@@ -3,7 +3,7 @@ only the steps it reaches:
 
     boot_args.py ............................ boot-args.txt
     overlay.py plan  (manifest) ............. overlay-plan.json
-    adt_edit.py      (board ADT, plan, iOS 27 cache list) ... ios.adt
+    adt_edit.py      (board ADT, plan, iOS 27 cache list and os trust module) ... ios.adt
     overlay.py trust (plan, Mach-Os) ........ overlay.trustcache
     trust.py         (IPSW, overlay, GPU, iOS 27 pretranslated) ... trustcache.bundle
     build_native_loader.py layout (kernel, ADT, bundle, seed, boot-args)
@@ -155,6 +155,10 @@ def _boot_package_impl(ctx):
     if pretranslated.cache_list:
         args.add("--a64x-cache-pretranslated", pretranslated.cache_list)
         adt_inputs.append(pretranslated.cache_list)
+    os_trust = [f for f in pretranslated.trust if f.basename == "os.trustcache"]
+    if os_trust:
+        args.add("--switch-pretranslated-trust", os_trust[0])
+        adt_inputs += os_trust
     args.add("--out", adt)
     _run(ctx, ctx.executable._adt_edit, [args], adt_inputs, [adt], "BootAdt", "Giving the ADT its iPad identity")
 

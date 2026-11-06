@@ -4,7 +4,7 @@
 Also the radios' nodes, the overlay's union directories, the loader's zeroed slots and, with --smp, all four A57s.
 
     adt_edit.py --adt BASE --overlay-plan PLAN --bt-patch HCD --portrait-header H [--smp]
-                [--a64x-cache-pretranslated LIST] --out ADT
+                [--a64x-cache-pretranslated LIST] [--switch-pretranslated-trust MODULE] --out ADT
 """
 
 import argparse
@@ -283,12 +283,25 @@ def with_a64x_cache_pretranslated(data: bytes, cache: bytes) -> bytes:
     return adt_serialize(tree)
 
 
+def with_switch_pretranslated_trust(data: bytes, module: bytes) -> bytes:
+    """Return the ADT with iOS 27's /chosen/switch-pretranslated-trust: the UUID of the trust module of the System
+    volume's translated executables (the os role's), which the kernel's lookup redirect requires loaded and checks each
+    such executable's CDHash against (bsd/vfs/vfs_switch_pretranslated.c).
+    """
+    if len(module) < 24 or struct.unpack_from('<I', module)[0] != 2:
+        raise SystemExit(f'switch-pretranslated-trust: {len(module)} bytes, not a version 2 trust module')
+    tree, _ = adt_parse(data)
+    put(child(tree, 'chosen'), 'switch-pretranslated-trust', module[4:20])
+    return adt_serialize(tree)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     for name in ('adt', 'overlay-plan', 'bt-patch', 'portrait-header', 'out'):
         parser.add_argument('--' + name, required=True, type=Path)
     parser.add_argument('--smp', action='store_true')
     parser.add_argument('--a64x-cache-pretranslated', type=Path)
+    parser.add_argument('--switch-pretranslated-trust', type=Path)
     args = parser.parse_args()
     dirs = [tuple(d) for d in json.loads(args.overlay_plan.read_text())['dirs']]
     adt = ipad_adt(
@@ -300,6 +313,8 @@ def main() -> None:
     )
     if args.a64x_cache_pretranslated:
         adt = with_a64x_cache_pretranslated(adt, args.a64x_cache_pretranslated.read_bytes())
+    if args.switch_pretranslated_trust:
+        adt = with_switch_pretranslated_trust(adt, args.switch_pretranslated_trust.read_bytes())
     if ('/filesystems', 'DoNotUseSEP') not in parse_adt(adt).properties:
         raise SystemExit('ADT patch failed')
     args.out.write_bytes(adt)
