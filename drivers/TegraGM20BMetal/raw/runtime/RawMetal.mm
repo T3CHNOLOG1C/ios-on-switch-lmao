@@ -4997,7 +4997,7 @@ static const char *ycbcr420Why(MTLTextureDescriptor *d, IOSurfaceRef s, NSUInteg
             refuseTexture(t, PredTexSurfImport, 1, 0, @"surface", extra);
         if (![t rmTwin])
             return nil;
-    } else
+    } else if (!t->_raw.planar && !t->_raw.ycbcr)  // (m2v's twin of a YCbCr surface holds a converted image of its own)
         prepareTwin(t);
     return (id<MTLTexture>)t;
 }
