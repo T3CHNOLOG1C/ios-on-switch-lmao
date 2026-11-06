@@ -29,6 +29,8 @@ COPTS = [
     "-Werror",
 ]
 
+exports_files(glob(["a64x/*"]))
+
 filegroup(
     name = "a64x_srcs",
     srcs = [
