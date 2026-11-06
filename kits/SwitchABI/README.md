@@ -14,9 +14,10 @@ order, instance size, field offsets, addresses) lives in tables.
 
 `switch_abi_class` makes `//kits/SwitchABI:<Class>`, which generates `Original<Class>.h` for the kind `--//ipsw:kind`
 selects. A driver adds `abi = ["<Class>"]` to `kernel_driver` and generates its bindings with `switch_abi_bindings`.
-The bindings hold every address in the table, slid by the kind's prelink slide. The build refuses an original import
-the table lacks, and an entry marked `"unported"` becomes a function that panics naming the symbol. A function without a
-`decl` is a C++ member that the driver's own header declares. It gets bound but not declared.
+The bindings hold every address in the table (an interface with `"bind": "imports"`: only the ones the driver's objects
+import), slid by the kind's prelink slide. The build refuses an original import the table lacks, and an entry marked
+`"unported"` becomes a function that panics naming the symbol. A function without a `decl` is a C++ member that the
+driver's own header declares. It gets bound but not declared.
 
 A driver class that subclasses the original names itself in `switch_abi_bindings` (`subclass`, plus `own` for the
 methods it overrides). Each build then checks its compiled vtable against the kind's table: the slot count, no pure

@@ -9,9 +9,9 @@ and SWITCH_ABI_KIND (the kind's name, for messages), after the interface's decla
 that no included header declares). A function without a "decl" is only bound: a C++ member the driver's own header
 declares. A "guard" class's unnamed slots are pure, except the ones its table inherits (hints.inherit), and
 SWITCH_ABI_GUARDS(trap) overrides each pure one in the subclass with trap(<slot>): no original code runs in a slot the
-table did not choose. The bindings bind every symbol of the tables' addresses (and refuse an original import they
-lack) at its kernelcache address plus the kind's prelink slide; an entry the table marks "unported" becomes a
-function that panics naming it.
+table did not choose. The bindings bind every symbol of the tables' addresses (only those the objects import, for an
+interface with "bind": "imports"), and refuse an original import they lack, at its kernelcache address plus the
+kind's prelink slide; an entry the table marks "unported" becomes a function that panics naming it.
 """
 
 import argparse
@@ -262,7 +262,8 @@ def bindings(pairs, objects):
         unknown = sorted(s for s in ours if s not in known)
         if unknown:
             raise SystemExit('{}: imports the table does not bind: {}'.format(table_name, ', '.join(unknown)))
-        for symbol in sorted(known):
+        bound = sorted(s for s in known if s in ours) if interface.get('bind') == 'imports' else sorted(known)
+        for symbol in bound:
             address, key = known[symbol]
             if address is None:
                 traps.append(symbol)

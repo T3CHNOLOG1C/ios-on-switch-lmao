@@ -219,6 +219,16 @@ class BindingsTest(unittest.TestCase):
         self.assertIn('b _switch_abi_unported', text)
         self.assertIn('.asciz "__ZN4Base9opaque170Ev"', text)
 
+    def test_bind_imports_binds_only_what_the_objects_import(self):
+        interface = dict(INTERFACE, bind='imports')
+        with tempfile.TemporaryDirectory() as tmp:
+            obj = Path(tmp) / 'a.o'
+            obj.write_bytes(macho_object(['__ZN4Base4stopEP9IOService']))
+            text = gen.bindings([(interface, TABLE, 'kinds/TEST/Base.json')], [str(obj)])
+        self.assertIn('.set __ZN4Base4stopEP9IOService, 0xfffffff005fff000', text)
+        self.assertNotIn('gMetaClass', text)
+        self.assertNotIn('opaque170', text)
+
     def test_an_import_the_table_lacks_is_refused(self):
         with self.assertRaises(SystemExit):
             self.bind(['__ZN4Base7unknownEv'])

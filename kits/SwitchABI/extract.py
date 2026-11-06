@@ -356,10 +356,7 @@ def plain_vtable_errors(
     for slot, key in table['layout'].items():
         if key in addresses and entries[int(slot)] != addresses[key]:
             errors.append(f'slot {slot} holds {entries[int(slot)]:#x}, the table binds {key} at {addresses[key]:#x}')
-    getter = entries[7]
-    adrp, add = (read(getter + 4 * i, 4) for i in range(2))
-    page = (getter & ~0xFFF) + (kernelcache.sx(((adrp >> 5) & 0x7FFFF) << 2 | (adrp >> 29) & 3, 21) << 12)
-    if page + ((add >> 10) & 0xFFF) != addresses['gMetaClass']:
+    if getter_target(read, entries[7]) != addresses['gMetaClass']:
         errors.append("getMetaClass does not return the table's gMetaClass")
     return errors
 
@@ -370,6 +367,17 @@ def bound(value: str | None) -> int | str | None:
 
 def plain_string_hint(hint: dict) -> int:
     raise SystemExit(f'"{hint["string"]}": a string hint needs a fileset kernelcache')
+
+
+def getter_target(read: Callable[[int, int], int], getter: int) -> int | None:
+    """The address getMetaClass forms with ADRP then ADD (after an unoptimised kext's stack spill, if any)."""
+    words = [read(getter + 4 * i, 4) for i in range(6)]
+    for i, adrp in enumerate(words[:-1]):
+        if (adrp & 0x9F000000) == 0x90000000:
+            pc, add = getter + 4 * i, words[i + 1]
+            page = (pc & ~0xFFF) + (kernelcache.sx(((adrp >> 5) & 0x7FFFF) << 2 | (adrp >> 29) & 3, 21) << 12)
+            return page + ((add >> 10) & 0xFFF)
+    return None
 
 
 def is_fileset(path):
