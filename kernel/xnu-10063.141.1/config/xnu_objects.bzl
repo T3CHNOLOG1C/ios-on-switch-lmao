@@ -383,6 +383,10 @@ def xnu_objects(name, component, table, release, srcs = None, **kwargs):
         name = name,
         component = component,
         config = by_profile("DEVELOPMENT", "RELEASE"),
+        target_compatible_with = select({
+            "//kernel:xnu_10063_141_1": [],
+            "//conditions:default": ["@platforms//:incompatible"],
+        }),
         objects = by_profile(table.objects, release.objects),
         copts = by_profile(table.copts, release.copts),
         includes = by_profile(table.includes, release.includes),

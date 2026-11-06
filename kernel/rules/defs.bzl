@@ -62,12 +62,30 @@ def xnu_sources(name, tags = None):
         tags = tags,
     )
 
-# The SDK root's other parts each XNU's installhdrs is recorded with (xnu_ops.install_base).
-BASE_SOURCES_10063 = {
-    "availability": "@availability_versions//:availability",
-    "libdispatch": "@libdispatch//:LICENSE",
-    "libplatform": "@libplatform//:LICENSE",
+# The SDK root's other parts (xnu_ops.install_base): each one's repository, for 10063 by default.
+BASE_10063 = {
+    "availability": "availability_versions",
+    "libdispatch": "libdispatch",
+    "libplatform": "libplatform",
 }
+
+# A file at each base repository's root: the recorder takes its directory.
+_BASE_ROOT_FILE = {
+    "availability": "availability",
+    "libdispatch": "LICENSE",
+    "libplatform": "LICENSE",
+}
+
+def base_root_files(base):
+    """{name: label of a file at the root of base[name]'s repository}, what xnu_recorder takes.
+
+    Args:
+        base: {"availability", "libplatform", "libdispatch"}: each one's repository name.
+
+    Returns:
+        The labels.
+    """
+    return {name: "@{}//:{}".format(repo, _BASE_ROOT_FILE[name]) for name, repo in base.items()}
 
 def xnu_recorder(version, darwin, ios_min, base_sources):
     """:update_tables (bazel run, manual): re-record tables/*.bzl of this kernel/xnu-<version>/ from its make.
@@ -111,19 +129,30 @@ xnu_unrecorded = rule(
 
 # Steps make's flow had besides the recorded ones: the empty directories the compiles' -I name (a marker each, as
 # make's xnu_build.py made), and the sanitizer ignore list the kernel recipes name (san/Makefile's sed).
-_OBJ_EXTRA = [
-    {"content": "", "kind": "write", "out": "o/EXPORT_HDRS/libsa/.keep"},
-    {"kind": "ignorelist", "out": "o/san/kasan-blacklist-arm64", "srcs": [
-        "s/san/memory/kasan-blacklist",
-        "s/san/memory/ubsan-blacklist",
-        "s/san/memory/kasan-blacklist-arm64",
-    ]},
-]
+def _obj_extra(ignorelist):
+    return [
+        {"content": "", "kind": "write", "out": "o/EXPORT_HDRS/libsa/.keep"},
+        {"kind": "ignorelist", "out": "o/san/kasan-{}-arm64".format(ignorelist), "srcs": [
+            "s/san/memory/kasan-" + ignorelist,
+            "s/san/memory/ubsan-" + ignorelist,
+            "s/san/memory/kasan-{}-arm64".format(ignorelist),
+        ]},
+    ]
 _SDKROOT_EXTRA = [
     {"content": "", "kind": "write", "out": "d/usr/local/include/kernel/.keep"},
 ]
 
-def xnu_package(version, darwin, ios_min, installhdrs, build, kernel_package, extra_headers, firehose):
+def xnu_package(
+        version,
+        darwin,
+        ios_min,
+        installhdrs,
+        build,
+        kernel_package,
+        extra_headers,
+        firehose,
+        base = BASE_10063,
+        ignorelist = "blacklist"):
     """The SDK root, the object root and the SDK of kernel/xnu-<version>, from its recorded tables.
 
     Args:
@@ -136,6 +165,8 @@ def xnu_package(version, darwin, ios_min, installhdrs, build, kernel_package, ex
         extra_headers: the headers XNU's build options put on every kernel compile (-I <tree>/diagnostics/switch).
         firehose: the SDK root with libdispatch's libfirehose_kernel.a installed (a directory): its files go into
             obj/sdkroot beside installhdrs' (:firehose), :sdkroot_files is both.
+        base: the SDK root's base repositories ({"availability", "libplatform", "libdispatch"}: repository names).
+        ignorelist: san/memory's word for its sanitizer lists (kasan-<ignorelist>; 12377 renamed blacklist to denylist).
     """
     root = native.package_name()
     xnu_sources(name = "srcs")
@@ -166,12 +197,13 @@ def xnu_package(version, darwin, ios_min, installhdrs, build, kernel_package, ex
         dst_dir = "obj/sdkroot",
         config = ":config",
         decomment = ":decomment",
+        **{name: "@{}//:all".format(repo) for name, repo in base.items()}
     )
     xnu_pass(
         name = "obj",
         table = select({
-            "//bazel:debug": json.encode({"flags": build["debug"]["flags"], "steps": build["debug"]["steps"] + _OBJ_EXTRA}),
-            "//bazel:release": json.encode({"flags": build["release"]["flags"], "steps": build["release"]["steps"] + _OBJ_EXTRA}),
+            "//bazel:debug": json.encode({"flags": build["debug"]["flags"], "steps": build["debug"]["steps"] + _obj_extra(ignorelist)}),
+            "//bazel:release": json.encode({"flags": build["release"]["flags"], "steps": build["release"]["steps"] + _obj_extra(ignorelist)}),
         }),
         srcs = [":srcs"],
         xnu_root = root,
@@ -179,6 +211,7 @@ def xnu_package(version, darwin, ios_min, installhdrs, build, kernel_package, ex
         sdkroot = ":sdkroot",
         config = ":config",
         decomment = ":decomment",
+        **{name: "@{}//:all".format(repo) for name, repo in base.items()}
     )
 
     # libdispatch's firehose library and the header it installs, where make's link and compiles find them.
@@ -215,7 +248,7 @@ def xnu_package(version, darwin, ios_min, installhdrs, build, kernel_package, ex
         extra = [extra_headers],
     )
 
-    recorder = xnu_recorder(version = version, darwin = darwin, ios_min = ios_min, base_sources = BASE_SOURCES_10063)
+    recorder = xnu_recorder(version = version, darwin = darwin, ios_min = ios_min, base_sources = base_root_files(base))
 
     # Whether the tables are what make does now (a few minutes of make: manual, run it after a makefile change).
     py_test(

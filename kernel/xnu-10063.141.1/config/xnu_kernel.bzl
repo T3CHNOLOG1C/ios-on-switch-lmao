@@ -374,6 +374,10 @@ def xnu_kernel(name, **kwargs):
     """The kernel link (_xnu_kernel) for the build profile's XNU config (debug DEVELOPMENT, release RELEASE)."""
     _xnu_kernel(
         name = name,
+        target_compatible_with = select({
+            "//kernel:xnu_10063_141_1": [],
+            "//conditions:default": ["@platforms//:incompatible"],
+        }),
         config = select({
             "//bazel:release": "RELEASE",
             "//conditions:default": "DEVELOPMENT",

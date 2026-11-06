@@ -1,0 +1,102 @@
+# XNU's san: the sanitizer runtimes (UBSan minimal). Apple's files as Apple has them (APPLE_LICENSE); only BUILD.bazel and .bzl files are ours.
+#
+# :objects compiles each object of objects.bzl (make's san.filelist, link order) on its own, so an edit to one
+# source recompiles that object and relinks the kernel (//kernel/xnu-12377.121.6/config:xnu_objects.bzl). A new
+# source: add it to objects.bzl where conf/files would put it, with any flags its conf/Makefile.* entry adds.
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//kernel/xnu-12377.121.6/config:xnu_objects.bzl", "xnu_objects")
+load(":objects.bzl", "DEVELOPMENT")
+
+package(default_visibility = ["//visibility:public"])
+
+# XNU's own files keep XNU's style: only our Starlark is formatted and linted.
+lint_files(exclude = [
+    "**/*.py",
+    "**/*.c",
+    "**/*.cc",
+    "**/*.cpp",
+    "**/*.h",
+    "**/*.hpp",
+    "**/*.inc",
+    "**/*.m",
+    "**/*.mm",
+    "**/*.rs",
+    "**/*.sh",
+    "**/*.md",
+    "**/*.json",
+    "**/*.toml",
+    "**/.clang-format",
+    "**/.clang-tidy",
+])
+
+# Every file, by its path below san/ (r18-xnu-hdrs' header, MIG and config rules name them).
+exports_files(glob(
+    ["**"],
+    exclude = ["BUILD.bazel"],
+))
+
+# What XNU's compiles may include from here (.d files prune each compile to what it read).
+filegroup(
+    name = "headers",
+    srcs = glob(
+        [
+            "**/*.h",
+            "**/*.hpp",
+            "**/*.inc",
+            "**/*.def",
+            "**/*.defs",
+            "**/*.iig",
+            "**/*.modulemap",
+        ],
+        allow_empty = True,
+    ),
+)
+
+# Every vendored file (r18-xnu-hdrs' :srcs): not ours, BUILD.bazel and .bzl.
+filegroup(
+    name = "all",
+    srcs = glob(
+        ["**"],
+        exclude = [
+            "BUILD.bazel",
+            "*.bzl",
+        ],
+    ),
+)
+
+# The sanitizer ignore lists every kernel compile names (-fsanitize-ignorelist): san/memory/Makefile and
+# san/coverage/Makefile, with src:./ made the XNU source's execution-root path (what the compiles' sources are).
+genrule(
+    name = "kasan_ignorelist",
+    srcs = [
+        "memory/kasan-denylist",
+        "memory/ubsan-denylist",
+        "memory/kasan-denylist-arm64",
+    ],
+    outs = ["kasan-denylist-arm64"],
+    cmd = "sed -e 's,^src:\\./,src:kernel/xnu-12377.121.6/,' $(SRCS) > $@",
+)
+
+genrule(
+    name = "kcov_ignorelist",
+    srcs = [
+        "coverage/kcov-denylist",
+        "coverage/kcov-denylist-arm64",
+    ],
+    outs = ["kcov-denylist-arm64"],
+    cmd = "sed -e 's,^src:\\./,src:kernel/xnu-12377.121.6/,' $(SRCS) > $@",
+)
+
+filegroup(
+    name = "ignorelists",
+    srcs = [
+        "kasan-denylist-arm64",
+        "kcov-denylist-arm64",
+    ],
+)
+
+xnu_objects(
+    name = "objects",
+    component = "san",
+    table = DEVELOPMENT,
+)

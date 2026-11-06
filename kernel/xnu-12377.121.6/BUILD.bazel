@@ -1,40 +1,42 @@
 # apple-oss-distributions/xnu tag xnu-12377.121.6 (commit ac9718fb1af6), vendored with the changes as commits on top:
 # Apple's files under the Apple Public Source License 2.0 (APPLE_LICENSE) and their notices, UniXNU's patches under
-# BSD-2-Clause-Patent (LICENSE.UniXNU).
+# BSD-2-Clause-Patent (LICENSE.UniXNU). Built with --config=ios27.
 load("@bazel_skylib//rules:diff_test.bzl", "diff_test")
-load("//kernel/rules:defs.bzl", "xnu_lint_files", "xnu_recorder", "xnu_sources", "xnu_unrecorded")
+load("//kernel/rules:defs.bzl", "xnu_lint_files", "xnu_package")
+load("//kernel/rules:layout.bzl", "KERNEL_PACKAGE")
+load(":tables/build_DEVELOPMENT.bzl", "BUILD_DEVELOPMENT")
+load(":tables/build_RELEASE.bzl", "BUILD_RELEASE")
+load(":tables/installhdrs.bzl", "INSTALLHDRS")
 
 package(default_visibility = ["//visibility:public"])
 
 xnu_lint_files()
 
-xnu_sources(
-    name = "srcs",
-    tags = ["manual"],
-)
-
-xnu_recorder(
-    base_sources = {
-        "availability": "@availability_versions_157_2//:availability",
-        "libdispatch": "@libdispatch_1542_100_32//:LICENSE",
-        "libplatform": "@libplatform_375_120_2//:LICENSE",
+xnu_package(
+    base = {
+        "availability": "availability_versions_157_2",
+        "libdispatch": "libdispatch_1542_100_32",
+        "libplatform": "libplatform_375_120_2",
+    },
+    build = {
+        "debug": BUILD_DEVELOPMENT,
+        "release": BUILD_RELEASE,
     },
     darwin = "25.5.0",
+    extra_headers = "//diagnostics/switch:headers",
+    firehose = "//kernel:fakeroot",
+    ignorelist = "denylist",
+    installhdrs = INSTALLHDRS,
     ios_min = "26.0",
+    kernel_package = KERNEL_PACKAGE,
     version = "12377.121.6",
-)
-
-xnu_unrecorded(
-    name = "sdk",
-    reason = "no tables recorded yet: bazel run :update_tables",
-    tags = ["manual"],
 )
 
 # XNU's make compiles a64x from inside the tree, so bsd/kern/a64x/ is a copy of //translate/arm64e's core.
 [
     diff_test(
         name = "a64x_copy_{}_test".format(name.replace(".", "_")),
-        file1 = "bsd/kern/a64x/" + name,
+        file1 = "//kernel/xnu-12377.121.6/bsd:kern/a64x/" + name,
         file2 = "//translate/arm64e:a64x/" + name,
     )
     for name in [

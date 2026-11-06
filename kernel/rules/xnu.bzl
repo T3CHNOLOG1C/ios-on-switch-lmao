@@ -132,7 +132,7 @@ def _xnu_pass_impl(ctx):
     py = ctx.toolchains[PY_TOOLCHAIN].py3_runtime
     base_sources = {}
     for name in ("availability", "libplatform", "libdispatch"):
-        files = getattr(ctx.files, "_" + name)
+        files = getattr(ctx.files, name)
         if files:
             base_sources[name] = files[0].owner.workspace_root
 
@@ -167,7 +167,7 @@ def _xnu_pass_impl(ctx):
                     pruned += below(incdir)
             if kind == "base":
                 for name in ("availability", "libplatform", "libdispatch"):
-                    inputs += getattr(ctx.files, "_" + name)
+                    inputs += getattr(ctx.files, name)
         own = {o.path: True for o in outs}
         pruned = [f for f in depset(pruned).to_list() if f.path not in own]
         spec = ctx.actions.declare_file("steps/{}/{}-{}.json".format(ctx.label.name, index, kind))
@@ -270,17 +270,17 @@ xnu_pass = rule(
     implementation = _xnu_pass_impl,
     doc = "One recorded XNU make pass (a table from xnu_record.py), replayed as Bazel actions.",
     attrs = {
+        "availability": attr.label(default = "@availability_versions//:all", doc = "the SDK root's base: AvailabilityVersions"),
         "config": attr.label(mandatory = True, executable = True, cfg = "exec", doc = "SETUP/config"),
         "decomment": attr.label(mandatory = True, executable = True, cfg = "exec", doc = "SETUP/decomment"),
         "dst_dir": attr.string(doc = "installhdrs: the DSTROOT (the SDK root), below this package's output directory"),
+        "libdispatch": attr.label(default = "@libdispatch//:all", doc = "the SDK root's base: libdispatch"),
+        "libplatform": attr.label(default = "@libplatform//:all", doc = "the SDK root's base: libplatform"),
         "obj_dir": attr.string(mandatory = True, doc = "the pass's object root, below this package's output directory"),
         "sdkroot": attr.label(providers = [XnuTreeInfo], doc = "build: the SDK root (KERNEL_SDKROOT)"),
         "srcs": attr.label_list(allow_files = True, doc = "every file of the XNU tree (xnu_sources)"),
         "table": attr.string(mandatory = True, doc = "the table, json.encode()d"),
         "xnu_root": attr.string(mandatory = True, doc = "the XNU tree's directory (kernel/xnu-<version>)"),
-        "_availability": attr.label(default = "@availability_versions//:all"),
-        "_libdispatch": attr.label(default = "@libdispatch//:all"),
-        "_libplatform": attr.label(default = "@libplatform//:all"),
         "_ops": attr.label(default = "//kernel/rules:xnu_ops.py", allow_single_file = True),
         "_xcode_identity": attr.label(default = "@xcode//:identity", allow_single_file = True),
     },

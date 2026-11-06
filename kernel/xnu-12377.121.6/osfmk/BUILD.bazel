@@ -1,0 +1,87 @@
+# XNU's osfmk: Mach: the scheduler, VM, IPC, the arm64 machine layer. Apple's files as Apple has them (APPLE_LICENSE); only BUILD.bazel and .bzl files are ours.
+#
+# :objects compiles each object of objects.bzl (make's osfmk.filelist, link order) on its own, so an edit to one
+# source recompiles that object and relinks the kernel (//kernel/xnu-12377.121.6/config:xnu_objects.bzl). A new
+# source: add it to objects.bzl where conf/files would put it, with any flags its conf/Makefile.* entry adds.
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//kernel/xnu-12377.121.6/config:xnu_objects.bzl", "xnu_objects")
+load("//kernel/xnu-12377.121.6/config:switch_objects.bzl", "PTHREAD_BOOTSTRAP")
+load(":objects.bzl", "DEVELOPMENT")
+
+package(default_visibility = ["//visibility:public"])
+
+# XNU's own files keep XNU's style: only our Starlark is formatted and linted.
+lint_files(exclude = [
+    "**/*.py",
+    "**/*.c",
+    "**/*.cc",
+    "**/*.cpp",
+    "**/*.h",
+    "**/*.hpp",
+    "**/*.inc",
+    "**/*.m",
+    "**/*.mm",
+    "**/*.rs",
+    "**/*.sh",
+    "**/*.md",
+    "**/*.json",
+    "**/*.toml",
+    "**/.clang-format",
+    "**/.clang-tidy",
+])
+
+# Every file, by its path below osfmk/ (r18-xnu-hdrs' header, MIG and config rules name them).
+exports_files(glob(
+    ["**"],
+    exclude = ["BUILD.bazel"],
+))
+
+# What XNU's compiles may include from here (.d files prune each compile to what it read).
+filegroup(
+    name = "headers",
+    srcs = glob(
+        [
+            "**/*.h",
+            "**/*.hpp",
+            "**/*.inc",
+            "**/*.def",
+            "**/*.defs",
+            "**/*.iig",
+            "**/*.modulemap",
+            "arm64/tunables/**/*.s",
+        ],
+        allow_empty = True,
+    ) + [
+        "console/iso_font.c",
+        "console/progress_meter_data.c",
+        "vm/vm_map_lock_tests.c",
+    ],
+)
+
+# Every vendored file (r18-xnu-hdrs' :srcs): not ours, BUILD.bazel and .bzl.
+filegroup(
+    name = "all",
+    srcs = glob(
+        ["**"],
+        exclude = [
+            "BUILD.bazel",
+            "*.bzl",
+        ],
+    ),
+)
+
+xnu_objects(
+    name = "objects",
+    component = "osfmk",
+    # assym.s, which osfmk's assembly includes: genassym.c's constants (osfmk/conf/Makefile.template).
+    genassym = "arm64/genassym.c",
+    table = DEVELOPMENT,
+)
+
+# libpthread_kernel.a's XNU object (//kernel:libpthread).
+xnu_objects(
+    name = "pthread_bootstrap",
+    srcs = ["//kernel/xnu-12377.121.6/bsd:kern/source_pthread_bootstrap.c"],
+    component = "osfmk",
+    table = PTHREAD_BOOTSTRAP,
+)
