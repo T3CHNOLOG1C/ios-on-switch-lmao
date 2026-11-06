@@ -40,6 +40,7 @@
 #include "../TegraNVDEC/TegraNVDEC.h"
 #include "../TegraNVDEC/nvidia/clc5b0.h"
 #include "TegraNVENC.h"
+#include "../../kits/SwitchTime/SwitchTime.h"
 #include "TegraNVENCCheck.h"
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wunused-const-variable"
@@ -75,13 +76,6 @@ bool resolveDec(void *, uint32_t handle, TegraNVDECBlock *block)
     const TegraNVENCBlock &b = gDec[handle - kE3DecFirstHandle];
     *block = TegraNVDECBlock{b.pa, b.size, b.va, b.first, b.count};
     return true;
-}
-
-uint64_t nowUs()
-{
-    uint64_t ns;
-    absolutetime_to_nanoseconds(mach_absolute_time(), &ns);
-    return ns / 1000;
 }
 
 uint32_t crc32(uint32_t crc, const uint8_t *p, size_t n)
@@ -210,7 +204,7 @@ void encodeAndDecode(uint32_t f, uint32_t layout, uint32_t chroma, Mode mode, Ou
     tegra_nvenc_cache_flush(gEnc[5].va, 4096);
     uint32_t fence = 0;
     const char *why = nullptr;
-    const uint64_t began = nowUs();
+    const uint64_t began = switch_now_us();
     o->ret = mode == kProbe ? tegra_nvenc_run_magic_probe(s, resolveEnc, nullptr, &fence, &why)
                             : tegra_nvenc_run(s, resolveEnc, nullptr, &fence, &why);
     IODelete(s, TegraNVENCSubmit, 1);
@@ -218,7 +212,7 @@ void encodeAndDecode(uint32_t f, uint32_t layout, uint32_t chroma, Mode mode, Ou
         IOLog("TegraNVENC: E3 NVENC job refused by the checker: %s\n", why);  // -22 in the FAIL line
     if (o->ret || (o->ret = tegra_nvenc_wait(fence)))
         return;
-    o->us = (uint32_t)(nowUs() - began);
+    o->us = (uint32_t)(switch_now_us() - began);
 
     tegra_nvenc_cache_flush(gEnc[5].va, sizeof(nvenc_pic_stat_s));
     const nvenc_pic_stat_s *stat = (const nvenc_pic_stat_s *)gEnc[5].va;
@@ -371,7 +365,7 @@ int run(TegraNVENCProven *proven, char *line, size_t size)
             snprintf(line, size, "E3 FAIL no arena memory");
             return -12;
         }
-    const uint64_t began = nowUs();
+    const uint64_t began = switch_now_us();
 
     // 1. The probe.
     Outcome probe;
@@ -446,7 +440,7 @@ int run(TegraNVENCProven *proven, char *line, size_t size)
              "E3 ok H.264 64x64 High CABAC QP 26 decoded back by NVDEC in %llu us: input layout %s, chroma %s; IDR %u "
              "bytes MSE %u.%02u/%u.%02u/%u.%02u (slice CRC %#010x, luma CRC %#010x); P %u bytes MSE %u.%02u/%u.%02u/"
              "%u.%02u (ret %d, status %#x, slice CRC %#010x): %s",
-             nowUs() - began, kLayoutName[layout], chroma ? "method" : "offset", idr.bytes, idr.mse[0] / 100,
+             switch_now_us() - began, kLayoutName[layout], chroma ? "method" : "offset", idr.bytes, idr.mse[0] / 100,
              idr.mse[0] % 100, idr.mse[1] / 100, idr.mse[1] % 100, idr.mse[2] / 100, idr.mse[2] % 100, idr.sliceCrc,
              idr.lumaCrc, p.bytes, p.mse[0] / 100, p.mse[0] % 100, p.mse[1] / 100, p.mse[1] % 100, p.mse[2] / 100,
              p.mse[2] % 100, p.ret, p.status, p.sliceCrc,

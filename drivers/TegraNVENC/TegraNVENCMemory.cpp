@@ -10,6 +10,7 @@
 #include <IOKit/IOBufferMemoryDescriptor.h>
 #include <string.h>
 #include "TegraNVENC.h"
+#include "../../kits/SwitchDMA/SwitchDcache.h"
 
 namespace {
 constexpr uint64_t kGranule = 64 * 1024, kGrowChunk = 8ull << 20, kMaxBytes = 96ull << 20;
@@ -41,22 +42,6 @@ void setUsed(Chunk &c, uint32_t first, uint32_t count, bool on)
         else
             c.used[i / 32] &= ~(1u << (i % 32));
     }
-}
-
-template <bool Invalidate> void cacheOp(const void *va, size_t size)
-{
-    if (!size)
-        return;
-    uint64_t ctr;
-    __asm__ volatile("mrs %0, ctr_el0" : "=r"(ctr));
-    const uintptr_t line = (uintptr_t)4 << ((ctr >> 16) & 15);
-    for (uintptr_t a = (uintptr_t)va & ~(line - 1), end = (uintptr_t)va + size; a < end; a += line) {
-        if (Invalidate)
-            __asm__ volatile("dc civac, %0" ::"r"(a) : "memory");
-        else
-            __asm__ volatile("dc cvac, %0" ::"r"(a) : "memory");
-    }
-    __asm__ volatile("dsb sy" ::: "memory");
 }
 
 // One more chunk (gLock held). Fails quietly; the caller reports.
@@ -113,12 +98,12 @@ bool fit(uint32_t chunk, uint32_t count, uint32_t *first)
 
 extern "C" void tegra_nvenc_cache_clean(const void *va, size_t size)
 {
-    cacheOp<false>(va, size);
+    switch_dcache_clean(va, size);
 }
 
 extern "C" void tegra_nvenc_cache_flush(const void *va, size_t size)
 {
-    cacheOp<true>(va, size);
+    switch_dcache_clean_invalidate(va, size);
 }
 
 extern "C" int tegra_nvenc_arena_init(uint64_t bytes)

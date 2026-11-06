@@ -46,33 +46,35 @@
 #include "../TegraHost1x/TegraHost1x.h"
 #include "TegraNVENC.h"
 #include "TegraNVENCCheck.h"
+#include "../../kits/SwitchBootArgs/SwitchBootArgs.h"
+#include "../../kits/SwitchCAR/SwitchCAR.h"
+#include "../../kits/SwitchCAR/SwitchPMC.h"
+#include "../../kits/SwitchDMA/SwitchDMABuffer.h"
+#include "../../kits/SwitchDMA/SwitchDcache.h"
+#include "../../kits/SwitchFalcon/SwitchFalcon.h"
+#include "../../kits/SwitchMMIO/SwitchMMIOKernel.h"
+#include "../../kits/SwitchTime/SwitchTime.h"
 
 extern "C" {
-vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
-boolean_t PE_parse_boot_argn(const char *arg_string, void *arg_ptr, int max_arg);
 extern const uint8_t tegra_nvenc_fw_start[] __asm__("_tegra_nvenc_fw_start");
 extern const uint8_t tegra_nvenc_fw_end[] __asm__("_tegra_nvenc_fw_end");
 }
 
 namespace {
-constexpr vm_offset_t kNvencPA = 0x544c0000, kNvencSize = 0x40000;
+constexpr uint64_t kNvencPA = 0x544c0000, kNvencSize = 0x40000;
 constexpr uint32_t kClass = TEGRA_HOST1X_CLASS_NVENC;
 constexpr uint32_t kThiMethod0 = 0x40;  // THI METHOD0 (offset) then METHOD1 (data)
-constexpr vm_offset_t kCarPA = 0x60006000, kPmcPagePA = 0x7000E000, kMcPA = 0x70019000;
-constexpr uint32_t kPmcOffset = 0x400, kPartition = 6;  // TEGRA_POWERGATE_MPE
+constexpr uint64_t kMcPA = 0x70019000;
+constexpr uint32_t kPartition = 6;  // TEGRA_POWERGATE_MPE
+constexpr unsigned kClock = 219;    // TEGRA210_CLK_NVENC: CAR bank Y bit 27, also its reset
 constexpr uint64_t kBootChunk = 2ull << 20;
 constexpr uint32_t kNvdecWaitMs = 20000;  // NVDEC's whole bring-up (arena, N1..N4) takes well under a second
 
 enum : uint32_t {  // clock and reset controller
     CLK_OUT_ENB_Y = 0x298,
-    CLK_ENB_Y_SET = 0x29c,
-    CLK_ENB_Y_CLR = 0x2a0,
     RST_DEVICES_Y = 0x2a4,
-    RST_DEV_Y_SET = 0x2a8,
-    RST_DEV_Y_CLR = 0x2ac,
     LVL2_CLK_GATE_OVRE = 0x554,
     CLK_SOURCE_NVENC = 0x6a0,
-    Y_NVENC = 1u << 27,
     OVRE_MPE_MBIST = 1u << 29,
     SOURCE_PLLP = 4u << 29,
     NVENC_DIV_1 = 0,  // 7.1 divider: 408 MHz * 2 / (0 + 2) = 408 MHz
@@ -80,9 +82,7 @@ enum : uint32_t {  // clock and reset controller
 
 enum : uint32_t {
     PWRGATE_TOGGLE = 0x30,
-    REMOVE_CLAMPING = 0x34,
     PWRGATE_STATUS = 0x38,
-    TOGGLE_START = 1u << 8
 };
 
 enum : uint32_t {
@@ -92,52 +92,14 @@ enum : uint32_t {
     SMMU_ENABLE = 1u << 31,
 };
 
-enum : uint32_t {  // falcon (drm/tegra/falcon.h), relative to the engine
-    FALCON_IRQSTAT = 0x1008,
-    FALCON_IRQMSET = 0x1010,
-    FALCON_IRQDEST = 0x101c,
-    FALCON_MAILBOX0 = 0x1040,
-    FALCON_MAILBOX1 = 0x1044,
-    FALCON_ITFEN = 0x1048,
-    FALCON_IDLESTATE = 0x104c,
-    FALCON_OS = 0x1080,
-    FALCON_DEBUGINFO = 0x1094,
-    FALCON_EXCI = 0x10d0,
-    FALCON_CPUCTL = 0x1100,
-    FALCON_BOOTVEC = 0x1104,
-    FALCON_DMACTL = 0x110c,
-    FALCON_DMATRFBASE = 0x1110,
-    FALCON_DMATRFMOFFS = 0x1114,
-    FALCON_DMATRFCMD = 0x1118,
-    FALCON_DMATRFFBOFFS = 0x111c,
-    FALCON_TRACEIDX = 0x1148,  // nvgpu hw_falcon_gm20b.h (falcon base + 0x148 / 0x14c / 0x168 / 0x16c / 0x200 / 0x20c)
-    FALCON_TRACEPC = 0x114c,
-    FALCON_EXTERRADDR = 0x1168,
-    FALCON_EXTERRSTAT = 0x116c,
-    FALCON_ICD_CMD = 0x1200,
-    FALCON_ICD_RDATA = 0x120c,
+enum : uint32_t {
     ICD_RREG = 0x8,  // icd_cmd opc rreg; register index << 8: SP 20, PC 21 (nvgpu falcon.h FALCON_REG_*)
     THI_INT_STATUS = 0x78,
-    CPUCTL_STARTCPU = 1u << 1,
-    DMACTL_SCRUBBING = (1u << 1) | (1u << 2),
-    DMATRFCMD_FULL = 1u << 0,
-    DMATRFCMD_IDLE = 1u << 1,
-    DMATRFCMD_IMEM = 1u << 4,
-    DMATRFCMD_SIZE_256B = 6u << 8,
-    ITFEN_CTXEN = 1u << 0,
-    ITFEN_MTHDEN = 1u << 1,
-    IRQMSET_BOOT = (1u << 1) | (1u << 4) | (1u << 5) | (1u << 6) | (1u << 7) | (0xffu << 8),
-    IRQDEST_BOOT = (1u << 4) | (1u << 5) | (1u << 6) | (1u << 7) | (0xffu << 8),
 };
 
-struct Image {  // falcon bin header v1 and its OS header (drm/tegra/falcon.h)
-    uint32_t size, binData, binSize, code, codeSize, data, dataSize, apps;
-};
-
-volatile uint8_t *gNvenc, *gCar, *gPmc, *gMc;
-IOBufferMemoryDescriptor *gFirmware;  // stays: the falcon OS loads its apps from it through DMATRFBASE
-uint64_t gFirmwarePA;
-Image gImage;
+volatile uint8_t *gNvenc, *gMc;
+switch_dma_buffer gFirmware;  // stays: the falcon OS loads its apps from it through DMATRFBASE
+switch_falcon_image gImage;
 char gLine[256];
 
 // Address methods no submit may set (features the checker keeps off): every job points them at the scratch buffer,
@@ -158,45 +120,10 @@ uint64_t gArenaUs;
 TegraNVENCBlock gSetup, gSink;  // setup slots and the scratch buffer, never mapped into a client
 TegraNVENCProven gProven;
 
-inline uint32_t r32(volatile uint8_t *base, uint32_t o)
-{
-    return *(volatile uint32_t *)(base + o);
-}
-
-inline void w32(volatile uint8_t *base, uint32_t o, uint32_t v)
-{
-    *(volatile uint32_t *)(base + o) = v;
-}
-
-inline uint32_t le32(const uint8_t *p)
-{
-    return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
-}
-
-bool waitBits(volatile uint8_t *base, uint32_t o, uint32_t mask, uint32_t value, uint32_t us)
-{
-    for (uint32_t i = 0; i <= us; ++i) {
-        if ((r32(base, o) & mask) == value)
-            return true;
-        IODelay(1);
-    }
-    return false;
-}
-
-uint64_t nowUs()
-{
-    uint64_t ns;
-    absolutetime_to_nanoseconds(mach_absolute_time(), &ns);
-    return ns / 1000;
-}
-
 const char *falconState()
 {
     static char text[160];
-    snprintf(text, sizeof(text), "falcon CPUCTL %#x IDLESTATE %#x IRQSTAT %#x MAILBOX0 %#x DEBUGINFO %#x",
-             r32(gNvenc, FALCON_CPUCTL), r32(gNvenc, FALCON_IDLESTATE), r32(gNvenc, FALCON_IRQSTAT),
-             r32(gNvenc, FALCON_MAILBOX0), r32(gNvenc, FALCON_DEBUGINFO));
-    return text;
+    return switch_falcon_state(gNvenc, text, sizeof(text));
 }
 
 // A falcon that did not finish, for its one line (nvgpu gk20a_falcon_dump_stats): CPUCTL (bit 4 halted, bit 5
@@ -208,54 +135,38 @@ const char *falconState()
 const char *falconDump(bool debugger)
 {
     static char text[512];
-    const uint32_t cpuctl = r32(gNvenc, FALCON_CPUCTL);
-    int n = snprintf(text, sizeof(text),
-                     "falcon CPUCTL %#x (%s) IDLESTATE %#x IRQSTAT %#x MAILBOX %#x %#x EXCI %#x OS %#x DEBUGINFO %#x "
-                     "DMATRFCMD %#x EXTERR %#x@%#x THI_INT %#x",
-                     cpuctl,
-                     cpuctl & 0x10   ? "halted"
-                     : cpuctl & 0x20 ? "stopped"
-                                     : "running",
-                     r32(gNvenc, FALCON_IDLESTATE), r32(gNvenc, FALCON_IRQSTAT), r32(gNvenc, FALCON_MAILBOX0),
-                     r32(gNvenc, FALCON_MAILBOX1), r32(gNvenc, FALCON_EXCI), r32(gNvenc, FALCON_OS),
-                     r32(gNvenc, FALCON_DEBUGINFO), r32(gNvenc, FALCON_DMATRFCMD), r32(gNvenc, FALCON_EXTERRSTAT),
-                     r32(gNvenc, FALCON_EXTERRADDR), r32(gNvenc, THI_INT_STATUS));
-    const uint32_t traced = (r32(gNvenc, FALCON_TRACEIDX) >> 16) & 0xff;
+    const uint32_t cpuctl = switch_mmio_read32(gNvenc, SWITCH_FALCON_CPUCTL);
+    int n = snprintf(
+        text, sizeof(text),
+        "falcon CPUCTL %#x (%s) IDLESTATE %#x IRQSTAT %#x MAILBOX %#x %#x EXCI %#x OS %#x DEBUGINFO %#x "
+        "DMATRFCMD %#x EXTERR %#x@%#x THI_INT %#x",
+        cpuctl,
+        cpuctl & 0x10   ? "halted"
+        : cpuctl & 0x20 ? "stopped"
+                        : "running",
+        switch_mmio_read32(gNvenc, SWITCH_FALCON_IDLESTATE), switch_mmio_read32(gNvenc, SWITCH_FALCON_IRQSTAT),
+        switch_mmio_read32(gNvenc, SWITCH_FALCON_MAILBOX0), switch_mmio_read32(gNvenc, SWITCH_FALCON_MAILBOX1),
+        switch_mmio_read32(gNvenc, SWITCH_FALCON_EXCI), switch_mmio_read32(gNvenc, SWITCH_FALCON_OS),
+        switch_mmio_read32(gNvenc, SWITCH_FALCON_DEBUGINFO), switch_mmio_read32(gNvenc, SWITCH_FALCON_DMATRFCMD),
+        switch_mmio_read32(gNvenc, SWITCH_FALCON_EXTERRSTAT), switch_mmio_read32(gNvenc, SWITCH_FALCON_EXTERRADDR),
+        switch_mmio_read32(gNvenc, THI_INT_STATUS));
+    const uint32_t traced = (switch_mmio_read32(gNvenc, SWITCH_FALCON_TRACEIDX) >> 16) & 0xff;
     n += snprintf(text + n, sizeof(text) - (size_t)n, " trace(%u)", traced);
     for (uint32_t i = 0; i < traced && i < 6; i++) {
-        w32(gNvenc, FALCON_TRACEIDX, i);
-        n += snprintf(text + n, sizeof(text) - (size_t)n, " %#x", r32(gNvenc, FALCON_TRACEPC) & 0xffffff);
+        switch_mmio_write32(gNvenc, SWITCH_FALCON_TRACEIDX, i);
+        n += snprintf(text + n, sizeof(text) - (size_t)n, " %#x",
+                      switch_mmio_read32(gNvenc, SWITCH_FALCON_TRACEPC) & 0xffffff);
     }
     if (debugger)
         n += snprintf(text + n, sizeof(text) - (size_t)n, " PC/SP");
     for (int i = 0; debugger && i < 3; i++) {
-        w32(gNvenc, FALCON_ICD_CMD, ICD_RREG | 21u << 8);
-        const uint32_t pc = r32(gNvenc, FALCON_ICD_RDATA);
-        w32(gNvenc, FALCON_ICD_CMD, ICD_RREG | 20u << 8);
-        n += snprintf(text + n, sizeof(text) - (size_t)n, " %#x/%#x", pc, r32(gNvenc, FALCON_ICD_RDATA));
+        switch_mmio_write32(gNvenc, SWITCH_FALCON_ICD_CMD, ICD_RREG | 21u << 8);
+        const uint32_t pc = switch_mmio_read32(gNvenc, SWITCH_FALCON_ICD_RDATA);
+        switch_mmio_write32(gNvenc, SWITCH_FALCON_ICD_CMD, ICD_RREG | 20u << 8);
+        n += snprintf(text + n, sizeof(text) - (size_t)n, " %#x/%#x", pc,
+                      switch_mmio_read32(gNvenc, SWITCH_FALCON_ICD_RDATA));
     }
     return text;
-}
-
-// falcon_parse_firmware_image: magic 0x10de (or 0x10fe), version 1, the OS header and data inside the image.
-bool parse(const uint8_t *fw, size_t length, Image *image)
-{
-    if (length < 0x100 || (le32(fw) != 0x10de && le32(fw) != 0x10fe) || le32(fw + 4) != 1)
-        return false;
-    image->size = le32(fw + 8);
-    const uint32_t os = le32(fw + 12);
-    image->binData = le32(fw + 16);
-    image->binSize = le32(fw + 20);
-    if (image->size > length || os > image->size - 20 || image->binData > image->size ||
-        image->binSize > image->size - image->binData)
-        return false;
-    image->code = le32(fw + os);
-    image->codeSize = le32(fw + os + 4);
-    image->data = le32(fw + os + 8);
-    image->dataSize = le32(fw + os + 12);
-    image->apps = le32(fw + os + 16);
-    return image->codeSize && image->code <= image->binSize && image->codeSize <= image->binSize - image->code &&
-           image->data <= image->binSize && image->dataSize <= image->binSize - image->data;
 }
 
 // tegra_powergate_power_up with the T210 MBIST workaround for the MPE partition (no slcg clock to hold on). A
@@ -263,46 +174,41 @@ bool parse(const uint8_t *fw, size_t length, Image *image)
 // from scratch.
 bool powerUp(bool *wasOn)
 {
-    if (r32(gMc, MC_SMMU_NVENC_ASID) & SMMU_ENABLE) {
+    if (switch_mmio_read32(gMc, MC_SMMU_NVENC_ASID) & SMMU_ENABLE) {
         snprintf(gLine, sizeof(gLine), "E1 FAIL SMMU translation is on for NVENC (MC 0x264 = %#x)",
-                 r32(gMc, MC_SMMU_NVENC_ASID));
+                 switch_mmio_read32(gMc, MC_SMMU_NVENC_ASID));
         return false;
     }
-    *wasOn = (r32(gPmc, kPmcOffset + PWRGATE_STATUS) >> kPartition) & 1;
-    w32(gCar, RST_DEV_Y_SET, Y_NVENC);
+    *wasOn = switch_pmc_partition_is_on(kPartition);
+    switch_car_reset_assert(kClock);
     IODelay(10);
     if (!*wasOn) {
-        if (!waitBits(gPmc, kPmcOffset + PWRGATE_TOGGLE, TOGGLE_START, 0, 5000)) {
-            snprintf(gLine, sizeof(gLine), "E1 FAIL PMC toggle busy (PWRGATE_TOGGLE %#x)",
-                     r32(gPmc, kPmcOffset + PWRGATE_TOGGLE));
-            return false;
-        }
-        w32(gPmc, kPmcOffset + PWRGATE_TOGGLE, kPartition | TOGGLE_START);
-        if (!waitBits(gPmc, kPmcOffset + PWRGATE_STATUS, 1u << kPartition, 1u << kPartition, 5000)) {
-            snprintf(gLine, sizeof(gLine), "E1 FAIL partition %u did not power on (PWRGATE_STATUS %#x)", kPartition,
-                     r32(gPmc, kPmcOffset + PWRGATE_STATUS));
+        if (!switch_pmc_partition_on(kPartition)) {
+            snprintf(gLine, sizeof(gLine), "E1 FAIL partition %u did not power on (PWRGATE_TOGGLE %#x STATUS %#x)",
+                     kPartition, switch_pmc_read(PWRGATE_TOGGLE), switch_pmc_read(PWRGATE_STATUS));
             return false;
         }
         IODelay(10);
     }
-    w32(gCar, CLK_SOURCE_NVENC, SOURCE_PLLP | NVENC_DIV_1);
+    switch_car_write(CLK_SOURCE_NVENC, SOURCE_PLLP | NVENC_DIV_1);
     IODelay(2);
-    w32(gCar, CLK_ENB_Y_SET, Y_NVENC);
+    switch_car_clock_enable(kClock);
     IODelay(10);
-    w32(gPmc, kPmcOffset + REMOVE_CLAMPING, 1u << kPartition);
+    switch_pmc_remove_clamping(kPartition);
     IODelay(10);
-    if (r32(gMc, MC_HOTRESET_CTRL) & MC_HOTRESET_NVENC)
-        w32(gMc, MC_HOTRESET_CTRL, r32(gMc, MC_HOTRESET_CTRL) & ~MC_HOTRESET_NVENC);
-    w32(gCar, RST_DEV_Y_CLR, Y_NVENC);
+    if (switch_mmio_read32(gMc, MC_HOTRESET_CTRL) & MC_HOTRESET_NVENC)
+        switch_mmio_write32(gMc, MC_HOTRESET_CTRL, switch_mmio_read32(gMc, MC_HOTRESET_CTRL) & ~MC_HOTRESET_NVENC);
+    switch_car_reset_deassert(kClock);
     IODelay(10);
-    const uint32_t ovre = r32(gCar, LVL2_CLK_GATE_OVRE);  // tegra210_generic_mbist_war
-    w32(gCar, LVL2_CLK_GATE_OVRE, ovre | OVRE_MPE_MBIST);
+    // tegra210_generic_mbist_war: only MPE's override bit changes, under the CAR lock.
+    const uint32_t overridden = switch_car_read(LVL2_CLK_GATE_OVRE) & OVRE_MPE_MBIST;
+    switch_car_rmw(LVL2_CLK_GATE_OVRE, 0, OVRE_MPE_MBIST);
     IODelay(1);
-    w32(gCar, LVL2_CLK_GATE_OVRE, ovre);
+    switch_car_rmw(LVL2_CLK_GATE_OVRE, OVRE_MPE_MBIST & ~overridden, 0);
     IODelay(1);
-    if (!(r32(gCar, CLK_OUT_ENB_Y) & Y_NVENC) || (r32(gCar, RST_DEVICES_Y) & Y_NVENC)) {
+    if (!switch_car_clock_enabled(kClock) || switch_car_reset_asserted(kClock)) {
         snprintf(gLine, sizeof(gLine), "E1 FAIL clock or reset stuck (CLK_OUT_ENB_Y %#x RST_DEVICES_Y %#x)",
-                 r32(gCar, CLK_OUT_ENB_Y), r32(gCar, RST_DEVICES_Y));
+                 switch_car_read(CLK_OUT_ENB_Y), switch_car_read(RST_DEVICES_Y));
         return false;
     }
     return true;
@@ -313,68 +219,40 @@ bool powerUp(bool *wasOn)
 bool loadImage()
 {
     const size_t length = (size_t)(tegra_nvenc_fw_end - tegra_nvenc_fw_start);
-    if (!parse(tegra_nvenc_fw_start, length, &gImage)) {
+    if (!switch_falcon_parse(tegra_nvenc_fw_start, length, &gImage)) {
         snprintf(gLine, sizeof(gLine), "E1 FAIL embedded firmware is not a falcon v1 image (%lu bytes)",
                  (unsigned long)length);
         return false;
     }
-    if (!gFirmware) {  // kept for resume: the falcon is reloaded from it after SC7
-        gFirmware = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task,
-                                                                     (IOOptionBits)kIODirectionInOut |
-                                                                         (IOOptionBits)kIOMemoryPhysicallyContiguous |
-                                                                         (IOOptionBits)kIOMemoryMapperNone,
-                                                                     gImage.size, 0xfffff000ULL);
-        IOByteCount contiguous = 0;
-        if (gFirmware && gFirmware->prepare() == kIOReturnSuccess)
-            gFirmwarePA = gFirmware->getPhysicalSegment(0, &contiguous, kIOMemoryMapperNone);
-        if (!gFirmwarePA || contiguous < gImage.size || gFirmwarePA + gImage.size > (1ULL << 32)) {
+    if (!gFirmware.memory) {  // kept for resume: the falcon is reloaded from it after SC7
+        if (!switch_dma_alloc(&gFirmware, gImage.size)) {
             snprintf(gLine, sizeof(gLine), "E1 FAIL no contiguous %u-byte firmware buffer below 4 GiB", gImage.size);
-            gFirmwarePA = 0;
             return false;
         }
-        memcpy(gFirmware->getBytesNoCopy(), tegra_nvenc_fw_start, gImage.size);
-        tegra_nvenc_cache_clean(gFirmware->getBytesNoCopy(), gImage.size);
+        memcpy(gFirmware.va, tegra_nvenc_fw_start, gImage.size);
+        switch_dcache_clean(gFirmware.va, gImage.size);
     }
-    w32(gNvenc, FALCON_DMATRFBASE, (uint32_t)((gFirmwarePA + gImage.binData) >> 8));
-    return true;
-}
-
-bool copyChunk(uint32_t from, uint32_t to, bool code)
-{
-    if (!waitBits(gNvenc, FALCON_DMATRFCMD, DMATRFCMD_FULL, 0, 100000))
-        return false;
-    w32(gNvenc, FALCON_DMATRFMOFFS, to);
-    w32(gNvenc, FALCON_DMATRFFBOFFS, from);
-    w32(gNvenc, FALCON_DMATRFCMD, DMATRFCMD_SIZE_256B | (code ? DMATRFCMD_IMEM : 0));
     return true;
 }
 
 // falcon_boot, minus its final idle poll: that the firmware runs is shown by E2's OP_DONE increment instead.
 bool bootFalcon()
 {
-    if (!waitBits(gNvenc, FALCON_DMACTL, DMACTL_SCRUBBING, 0, 10000)) {
-        snprintf(gLine, sizeof(gLine), "E1 FAIL IMEM/DMEM scrubbing did not end (DMACTL %#x)",
-                 r32(gNvenc, FALCON_DMACTL));
-        return false;
-    }
-    w32(gNvenc, FALCON_DMACTL, 0);
     if (!loadImage())
         return false;
-    bool queued = true;
-    for (uint32_t offset = 0; queued && offset < gImage.dataSize; offset += 256)
-        queued = copyChunk(gImage.data + offset, offset, false);
-    for (uint32_t offset = 0; queued && offset < gImage.codeSize; offset += 256)
-        queued = copyChunk(gImage.code + offset, offset, true);
-    if (!queued || !waitBits(gNvenc, FALCON_DMATRFCMD, DMATRFCMD_IDLE, DMATRFCMD_IDLE, 100000)) {
-        snprintf(gLine, sizeof(gLine), "E1 FAIL firmware DMA did not finish (DMATRFCMD %#x)",
-                 r32(gNvenc, FALCON_DMATRFCMD));
+    switch (switch_falcon_load(gNvenc, gFirmware.pa, &gImage)) {
+    case SWITCH_FALCON_SCRUBBING:
+        snprintf(gLine, sizeof(gLine), "E1 FAIL IMEM/DMEM scrubbing did not end (DMACTL %#x)",
+                 switch_mmio_read32(gNvenc, SWITCH_FALCON_DMACTL));
         return false;
+    case SWITCH_FALCON_DMA:
+        snprintf(gLine, sizeof(gLine), "E1 FAIL firmware DMA did not finish (DMATRFCMD %#x)",
+                 switch_mmio_read32(gNvenc, SWITCH_FALCON_DMATRFCMD));
+        return false;
+    case SWITCH_FALCON_OK:
+        break;
     }
-    w32(gNvenc, FALCON_IRQMSET, IRQMSET_BOOT);
-    w32(gNvenc, FALCON_IRQDEST, IRQDEST_BOOT);
-    w32(gNvenc, FALCON_ITFEN, ITFEN_MTHDEN | ITFEN_CTXEN);
-    w32(gNvenc, FALCON_BOOTVEC, 0);
-    w32(gNvenc, FALCON_CPUCTL, CPUCTL_STARTCPU);
+    switch_falcon_start(gNvenc);
     return true;
 }
 
@@ -407,10 +285,10 @@ bool proofOfLife(uint64_t *us, uint32_t *id, uint32_t *from)
         return false;
     }
     *from = tegra_host1x_syncpt_read(*id);
-    const uint64_t began = nowUs();
+    const uint64_t began = switch_now_us();
     const char *stage = nullptr;
     const int ret = answer(*id, *from, &stage);
-    *us = nowUs() - began;
+    *us = switch_now_us() - began;
     if (ret) {
         char host[200];
         tegra_host1x_describe(host, sizeof(host));
@@ -444,9 +322,9 @@ void timedOut(uint32_t fence)
 // Back to reset with the clock off after a failed bring-up: nothing will use the engine this boot.
 void park()
 {
-    w32(gCar, RST_DEV_Y_SET, Y_NVENC);
+    switch_car_reset_assert(kClock);
     IODelay(2);
-    w32(gCar, CLK_ENB_Y_CLR, Y_NVENC);
+    switch_car_clock_disable(kClock);
 }
 
 void bringUp(void *, wait_result_t)
@@ -465,23 +343,21 @@ void bringUp(void *, wait_result_t)
               "with\n");
         return;
     }
-    const uint64_t arenaStart = nowUs();
+    const uint64_t arenaStart = switch_now_us();
     if (tegra_nvenc_arena_init(kBootChunk)) {
         IOLog("TegraNVENC: E0 FAIL no contiguous %llu MiB arena chunk below 4 GiB\n", kBootChunk >> 20);
         return;
     }
-    gArenaUs = nowUs() - arenaStart;
+    gArenaUs = switch_now_us() - arenaStart;
     if (tegra_host1x_start()) {
         IOLog("TegraNVENC: E0 FAIL host1x is not up (see the TegraHost1x line)\n");
         giveUp(false);
         return;
     }
-    gNvenc = (volatile uint8_t *)ml_io_map(kNvencPA, kNvencSize);
-    gCar = (volatile uint8_t *)ml_io_map(kCarPA, 0x1000);
-    gPmc = (volatile uint8_t *)ml_io_map(kPmcPagePA, 0x1000);
-    gMc = (volatile uint8_t *)ml_io_map(kMcPA, 0x1000);
+    gNvenc = switch_mmio_map(kNvencPA, kNvencSize);
+    gMc = switch_mmio_map(kMcPA, 0x1000);
     gEngineLock = IOLockAlloc();
-    if (!gNvenc || !gCar || !gPmc || !gMc || !gEngineLock) {
+    if (!gNvenc || !gMc || !gEngineLock) {
         IOLog("TegraNVENC: E1 FAIL no mapping\n");
         giveUp(false);
         return;
@@ -494,8 +370,8 @@ void bringUp(void *, wait_result_t)
         return;
     }
     IOLog("TegraNVENC: E1 ok partition %u %s, 408 MHz, falcon started (OS code %#x+%#x data %#x+%#x, %u apps)\n",
-          kPartition, wasOn ? "already on" : "powered here", gImage.code, gImage.codeSize, gImage.data, gImage.dataSize,
-          gImage.apps);
+          kPartition, wasOn ? "already on" : "powered here", gImage.code, gImage.code_size, gImage.data,
+          gImage.data_size, gImage.apps);
     uint64_t us = 0;
     uint32_t id = 0, from = 0;
     if (!proofOfLife(&us, &id, &from)) {
@@ -678,9 +554,9 @@ void engineSuspend()
     gSuspended = true;
     if (!gWedged && tegra_host1x_syncpt_wait(gSyncpt, gBase + gIssued, kWaitBoundUs) == TEGRA_HOST1X_ETIMEDOUT)
         timedOut(gBase + gIssued);
-    w32(gCar, RST_DEV_Y_SET, Y_NVENC);
+    switch_car_reset_assert(kClock);
     IODelay(2);
-    w32(gCar, CLK_ENB_Y_CLR, Y_NVENC);
+    switch_car_clock_disable(kClock);
     IOLockUnlock(gEngineLock);
 }
 
@@ -716,8 +592,7 @@ void engineResume()
 extern "C" int tegra_nvenc_probe(void)
 {
     static volatile int started;
-    uint32_t noNvdec = 0;
-    if (PE_parse_boot_argn("switch-no-nvdec", &noNvdec, sizeof(noNvdec)) && noNvdec)
+    if (switch_boot_flag("switch-no-nvdec"))
         return 0;
     if (__atomic_exchange_n(&started, 1, __ATOMIC_SEQ_CST))
         return 0;

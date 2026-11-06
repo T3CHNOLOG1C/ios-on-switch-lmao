@@ -41,6 +41,12 @@ kernel_driver(
     hdr_deps = [
         "drivers/TegraHost1x",
         "drivers/TegraNVDEC",
+        "kits/SwitchBootArgs",
+        "kits/SwitchCAR",
+        "kits/SwitchDMA",
+        "kits/SwitchFalcon",
+        "kits/SwitchMMIO",
+        "kits/SwitchTime",
     ],
     stems = {"firmware.S": "nvenc_firmware"},
 )
