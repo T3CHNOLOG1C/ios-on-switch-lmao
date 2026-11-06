@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The ABI of our subclasses of original 21H461 classes (kernel_driver's abi_checks run it on every build).
 
-Usage: abi_check.py --class xudc|xhci --kernelcache KC --object X.o --late X.late.o --bindings B.S --output X.checked.o
+Usage: abi_check.py --class xudc|xhci --kernelcache KC --object X.o --late X.late.o --bindings B.S --output X.abi-ok
                     [--write]
 
 xudc: SwitchXUDC against IOUSBDeviceController (com.apple.iokit.IOUSBDeviceFamily);
@@ -17,7 +17,7 @@ Checks, against the kernelcache the prelinker uses:
   instead of comparing;
 - the late object (static initializer staged, Drivers.cmake switch_late_object) has the same instructions as the
   object and no __mod_init_func.
-Then copies the late object to --output, which the archive takes.
+Then writes --output, the build's record that the checks passed.
 """
 import argparse
 from pathlib import Path
@@ -298,7 +298,7 @@ def main():
     require(late_text == text_of(blob)[0], 'late-init staging changed instructions')
     require(not any(s['name'] == '__mod_init_func' for g in late_image['segments'] for s in g['sections']),
             'the late object still has an automatic initializer')
-    args.output.write_bytes(late)
+    args.output.write_text('ok\n')
 
 
 if __name__ == '__main__':

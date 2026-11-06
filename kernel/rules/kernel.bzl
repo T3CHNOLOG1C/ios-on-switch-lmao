@@ -327,6 +327,7 @@ def _kernel_driver_objects_impl(ctx):
         totals[part][_stem(src).lower()] = totals[part].get(_stem(src).lower(), 0) + 1
     seen = [{} for _ in compiled]
     objects = []
+    validations = []
     for src, part in zip(ctx.files.srcs, ctx.attr.parts):
         if taken[part] >= len(compiled[part]):
             fail("{}: {} has no object in {}".format(ctx.label, src.short_path, ctx.attr.cc_deps[part].label))
@@ -372,7 +373,7 @@ def _kernel_driver_objects_impl(ctx):
             final = late_obj
         if src.basename in checks:
             check = checks.pop(src.basename)
-            checked = ctx.actions.declare_file(out_dir + "/" + stem + ".checked.o")
+            checked = ctx.actions.declare_file(out_dir + "/" + stem + ".abi-ok")
             run_tool(
                 ctx,
                 ctx.attr.abi_check,
@@ -395,17 +396,19 @@ def _kernel_driver_objects_impl(ctx):
                 "KernelAbiCheck",
                 "Checking {} against the original kernelcache ({})".format(src.basename, check.cls),
             )
-            final = checked
+            validations.append(checked)
         objects.append(final)
     for part, objs in enumerate(compiled):
         if taken[part] != len(objs):
             fail("{}: {} has objects no source claims".format(ctx.label, ctx.attr.cc_deps[part].label))
     if checks:
         fail("{}: abi_checks for sources not in srcs: {}".format(ctx.label, checks.keys()))
+    # The checks are validations: the kernel links the objects as compiled, so no byte of it comes from the IPSW.
     return [
         DefaultInfo(files = depset(objects)),
         KernelObjectsInfo(objects = objects, prelink = ctx.attr.prelink, cuts = ctx.attr.prelink_cuts,
                           deferred = ctx.attr.prelink_deferred),
+        OutputGroupInfo(_validation = depset(validations)),
     ]
 
 _kernel_driver_objects = rule(

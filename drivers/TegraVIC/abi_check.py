@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """TegraVIC's bindings into the IOSurface kext (kernel_driver's abi_checks run it on every build).
 
-Usage: abi_check.py --class iosurface --kernelcache KC --object X.o --late X.o --bindings B.S --output X.checked.o
+Usage: abi_check.py --class iosurface --kernelcache KC --object X.o --late X.o --bindings B.S --output X.abi-ok
                     [--write]
 
 TegraVICSurface.cpp calls com.apple.iokit.IOSurface functions by address (the kext exports no symbols in the
@@ -15,11 +15,10 @@ kernelcache). Checks, against the kernelcache the prelinker uses:
 - the object's undefined _tegra_vic_ios_* symbols are all bound, and nothing else of the kext is imported;
 - Apple's AppleM2ScalerCSCDriver and IOSurfaceAcceleratorClient override, in the slots TegraVICUserClient.cpp
   replaces in their vtable copies, the methods read for the contract (CONTRACT.md).
-Then copies the object to --output, which the archive takes.
+Then writes --output, the build's record that the checks passed.
 """
 import argparse
 from pathlib import Path
-import shutil
 import struct
 import sys
 
@@ -164,7 +163,7 @@ def main():
     imports = {s for s in undefined(args.object.read_bytes()) if s.startswith('_tegra_vic_ios_')}
     require(imports <= bound, f'unbound IOSurface imports: {sorted(imports - bound)}')
     if args.output:
-        shutil.copyfile(args.late, args.output)
+        args.output.write_text('ok\n')
 
 
 if __name__ == '__main__':
