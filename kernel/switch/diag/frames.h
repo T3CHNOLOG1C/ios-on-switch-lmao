@@ -68,8 +68,13 @@ static inline struct switch_frames_client *switch_frames_new_client(struct switc
             oldest = i;
         }
     }
-    c->client[oldest] = (struct switch_frames_client){0};
-    return &c->client[oldest];
+    struct switch_frames_client *e = &c->client[oldest];
+    e->last_us = e->start_us = 0;
+    e->commits = 0;
+    for (unsigned int b = 0; b < SWITCH_FRAMES_BINS; b++) {
+        e->gaps[b] = 0;
+    }
+    return e;
 }
 
 /* A message from pid at now_us (microseconds of mach time). */
