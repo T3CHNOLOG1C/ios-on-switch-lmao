@@ -57,6 +57,7 @@ struct nvkmd_darwin_dev {
    struct nvkmd_dev base;
 
    struct nvkmd_darwin_conn conn;
+   bool shared_conn; /* the process's connection (darwin_shared), not its own */
 
    simple_mtx_t heap_mutex;
    struct util_vma_heap heap;
@@ -141,5 +142,12 @@ struct nvkmd_darwin_sync_point {
 void switch_nvk_import_surface(uint32_t surface_id, const void *base, uint64_t bytes);
 /* The GPU may write the surface from now on (method 15): before its first render, blit or store. false: not said. */
 bool switch_nvk_surface_gpu_writes(uint32_t surface_id);
+/* The process's connection, for the plugin's raw GM20B path (drivers/TegraGM20BMetal/raw/runtime/raw_kernel.cpp): opened by
+ * the first of it and NVK's first device, closed after the last release. One connection is one GPU address space, so each
+ * driver can use memory the other bound with no second import or bind. [*va_start, *va_end): client VAs NVK never hands
+ * out, the caller's to bind. false: no connection. */
+bool switch_nvk_connection(uint32_t *conn, bool *tunnel, uint32_t *selector, uint64_t *va_start,
+                           uint64_t *va_end);
+void switch_nvk_connection_release(void);
 
 #endif /* NVKMD_DARWIN_H */

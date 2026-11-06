@@ -177,6 +177,75 @@ darwin_unmap(const struct nvkmd_darwin_conn *c, uint32_t token,
    IOConnectUnmapMemory64(c->conn, token, mach_task_self(), addr);
 }
 
+/* The process's connection: NVK's first device and the plugin's raw GM20B
+ * path share it (switch_nvk_connection), whichever opens it first.
+ */
+static struct {
+   pthread_mutex_t lock;
+   uint32_t refs;
+   bool dev_claimed;
+   struct nvkmd_darwin_conn conn;
+   struct TegraGM20BAbiInfo info;
+} darwin_shared = { .lock = PTHREAD_MUTEX_INITIALIZER };
+
+static VkResult
+darwin_shared_open(struct vk_object_base *log_obj, struct nvkmd_darwin_conn *c,
+                   struct TegraGM20BAbiInfo *info)
+{
+   VkResult result = VK_SUCCESS;
+   pthread_mutex_lock(&darwin_shared.lock);
+   if (darwin_shared.refs == 0)
+      result = darwin_open(log_obj, &darwin_shared.conn, &darwin_shared.info);
+   if (result == VK_SUCCESS) {
+      darwin_shared.refs++;
+      *c = darwin_shared.conn;
+      *info = darwin_shared.info;
+   }
+   pthread_mutex_unlock(&darwin_shared.lock);
+   return result;
+}
+
+static void
+darwin_shared_close(void)
+{
+   pthread_mutex_lock(&darwin_shared.lock);
+   if (--darwin_shared.refs == 0)
+      darwin_close(&darwin_shared.conn);
+   pthread_mutex_unlock(&darwin_shared.lock);
+}
+
+/* The top quarter of the client VAs: NVK's heaps never hand it out, so the
+ * other driver of the shared connection binds its own memory there.
+ */
+static uint64_t
+darwin_foreign_va_start(const struct TegraGM20BAbiInfo *info)
+{
+   return align64(info->va_start + (info->va_end - info->va_start) / 4 * 3,
+                  1 << 16);
+}
+
+__attribute__((visibility("default"))) bool
+switch_nvk_connection(uint32_t *conn, bool *tunnel, uint32_t *selector,
+                      uint64_t *va_start, uint64_t *va_end)
+{
+   struct nvkmd_darwin_conn c;
+   struct TegraGM20BAbiInfo info;
+   if (darwin_shared_open(NULL, &c, &info) != VK_SUCCESS)
+      return false;
+   *conn = c.conn;
+   *tunnel = c.tunnel;
+   *selector = c.selector;
+   *va_start = darwin_foreign_va_start(&info);
+   *va_end = info.va_end;
+   return true;
+}
+
+__attribute__((visibility("default"))) void
+switch_nvk_connection_release(void)
+{
+   darwin_shared_close();
+}
+
 static VkResult
 darwin_result(struct vk_object_base *log_obj, kern_return_t kr,
               const char *what)
@@ -729,7 +798,14 @@ nvkmd_darwin_dev_destroy(struct nvkmd_dev *_dev)
    simple_mtx_destroy(&dev->heap_mutex);
    simple_mtx_destroy(&dev->channels_mutex);
    simple_mtx_destroy(&dev->base.mems_mutex);
-   darwin_close(&dev->conn);
+   if (dev->shared_conn) {
+      pthread_mutex_lock(&darwin_shared.lock);
+      darwin_shared.dev_claimed = false;
+      pthread_mutex_unlock(&darwin_shared.lock);
+      darwin_shared_close();
+   } else {
+      darwin_close(&dev->conn);
+   }
    FREE(dev);
 }
 
@@ -794,9 +870,22 @@ nvkmd_darwin_create_dev(struct nvkmd_pdev *_pdev,
    if (dev == NULL)
       return vk_error(log_obj, VK_ERROR_OUT_OF_HOST_MEMORY);
 
-   /* Each device gets its own connection, hence its own GPU address space. */
+   /* The first device takes the process's connection, which the raw GM20B
+    * path shares; any other gets its own, hence its own GPU address space.
+    */
+   pthread_mutex_lock(&darwin_shared.lock);
+   dev->shared_conn = !darwin_shared.dev_claimed;
+   darwin_shared.dev_claimed = true;
+   pthread_mutex_unlock(&darwin_shared.lock);
    struct TegraGM20BAbiInfo info;
-   VkResult result = darwin_open(log_obj, &dev->conn, &info);
+   VkResult result = dev->shared_conn ?
+                     darwin_shared_open(log_obj, &dev->conn, &info) :
+                     darwin_open(log_obj, &dev->conn, &info);
+   if (result != VK_SUCCESS && dev->shared_conn) {
+      pthread_mutex_lock(&darwin_shared.lock);
+      darwin_shared.dev_claimed = false;
+      pthread_mutex_unlock(&darwin_shared.lock);
+   }
    if (result != VK_SUCCESS) {
       FREE(dev);
       return result == VK_ERROR_INCOMPATIBLE_DRIVER ?
@@ -811,15 +900,17 @@ nvkmd_darwin_create_dev(struct nvkmd_pdev *_pdev,
    simple_mtx_init(&dev->base.mems_mutex, mtx_plain);
    simple_mtx_init(&dev->channels_mutex, mtx_plain);
 
-   /* Same split as nvkmd_nouveau: ordinary VAs below, capture/replay VAs in
-    * the upper half of the client window.
+   /* As nvkmd_nouveau: ordinary VAs in the lower half of the client window,
+    * capture/replay VAs above them, up to the quarter the other driver of the
+    * shared connection binds in.
     */
    const uint64_t start = MAX2(info.va_start, 4096);
+   const uint64_t foreign_start = darwin_foreign_va_start(&info);
    dev->replay_start = start + (info.va_end - start) / 2;
    simple_mtx_init(&dev->heap_mutex, mtx_plain);
    util_vma_heap_init(&dev->heap, start, dev->replay_start - start);
    util_vma_heap_init(&dev->replay_heap, dev->replay_start,
-                      info.va_end - dev->replay_start);
+                      foreign_start - dev->replay_start);
 
    p_atomic_cmpxchg(&surface_writes_dev, NULL, dev);
    *dev_out = &dev->base;
