@@ -16,7 +16,7 @@
 #                            submission waiting at the gate goes on at the wake, a caller that never leaves fails the drain
 #   gm20b_source_test        how the user client and gpu.c use both, the pool's zeroing (nvkm shim, scrubber), the
 #                            fence-only present, and which paths go through the sleep gate in what order (none of which a
-#                            host model runs)
+#                            host model runs); NVK's stencil copy temp on the bind alignment
 #
 #   bazel test //drivers/TegraGM20B/test:all
 load("//bazel/lint:defs.bzl", "lint_files")
@@ -60,6 +60,7 @@ host_test(
     data = [
         "//drivers/TegraGM20BMetal:raw/runtime/raw_kernel.cpp",
         "//third_party/mesa/src/nouveau/vulkan:nvkmd/darwin/nvkmd_darwin.c",
+        "//third_party/mesa/src/nouveau/vulkan:nvk_image.c",
         "//drivers/TegraGM20B:TegraGM20BUserClient.cpp",
         "//drivers/TegraGM20B:gpu.c",
         "//drivers/TegraGM20B:shim/linux.c",
