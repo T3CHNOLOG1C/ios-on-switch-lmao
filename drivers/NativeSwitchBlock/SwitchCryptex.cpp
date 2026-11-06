@@ -221,12 +221,13 @@ Job *gJobs;
 const uint8_t gZeros[kImageBlock] = {};
 
 // The boot prefetch threads, their reads in flight on the direct devices (bytes: reads straight to the card and reads
-// ahead into the cache), and the foreground's reads while they run.
+// ahead into the cache), and the foreground's reads while they run or the boot's window is open.
 struct {
     IOLock *lock;
     thread_t threads[kWorkers];
     uint64_t inflight;
     bool waiting;
+    volatile bool window;
     uint64_t foregroundReads, foregroundBytes;
 } gFlow;
 
@@ -606,7 +607,7 @@ IOReturn SwitchCryptexDevice::doAsyncReadWrite(IOMemoryDescriptor *buffer, UInt6
     p->remaining = 1;
     p->inflight = p->cached = false;
     p->prefetch = isPrefetchThread(current_thread());
-    if (!p->prefetch && prefetchRunning()) {
+    if (!p->prefetch && (prefetchRunning() || gFlow.window)) {
         __atomic_fetch_add(&gFlow.foregroundReads, 1, __ATOMIC_RELAXED);
         __atomic_fetch_add(&gFlow.foregroundBytes, length, __ATOMIC_RELAXED);
     }
@@ -1229,9 +1230,11 @@ extern "C" int switch_cryptex_manifest_sha384(dev_t device, const char *uuid, ui
 // card time. So:
 //  - record: on a boot with no valid list, every read of a cryptex volume's file that goes to the device (vfs_cluster.c
 //    cluster_io: page-in clusters, read misses, read-ahead) is logged with its first-read second, from the mounts until
-//    afterFrame (the later of kRecordAfterFrameS after the first frame and kRecordUntilS of uptime), and this file saves
-//    the files' ranges (file id, pages) as runs of up to kMaxRun pages (through gaps of up to kMaxGap pages), in
-//    first-read order, next to the System image (kListSuffix; the header keys both images' id, size and mtime);
+//    kRecordAfterBootS after System Boot Complete (SpringBoard finished startup: SwitchPower's boot-done hint), and this
+//    file saves the files' ranges (file id, pages) as runs of up to kMaxRun pages (through gaps of up to kMaxGap
+//    pages), in first-read order, at most kListCapPages, next to the System image (kListSuffix; the header keys both
+//    images' id, size and mtime). A boot that has not reached SpringBoard by kRecordBackstopS after the mounts saves
+//    nothing: a crash loop's reads (ReportCrash symbolicating the shared cache) would be replayed on every boot after;
 //  - replay: on every later boot, right after both cryptexes are mounted, kWorkers kernel threads page the runs in, in
 //    order (vnode_pagein on the file: absent pages only, into the file's own pages, read and checked like any page-in).
 //    APFS reads a page-in's blocks one at a time, so each thread first reads its run's absent pages ahead into the
@@ -1240,8 +1243,9 @@ extern "C" int switch_cryptex_manifest_sha384(dev_t device, const char *uuid, ui
 //    most kInFlightBytes of the threads' reads are on the card at once, in the SD driver's high class first come first
 //    served with the foreground's: a foreground read waits behind at most that much, the prefetch keeps a large share
 //    of the card, and it stays ahead of the foreground, whose page-ins then find their pages resident (or in flight,
-//    and wait for them). It stops when the list is done or when a recording would stop (afterFrame).
-// The volumes are read-only, so a stale list costs only wasted reads; a changed image is re-recorded. A list this build
+//    and wait for them). It stops when the list is done, or at the end of the boot's window as a recording would.
+// The volumes are read-only, so a stale list costs only wasted reads, but those are boot time: a changed image is
+// re-recorded, and so is a list a replay boot shows no longer matches the boot (switchListStale). A list this build
 // cannot read is a recording boot with no prefetch, so loadList says why in one line, and the format is frozen
 // (SwitchCryptexMap.h): a new one must read the old.
 namespace {
@@ -1249,11 +1253,10 @@ constexpr uint32_t kPage = 4096;
 constexpr uint32_t kMaxRun = 128;  // pages: 512 KiB per page-in, as the old 512 KiB advisory reads
 constexpr uint32_t kMaxGap = 8;    // read through up to 32 KiB of unrecorded pages rather than start another page-in
 constexpr uint64_t kInFlightBytes = 3 * kMaxRun * kPage;
-constexpr uint64_t kRecordAfterFrameS = 30;
-constexpr uint64_t kRecordUntilS = 125;
+constexpr uint64_t kRecordAfterBootS = 5;
+constexpr uint64_t kListCapPages = (768ull << 20) / kPage;
 constexpr uint32_t kLogEntries = 1u << 16;  // 2 MiB, allocated on recording boots only
-// NativeLegacyDisplay reports the first frame only in the unrotated layout; without a report, stop this long after the
-// mounts (the 11-04 boots reached SpringBoard 110-135 s after them).
+// The 11-04 boots reached SpringBoard 110-135 s after the mounts.
 constexpr uint64_t kRecordBackstopS = 180;
 // A prefetch read on the card this long with no other finishing was lost (they complete from the SD driver's interrupts).
 constexpr uint32_t kFlowTimeoutS = 30;
@@ -1285,11 +1288,12 @@ struct {
     switch_record_entry *log = nullptr;  // never freed: vfs_cluster.c may still be writing an entry
     Run *runs = nullptr;
     uint32_t runCount = 0;
-    uint64_t runCapacity = 0;  // the recording's runs allocation (afterFrame)
-    thread_call_t frameCall = nullptr, loadCall = nullptr;
-    volatile uint32_t frame = 0, stop = 0, started = 0;
+    uint64_t runCapacity = 0;  // the recording's runs allocation (saveRecording)
+    thread_call_t backstopCall = nullptr, loadCall = nullptr, bootCall = nullptr;
+    volatile uint32_t frame = 0, stop = 0, started = 0, bootComplete = 0;
+    uint64_t listPages = 0;  // the replayed list's
     // ioLeft: the boot's read phases still running (the replay, the recording window); at 0 the cache shrinks.
-    uint32_t next = 0, done = 0, files = 0, missing = 0, workers = 0, ioLeft = 0, frameDone = 0;
+    uint32_t next = 0, done = 0, files = 0, missing = 0, workers = 0, ioLeft = 0, windowDone = 0;
     uint64_t bytes = 0, startedMs = 0;
     VolumeMap map[SWITCH_CRYPTEX_COUNT] = {};
 } gPrefetch;
@@ -1547,7 +1551,7 @@ void readAheadRun(vnode_t vp, unsigned index, off_t offset, off_t length)
     vnode_put(devvp);
 }
 
-// The boot's reads are done (the replay, and the recording window up to afterFrame): the cache gives back its idle
+// The boot's reads are done (the replay, and the boot's window up to endBootWindow): the cache gives back its idle
 // windows beyond kSteadyWindows (all of them if it is off).
 void bootIoDone()
 {
@@ -1779,7 +1783,8 @@ void saveRecording()
     const uint32_t entries = appended < kLogEntries ? appended : kLogEntries;
     Run *runs = nullptr;
     uint32_t files = 0, dropped = 0;
-    const uint32_t count = buildRuns(log, entries, &runs, &files, &dropped);
+    const uint32_t built = buildRuns(log, entries, &runs, &files, &dropped);
+    const uint32_t count = switchCapRuns(runs, built, kListCapPages);
     ListHeader header = gPrefetch.key;
     header.runs = count;
     header.files = files;
@@ -1808,19 +1813,54 @@ void saveRecording()
         IOLog("SwitchBootPrefetch: %s not saved: %d (%u reads logged)\n", path, error, appended);
     else
         IOLog("SwitchBootPrefetch: recorded %u runs (%llu MiB) of %u cryptex files for the next boots (%u of %u "
-              "reads not kept)\n",
-              count, (pages * kPage) >> 20, files, dropped + (appended - entries), appended);
+              "reads not kept, %u runs past the %llu MiB cap)\n",
+              count, (pages * kPage) >> 20, files, dropped + (appended - entries), appended, built - count,
+              (kListCapPages * kPage) >> 20);
 }
 
-// kRecordAfterFrameS after the first frame (or kRecordBackstopS after the mounts): stop the prefetch, save a recording.
-// (Re-armed by the first frame after the backstop has run, it may run twice: only the first does anything.)
-void afterFrame(thread_call_param_t, thread_call_param_t)
+// The next boots record afresh: the list is emptied, which loadList refuses.
+void dropList(const char *why)
+{
+    char path[128];
+    listPath(path, sizeof(path));
+    vfs_context_t ctx = vfs_context_kernel();
+    vnode_t vp = NULLVP;
+    const int error = vnode_open(path, O_TRUNC | FWRITE | O_NOFOLLOW, 0, 0, &vp, ctx);
+    if (!error)
+        vnode_close(vp, FWRITE, ctx);
+    IOLog("SwitchBootPrefetch: list of %llu MiB dropped (%s), the next boot records afresh%s\n",
+          (gPrefetch.listPages * kPage) >> 20, why, error ? " (it could not be emptied)" : "");
+}
+
+// The boot's read window ends: kRecordAfterBootS after System Boot Complete (complete), or at the backstop. The replay
+// stops; a recording is kept only from a boot that reached SpringBoard. Whichever comes first acts.
+void endBootWindow(bool complete)
 {
     gPrefetch.stop = 1;
-    if (__atomic_exchange_n(&gPrefetch.frameDone, 1u, __ATOMIC_ACQ_REL))
+    if (__atomic_exchange_n(&gPrefetch.windowDone, 1u, __ATOMIC_ACQ_REL))
         return;
-    saveRecording();
+    gFlow.window = false;
+    if (complete) {
+        saveRecording();
+        const SwitchReplayResult replay = {gPrefetch.listPages, gFlow.foregroundBytes, gPrefetch.missing};
+        if (const char *stale = gPrefetch.runCount ? switchListStale(replay, kListCapPages, kPage) : nullptr)
+            dropList(stale);
+    } else if (__atomic_exchange_n(&gPrefetch.log, nullptr, __ATOMIC_ACQ_REL)) {
+        const uint32_t logged = switch_cluster_record_stop();
+        IOLog("SwitchBootPrefetch: no System Boot Complete %llu s after the mounts: the %u reads logged are not kept\n",
+              kRecordBackstopS, logged);
+    }
     bootIoDone();
+}
+
+void afterBoot(thread_call_param_t, thread_call_param_t)
+{
+    endBootWindow(true);
+}
+
+void backstop(thread_call_param_t, thread_call_param_t)
+{
+    endBootWindow(false);
 }
 
 // Temporary (r8-sdboot, 11-04): CPU time per core from boot to the first frame, to tell what bounds the boot once the
@@ -1852,23 +1892,27 @@ void prefetchStart()
         return;
     }
     gPrefetch.loadCall = thread_call_allocate_with_options(cpuLoad, nullptr, THREAD_CALL_PRIORITY_LOW, 0);
-    gPrefetch.frameCall = thread_call_allocate_with_options(afterFrame, nullptr, THREAD_CALL_PRIORITY_LOW, 0);
-    if (!gPrefetch.frameCall)
+    gPrefetch.backstopCall = thread_call_allocate_with_options(backstop, nullptr, THREAD_CALL_PRIORITY_LOW, 0);
+    gPrefetch.bootCall = thread_call_allocate_with_options(afterBoot, nullptr, THREAD_CALL_PRIORITY_LOW, 0);
+    if (!gPrefetch.backstopCall || !gPrefetch.bootCall)
         return;
     uint32_t count = 0;
     const char *why = nullptr;
     Run *runs = loadList(gPrefetch.key, &count, &why);
-    // The boot's read phases: the replay (if any) and the recording window, both before afterFrame can run.
+    // The boot's read phases: the replay (if any) and the boot's window, both before endBootWindow can run.
     gPrefetch.ioLeft = runs ? 2 : 1;
-    uint64_t backstop = 0;
-    clock_interval_to_deadline(static_cast<uint32_t>(kRecordBackstopS), NSEC_PER_SEC, &backstop);
-    thread_call_enter_delayed(gPrefetch.frameCall, backstop);
+    uint64_t deadline = 0;
+    clock_interval_to_deadline(static_cast<uint32_t>(kRecordBackstopS), NSEC_PER_SEC, &deadline);
+    thread_call_enter_delayed(gPrefetch.backstopCall, deadline);
+    gFlow.foregroundReads = gFlow.foregroundBytes = 0;
+    gFlow.window = true;
     if (runs) {
         gPrefetch.runs = runs;
         gPrefetch.runCount = count;
+        for (uint32_t i = 0; i < count; ++i)
+            gPrefetch.listPages += runs[i].pages;
         for (unsigned i = 0; i < SWITCH_CRYPTEX_COUNT; ++i)
             prepareMap(i);
-        gFlow.foregroundReads = gFlow.foregroundBytes = 0;
         gPrefetch.startedMs = uptimeMs();
         gPrefetch.workers = kWorkers;
         for (unsigned i = 0; i < kWorkers; ++i) {
@@ -1902,16 +1946,21 @@ extern "C" void switch_cryptex_mounted(unsigned index, mount_t mount)
 }
 
 // NativeLegacyDisplay calls this (weakly) at each frame until the first one shows, in any context, interrupts possibly
-// disabled: the first call moves afterFrame to the later of kRecordAfterFrameS from now and kRecordUntilS of uptime
-// (re-arming replaces the backstop deadline).
+// disabled.
 extern "C" void switch_boot_io_report(void)
 {
-    if (__atomic_exchange_n(&gPrefetch.frame, 1u, __ATOMIC_RELAXED) || !gPrefetch.frameCall)
+    if (__atomic_exchange_n(&gPrefetch.frame, 1u, __ATOMIC_RELAXED) || !gPrefetch.loadCall)
         return;
-    if (gPrefetch.loadCall)
-        thread_call_enter(gPrefetch.loadCall);
-    uint64_t deadline = 0, until = 0;
-    clock_interval_to_deadline(static_cast<uint32_t>(kRecordAfterFrameS), NSEC_PER_SEC, &deadline);
-    nanoseconds_to_absolutetime(kRecordUntilS * NSEC_PER_SEC, &until);
-    thread_call_enter_delayed(gPrefetch.frameCall, deadline > until ? deadline : until);
+    thread_call_enter(gPrefetch.loadCall);
+}
+
+// SwitchPower, at System Boot Complete (IOPMrootDomain's boot-done hint, on its work loop): the boot's window ends
+// kRecordAfterBootS later.
+extern "C" void switch_boot_io_complete(void)
+{
+    if (__atomic_exchange_n(&gPrefetch.bootComplete, 1u, __ATOMIC_RELAXED) || !gPrefetch.bootCall)
+        return;
+    uint64_t deadline = 0;
+    clock_interval_to_deadline(static_cast<uint32_t>(kRecordAfterBootS), NSEC_PER_SEC, &deadline);
+    thread_call_enter_delayed(gPrefetch.bootCall, deadline);
 }

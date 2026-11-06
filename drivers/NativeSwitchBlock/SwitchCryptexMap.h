@@ -187,6 +187,39 @@ inline uint64_t switchFnv(const uint8_t *p, uint64_t n)
     return h;
 }
 
+// The runs a list keeps, in replay order, until they hold `capPages` pages; returns how many.
+inline uint32_t switchCapRuns(const SwitchRun *runs, uint32_t count, uint64_t capPages)
+{
+    uint64_t pages = 0;
+    for (uint32_t i = 0; i < count; ++i) {
+        if (pages + runs[i].pages > capPages)
+            return i;
+        pages += runs[i].pages;
+    }
+    return count;
+}
+
+// What a replay boot that reached SpringBoard says about its list. The foreground's reads of the cryptexes while the
+// boot's window was open are the boot's reads the list lacks, or reached too late; hence the margin before they count.
+struct SwitchReplayResult {
+    uint64_t listPages, foregroundBytes;
+    uint32_t missingFiles;
+};
+
+constexpr uint64_t kSwitchStaleForegroundBytes = 64ull << 20;
+
+// Why the next boot records afresh, or nullptr to keep replaying the list.
+inline const char *switchListStale(const SwitchReplayResult &r, uint64_t capPages, uint64_t pageBytes)
+{
+    if (r.missingFiles)
+        return "files it names are gone";
+    if (r.listPages > capPages)
+        return "it holds more than a boot reads";
+    if (r.foregroundBytes > kSwitchStaleForegroundBytes && r.foregroundBytes > r.listPages * pageBytes / 2)
+        return "the boot read half as much again outside it";
+    return nullptr;
+}
+
 // Whether a saved header is a list this build replays for these images (at most maxRuns runs), or why not.
 inline const char *switchListRefusal(const SwitchListHeader &saved, const SwitchImageKey (&images)[2], uint32_t maxRuns)
 {

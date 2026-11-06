@@ -50,6 +50,7 @@
 #include "SwitchGovernor.h"
 #include "SwitchPerfGovernor.h"
 #include "SwitchPower.h"
+#include "../NativeSwitchBlock/SwitchCryptex.h"  // switch_boot_io_complete
 #include "../TegraDFLL/TegraDFLL.h"
 #include "../TegraGM20B/TegraGM20BGpu.h"     // tegra_gm20b_perf_hint, tegra_gm20b_idle_tick: the GPU's idle clock
 #include "../SwitchBattery/SwitchBattery.h"  // switch_battery_avg_ma: the draw beside the clocks
@@ -581,6 +582,7 @@ extern "C" void switch_perf_hint(unsigned int hint)
 {
     tegra_gm20b_perf_hint(hint);  // the GPU back at its full clock if it idles low
     if (hint == SWITCH_PERF_HINT_BOOT_DONE) {
+        switch_boot_io_complete();
         bootDone();
         return;
     }

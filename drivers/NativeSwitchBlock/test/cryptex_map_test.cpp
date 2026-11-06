@@ -268,3 +268,27 @@ TEST(CryptexMap, TheSavedListFormatStaysReadable)
     EXPECT_STREQ(switchListRefusal(other, keys, 1u << 18), "no runs, or too many");
     EXPECT_STREQ(switchListRefusal(header, keys, 1), "no runs, or too many");
 }
+
+TEST(CryptexMap, AListKeepsItsFirstRunsUpToTheCap)
+{
+    const SwitchRun runs[] = {{1, 0, 128, 1, 0}, {1, 128, 128, 1, 0}, {2, 0, 64, 2, 0}, {3, 0, 128, 9, 1}};
+    EXPECT_EQ(switchCapRuns(runs, 4, 1000), 4u);
+    EXPECT_EQ(switchCapRuns(runs, 4, 448), 4u);
+    EXPECT_EQ(switchCapRuns(runs, 4, 447), 3u);
+    EXPECT_EQ(switchCapRuns(runs, 4, 320), 3u);
+    EXPECT_EQ(switchCapRuns(runs, 4, 319), 2u);
+    EXPECT_EQ(switchCapRuns(runs, 4, 0), 0u);
+    EXPECT_EQ(switchCapRuns(nullptr, 0, 10), 0u);
+}
+
+TEST(CryptexMap, AReplayBootDropsAListThatNoLongerMatchesIt)
+{
+    constexpr uint64_t page = 4096, cap = (768ull << 20) / page, list = (300ull << 20) / page;
+    EXPECT_EQ(switchListStale({list, 0, 0}, cap, page), nullptr);
+    EXPECT_EQ(switchListStale({list, 140ull << 20, 0}, cap, page), nullptr);
+    EXPECT_STREQ(switchListStale({list, 151ull << 20, 0}, cap, page), "the boot read half as much again outside it");
+    EXPECT_EQ(switchListStale({(64ull << 20) / page, 64ull << 20, 0}, cap, page), nullptr);
+    EXPECT_STREQ(switchListStale({list, 0, 1}, cap, page), "files it names are gone");
+    EXPECT_STREQ(switchListStale({cap + 1, 0, 0}, cap, page), "it holds more than a boot reads");
+    EXPECT_EQ(switchListStale({cap, 0, 0}, cap, page), nullptr);
+}

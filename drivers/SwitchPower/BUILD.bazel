@@ -38,6 +38,7 @@ kernel_driver(
     ],
     hdr_deps = [
         "drivers/NativeMobileDisplay",
+        "drivers/NativeSwitchBlock",
         "drivers/SwitchBattery",
         "drivers/SwitchSuspend",
         "drivers/SwitchTouch",

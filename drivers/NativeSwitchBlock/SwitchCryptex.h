@@ -26,6 +26,9 @@ int switch_cryptex_fallback(unsigned index, dev_t *volume, char *devicePath, siz
 /* Right after each cryptex mount: registers it with the cluster layer and,
  * once both are mounted, starts the boot prefetch (replay or recording). */
 void switch_cryptex_mounted(unsigned index, struct mount *mount);
+/* System Boot Complete (SwitchPower's boot-done hint): the boot prefetch's window
+ * ends a few seconds later, and a recording is kept only from such a boot. */
+void switch_boot_io_complete(void);
 /* Revalidates the retained binding and unique exact-UUID RO APFS descendant.
  * Returns BSD errno; can be called after mounting to compare actual dev_t. */
 int switch_cryptex_volume_status(unsigned index, dev_t *volume, char *devicePath, size_t capacity);
