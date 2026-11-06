@@ -15,6 +15,10 @@ common --repo_contents_cache_gc_max_age=1d
 # Action results by action key: a fresh output base, a new worktree or `bazel clean` reuses them. With a disk cache
 # Bazel builds without the bytes: only top-level outputs land in the output base (one is ~1 GB, not 5).
 common --disk_cache=~/Library/Caches/switch-ios-bazel/disk
+# No py rule invents __init__.py files, in any repository: MODULE.bazel's explicit_init_py covers only this module, and
+# rules_pkg's zip and tar builders still asked for them (rules_python#2945: implicit ones make stray directories
+# importable and can empty a real __init__.py).
+common --incompatible_default_to_explicit_init_py
 # The cap the least recently used entries are deleted above, once Bazel has been idle for gc_idle_delay. One full
 # working set (//:boot //:gpu and the tests) is ~4.5 GB and each agent branch adds 0.3-1 GB of its own (an XNU object
 # root, a kernel, a package): 16G holds main and about ten branches in flight, where 10G evicted one agent's work per
