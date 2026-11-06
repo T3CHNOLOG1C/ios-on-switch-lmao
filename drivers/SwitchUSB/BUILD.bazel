@@ -169,6 +169,9 @@ kernel_driver(
 # with the setting (kernel/BUILD.bazel libNativeSwitchBlockDevice).
 kernel_driver(
     name = "SwitchUSBSuperSpeed",
-    srcs = ["XusbSuperSpeed.cpp"],
-    hdr_deps = [],
+    srcs = [
+        "XusbSuperSpeed.cpp",
+        "UsbSmmuMapper.cpp",
+    ],
+    hdr_deps = ["drivers/TegraSMMU"],
 )

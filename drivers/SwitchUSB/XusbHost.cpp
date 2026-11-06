@@ -7,6 +7,7 @@
 #if SWITCH_USB_SUPERSPEED
 #include "XusbLanes.h"
 #include "XusbSuperSpeed.h"
+#include "UsbSmmuMapper.h"
 #endif
 
 extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
@@ -547,3 +548,14 @@ bool Controller::interruptSample(uint32_t &iman, uint32_t &usbcmd, uint32_t &usb
 }
 
 }  // namespace xhost
+
+#if SWITCH_USB_SUPERSPEED
+bool switch_xusb_firmware_range(uint64_t *pa, uint64_t *bytes)
+{
+    if (!xhost::gFirmware.va)
+        return false;
+    *pa = xhost::gFirmware.pa;
+    *bytes = xhost::gFirmware.size;
+    return true;
+}
+#endif

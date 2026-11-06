@@ -120,3 +120,13 @@ host_test(
     ],
     deps = [":switch_usb_lanes_c"],
 )
+
+# UsbIova.h (UsbSmmuMapper.cpp): the XUSB host's SMMU window and the page layout of a scattered buffer at one IOVA range.
+host_test(
+    name = "usb_iova_test",
+    srcs = [
+        "usb_iova_test.cpp",
+        "//drivers/SwitchUSB:UsbIova.h",
+    ],
+    copts = ["-O1"],
+)
