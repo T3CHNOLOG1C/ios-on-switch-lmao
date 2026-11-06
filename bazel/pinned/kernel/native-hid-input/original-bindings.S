@@ -102,3 +102,6 @@
 .set __ZNK11IOHIDDevice12handleIsOpenEPK9IOService, 0xfffffff004adc93c
 .globl __ZTV11IOHIDDevice
 .set __ZTV11IOHIDDevice, 0xfffffff005d045b0
+#if XNU_12377_121_6
+#error "21H461 kernelcache addresses: there are no iPadOS 27.2 (24B119) bindings for this driver yet"
+#endif

@@ -386,3 +386,6 @@
 .set _native_legacy_set_refresh_properties, 0xfffffff00579ebb8
 .globl _native_legacy_vsync_notify
 .set _native_legacy_vsync_notify, 0xfffffff005796720
+#if XNU_12377_121_6
+#error "21H461 kernelcache addresses: there are no iPadOS 27.2 (24B119) bindings for this driver yet"
+#endif

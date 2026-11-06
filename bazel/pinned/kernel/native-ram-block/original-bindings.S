@@ -18,3 +18,6 @@
 .set __ZNK20IOBlockStorageDevice11getPropertyEPK8OSSymbol, 0xfffffff00496ee88
 .globl __ZTV20IOBlockStorageDevice
 .set __ZTV20IOBlockStorageDevice, 0xfffffff005cb44c0
+#if XNU_12377_121_6
+#error "21H461 kernelcache addresses: there are no iPadOS 27.2 (24B119) bindings for this driver yet"
+#endif

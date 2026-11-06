@@ -14,3 +14,6 @@
 .set _sheng_original_pmgr_nub_read, 0xfffffff004a24adc
 .globl _sheng_original_pmgr_nub_write
 .set _sheng_original_pmgr_nub_write, 0xfffffff004a230ec
+#if XNU_12377_121_6
+#error "21H461 kernelcache addresses: there are no iPadOS 27.2 (24B119) bindings for this driver yet"
+#endif

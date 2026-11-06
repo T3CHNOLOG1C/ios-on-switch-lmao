@@ -42,3 +42,6 @@
 .set __ZNK16IOAESAccelerator11getWorkLoopEv, 0xfffffff004a80a00
 .globl __ZNK16IOAESAccelerator12getMetaClassEv
 .set __ZNK16IOAESAccelerator12getMetaClassEv, 0xfffffff004a800c4
+#if XNU_12377_121_6
+#error "21H461 kernelcache addresses: there are no iPadOS 27.2 (24B119) bindings for this driver yet"
+#endif
