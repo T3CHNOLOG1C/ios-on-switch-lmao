@@ -935,6 +935,39 @@ nvk_image_init_linear_tiled_shadows(struct nvk_device *dev,
    return VK_SUCCESS;
 }
 
+static bool
+nvk_image_plane_has_va(const struct nvk_image *image,
+                       const struct nvk_image_plane *plane)
+{
+   return (image->vk.create_flags & VK_IMAGE_CREATE_SPARSE_BINDING_BIT) ||
+          plane->nil.pte_kind;
+}
+
+static uint32_t
+nvk_image_plane_align_B(const struct nvk_physical_device *pdev,
+                        const struct nvk_image *image,
+                        const struct nvk_image_plane *plane)
+{
+   if (!nvk_image_plane_has_va(image, plane))
+      return plane->nil.align_B;
+   return MAX2(plane->nil.align_B, pdev->nvkmd->bind_align_B);
+}
+
+/* A plane with a VA of its own (nvk_image_plane_alloc_va) is bound over the
+ * whole VA, its size rounded up to its alignment, and the image's memory must
+ * hold that bind: bind_align_B is the host page, 16 KiB on Darwin, where a
+ * block-linear plane is only a multiple of 8 KiB, and the kernel refuses a
+ * bind past the end of a BO.
+ */
+static uint64_t
+nvk_image_plane_bound_size_B(const struct nvk_image *image,
+                             const struct nvk_image_plane *plane)
+{
+   if (!nvk_image_plane_has_va(image, plane))
+      return plane->nil.size_B;
+   return align64(plane->nil.size_B, plane->plane_align_B);
+}
+
 static VkResult
 nvk_image_init(struct nvk_device *dev,
                struct nvk_image *image,
@@ -1211,12 +1244,9 @@ nvk_image_init(struct nvk_device *dev,
    uint64_t plane_offset_B = 0;
    image->image_size_B = 0;
    image->image_align_B = 0;
-   const bool sparse_bound =
-      image->vk.create_flags & VK_IMAGE_CREATE_SPARSE_BINDING_BIT;
    for (uint8_t plane = 0; plane < image->plane_count; plane++) {
-      uint32_t plane_align_B = image->planes[plane].nil.align_B;
-      if (sparse_bound || image->planes[plane].nil.pte_kind)
-         plane_align_B = MAX2(plane_align_B, pdev->nvkmd->bind_align_B);
+      const uint32_t plane_align_B =
+         nvk_image_plane_align_B(pdev, image, &image->planes[plane]);
       image->planes[plane].plane_align_B = plane_align_B;
       image->image_align_B = MAX2(plane_align_B, image->image_align_B);
 
@@ -1231,7 +1261,8 @@ nvk_image_init(struct nvk_device *dev,
       } else {
          plane_offset_B = align64(plane_offset_B, plane_align_B);
          image->planes[plane].plane_offset_B = plane_offset_B;
-         plane_offset_B += image->planes[plane].nil.size_B;
+         plane_offset_B +=
+            nvk_image_plane_bound_size_B(image, &image->planes[plane]);
          image->image_size_B = plane_offset_B;
       }
    }
@@ -1251,7 +1282,8 @@ nvk_image_init(struct nvk_device *dev,
       plane_offset_B =
          align64(plane_offset_B, image->stencil_copy_temp.plane_align_B);
       image->stencil_copy_temp.plane_offset_B = plane_offset_B;
-      plane_offset_B += image->stencil_copy_temp.nil.size_B;
+      plane_offset_B +=
+         nvk_image_plane_bound_size_B(image, &image->stencil_copy_temp);
       image->image_size_B = plane_offset_B;
       image->image_align_B = MAX2(image->stencil_copy_temp.plane_align_B,
                                   image->image_align_B);
