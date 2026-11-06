@@ -75,12 +75,14 @@
 #include "../ArmGIC/SwitchInterrupts.h"
 #include "../TegraGPIO/TegraGPIO.h"
 #include "../TegraI2C/TegraI2C.h"
+#include "../../kits/SwitchCAR/SwitchPMC.h"
+#include "../../kits/SwitchDMA/SwitchDcache.h"
+#include "../../kits/SwitchMMIO/SwitchMMIOKernel.h"
 
 extern "C" {
 extern task_t kernel_task;
 vm_offset_t phystokv(uint64_t pa);
 uint64_t pmap_find_pa(pmap_t pmap, uint64_t va);
-vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
 // Defined in TegraGPIO.cpp (output level, then GPIO mode; masked writes); TegraGPIO.h does not declare it yet.
 int tegra_gpio_output(unsigned gpio, int value);
 }
@@ -158,43 +160,6 @@ constexpr vm_offset_t kCarPA = 0x60006000, kPmcPagePA = 0x7000e000, kPinmuxPA = 
                       kAdmaPA = 0x702e2000, kAgicPA = 0x702f9000;
 constexpr uint32_t kPmcOffset = 0x400;  // APBDEV_PMC 0x7000e400
 
-inline uint32_t r32(volatile uint8_t *base, uint32_t o)
-{
-    return *(volatile uint32_t *)(base + o);
-}
-
-inline void w32(volatile uint8_t *base, uint32_t o, uint32_t v)
-{
-    *(volatile uint32_t *)(base + o) = v;
-}
-
-// A register handshake without an interrupt of its own (reset done, channel idle, PLL lock): microseconds.
-bool waitBits(volatile uint8_t *base, uint32_t reg, uint32_t mask, uint32_t want, uint32_t us)
-{
-    uint64_t deadline;
-    clock_interval_to_deadline(us, kMicrosecondScale, &deadline);
-    while ((r32(base, reg) & mask) != want) {
-        if (mach_absolute_time() > deadline)
-            return (r32(base, reg) & mask) == want;
-    }
-    return true;
-}
-
-// The ADMA does not snoop: clean (CPU -> DRAM) before it reads, clean+invalidate after it wrote. 64-byte lines (A57).
-void cacheClean(const void *start, size_t bytes)
-{
-    for (uintptr_t at = (uintptr_t)start & ~(uintptr_t)63, end = (uintptr_t)start + bytes; at < end; at += 64)
-        __asm__ volatile("dc cvac, %0" ::"r"(at) : "memory");
-    __asm__ volatile("dsb sy" ::: "memory");
-}
-
-void cacheFlush(const void *start, size_t bytes)
-{
-    for (uintptr_t at = (uintptr_t)start & ~(uintptr_t)63, end = (uintptr_t)start + bytes; at < end; at += 64)
-        __asm__ volatile("dc civac, %0" ::"r"(at) : "memory");
-    __asm__ volatile("dsb sy" ::: "memory");
-}
-
 // CLK_RST_CONTROLLER (hekate bdk/soc/clock.h; Linux clk-tegra-periph.c, clk-tegra210b01.c).
 enum : uint32_t {
     RST_DEVICES_L = 0x4,
@@ -247,8 +212,6 @@ static_assert(kI2sDiv == 30, "I2S0 = PLLA_OUT0 / 16");
 // APBDEV_PMC (hekate bdk/soc/pmc_t210.h; mainline pmc.c tegra210_io_pads/io_pad_vctrls).
 enum : uint32_t {
     CLAMP_STATUS = 0x2c,
-    PWRGATE_TOGGLE = 0x30,
-    REMOVE_CLAMPING = 0x34,
     PWRGATE_STATUS = 0x38,
     NO_IOPOWER = 0x44,
     PWR_DET = 0x48,
@@ -258,8 +221,8 @@ enum : uint32_t {
     IO_DPD2_STATUS = 0x1c4,
 };
 
-constexpr uint32_t kPartitionAud = 1u << 27;  // POWER_RAIL_AUD
-constexpr uint32_t kPartitionAudId = 27, kToggleStart = 1u << 8;
+constexpr uint32_t kPartitionAud = 1u << 27;          // POWER_RAIL_AUD
+constexpr uint32_t kPartitionAudId = 27;              // TEGRA_POWERGATE_AUD
 constexpr uint32_t kPad33V = (1u << 5) | (1u << 18);  // audio, audio-hv: 1 = 3.3 V
 constexpr uint32_t kNoIoPowerAudioHv = 1u << 18;
 constexpr uint32_t kClkOut1Mask = (3u << 6) | (1u << 2), kClkOut1Extern1 = (3u << 6) | (1u << 2);  // src 3, force on
@@ -599,7 +562,7 @@ class SwitchAudio : public IOService {
 
     static volatile uint8_t *map(vm_offset_t pa, vm_size_t size, const char *what)
     {
-        auto *base = reinterpret_cast<volatile uint8_t *>(ml_io_map(pa, size));
+        volatile uint8_t *base = switch_mmio_map(pa, size);
         if (!base)
             panic("SwitchAudio: cannot map %s at %#lx", what, (unsigned long)pa);
         return base;
@@ -617,124 +580,134 @@ class SwitchAudio : public IOService {
     // _update_pll_mnp, _clk_pll_enable, wait for lock). Left as it is if it already runs this configuration.
     void startPlla()
     {
-        const uint32_t base = r32(car, PLLA_BASE);
+        const uint32_t base = switch_mmio_read32(car, PLLA_BASE);
         const bool running = (base & (PLL_ENABLE | PLL_BYPASS | PLLA_IDDQ)) == PLL_ENABLE &&
-                             (base & PLLA_MNP_MASK) == kPllaMnp && (r32(car, PLLA_MISC2) & PLLA_EN_SDM) &&
-                             (r32(car, PLLA_MISC1) & 0xffff) == kPllaSdm;
+                             (base & PLLA_MNP_MASK) == kPllaMnp &&
+                             (switch_mmio_read32(car, PLLA_MISC2) & PLLA_EN_SDM) &&
+                             (switch_mmio_read32(car, PLLA_MISC1) & 0xffff) == kPllaSdm;
         if (!running) {
-            w32(car, PLLA_OUT, r32(car, PLLA_OUT) & ~3u);  // PLLA_OUT0 off while the PLL changes
-            w32(car, PLLA_BASE, (base & ~PLL_ENABLE) | PLLA_IDDQ);
-            w32(car, PLLA_MISC0, PLLA_LOCK_ENABLE);
-            w32(car, PLLA_MISC2, 0);
-            w32(car, PLLA_BASE, (r32(car, PLLA_BASE) & ~(PLL_BYPASS | PLLA_MNP_MASK)) | kPllaMnp);
-            w32(car, PLLA_MISC1, (r32(car, PLLA_MISC1) & ~0xffffu) | kPllaSdm);
-            w32(car, PLLA_MISC2, PLLA_EN_SDM);
+            switch_mmio_write32(car, PLLA_OUT,
+                                switch_mmio_read32(car, PLLA_OUT) & ~3u);  // PLLA_OUT0 off while the PLL changes
+            switch_mmio_write32(car, PLLA_BASE, (base & ~PLL_ENABLE) | PLLA_IDDQ);
+            switch_mmio_write32(car, PLLA_MISC0, PLLA_LOCK_ENABLE);
+            switch_mmio_write32(car, PLLA_MISC2, 0);
+            switch_mmio_write32(car, PLLA_BASE,
+                                (switch_mmio_read32(car, PLLA_BASE) & ~(PLL_BYPASS | PLLA_MNP_MASK)) | kPllaMnp);
+            switch_mmio_write32(car, PLLA_MISC1, (switch_mmio_read32(car, PLLA_MISC1) & ~0xffffu) | kPllaSdm);
+            switch_mmio_write32(car, PLLA_MISC2, PLLA_EN_SDM);
             IODelay(1);
-            w32(car, PLLA_BASE, r32(car, PLLA_BASE) & ~PLLA_IDDQ);
+            switch_mmio_write32(car, PLLA_BASE, switch_mmio_read32(car, PLLA_BASE) & ~PLLA_IDDQ);
             IODelay(5);
-            w32(car, PLLA_BASE, r32(car, PLLA_BASE) | PLL_ENABLE);
-            if (!waitBits(car, PLLA_BASE, PLL_LOCK, PLL_LOCK, 600)) {
-                panic("SwitchAudio: PLLA did not lock: BASE %#x MISC0 %#x MISC1 %#x MISC2 %#x", r32(car, PLLA_BASE),
-                      r32(car, PLLA_MISC0), r32(car, PLLA_MISC1), r32(car, PLLA_MISC2));
+            switch_mmio_write32(car, PLLA_BASE, switch_mmio_read32(car, PLLA_BASE) | PLL_ENABLE);
+            if (!switch_mmio_wait32(car, PLLA_BASE, PLL_LOCK, PLL_LOCK, 600)) {
+                panic("SwitchAudio: PLLA did not lock: BASE %#x MISC0 %#x MISC1 %#x MISC2 %#x",
+                      switch_mmio_read32(car, PLLA_BASE), switch_mmio_read32(car, PLLA_MISC0),
+                      switch_mmio_read32(car, PLLA_MISC1), switch_mmio_read32(car, PLLA_MISC2));
             }
             IODelay(50);
         }
         // PLLA_OUT0: ratio at 15:8, out of reset (bit 0) and enabled (bit 1); the vreg field 31:28 stays 0.
-        w32(car, PLLA_OUT, (r32(car, PLLA_OUT) & ~0xf000ff03u) | (kPllaOut0Div << 8));
-        w32(car, PLLA_OUT, r32(car, PLLA_OUT) | 3u);
+        switch_mmio_write32(car, PLLA_OUT, (switch_mmio_read32(car, PLLA_OUT) & ~0xf000ff03u) | (kPllaOut0Div << 8));
+        switch_mmio_write32(car, PLLA_OUT, switch_mmio_read32(car, PLLA_OUT) | 3u);
     }
 
     void tegraClocksAndPads()
     {
         // Every rate below assumes the 38.4 MHz oscillator as PLL reference (the T210B01 PLLA table has only that).
-        const uint32_t osc = r32(car, OSC_CTRL);
+        const uint32_t osc = switch_mmio_read32(car, OSC_CTRL);
         if ((osc >> 28) != 5 || ((osc >> 26) & 3))
             panic("SwitchAudio: unexpected OSC_CTRL %#x (want 38.4 MHz, ref /1)", osc);
         // The APE partition (AHUB, ADMA, AGIC) is powered at boot and nothing here gates it; un-gating it would need the
         // MC flush and SLCG sequence of powergate-t21x.c, so a gated partition is reported, not handled.
-        if (!(r32(pmc, PWRGATE_STATUS) & kPartitionAud)) {
-            panic("SwitchAudio: APE power partition is off (PMC PWRGATE_STATUS %#x)", r32(pmc, PWRGATE_STATUS));
+        if (!(switch_mmio_read32(pmc, PWRGATE_STATUS) & kPartitionAud)) {
+            panic("SwitchAudio: APE power partition is off (PMC PWRGATE_STATUS %#x)",
+                  switch_mmio_read32(pmc, PWRGATE_STATUS));
         }
-        if ((r32(pmc, IO_DPD_STATUS) & (1u << 17)) || (r32(pmc, IO_DPD2_STATUS) & (1u << 29))) {
+        if ((switch_mmio_read32(pmc, IO_DPD_STATUS) & (1u << 17)) ||
+            (switch_mmio_read32(pmc, IO_DPD2_STATUS) & (1u << 29))) {
             panic("SwitchAudio: audio pads in deep power-down (IO_DPD_STATUS %#x IO_DPD2_STATUS %#x)",
-                  r32(pmc, IO_DPD_STATUS), r32(pmc, IO_DPD2_STATUS));
+                  switch_mmio_read32(pmc, IO_DPD_STATUS), switch_mmio_read32(pmc, IO_DPD2_STATUS));
         }
         // DAP1 is on the audio-hv rail, AUD_MCLK on audio; both are vdd-1v8 (MAX77620 SD3), DTB iopad-defaults 1.8 V.
         // mainline tegra_io_pad_set_voltage: write-enable the bit in PWR_DET, then clear it in PWR_DET_VALUE.
-        if (r32(pmc, PWR_DET_VAL) & kPad33V) {
-            w32(pmc, PWR_DET, r32(pmc, PWR_DET) | kPad33V);
-            w32(pmc, PWR_DET_VAL, r32(pmc, PWR_DET_VAL) & ~kPad33V);
+        if (switch_mmio_read32(pmc, PWR_DET_VAL) & kPad33V) {
+            switch_mmio_write32(pmc, PWR_DET, switch_mmio_read32(pmc, PWR_DET) | kPad33V);
+            switch_mmio_write32(pmc, PWR_DET_VAL, switch_mmio_read32(pmc, PWR_DET_VAL) & ~kPad33V);
             IODelay(250);
         }
-        if (r32(pmc, NO_IOPOWER) & kNoIoPowerAudioHv)
-            w32(pmc, NO_IOPOWER, r32(pmc, NO_IOPOWER) & ~kNoIoPowerAudioHv);
+        if (switch_mmio_read32(pmc, NO_IOPOWER) & kNoIoPowerAudioHv)
+            switch_mmio_write32(pmc, NO_IOPOWER, switch_mmio_read32(pmc, NO_IOPOWER) & ~kNoIoPowerAudioHv);
 
         startPlla();
-        w32(car, CLK_SOURCE_APE, kApeSource);
-        w32(car, CLK_SOURCE_D_AUDIO, 0);            // PLLA_OUT0 (mux_d_audio_clk index 0), 1:1
-        w32(car, CLK_SOURCE_I2S0, kI2sDiv);         // PLLA_OUT0 (mux 0)
-        w32(car, CLK_SOURCE_EXTERN1, kExtern1Div);  // PLLA_OUT0 (mux 0)
-        w32(car, CLK_ENB_Y_SET, kClkY);
-        w32(car, CLK_ENB_V_SET, kClkV);
-        w32(car, CLK_ENB_L_SET, kClkL);
+        switch_mmio_write32(car, CLK_SOURCE_APE, kApeSource);
+        switch_mmio_write32(car, CLK_SOURCE_D_AUDIO, 0);            // PLLA_OUT0 (mux_d_audio_clk index 0), 1:1
+        switch_mmio_write32(car, CLK_SOURCE_I2S0, kI2sDiv);         // PLLA_OUT0 (mux 0)
+        switch_mmio_write32(car, CLK_SOURCE_EXTERN1, kExtern1Div);  // PLLA_OUT0 (mux 0)
+        switch_mmio_write32(car, CLK_ENB_Y_SET, kClkY);
+        switch_mmio_write32(car, CLK_ENB_V_SET, kClkV);
+        switch_mmio_write32(car, CLK_ENB_L_SET, kClkL);
         IODelay(2);
-        w32(car, RST_DEV_Y_CLR, kClkY);  // hekate hw_init leaves APE in reset
-        w32(car, RST_DEV_V_CLR, kClkV);
-        w32(car, RST_DEV_L_CLR, kClkL);
-        (void)r32(car, RST_DEV_L_CLR);
+        switch_mmio_write32(car, RST_DEV_Y_CLR, kClkY);  // hekate hw_init leaves APE in reset
+        switch_mmio_write32(car, RST_DEV_V_CLR, kClkV);
+        switch_mmio_write32(car, RST_DEV_L_CLR, kClkL);
+        (void)switch_mmio_read32(car, RST_DEV_L_CLR);
         IODelay(2);
         // MCLK: clk_out_1 <- extern1, forced on (clk-tegra-pmc.c PMC_CLK(1, 6, 2)).
-        w32(pmc, CLK_OUT_CNTRL, (r32(pmc, CLK_OUT_CNTRL) & ~kClkOut1Mask) | kClkOut1Extern1);
-        jackPinFound = r32(pinmux, kPinJackDetect);
+        switch_mmio_write32(pmc, CLK_OUT_CNTRL,
+                            (switch_mmio_read32(pmc, CLK_OUT_CNTRL) & ~kClkOut1Mask) | kClkOut1Extern1);
+        jackPinFound = switch_mmio_read32(pinmux, kPinJackDetect);
         for (const Pin &pin : kPins) {
-            w32(pinmux, pin.offset, (r32(pinmux, pin.offset) & ~kPinFields) | pin.value);
+            switch_mmio_write32(pinmux, pin.offset, (switch_mmio_read32(pinmux, pin.offset) & ~kPinFields) | pin.value);
         }
     }
 
     void tegraAhubAndDma()
     {
-        w32(ahub, ADMAIF_GLOBAL_ENABLE, 1);
+        switch_mmio_write32(ahub, ADMAIF_GLOBAL_ENABLE, 1);
         for (uint32_t part = 0; part < 3; ++part) {
-            w32(ahub, XBAR_I2S1 + part * XBAR_PART, part ? 0 : kXbarFromAdmaif1);
-            w32(ahub, XBAR_ADMAIF1 + part * XBAR_PART, part ? 0 : kXbarFromI2s1);
+            switch_mmio_write32(ahub, XBAR_I2S1 + part * XBAR_PART, part ? 0 : kXbarFromAdmaif1);
+            switch_mmio_write32(ahub, XBAR_ADMAIF1 + part * XBAR_PART, part ? 0 : kXbarFromI2s1);
         }
         // tegra_adma_init: clear interrupts, soft reset, enable.
-        w32(adma, GLOBAL_INT_CLEAR, 1);
-        w32(adma, GLOBAL_SOFT_RESET, 1);
-        if (!waitBits(adma, GLOBAL_SOFT_RESET, 1, 0, 10000))
+        switch_mmio_write32(adma, GLOBAL_INT_CLEAR, 1);
+        switch_mmio_write32(adma, GLOBAL_SOFT_RESET, 1);
+        if (!switch_mmio_wait32(adma, GLOBAL_SOFT_RESET, 1, 0, 10000))
             panic("SwitchAudio: ADMA soft reset did not finish");
-        w32(adma, GLOBAL_CMD, 1);
+        switch_mmio_write32(adma, GLOBAL_CMD, 1);
     }
 
     // The two ADMA channel SPIs on the AGIC, as Linux irq-gic.c sets up a distributor and CPU interface (priority
     // 0xa0, level, the reading CPU interface as target, PMR 0xf0, bypass bits kept). A refused enable panics.
     void tegraAgic()
     {
-        const uint32_t mask = r32(agic, GICD_ITARGETSR) & 0xff;  // banked: the interface our accesses come from
+        const uint32_t mask =
+            switch_mmio_read32(agic, GICD_ITARGETSR) & 0xff;  // banked: the interface our accesses come from
         if (!mask)
-            panic("SwitchAudio: AGIC CPU interface mask reads 0 (GICD_CTLR %#x)", r32(agic, GICD_CTLR));
+            panic("SwitchAudio: AGIC CPU interface mask reads 0 (GICD_CTLR %#x)", switch_mmio_read32(agic, GICD_CTLR));
         const unsigned channels = tegraCapture ? 2 : 1;
         for (unsigned ch = 0; ch < channels; ++ch) {
             const uint32_t id = kAgicAdma + ch, bit = 1u << (id % 32), word = 4 * (id / 32), shift = 8 * (id % 4);
-            w32(agic, GICD_ICENABLER + word, bit);
-            w32(agic, GICD_ICPENDR + word, bit);
+            switch_mmio_write32(agic, GICD_ICENABLER + word, bit);
+            switch_mmio_write32(agic, GICD_ICPENDR + word, bit);
             const uint32_t byteReg = id & ~3u;
-            w32(agic, GICD_IPRIORITYR + byteReg,
-                (r32(agic, GICD_IPRIORITYR + byteReg) & ~(0xffu << shift)) | 0xa0u << shift);
-            w32(agic, GICD_ITARGETSR + byteReg,
-                (r32(agic, GICD_ITARGETSR + byteReg) & ~(0xffu << shift)) | mask << shift);
+            switch_mmio_write32(agic, GICD_IPRIORITYR + byteReg,
+                                (switch_mmio_read32(agic, GICD_IPRIORITYR + byteReg) & ~(0xffu << shift)) |
+                                    0xa0u << shift);
+            switch_mmio_write32(agic, GICD_ITARGETSR + byteReg,
+                                (switch_mmio_read32(agic, GICD_ITARGETSR + byteReg) & ~(0xffu << shift)) |
+                                    mask << shift);
             const uint32_t cfg = GICD_ICFGR + 4 * (id / 16);
-            w32(agic, cfg, r32(agic, cfg) & ~(2u << (2 * (id % 16))));  // level
+            switch_mmio_write32(agic, cfg, switch_mmio_read32(agic, cfg) & ~(2u << (2 * (id % 16))));  // level
         }
-        w32(agic, GICD_CTLR, r32(agic, GICD_CTLR) | 1);
-        w32(agic, GICC_PMR, 0xf0);
-        w32(agic, GICC_CTLR, (r32(agic, GICC_CTLR) & 0x1e0) | 1);
+        switch_mmio_write32(agic, GICD_CTLR, switch_mmio_read32(agic, GICD_CTLR) | 1);
+        switch_mmio_write32(agic, GICC_PMR, 0xf0);
+        switch_mmio_write32(agic, GICC_CTLR, (switch_mmio_read32(agic, GICC_CTLR) & 0x1e0) | 1);
         for (unsigned ch = 0; ch < channels; ++ch) {
             const uint32_t id = kAgicAdma + ch, bit = 1u << (id % 32), word = 4 * (id / 32);
-            w32(agic, GICD_ISENABLER + word, bit);
-            if (!(r32(agic, GICD_ISENABLER + word) & bit)) {
-                panic("SwitchAudio: AGIC refused SPI %u (GICD_CTLR %#x GICC_CTLR %#x)", id - 32, r32(agic, GICD_CTLR),
-                      r32(agic, GICC_CTLR));
+            switch_mmio_write32(agic, GICD_ISENABLER + word, bit);
+            if (!(switch_mmio_read32(agic, GICD_ISENABLER + word) & bit)) {
+                panic("SwitchAudio: AGIC refused SPI %u (GICD_CTLR %#x GICC_CTLR %#x)", id - 32,
+                      switch_mmio_read32(agic, GICD_CTLR), switch_mmio_read32(agic, GICC_CTLR));
             }
         }
     }
@@ -768,8 +741,8 @@ class SwitchAudio : public IOService {
 
     void softReset(uint32_t reg, const char *what)
     {
-        w32(ahub, reg, 1);
-        if (!waitBits(ahub, reg, 1, 0, 10000))
+        switch_mmio_write32(ahub, reg, 1);
+        if (!switch_mmio_wait32(ahub, reg, 1, 0, 10000))
             panic("SwitchAudio: %s soft reset did not finish", what);
     }
 
@@ -781,25 +754,28 @@ class SwitchAudio : public IOService {
         const uint32_t saved[] = {I2S_TX_CIF, I2S_RX_CIF, I2S_TX_CTRL, I2S_RX_CTRL, I2S_CTRL};
         uint32_t values[5];
         for (unsigned i = 0; i < 5; ++i)
-            values[i] = r32(ahub, saved[i]);
-        w32(ahub, reg, 1);
-        if (!waitBits(ahub, reg, 1, 0, 10000)) {
+            values[i] = switch_mmio_read32(ahub, saved[i]);
+        switch_mmio_write32(ahub, reg, 1);
+        if (!switch_mmio_wait32(ahub, reg, 1, 0, 10000)) {
             panic("SwitchAudio: %s soft reset did not finish (I2S CTRL %#x EN %#x TIMING %#x RX %#x TX %#x; CAR I2S0 "
                   "src %#x "
                   "enb %u rst %u PLLA %#x OUT %#x)",
-                  what, r32(ahub, I2S_CTRL), r32(ahub, I2S_ENABLE), r32(ahub, I2S_TIMING), r32(ahub, I2S_RX_STATUS),
-                  r32(ahub, I2S_TX_STATUS), r32(car, CLK_SOURCE_I2S0), !!(r32(car, CLK_OUT_ENB_L) & kClkL),
-                  !!(r32(car, RST_DEVICES_L) & kClkL), r32(car, PLLA_BASE), r32(car, PLLA_OUT));
+                  what, switch_mmio_read32(ahub, I2S_CTRL), switch_mmio_read32(ahub, I2S_ENABLE),
+                  switch_mmio_read32(ahub, I2S_TIMING), switch_mmio_read32(ahub, I2S_RX_STATUS),
+                  switch_mmio_read32(ahub, I2S_TX_STATUS), switch_mmio_read32(car, CLK_SOURCE_I2S0),
+                  !!(switch_mmio_read32(car, CLK_OUT_ENB_L) & kClkL),
+                  !!(switch_mmio_read32(car, RST_DEVICES_L) & kClkL), switch_mmio_read32(car, PLLA_BASE),
+                  switch_mmio_read32(car, PLLA_OUT));
         }
         for (unsigned i = 0; i < 5; ++i)
-            w32(ahub, saved[i], values[i]);
+            switch_mmio_write32(ahub, saved[i], values[i]);
     }
 
     void stopUnit(uint32_t enable, uint32_t status, const char *what)
     {
-        w32(ahub, enable, 0);
-        if (!waitBits(ahub, status, 1, 0, 10000))
-            panic("SwitchAudio: %s did not stop (status %#x)", what, r32(ahub, status));
+        switch_mmio_write32(ahub, enable, 0);
+        if (!switch_mmio_wait32(ahub, status, 1, 0, 10000))
+            panic("SwitchAudio: %s did not stop (status %#x)", what, switch_mmio_read32(ahub, status));
     }
 
     void tegraStart()
@@ -808,9 +784,9 @@ class SwitchAudio : public IOService {
             return;  // the play position stands still: the plug-in sees no progress, never noise
         switch_audio_sample_t *out = ring(SwitchAudioMemoryOutput), *in = ring(SwitchAudioMemoryInput);
         bzero(out, kOutBytes);
-        cacheClean(out, kOutBytes);
+        switch_dcache_clean(out, kOutBytes);
         bzero(in, kInBytes);
-        cacheFlush(in, kInBytes);
+        switch_dcache_clean_invalidate(in, kInBytes);
         control->out_frames = 0;
         control->in_frames = 0;
         control->out_written = 0;
@@ -818,47 +794,48 @@ class SwitchAudio : public IOService {
         // hw_params (timing, data offset, CIF), then the DAPM PRE_PMU sw reset of each direction it powers up
         // (tegra210_i2s_rx_stop/tx_stop), which keeps that configuration and needs master mode (i2sSoftReset). Then
         // the ADMAIF resets and tegra_admaif_hw_params.
-        w32(ahub, I2S_CTRL, kI2sCtrl);
-        w32(ahub, I2S_ENABLE, 1);
-        w32(ahub, I2S_TIMING, kI2sTiming);
-        w32(ahub, I2S_RX_CTRL, kI2sDataOffset);
-        w32(ahub, I2S_TX_CTRL, kI2sDataOffset);
-        w32(ahub, I2S_RX_CIF, switch_audio_i2s_rx_cif());  // playback: XBAR stereo -> DAP stereo
-        w32(ahub, I2S_TX_CIF, switch_audio_i2s_tx_cif());  // capture: DAP stereo -> XBAR mono (left: IN1 is on both)
+        switch_mmio_write32(ahub, I2S_CTRL, kI2sCtrl);
+        switch_mmio_write32(ahub, I2S_ENABLE, 1);
+        switch_mmio_write32(ahub, I2S_TIMING, kI2sTiming);
+        switch_mmio_write32(ahub, I2S_RX_CTRL, kI2sDataOffset);
+        switch_mmio_write32(ahub, I2S_TX_CTRL, kI2sDataOffset);
+        switch_mmio_write32(ahub, I2S_RX_CIF, switch_audio_i2s_rx_cif());  // playback: XBAR stereo -> DAP stereo
+        // capture: DAP stereo -> XBAR mono (left: IN1 is on both)
+        switch_mmio_write32(ahub, I2S_TX_CIF, switch_audio_i2s_tx_cif());
         i2sSoftReset(I2S_RX_SOFT_RESET, "I2S1 RX");
         if (tegraCapture)
             i2sSoftReset(I2S_TX_SOFT_RESET, "I2S1 TX");
         softReset(ADMAIF_TX_SOFT_RESET, "ADMAIF1 TX");
         softReset(ADMAIF_RX_SOFT_RESET, "ADMAIF1 RX");
-        w32(ahub, ADMAIF_TX_CIF, switch_audio_admaif_cif(SWITCH_AUDIO_OUT_CHANNELS));
-        w32(ahub, ADMAIF_RX_CIF, switch_audio_admaif_cif(SWITCH_AUDIO_IN_CHANNELS));
+        switch_mmio_write32(ahub, ADMAIF_TX_CIF, switch_audio_admaif_cif(SWITCH_AUDIO_OUT_CHANNELS));
+        switch_mmio_write32(ahub, ADMAIF_RX_CIF, switch_audio_admaif_cif(SWITCH_AUDIO_IN_CHANNELS));
         const unsigned channels = tegraCapture ? 2 : 1;
         for (unsigned ch = 0; ch < channels; ++ch) {
             const uint32_t base = ch * CH_STRIDE;
-            w32(adma, base + CH_CMD, 0);
-            w32(adma, base + CH_INT_CLEAR, 1);
-            w32(adma, base + CH_TC, ch == kChOut ? kOutPeriodBytes : kInPeriodBytes);
-            w32(adma, base + CH_CTRL, kChCtrl[ch]);
-            w32(adma, base + CH_SRC, ch == kChOut ? ringPA[SwitchAudioMemoryOutput] : 0);
-            w32(adma, base + CH_TRG, ch == kChOut ? 0 : ringPA[SwitchAudioMemoryInput]);
-            w32(adma, base + CH_FIFO_CTRL, kChFifo[ch]);
-            w32(adma, base + CH_CONFIG, kChConfig[ch]);
+            switch_mmio_write32(adma, base + CH_CMD, 0);
+            switch_mmio_write32(adma, base + CH_INT_CLEAR, 1);
+            switch_mmio_write32(adma, base + CH_TC, ch == kChOut ? kOutPeriodBytes : kInPeriodBytes);
+            switch_mmio_write32(adma, base + CH_CTRL, kChCtrl[ch]);
+            switch_mmio_write32(adma, base + CH_SRC, ch == kChOut ? ringPA[SwitchAudioMemoryOutput] : 0);
+            switch_mmio_write32(adma, base + CH_TRG, ch == kChOut ? 0 : ringPA[SwitchAudioMemoryInput]);
+            switch_mmio_write32(adma, base + CH_FIFO_CTRL, kChFifo[ch]);
+            switch_mmio_write32(adma, base + CH_CONFIG, kChConfig[ch]);
         }
-        w32(ahub, I2S_RX_ENABLE, 1);
+        switch_mmio_write32(ahub, I2S_RX_ENABLE, 1);
         if (tegraCapture)
-            w32(ahub, I2S_TX_ENABLE, 1);
-        w32(ahub, ADMAIF_TX_ENABLE, 1);
+            switch_mmio_write32(ahub, I2S_TX_ENABLE, 1);
+        switch_mmio_write32(ahub, ADMAIF_TX_ENABLE, 1);
         if (tegraCapture)
-            w32(ahub, ADMAIF_RX_ENABLE, 1);
+            switch_mmio_write32(ahub, ADMAIF_RX_ENABLE, 1);
         // Sample time 0 is ring frame 0 leaving memory. tegra_adma_start brackets the start with the global clock gate.
         control->anchor_host = mach_absolute_time();
-        w32(adma, GLOBAL_CG, 0);
+        switch_mmio_write32(adma, GLOBAL_CG, 0);
         for (unsigned ch = 0; ch < channels; ++ch)
-            w32(adma, ch * CH_STRIDE + CH_CMD, 1);
-        w32(adma, GLOBAL_CG, 7);
+            switch_mmio_write32(adma, ch * CH_STRIDE + CH_CMD, 1);
+        switch_mmio_write32(adma, GLOBAL_CG, 7);
         for (unsigned ch = 0; ch < channels; ++ch) {
             periods[ch] = 0;
-            xferSeen[ch] = (uint16_t)r32(adma, ch * CH_STRIDE + CH_XFER_STATUS);
+            xferSeen[ch] = (uint16_t)switch_mmio_read32(adma, ch * CH_STRIDE + CH_XFER_STATUS);
         }
         graced = false;
         timer->setTimeoutMS(kWatchdogMS);
@@ -874,11 +851,12 @@ class SwitchAudio : public IOService {
         const unsigned channels = tegraCapture ? 2 : 1;
         for (unsigned ch = 0; ch < channels; ++ch) {
             const uint32_t base = ch * CH_STRIDE;
-            w32(adma, base + CH_CMD, 0);
-            if (!waitBits(adma, base + CH_STATUS, 1, 0, 10000)) {
-                panic("SwitchAudio: ADMA ch%u did not stop (STATUS %#x)", ch, r32(adma, base + CH_STATUS));
+            switch_mmio_write32(adma, base + CH_CMD, 0);
+            if (!switch_mmio_wait32(adma, base + CH_STATUS, 1, 0, 10000)) {
+                panic("SwitchAudio: ADMA ch%u did not stop (STATUS %#x)", ch,
+                      switch_mmio_read32(adma, base + CH_STATUS));
             }
-            w32(adma, base + CH_INT_CLEAR, 1);
+            switch_mmio_write32(adma, base + CH_INT_CLEAR, 1);
         }
         stopUnit(ADMAIF_TX_ENABLE, ADMAIF_TX_STATUS, "ADMAIF1 TX");
         softReset(ADMAIF_TX_SOFT_RESET, "ADMAIF1 TX");
@@ -889,7 +867,8 @@ class SwitchAudio : public IOService {
         stopUnit(I2S_RX_ENABLE, I2S_RX_STATUS, "I2S1 RX");
         if (tegraCapture)
             stopUnit(I2S_TX_ENABLE, I2S_TX_STATUS, "I2S1 TX");
-        w32(ahub, I2S_ENABLE, 0);  // the bit and frame clocks stop until the next session (runtime suspend in Linux)
+        switch_mmio_write32(ahub, I2S_ENABLE,
+                            0);  // the bit and frame clocks stop until the next session (runtime suspend in Linux)
     }
 
     // Period n of the playback ring has left memory: clear it for the next turn and move out_frames past it. A DMA
@@ -905,14 +884,15 @@ class SwitchAudio : public IOService {
             notePlayed(slot, done);
 #endif
         bzero(slot, kOutPeriodBytes);
-        cacheClean(slot, kOutPeriodBytes);
+        switch_dcache_clean(slot, kOutPeriodBytes);
         control->out_frames = done;
         if (!tegraCapture)
             control->in_frames = done;  // the capture ring stays silent, on the hardware's clock
         if (done > now + kPeriodFrames) {
             panic(
                 "SwitchAudio: ADMA ch0 runs fast: %llu frames played at clock frame %llu (I2S %#x CTRL %#x TIMING %#x)",
-                done, now, r32(ahub, I2S_RX_STATUS), r32(ahub, I2S_CTRL), r32(ahub, I2S_TIMING));
+                done, now, switch_mmio_read32(ahub, I2S_RX_STATUS), switch_mmio_read32(ahub, I2S_CTRL),
+                switch_mmio_read32(ahub, I2S_TIMING));
         }
     }
 
@@ -961,8 +941,8 @@ class SwitchAudio : public IOService {
     void capturedPeriod()
     {
         const uint64_t n = periods[kChIn]++;
-        cacheFlush(ring(SwitchAudioMemoryInput) + (n % kPeriods) * kPeriodFrames * SWITCH_AUDIO_IN_CHANNELS,
-                   kInPeriodBytes);
+        switch_dcache_clean_invalidate(
+            ring(SwitchAudioMemoryInput) + (n % kPeriods) * kPeriodFrames * SWITCH_AUDIO_IN_CHANNELS, kInPeriodBytes);
         control->in_frames = (n + 1) * kPeriodFrames;
     }
 
@@ -971,12 +951,12 @@ class SwitchAudio : public IOService {
     void channelInterrupt(unsigned ch)
     {
         const uint32_t base = ch * CH_STRIDE;
-        const uint32_t status = r32(adma, base + CH_INT_STATUS);
+        const uint32_t status = switch_mmio_read32(adma, base + CH_INT_STATUS);
         if (status)
-            w32(adma, base + CH_INT_CLEAR, status);
+            switch_mmio_write32(adma, base + CH_INT_CLEAR, status);
         if (!control->state)
             return;  // the period that ended as the stream stopped
-        const uint16_t xfer = (uint16_t)r32(adma, base + CH_XFER_STATUS);
+        const uint16_t xfer = (uint16_t)switch_mmio_read32(adma, base + CH_XFER_STATUS);
         uint32_t done = (uint16_t)(xfer - xferSeen[ch]);
         xferSeen[ch] = xfer;
         if (done > kPeriods) {
@@ -996,9 +976,10 @@ class SwitchAudio : public IOService {
             panic("SwitchAudio: ADMA ch1 behind: %llu periods vs %llu, XFER %u seen %u INT_STATUS %#x STATUS %#x, AGIC "
                   "pend %u, "
                   "ADMAIF RX %#x I2S TX %#x",
-                  periods[kChIn], periods[kChOut], r32(adma, in + CH_XFER_STATUS) & 0xffff, xferSeen[kChIn],
-                  r32(adma, in + CH_INT_STATUS), r32(adma, in + CH_STATUS), !!(r32(agic, GICD_ISPENDR + word) & bit),
-                  r32(ahub, ADMAIF_RX_STATUS), r32(ahub, I2S_TX_STATUS));
+                  periods[kChIn], periods[kChOut], switch_mmio_read32(adma, in + CH_XFER_STATUS) & 0xffff,
+                  xferSeen[kChIn], switch_mmio_read32(adma, in + CH_INT_STATUS),
+                  switch_mmio_read32(adma, in + CH_STATUS), !!(switch_mmio_read32(agic, GICD_ISPENDR + word) & bit),
+                  switch_mmio_read32(ahub, ADMAIF_RX_STATUS), switch_mmio_read32(ahub, I2S_TX_STATUS));
         }
     }
 
@@ -1007,16 +988,17 @@ class SwitchAudio : public IOService {
     {
         auto *self = static_cast<SwitchAudio *>(owner);
         for (;;) {
-            const uint32_t iar = r32(self->agic, GICC_IAR), id = iar & 0x3ff;
+            const uint32_t iar = switch_mmio_read32(self->agic, GICC_IAR), id = iar & 0x3ff;
             if (id >= 1020)
                 break;
             if (id == kAgicAdma + kChOut || (self->tegraCapture && id == kAgicAdma + kChIn)) {
                 self->channelInterrupt(id - kAgicAdma);
             } else {
-                w32(self->agic, GICD_ICENABLER + 4 * (id / 32), 1u << (id % 32));  // not ours: keep it off
+                switch_mmio_write32(self->agic, GICD_ICENABLER + 4 * (id / 32),
+                                    1u << (id % 32));  // not ours: keep it off
                 IOLog("SwitchAudio: AGIC interrupt %u is not ours, disabled\n", id);
             }
-            w32(self->agic, GICC_EOIR, iar);
+            switch_mmio_write32(self->agic, GICC_EOIR, iar);
         }
     }
 
@@ -1029,7 +1011,7 @@ class SwitchAudio : public IOService {
         if (!self->control->state)
             return;
         volatile uint8_t *dma = self->adma, *gic = self->agic;
-        const uint32_t xfer = r32(dma, CH_XFER_STATUS) & 0xffff;
+        const uint32_t xfer = switch_mmio_read32(dma, CH_XFER_STATUS) & 0xffff;
         if (xfer != self->xferSeen[kChOut] && !self->graced) {
             self->graced = true;
             sender->setTimeoutMS(kGraceMS);
@@ -1041,13 +1023,16 @@ class SwitchAudio : public IOService {
             const uint32_t id = kAgicAdma + kChOut, bit = 1u << (id % 32), word = 4 * (id / 32);
             panic("SwitchAudio: ADMA ch0 period interrupt lost: XFER %u seen %u INT_STATUS %#x, AGIC en %u pend %u act "
                   "%u, %s",
-                  xfer, self->xferSeen[kChOut], r32(dma, CH_INT_STATUS), !!(r32(gic, GICD_ISENABLER + word) & bit),
-                  !!(r32(gic, GICD_ISPENDR + word) & bit), !!(r32(gic, GICD_ISACTIVER + word) & bit), state);
+                  xfer, self->xferSeen[kChOut], switch_mmio_read32(dma, CH_INT_STATUS),
+                  !!(switch_mmio_read32(gic, GICD_ISENABLER + word) & bit),
+                  !!(switch_mmio_read32(gic, GICD_ISPENDR + word) & bit),
+                  !!(switch_mmio_read32(gic, GICD_ISACTIVER + word) & bit), state);
         }
         panic(
             "SwitchAudio: ADMA ch0 stalled at period %llu: STATUS %#x TC_STATUS %#x, ADMAIF TX %#x, I2S RX %#x EN %#x",
-            self->periods[kChOut], r32(dma, CH_STATUS), r32(dma, CH_TC_STATUS), r32(self->ahub, ADMAIF_TX_STATUS),
-            r32(self->ahub, I2S_RX_STATUS), r32(self->ahub, I2S_ENABLE));
+            self->periods[kChOut], switch_mmio_read32(dma, CH_STATUS), switch_mmio_read32(dma, CH_TC_STATUS),
+            switch_mmio_read32(self->ahub, ADMAIF_TX_STATUS), switch_mmio_read32(self->ahub, I2S_RX_STATUS),
+            switch_mmio_read32(self->ahub, I2S_ENABLE));
     }
 
     uint16_t codecRead(uint8_t reg)
@@ -1415,11 +1400,12 @@ class SwitchAudio : public IOService {
             "%#x xfer %u, I2S en %u rx %#x, ADMAIF tx %#x | jack %s st %#x pv6 %d, %s | codec %04x %04x %04x %04x vol "
             "%04x %04x dac %04x",
             self->control->state, starts, moved, self->statUnderruns, peak, cycles, cycles ? written / cycles : 0, lead,
-            lag, r32(self->adma, CH_STATUS), r32(self->adma, CH_XFER_STATUS) & 0xffff, r32(self->ahub, I2S_ENABLE),
-            r32(self->ahub, I2S_RX_STATUS), r32(self->ahub, ADMAIF_TX_STATUS), self->jackIn ? "in" : "out",
-            self->codecRead(INT_IRQ_ST), tegra_gpio_read(kJackDetect), routes[self->route], self->codecRead(PWR_DIG1),
-            self->codecRead(PWR_ANLG1), self->codecRead(PWR_MIXER), self->codecRead(PWR_VOL), self->codecRead(SPK_VOL),
-            self->codecRead(HP_VOL), self->codecRead(DAC1_DIG_VOL));
+            lag, switch_mmio_read32(self->adma, CH_STATUS), switch_mmio_read32(self->adma, CH_XFER_STATUS) & 0xffff,
+            switch_mmio_read32(self->ahub, I2S_ENABLE), switch_mmio_read32(self->ahub, I2S_RX_STATUS),
+            switch_mmio_read32(self->ahub, ADMAIF_TX_STATUS), self->jackIn ? "in" : "out", self->codecRead(INT_IRQ_ST),
+            tegra_gpio_read(kJackDetect), routes[self->route], self->codecRead(PWR_DIG1), self->codecRead(PWR_ANLG1),
+            self->codecRead(PWR_MIXER), self->codecRead(PWR_VOL), self->codecRead(SPK_VOL), self->codecRead(HP_VOL),
+            self->codecRead(DAC1_DIG_VOL));
         os_log(OS_LOG_DEFAULT, "%s", line);  // log only, never the boot console
         sender->setTimeoutMS(kStatsMS);
     }
@@ -1519,23 +1505,20 @@ class SwitchAudio : public IOService {
     // back as powergate-t21x.c powers a partition on: modules in reset with clocks on, toggle, unclamp.
     bool apePartitionOn()
     {
-        if (r32(pmc, PWRGATE_STATUS) & kPartitionAud)
+        if (switch_mmio_read32(pmc, PWRGATE_STATUS) & kPartitionAud)
             return true;
-        w32(car, RST_DEV_Y_SET, kClkY);
-        w32(car, RST_DEV_V_SET, kClkV);
-        w32(car, RST_DEV_L_SET, kClkL);
-        w32(car, CLK_ENB_Y_SET, kClkY);
-        w32(car, CLK_ENB_V_SET, kClkV);
-        w32(car, CLK_ENB_L_SET, kClkL);
+        switch_mmio_write32(car, RST_DEV_Y_SET, kClkY);
+        switch_mmio_write32(car, RST_DEV_V_SET, kClkV);
+        switch_mmio_write32(car, RST_DEV_L_SET, kClkL);
+        switch_mmio_write32(car, CLK_ENB_Y_SET, kClkY);
+        switch_mmio_write32(car, CLK_ENB_V_SET, kClkV);
+        switch_mmio_write32(car, CLK_ENB_L_SET, kClkL);
         IODelay(10);
-        if (!waitBits(pmc, PWRGATE_TOGGLE, kToggleStart, 0, 5000))
-            return false;
-        w32(pmc, PWRGATE_TOGGLE, kPartitionAudId | kToggleStart);
-        if (!waitBits(pmc, PWRGATE_STATUS, kPartitionAud, kPartitionAud, 5000))
+        if (!switch_pmc_partition_on(kPartitionAudId))
             return false;
         IODelay(10);
-        w32(pmc, REMOVE_CLAMPING, kPartitionAud);
-        return waitBits(pmc, CLAMP_STATUS, kPartitionAud, 0, 5000);
+        switch_pmc_remove_clamping(kPartitionAudId);
+        return switch_mmio_wait32(pmc, CLAMP_STATUS, kPartitionAud, 0, 5000);
     }
 
     static IOReturn sleepGated(OSObject *owner, void *entering, void *, void *, void *)
@@ -1551,7 +1534,7 @@ class SwitchAudio : public IOService {
         if (!self->apePartitionOn()) {
             IOLog("SwitchAudio: APE partition did not power on after sleep (PMC PWRGATE_STATUS %#x CLAMP %#x); audio "
                   "off\n",
-                  r32(self->pmc, PWRGATE_STATUS), r32(self->pmc, CLAMP_STATUS));
+                  switch_mmio_read32(self->pmc, PWRGATE_STATUS), switch_mmio_read32(self->pmc, CLAMP_STATUS));
             self->hardwareLost = true;
             return kIOReturnSuccess;
         }

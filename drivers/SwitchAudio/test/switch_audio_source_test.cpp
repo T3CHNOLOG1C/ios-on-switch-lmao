@@ -86,10 +86,12 @@ TEST(SwitchAudioSource, DriverProgramsTheHeaderWords)
 {
     const std::string d = SourceText("../SwitchAudio.cpp");
     for (const char *line :
-         {"w32(ahub, ADMAIF_TX_CIF, switch_audio_admaif_cif(SWITCH_AUDIO_OUT_CHANNELS));",
-          "w32(ahub, ADMAIF_RX_CIF, switch_audio_admaif_cif(SWITCH_AUDIO_IN_CHANNELS));",
-          "w32(ahub, I2S_RX_CIF, switch_audio_i2s_rx_cif());", "w32(ahub, I2S_TX_CIF, switch_audio_i2s_tx_cif());",
-          "w32(ahub, I2S_CTRL, kI2sCtrl);", "w32(ahub, I2S_TIMING, kI2sTiming);", "w32(car, CLK_SOURCE_I2S0, kI2sDiv);",
+         {"switch_mmio_write32(ahub, ADMAIF_TX_CIF, switch_audio_admaif_cif(SWITCH_AUDIO_OUT_CHANNELS));",
+          "switch_mmio_write32(ahub, ADMAIF_RX_CIF, switch_audio_admaif_cif(SWITCH_AUDIO_IN_CHANNELS));",
+          "switch_mmio_write32(ahub, I2S_RX_CIF, switch_audio_i2s_rx_cif());",
+          "switch_mmio_write32(ahub, I2S_TX_CIF, switch_audio_i2s_tx_cif());",
+          "switch_mmio_write32(ahub, I2S_CTRL, kI2sCtrl);", "switch_mmio_write32(ahub, I2S_TIMING, kI2sTiming);",
+          "switch_mmio_write32(car, CLK_SOURCE_I2S0, kI2sDiv);",
           "codecUpdate(I2S1_SDP, SWITCH_AUDIO_RT5640_SDP_MASK, SWITCH_AUDIO_RT5640_SDP);",
           "codecUpdate(ADDA_CLK1, SWITCH_AUDIO_RT5640_ADDA_MASK, SWITCH_AUDIO_RT5640_ADDA);"})
         EXPECT_THAT(d, HasSubstr(line));
@@ -98,7 +100,7 @@ TEST(SwitchAudioSource, DriverProgramsTheHeaderWords)
     for (const char *gone : {"kPack16", "constexpr uint32_t cif(", "sizeof(int16_t)", "int16_t *"})
         EXPECT_THAT(d, Not(HasSubstr(gone)));
     // Nothing else writes the CIF registers.
-    const std::regex writes(R"(w32\(ahub, (?:ADMAIF|I2S)_[RT]X_CIF,)");
+    const std::regex writes(R"(switch_mmio_write32\(ahub, (?:ADMAIF|I2S)_[RT]X_CIF,)");
     EXPECT_EQ(std::distance(std::sregex_iterator(d.begin(), d.end(), writes), std::sregex_iterator()), 4);
 }
 
