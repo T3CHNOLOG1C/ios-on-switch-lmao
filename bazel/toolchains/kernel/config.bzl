@@ -36,7 +36,23 @@ load("@xcode//:defs.bzl", "DEVELOPER_DIR", "IPHONEOS_SDK", "XCODE_TOOLCHAIN")
 load("//kernel/rules:layout.bzl", "compat_prefix_maps")
 load("//kernel/rules:sdk.bzl", "KernelSdkInfo")
 load(":recipes.bzl", DEVELOPMENT_RECIPES = "RECIPES")
+load(":recipes_12377.bzl", DEVELOPMENT_RECIPES_12377 = "RECIPES")
 load(":recipes_release.bzl", RELEASE_RECIPES = "RECIPES")
+
+# Per XNU: its recipes by kernel config, the iOS target its plain C and assembly build for, and what pins the core.
+# At an iOS 26+ target Apple clang's arm64 is an A12 (LSE, LDAPR, FP16); -mcpu=cortex-a57 keeps the code ARMv8.0.
+XNU_TARGETS = {
+    "10063.141.1": struct(
+        recipes = {"DEVELOPMENT": DEVELOPMENT_RECIPES, "RELEASE": RELEASE_RECIPES},
+        ios_min = "17.0",
+        cpu = [],
+    ),
+    "12377.121.6": struct(
+        recipes = {"DEVELOPMENT": DEVELOPMENT_RECIPES_12377},
+        ios_min = "26.0",
+        cpu = ["-mcpu=cortex-a57"],
+    ),
+}
 
 PATH_ROOT = "/switch-ios"
 
@@ -145,7 +161,10 @@ def _impl(ctx):
             sdk.kernel_config,
             ctx.attr.sdk.label,
         ))
-    recipes = RELEASE_RECIPES if config == "RELEASE" else DEVELOPMENT_RECIPES
+    target = XNU_TARGETS[ctx.attr._xnu_version[BuildSettingInfo].value]
+    if config not in target.recipes:
+        fail("{}: no {} recipes for XNU {}".format(ctx.label, config, ctx.attr._xnu_version[BuildSettingInfo].value))
+    recipes = target.recipes[config]
     for name, recipe in recipes.items():
         language = _LANGUAGE[name]
         actions = _CXX if language == "cxx" else _C
@@ -177,7 +196,9 @@ def _impl(ctx):
     features.append(feature(
         name = "kernel_plain_c",
         provides = ["kernel_c_recipe"],
-        flag_sets = [flag_set(actions = _C, flag_groups = _flags(["-mkernel", "-miphoneos-version-min=17.0", "-Os"] + maps))],
+        flag_sets = [flag_set(actions = _C, flag_groups = _flags(
+            ["-mkernel", "-miphoneos-version-min=" + target.ios_min, "-Os"] + target.cpu + maps,
+        ))],
         env_sets = [env_set(actions = _C, env_entries = [env_entry("SDKROOT", IPHONEOS_SDK)])],
     ))
     features.append(feature(
@@ -202,7 +223,7 @@ def _impl(ctx):
         name = "kernel_plain_asm",
         enabled = True,
         flag_sets = [flag_set(actions = _ASM, flag_groups = _flags(
-            ["-target", "arm64-apple-ios17.0", "-isysroot", IPHONEOS_SDK, "-Werror"] + maps,
+            ["-target", "arm64-apple-ios" + target.ios_min, "-isysroot", IPHONEOS_SDK, "-Werror"] + target.cpu + maps,
         ))],
     ))
 

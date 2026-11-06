@@ -14,6 +14,7 @@ package(default_visibility = ["//visibility:public"])
 # recipes.bzl and recipes_release.bzl are generated (update_recipes), not formatted by hand.
 lint_files(exclude = [
     "recipes.bzl",
+    "recipes_12377.bzl",
     "recipes_release.bzl",
 ])
 
@@ -112,6 +113,49 @@ py_binary(
         "--out=RELEASE=bazel/toolchains/kernel/recipes_release.bzl",
     ] + RECIPES,
     data = RECIPE_TABLES,
+    main = "//tools/kernel:recipes.py",
+    deps = ["//tools/kernel:common"],
+)
+
+# recipes_12377.bzl: the same recipes from kernel/xnu-12377.121.6 (DEVELOPMENT only), at its iOS 26 target. At an
+# iOS 26+ target Apple clang's arm64 is an A12 and -march=armv8-a does not undo it: the generic C++ recipe keeps -mcpu.
+XNU_12377 = "kernel/xnu-12377.121.6"
+
+RECIPES_12377 = [r.replace(":drop=-mcpu=", "") for r in RECIPES] + ["--ios-min=26.0"]
+
+RECIPE_TABLES_12377 = [
+    "//{}/config:recipes_development.bzl".format(XNU_12377),
+    "//{}/bsd:objects.bzl".format(XNU_12377),
+    "//{}/iokit:objects.bzl".format(XNU_12377),
+    "//{}/osfmk:objects.bzl".format(XNU_12377),
+    "@xcode//:xcode.env",
+]
+
+py_test(
+    name = "recipes_12377_test",
+    size = "small",
+    srcs = ["//tools/kernel:recipes.py"],
+    args = [
+        "--check",
+        "--tables=" + XNU_12377,
+        "--xcode-env=$(rootpath @xcode//:xcode.env)",
+        "--out=DEVELOPMENT=$(rootpath :recipes_12377.bzl)",
+    ] + RECIPES_12377,
+    data = [":recipes_12377.bzl"] + RECIPE_TABLES_12377,
+    main = "//tools/kernel:recipes.py",
+    tags = ["requires-darwin"],
+    deps = ["//tools/kernel:common"],
+)
+
+py_binary(
+    name = "update_recipes_12377",
+    srcs = ["//tools/kernel:recipes.py"],
+    args = [
+        "--tables=" + XNU_12377,
+        "--xcode-env=$(rootpath @xcode//:xcode.env)",
+        "--out=DEVELOPMENT=bazel/toolchains/kernel/recipes_12377.bzl",
+    ] + RECIPES_12377,
+    data = RECIPE_TABLES_12377,
     main = "//tools/kernel:recipes.py",
     deps = ["//tools/kernel:common"],
 )

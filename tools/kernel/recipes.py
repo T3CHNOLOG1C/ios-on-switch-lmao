@@ -14,7 +14,7 @@ drivers see: {gen} is <config>_ARM64_BCM2837/<component>/<config> in it, {export
 {fakeroot} (the kernel SDK root: {sdkroot}), {xnu} and {tree}. Flags only Apple clang takes, or only code generation
 needs, are listed apart (`apple`): the toolchain puts them in the apple_clang_only feature, which clang-tidy turns off.
 
-usage: recipes.py --tables kernel/xnu-<version> --xcode-env F --out CONFIG=FILE... [--check]
+usage: recipes.py --tables kernel/xnu-<version> --xcode-env F --out CONFIG=FILE... [--check] [--ios-min V]
                   --recipe NAME=OBJECT[:keep_warnings][:strip_includes][:drop=P]...
   OBJECT: an XNU object's source as objects.bzl names it (osfmk/arm/arm_init.c); its first directory is the component,
   its extension the language. --out: one file per XNU configuration (DEVELOPMENT=recipes.bzl, RELEASE=...).
@@ -49,8 +49,8 @@ APPLE_PREFIXES = (
 )
 APPLE_PAIRS = ('-mllvm', '-Xclang', '-index-store-path', '-arch')
 LANGUAGES = {'.c': 'c', '.cpp': 'cxx', '.s': 'asm'}
-# The flags every recipe targets with: what the driver's appended tail depends on.
-PROBE = ['-arch', 'arm64', '-mios-version-min=17.0', '-mkernel']
+# The flags every recipe targets with: what the driver's appended tail depends on (the iOS target is the XNU's).
+PROBE = ['-arch', 'arm64', '-mios-version-min={ios_min}', '-mkernel']
 # The compilation directory make's objects carried (the old layout's object root): the native XNU objects keep it
 # (kernel/xnu-<version>/config/xnu_objects.bzl LEGACY), and so do the drivers.
 MAKE_OBJ = '/switch-ios/bazel-out/darwin_arm64-fastbuild/bin/out/native-a57/root-v1/tree/build/xnu/ios-obj'
@@ -75,7 +75,7 @@ def load_table(path: Path) -> dict:
     return scope
 
 
-def driver_tail(xcode_env: str) -> list[str]:
+def driver_tail(xcode_env: str, ios_min: str) -> list[str]:
     """Return what this Xcode's clang driver appends to a kernel compile's arguments (its compilation database's)."""
     xcode = common.xcode_env(xcode_env)
     with tempfile.TemporaryDirectory() as scratch:
@@ -88,7 +88,7 @@ def driver_tail(xcode_env: str) -> list[str]:
             'db.json',
             '-isysroot',
             xcode['IPHONEOS_SDK'],
-            *PROBE,
+            *[p.format(ios_min=ios_min) for p in PROBE],
             '-c',
             'empty.c',
             '-o',
@@ -213,10 +213,11 @@ def main() -> None:
     parser.add_argument('--xcode-env', required=True)
     parser.add_argument('--out', action='append', required=True, help='CONFIG=PATH, e.g. DEVELOPMENT=recipes.bzl')
     parser.add_argument('--check', action='store_true')
+    parser.add_argument('--ios-min', default='17.0', help="the XNU's iOS deployment target")
     parser.add_argument('--recipe', action='append', required=True)
     args = parser.parse_args()
     tables = Path(args.tables)
-    tail = driver_tail(args.xcode_env)
+    tail = driver_tail(args.xcode_env, args.ios_min)
     specs = []
     for spec in args.recipe:
         name, _, rest = spec.partition('=')
