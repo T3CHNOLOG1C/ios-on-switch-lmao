@@ -117,7 +117,7 @@ void tegra_host1x_resume(void);
 // most; a fifth is refused with a log line and its engine is then not reloaded after SC7). Clients quiesce in the
 // reverse order of registration and reload in order, so an engine that registers after NVDEC (NVJPG, whose MBIST
 // workaround runs on NVDEC's clock) finds NVDEC already back.
-void tegra_host1x_set_sleep_client(void (*suspend)(void), void (*resume)(void));
+void tegra_host1x_set_sleep_client(void (*suspend)(), void (*resume)());
 void tegra_nvdec_suspend(void);
 void tegra_nvdec_resume(void);
 
