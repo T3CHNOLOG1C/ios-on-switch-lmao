@@ -23,6 +23,7 @@ usage: xnu_record.py --xnu DIR --version V --darwin V --ios-min V --out DIR --av
 """
 
 import argparse
+import dataclasses
 import json
 import os
 import re
@@ -156,17 +157,28 @@ def wrapper(path: Path, tool: str, real: str | Path, *, watch: bool = False) -> 
     path.chmod(0o755)
 
 
-def run_make(
-    src: Path, work: Path, target: str, variables: list[str], jobs: int, env: dict[str, str], version: str, darwin: str
-) -> int:
+@dataclasses.dataclass
+class Recording:
+    scratch: Path
+    src: Path
+    bin_dir: Path
+    env: dict[str, str]
+    args: argparse.Namespace
+
+    @property
+    def tools(self) -> list[str]:
+        return [f'MIG={self.bin_dir}/mig', f'IIG={self.bin_dir}/iig', f'UNIFDEF={self.bin_dir}/unifdef']
+
+
+def run_make(rec: Recording, work: Path, target: str, variables: list[str], env: dict[str, str]) -> int:
     command = [
         'make',
         '-C',
-        str(src),
+        str(rec.src),
         target,
-        'RC_DARWIN_KERNEL_VERSION=' + darwin,
-        'RC_ProjectSourceVersion=' + version,
-        'MAKEJOBS=-j' + str(jobs),
+        'RC_DARWIN_KERNEL_VERSION=' + rec.args.darwin,
+        'RC_ProjectSourceVersion=' + rec.args.version,
+        'MAKEJOBS=-j' + str(rec.args.jobs),
         'VERBOSE=YES',
         '-k',
         f'OBJROOT={work}/obj',
@@ -292,164 +304,189 @@ def record_pass(
 ) -> tuple[list[dict[str, object]], dict[str, dict[str, object]], list[str]]:
     """Return the table entries of one pass from its wrapper log."""
     records = [json.loads(line) for line in log_path.read_text().splitlines()]
-    steps, problems = [], []
-    unifdef_by_shell = {}
+    recorder = PassRecorder(roots, final_files, records)
     for r in records:
-        if r['tool'] == 'unifdef':
-            unifdef_by_shell.setdefault(r['ppid'], []).append(r)
-    produced = {}
+        if r['tool'] == 'installfile':
+            recorder.installfile(r)
+        elif r['tool'] in ('mig', 'iig'):
+            recorder.mig_or_iig(r)
+        elif r['tool'] in SCRIPTS:
+            recorder.script(r, make_log)
+    recorder.unifdef_to(records, make_log.read_text(errors='replace'))
+    recorder.symlinks(work)
+    recorder.xnu_version(work)
+    steps = [s for s in recorder.steps if not s.pop('duplicate', False)]
+    return steps, recorder.produced, recorder.problems
 
-    def claim(path: str, step: dict[str, object]) -> None:
+
+class PassRecorder:
+    def __init__(self, roots: Roots, final_files: dict[str, set[str]], records: list[dict[str, object]]):
+        self.roots = roots
+        self.final_files = final_files
+        self.steps = []
+        self.produced = {}
+        self.problems = []
+        self.used_unifdef = set()
+        self.unifdef_by_shell = {}
+        for r in records:
+            if r['tool'] == 'unifdef':
+                self.unifdef_by_shell.setdefault(r['ppid'], []).append(r)
+
+    def claim(self, path: str, step: dict[str, object]) -> None:
+        produced = self.produced
         if step.get('duplicate'):
             return
         if path in produced and produced[path] is not step and produced[path] == step:
             step['duplicate'] = True
             return
         if path in produced and produced[path] is not step:
-            problems.append('{} written twice ({} and {})'.format(path, produced[path]['kind'], step['kind']))
+            self.problems.append('{} written twice ({} and {})'.format(path, produced[path]['kind'], step['kind']))
         produced[path] = step
 
-    used_unifdef = set()
-    for r in records:
-        cwd = r['cwd']
-        if r['tool'] == 'installfile':
-            argv = r['argv']
-            mode = ' '.join(argv[:-2])
-            src_arg, dst_arg = argv[-2], argv[-1]
-            dst = rel(roots.spell(dst_arg, cwd))
-            m = re.search(r'\.unifdef\.(\d+)$', src_arg)
+    def add(self, outs: Iterable[str], step: dict[str, object]) -> None:
+        for o in outs:
+            self.claim(o, step)
+        self.steps.append(step)
+
+    def installfile(self, r: dict[str, object]) -> None:
+        cwd, argv, roots = r['cwd'], r['argv'], self.roots
+        mode = ' '.join(argv[:-2])
+        src_arg, dst_arg = argv[-2], argv[-1]
+        dst = rel(roots.spell(dst_arg, cwd))
+        m = re.search(r'\.unifdef\.(\d+)$', src_arg)
+        if not m:
+            self.add([dst], {'kind': 'copy', 'src': rel(roots.spell(src_arg, cwd)), 'out': dst, 'mode': mode})
+            return
+        shell = int(m.group(1))
+        stem = os.path.basename(src_arg)[: -len(m.group(0))]
+        candidates = [
+            u
+            for u in self.unifdef_by_shell.get(shell, [])
+            if os.path.basename(u['argv'][-1]) == stem and id(u) not in self.used_unifdef
+        ]
+        if len(candidates) != 1:
+            self.problems.append(f'{dst}: no unique unifdef for {src_arg} ({len(candidates)} found)')
+            return
+        u = candidates[0]
+        self.used_unifdef.add(id(u))
+        step = {
+            'kind': 'unifdef',
+            'flags': [roots.text(a) for a in u['argv'][:-1]],
+            'src': rel(roots.spell(u['argv'][-1], u['cwd'])),
+            'out': dst,
+            'mode': mode,
+        }
+        self.add([dst], step)
+
+    def mig_or_iig(self, r: dict[str, object]) -> None:
+        cwd, argv, roots = r['cwd'], r['argv'], self.roots
+        if r['tool'] == 'mig':
+            outs = outputs_of(argv, ('-header', '-user', '-server', '-sheader', '-iheader', '-dheader'), cwd, roots)
+            source = rel(roots.spell(argv[-1], cwd))
+        else:
+            outs = outputs_of(argv, ('--header', '--impl'), cwd, roots)
+            source = rel(roots.spell(argv[argv.index('--def') + 1], cwd))
+        if r['deps'] is None:
+            self.problems.append('{}: no dependency list for {}'.format(r['tool'], source))
+            return
+        # What it read besides sources (generated headers: their steps run first); sources come from the
+        # include directories (incdirs), pruned at run time.
+        generated = sorted({rel(roots.spell(d, cwd)) for d in r['deps'] if roots.place(d, cwd)} - {source})
+        step = {
+            'kind': r['tool'],
+            'cwd': rel(roots.spell(cwd)),
+            'argv': [roots.text(a) for a in argv],
+            'src': source,
+            'outs': outs,
+            'incdirs': sorted(set(include_dirs(argv, cwd, roots)) | {os.path.dirname(source)}),
+            'deps': [d for d in generated if not d.startswith(('s/', 'x/'))],
+        }
+        # iokit/Tests/TestServices wraps iig's implementation in #if DEBUG || DEVELOPMENT (echo, cat, echo).
+        for o in list(outs):
+            if o.endswith('.iig.cpp.tmp') and o[2:-4] in self.final_files.get(o[0], set()):
+                step['wrapped'] = o[:-4]
+                outs.append(o[:-4])
+        self.add(outs, step)
+
+    def script(self, r: dict[str, object], make_log: Path) -> None:
+        cwd, roots = r['cwd'], self.roots
+        # NOT_OURS names what r18-xnu-objs' rules make in the object root; everything in a DSTROOT is ours.
+        outs = [rel(roots.spell(p)) for p in script_outputs(r) if roots.place(p, cwd)]
+        outs = [o for o in outs if o.startswith('d/') or not NOT_OURS.search(o[2:])]
+        outs = [o for o in outs if o[2:] in self.final_files.get(o[0], set())]
+        if not outs:
+            return  # validate_blacklist and the like: nothing kept
+        step = {
+            'kind': 'script',
+            'tool': 's/' + r['tool'],
+            'cwd': rel(roots.spell(cwd)),
+            'argv': [roots.text(a) for a in r['argv']],
+            'env': {k: roots.text(v) for k, v in sorted(r['env'].items())},
+            'outs': outs,
+            'ins': script_inputs(r, cwd, roots, outs),
+        }
+        # A script that rewrites a file a copy installed (newvers.pl on version.h.template's copy): one step.
+        for o in outs:
+            earlier = self.produced.get(o)
+            if earlier is not None and earlier['kind'] == 'copy':
+                step['pre_copy'] = earlier['src']
+                self.steps.remove(earlier)
+                del self.produced[o]
+        if 'pre_copy' not in step and len(outs) == 1 and os.path.basename(outs[0]) in r['argv']:
+            # Rewritten in place after a plain install(1) make does not route through $(INSTALL).
+            m = re.search(
+                r'^install -c(?: -S)? -m \d+ (\S+) ' + re.escape(os.path.basename(outs[0])) + '$',
+                make_log.read_text(errors='replace'),
+                re.MULTILINE,
+            )
             if m:
-                shell = int(m.group(1))
-                stem = os.path.basename(src_arg)[: -len(m.group(0))]
-                candidates = [
-                    u
-                    for u in unifdef_by_shell.get(shell, [])
-                    if os.path.basename(u['argv'][-1]) == stem and id(u) not in used_unifdef
-                ]
-                if len(candidates) != 1:
-                    problems.append(f'{dst}: no unique unifdef for {src_arg} ({len(candidates)} found)')
-                    continue
-                u = candidates[0]
-                used_unifdef.add(id(u))
-                step = {
-                    'kind': 'unifdef',
-                    'flags': [roots.text(a) for a in u['argv'][:-1]],
-                    'src': rel(roots.spell(u['argv'][-1], u['cwd'])),
-                    'out': dst,
-                    'mode': mode,
-                }
-            else:
-                step = {'kind': 'copy', 'src': rel(roots.spell(src_arg, cwd)), 'out': dst, 'mode': mode}
-            claim(dst, step)
-            steps.append(step)
-        elif r['tool'] in ('mig', 'iig'):
-            argv = r['argv']
-            if r['tool'] == 'mig':
-                outs = outputs_of(argv, ('-header', '-user', '-server', '-sheader', '-iheader', '-dheader'), cwd, roots)
-                source = rel(roots.spell(argv[-1], cwd))
-            else:
-                outs = outputs_of(argv, ('--header', '--impl'), cwd, roots)
-                source = rel(roots.spell(argv[argv.index('--def') + 1], cwd))
-            if r['deps'] is None:
-                problems.append('{}: no dependency list for {}'.format(r['tool'], source))
-                continue
-            # What it read besides sources (generated headers: their steps run first); sources come from the
-            # include directories (incdirs), pruned at run time.
-            generated = sorted({rel(roots.spell(d, cwd)) for d in r['deps'] if roots.place(d, cwd)} - {source})
-            step = {
-                'kind': r['tool'],
-                'cwd': rel(roots.spell(cwd)),
-                'argv': [roots.text(a) for a in argv],
-                'src': source,
-                'outs': outs,
-                'incdirs': sorted(set(include_dirs(argv, cwd, roots)) | {os.path.dirname(source)}),
-                'deps': [d for d in generated if not d.startswith(('s/', 'x/'))],
-            }
-            # iokit/Tests/TestServices wraps iig's implementation in #if DEBUG || DEVELOPMENT (echo, cat, echo).
-            for o in list(outs):
-                if o.endswith('.iig.cpp.tmp') and o[2:-4] in final_files.get(o[0], set()):
-                    step['wrapped'] = o[:-4]
-                    outs.append(o[:-4])
-            for o in outs:
-                claim(o, step)
-            steps.append(step)
-        elif r['tool'] in SCRIPTS:
-            # NOT_OURS names what r18-xnu-objs' rules make in the object root; everything in a DSTROOT is ours.
-            outs = [rel(roots.spell(p)) for p in script_outputs(r) if roots.place(p, cwd)]
-            outs = [o for o in outs if o.startswith('d/') or not NOT_OURS.search(o[2:])]
-            outs = [o for o in outs if o[2:] in final_files.get(o[0], set())]
-            if not outs:
-                continue  # validate_blacklist and the like: nothing kept
-            step = {
-                'kind': 'script',
-                'tool': 's/' + r['tool'],
-                'cwd': rel(roots.spell(cwd)),
-                'argv': [roots.text(a) for a in r['argv']],
-                'env': {k: roots.text(v) for k, v in sorted(r['env'].items())},
-                'outs': outs,
-                'ins': script_inputs(r, cwd, roots, outs),
-            }
-            # A script that rewrites a file a copy installed (newvers.pl on version.h.template's copy): one step.
-            for o in outs:
-                earlier = produced.get(o)
-                if earlier is not None and earlier['kind'] == 'copy':
-                    step['pre_copy'] = earlier['src']
-                    steps.remove(earlier)
-                    del produced[o]
-            if 'pre_copy' not in step and len(outs) == 1 and os.path.basename(outs[0]) in r['argv']:
-                # Rewritten in place after a plain install(1) make does not route through $(INSTALL).
-                m = re.search(
-                    r'^install -c(?: -S)? -m \d+ (\S+) ' + re.escape(os.path.basename(outs[0])) + '$',
-                    make_log.read_text(errors='replace'),
-                    re.MULTILINE,
-                )
-                if m:
-                    step['pre_copy'] = rel(roots.spell(m.group(1), cwd))
-            for o in outs:
-                claim(o, step)
-            steps.append(step)
-    # unifdef straight into a file (syscalls.master -> bsd.syscalls.master): from make's log, which prints it whole.
-    log_text = make_log.read_text(errors='replace')
-    unpaired = {}
-    for r in records:
-        if r['tool'] == 'unifdef' and id(r) not in used_unifdef:
-            unpaired.setdefault(r['argv'][-1], []).append(r)
-    for source, rs in sorted(unpaired.items()):
+                step['pre_copy'] = rel(roots.spell(m.group(1), cwd))
+        self.add(outs, step)
+
+    def unifdef_to(self, records: list[dict[str, object]], log_text: str) -> None:
+        # unifdef straight into a file (syscalls.master -> bsd.syscalls.master): from make's log, which prints it whole.
+        unpaired = {}
+        for r in records:
+            if r['tool'] == 'unifdef' and id(r) not in self.used_unifdef:
+                unpaired.setdefault(r['argv'][-1], []).append(r)
+        for source, rs in sorted(unpaired.items()):
+            self.unifdef_to_source(source, rs, log_text)
+
+    def unifdef_to_source(self, source: str, rs: list[dict[str, object]], log_text: str) -> None:
         dsts = []
         for m in re.finditer(re.escape(source) + r' > (\S+);', log_text):
             if m.group(1) not in dsts:
                 dsts.append(m.group(1))
         flags = {tuple(r['argv'][:-1]) for r in rs}
         for d in dsts:
-            dst = rel(roots.spell(d, rs[0]['cwd']))
-            if dst[2:] not in final_files.get(dst[0], set()):
+            dst = rel(self.roots.spell(d, rs[0]['cwd']))
+            if dst[2:] not in self.final_files.get(dst[0], set()):
                 continue
             if len(flags) != 1:
-                problems.append(f'{dst}: unifdef runs on it with different flags')
+                self.problems.append(f'{dst}: unifdef runs on it with different flags')
                 continue
             step = {
                 'kind': 'unifdef_to',
-                'flags': [roots.text(a) for a in rs[0]['argv'][:-1]],
-                'src': rel(roots.spell(source, rs[0]['cwd'])),
+                'flags': [self.roots.text(a) for a in rs[0]['argv'][:-1]],
+                'src': rel(self.roots.spell(source, rs[0]['cwd'])),
                 'out': dst,
             }
-            claim(dst, step)
-            steps.append(step)
-    # Symbolic links (Kernel.framework's Headers, PrivateHeaders, Resources, Versions/Current).
-    for root, kind in (('d', 'dst'), ('o', 'obj')):
-        base = work / kind
-        for f in sorted(final_files.get(root + 'L', set())):
-            target = os.readlink(base / f)
-            step = {'kind': 'symlink', 'out': root + '/' + f, 'target': target}
-            claim(step['out'], step)
-            steps.append(step)
-    # xnuVersion: make echoes it (no tool to wrap); a pure function of RC_DARWIN_KERNEL_VERSION.
-    if 'xnuVersion' in final_files.get('o', set()):
-        step = {'kind': 'write', 'out': 'o/xnuVersion', 'content': (work / 'obj/xnuVersion').read_text()}
-        claim(step['out'], step)
-        steps.append(step)
-    steps = [s for s in steps if not s.pop('duplicate', False)]
-    return steps, produced, problems
+            self.add([dst], step)
+
+    def symlinks(self, work: Path) -> None:
+        # Symbolic links (Kernel.framework's Headers, PrivateHeaders, Resources, Versions/Current).
+        for root, kind in (('d', 'dst'), ('o', 'obj')):
+            base = work / kind
+            for f in sorted(self.final_files.get(root + 'L', set())):
+                target = os.readlink(base / f)
+                step = {'kind': 'symlink', 'out': root + '/' + f, 'target': target}
+                self.add([step['out']], step)
+
+    def xnu_version(self, work: Path) -> None:
+        # xnuVersion: make echoes it (no tool to wrap); a pure function of RC_DARWIN_KERNEL_VERSION.
+        if 'xnuVersion' in self.final_files.get('o', set()):
+            step = {'kind': 'write', 'out': 'o/xnuVersion', 'content': (work / 'obj/xnuVersion').read_text()}
+            self.add([step['out']], step)
 
 
 def check_coverage(
@@ -505,7 +542,7 @@ def write_table(path: Path, name: str, version: str, data: list[dict[str, object
     path.write_text(text)
 
 
-def main() -> None:
+def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     for name in ('xnu', 'version', 'out', 'availability', 'libplatform', 'libdispatch'):
         parser.add_argument('--' + name, required=True)
@@ -524,6 +561,118 @@ def main() -> None:
     for name in ('availability', 'libplatform', 'libdispatch'):
         given = Path(getattr(args, name)).resolve()
         setattr(args, name, str(given if given.is_dir() else given.parent))
+    return args
+
+
+def prepare_scratch(args: argparse.Namespace, xnu: Path, scratch: Path) -> Recording:
+    src = scratch / 'src'
+    bin_dir = scratch / 'bin'
+    if not args.reuse:
+        shutil.copytree(xnu, src, ignore=shutil.ignore_patterns('BUILD.bazel', '*.bzl', 'tables'))
+        bin_dir.mkdir()
+    for tool in ('mig', 'iig', 'unifdef'):
+        wrapper(bin_dir / tool, tool, TOOLCHAIN + '/' + tool)
+    for script in SCRIPTS:
+        real = src / (script + '.real')
+        if not args.reuse:
+            (src / script).rename(real)
+        wrapper(src / script, script, real, watch=True)
+    env = {
+        'PATH': '/usr/bin:/bin:/usr/sbin:/sbin',
+        'DEVELOPER_DIR': DEVELOPER_DIR,
+        'HOME': str(scratch),
+        'TMPDIR': str(scratch),
+        'LC_ALL': 'en_IE.UTF-8',
+        'LANG': 'en_IE.UTF-8',
+        'TZ': 'UTC',
+    }
+    return Recording(scratch, src, bin_dir, env, args)
+
+
+def record_installhdrs(rec: Recording) -> tuple[list[dict[str, object]], list[str], Path]:
+    # The SDK root, its other parts first (as sdkroot.py).
+    args = rec.args
+    work = rec.scratch / 'installhdrs'
+    dst = work / 'dst'
+    base_dir = work / 'base'
+    if not args.reuse:
+        base_dir.mkdir(parents=True)
+        xnu_ops.install_base(
+            Path(args.availability).resolve(),
+            Path(args.libplatform).resolve(),
+            Path(args.libdispatch).resolve(),
+            base_dir,
+            rec.env,
+        )
+        shutil.copytree(base_dir, dst, symlinks=True)
+    base_files = set(listing(base_dir)[0])
+    install_tool = rec.bin_dir / 'installfile-ih'
+    ih_env = dict(rec.env, KERNEL_SDKROOT=str(dst), XNU_AVAILABILITY_PL=str(dst / 'usr/local/libexec/availability.pl'))
+    # installfile is built by make's setup; the wrapper calls the copy make built.
+    wrapper(install_tool, 'installfile', work / 'obj/SETUP/installfile/installfile')
+    log = work / 'tools.jsonl'
+    if not (args.reuse and log.exists()):
+        log.write_text('')
+        variables = INSTALLHDRS_VARS + rec.tools + ['INSTALL=' + str(install_tool)]
+        run_make(rec, work, 'installhdrs', variables, dict(ih_env, XNU_RECORD_LOG=str(log)))
+    roots = Roots([(str(rec.src), 's'), (str(work / 'obj'), 'o'), (str(dst), 'd'), (DEVELOPER_DIR, 'x')])
+    files, links = listing(dst)
+    o_files, _ = listing(work / 'obj')
+    final = {'d': files, 'dL': links, 'o': o_files}
+    steps, produced, found = record_pass(work, roots, final, log, work / 'make.log')
+    # The SDK root's other parts (availability.pl and its headers, libplatform, libdispatch os/): one step, the
+    # files installhdrs did not write over.
+    base_step = {'kind': 'base', 'outs': sorted('d/' + f for f in base_files if 'd/' + f not in produced)}
+    steps.append(base_step)
+    for o in base_step['outs']:
+        produced[o] = base_step
+    found += check_coverage(produced, {'d/' + f for f in files | links}, final)
+    return steps, found, dst
+
+
+def record_build(rec: Recording, config: str, sdkroot: Path) -> tuple[list[dict[str, object]], list[str]]:
+    work = rec.scratch / ('build-' + config)
+    work.mkdir(exist_ok=True)
+    install_tool = rec.bin_dir / ('installfile-' + config)
+    wrapper(install_tool, 'installfile', work / 'obj/SETUP/installfile/installfile')
+    log = work / 'tools.jsonl'
+    b_env = dict(
+        rec.env,
+        KERNEL_SDKROOT=str(sdkroot),
+        XNU_AVAILABILITY_PL=str(sdkroot / 'usr/local/libexec/availability.pl'),
+        KERNEL_BUILD_DATE='Thu Jan  1 00:00:00 UTC 1970',
+    )
+    if not (rec.args.reuse and log.exists()):
+        log.write_text('')
+        variables = [
+            *build_vars(rec.args.ios_min),
+            'KERNEL_CONFIGS=' + config,
+            *rec.tools,
+            'INSTALL=' + str(install_tool),
+        ]
+        run_make(rec, work, 'build', variables, dict(b_env, XNU_RECORD_LOG=str(log)))
+    roots = Roots([(str(rec.src), 's'), (str(work / 'obj'), 'o'), (str(sdkroot), 'k'), (DEVELOPER_DIR, 'x')])
+    files, links = listing(work / 'obj')
+    final = {'o': files, 'oL': links}
+    coverage = {'o/' + f for f in files if not NOT_OURS.search(f)}
+    steps, produced, found = record_pass(work, roots, final, log, work / 'make.log')
+    found += check_coverage(produced, coverage, final)
+    return steps, found
+
+
+def check_tables(tables: dict[str, list[dict[str, object]]], out: Path, version: str) -> None:
+    with tempfile.TemporaryDirectory() as fresh:
+        stale = []
+        for name, data in tables.items():
+            write_table(Path(fresh) / (name + '.bzl'), name, version, data)
+            if (Path(fresh) / (name + '.bzl')).read_text() != (out / (name + '.bzl')).read_text():
+                stale.append(name)
+        if stale:
+            sys.exit('stale tables: {} (bazel run //kernel/xnu-{}:update_tables)'.format(', '.join(stale), version))
+
+
+def main() -> None:
+    args = parse_args()
     workspace = Path(os.environ.get('BUILD_WORKSPACE_DIRECTORY', '.'))
     xnu = (workspace / args.xnu).resolve() if not os.path.isabs(args.xnu) else Path(args.xnu)
     out = (workspace / args.out) if not os.path.isabs(args.out) else Path(args.out)
@@ -536,107 +685,11 @@ def main() -> None:
     tables = {}
     problems = []
     try:
-        src = scratch / 'src'
-        bin_dir = scratch / 'bin'
-        if not reuse:
-            shutil.copytree(xnu, src, ignore=shutil.ignore_patterns('BUILD.bazel', '*.bzl', 'tables'))
-            bin_dir.mkdir()
-        for tool in ('mig', 'iig', 'unifdef'):
-            wrapper(bin_dir / tool, tool, TOOLCHAIN + '/' + tool)
-        for script in SCRIPTS:
-            real = src / (script + '.real')
-            if not reuse:
-                (src / script).rename(real)
-            wrapper(src / script, script, real, watch=True)
-        env = {
-            'PATH': '/usr/bin:/bin:/usr/sbin:/sbin',
-            'DEVELOPER_DIR': DEVELOPER_DIR,
-            'HOME': str(scratch),
-            'TMPDIR': str(scratch),
-            'LC_ALL': 'en_IE.UTF-8',
-            'LANG': 'en_IE.UTF-8',
-            'TZ': 'UTC',
-        }
-        tools = [f'MIG={bin_dir}/mig', f'IIG={bin_dir}/iig', f'UNIFDEF={bin_dir}/unifdef']
-        # --- installhdrs: the SDK root, its other parts first (as sdkroot.py) ---
-        work = scratch / 'installhdrs'
-        dst = work / 'dst'
-        base_dir = work / 'base'
-        if not reuse:
-            base_dir.mkdir(parents=True)
-            xnu_ops.install_base(
-                Path(args.availability).resolve(),
-                Path(args.libplatform).resolve(),
-                Path(args.libdispatch).resolve(),
-                base_dir,
-                env,
-            )
-            shutil.copytree(base_dir, dst, symlinks=True)
-        base_files = set(listing(base_dir)[0])
-        install_tool = bin_dir / 'installfile-ih'
-        ih_env = dict(env, KERNEL_SDKROOT=str(dst), XNU_AVAILABILITY_PL=str(dst / 'usr/local/libexec/availability.pl'))
-        # installfile is built by make's setup; the wrapper calls the copy make built.
-        wrapper(install_tool, 'installfile', work / 'obj/SETUP/installfile/installfile')
-        log = work / 'tools.jsonl'
-        if not (args.reuse and log.exists()):
-            log.write_text('')
-            run_make(
-                src,
-                work,
-                'installhdrs',
-                INSTALLHDRS_VARS + tools + ['INSTALL=' + str(install_tool)],
-                args.jobs,
-                dict(ih_env, XNU_RECORD_LOG=str(log)),
-                args.version,
-                args.darwin,
-            )
-        roots = Roots([(str(src), 's'), (str(work / 'obj'), 'o'), (str(dst), 'd'), (DEVELOPER_DIR, 'x')])
-        files, links = listing(dst)
-        o_files, _ = listing(work / 'obj')
-        final = {'d': files, 'dL': links, 'o': o_files}
-        steps, produced, found = record_pass(work, roots, final, log, work / 'make.log')
-        # The SDK root's other parts (availability.pl and its headers, libplatform, libdispatch os/): one step, the
-        # files installhdrs did not write over.
-        base_step = {'kind': 'base', 'outs': sorted('d/' + f for f in base_files if 'd/' + f not in produced)}
-        steps.append(base_step)
-        for o in base_step['outs']:
-            produced[o] = base_step
-        found += check_coverage(produced, {'d/' + f for f in files | links}, final)
-        tables['installhdrs'] = steps
+        rec = prepare_scratch(args, xnu, scratch)
+        tables['installhdrs'], found, sdkroot = record_installhdrs(rec)
         problems += ['installhdrs: ' + p for p in found]
-        sdkroot = dst
-        # --- build, per kernel configuration ---
         for config in [c for c in args.configs.split(',') if c]:
-            work = scratch / ('build-' + config)
-            work.mkdir(exist_ok=True)
-            install_tool = bin_dir / ('installfile-' + config)
-            wrapper(install_tool, 'installfile', work / 'obj/SETUP/installfile/installfile')
-            log = work / 'tools.jsonl'
-            b_env = dict(
-                env,
-                KERNEL_SDKROOT=str(sdkroot),
-                XNU_AVAILABILITY_PL=str(sdkroot / 'usr/local/libexec/availability.pl'),
-                KERNEL_BUILD_DATE='Thu Jan  1 00:00:00 UTC 1970',
-            )
-            if not (args.reuse and log.exists()):
-                log.write_text('')
-                run_make(
-                    src,
-                    work,
-                    'build',
-                    [*build_vars(args.ios_min), 'KERNEL_CONFIGS=' + config, *tools, 'INSTALL=' + str(install_tool)],
-                    args.jobs,
-                    dict(b_env, XNU_RECORD_LOG=str(log)),
-                    args.version,
-                    args.darwin,
-                )
-            roots = Roots([(str(src), 's'), (str(work / 'obj'), 'o'), (str(sdkroot), 'k'), (DEVELOPER_DIR, 'x')])
-            files, links = listing(work / 'obj')
-            final = {'o': files, 'oL': links}
-            coverage = {'o/' + f for f in files if not NOT_OURS.search(f)}
-            steps, produced, found = record_pass(work, roots, final, log, work / 'make.log')
-            found += check_coverage(produced, coverage, final)
-            tables['build_' + config] = steps
+            tables['build_' + config], found = record_build(rec, config, sdkroot)
             problems += [f'build {config}: {p}' for p in found]
     finally:
         if not args.keep:
@@ -645,16 +698,7 @@ def main() -> None:
         sys.exit('\n'.join(problems[:200]) + (f'\n... {len(problems)} problems' if len(problems) > 200 else ''))
     out.mkdir(parents=True, exist_ok=True)
     if args.check:
-        with tempfile.TemporaryDirectory() as fresh:
-            stale = []
-            for name, data in tables.items():
-                write_table(Path(fresh) / (name + '.bzl'), name, args.version, data)
-                if (Path(fresh) / (name + '.bzl')).read_text() != (out / (name + '.bzl')).read_text():
-                    stale.append(name)
-            if stale:
-                sys.exit(
-                    'stale tables: {} (bazel run //kernel/xnu-{}:update_tables)'.format(', '.join(stale), args.version)
-                )
+        check_tables(tables, out, args.version)
         print('tables current')
         return
     for name, data in tables.items():
