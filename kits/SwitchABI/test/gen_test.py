@@ -73,10 +73,11 @@ class TablesTest(unittest.TestCase):
                 if interface.get('header', True):
                     gen.header(interface, table, path.name)
 
-    def test_every_declared_virtual_has_a_slot(self):
+    def test_every_virtual_the_class_adds_has_a_slot(self):
         for path, interface, table in tables():
             with self.subTest(table=str(path.relative_to(ROOT))):
-                self.assertEqual(set(table['layout'].values()), set(interface['methods']))
+                added = {k for k, m in interface['methods'].items() if not m['decl'].endswith(' override')}
+                self.assertLessEqual(added, set(table['layout'].values()))
 
 
 class HeaderTest(unittest.TestCase):

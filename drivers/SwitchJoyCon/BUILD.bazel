@@ -35,6 +35,7 @@ kernel_driver(
         "SwitchJoyConHID.cpp",
         "SwitchJoyConRail.cpp",
     ],
+    abi = ["IOHIDDevice"],
     hdr_deps = [
         "drivers/ArmGIC",
         "drivers/SwitchSuspend",
@@ -44,10 +45,6 @@ kernel_driver(
     late = ["SwitchJoyConHID.cpp"],
     # Game-controller personalities.
     prelink = ["com.apple.driver.AppleGameControllerPersonality"],
-    src_copts = {"SwitchJoyConHID.cpp": [
-        "-I",
-        "{build}/native-hid-input",
-    ]},
 )
 
 # joyconpaird / joyconnfc: Joy-Con Bluetooth pairing hand-off and NFC.

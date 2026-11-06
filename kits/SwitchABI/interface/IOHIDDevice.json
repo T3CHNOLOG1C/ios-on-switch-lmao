@@ -1,0 +1,115 @@
+{
+  "class": "IOHIDDevice",
+  "superclass": "IOService",
+  "kext": "com.apple.iokit.IOHIDFamily",
+  "structors": "abstract",
+  "header_name": "OriginalHidDeviceABI.h",
+  "includes": [
+    "IOKit/IOService.h",
+    "IOKit/IOMemoryDescriptor.h"
+  ],
+  "members": [
+    "using IOService::setProperty"
+  ],
+  "methods": {
+    "Dispatch": {
+      "decl": "IOReturn Dispatch(IORPC) override",
+      "mangled": "__ZN11IOHIDDevice8DispatchE5IORPC",
+      "pac": "_ZN15OSMetaClassBase8DispatchE5IORPC"
+    },
+    "free": {
+      "decl": "void free() override",
+      "mangled": "__ZN11IOHIDDevice4freeEv",
+      "pac": "_ZN8OSObject4freeEv"
+    },
+    "init": {
+      "decl": "bool init(OSDictionary *properties = nullptr) override",
+      "mangled": "__ZN11IOHIDDevice4initEP12OSDictionary",
+      "pac": "_ZN15IORegistryEntry4initEP12OSDictionary"
+    },
+    "setProperty": {
+      "decl": "bool setProperty(const OSSymbol *, OSObject *) override",
+      "mangled": "__ZN11IOHIDDevice11setPropertyEPK8OSSymbolP8OSObject",
+      "pac": "_ZN15IORegistryEntry11setPropertyEPK8OSSymbolP8OSObject"
+    },
+    "willTerminate": {
+      "decl": "bool willTerminate(IOService *, IOOptionBits) override",
+      "mangled": "__ZN11IOHIDDevice13willTerminateEP9IOServicej",
+      "pac": "_ZN9IOService13willTerminateEPS_j"
+    },
+    "didTerminate": {
+      "decl": "bool didTerminate(IOService *, IOOptionBits, bool *) override",
+      "mangled": "__ZN11IOHIDDevice12didTerminateEP9IOServicejPb",
+      "pac": "_ZN9IOService12didTerminateEPS_jPb"
+    },
+    "configureReport": {
+      "decl": "IOReturn configureReport(IOReportChannelList *, IOReportConfigureAction, void *, void *) override",
+      "mangled": "__ZN11IOHIDDevice15configureReportEP19IOReportChannelListjPvS2_",
+      "pac": "_ZN9IOService15configureReportEP19IOReportChannelListjPvS2_"
+    },
+    "updateReport": {
+      "decl": "IOReturn updateReport(IOReportChannelList *, IOReportUpdateAction, void *, void *) override",
+      "mangled": "__ZN11IOHIDDevice12updateReportEP19IOReportChannelListjPvS2_",
+      "pac": "_ZN9IOService12updateReportEP19IOReportChannelListjPvS2_"
+    },
+    "start": {
+      "decl": "bool start(IOService *) override",
+      "mangled": "__ZN11IOHIDDevice5startEP9IOService",
+      "pac": "_ZN9IOService5startEPS_"
+    },
+    "stop": {
+      "decl": "void stop(IOService *) override",
+      "mangled": "__ZN11IOHIDDevice4stopEP9IOService",
+      "pac": "_ZN9IOService4stopEPS_"
+    },
+    "handleOpen": {
+      "decl": "bool handleOpen(IOService *, IOOptionBits, void *) override",
+      "mangled": "__ZN11IOHIDDevice10handleOpenEP9IOServicejPv",
+      "pac": "_ZN9IOService10handleOpenEPS_jPv"
+    },
+    "handleClose": {
+      "decl": "void handleClose(IOService *, IOOptionBits) override",
+      "mangled": "__ZN11IOHIDDevice11handleCloseEP9IOServicej",
+      "pac": "_ZN9IOService11handleCloseEPS_j"
+    },
+    "handleIsOpen": {
+      "decl": "bool handleIsOpen(const IOService *) const override",
+      "mangled": "__ZNK11IOHIDDevice12handleIsOpenEPK9IOService",
+      "pac": "_ZNK9IOService12handleIsOpenEPKS_"
+    },
+    "matchPropertyTable": {
+      "decl": "bool matchPropertyTable(OSDictionary *, SInt32 *) override",
+      "mangled": "__ZN11IOHIDDevice18matchPropertyTableEP12OSDictionaryPi",
+      "pac": "_ZN9IOService18matchPropertyTableEP12OSDictionaryPi"
+    },
+    "message": {
+      "decl": "IOReturn message(UInt32, IOService *, void *) override",
+      "mangled": "__ZN11IOHIDDevice7messageEjP9IOServicePv",
+      "pac": "_ZN9IOService7messageEjPS_Pv"
+    },
+    "newUserClient": {
+      "decl": "IOReturn newUserClient(task_t, void *, UInt32, OSDictionary *, IOUserClient **) override",
+      "mangled": "__ZN11IOHIDDevice13newUserClientEP4taskPvjP12OSDictionaryPP12IOUserClient",
+      "pac": "_ZN9IOService13newUserClientEP4taskPvjP12OSDictionaryPP12IOUserClient"
+    },
+    "newTransportString": {
+      "decl": "virtual OSString *newTransportString() const",
+      "mangled": "__ZNK11IOHIDDevice18newTransportStringEv",
+      "pac": "_ZNK11IOHIDDevice18newTransportStringEv"
+    },
+    "newProductString": {
+      "decl": "virtual OSString *newProductString() const",
+      "mangled": "__ZNK11IOHIDDevice16newProductStringEv",
+      "pac": "_ZNK11IOHIDDevice16newProductStringEv"
+    },
+    "newReportDescriptor": {
+      "decl": "virtual IOReturn newReportDescriptor(IOMemoryDescriptor **) const = 0",
+      "pac": "_ZNK11IOHIDDevice19newReportDescriptorEPP18IOMemoryDescriptor"
+    },
+    "handleReport": {
+      "decl": "virtual IOReturn handleReport(IOMemoryDescriptor *, unsigned, IOOptionBits)",
+      "mangled": "__ZN11IOHIDDevice12handleReportEP18IOMemoryDescriptorjj",
+      "pac": "_ZN11IOHIDDevice12handleReportEP18IOMemoryDescriptor15IOHIDReportTypej"
+    }
+  }
+}

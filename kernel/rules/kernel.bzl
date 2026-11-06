@@ -46,7 +46,6 @@ GENERATED_HEADERS = {
     "storage-abi": "//{}:gen_storage_abi".format(KERNEL_PACKAGE),
     "native-ram-block": "//{}:gen_native_data_seed".format(KERNEL_PACKAGE),
     "native-legacy-display": "//{}:gen_pinned_headers".format(KERNEL_PACKAGE),
-    "native-hid-input": "//{}:gen_pinned_headers".format(KERNEL_PACKAGE),
     "sheng-platform-power": "//{}:gen_pinned_headers".format(KERNEL_PACKAGE),
 }
 

@@ -2,7 +2,7 @@
 // The touch screen's and buttons' HID devices (see SwitchHID.h).
 //
 // SwitchHIDDevice subclasses the original IOHIDDevice through the qualified ABI and bindings of NativeHidInput
-// (build/native-hid-input: OriginalHidDeviceABI.h, hid-original-bindings.o). Those bind every IOHIDDevice slot except
+// (kits/SwitchABI: OriginalHidDeviceABI.h, hid-original-bindings.o). Those bind every IOHIDDevice slot except
 // the ones NativeHidInput overrides, so this class overrides exactly that set: free, start, stop, getWorkLoop,
 // newTransportString, newProductString, newReportDescriptor; plus slot 183, setReport, as ../SwitchJoyCon does (the
 // motion sensors' Report Interval feature, SwitchHID.h). Its metaclass can only be registered once IOHIDFamily is

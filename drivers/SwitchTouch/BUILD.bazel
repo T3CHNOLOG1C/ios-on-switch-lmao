@@ -35,6 +35,7 @@ kernel_driver(
         "SwitchHIDDevice.cpp",
         "SwitchTouch.cpp",
     ],
+    abi = ["IOHIDDevice"],
     hdr_deps = [
         "drivers/ArmGIC",
         "drivers/NativeMobileDisplay",
@@ -43,8 +44,4 @@ kernel_driver(
         "drivers/TegraI2C",
     ],
     late = ["SwitchHIDDevice.cpp"],
-    src_copts = {"SwitchHIDDevice.cpp": [
-        "-I",
-        "{build}/native-hid-input",
-    ]},
 )

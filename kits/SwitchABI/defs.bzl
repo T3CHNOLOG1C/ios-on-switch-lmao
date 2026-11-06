@@ -13,7 +13,7 @@ def _header_impl(ctx):
     info = SwitchAbiInfo(interface = ctx.file.interface, table = ctx.file.table)
     if not ctx.attr.header:
         return [DefaultInfo(), CcInfo(), info]
-    out = ctx.actions.declare_file("include/Original{}.h".format(ctx.attr.cls))
+    out = ctx.actions.declare_file("include/" + (ctx.attr.header_name or "Original{}.h".format(ctx.attr.cls)))
     ctx.actions.run(
         executable = ctx.executable._gen,
         arguments = ["header", "--interface", ctx.file.interface.path, "--table", ctx.file.table.path, "--out", out.path],
@@ -36,19 +36,21 @@ switch_abi_header = rule(
     attrs = {
         "cls": attr.string(mandatory = True),
         "header": attr.bool(default = True, doc = "False: drivers declare the class from another header (its bindings only)"),
+        "header_name": attr.string(doc = "the header's file name, if not Original<cls>.h"),
         "interface": attr.label(mandatory = True, allow_single_file = [".json"]),
         "table": attr.label(mandatory = True, allow_single_file = [".json"]),
         "_gen": attr.label(default = ABI_PACKAGE + ":gen", executable = True, cfg = "exec"),
     },
 )
 
-def switch_abi_class(cls, header = True):
+def switch_abi_class(cls, header = True, header_name = None):
     """:<cls>, the class's header for the selected kind; a kind without kinds/<kind>/<cls>.json fails at analysis."""
     tables = native.glob(["kinds/*/{}.json".format(cls)], allow_empty = True)
     switch_abi_header(
         name = cls,
         cls = cls,
         header = header,
+        header_name = header_name,
         interface = "interface/{}.json".format(cls),
         table = select(
             {"//ipsw:" + t.split("/")[1]: t for t in tables},

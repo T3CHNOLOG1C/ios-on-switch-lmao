@@ -2,7 +2,7 @@
 // Joy-Con HID devices for the rail driver (see SwitchJoyConHID.h for what iOS does with them).
 //
 // SwitchJoyConDevice subclasses the original IOHIDDevice through NativeHidInput's qualified ABI and bindings
-// (build/native-hid-input: OriginalHidDeviceABI.h, hid-original-bindings.o), like ../SwitchTouch/SwitchHIDDevice.cpp,
+// (kits/SwitchABI: OriginalHidDeviceABI.h, hid-original-bindings.o), like ../SwitchTouch/SwitchHIDDevice.cpp,
 // so it is a late object (Drivers.cmake switch_late_object) whose static initializer runs from
 // switch_joycon_hid_prepare() once IOHIDFamily is loaded. Overrides: NativeHidInput's set (free, start, stop,
 // getWorkLoop, newTransportString, newProductString, newReportDescriptor; the bindings leave exactly those IOHIDDevice
