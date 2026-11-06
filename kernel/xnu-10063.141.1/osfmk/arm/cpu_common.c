@@ -558,6 +558,38 @@ cpu_signal_cancel(cpu_data_t *target_proc)
 	}
 }
 
+#if DEVELOPMENT || DEBUG
+/*
+ * Switch: the IPIs each CPU took, by what they asked for, for kprof's ipis line. Only the receiving CPU writes its
+ * row, with interrupts masked. Kinds: AST check, cross-call, timer, a wake with nothing pending (an idle CPU's SIGPnop),
+ * anything else.
+ */
+#define SWITCH_IPI_KINDS 5
+uint64_t switch_ipis_received[MAX_CPUS][SWITCH_IPI_KINDS];
+
+static void
+switch_ipi_count_received(unsigned int cpu, unsigned int signal)
+{
+	uint64_t *row = switch_ipis_received[cpu];
+
+	signal &= ~SIGPdisabled;
+	if (signal & SIGPast) {
+		row[0]++;
+	}
+	if (signal & (SIGPxcall | SIGPxcallImm)) {
+		row[1]++;
+	}
+	if (signal & SIGPdec) {
+		row[2]++;
+	}
+	if (signal == 0) {
+		row[3]++;
+	} else if (signal & ~(SIGPast | SIGPxcall | SIGPxcallImm | SIGPdec)) {
+		row[4]++;
+	}
+}
+#endif
+
 void
 cpu_signal_handler(void)
 {
@@ -591,6 +623,9 @@ cpu_signal_handler_internal(boolean_t disable_signal)
 	 * handlers.
 	 */
 	cpu_signal = os_atomic_or(&cpu_data_ptr->cpu_signal, 0, acquire);
+#if DEVELOPMENT || DEBUG
+	switch_ipi_count_received((unsigned int)cpu_data_ptr->cpu_number, cpu_signal);
+#endif
 
 	if ((!(cpu_signal & SIGPdisabled)) && (disable_signal == TRUE)) {
 		os_atomic_or(&cpu_data_ptr->cpu_signal, SIGPdisabled, relaxed);

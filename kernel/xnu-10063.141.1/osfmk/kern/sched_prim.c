@@ -4820,6 +4820,12 @@ sched_ipi_deferred_policy(processor_set_t pset, processor_t dst,
 	return SCHED_IPI_NONE;
 }
 
+#if DEVELOPMENT || DEBUG
+/* Switch: scheduler IPIs sent, by sched_ipi_event_t and by whether the target was idle, for kprof's ipis line. */
+#define SWITCH_SCHED_IPI_EVENTS 7
+uint64_t switch_sched_ipis[SWITCH_SCHED_IPI_EVENTS][2];
+#endif
+
 sched_ipi_type_t
 sched_ipi_action(processor_t dst, thread_t thread, sched_ipi_event_t event)
 {
@@ -4853,6 +4859,9 @@ sched_ipi_action(processor_t dst, thread_t thread, sched_ipi_event_t event)
 		bit_set(pset->pending_AST_PREEMPT_cpu_mask, dst->cpu_id);
 		break;
 	}
+#if DEVELOPMENT || DEBUG
+	os_atomic_inc(&switch_sched_ipis[event < SWITCH_SCHED_IPI_EVENTS ? event : 0][dst_idle], relaxed);
+#endif
 	return ipi_type;
 }
 
