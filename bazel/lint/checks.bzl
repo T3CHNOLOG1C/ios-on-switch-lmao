@@ -31,8 +31,14 @@ def _is_rs(f):
 def _is_md(f):
     return f.extension == "md"
 
+def _is_github_yaml(f):
+    return f.extension in ("yml", "yaml") and f.short_path.startswith(".github/")
+
 def _is_data(f):
-    return f.extension in ("json", "toml")
+    return f.extension in ("json", "toml") or _is_github_yaml(f)
+
+def _is_workflow(f):
+    return _is_github_yaml(f) and f.short_path.startswith(".github/workflows/")
 
 # Shell house style (shfmt): 4-space indent, case bodies indented, binary operators may start a line. Giving shfmt
 # its style flags also makes it ignore any .editorconfig it would otherwise pick up.
@@ -58,6 +64,7 @@ def _tools(ctx):
         rumdl = ctx.executable._rumdl,
         dprint = ctx.executable._dprint,
         dprint_plugins = ctx.files._dprint_plugins,
+        actionlint = ctx.executable._actionlint,
         rustfmt = rustfmt.rustfmt,
         rustfmt_files = rustfmt.all_files,
         ruff_config = ctx.file._ruff_config,
@@ -114,6 +121,14 @@ def _check_rumdl_format(t, f, _):
     argv = [t.rumdl.path, "fmt", "--check", "--color", "never", "--config", t.rumdl_config.path, f.path]
     return argv, [t.rumdl, t.rumdl_config]
 
+# actionlint checks the local actions and reusable workflows a workflow uses only inside a Git work tree, so the check
+# gives the sandbox an empty .git; it runs the pinned shellcheck on the run: scripts.
+def _check_actionlint(t, f, ctx_files):
+    argv = ["/bin/sh", "-c", 'mkdir -p .git && exec "$0" "$@"', t.actionlint.path, "-no-color", "-pyflakes="]
+    argv.append("-shellcheck=" + t.shellcheck.path)
+    argv.extend(["-config-file=" + c.path for c in ctx_files.github_yaml if c.short_path == ".github/actionlint.yaml"])
+    return argv + [f.path], [t.actionlint, t.shellcheck] + ctx_files.github_yaml
+
 def _check_dprint(t, f, _):
     # dprint takes the plugins after the files.
     argv = [t.dprint.path, "check", "--config", t.dprint_config.path, f.path, "--plugins"]
@@ -121,6 +136,7 @@ def _check_dprint(t, f, _):
     return argv, [t.dprint, t.dprint_config] + t.dprint_plugins
 
 CHECKS = {
+    "actionlint": (_is_workflow, _check_actionlint),
     "buildifier": (_is_starlark, _check_buildifier),
     "buildifier_format": (_is_starlark, _check_buildifier_format),
     "clang_format": (_is_c, _check_clang_format),
@@ -172,6 +188,7 @@ def _lint_test_impl(ctx):
     ctx_files = struct(
         clang_format_configs = [f for f in files if f.basename == ".clang-format"],
         rust = [f for f in files if _is_rs(f)],
+        github_yaml = [f for f in files if _is_github_yaml(f)],
     )
     reports = []
     for check in ctx.attr.checks:
@@ -204,13 +221,14 @@ def _lint_test_impl(ctx):
     return [DefaultInfo(executable = script, runfiles = ctx.runfiles(files = [manifest] + reports))]
 
 _TOOL_ATTRS = {
+    "_actionlint": attr.label(default = "@actionlint//:actionlint", executable = True, cfg = "exec", allow_single_file = True),
     "_buildifier": attr.label(default = "@buildifier//file", executable = True, cfg = "exec", allow_single_file = True),
     "_buildifier_config": attr.label(default = "//:.buildifier.json", allow_single_file = True),
     "_buildifier_tables": attr.label(default = "//:.buildifier-tables.json", allow_single_file = True),
     "_clang_format": attr.label(default = "@llvm//:bin/clang-format", executable = True, cfg = "exec", allow_single_file = True),
     "_dprint": attr.label(default = "@dprint//:dprint", executable = True, cfg = "exec", allow_single_file = True),
     "_dprint_config": attr.label(default = "//:dprint.json", allow_single_file = True),
-    "_dprint_plugins": attr.label_list(default = ["@dprint_plugin_json//file", "@dprint_plugin_toml//file"], allow_files = True),
+    "_dprint_plugins": attr.label_list(default = ["@dprint_plugin_json//file", "@dprint_plugin_toml//file", "@dprint_plugin_yaml//file"], allow_files = True),
     "_ruff": attr.label(default = "@ruff//:ruff", executable = True, cfg = "exec", allow_single_file = True),
     "_ruff_config": attr.label(default = "//:ruff.toml", allow_single_file = True),
     "_rumdl": attr.label(default = "@rumdl//:rumdl", executable = True, cfg = "exec", allow_single_file = True),

@@ -53,7 +53,7 @@ uv.configure(
 
 # --- Lint and format tools (//bazel/lint): release binaries pinned in bazel/lint/tools.bzl ----------------------
 lint_tools = use_extension("//bazel/lint:tools.bzl", "lint_tools")
-use_repo(lint_tools, "buildifier", "dprint", "dprint_plugin_json", "dprint_plugin_toml", "ruff", "rumdl", "shellcheck", "shfmt")
+use_repo(lint_tools, "actionlint", "buildifier", "dprint", "dprint_plugin_json", "dprint_plugin_toml", "dprint_plugin_yaml", "ruff", "rumdl", "shellcheck", "shfmt")
 
 # --- LLVM 23.1.4 (the Homebrew version the CMake flow used): ld.lld/objcopy/readelf/objdump for the loader, llvm-objcopy
 # for late kernel objects, clang-format/clang-tidy for lint. Only those binaries of the release are extracted. --------

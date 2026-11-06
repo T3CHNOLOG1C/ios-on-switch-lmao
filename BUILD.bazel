@@ -43,9 +43,12 @@ exports_files([
 
 # Never walk the root: its directory also holds out/ (agents' scratch, large and untracked), and a recursive glob or
 # subpackages(**) here costs every Bazel command tens of seconds of loading. The root's own files are the top-level
-# ones and docs/; its subpackages are those at the top level and one below it (drivers/<X>, ...).
+# ones, .github/ and docs/; its subpackages are those at the top level and one below it (drivers/<X>, ...).
 lint_files(
-    dirs = ["docs"],
+    dirs = [
+        ".github",
+        "docs",
+    ],
     # Untracked tool state at the top level of working copies.
     exclude = ["skills-lock.json"],
     subpackages = subpackages(
@@ -114,6 +117,7 @@ lint_test(
     name = "lint_test",
     srcs = [":lint_files"],
     checks = [
+        "actionlint",
         "buildifier",
         "ruff",
         "rumdl",

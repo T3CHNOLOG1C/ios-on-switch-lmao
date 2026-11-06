@@ -3,6 +3,7 @@
   "indentWidth": 2,
   "json": {},
   "toml": {},
+  "yaml": {},
   "excludes": [
     ".agents",
     "bazel/pinned/*/**",

@@ -33,12 +33,14 @@ PATTERNS = [
     "**/*.inc",
     "**/*.m",
     "**/*.mm",
-    # Rust, shell, Markdown, JSON, TOML
+    # Rust, shell, Markdown, JSON, TOML, YAML
     "**/*.rs",
     "**/*.sh",
     "**/*.md",
     "**/*.json",
     "**/*.toml",
+    "**/*.yml",
+    "**/*.yaml",
     # Tool configuration the checks read for the files below it (clang-format's and clang-tidy's nearest-file lookup)
     "**/.clang-format",
     "**/.clang-tidy",

@@ -11,6 +11,12 @@ _GH = "https://github.com/"
 
 # name: (url, sha256, strip_prefix or None for a bare binary, binary name)
 ARCHIVES = {
+    "actionlint": (
+        _GH + "rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_darwin_arm64.tar.gz",
+        "aba9ced2dee8d27fecca3dc7feb1a7f9a52caefa1eb46f3271ea66b6e0e6953f",
+        "",
+        "actionlint",
+    ),
     "dprint": (
         _GH + "dprint/dprint/releases/download/0.64.3/dprint-aarch64-apple-darwin.zip",
         "94b48820945602fb113a34343db0a9e653a8346c60966f790556dc9ce4084a92",
@@ -52,6 +58,11 @@ FILES = {
     "dprint_plugin_toml": (
         _GH + "dprint/dprint-plugin-toml/releases/download/0.9.0/plugin.wasm",
         "776e088ed4255a51a80e3640e5fd20b15661147e86df3e99611aaa37e9c59852",
+        False,
+    ),
+    "dprint_plugin_yaml": (
+        _GH + "g-plane/pretty_yaml/releases/download/v0.6.0/plugin.wasm",
+        "40a2fdda7040317eb1b23520f3a00769a5571eedb049c4ca9175c1b9eeba01ae",
         False,
     ),
     "shfmt": (
