@@ -1494,10 +1494,14 @@ IOReturn SwitchXUDC::activateEndpoint(int address, int type, int maxPacketSize, 
     ep.serialBusy = false;
     ep.in = in;
     ep.mps = (uint32_t)maxPacketSize;
-    if (!hw.initEndpoint(dci, kind, (uint32_t)maxPacketSize, period))
+    if (!hw.initEndpoint(dci, kind, (uint32_t)maxPacketSize, period)) {
+        IOLog("SwitchUSB: endpoint %#x (DCI %u) not activated: no memory for its transfer ring\n", address, dci);
         return kIOReturnNoMemory;
-    if (!hw.reloadEndpoint(dci))
+    }
+    if (!hw.reloadEndpoint(dci)) {
+        IOLog("SwitchUSB: endpoint %#x (DCI %u) not activated: EP_RELOAD did not clear\n", address, dci);
         return kIOReturnTimeout;
+    }
     ep.active = true;
     hw.run();  // hekate starts the controller at SET_CONFIGURATION
     return kIOReturnSuccess;
