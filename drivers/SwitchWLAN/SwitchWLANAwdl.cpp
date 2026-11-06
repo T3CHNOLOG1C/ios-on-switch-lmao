@@ -438,7 +438,7 @@ void drain(bool presence = true)
     }
     input = gInputHead;
     gInputHead = gInputTail = nullptr;
-    // NOLINTNEXTLINE(misc-const-correctness): const a ifnet_t is const a pointer (misc-misplaced-const)
+    // NOLINTNEXTLINE(misc-const-correctness): a const ifnet_t is a const pointer (misc-misplaced-const)
     ifnet_t ifp = gIf;
     IOLockUnlock(gLock);
     for (mbuf_t m = input, next = nullptr; m; m = next) {
@@ -806,8 +806,7 @@ void ifEventStub(ifnet_t, const struct kev_msg *)
 // NOLINTNEXTLINE(misc-use-internal-linkage): OSDefineMetaClassAndStructors needs the class's external linkage (its kalloc type view)
 class SwitchAwdlUserClient : public IOUserClient {
     // NOLINTNEXTLINE(misc-explicit-constructor): IOKit's structors macro declares the metaclass constructor
-    OSDeclareDefaultStructors(
-        SwitchAwdlUserClient);  // NOLINT(misc-explicit-constructor): IOKit's structors macro declares the metaclass constructor
+    OSDeclareDefaultStructors(SwitchAwdlUserClient);
 
 public:
     static void wake(OSAsyncReference64 reference)
@@ -965,8 +964,7 @@ IOReturn SwitchAwdlUserClient::externalMethod(uint32_t selector, IOExternalMetho
 // NOLINTNEXTLINE(misc-use-internal-linkage): OSDefineMetaClassAndStructors needs the class's external linkage (its kalloc type view)
 class SwitchAwdlInterface : public IOService {
     // NOLINTNEXTLINE(misc-explicit-constructor): IOKit's structors macro declares the metaclass constructor
-    OSDeclareDefaultStructors(
-        SwitchAwdlInterface);  // NOLINT(misc-explicit-constructor): IOKit's structors macro declares the metaclass constructor
+    OSDeclareDefaultStructors(SwitchAwdlInterface);
 
 public:
     IOReturn newUserClient(task_t task, void *security, UInt32 type, OSDictionary *properties,
@@ -1339,7 +1337,7 @@ extern "C" int switch_wlan_awdl_vif_delete(const void *payload, size_t length)
     awdl_core_stop(gCore);
     opStop(nullptr);
     gFacade.enabled = 0;
-    // NOLINTNEXTLINE(misc-const-correctness): const a ifnet_t is const a pointer (misc-misplaced-const)
+    // NOLINTNEXTLINE(misc-const-correctness): a const ifnet_t is a const pointer (misc-misplaced-const)
     ifnet_t ifp = gIf;
     gIf = nullptr;
     IOService *s = gService;
