@@ -3,8 +3,9 @@
 import sys, os, struct, bisect, collections, json
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from kcinfo import KC
+import paths
 kc = KC(sys.argv[1])
-cl = json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "closure.json")))
+cl = json.load(open(paths.work("closure.json")))
 sel = set(cl["selected"])
 ext = []
 for n, vm, fo in kc.entries:
@@ -49,5 +50,5 @@ print("distinct kernel BL/B targets", len(bl_t), "ADRP kernel pages", len(adrp_t
 fx = set(cl["kernel_targets"])
 print("BL targets also fixup targets:", len(set(bl_t) & fx), "union:", len(set(bl_t) | fx))
 cl["kernel_branch_targets"] = sorted(bl_t); cl["kernel_adrp_pages"] = sorted(adrp_t)
-json.dump(cl, open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "closure.json"), "w"), indent=0)
+json.dump(cl, open(paths.work("closure.json"), "w"), indent=0)
 for k, v in per.most_common(8): print("  ", k, v)

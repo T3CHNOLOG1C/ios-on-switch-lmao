@@ -20,6 +20,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 R = os.path.join(HERE, "..")
 sys.path.insert(0, HERE)
 from kcinfo import KC, ROOTS, decode8
+import paths
 from native_prelink import macho, exports, backed_offset
 
 CUTS = {("com.apple.iokit.IOUSBHostFamily", "com.apple.driver.AppleSMC"): "_switch_prelink_cut_null",
@@ -65,7 +66,7 @@ def main():
     nsym = {}
     for a, ns in exports(native_data, native).items():
         for n in ns: nsym.setdefault(n, a)
-    for l in open(os.path.join(HERE, "ours.nm")):          # local symbols too (vtable slots name some)
+    for l in open(paths.work("ours.nm")):          # local symbols too (vtable slots name some)
         a, t, n = l.split(); nsym.setdefault(n, int(a, 16))
     # every defined symbol of ours (exports() keeps external ones only; kexts bind to KPI = external)
     marker = nsym.get("_kalloc_sparse_prelink_index_version")
@@ -75,14 +76,14 @@ def main():
     d = kc.d
     roots = [r for r in ROOTS if r in kc.plist]
     sel, ifaces = kc.closure(roots, set(CUTS))
-    names = {int(a, 16): n for a, n in json.load(open(os.path.join(HERE, "kernel-names.json")))["names"].items()}
+    names = {int(a, 16): n for a, n in json.load(open(paths.work("kernel-names.json")))["names"].items()}
     # kexts link against the KPI only: a kext target named outside the 26.5.2 symbol sets (or iOS 17's imports) is
     # a naming error, so it stays unresolved
     import re
-    kpi = set(l.strip() for l in open(os.path.join(HERE, "symbolsets26.txt")))
+    kpi = set(l.strip() for l in open(paths.work("symbolsets26.txt")))
     # symbol-set entries like __ZN16IOPlatformExpert are prefixes (every member of the class)
     prefixes = tuple(e for e in kpi if re.fullmatch(r"__ZN(\d+[A-Za-z_]\w*?)+", e) and not e.endswith("E"))
-    source = json.load(open(os.path.join(HERE, "kernel-names.json")))["source"]
+    source = json.load(open(paths.work("kernel-names.json")))["source"]
     def exported(a, n):
         return (n in kpi or n.startswith(prefixes) or n.startswith("__ZTV") or n.endswith("gMetaClassE")
                 or source.get(hex(a)) in ("vtable", "got17", "got17+order", "symbolicator-class"))
@@ -163,7 +164,7 @@ def main():
                             a += v; f.write("F %x\n" % a)
                 f.write("E\n")
         open(os.path.join(t, "text"), "wb").write(blobs["__PLK_TEXT_EXEC"])
-        r = subprocess.run([os.path.join(R, "build/a64kext"), os.path.join(t, "text"), hex(text_lo), jobs, hex(stub_va),
+        r = subprocess.run([paths.ARM64E, "kext", os.path.join(t, "text"), hex(text_lo), jobs, hex(stub_va),
                             os.path.join(t, "text.out"), os.path.join(t, "stubs")], capture_output=True, text=True)
         if r.returncode: raise SystemExit(r.stderr)
         blobs["__PLK_TEXT_EXEC"] = bytearray(open(os.path.join(t, "text.out"), "rb").read())

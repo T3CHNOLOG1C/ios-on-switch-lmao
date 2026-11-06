@@ -6,6 +6,7 @@ load("//kernel/rules:firehose.bzl", "kernel_firehose")
 load("//kernel:prelink.bzl", "kernel_prelink_switch")
 load("//kernel/rules:inputs.bzl", "tool_output")
 load("//kernel/rules:kernel.bzl", "kernel_archive", "kernel_driver", "stage_files")
+load("//kernel/rules:prelink_fileset.bzl", "kernel_prelink_fileset")
 load("//kernel/rules:sdk.bzl", "outer_headers")
 load("//kernel/rules:version.bzl", "xnu_versions")
 load("//kernel/rules:xnu.bzl", "xnu_tree")
@@ -469,6 +470,14 @@ xnu_kernel_12377(
         "plain",
     ],
     out = "build/xnu-12377/mach.development.bcm2837.unstripped.noctf",
+)
+
+# iPadOS 27's kexts (the 24B119 kernelcache's) prelinked into the 12377 kernel.
+kernel_prelink_fileset(
+    name = "kernel_12377",
+    out = "build/xnu-12377/kernel.macho",
+    kernel = ":kernel_unprelinked_12377",
+    symbolsets = "//kernel/xnu-12377.121.6/config:symbolsets_plist",
 )
 
 # --- Prelink: Apple's original kexts (the V20 roots, plus every driver's prelink list) --------------------------------

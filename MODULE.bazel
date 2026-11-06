@@ -212,6 +212,14 @@ http_archive(
     urls = ["https://github.com/CTCaer/hekate/archive/45cd81ed08e30a26ba380958c7e20b55c342834b.tar.gz"],
 )
 
+# blacktop/ipsw, which the iPadOS 27 kext prelink runs on the kernelcache (C++ classes and vtables, symbolication).
+http_archive(
+    name = "ipsw_cli",
+    build_file_content = 'exports_files(["ipsw"])\n',
+    sha256 = "546af036b81c957ac7ddc71098ef65d2a8efebb70c81cce65bac4b9499091e8a",
+    urls = ["https://github.com/blacktop/ipsw/releases/download/v3.1.741/ipsw_3.1.741_macOS_arm64.tar.gz"],
+)
+
 # --- The IPSW: per IPSW kind (ipsw/pins.bzl, --//ipsw:kind), only the members the build and the SD install
 # read, fetched by HTTP range request into the repository cache (`bazel run //ipsw:pin` to pin a kind). The
 # build names them @ipsw//:<role>, the selected kind's. --------------------------------------------------------------

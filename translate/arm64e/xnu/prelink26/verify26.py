@@ -9,6 +9,7 @@ import bisect, collections, json, os, struct, subprocess, sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 R = os.path.join(HERE, "..")
 sys.path.insert(0, HERE)
+import paths
 from native_prelink import macho, backed_offset, unserialize_xml
 from kcinfo import KC
 
@@ -38,7 +39,7 @@ for va, size, b in ranges:
     at = backed_offset(img["segments"], va, size, len(o))
     words.append((va, struct.unpack_from("<%dI" % (size // 4), o, at), b))
 allw = [w for va, ws, b in words for w in ws]
-r = subprocess.run([os.path.join(R, "build/a64class")], input="\n".join("%08x" % w for w in allw) + "\n",
+r = subprocess.run([paths.ARM64E, "class"], input="\n".join("%08x" % w for w in allw) + "\n",
                    capture_output=True, text=True)
 cls = r.stdout.split("\n")
 k = 0
@@ -67,10 +68,12 @@ for off in struct.unpack_from("<%dI" % n, packed, 4):
 sa = int(rep["stub_area"]["va"], 16)
 nw = rep["stub_area"]["a64x_words"] + rep["stub_area"]["trampoline_words"]
 sw = struct.unpack_from("<%dI" % nw, o, backed_offset(img["segments"], sa, 4 * nw, len(o)))
-r2 = subprocess.run([os.path.join(R, "build/a64class")], input="\n".join("%08x" % w for w in sw[:rep["stub_area"]["a64x_words"]]) + "\n",
+r2 = subprocess.run([paths.ARM64E, "class"], input="\n".join("%08x" % w for w in sw[:rep["stub_area"]["a64x_words"]]) + "\n",
                     capture_output=True, text=True)
 res["stub words not ARMv8.0"] = sum(1 for c in r2.stdout.split("\n") if c and c != "ok")
 print(json.dumps(dict(res), indent=1))
 print("kext words the classifier still flags (data islands left as they were, or untranslated):", dict(left))
 for (b, c), v in left_where.most_common(12): print("   ", b, c, v)
 print("prelink info entries:", len(md["_PrelinkInfoDictionary"]), "KASLR pointers:", n)
+if res["pointer NOT mapped"] or res["stub words not ARMv8.0"]:
+    sys.exit("verify26: KASLR pointers outside the image or stub words above ARMv8.0")

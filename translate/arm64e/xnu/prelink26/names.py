@@ -19,9 +19,10 @@ sys.path.insert(0, HERE); sys.path.insert(0, os.path.join(R, "tools"))
 from kcinfo import KC, decode8
 from fileset import Fileset
 import kc17
+import paths
 
-KCPATH = os.path.join(R, "dl/ipsw-26.5.2/kernelcache.decompressed")
-OURS = os.path.join(R, "out/xnu-12377-port/mach.development.bcm2837.unstripped")
+KCPATH = paths.KERNELCACHE
+OURS = paths.OURS
 
 
 def mangle_class(c):
@@ -34,7 +35,7 @@ def mangle_class(c):
 def load_ours():
     k = Fileset(OURS)
     by_name, by_addr, ordered = {}, collections.defaultdict(set), []
-    for l in open(os.path.join(HERE, "ours.nm")):
+    for l in open(paths.work("ours.nm")):
         a, t, n = l.split()
         a = int(a, 16)
         by_name.setdefault(n, a); by_addr[a].add(n); ordered.append((a, n))
@@ -68,7 +69,7 @@ def main():
 
     # 1. vtables, each slot checked against its arm64e PAC discriminator
     from ptrauth_disc import discriminators
-    cpp = json.load(open(os.path.join(HERE, "cpp26.json")))
+    cpp = json.load(open(paths.work("cpp26.json")))
     kcls = {c["class"]: c for c in cpp if c["bundle"] == "com.apple.kernel"}
     meta_of = {}                       # our gMetaClass address -> class
     for c in kcls:
@@ -167,7 +168,7 @@ def main():
         else:
             vt_stats["apple target shared by different methods (not named)"] += 1
     # 3a. symbolicator: C names only (C++ ones come demangled)
-    sym = json.load(open(os.path.join(HERE, "sym/kernelcache.decompressed.symbols.json")))
+    sym = json.load(open(paths.work("sym/kernelcache.decompressed.symbols.json")))
     symn = {int(a): n for a, n in sym.items()}
     holdout = {}
     for a, n in symn.items():
@@ -197,7 +198,7 @@ def main():
         if j % 2 == 0 or seed_all: assign(a, holdout[a], "symbolicator")
     # 2. GOT order
     d17, kn17, names17, kexts17, gots17 = kc17.load()
-    universe = set(l.strip() for l in open(os.path.join(HERE, "symbolsets26.txt")))
+    universe = set(l.strip() for l in open(paths.work("symbolsets26.txt")))
     gots26 = {}
     for bid, vm, fo in kc.entries[1:]:
         secs = []
@@ -373,7 +374,7 @@ def main():
         if not progress: break
     print("interval pass named", ipass)
     if os.environ.get("NAMES_DEBUG"):
-        cl0 = json.load(open(os.path.join(HERE, "closure.json")))
+        cl0 = json.load(open(paths.work("closure.json")))
         need0 = set(cl0["kernel_targets"]) | set(cl0["kernel_branch_targets"])
         shown = 0
         for a in sorted(need0):
@@ -410,7 +411,7 @@ def main():
             else:
                 chk["not named by vtable/GOT"] += 1
     # the targets the kept kexts need
-    cl = json.load(open(os.path.join(HERE, "closure.json")))
+    cl = json.load(open(paths.work("closure.json")))
     need = sorted(set(cl["kernel_targets"]) | set(cl["kernel_branch_targets"]))
     got = [a for a in need if a in names]
     print("vtables:", dict(vt_stats), "slots", len(vt_slots))
@@ -422,7 +423,7 @@ def main():
     json.dump({"names": {hex(a): n for a, n in names.items()}, "source": {hex(a): s for a, s in source.items()},
                "missing": [hex(a) for a in missing], "conflicts": conflicts, "vt_slots": vt_slots,
                "holdout": dict(chk)},
-              open(os.path.join(HERE, "kernel-names.json" if seed_all else "kernel-names-holdout.json"), "w"), indent=0)
+              open(paths.work("kernel-names.json" if seed_all else "kernel-names-holdout.json"), "w"), indent=0)
 
 
 if __name__ == "__main__":

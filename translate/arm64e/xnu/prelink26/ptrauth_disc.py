@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """ptrauth string discriminators (clang's __builtin_ptrauth_string_discriminator), computed by clang itself:
-one generated C file, compiled for arm64e and run on this Mac. Cached in prelink26/disc-cache.json."""
-import json, os, subprocess, tempfile
+one generated C file, compiled for arm64e and run on this Mac. Cached in the work directory (disc-cache.json)."""
+import json, os, subprocess, sys, tempfile
 HERE = os.path.dirname(os.path.abspath(__file__))
-CACHE = os.path.join(HERE, "disc-cache.json")
+sys.path.insert(0, HERE)
+import paths
+CACHE = paths.work("disc-cache.json")
 
 def discriminators(names):
     cache = json.load(open(CACHE)) if os.path.exists(CACHE) else {}

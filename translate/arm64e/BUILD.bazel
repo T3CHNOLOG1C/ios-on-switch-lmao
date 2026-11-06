@@ -10,7 +10,7 @@
 #   :arm64e   the CLI over both (tools/)
 #   :oracle   the classifier and translated words against LLVM (a developer check)
 #   :xnu      the kernel side for xnu-12377.121.6 (sources and diff; not built, see xnu/README.md)
-#   :prelink26  the iPadOS 26.5.2 kext prelinker (a record, xnu/prelink26)
+#   :prelink    the kext prelinker for fileset kernelcaches (xnu/prelink26; //kernel:kernel_12377 runs it)
 load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load("@rules_python//python:py_binary.bzl", "py_binary")
@@ -111,10 +111,17 @@ filegroup(
     srcs = glob(["xnu/**"]),
 )
 
-# The iPadOS 26.5.2 kext prelinker, kept as a record (xnu/README.md): its paths are those of the 2026-11-04 scratch
-# layout, so it does not run as is.
+# The kext prelinker for fileset kernelcaches (iPadOS 26/27): prelink.py runs its steps over a work directory
+# (paths.py). bindings*.py and check_got_order_17.py are the 26.5.2 bindings run as it was, with that run's paths.
 py_library(
     name = "prelink26",
     srcs = glob(["xnu/prelink26/*.py"]),
     deps = ["//tools/prelink:native_prelink"],
+)
+
+py_binary(
+    name = "prelink",
+    srcs = ["xnu/prelink26/prelink.py"],
+    main = "xnu/prelink26/prelink.py",
+    deps = [":prelink26"],
 )

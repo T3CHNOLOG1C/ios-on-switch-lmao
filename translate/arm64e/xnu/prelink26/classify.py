@@ -2,6 +2,7 @@
 import sys, collections, bisect, json, os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from kcinfo import KC, ROOTS, decode8
+import paths
 CUTS = {("com.apple.iokit.IOUSBHostFamily", "com.apple.driver.AppleSMC"),
         ("com.apple.iokit.IOUSBHostFamily", "com.apple.driver.usb.AppleUSBHostPlatformProperties"),
         ("com.apple.iokit.IOAccessoryManager", "com.apple.driver.AppleOnboardSerial"),
@@ -38,4 +39,4 @@ for k, v in sorted(cnt.items()): print("  ", k, v)
 print("distinct kernel targets", len(kt))
 for k, v in other.most_common(30): print("  unselected:", k, v)
 json.dump({"selected": sorted(sel), "interfaces": sorted(ifaces), "kernel_targets": sorted(kt)},
-          open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "closure.json"), "w"), indent=0)
+          open(paths.work("closure.json"), "w"), indent=0)
