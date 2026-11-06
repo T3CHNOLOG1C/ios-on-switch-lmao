@@ -1,0 +1,32 @@
+{
+  "class": "IOWatchdog",
+  "kind": "24B119",
+  "size": "0xf8",
+  "first_slot": 168,
+  "slots": 172,
+  "slide": "-0x3fec000",
+  "layout": {
+    "87": "stop",
+    "140": "newUserClient",
+    "168": "enableWatchdog",
+    "169": "disableWatchdog",
+    "170": "petWatchdog"
+  },
+  "fields": {
+    "checkinLock": "0xa0",
+    "userspaceMonitoring": "0xa8",
+    "IOKitMonitoring": "0xa9",
+    "checkinDeadline": "0xc8"
+  },
+  "addresses": {
+    "gMetaClass": "0xfffffff00acee798",
+    "vtable": "0xfffffff007cebd58",
+    "C2": "0xfffffff008374f5c",
+    "D2": "0xfffffff008374f94",
+    "stop": "0xfffffff008375908",
+    "newUserClient": "0xfffffff008375c48",
+    "opaque171": "0xfffffff0083755e0",
+    "switch_original_watchdog_start": "0xfffffff008375030",
+    "switch_original_watchdog_check": "0xfffffff0083759e4"
+  }
+}

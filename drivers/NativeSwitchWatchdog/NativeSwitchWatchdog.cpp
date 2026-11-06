@@ -106,7 +106,7 @@ OSDefineMetaClassAndStructors(NativeSwitchWatchdog, IOWatchdog)
         return false;
     // Userspace monitoring only: no IOKit quiesce watch. Our registry has never been measured quiet within watchdogd's
     // 60 s, and that failure is a boot panic. Cleared before watchdogd can connect (launchd has yet to spawn it).
-    clearIOKitMonitoring();
+    setIOKitMonitoring(false);
     setProperty("IOKitQuiesceWatchdogEnabled", false);
     gWatchdog = this;
     verdictLock_ = IOLockAlloc();

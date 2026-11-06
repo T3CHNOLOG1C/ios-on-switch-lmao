@@ -11,7 +11,7 @@ code after the original family loads), abi_checks (SwitchUSB-style checks agains
 firmware (a firmware.S that .incbins the directory's firmware/), copts / c_copts / asm_copts, recipe / c_recipe /
 c_command (the compile recipe: a feature of the kernel toolchain, bazel/toolchains/kernel), hdrs, hdr_deps (the header
 directories the driver includes besides its own), prelink (original kexts this driver needs prelinked: they join the
-prelink roots).
+prelink roots), abi (original classes from kits/SwitchABI whose Original<Class>.h the driver includes).
 
 A driver is cc_library targets for the kernel platform (compiled with the kernel toolchain; .d files prune the headers
 each object really includes) plus <name>, the driver's objects in link order under the names the archives always had:
@@ -25,6 +25,7 @@ load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load("@rules_cc//cc/common:cc_info.bzl", "CcInfo")
 load("@xcode//:defs.bzl", "IPHONEOS_SDK", "XCODE_TOOLCHAIN")
 load("//bazel/platforms:transitions.bzl", "kernel_transition")
+load("//kits/SwitchABI:defs.bzl", "ABI_INCLUDE", "ABI_PACKAGE")
 load(":common.bzl", "KERNEL_TOOL_ATTRS", "PY_TOOLCHAIN", "XCODE_EXECUTION", "run_tool")
 load(":layout.bzl", "KERNEL_PACKAGE", "TREE_ROOT")
 
@@ -160,6 +161,7 @@ def kernel_driver(
         late = [],
         abi_checks = {},
         abi_check = None,
+        abi = [],
         prelink = [],
         prelink_cuts = [],
         prelink_deferred = [],
@@ -193,7 +195,7 @@ def kernel_driver(
     if not warnings:
         features.append("-kernel_warnings")
 
-    cxx_flags = (["-I", "{xnu}/osfmk"] if include_osfmk else []) + copts
+    cxx_flags = (["-I", "{xnu}/osfmk"] if include_osfmk else []) + (["-I", ABI_INCLUDE] if abi else []) + copts
     if hdr_deps == None and _one_package():
         header_deps = [KERNEL_SDK, ":all_kernel_headers"]
     else:
@@ -213,6 +215,7 @@ def kernel_driver(
                 fail("{}: hdr_deps names {}, which has no headers (kernel_header_libraries)".format(name, d))
             header_deps.append(_headers_label(d))
         header_deps.append(EXTRA_HEADERS)
+    header_deps = header_deps + ["{}:{}".format(ABI_PACKAGE, cls) for cls in abi]
 
     # Sources by the cc_library that compiles them; parts[i] is the index of source i's library.
     groups, order, parts = {}, [], []

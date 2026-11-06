@@ -2,6 +2,7 @@ load("//bazel/lint:defs.bzl", "lint_files")
 
 # drivers/NativeSwitchWatchdog: moved from out/native-a57/root-v1/tree/drivers/NativeSwitchWatchdog by the layout move.
 load("//kernel/rules:kernel.bzl", "kernel_driver", "kernel_headers")
+load("//kits/SwitchABI:defs.bzl", "switch_abi_bindings")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -36,6 +37,7 @@ kernel_driver(
         "NativeSwitchWatchdog.cpp",
         "original-bindings.S",
     ],
+    abi = ["IOWatchdog"],
     hdr_deps = [
         "drivers/SwitchPower",
     ],
@@ -43,4 +45,11 @@ kernel_driver(
     # No prelink entry: AppleARMWatchdogTimer is already prelinked as apfs's dependency (naming it as a root reorders
     # the inherited original extents, which emit_prelink.py refuses).
     stems = {"original-bindings.S": "watchdog-original-bindings"},
+)
+
+switch_abi_bindings(
+    name = "original_bindings",
+    out = "original-bindings.S",
+    classes = ["//kits/SwitchABI:IOWatchdog"],
+    objects = [":NativeSwitchWatchdog_cc"],
 )

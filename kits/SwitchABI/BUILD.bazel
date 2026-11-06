@@ -1,0 +1,43 @@
+# The original classes drivers subclass or call, as each IPSW kind lays them out: one driver tree for every kind.
+#
+#   interface/<Class>.json      what drivers see (methods, fields, members, functions): the same for every kind
+#   kinds/<kind>/<Class>.json   the kind's layout and addresses, extracted from its kernelcache
+#
+# Each class is :<Class>, Original<Class>.h for the selected kind (--//ipsw:kind). A driver lists the classes it uses
+# in kernel_driver's abi and binds their imports with switch_abi_bindings.
+load("@rules_python//python:py_binary.bzl", "py_binary")
+load("@rules_python//python:py_library.bzl", "py_library")
+load("@rules_python//python:py_test.bzl", "py_test")
+load("//bazel/lint:defs.bzl", "lint_files")
+load(":defs.bzl", "switch_abi_class")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files()
+
+exports_files(glob(
+    ["**"],
+    exclude = ["BUILD.bazel"],
+))
+
+py_library(
+    name = "gen_lib",
+    srcs = ["gen.py"],
+)
+
+py_binary(
+    name = "gen",
+    srcs = ["gen.py"],
+)
+
+py_test(
+    name = "gen_test",
+    srcs = ["test/gen_test.py"],
+    data = glob([
+        "interface/*.json",
+        "kinds/*/*.json",
+    ]),
+    deps = [":gen_lib"],
+)
+
+switch_abi_class("IOWatchdog")
