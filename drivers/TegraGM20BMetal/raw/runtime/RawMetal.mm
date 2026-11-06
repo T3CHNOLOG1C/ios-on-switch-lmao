@@ -4344,9 +4344,19 @@ static void scheduled(RMCommandBuffer *cb)
         cb->_scheduledSent = true;
         if (cb->_status == MTLCommandBufferStatusCommitted)
             cb->_status = MTLCommandBufferStatusScheduled;
-        handlers = [cb->_scheduledHandlers copy];
-        [cb->_scheduledHandlers removeAllObjects];
+        if (cb->_scheduledHandlers.count) {
+            handlers = [cb->_scheduledHandlers copy];
+            [cb->_scheduledHandlers removeAllObjects];
+        }
         cb->_gpuStart = hostSeconds();
+        // Core Animation's render thread waits for this every frame (waitUntilScheduled): with nothing to run, no hop through
+        // the handler queue
+        if (!handlers.count)
+            cb->_scheduledDone = true;
+    }
+    if (!handlers.count) {
+        cb->_changed.notify_all();
+        return;
     }
     dispatch_async(gRM->handlers, ^{
         for (MTLCommandBufferHandler h in handlers)
