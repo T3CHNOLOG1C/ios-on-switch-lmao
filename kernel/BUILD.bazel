@@ -10,6 +10,7 @@ load("//kernel/rules:sdk.bzl", "outer_headers")
 load("//kernel/rules:version.bzl", "xnu_versions")
 load("//kernel/rules:xnu.bzl", "xnu_tree")
 load("//kernel/xnu-10063.141.1/config:xnu_kernel.bzl", "xnu_kernel")
+load("//kernel/xnu-12377.121.6/config:xnu_kernel.bzl", xnu_kernel_12377 = "xnu_kernel")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -113,6 +114,23 @@ kernel_firehose(
     xnu = "//kernel/xnu-10063.141.1:srcs",
 )
 
+# xnu-12377's SDK root as one directory: the headers corecrypto and libpthread compile against for it (its
+# libfirehose_kernel.a is :fakeroot's, through kernel/xnu-12377.121.6:sdkroot_files).
+xnu_tree(
+    name = "fakeroot_headers_12377",
+    src = "//kernel/xnu-12377.121.6:sdkroot",
+    out = ".cache/fakeroot-headers-12377",
+)
+
+# The SDK root directory corecrypto and libpthread compile against, for the selected XNU.
+alias(
+    name = "kernel_headers_root",
+    actual = select({
+        ":xnu_12377_121_6": ":fakeroot_headers_12377",
+        "//conditions:default": ":fakeroot",
+    }),
+)
+
 # What the kernel's code compiles against: //kernel:sdk (kernel/xnu-<version>, every header its own file).
 
 # Generated headers the drivers' flags name ({build}/<dir>): built once, in the configuration that asks for the kernel.
@@ -173,17 +191,31 @@ tool_output(
 # and so corecrypto's archive, alone.
 tool_output(
     name = "xnu_symbols",
-    srcs = [
-        "//kernel/xnu-10063.141.1/config:all_alias_exp",
-        "//kernel/xnu-10063.141.1/config:link_symbols",
-        "//kernel/xnu-10063.141.1/config:link_symbols_list",
-    ],
+    srcs = select({
+        ":xnu_12377_121_6": [
+            "//kernel/xnu-12377.121.6/config:all_alias_exp",
+            "//kernel/xnu-12377.121.6/config:link_symbols",
+            "//kernel/xnu-12377.121.6/config:link_symbols_list",
+        ],
+        "//conditions:default": [
+            "//kernel/xnu-10063.141.1/config:all_alias_exp",
+            "//kernel/xnu-10063.141.1/config:link_symbols",
+            "//kernel/xnu-10063.141.1/config:link_symbols_list",
+        ],
+    }),
     outs = ["build/xnu/kernel-names.txt"],
-    args = [
-        "--names-list=$(execpath //kernel/xnu-10063.141.1/config:link_symbols_list)",
-        "--aliases=$(execpath //kernel/xnu-10063.141.1/config:all_alias_exp)",
-        "--out={out}",
-    ],
+    args = select({
+        ":xnu_12377_121_6": [
+            "--names-list=$(execpath //kernel/xnu-12377.121.6/config:link_symbols_list)",
+            "--aliases=$(execpath //kernel/xnu-12377.121.6/config:all_alias_exp)",
+            "--out={out}",
+        ],
+        "//conditions:default": [
+            "--names-list=$(execpath //kernel/xnu-10063.141.1/config:link_symbols_list)",
+            "--aliases=$(execpath //kernel/xnu-10063.141.1/config:all_alias_exp)",
+            "--out={out}",
+        ],
+    }),
     message = "Listing XNU's symbol names",
     tool = "xnu_symbols.py",
 )
@@ -191,7 +223,7 @@ tool_output(
 tool_output(
     name = "corecrypto",
     srcs = [
-        ":fakeroot",
+        ":kernel_headers_root",
         ":xnu_symbols",
         "@corecrypto//:all",
     ],
@@ -202,7 +234,7 @@ tool_output(
     args = [
         "--xcode-env={xcode_env}",
         "--source=external/+http_archive+corecrypto",
-        "--sdkroot=$(location :fakeroot)",
+        "--sdkroot=$(location :kernel_headers_root)",
         "--kernel-names=$(location :xnu_symbols)",
         "--out={out0}",
         "--namespace-header={out1}",
@@ -213,12 +245,20 @@ tool_output(
     tool = "corecrypto.py",
 )
 
+alias(
+    name = "pthread_bootstrap",
+    actual = select({
+        ":xnu_12377_121_6": "//kernel/xnu-12377.121.6/osfmk:pthread_bootstrap",
+        "//conditions:default": "//kernel/xnu-10063.141.1/osfmk:pthread_bootstrap",
+    }),
+)
+
 tool_output(
     name = "libpthread",
     srcs = [
-        ":fakeroot",
+        ":kernel_headers_root",
+        ":pthread_bootstrap",
         ":xnu_symbols",
-        "//kernel/xnu-10063.141.1/osfmk:pthread_bootstrap",
         "@libpthread//:all",
     ],
     outs = [
@@ -228,9 +268,9 @@ tool_output(
     args = [
         "--xcode-env={xcode_env}",
         "--source=external/+http_archive+libpthread",
-        "--sdkroot=$(location :fakeroot)",
+        "--sdkroot=$(location :kernel_headers_root)",
         "--kernel-names=$(execpath :xnu_symbols)",
-        "--bootstrap=$(execpath //kernel/xnu-10063.141.1/osfmk:pthread_bootstrap)",
+        "--bootstrap=$(execpath :pthread_bootstrap)",
         "--out={out0}",
         "--bootstrap-out={out1}",
         "--path-root={path_root}",
@@ -274,7 +314,7 @@ kernel_archive(
     ],
 )
 
-# XNU's mockfs.
+# XNU's mockfs (the same source in xnu-10063 and xnu-12377; it compiles against the selected XNU's SDK).
 kernel_driver(
     name = "mockfs",
     srcs = [
@@ -393,6 +433,42 @@ xnu_kernel(
         "force_load",
         "plain",
     ],
+)
+
+xnu_kernel_12377(
+    name = "kernel_unprelinked_12377",
+    extra_exports = ["prelink.exports"],
+    inputs = [
+        ":corecrypto",
+        ":libArmDTPlatform",
+        ":libArmCpu",
+        ":libNativeLegacyDisplay",
+        ":libNativeAES",
+        ":libNativeSwitchBlockDevice",
+        "//drivers/NativeRamBlock:NativeRamBlock",
+        ":libpthread",
+        ":libVerifiedRootProbe",
+        ":libmockfs_fixture",
+        ":libShengPlatformPower",
+        ":libSwitchDiag",
+        ":libLinkStubs",
+    ],
+    modes = [
+        "plain",
+        "force_load",
+        "force_load",
+        "force_load",
+        "force_load",
+        "force_load",
+        "plain",
+        "force_load",
+        "force_load",
+        "force_load",
+        "force_load",
+        "force_load",
+        "plain",
+    ],
+    out = "build/xnu-12377/mach.development.bcm2837.unstripped.noctf",
 )
 
 # --- Prelink: Apple's original kexts (the V20 roots, plus every driver's prelink list) --------------------------------
