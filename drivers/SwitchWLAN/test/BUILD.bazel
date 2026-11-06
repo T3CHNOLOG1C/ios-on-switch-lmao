@@ -15,6 +15,7 @@ host_shims(
     headers = [
         "IOKit/IOBufferMemoryDescriptor.h",
         "IOKit/IOLib.h",
+        "kern/clock.h",
     ],
     stubs = "switch_wlan_msgbuf_stubs.h",
 )
@@ -24,6 +25,10 @@ host_library(
     hdrs = [
         "//drivers/SwitchWLAN:SwitchWLANLink.h",
         "//drivers/SwitchWLAN:SwitchWLANPrivate.h",
+        "//kits/SwitchDMA:SwitchDcache.h",
+        "//kits/SwitchMMIO:SwitchMMIO.h",
+        "//kits/SwitchMMIO:SwitchMMIOKernel.h",
+        "//kits/SwitchRing:SwitchRing.h",
     ],
 )
 

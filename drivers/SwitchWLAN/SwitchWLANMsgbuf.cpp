@@ -27,6 +27,7 @@
 #include <IOKit/IOBufferMemoryDescriptor.h>
 #include <IOKit/IOLib.h>
 #include "SwitchWLANPrivate.h"
+#include "../../kits/SwitchRing/SwitchRing.h"
 
 namespace swlan {
 namespace {
@@ -198,7 +199,7 @@ bool Msgbuf::attach(Chip *chip, EventHandler events, FrameHandler frames, void *
         return false;
     areaUsed_ = 0;
     bzero(area_, layout_.length);
-    dcacheFlush(area_, layout_.length);
+    switch_dcache_clean_invalidate(area_, layout_.length);
     flow_ = FLOW_CLOSED;
     flowStatus_ = 0;
     replyReady_ = false;
@@ -356,7 +357,7 @@ unsigned Msgbuf::space(unsigned ring)
 {
     Ring &r = rings_[ring];
     auto room = [&r] {
-        return static_cast<unsigned>((r.seen + r.items - r.pos - 1u) % r.items);
+        return static_cast<unsigned>(switch_ring_pending(switch_ring_next(r.pos, r.items), r.seen, r.items));
     };
     if (room() == 0) {
         const uint16_t read = readIndex(r.rIndex);
@@ -381,11 +382,11 @@ uint8_t *Msgbuf::reserve(unsigned ring)
 void Msgbuf::advance(unsigned ring)
 {
     Ring &r = rings_[ring];
-    r.pos = static_cast<uint16_t>((r.pos + 1) % r.items);
+    r.pos = static_cast<uint16_t>(switch_ring_next(r.pos, r.items));
 }
 
 // The items written since the last publish out of the cache (one range, two when they wrap; the barrier also
-// completes any dcacheCleanLines of their buffers), then the new write index, then one doorbell.
+// completes any switch_dcache_clean_lines of their buffers), then the new write index, then one doorbell.
 void Msgbuf::publish(unsigned ring)
 {
     Ring &r = rings_[ring];
@@ -393,12 +394,12 @@ void Msgbuf::publish(unsigned ring)
         return;
     const uint32_t from = static_cast<uint32_t>(r.told) * r.size, to = static_cast<uint32_t>(r.pos) * r.size;
     if (r.pos > r.told) {
-        dcacheClean(r.va + from, to - from);
+        switch_dcache_clean_lines(r.va + from, to - from);
     } else {
-        dcacheClean(r.va + from, static_cast<uint32_t>(r.items) * r.size - from);
-        if (to)
-            dcacheClean(r.va, to);
+        switch_dcache_clean_lines(r.va + from, static_cast<uint32_t>(r.items) * r.size - from);
+        switch_dcache_clean_lines(r.va, to);
     }
+    switch_dcache_sync();
     chip_->tcm().w16(r.wIndex, r.pos);
     r.told = r.pos;
     chip_->write(pcie2_ + kH2DMailbox0, 1);
@@ -415,7 +416,7 @@ void Msgbuf::commit(unsigned ring)
 // of it is dirty in the cache while the chip writes it.
 bool Msgbuf::postControl(uint32_t id)
 {
-    dcacheFlush(control_[id].va, kControlBufferSize);
+    switch_dcache_clean_invalidate(control_[id].va, kControlBufferSize);
     uint8_t *p = reserve(CONTROL_SUBMIT);
     if (!p)
         return false;
@@ -446,7 +447,8 @@ bool Msgbuf::postRx(uint32_t id)
 
 // The chip's write index of a completion ring, read once per interrupt (brcmf_commonring_get_read_ptr): whatever
 // the chip writes after this read raises the mailbox interrupt again (service() cleared only the status it read), so
-// the next interrupt takes it.
+// the next interrupt takes it. The items it announces are invalidated here as one batch, completed by drain()'s one
+// barrier, rather than one barrier per item.
 void Msgbuf::refresh(unsigned ring)
 {
     Ring &r = rings_[ring];
@@ -456,6 +458,13 @@ void Msgbuf::refresh(unsigned ring)
         return;
     }
     r.seen = write;
+    const uint32_t from = static_cast<uint32_t>(r.pos) * r.size, to = static_cast<uint32_t>(write) * r.size;
+    if (write >= r.pos) {
+        switch_dcache_clean_invalidate_lines(r.va + from, to - from);
+    } else {
+        switch_dcache_clean_invalidate_lines(r.va + from, static_cast<uint32_t>(r.items) * r.size - from);
+        switch_dcache_clean_invalidate_lines(r.va, to);
+    }
 }
 
 // Next completion of `ring` up to its write index as last read, copied out. An announced item still reading zero
@@ -466,7 +475,6 @@ bool Msgbuf::next(unsigned ring, uint8_t *item)
     if (r.pos == r.seen)
         return false;
     uint8_t *p = r.va + static_cast<uint32_t>(r.pos) * r.size;
-    dcacheFlush(p, r.size);
     for (uint32_t waited = 0; !p[0]; waited += 10) {
         if (waited >= kLandingSpinUs) {
             panic("SwitchWLAN: ring %u item %u announced (write index %u) but still empty after %u ms: the chip's DMA "
@@ -474,10 +482,10 @@ bool Msgbuf::next(unsigned ring, uint8_t *item)
                   ring, r.pos, r.seen, kLandingSpinUs / 1000, areaPA_);
         }
         IODelay(10);
-        dcacheFlush(p, r.size);
+        switch_dcache_clean_invalidate(p, r.size);
     }
     memcpy(item, p, r.size);
-    r.pos = static_cast<uint16_t>((r.pos + 1) % r.items);
+    r.pos = static_cast<uint16_t>(switch_ring_next(r.pos, r.items));
     r.consumed += r.size;
     return true;
 }
@@ -488,15 +496,16 @@ void Msgbuf::retire(unsigned ring)
 {
     Ring &r = rings_[ring];
     const uint32_t bytes = static_cast<uint32_t>(r.items) * r.size;
-    const uint64_t target = r.consumed & ~static_cast<uint64_t>(kCacheLine - 1);
+    const uint64_t target = r.consumed & ~static_cast<uint64_t>(SWITCH_DCACHE_LINE - 1);
     if (r.cleared >= target)
         return;
     while (r.cleared < target) {
         uint8_t *line = r.va + static_cast<uint32_t>(r.cleared % bytes);
-        memset(line, 0, kCacheLine);
-        dcacheFlush(line, kCacheLine);
-        r.cleared += kCacheLine;
+        memset(line, 0, SWITCH_DCACHE_LINE);
+        switch_dcache_clean_invalidate_lines(line, SWITCH_DCACHE_LINE);
+        r.cleared += SWITCH_DCACHE_LINE;
     }
+    switch_dcache_sync();
     chip_->tcm().w16(r.rIndex, static_cast<uint16_t>((r.cleared / r.size) % r.items));
 }
 
@@ -506,7 +515,7 @@ void Msgbuf::txRelease(uint32_t id, uint16_t status)
         return;  // not one of ours in flight (a stale completion)
     txBusy_[id - 1] = 0;
     txStatus_[id - 1] = status;
-    txFree_[(txFreeHead_ + txFreeCount_) % txCount_] = static_cast<uint16_t>(id);
+    txFree_[switch_ring_advance(txFreeHead_, txFreeCount_, txCount_)] = static_cast<uint16_t>(id);
     ++txFreeCount_;
     --data_.txInFlight;
     ++data_.txDone;
@@ -522,6 +531,7 @@ void Msgbuf::drain()
     refresh(CONTROL_COMPLETE);
     refresh(TX_COMPLETE);
     refresh(RX_COMPLETE);
+    switch_dcache_sync();
     for (bool more = true; more;) {
         while (next(CONTROL_COMPLETE, item)) {
             const uint32_t id = le32(item + 4);
@@ -529,7 +539,7 @@ void Msgbuf::drain()
                 size_t length = le16(item + 12);
                 if (length > sizeof(reply_))
                     length = sizeof(reply_);
-                dcacheFlush(control_[id].va, length);
+                switch_dcache_clean_invalidate(control_[id].va, length);
                 memcpy(reply_, control_[id].va, length);
                 replyLength_ = length;
                 replyStatus_ = static_cast<int16_t>(le16(item + 8));
@@ -540,7 +550,7 @@ void Msgbuf::drain()
                 if (dataOffset_ + length > kControlBufferSize)
                     length = kControlBufferSize - dataOffset_;
                 const uint8_t *frame = control_[id].va + dataOffset_;
-                dcacheFlush(frame, length);
+                switch_dcache_clean_invalidate(frame, length);
                 if (length >= kEventData && ((frame[12] << 8) | frame[13]) == kEthPLinkCtl && events_) {
                     Event e;
                     e.flags = (static_cast<uint32_t>(frame[kEventMsg + 2]) << 8) | frame[kEventMsg + 3];
@@ -585,28 +595,43 @@ void Msgbuf::drain()
                 txRelease(le32(item + 4), le16(item + 8));
         }
         retire(TX_COMPLETE);
+
         // brcmf_msgbuf_process_rx_complete: the frame at its own offset, or at the firmware's default one; each
-        // buffer back to the chip after its frame was copied out, one doorbell for the pass.
+        // buffer back to the chip after its frame was copied out, one doorbell for the pass. Every frame's lines are
+        // invalidated first, with one barrier for the pass, before any frame is read.
+        struct Arrival {
+            uint32_t id;
+            uint16_t offset, length;
+            uint8_t flags;
+        };
+
+        Arrival arrivals[kDrainBudget];
+        unsigned arrived = 0;
         n = 0;
         while (n < kDrainBudget && next(RX_COMPLETE, item)) {
             ++n;
             const uint32_t id = le32(item + 4);
             if (item[0] != MSG_RX_CMPLT || id >= rxCount_)
                 continue;
-            --data_.rxPosted;
             const uint32_t offset = le16(item + 16) ? le16(item + 16) : dataOffset_;
             uint32_t length = le16(item + 14);
             if (offset >= kRxBufferSize)
                 length = 0;
             else if (offset + length > kRxBufferSize)
                 length = kRxBufferSize - offset;
-            const uint8_t *frame = rxVa(id) + offset;
-            dcacheFlush(frame, length);
+            switch_dcache_clean_invalidate_lines(rxVa(id) + offset, length);
+            arrivals[arrived++] = {id, static_cast<uint16_t>(offset), static_cast<uint16_t>(length), item[1]};
+        }
+        if (arrived)
+            switch_dcache_sync();
+        for (unsigned i = 0; i < arrived; ++i) {
+            const Arrival &a = arrivals[i];
+            --data_.rxPosted;
             ++data_.rxFrames;
-            data_.rxBytes += length;
-            if (frames_ && length >= kEthHeader)
-                frames_(context_, frame, length, item[1]);  // copied out here
-            if (postRx(id))
+            data_.rxBytes += a.length;
+            if (frames_ && a.length >= kEthHeader)
+                frames_(context_, rxVa(a.id) + a.offset, a.length, a.flags);  // copied out here
+            if (postRx(a.id))
                 ++data_.rxReposted;
         }
         retire(RX_COMPLETE);
@@ -651,7 +676,7 @@ bool Msgbuf::ioctlSubmit(uint32_t cmd, uint8_t ifidx, const uint8_t *data, size_
         n = kIoctlMax;
     memset(ioctlBuffer_.va, 0, n);
     memcpy(ioctlBuffer_.va, data, length < n ? length : n);
-    dcacheClean(ioctlBuffer_.va, n);
+    switch_dcache_clean(ioctlBuffer_.va, n);
     uint8_t *p = reserve(CONTROL_SUBMIT);
     if (!p) {
         snprintf(why, whyLength, "control submit ring full");
@@ -737,7 +762,7 @@ void Msgbuf::txReadBack(uint32_t id, const uint8_t *written, size_t length)
     if (id < 1 || id > txCount_ || length > kTxBufferSize)
         return;
     const uint8_t *chip = txVa(id);
-    dcacheFlush(chip, length);
+    switch_dcache_clean_invalidate(chip, length);
     ++data_.txReread;
     for (size_t i = 0; i < length; ++i) {
         if (chip[i] != written[i]) {
@@ -779,10 +804,10 @@ uint32_t Msgbuf::postFrame(unsigned ring, uint8_t ifidx, size_t length)
         return 0;
     }
     const uint16_t id = txFree_[txFreeHead_];
-    txFreeHead_ = (txFreeHead_ + 1) % txCount_;
+    txFreeHead_ = switch_ring_next(txFreeHead_, txCount_);
     --txFreeCount_;
     const uint8_t *frame = txVa(id);
-    dcacheCleanLines(frame, length);
+    switch_dcache_clean_lines(frame, length);
     txBusy_[id - 1] = 1;
     p[0] = MSG_TX_POST;
     p[1] = ifidx;
@@ -874,7 +899,7 @@ int Msgbuf::awdlSend(uint8_t ifidx, const uint8_t *frame, size_t length)
     r.pos = r.seen = r.told = 0;  // a fresh ring: both indices from zero
     chip_->tcm().w16(r.wIndex, 0);
     bzero(r.va, static_cast<uint32_t>(r.items) * r.size);
-    dcacheFlush(r.va, static_cast<uint32_t>(r.items) * r.size);
+    switch_dcache_clean_invalidate(r.va, static_cast<uint32_t>(r.items) * r.size);
     p[0] = MSG_FLOW_RING_CREATE;
     p[1] = ifidx;
     memcpy(p + 8, da, 6);

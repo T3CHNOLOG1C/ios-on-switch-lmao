@@ -10,8 +10,8 @@
 #include <IOKit/IOLib.h>
 #include <stddef.h>
 #include <stdint.h>
-
-extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
+#include "../../kits/SwitchDMA/SwitchDcache.h"
+#include "../../kits/SwitchMMIO/SwitchMMIOKernel.h"
 
 // Every device register access, for the host's msgbuf model (test/switch_wlan_msgbuf_test.cpp counts the PCIe reads
 // a received or sent frame costs); nothing in the kernel build.
@@ -29,37 +29,37 @@ struct Mmio {
 
     bool map(uint64_t pa, size_t length)
     {
-        base = reinterpret_cast<volatile uint8_t *>(ml_io_map(static_cast<vm_offset_t>(pa), length));
+        base = switch_mmio_map(pa, length);
         return base != nullptr;
     }
 
     uint32_t r32(uint32_t offset) const
     {
         SWLAN_MMIO_TRACE(this, 'r', offset);
-        return *reinterpret_cast<volatile uint32_t *>(base + offset);
+        return switch_mmio_read32(base, offset);
     }
 
     void w32(uint32_t offset, uint32_t value) const
     {
         SWLAN_MMIO_TRACE(this, 'w', offset);
-        *reinterpret_cast<volatile uint32_t *>(base + offset) = value;
+        switch_mmio_write32(base, offset, value);
     }
 
     uint16_t r16(uint32_t offset) const
     {
         SWLAN_MMIO_TRACE(this, 'r', offset);
-        return *reinterpret_cast<volatile uint16_t *>(base + offset);
+        return switch_mmio_read16(base, offset);
     }
 
     void w16(uint32_t offset, uint16_t value) const
     {
         SWLAN_MMIO_TRACE(this, 'w', offset);
-        *reinterpret_cast<volatile uint16_t *>(base + offset) = value;
+        switch_mmio_write16(base, offset, value);
     }
 
     uint8_t r8(uint32_t offset) const
     {
-        return base[offset];
+        return switch_mmio_read8(base, offset);
     }
 
     void modify(uint32_t offset, uint32_t clear, uint32_t set) const
@@ -68,16 +68,10 @@ struct Mmio {
     }
 
     // Bounded wait for a status bit that has no interrupt (PLL locks, calibration, power partitions, link
-    // training): true once (r32 & mask) == value, checked every 10 us for up to `us`.
+    // training): true once (r32 & mask) == value, within `us`.
     bool wait(uint32_t offset, uint32_t mask, uint32_t value, uint32_t us) const
     {
-        for (uint32_t waited = 0;; waited += 10) {
-            if ((r32(offset) & mask) == value)
-                return true;
-            if (waited >= us)
-                return false;
-            IODelay(10);
-        }
+        return switch_mmio_wait32(base, offset, mask, value, us);
     }
 
     // The same for waits measured in milliseconds (link training), sleeping 1 ms between looks as Linux does.
@@ -95,40 +89,11 @@ struct Mmio {
 
 uint64_t nowNs();
 
-// Cache maintenance for DMA memory shared with the chip. The AFI is not coherent with the CPU caches (Linux uses
-// dma_alloc_coherent's non-cacheable remap; nxk an uncached mapping; drivers/SwitchUSB cleans and invalidates by
-// hand), so every line the chip reads is cleaned after the CPU writes it, and every line it writes is invalidated
-// before the CPU reads it. Correct whatever attributes the kernel mapping has (DC ops on non-cacheable memory are
-// harmless). Lines are 64 bytes on the A57 (CTR_EL0.DminLine).
-constexpr uintptr_t kCacheLine = 64;
-
-inline void dcacheClean(const volatile void *p, size_t n)
-{
-    uintptr_t at = reinterpret_cast<uintptr_t>(p) & ~(kCacheLine - 1);
-    const uintptr_t end = reinterpret_cast<uintptr_t>(p) + n;
-    for (; at < end; at += kCacheLine)
-        __asm__ volatile("dc cvac, %0" ::"r"(at) : "memory");
-    __asm__ volatile("dsb sy" ::: "memory");
-}
-
-// Clean without the barrier, for a batch: the dcacheClean (or dsb) that follows completes these too, and must come
-// before the chip is told (the ring index write).
-inline void dcacheCleanLines(const volatile void *p, size_t n)
-{
-    uintptr_t at = reinterpret_cast<uintptr_t>(p) & ~(kCacheLine - 1);
-    const uintptr_t end = reinterpret_cast<uintptr_t>(p) + n;
-    for (; at < end; at += kCacheLine)
-        __asm__ volatile("dc cvac, %0" ::"r"(at) : "memory");
-}
-
-inline void dcacheFlush(const volatile void *p, size_t n)
-{
-    uintptr_t at = reinterpret_cast<uintptr_t>(p) & ~(kCacheLine - 1);
-    const uintptr_t end = reinterpret_cast<uintptr_t>(p) + n;
-    for (; at < end; at += kCacheLine)
-        __asm__ volatile("dc civac, %0" ::"r"(at) : "memory");
-    __asm__ volatile("dsb sy" ::: "memory");
-}
+// DMA memory shared with the chip goes through kits/SwitchDMA's cache maintenance: the AFI is not coherent with the
+// CPU caches (Linux uses dma_alloc_coherent's non-cacheable remap; nxk an uncached mapping), so every line the chip
+// reads is cleaned after the CPU writes it, and every line it writes is invalidated before the CPU reads it. Lines
+// the chip writes are never dirty (SwitchWLANMsgbuf.cpp), so clean+invalidate costs what an invalidate would, and
+// it also runs where the host tests build this code at EL0.
 
 // Little-endian fields of firmware messages, any alignment (the build is -mstrict-align).
 inline uint16_t le16(const uint8_t *p)

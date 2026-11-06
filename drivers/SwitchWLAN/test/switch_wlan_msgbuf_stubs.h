@@ -68,6 +68,20 @@ inline void IOSleep(unsigned ms)
     gDelayedUs += ms * 1000ull;
 }
 
+// kits/SwitchMMIO's bounded wait: a clock that advances a microsecond per look.
+#define NSEC_PER_USEC 1000u
+inline uint64_t gClockNs = 0;
+
+extern "C" inline uint64_t mach_absolute_time()
+{
+    return gClockNs += 1000;
+}
+
+extern "C" inline void clock_interval_to_deadline(uint32_t interval, uint32_t scale, uint64_t *deadline)
+{
+    *deadline = gClockNs + static_cast<uint64_t>(interval) * scale;
+}
+
 inline void bzero(void *p, size_t n)
 {
     memset(p, 0, n);
