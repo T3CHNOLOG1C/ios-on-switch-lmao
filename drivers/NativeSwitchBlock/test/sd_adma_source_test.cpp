@@ -71,7 +71,7 @@ TEST(SdAdmaSource, DriverGuards)
     EXPECT_THAT(source, HasSubstr("constexpr uint32_t kDirectWriteSectors = kBounceSectors;"));
     EXPECT_THAT(source, HasSubstr("constexpr uint32_t kWriteChecks = 32, kLargeWriteChecks = 16;"));
     const std::string prove = body("bool NativeSwitchBlock::proveWrite(");
-    EXPECT_THAT(prove, HasSubstr("if (sectors > kSafeSectors && largeWriteChecks) --largeWriteChecks;"));
+    EXPECT_THAT(prove, HasSubstr("if (sectors > kSafeSectors && largeWriteChecks)\n            --largeWriteChecks;"));
     EXPECT_TRUE(Search(prove, R"(if \(sectors > kSafeSectors\) \{[^}]*writeSectors = kSafeSectors;)"));
     EXPECT_THAT(prove, HasSubstr("admaWrites = false;"));
     EXPECT_THAT(begin, HasSubstr("(admaWrites && sectors <= writeSectors)"));
@@ -111,7 +111,7 @@ TEST(SdAdmaSource, HighProofGuards)
     EXPECT_THAT(prove, HasSubstr("return bounceChain(first, sectors);"));
     EXPECT_THAT(After(source, "void NativeSwitchBlock::beginBatch("), HasSubstr("high.proofDue(b.write, table.high)"));
     const std::string batch = body("void NativeSwitchBlock::endBatch(");
-    EXPECT_THAT(batch, HasSubstr("if (!proveHigh(first, sectors)) result = kIOReturnIOError;"));
+    EXPECT_THAT(batch, HasSubstr("if (!proveHigh(first, sectors))\n                result = kIOReturnIOError;"));
     // A write from pages above 4 GiB is read back while those checks last.
     EXPECT_THAT(batch, HasSubstr("high.writeCheckDue(write, table.high)"));
 }

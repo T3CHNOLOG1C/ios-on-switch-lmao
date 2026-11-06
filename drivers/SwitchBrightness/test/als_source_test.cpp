@@ -117,7 +117,8 @@ TEST(SwitchALSSource, I2C2BusAndPads)
         const uint32_t horizon = (old & ~0x01F1F000u) | 0x0001F000u;  // reg::ReadWrite(value, mask)
         EXPECT_EQ(ours, horizon) << std::hex << old;
     }
-    EXPECT_THAT(i2c, HasSubstr("if (info.sclDrive != kBus[1].sclDrive) return;")) << "the drive is I2C2's only";
+    EXPECT_THAT(i2c, HasSubstr("if (info.sclDrive != kBus[1].sclDrive)\n        return;"))
+        << "the drive is I2C2's only";
 }
 
 TEST(SwitchALSSource, Bh1730Commands)
@@ -126,7 +127,10 @@ TEST(SwitchALSSource, Bh1730Commands)
     EXPECT_THAT(als, HasSubstr("kSensor = 0x29;")) << "slave address 0101001";
     EXPECT_THAT(als, HasSubstr("kBus = 2;")) << "I2C2";
     EXPECT_THAT(als, HasSubstr("kCommand = 0x80, kSoftwareReset = 0xe4;")) << "1 00 xxxxx; 1 11 00100";
-    EXPECT_THAT(als, HasSubstr("RegControl = 0x00, RegTiming = 0x01, RegGain = 0x07, RegId = 0x12, RegData0 = 0x14"));
+    EXPECT_THAT(
+        als,
+        HasSubstr(
+            "RegControl = 0x00,\n    RegTiming = 0x01,\n    RegGain = 0x07,\n    RegId = 0x12,\n    RegData0 = 0x14"));
     EXPECT_THAT(als, HasSubstr("tegra_i2c_write(kBus, kSensor, kSoftwareReset, nullptr, 0)"))
         << "special command alone";
 }
@@ -145,7 +149,7 @@ TEST(SwitchALSSource, WhatCoreBrightnessReads)
                          {"ALSSuperFastIntegrationTime", kItimeUs},
                          {"ALSSlowIntegrationTime", kItimeUs},
                      }));
-    EXPECT_THAT(hid, HasSubstr("if (&p == &kProfiles[kSwitchHIDLight]) addLightProperties(dict);"));
+    EXPECT_THAT(hid, HasSubstr("if (&p == &kProfiles[kSwitchHIDLight])\n                addLightProperties(dict);"));
 
     const std::string backlight = SourceText("../SwitchBacklight.cpp");
     std::map<std::string, std::string> keys;

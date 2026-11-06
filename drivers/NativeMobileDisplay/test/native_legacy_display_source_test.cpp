@@ -131,14 +131,14 @@ TEST(VsyncPhaseSource, OneVsyncAFrame)
 {
     const std::string deliver =
         method(display(), "    void deliverVsync(uint64_t stamp, uint64_t continuous, uint32_t lead)");
-    EXPECT_THAT(deliver, HasSubstr("if (deliveredFrame == frameEnds) return;"));
-    EXPECT_THAT(method(display(), "    void vblankNotify()"), HasSubstr("if (phaseDelivering()) return;"));
+    EXPECT_THAT(deliver, HasSubstr("if (deliveredFrame == frameEnds)\n            return;"));
+    EXPECT_THAT(method(display(), "    void vblankNotify()"), HasSubstr("if (phaseDelivering())\n            return;"));
     EXPECT_THAT(method(display(), "    bool phaseDelivering() const"), HasSubstr("vpulseSeen"));
     // The irregular gap at a source or line change is never passed on as the interval.
     EXPECT_THAT(deliver, HasSubstr("!moved && vblankLast"));
     // A folded action (V_PULSE2 and the frame end together) counts the vsync against that frame, not the next.
-    expectBefore(method(display(), "    void vblankTick()"), "if (status & kVpulse2Int) vpulseNotify();",
-                 "if (status & kFrameEndInt) frameEnds = frameEnds + 1;");
+    expectBefore(method(display(), "    void vblankTick()"), "if (status & kVpulse2Int)\n            vpulseNotify();",
+                 "if (status & kFrameEndInt)\n            frameEnds = frameEnds + 1;");
 }
 
 TEST(VsyncPhaseSource, NeverFiringVpulse2CostsOneLine)
@@ -154,7 +154,8 @@ TEST(VsyncPhaseSource, ReplacementsAndResume)
 {
     // noteStatsWindow zeroes stReplaced each window: that is no replacement.
     expectBefore(after(display(), "    void notePresent(uint64_t stamp, uint64_t latchedAt, const FrameMark &mark)"),
-                 "if (stReplaced < phaseReplacedSeen) phaseReplacedSeen = 0;", "if (stReplaced != phaseReplacedSeen)");
+                 "if (stReplaced < phaseReplacedSeen)\n            phaseReplacedSeen = 0;",
+                 "if (stReplaced != phaseReplacedSeen)");
     // SC7 resets the DC: the phase's registers go back before finishResume's latch request.
     expectBefore(after(display(), "    bool finishResume()"), "writePhaseRegisters()", "kGeneralActReq | kWinAActReq");
 }
@@ -178,7 +179,7 @@ TEST(DisplayProbeSource, Wiring)
 TEST(DisplayProbeSource, AcceptedSwapTableNeverDropsThePendingHead)
 {
     const std::string add = method(display(), "    bool addValidated(");
-    EXPECT_THAT(add, Not(HasSubstr("if (slot == 8) slot = 0;")));
+    EXPECT_THAT(add, Not(testing::ContainsRegex("if \\(slot == 8\\)[[:space:]]+slot = 0;")));
     EXPECT_THAT(add, HasSubstr("validatedAt[i] < validatedAt[slot]"));
     EXPECT_THAT(method(display(), "    void kickOnce()\n"), HasSubstr("pruneValidated();"));
 }
@@ -202,11 +203,11 @@ TEST(PanicRestoreSource, EveryKernelConfig)
     expectBefore(chain, "dmb ish", "switch_display_panic_hook = restorePitchOnPanic;");
     static const std::string diag = SourceText("../../../diagnostics/switch/SwitchDiag.c");
     const std::string panic = Between(diag, "void switch_diag_panic(const char *format", "\n}\n");
-    expectBefore(panic, "if (display) display(format);", "switch_panic_begin(");
-    expectBefore(panic, "if (display) display(format);", "switch_diag_pixel(");
+    expectBefore(panic, "if (display)\n        display(format);", "switch_panic_begin(");
+    expectBefore(panic, "if (display)\n        display(format);", "switch_diag_pixel(");
     static const std::string save = SourceText("../../../diagnostics/switch/SwitchPanicSave.c");
     const std::string halted = Between(save, "void switch_panic_halted(void)\n", "\n}\n");
-    EXPECT_THAT(halted, HasSubstr("if (display) display(\"\");"));
+    EXPECT_THAT(halted, HasSubstr("if (display)\n        display(\"\");"));
     EXPECT_THAT(halted, Not(HasSubstr("PE_panic_hook")));
 }
 
@@ -217,5 +218,5 @@ TEST(DisplayStatsSource, QuietDisplayWindowsAreLogged)
     const std::string stats = method(display(), "    void noteStatsWindow()");
     EXPECT_THAT(stats, HasSubstr("if (stVsyncs && !stSwaps && !stPresents)"));
     expectBefore(stats, "SwitchDisplay: quiet display: ", "stSwaps = stVsyncs = ");
-    expectBefore(stats, "SwitchDisplay: quiet display: ", "if (logged) os_log(");
+    expectBefore(stats, "SwitchDisplay: quiet display: ", "if (logged)\n            os_log(");
 }

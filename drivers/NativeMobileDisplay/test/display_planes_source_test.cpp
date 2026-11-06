@@ -113,7 +113,7 @@ TEST(DisplayPlanesSource, DriverFollowsTheRules)
     const std::string frame = Function(planes, "void planeFrameEnd()\n");
     EXPECT_THAT(frame, HasSubstr("retireThrough(now.seq)"));
     EXPECT_THAT(frame, HasSubstr("planesOff("));
-    EXPECT_THAT(source, HasSubstr("if (status & kFrameEndInt) planeFrameEnd();"));
+    EXPECT_THAT(source, HasSubstr("if (status & kFrameEndInt)\n            planeFrameEnd();"));
     // The first client frame's swap retires at its own latch (latchRetire is on from the plane probe, before it).
     EXPECT_THAT(Method(source, "    void startRotation()\n"), HasSubstr("entrySeq[target] = seqOf(flipRequest);"));
     EXPECT_THAT(Method(source, "    void checkRotation()\n"), HasSubstr("retireThrough(entrySeq[asked]);"));
@@ -137,7 +137,7 @@ TEST(DisplayPlanesSource, DriverFollowsTheRules)
     // And VIC's proven row pitch: the alignment Core Animation sizes surfaces by follows it before backboardd reads it.
     EXPECT_THAT(gate, HasSubstr("vic->pitchAlign"));
     EXPECT_THAT(gate, HasSubstr("const bool ok = planes && turns && pitched;"));
-    EXPECT_THAT(gate, HasSubstr("if (ok) display->publishDetachAlignment(rows, bases);"));
+    EXPECT_THAT(gate, HasSubstr("if (ok)\n        display->publishDetachAlignment(rows, bases);"));
     ExpectBefore(gate, "publishDetachAlignment", "return ok;");
 }
 

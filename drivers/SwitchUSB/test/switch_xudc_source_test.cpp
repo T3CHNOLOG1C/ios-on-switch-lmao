@@ -57,7 +57,7 @@ TEST(SwitchXudcSource, OnlyTheHeadCompletes)
     EXPECT_THAT(
         source,
         HasSubstr("void SwitchXUDC::complete(uint32_t dci, IOReturn status, uint32_t actual, const Decision *event)"));
-    EXPECT_THAT(source, HasSubstr("case Verdict::Lost: return lostEvent(dci, e, index, d);"));
+    EXPECT_THAT(source, HasSubstr("case Verdict::Lost:\n        return lostEvent(dci, e, index, d);"));
     EXPECT_THAT(source, HasSubstr("panic(\"SwitchUSB: XUDC transfer event lost on DCI %u"));
     EXPECT_THAT(source, HasSubstr("panic(\"SwitchUSB: XUDC event ring full, events were lost"));
 }
@@ -65,7 +65,8 @@ TEST(SwitchXudcSource, OnlyTheHeadCompletes)
 TEST(SwitchXudcSource, CancelFencesUntilTheEventRingIsRead)
 {
     const std::string source = SourceText("../SwitchXUDC.cpp");
-    EXPECT_THAT(source, HasSubstr("if (ep.tds->cancel() && !draining && !hw.eventPending()) ep.tds->liftFence();"));
+    EXPECT_THAT(source,
+                HasSubstr("if (ep.tds->cancel() && !draining && !hw.eventPending())\n        ep.tds->liftFence();"));
     EXPECT_THAT(source, HasSubstr("endpoints[dci].tds->liftFence();"));
     EXPECT_THAT(source, HasSubstr("!ep.tds->fenced()")) << "kick puts nothing on a fenced ring";
     EXPECT_THAT(source, HasSubstr("if (!hw.nextEvent(e)) {")) << "the drain runs until the event ring is empty";
@@ -136,7 +137,7 @@ TEST(SwitchXudcSource, SleepPowersOnWholeBeforeTheBus)
     EXPECT_LT(power, lift);
     EXPECT_LT(lift, unmasked);
     EXPECT_LT(unmasked, on);
-    EXPECT_THAT(source, HasSubstr("if (on && lostToSleep) return;"));
+    EXPECT_THAT(source, HasSubstr("if (on && lostToSleep)\n        return;"));
 }
 
 // An attached host holds idle sleep off as an iPad's powerd does in USB device mode: every change of hostPresent goes

@@ -36,8 +36,8 @@ TEST(TegraVICSeed, DestinationSeedMovesBeforeTheReply)
 TEST(TegraVICSeed, BindingIsChecked)
 {
     const std::string check = SourceText("../abi_check.py");
-    EXPECT_THAT(check, HasSubstr("('_tegra_vic_ios_device_unlock', 0xfffffff005ba0fc8,"));
-    EXPECT_THAT(check, HasSubstr("('_tegra_vic_ios_device_unlock', 0xfffffff006e5ea88, 'AppleM2ScalerCSCDriver')"));
+    EXPECT_THAT(check, HasSubstr("(\n        '_tegra_vic_ios_device_unlock',\n        0xFFFFFFF005BA0FC8,"));
+    EXPECT_THAT(check, HasSubstr("('_tegra_vic_ios_device_unlock', 0xFFFFFFF006E5EA88, 'AppleM2ScalerCSCDriver')"));
     EXPECT_THAT(SourceText("../original-bindings.S"),
                 HasSubstr(".set _tegra_vic_ios_device_unlock, 0xfffffff004ba0fc8"));
 }

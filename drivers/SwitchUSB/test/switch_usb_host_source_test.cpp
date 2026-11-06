@@ -87,8 +87,8 @@ TEST(SwitchUsbHostSource, SwitchPdUsesThePolicy)
     EXPECT_THAT(source, HasSubstr("switch_pd_decide("));
     EXPECT_THAT(source, HasSubstr("switch_pd_window_end("));
     const std::string enter = Body(source, "void SwitchPD::enter(");
-    EXPECT_LT(at(enter, "if (!switches) setSwitches(false)"), at(enter, "setRails(rails)"));
-    EXPECT_LT(at(enter, "setRails(rails)"), at(enter, "if (switches) setSwitches(true)"));
+    EXPECT_LT(at(enter, "if (!switches)\n        setSwitches(false)"), at(enter, "setRails(rails)"));
+    EXPECT_LT(at(enter, "setRails(rails)"), at(enter, "if (switches)\n        setSwitches(true)"));
 }
 
 TEST(SwitchUsbHostSource, HostRoleUsesThePortHelpers)

@@ -74,7 +74,8 @@ TEST(SdCqSource, DriverGuards)
     // r18-sdcq: and an R1b's (CMD43: no task assigned before it completes); a failed command's response kept.
     EXPECT_THAT(command, HasSubstr("(data == kRegWrite || (flags & 3) == 3) && !waitIdle(true, 1000000000)"));
     // r18-sdcq (r8d): not after a command error, where RESPONSE is still the previous command's.
-    EXPECT_THAT(command, HasSubstr("if ((s & INT_COMMAND) && !(s & 0x000f0000u)) *response = r32(RESPONSE);"));
+    EXPECT_THAT(command,
+                HasSubstr("if ((s & INT_COMMAND) && !(s & 0x000f0000u))\n            *response = r32(RESPONSE);"));
     EXPECT_THAT(command, HasSubstr("limit = 1500000000ull"));
     EXPECT_THAT(body("Batch *NativeSwitchBlock::runGroup("), Not(HasSubstr("13, ")));  // no CMD13 task-status polling
     EXPECT_EQ(Count(engine(), "bus.settle()"), 2u);
@@ -113,28 +114,31 @@ TEST(SdCqSource, DriverGuards)
                 HasSubstr("ended(outcome == kGroupLegacy);"));
     EXPECT_THAT(member("bool leave(Bus &bus)"), HasSubstr("return quit(bus, \"the card stays in CQ mode\");"));
     const std::string out = member("bool quit(Bus &bus, const char *reason)");
-    EXPECT_LT(Index(out, "if (!off(bus))"), Index(out, "if (useCache && !disableCache(bus)) useCache = false;"));
+    EXPECT_LT(Index(out, "if (!off(bus))"),
+              Index(out, "if (useCache && !disableCache(bus))\n            useCache = false;"));
     const std::string fail = member("bool fail(Bus &bus, const char *reason, bool maybeOn = false)");
-    EXPECT_THAT(fail, HasSubstr("if (out) (void)disableCache(bus);"));
+    EXPECT_THAT(fail, HasSubstr("if (out)\n            (void)disableCache(bus);"));
     EXPECT_THAT(fail, HasSubstr("useCache = false;"));
     // Off is proven only by a CMD49 the card answered; no flush on the way (nothing completed is held).
     const std::string disable = member("bool disableCache(Bus &bus)");
-    EXPECT_THAT(disable, HasSubstr("if (bus.control(kSdPerfCacheControl, true, &value, &r1)) return false;"));
+    EXPECT_THAT(disable,
+                HasSubstr("if (bus.control(kSdPerfCacheControl, true, &value, &r1))\n                return false;"));
     EXPECT_THAT(disable, Not(HasSubstr("flush(")));
-    EXPECT_THAT(engine(), HasSubstr("bool commitWrite(Bus &bus) { return !cacheOn || flush(bus); }"));
+    EXPECT_THAT(engine(),
+                HasSubstr("bool commitWrite(Bus &bus)\n    {\n        return !cacheOn || flush(bus);\n    }"));
     EXPECT_THAT(member("void powerCycled()"), HasSubstr("cacheOn = false;"));  // Cache Enable is 0 after power-up
     // Reads only: a task write panics before anything is issued.
     const std::string issue = body("int NativeSwitchBlock::issue(");
-    EXPECT_THAT(issue, HasSubstr("if (write && task != kNoTask) panic("));
-    EXPECT_LT(Index(issue, "if (write && task != kNoTask) panic("), Index(issue, "w16(COMMAND"));
+    EXPECT_THAT(issue, HasSubstr("if (write && task != kNoTask)\n        panic("));
+    EXPECT_LT(Index(issue, "if (write && task != kNoTask)\n        panic("), Index(issue, "w16(COMMAND"));
     const std::string group = body("unsigned NativeSwitchBlock::groupLocked(");
     EXPECT_THAT(group, HasSubstr("first->write || sectors > kCqTaskSectors"));
     EXPECT_THAT(group, HasSubstr("switchNextIndependentRead(head, kCqTaskSectors, kMergeScan)"));
-    EXPECT_THAT(group, HasSubstr("if (payload != sectors && gapProofs) return 0;"));
+    EXPECT_THAT(group, HasSubstr("if (payload != sectors && gapProofs)\n        return 0;"));
     // r18-sdcq: every chain unlinked for a group runs (r8c: with cqMinChains above 2 the chains after the first were
     // dropped, their requests never completed); a pause gathers nothing.
     EXPECT_THAT(group, HasSubstr("return *queue || n > 1 ? n : 0;"));
-    EXPECT_LT(Index(group, "if (!cq.admit()) return 0;"), Index(group, "switchUnlinkChain(head, tail"));
+    EXPECT_LT(Index(group, "if (!cq.admit())\n        return 0;"), Index(group, "switchUnlinkChain(head, tail"));
     // Every task's blocks inside the APFS partition, checked before the group is assigned.
     const std::string run = body("Batch *NativeSwitchBlock::runGroup(");
     EXPECT_LT(Index(run, "outside the APFS partition"), Index(run, "cq.run(cqBus, host, tasks, n, proving, &proven)"));
@@ -146,7 +150,7 @@ TEST(SdCqSource, DriverGuards)
     EXPECT_THAT(run, HasSubstr("self->compareChain(group[i].first, group[i].sectors, &at)"));
     const std::string runner = Between(engine(), "Outcome run(Bus &bus, Host &host,", "\n    }\n\n");
     EXPECT_LT(Index(runner, "if (!leave(bus))"), Index(runner, "host.prove(i)"));
-    EXPECT_THAT(runner, HasSubstr("if (!proving) owed = static_cast<int>(done);"));
+    EXPECT_THAT(runner, HasSubstr("if (!proving)\n                    owed = static_cast<int>(done);"));
     // A proof that differs stops the queue and the whole group is read again the legacy way (from task 0); so does
     // a group whose retry failed while proving.
     EXPECT_TRUE(Search(runner, R"(if \(differs\) \{\s*\(void\)fail\(bus,)"));
@@ -161,17 +165,18 @@ TEST(SdCqSource, DriverGuards)
     EXPECT_THAT(task, HasSubstr("recover(true);"));
     // One os_log line per recovered error, rate-limited by count; one IOLog line only for a stop for the boot.
     const std::string recovered = body("void NativeSwitchBlock::cqRecovered(");
-    EXPECT_THAT(recovered, HasSubstr("if (cq.recoveries > kLoggedErrors && cq.recoveries % 64) return;"));
+    EXPECT_THAT(recovered, HasSubstr("if (cq.recoveries > kLoggedErrors && cq.recoveries % 64)\n        return;"));
     EXPECT_THAT(recovered, HasSubstr("os_log(OS_LOG_DEFAULT,"));
     EXPECT_THAT(recovered, Not(HasSubstr("IOLog(")));
     const std::string stopped = body("void NativeSwitchBlock::cqStopped()");
-    EXPECT_LT(Index(stopped, "if (cqStopLogged) return;"), Index(stopped, "IOLog("));
+    EXPECT_LT(Index(stopped, "if (cqStopLogged)\n        return;"), Index(stopped, "IOLog("));
     // A legacy command never finds the card in CQ mode: the worker leaves it first, and when its queue runs dry.
     const std::string worker = body("void NativeSwitchBlock::worker(");
-    EXPECT_LT(Index(worker, "if (next) self->cqLeave();"), Index(worker, "if (next) self->beginBatch(*next);"));
+    EXPECT_LT(Index(worker, "if (next)\n                self->cqLeave();"),
+              Index(worker, "if (next)\n                self->beginBatch(*next);"));
     EXPECT_THAT(worker, HasSubstr("self->cq.state == CqEngine::kOn) {"));
     EXPECT_THAT(body("void NativeSwitchBlock::suspend()"),
-                HasSubstr("if (cq.state == CqEngine::kOn) (void)cq.leave(cqBus);"));
+                HasSubstr("if (cq.state == CqEngine::kOn)\n        (void)cq.leave(cqBus);"));
     EXPECT_THAT(body("void NativeSwitchBlock::resume()"), HasSubstr("cq.powerCycled();"));
     // A card that will not leave CQ mode is power-cycled the way system sleep does it, never polled forever; r18-sdcq:
     // the queue on again after it.
@@ -182,7 +187,7 @@ TEST(SdCqSource, DriverGuards)
         EXPECT_THAT(reset, HasSubstr(step));
     // Setup: only a card that offers a queue with its control byte off, and only after its test group matched.
     const std::string check = body("const char *NativeSwitchBlock::checkCq(");
-    EXPECT_THAT(check, HasSubstr("if (perf.cqDepth < 2) return \"the card offers no queue\";"));
+    EXPECT_THAT(check, HasSubstr("if (perf.cqDepth < 2)\n        return \"the card offers no queue\";"));
     EXPECT_THAT(check, HasSubstr("if (perf.cqControl & kSdCqEnable)"));
     EXPECT_THAT(check, HasSubstr("memcmp(bounce + i * kBytes, checkBuffer + i * kBytes, kBytes)"));
     EXPECT_LT(Index(check, "cq.start(depth, perf.cache);"), Index(check, "cq.enter(cqBus)"));
@@ -190,7 +195,8 @@ TEST(SdCqSource, DriverGuards)
     // protocol error, and the data path's counts from zero.
     EXPECT_THAT(check, HasSubstr("perf.cqDepth > 2 ? perf.cqDepth - 1 : perf.cqDepth"));
     EXPECT_THAT(check, HasSubstr("if (why && protocol && !attempt) {"));
-    EXPECT_LT(Index(check, "const CqEngine::Recovery r = cq.recover(cqBus);"), Index(check, "if (why) break;"));
+    EXPECT_LT(Index(check, "const CqEngine::Recovery r = cq.recover(cqBus);"),
+              Index(check, "if (why)\n            break;"));
     EXPECT_THAT(check, HasSubstr("cq.resetCounts();"));
     // r16-sdcq: sessions with the card's cache (enter turns it on first, 4.19.1); a cache found on goes off before any
     // write; a failure says what read back.
@@ -206,19 +212,19 @@ TEST(SdCqSource, DriverGuards)
 TEST(SdCqSource, CacheContract)
 {
     const std::string &source = driver();
-    EXPECT_THAT(
-        source,
-        HasSubstr("IOReturn doSynchronize(UInt64, UInt64, IOOptionBits) override { return kIOReturnSuccess; }"));
-    EXPECT_THAT(source, HasSubstr("IOReturn doSynchronizeCache() override { return kIOReturnSuccess; }"));
+    EXPECT_THAT(source, HasSubstr("IOReturn doSynchronize(UInt64, UInt64, IOOptionBits) override\n    {\n        "
+                                  "return kIOReturnSuccess;\n    }"));
+    EXPECT_THAT(source,
+                HasSubstr("IOReturn doSynchronizeCache() override\n    {\n        return kIOReturnSuccess;\n    }"));
     EXPECT_THAT(source,
                 Not(HasSubstr("kIOStorageOptionForceUnitAccess")));  // every completed write is on flash already
     // Every write's last step, after every path that wrote it (direct, bounce, a proof's rewrite).
     const std::string end = body("void NativeSwitchBlock::endBatch(");
-    EXPECT_THAT(end, HasSubstr("if (write && !result && !commitWrite()) result = kIOReturnIOError;"));
+    EXPECT_THAT(end, HasSubstr("if (write && !result && !commitWrite())\n        result = kIOReturnIOError;"));
     EXPECT_LT(Index(end, "bounceChain(first, sectors)"), Index(end, "!commitWrite()"));
     EXPECT_LT(Index(end, "!commitWrite()"), Index(end, "b.result = result;"));
     const std::string commit = body("bool NativeSwitchBlock::commitWrite()");
-    EXPECT_THAT(commit, HasSubstr("if (!cq.cacheOn) return true;"));
+    EXPECT_THAT(commit, HasSubstr("if (!cq.cacheOn)\n        return true;"));
     EXPECT_THAT(commit, HasSubstr("cq.commitWrite(cqBus)"));
     EXPECT_THAT(commit, Not(HasSubstr("panic(")));
     // No panic and no flush on the way to sleep or a power cycle: nothing completed is held in the cache.

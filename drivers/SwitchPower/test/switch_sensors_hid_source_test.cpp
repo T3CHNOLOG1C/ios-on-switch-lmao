@@ -22,10 +22,14 @@ TEST(SwitchSensorsHidSource, HidShapes)
     // IOHIDEventService reserved 8..11 in IOHIDEventService.h order (2031.120.4): dispatchEvent 198 (proven by the edge
     // wrapper), getPrimaryUsagePage 199, getPrimaryUsage 200, copyEvent 201.
     EXPECT_THAT(hid, HasSubstr("kDispatch = 198"));
-    EXPECT_THAT(hid, HasSubstr("kPrimaryUsagePage = 199, kPrimaryUsage = 200, kCopyEvent = 201"));
+    EXPECT_THAT(hid, HasSubstr("kPrimaryUsagePage = 199,\n    kPrimaryUsage = 200,\n    kCopyEvent = 201"));
     // IOHIDEvent: setTimeStamp 17, getType 18, setType 19 (as SwitchALS), getFixedValue 25, setFixedValue 26.
-    EXPECT_THAT(hid, HasSubstr("kSetTimeStamp = 17, kGetType = 18, kSetType = 19, kGetFixed = 25, kSetFixed = 26"));
-    EXPECT_THAT(hid, HasSubstr("kType = 15, kFieldLevel = 0xf0000"));  // what IOHIDEventGetFloatValue(e, 0xf0000) reads
+    EXPECT_THAT(
+        hid,
+        HasSubstr(
+            "kSetTimeStamp = 17,\n    kGetType = 18,\n    kSetType = 19,\n    kGetFixed = 25,\n    kSetFixed = 26"));
+    EXPECT_THAT(hid,
+                HasSubstr("kType = 15,\n    kFieldLevel = 0xf0000"));  // what IOHIDEventGetFloatValue(e, 0xf0000) reads
     // The publish notification matches every IOHIDEventDriver: one with an IOPropertyMatch on VendorID/ProductID never
     // fired for the temperature drivers on hardware.
     EXPECT_THAT(hid, HasSubstr("addMatchingNotification(gIOFirstPublishNotification, matching, &published"));

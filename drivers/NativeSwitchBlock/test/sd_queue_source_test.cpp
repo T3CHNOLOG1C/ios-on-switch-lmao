@@ -80,6 +80,6 @@ TEST(SdQueueSource, GapChains)
     // Toward the requests gaps are skipped; from them (writes, read-back copies) every byte must be covered.
     EXPECT_THAT(body("bool NativeSwitchBlock::stageChain("), HasSubstr("toClient);"));
     // The cache maintenance and the high-memory proof leave the sink alone.
-    EXPECT_THAT(source, HasSubstr("if (pa - skip < skipBytes) continue;"));
+    EXPECT_THAT(source, HasSubstr("if (pa - skip < skipBytes)\n            continue;"));
     EXPECT_THAT(body("bool NativeSwitchBlock::proveHigh("), HasSubstr("|| inSink(pa)) {"));
 }

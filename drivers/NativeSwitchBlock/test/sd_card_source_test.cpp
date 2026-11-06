@@ -39,7 +39,7 @@ TEST(SdCardSource, IdentificationIsReadOnly)
     EXPECT_THAT(identify, Not(HasSubstr("w16(COMMAND")));
     const std::string ext = body("bool NativeSwitchBlock::extRead(");
     EXPECT_THAT(ext, HasSubstr("cardCommand(48, switchSdExtArgument(fno, address, length)"));
-    EXPECT_THAT(ext, HasSubstr("if (!switchSdExtRange(address, length)) return false;"));
+    EXPECT_THAT(ext, HasSubstr("if (!switchSdExtRange(address, length))\n        return false;"));
     // Once at boot, right after the bus is up (so the identification lines come first), never on resume.
     const std::string setup = body("bool NativeSwitchBlock::setup()");
     EXPECT_LT(Index(setup, "raiseBusSpeed()"), Index(setup, "identify();"));
@@ -61,8 +61,8 @@ TEST(SdCardSource, Cmd23FramingIsProvenAndGated)
     EXPECT_LT(Index(issue, "outside the APFS partition"), Index(issue, "w32(ARGUMENT2, frame.argument2)"));
     EXPECT_LT(Index(issue, "w32(ARGUMENT2, frame.argument2)"), Index(issue, "w16(COMMAND, frame.command)"));
     const std::string complete = body("int NativeSwitchBlock::complete(");
-    EXPECT_THAT(complete, HasSubstr("if (r16(AUTO_CMD_ERROR) & 0x9f) return 8;"));
-    EXPECT_THAT(complete, HasSubstr("if (!cmd23 && (r32(STOP_RESPONSE) & R1_STOP_ERRORS)) return 9;"));
+    EXPECT_THAT(complete, HasSubstr("if (r16(AUTO_CMD_ERROR) & 0x9f)\n            return 8;"));
+    EXPECT_THAT(complete, HasSubstr("if (!cmd23 && (r32(STOP_RESPONSE) & R1_STOP_ERRORS))\n            return 9;"));
     // The data path: direct (ADMA2) multi-block commands only, per direction.
     EXPECT_THAT(body("void NativeSwitchBlock::beginBatch("),
                 HasSubstr("b.cmd23 = b.direct && sectors > 1 && (b.write ? cmd23Writes : cmd23Reads);"));

@@ -33,7 +33,7 @@ TEST(CryptexSource, ReadsGoToTheCardWithoutACopy)
 {
     const std::string read = body("IOReturn SwitchCryptexDevice::doAsyncReadWrite(");
     // A read the cache does not take: each piece a sub-range of the request's own memory, issued on the SD device.
-    EXPECT_THAT(read, HasSubstr("if (cacheRead(p, buffer, block, count)) return kIOReturnSuccess;"));
+    EXPECT_THAT(read, HasSubstr("if (cacheRead(p, buffer, block, count))\n        return kIOReturnSuccess;"));
     EXPECT_THAT(read, HasSubstr("switchNextPiece(extents, extentCount, &at, start + done, length - done, maxPiece)"));
     EXPECT_THAT(read, HasSubstr("IOSubMemoryDescriptor::withSubRange(buffer, done, piece.length, kIODirectionIn)"));
     EXPECT_THAT(read, HasSubstr("sd->doAsyncReadWrite(sub, piece.disk / kSdSector, piece.length / kSdSector, issue,"));
