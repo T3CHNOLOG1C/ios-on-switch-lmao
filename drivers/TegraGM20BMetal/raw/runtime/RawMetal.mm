@@ -4269,6 +4269,8 @@ static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **
                         afterPass.push_back({t, uint32_t(a.level), mirror});
                     } else if (!raw::chainLevelTarget(t->_raw, uint32_t(a.level), levelTargets[j])) {
                         return fail(PredEncPassRender, "a mip level the raw path cannot render to", a.level);
+                    } else {
+                        levelTargets[j].tic = gRM->raw->levelTic(t->_raw, uint32_t(a.level));
                     }
                     raw::Texture::Chain &c = touch(t);
                     c.rawLevels |= uint16_t(1u << a.level);

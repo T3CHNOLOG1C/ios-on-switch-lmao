@@ -128,6 +128,7 @@ struct Texture {
         uint32_t fmt2d = 0;
         bool l0Fresh = false, levelsFresh = false;
         uint16_t rawLevels = 0, mirrorLevels = 0;
+        uint32_t levelTic[fx::kMaxLevels] = {};  // a view of each level alone (Device::levelTic), made on first use
     } *chain = nullptr;
 
     // A chain level as a render target (chainLevelTarget: no memory or header of its own, tic 0): block-linear at the level's
@@ -434,6 +435,9 @@ public:
     // A mipmapped 2D texture of `levels` levels: level 0 a pool texture as createTexture's, its header the block-linear chain's
     // (Texture::chain). False: not one the raw path keeps (chainsOn() false, a format the 2D engine does not filter, no memory).
     bool createMipTexture(uint32_t width, uint32_t height, uint32_t format, uint32_t levels, Texture &t);
+    // The texture header of level `level` of mipmapped texture `t`'s chain alone, as NVK's view of that level (a pass into
+    // the level fetches its color through it); 0: none
+    uint32_t levelTic(Texture &t, uint32_t level);
 
     // Whether mip chains are on: the 2D engine's self-test at open made the chain the design expects (fx_mip.h)
     bool chainsOn() const

@@ -1076,6 +1076,11 @@ void Device::destroyTexture(Texture &t)
         freeTic_.push_back(t.tic);
     }
     if (t.chain) {
+        for (const uint32_t level : t.chain->levelTic)
+            if (level) {
+                memset(tic_.cpu + 32 * level, 0, 32);
+                freeTic_.push_back(level);
+            }
         blFree(t.chain->span);
         delete t.chain;
         t.chain = nullptr;
@@ -2028,8 +2033,8 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, uint32_t first, ui
             tic = t ? t->tic : 0;
         } else if (e.kind == EntryFetch) {
             const Texture *t = pass_.color[e.slot].texture;
-            if (t && !t->tic) {  // a chain level target has no texture header of its own to fetch through
-                *why = "framebuffer fetch from a target the raw path cannot sample (a mip level)";
+            if (t && !t->tic) {
+                *why = "framebuffer fetch from a target the raw path cannot sample";
                 cb_->refusal = {RefNoTic, e.slot, t->format, t->width};
                 return false;
             }
@@ -2268,6 +2273,21 @@ static void targetWords(Push &p, uint32_t m, const Texture &t)
     uint32_t w[kColorTargetWords];
     colorTargetWords(d, w);
     p.incArray(m, w, kColorTargetWords);
+}
+
+uint32_t Device::levelTic(Texture &t, uint32_t level)
+{
+    const FormatInfo *f = formatInfo(t.format);
+    if (!t.chain || !f || level >= t.chain->layout.levels)
+        return 0;
+    std::lock_guard<std::mutex> l(lock_);
+    uint32_t &tic = t.chain->levelTic[level];
+    if (!tic && (tic = allocTic())) {
+        uint32_t w[8];
+        fx::mipChainTic(t.chain->layout, t.chain->va, f->tic0, f->srgb, level, 1, w);
+        memcpy(tic_.cpu + 32 * tic, w, 32);  // visible at the next submission's header invalidate
+    }
+    return tic;
 }
 
 bool chainLevelTarget(const Texture &t, uint32_t level, Texture &out)
