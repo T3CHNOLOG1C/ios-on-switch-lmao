@@ -12,23 +12,28 @@
     "stop": {
       "decl": "void stop(IOService *provider) override",
       "mangled": "__ZN10IOWatchdog4stopEP9IOService",
-      "doc": "disableWatchdog(), then IOService::stop."
+      "doc": "disableWatchdog(), then IOService::stop.",
+      "pac": "_ZN9IOService4stopEPS_"
     },
     "newUserClient": {
       "decl": "IOReturn newUserClient(task_t owningTask, void *securityID, UInt32 type, OSDictionary *properties, IOUserClient **handler) override",
-      "mangled": "__ZN10IOWatchdog13newUserClientEP4taskPvjP12OSDictionaryPP12IOUserClient"
+      "mangled": "__ZN10IOWatchdog13newUserClientEP4taskPvjP12OSDictionaryPP12IOUserClient",
+      "pac": "_ZN9IOService13newUserClientEP4taskPvjP12OSDictionaryPP12IOUserClient"
     },
     "enableWatchdog": {
       "decl": "virtual void enableWatchdog() = 0",
-      "doc": "Called by the original start while userspace monitoring is on."
+      "doc": "Called by the original start while userspace monitoring is on.",
+      "pac": "_ZN10IOWatchdog14enableWatchdogEv"
     },
     "disableWatchdog": {
       "decl": "virtual void disableWatchdog() = 0",
-      "doc": "Called by stop."
+      "doc": "Called by stop.",
+      "pac": "_ZN10IOWatchdog15disableWatchdogEv"
     },
     "petWatchdog": {
       "decl": "virtual void petWatchdog() = 0",
-      "doc": "AppleARMWatchdogTimer pets from its own interrupt."
+      "doc": "AppleARMWatchdogTimer pets from its own interrupt.",
+      "pac": "_ZN10IOWatchdog11petWatchdogEv"
     }
   },
   "fields": {

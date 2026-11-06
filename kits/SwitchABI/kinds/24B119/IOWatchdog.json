@@ -13,20 +13,73 @@
     "170": "petWatchdog"
   },
   "fields": {
-    "checkinLock": "0xa0",
-    "userspaceMonitoring": "0xa8",
     "IOKitMonitoring": "0xa9",
-    "checkinDeadline": "0xc8"
+    "checkinDeadline": "0xc8",
+    "checkinLock": "0xa0",
+    "userspaceMonitoring": "0xa8"
   },
   "addresses": {
-    "gMetaClass": "0xfffffff00acee798",
     "vtable": "0xfffffff007cebd58",
     "C2": "0xfffffff008374f5c",
     "D2": "0xfffffff008374f94",
-    "stop": "0xfffffff008375908",
-    "newUserClient": "0xfffffff008375c48",
-    "opaque171": "0xfffffff0083755e0",
     "switch_original_watchdog_start": "0xfffffff008375030",
-    "switch_original_watchdog_check": "0xfffffff0083759e4"
+    "opaque171": "0xfffffff0083755e0",
+    "stop": "0xfffffff008375908",
+    "switch_original_watchdog_check": "0xfffffff0083759e4",
+    "newUserClient": "0xfffffff008375c48",
+    "gMetaClass": "0xfffffff00acee798"
+  },
+  "found": {
+    "C2": "stores the vtable",
+    "D2": "branch after the constructors",
+    "IOKitMonitoring": "offset shown by 3942a669 at 0xfffffff008375638",
+    "checkinDeadline": "offset shown by f9406668 at 0xfffffff008375a3c",
+    "checkinLock": "offset shown by f9405015 at 0xfffffff008375a04",
+    "disableWatchdog": "slot 169 by PAC of _ZN10IOWatchdog15disableWatchdogEv",
+    "enableWatchdog": "slot 168 by PAC of _ZN10IOWatchdog14enableWatchdogEv",
+    "gMetaClass": "metaclass initialiser",
+    "newUserClient": "slot 140 by PAC of _ZN9IOService13newUserClientEP4taskPvjP12OSDictionaryPP12IOUserClient",
+    "petWatchdog": "slot 170 by hint",
+    "stop": "slot 87 by PAC of _ZN9IOService4stopEPS_",
+    "switch_original_watchdog_check": "references \"watchdog timeout: no checkins from %s in %llu seconds (%llu totalcheckins since monitoring last enabled), shutdown in pr\", 1 caller(s) up",
+    "switch_original_watchdog_start": "references \"-wdt-no-iokit\"",
+    "userspaceMonitoring": "offset shown by 3942a268 at 0xfffffff008375a1c",
+    "vtable": "metaclass initialiser"
+  },
+  "hints": {
+    "layout": {
+      "170": "petWatchdog"
+    },
+    "functions": {
+      "switch_original_watchdog_start": {
+        "string": "-wdt-no-iokit"
+      },
+      "switch_original_watchdog_check": {
+        "string": "watchdog timeout: no checkins from %s in %llu seconds (%llu totalcheckins since monitoring last enabled), shutdown in pr",
+        "up": 1
+      }
+    },
+    "fields": {
+      "checkinLock": {
+        "offset": "0xa0",
+        "at": "0xfffffff008375a04",
+        "word": "f9405015"
+      },
+      "userspaceMonitoring": {
+        "offset": "0xa8",
+        "at": "0xfffffff008375a1c",
+        "word": "3942a268"
+      },
+      "IOKitMonitoring": {
+        "offset": "0xa9",
+        "at": "0xfffffff008375638",
+        "word": "3942a669"
+      },
+      "checkinDeadline": {
+        "offset": "0xc8",
+        "at": "0xfffffff008375a3c",
+        "word": "f9406668"
+      }
+    }
   }
 }

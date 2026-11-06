@@ -30,6 +30,64 @@ py_binary(
     srcs = ["gen.py"],
 )
 
+py_binary(
+    name = "extract",
+    srcs = [
+        "extract.py",
+        "kernelcache.py",
+    ],
+    args = [
+        "--kernelcache",
+        "$(rootpath //ipsw:kernelcache)",
+        "--ipsw",
+        "$(rootpath @ipsw_cli//:ipsw)",
+        "--pins",
+        "$(rootpath //ipsw:pins.bzl)",
+    ],
+    data = [
+        "//ipsw:kernelcache",
+        "//ipsw:pins.bzl",
+        "@ipsw_cli//:ipsw",
+    ] + glob([
+        "interface/*.json",
+        "kinds/*/*.json",
+    ]),
+    deps = [
+        "//tools/prelink:native_prelink",
+        "//translate/arm64e:prelink26",
+    ],
+)
+
+py_binary(
+    name = "verify",
+    srcs = [
+        "extract.py",
+        "kernelcache.py",
+    ],
+    args = [
+        "--check",
+        "--kernelcache",
+        "$(rootpath //ipsw:kernelcache)",
+        "--ipsw",
+        "$(rootpath @ipsw_cli//:ipsw)",
+        "--pins",
+        "$(rootpath //ipsw:pins.bzl)",
+    ],
+    data = [
+        "//ipsw:kernelcache",
+        "//ipsw:pins.bzl",
+        "@ipsw_cli//:ipsw",
+    ] + glob([
+        "interface/*.json",
+        "kinds/*/*.json",
+    ]),
+    main = "extract.py",
+    deps = [
+        "//tools/prelink:native_prelink",
+        "//translate/arm64e:prelink26",
+    ],
+)
+
 py_test(
     name = "gen_test",
     srcs = ["test/gen_test.py"],
