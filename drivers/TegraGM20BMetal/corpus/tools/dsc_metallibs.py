@@ -53,8 +53,8 @@ for sub in sorted(d.glob('dyld_shared_cache_arm64*')):
         k = bisect.bisect_right(keys, addr) - 1
         image = images[k][1] if k >= 0 else '?'
         name = image.rsplit('/', 1)[-1]
-        dst = out / ('%s@%x.metallib' % (name, addr))
+        dst = out / f'{name}@{addr:x}.metallib'
         dst.write_bytes(hh[o : o + size])
         found += 1
-        print('%s\t%x\t%d\tv%d.%d type%d os%d\t%s' % (sub.name, addr, size, vmaj, vmin, ftype, os_, image))
+        print(f'{sub.name}\t{addr:x}\t{size}\tv{vmaj}.{vmin} type{ftype} os{os_}\t{image}')
 print('found', found, file=sys.stderr)

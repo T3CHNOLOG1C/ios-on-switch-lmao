@@ -87,7 +87,8 @@ def normal(line: str) -> tuple[str | None, str | None]:
         m = re.search(r' (lib=\S+ )?name=(\S+) k=(.*?)( \| |$)', line)
         if not m:
             return None, None
-        return 'S ok=1 %sname=%s k=%s | ' % (m[1] or '', m[2], m[3]), '%s%s %s' % (m[1] or '', m[2], m[3])
+        lib = m[1] or ''
+        return f'S ok=1 {lib}name={m[2]} k={m[3]} | ', f'{lib}{m[2]} {m[3]}'
     if line.startswith('C '):
         parts = line.split(' | ')
         head = parts[0].split()
@@ -96,7 +97,8 @@ def normal(line: str) -> tuple[str | None, str | None]:
             return None, None
         label = next((t for t in head if t.startswith('label=')), None)
         fields, stages = ' '.join(t for t in head if COMPUTE.match(t)), ' | '.join(stages)
-        return 'C ok=1 %s%s | %s | ' % (fields, ' ' + label if label else '', stages), fields + ' | ' + stages
+        labelled = f' {label}' if label else ''
+        return f'C ok=1 {fields}{labelled} | {stages} | ', fields + ' | ' + stages
     if line.startswith('D '):
         return line.rstrip(), line.rstrip()
     if line.startswith('R '):
@@ -108,7 +110,7 @@ def normal(line: str) -> tuple[str | None, str | None]:
         head = line[:v].split()
         label = next((t for t in head if t.startswith('label=')), 'label=-')
         state = ' '.join(t for t in head if DESCRIPTOR.match(t)) + line[v : end if end >= 0 else len(line)]
-        return 'R ok=1 %s %s | ' % (label, state), state
+        return f'R ok=1 {label} {state} | ', state
     return None, None
 
 
@@ -135,7 +137,7 @@ def opened(dirs: tuple[Path, ...], log: Callable[[str], None]) -> Iterator[None]
             os.chmod(d, mode)
             now = stat.S_IMODE(os.lstat(d).st_mode)
             if now != mode:
-                log('MODE NOT RESTORED: %s is %o, was %o' % (d, now, mode))
+                log(f'MODE NOT RESTORED: {d} is {now:o}, was {mode:o}')
 
 
 def readable(d: Path) -> bool:
@@ -172,9 +174,9 @@ def caches(
                 shut = [d for d in way if os.path.lexists(d) and not readable(d)]
                 if not shut:
                     if (c / sub).is_dir():
-                        look('%s/%s/%s' % (kind, c.name, sub), c / sub)
+                        look(f'{kind}/{c.name}/{sub}', c / sub)
                 elif open_all or c.name in opens:
-                    look('%s/%s/%s' % (kind, c.name, sub), c / sub, tuple(way))
+                    look(f'{kind}/{c.name}/{sub}', c / sub, tuple(way))
                 elif sub.startswith('Library'):
                     skipped.append(c.name)
             # the plugin's Library/Caches/m2v-<process> of a data container whose tmp is the process's temp directory
@@ -182,7 +184,7 @@ def caches(
             if readable(c / 'Library') and readable(c / 'Library/Caches'):
                 for m2v in sorted((c / 'Library/Caches').glob('m2v-*')):
                     if m2v.is_dir() and readable(m2v):
-                        look('%s/%s/%s' % (kind, c.name, m2v.relative_to(c)), m2v)
+                        look(f'{kind}/{c.name}/{m2v.relative_to(c)}', m2v)
     for pattern in (
         'tmp/m2v-*',
         'tmp/m2v',
@@ -209,17 +211,12 @@ def merge(corpus: Path, sources: list[tuple[str, str]]) -> list[str]:
                 seen.add(key)
                 lines.append(line)
                 added += 1
-        print('%s: %d new' % (name, added))
+        print(f'{name}: {added} new')
     corpus.write_text('\n'.join(lines) + '\n')
     print(
-        '%s: %d specializations, %d render states, %d compute states, %d dispatch shapes'
-        % (
-            corpus,
-            sum(l[0] == 'S' for l in lines),
-            sum(l[0] == 'R' for l in lines),
-            sum(l[0] == 'C' for l in lines),
-            sum(l[0] == 'D' for l in lines),
-        )
+        f'{corpus}: {sum(l[0] == "S" for l in lines)} specializations, '
+        f'{sum(l[0] == "R" for l in lines)} render states, {sum(l[0] == "C" for l in lines)} compute states, '
+        f'{sum(l[0] == "D" for l in lines)} dispatch shapes'
     )
     return lines
 
@@ -267,9 +264,10 @@ def records(caches: Sequence[str | Path], store: Path) -> None:
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(data)
             copied += 1
+    in_store = sum(1 for _ in store.glob('*/*')) if store.is_dir() else 0
     print(
-        '%s: %d driver records of %d caches, %d new, %d refused (envelope), %d in the store'
-        % (store, seen, len(caches), copied, bad, sum(1 for _ in store.glob('*/*')) if store.is_dir() else 0)
+        f'{store}: {seen} driver records of {len(caches)} caches, {copied} new, {bad} refused (envelope), '
+        f'{in_store} in the store'
     )
 
 
@@ -303,7 +301,7 @@ def pack(store: Path, corpus: Path) -> None:
         if p.stem in named and p.stem not in own and hashlib.sha256(p.read_bytes()).hexdigest() == p.stem
     )
     if not members:
-        sys.exit('%s: no driver records or libraries staged (harvest.py --volume or --records-from first)' % store)
+        sys.exit(f'{store}: no driver records or libraries staged (harvest.py --volume or --records-from first)')
     data = io.BytesIO()
     with tarfile.open(fileobj=data, mode='w', format=tarfile.USTAR_FORMAT) as tar:
         for path in members:
@@ -312,19 +310,16 @@ def pack(store: Path, corpus: Path) -> None:
             with path.open('rb') as f:
                 tar.addfile(info, f)
     digest = hashlib.sha256(data.getvalue()).hexdigest()
-    out = DEVICE / ('m2v-device-%s.tar' % digest[:16])
+    out = DEVICE / f'm2v-device-{digest[:16]}.tar'
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_bytes(data.getvalue())
+    record_count = sum(1 for p in members if p.parts[-3] == 'records')
+    library_count = sum(1 for p in members if p.parts[-2] == 'data')
     print(
-        '%s: %d driver records, %d libraries (of %d made from bytes the corpus names)'
-        % (
-            out,
-            sum(1 for p in members if p.parts[-3] == 'records'),
-            sum(1 for p in members if p.parts[-2] == 'data'),
-            len(named),
-        )
+        f'{out}: {record_count} driver records, {library_count} libraries '
+        f'(of {len(named)} made from bytes the corpus names)'
     )
-    print('gpu/deps.bzl:\nDEVICE_DATA = {\n    "file": "%s",\n    "sha256": "%s",\n}' % (out.name, digest))
+    print(f'gpu/deps.bzl:\nDEVICE_DATA = {{\n    "file": "{out.name}",\n    "sha256": "{digest}",\n}}')
 
 
 def option(args: list[str], name: str, many: bool = False) -> list[str] | str | None:
@@ -363,14 +358,14 @@ def main() -> None:
     if volume:
         volume = Path(volume)
         if not (volume / 'mobile').is_dir():
-            sys.exit('%s: not a mounted iPad Data volume (no mobile/)' % volume)
+            sys.exit(f'{volume}: not a mounted iPad Data volume (no mobile/)')
         found, skipped = caches(volume, opens, open_all, print)
         for where, m2v, through in found:
             with opened((*through, m2v) if through else (), print):
                 if not m2v.is_dir():
                     continue
                 sources.extend(
-                    ('%s/%s' % (where, journal), (m2v / journal).read_text(errors='replace'))
+                    (f'{where}/{journal}', (m2v / journal).read_text(errors='replace'))
                     for journal in JOURNALS
                     if (m2v / journal).is_file()
                 )
@@ -380,9 +375,10 @@ def main() -> None:
                     target = Path(save) / where.replace('/', '_')
                     shutil.rmtree(target, ignore_errors=True)
                     shutil.copytree(m2v, target, copy_function=shutil.copyfile, ignore=shutil.ignore_patterns('.*.tmp'))
+        journals = len(sources) - (len(args) - 1)
         print(
-            '%s: %d m2v caches, %d journals; %d closed containers not looked in (--open-all)'
-            % (volume, len(found), len(sources) - (len(args) - 1), len(set(skipped)))
+            f'{volume}: {len(found)} m2v caches, {journals} journals; {len(set(skipped))} closed containers not '
+            'looked in (--open-all)'
         )
     merge(corpus, sources)
 

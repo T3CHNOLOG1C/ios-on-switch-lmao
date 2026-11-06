@@ -48,7 +48,7 @@ def _xcode_env(path: str, work: Path) -> dict[str, str]:
 def _run(command: list[str | Path], env: dict[str, str]) -> str:
     result = subprocess.run([str(c) for c in command], env=env, capture_output=True, text=True, check=False)
     if result.returncode:
-        sys.exit('FAILED: %s\n%s%s' % (' '.join(map(str, command))[:600], result.stdout[-4000:], result.stderr[-6000:]))
+        sys.exit(f'FAILED: {" ".join(map(str, command))[:600]}\n{result.stdout[-4000:]}{result.stderr[-6000:]}')
     return result.stdout + result.stderr
 
 
@@ -61,7 +61,7 @@ def mock(args: argparse.Namespace, root: Path, work: Path) -> None:
             '-O1',
             '-Wall',
             '-dynamiclib',
-            '-ffile-prefix-map=%s=/switch-ios' % root,
+            f'-ffile-prefix-map={root}=/switch-ios',
             '-I',
             Path(args.abi_header).parent,
             args.mock_iokit,
@@ -92,7 +92,7 @@ def tool(args: argparse.Namespace, root: Path, work: Path) -> None:
             '-std=c++17',
             '-fobjc-arc',
             '-Wno-deprecated-declarations',
-            '-ffile-prefix-map=%s=/switch-ios' % root,
+            f'-ffile-prefix-map={root}=/switch-ios',
             '-I',
             Path(args.metal_header).parent,
             '-x',
@@ -191,7 +191,7 @@ def main() -> None:
             p.add_argument('--' + name, required=True)
     args = parser.parse_args()
     root = Path.cwd()
-    work = root / ('_seed_%s_work' % args.step)
+    work = root / f'_seed_{args.step}_work'
     if work.exists():
         shutil.rmtree(work)
     work.mkdir(parents=True)

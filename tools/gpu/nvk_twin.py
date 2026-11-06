@@ -20,7 +20,7 @@ def lc_uuid(path: str | Path, value: bytes | None = None) -> bytes:
                 Path(path).write_bytes(data)
             return bytes(data[at + 8 : at + 24])
         at += size
-    sys.exit('%s: no LC_UUID' % path)
+    sys.exit(f'{path}: no LC_UUID')
 
 
 def make_twin(nvk: str, twin: str, out: str, env: dict[str, str]) -> None:
@@ -31,7 +31,7 @@ def make_twin(nvk: str, twin: str, out: str, env: dict[str, str]) -> None:
     """
     sources = [Path(str(p) + '.source') for p in (nvk, twin)]
     if not all(p.is_file() for p in sources) or sources[0].read_text() != sources[1].read_text():
-        sys.exit("%s and %s missing or different: the twin is not of the iOS dylib's sources" % tuple(sources))
+        sys.exit(f"{sources[0]} and {sources[1]} missing or different: the twin is not of the iOS dylib's sources")
     shutil.copyfile(twin, out)
     Path(out).chmod(0o755)
     pinned = any(line.split()[1:] for line in sources[0].read_text().splitlines() if line.startswith('nvk-build-id'))
@@ -41,4 +41,4 @@ def make_twin(nvk: str, twin: str, out: str, env: dict[str, str]) -> None:
         ['/usr/bin/codesign', '--force', '--sign', '-', str(out)], env=env, capture_output=True, text=True, check=False
     )
     if result.returncode:
-        sys.exit('codesign %s: %s' % (out, result.stderr))
+        sys.exit(f'codesign {out}: {result.stderr}')

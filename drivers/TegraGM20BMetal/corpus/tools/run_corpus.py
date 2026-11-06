@@ -70,27 +70,20 @@ def run_one(tag: str, path: str, out: Path, timeout: int) -> tuple[str, int]:
         begins = [l for l in lines if l.startswith('BEGIN ')]
         if not begins:
             with rows.open('a') as f:
-                f.write(
-                    '%s\t-\t-\t-\tERR\t%s\t%s\t0\n'
-                    % (
-                        tag,
-                        'hang' if hung else 'crash',
-                        ' | '.join(l for l in lines[-6:] if 'NVK is not a conformant' not in l)[:1500].replace(
-                            '\t', ' '
-                        ),
-                    )
-                )
+                kind = 'hang' if hung else 'crash'
+                last = ' | '.join(l for l in lines[-6:] if 'NVK is not a conformant' not in l)[:1500].replace('\t', ' ')
+                f.write(f'{tag}\t-\t-\t-\tERR\t{kind}\t{last}\t0\n')
             break
         _, pos, name = begins[-1].split(' ', 2)
         tail = [l for l in lines[lines.index(begins[-1]) + 1 :] if 'NVK is not a conformant' not in l][-8:]
-        why = ('hang > %ds' % timeout) if hung else ('signal %d' % -code if code < 0 else 'exit %d' % code)
+        why = f'hang > {timeout}s' if hung else (f'signal {-code}' if code < 0 else f'exit {code}')
         with rows.open('a') as f:
-            f.write(
-                '%s\t%s\t?\t?\tERR\t%s\t%s: %s\t0\n'
-                % (tag, name, 'hang' if hung else 'crash', why, ' | '.join(tail)[:1500].replace('\t', ' '))
-            )
+            kind = 'hang' if hung else 'crash'
+            last = ' | '.join(tail)[:1500].replace('\t', ' ')
+            f.write(f'{tag}\t{name}\t?\t?\tERR\t{kind}\t{why}: {last}\t0\n')
         with log.open('a') as f:
-            f.write('== %s %s (%s)\n%s\n' % (pos, name, why, '\n'.join(tail)))
+            last = '\n'.join(tail)
+            f.write(f'== {pos} {name} ({why})\n{last}\n')
         crashes += 1
         start = int(pos) + 1
         if crashes > 400:

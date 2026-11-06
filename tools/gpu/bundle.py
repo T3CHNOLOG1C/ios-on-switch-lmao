@@ -34,7 +34,7 @@ class Xcode:
         values = dict(line.split('=', 1) for line in Path(env_file).read_text().splitlines() if '=' in line)
         self.toolchain = values['XCODE_TOOLCHAIN']
         self.env = {
-            'PATH': '%s:/usr/bin:/bin' % self.toolchain,
+            'PATH': f'{self.toolchain}:/usr/bin:/bin',
             'DEVELOPER_DIR': values['DEVELOPER_DIR'],
             'TMPDIR': os.environ.get('TMPDIR', '/tmp'),
         }
@@ -46,14 +46,14 @@ class Xcode:
             [str(path), *map(str, command[1:])], env=self.env, capture_output=True, text=True, check=False
         )
         if result.returncode:
-            sys.exit('FAILED: %s\n%s%s' % (' '.join(map(str, command)), result.stdout, result.stderr))
+            sys.exit(f'FAILED: {" ".join(map(str, command))}\n{result.stdout}{result.stderr}')
         return result.stdout + result.stderr
 
 
 def arm64(path: Path) -> None:
     magic, cputype, subtype = struct.unpack_from('<3I', Path(path).read_bytes())
     if (magic, cputype, subtype & 0xFFFFFF) != (0xFEEDFACF, 0x100000C, 0):
-        sys.exit('%s: expected a plain arm64 (subtype 0) Mach-O' % path)
+        sys.exit(f'{path}: expected a plain arm64 (subtype 0) Mach-O')
 
 
 def sign(xcode: Xcode, path: Path, identifier: str) -> str:
@@ -63,7 +63,7 @@ def sign(xcode: Xcode, path: Path, identifier: str) -> str:
     if not re.search(r'^Page size=4096$', detail, re.MULTILINE) or not re.search(
         r'^Hash type=sha256', detail, re.MULTILINE
     ):
-        sys.exit('%s: expected a SHA-256 signature with 4 KiB pages' % path)
+        sys.exit(f'{path}: expected a SHA-256 signature with 4 KiB pages')
     return re.search(r'^CDHash=([0-9a-f]{40})$', detail, re.MULTILINE)[1]
 
 
@@ -130,7 +130,7 @@ def main() -> None:
         )
         + '\n'
     )
-    print('bundle: plugin %s nvk %s' % (plugin_cdhash, nvk_cdhash))
+    print(f'bundle: plugin {plugin_cdhash} nvk {nvk_cdhash}')
 
 
 if __name__ == '__main__':

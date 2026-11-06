@@ -54,7 +54,7 @@ def framework(tag: str) -> str:
 
 
 def bucket(tag: str, name: str, phase: str, detail: str) -> str:
-    s = '%s %s %s %s' % (tag + '/' + name, phase, detail, '')
+    s = f'{tag}/{name} {phase} {detail} '
     if phase == 'container':
         return 'not AIR'
     if any(re.search(r, s) for r in A10_NA):
@@ -101,36 +101,17 @@ for fw in sorted(set(pb) | set(pa), key=lambda f: -pa.get(f, {}).get('entry', 0)
     tot_b.update(b)
     tot_a.update(a)
     print(
-        '%s\t%d\t%d\t%d\t%.1f\t%d\t%d\t%d\t%d'
-        % (
-            fw,
-            a['entry'],
-            b['ok'],
-            a['ok'],
-            100.0 * a['ok'] / max(1, a['entry']),
-            a['z'],
-            a['gap'],
-            a['harness'],
-            a['not on A10'],
-        )
+        f'{fw}\t{a["entry"]}\t{b["ok"]}\t{a["ok"]}\t{100.0 * a["ok"] / max(1, a["entry"]):.1f}\t{a["z"]}'
+        f'\t{a["gap"]}\t{a["harness"]}\t{a["not on A10"]}'
     )
 print(
-    'TOTAL\t%d\t%d\t%d\t%.1f\t%d\t%d\t%d\t%d'
-    % (
-        tot_a['entry'],
-        tot_b['ok'],
-        tot_a['ok'],
-        100.0 * tot_a['ok'] / max(1, tot_a['entry']),
-        tot_a['z'],
-        tot_a['gap'],
-        tot_a['harness'],
-        tot_a['not on A10'],
-    )
+    f'TOTAL\t{tot_a["entry"]}\t{tot_b["ok"]}\t{tot_a["ok"]}\t{100.0 * tot_a["ok"] / max(1, tot_a["entry"]):.1f}'
+    f'\t{tot_a["z"]}\t{tot_a["gap"]}\t{tot_a["harness"]}\t{tot_a["not on A10"]}'
 )
 reachable = tot_a['entry'] - tot_a['not on A10'] - tot_a['harness']
 print(
-    'reachable on A10, harness-supplied inputs aside: %d, pass %d (%.1f%%)'
-    % (reachable, tot_a['ok'], 100.0 * tot_a['ok'] / max(1, reachable))
+    f'reachable on A10, harness-supplied inputs aside: {reachable}, pass {tot_a["ok"]} '
+    f'({100.0 * tot_a["ok"] / max(1, reachable):.1f}%)'
 )
 if '--ms' in sys.argv:
     for fw in ('QuartzCore',):
@@ -141,8 +122,8 @@ if '--ms' in sys.argv:
         return xs[min(len(xs) - 1, int(p * len(xs)))] if xs else 0
 
     print(
-        'compile+make ms (host): all p50 %d p99 %d max %d; QuartzCore p50 %d p99 %d max %d'
-        % (q(allms, 0.5), q(allms, 0.99), allms[-1] if allms else 0, q(ms, 0.5), q(ms, 0.99), ms[-1] if ms else 0)
+        f'compile+make ms (host): all p50 {q(allms, 0.5)} p99 {q(allms, 0.99)} max {allms[-1] if allms else 0}; '
+        f'QuartzCore p50 {q(ms, 0.5)} p99 {q(ms, 0.99)} max {ms[-1] if ms else 0}'
     )
     gaps = collections.Counter()
     for (t, n), e in ea.items():
@@ -151,4 +132,4 @@ if '--ms' in sys.argv:
             d = re.sub(r'^with [^:]*: ', '', d)
             gaps[re.sub(r'\d+', 'N', d[:110])] += 1
     for g, n in gaps.most_common():
-        print('gap\t%d\t%s' % (n, g))
+        print(f'gap\t{n}\t{g}')

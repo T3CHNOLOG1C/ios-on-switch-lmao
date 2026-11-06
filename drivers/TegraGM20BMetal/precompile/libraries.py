@@ -75,7 +75,7 @@ def pins(volume: str) -> None:
     for path in sorted(str(p.relative_to(volume)) for p in Path(volume).rglob('*.metallib') if p.is_file()):
         data = (Path(volume) / path).read_bytes()
         if names(data):
-            print('%s  %s' % (hashlib.sha256(data).hexdigest(), path))
+            print(f'{hashlib.sha256(data).hexdigest()}  {path}')
 
 
 def index(root: str, out: str, devices: list[str]) -> None:
@@ -87,11 +87,12 @@ def index(root: str, out: str, devices: list[str]) -> None:
     for device in sorted(('/' + d.lstrip('/') for d in devices), key=lambda d: Path(d).parts):
         found = names((Path(root) / device.lstrip('/')).read_bytes())
         if found is None:
-            sys.exit('%s/%s is not a Metal library' % (root, device))
+            sys.exit(f'{root}/{device} is not a Metal library')
         for name in set(found):
             table[name].append(device)
     Path(out).write_text(json.dumps(dict(sorted(table.items())), indent=0) + '\n')
-    print('%s: %d function names in %d libraries' % (out, len(table), len({p for v in table.values() for p in v})))
+    libraries = len({p for v in table.values() for p in v})
+    print(f'{out}: {len(table)} function names in {libraries} libraries')
 
 
 STAGE = re.compile(r'\| ([vfklp]) (\S+)( [^|]*?)?(?= \|)')
@@ -154,23 +155,21 @@ def resolve(index_json: str, corpus: str, out: str) -> None:
                 if lib or not choice:
                     continue
                 if kind == 'S':
-                    text = text[: m.start(3) - 5] + 'lib=%s ' % choice + text[m.start(3) - 5 :]
+                    text = text[: m.start(3) - 5] + f'lib={choice} ' + text[m.start(3) - 5 :]
                 else:
                     text = text[: m.end(2)] + ' lib=' + choice + text[m.end(2) :]
             lines.append(text)
             first = next((lib for _, lib, _ in stages if lib), None) or choice or QC
             rows[first if how in ('qc', 'journaled', 'resolved', 'guessed') else how][(kind, how)] += 1
     Path(out).write_text('\n'.join(lines) + '\n')
-    print(
-        '%-80s %s'
-        % (
-            'library (lines: qc = QuartzCore by default, journaled, resolved by a unique name, guessed: in each '
-            'of up to %d)' % GUESSES,
-            '',
-        )
+    header = (
+        'library (lines: qc = QuartzCore by default, journaled, resolved by a unique name, guessed: in each '
+        f'of up to {GUESSES})'
     )
+    print(f'{header:<80} ')
     for lib, counts in sorted(rows.items(), key=lambda kv: -sum(kv[1].values())):
-        print('  %-78s %s' % (lib, ' '.join('%s.%s=%d' % (k, h, n) for (k, h), n in sorted(counts.items()))))
+        tally = ' '.join(f'{k}.{h}={n}' for (k, h), n in sorted(counts.items()))
+        print(f'  {lib:<78} {tally}')
 
 
 def main() -> None:

@@ -53,5 +53,5 @@ for i in range(icount):
                         sa, ss = struct.unpack_from('<QQ', cmds, so + 32)
                         if sa <= w < sa + ss:
                             sect = cmds[so : so + 16].rstrip(b'\0').decode()
-                    print('%x\t%s\t%s,%s' % (w, path, seg, sect))
+                    print(f'{w:x}\t{path}\t{seg},{sect}')
         o += cs

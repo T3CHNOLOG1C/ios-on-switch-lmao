@@ -76,39 +76,23 @@ for tag, name, stage, variant, result, phase, detail, ms in (r[:8] for r in rows
         c = category(phase, detail)
         cats[c] += 1
         catlibs[c].add(tag)
-        examples.setdefault(c, '%s %s: %s' % (tag, name, detail[:200]))
+        examples.setdefault(c, f'{tag} {name}: {detail[:200]}')
 tot = collections.Counter()
 lines = ['framework\tentry points\tok\tpass%\tvariants\tvariants ok\tlibrary functions']
 for fw, e in per.items():
     tot.update(e)
     n = e['entry points']
-    lines.append(
-        '%s\t%d\t%d\t%s\t%d\t%d\t%d'
-        % (
-            fw,
-            n,
-            e['ok'],
-            ('%.1f' % (100.0 * e['ok'] / n)) if n else '-',
-            e['variants tried'],
-            e['variants ok'],
-            e['library functions'],
-        )
-    )
+    passed = f'{100.0 * e["ok"] / n:.1f}' if n else '-'
+    lines.append(f'{fw}\t{n}\t{e["ok"]}\t{passed}\t{e["variants tried"]}\t{e["variants ok"]}\t{e["library functions"]}')
 lines.append(
-    'TOTAL\t%d\t%d\t%.1f\t%d\t%d\t%d'
-    % (
-        tot['entry points'],
-        tot['ok'],
-        100.0 * tot['ok'] / max(1, tot['entry points']),
-        tot['variants tried'],
-        tot['variants ok'],
-        tot['library functions'],
-    )
+    f'TOTAL\t{tot["entry points"]}\t{tot["ok"]}\t{100.0 * tot["ok"] / max(1, tot["entry points"]):.1f}'
+    f'\t{tot["variants tried"]}\t{tot["variants ok"]}\t{tot["library functions"]}'
 )
 (run / 'summary.tsv').write_text('\n'.join(lines) + '\n')
 clines = ['category\tfailures\tlibraries\texample']
 for c, n in cats.most_common():
-    clines.append('%s\t%d\t%d\t%s' % (c, n, len(catlibs[c]), examples[c].replace('\t', ' ')))
+    example = examples[c].replace('\t', ' ')
+    clines.append(f'{c}\t{n}\t{len(catlibs[c])}\t{example}')
 (run / 'categories.tsv').write_text('\n'.join(clines) + '\n')
 print(lines[-1])
 print('\n'.join(clines))

@@ -37,7 +37,7 @@ def main() -> None:
             p.add_argument('--' + name, required=True)
     args = parser.parse_args()
     root = Path.cwd()
-    work = root / ('_rawpack_%s_work' % args.step)
+    work = root / f'_rawpack_{args.step}_work'
     if work.exists():
         shutil.rmtree(work)
     (work / 'home').mkdir(parents=True)
@@ -61,7 +61,7 @@ def main() -> None:
             check=False,
         )
         if result.returncode:
-            sys.exit("the pack generator's tools failed:\n%s" % (result.stdout + result.stderr)[-6000:])
+            sys.exit(f"the pack generator's tools failed:\n{(result.stdout + result.stderr)[-6000:]}")
         shutil.rmtree(work)
         return
     tools = root / args.shader_tools
@@ -93,7 +93,7 @@ def main() -> None:
         check=False,
     )
     if result.returncode or not (generated / 'pack.bin').is_file():
-        sys.exit('the pack generator failed:\n%s' % (result.stdout + result.stderr)[-6000:])
+        sys.exit(f'the pack generator failed:\n{(result.stdout + result.stderr)[-6000:]}')
     print('\n'.join(line for line in result.stdout.splitlines() if not line.startswith('  skipped')))
     out = Path(args.out)
     if out.exists():
@@ -101,7 +101,7 @@ def main() -> None:
     out.mkdir(parents=True)
     shutil.copyfile(generated / 'pack.bin', out / 'pack.bin')
     shutil.rmtree(work)
-    print('raw pack: made, stack %s' % stack)
+    print(f'raw pack: made, stack {stack}')
 
 
 if __name__ == '__main__':

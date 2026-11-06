@@ -21,7 +21,7 @@ def main() -> None:
     options, command = argv[:split], argv[split + 1 :]
     xcode = dict(line.split('=', 1) for line in Path(options[0]).read_text().splitlines() if '=' in line)
     env = {
-        'PATH': '%s:/usr/bin:/bin:/usr/sbin:/sbin' % xcode['XCODE_TOOLCHAIN'],
+        'PATH': f'{xcode["XCODE_TOOLCHAIN"]}:/usr/bin:/bin:/usr/sbin:/sbin',
         'DEVELOPER_DIR': xcode['DEVELOPER_DIR'],
         'ZERO_AR_DATE': '1',
         'TMPDIR': os.environ.get('TMPDIR', '/tmp'),

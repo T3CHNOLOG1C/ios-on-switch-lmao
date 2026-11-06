@@ -43,6 +43,8 @@ for p in files:
     if not dup:
         seen[h] = t
         uniq.append((t, str(p)))
-(base / 'corpus_all.tsv').write_text(''.join('%s\t%s\t%s\t%d\t%s\n' % r for r in rows))
-(base / 'corpus.tsv').write_text(''.join('%s\t%s\n' % r for r in uniq))
+(base / 'corpus_all.tsv').write_text(
+    ''.join(f'{t}\t{path}\t{digest}\t{size}\t{dup}\n' for t, path, digest, size, dup in rows)
+)
+(base / 'corpus.tsv').write_text(''.join(f'{t}\t{path}\n' for t, path in uniq))
 print(len(rows), 'files', len(uniq), 'unique', sum(r[3] for r in rows) >> 20, 'MiB')

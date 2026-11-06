@@ -68,4 +68,4 @@ with open(sys.argv[4]) as image_list:
                     if s in WANT:
                         hits.add(s)
         if hits:
-            print('%s\t%s' % (image, ' '.join(sorted(hits))), flush=True)
+            print(f'{image}\t{" ".join(sorted(hits))}', flush=True)

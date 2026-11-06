@@ -58,9 +58,9 @@ def main() -> None:
         subprocess.run(['diskutil', 'info', '-plist', str(data)], capture_output=True, check=True).stdout
     )
     if info.get('VolumeUUID') != DATA_UUID or info.get('MountPoint') != str(data) or not info.get('WritableVolume'):
-        sys.exit('%s is not the iPadOS Data volume %s mounted read-write' % (data, DATA_UUID))
+        sys.exit(f'{data} is not the iPadOS Data volume {DATA_UUID} mounted read-write')
     if not (data / 'mobile').is_dir():
-        sys.exit('%s has no mobile/; wrong volume?' % data)
+        sys.exit(f'{data} has no mobile/; wrong volume?')
     target = data / 'ngpu/addons' / NAME
     seed_target = data / 'ngpu/addons/TegraGM20BMetal.m2v-seed'
     raw_target = data / 'ngpu/addons/TegraGM20BMetal.raw'
@@ -72,7 +72,7 @@ def main() -> None:
         return
     source = build / 'ngpu/addons' / NAME
     if not (source / 'TegraGM20BMetal').is_file() or not (build / 'TegraGM20BMetal.trustcache').is_file():
-        sys.exit('stage-tegra-gm20b-metal: no plugin build in %s (bazel build //gpu:bundle)' % build)
+        sys.exit(f'stage-tegra-gm20b-metal: no plugin build in {build} (bazel build //gpu:bundle)')
     for directory in (data / 'ngpu', data / 'ngpu/addons'):
         directory.mkdir(exist_ok=True)
         directory.chmod(0o755)

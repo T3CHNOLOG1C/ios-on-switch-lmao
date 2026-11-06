@@ -124,7 +124,7 @@ class Cache:
             if r in self.images:
                 names |= self.exports(r, seen)
             else:
-                print('  (re-export %s not in cache)' % r)
+                print(f'  (re-export {r} not in cache)')
         self.cache[path] = names
         return names
 
