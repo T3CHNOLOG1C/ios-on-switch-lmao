@@ -1,0 +1,15 @@
+# kits/SwitchRing on the host.
+#
+#   bazel test //kits/SwitchRing/test:all
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//bazel/testing:defs.bzl", "host_test")
+
+lint_files()
+
+host_test(
+    name = "switch_ring_test",
+    srcs = [
+        "switch_ring_test.cpp",
+        "//kits/SwitchRing:SwitchRing.h",
+    ],
+)
