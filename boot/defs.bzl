@@ -297,13 +297,15 @@ def _boot_package_impl(ctx):
     switchroot = {
         "bl31.bin": ctx.file.bl31,
         "bl33.bin": bl33,
+        "bootlogo.bmp": ctx.file.bootlogo,
     }
     package = ctx.actions.declare_directory(ctx.attr.out)
     commands = [
         'set -e; out="$1"',
-        '/bin/mkdir -p "$out/switchroot/ios" "$out/bootloader/ini"',
+        '/bin/mkdir -p "$out/switchroot/ios" "$out/bootloader/ini" "$out/bootloader/res"',
         '/bin/cp -R -L "%s" "$out/overlay"' % overlay.path,
         '/bin/cp -L "%s" "$out/bootloader/ini/ios.ini"' % ctx.file.ini.path,
+        '/bin/cp -L "%s" "$out/bootloader/res/icon_ios.bmp"' % ctx.file.icon.path,
     ] + [
         '/bin/cp -L "%s" "$out/switchroot/ios/%s"' % (f.path, n)
         for n, f in sorted(switchroot.items())
@@ -311,7 +313,7 @@ def _boot_package_impl(ctx):
     ctx.actions.run_shell(
         command = "\n".join(commands),
         arguments = [package.path],
-        inputs = [overlay, ctx.file.ini] + switchroot.values(),
+        inputs = [overlay, ctx.file.ini, ctx.file.icon] + switchroot.values(),
         outputs = [package],
         mnemonic = "BootPackage",
         progress_message = "Assembling the iOS boot entry",
@@ -333,8 +335,9 @@ def _tool(label):
 
 boot_package = rule(
     implementation = _boot_package_impl,
-    doc = "The Hekate boot entry (switchroot/ios/*, bootloader/ini/ios.ini, overlay/<absolute path>) from the " +
-          "prelinked kernel, the IPSW's trust caches, the GPU trust cache, the overlay and the native loader's sources.",
+    doc = "The Hekate boot entry (switchroot/ios/*, bootloader/ini/ios.ini, bootloader/res/icon_ios.bmp, " +
+          "overlay/<absolute path>) from the prelinked kernel, the IPSW's trust caches, the GPU trust cache, the " +
+          "overlay, the boot logo and the native loader's sources.",
     attrs = {
         "out": attr.string(default = "ios"),
         "ini": attr.label(mandatory = True, allow_single_file = True, doc = "bootloader/ini/ios.ini"),
@@ -347,6 +350,8 @@ boot_package = rule(
         "bl31": attr.label(mandatory = True, allow_single_file = True),
         "bl33": attr.label(mandatory = True, allow_single_file = True),
         "dtb": attr.label(mandatory = True, allow_single_file = True),
+        "bootlogo": attr.label(mandatory = True, allow_single_file = True),
+        "icon": attr.label(mandatory = True, allow_single_file = True),
         "exporter": attr.label(mandatory = True, allow_single_file = True),
         "bt_patch": attr.label(mandatory = True, allow_single_file = True),
         "overlay_manifest": attr.label(mandatory = True, allow_single_file = True),

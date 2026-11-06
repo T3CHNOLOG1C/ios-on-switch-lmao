@@ -1,5 +1,5 @@
-# The Hekate boot entry: what goes to the SD card's FAT (switchroot/ios/*, bootloader/ini/ios.ini) and the
-# userland overlay the deploy copies to Data (overlay/<absolute path>).
+# The Hekate boot entry: what goes to the SD card's FAT (switchroot/ios/*, bootloader/ini/ios.ini,
+# bootloader/res/icon_ios.bmp) and the userland overlay the deploy copies to Data (overlay/<absolute path>).
 #
 #   bazel build //:boot          -> bazel-bin/boot/ios/   (the CMake flow's out/boot/ios)
 #
@@ -78,10 +78,12 @@ boot_package(
     app_trust = "//ipsw:app_cryptex_trust_cache",
     bl31 = "//bazel/pinned:firmware/bl31.bin",
     bl33 = "//bazel/pinned:firmware/bl33.bin",
+    bootlogo = "//boot/logo:bootlogo.bmp",
     bt_patch = "//bazel/pinned:firmware/BCM4356A3.hcd",
     data_seed = "//bazel/pinned:data-seed/data-v10.dbr",
     dtb = "//bazel/pinned:firmware/oled-sku3.dtb",
     exporter = "//bazel/pinned:firmware/exporter.uimg",
+    icon = "//boot/logo:icon_ios.bmp",
     ini = ":ios_ini",
     kernel = "//kernel:kernel",
     linker_script = ":loader/link.ld",
