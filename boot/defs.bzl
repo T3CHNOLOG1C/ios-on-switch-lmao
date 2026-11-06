@@ -317,7 +317,7 @@ def _boot_package_impl(ctx):
         '/bin/mkdir -p "$out/switchroot/ios" "$out/bootloader/ini" "$out/bootloader/res"',
         '/bin/cp -R -L "%s" "$out/overlay"' % overlay.path,
         '/bin/cp -L "%s" "$out/bootloader/ini/ios.ini"' % ctx.file.ini.path,
-        '/bin/cp -L "%s" "$out/bootloader/res/icon_ios.bmp"' % ctx.file.icon.path,
+        '/bin/cp -L "%s" "$out/bootloader/res/icon_ios_hue.bmp"' % ctx.file.icon.path,
     ] + [
         '/bin/cp -L "%s" "$out/switchroot/ios/%s"' % (f.path, n)
         for n, f in sorted(switchroot.items())
@@ -347,7 +347,7 @@ def _tool(label):
 
 boot_package = rule(
     implementation = _boot_package_impl,
-    doc = "The Hekate boot entry (switchroot/ios/*, bootloader/ini/ios.ini, bootloader/res/icon_ios.bmp, " +
+    doc = "The Hekate boot entry (switchroot/ios/*, bootloader/ini/ios.ini, bootloader/res/icon_ios_hue.bmp, " +
           "overlay/<absolute path>) from the prelinked kernel, the IPSW's trust caches, the GPU trust cache, the " +
           "overlay, the boot logo and the native loader's sources.",
     attrs = {

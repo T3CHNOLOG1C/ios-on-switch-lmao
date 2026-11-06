@@ -20,7 +20,7 @@ pkg_files(
 
 pkg_files(
     name = "sd_res",
-    srcs = ["//boot/logo:icon_ios.bmp"],
+    srcs = ["//boot/logo:icon_ios_hue.bmp"],
     prefix = "bootloader/res",
 )
 

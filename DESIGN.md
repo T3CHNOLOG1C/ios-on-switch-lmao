@@ -172,7 +172,7 @@ top framed in ink on paper. The DOM lists them in boot order.
 
 The Switch pulled apart into its three pieces, the middle one an iPad screen with its home indicator, in ink on a
 Kapton amber tile. `.github/logo.svg` is the one source: a square viewBox at 0, one `<rect>` for the tile and one
-`<path>` for the mark, which boot/logo rasterises into hekate's `icon_ios.bmp`.
+`<path>` for the mark.
 
 ## Do's and Don'ts
 

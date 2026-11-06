@@ -82,7 +82,7 @@ Never write "IOSwitch" or "ioswitch" (any case) in code, file names, logs, paths
   - `switchroot/ios/`;
   - `bootloader/ini/ios.ini`, hekate entry `iOS`;
   - `bootloader/payloads/install-ios.bin`;
-  - `bootloader/res/icon_ios.bmp`.
+  - `bootloader/res/icon_ios_hue.bmp`.
 - Project name `ios-on-switch-lmao`: GitHub `brunostjohn/ios-on-switch-lmao`, docs `ios-on-switch-lmao.brunostjohn.com`.
 - Source extensions:
   - `.c` for C, `.cpp` for C++, `.h` for headers, `.mm` for Objective-C++, `.S` for assembly;

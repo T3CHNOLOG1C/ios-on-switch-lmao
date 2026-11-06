@@ -11,7 +11,7 @@ from pathlib import Path
 
 FILES = ['bl31.bin', 'bl33.bin']
 INI = (
-    '[iOS]\nl4t=1\nboot_prefixes=/switchroot/ios/\nid=iOS\nicon=bootloader/res/icon_ios.bmp\n'
+    '[iOS]\nl4t=1\nboot_prefixes=/switchroot/ios/\nid=iOS\nicon=bootloader/res/icon_ios_hue.bmp\n'
     'logopath=switchroot/ios/bootlogo.bmp\nbootwait=0\n'
     'scan_dev_for_extlinux=setexpr.l ios_uboot *0x60005010\nbootcmd_mmc0=true\n'
 )

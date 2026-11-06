@@ -77,6 +77,16 @@ class SyncTest(unittest.TestCase):
         changed, _ = cards.sync_boot_entry(self.fat, self.root / 'pkg1', log)
         self.assertEqual(changed, ['switchroot/ios/bl33.bin'])
 
+    def test_the_icons_former_name_goes_and_other_icons_stay(self):
+        for relative in ('bootloader/res/icon_ios.bmp', 'bootloader/res/icon_android_hue.bmp'):
+            (self.fat / relative).parent.mkdir(parents=True, exist_ok=True)
+            (self.fat / relative).write_bytes(b'x')
+        _, removed = cards.sync_boot_entry(self.fat, self.root / 'pkg0', Log())
+        self.assertIn('bootloader/res/icon_ios.bmp', removed)
+        files = self.snapshot()
+        self.assertNotIn('bootloader/res/icon_ios.bmp', files)
+        self.assertEqual(files['bootloader/res/icon_android_hue.bmp'], b'x')
+
     def test_a_copy_of_the_entry_under_another_name_is_replaced_in_place(self):
         old = (
             '[Old]\nl4t=1\nboot_prefixes=/switchroot/old-entry/\nid=OLD\nbootwait=0\n'

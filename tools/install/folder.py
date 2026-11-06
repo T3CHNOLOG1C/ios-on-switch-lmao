@@ -1,7 +1,7 @@
 """The folder //:image makes, merged onto the SD card's root, and how it is merged.
 
     switchroot/ios/            the boot package's files and install/ (manifest.bin, part-NN.bin)
-    bootloader/ini/ios.ini     the hekate entry, and its icon bootloader/res/icon_ios.bmp
+    bootloader/ini/ios.ini     the hekate entry, and its icon bootloader/res/icon_ios_hue.bmp
     bootloader/payloads/install-ios.bin
 
 Merging writes only those paths: switchroot/ios/ and its install/ lose files the folder does not have (except the

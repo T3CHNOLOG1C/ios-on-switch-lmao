@@ -9,9 +9,10 @@ Guard rails (every command):
   * the target is the one partition target.py selects (any size the kernel takes), Linux-data or APFS typed, not the
     FAT, not emuMMC; no other APFS or iOS entry on the card (the kernel takes the only one);
   * the hybrid MBR may list the target only as the whole partition (hekate lists l4t), never part of it.
-Writes on the FAT go only to switchroot/ios/*, bootloader/ini/ios.ini and bootloader/res/icon_ios.bmp (by name), and
+Writes on the FAT go only to switchroot/ios/*, bootloader/ini/ios.ini and bootloader/res/icon_ios_hue.bmp (by name), and
 remove a copy of this boot
-entry under the project's former names (renamed.py); on the iPad volumes only to the paths the caller names.
+entry under the project's former names (renamed.py) and the icon's former name (FORMER_ICONS); on the iPad volumes only
+to the paths the caller names.
 """
 
 import contextlib
@@ -28,7 +29,9 @@ from tools.install import gpt, host, renamed, target as targets
 LINUX_MBR = 0x83
 BOOT_ENTRY = 'switchroot/ios'
 INI = 'bootloader/ini/ios.ini'
-ICON = 'bootloader/res/icon_ios.bmp'
+ICON = 'bootloader/res/icon_ios_hue.bmp'
+# The menu icon before Nyx tinted it (an untinted tile): hekate never reads it once the ini names ICON.
+FORMER_ICONS = ('bootloader/res/icon_ios.bmp',)
 # The user's own files in the entry's folder, which no package ships: the loader reads bootargs.txt at boot.
 USER_FILES = ('bootargs.txt',)
 HASH_CHUNK = 8 << 20
@@ -299,6 +302,11 @@ def sync_boot_entry(
                 if not dry_run:
                     path.unlink()
     removed += renamed.remove_older_boot_entries(fat_root, INI, BOOT_ENTRY, dry_run)
+    for relative in FORMER_ICONS:
+        if (fat_root / relative).is_file():
+            removed.append(relative)
+            if not dry_run:
+                (fat_root / relative).unlink()
     for relative in list(wanted) + removed:  # AppleDouble files, by name only
         double = (fat_root / relative.rstrip('/')).with_name('._' + Path(relative.rstrip('/')).name)
         if double.exists() and not dry_run:

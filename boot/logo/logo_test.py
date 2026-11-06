@@ -137,9 +137,9 @@ class BootLogo(unittest.TestCase):
         location = runfiles.Create().Rlocation
         files = {
             name: Path(location(f'_main/boot/logo/{name}')).read_bytes()
-            for name in ('apple-logo~ipad.png', 'bootlogo.bmp', 'icon_ios.bmp')
+            for name in ('apple-logo~ipad.png', 'bootlogo.bmp', 'icon_ios_hue.bmp')
         }
-        cls.png, cls.bootlogo, cls.icon = files['apple-logo~ipad.png'], files['bootlogo.bmp'], files['icon_ios.bmp']
+        cls.png, cls.bootlogo, cls.icon = files['apple-logo~ipad.png'], files['bootlogo.bmp'], files['icon_ios_hue.bmp']
         cls.progressui = progressui_panel(cls.png, display_boot_rotation())
 
     def test_hekate_and_progressui_draw_the_same_panel(self) -> None:
@@ -180,25 +180,18 @@ class BootLogo(unittest.TestCase):
         self.assertTrue(all(row[i] == row[i + 1] == row[i + 2] for row in rows for i in range(0, len(row), 3)))
 
     def test_icon_is_what_nyx_reads(self) -> None:
-        size, width, height, pixels = read_bmp(self.icon)
+        size, width, height, _ = read_bmp(self.icon)
         self.assertEqual((size, width, height), (len(self.icon), 192, 192))
-        self.assertTrue(all(pixels[i + 3] == 255 for i in range(0, len(pixels), 4)))
 
-    def test_icon_is_the_project_mark_on_its_tile(self) -> None:
-        mark = Path(runfiles.Create().Rlocation('_main/.github/logo.svg')).read_text()
-        tile = bytes.fromhex(re.search(r'<rect\b[^>]*\bfill="#(\w{6})"', mark).group(1))[::-1]
-        ink = bytes.fromhex(re.search(r'<path\b[^>]*\bfill="#(\w{6})"', mark).group(1))[::-1]
+    def test_icon_is_a_hue_icon_as_nyx_draws_its_own(self) -> None:
         _, _, _, pixels = read_bmp(self.icon)
-        colours = {pixels[i : i + 3] for i in range(0, len(pixels), 4)}
-        widest = max(range(3), key=lambda i: abs(ink[i] - tile[i]))
-        for colour in colours:
-            share = (colour[widest] - tile[widest]) / (ink[widest] - tile[widest])
-            for t, k, v in zip(tile, ink, colour, strict=True):
-                self.assertLessEqual(abs(t + (k - t) * share - v), 1, f'{colour.hex()} is not a tile-to-ink blend')
-        self.assertIn(tile, colours)
-        self.assertIn(ink, colours)
-        for corner in (0, 191 * 4, 191 * 192 * 4, (192 * 192 - 1) * 4):
-            self.assertEqual(pixels[corner : corner + 3], tile)
+        self.assertEqual({pixels[i : i + 3] for i in range(0, len(pixels), 4)}, {b'\xff\xff\xff'})
+        lit = [i // 4 for i in range(0, len(pixels), 4) if pixels[i + 3] > 127]
+        xs, ys = [i % 192 for i in lit], [i // 192 for i in lit]
+        width, height = max(xs) - min(xs) + 1, max(ys) - min(ys) + 1
+        self.assertLessEqual(abs(max(width, height) - 160), 1, f'glyph {width}x{height}')
+        self.assertLessEqual(abs(min(xs) + max(xs) - 191), 1)
+        self.assertLessEqual(abs(min(ys) + max(ys) - 191), 1)
 
     def test_progressui_finds_this_logo_at_scale_1_and_2(self) -> None:
         manifest = json.loads(Path(runfiles.Create().Rlocation('_main/overlay/manifest.json')).read_text())

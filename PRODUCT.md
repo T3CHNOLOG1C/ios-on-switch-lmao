@@ -31,7 +31,7 @@ drivers, arm64e translation and Metal-to-Vulkan path between them.
 ## Operating Context
 
 - Started from hekate's **More Configs** menu, next to Android and Linux, with its own menu icon
-  (`bootloader/res/icon_ios.bmp`).
+  (`bootloader/res/icon_ios_hue.bmp`).
 - Installed by an image builder that runs on macOS (`bazelisk run //:image`) and a hekate payload (`install-ios.bin`).
 - Docs are a Mintlify site built from `docs/`, served at ios-on-switch-lmao.brunostjohn.com.
 

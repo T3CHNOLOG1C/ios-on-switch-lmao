@@ -65,7 +65,7 @@ If you already use Homebrew, `brew install bazelisk` does the same thing.
     to set file owners inside the image. The first run downloads several gigabytes, so give it time.
 
     It then copies its files onto the card and ejects it. It only adds `switchroot/ios/`, `bootloader/ini/ios.ini`,
-    `bootloader/res/icon_ios.bmp` and `bootloader/payloads/install-ios.bin`, and leaves everything else on the card
+    `bootloader/res/icon_ios_hue.bmp` and `bootloader/payloads/install-ios.bin`, and leaves everything else on the card
     alone.
 
     <Accordion title="Options">
@@ -130,7 +130,7 @@ Delete or recreate the iOS partition with hekate's partition manager. Then delet
 
 - `switchroot/ios/`
 - `bootloader/ini/ios.ini`
-- `bootloader/res/icon_ios.bmp`
+- `bootloader/res/icon_ios_hue.bmp`
 - `bootloader/payloads/install-ios.bin`
 
 The installer never touches anything else on the card.
