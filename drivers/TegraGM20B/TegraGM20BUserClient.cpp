@@ -550,7 +550,7 @@ bool poolZeroNow()
 void ownerNote(const char *owner, uint64_t bytes, uint64_t ns, bool made)
 {
 	SparePool *p = spares();
-	if (!p || !tgm_stats_on())
+	if (!TGM_STATS || !p)
 		return;
 	IOLockLock(p->lock);
 	OwnerStat *o = nullptr;
@@ -596,9 +596,9 @@ PushOwner gPushOwners[kPushOwners];
 uint64_t gPushSince;
 IOLock *gPushLock;
 
-bool pushScanOn()
+constexpr bool pushScanOn()
 {
-	return tgm_stats_on() != 0;
+	return TGM_STATS != 0;
 }
 
 IOReturn ioreturn(int err)
@@ -659,7 +659,7 @@ extern "C" unsigned long tgm_owner_stats(char *out, unsigned long size)
 {
 	SparePool *p = __atomic_load_n(&gSpares, __ATOMIC_ACQUIRE);
 	unsigned long at = 0;
-	if (!p || !size)
+	if (!TGM_STATS || !p || !size)
 		return 0;
 	out[0] = 0;
 	IOLockLock(p->lock);
@@ -1414,6 +1414,8 @@ IOReturn AGXDeviceUserClient::channelDestroy(const TegraGM20BAbiChannel *in)
 // BOs they lie in (pool BOs write-combined, cached BOs their kernel mapping); every 5 s the window's line.
 void AGXDeviceUserClient::scanPushes(const tgm_push *pushes, uint32_t count, tgm_prof *prof)
 {
+	if (!TGM_STATS)
+		return;
 	PushCounts c = {};
 	PushParse p = {};
 	const Binding *hit = nullptr;

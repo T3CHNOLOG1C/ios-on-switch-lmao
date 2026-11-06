@@ -1563,12 +1563,7 @@ static struct {
 
 static int stats_on(void)
 {
-	return 1;
-}
-
-int tgm_stats_on(void)
-{
-	return stats_on();
+	return TGM_STATS;
 }
 
 static void stats_add(u64 *sum, u64 *max, u64 v)
@@ -1612,12 +1607,12 @@ void tgm_stats_import(int64_t bytes, uint64_t pa)
 {
 	u64 now;
 	u32 i;
+	if (!stats_on())
+		return;
 	if (bytes > 0)
 		__atomic_fetch_add(&stats.imports, 1, __ATOMIC_RELAXED);
 	__atomic_fetch_add(&stats.live, bytes > 0 ? 1 : -1, __ATOMIC_RELAXED);
 	__atomic_fetch_add(&stats.live_bytes, bytes, __ATOMIC_RELAXED);
-	if (!stats_on())
-		return;
 	now = nvxnu_nanotime();
 	mutex_lock(&recent_lock);
 	if (bytes < 0) {
@@ -1637,7 +1632,8 @@ void tgm_stats_import(int64_t bytes, uint64_t pa)
 
 void tgm_stats_compositor_pool(int64_t bytes)
 {
-	__atomic_fetch_add(&compositor_pool, (u64)bytes, __ATOMIC_RELAXED);
+	if (stats_on())
+		__atomic_fetch_add(&compositor_pool, (u64)bytes, __ATOMIC_RELAXED);
 }
 
 void tgm_stats_bo_alloc(uint64_t bytes, int kind, uint64_t ns, const uint64_t phase_ns[TGM_PHASES],
@@ -3183,7 +3179,8 @@ static u32 chan_fence(struct tgm_chan *chan)
 	PUSH_KICK(push);
 	chan->submitted = next;
 	idle_kicked();
-	idle_stats();
+	if (stats_on())
+		idle_stats();
 	return next;
 }
 

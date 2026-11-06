@@ -199,9 +199,15 @@ void tgm_coherency_wrote(struct tgm_coh *c);
 uint64_t tgm_coherency_read_lock(uint64_t pa);
 uint64_t tgm_coherency_write_unlock(uint64_t pa);
 
+/* The stats (every periodic tegra-gm20b line, the submissions' GPU stamps, the push scan and profile): debug kernels
+ * only; a release kernel has none of their code or strings. */
+#if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)
+#define TGM_STATS 1
+#else
+#define TGM_STATS 0
+#endif
 /* The stats: one log line per 5 s of submissions (submits, fence latency, imports, pool, MC errors).
  * tgm_stats_import(+bytes, first page) for each host import made, (-bytes, first page) for each one released. */
-int tgm_stats_on(void);
 void tgm_stats_import(int64_t bytes, uint64_t pa);
 
 /* With the stats, what making and dropping GPU memory costs the CPU ("tegra-gm20b: mem", per 5 s window):
