@@ -37,6 +37,8 @@ host_library(
         "//drivers/SwitchPower:SwitchPower.h",
         "//drivers/SwitchTouch:SwitchHID.h",
         "//drivers/SwitchTouch:SwitchTouch.h",
+        "//drivers/SwitchTouch:SwitchTouchFilter.h",
+        "//drivers/SwitchTouch:SwitchTouchTrace.h",
         "//drivers/TegraAPBDMA:TegraAPBDMA.h",
         "//drivers/TegraGPIO:TegraGPIO.h",
         "//drivers/TegraI2C:TegraI2C.h",
@@ -87,5 +89,22 @@ host_test(
     data = [
         "//drivers/SwitchTouch:SwitchHIDDevice.cpp",
         "//drivers/SwitchTouch:SwitchTouch.cpp",
+    ],
+)
+
+host_test(
+    name = "switch_touch_filter_test",
+    srcs = [
+        "//drivers/SwitchTouch:SwitchTouchFilter.h",
+        "switch_touch_filter_test.cpp",
+    ],
+)
+
+host_test(
+    name = "switch_touch_trace_test",
+    srcs = ["switch_touch_trace_test.cpp"],
+    deps = [
+        ":headers",
+        ":kernel",
     ],
 )

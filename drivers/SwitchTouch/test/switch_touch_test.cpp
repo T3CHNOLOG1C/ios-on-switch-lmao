@@ -1178,10 +1178,11 @@ static void scenarioDmaOpenFails()
     check(gReports.size() - before == 5, "five-finger reads by PIO");
 }
 
-// --- Contact filter (SwitchTouch.cpp file comment) ------------------------------------------------------------------
-// Scans of one contact at 120 Hz: raw points, then the leave. Returns the reports posted meanwhile.
+// --- Contact filter (SwitchTouchFilter.h) ----------------------------------------------------------------------------
+// Scans of one contact at 120 Hz: raw points, then the leave. Returns the reports posted meanwhile. `strengths`, when
+// given, is each scan's strength (else z for all).
 static std::vector<SwitchTouchReport> scans(unsigned id, const std::vector<std::pair<unsigned, unsigned>> &points,
-                                            unsigned z = 16)
+                                            unsigned z = 16, const std::vector<unsigned> &strengths = {})
 {
     const size_t before = gReports.size();
     const uint64_t start = gNow + 1000000;
@@ -1189,7 +1190,8 @@ static std::vector<SwitchTouchReport> scans(unsigned id, const std::vector<std::
         gSchedule(start + s * 8333333, [=] {
             const bool leave = s == points.size();
             const auto p = points[leave ? s - 1 : s];
-            gFtm4.scan({contactEvent(leave ? 4 : s == 0 ? 3 : 5, id, p.first, p.second, z)});
+            const unsigned strength = s < strengths.size() ? strengths[s] : z;
+            gFtm4.scan({contactEvent(leave ? 4 : s == 0 ? 3 : 5, id, p.first, p.second, strength)});
         });
     }
     gRunUntil(start + (points.size() + 2) * 8333333);
@@ -1209,28 +1211,37 @@ static std::pair<int, int> reported(unsigned rx, unsigned ry)
 static void scenarioFilter()
 {
     bringUp();
-    // A tap whose pad creeps 2 raw px (inside the 3 px slop): reported at its first point from touch-down to lift.
+    // A tap whose pad creeps 2 raw px (inside the hysteresis): reported at its first point from touch-down to lift.
     {
         std::vector<std::pair<unsigned, unsigned>> p;
         for (unsigned i = 0; i < 10; ++i)
             p.push_back({600, 400 + std::min(i, 2u)});
         const auto r = scans(0, p);
-        check(r.size() == 2, format("tap inside the slop: down and up only (%zu reports)", r.size()));
+        check(r.size() == 2, format("tap inside the hysteresis: down and up only (%zu reports)", r.size()));
         if (r.size() == 2)
             check(r[0].slot[0].x == r[1].slot[0].x && r[0].slot[0].y == r[1].slot[0].y,
-                  "tap inside the slop: no travel");
+                  "tap inside the hysteresis: no travel");
     }
-    // One that creeps 8 raw px: out of the slop, then exactly where the finger is (no offset carried).
+    // One that creeps 8 raw px at a steady strength once settled: real motion, reported, and lifted within the
+    // hysteresis of the finger.
     {
         std::vector<std::pair<unsigned, unsigned>> p;
         for (unsigned i = 0; i < 10; ++i)
-            p.push_back({600, 400 + 2 * std::min(i, 4u)});
+            p.push_back({600, 400 + 2 * (i < 3 ? 0 : std::min(i - 2, 4u))});
         const auto r = scans(1, p);
         const auto want = reported(600, 408);
         check(r.size() > 2, format("creeping tap: its motion is reported (%zu reports)", r.size()));
-        check(r.back().slot[1].x == want.first && r.back().slot[1].y == want.second,
-              format("creeping tap: lifted at the finger's own point (%d,%d), want (%d,%d)", r.back().slot[1].x,
+        check(std::abs(r.back().slot[1].x - want.first) <= 3 && r.back().slot[1].y == want.second,
+              format("creeping tap: lifted at (%d,%d), within 3 px of the finger's (%d,%d)", r.back().slot[1].x,
                      r.back().slot[1].y, want.first, want.second));
+    }
+    // A still tap as the panel reports it: the centroid slides 12 raw px while the pad presses down (strength rising)
+    // and 18 more while it lifts (strength falling). Neither is motion.
+    {
+        const std::vector<std::pair<unsigned, unsigned>> p = {{700, 500}, {700, 506}, {700, 512}, {700, 512},
+                                                              {700, 512}, {700, 521}, {700, 530}};
+        const auto r = scans(5, p, 16, {12, 35, 70, 72, 71, 40, 15});
+        check(r.size() == 2, format("pressed and lifted tap: down and up only (%zu reports)", r.size()));
     }
     // A finger held still with 1-2 px of jitter: nothing after touch-down until the lift.
     {
@@ -1240,14 +1251,14 @@ static void scenarioFilter()
         const auto r = scans(2, p);
         check(r.size() == 2, format("jittering hold: down and up only (%zu reports)", r.size()));
     }
-    // A slow drag (3 raw px a scan): reported from its first motion (no time held), in small steps, and it ends where
-    // the finger is.
+    // A slow drag (3 raw px a scan) from touch-down: its first scan is still settling, then every scan is reported in
+    // small steps, and it ends within the hysteresis of the finger.
     {
         std::vector<std::pair<unsigned, unsigned>> p;
         for (unsigned i = 0; i < 30; ++i)
             p.push_back({800, 300 + 3 * i});
         const auto r = scans(3, p);
-        check(r.size() == 31, format("slow drag: every scan reported (%zu reports)", r.size()));
+        check(r.size() == 30, format("slow drag: every scan from the second reported (%zu reports)", r.size()));
         int last = r.empty() ? 0 : r[0].slot[3].x, worst = 0;
         for (const auto &rep : r) {
             worst = std::max(worst, std::abs((int)rep.slot[3].x - last));
@@ -1255,8 +1266,8 @@ static void scenarioFilter()
         }
         check(worst <= 4, format("slow drag: largest step %d px", worst));
         const auto want = reported(800, 300 + 3 * 29);
-        check(r.back().slot[3].x == want.first,
-              format("slow drag: ends at the finger (%d, want %d)", r.back().slot[3].x, want.first));
+        check(std::abs(r.back().slot[3].x - want.first) <= 3,
+              format("slow drag: ends within 3 px of the finger (%d, want %d)", r.back().slot[3].x, want.first));
     }
     // A fast start (24 raw px a scan): every scan reported.
     {
@@ -1266,8 +1277,9 @@ static void scenarioFilter()
     fireWatchdog();
     const std::string geometry = logLine("SwitchTouch geometry:");
     std::printf("%s\n", geometry.c_str());
-    check(geometry.find("reported moving 1; slop 3 px") != std::string::npos,
-          "geometry: of the three taps only the creeping one left the slop");
+    check(geometry.find("taps raw travel 11/31/31 px (4, reported moving 1, reported travel 1/7/7 px; hysteresis "
+                        "2.4 px)") != std::string::npos,
+          "geometry: of the four taps only the creeping one moved");
 }
 
 static void scenarioPalm()

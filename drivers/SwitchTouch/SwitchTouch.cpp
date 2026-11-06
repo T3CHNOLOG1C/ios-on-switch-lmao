@@ -21,12 +21,11 @@
 //     interrupts, reports, events, the FTM4's report interval while a contact is down, and filter->action, the count
 //     read, the event read, the HID post and filter->post, mean/p99/max, with the bus's I2C interrupts per report.
 //   * Contacts (r17-touch, after r8a: keyboard taps read as flicks down, the app switcher hard to reach, 4-finger
-//     swipes slow to start): a palm (strength 500 or more, as Linux ftm4 and hekate) is not a contact; a contact is
-//     held at its first point only until it is 3 px from it (a spatial slop: no time is held, no offset carried), so a
-//     tap that stays inside it reports no travel; the edge band is 40 px. A second os_log line beside the stats one
-//     measures the touch-down drift and taps' raw travel (which settle whether finger creep explains the keyboard's
-//     flick misreads), where edge swipes start, how far apart a 4-finger touch's contacts arrive, contact strength,
-//     palms and re-touches (a contact back within 40 ms where it left).
+//     swipes slow to start): a palm (strength 500 or more, as Linux ftm4 and hekate) is not a contact; a contact's
+//     reported point is SwitchTouchFilter.h's (r29-touch: what MultitouchHID does for Apple's screens); the edge band is
+//     40 px. A second os_log line beside the stats one measures the touch-down drift, taps' raw and reported travel,
+//     where edge swipes start, how far apart a 4-finger touch's contacts arrive, contact strength, palms and re-touches
+//     (a contact back within 40 ms where it left).
 //   * Events: byte 0 low nibble = type (3 enter, 4 leave, 5 motion), high nibble = contact 0..9; X = b1 << 4 | b3 >> 4,
 //     Y = b2 << 4 | b3 & 0xf, already in the landscape frame hekate's GUI uses (stm,max_coords 1280 x 720); scaled
 //     from the panel's active area (stm,max-real-coords 1264 x 704, stm,edge-offset 15) as fts_coordinates_factor.
@@ -51,6 +50,10 @@
 #include "../SwitchPower/SwitchPower.h"
 #include "SwitchHID.h"
 #include "SwitchTouch.h"
+#include "SwitchTouchFilter.h"
+#if DEVELOPMENT || DEBUG
+#include "SwitchTouchTrace.h"
+#endif
 
 // SwitchBrightness (SwitchBacklight.cpp): false while the panel is dark (display power off). Weak, so
 // the touch screen links and reports as before without it.
@@ -108,21 +111,19 @@ constexpr unsigned kEdgeBand = 40;
 constexpr uint32_t kWatchdogMS = 10000;  // with as much leeway (switch_check_after_ms): no wakeup of its own
 constexpr unsigned kEmptyLimit = 64;     // interrupts in a row that found the FIFO empty: INT is stuck low
 
-// Touch-down slop (r17-touch; file comment), report-frame pixels (8.26 px/mm): a contact is reported at its first point
-// until it is kSlop or more away from it, then exactly where the finger is (one step of at most a few px; nothing is
-// held for time and no offset is carried). Taps that stay inside the slop report no travel at all.
-// The touch-down drift (the pad flattening: a theory that the keyboard's flick-down misreads come from it) is only
-// measured: the largest raw distance from the first point over the first kDriftMs.
+// The touch-down drift is only measured: the largest raw distance from the first point over the first kDriftMs.
 // Palm: contact strength z (Linux ftm4 / hekate: bytes 4-5 << 6 over the gain in byte 6) at kPalmStrength or more is a
 // palm, as both reject it (L4T then lifts every contact; here only that one, so a gesture's fingers stay down).
-constexpr int kSlop = 3;
 constexpr uint64_t kDriftMs = 30;
 constexpr unsigned kPalmStrength = 500;
 // Geometry stats (the second stats line): taps are contacts down under kTapMs with under kTapTravel of raw travel (their
-// raw travel, and how many were reported moving: those that left the slop); an edge swipe starts
+// raw and reported travel, and how many were reported moving at all); an edge swipe starts
 // within kEdgeNear of an edge and goes kEdgeSwipe away from it within kEdgeSwipeMs; a re-touch is a contact back within
 // kRetouchMs and kRetouchPx of where the same contact left (a dropout, or a double tap faster than a hand makes).
 constexpr uint64_t kTapMs = 300, kEdgeSwipeMs = 200, kRetouchMs = 40;
+#if DEVELOPMENT || DEBUG
+constexpr uint64_t kTraceMs = 3000;  // contacts traced (SwitchTouchTrace.h): taps, flicks, swipes, a paused swipe
+#endif
 constexpr int kEdgeNear = 120, kEdgeSwipe = 100, kRetouchPx = 64, kTapTravel = 64;
 
 int distance(int dx, int dy)
@@ -273,20 +274,23 @@ class SwitchTouch : public IOService {
 
         struct Contact {
         bool down;
-        uint16_t x, y;           // as reported
-        bool palm;               // rejected until it leaves
-        bool slop;               // still inside the touch-down slop: reported at its first point
+        uint16_t x, y;  // as reported
+        bool palm;      // rejected until it leaves
+        switch_touch_filter::Contact filter;
         int16_t startX, startY;  // raw first point
         uint64_t downAt;
         // Geometry stats: the largest raw distance from the first point (in the first kDriftMs, and over the contact),
         // whether it was reported moving, its edge swipe (the nearest edge and the first point's distance from it).
-        uint16_t drift, rawTravel;
+        uint16_t drift, rawTravel, reportedTravel;
         bool driftSeen, moved, edgeCandidate, edgeSwipeSeen;
         uint8_t nearEdge;
         uint16_t edgeDistance;
         // Where and when it last left (re-touch stat).
         uint64_t leftAt;
         int16_t leftX, leftY;
+#if DEVELOPMENT || DEBUG
+        SwitchTouchTrace trace;
+#endif
     };
 
     // One stats window (file comment): counts, and the spans in microseconds.
@@ -297,7 +301,7 @@ class SwitchTouch : public IOService {
         Spread wake, countRead, eventRead, post, total, interval;
         // Geometry (pixels, ms): touch-down drift, taps' raw travel, edge swipes' first point, 4-finger arrival spread,
         // contact strength; taps reported moving, re-touches, palms.
-        Spread settle, tapRaw, edgeStart, arrival, strength;
+        Spread settle, tapRaw, tapReported, edgeStart, arrival, strength;
         uint32_t tapsMoved = 0, retouches = 0, palms = 0;
 
         void reset()
@@ -306,8 +310,8 @@ class SwitchTouch : public IOService {
             irqs = empty = reports = events = maxEvents = 0;
             tapsMoved = retouches = palms = 0;
             i2c = {};
-            Spread *const spreads[] = {&wake,   &countRead, &eventRead, &post,    &total,   &interval,
-                                       &settle, &tapRaw,    &edgeStart, &arrival, &strength};
+            Spread *const spreads[] = {&wake,   &countRead, &eventRead,   &post,      &total,   &interval,
+                                       &settle, &tapRaw,    &tapReported, &edgeStart, &arrival, &strength};
             for (Spread *spread : spreads)
                 spread->reset();
         }
@@ -345,8 +349,8 @@ class SwitchTouch : public IOService {
     void powerDown();
     void handle(const uint8_t *event);
     void position(const uint8_t *event, int &x, int &y) const;
-    void begin(Contact &contact, int x, int y, uint64_t now);
-    bool track(Contact &contact, int x, int y, uint64_t now);
+    void begin(Contact &contact, int x, int y, unsigned z, uint64_t now);
+    bool track(Contact &contact, int x, int y, unsigned z, uint64_t now);
     void noteDrift(Contact &contact);
     void ended(Contact &contact, uint64_t now);
     void report(Contact &contact, int x, int y);
@@ -696,7 +700,10 @@ void SwitchTouch::logStats()
     span("touch-down drift", st.settle);
     add(" px mean/p99/max (%u; first %llu ms, measured only)", st.settle.n, (unsigned long long)kDriftMs);
     span("; taps raw travel", st.tapRaw);
-    add(" px (%u, reported moving %u; slop %d px)", st.tapRaw.n, st.tapsMoved, kSlop);
+    add(" px (%u, reported moving %u", st.tapRaw.n, st.tapsMoved);
+    span(", reported travel", st.tapReported);
+    add(" px; hysteresis %d.%d px)", switch_touch_filter::kHysteresis / switch_touch_filter::kQ,
+        switch_touch_filter::kHysteresis % switch_touch_filter::kQ * 10 / switch_touch_filter::kQ);
     span("; edge swipes start", st.edgeStart);
     add(" px from the edge (%u; band %u)", st.edgeStart.n, kEdgeBand);
     span("; 4-finger arrival", st.arrival);
@@ -724,18 +731,21 @@ void SwitchTouch::report(Contact &contact, int x, int y)
     contact.y = (uint16_t)y;
 }
 
-// Touch-down at raw (x, y): reported there, inside its slop; its edge flag and edge-swipe candidacy; a re-touch.
-void SwitchTouch::begin(Contact &contact, int x, int y, uint64_t now)
+// Touch-down at raw (x, y): reported there; its edge flag and edge-swipe candidacy; a re-touch.
+void SwitchTouch::begin(Contact &contact, int x, int y, unsigned z, uint64_t now)
 {
     if (contact.leftAt && now > contact.leftAt && ticksToUs(now - contact.leftAt) < kRetouchMs * 1000 &&
         distance(x - contact.leftX, y - contact.leftY) < kRetouchPx)
         ++stats.retouches;
     report(contact, x, y);
-    contact.slop = true;
+    contact.filter.begin(x, y, z, ticksToUs(now));
     contact.startX = (int16_t)x;
     contact.startY = (int16_t)y;
     contact.downAt = now;
-    contact.drift = contact.rawTravel = 0;
+    contact.drift = contact.rawTravel = contact.reportedTravel = 0;
+#if DEVELOPMENT || DEBUG
+    contact.trace.start(z);
+#endif
     contact.driftSeen = contact.moved = contact.edgeSwipeSeen = false;
     // The nearest edge (0 left, 1 right, 2 top, 3 bottom of the report frame) and how far the first point is from it.
     const int d[4] = {x, (int)kSwitchTouchReportWidth - 1 - x, y, (int)kSwitchTouchReportHeight - 1 - y};
@@ -756,9 +766,8 @@ void SwitchTouch::noteDrift(Contact &contact)
     stats.settle.add(contact.drift);
 }
 
-// A motion to raw (x, y): true if the reported position changed. No time is held: inside the slop the first point
-// stands, outside it the finger's own position.
-bool SwitchTouch::track(Contact &contact, int x, int y, uint64_t now)
+// A motion to raw (x, y) at strength z: true if the reported position changed (SwitchTouchFilter.h).
+bool SwitchTouch::track(Contact &contact, int x, int y, unsigned z, uint64_t now)
 {
     const int fromStart = distance(x - contact.startX, y - contact.startY);
     if (fromStart > contact.rawTravel)
@@ -777,15 +786,19 @@ bool SwitchTouch::track(Contact &contact, int x, int y, uint64_t now)
             stats.edgeStart.add(contact.edgeDistance);
         }
     }
-    if (contact.slop) {
-        if (fromStart < kSlop)
-            return false;
-        contact.slop = false;
-    }
-    if (x == contact.x && y == contact.y)
+#if DEVELOPMENT || DEBUG
+    contact.trace.add((unsigned)ms, x - contact.startX, y - contact.startY, z);
+#endif
+    if (!contact.filter.sample(x, y, z, ticksToUs(now)))
+        return false;
+    const uint16_t wasX = contact.x, wasY = contact.y;
+    report(contact, contact.filter.x.pixel(), contact.filter.y.pixel());
+    if (contact.x == wasX && contact.y == wasY)
         return false;
     contact.moved = true;
-    report(contact, x, y);
+    const int reported = distance(contact.x - contact.startX, contact.y - contact.startY);
+    if (reported > contact.reportedTravel)
+        contact.reportedTravel = (uint16_t)reported;
     return true;
 }
 
@@ -793,12 +806,18 @@ bool SwitchTouch::track(Contact &contact, int x, int y, uint64_t now)
 void SwitchTouch::ended(Contact &contact, uint64_t now)
 {
     noteDrift(contact);
-    if (contact.downAt && now >= contact.downAt && ticksToUs(now - contact.downAt) < kTapMs * 1000 &&
-        contact.rawTravel < kTapTravel) {
+    const uint64_t ms = contact.downAt && now >= contact.downAt ? ticksToUs(now - contact.downAt) / 1000 : UINT64_MAX;
+    if (ms < kTapMs && contact.rawTravel < kTapTravel) {
         stats.tapRaw.add(contact.rawTravel);
+        stats.tapReported.add(contact.reportedTravel);
         if (contact.moved)
             ++stats.tapsMoved;
     }
+#if DEVELOPMENT || DEBUG
+    if (ms < kTraceMs)
+        contact.trace.log((unsigned)(&contact - contacts), contact.startX, contact.startY, (unsigned)ms,
+                          contact.x - contact.startX, contact.y - contact.startY);
+#endif
     contact.leftAt = now;
     contact.leftX = (int16_t)contact.x;
     contact.leftY = (int16_t)contact.y;
@@ -854,7 +873,7 @@ void SwitchTouch::handle(const uint8_t *event)
             return;  // as Linux: motion of a contact that has left is stale
         if (changed & bit)
             flush();
-        begin(contact, x, y, now);
+        begin(contact, x, y, z, now);
         stats.strength.add(z);
         contact.down = true;
         changed |= bit;
@@ -876,7 +895,7 @@ void SwitchTouch::handle(const uint8_t *event)
         dirty = true;
         return;
     }
-    if (track(contact, x, y, now))
+    if (track(contact, x, y, z, now))
         dirty = true;
 }
 
