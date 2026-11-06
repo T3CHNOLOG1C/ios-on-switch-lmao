@@ -15,7 +15,7 @@ enum tgm_sched_kick {
 	TGM_KICK_CLEAR,     /* the GPU was idle or on a high channel */
 	TGM_KICK_PREEMPTED, /* an app channel held GR or the PBDMA: preempted */
 	TGM_KICK_SWITCHING, /* the host was already switching (a timeslice expired or a preempt is in flight) */
-	TGM_KICK_DEFERRED,  /* an app channel held it, and nvkm held the runlist (a teardown or a recovery) */
+	TGM_KICK_DEFERRED, /* an app channel held it, and nvkm held the runlist (a teardown or a recovery) */
 };
 
 /* A high channel kicked work: preempt the app channel holding GR or the PBDMA, if one does. Never waits. */

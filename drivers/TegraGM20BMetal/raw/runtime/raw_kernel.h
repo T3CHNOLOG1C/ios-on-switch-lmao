@@ -48,11 +48,13 @@ public:
     void free(Bo &bo);
     bool channel(uint32_t engines, uint32_t &channel, const volatile uint32_t *&fence);
     void closeChannel(uint32_t channel);
+
     // An Exec or WaitFence found the channel dead (the kernel killed it for a GPU fault or hang; its fence was released)
     bool lost() const
     {
         return lost_.load(std::memory_order_relaxed);
     }
+
     // `last`: the channel's last submitted seqno (0 if none), waited on when the GPFIFO is full
     bool exec(uint32_t channel, const TegraGM20BAbiPush *pushes, uint32_t count, uint32_t last, uint32_t &seqno);
     // Blocks in the kernel until the channel's completed seqno passes `seqno` (the kext sleeps on the fence interrupt).

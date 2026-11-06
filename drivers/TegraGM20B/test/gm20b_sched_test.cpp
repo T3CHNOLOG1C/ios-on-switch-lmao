@@ -50,11 +50,12 @@ TEST(KickVictim, ATsgIdNamesNoChannel)
 	EXPECT_EQ(tgm_kick_victim(resident(7) | PFIFO_ENG_ID_TSG, 0, 0, 0, 0), TGM_VICTIM_NONE);
 }
 
-std::vector<uint16_t> plan(const std::vector<uint8_t> &high, const std::vector<uint16_t> &entries, unsigned max)
+std::vector<uint16_t> plan(const std::vector<uint8_t> &high, const std::vector<uint16_t> &entries,
+			   unsigned max)
 {
 	std::vector<uint16_t> order(4096);
-	order.resize(tgm_interleave(high.data(), entries.data(), unsigned(high.size()), max, order.data(),
-				    unsigned(order.size())));
+	order.resize(tgm_interleave(high.data(), entries.data(), unsigned(high.size()), max,
+				    order.data(), unsigned(order.size())));
 	return order;
 }
 
@@ -107,7 +108,8 @@ struct Candidates {
 
 	tgm_hang verdict(int &blame) const
 	{
-		return tgm_hang_blame(c.data(), int(c.size()), late_dead, late_kernel, progress, &blame);
+		return tgm_hang_blame(c.data(), int(c.size()), late_dead, late_kernel, progress,
+				      &blame);
 	}
 };
 

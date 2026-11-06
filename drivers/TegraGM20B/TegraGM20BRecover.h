@@ -14,22 +14,22 @@ int tgm_recover_suspects(struct nvkm_device *device, int *chids, int max);
 
 /* What a wait that ran out with no GPU error reported found (gpu.c hang_recover). */
 enum tgm_hang {
-	TGM_HANG_STUCK,      /* nothing to recover: the GPU is stuck on a kernel channel, or nothing progresses: panic */
+	TGM_HANG_STUCK, /* nothing to recover: the GPU is stuck on a kernel channel, or nothing progresses: panic */
 	TGM_HANG_RECOVERING, /* a client's channel the GPU is stuck on is being killed (or the late one died already) */
 	TGM_HANG_PROGRESSING /* no channel is stuck: the late work is slow, not hung */
 };
 
 struct tgm_hang_candidate {
-	uint8_t live;   /* a channel of the kernel's list */
-	uint8_t stuck;  /* work pending and nothing completed for the stuck time (gpu.c TGM_STUCK_NS) */
+	uint8_t live; /* a channel of the kernel's list */
+	uint8_t stuck; /* work pending and nothing completed for the stuck time (gpu.c TGM_STUCK_NS) */
 	uint8_t kernel; /* the present's or the scrubber's */
 };
 
 /* Candidates in order: tgm_recover_suspects' channels, the channel of its task the late one waits on, the late one. The first
  * stuck one is to blame (*blame, its index; else -1): a client's is killed, a kernel channel's is fatal. With none stuck, a
  * dead late channel is recovered already, and late kernel work with nothing progressing anywhere is fatal. */
-static inline enum tgm_hang tgm_hang_blame(const struct tgm_hang_candidate *c, int n, int late_dead, int late_kernel,
-					   int any_progress, int *blame)
+static inline enum tgm_hang tgm_hang_blame(const struct tgm_hang_candidate *c, int n, int late_dead,
+					   int late_kernel, int any_progress, int *blame)
 {
 	int i;
 

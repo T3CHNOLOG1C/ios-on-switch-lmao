@@ -30,7 +30,7 @@ canvas.height = innerHeight * devicePixelRatio;
 const gl = canvas.getContext('webgl2');
 canvas.addEventListener('webglcontextlost', e => { line.textContent = 'context lost: the GPU killed this page\'s channel'; e.preventDefault(); });
 const vs = `#version 300 es
-in vec2 p; void main() { gl_Position = vec4(p, 0.0, 1.0); }`;
+layout(location = 0) in vec2 p; void main() { gl_Position = vec4(p, 0.0, 1.0); }`;
 // u_stop is 0: the compiler cannot prove the hang loop ends, and every pass feeds the output so it cannot drop the loop
 const fs = `#version 300 es
 precision highp float;

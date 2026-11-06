@@ -70,7 +70,9 @@ static int cgrp_high(struct nvkm_cgrp *cgrp)
 	return 0;
 }
 
-/* runl->func->update, under runl->mutex as nvkm calls it */
+/* runl->func->update, under runl->mutex as nvkm calls it. The wait for the host's last update comes first: it may run
+ * nvkm's recovery (nvkm_runl_update_pending), which removes the channels it kills and updates the runlist itself, so the
+ * groups listed after it are the ones left, and the segment written last time is free. */
 static int sched_update(struct nvkm_runl *runl)
 {
 	const u32 size = runl->func->size;
@@ -80,6 +82,8 @@ static int sched_update(struct nvkm_runl *runl)
 	struct nvkm_chan *chan;
 	u32 units = 0, n, i, start, offset;
 
+	if (runl->func->pending(runl))
+		runl->func->wait(runl);
 	if (runl->cgrp_nr > SCHED_UNITS)
 		return nv50_runl_update(runl);
 	nvkm_runl_foreach_cgrp(cgrp, runl)
@@ -90,11 +94,8 @@ static int sched_update(struct nvkm_runl *runl)
 		rl[runl->id].high[units] = cgrp_high(cgrp);
 		rl[runl->id].entries[units++] = cgrp->hw + cgrp->chan_nr;
 	}
-	n = tgm_interleave(rl[runl->id].high, rl[runl->id].entries, units, rl[runl->id].segment / size,
-			   rl[runl->id].order, SCHED_ORDER);
-	/* the segment written last time is the host's until its update completes */
-	if (runl->func->pending(runl))
-		runl->func->wait(runl);
+	n = tgm_interleave(rl[runl->id].high, rl[runl->id].entries, units,
+			   rl[runl->id].segment / size, rl[runl->id].order, SCHED_ORDER);
 	start = rl[runl->id].next * rl[runl->id].segment;
 	rl[runl->id].next ^= 1;
 	offset = start;
@@ -259,6 +260,7 @@ void tgm_sched_stats(char *buf, unsigned int len)
 	    switching = __atomic_exchange_n(&st.switching, 0, __ATOMIC_RELAXED),
 	    deferred = __atomic_exchange_n(&st.deferred, 0, __ATOMIC_RELAXED);
 
-	scnprintf(buf, len, "%u high kicks: %u preempted an app, %u found a switch under way, %u deferred",
+	scnprintf(buf, len,
+		  "%u high kicks: %u preempted an app, %u found a switch under way, %u deferred",
 		  kicks, preempted, switching, deferred);
 }

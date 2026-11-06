@@ -1019,7 +1019,7 @@ struct tgm_chan {
 	int nobj;
 	int kernel; /* a kernel channel, no client waits on it and the present does not wait for it: CHAN_PRESENT, CHAN_SCRUB */
 	int critical; /* the compositor's or the kernel's: the high timeslice */
-	int high;     /* the compositor's or the present's: high on the runlist (TegraGM20BSched.h) */
+	int high; /* the compositor's or the present's: high on the runlist (TegraGM20BSched.h) */
 	int isolating; /* client fault isolation: its error or hang was taken as its own, the kill is under way */
 	u64 isolated_ns;
 	struct list_head live; /* live_chans, for tegra_gm20b_sync_for_cpu */
@@ -1027,17 +1027,17 @@ struct tgm_chan {
 	char owner[17];  /* process that created it */
 	char fault[200]; /* the nvkm report it was isolated for */
 	u64 submit_ns;   /* when the last fence was kicked */
-	u64 busy_ns;       /* hang_recover: when it last went from idle to work pending */
-	u64 progress_ns;   /* and when its fence last moved, to progress_done */
+	u64 busy_ns;     /* hang_recover: when it last went from idle to work pending */
+	u64 progress_ns; /* and when its fence last moved, to progress_done */
 	u32 progress_done;
-	u32 stall_done;  /* tgm_chan_check_progress: completed seqno first seen stalled, and when */
+	u32 stall_done; /* tgm_chan_check_progress: completed seqno first seen stalled, and when */
 	u64 stall_ns;
 	u32 gov_done;   /* idle clock: last seqno counted retired (gov_fenced) */
 	u32 woken_done; /* the completed seqno its waiters were last woken for (chan_wake_waiters) */
 	u32 stat_done;  /* stats: last seqno whose latency was counted, submit times by seqno */
 	u64 stat_sub_ns[CHAN_NSTAMPS];
 	u64 stat_sub_ptimer[CHAN_NSTAMPS];
-	u8 stat_kick[CHAN_NSTAMPS]; /* stats: what a high channel's kick found (enum tgm_sched_kick) */
+	u8 stat_kick[CHAN_NSTAMPS]; /* stats: what each high kick found (tgm_sched_kick) */
 	u64 stat_exec,
 		stat_exec_max; /* stats: this window's stamped exec time (PTIMER units), for its owner */
 	u32 stat_exec_n;
@@ -1457,7 +1457,8 @@ static int chan_stuck(struct tgm_chan *chan, u64 now)
 	       now - chan_progress_ns(chan) >= TGM_STUCK_NS;
 }
 
-static struct tgm_chan *live_by(u64 id, int chid) /* live_lock held; by id, else (id 0) by hardware channel */
+/* live_lock held; by id, else (id 0) by hardware channel */
+static struct tgm_chan *live_by(u64 id, int chid)
 {
 	struct tgm_chan *chan;
 
@@ -1558,7 +1559,7 @@ static struct {
 	 * of every process, the compositor's too, waits for it; nanoseconds, the sum counts them */
 	u64 lock_new_sum, lock_new_max, lock_free_sum, lock_free_max;
 	u32 lock_new, lock_free;
-	s64 live_bytes;                           /* host imports */
+	s64 live_bytes; /* host imports */
 	s32 live;
 } stats;
 
@@ -2245,8 +2246,8 @@ static void stats_tick(void)
 		"%llu; coherent from system memory %llu MiB in %llu), %s, MC "
 		"%08x "
 		"err "
-		"%08x at %08x; gpu.lock held by channel setup mean %llu us max %llu us (%u), teardown "
-		"mean %llu us max %llu us (%u)",
+		"%08x at %08x; gpu.lock held by channel setup mean %llu us max %llu us (%u), "
+		"teardown mean %llu us max %llu us (%u)",
 		copies ? PT_NS(cs) / copies / 1000 : 0, PT_NS(cm) / 1000, copies,
 		gaps ? PT_NS(gs) / gaps / 1000 : 0, PT_NS(gm) / 1000, gaps,
 		present_order_on() ? "on" : "off", ordered, idle, late, imports,
@@ -3707,8 +3708,8 @@ static void present_deadline(void *arg)
 			}
 		}
 	}
-	if (hang_recover(waited ? waited : present.chan, "present", waited ? seqno : present.pending,
-			 age) != TGM_HANG_STUCK) {
+	if (hang_recover(waited ? waited : present.chan, "present",
+			 waited ? seqno : present.pending, age) != TGM_HANG_STUCK) {
 		mutex_unlock(&live_lock);
 		present.recovered = nvxnu_nanotime();
 		nvxnu_work_schedule_after(present.deadline_work, TGM_PRESENT_NS);
@@ -3889,8 +3890,8 @@ static int present_copy(uint64_t src_va, uint64_t src_pa, uint64_t stride, int s
 		chan, room * 5 + 47 +
 			      CHAN_FENCE_DWORDS); /* acquires, a start stamp, the copy, the fence */
 	if (ret == -ETIMEDOUT)
-		tgm_chan_stalled(chan, "present: push buffer still full after 1 s",
-				 chan->submitted, NSEC_PER_SEC);
+		tgm_chan_stalled(chan, "present: push buffer still full after 1 s", chan->submitted,
+				 NSEC_PER_SEC);
 	if (ret) {
 		mutex_unlock(&present.lock);
 		return ret;
@@ -4171,7 +4172,8 @@ static void scrub_fenced(struct tgm_chan *chan)
  * SCRUB_NS more; with none, one line and a panic. */
 static void scrub_deadline(void *arg)
 {
-	static u64 recovered; /* the last time a recovery or progress restarted the wait (one work item: no race) */
+	/* the last time a recovery or progress restarted the wait (one work item: no race) */
+	static u64 recovered;
 	u32 tail = __atomic_load_n(&scrub.tail, __ATOMIC_ACQUIRE),
 	    head = __atomic_load_n(&scrub.head, __ATOMIC_ACQUIRE), slot = tail % SCRUB_JOBS;
 	enum tgm_hang verdict;
