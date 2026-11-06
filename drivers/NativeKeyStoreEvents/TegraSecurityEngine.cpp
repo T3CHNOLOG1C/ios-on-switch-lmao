@@ -127,18 +127,21 @@ volatile uint32_t *mapRegisters(uint64_t physical, IOMemoryMap **map)
 
 void cleanInvalidate(const void *va, size_t size)
 {
-    uint64_t ctr;
+    // NOLINTNEXTLINE(misc-const-correctness): written by the asm below
+    uint64_t ctr = 0;
     __asm__ volatile("mrs %0, ctr_el0" : "=r"(ctr));
-    const uintptr_t line = (uintptr_t)4 << ((ctr >> 16) & 15);
-    for (uintptr_t a = (uintptr_t)va & ~(line - 1), end = (uintptr_t)va + size; a < end; a += line)
+    const uintptr_t line = static_cast<uintptr_t>(4) << ((ctr >> 16) & 15);
+    for (uintptr_t a = reinterpret_cast<uintptr_t>(va) & ~(line - 1), end = reinterpret_cast<uintptr_t>(va) + size;
+         a < end; a += line)
         __asm__ volatile("dc civac, %0" ::"r"(a) : "memory");
     __asm__ volatile("dsb sy" ::: "memory");
 }
 
 bool allocateDma(Dma *dma)
 {
-    const IOOptionBits options = (IOOptionBits)kIODirectionInOut | (IOOptionBits)kIOMemoryPhysicallyContiguous |
-                                 (IOOptionBits)kIOMemoryMapperNone;
+    const IOOptionBits options = static_cast<IOOptionBits>(kIODirectionInOut) |
+                                 static_cast<IOOptionBits>(kIOMemoryPhysicallyContiguous) |
+                                 static_cast<IOOptionBits>(kIOMemoryMapperNone);
     dma->memory = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task, options, PAGE_SIZE, 0xfffff000ULL);
     if (!dma->memory || dma->memory->prepare() != kIOReturnSuccess) {
         OSSafeReleaseNULL(dma->memory);
@@ -152,7 +155,7 @@ bool allocateDma(Dma *dma)
         OSSafeReleaseNULL(dma->memory);
         return false;
     }
-    dma->pa = (uint32_t)pa;
+    dma->pa = static_cast<uint32_t>(pa);
     memset(dma->va, 0, kDmaUsed);
     cleanInvalidate(dma->va, kDmaUsed);
     return true;
@@ -218,7 +221,7 @@ bool ecbBlock(void *context, const uint8_t in[16], uint8_t out[16])
 
     __asm__ volatile("dsb sy" ::: "memory");
     se.w(kOperation, kOpStart);
-    uint64_t deadline;
+    uint64_t deadline = 0;
     clock_interval_to_deadline(kOpTimeoutMs, kMillisecondScale, &deadline);
     waitFor(b, deadline, "operation end", [&] {
         return (se.r(kIntStatus) & (kIntOpDone | kIntError)) || se.r(kErrStatus);
@@ -228,10 +231,11 @@ bool ecbBlock(void *context, const uint8_t in[16], uint8_t out[16])
     waitFor(b, deadline, "memory drain", [&] {
         return !(se.r(kStatus) & (kStatusStateMask | kStatusMemBusy)) && !(b.ahb[kAhbMemWrqueMstId / 4] & se.ahbMaster);
     });
-    const uint32_t interrupt = se.r(kIntStatus), error = se.r(kErrStatus);
+    const uint32_t interrupt = se.r(kIntStatus);
+    const uint32_t error = se.r(kErrStatus);
     se.w(kIntStatus, interrupt);
     se.w(kErrStatus, error);
-    bool ok = !error && !(interrupt & kIntError) && (interrupt & kIntOpDone);
+    const bool ok = (error == 0u) && ((interrupt & kIntError) == 0u) && ((interrupt & kIntOpDone) != 0u);
     if (ok) {
         cleanInvalidate(dma.va + kDmaOut, 16);
         memcpy(out, dma.va + kDmaOut, 16);
@@ -262,12 +266,19 @@ struct Result {
 
 void probeSlot(const Engine &se, Dma &dma, volatile uint32_t *ahb, uint32_t slot, Result &result)
 {
-    const uint32_t security = se.r(kSecurity), perKey = se.r(kPerKey), access = se.r(kKeyAccess + 4 * slot);
-    result.refusal = !(security & kSecuritySoftNonsecure)   ? "engine secure-only"
-                     : (security & kSecurityEngineDisabled) ? "engine disabled"
-                     : !(perKey & (1u << slot))             ? "slot secure-only"
-                     : !(access & kKeyUse)                  ? "key use disabled"
-                                                            : nullptr;
+    const uint32_t security = se.r(kSecurity);
+    const uint32_t perKey = se.r(kPerKey);
+    const uint32_t access = se.r(kKeyAccess + 4 * slot);
+    result.refusal = nullptr;
+    if (!(security & kSecuritySoftNonsecure)) {
+        result.refusal = "engine secure-only";
+    } else if (security & kSecurityEngineDisabled) {
+        result.refusal = "engine disabled";
+    } else if (!(perKey & (1u << slot))) {
+        result.refusal = "slot secure-only";
+    } else if (!(access & kKeyUse)) {
+        result.refusal = "key use disabled";
+    }
     if (result.refusal)
         return;
     Block b{&se, &dma, ahb, slot, 0, nullptr};
@@ -281,7 +292,7 @@ void probeSlot(const Engine &se, Dma &dma, volatile uint32_t *ahb, uint32_t slot
         return;
     }
     result.ran = true;
-    result.stable = !memcmp(result.mac, again, 16);
+    result.stable = (memcmp(result.mac, again, 16) == 0);
     aks::wipe(again, sizeof again);
 }
 
@@ -292,7 +303,8 @@ uint32_t fingerprint(const uint8_t mac[16])
     SHA256_Init(&c);
     SHA256_Update(&c, mac, 16);
     SHA256_Final(digest, &c);
-    return (uint32_t)digest[0] << 24 | (uint32_t)digest[1] << 16 | (uint32_t)digest[2] << 8 | digest[3];
+    return static_cast<uint32_t>(digest[0]) << 24 | static_cast<uint32_t>(digest[1]) << 16 |
+           static_cast<uint32_t>(digest[2]) << 8 | digest[3];
 }
 
 void describe(char *line, size_t size, const char *name, const Result &r, const uint8_t zeroKey[16])
@@ -302,8 +314,9 @@ void describe(char *line, size_t size, const char *name, const Result &r, const 
         return;
     }
     static const uint8_t zero[16] = {};
-    snprintf(line, size, "%s fp %08x stable %d nonzero %d zero-key %d", name, fingerprint(r.mac), r.stable,
-             memcmp(r.mac, zero, 16) != 0, !memcmp(r.mac, zeroKey, 16));
+    snprintf(line, size, "%s fp %08x stable %d nonzero %d zero-key %d", name, fingerprint(r.mac),
+             static_cast<int>(r.stable), static_cast<int>(memcmp(r.mac, zero, 16) != 0),
+             static_cast<int>(memcmp(r.mac, zeroKey, 16) == 0));
 }
 }  // namespace
 
@@ -315,28 +328,41 @@ extern "C" void native_aks_se_probe(void)
         return;
     probed = true;
 
-    IOMemoryMap *carMap = nullptr, *ahbMap = nullptr, *fuseMap = nullptr, *mcMap = nullptr, *se1Map = nullptr,
-                *se2Map = nullptr;
-    volatile uint32_t *car = mapRegisters(kCarPA, &carMap), *ahb = mapRegisters(kAhbArbPA, &ahbMap),
-                      *fuse = mapRegisters(kFusePagePA, &fuseMap), *mc = mapRegisters(kMcPA, &mcMap);
-    Engine se1{"SE1", 0x70012000, 1u << 14, nullptr}, se2{"SE2", 0x70412000, 1u << 13, nullptr};
+    IOMemoryMap *carMap = nullptr;
+    IOMemoryMap *ahbMap = nullptr;
+    IOMemoryMap *fuseMap = nullptr;
+    IOMemoryMap *mcMap = nullptr;
+    IOMemoryMap *se1Map = nullptr;
+    IOMemoryMap *se2Map = nullptr;
+    const volatile uint32_t *car = mapRegisters(kCarPA, &carMap);
+    volatile uint32_t *ahb = mapRegisters(kAhbArbPA, &ahbMap);
+    const volatile uint32_t *fuse = mapRegisters(kFusePagePA, &fuseMap);
+    const volatile uint32_t *mc = mapRegisters(kMcPA, &mcMap);
+    Engine se1{"SE1", 0x70012000, 1u << 14, nullptr};
+    Engine se2{"SE2", 0x70412000, 1u << 13, nullptr};
     se1.regs = mapRegisters(se1.physical, &se1Map);
     se2.regs = mapRegisters(se2.physical, &se2Map);
     Dma dma{};
-    Result r14, r15, r2;
+    Result r14;
+    Result r15;
+    Result r2;
     if (!car || !ahb || !fuse || !mc || !se1.regs || !se2.regs) {
         IOLog("AppleKeyStore: SE probe: cannot map CAR/AHB/FUSE/MC/SE\n");
         goto out;
     }
     {
-        const uint32_t clocks = car[kCarClkOutEnbV / 4], resets = car[kCarRstDevicesV / 4];
-        const bool fuseOn = (car[kCarClkOutEnbH / 4] & kFuseClockBit) && !(car[kCarRstDevicesH / 4] & kFuseClockBit);
+        const uint32_t clocks = car[kCarClkOutEnbV / 4];
+        const uint32_t resets = car[kCarRstDevicesV / 4];
+        const bool fuseOn =
+            ((car[kCarClkOutEnbH / 4] & kFuseClockBit) != 0u) && ((car[kCarRstDevicesH / 4] & kFuseClockBit) == 0u);
         const uint32_t privateKey = fuseOn ? fuse[kFusePrivateKeyDisable / 4] : ~0u;
-        const uint32_t smmu = mc[kMcSmmuConfig / 4], ppcs = mc[kMcSmmuPpcsAsid / 4];
+        const uint32_t smmu = mc[kMcSmmuConfig / 4];
+        const uint32_t ppcs = mc[kMcSmmuPpcsAsid / 4];
         // A clock-gated or reset APB block can hang the bus: no SE register is read unless the clock runs and reset is off.
         if (!(clocks & kSeClockBit) || (resets & kSeClockBit)) {
             IOLog("AppleKeyStore: SE probe: SE clock %d reset %d (source %#x), engine not read; fuse pkdisable %#x\n",
-                  !!(clocks & kSeClockBit), !!(resets & kSeClockBit), car[kCarClkSourceSe / 4], privateKey);
+                  static_cast<int>((clocks & kSeClockBit) != 0), static_cast<int>((resets & kSeClockBit) != 0),
+                  car[kCarClkSourceSe / 4], privateKey);
             goto out;
         }
         IOLog(
@@ -369,17 +395,20 @@ extern "C" void native_aks_se_probe(void)
         }
 
         // What an empty (all-zero) slot would give, so a slot the boot ROM never loaded is told from a real key.
-        uint8_t zeroKeyMac[16], zeroKey[16] = {};
+        uint8_t zeroKeyMac[16];
+        uint8_t zeroKey[16] = {};
         aes_encrypt_ctx zeroCtx;
         aes_encrypt_key128(zeroKey, &zeroCtx);
         aks::cmac(softwareEncrypt, &zeroCtx, reinterpret_cast<const uint8_t *>(kProbeLabel), sizeof kProbeLabel - 1,
                   zeroKeyMac);
-        char a[96], b[96], c[96];
+        char a[96];
+        char b[96];
+        char c[96];
         describe(a, sizeof a, "SE1.14", r14, zeroKeyMac);
         describe(b, sizeof b, "SE1.15", r15, zeroKeyMac);
         describe(c, sizeof c, "SE2.14", r2, zeroKeyMac);
         IOLog("AppleKeyStore: SE probe: %s; %s; %s; SE1.14 differs from SE1.15 %d\n", a, b, c,
-              r14.ran && r15.ran && memcmp(r14.mac, r15.mac, 16) != 0);
+              static_cast<int>(r14.ran && r15.ran && memcmp(r14.mac, r15.mac, 16) != 0));
         aks::wipe(&zeroCtx, sizeof zeroCtx);
     }
 out:

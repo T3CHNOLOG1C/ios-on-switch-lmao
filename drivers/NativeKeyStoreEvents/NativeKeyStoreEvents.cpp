@@ -45,10 +45,10 @@ constexpr uint32_t kStateFlags = 4;
 constexpr uint64_t kSystemHandle = 0;
 constexpr uint64_t kMaxKeyClass = 31;  // protection classes are small integers (securityd's "class 11" is dku)
 constexpr IOReturn kAksError =
-    (IOReturn)aks::kReturnError;  // also what libaks reports itself when the connection is missing
-constexpr IOReturn kAksBadArgument = (IOReturn)aks::kReturnBadArgument;
-constexpr IOReturn kAksUnsupported = (IOReturn)aks::kReturnUnsupported;
-constexpr IOReturn kAksNotFound = (IOReturn)aks::kReturnNotFound;
+    static_cast<IOReturn>(aks::kReturnError);  // also what libaks reports itself when the connection is missing
+constexpr IOReturn kAksBadArgument = static_cast<IOReturn>(aks::kReturnBadArgument);
+constexpr IOReturn kAksUnsupported = static_cast<IOReturn>(aks::kReturnUnsupported);
+constexpr IOReturn kAksNotFound = static_cast<IOReturn>(aks::kReturnNotFound);
 
 struct DerWriter {
     uint8_t *p;
@@ -57,19 +57,20 @@ struct DerWriter {
 
     void put(uint8_t b)
     {
-        if (n < cap)
+        if (n < cap) {
             p[n++] = b;
-        else
+        } else {
             ok = false;
+        }
     }
 
     void len(size_t l)
     {
-        if (l < 0x80)
-            put((uint8_t)l);
-        else {
+        if (l < 0x80) {
+            put(static_cast<uint8_t>(l));
+        } else {
             put(0x81);
-            put((uint8_t)l);
+            put(static_cast<uint8_t>(l));
         }
     }  // entries stay below 256 bytes
 };
@@ -78,8 +79,8 @@ struct DerWriter {
 size_t derIntegerContent(uint64_t v, uint8_t out[9])
 {
     uint8_t raw[8];
-    for (int i = 0; i < 8; ++i)
-        raw[i] = (uint8_t)(v >> (56 - 8 * i));
+    for (unsigned i = 0; i < 8; ++i)
+        raw[i] = static_cast<uint8_t>(v >> (56 - 8 * i));
     size_t start = 0;
     while (start < 7 && raw[start] == 0)
         ++start;
@@ -97,7 +98,7 @@ size_t entrySize(const char *key, uint64_t value)
     size_t kl = 0;
     while (key[kl])
         ++kl;
-    size_t body = (2 + kl) + (2 + derIntegerContent(value, c));
+    const size_t body = (2 + kl) + (2 + derIntegerContent(value, c));
     return 2 + body;
 }
 }  // namespace
@@ -123,7 +124,7 @@ extern "C" size_t native_aks_encode_state(uint8_t *out, size_t capacity, uint32_
         size_t kl = 0;
         while (e.key[kl])
             ++kl;
-        size_t il = derIntegerContent(e.value, c);
+        const size_t il = derIntegerContent(e.value, c);
         w.put(0x30);
         w.len((2 + kl) + (2 + il));
         w.put(0x0c);
@@ -139,65 +140,69 @@ extern "C" size_t native_aks_encode_state(uint8_t *out, size_t capacity, uint32_
 }
 
 // The caller's struct output: inline (structureOutput, at most 4 KiB) or a descriptor for larger buffers.
-IOReturn writeStructure(IOExternalMethodArguments *args, const uint8_t *bytes, size_t n)
+static IOReturn writeStructure(IOExternalMethodArguments *args, const uint8_t *bytes, size_t n)
 {
     if (args->structureOutputDescriptor) {
         if (n > args->structureOutputDescriptor->getLength())
             return kIOReturnNoSpace;
         args->structureOutputDescriptor->writeBytes(0, bytes, n);
-        args->structureOutputDescriptorSize = (uint32_t)n;
+        args->structureOutputDescriptorSize = static_cast<uint32_t>(n);
         return kIOReturnSuccess;
     }
     if (!args->structureOutput || n > args->structureOutputSize)
         return kIOReturnNoSpace;
     for (size_t k = 0; k < n; ++k)
-        ((uint8_t *)args->structureOutput)[k] = bytes[k];
-    args->structureOutputSize = (uint32_t)n;
+        static_cast<uint8_t *>(args->structureOutput)[k] = bytes[k];
+    args->structureOutputSize = static_cast<uint32_t>(n);
     return kIOReturnSuccess;
 }
 
-size_t structureCapacity(const IOExternalMethodArguments *args)
+static size_t structureCapacity(const IOExternalMethodArguments *args)
 {
-    return args->structureOutputDescriptor ? args->structureOutputDescriptor->getLength()
-           : args->structureOutput         ? args->structureOutputSize
-                                           : 0;
+    if (args->structureOutputDescriptor)
+        return args->structureOutputDescriptor->getLength();
+    return args->structureOutput ? args->structureOutputSize : 0;
 }
 
 // Selectors 10 and 11: [bag, class] in, the key or blob inline (wrapped keys stay far below the 4 KiB inline limit).
-IOReturn keyOperation(uint32_t selector, IOExternalMethodArguments *args)
+static IOReturn keyOperation(uint32_t selector, IOExternalMethodArguments *args)
 {
     const bool wrapping = selector == kSelWrapKey;
     if (args->scalarInputCount != 2 || !args->scalarInput || args->scalarOutputCount != (wrapping ? 1u : 0u) ||
         (wrapping && !args->scalarOutput) || !args->structureInput || args->structureInputDescriptor) {
         return kAksBadArgument;
     }
-    const int64_t bag = (int64_t)args->scalarInput[0], keyClass = (int64_t)args->scalarInput[1];
-    if (bag != (int64_t)kSystemHandle)
+    const int64_t bag = static_cast<int64_t>(args->scalarInput[0]);
+    const int64_t keyClass = static_cast<int64_t>(args->scalarInput[1]);
+    if (bag != static_cast<int64_t>(kSystemHandle))
         return bag < 0 ? kAksBadArgument : kAksNotFound;
-    if (keyClass < 1 || keyClass > (int64_t)kMaxKeyClass)
+    if (keyClass < 1 || keyClass > static_cast<int64_t>(kMaxKeyClass))
         return kAksBadArgument;
     uint8_t out[aks::kMaxKey + aks::kBlock];
-    size_t written = 0, capacity = structureCapacity(args);
+    size_t written = 0;
+    size_t capacity = structureCapacity(args);
     if (capacity > sizeof out)
         capacity = sizeof out;
-    const uint8_t *in = (const uint8_t *)args->structureInput;
-    IOReturn rc = wrapping ? native_aks_wrap((uint32_t)bag, (uint32_t)keyClass, in, args->structureInputSize, out,
-                                             capacity, &written)
-                           : native_aks_unwrap((uint32_t)bag, (uint32_t)keyClass, in, args->structureInputSize, out,
-                                               capacity, &written);
+    const uint8_t *in = static_cast<const uint8_t *>(args->structureInput);
+    IOReturn rc = wrapping ? native_aks_wrap(static_cast<uint32_t>(bag), static_cast<uint32_t>(keyClass), in,
+                                             args->structureInputSize, out, capacity, &written)
+                           : native_aks_unwrap(static_cast<uint32_t>(bag), static_cast<uint32_t>(keyClass), in,
+                                               args->structureInputSize, out, capacity, &written);
     if (rc == kIOReturnSuccess)
         rc = writeStructure(args, out, written);
     aks::wipe(out, sizeof out);
     if (rc != kIOReturnSuccess)
         return rc;
     if (wrapping) {
-        args->scalarOutput[0] = (uint64_t)keyClass;
+        args->scalarOutput[0] = static_cast<uint64_t>(keyClass);
         args->scalarOutputCount = 1;
     }
     return kIOReturnSuccess;
 }
 
+// NOLINTNEXTLINE(misc-use-internal-linkage): OSDefineMetaClassAndStructors needs external linkage (kalloc type view)
 class AppleKeyStoreUserClient final : public IOUserClient {
+    // NOLINTNEXTLINE(misc-explicit-constructor): IOKit's structors macro declares the metaclass constructor
 OSDeclareDefaultStructors(AppleKeyStoreUserClient) public : IOReturn clientClose() override
     {
         terminate();
@@ -208,9 +213,9 @@ OSDeclareDefaultStructors(AppleKeyStoreUserClient) public : IOReturn clientClose
                             void *) override
     {
         IOReturn rc = kAksUnsupported;
-        if (!args)
+        if (!args) {
             rc = kAksError;
-        else
+        } else {
             switch (selector) {
             // Handshake right after IOServiceOpen (a failure makes libaks drop the connection and reopen on every call), and the
             // bag/assertion/notification calls that need no answer in an environment without keybags.
@@ -251,7 +256,7 @@ OSDeclareDefaultStructors(AppleKeyStoreUserClient) public : IOReturn clientClose
                     break;
                 }
                 uint8_t der[160];
-                size_t n = native_aks_encode_state(der, sizeof der, native_aks_lock_state());
+                const size_t n = native_aks_encode_state(der, sizeof der, native_aks_lock_state());
                 rc = n ? writeStructure(args, der, n) : kIOReturnNoSpace;
                 break;
             }
@@ -264,12 +269,12 @@ OSDeclareDefaultStructors(AppleKeyStoreUserClient) public : IOReturn clientClose
                     rc = kAksBadArgument;
                     break;
                 }
-                if ((int64_t)args->scalarInput[0] != (int64_t)kSystemHandle) {
+                if (static_cast<int64_t>(args->scalarInput[0]) != static_cast<int64_t>(kSystemHandle)) {
                     rc = kAksNotFound;
                     break;
                 }
                 uint8_t uuid[16];
-                rc = native_aks_bag_uuid((uint32_t)kSystemHandle, uuid);
+                rc = native_aks_bag_uuid(static_cast<uint32_t>(kSystemHandle), uuid);
                 if (rc == kIOReturnSuccess)
                     rc = writeStructure(args, uuid, sizeof uuid);
                 break;
@@ -282,14 +287,17 @@ OSDeclareDefaultStructors(AppleKeyStoreUserClient) public : IOReturn clientClose
                 native_aks_unsupported(selector);
                 break;
             }
-        native_aks_call(selector, (int32_t)rc);
+        }
+        native_aks_call(selector, static_cast<int32_t>(rc));
         return rc;
     }
 };
 
 OSDefineMetaClassAndStructors(AppleKeyStoreUserClient, IOUserClient)
 
+    // NOLINTNEXTLINE(misc-use-internal-linkage): OSDefineMetaClassAndStructors needs external linkage (kalloc type view)
     class AppleKeyStore final : public IOService {
+    // NOLINTNEXTLINE(misc-explicit-constructor): IOKit's structors macro declares the metaclass constructor
     OSDeclareDefaultStructors(AppleKeyStore) IOReturn
         open(task_t task, void *security, UInt32 type, OSDictionary *properties, IOUserClient **out)
     {
