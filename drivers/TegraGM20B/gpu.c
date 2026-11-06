@@ -1213,8 +1213,9 @@ void tgm_chan_check_progress(struct tgm_chan *chan, const char *who, uint32_t se
  * taken (gk20a_fifo_recover, gk20a_gr_isr: the faulting channel gets an error and only it is torn down): after an
  * interrupt pass in which nvkm reported errors (xnu_glue.cpp gpuInterrupt), errors_contained() takes the channels the
  * reports name ("on channel N [" for MMU faults, "ch N" for PBDMA errors and GR exceptions) and those nvkm put into
- * recovery in that pass without naming them (a context-switch timeout, e.g. a shader that never ends:
- * gf100_fifo_intr_ctxsw_timeout -> nvkm_runl_rc_engn marks the channel on the engine). If each is a client channel
+ * recovery in that pass without naming them. A context-switch timeout (a shader that never ends, a switch that never
+ * drains) is a tick recover.c waits out until the engine's channel is stuck (tgm_ctxsw_stuck), then recovers as nvkm does
+ * (gf100_fifo_intr_ctxsw_timeout: the engine faulted off it). If each is a client channel
  * (the compositor's too: Core Animation makes its resources again after an error, as on iOS), the errors are that
  * client's: nvkm's recovery (nvkm_runl_rc_cgrp: runlist blocked and preempted, the channel disabled and removed, an
  * engine still on it reset; nvkm starts it itself for MMU faults, errors_contained() for the rest, which nvkm only
@@ -1307,17 +1308,13 @@ static const char *next_chid(const char *p, int *chid)
 	return best;
 }
 
-/* 1 if nvkm marked the channel's group for recovery (nvkm_runl_rc_cgrp), or, after a context-switch timeout (which
- * names no channel: nvkm first triggers an MMU fault on the engine, gf100_fifo_intr_ctxsw_timeout, and recovers in the
- * next pass), if an engine is still on it: the one that does not yield. */
-static int chan_marked(u32 chid, int ctxsw_timeout)
+/* 1 if nvkm marked the channel's group for recovery (nvkm_runl_rc_cgrp). */
+static int chan_marked(u32 chid)
 {
 	struct nvkm_runl *runl;
-	struct nvkm_engn *engn;
 	struct nvkm_chan *nchan;
 	unsigned long flags;
-	bool cgid;
-	int id, marked = 0;
+	int marked = 0;
 
 	nvkm_runl_foreach(runl, gpu.device->fifo)
 	{
@@ -1325,15 +1322,26 @@ static int chan_marked(u32 chid, int ctxsw_timeout)
 		if (!nchan)
 			continue;
 		marked = atomic_read(&nchan->cgrp->rc) != NVKM_CGRP_RC_NONE;
-		nvkm_runl_foreach_engn_cond(engn, runl, ctxsw_timeout && engn->func->cxid)
-		{
-			id = engn->func->cxid(engn, &cgid);
-			marked |= id >= 0 && id == (cgid ? nchan->cgrp->id : nchan->id);
-		}
 		nvkm_chan_put(&nchan, flags);
 		break;
 	}
 	return marked;
+}
+
+/* 1 if every report of the pass is a context-switch timeout tick: recover.c decides on those (tgm_ctxsw_stuck). */
+static int only_ctxsw_ticks(const char *errors)
+{
+	const char *p = errors, *bar, *tick;
+
+	for (;;) {
+		bar = strstr(p, " | ");
+		tick = strstr(p, "CTXSW_TIMEOUT");
+		if (!tick || (bar && tick > bar))
+			return 0;
+		if (!bar)
+			return 1;
+		p = bar + 3;
+	}
 }
 
 static void chan_recover(u32 chid)
@@ -1395,11 +1403,10 @@ static int errors_contained(const char *errors)
 		if (contained && i == n && n < ARRAY_SIZE(named))
 			named[n++] = found;
 	}
-	/* channels nvkm put into recovery itself, or the one a context-switch timeout is about; not yet dead or isolated */
+	/* channels nvkm put into recovery itself, not yet dead or isolated */
 	list_for_each_entry(chan, &live_chans, live)
 	{
-		if (!contained || chan->error || chan->isolating ||
-		    !chan_marked(chan->chid, strstr(errors, "CTXSW_TIMEOUT") != NULL))
+		if (!contained || chan->error || chan->isolating || !chan_marked(chan->chid))
 			continue;
 		for (i = 0; i < n && named[i] != chan; i++)
 			;
@@ -1408,7 +1415,7 @@ static int errors_contained(const char *errors)
 		else if (i == n && n < ARRAY_SIZE(named))
 			named[n++] = chan;
 	}
-	if (!n && (!iso.until || now >= iso.until))
+	if (!n && (!iso.until || now >= iso.until) && !only_ctxsw_ticks(errors))
 		contained = 0;
 	for (i = 0; contained && i < n; i++)
 		chan_isolate(named[i], errors, now);
@@ -1441,10 +1448,6 @@ static void iso_deadline(void *arg)
 	mutex_unlock(&live_lock);
 }
 
-/* A channel with work pending that has completed nothing for TGM_STUCK_NS. Below TGM_HANG_NS and the present's 1 s, so
- * the channels a late wait finds still stuck at its deadline were stuck for most of it. */
-#define TGM_STUCK_NS (500 * NSEC_PER_MSEC)
-
 static u64 chan_progress_ns(struct tgm_chan *chan)
 {
 	return max(READ_ONCE(chan->progress_ns), READ_ONCE(chan->busy_ns));
@@ -1452,9 +1455,8 @@ static u64 chan_progress_ns(struct tgm_chan *chan)
 
 static int chan_stuck(struct tgm_chan *chan, u64 now)
 {
-	return !READ_ONCE(chan->error) &&
-	       (s32)(tgm_chan_completed(chan) - READ_ONCE(chan->submitted)) < 0 &&
-	       now - chan_progress_ns(chan) >= TGM_STUCK_NS;
+	return tgm_stuck(READ_ONCE(chan->error) != 0, tgm_chan_completed(chan),
+			 READ_ONCE(chan->submitted), now, chan_progress_ns(chan));
 }
 
 /* live_lock held; by id, else (id 0) by hardware channel */
@@ -1511,7 +1513,33 @@ static enum tgm_hang hang_recover(struct tgm_chan *late, const char *who, u32 se
 	nvxnu_log("tegra-gm20b: GPU hang, recovering %s (channel %u): %s\n", blame->owner,
 		  blame->chid, report);
 	chan_isolate(blame, report, now);
+	tgm_recover_fault(gpu.device, blame->chid);
 	return verdict;
+}
+
+int tgm_ctxsw_stuck(int chid)
+{
+	struct tgm_chan *chan;
+	char report[sizeof(chan->fault)], state[320];
+	u64 now = nvxnu_nanotime();
+	int stuck = 1;
+
+	mutex_lock(&live_lock);
+	chan = live_by(0, chid);
+	if (chan && !chan_stuck(chan, now)) {
+		stuck = 0;
+	} else if (chan && !chan->isolating) {
+		chan_describe(chan, state, sizeof(state));
+		if (chan->kernel)
+			nvxnu_panic("tegra-gm20b: context switch timed out on %s's channel: %s",
+				    chan->owner, state);
+		scnprintf(report, sizeof(report), "CTXSW_TIMEOUT: %s", state);
+		nvxnu_log("tegra-gm20b: context switch timed out, recovering %s (channel %u): %s\n",
+			  chan->owner, chan->chid, state);
+		chan_isolate(chan, report, now);
+	}
+	mutex_unlock(&live_lock);
+	return stuck;
 }
 
 void tgm_chan_stalled(struct tgm_chan *chan, const char *who, uint32_t seqno, uint64_t waited_ns)
@@ -2150,7 +2178,7 @@ static void stats_tick(void)
 	u32 submits, fences, imports, timed, presents, ordered, idle, late, writer, allocs, mc_int,
 		mc_err, mc_adr, copies, gaps, comp, behind, lnew, lfree;
 	u64 abytes, ans, pt, cal, rate, cs, cm, gs, gm, busy, cos, com, bs, bm, lns, lnm, lfs, lfm;
-	char line[1024], clk[120], scrubbed[120], sched[120];
+	char line[1024], clk[120], scrubbed[120], sched[120], recov[80];
 
 	__atomic_fetch_add(&stats.submits, 1, __ATOMIC_RELAXED);
 	if (!since) {
@@ -2201,6 +2229,7 @@ static void stats_tick(void)
 	bs = __atomic_exchange_n(&stats.behind_sum, 0, __ATOMIC_RELAXED);
 	bm = __atomic_exchange_n(&stats.behind_max, 0, __ATOMIC_RELAXED);
 	tgm_sched_stats(sched, sizeof(sched));
+	tgm_recover_stats(recov, sizeof(recov));
 	lnew = __atomic_exchange_n(&stats.lock_new, 0, __ATOMIC_RELAXED);
 	lns = __atomic_exchange_n(&stats.lock_new_sum, 0, __ATOMIC_RELAXED);
 	lnm = __atomic_exchange_n(&stats.lock_new_max, 0, __ATOMIC_RELAXED);
@@ -2222,14 +2251,14 @@ static void stats_tick(void)
 		  "L2 %s, %u presents (%u writer-only), "
 		  "offer to done mean %llu us max "
 		  "%llu us, %s; compositor GPU queue mean %llu us max %llu us (%u), with an app on "
-		  "the GPU at its kick mean %llu us max %llu us (%u); %s",
+		  "the GPU at its kick mean %llu us max %llu us (%u); %s; %s",
 		  ms, submits, submits * 1000ULL / (ms ? ms : 1), fences ? sum / fences / 1000 : 0,
 		  max / 1000, fences, timed ? PT_NS(qs) / timed / 1000 : 0, PT_NS(qm) / 1000,
 		  timed ? PT_NS(es) / timed / 1000 : 0, PT_NS(em) / 1000, timed, busy, rate >> 16,
 		  ((rate & 0xffff) * 1000) >> 16, l2_on() ? "cached" : "volatile", presents, writer,
 		  presents ? ps / presents / 1000 : 0, pm / 1000, clk,
 		  comp ? PT_NS(cos) / comp / 1000 : 0, PT_NS(com) / 1000, comp,
-		  behind ? PT_NS(bs) / behind / 1000 : 0, PT_NS(bm) / 1000, behind, sched);
+		  behind ? PT_NS(bs) / behind / 1000 : 0, PT_NS(bm) / 1000, behind, sched, recov);
 	nvxnu_stats("tegra-gm20b: stats %s", line);
 	/* the pool by holder, so no share of it goes unnamed */
 	uint64_t pool_clients, pool_orphan_bytes, pool_orphans, pool_system_bytes, pool_systems;
@@ -4793,6 +4822,7 @@ int tgm_bringup(int stage, char *line, unsigned int len)
 			ret = m2(line, len);
 		if (ret)
 			return ret;
+		tgm_recover_init(gpu.device);
 		tgm_recover_arm(gpu.device);
 		tgm_sched_init(gpu.device);
 		gpu.stage = 2;

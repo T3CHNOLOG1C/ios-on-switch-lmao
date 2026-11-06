@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 // TegraGM20BSchedPolicy.h (what a compositor kick preempts, the interleaved runlist) and TegraGM20BRecover.h's
-// tgm_hang_blame (which channel a late wait kills), over the registers and channels of deploy-2045's hang: GR stuck
-// switching from backboardd's channel 3 to Maps' 26, PBDMA0 on 26.
+// tgm_stuck (when a context-switch timeout tick or a late wait may kill a channel) and tgm_hang_blame (which channel a
+// late wait kills), over the registers and channels of deploy-2045's hang: GR stuck switching from backboardd's channel 3
+// to Maps' 26, PBDMA0 on 26.
 #include <algorithm>
 #include <cstdint>
 #include <vector>
@@ -100,6 +101,36 @@ TEST(Interleave, NoRoomForAnyRepeatListsEachOnce)
 	const std::vector<uint8_t> high = {0, 1, 0};
 	const std::vector<uint16_t> entries = {1, 1, 1};
 	EXPECT_EQ(plan(high, entries, 3), (std::vector<uint16_t>{0, 1, 2}));
+}
+
+constexpr uint64_t kMs = 1000 * 1000;
+constexpr uint64_t kTick = 250 * kMs;  // recover.c's CTXSW_TIMEOUT_US
+
+TEST(Stuck, ALongDrainOfTheOutgoingChannelIsWaitedOut)
+{
+	// backboardd's m2v pass of 144 ms, two a frame, while an app waits: its last completion 20 ms before the switch
+	// request, the first tick 250 ms after it, the pass done at 288 ms, the second tick at 500 ms
+	const uint64_t request = 1000 * kMs, lastDone = request - 20 * kMs;
+	EXPECT_FALSE(tgm_stuck(0, 90, 92, request + kTick, lastDone));
+	EXPECT_FALSE(tgm_stuck(0, 91, 92, request + 2 * kTick, request + 288 * kMs));
+	EXPECT_LT(2 * 144 * kMs, TGM_STUCK_NS);
+}
+
+TEST(Stuck, Deploy2045sSwitchThatNeverEndsIsKilled)
+{
+	// ENG0 801ae003 at both ticks; backboardd's fence 90/93, nothing completed since 20 ms before the request
+	EXPECT_EQ(tgm_kick_victim(kHangEng0, 1, 1, 26, 0), TGM_VICTIM_SWITCHING);
+	const uint64_t request = 1000 * kMs, lastDone = request - 20 * kMs;
+	EXPECT_FALSE(tgm_stuck(0, 90, 93, request + kTick, lastDone));
+	EXPECT_TRUE(tgm_stuck(0, 90, 93, request + 2 * kTick, lastDone));
+}
+
+TEST(Stuck, IdleOrDeadChannelsNeverAre)
+{
+	EXPECT_FALSE(tgm_stuck(0, 93, 93, 10000 * kMs, 0));
+	EXPECT_FALSE(tgm_stuck(1, 90, 93, 10000 * kMs, 0));
+	EXPECT_TRUE(
+		tgm_stuck(0, 0xfffffffe, 2, 10000 * kMs, 0));  // a fence word wrapping past zero
 }
 
 struct Candidates {

@@ -22,6 +22,7 @@
 #include <subdev/timer.h>
 #include "TegraGM20BGpu.h"
 #include "TegraGM20BHost.h"
+#include "TegraGM20BRecover.h"
 #include "TegraGM20BSched.h"
 #include "TegraGM20BSchedPolicy.h"
 
@@ -30,8 +31,7 @@
 
 static DECLARE_BITMAP(high, SCHED_CHIDS);
 
-/* nvkm's FIFO and channel functions, the channel preempt wrapped (sched_chan_preempt) */
-static struct nvkm_fifo_func fifo_func;
+/* nvkm's channel functions, the preempt wrapped (sched_chan_preempt) */
 static struct nvkm_chan_func chan_func;
 static void (*orig_chan_preempt)(struct nvkm_chan *);
 
@@ -135,13 +135,11 @@ void tgm_sched_init(struct nvkm_device *device)
 	struct nvkm_runl *runl;
 	u32 entries;
 
-	if (fifo->func->chan.func->preempt && fifo->func != &fifo_func) {
+	if (fifo->func->chan.func->preempt && fifo->func->chan.func != &chan_func) {
 		chan_func = *fifo->func->chan.func;
 		orig_chan_preempt = chan_func.preempt;
 		chan_func.preempt = sched_chan_preempt;
-		fifo_func = *fifo->func;
-		fifo_func.chan.func = &chan_func;
-		fifo->func = &fifo_func;
+		tgm_fifo_func(fifo)->chan.func = &chan_func;
 	}
 
 	nvkm_runl_foreach(runl, device->fifo)
