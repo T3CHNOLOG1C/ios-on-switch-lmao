@@ -20,6 +20,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
+#include "../../kits/SwitchCRC/SwitchCRC.h"
 
 #define SWITCH_NVRAM_STORE_VERSION   1u
 #define SWITCH_NVRAM_STORE_HEADER    32u
@@ -36,17 +37,6 @@ static inline void switch_nvram_put32(uint8_t *p, uint32_t value)
 {
     for (int i = 0; i < 4; ++i)
         p[i] = (uint8_t)(value >> (8 * i));
-}
-
-static inline uint32_t switch_nvram_crc32(uint32_t crc, const uint8_t *p, size_t length)
-{
-    crc = ~crc;
-    while (length--) {
-        crc ^= *p++;
-        for (int bit = 0; bit < 8; ++bit)
-            crc = (crc >> 1) ^ (0xedb88320u & (0u - (crc & 1u)));
-    }
-    return ~crc;
 }
 
 static inline uint32_t switch_nvram_store_stride(uint32_t bytes)
@@ -87,8 +77,8 @@ static inline void switch_nvram_store_fill(uint8_t *slot, const uint8_t *image, 
     switch_nvram_put32(slot + 16, (uint32_t)sequence);
     switch_nvram_put32(slot + 20, (uint32_t)(sequence >> 32));
     memcpy(slot + SWITCH_NVRAM_STORE_HEADER, image, bytes);
-    uint32_t crc = switch_nvram_crc32(0, slot, 28);
-    switch_nvram_put32(slot + 28, switch_nvram_crc32(crc, image, bytes));
+    uint32_t crc = switch_crc32(0, slot, 28);
+    switch_nvram_put32(slot + 28, switch_crc32(crc, image, bytes));
 }
 
 // The image in slot n of the file's first length bytes, if that slot checks out for a bank of bytes; else NULL.
@@ -103,7 +93,7 @@ static inline const uint8_t *switch_nvram_store_slot(const uint8_t *file, size_t
         switch_nvram_get32(slot + 8) != SWITCH_NVRAM_STORE_VERSION || switch_nvram_get32(slot + 12) != bytes ||
         switch_nvram_get32(slot + 24) != 0)
         return NULL;
-    const uint32_t crc = switch_nvram_crc32(switch_nvram_crc32(0, slot, 28), image, bytes);
+    const uint32_t crc = switch_crc32(switch_crc32(0, slot, 28), image, bytes);
     if (crc != switch_nvram_get32(slot + 28) || !switch_nvram_chrp_valid(image, bytes))
         return NULL;
     *sequence = (uint64_t)switch_nvram_get32(slot + 16) | (uint64_t)switch_nvram_get32(slot + 20) << 32;

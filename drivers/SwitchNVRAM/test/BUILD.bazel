@@ -16,6 +16,7 @@ host_library(
     hdrs = [
         "switch_nvram_store_harness.h",
         "//drivers/SwitchNVRAM:SwitchNVRAMStore.h",
+        "//kits/SwitchCRC:SwitchCRC.h",
     ],
     copts = [
         "-O1",

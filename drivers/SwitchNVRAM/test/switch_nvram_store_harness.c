@@ -6,7 +6,7 @@
 
 uint32_t nv_crc32(const uint8_t *data, size_t length)
 {
-    return switch_nvram_crc32(0, data, length);
+    return switch_crc32(0, data, length);
 }
 
 uint32_t nv_stride(uint32_t bytes)
