@@ -353,6 +353,11 @@ options CONFIG_SUPPLEMENTAL_SIGNATURES # <config_supplemental_signatures>
 # code decryption... used on embedded for app protection, DSMOS on desktop
 #
 options		CONFIG_CODE_DECRYPTION		# <config_code_decryption>
+#
+# a64x: translate arm64e user code at load time for ARMv8.0 cores without
+# pointer authentication or LSE (e.g. Cortex-A57). Needs config_code_decryption.
+#
+options		CONFIG_A64X			# <a64x>
 
 #
 # User Content Protection, used on embedded

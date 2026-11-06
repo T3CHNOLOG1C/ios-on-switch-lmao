@@ -63,6 +63,8 @@
 #if defined(HAS_APPLE_PAC)
 #include <ptrauth.h>
 #include <arm/misc_protos.h>
+#elif CONFIG_A64X
+#include <ptrauth.h> /* the key names only: nothing is signed on this kernel */
 #endif /* defined(HAS_APPLE_PAC) */
 
 
@@ -557,7 +559,7 @@ fixupPage32(
 	return KERN_SUCCESS;
 }
 
-#if defined(HAS_APPLE_PAC)
+#if defined(HAS_APPLE_PAC) || CONFIG_A64X
 /*
  * Sign a pointer needed for fixups.
  */
@@ -577,6 +579,19 @@ signPointer(
 		return KERN_SUCCESS;
 	}
 
+#if !defined(HAS_APPLE_PAC)
+	/* CONFIG_A64X: pointer authentication is the identity (arm64e code runs translated) */
+	(void)loc;
+	(void)addrDiv;
+	(void)diversity;
+	(void)pager;
+	if (key == ptrauth_key_asia || key == ptrauth_key_asda) {
+		*signedAddr = unsignedAddr;
+		return KERN_SUCCESS;
+	}
+	printf("%s(): Invalid ptr auth key %d\n", __func__, key);
+	return KERN_FAILURE;
+#else /* defined(HAS_APPLE_PAC) */
 	uint64_t extendedDiscriminator = diversity;
 	if (addrDiv) {
 		extendedDiscriminator = __builtin_ptrauth_blend_discriminator(loc, extendedDiscriminator);
@@ -601,6 +616,7 @@ signPointer(
 		return KERN_FAILURE;
 	}
 	return KERN_SUCCESS;
+#endif /* defined(HAS_APPLE_PAC) */
 }
 
 /*
@@ -813,7 +829,7 @@ fixupCachePageAuth64(
 	} while (valid_chain);
 	return KERN_SUCCESS;
 }
-#endif /* defined(HAS_APPLE_PAC) */
+#endif /* defined(HAS_APPLE_PAC) || CONFIG_A64X */
 
 
 /*
@@ -922,7 +938,7 @@ fixup_page(
 	 * Route to the appropriate fixup routine
 	 */
 	switch (hdr->mwli_pointer_format) {
-#if defined(HAS_APPLE_PAC)
+#if defined(HAS_APPLE_PAC) || CONFIG_A64X
 	case DYLD_CHAINED_PTR_ARM64E:
 		fixupPageAuth64(userVA, contents, pager, segInfo, pageIndex, false);
 		break;
@@ -933,7 +949,7 @@ fixup_page(
 	case DYLD_CHAINED_PTR_ARM64E_SHARED_CACHE:
 		fixupCachePageAuth64(userVA, contents, pager, segInfo, pageIndex);
 		break;
-#endif /* defined(HAS_APPLE_PAC) */
+#endif /* defined(HAS_APPLE_PAC) || CONFIG_A64X */
 	case DYLD_CHAINED_PTR_64:
 		fixupPage64(userVA, contents, link_info, segInfo, pageIndex, false);
 		break;

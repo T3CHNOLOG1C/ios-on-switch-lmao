@@ -130,6 +130,7 @@
 #include <vm/vm_map_xnu.h>
 #include <vm/vm_pager_xnu.h>
 #include <vm/vm_sanitize_internal.h>
+#include <sys/a64x_xnu.h>
 
 #if CONFIG_MACF
 #include <security/mac_framework.h>
@@ -475,6 +476,15 @@ mmap(proc_t p, struct mmap_args *uap, user_addr_t *retval)
 		}
 	}
 
+#if CONFIG_A64X
+	/*
+	 * A JIT in an arm64e process emits arm64e code (PAC, LSE) that no one translates: refuse, so the JIT
+	 * (JavaScriptCore) falls back to its interpreter.
+	 */
+	if ((flags & MAP_JIT) && a64x_subtype_translated(p->p_cputype, p->p_cpusubtype)) {
+		return ENOTSUP;
+	}
+#endif /* CONFIG_A64X */
 	/* Entitlement check against code signing monitor */
 	if ((flags & MAP_JIT) && (vm_map_csm_allow_jit(user_map) != KERN_SUCCESS)) {
 		printf("[%d] code signing monitor denies JIT mapping\n", proc_pid(p));
@@ -914,6 +924,14 @@ map_file_retry:
 			user_addr = vm_map_page_size(user_map);
 			goto map_file_retry;
 		}
+#if CONFIG_A64X
+		if (result == KERN_SUCCESS && (prot & VM_PROT_EXECUTE) &&
+		    a64x_mmap_exec(user_map, vp, (off_t)vm_map_trunc_page(file_pos, user_mask), user_addr, user_size) != 0) {
+			/* arm64e text that cannot be translated would fault on its first RETAB: fail the mapping */
+			(void)mach_vm_deallocate(user_map, user_addr, user_size);
+			result = KERN_PROTECTION_FAILURE;
+		}
+#endif /* CONFIG_A64X */
 	}
 
 	if (!mapanon) {

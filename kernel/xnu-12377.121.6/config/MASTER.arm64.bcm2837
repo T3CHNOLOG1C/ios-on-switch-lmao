@@ -87,7 +87,7 @@
 #  VM_EXTRA =       [ ]
 #  VM_EXTRA_DEV =   [ ]
 #endif /* MASTER_CONFIG_ENABLE_KERNEL_TAG && MASTER_CONFIG_ENABLE_SPTM */
-#  VM_BASE =        [ vps_dynamic_prio vm_pressure_events jetsam freeze memorystatus config_code_decryption phantom_cache config_secluded_memory config_cs_validation_bitmap config_deferred_reclaim config_map_ranges VM_EXTRA ]
+#  VM_BASE =        [ vps_dynamic_prio vm_pressure_events jetsam freeze memorystatus config_code_decryption a64x phantom_cache config_secluded_memory config_cs_validation_bitmap config_deferred_reclaim config_map_ranges VM_EXTRA ]
 #  VM_RELEASE =     [ VM_BASE ]
 #  VM_DEV =         [ VM_BASE dynamic_codesigning ubsan_minimal VM_EXTRA_DEV ]
 #  VM_DEBUG =       [ VM_BASE dynamic_codesigning ubsan_minimal VM_EXTRA_DEV ]

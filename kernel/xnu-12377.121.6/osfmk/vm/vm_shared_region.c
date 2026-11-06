@@ -64,6 +64,12 @@
 #include <vm/vm_map_lock_internal.h>
 #include <vm/vm_memory_entry_xnu.h>
 #include <vm/vm_shared_region_internal.h>
+#if CONFIG_A64X
+/* bsd/kern/a64x_xnu.c (bsd headers are not visible here) */
+struct vnode;
+extern void *a64x_shared_cache_pager(void *file_object, uint64_t file_offset, uint64_t size, uint64_t vmaddr,
+    struct vnode *vp);
+#endif
 #include <vm/vm_kern_xnu.h>
 #include <vm/memory_object_internal.h>
 #include <vm/vm_protos_internal.h>
@@ -1833,6 +1839,25 @@ vm_shared_region_map_file_setup(
 				}
 			} else {
 				object = VM_OBJECT_NULL; /* no anonymous memory here */
+				memory_object_offset_t map_offset = mappings[i].sms_file_offset;
+#if CONFIG_A64X
+				/*
+				 * arm64e cache text: map it through the translator (an apple_protect pager on the
+				 * cache file: pages validated against the cache signature, then translated).
+				 */
+				memory_object_t a64x_mo = MEMORY_OBJECT_NULL;
+				if (mappings[i].sms_init_prot & VM_PROT_EXECUTE) {
+					/* every iOS 26 cache is arm64e, also the one arm64 processes map */
+					a64x_mo = a64x_shared_cache_pager(file_object, mappings[i].sms_file_offset,
+					    mappings[i].sms_size, mappings[i].sms_address - srfmp->slide, srfmp->vp);
+					if (a64x_mo == MEMORY_OBJECT_NULL) {
+						kr = KERN_FAILURE;
+						break;
+					}
+					__IGNORE_WCASTALIGN(map_port = (ipc_port_t)a64x_mo);
+					map_offset = 0;
+				}
+#endif /* CONFIG_A64X */
 				kr = mach_vm_map_kernel(
 					sr_map,
 					vm_sanitize_wrap_addr_ref(&target_address),
@@ -1841,11 +1866,16 @@ vm_shared_region_map_file_setup(
 					0,
 					vmk_flags,
 					map_port,
-					mappings[i].sms_file_offset,
+					map_offset,
 					TRUE,
 					mappings[i].sms_init_prot & VM_PROT_ALL,
 					mappings[i].sms_max_prot & VM_PROT_ALL,
 					VM_INHERIT_DEFAULT);
+#if CONFIG_A64X
+				if (a64x_mo != MEMORY_OBJECT_NULL) {
+					memory_object_deallocate(a64x_mo); /* the mapping holds its own reference */
+				}
+#endif /* CONFIG_A64X */
 			}
 
 			if (kr == KERN_SUCCESS) {
@@ -3349,6 +3379,9 @@ vm_shared_region_slide_page_v3(
 			} else {
 				memcpy(rebaseLocation, &value, sizeof(value));
 			}
+#else /* !__has_feature(ptrauth_calls) */
+			/* no pointer authentication here: the authenticated pointer is the plain target */
+			memcpy(rebaseLocation, &value, sizeof(value));
 #endif /* __has_feature(ptrauth_calls) */
 		} else {
 			// The new value for a rebase is the low 51-bits of the threaded value plus the slide.
@@ -3568,6 +3601,9 @@ vm_shared_region_slide_page_v5(
 			} else {
 				memcpy(rebaseLocation, &value, sizeof(value));
 			}
+#else /* !__has_feature(ptrauth_calls) */
+			/* no pointer authentication here: the authenticated pointer is the plain target */
+			memcpy(rebaseLocation, &value, sizeof(value));
 #endif /* __has_feature(ptrauth_calls) */
 		} else {
 			// the value already has the correct low bits, so just add in the high8 if it exists

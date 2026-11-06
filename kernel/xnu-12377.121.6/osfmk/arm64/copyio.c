@@ -426,6 +426,58 @@ copyin(const user_addr_t user_addr, void *kernel_addr, vm_size_t nbytes)
 	           _bcopyin(guarded_user_addr, kernel_addr, nbytes));
 }
 
+#if CONFIG_A64X
+extern int _a64x_user_rmw(const user_addr_t uaddr, uint64_t operand, uint64_t *old, uint32_t size_op);
+extern int _a64x_user_cas(const user_addr_t uaddr, uint64_t expected, uint64_t desired, uint64_t *old, uint32_t size);
+extern int _a64x_user_casp(const user_addr_t uaddr, const uint64_t *expected, const uint64_t *desired, uint64_t *old);
+
+/* LD<op>/SWP emulation: op 0 add, 1 clr, 2 eor, 3 set, 4 smax, 5 smin, 6 umax, 7 umin, 8 swp; acquire+release */
+int
+a64x_copyio_rmw(user_addr_t user_addr, uint32_t size, uint32_t op, uint64_t operand, uint64_t *old)
+{
+	vm_map_t map = current_thread()->map;
+	int result = copy_validate(map, user_addr, (uintptr_t)old, 1u << size, COPYIO_OUT | COPYIO_ATOMIC);
+	if (__improbable(result)) {
+		return result;
+	}
+	user_addr_t guarded_user_addr = copy_ensure_address_space_spec(map, user_addr);
+	return WRAP_COPYIO(USER_ACCESS_WRITE, map, _a64x_user_rmw(guarded_user_addr, operand, old, size | (op << 4)));
+}
+
+int
+a64x_copyio_cas(user_addr_t user_addr, uint32_t size, uint64_t expected, uint64_t desired, uint64_t *old)
+{
+	vm_map_t map = current_thread()->map;
+	int result = copy_validate(map, user_addr, (uintptr_t)old, 1u << size, COPYIO_OUT | COPYIO_ATOMIC);
+	if (__improbable(result)) {
+		return result;
+	}
+	user_addr_t guarded_user_addr = copy_ensure_address_space_spec(map, user_addr);
+	return WRAP_COPYIO(USER_ACCESS_WRITE, map, _a64x_user_cas(guarded_user_addr, expected, desired, old, size));
+}
+
+int
+a64x_copyio_casp(user_addr_t user_addr, uint64_t e0, uint64_t e1, uint64_t d0, uint64_t d1, uint64_t *o0, uint64_t *o1)
+{
+	vm_map_t map = current_thread()->map;
+	uint64_t e[2] = { e0, e1 }, d[2] = { d0, d1 }, o[2];
+	if (user_addr & 15) {
+		return EFAULT;
+	}
+	int result = copy_validate(map, user_addr, (uintptr_t)o, 16, COPYIO_OUT);
+	if (__improbable(result)) {
+		return result;
+	}
+	user_addr_t guarded_user_addr = copy_ensure_address_space_spec(map, user_addr);
+	result = WRAP_COPYIO(USER_ACCESS_WRITE, map, _a64x_user_casp(guarded_user_addr, e, d, o));
+	if (!result) {
+		*o0 = o[0];
+		*o1 = o[1];
+	}
+	return result;
+}
+#endif /* CONFIG_A64X */
+
 /*
  * copy{in,out}_atomic{32,64}
  * Read or store an aligned value from userspace as a single memory transaction.

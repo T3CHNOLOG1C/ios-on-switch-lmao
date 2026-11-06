@@ -743,6 +743,222 @@ LEXT(dtrace_nofault_copy64)
 
 #endif /* CONFIG_DTRACE */
 
+#if CONFIG_A64X
+/*
+ * a64x: atomic read-modify-write on user memory, for the undefined-instruction fallback of the arm64e translator
+ * (bsd/kern/a64x_xnu.c a64x_emulate_user). Exclusive loops with acquire+release, under a copyio recovery range: a
+ * fault on the user address goes through vm_fault first, as for any copyio, and returns EFAULT if unresolved.
+ */
+
+/*
+ * x9 = op(x8 = old, zero-extended; x1 = operand), for an access of 8 << size bits (w14 = 64 - that).
+ * w5: 0 add, 1 clr, 2 eor, 3 set, 4 smax, 5 smin, 6 umax, 7 umin, 8 swp. No memory access, flags clobbered.
+ */
+	.text
+	.align 2
+La64x_op:
+	cmp	w5, #8
+	b.eq	9f
+	cmp	w5, #4
+	b.hs	4f
+	cmp	w5, #1
+	b.lo	0f
+	b.eq	1f
+	cmp	w5, #3
+	b.eq	3f
+	eor	x9, x8, x1
+	ret
+0:	add	x9, x8, x1
+	ret
+1:	bic	x9, x8, x1
+	ret
+3:	orr	x9, x8, x1
+	ret
+4:	/* max/min: compare in the access width */
+	lslv	x12, x8, x14
+	lslv	x13, x1, x14
+	cmp	w5, #6
+	b.hs	6f
+	asrv	x12, x12, x14
+	asrv	x13, x13, x14
+	cmp	x12, x13
+	csel	x9, x8, x1, gt
+	cmp	w5, #4
+	b.eq	8f
+	cmp	x12, x13
+	csel	x9, x8, x1, lt
+8:	ret
+6:	lsrv	x12, x12, x14
+	lsrv	x13, x13, x14
+	cmp	x12, x13
+	csel	x9, x8, x1, hi
+	cmp	w5, #6
+	b.eq	8b
+	cmp	x12, x13
+	csel	x9, x8, x1, lo
+	ret
+9:	mov	x9, x1
+	ret
+
+/*
+ * int _a64x_user_rmw(user_addr_t uaddr, uint64_t operand, uint64_t *old, uint32_t size_op)
+ *   size_op = size (0 byte, 1 half, 2 word, 3 double) | op << 4
+ */
+	.text
+	.align 2
+	.globl EXT(_a64x_user_rmw)
+LEXT(_a64x_user_rmw)
+	COPYIO_STACK_PROLOG
+	PUSH_FRAME
+	and	w4, w3, #3
+	lsr	w5, w3, #4
+	mov	w14, #8
+	lslv	w14, w14, w4
+	mov	w15, #64
+	sub	w14, w15, w14
+	cmp	w4, #1
+	b.lo	Lrmw8
+	b.eq	Lrmw16
+	cmp	w4, #2
+	b.eq	Lrmw32
+	COPYIO_RECOVER_RANGE Lrmw64_done
+1:	ldaxr	x8, [x0]
+	bl	La64x_op
+	stlxr	w10, x9, [x0]
+	cbnz	w10, 1b
+Lrmw64_done:
+	b	Lrmw_out
+Lrmw32:
+	COPYIO_RECOVER_RANGE Lrmw32_done
+1:	ldaxr	w8, [x0]
+	bl	La64x_op
+	stlxr	w10, w9, [x0]
+	cbnz	w10, 1b
+Lrmw32_done:
+	b	Lrmw_out
+Lrmw16:
+	COPYIO_RECOVER_RANGE Lrmw16_done
+1:	ldaxrh	w8, [x0]
+	bl	La64x_op
+	stlxrh	w10, w9, [x0]
+	cbnz	w10, 1b
+Lrmw16_done:
+	b	Lrmw_out
+Lrmw8:
+	COPYIO_RECOVER_RANGE Lrmw8_done
+1:	ldaxrb	w8, [x0]
+	bl	La64x_op
+	stlxrb	w10, w9, [x0]
+	cbnz	w10, 1b
+Lrmw8_done:
+Lrmw_out:
+	str	x8, [x2]
+	mov	x0, #0
+	mov	x8, #0
+	POP_FRAME
+	ARM64_STACK_EPILOG EXT(_a64x_user_rmw)
+
+/*
+ * int _a64x_user_cas(user_addr_t uaddr, uint64_t expected, uint64_t desired, uint64_t *old, uint32_t size)
+ */
+	.text
+	.align 2
+	.globl EXT(_a64x_user_cas)
+LEXT(_a64x_user_cas)
+	COPYIO_STACK_PROLOG
+	PUSH_FRAME
+	/* compare only the access width of `expected` */
+	mov	w14, #8
+	lslv	w14, w14, w4
+	mov	w15, #64
+	sub	w14, w15, w14
+	lslv	x5, x1, x14
+	lsrv	x5, x5, x14
+	cmp	w4, #1
+	b.lo	Lcas8
+	b.eq	Lcas16
+	cmp	w4, #2
+	b.eq	Lcas32
+	COPYIO_RECOVER_RANGE Lcas64_done
+1:	ldaxr	x8, [x0]
+	cmp	x8, x5
+	b.ne	2f
+	stlxr	w10, x2, [x0]
+	cbnz	w10, 1b
+	b	Lcas64_done
+2:	clrex
+Lcas64_done:
+	b	Lcas_out
+Lcas32:
+	COPYIO_RECOVER_RANGE Lcas32_done
+1:	ldaxr	w8, [x0]
+	cmp	x8, x5
+	b.ne	2f
+	stlxr	w10, w2, [x0]
+	cbnz	w10, 1b
+	b	Lcas32_done
+2:	clrex
+Lcas32_done:
+	b	Lcas_out
+Lcas16:
+	COPYIO_RECOVER_RANGE Lcas16_done
+1:	ldaxrh	w8, [x0]
+	cmp	x8, x5
+	b.ne	2f
+	stlxrh	w10, w2, [x0]
+	cbnz	w10, 1b
+	b	Lcas16_done
+2:	clrex
+Lcas16_done:
+	b	Lcas_out
+Lcas8:
+	COPYIO_RECOVER_RANGE Lcas8_done
+1:	ldaxrb	w8, [x0]
+	cmp	x8, x5
+	b.ne	2f
+	stlxrb	w10, w2, [x0]
+	cbnz	w10, 1b
+	b	Lcas8_done
+2:	clrex
+Lcas8_done:
+Lcas_out:
+	str	x8, [x3]
+	mov	x0, #0
+	mov	x8, #0
+	POP_FRAME
+	ARM64_STACK_EPILOG EXT(_a64x_user_cas)
+
+/*
+ * int _a64x_user_casp(user_addr_t uaddr, const uint64_t expected[2], const uint64_t desired[2], uint64_t old[2])
+ * The old pair is stored back on a failed compare: an LDXP pair is single-copy atomic only once a STXP succeeds.
+ */
+	.text
+	.align 2
+	.globl EXT(_a64x_user_casp)
+LEXT(_a64x_user_casp)
+	COPYIO_STACK_PROLOG
+	PUSH_FRAME
+	ldp	x4, x5, [x1]
+	ldp	x6, x7, [x2]
+	COPYIO_RECOVER_RANGE Lcasp_done
+1:	ldaxp	x8, x9, [x0]
+	cmp	x8, x4
+	ccmp	x9, x5, #0, eq
+	b.ne	2f
+	stlxp	w10, x6, x7, [x0]
+	cbnz	w10, 1b
+	b	Lcasp_done
+2:	stlxp	w10, x8, x9, [x0]
+	cbnz	w10, 1b
+Lcasp_done:
+	stp	x8, x9, [x3]
+	mov	x0, #0
+	mov	x8, #0
+	mov	x9, #0
+	POP_FRAME
+	ARM64_STACK_EPILOG EXT(_a64x_user_casp)
+#endif /* CONFIG_A64X */
+
 /*
  * int _copyin_atomic32(const user_addr_t src, uint32_t *dst)
  */
