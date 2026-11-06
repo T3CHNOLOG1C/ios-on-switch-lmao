@@ -48,12 +48,13 @@
     },
     "performAESTask": {
       "decl": "virtual IOReturn performAES(void *input, void *output, task_t task, unsigned long long bytes, IOAESIV *iv, IOAESOperation operation, IOAESKeyData *key, IOAESCompletion completion, void *refcon)",
-      "mangled": "__ZN16IOAESAccelerator10performAESEPvS0_P4taskyP7IOAESIV14IOAESOperationP12IOAESKeyDataPFvS0_iES0_"
+      "mangled": "__ZN16IOAESAccelerator10performAESEPvS0_P4taskyP7IOAESIV14IOAESOperationP12IOAESKeyDataPFvS0_iES0_",
+      "doc": "The original refuses a selector with bit 31 set (kIOReturnNotPrivileged), so only kernel callers of the descriptor overload can pass one."
     },
     "performAESDescriptor": {
       "decl": "virtual IOReturn performAES(IOMemoryDescriptor *input, IOMemoryDescriptor *output, unsigned long long bytes, IOAESIV *iv, IOAESOperation operation, IOAESKeyData *key, unsigned long long inputOffset, unsigned long long outputOffset, IOAESCompletion completion, void *refcon)",
       "mangled": "__ZN16IOAESAccelerator10performAESEP18IOMemoryDescriptorS1_yP7IOAESIV14IOAESOperationP12IOAESKeyDatayyPFvPviES7_",
-      "doc": "The original clears bit 31 of key->selector in place before it looks at the selector."
+      "doc": "The original checks the selector with bit 31 cleared, then sets bit 31 again before the key reaches the hardware. Bit 31 marks another key form: the word at key + 0x28 must be 36, and the selector may not be 1000-1001, 2000-2002, 2100-3000 or 3102-3103."
     },
     "isKeySupported": {
       "decl": "virtual bool isKeySupported(unsigned selector)",
