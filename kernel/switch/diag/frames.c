@@ -2,7 +2,8 @@
 /*
  * Switch frame diagnostics (debug kernels): the render server's clients by commit cadence, and how long backboardd takes
  * to route each touch report, for NativeLegacyDisplay's stats window and touch interaction lines (frames.h has the
- * definitions). Two sets of accumulators, one per kind of window; each message and report feeds both.
+ * definitions). Two sets of accumulators, one per kind of window; each message and report feeds both. The same events,
+ * with the display's presents, carry one touch at a time to the panel for the interaction's latency line (latency.h).
  */
 
 #include <kern/misc_protos.h>
@@ -10,6 +11,7 @@
 #include <switch/xnu.h>
 
 #include "frames.h"
+#include "latency.h"
 
 #include <ipc/ipc_space.h>
 #include <kern/clock.h>
@@ -32,6 +34,7 @@ static struct {
     struct switch_frames_delivery delivery[WINDOWS];
 } acc;
 
+static struct switch_latency latency;
 static uint64_t touch_began, touch_last_down;
 static uint32_t report_pending;
 
@@ -46,7 +49,7 @@ static uint64_t abs_to_us(uint64_t abs)
 static LCK_GRP_DECLARE(frames_grp, "switch_frames");
 static LCK_SPIN_DECLARE(frames_lock, &frames_grp);
 
-void switch_frames_render_message(task_t sender)
+void switch_frames_render_message(task_t sender, mach_msg_id_t id)
 {
     char name[SWITCH_FRAMES_NAME];
     const uint64_t now = abs_to_us(mach_absolute_time());
@@ -56,6 +59,7 @@ void switch_frames_render_message(task_t sender)
     for (int w = 0; w < WINDOWS; w++) {
         switch_frames_note_message(&acc.cadence[w], task_pid(sender), name, now, PERIOD_US);
     }
+    switch_latency_message(&latency, task_pid(sender), id, now);
     lck_spin_unlock(&frames_lock);
 }
 
@@ -76,6 +80,7 @@ void switch_frames_render_server_sent(ipc_port_t port)
     switch_task_name(receiver, name, sizeof(name));
     const uint64_t now = abs_to_us(mach_absolute_time());
     lck_spin_lock(&frames_lock);
+    switch_latency_delivered(&latency, acc.delivery[STATS_WINDOW].pending_us, task_pid(receiver), now);
     for (int w = 0; w < WINDOWS; w++) {
         switch_frames_note_delivery(&acc.delivery[w], task_pid(receiver), name, now);
     }
@@ -83,7 +88,7 @@ void switch_frames_render_server_sent(ipc_port_t port)
     lck_spin_unlock(&frames_lock);
 }
 
-void switch_frames_touch(uint64_t stamp, bool down)
+void switch_frames_touch(uint64_t stamp, bool down, unsigned int changes)
 {
     uint64_t gap;
 
@@ -99,6 +104,7 @@ void switch_frames_touch(uint64_t stamp, bool down)
     for (int w = 0; w < WINDOWS; w++) {
         switch_frames_note_report(&acc.delivery[w], abs_to_us(stamp));
     }
+    switch_latency_report(&latency, changes);
     os_atomic_store(&report_pending, 1, relaxed);
     lck_spin_unlock(&frames_lock);
 }
@@ -126,9 +132,30 @@ size_t switch_frames_line(bool interaction, char *out, size_t size)
     return switch_frames_format(&cadence, &delivery, 4, out, size);
 }
 
+void switch_frames_present(uint64_t vsync, uint64_t submit, uint64_t latch)
+{
+    const uint64_t vsync_us = vsync != 0 ? abs_to_us(vsync) : 0, submit_us = abs_to_us(submit),
+                   latch_us = abs_to_us(latch);
+
+    lck_spin_lock(&frames_lock);
+    switch_latency_present(&latency, vsync_us, submit_us, latch_us);
+    lck_spin_unlock(&frames_lock);
+}
+
+size_t switch_frames_latency_line(char *out, size_t size)
+{
+    struct switch_latency_summary summary;
+
+    lck_spin_lock(&frames_lock);
+    switch_latency_summarize(&latency, &summary);
+    switch_latency_restart(&latency);
+    lck_spin_unlock(&frames_lock);
+    return switch_latency_format(&summary, out, size);
+}
+
 #else /* DEVELOPMENT || DEBUG */
 
-void switch_frames_touch(__unused uint64_t stamp, __unused bool down)
+void switch_frames_touch(__unused uint64_t stamp, __unused bool down, __unused unsigned int changes)
 {}
 
 void switch_frames_touch_activity(uint64_t *began, uint64_t *last_down)
@@ -137,6 +164,17 @@ void switch_frames_touch_activity(uint64_t *began, uint64_t *last_down)
 }
 
 size_t switch_frames_line(__unused bool interaction, char *out, size_t size)
+{
+    if (size != 0) {
+        out[0] = 0;
+    }
+    return 0;
+}
+
+void switch_frames_present(__unused uint64_t vsync, __unused uint64_t submit, __unused uint64_t latch)
+{}
+
+size_t switch_frames_latency_line(char *out, size_t size)
 {
     if (size != 0) {
         out[0] = 0;

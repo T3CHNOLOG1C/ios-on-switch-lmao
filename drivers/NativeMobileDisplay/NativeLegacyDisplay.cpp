@@ -54,9 +54,12 @@ extern "C" int tegra_gm20b_sync_for_cpu(const void *, uint64_t, uint64_t) __attr
 extern "C" void switch_render_server_watch(task_t);
 extern "C" void proc_selfname(char *, int);
 extern "C" size_t switch_render_senders_line(char *, size_t, uint64_t, unsigned);
-// XNU (kernel/switch/diag/frames.c): the current run of touches, and the clients' commit cadence and touch delivery
+// XNU (kernel/switch/diag/frames.c): the current run of touches, the clients' commit cadence and touch delivery, and
+// each present for the touch-to-scan latency line
 extern "C" void switch_frames_touch_activity(uint64_t *, uint64_t *);
 extern "C" size_t switch_frames_line(bool, char *, size_t);
+extern "C" void switch_frames_present(uint64_t, uint64_t, uint64_t);
+extern "C" size_t switch_frames_latency_line(char *, size_t);
 extern "C" uint64_t native_legacy_surface_width(OSObject *), native_legacy_surface_height(OSObject *);
 extern "C" uint64_t native_legacy_surface_stride(OSObject *), native_legacy_surface_allocation(OSObject *);
 extern "C" uint32_t native_legacy_surface_format(OSObject *), native_legacy_surface_planes(OSObject *);
@@ -1054,6 +1057,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
         ++stPresents;
         ++stLatch[latchedAt <= 1 ? 0 : 1];
         if (mark.submit && stamp > mark.submit) {
+            switch_frames_present(vsyncOf(mark), mark.submit, stamp);
             if (const uint64_t touch = switch_touch_take_report(mark.submit)) {
                 stTouchSwap.add(mark.submit - touch);
                 if (frameHists)
@@ -1133,6 +1137,18 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
                 line[at - 2] = 0;
         }
         os_log(OS_LOG_DEFAULT, "SwitchFrames interaction: %s", line);
+        if (switch_frames_latency_line(line, sizeof(line)))
+            os_log(OS_LOG_DEFAULT, "SwitchFrames latency: %s", line);
+    }
+
+    // The vsync a present's swap was drawn for (mach time), or 0 if its timeline has none.
+    static uint64_t vsyncOf(const FrameMark &mark)
+    {
+        if (mark.tl.vsyncUs == kNotSeen || mark.tl.vsyncUs > 0)
+            return 0;
+        uint64_t back = 0;
+        nanoseconds_to_absolutetime((uint64_t)-(int64_t)mark.tl.vsyncUs * 1000, &back);
+        return back < mark.submit ? mark.submit - back : 0;
     }
 
     // A present frames DC A periods after the previous one (lastPresent, not yet moved on): its cause, see above.

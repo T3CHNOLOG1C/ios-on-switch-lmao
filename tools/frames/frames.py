@@ -31,6 +31,7 @@ INTERACTION = re.compile(
     r'presents: 1:(?P<f1>\d+) 2:(?P<f2>\d+) 3:(?P<f3>\d+) 4\+:(?P<f4>\d+), (?P<lost>\d+) periods lost, '
     r'worst (?P<worst>[\d.]+) ms, still (?P<still>\d+); long (?P<causes>[a-z0-9 ]+?)(?:; (?P<rest>.*))?$'
 )
+LATENCY = re.compile(r'SwitchFrames latency: (?P<rest>.*)$')
 USER_FIELD = re.compile(r'(\w+) (\d+)(?: (\d+))?')
 
 # The kernel's stages, between consecutive points of a frame (microseconds from its origin; -1: not seen).
@@ -159,9 +160,13 @@ def collect(lines: list[str]) -> list[Frame]:
 
 
 def interactions(lines: list[str]) -> list[str]:
-    """Return one row per touch interaction window: its presents by interval, worst, causes and its clients."""
+    """Return one row per touch interaction window and one per latency line, which follows its window."""
     out = []
     for line in lines:
+        m = LATENCY.search(line)
+        if m:
+            out.append(f'    latency: {m.group("rest")}')
+            continue
         m = INTERACTION.search(line)
         if not m:
             continue

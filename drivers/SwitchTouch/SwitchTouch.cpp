@@ -71,8 +71,10 @@ extern "C" __attribute__((weak)) void switch_als_supply(bool)
 static void switch_touch_note_report(uint64_t stamp);
 
 #if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)
-// XNU (kernel/switch/diag/frames.c): each report, for the display's touch interaction windows and delivery latency.
-extern "C" void switch_frames_touch(uint64_t stamp, bool down);
+// XNU (kernel/switch/diag/frames.c): each report, for the display's touch interaction windows and their latency;
+// `changes` has kFramesBegan if a contact went down in it, kFramesEnded if one lifted (diag/latency.h's bits).
+extern "C" void switch_frames_touch(uint64_t stamp, bool down, unsigned changes);
+constexpr unsigned kFramesBegan = 1, kFramesEnded = 2;
 #endif
 
 namespace {
@@ -936,9 +938,13 @@ void SwitchTouch::flush()
         switch_touch_note_report(stamp);  // an interrupt's, on a lit screen
 #if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)
         bool down = false;
-        for (const Contact &contact : contacts)
-            down |= contact.down;
-        switch_frames_touch(stamp, down);
+        unsigned changes = 0;
+        for (unsigned i = 0; i < kSlots; ++i) {
+            down |= contacts[i].down;
+            if (changed & 1u << i)
+                changes |= contacts[i].down ? kFramesBegan : kFramesEnded;
+        }
+        switch_frames_touch(stamp, down, changes);
 #endif
     }
     changed = 0;

@@ -14,6 +14,8 @@
 #                            watched space and not for a kernel reply
 #   xnu_frames_test          kernel/switch/diag/frames.h: a client's commits as bursts of messages and the gaps between
 #                            them in refresh periods, touch deliveries, the line; both trees' ipc_kmsg_send feed it
+#   xnu_latency_test         kernel/switch/diag/latency.h: a touch report through its delivery, the app's commit, the
+#                            render server's vsync and swap to the scan-out; one sample in flight, stale ones dropped
 #   xnu_sched_stats_test     kernel/switch/sched/stats.h's latency histogram, percentiles and line entry; that
 #                            thread_invoke feeds it in both dispatch paths under the incoming thread's lock, and that
 #                            a release kernel compiles every hook to nothing
@@ -235,6 +237,22 @@ host_test(
     defines = [
         'IPC_KMSG_10063=\\"$(rootpath //kernel/xnu-10063.141.1/osfmk:ipc/ipc_kmsg.c)\\"',
         'IPC_KMSG_12377=\\"$(rootpath //kernel/xnu-12377.121.6/osfmk:ipc/ipc_kmsg.c)\\"',
+    ],
+    includes = ["."],
+)
+
+# --- kernel/switch/diag/latency.h --------------------------------------------------------------------------------------
+copy_file(
+    name = "switch_latency",
+    src = "//kernel/switch:diag/latency.h",
+    out = "diag/latency.h",
+)
+
+host_test(
+    name = "xnu_latency_test",
+    srcs = [
+        "diag/latency.h",
+        "xnu_latency_test.cpp",
     ],
     includes = ["."],
 )
