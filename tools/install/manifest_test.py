@@ -5,7 +5,7 @@ import struct
 import unittest
 import uuid
 
-from tools.install import manifest
+from tools.install import manifest, pack
 
 CONTAINER = uuid.UUID('50F8A67F-AFC1-4A1B-BCBB-82162674C67F')
 
@@ -77,8 +77,6 @@ class ManifestTest(unittest.TestCase):
 
 class ChunkHashTest(unittest.TestCase):
     def test_chunks_span_pieces(self):
-        from tools.install import pack
-
         data = bytes(range(256)) * ((manifest.HASH_CHUNK * 2 + 4096) // 256)
         hashes = pack.ChunkHashes()
         for at in range(0, len(data), 3 << 20):

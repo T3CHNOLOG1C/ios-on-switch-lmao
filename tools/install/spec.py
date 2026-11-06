@@ -29,7 +29,7 @@ def _uuid(value: str, what: str) -> str:
     try:
         return str(uuid.UUID(value.strip('"'))).upper()
     except ValueError:
-        raise SystemExit(f'{what} is not a UUID: {value}')
+        raise SystemExit(f'{what} is not a UUID: {value}') from None
 
 
 def parse(raw_mount: str, cryptex_h: str, cryptex_cpp: str, block_cpp: str) -> dict:

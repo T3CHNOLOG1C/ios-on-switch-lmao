@@ -123,7 +123,7 @@ class Container:
         node = self.read(paddr)
         if not checksum_ok(node) or object_header(node)[2] not in (OBJECT_TYPE_BTREE, OBJECT_TYPE_BTREE_NODE):
             raise ApfsError(f'bad object map node at block {paddr}')
-        flags, level, nkeys = struct.unpack_from('<HHI', node, 32)
+        flags, _level, nkeys = struct.unpack_from('<HHI', node, 32)
         table_off, table_len = struct.unpack_from('<HH', node, 40)
         if not flags & BTNODE_FIXED_KV_SIZE:
             raise ApfsError(f'object map node {paddr} is not fixed-size')

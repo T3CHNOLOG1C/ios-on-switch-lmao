@@ -73,7 +73,7 @@ def main() -> None:
     data = spec['volumes']['data']
     (out / 'data-seed-plan.txt').write_text(DATA_PLAN.format(name=data['name'], uuid=data['uuid']))
     entry = {}
-    for path in sorted((package / 'switchroot/ios').iterdir()) + [ini]:
+    for path in [*sorted((package / 'switchroot/ios').iterdir()), ini]:
         entry[path.relative_to(package).as_posix()] = {'size': path.stat().st_size, 'sha256': sha256(path)}
     (out / 'boot-entry.json').write_text(json.dumps(entry, indent=2) + '\n')
     overlay = package / 'overlay'

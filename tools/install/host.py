@@ -59,7 +59,7 @@ def run(tool: str, *args: object, check: bool = True, binary: bool = False, log:
     command = [TOOLS.get(tool, tool), *map(str, args)]
     if log:
         log.quiet('$', ' '.join(command))
-    result = subprocess.run(command, capture_output=True, text=not binary)
+    result = subprocess.run(command, capture_output=True, text=not binary, check=False)
     if check and result.returncode:
         raise HostError(
             '{} failed ({}): {}'.format(

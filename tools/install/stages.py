@@ -30,7 +30,7 @@ STAGING = '/private/preboot/Switch-Staging/'
 FLOOR = 14 << 30
 
 
-def identity(args: argparse.Namespace, spec: dict, pins: dict, size: int) -> dict:
+def identity(_args: argparse.Namespace, spec: dict, pins: dict, size: int) -> dict:
     """Return what a composed image depends on besides the boot package (populate reads that afresh)."""
     return {
         'partition_bytes': size,

@@ -98,7 +98,7 @@ def stage_cryptexes(
 
 def stage_gpu(data: Path, stager: str, gpu_base: str, log: host.Log) -> None:
     result = subprocess.run(
-        [sys.executable, stager, str(data), '--build', str(gpu_base)], capture_output=True, text=True
+        [sys.executable, stager, str(data), '--build', str(gpu_base)], capture_output=True, text=True, check=False
     )
     log('gpu:', (result.stdout + result.stderr).strip())
     if result.returncode:

@@ -59,7 +59,7 @@ class Roles:
                 if other in self.roles:
                     command += ['--cdhash-pairs', str(self._pairs(other))]
         self.log.quiet('$', ' '.join(command))
-        result = subprocess.run(command, capture_output=True, text=True)
+        result = subprocess.run(command, capture_output=True, text=True, check=False)
         self.log.quiet(result.stdout + result.stderr)
         if result.returncode:
             tail = (result.stderr or result.stdout).strip().splitlines()[-1:] or ['?']

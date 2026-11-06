@@ -48,6 +48,11 @@ from tools.install import (
     renamed,
 )
 
+try:
+    from python.runfiles import runfiles
+except ImportError:
+    runfiles = None
+
 # Logging profiles put on Data by hand during bring-up, which nothing else removes: com.apple.SystemConfiguration at
 # Debug, persisted, writes ~8 Debug lines/s to the persisted log (configd SCDynamicStore/IPMonitor, wifid
 # SCPreferences).
@@ -77,13 +82,8 @@ def set_awdl(data_root: Path, on: bool, log: host.Log) -> None:
 
 
 def located(path: str | None) -> str | None:
-    if path and not os.path.isabs(path):
-        try:
-            from python.runfiles import runfiles
-
-            path = runfiles.Create().Rlocation(path) or path
-        except ImportError:
-            pass
+    if path and not os.path.isabs(path) and runfiles:
+        path = runfiles.Create().Rlocation(path) or path
     return os.path.abspath(path) if path else None
 
 
@@ -126,7 +126,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--kcdata')
     parser.add_argument('--log')
     args = parser.parse_args(argv)
-    pull_logs.HARVEST = args.harvest and str(Path(args.harvest).parent)
+    harvest_dir = args.harvest and str(Path(args.harvest).parent)
     for name in ('boot_package', 'spec', 'gpu_bundle', 'stager', 'kcdata'):
         setattr(args, name, located(getattr(args, name)))
     log = host.Log(
@@ -138,11 +138,11 @@ def main(argv: list[str] | None = None) -> int:
         card = cards.resolve(args.disk)
         fat, target = cards.check_layout_unprivileged(card, spec)
         if target.content != 'Apple_APFS':
-            raise cards.Refused(f'{card.disk}: {target.identifier} is not installed yet (run //install:sd first)')
+            raise cards.RefusedError(f'{card.disk}: {target.identifier} is not installed yet (run //install:sd first)')
         data_uuid = spec['volumes']['data']['uuid']
         data = pull_logs.data_volume(card, data_uuid)
         if not data:
-            raise cards.Refused(f'{card.disk}: no iPad Data volume {data_uuid}')
+            raise cards.RefusedError(f'{card.disk}: no iPad Data volume {data_uuid}')
         if args.stage_gpu and not (
             args.gpu_bundle and (Path(args.gpu_bundle) / 'TegraGM20BMetal.trustcache').is_file()
         ):
@@ -183,9 +183,9 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.confirm != card.disk:
             if args.confirm or not sys.stdin.isatty():
-                raise cards.Refused(f'confirm with --confirm={card.disk} or interactively')
+                raise cards.RefusedError(f'confirm with --confirm={card.disk} or interactively')
             if input(f'Deploy to {card.disk}? Type {card.disk}: ').strip() != card.disk:
-                raise cards.Refused('not confirmed')
+                raise cards.RefusedError('not confirmed')
         ok = True
         preboot = pull_logs.data_volume(card, spec['volumes']['preboot']['uuid'])
         if preboot:
@@ -204,6 +204,7 @@ def main(argv: list[str] | None = None) -> int:
                     launchd=not args.no_launchd_log,
                     corpus=args.corpus,
                     kcdata=args.kcdata,
+                    harvest_dir=harvest_dir,
                 )
             with cards.mounted(fat.identifier, log) as fat_root:
                 cards.sync_boot_entry(fat_root, args.boot_package, log)
@@ -214,7 +215,7 @@ def main(argv: list[str] | None = None) -> int:
             if args.stage_gpu or args.remove_gpu:
                 command = [sys.executable, args.stager, str(data_root)]
                 command += ['--remove'] if args.remove_gpu else ['--build', args.gpu_bundle]
-                result = subprocess.run(command, capture_output=True, text=True)
+                result = subprocess.run(command, capture_output=True, text=True, check=False)
                 log('gpu:', (result.stdout + result.stderr).strip())
                 if result.returncode:
                     raise host.HostError('GPU bundle NOT staged')
@@ -232,7 +233,7 @@ def main(argv: list[str] | None = None) -> int:
             log('ejected', card.disk)
         log('deployed')
         return 0 if ok else 1
-    except cards.Refused as error:
+    except cards.RefusedError as error:
         log('REFUSED:', error)
         return 2
     except host.HostError as error:

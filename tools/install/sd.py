@@ -42,6 +42,11 @@ from tools.install import (
     target as targets,
 )
 
+try:
+    from python.runfiles import runfiles
+except ImportError:
+    runfiles = None
+
 COPY_CHUNK = composer.COPY_CHUNK
 SEEK_HOLE, SEEK_DATA = getattr(os, 'SEEK_HOLE', 3), getattr(os, 'SEEK_DATA', 4)
 
@@ -53,12 +58,7 @@ def default_log() -> Path:
 
 def resolve_inputs(args: argparse.Namespace) -> None:
     """Runfiles paths (from `bazel run`) to absolute paths, so a sudo re-exec needs no Bazel environment."""
-    try:
-        from python.runfiles import runfiles
-
-        locate = runfiles.Create()
-    except ImportError:
-        locate = None
+    locate = runfiles.Create() if runfiles else None
     for name in ('spec', 'ipsw', 'os_dmg', 'system_cryptex', 'app_cryptex', 'boot_package'):
         value = getattr(args, name)
         if value and not os.path.isabs(value) and locate:
@@ -105,7 +105,7 @@ class Installer:
             return 'detach' if target.type == gpt.APFS else 'compose'
         if target.type == gpt.APFS:
             if not self.ours(found):
-                raise cards.Refused(
+                raise cards.RefusedError(
                     f'{target.describe()} is APFS but not an ios-on-switch-lmao container (volumes {found}); '
                     'rerun with --reinstall-container to replace it'
                 )
@@ -117,7 +117,7 @@ class Installer:
         return 'compose'
 
     def plan(self, state: str) -> list[str]:
-        steps = {
+        return {
             'detach': [
                 'retype the GPT entry back to Linux data so macOS lets go of the old container',
                 'reprobe',
@@ -142,7 +142,6 @@ class Installer:
             'reprobe': ['reprobe', 'populate', 'boot entry', 'verify'],
             'populate': ['populate (only what differs)', 'boot entry', 'verify'],
         }[state]
-        return steps
 
     def scratch_dir(self) -> Path:
         return Path(self.args.scratch or (Path.home() / 'Library/Caches/switch-ios-install'))
@@ -180,10 +179,9 @@ class Installer:
                 hole = min(os.lseek(src, part_offset + data, SEEK_HOLE) - part_offset, size)
                 extents.append((data, hole))
                 position = hole
-            for begin, end in extents:
-                begin -= begin % 4096
-                end += -end % 4096
-                at = begin
+            for start, stop in extents:
+                at = start - start % 4096
+                end = stop + -stop % 4096
                 while at < min(end, size):
                     n = min(COPY_CHUNK, min(end, size) - at)
                     chunk = os.pread(src, n, part_offset + at)
@@ -375,9 +373,8 @@ class Installer:
             self.retype()
             retyped = True
             state = 'reprobe'
-        if state == 'reprobe':
-            if not self.reprobe():
-                return 0
+        if state == 'reprobe' and not self.reprobe():
+            return 0
         self.populate()
         self.boot_entry()
         self.verify(snapshot, retyped)
@@ -391,13 +388,13 @@ class Installer:
 def confirm(args: argparse.Namespace, card_disk: str) -> None:
     if args.confirm:
         if args.confirm != card_disk:
-            raise cards.Refused(f'--confirm={args.confirm} does not name the target {card_disk}')
+            raise cards.RefusedError(f'--confirm={args.confirm} does not name the target {card_disk}')
         return
     if not sys.stdin.isatty():
-        raise cards.Refused(f'type-to-confirm needs a terminal (or pass --confirm={card_disk})')
+        raise cards.RefusedError(f'type-to-confirm needs a terminal (or pass --confirm={card_disk})')
     answer = input(f"This rewrites {card_disk}'s userdata partition. Type {card_disk} to continue: ")
     if answer.strip() != card_disk:
-        raise cards.Refused('not confirmed')
+        raise cards.RefusedError('not confirmed')
     args.confirm = card_disk
 
 
@@ -411,7 +408,7 @@ def reexec_as_root(args: argparse.Namespace, argv: list[str]) -> NoReturn:
         passthrough = [a for a in passthrough if not a.startswith(flag + '=')]
         if value:
             passthrough.append(f'{flag}={value}')
-    command += passthrough + [f'--confirm={args.confirm}']
+    command += [*passthrough, f'--confirm={args.confirm}']
     print('running under sudo:', ' '.join(command), flush=True)
     os.execvp('sudo', command)
 
@@ -454,13 +451,13 @@ def main(argv: list[str] | None = None) -> int:
         if args.yes:
             card = cards.resolve(args.disk)
             if args.unprivileged_test and not card.image:
-                raise cards.Refused('--unprivileged-test is only for disk images')
+                raise cards.RefusedError('--unprivileged-test is only for disk images')
             confirm(args, card.disk)
             if os.geteuid() != 0 and not args.unprivileged_test:
                 args.scratch = str(installer.scratch_dir())
                 reexec_as_root(args, argv)
         return installer.run()
-    except cards.Refused as error:
+    except cards.RefusedError as error:
         log('REFUSED:', error)
         return 2
     except (host.HostError, apfs.ApfsError, gpt.GptError) as error:

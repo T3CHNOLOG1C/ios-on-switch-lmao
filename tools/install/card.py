@@ -34,7 +34,7 @@ USER_FILES = ('bootargs.txt',)
 HASH_CHUNK = 8 << 20
 
 
-class Refused(Exception):
+class RefusedError(Exception):
     """A guard said no. The message says which and why; nothing was written."""
 
 
@@ -61,25 +61,25 @@ def resolve(argument: str) -> Card:
     name = argument.removeprefix('/dev/')
     name = name.removeprefix('r')
     if not name.startswith('disk') or not name[4:].isdigit():
-        raise Refused(f'{argument!r} is not a whole disk (expected diskN)')
+        raise RefusedError(f'{argument!r} is not a whole disk (expected diskN)')
     info = host.disk_info(name)
     if not info:
-        raise Refused(f'no disk {name}')
+        raise RefusedError(f'no disk {name}')
     if info.get('ParentWholeDisk') != name or not info.get('WholeDisk'):
-        raise Refused(f'{name} is not a whole disk')
+        raise RefusedError(f'{name} is not a whole disk')
     if info.get('APFSPhysicalStores') or info.get('Content') == 'EF57347C-0000-11AA-AA11-00306543ECAC':
-        raise Refused(f"{name} is an APFS container (synthesized), not the card: name the card's own disk")
+        raise RefusedError(f"{name} is an APFS container (synthesized), not the card: name the card's own disk")
     if info.get('DeviceBlockSize', 512) != 512:
-        raise Refused('{} has {}-byte blocks; an SD card has 512'.format(name, info.get('DeviceBlockSize')))
+        raise RefusedError('{} has {}-byte blocks; an SD card has 512'.format(name, info.get('DeviceBlockSize')))
     if name in host.boot_disks():
-        raise Refused(f'{name} holds the running system')
+        raise RefusedError(f'{name} holds the running system')
     image = host.images().get(name, '')
     if info.get('Internal') and not info.get('RemovableMedia') and not image:
-        raise Refused(f'{name} is an internal, non-removable disk')
+        raise RefusedError(f'{name} is an internal, non-removable disk')
     if info.get('BusProtocol') == 'Disk Image' and not image:
-        raise Refused(f'{name} is a disk image hdiutil does not list')
+        raise RefusedError(f'{name} is a disk image hdiutil does not list')
     if not info.get('WritableMedia', True):
-        raise Refused(f'{name} is read-only media (SD lock switch?)')
+        raise RefusedError(f'{name} is read-only media (SD lock switch?)')
     return Card(name, info, int(info['TotalSize']), image)
 
 
@@ -87,11 +87,11 @@ def read_table(card: Card) -> gpt.Table:
     try:
         fd = os.open(card.raw, os.O_RDONLY)
     except PermissionError:
-        raise host.HostError(f"reading {card.raw}'s partition table needs root (sudo)")
+        raise host.HostError(f"reading {card.raw}'s partition table needs root (sudo)") from None
     try:
         card.table = gpt.read(fd, card.size)
     except gpt.GptError as error:
-        raise Refused(f'{card.disk}: {error}')
+        raise RefusedError(f'{card.disk}: {error}') from None
     finally:
         os.close(fd)
     return card.table
@@ -101,7 +101,7 @@ def _select(card: Card, entries: list[targets.Candidate], spec: dict, partition:
     try:
         return targets.select(entries, spec.get('partition_name', 'iOS'), partition)
     except targets.TargetError as error:
-        raise Refused(f'{card.disk}: {error}') from None
+        raise RefusedError(f'{card.disk}: {error}') from None
 
 
 def check_layout(card: Card, spec: dict, partition: str | None = None) -> gpt.Entry:
@@ -110,24 +110,24 @@ def check_layout(card: Card, spec: dict, partition: str | None = None) -> gpt.En
     entries = table.used
     first = table.entries[0]
     if first.type != gpt.BASIC_DATA or first.name != 'hos_data':
-        raise Refused(f"{card.disk}: entry #0 is {first.describe()}, not the Switch's hos_data FAT32 partition")
+        raise RefusedError(f"{card.disk}: entry #0 is {first.describe()}, not the Switch's hos_data FAT32 partition")
     if not any(p.kind in (0x0B, 0x0C) and p.first == first.first for p in table.mbr_partitions):
-        raise Refused(f'{card.disk}: the MBR does not list hos_data as FAT32 (no hybrid MBR: not a Switch card?)')
+        raise RefusedError(f'{card.disk}: the MBR does not list hos_data as FAT32 (no hybrid MBR: not a Switch card?)')
     fat_info = host.disk_info(card.slice(first)) or {}
     if fat_info.get('FilesystemType') not in ('msdos', None) and fat_info.get('FilesystemType'):
-        raise Refused('{}: hos_data is {}, not FAT'.format(card.disk, fat_info.get('FilesystemType')))
+        raise RefusedError('{}: hos_data is {}, not FAT'.format(card.disk, fat_info.get('FilesystemType')))
     eligible = [e for e in entries if e.index != first.index and e.type != gpt.EMUMMC]
     chosen = _select(
         card, [targets.Candidate(e.index, e.name, e.type == gpt.APFS, e.bytes) for e in eligible], spec, partition
     )
     target = next(e for e in eligible if e.index == chosen.index)
     if target.type not in (gpt.LINUX_DATA, gpt.APFS):
-        raise Refused(f'{card.disk}: {target.describe()} is neither Linux data nor APFS')
+        raise RefusedError(f'{card.disk}: {target.describe()} is neither Linux data nor APFS')
     for p in table.mbr_partitions:
         if p.kind in (0, 0xEE) or not (target.first <= p.first + p.sectors - 1 and p.first <= target.last):
             continue
         if not (p.kind == LINUX_MBR and p.first == target.first and p.sectors == target.sectors):
-            raise Refused(f'{card.disk}: the hybrid MBR lists a partition overlapping the target')
+            raise RefusedError(f'{card.disk}: the hybrid MBR lists a partition overlapping the target')
     card.target, card.fat = target, first
     return target
 
@@ -176,7 +176,7 @@ def check_layout_unprivileged(card: Card, spec: dict, partition: str | None = No
         or parts[0].content != 'Microsoft Basic Data'
         or parts[0].filesystem not in ('msdos', '')
     ):
-        raise Refused(f"{card.disk}: the first partition is not the Switch's hos_data FAT32")
+        raise RefusedError(f"{card.disk}: the first partition is not the Switch's hos_data FAT32")
     eligible = [p for p in parts[1:] if p.content.upper() != str(gpt.EMUMMC).upper()]
     chosen = _select(
         card, [targets.Candidate(p.index, p.name, p.content == 'Apple_APFS', p.size) for p in eligible], spec, partition

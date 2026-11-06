@@ -99,7 +99,7 @@ def _pread(fd: int, lba: int, sectors: int) -> bytes:
 def _parse_header(raw: bytes, lba: int) -> dict[str, int | uuid.UUID]:
     (
         signature,
-        revision,
+        _revision,
         size,
         crc,
         _reserved,
@@ -125,17 +125,17 @@ def _parse_header(raw: bytes, lba: int) -> dict[str, int | uuid.UUID]:
         raise GptError(f'GPT header at LBA {lba} says it is at {current}')
     if entry_size < 128 or entry_size % 8 or count * entry_size > 64 * 1024 or not count:
         raise GptError(f'bad GPT entry geometry at LBA {lba}')
-    return dict(
-        size=size,
-        backup=backup,
-        first_usable=first_usable,
-        last_usable=last_usable,
-        disk_guid=uuid.UUID(bytes_le=disk_guid),
-        entries_lba=entries_lba,
-        count=count,
-        entry_size=entry_size,
-        entries_crc=entries_crc,
-    )
+    return {
+        'size': size,
+        'backup': backup,
+        'first_usable': first_usable,
+        'last_usable': last_usable,
+        'disk_guid': uuid.UUID(bytes_le=disk_guid),
+        'entries_lba': entries_lba,
+        'count': count,
+        'entry_size': entry_size,
+        'entries_crc': entries_crc,
+    }
 
 
 def parse_entries(raw: bytes, count: int, size: int) -> list[Entry]:
@@ -243,10 +243,11 @@ def edit(table: Table, index: int, type_guid: uuid.UUID, name: str) -> list[tupl
     # Rewrite only the sectors of the entry array that hold the entry (the rest keep their bytes).
     first_sector, last_sector = at // SECTOR, (at + table.entry_size - 1) // SECTOR
     padded = raw.ljust(span, b'\0')
-    writes = []
-    for base in (table.entries_lba, table.backup_entries_lba):
-        for s in range(first_sector, last_sector + 1):
-            writes.append((base + s, padded[s * SECTOR : (s + 1) * SECTOR]))
+    writes = [
+        (base + s, padded[s * SECTOR : (s + 1) * SECTOR])
+        for base in (table.entries_lba, table.backup_entries_lba)
+        for s in range(first_sector, last_sector + 1)
+    ]
     writes.append((1, _rewrite_header(table.primary_header, crc)))
     writes.append((table.disk_sectors - 1, _rewrite_header(table.backup_header, crc)))
     return writes

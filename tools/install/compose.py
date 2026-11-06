@@ -5,7 +5,10 @@ given the Data and Preboot volumes, and those get the UUIDs the kernel was built
 apfs.py rewrites them offline). fsck_apfs checks the result.
 """
 
+import contextlib
+import fcntl
 import os
+import struct
 import subprocess
 import uuid
 from pathlib import Path
@@ -19,13 +22,8 @@ START_SECTOR = 2048
 
 def punch(fd: int, offset: int, length: int) -> None:
     """Give a copied range of a scratch image back to the disk, so the scratch and its copy never both exist whole."""
-    import fcntl
-    import struct
-
-    try:
+    with contextlib.suppress(OSError):
         fcntl.fcntl(fd, F_PUNCHHOLE, struct.pack('<IIqq', 0, 0, offset, length))
-    except OSError:
-        pass
 
 
 def ours(spec: dict, found: list[tuple[uuid.UUID, int, str]] | None) -> bool:
@@ -43,7 +41,9 @@ def attach_raw(image: Path, log: host.Log, mount: bool = False) -> str:
 
 
 def fsck(store: str, what: str, log: host.Log) -> None:
-    result = subprocess.run([host.TOOLS['fsck_apfs'], '-n', '/dev/r' + store], capture_output=True, text=True)
+    result = subprocess.run(
+        [host.TOOLS['fsck_apfs'], '-n', '/dev/r' + store], capture_output=True, text=True, check=False
+    )
     log.quiet(result.stdout + result.stderr)
     tail = (result.stdout + result.stderr).strip().splitlines()[-1:] or ['?']
     if result.returncode or 'appears to be OK' not in tail[0]:
@@ -63,7 +63,7 @@ def _attach_os(os_dmg: str, log: host.Log) -> tuple[str, str]:
     if len(apfs_part) != 1:
         for d in (e.get('dev-entry', '') for e in out['system-entities']):
             if d.startswith('/dev/disk') and 's' not in d[len('/dev/disk') :]:
-                subprocess.run([host.TOOLS['hdiutil'], 'detach', d], capture_output=True)
+                subprocess.run([host.TOOLS['hdiutil'], 'detach', d], capture_output=True, check=False)
         raise host.HostError(f'{os_dmg}: expected one APFS partition, got {out}')
     return apfs_part[0][: apfs_part[0].rindex('s')], apfs_part[0]
 

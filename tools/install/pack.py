@@ -1,5 +1,6 @@
 """A composed partition image into install/: part files under FAT32's 4 GiB limit and manifest.bin."""
 
+import contextlib
 import hashlib
 import os
 from pathlib import Path
@@ -85,13 +86,13 @@ def _write_parts(
 ) -> tuple[list[manifest.Part], list[bytes]]:
     parts, index, out, left = [], -1, None, 0
     hashes = ChunkHashes()
+    with contextlib.ExitStack() as part_file:
 
-    def close() -> None:
-        if out is not None:
-            out.close()
-            parts.append(manifest.Part(f'{fat_prefix}/{part_name(index)}', sizes[index]))
+        def close() -> None:
+            if out is not None:
+                part_file.close()
+                parts.append(manifest.Part(f'{fat_prefix}/{part_name(index)}', sizes[index]))
 
-    try:
         for at, source, n in plan:
             if source == manifest.ZERO:
                 continue
@@ -100,7 +101,7 @@ def _write_parts(
                 if not left:
                     close()
                     index += 1
-                    out, left = open(install_dir / part_name(index), 'wb'), sizes[index]
+                    out, left = part_file.enter_context(open(install_dir / part_name(index), 'wb')), sizes[index]
                 take = min(CHUNK, n - done, left)
                 chunk = os.pread(fd, take, offset + at + done)
                 if len(chunk) != take:
@@ -112,8 +113,4 @@ def _write_parts(
                 done += take
                 left -= take
         close()
-        out = None
-    finally:
-        if out is not None:
-            out.close()
     return parts, hashes.finish()

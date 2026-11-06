@@ -37,6 +37,11 @@ from tools.install import (
     target as targets,
 )
 
+try:
+    from python.runfiles import runfiles as rules_python_runfiles
+except ImportError:
+    rules_python_runfiles = None
+
 INPUTS = (
     'spec',
     'ipsw',
@@ -64,13 +69,8 @@ def parse_size(text: str) -> int:
     return int(found.group(1)) << {'': 0, 'm': 20, 'g': 30}[found.group(2).lower()]
 
 
-def runfiles():
-    try:
-        from python.runfiles import runfiles as rules_python_runfiles
-
-        return rules_python_runfiles.Create()
-    except ImportError:
-        return None
+def runfiles() -> 'rules_python_runfiles.Runfiles | None':
+    return rules_python_runfiles.Create() if rules_python_runfiles else None
 
 
 def resolve_inputs(args: argparse.Namespace) -> None:
@@ -105,7 +105,7 @@ def switch_cards() -> list[cards.Card]:
     for item in host.plist('diskutil', 'list', '-plist', 'physical').get('WholeDisks', []):
         try:
             card = cards.resolve(item)
-        except cards.Refused:
+        except cards.RefusedError:
             continue
         parts = cards.diskutil_partitions(card)
         if parts and parts[0].name == 'hos_data':
@@ -125,7 +125,7 @@ def find_target(
     else:
         found = switch_cards()
         if len(found) != 1:
-            raise cards.Refused(
+            raise cards.RefusedError(
                 '{} Switch SD cards in this Mac ({}): insert one, name it with --disk, or give --size'.format(
                     len(found), ', '.join(c.disk for c in found) or 'none'
                 )
@@ -180,7 +180,7 @@ def check_inputs(args: argparse.Namespace) -> list[str]:
         ]
     if missing:
         raise host.HostError('inputs missing: {}'.format(', '.join(missing)))
-    return sorted(cards.boot_entry_files(args.boot_package)) + [PAYLOAD]
+    return [*sorted(cards.boot_entry_files(args.boot_package)), PAYLOAD]
 
 
 class Builder:
@@ -195,11 +195,13 @@ class Builder:
             stages.refresh_boot(self.args.out, self.args, PAYLOAD, self.log)
             return 0
         self.log(f'image: {version_label(self.pins)}')
-        card, fat, partition, size = find_target(self.args, self.spec, self.log)
+        card, fat, _partition, size = find_target(self.args, self.spec, self.log)
         if size < MIN_BYTES:
-            raise cards.Refused(f'{size} bytes is too small for iOS: make the partition at least {MIN_BYTES >> 30} GiB')
+            raise cards.RefusedError(
+                f'{size} bytes is too small for iOS: make the partition at least {MIN_BYTES >> 30} GiB'
+            )
         if self.args.copy_to_card and not card:
-            raise cards.Refused('--copy-to-card writes to the card: put it in the Mac instead of giving --size')
+            raise cards.RefusedError('--copy-to-card writes to the card: put it in the Mac instead of giving --size')
         work = stages.Stages(self.args, self.spec, self.pins, self.log)
         done, offset = work.state(size, refuse_other_size=self.args.copy_to_card)
         for line in plan_lines(self.args, size, card, done):
@@ -235,7 +237,7 @@ class Builder:
     def check_space(self, size: int) -> None:
         want = needed(self.args, self.pins, compose.os_container_bytes(self.args.os_dmg, self.log))
         if size < want:
-            raise cards.Refused(f'the partition is {size} bytes; this iOS needs at least {want}')
+            raise cards.RefusedError(f'the partition is {size} bytes; this iOS needs at least {want}')
         free = stages.free_bytes(self.args.scratch)
         if free < want + stages.FLOOR:
             raise host.HostError(
@@ -334,7 +336,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         host.check_tools(log)
         return Builder(args, log).run()
-    except cards.Refused as error:
+    except cards.RefusedError as error:
         log('REFUSED:', error)
         return 2
     except (host.HostError, apfs.ApfsError, gpt.GptError, extents.ExtentError, manifest.ManifestError) as error:

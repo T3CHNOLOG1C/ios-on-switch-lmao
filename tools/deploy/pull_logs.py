@@ -48,10 +48,12 @@ from tools.install import (
     renamed,
 )
 
+try:
+    from python.runfiles import runfiles
+except ImportError:
+    runfiles = None
+
 DATA_UUID = 'D1B1D053-D0A6-496C-8625-A947A3DA863E'  # SwitchRawMount.h SWITCH_RAW_DATA_UUID (checked against spec)
-# The checkout's precompile directory (harvest.py and the corpus.log it merges into), relative to the workspace:
-# --harvest (//deploy's $(rootpath) of harvest.py, so it follows the file if it moves).
-HARVEST = None
 WEBKIT_IDS = (
     'com.apple.WebKit.WebContent',
     'com.apple.WebKit.Networking',
@@ -113,7 +115,7 @@ def thread_summary(report: dict, process: str) -> list[str]:
 
     def frame(entry: list[int]) -> str:
         index, offset = entry
-        uuid, base, kind = images[index] if 0 <= index < len(images) else ('?', 0, '?')
+        uuid, _base, kind = images[index] if 0 <= index < len(images) else ('?', 0, '?')
         return f'{kind}:{uuid[:8]}+0x{offset:x}'
 
     lines = []
@@ -122,8 +124,7 @@ def thread_summary(report: dict, process: str) -> list[str]:
             continue
         threads = task.get('threadById', {})
         lines.append('{}[{}]: {} threads'.format(task.get('procname'), pid, len(threads)))
-        for wait in task.get('waitInfo', []):
-            lines.append('  wait: ' + wait)
+        lines.extend('  wait: ' + wait for wait in task.get('waitInfo', []))
         for tid, thread in sorted(threads.items(), key=lambda item: int(item[0])):
             name = thread.get('name') or thread.get('dispatch_queue_label') or ''
             lines.append('  thread {} {} {}'.format(tid, name, ','.join(thread.get('state', []))))
@@ -142,7 +143,7 @@ def decode_stackshot(shot: Path, kcdata: str | Path | None, log: host.Log, what:
         return None
     ips = stem.with_name(stem.name + '.stackshot.ips')
     result = subprocess.run(
-        [sys.executable, '-I', str(kcdata), '-s', str(ips), str(shot)], capture_output=True, text=True
+        [sys.executable, '-I', str(kcdata), '-s', str(ips), str(shot)], capture_output=True, text=True, check=False
     )
     if result.returncode or not ips.is_file():
         log(what, 'stackshot', shot.name, 'NOT decoded:', (result.stderr or result.stdout).strip()[-300:])
@@ -208,6 +209,7 @@ def pull(
     launchd: bool = True,
     corpus: str | None = None,
     kcdata: str | Path | None = None,
+    harvest_dir: str | None = None,
 ) -> Path:
     data, out = Path(data), Path(out)
     out.mkdir(parents=True, exist_ok=True)
@@ -260,13 +262,16 @@ def pull(
             (out / 'lsdb-webkit.txt').write_text('\n'.join(counts) + '\n')
         else:
             log('LaunchServices database NOT copied (not found)')
-    script = workspace() / HARVEST / 'harvest.py' if HARVEST else None
+    # harvest_dir: the checkout's precompile directory (harvest.py and the corpus.log it merges into), relative to the
+    # workspace: --harvest's parent (//deploy's $(rootpath) of harvest.py, so it follows the file if it moves).
+    script = workspace() / harvest_dir / 'harvest.py' if harvest_dir else None
     if harvest and script and script.is_file():
         corpus = Path(corpus or script.parent / 'corpus.log')
         result = subprocess.run(
             [sys.executable, str(script), str(corpus), '--volume', str(data), '--save', str(out / 'm2v')],
             capture_output=True,
             text=True,
+            check=False,
         )
         log.quiet(result.stdout + result.stderr)
         log('m2v journals {} into {}'.format('harvested' if result.returncode == 0 else 'NOT harvested', corpus))
@@ -289,27 +294,15 @@ def pull(
 
 def runfile(path: str | None) -> str | None:
     """Return a runfiles path (bazel run) or a plain one, absolute; None stays None."""
-    if path and not os.path.isabs(path):
-        try:
-            from python.runfiles import runfiles
-
-            path = runfiles.Create().Rlocation(path) or path
-        except ImportError:
-            pass
+    if path and not os.path.isabs(path) and runfiles:
+        path = runfiles.Create().Rlocation(path) or path
     return os.path.abspath(path) if path else None
 
 
 def load_spec(path: str | None) -> dict:
     """//install:spec from a runfiles path (bazel run) or a plain path."""
-    import json
-
-    if path and not os.path.isabs(path):
-        try:
-            from python.runfiles import runfiles
-
-            path = runfiles.Create().Rlocation(path) or path
-        except ImportError:
-            pass
+    if path and not os.path.isabs(path) and runfiles:
+        path = runfiles.Create().Rlocation(path) or path
     if not path:
         return {'partition_bytes': 32 << 30, 'volumes': {'data': {'uuid': DATA_UUID}}}
     return json.loads(Path(path).read_text())
@@ -338,8 +331,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--kcdata', help="XNU's tools/lldbmacros/kcdata.py (decodes a saved panic's stackshot)")
     parser.add_argument('--no-eject', action='store_true', help='leave the card attached (default: unmount and eject)')
     args = parser.parse_args(argv)
-    global HARVEST
-    HARVEST = args.harvest and str(Path(args.harvest).parent)
     log = host.Log(
         args.log
         or Path.home() / 'Library/Logs/switch-ios-install/pull-logs-{}.log'.format(time.strftime('%Y%m%d-%H%M%S'))
@@ -348,7 +339,7 @@ def main(argv: list[str] | None = None) -> int:
         host.check_tools(log)
         spec = load_spec(args.spec)
         card = cards.resolve(args.disk)
-        fat, target = cards.check_layout_unprivileged(card, spec)
+        _fat, target = cards.check_layout_unprivileged(card, spec)
         volume = data_volume(card, spec['volumes']['data']['uuid'])
         if not volume:
             raise host.HostError('no iPad Data volume {} on {}'.format(spec['volumes']['data']['uuid'], card.disk))
@@ -364,6 +355,7 @@ def main(argv: list[str] | None = None) -> int:
                 launchd=not args.no_launchd,
                 corpus=args.corpus,
                 kcdata=runfile(args.kcdata),
+                harvest_dir=args.harvest and str(Path(args.harvest).parent),
             )
         if not args.no_eject:
             # As deploy does: the iPad volumes unmounted, then the whole card ejected.
@@ -373,7 +365,7 @@ def main(argv: list[str] | None = None) -> int:
             host.run('diskutil', 'eject', card.disk, log=log)
             log('ejected', card.disk)
         return 0
-    except cards.Refused as error:
+    except cards.RefusedError as error:
         log('REFUSED:', error)
         return 2
     except host.HostError as error:
