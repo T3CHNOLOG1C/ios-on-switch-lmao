@@ -19,8 +19,8 @@ usage: mkpack.py <merged programs.bin out> <out dir> <bucket dir>...
   (probe16.*, probe4096.*: each buffer entry's descriptor type, a uniform buffer's range NVK rounds up to 256 bytes, and
   the function's window on the slot) and programs.bin; a state's index is (its bucket, its line in the bucket's corpus).
   The context init and post-init registers are the first bucket's (every probe process opens the device alike). A
-  bucket dir named barrier<i> holds the fetching states' run with NVK's interlock hidden: a state whose own record is
-  metal2vulkan's storage form gets a second record from it, its barrier form (PipelineBarrierForm), after every first.
+  bucket's barrier/ holds its storage-form states' run with NVK's interlock hidden (rawpack.py barrier_set): each gets a
+  second record from it, its barrier form (PipelineBarrierForm), after every first.
 writes the merged programs.bin, <out>/pack.bin (runtime/raw_pack.h layout), <out>/pack.json, <out>/programs.txt
 (decoder tables), and prints a report.
 """
@@ -359,7 +359,8 @@ def pipeline(
 
 
 def main() -> None:
-    prog_path, out_dir, dirs = sys.argv[1], sys.argv[2], sys.argv[3:]
+    prog_path, out_dir = sys.argv[1], sys.argv[2]
+    dirs = [x for d in sys.argv[3:] for x in (d, os.path.join(d, 'barrier')) if os.path.isdir(x)]
     with open(prog_path, 'wb') as merged:
         for d in dirs:
             with open(os.path.join(d, 'programs.bin'), 'rb') as part:

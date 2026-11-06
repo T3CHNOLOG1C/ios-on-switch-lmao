@@ -26,17 +26,15 @@ writes <out>/pack.bin, pack.json, layouts.txt, report.txt and keeps the probe lo
 reruns the probes).
 --stack: the build's stack key (the plugin is compiled with the same value), stamped into the pack header: the runtime
 refuses a pack of another build.
-A state that fetches a color (fc_framebuffer_fetch) is probed a second time with NVK's interlock hidden
-(NVK_DEBUG=no_fsi, the macOS twin's alone), in buckets of their own (barrier0 .. barrier15): the pack holds both of
-metal2vulkan's forms of it, the storage form the pixel interlock orders and the barrier form (input attachments,
-barriers between draws).
+A bucket's states that its run drew in metal2vulkan's storage form (the pixel interlock on: framebuffer fetch, whatever
+library) are probed once more in <bucket>/barrier with NVK's interlock hidden (NVK_DEBUG=no_fsi, the macOS twin's
+alone), so the pack holds their barrier form too (input attachments, barriers between draws).
 The same work in three steps, for a build that caches each bucket's probe runs (they depend on the bucket's state lines
 and the tools alone):
        rawpack.py --split --qc <default.metallib> --corpus <corpus.log> --out <dir>
-           writes <dir>/work/bucket0 .. bucket15 and barrier0 .. barrier15, each a corpus.log of its states (a barrier
-           bucket only where its share of the states fetches)
+           writes <dir>/work/bucket0 .. bucket15, each a corpus.log of its states
        rawpack.py --probe-bucket <bucket dir> --prebuilt <dir> --nvk <host twin dylib> --qc <default.metallib>
-           probes one bucket in place: programs.bin, probe{256,16,4096}.{out,log}
+           probes one bucket in place: programs.bin, probe{256,16,4096}.{out,log}, and its barrier/ the same
        rawpack.py --link --out <dir> [--stack <hex key>] <bucket dir>...
            mkpack.py over the buckets: <dir>/pack.bin and the rest, as the one-step form writes them
 """
@@ -200,15 +198,12 @@ def build(work: Path, bridge: Path) -> None:
 BUCKETS = 16
 
 
-FETCH = 'fc_framebuffer_fetch:53:01'
-
-
 def split_buckets(corpus: Path, work: Path, count: int) -> list[Path]:
     """Write each bucket's corpus (its Core Animation lines, in corpus order) into work/bucket<i>/corpus.log.
 
-    Its fetching states go into work/barrier<i>/corpus.log too, where it has some. Each bucket starts with the first
-    downsample_4_frag state: the probe's warm-up draws it so its dummy sampler takes NVK's sampler index 0 (layouts.py
-    reads a handle naming index 0 as no sampler). A bucket that also holds it probes it twice; mkpack.py keeps one.
+    Each bucket starts with the first downsample_4_frag state: the probe's warm-up draws it so its dummy sampler takes
+    NVK's sampler index 0 (layouts.py reads a handle naming index 0 as no sampler). A bucket that also holds it probes
+    it twice; mkpack.py keeps one.
     """
     lines: list[list[str]] = [[] for _ in range(count)]
     warm = ''
@@ -219,13 +214,10 @@ def split_buckets(corpus: Path, work: Path, count: int) -> list[Path]:
                 warm = warm or (line if 'f downsample_4_frag' in line else '')
     dirs = []
     for i, part in enumerate(lines):
-        for name, states in ((f'bucket{i}', part), (f'barrier{i}', [line for line in part if FETCH in line])):
-            if not states:
-                continue
-            d = work / name
-            d.mkdir(parents=True)
-            (d / 'corpus.log').write_text(warm + ''.join(states))
-            dirs.append(d)
+        d = work / f'bucket{i}'
+        d.mkdir(parents=True)
+        (d / 'corpus.log').write_text(warm + ''.join(part))
+        dirs.append(d)
     return dirs
 
 
@@ -236,16 +228,57 @@ def fnv(b: bytes) -> int:
     return h
 
 
+def state_key(line: str) -> str:
+    """Give an R line's state key as probe.mm prints it: every descriptor field but the label, then its functions."""
+    bar1, bar2 = line.find(' | v '), line.find(' | f ')
+    if bar1 < 0 or bar2 < 0:
+        return ''
+    bar3 = line.find(' | ', bar2 + 5)
+    fields = [
+        h
+        for h in line[:bar1].split()
+        if h.startswith(('samples=', 'topo=', 'ds=')) or (len(h) > 1 and h[0] in 'ca' and h[1].isdigit())
+    ]
+    return (' '.join(fields) + ' ' + line[bar1 : bar3 if bar3 >= 0 else len(line)]).strip()
+
+
+def barrier_set(d: Path) -> Path | None:
+    """Write <d>/barrier/corpus.log: the warm-up line and the lines of the states d's run drew with the interlock on."""
+    sys.path.insert(0, str(HERE))
+    import probelog  # noqa: PLC0415  the pack directory's module, on the path only now
+
+    keys = {
+        p['key']
+        for p in probelog.load(str(d / 'probe256.out'), str(d / 'probe256.log'))
+        if p['records'] and p['records'][0]['regs'].get(0x1224, 0) & 3
+    }
+    lines = (d / 'corpus.log').read_text().splitlines(keepends=True)
+    chosen = [line for line in lines[1:] if state_key(line.rstrip('\n')) in keys]
+    if not chosen:
+        return None
+    barrier = d / 'barrier'
+    barrier.mkdir(exist_ok=True)
+    (barrier / 'corpus.log').write_text(lines[0] + ''.join(chosen))
+    return barrier
+
+
 def probe_bucket(tools: Path, d: Path, nvk: Path, qc: Path, env: dict[str, str]) -> str:
-    """Probe one bucket's states.
+    """Probe one bucket's states, then its storage-form states again with the interlock hidden (barrier_set).
 
     A run that only fills its m2v cache with NVK's driver records (NAK's programs), then the three decoded runs, which
     name each bound program by those records (RAWCAP_PROGRAMS) and hit the same cache.
     """
+    said = [probe_runs(tools, d, nvk, qc, env)]
+    barrier = barrier_set(d)
+    if barrier:
+        said.append(probe_runs(tools, barrier, nvk, qc, dict(env, NVK_DEBUG='no_fsi')))
+    return '; '.join(said)
+
+
+def probe_runs(tools: Path, d: Path, nvk: Path, qc: Path, env: dict[str, str]) -> str:
+    """Run the warm-up and the three decoded probe runs over d's corpus."""
     if d.name == 'bucket0':
         env = dict(env, PROBE_YCBCR_LIB=str(tools / 'ycbcr.metallib'))
-    if d.name.startswith('barrier'):
-        env = dict(env, NVK_DEBUG='no_fsi')
     said = []
 
     def probe(name: str, extra: dict[str, str]) -> None:
@@ -277,7 +310,7 @@ def probe_bucket(tools: Path, d: Path, nvk: Path, qc: Path, env: dict[str, str])
             },
         )
     shutil.rmtree(d / 'cache')
-    return f'rawpack: {d.name}: ' + '; '.join(said)
+    return f'rawpack: {d.parent.name + "/" if d.name == "barrier" else ""}{d.name}: ' + '; '.join(said)
 
 
 def probe_env() -> dict[str, str]:
