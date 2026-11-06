@@ -4415,11 +4415,13 @@ static void sleep_gate(void)
 		    us_since(start));
 }
 
+#define SLEEP_RECOVERIES 3
+
 static void sleep_fences(void)
 {
 	struct tgm_chan *chan;
 	u64 start = nvxnu_nanotime(), end = start + TGM_HANG_NS, id = 0;
-	u32 seqno = 0, chans, waits = 0;
+	u32 seqno = 0, chans, waits = 0, recoveries = 0;
 	int busy;
 
 	for (;;) {
@@ -4434,9 +4436,16 @@ static void sleep_fences(void)
 			if (busy || READ_ONCE(chan->error) ||
 			    (s32)(tgm_chan_completed(chan) - chan->submitted) >= 0)
 				continue;
-			if (nvxnu_nanotime() >= end)
-				tgm_chan_hung(chan, "system sleep", chan->submitted,
-					      nvxnu_nanotime() - start);
+			/* the gate is shut, so no work comes after this: what is stuck is killed, slow work gets more
+			 * time, each up to SLEEP_RECOVERIES times */
+			if (nvxnu_nanotime() >= end) {
+				if (++recoveries > SLEEP_RECOVERIES ||
+				    hang_recover(chan, "system sleep", chan->submitted,
+						 nvxnu_nanotime() - start) == TGM_HANG_STUCK)
+					tgm_chan_hung(chan, "system sleep", chan->submitted,
+						      nvxnu_nanotime() - start);
+				end = nvxnu_nanotime() + TGM_HANG_NS;
+			}
 			busy = 1;
 			id = chan->id;
 			seqno = chan->submitted;
