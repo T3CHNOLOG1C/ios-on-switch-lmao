@@ -40,6 +40,8 @@ class SyncTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
+        self.home = os.environ.get('SWITCH_HOME')
+        os.environ['SWITCH_HOME'] = str(self.root / 'state')
         package(self.root / 'pkg0')
         package(self.root / 'pkg1', generation=1)
         self.fat = self.root / 'fat'
@@ -58,6 +60,10 @@ class SyncTest(unittest.TestCase):
             (self.fat / relative).write_bytes(b'x')
 
     def tearDown(self):
+        if self.home is None:
+            os.environ.pop('SWITCH_HOME', None)
+        else:
+            os.environ['SWITCH_HOME'] = self.home
         self.tmp.cleanup()
 
     def snapshot(self):
@@ -174,10 +180,32 @@ class SyncTest(unittest.TestCase):
         (data / 'log/com.apple.xpc.launchd').mkdir(parents=True)
         (data / 'log/com.apple.xpc.launchd/launchd.log').write_text('launchd\n')
         (data / 'mobile').mkdir()
-        out = pull_logs.pull(data, self.root / 'logs', Log(), harvest=False)
-        self.assertEqual((out / 'diagnostics/Persist/0000.tracev3').read_bytes(), b'trace')
+        out = pull_logs.pull(data, self.root / 'logs', Log())
+        mirror = self.root / 'state/device-logs/mirror'
+        self.assertEqual((mirror / 'diagnostics/Persist/0000.tracev3').read_bytes(), b'trace')
         self.assertEqual((out / 'launchd.log').read_text(), 'launchd\n')
         self.assertTrue((out / 'migration-state.txt').is_file())
+
+    def test_log_mirror_copies_only_what_changed(self):
+        card = self.root / 'card'
+        (card / 'Persist').mkdir(parents=True)
+        for name in ('0000.tracev3', '0001.tracev3', '0002.tracev3'):
+            (card / 'Persist' / name).write_bytes(name.encode())
+        mirror = self.root / 'mirror'
+        self.assertEqual(pull_logs.mirror(card, mirror), (3, 36))
+        self.assertEqual(pull_logs.mirror(card, mirror), (0, 0))
+        (card / 'Persist/0002.tracev3').write_bytes(b'0002.tracev3 grew')
+        (card / 'Persist/0000.tracev3').unlink()
+        (card / 'Persist/0003.tracev3').write_bytes(b'new')
+        held = mirror / 'Persist/0002.tracev3'
+        linked = self.root / 'archive-0002.tracev3'
+        os.link(held, linked)
+        self.assertEqual(pull_logs.mirror(card, mirror), (2, 20))
+        self.assertEqual(
+            sorted(p.name for p in (mirror / 'Persist').iterdir()), ['0001.tracev3', '0002.tracev3', '0003.tracev3']
+        )
+        self.assertEqual(held.read_bytes(), b'0002.tracev3 grew')
+        self.assertEqual(linked.read_bytes(), b'0002.tracev3', 'an archive linked to the old file keeps it')
 
     def test_pull_logs_copies_and_decodes_a_saved_panic(self):
         data = self.root / 'data'
@@ -212,7 +240,7 @@ class SyncTest(unittest.TestCase):
         tool = self.root / 'kcdata.py'
         tool.write_text(f"import json, sys\nopen(sys.argv[2], 'w').write('{{}}\\n' + json.dumps({report!r}))\n")
         log = Log()
-        out = pull_logs.pull(data, self.root / 'logs', log, harvest=False, kcdata=tool)
+        out = pull_logs.pull(data, self.root / 'logs', log, kcdata=tool)
         self.assertEqual((out / 'panic-2026-11-05-120000.kcdata').read_bytes(), b'kcdata')
         self.assertTrue((out / 'panic-2026-11-05-120000.stackshot.ips').is_file())
         summary = (out / 'panic-2026-11-05-120000.threads.txt').read_text()
@@ -250,7 +278,7 @@ class SyncTest(unittest.TestCase):
         }
         tool = self.root / 'kcdata.py'
         tool.write_text(f"import json, sys\nopen(sys.argv[2], 'w').write('{{}}\\n' + json.dumps({report!r}))\n")
-        out = pull_logs.pull(data, self.root / 'logs', Log(), harvest=False, kcdata=tool)
+        out = pull_logs.pull(data, self.root / 'logs', Log(), kcdata=tool)
         self.assertIn('display off', (out / 'power.log').read_text())
         self.assertTrue((out / 'power.prev.log').is_file())
         self.assertEqual((out / 'wake-2026-11-05-120000.kcdata').read_bytes(), b'kcdata')

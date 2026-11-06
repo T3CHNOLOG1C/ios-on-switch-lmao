@@ -2,11 +2,12 @@
 """Deploy a new build to an installed card. No sudo needed.
 
     bazel run //deploy:sd -- <diskN>                       dry run: check the card, show what would change
-    bazel run //deploy:sd -- <diskN> --yes [--stage-gpu]   deploy (type the disk identifier to confirm)
+    bazel run //deploy:sd -- <diskN> --yes                 deploy (type the disk identifier to confirm)
 
-Steps (each can be switched off):
-  1 pull logs      the last boots' logs, logarchive and m2v journals (//deploy:pull_logs; --no-pull-logs skips it,
-                   --no-csstore/--no-harvest/--no-launchd-log narrow it)
+Steps:
+  1 pull logs      off unless --pull-logs (or --//deploy:logs): the last boots' logs and logarchive
+                   (//deploy:pull_logs; --no-csstore/--no-launchd-log narrow it); --harvest (or --//deploy:harvest)
+                   also merges the device's m2v journals into the checkout's corpus.log
   2 boot entry     switchroot/ios/* and bootloader/ini/ios.ini on the FAT: only files that differ are
                    copied, stale files in switchroot/ios/ removed (never the user's bootargs.txt or the install
                    images in switchroot/ios/install/), AppleDouble files by name; nothing else on the FAT. Refused
@@ -16,9 +17,10 @@ Steps (each can be switched off):
                    BT" (the FAT's switchroot/joycon_mac.ini, only read) as <Data>/Switch/bluetooth/{host-address,
                    joycon-pairing.plist}, removed when the FAT has none (joycon_pairing.py; --no-joycon-pairing
                    skips it)
-  4 GPU bundle     --stage-gpu: <Data>/ngpu/addons/TegraGM20BMetal.{bundle,m2v-seed} from --//deploy:gpu_bundle, via
-                   the plugin's stager (its CDHashes must be in the same build's kernel window: deploy the boot package
-                   built with that bundle); --remove-gpu removes it
+  4 GPU bundle     <Data>/ngpu/addons/TegraGM20BMetal.{bundle,m2v-seed,raw} from --//deploy:gpu_bundle, via the
+                   plugin's stager, which copies only the files whose sha256 the card does not already hold and
+                   reads nothing more when the card's list matches the build (its CDHashes must be in the same
+                   build's kernel window: deploy the boot package built with that bundle); --remove-gpu removes it
   4a AWDL           --awdl on|off: creates or removes <Data>/Switch/awdl-enable, the empty file SwitchWLAN's AWDL
                    (AirDrop's Wi-Fi link) is off without (read once per boot, after Data mounts)
   4b gallery tiles --reset-gallery-snapshots BUNDLE...: removes those poster extensions' gallery tiles from
@@ -118,15 +120,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('disk')
     parser.add_argument('--yes', action='store_true')
     parser.add_argument('--confirm')
-    parser.add_argument('--stage-gpu', action='store_true')
     parser.add_argument('--remove-gpu', action='store_true')
-    parser.add_argument('--no-pull-logs', action='store_true')
+    parser.add_argument('--pull-logs', action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument('--harvest', action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument('--no-csstore', action='store_true')
-    parser.add_argument('--no-harvest', action='store_true')
     parser.add_argument('--no-launchd-log', action='store_true')
     parser.add_argument('--logs-out')
     parser.add_argument('--corpus')
-    parser.add_argument('--harvest', help="harvest.py's path in the checkout (//deploy passes it)")
+    parser.add_argument('--harvest-script', help="harvest.py's path in the checkout (//deploy passes it)")
     parser.add_argument('--launchd-check', nargs='+', metavar='LABEL', default=None)
     parser.add_argument('--awdl', choices=('on', 'off'))
     parser.add_argument('--reset-gallery-snapshots', nargs='+', metavar='BUNDLE', default=None)
@@ -140,7 +141,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--kcdata')
     parser.add_argument('--log')
     args = parser.parse_args(argv)
-    harvest_dir = args.harvest and str(Path(args.harvest).parent)
+    harvest_dir = args.harvest_script and str(Path(args.harvest_script).parent)
     for name in ('boot_package', 'spec', 'ipsw', 'gpu_bundle', 'stager', 'kcdata'):
         setattr(args, name, located(getattr(args, name)))
     log = host.Log(
@@ -159,14 +160,17 @@ def main(argv: list[str] | None = None) -> int:
             raise cards.RefusedError(f'{card.disk}: no iPad Data volume {data_uuid}')
         check_kind(card, args.ipsw)
         gpu = Path(args.gpu_bundle) if args.gpu_bundle else None
-        if args.stage_gpu and not (gpu and (gpu.is_file() or (gpu / 'TegraGM20BMetal.trustcache').is_file())):
-            raise host.HostError('--stage-gpu: no GPU bundle (build //gpu:bundle; --//deploy:gpu_bundle=//gpu:bundle)')
+        if not args.remove_gpu and not (gpu and (gpu.is_file() or (gpu / 'TegraGM20BMetal.trustcache').is_file())):
+            raise host.HostError(
+                'no GPU bundle (--//deploy:gpu_bundle names //gpu:bundle or a directory like //gpu:base)'
+            )
         with cards.mounted(fat.identifier, log) as fat_root:
             changes, removed = cards.sync_boot_entry(fat_root, args.boot_package, log, dry_run=True)
             pairing = None if args.no_joycon_pairing else joycon_pairing.read(fat_root, log)
         log(f'card {card.disk}: FAT {fat.identifier}, iPad Data {data}')
         plan = (
-            (['pull logs'] if not args.no_pull_logs else [])
+            (['pull logs'] if args.pull_logs else [])
+            + (['harvest the m2v journals'] if args.harvest else [])
             + [f'boot entry: {len(changes)} to copy, {len(removed)} stale', 'overlay']
             + (
                 []
@@ -179,8 +183,7 @@ def main(argv: list[str] | None = None) -> int:
                     )
                 ]
             )
-            + (['stage the GPU bundle'] if args.stage_gpu else [])
-            + (['remove the GPU bundle'] if args.remove_gpu else [])
+            + (['remove the GPU bundle'] if args.remove_gpu else ['GPU bundle: stage what changed'])
             + ([f'AWDL {args.awdl} (<Data>/Switch/awdl-enable)'] if args.awdl else [])
             + (
                 ['reset gallery snapshots of {}'.format(' '.join(args.reset_gallery_snapshots))]
@@ -207,32 +210,30 @@ def main(argv: list[str] | None = None) -> int:
                 renamed.migrate_preboot(preboot_root, spec, log)
         with cards.mounted(data, log) as data_root:
             renamed.migrate_data(data_root, log)
-            if not args.no_pull_logs:
-                out = args.logs_out or pull_logs.state_dir() / 'device-logs' / time.strftime('boot-%m%d-%H%M')
+            out = Path(args.logs_out or pull_logs.state_dir() / 'device-logs' / time.strftime('boot-%m%d-%H%M'))
+            if args.pull_logs:
                 pull_logs.pull(
                     data_root,
                     out,
                     log,
-                    harvest=not args.no_harvest,
                     csstore=not args.no_csstore,
                     launchd=not args.no_launchd_log,
-                    corpus=args.corpus,
                     kcdata=args.kcdata,
-                    harvest_dir=harvest_dir,
                 )
+            if args.harvest:
+                pull_logs.harvest(data_root, out, log, harvest_dir, args.corpus)
             with cards.mounted(fat.identifier, log) as fat_root:
                 cards.sync_boot_entry(fat_root, args.boot_package, log)
             cards.sync_overlay(data_root, args.boot_package, log)
             remove_stale_logging_profiles(data_root, log)
             if not args.no_joycon_pairing:
                 joycon_pairing.stage(data_root, pairing, log)
-            if args.stage_gpu or args.remove_gpu:
-                command = [sys.executable, args.stager, str(data_root)]
-                command += ['--remove'] if args.remove_gpu else ['--build', args.gpu_bundle]
-                result = subprocess.run(command, capture_output=True, text=True, check=False)
-                log('gpu:', (result.stdout + result.stderr).strip())
-                if result.returncode:
-                    raise host.HostError('GPU bundle NOT staged')
+            command = [sys.executable, args.stager, str(data_root)]
+            command += ['--remove'] if args.remove_gpu else ['--build', args.gpu_bundle]
+            result = subprocess.run(command, capture_output=True, text=True, check=False)
+            log('gpu:', (result.stdout + result.stderr).strip())
+            if result.returncode:
+                raise host.HostError('GPU bundle NOT staged')
             if args.awdl:
                 set_awdl(data_root, args.awdl == 'on', log)
             if args.reset_gallery_snapshots:

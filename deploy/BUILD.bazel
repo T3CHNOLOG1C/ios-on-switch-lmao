@@ -1,9 +1,5 @@
-# Updating an installed card from the Mac (no sudo). See tools/deploy/deploy.py and pull_logs.py.
-#
-#   bazel run //deploy:sd -- disk4                          dry run
-#   bazel run //deploy:sd -- disk4 --yes                    deploy //:boot (pull logs first, eject after)
-#   bazel run //deploy:sd --//deploy:gpu_bundle=//gpu:bundle -- disk4 --yes --stage-gpu
-#   bazel run //deploy:pull_logs -- disk4                   logs + logarchive + m2v harvest only
+# Updating an installed card from the Mac (no sudo). See README.md, tools/deploy/deploy.py and pull_logs.py.
+load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
 load("@rules_python//python:py_binary.bzl", "py_binary")
 load("//bazel/lint:defs.bzl", "lint_files")
 
@@ -17,12 +13,34 @@ label_flag(
     build_setting_default = "//:boot",
 )
 
-# The Metal bundle --stage-gpu stages (a directory: ngpu/addons/..., TegraGM20BMetal.trustcache).
+# The Metal bundle deploy stages: //gpu:bundle's manifest over the bundle, the seed and the raw pack, or a directory
+# laid out as //gpu:base.
 label_flag(
     name = "gpu_bundle",
     build_setting_default = "//gpu:bundle",
     tags = ["manual"],
 )
+
+# Opt-in steps of a deploy, --//deploy:logs and --//deploy:harvest: the card's logs (live logs over USB cover the usual
+# case), and merging the device's m2v journals into the corpus. --pull-logs/--harvest (and --no-...) on deploy's
+# command line override them.
+[bool_flag(
+    name = name,
+    build_setting_default = False,
+) for name in ("logs", "harvest")]
+
+[config_setting(
+    name = name + "_on",
+    flag_values = {":" + name: "true"},
+) for name in ("logs", "harvest")]
+
+_OPT_IN = select({
+    ":logs_on": ["--pull-logs"],
+    "//conditions:default": [],
+}) + select({
+    ":harvest_on": ["--harvest"],
+    "//conditions:default": [],
+})
 
 py_binary(
     name = "sd",
@@ -35,8 +53,8 @@ py_binary(
         "--stager=$(rlocationpath //drivers/TegraGM20BMetal:stage-tegra-gm20b-metal.py)",
         "--kcdata=$(rlocationpath @xnu_base//:tools/lldbmacros/kcdata.py)",
         # The checkout's harvest.py (run there, so it merges into the checkout's corpus.log).
-        "--harvest=$(rootpath //drivers/TegraGM20BMetal:precompile/harvest.py)",
-    ],
+        "--harvest-script=$(rootpath //drivers/TegraGM20BMetal:precompile/harvest.py)",
+    ] + _OPT_IN,
     data = [
         ":boot_package",
         ":gpu_bundle",
@@ -60,8 +78,11 @@ py_binary(
     args = [
         "--spec=$(rlocationpath //install:spec)",
         "--kcdata=$(rlocationpath @xnu_base//:tools/lldbmacros/kcdata.py)",
-        "--harvest=$(rootpath //drivers/TegraGM20BMetal:precompile/harvest.py)",
-    ],
+        "--harvest-script=$(rootpath //drivers/TegraGM20BMetal:precompile/harvest.py)",
+    ] + select({
+        ":harvest_on": ["--harvest"],
+        "//conditions:default": [],
+    }),
     data = [
         "//install:spec",
         "//drivers/TegraGM20BMetal:precompile/harvest.py",

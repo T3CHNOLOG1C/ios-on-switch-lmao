@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """Pull the last boots' logs off the card's iPad Data volume (read-only but for harvest.py's one documented write).
 
-    bazel run //deploy:pull_logs -- <diskN> [--out DIR] [--no-logarchive] [--no-harvest] [--no-csstore] [--no-launchd]
+    bazel run //deploy:pull_logs -- <diskN> [--out DIR] [--no-logarchive] [--harvest] [--no-csstore] [--no-launchd]
                                             [--no-eject]
 
-Copies into <out> (default <state>/device-logs/boot-<MMDD-HHMM>, <state> being ~/Library/Application Support/switch-ios
-or $SWITCH_HOME: outside every checkout):
-  diagnostics/, uuidtext/               the unified log (Data db/), and <out>/boot.logarchive built from them
-                                        (`/usr/bin/log show --archive <out>/boot.logarchive --style compact
-                                        --info --debug`)
+The unified log (Data db/diagnostics and db/uuidtext) is mirrored in <state>/device-logs/mirror, copying only the files
+that are new or changed since the last pull (a closed tracev3 chunk never changes). Into <out> (default
+<state>/device-logs/boot-<MMDD-HHMM>, <state> being ~/Library/Application Support/switch-ios or $SWITCH_HOME: outside
+every checkout) it copies:
+  boot.logarchive                       the mirror as a logarchive, its files hard links into the mirror (`/usr/bin/log
+                                        show --archive <out>/boot.logarchive --style compact --info --debug`)
   launchd.log                           (--no-launchd skips it)
   mobile-CrashReporter/, *.ips          crash reports, the WebKit ones also at the top level
   mobileactivationd/, migration-state.txt, boot-io-census.bin
@@ -24,9 +25,10 @@ or $SWITCH_HOME: outside every checkout):
                                         decoded as the panic ones into wake-<UTC>.stackshot.ips and
                                         wake-<UTC>.threads.txt (SpringBoard's and backboardd's threads)
   com.apple.LaunchServices-*.csstore + lsdb-webkit.txt   (--no-csstore skips them)
-  m2v/ (+ m2v-cache -> backboardd's)    every process's m2v shader cache, whose journals are merged into the
-                                        precompile corpus (tree/drivers/TegraGM20BMetal/precompile/corpus.log, a source
-                                        file in your checkout) by that directory's harvest.py (--no-harvest skips it)
+  m2v/ (+ m2v-cache -> backboardd's)    with --harvest (or --//deploy:harvest): every process's m2v shader cache,
+                                        whose journals are merged into the precompile corpus
+                                        (drivers/TegraGM20BMetal/precompile/corpus.log, a source file in your checkout)
+                                        by that directory's harvest.py
 """
 
 import argparse
@@ -80,6 +82,33 @@ def copytree(src: Path, dst: Path, log: host.Log) -> bool:
         log.quiet('copied', src, '->', dst)
         return True
     return False
+
+
+def mirror(src: Path, dst: Path) -> tuple[int, int]:
+    """Make `dst` hold `src`'s files, copying only those it lacks or holds at another size or time.
+
+    Returns the files and bytes copied. A changed file is written beside and renamed over the old one, so the
+    logarchives linked to the old one keep it.
+    """
+    wanted, copied, size = set(), 0, 0
+    for path in sorted(src.rglob('*')) if src.is_dir() else []:
+        if not path.is_file():
+            continue
+        relative = path.relative_to(src)
+        wanted.add(relative)
+        stat, target = path.stat(), dst / relative
+        held = target.stat() if target.is_file() else None
+        if held and held.st_size == stat.st_size and int(held.st_mtime) == int(stat.st_mtime):
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        partial = target.with_name(target.name + '.partial')
+        shutil.copy2(path, partial)
+        partial.replace(target)
+        copied, size = copied + 1, size + stat.st_size
+    for path in sorted(dst.rglob('*')) if dst.is_dir() else []:
+        if path.is_file() and path.relative_to(dst) not in wanted:
+            path.unlink()
+    return copied, size
 
 
 def report_body(text: str) -> dict:
@@ -199,22 +228,46 @@ def decode_panics(out: Path, kcdata: str | Path | None, log: host.Log) -> None:
             log('hung process', process, '->', summary)
 
 
+def harvest(data: Path, out: Path, log: host.Log, harvest_dir: str | None, corpus: str | None = None) -> None:
+    """Merge the m2v journals of every process's cache into the checkout's corpus.log (harvest.py)."""
+    # harvest_dir: the checkout's precompile directory (harvest.py and the corpus.log it merges into), relative to the
+    # workspace: --harvest-script's parent (//deploy's $(rootpath) of harvest.py, so it follows the file if it moves).
+    script = workspace() / harvest_dir / 'harvest.py' if harvest_dir else None
+    if not (script and script.is_file()):
+        log('m2v harvest skipped: no', script)
+        return
+    corpus_file = Path(corpus or script.parent / 'corpus.log')
+    out.mkdir(parents=True, exist_ok=True)
+    result = subprocess.run(
+        [sys.executable, str(script), str(corpus_file), '--volume', str(data), '--save', str(out / 'm2v')],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    log.quiet(result.stdout + result.stderr)
+    log('m2v journals {} into {}'.format('harvested' if result.returncode == 0 else 'NOT harvested', corpus_file))
+    if (out / BACKBOARDD_CACHE).is_dir():
+        link = out / 'm2v-cache'
+        if link.is_symlink() or link.exists():
+            link.unlink()
+        link.symlink_to(BACKBOARDD_CACHE)
+
+
 def pull(
     data: str | Path,
     out: str | Path,
     log: host.Log,
     logarchive: bool = True,
-    harvest: bool = True,
     csstore: bool = True,
     launchd: bool = True,
-    corpus: str | None = None,
     kcdata: str | Path | None = None,
-    harvest_dir: str | None = None,
 ) -> Path:
     data, out = Path(data), Path(out)
     out.mkdir(parents=True, exist_ok=True)
-    copytree(data / 'db/diagnostics', out / 'diagnostics', log)
-    copytree(data / 'db/uuidtext', out / 'uuidtext', log)
+    unified = state_dir() / 'device-logs' / 'mirror'
+    for name in ('diagnostics', 'uuidtext'):
+        files, size = mirror(data / 'db' / name, unified / name)
+        log(f'{name}: {files} files ({size >> 20} MiB) new or changed since the last pull')
     if launchd and (data / 'log/com.apple.xpc.launchd/launchd.log').is_file():
         shutil.copyfile(data / 'log/com.apple.xpc.launchd/launchd.log', out / 'launchd.log')
     crash = data / 'mobile/Library/Logs/CrashReporter'
@@ -262,29 +315,9 @@ def pull(
             (out / 'lsdb-webkit.txt').write_text('\n'.join(counts) + '\n')
         else:
             log('LaunchServices database NOT copied (not found)')
-    # harvest_dir: the checkout's precompile directory (harvest.py and the corpus.log it merges into), relative to the
-    # workspace: --harvest's parent (//deploy's $(rootpath) of harvest.py, so it follows the file if it moves).
-    script = workspace() / harvest_dir / 'harvest.py' if harvest_dir else None
-    if harvest and script and script.is_file():
-        corpus = Path(corpus or script.parent / 'corpus.log')
-        result = subprocess.run(
-            [sys.executable, str(script), str(corpus), '--volume', str(data), '--save', str(out / 'm2v')],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        log.quiet(result.stdout + result.stderr)
-        log('m2v journals {} into {}'.format('harvested' if result.returncode == 0 else 'NOT harvested', corpus))
-        if (out / BACKBOARDD_CACHE).is_dir():
-            link = out / 'm2v-cache'
-            if link.is_symlink() or link.exists():
-                link.unlink()
-            link.symlink_to(BACKBOARDD_CACHE)
-    elif harvest:
-        log('m2v harvest skipped: no', script)
-    if logarchive and (out / 'diagnostics/timesync').is_dir():
+    if logarchive and (unified / 'diagnostics/timesync').is_dir():
         try:
-            boots = mkarchive.build(out, out / 'boot.logarchive')
+            boots = mkarchive.build(unified, out / 'boot.logarchive', copy=os.link)
             log('logarchive: {} ({} boots)'.format(out / 'boot.logarchive', len(boots)))
         except SystemExit as error:
             log('logarchive NOT built:', error)
@@ -323,8 +356,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('disk')
     parser.add_argument('--out')
     parser.add_argument('--corpus', help="precompile corpus to merge into (default: the checkout's corpus.log)")
-    parser.add_argument('--harvest', help="harvest.py's path in the checkout (//deploy passes it)")
-    for flag in ('logarchive', 'harvest', 'csstore', 'launchd'):
+    parser.add_argument('--harvest-script', help="harvest.py's path in the checkout (//deploy passes it)")
+    parser.add_argument('--harvest', action=argparse.BooleanOptionalAction, default=False)
+    for flag in ('logarchive', 'csstore', 'launchd'):
         parser.add_argument('--no-' + flag, action='store_true')
     parser.add_argument('--log')
     parser.add_argument('--spec', help="//install:spec (the kernel's volume UUIDs)")
@@ -350,13 +384,12 @@ def main(argv: list[str] | None = None) -> int:
                 out,
                 log,
                 logarchive=not args.no_logarchive,
-                harvest=not args.no_harvest,
                 csstore=not args.no_csstore,
                 launchd=not args.no_launchd,
-                corpus=args.corpus,
                 kcdata=runfile(args.kcdata),
-                harvest_dir=args.harvest and str(Path(args.harvest).parent),
             )
+            if args.harvest:
+                harvest(data, out, log, args.harvest_script and str(Path(args.harvest_script).parent), args.corpus)
         if not args.no_eject:
             # As deploy does: the iPad volumes unmounted, then the whole card ejected.
             container = host.container_on(target.identifier)

@@ -11,15 +11,17 @@ import shutil
 import struct
 import sys
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 
 
-def build(src: str | Path, out: str | Path) -> list[tuple[uuid.UUID, int]]:
+def build(src: str | Path, out: str | Path, copy: Callable = shutil.copy2) -> list[tuple[uuid.UUID, int]]:
+    """Make <out> from <src>'s diagnostics/ and uuidtext/, each file put there by `copy` (os.link: no bytes copied)."""
     src, out = Path(src), Path(out)
     if out.exists():
         shutil.rmtree(out)
-    shutil.copytree(src / 'diagnostics', out)
-    shutil.copytree(src / 'uuidtext', out, dirs_exist_ok=True)
+    shutil.copytree(src / 'diagnostics', out, copy_function=copy)
+    shutil.copytree(src / 'uuidtext', out, dirs_exist_ok=True, copy_function=copy)
     boots = []  # (uuid, wall ns) in timesync order
     for f in sorted((out / 'timesync').glob('*.timesync')):
         d = f.read_bytes()
