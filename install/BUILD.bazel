@@ -138,6 +138,13 @@ alias(
     }),
 )
 
+# iOS 27: {file name: sha256} of the pretranslate run the boot package carries (trust modules, the cache list); the
+# composer refuses a run that differs.
+label_flag(
+    name = "pretranslated_pins",
+    build_setting_default = ":none",
+)
+
 label_flag(
     name = "shader_seed",
     build_setting_default = "//gpu/seed:tree",
@@ -179,6 +186,7 @@ image_inputs(
     inputs = {
         "app_cryptex": "@ipsw//:app_cryptex",
         "os_dmg": "@ipsw//:os",
+        "pretranslated_pins": ":pretranslated_pins",
         "shader_seed": ":shader_seed",
         "shader_seed_size": ":shader_seed_size",
         "system_cryptex": ":system_cryptex",

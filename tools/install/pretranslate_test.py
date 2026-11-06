@@ -9,7 +9,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tools.install import host, pretranslate
+from tools.install import host, overlay_index, pretranslate
 
 FAKE_DRIVER = """#!{python}
 import argparse, hashlib, json, sys
@@ -86,6 +86,46 @@ class RolesTest(unittest.TestCase):
         self.driver.write_text('#!/bin/sh\necho broken >&2\nexit 3\n')
         with self.assertRaisesRegex(host.HostError, 'translating os failed: broken'):
             self.roles.run('os', self.dir / 'os')
+
+    def test_system_files_go_to_the_data_overlay_with_their_modes(self):
+        system = self.dir / 'system'
+        (system / 'usr/libexec').mkdir(parents=True)
+        (system / 'usr/libexec/tool').write_bytes(b'arm64e')
+        (system / 'usr/libexec/tool').chmod(0o750)
+        entries = self.roles.run('os', system)
+        data = self.dir / 'data'
+        data.mkdir()
+        entries[0]['path'] = '/usr/libexec/tool'
+        manifest = self.roles.overlay_system(data, system, entries, owners=False)
+        placed = data / pretranslate.OVERLAY / 'usr/libexec/tool'
+        self.assertEqual(placed.read_bytes(), b'arm64')
+        self.assertEqual(placed.stat().st_mode & 0o7777, 0o750)
+        self.assertEqual((system / 'usr/libexec/tool').read_bytes(), b'arm64e')
+        self.assertFalse(entries[0]['source'].exists())
+        self.assertEqual(manifest['files'][0]['mode'], '0750')
+        self.assertEqual(json.loads((data / pretranslate.OVERLAY_MANIFEST).read_text()), manifest)
+        index = (data / pretranslate.OVERLAY_INDEX).read_bytes()
+        self.assertEqual(overlay_index.decode(index), ['/usr/libexec/tool'])
+        self.assertIn('os.overlay.json', [p.name for p in self.roles.artifacts()])
+
+    def test_a_translated_file_that_does_not_match_is_refused(self):
+        system = self.dir / 'system'
+        (system / 'usr/bin').mkdir(parents=True)
+        (system / 'usr/bin/tool').write_bytes(b'arm64e')
+        entries = self.roles.run('os', system)
+        entries[0]['source'].write_bytes(b'corrupt')
+        with self.assertRaisesRegex(host.HostError, 'does not match'):
+            self.roles.overlay_system(self.dir / 'data', system, entries, owners=False)
+
+    def test_pins_refuse_another_translation(self):
+        for role in pretranslate.ORDER:
+            self.roles.run(role, self.dir / role)
+        digest = hashlib.sha256(b'trust os').hexdigest()
+        self.roles.check_pins({'os.trustcache': digest})
+        with self.assertRaisesRegex(host.HostError, 'os.trustcache'):
+            self.roles.check_pins({'os.trustcache': '0' * 64})
+        with self.assertRaisesRegex(host.HostError, 'missing.bin'):
+            self.roles.check_pins({'missing.bin': digest})
 
     def test_unknown_roles_refused(self):
         with self.assertRaises(host.HostError):

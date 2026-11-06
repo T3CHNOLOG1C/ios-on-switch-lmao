@@ -46,6 +46,7 @@ INPUTS = (
     'shader_seed',
     'shader_seed_size',
     'install_payload',
+    'pretranslated_pins',
 )
 PAYLOAD = 'bootloader/payloads/install-ios.bin'
 MIN_BYTES = 16 << 30

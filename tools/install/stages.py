@@ -103,6 +103,13 @@ class Stages:
                 expected[member] = cards.sha256_file(sources[member])
         return sources, expected
 
+    def check_pins(self, roles):
+        pins = getattr(self.args, 'pretranslated_pins', None)
+        if pins:
+            roles.check_pins(json.loads(Path(pins).read_text()))
+        else:
+            self.log('pretranslate: no pins given; the trust modules are not checked against the boot package')
+
     def check_translate_space(self, roles):
         """The SystemOS cryptex's clone takes its translated files, and the rebuilt image is staged into Preboot."""
         if not roles or 'system_cryptex' not in roles:
@@ -115,16 +122,6 @@ class Stages:
                     want >> 30, self.scratch, FLOOR >> 30, free >> 30
                 )
             )
-
-    def translate_system(self, entries):
-        """The System volume's delta. Apple's seal no longer describes the volume afterwards; whether the kernel boots
-        it re-sealed with a new root snapshot or as the live file system is not decided, so this stops."""
-        raise host.HostError(
-            'iOS 27: the System volume has {} translated files to apply, but how the kernel boots a changed System '
-            'volume (re-sealed, or its live file system) is not decided yet; the image is not finished'.format(
-                len(entries)
-            )
-        )
 
     def populate(self, size, offset):
         roles = self.roles()
@@ -143,16 +140,20 @@ class Stages:
             ):
                 system_entries = roles.run('os', system) if roles and 'os' in roles else None
                 sources, expected = self.cryptexes(roles)
+                if roles:
+                    self.check_pins(roles)
                 populate.seed_data(system, data, True, self.log, reseed=True)
                 if system_entries is not None:
-                    delta.apply(data, delta.entries_under(system_entries, '/private/var'), self.log, 'Data')
+                    below_var = delta.entries_under(system_entries, '/private/var')
+                    delta.apply(data, below_var, self.log, 'Data')
+                    rest = [e for e in system_entries if not e['path'].startswith('/private/var/')]
+                    roles.overlay_system(data, system, rest, True)
+                    roles.done('os')
                 populate.stage_cryptexes(preboot, self.spec, self.pins, sources, True, self.log, expected)
                 cards.sync_overlay(data, self.args.boot_package, self.log)
                 populate.stage_gpu(data, self.args.gpu_stager, self.args.gpu_base, self.log)
                 if self.args.shader_seed:
                     populate.merge_tree(self.args.shader_seed, data, True, self.log, 'shader seed')
-                if system_entries is not None:
-                    self.translate_system(system_entries)
             host.run('diskutil', 'unmountDisk', container['ContainerReference'], log=self.log, check=False)
             compose.fsck(disk + 's1', 'image', self.log)
         finally:

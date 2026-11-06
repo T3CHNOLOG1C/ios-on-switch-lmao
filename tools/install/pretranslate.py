@@ -4,13 +4,24 @@ Each role's driver reads one mounted volume and writes its delta (delta.py) to a
 cryptex goes last: the prebuilt loaders in its dyld cache check the binaries of every volume by cdhash, so its driver
 takes the cdhash pairs the System volume's and the App cryptex's runs wrote, or each launch falls back to a slower
 loader.
+
+The System volume stays sealed as Apple shipped it. Its translated files go to Data under Switch/pretranslated, at
+their System paths, its own tree because a deploy replaces Switch/overlay whole; the kernel shows them at those paths
+from Switch/pretranslated.index (overlay_index.py), which is made from Switch/pretranslated.json.
 """
 
+import json
+import os
 import shutil
 import subprocess
 from pathlib import Path
 
-from tools.install import delta, host
+from tools.install import card as cards, delta, host, overlay_index, renamed
+
+OVERLAY = renamed.DATA_FOLDER + '/pretranslated'
+OVERLAY_MANIFEST = OVERLAY + '.json'
+OVERLAY_INDEX = OVERLAY + '.index'
+COMPRESSED = 0x20
 
 ORDER = ('os', 'app_cryptex', 'system_cryptex')
 # What the boot package needs of a run (trust modules, the device tree's list of translated cache cdhashes).
@@ -75,3 +86,59 @@ class Roles:
 
     def artifacts(self):
         return sorted(self.kept.iterdir()) if self.kept.is_dir() else []
+
+    def check_pins(self, pins):
+        """The kept files against the ones the boot package was built with ({name: sha256}): a translation that made
+        other trust modules or another cache list would not run on the kernel."""
+        kept = {p.name: p for p in self.artifacts()}
+        wrong = [
+            name for name, digest in sorted(pins.items()) if name not in kept or cards.sha256_file(kept[name]) != digest
+        ]
+        if wrong:
+            raise host.HostError(
+                'this translation differs from the pinned one the boot package carries: {}'.format(', '.join(wrong))
+            )
+        self.log('pretranslate: {} files match the pins'.format(len(pins)))
+
+    def overlay_system(self, data, system, entries, owners):
+        """The System volume's translated files onto Data (OVERLAY), each with its System file's owner, mode and
+        flags, then their manifest and the kernel's index made from it; the manifest is also kept for the boot
+        package. Returns the manifest."""
+        root = Path(data) / OVERLAY
+        files = []
+        for e in entries:
+            original = os.lstat(Path(system) / e['path'].lstrip('/'))
+            target = root / e['path'].lstrip('/')
+            target.parent.mkdir(parents=True, exist_ok=True)
+            partial = target.with_name('.partial-' + target.name)
+            shutil.copyfile(e['source'], partial)
+            if cards.sha256_file(partial) != e['sha256_out']:
+                partial.unlink()
+                raise host.HostError('{}: the translated file does not match its manifest'.format(e['path']))
+            os.replace(partial, target)
+            e['source'].unlink()
+            target.chmod(original.st_mode & 0o7777)
+            if owners:
+                os.chown(target, original.st_uid, original.st_gid)
+            if original.st_flags & ~COMPRESSED:
+                os.chflags(target, original.st_flags & ~COMPRESSED)
+            files.append({
+                'path': e['path'],
+                'trust': True,
+                'mode': '{:04o}'.format(original.st_mode & 0o7777),
+                'sha256': e['sha256_out'],
+                'cdhash': e.get('cdhash', []),
+            })  # fmt: skip
+        manifest = {'files': files}
+        text = json.dumps(manifest, indent=1) + '\n'
+        root.mkdir(parents=True, exist_ok=True)
+        (Path(data) / OVERLAY_MANIFEST).write_text(text)
+        (Path(data) / OVERLAY_INDEX).write_bytes(overlay_index.encode([f['path'] for f in files]))
+        self.kept.mkdir(parents=True, exist_ok=True)
+        (self.kept / 'os.overlay.json').write_text(text)
+        if owners:
+            for directory in [root, *(p for p in root.rglob('*') if p.is_dir())]:
+                os.chown(directory, 0, 0)
+                directory.chmod(0o755)
+        self.log('System: {} translated files on Data under {}'.format(len(files), OVERLAY))
+        return manifest
