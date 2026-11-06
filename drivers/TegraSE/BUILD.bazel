@@ -31,5 +31,11 @@ kernel_headers()
 # against the A57s' crypto instructions (r17-crypto); the AppleKeyStore probe shares SE2 through tegra_se2_claim.
 kernel_driver(
     name = "TegraSE",
-    hdr_deps = ["drivers/ArmGIC"],
+    hdr_deps = [
+        "drivers/ArmGIC",
+        "kits/SwitchCAR",
+        "kits/SwitchDMA",
+        "kits/SwitchMMIO",
+        "kits/SwitchTime",
+    ],
 )

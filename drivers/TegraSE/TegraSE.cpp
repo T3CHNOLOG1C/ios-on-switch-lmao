@@ -56,10 +56,14 @@
 #pragma clang diagnostic pop
 #include "TegraSE.h"
 #include "../ArmGIC/SwitchInterrupts.h"
+#include "../../kits/SwitchCAR/SwitchCAR.h"
+#include "../../kits/SwitchDMA/SwitchDMABuffer.h"
+#include "../../kits/SwitchDMA/SwitchDcache.h"
+#include "../../kits/SwitchMMIO/SwitchMMIOKernel.h"
+#include "../../kits/SwitchTime/SwitchTime.h"
 
 extern "C" {
 extern task_t kernel_task;
-vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
 int write_random(void *buffer, u_int numBytes);
 kern_return_t kernel_thread_start(thread_continue_t continuation, void *parameter, thread_t *new_thread);
 void thread_deallocate(thread_t thread);
@@ -71,7 +75,7 @@ extern const struct ccdigest_info *switch_digest_originals[4];  // corecrypto's 
 }
 
 namespace {
-constexpr vm_offset_t kCarPA = 0x60006000, kAhbArbPA = 0x6000c000;
+constexpr uint64_t kAhbArbPA = 0x6000c000;
 
 enum : uint32_t {
     SECURITY = 0x000,
@@ -103,8 +107,8 @@ constexpr uint32_t kSoftNonsecure = 1u << 16, kEngineDisabled = 1u << 1;
 constexpr uint32_t kIntDone = 1u << 4, kIntError = 1u << 16;
 constexpr uint32_t kStatusBusy = 7;  // STATE not idle, or MEM_IF_BUSY (T210B01)
 constexpr uint32_t kAhbWrque = 0x0fc;
-constexpr uint32_t kCarRstV = 0x358, kCarClkV = 0x360, kCarRstW = 0x35c, kCarClkW = 0x364, kCarSourceSe = 0x42c;
-constexpr uint32_t kCarSe = 1u << 31, kCarEntropy = 1u << 21;
+constexpr uint32_t kCarRstV = 0x358, kCarClkV = 0x360, kCarSourceSe = 0x42c;
+constexpr unsigned kClockSe = 127, kClockEntropy = 149;  // TEGRA210_CLK_SE (bank V bit 31), _ENTROPY (W bit 21)
 
 // CONFIG: ENC_ALG << 12 (AES 1, RNG 2, SHA 3), DEC_ALG << 8 (AES 1), ENC_MODE << 24 / DEC_MODE << 16 (AES key size
 // 0/1/2 = 128/192/256; SHA1 0, SHA224 4, SHA256 5, SHA384 6, SHA512 7), DST << 2 (memory 0, hash registers 1).
@@ -123,7 +127,7 @@ constexpr size_t kHookMinBytes = 1024;  // smaller compresses (finals, short upd
 constexpr uint32_t kCheckFirst = 32, kCheckEvery = 512;
 
 struct Dma {
-    IOBufferMemoryDescriptor *memory;
+    switch_dma_buffer buffer;
     uint8_t *va;
     uint32_t pa;
 };
@@ -154,7 +158,7 @@ Engine gEngines[kEngines] = {
     {"SE1", 0x70012000, 32 + 58, 1u << 14, nullptr, nullptr, 0, 0, 0, 0, false, false, false, 0, {}, 0, {}, {}, {}, 0},
     {"SE2", 0x70412000, 32 + 190, 1u << 13, nullptr, nullptr, 0, 0, 0, 0, false, false, false, 0, {}, 0, {}, {}, {}, 0},
 };
-volatile uint8_t *gCar, *gAhb;
+volatile uint8_t *gAhb;
 IOWorkLoop *gLoop;
 IOLock *gQueue;
 volatile bool gSleeping;  // tegra_se_suspend to tegra_se_resume: callers take the CPU path
@@ -236,67 +240,31 @@ void tally(volatile uint64_t &counter, uint64_t bytes)
 
 uint32_t rd(const Engine &e, uint32_t offset)
 {
-    return *reinterpret_cast<volatile uint32_t *>(e.regs + offset);
+    return switch_mmio_read32(e.regs, offset);
 }
 
 void wr(const Engine &e, uint32_t offset, uint32_t value)
 {
-    *reinterpret_cast<volatile uint32_t *>(e.regs + offset) = value;
-}
-
-uint32_t car(uint32_t offset)
-{
-    return *reinterpret_cast<volatile uint32_t *>(gCar + offset);
+    switch_mmio_write32(e.regs, offset, value);
 }
 
 bool clockOn()
 {
-    return (car(kCarClkV) & kCarSe) && !(car(kCarRstV) & kCarSe);
-}
-
-void cleanInvalidate(const void *va, size_t size)
-{
-    if (!size)
-        return;
-    for (uintptr_t a = (uintptr_t)va & ~(uintptr_t)63, end = (uintptr_t)va + size; a < end; a += 64)
-        __asm__ volatile("dc civac, %0" ::"r"(a) : "memory");
-    __asm__ volatile("dsb sy" ::: "memory");
-}
-
-// After the engine wrote: drop the lines (never write a stale one back over its bytes). Output ranges are whole lines.
-void invalidate(const void *va, size_t size)
-{
-    if (!size)
-        return;
-    for (uintptr_t a = (uintptr_t)va & ~(uintptr_t)63, end = (uintptr_t)va + size; a < end; a += 64)
-        __asm__ volatile("dc ivac, %0" ::"r"(a) : "memory");
-    __asm__ volatile("dsb sy" ::: "memory");
+    return switch_car_clock_enabled(kClockSe) && !switch_car_reset_asserted(kClockSe);
 }
 
 bool allocate(Dma *dma, uint32_t size)
 {
-    const IOOptionBits options = (IOOptionBits)kIODirectionInOut | (IOOptionBits)kIOMemoryPhysicallyContiguous;
-    dma->memory = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task, options, size, 0x00000000fffff000ULL);
-    if (!dma->memory)
+    if (!switch_dma_alloc(&dma->buffer, size))
         return false;
-    IOByteCount length = 0;
-    const addr64_t pa = dma->memory->getPhysicalSegment(0, &length, kIOMemoryMapperNone);
-    if (!pa || length < size || pa + size > 0x100000000ULL) {
-        OSSafeReleaseNULL(dma->memory);
-        return false;
-    }
-    dma->va = static_cast<uint8_t *>(dma->memory->getBytesNoCopy());
-    dma->pa = (uint32_t)pa;
-    bzero(dma->va, size);
-    cleanInvalidate(dma->va, size);
+    dma->va = dma->buffer.va;
+    dma->pa = (uint32_t)dma->buffer.pa;
     return true;
 }
 
 uint64_t tenths(uint64_t ticks)  // of a microsecond
 {
-    uint64_t ns = 0;
-    absolutetime_to_nanoseconds(ticks, &ns);
-    return ns / 100;
+    return switch_abs_to_ns(ticks) / 100;
 }
 
 // Primary interrupt context: an operation's end (or error) acknowledged, its thread woken. Nothing else.
@@ -348,7 +316,7 @@ bool run(Engine &e, uint32_t in, uint32_t out)
     uint64_t interval;
     nanoseconds_to_absolutetime((uint64_t)kOpTimeoutMs * 1000000, &interval);
     assert_wait_deadline(&e.event, THREAD_UNINT, mach_absolute_time() + interval);
-    __asm__ volatile("dsb sy" ::: "memory");
+    switch_dcache_sync();  // completes mapSide's and the callers' cache maintenance before the engine starts
     wr(e, OPERATION, 1);
     const wait_result_t result = thread_block(THREAD_CONTINUE_NULL);
     if (result == THREAD_TIMED_OUT || e.seen == seen) {
@@ -489,25 +457,26 @@ bool mapSide(Engine &e, uint32_t at, const void *va, size_t len, bool output, Si
         side->bounced = true;
         if (!output)
             memcpy(bounce.va, va, len);
-        cleanInvalidate(bounce.va, len);
+        switch_dcache_clean_invalidate_lines(bounce.va, len);
         list[0] = 0;
         list[1] = bounce.pa;
         list[2] = (uint32_t)len;
     } else {
         list[0] = n - 1;
-        cleanInvalidate(va, len);  // input to memory; output lines gone before the engine writes
+        switch_dcache_clean_invalidate_lines(va, len);  // input to memory; output lines gone before the engine writes
     }
-    cleanInvalidate(list, 4 + 8 * (side->bounced ? 1 : n));
+    // No barrier here: run()'s DSB before the start completes these with everything else the operation set up.
+    switch_dcache_clean_invalidate_lines(list, 4 + 8 * (side->bounced ? 1 : n));
     return true;
 }
 
 void finishOutput(const Side &side, Dma &bounce)
 {
     if (side.bounced) {
-        invalidate(bounce.va, side.len);
+        switch_dcache_invalidate(bounce.va, side.len);
         memcpy(const_cast<uint8_t *>(side.va), bounce.va, side.len);
     } else {
-        invalidate(side.va, side.len);
+        switch_dcache_invalidate(side.va, side.len);
     }
 }
 
@@ -934,7 +903,7 @@ extern "C" int tegra_se_cmac(const uint8_t *key, unsigned keyBytes, const void *
             list[0] = n;
             list[1 + 2 * n] = e->list.pa + kScratch;
             list[2 + 2 * n] = 16;
-            cleanInvalidate(e->list.va, kListBytes);
+            switch_dcache_clean_invalidate(e->list.va, kListBytes);
         }
     }
     if (mapped) {
@@ -1183,7 +1152,7 @@ bool stateLoadWorks(Engine &only, unsigned alg, const struct ccdigest_info *di)
 
 bool engineUp(Engine &e)
 {
-    e.regs = reinterpret_cast<volatile uint8_t *>(ml_io_map(e.pa, 0x2000));
+    e.regs = switch_mmio_map(e.pa, 0x2000);
     if (!e.regs)
         return false;
     const uint32_t security = rd(e, SECURITY), perkey = rd(e, PERKEY);
@@ -1221,14 +1190,14 @@ bool engineUp(Engine &e)
 
 bool rng(Engine &e, uint8_t out[64])
 {
-    if (!(car(kCarClkW) & kCarEntropy) || (car(kCarRstW) & kCarEntropy))
+    if (!switch_car_clock_enabled(kClockEntropy) || switch_car_reset_asserted(kClockEntropy))
         return false;
     uint32_t *list = reinterpret_cast<uint32_t *>(e.list.va + kOutList);
     list[0] = 0;
     list[1] = e.bounceOut.pa;
     list[2] = 64;
-    cleanInvalidate(list, 12);
-    cleanInvalidate(e.bounceOut.va, 64);
+    switch_dcache_clean_invalidate(list, 12);
+    switch_dcache_clean_invalidate(e.bounceOut.va, 64);
     wr(e, CONFIG, 2u << 12 | 1u << 24);  // RNG, KEY192, memory
     wr(e, CRYPTO_CONFIG, 1u << 3 | kCryptoEncrypt);
     wr(e, RNG_CONFIG, 1u << 2 | 2u);  // SRC_ENTROPY | FORCE_RESEED
@@ -1236,10 +1205,10 @@ bool rng(Engine &e, uint8_t out[64])
     wr(e, LAST_BLOCK, 3);
     if (!run(e, 0, e.list.pa + kOutList))
         return false;
-    invalidate(e.bounceOut.va, 64);
+    switch_dcache_invalidate(e.bounceOut.va, 64);
     memcpy(out, e.bounceOut.va, 64);
     bzero(e.bounceOut.va, 64);
-    cleanInvalidate(e.bounceOut.va, 64);
+    switch_dcache_clean_invalidate(e.bounceOut.va, 64);
     uint32_t any = 0;
     for (unsigned i = 0; i < 64; ++i)
         any |= out[i];
@@ -1331,6 +1300,13 @@ void cpuCall(const Row &row, const uint8_t *in, uint8_t *out, size_t n)
     cpuAes(row.mode, row.encrypt, kKey256, row.keyBytes, kIv, in, out, n);
 }
 
+void release(Dma *dma)
+{
+    switch_dma_free(&dma->buffer);
+    dma->va = nullptr;
+    dma->pa = 0;
+}
+
 // Per algorithm and size: microseconds of the whole call on each engine (lists, cache maintenance, interrupt, wake)
 // against the CPU (kernel corecrypto, input cold in the cache like the engine's), best of 5; then each algorithm's
 // cutover set to the smallest size at which every engine is no slower than the CPU; then both engines at once.
@@ -1340,8 +1316,7 @@ void timing()
     Dma in = {}, out = {};
     if (!allocate(&in, sizes[4]) || !allocate(&out, sizes[4])) {
         IOLog("TegraSE: timing run skipped: no 1 MiB DMA buffers below 4 GiB\n");
-        if (in.memory)
-            OSSafeReleaseNULL(in.memory);
+        release(&in);
         return;
     }
     for (uint32_t i = 0; i < sizes[4]; ++i)
@@ -1367,7 +1342,7 @@ void timing()
                 for (unsigned rep = 0; rep < 5; ++rep) {
                     forceOnly(&e);
                     gAlg[row.alg].ops = kCheckFirst + 1;  // no cross-check inside the timed call
-                    cleanInvalidate(in.va, n);
+                    switch_dcache_clean_invalidate(in.va, n);
                     uint64_t t0 = mach_absolute_time();
                     const int r = engineCall(row, in.va, out.va, n);
                     const uint64_t t1 = mach_absolute_time() - t0;
@@ -1376,7 +1351,7 @@ void timing()
                         break;
                     if (t1 < seBest)
                         seBest = t1;
-                    cleanInvalidate(in.va, n);
+                    switch_dcache_clean_invalidate(in.va, n);
                     t0 = mach_absolute_time();
                     cpuCall(row, in.va, out.va, n);
                     const uint64_t c1 = mach_absolute_time() - t0;
@@ -1436,8 +1411,8 @@ void timing()
     }
     gForced[0] = nullptr;
     bzero(in.va, sizes[4]);
-    OSSafeReleaseNULL(in.memory);
-    OSSafeReleaseNULL(out.memory);
+    release(&in);
+    release(&out);
 }
 
 void stats(const char *when)
@@ -1459,24 +1434,23 @@ void stats(const char *when)
 
 void seThread(void *, wait_result_t)
 {
-    gCar = reinterpret_cast<volatile uint8_t *>(ml_io_map(kCarPA, 0x1000));
-    gAhb = reinterpret_cast<volatile uint8_t *>(ml_io_map(kAhbArbPA, 0x1000));
+    gAhb = switch_mmio_map(kAhbArbPA, 0x1000);
     gLoop = IOWorkLoop::workLoop();
     gQueue = IOLockAlloc();
-    if (!gCar || !gAhb || !gLoop || !gQueue) {
+    if (!gAhb || !gLoop || !gQueue) {
         IOLog("TegraSE: off for this boot: cannot map CAR/AHB or allocate\n");
         return;
     }
     // A clock-gated or reset APB block can hang the bus: no engine register is read unless the clock runs.
     if (!clockOn()) {
         IOLog("TegraSE: off for this boot: SE clock off or in reset (CLK_OUT_ENB_V %#x RST_DEVICES_V %#x)\n",
-              car(kCarClkV), car(kCarRstV));
+              switch_car_read(kCarClkV), switch_car_read(kCarRstV));
         return;
     }
     uint32_t answered = 0;
     unsigned up = 0;
     char line[256];
-    int at = snprintf(line, sizeof line, "TegraSE: clock source %#x;", car(kCarSourceSe));
+    int at = snprintf(line, sizeof line, "TegraSE: clock source %#x;", switch_car_read(kCarSourceSe));
     for (unsigned which = 0; which < kEngines; ++which) {
         Engine &e = gEngines[which];
         if (!tegra_se_claim(which + 1, TEGRA_SE_OWNER_DRIVER, 10000)) {
