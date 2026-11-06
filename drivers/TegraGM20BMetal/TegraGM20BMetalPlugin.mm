@@ -60,7 +60,6 @@
 #include <string.h>
 #include <unistd.h>
 #include "NativeBridgeMetalFrontend.h"
-#include "DisplayRateProbe.h"
 #include "RawMetal.h"
 #include "bridge/NativeMetalObjects.h"
 
@@ -610,7 +609,6 @@ id openDevice(unsigned port)
 #if SWITCH_DEBUG
         startRates();
 #endif
-        switch_display_rate_probe();
         return device;
     }
 }

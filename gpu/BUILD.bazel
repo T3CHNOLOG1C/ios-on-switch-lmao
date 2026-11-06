@@ -118,14 +118,12 @@ metal_plugin(
     name = "plugin",
     srcs = [
         GM20B_METAL + ":TegraGM20BMetalPlugin.mm",
-        GM20B_METAL + ":DisplayRateProbe.mm",
         METAL + ":NativeBridgeMetalFrontend.mm",
         GM20B_METAL + ":raw/runtime/RawMetal.mm",
     ],
     hdrs = [
         METAL + ":frontend_headers",
         GM20B_METAL + ":raw_runtime_headers",
-        GM20B_METAL + ":DisplayRateProbe.h",
         GM20B_ABI,
     ],
     bridge = ":bridge_ios",
