@@ -1,0 +1,39 @@
+{
+  "class": "ApplePMGR",
+  "kind": "24B119",
+  "size": "0x738d8",
+  "first_slot": 177,
+  "slots": 440,
+  "slide": "-0x3fec000",
+  "layout": {
+    "280": "readAon",
+    "281": "writeAon"
+  },
+  "fields": {},
+  "addresses": {
+    "vtable": "0xfffffff007e787b0",
+    "C2": "0xfffffff008edc418",
+    "D2": "0xfffffff008edc5e8",
+    "opaque266": "0xfffffff008f1c7d8",
+    "readAon": "0xfffffff008f1c834",
+    "writeAon": "0xfffffff008f1c840",
+    "gMetaClass": "0xfffffff00ae4ee80"
+  },
+  "found": {
+    "C2": "stores the vtable",
+    "D2": "branch after the constructors",
+    "gMetaClass": "metaclass initialiser",
+    "readAon": "slot 280 by hint",
+    "vtable": "metaclass initialiser",
+    "writeAon": "slot 281 by hint"
+  },
+  "hints": {
+    "layout": {
+      "280": "readAon",
+      "281": "writeAon"
+    },
+    "inherit": {
+      "266": "ApplePMGRNub's init (0xfffffff008f2e7f8) asks its provider's slot 266 (vtable +0x850) and refuses it when true. ApplePMGR's reads a flag (ldrb w8, [x0, #0x10c]; and w0, w8, #1) that only AppleBringUpPMGR's initDriver sets, so it answers false for the subclass's zeroed storage."
+    }
+  }
+}

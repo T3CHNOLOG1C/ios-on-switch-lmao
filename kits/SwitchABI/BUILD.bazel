@@ -134,6 +134,10 @@ switch_abi_class(
     header = False,
 )
 
+switch_abi_class("ApplePMGR")
+
+switch_abi_class("ApplePMGRNub")
+
 switch_abi_class("AppleUSBXHCI")
 
 switch_abi_class("IOAESAccelerator")

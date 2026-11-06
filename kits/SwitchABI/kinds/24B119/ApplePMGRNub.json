@@ -1,0 +1,50 @@
+{
+  "class": "ApplePMGRNub",
+  "kind": "24B119",
+  "size": "0x740",
+  "first_slot": 168,
+  "slots": 168,
+  "slide": "-0x3fec000",
+  "layout": {},
+  "fields": {
+    "pmgr": "0x88"
+  },
+  "addresses": {
+    "gMetaClass": "0xfffffff00ae4f3d8",
+    "sheng_original_pmgr_nub_create": "0xfffffff008f2e744",
+    "sheng_original_pmgr_nub_read": "0xfffffff008f31f60",
+    "sheng_original_pmgr_nub_write": "0xfffffff008f2f9b0"
+  },
+  "found": {
+    "gMetaClass": "metaclass initialiser",
+    "pmgr": "offset shown by f9004660 at 0xfffffff008f2e87c",
+    "sheng_original_pmgr_nub_create": "references \"soc-devices\", 1 caller(s) up",
+    "sheng_original_pmgr_nub_read": "ldr x0, [x0, #0x88] (pmgr), then a tail call of pmgr's slot 280 (vtable +0x8c0); 0xffffffff without one",
+    "sheng_original_pmgr_nub_write": "ldr x0, [x0, #0x88] (pmgr), then a tail call of pmgr's slot 281 (vtable +0x8c8); nothing without one"
+  },
+  "hints": {
+    "functions": {
+      "sheng_original_pmgr_nub_create": {
+        "string": "soc-devices",
+        "up": 1
+      },
+      "sheng_original_pmgr_nub_read": {
+        "at": "0xfffffff008f31f60",
+        "body": "f9404400 b40001a0 f9400010 aa0003f1 f2f9b431 dac11a30 d2811811 8b110210 f9400208 aa1003e1 aa0803f0 aa0103f1 f2e69991 d71f0a11 12800000 d65f03c0",
+        "why": "ldr x0, [x0, #0x88] (pmgr), then a tail call of pmgr's slot 280 (vtable +0x8c0); 0xffffffff without one"
+      },
+      "sheng_original_pmgr_nub_write": {
+        "at": "0xfffffff008f2f9b0",
+        "body": "f9404400 b40001a0 f9400010 aa0003f1 f2f9b431 dac11a30 d2811911 8b110210 f9400208 aa1003e2 aa0803f0 aa0203f1 f2fe3991 d71f0a11 d65f03c0",
+        "why": "ldr x0, [x0, #0x88] (pmgr), then a tail call of pmgr's slot 281 (vtable +0x8c8); nothing without one"
+      }
+    },
+    "fields": {
+      "pmgr": {
+        "offset": "0x88",
+        "at": "0xfffffff008f2e87c",
+        "word": "f9004660"
+      }
+    }
+  }
+}

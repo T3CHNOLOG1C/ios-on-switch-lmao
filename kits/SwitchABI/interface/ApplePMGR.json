@@ -1,0 +1,23 @@
+{
+  "class": "ApplePMGR",
+  "doc": "com.apple.driver.ApplePMGR's power manager. ShengPlatformPower subclasses it at its exact size, so ApplePMGRNub takes the subclass as its provider. Guarded: the subclass keeps IOService's and IOPMGR's slots and traps every slot ApplePMGR adds except readAon and writeAon (the nub's read and write) and those a kind's hints.inherit keeps. 24B119's ApplePMGRBase, between it and IOPMGR, is folded in.",
+  "superclass": "IOPMGR",
+  "kext": "com.apple.driver.ApplePMGR",
+  "structors": "abstract",
+  "guard": true,
+  "includes": [
+    "IOKit/IOPMGR.h"
+  ],
+  "methods": {
+    "readAon": {
+      "decl": "virtual uint32_t readAon()",
+      "mangled": "__ZN9ApplePMGR7readAonEv",
+      "doc": "What ApplePMGRNub's read returns, through its pmgr. The original answers 0xffffffff."
+    },
+    "writeAon": {
+      "decl": "virtual void writeAon(uint64_t value)",
+      "mangled": "__ZN9ApplePMGR8writeAonEy",
+      "doc": "ApplePMGRNub's write, through its pmgr. The original does nothing."
+    }
+  }
+}

@@ -1,0 +1,34 @@
+{
+  "class": "ApplePMGRNub",
+  "doc": "The nub ApplePMGR publishes for its clients (CLPC, PPM and the SoC tuner, each matched by IONameMatch). ShengPlatformPower creates one from an empty description and publishes it below itself.",
+  "superclass": "IOService",
+  "kext": "com.apple.driver.ApplePMGR",
+  "structors": "default",
+  "metaclass_only": true,
+  "includes": [
+    "IOKit/IOService.h"
+  ],
+  "methods": {},
+  "fields": {
+    "pmgr": {
+      "type": "IOService *",
+      "access": "get",
+      "public": true,
+      "doc": "The provider create bound, which read and write forward to."
+    }
+  },
+  "functions": {
+    "sheng_original_pmgr_nub_create": {
+      "decl": "ApplePMGRNub *sheng_original_pmgr_nub_create(IORegistryEntry *description, IOService *pmgr)",
+      "doc": "A new nub with description's properties, bound to pmgr; null when its init refuses pmgr (not an ApplePMGR, or one that refuses nubs). An empty description leaves its device tables empty."
+    },
+    "sheng_original_pmgr_nub_read": {
+      "decl": "uint32_t sheng_original_pmgr_nub_read(ApplePMGRNub *nub)",
+      "doc": "pmgr's readAon(), or 0xffffffff without a pmgr."
+    },
+    "sheng_original_pmgr_nub_write": {
+      "decl": "void sheng_original_pmgr_nub_write(ApplePMGRNub *nub, uint64_t value)",
+      "doc": "pmgr's writeAon(value), or nothing without a pmgr."
+    }
+  }
+}

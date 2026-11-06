@@ -1,0 +1,36 @@
+{
+  "class": "ApplePMGRNub",
+  "kind": "21H461",
+  "size": "0x740",
+  "first_slot": 168,
+  "slots": 168,
+  "slide": "-0x1000000",
+  "layout": {},
+  "fields": {
+    "pmgr": "0x88"
+  },
+  "addresses": {
+    "sheng_original_pmgr_nub_create": "0xfffffff005a22568",
+    "sheng_original_pmgr_nub_read": "0xfffffff005a24adc",
+    "sheng_original_pmgr_nub_write": "0xfffffff005a230ec"
+  },
+  "hints": {
+    "functions": {
+      "sheng_original_pmgr_nub_create": {
+        "at": "0xfffffff005a22568",
+        "body": "a9bd57f6 a9014ff4 a9027bfd 910083fd aa0103f4 aa0003f5 f0009620 91016000 5280e801",
+        "why": "allocates the nub (mov w1, #0x740), constructs it and runs its init on the description and pmgr"
+      },
+      "sheng_original_pmgr_nub_read": {
+        "at": "0xfffffff005a24adc",
+        "body": "f9404400 b4000080 f9400008 f9450101 d61f0020 12800000 d65f03c0",
+        "why": "ldr x0, [x0, #0x88] (pmgr), then a tail call of pmgr's slot 320 (vtable +0xa00); 0xffffffff without one"
+      },
+      "sheng_original_pmgr_nub_write": {
+        "at": "0xfffffff005a230ec",
+        "body": "f9404400 b4000080 f9400008 f9450502 d61f0040 d65f03c0",
+        "why": "ldr x0, [x0, #0x88] (pmgr), then a tail call of pmgr's slot 321 (vtable +0xa08); nothing without one"
+      }
+    }
+  }
+}

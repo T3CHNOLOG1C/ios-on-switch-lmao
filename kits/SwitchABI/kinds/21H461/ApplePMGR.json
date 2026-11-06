@@ -1,0 +1,20 @@
+{
+  "class": "ApplePMGR",
+  "kind": "21H461",
+  "size": "0x4b8a8",
+  "first_slot": 177,
+  "slots": 340,
+  "slide": "-0x1000000",
+  "layout": {
+    "320": "readAon",
+    "321": "writeAon"
+  },
+  "fields": {},
+  "addresses": {
+    "gMetaClass": "0xfffffff007adf490",
+    "C2": "0xfffffff0059f003c",
+    "D2": "0xfffffff0059f019c",
+    "readAon": "0xfffffff005a20fbc",
+    "writeAon": "0xfffffff005a20fc4"
+  }
+}
