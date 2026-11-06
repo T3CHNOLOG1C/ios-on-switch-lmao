@@ -1,0 +1,58 @@
+# SwitchDisplayPort: TV output over the USB-C port, as the dock does it (DisplayPort alternate mode into the dock's
+# DisplayPort-to-HDMI converter). Built and host-tested, linked only with --//drivers/SwitchDisplayPort:enabled.
+load("@bazel_skylib//lib:selects.bzl", "selects")
+load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//kernel/rules:kernel.bzl", "kernel_driver")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files()
+
+exports_files(glob(
+    ["**"],
+    exclude = ["BUILD.bazel"],
+))
+
+filegroup(
+    name = "all_files",
+    srcs = glob(
+        ["**"],
+        exclude = ["BUILD.bazel"],
+    ),
+)
+
+bool_flag(
+    name = "enabled",
+    build_setting_default = False,
+)
+
+config_setting(
+    name = "on",
+    flag_values = {":enabled": "True"},
+)
+
+# The BM92T36 alternate-mode engine runs when any feature behind the dock needs it.
+selects.config_setting_group(
+    name = "alt_mode",
+    match_any = [":on"],
+)
+
+# kernel_headers() by hand: the same headers, plus SWITCH_DISPLAYPORT=1 for every driver that names this directory in
+# its hdr_deps (SwitchUSB's SwitchPD.cpp), only with the setting on.
+filegroup(
+    name = "headers",
+    srcs = glob(["*.h"]),
+)
+
+cc_library(
+    name = "hdrs",
+    hdrs = [":headers"],
+    defines = select({
+        ":on": ["SWITCH_DISPLAYPORT=1"],
+        "//conditions:default": [],
+    }),
+    tags = ["kernel"],
+    target_compatible_with = ["//bazel/platforms:kernel"],
+)
