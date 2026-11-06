@@ -200,6 +200,13 @@ def do_iig(spec, step, used) -> bool:
     return True
 
 
+def wrap_iig_impl(spec, step) -> None:
+    """iokit/Tests/TestServices' rule: the implementation iig wrote to <out>.tmp, inside #if DEBUG || DEVELOPMENT."""
+    out = spec.path(step['wrapped'])
+    body = Path(out + '.tmp').read_text()
+    Path(out).write_text('#if DEBUG || DEVELOPMENT\n' + body + '#endif\n')
+
+
 def do_script(spec, step) -> None:
     cwd = spec.path(step['cwd'])
     os.makedirs(cwd, exist_ok=True)
@@ -432,6 +439,8 @@ def main() -> None:
             complete = do_mig(spec, step, used) and complete
         elif kind == 'iig':
             complete = do_iig(spec, step, used) and complete
+            if step.get('wrapped'):
+                wrap_iig_impl(spec, step)
         else:
             KINDS[kind](spec, step)
     if spec.data.get('unused'):

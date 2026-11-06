@@ -93,7 +93,7 @@ INSTALLHDRS_VARS = ['SDKROOT=macosx', 'ARCH_CONFIGS=ARM64', 'MACHINE_CONFIGS=BCM
 # tools, and what the link rules (r18-xnu-objs: config/, san/, assym, version.c) make themselves.
 NOT_OURS = re.compile(
     r'(\.(o|cpo|json|d|cpd|a|filelist|exp|plist|timestamp)$|^SETUP/|^san/|^cscope\.genhdrs/|'
-    r'^[A-Z]+_ARM64_BCM2837/(config/|version\.c$)|/assym\.s$|(^|/)\.[^/]*$|'
+    r'^[A-Z]+_ARM64_BCM2837/(config/|version\.c$)|/assym\.s$|(^|/)\.[^/]*$|/mach/checked$|'
     r'\.unifdef\.\d+$|\.strip\.\d+$)'
 )
 
@@ -352,6 +352,11 @@ def record_pass(name, src, work, roots, final_files, log_path, make_log):
                 'incdirs': sorted(set(include_dirs(argv, cwd, roots)) | {os.path.dirname(source)}),
                 'deps': [d for d in generated if not d.startswith(('s/', 'x/'))],
             }
+            # iokit/Tests/TestServices wraps iig's implementation in #if DEBUG || DEVELOPMENT (echo, cat, echo).
+            for o in list(outs):
+                if o.endswith('.iig.cpp.tmp') and o[2:-4] in final_files.get(o[0], set()):
+                    step['wrapped'] = o[:-4]
+                    outs.append(o[:-4])
             for o in outs:
                 claim(o, step)
             steps.append(step)
