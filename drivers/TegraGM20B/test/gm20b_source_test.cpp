@@ -120,9 +120,13 @@ TEST(GM20BPoolPolicySource, SystemBosGoAsPoolViewsDo)
 			"!bo->system && !(bo->flags & TegraGM20BBoContiguous) &&"));  // never a spare
 	expectBefore(flat(definition(client(), "void releaseOrphans()")),
 		     "orphan->view->release();", "orphan->backing->release();");
-	// Never read through the cacheable alias.
-	EXPECT_THAT(flat(definition(client(), "void AGXDeviceUserClient::scanPushes(")),
+	// Never read through the cacheable alias: the stats and a hang's line both read pushes through pushView.
+	EXPECT_THAT(flat(definition(client(), "const uint32_t *AGXDeviceUserClient::pushView(")),
 		    HasSubstr("!hit || hit->bo->system ? nullptr"));
+	EXPECT_THAT(flat(definition(client(), "void AGXDeviceUserClient::scanPushes(")),
+		    HasSubstr("pushView(va, bytes, hit)"));
+	EXPECT_THAT(flat(definition(client(), "int AGXDeviceUserClient::hungInterlocks(")),
+		    HasSubstr("pushView(va[i], uint64_t(dwords[i]) * 4, hit)"));
 }
 
 TEST(GM20BPoolPolicySource, StatsNameThePoolHolders)
