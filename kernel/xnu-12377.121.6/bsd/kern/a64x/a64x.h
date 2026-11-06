@@ -91,11 +91,13 @@ uint32_t a64x_dead_vregs_flow(const uint32_t *fn, int n, int site, uint32_t cand
                               bool whole_function);
 /* V registers one instruction may read / writes in full (conservative; false = not decoded, reads all) */
 bool a64x_vregs_public(uint32_t w, uint32_t *vr, uint32_t *vw);
+
 /* classes whose stubs use V temporaries */
 static inline bool a64x_class_uses_vtemps(enum a64x_class c)
 {
     return c == A64X_FP16 || c == A64X_FCMA || c == A64X_RDM;
 }
+
 /*
  * Out-of-line ARMv8.0 code for w (LSE, far LDRA): written to out[0..] for execution at stub_pc, ending in a branch to
  * site_pc + 4. `dead` = registers free at the site (a64x_dead_regs), others are spilled below the red zone.
@@ -113,6 +115,7 @@ struct a64x_code_map {
     bool (*is_code)(void *ctx, uint64_t va); /* is the word at va inside an instruction section? */
     uint32_t flags;                          /* A64X_MAP_* */
 };
+
 /*
  * Plain arm64 image (not arm64e): it holds no pointer-authentication instructions to rewrite, so PAC classes are
  * left alone (a stray one is data, or reaches the trap path); everything else the A57 lacks is still translated.
@@ -124,21 +127,25 @@ struct a64x_code_map {
  */
 #define A64X_MAP_KERNEL 2u
 bool a64x_rewrite1_kernel(uint32_t w, uint32_t *out);
+
 /* the pointer-authentication classes (rewritten as the identity in arm64e images) */
 static inline bool a64x_class_is_pac(enum a64x_class c)
 {
     return c >= A64X_PAC_BR && c <= A64X_PAC_LDRA;
 }
+
 struct a64x_stub_region {
     uint64_t va;         /* where the region is mapped (stub branches are PC-relative) */
     uint32_t *words;     /* kernel/host view of it; NULL = only compute the layout */
     uint32_t cap_words;  /* stub words may be placed at indices < cap_words */
     uint32_t first_word; /* words[0] holds stub word index first_word (a window onto the region) */
 };
+
 struct a64x_stats {
     uint64_t rewrite1[A64X_NCLASSES], stubs[A64X_NCLASSES], left[A64X_NCLASSES];
     uint64_t stub_words, stubs_spill;
 };
+
 /*
  * Translate one page (nwords words at va) from in to out. Stubs go to sr at `cursor` (in words); returns the cursor
  * after this page. Deterministic: the same page and cursor give the same output.
@@ -161,6 +168,7 @@ struct a64x_islands {
     bool open, sticky;
     uint64_t runs, words; /* stats: data runs and words found */
 };
+
 bool a64x_unallocated(uint32_t w);
 /* feed words [first, first + n) of the segment (va of the first one, code map as for translation), in order */
 void a64x_islands_page(struct a64x_islands *is, const uint32_t *w, uint32_t n, uint64_t first, uint64_t va,

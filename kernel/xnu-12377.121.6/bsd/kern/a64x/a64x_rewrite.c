@@ -24,101 +24,124 @@ static inline uint32_t enc_b(uint64_t from, uint64_t to)
 {
     return 0x14000000u | (uint32_t)(((int64_t)(to - from) >> 2) & 0x3FFFFFF);
 }
+
 static inline uint32_t enc_cbnz(bool x, uint32_t rt, int64_t delta)
 {
     return (x ? 0xB5000000u : 0x35000000u) | (((uint32_t)(delta >> 2) & 0x7FFFF) << 5) | rt;
 }
+
 /* MOV (register) = ORR Rd, ZR, Rm */
 static inline uint32_t enc_mov(bool x, uint32_t rd, uint32_t rm)
 {
     return (x ? 0xAA0003E0u : 0x2A0003E0u) | (rm << 16) | rd;
 }
+
 /* ADD/SUB (immediate), 12-bit, optional LSL 12; Rd/Rn may be SP */
 static inline uint32_t enc_addi(bool x, uint32_t rd, uint32_t rn, uint32_t imm12, bool lsl12)
 {
     return (x ? 0x91000000u : 0x11000000u) | (lsl12 ? 1u << 22 : 0) | (imm12 << 10) | (rn << 5) | rd;
 }
+
 static inline uint32_t enc_subi(bool x, uint32_t rd, uint32_t rn, uint32_t imm12, bool lsl12)
 {
     return (x ? 0xD1000000u : 0x51000000u) | (lsl12 ? 1u << 22 : 0) | (imm12 << 10) | (rn << 5) | rd;
 }
+
 /* logical (shifted register), shift 0: AND/ORR/EOR/BIC */
 static inline uint32_t enc_log(bool x, uint32_t opc_n, uint32_t rd, uint32_t rn, uint32_t rm)
 {
     return (x ? 0x80000000u : 0) | opc_n | (rm << 16) | (rn << 5) | rd;
 }
+
 #define LOG_AND 0x0A000000u
 #define LOG_BIC 0x0A200000u
 #define LOG_ORR 0x2A000000u
 #define LOG_EOR 0x4A000000u
+
 static inline uint32_t enc_add(bool x, uint32_t rd, uint32_t rn, uint32_t rm)
 {
     return (x ? 0x8B000000u : 0x0B000000u) | (rm << 16) | (rn << 5) | rd;
 }
+
 /* CMP (shifted reg) = SUBS ZR, Rn, Rm */
 static inline uint32_t enc_cmp(bool x, uint32_t rn, uint32_t rm)
 {
     return (x ? 0xEB00001Fu : 0x6B00001Fu) | (rm << 16) | (rn << 5);
 }
+
 /* CSEL Rd, Rn, Rm, cond */
 static inline uint32_t enc_csel(bool x, uint32_t rd, uint32_t rn, uint32_t rm, uint32_t cond)
 {
     return (x ? 0x9A800000u : 0x1A800000u) | (rm << 16) | (cond << 12) | (rn << 5) | rd;
 }
+
 /* SXTB/SXTH/UXTB/UXTH (32-bit): SBFM/UBFM Wd, Wn, #0, #7/#15 */
 static inline uint32_t enc_sxt(uint32_t size, uint32_t rd, uint32_t rn)
 {
     return 0x13000000u | ((size ? 15u : 7u) << 10) | (rn << 5) | rd;
 }
+
 static inline uint32_t enc_uxt(uint32_t size, uint32_t rd, uint32_t rn)
 {
     return 0x53000000u | ((size ? 15u : 7u) << 10) | (rn << 5) | rd;
 }
+
 /* AND Wd, Wn, #0xff / #0xffff (logical immediate, 32-bit: N=0, immr=0, imms=7/15) */
 static inline uint32_t enc_and_mask(uint32_t size, uint32_t rd, uint32_t rn)
 {
     return 0x12000000u | ((size ? 15u : 7u) << 10) | (rn << 5) | rd;
 }
+
 /* exclusive load/store, size 0..3 */
 static inline uint32_t enc_ldxr(uint32_t size, bool acq, uint32_t rt, uint32_t rn)
 {
     return (size << 30) | 0x085F7C00u | (acq ? 1u << 15 : 0) | (rn << 5) | rt;
 }
+
 static inline uint32_t enc_stxr(uint32_t size, bool rel, uint32_t rs, uint32_t rt, uint32_t rn)
 {
     return (size << 30) | 0x08007C00u | (rel ? 1u << 15 : 0) | (rs << 16) | (rn << 5) | rt;
 }
+
 static inline uint32_t enc_ldxp(bool x, bool acq, uint32_t rt, uint32_t rt2, uint32_t rn)
 {
     return (x ? 0xC87F0000u : 0x887F0000u) | (acq ? 1u << 15 : 0) | (rt2 << 10) | (rn << 5) | rt;
 }
+
 static inline uint32_t enc_stxp(bool x, bool rel, uint32_t rs, uint32_t rt, uint32_t rt2, uint32_t rn)
 {
     return (x ? 0xC8200000u : 0x88200000u) | (rel ? 1u << 15 : 0) | (rs << 16) | (rt2 << 10) | (rn << 5) | rt;
 }
+
 #define CLREX 0xD503305Fu
+
 /* STP/LDP Xt1, Xt2, [SP, #imm] (signed offset, scaled by 8) */
 static inline uint32_t enc_stp_sp(uint32_t t1, uint32_t t2, int32_t off)
 {
     return 0xA9000000u | (((uint32_t)(off / 8) & 0x7F) << 15) | (t2 << 10) | (31u << 5) | t1;
 }
+
 static inline uint32_t enc_ldp_sp(uint32_t t1, uint32_t t2, int32_t off)
 {
     return 0xA9400000u | (((uint32_t)(off / 8) & 0x7F) << 15) | (t2 << 10) | (31u << 5) | t1;
 }
+
 static inline uint32_t enc_str_sp(uint32_t t, int32_t off)
 {
     return 0xF9000000u | (((uint32_t)off / 8) << 10) | (31u << 5) | t;
 }
+
 static inline uint32_t enc_ldr_sp(uint32_t t, int32_t off)
 {
     return 0xF9400000u | (((uint32_t)off / 8) << 10) | (31u << 5) | t;
 }
+
 /* MRS Xt, NZCV / MSR NZCV, Xt */
 static inline uint32_t enc_mrs_nzcv(uint32_t t)
 {
     return 0xD53B4200u | t;
 }
+
 static inline uint32_t enc_msr_nzcv(uint32_t t)
 {
     return 0xD51B4200u | t;
@@ -168,9 +191,13 @@ bool a64x_rewrite1(uint32_t w, uint32_t *out)
     case A64X_PAC_BLR:
         *out = 0xD63F0000u | (rn << 5); /* BLR Xn */
         return true;
-    case A64X_PAC_RET: *out = RET; return true;
-    case A64X_PAC_DP: /* PAC*: signing is the identity; AUT*: authentication always succeeds */
-    case A64X_PAC_XPAC: /* nothing is signed, so nothing to strip */ *out = NOP; return true;
+    case A64X_PAC_RET:
+        *out = RET;
+        return true;
+    case A64X_PAC_DP:   /* PAC*: signing is the identity; AUT*: authentication always succeeds */
+    case A64X_PAC_XPAC: /* nothing is signed, so nothing to strip */
+        *out = NOP;
+        return true;
     case A64X_PAC_PACGA:
         *out = 0xAA1F03E0u | rt; /* MOV Xd, XZR: PACGA yields 0 */
         return true;
@@ -209,7 +236,8 @@ bool a64x_rewrite1(uint32_t w, uint32_t *out)
     case A64X_DPB:
         *out = 0xD50B7A20u | rt; /* DC CVAP -> DC CVAC */
         return true;
-    default: return false;
+    default:
+        return false;
     }
 }
 
@@ -808,10 +836,18 @@ static int stub_ldop_swp(uint32_t w, uint64_t stub_pc, uint64_t ret_pc, uint32_t
     put(&e, enc_ldxr(size, acq, old, base));
     if (!swp) {
         switch (opc) {
-        case 0: put(&e, enc_add(x, nw, old, rs)); break;
-        case 1: put(&e, enc_log(x, LOG_BIC, nw, old, rs)); break;
-        case 2: put(&e, enc_log(x, LOG_EOR, nw, old, rs)); break;
-        case 3: put(&e, enc_log(x, LOG_ORR, nw, old, rs)); break;
+        case 0:
+            put(&e, enc_add(x, nw, old, rs));
+            break;
+        case 1:
+            put(&e, enc_log(x, LOG_BIC, nw, old, rs));
+            break;
+        case 2:
+            put(&e, enc_log(x, LOG_EOR, nw, old, rs));
+            break;
+        case 3:
+            put(&e, enc_log(x, LOG_ORR, nw, old, rs));
+            break;
         default: {
             /* compare in the operand width; narrow signed values need the loaded value sign-extended */
             uint32_t cmpv = old;
@@ -969,18 +1005,21 @@ static inline int mark(struct emit *e)
 {
     return e->n;
 }
+
 static void fix_imm19(struct emit *e, int at, int target)
 {
     if (at < e->max) {
         e->out[at] |= ((uint32_t)(target - at) & 0x7FFFFu) << 5;
     }
 }
+
 static void fix_imm26(struct emit *e, int at, int target)
 {
     if (at < e->max) {
         e->out[at] |= (uint32_t)(target - at) & 0x3FFFFFFu;
     }
 }
+
 #define BCOND(c) (0x54000000u | (c))
 #define B_FWD    0x14000000u
 #define COND_EQ  0x0
@@ -988,11 +1027,13 @@ static void fix_imm26(struct emit *e, int at, int target)
 #define COND_HS  0x2
 #define COND_MI  0x4
 #define COND_PL  0x5
+
 /* CCMN Wzr, #0, #0, cond: Z=1,N=C=V=0 when cond holds, else NZCV=0000 */
 static inline uint32_t enc_ccmn_zero(uint32_t cond)
 {
     return 0x3A400BE0u | (cond << 12);
 }
+
 #define CMN_WZR_1 0x310007FFu /* NZCV = 0000 */
 
 /*
@@ -1109,6 +1150,7 @@ static int pick_vtemps_dead(uint32_t vdead, uint32_t avoid, int n, uint32_t *v, 
     }
     return k == n ? 0 : -1;
 }
+
 static void emit_vspill(struct emit *e, const uint32_t *v, int n, bool save)
 {
     if (!n) {
@@ -1138,26 +1180,32 @@ static inline uint32_t v_rev64(bool q, uint32_t size, uint32_t d, uint32_t n)
 {
     return 0x0E200800u | ((uint32_t)q << 30) | (size << 22) | (n << 5) | d;
 }
+
 static inline uint32_t v_ext8(uint32_t d, uint32_t n, uint32_t m)
 {
     return 0x6E004000u | (m << 16) | (n << 5) | d;
 }
+
 static inline uint32_t v_trn(bool two, bool q, uint32_t size, uint32_t d, uint32_t n, uint32_t m)
 {
     return (two ? 0x0E006800u : 0x0E002800u) | ((uint32_t)q << 30) | (size << 22) | (m << 16) | (n << 5) | d;
 }
+
 static inline uint32_t v_fneg(bool q, bool dbl, uint32_t d, uint32_t n)
 {
     return 0x2EA0F800u | ((uint32_t)q << 30) | ((uint32_t)dbl << 22) | (n << 5) | d;
 }
+
 static inline uint32_t v_fmla(bool q, bool dbl, uint32_t d, uint32_t n, uint32_t m)
 {
     return 0x0E20CC00u | ((uint32_t)q << 30) | ((uint32_t)dbl << 22) | (m << 16) | (n << 5) | d;
 }
+
 static inline uint32_t v_fadd(bool q, bool dbl, uint32_t d, uint32_t n, uint32_t m)
 {
     return 0x0E20D400u | ((uint32_t)q << 30) | ((uint32_t)dbl << 22) | (m << 16) | (n << 5) | d;
 }
+
 static inline uint32_t v_dup_d(uint32_t d, uint32_t n, uint32_t idx)
 {
     return 0x4E000400u | ((8u | (idx << 4)) << 16) | (n << 5) | d;
@@ -1168,6 +1216,7 @@ static void cx_swap(struct emit *e, bool q, bool dbl, uint32_t d, uint32_t n)
 {
     put(e, dbl ? v_ext8(d, n, n) : v_rev64(q, 2, d, n));
 }
+
 static void cx_dup(struct emit *e, bool q, bool dbl, bool imag, uint32_t d, uint32_t n)
 {
     put(e, v_trn(imag, q, dbl ? 3 : 2, d, n, n));
@@ -1275,9 +1324,12 @@ int a64x_stub_v(uint32_t w, uint64_t site_pc, uint64_t stub_pc, uint32_t dead, u
     uint64_t ret_pc = site_pc + 4;
     switch (a64x_classify(w)) {
     case A64X_LSE_LDOP:
-    case A64X_LSE_SWP: return stub_ldop_swp(w, stub_pc, ret_pc, dead, out, max);
-    case A64X_LSE_CAS: return stub_cas(w, stub_pc, ret_pc, dead, out, max);
-    case A64X_LSE_CASP: return stub_casp(w, stub_pc, ret_pc, dead, out, max);
+    case A64X_LSE_SWP:
+        return stub_ldop_swp(w, stub_pc, ret_pc, dead, out, max);
+    case A64X_LSE_CAS:
+        return stub_cas(w, stub_pc, ret_pc, dead, out, max);
+    case A64X_LSE_CASP:
+        return stub_casp(w, stub_pc, ret_pc, dead, out, max);
     case A64X_PAC_LDRA: {
         uint32_t one;
         if (a64x_rewrite1(w, &one)) {
@@ -1285,10 +1337,14 @@ int a64x_stub_v(uint32_t w, uint64_t site_pc, uint64_t stub_pc, uint32_t dead, u
         }
         return stub_ldra(w, stub_pc, ret_pc, out, max);
     }
-    case A64X_JSCVT: return stub_jscvt(w, stub_pc, ret_pc, dead, out, max);
-    case A64X_FCMA: return stub_fcma(w, stub_pc, ret_pc, vdead, out, max);
-    case A64X_FP16: return stub_fp16(w, stub_pc, ret_pc, dead, vdead, out, max);
-    case A64X_RDM: return stub_rdm(w, stub_pc, ret_pc, dead, vdead, out, max);
+    case A64X_JSCVT:
+        return stub_jscvt(w, stub_pc, ret_pc, dead, out, max);
+    case A64X_FCMA:
+        return stub_fcma(w, stub_pc, ret_pc, vdead, out, max);
+    case A64X_FP16:
+        return stub_fp16(w, stub_pc, ret_pc, dead, vdead, out, max);
+    case A64X_RDM:
+        return stub_rdm(w, stub_pc, ret_pc, dead, vdead, out, max);
     case A64X_SB: {
         /* SB: the speculation barrier's ARMv8.0 equivalent */
         struct emit e = {out, 0, max, stub_pc};
@@ -1297,7 +1353,8 @@ int a64x_stub_v(uint32_t w, uint64_t site_pc, uint64_t stub_pc, uint32_t dead, u
         put(&e, enc_b(here(&e), ret_pc));
         return e.n;
     }
-    default: return -1;
+    default:
+        return -1;
     }
 }
 

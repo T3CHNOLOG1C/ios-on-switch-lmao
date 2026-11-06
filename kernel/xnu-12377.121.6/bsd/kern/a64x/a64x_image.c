@@ -161,7 +161,8 @@ static void piece_close(struct a64x_islands *is, uint64_t end)
             for (uint64_t k = is->piece; k < end; k++) {
                 is->data[k >> 3] |= (uint8_t)(1u << (k & 7));
             }
-            if (!is->sticky) is->runs++;
+            if (!is->sticky)
+                is->runs++;
             is->sticky = true;
             is->words += end - is->piece;
         }
@@ -169,6 +170,7 @@ static void piece_close(struct a64x_islands *is, uint64_t end)
     is->piece = end;
     is->pnun = 0;
 }
+
 static void islands_close(struct a64x_islands *is, uint64_t end)
 {
     piece_close(is, end);

@@ -16,63 +16,78 @@ static inline uint32_t f_fcvtl(bool hi, uint32_t d, uint32_t n)
 {
     return 0x0E217800u | ((uint32_t)hi << 30) | (n << 5) | d;
 } /* .4s <- .4h/.8h */
+
 static inline uint32_t f_fcvtl_d(bool hi, uint32_t d, uint32_t n)
 {
     return 0x0E617800u | ((uint32_t)hi << 30) | (n << 5) | d;
 } /* .2d <- .2s/.4s */
+
 static inline uint32_t f_fcvtn(bool hi, uint32_t d, uint32_t n)
 {
     return 0x0E216800u | ((uint32_t)hi << 30) | (n << 5) | d;
 } /* .4h/.8h <- .4s */
+
 static inline uint32_t f_fcvtxn(bool hi, uint32_t d, uint32_t n)
 {
     return 0x2E616800u | ((uint32_t)hi << 30) | (n << 5) | d;
 } /* .2s/.4s <- .2d, odd */
+
 static inline uint32_t f_xtn(bool hi, uint32_t d, uint32_t n)
 {
     return 0x0E612800u | ((uint32_t)hi << 30) | (n << 5) | d;
 } /* .4h <- .4s */
+
 static inline uint32_t f_sqxtn(bool hi, bool u, uint32_t d, uint32_t n)
 {
     return (u ? 0x2E614800u : 0x0E614800u) | ((uint32_t)hi << 30) | (n << 5) | d;
 }
+
 static inline uint32_t f_sxtl(bool hi, bool u, uint32_t d, uint32_t n)
 {
     return (u ? 0x2F10A400u : 0x0F10A400u) | ((uint32_t)hi << 30) | (n << 5) | d;
 } /* .4s <- .4h */
+
 static inline uint32_t f_cvt_s_h(uint32_t d, uint32_t n)
 {
     return 0x1EE24000u | (n << 5) | d;
 } /* FCVT Sd, Hn */
+
 static inline uint32_t f_cvt_d_h(uint32_t d, uint32_t n)
 {
     return 0x1EE2C000u | (n << 5) | d;
 } /* FCVT Dd, Hn */
+
 static inline uint32_t f_cvt_h_s(uint32_t d, uint32_t n)
 {
     return 0x1E23C000u | (n << 5) | d;
 } /* FCVT Hd, Sn */
+
 static inline uint32_t f_cvt_h_d(uint32_t d, uint32_t n)
 {
     return 0x1E63C000u | (n << 5) | d;
 } /* FCVT Hd, Dn */
+
 static inline uint32_t f_fmov_ss(uint32_t d, uint32_t n)
 {
     return 0x1E204000u | (n << 5) | d;
 } /* FMOV Sd, Sn (clears above) */
+
 static inline uint32_t f_dup_h(uint32_t d, uint32_t n, uint32_t idx)
 {
     return 0x4E000400u | (((idx << 2) | 2u) << 16) | (n << 5) | d;
 } /* DUP Vd.8h, Vn.h[i] */
+
 static inline uint32_t f_dup_hs(uint32_t d, uint32_t n, uint32_t idx)
 {
     return 0x5E000400u | (((idx << 2) | 2u) << 16) | (n << 5) | d;
 } /* DUP Hd, Vn.h[i] */
+
 /* replace Rd/Rn/Rm/Ra fields */
 static inline uint32_t f_regs(uint32_t w, uint32_t d, uint32_t n, uint32_t m)
 {
     return (w & ~0x001F03FFu) | (m << 16) | (n << 5) | d;
 }
+
 static inline uint32_t f_regs1(uint32_t w, uint32_t d, uint32_t n)
 {
     return (w & ~0x3FFu) | (n << 5) | d;
@@ -90,6 +105,7 @@ static inline uint32_t f_three_to_s(uint32_t w)
 {
     return (w & ~((3u << 21) | (3u << 14))) | (1u << 21) | (3u << 14);
 }
+
 static inline uint32_t f_misc_to_s(uint32_t w)
 {
     return (w & ~(0x3Fu << 17)) | (0x10u << 17);
@@ -134,6 +150,7 @@ static int f16_begin(struct f16 *f, uint32_t *out, int max, uint64_t stub_pc, ui
     }
     return 0;
 }
+
 static int f16_end(struct f16 *f, uint64_t ret_pc)
 {
     int nv = f->nvs;
@@ -152,14 +169,28 @@ static int f16_end(struct f16 *f, uint64_t ret_pc)
     return f->e.n;
 }
 
-enum f16_narrow { NARROW_FCVTN, NARROW_XTN, NARROW_SQXTN, NARROW_UQXTN };
+enum f16_narrow {
+    NARROW_FCVTN,
+    NARROW_XTN,
+    NARROW_SQXTN,
+    NARROW_UQXTN
+};
+
 static void f16_narrow(struct emit *e, enum f16_narrow k, bool hi, uint32_t d, uint32_t n)
 {
     switch (k) {
-    case NARROW_FCVTN: put(e, f_fcvtn(hi, d, n)); break;
-    case NARROW_XTN: put(e, f_xtn(hi, d, n)); break;
-    case NARROW_SQXTN: put(e, f_sqxtn(hi, false, d, n)); break;
-    case NARROW_UQXTN: put(e, f_sqxtn(hi, true, d, n)); break;
+    case NARROW_FCVTN:
+        put(e, f_fcvtn(hi, d, n));
+        break;
+    case NARROW_XTN:
+        put(e, f_xtn(hi, d, n));
+        break;
+    case NARROW_SQXTN:
+        put(e, f_sqxtn(hi, false, d, n));
+        break;
+    case NARROW_UQXTN:
+        put(e, f_sqxtn(hi, true, d, n));
+        break;
     }
 }
 
@@ -290,7 +321,8 @@ static int stub_fp16(uint32_t w, uint64_t stub_pc, uint64_t ret_pc, uint32_t dea
     if ((w & 0x7FE00000u) == 0x1EE00000u || (w & 0x7FE00000u) == 0x1EC00000u || (w & 0xFFC00000u) == 0x1FC00000u) {
         if ((w & 0xFFC00000u) == 0x1FC00000u) {
             /* FMADD/FMSUB/FNMADD/FNMSUB Hd, Hn, Hm, Ha: in double */
-            if (f16_begin(&f, out, max, stub_pc, vav | (1u << a), 3, dead, vdead, 0, 0) < 0) return -1;
+            if (f16_begin(&f, out, max, stub_pc, vav | (1u << a), 3, dead, vdead, 0, 0) < 0)
+                return -1;
             uint32_t x = f.v[0], y = f.v[1], z = f.v[2];
             put(&f.e, f_cvt_d_h(x, n));
             put(&f.e, f_cvt_d_h(y, m));
@@ -309,12 +341,14 @@ static int stub_fp16(uint32_t w, uint64_t stub_pc, uint64_t ret_pc, uint32_t dea
             /* 1-source: opcode in 20:15 */
             uint32_t opc = BITS(w, 20, 15);
             if (opc == 0) { /* FMOV Hd, Hn */
-                if (f16_begin(&f, out, max, stub_pc, vav, 0, dead, vdead, 0, 0) < 0) return -1;
+                if (f16_begin(&f, out, max, stub_pc, vav, 0, dead, vdead, 0, 0) < 0)
+                    return -1;
                 f_isolate_h(&f.e, d, n);
                 return f16_end(&f, ret_pc);
             }
             if (opc == 1 || opc == 2) { /* FABS / FNEG: raw bits */
-                if (f16_begin(&f, out, max, stub_pc, vav, 0, dead, vdead, 0, 1) < 0) return -1;
+                if (f16_begin(&f, out, max, stub_pc, vav, 0, dead, vdead, 0, 1) < 0)
+                    return -1;
                 uint32_t g = f.g[0];
                 put(&f.e, 0x1E260000u | (n << 5) | g); /* fmov wg, sn */
                 put(&f.e,
@@ -324,7 +358,8 @@ static int stub_fp16(uint32_t w, uint64_t stub_pc, uint64_t ret_pc, uint32_t dea
                 return f16_end(&f, ret_pc);
             }
             if (opc == 3 || (opc >= 8 && opc <= 15 && opc != 13)) { /* FSQRT, FRINT* */
-                if (f16_begin(&f, out, max, stub_pc, vav, 0, dead, vdead, 0, 0) < 0) return -1;
+                if (f16_begin(&f, out, max, stub_pc, vav, 0, dead, vdead, 0, 0) < 0)
+                    return -1;
                 put(&f.e, f_cvt_s_h(d, n));
                 put(&f.e, (w & ~0x00C003FFu) | (d << 5) | d);
                 put(&f.e, f_cvt_h_s(d, d));
@@ -335,15 +370,18 @@ static int stub_fp16(uint32_t w, uint64_t stub_pc, uint64_t ret_pc, uint32_t dea
         if ((w & 0xFFE03C00u) == 0x1EE02000u) {
             /* FCMP/FCMPE Hn, Hm|#0 */
             bool zero = BIT(w, 3);
-            if (f16_begin(&f, out, max, stub_pc, vav, zero ? 1 : 2, dead, vdead, 0, 0) < 0) return -1;
+            if (f16_begin(&f, out, max, stub_pc, vav, zero ? 1 : 2, dead, vdead, 0, 0) < 0)
+                return -1;
             put(&f.e, f_cvt_s_h(f.v[0], n));
-            if (!zero) put(&f.e, f_cvt_s_h(f.v[1], m));
+            if (!zero)
+                put(&f.e, f_cvt_s_h(f.v[1], m));
             put(&f.e, (w & ~0x00C003E0u & ~0x001F0000u) | (f.v[0] << 5) | (zero ? 0 : f.v[1] << 16));
             return f16_end(&f, ret_pc);
         }
         if ((w & 0xFFE00C00u) == 0x1EE00400u) {
             /* FCCMP/FCCMPE */
-            if (f16_begin(&f, out, max, stub_pc, vav, 2, dead, vdead, 0, 0) < 0) return -1;
+            if (f16_begin(&f, out, max, stub_pc, vav, 2, dead, vdead, 0, 0) < 0)
+                return -1;
             put(&f.e, f_cvt_s_h(f.v[0], n));
             put(&f.e, f_cvt_s_h(f.v[1], m));
             put(&f.e, (w & ~0x00C003E0u & ~0x001F0000u) | (f.v[0] << 5) | (f.v[1] << 16));
@@ -351,7 +389,8 @@ static int stub_fp16(uint32_t w, uint64_t stub_pc, uint64_t ret_pc, uint32_t dea
         }
         if ((w & 0xFFE00C00u) == 0x1EE00C00u) {
             /* FCSEL Hd, Hn, Hm, cond: select the raw single, then keep only its low 16 bits */
-            if (f16_begin(&f, out, max, stub_pc, vav, 0, dead, vdead, 0, 0) < 0) return -1;
+            if (f16_begin(&f, out, max, stub_pc, vav, 0, dead, vdead, 0, 0) < 0)
+                return -1;
             put(&f.e, w & ~0x00C00000u);
             f_isolate_h(&f.e, d, d);
             return f16_end(&f, ret_pc);
@@ -363,7 +402,8 @@ static int stub_fp16(uint32_t w, uint64_t stub_pc, uint64_t ret_pc, uint32_t dea
             uint32_t bits = (BIT(imm8, 7) << 15) | ((b6 ^ 1) << 14) | ((b6 ? 3u : 0u) << 12) |
                             (BITS(imm8, 5, 4) << 10) | (BITS(imm8, 3, 0) << 6);
             uint32_t lo = bits & 0xFF, hi = bits >> 8;
-            if (f16_begin(&f, out, max, stub_pc, vav, 0, dead, vdead, 0, 0) < 0) return -1;
+            if (f16_begin(&f, out, max, stub_pc, vav, 0, dead, vdead, 0, 0) < 0)
+                return -1;
             if (lo) {
                 put(&f.e, 0x0F000400u | (BITS(lo, 7, 5) << 16) | (BITS(lo, 4, 0) << 5) | d); /* movi vd.2s, #lo */
                 if (hi)
@@ -379,8 +419,10 @@ static int stub_fp16(uint32_t w, uint64_t stub_pc, uint64_t ret_pc, uint32_t dea
         if ((w & 0xFFE00C00u) == 0x1EE00800u) {
             /* 2-source: FMUL FDIV FADD FSUB FMAX FMIN FMAXNM FMINNM FNMUL */
             uint32_t opc = BITS(w, 15, 12);
-            if (opc > 8) return -1;
-            if (f16_begin(&f, out, max, stub_pc, vav, 2, dead, vdead, 0, 0) < 0) return -1;
+            if (opc > 8)
+                return -1;
+            if (f16_begin(&f, out, max, stub_pc, vav, 2, dead, vdead, 0, 0) < 0)
+                return -1;
             put(&f.e, f_cvt_s_h(f.v[0], n));
             put(&f.e, f_cvt_s_h(f.v[1], m));
             put(&f.e, f_regs(w & ~0x00C00000u, f.v[0], f.v[0], f.v[1]));
@@ -395,27 +437,31 @@ static int stub_fp16(uint32_t w, uint64_t stub_pc, uint64_t ret_pc, uint32_t dea
             uint32_t rmode = BITS(w, 20, 19), opc = BITS(w, 18, 16);
             bool sf = BIT(w, 31);
             if (!fixed && rmode == 0 && opc == 6) { /* FMOV Wd/Xd, Hn */
-                if (f16_begin(&f, out, max, stub_pc, 0, 0, dead, vdead, 0, 0) < 0) return -1;
+                if (f16_begin(&f, out, max, stub_pc, 0, 0, dead, vdead, 0, 0) < 0)
+                    return -1;
                 put(&f.e, 0x1E260000u | (n << 5) | d); /* fmov wd, sn */
                 put(&f.e, 0x12003C00u | (d << 5) | d); /* and wd, wd, #0xffff */
                 return f16_end(&f, ret_pc);
             }
             if (!fixed && rmode == 0 && opc == 7) { /* FMOV Hd, Wn/Xn */
-                if (f16_begin(&f, out, max, stub_pc, 0, 0, dead, vdead, 0, 0) < 0) return -1;
+                if (f16_begin(&f, out, max, stub_pc, 0, 0, dead, vdead, 0, 0) < 0)
+                    return -1;
                 put(&f.e, 0x1E270000u | (n << 5) | d); /* fmov sd, wn */
                 f_isolate_h(&f.e, d, d);
                 return f16_end(&f, ret_pc);
             }
             if ((!fixed && rmode == 0 && (opc == 2 || opc == 3)) || (fixed && rmode == 0 && (opc == 2 || opc == 3))) {
                 /* SCVTF/UCVTF Hd, Wn/Xn{, #fbits}: in double (exact for 32-bit, harmless for 64-bit), one rounding */
-                if (f16_begin(&f, out, max, stub_pc, 0, 0, dead, vdead, 0, 0) < 0) return -1;
+                if (f16_begin(&f, out, max, stub_pc, 0, 0, dead, vdead, 0, 0) < 0)
+                    return -1;
                 put(&f.e, (w & ~0x00C00000u) | 0x00400000u); /* same, ftype = double, into Dd */
                 put(&f.e, f_cvt_h_d(d, d));
                 return f16_end(&f, ret_pc);
             }
             if ((!fixed && (opc == 0 || opc == 1 || opc == 4 || opc == 5)) || (fixed && rmode == 3 && opc <= 1)) {
                 /* FCVT{N,P,M,Z,A}{S,U} Wd/Xd, Hn{, #fbits}: exact widening, convert from single */
-                if (f16_begin(&f, out, max, stub_pc, 1u << n, 1, dead, vdead, 0, 0) < 0) return -1;
+                if (f16_begin(&f, out, max, stub_pc, 1u << n, 1, dead, vdead, 0, 0) < 0)
+                    return -1;
                 put(&f.e, f_cvt_s_h(f.v[0], n));
                 put(&f.e, (w & ~0x00C003E0u) | (f.v[0] << 5));
                 return f16_end(&f, ret_pc);
@@ -436,17 +482,20 @@ static int stub_fp16(uint32_t w, uint64_t stub_pc, uint64_t ret_pc, uint32_t dea
         bool cmp = key == 0x04 || key == 0x14 || key == 0x15 || key == 0x1C || key == 0x1D;
         bool pair = !scalar && (key == 0x10 || key == 0x12 || key == 0x16 || key == 0x18 || key == 0x1E);
         if (scalar) {
-            if (fused && (key == 0x01 || key == 0x09)) return -1;
+            if (fused && (key == 0x01 || key == 0x09))
+                return -1;
             if (fused) {
                 /* FRECPS/FRSQRTS Hd, Hn, Hm in double */
-                if (f16_begin(&f, out, max, stub_pc, vav, 2, dead, vdead, 0, 0) < 0) return -1;
+                if (f16_begin(&f, out, max, stub_pc, vav, 2, dead, vdead, 0, 0) < 0)
+                    return -1;
                 put(&f.e, f_cvt_d_h(f.v[0], n));
                 put(&f.e, f_cvt_d_h(f.v[1], m));
                 put(&f.e, f_regs(f_three_to_s(w) | (1u << 22), f.v[0], f.v[0], f.v[1]));
                 put(&f.e, f_cvt_h_d(d, f.v[0]));
                 return f16_end(&f, ret_pc);
             }
-            if (f16_begin(&f, out, max, stub_pc, vav, 2, dead, vdead, 0, 0) < 0) return -1;
+            if (f16_begin(&f, out, max, stub_pc, vav, 2, dead, vdead, 0, 0) < 0)
+                return -1;
             put(&f.e, f_cvt_s_h(f.v[0], n));
             put(&f.e, f_cvt_s_h(f.v[1], m));
             put(&f.e, f_regs(f_three_to_s(w), f.v[0], f.v[0], f.v[1]));
@@ -457,16 +506,19 @@ static int stub_fp16(uint32_t w, uint64_t stub_pc, uint64_t ret_pc, uint32_t dea
             return f16_end(&f, ret_pc);
         }
         if (fused) {
-            if (f16_begin(&f, out, max, stub_pc, vav, 8, dead, vdead, 0, 0) < 0) return -1;
+            if (f16_begin(&f, out, max, stub_pc, vav, 8, dead, vdead, 0, 0) < 0)
+                return -1;
             f16_fused(&f, q, f_three_to_s(w) | (1u << 30) | (1u << 22), key == 0x01 || key == 0x09, false, d, n, m);
             return f16_end(&f, ret_pc);
         }
         if (pair) {
-            if (f16_begin(&f, out, max, stub_pc, vav, 3, dead, vdead, 0, 0) < 0) return -1;
+            if (f16_begin(&f, out, max, stub_pc, vav, 3, dead, vdead, 0, 0) < 0)
+                return -1;
             f16_pair(&f, q, s4, d, n, m);
             return f16_end(&f, ret_pc);
         }
-        if (f16_begin(&f, out, max, stub_pc, vav, q ? 3 : 2, dead, vdead, 0, 0) < 0) return -1;
+        if (f16_begin(&f, out, max, stub_pc, vav, q ? 3 : 2, dead, vdead, 0, 0) < 0)
+            return -1;
         f16_vec2(&f, q, s4, cmp ? NARROW_XTN : NARROW_FCVTN, d, n, m);
         return f16_end(&f, ret_pc);
     }
@@ -481,9 +533,11 @@ static int stub_fp16(uint32_t w, uint64_t stub_pc, uint64_t ret_pc, uint32_t dea
         bool absneg = sa && opc == 0x0F;                        /* FABS / FNEG */
         if (absneg && !scalar) {
             /* raw bits: FABS = BIC #0x8000 per lane; FNEG = EOR with a 0x8000 pattern */
-            if (f16_begin(&f, out, max, stub_pc, vav, u ? 1 : 0, dead, vdead, 0, 0) < 0) return -1;
+            if (f16_begin(&f, out, max, stub_pc, vav, u ? 1 : 0, dead, vdead, 0, 0) < 0)
+                return -1;
             if (!u) {
-                if (d != n) put(&f.e, (q ? 0x4EA01C00u : 0x0EA01C00u) | (n << 16) | (n << 5) | d);
+                if (d != n)
+                    put(&f.e, (q ? 0x4EA01C00u : 0x0EA01C00u) | (n << 16) | (n << 5) | d);
                 put(&f.e, (q ? 0x6F00B400u : 0x2F00B400u) | (4u << 16) | d); /* bic vd.8h, #0x80, lsl #8 */
             } else {
                 put(&f.e, 0x4F04A400u | f.v[0]); /* movi vt.8h, #0x80, lsl #8 */
@@ -492,7 +546,8 @@ static int stub_fp16(uint32_t w, uint64_t stub_pc, uint64_t ret_pc, uint32_t dea
             return f16_end(&f, ret_pc);
         }
         if (scalar) {
-            if (f16_begin(&f, out, max, stub_pc, vav, 0, dead, vdead, 0, 0) < 0) return -1;
+            if (f16_begin(&f, out, max, stub_pc, vav, 0, dead, vdead, 0, 0) < 0)
+                return -1;
             if (fromint) {
                 put(&f.e, f_sxtl(false, u, d, n));
                 put(&f.e, f_regs1(f_misc_to_s(w), d, d));
@@ -509,7 +564,8 @@ static int stub_fp16(uint32_t w, uint64_t stub_pc, uint64_t ret_pc, uint32_t dea
             }
             return f16_end(&f, ret_pc);
         }
-        if (f16_begin(&f, out, max, stub_pc, vav, 2, dead, vdead, 0, 0) < 0) return -1;
+        if (f16_begin(&f, out, max, stub_pc, vav, 2, dead, vdead, 0, 0) < 0)
+            return -1;
         f16_vec1(&f, q, s4, fromint ? (u ? 2 : 1) : 0,
                  cmpz    ? NARROW_XTN
                  : toint ? (u ? NARROW_UQXTN : NARROW_SQXTN)
@@ -520,17 +576,20 @@ static int stub_fp16(uint32_t w, uint64_t stub_pc, uint64_t ret_pc, uint32_t dea
     /* across lanes FP16: 0 Q 0 01110 a 0 11000 opc 10 */
     if ((w & 0xBF7E0C00u) == 0x0E300800u) {
         uint32_t opc = BITS(w, 16, 12), sa = BIT(w, 23);
-        if (opc != 0x0C && opc != 0x0F) return -1;
+        if (opc != 0x0C && opc != 0x0F)
+            return -1;
         uint32_t v4s = w | (1u << 29) | (1u << 30);
         /* scalar 2-source counterpart: FMAXNM/FMINNM (opc 0C) or FMAX/FMIN (0F) */
         uint32_t ops = 0x1E200800u | ((opc == 0x0C ? 6u : 4u) + sa) << 12;
-        if (f16_begin(&f, out, max, stub_pc, vav, 2, dead, vdead, 0, 0) < 0) return -1;
+        if (f16_begin(&f, out, max, stub_pc, vav, 2, dead, vdead, 0, 0) < 0)
+            return -1;
         f16_across(&f, q, v4s, ops, d, n);
         return f16_end(&f, ret_pc);
     }
     /* scalar pairwise FP16: 01 0 11110 a 0 11000 opc 10 (on .2h) */
     if ((w & 0xFF7E0C00u) == 0x5E300800u) {
-        if (f16_begin(&f, out, max, stub_pc, vav, 0, dead, vdead, 0, 0) < 0) return -1;
+        if (f16_begin(&f, out, max, stub_pc, vav, 0, dead, vdead, 0, 0) < 0)
+            return -1;
         put(&f.e, f_fcvtl(false, d, n));
         put(&f.e, f_regs1(w | (1u << 29), d, d));
         put(&f.e, f_cvt_h_s(d, d));
@@ -542,10 +601,12 @@ static int stub_fp16(uint32_t w, uint64_t stub_pc, uint64_t ret_pc, uint32_t dea
         uint32_t u = BIT(w, 29), opc = BITS(w, 15, 12);
         uint32_t idx = (BIT(w, 11) << 2) | (BIT(w, 21) << 1) | BIT(w, 20), rm = BITS(w, 19, 16);
         bool fmla = !u && opc == 1, fmls = !u && opc == 5, fmul = opc == 9;
-        if (!fmla && !fmls && !fmul) return -1;
+        if (!fmla && !fmls && !fmul)
+            return -1;
         vav = (1u << d) | (1u << n) | (1u << rm);
         if (scalar) {
-            if (f16_begin(&f, out, max, stub_pc, vav, 3, dead, vdead, 0, 0) < 0) return -1;
+            if (f16_begin(&f, out, max, stub_pc, vav, 3, dead, vdead, 0, 0) < 0)
+                return -1;
             uint32_t x = f.v[0], y = f.v[1], z = f.v[2];
             put(&f.e, f_dup_hs(y, rm, idx));
             if (fmul) {
@@ -565,14 +626,16 @@ static int stub_fp16(uint32_t w, uint64_t stub_pc, uint64_t ret_pc, uint32_t dea
             return f16_end(&f, ret_pc);
         }
         if (fmul) {
-            if (f16_begin(&f, out, max, stub_pc, vav, 4, dead, vdead, 0, 0) < 0) return -1;
+            if (f16_begin(&f, out, max, stub_pc, vav, 4, dead, vdead, 0, 0) < 0)
+                return -1;
             uint32_t t = f.v[3];
             put(&f.e, f_dup_h(t, rm, idx));
             /* by element: U=0 is FMUL, U=1 FMULX; their .4s vector forms are 0x6E20DC00 (FMUL) and 0x4E20DC00 (FMULX) */
             f16_vec2(&f, q, u ? 0x4E20DC00u : 0x6E20DC00u, NARROW_FCVTN, d, n, t);
             return f16_end(&f, ret_pc);
         }
-        if (f16_begin(&f, out, max, stub_pc, vav, 9, dead, vdead, 0, 0) < 0) return -1;
+        if (f16_begin(&f, out, max, stub_pc, vav, 9, dead, vdead, 0, 0) < 0)
+            return -1;
         uint32_t t = f.v[8];
         put(&f.e, f_dup_h(t, rm, idx));
         f16_fused(&f, q, fmla ? 0x4E60CC00u : 0x4EE0CC00u, true, true, d, n, t);
@@ -585,7 +648,8 @@ static int stub_fp16(uint32_t w, uint64_t stub_pc, uint64_t ret_pc, uint32_t dea
         uint32_t bits = (BIT(imm8, 7) << 15) | ((b6 ^ 1) << 14) | ((b6 ? 3u : 0u) << 12) | (BITS(imm8, 5, 4) << 10) |
                         (BITS(imm8, 3, 0) << 6);
         uint32_t lo = bits & 0xFF, hi = bits >> 8;
-        if (f16_begin(&f, out, max, stub_pc, vav, 0, dead, vdead, 0, 0) < 0) return -1;
+        if (f16_begin(&f, out, max, stub_pc, vav, 0, dead, vdead, 0, 0) < 0)
+            return -1;
         uint32_t qq = (uint32_t)q << 30;
         put(&f.e, 0x0F008400u | qq | (BITS(lo, 7, 5) << 16) | (BITS(lo, 4, 0) << 5) | d); /* movi vd.8h, #lo */
         if (hi)
@@ -607,7 +671,8 @@ static int stub_rdm(uint32_t w, uint64_t stub_pc, uint64_t ret_pc, uint32_t dead
     bool scalar = BIT(w, 28), byelem = BIT(w, 24), q = BIT(w, 30), sub;
     uint32_t size = BITS(w, 23, 22), d = BITS(w, 4, 0), n = BITS(w, 9, 5), m = BITS(w, 20, 16);
     int idx = -1;
-    if (size != 1 && size != 2) return -1;
+    if (size != 1 && size != 2)
+        return -1;
     if (byelem) {
         sub = BIT(w, 13);
         if (size == 1) {
@@ -621,7 +686,8 @@ static int stub_rdm(uint32_t w, uint64_t stub_pc, uint64_t ret_pc, uint32_t dead
     }
     uint32_t e = size == 1 ? 16 : 32, wide = size + 1;
     struct f16 f;
-    if (f16_begin(&f, out, max, stub_pc, (1u << d) | (1u << n) | (1u << m), 4, dead, vdead, 0, 0) < 0) return -1;
+    if (f16_begin(&f, out, max, stub_pc, (1u << d) | (1u << n) | (1u << m), 4, dead, vdead, 0, 0) < 0)
+        return -1;
     uint32_t P = f.v[0], A = f.v[1], T = f.v[2], R = f.v[3];
     uint32_t mm = m;
     if (idx >= 0) {

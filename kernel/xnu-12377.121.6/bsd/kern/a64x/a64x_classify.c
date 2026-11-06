@@ -161,12 +161,18 @@ static bool sysreg_v80_el0(uint32_t op0, uint32_t op1, uint32_t crn, uint32_t cr
 {
     if (op0 == 3 && op1 == 3) {
         switch (crn) {
-        case 0: return crm == 0 && (op2 == 1 || op2 == 7);                           /* CTR, DCZID */
-        case 4: return (crm == 2 && op2 <= 1) || (crm == 4 && op2 <= 1) || crm == 5; /* NZCV DAIF FPCR FPSR DSPSR/DLR */
-        case 9: return crm >= 12;                                                    /* PMU */
-        case 13: return crm == 0 && (op2 == 2 || op2 == 3);                          /* TPIDR(RO)_EL0 */
-        case 14: return (crm == 0 && op2 <= 2) || (crm >= 2 && crm <= 3) || crm >= 8; /* CNT*, PMEV* */
-        default: return false;
+        case 0:
+            return crm == 0 && (op2 == 1 || op2 == 7); /* CTR, DCZID */
+        case 4:
+            return (crm == 2 && op2 <= 1) || (crm == 4 && op2 <= 1) || crm == 5; /* NZCV DAIF FPCR FPSR DSPSR/DLR */
+        case 9:
+            return crm >= 12; /* PMU */
+        case 13:
+            return crm == 0 && (op2 == 2 || op2 == 3); /* TPIDR(RO)_EL0 */
+        case 14:
+            return (crm == 0 && op2 <= 2) || (crm >= 2 && crm <= 3) || crm >= 8; /* CNT*, PMEV* */
+        default:
+            return false;
         }
     }
     if (op0 == 2 && op1 == 3) {

@@ -57,16 +57,27 @@ static bool a64x_vregs(uint32_t w, uint32_t *vr, uint32_t *vw)
             uint32_t opc = BITS(w, 15, 12), nr;
             switch (opc) {
             case 0:
-            case 2: nr = 4; break;
+            case 2:
+                nr = 4;
+                break;
             case 4:
-            case 6: nr = 3; break;
-            case 7: nr = 1; break;
+            case 6:
+                nr = 3;
+                break;
+            case 7:
+                nr = 1;
+                break;
             case 8:
-            case 10: nr = 2; break;
-            default: *vr = 0xFFFFFFFFu; return false;
+            case 10:
+                nr = 2;
+                break;
+            default:
+                *vr = 0xFFFFFFFFu;
+                return false;
             }
             uint32_t m = 0;
-            for (uint32_t k = 0; k < nr; k++) m |= VM(rd + k);
+            for (uint32_t k = 0; k < nr; k++)
+                m |= VM(rd + k);
             if (BIT(w, 22))
                 *vw = m;
             else
@@ -76,7 +87,8 @@ static bool a64x_vregs(uint32_t w, uint32_t *vr, uint32_t *vw)
         if ((w & 0xBF9F0000u) == 0x0D000000u || (w & 0xBF800000u) == 0x0D800000u) {
             /* single structure: lane (partial) or replicate (LDnR: full) */
             uint32_t opc = BITS(w, 15, 13), selem = ((BIT(w, 13) << 1) | BIT(w, 21)) + 1, m = 0;
-            for (uint32_t k = 0; k < selem; k++) m |= VM(rd + k);
+            for (uint32_t k = 0; k < selem; k++)
+                m |= VM(rd + k);
             if (BIT(w, 22) && (opc == 6 || opc == 7))
                 *vw = m;
             else
@@ -167,7 +179,8 @@ static bool a64x_vregs(uint32_t w, uint32_t *vr, uint32_t *vw)
                     /* three same FP16: FMLA/FMLS accumulate */
                     bool acc = BITS(w, 13, 11) == 1;
                     *vr = generic_r | (acc ? VM(rd) : 0);
-                    if (!acc) *vw = VM(rd);
+                    if (!acc)
+                        *vw = VM(rd);
                     return true;
                 }
                 /* three same extra (SQRDMLAH, dot products, FCMLA, FCADD, MMLA) and the rest: keep Rd */
@@ -177,10 +190,12 @@ static bool a64x_vregs(uint32_t w, uint32_t *vr, uint32_t *vw)
             if (!scalar && !u && !BIT(w, 15) && BITS(w, 11, 10) == 0 && BITS(w, 23, 22) == 0) {
                 /* TBL/TBX: Rn..Rn+len */
                 uint32_t len = BITS(w, 14, 13), m = VM(rm);
-                for (uint32_t k = 0; k <= len; k++) m |= VM(rn + k);
+                for (uint32_t k = 0; k <= len; k++)
+                    m |= VM(rn + k);
                 bool tbx = BIT(w, 12);
                 *vr = m | (tbx ? VM(rd) : 0);
-                if (!tbx) *vw = VM(rd);
+                if (!tbx)
+                    *vw = VM(rd);
                 return true;
             }
             if (!scalar && !u && !BIT(w, 15) && BITS(w, 11, 10) == 2) { /* UZP/TRN/ZIP */
@@ -202,7 +217,8 @@ static bool a64x_vregs(uint32_t w, uint32_t *vr, uint32_t *vw)
             uint32_t opc = BITS(w, 15, 11), size = BITS(w, 23, 22);
             bool acc = opc == 0x12 || opc == 0x19 || opc == 0x0F || opc == 0x1D || (opc == 0x03 && u && size != 0);
             *vr = generic_r | (acc ? VM(rd) : 0);
-            if (!acc) *vw = VM(rd);
+            if (!acc)
+                *vw = VM(rd);
             return true;
         }
         if (BITS(w, 11, 10) == 0) {
@@ -210,7 +226,8 @@ static bool a64x_vregs(uint32_t w, uint32_t *vr, uint32_t *vw)
             uint32_t opc = BITS(w, 15, 12);
             bool pure = opc <= 3 || opc == 7 || (opc >= 12 && opc <= 14) || ((opc == 4 || opc == 6) && (!q || scalar));
             *vr = generic_r | (pure ? 0 : VM(rd));
-            if (pure) *vw = VM(rd);
+            if (pure)
+                *vw = VM(rd);
             return true;
         }
         if (BITS(w, 11, 10) == 2 && BITS(w, 21, 17) == 0x10) {
@@ -219,7 +236,8 @@ static bool a64x_vregs(uint32_t w, uint32_t *vr, uint32_t *vw)
             bool narrow = opc == 0x12 || opc == 0x14 || opc == 0x16;
             bool acc = opc == 0x06 || opc == 0x03 || (narrow && q && !scalar); /* SADALP, SUQADD/USQADD accumulate */
             *vr = VM(rn) | (acc ? VM(rd) : 0);
-            if (!acc) *vw = VM(rd);
+            if (!acc)
+                *vw = VM(rd);
             return true;
         }
         if (BITS(w, 11, 10) == 2 && (BITS(w, 21, 17) == 0x18 || BITS(w, 22, 17) == 0x3C)) {
@@ -238,16 +256,19 @@ static bool a64x_vregs(uint32_t w, uint32_t *vr, uint32_t *vw)
             uint32_t cmode = BITS(w, 15, 12);
             bool rmw = (cmode & 1) && cmode < 12;
             *vr = rmw ? VM(rd) : 0;
-            if (!rmw) *vw = VM(rd);
+            if (!rmw)
+                *vw = VM(rd);
             return true;
         }
         /* shift by immediate */
         uint32_t opc = BITS(w, 15, 11);
         bool acc = opc == 0x02 || opc == 0x06 || opc == 0x08 || (opc == 0x0A && u);
         bool narrow = opc >= 0x10 && opc <= 0x13;
-        if (narrow && q && !scalar) acc = true;
+        if (narrow && q && !scalar)
+            acc = true;
         *vr = VM(rn) | (acc ? VM(rd) : 0);
-        if (!acc) *vw = VM(rd);
+        if (!acc)
+            *vw = VM(rd);
         return true;
     }
     if ((w & 0x9F000400u) == 0x0F000000u || (w & 0xDF000400u) == 0x5F000000u) {
@@ -257,7 +278,8 @@ static bool a64x_vregs(uint32_t w, uint32_t *vr, uint32_t *vw)
                     (u && (opc == 9 || opc == 10));
         uint32_t rm4 = BITS(w, 19, 16);
         *vr = VM(rn) | VM(rm) | VM(rm4) | (pure ? 0 : VM(rd));
-        if (pure) *vw = VM(rd);
+        if (pure)
+            *vw = VM(rd);
         return true;
     }
     /* crypto and anything else: read every named register, write nothing */
@@ -299,7 +321,8 @@ static bool vflow_dead(const uint32_t *w, int n, int site, uint32_t v, int budge
             }
             bool call = (e & 0xFC000000u) == 0x94000000u || (e & 0xFFFFFC1Fu) == 0xD63F0000u;
             if (call || e == RET) {
-                if (scratch) break; /* clobbered by the callee / not preserved for the caller */
+                if (scratch)
+                    break; /* clobbered by the callee / not preserved for the caller */
                 return false;
             }
             if ((e & 0xFE1FFC00u) == 0xD61F0000u) {
@@ -322,8 +345,10 @@ static bool vflow_dead(const uint32_t *w, int n, int site, uint32_t v, int budge
             }
             if (cond || uncond) {
                 if (tgt < 0 || tgt >= n) {
-                    if (!tail_ok || !scratch) return false;
-                    if (uncond) break; /* tail call */
+                    if (!tail_ok || !scratch)
+                        return false;
+                    if (uncond)
+                        break; /* tail call */
                     i++;
                     continue;
                 }
@@ -331,7 +356,8 @@ static bool vflow_dead(const uint32_t *w, int n, int site, uint32_t v, int budge
                     i = (int)tgt;
                     continue;
                 }
-                if (sp >= 512) return false;
+                if (sp >= 512)
+                    return false;
                 stack[sp++] = (int)tgt;
                 i++;
                 continue;
@@ -368,6 +394,7 @@ uint32_t a64x_dead_vregs_flow(const uint32_t *fn, int n, int site, uint32_t cand
 
 /* for the host tests */
 bool a64x_vregs_public(uint32_t w, uint32_t *vr, uint32_t *vw);
+
 bool a64x_vregs_public(uint32_t w, uint32_t *vr, uint32_t *vw)
 {
     return a64x_vregs(w, vr, vw);
