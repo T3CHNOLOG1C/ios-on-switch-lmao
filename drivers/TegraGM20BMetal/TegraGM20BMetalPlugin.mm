@@ -60,6 +60,7 @@
 #include <string.h>
 #include <unistd.h>
 #include "NativeBridgeMetalFrontend.h"
+#include "DisplayRateProbe.h"
 #include "RawMetal.h"
 #include "bridge/NativeMetalObjects.h"
 
@@ -599,6 +600,7 @@ id openDevice(unsigned port)
                !cache ? ")" : "", seeded ? "shared (" : "none", seeded ? seedName : "", seeded ? ")" : "",
                (unsigned long long)(openNs / 1000000), (unsigned long long)(bridgeNs / 1000000));
         startRates();
+        switch_display_rate_probe();
         return device;
     }
 }
