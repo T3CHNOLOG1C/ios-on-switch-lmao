@@ -2179,8 +2179,16 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, uint32_t first, ui
         writtenCount_ = 0;
         writtenFull_ = false;
 #endif
-        p.m(PIXEL_SHADER_BARRIER, 0);
-        p.m(INVALIDATE_TEXTURE_DATA_CACHE_PIXEL_ORDERED, 0);
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+        if (dev_->wfiFetchBarrier) {
+            p.m(WAIT_FOR_IDLE, 0);
+            p.m(INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI, 0);
+        } else
+#endif
+        {
+            p.m(PIXEL_SHADER_BARRIER, 0);
+            p.m(INVALIDATE_TEXTURE_DATA_CACHE_PIXEL_ORDERED, 0);
+        }
         writtenBits_ = storageWrittenBits_ = 0;
     }
     if (first != first_ || baseInstance != baseInstance_) {

@@ -33,6 +33,9 @@
 #include <string.h>
 #include <unistd.h>
 #include <xpc/xpc.h>
+#if SWITCH_DEBUG
+#include <notify.h>
+#endif
 
 // Public on macOS, private (but exported by libxpc and used by every iOS daemon) on iOS.
 extern xpc_connection_t
@@ -58,6 +61,28 @@ static void startPairingAgent(void)
     if (error)
         os_log_error(OS_LOG_DEFAULT, "BlueTool: %{public}s not started: %d", kPairingAgent, error);
 }
+
+#if SWITCH_DEBUG
+// Debug builds: the GPU context-switch stress (drivers/TegraGM20BMetal/raw/test/fetchform.cpp), once per Darwin notification
+// the Mac posts (`idevicenotificationproxy -u <udid> post com.brunostjohn.switch.debug.ctxsw-stress`). Nothing else starts
+// it; it runs a bounded time and exits.
+static const char kStress[] = "/usr/bin/switch-fetchform";
+
+static void watchStress(void)
+{
+    int token;
+    notify_register_dispatch("com.brunostjohn.switch.debug.ctxsw-stress", &token, dispatch_get_main_queue(), ^(int t) {
+        (void)t;
+        if (access(kStress, X_OK))
+            return;
+        char *argv[] = {(char *)kStress, NULL};
+        pid_t pid;
+        const int error = posix_spawn(&pid, kStress, NULL, NULL, argv, environ);
+        if (error)
+            os_log_error(OS_LOG_DEFAULT, "BlueTool: %{public}s not started: %d", kStress, error);
+    });
+}
+#endif
 
 static void answer(xpc_connection_t peer, xpc_object_t message)
 {
@@ -94,5 +119,8 @@ int main(void)
         xpc_connection_resume(connection);
     });
     xpc_connection_resume(listener);
+#if SWITCH_DEBUG
+    watchStress();
+#endif
     dispatch_main();
 }

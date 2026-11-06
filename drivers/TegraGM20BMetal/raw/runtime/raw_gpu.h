@@ -558,6 +558,12 @@ public:
             fetchBarriersInterlocked{0};
     } stats;
 
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    // The fetch barrier as WAIT_FOR_IDLE and INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI, the form before PIXEL_SHADER_BARRIER:
+    // only the context-switch stress sets it (test/fetchform.cpp), as the reference its other forms are compared with
+    bool wfiFetchBarrier = false;
+#endif
+
     // The self-test's result (open), per sampling candidate (fx::sampling(i)): bytes off by more than 1 in the CPU's Tegra and
     // Fermi views (~0u: not run); the one chains use (selfTestChosen, fx::kSamplings: none passed) and its view; the first
     // candidate's detail in the Tegra view (what the documented convention gave)
