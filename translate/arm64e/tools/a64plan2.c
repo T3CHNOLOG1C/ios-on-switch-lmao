@@ -171,6 +171,36 @@ static void mark_code(const uint8_t *m)
     }
 }
 
+/*
+ * TEXT_STUBS mappings (dyld_cache_mapping_and_slide_info flag 1 << 3) hold the cross-image stubs of the text next
+ * to them (adrp/add/ldr/braa): code that belongs to no image's sections.
+ */
+static void mark_stub_mappings(int nfiles)
+{
+    for (int f = 0; f < nfiles; f++) {
+        uint32_t so = u32(fb[f], 0x138), sc = u32(fb[f], 0x13C);
+        for (uint32_t i = 0; i < sc; i++) {
+            const uint8_t *e = fb[f] + so + 56 * i;
+            uint64_t addr = u64(e, 0), size = u64(e, 8), off = u64(e, 16);
+            if (!(u64(e, 40) & (1u << 3))) continue;
+            if (nvr == capvr) {
+                capvr = capvr ? capvr * 2 : 65536;
+                vr = realloc(vr, capvr * sizeof(*vr));
+            }
+            vr[nvr++] = (struct vrange){addr, addr + size};
+            if (nsecs == capsecs) {
+                capsecs = capsecs ? capsecs * 2 : 65536;
+                secs = realloc(secs, capsecs * sizeof(*secs));
+            }
+            secs[nsecs].lo = addr;
+            secs[nsecs].hi = addr + size;
+            snprintf(secs[nsecs].name, sizeof(secs[nsecs].name), "[TEXT_STUBS]");
+            nsecs++;
+            for (uint64_t x = off / 4; x < (off + size) / 4; x++) codebits[f][x >> 3] |= 1 << (x & 7);
+        }
+    }
+}
+
 /* every function start of every image (LC_FUNCTION_STARTS, read through the cache's LINKEDIT mapping) */
 static uint64_t *fstarts;
 static size_t nfstarts, capfs;
@@ -1468,6 +1498,7 @@ int a64x_cmd_plan2(int argc, char **argv)
         }
     }
     mark_code(m);
+    mark_stub_mappings((int)sub_cnt + 1);
     load_function_starts(m);
     if (getenv("A64X_CMP")) cmp_out = fopen(getenv("A64X_CMP"), "w");
     qsort(secs, nsecs, sizeof(*secs), cmp_sec);
