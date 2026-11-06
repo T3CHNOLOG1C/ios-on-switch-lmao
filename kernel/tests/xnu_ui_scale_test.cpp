@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <cstring>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "bazel/testing/source_text.h"
@@ -100,6 +101,32 @@ TEST(XnuUiScale, FmovImmediateMatchesTheAssembler)
     }
 }
 
+TEST(XnuUiScale, FmovFractionMatchesTheAssembler)
+{
+    // clang -arch arm64: fmov d2, #2.5 / #1.25 / #0.125 / #31.0
+    uint32_t insn = 0;
+    ASSERT_TRUE(switch_a64_fmov_d(2, 5, 2, &insn));
+    EXPECT_EQ(insn, 0x1e609002u);
+    ASSERT_TRUE(switch_a64_fmov_d(2, 10, 8, &insn));
+    EXPECT_EQ(insn, 0x1e6e9002u);
+    ASSERT_TRUE(switch_a64_fmov_d(2, 1, 8, &insn));
+    EXPECT_EQ(insn, 0x1e681002u);
+    ASSERT_TRUE(switch_a64_fmov_d(2, 31, 1, &insn));
+    EXPECT_EQ(insn, 0x1e67f002u);
+    // every positive immediate, as (16 + efgh) * 2^(n + 3) / 128
+    for (unsigned imm8 = 0; imm8 < 0x80; imm8++) {
+        const uint32_t expected = 0x1e601002u | (imm8 << 13);
+        const unsigned b = (imm8 >> 6) & 1, cd = (imm8 >> 4) & 3, efgh = imm8 & 0xf;
+        const unsigned p = b ? cd : cd + 4;
+        ASSERT_TRUE(switch_a64_fmov_d(2, (16 + efgh) << p, 128, &insn)) << imm8;
+        EXPECT_EQ(insn, expected) << imm8;
+        EXPECT_EQ(ExpandFmovImm(insn), (16.0 + efgh) * std::ldexp(1.0, static_cast<int>(p)) / 128.0) << imm8;
+    }
+    for (const auto &[num, den] : {std::pair{16u, 5u}, {8u, 5u}, {1u, 3u}, {33u, 1u}, {1u, 16u}, {64u, 1u}}) {
+        EXPECT_FALSE(switch_a64_fmov_d(2, num, den, &insn)) << num << "/" << den;
+    }
+}
+
 TEST(XnuUiScale, FrontBoardServicesOverride)
 {
     // what the 1.6-only site wrote: fmov d8, #8.0; fmov d1, #5.0; fdiv d8, d8, d1; tbnz w0, #0, +0x8; fmov d8, xzr
@@ -145,12 +172,73 @@ TEST(XnuUiScale, ProgressBarIsWholePixels)
               (std::vector<uint8_t>{0x33, 0x33, 0x6f, 0x43, 0x00, 0x00, 0x80, 0x40}));
 }
 
+TEST(XnuUiScale, BatteryFillMatchesTheAssembler)
+{
+    // clang -arch arm64: fmov d2, #2.5; fmul d1, d12, d2; frintn d1, d1; fdiv d13, d1, d2; fmov d3, #-4.0;
+    // fmadd d11, d13, d3, d11; fmadd d8, d13, d3, d8
+    EXPECT_EQ(
+        EditBytes(SWITCH_US_BATTERY_FILL, Named("1.25"), 28),
+        (std::vector<uint8_t>{0x02, 0x90, 0x60, 0x1e, 0x81, 0x09, 0x62, 0x1e, 0x21, 0x40, 0x64, 0x1e, 0x2d, 0x18,
+                              0x62, 0x1e, 0x03, 0x10, 0x72, 0x1e, 0xab, 0x2d, 0x43, 0x1f, 0xa8, 0x21, 0x43, 0x1f}));
+    uint8_t out[28] = {};
+    EXPECT_FALSE(switch_ui_scale_edit_bytes(SWITCH_US_BATTERY_FILL, Named("1.6"), out, sizeof(out)));
+    for (uint8_t byte : out) {
+        EXPECT_EQ(byte, 0);
+    }
+}
+
+namespace {
+// -[_UIStatusBarBatteryView _fillLayerFrame:cornerRadius:] with both battery edits, at 100% charge: the fill's rect
+// in pixels from the body's origin, for a body and line width in points.
+struct PixelRect {
+    double x, y, width, height;
+};
+
+PixelRect BatteryFill(const switch_ui_scale &s, double body_width, double body_height, double line_width)
+{
+    const std::vector<uint8_t> code = EditBytes(SWITCH_US_BATTERY_FILL, &s, 28);
+    auto insn = [&code](size_t i) {
+        uint32_t word = 0;
+        std::memcpy(&word, code.data() + 4 * i, sizeof(word));
+        return word;
+    };
+    const double d2 = ExpandFmovImm(insn(0));
+    const double d13 = std::nearbyint(line_width * d2) / d2;
+    const double d3 = ExpandFmovImm(insn(4));
+    const double width = std::fma(d13, d3, body_width), height = std::fma(d13, d3, body_height);
+    const double origin = d13 + d13;
+    const double pixels = static_cast<double>(s.num) / s.den;
+    return {origin * pixels, origin * pixels, width * pixels, height * pixels};
+}
+}  // namespace
+
+TEST(XnuUiScale, BatteryFillIsWholePixelsWithEqualGaps)
+{
+    const switch_ui_scale &s = *Named("1.25");
+    // the status bar's battery: 24 x 12 points, 1-point line, 30 x 15 pixels
+    const PixelRect fill = BatteryFill(s, 24, 12, 1);
+    EXPECT_NEAR(fill.x, 2, 1e-9);
+    EXPECT_NEAR(fill.y, 2, 1e-9);
+    EXPECT_NEAR(fill.width, 26, 1e-9);
+    EXPECT_NEAR(fill.height, 11, 1e-9);
+    EXPECT_NEAR(30 - (fill.x + fill.width), fill.x, 1e-9);
+    EXPECT_NEAR(15 - (fill.y + fill.height), fill.y, 1e-9);
+    // the other line widths _lineWidthAndInterspaceForIconSize: answers: insets of whole pixels, where Core Animation
+    // starts the stock fill (the first pixel whose centre the 2 * line_width * 1.25 inset covers)
+    for (double line_width : {1.0, 7.0 / 6.0, 1.25}) {
+        const double inset = BatteryFill(s, 24, 12, line_width).x;
+        EXPECT_NEAR(inset, std::round(inset), 1e-9) << line_width;
+        EXPECT_EQ(std::round(inset), std::ceil(2 * line_width * 1.25 - 0.5)) << line_width;
+    }
+}
+
 TEST(XnuUiScale, AWrongLengthOrAFixedEditWritesNothing)
 {
     uint8_t out[20] = {};
     EXPECT_FALSE(switch_ui_scale_edit_bytes(SWITCH_US_FBS_OVERRIDE, Named("1.6"), out, 16));
     EXPECT_FALSE(switch_ui_scale_edit_bytes(SWITCH_US_MG_SCALE, Named("1.6"), out, 12));
     EXPECT_FALSE(switch_ui_scale_edit_bytes(SWITCH_US_PROGRESS_BAR, Named("1.6"), out, 4));
+    EXPECT_FALSE(switch_ui_scale_edit_bytes(SWITCH_US_BATTERY_FILL, Named("1.25"), out, 20));
     EXPECT_FALSE(switch_ui_scale_edit_bytes(SWITCH_US_FIXED, Named("1.6"), out, 12));
     for (uint8_t byte : out) {
         EXPECT_EQ(byte, 0);
@@ -169,4 +257,8 @@ TEST(XnuUiScaleSource, CoreUiRowBytesAndStockAtScaleOne)
     ASSERT_NE(unit, std::string::npos);
     EXPECT_LT(unit, pager.find("vn_rdwr("));
     EXPECT_LT(unit, pager.find("apple_protect_pager_setup("));
+    // a site with no bytes at the boot's scale (the battery fill at 1.6) maps no pager either
+    const size_t no_bytes = pager.find("!switch_ui_scale_edit_bytes(site->edit[i].kind, switch_ui_scale()");
+    ASSERT_NE(no_bytes, std::string::npos);
+    EXPECT_LT(no_bytes, pager.find("apple_protect_pager_setup("));
 }

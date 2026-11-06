@@ -2798,6 +2798,17 @@ const struct switch_ui_scale *switch_ui_scale(void);
  *   first boot): 239 x 4 points times main-screen-scale in single precision, a fractional frame Core Animation
  *   resamples (382.4 x 6.4 at 1.6). Its two floats become the scale's progress_bar_bits, whose products are whole
  *   (382 x 6 at 1.6, 299 x 5 at 1.25), at the same place. Nothing else reads them.
+ * - UIKitCore (.03), -[_UIStatusBarBatteryView _fillLayerFrame:cornerRadius:], the status bar battery's fill (and
+ *   _UIStatusBarStaticBatteryView's, which inherits it): the 24 x 12 point body inset on every side by twice
+ *   lineWidthAndInterspace (1 point), its width then times the charge. At 1.25 the inset is 2.5 pixels, and Core
+ *   Animation starts a non-antialiased edge at the first pixel whose centre it covers, so both edges of the 25 x 10
+ *   pixel fill land half a pixel up and left: one pixel of gap above and left of it, two below and right. The inset
+ *   becomes whole pixels, rounded to nearest (frintn: the 2.5 tie goes to 2, where Core Animation drew the fill
+ *   from), for a 26 x 11 pixel fill with equal gaps. At 0x18ae7fa40 half the inset goes to d13 (saved by the
+ *   prologue, otherwise unused) and the inset comes twice off the width and height. The origin moves by it at
+ *   0x18ae7fa90, which runs on the same !_showsPercentage path, in place of CGRectGetWidth(fill): that is the
+ *   width's absolute value, fabs. At 1.6 the body is 38.4 x 19.2 pixels, no inset gives it equal whole-pixel gaps,
+ *   and 3.2 is no fmov immediate: the site stays stock.
  * MobileGestalt keeps its answer in its build-keyed cache; kern_exec.c drops that cache when the scale changes
  * (native_switch_ui_scale_cache).
  */
@@ -2882,6 +2893,25 @@ static const struct switch_us_site {
 		},
 		"ProgressUI", "progress bar",
 	},
+	{   /* dyld_shared_cache_arm64.03 of 21H461 (text 0x186dac000, file 0) */
+		{ 0x1b, 0x9c, 0xcf, 0x0c, 0x7b, 0x68, 0x39, 0x63, 0xaf, 0x64, 0x48, 0x4b, 0xcf, 0xda, 0xc1, 0x4c },
+		0x18ae7c000ULL, 0x40d0000ULL, 0x3000ULL, 1, 2,
+		{
+			/* 0x18ae7fa40: fadd d1, d12, d12; fadd d10, d1, d10; fsub d2, d11, d1; fsub d11, d2, d1;
+			 * fadd d9, d1, d9; fsub d2, d8, d1; fsub d8, d2, d1 */
+			{ 0x40d3a40ULL, 28, 0, 28, SWITCH_US_BATTERY_FILL,
+			  { 0x81, 0x29, 0x6c, 0x1e, 0x2a, 0x28, 0x6a, 0x1e, 0x62, 0x39, 0x61, 0x1e, 0x4b, 0x38, 0x61, 0x1e,
+			    0x29, 0x28, 0x69, 0x1e, 0x02, 0x39, 0x61, 0x1e, 0x48, 0x38, 0x61, 0x1e }, { 0 } },
+			/* 0x18ae7fa90: fmov d0, d10; fmov d1, d9; fmov d2, d11; fmov d3, d8; bl CGRectGetWidth
+			 * -> fadd d1, d13, d13; fadd d10, d10, d1; fadd d9, d9, d1; fabs d0, d11; nop */
+			{ 0x40d3a90ULL, 20, 0, 20, SWITCH_US_FIXED,
+			  { 0x40, 0x41, 0x60, 0x1e, 0x21, 0x41, 0x60, 0x1e, 0x62, 0x41, 0x60, 0x1e, 0x03, 0x41, 0x60, 0x1e,
+			    0x07, 0x24, 0xb0, 0x94 },
+			  { 0xa1, 0x29, 0x6d, 0x1e, 0x4a, 0x29, 0x61, 0x1e, 0x29, 0x29, 0x61, 0x1e, 0x60, 0xc1, 0x60, 0x1e,
+			    0x1f, 0x20, 0x03, 0xd5 } },
+		},
+		"UIKitCore", "status bar battery fill",
+	},
 };
 #define SWITCH_US_SITES           (sizeof(switch_us_sites) / sizeof(switch_us_sites[0]))
 #define SWITCH_US_PAGE_SIZE       0x4000ULL
@@ -2896,7 +2926,7 @@ switch_ui_scale_page(const void *src, void *dst, unsigned long long src_offset, 
 	const unsigned which = (unsigned)(site - switch_us_sites);
 	const struct switch_ui_scale *scale = switch_ui_scale();
 	uint8_t *out = dst;
-	uint8_t patched[2][sizeof(site->edit[0].patched)];
+	uint8_t patched[2][sizeof(site->edit[0].stock)];
 
 	bcopy(src, dst, SWITCH_HG_CHUNK);
 	for (unsigned i = 0; i < site->edits; i++) {
@@ -2941,6 +2971,13 @@ switch_ui_scale_pager(const struct switch_us_site *site, vm_object_t file_object
 	if (switch_ui_scale_is_unit(switch_ui_scale())) {
 		return MEMORY_OBJECT_NULL;
 	}
+	for (unsigned i = 0; i < site->edits; i++) {
+		uint8_t bytes[sizeof(site->edit[0].stock)];
+		if (site->edit[i].kind != SWITCH_US_FIXED &&
+		    !switch_ui_scale_edit_bytes(site->edit[i].kind, switch_ui_scale(), bytes, site->edit[i].size)) {
+			return MEMORY_OBJECT_NULL;  /* the site has nothing to write at this scale */
+		}
+	}
 
 	uint8_t header[SWITCH_HG_UUID_OFFSET + sizeof(site->uuid)];
 	int resid = 0;
@@ -2981,7 +3018,8 @@ switch_ui_scale_pager(const struct switch_us_site *site, vm_object_t file_object
  * (range_offset/range_size within the mapping), or MEMORY_OBJECT_NULL to keep that part of the mapping stock. The home
  * grid, settings icons and keyboard ranges are in different subcaches (.25, .13, .03), one per mapping, so they only
  * answer slot 0; the .07 mapping holds both widget deadline sites, slot k being site k; a UI scale site answers its own
- * slot (.11 holds three: MobileGestalt and the two CoreUI ones; .31 only ProgressUI's).
+ * slot (.11 holds three: MobileGestalt and the two CoreUI ones; .31 only ProgressUI's; .03's UIKitCore battery fill
+ * is slot 1, the keyboard's being 0).
  */
 memory_object_t switch_shared_cache_text_pager(vm_object_t file_object, uint64_t file_offset, uint64_t size,
     uint64_t unslid_address, struct vnode *vp, unsigned slot, uint64_t *range_offset, uint64_t *range_size);

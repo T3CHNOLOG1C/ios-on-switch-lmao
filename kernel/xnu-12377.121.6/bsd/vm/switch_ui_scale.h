@@ -69,19 +69,30 @@ switch_ui_scale_for_boot_arg(const char *value)
 }
 
 /*
- * fmov d<rd>, #value for an integer value 1..31. VFPExpandImm: value = (16 + efgh) / 16 * 2^n with imm8 = 0:b:cd:efgh,
- * n = cd + 1 when b is 0 (1..4) and n = cd - 3 when b is 1 (0 here: b:cd = 0b111).
+ * fmov d<rd>, #(num / den), false when no immediate is num / den. VFPExpandImm: value = (16 + efgh) / 16 * 2^n with
+ * imm8 = 0:b:cd:efgh, n = cd + 1 when b is 0 (1..4) and n = cd - 3 when b is 1 (-3..0).
  */
+static inline bool
+switch_a64_fmov_d(unsigned rd, unsigned num, unsigned den, uint32_t *insn)
+{
+	for (unsigned p = 0; p < 8; p++) {  /* n = p - 3: num * 128 = (16 + efgh) * (den << p) */
+		const unsigned q = num * 128 / (den << p);
+		if (q >= 16 && q <= 31 && q * (den << p) == num * 128) {
+			const unsigned b_cd = p >= 4 ? p - 4 : p + 4;
+			*insn = 0x1e601000u | (((b_cd << 4) | (q - 16)) << 13) | rd;
+			return true;
+		}
+	}
+	return false;
+}
+
+/* fmov d<rd>, #value for an integer value 1..31 */
 static inline uint32_t
 switch_a64_fmov_d_int(unsigned rd, unsigned value)
 {
-	unsigned n = 0;
-	while ((value >> (n + 1)) != 0) {
-		n++;
-	}
-	const unsigned efgh = ((value << 4) >> n) - 16;
-	const unsigned b_cd = n == 0 ? 0x7u : n - 1;
-	return 0x1e601000u | (((b_cd << 4) | efgh) << 13) | rd;
+	uint32_t insn = 0;
+	switch_a64_fmov_d(rd, value, 1, &insn);
+	return insn;
 }
 
 static inline uint32_t
@@ -111,9 +122,14 @@ enum switch_ui_scale_edit_kind {
 	SWITCH_US_FBS_OVERRIDE, /* 20 bytes: fmov d8, #num; fmov d1, #den; fdiv d8, d8, d1; tbnz w0, #0, +8; fmov d8, xzr */
 	SWITCH_US_MG_SCALE,     /* 8 bytes: movz w19, #float_bits[15:0]; movk w19, #float_bits[31:16], lsl #16 */
 	SWITCH_US_PROGRESS_BAR, /* 8 bytes: progress_bar_bits, little-endian */
+	/*
+	 * 28 bytes: fmov d2, #(2 * num / den); fmul d1, d12, d2; frintn d1, d1; fdiv d13, d1, d2; fmov d3, #-4.0;
+	 * fmadd d11, d13, d3, d11; fmadd d8, d13, d3, d8. None where 2 * num / den is no fmov immediate.
+	 */
+	SWITCH_US_BATTERY_FILL,
 };
 
-/* Writes the edit's bytes for the scale; false when the kind's length is not size. */
+/* Writes the edit's bytes for the scale; false when the kind's length is not size or the kind has none at the scale. */
 static inline bool
 switch_ui_scale_edit_bytes(enum switch_ui_scale_edit_kind kind, const struct switch_ui_scale *scale, uint8_t *out,
     size_t size)
@@ -143,6 +159,20 @@ switch_ui_scale_edit_bytes(enum switch_ui_scale_edit_kind kind, const struct swi
 		switch_a64_put(out, scale->progress_bar_bits[0]);
 		switch_a64_put(out + 4, scale->progress_bar_bits[1]);
 		return true;
+	case SWITCH_US_BATTERY_FILL: {
+		uint32_t pixels_per_two_points = 0;
+		if (size != 28 || !switch_a64_fmov_d(2, 2u * scale->num, scale->den, &pixels_per_two_points)) {
+			return false;
+		}
+		switch_a64_put(out, pixels_per_two_points);
+		switch_a64_put(out + 4, 0x1e620981u);  /* fmul d1, d12, d2 */
+		switch_a64_put(out + 8, 0x1e644021u);  /* frintn d1, d1 */
+		switch_a64_put(out + 12, 0x1e62182du); /* fdiv d13, d1, d2 */
+		switch_a64_put(out + 16, 0x1e721003u); /* fmov d3, #-4.0 */
+		switch_a64_put(out + 20, 0x1f432dabu); /* fmadd d11, d13, d3, d11 */
+		switch_a64_put(out + 24, 0x1f4321a8u); /* fmadd d8, d13, d3, d8 */
+		return true;
+	}
 	case SWITCH_US_FIXED:
 		break;
 	}
