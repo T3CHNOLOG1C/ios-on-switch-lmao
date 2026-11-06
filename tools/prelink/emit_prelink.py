@@ -22,6 +22,7 @@ import argparse
 import array
 import base64
 import copy
+import dataclasses
 import hashlib
 import itertools
 import json
@@ -30,10 +31,10 @@ import sys
 import xml.etree.ElementTree as ET
 from bisect import bisect_left
 from pathlib import Path
-from typing import Self
+from typing import NamedTuple, Self
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from native_prelink import backed_offset, macho, native_bindings, plan_original, unserialize_xml
+from native_prelink import backed_offset, macho, native_bindings, plan_original, prelink_info
 
 # Standard SHA-256 round constants, stored as 64 little-endian words. Some
 # assemblers embed these data in executable sections; do not decode as code.
@@ -128,50 +129,58 @@ def instruction_inventory(
                 continue
             at = backed_offset(parent, segment['va'], segment['filesize'], len(original_data))
             blob = original_data[at : at + segment['filesize']]
-            literals = []
-            # Complete identity is required: a prefix alone never excludes code.
-            for prefix, size, digest, prefix_offset in (
-                (bytes.fromhex('982f8a42'), 256, SHA256_K_DIGEST, 0),
-                (bytes.fromhex('0001000100010001'), 528, VECTOR_REPEAT_DIGEST, 64),
-                (bytes(range(32, 24, -1)), 40, ADLER32_VECTOR_DIGEST, 0),
-                *((bytes.fromhex(prefix), size, digest, 0) for prefix, size, digest in MATH_LITERAL_POOLS),
-            ):
-                search = 0
-                while (search := blob.find(prefix, search)) >= 0:
-                    start = search - prefix_offset
-                    if (
-                        start >= 0
-                        and start % 4 == 0
-                        and hashlib.sha256(blob[start : start + size]).hexdigest() == digest
-                    ):
-                        literals.append((start, start + size))
-                        literal_ranges.append(
-                            {'module': identifier, 'va': segment['va'] + start, 'size': size, 'sha256': digest}
-                        )
-                    search += 4
-            for offset in range(0, len(blob) - 3, 4):
-                if any(start <= offset < end for start, end in literals):
-                    continue
-                (word,) = struct.unpack_from('<I', blob, offset)
-                decoded = pc_relative_target(word, segment['va'] + offset)
-                if decoded is None:
-                    continue
-                target, page = decoded
-                if page:
-                    internal = any((s['va'] & ~4095) <= target < align(s['va'] + s['size']) for s in extents)
-                else:
-                    internal = any(s['va'] <= target < s['va'] + s['size'] for s in extents)
-                if not internal:
-                    raise ValueError(
-                        f'External PC-relative encoding at {segment["va"] + offset:#x}; '
-                        'no instruction rewrite supported'
-                    )
-                instruction_count += 1
+            literals = known_inline_literals(blob)
+            literal_ranges.extend(
+                {'module': identifier, 'va': segment['va'] + start, 'size': size, 'sha256': digest}
+                for start, size, digest in literals
+            )
+            spans = [(start, start + size) for start, size, _ in literals]
+            instruction_count += internal_pc_relative_count(blob, segment['va'], spans, extents)
     return {
         'pc_relative_encodings_preserved': instruction_count,
         'known_inline_data': literal_ranges,
         'register_dataflow_qualified': False,
     }
+
+
+def known_inline_literals(blob: bytes) -> list[tuple[int, int, str]]:
+    literals = []
+    # Complete identity is required: a prefix alone never excludes code.
+    for prefix, size, digest, prefix_offset in (
+        (bytes.fromhex('982f8a42'), 256, SHA256_K_DIGEST, 0),
+        (bytes.fromhex('0001000100010001'), 528, VECTOR_REPEAT_DIGEST, 64),
+        (bytes(range(32, 24, -1)), 40, ADLER32_VECTOR_DIGEST, 0),
+        *((bytes.fromhex(prefix), size, digest, 0) for prefix, size, digest in MATH_LITERAL_POOLS),
+    ):
+        search = 0
+        while (search := blob.find(prefix, search)) >= 0:
+            start = search - prefix_offset
+            if start >= 0 and start % 4 == 0 and hashlib.sha256(blob[start : start + size]).hexdigest() == digest:
+                literals.append((start, size, digest))
+            search += 4
+    return literals
+
+
+def internal_pc_relative_count(
+    blob: bytes, va: int, literals: list[tuple[int, int]], extents: list[dict[str, object]]
+) -> int:
+    count = 0
+    for offset in range(0, len(blob) - 3, 4):
+        if any(start <= offset < end for start, end in literals):
+            continue
+        (word,) = struct.unpack_from('<I', blob, offset)
+        decoded = pc_relative_target(word, va + offset)
+        if decoded is None:
+            continue
+        target, page = decoded
+        if page:
+            internal = any((s['va'] & ~4095) <= target < align(s['va'] + s['size']) for s in extents)
+        else:
+            internal = any(s['va'] <= target < s['va'] + s['size'] for s in extents)
+        if not internal:
+            raise ValueError(f'External PC-relative encoding at {va + offset:#x}; no instruction rewrite supported')
+        count += 1
+    return count
 
 
 # The prelink info's KCID is the one native-dependent value in its XML: prepare renders the XML with this stand-in
@@ -235,22 +244,133 @@ class Plan:
         return cls(**header, **fields)
 
 
-def prepare(
-    original_data: bytes,
-    roots: list[str],
-    slide: int,
-    early_security_init: dict[str, int] | None = None,
-    *,
-    inherited_original_report: dict[str, object],
-) -> tuple[Plan, dict[str, object], dict[str, list[tuple]]]:
+class Original(NamedTuple):
+    data: bytes
+    roots: list[str]
+    slide: int
+    early_security_init: dict[str, int] | None
+    inherited_report: dict[str, object]
+
+
+@dataclasses.dataclass
+class Kernelcache:
+    data: bytes
+    parent: list[dict[str, object]]
+    entries: dict[str, dict[str, object]]
+    modules: dict[str, dict[str, object]]
+
+
+class NativePointers(NamedTuple):
+    targets: list[list[object]]
+    kernel_sites: array.array
+    kernel_groups: array.array
+    cut_sites: list[list[object]]
+
+
+# The coalesced segments back to back, as apply appends them to the native kernel (each a 4 KiB multiple, so
+# contiguous there too): an offset in `output` here is one in the candidate less the first segment's file offset.
+class CoalescedImage:
+    def __init__(self) -> None:
+        self.output = bytearray()
+        self.new_segments = []
+        self.writes = []  # (offset, length) of every original-only write after the copies, in order
+
+    def append_segment(
+        self, name: str, va: int, blob: bytes | bytearray, size: int, protection: int
+    ) -> tuple[dict[str, object], int]:
+        if va % 4096 or size % 4096 or len(blob) > size:
+            raise ValueError('Coalesced segment must have native 4K alignment')
+        if any(s['size'] and va < s['va'] + s['size'] and s['va'] < va + size for s in self.new_segments):
+            raise ValueError('Coalesced segment collides with existing mapping')
+        fileoff = len(self.output)
+        self.output.extend(blob)
+        self.output.extend(bytes(size - len(blob)))
+        result = {'name': name, 'va': va, 'size': size, 'filesize': size, 'fileoff': fileoff}
+        self.new_segments.append(result)
+        return result, protection
+
+    def new_offset(self, address: int, length: int) -> int:
+        return backed_offset(self.new_segments, address, length, len(self.output))
+
+    def write(self, fmt: str, at: int, *values: int) -> None:
+        struct.pack_into(fmt, self.output, at, *values)
+        self.writes.append((at, struct.calcsize(fmt)))
+
+
+class NativeSites:
+    def __init__(self, pointers: NativePointers):
+        self.sites = sorted([*pointers.kernel_sites, *(at for at, *_ in pointers.cut_sites)])
+        if any(b - a < 8 for a, b in itertools.pairwise(self.sites)):
+            raise ValueError('Native kernel pointer sites overlap')
+
+    def hits(self, at: int, length: int) -> bool:
+        i = bisect_left(self.sites, at - 7)
+        return i < len(self.sites) and self.sites[i] < at + length
+
+
+def prepare(original: Original) -> tuple[Plan, dict[str, object], dict[str, list[tuple]]]:
     """Run emit()'s part that reads only the original kernelcache.
 
     Returns (the plan, the report without its native fields, the report's unbound pointers).
     """
-    inherited = inherited_original_report
+    inherited = original.inherited_report
+    slide = original.slide
     report, unbound = plan_original(
-        original_data, roots, slide, cuts=CUT_DEPENDENCIES, inherited_original_sha256=inherited['original_sha256']
+        original.data,
+        original.roots,
+        slide,
+        cuts=CUT_DEPENDENCIES,
+        inherited_original_sha256=inherited['original_sha256'],
     )
+    check_inherited_contract(report, inherited)
+    cache = read_kernelcache(original.data, report['components'])
+    add_original_findings(report, inherited, cache)
+    early_security_init = original.early_security_init or {}
+    report['early_security_initializers'] = early_security_initializers(cache, early_security_init, slide)
+    image = CoalescedImage()
+    segments = copy_coalesced_segments(image, cache, report['kernel_interfaces'], slide)
+    pointers = component_pointers(image, report['bindings'], unbound)
+    rebase_headers(image, cache, slide)
+    report['module_entrypoints'] = module_entrypoints(image, cache, report['components'], slide)
+    report['sparse_index'], index_at = sparse_index(image, cache, report, slide)
+    # Applying the native pointers last gives emit's bytes only when no original-only write after them overlaps one
+    # (none does: each pointer site is its own 8 bytes) and none is in code (checked below with the copied code).
+    native_sites = NativeSites(pointers)
+    if any(native_sites.hits(at, length) for at, length in image.writes):
+        raise ValueError('An original-only write overlaps a native kernel pointer site')
+    xml_head, xml_tail = prelink_info_xml(
+        selected_entries(cache, report, early_security_init, slide), kaslr_offsets(image, report)
+    )
+    text_hashes = executable_hashes(image, cache, native_sites, inherited, slide)
+    report['kcid_derivation'] = 'SHA256(domain + new_native_bytes + inherited_original_sha256_bytes)[:16]'
+    report.update(
+        candidate_sha256=None,
+        coalesced_segments=None,
+        original_executable_sha256=text_hashes,
+        candidate_bytes=None,
+        source_inputs_modified=False,
+        runtime_qualified=False,
+        loadable=False,
+    )
+    result = Plan(
+        slide=slide,
+        original_sha256=inherited['original_sha256'],
+        segments=[[s['name'], s['va'], s['size'], protection, s['fileoff']] for s, protection in segments],
+        blob=image.output,
+        targets=pointers.targets,
+        kernel_sites=pointers.kernel_sites,
+        kernel_groups=pointers.kernel_groups,
+        cuts=pointers.cut_sites,
+        extents=[[e['va'], e['size']] for e in report['extents']],
+        early_security_init=bool(early_security_init),
+        index=[report['sparse_index']['va'], report['sparse_index']['size'], index_at],
+        xml_head=xml_head,
+        xml_tail=xml_tail,
+    )
+    return result, report, unbound
+
+
+def check_inherited_contract(report: dict[str, object], inherited: dict[str, object]) -> None:
     # Required relocation work still parses original bytes. Reuse only findings
     # wholly determined by the unchanged original modules and fixed slide.
     for key in ('slide', 'codeless_components', 'kernel_interfaces'):
@@ -261,18 +381,22 @@ def prepare(
     old_extents = [e for e in report['extents'] if e['module'] not in NEW_ORIGINAL_COMPONENTS]
     if old_extents != inherited['extents']:
         raise ValueError('An inherited original component extent changed')
-    original = macho(original_data)
-    parent = original['segments']
-    old_info = next(s for s in parent if s['name'] == '__PRELINK_INFO')
-    at = backed_offset(parent, old_info['va'], old_info['filesize'], len(original_data))
-    metadata = unserialize_xml(original_data[at : at + old_info['filesize']])
+
+
+def read_kernelcache(data: bytes, components: list[str]) -> Kernelcache:
+    parent = macho(data)['segments']
+    metadata = prelink_info(data, parent)
     entries = {e['CFBundleIdentifier']: e for e in metadata['_PrelinkInfoDictionary']}
     modules = {}
-    for identifier in report['components']:
+    for identifier in components:
         va = entries[identifier]['_PrelinkExecutableLoadAddr']
-        modules[identifier] = macho(original_data, backed_offset(parent, va, 32, len(original_data)))
+        modules[identifier] = macho(data, backed_offset(parent, va, 32, len(data)))
+    return Kernelcache(data, parent, entries, modules)
+
+
+def add_original_findings(report: dict[str, object], inherited: dict[str, object], cache: Kernelcache) -> None:
     added_inventory = instruction_inventory(
-        original_data, parent, {k: v for k, v in modules.items() if k in NEW_ORIGINAL_COMPONENTS}
+        cache.data, cache.parent, {k: v for k, v in cache.modules.items() if k in NEW_ORIGINAL_COMPONENTS}
     )
     report['pc_relative_encodings_preserved'] = (
         inherited['pc_relative_encodings_preserved'] + added_inventory['pc_relative_encodings_preserved']
@@ -290,10 +414,12 @@ def prepare(
         'actual_copied_executable_bytes_compared': True,
         'original_bytes_consumed_for_required_relink': True,
     }
-    early_security_init = early_security_init or {}
-    report['early_security_initializers'] = {}
+
+
+def early_security_initializers(cache: Kernelcache, early_security_init: dict[str, int], slide: int) -> dict[str, int]:
+    initializers = {}
     for identifier, address in early_security_init.items():
-        if identifier not in modules or entries[identifier].get('AppleSecurityExtension') is not True:
+        if identifier not in cache.modules or cache.entries[identifier].get('AppleSecurityExtension') is not True:
             raise ValueError('Early initializer requires a selected security extension')
         if address % 4 or not any(
             s['name'] == '__TEXT_EXEC'
@@ -301,72 +427,69 @@ def prepare(
             and not s['maxprot'] & 2
             and s['va'] <= address
             and address + 4 <= s['va'] + s['filesize']
-            for s in modules[identifier]['segments']
+            for s in cache.modules[identifier]['segments']
         ):
             raise ValueError('Early security initializer outside original module code')
         if not 0 <= address + slide < 1 << 64:
             raise ValueError('Early initializer address overflow')
-        report['early_security_initializers'][identifier] = address + slide
-    # The coalesced segments back to back, as apply appends them to the native kernel (each a 4 KiB multiple, so
-    # contiguous there too): an offset in `output` here is one in the candidate less the first segment's file offset.
-    output = bytearray()
-    new_segments = []
-    writes = []  # (offset, length) of every original-only write after the copies, in order
+        initializers[identifier] = address + slide
+    return initializers
 
-    def append_segment(
-        name: str, va: int, blob: bytes | bytearray, size: int, protection: int
-    ) -> tuple[dict[str, object], int]:
-        if va % 4096 or size % 4096 or len(blob) > size:
-            raise ValueError('Coalesced segment must have native 4K alignment')
-        if any(s['size'] and va < s['va'] + s['size'] and s['va'] < va + size for s in new_segments):
-            raise ValueError('Coalesced segment collides with existing mapping')
-        fileoff = len(output)
-        output.extend(blob)
-        output.extend(bytes(size - len(blob)))
-        result = {'name': name, 'va': va, 'size': size, 'filesize': size, 'fileoff': fileoff}
-        new_segments.append(result)
-        return result, protection
 
+def copy_coalesced_segments(
+    image: CoalescedImage, cache: Kernelcache, kernel_interfaces: list[str], slide: int
+) -> list[tuple[dict[str, object], int]]:
     # Keep coalesced geometry, but only copy selected component segments.
     # Packed kernel-resource records are copied as original readonly metadata.
     segments = []
     for coalesced_name, component_name in COALESCED.items():
-        source = next(s for s in parent if s['name'] == coalesced_name)
+        source = next(s for s in cache.parent if s['name'] == coalesced_name)
         blob = bytearray(source['size'])
-        for module in modules.values():
-            for segment in module['segments']:
-                if segment['name'] != component_name or not segment['filesize']:
-                    continue
-                begin = segment['va'] - source['va']
-                if begin < 0 or begin + segment['size'] > len(blob):
-                    raise ValueError('Component is outside original coalesced range')
-                fileoff = backed_offset(parent, segment['va'], segment['filesize'], len(original_data))
-                blob[begin : begin + segment['filesize']] = original_data[fileoff : fileoff + segment['filesize']]
+        copy_component_segments(blob, source, cache, component_name)
         if coalesced_name == '__PRELINK_TEXT':
-            for identifier in report['kernel_interfaces']:
-                entry = entries[identifier]
-                va, length = entry['_PrelinkExecutableLoadAddr'], entry['_PrelinkExecutableSize']
-                begin = va - source['va']
-                at = backed_offset(parent, va, length, len(original_data))
-                if begin < 0 or begin + length > len(blob):
-                    raise ValueError('Kernel interface outside readonly prelink range')
-                blob[begin : begin + length] = original_data[at : at + length]
-        segments.append(append_segment(coalesced_name, source['va'] + slide, blob, source['size'], source['initprot']))
+            copy_kernel_interfaces(blob, source, cache, kernel_interfaces)
+        segments.append(
+            image.append_segment(coalesced_name, source['va'] + slide, blob, source['size'], source['initprot'])
+        )
+    return segments
 
-    def new_offset(address: int, length: int) -> int:
-        return backed_offset(new_segments, address, length, len(output))
 
-    def write(fmt: str, at: int, *values: int) -> None:
-        struct.pack_into(fmt, output, at, *values)
-        writes.append((at, struct.calcsize(fmt)))
+def copy_component_segments(
+    blob: bytearray, source: dict[str, object], cache: Kernelcache, component_name: str
+) -> None:
+    for module in cache.modules.values():
+        for segment in module['segments']:
+            if segment['name'] != component_name or not segment['filesize']:
+                continue
+            begin = segment['va'] - source['va']
+            if begin < 0 or begin + segment['size'] > len(blob):
+                raise ValueError('Component is outside original coalesced range')
+            fileoff = backed_offset(cache.parent, segment['va'], segment['filesize'], len(cache.data))
+            blob[begin : begin + segment['filesize']] = cache.data[fileoff : fileoff + segment['filesize']]
 
+
+def copy_kernel_interfaces(
+    blob: bytearray, source: dict[str, object], cache: Kernelcache, kernel_interfaces: list[str]
+) -> None:
+    for identifier in kernel_interfaces:
+        entry = cache.entries[identifier]
+        va, length = entry['_PrelinkExecutableLoadAddr'], entry['_PrelinkExecutableSize']
+        begin = va - source['va']
+        at = backed_offset(cache.parent, va, length, len(cache.data))
+        if begin < 0 or begin + length > len(blob):
+            raise ValueError('Kernel interface outside readonly prelink range')
+        blob[begin : begin + length] = cache.data[at : at + length]
+
+
+def component_pointers(
+    image: CoalescedImage, bindings: list[dict[str, object]], unbound: dict[str, list[tuple]]
+) -> NativePointers:
     # The component pointers here; the kernel and cut pointers' sites for apply, which binds them to the native kernel.
-    bindings = report['bindings']
     kernel = {index: (target, names) for index, target, names in unbound['kernel']}
     cut = {index: (component, dependency, stub) for index, component, dependency, stub in unbound['cut']}
     targets, groups, kernel_sites, kernel_groups, cut_sites = [], {}, array.array('Q'), array.array('I'), []
     for index, binding in enumerate(bindings):
-        at = new_offset(binding['new_site'], 8)
+        at = image.new_offset(binding['new_site'], 8)
         if index in kernel:
             target, names = kernel[index]
             if target not in groups:
@@ -377,75 +500,82 @@ def prepare(
         elif index in cut:
             cut_sites.append([at, *cut[index]])
         else:
-            write('<Q', at, binding['new_target'])
+            image.write('<Q', at, binding['new_target'])
+    return NativePointers(targets, kernel_sites, kernel_groups, cut_sites)
+
+
+def rebase_headers(image: CoalescedImage, cache: Kernelcache, slide: int) -> None:
     # Mach-O VM addresses are not all included in the cache's pointer list.
     # Rebase these headers explicitly; preserve section flags and offsets.
-    for identifier, module in modules.items():
-        old_header = entries[identifier]['_PrelinkExecutableLoadAddr']
-        original_header = backed_offset(parent, old_header, 32, len(original_data))
-        new_header = new_offset(old_header + slide, 32)
+    for identifier, module in cache.modules.items():
+        old_header = cache.entries[identifier]['_PrelinkExecutableLoadAddr']
+        original_header = backed_offset(cache.parent, old_header, 32, len(cache.data))
+        new_header = image.new_offset(old_header + slide, 32)
         for segment in module['segments']:
             if segment['va']:
                 at = new_header + segment['command_offset'] - original_header
-                write('<Q', at + 24, segment['va'] + slide)
+                image.write('<Q', at + 24, segment['va'] + slide)
             for section in segment['sections']:
                 if section['va']:
                     at = new_header + section['command_offset'] - original_header
-                    write('<Q', at + 32, section['va'] + slide)
-    report['module_entrypoints'] = {}
-    for identifier in report['components']:
-        va = entries[identifier]['_PrelinkKmodInfo']
-        at = backed_offset(parent, va, 196, len(original_data))
-        start, stop = struct.unpack_from('<QQ', original_data, at + 180)
+                    image.write('<Q', at + 32, section['va'] + slide)
+
+
+def module_entrypoints(
+    image: CoalescedImage, cache: Kernelcache, components: list[str], slide: int
+) -> dict[str, dict[str, int]]:
+    entrypoints = {}
+    for identifier in components:
+        va = cache.entries[identifier]['_PrelinkKmodInfo']
+        at = backed_offset(cache.parent, va, 196, len(cache.data))
+        start, stop = struct.unpack_from('<QQ', cache.data, at + 180)
         # The original OSKext boot path slides this field separately from its
         # coalesced pointer table. An ordinary relink must do the same.
-        (address,) = struct.unpack_from('<Q', original_data, at + 156)
+        (address,) = struct.unpack_from('<Q', cache.data, at + 156)
         if address:
-            if address != entries[identifier]['_PrelinkExecutableLoadAddr']:
+            if address != cache.entries[identifier]['_PrelinkExecutableLoadAddr']:
                 raise ValueError('Original kmod address disagrees with its component header')
-            write('<Q', new_offset(va + slide + 156, 8), address + slide)
-        report['module_entrypoints'][identifier] = {
+            image.write('<Q', image.new_offset(va + slide + 156, 8), address + slide)
+        entrypoints[identifier] = {
             'kmod_info_va': va + slide,
             'start_va': start + slide if start else 0,
             'stop_va': stop + slide if stop else 0,
         }
-    headers = sorted(entries[name]['_PrelinkExecutableLoadAddr'] + slide for name in report['components'])
-    prelink_text = next(s for s in new_segments if s['name'] == '__PRELINK_TEXT')
+    return entrypoints
+
+
+def sparse_index(
+    image: CoalescedImage, cache: Kernelcache, report: dict[str, object], slide: int
+) -> tuple[dict[str, object], int]:
+    headers = sorted(cache.entries[name]['_PrelinkExecutableLoadAddr'] + slide for name in report['components'])
+    prelink_text = next(s for s in image.new_segments if s['name'] == '__PRELINK_TEXT')
     index_size = len(headers) * 8
     index_va = (prelink_text['va'] + prelink_text['size'] - index_size) & ~7
     occupied_end = max(
         [
             s['va'] + slide + s['size']
-            for module in modules.values()
+            for module in cache.modules.values()
             for s in module['segments']
             if s['name'] == '__TEXT'
         ]
         + [
-            entries[name]['_PrelinkExecutableLoadAddr'] + slide + entries[name]['_PrelinkExecutableSize']
+            cache.entries[name]['_PrelinkExecutableLoadAddr'] + slide + cache.entries[name]['_PrelinkExecutableSize']
             for name in report['kernel_interfaces']
         ]
     )
     if index_va < occupied_end:
         raise ValueError('No readonly prelink padding for the sparse header index')
-    index_at = new_offset(index_va, index_size)
-    write(f'<{len(headers)}Q', index_at, *headers)
-    report['sparse_index'] = {'va': index_va, 'size': index_size, 'fileoff': None, 'headers': headers, 'abi': 1}
+    index_at = image.new_offset(index_va, index_size)
+    image.write(f'<{len(headers)}Q', index_at, *headers)
+    return {'va': index_va, 'size': index_size, 'fileoff': None, 'headers': headers, 'abi': 1}, index_at
 
-    # Applying the native pointers last gives emit's bytes only when no original-only write after them overlaps one
-    # (none does: each pointer site is its own 8 bytes) and none is in code (checked below with the copied code).
-    native_sites = sorted([*kernel_sites, *(at for at, *_ in cut_sites)])
-    if any(b - a < 8 for a, b in itertools.pairwise(native_sites)):
-        raise ValueError('Native kernel pointer sites overlap')
 
-    def hits_native(at: int, length: int) -> bool:
-        i = bisect_left(native_sites, at - 7)
-        return i < len(native_sites) and native_sites[i] < at + length
-
-    if any(hits_native(at, length) for at, length in writes):
-        raise ValueError('An original-only write overlaps a native kernel pointer site')
-    selected_entries = []
+def selected_entries(
+    cache: Kernelcache, report: dict[str, object], early_security_init: dict[str, int], slide: int
+) -> list[dict[str, object]]:
+    selected = []
     for identifier in [*report['kernel_interfaces'], *report['components'], *report['codeless_components']]:
-        entry = copy.deepcopy(entries[identifier])
+        entry = copy.deepcopy(cache.entries[identifier])
         if '_NativePrelinkEarlySecurityInit' in entry:
             raise ValueError('Refuse an initializer supplied by input metadata')
         if identifier in early_security_init:
@@ -458,13 +588,21 @@ def prepare(
                 del entry['OSBundleLibraries'][dependency]
         for name in DEFERRED_PERSONALITIES.get(identifier, ()):
             del entry['IOKitPersonalities'][name]
-        selected_entries.append(entry)
-    new_base = next(s['va'] for s in new_segments if s['name'] == '__PRELINK_TEXT')
+        selected.append(entry)
+    return selected
+
+
+def kaslr_offsets(image: CoalescedImage, report: dict[str, object]) -> list[int]:
+    new_base = next(s['va'] for s in image.new_segments if s['name'] == '__PRELINK_TEXT')
     offsets = [b['new_site'] - new_base for b in report['bindings']]
     if any(not 0 <= offset <= 0xFFFFFFFF for offset in offsets):
         raise ValueError('Rebased KASLR offset cannot fit original 32-bit format')
+    return offsets
+
+
+def prelink_info_xml(entries: list[dict[str, object]], offsets: list[int]) -> tuple[bytes, bytes]:
     new_metadata = {
-        '_PrelinkInfoDictionary': selected_entries,
+        '_PrelinkInfoDictionary': entries,
         '_PrelinkLinkKASLROffsets': struct.pack(f'<{len(offsets) + 1}I', len(offsets), *offsets),
         '_PrelinkKCID': KCID_STAND_IN,
     }
@@ -475,19 +613,25 @@ def prepare(
     xml_head, _, xml_tail = xml.partition(kcid)
     xml_head += kcid[: -len(b'</data>') - 24]
     xml_tail = b'</data>' + xml_tail
+    return xml_head, xml_tail
+
+
+def executable_hashes(
+    image: CoalescedImage, cache: Kernelcache, native_sites: NativeSites, inherited: dict[str, object], slide: int
+) -> dict[str, str]:
     # No executable instruction byte is patched, including original POST code.
     text_hashes = {}
-    for identifier, module in modules.items():
+    for identifier, module in cache.modules.items():
         for segment in module['segments']:
             if segment['name'] == '__TEXT_EXEC' and segment['filesize']:
-                old = backed_offset(parent, segment['va'], segment['filesize'], len(original_data))
-                new = new_offset(segment['va'] + slide, segment['filesize'])
-                if output[new : new + segment['filesize']] != original_data[
+                old = backed_offset(cache.parent, segment['va'], segment['filesize'], len(cache.data))
+                new = image.new_offset(segment['va'] + slide, segment['filesize'])
+                if image.output[new : new + segment['filesize']] != cache.data[
                     old : old + segment['filesize']
-                ] or hits_native(new, segment['filesize']):
+                ] or native_sites.hits(new, segment['filesize']):
                     raise ValueError('Original executable bytes changed')
                 text_hashes[identifier] = (
-                    hashlib.sha256(original_data[old : old + segment['filesize']]).hexdigest()
+                    hashlib.sha256(cache.data[old : old + segment['filesize']]).hexdigest()
                     if identifier in NEW_ORIGINAL_COMPONENTS
                     else inherited['original_executable_sha256'][identifier]
                 )
@@ -495,32 +639,49 @@ def prepare(
         'original_executable_sha256'
     ] or set(text_hashes) != set(inherited['original_executable_sha256']) | NEW_ORIGINAL_COMPONENTS:
         raise ValueError('Original executable identity set changed')
-    report['kcid_derivation'] = 'SHA256(domain + new_native_bytes + inherited_original_sha256_bytes)[:16]'
-    report.update(
-        candidate_sha256=None,
-        coalesced_segments=None,
-        original_executable_sha256=text_hashes,
-        candidate_bytes=None,
-        source_inputs_modified=False,
-        runtime_qualified=False,
-        loadable=False,
-    )
-    result = Plan(
-        slide=slide,
-        original_sha256=inherited['original_sha256'],
-        segments=[[s['name'], s['va'], s['size'], protection, s['fileoff']] for s, protection in segments],
-        blob=output,
-        targets=targets,
-        kernel_sites=kernel_sites,
-        kernel_groups=kernel_groups,
-        cuts=cut_sites,
-        extents=[[e['va'], e['size']] for e in report['extents']],
-        early_security_init=bool(early_security_init),
-        index=[index_va, index_size, index_at],
-        xml_head=xml_head,
-        xml_tail=xml_tail,
-    )
-    return result, report, unbound
+    return text_hashes
+
+
+class NativeImage:
+    def __init__(self, native_data: bytes, native: dict[str, object]):
+        self.native = native
+        self.output = bytearray(native_data)
+        self.new_segments = []
+
+    def append_segment(
+        self, name: str, va: int, blob: bytes | memoryview, size: int, protection: int
+    ) -> dict[str, object]:
+        if va % 4096 or size % 4096 or len(blob) > size:
+            raise ValueError('Coalesced segment must have native 4K alignment')
+        if any(
+            s['size'] and va < s['va'] + s['size'] and s['va'] < va + size
+            for s in [*self.native['segments'], *self.new_segments]
+        ):
+            raise ValueError('Coalesced segment collides with existing mapping')
+        placeholder = next((s for s in self.native['segments'] if s['name'] == name), None)
+        if placeholder is None or placeholder['size'] or len(placeholder['sections']) != 1:
+            raise ValueError(f'Expected one empty native {name} segment/section')
+        fileoff = align(len(self.output))
+        self.output.extend(bytes(fileoff - len(self.output)))
+        self.output.extend(blob)
+        self.output.extend(bytes(size - len(blob)))
+        command = placeholder['command_offset']
+        struct.pack_into('<4Q2I', self.output, command + 24, va, size, fileoff, size, protection, protection)
+        section = placeholder['sections'][0]['command_offset']
+        struct.pack_into('<QQI', self.output, section + 32, va, size, fileoff)
+        result = {'name': name, 'va': va, 'size': size, 'filesize': size, 'fileoff': fileoff}
+        self.new_segments.append(result)
+        return result
+
+    def append_plan_segments(self, plan: Plan) -> int:
+        base = None
+        for name, va, size, protection, at in plan.segments:
+            segment = self.append_segment(name, va, memoryview(plan.blob)[at : at + size], size, protection)
+            if base is None:
+                base = segment['fileoff'] - at
+            if segment['fileoff'] - at != base:
+                raise ValueError('Coalesced segments are not contiguous')
+        return base
 
 
 def apply(
@@ -539,69 +700,60 @@ def apply(
     addresses, stubs, exported = native_bindings(
         native_data, native, [tuple(t) for t in plan.targets], [tuple(c[1:]) for c in plan.cuts], plan.extents
     )
+    check_native_abi(native_data, native, exported, early_security_init=plan.early_security_init)
+    image = NativeImage(native_data, native)
+    base = image.append_plan_segments(plan)
+    pack = struct.Struct('<Q').pack_into
+    for at, group in zip(plan.kernel_sites, plan.kernel_groups, strict=False):
+        pack(image.output, base + at, addresses[group])
+    for (at, *_), address in zip(plan.cuts, stubs, strict=False):
+        pack(image.output, base + at, address)
+    kcid = hashlib.sha256(KCID_DOMAIN)
+    kcid.update(native_data)
+    kcid.update(bytes.fromhex(plan.original_sha256))
+    xml = plan.xml_head + base64.b64encode(kcid.digest()[:16]) + plan.xml_tail
+    info_va = align(max(s['va'] + s['size'] for s in native['segments'] if s['size']))
+    image.append_segment('__PRELINK_INFO', info_va, xml, align(len(xml)), 3)
+    add_sparse_index_section(image, plan.index, base)
+    macho(image.output)
+    if report is not None:
+        bind_report(report, unbound, plan, addresses, stubs)
+        report['native_sha256'] = hashlib.sha256(native_data).hexdigest()
+        report['sparse_index']['fileoff'] = base + plan.index[2]
+        report.update(
+            candidate_sha256=hashlib.sha256(image.output).hexdigest(),
+            coalesced_segments=image.new_segments,
+            candidate_bytes=len(image.output),
+        )
+    return bytes(image.output)
+
+
+def check_native_abi(
+    native_data: bytes, native: dict[str, object], exported: dict[int, list[str]], *, early_security_init: bool
+) -> None:
     marker = [address for address, names in exported.items() if '_kalloc_sparse_prelink_index_version' in names]
     if len(marker) != 1:
         raise ValueError('Native kernel lacks sparse-prelink index ABI')
     marker_at = backed_offset(native['segments'], marker[0], 4, len(native_data))
     if struct.unpack_from('<I', native_data, marker_at)[0] != 1:
         raise ValueError('Unsupported native sparse-prelink index ABI')
-    if plan.early_security_init:
+    if early_security_init:
         markers = [address for address, names in exported.items() if '_native_prelink_security_init_version' in names]
         if len(markers) != 1:
             raise ValueError('Native kernel lacks early security initializer ABI')
         at = backed_offset(native['segments'], markers[0], 4, len(native_data))
         if struct.unpack_from('<I', native_data, at)[0] != 1:
             raise ValueError('Unsupported early security initializer ABI')
-    output = bytearray(native_data)
-    new_segments = []
 
-    def append_segment(name: str, va: int, blob: bytes | memoryview, size: int, protection: int) -> dict[str, object]:
-        if va % 4096 or size % 4096 or len(blob) > size:
-            raise ValueError('Coalesced segment must have native 4K alignment')
-        if any(
-            s['size'] and va < s['va'] + s['size'] and s['va'] < va + size for s in [*native['segments'], *new_segments]
-        ):
-            raise ValueError('Coalesced segment collides with existing mapping')
-        placeholder = next((s for s in native['segments'] if s['name'] == name), None)
-        if placeholder is None or placeholder['size'] or len(placeholder['sections']) != 1:
-            raise ValueError(f'Expected one empty native {name} segment/section')
-        fileoff = align(len(output))
-        output.extend(bytes(fileoff - len(output)))
-        output.extend(blob)
-        output.extend(bytes(size - len(blob)))
-        command = placeholder['command_offset']
-        struct.pack_into('<4Q2I', output, command + 24, va, size, fileoff, size, protection, protection)
-        section = placeholder['sections'][0]['command_offset']
-        struct.pack_into('<QQI', output, section + 32, va, size, fileoff)
-        result = {'name': name, 'va': va, 'size': size, 'filesize': size, 'fileoff': fileoff}
-        new_segments.append(result)
-        return result
 
-    base = None
-    for name, va, size, protection, at in plan.segments:
-        segment = append_segment(name, va, memoryview(plan.blob)[at : at + size], size, protection)
-        if base is None:
-            base = segment['fileoff'] - at
-        if segment['fileoff'] - at != base:
-            raise ValueError('Coalesced segments are not contiguous')
-    pack = struct.Struct('<Q').pack_into
-    for at, group in zip(plan.kernel_sites, plan.kernel_groups, strict=False):
-        pack(output, base + at, addresses[group])
-    for (at, *_), address in zip(plan.cuts, stubs, strict=False):
-        pack(output, base + at, address)
-    kcid = hashlib.sha256(KCID_DOMAIN)
-    kcid.update(native_data)
-    kcid.update(bytes.fromhex(plan.original_sha256))
-    xml = plan.xml_head + base64.b64encode(kcid.digest()[:16]) + plan.xml_tail
-    info_va = align(max(s['va'] + s['size'] for s in native['segments'] if s['size']))
-    append_segment('__PRELINK_INFO', info_va, xml, align(len(xml)), 3)
+def add_sparse_index_section(image: NativeImage, index: list[int], base: int) -> None:
     # Expand the existing command in verified Mach-O header padding; mapped
     # payload offsets and all original kernel/component instruction bytes stay put.
-    index_va, index_size, index_at = plan.index
-    prelink_text = next(s for s in new_segments if s['name'] == '__PRELINK_TEXT')
+    index_va, index_size, index_at = index
+    prelink_text = next(s for s in image.new_segments if s['name'] == '__PRELINK_TEXT')
     commands = []
-    for command, at, length in native['commands']:
-        blob = bytearray(output[at : at + length])
+    for command, at, length in image.native['commands']:
+        blob = bytearray(image.output[at : at + length])
         if command == 0x19 and blob[8:24].rstrip(b'\0') == b'__PRELINK_TEXT':
             struct.pack_into('<I', blob, 4, length + 80)
             struct.pack_into('<I', blob, 64, 2)
@@ -627,46 +779,31 @@ def apply(
     rebuilt = b''.join(commands)
     first_payload = min(
         section['fileoff']
-        for segment in native['segments']
+        for segment in image.native['segments']
         for section in segment['sections']
         if section['size'] and section['fileoff']
     )
     if 32 + len(rebuilt) > first_payload:
         raise ValueError('Insufficient native Mach-O header padding for sparse index section')
-    struct.pack_into('<I', output, 20, len(rebuilt))
-    output[32 : 32 + len(rebuilt)] = rebuilt
-    macho(output)
-    if report is not None:
-        bindings = report['bindings']
-        for (index, target, _), group in zip(unbound['kernel'], plan.kernel_groups, strict=False):
-            if plan.targets[group][0] != target:
-                raise ValueError('The plan and the report disagree on a kernel pointer')
-            bindings[index]['new_target'] = addresses[group]
-        for (index, *_), address in zip(unbound['cut'], stubs, strict=False):
-            bindings[index]['new_target'] = address
-        report['native_sha256'] = hashlib.sha256(native_data).hexdigest()
-        report['sparse_index']['fileoff'] = base + index_at
-        report.update(
-            candidate_sha256=hashlib.sha256(output).hexdigest(),
-            coalesced_segments=new_segments,
-            candidate_bytes=len(output),
-        )
-    return bytes(output)
+    struct.pack_into('<I', image.output, 20, len(rebuilt))
+    image.output[32 : 32 + len(rebuilt)] = rebuilt
 
 
-def emit(
-    native_data: bytes,
-    original_data: bytes,
-    roots: list[str],
-    slide: int,
-    early_security_init: dict[str, int] | None = None,
-    *,
-    inherited_original_report: dict[str, object],
-) -> tuple[bytes, dict[str, object]]:
+def bind_report(
+    report: dict[str, object], unbound: dict[str, list[tuple]], plan: Plan, addresses: list[int], stubs: list[int]
+) -> None:
+    bindings = report['bindings']
+    for (index, target, _), group in zip(unbound['kernel'], plan.kernel_groups, strict=False):
+        if plan.targets[group][0] != target:
+            raise ValueError('The plan and the report disagree on a kernel pointer')
+        bindings[index]['new_target'] = addresses[group]
+    for (index, *_), address in zip(unbound['cut'], stubs, strict=False):
+        bindings[index]['new_target'] = address
+
+
+def emit(native_data: bytes, original: Original) -> tuple[bytes, dict[str, object]]:
     """Return the candidate and its report, in one process."""
-    plan, report, unbound = prepare(
-        original_data, roots, slide, early_security_init, inherited_original_report=inherited_original_report
-    )
+    plan, report, unbound = prepare(original)
     return apply(plan, native_data, report, unbound), report
 
 
@@ -752,8 +889,9 @@ def main() -> None:
             parser.add_argument('--output', required=True, type=Path)
     args = parser.parse_args(sys.argv[2:] if mode else sys.argv[1:])
     prelinked, inherited, initializers, previous = original_inputs(parser, args)
+    original = Original(prelinked, args.root, args.slide, initializers, inherited)
     if mode == 'plan':
-        plan, _, _ = prepare(prelinked, args.root, args.slide, initializers, inherited_original_report=inherited)
+        plan, _, _ = prepare(original)
         args.plan_output.parent.mkdir(parents=True, exist_ok=True)
         plan.save(args.plan_output)
         print(
@@ -761,9 +899,7 @@ def main() -> None:
             f'{len(plan.cuts)} cut pointers to bind'
         )
         return
-    image, report = emit(
-        args.kernel.read_bytes(), prelinked, args.root, args.slide, initializers, inherited_original_report=inherited
-    )
+    image, report = emit(args.kernel.read_bytes(), original)
     report['original_input_validation']['inherited_report'] = (
         'native-root-dma-v1/kernel.json sha256 ' + previous['report_sha256']
     )
