@@ -21,8 +21,8 @@ directory (make's `.`), {sdkroot} the kernel SDK root, {san} the sanitizer ignor
 load("@rules_cc//cc:find_cc_toolchain.bzl", "find_cc_toolchain", "use_cc_toolchain")
 load("@rules_cc//cc/common:cc_common.bzl", "cc_common")
 load("@xcode//:defs.bzl", "DEVELOPER_DIR", "XCODE_TOOLCHAIN")
-load("//kernel/rules:layout.bzl", "MOVED_ROOTS", "OLD_TREE", "PATH_ROOT", "tree_path")
 load("//bazel/platforms:transitions.bzl", "kernel_transition", "outer_transition")
+load("//kernel/rules:layout.bzl", "MOVED_ROOTS", "OLD_TREE", "PATH_ROOT", "tree_path")
 load(":recipes_development.bzl", "DEVELOPMENT_RECIPES")
 load(":recipes_release.bzl", "RELEASE_RECIPES")
 

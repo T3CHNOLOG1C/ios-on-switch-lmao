@@ -13,6 +13,7 @@ KERNEL_PLATFORM = "//bazel/platforms:ios_kernel_arm64"
 MACOS_USER_PLATFORM = "//bazel/platforms:macos_user_arm64"
 _PLATFORMS = "//command_line_option:platforms"
 _OUTER = "//bazel/platforms:outer"
+
 # Stands for "no --platforms" (the host platform) in _OUTER.
 _HOST = "-"
 

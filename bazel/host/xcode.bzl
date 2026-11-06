@@ -92,6 +92,7 @@ def _xcode_host_impl(rctx):
         "clang " + clang,
         "ld " + ld,
     ] + ["sha256 {} {}".format(digests[k], k) for k in sorted(digests)]) + "\n")
+
     # Sourced by the build's action wrappers (bazel/tools/xcode_env.sh): the absolute host paths, never PATH lookups.
     rctx.file("xcode.env", "\n".join([
         "DEVELOPER_DIR=" + developer,

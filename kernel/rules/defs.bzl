@@ -138,6 +138,7 @@ def _obj_extra(ignorelist):
             "s/san/memory/kasan-{}-arm64".format(ignorelist),
         ]},
     ]
+
 _SDKROOT_EXTRA = [
     {"content": "", "kind": "write", "out": "d/usr/local/include/kernel/.keep"},
 ]

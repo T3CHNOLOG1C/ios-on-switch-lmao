@@ -33,7 +33,6 @@ KernelObjectsInfo = provider(
     fields = ["objects", "prelink", "cuts", "deferred"],
 )
 
-
 # Compile recipes (the old recipe/c_recipe labels' names) -> the kernel toolchain's features.
 _CXX_RECIPES = ["iokit_cxx", "iokit_cxx_generic"]
 _C_RECIPES = ["osfmk_c", "bsd_c", "mockfs_c", "freestanding_c"]
@@ -341,7 +340,11 @@ def _kernel_driver_objects_impl(ctx):
         expected += _stem(src) + ".o"
         if not compiled_obj.path.endswith("/" + expected):
             fail("{}: object {} does not belong to {} (expected .../{})".format(
-                ctx.label, compiled_obj.path, src.short_path, expected))
+                ctx.label,
+                compiled_obj.path,
+                src.short_path,
+                expected,
+            ))
         ext = src.extension
         stem = _stem(src)
         if ext == "c" and ctx.attr.object_names == "path":
@@ -350,6 +353,7 @@ def _kernel_driver_objects_impl(ctx):
         stem = ctx.attr.stems.get(src.basename, stem)
         if not stem:
             fail("empty stem for {} (dir {}, short_path {})".format(src, ctx.attr.dir, src.short_path))
+
         # The object under the name and path the archives and the link always used.
         obj = ctx.actions.declare_file(out_dir + "/" + stem + ".o")
         ctx.actions.symlink(output = obj, target_file = compiled_obj)
@@ -403,11 +407,16 @@ def _kernel_driver_objects_impl(ctx):
             fail("{}: {} has objects no source claims".format(ctx.label, ctx.attr.cc_deps[part].label))
     if checks:
         fail("{}: abi_checks for sources not in srcs: {}".format(ctx.label, checks.keys()))
+
     # The checks are validations: the kernel links the objects as compiled, so no byte of it comes from the IPSW.
     return [
         DefaultInfo(files = depset(objects)),
-        KernelObjectsInfo(objects = objects, prelink = ctx.attr.prelink, cuts = ctx.attr.prelink_cuts,
-                          deferred = ctx.attr.prelink_deferred),
+        KernelObjectsInfo(
+            objects = objects,
+            prelink = ctx.attr.prelink,
+            cuts = ctx.attr.prelink_cuts,
+            deferred = ctx.attr.prelink_deferred,
+        ),
         OutputGroupInfo(_validation = depset(validations)),
     ]
 
@@ -449,6 +458,7 @@ def _kernel_archive_impl(ctx):
     args.add("rcs")
     args.add(out)
     args.add_all(members)
+
     # Xcode's ar (cmake/XnuRecipes.cmake switch_archive: `xcrun ar rcs`); ZERO_AR_DATE=1 zeroes the member dates.
     ctx.actions.run(
         executable = XCODE_TOOLCHAIN + "/ar",

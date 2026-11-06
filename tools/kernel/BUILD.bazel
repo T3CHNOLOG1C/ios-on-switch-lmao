@@ -2,8 +2,8 @@
 # them (run_tool in kernel/rules/common.bzl); nobody runs them by hand.
 load("@rules_python//python:py_binary.bzl", "py_binary")
 load("@rules_python//python:py_library.bzl", "py_library")
-load("//kernel/rules:common.bzl", "KERNEL_TOOLS")
 load("//bazel/lint:defs.bzl", "lint_files")
+load("//kernel/rules:common.bzl", "KERNEL_TOOLS")
 
 package(default_visibility = ["//visibility:public"])
 

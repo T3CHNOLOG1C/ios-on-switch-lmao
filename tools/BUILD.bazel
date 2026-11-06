@@ -1,6 +1,7 @@
+load("//bazel/lint:defs.bzl", "lint_files")
+
 # Host tools the build compiles from pinned source.
 load("//kernel/rules:inputs.bzl", "tool_output")
-load("//bazel/lint:defs.bzl", "lint_files")
 
 package(default_visibility = ["//visibility:public"])
 

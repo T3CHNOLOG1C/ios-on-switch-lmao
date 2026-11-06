@@ -1,6 +1,7 @@
+load("//bazel/lint:defs.bzl", "lint_files")
+
 # drivers/SwitchSuspend: moved from out/native-a57/root-v1/tree/drivers/SwitchSuspend by the layout move.
 load("//kernel/rules:kernel.bzl", "kernel_driver", "kernel_headers")
-load("//bazel/lint:defs.bzl", "lint_files")
 
 package(default_visibility = ["//visibility:public"])
 

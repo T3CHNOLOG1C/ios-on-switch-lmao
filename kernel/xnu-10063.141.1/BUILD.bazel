@@ -1,3 +1,5 @@
+load("//kernel/rules:defs.bzl", "xnu_lint_files", "xnu_package")
+
 # XNU xnu-10063.141.1 (apple-oss-distributions/xnu, commit d8b80295118e), vendored: Apple's files as Apple has them,
 # under the Apple Public Source License 2.0 (APPLE_LICENSE) and the notices in each file, with ios-on-switch-lmao's changes as
 # ordinary commits on top. Only BUILD.bazel and .bzl files in this tree are ours.
@@ -12,7 +14,6 @@
 # that read it and the compiles that include it, nothing else. r18-xnu-objs' BUILD files in the component directories
 # compile and link XNU from these.
 load("//kernel/rules:layout.bzl", "KERNEL_PACKAGE")
-load("//kernel/rules:defs.bzl", "xnu_lint_files", "xnu_package")
 load(":tables/build_DEVELOPMENT.bzl", "BUILD_DEVELOPMENT")
 load(":tables/build_RELEASE.bzl", "BUILD_RELEASE")
 load(":tables/installhdrs.bzl", "INSTALLHDRS")

@@ -17,10 +17,10 @@ Version-independent: kernel/xnu-<version>/BUILD.bazel instantiates these with it
 load("@rules_cc//cc/common:cc_common.bzl", "cc_common")
 load("@rules_cc//cc/common:cc_info.bzl", "CcInfo")
 load("@xcode//:defs.bzl", "DEVELOPER_DIR", "MACOSX_SDK")
+load("//bazel/platforms:transitions.bzl", "outer_transition")
 load("//kernel/rules:common.bzl", "PY_TOOLCHAIN", "XCODE_EXECUTION")
 load("//kernel/rules:layout.bzl", "OLD_TREE", "TREE_ROOT")
 load("//kernel/rules:sdk.bzl", "KernelSdkInfo")
-load("//bazel/platforms:transitions.bzl", "outer_transition")
 
 XnuTreeInfo = provider(
     doc = "Files below one directory, by their path below it.",

@@ -25,7 +25,7 @@ IPSWS = {
         "build": "21H461",
         "derived": {
             "kernelcache_sha256": "f18b4df865405f2a287b84977d7aca745e056d656d9fc9df1662970ce2969de7",
-            "quartzcore_metallib_sha256": "606f913adf520420f9b4bb666efb782a68c830f082f1e559e17b20d0d13adbc9"
+            "quartzcore_metallib_sha256": "606f913adf520420f9b4bb666efb782a68c830f082f1e559e17b20d0d13adbc9",
         },
         "device_class": "j120ap",
         "ios": "17",
@@ -38,7 +38,7 @@ IPSWS = {
                 "offset": 67,
                 "sha256": "c3ef4829e3b795915aec53eeeb470ee817f97b8c27f4eaceeb6c4f18119fd6ff",
                 "size": 10485760,
-                "stored_size": 2781428
+                "stored_size": 2781428,
             },
             "app_cryptex_trust_cache": {
                 "component": "Cryptex1,AppTrustCache",
@@ -48,7 +48,7 @@ IPSWS = {
                 "offset": 6749437699,
                 "sha256": "6244096f060c47c03b677bc1cb7e3f061bbd58fafc9a6ac144fb0544ee7f52a3",
                 "size": 767,
-                "stored_size": 739
+                "stored_size": 739,
             },
             "device_tree": {
                 "component": "DeviceTree",
@@ -58,7 +58,7 @@ IPSWS = {
                 "offset": 6773560004,
                 "sha256": "b6a41976d2fe70feb4d4d1a3b499df6502d9e6acbf6a91c88b27973355d096ec",
                 "size": 35260,
-                "stored_size": 35169
+                "stored_size": 35169,
             },
             "kernelcache": {
                 "component": "KernelCache",
@@ -68,7 +68,7 @@ IPSWS = {
                 "offset": 6818903409,
                 "sha256": "8c1a97e43fab66baa0be3584e933895f90cfd12ee04e2cbc0e64c3b04feb5bf3",
                 "size": 16238580,
-                "stored_size": 16214447
+                "stored_size": 16214447,
             },
             "os": {
                 "component": "OS",
@@ -78,7 +78,7 @@ IPSWS = {
                 "offset": 1591988020,
                 "sha256": "3f99b859c9728379110b66657c7b15285bcb1925ad8b5726542e2cdcf8b1028d",
                 "size": 5157406069,
-                "stored_size": 5157406069
+                "stored_size": 5157406069,
             },
             "static_trust_cache": {
                 "component": "StaticTrustCache",
@@ -88,7 +88,7 @@ IPSWS = {
                 "offset": 6773229318,
                 "sha256": "91433644b887568d5c052607aa7dd2a16eb85745378f480d5b94b7df0993bd44",
                 "size": 59519,
-                "stored_size": 54001
+                "stored_size": 54001,
             },
             "system_cryptex": {
                 "component": "Cryptex1,SystemOS",
@@ -98,7 +98,7 @@ IPSWS = {
                 "offset": 270462833,
                 "sha256": "ae2a7b69aaf9f58f8ebb8c9f10767b597ba5266e591f541dca0f9a56a4d394c6",
                 "size": 3303014400,
-                "stored_size": 1321525120
+                "stored_size": 1321525120,
             },
             "system_cryptex_trust_cache": {
                 "component": "Cryptex1,SystemTrustCache",
@@ -108,8 +108,8 @@ IPSWS = {
                 "offset": 6749450558,
                 "sha256": "ce0baf51e89d850811eff073f1baf75d9b6494b3ea35837f672d9c12d6821b8e",
                 "size": 1871,
-                "stored_size": 1748
-            }
+                "stored_size": 1748,
+            },
         },
         "product": "iPad7,1",
         "size": 6835124840,
@@ -120,15 +120,15 @@ IPSWS = {
             "app_cryptex_uuid": "C0DCFAA8-4E81-49CD-807D-BED3B9B6AE54",
             "os_volume_uuid": "04769D26-2CA0-4825-B443-E2E5F88300F2",
             "system_cryptex_image": "044-76034-038.dmg",
-            "system_cryptex_uuid": "8846FE78-2910-4297-AF97-D59BB6F8FC16"
+            "system_cryptex_uuid": "8846FE78-2910-4297-AF97-D59BB6F8FC16",
         },
-        "xnu": "10063.141.1"
+        "xnu": "10063.141.1",
     },
     "24B119": {
         "build": "24B119",
         "derived": {
             "kernelcache_sha256": "250337d45598da0e5cc578413704981368afe92f84b3450dc956e21da1b21bd4",
-            "quartzcore_metallib_sha256": "342e3ee16a83e7b04837dcdadf4a786020711e3179afcf0ca50a461e7331218b"
+            "quartzcore_metallib_sha256": "342e3ee16a83e7b04837dcdadf4a786020711e3179afcf0ca50a461e7331218b",
         },
         "device_class": "j181ap",
         "ios": "27",
@@ -141,7 +141,7 @@ IPSWS = {
                 "offset": 47,
                 "sha256": "71b113308b8cbeb77ea5e5b4c3396cb075f94b4d4ab8375837dba34db3aede50",
                 "size": 16777216,
-                "stored_size": 8962415
+                "stored_size": 8962415,
             },
             "app_cryptex_trust_cache": {
                 "component": "Cryptex1,AppTrustCache",
@@ -151,7 +151,7 @@ IPSWS = {
                 "offset": 10519920406,
                 "sha256": "3c60e7245889088a8d7ab74246712596ee3a39b222fc5035b3ef04147318f95c",
                 "size": 863,
-                "stored_size": 833
+                "stored_size": 833,
             },
             "device_tree": {
                 "component": "DeviceTree",
@@ -161,7 +161,7 @@ IPSWS = {
                 "offset": 10621133195,
                 "sha256": "83b909acc045a78a9a0e8892496ba9b379acbe6b8ed9d29251206c064d8c6ebf",
                 "size": 36554,
-                "stored_size": 36569
+                "stored_size": 36569,
             },
             "kernelcache": {
                 "component": "KernelCache",
@@ -171,7 +171,7 @@ IPSWS = {
                 "offset": 10659917172,
                 "sha256": "ce3cda3cb30a8168806fcd6f1cc50d6090fb633572b9976011034903c8b0fc5c",
                 "size": 21687326,
-                "stored_size": 21668113
+                "stored_size": 21668113,
             },
             "os": {
                 "aea_key": "base64:HzcLKynvr+LYWwgI8nvik7nKA6RQRdfyGJ+l3hyv4mA=",
@@ -182,7 +182,7 @@ IPSWS = {
                 "offset": 8962533,
                 "sha256": "939612a319ce0e533688bea0996437b951d47b3383eb9e6b9f114c092d09eaf0",
                 "size": 7717519360,
-                "stored_size": 7717519360
+                "stored_size": 7717519360,
             },
             "static_trust_cache": {
                 "component": "StaticTrustCache",
@@ -192,7 +192,7 @@ IPSWS = {
                 "offset": 10555209215,
                 "sha256": "8ac49a3586f46c3f2356bb9aa768a666c03edc927846928831da1fb400a1f639",
                 "size": 84601,
-                "stored_size": 76659
+                "stored_size": 76659,
             },
             "system_cryptex": {
                 "aea_key": "base64:vkMWcw+0u3HwUw8AehkWDt2CyPQCNWpz0Qz7NzGg+M8=",
@@ -203,7 +203,7 @@ IPSWS = {
                 "offset": 8103971707,
                 "sha256": "423778eee61b0fe78740d86928dc6d023aa9daf8e5a8afddbc64f54a4dcdea51",
                 "size": 2415919104,
-                "stored_size": 2415919104
+                "stored_size": 2415919104,
             },
             "system_cryptex_trust_cache": {
                 "component": "Cryptex1,SystemTrustCache",
@@ -213,8 +213,8 @@ IPSWS = {
                 "offset": 10555302247,
                 "sha256": "444670402cf8bc1c0f6b56c561dfc2d7e5b30beb33dfcaff9dc10a869f25177f",
                 "size": 3191,
-                "stored_size": 2922
-            }
+                "stored_size": 2922,
+            },
         },
         "product": "iPad12,1",
         "size": 10681591172,
@@ -225,8 +225,8 @@ IPSWS = {
             "app_cryptex_uuid": "D8B9F68E-F191-4FCD-9F89-D88A322E9B4D",
             "os_volume_uuid": "D05A9D99-D227-4757-9F58-C32593D3BFA7",
             "system_cryptex_image": "141-10410-227.dmg",
-            "system_cryptex_uuid": "ADB8FD34-DA7E-4538-9AAF-4F05EBB09057"
+            "system_cryptex_uuid": "ADB8FD34-DA7E-4538-9AAF-4F05EBB09057",
         },
-        "xnu": "12377.121.6"
-    }
+        "xnu": "12377.121.6",
+    },
 }

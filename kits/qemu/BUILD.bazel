@@ -1,5 +1,5 @@
-load("//kernel/rules:kernel.bzl", "kernel_driver", "kernel_headers")
 load("//bazel/lint:defs.bzl", "lint_files")
+load("//kernel/rules:kernel.bzl", "kernel_driver", "kernel_headers")
 
 package(default_visibility = ["//visibility:public"])
 

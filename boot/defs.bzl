@@ -177,6 +177,7 @@ def _boot_package_impl(ctx):
     # end of the file"), so a release kernel is stripped where it is linked, before the prelinker (which binds the kexts
     # to its global symbols, all a strip -x keeps).
     kernel = ctx.file.kernel
+
     # Layout and checks, then each shard of the window's LZ4 blocks compressed on its own (only the shards an edit
     # changed rerun), then the staged window and the loader's headers.
     window_plan = out("window/plan.json")

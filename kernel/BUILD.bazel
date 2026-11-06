@@ -2,8 +2,8 @@ load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load("//bazel/lint:defs.bzl", "lint_files")
 # The kernel: which XNU it is built from, and (from the layout move on) the kernelcache's archives, link and prelink.
 
-load("//kernel/rules:firehose.bzl", "kernel_firehose")
 load("//kernel:prelink.bzl", "kernel_prelink_switch")
+load("//kernel/rules:firehose.bzl", "kernel_firehose")
 load("//kernel/rules:inputs.bzl", "tool_output")
 load("//kernel/rules:kernel.bzl", "kernel_archive", "kernel_driver", "stage_files")
 load("//kernel/rules:prelink_fileset.bzl", "kernel_prelink_fileset")
@@ -438,6 +438,7 @@ xnu_kernel(
 
 xnu_kernel_12377(
     name = "kernel_unprelinked_12377",
+    out = "build/xnu-12377/mach.development.bcm2837.unstripped.noctf",
     extra_exports = ["prelink.exports"],
     inputs = [
         ":corecrypto",
@@ -469,7 +470,6 @@ xnu_kernel_12377(
         "force_load",
         "plain",
     ],
-    out = "build/xnu-12377/mach.development.bcm2837.unstripped.noctf",
 )
 
 # iPadOS 27's kexts (the 24B119 kernelcache's) prelinked into the 12377 kernel.

@@ -21,7 +21,10 @@ exports_files(glob(
 # (every .h/.c/.cpp/.mm/.py/.inc below raw/, the old build's raw_stack()).
 filegroup(
     name = "raw_runtime_headers",
-    srcs = glob(["raw/runtime/*.h", "raw/fx/*.h"]),
+    srcs = glob([
+        "raw/runtime/*.h",
+        "raw/fx/*.h",
+    ]),
 )
 
 # Not a hand run's leftovers: a .pyc of the modules (the host Python's) in a checkout would change the raw pack's action key

@@ -1,7 +1,8 @@
+load("//bazel/lint:defs.bzl", "lint_files")
+
 # drivers/NativeSwitchBlock: moved from out/native-a57/root-v1/tree/drivers/NativeSwitchBlock by the layout move.
 load("//kernel/rules:driver_flags.bzl", "BLOCK_FLAGS")
 load("//kernel/rules:kernel.bzl", "kernel_driver", "kernel_headers")
-load("//bazel/lint:defs.bzl", "lint_files")
 
 package(default_visibility = ["//visibility:public"])
 
