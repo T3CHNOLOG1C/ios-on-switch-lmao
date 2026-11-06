@@ -2502,6 +2502,7 @@ void NativeSwitchBlock::worker(void *context, wait_result_t)
         if (self->suspended)
             IOLockWakeup(self->queueLock, &self->working, false);
         IOLockUnlock(self->queueLock);
+#if DEVELOPMENT || DEBUG
         // Throughput line every statsEveryNs while I/O is happening (one log line).
         {
             const uint64_t now = nowNs();
@@ -2510,6 +2511,7 @@ void NativeSwitchBlock::worker(void *context, wait_result_t)
                 self->logThroughput();
             }
         }
+#endif
     }
 }
 
@@ -2839,6 +2841,7 @@ void NativeSwitchBlock::identify()
                        : "?",
              verdict);
     IOLog("%s\n", line);
+#if DEVELOPMENT || DEBUG
     // The raw registers (the CID's serial included) and the extension functions as read.
     char hex[4][132];
     const uint8_t *const raw[4] = {cid, csd, scrBytes, ssrBytes};
@@ -2867,6 +2870,7 @@ void NativeSwitchBlock::identify()
     }
     IOLog("SwitchSD: card registers CID %s CSD %s SCR %s SSR %s | %s\n", haveCid ? hex[0] : "-", haveCsd ? hex[1] : "-",
           haveScr ? hex[2] : "-", haveSsr ? hex[3] : "-", ext);
+#endif
 }
 
 // hekate sdmmc_setup_clock (sdmmc_driver.c:307): card clock gated, default tap (TAP_HW_UPDATED
