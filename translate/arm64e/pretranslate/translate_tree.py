@@ -209,7 +209,7 @@ def _translate_cache(args, cache, out, pairs, trust, apple, manifest) -> None:
     cdhashes = []
     for name in ['dyld_shared_cache_arm64e'] + [f'dyld_shared_cache_arm64e{s}' for s in suffixes]:
         src = cache / name
-        if name.endswith('.symbols') or name.endswith('.atlas') or not src.exists():
+        if name.endswith(('.symbols', '.atlas')) or not src.exists():
             continue
         dst = out / 'files' / CACHE_DIR / name
         dst.parent.mkdir(parents=True, exist_ok=True)
@@ -228,7 +228,7 @@ def _translate_cache(args, cache, out, pairs, trust, apple, manifest) -> None:
                 'cdhash': [cdhash],
             }
         )
-        flags, cat = apple.get(_cache_cdhash_in(args.tool, src), (0, 0))
+        flags, cat = apple.get(_cache_cdhash_in(src), (0, 0))
         trust.append((bytes.fromhex(cdhash), flags, cat))
     (out / 'a64x-cache-pretranslated.bin').write_bytes(b''.join(cdhashes))
 
@@ -239,10 +239,10 @@ def _subcache_suffixes(main_cache: Path) -> list[str]:
     return [data[off + 56 * i + 24 : off + 56 * i + 56].split(b'\0')[0].decode() for i in range(count)]
 
 
-def _cache_cdhash_in(tool, src):
+def _cache_cdhash_in(src: Path) -> str:
     # dsc-apply reports the new cdhash; the original is read directly for the trust-category lookup.
     data = src.read_bytes()
-    sig_off, sig_size = struct.unpack_from('<QQ', data, 0x28)
+    sig_off, _sig_size = struct.unpack_from('<QQ', data, 0x28)
     cd = data.index(b'\xfa\xde\x0c\x02', sig_off)
     length = struct.unpack_from('>I', data, cd + 4)[0]
     return hashlib.sha256(data[cd : cd + length]).digest()[:20].hex()

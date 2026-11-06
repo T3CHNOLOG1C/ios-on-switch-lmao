@@ -335,9 +335,8 @@ def check_xhci(kc, parent, read, u64, blob, image, symbols):
     movz = struct.unpack('<I', read(XHCI_METACLASS_SIZE, 4))[0]
     require(movz & 0xFFE0001F == 0x52800003 and (movz >> 5) & 0xFFFF == XHCI_SIZE, 'AppleUSBXHCI is 0xe48 bytes')
     bound = {}
-    for name, slot, address in XHCI_CODE:
-        if address is None:
-            address = original[slot]
+    for name, slot, pinned in XHCI_CODE:
+        address = original[slot] if pinned is None else pinned
         require(slot is None or original[slot] == address, f'{name} is original slot {slot}')
         if address in XHCI_PINNED:
             pin = bytes.fromhex(XHCI_PINNED[address])

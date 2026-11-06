@@ -59,7 +59,7 @@ def validate_elf(data: bytes) -> dict:
 def block_table(readelf: Path, objects: list[Path]) -> str:
     """Describe the kernel window's block table (copy.c's loader_blocks, runs.h) in the objects, for a failure."""
     for obj in objects:
-        symbols = subprocess.run([readelf, '-sW', obj], capture_output=True, text=True).stdout
+        symbols = subprocess.run([readelf, '-sW', obj], capture_output=True, text=True, check=False).stdout
         for line in symbols.splitlines():
             fields = line.split()
             if len(fields) >= 8 and fields[-1] == 'loader_blocks':
@@ -85,7 +85,10 @@ def main() -> None:
     with tempfile.TemporaryDirectory() as scratch:
         elf, flat = Path(scratch) / 'loader.elf', Path(scratch) / 'loader.bin'
         linked = subprocess.run(
-            [args.ld_lld, '-T', args.linker_script, '-o', elf, *args.objects], capture_output=True, text=True
+            [args.ld_lld, '-T', args.linker_script, '-o', elf, *args.objects],
+            capture_output=True,
+            text=True,
+            check=False,
         )
         if linked.returncode:
             if 'overlap' in linked.stdout + linked.stderr:  # link.ld's ASSERTs on the image's end

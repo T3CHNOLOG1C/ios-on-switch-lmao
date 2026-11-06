@@ -526,7 +526,7 @@ def window_checks(m: dict, payload: bytes, adt: bytes) -> dict:
     }
 
 
-def staged_window(constants: dict, table: list, stream: bytes) -> tuple[dict, bytes]:
+def staged_window(constants: dict, stream: bytes) -> tuple[dict, bytes]:
     """Stage the window for bl33.bin: the stream padded to 4 KiB.
 
     Returns the constants with its sizes and stage id, and the staged window.
@@ -572,8 +572,8 @@ def block_name(at: int) -> str:
 def layout(args: argparse.Namespace) -> None:
     """Lay out and check the window, then write its blocks, each in its shard's directory (shard_of)."""
     command_line = args.boot_args.read_text().rstrip('\n')
-    with tempfile.TemporaryDirectory() as scratch:
-        scratch = Path(scratch)
+    with tempfile.TemporaryDirectory() as temporary:
+        scratch = Path(temporary)
         # The layout refuses symlinked inputs, and Bazel's sandbox stages every input as one: regular copies.
         inputs = {}
         for name in ('kernel', 'adt', 'trustcache', 'data_seed'):
@@ -621,7 +621,7 @@ def join(args: argparse.Namespace) -> None:
     if found != len(compressed):
         raise SystemExit(f"{found} compressed blocks for the plan's {len(compressed)}")
     table, stream = block_table([(at, length) for at, length in plan['blocks']], compressed)
-    constants, staged = staged_window(plan['constants'], table, stream)
+    constants, staged = staged_window(plan['constants'], stream)
     args.layout_h.write_text(layout_header(constants))
     args.runs_h.write_text(runs_header(table))
     args.window.write_bytes(staged)

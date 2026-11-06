@@ -38,7 +38,7 @@ def trust_cache_bundle(bundle: bytes, *modules: bytes) -> bytes:
     """`bundle` (u32 count, u32 offsets, version-2 modules) with `modules` appended."""
     count = struct.unpack_from('<I', bundle)[0]
     starts = struct.unpack_from(f'<{count}I', bundle, 4)
-    existing = [bundle[s:e] for s, e in zip(starts, (*starts[1:], len(bundle)))]
+    existing = [bundle[s:e] for s, e in zip(starts, (*starts[1:], len(bundle)), strict=True)]
     merged = existing + [m for m in modules if m not in existing]
     offset, offsets = 4 + 4 * len(merged), []
     for module in merged:

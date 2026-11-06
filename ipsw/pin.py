@@ -67,10 +67,10 @@ def central_directory(remote: Remote) -> dict[str, dict[str, int]]:
     tail_start = max(0, remote.size - 65536 - 22)
     tail = remote.read(tail_start, remote.size)
     eocd = tail.rfind(b'PK\x05\x06')
-    count, cd_size, cd_offset = struct.unpack_from('<HII', tail, eocd + 10)
+    _count, cd_size, cd_offset = struct.unpack_from('<HII', tail, eocd + 10)
     zip64 = tail.rfind(b'PK\x06\x06')
     if zip64 >= 0:
-        count, cd_size, cd_offset = struct.unpack_from('<QQQ', tail, zip64 + 32)
+        _count, cd_size, cd_offset = struct.unpack_from('<QQQ', tail, zip64 + 32)
     data, at, members = remote.read(cd_offset, cd_offset + cd_size), 0, {}
     while data[at : at + 4] == b'PK\x01\x02':
         method, crc, csize, usize, name_len, extra_len, comment_len = struct.unpack_from('<H4xIIIHHH', data, at + 10)

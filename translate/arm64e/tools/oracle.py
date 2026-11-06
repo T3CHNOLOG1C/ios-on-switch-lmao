@@ -52,10 +52,10 @@ def invalid(words: list[int], args: list[str]) -> set[int]:
     for base in range(0, len(words), CHUNK):
         chunk = words[base : base + CHUNK]
         text = ''.join(
-            '0x%02x 0x%02x 0x%02x 0x%02x\n' % (w & 255, (w >> 8) & 255, (w >> 16) & 255, w >> 24) for w in chunk
+            f'0x{w & 255:02x} 0x{(w >> 8) & 255:02x} 0x{(w >> 16) & 255:02x} 0x{w >> 24:02x}\n' for w in chunk
         )
         p = subprocess.run(
-            [LLVM_MC, '--disassemble', '-triple=aarch64'] + args, input=text.encode(), capture_output=True, check=False
+            [LLVM_MC, '--disassemble', '-triple=aarch64', *args], input=text.encode(), capture_output=True, check=False
         )
         for m in re.finditer(rb'<stdin>:(\d+):\d+: warning: invalid instruction encoding', p.stderr):
             bad.add(base + int(m.group(1)) - 1)
@@ -64,7 +64,7 @@ def invalid(words: list[int], args: list[str]) -> set[int]:
 
 def classes(words: list[int]) -> list[str]:
     out = subprocess.run(
-        [arm64e_cli(), 'class'], input=''.join('%08x\n' % w for w in words).encode(), capture_output=True, check=True
+        [arm64e_cli(), 'class'], input=''.join(f'{w:08x}\n' for w in words).encode(), capture_output=True, check=True
     )
     return out.stdout.decode().split()
 
@@ -82,21 +82,22 @@ def features(samples: int) -> None:
         unallocated = sum(1 for i in flagged if i in bad_with)
         other = sum(1 for i in flagged if i not in bad_with and i not in bad_without)
         print(
-            '%-10s %8d sampled, %7d need it; missed %s; a64x flags %d: %d unallocated, %d valid without it'
-            % (feat, len(words), len(need), dict(missed) or 0, len(flagged), unallocated, other)
+            f'{feat:<10} {len(words):8d} sampled, {len(need):7d} need it; missed {dict(missed) or 0}; '
+            f'a64x flags {len(flagged)}: {unallocated} unallocated, {other} valid without it'
         )
 
 
 def a57(path: str) -> None:
-    words = [int(line.split()[0], 16) for line in open(path) if line.strip()]
+    with open(path) as lines:
+        words = [int(line.split()[0], 16) for line in lines if line.strip()]
     bad = sorted(invalid(words, ['-mcpu=cortex-a57']))
     tally = collections.Counter()
     if bad:
         cls = classes([words[i] for i in bad])
         tally.update(cls)
-    print('%d words, %d a Cortex-A57 cannot decode' % (len(words), len(bad)))
+    print(f'{len(words)} words, {len(bad)} a Cortex-A57 cannot decode')
     for name, n in tally.most_common():
-        print('  %-16s %d' % (name, n))
+        print(f'  {name:<16} {n}')
 
 
 def main() -> None:

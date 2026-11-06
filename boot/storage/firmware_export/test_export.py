@@ -3,6 +3,7 @@
 
 import ctypes
 import hashlib
+import re
 import struct
 import subprocess
 import tempfile
@@ -206,8 +207,6 @@ class TestExport(unittest.TestCase):
                 self.assertFalse(self.accesses)
 
     def test_every_instruction_fingerprint(self):
-        import re
-
         words = re.findall(r'\{0x([0-9a-f]{8})u,\s*0x([0-9a-f]{8})u\}', (HERE / 'signatures.h').read_text())
         for off, word in words:
             with self.subTest(offset=off):
@@ -325,7 +324,7 @@ class TestExport(unittest.TestCase):
 
     def test_every_read_can_fail_without_output(self):
         self.run_capture()
-        points = sorted(set(p for p, n in self.accesses))
+        points = sorted({p for p, n in self.accesses})
         for p in points:
             with self.subTest(p=hex(p)):
                 self.reject_at = p

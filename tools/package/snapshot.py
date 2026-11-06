@@ -29,7 +29,7 @@ def state_dir() -> Path:
 def located(path: str) -> Path:
     if path and not os.path.isabs(path):
         try:
-            from python.runfiles import runfiles
+            from python.runfiles import runfiles  # noqa: PLC0415  only under Bazel, and only for a relative path
 
             path = runfiles.Create().Rlocation(path) or path
         except ImportError:

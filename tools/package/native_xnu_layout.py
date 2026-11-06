@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import itertools
 import json
 import shutil
 import stat
@@ -120,7 +121,7 @@ def parse_kernel(data: bytes) -> Kernel:
     if cursor != end or entry is None or not segments:
         raise LayoutError('incomplete load-command table, segments or entry')
     ordered = sorted(segments, key=lambda item: item.vmaddr)
-    if any(a.vmaddr + a.vmsize > b.vmaddr for a, b in zip(ordered, ordered[1:])):
+    if any(a.vmaddr + a.vmsize > b.vmaddr for a, b in itertools.pairwise(ordered)):
         raise LayoutError('overlapping virtual segments')
     base, last = ordered[0].vmaddr, ordered[-1].vmaddr + ordered[-1].vmsize
     executable = any(s.vmaddr <= entry < s.vmaddr + s.filesize and s.protection & 4 for s in segments)
@@ -228,7 +229,7 @@ def validate_trustcache(data: bytes) -> None:
     if not 1 <= count <= 128 or count > (len(data) - 4) // 4:
         raise LayoutError('invalid trustcache count')
     starts = struct.unpack_from(f'<{count}I', data, 4)
-    for start, end in zip(starts, (*starts[1:], len(data))):
+    for start, end in zip(starts, (*starts[1:], len(data)), strict=True):
         if start < 4 + count * 4 or start % 4 or end > len(data) or end - start < 24:
             raise LayoutError('invalid trustcache range')
         if struct.unpack_from('<I', data, start)[0] != 2:
@@ -376,16 +377,16 @@ def build_layout(
         video_range = {'name': 'framebuffer', 'start': base, 'size': row * height, 'end': end}
     sources = {'kernel': source_record(kernel_path, image), 'adt': source_record(adt_path, tree_bytes)}
     sidecars = {}
-    for key, path, limit in (
+    for key, given, limit in (
         ('RAMDisk', ramdisk_path, 256 << 20),
         ('TrustCache', trustcache_path, 16 << 20),
         ('NativeDataSeed', data_seed_path, 16 << 20),
     ):
         placeholder = ('/chosen/memory-map', key) in adt.properties
-        if (path is not None) != placeholder:
+        if (given is not None) != placeholder:
             raise LayoutError(f'{key} input and ADT placeholder must both be present or absent')
-        if path is not None:
-            path = Path(path)
+        if given is not None:
+            path = Path(given)
             data = read_input(path, limit)
             if key == 'RAMDisk' and data[:8] == b'DBRDISK1':
                 raise LayoutError('packed ramdisk input is unsupported')

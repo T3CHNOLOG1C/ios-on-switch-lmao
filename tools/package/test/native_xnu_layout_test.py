@@ -83,7 +83,7 @@ class NativeLayoutTests(unittest.TestCase):
         self.output = self.root / 'layout'
 
     def build(self, **kwargs):
-        args = dict(physical_base=P, window_size=N, reserved_ranges=[])
+        args = {'physical_base': P, 'window_size': N, 'reserved_ranges': []}
         args.update(kwargs)
         return layout.build_layout(self.kernel, self.tree, self.output, **args)
 

@@ -76,8 +76,8 @@ class WindowDecodeTest(unittest.TestCase):
         self.assertEqual([(at, length) for at, length, _, _ in table], [tuple(b) for b in plan['blocks']])
         window = bytearray(constants['BYTES'])
         read = 0
-        for at, length, source, size in table:
-            stored, size = bool(size & STORED), size & ~STORED
+        for at, length, source, stream_bytes in table:
+            stored, size = bool(stream_bytes & STORED), stream_bytes & ~STORED
             self.assertEqual(source, read)
             body = staged[source : source + size]
             if stored:

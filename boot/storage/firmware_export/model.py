@@ -125,7 +125,7 @@ def main() -> None:
         (d / 'firmware-ram.bin').write_bytes(initial)
         guard = bytes([0x5A]) * 4096
         (d / 'reference-before.bin').write_bytes(guard)
-        with tempfile.TemporaryDirectory(prefix='switch-fwe-') as temp:
+        with tempfile.TemporaryDirectory(prefix='switch-fwe-'):
             cmd = [
                 tool('qemu-system-aarch64'),
                 '-machine',
@@ -181,15 +181,22 @@ def main() -> None:
                         p.wait(timeout=5)
         result = (d / 'caller-result.bin').read_bytes()
         values = struct.unpack('<16Q', result)
-        assert values[0] == 0x45585054444F4E45 and values[1] == error and values[2] == 0x40220000
-        assert values[3] == fixture.GD and values[4:15] == tuple(range(19, 30)) and values[15] == returned, values
+        assert values[0] == 0x45585054444F4E45
+        assert values[1] == error
+        assert values[2] == 0x40220000
+        assert values[3] == fixture.GD, values
+        assert values[4:15] == tuple(range(19, 30)), values
+        assert values[15] == returned, values
         assert (d / 'firmware-after.bin').read_bytes() == initial, 'firmware RAM changed'
         after = (d / 'reference-after.bin').read_bytes()
         record = after[0x400:0x500]
         if error:
-            assert after[:0x400] == guard[:0x400] and after[0x404:] == guard[0x404:] and record[:4] == bytes(4)
+            assert after[:0x400] == guard[:0x400]
+            assert after[0x404:] == guard[0x404:]
+            assert record[:4] == bytes(4)
         else:
-            assert after[:0x400] == guard[:0x400] and after[0x500:] == guard[0x500:]
+            assert after[:0x400] == guard[:0x400]
+            assert after[0x500:] == guard[0x500:]
             assert struct.unpack_from('<8I', record) == (0x4D435349, 1, 256, 1, 0x700B0000, 1, 512, 1)
             assert struct.unpack_from('<QQ', record, 0x20) == (fixture.CAPACITY, fixture.CAPACITY * 512)
             assert struct.unpack_from('<3I', record, 0x30) == (0xC0FF8000, 0xABCD, 0x80030000)
@@ -201,7 +208,8 @@ def main() -> None:
             )
             assert record[0x40:0x60] == initial[fixture.MMC + 0x40 - fixture.GD : fixture.MMC + 0x60 - fixture.GD]
             assert record[0x80:0xA0] == bytes.fromhex(manifest['bl33_sha256'])
-            assert record[0xA0:0xF0] == bytes(0x50) and record[0xF4:] == bytes(12)
+            assert record[0xA0:0xF0] == bytes(0x50)
+            assert record[0xF4:] == bytes(12)
             assert struct.unpack_from('<I', record, 0xF0)[0] == zlib.crc32(record[:0xF0])
         reports.append(
             {

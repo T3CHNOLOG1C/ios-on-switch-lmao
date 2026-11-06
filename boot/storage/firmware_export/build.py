@@ -105,7 +105,7 @@ def main() -> None:
         raise ValueError('ELF entry mismatch')
     segments = []
     for i in range(e[9]):
-        typ, flags_, off, va, pa, filesz, memsz, align = struct.unpack_from('<IIQQQQQQ', elf, e[4] + e[8] * i)
+        typ, flags_, off, va, pa, filesz, memsz, _align = struct.unpack_from('<IIQQQQQQ', elf, e[4] + e[8] * i)
         if typ != 1:
             continue
         if va != pa or not LOAD <= va < LOAD + 65536 or filesz != memsz or memsz > LOAD + 65536 - va:

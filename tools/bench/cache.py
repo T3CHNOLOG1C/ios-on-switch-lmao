@@ -31,9 +31,11 @@ DRIVER = 'drivers/SwitchButtons/SwitchButtons.cpp'
 
 def build(workspace: Path, label: str, startup: Sequence[str] = (), flags: Sequence[str] = ()) -> None:
     bazel = os.environ.get('BAZEL', 'bazel')
-    result = subprocess.run([bazel, *startup, 'build', *flags, *TARGETS], cwd=workspace, capture_output=True, text=True)
-    lines = [l for l in result.stderr.splitlines() if l.startswith('INFO: Elapsed') or ' processes' in l]
-    print('{:16} {}'.format(label, ' / '.join(l.replace('INFO: ', '') for l in lines)), flush=True)
+    result = subprocess.run(
+        [bazel, *startup, 'build', *flags, *TARGETS], cwd=workspace, capture_output=True, text=True, check=False
+    )
+    lines = [line for line in result.stderr.splitlines() if line.startswith('INFO: Elapsed') or ' processes' in line]
+    print('{:16} {}'.format(label, ' / '.join(line.replace('INFO: ', '') for line in lines)), flush=True)
     if result.returncode:
         sys.exit(result.stderr[-3000:])
 
@@ -62,7 +64,7 @@ def main() -> None:
         quiet = ['--experimental_convenience_symlinks=ignore']
         build(workspace, 'fresh base', ['--output_base=' + str(scratch / 'warm')], quiet)
         if args.cold:
-            build(workspace, 'cold', ['--output_base=' + str(scratch / 'cold')], quiet + ['--disk_cache='])
+            build(workspace, 'cold', ['--output_base=' + str(scratch / 'cold')], [*quiet, '--disk_cache='])
     finally:
         for base in ('warm', 'cold'):
             if (scratch / base).exists():
@@ -70,6 +72,7 @@ def main() -> None:
                     [os.environ.get('BAZEL', 'bazel'), '--output_base=' + str(scratch / base), 'clean', '--expunge'],
                     cwd=workspace,
                     capture_output=True,
+                    check=False,
                 )
         shutil.rmtree(scratch, ignore_errors=True)
 

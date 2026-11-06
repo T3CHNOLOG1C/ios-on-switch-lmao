@@ -63,6 +63,7 @@ def main() -> None:
             cwd=tree,
             capture_output=True,
             text=True,
+            check=False,
         )
         for line in build.stderr.splitlines():
             if line.startswith('INFO: Elapsed') or ' processes' in line:
@@ -81,10 +82,12 @@ def main() -> None:
         if executed:
             sys.exit('action keys differ between worktrees (see above)')
     finally:
-        subprocess.run([bazel, '--output_base=' + str(base), 'shutdown'], cwd=tree, capture_output=True)
+        subprocess.run([bazel, '--output_base=' + str(base), 'shutdown'], cwd=tree, capture_output=True, check=False)
         if not args.keep:
-            subprocess.run(['git', '-C', workspace, 'worktree', 'remove', '--force', str(tree)], capture_output=True)
-            subprocess.run(['chmod', '-R', 'u+w', str(scratch)], capture_output=True)
+            subprocess.run(
+                ['git', '-C', workspace, 'worktree', 'remove', '--force', str(tree)], capture_output=True, check=False
+            )
+            subprocess.run(['chmod', '-R', 'u+w', str(scratch)], capture_output=True, check=False)
             shutil.rmtree(scratch, ignore_errors=True)
 
 

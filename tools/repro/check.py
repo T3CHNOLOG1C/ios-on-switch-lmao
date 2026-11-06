@@ -76,6 +76,7 @@ def main() -> None:
                 cwd=workspace,
                 capture_output=True,
                 text=True,
+                check=False,
             )
             for line in build.stderr.splitlines():
                 if line.startswith('INFO: Elapsed') or ' processes' in line:
@@ -96,6 +97,7 @@ def main() -> None:
                     [bazel, '--output_base=' + str(scratch / f'base{n}'), 'clean', '--expunge'],
                     cwd=workspace,
                     capture_output=True,
+                    check=False,
                 )
             shutil.rmtree(scratch, ignore_errors=True)
 
