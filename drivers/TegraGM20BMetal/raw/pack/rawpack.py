@@ -26,6 +26,14 @@ writes <out>/pack.bin, pack.json, layouts.txt, report.txt and keeps the probe lo
 reruns the probes).
 --stack: the build's stack key (the plugin is compiled with the same value), stamped into the pack header: the runtime
 refuses a pack of another build.
+The same work in three steps, for a build that caches each bucket's probe runs (they depend on the bucket's state lines
+and the tools alone):
+       rawpack.py --split --qc <default.metallib> --corpus <corpus.log> --out <dir>
+           writes <dir>/work/bucket0 .. bucket15, each a corpus.log of its states
+       rawpack.py --probe-bucket <bucket dir> --prebuilt <dir> --nvk <host twin dylib> --qc <default.metallib>
+           probes one bucket in place: programs.bin, probe{256,16,4096}.{out,log}
+       rawpack.py --link --out <dir> [--stack <hex key>] <bucket dir>...
+           mkpack.py over the buckets: <dir>/pack.bin and the rest, as the one-step form writes them
 """
 
 import concurrent.futures
@@ -204,7 +212,7 @@ def split_buckets(corpus: Path, work: Path, count: int) -> list[Path]:
     dirs = []
     for i, part in enumerate(lines):
         d = work / f'bucket{i}'
-        (d / 'cache').mkdir(parents=True)
+        d.mkdir(parents=True)
         (d / 'corpus.log').write_text(warm + ''.join(part))
         dirs.append(d)
     return dirs
@@ -217,20 +225,20 @@ def fnv(b: bytes) -> int:
     return h
 
 
-def probe_bucket(work: Path, d: Path, nvk: Path, qc: Path, env: dict[str, str]) -> str:
+def probe_bucket(tools: Path, d: Path, nvk: Path, qc: Path, env: dict[str, str]) -> str:
     """Probe one bucket's states.
 
     A run that only fills its m2v cache with NVK's driver records (NAK's programs), then the three decoded runs, which
     name each bound program by those records (RAWCAP_PROGRAMS) and hit the same cache.
     """
     if d.name == 'bucket0':
-        env = dict(env, PROBE_YCBCR_LIB=str(work / 'ycbcr.metallib'))
+        env = dict(env, PROBE_YCBCR_LIB=str(tools / 'ycbcr.metallib'))
     said = []
 
     def probe(name: str, extra: dict[str, str]) -> None:
         with open(d / f'{name}.out', 'w') as out:
             r = subprocess.run(
-                [str(work / 'probe'), str(nvk), str(d / 'cache'), str(qc), str(d / 'corpus.log')],
+                [str(tools / 'probe'), str(nvk), str(d / 'cache'), str(qc), str(d / 'corpus.log')],
                 env=dict(env, **extra),
                 stdout=out,
                 stderr=subprocess.PIPE,
@@ -242,6 +250,8 @@ def probe_bucket(work: Path, d: Path, nvk: Path, qc: Path, env: dict[str, str]) 
         tail = [line for line in r.stderr.splitlines() if line.startswith('probe:')]
         said.append(f'{name}: {tail[-1] if tail else "?"}')
 
+    shutil.rmtree(d / 'cache', ignore_errors=True)
+    (d / 'cache').mkdir()
     probe('warm', {})
     run([sys.executable, HERE / 'mkprograms.py', d / 'programs.bin', d / 'cache'])
     for size in (256, 16, 4096):
@@ -257,30 +267,8 @@ def probe_bucket(work: Path, d: Path, nvk: Path, qc: Path, env: dict[str, str]) 
     return f'rawpack: {d.name}: ' + '; '.join(said)
 
 
-def main() -> None:
-    if '--build-only' in sys.argv[1:]:
-        out = Path(option('--out')).resolve()
-        out.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory() as scratch:
-            build(Path(scratch), Path(option('--bridge')).resolve())
-            for name in BUILT:
-                shutil.copyfile(Path(scratch) / name, out / name)
-                (out / name).chmod(0o755)
-        return
-    nvk, qc, corpus = (Path(option(n)).resolve() for n in ('--nvk', '--qc', '--corpus'))
-    out = Path(option('--out')).resolve()
-    stack = int(option('--stack', False) or '0', 16)
-    work = out / 'work'
-    shutil.rmtree(work, ignore_errors=True)
-    work.mkdir(parents=True)
-    corpus = ca_corpus(qc, corpus, work)
-    prebuilt = option('--prebuilt', False)
-    if prebuilt:
-        for name in BUILT:
-            shutil.copyfile(Path(prebuilt) / name, work / name)
-            (work / name).chmod(0o755)
-    else:
-        build(work, Path(option('--bridge')).resolve())
+def probe_env() -> dict[str, str]:
+    """Give the probe's environment: this process's, less every knob of the stack, plus the probe's own."""
     env = {
         k: v
         for k, v in os.environ.items()
@@ -299,16 +287,68 @@ def main() -> None:
         NMB_ASYNC_PSO_API='0',
         NMB_CACHE_MB='65536',
     )
-    buckets = split_buckets(corpus, work, BUCKETS)
-    with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count() or 1) as pool:
-        for line in pool.map(lambda b: probe_bucket(work, b, nvk, qc, env), buckets):
-            print(line)
-    report = run([sys.executable, HERE / 'mkpack.py', work / 'programs.bin', out, *buckets])
+    return env
+
+
+def link(out: Path, buckets: list[Path], stack: int, programs: Path) -> None:
+    """mkpack.py over the buckets' probe runs: out/pack.bin, stamped with the stack key."""
+    out.mkdir(parents=True, exist_ok=True)
+    report = run([sys.executable, HERE / 'mkpack.py', programs, out, *buckets])
     if stack:
         pack = bytearray((out / 'pack.bin').read_bytes())
         struct.pack_into('<Q', pack, 8 + 16 + 8 * 2 * 8, stack)  # PackHeader.stack (after the section table)
         (out / 'pack.bin').write_bytes(pack)
     print(report.rstrip())
+
+
+def main() -> None:
+    if '--build-only' in sys.argv[1:]:
+        out = Path(option('--out')).resolve()
+        out.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory() as scratch:
+            build(Path(scratch), Path(option('--bridge')).resolve())
+            for name in BUILT:
+                shutil.copyfile(Path(scratch) / name, out / name)
+                (out / name).chmod(0o755)
+        return
+    stack = int(option('--stack', False) or '0', 16)
+    if '--link' in sys.argv[1:]:  # --link --out <dir> [--stack <key>] <bucket dir>...
+        out = Path(option('--out')).resolve()
+        buckets = [Path(a).resolve() for a in sys.argv[sys.argv.index('--link') + 1 :] if Path(a).is_dir()]
+        buckets = [b for b in buckets if b != out]
+        link(out, buckets, stack, out / 'programs.bin')
+        return
+    qc = Path(option('--qc')).resolve()
+    nvk = Path(option('--nvk')).resolve() if '--split' not in sys.argv[1:] else qc
+    if '--probe-bucket' in sys.argv[1:]:  # --probe-bucket <dir> --prebuilt <tools> --nvk <dylib> --qc <metallib>
+        print(
+            probe_bucket(
+                Path(option('--prebuilt')).resolve(), Path(option('--probe-bucket')).resolve(), nvk, qc, probe_env()
+            )
+        )
+        return
+    corpus = Path(option('--corpus')).resolve()
+    out = Path(option('--out')).resolve()
+    work = out / 'work'
+    shutil.rmtree(work, ignore_errors=True)
+    work.mkdir(parents=True)
+    corpus = ca_corpus(qc, corpus, work)
+    if '--split' in sys.argv[1:]:  # --split --qc <metallib> --corpus <corpus.log> --out <dir>: <dir>/work/bucket<i>
+        split_buckets(corpus, work, BUCKETS)
+        return
+    prebuilt = option('--prebuilt', False)
+    if prebuilt:
+        for name in BUILT:
+            shutil.copyfile(Path(prebuilt) / name, work / name)
+            (work / name).chmod(0o755)
+    else:
+        build(work, Path(option('--bridge')).resolve())
+    env = probe_env()
+    buckets = split_buckets(corpus, work, BUCKETS)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count() or 1) as pool:
+        for line in pool.map(lambda b: probe_bucket(work, b, nvk, qc, env), buckets):
+            print(line)
+    link(out, buckets, stack, work / 'programs.bin')
     if '--clean' in sys.argv[1:]:
         shutil.rmtree(work)
 
