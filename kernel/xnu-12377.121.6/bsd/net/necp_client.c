@@ -76,7 +76,7 @@
 
 #include <os/refcnt.h>
 
-#include <CodeSignature/Entitlements.h>
+#include <CoreEntitlements/CoreEntitlements.h>
 
 #if SKYWALK
 #include <skywalk/os_skywalk_private.h>

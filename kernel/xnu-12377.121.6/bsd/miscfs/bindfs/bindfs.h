@@ -81,6 +81,9 @@
 //#define BINDFS_DEBUG 0
 
 #define BINDM_CACHE 0x0001
+/* Owner boot overlay (native_bindfs_boot_mount): report every file as owned by root:wheel. The backing directory is owner data made
+ * without root; launchd and the loader expect system-directory content to be root owned. Mode bits are left as they are. */
+#define BINDM_FORCE_ROOT 0x80000000ULL
 #define BINDM_CASEINSENSITIVE 0x0000000000000002
 
 typedef int (*vop_t)(void *);

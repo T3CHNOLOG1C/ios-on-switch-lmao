@@ -187,7 +187,7 @@
 
 #include "kern_exec_internal.h"
 
-#include <CodeSignature/Entitlements.h>
+#include <CoreEntitlements/CoreEntitlements.h>
 
 #include <mach/exclaves.h>
 
@@ -7940,8 +7940,1040 @@ create_unix_stack(vm_map_t map, load_result_t* load_result,
  *		word width of the kernel. Once the self-exec completes, the
  *		initproc might be different.
  */
+#if defined(XNU_OWNER_CACHE_MOUNT) && XNU_OWNER_CACHE_MOUNT
+#if !DEVELOPMENT && !DEBUG
+#error The offline owner cache mount is a development instrument
+#endif
+extern int native_verified_block_volume_device(const char *, dev_t *, char *, size_t);
+#if defined(XNU_OWNER_BOOT_MANIFEST) && XNU_OWNER_BOOT_MANIFEST
+extern int native_owner_publish_boot_manifest(dev_t, const char *, dev_t, const char *);
+#endif
+#if defined(XNU_OWNER_CACHE_STARTUP) && XNU_OWNER_CACHE_STARTUP
+extern void commpage_update_dyld_flags(uint64_t);
+volatile uint64_t native_owner_cache_dyld_flags = 0;
+#endif
+extern int native_verified_block_root_authorized(dev_t);
+volatile int native_owner_cache_stage = 0;
+volatile int native_owner_cache_status = -1;
+volatile int native_owner_cache_mount_status = -1;
+volatile int native_owner_cache_readonly = 0;
+volatile int native_owner_cache_authorized = 0;
+volatile int native_owner_cache_root_recheck = 0;
+volatile uint64_t native_owner_cache_actual_mount_flags = 0;
+volatile uintptr_t native_owner_cache_original_root = 0;
+volatile uintptr_t native_owner_cache_current_root = 0;
+volatile int native_owner_cache_native_union = 0;
+volatile dev_t native_owner_cache_selected_device = NODEV;
+volatile dev_t native_owner_cache_mounted_device = NODEV;
+char native_owner_cache_device_path[64];
+void native_owner_cache_checkpoint(int, int);
+__attribute__((noinline)) void
+native_owner_cache_checkpoint(int status, int authorized)
+{
+	__asm__ volatile("" : : "r"(status), "r"(authorized) : "memory");
+}
+
 static int
-load_init_program_at_path(proc_t p, user_addr_t scratch_addr, const char* path)
+native_owner_cache_prepare(proc_t p, user_addr_t scratch, user_addr_t *envp)
+{
+#ifndef XNU_OWNER_CACHE_VOLUME_UUID
+#define XNU_OWNER_CACHE_VOLUME_UUID "7A23BAC7-E86D-4DF4-B181-E6D80F212AE5"
+#endif
+	const char *volume = XNU_OWNER_CACHE_VOLUME_UUID;
+#if defined(XNU_OWNER_UNION_SYSTEMOS) && XNU_OWNER_UNION_SYSTEMOS
+#if !CONFIG_UNION_MOUNTS
+#error The owner composition requires the original native union-mount implementation
+#endif
+	const char *mountpoint = "/";
+#else
+	const char *mountpoint = "/private/preboot";
+#endif
+#if !defined(XNU_OWNER_UNION_SYSTEMOS) || !XNU_OWNER_UNION_SYSTEMOS
+	const char *environment = "DYLD_SHARED_CACHE_DIR=/private/preboot/System/Library/Caches/com.apple.dyld";
+#endif
+	vnode_t original_os_root = rootvnode;
+	native_owner_cache_original_root = (uintptr_t)original_os_root;
+	mount_t root_mount = vnode_mount(original_os_root);
+	vnode_t device_vnode = vfs_devvp(root_mount);
+	dev_t root_device = device_vnode ? vnode_specrdev(device_vnode) : NODEV;
+	dev_t selected = NODEV;
+	vnode_t mounted_root = NULLVP;
+	int error = EAUTH, root_authorized = 0, cache_authorized = 0;
+	int32_t result = 0;
+	user64_addr_t spec = scratch + 0x160;
+	char device_path[64] = {0};
+	uint8_t mount_data[0x150] = {0};
+	uint64_t mount_flags = MNT_RDONLY;
+	uint16_t mount_mode = 1;
+	uint32_t anonymous_owner = 99;
+#if !defined(XNU_OWNER_UNION_SYSTEMOS) || !XNU_OWNER_UNION_SYSTEMOS
+#if defined(XNU_OWNER_CRYPTEX_FILES) && XNU_OWNER_CRYPTEX_FILES
+	const char *fallback = "DYLD_FALLBACK_LIBRARY_PATH=/private/preboot/usr/lib";
+	user64_addr_t environment_vector[3] = {scratch + 0x400, scratch + 0x600, USER_ADDR_NULL};
+#else
+	user64_addr_t environment_vector[2] = {scratch + 0x400, USER_ADDR_NULL};
+#endif
+#endif
+	struct mount_args request = {.type = scratch + 0x100, .path = scratch + 0x120,
+	    .flags = MNT_RDONLY, .data = scratch + 0x200};
+	request.flags = (int)mount_flags;
+#if defined(XNU_OWNER_UNION_SYSTEMOS) && XNU_OWNER_UNION_SYSTEMOS
+	request.flags |= MNT_UNION;
+#endif
+	if (device_vnode) vnode_put(device_vnode);
+	root_authorized = (vfs_flags(root_mount) & MNT_RDONLY) && root_device != NODEV &&
+	    native_verified_block_root_authorized(root_device);
+	if (!root_authorized) goto done;
+	native_owner_cache_stage = 1;
+	if (!native_verified_block_volume_device(volume, &selected, device_path,
+	    sizeof(device_path))) goto done;
+	strlcpy(native_owner_cache_device_path, device_path, sizeof(native_owner_cache_device_path));
+	native_owner_cache_selected_device = selected;
+	native_owner_cache_stage = 2;
+	/* Exact user-mount payload already qualified against this original APFS. */
+	memcpy(mount_data, &spec, sizeof(spec));
+	memcpy(mount_data + 8, &mount_flags, sizeof(mount_flags));
+	memcpy(mount_data + 16, &mount_mode, sizeof(mount_mode));
+	memcpy(mount_data + 0x144, &anonymous_owner, sizeof(anonymous_owner));
+	memcpy(mount_data + 0x148, &anonymous_owner, sizeof(anonymous_owner));
+	if ((error = copyout("apfs", request.type, 5)) != 0 ||
+	    (error = copyout(mountpoint, request.path, strlen(mountpoint) + 1)) != 0 ||
+	    (error = copyout(device_path, spec, strlen(device_path) + 1)) != 0 ||
+	    (error = copyout(mount_data, request.data, sizeof(mount_data))) != 0) goto done;
+	native_owner_cache_stage = 3;
+	error = mount(p, &request, &result);
+	native_owner_cache_mount_status = error;
+	if (error) goto done;
+	native_owner_cache_stage = 4;
+	error = vnode_lookup(mountpoint, 0, &mounted_root, vfs_context_current());
+	if (error) goto done;
+	mount_t cache_mount = vnode_mount(mounted_root);
+	device_vnode = vfs_devvp(cache_mount);
+	dev_t actual = device_vnode ? vnode_specrdev(device_vnode) : NODEV;
+	if (device_vnode) vnode_put(device_vnode);
+	native_owner_cache_mounted_device = actual;
+	int readonly = (vfs_flags(cache_mount) & MNT_RDONLY) != 0;
+	native_owner_cache_readonly = readonly;
+	native_owner_cache_actual_mount_flags = vfs_flags(cache_mount);
+	native_owner_cache_current_root = (uintptr_t)rootvnode;
+	int native_union = (vfs_flags(cache_mount) & MNT_UNION) &&
+	    vnode_mountedhere(original_os_root) == cache_mount && rootvnode == mounted_root;
+	native_owner_cache_native_union = native_union;
+	cache_authorized = readonly && actual == selected &&
+	    !strcmp(vfs_statfs(cache_mount)->f_fstypename, "apfs") && native_verified_block_root_authorized(actual);
+#if defined(XNU_OWNER_UNION_SYSTEMOS) && XNU_OWNER_UNION_SYSTEMOS
+	cache_authorized = cache_authorized && native_union;
+#endif
+	if (!cache_authorized) { error = EAUTH; goto done; }
+	native_owner_cache_stage = 5;
+#if !defined(XNU_OWNER_UNION_SYSTEMOS) || !XNU_OWNER_UNION_SYSTEMOS
+	if ((error = copyout(environment, environment_vector[0], strlen(environment) + 1)) != 0 ||
+	    (error = copyout(environment_vector, scratch + 0x500, sizeof(environment_vector))) != 0) goto done;
+#if defined(XNU_OWNER_CRYPTEX_FILES) && XNU_OWNER_CRYPTEX_FILES
+	if ((error = copyout(fallback, scratch + 0x600, strlen(fallback) + 1)) != 0) goto done;
+#endif
+	*envp = scratch + 0x500;
+#else
+	*envp = USER_ADDR_NULL;
+#endif
+	native_owner_cache_stage = 6;
+done:
+	if (mounted_root) vnode_put(mounted_root);
+	int root_recheck = root_authorized && native_verified_block_root_authorized(root_device);
+	native_owner_cache_root_recheck = root_recheck;
+	if (!root_recheck) error = EAUTH;
+#if defined(XNU_OWNER_BOOT_MANIFEST) && XNU_OWNER_BOOT_MANIFEST
+	if (!error && cache_authorized && root_recheck &&
+	    !native_owner_publish_boot_manifest(root_device, XNU_OWNER_ROOT_VOLUME_UUID,
+	        selected, volume)) error = EAUTH;
+#endif
+#if defined(XNU_OWNER_CACHE_STARTUP) && XNU_OWNER_CACHE_STARTUP
+	if (!error && cache_authorized && root_recheck) {
+		/* Original dyld bit 3 selects no ignition; the owner chain and actual
+		 * readonly mounts above supply image authentication in this mode. */
+		dyld_flags |= UINT64_C(8);
+		commpage_update_dyld_flags(dyld_flags);
+		native_owner_cache_dyld_flags = dyld_flags;
+	}
+#endif
+	native_owner_cache_authorized = cache_authorized;
+	native_owner_cache_status = error;
+	native_owner_cache_checkpoint(error, cache_authorized);
+	return error;
+}
+#endif
+
+#if defined(XNU_OWNER_DATA_MOUNT) && XNU_OWNER_DATA_MOUNT
+#if !defined(XNU_OWNER_BOOT_MANIFEST) || !XNU_OWNER_BOOT_MANIFEST
+#error Scratch Data mounting requires the authenticated original OS startup path
+#endif
+#if defined(XNU_NATIVE_RAM_BLOCK) && XNU_NATIVE_RAM_BLOCK
+#ifndef XNU_OWNER_DATA_VOLUME_UUID
+#error Supply the observed scratch volume UUID for the IOKit backend
+#endif
+extern int native_ram_block_volume_seed(const char *, dev_t *, char *, size_t, uint64_t *, uint64_t *, uint8_t *);
+#endif
+extern dev_t mdevlookup(int);
+extern int mdevgetrange(int, uint64_t *, uint64_t *);
+volatile int native_owner_data_status = -1;
+volatile int native_owner_data_stage = 0;
+volatile int native_owner_data_readonly = -1;
+volatile dev_t native_owner_data_device = NODEV;
+uint64_t native_owner_data_seed_base, native_owner_data_seed_size;
+uint8_t native_owner_data_seed_sha256[32];
+char native_owner_data_device_path[64];
+
+/* Boot-time read-only union views of owner-provided GPU addon content over sealed system directories, mounted after the Data mount and
+ * before launchd starts: the Adreno Metal plugin bundle over /System/Library/Extensions (the original Metal discovery loads
+ * /System/Library/Extensions/<MetalPluginName>.bundle) and an owner launchd job over /System/Library/LaunchDaemons (a process outside
+ * every sandbox profile). Only with boot-arg sheng-gpu-addon=1. Never panics: a missing source directory or a refused mount only
+ * records its status. The backing directories are owner Data (not an authenticated immutable volume); code in them still has to
+ * pass AMFI through the loaded trust cache. */
+extern volatile int native_bindfs_boot_mount;
+volatile int native_gpu_addon_stage = 0;
+volatile int native_gpu_addon_status = -1;
+volatile int native_gpu_addon2_stage = 0;
+volatile int native_gpu_addon2_status = -1;
+volatile int native_gpu_addon3_stage = 0;
+volatile int native_gpu_addon3_status = -1;
+static void
+native_gpu_addon_mount(proc_t p, user_addr_t scratch, user_addr_t offset, const char *source, size_t source_size,
+    const char *point, size_t point_size, const char *visible, const char *own, volatile int *stage, volatile int *status)
+{
+	vnode_t probe = NULLVP;
+	int error;
+	*stage = 1;
+	error = vnode_lookup(source, 0, &probe, vfs_context_current());
+	if (error) {
+		*status = error;
+		return;
+	}
+	vnode_put(probe);
+	probe = NULLVP;
+	*stage = 2;
+	struct mount_args request = {.type = scratch + offset, .path = scratch + offset + 0x20,
+	    .flags = MNT_RDONLY | MNT_UNION, .data = scratch + offset + 0x100};
+	int32_t result = 0;
+	if ((error = copyout("bindfs", request.type, 7)) || (error = copyout(point, request.path, point_size)) ||
+	    (error = copyout(source, request.data, source_size))) {
+		*status = error;
+		return;
+	}
+	native_bindfs_boot_mount = 1;
+	error = mount(p, &request, &result);
+	native_bindfs_boot_mount = 0;
+	if (error) {
+		*status = error;
+		return;
+	}
+	*stage = 3;
+	/* The union must still show a sealed lower entry next to the owner's. */
+	error = vnode_lookup(visible, 0, &probe, vfs_context_current());
+	if (!error) {
+		vnode_put(probe);
+		probe = NULLVP;
+		*stage = 4;
+		/* ... and the owner's own entry must be visible through it (stage 5). */
+		error = vnode_lookup(own, 0, &probe, vfs_context_current());
+		if (!error) {
+			vnode_put(probe);
+			probe = NULLVP;
+			*stage = 5;
+		}
+	}
+	*status = error;
+}
+/* The GPU addon of the boot payload (scripts/make-gpu-addon.py, handed over by the loader as /chosen/memory-map/GpuAddon): every file
+ * whose content or mode differs from the mounted Data volume is written there before the addon mounts, so the plugin no longer has to
+ * be part of the Data seed and the seed's persistent store survives a plugin rebuild. Missing directories below /private/var/ngpu are
+ * created. A malformed addon is refused as a whole; a file that cannot be written keeps its old content.
+ * Counters for the boot log: files in the addon (-1 none), files written, files already equal, failures and the last error. */
+extern int native_ram_block_gpu_addon(const uint8_t **, uint64_t *) __attribute__((weak_import));
+#include <libkern/zlib.h>
+/* zlib's state, from kalloc with its size in front (the default allocator of the kernel's zlib is not meant for this). */
+static voidpf
+native_gpu_addon_zalloc(voidpf opaque __unused, uInt items, uInt size)
+{
+	size_t bytes = (size_t)items * size + 16;
+	uint8_t *block = kalloc_data(bytes, Z_WAITOK | Z_ZERO);
+	if (!block) {
+		return Z_NULL;
+	}
+	memcpy(block, &bytes, sizeof(bytes));
+	return block + 16;
+}
+static void
+native_gpu_addon_zfree(voidpf opaque __unused, voidpf address)
+{
+	uint8_t *block = (uint8_t *)address - 16;
+	size_t bytes = 0;
+	memcpy(&bytes, block, sizeof(bytes));
+	kfree_data(block, bytes);
+}
+static int
+native_gpu_addon_inflate(const uint8_t *packed, uint64_t packed_size, uint8_t *data, uint64_t size)
+{
+	z_stream stream;
+	memset(&stream, 0, sizeof(stream));
+	stream.zalloc = native_gpu_addon_zalloc;
+	stream.zfree = native_gpu_addon_zfree;
+	stream.next_in = (Bytef *)(uintptr_t)packed;
+	stream.avail_in = (uInt)packed_size;
+	stream.next_out = data;
+	stream.avail_out = (uInt)size;
+	if (inflateInit(&stream) != Z_OK) {
+		return ENOMEM;
+	}
+	int result = inflate(&stream, Z_FINISH);
+	inflateEnd(&stream);
+	return result == Z_STREAM_END && stream.total_out == size && !stream.avail_in ? 0 : EINVAL;
+}
+volatile int native_gpu_addon_files = -1;
+volatile int native_gpu_addon_written = 0;
+volatile int native_gpu_addon_same = 0;
+volatile int native_gpu_addon_failed = 0;
+volatile int native_gpu_addon_error = 0;
+static int
+native_gpu_addon_equal(vnode_t vp, const uint8_t *data, uint64_t size, uint32_t mode, vfs_context_t ctx)
+{
+	struct vnode_attr va;
+	VATTR_INIT(&va);
+	VATTR_WANTED(&va, va_data_size);
+	VATTR_WANTED(&va, va_mode);
+	if (vnode_getattr(vp, &va, ctx) || va.va_data_size != size || (va.va_mode & 07777) != mode) {
+		return 0;
+	}
+	const uint32_t chunk = 1024 * 1024;
+	uint8_t *buffer = kalloc_data(chunk, Z_WAITOK);
+	if (!buffer) {
+		return 0;
+	}
+	int equal = 1;
+	for (uint64_t at = 0; equal && at < size; at += chunk) {
+		int length = (int)(size - at < chunk ? size - at : chunk), resid = 0;
+		if (vn_rdwr(UIO_READ, vp, (caddr_t)buffer, length, (off_t)at, UIO_SYSSPACE, IO_NOAUTH, vfs_context_ucred(ctx), &resid,
+		    vfs_context_proc(ctx)) || resid || memcmp(buffer, data + at, length)) {
+			equal = 0;
+		}
+	}
+	kfree_data(buffer, chunk);
+	return equal;
+}
+static int
+native_gpu_addon_write(const char *path, const uint8_t *data, uint64_t size, uint32_t mode, vfs_context_t ctx)
+{
+	vnode_t vp = NULLVP;
+	int error = vnode_open(path, FREAD | O_NOFOLLOW, 0, 0, &vp, ctx);
+	if (!error) {
+		int equal = native_gpu_addon_equal(vp, data, size, mode, ctx);
+		vnode_close(vp, FREAD, ctx);
+		vp = NULLVP;
+		if (equal) {
+			return -1;
+		}
+	}
+	error = vnode_open(path, O_CREAT | O_TRUNC | FWRITE | O_NOFOLLOW, mode, 0, &vp, ctx);
+	if (error) {
+		return error;
+	}
+	int resid = 0;
+	error = vn_rdwr(UIO_WRITE, vp, (caddr_t)(uintptr_t)data, (int)size, 0, UIO_SYSSPACE, IO_NOAUTH | IO_UNIT, vfs_context_ucred(ctx),
+	    &resid, vfs_context_proc(ctx));
+	if (!error && resid) {
+		error = EIO;
+	}
+	if (!error) {
+		struct vnode_attr va;
+		VATTR_INIT(&va);
+		VATTR_SET(&va, va_mode, mode);
+		/* Kernel vnode_open does not finish O_TRUNC on the non-compound path. */
+		VATTR_SET(&va, va_data_size, size);
+		error = vnode_setattr(vp, &va, ctx);
+	}
+	if (!error) {
+		error = VNOP_FSYNC(vp, MNT_WAIT, ctx);
+	}
+	int close_error = vnode_close(vp, FWRITE, ctx);
+	return error ? error : close_error;
+}
+/* Creates the missing parent directories of an addon path with the mkdir syscall, /private/var/ngpu itself included (a Data seed
+ * that never had add-gpu-plugin-data.py applied has none). The scratch is one 4 KiB page; the mount arguments end below 0xa00. */
+static int
+native_gpu_addon_parents(proc_t p, user_addr_t scratch, const char *path)
+{
+	char parent[192];
+	strlcpy(parent, path, sizeof(parent));
+	for (size_t i = sizeof("/private/var/ngpu") - 1; parent[i]; ++i) {
+		if (parent[i] != '/') {
+			continue;
+		}
+		parent[i] = 0;
+		struct mkdir_args request = {.path = scratch + 0xc00, .mode = 0755};
+		int32_t result = 0;
+		int error = copyout(parent, request.path, i + 1);
+		if (!error) {
+			error = mkdir(p, &request, &result);
+		}
+		parent[i] = '/';
+		if (error && error != EEXIST) {
+			return error;
+		}
+	}
+	return 0;
+}
+static void
+native_gpu_addon_install(proc_t p, user_addr_t scratch)
+{
+	const uint8_t *addon = NULL;
+	uint64_t bytes = 0;
+	if (!native_ram_block_gpu_addon || !native_ram_block_gpu_addon(&addon, &bytes)) {
+		return;
+	}
+	uint32_t count = 0;
+	uint64_t total = 0;
+	if (bytes < 24 || memcmp(addon, "NGPUADD2", 8)) {
+		native_gpu_addon_error = EINVAL;
+		return;
+	}
+	memcpy(&count, addon + 8, 4);
+	memcpy(&total, addon + 16, 8);
+	if (total != bytes || !count || count > 4096) {
+		native_gpu_addon_error = EINVAL;
+		return;
+	}
+	/* Validate the whole addon before writing anything. */
+	uint64_t at = 24;
+	for (uint32_t i = 0; i < count; ++i) {
+		uint32_t name_bytes = 0, mode = 0;
+		uint64_t size = 0, packed = 0;
+		if (bytes - at < 24) {
+			native_gpu_addon_error = EINVAL;
+			return;
+		}
+		memcpy(&name_bytes, addon + at, 4);
+		memcpy(&mode, addon + at + 4, 4);
+		memcpy(&size, addon + at + 8, 8);
+		memcpy(&packed, addon + at + 16, 8);
+		at += 24;
+		uint64_t name_padded = (name_bytes + 7) & ~7ULL, size_padded = (packed + 7) & ~7ULL;
+		const char *name = (const char *)(addon + at);
+		if (name_bytes < 2 || name_bytes > 160 || bytes - at < name_padded || name[name_bytes - 1] || strnlen(name, name_bytes) != name_bytes - 1 ||
+		    name[0] == '/' || (mode & ~0777) || size > INT32_MAX || !packed || packed > INT32_MAX || bytes - at - name_padded < size_padded) {
+			native_gpu_addon_error = EINVAL;
+			return;
+		}
+		for (uint32_t k = 0; k + 1 < name_bytes - 1; ++k) {
+			if (name[k] == '.' && name[k + 1] == '.') {
+				native_gpu_addon_error = EINVAL;
+				return;
+			}
+		}
+		at += name_padded + size_padded;
+	}
+	if (at != bytes) {
+		native_gpu_addon_error = EINVAL;
+		return;
+	}
+	native_gpu_addon_files = (int)count;
+	vfs_context_t ctx = vfs_context_current();
+	char path[192];
+	at = 24;
+	for (uint32_t i = 0; i < count; ++i) {
+		uint32_t name_bytes = 0, mode = 0;
+		uint64_t size = 0, packed = 0;
+		memcpy(&name_bytes, addon + at, 4);
+		memcpy(&mode, addon + at + 4, 4);
+		memcpy(&size, addon + at + 8, 8);
+		memcpy(&packed, addon + at + 16, 8);
+		at += 24;
+		const char *name = (const char *)(addon + at);
+		at += (name_bytes + 7) & ~7ULL;
+		snprintf(path, sizeof(path), "/private/var/ngpu/%s", name);
+		uint8_t *data = kalloc_data(size ? size : 1, Z_WAITOK);
+		int error = data ? native_gpu_addon_inflate(addon + at, packed, data, size) : ENOMEM;
+		if (!error) {
+			error = native_gpu_addon_write(path, data, size, mode, ctx);
+			if (error == ENOENT && !(error = native_gpu_addon_parents(p, scratch, path))) {
+				error = native_gpu_addon_write(path, data, size, mode, ctx);
+			}
+		}
+		if (data) {
+			kfree_data(data, size ? size : 1);
+		}
+		if (error < 0) {
+			native_gpu_addon_same++;
+		} else if (error) {
+			native_gpu_addon_failed++;
+			native_gpu_addon_error = error;
+		} else {
+			native_gpu_addon_written++;
+		}
+		at += (packed + 7) & ~7ULL;
+	}
+}
+/* The OS cryptex where iPadOS looks for it. The root volume's entries for cryptex content are links into /System/Cryptexes/OS, which
+ * leads to /private/preboot/Cryptexes/OS; WebKit's processes are ExtensionKit extensions reached that way
+ * (/System/Library/ExtensionKit/Extensions/WebContentExtension.appex and its Networking and GPU siblings), so with the path missing
+ * Safari could not start them and its pages never loaded. The SystemOS volume is already the upper layer of the root union: its
+ * /System and /usr are bound read-only over /private/preboot/Cryptexes/OS/{System,usr}, not as unions, so a lookup there stays on the
+ * SystemOS volume and never meets the root's links again. The two mount points are owner Data directories under
+ * /private/var/ngpu/preboot, shown over the root's empty /private/preboot as a read-only union. Never fatal; stage and status go to the
+ * boot log: 1 mount points made, 2 preboot shown, 3 System bound, 4 usr bound, 5 an extension of WebKit visible through the path. */
+volatile int native_cryptex_os_stage = 0;
+volatile int native_cryptex_os_status = -1;
+static int
+native_cryptex_os_bind(proc_t p, user_addr_t scratch, const char *source, const char *point, int flags)
+{
+	struct mount_args request = {.type = scratch + 0xa00, .path = scratch + 0xa20, .flags = MNT_RDONLY | flags,
+	    .data = scratch + 0xb00};
+	int32_t result = 0;
+	int error;
+	if ((error = copyout("bindfs", request.type, 7)) || (error = copyout(point, request.path, strlen(point) + 1)) ||
+	    (error = copyout(source, request.data, strlen(source) + 1))) {
+		return error;
+	}
+	native_bindfs_boot_mount = 1;
+	error = mount(p, &request, &result);
+	native_bindfs_boot_mount = 0;
+	return error;
+}
+static void
+native_cryptex_os_view(proc_t p, user_addr_t scratch)
+{
+	static const char *const points[] = {"/private/var/ngpu/preboot/Cryptexes/OS/System/", "/private/var/ngpu/preboot/Cryptexes/OS/usr/"};
+	vnode_t probe = NULLVP;
+	int error = 0;
+	for (size_t i = 0; i < sizeof(points) / sizeof(points[0]) && !error; ++i) {
+		error = native_gpu_addon_parents(p, scratch, points[i]);
+	}
+	if (error) {
+		native_cryptex_os_status = error;
+		return;
+	}
+	native_cryptex_os_stage = 1;
+	if ((error = native_cryptex_os_bind(p, scratch, "/private/var/ngpu/preboot", "/private/preboot", MNT_UNION))) {
+		native_cryptex_os_status = error;
+		return;
+	}
+	native_cryptex_os_stage = 2;
+	if ((error = native_cryptex_os_bind(p, scratch, "/System", "/private/preboot/Cryptexes/OS/System", 0))) {
+		native_cryptex_os_status = error;
+		return;
+	}
+	native_cryptex_os_stage = 3;
+	if ((error = native_cryptex_os_bind(p, scratch, "/usr", "/private/preboot/Cryptexes/OS/usr", 0))) {
+		native_cryptex_os_status = error;
+		return;
+	}
+	native_cryptex_os_stage = 4;
+	error = vnode_lookup("/System/Cryptexes/OS/System/Library/ExtensionKit/Extensions/WebContentExtension.appex/Info.plist", 0, &probe,
+	    vfs_context_current());
+	if (!error) {
+		vnode_put(probe);
+		native_cryptex_os_stage = 5;
+	}
+	native_cryptex_os_status = error;
+}
+/* The device answers MobileGestalt cached while the display gamut was P3: removed so they are worked out again from the device tree
+ * (now sRGB). 0 removed, ENOENT none there (already regenerated or never made). */
+volatile int native_gestalt_cache_status = -1;
+static void
+native_gestalt_cache_drop(proc_t p, user_addr_t scratch)
+{
+	static const char cache[] = "/private/var/containers/Shared/SystemGroup/systemgroup.com.apple.mobilegestaltcache/Library/Caches/"
+	    "com.apple.MobileGestalt.plist";
+	struct unlink_args request = {.path = scratch + 0xc00};
+	int32_t result = 0;
+	int error = copyout(cache, request.path, sizeof(cache));
+	if (!error) {
+		error = unlink(p, &request, &result);
+	}
+	native_gestalt_cache_status = error;
+}
+/* LaunchServices' database of this Data store was built while /System/Cryptexes/OS led nowhere, so it never registered what lies behind
+ * it (WebKit's extensions among them) and lsd does not register system content again on a later boot of the same OS build. Its files
+ * are removed once, so lsd builds the database again with the path in place; the marker file keeps later boots from repeating it.
+ * Status for the boot log: files removed, or -2 done before, or -errno. */
+#include <sys/dirent.h>
+volatile int native_ls_store_status = -1;
+static void
+native_ls_store_drop(proc_t p, user_addr_t scratch)
+{
+	static const char marker[] = "/private/var/ngpu/ls-store-rebuilt-1";
+	static const char caches[] = "/private/var/mobile/Containers/Data/InternalDaemon/5C583048-0C53-456F-B110-BB12068B787F/Library/Caches";
+	static const char prefix[] = "com.apple.LaunchServices-";
+	vfs_context_t ctx = vfs_context_current();
+	vnode_t vp = NULLVP;
+	if (!vnode_lookup(marker, 0, &vp, ctx)) {
+		vnode_put(vp);
+		native_ls_store_status = -2;
+		return;
+	}
+	int error = vnode_lookup(caches, 0, &vp, ctx);
+	if (error) {
+		native_ls_store_status = -error;
+		return;
+	}
+	char names[8][64];
+	unsigned found = 0;
+	char *buffer = kalloc_data(4096, Z_WAITOK);
+	uio_t uio = buffer ? uio_create(1, 0, UIO_SYSSPACE, UIO_READ) : NULL;
+	int eof = 0;
+	while (uio && !eof && found < 8) {
+		uio_reset(uio, uio_offset(uio), UIO_SYSSPACE, UIO_READ);
+		uio_addiov(uio, CAST_USER_ADDR_T(buffer), 4096);
+		int entries = 0;
+		if ((error = VNOP_READDIR(vp, uio, 0, &eof, &entries, ctx))) {
+			break;
+		}
+		const size_t used = 4096 - (size_t)uio_resid(uio);
+		if (!used) {
+			break;
+		}
+		for (size_t at = 0; at + sizeof(struct dirent) - sizeof(((struct dirent *)0)->d_name) <= used && found < 8;) {
+			const struct dirent *entry = (const struct dirent *)(buffer + at);
+			if (!entry->d_reclen) {
+				break;
+			}
+			if (entry->d_namlen < sizeof(names[0]) && !strncmp(entry->d_name, prefix, sizeof(prefix) - 1)) {
+				memcpy(names[found], entry->d_name, entry->d_namlen);
+				names[found++][entry->d_namlen] = 0;
+			}
+			at += entry->d_reclen;
+		}
+	}
+	if (uio) {
+		uio_free(uio);
+	}
+	if (buffer) {
+		kfree_data(buffer, 4096);
+	}
+	vnode_put(vp);
+	if (error) {
+		native_ls_store_status = -error;
+		return;
+	}
+	int removed = 0;
+	char path[192];
+	for (unsigned i = 0; i < found; ++i) {
+		snprintf(path, sizeof(path), "%s/%s", caches, names[i]);
+		struct unlink_args request = {.path = scratch + 0xc00};
+		int32_t result = 0;
+		if (!copyout(path, request.path, strlen(path) + 1) && !unlink(p, &request, &result)) {
+			removed++;
+		}
+	}
+	(void)native_gpu_addon_write(marker, (const uint8_t *)"1\n", 2, 0644, ctx);
+	native_ls_store_status = removed;
+}
+static void
+native_gpu_addon_prepare(proc_t p, user_addr_t scratch)
+{
+	uint32_t enabled = 0;
+	if (!PE_parse_boot_argn("sheng-gpu-addon", &enabled, sizeof(enabled)) || enabled != 1) {
+		return;
+	}
+	native_gpu_addon_install(p, scratch);
+	static const char extensions_source[] = "/private/var/ngpu/addons", extensions_point[] = "/System/Library/Extensions";
+	static const char daemons_source[] = "/private/var/ngpu/daemons", daemons_point[] = "/System/Library/LaunchDaemons";
+	native_gpu_addon_mount(p, scratch, 0x400, extensions_source, sizeof(extensions_source), extensions_point,
+	    sizeof(extensions_point), "/System/Library/Extensions/AGXMetalA10.bundle",
+	    "/System/Library/Extensions/NativeAdrenoMetal.bundle/Info.plist", &native_gpu_addon_stage,
+	    &native_gpu_addon_status);
+	native_gpu_addon_mount(p, scratch, 0x600, daemons_source, sizeof(daemons_source), daemons_point, sizeof(daemons_point),
+	    "/System/Library/LaunchDaemons/com.apple.backboardd.plist",
+	    "/System/Library/LaunchDaemons/org.blu-sharky.adrenoprobed.plist", &native_gpu_addon2_stage, &native_gpu_addon2_status);
+	/* The default iPadOS 17 wallpaper's layered animation with PNG images in place of its HEIC ones (no hardware HEVC decoder here).
+	 * The overlay carries the animation's documents and the PNG images; the sealed assets directory stays visible below it. */
+	static const char wallpaper_source[] = "/private/var/ngpu/wallpaper",
+	    wallpaper_point[] = "/Library/Wallpaper/Collections/iPadOS_17~ipad.wallpaperCollection/Wallpapers/"
+	    "7570.iPadOS_17_Flat-1024w-1366h@2x~ipad.wallpaper/7570.iPadOS_17_Flat_Background-1024w-1366h@2x~ipad.ca";
+	native_gpu_addon_mount(p, scratch, 0x800, wallpaper_source, sizeof(wallpaper_source), wallpaper_point, sizeof(wallpaper_point),
+	    "/Library/Wallpaper/Collections/iPadOS_17~ipad.wallpaperCollection/Wallpapers/7570.iPadOS_17_Flat-1024w-1366h@2x~ipad.wallpaper/"
+	    "7570.iPadOS_17_Flat_Background-1024w-1366h@2x~ipad.ca/assets/J120.HEIC",
+	    "/Library/Wallpaper/Collections/iPadOS_17~ipad.wallpaperCollection/Wallpapers/7570.iPadOS_17_Flat-1024w-1366h@2x~ipad.wallpaper/"
+	    "7570.iPadOS_17_Flat_Background-1024w-1366h@2x~ipad.ca/J120.png", &native_gpu_addon3_stage, &native_gpu_addon3_status);
+	native_cryptex_os_view(p, scratch);
+	native_gestalt_cache_drop(p, scratch);
+	native_ls_store_drop(p, scratch);
+}
+
+/* The deletable system apps (Weather, Notes, Calendar, ...) ship in the OS volume's /private/var/staged_system_apps. A restore copies
+ * them into the Data volume, where SystemAppMigrator installs them during the first-boot data migration; until then only the
+ * placeholders in /System/Library/AppPlaceholders exist and the widgets of those apps stay blank. The owner Data mount hides the OS
+ * directory, so with boot-arg sheng-staged-apps=1 it is copied once, through the vnode the Data mount covers, into Data's
+ * /private/var/staged_system_apps before launchd starts. /private/var/db/.sheng-staged-apps marks a complete copy. Directories and
+ * regular files only (the 21H461 set has nothing else), owned by mobile (uid and gid 501): installcoordinationd and the migration plugin,
+ * which move and remove them, run as mobile.
+ * Counters for the boot log: stage (1 copying, 2 copied, 3 copied before, -1 no
+ * source, -2 out of memory), directories, files, MiB, failures and the last error. */
+#include <sys/dirent.h>
+volatile int native_staged_apps_stage = 0;
+volatile int native_staged_apps_dirs = 0;
+volatile int native_staged_apps_files = 0;
+volatile int native_staged_apps_mib = 0;
+volatile int native_staged_apps_failed = 0;
+volatile int native_staged_apps_error = 0;
+static uint64_t native_staged_apps_bytes;
+char native_staged_apps_path[96];   /* the file being copied, for the boot log */
+static const char native_staged_apps_marker[] = "/private/var/db/.sheng-staged-apps";
+#define NATIVE_STAGED_APPS_OWNER 501
+static void
+native_staged_apps_fail(int error)
+{
+	native_staged_apps_failed++;
+	native_staged_apps_error = error;
+}
+static int
+native_staged_apps_mkdir(proc_t p, user_addr_t scratch, const char *path)
+{
+	/* The scratch is one 4 KiB page; the mount arguments above end below 0xa00. */
+	struct mkdir_args request = {.path = scratch + 0xa00, .mode = 0755};
+	int32_t result = 0;
+	int error = copyout(path, request.path, strlen(path) + 1);
+	if (!error) {
+		error = mkdir(p, &request, &result);
+	}
+	if (error && error != EEXIST) {
+		return error;
+	}
+	vnode_t vp = NULLVP;
+	error = vnode_lookup(path, VNODE_LOOKUP_NOFOLLOW, &vp, vfs_context_current());
+	if (!error) {
+		struct vnode_attr va;
+		VATTR_INIT(&va);
+		VATTR_SET(&va, va_uid, NATIVE_STAGED_APPS_OWNER);
+		VATTR_SET(&va, va_gid, NATIVE_STAGED_APPS_OWNER);
+		error = vnode_setattr(vp, &va, vfs_context_current());
+		vnode_put(vp);
+	}
+	return error;
+}
+/* Reads to the end of the source rather than trusting a size: most of these files are compressed on the OS volume. */
+static int
+native_staged_apps_file(vnode_t source, const char *path, int mode, uint8_t *buffer, uint32_t chunk, vfs_context_t ctx)
+{
+	int error = VNOP_OPEN(source, FREAD, ctx);
+	if (error) {
+		return error;
+	}
+	vnode_t vp = NULLVP;
+	size_t length = strlen(path);
+	strlcpy(native_staged_apps_path, path + (length > sizeof(native_staged_apps_path) - 1 ? length - (sizeof(native_staged_apps_path) - 1) : 0),
+	    sizeof(native_staged_apps_path));
+	error = vnode_open(path, O_CREAT | O_TRUNC | FWRITE | O_NOFOLLOW, mode, 0, &vp, ctx);
+	for (off_t at = 0; !error;) {
+		int resid = 0;
+		error = vn_rdwr(UIO_READ, source, (caddr_t)buffer, (int)chunk, at, UIO_SYSSPACE, IO_NOAUTH, vfs_context_ucred(ctx), &resid,
+		    vfs_context_proc(ctx));
+		int length = (int)chunk - resid;
+		if (error || !length) {
+			break;
+		}
+		error = vn_rdwr(UIO_WRITE, vp, (caddr_t)buffer, length, at, UIO_SYSSPACE, IO_NOAUTH | IO_UNIT, vfs_context_ucred(ctx), &resid,
+		    vfs_context_proc(ctx));
+		if (!error && resid) {
+			error = EIO;
+		}
+		at += length;
+		native_staged_apps_bytes += (uint64_t)length;
+	}
+	if (vp) {
+		if (!error) {
+			struct vnode_attr va;
+			VATTR_INIT(&va);
+			VATTR_SET(&va, va_mode, mode);
+			VATTR_SET(&va, va_uid, NATIVE_STAGED_APPS_OWNER);
+			VATTR_SET(&va, va_gid, NATIVE_STAGED_APPS_OWNER);
+			error = vnode_setattr(vp, &va, ctx);
+		}
+		/* Each file goes to the medium before the next: without it the copy piled up dirty pages until it stalled (int-220). */
+		if (!error) {
+			error = VNOP_FSYNC(vp, MNT_WAIT, ctx);
+		}
+		int close_error = vnode_close(vp, FWRITE, ctx);
+		if (!error) {
+			error = close_error;
+		}
+	}
+	VNOP_CLOSE(source, FREAD, ctx);
+	return error;
+}
+/* Directories still to copy, as paths relative to the staged directory: the walk is iterative, because APFS operations need much of the
+ * kernel stack and a recursion as deep as the app bundles overflowed it (int-221). */
+struct native_staged_apps_pending {
+	char *pool;
+	uint32_t *at;
+	uint32_t used, count;
+};
+#define NATIVE_STAGED_APPS_POOL (2 * 1024 * 1024)
+#define NATIVE_STAGED_APPS_DIRS 16384
+/* Copies the entries of DIR into the Data directory PATH (appending each name to PATH and cutting it off again) and queues its
+ * subdirectories, whose source-relative paths start at REL inside PATH. */
+static void
+native_staged_apps_dir(proc_t p, user_addr_t scratch, vnode_t dir, char *path, size_t path_size, size_t rel,
+    struct native_staged_apps_pending *pending, uint8_t *entries, uint32_t entries_size, uint8_t *buffer, uint32_t chunk, vfs_context_t ctx)
+{
+	size_t base = strlen(path);
+	int error = VNOP_OPEN(dir, FREAD, ctx);
+	if (error) {
+		native_staged_apps_fail(error);
+		return;
+	}
+	off_t offset = 0;
+	for (int eof = 0; !error && !eof;) {
+		uio_t uio = uio_create(1, offset, UIO_SYSSPACE, UIO_READ);
+		if (!uio) {
+			error = ENOMEM;
+			break;
+		}
+		uio_addiov(uio, CAST_USER_ADDR_T(entries), entries_size);
+		int count = 0;
+		error = vnode_readdir64(dir, uio, VNODE_READDIR_EXTENDED, &eof, &count, ctx);
+		uint32_t filled = entries_size - (uint32_t)uio_resid(uio);
+		offset = uio_offset(uio);
+		uio_free(uio);
+		if (error || !filled) {
+			break;
+		}
+		for (uint32_t at = 0; at + offsetof(struct direntry, d_name) < filled;) {
+			struct direntry *entry = (struct direntry *)(entries + at);
+			if (!entry->d_reclen || at + entry->d_reclen > filled) {
+				error = EINVAL;
+				break;
+			}
+			at += entry->d_reclen;
+			const char *name = entry->d_name;
+			if (!entry->d_ino || !strcmp(name, ".") || !strcmp(name, "..")) {
+				continue;
+			}
+			if (base + 1 + strlen(name) >= path_size) {
+				native_staged_apps_fail(ENAMETOOLONG);
+				continue;
+			}
+			path[base] = '/';
+			strlcpy(path + base + 1, name, path_size - base - 1);
+			vnode_t child = NULLVP;
+			int child_error = vnode_lookupat(name, VNODE_LOOKUP_NOFOLLOW | VNODE_LOOKUP_NOCROSSMOUNT, &child, ctx, dir);
+			if (!child_error) {
+				struct vnode_attr va;
+				VATTR_INIT(&va);
+				VATTR_WANTED(&va, va_mode);
+				child_error = vnode_getattr(child, &va, ctx);
+				int mode = VATTR_IS_SUPPORTED(&va, va_mode) ? (int)(va.va_mode & 0777) : 0644;
+				if (child_error) {
+				} else if (vnode_vtype(child) == VDIR) {
+					child_error = native_staged_apps_mkdir(p, scratch, path);
+					size_t length = strlen(path + rel) + 1;
+					if (!child_error && (pending->count == NATIVE_STAGED_APPS_DIRS || NATIVE_STAGED_APPS_POOL - pending->used < length)) {
+						child_error = ENOSPC;
+					}
+					if (!child_error) {
+						memcpy(pending->pool + pending->used, path + rel, length);
+						pending->at[pending->count++] = pending->used;
+						pending->used += (uint32_t)length;
+						native_staged_apps_dirs++;
+					}
+				} else if (vnode_vtype(child) == VREG) {
+					child_error = native_staged_apps_file(child, path, mode, buffer, chunk, ctx);
+					if (!child_error) {
+						native_staged_apps_files++;
+						native_staged_apps_mib = (int)(native_staged_apps_bytes >> 20);
+					}
+				} else {
+					child_error = ENOTSUP;
+				}
+				vnode_put(child);
+			}
+			if (child_error) {
+				native_staged_apps_fail(child_error);
+			}
+			path[base] = '\0';
+		}
+	}
+	if (error) {
+		native_staged_apps_fail(error);
+	}
+	VNOP_CLOSE(dir, FREAD, ctx);
+}
+/* Copies the tree below SOURCE into the Data directory PATH, which exists. */
+static void
+native_staged_apps_walk(proc_t p, user_addr_t scratch, vnode_t source, char *path, size_t path_size, uint8_t *buffer, uint32_t chunk,
+    vfs_context_t ctx)
+{
+	const uint32_t entries_size = 8192;
+	struct native_staged_apps_pending pending = {
+		.pool = kalloc_data(NATIVE_STAGED_APPS_POOL, Z_WAITOK),
+		.at = kalloc_data(NATIVE_STAGED_APPS_DIRS * sizeof(uint32_t), Z_WAITOK),
+	};
+	uint8_t *entries = kalloc_data(entries_size, Z_WAITOK);
+	size_t root = strlen(path);
+	if (pending.pool && pending.at && entries) {
+		native_staged_apps_dir(p, scratch, source, path, path_size, root + 1, &pending, entries, entries_size, buffer, chunk, ctx);
+		while (pending.count) {
+			const char *rel = pending.pool + pending.at[--pending.count];
+			if (root + 1 + strlen(rel) >= path_size) {
+				native_staged_apps_fail(ENAMETOOLONG);
+				continue;
+			}
+			path[root] = '/';
+			strlcpy(path + root + 1, rel, path_size - root - 1);
+			vnode_t dir = NULLVP;
+			int error = vnode_lookupat(rel, VNODE_LOOKUP_NOFOLLOW | VNODE_LOOKUP_NOCROSSMOUNT, &dir, ctx, source);
+			if (!error) {
+				native_staged_apps_dir(p, scratch, dir, path, path_size, root + 1, &pending, entries, entries_size, buffer, chunk, ctx);
+				vnode_put(dir);
+			} else {
+				native_staged_apps_fail(error);
+			}
+			path[root] = '\0';
+		}
+	} else {
+		native_staged_apps_fail(ENOMEM);
+	}
+	if (entries) {
+		kfree_data(entries, entries_size);
+	}
+	if (pending.at) {
+		kfree_data(pending.at, NATIVE_STAGED_APPS_DIRS * sizeof(uint32_t));
+	}
+	if (pending.pool) {
+		kfree_data(pending.pool, NATIVE_STAGED_APPS_POOL);
+	}
+}
+static void
+native_staged_apps_prepare(proc_t p, user_addr_t scratch, mount_t data_mount)
+{
+	uint32_t enabled = 0;
+	if (!PE_parse_boot_argn("sheng-staged-apps", &enabled, sizeof(enabled)) || enabled != 1) {
+		return;
+	}
+	vfs_context_t ctx = vfs_context_current();
+	vnode_t vp = NULLVP, covered = data_mount->mnt_vnodecovered;
+	if (!vnode_lookup(native_staged_apps_marker, VNODE_LOOKUP_NOFOLLOW, &vp, ctx)) {
+		vnode_put(vp);
+		native_staged_apps_stage = 3;
+		return;
+	}
+	int error = covered ? vnode_getwithref(covered) : ENOENT;
+	if (!error) {
+		error = vnode_lookupat("staged_system_apps", VNODE_LOOKUP_NOFOLLOW | VNODE_LOOKUP_NOCROSSMOUNT, &vp, ctx, covered);
+		vnode_put(covered);
+	}
+	if (!error && vnode_vtype(vp) != VDIR) {
+		vnode_put(vp);
+		error = ENOTDIR;
+	}
+	if (error) {
+		native_staged_apps_error = error;
+		native_staged_apps_stage = -1;
+		return;
+	}
+	const uint32_t chunk = 1024 * 1024;
+	uint8_t *buffer = kalloc_data(chunk, Z_WAITOK);
+	char *path = kalloc_data(MAXPATHLEN, Z_WAITOK);
+	if (buffer && path) {
+		native_staged_apps_stage = 1;
+		strlcpy(path, "/private/var/staged_system_apps", MAXPATHLEN);
+		error = native_staged_apps_mkdir(p, scratch, path);
+		if (error) {
+			native_staged_apps_fail(error);
+		} else {
+			native_staged_apps_walk(p, scratch, vp, path, MAXPATHLEN, buffer, chunk, ctx);
+		}
+		if (!native_staged_apps_failed) {
+			vnode_t marker = NULLVP;
+			error = vnode_open(native_staged_apps_marker, O_CREAT | O_TRUNC | FWRITE | O_NOFOLLOW, 0644, 0, &marker, ctx);
+			if (!error) {
+				error = vnode_close(marker, FWRITE, ctx);
+			}
+			if (error) {
+				native_staged_apps_fail(error);
+			} else {
+				native_staged_apps_stage = 2;
+			}
+		}
+	} else {
+		native_staged_apps_stage = -2;
+	}
+	if (buffer) {
+		kfree_data(buffer, chunk);
+	}
+	if (path) {
+		kfree_data(path, MAXPATHLEN);
+	}
+	vnode_put(vp);
+}
+
+static int
+native_owner_data_prepare(proc_t p, user_addr_t scratch)
+{
+	uint64_t base = 0, size = 0;
+	dev_t device = NODEV;
+	int error = EINVAL;
+	vnode_t data_root = NULLVP;
+	char device_path[64] = "/dev/md0";
+#if defined(XNU_NATIVE_RAM_BLOCK) && XNU_NATIVE_RAM_BLOCK
+	/* The typed provider supplies logical seed identity for both dense and
+	 * sparse media. A sparse disk has no contiguous logical-byte address. */
+	if (!native_ram_block_volume_seed(XNU_OWNER_DATA_VOLUME_UUID, &device, device_path,
+	    sizeof(device_path), &base, &size, native_owner_data_seed_sha256)) { error = ENOENT; goto done; }
+	/* The typed provider's disk may be far larger than 2 GiB (a persistent Data disk keeps only its seed's nonzero pages). */
+	if (!size || size > UINT64_C(0x10000000000) || (size & 4095)) goto done;
+#else
+	device = mdevlookup(0);
+	if (device == NODEV || mdevgetrange(0, &base, &size) || base < VM_MIN_KERNEL_ADDRESS ||
+	    !size || size > UINT64_C(0x80000000) || (base & 4095) || (size & 4095)) goto done;
+	SHA256_CTX context;
+	SHA256_Init(&context);
+	SHA256_Update(&context, (const void *)base, size);
+	SHA256_Final(native_owner_data_seed_sha256, &context);
+#endif
+	native_owner_data_seed_base = base;
+	native_owner_data_seed_size = size;
+	native_owner_data_stage = 1;
+	strlcpy(native_owner_data_device_path, device_path, sizeof(native_owner_data_device_path));
+	uint8_t payload[0x150] = {0};
+	user64_addr_t spec = scratch + 0x160;
+	uint16_t mode = 1;
+	uint32_t anonymous_owner = 99;
+	memcpy(payload, &spec, sizeof(spec));
+	memcpy(payload + 16, &mode, sizeof(mode));
+	memcpy(payload + 0x144, &anonymous_owner, sizeof(anonymous_owner));
+	memcpy(payload + 0x148, &anonymous_owner, sizeof(anonymous_owner));
+	struct mount_args request = {.type = scratch + 0x100, .path = scratch + 0x120,
+	    .flags = 0, .data = scratch + 0x200};
+	int32_t result = 0;
+	if ((error = copyout("apfs", request.type, 5)) ||
+	    (error = copyout("/private/var", request.path, 13)) ||
+	    (error = copyout(device_path, spec, strlen(device_path) + 1)) ||
+	    (error = copyout(payload, request.data, sizeof(payload)))) goto done;
+	native_owner_data_stage = 2;
+	error = mount(p, &request, &result);
+	if (error) goto done;
+	native_owner_data_stage = 3;
+	error = vnode_lookup("/private/var", 0, &data_root, vfs_context_current());
+	if (error) goto done;
+	mount_t data_mount = vnode_mount(data_root);
+	vnode_t device_node = vfs_devvp(data_mount);
+	dev_t actual = device_node ? vnode_specrdev(device_node) : NODEV;
+	if (device_node) vnode_put(device_node);
+	native_owner_data_device = actual;
+	native_owner_data_readonly = (vfs_flags(data_mount) & MNT_RDONLY) != 0;
+	if (actual != device || (vfs_flags(data_mount) & MNT_RDONLY) ||
+	    strcmp(vfs_statfs(data_mount)->f_fstypename, "apfs")) error = EINVAL;
+	if (!error) native_owner_data_stage = 4;
+	if (!error) native_gpu_addon_prepare(p, scratch);
+	if (!error) native_staged_apps_prepare(p, scratch, data_mount);
+done:
+	if (data_root) vnode_put(data_root);
+	native_owner_data_status = error;
+	return error;
+}
+#endif
+
+static int
+load_init_program_at_path(proc_t p, user_addr_t scratch_addr, const char* path, user_addr_t envp)
 {
 	int retval[2];
 	int error;
@@ -8013,7 +9045,7 @@ load_init_program_at_path(proc_t p, user_addr_t scratch_addr, const char* path)
 	 */
 	init_exec_args.fname = argv0;
 	init_exec_args.argp = scratch_addr;
-	init_exec_args.envp = USER_ADDR_NULL;
+	init_exec_args.envp = envp;
 
 	/*
 	 * So that init task is set with uid,gid 0 token
@@ -8081,9 +9113,29 @@ load_init_program(proc_t p)
 
 	(void) mach_vm_allocate_kernel(map, &scratch_addr, map_page_size,
 	    VM_MAP_KERNEL_FLAGS_ANYWHERE());
+	user_addr_t init_envp = USER_ADDR_NULL;
+#if defined(XNU_OWNER_CACHE_MOUNT) && XNU_OWNER_CACHE_MOUNT
+	int cache_error = native_owner_cache_prepare(p, (user_addr_t)scratch_addr, &init_envp);
+	if (cache_error) panic("offline owner SystemOS mount failed: %d", cache_error);
+#endif
+#if defined(XNU_OWNER_DATA_MOUNT) && XNU_OWNER_DATA_MOUNT
+	int data_error = native_owner_data_prepare(p, (user_addr_t)scratch_addr);
+	if (data_error) panic("offline scratch Data mount failed: %d", data_error);
+#endif
 #if CONFIG_MEMORYSTATUS
 	(void) memorystatus_init_at_boot_snapshot();
 #endif /* CONFIG_MEMORYSTATUS */
+
+#if (DEBUG || DEVELOPMENT) && defined(XNU_NATIVE_AIR_INIT) && XNU_NATIVE_AIR_INIT
+	int offline_air = 0;
+	if (PE_parse_boot_argn("offline-air-init", &offline_air, sizeof(offline_air)) && offline_air) {
+		if (offline_air != 1) panic("offline AIR init invalid selector");
+		error = load_init_program_at_path(p, (user_addr_t)scratch_addr,
+		    "/private/var/tmp/air-native", init_envp);
+		if (error) panic("offline signed AIR instrument exec failed: %d", error);
+		return;
+	}
+#endif
 
 #if DEBUG || DEVELOPMENT
 	/* Check for boot-arg suffix first */
@@ -8095,7 +9147,7 @@ load_init_program(proc_t p)
 
 		if (is_release_suffix) {
 			printf("load_init_program: attempting to load /sbin/launchd\n");
-			error = load_init_program_at_path(p, (user_addr_t)scratch_addr, "/sbin/launchd");
+			error = load_init_program_at_path(p, (user_addr_t)scratch_addr, "/sbin/launchd", init_envp);
 			if (!error) {
 				return;
 			}
@@ -8106,7 +9158,7 @@ load_init_program(proc_t p)
 			strlcat(launchd_path, launchd_suffix, sizeof(launchd_path));
 
 			printf("load_init_program: attempting to load %s\n", launchd_path);
-			error = load_init_program_at_path(p, (user_addr_t)scratch_addr, launchd_path);
+			error = load_init_program_at_path(p, (user_addr_t)scratch_addr, launchd_path, init_envp);
 			if (!error) {
 				return;
 			} else if (error != ENOENT) {
@@ -8119,7 +9171,7 @@ load_init_program(proc_t p)
 	error = ENOENT;
 	for (i = 0; i < sizeof(init_programs) / sizeof(init_programs[0]); i++) {
 		printf("load_init_program: attempting to load %s\n", init_programs[i]);
-		error = load_init_program_at_path(p, (user_addr_t)scratch_addr, init_programs[i]);
+		error = load_init_program_at_path(p, (user_addr_t)scratch_addr, init_programs[i], init_envp);
 		if (!error) {
 			return;
 		} else if (error != ENOENT) {

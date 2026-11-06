@@ -4101,6 +4101,7 @@ is_io_registry_entry_get_property_bin(
 }
 
 
+static bool native_sandbox_grant(IOService * service);
 /* Routine io_registry_entry_set_properties */
 kern_return_t
 is_io_registry_entry_set_properties
@@ -4136,7 +4137,10 @@ is_io_registry_entry_set_properties
 			res = kIOReturnBadArgument;
 		}
 #if CONFIG_MACF
-		else if (0 != mac_iokit_check_set_properties(kauth_cred_get(),
+		/* A service's grant (native_sandbox_grant) stands in for the sandbox's verdict on setting its properties as well: backboardd's
+		 * profile refuses FadePeriod, which CoreBrightness sends with every brightness, on the panel backlight (int-276). */
+		else if (!(OSDynamicCast(IOService, entry) && native_sandbox_grant(OSDynamicCast(IOService, entry)))
+		    && 0 != mac_iokit_check_set_properties(kauth_cred_get(),
 		    registry_entry, obj)) {
 			res = kIOReturnNotPermitted;
 		}
@@ -4373,6 +4377,36 @@ is_io_service_set_authorization_id(
 }
 
 /* Routine io_service_open_ndr */
+/*
+ * The native GPU driver names, by the property NativeSandboxGrantProcess on its accelerator service, the processes (a comma-separated list of
+ * process names, the render server and the other processes that run its Metal plugin) to which it grants its own user client in place of the
+ * sandbox's verdict: the original profiles name no class of that driver. Nothing else is affected.
+ */
+extern "C" void proc_selfname(char * buf, int size);
+static bool
+native_sandbox_grant(IOService * service)
+{
+	OSString * list = OSDynamicCast(OSString, service->getProperty("NativeSandboxGrantProcess"));
+	char name[17] = {};
+	if (!list) {
+		return false;
+	}
+	proc_selfname(name, sizeof(name));
+	for (const char * at = list->getCStringNoCopy(); *at;) {
+		size_t length = 0;
+		while (at[length] && at[length] != ',') {
+			++length;
+		}
+		/* A process name holds 16 characters, so a longer entry is compared by its first 16. */
+		if (length && 0 == strncmp(name, at, length < sizeof(name) - 1 ? length : sizeof(name) - 1)
+		    && (length >= sizeof(name) - 1 || name[length] == 0)) {
+			return true;
+		}
+		at += length + (at[length] == ',' ? 1 : 0);
+	}
+	return false;
+}
+
 kern_return_t
 is_io_service_open_extended(
 	io_object_t _service,
@@ -4401,7 +4435,7 @@ is_io_service_open_extended(
 	}
 
 #if CONFIG_MACF
-	if (mac_iokit_check_open_service(kauth_cred_get(), service, connect_type) != 0) {
+	if (!native_sandbox_grant(service) && mac_iokit_check_open_service(kauth_cred_get(), service, connect_type) != 0) {
 		return kIOReturnNotPermitted;
 	}
 #endif
@@ -4560,7 +4594,9 @@ is_io_service_open_extended(
 				res = kIOReturnNotPrivileged;
 			}
 #if CONFIG_MACF
-			else if (0 != mac_iokit_check_open(kauth_cred_get(), client, connect_type)) {
+			/* The service's grant (native_sandbox_grant) stands in for the sandbox's verdict on the render server's open. */
+			else if (!native_sandbox_grant(service)
+			    && 0 != mac_iokit_check_open(kauth_cred_get(), client, connect_type)) {
 				IOLog("IOUC %s failed MACF in process %s\n",
 				    client->getMetaClass()->getClassName(), creatorNameCStr);
 				res = kIOReturnNotPermitted;
@@ -4568,6 +4604,7 @@ is_io_service_open_extended(
 #endif
 
 			if ((kIOReturnSuccess == res)
+			    && !native_sandbox_grant(service)
 			    && gIOUCFilterCallbacks
 			    && gIOUCFilterCallbacks->io_filter_resolver) {
 				io_filter_policy_t filterPolicy;
@@ -6850,3 +6887,66 @@ OSMetaClassDefineReservedUnused(IOUserClient2022, 0);
 OSMetaClassDefineReservedUnused(IOUserClient2022, 1);
 OSMetaClassDefineReservedUnused(IOUserClient2022, 2);
 OSMetaClassDefineReservedUnused(IOUserClient2022, 3);
+
+#if DEVELOPMENT || DEBUG
+extern "C" {
+volatile uint32_t native_mobile_graphics_abstract_null_mask;
+volatile uint64_t native_mobile_graphics_client_object;
+volatile uint64_t native_mobile_graphics_client_vptr;
+volatile uint64_t native_mobile_graphics_client_meta;
+volatile uint32_t native_mobile_graphics_client_size;
+volatile int native_mobile_graphics_client_init = -1;
+volatile uint32_t native_mobile_graphics_client_results[3] = {~0U, ~0U, ~0U};
+volatile int native_mobile_graphics_client_released;
+
+__attribute__((noinline)) void
+native_mobile_graphics_client_checkpoint(void)
+{
+	__asm__ volatile("" ::: "memory");
+}
+
+void
+native_mobile_graphics_client_probe(void)
+{
+	const char *abstract_names[] = {"IOMobileFramebuffer", "IOMobileFramebufferService", "IOMobileFramebufferLegacy"};
+	for (unsigned i = 0; i < 3; i++) {
+		OSObject *object = OSMetaClass::allocClassWithName(abstract_names[i]);
+		if (!object) {
+			native_mobile_graphics_abstract_null_mask |= 1U << i;
+		} else {
+			object->release();
+		}
+	}
+	OSObject *object = OSMetaClass::allocClassWithName("IOMobileFramebufferUserClient");
+	IOUserClient *client = OSDynamicCast(IOUserClient, object);
+	if (client) {
+		native_mobile_graphics_client_object = (uintptr_t)client;
+		native_mobile_graphics_client_vptr = *(const uintptr_t *)client;
+		native_mobile_graphics_client_meta = (uintptr_t)client->getMetaClass();
+		native_mobile_graphics_client_size = client->getMetaClass()->getClassSize();
+		native_mobile_graphics_client_init = client->init();
+		if (native_mobile_graphics_client_init) {
+			IOExternalMethodArguments arguments = {};
+			const uint32_t selectors[] = {90, 0x80000000U, ~0U};
+			for (unsigned i = 0; i < 3; i++) {
+				arguments.selector = selectors[i];
+				native_mobile_graphics_client_results[i] = client->externalMethod(selectors[i], &arguments, NULL, NULL, NULL);
+			}
+		}
+	}
+	if (object) {
+		object->release();
+		native_mobile_graphics_client_released = 1;
+	}
+	native_mobile_graphics_client_checkpoint();
+#if defined(XNU_NATIVE_MOBILE_DISPLAY) && XNU_NATIVE_MOBILE_DISPLAY
+	extern void native_mobile_display_provider_probe(void);
+	native_mobile_display_provider_probe();
+#endif
+#if defined(XNU_NATIVE_LEGACY_DISPLAY) && XNU_NATIVE_LEGACY_DISPLAY
+	extern void native_legacy_display_probe(void);
+	native_legacy_display_probe();
+#endif
+}
+}
+#endif

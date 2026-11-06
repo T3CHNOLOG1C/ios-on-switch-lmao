@@ -787,11 +787,15 @@ vm_shared_region_create(
 			csm_setup_nested_address_space(nested_pmap, base_address, size);
 #endif /* CODE_SIGNING_MONITOR */
 			int vm_map_pageshift = PAGE_SHIFT;
+#if !defined(APPLE_ARM64_ARCH_FAMILY) && !__ARM_16K_PG__
+			vm_map_pageshift = FOURK_PAGE_SHIFT;
+#else
 			if (is_64bit ||
 			    page_shift_user32 == SIXTEENK_PAGE_SHIFT) {
 				/* enforce 16KB alignment of VM map entries */
 				vm_map_pageshift = SIXTEENK_PAGE_SHIFT;
 			}
+#endif
 #if __ARM_MIXED_PAGE_SIZE__
 			if (cputype == CPU_TYPE_ARM64 &&
 			    target_page_shift == FOURK_PAGE_SHIFT) {
@@ -3582,6 +3586,97 @@ vm_shared_region_slide_page_v5(
 }
 
 
+
+#if !defined(APPLE_ARM64_ARCH_FAMILY) && !__ARM_16K_PG__
+/*
+ * A 4 KiB kernel pages a 16 KiB v5 slide page in four parts, each on its own. vaddr holds part `part` of the page and uservaddr is
+ * its user address; start is the offset (in the 16 KiB page) of the first rebase in this part. *next receives the offset of the
+ * first rebase after this part, or VM_SR_PART_NONE when the chain ends here. With apply false the chain is only followed (a source
+ * copy of an earlier part, to find where the chain enters a later one).
+ */
+kern_return_t
+vm_shared_region_slide_part_v5(
+	vm_shared_region_slide_info_t si,
+	vm_offset_t vaddr,
+	__unused mach_vm_offset_t uservaddr,
+	uint32_t part,
+	uint32_t start,
+	bool apply,
+	uint32_t *next,
+#if !__has_feature(ptrauth_calls)
+	__unused
+#endif /* !__has_feature(ptrauth_calls) */
+	uint64_t jop_key)
+{
+	vm_shared_region_slide_info_entry_v5_t s_info = &si->si_slide_info_entry->v5;
+	const uint32_t slide_amount = si->si_slide;
+	const uint64_t value_add = s_info->value_add;
+	const uint32_t part_start = part * PAGE_SIZE;
+	uint8_t *page_content = (uint8_t *)vaddr;
+
+	*next = VM_SR_PART_NONE;
+	if (start < part_start || start >= part_start + PAGE_SIZE || (start & 7)) {
+		return KERN_FAILURE;
+	}
+	uint32_t location = start;
+	for (;;) {
+		uint8_t *rebaseLocation = page_content + (location - part_start);
+		uint64_t value;
+		memcpy(&value, rebaseLocation, sizeof(value));
+		const uint64_t delta = ((value & 0x7FF0000000000000ULL) >> 52) * sizeof(uint64_t);
+
+		if (apply) {
+			/* The pointer formats and their rebase are those of vm_shared_region_slide_page_v5(). */
+#if __has_feature(ptrauth_calls)
+			bool        addrDiv = ((value & (1ULL << 50)) != 0);
+			bool        keyIsData = ((value & (1ULL << 51)) != 0);
+			ptrauth_key key = keyIsData ? ptrauth_key_asda : ptrauth_key_asia;
+			uint16_t    diversity = (uint16_t)((value >> 34) & 0xFFFF);
+#endif /* __has_feature(ptrauth_calls) */
+			uint64_t    high8 = (value << 22) & 0xFF00000000000000ULL;
+			bool        isAuthenticated = (value & (1ULL << 63)) != 0;
+
+			value = (value & 0x3FFFFFFFFULL) + value_add + slide_amount;
+			if (isAuthenticated) {
+#if __has_feature(ptrauth_calls)
+				uint64_t discriminator = diversity;
+				if (addrDiv) {
+					uintptr_t pageOffset = rebaseLocation - page_content;
+					discriminator = __builtin_ptrauth_blend_discriminator((void*)(((uintptr_t)uservaddr) + pageOffset), discriminator);
+				}
+				if (jop_key != 0 && si->si_ptrauth && !arm_user_jop_disabled()) {
+#if CONFIG_SPTM
+					pmap_batch_sign_user_ptr(rebaseLocation, (void *)value, key, discriminator, jop_key);
+#else /* CONFIG_SPTM */
+					value = (uintptr_t)pmap_sign_user_ptr((void *)value, key, discriminator, jop_key);
+					memcpy(rebaseLocation, &value, sizeof(value));
+#endif /* CONFIG_SPTM */
+				} else {
+					memcpy(rebaseLocation, &value, sizeof(value));
+				}
+#endif /* __has_feature(ptrauth_calls) */
+			} else {
+				value += high8;
+				memcpy(rebaseLocation, &value, sizeof(value));
+			}
+		}
+		if (delta == 0) {
+			break;
+		}
+		location += (uint32_t)delta;
+		if (location >= part_start + PAGE_SIZE) {
+			*next = location < s_info->page_size ? location : VM_SR_PART_NONE;
+			break;
+		}
+	}
+#if CONFIG_SPTM
+	if (apply) {
+		pmap_batch_sign_user_ptr(NULL, NULL, 0, 0, 0);
+	}
+#endif /* CONFIG_SPTM */
+	return KERN_SUCCESS;
+}
+#endif
 
 kern_return_t
 vm_shared_region_slide_page(

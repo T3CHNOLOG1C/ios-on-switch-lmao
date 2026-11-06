@@ -5448,14 +5448,16 @@ IOService::setRootMedia(IOService * root)
 	const OSMetaClass * ioblockstoragedriverClass;
 	bool unhide;
 
-	ioblockstoragedriverClass = OSMetaClass::getMetaClassWithName(gIOBlockStorageDriverKey);
-	assert(ioblockstoragedriverClass);
+	if (root) {
+		ioblockstoragedriverClass = OSMetaClass::getMetaClassWithName(gIOBlockStorageDriverKey);
+		assert(ioblockstoragedriverClass);
 
-	while (root) {
-		if (root->metaCast(ioblockstoragedriverClass)) {
-			break;
+		while (root) {
+			if (root->metaCast(ioblockstoragedriverClass)) {
+				break;
+			}
+			root = root->getProvider();
 		}
-		root = root->getProvider();
 	}
 
 	LOCKWRITENOTIFY();

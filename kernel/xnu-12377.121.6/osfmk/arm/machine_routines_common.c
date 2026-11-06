@@ -1542,3 +1542,12 @@ machine_init(void)
 	}
 	ml_lockdown_init();
 }
+
+#if !defined(APPLE_ARM64_ARCH_FAMILY)
+/* Non-Apple SoCs have no Apple fuses; report production like x86. */
+boolean_t
+ml_device_is_prod_fused(void)
+{
+	return TRUE;
+}
+#endif /* !defined(APPLE_ARM64_ARCH_FAMILY) */

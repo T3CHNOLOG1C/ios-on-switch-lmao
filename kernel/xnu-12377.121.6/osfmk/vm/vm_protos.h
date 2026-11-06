@@ -285,6 +285,7 @@ extern boolean_t cs_validate_range(struct vnode *vp,
     const void *data,
     vm_size_t size,
     unsigned *result);
+extern uint32_t cs_text_fixup_page(struct vnode *vp, memory_object_offset_t page_offset, void *kva);
 extern void cs_validate_page(
 	struct vnode *vp,
 	memory_object_t pager,

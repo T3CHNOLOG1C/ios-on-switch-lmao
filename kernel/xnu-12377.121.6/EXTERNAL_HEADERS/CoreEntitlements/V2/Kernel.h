@@ -1,0 +1,6 @@
+#ifndef CORE_ENTITLEMENTS_V2_KERNEL_H
+#define CORE_ENTITLEMENTS_V2_KERNEL_H
+
+#include <CoreEntitlements/V2/API.h>
+
+#endif /* CORE_ENTITLEMENTS_V2_KERNEL_H */

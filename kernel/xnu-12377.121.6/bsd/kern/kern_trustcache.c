@@ -557,8 +557,16 @@ SECURITY_READ_ONLY_LATE(TrustCacheRuntime_t) trust_cache_rt_storage;
 SECURITY_READ_ONLY_LATE(TrustCacheRuntime_t*) trust_cache_rt = &trust_cache_rt_storage;
 
 /* Mutable part of the runtime */
-TrustCacheMutableRuntime_t trust_cache_mut_rt_storage;
-SECURITY_READ_ONLY_LATE(TrustCacheMutableRuntime_t*) trust_cache_mut_rt = &trust_cache_mut_rt_storage;
+/*
+ * The kernel only allocates this runtime; libTrustCache in AMFI owns its layout. Newer AMFI keeps
+ * two loadable lists here (the xnu-8796 header declares one), so reserve zeroed room past the
+ * declared type. trustCacheInitializeRuntime clears only the declared part; the rest stays zero.
+ */
+static struct {
+	TrustCacheMutableRuntime_t runtime;
+	uint64_t reserved[7];
+} trust_cache_mut_rt_reserved;
+SECURITY_READ_ONLY_LATE(TrustCacheMutableRuntime_t*) trust_cache_mut_rt = &trust_cache_mut_rt_reserved.runtime;
 
 void
 trust_cache_runtime_init(void)

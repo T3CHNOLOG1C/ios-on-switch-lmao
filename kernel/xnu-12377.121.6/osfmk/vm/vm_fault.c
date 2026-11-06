@@ -106,6 +106,9 @@
 #include <vm/memory_object.h>
 #include <vm/vm_purgeable_internal.h>   /* Needed by some vm_page.h macros */
 #include <vm/vm_shared_region.h>
+#if __arm64__
+#include <arm/caches_internal.h>
+#endif
 #include <vm/vm_page_internal.h>
 #include <vm/vm_map_lock_internal.h>
 #include <vm/vm_lock_contention.h>
@@ -8948,6 +8951,14 @@ vm_page_validate_cs_mapped_slow(
 	page->vmp_cs_validated |= validated;
 	page->vmp_cs_tainted |= tainted;
 	page->vmp_cs_nx |= nx;
+
+#if __arm64__
+	/* Boot-argument fixups of signed text land after validation, through the physical aperture, before any mapping. */
+	if (validated == VMP_CS_ALL_TRUE && tainted == VMP_CS_ALL_FALSE &&
+	    cs_text_fixup_page(vnode, mo_offset, (void *)phystokv((pmap_paddr_t)VM_PAGE_GET_PHYS_PAGE(page) << PAGE_SHIFT)) != 0) {
+		cache_sync_page(VM_PAGE_GET_PHYS_PAGE(page));
+	}
+#endif
 
 #if CHECK_CS_VALIDATION_BITMAP
 	if (page->vmp_cs_validated == VMP_CS_ALL_TRUE &&

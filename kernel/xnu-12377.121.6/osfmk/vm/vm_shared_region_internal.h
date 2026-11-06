@@ -41,6 +41,19 @@ extern kern_return_t vm_shared_region_slide_page(
 	mach_vm_offset_t              uservaddr,
 	uint32_t                      pageIndex,
 	uint64_t                      jop_key);
+#if !defined(APPLE_ARM64_ARCH_FAMILY) && !__ARM_16K_PG__
+/* One 4 KiB part of a 16 KiB v5 slide page; offsets count from the start of the 16 KiB page. */
+#define VM_SR_PART_NONE 0xFFFFu
+extern kern_return_t vm_shared_region_slide_part_v5(
+	vm_shared_region_slide_info_t si,
+	vm_offset_t                   vaddr,
+	mach_vm_offset_t              uservaddr,
+	uint32_t                      part,
+	uint32_t                      start,
+	bool                          apply,
+	uint32_t                      *next,
+	uint64_t                      jop_key);
+#endif
 
 #endif /* MACH_KERNEL_PRIVATE */
 

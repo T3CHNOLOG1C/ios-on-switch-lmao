@@ -101,6 +101,47 @@
 #include <sys/xattr.h>
 #endif
 /*
+ * Board bring-up diagnostic: the distinct lookups that failed for MobileSafari (S) and lsd (L), errno and path (its last 96 characters
+ * when longer), read by the boot log. Localization folders, Trial and logging preferences are left out: they fail by design.
+ */
+char native_lookup_log[160][112];
+volatile unsigned native_lookup_count;
+static bool
+native_lookup_has(const char *text, const char *part)
+{
+	const size_t length = strlen(part);
+	for (; *text; ++text) {
+		if (strncmp(text, part, length) == 0) {
+			return true;
+		}
+	}
+	return false;
+}
+static void
+native_lookup_note(const char *path, int error)
+{
+	char name[MAXCOMLEN + 1];
+	proc_selfname(name, sizeof(name));
+	const char tag = !strcmp(name, "MobileSafari") ? 'S' : !strcmp(name, "lsd") ? 'L' : 0;
+	if (!tag || native_lookup_has(path, ".lproj") || native_lookup_has(path, "/Trial/") ||
+	    native_lookup_has(path, "/Preferences/Logging/")) {
+		return;
+	}
+	const size_t length = strlen(path);
+	char entry[112];
+	snprintf(entry, sizeof(entry), "%c e%d %s%s", tag, error, length > 96 ? "..." : "", length > 96 ? path + length - 96 : path);
+	unsigned seen = native_lookup_count < 160 ? native_lookup_count : 160;
+	for (unsigned i = 0; i < seen; ++i) {
+		if (strncmp(native_lookup_log[i], entry, sizeof(entry)) == 0) {
+			return;
+		}
+	}
+	unsigned slot = os_atomic_inc_orig(&native_lookup_count, relaxed);
+	if (slot < 160) {
+		strlcpy(native_lookup_log[slot], entry, sizeof(native_lookup_log[slot]));
+	}
+}
+/*
  * The minimum volfs-style pathname is 9.
  * Example:  "/.vol/1/2"
  */
@@ -1885,7 +1926,16 @@ lookup_traverse_union(vnode_t dvp, vnode_t *new_dvp, vfs_context_t ctx)
 	nd.ni_dvp = dvp->v_mount->mnt_vnodecovered;
 	error = namei(&nd);
 	if (error == 0) {
-		*new_dvp = nd.ni_vp;
+		/*
+		 * Only a directory below can hold the name: the base system keeps a symlink where the
+		 * mounted system has a framework directory, and searching that symlink gave ENOTDIR.
+		 */
+		if (nd.ni_vp->v_type != VDIR) {
+			vnode_put(nd.ni_vp);
+			error = ENOENT;
+		} else {
+			*new_dvp = nd.ni_vp;
+		}
 	}
 	nameidone(&nd);
 done:

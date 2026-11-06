@@ -20,6 +20,9 @@
 
 #ifndef ASSEMBLER
 #define PLATFORM_PANIC_LOG_DISABLED
+/* Apple CPMU registers are implementation defined; counters stay off and
+ * this only sizes the per-CPU counter state. */
+#define CPMU_PMC_COUNT 10
 #endif /* ! ASSEMBLER */
 
 #endif /* ! _PEXPERT_ARM_BCM2837_H */

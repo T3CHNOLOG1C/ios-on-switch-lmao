@@ -32,6 +32,10 @@
 
 #include <stdbool.h>
 #include <sys/cdefs.h>
+#include <pexpert/arm64/board_config.h>
+
+/* The MPIDR core type field exists only on Apple cores. */
+#if defined(APPLE_ARM64_ARCH_FAMILY)
 
 /**
  * Defines the core type of the executing CPU.
@@ -134,5 +138,7 @@ arm64_core_type_as_string(void)
 {
 	return arm64_core_type_to_string(arm64_core_type());
 }
+
+#endif /* defined(APPLE_ARM64_ARCH_FAMILY) */
 
 #endif /* !defined(__ASSEMBLER__) */

@@ -35,6 +35,23 @@
 const char * gIOKernelConfigTables =
     "("
     "   {"
+    "     'IOClass'         = ArmCpu;"
+    "     'IOProviderClass' = IOPlatformDevice;"
+    "     'IOProbeScore'    = 2000:32;"
+    "   },"
+    "   {"
+    "     'IOClass'         = ArmVirtPlatform;"
+    "     'IOProviderClass' = IOPlatformExpertDevice;"
+    "     'IONameMatch'     = 'linux,dummy-virt';"
+    "     'IOProbeScore'    = 10000:32;"
+    "   },"
+    "   {"
+    "     'IOClass'         = ArmDTPlatform;"
+    "     'IOProviderClass' = IOPlatformExpertDevice;"
+    "     'IONameMatch'     = 'device-tree';"
+    "     'IOProbeScore'    = 5000:32;"
+    "   },"
+    "   {"
     "     'IOClass'         = IOPanicPlatform;"
     "     'IOProviderClass' = IOPlatformExpertDevice;"
     "     'IOProbeScore'    = 0:32;"
@@ -44,4 +61,48 @@ const char * gIOKernelConfigTables =
     "     'IOProviderClass' = IOService;"
     "     'IOExclaveProxy'  = 1:32;"
     "   }"
+#if defined(XNU_NATIVE_AES) && XNU_NATIVE_AES
+    "   ,{"
+    "     'IOClass'         = NativeAES;"
+    "     'IOProviderClass' = IOResources;"
+    "     'IOResourceMatch' = IOBSD;"
+    "     'IOProbeScore'    = 1000:32;"
+    "   }"
+#endif
+#if defined(XNU_NATIVE_VIRTIO_BLOCK) && XNU_NATIVE_VIRTIO_BLOCK
+    "   ,{"
+    "     'IOClass'         = NativeVirtioBlock;"
+    "     'IOProviderClass' = IOPlatformDevice;"
+    "     'IOProbeScore'    = 1000:32;"
+    "   }"
+#endif
+#if defined(XNU_NATIVE_VIRTIO_CONSOLE) && XNU_NATIVE_VIRTIO_CONSOLE
+    "   ,{"
+    "     'IOClass'         = NativeVirtioConsole;"
+    "     'IOProviderClass' = IOPlatformDevice;"
+    "     'IOProbeScore'    = 1000:32;"
+    "   }"
+#endif
+#if defined(XNU_NATIVE_RAM_BLOCK) && XNU_NATIVE_RAM_BLOCK
+    "   ,{"
+    "     'IOClass'         = NativeRamBlock;"
+    "     'IOMatchCategory' = NativeRamBlock;"
+    "     'IOProviderClass' = IOResources;"
+    "     'IOResourceMatch' = IOBSD;"
+    "     'IOProbeScore'    = 1000:32;"
+    "   }"
+#endif
+#if defined(XNU_NATIVE_UFS) && XNU_NATIVE_UFS
+    "   ,{"
+    "     'IOClass'         = NativeUfs;"
+    "     'IOProviderClass' = IOPlatformDevice;"
+    "     'IOProbeScore'    = 1000:32;"
+    "   }"
+    "   ,{"
+    "     'IOClass'         = NativeUfs;"
+    "     'IOMatchCategory' = NativeUfsRoot;"
+    "     'IOProviderClass' = IOPlatformExpertDevice;"
+    "     'IOProbeScore'    = 500:32;"
+    "   }"
+#endif
     ")";

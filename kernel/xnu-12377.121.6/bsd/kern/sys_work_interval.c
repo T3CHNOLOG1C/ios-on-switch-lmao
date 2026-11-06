@@ -38,6 +38,22 @@
 
 #include <libkern/libkern.h>
 
+#include <sys/proc.h>
+#include <kern/policy_internal.h>
+
+/* Board bring-up diagnostic: the last work-interval CREATE2 results, read by the boot-progress banner. */
+char native_wi_log[4][100];
+volatile unsigned native_wi_count;
+static void
+native_wi_note(const char *what, int error, int kret, uint32_t flags)
+{
+	char name[20];
+	proc_selfname(name, sizeof(name));
+	unsigned slot = native_wi_count++ % 4;
+	snprintf(native_wi_log[slot], sizeof(native_wi_log[slot]), "WI#%u p%d %s %s err=%d kret=%d flags=%x app=%d",
+	    native_wi_count, proc_selfpid(), name, what, error, kret, flags, (int)task_is_app(current_task()));
+}
+
 int
 work_interval_ctl(__unused proc_t p, struct work_interval_ctl_args *uap,
     __unused int32_t *retval)
@@ -69,6 +85,7 @@ work_interval_ctl(__unused proc_t p, struct work_interval_ctl_args *uap,
 		}
 
 		if ((error = priv_check_cred(kauth_cred_get(), PRIV_WORK_INTERVAL, 0)) != 0) {
+			native_wi_note("priv", error, 0, create_params.wicp_create_flags);
 			return error;
 		}
 
@@ -79,6 +96,7 @@ work_interval_ctl(__unused proc_t p, struct work_interval_ctl_args *uap,
 		};
 
 		kret = kern_work_interval_create(current_thread(), &create_args);
+		native_wi_note("create", 0, kret, create_params.wicp_create_flags);
 
 		/* thread already has a work interval */
 		if (kret == KERN_FAILURE) {
@@ -263,6 +281,20 @@ work_interval_ctl(__unused proc_t p, struct work_interval_ctl_args *uap,
 			return EINVAL;
 		}
 
+		break;
+
+	/*
+	 * sheng: the interval instance operations of the OS's libsystem_kernel (start 6, update 7, finish 8; their numbers and argument
+	 * are not in this source). os_workgroup_interval_start/update/finish use them on every audio IO cycle; refusing them made the
+	 * audio server log a failure from its real-time IO thread each cycle. Without a performance controller there is nothing to
+	 * report them to, so the call succeeds.
+	 */
+	case 6:
+	case 7:
+	case 8:
+		if (uap->arg == USER_ADDR_NULL || uap->work_interval_id == 0) {
+			return EINVAL;
+		}
 		break;
 
 	default:

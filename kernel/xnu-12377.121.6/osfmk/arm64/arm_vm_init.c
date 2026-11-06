@@ -1031,6 +1031,19 @@ arm_vm_page_granular_helper(vm_offset_t start, vm_offset_t _end, vm_offset_t va,
 
 			ppte = (pt_entry_t*)alloc_ptpage(pa_offset == 0);
 			bzero(ppte, ARM_PGBYTES);
+			if ((tmplate & ARM_TTE_VALID) && (tmplate & ARM_TTE_TYPE_MASK) == ARM_TTE_TYPE_BLOCK) {
+				/*
+				 * Keep the rest of the block mapped: with 4 KiB pages a fileset
+				 * collection places kext headers in the same 2 MiB block as the
+				 * end of the kernel __TEXT, and a request for part of the block
+				 * must not unmap them.
+				 */
+				pmap_paddr_t block_pa = tmplate & ARM_TTE_BLOCK_L2_MASK;
+				pt_entry_t attributes = tmplate & ~(ARM_TTE_BLOCK_L2_MASK | ARM_PTE_HINT_MASK | ARM_PTE_TYPE_VALID);
+				for (i = 0; i <= (ARM_TT_L3_INDEX_MASK >> ARM_TT_L3_SHIFT); i++) {
+					ppte[i] = (block_pa + ((pmap_paddr_t)i << ARM_TT_L3_SHIFT)) | attributes | ARM_PTE_TYPE_VALID;
+				}
+			}
 			ppte_phys = kvtophys((vm_offset_t)ppte);
 
 			*tte2 = pa_to_tte(ppte_phys) | ARM_TTE_TYPE_TABLE | ARM_TTE_VALID;
@@ -2164,7 +2177,9 @@ arm_vm_init(uint64_t memory_size, boot_args * args)
 	arm_vm_physmap_init(args);
 	set_mmu_ttb_alternate(cpu_ttep & TTBR_BADDR_MASK);
 
+#if XNU_MONITOR
 	ml_enable_monitor();
+#endif
 
 	set_mmu_ttb(invalid_ttep & TTBR_BADDR_MASK);
 

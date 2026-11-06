@@ -162,6 +162,13 @@ struct cs_blob {
 	bool csb_csm_managed;
 	uint32_t csb_csm_trust_level;
 #endif
+
+	/* Native 4K authenticators derived only from fully verified original
+	 * 16K blocks. Append fields to preserve the existing binary prefix.
+	 */
+	const uint8_t   *csb_native4k_hashes;
+	vm_size_t       csb_native4k_hashes_size;
+	vm_size_t       csb_native4k_hash_count;
 };
 
 /*
