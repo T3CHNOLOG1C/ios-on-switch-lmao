@@ -6,6 +6,8 @@ which pins one kind's members and keeps the rest. Per kind:
             sha256 of its stored bytes (what Bazel fetches by range request) and of its content
   ios, xnu  pinned by hand: the iOS major (//ipsw:ios<major>, --config=ios<major>) and the XNU the kernel is built
             from for it (kernel/xnu-<xnu>, //kernel:xnu_<xnu>)
+  volumes   pinned by hand: the APFS volume UUIDs of the OS image and the two cryptexes (their volume superblocks,
+            read from the decrypted images) and the cryptex images' file names as Preboot stages them
   derived   what the build derives from the members, pinned by hand: kernelcache_sha256 (the kernelcache's IM4P payload,
             LZFSE-decompressed, its arm64 slice: //ipsw:kernelcache) and quartzcore_metallib_sha256 (QuartzCore's
             default.metallib on the OS volume, the shader seed's gate: //gpu:seed)
@@ -112,6 +114,13 @@ IPSWS = {
         "size": 6835124840,
         "url": "https://updates.cdn-apple.com/2025SpringFCS/fullrestores/122-77166/DCA6CFE8-90E9-4B92-880D-3DE171798E40/iPad_Pro_HFR_17.7.11_21H461_Restore.ipsw",
         "version": "17.7.11",
+        "volumes": {
+            "app_cryptex_image": "044-75188-038.dmg",
+            "app_cryptex_uuid": "C0DCFAA8-4E81-49CD-807D-BED3B9B6AE54",
+            "os_volume_uuid": "04769D26-2CA0-4825-B443-E2E5F88300F2",
+            "system_cryptex_image": "044-76034-038.dmg",
+            "system_cryptex_uuid": "8846FE78-2910-4297-AF97-D59BB6F8FC16"
+        },
         "xnu": "10063.141.1"
     },
     "24B119": {
@@ -209,6 +218,13 @@ IPSWS = {
         "size": 10681591172,
         "url": "https://updates.cdn-apple.com/2026FallFCS/4ed6b0d9-7721-4690-b843-664305638776/iPad_10.2_2021_27.2_24B119_Restore.ipsw",
         "version": "27.2",
+        "volumes": {
+            "app_cryptex_image": "141-08824-244.dmg",
+            "app_cryptex_uuid": "D8B9F68E-F191-4FCD-9F89-D88A322E9B4D",
+            "os_volume_uuid": "D05A9D99-D227-4757-9F58-C32593D3BFA7",
+            "system_cryptex_image": "141-10410-227.dmg",
+            "system_cryptex_uuid": "ADB8FD34-DA7E-4538-9AAF-4F05EBB09057"
+        },
         "xnu": "12377.121.6"
     }
 }
