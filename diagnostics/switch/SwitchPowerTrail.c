@@ -53,14 +53,6 @@ static uint32_t line_crc(const struct trail_line *line)
     return crc32(0, &copy, sizeof(copy));
 }
 
-static void store_words(volatile void *to, const void *from, size_t bytes)
-{
-    volatile uint32_t *dst = (volatile uint32_t *)to;
-    const uint32_t *src = (const uint32_t *)from;
-    for (size_t i = 0; i < bytes / 4; ++i)
-        dst[i] = src[i];
-}
-
 static void load_words(void *to, const volatile void *from, size_t bytes)
 {
     uint32_t *dst = (uint32_t *)to;
@@ -111,18 +103,18 @@ void switch_power_trail_init(volatile uint8_t *slice, uint32_t bytes)
     ring = (volatile struct trail_line *)(slice + sizeof(struct trail_header));
     count = lines - 1 < MAX_LINES ? lines - 1 : MAX_LINES;
     keep_previous();
-    const struct trail_line empty = {0};
     for (uint32_t i = 0; i < count; ++i)
-        store_words(&ring[i], &empty, sizeof(empty));
-    struct trail_header fresh = {.magic = TRAIL_MAGIC, .boot = previous_boot + 1, .lines = count};
-    store_words(header, &fresh, sizeof(fresh));
+        ring[i].seq = 0;
+    header->magic = TRAIL_MAGIC;
+    header->boot = previous_boot + 1;
+    header->lines = count;
     __asm__ volatile("dsb sy" ::: "memory");
 }
 
 void switch_power_trail(const char *format, ...)
 {
     char text[160];
-    va_list args;
+    va_list args;  // NOLINT(cppcoreguidelines-init-variables): va_start initializes it
     va_start(args, format);
     vsnprintf(text, sizeof(text), format, args);
     va_end(args);
@@ -138,7 +130,10 @@ void switch_power_trail(const char *format, ...)
     line.crc = line_crc(&line);
     volatile struct trail_line *slot = &ring[(line.seq - 1) % count];
     slot->seq = 0;
-    store_words((volatile uint8_t *)slot + 4, (const uint8_t *)&line + 4, sizeof(line) - 4);
+    slot->crc = line.crc;
+    slot->uptime_ns = line.uptime_ns;
+    for (uint32_t i = 0; i < TEXT_BYTES; ++i)
+        slot->text[i] = line.text[i];
     __asm__ volatile("dmb oshst" ::: "memory");
     slot->seq = line.seq;
     __asm__ volatile("dsb sy" ::: "memory");
@@ -149,10 +144,11 @@ void switch_power_trail_watch(unsigned seconds, const char *why)
     if (seconds > 255)
         seconds = 255;
     switch_panic_save_watchdog(seconds);
-    if (seconds)
+    if (seconds) {
         switch_power_trail("watchdog: warm reset in %u s (%s)", seconds, why);
-    else
+    } else {
         switch_power_trail("watchdog off (%s)", why);
+    }
 }
 
 /* SwitchPowerMark.cpp, the MAX77620 RTC's writer; weak, so that a kernel without the PMIC driver keeps marks in the
@@ -287,8 +283,8 @@ void switch_power_trail_report(void)
             text[c] = line->text[c];
         text[TEXT_BYTES] = 0;
         os_log(OS_LOG_DEFAULT, "SwitchPowerTrail: last boot: #%u %llu.%03llu %s", line->seq,
-               (unsigned long long)(line->uptime_ns / 1000000000ull),
-               (unsigned long long)(line->uptime_ns / 1000000ull % 1000), text);
+               (unsigned long long)(line->uptime_ns / 1000000000ULL),
+               (unsigned long long)(line->uptime_ns / 1000000ULL % 1000), text);
     }
 }
 #endif

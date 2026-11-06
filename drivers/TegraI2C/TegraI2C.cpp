@@ -916,7 +916,7 @@ extern "C" int tegra_i2c_raw_write(unsigned bus, uint8_t addr, const uint8_t *da
         return TEGRA_I2C_ENOTREADY;
     const BusInfo &info = kBus[bus - 1];
     volatile uint8_t *regs = gI2C + info.regs;
-    auto settled = [regs](uint32_t reg, uint32_t bits) {
+    const auto settled = [regs](uint32_t reg, uint32_t bits) {
         for (const uint64_t end = nowUs() + 2000; r32(regs, reg) & bits;) {
             if (nowUs() > end)
                 return !(r32(regs, reg) & bits);

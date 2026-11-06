@@ -23,7 +23,8 @@ void max77620::rtcQuiet(bool canSleep)
     uint64_t interval = 0;
     nanoseconds_to_absolutetime(uint64_t{kRtcUpdateMS} * 1000000, &interval);
     for (;;) {
-        const uint64_t now = mach_absolute_time(), quiet = __atomic_load_n(&gQuietAt, __ATOMIC_ACQUIRE);
+        const uint64_t now = mach_absolute_time();
+        const uint64_t quiet = __atomic_load_n(&gQuietAt, __ATOMIC_ACQUIRE);
         // Further off than one update: the counter restarted (the first C after SC7, before cpu_timebase_init
         // rebases mach time), and the last update is long done.
         if (now >= quiet || quiet - now > interval)
@@ -32,7 +33,7 @@ void max77620::rtcQuiet(bool canSleep)
             continue;
         uint64_t ns = 0;
         absolutetime_to_nanoseconds(quiet - now, &ns);
-        IOSleep((unsigned)(ns / 1000000) + 1);
+        IOSleep(static_cast<unsigned>(ns / 1000000) + 1);
     }
 }
 
@@ -80,8 +81,8 @@ int rawWrite(uint8_t reg, uint8_t value)
 // held is off from then on.
 int writeMark(Write put, uint32_t code)
 {
-    const uint8_t count = (uint8_t)((gCount + 1u) & 0x7fu);
-    int err = put(alarm2(SEC), (uint8_t)code);
+    const auto count = static_cast<uint8_t>((gCount + 1u) & 0x7fu);
+    int err = put(alarm2(SEC), static_cast<uint8_t>(code));
     if (!err)
         err = put(alarm2(MIN), count);
     for (unsigned field = HOUR; !err && gWritten == kNoMark && field < kTimeRegs; ++field)
@@ -149,7 +150,7 @@ extern "C" void switch_pmic_mark_start(void)
         IOLog("SwitchPowerTrail: no durable marks this boot (RTCUPDATE0: I2C5 %d)\n", err);
         return;
     }
-    gUpdate0 = update & (uint8_t)~(kRtcWriteUpdate | kRtcReadUpdate);
+    gUpdate0 = static_cast<uint8_t>(update & ~(unsigned{kRtcWriteUpdate} | kRtcReadUpdate));
     unsigned count = 0;
     const int last = lastMark(&count);
     switch_power_trail_durable(last, count);
