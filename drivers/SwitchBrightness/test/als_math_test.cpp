@@ -127,6 +127,22 @@ double windowLux(const std::vector<Row> &table, double d0, double d1, unsigned g
 static_assert(256 - switch_als::kCycles == 0xda, "TIMING default DAh: the 38 cycles");
 static_assert(switch_als::kIntegrationUS == kRefItimeUs && switch_als::kLuxMultiplier == kRefMultiplier);
 
+// A wake: CoreBrightness turns the display on at some point after SwitchALS set the sensor up (the DC's restart, while
+// the panel takes about half a second to wake) and gives up on a first sample 250 ms later. Whatever that point, the
+// next result is a whole conversion and comes in time.
+TEST(SwitchALSMath, FirstSampleAfterDisplayOnInTime)
+{
+    using namespace switch_als;
+    EXPECT_GE(kSampleUS, kConversionUS) << "each tick reads a finished conversion, the first one too";
+    for (unsigned displayOnUS = 0; displayOnUS <= 600000; displayOnUS += 1000) {
+        const unsigned next = (displayOnUS / kSampleUS + 1) * kSampleUS;
+        EXPECT_LT(next - displayOnUS, kFirstSampleTimeoutUS) << "display-on " << displayOnUS << " us after set-up";
+    }
+    // 11-06 (the old order): the sensor was set up at the panel's wake end, 69 ms after CoreBrightness's display-on, and
+    // its first result came a set-up tick, a skipped tick and a sample tick later: 424 ms, past the timeout.
+    EXPECT_GT(69000 + 3 * kSampleUS, kFirstSampleTimeoutUS);
+}
+
 TEST(SwitchALSMath, LuxAndGainAgainstBh1730)
 {
     using namespace switch_als;

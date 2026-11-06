@@ -57,10 +57,11 @@ struct SwitchTouchTrace {
                     at = sizeof(text) - 1;
                 i = i + 1 == kHead && skipped ? kHead + skipped : i + 1;
             }
+            ++line;  // not inside os_log: its arguments are evaluated twice
             os_log(OS_LOG_DEFAULT,
                    "SwitchTouch trace: contact %u at (%d,%d) %u ms, %u samples (%u not kept), lifted at %+d,%+d; "
                    "%u/%u%s",
-                   contact, x, y, ms, count, skipped, reportedDx, reportedDy, ++line, lines, text);
+                   contact, x, y, ms, count, skipped, reportedDx, reportedDy, line, lines, text);
         }
     }
 };

@@ -28,6 +28,12 @@
 namespace switch_als {
 constexpr unsigned kCycles = 38;                     // rohm,integration-cycle; TIMING = 256 - cycles (datasheet 0xda)
 constexpr unsigned kIntegrationUS = 2700 * kCycles;  // bh1730.c BH1730_ITIME_TO_US: 102.6 ms (+ 2 ms ADC)
+constexpr unsigned kConversionUS = kIntegrationUS + 2000;
+
+// SwitchALS takes a result every kFramesPerSample-th frame end of the 60 Hz panel, from its set-up on: each one a whole
+// conversion, and never as far apart as CoreBrightness's first-sample timeout after display-on (AABC, 250 ms).
+constexpr unsigned kFramesPerSample = 7, kFrameUS = 1000000 / 60, kFirstSampleTimeoutUS = 250000;
+constexpr unsigned kSampleUS = kFramesPerSample * kFrameUS;
 constexpr unsigned kLuxMultiplier = 3600, kLuxMax = 100000;
 constexpr unsigned kGains = 4;
 constexpr unsigned kGainFactor[kGains] = {1, 2, 64, 128};  // GAIN register 0..3
