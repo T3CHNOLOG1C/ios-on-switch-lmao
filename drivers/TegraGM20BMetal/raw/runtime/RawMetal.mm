@@ -5817,6 +5817,7 @@ size_t raw_metal_rates(char *out, size_t size)
     return n > 0 ? std::min(size_t(n), size - 1) : 0;
 }
 
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
 // The stall line (r7p8: the compositor stopped committing for good with nothing in the log): every 5 s, on a timer of its own,
 // what the raw path has pending, read without waiting (a lock another thread holds is reported held, not waited for). Once
 // nothing was committed or completed over two ticks while work is pending or one of its locks stays held, one line names it,
@@ -5887,6 +5888,7 @@ static void rawStallTick()
                  waiting, segNext, segs, reason, inflight, m2vPending, m2vUnscheduled, int(holders), int(device),
                  submitted, completed, (unsigned long long)commits, (unsigned long long)done);
 }
+#endif
 
 // raw_metal_prepare's thread and what it made (taken once, by raw_metal_device_open)
 static struct {
@@ -6075,6 +6077,7 @@ id<MTLDevice> raw_metal_device_open(const char *packPath, uint64_t stack, id<MTL
                    h == raw::Device::HeapByCopy ? ", its bytes checked"
                                                 : ": the pack's pages not imported, copied on the CPU");
     }
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     {  // the stall line's timer (rawStallTick): its own, so nothing the render server's other threads hold delays it
         static dispatch_source_t stall;
         stall =
@@ -6086,6 +6089,7 @@ id<MTLDevice> raw_metal_device_open(const char *packPath, uint64_t stack, id<MTL
         });
         dispatch_resume(stall);
     }
+#endif
     // both threads at the render thread's class: what they hold up is the frame
     std::thread([] {
         pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);

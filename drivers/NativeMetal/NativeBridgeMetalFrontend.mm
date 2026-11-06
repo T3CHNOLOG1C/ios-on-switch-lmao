@@ -289,10 +289,20 @@ static std::string gJournalPath;
 static uint64_t gJournalBegan;
 static int gJournalFd = -1;
 static bool gJournalRefused;
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+constexpr bool kJournal = true;
+#else
+constexpr bool kJournal = false;  // its only readers are the host's harvest tools
+#endif
+
+static bool journalOn()
+{
+    return kJournal && !gJournalPath.empty();
+}
 
 static void journal(const std::string &line)
 {
-    if (gJournalPath.empty())
+    if (!journalOn())
         return;
     std::lock_guard<std::mutex> lock(gJournalLock);
     if (gJournalFd < 0 && !gJournalRefused) {
@@ -1248,7 +1258,7 @@ static std::string journalToken(const char *text)
 // name and renamed; a library already kept is not written again.
 static std::string libraryJournalId(const void *bytes, size_t length)
 {
-    if (gJournalPath.empty() || !bytes || !length)
+    if (!journalOn() || !bytes || !length)
         return std::string();
     unsigned char digest[CC_SHA256_DIGEST_LENGTH];
     CC_SHA256(bytes, (CC_LONG)length, digest);
@@ -1476,7 +1486,7 @@ static bool systemCompiler();
     gTimeFunction.add(functionBegan);
     // One S line per specialization (int-155: every QuartzCore pipeline was made on its draw, and a refused generic function would leave its
     // generic pipeline unmade without a word): the function, its constants, the time, the refusal and QuartzCore's callers.
-    if (!gJournalPath.empty()) {
+    if (journalOn()) {
         char head[96];
         snprintf(head, sizeof head, "S t=%llu us=%llu ok=%d ",
                  (unsigned long long)((functionBegan - gJournalBegan) / 1000),
@@ -1680,7 +1690,7 @@ static NSData *functionBitcode(NBFunction *function)
 
 - (void)journalDispatch:(MTLSize)grid group:(MTLSize)group threads:(bool)threads
 {
-    if (_journalState.empty())
+    if (!journalOn() || _journalState.empty())
         return;
     const uint32_t g[3] = {(uint32_t)group.width, (uint32_t)group.height, (uint32_t)group.depth};
     const uint64_t n[3] = {grid.width, grid.height, grid.depth};
@@ -2376,7 +2386,7 @@ static void waitForResource(id resource)
     self.commandBuffer->encodedWork.dispatches++;
     const uint64_t s[3] = {size.width, size.height, size.depth}, g[3] = {group.width, group.height, group.depth};
     [self check:nmb_compute_dispatch(self.handle, s, g, threads) what:"dispatch"];
-    if (!gJournalPath.empty())
+    if (journalOn())
         [self.state journalDispatch:size group:group threads:threads];
 }
 
@@ -2405,7 +2415,7 @@ static void waitForResource(id resource)
     const uint64_t per[3] = {g.width, g.height, g.depth};
     [self check:nmb_compute_dispatch_indirect(self.handle, [(NBBuffer *)b handle], o, per)
            what:"dispatchThreadgroupsWithIndirectBuffer"];
-    if (!gJournalPath.empty())
+    if (journalOn())
         [self.state journalDispatch:MTLSizeMake(0, 0, 0) group:g threads:false];
 }
 
@@ -4250,7 +4260,7 @@ struct NBCost {
 static void journalRenderPipeline(MTLRenderPipelineDescriptor *d, MTLPipelineOption options, uint64_t began,
                                   const char *refused, const std::string &cost)
 {
-    if (gJournalPath.empty())
+    if (!journalOn())
         return;
     const uint64_t ended = nowUs();
     uint64_t tid = 0;
@@ -4312,7 +4322,7 @@ static void journalRenderPipeline(MTLRenderPipelineDescriptor *d, MTLPipelineOpt
 static std::string journalComputePipeline(MTLComputePipelineDescriptor *d, NBFunction *f, MTLPipelineOption options,
                                           uint64_t began, const char *refused)
 {
-    if (gJournalPath.empty())
+    if (!journalOn())
         return std::string();
     char head[256];
     snprintf(head, sizeof head, "form=%s opt=%llu", d ? "d" : "f", (unsigned long long)options);
@@ -5901,7 +5911,7 @@ static void fillLimits(id)
     library.storage = bytes;
     library.bytes = (const uint8_t *)bytes.bytes;
     library.length = bytes.length;
-    if (!gJournalPath.empty())
+    if (journalOn())
         library.journalId = journalToken(path.UTF8String);
     if (error)
         *error = nil;
@@ -6093,13 +6103,13 @@ static void fillLimits(id)
     }
     const NmbPipelineOptions creation = {(uint64_t)options, archives.data(), archives.size()};
     const uint64_t pipelineBegan = nowUs();
-    const NBCost costBegan = gJournalPath.empty() ? NBCost() : NBCost::now();  // read only for the journal
+    const NBCost costBegan = !journalOn() ? NBCost() : NBCost::now();  // read only for the journal
     NmbRenderPipeline *handle = nmb_render_pipeline_new_with_options(gDevice, p, &creation);
     delete p;
     gTimePipeline.add(pipelineBegan);
     gHistPso.add(nowUs() - pipelineBegan);
     journalRenderPipeline(d, options, pipelineBegan, handle ? nullptr : nmb_last_error(),
-                          gJournalPath.empty() ? std::string() : NBCost::now().since(costBegan));
+                          !journalOn() ? std::string() : NBCost::now().since(costBegan));
     if (!handle)
         return failWith<id<MTLRenderPipelineState>>(error, @"render pipeline", nil);
     NBRenderPipeline *state = [NBRenderPipeline new];
@@ -6295,6 +6305,8 @@ extern "C" id native_bridge_metal_open(const char *loader, const char *cache, ui
     }
     if (cache) {
         gCompileCache = std::string(cache) + "/msl";
+    }
+    if (cache && kJournal) {
         // The journal lives in a cache that survives reboots: past 2 MiB it starts again, the previous one kept as pipelines.log.old.
         gJournalPath = std::string(cache) + "/pipelines.log";
         gJournalBegan = nowUs();
@@ -6318,7 +6330,8 @@ extern "C" id native_bridge_metal_open(const char *loader, const char *cache, ui
                 *next++ = 0;
             else
                 next = line + strlen(line);
-            journal(std::string("F ") + line);
+            if (journalOn())
+                journal(std::string("F ") + line);
         }
     }
     Class base = objc_getClass("_MTLDevice");

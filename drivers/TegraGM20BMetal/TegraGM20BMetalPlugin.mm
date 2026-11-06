@@ -311,6 +311,7 @@ bool rawPack(char *path, size_t size)
 
 bool gRaw;  // the render server's device is the raw facade
 
+#if SWITCH_DEBUG
 // r17-widgets: the frame rates this process's display links are asked for. Each distinct request (a CAFrameRateRange or a
 // preferredFramesPerSecond, with the image+offset that made it) is logged once, up to 8 per process, and passed on unchanged.
 // With the commit stack line this tells where WidgetRenderer's steady 20 commits/s (the clock widget) come from: a rate SwiftUI
@@ -426,6 +427,7 @@ void startRates()
     });
     dispatch_resume(timer);
 }
+#endif
 
 // A Metal selector the frontend does not implement (the frontend's own report, made before it raises).
 void missing(const char *cls, const char *selector)
@@ -505,6 +507,10 @@ id openDevice(unsigned port)
         // device (NVK loaded and its device made, the runtime's device and priming), on the thread that asked for the device
         // (a process's main thread, often: Chrono's WidgetRenderer and the screenshot service wait on it).
         const uint64_t openBegan = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+#if !SWITCH_DEBUG
+        setenv("NMB_SHADOW_LOG", "0",
+               0);  // the bridge's shadow.log and its every-texture announcements: nothing reads them
+#endif
         uint64_t bridgeNs = 0;
         char candidates[6][512] = {};
         unsigned count = 0;
@@ -522,6 +528,7 @@ id openDevice(unsigned port)
                 continue;
             }
             cache = candidates[i];
+#if SWITCH_DEBUG
             // The runtime's making log (m2v 0118): one line per driver record this process writes (a pipeline compiled here,
             // which neither its cache nor the seed held), naming the record and the making's description, beside the journal so
             // harvest.py --save takes it; past 2 MiB it starts again, the previous kept as makings.log.old. A precompile's own
@@ -537,6 +544,7 @@ id openDevice(unsigned port)
                 }
                 setenv("METAL2VULKAN_MAKING_LOG", makings, 1);
             }
+#endif
             const uint64_t bridgeBegan = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
             @try {
                 device = native_bridge_metal_open(loader, cache, registryID, missing);
@@ -599,7 +607,9 @@ id openDevice(unsigned port)
                !cache ? " (" : "", !cache ? (gCacheRefusals[0] ? gCacheRefusals : "no candidate") : "",
                !cache ? ")" : "", seeded ? "shared (" : "none", seeded ? seedName : "", seeded ? ")" : "",
                (unsigned long long)(openNs / 1000000), (unsigned long long)(bridgeNs / 1000000));
+#if SWITCH_DEBUG
         startRates();
+#endif
         switch_display_rate_probe();
         return device;
     }

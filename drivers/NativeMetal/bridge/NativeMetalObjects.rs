@@ -174,7 +174,8 @@ fn env_on(name: &str, otherwise: bool) -> bool {
 /// The environment: NMB_MEMO_MB caps the memo (MiB; the runtime's 256 by default); NMB_REFUSE_REBINDS=0 lets encoders log
 /// their calls for rebinds again (nothing here rebinds); NMB_PADDED_ALIAS=1 renders and writes a texture over padded rows in
 /// place (PaddedReadsPolicy::AliasWrites, off: untried on NVK). Every texture given a shadow image is written to
-/// <cache>/shadow.log with why, once per reason. NMB_CACHE_MB caps the cache directory (MiB, 256 by default).
+/// <cache>/shadow.log with why, once per reason, unless NMB_SHADOW_LOG=0 (a release plugin's). NMB_CACHE_MB caps the cache
+/// directory (MiB, 256 by default).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nmb_device_open(loader: *const c_char, cache: *const c_char) -> *mut NmbDevice {
     guard(std::ptr::null_mut(), || {
@@ -218,7 +219,7 @@ pub unsafe extern "C" fn nmb_device_open(loader: *const c_char, cache: *const c_
         if env_on("NMB_PADDED_ALIAS", false) {
             options.policy.padded_reads = metal2vulkan::device::PaddedReadsPolicy::AliasWrites;
         }
-        if let Some(cache) = &cache {
+        if let Some(cache) = cache.as_ref().filter(|_| env_on("NMB_SHADOW_LOG", true)) {
             options
                 .announce_each
                 .insert(metal2vulkan_runtime::Degradation::ShadowedTexture);
