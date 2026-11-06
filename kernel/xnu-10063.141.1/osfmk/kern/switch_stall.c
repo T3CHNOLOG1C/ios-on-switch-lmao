@@ -1,6 +1,7 @@
 /*
- * Switch UI stall reports: one os_log line when SpringBoard's or backboardd's main thread has been off core for
- * SWITCH_STALL_NS, blocked on anything but its idle run loop or runnable and not run, and one when it runs again.
+ * Switch UI stall reports (debug kernels): one os_log line when SpringBoard's or backboardd's main thread has been off
+ * core for SWITCH_STALL_NS, blocked on anything but its idle run loop or runnable and not run, and one when it runs
+ * again.
  *
  * Detection rides the scheduler's maintenance tick (sched_timeshare_maintenance_continue, woken from context switches
  * and quantum expiry at most every sched_tick_interval): no timer of its own, no wakeup of an idle system. The tick
@@ -40,6 +41,8 @@
 #include <vm/vm_kern.h>
 #include <vm/vm_map.h>
 #include <vm/vm_shared_region.h>
+
+#if DEVELOPMENT || DEBUG
 
 void switch_stall_exec(thread_t thread);
 void switch_stall_tick(uint64_t now);
@@ -549,6 +552,8 @@ switch_stall_report(__unused thread_call_param_t p0, __unused thread_call_param_
 		thread_deallocate(t);
 	}
 }
+
+#endif /* DEVELOPMENT || DEBUG */
 
 #if DEVELOPMENT || DEBUG
 /*
