@@ -1,4 +1,6 @@
 load("@rules_python//python:py_binary.bzl", "py_binary")
+load("@rules_python//python:py_library.bzl", "py_library")
+load("@rules_python//python:py_test.bzl", "py_test")
 load("//bazel/lint:defs.bzl", "lint_files")
 
 package(default_visibility = ["//visibility:public"])
@@ -18,4 +20,22 @@ py_binary(
 py_binary(
     name = "cache_check",
     srcs = ["cache_check.py"],
+)
+
+# bazel run //tools/repro:linkedit -- OLD NEW: two kernel.macho files that may differ only in __LINKEDIT (renamed
+# symbols, the UUID the linker derives from them); everything else byte for byte, every symbol at the same place.
+py_library(
+    name = "linkedit_lib",
+    srcs = ["linkedit.py"],
+)
+
+py_binary(
+    name = "linkedit",
+    srcs = ["linkedit.py"],
+)
+
+py_test(
+    name = "linkedit_test",
+    srcs = ["linkedit_test.py"],
+    deps = [":linkedit_lib"],
 )
