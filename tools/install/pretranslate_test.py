@@ -9,6 +9,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from tools.install import host, overlay_index, pretranslate
 
@@ -111,6 +112,33 @@ class RolesTest(unittest.TestCase):
         tree = data / pretranslate.OVERLAY
         self.assertEqual(directories, sorted(p.stat().st_ino for p in (tree, tree / 'usr', tree / 'usr/libexec')))
         self.assertIn('os.overlay.json', [p.name for p in self.roles.artifacts()])
+
+    def test_as_root_the_tree_ends_system_immutable(self):
+        system = self.dir / 'system'
+        (system / 'usr/libexec').mkdir(parents=True)
+        (system / 'usr/libexec/tool').write_bytes(b'arm64e')
+        entries = self.roles.run('os', system)
+        entries[0]['path'] = '/usr/libexec/tool'
+        data = self.dir / 'data'
+        data.mkdir()
+        flagged = {}
+
+        def chflags(path, flags):
+            flagged[Path(path)] = flags
+
+        with mock.patch.object(pretranslate.os, 'chown'), mock.patch.object(pretranslate.os, 'chflags', chflags):
+            self.roles.overlay_system(data, system, entries, owners=True)
+        tree = data / pretranslate.OVERLAY
+        expected = {
+            tree,
+            tree / 'usr',
+            tree / 'usr/libexec',
+            tree / 'usr/libexec/tool',
+            data / pretranslate.OVERLAY_INDEX,
+        }
+        self.assertEqual(set(flagged), expected)
+        for path, flags in flagged.items():
+            self.assertTrue(flags & stat.SF_IMMUTABLE, path)
 
     def test_a_translated_file_that_does_not_match_is_refused(self):
         system = self.dir / 'system'

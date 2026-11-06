@@ -14,6 +14,7 @@ placed.
 import json
 import os
 import shutil
+import stat
 import subprocess
 from pathlib import Path
 
@@ -104,9 +105,10 @@ class Roles:
     def overlay_system(self, data, system, entries, owners):
         """The System volume's translated files onto Data (OVERLAY), each with its System file's owner, mode and
         flags, then their manifest and the kernel's index made from it; the manifest is also kept for the boot
-        package. Returns the manifest."""
+        package. As root, every file and directory of the tree ends system-immutable: the device's kernel refuses any
+        change to the tree anyway, the flag is a second layer. Returns the manifest."""
         root = Path(data) / OVERLAY
-        files, ids = [], []
+        files, ids, placed = [], [], []
         for e in entries:
             original = os.lstat(Path(system) / e['path'].lstrip('/'))
             target = root / e['path'].lstrip('/')
@@ -132,6 +134,7 @@ class Roles:
                     bytes.fromhex(cdhash[0]) if cdhash else b'\x00' * 20,
                 )
             )
+            placed.append(target)
             files.append({
                 'path': e['path'],
                 'trust': True,
@@ -155,5 +158,7 @@ class Roles:
         index.chmod(0o644)
         if owners:
             os.chown(index, 0, 0)
+            for path in [*placed, index, *reversed(directories)]:
+                os.chflags(path, os.lstat(path).st_flags | stat.SF_IMMUTABLE)
         self.log('System: {} translated files on Data under {}'.format(len(files), OVERLAY))
         return manifest
