@@ -23,7 +23,8 @@ runs:
         fi
         for app in /Applications/Xcode*.app; do
           if [ "$(/usr/libexec/PlistBuddy -c 'Print :ProductBuildVersion' "$app/Contents/version.plist")" = "$build" ]; then
-            echo "DEVELOPER_DIR=$app/Contents/Developer" >> "$GITHUB_ENV"
+            # The physical path: the image's Xcode_27.2.0.app is a symlink, and clang names headers by the real one.
+            echo "DEVELOPER_DIR=$(cd "$app" && pwd -P)/Contents/Developer" >> "$GITHUB_ENV"
             exit 0
           fi
         done
