@@ -1,6 +1,5 @@
 #include "SwitchDiag.h"
 #include <kern/thread_call.h>
-#include <kern/boot_progress.h>
 /*
  * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  *
@@ -1364,10 +1363,8 @@ grade:
 	 * Actually load the image file we previously decided to load.
 	 */
 	switch_diag_process_event(proc_getpid(p),p->p_name,"exec load_machfile enter",0);
-	boot_progress_process_stage(proc_getpid(p),p->p_name,"exec load_machfile enter");
 	lret = load_machfile(imgp, mach_header, thread, &map, &load_result);
 	switch_diag_process_event(proc_getpid(p),p->p_name,"exec load_machfile returned",lret);
-	boot_progress_process_stage(proc_getpid(p),p->p_name,"exec load_machfile returned");
 	if (lret != LOAD_SUCCESS) {
 		error = load_return_to_errno(lret);
 
@@ -8664,7 +8661,6 @@ static const char * init_programs[] = {
 void
 load_init_program(proc_t p)
 {
-	boot_progress_stage("load_init_program enter");
 	switch_diag_stage("launchd exec attempt - EL0 not established");
 	uint32_t i;
 	int error;
@@ -8675,24 +8671,20 @@ load_init_program(proc_t p)
 	(void) mach_vm_allocate_kernel(map, &scratch_addr, map_page_size, VM_FLAGS_ANYWHERE, VM_KERN_MEMORY_NONE);
 	user_addr_t init_envp = USER_ADDR_NULL;
 #if defined(XNU_OWNER_CACHE_MOUNT) && XNU_OWNER_CACHE_MOUNT
-	boot_progress_stage("SystemOS mount enter");
 #if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
 	switch_root_event(9,0,0);
 #endif
 	int cache_error = native_owner_cache_prepare(p, (user_addr_t)scratch_addr, &init_envp);
-	boot_progress_stage("SystemOS mount returned");
 #if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
 	switch_root_event(10,cache_error,0);
 #endif
 	if (cache_error) panic("offline owner SystemOS mount failed: %d", cache_error);
 #endif
 #if defined(XNU_OWNER_DATA_MOUNT) && XNU_OWNER_DATA_MOUNT
-	boot_progress_stage("Data mount enter");
 #if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
 	switch_root_event(11,0,0);
 #endif
 	int data_error = native_owner_data_prepare(p, (user_addr_t)scratch_addr);
-	boot_progress_stage("Data mount returned");
 #if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
 	switch_root_event(12,data_error,0);
 #endif
@@ -8709,13 +8701,6 @@ load_init_program(proc_t p)
 	(void)switch_nvram_data_mounted();
 	/* Owner overlay unions over sealed directories (SwitchRawMount.h), now that Data is mounted. */
 	native_switch_raw_overlay(p, (user_addr_t)scratch_addr);
-#endif
-#if defined(XNU_BOOT_PROGRESS) && XNU_BOOT_PROGRESS
-	extern int sheng_boot_watchdog_policy(void *, uint64_t);
-	boot_progress_stage("temporary watchdog launch policy enter");
-	int policy_error=sheng_boot_watchdog_policy(p, (uint64_t)scratch_addr);
-	if (policy_error) panic("sheng watchdog launch policy failed: %d", policy_error);
-	boot_progress_stage("temporary watchdog launch policy ready");
 #endif
 #endif
 #if CONFIG_MEMORYSTATUS
@@ -9202,7 +9187,6 @@ process_signature(proc_t p, struct image_params *imgp)
 	 * approve of exec, kill and return immediately.
 	 */
 	if (imgp->ip_mac_return != 0) {
-		boot_progress_process_stage(proc_getpid(p),p->p_name,"exec MAC policy REFUSED");
 		KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_PROC, BSD_PROC_EXITREASON_CREATE) | DBG_FUNC_NONE,
 		    proc_getpid(p), OS_REASON_EXEC, EXEC_EXIT_REASON_SECURITY_POLICY, 0, 0);
 		signature_failure_reason = os_reason_create(OS_REASON_EXEC, EXEC_EXIT_REASON_SECURITY_POLICY);
@@ -9368,9 +9352,7 @@ done:
 		 * state.
 		 */
 
-		boot_progress_process_stage(proc_getpid(p),p->p_name,"exec process signature enter");
 		error = proc_process_signature(p, &signature_failure_reason);
-		boot_progress_process_stage(proc_getpid(p),p->p_name,error ? "exec process signature REFUSED" : "exec process signature accepted");
 	}
 
 	if (0 == error) {

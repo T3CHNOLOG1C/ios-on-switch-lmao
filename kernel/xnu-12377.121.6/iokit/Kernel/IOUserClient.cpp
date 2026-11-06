@@ -6947,10 +6947,6 @@ native_mobile_graphics_client_probe(void)
 		native_mobile_graphics_client_released = 1;
 	}
 	native_mobile_graphics_client_checkpoint();
-#if defined(XNU_NATIVE_MOBILE_DISPLAY) && XNU_NATIVE_MOBILE_DISPLAY
-	extern void native_mobile_display_provider_probe(void);
-	native_mobile_display_provider_probe();
-#endif
 #if defined(XNU_NATIVE_LEGACY_DISPLAY) && XNU_NATIVE_LEGACY_DISPLAY
 	extern void native_legacy_display_probe(void);
 	native_legacy_display_probe();
