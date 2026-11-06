@@ -241,23 +241,39 @@ void switch_power_trail_mark_now(unsigned code)
     switch_pmic_mark_now((uint8_t)(code & 0x7fu));
 }
 
-void switch_power_trail_durable(int code, unsigned count)
+static int durable_code = -2; /* -2: not read this boot */
+static unsigned durable_count;
+
+static void log_durable(const char *when)
 {
-    if (code < 0) {
-        os_log(OS_LOG_DEFAULT, "SwitchPowerTrail: durable mark: none (the MAX77620 RTC holds no mark of ours)");
+    if (durable_code == -2)
+        return;
+    if (durable_code < 0) {
+        os_log(OS_LOG_DEFAULT, "SwitchPowerTrail: durable mark: none (the MAX77620 RTC holds no mark of ours)%s", when);
         return;
     }
-    os_log(OS_LOG_DEFAULT, "SwitchPowerTrail: durable mark: %#04x %s (mark %u of the last boot)", code,
-           mark_name((unsigned)code), count);
+    os_log(OS_LOG_DEFAULT, "SwitchPowerTrail: durable mark: %#04x %s (mark %u of the last boot)%s", durable_code,
+           mark_name((unsigned)durable_code), durable_count, when);
+}
+
+/* Logged at once and again before launchd: the unified log may not keep what the kernel logs this early. */
+void switch_power_trail_durable(int code, unsigned count)
+{
+    durable_code = code;
+    durable_count = count;
+    log_durable("");
 }
 
 void switch_power_trail_report(void)
 {
     static int reported;
-    if (reported || !ring)
+    if (reported)
         return;
     reported = 1;
+    log_durable(", again");
     switch_power_trail_mark(SWITCH_MARK_BOOT_LAUNCHD);
+    if (!ring)
+        return;
     if (!previous_found) {
         os_log(OS_LOG_DEFAULT, "SwitchPowerTrail: no trail from the last boot (cold power-on, or DRAM lost)");
         return;
