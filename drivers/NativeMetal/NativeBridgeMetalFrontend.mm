@@ -6800,9 +6800,10 @@ extern "C" size_t native_bridge_metal_rates(char *out, size_t size)
     // seed=: look-ups the shader cache seed missed since the last line, and a seed hit's p50/p99 look-up so far (ns, the
     // power of two above it; counted in debug builds only).
     if (at + 1 < size) {
-        const int more = snprintf(out + at, size - at, " seed=m%llu/%llu/%lluns",
-                                  (unsigned long long)(now.cache.seed_misses - was.cache.seed_misses),
-                                  (unsigned long long)now.cache.seed_hit_p50_ns, (unsigned long long)now.cache.seed_hit_p99_ns);
+        const int more =
+            snprintf(out + at, size - at, " seed=m%llu/%llu/%lluns",
+                     (unsigned long long)(now.cache.seed_misses - was.cache.seed_misses),
+                     (unsigned long long)now.cache.seed_hit_p50_ns, (unsigned long long)now.cache.seed_hit_p99_ns);
         if (more > 0)
             at = std::min<size_t>(at + (size_t)more, size - 1);
     }
