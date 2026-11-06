@@ -44,7 +44,7 @@ def main():
         raise ValueError('BL33 pin mismatch')
     source_names = ('export.c', 'export.h', 'native.c', 'entry.S', 'link.ld', 'signatures.h', 'build.py')
     source_hashes = {n: hashlib.sha256((SOURCE / n).read_bytes()).hexdigest() for n in source_names}
-    words = re.findall(r'\{0x([0-9a-f]{8})u,0x([0-9a-f]{8})u\}', (SOURCE / 'signatures.h').read_text())
+    words = re.findall(r'\{0x([0-9a-f]{8})u,\s*0x([0-9a-f]{8})u\}', (SOURCE / 'signatures.h').read_text())
     if len(words) < 100:
         raise ValueError('missing instruction signatures')
     for off, word in words:
