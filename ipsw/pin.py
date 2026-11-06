@@ -155,6 +155,40 @@ def stream_aea(remote: Remote, member: dict[str, int], offset: int, key: str) ->
     return stored.hexdigest(), content.hexdigest()
 
 
+def pin_members(remote: Remote, members: dict[str, dict[str, int]], identity: dict) -> dict[str, dict]:
+    pins = {}
+    for role, component in sorted(COMPONENTS.items()):
+        entry = identity['Manifest'].get(component)
+        if not entry or 'Path' not in entry.get('Info', {}):
+            print(f'# {role} ({component}): not in this build identity', file=sys.stderr)
+            continue
+        name = entry['Info']['Path']
+        member = members[name]
+        offset = data_offset(remote, member)
+        print(f'# {role}: {name} ({member["csize"]} bytes stored, {member["size"]} bytes)', file=sys.stderr)
+        key = None
+        if name.endswith('.aea'):
+            if member['method'] != 0:
+                raise SystemExit(f'{name}: a deflated AEA member')
+            key = aea_key(remote, offset)
+            sha256, content_sha256 = stream_aea(remote, member, offset, key)
+        else:
+            sha256, content_sha256 = stream(remote, member, offset)
+        pins[role] = {
+            'member': name,
+            'component': component,
+            'offset': offset,
+            'stored_size': member['csize'],
+            'size': member['size'],
+            'deflated': member['method'] == 8,
+            'sha256': sha256,
+            'content_sha256': content_sha256,
+        }
+        if key:
+            pins[role]['aea_key'] = key
+    return pins
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--kind', required=True, help='the IPSW kind: its build (ProductBuildVersion)')
@@ -186,38 +220,7 @@ def main() -> None:
         for i in manifest['BuildIdentities']
         if i['Info']['DeviceClass'] == device_class and i['Info']['RestoreBehavior'] == 'Erase'
     )
-    pins = {}
-    for role, component in sorted(COMPONENTS.items()):
-        entry = identity['Manifest'].get(component)
-        if not entry or 'Path' not in entry.get('Info', {}):
-            print(f'# {role} ({component}): not in this build identity', file=sys.stderr)
-            continue
-        name = entry['Info']['Path']
-        member = members[name]
-        offset = data_offset(remote, member)
-        print(
-            '# {}: {} ({} bytes stored, {} bytes)'.format(role, name, member['csize'], member['size']), file=sys.stderr
-        )
-        key = None
-        if name.endswith('.aea'):
-            if member['method'] != 0:
-                raise SystemExit(f'{name}: a deflated AEA member')
-            key = aea_key(remote, offset)
-            sha256, content_sha256 = stream_aea(remote, member, offset, key)
-        else:
-            sha256, content_sha256 = stream(remote, member, offset)
-        pins[role] = {
-            'member': name,
-            'component': component,
-            'offset': offset,
-            'stored_size': member['csize'],
-            'size': member['size'],
-            'deflated': member['method'] == 8,
-            'sha256': sha256,
-            'content_sha256': content_sha256,
-        }
-        if key:
-            pins[role]['aea_key'] = key
+    pins = pin_members(remote, members, identity)
     entry = {
         'url': url,
         'size': remote.size,
