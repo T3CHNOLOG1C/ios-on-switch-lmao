@@ -156,8 +156,9 @@ static inline const char *tegra_nvjpg_plan(const TegraNVJPGDecodeRequest *r, con
         return "decode size is not the file's size / 1, 2, 4 or 8";
     if (!(a->scales >> scale & 1))
         return "scale not proven on this unit";
-    const int grey = img->components == 1;
-    uint32_t format, planes;
+    const bool grey = img->components == 1;
+    uint32_t format = 0;
+    uint32_t planes = 0;
     switch (d->fourcc) {
     case TEGRA_NVJPG_FOURCC('4', '2', '0', 'f'):
         format = grey ? TEGRA_NVJPG_OUT_GREY : TEGRA_NVJPG_OUT_NV12;
@@ -203,13 +204,13 @@ static inline const char *tegra_nvjpg_plan(const TegraNVJPGDecodeRequest *r, con
     t->scale = scale;
     t->alpha = 0xff;
     for (uint32_t i = 0; i < planes && i < 3; i++) {
-        if (d->planeBytesPerRow[i] > 0xffffffffull)
+        if (d->planeBytesPerRow[i] > 0xffffffffULL)
             return "stride";
         t->pitch[i] = (uint32_t)d->planeBytesPerRow[i];
     }
     nvjpg_dec_drv_pic_setup_s scratch;
     memset(&scratch, 0, sizeof(scratch));
-    const char *why = tegra_nvjpg_setup_output(img, t, !a->clipped, &scratch, &p->extent);
+    const char *why = tegra_nvjpg_setup_output(img, t, a->clipped == 0, &scratch, &p->extent);
     if (why)
         return why;
     // Where each engine plane starts: the destination's plane plus the picture's offset in it.
@@ -228,9 +229,10 @@ static inline const char *tegra_nvjpg_plan(const TegraNVJPGDecodeRequest *r, con
         p->planeStart[1] = d->planeOffset[1] + (uint64_t)r->y_offset * t->pitch[1] + r->x_offset;
     else if (format == TEGRA_NVJPG_OUT_NV24)
         p->planeStart[1] = d->planeOffset[1] + (uint64_t)r->y_offset * t->pitch[1] + 2ull * r->x_offset;
-    for (uint32_t i = 0; i < p->planes; i++)
+    for (uint32_t i = 0; i < p->planes; i++) {
         if (p->planeStart[i] & 0xff)
             return "a plane does not start on 256 bytes (NVJPG takes address >> 8)";
+    }
     // Each plane's writes stay off every other plane, and inside the surface plus the sink.
     for (uint32_t i = 0; i < p->planes; i++) {
         const uint64_t end = p->planeStart[i] + (uint64_t)(p->extent.rows[i] - 1) * t->pitch[i] + p->extent.rowBytes[i];
@@ -239,7 +241,8 @@ static inline const char *tegra_nvjpg_plan(const TegraNVJPGDecodeRequest *r, con
         for (uint32_t j = 0; j < planes; j++) {
             if (j == i)
                 continue;
-            const uint64_t start = d->planeOffset[j], stop = start + d->planeBytesPerRow[j] * d->planeHeight[j];
+            const uint64_t start = d->planeOffset[j];
+            const uint64_t stop = start + d->planeBytesPerRow[j] * d->planeHeight[j];
             if (p->planeStart[i] < stop && end > start)
                 return "writes would run into another plane";
         }

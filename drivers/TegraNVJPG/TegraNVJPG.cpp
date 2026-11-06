@@ -77,7 +77,7 @@ constexpr uint64_t kMcPA = 0x70019000;
 constexpr uint32_t kPartition = 26;    // TEGRA_POWERGATE_NVJPG
 constexpr unsigned kClock = 195;       // TEGRA210_CLK_NVJPG: CAR bank Y bit 3, also its reset
 constexpr unsigned kNvdecClock = 194;  // TEGRA210_CLK_NVDEC: NVJPG's slcg clock
-constexpr uint64_t kArenaBytes = 1ull << 20;
+constexpr uint64_t kArenaBytes = 1ULL << 20;
 constexpr uint32_t kNvdecWaitMs = 20000;
 constexpr uint32_t kAsid = TEGRA_SMMU_ASID_NVJPG;  // 125 (VIC 127, the display 126)
 constexpr uint32_t kClockMHz = 408;
@@ -112,8 +112,8 @@ uint64_t gArenaUsed;
 char gLine[256];
 
 // SMMU domain: one page directory, the windows' tables (fixed) and the identity tables of the kernel buffers.
-constexpr uint32_t kWindowTables[TEGRA_NVJPG_WINDOWS] = {(uint32_t)(kTegraNVJPGWindowBytes[0] >> 22),
-                                                         (uint32_t)(kTegraNVJPGWindowBytes[1] >> 22)};
+constexpr uint32_t kWindowTables[TEGRA_NVJPG_WINDOWS] = {static_cast<uint32_t>(kTegraNVJPGWindowBytes[0] >> 22),
+                                                         static_cast<uint32_t>(kTegraNVJPGWindowBytes[1] >> 22)};
 constexpr uint32_t kIdentityTables = 4;  // the arena and the firmware: at most two 4 MiB sections each
 constexpr uint32_t kTables = 1 + kWindowTables[0] + kWindowTables[1] + kIdentityTables;
 TegraSMMUDomain gDomain;  // directory = page 0, the windows' tables pages 1.., then the identity tables
@@ -128,7 +128,7 @@ constexpr uint64_t kQueueUs = 2000000, kMaxBoundUs = 30000000;
 inline uint32_t jobBoundUs(uint64_t pixels)
 {
     const uint64_t us = kQueueUs + pixels / 16;
-    return (uint32_t)(us < kMaxBoundUs ? us : kMaxBoundUs);
+    return static_cast<uint32_t>(us < kMaxBoundUs ? us : kMaxBoundUs);
 }
 
 IOLock *gJobLock;    // one job at a time: map, run, unmap
@@ -166,7 +166,8 @@ inline uint32_t windowTable(uint32_t window)
 // The table entries just written, to memory (the SMMU does not snoop the CPU's caches).
 void cleanDomain()
 {
-    uintptr_t low, high;
+    uintptr_t low = 0;
+    uintptr_t high = 0;
     if (gDomain.takeDirty(&low, &high))
         switch_dcache_clean(reinterpret_cast<const void *>(low), high - low);
 }
@@ -182,18 +183,20 @@ bool smmuSetUp()
 {
     if (!gDomain.init(gTables.va, gTables.pa, kTables)) {
         snprintf(gLine, sizeof(gLine), "J1 FAIL the SMMU table buffer at %#llx cannot hold a directory",
-                 (unsigned long long)gTables.pa);
+                 static_cast<unsigned long long>(gTables.pa));
         return false;
     }
-    for (uint32_t w = 0; w < TEGRA_NVJPG_WINDOWS; w++)
+    for (uint32_t w = 0; w < TEGRA_NVJPG_WINDOWS; w++) {
         if (!gDomain.reserve(kTegraNVJPGWindowBase[w], kTegraNVJPGWindowBytes[w])) {
             snprintf(gLine, sizeof(gLine), "J1 FAIL no SMMU tables for window %u", w);
             return false;
         }
+    }
     const bool identities =
         gDomain.identity(gFirmware.pa, gFirmware.size, false) && gDomain.identity(gArena.pa, gArena.size, true);
     switch_dcache_clean(gTables.va, gTables.size);
-    uintptr_t low, high;
+    uintptr_t low = 0;
+    uintptr_t high = 0;
     gDomain.takeDirty(&low, &high);  // all of it was just cleaned
     if (!identities) {
         snprintf(gLine, sizeof(gLine), "J1 FAIL kernel buffers need more than %u identity tables", kIdentityTables);
@@ -329,9 +332,10 @@ void timedOut(uint32_t fence, uint64_t us)
 {
     char host[200];
     tegra_host1x_describe(host, sizeof(host));
-    if (gPublished)
+    if (gPublished) {
         panic("TegraNVJPG: job fence %u not reached in %llu ms (syncpoint %u at %u); %s; %s", fence, us / 1000, gSyncpt,
               tegra_host1x_syncpt_read(gSyncpt), falconState(), host);
+    }
     if (gWedged)
         return;
     gWedged = true;
@@ -344,15 +348,16 @@ void engineResume();
 
 bool allocate()
 {
-    const size_t length = (size_t)(tegra_nvjpg_fw_end - tegra_nvjpg_fw_start);
+    const size_t length =
+        reinterpret_cast<uintptr_t>(tegra_nvjpg_fw_end) - reinterpret_cast<uintptr_t>(tegra_nvjpg_fw_start);
     if (!switch_falcon_parse(tegra_nvjpg_fw_start, length, &gImage)) {
         snprintf(gLine, sizeof(gLine), "J0 FAIL embedded firmware is not a falcon v1 image (%lu bytes)",
-                 (unsigned long)length);
+                 static_cast<unsigned long>(length));
         return false;
     }
     if (!contiguous(switch_align_up(gImage.size, SWITCH_HW_PAGE_SIZE), &gFirmwareDma, &gFirmware) ||
         !contiguous(kArenaBytes, &gArenaDma, &gArena) ||
-        !contiguous((uint64_t)kTables * SWITCH_HW_PAGE_SIZE, &gTablesDma, &gTables)) {
+        !contiguous(static_cast<uint64_t>(kTables) * SWITCH_HW_PAGE_SIZE, &gTablesDma, &gTables)) {
         snprintf(gLine, sizeof(gLine), "J0 FAIL no contiguous firmware, arena or page-table memory below 4 GiB");
         return false;
     }
@@ -480,9 +485,10 @@ extern "C" int tegra_nvjpg_buffer(uint64_t size, TegraNVJPGBuffer *out)
 
 extern "C" void tegra_nvjpg_cache_pages(switch_dcache_op op, const uint64_t *pages, uint32_t count)
 {
-    for (uint32_t i = 0; i < count; i++)
+    for (uint32_t i = 0; i < count; i++) {
         if (switch_dma_pa_managed(pages[i]))
             switch_dcache_phys_lines(op, pages[i] & ~SWITCH_HW_PAGE_MASK, SWITCH_HW_PAGE_SIZE);
+    }
 }
 
 extern "C" void tegra_nvjpg_lock(void)
@@ -556,9 +562,10 @@ extern "C" int tegra_nvjpg_run(const TegraNVJPGJob *job, nvjpg_dec_status *statu
     switch_dcache_clean_lines(gSetup.va, sizeof(job->setup));
     bzero(gStatus.va, sizeof(nvjpg_dec_status));
     switch_dcache_clean_invalidate(gStatus.va, sizeof(nvjpg_dec_status));
-    uint32_t words[1 + 3 * 11 + 1], n = 0;
+    uint32_t words[1 + 3 * 11 + 1];
+    uint32_t n = 0;
     words[n++] = tegra_host1x_op_setclass(kClass, 0, 0);
-    auto method = [&](uint32_t offset, uint32_t value) {
+    const auto method = [&](uint32_t offset, uint32_t value) {
         words[n++] = tegra_host1x_op_incr(kThiMethod0 / 4, 2);
         words[n++] = offset / 4;
         words[n++] = value;
@@ -620,11 +627,12 @@ void engineResume()
         const uint32_t from = tegra_host1x_syncpt_read(gSyncpt);
         const char *stage = nullptr;
         const int ret = answer(gSyncpt, from, &stage);
-        if (!ret)
+        if (!ret) {
             gWedged = false;
-        else
+        } else {
             snprintf(gLine, sizeof(gLine), "%s did not answer (%d, syncpoint %u %u->%u); %s", stage, ret, gSyncpt, from,
                      tegra_host1x_syncpt_read(gSyncpt), falconState());
+        }
     }
     if (gWedged)
         IOLog("TegraNVJPG: resume FAIL %s; NVJPG refuses work (decodes go to the CPU)\n", gLine);
@@ -641,7 +649,7 @@ extern "C" int tegra_nvjpg_probe(void)
     static volatile int started;
     if (__atomic_exchange_n(&started, 1, __ATOMIC_SEQ_CST))
         return 0;
-    thread_t thread;
+    thread_t thread = nullptr;
     if (kernel_thread_start(bringUp, nullptr, &thread) != KERN_SUCCESS) {
         IOLog("TegraNVJPG: could not start the bring-up thread\n");
         return -1;
