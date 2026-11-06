@@ -15,7 +15,7 @@ here). The same kernelcache always gives the same JSON; --check compares instead
 
 A kernelcache that is not a fileset (iOS 17's arm64 prelinked kernel, unstripped of nothing but without PAC) cannot
 name slots; its tables are checked instead: the vtable has the table's slot count, every bound slot holds the
-table's address, and getMetaClass returns the table's gMetaClass.
+table's address, and getMetaClass returns the table's gMetaClass (for a table that binds the vtable).
 """
 
 import argparse
@@ -153,6 +153,20 @@ def fields(fs, table):
 def extract(fs, interface, table, kind, pure):
     cls = interface['class']
     info = fs.inheritance[cls]
+    if interface.get('metaclass_only'):
+        return dump({
+            'class': cls,
+            'kind': kind,
+            'size': hex(info['size']),
+            'first_slot': len(fs.classes[interface['superclass']]['methods']),
+            'slots': len(fs.slots(cls)),
+            'slide': table['slide'],
+            'layout': {},
+            'fields': {},
+            'addresses': {'gMetaClass': hex(info['meta'])},
+            'found': {'gMetaClass': 'metaclass initialiser'},
+            'hints': table.get('hints', {}),
+        })
     first, slots, named, found, errors = layout(fs, interface, table, pure)
     if errors:
         raise SystemExit('{} ({}):\n  {}'.format(cls, kind, '\n  '.join(errors)))
@@ -188,7 +202,11 @@ def extract(fs, interface, table, kind, pure):
         'found': dict(sorted(found.items())),
         'hints': table.get('hints', {}),
     }
-    return json.dumps(out, indent=2) + '\n'
+    return dump(out)
+
+
+def dump(table):
+    return json.dumps(table, indent=2) + '\n'
 
 
 def check_plain(path, interface, table):
@@ -203,6 +221,8 @@ def check_plain(path, interface, table):
         return int.from_bytes(data[backed_offset(segments, va, 8, len(data)) :][:8], 'little')
 
     addresses = {k: int(v, 16) for k, v in table['addresses'].items() if v != 'unported'}
+    if 'vtable' not in addresses:
+        return
     vtable = addresses['vtable'] + 16
     entries = [u64(vtable + 8 * i) for i in range(table['slots'] + 1)]
     errors = []

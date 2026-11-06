@@ -99,6 +99,16 @@ py_test(
 )
 
 switch_abi_class(
+    "AppleARMBacklight",
+    header = False,
+)
+
+switch_abi_class(
+    "IOAcceleratorES",
+    header = False,
+)
+
+switch_abi_class(
     "IOBlockStorageDevice",
     header = False,
 )

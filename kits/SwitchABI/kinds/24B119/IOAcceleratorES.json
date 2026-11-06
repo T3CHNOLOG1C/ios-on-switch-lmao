@@ -1,0 +1,23 @@
+{
+  "class": "IOAcceleratorES",
+  "kind": "24B119",
+  "size": "0x88",
+  "first_slot": 168,
+  "slots": 168,
+  "slide": "-0x3fec000",
+  "layout": {},
+  "fields": {},
+  "addresses": {
+    "vtable": "0xfffffff007fc9908",
+    "C2": "0xfffffff00986c4a8",
+    "D2": "0xfffffff00986c518",
+    "gMetaClass": "0xfffffff00aea8048"
+  },
+  "found": {
+    "C2": "stores the vtable",
+    "D2": "branch after the constructors",
+    "gMetaClass": "metaclass initialiser",
+    "vtable": "metaclass initialiser"
+  },
+  "hints": {}
+}

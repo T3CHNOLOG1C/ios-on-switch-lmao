@@ -1,0 +1,17 @@
+{
+  "class": "AppleARMBacklight",
+  "kind": "24B119",
+  "size": "0x370",
+  "first_slot": 168,
+  "slots": 169,
+  "slide": "-0x3fec000",
+  "layout": {},
+  "fields": {},
+  "addresses": {
+    "gMetaClass": "0xfffffff00acee300"
+  },
+  "found": {
+    "gMetaClass": "metaclass initialiser"
+  },
+  "hints": {}
+}

@@ -1,0 +1,13 @@
+{
+  "class": "AppleARMBacklight",
+  "kind": "21H461",
+  "size": "0x370",
+  "first_slot": 168,
+  "slots": 169,
+  "slide": "-0x1000000",
+  "layout": {},
+  "fields": {},
+  "addresses": {
+    "gMetaClass": "0xfffffff007ade638"
+  }
+}

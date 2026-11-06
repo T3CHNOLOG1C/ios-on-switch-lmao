@@ -1,0 +1,9 @@
+{
+  "class": "AppleARMBacklight",
+  "doc": "AppleARMPlatform's backlight: SwitchBacklight names its metaclass as its own metaclass's superclass, and nothing else of it.",
+  "superclass": "IOService",
+  "kext": "com.apple.driver.AppleARMPlatform",
+  "header": false,
+  "metaclass_only": true,
+  "methods": {}
+}

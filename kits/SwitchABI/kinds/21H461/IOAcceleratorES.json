@@ -1,0 +1,15 @@
+{
+  "class": "IOAcceleratorES",
+  "kind": "21H461",
+  "size": "0x88",
+  "first_slot": 168,
+  "slots": 168,
+  "slide": "-0x1000000",
+  "layout": {},
+  "fields": {},
+  "addresses": {
+    "C2": "0xfffffff005bd3b20",
+    "D2": "0xfffffff005bd3b64",
+    "gMetaClass": "0xfffffff007aeb688"
+  }
+}
