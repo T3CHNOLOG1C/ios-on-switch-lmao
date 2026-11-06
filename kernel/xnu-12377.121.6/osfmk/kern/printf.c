@@ -930,7 +930,8 @@ consdebug_putc(char c)
 	debug_putc(c);
 
 	/* Ignore `disable_serial_output` for early panic serial output from `sptm_serial_putc()`. */
-	if (!console_is_serial() && !disable_serial_output && (PE_kputc != NULL)) {
+	/* PE_kputc may be the same framebuffer sink as the console. */
+	if (!console_is_serial() && !disable_serial_output && (PE_kputc != NULL) && PE_kputc != console_write_unbuffered) {
 		PE_kputc(c);
 	} else if (!console_is_serial() && (PE_kputc == NULL)) {
 		/* Use SPTM's serial interface for early serial output. */
@@ -946,7 +947,8 @@ consdebug_putc_unbuffered(char c)
 	debug_putc(c);
 
 	/* Ignore `disable_serial_output` for early panic serial output from `sptm_serial_putc()`. */
-	if (!console_is_serial() && !disable_serial_output && (PE_kputc != NULL)) {
+	/* PE_kputc may be the same framebuffer sink as the console. */
+	if (!console_is_serial() && !disable_serial_output && (PE_kputc != NULL) && PE_kputc != console_write_unbuffered) {
 		PE_kputc(c);
 	} else if (!console_is_serial() && (PE_kputc == NULL)) {
 		/* Use SPTM's serial interface for early serial output. */

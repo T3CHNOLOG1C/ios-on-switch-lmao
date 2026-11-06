@@ -1,3 +1,4 @@
+#include "SwitchDiag.h"
 /*
  * Copyright (c) 2007-2011 Apple Inc. All rights reserved.
  *
@@ -45,6 +46,7 @@
 #include <arm/misc_protos.h>
 #include <pexpert/arm64/boot.h>
 #include <pexpert/device_tree.h>
+#include <arm64/switch_ram.h>
 
 #include <libkern/kernel_mach_header.h>
 #include <libkern/section_keywords.h>
@@ -349,6 +351,109 @@ SECURITY_READ_ONLY_LATE(vm_map_address_t) physmap_end = (vm_map_address_t)0;
  */
 SECURITY_READ_ONLY_LATE(addr64_t) first_avail_phys = 0;
 
+/* Actual banks and live reservations supplied by the gated native loader.
+ * The physical aperture remains dense for ARM64's span-indexed page metadata. */
+static struct switch_ram_ledger switch_ledger;
+static pmap_paddr_t switch_kernel_start, switch_bootstrap_start, switch_bootstrap_limit, switch_accounted_bootstrap_end;
+/* tegra-gpu-pool-pa: outside the managed pages like the framebuffer (no pv lists, never handed to the VM), and in the
+ * physical aperture write-combined only (no cacheable alias anywhere): the GPU driver reaches it with phystokv(). A
+ * separate 128 MiB ml_io_map_wcomb fails, kernel VA (10-30: "kmem_alloc(.., 134217728, ..): failed with 3"). */
+static pmap_paddr_t switch_gpu_start, switch_gpu_end;
+static bool switch_physmap_wcomb;   /* set only while arm_vm_switch_physmap maps the GPU pool */
+
+boolean_t
+pmap_switch_ram_enabled(void) { return switch_ledger.committed == 1; }
+
+boolean_t
+pmap_switch_pa_valid(pmap_paddr_t pa)
+{
+    if (!switch_ledger.committed) return TRUE;
+    if (pa >= 0xa0000000ULL && pa < 0xa0020000ULL) return FALSE;
+    if (pa >= 0xf5a00000ULL && pa < 0xf5e00000ULL) return FALSE;
+    if (pa >= switch_gpu_start && pa < switch_gpu_end) return FALSE;
+    return (pa >= switch_ledger.banks[0].start && pa < switch_ledger.banks[0].end) ||
+           (pa >= switch_ledger.banks[1].start && pa < switch_ledger.banks[1].end);
+}
+
+boolean_t
+pmap_switch_ram_reserved(ppnum_t pnum)
+{
+    pmap_paddr_t pa = (pmap_paddr_t)pnum << PAGE_SHIFT;
+    if (!switch_ledger.committed) return FALSE;
+    if (!pmap_switch_pa_valid(pa)) return TRUE;
+    if (pa < first_avail_phys && pa + PAGE_SIZE > switch_kernel_start) return TRUE;
+    for (unsigned i=0; i<switch_ledger.count; ++i) {
+        if (pa < switch_ledger.reserved[i].end && pa+PAGE_SIZE > switch_ledger.reserved[i].start) return TRUE;
+    }
+    return FALSE;
+}
+
+void
+pmap_switch_bootstrap_check(pmap_paddr_t start, pmap_paddr_t end)
+{
+    if (switch_ledger.committed && (start < switch_bootstrap_start || end < start || end > switch_bootstrap_limit))
+        panic("native bootstrap allocation outside contiguous free RAM");
+}
+
+static void
+pmap_switch_ram_init(boot_args *args)
+{
+#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
+    DTEntry entry; const void *wire; unsigned int bytes;
+    if (SecureDTLookupEntry(NULL, "/chosen", &entry) != kSuccess ||
+        SecureDTGetProperty(entry, "switch-ram-ledger", &wire, &bytes) != kSuccess) {
+        if (args->physBase == 0x80000000ULL && args->memSize == 0x100000000ULL)
+            panic("native full RAM requires live ownership ledger");
+        return;
+    }
+    if (bytes != sizeof(switch_ledger)) panic("native RAM ledger size");
+    memcpy(&switch_ledger, wire, sizeof(switch_ledger));
+    if (switch_ledger.magic != SWITCH_RAM_MAGIC || switch_ledger.version != 1 || switch_ledger.committed != 1 ||
+        !switch_ledger.count || switch_ledger.count > SWITCH_RAM_RANGES ||
+        switch_ledger.banks[0].start != 0x80000000ULL || switch_ledger.banks[0].end != 0xffd00000ULL ||
+        switch_ledger.banks[1].start != 0x100000000ULL || switch_ledger.banks[1].end != 0x180000000ULL ||
+        args->physBase != 0x80000000ULL || args->memSize != 0x100000000ULL ||
+        args->virtBase != 0xffffffefd2200000ULL)
+        panic("native RAM ledger/bank geometry");
+    switch_kernel_start = 0xb207c000;
+    switch_bootstrap_start = args->topOfKernelData;
+    /* Temporary assembly blocks end at the old envelope rounded down. */
+    switch_bootstrap_limit = 0xe2000000ULL;
+    if (switch_bootstrap_start <= switch_kernel_start || switch_bootstrap_start >= switch_bootstrap_limit)
+        panic("native kernel extent outside low bank");
+    for (unsigned i=0; i<switch_ledger.count; ++i) {
+        pmap_paddr_t start=switch_ledger.reserved[i].start, end=switch_ledger.reserved[i].end;
+        if (start >= end) panic("native invalid reservation");
+        if (start < switch_bootstrap_start && end > switch_kernel_start) panic("native reservation overlaps kernel");
+        if (start >= switch_bootstrap_start && start < switch_bootstrap_limit)
+            switch_bootstrap_limit = start & ~PAGE_MASK;
+    }
+    /* drivers/TegraGM20B's GPU pool (nvxnu_pool_init): with boot-arg tegra-gpu-pool-pa=<pa> (tegra-gpu-pool-mb, default
+     * 128) that RAM joins the ledger here, so the VM never hands it out and the GPU driver maps it write-combined. A
+     * physically contiguous 128 MiB below 4 GiB cannot be allocated once the VM is running (10-30: "M1 FAIL pool -12").
+     * It must lie in the low bank's free RAM, above the bootstrap blocks and below the framebuffer. */
+    uint64_t gpu_pa = 0, gpu_mb = 128;
+    if (PE_parse_boot_argn("tegra-gpu-pool-pa", &gpu_pa, sizeof(gpu_pa)) && gpu_pa) {
+        PE_parse_boot_argn("tegra-gpu-pool-mb", &gpu_mb, sizeof(gpu_mb));
+        const uint64_t gpu_end = gpu_pa + (gpu_mb << 20);
+        if ((gpu_pa & PAGE_MASK) || gpu_mb < 16 || gpu_mb > 1024 || gpu_pa < 0xe2000000ULL || gpu_end > 0xf5a00000ULL ||
+            switch_ledger.count == SWITCH_RAM_RANGES)
+            panic("tegra-gpu-pool-pa %#llx (%llu MiB) outside 0xe2000000-0xf5a00000, or the RAM ledger is full", gpu_pa, gpu_mb);
+        /* The ledger also holds the live FDT's /reserved-memory and memreserve ranges (loader memory.c), which the
+         * build does not know: RAM another owner keeps must not become the GPU's. */
+        for (unsigned i=0; i<switch_ledger.count; ++i) {
+            if (gpu_pa < switch_ledger.reserved[i].end && switch_ledger.reserved[i].start < gpu_end)
+                panic("tegra-gpu-pool-pa %#llx-%#llx overlaps reserved RAM %#llx-%#llx (ledger entry %u)", gpu_pa, gpu_end,
+                      (uint64_t)switch_ledger.reserved[i].start, (uint64_t)switch_ledger.reserved[i].end, i);
+        }
+        switch_ledger.reserved[switch_ledger.count++] = (struct switch_ram_range){gpu_pa, gpu_end};
+        switch_gpu_start = gpu_pa;
+        switch_gpu_end = gpu_end;
+    }
+#endif
+}
+
+
 /*
  * Bounds of the kernelcache; used for accounting.
  */
@@ -477,6 +582,7 @@ alloc_ptpage(boolean_t map_static)
 
 		return vaddr;
 	} else {
+		pmap_switch_bootstrap_check(avail_start, avail_start + ARM_PGBYTES);
 		vaddr = phystokv(avail_start);
 		avail_start += ARM_PGBYTES;
 
@@ -1063,7 +1169,7 @@ arm_vm_page_granular_helper(vm_offset_t start, vm_offset_t _end, vm_offset_t va,
 		for (i = 0; i <= (ARM_TT_L3_INDEX_MASK >> ARM_TT_L3_SHIFT); i++) {
 			if ((start <= va) && (va < rounded_end)) {
 				ptmp = pa | ARM_PTE_AF | ARM_PTE_SH(SH_OUTER_MEMORY) | ARM_PTE_TYPE_VALID;
-				ptmp = ptmp | ARM_PTE_ATTRINDX(CACHE_ATTRINDX_DEFAULT);
+				ptmp = ptmp | ARM_PTE_ATTRINDX(switch_physmap_wcomb ? CACHE_ATTRINDX_WRITECOMB : CACHE_ATTRINDX_DEFAULT);
 				ptmp = ptmp | ARM_PTE_AP(pte_prot_APX);
 				ptmp = ptmp | ARM_PTE_NX;
 #if __ARM_KERNEL_PROTECT__
@@ -1157,7 +1263,7 @@ arm_vm_page_granular_prot(vm_offset_t start, unsigned long size, pmap_paddr_t pa
 				tmplate = (pa & ARM_TTE_BLOCK_L2_MASK) | ARM_TTE_TYPE_BLOCK
 				    | ARM_TTE_VALID | ARM_TTE_BLOCK_AF | ARM_TTE_BLOCK_NX
 				    | ARM_TTE_BLOCK_AP(pte_prot_APX) | ARM_TTE_BLOCK_SH(SH_OUTER_MEMORY)
-				    | ARM_TTE_BLOCK_ATTRINDX(CACHE_ATTRINDX_WRITEBACK);
+				    | ARM_TTE_BLOCK_ATTRINDX(switch_physmap_wcomb ? CACHE_ATTRINDX_WRITECOMB : CACHE_ATTRINDX_WRITEBACK);
 
 #if __ARM_KERNEL_PROTECT__
 				tmplate = tmplate | ARM_TTE_BLOCK_NG;
@@ -1558,6 +1664,35 @@ arm_vm_physmap_slide(ptov_table_entry *temp_ptov_table, vm_map_address_t orig_va
 	++ptov_index;
 }
 
+static void
+arm_vm_switch_physmap(ptov_table_entry *table, pmap_paddr_t start, pmap_paddr_t end)
+{
+    static const struct switch_ram_range regions[] = {
+        {0x80000000ULL,0xa0000000ULL}, {0xa0020000ULL,0xf5a00000ULL},
+        {0xf5e00000ULL,0xffd00000ULL},
+        {0x100000000ULL,0x180000000ULL}
+    };
+    for (unsigned i=0;i<4;i++) {
+        pmap_paddr_t lo=MAX(start,regions[i].start), hi=MIN(end,regions[i].end);
+        /* The GPU pool (switch_gpu_start..end) splits the region it lies in and is mapped write-combined. */
+        pmap_paddr_t pieces[3][2] = {{lo, hi}, {0, 0}, {0, 0}};
+        if (switch_gpu_start < switch_gpu_end && lo < switch_gpu_end && switch_gpu_start < hi) {
+            pieces[0][1] = MAX(lo, switch_gpu_start);
+            pieces[1][0] = MAX(lo, switch_gpu_start);
+            pieces[1][1] = MIN(hi, switch_gpu_end);
+            pieces[2][0] = MIN(hi, switch_gpu_end);
+            pieces[2][1] = hi;
+        }
+        for (unsigned j=0;j<3;j++) {
+            if (pieces[j][0] >= pieces[j][1]) continue;
+            switch_physmap_wcomb = j == 1;
+            arm_vm_physmap_slide(table,pieces[j][0]-gPhysBase+gVirtBase,
+                pieces[j][1]-pieces[j][0],AP_RWNA,ARM64_GRANULE_ALLOW_BLOCK | ARM64_GRANULE_ALLOW_HINT);
+            switch_physmap_wcomb = false;
+        }
+    }
+}
+
 #if XNU_MONITOR
 
 SECURITY_READ_ONLY_LATE(static boolean_t) keep_linkedit = FALSE;
@@ -1643,14 +1778,20 @@ arm_vm_physmap_init(boot_args *args)
 	bzero(temp_ptov_table, sizeof(temp_ptov_table));
 
 	// Will be handed back to VM layer through ml_static_mfree() in arm_vm_prot_finalize()
+    if (switch_ledger.committed) arm_vm_switch_physmap(temp_ptov_table,gPhysBase,segLOWEST-gVirtBase+gPhysBase);
+    else {
 	arm_vm_physmap_slide(temp_ptov_table, gVirtBase, segLOWEST - gVirtBase, AP_RWNA,
 	    ARM64_GRANULE_ALLOW_BLOCK | ARM64_GRANULE_ALLOW_HINT);
+    }
 
 	arm_vm_page_granular_RWNX(end_kern, phystokv(args->topOfKernelData) - end_kern,
 	    ARM64_GRANULE_ALLOW_BLOCK | ARM64_GRANULE_ALLOW_HINT); /* Device Tree (if not locked down), RAM Disk (if present), bootArgs */
 
+    if (switch_ledger.committed) arm_vm_switch_physmap(temp_ptov_table,args->topOfKernelData,real_avail_end);
+    else {
 	arm_vm_physmap_slide(temp_ptov_table, (args->topOfKernelData - gPhysBase + gVirtBase),
 	    real_avail_end - args->topOfKernelData, AP_RWNA, ARM64_GRANULE_ALLOW_BLOCK | ARM64_GRANULE_ALLOW_HINT); // rest of physmem
+    }
 
 	assert((temp_ptov_table[ptov_index - 1].va + temp_ptov_table[ptov_index - 1].len) <= physmap_end);
 
@@ -1682,7 +1823,7 @@ arm_vm_prot_finalize(boot_args * args __unused)
 	 * should be immediately followed by XNU's TEXT segment
 	 */
 
-	ml_static_mfree(phystokv(gPhysBase), segLOWEST - gVirtBase);
+	if (!switch_ledger.committed) ml_static_mfree(phystokv(gPhysBase), segLOWEST - gVirtBase);
 
 	/*
 	 * KTRR support means we will be mucking with these pages and trying to
@@ -1838,6 +1979,7 @@ arm_vm_init(uint64_t memory_size, boot_args * args)
 	 */
 	gVirtBase = args->virtBase;
 	gPhysBase = args->physBase;
+	pmap_switch_ram_init(args);
 #if KASAN
 	real_phys_size = args->memSize + (shadow_ptop - shadow_pbase);
 #else
@@ -1855,6 +1997,8 @@ arm_vm_init(uint64_t memory_size, boot_args * args)
 	gPhysSize = mem_size = ((gPhysBase + args->memSize) & ~PAGE_MASK) - gPhysBase;
 	mem_actual = args->memSizeActual ? args->memSizeActual : mem_size;
 
+	if (switch_ledger.committed && memory_size && memory_size < mem_size)
+		panic("native full RAM profile cannot truncate dense aperture");
 	if ((memory_size != 0) && (mem_size > memory_size)) {
 		mem_size = memory_size;
 		max_mem_actual = memory_size;
@@ -1874,11 +2018,13 @@ arm_vm_init(uint64_t memory_size, boot_args * args)
 	physmap_base = phystokv(args->topOfKernelData);
 #endif
 
+	switch_diag_early_stage(17, "VM memory bounds ready");
 	// Slide the physical aperture to a random page-aligned location within the slide range
 	uint64_t physmap_slide = early_random() & ARM64_PHYSMAP_SLIDE_MASK & ~((uint64_t)PAGE_MASK);
 	assert(physmap_slide < ARM64_PHYSMAP_SLIDE_RANGE);
 
 	physmap_base += physmap_slide;
+	switch_diag_early_stage(18, "VM random slide ready");
 
 #if XNU_MONITOR
 	physmap_base = ROUND_TWIG(physmap_base);
@@ -2174,13 +2320,17 @@ arm_vm_init(uint64_t memory_size, boot_args * args)
 	kasan_init();
 #endif /* KASAN */
 
+	switch_diag_early_stage(19, "VM preparing final tables");
 	arm_vm_physmap_init(args);
 	set_mmu_ttb_alternate(cpu_ttep & TTBR_BADDR_MASK);
+	switch_diag_early_stage(20, "VM final kernel tables active");
 
 #if XNU_MONITOR
 	ml_enable_monitor();
 #endif
 
+	switch_diag_early_stage(21, "VM retiring early diagnostics");
+	switch_diag_early_leave();
 	set_mmu_ttb(invalid_ttep & TTBR_BADDR_MASK);
 
 	flush_mmu_tlb();
@@ -2237,7 +2387,22 @@ arm_vm_init(uint64_t memory_size, boot_args * args)
 	}
 
 	sane_size = mem_size - (avail_start - gPhysBase);
-	max_mem = mem_size;
+    max_mem = mem_size;
+    if (switch_ledger.committed) {
+        uint64_t eligible=0, free_bytes=0;
+        for (pmap_paddr_t pa=gPhysBase;pa<gPhysBase+mem_size;pa+=PAGE_SIZE) {
+            if (pmap_switch_pa_valid(pa)) {
+                boolean_t reserved=FALSE;
+                for (unsigned i=0;i<switch_ledger.count;i++)
+                    if (pa<switch_ledger.reserved[i].end && pa+PAGE_SIZE>switch_ledger.reserved[i].start) reserved=TRUE;
+                if (!reserved) eligible+=PAGE_SIZE;
+                if (!reserved && !(pa<avail_start && pa+PAGE_SIZE>switch_kernel_start)) free_bytes+=PAGE_SIZE;
+            }
+        }
+        max_mem=mem_actual=max_mem_actual=eligible;
+        sane_size=free_bytes;
+        switch_accounted_bootstrap_end=avail_start;
+    }
 	vm_kernel_slid_base = segLOWESTTEXT;
 	// vm_kernel_slide is set by arm_init()->arm_slide_rebase_and_sign_image()
 	vm_kernel_stext = segTEXTB;
@@ -2405,6 +2570,10 @@ arm_vm_init(uint64_t memory_size, boot_args * args)
 	pmap_static_allocations_done();
 #endif
 	first_avail = avail_start;
+	if (switch_ledger.committed) {
+        first_avail_phys = avail_start;
+        sane_size -= avail_start - switch_accounted_bootstrap_end;
+    }
 	patch_low_glo_static_region(args->topOfKernelData, avail_start - args->topOfKernelData);
 	enable_preemption();
 }

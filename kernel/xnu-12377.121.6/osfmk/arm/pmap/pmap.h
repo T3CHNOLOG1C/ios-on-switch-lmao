@@ -418,7 +418,15 @@ struct pmap {
 	char pmap_procname[17];
 #endif /* MACH_ASSERT */
 
+#if !defined(APPLE_ARM64_ARCH_FAMILY)
+	/*
+	 * EL0 cache maintenance traps (SCTLR_EL1.UCI clear) while this address space is live: it may write code and the
+	 * core needs a DC CVAU that its userland never issues (pmap_set_jit_entitled_internal). Takes reserved4's slot.
+	 */
+	bool user_cache_maintenance_trap;
+#else
 	bool reserved4;
+#endif
 
 	bool pmap_vm_map_cs_enforced;
 

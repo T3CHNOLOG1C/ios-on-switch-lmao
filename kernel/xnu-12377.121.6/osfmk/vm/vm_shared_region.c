@@ -74,6 +74,45 @@ extern void *a64x_shared_cache_pager(void *file_object, uint64_t file_offset, ui
 #include <vm/memory_object_internal.h>
 #include <vm/vm_protos_internal.h>
 #include <vm/vm_object_internal.h>
+#include <vm/vm_shared_region.h>
+
+#include <vm/vm_protos.h>
+#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT && CONFIG_CODE_DECRYPTION
+/* bsd/vm/vm_unix.c (bsd headers are not visible here) */
+struct vnode;
+extern memory_object_t switch_shared_cache_text_pager(vm_object_t file_object, uint64_t object_base, uint64_t file_offset, uint64_t size,
+    uint64_t unslid_address, struct vnode *vp, uint64_t *range_offset, uint64_t *range_size);
+
+/*
+ * Switch: replace a few pages of an executable cache mapping, just entered in the shared region, with an
+ * apple_protect pager over the same file (see switch_shared_cache_text_pager()). Fails open: when there is
+ * nothing to patch or anything goes wrong, the stock mapping stays as it is (vm_map_enter() puts the overwritten
+ * entries back if the new mapping fails). Same pager as the arm64e translator's cache mappings (r8-arm64e
+ * a64x_shared_cache_pager), which replaces the whole mapping's pager before it is entered; if both ever live in
+ * one tree, this one must take the translator's object as its backing object instead of the file's.
+ */
+static void
+switch_shared_cache_text_patch(vm_map_t sr_map, vm_map_offset_t sr_address,
+    const struct shared_file_mapping_slide_np *mapping, const struct _sr_file_mappings *srfmp, vm_object_t file_object,
+    uint64_t object_base)
+{
+	uint64_t range_offset = 0, range_size = 0;
+	memory_object_t mo = switch_shared_cache_text_pager(file_object, object_base, mapping->sms_file_offset, mapping->sms_size,
+	    mapping->sms_address - srfmp->slide, srfmp->vp, &range_offset, &range_size);
+	if (mo == MEMORY_OBJECT_NULL) {
+		return;
+	}
+	vm_map_offset_t address = sr_address + range_offset;
+	vm_map_kernel_flags_t vmk_flags = VM_MAP_KERNEL_FLAGS_FIXED(.vmf_overwrite = true);
+	kern_return_t kr = vm_map_enter_mem_object(sr_map, vm_sanitize_wrap_addr_ref(&address), range_size, 0, vmk_flags,
+	    (ipc_port_t)(uintptr_t)mo, 0, TRUE,
+	    mapping->sms_init_prot & VM_PROT_ALL, mapping->sms_max_prot & VM_PROT_ALL, VM_INHERIT_DEFAULT, NULL, 0);
+	memory_object_deallocate(mo); /* the mapping holds its own reference */
+	if (kr != KERN_SUCCESS) {
+		printf("SwitchHomeGrid: mapping the patched pages failed (0x%x), cache text left stock\n", (unsigned int)kr);
+	}
+}
+#endif
 
 #include <machine/commpage.h>
 #include <machine/cpu_capabilities.h>
@@ -1871,6 +1910,23 @@ vm_shared_region_map_file_setup(
 					mappings[i].sms_init_prot & VM_PROT_ALL,
 					mappings[i].sms_max_prot & VM_PROT_ALL,
 					VM_INHERIT_DEFAULT);
+#if CONFIG_A64X || (defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT && CONFIG_CODE_DECRYPTION)
+				vm_object_t text_object = file_object;
+				uint64_t text_object_base = 0;
+#endif
+#if CONFIG_A64X
+				if (a64x_mo != MEMORY_OBJECT_NULL) {
+					/* the home grid pages must come from the translated text: back them onto the a64x pager's object */
+					text_object = memory_object_control_to_vm_object(a64x_mo->mo_control);
+					text_object_base = mappings[i].sms_file_offset;
+				}
+#endif /* CONFIG_A64X */
+#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT && CONFIG_CODE_DECRYPTION
+				/* a few known constants in the cache text: see switch_shared_cache_text_pager() */
+				if (kr == KERN_SUCCESS && (mappings[i].sms_init_prot & VM_PROT_EXECUTE) && text_object != VM_OBJECT_NULL) {
+					switch_shared_cache_text_patch(sr_map, target_address, &mappings[i], srfmp, text_object, text_object_base);
+				}
+#endif
 #if CONFIG_A64X
 				if (a64x_mo != MEMORY_OBJECT_NULL) {
 					memory_object_deallocate(a64x_mo); /* the mapping holds its own reference */

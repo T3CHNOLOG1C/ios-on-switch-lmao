@@ -223,6 +223,15 @@ extern void mapping_free_prime(void); /* Primes the mapping block release list *
 /*
  * Routines to return the next unused physical page.
  */
+#if defined(__arm64__)
+extern unsigned int pmap_switch_dense_page_count(void);
+extern boolean_t pmap_switch_begin_dense_pages(void);
+extern boolean_t pmap_switch_page_reserved(ppnum_t pnum);
+extern boolean_t pmap_switch_ram_enabled(void);
+extern boolean_t pmap_switch_ram_reserved(ppnum_t pnum);
+extern boolean_t pmap_switch_pa_valid(pmap_paddr_t pa);
+extern void pmap_switch_bootstrap_check(pmap_paddr_t start, pmap_paddr_t end);
+#endif
 extern boolean_t pmap_next_page(ppnum_t *pnum);
 extern boolean_t pmap_next_page_hi(ppnum_t *pnum, boolean_t might_free);
 #ifdef __x86_64__
@@ -886,6 +895,11 @@ extern void pmap_set_jit_entitled(pmap_t pmap);
 
 /* Ask the pmap layer if there is a JIT entry in this map. */
 extern bool pmap_get_jit_entitled(pmap_t pmap);
+
+#if defined(__arm64__) && !CONFIG_SPTM
+/* A forked address space traps EL0 cache maintenance when its parent does (osfmk/arm/pmap/pmap.c). */
+extern void pmap_inherit_user_cache_maintenance_trap(pmap_t parent, pmap_t child);
+#endif
 
 /* Inform the pmap layer that the XO register is repurposed for this map */
 extern void pmap_set_tpro(pmap_t pmap);

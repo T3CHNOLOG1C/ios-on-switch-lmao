@@ -182,6 +182,14 @@ static struct smr_hash pgrp_hash;
 SECURITY_READ_ONLY_LATE(struct sesshashhead *) sesshashtbl;
 SECURITY_READ_ONLY_LATE(u_long) sesshash;
 
+/* Switch: off, as in RELEASE: tracking takes a backtrace (btref_get) for every proc_ref and proc_rele and drops them
+ * all again at each syscall return. */
+#if defined(SWITCH_XNU_DIAGNOSTICS) && SWITCH_XNU_DIAGNOSTICS
+#define SWITCH_PROCREF_TRACKING_OFF 1
+#else
+#define SWITCH_PROCREF_TRACKING_OFF 0
+#endif
+
 struct proclist allproc = LIST_HEAD_INITIALIZER(allproc);
 struct proclist zombproc = LIST_HEAD_INITIALIZER(zombproc);
 extern struct tty cons;
@@ -748,7 +756,7 @@ uthread_reset_proc_refcount(uthread_t uth)
 	uth->uu_proc_refcount = 0;
 
 #if PROC_REF_DEBUG
-	if (kern_feature_override(KF_DISABLE_PROCREF_TRACKING_OVRD)) {
+	if ((SWITCH_PROCREF_TRACKING_OFF || kern_feature_override(KF_DISABLE_PROCREF_TRACKING_OVRD))) {
 		return;
 	}
 
@@ -771,7 +779,7 @@ uthread_reset_proc_refcount(uthread_t uth)
 void
 uthread_init_proc_refcount(uthread_t uth)
 {
-	if (kern_feature_override(KF_DISABLE_PROCREF_TRACKING_OVRD)) {
+	if ((SWITCH_PROCREF_TRACKING_OFF || kern_feature_override(KF_DISABLE_PROCREF_TRACKING_OVRD))) {
 		return;
 	}
 
@@ -782,7 +790,7 @@ uthread_init_proc_refcount(uthread_t uth)
 void
 uthread_destroy_proc_refcount(uthread_t uth)
 {
-	if (kern_feature_override(KF_DISABLE_PROCREF_TRACKING_OVRD)) {
+	if ((SWITCH_PROCREF_TRACKING_OFF || kern_feature_override(KF_DISABLE_PROCREF_TRACKING_OVRD))) {
 		return;
 	}
 
@@ -799,7 +807,7 @@ uthread_destroy_proc_refcount(uthread_t uth)
 void
 uthread_assert_zero_proc_refcount(uthread_t uth)
 {
-	if (kern_feature_override(KF_DISABLE_PROCREF_TRACKING_OVRD)) {
+	if ((SWITCH_PROCREF_TRACKING_OFF || kern_feature_override(KF_DISABLE_PROCREF_TRACKING_OVRD))) {
 		return;
 	}
 
@@ -858,7 +866,7 @@ record_procref(proc_t p __unused, int count)
 	uth->uu_proc_refcount += count;
 
 #if PROC_REF_DEBUG
-	if (kern_feature_override(KF_DISABLE_PROCREF_TRACKING_OVRD)) {
+	if ((SWITCH_PROCREF_TRACKING_OFF || kern_feature_override(KF_DISABLE_PROCREF_TRACKING_OVRD))) {
 		return;
 	}
 	struct uthread_proc_ref_info *upri = uth->uu_proc_ref_info;

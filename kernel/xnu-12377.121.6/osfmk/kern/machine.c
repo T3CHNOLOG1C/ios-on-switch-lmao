@@ -147,6 +147,10 @@ processor_offline_intstack(processor_t processor) __dead2;
  *	Flag processor as up and running, and available
  *	for scheduling.
  */
+#if defined(SWITCH_XNU_DIAGNOSTICS) && SWITCH_XNU_DIAGNOSTICS
+extern void switch_smp_scheduler_online(unsigned int cpu);
+#endif
+
 void
 processor_up(
 	processor_t                     processor)
@@ -189,6 +193,9 @@ processor_up(
 	if (dtrace_cpu_state_changed_hook) {
 		(*dtrace_cpu_state_changed_hook)(processor->cpu_id, TRUE);
 	}
+#endif
+#if defined(SWITCH_XNU_DIAGNOSTICS) && SWITCH_XNU_DIAGNOSTICS
+	switch_smp_scheduler_online(processor->cpu_id);
 #endif
 }
 

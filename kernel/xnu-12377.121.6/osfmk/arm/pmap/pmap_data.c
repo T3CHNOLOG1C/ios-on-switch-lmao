@@ -697,6 +697,7 @@ pmap_data_bootstrap(void)
 	pt_desc_t *ptd_root_table = (pt_desc_t *)phystokv(avail_start);
 	avail_start = round_page(avail_start + ptd_root_table_size);
 
+	pmap_switch_bootstrap_check(pmap_struct_start, avail_start);
 	memset((char *)phystokv(pmap_struct_start), 0, avail_start - pmap_struct_start);
 
 	/* This function assumes that ptd_root_table has been zeroed out already. */

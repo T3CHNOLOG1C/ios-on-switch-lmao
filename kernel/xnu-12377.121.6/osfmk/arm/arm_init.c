@@ -1,3 +1,6 @@
+#include "SwitchDiag.h"
+#include "SwitchPanicSave.h"
+#include <kern/boot_progress.h>
 /*
  * Copyright (c) 2007-2024 Apple Inc. All rights reserved.
  *
@@ -356,7 +359,9 @@ arm_init(
 	DTEntry chosen = NULL;
 	unsigned int dt_entry_size = 0;
 
+	switch_diag_early_stage(7, "arm_init entered");
 	arm_slide_rebase_and_sign_image();
+	switch_diag_early_stage(8, "image rebased");
 
 	arm_static_if_init(args);
 
@@ -376,6 +381,8 @@ arm_init(
 #endif /* defined(HAS_APPLE_PAC) */
 
 	PE_init_platform(FALSE, args); /* Get platform expert set up */
+	switch_diag_early_stage(9, "platform expert ready");
+	boot_progress_init();
 
 #if __arm64__
 	configure_timer_apple_regs();
@@ -469,6 +476,7 @@ arm_init(
 #endif
 
 	ml_parse_cpu_topology();
+	switch_diag_early_stage(10, "cpu topology ready");
 
 
 	boot_cpu_id = ml_get_boot_cpu_number();
@@ -500,11 +508,14 @@ arm_init(
 	 */
 	thread->machine.preemption_count = 0;
 	cpu_bootstrap();
+	switch_diag_early_stage(11, "thread and cpu bootstrap ready");
 
 	rtclock_early_init();
+	switch_diag_early_stage(12, "early clock ready");
 
 	kernel_debug_string_early("kernel_startup_bootstrap");
 	kernel_startup_bootstrap();
+	switch_diag_early_stage(13, "startup bootstrap ready");
 
 	/*
 	 * Initialize the timer callout world
@@ -512,8 +523,10 @@ arm_init(
 	timer_call_init();
 
 	cpu_init();
+	switch_diag_early_stage(14, "cpu_init returned");
 
 	processor_bootstrap();
+	switch_diag_early_stage(15, "processor bootstrap ready");
 
 	if (PE_parse_boot_argn("maxmem", &maxmem, sizeof(maxmem))) {
 		xmaxmem = (uint64_t) maxmem * (1024 * 1024);
@@ -579,7 +592,13 @@ arm_init(
 	gDramSize = *dram_size;
 	pmap_first_pnum = (ppnum_t)atop(gDramBase);
 
+	boot_progress_stage("arm_vm_init enter");
+	switch_diag_early_stage(16, "arm_vm_init entered");
 	arm_vm_init(xmaxmem, args);
+	switch_diag_init(args);
+	/* The panic screen and record (SwitchPanicSave.c): its mappings, made while io_map can, and the last boot's record. */
+	switch_panic_save_init();
+	boot_progress_stage("arm_vm_init returned");
 
 	if (debug_boot_arg) {
 		patch_low_glo();
@@ -648,6 +667,7 @@ arm_init(
 	cpu_machine_idle_init(TRUE);
 
 	PE_init_platform(TRUE, &BootCpuData);
+	switch_diag_stage("platform interrupts initialized");
 
 	/* Initialize the debug infrastructure system-wide and on the local core. */
 	pe_arm_debug_init_early(&BootCpuData);
@@ -729,6 +749,14 @@ arm_init_cpu(
 
 
 	machine_set_current_thread(cpu_data_ptr->cpu_active_thread);
+#if defined(SWITCH_XNU_DIAGNOSTICS) && SWITCH_XNU_DIAGNOSTICS
+	/* A secondary's first start, and every core's start after system sleep (the boot CPU
+	 * resumes through the same PSCI entry), leaves the entry vectors here; a no-op otherwise. */
+	{
+		extern void switch_secondary_vectors_leave(void);
+		switch_secondary_vectors_leave();
+	}
+#endif
 
 #if APPLE_ARM64_ARCH_FAMILY
 	configure_late_apple_regs(false);

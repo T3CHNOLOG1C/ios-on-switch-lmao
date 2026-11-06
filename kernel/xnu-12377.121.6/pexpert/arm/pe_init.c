@@ -18,6 +18,7 @@
 #include <arm/caches_internal.h>
 #include <kern/debug.h>
 #include <libkern/section_keywords.h>
+#include "SwitchPanicSave.h"
 #include <os/overflow.h>
 
 #include <pexpert/arm64/board_config.h>
@@ -155,6 +156,19 @@ check_for_panic_log(void)
 	 * embedded-panic-log-size is the maximum amount of data to store in the buffer
 	 */
 	if (kSuccess != SecureDTLookupEntry(0, "pram", &entry)) {
+#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
+		/* No iBoot panic region on this boot chain: without one, SavePanicInfo spins at its first line and no panic
+		 * log is ever written. Boot-arg switch-panic-save gives it RAM kept across a warm reset (SwitchPanicSave.c). */
+		uintptr_t switch_base = 0;
+		unsigned int switch_bytes = 0;
+		if (switch_panic_save_xnu_buffer(&switch_base, &switch_bytes) &&
+		    switch_bytes > sizeof(struct embedded_panic_header)) {
+			gPanicBase = switch_base;
+			gPanicSize = switch_bytes;
+			panic_text_len = switch_bytes - sizeof(struct embedded_panic_header);
+			goto switch_panic_region;
+		}
+#endif
 		return;
 	}
 
@@ -198,6 +212,9 @@ check_for_panic_log(void)
 	}
 #endif /* DEVELOPMENT && defined(XNU_TARGET_OS_BRIDGE) */
 
+#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
+switch_panic_region:
+#endif
 #endif
 	panic_info = (struct embedded_panic_header *)gPanicBase;
 

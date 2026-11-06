@@ -5890,6 +5890,12 @@ cs_native4k_prepare(vnode_t vp, struct cs_blob *blob)
 	int error = EBADEXEC, ioflags;
 	kern_return_t kr;
 
+#if DEVELOPMENT || DEBUG
+	code_signing_config_t cs_config = 0;
+	code_signing_configuration(NULL, &cs_config);
+	if (cs_config & CS_CONFIG_INTEGRITY_SKIP) return 0;
+#endif
+
 	if (blob->csb_hash_pageshift <= PAGE_SHIFT) {
 		return 0;
 	}
@@ -6017,8 +6023,8 @@ cs_validate_hash(
 	size_t                  size;
 	off_t                   codeLimit = 0;
 	const char              *lower_bound, *upper_bound;
-	boolean_t               native4k_cached = FALSE;
 	vm_offset_t             kaddr, blob_addr;
+	boolean_t               native4k_cached = FALSE;
 
 	/* retrieve the expected hash */
 	found_hash = FALSE;

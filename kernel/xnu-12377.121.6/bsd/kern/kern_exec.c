@@ -1,3 +1,6 @@
+#include "SwitchDiag.h"
+#include <kern/thread_call.h>
+#include <kern/boot_progress.h>
 /*
  * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  *
@@ -944,6 +947,10 @@ set_crash_behavior_from_bootarg(proc_t p)
 	}
 }
 
+#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
+void native_switch_migration_process(proc_t p, int exited, int status);
+#endif
+
 void
 set_proc_name(struct image_params *imgp, proc_t p)
 {
@@ -964,6 +971,20 @@ set_proc_name(struct image_params *imgp, proc_t p)
 	}
 
 	bcopy((caddr_t)imgp->ip_ndp->ni_cnd.cn_nameptr, (caddr_t)p->p_comm, buflen);
+	p->p_comm[buflen] = '\0'; /* Switch: terminated before the proclog line prints it */
+#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
+	/* switch-proclog=1: one console line per exec and exit while userland has no other log path. */
+	{
+		static int proclog = -1;
+		if (proclog < 0) {
+			int value = 0;
+			(void)PE_parse_boot_argn("switch-proclog", &value, sizeof(value));
+			proclog = value;
+		}
+		if (proclog) printf("+%s[%d]\n", p->p_comm, proc_getpid(p));
+	}
+	native_switch_migration_process(p, 0, 0);
+#endif
 	p->p_comm[buflen] = '\0';
 
 	/*
@@ -2075,7 +2096,11 @@ grade:
 	/*
 	 * Actually load the image file we previously decided to load.
 	 */
+	switch_diag_process_event(proc_getpid(p),p->p_name,"exec load_machfile enter",0);
+	boot_progress_process_stage(proc_getpid(p),p->p_name,"exec load_machfile enter");
 	lret = load_machfile(imgp, mach_header, thread, &map, &load_result);
+	switch_diag_process_event(proc_getpid(p),p->p_name,"exec load_machfile returned",lret);
+	boot_progress_process_stage(proc_getpid(p),p->p_name,"exec load_machfile returned");
 	if (lret != LOAD_SUCCESS) {
 		error = load_return_to_errno(lret);
 
@@ -6724,6 +6749,158 @@ bad:
  * Note:	The argument and environment vectors are user space pointers
  *		to arrays of user space pointers.
  */
+
+/*
+ * Switch: environment a chosen daemon gets on top of its own, appended by exec_extract_strings (so a value the
+ * caller passes wins: getenv returns the first match).
+ *
+ * switch-bt=1: bluetoothd's POSIX HCI driver (21H461 bluetoothd FUN_1001d104c / FUN_1000ddaa8) opens the kernel
+ * control named in BT_HCI_TRANSPORT ("<transport>:<driver>:<name>,<baud>") instead of its default
+ * "com.apple.uart.sk.bluetooth", a Skywalk channel endpoint nothing here provides. drivers/SwitchBluetooth registers
+ * the plain stream "com.apple.uart.bluetooth" (the one BlueTool itself opens) with the controller already patched
+ * and at 3 Mbaud; "H4" is plain H4 framing with RTS/CTS, as the ADT's transport-encoding 1 says.
+ */
+/*
+ * r6-lows: CA_FORCE_TIMER=1 for backboardd (NATIVE_SWITCH_CA_VBL, a build-time switch: the boot-args are full). QuartzCore
+ * 21H461 CADeviceUseVBL() (dispatch_once at 0x189582620, read at the start of CA::WindowServer::AccelServer's constructor, before
+ * the Metal plug-in loads, hence the exec environment) is true only for MobileGestalt chip ids 0x7000 and 0x8010, or with this
+ * variable non-zero. True, IOMFBServer::add_vsync_source takes IOMobileFramebufferGetVSyncRunLoopSource: the render server's frame
+ * clock is NativeLegacyDisplay's vsync, sent from DC A's V_BLANK interrupt. False (A10X, 0x8011, this build's ADT), it makes a
+ * CADisplayTimer at the nominal refresh whose phase timer_callback aligns from IOMFBDisplay::timing_reference, display+0x6530,
+ * shared timing memory the legacy family never provides: a free-running 60 Hz timer at a random phase to DC A's flip latch
+ * (every boot's display stats: "vsync 0 sent", flip-wait mean 4-12 ms). With VBL, IOMFBDisplay::can_update_ also waits for the
+ * previous swap (IOMobileFramebufferSwapWait), which NativeLegacyDisplay retires when its GPU copy is offered. Off by default
+ * until one boot compares the display stats' present quantiles with and without it.
+ */
+#ifndef NATIVE_SWITCH_CA_VBL
+#define NATIVE_SWITCH_CA_VBL 0
+#endif
+
+/*
+ * r6-lows (r6h hangs, 11-01): CA_DISABLE_DETACHED=1 for backboardd whenever NativeLegacyDisplay's validator is the one
+ * (offline-legacy-validate=1): it takes one full-screen BGRA IOSurface in layer 0 and nothing else. QuartzCore 21H461 reads the
+ * variable once (init_debug: debug_option_env_vars[21] through CADefaultsGetFloat, which tries getenv first) into
+ * ca_debug_options[21], and CA::OGL::detach_contents returns "not detached" (reason 0x10, 0x189566798) before it asks the
+ * display's detach_layer. Without it, Photos made CA detach its content into a second display layer: every swap_end failed
+ * (e00002c2, "frame rejected (reason 2)", 60 a second) and the screen froze for 28 s and 100 s, and the second time
+ * IOMFBDisplay::detach_layer's copy_surface needed an IOSurfaceAccelerator, which this platform does not have:
+ * "Failed to create IOSurfaceAccelerator" abort, backboardd and SpringBoard restarted.
+ */
+static const char *const native_switch_bluetoothd_environment[] = {
+	"BT_HCI_TRANSPORT=H4:POSIX:com.apple.uart.bluetooth,3000000", NULL
+};
+static const char *const native_switch_backboardd_environment[] = {"CA_DISABLE_DETACHED=1", NULL};
+#if NATIVE_SWITCH_CA_VBL
+static const char *const native_switch_backboardd_vbl_environment[] = {"CA_DISABLE_DETACHED=1", "CA_FORCE_TIMER=1", NULL};
+#endif
+
+/* The extra environment strings for imgp's executable, NULL-terminated, or NULL for none. */
+static const char *const *
+native_switch_exec_environment(const struct image_params *imgp)
+{
+	const char *executable = imgp->ip_strings + strlen(EXECUTABLE_KEY);
+	static const char bluetoothd[] = "/usr/sbin/bluetoothd";
+	static int bluetooth = -1;
+	if (bluetooth < 0) {
+		uint32_t enabled = 0;
+		bluetooth = PE_parse_boot_argn("switch-bt", &enabled, sizeof(enabled)) && enabled;
+	}
+	if (bluetooth && !strncmp(executable, bluetoothd, sizeof(bluetoothd))) {
+		return native_switch_bluetoothd_environment;
+	}
+	static const char backboardd[] = "/usr/libexec/backboardd";
+	static int single_layer = -1;
+	if (single_layer < 0) {
+		uint32_t validate = 0;
+		single_layer = PE_parse_boot_argn("offline-legacy-validate", &validate, sizeof(validate)) && validate == 1;
+	}
+	if (!strncmp(executable, backboardd, sizeof(backboardd))) {
+#if NATIVE_SWITCH_CA_VBL
+		/* Only with the display's DC A vsync (sheng-vsync, NativeLegacyDisplay startVsync): without it nothing would drive CA. */
+		static int vbl = -1;
+		if (vbl < 0) {
+			uint32_t hz = 0, vblank = 1;
+			(void)PE_parse_boot_argn("switch-vblank", &vblank, sizeof(vblank));
+			vbl = PE_parse_boot_argn("sheng-vsync", &hz, sizeof(hz)) && hz && vblank;
+		}
+		if (vbl && single_layer) {
+			return native_switch_backboardd_vbl_environment;
+		}
+		if (vbl) {
+			return native_switch_backboardd_vbl_environment + 1;
+		}
+#endif
+		if (single_layer) {
+			return native_switch_backboardd_environment;
+		}
+	}
+	return NULL;
+}
+
+/*
+ * Switch: switch-no-iconagent=1 refuses to run iconservicesagent. With no Metal device in it, Core Image 21H461 falls back
+ * to OpenGL ES, which has no driver here, and the agent crash-loops on every SF Symbol while Settings waits on it.
+ * It is a user-domain job (user/501), so the system disabled.plist does not cover it; refusing the exec does, for any
+ * domain. Clients then get NSXPCConnectionInvalid at once and draw placeholders.
+ */
+static bool
+native_switch_exec_refused(const struct image_params *imgp)
+{
+	static const char iconagent[] = "/System/Library/CoreServices/iconservicesagent";
+	static int refuse = -1;
+	if (refuse < 0) {
+		uint32_t enabled = 0;
+		refuse = PE_parse_boot_argn("switch-no-iconagent", &enabled, sizeof(enabled)) && enabled;
+	}
+	return refuse && !strncmp(imgp->ip_strings + strlen(EXECUTABLE_KEY), iconagent, sizeof(iconagent));
+}
+
+/*
+ * Switch: executables the Data overlay shows (SwitchRawMount.h native_switch_raw_overlay: read-only bindfs unions
+ * of /private/var/Switch/overlay<directory> over sealed system directories) skip AMFI's launch constraints. They are
+ * our own builds and still have to be platform code through the packager's trust cache (constraint category 0), but
+ * they are not on the system volume, so the self constraint every launchd system service must meet (21H461 AMFI:
+ * on-system-volume or on-authorized-authapfs-volume, launch-type 1, validation-category 1) can never match. 10-31 r4a:
+ * the BlueTool stand-in died with "Launch Constraint Violation c[8]p[1]m[1]e[6]" on each of ~360 spawns, so bluetoothd
+ * waited on its chip boot for good. Only the kernel mounts bindfs here (bind_vfsops.c entitlement check).
+ */
+static bool
+native_switch_overlay_image(const struct image_params *imgp)
+{
+	static const char overlay[] = "/private/var/Switch/overlay/";
+	mount_t mp = imgp->ip_vp ? vnode_mount(imgp->ip_vp) : NULL;
+	if (!mp || !(vfs_flags(mp) & MNT_RDONLY)) return false;
+	struct vfsstatfs *sfs = vfs_statfs(mp);
+	/* No log line: r4b panicked formatting one here (xpcproxy spawning BlueTool, __doprnt fault in process_signature). */
+	return !strcmp(sfs->f_fstypename, "bindfs") && !strncmp(sfs->f_mntfromname, overlay, sizeof(overlay) - 1);
+}
+
+/*
+ * Switch: the two read-only Apple cryptex mounts (SwitchRawMount.h native_switch_raw_cache_prepare mounts the
+ * original System and App cryptex APFS volumes at /private/preboot/Cryptexes/{OS,App}). Real iOS grafts these onto the
+ * preboot volume (libignition), so their executables are "on an authorized cryptex / system volume" and meet the self
+ * launch constraint every launchd system service and BrowserEngineKit web process requires (21H461 AMFI:
+ * on-system-volume or on-authorized-authapfs-volume, launch-type 1, validation-category 1). We attach and mount them
+ * instead of grafting, so that fact is otherwise absent and WebKit's BEWebContentProcess/BENetworkingProcess/
+ * BERenderingProcess and the App-cryptex daemons (webbookmarksd, SafariBookmarksSyncAgent, Safari.History) die with a
+ * Launch Constraint Violation before launch. Supply the graft's answer for vnodes on exactly these two mounts, by the
+ * mount_t the kernel recorded when it mounted them (never a path string). This changes only the launch-constraint
+ * decision: code-signing, cdhash and trust-cache enforcement are unchanged and happen during image activation, so a
+ * binary on these mounts still has to match Apple's static trust cache exactly and nothing on Data gains anything.
+ */
+mount_t native_owner_cryptex_mount[2] = {NULL, NULL};
+/* The Preboot mount the two cryptexes stand in a graft on (vfs_syscalls.c getfsstat64_callback reports its mount point
+ * for them, as a graft's files would; their own f_mntonname is unchanged). */
+mount_t native_owner_cryptex_host = NULL;
+static bool
+native_switch_cryptex_image(const struct image_params *imgp)
+{
+	mount_t mp = imgp->ip_vp ? vnode_mount(imgp->ip_vp) : NULL;
+	if (!mp || !(vfs_flags(mp) & MNT_RDONLY)) return false;
+	for (unsigned i = 0; i < 2; ++i)
+		if (native_owner_cryptex_mount[i] && mp == native_owner_cryptex_mount[i]) return true;
+	return false;
+}
 __attribute__((noinline))
 static int
 exec_extract_strings(struct image_params *imgp)
@@ -6894,6 +7071,25 @@ exec_extract_strings(struct image_params *imgp)
 			goto bad;
 		}
 		imgp->ip_argspace -= new_ptr_size; /* to hold envv[] entry */
+		imgp->ip_envc++;
+	}
+
+	if (native_switch_exec_refused(imgp)) {
+		error = EPERM;
+		goto bad;
+	}
+	/* Switch: a chosen daemon's extra environment (native_switch_exec_environment). */
+	const char *const *native_environment = native_switch_exec_environment(imgp);
+	for (; native_environment && *native_environment; native_environment++) {
+		error = exec_add_user_string(imgp, CAST_USER_ADDR_T(*native_environment), UIO_SYSSPACE, TRUE);
+		if (error) {
+			goto bad;
+		}
+		if (imgp->ip_argspace < new_ptr_size) {
+			error = E2BIG;
+			goto bad;
+		}
+		imgp->ip_argspace -= new_ptr_size;
 		imgp->ip_envc++;
 	}
 
@@ -7973,13 +8169,19 @@ native_owner_cache_checkpoint(int status, int authorized)
 	__asm__ volatile("" : : "r"(status), "r"(authorized) : "memory");
 }
 
+#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
+#include "SwitchRawMount.h"
+#include "SwitchPanicSave.h"
+#endif
+
 static int
 native_owner_cache_prepare(proc_t p, user_addr_t scratch, user_addr_t *envp)
 {
-#ifndef XNU_OWNER_CACHE_VOLUME_UUID
-#define XNU_OWNER_CACHE_VOLUME_UUID "7A23BAC7-E86D-4DF4-B181-E6D80F212AE5"
+#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
+	if (switch_files_storage_profile() == SWITCH_STORAGE_RAW)
+		return native_switch_raw_cache_prepare(p, scratch, envp);
 #endif
-	const char *volume = XNU_OWNER_CACHE_VOLUME_UUID;
+	const char *volume = "8846FE78-2910-4297-AF97-D59BB6F8FC16";
 #if defined(XNU_OWNER_UNION_SYSTEMOS) && XNU_OWNER_UNION_SYSTEMOS
 #if !CONFIG_UNION_MOUNTS
 #error The owner composition requires the original native union-mount implementation
@@ -8084,7 +8286,7 @@ done:
 	if (!root_recheck) error = EAUTH;
 #if defined(XNU_OWNER_BOOT_MANIFEST) && XNU_OWNER_BOOT_MANIFEST
 	if (!error && cache_authorized && root_recheck &&
-	    !native_owner_publish_boot_manifest(root_device, XNU_OWNER_ROOT_VOLUME_UUID,
+	    !native_owner_publish_boot_manifest(root_device, "04769D26-2CA0-4825-B443-E2E5F88300F2",
 	        selected, volume)) error = EAUTH;
 #endif
 #if defined(XNU_OWNER_CACHE_STARTUP) && XNU_OWNER_CACHE_STARTUP
@@ -8112,6 +8314,13 @@ done:
 #error Supply the observed scratch volume UUID for the IOKit backend
 #endif
 extern int native_ram_block_volume_seed(const char *, dev_t *, char *, size_t, uint64_t *, uint64_t *, uint8_t *);
+#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
+#include "storage/block_backend.h"
+#include <sys/fcntl.h>
+#include <sys/stdio.h>
+extern int switch_data_volume_path(const char *, dev_t *, char *, size_t, uint64_t *);
+extern int switch_data_volume_status(const char *, dev_t *, char *, size_t, uint64_t *);
+#endif
 #endif
 extern dev_t mdevlookup(int);
 extern int mdevgetrange(int, uint64_t *, uint64_t *);
@@ -8134,8 +8343,6 @@ volatile int native_gpu_addon_stage = 0;
 volatile int native_gpu_addon_status = -1;
 volatile int native_gpu_addon2_stage = 0;
 volatile int native_gpu_addon2_status = -1;
-volatile int native_gpu_addon3_stage = 0;
-volatile int native_gpu_addon3_status = -1;
 static void
 native_gpu_addon_mount(proc_t p, user_addr_t scratch, user_addr_t offset, const char *source, size_t source_size,
     const char *point, size_t point_size, const char *visible, const char *own, volatile int *stage, volatile int *status)
@@ -8183,389 +8390,6 @@ native_gpu_addon_mount(proc_t p, user_addr_t scratch, user_addr_t offset, const 
 	}
 	*status = error;
 }
-/* The GPU addon of the boot payload (scripts/make-gpu-addon.py, handed over by the loader as /chosen/memory-map/GpuAddon): every file
- * whose content or mode differs from the mounted Data volume is written there before the addon mounts, so the plugin no longer has to
- * be part of the Data seed and the seed's persistent store survives a plugin rebuild. Missing directories below /private/var/ngpu are
- * created. A malformed addon is refused as a whole; a file that cannot be written keeps its old content.
- * Counters for the boot log: files in the addon (-1 none), files written, files already equal, failures and the last error. */
-extern int native_ram_block_gpu_addon(const uint8_t **, uint64_t *) __attribute__((weak_import));
-#include <libkern/zlib.h>
-/* zlib's state, from kalloc with its size in front (the default allocator of the kernel's zlib is not meant for this). */
-static voidpf
-native_gpu_addon_zalloc(voidpf opaque __unused, uInt items, uInt size)
-{
-	size_t bytes = (size_t)items * size + 16;
-	uint8_t *block = kalloc_data(bytes, Z_WAITOK | Z_ZERO);
-	if (!block) {
-		return Z_NULL;
-	}
-	memcpy(block, &bytes, sizeof(bytes));
-	return block + 16;
-}
-static void
-native_gpu_addon_zfree(voidpf opaque __unused, voidpf address)
-{
-	uint8_t *block = (uint8_t *)address - 16;
-	size_t bytes = 0;
-	memcpy(&bytes, block, sizeof(bytes));
-	kfree_data(block, bytes);
-}
-static int
-native_gpu_addon_inflate(const uint8_t *packed, uint64_t packed_size, uint8_t *data, uint64_t size)
-{
-	z_stream stream;
-	memset(&stream, 0, sizeof(stream));
-	stream.zalloc = native_gpu_addon_zalloc;
-	stream.zfree = native_gpu_addon_zfree;
-	stream.next_in = (Bytef *)(uintptr_t)packed;
-	stream.avail_in = (uInt)packed_size;
-	stream.next_out = data;
-	stream.avail_out = (uInt)size;
-	if (inflateInit(&stream) != Z_OK) {
-		return ENOMEM;
-	}
-	int result = inflate(&stream, Z_FINISH);
-	inflateEnd(&stream);
-	return result == Z_STREAM_END && stream.total_out == size && !stream.avail_in ? 0 : EINVAL;
-}
-volatile int native_gpu_addon_files = -1;
-volatile int native_gpu_addon_written = 0;
-volatile int native_gpu_addon_same = 0;
-volatile int native_gpu_addon_failed = 0;
-volatile int native_gpu_addon_error = 0;
-static int
-native_gpu_addon_equal(vnode_t vp, const uint8_t *data, uint64_t size, uint32_t mode, vfs_context_t ctx)
-{
-	struct vnode_attr va;
-	VATTR_INIT(&va);
-	VATTR_WANTED(&va, va_data_size);
-	VATTR_WANTED(&va, va_mode);
-	if (vnode_getattr(vp, &va, ctx) || va.va_data_size != size || (va.va_mode & 07777) != mode) {
-		return 0;
-	}
-	const uint32_t chunk = 1024 * 1024;
-	uint8_t *buffer = kalloc_data(chunk, Z_WAITOK);
-	if (!buffer) {
-		return 0;
-	}
-	int equal = 1;
-	for (uint64_t at = 0; equal && at < size; at += chunk) {
-		int length = (int)(size - at < chunk ? size - at : chunk), resid = 0;
-		if (vn_rdwr(UIO_READ, vp, (caddr_t)buffer, length, (off_t)at, UIO_SYSSPACE, IO_NOAUTH, vfs_context_ucred(ctx), &resid,
-		    vfs_context_proc(ctx)) || resid || memcmp(buffer, data + at, length)) {
-			equal = 0;
-		}
-	}
-	kfree_data(buffer, chunk);
-	return equal;
-}
-static int
-native_gpu_addon_write(const char *path, const uint8_t *data, uint64_t size, uint32_t mode, vfs_context_t ctx)
-{
-	vnode_t vp = NULLVP;
-	int error = vnode_open(path, FREAD | O_NOFOLLOW, 0, 0, &vp, ctx);
-	if (!error) {
-		int equal = native_gpu_addon_equal(vp, data, size, mode, ctx);
-		vnode_close(vp, FREAD, ctx);
-		vp = NULLVP;
-		if (equal) {
-			return -1;
-		}
-	}
-	error = vnode_open(path, O_CREAT | O_TRUNC | FWRITE | O_NOFOLLOW, mode, 0, &vp, ctx);
-	if (error) {
-		return error;
-	}
-	int resid = 0;
-	error = vn_rdwr(UIO_WRITE, vp, (caddr_t)(uintptr_t)data, (int)size, 0, UIO_SYSSPACE, IO_NOAUTH | IO_UNIT, vfs_context_ucred(ctx),
-	    &resid, vfs_context_proc(ctx));
-	if (!error && resid) {
-		error = EIO;
-	}
-	if (!error) {
-		struct vnode_attr va;
-		VATTR_INIT(&va);
-		VATTR_SET(&va, va_mode, mode);
-		/* Kernel vnode_open does not finish O_TRUNC on the non-compound path. */
-		VATTR_SET(&va, va_data_size, size);
-		error = vnode_setattr(vp, &va, ctx);
-	}
-	if (!error) {
-		error = VNOP_FSYNC(vp, MNT_WAIT, ctx);
-	}
-	int close_error = vnode_close(vp, FWRITE, ctx);
-	return error ? error : close_error;
-}
-/* Creates the missing parent directories of an addon path with the mkdir syscall, /private/var/ngpu itself included (a Data seed
- * that never had add-gpu-plugin-data.py applied has none). The scratch is one 4 KiB page; the mount arguments end below 0xa00. */
-static int
-native_gpu_addon_parents(proc_t p, user_addr_t scratch, const char *path)
-{
-	char parent[192];
-	strlcpy(parent, path, sizeof(parent));
-	for (size_t i = sizeof("/private/var/ngpu") - 1; parent[i]; ++i) {
-		if (parent[i] != '/') {
-			continue;
-		}
-		parent[i] = 0;
-		struct mkdir_args request = {.path = scratch + 0xc00, .mode = 0755};
-		int32_t result = 0;
-		int error = copyout(parent, request.path, i + 1);
-		if (!error) {
-			error = mkdir(p, &request, &result);
-		}
-		parent[i] = '/';
-		if (error && error != EEXIST) {
-			return error;
-		}
-	}
-	return 0;
-}
-static void
-native_gpu_addon_install(proc_t p, user_addr_t scratch)
-{
-	const uint8_t *addon = NULL;
-	uint64_t bytes = 0;
-	if (!native_ram_block_gpu_addon || !native_ram_block_gpu_addon(&addon, &bytes)) {
-		return;
-	}
-	uint32_t count = 0;
-	uint64_t total = 0;
-	if (bytes < 24 || memcmp(addon, "NGPUADD2", 8)) {
-		native_gpu_addon_error = EINVAL;
-		return;
-	}
-	memcpy(&count, addon + 8, 4);
-	memcpy(&total, addon + 16, 8);
-	if (total != bytes || !count || count > 4096) {
-		native_gpu_addon_error = EINVAL;
-		return;
-	}
-	/* Validate the whole addon before writing anything. */
-	uint64_t at = 24;
-	for (uint32_t i = 0; i < count; ++i) {
-		uint32_t name_bytes = 0, mode = 0;
-		uint64_t size = 0, packed = 0;
-		if (bytes - at < 24) {
-			native_gpu_addon_error = EINVAL;
-			return;
-		}
-		memcpy(&name_bytes, addon + at, 4);
-		memcpy(&mode, addon + at + 4, 4);
-		memcpy(&size, addon + at + 8, 8);
-		memcpy(&packed, addon + at + 16, 8);
-		at += 24;
-		uint64_t name_padded = (name_bytes + 7) & ~7ULL, size_padded = (packed + 7) & ~7ULL;
-		const char *name = (const char *)(addon + at);
-		if (name_bytes < 2 || name_bytes > 160 || bytes - at < name_padded || name[name_bytes - 1] || strnlen(name, name_bytes) != name_bytes - 1 ||
-		    name[0] == '/' || (mode & ~0777) || size > INT32_MAX || !packed || packed > INT32_MAX || bytes - at - name_padded < size_padded) {
-			native_gpu_addon_error = EINVAL;
-			return;
-		}
-		for (uint32_t k = 0; k + 1 < name_bytes - 1; ++k) {
-			if (name[k] == '.' && name[k + 1] == '.') {
-				native_gpu_addon_error = EINVAL;
-				return;
-			}
-		}
-		at += name_padded + size_padded;
-	}
-	if (at != bytes) {
-		native_gpu_addon_error = EINVAL;
-		return;
-	}
-	native_gpu_addon_files = (int)count;
-	vfs_context_t ctx = vfs_context_current();
-	char path[192];
-	at = 24;
-	for (uint32_t i = 0; i < count; ++i) {
-		uint32_t name_bytes = 0, mode = 0;
-		uint64_t size = 0, packed = 0;
-		memcpy(&name_bytes, addon + at, 4);
-		memcpy(&mode, addon + at + 4, 4);
-		memcpy(&size, addon + at + 8, 8);
-		memcpy(&packed, addon + at + 16, 8);
-		at += 24;
-		const char *name = (const char *)(addon + at);
-		at += (name_bytes + 7) & ~7ULL;
-		snprintf(path, sizeof(path), "/private/var/ngpu/%s", name);
-		uint8_t *data = kalloc_data(size ? size : 1, Z_WAITOK);
-		int error = data ? native_gpu_addon_inflate(addon + at, packed, data, size) : ENOMEM;
-		if (!error) {
-			error = native_gpu_addon_write(path, data, size, mode, ctx);
-			if (error == ENOENT && !(error = native_gpu_addon_parents(p, scratch, path))) {
-				error = native_gpu_addon_write(path, data, size, mode, ctx);
-			}
-		}
-		if (data) {
-			kfree_data(data, size ? size : 1);
-		}
-		if (error < 0) {
-			native_gpu_addon_same++;
-		} else if (error) {
-			native_gpu_addon_failed++;
-			native_gpu_addon_error = error;
-		} else {
-			native_gpu_addon_written++;
-		}
-		at += (packed + 7) & ~7ULL;
-	}
-}
-/* The OS cryptex where iPadOS looks for it. The root volume's entries for cryptex content are links into /System/Cryptexes/OS, which
- * leads to /private/preboot/Cryptexes/OS; WebKit's processes are ExtensionKit extensions reached that way
- * (/System/Library/ExtensionKit/Extensions/WebContentExtension.appex and its Networking and GPU siblings), so with the path missing
- * Safari could not start them and its pages never loaded. The SystemOS volume is already the upper layer of the root union: its
- * /System and /usr are bound read-only over /private/preboot/Cryptexes/OS/{System,usr}, not as unions, so a lookup there stays on the
- * SystemOS volume and never meets the root's links again. The two mount points are owner Data directories under
- * /private/var/ngpu/preboot, shown over the root's empty /private/preboot as a read-only union. Never fatal; stage and status go to the
- * boot log: 1 mount points made, 2 preboot shown, 3 System bound, 4 usr bound, 5 an extension of WebKit visible through the path. */
-volatile int native_cryptex_os_stage = 0;
-volatile int native_cryptex_os_status = -1;
-static int
-native_cryptex_os_bind(proc_t p, user_addr_t scratch, const char *source, const char *point, int flags)
-{
-	struct mount_args request = {.type = scratch + 0xa00, .path = scratch + 0xa20, .flags = MNT_RDONLY | flags,
-	    .data = scratch + 0xb00};
-	int32_t result = 0;
-	int error;
-	if ((error = copyout("bindfs", request.type, 7)) || (error = copyout(point, request.path, strlen(point) + 1)) ||
-	    (error = copyout(source, request.data, strlen(source) + 1))) {
-		return error;
-	}
-	native_bindfs_boot_mount = 1;
-	error = mount(p, &request, &result);
-	native_bindfs_boot_mount = 0;
-	return error;
-}
-static void
-native_cryptex_os_view(proc_t p, user_addr_t scratch)
-{
-	static const char *const points[] = {"/private/var/ngpu/preboot/Cryptexes/OS/System/", "/private/var/ngpu/preboot/Cryptexes/OS/usr/"};
-	vnode_t probe = NULLVP;
-	int error = 0;
-	for (size_t i = 0; i < sizeof(points) / sizeof(points[0]) && !error; ++i) {
-		error = native_gpu_addon_parents(p, scratch, points[i]);
-	}
-	if (error) {
-		native_cryptex_os_status = error;
-		return;
-	}
-	native_cryptex_os_stage = 1;
-	if ((error = native_cryptex_os_bind(p, scratch, "/private/var/ngpu/preboot", "/private/preboot", MNT_UNION))) {
-		native_cryptex_os_status = error;
-		return;
-	}
-	native_cryptex_os_stage = 2;
-	if ((error = native_cryptex_os_bind(p, scratch, "/System", "/private/preboot/Cryptexes/OS/System", 0))) {
-		native_cryptex_os_status = error;
-		return;
-	}
-	native_cryptex_os_stage = 3;
-	if ((error = native_cryptex_os_bind(p, scratch, "/usr", "/private/preboot/Cryptexes/OS/usr", 0))) {
-		native_cryptex_os_status = error;
-		return;
-	}
-	native_cryptex_os_stage = 4;
-	error = vnode_lookup("/System/Cryptexes/OS/System/Library/ExtensionKit/Extensions/WebContentExtension.appex/Info.plist", 0, &probe,
-	    vfs_context_current());
-	if (!error) {
-		vnode_put(probe);
-		native_cryptex_os_stage = 5;
-	}
-	native_cryptex_os_status = error;
-}
-/* The device answers MobileGestalt cached while the display gamut was P3: removed so they are worked out again from the device tree
- * (now sRGB). 0 removed, ENOENT none there (already regenerated or never made). */
-volatile int native_gestalt_cache_status = -1;
-static void
-native_gestalt_cache_drop(proc_t p, user_addr_t scratch)
-{
-	static const char cache[] = "/private/var/containers/Shared/SystemGroup/systemgroup.com.apple.mobilegestaltcache/Library/Caches/"
-	    "com.apple.MobileGestalt.plist";
-	struct unlink_args request = {.path = scratch + 0xc00};
-	int32_t result = 0;
-	int error = copyout(cache, request.path, sizeof(cache));
-	if (!error) {
-		error = unlink(p, &request, &result);
-	}
-	native_gestalt_cache_status = error;
-}
-/* LaunchServices' database of this Data store was built while /System/Cryptexes/OS led nowhere, so it never registered what lies behind
- * it (WebKit's extensions among them) and lsd does not register system content again on a later boot of the same OS build. Its files
- * are removed once, so lsd builds the database again with the path in place; the marker file keeps later boots from repeating it.
- * Status for the boot log: files removed, or -2 done before, or -errno. */
-#include <sys/dirent.h>
-volatile int native_ls_store_status = -1;
-static void
-native_ls_store_drop(proc_t p, user_addr_t scratch)
-{
-	static const char marker[] = "/private/var/ngpu/ls-store-rebuilt-1";
-	static const char caches[] = "/private/var/mobile/Containers/Data/InternalDaemon/5C583048-0C53-456F-B110-BB12068B787F/Library/Caches";
-	static const char prefix[] = "com.apple.LaunchServices-";
-	vfs_context_t ctx = vfs_context_current();
-	vnode_t vp = NULLVP;
-	if (!vnode_lookup(marker, 0, &vp, ctx)) {
-		vnode_put(vp);
-		native_ls_store_status = -2;
-		return;
-	}
-	int error = vnode_lookup(caches, 0, &vp, ctx);
-	if (error) {
-		native_ls_store_status = -error;
-		return;
-	}
-	char names[8][64];
-	unsigned found = 0;
-	char *buffer = kalloc_data(4096, Z_WAITOK);
-	uio_t uio = buffer ? uio_create(1, 0, UIO_SYSSPACE, UIO_READ) : NULL;
-	int eof = 0;
-	while (uio && !eof && found < 8) {
-		uio_reset(uio, uio_offset(uio), UIO_SYSSPACE, UIO_READ);
-		uio_addiov(uio, CAST_USER_ADDR_T(buffer), 4096);
-		int entries = 0;
-		if ((error = VNOP_READDIR(vp, uio, 0, &eof, &entries, ctx))) {
-			break;
-		}
-		const size_t used = 4096 - (size_t)uio_resid(uio);
-		if (!used) {
-			break;
-		}
-		for (size_t at = 0; at + sizeof(struct dirent) - sizeof(((struct dirent *)0)->d_name) <= used && found < 8;) {
-			const struct dirent *entry = (const struct dirent *)(buffer + at);
-			if (!entry->d_reclen) {
-				break;
-			}
-			if (entry->d_namlen < sizeof(names[0]) && !strncmp(entry->d_name, prefix, sizeof(prefix) - 1)) {
-				memcpy(names[found], entry->d_name, entry->d_namlen);
-				names[found++][entry->d_namlen] = 0;
-			}
-			at += entry->d_reclen;
-		}
-	}
-	if (uio) {
-		uio_free(uio);
-	}
-	if (buffer) {
-		kfree_data(buffer, 4096);
-	}
-	vnode_put(vp);
-	if (error) {
-		native_ls_store_status = -error;
-		return;
-	}
-	int removed = 0;
-	char path[192];
-	for (unsigned i = 0; i < found; ++i) {
-		snprintf(path, sizeof(path), "%s/%s", caches, names[i]);
-		struct unlink_args request = {.path = scratch + 0xc00};
-		int32_t result = 0;
-		if (!copyout(path, request.path, strlen(path) + 1) && !unlink(p, &request, &result)) {
-			removed++;
-		}
-	}
-	(void)native_gpu_addon_write(marker, (const uint8_t *)"1\n", 2, 0644, ctx);
-	native_ls_store_status = removed;
-}
 static void
 native_gpu_addon_prepare(proc_t p, user_addr_t scratch)
 {
@@ -8573,337 +8397,20 @@ native_gpu_addon_prepare(proc_t p, user_addr_t scratch)
 	if (!PE_parse_boot_argn("sheng-gpu-addon", &enabled, sizeof(enabled)) || enabled != 1) {
 		return;
 	}
-	native_gpu_addon_install(p, scratch);
 	static const char extensions_source[] = "/private/var/ngpu/addons", extensions_point[] = "/System/Library/Extensions";
 	static const char daemons_source[] = "/private/var/ngpu/daemons", daemons_point[] = "/System/Library/LaunchDaemons";
-	native_gpu_addon_mount(p, scratch, 0x400, extensions_source, sizeof(extensions_source), extensions_point,
+	/* Scratch page layout until launchd's exec: 0x000 its path and arguments, 0x100-0x34f mount requests,
+	 * 0x400 its environment string and 0x500 the vector (native_switch_raw_cache_prepare), 0x900 mkdir,
+	 * 0xa00-0xbff union mounts and renames. These two mounts take 0xc00-0xd7f and 0xe00-0xf7f. */
+	native_gpu_addon_mount(p, scratch, 0xc00, extensions_source, sizeof(extensions_source), extensions_point,
 	    sizeof(extensions_point), "/System/Library/Extensions/AGXMetalA10.bundle",
 	    "/System/Library/Extensions/NativeAdrenoMetal.bundle/Info.plist", &native_gpu_addon_stage,
 	    &native_gpu_addon_status);
-	native_gpu_addon_mount(p, scratch, 0x600, daemons_source, sizeof(daemons_source), daemons_point, sizeof(daemons_point),
+	native_gpu_addon_mount(p, scratch, 0xe00, daemons_source, sizeof(daemons_source), daemons_point, sizeof(daemons_point),
 	    "/System/Library/LaunchDaemons/com.apple.backboardd.plist",
 	    "/System/Library/LaunchDaemons/org.blu-sharky.adrenoprobed.plist", &native_gpu_addon2_stage, &native_gpu_addon2_status);
-	/* The default iPadOS 17 wallpaper's layered animation with PNG images in place of its HEIC ones (no hardware HEVC decoder here).
-	 * The overlay carries the animation's documents and the PNG images; the sealed assets directory stays visible below it. */
-	static const char wallpaper_source[] = "/private/var/ngpu/wallpaper",
-	    wallpaper_point[] = "/Library/Wallpaper/Collections/iPadOS_17~ipad.wallpaperCollection/Wallpapers/"
-	    "7570.iPadOS_17_Flat-1024w-1366h@2x~ipad.wallpaper/7570.iPadOS_17_Flat_Background-1024w-1366h@2x~ipad.ca";
-	native_gpu_addon_mount(p, scratch, 0x800, wallpaper_source, sizeof(wallpaper_source), wallpaper_point, sizeof(wallpaper_point),
-	    "/Library/Wallpaper/Collections/iPadOS_17~ipad.wallpaperCollection/Wallpapers/7570.iPadOS_17_Flat-1024w-1366h@2x~ipad.wallpaper/"
-	    "7570.iPadOS_17_Flat_Background-1024w-1366h@2x~ipad.ca/assets/J120.HEIC",
-	    "/Library/Wallpaper/Collections/iPadOS_17~ipad.wallpaperCollection/Wallpapers/7570.iPadOS_17_Flat-1024w-1366h@2x~ipad.wallpaper/"
-	    "7570.iPadOS_17_Flat_Background-1024w-1366h@2x~ipad.ca/J120.png", &native_gpu_addon3_stage, &native_gpu_addon3_status);
-	native_cryptex_os_view(p, scratch);
-	native_gestalt_cache_drop(p, scratch);
-	native_ls_store_drop(p, scratch);
 }
 
-/* The deletable system apps (Weather, Notes, Calendar, ...) ship in the OS volume's /private/var/staged_system_apps. A restore copies
- * them into the Data volume, where SystemAppMigrator installs them during the first-boot data migration; until then only the
- * placeholders in /System/Library/AppPlaceholders exist and the widgets of those apps stay blank. The owner Data mount hides the OS
- * directory, so with boot-arg sheng-staged-apps=1 it is copied once, through the vnode the Data mount covers, into Data's
- * /private/var/staged_system_apps before launchd starts. /private/var/db/.sheng-staged-apps marks a complete copy. Directories and
- * regular files only (the 21H461 set has nothing else), owned by mobile (uid and gid 501): installcoordinationd and the migration plugin,
- * which move and remove them, run as mobile.
- * Counters for the boot log: stage (1 copying, 2 copied, 3 copied before, -1 no
- * source, -2 out of memory), directories, files, MiB, failures and the last error. */
-#include <sys/dirent.h>
-volatile int native_staged_apps_stage = 0;
-volatile int native_staged_apps_dirs = 0;
-volatile int native_staged_apps_files = 0;
-volatile int native_staged_apps_mib = 0;
-volatile int native_staged_apps_failed = 0;
-volatile int native_staged_apps_error = 0;
-static uint64_t native_staged_apps_bytes;
-char native_staged_apps_path[96];   /* the file being copied, for the boot log */
-static const char native_staged_apps_marker[] = "/private/var/db/.sheng-staged-apps";
-#define NATIVE_STAGED_APPS_OWNER 501
-static void
-native_staged_apps_fail(int error)
-{
-	native_staged_apps_failed++;
-	native_staged_apps_error = error;
-}
-static int
-native_staged_apps_mkdir(proc_t p, user_addr_t scratch, const char *path)
-{
-	/* The scratch is one 4 KiB page; the mount arguments above end below 0xa00. */
-	struct mkdir_args request = {.path = scratch + 0xa00, .mode = 0755};
-	int32_t result = 0;
-	int error = copyout(path, request.path, strlen(path) + 1);
-	if (!error) {
-		error = mkdir(p, &request, &result);
-	}
-	if (error && error != EEXIST) {
-		return error;
-	}
-	vnode_t vp = NULLVP;
-	error = vnode_lookup(path, VNODE_LOOKUP_NOFOLLOW, &vp, vfs_context_current());
-	if (!error) {
-		struct vnode_attr va;
-		VATTR_INIT(&va);
-		VATTR_SET(&va, va_uid, NATIVE_STAGED_APPS_OWNER);
-		VATTR_SET(&va, va_gid, NATIVE_STAGED_APPS_OWNER);
-		error = vnode_setattr(vp, &va, vfs_context_current());
-		vnode_put(vp);
-	}
-	return error;
-}
-/* Reads to the end of the source rather than trusting a size: most of these files are compressed on the OS volume. */
-static int
-native_staged_apps_file(vnode_t source, const char *path, int mode, uint8_t *buffer, uint32_t chunk, vfs_context_t ctx)
-{
-	int error = VNOP_OPEN(source, FREAD, ctx);
-	if (error) {
-		return error;
-	}
-	vnode_t vp = NULLVP;
-	size_t length = strlen(path);
-	strlcpy(native_staged_apps_path, path + (length > sizeof(native_staged_apps_path) - 1 ? length - (sizeof(native_staged_apps_path) - 1) : 0),
-	    sizeof(native_staged_apps_path));
-	error = vnode_open(path, O_CREAT | O_TRUNC | FWRITE | O_NOFOLLOW, mode, 0, &vp, ctx);
-	for (off_t at = 0; !error;) {
-		int resid = 0;
-		error = vn_rdwr(UIO_READ, source, (caddr_t)buffer, (int)chunk, at, UIO_SYSSPACE, IO_NOAUTH, vfs_context_ucred(ctx), &resid,
-		    vfs_context_proc(ctx));
-		int length = (int)chunk - resid;
-		if (error || !length) {
-			break;
-		}
-		error = vn_rdwr(UIO_WRITE, vp, (caddr_t)buffer, length, at, UIO_SYSSPACE, IO_NOAUTH | IO_UNIT, vfs_context_ucred(ctx), &resid,
-		    vfs_context_proc(ctx));
-		if (!error && resid) {
-			error = EIO;
-		}
-		at += length;
-		native_staged_apps_bytes += (uint64_t)length;
-	}
-	if (vp) {
-		if (!error) {
-			struct vnode_attr va;
-			VATTR_INIT(&va);
-			VATTR_SET(&va, va_mode, mode);
-			VATTR_SET(&va, va_uid, NATIVE_STAGED_APPS_OWNER);
-			VATTR_SET(&va, va_gid, NATIVE_STAGED_APPS_OWNER);
-			error = vnode_setattr(vp, &va, ctx);
-		}
-		/* Each file goes to the medium before the next: without it the copy piled up dirty pages until it stalled (int-220). */
-		if (!error) {
-			error = VNOP_FSYNC(vp, MNT_WAIT, ctx);
-		}
-		int close_error = vnode_close(vp, FWRITE, ctx);
-		if (!error) {
-			error = close_error;
-		}
-	}
-	VNOP_CLOSE(source, FREAD, ctx);
-	return error;
-}
-/* Directories still to copy, as paths relative to the staged directory: the walk is iterative, because APFS operations need much of the
- * kernel stack and a recursion as deep as the app bundles overflowed it (int-221). */
-struct native_staged_apps_pending {
-	char *pool;
-	uint32_t *at;
-	uint32_t used, count;
-};
-#define NATIVE_STAGED_APPS_POOL (2 * 1024 * 1024)
-#define NATIVE_STAGED_APPS_DIRS 16384
-/* Copies the entries of DIR into the Data directory PATH (appending each name to PATH and cutting it off again) and queues its
- * subdirectories, whose source-relative paths start at REL inside PATH. */
-static void
-native_staged_apps_dir(proc_t p, user_addr_t scratch, vnode_t dir, char *path, size_t path_size, size_t rel,
-    struct native_staged_apps_pending *pending, uint8_t *entries, uint32_t entries_size, uint8_t *buffer, uint32_t chunk, vfs_context_t ctx)
-{
-	size_t base = strlen(path);
-	int error = VNOP_OPEN(dir, FREAD, ctx);
-	if (error) {
-		native_staged_apps_fail(error);
-		return;
-	}
-	off_t offset = 0;
-	for (int eof = 0; !error && !eof;) {
-		uio_t uio = uio_create(1, offset, UIO_SYSSPACE, UIO_READ);
-		if (!uio) {
-			error = ENOMEM;
-			break;
-		}
-		uio_addiov(uio, CAST_USER_ADDR_T(entries), entries_size);
-		int count = 0;
-		error = vnode_readdir64(dir, uio, VNODE_READDIR_EXTENDED, &eof, &count, ctx);
-		uint32_t filled = entries_size - (uint32_t)uio_resid(uio);
-		offset = uio_offset(uio);
-		uio_free(uio);
-		if (error || !filled) {
-			break;
-		}
-		for (uint32_t at = 0; at + offsetof(struct direntry, d_name) < filled;) {
-			struct direntry *entry = (struct direntry *)(entries + at);
-			if (!entry->d_reclen || at + entry->d_reclen > filled) {
-				error = EINVAL;
-				break;
-			}
-			at += entry->d_reclen;
-			const char *name = entry->d_name;
-			if (!entry->d_ino || !strcmp(name, ".") || !strcmp(name, "..")) {
-				continue;
-			}
-			if (base + 1 + strlen(name) >= path_size) {
-				native_staged_apps_fail(ENAMETOOLONG);
-				continue;
-			}
-			path[base] = '/';
-			strlcpy(path + base + 1, name, path_size - base - 1);
-			vnode_t child = NULLVP;
-			int child_error = vnode_lookupat(name, VNODE_LOOKUP_NOFOLLOW | VNODE_LOOKUP_NOCROSSMOUNT, &child, ctx, dir);
-			if (!child_error) {
-				struct vnode_attr va;
-				VATTR_INIT(&va);
-				VATTR_WANTED(&va, va_mode);
-				child_error = vnode_getattr(child, &va, ctx);
-				int mode = VATTR_IS_SUPPORTED(&va, va_mode) ? (int)(va.va_mode & 0777) : 0644;
-				if (child_error) {
-				} else if (vnode_vtype(child) == VDIR) {
-					child_error = native_staged_apps_mkdir(p, scratch, path);
-					size_t length = strlen(path + rel) + 1;
-					if (!child_error && (pending->count == NATIVE_STAGED_APPS_DIRS || NATIVE_STAGED_APPS_POOL - pending->used < length)) {
-						child_error = ENOSPC;
-					}
-					if (!child_error) {
-						memcpy(pending->pool + pending->used, path + rel, length);
-						pending->at[pending->count++] = pending->used;
-						pending->used += (uint32_t)length;
-						native_staged_apps_dirs++;
-					}
-				} else if (vnode_vtype(child) == VREG) {
-					child_error = native_staged_apps_file(child, path, mode, buffer, chunk, ctx);
-					if (!child_error) {
-						native_staged_apps_files++;
-						native_staged_apps_mib = (int)(native_staged_apps_bytes >> 20);
-					}
-				} else {
-					child_error = ENOTSUP;
-				}
-				vnode_put(child);
-			}
-			if (child_error) {
-				native_staged_apps_fail(child_error);
-			}
-			path[base] = '\0';
-		}
-	}
-	if (error) {
-		native_staged_apps_fail(error);
-	}
-	VNOP_CLOSE(dir, FREAD, ctx);
-}
-/* Copies the tree below SOURCE into the Data directory PATH, which exists. */
-static void
-native_staged_apps_walk(proc_t p, user_addr_t scratch, vnode_t source, char *path, size_t path_size, uint8_t *buffer, uint32_t chunk,
-    vfs_context_t ctx)
-{
-	const uint32_t entries_size = 8192;
-	struct native_staged_apps_pending pending = {
-		.pool = kalloc_data(NATIVE_STAGED_APPS_POOL, Z_WAITOK),
-		.at = kalloc_data(NATIVE_STAGED_APPS_DIRS * sizeof(uint32_t), Z_WAITOK),
-	};
-	uint8_t *entries = kalloc_data(entries_size, Z_WAITOK);
-	size_t root = strlen(path);
-	if (pending.pool && pending.at && entries) {
-		native_staged_apps_dir(p, scratch, source, path, path_size, root + 1, &pending, entries, entries_size, buffer, chunk, ctx);
-		while (pending.count) {
-			const char *rel = pending.pool + pending.at[--pending.count];
-			if (root + 1 + strlen(rel) >= path_size) {
-				native_staged_apps_fail(ENAMETOOLONG);
-				continue;
-			}
-			path[root] = '/';
-			strlcpy(path + root + 1, rel, path_size - root - 1);
-			vnode_t dir = NULLVP;
-			int error = vnode_lookupat(rel, VNODE_LOOKUP_NOFOLLOW | VNODE_LOOKUP_NOCROSSMOUNT, &dir, ctx, source);
-			if (!error) {
-				native_staged_apps_dir(p, scratch, dir, path, path_size, root + 1, &pending, entries, entries_size, buffer, chunk, ctx);
-				vnode_put(dir);
-			} else {
-				native_staged_apps_fail(error);
-			}
-			path[root] = '\0';
-		}
-	} else {
-		native_staged_apps_fail(ENOMEM);
-	}
-	if (entries) {
-		kfree_data(entries, entries_size);
-	}
-	if (pending.at) {
-		kfree_data(pending.at, NATIVE_STAGED_APPS_DIRS * sizeof(uint32_t));
-	}
-	if (pending.pool) {
-		kfree_data(pending.pool, NATIVE_STAGED_APPS_POOL);
-	}
-}
-static void
-native_staged_apps_prepare(proc_t p, user_addr_t scratch, mount_t data_mount)
-{
-	uint32_t enabled = 0;
-	if (!PE_parse_boot_argn("sheng-staged-apps", &enabled, sizeof(enabled)) || enabled != 1) {
-		return;
-	}
-	vfs_context_t ctx = vfs_context_current();
-	vnode_t vp = NULLVP, covered = data_mount->mnt_vnodecovered;
-	if (!vnode_lookup(native_staged_apps_marker, VNODE_LOOKUP_NOFOLLOW, &vp, ctx)) {
-		vnode_put(vp);
-		native_staged_apps_stage = 3;
-		return;
-	}
-	int error = covered ? vnode_getwithref(covered) : ENOENT;
-	if (!error) {
-		error = vnode_lookupat("staged_system_apps", VNODE_LOOKUP_NOFOLLOW | VNODE_LOOKUP_NOCROSSMOUNT, &vp, ctx, covered);
-		vnode_put(covered);
-	}
-	if (!error && vnode_vtype(vp) != VDIR) {
-		vnode_put(vp);
-		error = ENOTDIR;
-	}
-	if (error) {
-		native_staged_apps_error = error;
-		native_staged_apps_stage = -1;
-		return;
-	}
-	const uint32_t chunk = 1024 * 1024;
-	uint8_t *buffer = kalloc_data(chunk, Z_WAITOK);
-	char *path = kalloc_data(MAXPATHLEN, Z_WAITOK);
-	if (buffer && path) {
-		native_staged_apps_stage = 1;
-		strlcpy(path, "/private/var/staged_system_apps", MAXPATHLEN);
-		error = native_staged_apps_mkdir(p, scratch, path);
-		if (error) {
-			native_staged_apps_fail(error);
-		} else {
-			native_staged_apps_walk(p, scratch, vp, path, MAXPATHLEN, buffer, chunk, ctx);
-		}
-		if (!native_staged_apps_failed) {
-			vnode_t marker = NULLVP;
-			error = vnode_open(native_staged_apps_marker, O_CREAT | O_TRUNC | FWRITE | O_NOFOLLOW, 0644, 0, &marker, ctx);
-			if (!error) {
-				error = vnode_close(marker, FWRITE, ctx);
-			}
-			if (error) {
-				native_staged_apps_fail(error);
-			} else {
-				native_staged_apps_stage = 2;
-			}
-		}
-	} else {
-		native_staged_apps_stage = -2;
-	}
-	if (buffer) {
-		kfree_data(buffer, chunk);
-	}
-	if (path) {
-		kfree_data(path, MAXPATHLEN);
-	}
-	vnode_put(vp);
-}
 
 static int
 native_owner_data_prepare(proc_t p, user_addr_t scratch)
@@ -8913,12 +8420,40 @@ native_owner_data_prepare(proc_t p, user_addr_t scratch)
 	int error = EINVAL;
 	vnode_t data_root = NULLVP;
 	char device_path[64] = "/dev/md0";
+	uint32_t switch_persistent = 0;
+	int switch_raw = 0;
+	const char *data_uuid = XNU_OWNER_DATA_VOLUME_UUID;
 #if defined(XNU_NATIVE_RAM_BLOCK) && XNU_NATIVE_RAM_BLOCK
-	/* The typed provider supplies logical seed identity for both dense and
-	 * sparse media. A sparse disk has no contiguous logical-byte address. */
+#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
+	(void)PE_parse_boot_argn("switch-root-boot", &switch_persistent, sizeof(switch_persistent));
+	switch_raw = switch_files_storage_profile() == SWITCH_STORAGE_RAW;
+	if (switch_raw) data_uuid = SWITCH_RAW_DATA_UUID;
+	if (switch_persistent == 1) {
+		/* Mutable Data has no fixed content digest or contiguous RAM address.
+		 * Select only the exact UUID under this boot's persistent SD child. */
+		bzero(native_owner_data_seed_sha256, sizeof(native_owner_data_seed_sha256));
+		/* Sibling APFS media may still be publishing after OS root is ready.
+		 * Yield only for that state; never retry a refused identity or I/O. */
+		for (unsigned attempt = 0;; ++attempt) {
+			int status = switch_raw ?
+			    switch_raw_volume_status(data_uuid, &device, device_path, sizeof(device_path), &size) :
+			    switch_data_volume_status(data_uuid, &device, device_path, sizeof(device_path), &size);
+			if (status == SWITCH_BLOCK_OK) break;
+			if (status != SWITCH_BLOCK_NOT_READY) {
+				error = status == SWITCH_BLOCK_NOMEM ? ENOMEM :
+				    (status == SWITCH_BLOCK_IO ? EIO : EINVAL);
+				goto done;
+			}
+			if (attempt == 100) { error = ETIMEDOUT; goto done; }
+			struct timespec interval = {.tv_sec = 0, .tv_nsec = 100000000};
+			(void)msleep((void *)&native_owner_data_stage, NULL, PWAIT, "switchData", &interval);
+		}
+		if (size != (switch_raw ? SWITCH_RAW_BYTES : UINT64_C(17179869184))) goto done;
+	} else
+#endif
 	if (!native_ram_block_volume_seed(XNU_OWNER_DATA_VOLUME_UUID, &device, device_path,
 	    sizeof(device_path), &base, &size, native_owner_data_seed_sha256)) { error = ENOENT; goto done; }
-	/* The typed provider's disk may be far larger than 2 GiB (a persistent Data disk keeps only its seed's nonzero pages). */
+	/* Logical capacity is independent of the optional RAM seed representation. */
 	if (!size || size > UINT64_C(0x10000000000) || (size & 4095)) goto done;
 #else
 	device = mdevlookup(0);
@@ -8962,14 +8497,648 @@ native_owner_data_prepare(proc_t p, user_addr_t scratch)
 	native_owner_data_readonly = (vfs_flags(data_mount) & MNT_RDONLY) != 0;
 	if (actual != device || (vfs_flags(data_mount) & MNT_RDONLY) ||
 	    strcmp(vfs_statfs(data_mount)->f_fstypename, "apfs")) error = EINVAL;
+#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
+	if (!error && switch_persistent == 1) {
+		dev_t rechecked = NODEV;
+		uint64_t rechecked_size = 0;
+		char rechecked_path[64];
+		int status = switch_raw ?
+		    switch_raw_volume_status(data_uuid, &rechecked, rechecked_path, sizeof(rechecked_path), &rechecked_size) :
+		    switch_data_volume_status(data_uuid, &rechecked, rechecked_path, sizeof(rechecked_path), &rechecked_size);
+		if (status != SWITCH_BLOCK_OK || rechecked != actual || rechecked_size != size ||
+		    strcmp(device_path, rechecked_path)) error = EPERM;
+	}
+	if (!error) {
+		uint64_t observed_root=UINT64_MAX,observed_mobile=UINT64_MAX;
+		uint64_t flags=vfs_flags(data_mount);
+		struct vnode_attr attributes;
+		vnode_t mobile=NULLVP;
+		if ((flags & MNT_IGNORE_OWNERSHIP) || !vnode_isdir(data_root)) error=EPERM;
+		if (!error) {
+			VATTR_INIT(&attributes);
+			VATTR_WANTED(&attributes,va_uid);VATTR_WANTED(&attributes,va_gid);
+			error=VNOP_GETATTR(data_root,&attributes,vfs_context_current());
+			if (!error && (!VATTR_IS_SUPPORTED(&attributes,va_uid) || !VATTR_IS_SUPPORTED(&attributes,va_gid))) error=ENOTSUP;
+			if (!error) observed_root=((uint64_t)attributes.va_uid<<32)|attributes.va_gid;
+		}
+		if (!error) error=vnode_lookup("/private/var/mobile",0,&mobile,vfs_context_current());
+		if (!error && (!vnode_isdir(mobile) || vnode_mount(mobile)!=data_mount)) error=EINVAL;
+		if (!error) {
+			VATTR_INIT(&attributes);
+			VATTR_WANTED(&attributes,va_uid);VATTR_WANTED(&attributes,va_gid);
+			error=VNOP_GETATTR(mobile,&attributes,vfs_context_current());
+			if (!error && (!VATTR_IS_SUPPORTED(&attributes,va_uid) || !VATTR_IS_SUPPORTED(&attributes,va_gid))) error=ENOTSUP;
+			if (!error) observed_mobile=((uint64_t)attributes.va_uid<<32)|attributes.va_gid;
+		}
+		if (mobile) vnode_put(mobile);
+		switch_root_data_ownership(flags,observed_root,observed_mobile);
+		if (!error && (observed_root!=0 || observed_mobile!=((UINT64_C(501)<<32)|501)))
+			printf("SwitchRawBoot: Data ownership root=%llx mobile=%llx (expected 0/501:501)\n",
+			    observed_root, observed_mobile);
+	}
+#endif
 	if (!error) native_owner_data_stage = 4;
 	if (!error) native_gpu_addon_prepare(p, scratch);
-	if (!error) native_staged_apps_prepare(p, scratch, data_mount);
 done:
 	if (data_root) vnode_put(data_root);
 	native_owner_data_status = error;
 	return error;
 }
+
+#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT && \
+    defined(XNU_NATIVE_RAM_BLOCK) && XNU_NATIVE_RAM_BLOCK
+/* Development launchd policy retained on persistent Data for the native board.
+ * The original OS job and executable remain unchanged. */
+static int
+native_switch_watchdog_attributes(vnode_t vp, mount_t data_mount, int directory, uint64_t size)
+{
+	struct vnode_attr attributes;
+	if (vnode_mount(vp) != data_mount ||
+	    (directory ? !vnode_isdir(vp) : !vnode_isreg(vp))) return EINVAL;
+	VATTR_INIT(&attributes);
+	VATTR_WANTED(&attributes, va_uid);
+	VATTR_WANTED(&attributes, va_gid);
+	VATTR_WANTED(&attributes, va_mode);
+	if (!directory) VATTR_WANTED(&attributes, va_data_size);
+	int error = VNOP_GETATTR(vp, &attributes, vfs_context_current());
+	if (error) return error;
+	if (!VATTR_IS_SUPPORTED(&attributes, va_uid) || !VATTR_IS_SUPPORTED(&attributes, va_gid) ||
+	    !VATTR_IS_SUPPORTED(&attributes, va_mode) ||
+	    (!directory && !VATTR_IS_SUPPORTED(&attributes, va_data_size))) return ENOTSUP;
+	if (attributes.va_uid != 0 || attributes.va_gid != 0) return EPERM;
+	if (directory) {
+		if (attributes.va_mode & 022) return EPERM;
+	} else if ((attributes.va_mode & 022) || (size != UINT64_MAX &&
+	    ((attributes.va_mode & 07777) != 0644 || attributes.va_data_size != size))) return EINVAL;
+	return 0;
+}
+
+static int
+native_switch_watchdog_directory(proc_t p, user_addr_t scratch, const char *path, mount_t data_mount)
+{
+	vnode_t vp = NULLVP;
+	int created = 0;
+	int error = vnode_open(path, FREAD | O_DIRECTORY | O_NOFOLLOW_ANY, 0, 0, &vp, vfs_context_current());
+	if (error == ENOENT) {
+		struct mkdir_args request = {.path = scratch + 0x900, .mode = 0755};
+		int32_t result = 0;
+		if ((error = copyout(path, request.path, strlen(path) + 1))) return error;
+		if ((error = mkdir(p, &request, &result))) return error;
+		created = 1;
+		error = vnode_open(path, FREAD | O_DIRECTORY | O_NOFOLLOW_ANY, 0, 0, &vp, vfs_context_current());
+	}
+	if (error) return error;
+	/* No other userspace exists yet; each already-checked parent is root owned
+	 * and cannot be changed by a non-root principal during this preparation. */
+	if (vnode_mount(vp) != data_mount || !vnode_isdir(vp)) error = EINVAL;
+	if (!error && created) {
+		struct vnode_attr attributes;
+		VATTR_INIT(&attributes);
+		VATTR_SET(&attributes, va_uid, 0);
+		VATTR_SET(&attributes, va_gid, 0);
+		VATTR_SET(&attributes, va_mode, 0755);
+		error = vnode_setattr(vp, &attributes, vfs_context_current());
+	}
+	if (!error) error = native_switch_watchdog_attributes(vp, data_mount, 1, 0);
+	if (!error) error = VNOP_FSYNC(vp, MNT_WAIT, vfs_context_current());
+	int close_error = vnode_close(vp, FREAD, vfs_context_current());
+	return error ? error : close_error;
+}
+
+static int
+native_switch_watchdog_file(proc_t p, user_addr_t scratch, const char *path, const char *bytes, int length, mount_t data_mount,
+    uid_t owner, gid_t group, mode_t mode)
+{
+	/* An empty marker is created once; the policy is replaced atomically every boot
+	 * so edits to its job list reach existing Data volumes. Root-owned, as launchd requires. */
+	vfs_context_t context = vfs_context_current();
+	vnode_t vp = NULLVP;
+	char temporary[192];
+	int error;
+	if (!length) {
+		error = vnode_open(path, FREAD | O_NOFOLLOW_ANY, 0, 0, &vp, context);
+		if (!error) return vnode_close(vp, FREAD, context);
+		if (error != ENOENT) return error;
+	}
+	int size = snprintf(temporary, sizeof(temporary), "%s.Switch-%s", path, bootsessionuuid_string);
+	if (size < 0 || (size_t)size >= sizeof(temporary)) return ENAMETOOLONG;
+	error = vnode_open(temporary, FREAD | FWRITE | O_CREAT | O_TRUNC | O_NOFOLLOW_ANY, mode, 0, &vp, context);
+	if (error) return error;
+	if (vnode_mount(vp) != data_mount || !vnode_isreg(vp)) error = EINVAL;
+	if (!error && length) {
+		int residual = length;
+		error = vn_rdwr(UIO_WRITE, vp, (caddr_t)bytes, length, 0, UIO_SYSSPACE, IO_SYNC,
+		    vfs_context_ucred(context), &residual, p);
+		if (!error && residual) error = EIO;
+	}
+	if (!error) {
+		struct vnode_attr attributes;
+		VATTR_INIT(&attributes);
+		VATTR_SET(&attributes, va_uid, owner);
+		VATTR_SET(&attributes, va_gid, group);
+		VATTR_SET(&attributes, va_mode, mode);
+		error = vnode_setattr(vp, &attributes, context);
+	}
+	int close_error = vnode_close(vp, FREAD | FWRITE | (length ? FWASWRITTEN : 0), context);
+	if (!error) error = close_error;
+	struct renameatx_np_args request = {.fromfd = AT_FDCWD, .from = scratch + 0xa00,
+	    .tofd = AT_FDCWD, .to = scratch + 0xb00, .flags = RENAME_NOFOLLOW_ANY};
+	int32_t result = 0;
+	if (!error) error = copyout(temporary, request.from, strlen(temporary) + 1);
+	if (!error) error = copyout(path, request.to, strlen(path) + 1);
+	if (!error) error = renameatx_np(p, &request, &result);
+	if (error && !copyout(temporary, request.from, strlen(temporary) + 1)) {
+		struct unlink_args cleanup = {.path = request.from};
+		(void)unlink(p, &cleanup, &result);
+	}
+	return error;
+}
+
+static int
+native_switch_mkdir(proc_t p, user_addr_t scratch, const char *path, uid_t owner, mode_t mode)
+{
+	vnode_t vp = NULLVP;
+	int error = vnode_lookup(path, 0, &vp, vfs_context_current());
+	if (!error) {
+		vnode_put(vp);
+		return 0;
+	}
+	if (error != ENOENT) return error;
+	struct mkdir_args request = {.path = scratch + 0x900, .mode = 0755};
+	int32_t result = 0;
+	if ((error = copyout(path, request.path, strlen(path) + 1)) || (error = mkdir(p, &request, &result))) return error;
+	if ((error = vnode_lookup(path, 0, &vp, vfs_context_current()))) return error;
+	struct vnode_attr attributes;
+	VATTR_INIT(&attributes);
+	VATTR_SET(&attributes, va_uid, owner);
+	VATTR_SET(&attributes, va_gid, owner);
+	VATTR_SET(&attributes, va_mode, mode);
+	error = vnode_setattr(vp, &attributes, vfs_context_current());
+	vnode_put(vp);
+	return error;
+}
+
+/* The migration on XNU's console, where the user watches it: DataMigrator's processes as they start and end, a status line
+ * every 15 s, and its end (the sentinel gone: DataMigrator removes it when the migration is over). Until then
+ * switch_console_hold keeps the console on screen instead of backboardd's progress bar (drivers/NativeMobileDisplay draws
+ * the UI's frames but does not show them), for at most an hour; the migration itself carries on either way. */
+volatile int switch_console_hold = 0;
+#define NATIVE_MIGRATION_TICK_S 15
+#define NATIVE_MIGRATION_HOLD_S 3600
+static struct {
+	volatile int active;
+	uint64_t started;
+	uint32_t plugins_started, plugins_done, plugins_failed;
+	thread_call_t tick;
+} native_migration;
+
+static uint64_t
+native_migration_seconds(void)
+{
+	uint64_t ns = 0;
+	absolutetime_to_nanoseconds(mach_absolute_time() - native_migration.started, &ns);
+	return ns / NSEC_PER_SEC;
+}
+
+static void
+native_migration_tick(thread_call_param_t p0 __unused, thread_call_param_t p1 __unused)
+{
+	if (!native_migration.active) return;
+	const uint64_t s = native_migration_seconds();
+	vnode_t vp = NULLVP;
+	const int present = !vnode_lookup("/private/var/datamigrator/migrate", 0, &vp, vfs_context_kernel());
+	if (present) vnode_put(vp);
+	if (!present) {
+		native_migration.active = 0;
+		switch_console_hold = 0;
+		printf("SwitchMigration: FINISHED after %llum%02llus (%u plugin runs, %u failed): the home screen comes next\n",
+		    s / 60, s % 60, native_migration.plugins_done, native_migration.plugins_failed);
+		return;
+	}
+	printf("SwitchMigration: running %llum%02llus: %u plugin runs started, %u done, %u failed. Leave the Switch on.\n",
+	    s / 60, s % 60, native_migration.plugins_started, native_migration.plugins_done, native_migration.plugins_failed);
+	if (switch_console_hold && s >= NATIVE_MIGRATION_HOLD_S) {
+		switch_console_hold = 0;
+		printf("SwitchMigration: still running after %u min: the screen goes to the UI (the migration carries on)\n",
+		    NATIVE_MIGRATION_HOLD_S / 60);
+	}
+	uint64_t deadline = 0;
+	clock_interval_to_deadline(NATIVE_MIGRATION_TICK_S, NSEC_PER_SEC, &deadline);
+	thread_call_enter_delayed(native_migration.tick, deadline);
+}
+
+static void
+native_migration_start(void)
+{
+	native_migration.started = mach_absolute_time();
+	native_migration.tick = thread_call_allocate(native_migration_tick, NULL);
+	if (!native_migration.tick) return;
+	native_migration.active = 1;
+	switch_console_hold = 1;
+	printf("SwitchMigration: STARTING: iOS now installs the stock apps and sets up the defaults (wallpaper, ...).\n"
+	    "SwitchMigration: this can take 20+ minutes and runs once: leave the Switch on until the home screen appears.\n"
+	    "SwitchMigration: progress is logged here every %u s; the console stays up until it ends.\n",
+	    NATIVE_MIGRATION_TICK_S);
+	uint64_t deadline = 0;
+	clock_interval_to_deadline(NATIVE_MIGRATION_TICK_S, NSEC_PER_SEC, &deadline);
+	thread_call_enter_delayed(native_migration.tick, deadline);
+}
+
+/* exec (exited 0, from set_proc_name) and exit (exited 1, from proc_exit with the exit status) of every process. */
+void
+native_switch_migration_process(proc_t p, int exited, int status)
+{
+	if (!native_migration.active) return;
+	const char *name = p->p_name[0] ? p->p_name : p->p_comm;
+	const int plugin = !strcmp(name, "com.apple.migrationpluginwrapper");
+	if (!plugin && strcmp(name, "com.apple.datamigrator") && strcmp(name, "com.apple.datamigratorhelper")) return;
+	const uint64_t s = native_migration_seconds();
+	if (plugin && !exited) native_migration.plugins_started++;
+	if (plugin && exited) {
+		native_migration.plugins_done++;
+		if (status) native_migration.plugins_failed++;
+	}
+	if (exited)
+		printf("SwitchMigration: %llum%02llus %s[%d] ended (status %#x)%s\n", s / 60, s % 60, name, proc_getpid(p), status,
+		    plugin ? "" : " (DataMigrator itself)");
+	else
+		printf("SwitchMigration: %llum%02llus %s[%d] started\n", s / 60, s % 60, name, proc_getpid(p));
+}
+
+/* The data migration the first boot after a restore runs, once. The com.apple.migration prefs below record 21H461 as
+ * migrated (UniXNU's skip-setup seed), so DataMigrator always answered "System build version unchanged" and
+ * SystemAppMigrator.migrator never installed the 29 removable apps a restore leaves in /private/var/staged_system_apps
+ * (Maps, Mail, Calendar, Notes, Music, ...; every binary is in the static trust cache). DataMigrator's own trigger is
+ * its sentinel, /private/var/datamigrator/migrate ("Migration sentinel present. Migration necessary."), which it removes
+ * when the migration ends; backboardd then runs it behind its progress bar while SpringBoard waits. The marker makes it
+ * one try: a sentinel still there on a later boot means that migration never ended (a plugin hung, the power was cut),
+ * and it is removed rather than run again. Failures are logged only. */
+static void
+native_switch_system_app_migration(proc_t p, user_addr_t scratch, mount_t data_mount)
+{
+	static const char marker[] = "/private/var/Switch/system-app-migration",
+	    sentinel[] = "/private/var/datamigrator/migrate";
+	vfs_context_t context = vfs_context_current();
+	vnode_t vp = NULLVP;
+	int error = vnode_lookup(marker, 0, &vp, context);
+	if (!error) {
+		vnode_put(vp);
+		if (vnode_lookup(sentinel, 0, &vp, context)) return;
+		vnode_put(vp);
+		struct unlink_args request = {.path = scratch + 0x900};
+		int32_t result = 0;
+		if (!(error = copyout(sentinel, request.path, sizeof(sentinel)))) error = unlink(p, &request, &result);
+		printf("SwitchRawBoot: last boot's data migration did not finish; not run again (%d)\n", error);
+		return;
+	}
+	/* datamigrator runs as mobile and unlinks the sentinel: directory and file are mobile's, as on the OS volume. */
+	if (error == ENOENT) error = native_switch_mkdir(p, scratch, "/private/var/datamigrator", 501, 0755);
+	if (!error) error = native_switch_watchdog_file(p, scratch, sentinel, "", 0, data_mount, 501, 501, 0644);
+	if (!error) error = native_switch_mkdir(p, scratch, "/private/var/Switch", 0, 0755);
+	if (!error) error = native_switch_watchdog_file(p, scratch, marker, "", 0, data_mount, 0, 0, 0644);
+	if (error) printf("SwitchRawBoot: data migration request failed: %d\n", error);
+	else {
+		printf("SwitchRawBoot: data migration requested (staged system apps)\n");
+		native_migration_start();
+	}
+}
+
+/* Portrait-native (drivers/NativeMobileDisplay/SwitchPortrait.h): iOS is given the Switch's 720x1280 panel as it is and
+ * runs landscape with the panel's top on the user's right, which is interface orientation 4 (landscape left, home button
+ * on the left) and device orientation 4. With no accelerometer, the orientation comes from two places:
+ *  - ADT /chosen display-boot-rotation 270 (scripts/package_raw_boot.py, which also decides the mode): MobileGestalt
+ *    DisplayBootRotation, from which SpringBoard starts in orientation 4 (-[SpringBoard _bootOrientation]: 270 -> 4,
+ *    90 -> 3) and ProgressUI turns the boot Apple logo.
+ *  - SpringBoard's rotation lock, restored at every startup (-[SBOrientationLockManager restoreStateFromPrefs] locks to
+ *    SBLastRotationLockedOrientation[iPad] when it is non-zero, and sends backboardd BKSHIDServicesLockOrientation, so
+ *    backboardd's device orientation is 4 and CoreMotion's "unknown" is ignored). It is derived from the ADT value, so
+ *    the packager's one number turns everything (270 -> 4; its mirror, 90 -> 3). The SpringBoard plist is rewritten
+ *    every boot, so a lock turned off in Control Center comes back at the next boot.
+ * The orientation to lock to, from this boot's ADT; 0: not portrait-native. */
+static unsigned int
+native_switch_portrait(void)
+{
+	DTEntry chosen;
+	void const *value = NULL;
+	unsigned int size = 0;
+	uint32_t rotation = 0;
+	if (SecureDTLookupEntry(0, "/chosen", &chosen) == kSuccess &&
+	    SecureDTGetProperty(chosen, "display-boot-rotation", &value, &size) == kSuccess && size == sizeof(rotation)) {
+		memcpy(&rotation, value, sizeof(rotation));
+	}
+	return rotation == 270 ? 4 : rotation == 90 ? 3 : 0;
+}
+
+/* The SpringBoard prefs body with the rotation lock added before its closing "</dict></plist>\n", in buffer; any other
+ * domain, or not portrait-native, as it is. */
+static const char *
+native_switch_portrait_prefs(const char *name, const char *body, char *buffer, size_t size)
+{
+	static const char end[] = "</dict></plist>\n";
+	const size_t length = strlen(body), tail = sizeof(end) - 1;
+	const unsigned int orientation = native_switch_portrait();
+	if (strcmp(name, "com.apple.springboard") || !orientation || length < tail || strcmp(body + length - tail, end)) {
+		return body;
+	}
+	const int made = snprintf(buffer, size, "%.*s<key>SBLastRotationLockedOrientationiPad</key><integer>%u</integer>"
+	    "<key>SBLastRotationLockedOrientation</key><integer>%u</integer>%s", (int)(length - tail), body, orientation,
+	    orientation, end);
+	return made > 0 && (size_t)made < size ? buffer : body;
+}
+
+/* MobileGestalt caches its answers (DisplayBootRotation among them) keyed by the OS build alone, so an answer from the
+ * other mode would outlive the ADT change. When the mode differs from the last boot's (a marker per locked orientation),
+ * the cache is removed once and MobileGestalt makes it again. Failures are logged only; the next boot tries again. */
+static void
+native_switch_portrait_cache(proc_t p, user_addr_t scratch, mount_t data_mount)
+{
+	static const char cache[] = "/private/var/containers/Shared/SystemGroup/systemgroup.com.apple.mobilegestaltcache/"
+	    "Library/Caches/com.apple.MobileGestalt.plist";
+	const unsigned int orientation = native_switch_portrait();
+	char marker[2][64];
+	int marked[2], changed = 0;
+	for (unsigned int i = 0; i < 2; ++i) {
+		snprintf(marker[i], sizeof(marker[i]), "/private/var/Switch/portrait-native-%u", 3 + i);
+		vnode_t vp = NULLVP;
+		marked[i] = !vnode_lookup(marker[i], 0, &vp, vfs_context_current());
+		if (vp) vnode_put(vp);
+		changed |= marked[i] != (orientation == 3 + i);
+	}
+	if (!changed) return;
+	struct unlink_args request = {.path = scratch + 0x900};
+	int32_t result = 0;
+	int error = copyout(cache, request.path, sizeof(cache));
+	if (!error) error = unlink(p, &request, &result);
+	if (error == ENOENT) error = 0;
+	for (unsigned int i = 0; i < 2 && !error; ++i) {
+		if (marked[i] && orientation != 3 + i) {
+			if (!(error = copyout(marker[i], request.path, strlen(marker[i]) + 1))) error = unlink(p, &request, &result);
+		} else if (!marked[i] && orientation == 3 + i) {
+			error = native_switch_mkdir(p, scratch, "/private/var/Switch", 0, 0755);
+			if (!error) error = native_switch_watchdog_file(p, scratch, marker[i], "", 0, data_mount, 0, 0, 0644);
+		}
+	}
+	printf("SwitchRawBoot: screen %s (orientation %u): MobileGestalt cache dropped (%d)\n",
+	    orientation ? "portrait-native" : "landscape", orientation, error);
+}
+
+/* Portrait-native: Core Animation must composite the landscape interface into the portrait framebuffer itself. backboardd
+ * hands every interface orientation to the window server's first display as if it were a mirrored one
+ * (UpdateMirroredDisplayOrientationWithInterfaceOrientation: [[CAWindowServer serverIfRunning].displays[0] setOrientation:]),
+ * which here is the panel; with landscape there, QuartzCore (CA::OGL::MetalContext::get_surface) asks Metal for a rotated
+ * 1280x720 render target over the 720-wide framebuffer (MTLTextureDescriptor rotation 3), which the GPU here renders only
+ * through a shadow and a turning copy, and this build refuses: every frame failed from the first landscape layout (boot
+ * 11-04 16:03, "Failed to allocate [1280 x 720] BGRA framebuffer"), the screen kept the boot logo. backboardd skips that
+ * update, and sets the display's orientation once at start instead, when its local default BKForceMirroredOrientation
+ * (com.apple.backboardd, BKSLocalDefaults) is set: "portrait" keeps the window server display in the panel's own
+ * orientation, as it was in the landscape-screen mode. It is a managed preference (CFPreferences reads
+ * /Library/Managed Preferences/mobile/<domain>.plist over the user's), so backboardd's own plist (Invert Colors, ALS,
+ * pointer settings) is left alone. Root-owned like MDM's, rewritten every boot; not portrait-native, it goes. */
+static void
+native_switch_portrait_display(proc_t p, user_addr_t scratch, mount_t data_mount)
+{
+	static const char directory[] = "/private/var/Managed Preferences", user[] = "/private/var/Managed Preferences/mobile",
+	    path[] = "/private/var/Managed Preferences/mobile/com.apple.backboardd.plist",
+	    body[] = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+	    "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n"
+	    "<plist version=\"1.0\"><dict><key>BKForceMirroredOrientation</key><string>portrait</string></dict></plist>\n";
+	int error = 0;
+	if (!native_switch_portrait()) {
+		vnode_t vp = NULLVP;
+		if (vnode_lookup(path, 0, &vp, vfs_context_current())) return;
+		vnode_put(vp);
+		struct unlink_args request = {.path = scratch + 0x900};
+		int32_t result = 0;
+		if (!(error = copyout(path, request.path, sizeof(path)))) error = unlink(p, &request, &result);
+	} else {
+		error = native_switch_mkdir(p, scratch, directory, 0, 0755);
+		if (!error) error = native_switch_mkdir(p, scratch, user, 0, 0755);
+		if (!error) error = native_switch_watchdog_file(p, scratch, path, body, (int)sizeof(body) - 1, data_mount, 0, 0, 0644);
+	}
+	if (error) printf("SwitchRawBoot: %s failed: %d\n", path, error);
+}
+
+/* The state a restored iPad has after Setup and data migration, plus no
+ * SpringBoard watchdogs or idle sleep (no buttons or idle timer here yet).
+ * Keys follow UniXNU's skip-setup seed and ios-sweet's root tweaks. */
+static int
+native_switch_setup_state(proc_t p, user_addr_t scratch, mount_t data_mount)
+{
+#define SWITCH_PLIST(body) "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" \
+	"<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n" \
+	"<plist version=\"1.0\"><dict>" body "</dict></plist>\n"
+	static const struct { const char *name, *body; bool once; } prefs[] = {
+		{"com.apple.purplebuddy", SWITCH_PLIST("<key>SetupDone</key><true/><key>SetupFinishedAllSteps</key><true/>"
+		    "<key>SetupVersion</key><integer>11</integer><key>daemonizeNeedsToRun</key><false/>"), false},
+		{"com.apple.purplebuddy.notbackedup", SWITCH_PLIST("<key>ShouldRunDiagnosticsMiniBuddy</key><false/>"
+		    "<key>ShouldRunHSA2MiniBuddy</key><false/><key>ShouldRunKeychainSyncMiniBuddy</key><false/>"
+		    "<key>ShouldRunMesaMiniBuddy</key><false/><key>ShouldRunPaymentMiniBuddy</key><false/>"
+		    "<key>ShouldRunStandardMiniBuddy</key><false/><key>SilentICDPUpgrade</key><false/>"), false},
+		{"com.apple.managedconfiguration.notbackedup",
+		    SWITCH_PLIST("<key>LockdownActivationIndicatesCloudConfigurationAvailable</key><false/>"), false},
+		{"com.apple.springboard", SWITCH_PLIST("<key>BKNoWatchdogs</key><true/>"
+		    "<key>FBLaunchWatchdogExceptions</key><dict><key>com.apple.purplebuddy</key><real>100</real></dict>"
+		    "<key>MCForceShowCloudConfigurationUI</key><false/><key>SBDisableAutoDim</key><true/>"
+		    "<key>SBDontDimOrLockOnAC</key><true/><key>SBDisableIdleSleep</key><true/>"
+		    /* The 7" panel shows 1280x720 points at scale 1 (UIScreen.scale is an integer all the way down,
+		     * so no fractional zoom): large icons and the text size below keep things legible and crisp. */
+		    "<key>SBHomeLargeIcons</key><true/>"), false},
+		{"com.apple.UIKit", SWITCH_PLIST("<key>UIPreferredContentSizeCategoryName</key>"
+		    "<string>UICTContentSizeCategoryXXL</string>"), false},
+		/* Seeded once: DataMigrator keeps its results and its hang-reboot count in this domain. */
+		{"com.apple.migration", SWITCH_PLIST("<key>LastSystemVersion</key><string>21H461</string>"
+		    "<key>DMUserDataDisposition</key><dict><key>SyntheticDidUpgrade</key><false/>"
+		    "<key>buildVersion</key><string>21H461</string></dict>"), true},
+	};
+#undef SWITCH_PLIST
+	/* Directories a restore creates on Data (UniXNU prepare-offline-data.py): usermanagerd keeps its
+	 * session and persona keybags in keybags/ and aborts at every start without it. */
+	static const struct { const char *path; uid_t owner; mode_t mode; } directories[] = {
+		{"/private/var/containers", 0, 0755}, {"/private/var/containers/Bundle", 33, 0755},
+		{"/private/var/containers/Data", 0, 0755}, {"/private/var/containers/Data/System", 0, 0755},
+		{"/private/var/containers/Data/Application", 0, 0755},
+		{"/private/var/containers/Shared", 0, 0755}, {"/private/var/containers/Shared/SystemGroup", 0, 0755},
+		{"/private/var/containers/Temp", 0, 0755},
+		{"/private/var/keybags", 0, 0700}, {"/private/var/keybags/backup", 0, 0700},
+		{"/private/var/PersonaVolumes", 0, 0755}, {"/private/var/Library", 0, 0755},
+		{"/private/var/db/dslocal", 0, 0755}, {"/private/var/db/dslocal/nodes", 0, 0755},
+		{"/private/var/db/dslocal/nodes/Default", 0, 0755},
+		{"/private/var/db/dslocal/nodes/Default/users", 0, 0755},
+		{"/private/var/db/dslocal/nodes/Default/groups", 0, 0755},
+		{"/private/var/db/dslocal/nodes/Default/config", 0, 0755},
+		{"/private/var/mobile/Documents", 501, 0755},
+	};
+	int error = 0;
+	for (unsigned i = 0; i < sizeof(directories) / sizeof(directories[0]) && !error; ++i)
+		error = native_switch_mkdir(p, scratch, directories[i].path, directories[i].owner, directories[i].mode);
+	char path[160] = "/private/var/containers";
+	for (unsigned i = 0; i < sizeof(prefs) / sizeof(prefs[0]) && !error; ++i) {
+		snprintf(path, sizeof(path), "/private/var/mobile/Library/Preferences/%s.plist", prefs[i].name);
+		vnode_t existing = NULLVP;
+		if (prefs[i].once && !vnode_lookup(path, 0, &existing, vfs_context_current())) {
+			vnode_put(existing);
+			continue;
+		}
+		static char portrait[1024];  /* once, in launchd's exec */
+		const char *body = native_switch_portrait_prefs(prefs[i].name, prefs[i].body, portrait, sizeof(portrait));
+		error = native_switch_watchdog_file(p, scratch, path, body, (int)strlen(body), data_mount, 501, 501, 0600);
+	}
+	if (error) printf("SwitchRawBoot: first-boot state failed at %s: %d\n", path, error);
+	else {
+		native_switch_portrait_cache(p, scratch, data_mount);
+		native_switch_portrait_display(p, scratch, data_mount);
+		native_switch_system_app_migration(p, scratch, data_mount);
+	}
+	return error;
+}
+
+/* The last boot's panic, kept in RAM across the warm reset (boot-arg switch-panic-save, SwitchPanicSave.c):
+ * /private/var/Switch/panic-<UTC time>.log, root 0644, written as the policy files are; the record is cleared once it is
+ * on Data. A failure is logged and the record kept for the next boot. */
+static void
+native_switch_panic_save(proc_t p, user_addr_t scratch, mount_t data_mount)
+{
+	char path[96];
+	uint32_t length = 0;
+	const char *text = switch_panic_save_pending(&length, path, sizeof(path));
+	if (!text) return;
+	int error = native_switch_mkdir(p, scratch, "/private/var/Switch", 0, 0755);
+	if (!error) error = native_switch_watchdog_file(p, scratch, path, text, (int)length, data_mount, 0, 0, 0644);
+	switch_panic_save_done(error, path);
+}
+
+static int
+native_switch_watchdog_policy(proc_t p, user_addr_t scratch)
+{
+	/* Jobs with no hardware or accounts here; the first four deadlock each other
+	 * (UniXNU-sheng BootWatchdogPolicy.c "lite" set). */
+#define NATIVE_SWITCH_POLICY_HEAD "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" \
+	    "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n" \
+	    "<plist version=\"1.0\"><dict>" \
+	    "<key>com.apple.watchdogd</key><true/>" \
+	    "<key>com.apple.identityservicesd</key><true/>" \
+	    "<key>com.apple.locationd</key><true/>" \
+	    "<key>com.apple.CommCenter</key><true/>"
+	/* Bluetooth needs drivers/SwitchBluetooth, which runs only with boot-arg switch-bt=1 (the BlueTool stand-in in
+	 * the overlay and bluetoothd's transport, native_switch_exec_environment, are gated the same way). Without it
+	 * bluetoothd has no controller and stays disabled. audiomxd's Bluetooth plug-in then retries bluetoothd's
+	 * com.apple.BTAudioHALPlugin.xpc in a tight loop (~520/s, 500k+ log lines a boot) unless the overlay shows the stub
+	 * BTAudioHALPlugin.driver/Info.plist (drivers/SwitchAudio/hal/BTAudioHALPlugin-Info.plist: a loading condition that
+	 * matches no IOService, so the audio server defers the plug-in before loading any code). So audiomxd runs when
+	 * bluetoothd does or when that stub is on Data, and stays disabled otherwise. */
+#define NATIVE_SWITCH_POLICY_BLUETOOTH "<key>com.apple.bluetoothd</key><true/>"
+#define NATIVE_SWITCH_POLICY_AUDIO "<key>com.apple.audiomxd</key><true/>"
+#define NATIVE_SWITCH_POLICY_TAIL "<key>com.apple.photoanalysisd</key><true/>" \
+	    "<key>com.apple.mediaanalysisd</key><true/>" \
+	    "<key>com.apple.mediastream.mstreamd</key><true/>" \
+	    "<key>com.apple.icloud.searchpartyd</key><true/>" \
+	    "<key>com.apple.findmy.findmybeaconingd</key><true/>" \
+	    "<key>com.apple.familycircled</key><true/>" \
+	    "<key>com.apple.financed</key><true/>" \
+	    "<key>com.apple.softwareupdateservicesd</key><true/>" \
+	    "<key>com.apple.ndoagent</key><true/>" \
+	    "<key>com.apple.biomesyncd</key><true/>" \
+	    "<key>com.apple.email.maild</key><true/>" \
+	    "<key>com.apple.amsengagementd</key><true/>" \
+	    "<key>com.apple.adid</key><true/>" \
+	    "<key>com.apple.eyereliefd</key><true/>" \
+	    "<key>com.apple.fairplayd.A2</key><true/>" \
+	    "<key>com.apple.passd</key><true/>" \
+	    "<key>com.apple.mobile.obliteration</key><true/>" \
+	    "<key>com.apple.coreduetd</key><true/>" \
+	    NATIVE_SWITCH_POLICY_NO_HARDWARE \
+	    "</dict></plist>\n"
+	/* No such hardware on the Switch (approved 11-04): NFC, secure element, Tap to Pay, ID wallet, Face ID, UWB,
+	 * multitouch calibration, hotspot, cellular helper, smart charging, Apple display FDR/BICS; and tailspind (always-on
+	 * kdebug tracing) and accessoryupdaterd. This file is the only override database 21H461 launchd reads: no
+	 * disabled.<uid>.plist exists. launchd reads it once, between its finish-demo-restore and sysstatuscheck boot tasks.
+	 * The user/501 domain shares the system domain's dictionary, so one bare-label key covers both domains. A job disabled
+	 * here is refused at import (error 119), so nothing spawns it, whether speculative, xpc event or mach lookup.
+	 * Not here: ptpd and atc (USB), and WebBookmarks.webbookmarksd (Safari needs it; the cryptex launch-constraint
+	 * fix ended its respawn loop). */
+#define NATIVE_SWITCH_POLICY_NO_HARDWARE "<key>com.apple.nfcd</key><true/>" \
+	    "<key>com.apple.seld</key><true/>" \
+	    "<key>com.apple.seserviced</key><true/>" \
+	    "<key>com.apple.softposreaderd</key><true/>" \
+	    "<key>com.apple.coreidvd</key><true/>" \
+	    "<key>com.apple.biometrickitd.mesa</key><true/>" \
+	    "<key>com.apple.nearbyd</key><true/>" \
+	    "<key>com.apple.mtmergeprops</key><true/>" \
+	    "<key>com.apple.MobileInternetSharing</key><true/>" \
+	    "<key>com.apple.CommCenterMobileHelper</key><true/>" \
+	    "<key>com.apple.PowerUIAgent</key><true/>" \
+	    "<key>com.apple.iomfb_fdr_loader</key><true/>" \
+	    "<key>com.apple.iomfb_bics_daemon</key><true/>" \
+	    "<key>com.apple.tailspind</key><true/>" \
+	    "<key>com.apple.accessoryupdaterd</key><true/>"
+	static const char head[] = NATIVE_SWITCH_POLICY_HEAD, bluetooth_off[] = NATIVE_SWITCH_POLICY_BLUETOOTH,
+	    audio_off[] = NATIVE_SWITCH_POLICY_AUDIO, tail[] = NATIVE_SWITCH_POLICY_TAIL;
+	static char policy[sizeof(head) + sizeof(bluetooth_off) + sizeof(audio_off) + sizeof(tail)];
+#undef NATIVE_SWITCH_POLICY_HEAD
+#undef NATIVE_SWITCH_POLICY_BLUETOOTH
+#undef NATIVE_SWITCH_POLICY_AUDIO
+#undef NATIVE_SWITCH_POLICY_TAIL
+#undef NATIVE_SWITCH_POLICY_NO_HARDWARE
+	static const char bluetooth_audio_stub[] =
+	    "/private/var/Switch/overlay/System/Library/Audio/Plug-Ins/HAL/BTAudioHALPlugin.driver/Info.plist";
+	uint32_t bluetooth = 0;
+	const int with_bluetooth = PE_parse_boot_argn("switch-bt", &bluetooth, sizeof(bluetooth)) && bluetooth;
+	int policy_size = 0;
+	static const char *const paths[] = {
+	    "/private/var/db/com.apple.xpc.launchd/disabled.plist",
+	    "/private/var/db/com.apple.xpc.launchd/disabled.migrated"
+	};
+	uint32_t root_boot = 0;
+	if (!PE_parse_boot_argn("switch-root-boot", &root_boot, sizeof(root_boot)) || root_boot != 1) return 0;
+	if (native_owner_data_status || native_owner_data_stage != 4 || native_owner_data_device == NODEV) return EPERM;
+	vnode_t data_root = NULLVP;
+	int error = vnode_open("/private/var", FREAD | O_DIRECTORY | O_NOFOLLOW_ANY,
+	    0, 0, &data_root, vfs_context_current());
+	if (error) return error;
+	mount_t data_mount = vnode_mount(data_root);
+	vnode_t device = vfs_devvp(data_mount);
+	dev_t actual = device ? vnode_specrdev(device) : NODEV;
+	if (device) vnode_put(device);
+	if (actual != native_owner_data_device ||
+	    (vfs_flags(data_mount) & (MNT_RDONLY | MNT_IGNORE_OWNERSHIP)) ||
+	    strcmp(vfs_statfs(data_mount)->f_fstypename, "apfs")) error = EPERM;
+	if (!error) error = native_switch_watchdog_attributes(data_root, data_mount, 1, 0);
+	if (!error) {
+		vnode_t stub = NULLVP;
+		/* The HAL union with the stub is gated on switch-audio (tree/overlay/manifest.json), so the stub only
+		 * counts when that boot-arg is set: otherwise the real BTAudioHALPlugin would load and spin. */
+		uint32_t audio = 0;
+		const int with_audio_arg = PE_parse_boot_argn("switch-audio", &audio, sizeof(audio)) && audio;
+		const int with_audio = with_bluetooth ||
+		    (with_audio_arg && !vnode_lookup(bluetooth_audio_stub, 0, &stub, vfs_context_current()));
+		if (stub) vnode_put(stub);
+		strlcpy(policy, head, sizeof(policy));
+		if (!with_bluetooth) strlcat(policy, bluetooth_off, sizeof(policy));
+		if (!with_audio) strlcat(policy, audio_off, sizeof(policy));
+		policy_size = (int)strlcat(policy, tail, sizeof(policy));
+		if (!with_audio) printf("SwitchRawBoot: audiomxd stays disabled: no %s\n", bluetooth_audio_stub);
+	}
+	if (!error) error = native_switch_watchdog_directory(p, scratch, "/private/var/db", data_mount);
+	if (!error) error = native_switch_watchdog_directory(p, scratch,
+	    "/private/var/db/com.apple.xpc.launchd", data_mount);
+	if (!error) error = native_switch_watchdog_file(p, scratch, paths[0], policy, policy_size, data_mount, 0, 0, 0644);
+	/* Persist the policy name before allowing launchd's migration marker. */
+	if (!error) error = native_switch_watchdog_directory(p, scratch,
+	    "/private/var/db/com.apple.xpc.launchd", data_mount);
+	if (!error) error = native_switch_watchdog_file(p, scratch, paths[1], "", 0, data_mount, 0, 0, 0644);
+	/* Persist new file names and any newly created parent directories. */
+	if (!error) error = native_switch_watchdog_directory(p, scratch,
+	    "/private/var/db/com.apple.xpc.launchd", data_mount);
+	if (!error) error = native_switch_watchdog_directory(p, scratch, "/private/var/db", data_mount);
+	if (!error) error = native_switch_setup_state(p, scratch, data_mount);
+	if (!error) native_switch_panic_save(p, scratch, data_mount);
+	if (!error) error = VNOP_FSYNC(data_root, MNT_WAIT, vfs_context_current());
+	int close_error = vnode_close(data_root, FREAD, vfs_context_current());
+	if (!error) error = close_error;
+	if (!error) printf("Switch: persistent Data launchd preferences ready\n");
+	return error;
+}
+#endif
 #endif
 
 static int
@@ -9055,7 +9224,13 @@ load_init_program_at_path(proc_t p, user_addr_t scratch_addr, const char* path, 
 	 */
 	set_security_token(p, proc_ucred_unsafe(p));
 
+#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
+	error=execve(p, &init_exec_args, retval);
+	if (!strcmp(path,"/sbin/launchd")) switch_root_event(13,error,0);
+	return error;
+#else
 	return execve(p, &init_exec_args, retval);
+#endif
 }
 
 static const char * init_programs[] = {
@@ -9100,6 +9275,8 @@ static const char * init_programs[] = {
 void
 load_init_program(proc_t p)
 {
+	boot_progress_stage("load_init_program enter");
+	switch_diag_stage("launchd exec attempt - EL0 not established");
 	uint32_t i;
 	int error;
 	vm_map_t map = current_map();
@@ -9115,12 +9292,42 @@ load_init_program(proc_t p)
 	    VM_MAP_KERNEL_FLAGS_ANYWHERE());
 	user_addr_t init_envp = USER_ADDR_NULL;
 #if defined(XNU_OWNER_CACHE_MOUNT) && XNU_OWNER_CACHE_MOUNT
+	boot_progress_stage("SystemOS mount enter");
+#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
+	switch_root_event(9,0,0);
+#endif
 	int cache_error = native_owner_cache_prepare(p, (user_addr_t)scratch_addr, &init_envp);
+	boot_progress_stage("SystemOS mount returned");
+#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
+	switch_root_event(10,cache_error,0);
+#endif
 	if (cache_error) panic("offline owner SystemOS mount failed: %d", cache_error);
 #endif
 #if defined(XNU_OWNER_DATA_MOUNT) && XNU_OWNER_DATA_MOUNT
+	boot_progress_stage("Data mount enter");
+#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
+	switch_root_event(11,0,0);
+#endif
 	int data_error = native_owner_data_prepare(p, (user_addr_t)scratch_addr);
+	boot_progress_stage("Data mount returned");
+#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
+	switch_root_event(12,data_error,0);
+#endif
 	if (data_error) panic("offline scratch Data mount failed: %d", data_error);
+#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT && \
+    defined(XNU_NATIVE_RAM_BLOCK) && XNU_NATIVE_RAM_BLOCK
+	int watchdog_error = native_switch_watchdog_policy(p, (user_addr_t)scratch_addr);
+	if (watchdog_error) printf("SwitchRawBoot: watchdogd launchd policy not written: %d (continuing)\n", watchdog_error);
+	/* Owner overlay unions over sealed directories (SwitchRawMount.h), now that Data is mounted. */
+	native_switch_raw_overlay(p, (user_addr_t)scratch_addr);
+#endif
+#if defined(XNU_BOOT_PROGRESS) && XNU_BOOT_PROGRESS
+	extern int sheng_boot_watchdog_policy(void *, uint64_t);
+	boot_progress_stage("temporary watchdog launch policy enter");
+	int policy_error=sheng_boot_watchdog_policy(p, (uint64_t)scratch_addr);
+	if (policy_error) panic("sheng watchdog launch policy failed: %d", policy_error);
+	boot_progress_stage("temporary watchdog launch policy ready");
+#endif
 #endif
 #if CONFIG_MEMORYSTATUS
 	(void) memorystatus_init_at_boot_snapshot();
@@ -9649,6 +9856,7 @@ process_signature(proc_t p, struct image_params *imgp)
 	 * approve of exec, kill and return immediately.
 	 */
 	if (imgp->ip_mac_return != 0) {
+		boot_progress_process_stage(proc_getpid(p),p->p_name,"exec MAC policy REFUSED");
 		KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_PROC, BSD_PROC_EXITREASON_CREATE) | DBG_FUNC_NONE,
 		    proc_getpid(p), OS_REASON_EXEC, EXEC_EXIT_REASON_SECURITY_POLICY, 0, 0);
 		signature_failure_reason = os_reason_create(OS_REASON_EXEC, EXEC_EXIT_REASON_SECURITY_POLICY);
@@ -9664,9 +9872,12 @@ process_signature(proc_t p, struct image_params *imgp)
 		goto done;
 	}
 
-	/* call the launch constraints hook */
+	/* call the launch constraints hook (Switch: not for the Data overlay's executables, native_switch_overlay_image,
+	 * nor for the two grafted-equivalent Apple cryptex mounts, native_switch_cryptex_image; trust cache still enforced) */
 	os_reason_t launch_constraint_reason;
-	if ((error = mac_proc_check_launch_constraints(p, imgp, &launch_constraint_reason)) != 0) {
+	error = (native_switch_overlay_image(imgp) || native_switch_cryptex_image(imgp)) ?
+	    0 : mac_proc_check_launch_constraints(p, imgp, &launch_constraint_reason);
+	if (error != 0) {
 		signature_failure_reason = launch_constraint_reason;
 		goto done;
 	}
@@ -9825,7 +10036,9 @@ done:
 		 * state.
 		 */
 
+		boot_progress_process_stage(proc_getpid(p),p->p_name,"exec process signature enter");
 		error = proc_process_signature(p, &signature_failure_reason);
+		boot_progress_process_stage(proc_getpid(p),p->p_name,error ? "exec process signature REFUSED" : "exec process signature accepted");
 	}
 
 	if (0 == error) {

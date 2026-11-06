@@ -99,6 +99,7 @@
 #include <sys/kdebug.h>
 #include <sys/kdebug_triage.h>
 #include <libkern/OSAtomic.h>
+#include <os/atomic_private.h>
 
 #include <sys/sdt.h>
 
@@ -202,6 +203,19 @@ static int cluster_handle_split_pagein(vnode_t vp, upl_t upl, upl_offset_t upl_o
     u_int io_size, int rounded_size, int local_flags, int (*callback)(buf_t, void *), void *callback_arg);
 
 static void cluster_read_upl_release(upl_t upl, int start_pg, int last_pg, int take_reference);
+static inline bool switch_cluster_is_image(vnode_t vp);
+static inline bool switch_cluster_verified_mount(mount_t mp);
+/* SwitchBootPrefetch (r8-sdboot): while it runs, the foreground's reads of the System image and those that went to
+ * the card (cluster_io: misses plus their read-ahead), for its one summary line (SwitchCryptex.cpp). */
+static thread_t switch_prefetch_thread;
+static vnode_t switch_prefetch_vp;
+static uint64_t switch_image_reads, switch_image_ios;
+static inline bool
+switch_prefetch_foreground(vnode_t vp)
+{
+	return os_atomic_load(&switch_prefetch_thread, acquire) != THREAD_NULL && vp == switch_prefetch_vp &&
+	       current_thread() != switch_prefetch_thread;
+}
 static int cluster_copy_ubc_data_internal(vnode_t vp, struct uio *uio, int *io_resid, int mark_dirty, int take_reference);
 
 static int cluster_read_copy(vnode_t vp, struct uio *uio, u_int32_t io_req_size, off_t filesize, int flags,
@@ -1580,6 +1594,11 @@ cluster_io(vnode_t vp, upl_t upl, vm_offset_t upl_offset, off_t f_offset, int no
 	}
 	upl_end_offset = upl_offset + size;
 
+	/* SwitchBootPrefetch: the foreground's reads of the System image that still go to the card. */
+	if ((flags & CL_READ) && switch_prefetch_foreground(vp)) {
+		os_atomic_inc(&switch_image_ios, relaxed);
+	}
+
 	KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 22)) | DBG_FUNC_START, (int)f_offset, size, upl_offset, flags, 0);
 
 	/*
@@ -1600,7 +1619,7 @@ cluster_io(vnode_t vp, upl_t upl, vm_offset_t upl_offset, off_t f_offset, int no
 
 		/* See if we can do cluster verification (pageins and aligned reads) */
 		if ((flags & CL_PAGEIN || cluster_verify_threads) &&
-		    !(mp->mnt_kern_flag & MNTK_VIRTUALDEV) &&
+		    (!(mp->mnt_kern_flag & MNTK_VIRTUALDEV) || switch_cluster_verified_mount(mp)) &&
 		    (VNOP_VERIFY(vp, f_offset, NULL, 0, &verify_block_size, NULL, VNODE_VERIFY_DEFAULT, NULL, &verify_kind) == 0) &&
 		    verify_block_size) {
 			if (verify_block_size != PAGE_SIZE) {
@@ -4643,6 +4662,148 @@ cluster_read(vnode_t vp, struct uio *uio, off_t filesize, int xflags)
 	return cluster_read_ext(vp, uio, filesize, xflags, NULL, NULL);
 }
 
+/*
+ * Switch (r8-sdboot): the System/App cryptex disk images (drivers/NativeSwitchBlock/SwitchCryptex.cpp registers
+ * their backing files after the attach and clears DiskImages' VNOCACHE_DATA on them, so their reads go through the page
+ * cache). Matched by pointer and vid, never dereferenced from the table, so a recycled vnode simply stops matching.
+ * Registered images' cached reads always take a page reference (cluster_read_copy), whatever tier the disk image's I/O
+ * thread runs at, instead of landing unreferenced on the speculative queue, the first pages the pageout scan frees.
+ *
+ * Boot prefetch recording: on a boot with no valid prefetch list, SwitchCryptex arms a map with one byte per 4 KiB
+ * block of the System image (0 never read, else 1 + whole seconds since it was armed, at most 255) and the reads of that
+ * image set each block's first-read time here. SwitchCryptex stops it after the first frame and saves the map next
+ * to the image; the next boots replay it as large reads in first-read order. The map is never freed (a read racing the
+ * stop may still be writing to it; it is allocated once per image change).
+ */
+#define SWITCH_IMAGE_VNODES 2
+static struct {
+	vnode_t  vp;
+	uint32_t vid;
+} switch_image_vnodes[SWITCH_IMAGE_VNODES];
+static uint8_t *switch_record_map;
+static vnode_t switch_record_vp;
+static uint32_t switch_record_vid, switch_record_blocks;
+static uint64_t switch_record_start, switch_record_second;
+
+void switch_cluster_register_image(vnode_t vp);
+void
+switch_cluster_register_image(vnode_t vp)
+{
+	for (unsigned i = 0; i < SWITCH_IMAGE_VNODES; i++) {
+		if (os_atomic_load(&switch_image_vnodes[i].vp, relaxed) == NULLVP) {
+			switch_image_vnodes[i].vid = vnode_vid(vp);
+			os_atomic_store(&switch_image_vnodes[i].vp, vp, release);
+			return;
+		}
+	}
+}
+
+static inline bool
+switch_cluster_is_image(vnode_t vp)
+{
+	for (unsigned i = 0; i < SWITCH_IMAGE_VNODES; i++) {
+		vnode_t image = os_atomic_load(&switch_image_vnodes[i].vp, acquire);
+		if (image == NULLVP) {
+			return false;
+		}
+		if (image == vp && switch_image_vnodes[i].vid == vp->v_id) {
+			return true;
+		}
+	}
+	return false;
+}
+
+/*
+ * Switch (r8-sdboot) experiment, off unless SWITCH_CRYPTEX_CLUSTER_VERIFY is 1: let the cluster layer verify
+ * page-ins on the two cryptex mounts (SwitchRawMount.h registers them) although they sit on DiskImages devices
+ * (MNTK_VIRTUALDEV), as it does on any other volume. On 11-04 the System cryptex paged the dyld shared cache in one
+ * 4 KiB block at a time as B_META reads, ~230K per boot, 96 % of them its subcaches' data: likely APFS's own per-block
+ * verification fallback, which a virtual device gets. The same VNOP_VERIFY hash check runs either way (cluster_EOT
+ * allocates the context when the I/O is issued, cluster_iodone verifies), so nothing is loosened. Kept off by default:
+ * XNU excludes disk images on purpose, and the completion (with VNOP_VERIFY) runs on DiskImages' I/O thread.
+ */
+#ifndef SWITCH_CRYPTEX_CLUSTER_VERIFY
+#define SWITCH_CRYPTEX_CLUSTER_VERIFY 0
+#endif
+static mount_t switch_verified_mounts[2];
+
+void switch_cluster_register_verified_mount(mount_t mp);
+void
+switch_cluster_register_verified_mount(mount_t mp)
+{
+	for (unsigned i = 0; i < 2; i++) {
+		if (os_atomic_load(&switch_verified_mounts[i], relaxed) == NULL) {
+			os_atomic_store(&switch_verified_mounts[i], mp, release);
+			return;
+		}
+	}
+}
+
+static inline bool
+switch_cluster_verified_mount(mount_t mp)
+{
+	return SWITCH_CRYPTEX_CLUSTER_VERIFY && mp &&
+	       (os_atomic_load(&switch_verified_mounts[0], acquire) == mp ||
+	       os_atomic_load(&switch_verified_mounts[1], acquire) == mp);
+}
+
+void switch_cluster_prefetch_begin(vnode_t vp, thread_t thread);
+void
+switch_cluster_prefetch_begin(vnode_t vp, thread_t thread)
+{
+	switch_prefetch_vp = vp;
+	os_atomic_store(&switch_image_reads, 0, relaxed);
+	os_atomic_store(&switch_image_ios, 0, relaxed);
+	os_atomic_store(&switch_prefetch_thread, thread, release);
+}
+
+void switch_cluster_prefetch_end(uint64_t *reads, uint64_t *ios);
+void
+switch_cluster_prefetch_end(uint64_t *reads, uint64_t *ios)
+{
+	os_atomic_store(&switch_prefetch_thread, THREAD_NULL, release);
+	*reads = os_atomic_load(&switch_image_reads, relaxed);
+	*ios = os_atomic_load(&switch_image_ios, relaxed);
+}
+
+void switch_cluster_record_start(vnode_t vp, uint8_t *map, uint32_t blocks);
+void
+switch_cluster_record_start(vnode_t vp, uint8_t *map, uint32_t blocks)
+{
+	nanoseconds_to_absolutetime(NSEC_PER_SEC, &switch_record_second);
+	switch_record_start = mach_absolute_time();
+	switch_record_vp = vp;
+	switch_record_vid = vnode_vid(vp);
+	switch_record_blocks = blocks;
+	os_atomic_store(&switch_record_map, map, release);
+}
+
+/* Stops the recording; the map stays valid (never freed). */
+void switch_cluster_record_stop(void);
+void
+switch_cluster_record_stop(void)
+{
+	os_atomic_store(&switch_record_map, (uint8_t *)NULL, release);
+}
+
+static void
+switch_cluster_record(vnode_t vp, struct uio *uio)
+{
+	uint8_t *map = os_atomic_load(&switch_record_map, acquire);
+	if (map == NULL || vp != switch_record_vp || vp->v_id != switch_record_vid || uio_resid(uio) <= 0 ||
+	    uio_offset(uio) < 0) {
+		return;
+	}
+	const uint64_t elapsed = (mach_absolute_time() - switch_record_start) / switch_record_second;
+	const uint8_t when = (uint8_t)(elapsed < 254 ? elapsed + 1 : 255);
+	const uint64_t first = (uint64_t)uio_offset(uio) / PAGE_SIZE;
+	const uint64_t last = ((uint64_t)uio_offset(uio) + (uint64_t)uio_resid(uio) - 1) / PAGE_SIZE;
+	for (uint64_t b = first; b <= last && b < switch_record_blocks; b++) {
+		if (map[b] == 0) {
+			map[b] = when;
+		}
+	}
+}
 
 int
 cluster_read_ext(vnode_t vp, struct uio *uio, off_t filesize, int xflags, int (*callback)(buf_t, void *), void *callback_arg)
@@ -4657,6 +4818,12 @@ cluster_read_ext(vnode_t vp, struct uio *uio, off_t filesize, int xflags, int (*
 
 	flags = xflags;
 
+	if (os_atomic_load(&switch_record_map, relaxed)) {
+		switch_cluster_record(vp, uio);
+	}
+	if (switch_prefetch_foreground(vp)) {
+		os_atomic_inc(&switch_image_reads, relaxed);
+	}
 	if (vp->v_flag & VNOCACHE_DATA) {
 		flags |= IO_NOCACHE;
 	}
@@ -4800,7 +4967,12 @@ cluster_read_copy(vnode_t vp, struct uio *uio, u_int32_t io_req_size, off_t file
 
 	policy = throttle_get_io_policy(NULL);
 
-	if (policy == THROTTLE_LEVEL_TIER3 || policy == THROTTLE_LEVEL_TIER2 || (flags & IO_NOCACHE)) {
+	/*
+	 * Switch (r8-sdboot): the cryptex images' cached pages take a reference like any foreground read, whatever tier
+	 * the disk image's I/O thread runs at (see switch_cluster_register_image).
+	 */
+	if ((policy == THROTTLE_LEVEL_TIER3 || policy == THROTTLE_LEVEL_TIER2 || (flags & IO_NOCACHE)) &&
+	    ((flags & IO_NOCACHE) || !switch_cluster_is_image(vp))) {
 		take_reference = 0;
 	}
 

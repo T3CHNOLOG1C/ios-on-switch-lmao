@@ -71,10 +71,16 @@ extern pmap_paddr_t vm_first_phys, vm_last_phys;
  *
  * @param pa The physical address to check.
  */
+extern boolean_t pmap_switch_pa_valid(pmap_paddr_t pa); /* osfmk/arm64/arm_vm_init.c (Switch RAM holes) */
+
+extern boolean_t pmap_switch_pa_valid(pmap_paddr_t pa); /* osfmk/arm64/arm_vm_init.c (Switch RAM holes) */
+
+extern boolean_t pmap_switch_pa_valid(pmap_paddr_t pa); /* osfmk/arm64/arm_vm_init.c (Switch RAM holes) */
+
 static inline bool
 pa_valid(pmap_paddr_t pa)
 {
-	return (pa >= vm_first_phys) && (pa < vm_last_phys);
+	return (pa >= vm_first_phys) && (pa < vm_last_phys) && pmap_switch_pa_valid(pa);
 }
 
 /**

@@ -12972,6 +12972,9 @@ after_loop:
 		/* Tell the pmap that it supports JIT. */
 		pmap_set_jit_entitled(new_map->pmap);
 	}
+#if defined(__arm64__) && !CONFIG_SPTM
+	pmap_inherit_user_cache_maintenance_trap(old_map->pmap, new_map->pmap);
+#endif
 
 	/* Propagate TPRO settings for the pmap layer */
 	if (pmap_get_tpro(old_map->pmap)) {

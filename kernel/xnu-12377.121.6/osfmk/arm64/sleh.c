@@ -1,3 +1,4 @@
+#include <kern/boot_progress.h>
 /*
  * Copyright (c) 2012-2023 Apple Inc. All rights reserved.
  *
@@ -1522,6 +1523,7 @@ handle_user_breakpoint(arm_saved_state_t *state, uint64_t esr __unused)
 	mach_exception_data_type_t codes[2]  = {EXC_ARM_BREAKPOINT};
 	mach_msg_type_number_t     numcodes  = 2;
 
+	boot_progress_user_breakpoint(state, esr);
 	if (ESR_EC(esr) == ESR_EC_BRK_AARCH64) {
 		/*
 		 * Consult the trap labels we know about to decide whether userspace
@@ -2089,6 +2091,7 @@ handle_user_abort(arm_saved_state_t *state, uint64_t esr, vm_offset_t fault_addr
 	}
 #endif /* __has_feature(ptrauth_calls) */
 
+	boot_progress_user_abort(state, esr, fault_addr);
 	const self_restrict_mode_t self_restrict_mode = user_fault_in_self_restrict_mode(thread);
 	if ((self_restrict_mode != SELF_RESTRICT_NONE) &&
 	    task_is_jit_exception_fatal(get_threadtask(thread))) {
@@ -2811,7 +2814,142 @@ handle_mach_continuous_time_trap(arm_saved_state_t *state)
 }
 
 
+#if !defined(APPLE_ARM64_ARCH_FAMILY)
+/*
+ * EL0 cache maintenance on cores whose instruction fetch is not coherent with their data caches (CTR_EL0.IDC == 0,
+ * the Cortex-A57 here). iOS userland is built for Apple cores, where it is: libsystem_platform's sys_icache_invalidate
+ * is DSB ISH, IC IVAU per 64-byte line, DSB ISH, ISB, and sys_dcache_flush is a bare DSB ISH. JavaScriptCore publishes
+ * every piece of JIT code with sys_icache_invalidate alone (LinkBuffer::finalizeCodeWithoutDisassemblyImpl and the
+ * Yarr, Wasm, IC repatch and jump island paths), so on an A57 the new code stays dirty in the writer's L1D, the IC IVAU
+ * refetch reads the old line from L2, and the first instruction executed is whatever was there before (zero filled
+ * JIT memory: UDF, SIGILL on an instruction that is valid in memory). The pmap clears SCTLR_EL1.UCI while a MAP_JIT
+ * entitled address space is live (pmap_set_jit_entitled_internal), so its IC IVAU and DC CVAU/CVAC/CIVAC trap here
+ * (EC 0x18) and are performed by switch_user_cache_maintenance() with the DC CVAU that IC IVAU needs on this core.
+ *
+ * ISS of an EC 0x18 trap: Op0[21:20] Op2[19:17] Op1[16:14] CRn[13:10] Rt[9:5] CRm[4:1] Direction[0] (0: SYS/MSR).
+ */
+#define SWITCH_ISS_SYS_C7(crm)  ((1u << 20) | (1u << 17) | (3u << 14) | (7u << 10) | ((uint32_t)(crm) << 1))
+#define SWITCH_ISS_SYS_MASK     ((3u << 20) | (7u << 17) | (7u << 14) | (0xfu << 10) | (0xfu << 1) | 1u)
+#define SWITCH_ISS_RT(iss)      (((iss) >> 5) & 0x1fu)
+
+extern int switch_user_cache_maintenance(user_addr_t va, vm_size_t len, uint32_t op);
+
+/*
+ * libsystem_platform's _sys_icache_invalidate (21H461), from its IC IVAU to the loop exit. x9 is the current 64-byte
+ * line and x10 the negated number of lines left, counted up to zero; x2/x3 only pace extra DSBs for CPU families on a
+ * list and are dead after the loop. Its IC IVAU is the only EL0 cache maintenance instruction anywhere in the 21H461
+ * shared cache, so maintaining the rest of the range in this one trap makes every JIT publish cost one trap rather
+ * than one per line.
+ */
+static const uint32_t switch_sys_icache_invalidate_loop[] = {
+	0xd50b7529, /* ic   ivau, x9 */
+	0x91010129, /* add  x9, x9, #0x40 */
+	0xf1000442, /* subs x2, x2, #1 */
+	0x54000081, /* b.ne +0x10 */
+	0xb4000103, /* cbz  x3, +0x20 */
+	0xd5033b9f, /* dsb  ish */
+	0xd2800282, /* mov  x2, #0x14 */
+	0xb100054a, /* adds x10, x10, #1 */
+	0x54ffff01, /* b.ne -0x20 (the ic ivau) */
+	0xd5033b9f, /* dsb  ish: loop exit */
+};
+#define SWITCH_ICACHE_LOOP_EXIT  (9 * sizeof(uint32_t))
+#define SWITCH_ICACHE_LOOP_LINE  64
+/* Lines maintained per trap (256 KiB): a longer range resumes at the IC IVAU and traps again, so it stays killable. */
+#define SWITCH_ICACHE_LOOP_CHUNK 4096
+
+/* One kernel log line the first time each path runs, so a boot log shows the JIT publishes being completed. */
+static bool switch_ucm_noted_loop, switch_ucm_noted_single;
+
+static void
+switch_ucm_note(bool *noted, const char *what, arm_saved_state_t *state, uint64_t detail)
+{
+	if (os_atomic_xchg(noted, true, relaxed)) {
+		return;
+	}
+	const char *name = task_best_name(current_task());
+	printf("SwitchJIT: %s for %s[%d] at pc 0x%llx (%llu)\n", what, name, task_pid(current_task()),
+	    (unsigned long long)get_saved_state_pc(state), (unsigned long long)detail);
+}
+
+static bool
+switch_user_icache_loop(arm_saved_state_t *state)
+{
+	uint32_t       code[sizeof(switch_sys_icache_invalidate_loop) / sizeof(uint32_t)];
+	const int64_t  left = (int64_t)get_saved_state_reg(state, 10);
+	const uint64_t line = (uint64_t)get_saved_state_reg(state, 9);
+	uint64_t       lines;
+
+	if (left >= 0 || (get_saved_state_cpsr(state) & PSR64_SS) ||
+	    copyin(get_saved_state_pc(state), (char *)code, sizeof(code)) != 0 ||
+	    memcmp(code, switch_sys_icache_invalidate_loop, sizeof(code)) != 0) {
+		return false;
+	}
+	lines = MIN((uint64_t)0 - (uint64_t)left, (uint64_t)SWITCH_ICACHE_LOOP_CHUNK);
+	if (switch_user_cache_maintenance(line, lines * SWITCH_ICACHE_LOOP_LINE, SWITCH_UCM_SYNC_I) != 0) {
+		/* Leave the faulting line to the single-instruction path, which reports it where the loop stands. */
+		return false;
+	}
+	switch_ucm_note(&switch_ucm_noted_loop, "sys_icache_invalidate completed with DC CVAU (lines)", state, lines);
+	set_user_saved_state_reg(state, 9, (register_t)(line + lines * SWITCH_ICACHE_LOOP_LINE));
+	set_user_saved_state_reg(state, 10, (register_t)(left + (int64_t)lines));
+	if (left + (int64_t)lines == 0) {
+		/* Leave as the last "adds x10, x10, #1" (-1 + 1) would: Z and C set, then fall out of the loop. */
+		set_user_saved_state_cpsr(state,
+		    (get_saved_state_cpsr(state) & ~(0xfu << PSR64_NZCV_SHIFT)) | PSR64_Z | PSR64_C);
+		set_user_saved_state_pc(state, get_saved_state_pc(state) + SWITCH_ICACHE_LOOP_EXIT);
+	}
+	return true;
+}
+
+/* Returns true when the trap was EL0 cache maintenance and has been performed (or raised as the fault it caused). */
+static bool
+switch_user_cache_maintenance_trap(arm_saved_state_t *state, uint32_t esr)
+{
+	const uint32_t iss = ESR_ISS(esr);
+	const uint32_t rt  = SWITCH_ISS_RT(iss);
+	user_addr_t    va;
+	uint32_t       op;
+
+	switch (iss & SWITCH_ISS_SYS_MASK) {
+	case SWITCH_ISS_SYS_C7(5):  /* IC IVAU */
+		op = SWITCH_UCM_SYNC_I;
+		break;
+	case SWITCH_ISS_SYS_C7(11): /* DC CVAU */
+		op = SWITCH_UCM_DC_CVAU;
+		break;
+	case SWITCH_ISS_SYS_C7(10): /* DC CVAC */
+		op = SWITCH_UCM_DC_CVAC;
+		break;
+	case SWITCH_ISS_SYS_C7(14): /* DC CIVAC */
+		op = SWITCH_UCM_DC_CIVAC;
+		break;
+	default:
+		return false;
+	}
+
+	if (op == SWITCH_UCM_SYNC_I && rt == 9 && switch_user_icache_loop(state)) {
+		return true;
+	}
+
+	/* Rt 31 is XZR for SYS; x29/x30 are fp/lr, which follow x[28] in the saved state. */
+	va = (rt == 31) ? 0 : (user_addr_t)get_saved_state_reg(state, rt);
+	switch_ucm_note(&switch_ucm_noted_single, "EL0 cache maintenance line emulated (SWITCH_UCM op)", state, op);
+	if (switch_user_cache_maintenance(va, 1, op) != 0) {
+		/* What the instruction would have raised itself: the abort vm_fault could not resolve. */
+		mach_exception_data_type_t codes[2] = {KERN_INVALID_ADDRESS, (mach_exception_data_type_t)va};
+
+		exception_triage(EXC_BAD_ACCESS, codes, 2);
+		__builtin_unreachable();
+	}
+	add_user_saved_state_pc(state, 4);
+	return true;
+}
+#endif /* !defined(APPLE_ARM64_ARCH_FAMILY) */
+
+#if defined(APPLE_ARM64_ARCH_FAMILY)
 __attribute__((noreturn))
+#endif
 static void
 handle_msr_trap(arm_saved_state_t *state, uint64_t esr)
 {
@@ -2827,6 +2965,12 @@ handle_msr_trap(arm_saved_state_t *state, uint64_t esr)
 	if (PSR64_IS_KERNEL(get_saved_state_cpsr(state))) {
 		panic("MSR/MRS trap (ESR 0x%llx) from kernel", esr);
 	}
+
+#if !defined(APPLE_ARM64_ARCH_FAMILY)
+	if (switch_user_cache_maintenance_trap(state, esr)) {
+		return;
+	}
+#endif
 
 	COPYIN(get_saved_state_pc(state), (char *)&instr, sizeof(instr));
 	codes[1] = instr;
@@ -3019,6 +3163,7 @@ sleh_irq(arm_saved_state_t *state)
 
 
 	sleh_interrupt_handler_prologue(state, DBG_INTR_TYPE_OTHER);
+	boot_progress_irq(get_saved_state_pc(state), get_saved_state_cpsr(state), get_saved_state_sp(state));
 
 #if USE_APPLEARMSMP
 	PE_handle_ext_interrupt();

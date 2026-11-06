@@ -934,6 +934,8 @@ PMAP_SUPPORT_PROTOTYPES(
 	vm_prot_t allow_mode,
 	int options), ARM_FORCE_FAST_FAULT_INDEX);
 
+MARK_AS_PMAP_TEXT static void pmap_phys_write_disable(vm_address_t va);
+
 MARK_AS_PMAP_TEXT static boolean_t
 arm_force_fast_fault_with_flush_range(
 	ppnum_t ppnum,
@@ -2346,7 +2348,9 @@ pmap_bootstrap(
 	/**
 	 * Bootstrap any necessary SART data structures and values needed from the device tree.
 	 */
+#if XNU_MONITOR_ANS2_SART
 	sart_bootstrap();
+#endif
 
 	/**
 	 * Don't make any assumptions about the alignment of avail_start before this
@@ -2359,6 +2363,7 @@ pmap_bootstrap(
 	asid_bitmap = (bitmap_t*)phystokv(avail_start);
 	avail_start = round_page(avail_start + asid_table_size);
 
+	pmap_switch_bootstrap_check(pmap_struct_start, avail_start);
 	memset((char *)phystokv(pmap_struct_start), 0, avail_start - pmap_struct_start);
 
 	vm_first_phys = gPhysBase;
@@ -2668,6 +2673,19 @@ pmap_virtual_region(
 	unsigned long low_global_vr_mask = 0;
 	vm_map_size_t low_global_vr_size = 0;
 
+	if (pmap_switch_ram_enabled()) {
+		/* Full native RAM starts below low globals. Reserve the union of
+		 * the low ranges once, then retain the separate high window. */
+		if (region_select == 0) {
+			*startp = VM_MIN_KERNEL_AND_KEXT_ADDRESS;
+			*size = ((virtual_space_start + 0x7fffffULL) & ~0x7fffffULL) - *startp;
+			return TRUE;
+		}
+		if (region_select != 1) {
+			return FALSE;
+		}
+	}
+
 	if (region_select == 0) {
 		/* Round to avoid overlapping with the V=P area; round to at least the L2 block size. */
 		if (!TEST_PAGE_SIZE_4K) {
@@ -2720,6 +2738,34 @@ pmap_virtual_region(
 
 static unsigned int avail_page_count = 0;
 static bool need_ram_ranges_init = true;
+static void initialize_ram_ranges(void);
+static bool switch_dense_pages;
+static pmap_paddr_t switch_stolen_end;
+
+unsigned int
+pmap_switch_dense_page_count(void)
+{
+    return pmap_switch_ram_enabled() ? 0x100000 : 0;
+}
+
+boolean_t
+pmap_switch_page_reserved(ppnum_t pnum)
+{
+    pmap_paddr_t pa=(pmap_paddr_t)pnum << PAGE_SHIFT;
+    return pmap_switch_ram_reserved(pnum) || pa < switch_stolen_end;
+}
+
+boolean_t
+pmap_switch_begin_dense_pages(void)
+{
+    if (!pmap_switch_dense_page_count()) return FALSE;
+    if (need_ram_ranges_init) initialize_ram_ranges();
+    switch_stolen_end=first_avail;
+    first_avail=gPhysBase;
+    switch_dense_pages=true;
+    return TRUE;
+}
+
 
 /*
  * Initialize the count of available pages. No lock needed here,
@@ -2734,7 +2780,12 @@ initialize_ram_ranges(void)
 	assert(first <= end);
 	assert(first == (first & ~PAGE_MASK));
 	assert(end == (end & ~PAGE_MASK));
-	avail_page_count = atop(end - first);
+    if (pmap_switch_dense_page_count()) {
+        first_avail=gPhysBase;
+        avail_page_count=0;
+        for (pmap_paddr_t pa=gPhysBase;pa<end;pa+=PAGE_SIZE)
+            if (!pmap_switch_page_reserved((ppnum_t)atop(pa))) ++avail_page_count;
+    } else avail_page_count = atop(end - first);
 
 	need_ram_ranges_init = false;
 }
@@ -2777,11 +2828,17 @@ pmap_next_page(
 		initialize_ram_ranges();
 	}
 
+    if (pmap_switch_dense_page_count() && !switch_dense_pages) {
+        while (first_avail<avail_end && pmap_switch_page_reserved((ppnum_t)atop(first_avail)))
+            first_avail+=PAGE_SIZE;
+    }
 	if (first_avail != avail_end) {
 		*pnum = (ppnum_t)atop(first_avail);
 		first_avail += PAGE_SIZE;
-		assert(avail_page_count > 0);
-		--avail_page_count;
+        if (!switch_dense_pages || !pmap_switch_page_reserved(*pnum)) {
+            assert(avail_page_count > 0);
+            --avail_page_count;
+        }
 		return TRUE;
 	}
 	assert(avail_page_count == 0);
@@ -3054,6 +3111,9 @@ pmap_create_options_internal(
 
 
 	p->pmap_vm_map_cs_enforced = false;
+#if !defined(APPLE_ARM64_ARCH_FAMILY)
+	p->user_cache_maintenance_trap = false;
+#endif
 	p->min = 0;
 
 
@@ -7932,6 +7992,24 @@ pmap_unlock_phys_page(ppnum_t pn)
 	{ simple_unlock(&phys_backup_lock);}
 }
 
+#if !defined(APPLE_ARM64_ARCH_FAMILY)
+/*
+ * Make EL0 cache maintenance on this CPU trap or not, as the user address space about to run here needs (see
+ * pmap_set_jit_entitled_internal). SCTLR_EL1.UCI only governs EL0, and the exception return to EL0 is a context
+ * synchronization event, so no ISB: an address space switch that keeps the setting costs one MRS.
+ */
+static inline void
+pmap_apply_user_cache_maintenance_trap(pmap_t pmap)
+{
+	const uint64_t sctlr = __builtin_arm_rsr64("SCTLR_EL1");
+	const uint64_t want = pmap->user_cache_maintenance_trap ? (sctlr & ~SCTLR_UCI_ENABLED) : (sctlr | SCTLR_UCI_ENABLED);
+
+	if (__improbable(want != sctlr)) {
+		__builtin_arm_wsr64("SCTLR_EL1", want);
+	}
+}
+#endif /* !defined(APPLE_ARM64_ARCH_FAMILY) */
+
 MARK_AS_PMAP_TEXT static void
 pmap_switch_user_ttb(pmap_t pmap, pmap_cpu_data_t *cpu_data_ptr)
 {
@@ -7963,6 +8041,9 @@ pmap_switch_user_ttb(pmap_t pmap, pmap_cpu_data_t *cpu_data_ptr)
 
 	if (pmap != kernel_pmap) {
 		set_mmu_ttb((pmap->ttep & TTBR_BADDR_MASK) | (((uint64_t)pmap->hw_asid) << TTBR_ASID_SHIFT));
+#if !defined(APPLE_ARM64_ARCH_FAMILY)
+		pmap_apply_user_cache_maintenance_trap(pmap);
+#endif
 	} else if (!pmap_user_ttb_is_clear()) {
 		pmap_clear_user_ttb_internal();
 	}
@@ -12812,10 +12893,50 @@ pmap_get_vm_map_cs_enforced(
 	return pmap->pmap_vm_map_cs_enforced;
 }
 
+#if !defined(APPLE_ARM64_ARCH_FAMILY)
+/*
+ * iOS userland publishes code it writes (JavaScriptCore's JIT) with IC IVAU alone, as Apple cores fetch instructions
+ * coherently with their data caches. Without CTR_EL0.IDC (Cortex-A57) the new code also has to be cleaned to the PoU
+ * first, or the fetch after the IC IVAU reads stale lines from L2. Only MAP_JIT entitled address spaces can make code
+ * (the same MAC check gates MAP_JIT), so EL0 cache maintenance traps while one is live and sleh.c performs it with
+ * the clean; every other process keeps untrapped EL0 cache maintenance (our GPU userland issues DC CIVAC/CVAC loops).
+ */
+static void
+pmap_enable_user_cache_maintenance_trap(pmap_t pmap)
+{
+	if (pmap == kernel_pmap || (__builtin_arm_rsr64("CTR_EL0") & CTR_EL0_IDC)) {
+		return;
+	}
+	pmap->user_cache_maintenance_trap = true;
+
+	/* Exec sets this before the new task's thread first runs; should the pmap be live here already, apply it now. */
+	disable_preemption();
+	if ((get_mmu_ttb() & TTBR_BADDR_MASK) == (pmap->ttep & TTBR_BADDR_MASK)) {
+		pmap_apply_user_cache_maintenance_trap(pmap);
+	}
+	enable_preemption();
+}
+#endif /* !defined(APPLE_ARM64_ARCH_FAMILY) */
+
+void
+pmap_inherit_user_cache_maintenance_trap(
+	__unused pmap_t parent,
+	__unused pmap_t child)
+{
+#if !defined(APPLE_ARM64_ARCH_FAMILY)
+	if (parent->user_cache_maintenance_trap) {
+		pmap_enable_user_cache_maintenance_trap(child);
+	}
+#endif
+}
+
 MARK_AS_PMAP_TEXT void
 pmap_set_jit_entitled_internal(
 	__unused pmap_t pmap)
 {
+#if !defined(APPLE_ARM64_ARCH_FAMILY)
+	pmap_enable_user_cache_maintenance_trap(pmap);
+#endif
 	return;
 }
 
@@ -15301,3 +15422,7 @@ pmap_pending_preemption(void)
 	return _pmap_pending_preemption_real();
 }
 #endif /* SCHED_HYGIENE_DEBUG && (DEBUG || DEVELOPMENT) */
+
+#if defined(SWITCH_XNU_DIAGNOSTICS) && SWITCH_XNU_DIAGNOSTICS && !XNU_MONITOR
+#include <arm64/switch_smp_tables.h>
+#endif

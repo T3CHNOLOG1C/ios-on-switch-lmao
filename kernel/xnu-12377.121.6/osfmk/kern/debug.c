@@ -54,6 +54,8 @@
  * the rights to redistribute these changes.
  */
 
+#include "SwitchDiag.h"
+#include "SwitchPanicSave.h"
 #include <mach_assert.h>
 #include <mach_kdp.h>
 #include <kdp/kdp.h>
@@ -1338,6 +1340,7 @@ panic_trap_to_debugger(const char *panic_format_str, va_list *panic_args, unsign
 
 	/* Never hide pointers from panic logs. */
 	doprnt_hide_pointers = FALSE;
+	switch_diag_panic(panic_format_str, panic_args, panic_caller);
 
 	if (ctx != NULL) {
 		/*
@@ -1533,6 +1536,8 @@ debugger_collect_diagnostics(unsigned int exception, unsigned int code, unsigned
 		 * hooked up for embedded
 		 */
 		SavePanicInfo(debugger_message, debugger_panic_data, debugger_panic_options, debugger_panic_initiator);
+		/* The panic log is written: onto the panic screen and the persistent record, then the warm reset (may not return). */
+		switch_panic_logged();
 
 #if DEVELOPMENT || DEBUG
 		INJECT_NESTED_PANIC_IF_REQUESTED(PANIC_TEST_CASE_RECURPANIC_POSTLOG);
@@ -1750,6 +1755,10 @@ handle_debugger_trap(unsigned int exception, unsigned int code, unsigned int sub
 	kernel_debugger_entry_count = CPUDEBUGGERCOUNT;
 	if (kernel_debugger_entry_count > 0) {
 		console_suspend();
+	}
+	/* Every other CPU is halted now: the panic screen is drawn once more (SwitchPanicSave.c). */
+	if (CPUDEBUGGEROP == DBOP_PANIC) {
+		switch_panic_halted();
 	}
 
 	/*

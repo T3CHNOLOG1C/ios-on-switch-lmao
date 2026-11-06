@@ -1,3 +1,5 @@
+#include "SwitchDiag.h"
+#include <kern/boot_progress.h>
 /*
  * Copyright (c) 2000-2021 Apple Inc. All rights reserved.
  *
@@ -569,6 +571,8 @@ native_mobile_graphics_load_probe(void)
 void
 bsd_init(void)
 {
+	boot_progress_stage("bsd_init enter");
+	switch_diag_stage("bsd_init entered");
 	struct uthread *ut;
 	vnode_t init_rootvnode = NULLVP;
 	struct proc_ro_data kernproc_ro_data = {
@@ -588,7 +592,7 @@ bsd_init(void)
 #if DEBUG_BSDINIT
 #define bsd_init_kprintf(x, ...) kprintf("bsd_init: " x, ## __VA_ARGS__)
 #else
-#define bsd_init_kprintf(x, ...)
+#define bsd_init_kprintf(x, ...) boot_progress_stage("bsd_init: " x)
 #endif
 
 	throttle_init();
@@ -776,6 +780,13 @@ bsd_init(void)
 	bsd_init_kprintf("calling bsd_bufferinit\n");
 	bsd_bufferinit();
 
+#if defined(XNU_SHENG_PMGR) && XNU_SHENG_PMGR
+	extern void sheng_pmgr_run(void);
+	boot_progress_stage("original PMGR nub start");
+	sheng_pmgr_run();
+	boot_progress_stage("original PMGR nub returned");
+#endif
+
 	/*
 	 * Initialize the calendar.
 	 */
@@ -789,6 +800,12 @@ bsd_init(void)
 	native_apfs_load_probe();
 	native_mobile_graphics_load_probe();
 	native_iogpu_load_probe();
+	/* After IOMobileGraphicsFamily: IOGPUFamily then brings no new dependency (AppleARMPlatform, AMFI, IOSurface,
+	 * IOReportFamily are loaded) and has no personalities. QuartzCore polls 30 s for an IOAcceleratorES otherwise. */
+	{
+		extern void switch_accel_stub_publish(void);
+		switch_accel_stub_publish();
+	}
 #if defined(XNU_ADRENO_FIRMWARE_PROBE) && XNU_ADRENO_FIRMWARE_PROBE
 	extern void native_adreno_firmware_probe(void);
 	native_adreno_firmware_probe();
@@ -909,7 +926,9 @@ bsd_init(void)
 
 	bsd_init_kprintf("calling sysctl_mib_init\n");
 	sysctl_mib_init();
-#if defined(XNU_VERIFIED_ROOT_PROBE) && XNU_VERIFIED_ROOT_PROBE
+#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
+	/* The SD disk is published after bsd_autoconf() below, not here. */
+#elif defined(XNU_VERIFIED_ROOT_PROBE) && XNU_VERIFIED_ROOT_PROBE
 	{
 		extern void native_verified_root_probe(void);
 		int enabled = 0;
@@ -921,6 +940,13 @@ bsd_init(void)
 
 	bsd_init_kprintf("calling bsd_autoconf\n");
 	bsd_autoconf();
+#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
+	/* Publish the SD disk only once IOBSD exists. APFS's container start takes
+	 * its container lock and then waits for IOBSD; APFS's IOBSD-matched service
+	 * takes the same lock in its start. If the disk appears first, the two IOKit
+	 * matching threads deadlock (four cores lose that race every time). */
+	switch_root_boot_prepare();
+#endif
 
 #if CONFIG_DTRACE
 	dtrace_postinit();
@@ -1012,9 +1038,21 @@ bsd_init(void)
 #endif
 
 		bsd_init_kprintf("vfs_mountroot\n");
+		boot_progress_stage("vfs_mountroot enter");
+#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
+		switch_root_event(6,0,0);
+#endif
 		if (0 == (err = vfs_mountroot())) {
+			boot_progress_stage("vfs_mountroot mounted; authentication pending");
+#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
+			switch_root_event(7,0,0);
+#endif
 			break;
 		}
+#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
+		switch_root_event(7,err,0);
+		panic("native original root mount failed: %d",err);
+#endif
 		rootdevice[0] = '\0';
 #if CONFIG_NETBOOT
 		if (netboot) {
@@ -1077,7 +1115,15 @@ bsd_init(void)
 				vnode_t device_vnode = vfs_devvp(root_mount);
 				dev_t device = device_vnode ? vnode_specrdev(device_vnode) : NODEV;
 				int readonly = (vfs_flags(root_mount) & MNT_RDONLY) != 0;
+#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
+				extern int native_verified_block_os_root_authorized(dev_t,dev_t);
+				/* Only the expected missing Apple personalization may use the
+				 * explicit owner-signed development policy for this exact root. */
+				int owner = autherr == EAUTH && readonly && device_vnode &&
+				    native_verified_block_os_root_authorized(device,rootdev);
+#else
 				int owner = readonly && device_vnode && native_verified_block_root_authorized(device);
+#endif
 				if (device_vnode) vnode_put(device_vnode);
 				native_owner_root_mount_device = device;
 				native_owner_root_selected_device = rootdev;
@@ -1088,6 +1134,9 @@ bsd_init(void)
 				owner_authorized = owner;
 #endif
 				native_owner_root_checkpoint(autherr, owner, device);
+#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
+				switch_root_event(8,autherr,((uint64_t)(uint32_t)device<<32)|(unsigned)owner);
+#endif
 			}
 #endif
 			if (autherr && !owner_authorized) {
@@ -1099,6 +1148,7 @@ bsd_init(void)
 				extern void native_owner_root_accepted_checkpoint(int, int);
 				native_owner_root_accepted = owner_authorized;
 				native_owner_root_accepted_checkpoint(autherr, owner_authorized);
+				boot_progress_stage("root authentication decision recorded");
 			}
 #endif
 		}

@@ -526,6 +526,16 @@ do_cacheid(void)
 		cpuid_cache_info_p->c_isize = (arm_cache_ccsidr_info.bits.NumSets + 1) * c_linesz * c_assoc;
 	}
 
+#if defined(SWITCH_XNU_DIAGNOSTICS) && SWITCH_XNU_DIAGNOSTICS && !defined(APPLE_ARM64_ARCH_FAMILY)
+	/* No set/way "bulk" cache operations (osfmk/arm/caches.c): from c_bulksize_op bytes up (the 2 MiB L2 here),
+	 * IOMemoryDescriptor::performOperation (the original IOStorageFamily and IOHIDFamily call it; Apple built them
+	 * for coherent I/O, where it does nothing), IODMACommand on non-coherent mappings and flush_dcache_syscall
+	 * cleaned the calling core's L1 and the whole shared L2 by set/way. That is not a coherency operation on SMP
+	 * (another A57's dirty L1 lines stay where they are) and it empties the L2 under all four cores; by address it
+	 * is correct and takes about as long up to a few MiB. */
+	cpuid_cache_info_p->c_bulksize_op = 0;
+#endif
+
 	if (cpuid_cache_info_p == cpuid_cache_info_boot_cpu) {
 		cpuid_cache_info_p->c_valid = true;
 	} else {

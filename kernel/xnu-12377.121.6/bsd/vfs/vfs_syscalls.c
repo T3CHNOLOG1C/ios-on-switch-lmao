@@ -4149,6 +4149,35 @@ __mac_getfsstat(__unused proc_t p, struct __mac_getfsstat_args *uap, int *retval
 	return 0;
 }
 
+/*
+ * Switch: real iOS grafts the System and App cryptexes onto the Preboot volume (libignition graftdmg), so a cryptex
+ * file belongs to Preboot and its volume URL is /private/preboot. CoreServicesInternal 21H461 createVolumeURL takes a
+ * file's volume URL from getmntinfo(3) -- the getfsstat64 entry whose f_fsid matches the file's device, its
+ * f_mntonname -- and LaunchServices files a bundle under that volume's container. lsd's first-boot work
+ * (_LSServerCleanEphemeralMobileContainersForFirstBoot) removes every container that is not the root, system data,
+ * Preboot or user data volume, with all its bundles and plugins, so cryptex-hosted WebKit web-process extensions
+ * would vanish on every reboot. Our kernel attaches and mounts the cryptexes instead (SwitchRawMount.h), so report
+ * the Preboot mount point here for exactly those two mounts, by the mount_t recorded when they were mounted. Only
+ * this copied-out record changes: the mounts' own f_mntonname (which getattrlist names a volume root after, and so
+ * realpath(3) depends on), statfs, fsid, flags and every other field are unchanged.
+ */
+extern mount_t native_owner_cryptex_mount[2];
+extern mount_t native_owner_cryptex_host;
+static const char *
+native_switch_graft_mntonname(mount_t mp)
+{
+	mount_t host = native_owner_cryptex_host;
+	if (!host || !mp) {
+		return NULL;
+	}
+	for (unsigned i = 0; i < 2; ++i) {
+		if (mp == native_owner_cryptex_mount[i]) {
+			return host->mnt_vfsstat.f_mntonname;
+		}
+	}
+	return NULL;
+}
+
 static int
 getfsstat64_callback(mount_t mp, void * arg)
 {
@@ -4183,6 +4212,10 @@ getfsstat64_callback(mount_t mp, void * arg)
 		}
 
 		vfs_get_statfs64(mp, &sfs);
+		const char *graft_host = native_switch_graft_mntonname(mp);
+		if (graft_host) {
+			strlcpy(sfs.f_mntonname, graft_host, sizeof(sfs.f_mntonname));
+		}
 		error = copyout(&sfs, fstp->sfsp, sizeof(sfs));
 		if (error) {
 			fstp->error = error;

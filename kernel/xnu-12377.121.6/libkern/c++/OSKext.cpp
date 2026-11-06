@@ -75,6 +75,11 @@ extern "C" {
 
 #include <libkern/OSKextLibPrivate.h>
 #include <libkern/c++/OSKext.h>
+
+#if CONFIG_MACF
+extern "C" int mac_late;
+extern "C" __attribute__((used)) const uint32_t native_prelink_security_init_version = 1;
+#endif
 #include <libkern/c++/OSLib.h>
 #include <ptrauth.h>
 

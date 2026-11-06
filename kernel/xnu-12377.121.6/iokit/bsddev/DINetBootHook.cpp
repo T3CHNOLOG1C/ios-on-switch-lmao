@@ -91,6 +91,9 @@
 #include <IOKit/IOService.h>
 #include <IOKit/IOLib.h>
 #include "DINetBootHook.h"
+#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
+#include "SwitchFiles.h"
+#endif
 
 #define kIOHDIXControllerClassName      "IOHDIXController"
 #define kDIRootImageKey                         "di-root-image"
@@ -111,6 +114,14 @@ di_load_controller( void )
 
 	do {
 		IOService::getResourceService()->publishResource("com.apple.AppleDiskImageController.load", kOSBooleanTrue);
+#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
+		if (switch_files_storage_profile() == SWITCH_STORAGE_RAW) {
+			/* Native raw boot must fail instead of waiting forever on unrelated busy resources. */
+			if (IOService::getResourceService()->waitQuiet(NSEC_PER_SEC * kDIMatchQuiesceTimeout) != kIOReturnSuccess) {
+				break;
+			}
+		} else
+#endif
 		IOService::getResourceService()->waitQuiet();
 
 		// first find IOHDIXController

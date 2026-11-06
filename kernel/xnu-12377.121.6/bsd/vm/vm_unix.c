@@ -119,6 +119,9 @@
 #include <vm/vm_mteinfo_internal.h>
 #endif /* HAS_MTE */
 #include <vm/vm_page.h>
+#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT && CONFIG_CODE_DECRYPTION
+#include <kern/page_decrypt.h>   /* SwitchHomeGrid pager */
+#endif
 
 #include <sys/kern_memorystatus.h>
 #include <sys/kern_memorystatus_freeze.h>
@@ -1443,6 +1446,146 @@ out:
 }
 #endif
 
+#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT && CONFIG_CODE_DECRYPTION
+/*
+ * SwitchHomeGrid: 6 columns x 4 rows on the landscape home screen.
+ *
+ * SpringBoardHome takes its grid sizes from a constant table, _defaultRootMetrics (__TEXT.__const, in the r-x
+ * TEXT mapping of the iOS 17.7 21H461 cache file dyld_shared_cache_arm64.25), indexed by screen type only.
+ * Every iPad type (0x19-0x2b, 16 entries) has the root grid 5x6 portrait / 6x5 landscape. Each entry also
+ * holds the grid iPadOS gives pages that contain widgets, 4x6 portrait (landscape 0x0, i.e. the transpose:
+ * 6x4), with the same insets. Here every page gets that grid: each entry's root grid bytes {5,6,6,5} become
+ * {4,6,6,4}. The icon model's page size follows the portrait grid, so both orientations hold 24 icons.
+ *
+ * Mechanism (the one the arm64e translator uses for cache text, r8-arm64e): an apple_protect pager on the
+ * cache file replaces the two 16 KB pages that hold the 16 entries in the shared region. At page-in it faults
+ * the page from the file (the vnode's UBC), validates it against the cache's own code signature (Apple's
+ * hashes), copies it to the new page, which inherits that validation, and only then lets
+ * switch_home_grid_page() change a 4 KB chunk, and only if every entry in the chunk reads exactly as shipped.
+ * Nothing on disk changes. Keyed to the subcache UUID, the mapping's address and its file offset; anything
+ * else leaves the cache text stock. Private mappings of the cache file (not through the shared region) stay
+ * stock too.
+ */
+static const uint8_t switch_hg_magic[16] = "dyld_v1   arm64";
+static const uint8_t switch_hg_uuid[16] = {           /* dyld_shared_cache_arm64.25 of 21H461 */
+	0xf1, 0x6d, 0xce, 0xf8, 0xc4, 0x46, 0x38, 0x05, 0x91, 0x63, 0xc0, 0x13, 0x8e, 0x4d, 0xca, 0xd1,
+};
+#define SWITCH_HG_UUID_OFFSET     0x58                /* dyld_cache_header.uuid */
+#define SWITCH_HG_PAGES_VMADDR    0x1cf660000ULL      /* unslid; 2 x 16 KB */
+#define SWITCH_HG_PAGES_FILEOFF   0x15cc000ULL
+#define SWITCH_HG_PAGES_SIZE      0x8000ULL
+#define SWITCH_HG_CHUNKS_OFFSET   0x3000ULL           /* the 4 KB chunks at 0x1cf663000 and 0x1cf664000 */
+#define SWITCH_HG_CHUNKS_SIZE     0x2000ULL
+#define SWITCH_HG_ENTRY0_FILEOFF  0x15cf6a0ULL        /* _defaultRootMetrics (0x1cf6633d0) + 0x2d0: type 0x19 */
+#define SWITCH_HG_ENTRY_STRIDE    0x120ULL
+#define SWITCH_HG_ENTRIES         16u
+#define SWITCH_HG_WIDGETS_OFFSET  0x48                /* the entry's grid for pages with widgets */
+#define SWITCH_HG_CHUNK           4096ULL
+
+static int switch_hg_cookie;                          /* crypt_ops: identifies this pager's crypt_info */
+static uint32_t switch_hg_chunks_done;                /* one bit per patched 4 KB chunk */
+static uint32_t switch_hg_mismatch_logged;
+
+static int
+switch_home_grid_page(const void *src, void *dst, unsigned long long src_offset, __unused void *ops)
+{
+	static const uint8_t stock[8] = { 5, 6, 6, 5, 0, 0, 0, 0 };
+	static const uint8_t widgets[8] = { 4, 6, 0, 0, 0, 0, 0, 0 };
+	static const uint8_t grid[4] = { 4, 6, 6, 4 };
+	uint8_t *out = dst;
+	unsigned int count = 0;
+
+	bcopy(src, dst, SWITCH_HG_CHUNK);
+	/* all or nothing per chunk: check every entry in it, then patch */
+	for (int pass = 0; pass < 2; pass++) {
+		for (unsigned int k = 0; k < SWITCH_HG_ENTRIES; k++) {
+			uint64_t fileoff = SWITCH_HG_ENTRY0_FILEOFF + k * SWITCH_HG_ENTRY_STRIDE;
+			if (fileoff < src_offset || fileoff >= src_offset + SWITCH_HG_CHUNK) {
+				continue;
+			}
+			uint64_t at = fileoff - src_offset;
+			if (pass == 0) {
+				if (at + SWITCH_HG_WIDGETS_OFFSET + sizeof(widgets) > SWITCH_HG_CHUNK ||
+				    memcmp(out + at, stock, sizeof(stock)) != 0 ||
+				    memcmp(out + at + SWITCH_HG_WIDGETS_OFFSET, widgets, sizeof(widgets)) != 0) {
+					if (!os_atomic_xchg(&switch_hg_mismatch_logged, 1, relaxed)) {
+						printf("SwitchHomeGrid: cache bytes at 0x%llx are not the shipped ones, "
+						    "page left stock\n", fileoff);
+					}
+					return 0;
+				}
+				count++;
+			} else {
+				memcpy(out + at, grid, sizeof(grid));
+			}
+		}
+	}
+	uint64_t chunk = (src_offset - (SWITCH_HG_PAGES_FILEOFF + SWITCH_HG_CHUNKS_OFFSET)) / SWITCH_HG_CHUNK;
+	if (count == 0 || chunk >= SWITCH_HG_CHUNKS_SIZE / SWITCH_HG_CHUNK) {
+		return 0;
+	}
+	uint32_t all = (1u << (SWITCH_HG_CHUNKS_SIZE / SWITCH_HG_CHUNK)) - 1;
+	uint32_t before = os_atomic_or_orig(&switch_hg_chunks_done, 1u << chunk, relaxed);
+	if (before != all && (before | (1u << chunk)) == all) {
+		printf("SwitchHomeGrid: 6x4 (%u entries, %llu pages)\n", SWITCH_HG_ENTRIES,
+		    SWITCH_HG_PAGES_SIZE / PAGE_SIZE);
+	}
+	return 0;
+}
+
+/*
+ * Called by vm_shared_region_map_file_setup() for each executable cache mapping it has just entered in a shared
+ * region. Returns an apple_protect pager for the range to replace (range_offset/range_size within the mapping),
+ * or MEMORY_OBJECT_NULL to keep the mapping stock.
+ */
+memory_object_t switch_shared_cache_text_pager(vm_object_t file_object, uint64_t object_base, uint64_t file_offset, uint64_t size,
+    uint64_t unslid_address, struct vnode *vp, uint64_t *range_offset, uint64_t *range_size);
+memory_object_t
+switch_shared_cache_text_pager(vm_object_t file_object, uint64_t object_base, uint64_t file_offset, uint64_t size,
+    uint64_t unslid_address, struct vnode *vp, uint64_t *range_offset, uint64_t *range_size)
+{
+	if (unslid_address > SWITCH_HG_PAGES_VMADDR ||
+	    SWITCH_HG_PAGES_VMADDR + SWITCH_HG_PAGES_SIZE > unslid_address + size ||
+	    file_offset + (SWITCH_HG_PAGES_VMADDR - unslid_address) != SWITCH_HG_PAGES_FILEOFF ||
+	    file_object == VM_OBJECT_NULL || vp == NULLVP) {
+		return MEMORY_OBJECT_NULL;  /* not the mapping that holds the table */
+	}
+
+	uint8_t header[SWITCH_HG_UUID_OFFSET + sizeof(switch_hg_uuid)];
+	int resid = 0;
+	int error = vn_rdwr(UIO_READ, vp, (caddr_t)header, sizeof(header), 0, UIO_SYSSPACE, IO_NODELOCKED,
+	    vfs_context_ucred(vfs_context_current()), &resid, current_proc());
+	if (error != 0 || resid != 0) {
+		printf("SwitchHomeGrid: cache header read failed (%d), cache text left stock\n", error);
+		return MEMORY_OBJECT_NULL;
+	}
+	if (memcmp(header, switch_hg_magic, sizeof(switch_hg_magic)) != 0 ||
+	    memcmp(header + SWITCH_HG_UUID_OFFSET, switch_hg_uuid, sizeof(switch_hg_uuid)) != 0) {
+		printf("SwitchHomeGrid: not the 21H461 subcache (UUID differs), cache text left stock\n");
+		return MEMORY_OBJECT_NULL;
+	}
+
+	struct pager_crypt_info crypt_info = {
+		.page_decrypt = switch_home_grid_page,
+		.crypt_end = NULL,
+		.crypt_ops = &switch_hg_cookie,
+		.crypt_refcnt = 0,
+	};
+	/* page_decrypt() gets crypto_backing_offset - crypto_start + offset in the pager: the chunk's file offset */
+	/* file_object is the cache file's object (object_base 0) or the a64x translator's, whose offset 0 is file offset object_base */
+	memory_object_t mo = apple_protect_pager_setup(file_object, SWITCH_HG_PAGES_FILEOFF - object_base,
+	    SWITCH_HG_PAGES_FILEOFF + SWITCH_HG_CHUNKS_OFFSET, &crypt_info,
+	    SWITCH_HG_CHUNKS_OFFSET, SWITCH_HG_CHUNKS_OFFSET + SWITCH_HG_CHUNKS_SIZE, TRUE);
+	if (mo == MEMORY_OBJECT_NULL) {
+		printf("SwitchHomeGrid: pager setup failed, cache text left stock\n");
+		return MEMORY_OBJECT_NULL;
+	}
+	*range_offset = SWITCH_HG_PAGES_VMADDR - unslid_address;
+	*range_size = SWITCH_HG_PAGES_SIZE;
+	return mo;
+}
+#endif /* XNU_SWITCH_VERIFIED_ROOT && CONFIG_CODE_DECRYPTION */
+
 /*
  * Setup part of _shared_region_map_and_slide().
  * It had to be broken out of _shared_region_map_and_slide() to
@@ -1789,9 +1932,25 @@ after_root_check:
 #define PREBOOT_CRYPTEX_PATH "/private/preboot/Cryptexes"
 #endif
 			error = vnode_lookup(PREBOOT_CRYPTEX_PATH, 0, &preboot_vp, vfs_context_current());
+#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
+			/* Switch mounts the OS cryptex as its own read-only APFS volume
+			 * at Cryptexes/OS instead of grafting it into Preboot. */
+			boolean_t switch_cryptex = FALSE;
+			if (!error && srfmp->vp->v_mount != preboot_vp->v_mount) {
+				vnode_t cryptex_vp = NULL;
+				if (!vnode_lookup(PREBOOT_CRYPTEX_PATH "/OS", 0, &cryptex_vp, vfs_context_current())) {
+					switch_cryptex = cryptex_vp->v_mount == srfmp->vp->v_mount &&
+					    (vfs_flags(cryptex_vp->v_mount) & MNT_RDONLY);
+					(void)vnode_put(cryptex_vp);
+				}
+			}
+#endif
 			if ((error || srfmp->vp->v_mount != preboot_vp->v_mount)
 #if defined(XNU_OWNER_CACHE_CARRIER) && XNU_OWNER_CACHE_CARRIER
 			    && !owner_carrier
+#endif
+#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
+			    && !switch_cryptex
 #endif
 			    ) {
 				SHARED_REGION_TRACE_ERROR(

@@ -18,6 +18,11 @@
 #define __ARM_DEBUG__             7
 #define __ARM64_PMAP_SUBPAGE_L1__ 1
 
+/* Explicit native ARMv8.1+ bring-up; the original A53 target has no PAN. */
+#if defined(XNU_NATIVE_PAN) && XNU_NATIVE_PAN
+#define __ARM_PAN_AVAILABLE__      1
+#endif
+
 #ifndef ASSEMBLER
 #define PLATFORM_PANIC_LOG_DISABLED
 /* Apple CPMU registers are implementation defined; counters stay off and

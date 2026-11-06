@@ -2612,6 +2612,10 @@ pmap_startup(
 #if XNU_VM_HAS_DELAYED_PAGES
 	uint_t          low_page_count = 0;
 #endif /* XNU_VM_HAS_DELAYED_PAGES */
+	unsigned int   native_dense_pages = 0, native_reserved_pages = 0;
+#if defined(__arm64__) && defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
+	native_dense_pages = pmap_switch_dense_page_count();
+#endif
 
 	/*
 	 * make sure we are aligned on a 64 byte boundary
@@ -2666,10 +2670,18 @@ pmap_startup(
 	mem_sz += round_page(virtual_space_start) - virtual_space_start;   /* Account for any slop */
 	divisor = PAGE_SIZE + sizeof(struct vm_page);
 	npages  = (uint32_t)((mem_sz + divisor - 1) / divisor); /* scaled to include the vm_page_ts */
-
+	/* Switch: the linear array derives PPNs from indices, so the reserved holes of the dense span need slots too. */
+	if (native_dense_pages) {
+		npages = native_dense_pages;
+	}
 
 	vm_pages     = pmap_steal_freeable_memory(npages * sizeof(struct vm_page));
 	vm_pages_end = vm_page_get(npages);
+#if defined(__arm64__) && defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
+	if (native_dense_pages && !pmap_switch_begin_dense_pages()) {
+		panic("native dense memory setup failed");
+	}
+#endif
 
 #if CONFIG_SECLUDED_MEMORY
 	/*
@@ -2732,6 +2744,10 @@ pmap_startup(
 	vm_free_page_lock();
 
 	for (uint32_t i = 0; i < npages && pmap_next_page(&phys_page); i++) {
+		boolean_t native_reserved = FALSE;
+#if defined(__arm64__) && defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
+		native_reserved = native_dense_pages && pmap_switch_page_reserved(phys_page);
+#endif
 #if XNU_VM_HAS_DELAYED_PAGES
 		if (phys_page < max_valid_low_ppnum) {
 			++low_page_count;
@@ -2769,6 +2785,12 @@ pmap_startup(
 
 		++vm_pages_count;
 		vm_page_init(vm_page_get(i), phys_page);
+		if (native_reserved) {
+			/* A hole of the dense span: a busy, failed descriptor that is never freed (only descriptor memory is touched). */
+			vm_page_get(i)->vmp_error = true;
+			++native_reserved_pages;
+			continue;
+		}
 		if (fillval) {
 			fillPage(phys_page, fillval);
 		}
@@ -2777,7 +2799,11 @@ pmap_startup(
 		}
 	}
 
-	vm_page_pages = vm_pages_count; /* used to report to user space */
+	if (native_dense_pages) {
+		assert(vm_pages_count == native_dense_pages);
+		assert(pmap_free_pages() == 0);
+	}
+	vm_page_pages = vm_pages_count - native_reserved_pages; /* used to report to user space: usable pages, not holes */
 
 	if (!vm_himemory_mode) {
 		for (uint32_t i = npages; i-- > 0;) {
