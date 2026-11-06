@@ -72,6 +72,12 @@ SWITCH_COPTS = {
         "-D",
         "XNU_OWNER_BOOT_MANIFEST=1",
     ],
+    # The source corecrypto provider is off, as in the 10063 tree: Apple's prelinked corecrypto kext is the only one,
+    # and OSKext starts it like any other.
+    "libkern/c++/OSKext.cpp": [
+        "-U",
+        "XNU_SOURCE_CORECRYPTO14",
+    ],
     "osfmk/arm64/start.s": [
         "-D",
         "XNU_NATIVE_ARCH_TIMER=1",
