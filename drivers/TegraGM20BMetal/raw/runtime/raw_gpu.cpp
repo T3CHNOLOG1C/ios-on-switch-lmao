@@ -76,6 +76,8 @@ enum : uint32_t {
 constexpr uint32_t kRootBytes = 0x800, kSetBytes = 0x100, kUboChunk = 0x100;
 constexpr uint32_t kRootInterlockTickets = 0x260;  // offsetof(nvk_root_descriptor_table, interlock_ticket_buffer)
 constexpr uint32_t kTicCount = 8192, kTscCount = 1024;
+constexpr uint32_t kEngines =
+    TegraGM20BEngine3D | TegraGM20BEngineCompute | TegraGM20BEngineCopy | TegraGM20BEngine2D | TegraGM20BEngineM2MF;
 constexpr uint64_t kPushRing = 2 << 20, kUploadRing = 4 << 20;
 constexpr uint64_t kChunk = 16 << 20, kDedicated = 8 << 20;
 // The shader heap: the programs of the states a process uses, placed at first use (Device::place); the pack holds tens of MB
@@ -210,66 +212,16 @@ Device::~Device()
         grower_.join();
 }
 
-bool Device::open(const char *packPath, uint64_t stack, std::string &err)
+uint32_t Device::contextWords() const
 {
-    if (!pack_.load(packPath, stack, err))
-        return false;
-    if (!k_.open(err))
-        return false;
-    if (k_.info().cls_eng3d != 0xb197 || k_.info().cls_copy != 0xb0b5) {
-        err = "not a MAXWELL_B with MAXWELL_DMA_COPY_A";
-        return false;
-    }
-    return init(err);
+    return uint32_t(pack_.bytes(PackInit) / sizeof(PackInitMethod)) * 2 + 4096;
 }
 
-bool Device::init(std::string &err)
+// The channel's context: NVK's own init methods with our addresses, then every register Core Animation's states leave the
+// same. A channel the kernel kills takes its context with it (reopen).
+void Device::emitContext(Push &p)
 {
-    const uint64_t heapBytes = std::min<uint64_t>(pack_.bytes(PackHeap), kHeapCap);
-    if (!k_.alloc(heapBytes + 0x1000, true, heap_) || !k_.alloc(kTicCount * 32, true, tic_) ||
-        !k_.alloc(kTscCount * 32, true, tsc_) || !k_.alloc(0x1000, true, root_) || !k_.alloc(0x10000, true, zero_) ||
-        !k_.alloc(0x1000, true, tickets_) || !k_.alloc(kPushRing, true, push_.bo) ||
-        !k_.alloc(kUploadRing, true, upload_.bo)) {
-        err = k_.error();
-        return false;
-    }
-    memset(tic_.cpu, 0, tic_.bytes);
-    memset(tsc_.cpu, 0, tsc_.bytes);
-    memset(root_.cpu, 0, root_.bytes);
-    memset(zero_.cpu, 0, zero_.bytes);
-    memset(tickets_.cpu, 0, tickets_.bytes);
-    if (!k_.channel(TegraGM20BEngine3D | TegraGM20BEngineCompute | TegraGM20BEngineCopy | TegraGM20BEngine2D |
-                        TegraGM20BEngineM2MF,
-                    channel_, fence_)) {
-        err = k_.error();
-        return false;
-    }
-    // texture header 0: NIL's null descriptor (block linear over the zero page), what NVK keeps at index 0
-    uint32_t *t0 = reinterpret_cast<uint32_t *>(tic_.cpu);
-    t0[0] = 0x2491d;
-    t0[1] = uint32_t(zero_.va);
-    t0[2] = 0x600000 | uint32_t(zero_.va >> 32);
-    t0[4] = 0xe2840000;
-    t0[5] = 0x80000000;
-    t0[7] = 0x80000001;
-    // m2v's neutral sampler, which it binds for a sampler slot the function reads and the encoder left unbound (Vulkan defaults:
-    // nearest, clamp to edge, mip nearest, no LOD clamp), then the constexpr samplers the pack's functions use
-    {
-        const uint32_t neutral[8] = {0x26092, 0x291, 0xfff000, 0, 0, 0, 0, 0};
-        memcpy(tsc_.cpu + 32 * nextTsc_, neutral, 32);
-        neutralTsc_ = nextTsc_++;
-    }
-    const uint32_t *cs = pack_.section<uint32_t>(PackSamplers);
-    for (uint32_t i = 0; i < pack_.header()->samplers; i++) {
-        memcpy(tsc_.cpu + 32 * nextTsc_, cs + 8 * i, 32);
-        constexprTsc_.push_back(nextTsc_++);
-    }
-
-    // the context: NVK's own init methods with our addresses, then every register Core Animation's states leave the same
-    uint64_t va;
     const uint32_t initCount = uint32_t(pack_.bytes(PackInit) / sizeof(PackInitMethod));
-    uint32_t *start = reinterpret_cast<uint32_t *>(alloc(push_, (initCount * 2 + 4096) * 4, 256, va));
-    Push p{start, start + initCount * 2 + 4096};
     const PackInitMethod *im = pack_.section<PackInitMethod>(PackInit);
     for (uint32_t i = 0; i < initCount; i++) {
         uint32_t d = im[i].data;
@@ -330,6 +282,65 @@ bool Device::init(std::string &err)
         p.m(LOAD_CB_OFFSET, kRootInterlockTickets);
         p.nonInc(LOAD_CB, a, 2);
     }
+}
+
+bool Device::open(const char *packPath, uint64_t stack, std::string &err)
+{
+    if (!pack_.load(packPath, stack, err))
+        return false;
+    if (!k_.open(err))
+        return false;
+    if (k_.info().cls_eng3d != 0xb197 || k_.info().cls_copy != 0xb0b5) {
+        err = "not a MAXWELL_B with MAXWELL_DMA_COPY_A";
+        return false;
+    }
+    return init(err);
+}
+
+bool Device::init(std::string &err)
+{
+    const uint64_t heapBytes = std::min<uint64_t>(pack_.bytes(PackHeap), kHeapCap);
+    if (!k_.alloc(heapBytes + 0x1000, true, heap_) || !k_.alloc(kTicCount * 32, true, tic_) ||
+        !k_.alloc(kTscCount * 32, true, tsc_) || !k_.alloc(0x1000, true, root_) || !k_.alloc(0x10000, true, zero_) ||
+        !k_.alloc(0x1000, true, tickets_) || !k_.alloc(kPushRing, true, push_.bo) ||
+        !k_.alloc(kUploadRing, true, upload_.bo)) {
+        err = k_.error();
+        return false;
+    }
+    memset(tic_.cpu, 0, tic_.bytes);
+    memset(tsc_.cpu, 0, tsc_.bytes);
+    memset(root_.cpu, 0, root_.bytes);
+    memset(zero_.cpu, 0, zero_.bytes);
+    memset(tickets_.cpu, 0, tickets_.bytes);
+    if (!k_.channel(kEngines, channel_, fence_)) {
+        err = k_.error();
+        return false;
+    }
+    // texture header 0: NIL's null descriptor (block linear over the zero page), what NVK keeps at index 0
+    uint32_t *t0 = reinterpret_cast<uint32_t *>(tic_.cpu);
+    t0[0] = 0x2491d;
+    t0[1] = uint32_t(zero_.va);
+    t0[2] = 0x600000 | uint32_t(zero_.va >> 32);
+    t0[4] = 0xe2840000;
+    t0[5] = 0x80000000;
+    t0[7] = 0x80000001;
+    // m2v's neutral sampler, which it binds for a sampler slot the function reads and the encoder left unbound (Vulkan defaults:
+    // nearest, clamp to edge, mip nearest, no LOD clamp), then the constexpr samplers the pack's functions use
+    {
+        const uint32_t neutral[8] = {0x26092, 0x291, 0xfff000, 0, 0, 0, 0, 0};
+        memcpy(tsc_.cpu + 32 * nextTsc_, neutral, 32);
+        neutralTsc_ = nextTsc_++;
+    }
+    const uint32_t *cs = pack_.section<uint32_t>(PackSamplers);
+    for (uint32_t i = 0; i < pack_.header()->samplers; i++) {
+        memcpy(tsc_.cpu + 32 * nextTsc_, cs + 8 * i, 32);
+        constexprTsc_.push_back(nextTsc_++);
+    }
+
+    uint64_t va;
+    uint32_t *start = reinterpret_cast<uint32_t *>(alloc(push_, contextWords() * 4, 256, va));
+    Push p{start, start + contextWords()};
+    emitContext(p);
     TegraGM20BAbiPush seg = {va, uint32_t(p.at - start), 0};
     uint32_t seq = 0;
     if (!k_.exec(channel_, &seg, 1, 0, seq)) {
@@ -343,6 +354,7 @@ bool Device::init(std::string &err)
         return false;
     }
     // SET_CT_WRITE(i), as the baseline leaves it where a state's registers do not set it
+    const uint32_t *base = pack_.section<uint32_t>(PackBaseline);
     for (uint64_t i = 0; i < pack_.bytes(PackBaseline) / 8; i++)
         if (base[2 * i] >= CT_WRITE && base[2 * i] < CT_WRITE + 32)
             ctWrite_[(base[2 * i] - CT_WRITE) / 4] = base[2 * i + 1];
@@ -1549,8 +1561,51 @@ void Device::trimBackings()
 
 // ---- command buffer ----
 
+void Device::noteLost()
+{
+    lostThrough_.store(__atomic_load_n(&lastSeqno_, __ATOMIC_RELAXED), std::memory_order_relaxed);
+    lostAny_.store(true, std::memory_order_release);
+}
+
+// The kernel killed the channel (a GPU fault or hang, its own or one it was stuck behind; as a GPU restart on iOS): what it
+// had in flight failed, and a new channel gets the context the old one took with it. Between command buffers: no span of
+// either ring is open, and every one the old channel had is done (the kernel released its fence), whatever word the new
+// channel's fence is.
+bool Device::reopen()
+{
+    noteLost();
+    k_.closeChannel(channel_);
+    if (!k_.channel(kEngines, channel_, fence_))
+        return false;
+    stats.reopens++;
+    push_.inflight.clear();
+    upload_.inflight.clear();
+    {
+        std::lock_guard<std::mutex> l(lock_);
+        for (Backing *b : backings_)
+            b->lastUse = 0;
+    }
+    memset(rootPush_, 0, sizeof rootPush_);
+    restart_ = 0;
+    const uint32_t words = contextWords() + uint32_t(fx::twodInitWords());
+    uint64_t va;
+    uint32_t *start = reinterpret_cast<uint32_t *>(alloc(push_, words * 4, 256, va));
+    Push p{start, start + words};
+    emitContext(p);
+    fx::emitTwodInit(p);
+    TegraGM20BAbiPush seg = {va, uint32_t(p.at - start), 0};
+    uint32_t seq = 0;
+    if (!k_.exec(channel_, &seg, 1, 0, seq))
+        return false;
+    lastSeqno_ = seq;
+    retire(push_, seq);
+    return true;
+}
+
 CommandBuffer *Device::begin()
 {
+    if (k_.lost())
+        reopen();
     CommandBuffer &cb = cb_;
     cb.dev_ = this;
     cb.segments_.clear();

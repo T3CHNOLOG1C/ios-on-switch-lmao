@@ -47,6 +47,12 @@ public:
     // back to the free list at once: call it only once no submission that uses the BO is still running (raw::Device does).
     void free(Bo &bo);
     bool channel(uint32_t engines, uint32_t &channel, const volatile uint32_t *&fence);
+    void closeChannel(uint32_t channel);
+    // An Exec or WaitFence found the channel dead (the kernel killed it for a GPU fault or hang; its fence was released)
+    bool lost() const
+    {
+        return lost_.load(std::memory_order_relaxed);
+    }
     // `last`: the channel's last submitted seqno (0 if none), waited on when the GPFIFO is full
     bool exec(uint32_t channel, const TegraGM20BAbiPush *pushes, uint32_t count, uint32_t last, uint32_t &seqno);
     // Blocks in the kernel until the channel's completed seqno passes `seqno` (the kext sleeps on the fence interrupt).
@@ -82,6 +88,8 @@ private:
     // A SurfaceWrites failed: imports stop saying the GPU only samples them, and every Exec carries
     // TegraGM20BPushImportsWritten.
     std::atomic<bool> importsWritten_{false};
+    std::atomic<bool> lost_{false};
+    uint64_t fenceMap_ = 0;  // the fence page's mapping, made once: every channel's word is in it
     uint32_t selector_ = 0;
     TegraGM20BAbiInfo info_ = {};
     std::map<uint64_t, uint64_t> vaFree_;  // start -> bytes, coalesced

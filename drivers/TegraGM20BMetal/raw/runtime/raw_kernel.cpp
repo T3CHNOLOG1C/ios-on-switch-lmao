@@ -239,14 +239,22 @@ bool Kernel::channel(uint32_t engines, uint32_t &channel, const volatile uint32_
         err_ = "ChannelCreate failed";
         return false;
     }
-    uint64_t addr = 0, size = 0;
-    if (!map(r.fence_token, true, addr, size)) {
+    uint64_t size = 0;
+    if (!fenceMap_ && !map(r.fence_token, true, fenceMap_, size)) {
+        fenceMap_ = 0;
         err_ = "fence map failed";
         return false;
     }
     channel = r.channel;
-    fence = reinterpret_cast<const volatile uint32_t *>(uintptr_t(addr) + r.fence_offset);
+    fence = reinterpret_cast<const volatile uint32_t *>(uintptr_t(fenceMap_) + r.fence_offset);
+    lost_.store(false, std::memory_order_relaxed);
     return true;
+}
+
+void Kernel::closeChannel(uint32_t channel)
+{
+    const TegraGM20BAbiChannel in = {channel, 0};
+    call(TegraGM20BMethodChannelDestroy, &in, sizeof in, nullptr, 0);
 }
 
 // A clientMemoryForType token mapped into this task: through the kext's own Map (method 12) where it has one, as NVK's
@@ -307,6 +315,8 @@ bool Kernel::exec(uint32_t channel, const TegraGM20BAbiPush *pushes, uint32_t co
             seqno = r.seqno;
             return true;
         }
+        if (kr == kIOReturnNotResponding)
+            lost_.store(true, std::memory_order_relaxed);
         if (kr != kIOReturnBusy || !last) {
             err_ = "Exec failed";
             return false;
@@ -321,6 +331,8 @@ bool Kernel::wait(uint32_t channel, uint32_t seqno, uint64_t timeoutNs)
 {
     TegraGM20BAbiWaitFence w = {channel, seqno, timeoutNs};
     const int kr = call(TegraGM20BMethodWaitFence, &w, sizeof w, nullptr, 0);
+    if (kr == kIOReturnNotResponding)
+        lost_.store(true, std::memory_order_relaxed);
     if (kr != KERN_SUCCESS) {
         err_ = "WaitFence failed";
         return false;

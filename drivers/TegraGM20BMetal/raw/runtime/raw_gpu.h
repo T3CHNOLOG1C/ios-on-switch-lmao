@@ -509,10 +509,19 @@ public:
         return int32_t(*fence_ - seqno) >= 0;
     }
 
+    // In the kernel, on the fence interrupt. False: the submission failed, the channel died with it in flight (reopen).
     bool wait(uint32_t seqno)
     {
-        return done(seqno) || k_.wait(channel_, seqno);
-    }  // in the kernel, on the fence interrupt
+        if (!done(seqno) && !k_.wait(channel_, seqno) && k_.lost())
+            noteLost();
+        return !lost(seqno);
+    }
+
+    bool lost(uint32_t seqno) const
+    {
+        return lostAny_.load(std::memory_order_acquire) &&
+               int32_t(lostThrough_.load(std::memory_order_relaxed) - seqno) >= 0;
+    }
 
     // GPU-side order with the process's other driver (NVK's channels), through the kernel's Order (TegraGM20BInfoOrder; false:
     // it has none). orderAfterOthers: this channel's next submission starts with an acquire on what they submitted so far;
@@ -557,6 +566,8 @@ public:
         // color write would have encoded, and those the interlocked storage form would (RenderEncoder::countRules)
         std::atomic<uint64_t> fetchBarriers{0}, fetchBarriersDisjoint{0}, fetchBarriersAnyColor{0},
             fetchBarriersInterlocked{0};
+        // channels made again after the kernel killed one
+        std::atomic<uint64_t> reopens{0};
     } stats;
 
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
@@ -665,6 +676,13 @@ private:
     uint64_t commitCount_ = 0;
 
     bool init(std::string &err);
+    uint32_t contextWords() const;
+    void emitContext(Push &p);
+    bool reopen();
+    void noteLost();
+    // the last seqno of a channel that died: it and every one before it failed (or completed before; not told apart)
+    std::atomic<uint32_t> lostThrough_{0};
+    std::atomic<bool> lostAny_{false};
     uint8_t *alloc(Ring &r, uint32_t bytes, uint32_t align, uint64_t &va);
     void retire(Ring &r, uint32_t seqno);
     uint32_t allocTic();
