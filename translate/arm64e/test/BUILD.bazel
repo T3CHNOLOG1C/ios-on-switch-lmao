@@ -4,11 +4,14 @@
 #   classify_test    the classifier, the one-word rewrites and the fast-reject table on known encodings
 #   semantics_test   LSE, LDRA and FP stubs against the instructions, from the same random states
 #   macho_test       the loader's translation of small synthetic Mach-Os, verification, chained fixups
+#   pretranslate_test   offline translation of small signed Mach-Os: stub placement, marker, re-signing, fallbacks
+#   run_translated_test an A12-built program translated offline and run next to the original (needs Apple silicon)
 #   kernel_kind_test the kernel header's loader decision against the host mirror (a64x_image_kind vs a64x_kind_of)
 #   vlive_test       (manual) V-register liveness claims re-run against this Mac's own dyld cache
 #   fma16_test       (manual) every half-precision FMA product, scalar and vector, against the hardware
 #
 #   bazel test //translate/arm64e/test:all
+load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
 load("//bazel/lint:defs.bzl", "lint_files")
 load("//bazel/testing:defs.bzl", "host_library", "host_test")
 
@@ -33,12 +36,15 @@ host_library(
         "//translate/arm64e:macho/dsc.c",
         "//translate/arm64e:macho/dsc_verify.c",
         "//translate/arm64e:macho/macho.c",
+        "//translate/arm64e:macho/pretranslate.c",
+        "//translate/arm64e:macho/pt_verify.c",
         "//translate/arm64e:macho/sha256.c",
     ],
     hdrs = [
         "//translate/arm64e:macho/codesign.h",
         "//translate/arm64e:macho/dsc.h",
         "//translate/arm64e:macho/macho.h",
+        "//translate/arm64e:macho/pretranslate.h",
         "//translate/arm64e:macho/sha256.h",
     ],
     deps = [":a64x"],
@@ -65,6 +71,29 @@ host_test(
 host_test(
     name = "macho_test",
     srcs = ["macho_test.cpp"],
+    deps = [":macho"],
+)
+
+host_test(
+    name = "pretranslate_test",
+    srcs = ["pretranslate_test.cpp"],
+    deps = [":macho"],
+)
+
+# Built for an A12 (LSE, LDAPR, FP16) as plain arm64, so this Mac runs it before and after translation.
+cc_binary(
+    name = "translated_target",
+    srcs = ["translated_target.c"],
+    copts = [
+        "-O2",
+        "-mcpu=apple-a12",
+    ],
+)
+
+host_test(
+    name = "run_translated_test",
+    srcs = ["run_translated_test.cpp"],
+    data = [":translated_target"],
     deps = [":macho"],
 )
 

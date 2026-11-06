@@ -94,6 +94,7 @@ int a64x_macho_parse(const uint8_t *base, size_t size, struct a64x_macho *m, cha
     m->cpusubtype = rd32(base + 8);
     m->filetype = rd32(base + 12);
     m->ncmds = rd32(base + 16);
+    m->marked = rd32(base + 28) == A64X_PRETRANSLATED;
     uint32_t sizeofcmds = rd32(base + 20);
     if (sizeofcmds > size - 32) return fail(err, errlen, "load commands (%u bytes) past the end", sizeofcmds);
     const uint8_t *p = base + 32, *end = p + sizeofcmds;
@@ -294,6 +295,19 @@ static int find_islands(const struct a64x_macho *m, struct a64x_image_xlate *x, 
     x->island_words = is.words;
     free(fs);
     return 0;
+}
+
+int a64x_image_islands(const struct a64x_macho *m, uint32_t map_flags, struct a64x_image_xlate *x)
+{
+    memset(x, 0, sizeof(*x));
+    x->npages = (uint32_t)((m->exec_filesize + A64X_XLATE_PAGE - 1) / A64X_XLATE_PAGE);
+    return find_islands(m, x, map_flags);
+}
+
+bool a64x_image_is_code(const struct a64x_macho *m, const uint8_t *data, uint64_t off)
+{
+    struct img_ctx c = {m, data};
+    return img_is_code(&c, off);
 }
 
 int a64x_translate_image(const struct a64x_macho *m, uint32_t map_page, uint32_t extra_flags, uint8_t *out,

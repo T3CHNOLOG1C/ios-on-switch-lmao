@@ -18,5 +18,6 @@ int a64x_cmd_stubdump(int argc, char **argv);     /* a64stubdump.c: one instruct
 int a64x_cmd_xlate(int argc, char **argv);        /* a64xlate.c: standalone images, as the kernel loads them */
 int a64x_cmd_translate(int argc, char **argv);    /* translate.c: write a translated image and its stubs */
 int a64x_cmd_fixups(int argc, char **argv);       /* translate.c: authenticated chained fixups as plain ones */
+int a64x_cmd_pretranslate(int argc, char **argv); /* pretranslate.c: a Mach-O translated in place, re-signed */
 
 #endif /* ARM64E_TOOLS_COMMANDS_H */

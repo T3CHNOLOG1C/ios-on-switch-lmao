@@ -11,6 +11,7 @@
 
 #include "../a64x/a64x.h"
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -39,13 +40,18 @@ extern "C" {
 /* The marker of an image built for the A57 (-mcpu=cortex-a57, no PAC, no LSE): mapped as is, never scanned. */
 #define A64X_TARGET_SEGNAME  "__TEXT"
 #define A64X_TARGET_SECTNAME "__a64x_target"
+/*
+ * mach_header_64.reserved of a slice translated offline ("a64x"): mapped as is, like the section marker. Apple's
+ * binaries have no room after their load commands for a section, and keep reserved at 0.
+ */
+#define A64X_PRETRANSLATED 0x78343661u
 
 /* What the loader does with an image (the kernel's a64x_image_kind() plus the marker). */
 enum a64x_kind {
     A64X_KIND_NATIVE = 0, /* not arm64, or an arm64 subtype the loader leaves alone: untouched */
     A64X_KIND_ARM64E,     /* full translation: PAC as the identity, LSE, FP16, ... */
     A64X_KIND_ARM64,      /* plain arm64 (ALL/V8): only what the A57 lacks, no PAC rewrites */
-    A64X_KIND_MARKED,     /* carries __TEXT,__a64x_target: built for this core, mapped as is */
+    A64X_KIND_MARKED,     /* __TEXT,__a64x_target or the reserved marker: built or translated for this core */
 };
 const char *a64x_kind_name(enum a64x_kind kind);
 enum a64x_kind a64x_kind_of(uint32_t cputype, uint32_t cpusubtype, int marked);
@@ -63,7 +69,7 @@ struct a64x_macho {
     const uint8_t *base; /* the slice: its mach_header_64 is at base[0] */
     size_t size;
     uint32_t cputype, cpusubtype, filetype, ncmds;
-    int marked;                           /* has __TEXT,__a64x_target */
+    int marked;                           /* has __TEXT,__a64x_target, or reserved == A64X_PRETRANSLATED */
     uint64_t text_vmaddr;                 /* __TEXT's (function starts count from it) */
     uint32_t nexec;                       /* executable segments (the loader translates images with one) */
     uint64_t exec_fileoff, exec_filesize; /* the executable segment, slice-relative */
@@ -118,6 +124,10 @@ struct a64x_image_xlate {
 int a64x_translate_image(const struct a64x_macho *m, uint32_t map_page, uint32_t extra_flags, uint8_t *out,
                          struct a64x_image_xlate *x, char *err, size_t errlen);
 void a64x_image_xlate_free(struct a64x_image_xlate *x);
+/* The data islands of the image's executable segment as the loader finds them: x->npages and x->data only. */
+int a64x_image_islands(const struct a64x_macho *m, uint32_t map_flags, struct a64x_image_xlate *x);
+/* The word at slice offset off is inside an instruction section and not data (data: a64x_image_islands' bitmap). */
+bool a64x_image_is_code(const struct a64x_macho *m, const uint8_t *data, uint64_t off);
 
 /*
  * Checks a translation from its output bytes: every changed word that is a branch into the stub region reaches stub
@@ -166,6 +176,7 @@ int a64x_fixup_strip_auth(uint32_t format, uint64_t raw, uint64_t preferred_base
 struct a64x_fixup_stats {
     uint64_t rebases, binds, auth_rebases, auth_binds, stripped;
 };
+
 /*
  * Walks every chain of the slice's LC_DYLD_CHAINED_FIXUPS (thin images and MH_FILESET kernel collections) and,
  * when `out` is not NULL (a copy of the slice, m->size bytes), writes each authenticated entry there as its plain
