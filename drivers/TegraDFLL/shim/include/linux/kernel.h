@@ -95,7 +95,7 @@ typedef struct { int counter; } atomic_t;
 #define U32_MAX ((u32)~0U)
 #define S32_MAX ((s32)(U32_MAX >> 1))
 #define BITS_PER_LONG 64
-#define BIT(n) (1UL << (n))
+#define BIT(n) (1UL << (unsigned int)(n))
 #define NSEC_PER_USEC 1000L
 #define NSEC_PER_MSEC 1000000L
 #define USEC_PER_MSEC 1000L
