@@ -40,7 +40,10 @@ INTERFACE = {
         'kick': {'decl': 'virtual void kick() = 0'},
     },
     'fields': {'armed': {'type': 'bool', 'access': 'get set'}},
-    'functions': {'switch_base_check': {'decl': 'void switch_base_check(Base *base)'}},
+    'functions': {
+        'switch_base_check': {'decl': 'void switch_base_check(Base *base)'},
+        'helperReset': {'symbols': ['_ZN6Helper5resetEv']},
+    },
 }
 TABLE = {
     'class': 'Base',
@@ -58,6 +61,7 @@ TABLE = {
         'opaque170': 'unported',
         'switch_base_check': '0xfffffff006000200',
         'getMetaClass': '0xfffffff006000300',
+        'helperReset': '0xfffffff006000400',
     },
 }
 
@@ -111,6 +115,11 @@ class HeaderTest(unittest.TestCase):
         with self.assertRaises(SystemExit):
             gen.header(interface, TABLE, 'kinds/TEST/Base.json')
 
+    def test_a_function_without_a_declaration_is_not_declared(self):
+        text = gen.header(INTERFACE, TABLE, 'kinds/TEST/Base.json')
+        self.assertIn('void switch_base_check(Base *base);', text)
+        self.assertNotIn('reset', text)
+
     def test_a_slot_the_interface_lacks_is_refused(self):
         table = dict(TABLE, layout={'168': 'missing'})
         with self.assertRaises(SystemExit):
@@ -130,6 +139,7 @@ class BindingsTest(unittest.TestCase):
         self.assertIn('.set __ZN4Base10gMetaClassE, 0xfffffff006fff000', text)
         self.assertIn('.set _switch_base_check, 0xfffffff005fff200', text)
         self.assertIn('.set __ZNK4Base12getMetaClassEv, 0xfffffff005fff300', text)
+        self.assertIn('.set __ZN6Helper5resetEv, 0xfffffff005fff400', text)
 
     def test_unported_becomes_a_named_trap(self):
         text = self.bind(['__ZN4Base9opaque170Ev'])

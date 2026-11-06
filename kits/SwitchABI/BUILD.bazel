@@ -89,6 +89,19 @@ py_binary(
 )
 
 py_test(
+    name = "extract_test",
+    srcs = [
+        "extract.py",
+        "kernelcache.py",
+        "test/extract_test.py",
+    ],
+    deps = [
+        "//tools/prelink:native_prelink",
+        "//translate/arm64e:prelink26",
+    ],
+)
+
+py_test(
     name = "gen_test",
     srcs = ["test/gen_test.py"],
     data = glob([

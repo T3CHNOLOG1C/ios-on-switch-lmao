@@ -141,6 +141,54 @@ def locate(fs, bundle, hint):
     return function
 
 
+BTI_C = 0xD503245F
+
+Body = Callable[[int, int], list[int] | None]
+
+
+def fileset_body(fs: kernelcache.Fileset) -> Body:
+    """Read the first words (BTI landing pads skipped) of the function starting at an address, or None if none does."""
+
+    def body(at: int, count: int) -> list[int] | None:
+        start, end = fs.function(at)
+        return [w for _, w in fs.words(start, end) if w != BTI_C][:count] if start == at else None
+
+    return body
+
+
+def plain_body(word: Callable[[int], int]) -> Body:
+    """Read the words at an address of a kernelcache that has no function starts (iOS 17's)."""
+    return lambda at, count: [word(at + 4 * i) for i in range(count)]
+
+
+def functions(body: Body, find: Callable[[dict], int], table: dict) -> tuple[dict, dict]:
+    """Locate hints.functions: the one path for every kind and table.
+
+    An entry is "unported", a function whose code starts as described ("at", "body", "why"), or the one function
+    referencing a string ("string", "up" callers up), which find() locates.
+    """
+    addresses, found = {}, {}
+    for key, hint in sorted(table.get('hints', {}).get('functions', {}).items()):
+        if hint == 'unported':
+            addresses[key], found[key] = 'unported', 'not located in this kind yet'
+        elif 'at' in hint:
+            at, want = int(hint['at'], 16), [int(w, 16) for w in hint['body'].split()]
+            got = body(at, len(want))
+            if got != want:
+                words = 'no function starts there' if got is None else ' '.join(f'{w:08x}' for w in got)
+                raise SystemExit(f'{key} at {at:#x}: {words}; the hint says {hint["body"]}')
+            addresses[key], found[key] = hex(at), hint['why']
+        else:
+            addresses[key] = hex(find(hint))
+            up = f', {hint["up"]} caller(s) up' if hint.get('up') else ''
+            found[key] = f'references "{hint["string"]}"{up}'
+    return addresses, found
+
+
+def fileset_functions(fs: kernelcache.Fileset, bundle: str, table: dict) -> tuple[dict, dict]:
+    return functions(fileset_body(fs), lambda hint: locate(fs, bundle, hint), table)
+
+
 def fields(fs, table):
     out, found = {}, {}
     for key, hint in sorted(table.get('hints', {}).get('fields', {}).items()):
@@ -168,17 +216,7 @@ def extract(fs, interface, table, kind, pure):
     cls = interface['class']
     info = fs.inheritance[cls]
     if interface.get('functions_only'):
-        addresses, found = {}, {}
-        for key, hint in sorted(table.get('hints', {}).get('functions', {}).items()):
-            if hint == 'unported':
-                addresses[key], found[key] = 'unported', 'not located in this kind yet'
-                continue
-            at = int(hint['at'], 16)
-            body = [w for _, w in fs.words(*fs.function(at)) if w != 0xD503245F]
-            want = [int(w, 16) for w in hint['body'].split()]
-            if fs.function(at)[0] != at or body[: len(want)] != want:
-                raise SystemExit('{}: {:#x} is not the function the hint describes'.format(key, at))
-            addresses[key], found[key] = hex(at), hint['why']
+        addresses, found = fileset_functions(fs, info['bundle'], table)
         return dump(
             {
                 'class': cls,
@@ -195,6 +233,8 @@ def extract(fs, interface, table, kind, pure):
             }
         )
     if interface.get('metaclass_only'):
+        addresses, found = fileset_functions(fs, info['bundle'], table)
+        addresses['gMetaClass'], found['gMetaClass'] = hex(info['meta']), 'metaclass initialiser'
         return dump(
             {
                 'class': cls,
@@ -205,8 +245,8 @@ def extract(fs, interface, table, kind, pure):
                 'slide': table['slide'],
                 'layout': {},
                 'fields': {},
-                'addresses': {'gMetaClass': hex(info['meta'])},
-                'found': {'gMetaClass': 'metaclass initialiser'},
+                'addresses': dict(sorted(addresses.items())),
+                'found': dict(sorted(found.items())),
                 'hints': table.get('hints', {}),
             }
         )
@@ -225,11 +265,10 @@ def extract(fs, interface, table, kind, pure):
     for key, address in structors(fs, cls).items():
         addresses[key] = address
         found[key] = 'stores the vtable' if key == 'C2' else 'branch after the constructors'
-    for key, hint in sorted(table.get('hints', {}).get('functions', {}).items()):
-        addresses[key] = locate(fs, info['bundle'], hint)
-        found[key] = 'references "{}"'.format(hint['string']) + (
-            ', {} caller(s) up'.format(hint['up']) if hint.get('up') else ''
-        )
+    located, located_found = fileset_functions(fs, info['bundle'], table)
+    addresses.update({k: int(v, 16) for k, v in located.items() if v != 'unported'})
+    unported = sorted(k for k, v in located.items() if v == 'unported')
+    found.update(located_found)
     offsets, field_found = fields(fs, table)
     found.update(field_found)
     values, value_found = constants(fs, table)
@@ -247,7 +286,8 @@ def extract(fs, interface, table, kind, pure):
     if values:
         out['constants'] = values
     out.update(
-        addresses={k: hex(v) for k, v in sorted(addresses.items(), key=lambda kv: (kv[1], kv[0]))},
+        addresses={k: hex(v) for k, v in sorted(addresses.items(), key=lambda kv: (kv[1], kv[0]))}
+        | {k: 'unported' for k in unported},
         found=dict(sorted(found.items())),
         hints=table.get('hints', {}),
     )
@@ -269,7 +309,12 @@ def check_plain(path: Path, interface: dict, table: dict) -> None:
         return int.from_bytes(data[backed_offset(segments, va, size, len(data)) :][:size], 'little')
 
     addresses = {k: int(v, 16) for k, v in table['addresses'].items() if v != 'unported'}
-    errors = plain_function_errors(lambda va: read(va, 4), addresses, table)
+    located, _ = functions(plain_body(lambda va: read(va, 4)), plain_string_hint, table)
+    errors = [
+        f'{key}: the hint locates {value}, the table binds {table["addresses"].get(key)}'
+        for key, value in located.items()
+        if bound(value) != bound(table['addresses'].get(key))
+    ]
     if 'vtable' in addresses:
         code = [(g['va'], g['va'] + g['size']) for g in segments if g['initprot'] & 4]
         errors += plain_vtable_errors(read, code, addresses, table)
@@ -300,20 +345,12 @@ def plain_vtable_errors(
     return errors
 
 
-def plain_function_errors(word: Callable[[int], int], addresses: dict[str, int], table: dict) -> list[str]:
-    """Check each hints.functions {at, body}: the words at `at`, and that `at` is the address the table binds."""
-    errors = []
-    for key, hint in sorted(table.get('hints', {}).get('functions', {}).items()):
-        if not isinstance(hint, dict) or 'body' not in hint:
-            continue
-        at, want = int(hint['at'], 16), [int(w, 16) for w in hint['body'].split()]
-        got = [word(at + 4 * i) for i in range(len(want))]
-        if addresses.get(key) != at:
-            errors.append(f'{key}: the hint is at {at:#x}, the table binds {table["addresses"].get(key)}')
-        if got != want:
-            words = ' '.join(f'{w:08x}' for w in got)
-            errors.append(f'{key} at {at:#x}: the words are {words}, the hint says {hint["body"]}')
-    return errors
+def bound(value: str | None) -> int | str | None:
+    return value if value in (None, 'unported') else int(value, 16)
+
+
+def plain_string_hint(hint: dict) -> int:
+    raise SystemExit(f'"{hint["string"]}": a string hint needs a fileset kernelcache')
 
 
 def is_fileset(path):

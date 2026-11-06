@@ -5,9 +5,10 @@
 
 The header declares the original class as the kind lays it out: its instance size, its virtuals in slot order (a slot
 no driver names is opaque<N>), field accessors at the kind's offsets, the kind's constants and the members drivers
-call, after the interface's declarations (the types its methods name that no included header declares). The bindings
-bind every symbol of the tables' addresses (and refuse an original import they lack) at its kernelcache address plus
-the kind's prelink slide; an entry the table marks "unported" becomes a function that panics naming it.
+call, after the interface's declarations (the types its methods name that no included header declares). A function
+without a "decl" is only bound: a C++ member the driver's own header declares. The bindings bind every symbol of the
+tables' addresses (and refuse an original import they lack) at its kernelcache address plus the kind's prelink slide;
+an entry the table marks "unported" becomes a function that panics naming it.
 """
 
 import argparse
@@ -152,10 +153,10 @@ def header(interface, table, table_name):
     out += ['    {};'.format(decl) for decl in interface.get('members', [])]
     out += ['};', '#undef SWITCH_ABI_OPAQUE']
     out.append('static_assert(sizeof({}) == {:#x}, "{} as {} lays it out");'.format(cls, size, cls, table['kind']))
-    functions = interface.get('functions', {})
+    functions = [f for f in interface.get('functions', {}).values() if 'decl' in f]
     if functions:
         out += ['', 'extern "C" {']
-        for f in functions.values():
+        for f in functions:
             out += doc(f, '') + declaration(f['decl'], '')
         out.append('}')
     return '\n'.join(out) + '\n'
