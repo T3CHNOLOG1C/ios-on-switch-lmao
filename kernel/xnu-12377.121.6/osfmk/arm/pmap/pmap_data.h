@@ -54,6 +54,7 @@
  */
 #include <arm/pmap.h>
 #include <arm/pmap/pmap_pt_geometry.h>
+#include <switch/ram.h>
 
 /**
  * These values represent the first and last kernel-managed physical addresses.
@@ -71,12 +72,6 @@ extern pmap_paddr_t vm_first_phys, vm_last_phys;
  *
  * @param pa The physical address to check.
  */
-extern boolean_t pmap_switch_pa_valid(pmap_paddr_t pa); /* osfmk/arm64/arm_vm_init.c (Switch RAM holes) */
-
-extern boolean_t pmap_switch_pa_valid(pmap_paddr_t pa); /* osfmk/arm64/arm_vm_init.c (Switch RAM holes) */
-
-extern boolean_t pmap_switch_pa_valid(pmap_paddr_t pa); /* osfmk/arm64/arm_vm_init.c (Switch RAM holes) */
-
 static inline bool
 pa_valid(pmap_paddr_t pa)
 {

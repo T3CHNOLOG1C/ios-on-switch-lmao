@@ -319,7 +319,7 @@ def _xnu_object_names_impl(ctx):
     lines = []
     for target in ctx.attr.components:
         info = target[XnuObjectsInfo]
-        lines += ["{} {}\n".format(info.component, name) for name in info.names]
+        lines += ["{} {}\n".format(info.component, name) for name in info.names if not name.startswith("switch/")]
     ctx.actions.write(out, "".join(lines))
     return [DefaultInfo(files = depset([out]))]
 

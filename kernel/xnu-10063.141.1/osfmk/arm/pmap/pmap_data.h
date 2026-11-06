@@ -54,6 +54,7 @@
  */
 #include <arm/pmap.h>
 #include <arm/pmap/pmap_pt_geometry.h>
+#include <switch/ram.h>
 
 /**
  * These values represent the first and last kernel-managed physical addresses.

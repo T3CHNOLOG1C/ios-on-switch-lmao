@@ -23,6 +23,7 @@ load("@rules_cc//cc/common:cc_common.bzl", "cc_common")
 load("@xcode//:defs.bzl", "DEVELOPER_DIR", "XCODE_TOOLCHAIN")
 load("//bazel/platforms:transitions.bzl", "kernel_transition", "outer_transition")
 load("//kernel/rules:layout.bzl", "MOVED_ROOTS", "OLD_TREE", "PATH_ROOT", "tree_path")
+load("//kernel/switch:objects.bzl", "SWITCH_ROOT", "switch_copts", "switch_objects")
 load(":recipes_development.bzl", "DEVELOPMENT_RECIPES")
 load(":selected.bzl", "selected_only")
 load(":switch_objects.bzl", "SWITCH_COPTS")
@@ -58,8 +59,9 @@ LEGACY = struct(
     obj = ("{}/{}/{}".format(_ROOT, _MAKE_BIN, _MAKE_OBJ), "{}/{}".format(_ROOT, _MAKE_OBJ)),
 )
 
-# The flags only the kernel toolchain's driver recipes add: never on XNU's own objects.
-_DRIVER_FEATURES = ["kernel_iokit_cxx", "kernel_osfmk_c", "kernel_warnings", "kernel_plain_asm", "xnu_version_macro"]
+# The flags only the kernel toolchain's driver recipes add: never on XNU's own objects. (xnu_version_macro is on:
+# XNU_<version>, which kernel/switch's code and hook headers test.)
+_DRIVER_FEATURES = ["kernel_iokit_cxx", "kernel_osfmk_c", "kernel_warnings", "kernel_plain_asm"]
 
 _LANG = {"c": "c", "cpp": "cxx", "s": "asm"}
 
@@ -85,6 +87,7 @@ def _maps(places, gen, relative):
 
     # The kernel tree's directories XNU includes from, wherever kernel/rules/layout.bzl puts them now.
     tree = [(tree_path(root), ("{}/{}/{}".format(PATH_ROOT, OLD_TREE, root),) * 2) for root in MOVED_ROOTS]
+    tree.append((tree_path(SWITCH_ROOT), ("{}/{}".format(PATH_ROOT, SWITCH_ROOT),) * 2))
     pairs = [(places["{xnu}"], LEGACY.xnu)] + tree + [
         (places["{export}"], LEGACY.export),
         (places["{sdkroot}"], LEGACY.sdkroot),
@@ -245,6 +248,10 @@ def _xnu_objects_impl(ctx):
     for f in gen_srcs:
         if f.path.startswith(gen_path + "/"):
             by_path["gen:" + f.path[len(gen_path) + 1:]] = f
+    for f in ctx.files.switch_srcs:
+        if not f.short_path.startswith(SWITCH_ROOT + "/"):
+            fail("{}: {} is not in {}".format(ctx.label, f.short_path, SWITCH_ROOT))
+        by_path["switch:" + f.short_path[len(SWITCH_ROOT) + 1:]] = f
 
     # One compile per set of identical flags (most of a component shares its recipe's).
     groups, order = {}, []
@@ -268,6 +275,7 @@ def _xnu_objects_impl(ctx):
             _expand(ctx.attr.copts.get(entry, []), places) +
             includes +
             _expand(ctx.attr.includes.get(entry, []), places) +
+            ["-I", tree_path(SWITCH_ROOT + "/include")] +
             maps
         )
         key = "\n".join(flags)
@@ -300,7 +308,10 @@ def _xnu_objects_impl(ctx):
     setsegname = ctx.executable._setsegname
     for entry, src in sources:
         obj = compiled[src]
-        base = src.basename.rpartition(".")[0] + (".cpo" if src.extension == "cpp" else ".o")
+
+        # kernel/switch's objects keep their directory: switch/<subsystem>/<name>.o, never an Apple object's name.
+        stem = "switch/" + entry[len("switch:"):] if entry.startswith("switch:") else src.basename
+        base = stem.rpartition(".")[0] + (".cpo" if src.extension == "cpp" else ".o")
         for i, spec in enumerate(ctx.attr.segments.get(entry, [])):
             renamed = ctx.actions.declare_file("{}_seg/{}.{}".format(ctx.label.name, base, i))
             args = ctx.actions.args()
@@ -339,11 +350,12 @@ xnu_objects_rule = rule(
         "genassym": attr.label(allow_single_file = [".c"], doc = "osfmk only: genassym.c (assym.s)"),
         "ignorelists": attr.label(mandatory = True, allow_files = True, cfg = outer_transition),
         "includes": attr.string_list_dict(doc = "per object: flags after the recipe's INCFLAGS (make's _INCFLAGS)"),
-        "objects": attr.string_list(mandatory = True, doc = "XNU-relative sources (or gen:<path>), link order"),
+        "objects": attr.string_list(mandatory = True, doc = "XNU-relative sources (or gen:<path>, switch:<path>), link order"),
         "owner_header": attr.label(mandatory = True, allow_single_file = True, cfg = outer_transition),
         "sdkroot": attr.label(mandatory = True, allow_files = True, cfg = outer_transition),
         "segments": attr.string_list_dict(doc = "per object: setsegname passes (arguments), in order"),
         "srcs": attr.label_list(allow_files = [".c", ".cpp", ".s"], doc = "the vendored sources objects names"),
+        "switch_srcs": attr.label_list(allow_files = [".c", ".cpp", ".s"], doc = "kernel/switch's sources (switch:<path>)"),
         "tree_headers": attr.label_list(allow_files = True, doc = "the kernel tree's headers XNU includes"),
         "xnu_headers": attr.label_list(allow_files = True, doc = "XNU's source headers (every component's :headers)"),
         "_allowlist_function_transition": attr.label(default = "@bazel_tools//tools/allowlists/function_transition_allowlist"),
@@ -379,16 +391,20 @@ def xnu_objects(name, component, table, srcs = None, **kwargs):
         "gen_srcs": XNU_INPUTS + "gen_{}_srcs".format(component),
     }
     inputs.update(kwargs)
+
+    # kernel/switch's objects join each component's own objects, not pthread_bootstrap's one.
+    ours = component if name == "objects" else None
     xnu_objects_rule(
         name = name,
         component = component,
         config = "DEVELOPMENT",
-        objects = table.objects,
-        copts = {k: SWITCH_COPTS.get(k, []) + table.copts.get(k, []) for k in table.objects},
+        objects = switch_objects(ours, table.objects),
+        copts = switch_copts(ours, {k: SWITCH_COPTS.get(k, []) + table.copts.get(k, []) for k in table.objects}),
         includes = table.includes,
         segments = table.segments,
         target_compatible_with = selected_only(),
         srcs = srcs if srcs != None else native.glob(["**/*.c", "**/*.cpp", "**/*.s"], allow_empty = True),
+        switch_srcs = ["//kernel/switch:srcs"],
         export_hdrs = XNU_INPUTS + "export_hdrs",
         sdkroot = XNU_INPUTS + "sdkroot_files",
         ignorelists = "//kernel/xnu-12377.121.6/san:ignorelists",
@@ -402,6 +418,7 @@ def xnu_objects(name, component, table, srcs = None, **kwargs):
             "//diagnostics/switch:headers",
             "//drivers/NativeSwitchBlock:headers",
             "//kits/VerifiedRoot:headers",
+            "//kernel/switch:headers",
         ],
         # XNU is Apple's code: no clang-tidy or other linting of its compiles.
         tags = [

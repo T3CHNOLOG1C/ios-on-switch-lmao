@@ -1,0 +1,25 @@
+# Our code in XNU (README.md): the hook headers Apple's files include (include/switch/) and the code behind them, one
+# directory per subsystem, compiled into both kernels as XNU objects (objects.bzl).
+load("//bazel/lint:defs.bzl", "lint_files")
+
+package(default_visibility = ["//kernel:__subpackages__"])
+
+lint_files()
+
+filegroup(
+    name = "srcs",
+    srcs = glob(
+        [
+            "*/*.c",
+            "*/*.cpp",
+            "*/*.s",
+        ],
+        allow_empty = True,
+        exclude = ["include/**"],
+    ),
+)
+
+filegroup(
+    name = "headers",
+    srcs = glob(["**/*.h"]) + ["//boot:loader/ram.h"],
+)

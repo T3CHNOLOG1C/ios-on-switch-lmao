@@ -84,6 +84,7 @@
 
 #include <arm64/proc_reg.h>
 #include <pexpert/arm64/boot.h>
+#include <switch/ram.h>
 #if XNU_MONITOR_ANS2_SART
 #include <arm64/ppl/sart.h>
 #endif
@@ -2609,18 +2610,7 @@ pmap_virtual_region(
 	unsigned long low_global_vr_mask = 0;
 	vm_map_size_t low_global_vr_size = 0;
 
-	if (pmap_switch_ram_enabled()) {
-		/* Full native RAM starts below low globals. Reserve the union of
-		 * the low ranges once, then retain the separate high window. */
-		if (region_select == 0) {
-			*startp = VM_MIN_KERNEL_AND_KEXT_ADDRESS;
-			*size = ((virtual_space_start + 0x7fffffULL) & ~0x7fffffULL) - *startp;
-			return TRUE;
-		}
-		if (region_select != 1) {
-			return FALSE;
-		}
-	}
+	if (switch_ram_virtual_region(region_select, startp, size, &ret)) return ret;
 
 	if (region_select == 0) {
 		/* Round to avoid overlapping with the V=P area; round to at least the L2 block size. */
@@ -2677,34 +2667,6 @@ pmap_virtual_region(
 
 static unsigned int avail_page_count = 0;
 static bool need_ram_ranges_init = true;
-static void initialize_ram_ranges(void);
-static bool switch_dense_pages;
-static pmap_paddr_t switch_stolen_end;
-
-unsigned int
-pmap_switch_dense_page_count(void)
-{
-    return pmap_switch_ram_enabled() ? 0x100000 : 0;
-}
-
-boolean_t
-pmap_switch_page_reserved(ppnum_t pnum)
-{
-    pmap_paddr_t pa=(pmap_paddr_t)pnum << PAGE_SHIFT;
-    return pmap_switch_ram_reserved(pnum) || pa < switch_stolen_end;
-}
-
-boolean_t
-pmap_switch_begin_dense_pages(void)
-{
-    if (!pmap_switch_dense_page_count()) return FALSE;
-    if (need_ram_ranges_init) initialize_ram_ranges();
-    switch_stolen_end=first_avail;
-    first_avail=gPhysBase;
-    switch_dense_pages=true;
-    return TRUE;
-}
-
 
 
 /**
@@ -2736,12 +2698,8 @@ initialize_ram_ranges(void)
 	assert(first <= end);
 	assert(first == (first & ~PAGE_MASK));
 	assert(end == (end & ~PAGE_MASK));
-    if (pmap_switch_dense_page_count()) {
-        first_avail=gPhysBase;
-        avail_page_count=0;
-        for (pmap_paddr_t pa=gPhysBase;pa<end;pa+=PAGE_SIZE)
-            if (!pmap_switch_page_reserved((ppnum_t)atop(pa))) ++avail_page_count;
-    } else avail_page_count = atop(end - first);
+	avail_page_count = atop(end - first);
+	switch_ram_count_pages(&avail_page_count, end);
 
 	need_ram_ranges_init = false;
 }
@@ -2784,17 +2742,14 @@ pmap_next_page(
 		initialize_ram_ranges();
 	}
 
-    if (pmap_switch_dense_page_count() && !switch_dense_pages) {
-        while (first_avail<avail_end && pmap_switch_page_reserved((ppnum_t)atop(first_avail)))
-            first_avail+=PAGE_SIZE;
-    }
-    if (first_avail != avail_end) {
+	switch_ram_skip_reserved();
+	if (first_avail != avail_end) {
 		*pnum = (ppnum_t)atop(first_avail);
 		first_avail += PAGE_SIZE;
-        if (!switch_dense_pages || !pmap_switch_page_reserved(*pnum)) {
-            assert(avail_page_count > 0);
-            --avail_page_count;
-        }
+		if (switch_ram_page_counted(*pnum)) {
+		assert(avail_page_count > 0);
+		--avail_page_count;
+		}
 		return TRUE;
 	}
 	assert(avail_page_count == 0);
