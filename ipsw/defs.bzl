@@ -77,3 +77,57 @@ ipsw_pins = rule(
     doc = "The kind's member pins as JSON (the SD installer checks Preboot copies against their content sha256s).",
     attrs = _IPSW,
 )
+
+PretranslatedPinsInfo = provider(
+    doc = "iOS 27's pretranslate outputs the boot package carries, each checked against the kind's derived pins.",
+    fields = {
+        "trust": "list of File: the trust modules of the translated binaries, os, app_cryptex, system_cryptex",
+        "cache_list": "File or None: the translated dyld cache files' cdhashes (/chosen/a64x-cache-pretranslated)",
+        "pins": "File or None: {file name: sha256}, what the image composer's run must reproduce",
+    },
+)
+
+_PRETRANSLATE_ROLES = ("os", "app_cryptex", "system_cryptex")
+_CACHE_LIST = "a64x-cache-pretranslated.bin"
+
+def _ipsw_pretranslated_impl(ctx):
+    pins = ctx.attr.ipsw[IpswInfo].derived.get("pretranslated", {})
+    given = {f.basename: f for f in ctx.files.srcs}
+    if sorted(given) != sorted(pins):
+        fail("{}: the files {} are not the ones ipsw/pins.bzl's derived \"pretranslated\" pins ({})".format(
+            ctx.label,
+            sorted(given),
+            sorted(pins),
+        ))
+    checked = {}
+    for name, src in given.items():
+        out = ctx.actions.declare_file(ctx.label.name + "/" + name)
+        ctx.actions.run(
+            executable = ctx.executable._derived,
+            arguments = [src.path, out.path, pins[name]],
+            inputs = [src],
+            outputs = [out],
+            mnemonic = "IpswDerived",
+            progress_message = "Checking %s against its pin" % name,
+        )
+        checked[name] = out
+    pins_file = None
+    if pins:
+        pins_file = ctx.actions.declare_file(ctx.label.name + "/pins.json")
+        ctx.actions.write(pins_file, json.encode_indent(pins, indent = "  ") + "\n")
+    trust = [checked[role + ".trustcache"] for role in _PRETRANSLATE_ROLES if role + ".trustcache" in checked]
+    return [
+        DefaultInfo(files = depset(checked.values())),
+        PretranslatedPinsInfo(trust = trust, cache_list = checked.get(_CACHE_LIST), pins = pins_file),
+        OutputGroupInfo(pins = depset([pins_file] if pins_file else [])),
+    ]
+
+ipsw_pretranslated = rule(
+    implementation = _ipsw_pretranslated_impl,
+    doc = "The kind's pretranslate outputs (//translate/arm64e/pretranslate, run offline on the decrypted images), " +
+          "each copied after a sha256 check against pins.bzl's derived \"pretranslated\"; empty for a kind without.",
+    attrs = _IPSW | {
+        "srcs": attr.label_list(allow_files = True),
+        "_derived": attr.label(default = "//ipsw:derived", executable = True, cfg = "exec"),
+    },
+)

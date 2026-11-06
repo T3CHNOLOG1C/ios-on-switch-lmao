@@ -9,9 +9,11 @@ which pins one kind's members and keeps the rest. Per kind:
   volumes   pinned by hand: the APFS volume UUIDs of the OS image and the two cryptexes (their volume superblocks,
             read from the decrypted images) and the cryptex images' file names as Preboot stages them
   derived   what the build derives from the members, pinned by hand: kernelcache_sha256 (the kernelcache's IM4P payload,
-            LZFSE-decompressed, its arm64 slice: //ipsw:kernelcache) and quartzcore_metallib_sha256 (QuartzCore's
+            LZFSE-decompressed, its arm64 slice: //ipsw:kernelcache), quartzcore_metallib_sha256 (QuartzCore's
             default.metallib, the OS volume's or the SystemOS cryptex's grafted over it: the shader seed's gate,
-            //gpu/seed:seed)
+            //gpu/seed:seed) and, for an arm64e IPSW, pretranslated: {file: sha256} of ipsw/pretranslated/<kind>/, the
+            trust modules and dyld cache list of //translate/arm64e/pretranslate's run over the decrypted images
+            (//ipsw:pretranslated)
 An Apple Encrypted Archive member (iOS 26 and later) also has aea_key, the key /usr/bin/aea decrypts it with, which
 `pin` unwraps from the archive's auth data. An empty kind is a declared slot: //ipsw:kind accepts it, no repository is
 made for it, and anything that reads an IPSW fails at analysis until it is pinned.
@@ -128,6 +130,12 @@ IPSWS = {
         "build": "24B119",
         "derived": {
             "kernelcache_sha256": "250337d45598da0e5cc578413704981368afe92f84b3450dc956e21da1b21bd4",
+            "pretranslated": {
+                "a64x-cache-pretranslated.bin": "c84bbd25c9091285d857c33d8cdbf50164d9e620c1e444dbbae1b1eb8bae556b",
+                "app_cryptex.trustcache": "8c49696d35668a109494d6d3b3560013947f34f93b99b876b266127f0a7d20a7",
+                "os.trustcache": "b3a4f4637003775ba5313e1bac44257fa79aece46445a6f2c6422df28848c3ac",
+                "system_cryptex.trustcache": "13e6b28ad099616839981c1567fec57bedd462e67c7e8a0130e692a06bcc52ec",
+            },
             "quartzcore_metallib_sha256": "342e3ee16a83e7b04837dcdadf4a786020711e3179afcf0ca50a461e7331218b",
         },
         "device_class": "j181ap",

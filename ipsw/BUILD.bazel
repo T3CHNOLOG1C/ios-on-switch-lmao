@@ -5,8 +5,9 @@
 load("@rules_python//python:py_binary.bzl", "py_binary")
 load("@rules_python//python:py_library.bzl", "py_library")
 load("//bazel/lint:defs.bzl", "lint_files")
-load(":defs.bzl", "ipsw_kernelcache", "ipsw_static_trust")
+load(":defs.bzl", "ipsw_kernelcache", "ipsw_pretranslated", "ipsw_static_trust")
 load(":ipsw.bzl", "ipsw_kinds")
+load(":pins.bzl", "IPSWS")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -40,6 +41,29 @@ ipsw_static_trust(
 alias(
     name = "app_cryptex_trust_cache",
     actual = "@ipsw//:app_cryptex_trust_cache",
+)
+
+# iOS 27: what the boot package carries of the pretranslate run (pretranslated/<kind>/, made offline from the decrypted
+# images by //translate/arm64e/pretranslate's driver, which needs root to mount them): the trust modules, the dyld
+# cache list and the pins the image composer's own run must match. Empty for a kind with no derived "pretranslated".
+ipsw_pretranslated(
+    name = "pretranslated",
+    srcs = select({
+        ":" + kind: glob(["pretranslated/{}/*".format(kind)])
+        for kind, ipsw in IPSWS.items()
+        if ipsw.get("derived", {}).get("pretranslated")
+    } | {"//conditions:default": []}),
+)
+
+filegroup(
+    name = "pretranslated_pins",
+    srcs = [":pretranslated"],
+    output_group = "pins",
+)
+
+py_binary(
+    name = "derived",
+    srcs = ["derived.py"],
 )
 
 # `bazel run //ipsw:pin -- --kind=<build> <ipsw url> <product> <device class>`: pins one IPSW kind's members in
