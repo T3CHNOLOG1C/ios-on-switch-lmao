@@ -1443,6 +1443,29 @@ vfs_context_allow_entitled_reserve_access(vfs_context_t ctx)
 }
 
 /*
+ * Darwin 26 KPIs that query the I/O policy of the context's process.
+ * APFS calls them by address; the original kernel resolves the process like
+ * vfs_context_proc() and tests one p_vfs_iopolicy bit.
+ */
+boolean_t
+vfs_context_ignores_content_protection(vfs_context_t ctx)
+{
+	proc_t p = vfs_context_proc(ctx);
+
+	return p && (os_atomic_load(&p->p_vfs_iopolicy, relaxed) & P_VFS_IOPOLICY_IGNORE_CONTENT_PROTECTION);
+}
+
+/*
+ * The original kernel tests policy bit 0x8000, which has no definition and
+ * no setter in this kernel, so the policy is never in effect.
+ */
+boolean_t
+vfs_context_iopolicy_unassigned_0x8000(__unused vfs_context_t ctx)
+{
+	return false;
+}
+
+/*
  * vfs_context_proc
  *
  * Description:	Given a vfs_context_t, return the proc_t associated with it.

@@ -38,6 +38,7 @@ _ml_satisfies_x86_64_requirements
 _ml_set_reset_time
 _ml_thread_is64bit
 _proc_getcdhash
+_proc_getcdhash_with_length
 _sched_disable_acc_rail
 _sched_enable_acc_rail
 _sched_perfcontrol_abandon_preemption_disable_measurement

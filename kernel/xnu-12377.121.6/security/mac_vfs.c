@@ -1602,7 +1602,11 @@ mac_vnode_check_lookup_preflight(vfs_context_t ctx, struct vnode *dvp,
 		return 0;
 	}
 	VFS_KERNEL_DEBUG_START1(50, dvp);
-	MAC_CHECK(vnode_check_lookup_preflight, cred, dvp, mac_vnode_label(dvp), path, pathlen);
+	/*
+	 * Darwin 26 policies take a sixth lookup-state argument that the Darwin 26
+	 * lookup derives from its own nameidata; this lookup passes no state bits.
+	 */
+	MAC_CHECK(vnode_check_lookup_preflight, cred, dvp, mac_vnode_label(dvp), path, pathlen, 0);
 	VFS_KERNEL_DEBUG_END1(50, dvp);
 	return error;
 }

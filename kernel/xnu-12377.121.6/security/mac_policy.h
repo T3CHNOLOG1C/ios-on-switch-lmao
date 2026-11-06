@@ -4441,6 +4441,7 @@ typedef int mpo_vnode_check_listextattr_t(
  *  @param dlabel Policy label for dvp
  *  @param path Path being looked up
  *  @param pathlen Length of path in bytes
+ *  @param lookup_flags Lookup state from Darwin 26 callers; 0 from this kernel
  *
  *  Determine whether the subject identified by the credential can perform
  *  a lookup of the passed path relative to the passed directory vnode.
@@ -4458,7 +4459,8 @@ typedef int mpo_vnode_check_lookup_preflight_t(
 	struct vnode *dvp,
 	struct label *dlabel,
 	const char *path,
-	size_t pathlen
+	size_t pathlen,
+	uint32_t lookup_flags
 	);
 
 /**

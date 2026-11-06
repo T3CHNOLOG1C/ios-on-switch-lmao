@@ -712,6 +712,7 @@ _gOSKextUnresolved
 _img4_interface_register
 _image4_dlxk_link
 _image4_dlxk_get
+_image4_v2_interface_register
 _inet_ntop
 _inflate
 _inflateEnd

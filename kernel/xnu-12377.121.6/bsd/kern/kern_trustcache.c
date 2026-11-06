@@ -744,8 +744,11 @@ xnu_query_trust_cache(
 {
 	kern_return_t ret = KERN_NOT_FOUND;
 
-	/* Validate the query type preemptively */
-	if (query_type >= kTCQueryTypeTotal) {
+	/*
+	 * Validate the query type preemptively. Darwin 26 libraries (TrustCache
+	 * interface version 5) define further query types and validate them.
+	 */
+	if (query_type >= kTCQueryTypeTotal && amfi->TrustCache.version < 5) {
 		printf("unable to query trust cache: invalid query type: %u\n", query_type);
 		return KERN_INVALID_ARGUMENT;
 	}
@@ -1120,6 +1123,31 @@ query_trust_cache_for_rem(
 #endif
 
 	return ret;
+}
+
+kern_return_t
+query_trust_cache_with_length(
+	TCQueryType_t query_type,
+	const uint8_t *cdhash,
+	size_t cdhash_length,
+	TrustCacheQueryToken_t *query_token)
+{
+	if (cdhash != NULL && cdhash_length != kTCEntryHashSize) {
+		return KERN_NOT_FOUND;
+	}
+	return query_trust_cache(query_type, cdhash, query_token);
+}
+
+kern_return_t
+query_trust_cache_for_rem_with_length(
+	const uint8_t *cdhash,
+	size_t cdhash_length,
+	uint8_t *rem_perms)
+{
+	if (cdhash != NULL && cdhash_length != kTCEntryHashSize) {
+		return KERN_NOT_FOUND;
+	}
+	return query_trust_cache_for_rem(cdhash, rem_perms);
 }
 
 /*

@@ -180,6 +180,23 @@ query_trust_cache_for_rem(
 	const uint8_t cdhash[kTCEntryHashSize],
 	uint8_t *rem_perms);
 
+/**
+ * Darwin 26 variants that take the cdhash length. Trust cache entries hold
+ * kTCEntryHashSize bytes, so a cdhash of any other length is not found.
+ */
+kern_return_t
+query_trust_cache_with_length(
+	TCQueryType_t query_type,
+	const uint8_t *cdhash,
+	size_t cdhash_length,
+	TrustCacheQueryToken_t *query_token);
+
+kern_return_t
+query_trust_cache_for_rem_with_length(
+	const uint8_t *cdhash,
+	size_t cdhash_length,
+	uint8_t *rem_perms);
+
 __END_DECLS
 
 #endif /* KERNEL_PRIVATE */

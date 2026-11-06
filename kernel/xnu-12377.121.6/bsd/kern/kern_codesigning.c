@@ -945,6 +945,31 @@ unrestrict_local_signing_cdhash(
 #endif
 }
 
+void
+set_compilation_service_cdhash_ext(
+	const cs_cdhash_ext_t *cdhash)
+{
+	if (cdhash->length == CS_CDHASH_LEN) {
+		set_compilation_service_cdhash(cdhash->hash);
+	}
+}
+
+bool
+match_compilation_service_cdhash_ext(
+	const cs_cdhash_ext_t *cdhash)
+{
+	return cdhash->length == CS_CDHASH_LEN && match_compilation_service_cdhash(cdhash->hash);
+}
+
+void
+unrestrict_local_signing_cdhash_ext(
+	const cs_cdhash_ext_t *cdhash)
+{
+	if (cdhash->length == CS_CDHASH_LEN) {
+		unrestrict_local_signing_cdhash(cdhash->hash);
+	}
+}
+
 kern_return_t
 get_trust_level_kdp(
 	__unused pmap_t pmap,

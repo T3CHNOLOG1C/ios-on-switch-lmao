@@ -381,6 +381,28 @@ unrestrict_local_signing_cdhash(
 	const uint8_t *cdhash);
 
 /**
+ * Darwin 26 passes cdhashes as up to 64 bytes followed by their length. The
+ * variants below act on cdhashes of CS_CDHASH_LEN bytes, the only length this
+ * kernel produces, and ignore any other.
+ */
+typedef struct cs_cdhash_ext {
+	uint8_t hash[64];
+	size_t length;
+} cs_cdhash_ext_t;
+
+void
+set_compilation_service_cdhash_ext(
+	const cs_cdhash_ext_t *cdhash);
+
+bool
+match_compilation_service_cdhash_ext(
+	const cs_cdhash_ext_t *cdhash);
+
+void
+unrestrict_local_signing_cdhash_ext(
+	const cs_cdhash_ext_t *cdhash);
+
+/**
  * The kernel or the monitor environments allocate some data which is used by AppleImage4
  * for storing critical system information such as nonces. AppleImage4 uses this API to
  * get access to this data while abstracting the implementation underneath.

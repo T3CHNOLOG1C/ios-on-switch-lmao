@@ -104,6 +104,8 @@ int UBCINFOEXISTS(const struct vnode *);
 
 /* cluster IO routines */
 void    cluster_update_state(vnode_t, vm_object_offset_t, vm_object_offset_t, boolean_t);
+int     cluster_update_range(vnode_t, off_t, off_t, off_t,
+    int (*)(vnode_t, off_t, off_t, off_t, off_t, off_t, void *), void *);
 
 int     advisory_read(vnode_t, off_t, off_t, int);
 int     advisory_read_ext(vnode_t, off_t, off_t, int, int (*)(buf_t, void *), void *, int);

@@ -392,6 +392,7 @@ _csblob_register_profile_uuid
 _csblob_get_addr
 _csblob_get_base_offset
 _csblob_get_cdhash
+_csblob_get_cdhash_with_length
 _csblob_get_code_directory
 _csblob_get_entitlements
 _csblob_get_der_entitlements
@@ -786,6 +787,8 @@ _load_trust_cache
 _load_trust_cache_with_type
 _load_legacy_trust_cache
 _query_trust_cache
+_query_trust_cache_with_length
+_query_trust_cache_for_rem_with_length
 _query_trust_cache_for_rem
 _m_cat
 _m_free:_mbuf_free
@@ -896,10 +899,13 @@ _pktap_output_packet
 _code_signing_configuration
 _disable_code_signing_feature
 _set_compilation_service_cdhash
+_set_compilation_service_cdhash_ext
 _match_compilation_service_cdhash
+_match_compilation_service_cdhash_ext
 _set_local_signing_public_key
 _get_local_signing_public_key
 _unrestrict_local_signing_cdhash
+_unrestrict_local_signing_cdhash_ext
 _kernel_image4_monitor_trap
 _kernel_image4_storage_data
 _kernel_image4_set_nonce
@@ -1127,6 +1133,8 @@ _vfs_context_set_special_port
 _vfs_context_is_dataless_manipulator
 _vfs_context_skip_mtime_update
 _vfs_context_allow_entitled_reserve_access
+_vfs_context_ignores_content_protection
+_vfs_context_iopolicy_unassigned_0x8000
 _vfs_setdevvp
 _vfs_devvp
 _vfs_get_thread_fs_private
@@ -1255,6 +1263,7 @@ _vn_pathconf
 _vnode_cleardirty
 _vnode_clearfastdevicecandidate
 _vnode_getname_printable
+_cluster_update_range
 _vnode_getfromfd
 _vnode_parent
 _vnode_getparent_and_name

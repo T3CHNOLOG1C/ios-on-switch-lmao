@@ -1358,6 +1358,8 @@ boolean_t vfs_context_can_resolve_triggers(vfs_context_t);
 boolean_t vfs_context_can_break_leases(vfs_context_t);
 boolean_t vfs_context_skip_mtime_update(vfs_context_t ctx);
 boolean_t vfs_context_allow_entitled_reserve_access(vfs_context_t ctx);
+boolean_t vfs_context_ignores_content_protection(vfs_context_t ctx);
+boolean_t vfs_context_iopolicy_unassigned_0x8000(vfs_context_t ctx);
 void    vfs_setmntsystem(mount_t mp);
 void    vfs_setmntsystemdata(mount_t mp);
 void    vfs_setmntswap(mount_t mp);

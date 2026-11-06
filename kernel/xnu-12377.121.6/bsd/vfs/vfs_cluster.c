@@ -103,6 +103,7 @@
 #include <sys/sdt.h>
 
 #include <stdbool.h>
+#include <os/overflow.h>
 
 #include <vfs/vfs_disk_conditioner.h>
 
@@ -3892,6 +3893,52 @@ cluster_update_state(vnode_t vp, vm_object_offset_t s_offset, vm_object_offset_t
 
 	cluster_update_state_internal(vp, &cl, 0, TRUE, &first_pass, s_offset, (int)(e_offset - s_offset),
 	    vp->v_un.vu_ubcinfo->ui_size, NULL, NULL, vm_initiated);
+}
+
+static void
+cluster_update_state_internal(vnode_t vp, struct cl_extent *cl, int flags, boolean_t defer_writes,
+    boolean_t *first_pass, off_t write_off, int write_cnt, off_t newEOF,
+    int (*callback)(buf_t, void *), void *callback_arg, boolean_t vm_initiated);
+
+/*
+ * Darwin 26 KPI used by APFS: run a file system callback over the page range
+ * covering [offset, offset + length) in chunks of at most 64 MiB, and mark
+ * each chunk for deferred write-behind once the callback succeeds.
+ */
+#define CLUSTER_UPDATE_RANGE_CHUNK (64ULL * 1024 * 1024)
+
+int
+cluster_update_range(vnode_t vp, off_t offset, off_t length, off_t filesize,
+    int (*callback)(vnode_t, off_t, off_t, off_t, off_t, off_t, void *), void *callback_arg)
+{
+	off_t end, start, last, chunk;
+	struct cl_extent cl;
+	boolean_t first_pass;
+	int error;
+
+	if (callback == NULL || offset < 0 || length < 0 || filesize < 0 ||
+	    os_add_overflow(offset, length, &end) || (off_t)round_page_64(filesize) < end) {
+		return EINVAL;
+	}
+	if (length == 0) {
+		return 0;
+	}
+	start = trunc_page_64(offset);
+	last = round_page_64(end);
+	while (start < last) {
+		chunk = MIN(start + (off_t)CLUSTER_UPDATE_RANGE_CHUNK, last);
+		error = callback(vp, offset, length, filesize, start, chunk, callback_arg);
+		if (error) {
+			return error;
+		}
+		first_pass = TRUE;
+		cl.b_addr = (daddr64_t)(start / PAGE_SIZE_64);
+		cl.e_addr = (daddr64_t)(chunk / PAGE_SIZE_64);
+		cluster_update_state_internal(vp, &cl, 0, TRUE, &first_pass, start, (int)(chunk - start),
+		    vp->v_un.vu_ubcinfo->ui_size, NULL, NULL, FALSE);
+		start = chunk;
+	}
+	return 0;
 }
 
 

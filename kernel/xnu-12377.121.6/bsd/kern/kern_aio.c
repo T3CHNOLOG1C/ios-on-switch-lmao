@@ -830,6 +830,25 @@ aio_read(proc_t p, struct aio_read_args *uap, int *retval)
 	return error;
 }
 
+/*
+ * aio_readv and aio_writev take a vectored aiocb whose layout this kernel
+ * does not define. They fail with ENOTSUP instead of the SIGSYS of nosys,
+ * so callers can fall back to aio_read and aio_write.
+ */
+int
+aio_readv(__unused proc_t p, __unused struct aio_readv_args *uap, int *retval)
+{
+	*retval = -1;
+	return ENOTSUP;
+}
+
+int
+aio_writev(__unused proc_t p, __unused struct aio_writev_args *uap, int *retval)
+{
+	*retval = -1;
+	return ENOTSUP;
+}
+
 
 /*
  * aio_return - return the return status associated with the async IO

@@ -2525,8 +2525,43 @@ sys_dup2(proc_t p, struct dup2_args *uap, int32_t *retval)
 	return dup2(p, p_cred, uap->from, uap->to, retval);
 }
 
+static int dup2_flags(proc_t p, kauth_cred_t p_cred, int old, int new,
+    fileproc_flags_t fp_flags, int *retval);
+
+/*
+ * dup3(from, to, flags): dup2(2) that sets O_CLOEXEC and O_CLOFORK on the
+ * new descriptor, and refuses from == to.
+ */
+int
+sys_dup3(proc_t p, struct dup3_args *uap, int32_t *retval)
+{
+	kauth_cred_t p_cred = current_cached_proc_cred(p);
+	fileproc_flags_t fp_flags = 0;
+
+	if (uap->flags & ~(O_CLOEXEC | O_CLOFORK)) {
+		return EINVAL;
+	}
+	if (uap->from == uap->to) {
+		return EINVAL;
+	}
+	if (uap->flags & O_CLOEXEC) {
+		fp_flags |= FP_CLOEXEC;
+	}
+	if (uap->flags & O_CLOFORK) {
+		fp_flags |= FP_CLOFORK;
+	}
+	return dup2_flags(p, p_cred, uap->from, uap->to, fp_flags, retval);
+}
+
 int
 dup2(proc_t p, kauth_cred_t p_cred, int old, int new, int *retval)
+{
+	return dup2_flags(p, p_cred, old, new, 0, retval);
+}
+
+static int
+dup2_flags(proc_t p, kauth_cred_t p_cred, int old, int new,
+    fileproc_flags_t fp_flags, int *retval)
 {
 	struct filedesc *fdp = &p->p_fd;
 	struct fileproc *fp, *nfp;
@@ -2605,7 +2640,7 @@ closeit:
 		panic("dup2: unreserved fileflags with new %d", new);
 	}
 #endif
-	error = finishdup(p, p_cred, old, new, 0, retval);
+	error = finishdup(p, p_cred, old, new, fp_flags, retval);
 	fp_drop(p, old, fp, 1);
 	proc_fdunlock(p);
 

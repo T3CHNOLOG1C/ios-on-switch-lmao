@@ -115,6 +115,7 @@ vm_address_t    csblob_get_addr(struct cs_blob *);
 const char *    csblob_get_teamid(struct cs_blob *);
 const char *    csblob_get_identity(struct cs_blob *);
 const uint8_t * csblob_get_cdhash(struct cs_blob *);
+const uint8_t * csblob_get_cdhash_with_length(struct cs_blob *, uint8_t *);
 const CS_CodeDirectory* csblob_get_code_directory(struct cs_blob *csblob);
 int             csblob_get_platform_binary(struct cs_blob *);
 void            csblob_invalidate_flags(struct cs_blob *blob);

@@ -140,6 +140,7 @@ extern uint32_t proc_persona_id(proc_t);
 extern uint32_t proc_getuid(proc_t);
 extern uint32_t proc_getgid(proc_t);
 extern int proc_getcdhash(proc_t, unsigned char *);
+extern int proc_getcdhash_with_length(proc_t, unsigned char *, uint8_t *);
 
 /*!
  *  @function    proc_pidbackgrounded

@@ -653,6 +653,19 @@ csblob_get_cdhash(struct cs_blob *csblob)
 }
 
 /*
+ * Darwin 26 KPI: the cdhash and its length. Darwin 26 stores cdhashes of up
+ * to 64 bytes; every cdhash of this kernel is CS_CDHASH_LEN bytes.
+ */
+const uint8_t *
+csblob_get_cdhash_with_length(struct cs_blob *csblob, uint8_t *length)
+{
+	if (length) {
+		*length = CS_CDHASH_LEN;
+	}
+	return csblob_get_cdhash(csblob);
+}
+
+/*
  * Function: csblob_get_signer_type
  *
  * Description: This function returns the signer type

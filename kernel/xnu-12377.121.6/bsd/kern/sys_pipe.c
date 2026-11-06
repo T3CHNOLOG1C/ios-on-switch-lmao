@@ -388,12 +388,55 @@ expand_pipespace(struct pipe *p, int target_size)
  */
 
 /* ARGSUSED */
+static int pipe_common(proc_t p, int flags, int32_t *retval);
+
 int
 pipe(proc_t p, __unused struct pipe_args *uap, int32_t *retval)
 {
+	return pipe_common(p, 0, retval);
+}
+
+/*
+ * pipe2(int fildes[2], int flags): pipe(2) that stores both descriptors at
+ * fildes and applies O_CLOEXEC, O_CLOFORK and O_NONBLOCK to them.
+ */
+int
+pipe2(proc_t p, struct pipe2_args *uap, __unused int32_t *retval)
+{
+	int32_t fds[2];
+	int error;
+
+	if (uap->flags & ~(O_CLOEXEC | O_CLOFORK | O_NONBLOCK)) {
+		return EINVAL;
+	}
+	error = pipe_common(p, uap->flags, fds);
+	if (error) {
+		return error;
+	}
+	error = copyout(fds, uap->fildes, sizeof(fds));
+	if (error) {
+		kauth_cred_t p_cred = current_cached_proc_cred(p);
+
+		(void)close_nocancel(p, p_cred, fds[0]);
+		(void)close_nocancel(p, p_cred, fds[1]);
+	}
+	return error;
+}
+
+static int
+pipe_common(proc_t p, int flags, int32_t *retval)
+{
 	struct fileproc *rf, *wf;
 	struct pipe *rpipe, *wpipe;
+	fileproc_flags_t fp_flags = 0;
 	int error;
+
+	if (flags & O_CLOEXEC) {
+		fp_flags |= FP_CLOEXEC;
+	}
+	if (flags & O_CLOFORK) {
+		fp_flags |= FP_CLOFORK;
+	}
 
 	error = pipepair_alloc(&rpipe, &wpipe);
 	if (error) {
@@ -409,7 +452,8 @@ pipe(proc_t p, __unused struct pipe_args *uap, int32_t *retval)
 	if (error) {
 		goto freepipes;
 	}
-	rf->f_flag = FREAD;
+	rf->f_flag = FREAD | (flags & O_NONBLOCK ? FNONBLOCK : 0);
+	rf->fp_flags |= fp_flags;
 	rf->f_ops = &pipeops;
 	fp_set_data(rf, rpipe);
 
@@ -418,7 +462,8 @@ pipe(proc_t p, __unused struct pipe_args *uap, int32_t *retval)
 		fp_free(p, retval[0], rf);
 		goto freepipes;
 	}
-	wf->f_flag = FWRITE;
+	wf->f_flag = FWRITE | (flags & O_NONBLOCK ? FNONBLOCK : 0);
+	wf->fp_flags |= fp_flags;
 	wf->f_ops = &pipeops;
 	fp_set_data(wf, wpipe);
 

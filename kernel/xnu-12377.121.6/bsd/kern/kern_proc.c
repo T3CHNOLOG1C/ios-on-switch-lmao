@@ -2202,6 +2202,33 @@ proc_getcdhash(proc_t p, unsigned char *cdhash)
 	return vn_getcdhash(p->p_textvp, p->p_textoff, cdhash, NULL);
 }
 
+/*
+ * Darwin 26 KPI: copy the cdhash into a buffer whose capacity is *length and
+ * return its length there. Fails with ERANGE when the buffer is too small.
+ */
+int
+proc_getcdhash_with_length(proc_t p, unsigned char *cdhash, uint8_t *length)
+{
+	unsigned char hash[CS_CDHASH_LEN];
+	int error;
+
+	if (p == kernproc) {
+		return EINVAL;
+	}
+	error = vn_getcdhash(p->p_textvp, p->p_textoff, hash, NULL);
+	if (error) {
+		return error;
+	}
+	if (*length < CS_CDHASH_LEN) {
+		return ERANGE;
+	}
+	*length = CS_CDHASH_LEN;
+	if (cdhash) {
+		memcpy(cdhash, hash, CS_CDHASH_LEN);
+	}
+	return 0;
+}
+
 uint64_t
 proc_getcsflags(proc_t p)
 {
