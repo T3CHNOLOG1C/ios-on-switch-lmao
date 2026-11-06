@@ -65,8 +65,20 @@ enum Field : unsigned {
     FieldCount
 };
 
+// Surface work in the process: Metal textures made over IOSurfaces, kernel imports made and reused, m2v twins made (raw replays)
+struct Churn {
+    uint64_t surfaces = 0, imports = 0, hits = 0, twins = 0;
+};
+
+// A commit site's own per-thread state: its previous commit and the process's churn totals then
+struct Since {
+    uint64_t commit = 0;
+    Churn totals;
+};
+
 struct Stamps {
     uint64_t seq = 0;
+    Churn churn;  // since this thread's previous commit at the same site
     std::atomic<uint64_t> at[FieldCount] = {};
 
     void set(Field f, uint64_t ticks)
@@ -97,15 +109,18 @@ inline uint64_t ticksPerMs()
     return perMs;
 }
 
-// At the commit call's entry: the command buffer's sequence number and the stamps that start it. `lastCommit` is the caller's
-// own per-thread stamp: the raw facade's and the m2v frontend's commits interleave on one thread when a replay commits.
-inline void committed(Stamps &s, uint64_t &lastCommit)
+// At the commit call's entry: the command buffer's sequence number and the stamps that start it. `since` is the caller's own
+// per-thread state: the raw facade's and the m2v frontend's commits interleave on one thread when a replay commits.
+inline void committed(Stamps &s, Since &since, const Churn &totals)
 {
     static std::atomic<uint64_t> sequence{0};
     s.seq = sequence.fetch_add(1, std::memory_order_relaxed) + 1;
     const uint64_t t = s.mark(Commit);
-    s.set(Previous, lastCommit);
-    lastCommit = t;
+    s.set(Previous, since.commit);
+    since.commit = t;
+    s.churn = {totals.surfaces - since.totals.surfaces, totals.imports - since.totals.imports,
+               totals.hits - since.totals.hits, totals.twins - since.totals.twins};
+    since.totals = totals;
     trace(kCommit, kPoint, s.seq);
 }
 
@@ -143,10 +158,11 @@ inline void finished(Stamps &s)
     os_log(
         log,
         "SwitchFrameUser: %{public}s cb %llu commit %llu enc %llu %llu replay %llu %llu ret %llu owait %llu %llu fence "
-        "%llu done %llu back %llu slot %llu %llu twins %llu prev %llu dropped %u",
+        "%llu done %llu back %llu slot %llu %llu twins %llu prev %llu dropped %u surf %llu imp %llu hit %llu twin %llu",
         getprogname(), (unsigned long long)s.seq, g(Commit), g(EncodeStart), g(EncodeEnd), g(ReplayStart), g(ReplayEnd),
         g(Returned), g(OrderWaitStart), g(OrderWaitEnd), g(Fence), g(Done), g(Back), g(SlotStart), g(SlotEnd), g(Twins),
-        g(Previous), dropped.exchange(0, std::memory_order_relaxed));
+        g(Previous), dropped.exchange(0, std::memory_order_relaxed), (unsigned long long)s.churn.surfaces,
+        (unsigned long long)s.churn.imports, (unsigned long long)s.churn.hits, (unsigned long long)s.churn.twins);
 }
 
 }  // namespace switch_frame

@@ -41,6 +41,11 @@
 extern "C" id native_bridge_metal_texture_in_place(id buffer, id descriptor, NSUInteger offset, NSUInteger bytesPerRow)
     __attribute__((weak_import));
 
+#if SWITCH_FRAME_TIMELINE
+static std::atomic<uint64_t> gSurfaceTextures{0},
+    gTwinsMade{0};  // the frame timeline's churn counts (SwitchFrameTimeline.h)
+#endif
+
 static os_log_t rawLog()
 {
     static os_log_t l = os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "raw");
@@ -2942,8 +2947,12 @@ static bool heldBehindEvent();
         _status = MTLCommandBufferStatusCommitted;
     }
 #if SWITCH_FRAME_TIMELINE
-    static thread_local uint64_t lastCommit = 0;
-    switch_frame::committed(_frame, lastCommit);
+    static thread_local switch_frame::Since since;
+    const raw::Device::Stats &k = gRM->raw->stats;
+    switch_frame::committed(_frame, since,
+                            {gSurfaceTextures.load(std::memory_order_relaxed),
+                             k.importsMade.load(std::memory_order_relaxed),
+                             k.importHits.load(std::memory_order_relaxed), gTwinsMade.load(std::memory_order_relaxed)});
 #endif
     if (_active)
         [(RMEncoder *)_active endEncoding];
@@ -3126,6 +3135,7 @@ static inline id twinOf(id object)
         const uint64_t began = mach_absolute_time();
         id twin = [(RMObject *)object rmTwin];
         tTwinTicks += mach_absolute_time() - began;
+        gTwinsMade.fetch_add(1, std::memory_order_relaxed);
         return twin;
     }
 #endif
@@ -4701,6 +4711,9 @@ static const char *ycbcr420Why(MTLTextureDescriptor *d, IOSurfaceRef s, NSUInteg
 {
     if (!s)
         return nil;
+#if SWITCH_FRAME_TIMELINE
+    gSurfaceTextures.fetch_add(1, std::memory_order_relaxed);
+#endif
     RMTexture *t = [RMTexture new];
     t->_device = self;
     t->_descriptor = [d copy];

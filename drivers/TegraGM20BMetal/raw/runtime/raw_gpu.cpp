@@ -613,6 +613,7 @@ Import *Device::importSurface(uint64_t id, void *base, uint64_t bytes, const voi
         auto it = surfaces_.find(key);
         if (it != surfaces_.end()) {
             it->second->refs++;
+            stats.importHits++;
             return it->second;
         }
     }
@@ -630,6 +631,7 @@ Import *Device::importSurface(uint64_t id, void *base, uint64_t bytes, const voi
     if (id)
         surfaces_[key] = i;
     stats.imports++;
+    stats.importsMade++;
     stats.importBytes += i->bo.bytes;
     return i;
 }

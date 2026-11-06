@@ -513,6 +513,8 @@ public:
     struct Stats {
         std::atomic<uint64_t> commits{0}, pushBytes{0}, uploadBytes{0}, ringWaits{0}, imports{0}, importBytes{0},
             poolBytes{0}, poolChunks{0}, cleanBytes{0}, poolStalls{0};
+        // surface imports made (a kernel import each) and found live, since open
+        std::atomic<uint64_t> importsMade{0}, importHits{0};
         // diagnostics: color targets the raw path rendered whose address or pitch is not a multiple of 128 (NVK renders
         // those through a tiled shadow: nvk_cmd_draw.c nvk_image_plane_aligned_for_linear_attachment), and the last one's pitch
         std::atomic<uint64_t> rtUnaligned{0};

@@ -3786,8 +3786,11 @@ extern "C" size_t native_bridge_metal_commit_origin(char *out, size_t size)
 - (void)commit
 {
 #if SWITCH_FRAME_TIMELINE
-    static thread_local uint64_t lastCommit = 0;
-    switch_frame::committed(frame, lastCommit);
+    static thread_local switch_frame::Since since;
+    switch_frame::committed(frame, since,
+                            {gTimeSurfaceTexture.count.load(std::memory_order_relaxed),
+                             gTimeSurfaceImport.count.load(std::memory_order_relaxed),
+                             gSurfaceImportHits.load(std::memory_order_relaxed), 0});
     switch_frame::trace(switch_frame::kM2vCommit, switch_frame::kPoint, frame.seq);
 #endif
     const uint64_t began = apiTiming() ? mach_absolute_time() : 0;
