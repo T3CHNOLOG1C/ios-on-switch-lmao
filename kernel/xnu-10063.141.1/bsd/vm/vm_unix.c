@@ -2525,25 +2525,27 @@ switch_settings_icons_pager(vm_object_t file_object, uint64_t file_offset, uint6
 }
 
 /*
- * Switch keyboard: the software keyboard as wide as the screen from its first layout.
+ * Switch keyboard: the standard iPad keyboard, as wide as the screen from its first layout.
  *
  * MobileGestalt's ArtworkDeviceSubType is 2732 (the ADT's iPad7,1 artwork, tools/package/package_raw_boot.py), so
- * TextInput's IsLargeIPad() is true, the KeyboardUseProLayout preference defaults to YES, and UIKit gives the keyboard
- * the 12.9-inch Pro class (keyboard idiom 23). For that class _UIKeyboardGetDerivedKeyboardForSpecificOrientation
- * (UIKitCore, cache text in dyld_shared_cache_arm64.03 of 21H461) makes no derived keyboard: a real 12.9-inch screen
- * is 1366 points wide in landscape, the width of a layout of its own. This one is not a layout width, so the layout
- * picked by width is narrower than the screen. Its keys are drawn stretched to the screen's width, but the keyboard
- * view keeps the layout's width (the 1024-point Wildcat-Landscape on a 1280-point screen: UIKeyboardAutomatic frame
- * (128 0; 1024 370)), and the input window places that narrower view centred in some layout passes and at x = 0 in
- * others: a text field's first keyboard shows its keys shifted right, the right-hand ones off the screen, until a
- * later pass (a keypress) moves it.
+ * TextInput's IsLargeIPad() is true and com.apple.keyboard.preferences' KeyboardUseProLayout defaults to YES, which
+ * gives every screen the 12.9-inch Pro class (keyboard idiom 23: its extra keys, shrunk to the screen). kern_exec.c's
+ * first-boot state makes it NO, so _UIKeyboardComputeKeyboardIdiomFromScreenTraits takes the class from the screen's
+ * reference bounds as on any other iPad: 576x1024 and 450x800 points are smaller than every size in its table, the
+ * standard iPad class (idiom 1); 720x1280 is the 11-inch class (24), whose keyboard UIKit derives to the screen.
+ * For idiom 1 _UIKeyboardGetDerivedKeyboardForSpecificOrientation (UIKitCore, cache text in
+ * dyld_shared_cache_arm64.03 of 21H461) makes no derived keyboard: a real one is 768x1024, a layout's width in both
+ * orientations. Here only 1.25's landscape is (1024); otherwise the layout picked by width is not the screen's, and
+ * the keyboard view keeps the layout's width while the input window places it centred in some layout passes and at
+ * x = 0 in others (as the Pro class did at 1: UIKeyboardAutomatic frame (128 0; 1024 370) on a 1280-point screen,
+ * its keys shifted right until a keypress moved it).
  * Every other iPad whose screen is not a layout width gets a derived keyboard. For idiom 26 (screens larger than
- * 768x1024, the 10.2-inch iPad) that branch derives Wildcat-Landscape with keyboardSize (screen width, -1): the
- * keyboard view, its keyplane (sizeForKeyplane:) and the drawn keys all take the screen's width; the height and the
- * layout stay the same. Here the Pro class takes that branch for its non-emoji keyboards too: the emoji test's
- * cbz w0 (no "emoji" in the input mode) goes to the idiom-26 branch (+0x5c) instead of "no derived keyboard" (+0x54).
- * Same pager and checks as the settings icons, on one 4 KB chunk: the instruction and the two after it must read as
- * shipped.
+ * 768x1024, the 10.2-inch iPad) that branch derives Wildcat-Landscape or Wildcat-Portrait with keyboardSize (screen
+ * width, -1): the keyboard view, its keyplane (sizeForKeyplane:) and the drawn keys all take the screen's width; the
+ * height and the layout stay the same. Here idiom 1 takes that branch too: the class dispatch's b.ne (not idiom 25:
+ * no derived keyboard, +0x264) goes to the idiom-26 branch (+0x26c). Idiom 1 is the only class that takes it: 23 and
+ * 26 branch off before it, 25 falls through it, and 24 is derived before the dispatch. Same pager and checks as the
+ * settings icons, on one 4 KB chunk: the instruction and the two after it must read as shipped.
  */
 static const uint8_t switch_kb_uuid[16] = {           /* dyld_shared_cache_arm64.03 of 21H461 */
 	0x1b, 0x9c, 0xcf, 0x0c, 0x7b, 0x68, 0x39, 0x63, 0xaf, 0x64, 0x48, 0x4b, 0xcf, 0xda, 0xc1, 0x4c,
@@ -2552,7 +2554,7 @@ static const uint8_t switch_kb_uuid[16] = {           /* dyld_shared_cache_arm64
 #define SWITCH_KB_PAGES_FILEOFF   0x3500000ULL
 #define SWITCH_KB_PAGES_SIZE      0x4000ULL
 #define SWITCH_KB_CHUNK_OFFSET    0x3000ULL           /* the 4 KB chunk at 0x18a2af000 */
-#define SWITCH_KB_INSN_FILEOFF    0x3503ae4ULL        /* 0x18a2afae4, the function + 0xd14 */
+#define SWITCH_KB_INSN_FILEOFF    0x35038d4ULL        /* 0x18a2af8d4, the function + 0xb04 */
 
 static int switch_kb_cookie;                          /* crypt_ops: identifies this pager's crypt_info */
 static uint32_t switch_kb_logged;
@@ -2560,9 +2562,9 @@ static uint32_t switch_kb_logged;
 static int
 switch_keyboard_page(const void *src, void *dst, unsigned long long src_offset, __unused void *ops)
 {
-	/* cbz w0, +0x54 (no derived keyboard); adrp x8, UIKBDerivedKeyboard@PAGE; ldr x0, [x8, #0x7b8] */
-	static const uint8_t stock[12] = { 0xa0, 0x02, 0x00, 0x34, 0xa8, 0x0f, 0x33, 0x90, 0x00, 0xdd, 0x43, 0xf9 };
-	static const uint8_t derived[4] = { 0xe0, 0x02, 0x00, 0x34 };   /* cbz w0, +0x5c (the idiom-26 branch) */
+	/* b.ne +0x264 (no derived keyboard); cmp x27, #0x2; cset w19, lo */
+	static const uint8_t stock[12] = { 0x21, 0x13, 0x00, 0x54, 0x7f, 0x0b, 0x00, 0xf1, 0xf3, 0x27, 0x9f, 0x1a };
+	static const uint8_t derived[4] = { 0x61, 0x13, 0x00, 0x54 };   /* b.ne +0x26c (the idiom-26 branch) */
 	uint8_t *out = dst;
 
 	bcopy(src, dst, SWITCH_HG_CHUNK);
@@ -2579,7 +2581,7 @@ switch_keyboard_page(const void *src, void *dst, unsigned long long src_offset, 
 	}
 	memcpy(out + at, derived, sizeof(derived));
 	if (!os_atomic_xchg(&switch_kb_logged, 1, relaxed)) {
-		printf("SwitchKeyboard: Pro-class keyboard derived to the screen width\n");
+		printf("SwitchKeyboard: standard iPad keyboard derived to the screen width\n");
 	}
 	return 0;
 }

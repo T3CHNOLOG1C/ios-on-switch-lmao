@@ -9208,6 +9208,10 @@ native_switch_setup_state(proc_t p, user_addr_t scratch, mount_t data_mount)
 		{"com.apple.springboard", SWITCH_PLIST(SWITCH_SPRINGBOARD "<key>SBHomeLargeIcons</key><true/>"), kSetupManaged,
 		    kSetupUnitScale},
 		{"com.apple.springboard", SWITCH_PLIST(SWITCH_SPRINGBOARD), kSetupManaged, kSetupFractionalScale},
+		/* The keyboard class from the screen's size, not the 12.9-inch artwork's: TextInput defaults this to
+		 * IsLargeIPad() (ArtworkDeviceSubType 2732), which forces the Pro class on every screen (vm_unix.c's Switch
+		 * keyboard). Managed: the user's other keyboard settings in the domain stay theirs. */
+		{"com.apple.keyboard.preferences", SWITCH_PLIST("<key>KeyboardUseProLayout</key><false/>"), kSetupManaged},
 		{"com.apple.UIKit", SWITCH_PLIST("<key>UIPreferredContentSizeCategoryName</key>"
 		    "<string>UICTContentSizeCategoryXXL</string>"), kSetupOnce, kSetupUnitScale}, /* the user's Text Size then sticks */
 		/* Seeded once: DataMigrator keeps its results and its hang-reboot count in this domain. */
