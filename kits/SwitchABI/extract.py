@@ -9,9 +9,12 @@ The kind is the one whose pinned kernelcache sha256 (ipsw/pins.bzl) the kernelca
 Read from the kernelcache: the instance size, gMetaClass and the vtable (the metaclass initialisers), the slot count,
 each interface method's slot (its PAC discriminator, from Apple's mangled root name), every other slot the class adds
 (opaque<N>, or a refusal if it is pure: a new contract), the C2 constructor and D2 destructor (the functions storing
-the vtable), and every function a hint locates by a string it references. Hints are what no reading can name: a
-renamed method's slot, the string that finds a function, a field's offset or a constant with the instruction that shows
-it (checked here). The same kernelcache always gives the same JSON; --check compares instead of writing.
+the vtable), and every function a hint locates by a string it references or by its first words at an address. Hints
+are what no reading can name: a renamed method's slot, the string that finds a function, a field's offset or a
+constant with the instruction that shows it (checked here). A "guard" class's subclass keeps its superclass's slots
+and traps the added ones, so neither its overrides of inherited slots nor its pure ones need declaring, and only the
+added slots the table inherits (hints.inherit) get an address. The same kernelcache always gives the same JSON;
+--check compares instead of writing.
 
 A kernelcache that is not a fileset (iOS 17's arm64 prelinked kernel, unstripped of nothing but without PAC) cannot
 name slots; its tables are checked instead: the vtable has the table's slot count, every bound slot holds the
@@ -63,6 +66,7 @@ def layout(fs, interface, table, pure):
     for i, _, pac in slots:
         by_pac[pac].append(i)
     hints = {int(k): v for k, v in table.get('hints', {}).get('layout', {}).items()}
+    guard = interface.get('guard')
     named, found = {}, {}
     for key, method in interface['methods'].items():
         hit = [i for i in by_pac.get(kernelcache.discriminator(pac_root(method)), []) if i not in hints]
@@ -76,7 +80,7 @@ def layout(fs, interface, table, pure):
     for i, target, _ in slots:
         own = parent.get(i) != target
         key = named.get(i)
-        if i < first and own and key is None and i not in STRUCTOR_SLOTS:
+        if i < first and own and key is None and i not in STRUCTOR_SLOTS and not guard:
             errors.append(
                 'slot {} overrides {} at {:#x}; the interface must declare it'.format(
                     i, interface['superclass'], target
@@ -85,10 +89,11 @@ def layout(fs, interface, table, pure):
         if i < first and key is not None and not own:
             del named[i]
             found.pop(key)
-        if i >= first and target == pure and key is None:
+        if i >= first and target == pure and key is None and not guard:
             errors.append('slot {} is a pure virtual the interface does not declare'.format(i))
         if key is not None and i < len(slots) and (target == pure) != interface['methods'][key]['decl'].endswith('= 0'):
             errors.append('{} (slot {}) is {}pure in the kernelcache'.format(key, i, '' if target == pure else 'not '))
+    errors += uninheritable(table, slots, first, named, pure)
     missing = sorted(set(interface['methods']) - set(named.values()))
     errors += [
         '{}: no slot (no PAC match and no hint)'.format(k)
@@ -96,6 +101,17 @@ def layout(fs, interface, table, pure):
         if interface['methods'][k]['decl'].endswith('= 0') or 'override' not in interface['methods'][k]['decl']
     ]
     return first, slots, named, found, errors
+
+
+def uninheritable(table, slots, first, named, pure):
+    """Refuse each hints.inherit slot that is not an added, unnamed slot with code of its own."""
+    targets = {i: t for i, t, _ in slots}
+    inherit = sorted(int(k) for k in table.get('hints', {}).get('inherit', {}))
+    return [
+        'slot {} cannot be inherited: not an added slot with code of its own'.format(i)
+        for i in inherit
+        if i < first or i in named or targets.get(i, pure) == pure
+    ]
 
 
 def structors(fs, cls):
@@ -235,6 +251,8 @@ def extract(fs, interface, table, kind, pure):
     if interface.get('metaclass_only'):
         addresses, found = fileset_functions(fs, info['bundle'], table)
         addresses['gMetaClass'], found['gMetaClass'] = hex(info['meta']), 'metaclass initialiser'
+        offsets, field_found = fields(fs, table)
+        found.update(field_found)
         return dump(
             {
                 'class': cls,
@@ -244,7 +262,7 @@ def extract(fs, interface, table, kind, pure):
                 'slots': len(fs.slots(cls)),
                 'slide': table['slide'],
                 'layout': {},
-                'fields': {},
+                'fields': offsets,
                 'addresses': dict(sorted(addresses.items())),
                 'found': dict(sorted(found.items())),
                 'hints': table.get('hints', {}),
@@ -259,8 +277,9 @@ def extract(fs, interface, table, kind, pure):
     for slot, key in named.items():
         if targets[slot] != pure:
             addresses[key] = targets[slot]
+    inherit = {int(k) for k in table.get('hints', {}).get('inherit', {})}
     for i, target, _ in slots:
-        if i >= first and i not in named:
+        if i >= first and i not in named and (not interface.get('guard') or i in inherit):
             addresses['opaque{}'.format(i)] = target
     for key, address in structors(fs, cls).items():
         addresses[key] = address

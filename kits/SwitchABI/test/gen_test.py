@@ -127,6 +127,77 @@ class HeaderTest(unittest.TestCase):
             gen.header(INTERFACE, table, 'kinds/TEST/Base.json')
 
 
+GUARDED = dict(INTERFACE, guard=True, fields={}, methods={'kick': {'decl': 'virtual void kick() = 0'}})
+GUARDED_TABLE = dict(TABLE, layout={'169': 'kick'}, fields={}, hints={'inherit': {'170': 'the original runs it'}})
+
+
+class GuardTest(unittest.TestCase):
+    def test_unnamed_slots_are_pure_and_inherited_ones_bound(self):
+        text = gen.header(GUARDED, GUARDED_TABLE, 'kinds/TEST/Base.json')
+        body = text[text.index('public:') : text.index('};')]
+        self.assertIn('    virtual void opaque168() = 0;', body)
+        self.assertIn('    SWITCH_ABI_OPAQUE(170);', body)
+        self.assertNotIn('opaque169', body)
+
+    def test_the_guard_macro_traps_each_pure_slot(self):
+        text = gen.header(GUARDED, dict(GUARDED_TABLE, slots=172), 'kinds/TEST/Base.json')
+        start = text.index('#define SWITCH_ABI_GUARDS(trap)')
+        macro = text[start : text.index('\n', text.index('trap(171)'))]
+        self.assertEqual(
+            macro.splitlines()[1:],
+            ['    void opaque168() override { trap(168); } \\', '    void opaque171() override { trap(171); }'],
+        )
+
+    def test_inheriting_a_named_slot_is_refused(self):
+        table = dict(GUARDED_TABLE, hints={'inherit': {'169': 'named'}})
+        with self.assertRaises(SystemExit):
+            gen.header(GUARDED, table, 'kinds/TEST/Base.json')
+
+    def test_no_guard_no_macro(self):
+        self.assertNotIn('SWITCH_ABI_GUARDS', gen.header(INTERFACE, TABLE, 'kinds/TEST/Base.json'))
+
+
+NUB = {
+    'class': 'Nub',
+    'superclass': 'IOService',
+    'structors': 'default',
+    'metaclass_only': True,
+    'includes': ['IOKit/IOService.h'],
+    'methods': {},
+    'fields': {'owner': {'type': 'IOService *', 'access': 'get', 'public': True}},
+    'functions': {'switch_nub_read': {'decl': 'uint32_t switch_nub_read(Nub *nub)'}},
+}
+NUB_TABLE = {
+    'class': 'Nub',
+    'kind': 'TEST',
+    'size': '0x740',
+    'first_slot': 168,
+    'slots': 168,
+    'slide': '-0x1000',
+    'layout': {},
+    'fields': {'owner': '0x88'},
+    'addresses': {'gMetaClass': '0xfffffff007000000', 'switch_nub_read': '0xfffffff006000000'},
+}
+
+
+class MetaclassOnlyTest(unittest.TestCase):
+    def test_public_fields_and_functions_without_slots(self):
+        text = gen.header(NUB, NUB_TABLE, 'kinds/TEST/Nub.json')
+        public = text[text.index('public:') : text.index('};')]
+        self.assertIn('IOService *owner() const { return switch_abi_load<IOService *>(this, 0x88); }', public)
+        self.assertNotIn('protected:', text)
+        self.assertNotIn('SWITCH_ABI_OPAQUE(', public)
+        self.assertIn('uint32_t switch_nub_read(Nub *nub);', text[text.index('extern "C"') :])
+
+    def test_its_functions_and_metaclass_are_bound(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            obj = Path(tmp) / 'a.o'
+            obj.write_bytes(macho_object(['_switch_nub_read']))
+            text = gen.bindings([(NUB, NUB_TABLE, 'kinds/TEST/Nub.json')], [str(obj)])
+        self.assertIn('.set _switch_nub_read, 0xfffffff005fff000', text)
+        self.assertIn('.set __ZN3Nub10gMetaClassE, 0xfffffff006fff000', text)
+
+
 class BindingsTest(unittest.TestCase):
     def bind(self, undefined):
         with tempfile.TemporaryDirectory() as tmp:

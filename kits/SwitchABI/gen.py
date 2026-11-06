@@ -7,9 +7,11 @@ The header declares the original class as the kind lays it out: its instance siz
 no driver names is opaque<N>), field accessors at the kind's offsets, the kind's constants, the members drivers call
 and SWITCH_ABI_KIND (the kind's name, for messages), after the interface's declarations (the types its methods name
 that no included header declares). A function without a "decl" is only bound: a C++ member the driver's own header
-declares. The bindings bind every symbol of the tables' addresses (and refuse an original import they lack) at its
-kernelcache address plus the kind's prelink slide; an entry the table marks "unported" becomes a function that panics
-naming it.
+declares. A "guard" class's unnamed slots are pure, except the ones its table inherits (hints.inherit), and
+SWITCH_ABI_GUARDS(trap) overrides each pure one in the subclass with trap(<slot>): no original code runs in a slot the
+table did not choose. The bindings bind every symbol of the tables' addresses (and refuse an original import they
+lack) at its kernelcache address plus the kind's prelink slide; an entry the table marks "unported" becomes a
+function that panics naming it.
 """
 
 import argparse
@@ -88,17 +90,46 @@ def slot_declarations(interface, table):
     for slot, key in sorted(named.items()):
         if slot < first:
             lines += doc(methods[key], '    ') + declaration(methods[key]['decl'], '    ')
+    guarded = guarded_slots(interface, table)
     for slot in range(first, count):
         if slot in named:
             lines += doc(methods[named[slot]], '    ') + declaration(methods[named[slot]]['decl'], '    ')
+        elif slot in guarded:
+            lines.append('    virtual void opaque{}() = 0;'.format(slot))
         else:
             lines.append('    SWITCH_ABI_OPAQUE({});'.format(slot))
     return lines
 
 
-def accessors(interface, table):
+def guarded_slots(interface, table):
+    """Return a guard class's added slots the table neither names nor inherits: pure, and trapped by the subclass."""
+    if not interface.get('guard'):
+        return []
+    first, count = table['first_slot'], table['slots']
+    named = {int(slot) for slot in table['layout']}
+    inherit = {int(slot) for slot in table.get('hints', {}).get('inherit', {})}
+    stray = sorted(s for s in inherit if s in named or not first <= s < count)
+    if stray:
+        raise SystemExit(
+            '{}: inherited slots that are named or not among the added ones: {}'.format(table['class'], stray)
+        )
+    return [s for s in range(first, count) if s not in named and s not in inherit]
+
+
+def guards(interface, table):
+    """Return SWITCH_ABI_GUARDS(trap): the subclass's override of every guarded slot, calling trap(<slot>)."""
+    slots = guarded_slots(interface, table)
+    if not slots:
+        return []
+    body = ['    void opaque{0}() override {{ trap({0}); }}'.format(s) for s in slots]
+    return ['#define SWITCH_ABI_GUARDS(trap) \\'] + [line + ' \\' for line in body[:-1]] + body[-1:]
+
+
+def accessors(interface, table, public):
     lines = []
     for key, field in interface.get('fields', {}).items():
+        if bool(field.get('public')) != public:
+            continue
         offset = table['fields'].get(key)
         if offset is None:
             raise SystemExit('{}: no offset for field {}'.format(table['class'], key))
@@ -147,13 +178,22 @@ def header(interface, table, table_name):
     )
     out += ['', 'class {} : public {} {{'.format(cls, sup), '    {}({})'.format(structors, cls)]
     out.append('    unsigned char switchAbiStorage_[{:#x} - sizeof({})];'.format(size, sup))
-    fields = accessors(interface, table)
+    fields = accessors(interface, table, public=False)
     if fields:
         out += ['', 'protected:'] + fields
-    out += ['', 'public:', *constant_declarations(interface, table), *slot_declarations(interface, table)]
+    out += [
+        '',
+        'public:',
+        *accessors(interface, table, public=True),
+        *constant_declarations(interface, table),
+        *slot_declarations(interface, table),
+    ]
     out += ['    {};'.format(decl) for decl in interface.get('members', [])]
     out += ['};', '#undef SWITCH_ABI_OPAQUE']
     out.append('static_assert(sizeof({}) == {:#x}, "{} as {} lays it out");'.format(cls, size, cls, table['kind']))
+    trap = guards(interface, table)
+    if trap:
+        out += ['', *trap]
     functions = [f for f in interface.get('functions', {}).values() if 'decl' in f]
     if functions:
         out += ['', 'extern "C" {']
