@@ -2,6 +2,7 @@
   "type": "auto",
   "mode": "fix",
   "lint": "warn",
-  "warningsList": ["all"],
+  "//": "buildifier's default warnings (all but unsorted-dict-items: dict order feeds actions and generated files here, as list order does) minus the per-argument and return-value docstring sections, which would restate names (AGENTS.md); a docstring's summary line is still checked.",
+  "warningsList": ["-function-docstring-args", "-function-docstring-return"],
   "addTables": ".buildifier-tables.json"
 }
