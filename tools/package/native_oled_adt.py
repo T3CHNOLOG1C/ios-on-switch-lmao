@@ -13,6 +13,7 @@ import os
 import struct
 import zlib
 from collections.abc import Iterable, Sequence
+from typing import NamedTuple
 
 MANAGED_BASE = 0xB2004000
 MANAGED_USER_BASE = 0xB207C000
@@ -71,20 +72,16 @@ def _empty_nvram_proxy() -> list[tuple[str, bytes]]:
     ]
 
 
-def generate_adt(
-    seed: bytes | None = None,
-    *,
-    userspace_fixture: bool = False,
-    storage_probe: bool = False,
-    root_boot: bool = False,
-    full_ram: bool = False,
-    native_smp: bool = False,
-) -> bytes:
-    """Serialize only the audited native resources; deterministic seed for tests."""
-    if seed is None:
-        seed = os.urandom(64)
-    if not isinstance(seed, bytes) or len(seed) != 64:
-        raise ValueError('random seed must be exactly 64 bytes')
+class Profile(NamedTuple):
+    userspace_fixture: bool = False
+    storage_probe: bool = False
+    root_boot: bool = False
+    full_ram: bool = False
+    native_smp: bool = False
+
+
+def _check_profile(profile: Profile) -> None:
+    userspace_fixture, storage_probe, root_boot, full_ram, native_smp = profile
     if type(userspace_fixture) is not bool:
         raise ValueError('userspace_fixture must be a boolean')
     if type(root_boot) is not bool or (root_boot and userspace_fixture):
@@ -99,9 +96,10 @@ def generate_adt(
         raise ValueError('full_ram requires native root profile')
     if type(native_smp) is not bool or (native_smp and not (root_boot and full_ram)):
         raise ValueError('native_smp requires the explicit full-RAM native root profile')
-    # Sidecar slots stay empty until native_xnu_layout checks and places their
-    # exact bytes inside the managed kernel window. The root profile uses a
-    # disposable Data seed; the userspace fixture profile uses a RAM root.
+
+
+def _bootstrap(profile: Profile) -> list[tuple[str, bytes]]:
+    userspace_fixture, storage_probe, root_boot, full_ram, _ = profile
     bootstrap = (
         [
             ('osenvironment', b'main\0' if root_boot else b'ramdisk\0'),
@@ -117,13 +115,57 @@ def generate_adt(
         bootstrap.append(('switch-sd-reference', struct.pack('<QQ', 0xA001F000, 0x1000)))
     if full_ram:
         bootstrap.append(('switch-ram-ledger', bytes(16 + 32 + 96 * 16)))
-    memory_map = (
-        [('NativeDataSeed', bytes(16)), ('TrustCache', bytes(16))]
-        if root_boot
-        else [('RAMDisk', bytes(16)), ('TrustCache', bytes(16))]
-        if userspace_fixture
-        else []
+    return bootstrap
+
+
+def _memory_map(profile: Profile) -> list[tuple[str, bytes]]:
+    # Sidecar slots stay empty until native_xnu_layout checks and places their
+    # exact bytes inside the managed kernel window. The root profile uses a
+    # disposable Data seed; the userspace fixture profile uses a RAM root.
+    if profile.root_boot:
+        return [('NativeDataSeed', bytes(16)), ('TrustCache', bytes(16))]
+    if profile.userspace_fixture:
+        return [('RAMDisk', bytes(16)), ('TrustCache', bytes(16))]
+    return []
+
+
+def _cpus(native_smp: bool) -> bytes:
+    return _node(
+        'cpus',
+        children=[
+            _node(
+                f'cpu{core}',
+                [
+                    ('state', b'stopped\0' if core else b'running\0'),
+                    ('reg', struct.pack('<I', core)),  # MPIDR affinity, not its RES1 bit.
+                    ('device_type', b'cpu\0'),
+                    ('compatible', b'arm,cortex-a57\0'),
+                    ('timebase-frequency', struct.pack('<I', TIMEBASE_HZ)),
+                    *(
+                        [
+                            ('cluster-type', struct.pack('<I', 0)),
+                            ('die-cluster-id', struct.pack('<I', 0)),
+                            ('cluster-core-id', struct.pack('<I', core)),
+                            ('l2-cache-id', struct.pack('<I', 0)),
+                        ]
+                        if native_smp
+                        else []
+                    ),
+                ],
+            )
+            for core in range(4 if native_smp else 1)
+        ],
     )
+
+
+def generate_adt(seed: bytes | None, profile: Profile) -> bytes:
+    """Serialize only the audited native resources; deterministic seed for tests."""
+    if seed is None:
+        seed = os.urandom(64)
+    if not isinstance(seed, bytes) or len(seed) != 64:
+        raise ValueError('random seed must be exactly 64 bytes')
+    _check_profile(profile)
+    userspace_fixture, _, root_boot, full_ram, native_smp = profile
     return _node(
         'device-tree',
         [
@@ -142,40 +184,15 @@ def generate_adt(
                     # Host layout request, not a claim that this window is owned.
                     ('darwinboot-memory-size', struct.pack('<Q', (4 << 30) if full_ram else MANAGED_SIZE)),
                     *_empty_nvram_proxy(),
-                    *bootstrap,
+                    *_bootstrap(profile),
                 ],
                 [
                     # arm_vm_init asserts that this node exists; TrustCache is optional.
-                    _node('memory-map', memory_map),
+                    _node('memory-map', _memory_map(profile)),
                     *([_node('manifest-properties')] if userspace_fixture or root_boot else []),
                 ],
             ),
-            _node(
-                'cpus',
-                children=[
-                    _node(
-                        f'cpu{core}',
-                        [
-                            ('state', b'stopped\0' if core else b'running\0'),
-                            ('reg', struct.pack('<I', core)),  # MPIDR affinity, not its RES1 bit.
-                            ('device_type', b'cpu\0'),
-                            ('compatible', b'arm,cortex-a57\0'),
-                            ('timebase-frequency', struct.pack('<I', TIMEBASE_HZ)),
-                            *(
-                                [
-                                    ('cluster-type', struct.pack('<I', 0)),
-                                    ('die-cluster-id', struct.pack('<I', 0)),
-                                    ('cluster-core-id', struct.pack('<I', core)),
-                                    ('l2-cache-id', struct.pack('<I', 0)),
-                                ]
-                                if native_smp
-                                else []
-                            ),
-                        ],
-                    )
-                    for core in range(4 if native_smp else 1)
-                ],
-            ),
+            _cpus(native_smp),
             *([_node('psci', [('compatible', b'arm,psci-0.2\0'), ('method', b'smc\0')])] if native_smp else []),
             # Preserve XNU's RAM-based vnode sizing instead of the BCM2837 cap.
             _node(

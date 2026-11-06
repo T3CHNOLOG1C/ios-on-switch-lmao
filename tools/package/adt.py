@@ -13,5 +13,7 @@ import native_oled_adt
 
 seed, out = sys.argv[1:]
 Path(out).write_bytes(
-    native_oled_adt.generate_adt(bytes.fromhex(seed), storage_probe=True, root_boot=True, full_ram=True)
+    native_oled_adt.generate_adt(
+        bytes.fromhex(seed), native_oled_adt.Profile(storage_probe=True, root_boot=True, full_ram=True)
+    )
 )
