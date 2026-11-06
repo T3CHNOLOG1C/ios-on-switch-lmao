@@ -384,8 +384,27 @@ def _check_command_line(m: dict, payload: bytes) -> None:
     )
 
 
-def _check_native_profile(m: dict, payload: bytes) -> None:
-    _require(m['virt_base'] == 0xFFFFFFF00427C000, 'prelinked native profile requires its exact reviewed virtual base')
+# The full-RAM bank (boot_phys_base, boot_memory_size, boot_memory_actual), measured on the Switch OLED.
+FULL_RAM_BANK = (0x80000000, 0x100000000, 0xFFD00000)
+# Each IPSW kind's reviewed virtual base: the prelinked image's lowest segment. 21H461's was measured on the device;
+# 24B119's is derived from its prelink (the kexts at -0x4088000) and has not booted yet.
+NATIVE_PROFILES = {
+    '21H461': {'virt_base': 0xFFFFFFF00427C000, 'measured': True},
+    '24B119': {'virt_base': 0xFFFFFFF00307C000, 'measured': False},
+}
+
+
+def boot_virt_base(virt_base: int, phys_base: int, boot_phys: int) -> int:
+    """Return the virtual address XNU gives physical boot_phys: the kernel window maps virt_base at phys_base."""
+    return virt_base - phys_base + boot_phys
+
+
+def _check_native_profile(m: dict, payload: bytes, kind: str) -> None:
+    _require(kind in NATIVE_PROFILES, f'no reviewed native profile for IPSW kind {kind}')
+    _require(
+        m['virt_base'] == NATIVE_PROFILES[kind]['virt_base'],
+        f"prelinked native profile requires {kind}'s exact reviewed virtual base",
+    )
     _require(
         m['phys_base'] & ~0x1FFFFF == 0xB2000000 and (m['window_end'] + 0x1FFFFF) & ~0x1FFFFF == 0xE2200000,
         'native ownership envelope changed',
@@ -400,7 +419,7 @@ def _check_native_profile(m: dict, payload: bytes) -> None:
     _require(not len(payload) % 0x1000, 'native cacheable copy requires a page-aligned payload')
 
 
-def window_checks(m: dict, payload: bytes, adt: bytes) -> dict:
+def window_checks(m: dict, payload: bytes, adt: bytes, kind: str) -> dict:
     """Check what the cacheable-copy root-boot loader needs of a layout and return the loader's constants.
 
     `m` is the layout's manifest, `payload` its image and `adt` the ADT it was laid out with. The staged window's
@@ -427,8 +446,8 @@ def window_checks(m: dict, payload: bytes, adt: bytes) -> dict:
         'full RAM requires zeroed runtime ledger slot',
     )
     _require(
-        (m.get('boot_phys_base'), m.get('boot_virt_base'), m.get('boot_memory_size'), m.get('boot_memory_actual'))
-        == (0x80000000, 0xFFFFFFEFD2200000, 0x100000000, 0xFFD00000),
+        (m.get('boot_phys_base'), m.get('boot_memory_size'), m.get('boot_memory_actual')) == FULL_RAM_BANK
+        and m.get('boot_virt_base') == boot_virt_base(m['virt_base'], m['phys_base'], FULL_RAM_BANK[0]),
         'full RAM boot bases/span differ from measured bank profile',
     )
     start = m['adt_pa'] - m['phys_base']
@@ -503,7 +522,7 @@ def window_checks(m: dict, payload: bytes, adt: bytes) -> dict:
     )
     _check_sidecars(m, payload, properties, start, sidecars)
     _check_command_line(m, payload)
-    _check_native_profile(m, payload)
+    _check_native_profile(m, payload, kind)
 
     return {
         'SOURCE': STAGE_SOURCE,
@@ -609,7 +628,7 @@ def layout(args: argparse.Namespace) -> None:
             ),
         )
         payload = (scratch / 'layout/kernel-window.bin').read_bytes()
-        constants = window_checks(m, payload, inputs['adt'].read_bytes())
+        constants = window_checks(m, payload, inputs['adt'].read_bytes(), args.kind)
     runs, _ = pack_window(payload)
     blocks = lz4_blocks(runs)
     shards = sorted(p.name for p in args.blocks.iterdir())
@@ -655,6 +674,8 @@ def main() -> None:
         p = steps.add_parser(step)
         for name in names:
             p.add_argument('--' + name, required=True, type=Path)
+        if step == 'layout':
+            p.add_argument('--kind', required=True, help='the IPSW kind, for its reviewed native profile')
     args = parser.parse_args()
     if args.step == 'layout':
         layout(args)

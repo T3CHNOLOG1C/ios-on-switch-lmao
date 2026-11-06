@@ -126,6 +126,12 @@ py_binary(
 )
 
 py_test(
+    name = "native_profile_test",
+    srcs = ["native_profile_test.py"],
+    deps = [":kernel_window"],
+)
+
+py_test(
     name = "wallpaper_1x_test",
     srcs = [
         "wallpaper_1x.py",

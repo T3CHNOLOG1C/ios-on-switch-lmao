@@ -201,6 +201,7 @@ def _boot_package_impl(ctx):
     args.add("--boot-args", boot_args)
     args.add("--plan", window_plan)
     args.add("--blocks", shards[0].dirname)
+    args.add("--kind", ctx.attr._kind[BuildSettingInfo].value)
     _run(ctx, ctx.executable._window, [args], [kernel, adt, bundle, ctx.file.data_seed, boot_args], [window_plan] + shards, "KernelLayout", "Laying out the kernel window")
 
     compressed = []
@@ -381,6 +382,7 @@ boot_package = rule(
             doc = "iOS 27's pinned pretranslate run: its trust modules join the bundle, its cache list the ADT",
         ),
         "_gpu_trustcache": attr.label(default = "//boot:gpu_trustcache"),
+        "_kind": attr.label(default = "//ipsw:kind"),
         "_profile": attr.label(default = "//bazel:profile"),
         "_smp": attr.label(default = "//boot:smp"),
         "_xcode_env": attr.label(default = "@xcode//:xcode.env", allow_single_file = True),
