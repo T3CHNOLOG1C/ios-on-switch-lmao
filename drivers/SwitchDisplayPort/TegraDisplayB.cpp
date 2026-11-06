@@ -4,7 +4,8 @@
 // (Copyright (C) 2012 Avionic Design GmbH, 2012 NVIDIA Corporation): tegra_crtc_atomic_enable, tegra_dc_set_timings
 // (reference-to-sync 1/1), tegra_dc_commit_state (shift clock 1:1), tegra_dc_setup_window for a 1:1 pitch BGRA
 // window, SOR_ENABLE(1) = DC_DISP_DISP_WIN_OPTIONS bit 26. Power: the DISB partition (19), DISP2 clock and reset 26, MC
-// client hot reset DCB (MC 0x200 bit 3, Linux memory/tegra/tegra210.c).
+// client hot reset DCB (MC 0x200 bit 3, Linux memory/tegra/tegra210.c), the MBIST workaround (clk-tegra210.c
+// tegra210_generic_mbist_war, LVL2_CLK_GATE_OVRA bit 2).
 #include "TegraDisplayB.h"
 
 #include <IOKit/IOLib.h>
@@ -15,6 +16,7 @@ namespace {
 constexpr uint64_t kDisplayBPA = 0x54240000, kMcPA = 0x70019000;
 constexpr unsigned kClockDisp2 = 26, kPartitionDisb = 19;
 constexpr uint32_t kMcHotResetControl = 0x200, kMcHotResetDcb = 1u << 3;
+constexpr uint32_t kLvl2ClockGateOverrideA = 0xf8, kOverrideDisb = 1u << 2;
 
 enum : uint32_t {
     DC_CMD_DISPLAY_COMMAND_OPTION0 = 0x031,
@@ -122,6 +124,13 @@ bool TegraDisplayB::powerUp(char *why, size_t size)
         snprintf(why, size, "the DISB power partition did not come up");
         return false;
     }
+    // tegra210_generic_mbist_war for DISB: the partition's RAMs initialise only with their second-level clock gate
+    // overridden for a moment after the partition comes up.
+    const uint32_t gates = switch_car_read(kLvl2ClockGateOverrideA);
+    switch_car_write(kLvl2ClockGateOverrideA, gates | kOverrideDisb);
+    IODelay(1);
+    switch_car_write(kLvl2ClockGateOverrideA, gates);
+    IODelay(1);
     volatile uint8_t *mc = switch_mmio_map(kMcPA, 0x1000);
     switch_mmio_rmw32(mc, kMcHotResetControl, kMcHotResetDcb, 0);
     for (const Reg &reg : kInit) {
