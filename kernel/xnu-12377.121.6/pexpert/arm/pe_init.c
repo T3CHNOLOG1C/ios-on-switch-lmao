@@ -159,7 +159,7 @@ check_for_panic_log(void)
 	if (kSuccess != SecureDTLookupEntry(0, "pram", &entry)) {
 #if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
 		/* No iBoot panic region on this boot chain: without one, SavePanicInfo spins at its first line and no panic
-		 * log is ever written. Boot-arg switch-panic-save gives it RAM kept across a warm reset (SwitchPanicSave.c). */
+		 * log is ever written. SwitchPanicSave.c gives it RAM kept across a warm reset. */
 		uintptr_t switch_base = 0;
 		unsigned int switch_bytes = 0;
 		if (switch_panic_save_xnu_buffer(&switch_base, &switch_bytes) &&

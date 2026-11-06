@@ -122,6 +122,10 @@
 #if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT && CONFIG_CODE_DECRYPTION
 #include <kern/page_decrypt.h>   /* SwitchHomeGrid pager */
 #endif
+#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
+#include <pexpert/pexpert.h>
+#include <vm/switch_ui_scale.h>
+#endif
 
 #include <sys/kern_memorystatus.h>
 #include <sys/kern_memorystatus_freeze.h>
@@ -1910,41 +1914,55 @@ switch_widget_deadline_pager(const struct switch_wd_site *site, vm_object_t file
 	return mo;
 }
 
+const struct switch_ui_scale *switch_ui_scale(void);
+
 /*
- * SwitchUIScale: 1.6 pixels per point on the 720x1280 panel, every pixel rendered natively.
+ * SwitchUIScale: switch-ui-scale=<1|1.25|1.6> pixels per point on the 720x1280 panel (switch_ui_scale.h), every
+ * pixel rendered natively. At 1 every site below stays stock.
  *
  * At the panel's 209.8 ppi, 1.6 px/pt gives a point the physical size of a 9.7- to 12.9-inch iPad's (264 ppi at
- * scale 2: 132 points per inch). The screen is 450x800 points, 800x450 in landscape. iPadOS has no fractional scale
- * for the main display: MobileGestalt makes main-screen-scale from the integer /chosen/display-scale, QuartzCore's
- * -[CADisplayMode preferredScale] truncates that answer (fcvtzu), and FrontBoardServices' main display modes take it.
- * Display Zoom and More Space resample a canvas of another size in the display pipe instead. From FrontBoardServices
- * up the scale is a double: -[FBSDisplayMode pointScale] is the mode's scaleOverride when that is nonzero (otherwise
- * its preferredScale), UIScreen.scale is the display configuration's pointScale, _UIRootWindow maps points to pixels
- * with an affine scale by UIScreen.scale under its rotation, and UIKit's layers rasterize at contentsScale =
- * UIScreen.scale (QuartzCore keeps a non-integer contents or rasterization scale in the layer's extension). A
- * non-integer override therefore draws every layer at 1.6 into the native framebuffer and nothing is resampled.
- * Touches reach UIKit in display pixels and are divided by UIScreen.scale (-[UIWindow
- * _transformDisplayToWindowCoordinates:]), so they follow.
+ * scale 2: 132 points per inch). iPadOS has no fractional scale for the main display: MobileGestalt makes
+ * main-screen-scale from the integer /chosen/display-scale, QuartzCore's -[CADisplayMode preferredScale] truncates
+ * that answer (fcvtzu), and FrontBoardServices' main display modes take it. Display Zoom and More Space resample a
+ * canvas of another size in the display pipe instead. From FrontBoardServices up the scale is a double:
+ * -[FBSDisplayMode pointScale] is the mode's scaleOverride when that is nonzero (otherwise its preferredScale),
+ * UIScreen.scale is the display configuration's pointScale, _UIRootWindow maps points to pixels with an affine scale
+ * by UIScreen.scale under its rotation, and UIKit's layers rasterize at contentsScale = UIScreen.scale (QuartzCore
+ * keeps a non-integer contents or rasterization scale in the layer's extension). A non-integer override therefore
+ * draws every layer at the scale into the native framebuffer and nothing is resampled. Touches reach UIKit in
+ * display pixels and are divided by UIScreen.scale (-[UIWindow _transformDisplayToWindowCoordinates:]).
  *
- * Two sites, one 4 KB chunk of cache text each, applied all or nothing per site:
+ * One 4 KB chunk of cache text per site, applied all or nothing per site:
  * - FrontBoardServices (.09), -[FBSDisplayConfiguration _initWithImmutableDisplay:originalDisplay:assertIfInvalid:]
- *   + 0x1c0: the main display's modes get the scale override 8 / 5, exact in a double, so the bounds are 450x800.
- *   Three instructions make it in the five that gave every other display BKSDisplayServicesGetExternalDisplayScale():
- *   other displays now get no override, so their modes keep QuartzCore's integer scale.
- * - libMobileGestalt (.11), MGIOMFBSupport.c's static screen info: main-screen-scale is 1.6f instead of the
- *   property's value converted. IconServices, TextInputCore, GraphicsServices, CoreMaterial, WebCore and others size
- *   bitmaps from MobileGestalt rather than UIScreen; at 1 those would be drawn scaled up. The register that held the
- *   property holds the float's bits (movz/movk over its read, fmov over the scvtf). Its one other use, the screen
- *   class lookup, finds no class for 720x1280 at scale 1 either. QuartzCore's own scale stays 1 (fcvtzu of 1.6f).
- * MobileGestalt keeps the answer in its build-keyed cache; kern_exec.c drops that cache once for this scale
+ *   + 0x1c0: the main display's modes get the scale override num / den. Three instructions make it in the five that
+ *   gave every other display BKSDisplayServicesGetExternalDisplayScale(): other displays now get no override, so
+ *   their modes keep QuartzCore's integer scale.
+ * - libMobileGestalt (.11), MGIOMFBSupport.c's static screen info: main-screen-scale is the scale's float instead of
+ *   the property's value converted. IconServices, TextInputCore, GraphicsServices, CoreMaterial, WebCore and others
+ *   size bitmaps from MobileGestalt rather than UIScreen; at 1 those would be drawn scaled up. The register that held
+ *   the property holds the float's bits (movz/movk over its read, fmov over the scvtf). Its one other use, the screen
+ *   class lookup, finds no class for this panel at any scale. QuartzCore's own scale stays 1 (fcvtzu).
+ * - CoreUI (.11), -[CUINamedVectorPDFImage rasterizeImageUsingScaleFactor:forTargetSize:] and its SVG twin: the
+ *   bitmap is trunc(w * scale) pixels wide but its row bytes were trunc(w * scale * bytes per pixel), which is not a
+ *   multiple of the pixel at a fractional pixel width (34 points at 1.6: 54 pixels, 217 bytes). CGBitmapContextCreate
+ *   rejects that and frees the buffer through CoreUI's release callback, then CUICGBitmapContextCreate munmaps it
+ *   again: EXC_GUARD DEALLOC_GAP, SpringBoard killed laying out Control Center. Row bytes become width * bytes per
+ *   pixel (mul x3, x0, x24), the same value wherever the stock code worked. Every other CoreUI bitmap takes its row
+ *   bytes from an integer width or lets CUICGBitmapContextCreate choose them.
+ * - ProgressUI (.31), -[PUIProgressWindow _layoutScreen]'s progress bar (DataMigrator's, under the boot logo on the
+ *   first boot): 239 x 4 points times main-screen-scale in single precision, a fractional frame Core Animation
+ *   resamples (382.4 x 6.4 at 1.6). Its two floats become the scale's progress_bar_bits, whose products are whole
+ *   (382 x 6 at 1.6, 299 x 5 at 1.25), at the same place. Nothing else reads them.
+ * MobileGestalt keeps its answer in its build-keyed cache; kern_exec.c drops that cache when the scale changes
  * (native_switch_ui_scale_cache).
  */
 struct switch_us_edit {
 	uint64_t fileoff;                           /* the first byte that must read as shipped */
 	uint8_t length;                             /* bytes that must read as shipped */
 	uint8_t at, size;                           /* the bytes replaced, from fileoff + at */
+	enum switch_ui_scale_edit_kind kind;
 	uint8_t stock[28];
-	uint8_t patched[20];
+	uint8_t patched[20];                        /* SWITCH_US_FIXED's */
 };
 
 static const struct switch_us_site {
@@ -1952,40 +1970,72 @@ static const struct switch_us_site {
 	uint64_t page_vmaddr;                       /* unslid; one 16 KB page */
 	uint64_t page_fileoff;
 	uint64_t chunk_offset;                      /* the 4 KB chunk within the page that holds every edit */
+	unsigned slot;                              /* switch_shared_cache_text_pager()'s, one per site of a mapping */
 	unsigned edits;
 	struct switch_us_edit edit[2];
 	const char *name, *applied;
 } switch_us_sites[] = {
 	{   /* dyld_shared_cache_arm64.09 of 21H461 (text 0x199130000, file 0) */
 		{ 0x59, 0xec, 0x4b, 0x71, 0xf0, 0x27, 0x33, 0xd1, 0xae, 0x39, 0x4e, 0x04, 0xbd, 0x70, 0x7b, 0x6d },
-		0x19f3cc000ULL, 0x629c000ULL, 0x3000ULL, 1,
+		0x19f3cc000ULL, 0x629c000ULL, 0x3000ULL, 0, 1,
 		{
 			/* 0x19f3cf8cc: bl isMainDisplay; fmov d8, xzr; tbnz w0, #0, +0x10; mov x0, x28;
-			 * bl BKSDisplayServicesGetExternalDisplayScale; fcvt d8, s0; mov x0, x28
-			 * -> fmov d8, #8.0; fmov d1, #5.0; fdiv d8, d8, d1; tbnz w0, #0, +0x8; fmov d8, xzr */
-			{ 0x629f8ccULL, 28, 4, 20,
+			 * bl BKSDisplayServicesGetExternalDisplayScale; fcvt d8, s0; mov x0, x28 */
+			{ 0x629f8ccULL, 28, 4, 20, SWITCH_US_FBS_OVERRIDE,
 			  { 0xcd, 0x90, 0x02, 0x94, 0xe8, 0x03, 0x67, 0x9e, 0x80, 0x00, 0x00, 0x37, 0xe0, 0x03, 0x1c, 0xaa,
-			    0x28, 0x20, 0x24, 0x94, 0x08, 0xc0, 0x22, 0x1e, 0xe0, 0x03, 0x1c, 0xaa },
-			  { 0x08, 0x10, 0x64, 0x1e, 0x01, 0x90, 0x62, 0x1e, 0x08, 0x19, 0x61, 0x1e, 0x40, 0x00, 0x00, 0x37,
-			    0xe8, 0x03, 0x67, 0x9e } },
+			    0x28, 0x20, 0x24, 0x94, 0x08, 0xc0, 0x22, 0x1e, 0xe0, 0x03, 0x1c, 0xaa }, { 0 } },
 		},
-		"FrontBoardServices", "main display scale override 8/5",
+		"FrontBoardServices", "main display scale override",
 	},
 	{   /* dyld_shared_cache_arm64.11 of 21H461 (text 0x19fce4000, file 0) */
 		{ 0x70, 0x56, 0x7d, 0x89, 0x4c, 0xe6, 0x3e, 0xc6, 0xa4, 0xde, 0xe7, 0xb4, 0xf4, 0xec, 0x60, 0x41 },
-		0x1a0214000ULL, 0x530000ULL, 0x1000ULL, 2,
+		0x1a0214000ULL, 0x530000ULL, 0x1000ULL, 0, 2,
 		{
-			/* 0x1a0215754: mov w4, #1; bl (the display-scale read); mov x19, x0
-			 * -> movz w19, #0xcccd; movk w19, #0x3fcc, lsl #16 */
-			{ 0x531754ULL, 12, 4, 8,
-			  { 0x24, 0x00, 0x80, 0x52, 0x05, 0xe9, 0xff, 0x97, 0xf3, 0x03, 0x00, 0xaa },
-			  { 0xb3, 0x99, 0x99, 0x52, 0x93, 0xf9, 0xa7, 0x72 } },
+			/* 0x1a0215754: mov w4, #1; bl (the display-scale read); mov x19, x0 */
+			{ 0x531754ULL, 12, 4, 8, SWITCH_US_MG_SCALE,
+			  { 0x24, 0x00, 0x80, 0x52, 0x05, 0xe9, 0xff, 0x97, 0xf3, 0x03, 0x00, 0xaa }, { 0 } },
 			/* 0x1a021594c: str w21, [sp, #0x68]; scvtf s0, w19; stp s0, s8, [sp, #0x6c] -> fmov s0, w19 */
-			{ 0x53194cULL, 12, 4, 4,
+			{ 0x53194cULL, 12, 4, 4, SWITCH_US_FIXED,
 			  { 0xf5, 0x6b, 0x00, 0xb9, 0x60, 0x02, 0x22, 0x1e, 0xe0, 0xa3, 0x0d, 0x2d },
 			  { 0x60, 0x02, 0x27, 0x1e } },
 		},
-		"MobileGestalt", "main-screen-scale 1.6",
+		"MobileGestalt", "main-screen-scale",
+	},
+	{   /* .11 */
+		{ 0x70, 0x56, 0x7d, 0x89, 0x4c, 0xe6, 0x3e, 0xc6, 0xa4, 0xde, 0xe7, 0xb4, 0xf4, 0xec, 0x60, 0x41 },
+		0x1a315c000ULL, 0x3478000ULL, 0x0ULL, 1, 1,
+		{
+			/* 0x1a315c214: fcvtzu x0, d12; fcvtzu x1, d11; ucvtf d0, x24; fmul d0, d12, d0; fcvtzu x3, d0
+			 * -> mul x3, x0, x24; nop; nop */
+			{ 0x3478214ULL, 20, 8, 12, SWITCH_US_FIXED,
+			  { 0x80, 0x01, 0x79, 0x9e, 0x61, 0x01, 0x79, 0x9e, 0x00, 0x03, 0x63, 0x9e, 0x80, 0x09, 0x60, 0x1e,
+			    0x03, 0x00, 0x79, 0x9e },
+			  { 0x03, 0x7c, 0x18, 0x9b, 0x1f, 0x20, 0x03, 0xd5, 0x1f, 0x20, 0x03, 0xd5 } },
+		},
+		"CoreUI", "PDF vector image row bytes",
+	},
+	{   /* .11 */
+		{ 0x70, 0x56, 0x7d, 0x89, 0x4c, 0xe6, 0x3e, 0xc6, 0xa4, 0xde, 0xe7, 0xb4, 0xf4, 0xec, 0x60, 0x41 },
+		0x1a31d0000ULL, 0x34ec000ULL, 0x3000ULL, 2, 1,
+		{
+			/* 0x1a31d369c: fcvtzu x0, d10; fcvtzu x1, d9; ucvtf d0, x24; fmul d0, d10, d0; fcvtzu x3, d0
+			 * -> mul x3, x0, x24; nop; nop */
+			{ 0x34ef69cULL, 20, 8, 12, SWITCH_US_FIXED,
+			  { 0x40, 0x01, 0x79, 0x9e, 0x21, 0x01, 0x79, 0x9e, 0x00, 0x03, 0x63, 0x9e, 0x40, 0x09, 0x60, 0x1e,
+			    0x03, 0x00, 0x79, 0x9e },
+			  { 0x03, 0x7c, 0x18, 0x9b, 0x1f, 0x20, 0x03, 0xd5, 0x1f, 0x20, 0x03, 0xd5 } },
+		},
+		"CoreUI", "SVG vector image row bytes",
+	},
+	{   /* dyld_shared_cache_arm64.31 of 21H461 (text 0x1e221c000, file 0) */
+		{ 0x64, 0xa2, 0xf3, 0x51, 0xbe, 0x93, 0x39, 0xa6, 0x93, 0x72, 0xe8, 0x56, 0xb6, 0x64, 0x9c, 0xfc },
+		0x1e41f0000ULL, 0x1fd4000ULL, 0x1000ULL, 0, 1,
+		{
+			/* 0x1e41f1838: 239.0f, 4.0f */
+			{ 0x1fd5838ULL, 8, 0, 8, SWITCH_US_PROGRESS_BAR,
+			  { 0x00, 0x00, 0x6f, 0x43, 0x00, 0x00, 0x80, 0x40 }, { 0 } },
+		},
+		"ProgressUI", "progress bar",
 	},
 };
 #define SWITCH_US_SITES           (sizeof(switch_us_sites) / sizeof(switch_us_sites[0]))
@@ -1999,7 +2049,9 @@ switch_ui_scale_page(const void *src, void *dst, unsigned long long src_offset, 
 {
 	const struct switch_us_site *site = ops;
 	const unsigned which = (unsigned)(site - switch_us_sites);
+	const struct switch_ui_scale *scale = switch_ui_scale();
 	uint8_t *out = dst;
+	uint8_t patched[2][sizeof(site->edit[0].patched)];
 
 	bcopy(src, dst, SWITCH_HG_CHUNK);
 	for (unsigned i = 0; i < site->edits; i++) {
@@ -2014,18 +2066,23 @@ switch_ui_scale_page(const void *src, void *dst, unsigned long long src_offset, 
 			}
 			return 0;
 		}
+		if (edit->kind == SWITCH_US_FIXED) {
+			memcpy(patched[i], edit->patched, edit->size);
+		} else if (!switch_ui_scale_edit_bytes(edit->kind, scale, patched[i], edit->size)) {
+			return 0;
+		}
 	}
 	for (unsigned i = 0; i < site->edits; i++) {
 		const struct switch_us_edit *edit = &site->edit[i];
-		memcpy(out + (edit->fileoff - src_offset) + edit->at, edit->patched, edit->size);
+		memcpy(out + (edit->fileoff - src_offset) + edit->at, patched[i], edit->size);
 	}
 	if (!os_atomic_xchg(&switch_us_logged[which], 1, relaxed)) {
-		printf("SwitchUIScale: %s %s\n", site->name, site->applied);
+		printf("SwitchUIScale: %s %s at %s\n", site->name, site->applied, scale->name);
 	}
 	return 0;
 }
 
-/* The pager for one UI scale site, if this mapping holds it, or MEMORY_OBJECT_NULL. */
+/* The pager for one UI scale site, if this mapping holds it and the scale is not 1, or MEMORY_OBJECT_NULL. */
 static memory_object_t
 switch_ui_scale_pager(const struct switch_us_site *site, vm_object_t file_object, uint64_t object_base, uint64_t file_offset, uint64_t size,
     uint64_t unslid_address, struct vnode *vp, uint64_t *range_offset, uint64_t *range_size)
@@ -2035,6 +2092,9 @@ switch_ui_scale_pager(const struct switch_us_site *site, vm_object_t file_object
 	    file_offset + (site->page_vmaddr - unslid_address) != site->page_fileoff ||
 	    file_object == VM_OBJECT_NULL || vp == NULLVP) {
 		return MEMORY_OBJECT_NULL;  /* not the mapping that holds the site */
+	}
+	if (switch_ui_scale_is_unit(switch_ui_scale())) {
+		return MEMORY_OBJECT_NULL;
 	}
 
 	uint8_t header[SWITCH_HG_UUID_OFFSET + sizeof(site->uuid)];
@@ -2074,8 +2134,9 @@ switch_ui_scale_pager(const struct switch_us_site *site, vm_object_t file_object
  * Called by vm_shared_region_map_file_setup() for each executable cache mapping it has just entered in a shared
  * region, once per slot (0 .. SWITCH_TEXT_SLOTS - 1 there). Returns an apple_protect pager for the slot's range to replace
  * (range_offset/range_size within the mapping), or MEMORY_OBJECT_NULL to keep that part of the mapping stock. The home
- * grid, settings icons, keyboard and UI scale ranges are in different subcaches (.25, .13, .03, .09, .11), one per
- * mapping, so they only answer slot 0; the .07 mapping holds both widget deadline sites, slot k being site k.
+ * grid, settings icons and keyboard ranges are in different subcaches (.25, .13, .03), one per mapping, so they only
+ * answer slot 0; the .07 mapping holds both widget deadline sites, slot k being site k; a UI scale site answers its own
+ * slot (.11 holds three: MobileGestalt and the two CoreUI ones; .31 only ProgressUI's).
  * file_object is the cache file's object (object_base 0) or the a64x translator's, whose offset 0 is file offset
  * object_base.
  */
@@ -2095,13 +2156,18 @@ switch_shared_cache_text_pager(vm_object_t file_object, uint64_t object_base, ui
 		if (mo == MEMORY_OBJECT_NULL) {
 			mo = switch_keyboard_pager(file_object, object_base, file_offset, size, unslid_address, vp, range_offset, range_size);
 		}
-		for (unsigned site = 0; site < SWITCH_US_SITES && mo == MEMORY_OBJECT_NULL; site++) {
-			mo = switch_ui_scale_pager(&switch_us_sites[site], file_object, object_base, file_offset, size, unslid_address, vp,
-			    range_offset, range_size);
-		}
 		if (mo != MEMORY_OBJECT_NULL) {
 			return mo;
 		}
+	}
+	for (unsigned site = 0; site < SWITCH_US_SITES && mo == MEMORY_OBJECT_NULL; site++) {
+		if (switch_us_sites[site].slot == slot) {
+			mo = switch_ui_scale_pager(&switch_us_sites[site], file_object, object_base, file_offset, size, unslid_address,
+			    vp, range_offset, range_size);
+		}
+	}
+	if (mo != MEMORY_OBJECT_NULL) {
+		return mo;
 	}
 	if (slot < SWITCH_WD_SITES) {
 		mo = switch_widget_deadline_pager(&switch_wd_sites[slot], file_object, object_base, file_offset, size, unslid_address, vp,
@@ -2110,6 +2176,30 @@ switch_shared_cache_text_pager(vm_object_t file_object, uint64_t object_base, ui
 	return mo;
 }
 #endif /* XNU_SWITCH_VERIFIED_ROOT && CONFIG_CODE_DECRYPTION */
+
+#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
+/* The boot's UI scale (switch_ui_scale.h), read once; kern_exec.c's first-boot state follows it too. */
+const struct switch_ui_scale *
+switch_ui_scale(void)
+{
+	static const struct switch_ui_scale *chosen;
+	const struct switch_ui_scale *scale = os_atomic_load(&chosen, relaxed);
+	if (scale != NULL) {
+		return scale;
+	}
+	char value[8] = "";
+	const bool given = PE_parse_boot_arg_str("switch-ui-scale", value, sizeof(value));
+	scale = switch_ui_scale_for_boot_arg(given ? value : NULL);
+	if (os_atomic_cmpxchg(&chosen, NULL, scale, relaxed)) {
+		if (given && switch_ui_scale_named(value) == NULL) {
+			printf("SwitchUIScale: switch-ui-scale=%s is not 1, 1.25 or 1.6: scale %s\n", value, scale->name);
+		} else {
+			printf("SwitchUIScale: scale %s (%u/%u)\n", scale->name, scale->num, scale->den);
+		}
+	}
+	return os_atomic_load(&chosen, relaxed);
+}
+#endif
 
 /*
  * Setup part of _shared_region_map_and_slide().

@@ -355,7 +355,7 @@ SECURITY_READ_ONLY_LATE(addr64_t) first_avail_phys = 0;
  * The physical aperture remains dense for ARM64's span-indexed page metadata. */
 static struct switch_ram_ledger switch_ledger;
 static pmap_paddr_t switch_kernel_start, switch_bootstrap_start, switch_bootstrap_limit, switch_accounted_bootstrap_end;
-/* tegra-gpu-pool-pa: outside the managed pages like the framebuffer (no pv lists, never handed to the VM), and in the
+/* The GPU pool: outside the managed pages like the framebuffer (no pv lists, never handed to the VM), and in the
  * physical aperture write-combined only (no cacheable alias anywhere): the GPU driver reaches it with phystokv(). A
  * separate 128 MiB ml_io_map_wcomb fails, kernel VA (10-30: "kmem_alloc(.., 134217728, ..): failed with 3"). */
 static pmap_paddr_t switch_gpu_start, switch_gpu_end;
@@ -363,6 +363,14 @@ static bool switch_physmap_wcomb;   /* set only while arm_vm_switch_physmap maps
 
 boolean_t
 pmap_switch_ram_enabled(void) { return switch_ledger.committed == 1; }
+
+boolean_t
+pmap_switch_gpu_pool(pmap_paddr_t *start, pmap_paddr_t *end)
+{
+    *start = switch_gpu_start;
+    *end = switch_gpu_end;
+    return switch_gpu_start < switch_gpu_end;
+}
 
 boolean_t
 pmap_switch_pa_valid(pmap_paddr_t pa)
@@ -428,23 +436,20 @@ pmap_switch_ram_init(boot_args *args)
         if (start >= switch_bootstrap_start && start < switch_bootstrap_limit)
             switch_bootstrap_limit = start & ~PAGE_MASK;
     }
-    /* drivers/TegraGM20B's GPU pool (nvxnu_pool_init): with boot-arg tegra-gpu-pool-pa=<pa> (tegra-gpu-pool-mb, default
-     * 256: every process's coherent GPU memory and nvkm's own come from it; 128 starved poster extensions on 11-04 with a
-     * dozen Metal processes, of 3.9 GB) that RAM joins the ledger here, so the VM never hands it out and the GPU driver
-     * maps it write-combined. A physically contiguous 128 MiB below 4 GiB cannot be allocated once the VM is running (10-30: "M1 FAIL pool -12").
-     * It must lie in the low bank's free RAM, above the bootstrap blocks and below the framebuffer. */
-    uint64_t gpu_pa = 0, gpu_mb = 256;
-    if (PE_parse_boot_argn("tegra-gpu-pool-pa", &gpu_pa, sizeof(gpu_pa)) && gpu_pa) {
-        PE_parse_boot_argn("tegra-gpu-pool-mb", &gpu_mb, sizeof(gpu_mb));
-        const uint64_t gpu_end = gpu_pa + (gpu_mb << 20);
-        if ((gpu_pa & PAGE_MASK) || gpu_mb < 16 || gpu_mb > 1024 || gpu_pa < 0xe2000000ULL || gpu_end > 0xf5a00000ULL ||
-            switch_ledger.count == SWITCH_RAM_RANGES)
-            panic("tegra-gpu-pool-pa %#llx (%llu MiB) outside 0xe2000000-0xf5a00000, or the RAM ledger is full", gpu_pa, gpu_mb);
+    /* drivers/TegraGM20B's GPU pool (nvxnu_pool_init, through pmap_switch_gpu_pool): 256 MiB, every process's coherent GPU
+     * memory and nvkm's own (128 starved poster extensions on 11-04 with a dozen Metal processes, of 3.9 GB). It joins the
+     * ledger here, so the VM never hands it out and the GPU driver maps it write-combined. A physically contiguous 128 MiB
+     * below 4 GiB cannot be allocated once the VM is running (10-30: "M1 FAIL pool -12"). It lies in the low bank's free RAM,
+     * above the bootstrap blocks (0xe2000000) and below the framebuffer (0xf5a00000). */
+    {
+        const uint64_t gpu_pa = 0xe4000000ULL, gpu_end = gpu_pa + (256ULL << 20);
+        if (switch_ledger.count == SWITCH_RAM_RANGES)
+            panic("the GPU pool %#llx-%#llx does not fit: the RAM ledger is full", gpu_pa, gpu_end);
         /* The ledger also holds the live FDT's /reserved-memory and memreserve ranges (loader memory.c), which the
          * build does not know: RAM another owner keeps must not become the GPU's. */
         for (unsigned i=0; i<switch_ledger.count; ++i) {
             if (gpu_pa < switch_ledger.reserved[i].end && switch_ledger.reserved[i].start < gpu_end)
-                panic("tegra-gpu-pool-pa %#llx-%#llx overlaps reserved RAM %#llx-%#llx (ledger entry %u)", gpu_pa, gpu_end,
+                panic("the GPU pool %#llx-%#llx overlaps reserved RAM %#llx-%#llx (ledger entry %u)", gpu_pa, gpu_end,
                       (uint64_t)switch_ledger.reserved[i].start, (uint64_t)switch_ledger.reserved[i].end, i);
         }
         switch_ledger.reserved[switch_ledger.count++] = (struct switch_ram_range){gpu_pa, gpu_end};

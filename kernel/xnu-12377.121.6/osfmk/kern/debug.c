@@ -365,7 +365,8 @@ uuid_string_t auxkc_uuid_string;
  */
 static boolean_t debugger_is_panic = TRUE;
 
-TUNABLE(unsigned int, debug_boot_arg, "debug", 0);
+/* ios-on-switch-lmao: no iBoot sets debug=, so the kernel defaults to what the Switch boots with. */
+TUNABLE(unsigned int, debug_boot_arg, "debug", 0x14e);
 
 TUNABLE_DEV_WRITEABLE(unsigned int, verbose_panic_flow_logging, "verbose_panic_flow_logging", 0);
 

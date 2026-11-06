@@ -597,7 +597,7 @@ switch_log_boot_stamps(void)
 		EMC_RESULT, EMC_RATES, EMC_CORE, COUNT
 	};
 	static const char *const uboot[] = {
-		"main", "sd", "ready", "boot.scr", "loader.bin", "dtb", "kernel-window", "exporter", "bootm prep", "bootm go",
+		"main", "sd", "ready", "script", "bootargs.txt", "dtb", "window", "exporter", "bootm prep", "bootm go",
 	};
 	static const char *const loader[] = {
 		"entry", "emc", "emc done", "gates", "unpack", "unpacked", "copied", "xnu",
@@ -704,12 +704,6 @@ kernel_bootstrap(void)
 		if (PE_parse_boot_argn("-show_pointers", &namep, sizeof(namep))) {
 			doprnt_hide_pointers = FALSE;
 		}
-	}
-	/* Owner device: honour -no_slto_panic without a debugger-enabled device policy. A thread that waits for an IPI acknowledgement
-	 * (restartable ranges) then keeps waiting instead of panicking the whole machine; the other cores keep running. */
-	if (PE_parse_boot_argn("-no_slto_panic", &namep, sizeof(namep))) {
-		extern boolean_t spinlock_timeout_panic;
-		spinlock_timeout_panic = FALSE;
 	}
 
 	kernel_bootstrap_log("console_init");

@@ -460,8 +460,8 @@ __options_decl(kalloc_type_variant_t, uint16_t, {
 TUNABLE(kalloc_type_options_t, kt_options, "kt", 0);
 TUNABLE(uint16_t, kt_var_heaps, "kt_var_heaps",
     ZSECURITY_CONFIG_KT_VAR_BUDGET);
-TUNABLE(uint16_t, kt_fixed_zones, "kt_fixed_zones",
-    ZSECURITY_CONFIG_KT_BUDGET);
+/* ios-on-switch-lmao: the small-memory budget, as UniXNU boots with (the iOS default is 260). */
+TUNABLE(uint16_t, kt_fixed_zones, "kt_fixed_zones", 120);
 TUNABLE(uint16_t, kt_var_ptr_heaps, "kt_var_ptr_heaps", 2);
 static TUNABLE(bool, kt_shared_fixed, "-kt-shared", true);
 

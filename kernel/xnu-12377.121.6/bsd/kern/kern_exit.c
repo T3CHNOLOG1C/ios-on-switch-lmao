@@ -2393,20 +2393,6 @@ proc_exit(proc_t p)
 	proc_unlock(p);
 	pid = proc_getpid(p);
 	exitval = p->p_xstat;
-#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
-	{
-		static int proclog = -1;
-		if (proclog < 0) {
-			int value = 0;
-			(void)PE_parse_boot_argn("switch-proclog", &value, sizeof(value));
-			proclog = value;
-		}
-		if (proclog) {
-			if (WIFSIGNALED(exitval)) printf("-%s[%d] signal %d\n", p->p_comm, pid, WTERMSIG(exitval));
-			else printf("-%s[%d] exit %d\n", p->p_comm, pid, WEXITSTATUS(exitval));
-		}
-	}
-#endif
 	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_COMMON,
 	    BSDDBG_CODE(DBG_BSD_PROC, BSD_PROC_EXIT) | DBG_FUNC_START,
 	    pid, exitval, 0, 0, 0);

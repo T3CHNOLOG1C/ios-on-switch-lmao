@@ -172,6 +172,7 @@
 #include <vm/vm_pageout_xnu.h>
 #include <vm/pmap.h>
 #include <vm/vm_reclaim_xnu.h>
+#include <vm/switch_ui_scale.h>
 
 #include <kdp/kdp_dyld.h>
 
@@ -979,16 +980,6 @@ set_proc_name(struct image_params *imgp, proc_t p)
 	bcopy((caddr_t)imgp->ip_ndp->ni_cnd.cn_nameptr, (caddr_t)p->p_comm, buflen);
 	p->p_comm[buflen] = '\0'; /* Switch: terminated before the proclog line prints it */
 #if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
-	/* switch-proclog=1: one console line per exec and exit while userland has no other log path. */
-	{
-		static int proclog = -1;
-		if (proclog < 0) {
-			int value = 0;
-			(void)PE_parse_boot_argn("switch-proclog", &value, sizeof(value));
-			proclog = value;
-		}
-		if (proclog) printf("+%s[%d]\n", p->p_comm, proc_getpid(p));
-	}
 	native_switch_migration_process(p, 0, 0);
 #endif
 	p->p_comm[buflen] = '\0';
@@ -6793,14 +6784,14 @@ bad:
  * Switch: environment a chosen daemon gets on top of its own, appended by exec_extract_strings (so a value the
  * caller passes wins: getenv returns the first match).
  *
- * switch-bt=1: bluetoothd's POSIX HCI driver (21H461 bluetoothd FUN_1001d104c / FUN_1000ddaa8) opens the kernel
+ * Unless switch-no-bt: bluetoothd's POSIX HCI driver (21H461 bluetoothd FUN_1001d104c / FUN_1000ddaa8) opens the kernel
  * control named in BT_HCI_TRANSPORT ("<transport>:<driver>:<name>,<baud>") instead of its default
  * "com.apple.uart.sk.bluetooth", a Skywalk channel endpoint nothing here provides. drivers/SwitchBluetooth registers
  * the plain stream "com.apple.uart.bluetooth" (BlueTool's own) with the controller patched, at 3 Mbaud. "H4BC" (J120's
  * transport-encoding 3, BT_WAKE through SwitchBluetooth's /dev/btwake): plain "H4" crashed every stack terminate.
  */
 /*
- * r6-lows: CA_FORCE_TIMER=1 for backboardd (NATIVE_SWITCH_CA_VBL, a build-time switch: the boot-args are full). QuartzCore
+ * r6-lows: CA_FORCE_TIMER=1 for backboardd (NATIVE_SWITCH_CA_VBL, a build-time switch). QuartzCore
  * 21H461 CADeviceUseVBL() (dispatch_once at 0x189582620, read at the start of CA::WindowServer::AccelServer's constructor, before
  * the Metal plug-in loads, hence the exec environment) is true only for MobileGestalt chip ids 0x7000 and 0x8010, or with this
  * variable non-zero. True, IOMFBServer::add_vsync_source takes IOMobileFramebufferGetVSyncRunLoopSource: the render server's frame
@@ -6818,8 +6809,8 @@ bad:
 #endif
 
 /*
- * r6-lows (r6h hangs, 11-01): CA_DISABLE_DETACHED=1 for backboardd whenever NativeLegacyDisplay's validator is the one
- * (offline-legacy-validate=1): it takes one full-screen BGRA IOSurface in layer 0 and nothing else. QuartzCore 21H461 reads the
+ * r6-lows (r6h hangs, 11-01): CA_DISABLE_DETACHED=1 for backboardd whenever NativeLegacyDisplay's validator is the one: it
+ * takes one full-screen BGRA IOSurface in layer 0 and nothing else. QuartzCore 21H461 reads the
  * variable once (init_debug: debug_option_env_vars[21] through CADefaultsGetFloat, which tries getenv first) into
  * ca_debug_options[21], and CA::OGL::detach_contents returns "not detached" (reason 0x10, 0x189566798) before it asks the
  * display's detach_layer. Without it, Photos made CA detach its content into a second display layer: every swap_end failed
@@ -6839,12 +6830,20 @@ native_legacy_detach_ready(void)
 {
 	return false;
 }
+/* A switch-no-<feature> boot-arg: present (a bare word reads as 1) and not =0. */
+static int
+native_switch_disabled(const char *name)
+{
+	uint32_t value = 0;
+	return PE_parse_boot_argn(name, &value, sizeof(value)) && value;
+}
 static const char *const native_switch_bluetoothd_environment[] = {
 	"BT_HCI_TRANSPORT=H4BC:POSIX:com.apple.uart.bluetooth,3000000", NULL
 };
-static const char *const native_switch_backboardd_environment[] = {"CA_DISABLE_DETACHED=1", NULL};
 #if NATIVE_SWITCH_CA_VBL
 static const char *const native_switch_backboardd_vbl_environment[] = {"CA_DISABLE_DETACHED=1", "CA_FORCE_TIMER=1", NULL};
+#else
+static const char *const native_switch_backboardd_environment[] = {"CA_DISABLE_DETACHED=1", NULL};
 #endif
 
 /* The extra environment strings for imgp's executable, NULL-terminated, or NULL for none. */
@@ -6855,58 +6854,26 @@ native_switch_exec_environment(const struct image_params *imgp)
 	static const char bluetoothd[] = "/usr/sbin/bluetoothd";
 	static int bluetooth = -1;
 	if (bluetooth < 0) {
-		uint32_t enabled = 0;
-		bluetooth = PE_parse_boot_argn("switch-bt", &enabled, sizeof(enabled)) && enabled;
+		bluetooth = !native_switch_disabled("switch-no-bt");
 	}
 	if (bluetooth && !strncmp(executable, bluetoothd, sizeof(bluetoothd))) {
 		return native_switch_bluetoothd_environment;
 	}
 	static const char backboardd[] = "/usr/libexec/backboardd";
-	static int single_layer = -1;
-	if (single_layer < 0) {
-		uint32_t validate = 0;
-		single_layer = PE_parse_boot_argn("offline-legacy-validate", &validate, sizeof(validate)) && validate == 1;
-	}
 	if (!strncmp(executable, backboardd, sizeof(backboardd))) {
-		const int single = single_layer && !native_legacy_detach_ready();
+		const int single = !native_legacy_detach_ready();
 #if NATIVE_SWITCH_CA_VBL
-		/* Only with the display's DC A vsync (sheng-vsync, NativeLegacyDisplay startVsync): without it nothing would drive CA. */
-		static int vbl = -1;
-		if (vbl < 0) {
-			uint32_t hz = 0, vblank = 1;
-			(void)PE_parse_boot_argn("switch-vblank", &vblank, sizeof(vblank));
-			vbl = PE_parse_boot_argn("sheng-vsync", &hz, sizeof(hz)) && hz && vblank;
-		}
-		if (vbl && single) {
+		if (single) {
 			return native_switch_backboardd_vbl_environment;
 		}
-		if (vbl) {
-			return native_switch_backboardd_vbl_environment + 1;
-		}
-#endif
+		return native_switch_backboardd_vbl_environment + 1;
+#else
 		if (single) {
 			return native_switch_backboardd_environment;
 		}
+#endif
 	}
 	return NULL;
-}
-
-/*
- * Switch: switch-no-iconagent=1 refuses to run iconservicesagent. With no Metal device in it, Core Image 21H461 falls back
- * to OpenGL ES, which has no driver here, and the agent crash-loops on every SF Symbol while Settings waits on it.
- * It is a user-domain job (user/501), so the system disabled.plist does not cover it; refusing the exec does, for any
- * domain. Clients then get NSXPCConnectionInvalid at once and draw placeholders.
- */
-static bool
-native_switch_exec_refused(const struct image_params *imgp)
-{
-	static const char iconagent[] = "/System/Library/CoreServices/iconservicesagent";
-	static int refuse = -1;
-	if (refuse < 0) {
-		uint32_t enabled = 0;
-		refuse = PE_parse_boot_argn("switch-no-iconagent", &enabled, sizeof(enabled)) && enabled;
-	}
-	return refuse && !strncmp(imgp->ip_strings + strlen(EXECUTABLE_KEY), iconagent, sizeof(iconagent));
 }
 
 /*
@@ -7128,10 +7095,6 @@ exec_extract_strings(struct image_params *imgp)
 		imgp->ip_envc++;
 	}
 
-	if (native_switch_exec_refused(imgp)) {
-		error = EPERM;
-		goto bad;
-	}
 	/* Switch: a chosen daemon's extra environment (native_switch_exec_environment). */
 	const char *const *native_environment = native_switch_exec_environment(imgp);
 	for (; native_environment && *native_environment; native_environment++) {
@@ -8389,7 +8352,7 @@ char native_owner_data_device_path[64];
 /* Boot-time read-only union views of owner-provided GPU addon content over sealed system directories, mounted after the Data mount and
  * before launchd starts: the Adreno Metal plugin bundle over /System/Library/Extensions (the original Metal discovery loads
  * /System/Library/Extensions/<MetalPluginName>.bundle) and an owner launchd job over /System/Library/LaunchDaemons (a process outside
- * every sandbox profile). Only with boot-arg sheng-gpu-addon=1. Never panics: a missing source directory or a refused mount only
+ * every sandbox profile). Never panics: a missing source directory or a refused mount only
  * records its status. The backing directories are owner Data (not an authenticated immutable volume); code in them still has to
  * pass AMFI through the loaded trust cache. */
 extern volatile int native_bindfs_boot_mount;
@@ -8447,10 +8410,6 @@ native_gpu_addon_mount(proc_t p, user_addr_t scratch, user_addr_t offset, const 
 static void
 native_gpu_addon_prepare(proc_t p, user_addr_t scratch)
 {
-	uint32_t enabled = 0;
-	if (!PE_parse_boot_argn("sheng-gpu-addon", &enabled, sizeof(enabled)) || enabled != 1) {
-		return;
-	}
 	static const char extensions_source[] = "/private/var/ngpu/addons", extensions_point[] = "/System/Library/Extensions";
 	static const char daemons_source[] = "/private/var/ngpu/daemons", daemons_point[] = "/System/Library/LaunchDaemons";
 	/* Scratch page layout until launchd's exec: 0x000 its path and arguments, 0x100-0x34f mount requests,
@@ -8479,7 +8438,7 @@ native_owner_data_prepare(proc_t p, user_addr_t scratch)
 	const char *data_uuid = XNU_OWNER_DATA_VOLUME_UUID;
 #if defined(XNU_NATIVE_RAM_BLOCK) && XNU_NATIVE_RAM_BLOCK
 #if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
-	(void)PE_parse_boot_argn("switch-root-boot", &switch_persistent, sizeof(switch_persistent));
+	switch_persistent = 1;
 	switch_raw = switch_files_storage_profile() == SWITCH_STORAGE_RAW;
 	if (switch_raw) data_uuid = SWITCH_RAW_DATA_UUID;
 	if (switch_persistent == 1) {
@@ -9117,27 +9076,51 @@ native_switch_als_cache(proc_t p, user_addr_t scratch, mount_t data_mount)
 	printf("SwitchRawBoot: ambient light sensor %s: MobileGestalt cache dropped (%d)\n", als ? "on" : "off", error);
 }
 
+extern const struct switch_ui_scale *switch_ui_scale(void);
+
 /* The UI scale (vm_unix.c, SwitchUIScale): MobileGestalt's main-screen-scale comes from its static screen info, which
- * lives in the same build-keyed cache as DisplayBootRotation, so a cache made at another scale keeps answering it. The
- * cache is dropped once per scale: the marker names the scale whose cache MobileGestalt has made since. */
+ * lives in the same build-keyed cache as DisplayBootRotation, so a cache made at another scale keeps answering it.
+ * /private/var/Switch/ui-scale-<num>-<den> names the fractional scale MobileGestalt has made its cache at since the
+ * cache was last dropped; no marker is scale 1, the stock answer, so a Data volume that never left 1 keeps its cache. */
 static void
 native_switch_ui_scale_cache(proc_t p, user_addr_t scratch, mount_t data_mount)
 {
 	static const char cache[] = "/private/var/containers/Shared/SystemGroup/systemgroup.com.apple.mobilegestaltcache/"
-	    "Library/Caches/com.apple.MobileGestalt.plist", marker[] = "/private/var/Switch/ui-scale-8-5";
-	vnode_t vp = NULLVP;
-	if (!vnode_lookup(marker, 0, &vp, vfs_context_current())) {
+	    "Library/Caches/com.apple.MobileGestalt.plist";
+	const struct switch_ui_scale *scale = switch_ui_scale();
+	char markers[SWITCH_UI_SCALES][48] = {{0}};
+	bool current = false, other = false;
+	for (unsigned i = 0; i < SWITCH_UI_SCALES; i++) {
+		const struct switch_ui_scale *each = &switch_ui_scales[i];
+		if (switch_ui_scale_is_unit(each)) continue;
+		snprintf(markers[i], sizeof(markers[i]), "/private/var/Switch/ui-scale-%u-%u", each->num, each->den);
+		vnode_t vp = NULLVP;
+		if (vnode_lookup(markers[i], 0, &vp, vfs_context_current())) {
+			markers[i][0] = '\0';
+			continue;
+		}
 		vnode_put(vp);
-		return;
+		if (each == scale) current = true;
+		else other = true;
 	}
+	if (switch_ui_scale_is_unit(scale) ? !other : current) return;
 	struct unlink_args request = {.path = scratch + 0x900};
 	int32_t result = 0;
 	int error = copyout(cache, request.path, sizeof(cache));
 	if (!error) error = native_switch_unlink(p, &request, &result);
 	if (error == ENOENT) error = 0;
-	if (!error) error = native_switch_mkdir(p, scratch, "/private/var/Switch", 0, 0755);
-	if (!error) error = native_switch_watchdog_file(p, scratch, marker, "", 0, data_mount, 0, 0, 0644);
-	printf("SwitchRawBoot: UI scale 8/5: MobileGestalt cache dropped (%d)\n", error);
+	for (unsigned i = 0; i < SWITCH_UI_SCALES && !error; i++) {
+		if (markers[i][0] == '\0' || &switch_ui_scales[i] == scale) continue;
+		error = copyout(markers[i], request.path, strlen(markers[i]) + 1);
+		if (!error) error = native_switch_unlink(p, &request, &result);
+	}
+	if (!error && !switch_ui_scale_is_unit(scale)) {
+		char marker[48];
+		snprintf(marker, sizeof(marker), "/private/var/Switch/ui-scale-%u-%u", scale->num, scale->den);
+		error = native_switch_mkdir(p, scratch, "/private/var/Switch", 0, 0755);
+		if (!error) error = native_switch_watchdog_file(p, scratch, marker, "", 0, data_mount, 0, 0, 0644);
+	}
+	printf("SwitchRawBoot: UI scale %s: MobileGestalt cache dropped (%d)\n", scale->name, error);
 }
 
 /* Portrait-native: Core Animation must composite the landscape interface into the portrait framebuffer itself. backboardd
@@ -9189,6 +9172,7 @@ native_switch_portrait_display(proc_t p, user_addr_t scratch, mount_t data_mount
  * default 0.5 at each boot (every boot logged since 10-30). Should the managed file not be written, the user's plist is
  * replaced as before (one line). */
 enum native_switch_setup_kind { kSetupUser, kSetupOnce, kSetupManaged };
+enum native_switch_setup_scale { kSetupAnyScale, kSetupUnitScale, kSetupFractionalScale };
 
 static int
 native_switch_setup_state(proc_t p, user_addr_t scratch, mount_t data_mount)
@@ -9196,7 +9180,23 @@ native_switch_setup_state(proc_t p, user_addr_t scratch, mount_t data_mount)
 #define SWITCH_PLIST(body) "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" \
 	"<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n" \
 	"<plist version=\"1.0\"><dict>" body "</dict></plist>\n"
-	static const struct { const char *name, *body; enum native_switch_setup_kind kind; } prefs[] = {
+/* SBDisableIdleSleep is explicitly false: earlier boots wrote true into the user plist, which this managed key
+ * overrides. True makes SpringBoard hold FrontBoard's PreventIdleSleep ("SBPowerDefaults") forever.
+ * Fixed volume buttons (SBDisableNaturalVolumeButtonArrangement). SpringBoard swaps volume up and down by interface
+ * orientation (SBVolumeButtonEventMapper) for an iPad's top-edge or right-edge buttons. It puts them on the top edge
+ * here: no iPad without a home button has a screen as small as this one's, so the screen type falls back to the iPad
+ * mini 6. In orientation 4 that swap turns Vol- into Vol+. With it off, Vol+ (PX6) raises the volume in every
+ * interface orientation the Switch rotates to. */
+#define SWITCH_SPRINGBOARD "<key>BKNoWatchdogs</key><true/>" \
+	"<key>FBLaunchWatchdogExceptions</key><dict><key>com.apple.purplebuddy</key><real>100</real></dict>" \
+	"<key>MCForceShowCloudConfigurationUI</key><false/><key>SBDisableAutoDim</key><true/>" \
+	"<key>SBDontDimOrLockOnAC</key><true/><key>SBDisableIdleSleep</key><false/>" \
+	"<key>SBDisableNaturalVolumeButtonArrangement</key><true/>"
+	static const struct {
+		const char *name, *body;
+		enum native_switch_setup_kind kind;
+		enum native_switch_setup_scale scale;
+	} prefs[] = {
 		{"com.apple.purplebuddy", SWITCH_PLIST("<key>SetupDone</key><true/><key>SetupFinishedAllSteps</key><true/>"
 		    "<key>SetupVersion</key><integer>11</integer><key>daemonizeNeedsToRun</key><false/>"), kSetupUser},
 		{"com.apple.purplebuddy.notbackedup", SWITCH_PLIST("<key>ShouldRunDiagnosticsMiniBuddy</key><false/>"
@@ -9205,24 +9205,19 @@ native_switch_setup_state(proc_t p, user_addr_t scratch, mount_t data_mount)
 		    "<key>ShouldRunStandardMiniBuddy</key><false/><key>SilentICDPUpgrade</key><false/>"), kSetupUser},
 		{"com.apple.managedconfiguration.notbackedup",
 		    SWITCH_PLIST("<key>LockdownActivationIndicatesCloudConfigurationAvailable</key><false/>"), kSetupUser},
-		{"com.apple.springboard", SWITCH_PLIST("<key>BKNoWatchdogs</key><true/>"
-		    "<key>FBLaunchWatchdogExceptions</key><dict><key>com.apple.purplebuddy</key><real>100</real></dict>"
-		    "<key>MCForceShowCloudConfigurationUI</key><false/><key>SBDisableAutoDim</key><true/>"
-		    "<key>SBDontDimOrLockOnAC</key><true/>"
-		    /* Explicitly false: earlier boots wrote true into the user plist, which this managed key overrides.
-		     * True makes SpringBoard hold FrontBoard's PreventIdleSleep ("SBPowerDefaults") forever. */
-		    "<key>SBDisableIdleSleep</key><false/>"
-		    /* Fixed volume buttons. SpringBoard swaps volume up and down by interface orientation
-		     * (SBVolumeButtonEventMapper) for an iPad's top-edge or right-edge buttons. It puts them on the
-		     * top edge here: no iPad without a home button is as small as 450x800 points, so the screen
-		     * type falls back to the iPad mini 6. In orientation 4 that swap turns Vol- into Vol+. With it
-		     * off, Vol+ (PX6) raises the volume in every interface orientation the Switch rotates to. */
-		    "<key>SBDisableNaturalVolumeButtonArrangement</key><true/>"), kSetupManaged},
+		/* 720x1280 points at scale 1 are too small to read on a 7" panel: large icons and the text size below keep
+		 * them legible. A fractional scale's points are an iPad's, and Settings' own choices apply. */
+		{"com.apple.springboard", SWITCH_PLIST(SWITCH_SPRINGBOARD "<key>SBHomeLargeIcons</key><true/>"), kSetupManaged,
+		    kSetupUnitScale},
+		{"com.apple.springboard", SWITCH_PLIST(SWITCH_SPRINGBOARD), kSetupManaged, kSetupFractionalScale},
+		{"com.apple.UIKit", SWITCH_PLIST("<key>UIPreferredContentSizeCategoryName</key>"
+		    "<string>UICTContentSizeCategoryXXL</string>"), kSetupOnce, kSetupUnitScale}, /* the user's Text Size then sticks */
 		/* Seeded once: DataMigrator keeps its results and its hang-reboot count in this domain. */
 		{"com.apple.migration", SWITCH_PLIST("<key>LastSystemVersion</key><string>21H461</string>"
 		    "<key>DMUserDataDisposition</key><dict><key>SyntheticDidUpgrade</key><false/>"
 		    "<key>buildVersion</key><string>21H461</string></dict>"), kSetupOnce},
 	};
+#undef SWITCH_SPRINGBOARD
 #undef SWITCH_PLIST
 	/* Directories a restore creates on Data (UniXNU prepare-offline-data.py): usermanagerd keeps its
 	 * session and persona keybags in keybags/ and aborts at every start without it. */
@@ -9245,7 +9240,9 @@ native_switch_setup_state(proc_t p, user_addr_t scratch, mount_t data_mount)
 	for (unsigned i = 0; i < sizeof(directories) / sizeof(directories[0]) && !error; ++i)
 		error = native_switch_mkdir(p, scratch, directories[i].path, directories[i].owner, directories[i].mode);
 	char path[160] = "/private/var/containers";
+	const bool unit_scale = switch_ui_scale_is_unit(switch_ui_scale());
 	for (unsigned i = 0; i < sizeof(prefs) / sizeof(prefs[0]) && !error; ++i) {
+		if (prefs[i].scale == (unit_scale ? kSetupFractionalScale : kSetupUnitScale)) continue;
 		const char *body = prefs[i].body;
 		if (prefs[i].kind == kSetupManaged) {
 			snprintf(path, sizeof(path), "/private/var/Managed Preferences/mobile/%s.plist", prefs[i].name);
@@ -9278,7 +9275,7 @@ native_switch_setup_state(proc_t p, user_addr_t scratch, mount_t data_mount)
 	return error;
 }
 
-/* The last boot's panic, kept in RAM across the warm reset (boot-arg switch-panic-save, SwitchPanicSave.c):
+/* The last boot's panic, kept in RAM across the warm reset (SwitchPanicSave.c):
  * /private/var/Switch/panic-<UTC time>.log, root 0644, written as the policy files are, and its panic stackshot (zlib
  * kcdata: every task's threads, kernel and user frames, wait info) as panic-<UTC time>.kcdata next to it; the record is
  * cleared once the text is on Data. A failure is logged and the record kept for the next boot. A copy of both goes to
@@ -9332,13 +9329,10 @@ native_switch_watchdog_policy(proc_t p, user_addr_t scratch)
 	    "<plist version=\"1.0\"><dict>" \
 	    "<key>com.apple.identityservicesd</key><true/>" \
 	    "<key>com.apple.CommCenter</key><true/>"
-	/* Bluetooth needs drivers/SwitchBluetooth, which runs only with boot-arg switch-bt=1 (the BlueTool stand-in in
-	 * the overlay and bluetoothd's transport, native_switch_exec_environment, are gated the same way). Without it
-	 * bluetoothd has no controller and stays disabled. audiomxd's Bluetooth plug-in then retries bluetoothd's
-	 * com.apple.BTAudioHALPlugin.xpc in a tight loop (~520/s, 500k+ log lines a boot) unless the overlay shows the stub
-	 * BTAudioHALPlugin.driver/Info.plist (drivers/SwitchAudio/hal/BTAudioHALPlugin-Info.plist: a loading condition that
-	 * matches no IOService, so the audio server defers the plug-in before loading any code). So audiomxd runs when
-	 * bluetoothd does or when that stub is on Data, and stays disabled otherwise. */
+	/* Bluetooth needs drivers/SwitchBluetooth, which boot-arg switch-no-bt keeps off (the BlueTool stand-in in the
+	 * overlay and bluetoothd's transport, native_switch_exec_environment, follow it). Without it bluetoothd has no
+	 * controller and stays disabled, and so does audiomxd: its Bluetooth plug-in would retry bluetoothd's
+	 * com.apple.BTAudioHALPlugin.xpc in a tight loop (~520/s, 500k+ log lines a boot). */
 #define NATIVE_SWITCH_POLICY_BLUETOOTH "<key>com.apple.bluetoothd</key><true/>"
 	/* watchdogd (the userspace watchdog: it pings backboardd, SpringBoard, logd, configd... every 10 s, and a hang
 	 * ends in a "userspace watchdog timeout" panic with a stackshot) runs once drivers/NativeSwitchWatchdog
@@ -9401,17 +9395,12 @@ native_switch_watchdog_policy(proc_t p, user_addr_t scratch)
 #undef NATIVE_SWITCH_POLICY_AUDIO
 #undef NATIVE_SWITCH_POLICY_TAIL
 #undef NATIVE_SWITCH_POLICY_NO_HARDWARE
-	static const char bluetooth_audio_stub[] =
-	    "/private/var/Switch/overlay/System/Library/Audio/Plug-Ins/HAL/BTAudioHALPlugin.driver/Info.plist";
-	uint32_t bluetooth = 0;
-	const int with_bluetooth = PE_parse_boot_argn("switch-bt", &bluetooth, sizeof(bluetooth)) && bluetooth;
+	const int with_bluetooth = !native_switch_disabled("switch-no-bt");
 	int policy_size = 0;
 	static const char *const paths[] = {
 	    "/private/var/db/com.apple.xpc.launchd/disabled.plist",
 	    "/private/var/db/com.apple.xpc.launchd/disabled.migrated"
 	};
-	uint32_t root_boot = 0;
-	if (!PE_parse_boot_argn("switch-root-boot", &root_boot, sizeof(root_boot)) || root_boot != 1) return 0;
 	if (native_owner_data_status || native_owner_data_stage != 4 || native_owner_data_device == NODEV) return EPERM;
 	vnode_t data_root = NULLVP;
 	int error = vnode_open("/private/var", FREAD | O_DIRECTORY | O_NOFOLLOW_ANY,
@@ -9426,14 +9415,7 @@ native_switch_watchdog_policy(proc_t p, user_addr_t scratch)
 	    strcmp(vfs_statfs(data_mount)->f_fstypename, "apfs")) error = EPERM;
 	if (!error) error = native_switch_watchdog_attributes(data_root, data_mount, 1, 0);
 	if (!error) {
-		vnode_t stub = NULLVP;
-		/* The HAL union with the stub is gated on switch-audio (tree/overlay/manifest.json), so the stub only
-		 * counts when that boot-arg is set: otherwise the real BTAudioHALPlugin would load and spin. */
-		uint32_t audio = 0;
-		const int with_audio_arg = PE_parse_boot_argn("switch-audio", &audio, sizeof(audio)) && audio;
-		const int with_audio = with_bluetooth ||
-		    (with_audio_arg && !vnode_lookup(bluetooth_audio_stub, 0, &stub, vfs_context_current()));
-		if (stub) vnode_put(stub);
+		const int with_audio = with_bluetooth;
 		extern int switch_watchdog_ready(void);
 		const int with_watchdog = switch_watchdog_ready();
 		strlcpy(policy, head, sizeof(policy));
@@ -9441,7 +9423,7 @@ native_switch_watchdog_policy(proc_t p, user_addr_t scratch)
 		if (!with_audio) strlcat(policy, audio_off, sizeof(policy));
 		if (!with_watchdog) strlcat(policy, watchdogd_off, sizeof(policy));
 		policy_size = (int)strlcat(policy, tail, sizeof(policy));
-		if (!with_audio) printf("SwitchRawBoot: audiomxd stays disabled: no %s\n", bluetooth_audio_stub);
+		if (!with_audio) printf("SwitchRawBoot: audiomxd stays disabled: no Bluetooth (switch-no-bt)\n");
 		if (!with_watchdog) printf("SwitchRawBoot: watchdogd stays disabled: NativeSwitchWatchdog not published\n");
 	}
 	if (!error) error = native_switch_watchdog_directory(p, scratch, "/private/var/db", data_mount);
@@ -9667,17 +9649,6 @@ load_init_program(proc_t p)
 #if CONFIG_MEMORYSTATUS
 	(void) memorystatus_init_at_boot_snapshot();
 #endif /* CONFIG_MEMORYSTATUS */
-
-#if (DEBUG || DEVELOPMENT) && defined(XNU_NATIVE_AIR_INIT) && XNU_NATIVE_AIR_INIT
-	int offline_air = 0;
-	if (PE_parse_boot_argn("offline-air-init", &offline_air, sizeof(offline_air)) && offline_air) {
-		if (offline_air != 1) panic("offline AIR init invalid selector");
-		error = load_init_program_at_path(p, (user_addr_t)scratch_addr,
-		    "/private/var/tmp/air-native", init_envp);
-		if (error) panic("offline signed AIR instrument exec failed: %d", error);
-		return;
-	}
-#endif
 
 #if DEBUG || DEVELOPMENT
 	/* Check for boot-arg suffix first */

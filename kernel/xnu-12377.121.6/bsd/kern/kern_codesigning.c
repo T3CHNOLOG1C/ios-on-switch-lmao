@@ -150,6 +150,15 @@ code_signing_configuration(
 	config |= CS_CONFIG_LOCAL_SIGNING;
 	config |= CS_CONFIG_OOP_JIT;
 
+	/*
+	 * ios-on-switch-lmao: no page-content hashing, in every kernel configuration. Each binary's CDHash is still
+	 * checked against the trust caches when it is loaded. With no secure boot, anyone who can change a file on the
+	 * card can replace the kernel too, so hashing pages costs boot time and protects nothing: without the skip this
+	 * 4 KiB-page kernel reads and hashes a binary's whole code range when its 16 KiB-page signature is added
+	 * (ubc_subr.c cs_native4k_prepare), then hashes each code page again when it faults in.
+	 */
+	config |= CS_CONFIG_INTEGRITY_SKIP;
+
 #if CODE_SIGNING_MONITOR
 	/* Mark the code signing monitor as enabled if required */
 	if (csm_enabled() == true) {
@@ -230,7 +239,6 @@ code_signing_configuration(
 	int amfi_unrestrict_task_for_pid = 0;
 	int amfi_get_out_of_my_way = 0;
 	int cs_enforcement_disabled = 0;
-	int cs_integrity_skip = 0;
 	int amfi_relax_profile_trust = 0;
 	int amfi_dev_mode_policy = 0;
 
@@ -260,12 +268,6 @@ code_signing_configuration(
 		"cs_enforcement_disable",
 		&cs_enforcement_disabled,
 		sizeof(cs_enforcement_disabled));
-
-	/* Parse the system code signing integrity-check bypass */
-	PE_parse_boot_argn(
-		"cs_integrity_skip",
-		&cs_integrity_skip,
-		sizeof(cs_integrity_skip));
 
 	/* Parse the AMFI profile trust bypass */
 	PE_parse_boot_argn(
@@ -311,11 +313,6 @@ code_signing_configuration(
 		config |= CS_CONFIG_GET_OUT_OF_MY_WAY;
 	} else if (cs_enforcement_disabled) {
 		config |= CS_CONFIG_GET_OUT_OF_MY_WAY;
-	}
-
-	/* CS_CONFIG_INTEGRITY_SKIP */
-	if (cs_integrity_skip) {
-		config |= CS_CONFIG_INTEGRITY_SKIP;
 	}
 
 	/* CS_CONFIG_RELAX_PROFILE_TRUST */

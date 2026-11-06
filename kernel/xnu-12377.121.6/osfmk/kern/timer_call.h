@@ -215,7 +215,7 @@ enum running_timer {
 	RUNNING_TIMER_KPERF,
 #endif /* KPERF */
 	RUNNING_TIMER_PERFCONTROL,
-	RUNNING_TIMER_SWITCH_KPROF,   /* switch_kprof.c: the kernel sampling profiler (switch-diag=3) */
+	RUNNING_TIMER_SWITCH_KPROF,   /* switch_kprof.c: the kernel sampling profiler (kprof_wanted) */
 	RUNNING_TIMER_MAX,
 };
 
