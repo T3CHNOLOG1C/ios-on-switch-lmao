@@ -90,8 +90,7 @@ If the file can't be used, the boot stops on screen:
 
 ## Code signing
 
-XNU's RELEASE configuration ignores `cs_integrity_skip=1`. Without it, this 4 KiB-page kernel reads and hashes a
-binary's whole code range when its signature is added (Apple signs in 16 KiB pages, so the kernel derives 4 KiB
-digests up front), then hashes each code page again when it faults in. Both builds now skip that page hashing with no
-boot-arg. Each binary's CDHash is still checked against the trust caches when it loads. With no secure boot, anyone
-who can change a file on the card can replace the kernel too, so the hashing costs boot time and protects nothing.
+XNU's RELEASE configuration ignores `cs_integrity_skip=1`. Without it, the kernel hashes each code page when it faults
+in. Both builds now skip that page hashing with no boot-arg. Each binary's CDHash is still checked against the trust
+caches when it loads. With no secure boot, anyone who can change a file on the card can replace the kernel too, so the
+hashing costs boot time and protects nothing.

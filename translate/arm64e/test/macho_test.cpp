@@ -193,7 +193,7 @@ void translate(const Spec &s, Translated &t, uint32_t flags = 0)
     t.out.assign(t.in.size(), 0);
     char err[256] = "";
     ASSERT_EQ(0, a64x_macho_parse(t.in.data(), t.in.size(), t.m.get(), err, sizeof(err))) << err;
-    t.rc = a64x_translate_image(t.m.get(), 4096, flags, t.out.data(), &t.x, err, sizeof(err));
+    t.rc = a64x_translate_image(t.m.get(), 16384, flags, t.out.data(), &t.x, err, sizeof(err));
     t.err = err;
     if (t.rc == 0) {
         t.sites = a64x_verify_image(t.m.get(), t.out.data(), &t.x, err, sizeof(err));

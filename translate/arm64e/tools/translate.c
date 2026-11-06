@@ -65,7 +65,7 @@ static void report(const struct a64x_macho *m, const struct a64x_image_xlate *x,
 
 int a64x_cmd_translate(int argc, char **argv)
 {
-    uint32_t map_page = 4096, flags = 0;
+    uint32_t map_page = 16384, flags = 0;
     int ch;
     while ((ch = getopt(argc, argv, "km:")) != -1) {
         if (ch == 'k')

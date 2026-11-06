@@ -336,8 +336,7 @@ extern void switch_kprof_wait(unsigned int kind, uint64_t elapsed, uint64_t byte
 #define SWITCH_FAULT_WIRE      0x01u  /* change_wiring: vm_map_wire, IOKit prepare */
 #define SWITCH_FAULT_KERNEL    0x02u  /* in a kernel map */
 #define SWITCH_FAULT_PURGEABLE 0x04u  /* a zero fill in a purgeable object */
-extern void switch_kprof_fault(unsigned int cls, unsigned int flags, uint64_t began, uint64_t vaddr,
-    unsigned int around);
+extern void switch_kprof_fault(unsigned int cls, unsigned int flags, uint64_t began, uint64_t vaddr);
 /* osfmk/arm64/sleh.c (r17-faults): a fault arm_fast_fault resolved (pmap ref/mod emulation, never reaches vm_fault) */
 extern void switch_kprof_fast_fault(bool access_flag);
 #if FBDP_DEBUG_OBJECT_NO_PAGER

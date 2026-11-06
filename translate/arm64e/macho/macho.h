@@ -119,9 +119,9 @@ struct a64x_image_xlate {
 /*
  * Translates the image's executable segment as the kernel does at load: data islands from function starts and data
  * in code, then a64x_translate_page() over each 4 KB page with the stubs laid out after the image's address space
- * (rounded up to map_page, the process map's page size: 4 KB on the Switch, whose A57 has no 16 KB granule;
- * 16 KB on an iPad). `out` receives the whole slice with the
- * segment translated (size m->size; NULL: layout only). A marked or native image is copied unchanged.
+ * (rounded up to map_page, the process map's page size: 16 KB, the VM page on the Switch as on an iPad). `out`
+ * receives the whole slice with the segment translated (size m->size; NULL: layout only). A marked or native image is
+ * copied unchanged.
  * extra_flags: A64X_MAP_KERNEL for kernel code. 0 on success.
  */
 int a64x_translate_image(const struct a64x_macho *m, uint32_t map_page, uint32_t extra_flags, uint8_t *out,

@@ -43,13 +43,11 @@
  *       resident page mapped again), device (an IOKit/device pager page: GPU pool views, IOSurfaces of physical
  *       memory), file (paged in), cmp (decompressed), failed; how many of them wired memory (vm_map_wire, IOKit
  *       prepare), were in a kernel map, in the task's shared region (the dyld shared cache), in a kernel copyin or
- *       copyout, and the zero fills of purgeable memory; the zero-fill fault-around (vm_fault.c
- *       switch_zero_fill_around: pages zero filled and mapped with a fault's page, never faulted themselves); the
- *       fast faults (pmap reference/modify emulation, which never reach vm_fault: access-flag and write-permission
- *       faults); and XNU's own vm_statistics64 counters over the window (vm_stat's), where zero fills outside
- *       vm_fault are UPL/IOKit prepare zero fills
+ *       copyout, and the zero fills of purgeable memory; the fast faults (pmap reference/modify emulation, which never
+ *       reach vm_fault: access-flag and write-permission faults); and XNU's own vm_statistics64 counters over the
+ *       window (vm_stat's), where zero fills outside vm_fault are UPL/IOKit prepare zero fills
  *   Switch kprof faults by process 1/2, 2/2: the processes with the most vm_faults, by class, with their fault time,
- *       wired/shared-region/copyio counts, fast faults and fault-around pages
+ *       wired/shared-region/copyio counts and fast faults
  *   Switch kprof zf sites: where the two processes with the most zero fills took them: the user PC (copyio: k, the
  *       syscall's) as dsc/main+ 64-byte bucket, with its majority LR
  *   The first line also carries each CPU's interrupts, IPIs and synchronous exceptions (faults and traps) per second.
@@ -158,10 +156,10 @@ struct kprof_task {
 	uint64_t cpu_abs;       /* merged table: exact user+system CPU this window (kprof_refresh_names) */
 	uint32_t age_ms;
 	/* r17-faults, switch_kprof_fault/_fast_fault: this window's vm_faults by class, the time they took (mach time),
-	 * how many wired memory, were in the shared region or in a kernel copyin/copyout, the fast faults (access flag,
-	 * write permission) and the pages the zero-fill fault-around entered */
+	 * how many wired memory, were in the shared region or in a kernel copyin/copyout, and the fast faults (access flag,
+	 * write permission) */
 	uint32_t faults[KPROF_F_CLASSES];
-	uint32_t fault_wired, fault_dsc, fault_copyio, fast_af, fast_mod, zf_around;
+	uint32_t fault_wired, fault_dsc, fault_copyio, fast_af, fast_mod;
 	uint64_t fault_abs;
 };
 
@@ -170,7 +168,7 @@ struct kprof_faults {
 	uint32_t n[KPROF_F_CLASSES];
 	uint64_t abs[KPROF_F_CLASSES];      /* mach time in vm_fault */
 	uint64_t max_abs[KPROF_F_CLASSES];
-	uint32_t wired, kernel, dsc, copyio, purgeable, fast_af, fast_mod, around_faults, around_pages;
+	uint32_t wired, kernel, dsc, copyio, purgeable, fast_af, fast_mod;
 };
 
 /* r17-faults: a zero fill's user PC (64-byte bucket, KPROF_U_* key, KPROF_U_COPYIO for a kernel copyio's fault) with
@@ -669,7 +667,7 @@ switch_kprof_wait(unsigned int kind, uint64_t elapsed, uint64_t bytes)
  * table probes per fault, never on an interrupt path (vm_fault refuses those).
  */
 void
-switch_kprof_fault(unsigned int cls, unsigned int flags, uint64_t began, uint64_t vaddr, unsigned int around)
+switch_kprof_fault(unsigned int cls, unsigned int flags, uint64_t began, uint64_t vaddr)
 {
 	const uint64_t       now = mach_absolute_time();
 	thread_t             thread = current_thread();
@@ -720,10 +718,6 @@ switch_kprof_fault(unsigned int cls, unsigned int flags, uint64_t began, uint64_
 	b->faults.purgeable += (flags & SWITCH_FAULT_PURGEABLE) != 0;
 	b->faults.dsc += dsc;
 	b->faults.copyio += copyio;
-	if (around != 0) {
-		b->faults.around_faults++;
-		b->faults.around_pages += around;
-	}
 	ts = kprof_task_slot(b->task, 7, task_pid(task));
 	if (ts != NULL) {
 		if (ts->name[0] == '\0') {
@@ -734,7 +728,6 @@ switch_kprof_fault(unsigned int cls, unsigned int flags, uint64_t began, uint64_
 		ts->fault_wired += (flags & SWITCH_FAULT_WIRE) != 0;
 		ts->fault_dsc += dsc;
 		ts->fault_copyio += copyio;
-		ts->zf_around += around;
 	}
 	if (upcb != NULL) {
 		const uint64_t     where = kprof_user_location(task, pc);
@@ -1391,8 +1384,6 @@ kprof_faults_merge(struct kprof_faults *dst, const struct kprof_faults *src)
 	dst->purgeable += src->purgeable;
 	dst->fast_af += src->fast_af;
 	dst->fast_mod += src->fast_mod;
-	dst->around_faults += src->around_faults;
-	dst->around_pages += src->around_pages;
 }
 
 static uint64_t
@@ -1457,11 +1448,11 @@ kprof_faults_lines(uint64_t window)
 		kprof_put("%s %s %u %llu %llu", k ? "," : "", names[k], f->n[k], kprof_abs_ms(f->abs[k]),
 		    kprof_abs_us(f->max_abs[k]));
 	}
-	zf_seen = (uint64_t)f->n[KPROF_F_ZF] + f->around_pages;
-	kprof_put("; wired %u, kernel map %u, shared region %u, copyio %u, purgeable zf %u; zf around %u faults +%u pages; "
+	zf_seen = f->n[KPROF_F_ZF];
+	kprof_put("; wired %u, kernel map %u, shared region %u, copyio %u, purgeable zf %u; "
 	    "fast %llu/s (af %u, mod %u); xnu: faults %llu (wire_fast %lld), zero_fill %llu (outside vm_fault %lld), cow %llu, "
 	    "pageins %llu, reactivations %llu, decompressions %llu, compressions %llu, purges %llu, swapins %llu; free %u",
-	    f->wired, f->kernel, f->dsc, f->copyio, f->purgeable, f->around_faults, f->around_pages,
+	    f->wired, f->kernel, f->dsc, f->copyio, f->purgeable,
 	    (uint64_t)(f->fast_af + f->fast_mod) * NSEC_PER_SEC / window, f->fast_af, f->fast_mod,
 	    d[0], (long long)d[0] - (long long)total, d[1], (long long)d[1] - (long long)zf_seen, d[2], d[3], d[4], d[5],
 	    d[6], d[7], d[8], vm_page_free_count);
@@ -1480,7 +1471,7 @@ kprof_faults_lines(uint64_t window)
 	lines = (ntop + 3) / 4;
 	for (unsigned int line = 0; line < lines; line++) {
 		kprof_put("SwitchKprof faults by process %u/%u (n: zf cow soft device file cmp failed, ms; wired, shared "
-		    "region, copyio; fast af/mod; zf around +pages):", line + 1, lines);
+		    "region, copyio; fast af/mod):", line + 1, lines);
 		for (unsigned int i = line * 4; i < MIN(ntop, (line + 1) * 4); i++) {
 			const struct kprof_task *t = &kprof_tasks[top[i]];
 
@@ -1488,8 +1479,8 @@ kprof_faults_lines(uint64_t window)
 			for (unsigned int k = 0; k < KPROF_F_CLASSES; k++) {
 				kprof_put(" %u", t->faults[k]);
 			}
-			kprof_put(", %llu ms; %u, %u, %u; %u/%u; +%u;", kprof_abs_ms(t->fault_abs), t->fault_wired, t->fault_dsc,
-			    t->fault_copyio, t->fast_af, t->fast_mod, t->zf_around);
+			kprof_put(", %llu ms; %u, %u, %u; %u/%u;", kprof_abs_ms(t->fault_abs), t->fault_wired, t->fault_dsc,
+			    t->fault_copyio, t->fast_af, t->fast_mod);
 		}
 		kprof_flush();
 	}
@@ -1509,8 +1500,8 @@ kprof_faults_lines(uint64_t window)
 			    kprof_sites[i].n : 0;
 		}
 		nsites = kprof_top(kprof_vals + KPROF_TASKS, KPROF_SITES, sites, KPROF_TOP_SITES);
-		kprof_put("SwitchKprof zf sites: %s[%d] %u (+%u around) (pc <majority lr n):", t->name, t->pid,
-		    t->faults[KPROF_F_ZF], t->zf_around);
+		kprof_put("SwitchKprof zf sites: %s[%d] %u (pc <majority lr n):", t->name, t->pid,
+		    t->faults[KPROF_F_ZF]);
 		for (unsigned int i = 0; i < nsites; i++) {
 			const struct kprof_site *s = &kprof_sites[sites[i]];
 			const uint64_t           key = s->key & ~KPROF_U_COPYIO;
@@ -1713,7 +1704,6 @@ kprof_summary(__unused thread_call_param_t p0, __unused thread_call_param_t p1)
 			dst->fault_copyio += src->fault_copyio;
 			dst->fast_af += src->fast_af;
 			dst->fast_mod += src->fast_mod;
-			dst->zf_around += src->zf_around;
 			if (dst->name[0] == '\0') {
 				strlcpy(dst->name, src->name, sizeof(dst->name));
 			}

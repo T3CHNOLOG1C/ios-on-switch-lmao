@@ -8,9 +8,6 @@
 #   xnu_memcmp_source_test   subrs.c uses it on arm64 only, through the two bodies the harness copies
 #   xnu_stall_test           osfmk/kern/switch_stall.h's decisions: which samples of a UI main thread are a stall,
 #                            one report and one end per episode, wait names by block_hint.h value, user addresses
-#   xnu_zero_fill_around_test  vm_fault.c's switch_zero_fill_around (r17-faults) enters exactly the absent pages of
-#                            the faulting page's 16 KiB group in its map entry and VM object, and nothing outside the
-#                            plain case, against a model of the object and pmap
 #   xnu_render_senders_test  osfmk/ipc/switch_render_senders.h's table and line: the render server's senders by
 #                            process, largest first, with their rates and top ids, the rest as others
 #   xnu_render_senders_source_test  ipc_kmsg_send counts a message under its destination port's lock, only for the
@@ -114,40 +111,6 @@ host_test(
         'SUBRS_PATCHED=\\"$(rootpath //kernel/xnu-10063.141.1/osfmk:device/subrs.c)\\"',
         'SUBRS_BASE=\\"$(rootpath @xnu_base//:osfmk/device/subrs.c)\\"',
     ],
-)
-
-# --- vm_fault.c's switch_zero_fill_around -----------------------------------------------------------------------------
-# fault_around.h: vm_fault.c from "#ifndef SWITCH_ZERO_FILL_AROUND" up to "uint64_t vm_fault_resilient_media_initiate".
-genrule(
-    name = "fault_around",
-    srcs = ["//kernel/xnu-10063.141.1/osfmk:vm/vm_fault.c"],
-    outs = ["fault_around.h"],
-    cmd = """awk '
-        /^uint64_t vm_fault_resilient_media_initiate/ { if (on) { done = 1; exit } }
-        /^#ifndef SWITCH_ZERO_FILL_AROUND/ { on = 1 }
-        on { print }
-        END { if (!done) exit 1 }
-    ' $< > $@""",
-)
-
-host_library(
-    name = "zero_fill_around",
-    srcs = [
-        "fault_around.h",
-        "xnu_zero_fill_around_harness.c",
-    ],
-    copts = [
-        "-O1",
-        "-Wno-unused-parameter",
-    ],
-    defines = ["main=xnu_zero_fill_around_main"],
-    includes = ["."],
-)
-
-host_test(
-    name = "xnu_zero_fill_around_test",
-    srcs = ["xnu_zero_fill_around_test.cpp"],
-    deps = [":zero_fill_around"],
 )
 
 # --- switch_render_senders.h ----------------------------------------------------------------------------------------

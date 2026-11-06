@@ -4147,109 +4147,6 @@ vm_fault_type_for_tracing(boolean_t need_copy_on_read, int type_of_fault)
 	return type_of_fault;
 }
 
-/*
- * Switch (r17-faults): zero-fill fault-around, the iPad's 16 KiB VM page on this 4 KiB kernel (the Cortex-A57 has no
- * 16 KiB translation granule). iPadOS userland touches anonymous memory as it would on 16 KiB pages, so every 16 KiB
- * it first touches costs four zero-fill faults here instead of one: four exception entries, map and object lookups,
- * page grabs and pmap_enters, for the same bytes zeroed. Once a zero-fill fault has entered its own page, the other
- * absent pages of its 16 KiB-aligned group are allocated, zero filled and entered with the same protection and fault
- * type (as one 16 KiB page would be), under the locks the fault already holds, so they never fault themselves.
- *
- * Only in the plain case: a fresh anonymous object (internal, no shadow, no copy object, no pager yet, so nothing of it
- * is compressed or backed elsewhere; not purgeable, not all-reusable), a user map entry the fault found directly (no
- * submap, no caller pmap), not executable, not wiring, not a realtime thread, and only while free memory is above the
- * free target; a page that is resident, outside the entry or the object, or that cannot be grabbed or entered without
- * blocking ends the group. A zero page entered early is exactly what its own fault would have entered: semantics stay;
- * the footprint is the 16 KiB-page footprint iPadOS's limits are made for. Counted on the kprof faults line.
- *
- * Without dynamic paging (no active compressor, e.g. vm_compressor_mode 8) an anonymous page has nowhere to go, so
- * zero_fill_cleanup puts it on the throttled queue before vm_fault_enqueue_page; each page here goes there first too,
- * which vm_fault_enter's enqueue then leaves alone.
- */
-#ifndef SWITCH_ZERO_FILL_AROUND
-#define SWITCH_ZERO_FILL_AROUND 1     /* 0: one page per zero-fill fault, as XNU (an A/B build); the counters stay */
-#endif
-#define SWITCH_ZF_GROUP       (16ULL * 1024)
-
-static unsigned int
-switch_zero_fill_around(
-	vm_object_t             object,
-	vm_object_offset_t      offset,
-	pmap_t                  pmap,
-	vm_map_offset_t         vaddr,
-	vm_prot_t               prot,
-	vm_prot_t               caller_prot,
-	vm_object_fault_info_t  fault_info)
-{
-	const vm_map_offset_t   group = vaddr & ~(vm_map_offset_t)(SWITCH_ZF_GROUP - 1);
-	unsigned int            around = 0;
-
-	vm_object_lock_assert_exclusive(object);
-	/* the main page's pmap_enter may have dropped the object lock: test the object again */
-	if (!SWITCH_ZERO_FILL_AROUND || PAGE_SIZE >= SWITCH_ZF_GROUP || !object->internal ||
-	    object->shadow != VM_OBJECT_NULL || object->vo_copy != VM_OBJECT_NULL || object->pager_created ||
-	    object->purgable != VM_PURGABLE_DENY || object->all_reusable || object->blocked_access ||
-	    object->phys_contiguous || is_kernel_object(object) || pmap == kernel_pmap ||
-	    (prot & VM_PROT_EXECUTE)) {
-		return 0;
-	}
-	for (vm_map_offset_t va = group; va < group + SWITCH_ZF_GROUP; va += PAGE_SIZE) {
-		vm_object_offset_t      off;
-		vm_page_t               m;
-		boolean_t               need_retry = FALSE;
-		uint8_t                 lock_type = OBJECT_LOCK_EXCLUSIVE;
-		int                     type_of_fault = DBG_ZERO_FILL_FAULT;
-		kern_return_t           kr;
-
-		if (va == vaddr) {
-			continue;
-		}
-		if (va < vaddr) {
-			if (offset < vaddr - va) {
-				continue;
-			}
-			off = offset - (vaddr - va);
-		} else {
-			off = offset + (va - vaddr);
-		}
-		/* within the faulting entry's range of the object, and the object */
-		if (off < fault_info->lo_offset || off >= fault_info->hi_offset || off >= object->vo_size) {
-			continue;
-		}
-		if (vm_page_lookup(object, off) != VM_PAGE_NULL) {
-			continue;
-		}
-		if (vm_page_free_count <= vm_page_free_target) {
-			break;
-		}
-		m = vm_page_alloc(object, off);
-		if (m == VM_PAGE_NULL) {
-			break;
-		}
-		vm_fault_cs_clear(m);
-		m->vmp_pmapped = TRUE;
-		vm_page_zero_fill(m);
-		counter_inc(&vm_statistics_zero_fill_count);
-		DTRACE_VM2(zfod, int, 1, (uint64_t *), NULL);
-		if (!VM_DYNAMIC_PAGING_ENABLED()) {
-			vm_page_lockspin_queues();
-			vm_fault_enqueue_throttled_locked(m);
-			vm_page_unlock_queues();
-		}
-		/* need_retry: a pmap_enter that would block (page tables, PV entries) leaves the page resident unmapped */
-		kr = vm_fault_enter(m, pmap, va, PAGE_SIZE, 0, prot, caller_prot, FALSE, FALSE, VM_KERN_MEMORY_NONE,
-		    fault_info, &need_retry, &type_of_fault, &lock_type);
-		if (m->vmp_busy) {
-			PAGE_WAKEUP_DONE(m);
-		}
-		if (kr != KERN_SUCCESS || need_retry) {
-			break;
-		}
-		around++;
-	}
-	return around;
-}
-
 uint64_t vm_fault_resilient_media_initiate = 0;
 uint64_t vm_fault_resilient_media_retry = 0;
 uint64_t vm_fault_resilient_media_proceed = 0;
@@ -4344,7 +4241,6 @@ vm_fault_internal(
 #endif
 	bool                    switch_device = false;    /* the page entered was a device pager's */
 	bool                    switch_purgeable = false; /* a zero fill in a purgeable object */
-	unsigned int            switch_around = 0;        /* pages the zero-fill fault-around entered */
 
 
 	real_vaddr = vaddr;
@@ -5839,15 +5735,6 @@ zero_fill_cleanup:
 				}
 				vm_fault_enqueue_page(object, m, wired, change_wiring, wire_tag, fault_info.no_cache, &type_of_fault, kr);
 
-				/* Switch (r17-faults): the rest of this page's 16 KiB group, under the same locks */
-				if (kr == KERN_SUCCESS && need_retry == FALSE && type_of_fault == DBG_ZERO_FILL_FAULT &&
-				    !change_wiring && !wired && !rtfault && caller_pmap == PMAP_NULL && physpage_p == NULL &&
-				    top_object == VM_OBJECT_NULL && map == original_map && real_map == map &&
-				    fault_page_size == PAGE_SIZE && !map->no_zero_fill) {
-					switch_around = switch_zero_fill_around(object, vm_object_trunc_page(offset), pmap, vaddr,
-					    prot, caller_prot, &fault_info);
-				}
-
 				if (__improbable(rtfault &&
 				    !m->vmp_realtime &&
 				    vm_pageout_protect_realtime)) {
@@ -6716,12 +6603,11 @@ done:
 		switch_kprof_fault(switch_class,
 		    (change_wiring ? SWITCH_FAULT_WIRE : 0) | (original_map->pmap == kernel_pmap ? SWITCH_FAULT_KERNEL : 0) |
 		    (switch_purgeable && switch_class == SWITCH_FAULT_ZF ? SWITCH_FAULT_PURGEABLE : 0),
-		    switch_began, (uint64_t)vaddr, switch_around);
+		    switch_began, (uint64_t)vaddr);
 	}
 #else
 	(void)switch_device;
 	(void)switch_purgeable;
-	(void)switch_around;
 #endif
 
 	return kr;

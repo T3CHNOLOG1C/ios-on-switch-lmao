@@ -27,7 +27,7 @@ xnu_versions(name = "xnu_version")
 # kernel, kept until a 16 KiB boot is proven on the device.
 string_flag(
     name = "vm_page_size",
-    build_setting_default = "4k",
+    build_setting_default = "16k",
     scope = "target",
     values = [
         "16k",
