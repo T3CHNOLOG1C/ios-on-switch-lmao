@@ -4,6 +4,8 @@
 #include "raw_kernel.h"
 
 #include <IOKit/IOKitLib.h>
+#include <dlfcn.h>
+#include <mach-o/dyld.h>
 #include <mach/mach.h>
 #include <cstdio>
 #include <cstdlib>
@@ -12,11 +14,36 @@
 namespace raw {
 namespace {
 constexpr uint64_t kVaGranule = 0x10000;  // the GMMU big page: every range starts and ends on one
+constexpr char kNvk[] = "libvulkan_nouveau.dylib";
+
+// NVK's image: the one this process loaded already, else the one beside this image (the plugin's bundle, which the m2v device's
+// open loads NVK from: the same image then). Null: none (a host tool of the raw path alone).
+void *nvkImage()
+{
+    const size_t suffix = strlen(kNvk);
+    for (uint32_t i = 0, n = _dyld_image_count(); i < n; i++) {
+        const char *name = _dyld_get_image_name(i);
+        const size_t length = name ? strlen(name) : 0;
+        if (length > suffix && name[length - suffix - 1] == '/' && !strcmp(name + length - suffix, kNvk))
+            return dlopen(name, RTLD_NOW | RTLD_NOLOAD);
+    }
+    Dl_info info = {};
+    if (!dladdr(reinterpret_cast<const void *>(&nvkImage), &info) || !info.dli_fname)
+        return nullptr;
+    std::string path(info.dli_fname);
+    const size_t slash = path.rfind('/');
+    if (slash == std::string::npos)
+        return nullptr;
+    path.replace(slash + 1, std::string::npos, kNvk);
+    return dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
 }
+}  // namespace
 
 Kernel::~Kernel()
 {
-    if (conn_)
+    if (release_)
+        release_();
+    else if (conn_)
         IOServiceClose(conn_);
 }
 
@@ -38,6 +65,31 @@ int Kernel::call(uint32_t method, const void *in, size_t inSize, void *out, size
 }
 
 bool Kernel::open(std::string &err)
+{
+    using Connection = bool (*)(uint32_t *, bool *, uint32_t *, uint64_t *, uint64_t *);
+    void *nvk = nvkImage();
+    const auto connection = nvk ? reinterpret_cast<Connection>(dlsym(nvk, "switch_nvk_connection")) : nullptr;
+    const auto release = nvk ? reinterpret_cast<void (*)()>(dlsym(nvk, "switch_nvk_connection_release")) : nullptr;
+    if (!connection || !release)
+        return openOwn(err);
+    uint64_t vaStart = 0, vaEnd = 0;
+    if (!connection(&conn_, &tunnel_, &selector_, &vaStart, &vaEnd)) {
+        err = "NVK's connection did not open";
+        return false;
+    }
+    release_ = release;
+    shared_ = true;
+    if (call(TegraGM20BMethodGetInfo, nullptr, 0, &info_, sizeof info_) != KERN_SUCCESS ||
+        info_.abi_version != TegraGM20BAbiVersion) {
+        err = "GetInfo failed";
+        return false;
+    }
+    vaStart = (vaStart + kVaGranule - 1) & ~(kVaGranule - 1);
+    vaFree_[vaStart] = (vaEnd & ~(kVaGranule - 1)) - vaStart;
+    return true;
+}
+
+bool Kernel::openOwn(std::string &err)
 {
     const char *name = getenv("NVK_DARWIN_SERVICE");
     if (!name || !*name)

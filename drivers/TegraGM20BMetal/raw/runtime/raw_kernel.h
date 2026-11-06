@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: MIT
 // The TegraGM20B user client (drivers/TegraGM20B/TegraGM20BABI.h) as the raw GM20B path calls it: the same service, open type,
 // call forms (direct, or tunnelled through the one selector a sandbox admits) and records as Mesa NVK's nvkmd_darwin.
-// Its own connection, so its own GPU VM: VAs come from the top quarter of the client range (a GPU fault address says which path
-// made it), through a first-fit free list (VA is given back when a BO is freed).
+// The connection is NVK's (switch_nvk_connection), so the GPU VM is the one m2v draws in: a BO and VA of either driver are the
+// other's too, and m2v's views of the raw path's memory need no import or bind of their own. VAs come from the quarter NVK leaves
+// out, the top one (a GPU fault address says which path made it), through a first-fit free list (VA is given back when a BO is
+// freed). A process without NVK (a host tool of the raw path alone) gets a connection of its own, the same quarter.
 // Not thread safe: raw::Device calls it under its own lock.
 #pragma once
 #include <atomic>
@@ -28,6 +30,12 @@ class Kernel {
 public:
     ~Kernel();
     bool open(std::string &err);
+
+    // The connection is NVK's: m2v's views of this path's memory may name its BOs and VAs.
+    bool shared() const
+    {
+        return shared_;
+    }
 
     const TegraGM20BAbiInfo &info() const
     {
@@ -86,8 +94,11 @@ private:
     bool bind(uint64_t va, uint64_t handle, uint64_t range, uint32_t kind);
     uint64_t allocVa(uint64_t bytes, uint64_t align);
     void freeVa(uint64_t va, uint64_t bytes);
+    bool openOwn(std::string &err);
     uint32_t conn_ = 0;
     bool tunnel_ = false;
+    bool shared_ = false;
+    void (*release_)() = nullptr;  // NVK's switch_nvk_connection_release
     // A SurfaceWrites failed: imports stop saying the GPU only samples them, and every Exec carries
     // TegraGM20BPushImportsWritten.
     std::atomic<bool> importsWritten_{false};

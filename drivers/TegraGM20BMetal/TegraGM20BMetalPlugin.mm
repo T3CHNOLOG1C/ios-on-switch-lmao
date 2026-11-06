@@ -462,6 +462,10 @@ id openDevice(unsigned port)
         if (!renderServer && strcmp(getprogname(), "iconservicesagent") != 0 &&
             strcmp(getprogname(), "ScreenshotServicesService") != 0 && !knobOn("TEGRA_GPU_ALL_CLIENTS", true))
             return nil;
+        // NVK opens the first service of this class (nvkmd_darwin.c darwin_open): ours, never the IOAcceleratorES stub
+        // (drivers/SwitchAccelStub) that only ends QuartzCore's accelerator poll. Set before the raw path's setup below, which
+        // may be the first to open NVK's connection.
+        setenv("NVK_DARWIN_SERVICE", "AGXAccelerator", 0);
         // The raw GM20B path's own setup (its pack, channel and context, the first pool chunk) starts now, beside the m2v device's
         // open below; raw_metal_device_open takes what it made, so the render server's first frame waits for neither twice.
         if (renderServer && !(getenv("TEGRA_RAW_METAL") && strcmp(getenv("TEGRA_RAW_METAL"), "0") == 0)) {
@@ -492,9 +496,6 @@ id openDevice(unsigned port)
             if (auto entryID = (int (*)(unsigned, uint64_t *))dlsym(iokit, "IORegistryEntryGetRegistryEntryID"))
                 entryID(port, &registryID);
         }
-        // NVK opens the first service of this class (nvkmd_darwin.c darwin_open): ours, never the IOAcceleratorES stub
-        // (drivers/SwitchAccelStub) that only ends QuartzCore's accelerator poll.
-        setenv("NVK_DARWIN_SERVICE", "AGXAccelerator", 0);
         // The render server compresses its framebuffer and surfaces in an Apple GPU layout unless told not to; this GPU and the
         // display driver take plain rows. The kernel also writes these as backboardd's preferences (read before this code runs).
         if (renderServer) {
