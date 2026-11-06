@@ -151,17 +151,21 @@ CHECKS = {
 }
 
 # Runs the check; its report is empty when it passes and holds the tool's output when it fails. The action itself
-# always succeeds, so `bazel build //...` never stops on a finding and the test lists every finding at once.
+# always succeeds, so `bazel build //...` never stops on a finding and the test lists every finding at once. sed makes
+# the paths relative to the workspace, not the sandbox (bash 3.2's ${out//pattern/} is quadratic in the output).
 _RUN = """\
 report="$1"; shift
 export DPRINT_CACHE_DIR="$(mktemp -d)" RUMDL_CACHE_DIR="$(mktemp -d)" NO_COLOR=1
-if out="$("$@" 2>&1)"; then
+log="$(mktemp)"
+if "$@" > "$log" 2>&1; then
     : > "$report"
 else
     rc=$?
-    sandbox="$PWD/"; out="${out//$sandbox/}"  # paths relative to the workspace, not the sandbox
-    printf '%s\\n%s\\n' "${out:-(no output)}" "exit $rc: $*" > "$report"
+    sed "s|$PWD/||g" "$log" > "$report"
+    [ -s "$report" ] || echo "(no output)" > "$report"
+    echo "exit $rc: $*" >> "$report"
 fi
+rm -f "$log"
 """
 
 _TEST = """\

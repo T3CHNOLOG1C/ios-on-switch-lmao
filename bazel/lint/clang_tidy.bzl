@@ -58,16 +58,20 @@ EXTRA_ARGS = [
 ]
 
 # The report is empty when the unit passes and holds clang-tidy's findings when it does not; the action itself always
-# succeeds, so the test lists every finding at once.
+# succeeds, so the test lists every finding at once. sed makes the paths relative to the workspace, not the sandbox:
+# bash 3.2's ${out//pattern/} is quadratic, minutes per MB of findings.
 _RUN = """\
 report="$1"; unit="$2"; shift 2
-if out="$("$@" 2>&1)"; then
+log="$(mktemp)"
+if "$@" > "$log" 2>&1; then
     : > "$report"
 else
     rc=$?
-    sandbox="$PWD/"; out="${out//$sandbox/}"  # paths relative to the workspace, not the sandbox
-    printf '%s\\n%s\\n' "${out:-(no output)}" "exit $rc: clang-tidy $unit" > "$report"
+    sed "s|$PWD/||g" "$log" > "$report"
+    [ -s "$report" ] || echo "(no output)" > "$report"
+    echo "exit $rc: clang-tidy $unit" >> "$report"
 fi
+rm -f "$log"
 """
 
 def _flags(cc_toolchain, feature_configuration, compilation_context, action, user_flags):
