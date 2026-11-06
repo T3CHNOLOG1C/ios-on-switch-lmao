@@ -4,11 +4,12 @@
     gen.py bindings --pair I T [--pair I T]... --object O... --out bindings.S
 
 The header declares the original class as the kind lays it out: its instance size, its virtuals in slot order (a slot
-no driver names is opaque<N>), field accessors at the kind's offsets, the kind's constants and the members drivers
-call, after the interface's declarations (the types its methods name that no included header declares). A function
-without a "decl" is only bound: a C++ member the driver's own header declares. The bindings bind every symbol of the
-tables' addresses (and refuse an original import they lack) at its kernelcache address plus the kind's prelink slide;
-an entry the table marks "unported" becomes a function that panics naming it.
+no driver names is opaque<N>), field accessors at the kind's offsets, the kind's constants, the members drivers call
+and SWITCH_ABI_KIND (the kind's name, for messages), after the interface's declarations (the types its methods name
+that no included header declares). A function without a "decl" is only bound: a C++ member the driver's own header
+declares. The bindings bind every symbol of the tables' addresses (and refuse an original import they lack) at its
+kernelcache address plus the kind's prelink slide; an entry the table marks "unported" becomes a function that panics
+naming it.
 """
 
 import argparse
@@ -139,7 +140,7 @@ def header(interface, table, table_name):
     out += ['#pragma once'] + ['#include <{}>'.format(h) for h in interface['includes']]
     if interface.get('declarations'):
         out += [''] + interface['declarations']
-    out += ['', ACCESS.rstrip('\n'), '']
+    out += ['', ACCESS.rstrip('\n'), '', '#define SWITCH_ABI_KIND "{}"'.format(table['kind']), '']
     out.append(
         '#define SWITCH_ABI_OPAQUE(n) '
         'virtual __attribute__((deprecated("inherited original slot: never call"))) void opaque##n()'

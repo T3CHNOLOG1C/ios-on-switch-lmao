@@ -100,6 +100,7 @@ class HeaderTest(unittest.TestCase):
         self.assertLess(body.index('SWITCH_ABI_OPAQUE(168)'), body.index('virtual void kick() = 0'))
         self.assertLess(body.index('virtual void kick() = 0'), body.index('SWITCH_ABI_OPAQUE(170)'))
         self.assertIn('static_assert(sizeof(Base) == 0x100', text)
+        self.assertIn('#define SWITCH_ABI_KIND "TEST"', text)
         self.assertIn('switch_abi_load<uint8_t>(this, 0x90) != 0', text)
 
     def test_declarations_between_the_includes_and_the_class(self):
