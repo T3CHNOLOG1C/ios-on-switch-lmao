@@ -348,6 +348,31 @@ TEST(GM20BKillSource, AKilledChannelLeavesItsConnectionWorking)
 		    HasSubstr("chans_[i] && !tgm_chan_error(chans_[i]) &&"));
 }
 
+// The raw path's reopen after its channel is killed: the shader heap's BO and VA outlive the channel, so every program
+// placed in it (Device::place) keeps its slot and every state that baked its offset stays drawable; the new channel gets
+// what lives in a channel's context again, the program region at the heap, the texture and sampler pools and the root
+// constant buffer (emitContext, from the pack's relocations) and the 2D state, and the first command buffer's prologue
+// invalidates the shader caches before any draw.
+TEST(GM20BRawReopenSource, ReopenKeepsTheHeapAndReplaysTheContext)
+{
+	const std::string raw = SourceText("../../TegraGM20BMetal/raw/runtime/raw_gpu.cpp");
+	const std::string reopen = flat(definition(raw, "bool Device::reopen()"));
+	EXPECT_THAT(reopen, Not(HasSubstr("placed_")));
+	EXPECT_THAT(reopen, Not(HasSubstr("heapPlaced_")));
+	EXPECT_THAT(reopen, Not(HasSubstr("pipelines_")));
+	EXPECT_THAT(reopen, Not(HasSubstr("heap_")));
+	expectBefore(reopen, "k_.channel(kEngines, channel_, fence_)", "emitContext(p);");
+	expectBefore(reopen, "emitContext(p);", "fx::emitTwodInit(p);");
+	const std::string context = flat(definition(raw, "void Device::emitContext(Push &p)"));
+	for (const char *reloc :
+	     {"case RelocHeapHi:", "case RelocHeapLo:", "case RelocTicHi:", "case RelocTicLo:",
+	      "case RelocTscHi:", "case RelocTscLo:", "case RelocRootHi:", "case RelocRootLo:"})
+		EXPECT_THAT(context, HasSubstr(reloc));
+	EXPECT_THAT(context, HasSubstr("p.inc(CB_SELECTOR_A,"));
+	const std::string begin = flat(definition(raw, "CommandBuffer *Device::begin()"));
+	expectBefore(begin, "reopen();", "p.m(INVALIDATE_SHADER_CACHES_NO_WFI,");
+}
+
 // No spin for GPFIFO or push room: every wait for room sleeps until a fence's interrupt, and the fence reports GET to nvif
 // before that interrupt, so the room the GPU freed is there when the waiter looks.
 TEST(GM20BRoomSource, RoomIsWaitedForByInterrupt)
