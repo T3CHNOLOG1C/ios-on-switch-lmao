@@ -88,6 +88,18 @@ TEST(DirectScanoutSource, NeverReplacedAcrossLayouts)
     EXPECT_THAT(method(display(), "    void presentEntry(int i)\n"), HasSubstr("sameLayout(i, ring.pending)"));
 }
 
+// A surface the GPU renders tiled is scanned block-linear in place, or copied as a block-linear source; never as pitch.
+TEST(DirectScanoutSource, TiledSurfacesScanBlockLinear)
+{
+    EXPECT_THAT(
+        method(display(), "    void layoutOf(int i, uint32_t &kind, uint32_t &stride, uint32_t &hOffset) const\n"),
+        HasSubstr("kind = slots[i - kSlot0].tiled ? kBlockSurfaceKind : 0;"));
+    EXPECT_THAT(method(display(), "    bool offerGpuCopy("),
+                HasSubstr("copy.flags = tiled ? TEGRA_SCANOUT_COPY_SOURCE_BLOCK : 0;"));
+    expectBefore(after(display(), "    void kickOnce()"), "const bool tiled = surfaceTiled(memory);",
+                 "offerDirect(request, memory, sourceStride, allocation, width, height, tiled, kickAt)");
+}
+
 // Every flip, latch check and copy target goes through TegraScanoutRing (TegraDisplayFlip/test:scanout_ring_test): the
 // two-buffer state is gone.
 TEST(ScanoutRingSource, DisplayUsesTheRing)

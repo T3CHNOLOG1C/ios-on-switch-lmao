@@ -231,6 +231,19 @@ TEST(GM20BPresentSource, FenceOnlyPresentHasNoCopy)
 		     "NVB0B5_LAUNCH_DMA_NON_PIPELINED");
 }
 
+// A tiled (block-linear) source: the copy engine reads it block-linear with the tiled block height, never as pitch, and
+// the user client records a surface as tiled only from a bind of the whole surface.
+TEST(GM20BPresentSource, TiledSourceIsCopiedBlockLinear)
+{
+	const std::string copy = flat(Between(gpu(), "static int present_copy(", "\n}\n"));
+	expectBefore(copy, "if (src_block) PUSH_NVSQ(push, NVA0B5, NVB0B5_SET_SRC_BLOCK_SIZE",
+		     "NVB0B5_LAUNCH_DMA");
+	EXPECT_THAT(copy, HasSubstr("(src_block ? 0 : NVB0B5_LAUNCH_DMA_SRC_PITCH)"));
+	EXPECT_THAT(flat(Between(client(), "IOReturn AGXDeviceUserClient::vmBind(", "\n}\n")),
+		    HasSubstr("if (bo->coh && !op.bo_offset && op.range >= bo->bytes) "
+			      "tgm_coherency_bound(bo->coh, op.kind);"));
+}
+
 // System sleep (gpu.c "system sleep"): every path that touches the GPU outside gpu.lock goes through the gate
 // gm20b_sleep_test runs, and sleep and wake keep the orders the hardware needs.
 TEST(GM20BSleepSource, GpuTouchingPathsGoThroughTheGate)

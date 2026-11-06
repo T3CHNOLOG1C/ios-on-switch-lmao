@@ -1370,6 +1370,8 @@ IOReturn AGXDeviceUserClient::vmBind(const TegraGM20BAbiVmBind *in, uint32_t cou
 		if (ret)
 			return ret;
 		binds_[nbinds_++] = {op.va, op.range, bo, op.bo_offset};
+		if (bo->coh && !op.bo_offset && op.range >= bo->bytes)
+			tgm_coherency_bound(bo->coh, op.kind);
 		tgm_stats_bind(1, op.range >> 12, nowNs() - start);
 	}
 	return kIOReturnSuccess;
@@ -2204,9 +2206,15 @@ extern "C" int tegra_gm20b_scanout_copy(const struct TegraScanoutCopy *copy)
 	IOMemoryDescriptor *memory =
 		OSDynamicCast(IOMemoryDescriptor, static_cast<OSObject *>(copy->source));
 	const bool fenceOnly = copy->flags & TEGRA_SCANOUT_COPY_FENCE_ONLY;
+	const bool sourceBlock = copy->flags & TEGRA_SCANOUT_COPY_SOURCE_BLOCK;
+	const uint64_t sourceLines =
+		sourceBlock ? (copy->height + (8u << TEGRA_SCANOUT_TILED_BLOCK_HEIGHT_LOG2) - 1) &
+				      ~((8ull << TEGRA_SCANOUT_TILED_BLOCK_HEIGHT_LOG2) - 1)
+			    : copy->height;
 	if (!memory || !copy->width || !copy->height || copy->width > 16384 ||
 	    copy->sourceStride < uint64_t(copy->width) * 4 || copy->sourceStride > UINT32_MAX ||
-	    copy->sourceBytes < copy->sourceStride * copy->height ||
+	    copy->sourceBytes < copy->sourceStride * sourceLines ||
+	    (sourceBlock && (copy->width * 4) % 64) ||
 	    (!fenceOnly && (copy->targetPitch < copy->width * 4 || copy->blockHeightLog2 > 5)))
 		return kIOReturnBadArgument;
 	// the block-linear target must hold the frame: whole block rows of targetPitch bytes x (8 << blockHeightLog2) lines
@@ -2229,8 +2237,8 @@ extern "C" int tegra_gm20b_scanout_copy(const struct TegraScanoutCopy *copy)
 	const uint64_t source =
 		target || fenceOnly ? presentSurface(memory, copy->sourceBytes, &sourcePa) : 0;
 	int ret = (target || fenceOnly) && source
-			  ? tgm_present_copy(source, sourcePa, copy->sourceStride, copy->width,
-					     copy->height, target, copy->targetPitch,
+			  ? tgm_present_copy(source, sourcePa, copy->sourceStride, sourceBlock,
+					     copy->width, copy->height, target, copy->targetPitch,
 					     copy->blockHeightLog2, presentDone, copy->display)
 			  : -12;  // ENOMEM: the target or the surface could not be mapped
 	IOLockUnlock(gPresentLock);

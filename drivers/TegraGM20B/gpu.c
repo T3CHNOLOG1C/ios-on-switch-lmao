@@ -59,6 +59,7 @@
 #include "TegraGM20BGpu.h"
 #include "TegraGM20BSleepGate.h"
 #include "../TegraDisplayFlip/SwitchFrameTimeline.h"
+#include "../TegraDisplayFlip/TegraScanoutCopy.h"
 
 /* mainline tegra210.dtsi gpu@57000000: BAR0, BAR1, SPI 157 ("stall") / 158 ("nonstall") */
 static struct resource gpu_res[] = {
@@ -1100,6 +1101,7 @@ struct tgm_coh {
 	u32 npages, refs;
 	int writable;  /* some import lets the GPU write it: submissions mark it GPU-dirty */
 	int gpu_dirty; /* atomic: the GPU may have written it since the last CPU read lock */
+	int tiled; /* atomic: its last whole-surface bind was block-linear (TEGRA_SCANOUT_TILED_KIND) */
 };
 
 /* Registers this driver's read_lock/write_unlock with the kernel's IOSurface lock/unlock hook (XNU IOUserClient.cpp). */
@@ -1179,6 +1181,25 @@ void tgm_coherency_put(struct tgm_coh *c)
 		kfree(c);
 	}
 	mutex_unlock(&coh_lock);
+}
+
+/* A bind of the whole surface holding `c` with PTE kind `kind`: the GPU now addresses its pixels block-linear or not. */
+void tgm_coherency_bound(struct tgm_coh *c, uint32_t kind)
+{
+	if (c)
+		__atomic_store_n(&c->tiled, kind == TEGRA_SCANOUT_TILED_KIND, __ATOMIC_RELEASE);
+}
+
+int tegra_gm20b_surface_tiled(uint64_t pa)
+{
+	struct tgm_coh *c;
+	int tiled;
+
+	mutex_lock(&coh_lock);
+	c = *coh_slot(pa);
+	tiled = c && __atomic_load_n(&c->tiled, __ATOMIC_ACQUIRE);
+	mutex_unlock(&coh_lock);
+	return tiled;
 }
 
 /* A submission that may write the writable import holding `c`: mark it dirty, so the next CPU read lock invalidates it.
@@ -3433,6 +3454,12 @@ int tgm_chan_exec(struct tgm_chan *chan, const struct tgm_push *pushes, uint32_t
 #define NVB0B5_SET_DST_DEPTH 0x0718
 #define NVB0B5_SET_DST_LAYER 0x071c
 #define NVB0B5_SET_DST_ORIGIN 0x0720
+#define NVB0B5_SET_SRC_BLOCK_SIZE 0x0728
+#define NVB0B5_SET_SRC_WIDTH 0x072c
+#define NVB0B5_SET_SRC_HEIGHT 0x0730
+#define NVB0B5_SET_SRC_DEPTH 0x0734
+#define NVB0B5_SET_SRC_LAYER 0x0738
+#define NVB0B5_SET_SRC_ORIGIN 0x073c
 #define TGM_PRESENT_NS \
 	(1000 *        \
 	 NSEC_PER_MSEC) /* as the display's own limit: compositor jobs up to ~90 ms were seen */
@@ -3671,8 +3698,8 @@ static int present_writer_on(void)
 	return 1;
 }
 
-static int present_copy(uint64_t src_va, uint64_t src_pa, uint64_t stride, uint32_t width,
-			uint32_t height, uint64_t dst_va, uint32_t dst_pitch,
+static int present_copy(uint64_t src_va, uint64_t src_pa, uint64_t stride, int src_block,
+			uint32_t width, uint32_t height, uint64_t dst_va, uint32_t dst_pitch,
 			uint32_t block_height_log2, void (*done)(void *), void *arg)
 {
 	struct tgm_chan *chan = present.chan, *user;
@@ -3699,7 +3726,7 @@ static int present_copy(uint64_t src_va, uint64_t src_pa, uint64_t stride, uint3
 	mutex_unlock(&live_lock);
 	push = &chan->chan.push;
 	ret = PUSH_WAIT(
-		push, room * 5 + 40 +
+		push, room * 5 + 47 +
 			      CHAN_FENCE_DWORDS); /* acquires, a start stamp, the copy, the fence */
 	if (ret == -ETIMEDOUT)
 		tgm_chan_hung(chan, "present: push buffer still full after 1 s", chan->submitted,
@@ -3753,10 +3780,16 @@ static int present_copy(uint64_t src_va, uint64_t src_pa, uint64_t stride, uint3
 			  NVB0B5_BLOCK_SIZE_FERMI_8(block_height_log2), NVB0B5_SET_DST_WIDTH,
 			  dst_pitch, NVB0B5_SET_DST_HEIGHT, height, NVB0B5_SET_DST_DEPTH, 1,
 			  NVB0B5_SET_DST_LAYER, 0, NVB0B5_SET_DST_ORIGIN, 0);
+		if (src_block)
+			PUSH_NVSQ(push, NVA0B5, NVB0B5_SET_SRC_BLOCK_SIZE,
+				  NVB0B5_BLOCK_SIZE_FERMI_8(TEGRA_SCANOUT_TILED_BLOCK_HEIGHT_LOG2),
+				  NVB0B5_SET_SRC_WIDTH, width * 4, NVB0B5_SET_SRC_HEIGHT, height,
+				  NVB0B5_SET_SRC_DEPTH, 1, NVB0B5_SET_SRC_LAYER, 0,
+				  NVB0B5_SET_SRC_ORIGIN, 0);
 		PUSH_NVSQ(push, NVA0B5, NVB0B5_LAUNCH_DMA,
 			  NVB0B5_LAUNCH_DMA_NON_PIPELINED | NVB0B5_LAUNCH_DMA_FLUSH_ENABLE |
-				  NVB0B5_LAUNCH_DMA_SRC_PITCH | NVB0B5_LAUNCH_DMA_DST_BLOCKLINEAR |
-				  NVB0B5_LAUNCH_DMA_MULTI_LINE);
+				  (src_block ? 0 : NVB0B5_LAUNCH_DMA_SRC_PITCH) |
+				  NVB0B5_LAUNCH_DMA_DST_BLOCKLINEAR | NVB0B5_LAUNCH_DMA_MULTI_LINE);
 	}
 	/* set before the kick: the nonstall interrupt can come before chan_fence returns */
 	present.done = done;
@@ -3783,15 +3816,15 @@ static int present_copy(uint64_t src_va, uint64_t src_pa, uint64_t stride, uint3
 }
 
 /* Refused while the gate is shut: the display copies that frame on the CPU. */
-int tgm_present_copy(uint64_t src_va, uint64_t src_pa, uint64_t stride, uint32_t width,
-		     uint32_t height, uint64_t dst_va, uint32_t dst_pitch,
+int tgm_present_copy(uint64_t src_va, uint64_t src_pa, uint64_t stride, int src_block,
+		     uint32_t width, uint32_t height, uint64_t dst_va, uint32_t dst_pitch,
 		     uint32_t block_height_log2, void (*done)(void *), void *arg)
 {
 	int ret;
 
 	if (!gate_try())
 		return -EBUSY;
-	ret = present_copy(src_va, src_pa, stride, width, height, dst_va, dst_pitch,
+	ret = present_copy(src_va, src_pa, stride, src_block, width, height, dst_va, dst_pitch,
 			   block_height_log2, done, arg);
 	gate_leave();
 	return ret;

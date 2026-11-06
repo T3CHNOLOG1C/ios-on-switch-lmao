@@ -167,7 +167,8 @@ void tgm_fence_page_put(volatile uint32_t *va);
 
 /* GPU present (gpu.c "GPU present"): a kernel channel and address space, made at the first call (from the self-test on).
  * Mappings in it are volatile, at addresses the caller picks in [TGM_USER_VA_START, TGM_KERNEL_VA). tgm_present_copy
- * queues one copy engine copy, pitch source (stride) to a block-linear destination (dst_pitch bytes across, blocks one
+ * queues one copy engine copy, pitch source (stride; src_block: block-linear, width x 4 bytes across, blocks of
+ * 2^TEGRA_SCANOUT_TILED_BLOCK_HEIGHT_LOG2 GOBs) to a block-linear destination (dst_pitch bytes across, blocks one
  * GOB wide and 2^block_height_log2 GOBs high, 8-line GOBs), after the work submitted so far by the channels whose address
  * spaces import the source (every user channel's when none does), and
  * returns at once: 0, or -EBUSY (one in flight), -EINVAL, -ENODEV. done(arg) runs exactly once for an accepted copy,
@@ -175,8 +176,8 @@ void tgm_fence_page_put(volatile uint32_t *va);
 int tgm_present_open(struct tgm_vm **pvm);
 int tgm_present_map(uint64_t va, struct tgm_mem *mem, uint64_t bytes, uint8_t kind);
 int tgm_present_unmap(uint64_t va, uint64_t bytes);
-int tgm_present_copy(uint64_t src_va, uint64_t src_pa, uint64_t stride, uint32_t width,
-		     uint32_t height, uint64_t dst_va, uint32_t dst_pitch,
+int tgm_present_copy(uint64_t src_va, uint64_t src_pa, uint64_t stride, int src_block,
+		     uint32_t width, uint32_t height, uint64_t dst_va, uint32_t dst_pitch,
 		     uint32_t block_height_log2, void (*done)(void *), void *arg);
 /* Host import bookkeeping for the present: `pa` is the import's first page; add 1 when made, 0 when released. The
  * present waits only for address spaces that import its surface (src_pa, the surface's first page), when any does. */
@@ -196,6 +197,8 @@ struct tgm_coh;
 struct tgm_coh *tgm_coherency_add(uint64_t pa, const uint64_t *pas, uint32_t npages, int writable);
 void tgm_coherency_put(struct tgm_coh *c);
 void tgm_coherency_wrote(struct tgm_coh *c);
+/* A GPU client bound the whole surface holding `c` with PTE kind `kind` (tegra_gm20b_surface_tiled reads it). */
+void tgm_coherency_bound(struct tgm_coh *c, uint32_t kind);
 uint64_t tgm_coherency_read_lock(uint64_t pa);
 uint64_t tgm_coherency_write_unlock(uint64_t pa);
 

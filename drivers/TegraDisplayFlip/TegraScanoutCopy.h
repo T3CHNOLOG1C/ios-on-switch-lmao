@@ -17,6 +17,14 @@
 // flags: no copy; the completion only says the compositor's GPU work on the source is done (direct scanout: the display
 // scans the source itself, through the SMMU). target, targetBytes, targetPitch and blockHeightLog2 are ignored.
 #define TEGRA_SCANOUT_COPY_FENCE_ONLY 1u
+// flags: the source is block-linear (tegra_gm20b_surface_tiled): GOBs of 64 bytes x 8 lines, blocks 1 GOB wide and
+// 2^TEGRA_SCANOUT_TILED_BLOCK_HEIGHT_LOG2 GOBs high, width x 4 bytes (whole GOBs) across.
+#define TEGRA_SCANOUT_COPY_SOURCE_BLOCK 2u
+// Tiled IOSurfaces (the GPU renders them block-linear, the display scans them as such): bound by the GPU client with the
+// generic 16Bx2 PTE kind, blocks of 16 GOBs, rows of width x bytes per pixel (only surfaces whose rows are whole GOBs and
+// whose height is whole blocks are tiled, so the block-linear frame fits the pitch allocation; bytes per row is ignored).
+#define TEGRA_SCANOUT_TILED_KIND              0xfeu
+#define TEGRA_SCANOUT_TILED_BLOCK_HEIGHT_LOG2 4u
 
 struct TegraScanoutCopy {
     uint32_t version;        // TEGRA_SCANOUT_COPY_VERSION
@@ -54,6 +62,9 @@ int tegra_gm20b_scanout_copy(const struct TegraScanoutCopy *copy);
 // partial frame; the display does not flip to it). Any context, the GPU's interrupt filter included; it only records the status
 // and signals the display's work loop. The display panics if an accepted copy is not completed within 1 s.
 void native_legacy_gpu_complete(void *display, int status);
+// Provided by the GPU driver (weak in NativeLegacyDisplay): whether the IOSurface whose first page is `pa` holds
+// block-linear pixels, i.e. a GPU client's last bind of the whole surface used TEGRA_SCANOUT_TILED_KIND. Thread context.
+int tegra_gm20b_surface_tiled(uint64_t pa);
 #ifdef __cplusplus
 }
 #endif
