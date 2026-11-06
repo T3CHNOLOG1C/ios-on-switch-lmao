@@ -42,10 +42,10 @@
 > **Read this before you do anything.**
 >
 > - There is no warranty. If you break your console, that's your fault.
-> - It runs on the Nintendo Switch OLED and nothing else, and there are no plans for any other model.
-> - There is no support, for installing it or for anything else. Issues are disabled.
-> - Don't send me Twitter DMs or emails about it.
-> - PRs are accepted, but slop won't be merged. im not reading allat.
+> - This port runs on the Nintendo Switch OLED and nothing else, and there are no plans to support any other Switch model.
+> - There is no support with running this, for installing it, or for anything else. Issues are disabled.
+> - Don't send me Twitter DMs or emails asking for help.
+> - PRs are accepted, but straight slop won't be merged. im not reading allat.
 > - There's no promise when, or whether, a PR gets merged. i have a life too.
 
 <br />
