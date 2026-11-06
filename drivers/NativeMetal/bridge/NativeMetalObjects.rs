@@ -414,6 +414,9 @@ pub struct NmbShaderCacheStats {
     pub driver_truncated: u64,
     pub driver_mismatched: u64,
     pub driver_unchanged: u64,
+    pub seed_misses: u64,
+    pub seed_hit_p50_ns: u64,
+    pub seed_hit_p99_ns: u64,
 }
 
 #[unsafe(no_mangle)]
@@ -436,6 +439,9 @@ pub extern "C" fn nmb_device_shader_cache_stats(device: *const NmbDevice, out: *
             driver_truncated: stats.driver_data_truncated,
             driver_mismatched: stats.driver_data_mismatched,
             driver_unchanged: stats.driver_data_unchanged,
+            seed_misses: stats.seed_misses,
+            seed_hit_p50_ns: stats.seed_hit_p50_ns,
+            seed_hit_p99_ns: stats.seed_hit_p99_ns,
         };
         Ok(true)
     })

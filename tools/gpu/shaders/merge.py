@@ -40,8 +40,9 @@ CONTENT = '529a20fd270ababa3e5ec2fe4d1674d93739ba5bcd61861674b4fb6db349af9f'
 RECORD_MAGIC = b'M2VPPLC\0'
 SEED = 'ngpu/addons/TegraGM20BMetal.m2v-seed/shared'
 RAW = 'ngpu/addons/TegraGM20BMetal.raw'
-INDEX_MAGIC = b'M2VSEED1'
-INDEX_VERSION = 1
+INDEX_MAGIC = b'M2VSEED2'
+INDEX_VERSION = 2
+RUN_ENTRIES = 4
 
 # path below the cache directory -> (sha256, size, pack, offset)
 Entries = dict[str, tuple[str, int, int, int]]
@@ -104,16 +105,28 @@ def merge_records(store: Path | None, pack: Path, number: int, identity: bytes, 
     return counts
 
 
+def prefix_bits(entries: int) -> int:
+    """Return k for 2^k runs of about RUN_ENTRIES entries each (the names' first k bits pick the run)."""
+    return min(24, max(0, (entries // RUN_ENTRIES).bit_length()))
+
+
 def write_index(path: Path, build: str, packs: int, entries: Entries) -> None:
-    """Write the packed seed's index: the header, then each entry sorted by (name, space)."""
+    """Write the packed seed's index: the header, the run table, then each entry sorted by (name, space)."""
     records = []
     for relative, (_, size, pack, offset) in entries.items():
         directory, _, name = relative.split('/')[1:]
-        space = 1 if directory == CONTENT else 0
-        records.append((bytes.fromhex(name), space, pack, size, offset))
+        records.append((bytes.fromhex(name), 1 if directory == CONTENT else 0, pack, size, offset))
     records.sort()
+    bits = prefix_bits(len(records))
+    starts, at = [], 0
+    for run in range((1 << bits) + 1):
+        while at < len(records) and bits and int.from_bytes(records[at][0][:4], 'big') >> (32 - bits) < run:
+            at += 1
+        starts.append(at if bits else 0)
+    starts[-1] = len(records)
     with path.open('wb') as f:
         f.write(INDEX_MAGIC + struct.pack('<IIQ', INDEX_VERSION, packs, len(records)) + bytes.fromhex(build))
+        f.write(struct.pack('<II', bits, 0) + struct.pack(f'<{len(starts)}I', *starts))
         for name, space, pack, size, offset in records:
             f.write(name + struct.pack('<BBHIQ', space, 0, pack, size, offset))
 

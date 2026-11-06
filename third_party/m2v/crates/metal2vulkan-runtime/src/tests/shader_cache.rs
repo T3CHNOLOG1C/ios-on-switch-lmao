@@ -295,7 +295,8 @@ fn a_seed_beneath_the_directory_is_read_and_never_changed() {
 }
 
 /// Pack the cache directory at `from` as a packed seed of `build` at `to` (one pack), as the seed's
-/// build writes one (tools/gpu/shaders/merge.py): `index` sorted by (name, space), `packs/000`.
+/// build writes one (tools/gpu/shaders/merge.py): `index` sorted by (name, space) in one run,
+/// `packs/000`.
 fn pack(from: &Path, build: &[u8; 32], to: &Path) {
     let content: String = crate::shader_cache::store::content()
         .iter()
@@ -304,7 +305,13 @@ fn pack(from: &Path, build: &[u8; 32], to: &Path) {
     let mut records = Vec::new();
     let mut pack = Vec::new();
     for (path, bytes, _) in files(from) {
-        let directory = path.parent().unwrap().parent().unwrap().file_name().unwrap();
+        let directory = path
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .file_name()
+            .unwrap();
         let space = u8::from(directory.to_str().unwrap() == content);
         let name = path.file_name().unwrap().to_str().unwrap();
         let mut raw = [0u8; 32];
@@ -315,11 +322,15 @@ fn pack(from: &Path, build: &[u8; 32], to: &Path) {
         pack.extend_from_slice(&bytes);
     }
     records.sort();
-    let mut index = b"M2VSEED1".to_vec();
-    index.extend_from_slice(&1u32.to_le_bytes());
+    // One run (no prefix bits): every entry in it, as a seed of a few entries is written.
+    let mut index = b"M2VSEED2".to_vec();
+    index.extend_from_slice(&2u32.to_le_bytes());
     index.extend_from_slice(&1u32.to_le_bytes());
     index.extend_from_slice(&(records.len() as u64).to_le_bytes());
     index.extend_from_slice(build);
+    index.extend_from_slice(&[0; 8]);
+    index.extend_from_slice(&0u32.to_le_bytes());
+    index.extend_from_slice(&(records.len() as u32).to_le_bytes());
     for (name, space, length, offset) in records {
         index.extend_from_slice(&name);
         index.extend_from_slice(&[space, 0, 0, 0]);
@@ -353,14 +364,20 @@ fn a_packed_seed_is_read_as_its_directory_is() {
         .with_seed(Some(seed.path().to_path_buf()));
     assert_eq!(directory.seed(), Some(seed.path()));
     let store = Store::new(directory, None);
-    assert_eq!(get(&store, &seeded, 1), Lookup::Hit(data(1, b"seeded entry")));
+    assert_eq!(
+        get(&store, &seeded, 1),
+        Lookup::Hit(data(1, b"seeded entry"))
+    );
     let loaded = store.load_content(&record, |bytes| {
         open(&identity(5), &bytes).map(|data| bytes[data].to_vec())
     });
     assert_eq!(loaded, Lookup::Hit(data(5, b"seeded record")));
     assert_eq!(get(&store, &name(&BUILD, 2), 2), Lookup::Absent);
     assert_eq!(store.counters.seed_reads.load(Ordering::Relaxed), 2);
-    assert!(files(scratch.path()).is_empty(), "a seed's hit writes nothing");
+    assert!(
+        files(scratch.path()).is_empty(),
+        "a seed's hit writes nothing"
+    );
 
     let directory = Directory::open(scratch.path().to_path_buf(), OTHER_BUILD, 1 << 20)
         .unwrap()

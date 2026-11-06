@@ -46,6 +46,8 @@ struct NmbShaderCacheStats {
     uint64_t hits, misses, rejected, read_failures, writes, write_failures, evictions;
     uint64_t driver_loads, driver_hits, driver_misses, driver_saves, driver_truncated, driver_mismatched,
         driver_unchanged;
+    /* Debug builds only: seed look-ups that missed, and a seed hit's p50/p99 look-up in ns (power-of-two bounds). */
+    uint64_t seed_misses, seed_hit_p50_ns, seed_hit_p99_ns;
 };
 
 bool nmb_device_shader_cache_stats(const NmbDevice *, struct NmbShaderCacheStats *);

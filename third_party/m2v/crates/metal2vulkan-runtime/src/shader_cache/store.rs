@@ -123,7 +123,9 @@ impl Directory {
             written.and(removed).map_err(failed(&directory.root))
         })();
         match made {
-            Err(_) if std::env::var_os("METAL2VULKAN_SHADER_CACHE_OPTIONAL").is_some() => Ok(directory),
+            Err(_) if std::env::var_os("METAL2VULKAN_SHADER_CACHE_OPTIONAL").is_some() => {
+                Ok(directory)
+            }
             Err(failed) => Err(failed),
             Ok(()) => Ok(directory),
         }
@@ -132,7 +134,9 @@ impl Directory {
     /// This directory with `seed` beneath it (read only), when that is a seed of this build; else
     /// with none.
     pub(crate) fn with_seed(self, seed: Option<PathBuf>) -> Directory {
-        let seed = seed.and_then(|seed| Seed::open(seed, &self.build)).map(Arc::new);
+        let seed = seed
+            .and_then(|seed| Seed::open(seed, &self.build))
+            .map(Arc::new);
         Directory { seed, ..self }
     }
 
@@ -283,6 +287,10 @@ pub(crate) struct Counters {
     pub(crate) driver_data_mismatched: AtomicU64,
     pub(crate) driver_data_unchanged: AtomicU64,
     pub(crate) seed_reads: AtomicU64,
+    /// Seed look-ups that found nothing, and seed hits by how long the look-up took (hit n: under
+    /// 2^n ns). Counted in debug builds only (`switch_debug`).
+    pub(crate) seed_misses: AtomicU64,
+    pub(crate) seed_hit_ns: [AtomicU64; 32],
 }
 
 impl Counters {
@@ -482,11 +490,34 @@ impl Store {
         match own {
             Found::Bytes(bytes, file) => FoundIn::Directory(bytes, file),
             Found::Failed => FoundIn::Failed,
-            Found::Absent => match self.directory.read_seed(space, name, self.entry_limit()) {
-                SeedRead::Bytes(bytes) => FoundIn::Seed(bytes),
-                SeedRead::Failed => FoundIn::Failed,
-                SeedRead::Absent => FoundIn::Absent,
-            },
+            Found::Absent => {
+                #[cfg(switch_debug)]
+                let began = std::time::Instant::now();
+                let read = self.directory.read_seed(space, name, self.entry_limit());
+                #[cfg(switch_debug)]
+                self.time_seed(&read, began);
+                match read {
+                    SeedRead::Bytes(bytes) => FoundIn::Seed(bytes),
+                    SeedRead::Failed => FoundIn::Failed,
+                    SeedRead::Absent => FoundIn::Absent,
+                }
+            }
+        }
+    }
+
+    /// Count a seed look-up: a miss, or a hit in its latency bucket.
+    #[cfg(switch_debug)]
+    fn time_seed(&self, read: &SeedRead, began: std::time::Instant) {
+        match read {
+            SeedRead::Absent if self.directory.seed().is_some() => {
+                count(&self.counters.seed_misses)
+            }
+            SeedRead::Bytes(_) => {
+                let nanos = u64::try_from(began.elapsed().as_nanos()).unwrap_or(u64::MAX);
+                let bucket = (u64::BITS - nanos.leading_zeros()).min(31) as usize;
+                count(&self.counters.seed_hit_ns[bucket]);
+            }
+            _ => {}
         }
     }
 

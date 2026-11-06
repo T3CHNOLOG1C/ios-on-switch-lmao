@@ -25,20 +25,31 @@ def record(payload: bytes) -> bytes:
 
 
 def read_index(path: Path) -> tuple[str, dict[tuple[bytes, int], tuple[int, int, int]]]:
+    """Read the index back, and look every entry up through its run, as seed.rs does."""
     data = path.read_bytes()
     magic, version, _, count = struct.unpack_from('<8sIIQ', data)
     assert (magic, version) == (merge.INDEX_MAGIC, merge.INDEX_VERSION), (magic, version)
-    entries, names = {}, []
+    (bits,) = struct.unpack_from('<I', data, 56)
+    starts = struct.unpack_from(f'<{(1 << bits) + 1}I', data, 64)
+    records = 64 + 4 * len(starts)
+    assert len(data) == records + 48 * count
+    entries = {}
     for i in range(count):
-        name, space, _, pack, size, offset = struct.unpack_from('<32sBBHIQ', data, 56 + 48 * i)
+        name, space, _, pack, size, offset = struct.unpack_from('<32sBBHIQ', data, records + 48 * i)
+        run = int.from_bytes(name[:4], 'big') >> (32 - bits) if bits else 0
+        assert starts[run] <= i < starts[run + 1], 'every entry in its run'
         entries[name, space] = (pack, offset, size)
-        names.append((name, space))
-    assert names == sorted(names), 'sorted for the binary search'
     return data[24:56].hex(), entries
 
 
 def entry(n: int) -> str:
     return f'v1/{BUILD}/{n:02x}/{n:02x}' + 'e' * 62
+
+
+class PrefixTest(unittest.TestCase):
+    def test_runs_hold_a_few_entries(self):
+        self.assertEqual(merge.prefix_bits(0), 0)
+        self.assertEqual(merge.prefix_bits(112637), 15)
 
 
 class JoinTest(unittest.TestCase):
