@@ -17,10 +17,11 @@ import argparse
 import hashlib
 import json
 import os
+import shutil
 import struct
 import subprocess
 import sys
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import NamedTuple
 
@@ -34,6 +35,13 @@ def sha256(path: Path) -> str:
         for chunk in iter(lambda: f.read(1 << 20), b''):
             h.update(chunk)
     return h.hexdigest()
+
+
+def key_sha256(path: Path) -> str | None:
+    try:
+        return sha256(path)
+    except OSError:
+        return None
 
 
 def is_macho(path: Path) -> bool:
@@ -120,6 +128,42 @@ def _memoized(translator: Translator, src: Path, dst: Path, memo: Path, in_sha: 
     return r
 
 
+class Memo(NamedTuple):
+    """Translations kept across runs, each under the hash of every input that decides it.
+
+    A key part that is None (an input that could not be hashed) is a miss: produce runs, and nothing is kept.
+    """
+
+    root: Path
+
+    def run(self, parts: list[str | None], dst: Path, produce: Callable[[], dict]) -> dict:
+        """Return produce()'s record with its dst written, restored from an earlier run of the same key if kept."""
+        if any(p is None for p in parts):
+            return produce()
+        key = hashlib.sha256('\0'.join(parts).encode()).hexdigest()
+        record, data = self.root / f'{key}.json', self.root / f'{key}.out'
+        kept = json.loads(record.read_text()) if record.is_file() else {}
+        if '_sha_out' in kept:
+            sha_out = kept.pop('_sha_out')
+            if sha_out is None:
+                dst.unlink(missing_ok=True)
+                return kept
+            if data.is_file() and sha256(data) == sha_out:
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(data, dst)
+                return kept
+        result = produce()
+        self.root.mkdir(parents=True, exist_ok=True)
+        sha_out = None
+        if dst.is_file():
+            shutil.copyfile(dst, data)
+            sha_out = sha256(data)
+        partial = record.with_suffix('.partial')
+        partial.write_text(json.dumps(dict(result, _sha_out=sha_out)))
+        os.replace(partial, record)
+        return result
+
+
 def _external_pairs(paths: Iterable[str]) -> list[tuple[str, str]]:
     pairs = []
     for p in paths:
@@ -154,7 +198,11 @@ def main() -> None:
         default=[],
         help="another role's <role>.cdhash-pairs, for the cache's prebuilt loaders",
     )
+    ap.add_argument(
+        '--memo', type=Path, help='keep translations here across runs, keyed by their inputs (default: none)'
+    )
     args = ap.parse_args()
+    memo = Memo(args.memo) if args.memo else None
 
     out = args.out
     out.mkdir(parents=True, exist_ok=True)
@@ -176,8 +224,15 @@ def main() -> None:
         rel = src.relative_to(args.volume)
         dst = out / 'files' / rel
         in_sha = sha256(src)
-        memo = work / (str(rel).replace('/', '_') + '.json')
-        r = _memoized(translator, src, dst, memo, in_sha)
+        if memo:
+            report = work / 'report.json'
+            r = memo.run(
+                ['file', in_sha, translator.version],
+                dst,
+                lambda src=src, dst=dst, report=report: pretranslate_file(translator.tool, src, dst, report),
+            )
+        else:
+            r = _memoized(translator, src, dst, work / (str(rel).replace('/', '_') + '.json'), in_sha)
         translated = [s for s in r['slices'] if s['status'] == 'translated']
         if not translated:
             dst.unlink(missing_ok=True)
@@ -220,9 +275,18 @@ def _translate_cache(
     manifest: dict,
 ) -> None:
     cache, out = args.volume / CACHE_DIR, args.out
+    memo, version = (Memo(args.memo) if args.memo else None), _tool_version(args.tool)
     main_cache = cache / 'dyld_shared_cache_arm64e'
     plan = out / f'{args.role}.a64xplan'
-    run_tool(args.tool, 'plan', '-o', str(plan), str(main_cache))
+
+    def make_plan() -> dict:
+        run_tool(args.tool, 'plan', '-o', str(plan), str(main_cache))
+        return {}
+
+    if memo:
+        memo.run(['plan', key_sha256(main_cache), version], plan, make_plan)
+    else:
+        make_plan()
     pairs_file = out / '.work' / 'cache_pairs.txt'
     pairs_file.write_text(''.join(f'{a} {b}\n' for a, b in pairs))
 
@@ -234,8 +298,16 @@ def _translate_cache(
             continue
         dst = out / 'files' / CACHE_DIR / name
         dst.parent.mkdir(parents=True, exist_ok=True)
-        line = run_tool(args.tool, 'dsc-apply', '-c', str(pairs_file), str(plan), str(src), str(dst))
-        cdhash = line.split()[0]
+
+        def apply(src: Path = src, dst: Path = dst) -> dict:
+            line = run_tool(args.tool, 'dsc-apply', '-c', str(pairs_file), str(plan), str(src), str(dst))
+            return {'cdhash': line.split()[0]}
+
+        if memo:
+            parts = ['dsc', key_sha256(src), key_sha256(plan), key_sha256(pairs_file), version]
+            cdhash = memo.run(parts, dst, apply)['cdhash']
+        else:
+            cdhash = apply()['cdhash']
         cdhashes.append(bytes.fromhex(cdhash))
         if sha256(dst) == sha256(src):
             dst.unlink()

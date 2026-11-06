@@ -9,6 +9,7 @@
 # The driver writes <role>.manifest.json, the replacement files, <role>.trustcache and, for the SystemOS cryptex,
 # <role>.a64xplan and a64x-cache-pretranslated.bin (the device tree's /chosen/a64x-cache-pretranslated).
 load("@rules_python//python:py_binary.bzl", "py_binary")
+load("@rules_python//python:py_test.bzl", "py_test")
 load("//bazel/lint:defs.bzl", "lint_files")
 load(":defs.bzl", "pretranslate_role")
 
@@ -19,6 +20,12 @@ lint_files()
 py_binary(
     name = "translate_tree",
     srcs = ["translate_tree.py"],
+)
+
+py_test(
+    name = "translate_tree_test",
+    srcs = ["translate_tree_test.py"],
+    data = ["translate_tree.py"],
 )
 
 [pretranslate_role(
