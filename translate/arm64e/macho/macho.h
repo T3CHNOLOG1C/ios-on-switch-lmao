@@ -24,6 +24,7 @@ extern "C" {
 #define A64X_FAT_MAGIC_64             0xCAFEBABFu
 #define A64X_CPU_TYPE_ARM64           0x0100000Cu
 #define A64X_CPU_SUBTYPE_MASK         0xFF000000u
+#define A64X_CPU_SUBTYPE_PTRAUTH_ABI  0x80000000u /* arm64e: pointer authentication with a versioned ABI */
 #define A64X_CPU_SUBTYPE_ARM64_ALL    0u
 #define A64X_CPU_SUBTYPE_ARM64_V8     1u
 #define A64X_CPU_SUBTYPE_ARM64E       2u

@@ -24,7 +24,8 @@ struct arm_saved_state;
 static inline int
 a64x_subtype_translated(cpu_type_t type, cpu_subtype_t subtype)
 {
-	return type == CPU_TYPE_ARM64 && (subtype & ~CPU_SUBTYPE_MASK) == CPU_SUBTYPE_ARM64E;
+	return type == CPU_TYPE_ARM64 &&
+	       ((subtype & CPU_SUBTYPE_PTRAUTH_ABI) || (subtype & ~CPU_SUBTYPE_MASK) == CPU_SUBTYPE_ARM64E);
 }
 
 /*
@@ -48,6 +49,14 @@ a64x_image_kind(cpu_type_t type, cpu_subtype_t subtype)
 {
 	if (type != CPU_TYPE_ARM64) {
 		return A64X_IMAGE_NATIVE;
+	}
+	/*
+	 * arm64e is the pointer-authentication capability bit, not a subtype value: a fat arm64e binary carries one
+	 * slice per ptrauth ABI version (CPU_SUBTYPE_ARM64E and the versioned ones, whose low byte is not 2), and
+	 * every one holds PAC. Grade them all as arm64e, so whichever the loader picks is translated.
+	 */
+	if (subtype & CPU_SUBTYPE_PTRAUTH_ABI) {
+		return A64X_IMAGE_ARM64E;
 	}
 	switch (subtype & ~CPU_SUBTYPE_MASK) {
 	case CPU_SUBTYPE_ARM64E:

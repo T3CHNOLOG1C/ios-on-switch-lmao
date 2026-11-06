@@ -74,11 +74,17 @@ enum a64x_kind a64x_kind_of(uint32_t cputype, uint32_t cpusubtype, int marked)
 {
     if (cputype != A64X_CPU_TYPE_ARM64) return A64X_KIND_NATIVE;
     enum a64x_kind kind;
-    switch (cpusubtype & ~A64X_CPU_SUBTYPE_MASK) {
-    case A64X_CPU_SUBTYPE_ARM64E: kind = A64X_KIND_ARM64E; break;
-    case A64X_CPU_SUBTYPE_ARM64_ALL:
-    case A64X_CPU_SUBTYPE_ARM64_V8: kind = A64X_KIND_ARM64; break;
-    default: return A64X_KIND_NATIVE;
+    /* arm64e is the ptrauth capability bit (a fat binary's versioned-ABI slices do not carry subtype 2 in the low
+     * byte, but every one holds PAC): a64x_xnu.h a64x_image_kind decides the same way. */
+    if (cpusubtype & A64X_CPU_SUBTYPE_PTRAUTH_ABI) {
+        kind = A64X_KIND_ARM64E;
+    } else {
+        switch (cpusubtype & ~A64X_CPU_SUBTYPE_MASK) {
+        case A64X_CPU_SUBTYPE_ARM64E: kind = A64X_KIND_ARM64E; break;
+        case A64X_CPU_SUBTYPE_ARM64_ALL:
+        case A64X_CPU_SUBTYPE_ARM64_V8: kind = A64X_KIND_ARM64; break;
+        default: return A64X_KIND_NATIVE;
+        }
     }
     /* the marker wins over the subtype (a64x_map_image: a marked image is mapped as is) */
     return marked ? A64X_KIND_MARKED : kind;
