@@ -278,36 +278,26 @@ AVAILABILITY_MODULEMAPS = {
 }
 
 
+def run_or_fail(command: list[str | Path], env: dict[str, str], cwd: Path | None = None) -> None:
+    r = subprocess.run([str(c) for c in command], cwd=cwd, env=env, stdout=None, stderr=subprocess.PIPE, check=False)
+    if r.returncode:
+        fail('{} failed: {}'.format(command[0], r.stderr.decode(errors='replace')))
+
+
 def install_base(
-    availability: Path,
-    libplatform: Path,
-    libdispatch: Path,
-    out: str | Path,
-    env: dict[str, str],
-    python3: str | None = None,
+    availability: Path, libplatform: Path, libdispatch: Path, out: str | Path, env: dict[str, str]
 ) -> None:
     """Install the SDK root's other parts into out.
 
     availability.pl and AvailabilityVersions' headers (its CMake install, INSTALL_KERNEL_HEADERS=1), libplatform's
     public and private headers, libdispatch's os/ headers reduced to their kernel view.
     """
-    python3 = python3 or sys.executable
+    python3 = sys.executable
     env = dict(env, PATH=os.path.dirname(python3) + ':' + env['PATH'])
     out = Path(out)
     libexec = out / 'usr/local/libexec'
     libexec.mkdir(parents=True, exist_ok=True)
-
-    def check(
-        command: list[str | Path], cwd: Path | None = None, stdout: int | None = None
-    ) -> subprocess.CompletedProcess[bytes]:
-        r = subprocess.run(
-            [str(c) for c in command], cwd=cwd, env=env, stdout=stdout, stderr=subprocess.PIPE, check=False
-        )
-        if r.returncode:
-            fail('{} failed: {}'.format(command[0], r.stderr.decode(errors='replace')))
-        return r
-
-    check(
+    run_or_fail(
         [
             python3,
             availability / 'availability',
@@ -315,6 +305,7 @@ def install_base(
             availability / 'availability',
             libexec / 'availability.pl',
         ],
+        env,
         cwd=availability,
     )
     (libexec / 'availability.pl').chmod(0o755)
@@ -322,18 +313,19 @@ def install_base(
         generated = Path(scratch)
         templates = availability / 'templates'
         for name in [n for n in AVAILABILITY_TEMPLATES if (templates / n).exists()]:
-            check(
+            run_or_fail(
                 [
                     python3,
                     libexec / 'availability.pl',
                     '--preprocess',
                     templates / name,
                     generated / name,
-                ]
+                ],
+                env,
             )
         modulemaps = {n: d for n, d in AVAILABILITY_MODULEMAPS.items() if (templates / n).exists()}
         for name in modulemaps:
-            check(
+            run_or_fail(
                 [
                     'sh',
                     availability / 'unifdef_command.sh',
@@ -341,7 +333,8 @@ def install_base(
                     '-o',
                     generated / name,
                     templates / name,
-                ]
+                ],
+                env,
             )
         public = [
             'Availability.h',
