@@ -2,7 +2,7 @@
  * FAT reader owns policy loading. No child device exists until this finishes. */
 #include "SwitchRootPolicy.h"
 #include "SwitchRootExpectations.h"
-#include <vm/vm_kern.h>
+#include "SwitchKmem.h"
 #include <vm/vm_map.h>
 
 extern void switch_root_progress(unsigned, unsigned, uint64_t, uint64_t);
@@ -107,13 +107,13 @@ int switch_root_policy_load(void)
         index_size = 0;
         views[disk].envelope = (const uint8_t *)storage[disk];
         views[disk].envelope_bytes = e->bytes;
-        if (vm_map_protect(kernel_map, storage[disk], storage[disk] + sizes[disk], VM_PROT_READ, TRUE) !=
+        if (switch_vm_map_protect(kernel_map, storage[disk], storage[disk] + sizes[disk], VM_PROT_READ, TRUE) !=
             KERN_SUCCESS) {
             code = 414;
             goto fail;
         }
     }
-    if (vm_map_protect(kernel_map, descriptors, descriptors + PAGE_SIZE, VM_PROT_READ, TRUE) != KERN_SUCCESS) {
+    if (switch_vm_map_protect(kernel_map, descriptors, descriptors + PAGE_SIZE, VM_PROT_READ, TRUE) != KERN_SUCCESS) {
         code = 415;
         goto fail;
     }

@@ -58,6 +58,13 @@ uint32_t retryHeld();
 unsigned ceiling();
 unsigned indexAt(uint32_t khz);
 
+// The context-switch callout's last parameter: xnu-12377 passes a timeout the callout may set, xnu-10063 nothing.
+#if XNU_12377_121_6
+typedef uint64_t *CswTimeout;
+#else
+typedef void *CswTimeout;
+#endif
+
 }  // namespace switchperf
 
 #endif

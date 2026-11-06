@@ -111,7 +111,7 @@ uint64_t absUs(uint64_t us)
 
 // The scheduler's context-switch callout (interrupts masked, the switching CPU's own slot only).
 void csw(perfcontrol_event event, uint32_t cpu, uint64_t timestamp, uint32_t, struct perfcontrol_thread_data *,
-         struct perfcontrol_thread_data *, struct perfcontrol_cpu_counters *, void *)
+         struct perfcontrol_thread_data *, struct perfcontrol_cpu_counters *, switchperf::CswTimeout)
 {
     if (cpu >= kMaxCpus) return;
     CpuLoad &l = gLoad[cpu];
