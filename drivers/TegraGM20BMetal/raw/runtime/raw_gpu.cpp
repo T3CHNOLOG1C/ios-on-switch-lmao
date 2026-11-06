@@ -1814,6 +1814,10 @@ void RenderEncoder::barrier()
     p_.m(WAIT_FOR_IDLE, 0);
     p_.m(INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI, 0);
     colorWritten_ = false;
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    writtenCount_ = 0;
+    writtenFull_ = false;
+#endif
 }
 
 bool RenderEncoder::draw(uint32_t primitive, uint32_t first, uint32_t count, uint32_t instances, uint32_t baseInstance,
@@ -1919,6 +1923,9 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, uint32_t first, ui
         const bool empty = vp_[2] == 0 || vp_[3] == 0;
         axis(vp_[0], empty ? 0 : vp_[2], areaW_, sc_[0], sc_[0] + sc_[2], x);
         axis(vp_[1], empty ? 0 : vp_[3], areaH_, sc_[1], sc_[1] + sc_[3], y);
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+        drawRect_ = {x[0], y[0], x[1], y[1]};
+#endif
         if (x[1] > x[0] && y[1] > y[0]) {
             const std::array<uint32_t, 4> r = {x[0], y[0], x[1], y[1]};
             if (std::find(rects_.begin(), rects_.end(), r) == rects_.end())
@@ -2096,6 +2103,13 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, uint32_t first, ui
     }
     // framebuffer fetch reads the color attachment through the texture unit: m2v's barrier (0106: only after a draw wrote color)
     if ((r.flags & PipelineFetches) && colorWritten_) {
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+        dev_->stats.fetchBarriers++;
+        if (!whole_ && !writtenOverlaps(drawRect_))
+            dev_->stats.fetchBarriersDisjoint++;
+        writtenCount_ = 0;
+        writtenFull_ = false;
+#endif
         p.m(WAIT_FOR_IDLE, 0);
         p.m(INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI, 0);
         colorWritten_ = false;
@@ -2110,8 +2124,32 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, uint32_t first, ui
         baseInstance_ = baseInstance;
     }
     colorWritten_ |= pl->writesColor;
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    if (pl->writesColor && whole_)
+        writtenFull_ = true;
+    else if (pl->writesColor && drawRect_[2] > drawRect_[0] && drawRect_[3] > drawRect_[1]) {
+        if (writtenCount_ < written_.size())
+            written_[writtenCount_++] = drawRect_;
+        else
+            writtenFull_ = true;
+    }
+#endif
     return true;
 }
+
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+bool RenderEncoder::writtenOverlaps(const std::array<uint32_t, 4> &r) const
+{
+    if (writtenFull_)
+        return true;
+    for (uint32_t i = 0; i < writtenCount_; i++) {
+        const std::array<uint32_t, 4> &w = written_[i];
+        if (r[0] < w[2] && w[0] < r[2] && r[1] < w[3] && w[1] < r[3])
+            return true;
+    }
+    return false;
+}
+#endif
 
 // The clear value m2v hands Vulkan for a Metal clear color of an attachment of `format` (metal2vulkan-runtime clear_value.rs
 // `color`): what NVK's clear writes, as Metal's conversion stores it. Normalized channels through float, clamped, k / 255 of the

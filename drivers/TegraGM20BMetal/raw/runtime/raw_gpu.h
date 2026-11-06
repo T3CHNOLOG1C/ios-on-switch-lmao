@@ -277,6 +277,14 @@ private:
     double vp_[4] = {};
     uint32_t sc_[4] = {};
     std::vector<std::array<uint32_t, 4>> rects_;
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    // the draw's pixels (empty: none), and the pixels color writes reached since the last barrier (full: more than it holds)
+    std::array<uint32_t, 4> drawRect_ = {};
+    std::array<std::array<uint32_t, 4>, 16> written_ = {};
+    uint32_t writtenCount_ = 0;
+    bool writtenFull_ = false;
+    bool writtenOverlaps(const std::array<uint32_t, 4> &r) const;
+#endif
 
     struct Clear {
         uint32_t target, x0, y0, x1, y1;
@@ -527,6 +535,9 @@ public:
         std::atomic<uint64_t> ceOps{0}, ceBytes{0};
         // passes into a chain level, and levels copied between a chain and its mirrors (out: for m2v; in: what m2v rendered)
         std::atomic<uint64_t> levelPasses{0}, mirrorsOut{0}, mirrorsIn{0};
+        // framebuffer-fetch barriers encoded, and of those the ones whose draw's pixels no color write since the last barrier
+        // reached (debug builds: what skipping a barrier by region would save)
+        std::atomic<uint64_t> fetchBarriers{0}, fetchBarriersDisjoint{0};
     } stats;
 
     // The self-test's result (open), per sampling candidate (fx::sampling(i)): bytes off by more than 1 in the CPU's Tegra and
