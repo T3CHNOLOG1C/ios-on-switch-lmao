@@ -122,7 +122,9 @@ def lz4_frame_blocks(frame: bytes, length: int) -> list[tuple[int, bool, bytes]]
 
 def lz4_blocks(runs: list[tuple[int, int]]) -> list[tuple[int, int]]:
     """The extents' LZ4 blocks as (window offset, length): each extent cut into 1 MiB blocks from its start (lz4 -B6)."""
-    return [(at, min(LZ4_BLOCK, start + size - at)) for start, size in runs for at in range(start, start + size, LZ4_BLOCK)]
+    return [
+        (at, min(LZ4_BLOCK, start + size - at)) for start, size in runs for at in range(start, start + size, LZ4_BLOCK)
+    ]
 
 
 def compress_blocks(blocks: list[bytes], lz4: str | None = None) -> list[tuple[bool, bytes]]:
@@ -267,7 +269,8 @@ def window_checks(m: dict, payload: bytes, adt: bytes) -> dict:
     the ADT it was laid out with), and the loader's constants but for the staged window's (None until it is made)."""
     _require(m['schema_version'] == 1 and m['profile'] == 'native-xnu-host-layout', 'unsupported host layout')
     _require(
-        m.get('native_window_ownership_verified') is False, 'this builder requires an explicitly unverified ownership status'
+        m.get('native_window_ownership_verified') is False,
+        'this builder requires an explicitly unverified ownership status',
     )
     _require(m['image']['file'] == 'kernel-window.bin', 'unexpected image filename')
     _require(
@@ -276,7 +279,9 @@ def window_checks(m: dict, payload: bytes, adt: bytes) -> dict:
         'layout image identity mismatch',
     )
     _require(0 < len(payload) <= LIMIT and not len(payload) % 8, 'image exceeds aligned bounded staging region')
-    _require(m['phys_base'] == PHYSICAL_BASE and m['owned_window_size'] == WINDOW_SIZE, 'not the 768 MiB root-boot layout')
+    _require(
+        m['phys_base'] == PHYSICAL_BASE and m['owned_window_size'] == WINDOW_SIZE, 'not the 768 MiB root-boot layout'
+    )
     for key in (
         'phys_base',
         'virt_base',
@@ -320,7 +325,9 @@ def window_checks(m: dict, payload: bytes, adt: bytes) -> dict:
     # loader fills, at the offsets layout.h gives it.
     sidecars = ('NativeDataSeed', 'TrustCache')
     _require(not set(sidecars) - m['sources'].keys(), 'the root boot needs the Data seed and trust cache sidecars')
-    _require(not any(k in m['sources'] for k in ('RAMDisk', 'PackedRAMDisk')), 'root_boot excludes a diagnostic RAM root')
+    _require(
+        not any(k in m['sources'] for k in ('RAMDisk', 'PackedRAMDisk')), 'root_boot excludes a diagnostic RAM root'
+    )
     source = m['sources']['adt']
     _require(
         len(adt) == source['size_bytes'] and hashlib.sha256(adt).hexdigest() == source['sha256'],
@@ -421,10 +428,14 @@ def window_checks(m: dict, payload: bytes, adt: bytes) -> dict:
             and size <= m['used_end'] - address,
             'root_boot sidecar bounds changed: ' + key,
         )
-        _require(not any(address < end and begin < address + size for begin, end in spans), 'root_boot sidecars overlap')
+        _require(
+            not any(address < end and begin < address + size for begin, end in spans), 'root_boot sidecars overlap'
+        )
         spans.append((address, address + size))
         content = payload[address - m['phys_base'] : address - m['phys_base'] + size]
-        _require(hashlib.sha256(content).hexdigest() == expected['sha256'], 'root_boot sidecar contents changed: ' + key)
+        _require(
+            hashlib.sha256(content).hexdigest() == expected['sha256'], 'root_boot sidecar contents changed: ' + key
+        )
         (validate_data_seed if key == 'NativeDataSeed' else validate_trustcache)(content)
 
     # The built-in line in the window's boot_args.
@@ -448,7 +459,10 @@ def window_checks(m: dict, payload: bytes, adt: bytes) -> dict:
     )
     expected = set(NATIVE_FULL_RAM_EXCLUSIONS)
     actual = {(r['name'], r['start'], r['size']) for r in m['reserved_ranges']}
-    _require(actual == expected and len(m['reserved_ranges']) == len(expected), 'native experiment requires the exact reviewed exclusion ledger')
+    _require(
+        actual == expected and len(m['reserved_ranges']) == len(expected),
+        'native experiment requires the exact reviewed exclusion ledger',
+    )
     _require(len(payload) <= 0x6000000 and m['video'] == VIDEO, 'native staging or display contract mismatch')
     _require(not len(payload) % 0x1000, 'native cacheable copy requires a page-aligned payload')
 
@@ -491,7 +505,9 @@ def staged_window(constants: dict, table: list, stream: bytes) -> tuple[dict, by
     """The window as staged in bl33.bin (the stream padded to 4 KiB) and the constants with its sizes and stage id."""
     # Staged in bl33.bin (stage_into_bl33); the loader maps it in 4 KiB pages.
     staged = stream + bytes(-len(stream) % PACK_PAGE)
-    _require(STAGE_SOURCE + len(staged) + PACK_PAGE <= STAGE_END, 'compressed kernel window does not fit before ramoops')
+    _require(
+        STAGE_SOURCE + len(staged) + PACK_PAGE <= STAGE_END, 'compressed kernel window does not fit before ramoops'
+    )
     return dict(constants, PACKED_BYTES=len(staged), STREAM_BYTES=len(stream), STAGE_ID=stage_id(staged)), staged
 
 
@@ -507,7 +523,8 @@ def runs_header(blocks: list) -> str:
         f'#define LOAD_BLOCK_COUNT {len(blocks)}u\n'
         'static const uint64_t loader_blocks[LOAD_BLOCK_COUNT][4] = {\n'
         + ''.join(
-            f'    {{UINT64_C(0x{a:x}), UINT64_C(0x{b:x}), UINT64_C(0x{c:x}), UINT64_C(0x{d:x})}},\n' for a, b, c, d in blocks
+            f'    {{UINT64_C(0x{a:x}), UINT64_C(0x{b:x}), UINT64_C(0x{c:x}), UINT64_C(0x{d:x})}},\n'
+            for a, b, c, d in blocks
         )
         + '};\n'
     )
@@ -574,7 +591,7 @@ def join(args):
         compressed.append((stored, body))
     found = sum(1 for _ in args.compressed.glob('*/*'))
     if found != len(compressed):
-        raise SystemExit(f'{found} compressed blocks for the plan\'s {len(compressed)}')
+        raise SystemExit(f"{found} compressed blocks for the plan's {len(compressed)}")
     table, stream = block_table([(at, length) for at, length in plan['blocks']], compressed)
     constants, staged = staged_window(plan['constants'], table, stream)
     args.layout_h.write_text(layout_header(constants))

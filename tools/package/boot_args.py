@@ -7,6 +7,7 @@ Every feature is on in code, and what XNU used to be told on the command line co
 ADT (adt_edit.py). The loader appends switchroot/ios/bootargs.txt at boot, whose words can only turn something off.
 The kernel reads the line as one string of at most 1023 bytes (native_xnu_layout checks it).
 """
+
 import sys
 from pathlib import Path
 

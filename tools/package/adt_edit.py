@@ -4,6 +4,7 @@ directories, the loader's zeroed slots and, with --smp, all four A57s.
 
     adt_edit.py --adt BASE --overlay-plan PLAN --bt-patch HCD --portrait-header H [--smp] --out ADT
 """
+
 import argparse
 import json
 import struct
@@ -38,10 +39,10 @@ def adt_parse(data, pos=0):
     pos += 8
     props, nodes = [], []
     for _ in range(count):
-        name = data[pos:pos + 32].split(b'\0', 1)[0].decode()
+        name = data[pos : pos + 32].split(b'\0', 1)[0].decode()
         word = struct.unpack_from('<I', data, pos + 32)[0]
-        size = word & 0x7fffffff
-        props.append([name, word, data[pos + 36:pos + 36 + size]])
+        size = word & 0x7FFFFFFF
+        props.append([name, word, data[pos + 36 : pos + 36 + size]])
         pos += 36 + size + (-size % 4)
     for _ in range(children):
         node, pos = adt_parse(data, pos)
@@ -102,7 +103,7 @@ def ipad_adt(data, *, smp=False, overlay_dirs=(), bt_patch=None, portrait=False)
     tree, end = adt_parse(data)
     if end != len(data):
         raise SystemExit('trailing bytes after the ADT')
-    put(tree, 'model', b'iPad7,1\0')            # hw.model; idle code matches "compatible"
+    put(tree, 'model', b'iPad7,1\0')  # hw.model; idle code matches "compatible"
     put(tree, 'target-type', b'J120\0')
     # The audio server keys its routing database on the board name; the Switch entries stay
     # after it (switch_idle_board looks for nintendo,aula).
@@ -110,7 +111,7 @@ def ipad_adt(data, *, smp=False, overlay_dirs=(), bt_patch=None, portrait=False)
     if not compatible.startswith(b'J120AP\0'):
         put(tree, 'compatible', b'J120AP\0' + compatible)
     chosen = child(tree, 'chosen')
-    put(chosen, 'ephemeral-storage', u32(0))    # Data is a persistent APFS volume
+    put(chosen, 'ephemeral-storage', u32(0))  # Data is a persistent APFS volume
     # Portrait-native kernel (SwitchPortrait.h): iOS is given the 720x1280 panel and runs landscape with the panel's
     # top on the user's right. MobileGestalt DisplayBootRotation reads this: SpringBoard starts in interface orientation
     # 4 (landscape left, -[SpringBoard _bootOrientation]) and ProgressUI turns the boot Apple logo the same way. The
@@ -120,7 +121,7 @@ def ipad_adt(data, *, smp=False, overlay_dirs=(), bt_patch=None, portrait=False)
         put(chosen, 'display-boot-rotation', u32(270))
     # Locally administered addresses; MobileGestalt waits on these when they are missing.
     for index, key in enumerate(('mac-address-wifi0', 'mac-address-bluetooth0', 'mac-address-ethernet0')):
-        put(chosen, key, bytes([0x02, 0x1d, 0x5a, 0x00, 0x00, index + 1]))
+        put(chosen, key, bytes([0x02, 0x1D, 0x5A, 0x00, 0x00, index + 1]))
     for key in ('certificate-production-status', 'effective-production-status-ap'):
         put(chosen, key, u32(0))
     for key in ('certificate-security-mode', 'effective-security-mode-sep'):
@@ -129,16 +130,20 @@ def ipad_adt(data, *, smp=False, overlay_dirs=(), bt_patch=None, portrait=False)
     # the console may sleep is SwitchSuspend's call at runtime (a CPU power assertion while it cannot).
     put(child(tree, 'defaults'), 'sleep-disabled', u32(0))
     product = child(tree, 'product')
-    for key, value in (('product-name', b'iPad Pro (12.9-inch) (2nd generation)\0'),
-                       ('product-description', b'iPad Pro (12.9-inch) (2nd generation)\0'),
-                       ('model', b'iPad7,1\0'), ('artwork-device-idiom', b'pad\0'),
-                       ('artwork-device-subtype', u32(2732)), ('artwork-scale-factor', u32(2)),
-                       ('artwork-display-gamut', DISPLAY_GAMUT.encode() + b'\0'),
-                       ('compatible-device-fallback', b'iPad6,7\0'),
-                       ('thin-bezel', u32(1)),
-                       ('product-id', bytes.fromhex('e9fefef6e6f9d12a5ba1a2551866cbbd749f0ec3'))):
+    for key, value in (
+        ('product-name', b'iPad Pro (12.9-inch) (2nd generation)\0'),
+        ('product-description', b'iPad Pro (12.9-inch) (2nd generation)\0'),
+        ('model', b'iPad7,1\0'),
+        ('artwork-device-idiom', b'pad\0'),
+        ('artwork-device-subtype', u32(2732)),
+        ('artwork-scale-factor', u32(2)),
+        ('artwork-display-gamut', DISPLAY_GAMUT.encode() + b'\0'),
+        ('compatible-device-fallback', b'iPad6,7\0'),
+        ('thin-bezel', u32(1)),
+        ('product-id', bytes.fromhex('e9fefef6e6f9d12a5ba1a2551866cbbd749f0ec3')),
+    ):
         put(product, key, value)
-    put(child(product, 'audio'), 'wireless-splitter', u32(1))   # as UniXNU's 21H461 profile
+    put(child(product, 'audio'), 'wireless-splitter', u32(1))  # as UniXNU's 21H461 profile
     # Bluetooth (drivers/SwitchBluetooth). ArmDTPlatform publishes every /arm-io child, so this is the
     # IOService named "bluetooth" bluetoothd looks up (local-mac-address, transport-speed, transport-encoding: J120's 3,
     # H4BC, which also opens /dev/btwake, SwitchBluetooth's; bluetoothd takes its transport from kern_exec.c's
@@ -147,8 +152,12 @@ def ipad_adt(data, *, smp=False, overlay_dirs=(), bt_patch=None, portrait=False)
     # local-mac-address (and /chosen mac-address-bluetooth0) with the unit's own address from the fuse lot code when it
     # can read it.
     bluetooth = child(child(tree, 'arm-io'), 'bluetooth')
-    for key, value in (('device_type', b'bluetooth\0'), ('local-mac-address', bytes([0x02, 0x1d, 0x5a, 0x00, 0x00, 0x02])),
-                       ('transport-speed', u32(3000000)), ('transport-encoding', u32(3))):
+    for key, value in (
+        ('device_type', b'bluetooth\0'),
+        ('local-mac-address', bytes([0x02, 0x1D, 0x5A, 0x00, 0x00, 0x02])),
+        ('transport-speed', u32(3000000)),
+        ('transport-encoding', u32(3)),
+    ):
         put(bluetooth, key, value)
     if bt_patch is not None:
         put(bluetooth, 'switch,patchram', bt_patch)
@@ -156,7 +165,7 @@ def ipad_adt(data, *, smp=False, overlay_dirs=(), bt_patch=None, portrait=False)
     # mac-address-wifi0) with the unit's own address from the fuse lot code, the one the chip is given, before userland
     # starts.
     wlan = child(child(tree, 'arm-io'), 'wlan')
-    for key, value in (('device_type', b'wlan\0'), ('local-mac-address', bytes([0x02, 0x1d, 0x5a, 0x00, 0x00, 0x01]))):
+    for key, value in (('device_type', b'wlan\0'), ('local-mac-address', bytes([0x02, 0x1D, 0x5A, 0x00, 0x00, 0x01]))):
         put(wlan, key, value)
     # The platform UUID. IOPlatformExpertDevice::generatePlatformUUID makes IOPlatformUUID from /chosen
     # unique-chip-id (8 bytes) and chip-id (4 bytes), as iBoot sets them; without them the IOPlatformUUID resource
@@ -165,17 +174,24 @@ def ipad_adt(data, *, smp=False, overlay_dirs=(), bt_patch=None, portrait=False)
     # start(), no prime(), so State:/Network/Interface never lists en0 and wifid makes no Wi-Fi device. chip-id is
     # J120's A10X (T8011); unique-chip-id stands in for the ECID, a fixed value with the overlay MACs' 02:1d:5a.
     put(chosen, 'chip-id', u32(0x8011))
-    put(chosen, 'unique-chip-id', struct.pack('<Q', 0x001d5a0000000001))
+    put(chosen, 'unique-chip-id', struct.pack('<Q', 0x001D5A0000000001))
     # USB device mode (drivers/SwitchUSB): /arm-io/usb-device with an iPad usb-device node's identity (J120: Apple
     # 0x05ac:0x12ab "iPad"), published by ArmDTPlatform; SwitchXUDC starts on it and IOUSBDeviceFamily reads these.
     # compatible is not usb-device,t8011, so nothing of Apple's matches the node itself.
     if USB_DEVICE_CONFIGURATION:
         usb = child(child(tree, 'arm-io'), 'usb-device')
-        for key, value in (('compatible', b'usb-device,tegra210\0'), ('device_type', b'usb-device\0'),
-                           ('vendor-id', u32(0x05ac)), ('product-id', u32(0x12ab)), ('product-version', u32(0x0701)),
-                           ('bcd-usb-version', u32(0x0200)), ('vendor-string', b'Apple Inc.\0'),
-                           ('manufacturer-string', b'Apple Inc.\0'), ('product-string', b'iPad\0'),
-                           ('configuration-string', USB_DEVICE_CONFIGURATION.encode() + b'\0')):
+        for key, value in (
+            ('compatible', b'usb-device,tegra210\0'),
+            ('device_type', b'usb-device\0'),
+            ('vendor-id', u32(0x05AC)),
+            ('product-id', u32(0x12AB)),
+            ('product-version', u32(0x0701)),
+            ('bcd-usb-version', u32(0x0200)),
+            ('vendor-string', b'Apple Inc.\0'),
+            ('manufacturer-string', b'Apple Inc.\0'),
+            ('product-string', b'iPad\0'),
+            ('configuration-string', USB_DEVICE_CONFIGURATION.encode() + b'\0'),
+        ):
             put(usb, key, value)
     # USB host mode: /arm-io/usb-xhci (J120 has one), present = on. compatible is not usb-xhci,t8011, so nothing of
     # Apple's matches the node itself; SwitchXHCI makes its own provider with the register window and interrupt.
@@ -185,11 +201,18 @@ def ipad_adt(data, *, smp=False, overlay_dirs=(), bt_patch=None, portrait=False)
             put(xhci, key, value)
     # Directories the kernel shows the Data overlay over: NUL-terminated "<directory>[:<boot-arg>]".
     if overlay_dirs:
-        put(chosen, 'switch-overlay', b''.join(f'{d}:{g}\0'.encode() if g else f'{d}\0'.encode()
-                                                 for d, g in overlay_dirs))
+        put(
+            chosen,
+            'switch-overlay',
+            b''.join(f'{d}:{g}\0'.encode() if g else f'{d}\0'.encode() for d, g in overlay_dirs),
+        )
     buttons = child(tree, 'buttons')
-    for key, value in (('compatible', b'buttons\0'), ('device_type', b'buttons\0'),
-                       ('button-names', b'hold\0voldown\0volup\0'), ('home-button-type', u32(2))):
+    for key, value in (
+        ('compatible', b'buttons\0'),
+        ('device_type', b'buttons\0'),
+        ('button-names', b'hold\0voldown\0volup\0'),
+        ('home-button-type', u32(2)),
+    ):
         put(buttons, key, value)
     # APFS's no-SEP mode; it also permits the unencrypted Data volume.
     filesystems = child(tree, 'filesystems')
@@ -213,8 +236,13 @@ def main():
     parser.add_argument('--smp', action='store_true')
     args = parser.parse_args()
     dirs = [tuple(d) for d in json.loads(args.overlay_plan.read_text())['dirs']]
-    adt = ipad_adt(args.adt.read_bytes(), smp=args.smp, overlay_dirs=dirs,
-                   bt_patch=args.bt_patch.read_bytes(), portrait=portrait_native(args.portrait_header))
+    adt = ipad_adt(
+        args.adt.read_bytes(),
+        smp=args.smp,
+        overlay_dirs=dirs,
+        bt_patch=args.bt_patch.read_bytes(),
+        portrait=portrait_native(args.portrait_header),
+    )
     if ('/filesystems', 'DoNotUseSEP') not in parse_adt(adt).properties:
         raise SystemExit('ADT patch failed')
     args.out.write_bytes(adt)

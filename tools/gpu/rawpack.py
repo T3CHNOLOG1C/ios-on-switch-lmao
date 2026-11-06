@@ -14,6 +14,7 @@ seed, in two actions (gpu/seed/defs.bzl: seed_tools builds, seed_raw_pack runs):
 
 A corpus edit reruns only the run; a frontend or raw/pack source edit both.
 """
+
 import argparse
 import json
 import os
@@ -26,8 +27,10 @@ from pathlib import Path
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     steps = parser.add_subparsers(dest='step', required=True)
-    for step, names in (('build', ('xcode-env', 'host-bridge', 'generator', 'tree', 'out')),
-                        ('run', ('shader-tools', 'qc', 'corpus', 'generator', 'tree', 'out'))):
+    for step, names in (
+        ('build', ('xcode-env', 'host-bridge', 'generator', 'tree', 'out')),
+        ('run', ('shader-tools', 'qc', 'corpus', 'generator', 'tree', 'out')),
+    ):
         p = steps.add_parser(step)
         for name in names:
             p.add_argument('--' + name, required=True)
@@ -37,17 +40,26 @@ def main():
     if work.exists():
         shutil.rmtree(work)
     (work / 'home').mkdir(parents=True)
-    env = {'PATH': '/usr/bin:/bin', 'ZERO_AR_DATE': '1', 'HOME': str(work / 'home'),
-           'TMPDIR': os.environ.get('TMPDIR', str(work)), 'RAWPACK_TREE': str(root / args.tree)}
+    env = {
+        'PATH': '/usr/bin:/bin',
+        'ZERO_AR_DATE': '1',
+        'HOME': str(work / 'home'),
+        'TMPDIR': os.environ.get('TMPDIR', str(work)),
+        'RAWPACK_TREE': str(root / args.tree),
+    }
     if args.step == 'build':
         xcode = dict(line.split('=', 1) for line in Path(args.xcode_env).read_text().splitlines() if '=' in line)
         env['DEVELOPER_DIR'] = xcode['DEVELOPER_DIR']
     generator = [sys.executable, str(root / args.generator)]
     if args.step == 'build':
-        result = subprocess.run(generator + ['--build-only', '--bridge', str(root / args.host_bridge), '--out', str(root / args.out)],
-                                env=env, capture_output=True, text=True)
+        result = subprocess.run(
+            generator + ['--build-only', '--bridge', str(root / args.host_bridge), '--out', str(root / args.out)],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
         if result.returncode:
-            sys.exit('the pack generator\'s tools failed:\n%s' % (result.stdout + result.stderr)[-6000:])
+            sys.exit("the pack generator's tools failed:\n%s" % (result.stdout + result.stderr)[-6000:])
         shutil.rmtree(work)
         return
     tools = root / args.shader_tools
@@ -56,9 +68,27 @@ def main():
     dylib.chmod(0o755)
     generated = work / 'out'
     stack = json.loads((tools / 'MANIFEST.json').read_text())['stack']
-    result = subprocess.run(generator + ['--prebuilt', str(tools / 'raw'), '--nvk', str(dylib), '--qc', str(root / args.qc),
-                                         '--corpus', str(root / args.corpus), '--out', str(generated), '--stack', stack,
-                                         '--clean'], env=env, capture_output=True, text=True)
+    result = subprocess.run(
+        generator
+        + [
+            '--prebuilt',
+            str(tools / 'raw'),
+            '--nvk',
+            str(dylib),
+            '--qc',
+            str(root / args.qc),
+            '--corpus',
+            str(root / args.corpus),
+            '--out',
+            str(generated),
+            '--stack',
+            stack,
+            '--clean',
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
     if result.returncode or not (generated / 'pack.bin').is_file():
         sys.exit('the pack generator failed:\n%s' % (result.stdout + result.stderr)[-6000:])
     print('\n'.join(line for line in result.stdout.splitlines() if not line.startswith('  skipped')))

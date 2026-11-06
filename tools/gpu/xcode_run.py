@@ -5,6 +5,7 @@ Runs an Xcode tool (`clang`, `clang++`, `strip`, `dsymutil`, `codesign`, ...) fr
 @xcode//:xcode.env, with DEVELOPER_DIR set, `@IPHONEOS_SDK@`/`@MACOSX_SDK@`/`@PWD@`/`@FILE:<path>@` replaced in the arguments, and
 ZERO_AR_DATE=1 (no object/archive timestamps in a link). A bare tool name is looked up in the Xcode toolchain, then
 /usr/bin (codesign lives there)."""
+
 import os
 import subprocess
 import sys
@@ -14,11 +15,15 @@ from pathlib import Path
 def main():
     argv = sys.argv[1:]
     split = argv.index('--')
-    options, command = argv[:split], argv[split + 1:]
+    options, command = argv[:split], argv[split + 1 :]
     xcode = dict(line.split('=', 1) for line in Path(options[0]).read_text().splitlines() if '=' in line)
-    env = {'PATH': '%s:/usr/bin:/bin:/usr/sbin:/sbin' % xcode['XCODE_TOOLCHAIN'],
-           'DEVELOPER_DIR': xcode['DEVELOPER_DIR'], 'ZERO_AR_DATE': '1',
-           'TMPDIR': os.environ.get('TMPDIR', '/tmp'), 'HOME': os.environ.get('HOME', '/var/empty')}
+    env = {
+        'PATH': '%s:/usr/bin:/bin:/usr/sbin:/sbin' % xcode['XCODE_TOOLCHAIN'],
+        'DEVELOPER_DIR': xcode['DEVELOPER_DIR'],
+        'ZERO_AR_DATE': '1',
+        'TMPDIR': os.environ.get('TMPDIR', '/tmp'),
+        'HOME': os.environ.get('HOME', '/var/empty'),
+    }
     for option in options[1:]:
         if option.startswith('NAME=') or '=' not in option:
             sys.exit('bad option ' + option)
@@ -32,7 +37,7 @@ def main():
         while '@FILE:' in arg:
             start = arg.index('@FILE:')
             end = arg.index('@', start + 6)
-            arg = arg[:start] + Path(arg[start + 6:end]).read_text().strip() + arg[end + 1:]
+            arg = arg[:start] + Path(arg[start + 6 : end]).read_text().strip() + arg[end + 1 :]
         command[i] = arg
     tool = command[0]
     if '/' not in tool:

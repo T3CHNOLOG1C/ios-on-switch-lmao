@@ -13,7 +13,19 @@ def legacy_image(data: bytes, *, os_type: int, kind: int, name: str, load: int =
     if len(title) > 32:
         raise ValueError('legacy image name is too long')
     header = struct.pack(
-        '>7I4B32s', 0x27051956, 0, 0, len(data), load, entry, zlib.crc32(data), os_type, 22, kind, 0, title.ljust(32, b'\0')
+        '>7I4B32s',
+        0x27051956,
+        0,
+        0,
+        len(data),
+        load,
+        entry,
+        zlib.crc32(data),
+        os_type,
+        22,
+        kind,
+        0,
+        title.ljust(32, b'\0'),
     )
     header = header[:4] + struct.pack('>I', zlib.crc32(header)) + header[8:]
     image = header + data

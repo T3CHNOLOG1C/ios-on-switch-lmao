@@ -14,6 +14,7 @@ Scenarios (each prints Bazel's Elapsed/processes lines):
   fresh base       a brand-new output base (a fresh clone or `bazel clean --expunge`): everything from the disk cache
   cold (--cold)    a brand-new output base with no disk cache: everything runs
 The edited source is always restored."""
+
 import argparse
 import os
 import shutil
@@ -22,49 +23,54 @@ import sys
 import tempfile
 from pathlib import Path
 
-TARGETS = ["//:boot", "//:gpu"]
-DRIVER = "drivers/SwitchButtons/SwitchButtons.cpp"
+TARGETS = ['//:boot', '//:gpu']
+DRIVER = 'drivers/SwitchButtons/SwitchButtons.cpp'
 
 
 def build(workspace, label, startup=(), flags=()):
-    bazel = os.environ.get("BAZEL", "bazel")
-    result = subprocess.run([bazel, *startup, "build", *flags, *TARGETS], cwd=workspace, capture_output=True, text=True)
-    lines = [l for l in result.stderr.splitlines() if l.startswith("INFO: Elapsed") or " processes" in l]
-    print("{:16} {}".format(label, " / ".join(l.replace("INFO: ", "") for l in lines)), flush=True)
+    bazel = os.environ.get('BAZEL', 'bazel')
+    result = subprocess.run([bazel, *startup, 'build', *flags, *TARGETS], cwd=workspace, capture_output=True, text=True)
+    lines = [l for l in result.stderr.splitlines() if l.startswith('INFO: Elapsed') or ' processes' in l]
+    print('{:16} {}'.format(label, ' / '.join(l.replace('INFO: ', '') for l in lines)), flush=True)
     if result.returncode:
         sys.exit(result.stderr[-3000:])
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--cold", action="store_true")
+    parser.add_argument('--cold', action='store_true')
     args = parser.parse_args()
-    workspace = Path(os.environ.get("BUILD_WORKSPACE_DIRECTORY") or sys.exit("run with bazel run"))
-    build(workspace, "warm-up")
-    build(workspace, "no-op")
+    workspace = Path(os.environ.get('BUILD_WORKSPACE_DIRECTORY') or sys.exit('run with bazel run'))
+    build(workspace, 'warm-up')
+    build(workspace, 'no-op')
     source = workspace / DRIVER
     original = source.read_bytes()
     try:
-        source.write_bytes(original + b"// cache demo\n")
-        build(workspace, "comment added")
-        source.write_bytes(original + b'extern "C" __attribute__((used)) int switch_cache_demo(void) { return 1104; }\n')
-        build(workspace, "code changed")
+        source.write_bytes(original + b'// cache demo\n')
+        build(workspace, 'comment added')
+        source.write_bytes(
+            original + b'extern "C" __attribute__((used)) int switch_cache_demo(void) { return 1104; }\n'
+        )
+        build(workspace, 'code changed')
     finally:
         source.write_bytes(original)
-    build(workspace, "code reverted")
-    scratch = Path(tempfile.mkdtemp(prefix="switch-bench-"))
+    build(workspace, 'code reverted')
+    scratch = Path(tempfile.mkdtemp(prefix='switch-bench-'))
     try:
-        quiet = ["--experimental_convenience_symlinks=ignore"]
-        build(workspace, "fresh base", ["--output_base=" + str(scratch / "warm")], quiet)
+        quiet = ['--experimental_convenience_symlinks=ignore']
+        build(workspace, 'fresh base', ['--output_base=' + str(scratch / 'warm')], quiet)
         if args.cold:
-            build(workspace, "cold", ["--output_base=" + str(scratch / "cold")], quiet + ["--disk_cache="])
+            build(workspace, 'cold', ['--output_base=' + str(scratch / 'cold')], quiet + ['--disk_cache='])
     finally:
-        for base in ("warm", "cold"):
+        for base in ('warm', 'cold'):
             if (scratch / base).exists():
-                subprocess.run([os.environ.get("BAZEL", "bazel"), "--output_base=" + str(scratch / base), "clean",
-                                "--expunge"], cwd=workspace, capture_output=True)
+                subprocess.run(
+                    [os.environ.get('BAZEL', 'bazel'), '--output_base=' + str(scratch / base), 'clean', '--expunge'],
+                    cwd=workspace,
+                    capture_output=True,
+                )
         shutil.rmtree(scratch, ignore_errors=True)
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

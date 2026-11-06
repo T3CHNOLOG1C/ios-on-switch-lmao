@@ -21,6 +21,7 @@ probes).
 --stack: the build's stack key (the plugin is compiled with the same value), stamped into the pack header: the runtime refuses a
 pack of another build.
 """
+
 import os
 import shutil
 import struct
@@ -29,18 +30,27 @@ import sys
 import tempfile
 from pathlib import Path
 
-HERE = Path(__file__).resolve().parent            # drivers/TegraGM20BMetal/raw/pack
+HERE = Path(__file__).resolve().parent  # drivers/TegraGM20BMetal/raw/pack
 RAW = HERE.parent
-TREE = Path(os.environ.get('RAWPACK_TREE', RAW.parents[2]))   # tree/ (drivers/TegraGM20BMetal/raw -> tree)
+TREE = Path(os.environ.get('RAWPACK_TREE', RAW.parents[2]))  # tree/ (drivers/TegraGM20BMetal/raw -> tree)
 METAL = TREE / 'drivers/NativeMetal'
 ABI = TREE / 'drivers/TegraGM20B'
 
 
 def run(cmd, env=None, out=None):
-    r = subprocess.run([str(c) for c in cmd], capture_output=out is None, text=True, env=env,
-                       stdout=open(out, 'w') if out else None, stderr=subprocess.PIPE if out else None)
+    r = subprocess.run(
+        [str(c) for c in cmd],
+        capture_output=out is None,
+        text=True,
+        env=env,
+        stdout=open(out, 'w') if out else None,
+        stderr=subprocess.PIPE if out else None,
+    )
     if r.returncode:
-        sys.exit('rawpack: FAILED: %s\n%s%s' % (' '.join(map(str, cmd))[:400], (r.stdout or '')[-3000:], (r.stderr or '')[-5000:]))
+        sys.exit(
+            'rawpack: FAILED: %s\n%s%s'
+            % (' '.join(map(str, cmd))[:400], (r.stdout or '')[-3000:], (r.stderr or '')[-5000:])
+        )
     return (r.stdout or '') + (r.stderr or '')
 
 
@@ -71,12 +81,60 @@ def build(work, bridge):
     run(['xcrun', 'clang', *cflags, '-c', HERE / 'mock_iokit.c', '-o', work / 'mock_iokit.o'])
     run(['xcrun', 'clang++', *cflags, '-std=c++17', '-c', HERE / 'cap.cpp', '-o', work / 'cap.o'])
     run(['xcrun', 'clang++', *cflags, '-std=c++17', '-c', HERE / 'nvdec.cpp', '-o', work / 'nvdec.o'])
-    run(['xcrun', 'clang++', '-dynamiclib', work / 'mock_iokit.o', work / 'cap.o', work / 'nvdec.o', *objs, '-framework', 'IOKit',
-         '-framework', 'CoreFoundation', '-install_name', '@rpath/libmock_iokit.dylib', '-o', work / 'libmock_iokit.dylib'])
-    run(['xcrun', 'clang++', '-O2', '-std=c++17', '-fobjc-arc', '-Wno-deprecated-declarations', *maps, '-I', METAL,
-         '-x', 'objective-c++', HERE / 'probe.mm', METAL / 'NativeBridgeMetalFrontend.mm', '-x', 'none', bridge, '-L', work,
-         '-lmock_iokit', '-Wl,-rpath,@executable_path', '-lobjc', '-framework', 'Foundation', '-framework', 'Metal', '-framework', 'IOSurface',
-         '-framework', 'IOKit', '-o', work / 'probe'])
+    run(
+        [
+            'xcrun',
+            'clang++',
+            '-dynamiclib',
+            work / 'mock_iokit.o',
+            work / 'cap.o',
+            work / 'nvdec.o',
+            *objs,
+            '-framework',
+            'IOKit',
+            '-framework',
+            'CoreFoundation',
+            '-install_name',
+            '@rpath/libmock_iokit.dylib',
+            '-o',
+            work / 'libmock_iokit.dylib',
+        ]
+    )
+    run(
+        [
+            'xcrun',
+            'clang++',
+            '-O2',
+            '-std=c++17',
+            '-fobjc-arc',
+            '-Wno-deprecated-declarations',
+            *maps,
+            '-I',
+            METAL,
+            '-x',
+            'objective-c++',
+            HERE / 'probe.mm',
+            METAL / 'NativeBridgeMetalFrontend.mm',
+            '-x',
+            'none',
+            bridge,
+            '-L',
+            work,
+            '-lmock_iokit',
+            '-Wl,-rpath,@executable_path',
+            '-lobjc',
+            '-framework',
+            'Foundation',
+            '-framework',
+            'Metal',
+            '-framework',
+            'IOSurface',
+            '-framework',
+            'IOKit',
+            '-o',
+            work / 'probe',
+        ]
+    )
     run(['xcrun', '-sdk', 'iphoneos', 'metal', '-c', HERE / 'ycbcr.metal', '-I', HERE, '-o', work / 'ycbcr.air'])
     run(['xcrun', '-sdk', 'iphoneos', 'metallib', work / 'ycbcr.air', '-o', work / 'ycbcr.metallib'])
 
@@ -104,9 +162,21 @@ def main():
             (work / name).chmod(0o755)
     else:
         build(work, Path(option('--bridge')).resolve())
-    env = {k: v for k, v in os.environ.items()
-           if not k.startswith(('NAK_', 'NVK_', 'MESA_', 'NMB_', 'M2V_', 'METAL2VULKAN_', 'TEGRA_', 'MTL_', 'NVDEC_', 'RAWCAP_', 'PROBE_'))}
-    env.update(MESA_SHADER_CACHE_DISABLE='true', NVDEC_PROBE='1', NVDEC_SCRUB='1', NVDEC_TRACE='3', NMB_ASYNC_PSO='0', NMB_ASYNC_PSO_API='0')
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if not k.startswith(
+            ('NAK_', 'NVK_', 'MESA_', 'NMB_', 'M2V_', 'METAL2VULKAN_', 'TEGRA_', 'MTL_', 'NVDEC_', 'RAWCAP_', 'PROBE_')
+        )
+    }
+    env.update(
+        MESA_SHADER_CACHE_DISABLE='true',
+        NVDEC_PROBE='1',
+        NVDEC_SCRUB='1',
+        NVDEC_TRACE='3',
+        NMB_ASYNC_PSO='0',
+        NMB_ASYNC_PSO_API='0',
+    )
     env.update(PROBE_YCBCR_LIB=str(work / 'ycbcr.metallib'))
     # first a run that only fills the m2v cache with NVK's driver records (NAK's programs), then the three decoded runs, which
     # name each bound program by those records (RAWCAP_PROGRAMS) and hit the same cache
@@ -114,8 +184,13 @@ def main():
     cache.mkdir()
 
     def probe(name, extra):
-        r = subprocess.run([str(work / 'probe'), str(nvk), str(cache), str(qc), str(corpus)], env=dict(env, **extra),
-                           stdout=open(work / ('%s.out' % name), 'w'), stderr=subprocess.PIPE, text=True)
+        r = subprocess.run(
+            [str(work / 'probe'), str(nvk), str(cache), str(qc), str(corpus)],
+            env=dict(env, **extra),
+            stdout=open(work / ('%s.out' % name), 'w'),
+            stderr=subprocess.PIPE,
+            text=True,
+        )
         if r.returncode:
             sys.exit('rawpack: probe %s failed:\n%s' % (name, r.stderr[-4000:]))
         tail = [l for l in r.stderr.splitlines() if l.startswith('probe:')]
@@ -124,13 +199,28 @@ def main():
     probe('warm', {})
     print(run([sys.executable, HERE / 'mkprograms.py', work / 'programs.bin', cache]).strip())
     for size in (256, 16, 4096):
-        probe('probe%d' % size, dict(PROBE_BYTES=str(size), RAWCAP_LOG=str(work / ('probe%d.log' % size)),
-                                     RAWCAP_PROGRAMS=str(work / 'programs.bin')))
-    report = run([sys.executable, HERE / 'mkpack.py', work / 'probe256.out', work / 'probe256.log', work / 'programs.bin', out,
-                  work / 'probe'])
+        probe(
+            'probe%d' % size,
+            dict(
+                PROBE_BYTES=str(size),
+                RAWCAP_LOG=str(work / ('probe%d.log' % size)),
+                RAWCAP_PROGRAMS=str(work / 'programs.bin'),
+            ),
+        )
+    report = run(
+        [
+            sys.executable,
+            HERE / 'mkpack.py',
+            work / 'probe256.out',
+            work / 'probe256.log',
+            work / 'programs.bin',
+            out,
+            work / 'probe',
+        ]
+    )
     if stack:
         pack = bytearray((out / 'pack.bin').read_bytes())
-        struct.pack_into('<Q', pack, 8 + 16 + 8 * 2 * 8, stack)   # PackHeader.stack (after the section table)
+        struct.pack_into('<Q', pack, 8 + 16 + 8 * 2 * 8, stack)  # PackHeader.stack (after the section table)
         (out / 'pack.bin').write_bytes(pack)
     print(report.rstrip())
     if '--clean' in sys.argv[1:]:

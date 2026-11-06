@@ -60,13 +60,15 @@ def plan(manifest: dict, portrait: bool, given=None) -> dict:
         if gates.setdefault(directory, gate) != gate:
             raise SystemExit(f'overlay: files in {directory} need the same boot-arg')
         trust = bool(entry.get('trust'))
-        files.append({
-            'path': path,
-            'source': entry['source'],
-            'trust': trust,
-            'mode': int(entry.get('mode', '0755' if trust else '0644'), 8),
-            'directory': directory,
-        })
+        files.append(
+            {
+                'path': path,
+                'source': entry['source'],
+                'trust': trust,
+                'mode': int(entry.get('mode', '0755' if trust else '0644'), 8),
+                'directory': directory,
+            }
+        )
     used = {f['directory'] for f in files}
     return {'files': files, 'dirs': sorted([d, g] for d, g in gates.items() if d in used)}
 
@@ -114,7 +116,7 @@ def _files(specs):
 
 def _need(files, entry):
     if entry['source'] not in files:
-        sys.exit(f"overlay: {entry['path']}: //boot:package gives no {entry['source']}")
+        sys.exit(f'overlay: {entry["path"]}: //boot:package gives no {entry["source"]}')
     return files[entry['source']]
 
 

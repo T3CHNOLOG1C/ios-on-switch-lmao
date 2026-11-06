@@ -20,14 +20,15 @@ reads it, read-only, and stages two files under <Data>/Switch/bluetooth/ (/priva
 
 No dump on the FAT removes both, and the console goes back to its own address. Nothing is ever written to the FAT.
 """
+
 import plistlib
 import re
 from pathlib import Path
 
-INI = "switchroot/joycon_mac.ini"
-STAGED = "Switch/bluetooth"
-PRODUCTS = {1: ("Joy-Con (L)", 0x2006), 2: ("Joy-Con (R)", 0x2007), 3: ("Pro Controller", 0x2009)}
-_ADDRESS = re.compile(r"^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}$")
+INI = 'switchroot/joycon_mac.ini'
+STAGED = 'Switch/bluetooth'
+PRODUCTS = {1: ('Joy-Con (L)', 0x2006), 2: ('Joy-Con (R)', 0x2007), 3: ('Pro Controller', 0x2009)}
+_ADDRESS = re.compile(r'^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}$')
 
 
 def parse(text):
@@ -36,87 +37,101 @@ def parse(text):
     sections, current = {}, None
     for raw in text.splitlines():
         line = raw.strip()
-        if line.startswith("[") and line.endswith("]"):
+        if line.startswith('[') and line.endswith(']'):
             current = sections.setdefault(line[1:-1].strip(), {})
-        elif current is not None and "=" in line:
-            key, value = line.split("=", 1)
+        elif current is not None and '=' in line:
+            key, value = line.split('=', 1)
             current[key.strip().lower()] = value.strip()
     controllers, skipped, host = [], [], None
-    for name in sorted(n for n in sections if n.startswith("joycon_")):
+    for name in sorted(n for n in sections if n.startswith('joycon_')):
         entry = sections[name]
         try:
-            kind = int(entry.get("type", "0"), 0)
+            kind = int(entry.get('type', '0'), 0)
         except ValueError:
             kind = 0
-        mac, peer, ltk = entry.get("mac", ""), entry.get("host", ""), entry.get("ltk", "")
+        mac, peer, ltk = entry.get('mac', ''), entry.get('host', ''), entry.get('ltk', '')
         if kind not in PRODUCTS:
-            skipped.append("{}: type {} (none, or not paired in Horizon)".format(name, entry.get("type")))
+            skipped.append('{}: type {} (none, or not paired in Horizon)'.format(name, entry.get('type')))
             continue
-        if not _ADDRESS.match(mac) or not _ADDRESS.match(peer) or not re.fullmatch(r"[0-9A-Fa-f]{32}", ltk):
-            skipped.append("{}: malformed mac/host/ltk".format(name))
+        if not _ADDRESS.match(mac) or not _ADDRESS.match(peer) or not re.fullmatch(r'[0-9A-Fa-f]{32}', ltk):
+            skipped.append('{}: malformed mac/host/ltk'.format(name))
             continue
         key = bytes.fromhex(ltk)
-        if not any(key) or peer.replace(":", "") == "000000000000":
-            skipped.append("{}: empty host or key".format(name))
+        if not any(key) or peer.replace(':', '') == '000000000000':
+            skipped.append('{}: empty host or key'.format(name))
             continue
         host = host or peer.lower()
         if peer.lower() != host:
             # One controller address only (switchroot takes one as well): this Joy-Con was paired to another console.
-            skipped.append("{}: paired to {}, not {}".format(name, peer.lower(), host))
+            skipped.append('{}: paired to {}, not {}'.format(name, peer.lower(), host))
             continue
         label, product = PRODUCTS[kind]
-        controllers.append({"Address": mac.lower(), "Name": label, "ProductID": product, "LinkKey": key})
+        controllers.append({'Address': mac.lower(), 'Name': label, 'ProductID': product, 'LinkKey': key})
     if not controllers:
-        return {"host": None, "controllers": [], "skipped": skipped} if skipped else None
-    return {"host": host, "controllers": controllers, "skipped": skipped}
+        return {'host': None, 'controllers': [], 'skipped': skipped} if skipped else None
+    return {'host': host, 'controllers': controllers, 'skipped': skipped}
 
 
 def read(fat_root, log):
     """The dump on a mounted FAT, parsed; None when there is none. Only reads."""
     path = Path(fat_root) / INI
     if not path.is_file():
-        log("joycon pairing: no {} on the FAT (hekate: Tools > Dump Joy-Con BT, after pairing in Horizon)".format(INI))
+        log('joycon pairing: no {} on the FAT (hekate: Tools > Dump Joy-Con BT, after pairing in Horizon)'.format(INI))
         return None
-    pairing = parse(path.read_text(errors="replace"))
+    pairing = parse(path.read_text(errors='replace'))
     if pairing is None:
-        log("joycon pairing: {} has no Joy-Con sections".format(INI))
-    for reason in (pairing or {}).get("skipped", []):
-        log("joycon pairing: skipped", reason)
-    if pairing and pairing["controllers"]:
-        log("joycon pairing: host {}, {}".format(pairing["host"], ", ".join(
-            "{} {}".format(c["Name"], c["Address"]) for c in pairing["controllers"])))
-    return pairing if pairing and pairing["controllers"] else None
+        log('joycon pairing: {} has no Joy-Con sections'.format(INI))
+    for reason in (pairing or {}).get('skipped', []):
+        log('joycon pairing: skipped', reason)
+    if pairing and pairing['controllers']:
+        log(
+            'joycon pairing: host {}, {}'.format(
+                pairing['host'], ', '.join('{} {}'.format(c['Name'], c['Address']) for c in pairing['controllers'])
+            )
+        )
+    return pairing if pairing and pairing['controllers'] else None
 
 
 def stage(data_root, pairing, log, dry_run=False):
     """<Data>/Switch/bluetooth/{host-address,joycon-pairing.plist} := the dump, or removed when there is none.
     Returns whether anything changed."""
     directory = Path(data_root) / STAGED
-    address, plist = directory / "host-address", directory / "joycon-pairing.plist"
+    address, plist = directory / 'host-address', directory / 'joycon-pairing.plist'
     if not pairing:
         stale = [p for p in (address, plist) if p.exists()]
         if stale and not dry_run:
             for path in stale:
                 path.unlink()
         if stale:
-            log("joycon pairing: staged dump removed{} (the console uses its own address again)".format(
-                " (dry run)" if dry_run else ""))
+            log(
+                'joycon pairing: staged dump removed{} (the console uses its own address again)'.format(
+                    ' (dry run)' if dry_run else ''
+                )
+            )
         return bool(stale)
     wanted = {
-        address: bytes.fromhex(pairing["host"].replace(":", "")),
-        plist: plistlib.dumps({"HostAddress": pairing["host"], "Source": INI, "Controllers": pairing["controllers"]},
-                              fmt=plistlib.FMT_XML, sort_keys=True),
+        address: bytes.fromhex(pairing['host'].replace(':', '')),
+        plist: plistlib.dumps(
+            {'HostAddress': pairing['host'], 'Source': INI, 'Controllers': pairing['controllers']},
+            fmt=plistlib.FMT_XML,
+            sort_keys=True,
+        ),
     }
     changed = [p for p, content in wanted.items() if not p.is_file() or p.read_bytes() != content]
     if changed and not dry_run:
         directory.mkdir(parents=True, exist_ok=True)
         directory.chmod(0o755)
         for path in changed:
-            partial = path.with_name(".partial-" + path.name)
+            partial = path.with_name('.partial-' + path.name)
             partial.write_bytes(wanted[path])
             partial.chmod(0o644)
             partial.replace(path)
-    log("joycon pairing: {}{}".format("staged {} for {}".format(
-        "/".join(p.name for p in changed), pairing["host"]) if changed else "staged dump unchanged",
-        " (dry run)" if dry_run and changed else ""))
+    log(
+        'joycon pairing: {}{}'.format(
+            'staged {} for {}'.format('/'.join(p.name for p in changed), pairing['host'])
+            if changed
+            else 'staged dump unchanged',
+            ' (dry run)' if dry_run and changed else '',
+        )
+    )
     return bool(changed)

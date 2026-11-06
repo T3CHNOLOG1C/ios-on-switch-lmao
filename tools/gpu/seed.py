@@ -36,8 +36,13 @@ ARCHES = {0x0100000C: 'arm64', 0x01000007: 'x86_64'}
 def _xcode_env(path, work):
     xcode = dict(line.split('=', 1) for line in Path(path).read_text().splitlines() if '=' in line)
     (work / 'home').mkdir(parents=True, exist_ok=True)
-    return {'PATH': '/usr/bin:/bin', 'DEVELOPER_DIR': xcode['DEVELOPER_DIR'], 'ZERO_AR_DATE': '1',
-            'HOME': str(work / 'home'), 'TMPDIR': os.environ.get('TMPDIR', str(work))}
+    return {
+        'PATH': '/usr/bin:/bin',
+        'DEVELOPER_DIR': xcode['DEVELOPER_DIR'],
+        'ZERO_AR_DATE': '1',
+        'HOME': str(work / 'home'),
+        'TMPDIR': os.environ.get('TMPDIR', str(work)),
+    }
 
 
 def _run(command, env):
@@ -49,43 +54,106 @@ def _run(command, env):
 
 def mock(args, root, work):
     env = _xcode_env(args.xcode_env, work)
-    _run(['/usr/bin/xcrun', 'clang', '-O1', '-Wall', '-dynamiclib', '-ffile-prefix-map=%s=/switch-ios' % root, '-I',
-          Path(args.abi_header).parent, args.mock_iokit, '-framework', 'IOKit', '-framework', 'CoreFoundation',
-          '-install_name', '@rpath/libmock_iokit.dylib', '-o', args.out], env)
+    _run(
+        [
+            '/usr/bin/xcrun',
+            'clang',
+            '-O1',
+            '-Wall',
+            '-dynamiclib',
+            '-ffile-prefix-map=%s=/switch-ios' % root,
+            '-I',
+            Path(args.abi_header).parent,
+            args.mock_iokit,
+            '-framework',
+            'IOKit',
+            '-framework',
+            'CoreFoundation',
+            '-install_name',
+            '@rpath/libmock_iokit.dylib',
+            '-o',
+            args.out,
+        ],
+        env,
+    )
 
 
 def tool(args, root, work):
     """The precompile tool, linked against the mock IOKit beside it (the tools directory puts the two side by side)."""
     env = _xcode_env(args.xcode_env, work)
-    _run(['/usr/bin/xcrun', 'clang++', '-O2', '-std=c++17', '-fobjc-arc', '-Wno-deprecated-declarations',
-          '-ffile-prefix-map=%s=/switch-ios' % root, '-I', Path(args.metal_header).parent, '-x', 'objective-c++',
-          args.precompile, args.frontend, '-x', 'none', args.host_bridge, '-L', Path(args.mock).parent, '-lmock_iokit',
-          '-Wl,-rpath,@executable_path', '-framework', 'Foundation', '-framework', 'Metal', '-framework', 'IOSurface',
-          '-framework', 'IOKit', '-o', args.out], env)
+    _run(
+        [
+            '/usr/bin/xcrun',
+            'clang++',
+            '-O2',
+            '-std=c++17',
+            '-fobjc-arc',
+            '-Wno-deprecated-declarations',
+            '-ffile-prefix-map=%s=/switch-ios' % root,
+            '-I',
+            Path(args.metal_header).parent,
+            '-x',
+            'objective-c++',
+            args.precompile,
+            args.frontend,
+            '-x',
+            'none',
+            args.host_bridge,
+            '-L',
+            Path(args.mock).parent,
+            '-lmock_iokit',
+            '-Wl,-rpath,@executable_path',
+            '-framework',
+            'Foundation',
+            '-framework',
+            'Metal',
+            '-framework',
+            'IOSurface',
+            '-framework',
+            'IOKit',
+            '-o',
+            args.out,
+        ],
+        env,
+    )
 
 
 def twin(args, root, work):
     # The twin with the device's pipeline cache identity (tools/gpu/nvk_twin.py).
     (work / 'home').mkdir()
-    make_twin(args.nvk, args.twin, args.out,
-              {'PATH': '/usr/bin:/bin', 'HOME': str(work / 'home'), 'TMPDIR': os.environ.get('TMPDIR', str(work))})
+    make_twin(
+        args.nvk,
+        args.twin,
+        args.out,
+        {'PATH': '/usr/bin:/bin', 'HOME': str(work / 'home'), 'TMPDIR': os.environ.get('TMPDIR', str(work))},
+    )
 
 
 def layout(args, root, work):
     out = Path(args.out)
     shutil.rmtree(out, ignore_errors=True)
     (out / 'raw').mkdir(parents=True)
-    for source, name in ((args.precompile, 'precompile'), (args.mock, 'libmock_iokit.dylib'),
-                         (args.twin_dylib, 'libvulkan_nouveau.dylib')):
+    for source, name in (
+        (args.precompile, 'precompile'),
+        (args.mock, 'libmock_iokit.dylib'),
+        (args.twin_dylib, 'libvulkan_nouveau.dylib'),
+    ):
         shutil.copyfile(source, out / name)
         (out / name).chmod(0o755)
     for path in sorted(Path(args.raw).iterdir()):
         shutil.copyfile(path, out / 'raw' / path.name)
         (out / 'raw' / path.name).chmod(0o755)
-    cpu, = struct.unpack_from('<I', (out / 'precompile').read_bytes(), 4)
-    mesa = next(line.split()[1] for line in Path(args.nvk_source).read_text().splitlines() if line.startswith('mesa-tree'))
-    manifest = {'format': 1, 'arch': ARCHES.get(cpu, hex(cpu)), 'stack': Path(args.stack).read_text().strip(),
-                'nvk_uuid': lc_uuid(out / 'libvulkan_nouveau.dylib').hex(), 'mesa_tree': mesa}
+    (cpu,) = struct.unpack_from('<I', (out / 'precompile').read_bytes(), 4)
+    mesa = next(
+        line.split()[1] for line in Path(args.nvk_source).read_text().splitlines() if line.startswith('mesa-tree')
+    )
+    manifest = {
+        'format': 1,
+        'arch': ARCHES.get(cpu, hex(cpu)),
+        'stack': Path(args.stack).read_text().strip(),
+        'nvk_uuid': lc_uuid(out / 'libvulkan_nouveau.dylib').hex(),
+        'mesa_tree': mesa,
+    }
     (out / 'MANIFEST.json').write_text(json.dumps(manifest, indent=1, sort_keys=True) + '\n')
 
 

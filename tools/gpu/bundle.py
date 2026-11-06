@@ -12,6 +12,7 @@ no entitlements, no signing time, so the CDHashes are a function of the bytes. T
 module (vendor/unixnu/scripts/make-owner-trust-bundle.py): u32 version, uuid5 of the CDHashes, u32 count, then per
 entry the 20-byte CDHash, hash type 2 (SHA-256), flags 0, constraint category 0, reserved 0, in ascending order.
 """
+
 import argparse
 import json
 import os
@@ -31,8 +32,11 @@ class Xcode:
     def __init__(self, env_file):
         values = dict(line.split('=', 1) for line in Path(env_file).read_text().splitlines() if '=' in line)
         self.toolchain = values['XCODE_TOOLCHAIN']
-        self.env = {'PATH': '%s:/usr/bin:/bin' % self.toolchain, 'DEVELOPER_DIR': values['DEVELOPER_DIR'],
-                    'TMPDIR': os.environ.get('TMPDIR', '/tmp')}
+        self.env = {
+            'PATH': '%s:/usr/bin:/bin' % self.toolchain,
+            'DEVELOPER_DIR': values['DEVELOPER_DIR'],
+            'TMPDIR': os.environ.get('TMPDIR', '/tmp'),
+        }
 
     def run(self, *command):
         tool = command[0]
@@ -45,7 +49,7 @@ class Xcode:
 
 def arm64(path):
     magic, cputype, subtype = struct.unpack_from('<3I', Path(path).read_bytes())
-    if (magic, cputype, subtype & 0xffffff) != (0xfeedfacf, 0x100000c, 0):
+    if (magic, cputype, subtype & 0xFFFFFF) != (0xFEEDFACF, 0x100000C, 0):
         sys.exit('%s: expected a plain arm64 (subtype 0) Mach-O' % path)
 
 
@@ -60,7 +64,9 @@ def sign(xcode, path, identifier):
 
 def trust_module(cdhashes):
     hashes = sorted(bytes.fromhex(h) for h in cdhashes)
-    identifier = uuid.uuid5(uuid.NAMESPACE_URL, 'com.brunostjohn.switch.tegra-gm20b-metal:' + ''.join(h.hex() for h in hashes))
+    identifier = uuid.uuid5(
+        uuid.NAMESPACE_URL, 'com.brunostjohn.switch.tegra-gm20b-metal:' + ''.join(h.hex() for h in hashes)
+    )
     return struct.pack('<I16sI', 2, identifier.bytes, len(hashes)) + b''.join(h + bytes([2, 0, 0, 0]) for h in hashes)
 
 
@@ -87,18 +93,38 @@ def main():
     xcode.run('strip', '-x', dylib)
     arm64(dylib)
     nvk_cdhash = sign(xcode, dylib, 'com.brunostjohn.switch.nvk')
-    (bundle / 'Info.plist').write_bytes(plistlib.dumps(dict(
-        CFBundleIdentifier='com.brunostjohn.switch.' + NAME, CFBundleExecutable=NAME, CFBundlePackageType='BNDL',
-        CFBundleVersion='1', CFBundleShortVersionString='1', NSPrincipalClass='TegraGM20BMetalDevice',
-        MinimumOSVersion='17.0', SwitchShaderStack=Path(args.stack).read_text().strip()), fmt=plistlib.FMT_XML))
+    (bundle / 'Info.plist').write_bytes(
+        plistlib.dumps(
+            dict(
+                CFBundleIdentifier='com.brunostjohn.switch.' + NAME,
+                CFBundleExecutable=NAME,
+                CFBundlePackageType='BNDL',
+                CFBundleVersion='1',
+                CFBundleShortVersionString='1',
+                NSPrincipalClass='TegraGM20BMetalDevice',
+                MinimumOSVersion='17.0',
+                SwitchShaderStack=Path(args.stack).read_text().strip(),
+            ),
+            fmt=plistlib.FMT_XML,
+        )
+    )
     plugin_cdhash = sign(xcode, bundle, 'com.brunostjohn.switch.' + NAME)
     for path in [bundle, *bundle.rglob('*')]:
         path.chmod(0o755 if path.is_dir() or path in (exe, dylib) else 0o644)
 
     Path(args.trustcache).write_bytes(trust_module([plugin_cdhash, nvk_cdhash]))
-    Path(args.trust_json).write_text(json.dumps(dict(plugin_cdhash=plugin_cdhash, nvk_cdhash=nvk_cdhash,
-                                                     plugin_bytes=exe.stat().st_size, nvk_bytes=dylib.stat().st_size),
-                                                indent=2) + '\n')
+    Path(args.trust_json).write_text(
+        json.dumps(
+            dict(
+                plugin_cdhash=plugin_cdhash,
+                nvk_cdhash=nvk_cdhash,
+                plugin_bytes=exe.stat().st_size,
+                nvk_bytes=dylib.stat().st_size,
+            ),
+            indent=2,
+        )
+        + '\n'
+    )
     print('bundle: plugin %s nvk %s' % (plugin_cdhash, nvk_cdhash))
 
 

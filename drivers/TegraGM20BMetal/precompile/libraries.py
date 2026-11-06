@@ -24,6 +24,7 @@ A journal line names its library from the frontend that writes lib= on; an older
 function name, and the table keeps the two apart. A wrong guess costs nothing on the device: m2v's keys hash the function's AIR,
 so a translation of another library's function is never found there.
 """
+
 import hashlib
 import json
 import re
@@ -38,28 +39,28 @@ QC = '/System/Library/Frameworks/QuartzCore.framework/default.metallib'
 def names(data):
     """The function names of a metallib's bytes (the first MTLB slice of a fat one), or None when it is not one."""
     if data[:4] == b'\xca\xfe\xba\xbe':
-        count, = struct.unpack_from('>I', data, 4)
+        (count,) = struct.unpack_from('>I', data, 4)
         for i in range(count):
             _, _, offset, size, _ = struct.unpack_from('>IIIII', data, 8 + 20 * i)
-            if data[offset:offset + 4] == b'MTLB':
-                return names(data[offset:offset + size])
+            if data[offset : offset + 4] == b'MTLB':
+                return names(data[offset : offset + size])
         return None
     if data[:4] != b'MTLB' or len(data) < 0x58:
         return None
-    offset, _ = struct.unpack_from('<QQ', data, 24)   # the function list: u32 count, then entries of u32 size and tags
+    offset, _ = struct.unpack_from('<QQ', data, 24)  # the function list: u32 count, then entries of u32 size and tags
     if offset + 4 > len(data):
         return None
-    count, = struct.unpack_from('<I', data, offset)
+    (count,) = struct.unpack_from('<I', data, offset)
     at, found = offset + 4, []
     for _ in range(count):
         if at + 4 > len(data):
             return None
-        size, = struct.unpack_from('<I', data, at)
+        (size,) = struct.unpack_from('<I', data, at)
         tag, end = at + 4, at + size
-        while tag + 6 <= end and data[tag:tag + 4] != b'ENDT':
-            length, = struct.unpack_from('<H', data, tag + 4)
-            if data[tag:tag + 4] == b'NAME':
-                found.append(data[tag + 6:tag + 6 + length].split(b'\0')[0].decode('utf-8', 'replace'))
+        while tag + 6 <= end and data[tag : tag + 4] != b'ENDT':
+            (length,) = struct.unpack_from('<H', data, tag + 4)
+            if data[tag : tag + 4] == b'NAME':
+                found.append(data[tag + 6 : tag + 6 + length].split(b'\0')[0].decode('utf-8', 'replace'))
             tag += 6 + length
         at = end
     return found
@@ -90,7 +91,9 @@ def index(root, out, devices):
 STAGE = re.compile(r'\| ([vfklp]) (\S+)( [^|]*?)?(?= \|)')
 
 
-GUESSES = 3   # a name in up to this many libraries is replayed in each of them (seed space only: m2v's keys hash the AIR)
+GUESSES = (
+    3  # a name in up to this many libraries is replayed in each of them (seed space only: m2v's keys hash the AIR)
+)
 
 
 def resolve(index_json, corpus, out):
@@ -125,24 +128,39 @@ def resolve(index_json, corpus, out):
         else:
             # The stages' functions are taken to come from one library: the libraries every open stage's name is in.
             common = set(open_[0]).intersection(*open_[1:])
-            how = 'qc' if common == {None} else 'resolved' if len(common) == 1 else \
-                'guessed' if 1 < len(common) <= GUESSES else 'ambiguous' if any(open_) else 'unknown'
+            how = (
+                'qc'
+                if common == {None}
+                else 'resolved'
+                if len(common) == 1
+                else 'guessed'
+                if 1 < len(common) <= GUESSES
+                else 'ambiguous'
+                if any(open_)
+                else 'unknown'
+            )
             choices = sorted(common, key=lambda c: c or '') if how in ('qc', 'resolved', 'guessed') else [None]
         for choice in choices:
             text = line
-            for m, lib, _ in reversed(stages):   # from the end, so earlier offsets hold
+            for m, lib, _ in reversed(stages):  # from the end, so earlier offsets hold
                 if lib or not choice:
                     continue
                 if kind == 'S':
-                    text = text[:m.start(3) - 5] + 'lib=%s ' % choice + text[m.start(3) - 5:]
+                    text = text[: m.start(3) - 5] + 'lib=%s ' % choice + text[m.start(3) - 5 :]
                 else:
-                    text = text[:m.end(2)] + ' lib=' + choice + text[m.end(2):]
+                    text = text[: m.end(2)] + ' lib=' + choice + text[m.end(2) :]
             lines.append(text)
             first = next((lib for _, lib, _ in stages if lib), None) or choice or QC
             rows[first if how in ('qc', 'journaled', 'resolved', 'guessed') else how][(kind, how)] += 1
     Path(out).write_text('\n'.join(lines) + '\n')
-    print('%-80s %s' % ('library (lines: qc = QuartzCore by default, journaled, resolved by a unique name, guessed: in each '
-                        'of up to %d)' % GUESSES, ''))
+    print(
+        '%-80s %s'
+        % (
+            'library (lines: qc = QuartzCore by default, journaled, resolved by a unique name, guessed: in each '
+            'of up to %d)' % GUESSES,
+            '',
+        )
+    )
     for lib, counts in sorted(rows.items(), key=lambda kv: -sum(kv[1].values())):
         print('  %-78s %s' % (lib, ' '.join('%s.%s=%d' % (k, h, n) for (k, h), n in sorted(counts.items()))))
 
@@ -152,7 +170,9 @@ def main():
     if verb == 'pins' and len(rest) == 1:
         pins(rest[0])
     elif verb == 'names' and len(rest) >= 2:
-        index(rest[0], rest[1], rest[2:] or [str(p.relative_to(rest[0])) for p in Path(rest[0]).rglob('*') if p.is_file()])
+        index(
+            rest[0], rest[1], rest[2:] or [str(p.relative_to(rest[0])) for p in Path(rest[0]).rglob('*') if p.is_file()]
+        )
     elif verb == 'resolve' and len(rest) == 3:
         resolve(*rest)
     else:

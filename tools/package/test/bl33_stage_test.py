@@ -65,10 +65,15 @@ class Bl33StageTests(unittest.TestCase):
         }
         cls.dtb = DTB.read_bytes()
         cls.script = boot_script(TEMPLATE.read_text(), cls.constants, len(cls.dtb))
-        cls.loader = legacy_image(random.Random(5).randbytes(0x1D000), os_type=5, kind=2, name='Loader', load=LOAD,
-                                  entry=LOAD)
-        cls.slots = [(*SCRIPT_SLOT, script_image(cls.script)), (*LOADER_SLOT, cls.loader),
-                     (*EXPORTER_SLOT, EXPORTER.read_bytes()), (*DTB_SLOT, cls.dtb)]
+        cls.loader = legacy_image(
+            random.Random(5).randbytes(0x1D000), os_type=5, kind=2, name='Loader', load=LOAD, entry=LOAD
+        )
+        cls.slots = [
+            (*SCRIPT_SLOT, script_image(cls.script)),
+            (*LOADER_SLOT, cls.loader),
+            (*EXPORTER_SLOT, EXPORTER.read_bytes()),
+            (*DTB_SLOT, cls.dtb),
+        ]
         cls.bl33 = stage_into_bl33(bl33_patch(cls.original), cls.staged, len(cls.stream), cls.slots)
 
     def word(self, image, address):
@@ -100,8 +105,9 @@ class Bl33StageTests(unittest.TestCase):
         copy = re.search(r'cp\.b (0x[0-9a-f]+) 0x8D000000 (0x[0-9a-f]+);', self.script)
         source, size = int(copy.group(1), 16), int(copy.group(2), 16)
         self.assertEqual(self.bl33[source - BL33_BASE : source - BL33_BASE + size], self.dtb)
-        self.assertIn(f'load mmc ${{devnum}}:${{distro_bootpart}} {BOOT_ARGS_PAGE:#x} /switchroot/ios/bootargs.txt',
-                      self.script)
+        self.assertIn(
+            f'load mmc ${{devnum}}:${{distro_bootpart}} {BOOT_ARGS_PAGE:#x} /switchroot/ios/bootargs.txt', self.script
+        )
         self.assertNotRegex(self.script, r'@[A-Z_0-9]+@|boot\.scr|loader\.uboot\.bin|exporter\.uimg|oled-sku3\.dtb')
         self.assertEqual(set(re.findall(r'/switchroot/[^ ;]+', self.script)), {'/switchroot/ios/bootargs.txt'})
 

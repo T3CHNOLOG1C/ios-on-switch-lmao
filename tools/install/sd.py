@@ -20,6 +20,7 @@ Steps, each skipped when the card already has its result (so a rerun only does w
   6 verify   One APFS partition of the right size, the partition table unchanged but for our entry, the volume UUIDs,
              fsck_apfs -n clean. Then the card is ejected (--no-eject keeps it).
 """
+
 import argparse
 import json
 import os
@@ -27,28 +28,29 @@ import sys
 import time
 from pathlib import Path
 
-if __package__ in (None, ""):
+if __package__ in (None, ''):
     sys.path.insert(0, str(Path(os.path.abspath(__file__)).parents[2]))
 from tools.install import apfs, card as cards, compose as composer, gpt, host, populate  # noqa: E402
 from tools.install import target as targets  # noqa: E402
 
 COPY_CHUNK = composer.COPY_CHUNK
-SEEK_HOLE, SEEK_DATA = getattr(os, "SEEK_HOLE", 3), getattr(os, "SEEK_DATA", 4)
+SEEK_HOLE, SEEK_DATA = getattr(os, 'SEEK_HOLE', 3), getattr(os, 'SEEK_DATA', 4)
 
 
 def default_log():
-    stamp = time.strftime("%Y%m%d-%H%M%S")
-    return Path.home() / "Library/Logs/switch-ios-install/install-{}.log".format(stamp)
+    stamp = time.strftime('%Y%m%d-%H%M%S')
+    return Path.home() / 'Library/Logs/switch-ios-install/install-{}.log'.format(stamp)
 
 
 def resolve_inputs(args):
     """Runfiles paths (from `bazel run`) to absolute paths, so a sudo re-exec needs no Bazel environment."""
     try:
         from python.runfiles import runfiles
+
         locate = runfiles.Create()
     except ImportError:
         locate = None
-    for name in ("spec", "ipsw", "os_dmg", "system_cryptex", "app_cryptex", "boot_package"):
+    for name in ('spec', 'ipsw', 'os_dmg', 'system_cryptex', 'app_cryptex', 'boot_package'):
         value = getattr(args, name)
         if value and not os.path.isabs(value) and locate:
             located = locate.Rlocation(value)
@@ -64,7 +66,7 @@ class Installer:
         self.args, self.log = args, log
         self.spec = json.loads(Path(args.spec).read_text())
         self.pins = json.loads(Path(args.ipsw).read_text())
-        self.want = {k: v["uuid"] for k, v in self.spec["volumes"].items()}
+        self.want = {k: v['uuid'] for k, v in self.spec['volumes'].items()}
         self.card = None
 
     def inspect(self):
@@ -91,39 +93,55 @@ class Installer:
         if self.args.reinstall_container:
             # Never write under a container macOS has attached: make it Linux-typed again first (macOS detaches it on
             # the reprobe), then compose as on a fresh card.
-            return "detach" if target.type == gpt.APFS else "compose"
+            return 'detach' if target.type == gpt.APFS else 'compose'
         if target.type == gpt.APFS:
             if not self.ours(found):
                 raise cards.Refused(
-                    "{} is APFS but not an ios-on-switch-lmao container (volumes {}); rerun with --reinstall-container to "
-                    "replace it".format(target.describe(), found))
+                    '{} is APFS but not an ios-on-switch-lmao container (volumes {}); rerun with --reinstall-container to '
+                    'replace it'.format(target.describe(), found)
+                )
             if not cards.volumes(self.card):
-                return "reprobe"            # written, retyped, but macOS has not attached it yet
-            return "populate"
+                return 'reprobe'  # written, retyped, but macOS has not attached it yet
+            return 'populate'
         if self.ours(found):
-            return "retype"                 # written by an interrupted run, still Linux-typed
-        return "compose"
+            return 'retype'  # written by an interrupted run, still Linux-typed
+        return 'compose'
 
     def plan(self, state):
         steps = {
-            "detach": ["retype the GPT entry back to Linux data so macOS lets go of the old container", "reprobe",
-                       "compose", "write", "retype to APFS", "reprobe", "populate", "boot entry", "verify"],
-            "compose": ["compose the container in {} (about {} GB free needed)".format(self.scratch_dir(), 7),
-                        "write it to {} ({})".format(self.card.slice(self.card.target), self.card.target.describe()),
-                        "retype the GPT entry to APFS, name iOS", "reprobe", "populate", "boot entry", "verify"],
-            "retype": ["retype the GPT entry to APFS, name iOS", "reprobe", "populate", "boot entry", "verify"],
-            "reprobe": ["reprobe", "populate", "boot entry", "verify"],
-            "populate": ["populate (only what differs)", "boot entry", "verify"],
+            'detach': [
+                'retype the GPT entry back to Linux data so macOS lets go of the old container',
+                'reprobe',
+                'compose',
+                'write',
+                'retype to APFS',
+                'reprobe',
+                'populate',
+                'boot entry',
+                'verify',
+            ],
+            'compose': [
+                'compose the container in {} (about {} GB free needed)'.format(self.scratch_dir(), 7),
+                'write it to {} ({})'.format(self.card.slice(self.card.target), self.card.target.describe()),
+                'retype the GPT entry to APFS, name iOS',
+                'reprobe',
+                'populate',
+                'boot entry',
+                'verify',
+            ],
+            'retype': ['retype the GPT entry to APFS, name iOS', 'reprobe', 'populate', 'boot entry', 'verify'],
+            'reprobe': ['reprobe', 'populate', 'boot entry', 'verify'],
+            'populate': ['populate (only what differs)', 'boot entry', 'verify'],
         }[state]
         return steps
 
     def scratch_dir(self):
-        return Path(self.args.scratch or (Path.home() / "Library/Caches/switch-ios-install"))
+        return Path(self.args.scratch or (Path.home() / 'Library/Caches/switch-ios-install'))
 
     def compose(self):
         scratch = self.scratch_dir()
         scratch.mkdir(parents=True, exist_ok=True)
-        image = scratch / "compose.img"
+        image = scratch / 'compose.img'
         self.log("compose: attaching the IPSW's OS image", self.args.os_dmg)
         offset, os_bytes = composer.compose(image, self.args.os_dmg, self.card.target.bytes, self.spec, self.log)
         return image, offset, os_bytes
@@ -158,24 +176,25 @@ class Installer:
                     n = min(COPY_CHUNK, min(end, size) - at)
                     chunk = os.pread(src, n, part_offset + at)
                     if len(chunk) != n or os.pwrite(dst, chunk, target_offset + at) != n:
-                        raise host.HostError("copy to {} failed at {}".format(self.card.raw, at))
-                    composer.punch(src, part_offset + at, n)     # the scratch shrinks as the card fills
+                        raise host.HostError('copy to {} failed at {}'.format(self.card.raw, at))
+                    composer.punch(src, part_offset + at, n)  # the scratch shrinks as the card fills
                     at += n
                     written += n
             os.fsync(dst)
         finally:
             os.close(src)
             os.close(dst)
-        self.log("write: {} bytes in {} extents onto {}".format(written, len(extents),
-                                                                 self.card.slice(self.card.target)))
+        self.log(
+            'write: {} bytes in {} extents onto {}'.format(written, len(extents), self.card.slice(self.card.target))
+        )
 
-    def retype(self, kind=gpt.APFS, name="iOS"):
+    def retype(self, kind=gpt.APFS, name='iOS'):
         fat = self.card.slice(self.card.fat)
         if host.mount_point(fat):
-            host.run("diskutil", "unmount", fat, log=self.log)
+            host.run('diskutil', 'unmount', fat, log=self.log)
         container = host.container_on(self.card.slice(self.card.target))
         if container:
-            host.run("diskutil", "unmountDisk", container["ContainerReference"], log=self.log, check=False)
+            host.run('diskutil', 'unmountDisk', container['ContainerReference'], log=self.log, check=False)
         before = cards.table_snapshot(self.card)
         writes = gpt.edit(self.card.table, self.card.target.index, kind, name)
         fd = os.open(self.card.raw, os.O_RDWR)
@@ -185,58 +204,66 @@ class Installer:
             os.close(fd)
         cards.read_table(self.card)
         after = cards.table_snapshot(self.card)
-        if before[:gpt.SECTOR] != after[:gpt.SECTOR]:
-            raise host.HostError("the MBR changed (it must not)")
-        self.log("retype: {} -> {} {!r} ({} sectors rewritten)".format(self.card.target.describe(),
-                                                                       gpt.NAMES[kind], name, len(writes)))
+        if before[: gpt.SECTOR] != after[: gpt.SECTOR]:
+            raise host.HostError('the MBR changed (it must not)')
+        self.log(
+            'retype: {} -> {} {!r} ({} sectors rewritten)'.format(
+                self.card.target.describe(), gpt.NAMES[kind], name, len(writes)
+            )
+        )
 
     def reprobe(self, expect_container=True):
         if self.card.image:
             image = self.card.image
-            host.run("hdiutil", "detach", self.card.disk, log=self.log)
-            fmt = host.run("hdiutil", "imageinfo", "-format", image).strip()
-            args = ["attach", "-plist", "-nomount"]
-            if fmt.startswith("RAW"):
-                args += ["-imagekey", "diskimage-class=CRawDiskImage"]
-            out = host.plist("hdiutil", *args, image, log=self.log)
-            disk = host.whole_disk_of(out["system-entities"])
-            self.log("reprobe: image re-attached as", disk)
+            host.run('hdiutil', 'detach', self.card.disk, log=self.log)
+            fmt = host.run('hdiutil', 'imageinfo', '-format', image).strip()
+            args = ['attach', '-plist', '-nomount']
+            if fmt.startswith('RAW'):
+                args += ['-imagekey', 'diskimage-class=CRawDiskImage']
+            out = host.plist('hdiutil', *args, image, log=self.log)
+            disk = host.whole_disk_of(out['system-entities'])
+            self.log('reprobe: image re-attached as', disk)
             self.args.disk = disk
             for _ in range(30):
                 self.inspect()
                 if bool(cards.volumes(self.card)) == expect_container:
                     return True
                 time.sleep(1)
-            raise host.HostError("macOS did {}attach the container on {}".format("not " if expect_container else "",
-                                                                                 disk))
-        host.run("diskutil", "eject", self.card.disk, log=self.log)
-        self.log("\nThe card is ejected so macOS reads its new partition table. Reinsert it and run the same command "
-                 "again; it continues where it stopped.")
+            raise host.HostError(
+                'macOS did {}attach the container on {}'.format('not ' if expect_container else '', disk)
+            )
+        host.run('diskutil', 'eject', self.card.disk, log=self.log)
+        self.log(
+            '\nThe card is ejected so macOS reads its new partition table. Reinsert it and run the same command '
+            'again; it continues where it stopped.'
+        )
         return False
 
     def populate(self):
         vols = cards.volumes(self.card)
         missing = [k for k, u in self.want.items() if u not in vols]
         if missing:
-            raise host.HostError("volumes {} not attached (have {})".format(missing, sorted(vols)))
-        dev = {k: vols[u]["DeviceIdentifier"] for k, u in self.want.items()}
+            raise host.HostError('volumes {} not attached (have {})'.format(missing, sorted(vols)))
+        dev = {k: vols[u]['DeviceIdentifier'] for k, u in self.want.items()}
         owners = os.geteuid() == 0
         if not owners and not self.args.unprivileged_test:
-            raise host.HostError("populating needs root (file owners): run with sudo")
-        with cards.mounted(dev["system"], self.log, read_only=True) as system, \
-                cards.mounted(dev["data"], self.log, owners=True) as data, \
-                cards.mounted(dev["preboot"], self.log, owners=True) as preboot:
-            if not (system / "private/preboot").is_dir():
-                raise host.HostError("the System volume has no /private/preboot (the kernel mounts Preboot there)")
+            raise host.HostError('populating needs root (file owners): run with sudo')
+        with (
+            cards.mounted(dev['system'], self.log, read_only=True) as system,
+            cards.mounted(dev['data'], self.log, owners=True) as data,
+            cards.mounted(dev['preboot'], self.log, owners=True) as preboot,
+        ):
+            if not (system / 'private/preboot').is_dir():
+                raise host.HostError('the System volume has no /private/preboot (the kernel mounts Preboot there)')
             populate.seed_data(system, data, owners, self.log, self.args.reseed_data)
-            sources = {"system_cryptex": self.args.system_cryptex, "app_cryptex": self.args.app_cryptex}
+            sources = {'system_cryptex': self.args.system_cryptex, 'app_cryptex': self.args.app_cryptex}
             populate.stage_cryptexes(preboot, self.spec, self.pins, sources, owners, self.log)
             if self.args.boot_package:
                 cards.sync_overlay(data, self.args.boot_package, self.log)
 
     def boot_entry(self):
         if not self.args.boot_package:
-            self.log("boot entry: no boot package given; skipped")
+            self.log('boot entry: no boot package given; skipped')
             return
         fat = self.card.slice(self.card.fat)
         with cards.mounted(fat, self.log) as root:
@@ -246,10 +273,10 @@ class Installer:
         self.inspect()
         after = cards.table_snapshot(self.card)
         if len(after) != len(snapshot):
-            raise host.HostError("verify: the partition table changed shape")
+            raise host.HostError('verify: the partition table changed shape')
         table, span = self.card.table, self.card.table.entry_sectors * gpt.SECTOR
         allowed = set()
-        if retyped:     # the primary header, the target entry in both arrays, the backup header
+        if retyped:  # the primary header, the target entry in both arrays, the backup header
             entry = self.card.target.index * table.entry_size
             allowed |= set(range(gpt.SECTOR, 2 * gpt.SECTOR))
             for base in (2 * gpt.SECTOR, 2 * gpt.SECTOR + span):
@@ -257,135 +284,161 @@ class Installer:
             allowed |= set(range(len(after) - gpt.SECTOR, len(after)))
         changed = [i for i in range(len(after)) if after[i] != snapshot[i] and i not in allowed]
         if changed:
-            raise host.HostError("verify: partition-table bytes changed outside the target entry: offsets {}".format(
-                changed[:16]))
-        self.log("verify: partition table: {} (MBR untouched)".format(
-            "only the target entry and the two headers changed" if retyped else "unchanged"))
+            raise host.HostError(
+                'verify: partition-table bytes changed outside the target entry: offsets {}'.format(changed[:16])
+            )
+        self.log(
+            'verify: partition table: {} (MBR untouched)'.format(
+                'only the target entry and the two headers changed' if retyped else 'unchanged'
+            )
+        )
         apfs_entries = [e for e in self.card.table.used if e.type == gpt.APFS]
         if len(apfs_entries) != 1 or apfs_entries[0].index != self.card.target.index:
-            raise host.HostError("verify: APFS entries {}".format([e.describe() for e in apfs_entries]))
+            raise host.HostError('verify: APFS entries {}'.format([e.describe() for e in apfs_entries]))
         vols = cards.volumes(self.card)
         for key, want in self.want.items():
             if want not in vols:
-                raise host.HostError("verify: volume {} {} missing".format(key, want))
-        composer.fsck(self.card.slice(self.card.target), "card", self.log)
-        self.log("verify: one APFS partition ({} bytes), volumes {}".format(
-            self.card.target.bytes, ", ".join("{} {}".format(k, v) for k, v in self.want.items())))
+                raise host.HostError('verify: volume {} {} missing'.format(key, want))
+        composer.fsck(self.card.slice(self.card.target), 'card', self.log)
+        self.log(
+            'verify: one APFS partition ({} bytes), volumes {}'.format(
+                self.card.target.bytes, ', '.join('{} {}'.format(k, v) for k, v in self.want.items())
+            )
+        )
 
     def run(self):
         try:
             state = self.inspect()
         except host.HostError as error:
-            if "needs root" not in str(error) or self.args.yes:
+            if 'needs root' not in str(error) or self.args.yes:
                 raise
             card = cards.resolve(self.args.disk)
             fat, target = cards.check_layout_unprivileged(card, self.spec)
-            self.log("card: {} ({} bytes); FAT {}, target {} {!r} ({} bytes, {})".format(
-                card.disk, card.size, fat.identifier, target.identifier, target.name, target.size, target.content))
-            self.log("dry run: the layout passes diskutil's checks. Reading the partition table itself (hybrid MBR, "
-                     "both GPT copies) and the container needs root: --yes runs the full checks under sudo before "
-                     "writing anything.")
+            self.log(
+                'card: {} ({} bytes); FAT {}, target {} {!r} ({} bytes, {})'.format(
+                    card.disk, card.size, fat.identifier, target.identifier, target.name, target.size, target.content
+                )
+            )
+            self.log(
+                "dry run: the layout passes diskutil's checks. Reading the partition table itself (hybrid MBR, "
+                'both GPT copies) and the container needs root: --yes runs the full checks under sudo before '
+                'writing anything.'
+            )
             return 0
-        self.log("card: {} ({} bytes{}), target {}".format(
-            self.card.disk, self.card.size, ", image " + self.card.image if self.card.image else "",
-            self.card.target.describe()))
-        self.log("state:", state)
+        self.log(
+            'card: {} ({} bytes{}), target {}'.format(
+                self.card.disk,
+                self.card.size,
+                ', image ' + self.card.image if self.card.image else '',
+                self.card.target.describe(),
+            )
+        )
+        self.log('state:', state)
         for step in self.plan(state):
-            self.log("  plan:", step)
+            self.log('  plan:', step)
         if not self.args.yes:
-            self.log("dry run: nothing written (add --yes to install)")
+            self.log('dry run: nothing written (add --yes to install)')
             return 0
         snapshot = cards.table_snapshot(self.card)
-        backup = Path(str(self.log.path) + ".partition-table.bin")
+        backup = Path(str(self.log.path) + '.partition-table.bin')
         backup.write_bytes(snapshot)
-        self.log("partition table backed up to", backup)
+        self.log('partition table backed up to', backup)
         retyped = False
-        if state == "detach":
+        if state == 'detach':
             self.retype(gpt.LINUX_DATA, targets.SETUP_NAME)
             retyped = True
             if not self.reprobe(expect_container=False):
                 return 0
             snapshot = cards.table_snapshot(self.card)
             retyped = False
-            state = "compose"
-        if state == "compose":
+            state = 'compose'
+        if state == 'compose':
             if host.container_on(self.card.slice(self.card.target)):
-                raise host.HostError("macOS has a container attached on {}: refusing to write under it".format(
-                    self.card.slice(self.card.target)))
+                raise host.HostError(
+                    'macOS has a container attached on {}: refusing to write under it'.format(
+                        self.card.slice(self.card.target)
+                    )
+                )
             image, offset, os_bytes = self.compose()
             try:
                 self.write(image, offset, os_bytes)
             finally:
                 if not self.args.keep_scratch:
                     image.unlink()
-            state = "retype"
-        if state == "retype":
+            state = 'retype'
+        if state == 'retype':
             self.retype()
             retyped = True
-            state = "reprobe"
-        if state == "reprobe":
+            state = 'reprobe'
+        if state == 'reprobe':
             if not self.reprobe():
                 return 0
         self.populate()
         self.boot_entry()
         self.verify(snapshot, retyped)
         if not self.card.image and not self.args.no_eject:
-            host.run("diskutil", "eject", self.card.disk, log=self.log)
-            self.log("ejected", self.card.disk)
-        self.log("done")
+            host.run('diskutil', 'eject', self.card.disk, log=self.log)
+            self.log('ejected', self.card.disk)
+        self.log('done')
         return 0
 
 
 def confirm(args, card_disk):
     if args.confirm:
         if args.confirm != card_disk:
-            raise cards.Refused("--confirm={} does not name the target {}".format(args.confirm, card_disk))
+            raise cards.Refused('--confirm={} does not name the target {}'.format(args.confirm, card_disk))
         return
     if not sys.stdin.isatty():
-        raise cards.Refused("type-to-confirm needs a terminal (or pass --confirm={})".format(card_disk))
+        raise cards.Refused('type-to-confirm needs a terminal (or pass --confirm={})'.format(card_disk))
     answer = input("This rewrites {}'s userdata partition. Type {} to continue: ".format(card_disk, card_disk))
     if answer.strip() != card_disk:
-        raise cards.Refused("not confirmed")
+        raise cards.Refused('not confirmed')
     args.confirm = card_disk
 
 
 def reexec_as_root(args, argv):
     """After confirmation: the same command under sudo, with absolute input paths and the confirmation."""
-    command = ["sudo", "--", sys.executable, os.path.abspath(__file__)]
-    passthrough = [a for a in argv if not a.startswith("--confirm")]
-    for name in ("spec", "ipsw", "os_dmg", "system_cryptex", "app_cryptex", "boot_package", "scratch", "log"):
+    command = ['sudo', '--', sys.executable, os.path.abspath(__file__)]
+    passthrough = [a for a in argv if not a.startswith('--confirm')]
+    for name in ('spec', 'ipsw', 'os_dmg', 'system_cryptex', 'app_cryptex', 'boot_package', 'scratch', 'log'):
         value = getattr(args, name)
-        flag = "--" + name.replace("_", "-")
-        passthrough = [a for a in passthrough if not a.startswith(flag + "=")]
+        flag = '--' + name.replace('_', '-')
+        passthrough = [a for a in passthrough if not a.startswith(flag + '=')]
         if value:
-            passthrough.append("{}={}".format(flag, value))
-    command += passthrough + ["--confirm={}".format(args.confirm)]
-    print("running under sudo:", " ".join(command), flush=True)
-    os.execvp("sudo", command)
+            passthrough.append('{}={}'.format(flag, value))
+    command += passthrough + ['--confirm={}'.format(args.confirm)]
+    print('running under sudo:', ' '.join(command), flush=True)
+    os.execvp('sudo', command)
 
 
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("disk", help="the card's whole disk, e.g. disk4 (see `diskutil list external`)")
-    parser.add_argument("--yes", action="store_true", help="install (default: dry run)")
-    parser.add_argument("--confirm", help="the disk identifier, instead of typing it (scripts and tests)")
-    parser.add_argument("--reseed-data", action="store_true", help="replace Data's contents with a fresh seed")
-    parser.add_argument("--reinstall-container", action="store_true", help="rewrite the container even if present")
-    parser.add_argument("--partition", help="the partition to install to, by GPT name, when the card has several")
-    parser.add_argument("--no-eject", action="store_true")
-    parser.add_argument("--keep-scratch", action="store_true")
-    parser.add_argument("--unprivileged-test", action="store_true",
-                        help="disk images you own only: run without root, skipping file ownership (NOT bootable)")
-    parser.add_argument("--scratch", help="scratch directory for the composed container (default ~/Library/Caches/"
-                                          "switch-install; needs about 7 GB free)")
-    parser.add_argument("--log")
-    parser.add_argument("--spec", required=True)
-    parser.add_argument("--ipsw", required=True)
-    parser.add_argument("--os-dmg", required=True)
-    parser.add_argument("--system-cryptex", required=True)
-    parser.add_argument("--app-cryptex", required=True)
-    parser.add_argument("--boot-package")
+    parser.add_argument('disk', help="the card's whole disk, e.g. disk4 (see `diskutil list external`)")
+    parser.add_argument('--yes', action='store_true', help='install (default: dry run)')
+    parser.add_argument('--confirm', help='the disk identifier, instead of typing it (scripts and tests)')
+    parser.add_argument('--reseed-data', action='store_true', help="replace Data's contents with a fresh seed")
+    parser.add_argument('--reinstall-container', action='store_true', help='rewrite the container even if present')
+    parser.add_argument('--partition', help='the partition to install to, by GPT name, when the card has several')
+    parser.add_argument('--no-eject', action='store_true')
+    parser.add_argument('--keep-scratch', action='store_true')
+    parser.add_argument(
+        '--unprivileged-test',
+        action='store_true',
+        help='disk images you own only: run without root, skipping file ownership (NOT bootable)',
+    )
+    parser.add_argument(
+        '--scratch',
+        help='scratch directory for the composed container (default ~/Library/Caches/'
+        'switch-install; needs about 7 GB free)',
+    )
+    parser.add_argument('--log')
+    parser.add_argument('--spec', required=True)
+    parser.add_argument('--ipsw', required=True)
+    parser.add_argument('--os-dmg', required=True)
+    parser.add_argument('--system-cryptex', required=True)
+    parser.add_argument('--app-cryptex', required=True)
+    parser.add_argument('--boot-package')
     args = parser.parse_args(argv)
     resolve_inputs(args)
     args.log = args.log or str(default_log())
@@ -396,21 +449,21 @@ def main(argv=None):
         if args.yes:
             card = cards.resolve(args.disk)
             if args.unprivileged_test and not card.image:
-                raise cards.Refused("--unprivileged-test is only for disk images")
+                raise cards.Refused('--unprivileged-test is only for disk images')
             confirm(args, card.disk)
             if os.geteuid() != 0 and not args.unprivileged_test:
                 args.scratch = str(installer.scratch_dir())
                 reexec_as_root(args, argv)
         return installer.run()
     except cards.Refused as error:
-        log("REFUSED:", error)
+        log('REFUSED:', error)
         return 2
     except (host.HostError, apfs.ApfsError, gpt.GptError) as error:
-        log("FAILED:", error)
+        log('FAILED:', error)
         return 1
     finally:
-        log.quiet("log:", args.log)
+        log.quiet('log:', args.log)
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     sys.exit(main())

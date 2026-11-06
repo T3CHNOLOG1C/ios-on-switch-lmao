@@ -20,6 +20,7 @@ The output is metadata only (identifiers, names, file names) and is pinned in ba
 
 Usage: wallpaper_1x.py <OS volume .dmg> <output directory>   (the IPSW's OS member: @ipsw//:os, ipsw/pins.bzl)
 """
+
 import plistlib
 import subprocess
 import sys
@@ -29,7 +30,11 @@ from pathlib import Path
 COLLECTIONS = 'Library/Wallpaper/Collections'
 # (collection, bundle, output name): the J120 bundles of the iPad's default collection and of Lake.
 BUNDLES = (
-    ('iPadOS_17~ipad.wallpaperCollection', '7570.iPadOS_17_Flat-1024w-1366h@2x~ipad.wallpaper', '7570.iPadOS_17_Flat.plist'),
+    (
+        'iPadOS_17~ipad.wallpaperCollection',
+        '7570.iPadOS_17_Flat-1024w-1366h@2x~ipad.wallpaper',
+        '7570.iPadOS_17_Flat.plist',
+    ),
     ('Lake~ipad.wallpaperCollection', '7560.Lake_Flat-1024w-1366h@2x~ipad.wallpaper', '7560.Lake_Flat.plist'),
 )
 FROM_CLASS, TO_CLASS = '1024w-1366h@2x~ipad', 'any'
@@ -52,11 +57,16 @@ def main():
         raise SystemExit(__doc__)
     dmg, out = Path(sys.argv[1]), Path(sys.argv[2])
     with tempfile.TemporaryDirectory() as mount:
-        subprocess.run(['hdiutil', 'attach', '-readonly', '-nobrowse', '-noverify', '-mountpoint', mount, str(dmg)],
-                       check=True, stdout=subprocess.DEVNULL)
+        subprocess.run(
+            ['hdiutil', 'attach', '-readonly', '-nobrowse', '-noverify', '-mountpoint', mount, str(dmg)],
+            check=True,
+            stdout=subprocess.DEVNULL,
+        )
         try:
-            sources = {name: (Path(mount) / COLLECTIONS / collection / 'Wallpapers' / bundle / 'Wallpaper.plist')
-                       .read_bytes() for collection, bundle, name in BUNDLES}
+            sources = {
+                name: (Path(mount) / COLLECTIONS / collection / 'Wallpapers' / bundle / 'Wallpaper.plist').read_bytes()
+                for collection, bundle, name in BUNDLES
+            }
         finally:
             subprocess.run(['hdiutil', 'detach', mount], check=True, stdout=subprocess.DEVNULL)
     out.mkdir(parents=True, exist_ok=True)

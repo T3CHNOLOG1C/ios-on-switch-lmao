@@ -11,6 +11,7 @@ Writes into <dir>:
   boot-entry.json               switchroot/ios/* and the ini: size and sha256 of each file
   manifest.json                 all of the above in one record (IPSW identity, sizes, sha256s)
 """
+
 import argparse
 import hashlib
 import json
@@ -34,7 +35,7 @@ Switch/portrait-native-*, Switch/panic-*.log.
 
 def sha256(path):
     digest = hashlib.sha256()
-    with open(path, "rb") as f:
+    with open(path, 'rb') as f:
         while chunk := f.read(1 << 20):
             digest.update(chunk)
     return digest.hexdigest()
@@ -42,44 +43,53 @@ def sha256(path):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    for name in ("spec", "ipsw", "boot-package", "out"):
-        parser.add_argument("--" + name, required=True)
+    for name in ('spec', 'ipsw', 'boot-package', 'out'):
+        parser.add_argument('--' + name, required=True)
     args = parser.parse_args()
     spec, pins = json.loads(Path(args.spec).read_text()), json.loads(Path(args.ipsw).read_text())
     package, out = Path(args.boot_package), Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
-    ini = package / "bootloader/ini/ios.ini"
-    (out / "bootloader/ini").mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(ini, out / "bootloader/ini/ios.ini")
-    (out / "uuid-spec.json").write_text(json.dumps(spec, indent=2, sort_keys=True) + "\n")
+    ini = package / 'bootloader/ini/ios.ini'
+    (out / 'bootloader/ini').mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(ini, out / 'bootloader/ini/ios.ini')
+    (out / 'uuid-spec.json').write_text(json.dumps(spec, indent=2, sort_keys=True) + '\n')
     staging = []
-    for item in spec["cryptexes"]:
-        pin = pins["members"][item["member"]]
-        if Path(item["path"]).name != Path(pin["member"]).name:
-            raise SystemExit("{}: kernel path {} vs IPSW member {}".format(item["member"], item["path"], pin["member"]))
-        staging.append({"preboot_path": item["path"], "ipsw_member": pin["member"], "size": pin["size"],
-                        "sha256": pin["content_sha256"], "volume_uuid": item["volume_uuid"], "owner": "0:0",
-                        "mode": "0644"})
-    (out / "preboot-staging.json").write_text(json.dumps(staging, indent=2) + "\n")
-    data = spec["volumes"]["data"]
-    (out / "data-seed-plan.txt").write_text(DATA_PLAN.format(name=data["name"], uuid=data["uuid"]))
+    for item in spec['cryptexes']:
+        pin = pins['members'][item['member']]
+        if Path(item['path']).name != Path(pin['member']).name:
+            raise SystemExit('{}: kernel path {} vs IPSW member {}'.format(item['member'], item['path'], pin['member']))
+        staging.append(
+            {
+                'preboot_path': item['path'],
+                'ipsw_member': pin['member'],
+                'size': pin['size'],
+                'sha256': pin['content_sha256'],
+                'volume_uuid': item['volume_uuid'],
+                'owner': '0:0',
+                'mode': '0644',
+            }
+        )
+    (out / 'preboot-staging.json').write_text(json.dumps(staging, indent=2) + '\n')
+    data = spec['volumes']['data']
+    (out / 'data-seed-plan.txt').write_text(DATA_PLAN.format(name=data['name'], uuid=data['uuid']))
     entry = {}
-    for path in sorted((package / "switchroot/ios").iterdir()) + [ini]:
-        entry[path.relative_to(package).as_posix()] = {"size": path.stat().st_size, "sha256": sha256(path)}
-    (out / "boot-entry.json").write_text(json.dumps(entry, indent=2) + "\n")
-    overlay = package / "overlay"
+    for path in sorted((package / 'switchroot/ios').iterdir()) + [ini]:
+        entry[path.relative_to(package).as_posix()] = {'size': path.stat().st_size, 'sha256': sha256(path)}
+    (out / 'boot-entry.json').write_text(json.dumps(entry, indent=2) + '\n')
+    overlay = package / 'overlay'
     manifest = {
-        "ipsw": {k: pins[k] for k in ("product", "device_class", "version", "build", "url", "size")},
-        "partition": {"type": spec["partition_type"], "gpt_name": spec["partition_name"]},
-        "volumes": spec["volumes"],
-        "os_image": {k: pins["members"]["os"][k] for k in ("member", "size", "content_sha256")},
-        "preboot": staging,
-        "boot_entry": entry,
-        "overlay_files": sorted(p.relative_to(overlay).as_posix() for p in overlay.rglob("*") if p.is_file())
-        if overlay.is_dir() else [],
+        'ipsw': {k: pins[k] for k in ('product', 'device_class', 'version', 'build', 'url', 'size')},
+        'partition': {'type': spec['partition_type'], 'gpt_name': spec['partition_name']},
+        'volumes': spec['volumes'],
+        'os_image': {k: pins['members']['os'][k] for k in ('member', 'size', 'content_sha256')},
+        'preboot': staging,
+        'boot_entry': entry,
+        'overlay_files': sorted(p.relative_to(overlay).as_posix() for p in overlay.rglob('*') if p.is_file())
+        if overlay.is_dir()
+        else [],
     }
-    (out / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+    (out / 'manifest.json').write_text(json.dumps(manifest, indent=2, sort_keys=True) + '\n')
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Plan ordinary ARM64 prelink pointer rebinding; never changes input images."""
+
 import argparse
 import base64
 from bisect import bisect_right
@@ -15,7 +16,7 @@ def macho(data, at=0):
     if at < 0 or at + 32 > len(data):
         raise ValueError('Mach-O header outside image')
     magic, cpu, subtype, kind, count, size = struct.unpack_from('<6I', data, at)
-    if (magic, cpu, subtype) != (0xfeedfacf, 0x100000c, 0):
+    if (magic, cpu, subtype) != (0xFEEDFACF, 0x100000C, 0):
         raise ValueError('Only ordinary little-endian ARM64 is supported')
     end = at + 32 + size
     if end > len(data):
@@ -32,19 +33,38 @@ def macho(data, at=0):
         if command == 0x19:
             if length < 72:
                 raise ValueError('Truncated segment')
-            name, va, size, fileoff, filesize, maxprot, initprot, nsects, flags = struct.unpack_from('<16s4Q4I', data, offset + 8)
+            name, va, size, fileoff, filesize, maxprot, initprot, nsects, flags = struct.unpack_from(
+                '<16s4Q4I', data, offset + 8
+            )
             if length != 72 + 80 * nsects or filesize > size or va + size > 1 << 64:
                 raise ValueError('Invalid segment extent')
-            segments.append({'name': name.rstrip(b'\0').decode(), 'va': va, 'size': size,
-                             'fileoff': fileoff, 'filesize': filesize, 'command_offset': offset,
-                             'maxprot': maxprot, 'initprot': initprot, 'sections': []})
+            segments.append(
+                {
+                    'name': name.rstrip(b'\0').decode(),
+                    'va': va,
+                    'size': size,
+                    'fileoff': fileoff,
+                    'filesize': filesize,
+                    'command_offset': offset,
+                    'maxprot': maxprot,
+                    'initprot': initprot,
+                    'sections': [],
+                }
+            )
             for index in range(nsects):
                 section_at = offset + 72 + index * 80
                 section_name, _, address, extent, section_offset = struct.unpack_from('<16s16sQQI', data, section_at)
                 if extent and not va <= address <= address + extent <= va + size:
                     raise ValueError('Section outside segment')
-                segments[-1]['sections'].append({'name': section_name.rstrip(b'\0').decode(),
-                    'va': address, 'size': extent, 'fileoff': section_offset, 'command_offset': section_at})
+                segments[-1]['sections'].append(
+                    {
+                        'name': section_name.rstrip(b'\0').decode(),
+                        'va': address,
+                        'size': extent,
+                        'fileoff': section_offset,
+                        'command_offset': section_at,
+                    }
+                )
         offset += length
     if offset != end:
         raise ValueError('Load command size mismatch')
@@ -52,8 +72,11 @@ def macho(data, at=0):
 
 
 def backed_offset(segments, address, length, data_length):
-    matches = [s['fileoff'] + address - s['va'] for s in segments
-               if s['va'] <= address and address + length <= s['va'] + s['filesize']]
+    matches = [
+        s['fileoff'] + address - s['va']
+        for s in segments
+        if s['va'] <= address and address + length <= s['va'] + s['filesize']
+    ]
     if len(matches) != 1 or matches[0] + length > data_length:
         raise ValueError(f'Ambiguous or unbacked address {address:#x}+{length:#x}')
     return matches[0]
@@ -67,10 +90,10 @@ def exports(data, image):
     symoff, count, stroff, strsize = struct.unpack_from('<4I', data, tables[0][0] + 8)
     if symoff + count * 16 > len(data) or stroff + strsize > len(data):
         raise ValueError('Symbol table outside image')
-    strings = data[stroff:stroff + strsize]
+    strings = data[stroff : stroff + strsize]
     for index in range(count):
         strx, kind, _, _, address = struct.unpack_from('<IBBHQ', data, symoff + index * 16)
-        if kind & 0xe0 or not kind & 1 or not kind & 0x0e:
+        if kind & 0xE0 or not kind & 1 or not kind & 0x0E:
             continue
         end = strings.find(b'\0', strx)
         if strx >= strsize or end < 0:
@@ -133,8 +156,9 @@ def plan(native_data, original_data, roots, slide, *, inherited_original_sha256=
     # rebound to the native stub, an 8-byte zero constant, so the GOT load the component does reads NULL.
     # The original kernelcache's identity is inherited from the completed pass that made it: do not reread or hash it
     # merely to reproduce an existing digest.
-    report, unbound = plan_original(original_data, roots, slide, inherited_original_sha256=inherited_original_sha256,
-                                    cuts=cuts)
+    report, unbound = plan_original(
+        original_data, roots, slide, inherited_original_sha256=inherited_original_sha256, cuts=cuts
+    )
     bind_native(report, unbound, native_data)
     return report
 
@@ -144,8 +168,11 @@ def plan_original(original_data, roots, slide, *, inherited_original_sha256=None
     the component pointers bound. The kernel and cut pointers' targets (new_target None here) and the checks against
     the native kernel are bind_native's, from `pending`: {'kernel': [(binding index, target, original export names)],
     'cut': [(binding index, component, dependency, stub)]}."""
-    if (not isinstance(inherited_original_sha256, str) or len(inherited_original_sha256) != 64 or
-            any(c not in '0123456789abcdef' for c in inherited_original_sha256)):
+    if (
+        not isinstance(inherited_original_sha256, str)
+        or len(inherited_original_sha256) != 64
+        or any(c not in '0123456789abcdef' for c in inherited_original_sha256)
+    ):
         raise ValueError('A valid inherited original identity is required')
     if slide % 4096:
         raise ValueError('Rebasing must preserve native 4K alignment')
@@ -155,7 +182,7 @@ def plan_original(original_data, roots, slide, *, inherited_original_sha256=None
     parent = original['segments']
     info = next(s for s in parent if s['name'] == '__PRELINK_INFO')
     at = backed_offset(parent, info['va'], info['filesize'], len(original_data))
-    metadata = unserialize_xml(original_data[at:at + info['filesize']])
+    metadata = unserialize_xml(original_data[at : at + info['filesize']])
     entries = {}
     for entry in metadata['_PrelinkInfoDictionary']:
         identifier = entry['CFBundleIdentifier']
@@ -163,7 +190,7 @@ def plan_original(original_data, roots, slide, *, inherited_original_sha256=None
             raise ValueError('Duplicate prelink identifier')
         entries[identifier] = entry
     cuts = dict(cuts or {})
-    for (component, dependency) in cuts:
+    for component, dependency in cuts:
         if dependency not in (entries.get(component, {}).get('OSBundleLibraries') or {}):
             raise ValueError(f'Cut {component} -> {dependency}: not a declared dependency')
     selected, interfaces = set(), set()
@@ -198,9 +225,18 @@ def plan_original(original_data, roots, slide, *, inherited_original_sha256=None
     codeless = selected - modules.keys()
     for identifier in codeless:
         entry = entries[identifier]
-        executable_keys = ('CFBundleExecutable', '_PrelinkExecutableLoadAddr',
-            '_PrelinkExecutableSourceAddr', '_PrelinkExecutableSize', '_PrelinkKmodInfo')
-        if any(key in entry for key in executable_keys) or not isinstance(entry.get('IOKitPersonalities'), dict) or not entry['IOKitPersonalities']:
+        executable_keys = (
+            'CFBundleExecutable',
+            '_PrelinkExecutableLoadAddr',
+            '_PrelinkExecutableSourceAddr',
+            '_PrelinkExecutableSize',
+            '_PrelinkKmodInfo',
+        )
+        if (
+            any(key in entry for key in executable_keys)
+            or not isinstance(entry.get('IOKitPersonalities'), dict)
+            or not entry['IOKitPersonalities']
+        ):
             raise ValueError('Codeless component must contain personalities and no executable fields: ' + identifier)
     owned.sort(key=lambda item: item[:3])
     for left, right in zip(owned, owned[1:]):
@@ -214,7 +250,7 @@ def plan_original(original_data, roots, slide, *, inherited_original_sha256=None
 
     original_symbols = exports(original_data, original)
     packed = metadata['_PrelinkLinkKASLROffsets']
-    count, = struct.unpack_from('<I', packed)
+    (count,) = struct.unpack_from('<I', packed)
     if len(packed) != 4 + count * 4:
         raise ValueError('Invalid pointer-table extent')
     offsets = struct.unpack_from(f'<{count}I', packed, 4)
@@ -231,7 +267,7 @@ def plan_original(original_data, roots, slide, *, inherited_original_sha256=None
             continue
         if source != owner(site + 7):
             raise ValueError('Pointer spans component extent')
-        target, = struct.unpack_from('<Q', original_data, backed_offset(parent, site, 8, len(original_data)))
+        (target,) = struct.unpack_from('<Q', original_data, backed_offset(parent, site, 8, len(original_data)))
         destination = owner(target)
         replacement = None
         if destination and (source[2], destination[2]) in cuts and destination[2] not in selected:
@@ -249,28 +285,48 @@ def plan_original(original_data, roots, slide, *, inherited_original_sha256=None
         # A native export (the kernel and cut targets) is a 64-bit symbol value: always in range.
         if not 0 <= site + slide < 1 << 64 or not 0 <= (target if replacement is None else replacement) < 1 << 64:
             raise ValueError('Rebased pointer outside 64-bit address space')
-        bindings.append({'site': site, 'target': target, 'new_site': site + slide,
-                         'new_target': replacement, 'kind': kind, 'module': source[2]})
+        bindings.append(
+            {
+                'site': site,
+                'target': target,
+                'new_site': site + slide,
+                'new_target': replacement,
+                'kind': kind,
+                'module': source[2],
+            }
+        )
     for edge, (expected, _) in cuts.items():
         if edge[0] in selected and cut_sites[edge] != expected:
-            raise ValueError(f'Cut {edge[0]} -> {edge[1]}: {cut_sites[edge]} pointer sites, the allow-list says {expected}')
+            raise ValueError(
+                f'Cut {edge[0]} -> {edge[1]}: {cut_sites[edge]} pointer sites, the allow-list says {expected}'
+            )
     extents = []
     for start, end, identifier, segment in owned:
         if identifier not in selected:
             continue
         if not 0 <= start + slide < end + slide <= 1 << 64:
             raise ValueError('Rebased segment outside 64-bit address space')
-        extents.append({'module': identifier, 'segment': segment['name'],
-                        'va': start + slide, 'size': end - start})
-    return {'native_sha256': None,
-            'original_sha256': inherited_original_sha256,
-            'slide': slide, 'components': sorted(selected - codeless),
-            'codeless_components': sorted(codeless), 'kernel_interfaces': sorted(interfaces),
-            'pointer_counts': dict(Counter(binding['kind'] for binding in bindings)),
-            'extents': extents, 'bindings': bindings, 'images_modified': False,
-            'cut_dependencies': [{'component': c, 'dependency': d, 'pointer_sites': cut_sites[(c, d)],
-                                  'stub': cuts[(c, d)][1]} for (c, d) in sorted(cuts) if c in selected],
-            'instruction_relocation_complete': False, 'abi_qualified': False, 'loadable': False}, unbound
+        extents.append({'module': identifier, 'segment': segment['name'], 'va': start + slide, 'size': end - start})
+    return {
+        'native_sha256': None,
+        'original_sha256': inherited_original_sha256,
+        'slide': slide,
+        'components': sorted(selected - codeless),
+        'codeless_components': sorted(codeless),
+        'kernel_interfaces': sorted(interfaces),
+        'pointer_counts': dict(Counter(binding['kind'] for binding in bindings)),
+        'extents': extents,
+        'bindings': bindings,
+        'images_modified': False,
+        'cut_dependencies': [
+            {'component': c, 'dependency': d, 'pointer_sites': cut_sites[(c, d)], 'stub': cuts[(c, d)][1]}
+            for (c, d) in sorted(cuts)
+            if c in selected
+        ],
+        'instruction_relocation_complete': False,
+        'abi_qualified': False,
+        'loadable': False,
+    }, unbound
 
 
 def native_bindings(native_data, native, kernel_targets, cut_stubs, extents):
@@ -308,9 +364,12 @@ def bind_native(report, unbound, native_data):
         raise ValueError('Expected MH_EXECUTE kernel images')
     bindings = report['bindings']
     addresses, stubs, exported = native_bindings(
-        native_data, native, [(target, names) for _, target, names in unbound['kernel']],
+        native_data,
+        native,
+        [(target, names) for _, target, names in unbound['kernel']],
         [(component, dependency, stub) for _, component, dependency, stub in unbound['cut']],
-        [(e['va'], e['size']) for e in report['extents']])
+        [(e['va'], e['size']) for e in report['extents']],
+    )
     for (index, _, _), address in zip(unbound['kernel'], addresses):
         bindings[index]['new_target'] = address
     for (index, _, _, _), address in zip(unbound['cut'], stubs):
@@ -330,7 +389,11 @@ def main():
     report = plan(args.kernel.read_bytes(), args.prelinked.read_bytes(), args.root, args.slide)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2) + '\n')
-    print(json.dumps({key: report[key] for key in ('components', 'kernel_interfaces', 'pointer_counts', 'loadable')}, indent=2))
+    print(
+        json.dumps(
+            {key: report[key] for key in ('components', 'kernel_interfaces', 'pointer_counts', 'loadable')}, indent=2
+        )
+    )
 
 
 if __name__ == '__main__':

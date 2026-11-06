@@ -36,7 +36,9 @@ def validate_elf(data: bytes) -> dict:
         raise ValueError('invalid ELF program header table')
     segments = []
     for index in range(phnum):
-        kind, flags, offset, virt, phys, filesz, memsz, _ = struct.unpack_from('<IIQQQQQQ', data, phoff + index * phsize)
+        kind, flags, offset, virt, phys, filesz, memsz, _ = struct.unpack_from(
+            '<IIQQQQQQ', data, phoff + index * phsize
+        )
         if kind != 1:
             continue
         if (

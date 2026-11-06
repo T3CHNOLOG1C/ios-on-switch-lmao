@@ -37,6 +37,7 @@ usage: harvest.py <corpus.log> <pipelines.log>...    e.g. harvest.py corpus.log 
           gpu/deps.bzl. The first build after the pin copies the tar into the repository cache; no build reads the
           staging directory.
 """
+
 import hashlib
 import io
 import os
@@ -54,14 +55,22 @@ COMPUTE = re.compile(r'(form|opt|max|tgm|icb|depth|abf|mut)=')
 PROJECT = Path(os.environ.get('BUILD_WORKSPACE_DIRECTORY') or Path(__file__).resolve().parents[3])
 # The device's data, outside every checkout (it is Apple-derived, so never tracked): where --pack writes the tar
 # @gpu_device_data's first fetch on a machine reads (gpu/deps.bzl), and the staging directory beside it.
-DEVICE = Path(os.environ.get('SWITCH_HOME') or Path.home() / 'Library/Application Support/switch-ios') / 'gpu-device-data'
+DEVICE = (
+    Path(os.environ.get('SWITCH_HOME') or Path.home() / 'Library/Application Support/switch-ios') / 'gpu-device-data'
+)
 # /private/var/containers/Data/System/<UUID>/Library/Caches/m2v of the system containers whose processes kept an m2v cache there
 # (the plugin's "device ... ready in" lines, r5d and r6h): their Library and Library/Caches are mode 000.
-SYSTEM_CACHES = {'6C7A65AF-CB18-421C-A07A-D724B05A7AB6': 'backboardd', '532E562F-2888-4C55-9BF8-E6F0B246BBDA': 'SpringBoard',
-                 '5BDBB9F1-C07A-4290-9D80-EA49A6BA2D68': 'Preferences', 'AA90E4B6-B0E4-4776-8E70-A4444E65642F': 'Spotlight'}
+SYSTEM_CACHES = {
+    '6C7A65AF-CB18-421C-A07A-D724B05A7AB6': 'backboardd',
+    '532E562F-2888-4C55-9BF8-E6F0B246BBDA': 'SpringBoard',
+    '5BDBB9F1-C07A-4290-9D80-EA49A6BA2D68': 'Preferences',
+    'AA90E4B6-B0E4-4776-8E70-A4444E65642F': 'Spotlight',
+}
 JOURNALS = ('pipelines.log.old', 'pipelines.log')
-CONTENT = '529a20fd270ababa3e5ec2fe4d1674d93739ba5bcd61861674b4fb6db349af9f'   # m2v's content directory (seed.py's CONTENT)
-RECORD_MAGIC = b'M2VPPLC\0'     # m2v shader_cache/driver.rs: magic, identity (28 bytes), data length (u64), data, SHA-256     # oldest first: the frontend renames the journal past 2 MiB
+CONTENT = (
+    '529a20fd270ababa3e5ec2fe4d1674d93739ba5bcd61861674b4fb6db349af9f'  # m2v's content directory (seed.py's CONTENT)
+)
+RECORD_MAGIC = b'M2VPPLC\0'  # m2v shader_cache/driver.rs: magic, identity (28 bytes), data length (u64), data, SHA-256     # oldest first: the frontend renames the journal past 2 MiB
 
 
 def normal(line):
@@ -92,7 +101,7 @@ def normal(line):
             return None, None
         head = line[:v].split()
         label = next((t for t in head if t.startswith('label=')), 'label=-')
-        state = ' '.join(t for t in head if DESCRIPTOR.match(t)) + line[v:end if end >= 0 else len(line)]
+        state = ' '.join(t for t in head if DESCRIPTOR.match(t)) + line[v : end if end >= 0 else len(line)]
         return 'R ok=1 %s %s | ' % (label, state), state
     return None, None
 
@@ -106,7 +115,7 @@ def opened(dirs, log):
         for d in dirs:
             try:
                 mode = stat.S_IMODE(os.lstat(d).st_mode)
-            except FileNotFoundError:   # nothing deeper either: the block finds no cache
+            except FileNotFoundError:  # nothing deeper either: the block finds no cache
                 break
             if mode & stat.S_IRUSR and mode & stat.S_IXUSR:
                 continue
@@ -139,13 +148,15 @@ def caches(volume, opens, open_all, log):
         except OSError:
             return []
 
-    for kind, base in (('System', volume / 'containers/Data/System'),
-                       ('Application', volume / 'mobile/Containers/Data/Application'),
-                       ('PluginKitPlugin', volume / 'mobile/Containers/Data/PluginKitPlugin')):
+    for kind, base in (
+        ('System', volume / 'containers/Data/System'),
+        ('Application', volume / 'mobile/Containers/Data/Application'),
+        ('PluginKitPlugin', volume / 'mobile/Containers/Data/PluginKitPlugin'),
+    ):
         for c in containers(base):
             for sub in ('Library/Caches/m2v', 'tmp/m2v'):
                 parts = sub.split('/')
-                way = [c / '/'.join(parts[:i + 1]) for i in range(len(parts) - 1)]
+                way = [c / '/'.join(parts[: i + 1]) for i in range(len(parts) - 1)]
                 shut = [d for d in way if os.path.lexists(d) and not readable(d)]
                 if not shut:
                     if (c / sub).is_dir():
@@ -160,7 +171,15 @@ def caches(volume, opens, open_all, log):
                 for m2v in sorted((c / 'Library/Caches').glob('m2v-*')):
                     if m2v.is_dir() and readable(m2v):
                         look('%s/%s/%s' % (kind, c.name, m2v.relative_to(c)), m2v)
-    for pattern in ('tmp/m2v-*', 'tmp/m2v', 'mobile/tmp/*/m2v', 'mobile/Library/Caches/m2v', 'root/Library/Caches/m2v', 'folders/*/*/C/m2v', 'folders/*/*/T/m2v'):
+    for pattern in (
+        'tmp/m2v-*',
+        'tmp/m2v',
+        'mobile/tmp/*/m2v',
+        'mobile/Library/Caches/m2v',
+        'root/Library/Caches/m2v',
+        'folders/*/*/C/m2v',
+        'folders/*/*/T/m2v',
+    ):
         for m2v in sorted(volume.glob(pattern)):
             if m2v.is_dir() and readable(m2v):
                 look(str(m2v.relative_to(volume)), m2v)
@@ -180,9 +199,16 @@ def merge(corpus, sources):
                 added += 1
         print('%s: %d new' % (name, added))
     corpus.write_text('\n'.join(lines) + '\n')
-    print('%s: %d specializations, %d render states, %d compute states, %d dispatch shapes' %
-          (corpus, sum(l[0] == 'S' for l in lines), sum(l[0] == 'R' for l in lines), sum(l[0] == 'C' for l in lines),
-           sum(l[0] == 'D' for l in lines)))
+    print(
+        '%s: %d specializations, %d render states, %d compute states, %d dispatch shapes'
+        % (
+            corpus,
+            sum(l[0] == 'S' for l in lines),
+            sum(l[0] == 'R' for l in lines),
+            sum(l[0] == 'C' for l in lines),
+            sum(l[0] == 'D' for l in lines),
+        )
+    )
     return lines
 
 
@@ -223,16 +249,25 @@ def records(caches, store):
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(data)
             copied += 1
-    print('%s: %d driver records of %d caches, %d new, %d refused (envelope), %d in the store' %
-          (store, seen, len(caches), copied, bad, sum(1 for _ in store.glob('*/*')) if store.is_dir() else 0))
+    print(
+        '%s: %d driver records of %d caches, %d new, %d refused (envelope), %d in the store'
+        % (store, seen, len(caches), copied, bad, sum(1 for _ in store.glob('*/*')) if store.is_dir() else 0)
+    )
 
 
 def embedded_libraries():
     """The sha256 of each metallib the build makes itself: the OS volume's (gpu/apple-libs.sha256) and the frontend's."""
-    made = {line.split()[0] for line in (PROJECT / 'gpu/apple-libs.sha256').read_text().splitlines()
-            if line.strip() and not line.startswith('#')}
+    made = {
+        line.split()[0]
+        for line in (PROJECT / 'gpu/apple-libs.sha256').read_text().splitlines()
+        if line.strip() and not line.startswith('#')
+    }
     text = (Path(__file__).resolve().parents[2] / 'NativeMetal/TwoPlaneStandIn.h').read_text()
-    made.add(hashlib.sha256(bytes(int(b, 16) for b in re.findall(r'0x([0-9a-fA-F]{2})', text[text.index('{'):]))).hexdigest())
+    made.add(
+        hashlib.sha256(
+            bytes(int(b, 16) for b in re.findall(r'0x([0-9a-fA-F]{2})', text[text.index('{') :]))
+        ).hexdigest()
+    )
     return made
 
 
@@ -241,8 +276,11 @@ def pack(store, corpus):
     named = set(re.findall(r'lib=data:([0-9a-f]{64})', corpus.read_text()))
     own = embedded_libraries()
     members = sorted(p for p in (store / 'records').glob('*/*') if p.is_file() and record_ok(p.read_bytes()))
-    members += sorted(p for p in (store / 'data').glob('*.metallib')
-                      if p.stem in named and p.stem not in own and hashlib.sha256(p.read_bytes()).hexdigest() == p.stem)
+    members += sorted(
+        p
+        for p in (store / 'data').glob('*.metallib')
+        if p.stem in named and p.stem not in own and hashlib.sha256(p.read_bytes()).hexdigest() == p.stem
+    )
     if not members:
         sys.exit('%s: no driver records or libraries staged (harvest.py --volume or --records-from first)' % store)
     data = io.BytesIO()
@@ -256,9 +294,15 @@ def pack(store, corpus):
     out = DEVICE / ('m2v-device-%s.tar' % digest[:16])
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_bytes(data.getvalue())
-    print('%s: %d driver records, %d libraries (of %d made from bytes the corpus names)' %
-          (out, sum(1 for p in members if p.parts[-3] == 'records'), sum(1 for p in members if p.parts[-2] == 'data'),
-           len(named)))
+    print(
+        '%s: %d driver records, %d libraries (of %d made from bytes the corpus names)'
+        % (
+            out,
+            sum(1 for p in members if p.parts[-3] == 'records'),
+            sum(1 for p in members if p.parts[-2] == 'data'),
+            len(named),
+        )
+    )
     print('gpu/deps.bzl:\nDEVICE_DATA = {\n    "file": "%s",\n    "sha256": "%s",\n}' % (out.name, digest))
 
 
@@ -284,8 +328,10 @@ def main():
     records_from = option(args, '--records-from', many=True)
     if records_from:
         records_from += args
-        records(sorted({str(v1.parent) for d in records_from for v1 in Path(d).rglob('v1') if (v1 / CONTENT).is_dir()}),
-                store / 'records')
+        records(
+            sorted({str(v1.parent) for d in records_from for v1 in Path(d).rglob('v1') if (v1 / CONTENT).is_dir()}),
+            store / 'records',
+        )
         return
     opens = set(option(args, '--open', many=True)) or set(SYSTEM_CACHES)
     open_all = '--open-all' in args
@@ -311,8 +357,10 @@ def main():
                     target = Path(save) / where.replace('/', '_')
                     shutil.rmtree(target, ignore_errors=True)
                     shutil.copytree(m2v, target, copy_function=shutil.copyfile, ignore=shutil.ignore_patterns('.*.tmp'))
-        print('%s: %d m2v caches, %d journals; %d closed containers not looked in (--open-all)' %
-              (volume, len(found), len(sources) - (len(args) - 1), len(set(skipped))))
+        print(
+            '%s: %d m2v caches, %d journals; %d closed containers not looked in (--open-all)'
+            % (volume, len(found), len(sources) - (len(args) - 1), len(set(skipped)))
+        )
     merge(corpus, sources)
 
 

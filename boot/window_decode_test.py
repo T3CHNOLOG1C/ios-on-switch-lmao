@@ -53,8 +53,11 @@ def one_block_frame(block: bytes) -> bytes:
 
 def runs_table(text: str) -> list[tuple[int, int, int, int]]:
     count = int(re.search(r'#define LOAD_BLOCK_COUNT (\d+)u', text).group(1))
-    rows = re.findall(r'\{UINT64_C\((0x[0-9a-f]+)\), UINT64_C\((0x[0-9a-f]+)\), UINT64_C\((0x[0-9a-f]+)\), '
-                      r'UINT64_C\((0x[0-9a-f]+)\)\}', text)
+    rows = re.findall(
+        r'\{UINT64_C\((0x[0-9a-f]+)\), UINT64_C\((0x[0-9a-f]+)\), UINT64_C\((0x[0-9a-f]+)\), '
+        r'UINT64_C\((0x[0-9a-f]+)\)\}',
+        text,
+    )
     if len(rows) != count:
         raise ValueError(f'runs.h: {len(rows)} rows for LOAD_BLOCK_COUNT {count}')
     return [tuple(int(v, 16) for v in row) for row in rows]
@@ -75,14 +78,15 @@ class WindowDecodeTest(unittest.TestCase):
         for at, length, source, size in table:
             stored, size = bool(size & STORED), size & ~STORED
             self.assertEqual(source, read)
-            body = staged[source:source + size]
+            body = staged[source : source + size]
             if stored:
                 decoded = body
             else:
-                decoded = subprocess.run([LZ4, '-d', '-c', '-q'], input=one_block_frame(body), capture_output=True,
-                                         check=True).stdout
+                decoded = subprocess.run(
+                    [LZ4, '-d', '-c', '-q'], input=one_block_frame(body), capture_output=True, check=True
+                ).stdout
             self.assertEqual(len(decoded), length, f'block at {at:#x}')
-            window[at:at + length] = decoded
+            window[at : at + length] = decoded
             read += size
         self.assertEqual(read, constants['STREAM_BYTES'])
         self.assertFalse(any(staged[read:]), 'the staged window is padded with zeros')

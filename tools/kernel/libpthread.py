@@ -6,6 +6,7 @@ XNU patch adds the source; //kernel/xnu-10063.141.1/osfmk:pthread_bootstrap comp
 usage: libpthread.py --xcode-env F --source DIR --sdkroot DIR --kernel-names NAMES.txt --bootstrap O --out A.a
                      --bootstrap-out O --path-root P --bin-dir D
 """
+
 import argparse
 import struct
 import subprocess
@@ -20,42 +21,87 @@ from kernel_names import archive_names  # noqa: E402
 
 def check(path):
     data = path.read_bytes()
-    if struct.unpack_from("<4I", data) != (0xFEEDFACF, 0x100000C, 0, 1):
-        sys.exit("Unexpected pthread object architecture: " + path.name)
+    if struct.unpack_from('<4I', data) != (0xFEEDFACF, 0x100000C, 0, 1):
+        sys.exit('Unexpected pthread object architecture: ' + path.name)
 
 
 def main():
     parser = argparse.ArgumentParser()
-    for name in ("xcode-env", "source", "sdkroot", "kernel-names", "bootstrap", "out", "bootstrap-out", "path-root",
-                 "bin-dir"):
-        parser.add_argument("--" + name, required=True)
+    for name in (
+        'xcode-env',
+        'source',
+        'sdkroot',
+        'kernel-names',
+        'bootstrap',
+        'out',
+        'bootstrap-out',
+        'path-root',
+        'bin-dir',
+    ):
+        parser.add_argument('--' + name, required=True)
     args = parser.parse_args()
     here = common.execroot()
     xcode = common.xcode_env(args.xcode_env)
     env = common.environment(xcode)
     source = Path(here, args.source)
-    framework = Path(here, args.sdkroot, "System/Library/Frameworks/Kernel.framework/Versions/A")
-    root = args.path_root.rstrip("/")
-    tree = root + "/out/native-a57/root-v1/tree"
-    maps = ["-ffile-prefix-map={}={}/.cache/libpthread-work".format(source, tree),
-            "-ffile-prefix-map={}/{}={}".format(here, args.bin_dir, root),
-            "-ffile-prefix-map={}={}".format(here, root),
-            # make's osfmk object directory, where these were compiled when the kernel came from make.
-            "-fdebug-compilation-dir={}/{}/out/native-a57/root-v1/tree/build/xnu/ios-obj/"
-            "DEVELOPMENT_ARM64_BCM2837/osfmk/DEVELOPMENT".format(root, args.bin_dir)]
+    framework = Path(here, args.sdkroot, 'System/Library/Frameworks/Kernel.framework/Versions/A')
+    root = args.path_root.rstrip('/')
+    tree = root + '/out/native-a57/root-v1/tree'
+    maps = [
+        '-ffile-prefix-map={}={}/.cache/libpthread-work'.format(source, tree),
+        '-ffile-prefix-map={}/{}={}'.format(here, args.bin_dir, root),
+        '-ffile-prefix-map={}={}'.format(here, root),
+        # make's osfmk object directory, where these were compiled when the kernel came from make.
+        '-fdebug-compilation-dir={}/{}/out/native-a57/root-v1/tree/build/xnu/ios-obj/'
+        'DEVELOPMENT_ARM64_BCM2837/osfmk/DEVELOPMENT'.format(root, args.bin_dir),
+    ]
 
     def compile_one(path, destination, namespace=None):
-        command = ["xcrun", "--sdk", "iphoneos", "clang", "-target", "arm64-apple-ios17.0",
-                   "-isysroot", xcode["IPHONEOS_SDK"], "-mkernel", "-ffreestanding", "-fno-builtin",
-                   "-fno-stack-check", "-std=gnu11", "-fblocks", "-O2", "-mno-implicit-float",
-                   "-DKERNEL=1", "-DKERNEL_PRIVATE=1", "-DXNU_KERNEL_PRIVATE=1",
-                   "-DMACH_KERNEL_PRIVATE=1", "-DMACH_ASSERT=1", "-DDEBUG=1",
-                   "-D__PTHREAD_EXPOSE_INTERNALS__=1", "-DABSOLUTETIME_SCALAR_TYPE=1", "-DNEEDS_SCHED_CALL_T=1",
-                   "-I", str(source / "private"), "-I", str(source / "include"), "-I", str(source),
-                   "-I", str(framework / "PrivateHeaders"), "-I", str(framework / "Headers"),
-                   "-Wno-deprecated-declarations", *maps, "-c", str(path), "-o", str(destination)]
+        command = [
+            'xcrun',
+            '--sdk',
+            'iphoneos',
+            'clang',
+            '-target',
+            'arm64-apple-ios17.0',
+            '-isysroot',
+            xcode['IPHONEOS_SDK'],
+            '-mkernel',
+            '-ffreestanding',
+            '-fno-builtin',
+            '-fno-stack-check',
+            '-std=gnu11',
+            '-fblocks',
+            '-O2',
+            '-mno-implicit-float',
+            '-DKERNEL=1',
+            '-DKERNEL_PRIVATE=1',
+            '-DXNU_KERNEL_PRIVATE=1',
+            '-DMACH_KERNEL_PRIVATE=1',
+            '-DMACH_ASSERT=1',
+            '-DDEBUG=1',
+            '-D__PTHREAD_EXPOSE_INTERNALS__=1',
+            '-DABSOLUTETIME_SCALAR_TYPE=1',
+            '-DNEEDS_SCHED_CALL_T=1',
+            '-I',
+            str(source / 'private'),
+            '-I',
+            str(source / 'include'),
+            '-I',
+            str(source),
+            '-I',
+            str(framework / 'PrivateHeaders'),
+            '-I',
+            str(framework / 'Headers'),
+            '-Wno-deprecated-declarations',
+            *maps,
+            '-c',
+            str(path),
+            '-o',
+            str(destination),
+        ]
         if namespace:
-            command += ["-include", str(namespace)]
+            command += ['-include', str(namespace)]
         result = subprocess.run(command, cwd=here, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
         if result.returncode:
             sys.exit(result.stdout[-4500:])
@@ -63,33 +109,35 @@ def main():
 
     with tempfile.TemporaryDirectory() as scratch:
         out = Path(scratch)
-        sources = [source / "kern" / name for name in ("kern_init.c", "kern_support.c", "kern_synch.c")]
-        objects = [out / (s.stem + ".o") for s in sources]
+        sources = [source / 'kern' / name for name in ('kern_init.c', 'kern_support.c', 'kern_synch.c')]
+        objects = [out / (s.stem + '.o') for s in sources]
         for s, o in zip(sources, objects):
             compile_one(s, o)
-        names = {line.partition(" ")[2] for line in Path(args.kernel_names).read_text().splitlines() if line}
-        definitions = set().union(*(archive_names(o, "-U", env) for o in objects))
+        names = {line.partition(' ')[2] for line in Path(args.kernel_names).read_text().splitlines() if line}
+        definitions = set().union(*(archive_names(o, '-U', env) for o in objects))
         collisions = definitions & names
         if collisions:
-            namespace = out / "namespace.h"
-            namespace.write_text("".join("#define {} pthread519_{}\n".format(n[1:], n[1:]) for n in sorted(collisions)))
+            namespace = out / 'namespace.h'
+            namespace.write_text(''.join('#define {} pthread519_{}\n'.format(n[1:], n[1:]) for n in sorted(collisions)))
             for s, o in zip(sources, objects):
                 compile_one(s, o, namespace)
-        definitions = set().union(*(archive_names(o, "-U", env) for o in objects))
-        imports = set().union(*(archive_names(o, "-u", env) for o in objects)) - definitions
-        missing = sorted(imports - names - {"___dso_handle"})
-        if not {"_pthread_kern", "_current_uthread"} <= collisions:
-            sys.exit("Missing expected pthread/XNU static symbol isolation")
+        definitions = set().union(*(archive_names(o, '-U', env) for o in objects))
+        imports = set().union(*(archive_names(o, '-u', env) for o in objects)) - definitions
+        missing = sorted(imports - names - {'___dso_handle'})
+        if not {'_pthread_kern', '_current_uthread'} <= collisions:
+            sys.exit('Missing expected pthread/XNU static symbol isolation')
         if missing:
-            sys.exit("Unavailable real kernel imports: {}".format(missing))
-        bootstrap = out / "source_pthread_bootstrap.o"
+            sys.exit('Unavailable real kernel imports: {}'.format(missing))
+        bootstrap = out / 'source_pthread_bootstrap.o'
         bootstrap.write_bytes(Path(args.bootstrap).read_bytes())
         check(bootstrap)
-        archive = out / "libpthread_kernel.a"
-        subprocess.run(["xcrun", "ar", "rcs", str(archive), *[str(o) for o in objects], str(bootstrap)], check=True, env=env)
+        archive = out / 'libpthread_kernel.a'
+        subprocess.run(
+            ['xcrun', 'ar', 'rcs', str(archive), *[str(o) for o in objects], str(bootstrap)], check=True, env=env
+        )
         Path(args.out).write_bytes(archive.read_bytes())
         Path(args.bootstrap_out).write_bytes(bootstrap.read_bytes())
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

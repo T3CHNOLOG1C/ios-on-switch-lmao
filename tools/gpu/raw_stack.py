@@ -8,6 +8,7 @@ refuses a pack of another build. The NVK dylib (its context init, NAK's programs
 file of the crates the bridge links, by its path below the m2v tree, in path order; with the bridge sources: the binding
 rules), the frontend (the journal's state keys) and the raw runtime and pack generator (every .h/.c/.cpp/.mm/.py/.inc
 below raw/, in path order), the last three each by its file name and bytes. Writes the first 16 hex digits."""
+
 import argparse
 import hashlib
 from pathlib import Path
@@ -24,8 +25,11 @@ def main():
     drivers, raw, m2v_root = Path(args.drivers), Path(args.raw), Path(args.m2v_root)
     m2v = sorted(Path(path).relative_to(m2v_root).as_posix() for path in args.m2v)
     metal = drivers / 'NativeMetal'
-    sources = [metal / 'bridge/NativeMetalBridge.rs', metal / 'bridge/NativeMetalObjects.rs',
-               metal / 'NativeBridgeMetalFrontend.mm']
+    sources = [
+        metal / 'bridge/NativeMetalBridge.rs',
+        metal / 'bridge/NativeMetalObjects.rs',
+        metal / 'NativeBridgeMetalFrontend.mm',
+    ]
     raw_files = sorted(p for p in raw.rglob('*') if p.is_file() and p.suffix in SUFFIXES)
     digest = hashlib.sha256(Path(args.nvk).read_bytes())
     for relative in m2v:

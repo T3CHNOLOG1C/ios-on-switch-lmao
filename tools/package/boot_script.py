@@ -4,6 +4,7 @@ legacy script image bl33.py stages in bl33.bin (loader_abi.SCRIPT_SLOT), where t
 
     boot_script.py --template T --constants C --dtb DTB --text OUT --image OUT
 """
+
 import argparse
 import json
 import re

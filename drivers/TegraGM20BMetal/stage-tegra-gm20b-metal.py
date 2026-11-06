@@ -22,6 +22,7 @@ As vendor/unixnu/scripts/add-gpu-plugin-data.py --publish (UniXNU-sheng), on the
 The CDHashes must also be in the boot entry's static trust cache (//boot:package appends //gpu:trustcache, the same
 TegraGM20BMetal.trustcache), so stage and package from the same build.
 """
+
 import os
 import plistlib
 import shutil
@@ -31,7 +32,11 @@ from pathlib import Path
 
 DATA_UUID = 'D1B1D053-D0A6-496C-8625-A947A3DA863E'
 NAME = 'TegraGM20BMetal.bundle'
-PREFS = {'CAEnableDeepFramebuffer': False, 'CAEnableFramebufferCompression': False, 'CAEnableIOSurfaceCompression': False}
+PREFS = {
+    'CAEnableDeepFramebuffer': False,
+    'CAEnableFramebufferCompression': False,
+    'CAEnableIOSurfaceCompression': False,
+}
 
 
 def main():
@@ -39,15 +44,17 @@ def main():
     remove = '--remove' in argv
     raw = '--no-raw' not in argv and os.environ.get('TEGRA_RAW_STAGE', '1') != '0'
     argv = [a for a in argv if a != '--no-raw']
-    build = None   # //gpu:bundle's directory (//deploy:sd passes it)
+    build = None  # //gpu:bundle's directory (//deploy:sd passes it)
     if '--build' in argv[:-1]:
         build = Path(argv[argv.index('--build') + 1]).resolve()
-        del argv[argv.index('--build'):argv.index('--build') + 2]
+        del argv[argv.index('--build') : argv.index('--build') + 2]
     args = [a for a in argv if a != '--remove']
     if len(args) != 1 or (build is None and not remove):
         sys.exit(__doc__)
     data = Path(args[0]).resolve()
-    info = plistlib.loads(subprocess.run(['diskutil', 'info', '-plist', str(data)], capture_output=True, check=True).stdout)
+    info = plistlib.loads(
+        subprocess.run(['diskutil', 'info', '-plist', str(data)], capture_output=True, check=True).stdout
+    )
     if info.get('VolumeUUID') != DATA_UUID or info.get('MountPoint') != str(data) or not info.get('WritableVolume'):
         sys.exit('%s is not the iPadOS Data volume %s mounted read-write' % (data, DATA_UUID))
     if not (data / 'mobile').is_dir():
@@ -90,11 +97,16 @@ def main():
             file.chmod(0o644)
             if os.geteuid() == 0:
                 os.chown(file, owner, owner)
-    for leftover in (data / 'ngpu').rglob('._*'):   # AppleDouble files a non-APFS copy may leave
+    for leftover in (data / 'ngpu').rglob('._*'):  # AppleDouble files a non-APFS copy may leave
         leftover.unlink()
     subprocess.run(['sync'], check=True)
-    print('staged', target, sorted(p.name for p in target.iterdir()), 'seed' if seed_target.exists() else 'no seed',
-          'raw pack' if raw_target.exists() else 'no raw pack')
+    print(
+        'staged',
+        target,
+        sorted(p.name for p in target.iterdir()),
+        'seed' if seed_target.exists() else 'no seed',
+        'raw pack' if raw_target.exists() else 'no raw pack',
+    )
 
 
 if __name__ == '__main__':
