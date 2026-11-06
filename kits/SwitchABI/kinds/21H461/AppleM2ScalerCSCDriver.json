@@ -1,0 +1,31 @@
+{
+  "class": "AppleM2ScalerCSCDriver",
+  "kind": "21H461",
+  "size": "0x540",
+  "first_slot": 168,
+  "slots": 171,
+  "slide": "-0x1000000",
+  "layout": {
+    "14": "free",
+    "21": "init",
+    "44": "setProperties",
+    "85": "probe",
+    "86": "start",
+    "87": "stop",
+    "140": "newUserClient",
+    "155": "setPowerState"
+  },
+  "fields": {},
+  "addresses": {
+    "gMetaClass": "0xfffffff007b184a8",
+    "vtable": "0xfffffff006e705e8",
+    "free": "0xfffffff006126514",
+    "init": "0xfffffff0061264e4",
+    "setProperties": "0xfffffff0061251bc",
+    "probe": "0xfffffff006126524",
+    "start": "0xfffffff006126644",
+    "stop": "0xfffffff006127068",
+    "newUserClient": "0xfffffff0061283e4",
+    "setPowerState": "0xfffffff006124a28"
+  }
+}

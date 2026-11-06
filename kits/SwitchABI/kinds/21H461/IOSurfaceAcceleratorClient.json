@@ -1,0 +1,25 @@
+{
+  "class": "IOSurfaceAcceleratorClient",
+  "kind": "21H461",
+  "size": "0x160",
+  "first_slot": 186,
+  "slots": 186,
+  "slide": "-0x1000000",
+  "layout": {
+    "14": "free",
+    "172": "clientClose",
+    "175": "registerNotificationPort",
+    "178": "clientMemoryForType",
+    "182": "getTargetAndMethodForIndex"
+  },
+  "fields": {},
+  "addresses": {
+    "gMetaClass": "0xfffffff007b18158",
+    "vtable": "0xfffffff006e65a28",
+    "free": "0xfffffff006114078",
+    "clientClose": "0xfffffff0061142e8",
+    "registerNotificationPort": "0xfffffff00611434c",
+    "clientMemoryForType": "0xfffffff00611435c",
+    "getTargetAndMethodForIndex": "0xfffffff0061142c0"
+  }
+}

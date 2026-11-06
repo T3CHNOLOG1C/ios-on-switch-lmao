@@ -1,0 +1,38 @@
+{
+  "class": "IOSurfaceAcceleratorClient",
+  "doc": "Apple's scaler user client (com.apple.driver.AppleM2ScalerCSCDriver), which TegraVIC instantiates per connection and points at a copy of its vtable with the slots below replaced (drivers/TegraVIC/CONTRACT.md); its externalMethod is IOUserClient's, which TegraVIC replaces too. TegraVIC finds each slot at run time by the IOUserClient function it holds in IOUserClient's own vtable; these tables check that Apple's client overrides exactly those slots.",
+  "superclass": "IOUserClient",
+  "kext": "com.apple.driver.AppleM2ScalerCSCDriver",
+  "structors": "default",
+  "header": false,
+  "includes": [
+    "IOKit/IOUserClient.h"
+  ],
+  "methods": {
+    "free": {
+      "decl": "void free() override",
+      "pac": "_ZN8OSObject4freeEv",
+      "doc": "TegraVIC replaces it (its connection's state)."
+    },
+    "clientClose": {
+      "decl": "IOReturn clientClose() override",
+      "pac": "_ZN12IOUserClient11clientCloseEv",
+      "doc": "TegraVIC replaces it."
+    },
+    "registerNotificationPort": {
+      "decl": "IOReturn registerNotificationPort(mach_port_t, UInt32, UInt32) override",
+      "pac": "_ZN12IOUserClient24registerNotificationPortEP8ipc_portjj",
+      "doc": "TegraVIC replaces it."
+    },
+    "clientMemoryForType": {
+      "decl": "IOReturn clientMemoryForType(UInt32, IOOptionBits *, IOMemoryDescriptor **) override",
+      "pac": "_ZN12IOUserClient19clientMemoryForTypeEjPjPP18IOMemoryDescriptor",
+      "doc": "TegraVIC puts IOUserClient's back."
+    },
+    "getTargetAndMethodForIndex": {
+      "decl": "IOExternalMethod *getTargetAndMethodForIndex(IOService **, UInt32) override",
+      "pac": "_ZN12IOUserClient26getTargetAndMethodForIndexEPP9IOServicej",
+      "doc": "TegraVIC puts IOUserClient's back."
+    }
+  }
+}

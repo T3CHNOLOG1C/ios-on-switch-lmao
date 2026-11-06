@@ -13,8 +13,9 @@
 // pointed at a copy of its class's vtable in which the slots that would reach Apple's scaler hardware are ours or the
 // IOService/IOUserClient defaults (never start/probe/stop/setPowerState/setProperties of the real driver; never its
 // client's method table, port, close or free). Nothing of Apple's driver runs but its constructors and getMetaClass.
-// The slots are found by the IOService/IOUserClient functions they hold in the kernel's own vtables, and V5 checks
-// that each one the copy replaces held an override of Apple's (inside its kext) before anything is published.
+// The slots are found by the IOService/IOUserClient functions they hold in the kernel's own vtables; that each one the
+// copy replaces holds an override of Apple's is kits/SwitchABI's AppleM2ScalerCSCDriver and IOSurfaceAcceleratorClient
+// tables, checked against each IPSW kind's kernelcache by //kits/SwitchABI:verify.
 //
 //   sel 1  transform (0x1b0 bytes in): surfaces looked up by ID in the caller's task, the request translated and every
 //          job checked before the call returns (TegraVICRequest.h, TegraVICConfig.h); a refusal is the call's result
@@ -840,20 +841,7 @@ extern "C" int tegra_vic_publish(void)
         {(const void *)iouc_client_memory, (const void *)iouc_client_memory},
         {(const void *)iouc_target_and_method, (const void *)iouc_target_and_method},
     };
-    // Apple's own overrides must sit where the base methods are (newUserClient, start, free, close, port, ...): proof
-    // that these are the classes read (CONTRACT.md) and that each replaced slot is one Apple's driver uses.
-    const uintptr_t *sv = *(const uintptr_t *const *)service, *cv = *(const uintptr_t *const *)probe;
     const int s0 = slotOf(tegra_vic_ioservice_vtable, (const void *)ios_new_user_client);
-    const int c0 = slotOf(tegra_vic_iouserclient_vtable, (const void *)iouc_free);
-    const int c1 = slotOf(tegra_vic_iouserclient_vtable, (const void *)iouc_client_close);
-    const bool overridden = s0 >= 0 && c0 >= 0 && c1 >= 0 && sv[s0] != (uintptr_t)ios_new_user_client &&
-                            cv[c0] != (uintptr_t)iouc_free && cv[c1] != (uintptr_t)iouc_client_close;
-    if (!overridden) {
-        IOLog("TegraVIC: V5 FAIL Apple's scaler classes do not override newUserClient/free/clientClose where expected "
-              "(slots %d %d %d)\n",
-              s0, c0, c1);
-        return -22;
-    }
     if (!swizzle(service, tegra_vic_ioservice_vtable, gServiceVtable, serviceFns, 6, line, sizeof(line)) ||
         !swizzle(probe, tegra_vic_iouserclient_vtable, gClientVtable, clientFns, 6, line, sizeof(line))) {
         IOLog("TegraVIC: %s\n", line);

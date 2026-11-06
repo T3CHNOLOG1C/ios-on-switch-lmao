@@ -1,0 +1,49 @@
+{
+  "class": "AppleM2ScalerCSCDriver",
+  "kind": "24B119",
+  "size": "0x640",
+  "first_slot": 168,
+  "slots": 171,
+  "slide": "-0x3fec000",
+  "layout": {
+    "14": "free",
+    "21": "init",
+    "44": "setProperties",
+    "85": "probe",
+    "86": "start",
+    "87": "stop",
+    "140": "newUserClient",
+    "155": "setPowerState"
+  },
+  "fields": {},
+  "addresses": {
+    "vtable": "0xfffffff007e1a168",
+    "C2": "0xfffffff008bd1f20",
+    "opaque170": "0xfffffff008bd2e44",
+    "setPowerState": "0xfffffff008bd2f38",
+    "setProperties": "0xfffffff008bd3cc4",
+    "init": "0xfffffff008bd660c",
+    "free": "0xfffffff008bd6628",
+    "probe": "0xfffffff008bd6644",
+    "start": "0xfffffff008bd680c",
+    "stop": "0xfffffff008bd753c",
+    "newUserClient": "0xfffffff008bd8bfc",
+    "opaque168": "0xfffffff008bd8f84",
+    "opaque169": "0xfffffff008bd9550",
+    "gMetaClass": "0xfffffff00ad2cea0"
+  },
+  "found": {
+    "C2": "stores the vtable",
+    "free": "slot 14 by PAC of _ZN8OSObject4freeEv",
+    "gMetaClass": "metaclass initialiser",
+    "init": "slot 21 by PAC of _ZN15IORegistryEntry4initEP12OSDictionary",
+    "newUserClient": "slot 140 by PAC of _ZN9IOService13newUserClientEP4taskPvjP12OSDictionaryPP12IOUserClient",
+    "probe": "slot 85 by PAC of _ZN9IOService5probeEPS_Pi",
+    "setPowerState": "slot 155 by PAC of _ZN9IOService13setPowerStateEmPS_",
+    "setProperties": "slot 44 by PAC of _ZN15IORegistryEntry13setPropertiesEP8OSObject",
+    "start": "slot 86 by PAC of _ZN9IOService5startEPS_",
+    "stop": "slot 87 by PAC of _ZN9IOService4stopEPS_",
+    "vtable": "metaclass initialiser"
+  },
+  "hints": {}
+}

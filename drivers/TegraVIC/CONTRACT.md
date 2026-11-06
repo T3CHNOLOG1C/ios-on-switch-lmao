@@ -126,8 +126,8 @@ device tree), so no instance exists. A class of ours with either name would make
 with it, fail to load; and matching (`IOServiceMatching` walks instances of the named class) and the sandbox go by
 those names. So TegraVIC instantiates Apple's classes (`OSMetaClass::allocClassWithName`) and points each object at a
 copy of its class's vtable with these slots replaced (slots found by the IOService/IOUserClient function each holds in
-the kernel's own `__ZTV9IOService`/`__ZTV12IOUserClient`, and V5 checks at run time that Apple's overrides sit
-there):
+the kernel's own `__ZTV9IOService`/`__ZTV12IOUserClient`; that Apple's overrides sit there is kits/SwitchABI's
+AppleM2ScalerCSCDriver and IOSurfaceAcceleratorClient tables, checked against each kind's kernelcache by `:verify`):
 
 | class | slot (method) | Apple's override | in the copy |
 |---|---|---|---|

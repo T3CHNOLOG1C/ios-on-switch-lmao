@@ -1,0 +1,39 @@
+{
+  "class": "IOSurfaceAcceleratorClient",
+  "kind": "24B119",
+  "size": "0x180",
+  "first_slot": 186,
+  "slots": 186,
+  "slide": "-0x3fec000",
+  "layout": {
+    "14": "free",
+    "172": "clientClose",
+    "175": "registerNotificationPort",
+    "178": "clientMemoryForType",
+    "182": "getTargetAndMethodForIndex"
+  },
+  "fields": {},
+  "addresses": {
+    "vtable": "0xfffffff007e0a8f0",
+    "C2": "0xfffffff008b96348",
+    "D2": "0xfffffff008b963c0",
+    "free": "0xfffffff008b967cc",
+    "getTargetAndMethodForIndex": "0xfffffff008b969e8",
+    "clientClose": "0xfffffff008b96a28",
+    "registerNotificationPort": "0xfffffff008b96b34",
+    "clientMemoryForType": "0xfffffff008b96b8c",
+    "gMetaClass": "0xfffffff00ad2c898"
+  },
+  "found": {
+    "C2": "stores the vtable",
+    "D2": "branch after the constructors",
+    "clientClose": "slot 172 by PAC of _ZN12IOUserClient11clientCloseEv",
+    "clientMemoryForType": "slot 178 by PAC of _ZN12IOUserClient19clientMemoryForTypeEjPjPP18IOMemoryDescriptor",
+    "free": "slot 14 by PAC of _ZN8OSObject4freeEv",
+    "gMetaClass": "metaclass initialiser",
+    "getTargetAndMethodForIndex": "slot 182 by PAC of _ZN12IOUserClient26getTargetAndMethodForIndexEPP9IOServicej",
+    "registerNotificationPort": "slot 175 by PAC of _ZN12IOUserClient24registerNotificationPortEP8ipc_portjj",
+    "vtable": "metaclass initialiser"
+  },
+  "hints": {}
+}

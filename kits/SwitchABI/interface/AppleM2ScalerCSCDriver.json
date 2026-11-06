@@ -1,0 +1,51 @@
+{
+  "class": "AppleM2ScalerCSCDriver",
+  "doc": "Apple's scaler service (com.apple.driver.AppleM2ScalerCSCDriver), which TegraVIC instantiates and points at a copy of its vtable with the slots below replaced (drivers/TegraVIC/CONTRACT.md). TegraVIC finds each slot at run time by the IOService function it holds in IOService's own vtable; these tables check that Apple's driver overrides exactly those slots, so each replaced slot is one Apple's driver uses.",
+  "superclass": "IOService",
+  "kext": "com.apple.driver.AppleM2ScalerCSCDriver",
+  "structors": "default",
+  "header": false,
+  "includes": [
+    "IOKit/IOService.h"
+  ],
+  "methods": {
+    "free": {
+      "decl": "void free() override",
+      "pac": "_ZN8OSObject4freeEv"
+    },
+    "init": {
+      "decl": "bool init(OSDictionary *properties = nullptr) override",
+      "pac": "_ZN15IORegistryEntry4initEP12OSDictionary"
+    },
+    "setProperties": {
+      "decl": "IOReturn setProperties(OSObject *) override",
+      "pac": "_ZN15IORegistryEntry13setPropertiesEP8OSObject",
+      "doc": "TegraVIC replaces it (kIOReturnUnsupported)."
+    },
+    "probe": {
+      "decl": "IOService *probe(IOService *, SInt32 *) override",
+      "pac": "_ZN9IOService5probeEPS_Pi",
+      "doc": "TegraVIC puts IOService's back."
+    },
+    "start": {
+      "decl": "bool start(IOService *) override",
+      "pac": "_ZN9IOService5startEPS_",
+      "doc": "TegraVIC puts IOService's back."
+    },
+    "stop": {
+      "decl": "void stop(IOService *) override",
+      "pac": "_ZN9IOService4stopEPS_",
+      "doc": "TegraVIC puts IOService's back."
+    },
+    "newUserClient": {
+      "decl": "IOReturn newUserClient(task_t, void *, UInt32, OSDictionary *, IOUserClient **) override",
+      "pac": "_ZN9IOService13newUserClientEP4taskPvjP12OSDictionaryPP12IOUserClient",
+      "doc": "TegraVIC replaces it: an Apple IOSurfaceAcceleratorClient pointed at TegraVIC's slots."
+    },
+    "setPowerState": {
+      "decl": "IOReturn setPowerState(unsigned long, IOService *) override",
+      "pac": "_ZN9IOService13setPowerStateEmPS_",
+      "doc": "TegraVIC puts IOService's back."
+    }
+  }
+}
