@@ -1737,8 +1737,10 @@ IOReturn AGXDeviceUserClient::waitFence(const TegraGM20BAbiWaitFence *in)
 			tgm_chan_hung(chan, "fence wait", in->seqno,
 				      now - start);  // CONTRACT: UINT64_MAX means 10 s
 		} else if (!limit_ns || now - start >= limit_ns) {
+			hangHolder_ = current_thread();
 			if (limit_ns)
 				tgm_chan_check_progress(chan, "fence wait", in->seqno);
+			hangHolder_ = nullptr;
 			ret = kIOReturnTimeout;
 		}
 		IOLockUnlock(lock_);
