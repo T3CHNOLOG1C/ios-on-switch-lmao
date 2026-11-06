@@ -100,7 +100,7 @@ TEST(SdAdmaSource, HighProofGuards)
     EXPECT_THAT(build, HasSubstr("cacheableRam(page) && high.pageOk(page, write)"));
     // Writes never go above 4 GiB while that is unproven; the IRAM alias window stays out of proving reads.
     EXPECT_THAT(header, HasSubstr("state == kOn || (state == kProving && !write) ? kAdmaDmaLimit : kAdma4GiB"));
-    EXPECT_THAT(header, HasSubstr("!(state == kProving && !write && page - kAdmaIramAlias < kAdmaIramBytes)"));
+    EXPECT_THAT(header, HasSubstr("state != kProving || write || page - kAdmaIramAlias >= kAdmaIramBytes"));
     // Only reads are poisoned, and a mismatch puts SDMA's bytes into the requests before they complete.
     EXPECT_THAT(body("void NativeSwitchBlock::prepareDirect("), HasSubstr("poison && !write"));
     const std::string prove = body("bool NativeSwitchBlock::proveHigh(");
@@ -158,7 +158,7 @@ TEST(SdAdmaSource, ReadStaging)
                 HasSubstr("pa >= bouncePA && pa - bouncePA < kBounceBytes"));
     // setup()'s check runs the staging path on the hardware; a failure only keeps it off (no panic in it).
     const std::string check = body("const char *NativeSwitchBlock::checkAdma(");
-    EXPECT_THAT(check, HasSubstr("stagingOn = !stagingWhy;"));
+    EXPECT_THAT(check, HasSubstr("stagingOn = (stagingWhy == nullptr);"));
     EXPECT_LT(Index(check, "copyStaged()"), Index(check, "memcmp(pageBytes, reference, kTestBytes)"));
     EXPECT_THAT(check, Not(HasSubstr("panic(")));
 }
