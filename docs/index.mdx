@@ -22,17 +22,21 @@ card, and the installer leaves the rest of the card alone.
   - Pull requests are the only thing accepted, and there's no timeline for reviewing them.
 </Warning>
 
-<CardGroup cols={2}>
-  <Card title="Install it" icon="download" href="/installation">
-    What you need, and every step from an empty partition to the Home Screen.
-  </Card>
-  <Card title="What works" icon="list-check" href="/what-works">
-    The hardware and features that work, and the ones that don't.
-  </Card>
-  <Card title="How it works" icon="microchip" href="/how-it-works">
-    How iPadOS ends up running on a console Apple never made it for.
-  </Card>
-  <Card title="Contributing" icon="code-pull-request" href="/contributing">
-    Building from source and sending a pull request.
-  </Card>
-</CardGroup>
+<div className="contents-list">
+  <a href="/installation">
+    <span>Installation</span>
+    <span>What you need, and every step from an empty partition to the Home Screen.</span>
+  </a>
+  <a href="/what-works">
+    <span>What works and what doesn't</span>
+    <span>The hardware and features that work, and the ones that don't.</span>
+  </a>
+  <a href="/how-it-works">
+    <span>How it works</span>
+    <span>How iPadOS ends up running on a console Apple never made it for.</span>
+  </a>
+  <a href="/contributing">
+    <span>Contributing</span>
+    <span>Building from source and sending a pull request.</span>
+  </a>
+</div>

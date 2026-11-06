@@ -3,10 +3,18 @@ title: "How it works"
 description: "How iPadOS ends up running on a console Apple never made it for."
 ---
 
+<ol className="stack" aria-label="From the hardware up">
+  <li><strong>Tegra X1+</strong><span>Four Cortex-A57 cores, a Maxwell GPU and 4 GB of RAM.</span></li>
+  <li><strong>hekate</strong><span>Starts the boot with switchroot's ARM Trusted Firmware and U-Boot.</span></li>
+  <li><strong>The loader</strong><span>Puts the kernel in memory with an Apple device tree written for the Switch.</span></li>
+  <li><strong>XNU</strong><span>Apple's kernel, built from source, with about forty drivers for the Switch.</span></li>
+  <li><strong>iPadOS 26 and 27</strong><span>Apple's own system, with its arm64e code translated for the A57.</span></li>
+</ol>
+
 ## The hardware
 
 The Switch OLED runs on NVIDIA's Tegra X1+, a chip from 2019 with four ARM Cortex-A57 cores, a Maxwell GPU and 4 GB
-of RAM, driving a 7-inch 1280×720 OLED panel. iPadOS is told it's running on a 9th-generation iPad, the oldest iPad
+of RAM, driving a 7-inch 1280×720 OLED panel. iPadOS is told it's running on a 9th-&#8288;generation iPad, the oldest iPad
 that runs iPadOS 27.
 
 ## Booting

@@ -1,14 +1,16 @@
 ---
-title: "What works and what doesn't"
-description: "The hardware and features that work on the Switch OLED, and the ones that don't."
+title: "What works and what doesn’t"
+description: "The hardware and features that work on the Switch OLED, and the ones that don’t."
 ---
 
 iPadOS 26 and 27 both run. iPadOS 27 uses iPadOS 26's kernel, because Apple hasn't published the source of 27's yet.
-As far as iPadOS can tell, the Switch is a 9th-generation iPad.
+As far as iPadOS can tell, the Switch is a 9th-&#8288;generation iPad.
 
 ## What works
 
 ### Screen and controls
+
+<div className="status-list" data-status="works">
 
 - The touchscreen, with multi-touch and palm rejection.
 - The OLED panel at its native 1280×720. The interface is drawn at 1.6 pixels per point, so nothing gets scaled up
@@ -19,24 +21,38 @@ As far as iPadOS can tell, the Switch is a 9th-generation iPad.
 - Joy-Con on the rails and over Bluetooth, and the Pro Controller, with the Home and Capture buttons. Pressing Home
   on a controller wakes the console, as it does on the Switch's own system.
 
+</div>
+
 ### Graphics and media
+
+<div className="status-list" data-status="works">
 
 - Metal, on the Switch's GPU. Core Animation, apps and games all draw through it.
 - Hardware video decoding for H.264, HEVC (10-bit too) and VP9, and for HEIC photos.
 - Hardware JPEG decoding and H.264 encoding.
 - The speakers and the headphone jack, which notices when you plug something in, and Bluetooth headphones.
 
+</div>
+
 ### Connections
+
+<div className="status-list" data-status="works">
 
 - Wi-Fi and Bluetooth, which share one antenna and take turns on it.
 - USB-C to a computer. A Mac sees the Switch as an iPad and can pair with it.
 - USB 2 accessories on the USB-C port. {/* TODO(confirm): USB host mode tested on hardware. */}
 
+</div>
+
 ### Power
+
+<div className="status-list" data-status="works">
 
 - The battery level, and charging over USB-C, from USB Power Delivery chargers up to 15 V too.
 - Sleep and wake.
 - The temperature sensors, which iPadOS uses to manage heat.
+
+</div>
 
 ## What doesn't
 
@@ -47,10 +63,14 @@ and there are no plans to change that. That means App Store apps and DRM-protect
 
 ### Not yet
 
+<div className="status-list" data-status="not-yet">
+
 - TV output through the dock.
 - USB 3.
 - AirDrop. {/* TODO(r22-awdl): update once AWDL works end to end. */}
 - Updating to a new release without erasing iOS's data.
+
+</div>
 
 {/* TODO(confirm): the headset microphone, and setting a passcode (the key store runs as if there is none). */}
 
