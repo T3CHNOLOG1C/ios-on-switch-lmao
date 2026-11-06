@@ -70,10 +70,12 @@ namespace bq = charge::bq;
 constexpr unsigned kBus = 1;
 constexpr uint32_t kIdentifyRetryMS = 30000;  // until the chips answer on I2C1
 constexpr uint32_t kRefreshMS = 120000;       // re-read for the values without an interrupt
-constexpr unsigned kStatsEvery = 2;           // re-reads per periodic stats line (4 minutes)
-constexpr uint32_t kSettleMS = 250;           // after an interrupt: coalesce the chips' alerts, let them settle
-constexpr unsigned kAlertBurst = 20;          // interrupts per second from one line that mean it is stuck
-constexpr unsigned kLostLimit = 3;            // settings lost this many readings in a row: stop managing
+#if DEVELOPMENT || DEBUG
+constexpr unsigned kStatsEvery = 2;  // re-reads per periodic stats line (4 minutes)
+#endif
+constexpr uint32_t kSettleMS = 250;   // after an interrupt: coalesce the chips' alerts, let them settle
+constexpr unsigned kAlertBurst = 20;  // interrupts per second from one line that mean it is stuck
+constexpr unsigned kLostLimit = 3;    // settings lost this many readings in a row: stop managing
 constexpr uint8_t kGauge = 0x36, kCharger = 0x6b;
 
 // MAX17050 registers.
@@ -788,10 +790,15 @@ bool SwitchBattery::refresh()
         IOLog("SwitchBattery: gauge alert setup failed\n");
     if (r.fault)
         statsDue = true;  // a charger fault is news
+#if DEVELOPMENT || DEBUG
     if (statsDue || refreshes % kStatsEvery == 0) {
         stats(r, pd);
         statsDue = false;
     }
+#else
+    if (r.fault)
+        stats(r, pd);
+#endif
     return true;
 }
 

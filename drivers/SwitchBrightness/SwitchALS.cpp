@@ -99,7 +99,9 @@ constexpr unsigned kClockDeadlineMS = 2000;
 constexpr unsigned kSupplyDeadlineMS = 20000;  // from start to SwitchTouch's first LDO6 (it powers up in ~60 ms)
 constexpr unsigned kErrorLimit = 20;           // samples in a row the sensor did not answer (about 2.3 s)
 constexpr unsigned kUnclaimedLimit = 300;      // samples with no IOHIDEventDriver on the HID device (about 35 s)
-constexpr unsigned kStatsSamples = 43;         // one log line per 5 s of samples
+#if DEVELOPMENT || DEBUG
+constexpr unsigned kStatsSamples = 43;  // one log line per 5 s of samples
+#endif
 
 constexpr unsigned kSetTimeStamp = 17, kSetType = 19, kSetIntegerValue = 24;
 constexpr uint32_t kAmbientLightType = 12, kFieldLevel = 0xc0000, kFieldChannel0 = 0xc0001, kFieldChannel1 = 0xc0002;
@@ -362,6 +364,7 @@ void SwitchALS::dispatch(uint32_t level, uint32_t visible, uint32_t ir)
     }
 }
 
+#if DEVELOPMENT || DEBUG
 // To the log only: what the sensor saw over the last 5 s, and the panel level it saw it at, only when that changed
 // since the last line (gain, panel level, or a reading more than an eighth, at least 2 lux, off the last line's
 // lux), so a lit screen in steady light writes no line every 5 s.
@@ -387,6 +390,7 @@ void SwitchALS::noteStats(uint32_t level, uint32_t visible, uint32_t ir)
     luxMin = ~0u;
     luxMax = 0;
 }
+#endif
 
 // Work loop: a transfer to the sensor failed. kErrorLimit in a row turn it off, with one line on the supplies, one on
 // the bus and the controller's last failure (TegraI2C), and, if it never answered, one on the lines, the PMC's rails
@@ -438,7 +442,9 @@ void SwitchALS::sample()
     if (!saturated(visible, ir) || gain == 0) {  // a clipped reading at a higher gain only steps the gain down
         const uint32_t level = lux(visible, ir, gain);
         dispatch(level, visible, ir);
+#if DEVELOPMENT || DEBUG
         noteStats(level, visible, ir);
+#endif
     }
 
     const unsigned next = nextGain(gain, visible, ir);
