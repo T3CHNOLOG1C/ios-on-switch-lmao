@@ -112,6 +112,8 @@ kernel_driver(
     hdr_deps = [
         "drivers/ArmGIC",
         "drivers/SwitchBattery",
+        # SwitchPDAltModeHook.h, and SWITCH_DISPLAYPORT=1 with --//drivers/SwitchDisplayPort:enabled.
+        "drivers/SwitchDisplayPort",
         "drivers/TegraGPIO",
         "drivers/TegraI2C",
     ],

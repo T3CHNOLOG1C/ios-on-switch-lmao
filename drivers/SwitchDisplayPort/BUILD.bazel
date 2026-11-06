@@ -56,3 +56,31 @@ cc_library(
     tags = ["kernel"],
     target_compatible_with = ["//bazel/platforms:kernel"],
 )
+
+# The BM92T36 alternate-mode engine: SwitchPD (drivers/SwitchUSB) calls it under SWITCH_DISPLAYPORT or
+# SWITCH_USB_SUPERSPEED; kernel/BUILD.bazel links it with :alt_mode.
+kernel_driver(
+    name = "SwitchPDAltMode",
+    srcs = ["SwitchPDAltMode.cpp"],
+    hdr_deps = [
+        "drivers/SwitchUSB",
+        "drivers/TegraI2C",
+    ],
+)
+
+# DPAUX1, SOR1, display controller B and the external screen; kernel/BUILD.bazel links it with :on.
+kernel_driver(
+    name = "SwitchDisplayPort",
+    srcs = [
+        "SwitchDisplayPort.cpp",
+        "SwitchDPSession.cpp",
+        "SwitchExternalScreen.cpp",
+        "TegraDisplayB.cpp",
+        "TegraDpaux1.cpp",
+        "TegraSor1.cpp",
+    ],
+    hdr_deps = [
+        "drivers/ArmGIC",
+        "drivers/TegraI2C",
+    ],
+)

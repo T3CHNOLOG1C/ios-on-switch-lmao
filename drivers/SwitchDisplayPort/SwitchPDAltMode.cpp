@@ -1,0 +1,120 @@
+// SPDX-License-Identifier: GPL-2.0-only
+// The BM92T36 alternate-mode engine on SwitchPD's work loop: SwitchPDAltModeSteps.h decides, this file does the I2C,
+// the step timer and the hand-offs. DisplayPort's lanes go to SwitchDisplayPort; the SuperSpeed pair's fate and the
+// dock's hub go to SwitchUSB's USB 3 side (r24-usb3's XusbLanes.h) when that is built in.
+#include <IOKit/IOLib.h>
+#include <IOKit/IOService.h>
+#include <IOKit/IOTimerEventSource.h>
+#include <IOKit/IOWorkLoop.h>
+
+#include "../TegraI2C/TegraI2C.h"
+#include "SwitchPDAltModeHook.h"
+#include "SwitchPDAltModeSteps.h"
+#if SWITCH_DISPLAYPORT
+#include "SwitchDisplayPort.h"
+#endif
+#if SWITCH_USB_SUPERSPEED
+#include "../SwitchUSB/XusbLanes.h"
+#endif
+
+namespace {
+constexpr unsigned kBus = 1;
+constexpr uint8_t kPD = 0x18;
+enum : uint8_t { COMMAND = 0x05, DP_STATUS = 0x18, INCOMING_VDM = 0x50, OUTGOING_VDM = 0x60 };
+
+#if SWITCH_DISPLAYPORT
+constexpr bool kWantDisplayPort = true;
+#else
+constexpr bool kWantDisplayPort = false;
+#endif
+
+IOTimerEventSource *gTimer;
+struct switch_pd_alt gAlt;
+uint16_t gStatus1;
+enum switch_pd_alt_lanes gToldLanes = SWITCH_PD_ALT_LANES_FREE;
+bool gToldHub;
+unsigned gToldDisplayPort;
+
+void hand_off()
+{
+#if SWITCH_USB_SUPERSPEED
+    if (gAlt.lanes != gToldLanes || gAlt.hub_enabled != gToldHub) {
+        switch_usb_set_alt_lanes(gAlt.lanes == SWITCH_PD_ALT_LANES_PENDING ? SWITCH_USB3_LANES_PENDING
+                                 : gAlt.lanes == SWITCH_PD_ALT_LANES_TAKEN ? SWITCH_USB3_LANES_TAKEN
+                                                                           : SWITCH_USB3_LANES_FREE,
+                                 gAlt.hub_enabled);
+    }
+#endif
+    gToldLanes = gAlt.lanes;
+    gToldHub = gAlt.hub_enabled;
+#if SWITCH_DISPLAYPORT
+    if (gAlt.dp_lanes != gToldDisplayPort) {
+        switch_displayport_alt_mode(gAlt.dp_lanes, (gStatus1 & SWITCH_PD_ALT_STATUS1_CSIDE) != 0);
+    }
+#endif
+    gToldDisplayPort = gAlt.dp_lanes;
+}
+
+void perform(struct switch_pd_alt_out out)
+{
+    if (out.act == SWITCH_PD_ALT_READ) {
+        uint8_t incoming[SWITCH_PD_ALT_INCOMING_MAX] = {};
+        if (tegra_i2c_read(kBus, kPD, INCOMING_VDM, incoming, sizeof(incoming)) != 0) {
+            out = switch_pd_alt_finish(&gAlt, SWITCH_PD_ALT_FAILED, "INCOMING_VDM could not be read");
+        } else {
+            out = switch_pd_alt_reply(&gAlt, incoming, sizeof(incoming));
+        }
+    }
+    if (out.act == SWITCH_PD_ALT_COMMAND) {
+        const uint8_t command[2] = {(uint8_t)out.command, (uint8_t)(out.command >> 8)};
+        const bool written =
+            (out.message_len == 0 || tegra_i2c_write(kBus, kPD, OUTGOING_VDM, out.message, out.message_len) == 0) &&
+            tegra_i2c_write(kBus, kPD, COMMAND, command, sizeof(command)) == 0;
+        if (!written) {
+            out = switch_pd_alt_finish(&gAlt, SWITCH_PD_ALT_FAILED, "the command could not be written");
+        }
+    }
+    if (out.line != nullptr) {
+        IOLog("SwitchPD: alternate mode (%s): %s\n", switch_pd_alt_step_name(gAlt.step), out.line);
+    }
+    if (out.timer_ms != 0) {
+        gTimer->setTimeoutMS(out.timer_ms);
+    } else {
+        gTimer->cancelTimeout();
+    }
+    hand_off();
+}
+
+void timerFired(OSObject *, IOTimerEventSource *)
+{
+    perform(switch_pd_alt_timer(&gAlt, switch_pd_alt_at_rest()));
+}
+}  // namespace
+
+void switch_pd_alt_attach(IOService *owner, IOWorkLoop *loop)
+{
+    switch_pd_alt_init(&gAlt, kWantDisplayPort);
+    gTimer = IOTimerEventSource::timerEventSource(owner, &timerFired);
+    if (gTimer == nullptr || loop->addEventSource(gTimer) != kIOReturnSuccess) {
+        panic("SwitchPD: cannot add the alternate-mode timer to the PD work loop");
+    }
+}
+
+void switch_pd_alt_alert(uint16_t alert, uint16_t status1, bool sink_session, bool at_rest)
+{
+    gStatus1 = status1;
+    uint16_t dp_status = 0;
+    if (gAlt.step == SWITCH_PD_ALT_IDLE && sink_session && at_rest) {
+        uint8_t raw[2] = {};
+        (void)tegra_i2c_read(kBus, kPD, DP_STATUS, raw, sizeof(raw));
+        dp_status = (uint16_t)(raw[0] | (raw[1] << 8));
+    }
+    const struct switch_pd_alt_in in = {alert, status1, dp_status, sink_session, at_rest};
+    const enum switch_pd_alt_step before = gAlt.step;
+    const struct switch_pd_alt_out out = switch_pd_alt_event(&gAlt, &in);
+    if (out.act == SWITCH_PD_ALT_NONE && out.line == nullptr && gAlt.step == before) {
+        hand_off();
+        return;
+    }
+    perform(out);
+}

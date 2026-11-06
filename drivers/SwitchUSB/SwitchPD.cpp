@@ -10,7 +10,8 @@
 // (vbus-supply usb0_vbus) is turned on as Linux does, but on Mariko boards it is not what powers the port.
 // The USB-PD request (SwitchPD.h): bm92txx.c bm92t_event_handler's INIT_STATE/NEW_PDO/PS_RDY_SENT steps and
 // bm92t_power_work, bm92t_check_pdo/bm92t_send_rdo through SwitchBattery/SwitchChargePolicy.h; its msleep()s are
-// one-shot timers here; no DR swap, VDM or dock alt mode.
+// one-shot timers here. DR swap, VDMs and the dock's alternate modes are drivers/SwitchDisplayPort/SwitchPDAltMode.cpp's,
+// built in with DisplayPort or the dock's USB 3 (SwitchPDAltModeHook.h).
 #include "SwitchPD.h"
 #include <IOKit/IOInterruptEventSource.h>
 #include <IOKit/IOLib.h>
@@ -24,6 +25,9 @@
 #include "../TegraGPIO/TegraGPIO.h"
 #include "../TegraI2C/TegraI2C.h"
 #include "SwitchPDPolicy.h"
+#if SWITCH_DISPLAYPORT || SWITCH_USB_SUPERSPEED
+#include "../SwitchDisplayPort/SwitchPDAltModeHook.h"
+#endif
 
 namespace {
 constexpr unsigned kBus = 1;
@@ -207,6 +211,12 @@ public:
     {
         return loop;
     }
+#if SWITCH_DISPLAYPORT || SWITCH_USB_SUPERSPEED
+    bool requestAtRest() const
+    {
+        return nego == Nego::Settling || nego == Nego::Done || nego == Nego::Failed;
+    }
+#endif
 
     bool begin(uint16_t &type, uint16_t &revision, uint16_t &config, bool &turnedOff);
     IOReturn addListener(Listener listener);
@@ -268,6 +278,9 @@ bool SwitchPD::begin(uint16_t &type, uint16_t &revision, uint16_t &config, bool 
         loop->addEventSource(alert) != kIOReturnSuccess) {
         panic("SwitchPD: cannot attach the BM92T36 ALERT (PK4, GPIO %u, level low)", TEGRA_GPIO_PD_ALERT);
     }
+#if SWITCH_DISPLAYPORT || SWITCH_USB_SUPERSPEED
+    switch_pd_alt_attach(this, loop);
+#endif
     loop->runAction(
         [](OSObject *owner, void *, void *, void *, void *) -> IOReturn {
             auto *self = static_cast<SwitchPD *>(owner);
@@ -305,6 +318,11 @@ void SwitchPD::handle(uint16_t alertBits, uint16_t status1, uint16_t status2)
     state.dataHost = state.plugged && ((status1 >> SWITCH_PD_STATUS1_DR_SHIFT) & 3) == SWITCH_PD_DATA_ROLE_DFP;
     apply(switch_pd_decide(phase, alertBits, status1, status2, allowSource));
     negotiate(alertBits);
+#if SWITCH_DISPLAYPORT || SWITCH_USB_SUPERSPEED
+    switch_pd_alt_alert(alertBits, status1,
+                        phase == SWITCH_PD_SINK && state.plugged && !(status1 & SWITCH_PD_STATUS1_SRC_MODE),
+                        requestAtRest());
+#endif
     notify();
 }
 
@@ -826,6 +844,13 @@ extern "C" void switch_pd_check_delivery(const char *who)
     if (__atomic_load_n(&gPDStage, __ATOMIC_ACQUIRE) == 2)
         tegra_gpio_check_delivery(TEGRA_GPIO_PD_ALERT, who);
 }
+
+#if SWITCH_DISPLAYPORT || SWITCH_USB_SUPERSPEED
+extern "C" bool switch_pd_alt_at_rest(void)
+{
+    return __atomic_load_n(&gPDStage, __ATOMIC_ACQUIRE) == 2 && gPD->requestAtRest();
+}
+#endif
 
 extern "C" int switch_pd_allow_source(bool allow)
 {

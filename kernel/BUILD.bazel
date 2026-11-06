@@ -314,6 +314,12 @@ kernel_archive(
     ] + select({
         "//drivers/SwitchUSB:superspeed_on": ["//drivers/SwitchUSB:SwitchUSBSuperSpeed"],
         "//conditions:default": [],
+    }) + select({
+        "//drivers/SwitchDisplayPort:alt_mode": ["//drivers/SwitchDisplayPort:SwitchPDAltMode"],
+        "//conditions:default": [],
+    }) + select({
+        "//drivers/SwitchDisplayPort:on": ["//drivers/SwitchDisplayPort:SwitchDisplayPort"],
+        "//conditions:default": [],
     }),
 )
 
