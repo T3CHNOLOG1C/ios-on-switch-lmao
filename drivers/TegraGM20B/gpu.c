@@ -1554,6 +1554,10 @@ static struct {
 	 * app on the GPU (tgm_sched_kicked: preempted, mid-switch or deferred), PTIMER units */
 	u32 comp, behind;
 	u64 comp_sum, comp_max, behind_sum, behind_max;
+	/* gpu.lock held by a channel's setup (chan_new) and teardown (chan_free): every VmBind, BoAlloc, BoImport and BoFree
+	 * of every process, the compositor's too, waits for it; nanoseconds, the sum counts them */
+	u64 lock_new_sum, lock_new_max, lock_free_sum, lock_free_max;
+	u32 lock_new, lock_free;
 	s64 live_bytes;                           /* host imports */
 	s32 live;
 } stats;
@@ -2143,8 +2147,8 @@ static void stats_tick(void)
 	u64 now = nvxnu_nanotime(), since = __atomic_load_n(&stats.since, __ATOMIC_RELAXED), ms,
 	    sum, max, qs, qm, es, em, ps, pm;
 	u32 submits, fences, imports, timed, presents, ordered, idle, late, writer, allocs, mc_int,
-		mc_err, mc_adr, copies, gaps, comp, behind;
-	u64 abytes, ans, pt, cal, rate, cs, cm, gs, gm, busy, cos, com, bs, bm;
+		mc_err, mc_adr, copies, gaps, comp, behind, lnew, lfree;
+	u64 abytes, ans, pt, cal, rate, cs, cm, gs, gm, busy, cos, com, bs, bm, lns, lnm, lfs, lfm;
 	char line[1024], clk[120], scrubbed[120], sched[120];
 
 	__atomic_fetch_add(&stats.submits, 1, __ATOMIC_RELAXED);
@@ -2196,6 +2200,12 @@ static void stats_tick(void)
 	bs = __atomic_exchange_n(&stats.behind_sum, 0, __ATOMIC_RELAXED);
 	bm = __atomic_exchange_n(&stats.behind_max, 0, __ATOMIC_RELAXED);
 	tgm_sched_stats(sched, sizeof(sched));
+	lnew = __atomic_exchange_n(&stats.lock_new, 0, __ATOMIC_RELAXED);
+	lns = __atomic_exchange_n(&stats.lock_new_sum, 0, __ATOMIC_RELAXED);
+	lnm = __atomic_exchange_n(&stats.lock_new_max, 0, __ATOMIC_RELAXED);
+	lfree = __atomic_exchange_n(&stats.lock_free, 0, __ATOMIC_RELAXED);
+	lfs = __atomic_exchange_n(&stats.lock_free_sum, 0, __ATOMIC_RELAXED);
+	lfm = __atomic_exchange_n(&stats.lock_free_max, 0, __ATOMIC_RELAXED);
 	tegra_gm20b_mc_errors(&mc_int, &mc_err, &mc_adr);
 	/* the GPU's share of the window spent on stamped user submissions and copies */
 	busy = PT_NS(es + cs) * 100 / (now - since);
@@ -2235,7 +2245,8 @@ static void stats_tick(void)
 		"%llu; coherent from system memory %llu MiB in %llu), %s, MC "
 		"%08x "
 		"err "
-		"%08x at %08x",
+		"%08x at %08x; gpu.lock held by channel setup mean %llu us max %llu us (%u), teardown "
+		"mean %llu us max %llu us (%u)",
 		copies ? PT_NS(cs) / copies / 1000 : 0, PT_NS(cm) / 1000, copies,
 		gaps ? PT_NS(gs) / gaps / 1000 : 0, PT_NS(gm) / 1000, gaps,
 		present_order_on() ? "on" : "off", ordered, idle, late, imports,
@@ -2245,7 +2256,8 @@ static void stats_tick(void)
 		nvxnu_pool_used_pages() >> (20 - PAGE_SHIFT), nvxnu_pool_size() >> 20,
 		__atomic_load_n(&compositor_pool, __ATOMIC_RELAXED) >> 20, pool_clients >> 20,
 		pool_orphan_bytes >> 20, pool_orphans, pool_system_bytes >> 20, pool_systems,
-		scrubbed, mc_int, mc_err, mc_adr);
+		scrubbed, mc_int, mc_err, mc_adr, lnew ? lns / lnew / 1000 : 0, lnm / 1000, lnew,
+		lfree ? lfs / lfree / 1000 : 0, lfm / 1000, lfree);
 	nvxnu_stats("tegra-gm20b: stats2 %s", line);
 	stats_exec_owners(line, sizeof(line), rate);
 	stats_mem(ms);
@@ -2731,7 +2743,7 @@ static int chan_new(struct tgm_vm *vm, const void *vm_owner, volatile uint32_t *
 	struct gf100_vmm_map_v0 margs = {.version = 0, .vol = 1};
 	struct nvif_push *push;
 	struct tgm_chan *chan;
-	u64 runm;
+	u64 runm, locked;
 	u32 i, npages = CHAN_BYTES >> PAGE_SHIFT;
 	int ret;
 
@@ -2765,6 +2777,7 @@ static int chan_new(struct tgm_vm *vm, const void *vm_owner, volatile uint32_t *
 		chan->ring_pas[i] = chan->ring_pa + ((u64)i << PAGE_SHIFT);
 
 	mutex_lock(&gpu.lock);
+	locked = stats_on() ? nvxnu_nanotime() : 0;
 	{
 		struct nvif_mem_ram_v0 rargs = {.version = 0, .dma = (dma_addr_t *)chan->ring_pas};
 		chan->ring_mem->bytes = CHAN_BYTES;
@@ -2840,6 +2853,10 @@ static int chan_new(struct tgm_vm *vm, const void *vm_owner, volatile uint32_t *
 				 chan->ring_va, CHAN_PUSH_BYTES,
 				 (u8 *)chan->ring + CHAN_PUSH_BYTES + CHAN_GPFIFO_BYTES,
 				 chan->ring_va + CHAN_PUSH_BYTES + CHAN_GPFIFO_BYTES);
+	if (stats_on()) {
+		__atomic_fetch_add(&stats.lock_new, 1, __ATOMIC_RELAXED);
+		stats_add(&stats.lock_new_sum, &stats.lock_new_max, nvxnu_nanotime() - locked);
+	}
 	mutex_unlock(&gpu.lock);
 	if (ret) {
 		mutex_lock(&gpu.lock);
@@ -2908,7 +2925,7 @@ void tgm_chan_del(struct tgm_chan **pchan)
 {
 	struct tgm_chan *chan = *pchan;
 	u32 waiter;
-	u64 end;
+	u64 end, held;
 	if (!chan)
 		return;
 	waiter = tgm_chan_waiter(chan);
@@ -2935,7 +2952,12 @@ void tgm_chan_del(struct tgm_chan **pchan)
 	order_forget(chan);
 	mutex_unlock(&live_lock);
 	mutex_lock(&gpu.lock);
+	held = stats_on() ? nvxnu_nanotime() : 0;
 	chan_free(chan);
+	if (stats_on()) {
+		__atomic_fetch_add(&stats.lock_free, 1, __ATOMIC_RELAXED);
+		stats_add(&stats.lock_free_sum, &stats.lock_free_max, nvxnu_nanotime() - held);
+	}
 	mutex_unlock(&gpu.lock);
 	*pchan = NULL;
 	nvxnu_word_wake(&waiter_words[waiter]);
