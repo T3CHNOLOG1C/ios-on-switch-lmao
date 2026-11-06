@@ -44,13 +44,13 @@
 #include <string.h>
 #include "../TegraVIC/TegraVICSurface.h"
 #include "TegraNVJPG.h"
+#include "../../kits/SwitchDMA/SwitchHwPage.h"
 #include "../../kits/SwitchMath/SwitchMath.h"
 #include "../../kits/SwitchTime/SwitchTime.h"
 #include "TegraNVJPGRequest.h"
 
 extern "C" {
 vm_offset_t phystokv(uint64_t pa);
-boolean_t pmap_valid_page(ppnum_t pn);
 }
 
 class AppleJPEGDriverUserClient;
@@ -61,8 +61,8 @@ constexpr uint32_t kQueueMax = 16;
 constexpr uint64_t kSinkBytes = 1ull << 20;   // MCU padding past a destination's last page (15 rows of 64 KiB)
 constexpr uint32_t kHeaderChunk = 128 << 10;  // headers read first (APP segments: EXIF, ICC, XMP)
 constexpr uint32_t kHeaderMax = 4 << 20;      // ... and at most this far, if the first chunk ends before SOS
-const uint32_t kOutPages = (uint32_t)(kTegraNVJPGWindowBytes[TEGRA_NVJPG_WINDOW_OUT] >> 12);
-const uint32_t kInPages = (uint32_t)(kTegraNVJPGWindowBytes[TEGRA_NVJPG_WINDOW_IN] >> 12);
+const uint32_t kOutPages = (uint32_t)(kTegraNVJPGWindowBytes[TEGRA_NVJPG_WINDOW_OUT] >> SWITCH_HW_PAGE_SHIFT);
+const uint32_t kInPages = (uint32_t)(kTegraNVJPGWindowBytes[TEGRA_NVJPG_WINDOW_IN] >> SWITCH_HW_PAGE_SHIFT);
 
 uint64_t *gOutList, *gInList;  // the engine thread's page lists
 TegraNVJPGBuffer gSink;        // one arena page, mapped for every sink entry
@@ -169,11 +169,11 @@ void fillChroma(const TegraNVJPGPlan &p, uint32_t pages)
     auto fill = [&] {
         for (uint64_t row = 0; row < p.fillRows; row++) {
             for (uint64_t at = p.fillStart + row * p.fillPitch, end = at + p.fillRowBytes; at < end;) {
-                const uint32_t page = (uint32_t)(at >> 12);
-                const uint64_t stop = SWITCH_MIN(switch_align_down(at, 4096) + 4096, end);
-                if (page >= pages || !pmap_valid_page((ppnum_t)(gOutList[page] >> 12)))
+                const uint32_t page = (uint32_t)(at >> SWITCH_HW_PAGE_SHIFT);
+                const uint64_t stop = SWITCH_MIN(switch_align_down(at, SWITCH_HW_PAGE_SIZE) + SWITCH_HW_PAGE_SIZE, end);
+                if (page >= pages || !switch_dma_pa_managed(gOutList[page]))
                     return;  // the plan bounded it
-                uint8_t *va = (uint8_t *)phystokv(gOutList[page]) + (at & 0xfff);
+                uint8_t *va = (uint8_t *)phystokv(gOutList[page]) + (at & SWITCH_HW_PAGE_MASK);
                 memset(va, 0x80, stop - at);
                 switch_dcache_clean_lines(va, stop - at);
                 at = stop;
@@ -189,21 +189,24 @@ IOReturn runJob(Job *job)
 {
     const TegraNVJPGPlan &p = job->plan;
     uint32_t pages = 0;
-    const uint64_t surfaceBytes = (job->dst.desc.length + 0xfff) & ~0xfffull;
+    const uint64_t surfaceBytes = switch_align_up(job->dst.desc.length, SWITCH_HW_PAGE_SIZE);
     IOReturn ret = tegra_vic_surface_prepare(&job->dst, job->dst.desc.length, gOutList, kOutPages, &pages);
     if (ret)
         return ret == kIOReturnNotAligned ? kIOReturnIOError : ret;
     // Sink entries for the MCU padding the plan allowed past the surface's pages.
     uint32_t mapped = pages;
-    while (((uint64_t)mapped << 12) < p.writeEnd && mapped < kOutPages)
+    while (((uint64_t)mapped << SWITCH_HW_PAGE_SHIFT) < p.writeEnd && mapped < kOutPages)
         gOutList[mapped++] = gSink.pa;
-    if (((uint64_t)mapped << 12) < p.writeEnd || surfaceBytes > ((uint64_t)pages << 12)) {
+    if (((uint64_t)mapped << SWITCH_HW_PAGE_SHIFT) < p.writeEnd ||
+        surfaceBytes > ((uint64_t)pages << SWITCH_HW_PAGE_SHIFT)) {
         tegra_vic_surface_complete(&job->dst);
         return kIOReturnBadArgument;
     }
     for (uint32_t i = 0; i < job->bitPages; i++) {
         IOByteCount length = 0;
-        gInList[i] = job->bits->getPhysicalSegment((IOByteCount)i << 12, &length, kIOMemoryMapperNone) & ~0xfffull;
+        gInList[i] =
+            job->bits->getPhysicalSegment((IOByteCount)i << SWITCH_HW_PAGE_SHIFT, &length, kIOMemoryMapperNone) &
+            ~SWITCH_HW_PAGE_MASK;
     }
     gInList[job->bitPages] = gSink.pa;  // the engine may read a little past the scan's end
     tegra_nvjpg_lock();
@@ -307,7 +310,7 @@ const char *readSource(TegraVICSurface *src, uint64_t size, TegraNVJPGImage *img
     *ret = kIOReturnBadArgument;
     if (size < 4 || size > src->desc.length)
         return "source size";
-    const uint32_t pageCount = (uint32_t)((size + 0xfff) >> 12);
+    const uint32_t pageCount = (uint32_t)switch_div_round_up(size, SWITCH_HW_PAGE_SIZE);
     uint64_t *pages = IONewData(uint64_t, pageCount);
     if (!pages) {
         *ret = kIOReturnNoMemory;
@@ -346,12 +349,13 @@ const char *readSource(TegraVICSurface *src, uint64_t size, TegraNVJPGImage *img
         return why;
     }
     const uint64_t scan = size - img->scanOffset;
-    if (scan + 2 > kTegraNVJPGWindowBytes[TEGRA_NVJPG_WINDOW_IN] - 4096) {
+    if (scan + 2 > kTegraNVJPGWindowBytes[TEGRA_NVJPG_WINDOW_IN] - SWITCH_HW_PAGE_SIZE) {
         tegra_vic_surface_complete(src);
         *ret = kIOReturnUnsupported;
         return "scan larger than the 64 MiB input window";
     }
-    job->bits = IOBufferMemoryDescriptor::inTaskWithOptions(kernel_task, kIODirectionOut, scan + 2, 4096);
+    job->bits =
+        IOBufferMemoryDescriptor::inTaskWithOptions(kernel_task, kIODirectionOut, scan + 2, SWITCH_HW_PAGE_SIZE);
     if (!job->bits || job->bits->prepare() != kIOReturnSuccess ||
         src->memory->readBytes(img->scanOffset, job->bits->getBytesNoCopy(), scan) != scan) {
         tegra_vic_surface_complete(src);
@@ -373,7 +377,7 @@ const char *readSource(TegraVICSurface *src, uint64_t size, TegraNVJPGImage *img
     img->scanEnd = img->scanOffset + scanned.scanEnd;
     img->eoi = scanned.eoi;
     job->engine.setup.bitstream_size = (int)used;
-    job->bitPages = (uint32_t)((used + 0xfff) >> 12);
+    job->bitPages = (uint32_t)switch_div_round_up(used, SWITCH_HW_PAGE_SIZE);
     *ret = kIOReturnSuccess;
     return nullptr;
 }
@@ -721,7 +725,7 @@ extern "C" int tegra_nvjpg_publish(void)
     gStatsLock = IOLockAlloc();
     gOutList = IONewData(uint64_t, kOutPages);
     gInList = IONewData(uint64_t, kInPages);
-    if (!gQueueLock || !gStatsLock || !gOutList || !gInList || tegra_nvjpg_buffer(4096, &gSink) ||
+    if (!gQueueLock || !gStatsLock || !gOutList || !gInList || tegra_nvjpg_buffer(SWITCH_HW_PAGE_SIZE, &gSink) ||
         !tegra_vic_surface_start()) {
         IOLog("TegraNVJPG: J4 FAIL no memory for the service, or no IOCoreSurfaceRoot\n");
         return -12;

@@ -57,13 +57,13 @@
 #include "../../kits/SwitchCAR/SwitchPMC.h"
 #include "../../kits/SwitchDMA/SwitchDMABuffer.h"
 #include "../../kits/SwitchDMA/SwitchDcache.h"
+#include "../../kits/SwitchDMA/SwitchHwPage.h"
 #include "../../kits/SwitchFalcon/SwitchFalcon.h"
 #include "../../kits/SwitchMath/SwitchMath.h"
 #include "../../kits/SwitchMMIO/SwitchMMIOKernel.h"
 #include "../../kits/SwitchTime/SwitchTime.h"
 
 extern "C" {
-boolean_t pmap_valid_page(ppnum_t pn);
 int tegra_nvdec_await(uint32_t timeoutMs);
 extern const uint8_t tegra_nvjpg_fw_start[] __asm__("_tegra_nvjpg_fw_start");
 extern const uint8_t tegra_nvjpg_fw_end[] __asm__("_tegra_nvjpg_fw_end");
@@ -350,8 +350,9 @@ bool allocate()
                  (unsigned long)length);
         return false;
     }
-    if (!contiguous(switch_align_up(gImage.size, 4096), &gFirmwareDma, &gFirmware) ||
-        !contiguous(kArenaBytes, &gArenaDma, &gArena) || !contiguous((uint64_t)kTables * 4096, &gTablesDma, &gTables)) {
+    if (!contiguous(switch_align_up(gImage.size, SWITCH_HW_PAGE_SIZE), &gFirmwareDma, &gFirmware) ||
+        !contiguous(kArenaBytes, &gArenaDma, &gArena) ||
+        !contiguous((uint64_t)kTables * SWITCH_HW_PAGE_SIZE, &gTablesDma, &gTables)) {
         snprintf(gLine, sizeof(gLine), "J0 FAIL no contiguous firmware, arena or page-table memory below 4 GiB");
         return false;
     }
@@ -467,7 +468,7 @@ extern "C" uint32_t tegra_nvjpg_clock_mhz(void)
 
 extern "C" int tegra_nvjpg_buffer(uint64_t size, TegraNVJPGBuffer *out)
 {
-    size = (size + 0xfff) & ~0xfffull;
+    size = switch_align_up(size, SWITCH_HW_PAGE_SIZE);
     if (!gArena.va || gArenaUsed + size > gArena.size)
         return -12;
     out->pa = gArena.pa + gArenaUsed;
@@ -480,8 +481,8 @@ extern "C" int tegra_nvjpg_buffer(uint64_t size, TegraNVJPGBuffer *out)
 extern "C" void tegra_nvjpg_cache_pages(switch_dcache_op op, const uint64_t *pages, uint32_t count)
 {
     for (uint32_t i = 0; i < count; i++)
-        if (pmap_valid_page((ppnum_t)(pages[i] >> 12)))
-            switch_dcache_phys_lines(op, pages[i] & ~0xfffULL, 4096);
+        if (switch_dma_pa_managed(pages[i]))
+            switch_dcache_phys_lines(op, pages[i] & ~SWITCH_HW_PAGE_MASK, SWITCH_HW_PAGE_SIZE);
 }
 
 extern "C" void tegra_nvjpg_lock(void)
@@ -498,7 +499,7 @@ extern "C" void tegra_nvjpg_unlock(void)
 // the job's memory faults in the SMMU instead of reaching memory.
 extern "C" uint64_t tegra_nvjpg_window_map(uint32_t window, const uint64_t *pages, uint32_t count, bool writable)
 {
-    if (window >= TEGRA_NVJPG_WINDOWS || count > (uint32_t)(kTegraNVJPGWindowBytes[window] >> 12))
+    if (window >= TEGRA_NVJPG_WINDOWS || count > (uint32_t)(kTegraNVJPGWindowBytes[window] >> SWITCH_HW_PAGE_SHIFT))
         return 0;
     uint32_t *pt = table(windowTable(window));  // the window's tables are consecutive pages
     for (uint32_t i = 0; i < count; i++)

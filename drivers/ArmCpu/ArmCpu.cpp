@@ -10,6 +10,8 @@
 #include <libkern/kernel_mach_header.h>
 #include <arm64/switch_smp.h>
 #include "../ArmGIC/ArmGIC.h"
+#include "../../kits/SwitchDMA/SwitchDcache.h"
+#include "../../kits/SwitchDMA/SwitchHwPage.h"
 
 // Exact private entry from Darwin 23 arm/rtclock.h. Its full data header is
 // not exported to IOKit; the IRQ path calls the real kernel implementation.
@@ -23,7 +25,6 @@ extern "C" void thread_deallocate(thread_t);
 extern "C" thread_t current_thread(void);
 extern "C" kern_return_t thread_terminate(thread_t);
 extern "C" int switch_smp_publish_cpu_state(void);
-extern "C" boolean_t pmap_valid_page(ppnum_t);
 // System sleep (drivers/SwitchSuspend): the scheduler's processor exit, XNU's sleep path, the platform quiesce/active
 // actions.
 extern "C" kern_return_t processor_exit(processor_t);
@@ -1429,15 +1430,8 @@ extern "C" int armcpu_system_sleep_enable(char *why, size_t size)
 // dirty cache lines are not guaranteed to be visible to a core with caches off (XNU only flushes the per-CPU data).
 static void cleanToMemory(const void *start, size_t length)
 {
-    uint64_t ctr;
-    __asm__ volatile("mrs %0, ctr_el0" : "=r"(ctr));
-    uintptr_t line = static_cast<uintptr_t>(4) << ((ctr >> 16) & 15);
-    uintptr_t address = reinterpret_cast<uintptr_t>(start) & ~(line - 1),
-              end = reinterpret_cast<uintptr_t>(start) + length;
-    for (; address < end; address += line) {
-        __asm__ volatile("dc cvac, %0" ::"r"(address) : "memory");
-    }
-    __asm__ volatile("dsb sy\nisb" ::: "memory");
+    switch_dcache_clean(start, length);
+    __asm__ volatile("isb" ::: "memory");
 }
 
 static bool cleanKernelSegments(void)
@@ -1462,22 +1456,26 @@ static bool cleanKernelSegments(void)
             }
             const kernel_segment_command_t *seg = reinterpret_cast<const kernel_segment_command_t *>(command);
             if (seg->vmsize > UINTPTR_MAX - seg->vmaddr || seg->vmsize > (UINT64_C(1) << 30) ||
-                seg->vmaddr + seg->vmsize > UINTPTR_MAX - 4095) {
+                seg->vmaddr + seg->vmsize > UINTPTR_MAX - SWITCH_HW_PAGE_MASK) {
                 return false;
             }
             if (seg->initprot & VM_PROT_READ) {
                 // Discarded KLD/LINKEDIT pages can be unmapped by this point. Clean
                 // only currently mapped RAM pages, never an MMIO alias or a hole.
-                for (uintptr_t va = seg->vmaddr & ~UINT64_C(4095); va < seg->vmaddr + seg->vmsize; va += 4096) {
+                for (uintptr_t va = seg->vmaddr & ~SWITCH_HW_PAGE_MASK; va < seg->vmaddr + seg->vmsize;
+                     va += SWITCH_HW_PAGE_SIZE) {
                     const uint64_t pa = ml_vtophys(va);
-                    if (pa && pmap_valid_page(static_cast<ppnum_t>(pa >> 12))) {
-                        cleanToMemory(reinterpret_cast<const void *>(va), 4096);
+                    if (pa && switch_dma_pa_managed(pa)) {
+                        switch_dcache_clean_lines(reinterpret_cast<const void *>(va), SWITCH_HW_PAGE_SIZE);
                     }
                 }
             }
         }
         command += load->cmdsize;
     }
+    // One barrier completes every page's clean (and anything written before), ahead of the core that reads them.
+    switch_dcache_sync();
+    __asm__ volatile("isb" ::: "memory");
     return command == end;
 }
 

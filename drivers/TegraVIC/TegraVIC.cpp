@@ -53,13 +53,13 @@
 #include "../../kits/SwitchCAR/SwitchPMC.h"
 #include "../../kits/SwitchDMA/SwitchDMABuffer.h"
 #include "../../kits/SwitchDMA/SwitchDcache.h"
+#include "../../kits/SwitchDMA/SwitchHwPage.h"
 #include "../../kits/SwitchFalcon/SwitchFalcon.h"
 #include "../../kits/SwitchMath/SwitchMath.h"
 #include "../../kits/SwitchMMIO/SwitchMMIOKernel.h"
 #include "../../kits/SwitchTime/SwitchTime.h"
 
 extern "C" {
-boolean_t pmap_valid_page(ppnum_t pn);
 int tegra_nvdec_await(uint32_t timeoutMs);
 extern const uint8_t tegra_vic_fw_start[] __asm__("_tegra_vic_fw_start");
 extern const uint8_t tegra_vic_fw_end[] __asm__("_tegra_vic_fw_end");
@@ -143,8 +143,8 @@ TegraVICTraits gTraits;
 void cachePages(switch_dcache_op op, const uint64_t *pages, uint32_t count)
 {
     for (uint32_t i = 0; i < count; i++)
-        if (pmap_valid_page((ppnum_t)(pages[i] >> 12)))
-            switch_dcache_phys_lines(op, pages[i] & ~0xfffULL, 4096);
+        if (switch_dma_pa_managed(pages[i]))
+            switch_dcache_phys_lines(op, pages[i] & ~SWITCH_HW_PAGE_MASK, SWITCH_HW_PAGE_SIZE);
 }
 
 const char *falconState()
@@ -374,14 +374,15 @@ bool allocate()
                  (unsigned long)length);
         return false;
     }
-    if (!contiguous(switch_align_up(gImage.size, 4096), &gFirmwareDma, &gFirmware) ||
-        !contiguous(kArenaBytes, &gArenaDma, &gArena) || !contiguous((uint64_t)kTables * 4096, &gTablesDma, &gTables)) {
+    if (!contiguous(switch_align_up(gImage.size, SWITCH_HW_PAGE_SIZE), &gFirmwareDma, &gFirmware) ||
+        !contiguous(kArenaBytes, &gArenaDma, &gArena) ||
+        !contiguous((uint64_t)kTables * SWITCH_HW_PAGE_SIZE, &gTablesDma, &gTables)) {
         snprintf(gLine, sizeof(gLine), "V0 FAIL no contiguous firmware, arena or page-table memory below 4 GiB");
         return false;
     }
     memcpy(gFirmware.va, tegra_vic_fw_start, gImage.size);
     switch_dcache_clean(gFirmware.va, gImage.size);
-    return tegra_vic_buffer(4096, &gConfig) == 0 && tegra_vic_buffer(0x3000, &gFilter) == 0;
+    return tegra_vic_buffer(SWITCH_HW_PAGE_SIZE, &gConfig) == 0 && tegra_vic_buffer(0x3000, &gFilter) == 0;
 }
 
 void giveBack()
@@ -489,7 +490,7 @@ extern "C" const TegraVICTraits *tegra_vic_traits(void)
 
 extern "C" int tegra_vic_buffer(uint64_t size, TegraVICBuffer *out)
 {
-    size = (size + 0xfff) & ~0xfffull;
+    size = switch_align_up(size, SWITCH_HW_PAGE_SIZE);
     if (!gArena.va || gArenaUsed + size > gArena.size)
         return -12;
     out->pa = gArena.pa + gArenaUsed;
@@ -529,7 +530,7 @@ extern "C" void tegra_vic_unlock(void)
 extern "C" uint64_t tegra_vic_window_map(uint32_t window, const uint64_t *pages, uint32_t count, bool writable)
 {
     const uint64_t base = kTegraVICWindowBase + window * kTegraVICWindowBytes;
-    const uint32_t limit = (uint32_t)(kTegraVICWindowBytes >> 12);
+    const uint32_t limit = (uint32_t)(kTegraVICWindowBytes >> SWITCH_HW_PAGE_SHIFT);
     if (window >= TEGRA_VIC_WINDOWS || count > limit)
         return 0;
     uint32_t *pt = table(1 + window * kWindowTables);  // the window's tables are consecutive pages
