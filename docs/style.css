@@ -1,0 +1,505 @@
+/* Mintlify loads every .css file in docs/ on every page. Its element hooks (#navbar, data-component-part, ...) are not
+   a stable API, so this file only restyles what docs.json cannot reach. */
+
+@font-face {
+  font-family: "Barlow";
+  src: url("/fonts/barlow-600.woff2") format("woff2");
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Barlow";
+  src: url("/fonts/barlow-400-italic.woff2") format("woff2");
+  font-weight: 400;
+  font-style: italic;
+  font-display: swap;
+}
+
+:root {
+  --paper: #ffffff;
+  --paper-2: #f5f5f2;
+  --ink: #16181b;
+  --ink-2: #4a4f57;
+  --body: #33373d;
+  --rule: #dcddd9;
+  --amber: #f0a21e;
+  --amber-ink: #9a5b00;
+  --label: "Barlow Semi Condensed", "Barlow", sans-serif;
+}
+
+html.dark {
+  --paper: #121315;
+  --paper-2: #1a1c1f;
+  --ink: #ecedea;
+  --ink-2: #a3a8af;
+  --body: #c9ccd1;
+  --rule: #2b2d31;
+  --amber-ink: #f0a21e;
+}
+
+::selection {
+  background: var(--amber);
+  color: #16181b;
+}
+
+html {
+  caret-color: var(--amber-ink);
+  scrollbar-color: var(--rule) transparent;
+}
+
+:focus-visible {
+  outline: 2px solid var(--amber) !important;
+  outline-offset: 2px;
+}
+
+/* Running head: the tape strip under the navbar. */
+#navbar::after {
+  content: "";
+  position: absolute;
+  inset: auto 0 -3px 0;
+  height: 3px;
+  background: var(--amber);
+  z-index: 20;
+}
+
+#page-context-menu button {
+  border-radius: 2px;
+  border-color: var(--rule);
+}
+
+#navbar #search-bar-entry {
+  border-radius: 2px;
+  border-color: var(--rule);
+  background: var(--paper-2);
+}
+
+#search-bar-entry [data-search-item="trigger-label"],
+#footer a {
+  color: var(--ink-2) !important;
+}
+
+/* The sidebar shows where the reader is; a section label above every title would say it twice. */
+#header .eyebrow {
+  display: none;
+}
+
+#page-title {
+  text-wrap: balance;
+  font-family: var(--label);
+  font-weight: 600;
+  font-size: 2.75rem;
+  line-height: 1.05;
+  letter-spacing: -0.015em;
+  color: var(--ink);
+  word-break: normal;
+}
+
+#header {
+  padding-bottom: 1.25rem;
+  border-bottom: 1px solid var(--ink);
+}
+
+#header + div,
+#header ~ .description,
+#header p {
+  color: var(--ink-2);
+}
+
+#content-area .prose {
+  --tw-prose-body: var(--body);
+  --tw-prose-invert-body: var(--body);
+  --tw-prose-headings: var(--ink);
+  --tw-prose-invert-headings: var(--ink);
+  --tw-prose-bold: var(--ink);
+  --tw-prose-invert-bold: var(--ink);
+  --tw-prose-bullets: var(--ink-2);
+  --tw-prose-invert-bullets: var(--ink-2);
+  --tw-prose-counters: var(--ink-2);
+  --tw-prose-invert-counters: var(--ink-2);
+  color: var(--body);
+}
+
+.mdx-content {
+  font-size: 17px;
+  line-height: 1.65;
+  text-wrap: pretty;
+}
+
+.mdx-content h2,
+.mdx-content h3 {
+  text-wrap: balance;
+}
+
+.mdx-content strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.mdx-content h2 {
+  font-family: var(--label);
+  font-weight: 600;
+  font-size: 1.75rem;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+  margin-top: 3.5rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--rule);
+}
+
+.mdx-content h3 {
+  font-family: var(--label);
+  font-weight: 600;
+  font-size: 1.3rem;
+  color: var(--ink);
+  margin-top: 2.25rem;
+}
+
+.mdx-content a.link {
+  color: var(--ink);
+  font-weight: 600;
+  border-bottom: 0;
+  text-decoration: underline 1px var(--ink-2);
+  text-underline-offset: 0.2em;
+}
+
+.mdx-content a.link:hover {
+  background: var(--paper-2);
+  text-decoration-color: var(--ink);
+}
+
+.mdx-content :not(pre) > code {
+  color: var(--ink);
+  background: var(--paper-2);
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  padding: 0.05em 0.35em;
+}
+
+.mdx-content li::marker {
+  color: var(--ink-2);
+}
+
+/* Steps: numbered callout balloons on a leader line. */
+[data-component-part="step-indicator"] {
+  width: 2rem;
+  height: 2rem;
+  margin-left: -2px;
+  background: var(--amber) !important;
+  color: #16181b !important;
+  font-family: var(--label);
+  font-size: 1rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+[data-component-part="step-line"] {
+  background: var(--ink-2) !important;
+  opacity: 0.45;
+}
+
+[data-component-part="step-title"] {
+  font-family: var(--label);
+  font-size: 1.3rem;
+  font-weight: 600;
+  color: var(--ink) !important;
+  margin-top: 0.35rem;
+}
+
+/* Callouts: a plate with a 1px frame; the warning plate carries the tape strip. */
+.callout {
+  border-radius: 2px !important;
+  border: 1px solid var(--rule) !important;
+  background: var(--paper-2) !important;
+}
+
+.callout [data-component-part="callout-content"] {
+  font-size: 1rem;
+  line-height: 1.6;
+}
+
+.callout [data-component-part="callout-content"] li {
+  line-height: 1.6;
+}
+
+.callout [data-component-part="callout-content"],
+.callout [data-component-part="callout-icon"] svg {
+  color: var(--ink) !important;
+}
+
+.callout[data-callout-type="warning"] {
+  border-color: var(--ink) !important;
+  background: var(--paper) !important;
+  box-shadow: inset 0 5px 0 var(--amber);
+  padding-top: 1.4rem;
+}
+
+/* Tables: a parts list. */
+.mdx-content table {
+  font-variant-numeric: tabular-nums;
+  border-collapse: collapse;
+}
+
+.mdx-content th {
+  font-family: var(--label);
+  font-weight: 600;
+  font-size: 1rem;
+  color: var(--ink);
+  border-bottom: 1px solid var(--ink) !important;
+}
+
+.mdx-content td {
+  border-bottom: 1px solid var(--rule) !important;
+}
+
+.code-block {
+  border-radius: 2px !important;
+  border-color: var(--rule) !important;
+  background: var(--paper-2) !important;
+}
+
+.code-block pre {
+  background: transparent !important;
+}
+
+/* Code is set in ink like the rest of the page: no syntax hues. Mintlify's dark-mode colour and background rules are
+   !important inside its own cascade layer, which outranks this file, so the Shiki variables they read are overridden
+   instead. */
+.code-block .shiki span {
+  --shiki-light: var(--ink) !important;
+  --shiki-dark: var(--ink) !important;
+  color: var(--ink) !important;
+}
+
+.code-block,
+.code-block * {
+  --shiki-light-bg: transparent !important;
+  --shiki-dark-bg: transparent !important;
+}
+
+/* Sidebar: the active page is a printed thumb tab. */
+#sidebar-content .sidebar-group-header {
+  font-family: var(--label);
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+#sidebar-content li[data-active="true"] > a {
+  background: var(--amber);
+  color: #16181b !important;
+  border-radius: 2px;
+  text-shadow: none !important;
+  font-weight: 600;
+}
+
+#sidebar-content li:not([data-active="true"]) > a:hover {
+  background: var(--paper-2);
+  border-radius: 2px;
+}
+
+#table-of-contents a[data-active="true"] {
+  color: var(--ink) !important;
+  font-weight: 600;
+}
+
+/* The index's contents list. */
+.contents-list {
+  margin: 2.5rem 0 0;
+  border-top: 1px solid var(--ink);
+}
+
+.mdx-content .contents-list a.link {
+  display: grid;
+  grid-template-columns: 15rem 1fr;
+  gap: 0.75rem;
+  padding: 1rem 0.25rem;
+  border-bottom: 1px solid var(--rule);
+  font-weight: 400;
+  text-decoration: none;
+  color: var(--ink-2);
+}
+
+.mdx-content .contents-list a.link:hover {
+  background: var(--paper-2);
+}
+
+.contents-list a span:first-child {
+  display: flex;
+  align-items: baseline;
+  font-family: var(--label);
+  font-weight: 600;
+  font-size: 1.15rem;
+  line-height: 1.4;
+  color: var(--ink);
+}
+
+/* The dotted leader from each title to its description. */
+.contents-list a span:first-child::after {
+  content: "";
+  flex: 1;
+  min-width: 1rem;
+  margin-left: 0.5rem;
+  border-bottom: 1px dotted var(--ink-2);
+}
+
+@media (max-width: 640px) {
+  .mdx-content .contents-list a.link {
+    grid-template-columns: 1fr;
+    gap: 0.25rem;
+  }
+
+  .contents-list a span:first-child::after {
+    display: none;
+  }
+}
+
+/* What works: status is a drawn mark beside each item, as well as the heading's word. */
+.status-list ul {
+  list-style: none;
+  padding-left: 0;
+}
+
+.status-list li {
+  position: relative;
+  padding-left: 1.75rem;
+}
+
+.status-list li::before {
+  content: "";
+  position: absolute;
+  left: 0.15rem;
+  top: 0.45em;
+  width: 0.75rem;
+  height: 0.75rem;
+  border: 2px solid var(--ink);
+  border-radius: 1px;
+}
+
+.status-list[data-status="works"] li::before {
+  background: var(--ink);
+}
+
+.status-list[data-status="not-yet"] li::before {
+  background: transparent;
+}
+
+/* How it works: the boot chain, metal at the bottom. */
+.stack {
+  display: flex;
+  flex-direction: column-reverse;
+  margin: 2rem 0 1rem;
+  padding: 0;
+  list-style: none;
+}
+
+.stack li {
+  display: grid;
+  grid-template-columns: 9.5rem 1fr;
+  gap: 1rem;
+  margin: 0 0 0.375rem;
+  padding: 0.7rem 1rem;
+  border: 1px solid var(--rule);
+  background: var(--paper-2);
+}
+
+.stack li:first-child {
+  border-color: var(--ink);
+  border-bottom-width: 6px;
+}
+
+.stack li:last-child {
+  border-color: var(--ink);
+  background: var(--paper);
+}
+
+.stack strong {
+  font-family: var(--label);
+  font-size: 1.1rem;
+}
+
+@media (max-width: 640px) {
+  .stack li {
+    grid-template-columns: 1fr;
+    gap: 0.125rem;
+  }
+}
+
+.code-block [class*="bg-codeblock"] {
+  background: transparent !important;
+  border-radius: 2px;
+}
+
+details.accordion {
+  border-radius: 2px !important;
+  border: 1px solid var(--rule) !important;
+  background: var(--paper) !important;
+}
+
+details.accordion > summary {
+  font-family: var(--label);
+  font-weight: 600;
+  font-size: 1.05rem;
+  color: var(--ink);
+}
+
+details.accordion > summary:hover {
+  background: var(--paper-2) !important;
+}
+
+[data-component-part="step-content"] {
+  font-size: 17px;
+  line-height: 1.65;
+}
+
+#navbar div[class*="bg-gray-50"] {
+  background: var(--paper-2);
+}
+
+#pagination a {
+  border-radius: 2px;
+  border-color: var(--rule);
+}
+
+#pagination a:hover {
+  border-color: var(--ink);
+}
+
+#pagination a > div > div:first-child {
+  font-family: var(--label);
+  font-weight: 600;
+  font-size: 1.1rem;
+  color: var(--ink);
+}
+
+/* Installation's "What you need": a parts list with item numbers. */
+.parts-list ul {
+  list-style: none;
+  padding-left: 0;
+  counter-reset: part;
+  border-top: 1px solid var(--ink);
+}
+
+.parts-list li {
+  counter-increment: part;
+  position: relative;
+  margin: 0;
+  padding: 0.6rem 0 0.6rem 2.5rem;
+  border-bottom: 1px solid var(--rule);
+}
+
+.parts-list li::before {
+  content: counter(part);
+  position: absolute;
+  top: 0.6rem;
+  left: 0.25rem;
+  width: auto;
+  height: auto;
+  border-radius: 0;
+  background: none;
+  font-family: var(--label);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}

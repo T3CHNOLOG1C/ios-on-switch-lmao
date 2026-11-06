@@ -1,0 +1,139 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-05T00:00:00Z",
+  "title": "Design System: ios-on-switch-lmao",
+  "extensions": {
+    "colorMeta": {
+      "kapton-amber": {
+        "role": "primary",
+        "displayName": "Kapton amber"
+      },
+      "amber-ink": {
+        "role": "primary",
+        "displayName": "Amber ink"
+      },
+      "paper": {
+        "role": "neutral",
+        "displayName": "Paper"
+      },
+      "paper-2": {
+        "role": "neutral",
+        "displayName": "Paper 2"
+      },
+      "ink": {
+        "role": "neutral",
+        "displayName": "Ink"
+      },
+      "body": {
+        "role": "neutral",
+        "displayName": "Body"
+      },
+      "ink-2": {
+        "role": "neutral",
+        "displayName": "Ink 2"
+      },
+      "rule": {
+        "role": "neutral",
+        "displayName": "Rule"
+      }
+    },
+    "typographyMeta": {
+      "title": {
+        "displayName": "Title",
+        "purpose": "Page titles."
+      },
+      "heading": {
+        "displayName": "Heading",
+        "purpose": "h2 section openers, ruled above."
+      },
+      "subheading": {
+        "displayName": "Subheading",
+        "purpose": "h3, step titles, contents titles."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Running text."
+      }
+    },
+    "shadows": [],
+    "motion": [],
+    "breakpoints": [
+      {
+        "name": "single-column",
+        "value": "640px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Step balloon",
+      "kind": "custom",
+      "refersTo": "step-balloon",
+      "description": "Numbered callout balloon on a leader line, for install steps.",
+      "html": "<div class=\"ds-step\"><span class=\"ds-step-n\">1</span><span class=\"ds-step-t\">Make a partition for iOS in hekate</span></div>",
+      "css": ".ds-step { display: flex; align-items: center; gap: 12px; font-family: 'Barlow Semi Condensed', sans-serif; } .ds-step-n { width: 2rem; height: 2rem; border-radius: 50%; background: #F0A21E; color: #16181B; display: flex; align-items: center; justify-content: center; font-weight: 600; font-variant-numeric: tabular-nums; } .ds-step-t { font-size: 1.3rem; font-weight: 600; color: #16181B; }"
+    },
+    {
+      "name": "Warning plate",
+      "kind": "custom",
+      "refersTo": "warning-plate",
+      "description": "The one callout that frames itself in ink with the amber band.",
+      "html": "<div class=\"ds-warn\">Nobody can help you if this goes wrong.</div>",
+      "css": ".ds-warn { border: 1px solid #16181B; border-radius: 2px; background: #FFFFFF; box-shadow: inset 0 5px 0 #F0A21E; padding: 22px 20px 16px; color: #16181B; font-family: Barlow, sans-serif; }"
+    },
+    {
+      "name": "Active nav tab",
+      "kind": "nav",
+      "refersTo": "nav-tab-active",
+      "description": "The sidebar's current page as a printed thumb tab.",
+      "html": "<nav class=\"ds-nav\"><a class=\"ds-nav-a\" href=\"#\">iPadOS on the Switch OLED</a><a class=\"ds-nav-a ds-on\" href=\"#\">Installation</a></nav>",
+      "css": ".ds-nav { display: flex; flex-direction: column; font-family: Barlow, sans-serif; } .ds-nav-a { padding: 6px 16px; color: #4A4F57; text-decoration: none; border-radius: 2px; } .ds-nav-a:hover { background: #F5F5F2; } .ds-nav-a:focus-visible { outline: 2px solid #F0A21E; outline-offset: 2px; } .ds-on { background: #F0A21E; color: #16181B; font-weight: 600; }"
+    },
+    {
+      "name": "Contents row",
+      "kind": "custom",
+      "description": "One page in the index contents list, a dotted leader from title to description.",
+      "html": "<a class=\"ds-row\" href=\"#\"><span>Installation</span><span>What you need, and every step from an empty partition to the Home Screen.</span></a>",
+      "css": ".ds-row { display: grid; grid-template-columns: 15rem 1fr; gap: 12px; padding: 16px 4px; border-bottom: 1px solid #DCDDD9; color: #4A4F57; text-decoration: none; font-family: Barlow, sans-serif; } .ds-row:hover { background: #F5F5F2; } .ds-row:focus-visible { outline: 2px solid #F0A21E; } .ds-row span:first-child { display: flex; align-items: baseline; font-family: 'Barlow Semi Condensed', sans-serif; font-weight: 600; font-size: 1.15rem; color: #16181B; } .ds-row span:first-child::after { content: ''; flex: 1; min-width: 1rem; margin-left: 8px; border-bottom: 1px dotted #4A4F57; }"
+    },
+    {
+      "name": "Inline link",
+      "kind": "custom",
+      "description": "Ink text with a 1px ink 2 underline; amber is never a text colour.",
+      "html": "<p class=\"ds-p\">A Switch OLED that already boots <a class=\"ds-link\" href=\"#\">hekate</a>.</p>",
+      "css": ".ds-p { font-family: Barlow, sans-serif; font-size: 17px; color: #33373D; } .ds-link { color: #16181B; font-weight: 600; text-decoration: underline 1px #4A4F57; text-underline-offset: 0.2em; } .ds-link:hover { background: #F5F5F2; text-decoration-color: #16181B; } .ds-link:focus-visible { outline: 2px solid #F0A21E; outline-offset: 2px; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The service manual",
+    "overview": "The docs read like the console's own repair guide: numbered callout balloons down the install steps, parts lists for tables, a framed warning plate, and a running head with a strip of Kapton tape under it. Kapton is the amber tape used in modchip installs, which is how a Switch OLED gets to hekate in the first place.\n\nThe frame carries the world and the reading column stays calm. Mintlify draws the navigation, search and components; docs.json sets the fonts and colours, and docs/style.css restyles the rest.",
+    "keyCharacteristics": [
+      "Paper and ink with one amber, used as a fill and never as text on paper.",
+      "Condensed titles and labels over a plain reading face.",
+      "Square 2px corners and 1px rules. No shadows."
+    ],
+    "rules": [
+      {
+        "name": "The Tape Rule",
+        "body": "Amber marks where the reader is or what to watch: the current page, the current step, the warning. It never colours text, links or status marks, and code has no syntax hues: nothing else gets a hue.",
+        "section": "colors"
+      },
+      {
+        "name": "The Mark-Not-Hue Rule",
+        "body": "A status is a drawn mark beside a word: a filled ink square for what works, an open ink square for what doesn't yet.",
+        "section": "colors"
+      }
+    ],
+    "dos": [
+      "**Do** keep amber to the current page, the current step, the warning and the mark.",
+      "**Do** set links in ink with a 1px ink 2 underline, offset 0.2em.",
+      "**Do** put a drawn mark next to a status word.",
+      "**Do** keep `.github/logo.svg` to one `<rect>` and one `<path>` with no transform, or boot/logo can't read it."
+    ],
+    "donts": [
+      "**Don't** set amber text on paper: it's 2.1:1.",
+      "**Don't** add drop shadows or radii above 2px on plates.",
+      "**Don't** use Apple's or Nintendo's marks as the project's. The Apple boot logo belongs to the boot path, not this system."
+    ]
+  }
+}
