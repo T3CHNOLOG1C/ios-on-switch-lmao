@@ -126,14 +126,15 @@ progressive, lossless, hierarchical, arithmetic, JPEG-LS, 12-bit, 16-bit tables,
 RGB, 4:1:1, chroma above 1x1, grey above 1x1, non-interleaved or multiple scans, DNL, sizes above 16384, undefined or
 corrupt tables; destination formats other than the four (420v, 422f, 444f, yuvf, ...); a decode size that is not the
 file's / 2^n; anything J3 did not prove; strides not a multiple of 64; plane starts not on 256 bytes; MCU padding that
-would run into another plane or past the destination's 1 MiB sink (§7). The destination's pixel format is checked
-before anything is copied (under the interchange formats CMPhoto also asks for 422f, 444f and yuvf).; a destination above 255 MiB or a scan above
-64 MiB (the SMMU windows); sel 5 crop rectangles. Refused as **kIOReturnBadArgument**: unknown surface IDs, a request
-whose size, subsampling or offsets contradict the file or the destination, Apple's own bounds (dst size < 7, widths
-< 4, heights < 2, offsets ≥ 0x2000), protected destinations. A protected source is **kIOReturnNotPermitted**
-(Apple's 0xe00002e2). TegraNVJPG never returns kIOReturnNotAligned (a wiring failure that says so becomes Unsupported or
-IOError): CMPhoto answers that one by copying the bitstream and retrying (0x1aaee0038), and TegraNVJPG copies it anyway. A decode the engine reports in error
-(status error, or no bytes consumed) is **kIOReturnIOError**, also a per-image fallback.
+would run into another plane or past the destination's 1 MiB sink (§7). The destination's pixel format is checked before
+anything is copied (under the interchange formats CMPhoto also asks for 422f, 444f and yuvf).; a destination above 255
+MiB or a scan above 64 MiB (the SMMU windows); sel 5 crop rectangles. Refused as **kIOReturnBadArgument**: unknown
+surface IDs, a request whose size, subsampling or offsets contradict the file or the destination, Apple's own bounds
+(dst size < 7, widths < 4, heights < 2, offsets ≥ 0x2000), protected destinations. A protected source is
+**kIOReturnNotPermitted** (Apple's 0xe00002e2). TegraNVJPG never returns kIOReturnNotAligned (a wiring failure that says
+so becomes Unsupported or IOError): CMPhoto answers that one by copying the bitstream and retrying (0x1aaee0038), and
+TegraNVJPG copies it anyway. A decode the engine reports in error (status error, or no bytes consumed) is
+**kIOReturnIOError**, also a per-image fallback.
 
 ## 5. Who reaches the hardware [V unless marked]
 

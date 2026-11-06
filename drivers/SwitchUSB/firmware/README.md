@@ -3,7 +3,7 @@
 The Tegra X1 (T210B01, "Mariko") XUSB host controller's falcon firmware, loaded by `XusbHost.cpp`
 (`Controller::loadFirmware`, after Linux `tegra_xhci_load_firmware`) and embedded by `../firmware.S`.
 
-- Source: https://github.com/TheMuppets/proprietary_vendor_nvidia, branch `lineage-19.1`,
+- Source: <https://github.com/TheMuppets/proprietary_vendor_nvidia>, branch `lineage-19.1`,
   path `t210/firmware/xusb/tegra210b01_xusb_firmware` (the LineageOS NVIDIA vendor tree that switchroot's Android
   builds use; it is not in any gitlab.com/switchroot repository: nx-firmware, proprietary_vendor_* and l4t-* were
   searched).

@@ -21,6 +21,7 @@ any shared events and, when flag 0x400 is set, copies with Metal) **[V]**.
 ## 2. Opening it [V]
 
 `IOSurfaceAcceleratorCreate(alloc, options, &accel)`:
+
 - `IOServiceGetMatchingService(IOServiceMatching("AppleM2ScalerCSCDriver"))` ("AppleSRSDriver" only if the options
   have "Sharpener"); none → 0xe00002c0.
 - `IOServiceOpen(service, mach_task_self(), type 0, &connect)`; Apple's `newUserClient` ignores the type and checks no
@@ -182,7 +183,6 @@ are generated in its encoding (`tegra_vic_matrix_*`) and checked on the host aga
   and matrix, slot 0 config, surface and matrix), its methods and the falcon's state ("TegraVIC: diag ..."). The 420f
   -> 420f pass-through is checked too, as a trait (`yccIn`): not proven, such jobs are refused (callers fall back);
   not a gate.
-
 - **Shared events** are refused. If Core Animation sends them on the clone path, each frame's transform fails with
   kIOReturnUnsupported (no crash; CA force-completes the events). The device log says so once ("transform refused
   ... shared events"). Supporting them needs the IOSurface kext's IOSurfaceSharedEvent lookup/listener/signal

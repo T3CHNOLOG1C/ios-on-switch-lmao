@@ -2,7 +2,7 @@
 
 Everything that runs between hekate and XNU: the hekate entry, U-Boot's half of the handoff, and the native loader.
 
-```
+```text
 bazel build //:boot                    # debug
 bazel build //:boot --config=release   # release
 ```
@@ -75,7 +75,7 @@ Both builds' own line is `-apfs_shared_datavolume`: Apple's AppleKeyStore reads 
 
 `-v` shows the text console instead of the Apple logo, in debug builds only. For a debug boot with the console:
 
-```
+```text
 # switchroot/ios/bootargs.txt
 -v
 ```

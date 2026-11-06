@@ -144,6 +144,7 @@ reading. Consequences to know: TS0A "Ambient" reads high (it is J120's formula o
 watches the hottest of cpu0-3, gpu, pllx and the SoC diode.
 
 How each is read, on thermalmonitord's own 5 s cadence (it calls in; no timer of ours):
+
 - **SOC_THERM** (`SwitchSensors.cpp`): brought up once, as L4T `soctherm.c` for `nvidia,tegra210b01-soctherm`:
   fuse clock visible; per-sensor calibration from FUSE_TSENSOR_COMMON (0x180) and each sensor's calibration fuse
   (`tsensor-fuse.c`, T210B01 config tall 16300, tsample 240, pdiv 12, pdiv_ate 6, tsample_ate 480; alpha/beta from
@@ -165,18 +166,19 @@ is substituted.
 
 - **[V] CPU**: `-[MitigationController updateCPU]` (no power zones on J120AP) writes four DVD factor contributors on
   **`IOServiceMatching("ApplePMGR")`** with `IORegistryEntrySetCFProperty`:
-  `AppleARMPerformanceControllerDVDFactor1-slowloop`, `-hip`, `-upo`, `-lpm`, each `value < 100 ? value * 65536 /
-  100 : 0x10000` (a 16.16 share; `cpuComponentControl` maps max load index to DVD factor: 2->0 ... 37->35 ...
-  100->100). It also looks for `AppleCLPC` (absent: `Could not find CLPC service`). Here `ApplePMGR` is
-  ShengPlatformPower (a subclass of the original; it grants thermalmonitord its property writes with
+  `AppleARMPerformanceControllerDVDFactor1-slowloop`, `-hip`, `-upo`, `-lpm`, each
+  `value < 100 ? value * 65536 / 100 : 0x10000` (a 16.16 share; `cpuComponentControl` maps max load index to DVD factor:
+  2->0 ... 37->35 ... 100->100). It also looks for `AppleCLPC` (absent: `Could not find CLPC service`). Here `ApplePMGR`
+  is ShengPlatformPower (a subclass of the original; it grants thermalmonitord its property writes with
   NativeSandboxGrantProcess, since the sandbox profiles name only original classes); its new `setProperties` takes the
-  four keys (and publishes them), and the lowest becomes **`switch_perf_cltm_ceiling()`**: the CPU governor's highest point is also
-  at or below that share of 1785 MHz (`switch_gov_index_at_fraction`), together with the DFLL's thermal cap, at once
-  and also across governor restarts. **[I]** That a DVD factor is a share of the top clock is our reading (CLPC's
-  side is not in 21H461's userspace); the keys, scaling and target service are **[V]**. One os_log line per change. In PLL or fixed-DFLL mode the ceiling has no
-  effect (the line says so): that includes main's current default (c1e0a4b, r7z: the DFLL fixed at 1785 MHz with the
-  governor off while r7y's slowdown is bisected). Once the governor is the default again, CLTM's cap applies with no
-  further change; until then the CPU's thermal protection is SwitchThermal's DFLL voltage cap (64/84 C) alone.
+  four keys (and publishes them), and the lowest becomes **`switch_perf_cltm_ceiling()`**: the CPU governor's highest
+  point is also at or below that share of 1785 MHz (`switch_gov_index_at_fraction`), together with the DFLL's thermal
+  cap, at once and also across governor restarts. **[I]** That a DVD factor is a share of the top clock is our reading
+  (CLPC's side is not in 21H461's userspace); the keys, scaling and target service are **[V]**. One os_log line per
+  change. In PLL or fixed-DFLL mode the ceiling has no effect (the line says so): that includes main's current default
+  (c1e0a4b, r7z: the DFLL fixed at 1785 MHz with the governor off while r7y's slowdown is bisected). Once the governor
+  is the default again, CLTM's cap applies with no further change; until then the CPU's thermal protection is
+  SwitchThermal's DFLL voltage cap (64/84 C) alone.
 - **[V] GPU**: `-[MitigationController updateGPU]` writes `GPUMaxPower` (percent) on
   **`IOServiceMatching("AppleDieTempController")`**, which does not exist here (`Cannot find AppleDieTempController
   service`), so GPU caps reach nothing yet. Next step (needs r15-dvfs's GPU governor on main, and a decision on
@@ -221,10 +223,10 @@ r15.tar --age-limit 600`, then `/usr/bin/log show --archive <dir>.logarchive --s
 
 1. Kernel: `SwitchSensors: SOC_THERM up (fuse common ...; CONFIG2 ...)` and no `SwitchSensors: ... off` /
    `SwitchHID: temperature ...` line.
-2. Kernel: `SwitchSensors: 38 of 38 HID sensors hooked (P by the publish notification, Q once matching was quiet)`,
-   then `SwitchSensors: thermalmonitord's 38 sensors answer (it has read all 21 it reads): CPU a b c d, GPU e, PLLX f,
-   SoC diode g, PCB h, battery i C` with plausible values (CPU/GPU/PLLX within a few degrees of the SoC diode at idle, PCB below them,
-   battery near room temperature), and **no** `userspace watchdog off for this boot`.
+2. Kernel: `SwitchSensors: 38 of 38 HID sensors hooked (P by the publish notification, Q once matching was quiet)`, then
+   `SwitchSensors: thermalmonitord's 38 sensors answer (it has read all 21 it reads): CPU a b c d, GPU e, PLLX f, SoC diode g, PCB h, battery i C`
+   with plausible values (CPU/GPU/PLLX within a few degrees of the SoC diode at idle, PCB below them, battery near room
+   temperature), and **no** `userspace watchdog off for this boot`.
 3. Kernel: `SwitchWatchdog: watchdogd connected; userspace watchdog armed`.
 4. thermalmonitord: no `no HID services (5)`, no `found error sensor result`, no `partial sensors`, no
    `Could not get event from service`.

@@ -221,11 +221,11 @@ What a bootable 26.5.2 still needs (in order):
 
 1. **Kernel**: xnu-12377.121.6 + UniXNU's `patches/xnu-12377` series as in its arm64e profile minus
    `native-pac-keys.patch`, `arm64e-threaded-starts.patch`, `native-arm-pan.patch` (A57 has no PAC, no PAN), built
-   **arm64** for `MACHINE_CONFIGS=BCM2837` with `a64x` enabled + the ios-on-switch-lmao board/driver changes. The ios-on-switch-lmao
-   XNU diff (`tree/patches/xnu-switch.diff`, against xnu-10063.141.1) has to be ported to 12377 hunk by hunk
-   (raw SD mount, SwitchRawMount/cryptex binding, ArmCpu SMP fixes, interrupt plumbing, display hooks...).
-   UniXNU-sheng's iPadOS 27 bring-up patch shows the 12377-era equivalents (bindfs/vm_unix cryptex paths,
-   shared-region 4K slide, posix_spawnattr layout).
+   **arm64** for `MACHINE_CONFIGS=BCM2837` with `a64x` enabled + the ios-on-switch-lmao board/driver changes. The
+   ios-on-switch-lmao XNU diff (`tree/patches/xnu-switch.diff`, against xnu-10063.141.1) has to be ported to 12377 hunk
+   by hunk (raw SD mount, SwitchRawMount/cryptex binding, ArmCpu SMP fixes, interrupt plumbing, display hooks...).
+   UniXNU-sheng's iPadOS 27 bring-up patch shows the 12377-era equivalents (bindfs/vm_unix cryptex paths, shared-region
+   4K slide, posix_spawnattr layout).
 2. **Kexts**: the 26.5.2 kernelcache is an arm64e MH_FILESET (240 kexts). UniXNU's 26.5.2 profile lists the prelink
    roots (apfs, AMFI, sandbox, IOSurface, IOGPUFamily, IOHIDFamily, corecrypto, ...). Our kernel is arm64, the kexts
    arm64e: their text must be translated **at prelink time** (host side: same a64x rewrite in kernel mode; PAC
@@ -236,8 +236,8 @@ What a bootable 26.5.2 still needs (in order):
    itself, which we replace; LDOP 8.3k), LDAPR 1k, FP16 15. APFS: 336k words, 1,472 LDOP, 16 CAS, 3 LDAPR;
    AMFI 2 CAS; sandbox 51 LDOP + 4 CAS + 1 SWP; IOSurface 9 + 6; corecrypto has SHA3/SVE paths behind its CPU checks.
    Here the layout is ours (the prelinker places each kext), so every LSE site gets an adjacent stub: no planner.
-3. **Drivers**: every ios-on-switch-lmao IOKit driver (SD, GIC, display, GPU, touch, buttons, audio, Wi-Fi, BT, power) rebuilt
-   against the 12377 KPIs; the m2v/NVK Metal plugin rebuilt for the iOS 26 SDK (its shader cache keys change).
+3. **Drivers**: every ios-on-switch-lmao IOKit driver (SD, GIC, display, GPU, touch, buttons, audio, Wi-Fi, BT, power)
+   rebuilt against the 12377 KPIs; the m2v/NVK Metal plugin rebuilt for the iOS 26 SDK (its shader cache keys change).
 4. **Identity**: ADT as J171aAP/iPad11,6 (or keep the iPad7,1-style generic iPad identity with the 26 product keys);
    delete the MobileGestalt cache on Data after the identity change (springboard-blockers note).
 5. **Image**: OS volume (094-56745-108.dmg.aea, 7.18 GB encrypted), SystemOS and AppOS cryptexes and their
@@ -583,27 +583,27 @@ was changed.
 
 ### 11.1 Port
 
-Regenerated the diff from the XNU working repo (read only): `git diff d8b8029..ios-on-switch-lmao` at 3515591 (home grid pager
-included) -> `port/xnu-switch-3515591.diff`, 120 files / 336 hunks. 3-way merge per file (base 10063, ours =
-12377+UniXNU+a64x, theirs = ios-on-switch-lmao), conflicts resolved by region with a reason each; record, per-hunk table and
-the one-line reasons for every place ours was kept: `kernel/switch-12377-port-plan.md`, `port/hunks.md`,
-`port/conflict-decisions.json`. Hunks: applied 212 (+2 with a 12377 API change), kept ours 77 (26 as is, 23
-hand-merged, 15 relocated into 12377's code, 10 ported by hand, 3 next to 12377's), already in 12377/UniXNU 24,
-took UniXNU/12377's equivalent 12, dropped 9 (PGZ x3, I/O submap, RPi timer routing, uat_bootstrap guard, 3 DriverKit
-headers). Home grid (3515591) chained onto the a64x cache pager: the apple_protect pager backs onto the a64x pager's
-object when the text is translated, onto the file otherwise. ios-on-switch-lmao's own code (299 build steps: drivers,
-diagnostics, kits, 11 archives) is built against the 12377 headers by `port/ext_build.py` from the main CMake
-build's commands (read only), with recipes regenerated from the 12377 build's compile records.
+Regenerated the diff from the XNU working repo (read only): `git diff d8b8029..ios-on-switch-lmao` at 3515591 (home grid
+pager included) -> `port/xnu-switch-3515591.diff`, 120 files / 336 hunks. 3-way merge per file (base 10063, ours =
+12377+UniXNU+a64x, theirs = ios-on-switch-lmao), conflicts resolved by region with a reason each; record, per-hunk table
+and the one-line reasons for every place ours was kept: `kernel/switch-12377-port-plan.md`, `port/hunks.md`,
+`port/conflict-decisions.json`. Hunks: applied 212 (+2 with a 12377 API change), kept ours 77 (26 as is, 23 hand-merged,
+15 relocated into 12377's code, 10 ported by hand, 3 next to 12377's), already in 12377/UniXNU 24, took UniXNU/12377's
+equivalent 12, dropped 9 (PGZ x3, I/O submap, RPi timer routing, uat_bootstrap guard, 3 DriverKit headers). Home grid
+(3515591) chained onto the a64x cache pager: the apple_protect pager backs onto the a64x pager's object when the text is
+translated, onto the file otherwise. ios-on-switch-lmao's own code (299 build steps: drivers, diagnostics, kits, 11
+archives) is built against the 12377 headers by `port/ext_build.py` from the main CMake build's commands (read only),
+with recipes regenerated from the 12377 build's compile records.
 
 ### 11.2 The kernel links (measured)
 
-`build/xnu-port/obj/DEVELOPMENT_ARM64_BCM2837/mach.development.bcm2837(.unstripped)` (copied to
-`out/xnu-12377-port/`): Mach-O arm64 subtype ALL, NOUNDEFS, 0 undefined symbols, Darwin 25.5.0, 26,703,160 bytes
-unstripped (sha256 5ead9776...71cac), 22,163,120 stripped (e336fc76...a4da). Same 15 link inputs as the main 10063
-kernel. Symbols: of the 614 main-kernel symbols the ios-on-switch-lmao diff defines or touches, 602 are present; the 12 absent
-are PGZ (4, gone in 12377), `vm_map_set_page_shift` (12377 passes the shift to `vm_map_create_with_page_shift`; same
-4K rule), `proc_ref_tracking_disabled` (TUNABLE replaced by a constant, same behaviour), 3 now-static VM counters and
-3 inline queue helpers. 115 a64x symbols. Full XNU rebuild: 38.6 s wall; ios-on-switch-lmao's archives: 7.6 s.
+`build/xnu-port/obj/DEVELOPMENT_ARM64_BCM2837/mach.development.bcm2837(.unstripped)` (copied to `out/xnu-12377-port/`):
+Mach-O arm64 subtype ALL, NOUNDEFS, 0 undefined symbols, Darwin 25.5.0, 26,703,160 bytes unstripped (sha256
+5ead9776...71cac), 22,163,120 stripped (e336fc76...a4da). Same 15 link inputs as the main 10063 kernel. Symbols: of the
+614 main-kernel symbols the ios-on-switch-lmao diff defines or touches, 602 are present; the 12 absent are PGZ (4, gone
+in 12377), `vm_map_set_page_shift` (12377 passes the shift to `vm_map_create_with_page_shift`; same 4K rule),
+`proc_ref_tracking_disabled` (TUNABLE replaced by a constant, same behaviour), 3 now-static VM counters and 3 inline
+queue helpers. 115 a64x symbols. Full XNU rebuild: 38.6 s wall; ios-on-switch-lmao's archives: 7.6 s.
 
 ### 11.3 The A57 pin (bug found and fixed; also affects 10.1)
 
@@ -615,8 +615,9 @@ at 17.0 and never needed it. Round 4's 12377 kernel (10.1) had the same flags an
 SFLAGS has no CFLAGS_EXTRA), and the `iokit_cxx_generic` recipe keeps `-mcpu` (main's Drivers.cmake drops it: harmless
 at 17.0, wrong at 26+). After: the classifier finds 40 non-v8.0 words in the port kernel,
 **the same 40 at the same symbols as the main 10063 kernel** (K256 and lz4 tables, data after exception vectors, guarded
-Apple-impdef sysregs in awl_* and `_switch_secondary_entry`): `port/verify/flagged-{port,main}.txt`. ios-on-switch-lmao's 302
-objects: 0. When the main tree or the Bazel build moves to 12377, both changes have to go with it.
+Apple-impdef sysregs in awl_* and `_switch_secondary_entry`): `port/verify/flagged-{port,main}.txt`.
+ios-on-switch-lmao's 302 objects: 0. When the main tree or the Bazel build moves to 12377, both changes have to go with
+it.
 
 ### 11.4 Not verified
 
