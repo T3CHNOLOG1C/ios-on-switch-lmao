@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Merge device journals (the frontend's pipelines.log: S lines, one per function specialization, R lines, one per render pipeline
-state, and C lines, one per compute pipeline state) into the precompile corpus: each made once, by any process, in the order first
-seen, without the times, threads, costs and callers. The corpus keeps what it had; new journals only add. Each function names its
-library (lib=: the file's path, or data:<SHA-256> of a library made from bytes); a line from before the journal named libraries
-has none, and precompile/libraries.py guesses it by the function's name.
+state, C lines, one per compute pipeline state, and D lines, one per dispatch shape a compute state took) into the precompile
+corpus: each made once, by any process, in the order first seen, without the times, threads, costs and callers. The corpus keeps
+what it had; new journals only add. Each function names its library (lib=: the file's path, or data:<SHA-256> of a library made
+from bytes); a line from before the journal named libraries has none, and precompile/libraries.py guesses it by the function's
+name.
 
 usage: harvest.py <corpus.log> <pipelines.log>...    e.g. harvest.py corpus.log <state>/device-logs/*/m2v-cache/pipelines.log
        harvest.py <corpus.log> --volume <mounted Data volume> [--save <dir>] [--open <container UUID>]... [--open-all]
@@ -81,6 +82,8 @@ def normal(line):
         label = next((t for t in head if t.startswith('label=')), None)
         fields, stages = ' '.join(t for t in head if COMPUTE.match(t)), ' | '.join(stages)
         return 'C ok=1 %s%s | %s | ' % (fields, ' ' + label if label else '', stages), fields + ' | ' + stages
+    if line.startswith('D '):
+        return line.rstrip(), line.rstrip()
     if line.startswith('R '):
         v = line.find(' | v ')
         f = line.find(' | f ', v)
@@ -177,8 +180,9 @@ def merge(corpus, sources):
                 added += 1
         print('%s: %d new' % (name, added))
     corpus.write_text('\n'.join(lines) + '\n')
-    print('%s: %d specializations, %d render states, %d compute states' %
-          (corpus, sum(l[0] == 'S' for l in lines), sum(l[0] == 'R' for l in lines), sum(l[0] == 'C' for l in lines)))
+    print('%s: %d specializations, %d render states, %d compute states, %d dispatch shapes' %
+          (corpus, sum(l[0] == 'S' for l in lines), sum(l[0] == 'R' for l in lines), sum(l[0] == 'C' for l in lines),
+           sum(l[0] == 'D' for l in lines)))
     return lines
 
 

@@ -12,6 +12,7 @@
 #import <IOSurface/IOSurfaceRef.h>
 #import <objc/runtime.h>
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <mutex>
 #include <pthread.h>
@@ -1427,13 +1428,39 @@ static NSData *functionBitcode(NBFunction *function)
     });
     return bitcode;
 }
+// A dispatch's threadgroup size (and, for dispatchThreads, the grid's remainder) picks the VkPipeline it runs: the local size is
+// a specialization. The first dispatch of each such shape a state takes is journaled as a D line naming the state as its C line
+// does, so the shader seed can make those pipelines ahead of time too.
 @interface NBComputePipeline : NBObject
 @property (nonatomic) NmbComputePipeline *handle;
+@property (nonatomic) std::string journalState;
+- (void)journalDispatch:(MTLSize)grid group:(MTLSize)group threads:(bool)threads;
 @end
-@implementation NBComputePipeline
+@implementation NBComputePipeline {
+    std::mutex _dispatchLock;
+    std::vector<std::array<uint32_t, 7>> _dispatched;
+}
 - (void)dealloc
 {
     nmb_compute_pipeline_release(_handle);
+}
+- (void)journalDispatch:(MTLSize)grid group:(MTLSize)group threads:(bool)threads
+{
+    if (_journalState.empty()) return;
+    const uint32_t g[3] = {(uint32_t)group.width, (uint32_t)group.height, (uint32_t)group.depth};
+    const uint64_t n[3] = {grid.width, grid.height, grid.depth};
+    std::array<uint32_t, 7> shape = {g[0], g[1], g[2], 0, 0, 0, threads};
+    for (int i = 0; threads && i < 3; i++) shape[3 + i] = g[i] ? (uint32_t)(n[i] % g[i]) : 0;
+    {
+        std::lock_guard<std::mutex> hold(_dispatchLock);
+        if (_dispatched.size() >= 16 || std::find(_dispatched.begin(), _dispatched.end(), shape) != _dispatched.end())
+            return;
+        _dispatched.push_back(shape);
+    }
+    char head[128];
+    snprintf(head, sizeof head, "D ok=1 tg=%u,%u,%u edge=%u,%u,%u threads=%u | ", shape[0], shape[1], shape[2], shape[3],
+             shape[4], shape[5], shape[6]);
+    journal(head + _journalState);
 }
 - (NSUInteger)maxTotalThreadsPerThreadgroup
 {
@@ -1946,6 +1973,7 @@ static void waitForResource(id resource)
 
 @interface NBComputeEncoder : NBEncoder
 @property (nonatomic) MTLDispatchType kind;
+@property (nonatomic, strong) NBComputePipeline *state;
 @end
 @implementation NBComputeEncoder
 - (MTLDispatchType)dispatchType
@@ -1961,6 +1989,7 @@ static void waitForResource(id resource)
     }
     [self check:nmb_compute_set_pipeline(self.handle, [(NBComputePipeline *)state handle])
            what:"setComputePipelineState"];
+    self.state = (NBComputePipeline *)state;
 }
 - (void)setBuffer:(id<MTLBuffer>)b offset:(NSUInteger)o atIndex:(NSUInteger)i
 {
@@ -2002,6 +2031,7 @@ static void waitForResource(id resource)
     self.commandBuffer->encodedWork.dispatches++;
     const uint64_t s[3] = {size.width, size.height, size.depth}, g[3] = {group.width, group.height, group.depth};
     [self check:nmb_compute_dispatch(self.handle, s, g, threads) what:"dispatch"];
+    if (!gJournalPath.empty()) [self.state journalDispatch:size group:group threads:threads];
 }
 - (void)dispatchThreads:(MTLSize)t threadsPerThreadgroup:(MTLSize)g
 {
@@ -2026,6 +2056,7 @@ static void waitForResource(id resource)
     const uint64_t per[3] = {g.width, g.height, g.depth};
     [self check:nmb_compute_dispatch_indirect(self.handle, [(NBBuffer *)b handle], o, per)
            what:"dispatchThreadgroupsWithIndirectBuffer"];
+    if (!gJournalPath.empty()) [self.state journalDispatch:MTLSizeMake(0, 0, 0) group:g threads:false];
 }
 // SPI (MTLDispatchThreadsIndirectArguments: the grid, then the threadgroup).
 - (void)dispatchThreadsWithIndirectBuffer:(id<MTLBuffer>)b indirectBufferOffset:(NSUInteger)o
@@ -3676,15 +3707,14 @@ static void journalRenderPipeline(MTLRenderPipelineDescriptor *d, MTLPipelineOpt
 // One journal line of a compute pipeline creation begun at `began`, `refused` its refusal or null: made from the function `f` alone
 // (form=f) or from the descriptor `d` (form=d: its fields, the kernel as k, its visible linked functions as l and private ones as
 // p), with `options`; the host makes it again the same way (precompile.mm).
-static void journalComputePipeline(MTLComputePipelineDescriptor *d, NBFunction *f, MTLPipelineOption options,
-                                   uint64_t began, const char *refused)
+// Returns what made the state as the C line names it ("form=... | k ... | "), which its D lines repeat; "" when not journaled.
+static std::string journalComputePipeline(MTLComputePipelineDescriptor *d, NBFunction *f, MTLPipelineOption options,
+                                          uint64_t began, const char *refused)
 {
-    if (gJournalPath.empty()) return;
+    if (gJournalPath.empty()) return std::string();
     char head[256];
-    snprintf(head, sizeof head, "C t=%llu us=%llu ok=%d form=%s opt=%llu",
-             (unsigned long long)((began - gJournalBegan) / 1000), (unsigned long long)(nowUs() - began),
-             refused ? 0 : 1, d ? "d" : "f", (unsigned long long)options);
-    std::string line = head;
+    snprintf(head, sizeof head, "form=%s opt=%llu", d ? "d" : "f", (unsigned long long)options);
+    std::string state = head;
     if (d) {
         char mutability[32] = {};
         for (unsigned i = 0; i < 31; i++) mutability[i] = (char)('0' + (d.buffers[i].mutability & 7));
@@ -3692,20 +3722,26 @@ static void journalComputePipeline(MTLComputePipelineDescriptor *d, NBFunction *
                  (unsigned long)d.maxTotalThreadsPerThreadgroup, (int)d.threadGroupSizeIsMultipleOfThreadExecutionWidth,
                  (int)d.supportIndirectCommandBuffers, (unsigned long)d.maxCallStackDepth,
                  (int)d.supportAddingBinaryFunctions, mutability);
-        line += head;
-        line += " label=" + journalToken(d.label.UTF8String);
+        state += head;
+        state += " label=" + journalToken(d.label.UTF8String);
         f = (NBFunction *)d.computeFunction;
     }
-    line += " | k " + stageText(f);
+    state += " | k " + stageText(f);
     for (id l in d.linkedFunctions.functions)
-        line += " | l " + stageText([l isKindOfClass:[NBFunction class]] ? (NBFunction *)l : nil);
+        state += " | l " + stageText([l isKindOfClass:[NBFunction class]] ? (NBFunction *)l : nil);
     for (id l in d.linkedFunctions.privateFunctions)
-        line += " | p " + stageText([l isKindOfClass:[NBFunction class]] ? (NBFunction *)l : nil);
+        state += " | p " + stageText([l isKindOfClass:[NBFunction class]] ? (NBFunction *)l : nil);
+    for (char &c : state)
+        if (c == '\n') c = ' ';
+    snprintf(head, sizeof head, "C t=%llu us=%llu ok=%d ", (unsigned long long)((began - gJournalBegan) / 1000),
+             (unsigned long long)(nowUs() - began), refused ? 0 : 1);
+    std::string line = head + state;
     if (refused) line += std::string(" | refused ") + refused;
     line += " | " + quartzCoreCallers();
     for (char &c : line)
         if (c == '\n') c = ' ';
     journal(line);
+    return refused ? std::string() : state + " | ";
 }
 // A render pipeline descriptor in the bridge's form; false, with the error, for a function of another device.
 static bool renderDescriptor(MTLRenderPipelineDescriptor *d, NmbRenderPipelineDescriptor *p, NSError **error)
@@ -5158,10 +5194,12 @@ static void fillLimits(id) {}  // the host's _MTLDevice has its own layout
     NmbComputePipeline *handle =
         nmb_compute_pipeline_new_with_options(gDevice, [(NBFunction *)function handle], &creation);
     gTimePipeline.add(pipelineBegan);
-    journalComputePipeline(nil, (NBFunction *)function, options, pipelineBegan, handle ? nullptr : nmb_last_error());
+    std::string journaled =
+        journalComputePipeline(nil, (NBFunction *)function, options, pipelineBegan, handle ? nullptr : nmb_last_error());
     if (!handle) return failWith<id<MTLComputePipelineState>>(error, @"compute pipeline", nil);
     NBComputePipeline *state = [NBComputePipeline new];
     state.handle = handle;
+    state.journalState = journaled;
     gPipelines++;
     if (error) *error = nil;
     return (id<MTLComputePipelineState>)state;
@@ -5182,10 +5220,11 @@ static void fillLimits(id) {}  // the host's _MTLDevice has its own layout
     const uint64_t pipelineBegan = nowUs();
     NmbComputePipeline *handle = nmb_compute_pipeline_new_with_descriptor(gDevice, &p, &creation);
     gTimePipeline.add(pipelineBegan);
-    journalComputePipeline(d, nil, options, pipelineBegan, handle ? nullptr : nmb_last_error());
+    std::string journaled = journalComputePipeline(d, nil, options, pipelineBegan, handle ? nullptr : nmb_last_error());
     if (!handle) return failWith<id<MTLComputePipelineState>>(error, @"compute pipeline", nil);
     NBComputePipeline *state = [NBComputePipeline new];
     state.handle = handle;
+    state.journalState = journaled;
     state.label = d.label;
     gPipelines++;
     if (error) *error = nil;
