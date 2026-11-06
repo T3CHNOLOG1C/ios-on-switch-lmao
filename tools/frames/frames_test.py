@@ -18,7 +18,7 @@ class FramesTest(unittest.TestCase):
         got = frames.collect([KERNEL, USER])
         self.assertEqual(len(got), 1)
         frame = got[0]
-        stages = dict((name, us) for name, us, _ in frame.stages())
+        stages = {name: us for name, us, _ in frame.stages()}
         self.assertEqual(stages['vsync->first submit'], 4000)
         self.assertEqual(stages['offer->gpu done'], 24400)
         self.assertEqual(stages['flip->latch'], 18800)

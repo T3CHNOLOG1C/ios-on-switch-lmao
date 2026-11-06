@@ -63,8 +63,8 @@ class Frame:
     surfaces: dict = field(default_factory=dict)
     user: list = field(default_factory=list)
 
-    def stages(self):
-        """(name, microseconds, meaning) for each stage whose two ends were seen."""
+    def stages(self) -> list[tuple[str, int, str]]:
+        """Return (name, microseconds, meaning) for each stage whose two ends were seen."""
         out = []
         for name, start, end, meaning in STAGES:
             a = 0 if start == 'origin' else self.points[start]
@@ -74,8 +74,8 @@ class Frame:
         return out
 
 
-def parse_frame(m):
-    """A Frame from a SwitchFrame line's match."""
+def parse_frame(m: re.Match) -> Frame:
+    """Build a Frame from a SwitchFrame line's match."""
     g = m.groupdict()
     points = {k: int(g[k]) for k in ('first', 'last', 'swap', 'offer', 'done', 'flip', 'at_latch')}
     return Frame(
@@ -95,17 +95,17 @@ def parse_frame(m):
     )
 
 
-def parse_user(m):
-    """(process, command buffer, {field: (start ticks, end ticks)}) from a SwitchFrameUser line's match."""
+def parse_user(m: re.Match) -> tuple[str, int, dict[str, tuple[int, int]]]:
+    """Return (process, command buffer, {field: (start ticks, end ticks)}) from a SwitchFrameUser line."""
     spans = {}
     for name, a, b in USER_FIELD.findall(m.group('rest')):
         spans[name] = (int(a), int(b) if b else int(a))
     return m.group('proc'), int(m.group('cb')), spans
 
 
-def read_lines(path):
-    """The log's text: `log show` of a .logarchive, or a text file as is."""
-    if path.endswith('.logarchive') or path.endswith('.logarchive/'):
+def read_lines(path: str) -> list[str]:
+    """Return the log's lines: `log show` of a .logarchive, or a text file as is."""
+    if path.endswith(('.logarchive', '.logarchive/')):
         out = subprocess.run(
             [
                 '/usr/bin/log',
@@ -126,8 +126,8 @@ def read_lines(path):
         return f.read().splitlines()
 
 
-def collect(lines):
-    """The slow frames, each with the user lines of the commits that preceded its swap."""
+def collect(lines: list[str]) -> list[Frame]:
+    """Return the slow frames, each with the user lines of the commits that preceded its swap."""
     frames, users = [], defaultdict(list)
     for line in lines:
         m = FRAME.search(line)
@@ -153,11 +153,13 @@ def collect(lines):
     return frames
 
 
-def describe(frame):
-    """The lines printed for one slow frame."""
+def describe(frame: Frame) -> list[str]:
+    """Return the lines printed for one slow frame."""
     out = [
-        f'latch {frame.latch}: {frame.frames} frames ({frame.interval_us / 1000:.1f} ms), cause {frame.cause}, '
-        f'from {frame.origin_kind}'
+        (
+            f'latch {frame.latch}: {frame.frames} frames ({frame.interval_us / 1000:.1f} ms), cause {frame.cause}, '
+            f'from {frame.origin_kind}'
+        )
     ]
     worst = max(frame.stages(), key=lambda s: s[1], default=None)
     for name, us, meaning in frame.stages():
@@ -179,7 +181,7 @@ def describe(frame):
             f'cleaned {n["clean_kib"]} KiB in {n["clean_us"]} us), '
             f'{n["bind"]} binds ({n["bind_us"]} us), {n["alloc"]} allocs ({n["alloc_us"]} us), {n["free"]} frees'
         )
-    for proc, commit, cb, spans in frame.user:
+    for proc, _commit, cb, spans in frame.user:
         parts = []
         for name, (a, b) in spans.items():
             if not a:
@@ -190,8 +192,8 @@ def describe(frame):
     return out
 
 
-def summary(frames):
-    """Counts by cause and by the costliest stage, and each stage's mean."""
+def summary(frames: list[Frame]) -> list[str]:
+    """Return the counts by cause and by the costliest stage, and each stage's mean."""
     causes = Counter(f.cause for f in frames)
     worst = Counter()
     totals, counts = defaultdict(float), Counter()
@@ -212,7 +214,8 @@ def summary(frames):
     return out
 
 
-def main(argv=None):
+def main(argv: list[str] | None = None) -> int:
+    """Print every slow frame of the log, then the summary."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument('log', help='a pulled .logarchive, or a text file of the log')
     parser.add_argument('--summary', action='store_true', help='only the summary')
