@@ -24,7 +24,7 @@
 #   overlay/apple-logo~ipad.png
 #       ProgressUI's 1x boot logo (bazel run //tools/package:progressui_logo remakes it; Apple's artwork).
 #   overlay/wallpaper-1x/*.plist
-#       The J120 (_Flat) iPadOS 17 and Lake bundles' Wallpaper.plist at the UI scale's screen class (@1.6x), so
+#       The J120 (_Flat) iPadOS 17 and Lake bundles' Wallpaper.plist at the 'any' screen class, so
 #       WallpaperKit loads them (bazel run //tools/package:wallpaper_1x remakes them from the OS volume; metadata only,
 #       no artwork).
 

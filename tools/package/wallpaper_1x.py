@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
-"""Make the UI scale's screen class's Wallpaper.plist for the two J120 wallpapers, from the 21H461 OS volume's own.
+"""Make the J120 wallpapers' Wallpaper.plist load at every UI scale, from the 21H461 OS volume's own.
 
-WallpaperKit loads a wallpaper bundle only when the logicalScreenClass in its Wallpaper.plist is 'any' or the
-device's (+[WKWallpaperBundle shouldLoadWallpaperBundleAtURL:]). WKLogicalScreenClassString builds the device's from
-MobileGestalt's standard display zoom size, which follows ADT /product artwork-device-subtype and artwork-scale-factor
-(2732 and 2: 1024x1366), and UIScreen.scale as an NSNumber: '1024w-1366h@1.6x~ipad' at the 1.6 UI scale
-(kernel/xnu-10063.141.1/bsd/vm/vm_unix.c, SwitchUIScale), while 21H461 ships only @2x iPad bundles. Without
-these the iPadOS 17 and Lake collections load empty, the iPad's default wallpaper (7570) is "not found on disk", and
-WKDefaultWallpaperManager falls back to its synthesized 'Solid Black' (400).
+WallpaperKit loads a wallpaper bundle only when the logicalScreenClass in its Wallpaper.plist is the device's or
+WKWallpaperRepresentingLogicalScreenClassAny, 'any' (+[WKWallpaperBundle shouldLoadWallpaperBundleAtURL:]).
+WKLogicalScreenClassString builds the device's from MobileGestalt's standard display zoom size (ADT /product
+artwork-device-subtype 2732 and artwork-scale-factor 2: 1024x1366) and UIScreen.scale as an NSNumber, so it follows
+switch-ui-scale ('1024w-1366h@1x~ipad', '1024w-1366h@1.6x~ipad': kernel/xnu-10063.141.1/bsd/vm/vm_unix.c,
+SwitchUIScale), while 21H461 ships only @2x iPad bundles. Without these the iPadOS 17 and Lake collections load
+empty, the iPad's default wallpaper (7570) is "not found on disk", and WKDefaultWallpaperManager falls back to its
+synthesized 'Solid Black' (400).
 
 iPad7,1 (J120) has its own bundles: the animated ones list it in unsupportedProductTypes, the _Flat ones in
 productTypes (J120.HEIC, J99-Flat.HEIC: one 2x image each). This copies each _Flat bundle's Wallpaper.plist with
-logicalScreenClass set to the UI scale's class and nothing else changed. The overlay (overlay/manifest.json) shows it
+logicalScreenClass set to 'any' and nothing else changed. The overlay (overlay/manifest.json) shows it
 over the sealed bundle's own plist, with the bundle directory as its own union, so its .ca and HEIC are the sealed
 volume's: no artwork is copied, and the 2x image is drawn into the 720x1280 panel (scaled down, never up).
 
@@ -31,7 +32,7 @@ BUNDLES = (
     ('iPadOS_17~ipad.wallpaperCollection', '7570.iPadOS_17_Flat-1024w-1366h@2x~ipad.wallpaper', '7570.iPadOS_17_Flat.plist'),
     ('Lake~ipad.wallpaperCollection', '7560.Lake_Flat-1024w-1366h@2x~ipad.wallpaper', '7560.Lake_Flat.plist'),
 )
-FROM_CLASS, TO_CLASS = '1024w-1366h@2x~ipad', '1024w-1366h@1.6x~ipad'
+FROM_CLASS, TO_CLASS = '1024w-1366h@2x~ipad', 'any'
 PRODUCT = 'iPad7,1'
 
 

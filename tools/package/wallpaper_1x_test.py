@@ -30,7 +30,7 @@ def pinned():
 class OneXTest(unittest.TestCase):
     def test_only_the_screen_class_changes(self):
         out = plistlib.loads(wallpaper_1x.one_x(plistlib.dumps(FLAT, fmt=plistlib.FMT_BINARY), "flat"))
-        self.assertEqual(out.pop("logicalScreenClass"), "1024w-1366h@1.6x~ipad")
+        self.assertEqual(out.pop("logicalScreenClass"), "any")
         expected = dict(FLAT)
         expected.pop("logicalScreenClass")
         self.assertEqual(out, expected)
@@ -42,12 +42,12 @@ class OneXTest(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 wallpaper_1x.one_x(plistlib.dumps(bad, fmt=plistlib.FMT_BINARY), "bad")
 
-    def test_pinned_plists_are_ui_scale_j120_bundles(self):
+    def test_pinned_plists_are_any_scale_j120_bundles(self):
         found = pinned()
         self.assertEqual([p.name for p in found], ["7560.Lake_Flat.plist", "7570.iPadOS_17_Flat.plist"])
         for path in found:
             plist = plistlib.loads(path.read_bytes())
-            self.assertEqual(plist["logicalScreenClass"], "1024w-1366h@1.6x~ipad", path.name)
+            self.assertEqual(plist["logicalScreenClass"], "any", path.name)
             self.assertIn("iPad7,1", plist["productTypes"])
             self.assertTrue(plist["assets"]["lockAndHome"]["default"]["backgroundAnimationFileName"].endswith(
                 "-1024w-1366h@2x~ipad.ca"), path.name)

@@ -135,7 +135,7 @@ py_binary(
     srcs = ["progressui_logo.py"],
 )
 
-# Remakes bazel/pinned/overlay/wallpaper-1x/*.plist (the J120 iPadOS 17 and Lake wallpapers at the @1.6x screen class)
+# Remakes bazel/pinned/overlay/wallpaper-1x/*.plist (the J120 iPadOS 17 and Lake wallpapers at the 'any' screen class)
 # from the OS volume image:
 #   bazel run //tools/package:wallpaper_1x -- <OS volume .dmg> <output directory>
 py_binary(
