@@ -22,14 +22,16 @@
 #include <string.h>
 #include "TegraHost1x.h"
 #include "../ArmGIC/SwitchInterrupts.h"
-
-extern "C" {
-vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
-}
+#include "../../kits/SwitchCAR/SwitchCAR.h"
+#include "../../kits/SwitchDMA/SwitchDMABuffer.h"
+#include "../../kits/SwitchDMA/SwitchDcache.h"
+#include "../../kits/SwitchMMIO/SwitchMMIOKernel.h"
+#include "../../kits/SwitchTime/SwitchTime.h"
 
 namespace {
-constexpr vm_offset_t kHost1xPA = 0x50000000, kHost1xSize = 0x34000;
-constexpr vm_offset_t kCarPA = 0x60006000, kMcPA = 0x70019000;
+constexpr uint64_t kHost1xPA = 0x50000000, kHost1xSize = 0x34000;
+constexpr uint64_t kMcPA = 0x70019000;
+constexpr unsigned kClock = 28;  // TEGRA210_CLK_HOST1X: CAR bank L bit 28, also its reset
 constexpr uint32_t kSyncOffset = 0x2100;
 constexpr uint32_t kIntid = 32 + 65;  // "syncpt" (tegra210.dtsi host1x@50000000)
 constexpr uint32_t kSyncpts = 192, kFirstOwn = 160;
@@ -37,12 +39,8 @@ constexpr uint32_t kPushBytes = 16384;  // 2048 two-word slots (4x Linux's), + R
 constexpr uint32_t kGraceMs = 50;
 
 enum : uint32_t {  // clock and reset controller (Linux clk.h, clk-tegra-periph.c)
-    RST_DEVICES_L = 0x004,
     CLK_OUT_ENB_L = 0x010,
     CLK_SOURCE_HOST1X = 0x180,
-    RST_DEV_L_CLR = 0x304,
-    CLK_ENB_L_SET = 0x320,
-    L_HOST1X = 1u << 28,
     SOURCE_PLLP = 4u << 29,
     HOST1X_DIV_2_5 = 3,  // 7.1 divider: 408 MHz * 2 / (3 + 2) = 163.2 MHz
 };
@@ -87,12 +85,12 @@ constexpr uint32_t opRestart(uint32_t byteOffset)
 
 constexpr uint32_t kOpNop = 2u << 28;  // NONINCR, offset 0, count 0
 
-volatile uint8_t *gHost, *gCar, *gMc;
+volatile uint8_t *gHost, *gMc;
 IOWorkLoop *gLoop;
 IOInterruptEventSource *gIrq;
 IOLock *gLock;        // syncpoint waits and the interrupt action
 IOLock *gSubmitLock;  // channel 0's push buffer
-IOBufferMemoryDescriptor *gPush;
+switch_dma_buffer gPush;
 uint32_t *gPushVA;
 uint64_t gPushPA;
 uint32_t gPut;   // byte offset of the next word
@@ -104,39 +102,19 @@ uint32_t gSaved[kSyncpts];       // syncpoint values across SC7, which resets th
 unsigned gClockMHz;
 bool gStrict;  // a client proved its engine: a lost interrupt panics from here on (tegra_host1x_set_strict)
 
-inline uint32_t r32(volatile uint8_t *base, uint32_t o)
-{
-    return *(volatile uint32_t *)(base + o);
-}
-
-inline void w32(volatile uint8_t *base, uint32_t o, uint32_t v)
-{
-    *(volatile uint32_t *)(base + o) = v;
-}
-
 inline uint32_t sync(uint32_t o)
 {
-    return r32(gHost, kSyncOffset + o);
+    return switch_mmio_read32(gHost, kSyncOffset + o);
 }
 
 inline void syncWrite(uint32_t o, uint32_t v)
 {
-    w32(gHost, kSyncOffset + o, v);
+    switch_mmio_write32(gHost, kSyncOffset + o, v);
 }
 
 inline bool reached(uint32_t value, uint32_t threshold)
 {
     return (int32_t)(value - threshold) >= 0;
-}
-
-void cleanToPoC(const void *va, size_t size)
-{
-    uint64_t ctr;
-    __asm__ volatile("mrs %0, ctr_el0" : "=r"(ctr));
-    const uintptr_t line = (uintptr_t)4 << ((ctr >> 16) & 15);
-    for (uintptr_t a = (uintptr_t)va & ~(line - 1), end = (uintptr_t)va + size; a < end; a += line)
-        __asm__ volatile("dc cvac, %0" ::"r"(a) : "memory");
-    __asm__ volatile("dsb sy" ::: "memory");
 }
 
 // The syncpoint line (level). Every armed status bit seen is disabled and cleared, as Linux syncpt_thresh_isr does,
@@ -170,49 +148,44 @@ int fail(const char *why, uint32_t value)
 bool clockOn(unsigned *mhz, bool *enabled)
 {
     *enabled = false;
-    if (!(r32(gCar, CLK_OUT_ENB_L) & L_HOST1X)) {
-        w32(gCar, CLK_SOURCE_HOST1X, SOURCE_PLLP | HOST1X_DIV_2_5);
+    if (!switch_car_clock_enabled(kClock)) {
+        switch_car_write(CLK_SOURCE_HOST1X, SOURCE_PLLP | HOST1X_DIV_2_5);
         IODelay(2);
-        w32(gCar, CLK_ENB_L_SET, L_HOST1X);
+        switch_car_clock_enable(kClock);
         *enabled = true;
     }
-    if (r32(gCar, RST_DEVICES_L) & L_HOST1X) {
+    if (switch_car_reset_asserted(kClock)) {
         IODelay(2);
-        w32(gCar, RST_DEV_L_CLR, L_HOST1X);
+        switch_car_reset_deassert(kClock);
         *enabled = true;
     }
-    const uint32_t source = r32(gCar, CLK_SOURCE_HOST1X);
+    const uint32_t source = switch_car_read(CLK_SOURCE_HOST1X);
     *mhz = (source >> 29) == 4 ? 408u * 2 / ((source & 0xff) + 2) : 0;  // only PLLP is known for certain
-    return (r32(gCar, CLK_OUT_ENB_L) & L_HOST1X) && !(r32(gCar, RST_DEVICES_L) & L_HOST1X);
+    return switch_car_clock_enabled(kClock) && !switch_car_reset_asserted(kClock);
 }
 
 // Linux cdma_start for channel 0: the push buffer is allocated once and reprogrammed after SC7.
 bool channelAlloc()
 {
-    const IOOptionBits options = (IOOptionBits)kIODirectionInOut | (IOOptionBits)kIOMemoryPhysicallyContiguous |
-                                 (IOOptionBits)kIOMemoryMapperNone;
-    gPush =
-        IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task, options, kPushBytes + PAGE_SIZE, 0xfffff000ULL);
-    if (!gPush || gPush->prepare() != kIOReturnSuccess)
+    if (!switch_dma_alloc(&gPush, kPushBytes + PAGE_SIZE))
         return false;
-    IOByteCount length = 0;
-    gPushPA = gPush->getPhysicalSegment(0, &length, kIOMemoryMapperNone);
-    gPushVA = (uint32_t *)gPush->getBytesNoCopy();
-    return gPushPA && gPushVA && length >= kPushBytes + 4 && gPushPA + kPushBytes + 4 <= (1ULL << 32);
+    gPushPA = gPush.pa;
+    gPushVA = (uint32_t *)gPush.va;
+    return true;
 }
 
 void channelProgram()
 {
     memset(gPushVA, 0, kPushBytes + 4);
     gPushVA[kPushBytes / 4] = opRestart(0);
-    cleanToPoC(gPushVA, kPushBytes + 4);
+    switch_dcache_clean(gPushVA, kPushBytes + 4);
     syncWrite(SYNC_CMDPROC_STOP, sync(SYNC_CMDPROC_STOP) & ~1u);
-    w32(gHost, CH_DMACTRL, DMACTRL_STOP);
-    w32(gHost, CH_DMASTART, (uint32_t)gPushPA);
-    w32(gHost, CH_DMAPUT, 0);
-    w32(gHost, CH_DMAEND, kPushBytes + 4);
-    w32(gHost, CH_DMACTRL, DMACTRL_STOP | DMACTRL_GETRST | DMACTRL_INITGET);
-    w32(gHost, CH_DMACTRL, 0);
+    switch_mmio_write32(gHost, CH_DMACTRL, DMACTRL_STOP);
+    switch_mmio_write32(gHost, CH_DMASTART, (uint32_t)gPushPA);
+    switch_mmio_write32(gHost, CH_DMAPUT, 0);
+    switch_mmio_write32(gHost, CH_DMAEND, kPushBytes + 4);
+    switch_mmio_write32(gHost, CH_DMACTRL, DMACTRL_STOP | DMACTRL_GETRST | DMACTRL_INITGET);
+    switch_mmio_write32(gHost, CH_DMACTRL, 0);
     gPut = 0;
 }
 
@@ -243,29 +216,21 @@ bool attachInterrupt()
     return true;
 }
 
-uint64_t nowUs()
-{
-    uint64_t ns;
-    absolutetime_to_nanoseconds(mach_absolute_time(), &ns);
-    return ns / 1000;
-}
-
 int bringUp()
 {
-    gHost = (volatile uint8_t *)ml_io_map(kHost1xPA, kHost1xSize);
-    gCar = (volatile uint8_t *)ml_io_map(kCarPA, 0x1000);
-    gMc = (volatile uint8_t *)ml_io_map(kMcPA, 0x1000);
+    gHost = switch_mmio_map(kHost1xPA, kHost1xSize);
+    gMc = switch_mmio_map(kMcPA, 0x1000);
     gLock = IOLockAlloc();
     gSubmitLock = IOLockAlloc();
-    if (!gHost || !gCar || !gMc || !gLock || !gSubmitLock)
+    if (!gHost || !gMc || !gLock || !gSubmitLock)
         return fail("no mapping", 0);
     bool enabled = false;
     if (!clockOn(&gClockMHz, &enabled))
-        return fail("clock or reset stuck, CAR CLK_OUT_ENB_L", r32(gCar, CLK_OUT_ENB_L));
-    if (r32(gMc, MC_SMMU_HC_ASID) & SMMU_ENABLE)
-        return fail("SMMU translation is on for HC, MC 0x250", r32(gMc, MC_SMMU_HC_ASID));
-    if (r32(gMc, MC_HOTRESET_CTRL) & MC_HOTRESET_HC)
-        w32(gMc, MC_HOTRESET_CTRL, r32(gMc, MC_HOTRESET_CTRL) & ~MC_HOTRESET_HC);
+        return fail("clock or reset stuck, CAR CLK_OUT_ENB_L", switch_car_read(CLK_OUT_ENB_L));
+    if (switch_mmio_read32(gMc, MC_SMMU_HC_ASID) & SMMU_ENABLE)
+        return fail("SMMU translation is on for HC, MC 0x250", switch_mmio_read32(gMc, MC_SMMU_HC_ASID));
+    if (switch_mmio_read32(gMc, MC_HOTRESET_CTRL) & MC_HOTRESET_HC)
+        switch_mmio_write32(gMc, MC_HOTRESET_CTRL, switch_mmio_read32(gMc, MC_HOTRESET_CTRL) & ~MC_HOTRESET_HC);
     syncConfigure();
     if (!attachInterrupt())
         return fail("cannot attach the syncpoint interrupt, INTID", kIntid);
@@ -281,7 +246,7 @@ int bringUp()
         tegra_host1x_op_setclass(TEGRA_HOST1X_CLASS_HOST1X, 0, 0),
         tegra_host1x_op_incr_syncpt(TEGRA_HOST1X_COND_IMMEDIATE, id),
     };
-    const uint64_t began = nowUs();
+    const uint64_t began = switch_now_us();
     int ret = tegra_host1x_submit(stream, 2);
     if (!ret)
         ret = tegra_host1x_syncpt_wait(id, before + 1, 100000);
@@ -294,7 +259,7 @@ int bringUp()
         return gState;
     }
     IOLog("TegraHost1x: H1 ok syncpoint %u %u->%u by interrupt in %llu us (channel 0, host1x %u MHz%s)\n", id, before,
-          tegra_host1x_syncpt_read(id), nowUs() - began, gClockMHz, enabled ? ", enabled here" : "");
+          tegra_host1x_syncpt_read(id), switch_now_us() - began, gClockMHz, enabled ? ", enabled here" : "");
     return TEGRA_HOST1X_OK;
 }
 }  // namespace
@@ -395,7 +360,7 @@ extern "C" int tegra_host1x_submit(const uint32_t *words, uint32_t count)
     if (!words || !count || count >= kPushBytes / 4)
         return TEGRA_HOST1X_EINVAL;
     IOLockLock(gSubmitLock);
-    const uint32_t get = r32(gHost, CH_DMAGET) % kPushBytes;
+    const uint32_t get = switch_mmio_read32(gHost, CH_DMAGET) % kPushBytes;
     const uint32_t room = (get + kPushBytes - gPut - 4) % kPushBytes;
     // A job must not straddle the RESTART slot: Linux's push buffer only holds two-word GATHERs, but these are the
     // job's own opcodes, and a RESTART landing inside an opcode's data is taken as data, so the command processor runs
@@ -410,15 +375,15 @@ extern "C" int tegra_host1x_submit(const uint32_t *words, uint32_t count)
     if (pad) {
         for (uint32_t at = gPut; at < kPushBytes; at += 4)
             gPushVA[at / 4] = kOpNop;
-        cleanToPoC((uint8_t *)gPushVA + gPut, pad);
+        switch_dcache_clean_lines((uint8_t *)gPushVA + gPut, pad);
         gPut = 0;
     }
     const uint32_t from = gPut;
     for (uint32_t i = 0; i < count; i++)
         gPushVA[from / 4 + i] = words[i];
-    cleanToPoC((uint8_t *)gPushVA + from, bytes);
+    switch_dcache_clean((uint8_t *)gPushVA + from, bytes);  // its DSB also completes the padding's
     gPut = (from + bytes) % kPushBytes;  // a job that ends exactly at the RESTART slot leaves PUT at 0
-    w32(gHost, CH_DMAPUT, gPut);
+    switch_mmio_write32(gHost, CH_DMAPUT, gPut);
     IOLockUnlock(gSubmitLock);
     return TEGRA_HOST1X_OK;
 }
@@ -432,8 +397,9 @@ extern "C" void tegra_host1x_describe(char *buffer, size_t size)
     const uint32_t cbstat = sync(SYNC_CBSTAT0);
     snprintf(buffer, size,
              "ch0 DMAGET %#x DMAPUT %#x DMACTRL %#x FIFOSTAT %#x class %#x offset %#x CBREAD %#x STOP %#x",
-             r32(gHost, CH_DMAGET), r32(gHost, CH_DMAPUT), r32(gHost, CH_DMACTRL), r32(gHost, CH_FIFOSTAT),
-             (cbstat >> 16) & 0x3ff, cbstat & 0xffff, sync(SYNC_CBREAD0), sync(SYNC_CMDPROC_STOP));
+             switch_mmio_read32(gHost, CH_DMAGET), switch_mmio_read32(gHost, CH_DMAPUT),
+             switch_mmio_read32(gHost, CH_DMACTRL), switch_mmio_read32(gHost, CH_FIFOSTAT), (cbstat >> 16) & 0x3ff,
+             cbstat & 0xffff, sync(SYNC_CBREAD0), sync(SYNC_CMDPROC_STOP));
 }
 
 // Clients have quiesced (their last fences reached) before this. SC7 powers the sync unit and channels down, so the
@@ -445,7 +411,7 @@ extern "C" void tegra_host1x_suspend(void)
     IOLockLock(gSubmitLock);
     for (uint32_t id = kFirstOwn; id < kSyncpts && id < gNextSyncpt; id++)
         gSaved[id] = sync(SYNC_SYNCPT + 4 * id);
-    w32(gHost, CH_DMACTRL, DMACTRL_STOP);
+    switch_mmio_write32(gHost, CH_DMACTRL, DMACTRL_STOP);
     gState = 2;
     IOLockUnlock(gSubmitLock);
 }
@@ -459,13 +425,14 @@ extern "C" void tegra_host1x_resume(void)
     IOLockLock(gSubmitLock);
     // SC7 resets the CAR: put host1x back on the boot chain's PLLP / 2.5 if it came back on another source (it is
     // idle, and nothing behind it has resumed yet: the display's wake hook runs after this one).
-    if ((r32(gCar, CLK_SOURCE_HOST1X) >> 29) != 4) {
-        w32(gCar, CLK_SOURCE_HOST1X, SOURCE_PLLP | HOST1X_DIV_2_5);
+    if ((switch_car_read(CLK_SOURCE_HOST1X) >> 29) != 4) {
+        switch_car_write(CLK_SOURCE_HOST1X, SOURCE_PLLP | HOST1X_DIV_2_5);
         IODelay(2);
     }
     bool enabled = false;
     if (!clockOn(&gClockMHz, &enabled)) {
-        IOLog("TegraHost1x: H1 FAIL resume: clock or reset stuck, CAR CLK_OUT_ENB_L %#x\n", r32(gCar, CLK_OUT_ENB_L));
+        IOLog("TegraHost1x: H1 FAIL resume: clock or reset stuck, CAR CLK_OUT_ENB_L %#x\n",
+              switch_car_read(CLK_OUT_ENB_L));
         gState = TEGRA_HOST1X_ENODEV;
         IOLockUnlock(gSubmitLock);
         return;
