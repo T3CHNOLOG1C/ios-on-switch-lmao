@@ -3106,6 +3106,8 @@ int tgm_chan_order(struct tgm_chan *chan, uint32_t flags, uint32_t seqno, uint32
 	*queued = 0;
 	if (chan->kernel || !flags || (flags & ~(TGM_ORDER_AFTER | TGM_ORDER_BEFORE)))
 		return -EINVAL;
+	if (READ_ONCE(chan->error))
+		return -EIO;
 	if (flags & TGM_ORDER_BEFORE) {
 		if (!seqno)
 			seqno = chan->submitted;

@@ -1568,9 +1568,9 @@ void Device::noteLost()
 }
 
 // The kernel killed the channel (a GPU fault or hang, its own or one it was stuck behind; as a GPU restart on iOS): what it
-// had in flight failed, and a new channel gets the context the old one took with it. Between command buffers: no span of
-// either ring is open, and every one the old channel had is done (the kernel released its fence), whatever word the new
-// channel's fence is.
+// had in flight failed, and a new channel, named by ChannelCreate's reply, gets the context the old one took with it.
+// Between command buffers: no span of either ring is open, and every one the old channel had is done (the kernel released
+// its fence), whatever word the new channel's fence is.
 bool Device::reopen()
 {
     noteLost();
@@ -1604,7 +1604,7 @@ bool Device::reopen()
 
 CommandBuffer *Device::begin()
 {
-    if (k_.lost())
+    if (k_.lost(channel_))
         reopen();
     CommandBuffer &cb = cb_;
     cb.dev_ = this;

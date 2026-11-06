@@ -512,7 +512,7 @@ public:
     // In the kernel, on the fence interrupt. False: the submission failed, the channel died with it in flight (reopen).
     bool wait(uint32_t seqno)
     {
-        if (!done(seqno) && !k_.wait(channel_, seqno) && k_.lost())
+        if (!done(seqno) && !k_.wait(channel_, seqno) && k_.lost(channel_))
             noteLost();
         return !lost(seqno);
     }

@@ -247,7 +247,8 @@ bool Kernel::channel(uint32_t engines, uint32_t &channel, const volatile uint32_
     }
     channel = r.channel;
     fence = reinterpret_cast<const volatile uint32_t *>(uintptr_t(fenceMap_) + r.fence_offset);
-    lost_.store(false, std::memory_order_relaxed);
+    uint32_t reused = r.channel;
+    lostChannel_.compare_exchange_strong(reused, 0, std::memory_order_relaxed);
     return true;
 }
 
@@ -316,7 +317,7 @@ bool Kernel::exec(uint32_t channel, const TegraGM20BAbiPush *pushes, uint32_t co
             return true;
         }
         if (kr == kIOReturnNotResponding)
-            lost_.store(true, std::memory_order_relaxed);
+            lostChannel_.store(channel, std::memory_order_relaxed);
         if (kr != kIOReturnBusy || !last) {
             err_ = "Exec failed";
             return false;
@@ -332,7 +333,7 @@ bool Kernel::wait(uint32_t channel, uint32_t seqno, uint64_t timeoutNs)
     TegraGM20BAbiWaitFence w = {channel, seqno, timeoutNs};
     const int kr = call(TegraGM20BMethodWaitFence, &w, sizeof w, nullptr, 0);
     if (kr == kIOReturnNotResponding)
-        lost_.store(true, std::memory_order_relaxed);
+        lostChannel_.store(channel, std::memory_order_relaxed);
     if (kr != KERN_SUCCESS) {
         err_ = "WaitFence failed";
         return false;

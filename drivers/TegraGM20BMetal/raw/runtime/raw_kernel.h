@@ -49,10 +49,11 @@ public:
     bool channel(uint32_t engines, uint32_t &channel, const volatile uint32_t *&fence);
     void closeChannel(uint32_t channel);
 
-    // An Exec or WaitFence found the channel dead (the kernel killed it for a GPU fault or hang; its fence was released)
-    bool lost() const
+    // An Exec or WaitFence found `channel` dead (the kernel killed it for a GPU fault or hang; its fence was released, and
+    // the connection's other channels, BOs and binds go on)
+    bool lost(uint32_t channel) const
     {
-        return lost_.load(std::memory_order_relaxed);
+        return lostChannel_.load(std::memory_order_relaxed) == channel;
     }
 
     // `last`: the channel's last submitted seqno (0 if none), waited on when the GPFIFO is full
@@ -90,8 +91,8 @@ private:
     // A SurfaceWrites failed: imports stop saying the GPU only samples them, and every Exec carries
     // TegraGM20BPushImportsWritten.
     std::atomic<bool> importsWritten_{false};
-    std::atomic<bool> lost_{false};
-    uint64_t fenceMap_ = 0;  // the fence page's mapping, made once: every channel's word is in it
+    std::atomic<uint32_t> lostChannel_{0};
+    uint64_t fenceMap_ = 0;  // the connection's fence page, mapped once: every channel's word is in it
     uint32_t selector_ = 0;
     TegraGM20BAbiInfo info_ = {};
     std::map<uint64_t, uint64_t> vaFree_;  // start -> bytes, coalesced

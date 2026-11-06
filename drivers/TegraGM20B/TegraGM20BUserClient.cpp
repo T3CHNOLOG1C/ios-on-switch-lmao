@@ -747,7 +747,6 @@ class AGXDeviceUserClient : public IOUserClient
 		0;  // the ones read, every kProfileEvery-th also profiled (gpu.c "push profile")
 	bool critical_ =
 		true;  // the compositor's GPU priority; no pool quota (all but the compositor with all-clients)
-	bool dead_ = false;  // a channel was killed for a GPU error: no new work, BOs or binds
 	bool importsWritten_ =
 		false;  // TegraGM20BPushImportsWritten: every submission marks every writable import
 	bool quotaLogged_ = false;
@@ -2000,8 +1999,7 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 
 	if (method == TegraGM20BMethodWaitFence)
 		return waitFence(static_cast<const TegraGM20BAbiWaitFence *>(in));
-	// Map and Unmap take lock_ themselves (Map's clientMemoryForType must run without it); a dead connection still maps and
-	// unmaps what it has, as IOConnectMapMemory64 would.
+	// Map and Unmap take lock_ themselves (Map's clientMemoryForType must run without it).
 	if (method == TegraGM20BMethodMap)
 		return mapToken(static_cast<const TegraGM20BAbiMap *>(in),
 				static_cast<TegraGM20BAbiMapReply *>(out));
@@ -2012,17 +2010,9 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 		return kIOReturnSuccess;
 	}
 	IOLockLock(lock_);
-	// a channel of this connection was killed for a GPU error (client fault isolation): the connection takes no
-	// new work, memory or binds; status, fence waits, frees and teardown still answer, so the client sees the error and
-	// fails or falls back
-	for (uint32_t i = 0; i < kMaxChannels && !dead_; i++)
-		dead_ = chans_[i] && tgm_chan_error(chans_[i]) && tgm_stage() >= 3;
-	if (dead_ && (method == TegraGM20BMethodBoAlloc || method == TegraGM20BMethodBoImport ||
-		      method == TegraGM20BMethodVmBind || method == TegraGM20BMethodChannelCreate ||
-		      method == TegraGM20BMethodExec || method == TegraGM20BMethodOrder)) {
-		IOLockUnlock(lock_);
-		return kIOReturnNotResponding;
-	}
+	// A channel killed for a GPU fault or hang (client fault isolation) refuses only what names it (Exec, Order and
+	// WaitFence answer kIOReturnNotResponding, GetStatus its error); the connection's memory, binds and other channels
+	// go on, and ChannelCreate makes it a new one, as a GPU restart leaves a Metal device on iOS.
 	IOReturn ret;
 	switch (method) {
 	case TegraGM20BMethodGetInfo:

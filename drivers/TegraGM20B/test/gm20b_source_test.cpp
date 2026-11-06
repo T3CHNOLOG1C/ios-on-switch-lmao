@@ -326,6 +326,28 @@ TEST(GM20BFenceWakeSource, WaitersWakeByChannel)
 	EXPECT_THAT(wait, Not(HasSubstr("tgm_idle(")));
 }
 
+// A killed channel is dead alone (client fault isolation): what names it refuses, the connection's memory, binds and other
+// channels go on, a new channel can be made in it, and nothing another channel waits for stays on the dead one.
+TEST(GM20BKillSource, AKilledChannelLeavesItsConnectionWorking)
+{
+	const std::string run =
+		flat(definition(client(), "IOReturn AGXDeviceUserClient::run(uint32_t method,"));
+	EXPECT_THAT(client(), Not(HasSubstr("dead_")));
+	EXPECT_THAT(run, Not(HasSubstr("tgm_chan_error(")));
+	EXPECT_THAT(flat(definition(gpu(), "static int chan_exec(struct tgm_chan *chan,")),
+		    HasSubstr("if (chan->error) return -EIO;"));
+	const std::string order =
+		flat(definition(gpu(), "int tgm_chan_order(struct tgm_chan *chan,"));
+	EXPECT_THAT(order, HasSubstr("if (READ_ONCE(chan->error)) return -EIO;"));
+	EXPECT_THAT(order, HasSubstr("READ_ONCE(other->error)) continue;"));
+	const std::string killed = flat(definition(
+		gpu(), "static int chan_killed(struct nvif_event *event, void *repv, u32 repc)"));
+	EXPECT_THAT(killed, HasSubstr("WRITE_ONCE(*chan->fence_cpu, chan->submitted);"));
+	EXPECT_THAT(killed, HasSubstr("chan->kernel || !tgm_all_clients()"));
+	EXPECT_THAT(flat(definition(client(), "void AGXDeviceUserClient::reap(bool force)")),
+		    HasSubstr("chans_[i] && !tgm_chan_error(chans_[i]) &&"));
+}
+
 // No spin for GPFIFO or push room: every wait for room sleeps until a fence's interrupt, and the fence reports GET to nvif
 // before that interrupt, so the room the GPU freed is there when the waiter looks.
 TEST(GM20BRoomSource, RoomIsWaitedForByInterrupt)
