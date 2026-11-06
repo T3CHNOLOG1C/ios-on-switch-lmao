@@ -1,17 +1,14 @@
-Switch's local Python integration and documentation were authored for this project.
-It does not include Apple's proprietary OS images in its tracked source.
+ios-on-switch-lmao
+Copyright (C) 2026 Bruno St John
 
-The optional HakiOS checkout is fetched from:
-https://github.com/oosexgang/hakios-xnu-kernel
-Its kernel changes, drivers, loader, binaries and other components retain their
-upstream licenses. See that repository's LICENSE/NOTICE, COMPLIANCE.md and
-THIRD_PARTY_LICENSES.md. Switch verifies the upstream binary hashes; it does
-not claim that those binaries were rebuilt locally.
+The project's own code is licensed under the GNU General Public License,
+version 2 only (GPL-2.0-only). The full text is in LICENSE.
 
-UniXNU and its QEMU device port are separate upstream projects:
-https://github.com/UniXNU/UniXNU
-https://github.com/xVanTuring/UniXNU-qemu
-Their code and any user-built/exported components retain their original licenses.
-Apple iOS/iPadOS system files must be supplied separately by the builder.
+Code, firmware and other files from upstream projects keep their own licences,
+as their file headers or the LICENSE, LICENCE, SOURCE or UPSTREAM file next to
+them say.
 
-This project is independent of Apple, Nintendo, HakiOS, UniXNU and Switchroot.
+Release archives contain no iOS or iPadOS system files. The image builder
+downloads Apple's IPSW on the user's own Mac.
+
+This project is not affiliated with or endorsed by Apple or Nintendo.
