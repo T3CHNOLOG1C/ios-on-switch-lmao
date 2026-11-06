@@ -28,6 +28,14 @@ IMAGE = 'image.img'
 STAGES = ('compose', 'populate', 'pack')
 STAGING = '/private/preboot/Switch-Staging/'
 FLOOR = 14 << 30
+# iOS 17's image was composed before per-kind scratch, and the morning command names no --scratch, so 21H461 keeps the
+# unsuffixed directory. Every other build gets its own, so one kind's image never recomposes over another's.
+LEGACY_BUILD = '21H461'
+
+
+def default_scratch(build: str) -> Path:
+    base = Path.home() / 'Library/Caches/switch-ios'
+    return base / 'image' if build == LEGACY_BUILD else base / f'image-{build}'
 
 
 def identity(_args: argparse.Namespace, spec: dict, pins: dict, size: int) -> dict:

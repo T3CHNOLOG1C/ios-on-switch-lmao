@@ -328,7 +328,8 @@ def main(argv: list[str] | None = None) -> int:
     resolve_inputs(args)
     workspace = os.environ.get('BUILD_WORKSPACE_DIRECTORY') or os.getcwd()
     args.out = os.path.abspath(args.out or os.path.join(workspace, 'out/sd'))
-    args.scratch = os.path.abspath(args.scratch or Path.home() / 'Library/Caches/switch-ios/image')
+    build = json.loads(Path(args.ipsw).read_text())['build']
+    args.scratch = os.path.abspath(args.scratch or stages.default_scratch(build))
     args.log = args.log or str(
         Path.home() / 'Library/Logs/switch-ios/image-{}.log'.format(time.strftime('%Y%m%d-%H%M%S'))
     )

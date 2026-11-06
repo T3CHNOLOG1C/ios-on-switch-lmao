@@ -16,6 +16,17 @@ def quiet(*parts: object):
     pass
 
 
+class ScratchTest(unittest.TestCase):
+    BUILDS = ('21H461', '24B119', '23F84', '22A3354')
+
+    def test_legacy_build_keeps_the_unsuffixed_directory(self):
+        self.assertEqual(stages.default_scratch('21H461').name, 'image')
+
+    def test_each_build_has_its_own_directory(self):
+        dirs = [stages.default_scratch(b) for b in self.BUILDS]
+        self.assertEqual(len(set(dirs)), len(dirs))
+
+
 class StateTest(unittest.TestCase):
     def setUp(self):
         self.dir = Path(tempfile.mkdtemp())
