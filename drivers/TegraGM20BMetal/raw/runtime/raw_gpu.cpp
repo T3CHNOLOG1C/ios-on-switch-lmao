@@ -115,7 +115,7 @@ const FormatInfo kFormats[] = {
     {71, 0, 0x58d24908, 4, true},        // RGBA8Unorm_sRGB
     {80, 0xcf, 0x54e24908, 4, false},    // BGRA8Unorm
     {81, 0, 0x54e24908, 4, true},        // BGRA8Unorm_sRGB
-    {90, 0, 0x58d24909, 4, false},       // RGB10A2Unorm
+    {90, 0xd1, 0x58d24909, 4, false},    // RGB10A2Unorm (rendered: a 10-bit code texture's image)
     {92, 0, 0x78d7ffa1, 4, false},       // RG11B10Float
     {93, 0, 0x78d7ffa0, 4, false},       // RGB9E5Float
     {94, 0, 0x54e24909, 4, false},       // BGR10A2Unorm
@@ -1456,46 +1456,39 @@ bool Device::samplerVariant(Sampler &s, uint8_t map)
 Pipeline *Device::ycbcrPipeline(uint8_t output)
 {
     static const char *const names[] = {"", "raw.ycbcr.ycbcr_converted_frag", "raw.ycbcr.ycbcr_srgb_frag",
-                                        "raw.ycbcr.ycbcr_codes_frag"};
-    if (!output || output > 3)
+                                        "raw.ycbcr.ycbcr_codes_frag", "raw.ycbcr.ycbcr_codes10_frag"};
+    if (!output || output > 4)
         return nullptr;
     return pipeline(Pack::fnv(names[output], strlen(names[output])));
 }
 
-bool Device::createYcbcrTexture(uint64_t surfaceId, void *base, uint64_t allocBytes, const void *surface, uint64_t luma,
-                                uint32_t lumaPitch, uint64_t chroma, uint32_t chromaPitch, uint32_t width,
-                                uint32_t height, uint32_t format, const uint32_t shape[9], Texture &t)
+bool Device::createYcbcrTexture(uint64_t surfaceId, void *base, uint64_t allocBytes, const void *surface,
+                                const YcbcrPlan &plan, uint32_t width, uint32_t height, Texture &t)
 {
-    constexpr uint32_t kR8Unorm = 10, kRG8Unorm = 30;
-    const uint8_t output = format == 500 ? 1 : format == 520 ? 2 : format == 540 ? 3 : 0;
-    const uint32_t image = output == 1 ? 115 : output == 2 ? 125 : 70;
-    if (!output || !ycbcrPipeline(output))
+    if (!ycbcrPipeline(plan.output))
         return false;
-    Texture *y = new Texture, *c = new Texture;
-    if (!createSurfaceTexture(surfaceId, base, allocBytes, surface, luma, width, height, lumaPitch, kR8Unorm, *y)) {
-        delete y;
-        delete c;
+    Texture *y = new Texture, *c = plan.chromaWidth ? new Texture : nullptr;
+    auto undo = [&] {
+        for (Texture *x : {y, c})
+            if (x) {
+                destroyTexture(*x);
+                delete x;
+            }
         return false;
-    }
-    if (!createSurfaceTexture(surfaceId, base, allocBytes, surface, chroma, (width + 1) / 2, (height + 1) / 2,
-                              chromaPitch, kRG8Unorm, *c)) {
-        destroyTexture(*y);
-        delete y;
-        delete c;
-        return false;
-    }
-    if (!createTexture(width, height, image, t)) {
-        destroyTexture(*y);
-        destroyTexture(*c);
-        delete y;
-        delete c;
-        return false;
-    }
+    };
+    if (!createSurfaceTexture(surfaceId, base, allocBytes, surface, plan.luma, width, height, plan.lumaPitch,
+                              plan.lumaFormat, *y))
+        return undo();
+    if (c && !createSurfaceTexture(surfaceId, base, allocBytes, surface, plan.chroma, plan.chromaWidth,
+                                   plan.chromaHeight, plan.chromaPitch, plan.chromaFormat, *c))
+        return undo();
+    if (!createTexture(width, height, plan.image, t))
+        return undo();
     t.luma = y;
     t.chroma = c;
-    memcpy(t.shape, shape, sizeof t.shape);
-    t.ycbcr = output;
-    t.addressMap = output == 3 ? 3 : 1;  // (codes: clamps to zero and to the border at the edge too)
+    memcpy(t.shape, plan.shape, sizeof t.shape);
+    t.ycbcr = plan.output;
+    t.addressMap = plan.addressMap;
     // its alpha read as one, as m2v's view of its own converted image reads it (W_SOURCE ONE_FLOAT; the conversion writes 1 there
     // too: the same texels, now the same header)
     {

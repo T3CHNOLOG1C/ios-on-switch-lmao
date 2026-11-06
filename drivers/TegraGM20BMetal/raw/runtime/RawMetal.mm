@@ -327,7 +327,7 @@ static NSString *describe(MTLTextureDescriptor *d)
 // A texture the raw path does not keep: its predicate, and the predicate's first line with the texture's details
 @class RMTexture;
 static NSString *
-surfaceShape(RMTexture *t);  // a surface texture's pixel format, planes and 4:2:0 verdict (after RMTexture)
+surfaceShape(RMTexture *t);  // a surface texture's pixel format, planes and YCbCr verdict (after RMTexture)
 static void refuseTexture(RMTexture *t, RMPred p, uint64_t a, uint64_t b, NSString *kind, NSString *extra);
 
 // MTLDataType sizes, as the frontend journals constants (NativeBridgeMetalFrontend.mm constantBytes)
@@ -1446,7 +1446,7 @@ static void cpuLevel(RMTexture *t, MTLRegion r, NSUInteger level, uint8_t *bytes
     }
 }
 
-static const char *ycbcr420Why(MTLTextureDescriptor *d, IOSurfaceRef s, NSUInteger plane);
+static const char *ycbcrPlan(MTLTextureDescriptor *d, IOSurfaceRef s, NSUInteger plane, raw::YcbcrPlan &out);
 
 static NSString *surfaceShape(RMTexture *t)
 {
@@ -1463,9 +1463,11 @@ static NSString *surfaceShape(RMTexture *t)
         [out appendFormat:@" p%zu %zux%zu/%zuB row %zu", k, IOSurfaceGetWidthOfPlane(s, k),
                           IOSurfaceGetHeightOfPlane(s, k), IOSurfaceGetBytesPerElementOfPlane(s, k),
                           IOSurfaceGetBytesPerRowOfPlane(s, k)];
-    const NSUInteger f = t->_descriptor.pixelFormat;
-    if (f == 500 || f == 520 || f == 540)
-        [out appendFormat:@" 4:2:0 not taken: %s", ycbcr420Why(t->_descriptor, s, t->_plane)];
+    if (raw::isYcbcrFormat(uint32_t(t->_descriptor.pixelFormat))) {
+        raw::YcbcrPlan plan;
+        const char *why = ycbcrPlan(t->_descriptor, s, t->_plane, plan);
+        [out appendFormat:@" YCbCr not taken: %s", why ?: "taken (refused later: the import or the pool)"];
+    }
     return out;
 }
 
@@ -2543,10 +2545,10 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
         [_cb takeReason:WhyTexture why:@"a texture copy the raw path does not do (levels, slices, formats)"];
         hit(_cb, PredBlitTexCopy, ss | sl << 8 | ds << 16 | dl << 24,
             uint64_t(size.width) << 32 | uint32_t(size.height));
-    } else if (a->_raw.addressMap ||
-               b->_raw.addressMap) {  // Metal's copies move a planar texture's planes' bytes: m2v's
+    } else if (a->_raw.converted() || b->_raw.converted()) {
+        // Metal's copies move a planar texture's planes' bytes: m2v's
         [_cb takeReason:WhyTexture why:@"a copy to or from a planar texture"];
-        hit(_cb, PredEncPlanarCopy, a->_raw.addressMap, b->_raw.addressMap);
+        hit(_cb, PredEncPlanarCopy, a->_raw.converted(), b->_raw.converted());
     }
     [_cb retain:s];
     [_cb retain:d];
@@ -2635,9 +2637,9 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
     if (!ok) {
         [_cb takeReason:WhyTexture why:@"a buffer-to-texture copy the raw path does not do"];
         hit(_cb, PredBlitBufToTex, row, uint64_t(ds) | uint64_t(dl) << 8 | uint64_t(size.depth) << 16);
-    } else if (b->_raw.addressMap) {
+    } else if (b->_raw.converted()) {
         [_cb takeReason:WhyTexture why:@"a copy to or from a planar texture"];
-        hit(_cb, PredEncPlanarCopy, 0, b->_raw.addressMap);
+        hit(_cb, PredEncPlanarCopy, 0, 1);
     } else if (row % b->_raw.bpp &&
                size.height > 1) {  // rows of whole texels (Metal's rule; the copy engine takes any)
         [_cb takeReason:WhyTexture why:@"a buffer-to-texture copy whose rows are not whole texels"];
@@ -2704,9 +2706,9 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
     if (!ok) {
         [_cb takeReason:WhyTexture why:@"a texture-to-buffer copy the raw path does not do"];
         hit(_cb, PredBlitTexToBuf, row, uint64_t(ss) | uint64_t(sl) << 8 | uint64_t(size.depth) << 16);
-    } else if (a->_raw.addressMap) {
+    } else if (a->_raw.converted()) {
         [_cb takeReason:WhyTexture why:@"a copy to or from a planar texture"];
-        hit(_cb, PredEncPlanarCopy, a->_raw.addressMap, 0);
+        hit(_cb, PredEncPlanarCopy, 1, 0);
     }
     [_cb retain:s];
     [_cb retain:d];
@@ -4071,7 +4073,7 @@ static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **
         std::vector<RMTexture *> planar;
         std::vector<RMSampler *> samplers;
         auto isPlanar = [](void *o) {
-            return o && ((__bridge RMTexture *)o)->_raw.addressMap;
+            return o && ((__bridge RMTexture *)o)->_raw.converted();
         };
         for (size_t at = from; at < to; at++) {
             const Cmd &c = cb->_tape[at];
@@ -4082,7 +4084,7 @@ static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **
                 return fail(PredEncPlanarCopy, "a copy to or from a planar texture", c.op);
             if (c.op == OpTexture && c.obj) {
                 RMTexture *t = (__bridge RMTexture *)c.obj;
-                if (t->_raw.addressMap && std::find(planar.begin(), planar.end(), t) == planar.end())
+                if (t->_raw.converted() && std::find(planar.begin(), planar.end(), t) == planar.end())
                     planar.push_back(t);
             } else if (c.op == OpSampler && c.obj) {
                 RMSampler *sm = (__bridge RMSampler *)c.obj;
@@ -4094,7 +4096,7 @@ static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **
             // the samplers' headers under the planar textures' address maps (m2v's), which the draws' handles take
             for (RMTexture *t : planar)
                 for (RMSampler *sm : samplers)
-                    if (!d.samplerVariant(sm->_raw, t->_raw.addressMap))
+                    if (t->_raw.addressMap && !d.samplerVariant(sm->_raw, t->_raw.addressMap))
                         return fail(PredEncPlanarClamp, "no sampler header for an address map");
             // an image converted already from its surface at the surface's seed now is not converted again: the work that
             // converted it went before on this channel (the decoder and ImageIO write a surface under a write lock, which
@@ -4119,7 +4121,7 @@ static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **
                         conv->convertPlanar(t->_raw);
                 conv->end();
             }
-            // 4:2:0 textures' planes whose rows or offset are 16 bytes apart but not 32 (ImageIO's photo thumbnails, a width of
+            // YCbCr textures' planes whose rows or offset are 16 bytes apart but not 32 (ImageIO's photo thumbnails, a width of
             // 360: rows of 368) are sampled through pool images (raw::Texture::sampled, createSurfaceTexture): filled from the
             // planes by the copy engine first, as refresh() fills a sampled surface's (r7u: without it the conversion read
             // whatever the pool held, magenta and green stripes of older images)
@@ -4135,7 +4137,7 @@ static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **
                         }
             if (fill)
                 fill->end();
-            // 4:2:0 textures: a pass of the pack's conversion state each, into the image the draws sample
+            // YCbCr textures: a pass of the pack's conversion state each, into the image the draws sample
             for (RMTexture *t : planar) {
                 raw::Texture &x = t->_raw;
                 if (!x.ycbcr)
@@ -4147,11 +4149,11 @@ static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **
                 p.count = 1;
                 raw::RenderEncoder *conv = rc->render(p);
                 if (!conv)
-                    return fail(PredEncPassRender, "a 4:2:0 texture's image the raw path cannot render");
+                    return fail(PredEncPassRender, "a YCbCr texture's image the raw path cannot render");
                 conv->setPipeline(d.ycbcrPipeline(x.ycbcr));
                 conv->setBytes(2, 0, x.shape, sizeof x.shape);
                 conv->setTexture(0, x.luma);
-                conv->setTexture(1, x.chroma);
+                conv->setTexture(1, x.chroma ? x.chroma : x.luma);  // (over plane 1: chroma codes 0, none read)
                 conv->setViewport(0, 0, x.width, x.height, 0, 1);
                 conv->setScissor(0, 0, x.width, x.height);
                 if (!conv->draw(4 /* MTLPrimitiveTypeTriangleStrip */, 0, 4, 1, 0, why))
@@ -4820,105 +4822,39 @@ static bool planar444(MTLTextureDescriptor *d, IOSurfaceRef s, NSUInteger plane)
            IOSurfaceGetBytesPerElementOfPlane(s, 0) == 1 && IOSurfaceGetBytesPerElementOfPlane(s, 1) == 2;
 }
 
-// YCBCR8_420_2P (500), YCBCR8_420_2P_sRGB (520) or RGB8_420_2P (540) over plane 0 of a CoreVideo '420v' or '420f' surface
-// (plane 0 the texture's size, as m2v takes it: a padded surface m2v cannot read stays m2v's, so no frame differs by driver)
-// (decoded photos and video frames, the photo wallpaper): Metal reads it converted by the surface's range and matrix (500), that
-// through the sRGB curve (520), or its codes (540), each with its chroma filtered 9/3/3/1 (m2v ycbcr.rs), which the raw path
-// draws into an image of its own with the pack's conversion state (pack/ycbcr.metal, exact against Metal's measured reads:
-// test/ycbcrcheck.mm) before the work that samples it. The surface's planes where m2v takes them (16-byte offsets and rows,
-// the chroma plane at least the texture's half), and a matrix it takes (none or BT.601, BT.709, BT.2020, SMPTE 240M as BT.709).
-// `shape`: the conversion's fragment buffer (width, height, full range, then red's, green's and blue's kb and kr).
-static bool ycbcr420(MTLTextureDescriptor *d, IOSurfaceRef s, NSUInteger plane, uint32_t shape[9])
+// A YCbCr texture's plan (raw_ycbcr.h): Metal reads it converted by the surface's range and matrix, that through the sRGB curve,
+// or its codes, which the raw path draws into an image of its own with the pack's conversion state (pack/ycbcr.metal, exact
+// against Metal's reads: test/ycbcroracle.mm) before the work that samples it. Null when taken, else the rule that refused it.
+static const char *ycbcrPlan(MTLTextureDescriptor *d, IOSurfaceRef s, NSUInteger plane, raw::YcbcrPlan &out)
 {
-    const NSUInteger f = d.pixelFormat;
-    if ((f != 500 && f != 520 && f != 540) || plane != 0 || IOSurfaceGetPlaneCount(s) != 2)
-        return false;
-    const uint32_t fourcc = IOSurfaceGetPixelFormat(s);
-    const bool full = fourcc == '420f';
-    if (!full && fourcc != '420v')
-        return false;
     static const SEL rotation = NSSelectorFromString(@"rotation");
     const NSUInteger turned =
         [d respondsToSelector:rotation] ? ((NSUInteger (*)(id, SEL))objc_msgSend)(d, rotation) : 0;
-    const size_t w = d.width, h = d.height;
-    if (d.textureType != MTLTextureType2D || d.mipmapLevelCount != 1 || d.sampleCount != 1 || turned ||
-        (d.usage & ~(MTLTextureUsageShaderRead | MTLTextureUsagePixelFormatView)) ||
-        IOSurfaceGetWidthOfPlane(s, 0) != w || IOSurfaceGetHeightOfPlane(s, 0) != h ||
-        IOSurfaceGetWidthOfPlane(s, 1) < (w + 1) / 2 || IOSurfaceGetHeightOfPlane(s, 1) < (h + 1) / 2 ||
-        IOSurfaceGetBytesPerElementOfPlane(s, 0) != 1 || IOSurfaceGetBytesPerElementOfPlane(s, 1) != 2)
-        return false;
+    raw::YcbcrFacts f;
+    f.pixelFormat = uint32_t(d.pixelFormat);
+    f.fourcc = IOSurfaceGetPixelFormat(s);
+    f.plane = uint32_t(plane);
+    f.planes = uint32_t(IOSurfaceGetPlaneCount(s));
+    f.width = uint32_t(d.width);
+    f.height = uint32_t(d.height);
+    f.surfaceWidth = uint32_t(IOSurfaceGetWidth(s));
+    f.surfaceHeight = uint32_t(IOSurfaceGetHeight(s));
     const uintptr_t base = uintptr_t(IOSurfaceGetBaseAddress(s));
-    for (size_t p : {0, 1})
-        if (((uintptr_t(IOSurfaceGetBaseAddressOfPlane(s, p)) - base) & 15) ||
-            (IOSurfaceGetBytesPerRowOfPlane(s, p) & 15))
-            return false;
-    int matrix =
-        0;  // m2v ycbcr.rs: none and ITU_R_601_4 BT.601, ITU_R_709_2 and SMPTE_240M_1995 BT.709, ITU_R_2020 BT.2020
-    if (CFTypeRef value = IOSurfaceCopyValue(s, CFSTR("IOSurfaceYCbCrMatrix"))) {
-        char name[32] = "";
-        if (CFGetTypeID(value) == CFStringGetTypeID())
-            CFStringGetCString((CFStringRef)value, name, sizeof name, kCFStringEncodingUTF8);
-        CFRelease(value);
-        if (!strcmp(name, "ITU_R_709_2") || !strcmp(name, "SMPTE_240M_1995"))
-            matrix = 1;
-        else if (!strcmp(name, "ITU_R_2020"))
-            matrix = 2;
-        else if (strcmp(name, "ITU_R_601_4"))
-            return false;
+    for (size_t k = 0; k < 2 && k < f.planes; k++) {
+        f.offset[k] = uintptr_t(IOSurfaceGetBaseAddressOfPlane(s, k)) - base;
+        f.pitch[k] = uint32_t(IOSurfaceGetBytesPerRowOfPlane(s, k));
     }
-    // m2v ycbcr_convert.rs `coefficients`: each channel's (kb, kr) of the range and matrix
-    static const int32_t k[2][3][6] = {
-        {{-9, 13123, -3218, -6686, 16591, 9}, {-1, 14743, -1753, -4383, 17373, 1}, {0, 13806, -1540, -5349, 17614, -1}},
-        {{-8, 11483, -2816, -5850, 14518, 8},
-         {-1, 12900, -1534, -3835, 15201, 1},
-         {0, 12080, -1348, -4680, 15412, -1}}};
-    shape[0] = uint32_t(w);
-    shape[1] = uint32_t(h);
-    shape[2] = full;
-    for (int i = 0; i < 6; i++)
-        shape[3 + i] = uint32_t(k[full][matrix][i]);
-    return true;
-}
-
-// Which of ycbcr420's terms a 4:2:0 texture failed (the per-shape line): its checks in its order
-static const char *ycbcr420Why(MTLTextureDescriptor *d, IOSurfaceRef s, NSUInteger plane)
-{
-    if (plane != 0)
-        return "a plane other than 0";
-    if (IOSurfaceGetPlaneCount(s) != 2)
-        return "not two planes";
-    const uint32_t fourcc = IOSurfaceGetPixelFormat(s);
-    if (fourcc != '420f' && fourcc != '420v')
-        return "pixel format";
-    static const SEL rotation = NSSelectorFromString(@"rotation");
-    const NSUInteger turned =
-        [d respondsToSelector:rotation] ? ((NSUInteger (*)(id, SEL))objc_msgSend)(d, rotation) : 0;
-    if (d.textureType != MTLTextureType2D || d.mipmapLevelCount != 1 || d.sampleCount != 1 || turned)
-        return "shape";
-    if (d.usage & ~(MTLTextureUsageShaderRead | MTLTextureUsagePixelFormatView))
-        return "usage";
-    const size_t w = d.width, h = d.height;
-    if (IOSurfaceGetWidthOfPlane(s, 0) != w || IOSurfaceGetHeightOfPlane(s, 0) != h ||
-        IOSurfaceGetWidthOfPlane(s, 1) < (w + 1) / 2 || IOSurfaceGetHeightOfPlane(s, 1) < (h + 1) / 2)
-        return "plane sizes";
-    if (IOSurfaceGetBytesPerElementOfPlane(s, 0) != 1 || IOSurfaceGetBytesPerElementOfPlane(s, 1) != 2)
-        return "plane element sizes";
-    const uintptr_t base = uintptr_t(IOSurfaceGetBaseAddress(s));
-    for (size_t p : {0, 1})
-        if (((uintptr_t(IOSurfaceGetBaseAddressOfPlane(s, p)) - base) & 15) ||
-            (IOSurfaceGetBytesPerRowOfPlane(s, p) & 15))
-            return "plane offset or row not 16-byte";
+    f.allocBytes = IOSurfaceGetAllocSize(s);
+    f.simple = d.textureType == MTLTextureType2D && d.mipmapLevelCount == 1 && d.sampleCount == 1 && !turned &&
+               !(d.usage & ~(MTLTextureUsageShaderRead | MTLTextureUsagePixelFormatView));
+    char matrix[32] = "";
     if (CFTypeRef value = IOSurfaceCopyValue(s, CFSTR("IOSurfaceYCbCrMatrix"))) {
-        static char name[48];
-        name[0] = 0;
         if (CFGetTypeID(value) == CFStringGetTypeID())
-            CFStringGetCString((CFStringRef)value, name, sizeof name, kCFStringEncodingUTF8);
+            CFStringGetCString((CFStringRef)value, matrix, sizeof matrix, kCFStringEncodingUTF8);
         CFRelease(value);
-        if (strcmp(name, "ITU_R_709_2") && strcmp(name, "SMPTE_240M_1995") && strcmp(name, "ITU_R_2020") &&
-            strcmp(name, "ITU_R_601_4"))
-            return "matrix";
+        f.matrix = matrix;
     }
-    return "taken (refused later: the import or the pool)";
+    return raw::planYcbcr(f, out);
 }
 
 - (id<MTLTexture>)newTextureWithDescriptor:(MTLTextureDescriptor *)d iosurface:(IOSurfaceRef)s plane:(NSUInteger)plane
@@ -4934,34 +4870,19 @@ static const char *ycbcr420Why(MTLTextureDescriptor *d, IOSurfaceRef s, NSUInteg
     t->_kind = RMTextureSurface;
     t->_surface = (IOSurfaceRef)CFRetain(s);
     t->_plane = plane;
-    uint32_t shape[9];
-    if (ycbcr420(d, s, plane, shape)) {  // a 4:2:0 YCbCr texture: an image the pack's conversion state draws
-        void *base = IOSurfaceGetBaseAddress(s);
-        const uintptr_t at = uintptr_t(base);
-        t->_rawOk = gRM->raw->createYcbcrTexture(
-            IOSurfaceGetID(s), base, IOSurfaceGetAllocSize(s), s, uintptr_t(IOSurfaceGetBaseAddressOfPlane(s, 0)) - at,
-            uint32_t(IOSurfaceGetBytesPerRowOfPlane(s, 0)), uintptr_t(IOSurfaceGetBaseAddressOfPlane(s, 1)) - at,
-            uint32_t(IOSurfaceGetBytesPerRowOfPlane(s, 1)), uint32_t(d.width), uint32_t(d.height),
-            uint32_t(d.pixelFormat), shape, t->_raw);
-        // the next boot's check of r18's fix: the first 4:2:0 surface whose planes are sampled through pool images (rows or the
-        // chroma plane 16 bytes off 32), once
-        static std::atomic<bool> said{false};
-        if (t->_rawOk && (t->_raw.luma->sampled || t->_raw.chroma->sampled) && !said.exchange(true))
-            os_log(rawLog(),
-                   "raw: 4:2:0 planes through pool images, filled by the copy engine (%ux%u '%c%c%c%c', rows %zu/%zu, "
-                   "chroma at %lu)",
-                   unsigned(d.width), unsigned(d.height), char(IOSurfaceGetPixelFormat(s) >> 24),
-                   char(IOSurfaceGetPixelFormat(s) >> 16), char(IOSurfaceGetPixelFormat(s) >> 8),
-                   char(IOSurfaceGetPixelFormat(s)), IOSurfaceGetBytesPerRowOfPlane(s, 0),
-                   IOSurfaceGetBytesPerRowOfPlane(s, 1),
-                   (unsigned long)(uintptr_t(IOSurfaceGetBaseAddressOfPlane(s, 1)) - at));
-    } else if (planar444(d, s, plane)) {  // RGB8_444_2P over a 4:4:4 two-plane surface: an RGBA8 image of its codes
+    raw::YcbcrPlan ycbcr;
+    if (planar444(d, s, plane)) {  // RGB8_444_2P over a 4:4:4 two-plane surface: an RGBA8 image of its codes
         void *base = IOSurfaceGetBaseAddress(s);
         const uintptr_t at = uintptr_t(base);
         t->_rawOk = gRM->raw->createPlanarTexture(
             IOSurfaceGetID(s), base, IOSurfaceGetAllocSize(s), s, uintptr_t(IOSurfaceGetBaseAddressOfPlane(s, 0)) - at,
             uint32_t(IOSurfaceGetBytesPerRowOfPlane(s, 0)), uintptr_t(IOSurfaceGetBaseAddressOfPlane(s, 1)) - at,
             uint32_t(IOSurfaceGetBytesPerRowOfPlane(s, 1)), uint32_t(d.width), uint32_t(d.height), t->_raw);
+    } else if (raw::isYcbcrFormat(uint32_t(d.pixelFormat)) && !ycbcrPlan(d, s, plane, ycbcr)) {
+        // a YCbCr texture: an image the pack's conversion state draws
+        t->_rawOk =
+            gRM->raw->createYcbcrTexture(IOSurfaceGetID(s), IOSurfaceGetBaseAddress(s), IOSurfaceGetAllocSize(s), s,
+                                         ycbcr, uint32_t(d.width), uint32_t(d.height), t->_raw);
     } else if (rawShape(d) && !plane && IOSurfaceGetPlaneCount(s) <= 1) {
         // a surface without planes, or one described by a single plane (CoreVideo's chunky surfaces): its plane's bytes
         void *base = IOSurfaceGetBaseAddress(s);  // valid while the surface lives (the import retains it)

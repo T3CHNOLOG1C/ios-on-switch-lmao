@@ -34,6 +34,7 @@
 #include "raw_kernel.h"
 #include "raw_pack.h"
 #include "raw_push.h"
+#include "raw_ycbcr.h"
 #include "../fx/fx_mip.h"
 
 namespace raw {
@@ -97,16 +98,24 @@ struct Texture {
     } planes;
 
     bool planar = false;
-    // A two-plane 4:2:0 surface's texture (YCBCR8_420_2P 500, its sRGB twin 520, RGB8_420_2P 540): the image sampled is span
-    // (RGBA16Float, RGBA32Float, RGBA8Unorm), which a pass of the pack's conversion state draws from the planes' textures, luma
-    // (R8Unorm) and chroma (RG8Unorm), before the work that samples it (pack/ycbcr.metal; shape: its fragment buffer 0)
+    // A two-plane YCbCr surface's texture (raw_ycbcr.h): the image sampled is span (RGBA16Float, RGBA32Float, RGBA8Unorm,
+    // RGB10A2Unorm), which a pass of the pack's conversion state draws from the planes' textures, luma (R8Unorm, R16Unorm) and
+    // chroma (RG8Unorm, RG16Unorm; none over plane 1), before the work that samples it (pack/ycbcr.metal; shape: its fragment
+    // buffer 0)
     Texture *luma = nullptr, *chroma = nullptr;
-    uint32_t shape[9] = {};
-    uint8_t ycbcr = 0;  // 1 converted, 2 sRGB, 3 codes
+    uint32_t shape[kYcbcrShapeWords] = {};
+    uint8_t ycbcr = 0;  // YcbcrOutput, 0: none
     // m2v's address map of a planar texture's samplers (metal2vulkan texture/ycbcr_image.rs `ycbcr_modes`): 1 the wrapping modes
     // (repeat, mirrored repeat, mirror-clamp) clamp to the edge (4:2:0 converted), 2 clamp to zero and to the border clamp to the
     // edge (4:4:4 codes), 3 both (4:2:0 codes)
     uint8_t addressMap = 0;
+
+    // Its image is converted from a surface's planes: Metal's copies of it move the planes' bytes
+    bool converted() const
+    {
+        return planar || ycbcr;
+    }
+
     // Rows 16 but not 32 bytes apart (or an address off 32): the texture header's pitch takes multiples of 32, so it is sampled
     // through `sampled`, a pool image of its texels the copy engine refreshes from it (CommandBuffer::refresh) before work that
     // samples it, as m2v samples such a surface through a shadow image it copies in. tic is sampled's.
@@ -417,13 +426,10 @@ public:
 
     bool createSurfaceTexture(uint64_t surfaceId, void *base, uint64_t allocBytes, const void *surface, uint64_t offset,
                               uint32_t width, uint32_t height, uint32_t pitch, uint32_t format, Texture &t);
-    // A two-plane 4:2:0 surface's texture of YCBCR8_420_2P (500), YCBCR8_420_2P_sRGB (520) or RGB8_420_2P (540): its planes at
-    // `luma`/`chroma` (offsets in the allocation, with their pitches) as R8Unorm and RG8Unorm textures, its image an
-    // RGBA16Float, RGBA32Float or RGBA8Unorm one of the pool, `shape` the conversion's fragment buffer (pack/ycbcr.metal)
-    bool createYcbcrTexture(uint64_t surfaceId, void *base, uint64_t allocBytes, const void *surface, uint64_t luma,
-                            uint32_t lumaPitch, uint64_t chroma, uint32_t chromaPitch, uint32_t width, uint32_t height,
-                            uint32_t format, const uint32_t shape[9], Texture &t);
-    // The pack's conversion state of a 4:2:0 texture's output (Texture::ycbcr), null if the pack has none
+    // A two-plane YCbCr surface's texture of `width` x `height` as `plan` reads its planes, its image one of the pool
+    bool createYcbcrTexture(uint64_t surfaceId, void *base, uint64_t allocBytes, const void *surface,
+                            const YcbcrPlan &plan, uint32_t width, uint32_t height, Texture &t);
+    // The pack's conversion state of a YCbCr texture's output (Texture::ycbcr), null if the pack has none
     Pipeline *ycbcrPipeline(uint8_t output);
     // s's header under address map `map` (Texture::addressMap), made now if it is not yet
     bool samplerVariant(Sampler &s, uint8_t map);

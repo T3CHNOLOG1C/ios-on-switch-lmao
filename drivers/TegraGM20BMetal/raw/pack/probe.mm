@@ -204,7 +204,7 @@ int main(int argc, char **argv)
             lines.push_back(plain.UTF8String);
         }
         // PROBE_YCBCR_LIB=<metallib>: the raw path's own states after Core Animation's, drawn and read alike: the conversions of
-        // 4:2:0 YCbCr textures (pack/ycbcr.metal), lines marked "@Y " (their functions are that library's); mkpack.py keys
+        // YCbCr textures (pack/ycbcr.metal), lines marked "@Y " (their functions are that library's); mkpack.py keys
         // them by name ("raw.ycbcr.<fragment function>"), which the runtime asks for
         id<MTLLibrary> ycbcr = nil;
         if (const char *path = getenv("PROBE_YCBCR_LIB")) {
@@ -215,7 +215,7 @@ int main(int argc, char **argv)
             }
             for (const char *out :
                  {"115 | v ycbcr_vert | f ycbcr_converted_frag", "125 | v ycbcr_vert | f ycbcr_srgb_frag",
-                  "70 | v ycbcr_vert | f ycbcr_codes_frag"}) {
+                  "70 | v ycbcr_vert | f ycbcr_codes_frag", "90 | v ycbcr_vert | f ycbcr_codes10_frag"}) {
                 std::string o = out;
                 const size_t bar = o.find(' ');
                 lines.push_back("@Y R ok=1 label=raw.ycbcr samples=1 topo=0 ds=0/0 c0=" + o.substr(0, bar) +
