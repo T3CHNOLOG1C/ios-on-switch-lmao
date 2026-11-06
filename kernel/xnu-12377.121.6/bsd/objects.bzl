@@ -349,7 +349,6 @@ DEVELOPMENT = struct(
         "bsd/kern/sysv_msg.c",
         "bsd/kern/mach_fat.c",
         "bsd/kern/mach_loader.c",
-        "bsd/kern/a64x_xnu.c",
         "bsd/kern/posix_sem.c",
         "bsd/kern/posix_shm.c",
         "bsd/kern/qsort.c",

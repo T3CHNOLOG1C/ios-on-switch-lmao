@@ -814,7 +814,7 @@ LEXT(dtrace_nofault_copy64)
 #if CONFIG_A64X
 /*
  * a64x: atomic read-modify-write on user memory, for the undefined-instruction fallback of the arm64e translator
- * (bsd/kern/a64x_xnu.c a64x_emulate_user). Exclusive loops with acquire+release, under a copyio recovery range: a
+ * (kernel/switch/translate/a64x_xnu.c a64x_emulate_user). Exclusive loops with acquire+release, under a copyio recovery range: a
  * fault on the user address goes through vm_fault first, as for any copyio, and returns EFAULT if unresolved.
  */
 

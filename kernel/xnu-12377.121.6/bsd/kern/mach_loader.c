@@ -49,7 +49,7 @@
 #include <sys/fcntl.h>
 #include <sys/file_internal.h>
 #include <sys/ubc_internal.h>
-#include <sys/a64x_xnu.h>
+#include <switch/a64x.h>
 #include <sys/imgact.h>
 #include <sys/codesign.h>
 #include <sys/proc_uuid_policy.h>
@@ -1995,13 +1995,7 @@ parse_machfile(
 		ret = LOAD_BADMACHO_UPX;
 	}
 
-#if CONFIG_A64X
-	/* arm64e text runs only translated; arm64 text is scanned, translated if it needs it (sys/a64x_xnu.h) */
-	if (ret == LOAD_SUCCESS && a64x_image_kind(header->cputype, header->cpusubtype) != A64X_IMAGE_NATIVE &&
-	    a64x_load_image(map, vp, file_offset, addr, alloc_size, slide) != 0) {
-		ret = LOAD_FAILURE;
-	}
-#endif /* CONFIG_A64X */
+	if (ret == LOAD_SUCCESS && switch_a64x_load_refused(header, map, vp, file_offset, addr, alloc_size, slide)) ret = LOAD_FAILURE;
 
 	kfree_data(addr, alloc_size);
 

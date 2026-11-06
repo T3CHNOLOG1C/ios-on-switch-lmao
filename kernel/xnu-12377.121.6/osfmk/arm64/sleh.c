@@ -34,9 +34,7 @@
 #include <arm/rtclock.h>
 #include <arm/trap_internal.h> /* for IS_ARM_GDB_TRAP() et al */
 #include <arm64/proc_reg.h>
-#if CONFIG_A64X
-extern int a64x_emulate_user(arm_saved_state_t *state, uint32_t instr);
-#endif
+#include <switch/a64x_trap.h>
 #include <arm64/machine_machdep.h>
 #include <kern/cpc.h>
 #include <arm64/instructions.h>
@@ -1194,12 +1192,7 @@ handle_uncategorized(arm_saved_state_t *state)
 
 	COPYIN(get_saved_state_pc(state), (char *)&instr, sizeof(instr));
 
-#if CONFIG_A64X
-	/* what the load-time translator left (LSE in places it could not give a stub) */
-	if (PSR64_IS_USER64(get_saved_state_cpsr(state)) && a64x_emulate_user(state, instr)) {
-		return;
-	}
-#endif /* CONFIG_A64X */
+	if (switch_a64x_emulated(state, instr)) return;
 
 #if CONFIG_DTRACE
 

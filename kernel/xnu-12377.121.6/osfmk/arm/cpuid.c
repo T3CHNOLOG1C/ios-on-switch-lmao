@@ -90,7 +90,7 @@ do_cpuid(void)
 #if (__ARM_ARCH__ == 8)
 
 #if defined(HAS_APPLE_PAC) || CONFIG_A64X
-	/* CONFIG_A64X: arm64e binaries run through the load-time translator (bsd/kern/a64x_xnu.c) */
+	/* CONFIG_A64X: arm64e binaries run through the load-time translator (kernel/switch/translate/a64x_xnu.c) */
 	cpuid_cpu_info.arm_info.arm_arch = CPU_ARCH_ARMv8E;
 #else /* defined(HAS_APPLE_PAC) */
 	cpuid_cpu_info.arm_info.arm_arch = CPU_ARCH_ARMv8;
