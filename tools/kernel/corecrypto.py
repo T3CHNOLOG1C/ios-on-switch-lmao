@@ -1,6 +1,8 @@
-"""The kernel's corecrypto provider archive (tree/scripts/build-corecrypto-14.py, run plain then --namespace, in one
-action): the corecrypto_kext target's C sources, compiled for the iOS 17 kernel without assembly; the names the plain
-archive shares with XNU are renamed cc14_<name> (namespace.h) in the namespaced archive the kernel links.
+"""The kernel's corecrypto provider archive.
+
+As tree/scripts/build-corecrypto-14.py made it, run plain then --namespace, in one action: the corecrypto_kext target's
+C sources, compiled for the iOS 17 kernel without assembly; the names the plain archive shares with XNU are renamed
+cc14_<name> (namespace.h) in the namespaced archive the kernel links.
 
 usage: corecrypto.py --xcode-env F --source DIR --sdkroot DIR --kernel-names NAMES.txt --out A.a --namespace-header H
                      --path-root P [--jobs N]

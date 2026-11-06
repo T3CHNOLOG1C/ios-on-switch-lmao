@@ -1,5 +1,6 @@
-"""host_c_binary.py --xcode-env F --out O [--flag F]... SOURCE...: a small host (macOS arm64) C tool built from pinned
-source with Xcode's clang and the macOS SDK (lz4 for the kernel window).
+"""host_c_binary.py --xcode-env F --out O [--flag F]... SOURCE...: a small host (macOS arm64) C tool.
+
+Built from pinned source with Xcode's clang and the macOS SDK (lz4 for the kernel window).
 """
 
 import argparse

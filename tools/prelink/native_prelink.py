@@ -165,10 +165,11 @@ def plan(native_data, original_data, roots, slide, *, inherited_original_sha256=
 
 
 def plan_original(original_data, roots, slide, *, inherited_original_sha256=None, cuts=None):
-    """plan()'s part that reads only the original kernelcache: the closure, the extents and every pointer site, with
-    the component pointers bound. The kernel and cut pointers' targets (new_target None here) and the checks against
-    the native kernel are bind_native's, from `pending`: {'kernel': [(binding index, target, original export names)],
-    'cut': [(binding index, component, dependency, stub)]}.
+    """Run plan()'s part that reads only the original kernelcache.
+
+    The closure, the extents and every pointer site, with the component pointers bound. The kernel and cut pointers'
+    targets (new_target None here) and the checks against the native kernel are bind_native's, from `pending`:
+    {'kernel': [(binding index, target, original export names)], 'cut': [(binding index, component, dependency, stub)]}.
     """
     if (
         not isinstance(inherited_original_sha256, str)
@@ -334,9 +335,11 @@ def plan_original(original_data, roots, slide, *, inherited_original_sha256=None
 
 
 def native_bindings(native_data, native, kernel_targets, cut_stubs, extents):
-    """The native kernel's half of plan(): each kernel target's native address (kernel_targets: [(target, original
-    export names)]), each cut's stub address (cut_stubs: [(component, dependency, stub)]), and the checks that the
-    rebased extents ([(va, size)]) miss the native segments. The exports, for the caller's own markers.
+    """Run the native kernel's half of plan().
+
+    Each kernel target's native address (kernel_targets: [(target, original export names)]), each cut's stub address
+    (cut_stubs: [(component, dependency, stub)]), and the checks that the rebased extents ([(va, size)]) miss the native
+    segments. The exports, for the caller's own markers.
     """
     native_symbols = {}
     exported = exports(native_data, native)
@@ -362,8 +365,10 @@ def native_bindings(native_data, native, kernel_targets, cut_stubs, extents):
 
 
 def bind_native(report, unbound, native_data):
-    """plan()'s native half on plan_original's report: the kernel and cut pointers' new targets, the native checks,
-    native_sha256. The exports of the native kernel.
+    """Run plan()'s native half on plan_original's report.
+
+    The kernel and cut pointers' new targets, the native checks, native_sha256. Returns the exports of the native
+    kernel.
     """
     native = macho(native_data)
     if native['kind'] != 2:

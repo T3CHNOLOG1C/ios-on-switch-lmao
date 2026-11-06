@@ -1,5 +1,6 @@
-"""libfirehose_kernel.a (and its installed header) from libdispatch, built with xcodebuild against the kernel SDK root,
-as the tree's scripts/build-firehose.sh did.
+"""libfirehose_kernel.a (and its installed header) from libdispatch.
+
+Built with xcodebuild against the kernel SDK root, as the tree's scripts/build-firehose.sh did.
 
 usage: firehose.py --xcode-env F --libdispatch DIR --xnu DIR --sdkroot DIR --out DIR --log F [--jobs N]
 """

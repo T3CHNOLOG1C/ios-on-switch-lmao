@@ -1,5 +1,7 @@
-"""data_seed.py SEED.dbr UUID OUT.h: NativeDataSeed.h for NativeRamBlock (tree/scripts/build-native-ram-block.py
---pins-only): the packed seed's geometry and its encoded and logical SHA-256s, compiled into the driver.
+"""data_seed.py SEED.dbr UUID OUT.h: NativeDataSeed.h for NativeRamBlock.
+
+As tree/scripts/build-native-ram-block.py --pins-only wrote it: the packed seed's geometry and its encoded and logical
+SHA-256s, compiled into the driver.
 """
 
 import hashlib

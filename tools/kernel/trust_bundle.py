@@ -1,6 +1,7 @@
-"""trust_bundle.py OUT STATIC.im4p SYSTEM.im4p: the static trust cache bundle the kernel window carries for the root and
-OS cryptex (vendor/unixnu's build-original-system-trust.py: u32 count 2, u32 offsets, the 'trst' payload of
-StaticTrustCache, the 'trcs' payload of Cryptex1,SystemTrustCache).
+"""trust_bundle.py OUT STATIC.im4p SYSTEM.im4p: the static trust cache bundle for the root and OS cryptex.
+
+The kernel window carries it. Its layout is vendor/unixnu's build-original-system-trust.py's: u32 count 2, u32
+offsets, the 'trst' payload of StaticTrustCache, the 'trcs' payload of Cryptex1,SystemTrustCache.
 """
 
 import struct

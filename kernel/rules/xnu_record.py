@@ -1,6 +1,8 @@
-"""Records what XNU's make does to make its headers and generated sources: the tables kernel/rules/xnu.bzl replays as
-one Bazel action per step (bazel run //kernel/xnu-<version>:update_tables, after a change to XNU's makefiles, MASTER
-files, conf/files, a script they run or Xcode; bazel test //kernel/xnu-<version>:tables_test says when it is due).
+"""Records what XNU's make does to make its headers and generated sources.
+
+The records are the tables kernel/rules/xnu.bzl replays as one Bazel action per step (bazel run
+//kernel/xnu-<version>:update_tables, after a change to XNU's makefiles, MASTER files, conf/files, a script they run or
+Xcode; bazel test //kernel/xnu-<version>:tables_test says when it is due).
 
 In a scratch directory, on a copy of kernel/xnu-<version>, it runs make as the earlier Bazel flow did:
   installhdrs  SDKROOT=macosx into a DSTROOT that already holds the SDK root's other parts (tools/kernel/sdkroot.py):
@@ -222,7 +224,10 @@ SYSCALL_MODES = {
 
 
 def script_outputs(r):
-    """The files a script writes (absolute): from its arguments, doconf's from what appeared in its -d directory."""
+    """Return the files a script writes (absolute).
+
+    They come from its arguments; doconf's from what appeared in its -d directory.
+    """
     tool, argv, cwd = r['tool'], r['argv'], r['cwd']
     if tool.endswith('doconf'):
         return r['written']
@@ -234,8 +239,10 @@ def script_outputs(r):
 
 
 def script_inputs(r, cwd, roots, outs):
-    """The files a script reads: those its arguments and environment name, doconf's MASTER files and conf/
-    directory, newvers.pl's $OBJROOT/xnuVersion.
+    """Return the files a script reads.
+
+    Those its arguments and environment name, doconf's MASTER files and conf/ directory, newvers.pl's
+    $OBJROOT/xnuVersion.
     """
     ins = set()
     for value in list(r['argv']) + list(r['env'].values()):
@@ -278,7 +285,7 @@ def include_dirs(argv, cwd, roots):
 
 
 def record_pass(work, roots, final_files, log_path, make_log):
-    """The table entries of one pass from its wrapper log."""
+    """Return the table entries of one pass from its wrapper log."""
     records = [json.loads(line) for line in log_path.read_text().splitlines()]
     steps, problems = [], []
     unifdef_by_shell = {}
@@ -464,8 +471,10 @@ def listing(root):
 
 
 def write_table(path, name, version, data):
-    """A .bzl file: NAME = {"flags": [unifdef flag lists], "steps": [one dict per step]}, sorted, so a re-recorded
-    table diffs line by line. A step's "flags" is an index into "flags" (a few flag sets serve thousands of headers).
+    """Write a table as a .bzl file: NAME = {"flags": [unifdef flag lists], "steps": [one dict per step]}.
+
+    It is sorted, so a re-recorded table diffs line by line. A step's "flags" is an index into "flags" (a few flag sets
+    serve thousands of headers).
     """
     flags = sorted({tuple(s['flags']) for s in data if 'flags' in s})
     index = {f: i for i, f in enumerate(flags)}

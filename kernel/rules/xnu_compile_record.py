@@ -1,5 +1,7 @@
-"""XNU's compile and link records as the tables kernel/xnu-<version>/ compiles from: <component>/objects.bzl and
-config/recipes_<config>.bzl (the forms xnu_objects.bzl and xnu_kernel.bzl read).
+"""XNU's compile and link records as the tables kernel/xnu-<version>/ compiles from.
+
+The tables are <component>/objects.bzl and config/recipes_<config>.bzl (the forms xnu_objects.bzl and xnu_kernel.bzl
+read).
 
 Input is a VERBOSE=YES make build of the tree (real compilers): every compile's -MJ record in the object root, each
 component's <component>.filelist for the link order, and from the log the setsegname loops and the kernel's link.
@@ -56,9 +58,11 @@ def split_joined(tokens):
 
 
 def compiles(obj):
-    """Every compile's -MJ record in obj: (the directory it ran in, its source, its arguments). The records keep make's
-    argument order less the dependency flags (-MD, -MF, -MJ, -MP), plus what the clang driver appends to every compile
-    (vendor features, the linker version, the target): that common suffix is dropped, the kernel toolchain adds its own.
+    """Return every compile's -MJ record in obj: (the directory it ran in, its source, its arguments).
+
+    The records keep make's argument order less the dependency flags (-MD, -MF, -MJ, -MP), plus what the clang driver
+    appends to every compile (vendor features, the linker version, the target): that common suffix is dropped, the
+    kernel toolchain adds its own.
     """
     found = []
     for path in sorted(Path(obj).rglob('*.json')):
@@ -99,7 +103,7 @@ def parse_compile(argv, source, places, gen):
 
 
 def drop_missing_sdk_includes(tokens):
-    """The iPhoneOS SDK's iBoot and AppleFeatures include directories make names do not exist in the SDK."""
+    """Drop the iPhoneOS SDK's iBoot and AppleFeatures include directories make names: the SDK has neither."""
     out, i = [], 0
     while i < len(tokens):
         if tokens[i] == '-I' and i + 1 < len(tokens) and '/Platforms/iPhoneOS.platform/' in tokens[i + 1]:
@@ -127,7 +131,7 @@ def segments(log):
 
 
 def link(log, places):
-    """The kernel's link (MakeInc.kernel), its archives (what follows -lcc_kext) as @KERNEL_ARCHIVES@."""
+    """Return the kernel's link (MakeInc.kernel), its archives (what follows -lcc_kext) as @KERNEL_ARCHIVES@."""
     for line in Path(log).read_text(errors='replace').splitlines():
         if '-filelist link.filelist' not in line or '.unstripped' not in line:
             continue
@@ -138,7 +142,7 @@ def link(log, places):
 
 
 def gen_root(cwd, objdir):
-    """The directory a component's generated sources hang from (its <component>/<CONFIG>), or the config's own."""
+    """Return the directory a component's generated sources hang from: its <component>/<CONFIG>, or the config's."""
     path = Path(cwd).resolve()
     while objdir not in (path.name, path.parent.parent.name):
         path = path.parent
@@ -146,7 +150,7 @@ def gen_root(cwd, objdir):
 
 
 def common_prefix(values):
-    """The longest list every value starts with: a component's recipe is what all its objects share."""
+    """Return the longest list every value starts with: a component's recipe is what all its objects share."""
     first = values[0]
     n = len(first)
     for v in values[1:]:

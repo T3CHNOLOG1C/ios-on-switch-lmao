@@ -125,7 +125,7 @@ def do_unifdef_to(spec, step) -> None:
 
 
 def parse_deps(text):
-    """The files a make-style dependency file lists (its first target's prerequisites)."""
+    """Return the files a make-style dependency file lists (its first target's prerequisites)."""
     text = text.replace('\\\n', ' ')
     _, _, prereqs = text.partition(':')
     out = []
@@ -273,7 +273,9 @@ AVAILABILITY_MODULEMAPS = {
 
 
 def install_base(availability, libplatform, libdispatch, out, env, python3=None) -> None:
-    """availability.pl and AvailabilityVersions' headers (its CMake install, INSTALL_KERNEL_HEADERS=1), libplatform's
+    """Install the SDK root's other parts into out.
+
+    availability.pl and AvailabilityVersions' headers (its CMake install, INSTALL_KERNEL_HEADERS=1), libplatform's
     public and private headers, libdispatch's os/ headers reduced to their kernel view.
     """
     python3 = python3 or sys.executable
@@ -385,8 +387,9 @@ def install_base(availability, libplatform, libdispatch, out, env, python3=None)
 
 
 def do_base(spec, step) -> None:
-    """The base step writes into a scratch root, then only its declared outputs move into place (installhdrs owns
-    the rest of the SDK root's files).
+    """Run the base step in a scratch root, then move only its declared outputs into place.
+
+    installhdrs owns the rest of the SDK root's files.
     """
     with tempfile.TemporaryDirectory() as scratch:
         sources = spec.data['base_sources']
@@ -409,7 +412,7 @@ def do_base(spec, step) -> None:
 
 
 def do_ignorelist(spec, step) -> None:
-    """A sanitizer ignore list, as san/Makefile's sed makes it: its parts, src:./ entries rooted at the XNU tree."""
+    """Write a sanitizer ignore list as san/Makefile's sed does: its parts, src:./ entries rooted at the XNU tree."""
     text = ''.join(Path(spec.path(s)).read_text() for s in step['srcs'])
     out = spec.path(step['out'])
     writable(out)

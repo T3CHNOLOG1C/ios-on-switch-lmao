@@ -1,6 +1,7 @@
-"""storage_abi.py --xcode-env F --source DIR --out DIR: the CMake flow's tree/build/storage-abi/include
-(tree/scripts/audit-storage-interface.py): IOStorageFamily-315's headers as IOKit/storage/*.h, plus the macOS SDK's
-TargetConditionals.h, the one platform header the kernel SDK lacks.
+"""storage_abi.py --xcode-env F --source DIR --out DIR: the CMake flow's tree/build/storage-abi/include.
+
+As tree/scripts/audit-storage-interface.py made it: IOStorageFamily-315's headers as IOKit/storage/*.h, plus the macOS
+SDK's TargetConditionals.h, the one platform header the kernel SDK lacks.
 """
 
 import argparse

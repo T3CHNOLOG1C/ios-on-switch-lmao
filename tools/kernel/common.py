@@ -28,7 +28,7 @@ def xcode_env(path):
 
 
 def environment(xcode, extra_path=(), **extra):
-    """A clean environment: fixed PATH, Xcode selected by DEVELOPER_DIR, deterministic archives, no locale drift."""
+    """Return a clean environment: fixed PATH, Xcode by DEVELOPER_DIR, deterministic archives, no locale drift."""
     env = {
         'PATH': ':'.join([*extra_path, SYSTEM_PATH]),
         'DEVELOPER_DIR': xcode['DEVELOPER_DIR'],
@@ -70,7 +70,7 @@ MOVED_ROOTS = ('drivers', 'kits', 'diagnostics', 'overlay')
 
 
 def old_spelling(path, bin_dir=None):
-    """The pre-move spelling of an execroot-relative path (unchanged if it was not moved)."""
+    """Return the pre-move spelling of an execroot-relative path (unchanged if it was not moved)."""
     for root in MOVED_ROOTS:
         if path == root or path.startswith(root + '/'):
             return OLD_TREE + '/' + path
@@ -80,8 +80,10 @@ def old_spelling(path, bin_dir=None):
 
 
 def compat_prefix_maps(path_root, bin_dir):
-    """Prefix maps from moved paths (absolute, below this execution root) to their old spellings, after the generic
-    ones (debug maps: the last match wins; macro maps: the most specific). Empty while nothing has moved.
+    """Return prefix maps from moved paths (absolute, below this execution root) to their old spellings.
+
+    They come after the generic ones (debug maps: the last match wins; macro maps: the most specific). Empty while
+    nothing has moved.
     """
     here, root = execroot(), path_root.rstrip('/')
     maps = []
@@ -101,9 +103,10 @@ XNU_REPOSITORY = 'external/+http_archive+xnu'
 
 
 def prefix_maps(path_root, bin_dir, xnu_dir):
-    """-ffile-prefix-map flags that make every path a compile can embed independent of the sandbox: the patched XNU
-    source shows as <root>/out/native-a57/root-v1/tree/.cache/xnu-work (where the CMake flow kept its checkout),
-    build outputs as <root>/<package path> (bazel-bin/out/... -> out/...), sources as <root>/<path>.
+    """Return -ffile-prefix-map flags that make every path a compile can embed independent of the sandbox.
+
+    The patched XNU source shows as <root>/out/native-a57/root-v1/tree/.cache/xnu-work (where the CMake flow kept its
+    checkout), build outputs as <root>/<package path> (bazel-bin/out/... -> out/...), sources as <root>/<path>.
     """
     here = execroot()
     tree = path_root.rstrip('/') + '/out/native-a57/root-v1/tree/.cache/xnu-work'
@@ -129,10 +132,11 @@ def copy_tree(source, target):
 
 
 def resolve_links(root):
-    """Replace every symbolic link below root by a copy of what it names (Kernel.framework's Headers ->
-    Versions/Current/Headers and Versions/Current -> A, as XNU's installhdrs makes them). Tree artifacts stay
-    self-contained: a cache that hands out a tree's links but not their targets (Bazel's build without the bytes) would
-    otherwise leave them dangling, and Bazel then re-runs the action on every build.
+    """Replace every symbolic link below root by a copy of what it names.
+
+    Kernel.framework's Headers -> Versions/Current/Headers and Versions/Current -> A, as XNU's installhdrs makes them.
+    Tree artifacts stay self-contained: a cache that hands out a tree's links but not their targets (Bazel's build
+    without the bytes) would otherwise leave them dangling, and Bazel then re-runs the action on every build.
     """
     root = Path(root)
     while True:

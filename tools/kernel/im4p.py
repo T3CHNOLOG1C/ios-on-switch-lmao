@@ -1,6 +1,7 @@
-"""im4p.py payload IN OUT [--expect-type T] [--lzfse] [--thin-arm64] [--sha256 H]: an IM4P's payload, optionally LZFSE-
-decoded (macOS's compression_tool, a declared host tool) and reduced to its arm64 slice, as vendor/unixnu's ipsw.py
-kernelcache() made kernelcache.decompressed; checked against a pin when one is given.
+"""im4p.py payload IN OUT [--expect-type T] [--lzfse] [--thin-arm64] [--sha256 H]: an IM4P's payload.
+
+Optionally LZFSE-decoded (macOS's compression_tool, a declared host tool) and reduced to its arm64 slice, as
+vendor/unixnu's ipsw.py kernelcache() made kernelcache.decompressed; checked against a pin when one is given.
 """
 
 import argparse

@@ -179,9 +179,10 @@ PLAN_MAGIC = b'SWCHPLK1'
 
 
 class Plan:
-    """What apply needs from the original kernelcache: the coalesced segments back to back (every byte that does not
-    depend on the native kernel written), where the native kernel's pointers go, and the prelink info XML around its
-    KCID.
+    """What apply needs from the original kernelcache.
+
+    The coalesced segments back to back (every byte that does not depend on the native kernel written), where the
+    native kernel's pointers go, and the prelink info XML around its KCID.
     """
 
     def __init__(self, **fields):
@@ -232,8 +233,9 @@ class Plan:
 
 
 def prepare(original_data, roots, slide, early_security_init=None, *, inherited_original_report):
-    """emit()'s part that reads only the original kernelcache: (the plan, the report without its native fields, the
-    report's unbound pointers).
+    """Run emit()'s part that reads only the original kernelcache.
+
+    Returns (the plan, the report without its native fields, the report's unbound pointers).
     """
     inherited = inherited_original_report
     report, unbound = plan_original(
@@ -510,8 +512,9 @@ def prepare(original_data, roots, slide, early_security_init=None, *, inherited_
 
 
 def apply(plan, native_data, report=None, unbound=None):
-    """emit()'s part that reads the native kernel: the candidate from a plan (and, given prepare's report and unbound
-    pointers, the report).
+    """Run emit()'s part that reads the native kernel: the candidate from a plan.
+
+    Given prepare's report and unbound pointers, it completes the report too.
     """
     native = macho(native_data)
     if native['kind'] != 2:
@@ -635,7 +638,7 @@ def apply(plan, native_data, report=None, unbound=None):
 
 
 def emit(native_data, original_data, roots, slide, early_security_init=None, *, inherited_original_report):
-    """The candidate and its report, in one process."""
+    """Return the candidate and its report, in one process."""
     plan, report, unbound = prepare(
         original_data, roots, slide, early_security_init, inherited_original_report=inherited_original_report
     )
@@ -666,7 +669,7 @@ def original_arguments(parser):
 
 
 def original_inputs(parser, args):
-    """The checked original inputs: (kernelcache bytes, inherited report, early initializers, previous)."""
+    """Return the checked original inputs: (kernelcache bytes, inherited report, early initializers, previous)."""
     NEW_ORIGINAL_COMPONENTS.update(args.new_root)
     for cut in args.cut:
         component, dependency, sites = cut.split('=')

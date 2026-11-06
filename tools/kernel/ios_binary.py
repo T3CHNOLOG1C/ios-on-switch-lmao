@@ -1,5 +1,7 @@
-"""An iOS 17 userland binary for the overlay, as cmake/Drivers.cmake built them: Xcode's clang for arm64-apple-ios17.0
-with the iPhoneOS SDK, then an ad hoc signature (no timestamp: the CDHash is a function of the bytes).
+"""An iOS 17 userland binary for the overlay, as cmake/Drivers.cmake built them.
+
+Xcode's clang for arm64-apple-ios17.0 with the iPhoneOS SDK, then an ad hoc signature (no timestamp: the CDHash is a
+function of the bytes).
 
 usage: ios_binary.py --xcode-env F --out O --path-root P --bin-dir D [--coreaudio-headers] [--strip]
                      [--sign-identifier ID] [--entitlements E] [--pagesize N] -- <clang args and sources>
