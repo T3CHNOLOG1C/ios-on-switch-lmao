@@ -44,6 +44,16 @@ ignore = [
   # Binary formats and hardware registers: the values are the specification (offsets, magic numbers, sizes), and a
   # name for each one would only restate the comment or table it comes from. Constants used twice get a name anyway.
   "PLR2004",
+  # Missing docstrings: AGENTS.md has code say what it does and comments only what it cannot; a docstring required on
+  # every module, class and function would restate names. A docstring that is there is still checked (D2xx, D4xx).
+  "D100",
+  "D101",
+  "D102",
+  "D103",
+  "D104",
+  "D105",
+  "D106",
+  "D107",
   # The formatter owns these (ruff's documented formatter conflicts).
   "ISC001",
   "W191",
@@ -79,5 +89,5 @@ combine-as-imports = true
 
 [lint.per-file-ignores]
 # Tests are unittest: their assertions are unittest's, their names say what they test, and `-> None` adds nothing.
-"**/test_*.py" = ["PT009", "PT027", "D101", "D102", "ANN201"]
-"**/*_test.py" = ["PT009", "PT027", "D101", "D102", "ANN201"]
+"**/test_*.py" = ["PT009", "PT027", "ANN201"]
+"**/*_test.py" = ["PT009", "PT027", "ANN201"]
