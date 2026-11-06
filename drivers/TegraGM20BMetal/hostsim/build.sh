@@ -13,14 +13,14 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 TREE=$HERE/../../..
 mkdir -p "$2"
 xcrun clang -O1 -Wall -dynamiclib -I "$TREE/drivers/TegraGM20B" "$HERE/mock_iokit.c" -framework IOKit -framework CoreFoundation \
-  -install_name @rpath/libmock_iokit.dylib -o "$2/libmock_iokit.dylib"
+    -install_name @rpath/libmock_iokit.dylib -o "$2/libmock_iokit.dylib"
 xcrun clang++ -O1 -g -std=c++17 -fobjc-arc -Wno-deprecated-declarations -I "$TREE/drivers/NativeMetal" -x objective-c++ \
-  "$HERE/m2v_gm20b.mm" "$TREE/drivers/NativeMetal/NativeBridgeMetalFrontend.mm" -x none "$1" -L "$2" -lmock_iokit \
-  -Wl,-rpath,"$2" -lobjc -framework Foundation -framework Metal -framework IOSurface -framework IOKit -o "$2/m2v_gm20b"
+    "$HERE/m2v_gm20b.mm" "$TREE/drivers/NativeMetal/NativeBridgeMetalFrontend.mm" -x none "$1" -L "$2" -lmock_iokit \
+    -Wl,-rpath,"$2" -lobjc -framework Foundation -framework Metal -framework IOSurface -framework IOKit -o "$2/m2v_gm20b"
 xcrun clang++ -O1 -g -std=c++17 -fobjc-arc -Wno-deprecated-declarations -I "$TREE/drivers/NativeMetal" -x objective-c++ \
-  "$HERE/qc_frontend.mm" "$TREE/drivers/NativeMetal/NativeBridgeMetalFrontend.mm" -x none "$1" -L "$2" -lmock_iokit \
-  -Wl,-rpath,"$2" -lobjc -framework Foundation -framework Metal -framework IOSurface -framework IOKit -o "$2/qc_frontend"
+    "$HERE/qc_frontend.mm" "$TREE/drivers/NativeMetal/NativeBridgeMetalFrontend.mm" -x none "$1" -L "$2" -lmock_iokit \
+    -Wl,-rpath,"$2" -lobjc -framework Foundation -framework Metal -framework IOSurface -framework IOKit -o "$2/qc_frontend"
 xcrun clang++ -O1 -g -std=c++17 -fobjc-arc -Wno-deprecated-declarations -I "$TREE/drivers/NativeMetal" -x objective-c++ \
-  "$HERE/present_frontend.mm" "$TREE/drivers/NativeMetal/NativeBridgeMetalFrontend.mm" -x none "$1" -L "$2" -lmock_iokit \
-  -Wl,-rpath,"$2" -lobjc -framework Foundation -framework Metal -framework IOSurface -framework IOKit -o "$2/present_frontend"
+    "$HERE/present_frontend.mm" "$TREE/drivers/NativeMetal/NativeBridgeMetalFrontend.mm" -x none "$1" -L "$2" -lmock_iokit \
+    -Wl,-rpath,"$2" -lobjc -framework Foundation -framework Metal -framework IOSurface -framework IOKit -o "$2/present_frontend"
 echo "built $2/m2v_gm20b $2/qc_frontend $2/present_frontend"
