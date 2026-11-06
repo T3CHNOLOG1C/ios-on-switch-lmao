@@ -25,6 +25,7 @@
 #include <string.h>
 #include "../TegraHost1x/TegraHost1x.h"
 #include "TegraNVJPG.h"
+#include "../../kits/SwitchTime/SwitchTime.h"
 #include "selftest/J3Vectors.h"
 
 namespace {
@@ -57,13 +58,6 @@ const Vector kAScaled[3] = {
     {"J3A/4", kJ3AJpeg, sizeof(kJ3AJpeg), 11, 10, {kJ3AScale2Plane0, kJ3AScale2Plane1, kJ3AScale2Plane2}, 11, 10, 2},
     {"J3A/8", kJ3AJpeg, sizeof(kJ3AJpeg), 6, 5, {kJ3AScale3Plane0, kJ3AScale3Plane1, kJ3AScale3Plane2}, 6, 5, 3},
 };
-
-uint64_t nowUs()
-{
-    uint64_t ns;
-    absolutetime_to_nanoseconds(mach_absolute_time(), &ns);
-    return ns / 1000;
-}
 
 inline uint32_t refY(const Vector &v, uint32_t x, uint32_t y)
 {
@@ -140,7 +134,7 @@ int decode(const Vector &v, uint32_t format, uint64_t bits, const Output &out, n
     uint32_t bytes = scan;
     if (!img.eoi)
         gBits.va[bytes++] = 0xff, gBits.va[bytes++] = 0xd9;
-    tegra_nvjpg_cache_clean(gBits.va, bytes);
+    switch_dcache_clean(gBits.va, bytes);
     static TegraNVJPGJob job;  // the setup is 2.8 KiB: not on the kernel stack (J3 runs on one thread)
     bzero(&job, sizeof(job));
     tegra_nvjpg_setup_image(&img, bytes, &job.setup);
@@ -246,7 +240,7 @@ Output layout(uint32_t format, uint32_t pitch)
 void prefill(uint8_t guard)
 {
     memset(gOut.va, guard, gOut.size);
-    tegra_nvjpg_cache_flush(gOut.va, gOut.size);
+    switch_dcache_clean_invalidate(gOut.va, gOut.size);
 }
 
 // A case on the 1:1 output buffer: 0 passed, -1 failed (gWhy), -2 engine failure.
@@ -258,7 +252,7 @@ int run(const Vector &v, uint32_t format, uint32_t pitch)
     const int ret = decode(v, format, gBits.pa, out, &status);
     if (ret)
         return ret;
-    tegra_nvjpg_cache_flush(gOut.va, gOut.size);
+    switch_dcache_clean_invalidate(gOut.va, gOut.size);
     return compare(v, format, out) ? 0 : -1;
 }
 
@@ -277,7 +271,7 @@ int extent(uint32_t format, uint32_t pitch, bool *clipped)
         const int ret = decode(kA, format, gBits.pa, out, &status);
         if (ret)
             return ret;
-        tegra_nvjpg_cache_flush(gOut.va, gOut.size);
+        switch_dcache_clean_invalidate(gOut.va, gOut.size);
         if (!compare(kA, format, out))
             return -1;
         if (!pass) {
@@ -315,8 +309,8 @@ int translation()
 {
     memset(gPageA.va, 0x5a, gPageA.size);
     memset(gPageB.va, 0x5a, gPageB.size);
-    tegra_nvjpg_cache_flush(gPageA.va, gPageA.size);
-    tegra_nvjpg_cache_flush(gPageB.va, gPageB.size);
+    switch_dcache_clean_invalidate(gPageA.va, gPageA.size);
+    switch_dcache_clean_invalidate(gPageB.va, gPageB.size);
     for (uint64_t at = 0; at < gPageA.size; at += 4096)
         tegra_nvjpg_identity_override(gPageA.pa + at, gPageB.pa + at);
     Output out = {};
@@ -329,8 +323,8 @@ int translation()
         tegra_nvjpg_identity_override(gPageA.pa + at, gPageA.pa + at);
     if (ret)
         return ret;
-    tegra_nvjpg_cache_flush(gPageA.va, gPageA.size);
-    tegra_nvjpg_cache_flush(gPageB.va, gPageB.size);
+    switch_dcache_clean_invalidate(gPageA.va, gPageA.size);
+    switch_dcache_clean_invalidate(gPageB.va, gPageB.size);
     uint32_t inA = 0;
     for (uint64_t i = 0; i < gPageA.size; i++)
         inA += gPageA.va[i] != 0x5a;
@@ -354,7 +348,7 @@ int windows()
     for (uint32_t i = 0; i < 4; i++)
         outPages[i] = gPageB.pa + (uint64_t)(3 - i) * 4096;
     memset(gPageB.va, 0x5a, gPageB.size);
-    tegra_nvjpg_cache_flush(gPageB.va, gPageB.size);
+    switch_dcache_clean_invalidate(gPageB.va, gPageB.size);
     const uint64_t inBase = tegra_nvjpg_window_map(TEGRA_NVJPG_WINDOW_IN, in, 2, false);
     const uint64_t outBase = tegra_nvjpg_window_map(TEGRA_NVJPG_WINDOW_OUT, outPages, 4, true);
     if (!inBase || !outBase) {
@@ -370,7 +364,7 @@ int windows()
     tegra_nvjpg_window_clear(TEGRA_NVJPG_WINDOW_OUT);
     if (ret)
         return ret;
-    tegra_nvjpg_cache_flush(gPageB.va, gPageB.size);
+    switch_dcache_clean_invalidate(gPageB.va, gPageB.size);
     // Undo the permutation into gOut and compare there.
     for (uint32_t i = 0; i < 4; i++)
         memcpy(gOut.va + i * 4096, gPageB.va + (3 - i) * 4096, 4096);
@@ -393,7 +387,7 @@ extern "C" int tegra_nvjpg_self_test(TegraNVJPGTraits *traits)
         IOLog("TegraNVJPG: J3 FAIL no self-test buffers in the arena\n");
         return -1;
     }
-    const uint64_t began = nowUs();
+    const uint64_t began = switch_now_us();
     tegra_nvjpg_lock();
     int ret = translation();
     bool clipNv12 = false, clipBgra = false;
@@ -460,7 +454,7 @@ extern "C" int tegra_nvjpg_self_test(TegraNVJPGTraits *traits)
     IOLog("TegraNVJPG: J3 ok %u decodes in %llu us (engine %llu us): SMMU translates (windows, pages out of order); "
           "formats %#x, sampling %#x, scales %#x; writes %s; 44x40 4:2:0 to BGRA in %llu cycles (%llu per 16 "
           "pixels at %u MHz)%s%s\n",
-          gJobs, nowUs() - began, gBusyUs, traits->formats, traits->chroma, traits->scales,
+          gJobs, switch_now_us() - began, gBusyUs, traits->formats, traits->chroma, traits->scales,
           traits->clipped ? "clipped to the picture" : "whole MCUs (destinations must hold the MCU grid)", gCycles,
           traits->cyclesPerPixel16, tegra_nvjpg_clock_mhz(), off[0] ? "; off: " : "", off);
     return 0;

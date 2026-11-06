@@ -53,10 +53,16 @@
 #include "../TegraSMMU/TegraSMMUDomain.h"
 #include "TegraNVJPG.h"
 #include "nvidia/cle7d0.h"
+#include "../../kits/SwitchCAR/SwitchCAR.h"
+#include "../../kits/SwitchCAR/SwitchPMC.h"
+#include "../../kits/SwitchDMA/SwitchDMABuffer.h"
+#include "../../kits/SwitchDMA/SwitchDcache.h"
+#include "../../kits/SwitchFalcon/SwitchFalcon.h"
+#include "../../kits/SwitchMath/SwitchMath.h"
+#include "../../kits/SwitchMMIO/SwitchMMIOKernel.h"
+#include "../../kits/SwitchTime/SwitchTime.h"
 
 extern "C" {
-vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
-vm_offset_t phystokv(uint64_t pa);
 boolean_t pmap_valid_page(ppnum_t pn);
 int tegra_nvdec_await(uint32_t timeoutMs);
 extern const uint8_t tegra_nvjpg_fw_start[] __asm__("_tegra_nvjpg_fw_start");
@@ -64,27 +70,23 @@ extern const uint8_t tegra_nvjpg_fw_end[] __asm__("_tegra_nvjpg_fw_end");
 }
 
 namespace {
-constexpr vm_offset_t kNvjpgPA = 0x54380000, kNvjpgSize = 0x40000;
+constexpr uint64_t kNvjpgPA = 0x54380000, kNvjpgSize = 0x40000;
 constexpr uint32_t kClass = TEGRA_HOST1X_CLASS_NVJPG;
 constexpr uint32_t kThiMethod0 = 0x40;  // THI METHOD0 (offset) then METHOD1 (data)
-constexpr vm_offset_t kCarPA = 0x60006000, kPmcPagePA = 0x7000E000, kMcPA = 0x70019000;
-constexpr uint32_t kPmcOffset = 0x400, kPartition = 26;  // TEGRA_POWERGATE_NVJPG
+constexpr uint64_t kMcPA = 0x70019000;
+constexpr uint32_t kPartition = 26;    // TEGRA_POWERGATE_NVJPG
+constexpr unsigned kClock = 195;       // TEGRA210_CLK_NVJPG: CAR bank Y bit 3, also its reset
+constexpr unsigned kNvdecClock = 194;  // TEGRA210_CLK_NVDEC: NVJPG's slcg clock
 constexpr uint64_t kArenaBytes = 1ull << 20;
 constexpr uint32_t kNvdecWaitMs = 20000;
 constexpr uint32_t kAsid = TEGRA_SMMU_ASID_NVJPG;  // 125 (VIC 127, the display 126)
 constexpr uint32_t kClockMHz = 408;
 
-enum : uint32_t {  // clock and reset controller, Y bank
+enum : uint32_t {  // clock and reset controller
     CLK_OUT_ENB_Y = 0x298,
-    CLK_ENB_Y_SET = 0x29c,
-    CLK_ENB_Y_CLR = 0x2a0,
     RST_DEVICES_Y = 0x2a4,
-    RST_DEV_Y_SET = 0x2a8,
-    RST_DEV_Y_CLR = 0x2ac,
     LVL2_CLK_GATE_OVRE = 0x554,
     CLK_SOURCE_NVJPG = 0x69c,
-    Y_NVDEC = 1u << 2,
-    Y_NVJPG = 1u << 3,
     OVRE_NVJPG_MBIST = (1u << 9) | (1u << 31),
     SOURCE_PLLP = 4u << 29,
     NVJPG_DIV_1 = 0,  // 7.1 divider: 408 MHz * 2 / (0 + 2) = 408 MHz
@@ -92,9 +94,7 @@ enum : uint32_t {  // clock and reset controller, Y bank
 
 enum : uint32_t {
     PWRGATE_TOGGLE = 0x30,
-    REMOVE_CLAMPING = 0x34,
     PWRGATE_STATUS = 0x38,
-    TOGGLE_START = 1u << 8
 };
 
 enum : uint32_t {                                 // the SMMU's own registers are TegraSMMU.h's
@@ -103,42 +103,12 @@ enum : uint32_t {                                 // the SMMU's own registers ar
     MC_HOTRESET_NVJPG = 1u << 8,
 };
 
-enum : uint32_t {  // falcon (drm/tegra/falcon.h), relative to the engine
-    FALCON_IRQSTAT = 0x1008,
-    FALCON_IRQMSET = 0x1010,
-    FALCON_IRQDEST = 0x101c,
-    FALCON_MAILBOX0 = 0x1040,
-    FALCON_ITFEN = 0x1048,
-    FALCON_IDLESTATE = 0x104c,
-    FALCON_DEBUGINFO = 0x1094,
-    FALCON_CPUCTL = 0x1100,
-    FALCON_BOOTVEC = 0x1104,
-    FALCON_DMACTL = 0x110c,
-    FALCON_DMATRFBASE = 0x1110,
-    FALCON_DMATRFMOFFS = 0x1114,
-    FALCON_DMATRFCMD = 0x1118,
-    FALCON_DMATRFFBOFFS = 0x111c,
-    CPUCTL_STARTCPU = 1u << 1,
-    DMACTL_SCRUBBING = (1u << 1) | (1u << 2),
-    DMATRFCMD_FULL = 1u << 0,
-    DMATRFCMD_IDLE = 1u << 1,
-    DMATRFCMD_IMEM = 1u << 4,
-    DMATRFCMD_SIZE_256B = 6u << 8,
-    ITFEN_CTXEN = 1u << 0,
-    ITFEN_MTHDEN = 1u << 1,
-    IRQMSET_BOOT = (1u << 1) | (1u << 4) | (1u << 5) | (1u << 6) | (1u << 7) | (0xffu << 8),
-    IRQDEST_BOOT = (1u << 4) | (1u << 5) | (1u << 6) | (1u << 7) | (0xffu << 8),
-};
+switch_falcon_image gImage;
 
-struct Image {  // falcon bin header v1 and its OS header (drm/tegra/falcon.h)
-    uint32_t size, binData, binSize, code, codeSize, data, dataSize, apps;
-};
-
-volatile uint8_t *gJpg, *gCar, *gPmc, *gMc;
-IOBufferMemoryDescriptor *gFirmwareMd, *gArenaMd, *gTablesMd;
+volatile uint8_t *gJpg, *gMc;
+switch_dma_buffer gFirmwareDma, gArenaDma, gTablesDma;
 TegraNVJPGBuffer gFirmware, gArena, gTables;
 uint64_t gArenaUsed;
-Image gImage;
 char gLine[256];
 
 // SMMU domain: one page directory, the windows' tables (fixed) and the identity tables of the kernel buffers.
@@ -168,105 +138,19 @@ bool gUp, gWedged, gSuspended, gPublished;
 TegraNVJPGBuffer gSetup, gStatus;
 TegraNVJPGTraits gTraits;
 
-inline uint32_t r32(volatile uint8_t *base, uint32_t o)
-{
-    return *(volatile uint32_t *)(base + o);
-}
-
-inline void w32(volatile uint8_t *base, uint32_t o, uint32_t v)
-{
-    *(volatile uint32_t *)(base + o) = v;
-}
-
-inline uint32_t le32(const uint8_t *p)
-{
-    return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
-}
-
-bool waitBits(volatile uint8_t *base, uint32_t o, uint32_t mask, uint32_t value, uint32_t us)
-{
-    for (uint32_t i = 0; i <= us; ++i) {
-        if ((r32(base, o) & mask) == value)
-            return true;
-        IODelay(1);
-    }
-    return false;
-}
-
-uint64_t nowUs()
-{
-    uint64_t ns;
-    absolutetime_to_nanoseconds(mach_absolute_time(), &ns);
-    return ns / 1000;
-}
-
-template <bool Invalidate> void cacheOp(const void *va, size_t size)
-{
-    if (!size)
-        return;
-    uint64_t ctr;
-    __asm__ volatile("mrs %0, ctr_el0" : "=r"(ctr));
-    const uintptr_t line = (uintptr_t)4 << ((ctr >> 16) & 15);
-    __asm__ volatile("dsb sy" ::: "memory");
-    for (uintptr_t a = (uintptr_t)va & ~(line - 1), end = (uintptr_t)va + size; a < end; a += line) {
-        if (Invalidate)
-            __asm__ volatile("dc civac, %0" ::"r"(a) : "memory");
-        else
-            __asm__ volatile("dc cvac, %0" ::"r"(a) : "memory");
-    }
-    __asm__ volatile("dsb sy" ::: "memory");
-}
-
 const char *falconState()
 {
     static char text[160];
-    snprintf(text, sizeof(text), "falcon CPUCTL %#x IDLESTATE %#x IRQSTAT %#x MAILBOX0 %#x DEBUGINFO %#x",
-             r32(gJpg, FALCON_CPUCTL), r32(gJpg, FALCON_IDLESTATE), r32(gJpg, FALCON_IRQSTAT),
-             r32(gJpg, FALCON_MAILBOX0), r32(gJpg, FALCON_DEBUGINFO));
-    return text;
+    return switch_falcon_state(gJpg, text, sizeof(text));
 }
 
 // One physically contiguous buffer below 4 GiB, zeroed and clean in the caches.
-bool contiguous(uint64_t bytes, IOBufferMemoryDescriptor **md, TegraNVJPGBuffer *out)
+bool contiguous(uint64_t bytes, switch_dma_buffer *dma, TegraNVJPGBuffer *out)
 {
-    const IOOptionBits options = (IOOptionBits)kIODirectionInOut | (IOOptionBits)kIOMemoryPhysicallyContiguous |
-                                 (IOOptionBits)kIOMemoryMapperNone;
-    *md = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task, options, bytes, 0xfffff000ULL);
-    IOByteCount length = 0;
-    uint64_t pa = 0;
-    if (*md && (*md)->prepare() == kIOReturnSuccess)
-        pa = (*md)->getPhysicalSegment(0, &length, kIOMemoryMapperNone);
-    if (!pa || length < bytes || pa + bytes > (1ULL << 32)) {
-        OSSafeReleaseNULL(*md);
+    if (!switch_dma_alloc(dma, bytes))
         return false;
-    }
-    out->pa = pa;
-    out->size = bytes;
-    out->va = (uint8_t *)(*md)->getBytesNoCopy();
-    bzero(out->va, bytes);
-    cacheOp<true>(out->va, bytes);
+    *out = {dma->pa, dma->size, dma->va};
     return true;
-}
-
-// falcon_parse_firmware_image: magic 0x10de (or 0x10fe), version 1, the OS header and data inside the image.
-bool parse(const uint8_t *fw, size_t length, Image *image)
-{
-    if (length < 0x100 || (le32(fw) != 0x10de && le32(fw) != 0x10fe) || le32(fw + 4) != 1)
-        return false;
-    image->size = le32(fw + 8);
-    const uint32_t os = le32(fw + 12);
-    image->binData = le32(fw + 16);
-    image->binSize = le32(fw + 20);
-    if (image->size > length || os > image->size - 20 || image->binData > image->size ||
-        image->binSize > image->size - image->binData)
-        return false;
-    image->code = le32(fw + os);
-    image->codeSize = le32(fw + os + 4);
-    image->data = le32(fw + os + 8);
-    image->dataSize = le32(fw + os + 12);
-    image->apps = le32(fw + os + 16);
-    return image->codeSize && image->code <= image->binSize && image->codeSize <= image->binSize - image->code &&
-           image->data <= image->binSize && image->dataSize <= image->binSize - image->data;
 }
 
 inline uint32_t *table(uint32_t index)
@@ -284,7 +168,7 @@ void cleanDomain()
 {
     uintptr_t low, high;
     if (gDomain.takeDirty(&low, &high))
-        cacheOp<false>(reinterpret_cast<const void *>(low), high - low);
+        switch_dcache_clean(reinterpret_cast<const void *>(low), high - low);
 }
 
 void smmuFlush()
@@ -308,7 +192,7 @@ bool smmuSetUp()
         }
     const bool identities =
         gDomain.identity(gFirmware.pa, gFirmware.size, false) && gDomain.identity(gArena.pa, gArena.size, true);
-    cacheOp<false>(gTables.va, gTables.size);
+    switch_dcache_clean(gTables.va, gTables.size);
     uintptr_t low, high;
     gDomain.takeDirty(&low, &high);  // all of it was just cleaned
     if (!identities) {
@@ -342,61 +226,46 @@ void smmuDetach()
 // from scratch.
 bool powerUp(bool *wasOn)
 {
-    *wasOn = (r32(gPmc, kPmcOffset + PWRGATE_STATUS) >> kPartition) & 1;
-    w32(gCar, RST_DEV_Y_SET, Y_NVJPG);
+    *wasOn = switch_pmc_partition_is_on(kPartition);
+    switch_car_reset_assert(kClock);
     IODelay(10);
     if (!*wasOn) {
-        if (!waitBits(gPmc, kPmcOffset + PWRGATE_TOGGLE, TOGGLE_START, 0, 5000)) {
-            snprintf(gLine, sizeof(gLine), "J1 FAIL PMC toggle busy (PWRGATE_TOGGLE %#x)",
-                     r32(gPmc, kPmcOffset + PWRGATE_TOGGLE));
-            return false;
-        }
-        w32(gPmc, kPmcOffset + PWRGATE_TOGGLE, kPartition | TOGGLE_START);
-        if (!waitBits(gPmc, kPmcOffset + PWRGATE_STATUS, 1u << kPartition, 1u << kPartition, 5000)) {
-            snprintf(gLine, sizeof(gLine), "J1 FAIL partition %u did not power on (PWRGATE_STATUS %#x)", kPartition,
-                     r32(gPmc, kPmcOffset + PWRGATE_STATUS));
+        if (!switch_pmc_partition_on(kPartition)) {
+            snprintf(gLine, sizeof(gLine), "J1 FAIL partition %u did not power on (PWRGATE_TOGGLE %#x STATUS %#x)",
+                     kPartition, switch_pmc_read(PWRGATE_TOGGLE), switch_pmc_read(PWRGATE_STATUS));
             return false;
         }
         IODelay(10);
     }
-    w32(gCar, CLK_SOURCE_NVJPG, SOURCE_PLLP | NVJPG_DIV_1);
+    switch_car_write(CLK_SOURCE_NVJPG, SOURCE_PLLP | NVJPG_DIV_1);
     IODelay(2);
-    w32(gCar, CLK_ENB_Y_SET, Y_NVJPG);
+    switch_car_clock_enable(kClock);
     IODelay(10);
-    w32(gPmc, kPmcOffset + REMOVE_CLAMPING, 1u << kPartition);
+    switch_pmc_remove_clamping(kPartition);
     IODelay(10);
     // MC_HOTRESET_CTRL_1 holds NVDEC's and the GPU's bits too: read-modify-write only when NVJPG's is set (NVDEC's
     // bring-up, the other writer of this register at boot, has ended by now).
-    if (r32(gMc, MC_HOTRESET_CTRL_1) & MC_HOTRESET_NVJPG)
-        w32(gMc, MC_HOTRESET_CTRL_1, r32(gMc, MC_HOTRESET_CTRL_1) & ~MC_HOTRESET_NVJPG);
-    w32(gCar, RST_DEV_Y_CLR, Y_NVJPG);
+    if (switch_mmio_read32(gMc, MC_HOTRESET_CTRL_1) & MC_HOTRESET_NVJPG)
+        switch_mmio_write32(gMc, MC_HOTRESET_CTRL_1, switch_mmio_read32(gMc, MC_HOTRESET_CTRL_1) & ~MC_HOTRESET_NVJPG);
+    switch_car_reset_deassert(kClock);
     IODelay(10);
-    // tegra210_generic_mbist_war with NVJPG's slcg clock (NVDEC's) running for the pulse; NVDEC's own state is kept.
-    const bool nvdecOn = r32(gCar, CLK_OUT_ENB_Y) & Y_NVDEC;
+    // tegra210_generic_mbist_war with NVJPG's slcg clock (NVDEC's) running for the pulse; NVDEC's own state is kept,
+    // and only NVJPG's override bits change, under the CAR lock.
+    const bool nvdecOn = switch_car_clock_enabled(kNvdecClock);
     if (!nvdecOn)
-        w32(gCar, CLK_ENB_Y_SET, Y_NVDEC);
-    const uint32_t ovre = r32(gCar, LVL2_CLK_GATE_OVRE);
-    w32(gCar, LVL2_CLK_GATE_OVRE, ovre | OVRE_NVJPG_MBIST);
+        switch_car_clock_enable(kNvdecClock);
+    const uint32_t overridden = switch_car_read(LVL2_CLK_GATE_OVRE) & OVRE_NVJPG_MBIST;
+    switch_car_rmw(LVL2_CLK_GATE_OVRE, 0, OVRE_NVJPG_MBIST);
     IODelay(1);
-    w32(gCar, LVL2_CLK_GATE_OVRE, ovre);
+    switch_car_rmw(LVL2_CLK_GATE_OVRE, OVRE_NVJPG_MBIST & ~overridden, 0);
     IODelay(1);
     if (!nvdecOn)
-        w32(gCar, CLK_ENB_Y_CLR, Y_NVDEC);
-    if (!(r32(gCar, CLK_OUT_ENB_Y) & Y_NVJPG) || (r32(gCar, RST_DEVICES_Y) & Y_NVJPG)) {
+        switch_car_clock_disable(kNvdecClock);
+    if (!switch_car_clock_enabled(kClock) || switch_car_reset_asserted(kClock)) {
         snprintf(gLine, sizeof(gLine), "J1 FAIL clock or reset stuck (CLK_OUT_ENB_Y %#x RST_DEVICES_Y %#x)",
-                 r32(gCar, CLK_OUT_ENB_Y), r32(gCar, RST_DEVICES_Y));
+                 switch_car_read(CLK_OUT_ENB_Y), switch_car_read(RST_DEVICES_Y));
         return false;
     }
-    return true;
-}
-
-bool copyChunk(uint32_t from, uint32_t to, bool code)
-{
-    if (!waitBits(gJpg, FALCON_DMATRFCMD, DMATRFCMD_FULL, 0, 100000))
-        return false;
-    w32(gJpg, FALCON_DMATRFMOFFS, to);
-    w32(gJpg, FALCON_DMATRFFBOFFS, from);
-    w32(gJpg, FALCON_DMATRFCMD, DMATRFCMD_SIZE_256B | (code ? DMATRFCMD_IMEM : 0));
     return true;
 }
 
@@ -404,28 +273,19 @@ bool copyChunk(uint32_t from, uint32_t to, bool code)
 // fetches through NVJPG's SMMU domain, where the firmware sits 1:1 (and its OS loads its apps from there later).
 bool bootFalcon()
 {
-    if (!waitBits(gJpg, FALCON_DMACTL, DMACTL_SCRUBBING, 0, 10000)) {
+    switch (switch_falcon_load(gJpg, gFirmware.pa, &gImage)) {
+    case SWITCH_FALCON_SCRUBBING:
         snprintf(gLine, sizeof(gLine), "J1 FAIL IMEM/DMEM scrubbing did not end (DMACTL %#x)",
-                 r32(gJpg, FALCON_DMACTL));
+                 switch_mmio_read32(gJpg, SWITCH_FALCON_DMACTL));
         return false;
-    }
-    w32(gJpg, FALCON_DMACTL, 0);
-    w32(gJpg, FALCON_DMATRFBASE, (uint32_t)((gFirmware.pa + gImage.binData) >> 8));
-    bool queued = true;
-    for (uint32_t offset = 0; queued && offset < gImage.dataSize; offset += 256)
-        queued = copyChunk(gImage.data + offset, offset, false);
-    for (uint32_t offset = 0; queued && offset < gImage.codeSize; offset += 256)
-        queued = copyChunk(gImage.code + offset, offset, true);
-    if (!queued || !waitBits(gJpg, FALCON_DMATRFCMD, DMATRFCMD_IDLE, DMATRFCMD_IDLE, 100000)) {
+    case SWITCH_FALCON_DMA:
         snprintf(gLine, sizeof(gLine), "J1 FAIL firmware DMA did not finish (DMATRFCMD %#x)",
-                 r32(gJpg, FALCON_DMATRFCMD));
+                 switch_mmio_read32(gJpg, SWITCH_FALCON_DMATRFCMD));
         return false;
+    case SWITCH_FALCON_OK:
+        break;
     }
-    w32(gJpg, FALCON_IRQMSET, IRQMSET_BOOT);
-    w32(gJpg, FALCON_IRQDEST, IRQDEST_BOOT);
-    w32(gJpg, FALCON_ITFEN, ITFEN_MTHDEN | ITFEN_CTXEN);
-    w32(gJpg, FALCON_BOOTVEC, 0);
-    w32(gJpg, FALCON_CPUCTL, CPUCTL_STARTCPU);
+    switch_falcon_start(gJpg);
     return true;
 }
 
@@ -453,9 +313,9 @@ int answer(uint32_t id, uint32_t from, const char **stage)
 
 void engineOff()
 {
-    w32(gCar, RST_DEV_Y_SET, Y_NVJPG);
+    switch_car_reset_assert(kClock);
     IODelay(2);
-    w32(gCar, CLK_ENB_Y_CLR, Y_NVJPG);
+    switch_car_clock_disable(kClock);
 }
 
 // Back to bypass, reset and clock off after a failed bring-up: nothing will use the engine this boot.
@@ -485,18 +345,18 @@ void engineResume();
 bool allocate()
 {
     const size_t length = (size_t)(tegra_nvjpg_fw_end - tegra_nvjpg_fw_start);
-    if (!parse(tegra_nvjpg_fw_start, length, &gImage)) {
+    if (!switch_falcon_parse(tegra_nvjpg_fw_start, length, &gImage)) {
         snprintf(gLine, sizeof(gLine), "J0 FAIL embedded firmware is not a falcon v1 image (%lu bytes)",
                  (unsigned long)length);
         return false;
     }
-    if (!contiguous((gImage.size + 0xfff) & ~0xfffull, &gFirmwareMd, &gFirmware) ||
-        !contiguous(kArenaBytes, &gArenaMd, &gArena) || !contiguous((uint64_t)kTables * 4096, &gTablesMd, &gTables)) {
+    if (!contiguous(switch_align_up(gImage.size, 4096), &gFirmwareDma, &gFirmware) ||
+        !contiguous(kArenaBytes, &gArenaDma, &gArena) || !contiguous((uint64_t)kTables * 4096, &gTablesDma, &gTables)) {
         snprintf(gLine, sizeof(gLine), "J0 FAIL no contiguous firmware, arena or page-table memory below 4 GiB");
         return false;
     }
     memcpy(gFirmware.va, tegra_nvjpg_fw_start, gImage.size);
-    cacheOp<false>(gFirmware.va, gImage.size);
+    switch_dcache_clean(gFirmware.va, gImage.size);
     if (tegra_nvjpg_buffer(sizeof(nvjpg_dec_drv_pic_setup_s), &gSetup) ||
         tegra_nvjpg_buffer(sizeof(nvjpg_dec_status), &gStatus)) {
         snprintf(gLine, sizeof(gLine), "J0 FAIL no setup or status slot in the arena");
@@ -507,9 +367,9 @@ bool allocate()
 
 void giveBack()
 {
-    OSSafeReleaseNULL(gFirmwareMd);
-    OSSafeReleaseNULL(gArenaMd);
-    OSSafeReleaseNULL(gTablesMd);
+    switch_dma_free(&gFirmwareDma);
+    switch_dma_free(&gArenaDma);
+    switch_dma_free(&gTablesDma);
 }
 
 void bringUp(void *, wait_result_t)
@@ -521,25 +381,23 @@ void bringUp(void *, wait_result_t)
         IOLog("TegraNVJPG: J0 FAIL host1x is not up (see the TegraHost1x line)\n");
         return;
     }
-    gJpg = (volatile uint8_t *)ml_io_map(kNvjpgPA, kNvjpgSize);
-    gCar = (volatile uint8_t *)ml_io_map(kCarPA, 0x1000);
-    gPmc = (volatile uint8_t *)ml_io_map(kPmcPagePA, 0x1000);
-    gMc = (volatile uint8_t *)ml_io_map(kMcPA, 0x1000);
+    gJpg = switch_mmio_map(kNvjpgPA, kNvjpgSize);
+    gMc = switch_mmio_map(kMcPA, 0x1000);
     gJobLock = IOLockAlloc();
     gStateLock = IOLockAlloc();
-    if (!gJpg || !gCar || !gPmc || !gMc || !gJobLock || !gStateLock) {
+    if (!gJpg || !gMc || !gJobLock || !gStateLock) {
         IOLog("TegraNVJPG: J0 FAIL no mapping\n");
         return;
     }
     gLine[0] = 0;
-    const uint64_t began = nowUs();
+    const uint64_t began = switch_now_us();
     if (!allocate()) {
         IOLog("TegraNVJPG: %s\n", gLine);
         giveBack();
         return;
     }
     IOLog("TegraNVJPG: J0 ok firmware %u bytes at %#llx, arena %llu KiB at %#llx, %u page tables, in %llu us\n",
-          gImage.size, gFirmware.pa, kArenaBytes >> 10, gArena.pa, kTables, nowUs() - began);
+          gImage.size, gFirmware.pa, kArenaBytes >> 10, gArena.pa, kTables, switch_now_us() - began);
     bool wasOn = false;
     if (!smmuSetUp() || !smmuAttach() || !powerUp(&wasOn) || !bootFalcon()) {
         IOLog("TegraNVJPG: %s\n", gLine[0] ? gLine : "J1 FAIL");
@@ -549,8 +407,8 @@ void bringUp(void *, wait_result_t)
     }
     IOLog("TegraNVJPG: J1 ok ASID %u (directory %#llx), partition %u %s, %u MHz, falcon started (OS code %#x+%#x data "
           "%#x+%#x, %u apps)\n",
-          kAsid, gTables.pa, kPartition, wasOn ? "already on" : "powered here", kClockMHz, gImage.code, gImage.codeSize,
-          gImage.data, gImage.dataSize, gImage.apps);
+          kAsid, gTables.pa, kPartition, wasOn ? "already on" : "powered here", kClockMHz, gImage.code,
+          gImage.code_size, gImage.data, gImage.data_size, gImage.apps);
     uint32_t id = 0;
     if (tegra_host1x_syncpt_alloc(&id)) {
         IOLog("TegraNVJPG: J2 FAIL no syncpoint left\n");
@@ -560,7 +418,7 @@ void bringUp(void *, wait_result_t)
     }
     const uint32_t from = tegra_host1x_syncpt_read(id);
     const char *stage = nullptr;
-    const uint64_t start = nowUs();
+    const uint64_t start = switch_now_us();
     const int ret = answer(id, from, &stage);
     if (ret) {
         char host[200];
@@ -573,7 +431,7 @@ void bringUp(void *, wait_result_t)
         return;
     }
     IOLog("TegraNVJPG: J2 ok host interface and falcon incremented syncpoint %u %u->%u by interrupt in %llu us; %s\n",
-          id, from, tegra_host1x_syncpt_read(id), nowUs() - start, falconState());
+          id, from, tegra_host1x_syncpt_read(id), switch_now_us() - start, falconState());
     gSyncpt = id;
     gNext = tegra_host1x_syncpt_read(id);
     gUp = true;
@@ -619,30 +477,11 @@ extern "C" int tegra_nvjpg_buffer(uint64_t size, TegraNVJPGBuffer *out)
     return 0;
 }
 
-extern "C" void tegra_nvjpg_cache_clean(const void *va, size_t size)
+extern "C" void tegra_nvjpg_cache_pages(switch_dcache_op op, const uint64_t *pages, uint32_t count)
 {
-    cacheOp<false>(va, size);
-}
-
-extern "C" void tegra_nvjpg_cache_flush(const void *va, size_t size)
-{
-    cacheOp<true>(va, size);
-}
-
-extern "C" void tegra_nvjpg_cache_flush_pages(const uint64_t *pages, uint32_t count)
-{
-    uint64_t ctr;
-    __asm__ volatile("mrs %0, ctr_el0" : "=r"(ctr));
-    const uintptr_t line = (uintptr_t)4 << ((ctr >> 16) & 15);
-    __asm__ volatile("dsb sy" ::: "memory");
-    for (uint32_t i = 0; i < count; i++) {
-        if (!pmap_valid_page((ppnum_t)(pages[i] >> 12)))
-            continue;
-        const uintptr_t va = phystokv(pages[i] & ~0xfffULL);
-        for (uintptr_t a = va; a < va + 4096; a += line)
-            __asm__ volatile("dc civac, %0" ::"r"(a) : "memory");
-    }
-    __asm__ volatile("dsb sy" ::: "memory");
+    for (uint32_t i = 0; i < count; i++)
+        if (pmap_valid_page((ppnum_t)(pages[i] >> 12)))
+            switch_dcache_phys_lines(op, pages[i] & ~0xfffULL, 4096);
 }
 
 extern "C" void tegra_nvjpg_lock(void)
@@ -666,7 +505,7 @@ extern "C" uint64_t tegra_nvjpg_window_map(uint32_t window, const uint64_t *page
         pt[i] = TegraSMMUDomain::entry(pages[i], writable);
     for (uint32_t i = count; i < gWindowMapped[window]; i++)
         pt[i] = 0;
-    cacheOp<false>(pt, (uint64_t)(count > gWindowMapped[window] ? count : gWindowMapped[window]) * 4);
+    switch_dcache_clean(pt, (uint64_t)(count > gWindowMapped[window] ? count : gWindowMapped[window]) * 4);
     gWindowMapped[window] = count;
     smmuFlush();
     return kTegraNVJPGWindowBase[window];
@@ -678,7 +517,7 @@ extern "C" void tegra_nvjpg_window_clear(uint32_t window)
         return;
     uint32_t *pt = table(windowTable(window));
     bzero(pt, (uint64_t)gWindowMapped[window] * 4);
-    cacheOp<false>(pt, (uint64_t)gWindowMapped[window] * 4);
+    switch_dcache_clean(pt, (uint64_t)gWindowMapped[window] * 4);
     gWindowMapped[window] = 0;
     smmuFlush();
 }
@@ -713,9 +552,9 @@ extern "C" int tegra_nvjpg_run(const TegraNVJPGJob *job, nvjpg_dec_status *statu
         return -19;
     }
     memcpy(gSetup.va, &job->setup, sizeof(job->setup));
-    cacheOp<false>(gSetup.va, sizeof(job->setup));
+    switch_dcache_clean_lines(gSetup.va, sizeof(job->setup));
     bzero(gStatus.va, sizeof(nvjpg_dec_status));
-    cacheOp<true>(gStatus.va, sizeof(nvjpg_dec_status));
+    switch_dcache_clean_invalidate(gStatus.va, sizeof(nvjpg_dec_status));
     uint32_t words[1 + 3 * 11 + 1], n = 0;
     words[n++] = tegra_host1x_op_setclass(kClass, 0, 0);
     auto method = [&](uint32_t offset, uint32_t value) {
@@ -737,17 +576,17 @@ extern "C" int tegra_nvjpg_run(const TegraNVJPGJob *job, nvjpg_dec_status *statu
     method(NVE7D0_EXECUTE, 1u << 8);  // AWAKEN
     words[n++] = tegra_host1x_op_incr_syncpt(TEGRA_HOST1X_COND_OP_DONE, gSyncpt);
     const uint32_t fence = gNext + 1;
-    const uint64_t start = nowUs();
+    const uint64_t start = switch_now_us();
     int ret = tegra_host1x_submit(words, n);
     if (!ret) {
         gNext = fence;
         ret = tegra_host1x_syncpt_wait(gSyncpt, fence, jobBoundUs(job->pixels));
         if (ret == TEGRA_HOST1X_ETIMEDOUT)
-            timedOut(fence, nowUs() - start);
+            timedOut(fence, switch_now_us() - start);
     }
     if (busyUs)
-        *busyUs = nowUs() - start;
-    cacheOp<true>(gStatus.va, sizeof(nvjpg_dec_status));
+        *busyUs = switch_now_us() - start;
+    switch_dcache_clean_invalidate(gStatus.va, sizeof(nvjpg_dec_status));
     memcpy(status, gStatus.va, sizeof(*status));
     IOLockUnlock(gStateLock);
     return ret;

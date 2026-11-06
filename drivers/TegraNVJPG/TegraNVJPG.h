@@ -10,6 +10,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "TegraNVJPGJpeg.h"
+#include "../../kits/SwitchDMA/SwitchDcache.h"
 
 // A physically contiguous kernel buffer below 4 GiB, mapped 1:1 in NVJPG's address space (IOVA = PA).
 struct TegraNVJPGBuffer {
@@ -62,9 +63,9 @@ void tegra_nvjpg_window_clear(uint32_t window);
 // NVJPG's syncpoint and sleeps until that increment's interrupt (bounded: past the bound a one-line panic once the
 // service is published; before, -60 and the engine refuses work). Fills the firmware's status. Job lock held.
 int tegra_nvjpg_run(const TegraNVJPGJob *job, nvjpg_dec_status *status, uint64_t *busyUs);
-void tegra_nvjpg_cache_clean(const void *va, size_t size);                  // dc cvac
-void tegra_nvjpg_cache_flush(const void *va, size_t size);                  // dc civac
-void tegra_nvjpg_cache_flush_pages(const uint64_t *pages, uint32_t count);  // dc civac through the physical aperture
+// A job's pages (managed RAM only) through the physical aperture, with no barrier: the caller's switch_dcache_sync()
+// completes them.
+void tegra_nvjpg_cache_pages(switch_dcache_op op, const uint64_t *pages, uint32_t count);
 uint32_t tegra_nvjpg_clock_mhz(void);
 
 // SMMU proof (J3): maps the page at identity IOVA `iova` to physical `pa` (or back to 1:1). Job lock held.

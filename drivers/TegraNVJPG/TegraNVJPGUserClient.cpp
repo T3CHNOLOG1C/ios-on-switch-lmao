@@ -44,6 +44,8 @@
 #include <string.h>
 #include "../TegraVIC/TegraVICSurface.h"
 #include "TegraNVJPG.h"
+#include "../../kits/SwitchMath/SwitchMath.h"
+#include "../../kits/SwitchTime/SwitchTime.h"
 #include "TegraNVJPGRequest.h"
 
 extern "C" {
@@ -66,13 +68,6 @@ uint64_t *gOutList, *gInList;  // the engine thread's page lists
 TegraNVJPGBuffer gSink;        // one arena page, mapped for every sink entry
 volatile uint32_t gConnections;
 IOLock *gQueueLock;
-
-uint64_t nowUs()
-{
-    uint64_t ns;
-    absolutetime_to_nanoseconds(mach_absolute_time(), &ns);
-    return ns / 1000;
-}
 
 IOReturn ioreturn(int err)
 {
@@ -119,7 +114,7 @@ void refused(const char *why)
 void statsLine()
 {
     IOLockLock(gStatsLock);
-    const uint64_t now = nowUs();
+    const uint64_t now = switch_now_us();
     if (!gStats.windowStart)
         gStats.windowStart = now;
     if (now - gStats.windowStart < 5000000 || !(gStats.decodes + gStats.refused)) {
@@ -171,23 +166,22 @@ void dropJob(Job *job)
 // aperture of the destination's pages (wired, listed in gOutList), cleaned to DRAM for readers that do not snoop.
 void fillChroma(const TegraNVJPGPlan &p, uint32_t pages)
 {
-    uint64_t ctr;
-    __asm__ volatile("mrs %0, ctr_el0" : "=r"(ctr));
-    const uintptr_t line = (uintptr_t)4 << ((ctr >> 16) & 15);
-    for (uint64_t row = 0; row < p.fillRows; row++) {
-        for (uint64_t at = p.fillStart + row * p.fillPitch, end = at + p.fillRowBytes; at < end;) {
-            const uint32_t page = (uint32_t)(at >> 12);
-            const uint64_t stop = ((at >> 12) + 1) << 12 < end ? ((at >> 12) + 1) << 12 : end;
-            if (page >= pages || !pmap_valid_page((ppnum_t)(gOutList[page] >> 12)))
-                return;  // the plan bounded it
-            uint8_t *va = (uint8_t *)phystokv(gOutList[page]) + (at & 0xfff);
-            memset(va, 0x80, stop - at);
-            for (uintptr_t a = (uintptr_t)va & ~(line - 1); a < (uintptr_t)va + (stop - at); a += line)
-                __asm__ volatile("dc cvac, %0" ::"r"(a) : "memory");
-            at = stop;
+    auto fill = [&] {
+        for (uint64_t row = 0; row < p.fillRows; row++) {
+            for (uint64_t at = p.fillStart + row * p.fillPitch, end = at + p.fillRowBytes; at < end;) {
+                const uint32_t page = (uint32_t)(at >> 12);
+                const uint64_t stop = SWITCH_MIN(switch_align_down(at, 4096) + 4096, end);
+                if (page >= pages || !pmap_valid_page((ppnum_t)(gOutList[page] >> 12)))
+                    return;  // the plan bounded it
+                uint8_t *va = (uint8_t *)phystokv(gOutList[page]) + (at & 0xfff);
+                memset(va, 0x80, stop - at);
+                switch_dcache_clean_lines(va, stop - at);
+                at = stop;
+            }
         }
-    }
-    __asm__ volatile("dsb sy" ::: "memory");
+    };
+    fill();
+    switch_dcache_sync();
 }
 
 // Engine thread: one decode.
@@ -218,8 +212,10 @@ IOReturn runJob(Job *job)
     if (!out || !in)
         ret = kIOReturnNoSpace;
     // NVJPG does not snoop the CPU's caches: no dirty line of the destination may be written back over the picture.
-    if (!ret)
-        tegra_nvjpg_cache_flush_pages(gOutList, pages);
+    if (!ret) {
+        tegra_nvjpg_cache_pages(SWITCH_DCACHE_CLEAN_INVALIDATE, gOutList, pages);
+        switch_dcache_sync();
+    }
     nvjpg_dec_status status = {};
     uint64_t busy = 0;
     if (!ret) {
@@ -231,7 +227,8 @@ IOReturn runJob(Job *job)
             ret = kIOReturnIOError;
     }
     // The CPU may have pulled destination lines in while NVJPG wrote: readers must see DRAM.
-    tegra_nvjpg_cache_flush_pages(gOutList, pages);
+    tegra_nvjpg_cache_pages(SWITCH_DCACHE_CLEAN_INVALIDATE, gOutList, pages);
+    switch_dcache_sync();
     tegra_nvjpg_window_clear(TEGRA_NVJPG_WINDOW_OUT);
     tegra_nvjpg_window_clear(TEGRA_NVJPG_WINDOW_IN);
     tegra_nvjpg_unlock();
@@ -372,7 +369,7 @@ const char *readSource(TegraVICSurface *src, uint64_t size, TegraNVJPGImage *img
     uint32_t used = scanned.scanEnd;
     if (!scanned.eoi)
         bytes[used++] = 0xff, bytes[used++] = 0xd9;
-    tegra_nvjpg_cache_clean(bytes, used);
+    switch_dcache_clean(bytes, used);
     img->scanEnd = img->scanOffset + scanned.scanEnd;
     img->eoi = scanned.eoi;
     job->engine.setup.bitstream_size = (int)used;
@@ -452,7 +449,7 @@ void AppleJPEGDriverUserClient::finished(Job *job)
 
 IOReturn AppleJPEGDriverUserClient::decode(const void *in, uint32_t inSize, void *out, uint32_t *outSize, bool ext)
 {
-    const uint64_t began = nowUs();
+    const uint64_t began = switch_now_us();
 
     union {
         TegraNVJPGDecodeRequest base;
@@ -541,7 +538,7 @@ IOReturn AppleJPEGDriverUserClient::decode(const void *in, uint32_t inSize, void
         IOFreeData(req, sizeof(*req));
         return ret;
     }
-    job->cpuUs = nowUs() - began;
+    job->cpuUs = switch_now_us() - began;
     job->async = r.callback != 0;
     job->context = r.context;
     IOLockLock(lock_);

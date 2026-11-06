@@ -43,6 +43,12 @@ kernel_driver(
         "drivers/TegraHost1x",
         "drivers/TegraSMMU",
         "drivers/TegraVIC",
+        "kits/SwitchCAR",
+        "kits/SwitchDMA",
+        "kits/SwitchFalcon",
+        "kits/SwitchMMIO",
+        "kits/SwitchMath",
+        "kits/SwitchTime",
     ],
     stems = {"firmware.S": "nvjpg_firmware"},
 )
