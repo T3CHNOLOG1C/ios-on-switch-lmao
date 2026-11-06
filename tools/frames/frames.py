@@ -26,6 +26,11 @@ FRAME = re.compile(
     r'clean (?P<clean_kib>\d+) KiB (?P<clean_us>\d+) us)?'
 )
 USER = re.compile(r'SwitchFrameUser: (?P<proc>\S+) cb (?P<cb>\d+) (?P<rest>.*)')
+INTERACTION = re.compile(
+    r'^(?P<time>\S+ \S+).*SwitchFrames interaction: (?P<ms>\d+) ms \(touch (?P<touch>\d+) ms\), (?P<presents>\d+) '
+    r'presents: 1:(?P<f1>\d+) 2:(?P<f2>\d+) 3:(?P<f3>\d+) 4\+:(?P<f4>\d+), (?P<lost>\d+) periods lost, '
+    r'worst (?P<worst>[\d.]+) ms, still (?P<still>\d+); long (?P<causes>[a-z0-9 ]+?)(?:; (?P<rest>.*))?$'
+)
 USER_FIELD = re.compile(r'(\w+) (\d+)(?: (\d+))?')
 
 # The kernel's stages, between consecutive points of a frame (microseconds from its origin; -1: not seen).
@@ -153,6 +158,26 @@ def collect(lines: list[str]) -> list[Frame]:
     return frames
 
 
+def interactions(lines: list[str]) -> list[str]:
+    """Return one row per touch interaction window: its presents by interval, worst, causes and its clients."""
+    out = []
+    for line in lines:
+        m = INTERACTION.search(line)
+        if not m:
+            continue
+        g = m.groupdict()
+        intervals = int(g['f1']) + int(g['f2']) + int(g['f3']) + int(g['f4'])
+        locked = 100 * int(g['f1']) / intervals if intervals else 0
+        out.append(
+            f'{g["time"][11:23]} {g["ms"]:>5} ms (touch {g["touch"]:>5}): {g["presents"]:>4} presents, '
+            f'1:{g["f1"]} 2:{g["f2"]} 3:{g["f3"]} 4+:{g["f4"]} ({locked:.0f}% one frame apart), worst {g["worst"]} ms, '
+            f'still {g["still"]}; long {g["causes"]}'
+        )
+        if g['rest']:
+            out.append(f'    {g["rest"]}')
+    return out
+
+
 def describe(frame: Frame) -> list[str]:
     """Return the lines printed for one slow frame."""
     out = [
@@ -220,13 +245,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('log', help='a pulled .logarchive, or a text file of the log')
     parser.add_argument('--summary', action='store_true', help='only the summary')
     args = parser.parse_args(argv)
-    frames = collect(read_lines(args.log))
+    lines = read_lines(args.log)
+    frames = collect(lines)
     if not frames:
         print('no SwitchFrame lines: a debug kernel logs them; check the archive covers the boot')
         return 1
     if not args.summary:
         for frame in frames:
             print('\n'.join(describe(frame)))
+    rows = interactions(lines)
+    if rows:
+        print('touch interactions:')
+        print('\n'.join(rows))
     print('\n'.join(summary(frames)))
     return 0
 
