@@ -1,0 +1,7 @@
+# Kernel code: interrupt handlers, command engines and bring-up sequences are hardware state machines whose branches
+# follow the device's states and the vendor's register sequences, so cognitive complexity and function size measure
+# the hardware here. Every other check of the root .clang-tidy applies.
+InheritParentConfig: true
+Checks: >
+  -readability-function-cognitive-complexity,
+  -readability-function-size
