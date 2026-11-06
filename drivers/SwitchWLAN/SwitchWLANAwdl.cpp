@@ -54,59 +54,76 @@ extern "C" {
 extern "C" {
 __attribute__((weak)) int swlan_awdl_open(const struct swlan_awdl_caps **caps_out)
 {
-    if (caps_out) *caps_out = nullptr;
+    if (caps_out)
+        *caps_out = nullptr;
     return -EOPNOTSUPP;
 }
+
 __attribute__((weak)) int swlan_awdl_query(const struct swlan_awdl_caps **caps_out)
 {
-    if (caps_out) *caps_out = nullptr;
+    if (caps_out)
+        *caps_out = nullptr;
     return -EOPNOTSUPP;
 }
-__attribute__((weak)) void swlan_awdl_close(void) {}
+
+__attribute__((weak)) void swlan_awdl_close(void)
+{}
+
 __attribute__((weak)) int swlan_awdl_rx_start(swlan_rx_fn, void *)
 {
     return -EOPNOTSUPP;
 }
+
 __attribute__((weak)) int swlan_awdl_rx_stop(void)
 {
     return 0;
 }
+
 __attribute__((weak)) int swlan_awdl_rx_filter(const uint8_t *, const uint8_t *, uint16_t)
 {
     return -EOPNOTSUPP;
 }
+
 __attribute__((weak)) int swlan_awdl_tx(const struct swlan_tx_req *)
 {
     return -EOPNOTSUPP;
 }
+
 __attribute__((weak)) int swlan_awdl_chanseq_set(const struct swlan_chan_seq *)
 {
     return -EOPNOTSUPP;
 }
+
 __attribute__((weak)) int swlan_awdl_chanseq_clear(void)
 {
     return 0;
 }
+
 __attribute__((weak)) int swlan_awdl_events(swlan_evt_fn, void *)
 {
     return -EOPNOTSUPP;
 }
+
 __attribute__((weak)) int swlan_awdl_tsf_read(uint64_t *)
 {
     return -EOPNOTSUPP;
 }
+
 __attribute__((weak)) int swlan_awdl_var(int, uint8_t, const char *, const void *, size_t, void *, size_t, size_t *)
 {
     return -EOPNOTSUPP;
 }
+
 __attribute__((weak)) int swlan_awdl_fw_events(swlan_fw_event_fn, void *)
 {
     return -EOPNOTSUPP;
 }
+
 __attribute__((weak)) int swlan_awdl_eth_tx(const uint8_t *, size_t)
 {
     return -EOPNOTSUPP;
 }
+
 __attribute__((weak)) int swlan_awdl_eth_rx(swlan_eth_rx_fn, void *)
 {
     return -EOPNOTSUPP;
@@ -158,6 +175,7 @@ struct Presence {
     int8_t rssi;
     uint8_t present;
 };
+
 Presence gPresence[16];
 unsigned gPresenceCount;
 mbuf_t gInputHead, gInputTail;
@@ -168,6 +186,7 @@ uint64_t hostNs()
     absolutetime_to_nanoseconds(mach_absolute_time(), &ns);
     return ns;
 }
+
 // The radio's TSF now, from the last (TSF, host clock) pair; re-read once a second.
 // The rule for every radio call that waits on the firmware (swlan_awdl_tsf_read, swlan_awdl_var): never under
 // gLock and never from a radio callback (the radio's work loop would wait on itself). They run from iovarWork or
@@ -184,43 +203,53 @@ uint64_t nowTsf()
     }
     return awdl_tsf_clock_now(&gClock, ns);
 }
+
 // Soft backend only, from timerFired without gLock: re-read the radio's TSF once a second.
 void reanchorUnlocked()
 {
-    if (!gCaps || gCaps->has_native_awdl || hostNs() - gLastAnchorNs < 1000000000ull) return;
+    if (!gCaps || gCaps->has_native_awdl || hostNs() - gLastAnchorNs < 1000000000ull)
+        return;
     uint64_t tsf = 0;
     const uint64_t ns = hostNs();
-    if (swlan_awdl_tsf_read(&tsf) != 0) return;
+    if (swlan_awdl_tsf_read(&tsf) != 0)
+        return;
     IOLockLock(gLock);
     awdl_tsf_clock_anchor(&gClock, tsf, ns);
     gLastAnchorNs = ns;
     IOLockUnlock(gLock);
 }
+
 void armTimer(uint64_t tsf)
 {
-    if (!gTimer || tsf == UINT64_MAX) return;
+    if (!gTimer || tsf == UINT64_MAX)
+        return;
     uint64_t deadline, leeway;
     nanoseconds_to_absolutetime(awdl_tsf_clock_host(&gClock, tsf), &deadline);
     nanoseconds_to_absolutetime(50000, &leeway);
     thread_call_enter_delayed_with_leeway(gTimer, nullptr, deadline, leeway, THREAD_CALL_DELAY_LEEWAY);
 }
+
 void rearm()
 {
-    if (gCore && awdl_core_running(gCore)) armTimer(awdl_core_timer(gCore, nowTsf()));
+    if (gCore && awdl_core_running(gCore))
+        armTimer(awdl_core_timer(gCore, nowTsf()));
 }
 
 // ---- events to wifip2pd ---------------------------------------------------------------------------------------------
 void wakeEventClient();  // below the user client (sendAsyncResult64 is its protected member)
+
 void postEvent(uint32_t event, const void *payload, uint32_t length)
 {
-    if (!gMonitoring) return;
+    if (!gMonitoring)
+        return;
     if (a80211_ring_post(&gRing, event, gName, payload, length)) {
         static unsigned said;
         if (said++ < 2)
             IOLog("SwitchWLAN: AWDL: event ring full, event %u dropped (%u so far)\n", event, gRing.dropped);
         return;
     }
-    if (gAsyncArmed) wakeEventClient();
+    if (gAsyncArmed)
+        wakeEventClient();
 }
 
 // ---- what the core asks of us (gLock held) --------------------------------------------------------------------------
@@ -235,19 +264,23 @@ int hostTx(void *, const uint8_t *frame, size_t length, uint16_t freq, uint64_t 
     r.tx_tsf = gCaps && gCaps->can_inject_timed ? tsf : 0;
     return swlan_awdl_tx(&r) < 0 ? -1 : 0;
 }
+
 // The radio takes slots of at most 65535 us (RADIO-API §4): each 64-TU AWDL slot goes as two halves.
 void hostSchedule(void *, const struct awdl_chan seq[AWDL_SEQ_SLOTS], uint64_t anchorTsf)
 {
     static struct swlan_chan_slot slots[2 * AWDL_SEQ_SLOTS];
-    for (unsigned i = 0; i < AWDL_SEQ_SLOTS; ++i) slots[2 * i] = slots[2 * i + 1] = {awdl_chan_freq(seq[i]), 32768};
+    for (unsigned i = 0; i < AWDL_SEQ_SLOTS; ++i)
+        slots[2 * i] = slots[2 * i + 1] = {awdl_chan_freq(seq[i]), 32768};
     swlan_status st;
     switch_wlan_status_get(&st);
     const struct swlan_chan_seq s = {anchorTsf, 32768u * 2 * AWDL_SEQ_SLOTS, 2 * AWDL_SEQ_SLOTS,
                                      static_cast<uint16_t>(st.state == SWLAN_STA_UP ? st.freq_mhz : 0), slots};
     const int e = swlan_awdl_chanseq_set(&s);
     static unsigned said;
-    if (e < 0 && said++ < 2) IOLog("SwitchWLAN: AWDL: the radio refused the channel sequence (%d)\n", e);
+    if (e < 0 && said++ < 2)
+        IOLog("SwitchWLAN: AWDL: the radio refused the channel sequence (%d)\n", e);
 }
+
 void hostPeer(void *, const uint8_t addr[6], int present, int8_t rssi)
 {
     a80211_awdl_peer(&gFacade, addr, present, rssi);
@@ -256,14 +289,18 @@ void hostPeer(void *, const uint8_t addr[6], int present, int8_t rssi)
         memcpy(p.addr, addr, 6);
         p.rssi = rssi;
         p.present = static_cast<uint8_t>(present != 0);
-        if (gDeferred) thread_call_enter(gDeferred);
+        if (gDeferred)
+            thread_call_enter(gDeferred);
     }
 }
+
 void hostDeliver(void *, const uint8_t *eth, size_t length)
 {
-    if (!gIf) return;
+    if (!gIf)
+        return;
     mbuf_t m = nullptr;
-    if (mbuf_allocpacket(MBUF_DONTWAIT, length, nullptr, &m) || !m) return;
+    if (mbuf_allocpacket(MBUF_DONTWAIT, length, nullptr, &m) || !m)
+        return;
     if (mbuf_copyback(m, 0, length, eth, MBUF_DONTWAIT)) {
         mbuf_freem(m);
         return;
@@ -276,6 +313,7 @@ void hostDeliver(void *, const uint8_t *eth, size_t length)
         gInputHead = m;
     gInputTail = m;
 }
+
 void hostLog(void *, const char *line)
 {
     IOLog("SwitchWLAN: %s\n", line);
@@ -291,9 +329,11 @@ struct Iovar {
     uint16_t length;
     uint8_t value[512];
 };
+
 Iovar gIovars[40];  // the series' bring-up is 18 requests after the creation, a resync 6
 unsigned gIovarHead, gIovarCount;
 bool gIovarBusy;  // one worker drains the queue (a thread call entered while it runs may run again beside it)
+
 int hostIovar(void *, int32_t ifidx, int get, const char *name, const void *buf, size_t length)
 {
     if (gIovarCount == sizeof gIovars / sizeof gIovars[0] || length > sizeof gIovars[0].value || ifidx < 0 ||
@@ -309,10 +349,13 @@ int hostIovar(void *, int32_t ifidx, int get, const char *name, const void *buf,
     v.get = static_cast<uint8_t>(get != 0);
     strlcpy(v.name, name, sizeof v.name);
     v.length = static_cast<uint16_t>(length);
-    if (length) memcpy(v.value, buf, length);
-    if (gIovarWork) thread_call_enter(gIovarWork);
+    if (length)
+        memcpy(v.value, buf, length);
+    if (gIovarWork)
+        thread_call_enter(gIovarWork);
     return 0;
 }
+
 void iovarWork(thread_call_param_t, thread_call_param_t)
 {
     static Iovar v;  // the busy worker's only (gIovarBusy)
@@ -346,11 +389,13 @@ void iovarWork(thread_call_param_t, thread_call_param_t)
                       bcme_name(status));
         }
         IOLockLock(gLock);
-        if (gCore) awdl_core_fw_result(gCore, v.name, status, nowTsf());
+        if (gCore)
+            awdl_core_fw_result(gCore, v.name, status, nowTsf());
         rearm();
         IOLockUnlock(gLock);
     }
 }
+
 // The firmware's AWDL interface takes frames under the radio's gate, and the radio calls the stack (under gLock)
 // from its work loop with that gate held: so a frame is never handed over with gLock held. ifOutput gives the core a
 // stash for the one frame it may send, and passes it on after dropping gLock.
@@ -358,10 +403,13 @@ struct TxStash {
     size_t length;
     uint8_t frame[AWDL_MAX_FRAME];
 };
+
 TxStash *gStash;  // only while ifOutput holds gLock
+
 int hostTxEth(void *, const uint8_t *eth, size_t length)
 {
-    if (!gStash || gStash->length || length > sizeof gStash->frame) return -1;
+    if (!gStash || gStash->length || length > sizeof gStash->frame)
+        return -1;
     memcpy(gStash->frame, eth, length);
     gStash->length = length;
     return 0;
@@ -414,19 +462,23 @@ void drain(bool presence = true)
         const errno_t e = todo[i].present ? ifnet_notice_node_presence(ifp, reinterpret_cast<struct sockaddr *>(&sdl),
                                                                        todo[i].rssi, 0, 0, srvinfo)
                                           : ifnet_notice_node_absence(ifp, reinterpret_cast<struct sockaddr *>(&sdl));
-        if (e) IOLog("SwitchWLAN: AWDL: node %s failed (%d)\n", todo[i].present ? "presence" : "absence", e);
+        if (e)
+            IOLog("SwitchWLAN: AWDL: node %s failed (%d)\n", todo[i].present ? "presence" : "absence", e);
     }
 }
+
 void deferredWork(thread_call_param_t, thread_call_param_t)
 {
     drain();
 }
+
 // Once a minute, to the unified log (not the console): whether the firmware's AWDL frames and events arrive at all.
 void statsLine()
 {
     static uint64_t last;
     const uint64_t ns = hostNs();
-    if (ns - last < 60000000000ull || !gCore) return;
+    if (ns - last < 60000000000ull || !gCore)
+        return;
     last = ns;
     const awdl_stats *st = awdl_core_stats(gCore);
     os_log(
@@ -439,11 +491,13 @@ void statsLine()
         st->iovar_skipped, st->data_rx, st->data_tx, st->data_drop, st->tx_refused, st->data_not_awdl,
         st->mode_changes);
 }
+
 void timerFired(thread_call_param_t, thread_call_param_t)
 {
     reanchorUnlocked();
     IOLockLock(gLock);
-    if (gCore && awdl_core_running(gCore)) awdl_core_set_infra(gCore, swlan_awdl_infra_freq(), nowTsf());
+    if (gCore && awdl_core_running(gCore))
+        awdl_core_set_infra(gCore, swlan_awdl_infra_freq(), nowTsf());
     rearm();
     statsLine();
     IOLockUnlock(gLock);
@@ -454,7 +508,8 @@ void timerFired(thread_call_param_t, thread_call_param_t)
 void radioRx(void *, const uint8_t *frame, size_t length, const struct swlan_rx_meta *meta)
 {
     if (meta && (meta->flags & SWLAN_RX_FCS_PRESENT)) {
-        if (length < 4) return;
+        if (length < 4)
+            return;
         length -= 4;
     }
     IOLockLock(gLock);
@@ -465,8 +520,10 @@ void radioRx(void *, const uint8_t *frame, size_t length, const struct swlan_rx_
         rearm();
     }
     IOLockUnlock(gLock);
-    if (gInputHead) drain(false);
+    if (gInputHead)
+        drain(false);
 }
+
 // Native backend: the firmware's AWDL events and the frames of its AWDL interface.
 void fwEvent(void *, const struct swlan_fw_event *e, const uint8_t *data, size_t length)
 {
@@ -479,23 +536,28 @@ void fwEvent(void *, const struct swlan_fw_event *e, const uint8_t *data, size_t
         rearm();
     }
     IOLockUnlock(gLock);
-    if (gInputHead) drain(false);
+    if (gInputHead)
+        drain(false);
 }
+
 // The firmware's AWDL interface: 802.3 frames with the AWDL data header, which the core strips (hostDeliver).
 void ethRx(void *, const uint8_t *frame, size_t length)
 {
     IOLockLock(gLock);
-    if (gCore && awdl_core_running(gCore)) awdl_core_rx_eth(gCore, frame, length, nowTsf());
+    if (gCore && awdl_core_running(gCore))
+        awdl_core_rx_eth(gCore, frame, length, nowTsf());
     IOLockUnlock(gLock);
     drain(false);
 }
 
 void radioEvent(void *, const struct swlan_awdl_event *e)
 {
-    if (e->type != SWLAN_AWDL_CHIP_LOST) return;
+    if (e->type != SWLAN_AWDL_CHIP_LOST)
+        return;
     IOLog("SwitchWLAN: AWDL: the radio was lost; AWDL stopped (wifip2pd re-enables it after recovery)\n");
     IOLockLock(gLock);
-    if (gCore) awdl_core_stop(gCore);
+    if (gCore)
+        awdl_core_stop(gCore);
     gFacade.enabled = 0;
     gRxStarted = false;
     IOLockUnlock(gLock);
@@ -509,7 +571,8 @@ int opStart(void *)
     awdl_core_set_infra(gCore, swlan_awdl_infra_freq(), nowTsf());
     if (!gRxStarted && gCaps->has_native_awdl) {
         int e = swlan_awdl_fw_events(fwEvent, nullptr);
-        if (e >= 0) e = swlan_awdl_eth_rx(ethRx, nullptr);
+        if (e >= 0)
+            e = swlan_awdl_eth_rx(ethRx, nullptr);
         if (e < 0) {
             IOLog("SwitchWLAN: AWDL: the radio would not deliver the firmware's AWDL events and frames (%d): off\n", e);
             return ENXIO;
@@ -529,19 +592,23 @@ int opStart(void *)
     }
     return 0;
 }
+
 void opStop(void *)
 {
-    if (gTimer) thread_call_cancel(gTimer);
+    if (gTimer)
+        thread_call_cancel(gTimer);
     if (!gCaps->has_native_awdl) {  // native: the core's "awdl_if down" stops the firmware; its events stay on
         swlan_awdl_chanseq_clear();
         swlan_awdl_rx_stop();
         gRxStarted = false;
     }
 }
+
 void opPost(void *, uint32_t event, const void *payload, uint32_t length)
 {
     postEvent(event, payload, length);
 }
+
 void opLog(void *, const char *line)
 {
     IOLog("SwitchWLAN: %s\n", line);
@@ -550,7 +617,8 @@ void opLog(void *, const char *line)
 // A short suffix for SwitchWLAN's 5-s stats line, so en0 rx and AWDL state read off one line (empty when off).
 extern "C" int switch_wlan_awdl_stat(char *buf, size_t size)
 {
-    if (!gLock || !gCore) return 0;
+    if (!gLock || !gCore)
+        return 0;
     int n = 0;
     IOLockLock(gLock);
     if (gCore && awdl_core_running(gCore)) {
@@ -586,7 +654,8 @@ errno_t ifOutput(ifnet_t ifp, mbuf_t m)
         rearm();
     }
     IOLockUnlock(gLock);
-    if (!r && stash.length && swlan_awdl_eth_tx(stash.frame, stash.length) < 0) r = -1;
+    if (!r && stash.length && swlan_awdl_eth_tx(stash.frame, stash.length) < 0)
+        r = -1;
     IOLockUnlock(gSend);
     if (r)
         ifnet_stat_increment_out(ifp, 0, 0, 1);
@@ -613,7 +682,8 @@ int ensureRadio()
             // the radio says why in its own line; a radio that was only down (recovering) is asked again next time
             IOLog("SwitchWLAN: AWDL: wifip2pd enabled AWDL but the radio did not open for it (%d): AWDL off%s\n", r,
                   r == -ENXIO ? " until the next enable" : "");
-            if (r != -ENXIO) gRadioOpen = -1;
+            if (r != -ENXIO)
+                gRadioOpen = -1;
             e = ENXIO;
         }
     }
@@ -623,12 +693,15 @@ int ensureRadio()
 
 int awdlRequest(bool set, apple80211req &rq)
 {
-    if (rq.req_len > kMaxRequest) return EINVAL;
+    if (rq.req_len > kMaxRequest)
+        return EINVAL;
     const uint32_t capacity = rq.req_len;
     uint8_t *data = capacity ? static_cast<uint8_t *>(IOMallocZeroData(capacity)) : nullptr;
-    if (capacity && !data) return ENOMEM;
+    if (capacity && !data)
+        return ENOMEM;
     int e = 0;
-    if (set && capacity && rq.req_data) e = copyin(rq.req_data, data, capacity);
+    if (set && capacity && rq.req_data)
+        e = copyin(rq.req_data, data, capacity);
     // apple80211_awdl_sync_enabled {version, flags, enabled}: AWDL on needs the radio opened first, without gLock
     if (!e && set && rq.req_type == A80211_IOC_AWDL_SYNC_ENABLED && capacity >= 12 &&
         (data[8] | data[9] | data[10] | data[11]))
@@ -640,9 +713,12 @@ int awdlRequest(bool set, apple80211req &rq)
         rearm();
         IOLockUnlock(gLock);
     }
-    if (!e && !set && length && rq.req_data) e = copyout(data, rq.req_data, length);
-    if (!e && !set) rq.req_len = length;
-    if (data) IOFreeData(data, capacity);
+    if (!e && !set && length && rq.req_data)
+        e = copyout(data, rq.req_data, length);
+    if (!e && !set)
+        rq.req_len = length;
+    if (data)
+        IOFreeData(data, capacity);
     drain();
     return e;
 }
@@ -655,7 +731,8 @@ errno_t answerMedia(void *arg, int status)
     m->ifm_mask = 0;
     m->ifm_status = status;
     m->ifm_active = media;
-    if (m->ifmu_ulist && m->ifm_count > 0 && copyout(&media, m->ifmu_ulist, sizeof media)) return EFAULT;
+    if (m->ifmu_ulist && m->ifm_count > 0 && copyout(&media, m->ifmu_ulist, sizeof media))
+        return EFAULT;
     m->ifm_count = 1;
     return 0;
 }
@@ -664,21 +741,28 @@ errno_t ifIoctl(ifnet_t ifp, unsigned long cmd, void *arg)
 {
     switch (cmd) {
     case SIOCGA80211:
-    case SIOCSA80211: return awdlRequest(cmd == SIOCSA80211, *static_cast<apple80211req *>(arg));
-    case SIOCGIFMEDIA64: return answerMedia(arg, IFM_AVALID | (gCore && awdl_core_running(gCore) ? IFM_ACTIVE : 0));
+    case SIOCSA80211:
+        return awdlRequest(cmd == SIOCSA80211, *static_cast<apple80211req *>(arg));
+    case SIOCGIFMEDIA64:
+        return answerMedia(arg, IFM_AVALID | (gCore && awdl_core_running(gCore) ? IFM_ACTIVE : 0));
     case SIOCSIFLLADDR: {
         // wifip2pd's AWDL address: the stack transmits with it and the kernel derives fe80::/64 from it
         const struct ifreq *ifr = static_cast<const struct ifreq *>(arg);
-        if (ifr->ifr_addr.sa_len != ETHER_ADDR_LEN) return EINVAL;
+        if (ifr->ifr_addr.sa_len != ETHER_ADDR_LEN)
+            return EINVAL;
         const uint8_t *mac = reinterpret_cast<const uint8_t *>(ifr->ifr_addr.sa_data);
         // While AWDL runs on the firmware, its awdl_if and payload carry the address: change it only while off
-        if (gCaps && gCaps->has_native_awdl && gCore && awdl_core_running(gCore)) return EBUSY;
+        if (gCaps && gCaps->has_native_awdl && gCore && awdl_core_running(gCore))
+            return EBUSY;
         const errno_t e = ifnet_set_lladdr(ifp, mac, ETHER_ADDR_LEN);
-        if (e) return e;
+        if (e)
+            return e;
         IOLockLock(gLock);
         memcpy(gMac, mac, 6);
-        if (gCore) awdl_core_set_addr(gCore, mac);
-        if (gRxStarted) swlan_awdl_rx_filter(gMac, awdl_bssid, 0);
+        if (gCore)
+            awdl_core_set_addr(gCore, mac);
+        if (gRxStarted)
+            swlan_awdl_rx_filter(gMac, awdl_bssid, 0);
         IOLockUnlock(gLock);
         return 0;
     }
@@ -687,19 +771,24 @@ errno_t ifIoctl(ifnet_t ifp, unsigned long cmd, void *arg)
     case SIOCADDMULTI:
     case SIOCDELMULTI:
     case SIOCSIFADDR:
-    case SIOCSIFMEDIA: return 0;
+    case SIOCSIFMEDIA:
+        return 0;
     default: {
         static unsigned said;
-        if (said++ < 8) IOLog("SwitchWLAN: AWDL: %s request %lx not handled\n", gName, cmd);
+        if (said++ < 8)
+            IOLog("SwitchWLAN: AWDL: %s request %lx not handled\n", gName, cmd);
         return EOPNOTSUPP;
     }
     }
 }
+
 void ifDetached(ifnet_t ifp)
 {
     ifnet_release(ifp);
 }
-void ifEventStub(ifnet_t, const struct kev_msg *) {}
+
+void ifEventStub(ifnet_t, const struct kev_msg *)
+{}
 
 }  // namespace
 
@@ -708,7 +797,11 @@ class SwitchAwdlUserClient : public IOUserClient {
     OSDeclareDefaultStructors(SwitchAwdlUserClient);
 
 public:
-    static void wake(OSAsyncReference64 reference) { sendAsyncResult64(reference, kIOReturnSuccess, nullptr, 0); }
+    static void wake(OSAsyncReference64 reference)
+    {
+        sendAsyncResult64(reference, kIOReturnSuccess, nullptr, 0);
+    }
+
     IOReturn clientClose() APPLE_KEXT_OVERRIDE;
     IOReturn clientMemoryForType(UInt32 type, IOOptionBits *options, IOMemoryDescriptor **memory) APPLE_KEXT_OVERRIDE;
     IOReturn externalMethod(uint32_t selector, IOExternalMethodArguments *arguments, IOExternalMethodDispatch *dispatch,
@@ -717,6 +810,7 @@ public:
 private:
     IOReturn passthrough(IOExternalMethodArguments *a);
 };
+
 OSDefineMetaClassAndStructors(SwitchAwdlUserClient, IOUserClient);
 
 namespace {
@@ -731,7 +825,8 @@ IOReturn SwitchAwdlUserClient::clientClose()
     IOLockLock(gLock);
     if (gEventClient == this) {
         gMonitoring = false;
-        if (gAsyncArmed) releaseAsyncReference64(gAsync);
+        if (gAsyncArmed)
+            releaseAsyncReference64(gAsync);
         gAsyncArmed = false;
         gEventClient = nullptr;
     }
@@ -743,7 +838,8 @@ IOReturn SwitchAwdlUserClient::clientClose()
 IOReturn SwitchAwdlUserClient::clientMemoryForType(UInt32 type, IOOptionBits *options, IOMemoryDescriptor **memory)
 {
     IOBufferMemoryDescriptor *md = type == 1 ? gRingMemory : type == 2 ? gStateMemory : nullptr;
-    if (!md) return kIOReturnBadArgument;
+    if (!md)
+        return kIOReturnBadArgument;
     md->retain();
     *memory = md;
     *options = type == 1 ? kIOMapReadOnly : 0;
@@ -757,14 +853,17 @@ IOReturn SwitchAwdlUserClient::passthrough(IOExternalMethodArguments *a)
 {
     const uint32_t size = a->structureInputDescriptor ? static_cast<uint32_t>(a->structureInputDescriptor->getLength())
                                                       : a->structureInputSize;
-    if (size < 0x30 + 8 || size > 0x40000) return kIOReturnBadArgument;
+    if (size < 0x30 + 8 || size > 0x40000)
+        return kIOReturnBadArgument;
     uint8_t head[8], trailer[0x28];
     if (a->structureInputDescriptor) {
         IOMemoryDescriptor *md = a->structureInputDescriptor;
-        if (md->prepare() != kIOReturnSuccess) return kIOReturnVMError;
+        if (md->prepare() != kIOReturnSuccess)
+            return kIOReturnVMError;
         const bool ok = md->readBytes(0, head, 8) == 8 && md->readBytes(size - 0x28, trailer, 0x28) == 0x28;
         md->complete();
-        if (!ok) return kIOReturnVMError;
+        if (!ok)
+            return kIOReturnVMError;
     } else {
         memcpy(head, a->structureInput, 8);
         memcpy(trailer, static_cast<const uint8_t *>(a->structureInput) + size - 0x28, 0x28);
@@ -774,14 +873,16 @@ IOReturn SwitchAwdlUserClient::passthrough(IOExternalMethodArguments *a)
     memcpy(&cmd, head, 4);
     memcpy(&type, trailer + 0x10, 4);
     memcpy(&val, trailer + 0x14, 4);
-    if (cmd != SIOCGA80211) return kIOReturnUnsupported;  // sets go through the socket (useIOUCWhenPossible = 0)
+    if (cmd != SIOCGA80211)
+        return kIOReturnUnsupported;  // sets go through the socket (useIOUCWhenPossible = 0)
     uint8_t out[512] = {};
     uint32_t length = 0;
     const uint32_t capacity = a->structureOutputSize < sizeof out ? a->structureOutputSize : sizeof out;
     IOLockLock(gLock);
     const int e = a80211_awdl_request(&gFacade, 0, type, &val, out, &length, capacity, nowTsf());
     IOLockUnlock(gLock);
-    if (e) return kIOReturnUnsupported;
+    if (e)
+        return kIOReturnUnsupported;
     memcpy(a->structureOutput, out, length);
     a->structureOutputSize = length;
     return kIOReturnSuccess;
@@ -791,10 +892,12 @@ IOReturn SwitchAwdlUserClient::externalMethod(uint32_t selector, IOExternalMetho
                                               IOExternalMethodDispatch *, OSObject *, void *)
 {
     switch (selector) {
-    case 0: return passthrough(a);
+    case 0:
+        return passthrough(a);
     case 1:    // useIOUCWhenPossible: no, keep Apple80211RawGet/RawSet on the socket
     case 5: {  // useIOUCEventPipe: yes
-        if (a->structureOutputSize < 1 || !a->structureOutput) return kIOReturnBadArgument;
+        if (a->structureOutputSize < 1 || !a->structureOutput)
+            return kIOReturnBadArgument;
         *static_cast<uint8_t *>(a->structureOutput) = selector == 5;
         a->structureOutputSize = 1;
         return kIOReturnSuccess;
@@ -803,7 +906,8 @@ IOReturn SwitchAwdlUserClient::externalMethod(uint32_t selector, IOExternalMetho
         IOLockLock(gLock);
         if (gEventClient && gEventClient != this) {
             IOLog("SwitchWLAN: AWDL: a second event monitor on %s takes over the ring\n", gName);
-            if (gAsyncArmed) releaseAsyncReference64(gAsync);
+            if (gAsyncArmed)
+                releaseAsyncReference64(gAsync);
             gAsyncArmed = false;
         }
         gEventClient = this;
@@ -817,7 +921,8 @@ IOReturn SwitchAwdlUserClient::externalMethod(uint32_t selector, IOExternalMetho
         IOLockLock(gLock);
         if (gEventClient == this) {
             gMonitoring = false;
-            if (gAsyncArmed) releaseAsyncReference64(gAsync);
+            if (gAsyncArmed)
+                releaseAsyncReference64(gAsync);
             gAsyncArmed = false;
             gEventClient = nullptr;
         }
@@ -825,15 +930,18 @@ IOReturn SwitchAwdlUserClient::externalMethod(uint32_t selector, IOExternalMetho
         return kIOReturnSuccess;
     }
     case 2: {  // the wake-up for new events
-        if (!a->asyncReference || a->asyncReferenceCount < kOSAsyncRef64Count) return kIOReturnBadArgument;
+        if (!a->asyncReference || a->asyncReferenceCount < kOSAsyncRef64Count)
+            return kIOReturnBadArgument;
         IOLockLock(gLock);
-        if (gAsyncArmed) releaseAsyncReference64(gAsync);
+        if (gAsyncArmed)
+            releaseAsyncReference64(gAsync);
         bcopy(a->asyncReference, gAsync, sizeof(OSAsyncReference64));
         gAsyncArmed = true;
         IOLockUnlock(gLock);
         return kIOReturnSuccess;
     }
-    default: return kIOReturnUnsupported;
+    default:
+        return kIOReturnUnsupported;
     }
 }
 
@@ -844,7 +952,8 @@ public:
     IOReturn newUserClient(task_t task, void *security, UInt32 type, OSDictionary *properties,
                            IOUserClient **handler) APPLE_KEXT_OVERRIDE
     {
-        if (type != 0) return kIOReturnBadArgument;
+        if (type != 0)
+            return kIOReturnBadArgument;
         SwitchAwdlUserClient *client = OSTypeAlloc(SwitchAwdlUserClient);
         if (!client || !client->initWithTask(task, security, type, properties)) {
             OSSafeReleaseNULL(client);
@@ -863,6 +972,7 @@ public:
         return kIOReturnSuccess;
     }
 };
+
 OSDefineMetaClassAndStructors(SwitchAwdlInterface, IOService);
 
 namespace {
@@ -979,13 +1089,16 @@ errno_t downOutput(ifnet_t ifp, mbuf_t m)
 errno_t downIoctl(ifnet_t, unsigned long cmd, void *arg)
 {
     switch (cmd) {
-    case SIOCGIFMEDIA64: return answerMedia(arg, a80211_awdl_down_media_status());
+    case SIOCGIFMEDIA64:
+        return answerMedia(arg, a80211_awdl_down_media_status());
     case SIOCSIFFLAGS:
     case SIOCSIFMTU:
     case SIOCADDMULTI:
     case SIOCDELMULTI:
-    case SIOCSIFADDR: return 0;
-    default: return EOPNOTSUPP;
+    case SIOCSIFADDR:
+        return 0;
+    default:
+        return EOPNOTSUPP;
     }
 }
 
@@ -1062,10 +1175,12 @@ void scheduleDownInterface()
 
 extern "C" int switch_wlan_awdl_capable(void)
 {
-    if (__atomic_load_n(&gCapable, __ATOMIC_ACQUIRE) >= 0) return gCapable;
+    if (__atomic_load_n(&gCapable, __ATOMIC_ACQUIRE) >= 0)
+        return gCapable;
     // one caller decides; a concurrent one is told "not (yet)" and asks again at its next request
     static unsigned deciding;
-    if (__atomic_exchange_n(&deciding, 1u, __ATOMIC_ACQ_REL)) return 0;
+    if (__atomic_exchange_n(&deciding, 1u, __ATOMIC_ACQ_REL))
+        return 0;
     if (gCapable < 0) {
         int verdict = -1;
         const struct swlan_awdl_caps *caps = nullptr;
@@ -1118,8 +1233,10 @@ extern "C" int switch_wlan_awdl_capable(void)
                   caps->can_scheduled_hops, caps->can_stay_assoc);
             verdict = 1;
         }
-        if (verdict >= 0) __atomic_store_n(&gCapable, verdict, __ATOMIC_RELEASE);
-        if (verdict == 0) scheduleDownInterface();
+        if (verdict >= 0)
+            __atomic_store_n(&gCapable, verdict, __ATOMIC_RELEASE);
+        if (verdict == 0)
+            scheduleDownInterface();
     }
     __atomic_store_n(&deciding, 0u, __ATOMIC_RELEASE);
     return gCapable > 0 ? 1 : 0;
@@ -1127,21 +1244,26 @@ extern "C" int switch_wlan_awdl_capable(void)
 
 extern "C" int switch_wlan_awdl_vif_create(void *payload, size_t length)
 {
-    if (length < sizeof(a80211_virt_if_create)) return EINVAL;
+    if (length < sizeof(a80211_virt_if_create))
+        return EINVAL;
     a80211_virt_if_create *r = static_cast<a80211_virt_if_create *>(payload);
-    if (r->role != A80211_VIF_ROLE_AWDL || switch_wlan_awdl_capable() != 1) return EOPNOTSUPP;
+    if (r->role != A80211_VIF_ROLE_AWDL || switch_wlan_awdl_capable() != 1)
+        return EOPNOTSUPP;
     IOLockLock(gLock);
     if (!gIf && !gCreating) {
         gUnit = r->unit < 8 ? r->unit : 0;
         snprintf(gName, sizeof gName, "awdl%u", gUnit);
         static const uint8_t zero[6] = {};
-        if (memcmp(r->mac, zero, 6)) memcpy(gMac, r->mac, 6);
+        if (memcmp(r->mac, zero, 6))
+            memcpy(gMac, r->mac, 6);
         awdl_core_set_addr(gCore, gMac);
         uint8_t caps[12] = {0x4c, 0x46, 0x0a, 0, 0x01};  // en0's bitmap (SwitchWLANNet kCardCaps) plus bit 32
         const a80211_awdl_ops ops = {nullptr, opStart, opStop, opPost, opLog};
         a80211_awdl_init(&gFacade, gCore, &ops, gName, "en0", caps);
-        if (!gRingMemory) gRingMemory = IOBufferMemoryDescriptor::withOptions(kSharedOptions, kRingSize, PAGE_SIZE);
-        if (!gStateMemory) gStateMemory = IOBufferMemoryDescriptor::withOptions(kSharedOptions, PAGE_SIZE, PAGE_SIZE);
+        if (!gRingMemory)
+            gRingMemory = IOBufferMemoryDescriptor::withOptions(kSharedOptions, kRingSize, PAGE_SIZE);
+        if (!gStateMemory)
+            gStateMemory = IOBufferMemoryDescriptor::withOptions(kSharedOptions, PAGE_SIZE, PAGE_SIZE);
         if (!gRingMemory || !gStateMemory) {
             IOLockUnlock(gLock);
             IOLog("SwitchWLAN: AWDL: no memory for the event ring\n");
@@ -1160,7 +1282,8 @@ extern "C" int switch_wlan_awdl_vif_create(void *payload, size_t length)
 
 extern "C" int switch_wlan_awdl_vif_delete(const void *payload, size_t length)
 {
-    if (length < sizeof(a80211_virt_if_delete) || gCapable != 1) return EOPNOTSUPP;
+    if (length < sizeof(a80211_virt_if_delete) || gCapable != 1)
+        return EOPNOTSUPP;
     const a80211_virt_if_delete *d = static_cast<const a80211_virt_if_delete *>(payload);
     IOLockLock(gLock);
     if (!gIf || strncmp(d->name, gName, sizeof d->name)) {

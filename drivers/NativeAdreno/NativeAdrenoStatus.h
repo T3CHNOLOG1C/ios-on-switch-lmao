@@ -3,6 +3,7 @@
 #define NATIVE_ADRENO_STATUS_H
 #include <IOKit/IOTypes.h>
 #include <stdint.h>
+
 /* Monotonic fault and suspend counters for Turnip's device_check_status and
  * device_get_suspend_count. Turnip compares the fault count against the value
  * it saw last; a change means the context is lost. This object only counts
@@ -14,20 +15,36 @@ struct NativeAdrenoStatusCounts {
     uint64_t faults;
     uint64_t suspends;
 };
+
 class NativeAdrenoStatus final {
     uint64_t faults_ = 0, suspends_ = 0;
 
 public:
     void noteFault()
     {
-        if (faults_ != UINT64_MAX) ++faults_;
+        if (faults_ != UINT64_MAX)
+            ++faults_;
     }
+
     void noteSuspend()
     {
-        if (suspends_ != UINT64_MAX) ++suspends_;
+        if (suspends_ != UINT64_MAX)
+            ++suspends_;
     }
-    uint64_t faults() const { return faults_; }
-    uint64_t suspends() const { return suspends_; }
-    NativeAdrenoStatusCounts counts() const { return {faults_, suspends_}; }
+
+    uint64_t faults() const
+    {
+        return faults_;
+    }
+
+    uint64_t suspends() const
+    {
+        return suspends_;
+    }
+
+    NativeAdrenoStatusCounts counts() const
+    {
+        return {faults_, suspends_};
+    }
 };
 #endif

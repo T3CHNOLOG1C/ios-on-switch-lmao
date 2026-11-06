@@ -14,12 +14,14 @@
     } while (0)
 #define SMMU_BYTES 0x40000
 #define CB         0x22000
+
 IOReturn NativeAdrenoQueryCpu4K(NativeAdrenoCpuState *out)
 {
     CHECK(out);
     *out = {};
     return kIOReturnSuccess;
 }
+
 IOReturn NativeAdrenoMaintainOwnedPages(void *mapping, size_t bytes, NativeAdrenoCacheOperation op)
 {
     CHECK(mapping && bytes && !(((uintptr_t)mapping | bytes) & 4095));
@@ -27,43 +29,54 @@ IOReturn NativeAdrenoMaintainOwnedPages(void *mapping, size_t bytes, NativeAdren
     ++fixture.cache_calls;
     return fixture.cache_calls == fixture.cache_fail_call ? kIOReturnIOError : kIOReturnSuccess;
 }
+
 /* SMMUv2 register peer. */
 static uint32_t mmio[SMMU_BYTES / 4];
+
 static struct {
     unsigned calls, fail_call, after;
 } mf;
+
 static ArmSmmu4KIo smmuio;
 static ArmSmmu4KStreamState streams;
 static ArmSmmu4KStream routes[2] = {{2, 0}, {4, 1}};
 static ArmSmmu4KStreamResult route_result;
 static ArmSmmu4KContextConfig context;
 static ArmSmmu4KContextImage context_image;
+
 static int mevent(void)
 {
     return ++mf.calls == mf.fail_call;
 }
+
 static int mread32(void *c, size_t at, uint32_t *v)
 {
     CHECK(c == &mf && at % 4 == 0 && at <= SMMU_BYTES - 4);
-    if (mevent()) return 1;
+    if (mevent())
+        return 1;
     *v = mmio[at / 4];
     return 0;
 }
+
 static int mread64(void *c, size_t at, uint64_t *v)
 {
     CHECK(c == &mf && at % 8 == 0 && at <= SMMU_BYTES - 8);
-    if (mevent()) return 1;
+    if (mevent())
+        return 1;
     std::memcpy(v, mmio + at / 4, 8);
     return 0;
 }
+
 static int mwrite32(void *c, size_t at, uint32_t v)
 {
     CHECK(c == &mf && at % 4 == 0 && at <= SMMU_BYTES - 4);
     int f = mevent();
-    if (f && !mf.after) return 1;
+    if (f && !mf.after)
+        return 1;
     mmio[at / 4] = v;
     return f;
 }
+
 static int mwrite64(void *c, size_t at, uint64_t v)
 {
     (void)c;
@@ -72,20 +85,26 @@ static int mwrite64(void *c, size_t at, uint64_t v)
     CHECK(0);
     return 1;
 }
+
 static int mbarrier(void *c)
 {
     CHECK(c == &mf);
     return mevent();
 }
+
 /* CP register peer. */
 struct CpPeer {
     std::vector<uint32_t> regs;
     std::vector<uint32_t> writes;
     unsigned publish = 0, acquire = 0, barriers = 0, fail_publish = 0, fail_acquire = 0, fail_barrier = 0;
-    CpPeer() : regs(0x10000, 0) {}
+
+    CpPeer() : regs(0x10000, 0)
+    {}
 };
+
 static CpPeer cp;
 static uint64_t clock_us = 0;
+
 static int cwrite(void *c, uint32_t reg, uint32_t v)
 {
     CHECK(c == &cp && reg < cp.regs.size());
@@ -93,41 +112,48 @@ static int cwrite(void *c, uint32_t reg, uint32_t v)
     cp.writes.push_back(reg);
     return 0;
 }
+
 static int cread(void *c, uint32_t reg, uint32_t *v)
 {
     CHECK(c == &cp && v && reg < cp.regs.size());
     *v = cp.regs[reg];
     return 0;
 }
+
 static int cbarrier(void *c)
 {
     CHECK(c == &cp);
     ++cp.barriers;
     return cp.barriers == cp.fail_barrier;
 }
+
 static int cpublish(void *c, const volatile uint32_t *w, size_t bytes)
 {
     CHECK(c == &cp && w && bytes == 32768);
     ++cp.publish;
     return cp.publish == cp.fail_publish;
 }
+
 static int cacquire(void *c, volatile uint32_t *w, size_t bytes)
 {
     CHECK(c == &cp && w && bytes == 4096);
     ++cp.acquire;
     return cp.acquire == cp.fail_acquire;
 }
+
 static uint64_t cnow(void *c)
 {
     CHECK(c == &cp);
     return clock_us;
 }
+
 static int cidle(void *c)
 {
     CHECK(c == &cp);
     clock_us += 1000;
     return 0;
 }
+
 struct Path {
     NativeAdrenoMemory tables, object;
     ArmSmmu4KLiveArena arena;
@@ -138,11 +164,13 @@ struct Path {
     NativeAdrenoSubmit submit;
     uint64_t handle = 0;
 };
+
 static uint32_t ringmem[8192], fencemem[1024];
 static std::vector<uint64_t> dram_reads;
 static NativeAdrenoRingIo ringio{&cp, cwrite, cread, cbarrier};
 static NativeAdrenoRingCache ringcache{&cp, cpublish, cacquire};
 static NativeAdrenoRingClock ringclock{&cp, cnow, cidle};
+
 static void smmuReset(void)
 {
     std::memset(mmio, 0, sizeof(mmio));
@@ -153,10 +181,12 @@ static void smmuReset(void)
     mmio[0x24 / 4] = 0x40000010;
     mmio[0x28 / 4] = 0x1433;
     mmio[0] = 0x436;
-    for (unsigned i = 0; i < 8; ++i) mmio[(0xc00 + 4 * i) / 4] = 0x20000;
+    for (unsigned i = 0; i < 8; ++i)
+        mmio[(0xc00 + 4 * i) / 4] = 0x20000;
     mmio[0x800 / 4] = 1u << 31 | 9;
     mmio[0xc00 / 4] = 3;
 }
+
 static int exposed(Path &p, bool write_combined = false)
 {
     smmuReset();
@@ -164,7 +194,8 @@ static int exposed(Path &p, bool write_combined = false)
     clock_us = 0;
     std::memset(ringmem, 0xef, sizeof(ringmem));
     std::memset(fencemem, 0, sizeof(fencemem));
-    if (p.tables.allocate(32 * 4096, 40, true, 32 * 4096)) return kIOReturnNoMemory;
+    if (p.tables.allocate(32 * 4096, 40, true, 32 * 4096))
+        return kIOReturnNoMemory;
     if (NativeAdrenoPrepareSmmuMemory(&p.tables, 32, 40, 0x800000, 65536, 0, 16, &p.arena, &p.state, &p.visibility))
         return kIOReturnBadArgument;
     context = (ArmSmmu4KContextConfig){.lower = &p.arena.config,
@@ -185,16 +216,22 @@ static int exposed(Path &p, bool write_combined = false)
     std::memcpy(mmio + (CB + 0x20) / 4, &context_image.ttbr0, 8);
     std::memcpy(mmio + (CB + 0x28) / 4, &context_image.ttbr1, 8);
     mmio[(CB + 0x38) / 4] = context_image.mair0;
-    if (ArmSmmu4KAttachStreams(&smmuio, &streams, routes, 2, 2, &context, &route_result)) return kIOReturnBadArgument;
+    if (ArmSmmu4KAttachStreams(&smmuio, &streams, routes, 2, 2, &context, &route_result))
+        return kIOReturnBadArgument;
     NativeAdrenoVmRegion lower = {&p.tables, &p.arena, &p.state};
-    if (p.vm.attach(&smmuio, &context, &streams, &lower, nullptr, 32, 1000)) return kIOReturnBadArgument;
-    if (p.object.allocate(8192, 40, false, 8192)) return kIOReturnNoMemory;
-    if (write_combined && p.object.makeWriteCombined()) return kIOReturnNoMemory;
-    if (p.vm.map(&p.object, 0, 0x800000, 3, 0, 2, &p.handle)) return kIOReturnBadArgument;
+    if (p.vm.attach(&smmuio, &context, &streams, &lower, nullptr, 32, 1000))
+        return kIOReturnBadArgument;
+    if (p.object.allocate(8192, 40, false, 8192))
+        return kIOReturnNoMemory;
+    if (write_combined && p.object.makeWriteCombined())
+        return kIOReturnNoMemory;
+    if (p.vm.map(&p.object, 0, 0x800000, 3, 0, 2, &p.handle))
+        return kIOReturnBadArgument;
     if (p.ring.attach(&ringio, &ringcache, ringmem, sizeof(ringmem), 0x100000, fencemem, sizeof(fencemem), 0x108000))
         return kIOReturnBadArgument;
     return p.submit.attach(&p.vm, &p.ring);
 }
+
 int main()
 {
     /* One validated indirect-buffer submission with exact ring bytes. */
@@ -259,7 +296,8 @@ int main()
         native_adreno_line_audit = [](uint64_t physical, size_t bytes, uint32_t *dirty, uint32_t *stale) {
             audited.push_back(physical);
             audited.push_back(bytes);
-            if (fail) return 1;
+            if (fail)
+                return 1;
             *dirty += dirty_lines;
             *stale += 1;
             return 0;
@@ -315,7 +353,9 @@ int main()
         Path p;
         CHECK(exposed(p, true) == kIOReturnSuccess);
         NativeAdrenoSubmitBuffer buffer{p.handle, 0x800000, 4096};
-        native_adreno_line_audit = [](uint64_t, size_t, uint32_t *, uint32_t *) { return 1; };
+        native_adreno_line_audit = [](uint64_t, size_t, uint32_t *, uint32_t *) {
+            return 1;
+        };
         uint32_t fence = 0;
         CHECK(p.submit.submit(&buffer, 1, 0, &fence) == kIOReturnSuccess && fence == 1);
         CHECK(!p.vm.writeCombinedTrusted() && native_adreno_wc_audit[4] == kIOReturnIOError);
@@ -343,7 +383,8 @@ int main()
         NativeAdrenoSubmitBuffer unknown[1] = {{p.handle + 7, 0x800000, 4096}};
         CHECK(p.submit.submit(unknown, 1, 0, &fence) == kIOReturnBadArgument);
         NativeAdrenoSubmitBuffer many[17];
-        for (auto &b : many) b = {p.handle, 0x800000, 4096};
+        for (auto &b : many)
+            b = {p.handle, 0x800000, 4096};
         CHECK(p.submit.submit(many, 17, 0, &fence) == kIOReturnBadArgument);
         CHECK(p.object.deviceReferences() == 1 && cp.regs[0x0807] == wptr && p.submit.outstanding() == 0);
         /* Duplicate buffers share one device reference. */
@@ -383,19 +424,23 @@ int main()
                 "duplicate-buffer reference case and 1 poisoned-commit retention case over software SMMU/CP peers; 2 "
                 "write-combine audit cases (trusted, dirty and failed)\n");
 }
+
 /* Physical-page maintenance (imported BOs): record it; no host page is touched. */
 /* Host double: the page attribute change of user BOs has no host equivalent (no host page is touched). */
 IOReturn NativeAdrenoSetPagesCacheMode(const NativeAdrenoPhysicalSpan *spans, size_t count, bool)
 {
     return spans && count ? kIOReturnSuccess : kIOReturnBadArgument;
 }
+
 IOReturn NativeAdrenoReassertWriteCombined(const NativeAdrenoPhysicalSpan *spans, size_t count, uint32_t *reset)
 {
     return spans && count && reset ? kIOReturnSuccess : kIOReturnBadArgument;
 }
+
 IOReturn NativeAdrenoMaintainPhysicalPages(uint64_t physical, size_t bytes, NativeAdrenoCacheOperation op)
 {
-    if (!physical || !bytes || ((physical | bytes) & 4095) || op > NativeAdrenoInvalidate) std::abort();
+    if (!physical || !bytes || ((physical | bytes) & 4095) || op > NativeAdrenoInvalidate)
+        std::abort();
     ++fixture.physical_calls;
     fixture.physical_bytes += bytes;
     return kIOReturnSuccess;

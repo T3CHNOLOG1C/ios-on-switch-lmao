@@ -287,7 +287,9 @@ static void smmuBypassStream(uint16_t stream, OSSharedPtr<IOMemoryMap> &keep, ui
     if (!smmu) {
         panic("NATIVE_UFS smmu: map failed");
     }
-    UfsSmmuPlan plan = planUfsSmmu(stream, dma, bytes, [smmu](unsigned offset) { return read32(smmu, offset); });
+    UfsSmmuPlan plan = planUfsSmmu(stream, dma, bytes, [smmu](unsigned offset) {
+        return read32(smmu, offset);
+    });
     gRootDiagnostic.smmuId1 = read32(smmu, 0x24);
     gRootDiagnostic.smmuId2 = read32(smmu, 0x28);
     gRootDiagnostic.smmuSlot = plan.slot;
@@ -302,7 +304,10 @@ static void smmuBypassStream(uint16_t stream, OSSharedPtr<IOMemoryMap> &keep, ui
     unsigned bank = plan.bank, index = plan.slot;
     uintptr_t cb = smmu + (plan.pages + bank) * 4096;
     const char *failure = configureUfsSmmu(
-        plan, stream, [smmu](unsigned offset) { return read32(smmu, offset); },
+        plan, stream,
+        [smmu](unsigned offset) {
+            return read32(smmu, offset);
+        },
         [smmu](unsigned offset, uint32_t value) {
             write32(smmu, offset, value);
             __asm__ volatile("dsb sy" ::: "memory");
@@ -369,8 +374,10 @@ void NativeUfs::adoptAndRead(unsigned level)
     write32(hc, 0x60, 0);  // stop the firmware's request list
     __asm__ volatile("dsb sy" ::: "memory");
     unsigned stopLoops = 10000;
-    while ((read32(hc, 0x60) & 1) && stopLoops--) IODelay(10);
-    if (read32(hc, 0x60) & 1) panic("NATIVE_UFS adopt: request list did not stop");
+    while ((read32(hc, 0x60) & 1) && stopLoops--)
+        IODelay(10);
+    if (read32(hc, 0x60) & 1)
+        panic("NATIVE_UFS adopt: request list did not stop");
     smmuBypassStream(0x60, smmuMap, smmuReport, phys, 16384);
     write32(hc, 0x50, static_cast<uint32_t>(phys));
     write32(hc, 0x54, static_cast<uint32_t>(phys >> 32));
@@ -570,7 +577,9 @@ void NativeUfs::adoptAndRead(unsigned level)
         auto le32 = [](const uint8_t *at) -> uint32_t {
             return uint32_t(at[0]) | (uint32_t(at[1]) << 8) | (uint32_t(at[2]) << 16) | (uint32_t(at[3]) << 24);
         };
-        auto le64 = [&](const uint8_t *at) -> uint64_t { return uint64_t(le32(at)) | (uint64_t(le32(at + 4)) << 32); };
+        auto le64 = [&](const uint8_t *at) -> uint64_t {
+            return uint64_t(le32(at)) | (uint64_t(le32(at + 4)) << 32);
+        };
         uint32_t sig0 = le32(hdr), sig1 = le32(hdr + 4), hdrCrc = le32(hdr + 16), entCrc = le32(hdr + 88);
         uint64_t curLba = le64(hdr + 24), bakLba = le64(hdr + 32), firstUsable = le64(hdr + 40),
                  lastUsable = le64(hdr + 48);
@@ -826,6 +835,7 @@ struct UfsHost {
     bool poisoned = false;
     uintptr_t smmu = 0, cb = 0;
 };
+
 UfsHost gHost = {OSSharedPtr<IOMemoryMap>(), OSSharedPtr<IOMemoryMap>(), 0, nullptr, nullptr, 0, nullptr, false};
 
 static IOReturn recordTransport(IOReturn result, uint32_t ocs)
@@ -841,7 +851,8 @@ static IOReturn recordTransport(IOReturn result, uint32_t ocs)
         gRootDiagnostic.list = uint64_t(read32(gHost.hc, 0x50)) | (uint64_t(read32(gHost.hc, 0x54)) << 32);
         gRootDiagnostic.runStop = read32(gHost.hc, 0x60);
         gRootDiagnostic.ahit = read32(gHost.hc, 0x18);
-        for (unsigned i = 0; i < 5; ++i) gRootDiagnostic.uic[i] = read32(gHost.hc, 0x38 + 4 * i);
+        for (unsigned i = 0; i < 5; ++i)
+            gRootDiagnostic.uic[i] = read32(gHost.hc, 0x38 + 4 * i);
         if (gHost.smmu && gHost.cb) {
             gRootDiagnostic.gfsr = read32(gHost.smmu, 0x48);
             gRootDiagnostic.gsyn = read32(gHost.smmu, 0x54);
@@ -935,7 +946,8 @@ static bool hostBringUp(const char **why)
     cacheCivac(gHost.virt, kDmaBytes);
     uint32_t report[3] = {0, 0, 0};
     gRootDiagnostic.stage = "SMMU and request list";
-    if (!hostStopQueue(why)) return false;
+    if (!hostStopQueue(why))
+        return false;
     smmuBypassStream(0x60, gHost.smmuMap, report, gHost.phys, kDmaBytes);
     gHost.smmu = gHost.smmuMap->getVirtualAddress();
     uint32_t idr1 = read32(gHost.smmu, 0x24);
@@ -946,7 +958,8 @@ static bool hostBringUp(const char **why)
         gRootDiagnostic.smmuId2 = read32(gHost.smmu, 0x28);
         gRootDiagnostic.cba2r = read32(gHost.smmu, 0x1800 + 4 * (report[0] >> 16));
     }
-    if (!hostStartQueue(why)) return false;
+    if (!hostStartQueue(why))
+        return false;
     gRootDiagnostic.stage = "NOP OUT";
     // NOP OUT proves the transport before touching the SCSI layer.
     if (hostNop() != kIOReturnSuccess) {
@@ -982,7 +995,8 @@ static bool hostBringUp(const char **why)
             gHost.ready = true;
             return true;
         }
-        if (gHost.poisoned) break;
+        if (gHost.poisoned)
+            break;
         IOSleep(10);
     }
     gHost.ready = false;
@@ -1014,6 +1028,7 @@ struct StoreGeometry {
     uint64_t first, last, imageBytes, entriesLba;
     uint32_t headerCrc, entriesCrc, entryCount;
 };
+
 StoreGeometry gStoreGeometry;
 uint64_t gStoreRegionFirst, gStoreRegionBlocks;
 // The diagnostic log (sheng-log=1): always the last 32 MiB of userdata, so the Data store's place does not depend on logging.
@@ -1026,12 +1041,14 @@ uint64_t gLogRegionFirst, gLogRegionBlocks;
 // is unused. sheng-log-reserve=<MiB>, default 1024; 0 gives all the room to Data and is only accepted with the log off. The store's place
 // depends on it, so an image keeps one value for its whole life (a different value moves the store: the old one is read as blank).
 constexpr uint32_t kDefaultReserveMiB = 1024;
+
 static uint64_t reserveBlocks(void)
 {
     static int64_t cached = -1;
     if (cached < 0) {
         uint32_t mib = kDefaultReserveMiB;
-        if (!PE_parse_boot_argn("sheng-log-reserve", &mib, sizeof(mib)) || mib > 16384) mib = kDefaultReserveMiB;
+        if (!PE_parse_boot_argn("sheng-log-reserve", &mib, sizeof(mib)) || mib > 16384)
+            mib = kDefaultReserveMiB;
         cached = static_cast<int64_t>(mib) * 256;  // 4096-byte blocks
     }
     return static_cast<uint64_t>(cached);
@@ -1042,7 +1059,8 @@ static unsigned storeMode(void)
     static int cached = -1;
     if (cached < 0) {
         uint32_t value = 0;
-        if (!PE_parse_boot_argn("sheng-data-persist", &value, sizeof(value)) || value > 2) value = 0;
+        if (!PE_parse_boot_argn("sheng-data-persist", &value, sizeof(value)) || value > 2)
+            value = 0;
         cached = static_cast<int>(value);
     }
     return static_cast<unsigned>(cached);
@@ -1082,12 +1100,14 @@ extern "C" int native_ufs_store_open(uint64_t blocks, uint64_t *firstLba, const 
             else {
                 gStoreRegionFirst = first;
                 gStoreRegionBlocks = blocks;
-                if (firstLba) *firstLba = first;
+                if (firstLba)
+                    *firstLba = first;
                 ok = 1;
             }
         }
     }
-    if (why) *why = reason;
+    if (why)
+        *why = reason;
     return ok;
 }
 
@@ -1097,7 +1117,8 @@ extern "C" int native_ufs_store_read(uint64_t rel, uint32_t blocks, void *dst)
         return 0;
     while (blocks) {
         uint32_t chunk = blocks > kDataMax / 4096 ? static_cast<uint32_t>(kDataMax / 4096) : blocks;
-        if (hostRead4k(0, gStoreRegionFirst + rel, chunk, dst) != kIOReturnSuccess) return 0;
+        if (hostRead4k(0, gStoreRegionFirst + rel, chunk, dst) != kIOReturnSuccess)
+            return 0;
         dst = static_cast<uint8_t *>(dst) + chunk * 4096ULL;
         rel += chunk;
         blocks -= chunk;
@@ -1113,7 +1134,8 @@ extern "C" int native_ufs_store_write(uint64_t rel, uint32_t blocks, const void 
     while (blocks) {
         uint32_t chunk = blocks > kDataMax / 4096 ? static_cast<uint32_t>(kDataMax / 4096) : blocks;
         // Forced unit access: the block is on the medium when the command completes, so the overlay needs no cache flush.
-        if (hostWrite4k(0, gStoreRegionFirst + rel, chunk, src, true) != kIOReturnSuccess) return 0;
+        if (hostWrite4k(0, gStoreRegionFirst + rel, chunk, src, true) != kIOReturnSuccess)
+            return 0;
         src = static_cast<const uint8_t *>(src) + chunk * 4096ULL;
         rel += chunk;
         blocks -= chunk;
@@ -1134,7 +1156,8 @@ static unsigned logMode(void)
     static int cached = -1;
     if (cached < 0) {
         uint32_t value = 0;
-        if (!PE_parse_boot_argn("sheng-log", &value, sizeof(value)) || value > 1) value = 0;
+        if (!PE_parse_boot_argn("sheng-log", &value, sizeof(value)) || value > 1)
+            value = 0;
         cached = static_cast<int>(value);
     }
     return static_cast<unsigned>(cached);
@@ -1166,22 +1189,27 @@ extern "C" int native_ufs_log_open(uint64_t *firstLba, uint64_t *blocks, const c
             else {
                 gLogRegionFirst = first;
                 gLogRegionBlocks = kLogReserveBlocks;
-                if (firstLba) *firstLba = first;
-                if (blocks) *blocks = kLogReserveBlocks;
+                if (firstLba)
+                    *firstLba = first;
+                if (blocks)
+                    *blocks = kLogReserveBlocks;
                 ok = 1;
             }
         }
     }
-    if (why) *why = reason;
+    if (why)
+        *why = reason;
     return ok;
 }
 
 extern "C" int native_ufs_log_write(uint64_t rel, uint32_t blocks, const void *src)
 {
-    if (!gLogRegionBlocks || !src || !blocks || rel >= gLogRegionBlocks || blocks > gLogRegionBlocks - rel) return 0;
+    if (!gLogRegionBlocks || !src || !blocks || rel >= gLogRegionBlocks || blocks > gLogRegionBlocks - rel)
+        return 0;
     while (blocks) {
         uint32_t chunk = blocks > kDataMax / 4096 ? static_cast<uint32_t>(kDataMax / 4096) : blocks;
-        if (hostWrite4k(0, gLogRegionFirst + rel, chunk, src) != kIOReturnSuccess) return 0;
+        if (hostWrite4k(0, gLogRegionFirst + rel, chunk, src) != kIOReturnSuccess)
+            return 0;
         src = static_cast<const uint8_t *>(src) + chunk * 4096ULL;
         rel += chunk;
         blocks -= chunk;
@@ -1197,11 +1225,13 @@ extern "C" uint64_t native_ufs_export_blocks(void)
 
 extern "C" int native_ufs_export_write(uint64_t rel, uint32_t blocks, const void *src)
 {
-    if (!gLogRegionBlocks || !src || !blocks || rel >= kExportBlocks || blocks > kExportBlocks - rel) return 0;
+    if (!gLogRegionBlocks || !src || !blocks || rel >= kExportBlocks || blocks > kExportBlocks - rel)
+        return 0;
     const uint64_t base = gLogRegionFirst - kExportBlocks;
     while (blocks) {
         uint32_t chunk = blocks > kDataMax / 4096 ? static_cast<uint32_t>(kDataMax / 4096) : blocks;
-        if (hostWrite4k(0, base + rel, chunk, src) != kIOReturnSuccess) return 0;
+        if (hostWrite4k(0, base + rel, chunk, src) != kIOReturnSuccess)
+            return 0;
         src = static_cast<const uint8_t *>(src) + chunk * 4096ULL;
         rel += chunk;
         blocks -= chunk;
@@ -1217,16 +1247,19 @@ extern "C" int native_ufs_log_sync(void)
 // Re-read the GPT header and entry array and compare their CRCs with what was recorded at root start. 0 = unchanged.
 extern "C" unsigned native_ufs_store_gpt_check(void)
 {
-    if (!gStoreGeometry.valid || !gHost.ready) return 1;
+    if (!gStoreGeometry.valid || !gHost.ready)
+        return 1;
     static uint8_t block[4096];
-    if (hostRead4k(0, 1, 1, block) != kIOReturnSuccess) return 2;
+    if (hostRead4k(0, 1, 1, block) != kIOReturnSuccess)
+        return 2;
     uint32_t headerBytes = le32(block + 12);
     if (headerBytes < 92 || headerBytes > 4096 || rootCrc32(block, headerBytes, true) != le32(block + 16) ||
         le32(block + 16) != gStoreGeometry.headerCrc)
         return 3;
     uint32_t blocks = (gStoreGeometry.entryCount * 128 + 4095) / 4096;
     static uint8_t entries[4096 * 4];
-    if (blocks > 4 || hostRead4k(0, gStoreGeometry.entriesLba, blocks, entries) != kIOReturnSuccess) return 4;
+    if (blocks > 4 || hostRead4k(0, gStoreGeometry.entriesLba, blocks, entries) != kIOReturnSuccess)
+        return 4;
     return rootCrc32(entries, gStoreGeometry.entryCount * 128) == gStoreGeometry.entriesCrc ? 0 : 5;
 }
 
@@ -1251,62 +1284,113 @@ public:
     bool authenticatesVolume(const char *uuid, uint8_t *manifestDigest = nullptr) const;
     bool signedVolumeUuid(char out[37]) const;
 #endif
-    const char *windowLabel() const { return label; }
+    const char *windowLabel() const
+    {
+        return label;
+    }
+
     bool configure(const char *name, uint64_t absoluteOffset, uint64_t size);
     bool start(IOService *provider) override;
     void free() override;
-    IOReturn doEjectMedia() override { return kIOReturnUnsupported; }
-    IOReturn doFormatMedia(UInt64) override { return kIOReturnNotWritable; }
-    UInt32 doGetFormatCapacities(UInt64 *, UInt32) const override { return 0; }
-    char *getVendorString() override { return const_cast<char *>("Native"); }
-    char *getProductString() override { return label; }
-    char *getRevisionString() override { return const_cast<char *>("1.0"); }
+
+    IOReturn doEjectMedia() override
+    {
+        return kIOReturnUnsupported;
+    }
+
+    IOReturn doFormatMedia(UInt64) override
+    {
+        return kIOReturnNotWritable;
+    }
+
+    UInt32 doGetFormatCapacities(UInt64 *, UInt32) const override
+    {
+        return 0;
+    }
+
+    char *getVendorString() override
+    {
+        return const_cast<char *>("Native");
+    }
+
+    char *getProductString() override
+    {
+        return label;
+    }
+
+    char *getRevisionString() override
+    {
+        return const_cast<char *>("1.0");
+    }
+
     char *getAdditionalDeviceInfoString() override
     {
         return const_cast<char *>("UFS LUN 0 userdata window, read-only");
     }
+
     IOReturn reportBlockSize(UInt64 *value) override
     {
         *value = 512;
         return kIOReturnSuccess;
     }
+
     IOReturn reportEjectability(bool *value) override
     {
         *value = false;
         return kIOReturnSuccess;
     }
+
     IOReturn reportMaxValidBlock(UInt64 *value) override
     {
         *value = bytes / 512 - 1;
         return kIOReturnSuccess;
     }
+
     IOReturn reportMediaState(bool *present, bool *changed) override
     {
         *present = online;
-        if (changed) *changed = false;
+        if (changed)
+            *changed = false;
         return kIOReturnSuccess;
     }
+
     IOReturn reportRemovability(bool *value) override
     {
         *value = false;
         return kIOReturnSuccess;
     }
+
     IOReturn reportWriteProtection(bool *value) override
     {
         *value = true;
         return kIOReturnSuccess;
     }
-    IOReturn doSynchronizeCache() override { return online ? kIOReturnSuccess : kIOReturnNotReady; }
-    IOReturn doSynchronize(UInt64, UInt64, IOOptionBits) override { return doSynchronizeCache(); }
+
+    IOReturn doSynchronizeCache() override
+    {
+        return online ? kIOReturnSuccess : kIOReturnNotReady;
+    }
+
+    IOReturn doSynchronize(UInt64, UInt64, IOOptionBits) override
+    {
+        return doSynchronizeCache();
+    }
+
     IOReturn getWriteCacheState(bool *value) override
     {
         *value = false;
         return kIOReturnSuccess;
     }
-    IOReturn setWriteCacheState(bool) override { return kIOReturnUnsupported; }
+
+    IOReturn setWriteCacheState(bool) override
+    {
+        return kIOReturnUnsupported;
+    }
+
     IOReturn doAsyncReadWrite(IOMemoryDescriptor *, UInt64, UInt64, IOStorageAttributes *,
                               IOStorageCompletion *) override;
 };
+
 OSDefineMetaClassAndStructors(NativeUfsBlock, IOBlockStorageDevice)
 
     extern "C"
@@ -1318,6 +1402,7 @@ OSDefineMetaClassAndStructors(NativeUfsBlock, IOBlockStorageDevice)
 
 static char gRootDiagnosticText[2500];
 static char gRootMediaText[1000];
+
 // Passive diagnostic reader: cached software values only. It must remain safe
 // when called from an IRQ while the transport is busy: no locks, allocations,
 // MMIO reads, queue resets, or changes to the command/trust state. Fields can
@@ -1335,7 +1420,8 @@ static void rootDiagnosticFailure(const char *reason)
 {
     // Kept even when the panic diagnostic is off, so the boot page can say why nothing was published.
     native_ufs_root_failure = reason;
-    if (!gRootDiagnosticEnabled) return;
+    if (!gRootDiagnosticEnabled)
+        return;
     gRootDiagnostic.published = native_ufs_blocks_published;
     gRootDiagnostic.reads = native_ufs_block_reads;
     gRootDiagnostic.failures = native_ufs_block_failures;
@@ -1353,7 +1439,8 @@ bool NativeUfsBlock::configure(const char *name, uint64_t absoluteOffset, uint64
     absolute = absoluteOffset;
     bytes = size;
     windowLock = IOLockAlloc();
-    if (!windowLock) return false;
+    if (!windowLock)
+        return false;
     bounce = static_cast<uint8_t *>(IOMalloc(kDataMax));
     if (!bounce) {
         return false;
@@ -1371,12 +1458,14 @@ bool NativeUfsBlock::configure(const char *name, uint64_t absoluteOffset, uint64
 volatile uint64_t native_ufs_verified_blocks = 0;
 // Time spent hashing/verifying and reading from the UFS transport, in generic-timer ticks (diagnostic only).
 volatile uint64_t native_ufs_verify_ticks = 0, native_ufs_read_ticks = 0;
+
 static inline uint64_t timerTicks(void)
 {
     uint64_t v;
     __asm__ volatile("isb\n\tmrs %0, cntpct_el0" : "=r"(v));
     return v;
 }
+
 volatile uint32_t native_ufs_integrity_failures = 0;
 
 bool NativeUfsBlock::configureVerification()
@@ -1526,14 +1615,23 @@ IOReturn NativeUfsBlock::doAsyncReadWrite(IOMemoryDescriptor *buffer, UInt64 blo
     if (!online) {
         return kIOReturnNotReady;
     }
+
     struct Operations {
         IOLock *mutex;
         IOMemoryDescriptor *buffer;
 #if defined(NATIVE_VERIFIED_BLOCK) && NATIVE_VERIFIED_BLOCK
         const vr_view *view;
 #endif
-        void lock() { IOLockLock(mutex); }
-        void unlock() { IOLockUnlock(mutex); }
+        void lock()
+        {
+            IOLockLock(mutex);
+        }
+
+        void unlock()
+        {
+            IOLockUnlock(mutex);
+        }
+
         IOReturn read(uint64_t lba, uint32_t blocks, void *out)
         {
             uint64_t t0 = timerTicks();
@@ -1541,6 +1639,7 @@ IOReturn NativeUfsBlock::doAsyncReadWrite(IOMemoryDescriptor *buffer, UInt64 blo
             __atomic_fetch_add(&native_ufs_read_ticks, timerTicks() - t0, __ATOMIC_RELAXED);
             return r;
         }
+
         IOReturn verify(uint64_t index, const void *data, size_t length)
         {
 #if defined(NATIVE_VERIFIED_BLOCK) && NATIVE_VERIFIED_BLOCK
@@ -1554,7 +1653,8 @@ IOReturn NativeUfsBlock::doAsyncReadWrite(IOMemoryDescriptor *buffer, UInt64 blo
                 return kIOReturnNotPrivileged;
             }
             __atomic_fetch_add(&native_ufs_verified_blocks, 1, __ATOMIC_RELAXED);
-            if (boot_progress_poll) boot_progress_poll();
+            if (boot_progress_poll)
+                boot_progress_poll();
 #else
             (void)index;
             (void)data;
@@ -1562,10 +1662,12 @@ IOReturn NativeUfsBlock::doAsyncReadWrite(IOMemoryDescriptor *buffer, UInt64 blo
 #endif
             return kIOReturnSuccess;
         }
+
         uint64_t copy(uint64_t offset, const void *data, uint64_t length)
         {
             uint64_t copied = buffer->writeBytes(offset, data, length);
-            if (copied == length) __atomic_fetch_add(&native_ufs_block_reads, 1, __ATOMIC_RELAXED);
+            if (copied == length)
+                __atomic_fetch_add(&native_ufs_block_reads, 1, __ATOMIC_RELAXED);
             return copied;
         }
     } operations = {windowLock, buffer
@@ -1627,7 +1729,8 @@ static bool mediaWithUuidExists(const char *uuid, NativeUfsBlock *window)
         if (iterator) {
             for (unsigned matches = 0; matches < 64 && !found; ++matches) {
                 IORegistryEntry *media = OSDynamicCast(IORegistryEntry, iterator->getNextObject());
-                if (!media) break;
+                if (!media)
+                    break;
                 IORegistryIterator *parents = IORegistryIterator::iterateOver(
                     media, gIOServicePlane, kIORegistryIterateRecursively | kIORegistryIterateParents);
                 if (parents) {
@@ -1652,7 +1755,8 @@ static void captureMissingMedia(const char *uuid)
     unsigned count = 0;
     while (iterator && used < int(sizeof(gRootMediaText)) - 180 && count++ < 8) {
         IOService *media = OSDynamicCast(IOService, iterator->getNextObject());
-        if (!media) break;
+        if (!media)
+            break;
         OSString *id = OSDynamicCast(OSString, media->getProperty("UUID"));
         OSString *bsd = OSDynamicCast(OSString, media->getProperty(kIOBSDNameKey));
         OSNumber *size = OSDynamicCast(OSNumber, media->getProperty("Size"));
@@ -1669,8 +1773,10 @@ static void captureMissingMedia(const char *uuid)
 static void discardPendingWindow(unsigned index)
 {
     NativeUfsBlock *device = gPendingDevice[index];
-    if (!device) return;
-    if (gPendingAttached[index]) device->detach(gPendingProvider);
+    if (!device)
+        return;
+    if (gPendingAttached[index])
+        device->detach(gPendingProvider);
     gPendingAttached[index] = false;
     gPendingDevice[index] = nullptr;
     device->release();
@@ -1685,11 +1791,13 @@ static void publishThread(void *, wait_result_t)
             gRootDiagnostic.stage = "root window service start";
             gRootDiagnostic.publicationPhase = static_cast<unsigned>(UfsRootPhase::Start);
             gRootDiagnostic.publicationWindow = index;
-            if (!device->start(gPendingProvider)) return false;
+            if (!device->start(gPendingProvider))
+                return false;
             native_ufs_blocks_published = native_ufs_blocks_published + 1;
             IOLog("NativeUfs: published %s\n", device->windowLabel());
             return true;
         }
+
         bool wait(unsigned index)
         {
             NativeUfsBlock *device = gPendingDevice[index];
@@ -1701,15 +1809,22 @@ static void publishThread(void *, wait_result_t)
             // Diagnostic mode affects reporting only, never the dependency gate.
             for (unsigned tick = 0; tick <= 300; ++tick) {
                 ready = mediaWithUuidExists(uuid, device);
-                if (ready || tick == 300) break;
+                if (ready || tick == 300)
+                    break;
                 IOSleep(100);
             }
             IOLog("NativeUfs: %s volume %s %s\n", device->windowLabel(), uuid, ready ? "ready" : "not ready");
-            if (!ready) captureMissingMedia(uuid);
+            if (!ready)
+                captureMissingMedia(uuid);
             return ready;
         }
-        void discard(unsigned index) { discardPendingWindow(index); }
+
+        void discard(unsigned index)
+        {
+            discardPendingWindow(index);
+        }
     } operations;
+
     UfsRootPublicationResult result = ufsPublishRootWindows(operations, gPublicationPlan);
     if (result.phase != UfsRootPhase::Complete) {
         gRootDiagnostic.result = result.phase == UfsRootPhase::Start ? kIOReturnIOError : kIOReturnTimeout;
@@ -1938,7 +2053,8 @@ bool NativeUfs::startRoot(IOService *provider)
     if (!layout || !findRootLayout(layout, &why)) {
         rootDiagnosticFailure(layout ? why : "root layout allocation failed");
         IOLog("NativeUfs: root layout failed: %s\n", why);
-        if (layout) IOFree(layout, sizeof(RootLayout));
+        if (layout)
+            IOFree(layout, sizeof(RootLayout));
         return false;
     }
     native_ufs_root_step = 3;
@@ -1958,7 +2074,8 @@ bool NativeUfs::startRoot(IOService *provider)
                       layout->gptEntriesCrc,
                       layout->gptEntryCount};
     const char *names[4] = {};
-    for (unsigned i = 0; i < layout->windows; ++i) names[i] = layout->window[i].name;
+    for (unsigned i = 0; i < layout->windows; ++i)
+        names[i] = layout->window[i].name;
     if (!ufsBuildRootPlan(names, layout->windows, gPublicationPlan)) {
         rootDiagnosticFailure("root windows require distinct OS and SystemOS");
         IOFree(layout, sizeof(RootLayout));
@@ -1972,9 +2089,11 @@ bool NativeUfs::startRoot(IOService *provider)
     // Prepare all windows or publish none. Diagnostics never decide policy.
     gPending = 0;
     gPendingProvider = this;
+
     struct Operations {
         NativeUfs *owner;
         RootLayout *layout;
+
         bool prepare(unsigned index)
         {
             gRootDiagnostic.stage = "root window allocation/configuration";
@@ -1990,12 +2109,14 @@ bool NativeUfs::startRoot(IOService *provider)
                 !device->configure(layout->window[index].name, absolute, layout->window[index].size))
                 return false;
             gRootDiagnostic.stage = "root window attachment";
-            if (!device->attach(owner)) return false;
+            if (!device->attach(owner))
+                return false;
             gPendingAttached[index] = true;
             ++gPending;
             gRootDiagnostic.prepared = gPending;
             return true;
         }
+
         bool validate()
         {
             gRootDiagnostic.stage = "signed window identities";
@@ -2003,15 +2124,18 @@ bool NativeUfs::startRoot(IOService *provider)
 #if defined(NATIVE_VERIFIED_BLOCK) && NATIVE_VERIFIED_BLOCK
             for (unsigned i = 0; i < gPending; ++i) {
                 gRootDiagnostic.publicationWindow = i;
-                if (!gPendingDevice[i]->signedVolumeUuid(gPendingUuid[i])) return false;
+                if (!gPendingDevice[i]->signedVolumeUuid(gPendingUuid[i]))
+                    return false;
                 for (unsigned j = 0; j < i; ++j)
-                    if (!strcmp(gPendingUuid[i], gPendingUuid[j])) return false;
+                    if (!strcmp(gPendingUuid[i], gPendingUuid[j]))
+                        return false;
             }
             return true;
 #else
             return false;  // Root publication requires owner verification in every build.
 #endif
         }
+
         bool schedule()
         {
             gRootDiagnostic.stage = "root publisher thread";
@@ -2026,8 +2150,13 @@ bool NativeUfs::startRoot(IOService *provider)
             thread_deallocate(thread);
             return true;
         }
-        void discard(unsigned index) { discardPendingWindow(index); }
+
+        void discard(unsigned index)
+        {
+            discardPendingWindow(index);
+        }
     } operations = {this, layout};
+
     UfsRootPublicationResult result = ufsPrepareRootWindows(operations, layout->windows);
     IOFree(layout, sizeof(RootLayout));
     if (result.phase != UfsRootPhase::Complete) {

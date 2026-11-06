@@ -16,8 +16,17 @@
 #include <stdint.h>
 #include "../../TegraNVENC/TegraNVENCABI.h"
 
-enum { H264_PROFILE_BASELINE = 66, H264_PROFILE_MAIN = 77, H264_PROFILE_HIGH = 100 };
-enum { H264ENC_IDR = 3, H264ENC_I = 2, H264ENC_P = 0 };  // nvenc_h264_pic_control_s pic_type
+enum {
+    H264_PROFILE_BASELINE = 66,
+    H264_PROFILE_MAIN = 77,
+    H264_PROFILE_HIGH = 100
+};
+
+enum {
+    H264ENC_IDR = 3,
+    H264ENC_I = 2,
+    H264ENC_P = 0
+};  // nvenc_h264_pic_control_s pic_type
 
 typedef struct {
     uint32_t width, height;          // displayed size; the coded size is whole macroblocks, cropped in the SPS

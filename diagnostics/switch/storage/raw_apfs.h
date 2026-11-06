@@ -64,8 +64,8 @@ int switch_raw_apfs_validate_nxsb(const void *block, uint32_t available_bytes, u
  * Writes are enabled only after validation and successful cache qualification.
  * A failed open is unusable; close it before disposing of its fixed storage. */
 int switch_raw_apfs_open(struct switch_raw_apfs *, const struct switch_raw_apfs_io *, uint64_t capacity_sectors,
-                       const struct switch_raw_apfs_partition *, uint32_t count,
-                       const uint8_t expected_container_uuid[16], void *private_scratch, uint32_t scratch_bytes);
+                         const struct switch_raw_apfs_partition *, uint32_t count,
+                         const uint8_t expected_container_uuid[16], void *private_scratch, uint32_t scratch_bytes);
 int switch_raw_apfs_get_info(struct switch_raw_apfs *, struct switch_block_info *);
 /* Exact, nonzero, 512-aligned <=64 KiB request. Read output and write input
  * MUST be private staging. Copy read bytes to clients only after OK; stage the

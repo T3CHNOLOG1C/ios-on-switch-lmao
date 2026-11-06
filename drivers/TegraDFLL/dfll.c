@@ -45,6 +45,7 @@ extern struct cvb_table tegra210b01_cpu_cvb_tables[4];
 #define VOUT_SLEW_MS 1
 
 static void *api_lock;
+
 static struct {
 	bool prepared, enabled, thermal_set;
 	int prepare_err;
@@ -56,6 +57,7 @@ static struct {
 } st;
 
 static int fail(char *why, size_t len, int err, const char *fmt, ...) __printf(4, 5);
+
 static int fail(char *why, size_t len, int err, const char *fmt, ...)
 {
 	va_list ap;

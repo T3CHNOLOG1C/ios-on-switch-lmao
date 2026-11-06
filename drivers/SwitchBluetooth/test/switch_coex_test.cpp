@@ -30,22 +30,29 @@ void put16(Bytes &b, size_t at, unsigned v)
     b[at] = (uint8_t)v;
     b[at + 1] = (uint8_t)(v >> 8);
 }
+
 void put32(Bytes &b, size_t at, uint32_t v)
 {
-    for (unsigned i = 0; i < 4; ++i) b[at + i] = (uint8_t)(v >> (8 * i));
+    for (unsigned i = 0; i < 4; ++i)
+        b[at + i] = (uint8_t)(v >> (8 * i));
 }
+
 Bytes le16s(std::initializer_list<unsigned> values)
 {
     Bytes b;
-    for (unsigned v : values) b.insert(b.end(), {(uint8_t)v, (uint8_t)(v >> 8)});
+    for (unsigned v : values)
+        b.insert(b.end(), {(uint8_t)v, (uint8_t)(v >> 8)});
     return b;
 }
+
 Bytes hex(const std::string &text)
 {
     Bytes b;
-    for (size_t i = 0; i < text.size(); i += 2) b.push_back((uint8_t)std::stoul(text.substr(i, 2), nullptr, 16));
+    for (size_t i = 0; i < text.size(); i += 2)
+        b.push_back((uint8_t)std::stoul(text.substr(i, 2), nullptr, 16));
     return b;
 }
+
 Bytes cat(Bytes a, const Bytes &b)
 {
     a.insert(a.end(), b.begin(), b.end());
@@ -72,7 +79,8 @@ Bytes staInfo(const StaInfo &s)
     put32(b, 8, 0x10);  // flags (associated)
     put32(b, 12, s.idle);
     const uint32_t middle[] = {s.tx, s.failed, s.ucast, s.mcast, s.txRate, s.rxRate, 1000, s.decryptFailed};
-    for (size_t i = 0; i < 8; ++i) put32(b, 52 + 4 * i, middle[i]);
+    for (size_t i = 0; i < 8; ++i)
+        put32(b, 52 + 4 * i, middle[i]);
     put32(b, 160, s.retried);
     put32(b, 164, s.exhausted);
     return b;
@@ -85,10 +93,12 @@ protected:
         coex_reset();
         sta_reset();
     }
+
     static unsigned command(uint16_t opcode, const Bytes &params)
     {
         return coex_command(opcode, params.data(), (uint32_t)params.size());
     }
+
     static std::string describe(size_t size = 200)
     {
         std::vector<char> out(size, 0);
@@ -96,37 +106,51 @@ protected:
         EXPECT_LT(n, (int)size);
         return out.data();
     }
+
     static std::array<uint32_t, 8> state()
     {
         std::array<uint32_t, 8> out{};
         coex_state(out.data());
         return out;
     }
+
     static std::string flags(uint32_t value)
     {
         char out[48] = {};
         bt_flags_describe(value, out, sizeof(out));
         return out;
     }
-    static int sta(const Bytes &buffer) { return sta_parse(buffer.data(), buffer.size()); }
+
+    static int sta(const Bytes &buffer)
+    {
+        return sta_parse(buffer.data(), buffer.size());
+    }
+
     static std::string staLine()
     {
         char out[240] = {};
         sta_describe(out, sizeof(out));
         return out;
     }
+
     static std::array<uint32_t, 13> fields()
     {
         std::array<uint32_t, 13> out{};
         sta_fields(out.data());
         return out;
     }
+
     struct Afh {
         unsigned usable;
         std::array<unsigned, 2> range;
         std::array<uint8_t, 10> map;
-        bool bit(unsigned n) const { return map[n / 8] >> (n % 8) & 1; }
+
+        bool bit(unsigned n) const
+        {
+            return map[n / 8] >> (n % 8) & 1;
+        }
     };
+
     static Afh afh(uint32_t mhz)
     {
         Afh a{};
@@ -207,7 +231,8 @@ TEST_F(Coex, DescribeNeverOverruns)
         std::vector<char> out(size + 8, (char)0xaa);
         const int n = coex_describe(out.data(), size);
         EXPECT_LT(n, (int)size) << "size " << size;
-        for (size_t i = size; i < size + 8; ++i) EXPECT_EQ((uint8_t)out[i], 0xaa) << "size " << size << " byte " << i;
+        for (size_t i = size; i < size + 8; ++i)
+            EXPECT_EQ((uint8_t)out[i], 0xaa) << "size " << size << " byte " << i;
         const std::string got(out.data(), strnlen(out.data(), out.size()));
         EXPECT_EQ(full.compare(0, got.size(), got), 0) << "size " << size << ": " << got;
     }
@@ -268,8 +293,10 @@ TEST_F(Coex, AfhMapForWifiChannels)
     EXPECT_EQ(six.range, (std::array<unsigned, 2>{24, 46}));
     std::vector<unsigned> unset, want;
     for (unsigned n = 0; n < 80; ++n)
-        if (!six.bit(n)) unset.push_back(n);
-    for (unsigned n = 24; n <= 46; ++n) want.push_back(n);
+        if (!six.bit(n))
+            unset.push_back(n);
+    for (unsigned n = 24; n <= 46; ++n)
+        want.push_back(n);
     want.push_back(79);
     EXPECT_EQ(unset, want);
     EXPECT_EQ(afh(2412).usable, 57u);  // channel 1 clamps at Bluetooth channel 0
@@ -277,12 +304,14 @@ TEST_F(Coex, AfhMapForWifiChannels)
     EXPECT_EQ(afh(2472).usable, 59u);  // channel 13 at 78
     EXPECT_EQ(afh(2472).range, (std::array<unsigned, 2>{59, 78}));
     unsigned fewest = 79;
-    for (uint32_t f = 2412; f < 2473; f += 5) fewest = std::min(fewest, afh(f).usable);
+    for (uint32_t f = 2412; f < 2473; f += 5)
+        fewest = std::min(fewest, afh(f).usable);
     EXPECT_GE(fewest, 20u);      // the spec's minimum
     const Afh five = afh(5180);  // 5 GHz: every channel usable, bit 79 reserved 0
     EXPECT_EQ(five.usable, 79u);
     EXPECT_EQ(five.range, (std::array<unsigned, 2>{79, 79}));
-    for (unsigned n = 0; n < 80; ++n) EXPECT_EQ(five.bit(n), n < 79) << "bit " << n;
+    for (unsigned n = 0; n < 80; ++n)
+        EXPECT_EQ(five.bit(n), n < 79) << "bit " << n;
     EXPECT_EQ(afh(0).usable, 79u);
 }
 
@@ -290,7 +319,8 @@ TEST_F(Coex, AfhMapReadback)
 {
     unsigned inside = 0;
     std::array<uint8_t, 10> everything{};
-    for (unsigned n = 0; n < 79; ++n) everything[n / 8] |= (uint8_t)(1u << (n % 8));
+    for (unsigned n = 0; n < 79; ++n)
+        everything[n / 8] |= (uint8_t)(1u << (n % 8));
     EXPECT_EQ(afh_used(everything.data(), 24, 46, &inside), 79u);
     EXPECT_EQ(inside, 23u);
     const Afh avoided = afh(2437);
@@ -303,7 +333,9 @@ TEST_F(Coex, Pm2SleepReturnAndPolicy)
 {
     std::array<uint8_t, 24> out{};
     pm2_sleep_ret_ext(out.data());
-    auto u16 = [&](size_t at) { return (unsigned)(out[at] | out[at + 1] << 8); };
+    auto u16 = [&](size_t at) {
+        return (unsigned)(out[at] | out[at + 1] << 8);
+    };
     auto u32 = [&](size_t at) {
         return (uint32_t)out[at] | (uint32_t)out[at + 1] << 8 | (uint32_t)out[at + 2] << 16 |
                (uint32_t)out[at + 3] << 24;
@@ -321,7 +353,8 @@ TEST_F(Coex, Pm2SleepReturnAndPolicy)
 Bytes btcdynProfile()
 {
     Bytes profile = cat(Bytes{1, 3, 99, 0, 22, 24, 5, 5, 0, 1}, Bytes(20, 0));
-    for (int8_t v : {5, -120, 0, -52, -72}) profile.push_back((uint8_t)v);
+    for (int8_t v : {5, -120, 0, -52, -72})
+        profile.push_back((uint8_t)v);
     profile.resize(50, 0);
     return profile;
 }
@@ -330,7 +363,8 @@ Bytes btcdynProfile()
 TEST_F(Coex, BtcDynctlStatusAndProfile)
 {
     Bytes status{0, 0x34, 0x12};
-    for (int8_t v : {-9, -40, -55}) status.push_back((uint8_t)v);
+    for (int8_t v : {-9, -40, -55})
+        status.push_back((uint8_t)v);
     status.insert(status.end(), {22, 5});
     char out[120] = {};
     EXPECT_GT(btc_status_describe(status.data(), status.size(), out, sizeof(out)), 0);

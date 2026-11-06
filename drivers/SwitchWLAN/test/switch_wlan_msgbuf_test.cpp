@@ -33,6 +33,7 @@ struct Counts {
     uint64_t msis = 0;                     // interrupts taken (service() calls)
     uint64_t copiedBytes = 0;              // frame bytes the CPU copied: out of RX buffers, into TX buffers
 };
+
 Counts gCount;
 
 // ---- the chip's RAM ------------------------------------------------------------------------------------------------
@@ -47,20 +48,24 @@ uint16_t tcm16(uint32_t a)
 {
     return static_cast<uint16_t>(gTcm[a] | gTcm[a + 1] << 8);
 }
+
 uint32_t tcm32(uint32_t a)
 {
     return tcm16(a) | static_cast<uint32_t>(tcm16(a + 2)) << 16;
 }
+
 void setTcm16(uint32_t a, uint16_t v)
 {
     gTcm[a] = static_cast<uint8_t>(v);
     gTcm[a + 1] = static_cast<uint8_t>(v >> 8);
 }
+
 void setTcm32(uint32_t a, uint32_t v)
 {
     setTcm16(a, static_cast<uint16_t>(v));
     setTcm16(a + 2, static_cast<uint16_t>(v >> 16));
 }
+
 void resetTcm()
 {
     memset(gTcm, 0, sizeof(gTcm));
@@ -80,15 +85,18 @@ uint16_t le16(const uint8_t *p)
 {
     return static_cast<uint16_t>(p[0] | p[1] << 8);
 }
+
 uint32_t le32(const uint8_t *p)
 {
     return le16(p) | static_cast<uint32_t>(le16(p + 2)) << 16;
 }
+
 void put16(uint8_t *p, uint16_t v)
 {
     p[0] = static_cast<uint8_t>(v);
     p[1] = static_cast<uint8_t>(v >> 8);
 }
+
 void put32(uint8_t *p, uint32_t v)
 {
     put16(p, static_cast<uint16_t>(v));
@@ -99,11 +107,13 @@ void put32(uint8_t *p, uint32_t v)
 struct Frame {
     std::vector<uint8_t> bytes;
 };
+
 Frame makeFrame(uint32_t seq, size_t length)
 {
     Frame f;
     f.bytes.resize(length);
-    for (size_t i = 0; i < length; ++i) f.bytes[i] = static_cast<uint8_t>((seq * 131 + i * 7) & 0xFF);
+    for (size_t i = 0; i < length; ++i)
+        f.bytes[i] = static_cast<uint8_t>((seq * 131 + i * 7) & 0xFF);
     f.bytes[12] = 0x08;  // IPv4
     f.bytes[13] = 0x00;
     put32(f.bytes.data() + 14, seq);
@@ -117,15 +127,18 @@ public:
         uint16_t items = 0, size = 0, pos = 0;
         bool live = false;
     };
+
     uint32_t mbInt = 0, mbMask = 0;
     Ring h2d[2 + 8];                                      // control submit, rx post, flow rings by id 2..
     Ring d2h[3];                                          // control complete, tx complete, rx complete
     std::deque<std::pair<uint32_t, uint32_t>> rxBuffers;  // posted: id, pa
     std::deque<std::pair<uint32_t, uint32_t>> ioctlBuffers, eventBuffers;
+
     struct Held {
         uint32_t id;
         uint16_t ring;
     };
+
     std::deque<Held> txHeld;    // transmit posts fetched, waiting for the air
     std::vector<Frame> txSeen;  // frames as the chip DMA'd them
     unsigned holdLimit = 64;    // frames the firmware fetches into its own memory before the air takes them
@@ -135,9 +148,11 @@ public:
 
     uint8_t *va(uint32_t pa) const
     {
-        if (pa < kFakeAreaPA || pa - kFakeAreaPA >= gAreaLength) throw std::runtime_error("DMA outside the area");
+        if (pa < kFakeAreaPA || pa - kFakeAreaPA >= gAreaLength)
+            throw std::runtime_error("DMA outside the area");
         return gAreaBytes + (pa - kFakeAreaPA);
     }
+
     void attach()
     {
         *this = Firmware{};
@@ -149,36 +164,43 @@ public:
             r.items = tcm16(mem + 4);
             r.size = tcm16(mem + 6);
             r.live = true;
-            if (r.items != items[k] || r.size != sizes[k]) throw std::runtime_error("ring geometry");
+            if (r.items != items[k] || r.size != sizes[k])
+                throw std::runtime_error("ring geometry");
         }
     }
+
     // The H2D rings up to the host's write indices (the firmware's own reads of its RAM are not PCIe for the host).
     void serviceH2D()
     {
         for (unsigned id = 0; id < sizeof(h2d) / sizeof(h2d[0]); ++id) {
             Ring &r = h2d[id];
-            if (!r.live) continue;
+            if (!r.live)
+                continue;
             const uint16_t w = tcm16(kH2DW + 4 * id);
             while (r.pos != w) {
                 const uint8_t *item = va(r.pa + static_cast<uint32_t>(r.pos) * r.size);
-                if (id >= 2 && item[0] == 0x0F && txHeld.size() >= holdLimit) break;  // leaves it in the ring
+                if (id >= 2 && item[0] == 0x0F && txHeld.size() >= holdLimit)
+                    break;  // leaves it in the ring
                 take(id, item);
                 r.pos = static_cast<uint16_t>((r.pos + 1) % r.items);
                 setTcm16(kH2DR + 4 * id, r.pos);
             }
         }
     }
+
     // One completion onto a D2H ring and its doorbell interrupt; false when the host has not made room.
     bool push(unsigned k, const uint8_t *item)
     {
         Ring &r = d2h[k];
-        if ((r.pos + 1) % r.items == tcm16(kD2HR + 4 * k)) return false;
+        if ((r.pos + 1) % r.items == tcm16(kD2HR + 4 * k))
+            return false;
         memcpy(va(r.pa + static_cast<uint32_t>(r.pos) * r.size), item, r.size);
         r.pos = static_cast<uint16_t>((r.pos + 1) % r.items);
         setTcm16(kD2HW + 4 * k, r.pos);
         mbInt |= 0x10000;
         return true;
     }
+
     // A received frame into the oldest posted buffer.
     bool receive(const Frame &f)
     {
@@ -194,9 +216,11 @@ public:
         item[0] = 0x12;
         put32(item + 4, id);
         put16(item + 14, static_cast<uint16_t>(f.bytes.size()));
-        if (!push(2, item)) throw std::runtime_error("rx complete ring full");
+        if (!push(2, item))
+            throw std::runtime_error("rx complete ring full");
         return true;
     }
+
     // The air took `n` of the frames held: their completions, oldest first.
     void transmitted(unsigned n, uint16_t status = 0)
     {
@@ -206,31 +230,53 @@ public:
             put32(item + 4, txHeld.front().id);
             put16(item + 8, status);
             put16(item + 10, txHeld.front().ring);
-            if (!push(1, item)) throw std::runtime_error("tx complete ring full");
+            if (!push(1, item))
+                throw std::runtime_error("tx complete ring full");
             txHeld.pop_front();
         }
     }
+
     void reg(uint32_t offset, uint32_t value)
     {
         switch (offset) {
-        case 0x48: mbInt &= ~value; break;  // write 1 to clear
-        case 0x4C: mbMask = value; break;
-        case 0x140: ++gCount.doorbells; break;
-        default: break;
+        case 0x48:
+            mbInt &= ~value;
+            break;  // write 1 to clear
+        case 0x4C:
+            mbMask = value;
+            break;
+        case 0x140:
+            ++gCount.doorbells;
+            break;
+        default:
+            break;
         }
     }
-    uint32_t reg(uint32_t offset) const { return offset == 0x48 ? mbInt : offset == 0x4C ? mbMask : 0; }
-    bool interrupting() const { return (mbInt & mbMask) != 0; }
+
+    uint32_t reg(uint32_t offset) const
+    {
+        return offset == 0x48 ? mbInt : offset == 0x4C ? mbMask : 0;
+    }
+
+    bool interrupting() const
+    {
+        return (mbInt & mbMask) != 0;
+    }
 
 private:
     void control(const uint8_t *item)
     {
         uint8_t out[24] = {};
         switch (item[0]) {
-        case 0x0B: ioctlBuffers.emplace_back(le32(item + 4), le32(item + 16)); return;
-        case 0x0D: eventBuffers.emplace_back(le32(item + 4), le32(item + 16)); return;
+        case 0x0B:
+            ioctlBuffers.emplace_back(le32(item + 4), le32(item + 16));
+            return;
+        case 0x0D:
+            eventBuffers.emplace_back(le32(item + 4), le32(item + 16));
+            return;
         case 0x09: {  // an ioctl: its answer (four bytes) into the oldest response buffer
-            if (ioctlBuffers.empty()) throw std::runtime_error("ioctl without a response buffer");
+            if (ioctlBuffers.empty())
+                throw std::runtime_error("ioctl without a response buffer");
             const auto [id, pa] = ioctlBuffers.front();
             ioctlBuffers.pop_front();
             put32(va(pa), 0x12345678);
@@ -252,19 +298,25 @@ private:
             put16(out + 10, flowId);
             break;
         }
-        default: return;
+        default:
+            return;
         }
-        if (!push(0, out)) throw std::runtime_error("control complete ring full");
+        if (!push(0, out))
+            throw std::runtime_error("control complete ring full");
     }
+
     void take(unsigned id, const uint8_t *item)
     {
-        if (id == 0) return control(item);
+        if (id == 0)
+            return control(item);
         if (id == 1) {
-            if (item[0] != 0x11) throw std::runtime_error("rx post ring: not a buffer post");
+            if (item[0] != 0x11)
+                throw std::runtime_error("rx post ring: not a buffer post");
             rxBuffers.emplace_back(le32(item + 4), le32(item + 24));
             return;
         }
-        if (item[0] != 0x0F) throw std::runtime_error("flow ring: not a TX post");
+        if (item[0] != 0x0F)
+            throw std::runtime_error("flow ring: not a TX post");
         Frame f;
         f.bytes.assign(item + 8, item + 22);
         const uint8_t *payload = va(le32(item + 32));
@@ -273,16 +325,20 @@ private:
         txHeld.push_back({le32(item + 4), static_cast<uint16_t>(id)});
     }
 };
+
 Firmware gFw;
 
 // ---- the driver around Msgbuf: what SwitchWLAN.cpp and SwitchWLANNet.cpp do with it ----------------------------------
 std::vector<Frame> gReceived;
+
 void onFrame(void *, const uint8_t *frame, size_t length, uint8_t)
 {
     gCount.copiedBytes += length;  // SwitchWLANNet on_rx: the one copy, into the mbuf
     gReceived.push_back(Frame{std::vector<uint8_t>(frame, frame + length)});
 }
-void onEvent(void *, const swlan::Event &) {}
+
+void onEvent(void *, const swlan::Event &)
+{}
 
 swlan::Chip gChip;
 swlan::Msgbuf gMb;
@@ -291,6 +347,7 @@ swlan::Msgbuf gMb;
 unsigned gResumes = 0;
 std::deque<Frame> gQueue;  // en0's output queue (the stack's)
 void start();
+
 void interrupts()
 {
     while (gFw.interrupting()) {
@@ -303,14 +360,17 @@ void interrupts()
         }
     }
 }
+
 // en0's start routine (SwitchWLANNet if_start over SwitchWLAN::transmitFrames): what the radio takes, in batches of
 // at most 64, one copy per frame from the queue into its transmit buffer, one doorbell per batch.
 unsigned gBatches = 0;
+
 void start()
 {
     for (;;) {
         unsigned room = gMb.txRoom();
-        if (!room || gQueue.empty()) return;
+        if (!room || gQueue.empty())
+            return;
         unsigned batch = room < 64 ? room : 64;
         ++gBatches;
         for (; batch && !gQueue.empty() && gMb.txRoom(); --batch) {
@@ -318,12 +378,14 @@ void start()
             uint8_t *buffer = gMb.txBuffer();
             memcpy(buffer, f.bytes.data(), f.bytes.size());
             gCount.copiedBytes += f.bytes.size();
-            if (!gMb.txPost(f.bytes.size())) throw std::runtime_error("txPost refused with room");
+            if (!gMb.txPost(f.bytes.size()))
+                throw std::runtime_error("txPost refused with room");
             gQueue.pop_front();
         }
         gMb.txFlush();
     }
 }
+
 // The firmware's turn: everything the host rang for.
 void firmware()
 {
@@ -350,19 +412,23 @@ bool bringUp()
     firmware();
     return true;
 }
+
 bool openFlow()
 {
     gMb.flowCreateSubmit(kAp, kUs);
     firmware();
     return gMb.flow() == swlan::Msgbuf::FLOW_OPEN;
 }
+
 unsigned gPeak = 0;  // the most frames in flight seen (takeCounters starts its peak again each time)
+
 uint32_t inFlight()
 {
     const swlan::DataCounters d = gMb.takeCounters();
     gPeak = d.txPeak > gPeak ? d.txPeak : gPeak;
     return d.txInFlight;
 }
+
 void resetCounts()
 {
     gCount = {};
@@ -440,12 +506,14 @@ Result rxScenario(unsigned frames, unsigned burst)
     gReceived.clear();
     unsigned sent = 0;
     while (sent < frames) {
-        for (unsigned i = 0; i < burst && sent < frames; ++i, ++sent) gFw.receive(makeFrame(sent, 1514));
+        for (unsigned i = 0; i < burst && sent < frames; ++i, ++sent)
+            gFw.receive(makeFrame(sent, 1514));
         firmware();  // the interrupt, then the reposts it rang for
         firmware();
     }
     bool intact = gReceived.size() == frames;
-    for (unsigned i = 0; intact && i < frames; ++i) intact = gReceived[i].bytes == makeFrame(i, 1514).bytes;
+    for (unsigned i = 0; intact && i < frames; ++i)
+        intact = gReceived[i].bytes == makeFrame(i, 1514).bytes;
     Result r = counts(frames);
     r.intact = intact;
     return r;
@@ -459,7 +527,8 @@ Result txScenario(unsigned frames, unsigned hold, unsigned perAir)
     REQUIRE(openFlow());
     resetCounts();
     gFw.holdLimit = hold;
-    for (unsigned i = 0; i < frames; ++i) gQueue.push_back(makeFrame(i, 1514));
+    for (unsigned i = 0; i < frames; ++i)
+        gQueue.push_back(makeFrame(i, 1514));
     start();
     for (unsigned turns = 0; (!gQueue.empty() || !gFw.txHeld.empty() || inFlight()) && turns < 100000; ++turns) {
         firmware();
@@ -467,7 +536,8 @@ Result txScenario(unsigned frames, unsigned hold, unsigned perAir)
         firmware();
     }
     bool intact = gFw.txSeen.size() == frames && gQueue.empty();
-    for (unsigned i = 0; intact && i < frames; ++i) intact = gFw.txSeen[i].bytes == makeFrame(i, 1514).bytes;
+    for (unsigned i = 0; intact && i < frames; ++i)
+        intact = gFw.txSeen[i].bytes == makeFrame(i, 1514).bytes;
     Result r = counts(frames);
     r.intact = intact;
     r.queuedLeft = gQueue.size();
@@ -485,9 +555,11 @@ Result mixedScenario(unsigned frames, unsigned burst)
     gFw.holdLimit = 32;
     unsigned sent = 0, acks = 0;
     while (sent < frames) {
-        for (unsigned i = 0; i < burst && sent < frames; ++i, ++sent) gFw.receive(makeFrame(sent, 1514));
+        for (unsigned i = 0; i < burst && sent < frames; ++i, ++sent)
+            gFw.receive(makeFrame(sent, 1514));
         firmware();
-        while (acks < sent / 2) gQueue.push_back(makeFrame(100000 + acks++, 66));
+        while (acks < sent / 2)
+            gQueue.push_back(makeFrame(100000 + acks++, 66));
         start();
         firmware();
         gFw.transmitted(burst / 2);
@@ -592,6 +664,7 @@ void swlan_test_mmio(const void *, char kind, uint32_t)
 {
     ++(kind == 'r' ? gCount.tcmReads : gCount.tcmWrites);
 }
+
 namespace swlan {
 bool Chip::attach(TegraPcie *, uint32_t, uint32_t, char *, size_t)
 {
@@ -602,20 +675,24 @@ bool Chip::attach(TegraPcie *, uint32_t, uint32_t, char *, size_t)
     cores_[0] = {0x83C, 7, kPcie2Base, kPcie2Base + 0x100000};
     return true;
 }
+
 uint32_t Chip::read(uint32_t address)
 {
     ++gCount.regReads;
     return gFw.reg(address - kPcie2Base);
 }
+
 void Chip::write(uint32_t address, uint32_t value)
 {
     ++gCount.regWrites;
     gFw.reg(address - kPcie2Base, value);
 }
+
 const Core *Chip::find(uint16_t coreId) const
 {
     for (unsigned i = 0; i < coreCount_; ++i)
-        if (cores_[i].id == coreId) return &cores_[i];
+        if (cores_[i].id == coreId)
+            return &cores_[i];
     return nullptr;
 }
 }  // namespace swlan
@@ -749,7 +826,8 @@ TEST(SwitchWlanMsgbuf, TransmitBufferReadBackComparesWhatTheChipFetches)
         EXPECT_EQ(d.txRereadAt, 41u);
         firmware();
         EXPECT_EQ(gFw.txSeen.size(), 1u);
-        if (!gFw.txSeen.empty()) EXPECT_EQ(gFw.txSeen[0].bytes, f.bytes);
+        if (!gFw.txSeen.empty())
+            EXPECT_EQ(gFw.txSeen[0].bytes, f.bytes);
     });
 }
 
@@ -768,5 +846,7 @@ TEST(SwitchWlanMsgbuf, NoContiguous2MiBTakesTheOldLayoutWithOneLine)
 
 TEST(SwitchWlanMsgbuf, LinkDecoding)
 {
-    ExpectPassesInFreshProcess([] { linkScenario(); });
+    ExpectPassesInFreshProcess([] {
+        linkScenario();
+    });
 }

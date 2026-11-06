@@ -46,12 +46,16 @@ struct Bench {
     {
         TegraVICJob job;
         *why = tegra_vic_build(s, d, op, t, kConfig, kFilter, &job);
-        if (*why) return -22;
+        if (*why)
+            return -22;
         static_cast<Bench *>(ctx)->run(job);
         return 0;
     }
 
-    static void Note(void *ctx, const char *line) { static_cast<Bench *>(ctx)->notes.push_back(line); }
+    static void Note(void *ctx, const char *line)
+    {
+        static_cast<Bench *>(ctx)->notes.push_back(line);
+    }
 
     TegraVICProbeEnv env()
     {
@@ -128,6 +132,7 @@ uint64_t field(const TegraVICJob &j, uint32_t base, uint32_t bit, uint32_t width
 {
     return tegra_vic_get(j.config, base, bit, width);
 }
+
 #define FIELD(job, base, name) field((job), (base), name##_BIT, name##_WIDTH)
 
 // The device's lines (V4 diag, transforms 0xf): rectangles and surface after the transpose, and rectangles and surface
@@ -221,7 +226,8 @@ TEST_P(TransposeProbe, FindsAllEight)
                               "at byte 256, 0,1 at 4;"),
               std::string::npos)
         << b.notes[0];
-    for (size_t i = 1; i < 4; i++) EXPECT_NE(b.notes[i].find(": no transform;"), std::string::npos) << b.notes[i];
+    for (size_t i = 1; i < 4; i++)
+        EXPECT_NE(b.notes[i].find(": no transform;"), std::string::npos) << b.notes[i];
     EXPECT_NE(b.notes[3].find("rects after, surface after the transpose"), std::string::npos) << b.notes[3];
     EXPECT_NE(b.notes[3].find(" (0,0)<-1,0 (1,0)<-1,0 (0,1)<-5,0 (15,0)<-1,7 (0,31)<-- (15,31)<--"), std::string::npos)
         << b.notes[3];
@@ -247,7 +253,8 @@ TEST_P(TransposeProbe, Placement)
     }
     uint32_t unflipped = 0;
     for (uint32_t tr = 0; tr < 8; tr++)
-        if (!t.vicFlips[tr][0] && !t.vicFlips[tr][1]) unflipped |= 1u << tr;
+        if (!t.vicFlips[tr][0] && !t.vicFlips[tr][1])
+            unflipped |= 1u << tr;
     EXPECT_EQ(t.subRects, unflipped);
     EXPECT_EQ(b.notes.size(), (size_t)(8 - __builtin_popcount(unflipped)));
     ASSERT_FALSE(b.notes.empty());
@@ -417,13 +424,15 @@ TEST_P(TransposeJobs, QuarterTurnsInto420f)
                 uint32_t e[3];
                 ycc(want[(size_t)v * DW + u], e);
                 lumaOff += b.dst[(size_t)v * DP + u] != e[0];
-                if ((u | v) & 1) continue;
+                if ((u | v) & 1)
+                    continue;
                 const uint8_t *cq = b.dst.data() + lumaBytes + (size_t)(v / 2) * DP + (u / 2) * 2;
                 chromaOff += cq[0] != e[1] || cq[1] != e[2];
             }
         EXPECT_EQ(lumaOff, 0u) << "transform " << tr;
         EXPECT_EQ(chromaOff, 0u) << "transform " << tr;
-        for (size_t i = planes; i < b.dst.size(); i++) ASSERT_EQ(b.dst[i], TEGRA_VIC_POISON_BYTE) << "past the planes";
+        for (size_t i = planes; i < b.dst.size(); i++)
+            ASSERT_EQ(b.dst[i], TEGRA_VIC_POISON_BYTE) << "past the planes";
     }
 }
 

@@ -8,10 +8,10 @@
 extern "C" {
 #endif
 
-#define SWITCH_BLOCK_DISK_COUNT 2u
-#define SWITCH_BLOCK_SECTOR_BYTES 512u
+#define SWITCH_BLOCK_DISK_COUNT         2u
+#define SWITCH_BLOCK_SECTOR_BYTES       512u
 #define SWITCH_BLOCK_MAX_TRANSFER_BYTES 65536u
-#define SWITCH_BLOCK_MAX_INDEX_BYTES (16u * 1024u * 1024u)
+#define SWITCH_BLOCK_MAX_INDEX_BYTES    (16u * 1024u * 1024u)
 
 enum switch_block_status {
     SWITCH_BLOCK_OK = 0,
@@ -41,21 +41,19 @@ struct switch_block_info {
  * has succeeded. The backend retains no stack-owned host or callback context.
  * Index allocations are bounded in aggregate by SWITCH_BLOCK_MAX_INDEX_BYTES.
  * On failure *out is NULL and every newly owned allocation is released. */
-int switch_block_create(const struct switch_block_allocator *allocator,
-                     struct switch_block_backend **out);
+int switch_block_create(const struct switch_block_allocator *allocator, struct switch_block_backend **out);
 
 /* Stable indexes: 0 = OS, 1 = SystemOS. Capacities are immutable, nonzero and
  * sector aligned. Labels are NUL terminated. No fabricated fallback sizes. */
-int switch_block_get_info(struct switch_block_backend *backend, unsigned index,
-                       struct switch_block_info *info);
+int switch_block_get_info(struct switch_block_backend *backend, unsigned index, struct switch_block_info *info);
 
 /* Read only, offset and nonzero length aligned to512 bytes, length<=64KiB.
  * OK means every requested byte is valid. On any error the caller discards
  * the entire output range, even if a prefix was filled. A fatal controller
  * failure latches the backend unavailable; no automatic reset or retry.
  * This function never calls IOKit, invokes completion, or changes its lock. */
-int switch_block_read(struct switch_block_backend *backend, unsigned index,
-                   uint64_t byte_offset, void *destination, uint32_t length);
+int switch_block_read(struct switch_block_backend *backend, unsigned index, uint64_t byte_offset, void *destination,
+                      uint32_t length);
 
 /* No published child or in-flight read may retain the backend when destroyed.
  * Releases only backend-owned allocations, never firmware/reference memory. */

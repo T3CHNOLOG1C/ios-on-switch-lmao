@@ -49,7 +49,8 @@ inline void colorTargetWords(const ColorTargetDesc &d, uint32_t w[kColorTargetWo
 inline bool chainLevelDesc(const fx::MipChain &c, uint64_t chainVa, uint32_t level, uint32_t rtFormat,
                            ColorTargetDesc &d)
 {
-    if (!level || level >= c.levels || !c.bpp || !rtFormat) return false;
+    if (!level || level >= c.levels || !c.bpp || !rtFormat)
+        return false;
     const fx::MipLevel &l = c.level[level];
     d = ColorTargetDesc();
     d.va = chainVa + l.offset;

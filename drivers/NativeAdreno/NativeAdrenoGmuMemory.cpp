@@ -1,17 +1,24 @@
 /* SPDX-License-Identifier: MIT */
 #include "NativeAdrenoGmuMemory.h"
 #include <IOKit/IOLib.h>
-enum : size_t { PageBytes = 0x1000 };
+
+enum : size_t {
+    PageBytes = 0x1000
+};
+
 NativeAdrenoGmuSizes NativeAdrenoGmuDefaultSizes(size_t table_bytes)
 {
     return {0xffc000, 0x4000, 0x7000, 0x4000, 0x4000, table_bytes};
 }
+
 IOReturn NativeAdrenoGmuAllocator::allocate(const NativeAdrenoGmuSizes &sizes, unsigned address_bits)
 {
-    if (ready_ || icache_.bytes()) return kIOReturnBusy;
+    if (ready_ || icache_.bytes())
+        return kIOReturnBusy;
     const uint64_t requested[] = {sizes.icache, sizes.dummy, sizes.debug, sizes.log, sizes.hfi, sizes.tables};
     for (uint64_t value : requested)
-        if (!value || (value & (PageBytes - 1)) || value > uint64_t(SIZE_MAX)) return kIOReturnBadArgument;
+        if (!value || (value & (PageBytes - 1)) || value > uint64_t(SIZE_MAX))
+            return kIOReturnBadArgument;
     /* The fixed addresses of a6xx_gmu.c at the pinned tree: icache at 0x4000 below the uncached range, dummy and
      * debug at 0x60000000/0x60400000. Log and HFI have no fixed address there; drm_mm gives them the lowest free
      * pages after the dummy, which is where they are put here. */
@@ -19,12 +26,14 @@ IOReturn NativeAdrenoGmuAllocator::allocate(const NativeAdrenoGmuSizes &sizes, u
         sizes.dummy + sizes.log + sizes.hfi > GmuDebugIova - GmuUncachedBase ||
         sizes.debug > GmuApertureBytes - GmuDebugIova)
         return kIOReturnBadArgument;
+
     struct Selection {
         NativeAdrenoMemory *memory;
         uint64_t bytes;
         uint64_t *iova;
         uint64_t at;
     };
+
     const Selection selections[] = {{&icache_, sizes.icache, &layout_.icache_iova, GmuIcacheIova},
                                     {&dummy_, sizes.dummy, &layout_.dummy_iova, GmuUncachedBase},
                                     {&debug_, sizes.debug, &layout_.debug_iova, GmuDebugIova},
@@ -45,11 +54,14 @@ IOReturn NativeAdrenoGmuAllocator::allocate(const NativeAdrenoGmuSizes &sizes, u
     ready_ = true;
     return kIOReturnSuccess;
 }
+
 IOReturn NativeAdrenoGmuAllocator::mapInto(NativeAdrenoVm *vm)
 {
-    if (!ready_ || !vm) return kIOReturnBadArgument;
+    if (!ready_ || !vm)
+        return kIOReturnBadArgument;
     for (uint64_t handle : handles_)
-        if (handle) return kIOReturnBusy;
+        if (handle)
+            return kIOReturnBusy;
     /* The table pool itself is never mapped: its physical pages are the
      * translation storage and the VM refuses such an overlap. */
     NativeAdrenoMemory *objects[] = {&icache_, &dummy_, &debug_, &log_, &hfi_};
@@ -71,9 +83,11 @@ IOReturn NativeAdrenoGmuAllocator::mapInto(NativeAdrenoVm *vm)
     }
     return kIOReturnSuccess;
 }
+
 IOReturn NativeAdrenoGmuAllocator::unmapFrom(NativeAdrenoVm *vm)
 {
-    if (!vm) return kIOReturnBadArgument;
+    if (!vm)
+        return kIOReturnBadArgument;
     IOReturn status = kIOReturnSuccess;
     for (size_t index = 5; index--;)
         if (handles_[index]) {
@@ -85,19 +99,24 @@ IOReturn NativeAdrenoGmuAllocator::unmapFrom(NativeAdrenoVm *vm)
         }
     return status;
 }
+
 IOReturn NativeAdrenoGmuAllocator::releaseAll()
 {
     NativeAdrenoMemory *objects[] = {&icache_, &dummy_, &debug_, &log_, &hfi_, &tables_};
     IOReturn status = kIOReturnSuccess;
     for (NativeAdrenoMemory *object : objects)
-        if (object->bytes() && object->release() != kIOReturnSuccess) status = kIOReturnIOError;
+        if (object->bytes() && object->release() != kIOReturnSuccess)
+            status = kIOReturnIOError;
     return status;
 }
+
 IOReturn NativeAdrenoGmuAllocator::release()
 {
-    if (!ready_) return kIOReturnNotReady;
+    if (!ready_)
+        return kIOReturnNotReady;
     const IOReturn status = releaseAll();
-    if (status) return status;
+    if (status)
+        return status;
     ready_ = false;
     layout_ = {};
     return kIOReturnSuccess;

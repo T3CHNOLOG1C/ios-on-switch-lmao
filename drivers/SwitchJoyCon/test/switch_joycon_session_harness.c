@@ -24,10 +24,12 @@ unsigned jc_republish_gap_ms(void)
 {
     return kSwitchJoyConRepublishGapMS;
 }
+
 size_t jc_session_size(void)
 {
     return sizeof(struct switch_joycon_session);
 }
+
 size_t jc_guard_size(void)
 {
     return sizeof(struct switch_joycon_republish_guard);

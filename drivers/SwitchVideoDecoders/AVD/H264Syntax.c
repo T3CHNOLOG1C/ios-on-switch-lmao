@@ -21,7 +21,8 @@ static bool load(Reader *r, const uint8_t *nal, size_t size, bool allowTruncate)
             zeros = 0;
             continue;
         }
-        if (r->size == sizeof(r->data)) return allowTruncate;
+        if (r->size == sizeof(r->data))
+            return allowTruncate;
         zeros = nal[i] ? 0 : zeros + 1;
         r->data[r->size++] = nal[i];
     }
@@ -69,8 +70,10 @@ static int32_t se(Reader *r)
 static bool moreData(const Reader *r)
 {
     size_t last = r->size;
-    while (last && !r->data[last - 1]) last--;
-    if (!last) return false;
+    while (last && !r->data[last - 1])
+        last--;
+    if (!last)
+        return false;
     const unsigned trailing = (unsigned)__builtin_ctz(r->data[last - 1]);
     return r->bit < (last - 1) * 8 + (7 - trailing);
 }
@@ -104,7 +107,8 @@ static bool scalingList(Reader *r, uint8_t *out, unsigned size)
     for (unsigned j = 0; j < size; j++) {
         if (next) {
             next = (last + (unsigned)se(r) + 256) % 256;
-            if (!j && !next) return false;
+            if (!j && !next)
+                return false;
         }
         out[size == 16 ? kZigzag4[j] : kZigzag8[j]] = (uint8_t)(next ? next : last);
         last = next ? next : last;
@@ -119,7 +123,8 @@ static void scalingMatrices(Reader *r, unsigned lists8, uint8_t s4[6][16], uint8
 {
     for (unsigned i = 0; i < 6; i++) {
         if (flag(r)) {
-            if (!scalingList(r, s4[i], 16)) defaultList(s4[i], 16, i >= 3);
+            if (!scalingList(r, s4[i], 16))
+                defaultList(s4[i], 16, i >= 3);
         } else if (i == 0 || i == 3) {
             if (fb4)
                 memcpy(s4[i], fb4[i], 16);
@@ -133,7 +138,8 @@ static void scalingMatrices(Reader *r, unsigned lists8, uint8_t s4[6][16], uint8
         uint8_t scratch[64];
         uint8_t *dst = i < 2 ? s8[i] : scratch;  // 4:4:4 chroma lists are parsed and dropped
         if (flag(r)) {
-            if (!scalingList(r, dst, 64)) defaultList(dst, 64, i & 1);
+            if (!scalingList(r, dst, 64))
+                defaultList(dst, 64, i & 1);
         } else if (i < 2) {
             if (fb8)
                 memcpy(dst, fb8[i], 64);
@@ -164,9 +170,11 @@ static void hrd(Reader *r)
 // E.1.1; a damaged VUI only loses the VUI.
 static void vui(Reader *r, H264SPS *s)
 {
-    if (flag(r) && bits(r, 8) == 255) bits(r, 32);  // aspect_ratio_idc, Extended_SAR
-    if (flag(r)) flag(r);                           // overscan
-    if (flag(r)) {                                  // video_signal_type
+    if (flag(r) && bits(r, 8) == 255)
+        bits(r, 32);  // aspect_ratio_idc, Extended_SAR
+    if (flag(r))
+        flag(r);    // overscan
+    if (flag(r)) {  // video_signal_type
         bits(r, 3);
         s->full_range = flag(r);
         if ((s->colour_description = flag(r))) {
@@ -179,13 +187,17 @@ static void vui(Reader *r, H264SPS *s)
         ue(r);
         ue(r);
     }
-    if (flag(r)) bits(r, 32), bits(r, 32), flag(r);  // timing_info
+    if (flag(r))
+        bits(r, 32), bits(r, 32), flag(r);  // timing_info
     const bool nal = flag(r);
-    if (nal) hrd(r);
+    if (nal)
+        hrd(r);
     const bool vcl = flag(r);
-    if (vcl) hrd(r);
-    if (nal || vcl) flag(r);  // low_delay_hrd_flag
-    flag(r);                  // pic_struct_present_flag
+    if (vcl)
+        hrd(r);
+    if (nal || vcl)
+        flag(r);  // low_delay_hrd_flag
+    flag(r);      // pic_struct_present_flag
     if (flag(r)) {
         flag(r);
         ue(r), ue(r), ue(r), ue(r);
@@ -207,12 +219,14 @@ int h264_parse_sps(H264ParamSets *sets, const uint8_t *nal, size_t size, uint8_t
     Reader r;
     H264SPS s;
     memset(&s, 0, sizeof(s));
-    if (!load(&r, nal, size, false)) return -1;
+    if (!load(&r, nal, size, false))
+        return -1;
     s.profile_idc = (uint8_t)bits(&r, 8);
     s.constraint_flags = (uint8_t)bits(&r, 8);
     s.level_idc = (uint8_t)bits(&r, 8);
     const uint32_t id = ue(&r);
-    if (id >= 32) return -1;
+    if (id >= 32)
+        return -1;
     s.chroma_format_idc = 1;
     s.bit_depth_luma = s.bit_depth_chroma = 8;
     flat(s.scaling4, s.scaling8);
@@ -231,42 +245,52 @@ int h264_parse_sps(H264ParamSets *sets, const uint8_t *nal, size_t size, uint8_t
     case 134:
     case 135:
         s.chroma_format_idc = (uint8_t)ue(&r);
-        if (s.chroma_format_idc > 3) return -1;
-        if (s.chroma_format_idc == 3) s.separate_colour_plane = flag(&r);
+        if (s.chroma_format_idc > 3)
+            return -1;
+        if (s.chroma_format_idc == 3)
+            s.separate_colour_plane = flag(&r);
         s.bit_depth_luma = (uint8_t)(ue(&r) + 8);
         s.bit_depth_chroma = (uint8_t)(ue(&r) + 8);
         s.transform_bypass = flag(&r);
         if ((s.scaling_matrix_present = flag(&r)))
             scalingMatrices(&r, s.chroma_format_idc != 3 ? 2 : 6, s.scaling4, s.scaling8, NULL, NULL);
         break;
-    default: break;
+    default:
+        break;
     }
     const uint32_t log2FrameNum = ue(&r) + 4;
     s.poc_type = (uint8_t)ue(&r);
-    if (log2FrameNum > 16 || s.poc_type > 2) return -1;
+    if (log2FrameNum > 16 || s.poc_type > 2)
+        return -1;
     s.log2_max_frame_num = (uint8_t)log2FrameNum;
     if (s.poc_type == 0) {
         const uint32_t log2Poc = ue(&r) + 4;
-        if (log2Poc > 16) return -1;
+        if (log2Poc > 16)
+            return -1;
         s.log2_max_poc_lsb = (uint8_t)log2Poc;
     } else if (s.poc_type == 1) {
         s.delta_pic_order_always_zero = flag(&r);
         s.offset_for_non_ref_pic = se(&r);
         s.offset_for_top_to_bottom_field = se(&r);
         const uint32_t cycle = ue(&r);
-        if (cycle > 255) return -1;
+        if (cycle > 255)
+            return -1;
         s.num_ref_frames_in_poc_cycle = (uint8_t)cycle;
-        for (uint32_t i = 0; i < cycle; i++) s.offset_for_ref_frame[i] = se(&r);
+        for (uint32_t i = 0; i < cycle; i++)
+            s.offset_for_ref_frame[i] = se(&r);
     }
     const uint32_t refs = ue(&r);
-    if (refs > 16) return -1;
+    if (refs > 16)
+        return -1;
     s.max_num_ref_frames = (uint8_t)refs;
     s.gaps_in_frame_num_allowed = flag(&r);
     const uint32_t w = ue(&r) + 1, h = ue(&r) + 1;
-    if (w > 1024 || h > 1024) return -1;
+    if (w > 1024 || h > 1024)
+        return -1;
     s.width_mbs = (uint16_t)w;
     s.height_map_units = (uint16_t)h;
-    if (!(s.frame_mbs_only = flag(&r))) s.mb_adaptive_frame_field = flag(&r);
+    if (!(s.frame_mbs_only = flag(&r)))
+        s.mb_adaptive_frame_field = flag(&r);
     s.direct_8x8_inference = flag(&r);
     if (flag(&r)) {
         const unsigned cx = s.chroma_format_idc == 1 || s.chroma_format_idc == 2 ? 2 : 1;
@@ -278,11 +302,14 @@ int h264_parse_sps(H264ParamSets *sets, const uint8_t *nal, size_t size, uint8_t
         if (s.crop_left + s.crop_right >= w * 16 || s.crop_top + s.crop_bottom >= h * 16 * (2 - s.frame_mbs_only))
             return -1;
     }
-    if (r.overrun) return -1;
-    if (flag(&r)) vui(&r, &s);
+    if (r.overrun)
+        return -1;
+    if (flag(&r))
+        vui(&r, &s);
     s.valid = true;
     sets->sps[id] = s;
-    if (idOut) *idOut = (uint8_t)id;
+    if (idOut)
+        *idOut = (uint8_t)id;
     return 0;
 }
 
@@ -291,23 +318,28 @@ int h264_parse_pps(H264ParamSets *sets, const uint8_t *nal, size_t size, uint8_t
     Reader r;
     H264PPS p;
     memset(&p, 0, sizeof(p));
-    if (!load(&r, nal, size, false)) return -1;
+    if (!load(&r, nal, size, false))
+        return -1;
     const uint32_t id = ue(&r), spsId = ue(&r);
-    if (id >= 256 || spsId >= 32 || !sets->sps[spsId].valid) return -1;
+    if (id >= 256 || spsId >= 32 || !sets->sps[spsId].valid)
+        return -1;
     const H264SPS *s = &sets->sps[spsId];
     p.sps_id = (uint8_t)spsId;
     p.entropy_coding_mode = flag(&r);
     p.bottom_field_pic_order_present = flag(&r);
     const uint32_t groups = ue(&r) + 1;
-    if (groups > 8) return -1;
+    if (groups > 8)
+        return -1;
     p.num_slice_groups = (uint8_t)groups;
     if (groups > 1) {  // FMO (Baseline only): parsed far enough to report, never decoded here
-        if (idOut) *idOut = (uint8_t)id;
+        if (idOut)
+            *idOut = (uint8_t)id;
         sets->pps[id] = p;
         return 0;
     }
     const uint32_t l0 = ue(&r) + 1, l1 = ue(&r) + 1;
-    if (l0 > 32 || l1 > 32) return -1;
+    if (l0 > 32 || l1 > 32)
+        return -1;
     p.num_ref_idx_active[0] = (uint8_t)l0;
     p.num_ref_idx_active[1] = (uint8_t)l1;
     p.weighted_pred = flag(&r);
@@ -338,20 +370,25 @@ int h264_parse_pps(H264ParamSets *sets, const uint8_t *nal, size_t size, uint8_t
         }
         p.second_chroma_qp_index_offset = (int8_t)se(&r);
     }
-    if (r.overrun || p.pic_init_qp < 0 || p.pic_init_qp > 51) return -1;
+    if (r.overrun || p.pic_init_qp < 0 || p.pic_init_qp > 51)
+        return -1;
     p.valid = true;
     sets->pps[id] = p;
-    if (idOut) *idOut = (uint8_t)id;
+    if (idOut)
+        *idOut = (uint8_t)id;
     return 0;
 }
 
 static bool refListModification(Reader *r)
 {
-    if (!flag(r)) return true;
+    if (!flag(r))
+        return true;
     for (unsigned n = 0; n < 33; n++) {
         const uint32_t idc = ue(r);
-        if (idc == 3) return true;
-        if (idc > 2 || r->overrun) return false;
+        if (idc == 3)
+            return true;
+        if (idc > 2 || r->overrun)
+            return false;
         ue(r);
     }
     return false;
@@ -360,11 +397,14 @@ static bool refListModification(Reader *r)
 static void predWeightTable(Reader *r, unsigned chromaArrayType, const uint8_t count[2], bool b)
 {
     ue(r);
-    if (chromaArrayType) ue(r);
+    if (chromaArrayType)
+        ue(r);
     for (unsigned list = 0; list < (b ? 2u : 1u); list++) {
         for (unsigned i = 0; i < count[list] && !r->overrun; i++) {
-            if (flag(r)) se(r), se(r);
-            if (chromaArrayType && flag(r)) se(r), se(r), se(r), se(r);
+            if (flag(r))
+                se(r), se(r);
+            if (chromaArrayType && flag(r))
+                se(r), se(r), se(r), se(r);
         }
     }
 }
@@ -373,44 +413,57 @@ int h264_parse_slice(const H264ParamSets *sets, const uint8_t *nal, size_t size,
 {
     Reader r;
     memset(out, 0, sizeof(*out));
-    if (size < 2) return -1;
+    if (size < 2)
+        return -1;
     out->nal_ref_idc = (nal[0] >> 5) & 3;
     out->nal_unit_type = nal[0] & 0x1f;
-    if (!load(&r, nal, size, true)) return -1;
+    if (!load(&r, nal, size, true))
+        return -1;
     out->first_mb_in_slice = ue(&r);
     const uint32_t type = ue(&r);
     const uint32_t ppsId = ue(&r);
-    if (type > 9 || ppsId >= 256 || !sets->pps[ppsId].valid) return -1;
+    if (type > 9 || ppsId >= 256 || !sets->pps[ppsId].valid)
+        return -1;
     out->slice_type = (uint8_t)(type % 5);
     out->pps_id = (uint8_t)ppsId;
     const H264PPS *p = &sets->pps[ppsId];
     const H264SPS *s = &sets->sps[p->sps_id];
-    if (!s->valid) return -1;
+    if (!s->valid)
+        return -1;
     const bool idr = out->nal_unit_type == H264_NAL_IDR;
-    if (s->separate_colour_plane) bits(&r, 2);
+    if (s->separate_colour_plane)
+        bits(&r, 2);
     out->frame_num = bits(&r, s->log2_max_frame_num);
-    if (!s->frame_mbs_only && (out->field_pic = flag(&r))) out->bottom_field = flag(&r);
-    if (idr) out->idr_pic_id = ue(&r);
+    if (!s->frame_mbs_only && (out->field_pic = flag(&r)))
+        out->bottom_field = flag(&r);
+    if (idr)
+        out->idr_pic_id = ue(&r);
     if (s->poc_type == 0) {
         out->poc_lsb = bits(&r, s->log2_max_poc_lsb);
-        if (p->bottom_field_pic_order_present && !out->field_pic) out->delta_poc_bottom = se(&r);
+        if (p->bottom_field_pic_order_present && !out->field_pic)
+            out->delta_poc_bottom = se(&r);
     }
     if (s->poc_type == 1 && !s->delta_pic_order_always_zero) {
         out->delta_poc[0] = se(&r);
-        if (p->bottom_field_pic_order_present && !out->field_pic) out->delta_poc[1] = se(&r);
+        if (p->bottom_field_pic_order_present && !out->field_pic)
+            out->delta_poc[1] = se(&r);
     }
-    if (p->redundant_pic_cnt_present) ue(&r);
+    if (p->redundant_pic_cnt_present)
+        ue(&r);
     const bool b = out->slice_type == H264_SLICE_B;
     const bool intra = out->slice_type == H264_SLICE_I || out->slice_type == H264_SLICE_SI;
-    if (b) flag(&r);  // direct_spatial_mv_pred_flag
+    if (b)
+        flag(&r);  // direct_spatial_mv_pred_flag
     uint8_t count[2] = {p->num_ref_idx_active[0], p->num_ref_idx_active[1]};
     if (!intra && flag(&r)) {
         const uint32_t l0 = ue(&r) + 1, l1 = b ? ue(&r) + 1 : count[1];
-        if (l0 > 32 || l1 > 32) return -1;
+        if (l0 > 32 || l1 > 32)
+            return -1;
         count[0] = (uint8_t)l0;
         count[1] = (uint8_t)l1;
     }
-    if (!intra && (!refListModification(&r) || (b && !refListModification(&r)))) return -1;
+    if (!intra && (!refListModification(&r) || (b && !refListModification(&r))))
+        return -1;
     if ((p->weighted_pred && !intra && !b) || (p->weighted_bipred_idc == 1 && b))
         predWeightTable(&r, s->separate_colour_plane ? 0 : s->chroma_format_idc, count, b);
     if (out->nal_ref_idc) {
@@ -420,14 +473,20 @@ int h264_parse_slice(const H264ParamSets *sets, const uint8_t *nal, size_t size,
         } else if ((out->adaptive_ref_pic_marking = flag(&r))) {
             for (;;) {
                 const uint32_t op = ue(&r);
-                if (!op) break;
-                if (op > 6 || out->mmco_count == 32 || r.overrun) return -1;
+                if (!op)
+                    break;
+                if (op > 6 || out->mmco_count == 32 || r.overrun)
+                    return -1;
                 H264MMCO *m = &out->mmco[out->mmco_count++];
                 m->type = (uint8_t)op;
-                if (op == 1 || op == 3) m->difference_of_pic_nums_minus1 = ue(&r);
-                if (op == 2) m->long_term_pic_num = ue(&r);
-                if (op == 3 || op == 6) m->long_term_frame_idx = ue(&r);
-                if (op == 4) m->max_long_term_frame_idx_plus1 = ue(&r);
+                if (op == 1 || op == 3)
+                    m->difference_of_pic_nums_minus1 = ue(&r);
+                if (op == 2)
+                    m->long_term_pic_num = ue(&r);
+                if (op == 3 || op == 6)
+                    m->long_term_frame_idx = ue(&r);
+                if (op == 4)
+                    m->max_long_term_frame_idx_plus1 = ue(&r);
             }
         }
     }

@@ -17,7 +17,8 @@
 
 int main(int argc, char **argv)
 {
-    if (argc != 5) return 2;
+    if (argc != 5)
+        return 2;
     @autoreleasepool {
         NSError *error = nil;
         const bool produce = !strcmp(argv[4], "produce");
@@ -40,7 +41,8 @@ int main(int argc, char **argv)
         descriptor.label = @"archived compute";
         auto archiveDescriptor = [MTLBinaryArchiveDescriptor new];
         NSURL *url = [NSURL fileURLWithPath:@(argv[3])];
-        if (!produce) archiveDescriptor.url = url;
+        if (!produce)
+            archiveDescriptor.url = url;
         id<MTLBinaryArchive> archive = [device newBinaryArchiveWithDescriptor:archiveDescriptor error:&error];
         REQUIRE(archive && !error);
         descriptor.binaryArchives = @[ archive ];

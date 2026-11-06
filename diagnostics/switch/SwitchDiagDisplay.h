@@ -13,19 +13,21 @@
 #define SWITCH_BACKGROUND UINT32_C(0xff20140c)
 
 static inline int switch_diag_video_matches(uint64_t base, uint64_t display, uint64_t row, uint64_t width,
-                                              uint64_t height, uint64_t depth)
+                                            uint64_t height, uint64_t depth)
 {
     return base == SWITCH_FB_PA && display == 1 && row == 2880 && width == 720 && height == 1280 && depth == 32;
 }
 
 static inline void switch_diag_pixel(volatile uint32_t *pixels, unsigned x, unsigned y, uint32_t color)
 {
-    if (x < 1280 && y < 720) pixels[(uint64_t)(1279 - x) * 720 + y] = color;
+    if (x < 1280 && y < 720)
+        pixels[(uint64_t)(1279 - x) * 720 + y] = color;
 }
 
 static inline void switch_diag_clear(volatile uint32_t *pixels)
 {
-    for (unsigned i = 0; i < SWITCH_FB_BYTES / 4; ++i) pixels[i] = SWITCH_BACKGROUND;
+    for (unsigned i = 0; i < SWITCH_FB_BYTES / 4; ++i)
+        pixels[i] = SWITCH_BACKGROUND;
 }
 
 // Five-column, seven-row glyphs. Bit 4 is the leftmost pixel of each row.
@@ -52,27 +54,33 @@ static const struct {
 };
 
 /* Bounded logical 1280x720 text. Returns nonzero if text did not fit. */
-static inline int switch_diag_text(volatile uint32_t *pixels, unsigned x, unsigned y, unsigned bottom,
-                                     const char *text, unsigned limit, uint32_t color)
+static inline int switch_diag_text(volatile uint32_t *pixels, unsigned x, unsigned y, unsigned bottom, const char *text,
+                                   unsigned limit, uint32_t color)
 {
     const unsigned left = x;
-    if (bottom > 704) bottom = 704;
+    if (bottom > 704)
+        bottom = 704;
     for (unsigned n = 0; n < limit; ++n) {
         char ch = text[n];
-        if (!ch) return 0;
+        if (!ch)
+            return 0;
         if (ch == '\n') {
             x = left;
             y += 20;
             continue;
         }
-        if (ch == '\r') continue;
-        if (ch == '\t') ch = ' ';
+        if (ch == '\r')
+            continue;
+        if (ch == '\t')
+            ch = ' ';
         if (x + 12 > 1264) {
             x = left;
             y += 20;
         }
-        if (y + 14 > bottom) return 1;
-        if (ch >= 'a' && ch <= 'z') ch -= 'a' - 'A';
+        if (y + 14 > bottom)
+            return 1;
+        if (ch >= 'a' && ch <= 'z')
+            ch -= 'a' - 'A';
         const uint8_t *glyph = switch_diag_font[sizeof(switch_diag_font) / sizeof(switch_diag_font[0]) - 2].row;
         for (unsigned i = 0; i < sizeof(switch_diag_font) / sizeof(switch_diag_font[0]); ++i)
             if (switch_diag_font[i].ch == ch) {
@@ -84,7 +92,7 @@ static inline int switch_diag_text(volatile uint32_t *pixels, unsigned x, unsign
                 for (unsigned dy = 0; dy < 2; ++dy)
                     for (unsigned dx = 0; dx < 2; ++dx)
                         switch_diag_pixel(pixels, x + col * 2 + dx, y + row * 2 + dy,
-                                            col < 5 && (glyph[row] & (1u << (4 - col))) ? color : SWITCH_BACKGROUND);
+                                          col < 5 && (glyph[row] & (1u << (4 - col))) ? color : SWITCH_BACKGROUND);
         x += 12;
     }
     return 1;

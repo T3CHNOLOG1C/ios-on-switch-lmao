@@ -61,6 +61,7 @@ enum : uint32_t {
     kStatus = 0x800,
     kErrStatus = 0x804,
 };
+
 constexpr uint32_t kSecuritySoftNonsecure = 1u << 16, kSecurityEngineDisabled = 1u << 1;
 // KEYTABLE_ACCESS: a set bit allows (hekate se_key_acc_ctrl writes the inverted disable flags).
 constexpr uint32_t kKeyUse = 1u << 6;
@@ -68,6 +69,7 @@ constexpr uint32_t kIntOpDone = 1u << 4, kIntError = 1u << 16;
 constexpr uint32_t kStatusStateMask = 3, kStatusMemBusy = 1u << 2;
 constexpr uint32_t kOpStart = 1;
 constexpr uint32_t kConfigEcbEncrypt = 1u << 12;  // ENC_ALG AES_ENC, ENC_MODE KEY128, DEC_ALG NOP, DST MEMORY
+
 // CORE_SEL encrypt; XOR bypass (ECB), input from memory, original IV (unused without XOR), AHB memory interface, no hash.
 constexpr uint32_t cryptoEcbEncrypt(uint32_t slot)
 {
@@ -85,8 +87,16 @@ struct Engine {
     uint64_t physical;
     uint32_t ahbMaster;  // bit in MEM_WRQUE_MST_ID: SE1 14, SE2 13 (the DTB's nvidia,ahb-master-id)
     volatile uint32_t *regs;
-    uint32_t r(uint32_t offset) const { return regs[offset / 4]; }
-    void w(uint32_t offset, uint32_t value) const { regs[offset / 4] = value; }
+
+    uint32_t r(uint32_t offset) const
+    {
+        return regs[offset / 4];
+    }
+
+    void w(uint32_t offset, uint32_t value) const
+    {
+        regs[offset / 4] = value;
+    }
 };
 
 struct Dma {
@@ -147,7 +157,8 @@ bool allocateDma(Dma *dma)
 
 void releaseDma(Dma *dma)
 {
-    if (!dma->memory) return;
+    if (!dma->memory)
+        return;
     memset(dma->va, 0, kDmaUsed);
     cleanInvalidate(dma->va, kDmaUsed);
     dma->memory->complete();
@@ -206,8 +217,9 @@ bool ecbBlock(void *context, const uint8_t in[16], uint8_t out[16])
     se.w(kOperation, kOpStart);
     uint64_t deadline;
     clock_interval_to_deadline(kOpTimeoutMs, kMillisecondScale, &deadline);
-    waitFor(b, deadline, "operation end",
-            [&] { return (se.r(kIntStatus) & (kIntOpDone | kIntError)) || se.r(kErrStatus); });
+    waitFor(b, deadline, "operation end", [&] {
+        return (se.r(kIntStatus) & (kIntOpDone | kIntError)) || se.r(kErrStatus);
+    });
     // T210B01: the output is in memory once the engine is idle, its memory interface quiet and the AHB write queue drained (L4T
     // tegra_se_start_operation ahb_ack, hekate _se_op_wait).
     waitFor(b, deadline, "memory drain", [&] {
@@ -253,7 +265,8 @@ void probeSlot(const Engine &se, Dma &dma, volatile uint32_t *ahb, uint32_t slot
                      : !(perKey & (1u << slot))             ? "slot secure-only"
                      : !(access & kKeyUse)                  ? "key use disabled"
                                                             : nullptr;
-    if (result.refusal) return;
+    if (result.refusal)
+        return;
     Block b{&se, &dma, ahb, slot, 0, nullptr};
     uint8_t again[16];
     const uint8_t *label = reinterpret_cast<const uint8_t *>(kProbeLabel);
@@ -295,7 +308,8 @@ void describe(char *line, size_t size, const char *name, const Result &r, const 
 extern "C" void native_aks_se_probe(void)
 {
     static bool probed;
-    if (probed) return;
+    if (probed)
+        return;
     probed = true;
 
     IOMemoryMap *carMap = nullptr, *ahbMap = nullptr, *fuseMap = nullptr, *mcMap = nullptr, *se1Map = nullptr,

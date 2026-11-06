@@ -55,6 +55,7 @@ static const unsigned char touchDescriptor[] = {0x05,
                                                 0x02,
                                                 0xc0};
 #define TOUCH_FINGERS 10
+
 // Edge contacts (int-163). A contact that starts within ~3 mm of a panel edge carries kIOHIDDigitizerEventFromEdgeTip (0x800) in its
 // finger events' event mask for its whole life, as Apple's multitouch stack reports it (MultitouchHID). UIKit derives UITouch's edge
 // type from that bit alone (_UIEventHIDTouchEdgeTypeForHIDEvent: 0x800/0x1000/0x2000/0x40000 -> 1..4), and every screen-edge
@@ -76,6 +77,7 @@ enum {
     kGetFixed = 25,
     kContacts = 256
 };
+
 enum : uint32_t {
     kDigitizer = 11,
     kX = 0xB0000,
@@ -86,6 +88,7 @@ enum : uint32_t {
     kMaskTouch = 2,
     kFromEdgeTip = 0x800
 };
+
 // 48 panel pixels of 3048 x 2032 (the sweet reference uses 48 px), in the driver's normalised IOFixed coordinates.
 static const int32_t kEdgeX = 48 * 65536 / 3048, kEdgeY = 48 * 65536 / 2032;
 static uintptr_t originalDispatch;
@@ -93,14 +96,17 @@ static bool fromEdge[kContacts];
 extern "C" {
 volatile uint32_t native_touch_edge_stats[4];
 }  // [0] installed, [1] contacts begun, [2] of them at an edge, [3] skipped events
+
 template <typename R, typename... A> static R call(void *object, unsigned slot, A... args)
 {
     return reinterpret_cast<R (*)(void *, A...)>((*reinterpret_cast<uintptr_t **>(object))[slot])(object, args...);
 }
+
 // One finger event; true when it now carries the bit.
 static bool mark(void *child)
 {
-    if (call<uint32_t, IOOptionBits>(child, kGetType, 0) != kDigitizer) return false;  // the scan-time vendor child
+    if (call<uint32_t, IOOptionBits>(child, kGetType, 0) != kDigitizer)
+        return false;  // the scan-time vendor child
     const uint32_t index = (uint32_t)call<int32_t, uint32_t, IOOptionBits>(child, kGetInteger, kIndex, 0);
     if (index >= kContacts) {
         native_touch_edge_stats[3] = native_touch_edge_stats[3] + 1;
@@ -113,7 +119,8 @@ static bool mark(void *child)
                       y = call<int32_t, uint32_t, IOOptionBits>(child, kGetFixed, kY, 0);
         fromEdge[index] = x < kEdgeX || x > 65536 - kEdgeX || y < kEdgeY || y > 65536 - kEdgeY;
         native_touch_edge_stats[1] = native_touch_edge_stats[1] + 1;
-        if (fromEdge[index]) native_touch_edge_stats[2] = native_touch_edge_stats[2] + 1;
+        if (fromEdge[index])
+            native_touch_edge_stats[2] = native_touch_edge_stats[2] + 1;
     }
     const bool edged = fromEdge[index];
     if (edged)
@@ -122,6 +129,7 @@ static bool mark(void *child)
         fromEdge[index] = false;  // the lift keeps the bit; the next contact with this index starts fresh
     return edged;
 }
+
 static void dispatch(IOService *self, OSObject *event, IOOptionBits options)
 {
     if (event && call<uint32_t, IOOptionBits>(event, kGetType, 0) == kDigitizer) {
@@ -146,13 +154,16 @@ static void dispatch(IOService *self, OSObject *event, IOOptionBits options)
     }
     reinterpret_cast<void (*)(IOService *, OSObject *, IOOptionBits)>(originalDispatch)(self, event, options);
 }
+
 // This device's own event driver gets the wrapped copy; any other driver keeps the original table.
 static void install(IORegistryEntry *driver)
 {
-    if (originalDispatch || !driver) return;
+    if (originalDispatch || !driver)
+        return;
     uintptr_t *table = *reinterpret_cast<uintptr_t **>(driver);
     uintptr_t *copy = static_cast<uintptr_t *>(IOMalloc(kSlots * sizeof(uintptr_t)));
-    if (!copy) return;
+    if (!copy)
+        return;
     memcpy(copy, table, kSlots * sizeof(uintptr_t));
     originalDispatch = copy[kDispatch];
     copy[kDispatch] = (uintptr_t)&dispatch;
@@ -161,6 +172,7 @@ static void install(IORegistryEntry *driver)
     native_touch_edge_stats[0] = 1;
 }
 }  // namespace edge
+
 class NativeHidInput : public IOHIDDevice {
     OSDeclareDefaultStructors(NativeHidInput) IOWorkLoop *inputLoop = nullptr;
     IOTimerEventSource *timer = nullptr;
@@ -174,35 +186,46 @@ class NativeHidInput : public IOHIDDevice {
     // Fingers sent as down in the previous report; a vanished identifier gets one explicit tip-up report.
     int prevIds[TOUCH_FINGERS] = {-1, -1, -1, -1, -1, -1, -1, -1, -1, -1};
     int prevX[TOUCH_FINGERS] = {}, prevY[TOUCH_FINGERS] = {};
+
     static unsigned transformCoordinate(int value, int maximum)
     {
-        if (value < 0) value = 0;
-        if (value >= maximum) value = maximum - 1;
+        if (value < 0)
+            value = 0;
+        if (value >= maximum)
+            value = maximum - 1;
         return (unsigned)((long long)value * 32767 / (maximum - 1));
     }
+
     // One finger set to the event driver. The touch thread (kits/sheng/TouchProbe.cpp) calls touchNotify after it publishes a frame; there is no timer
     // watching the seqlock any more (it woke the work loop every 8 ms for nothing).
     static void touchNotify(void *context)
     {
         NativeHidInput *self = static_cast<NativeHidInput *>(context);
-        if (self && self->inputLoop) self->inputLoop->runAction(&NativeHidInput::touchAction, self);
+        if (self && self->inputLoop)
+            self->inputLoop->runAction(&NativeHidInput::touchAction, self);
     }
+
     static IOReturn touchAction(OSObject *owner, void *, void *, void *, void *)
     {
         NativeHidInput *self = OSDynamicCast(NativeHidInput, owner);
-        if (!self) return kIOReturnSuccess;
+        if (!self)
+            return kIOReturnSuccess;
         self->touchSend();
         return kIOReturnSuccess;
     }
+
     void touchSend()
     {
         NativeHidInput *self = this;
-        if (!self->hasEventDriverCached()) return;
+        if (!self->hasEventDriverCached())
+            return;
         uint32_t before = native_touch_seq;
-        if ((before & 1) || before == self->lastSeq) return;
+        if ((before & 1) || before == self->lastSeq)
+            return;
         __asm__ volatile("dmb ish" ::: "memory");
         unsigned count = native_touch_count;
-        if (count > TOUCH_FINGERS) count = TOUCH_FINGERS;
+        if (count > TOUCH_FINGERS)
+            count = TOUCH_FINGERS;
         int ids[TOUCH_FINGERS], xs[TOUCH_FINGERS], ys[TOUCH_FINGERS];
         for (unsigned i = 0; i < count; ++i) {
             ids[i] = native_touch_ids[i];
@@ -210,7 +233,8 @@ class NativeHidInput : public IOHIDDevice {
             ys[i] = native_touch_ys[i];
         }
         __asm__ volatile("dmb ish" ::: "memory");
-        if (native_touch_seq != before) return;  // torn read: retry on the next tick
+        if (native_touch_seq != before)
+            return;  // torn read: retry on the next tick
         self->lastSeq = before;
         // Sizes follow the axis maxima of the touch core: 30480 long, 20320 short, mapped to the same 0..32767 range.
         unsigned char report[1 + TOUCH_FINGERS * 6 + 1] = {3};
@@ -231,7 +255,8 @@ class NativeHidInput : public IOHIDDevice {
         unsigned downCount = slot;
         // Identifiers that were down and are gone: tip up at the last known position.
         for (unsigned j = downCount; j < TOUCH_FINGERS; ++j) {
-            if (self->prevIds[j] < 0) continue;
+            if (self->prevIds[j] < 0)
+                continue;
             if (slot < TOUCH_FINGERS) {
                 unsigned char *f = report + 1 + slot * 6;
                 f[0] = 2;
@@ -244,7 +269,8 @@ class NativeHidInput : public IOHIDDevice {
             }
             self->prevIds[j] = -1;
         }
-        if (!slot) return;
+        if (!slot)
+            return;
         report[1 + TOUCH_FINGERS * 6] = (unsigned char)slot;
         IOBufferMemoryDescriptor *buffer =
             IOBufferMemoryDescriptor::withBytes(report, sizeof(report), kIODirectionNone);
@@ -253,39 +279,49 @@ class NativeHidInput : public IOHIDDevice {
         native_hid_input_observed(6, result);
         native_touch_hid_reports = native_touch_hid_reports + 1;
     }
+
     bool hasEventDriverCached()
     {
         if (!eventDriverFound) {
             IORegistryEntry *driver = eventDriver(this, 4);
             eventDriverFound = driver != nullptr;
-            if (driver && (touchEnabled || touchOnly)) edge::install(driver);
+            if (driver && (touchEnabled || touchOnly))
+                edge::install(driver);
         }
         return eventDriverFound;
     }
+
     static bool hasEventDriver(IORegistryEntry *parent, unsigned depth)
     {
         return eventDriver(parent, depth) != nullptr;
     }
+
     // The IOHIDEventDriver below this device, if one has attached.
     static IORegistryEntry *eventDriver(IORegistryEntry *parent, unsigned depth)
     {
-        if (!depth) return nullptr;
+        if (!depth)
+            return nullptr;
         OSIterator *it = parent->getChildIterator(gIOServicePlane);
-        if (!it) return nullptr;
+        if (!it)
+            return nullptr;
         IORegistryEntry *found = nullptr;
         while (OSObject *child = it->getNextObject()) {
             IORegistryEntry *entry = OSDynamicCast(IORegistryEntry, child);
-            if (!entry) continue;
+            if (!entry)
+                continue;
             found = entry->metaCast("IOHIDEventDriver") ? entry : eventDriver(entry, depth - 1);
-            if (found) break;
+            if (found)
+                break;
         }
         it->release();
         return found;
     }
+
     static void tick(OSObject *owner, IOTimerEventSource *source)
     {
         NativeHidInput *self = OSDynamicCast(NativeHidInput, owner);
-        if (!self) return;
+        if (!self)
+            return;
         native_hid_live_checkpoint(self);
         if (self->touchOnly) {
             source->setTimeoutMS(1000);
@@ -319,16 +355,30 @@ class NativeHidInput : public IOHIDDevice {
     }
 
 public:
-    void setTouchOnly() { touchOnly = true; }
-    IOWorkLoop *getWorkLoop() const override { return inputLoop; }
-    OSString *newTransportString() const override { return OSString::withCString(touchOnly ? "SPI" : "Virtual"); }
+    void setTouchOnly()
+    {
+        touchOnly = true;
+    }
+
+    IOWorkLoop *getWorkLoop() const override
+    {
+        return inputLoop;
+    }
+
+    OSString *newTransportString() const override
+    {
+        return OSString::withCString(touchOnly ? "SPI" : "Virtual");
+    }
+
     OSString *newProductString() const override
     {
         return OSString::withCString(touchOnly ? "Offline touch digitizer" : "Offline HID input probe");
     }
+
     IOReturn newReportDescriptor(IOMemoryDescriptor **out) const override
     {
-        if (!out) return kIOReturnBadArgument;
+        if (!out)
+            return kIOReturnBadArgument;
         unsigned char combined[sizeof(descriptor) + sizeof(touchDescriptor)];
         size_t size;
         if (touchOnly) {
@@ -347,18 +397,22 @@ public:
         *out = IOBufferMemoryDescriptor::withBytes(combined, size, kIODirectionNone);
         return *out ? kIOReturnSuccess : kIOReturnNoMemory;
     }
+
     bool start(IOService *provider) override
     {
         inputLoop = IOWorkLoop::workLoop();
-        if (!inputLoop) return false;
+        if (!inputLoop)
+            return false;
         // Request the normal generic HID event personality for this owned
         // keyboard. This is a matching property, not a client entitlement.
-        if (!setProperty("HIDDefaultBehavior", true)) return false;
+        if (!setProperty("HIDDefaultBehavior", true))
+            return false;
         if (touchOnly || touchEnabled) {
             setProperty("Built-In", true);
             setProperty("DisplayIntegrated", true);
         }
-        if (!IOHIDDevice::start(provider)) return false;
+        if (!IOHIDDevice::start(provider))
+            return false;
         timer = IOTimerEventSource::timerEventSource(this, tick);
         if (!timer || inputLoop->addEventSource(timer) != kIOReturnSuccess) {
             OSSafeReleaseNULL(timer);
@@ -366,16 +420,19 @@ public:
             return false;
         }
         if (touchOnly || touchEnabled) {
-            if (&native_touch_set_sink) native_touch_set_sink(&NativeHidInput::touchNotify, this);
+            if (&native_touch_set_sink)
+                native_touch_set_sink(&NativeHidInput::touchNotify, this);
         }
         setProperty("OfflineInputProbe", true);
         native_hid_input_observed(2, 0);
         timer->setTimeoutMS(1000);
         return true;
     }
+
     void stop(IOService *provider) override
     {
-        if ((touchOnly || touchEnabled) && &native_touch_set_sink) native_touch_set_sink(nullptr, nullptr);
+        if ((touchOnly || touchEnabled) && &native_touch_set_sink)
+            native_touch_set_sink(nullptr, nullptr);
         if (timer) {
             timer->cancelTimeout();
             inputLoop->removeEventSource(timer);
@@ -383,19 +440,23 @@ public:
         }
         IOHIDDevice::stop(provider);
     }
+
     void free() override
     {
         OSSafeReleaseNULL(inputLoop);
         IOHIDDevice::free();
     }
 };
+
 OSDefineMetaClassAndStructors(NativeHidInput, IOHIDDevice) extern "C" IOService *native_hid_input_allocate(void)
 {
     return new NativeHidInput;
 }
+
 extern "C" IOService *native_hid_touch_allocate(void)
 {
     NativeHidInput *device = new NativeHidInput;
-    if (device) device->setTouchOnly();
+    if (device)
+        device->setTouchOnly();
     return device;
 }

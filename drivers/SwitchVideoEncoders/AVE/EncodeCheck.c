@@ -12,7 +12,13 @@
 // 21H461 is iOS 17.7: the hardware-encoder keys the SDK marks iOS 17.4 are there (weak imports at the 17.0 target).
 #pragma clang diagnostic ignored "-Wunguarded-availability-new"
 
-enum { W = 320, H = 240, FRAMES = 30, KEY_INTERVAL = 10, FORCED_KEY = 15 };
+enum {
+    W = 320,
+    H = 240,
+    FRAMES = 30,
+    KEY_INTERVAL = 10,
+    FORCED_KEY = 15
+};
 
 typedef struct {
     CMSampleBufferRef samples[FRAMES];
@@ -36,8 +42,10 @@ static bool inSquare(int i, int x, int y)
 static uint8_t lumaAt(int i, int x, int y)
 {
     int v = (x + y / 2) & 0xff;
-    if (inSquare(i, x, y)) v = 235;
-    if (x >= 240 && y >= 160) v = ((x / 2 + y / 2 + i) & 1) ? 200 : 60;
+    if (inSquare(i, x, y))
+        v = 235;
+    if (x >= 240 && y >= 160)
+        v = ((x / 2 + y / 2 + i) & 1) ? 200 : 60;
     return (uint8_t)(v < 16 ? 16 : v > 235 ? 235 : v);
 }
 
@@ -60,12 +68,14 @@ static CVPixelBufferRef makeFrame(int i)
     CVPixelBufferCreate(NULL, W, H, kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange, attrs, &image);
     CFRelease(attrs);
     CFRelease(empty);
-    if (!image) return NULL;
+    if (!image)
+        return NULL;
     CVPixelBufferLockBaseAddress(image, 0);
     uint8_t *y = CVPixelBufferGetBaseAddressOfPlane(image, 0), *c = CVPixelBufferGetBaseAddressOfPlane(image, 1);
     const size_t ys = CVPixelBufferGetBytesPerRowOfPlane(image, 0), cs = CVPixelBufferGetBytesPerRowOfPlane(image, 1);
     for (int row = 0; row < H; row++)
-        for (int x = 0; x < W; x++) y[(size_t)row * ys + x] = lumaAt(i, x, row);
+        for (int x = 0; x < W; x++)
+            y[(size_t)row * ys + x] = lumaAt(i, x, row);
     for (int row = 0; row < H / 2; row++)
         for (int x = 0; x < W / 2; x++)
             chromaAt(i, x, row, &c[(size_t)row * cs + 2 * x], &c[(size_t)row * cs + 2 * x + 1]);
@@ -121,9 +131,11 @@ static void decoded(void *refcon, void *frameRefcon, OSStatus status, VTDecodeIn
     CVPixelBufferUnlockBaseAddress(image, kCVPixelBufferLock_ReadOnly);
     for (int p = 0; p < 3; p++) {
         const double q = psnr(sse[p], p ? W * H / 4.0 : (double)W * H);
-        if (!d->count || q < d->minPsnr[p]) d->minPsnr[p] = q;
+        if (!d->count || q < d->minPsnr[p])
+            d->minPsnr[p] = q;
         d->sumPsnr[p] += q;
-        if (d->badIndex < 0 && q < 20) d->badIndex = i;
+        if (d->badIndex < 0 && q < 20)
+            d->badIndex = i;
     }
     d->count++;
 }
@@ -138,7 +150,8 @@ static void setNumber(VTCompressionSessionRef s, CFStringRef key, double value)
 static bool isSync(CMSampleBufferRef sample)
 {
     CFArrayRef a = CMSampleBufferGetSampleAttachmentsArray(sample, false);
-    if (!a || !CFArrayGetCount(a)) return true;
+    if (!a || !CFArrayGetCount(a))
+        return true;
     CFBooleanRef notSync = CFDictionaryGetValue(CFArrayGetValueAtIndex(a, 0), kCMSampleAttachmentKey_NotSync);
     return !notSync || !CFBooleanGetValue(notSync);
 }
@@ -156,7 +169,8 @@ bool encode_check(CFDictionaryRef spec, CFStringRef entropy, double minPsnr, cha
     VTCompressionSessionRef session = NULL;
     OSStatus status =
         VTCompressionSessionCreate(NULL, W, H, kCMVideoCodecType_H264, spec, NULL, NULL, encoded, &enc, &session);
-    if (ownSpec) CFRelease(ownSpec);
+    if (ownSpec)
+        CFRelease(ownSpec);
     if (status) {
         snprintf(line, size, "FAIL VTCompressionSessionCreate %d (no hardware H.264 encoder in this process)",
                  (int)status);
@@ -164,7 +178,8 @@ bool encode_check(CFDictionaryRef spec, CFStringRef entropy, double minPsnr, cha
     }
     VTSessionSetProperty(session, kVTCompressionPropertyKey_RealTime, kCFBooleanTrue);
     VTSessionSetProperty(session, kVTCompressionPropertyKey_ProfileLevel, kVTProfileLevel_H264_High_AutoLevel);
-    if (entropy) VTSessionSetProperty(session, kVTCompressionPropertyKey_H264EntropyMode, entropy);
+    if (entropy)
+        VTSessionSetProperty(session, kVTCompressionPropertyKey_H264EntropyMode, entropy);
     setNumber(session, kVTCompressionPropertyKey_MaxKeyFrameInterval, KEY_INTERVAL);
     setNumber(session, kVTCompressionPropertyKey_ExpectedFrameRate, 30);
     setNumber(session, kVTCompressionPropertyKey_Quality, 0.8);
@@ -188,7 +203,8 @@ bool encode_check(CFDictionaryRef spec, CFStringRef entropy, double minPsnr, cha
         if (VTCompressionSessionEncodeFrame(session, image, CMTimeMake(i, 30), CMTimeMake(1, 30), options,
                                             (void *)(intptr_t)i, NULL))
             failed++;
-        if (options) CFRelease(options);
+        if (options)
+            CFRelease(options);
         CVPixelBufferRelease(image);
     }
     VTCompressionSessionCompleteFrames(session, kCMTimeInvalid);
@@ -197,20 +213,23 @@ bool encode_check(CFDictionaryRef spec, CFStringRef entropy, double minPsnr, cha
     CFRelease(session);
     const double ms = ((double)(t1.tv_sec - t0.tv_sec) * 1e3 + (double)(t1.tv_nsec - t0.tv_nsec) / 1e6) / FRAMES;
     const bool onHardware = hardware == kCFBooleanTrue;
-    if (hardware) CFRelease(hardware);
+    if (hardware)
+        CFRelease(hardware);
 
     // Sync samples: every 10th picture and the forced one, or every picture when the encoder runs intra only.
     char keys[96] = "";
     size_t bytes = 0;
     int syncs = 0, misplaced = 0;
     for (int i = 0; i < enc.count && i < FRAMES; i++) {
-        if (!enc.samples[i]) continue;
+        if (!enc.samples[i])
+            continue;
         bytes += CMSampleBufferGetTotalSampleSize(enc.samples[i]);
         const bool sync = isSync(enc.samples[i]);
         const bool expected = i == 0 || i == 10 || i == FORCED_KEY || i == 25;
         if (sync) {
             syncs++;
-            if (strlen(keys) < sizeof(keys) - 4) snprintf(keys + strlen(keys), sizeof(keys) - strlen(keys), " %d", i);
+            if (strlen(keys) < sizeof(keys) - 4)
+                snprintf(keys + strlen(keys), sizeof(keys) - strlen(keys), " %d", i);
         }
         misplaced += sync != expected;
     }
@@ -226,7 +245,8 @@ bool encode_check(CFDictionaryRef spec, CFStringRef entropy, double minPsnr, cha
         VTDecompressionOutputCallbackRecord callback = {decoded, &dec};
         VTDecompressionSessionRef decoder = NULL;
         if (!VTDecompressionSessionCreate(NULL, format, NULL, attrs, &callback, &decoder)) {
-            for (int i = 0; i < FRAMES; i++) VTDecompressionSessionDecodeFrame(decoder, enc.samples[i], 0, NULL, NULL);
+            for (int i = 0; i < FRAMES; i++)
+                VTDecompressionSessionDecodeFrame(decoder, enc.samples[i], 0, NULL, NULL);
             VTDecompressionSessionWaitForAsynchronousFrames(decoder);
             VTDecompressionSessionInvalidate(decoder);
             CFRelease(decoder);
@@ -235,7 +255,8 @@ bool encode_check(CFDictionaryRef spec, CFStringRef entropy, double minPsnr, cha
         CFRelease(pf);
     }
     for (int i = 0; i < FRAMES; i++)
-        if (enc.samples[i]) CFRelease(enc.samples[i]);
+        if (enc.samples[i])
+            CFRelease(enc.samples[i]);
     const bool ok = enc.count == FRAMES && !enc.errors && !failed && onHardware && (!misplaced || intraOnly) &&
                     dec.count == FRAMES && !dec.errors && dec.minPsnr[0] >= minPsnr && dec.minPsnr[1] >= minPsnr &&
                     dec.minPsnr[2] >= minPsnr;

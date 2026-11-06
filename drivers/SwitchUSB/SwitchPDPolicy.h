@@ -63,12 +63,18 @@ struct switch_pd_step {
 static inline const char *switch_pd_phase_name(enum switch_pd_phase phase)
 {
     switch (phase) {
-    case SWITCH_PD_EMPTY: return "empty";
-    case SWITCH_PD_SINK: return "sink";
-    case SWITCH_PD_CLASSIFY: return "classify";
-    case SWITCH_PD_REATTACH: return "reattach";
-    case SWITCH_PD_SOURCE: return "source";
-    case SWITCH_PD_HELD: return "held";
+    case SWITCH_PD_EMPTY:
+        return "empty";
+    case SWITCH_PD_SINK:
+        return "sink";
+    case SWITCH_PD_CLASSIFY:
+        return "classify";
+    case SWITCH_PD_REATTACH:
+        return "reattach";
+    case SWITCH_PD_SOURCE:
+        return "source";
+    case SWITCH_PD_HELD:
+        return "held";
     }
     return "?";
 }
@@ -108,7 +114,8 @@ static inline struct switch_pd_step switch_pd_decide(enum switch_pd_phase phase,
     switch (phase) {
     case SWITCH_PD_EMPTY:
         // Our sink without OTG_INSERT (yet, or an accessory): nothing to decide until the controller says more.
-        if (!plugged || (partner_is_sink && !otg_sink)) return none;
+        if (!plugged || (partner_is_sink && !otg_sink))
+            return none;
         if (!partner_is_sink)
             return switch_pd_step_make(SWITCH_PD_ENTER, SWITCH_PD_SINK, false,
                                        "sink: the partner is a source (charger, host or dock)");
@@ -122,14 +129,16 @@ static inline struct switch_pd_step switch_pd_decide(enum switch_pd_phase phase,
                                    "classifying: the partner came up as our sink; source switches off 1 s");
     case SWITCH_PD_CLASSIFY:
         // The switches moved the port: a sink-only partner stays away, a dual-role one sources.
-        if (!plugged) return switch_pd_step_make(SWITCH_PD_SAW_DETACH, phase, false, 0);
+        if (!plugged)
+            return switch_pd_step_make(SWITCH_PD_SAW_DETACH, phase, false, 0);
         if (!partner_is_sink)
             return switch_pd_step_make(
                 SWITCH_PD_ENTER, SWITCH_PD_SINK, true,
                 "dual-role partner: it sources with our source switches off (sink until unplugged)");
         return none;
     case SWITCH_PD_REATTACH:
-        if (!plugged || (partner_is_sink && !otg_sink)) return none;
+        if (!plugged || (partner_is_sink && !otg_sink))
+            return none;
         if (otg_sink && (!vbus || switch_pd_vbus_ours(status1)))
             return switch_pd_step_make(SWITCH_PD_START, SWITCH_PD_SOURCE, true, 0);
         return switch_pd_step_make(SWITCH_PD_ENTER, SWITCH_PD_SINK, true,
@@ -148,7 +157,8 @@ static inline struct switch_pd_step switch_pd_decide(enum switch_pd_phase phase,
         return none;
     case SWITCH_PD_SINK:
     case SWITCH_PD_HELD:
-        if (!plugged) return switch_pd_step_make(SWITCH_PD_ENTER, SWITCH_PD_EMPTY, false, "detached");
+        if (!plugged)
+            return switch_pd_step_make(SWITCH_PD_ENTER, SWITCH_PD_EMPTY, false, "detached");
         return none;
     }
     return none;

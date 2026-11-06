@@ -62,7 +62,12 @@ enum {
 
 // NVDEC application ids (clc5b0.h NVC5B0_SET_APPLICATION_ID_ID_*). TegraNVDECInfo.codecs has bit n set for each
 // codec whose boot self-test (N3) passed; Submit refuses the others.
-enum { TEGRA_NVDEC_CODEC_H264 = 3, TEGRA_NVDEC_CODEC_HEVC = 7, TEGRA_NVDEC_CODEC_VP9 = 9 };
+enum {
+    TEGRA_NVDEC_CODEC_H264 = 3,
+    TEGRA_NVDEC_CODEC_HEVC = 7,
+    TEGRA_NVDEC_CODEC_VP9 = 9
+};
+
 // Not an application id: TegraNVDECInfo.codecs bit 16, HEVC Main 10 written as 8-bit NV12 (disp_output_mode 2/3) is
 // proven (set with HEVC at N3, which decodes an 8-bit picture; cleared by a failed Main 10 clip check).
 #define TEGRA_NVDEC_HEVC_MAIN10 (1u << 16)
@@ -78,13 +83,16 @@ typedef struct {
 typedef struct {
     uint64_t size;
 } TegraNVDECBufferAlloc;
+
 typedef struct {
     uint32_t handle, reserved;
     uint64_t size;
 } TegraNVDECBufferReply;  // size rounded to 64 KiB
+
 typedef struct {
     uint32_t handle, reserved;
 } TegraNVDECBuffer;
+
 typedef struct {
     uint32_t handle, offset, length, reserved;
 } TegraNVDECRange;
@@ -97,11 +105,15 @@ typedef struct {
     uint32_t value, offset;
 } TegraNVDECEntry;
 
-enum { TEGRA_NVDEC_ENTRY_VALUE = 0, TEGRA_NVDEC_ENTRY_RELOC = 1 };
+enum {
+    TEGRA_NVDEC_ENTRY_VALUE = 0,
+    TEGRA_NVDEC_ENTRY_RELOC = 1
+};
 
 #define TEGRA_NVDEC_MAX_ENTRIES 64
 #define TEGRA_NVDEC_MAX_RANGES  4
 #define TEGRA_NVDEC_MAX_SETUP   1024
+
 typedef struct {
     uint32_t codec;  // TEGRA_NVDEC_CODEC_*
     uint32_t entry_count, clean_count;

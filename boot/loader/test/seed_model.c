@@ -55,10 +55,12 @@ static void start(void)
     CHECK(m.out_ll == (uint32_t)(uintptr_t)switch_seed_dma_words());
     volatile uint32_t *dma = switch_seed_dma_words();
     CHECK(dma[0] == 0 && dma[1] == (uint32_t)(uintptr_t)(dma + 16) && dma[2] == 64);
-    for (unsigned i = 16; i < 32; ++i) CHECK(dma[i] == 0); /* cleared before the start */
+    for (unsigned i = 16; i < 32; ++i)
+        CHECK(dma[i] == 0); /* cleared before the start */
     m.modes[m.starts < 4 ? m.starts : 3] = m.rng & 3u;
     ++m.starts;
-    if (m.flags & NEVER_DONE) return;
+    if (m.flags & NEVER_DONE)
+        return;
     if ((m.flags & ERROR_ALWAYS) || ((m.flags & ERROR_FIRST) && m.starts == 1)) {
         m.ints |= 1u << 16;
         m.err = 0x40u;
@@ -66,7 +68,8 @@ static void start(void)
     }
     for (unsigned i = 0; i < 16; ++i) {
         uint32_t word = (m.flags & ZERO_OUTPUT) ? 0 : 0x9e3779b9u * (i + 7u) ^ m.starts * 0x85ebca6bu;
-        if (m.flags & REPEAT_OUTPUT) word = 0x1234u + (i & 3u);
+        if (m.flags & REPEAT_OUTPUT)
+            word = 0x1234u + (i & 3u);
         m.drbg[i] = word;
         dma[16 + i] = word;
     }
@@ -78,36 +81,56 @@ static void start(void)
 
 uint32_t switch_seed_read32(uint64_t pa)
 {
-    if (pa >= SEED_PA && pa < SEED_PA + 64) return m.seed[(pa - SEED_PA) / 4];
-    if (pa >= SOURCE_PA && pa < SOURCE_PA + 8) return m.source[(pa - SOURCE_PA) / 4];
+    if (pa >= SEED_PA && pa < SEED_PA + 64)
+        return m.seed[(pa - SEED_PA) / 4];
+    if (pa >= SOURCE_PA && pa < SOURCE_PA + 8)
+        return m.source[(pa - SOURCE_PA) / 4];
     switch (pa) {
-    case CAR + 0x358: return m.rst_v;
-    case CAR + 0x35c: return m.rst_w;
-    case CAR + 0x360: return m.clk_v;
-    case CAR + 0x364: return (m.flags & ENTROPY_STUCK) ? m.clk_w & ~(1u << 21) : m.clk_w;
+    case CAR + 0x358:
+        return m.rst_v;
+    case CAR + 0x35c:
+        return m.rst_w;
+    case CAR + 0x360:
+        return m.clk_v;
+    case CAR + 0x364:
+        return (m.flags & ENTROPY_STUCK) ? m.clk_w & ~(1u << 21) : m.clk_w;
     case AHB + 0xfc:
-        if (m.wrque && !(m.flags & NEVER_DRAIN) && !--m.drains) m.wrque = 0;
+        if (m.wrque && !(m.flags & NEVER_DRAIN) && !--m.drains)
+            m.wrque = 0;
         return m.wrque;
-    default: break;
+    default:
+        break;
     }
     CHECK(pa >= SE2 && pa < SE2 + 0x1000);
     CHECK((m.clk_v & (1u << 31)) && !(m.rst_v & (1u << 31))); /* never with the clock off or in reset */
     ++m.se_accesses;
     switch ((uint32_t)pa - SE2) {
-    case 0x000: return m.security;
-    case 0x010: return m.ints;
-    case 0x014: return m.config;
-    case 0x018: return m.in_ll;
-    case 0x024: return m.out_ll;
-    case 0x304: return m.crypto;
-    case 0x318: return m.last;
-    case 0x340: return m.rng;
-    case 0x344: return m.rng_src;
+    case 0x000:
+        return m.security;
+    case 0x010:
+        return m.ints;
+    case 0x014:
+        return m.config;
+    case 0x018:
+        return m.in_ll;
+    case 0x024:
+        return m.out_ll;
+    case 0x304:
+        return m.crypto;
+    case 0x318:
+        return m.last;
+    case 0x340:
+        return m.rng;
+    case 0x344:
+        return m.rng_src;
     case 0x800: /* the memory interface goes quiet after a few looks, unless the model says never */
-        if (m.status && !(m.flags & NEVER_DRAIN) && ++m.busy_reads >= 3) m.status = 0;
+        if (m.status && !(m.flags & NEVER_DRAIN) && ++m.busy_reads >= 3)
+            m.status = 0;
         return m.status;
-    case 0x804: return m.err;
-    default: abort();
+    case 0x804:
+        return m.err;
+    default:
+        abort();
     }
 }
 
@@ -135,22 +158,42 @@ void switch_seed_write32(uint64_t pa, uint32_t value)
     CHECK((m.clk_v & (1u << 31)) && !(m.rst_v & (1u << 31)));
     CHECK(m.security & (1u << 16)); /* nothing written to a secure-only engine */
     ++m.se_accesses;
-    if (m.flags & DROP_WRITES) return;
+    if (m.flags & DROP_WRITES)
+        return;
     switch ((uint32_t)pa - SE2) {
     case 0x008:
         CHECK(value == 1);
         start();
         return;
-    case 0x010: m.ints &= ~value; return;
-    case 0x014: m.config = value; return;
-    case 0x018: m.in_ll = value; return;
-    case 0x024: m.out_ll = value; return;
-    case 0x304: m.crypto = value; return;
-    case 0x318: m.last = value; return;
-    case 0x340: m.rng = value; return;
-    case 0x344: m.rng_src = value; return;
-    case 0x804: m.err &= ~value; return;
-    default: abort();
+    case 0x010:
+        m.ints &= ~value;
+        return;
+    case 0x014:
+        m.config = value;
+        return;
+    case 0x018:
+        m.in_ll = value;
+        return;
+    case 0x024:
+        m.out_ll = value;
+        return;
+    case 0x304:
+        m.crypto = value;
+        return;
+    case 0x318:
+        m.last = value;
+        return;
+    case 0x340:
+        m.rng = value;
+        return;
+    case 0x344:
+        m.rng_src = value;
+        return;
+    case 0x804:
+        m.err &= ~value;
+        return;
+    default:
+        abort();
     }
 }
 
@@ -171,14 +214,16 @@ static uint32_t run(unsigned flags)
     const uint32_t word = switch_seed_mix(SEED_PA, SOURCE_PA, ticks, 38400);
     CHECK(m.source[0] == SWITCH_SEED_MAGIC && m.source[1] == word);
     volatile uint32_t *dma = switch_seed_dma_words();
-    for (unsigned i = 16; i < 32; ++i) CHECK(dma[i] == 0); /* nothing of the output stays in the image */
+    for (unsigned i = 16; i < 32; ++i)
+        CHECK(dma[i] == 0); /* nothing of the output stays in the image */
     return word;
 }
 
 /* The seed after a run: pinned ^ output (if mixed) ^ the counter in words 0 and 1. */
 static void check_seed(int mixed)
 {
-    for (unsigned i = 2; i < 16; ++i) CHECK(m.seed[i] == (pinned[i] ^ (mixed ? m.drbg[i] : 0)));
+    for (unsigned i = 2; i < 16; ++i)
+        CHECK(m.seed[i] == (pinned[i] ^ (mixed ? m.drbg[i] : 0)));
     const uint32_t c0 = m.seed[0] ^ pinned[0] ^ (mixed ? m.drbg[0] : 0);
     const uint32_t c1 = m.seed[1] ^ pinned[1] ^ (mixed ? m.drbg[1] : 0);
     const uint64_t counter = (uint64_t)c1 << 32 | c0;
@@ -186,6 +231,7 @@ static void check_seed(int mixed)
 }
 
 unsigned seed_scenarios(void);
+
 unsigned seed_scenarios(void)
 {
     unsigned scenarios = 0;
@@ -195,7 +241,8 @@ unsigned seed_scenarios(void)
     CHECK((w & 0xffffu) == SWITCH_SEED_STATUS_MIXED && m.starts == 1 && m.modes[0] == 2);
     check_seed(1);
     uint32_t fold = 0;
-    for (unsigned i = 0; i < 16; ++i) fold ^= m.drbg[i];
+    for (unsigned i = 0; i < 16; ++i)
+        fold ^= m.drbg[i];
     CHECK(w >> 16 == ((fold ^ fold >> 16) & 0xffffu));
     ++scenarios;
 

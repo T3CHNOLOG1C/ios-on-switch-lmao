@@ -21,7 +21,8 @@ int runLse(std::initializer_list<const char *> args)
 {
     char *argv[8] = {const_cast<char *>("lse_semantics")};
     int argc = 1;
-    for (const char *a : args) argv[argc++] = const_cast<char *>(a);
+    for (const char *a : args)
+        argv[argc++] = const_cast<char *>(a);
     return lse_semantics_main(argc, argv);
 }
 
@@ -29,18 +30,23 @@ int runFp(std::initializer_list<const char *> args)
 {
     char *argv[8] = {const_cast<char *>("fp_semantics")};
     int argc = 1;
-    for (const char *a : args) argv[argc++] = const_cast<char *>(a);
+    for (const char *a : args)
+        argv[argc++] = const_cast<char *>(a);
     return fp_semantics_main(argc, argv);
 }
 
 TEST(LseStubs, SystematicEncodingsMatchTheInstruction)
 {
-    switch_ios::test::ExpectPassesInFreshProcess([] { EXPECT_EQ(0, runLse({"--gen", "6"})); });
+    switch_ios::test::ExpectPassesInFreshProcess([] {
+        EXPECT_EQ(0, runLse({"--gen", "6"}));
+    });
 }
 
 TEST(LseStubs, RandomEncodingsMatchTheInstruction)
 {
-    switch_ios::test::ExpectPassesInFreshProcess([] { EXPECT_EQ(0, runLse({"--random", "3000", "4"})); });
+    switch_ios::test::ExpectPassesInFreshProcess([] {
+        EXPECT_EQ(0, runLse({"--random", "3000", "4"}));
+    });
 }
 
 TEST(LseStubs, ACorruptedStubIsCaught)
@@ -72,6 +78,7 @@ TEST(FpStubs, FcmaFormsMatchTheInstruction)
 {
     expectExact(A64X_FCMA, "3000000");
 }
+
 TEST(FpStubs, JscvtMatchesTheInstruction)
 {
     expectExact(A64X_JSCVT, "3000000");
@@ -97,6 +104,7 @@ TEST(FpStubs, Fp16FormsMatchTheInstruction)
 {
     expectMatches(A64X_FP16, "3000000");
 }
+
 TEST(FpStubs, RdmFormsMatchTheInstruction)
 {
     expectMatches(A64X_RDM, "3000000");

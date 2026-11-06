@@ -85,6 +85,7 @@ struct TegraGM20BAbiBoAlloc {
 	uint32_t align_log2; /* 12..21; physical alignment only matters with Contiguous */
 	uint32_t flags;      /* TegraGM20BBo* */
 };
+
 struct TegraGM20BAbiBoAllocReply {
 	uint64_t
 		handle; /* nonzero, unique per connection, never reused while the connection lives */
@@ -112,6 +113,7 @@ enum {
 	TegraGM20BBindMapSparse =
 		3, /* [va, va+range) -> sparse (reads 0, writes dropped); needs InfoSparse */
 };
+
 struct TegraGM20BAbiBindOp {
 	uint32_t op;        /* TegraGM20BBind* */
 	uint32_t kind;      /* GMMU PTE kind (NVK's pte_kind); 0 = pitch/generic */
@@ -120,6 +122,7 @@ struct TegraGM20BAbiBindOp {
 	uint64_t va;        /* page multiple, inside [va_start, va_end) */
 	uint64_t range;     /* page multiple, nonzero */
 };
+
 struct TegraGM20BAbiVmBind {
 	uint32_t count; /* 1..TegraGM20BMaxBindOps */
 	uint32_t reserved;
@@ -134,6 +137,7 @@ enum {
 	TegraGM20BEngineM2MF = 1u << 3,
 	TegraGM20BEngineCompute = 1u << 4,
 };
+
 /* Method 6. A GPFIFO channel on the GR runlist in the connection's VM, with its GR context, and subchannels 0..4 bound to the
  * eng3d, compute, m2mf, eng2d and copy classes. fence_token maps (read-only) a page whose uint32 at fence_offset is the channel's
  * last completed seqno. */
@@ -141,6 +145,7 @@ struct TegraGM20BAbiChannelCreate {
 	uint32_t engines;
 	uint32_t reserved;
 };
+
 struct TegraGM20BAbiChannelCreateReply {
 	uint32_t channel;      /* nonzero, per connection */
 	uint32_t fence_token;  /* clientMemoryForType type of the fence page */
@@ -160,16 +165,19 @@ struct TegraGM20BAbiChannel {
 enum {
 	TegraGM20BPushNoPrefetch = 1u << 0, /* GPFIFO entry NO_PREFETCH bit */
 };
+
 struct TegraGM20BAbiPush {
 	uint64_t va;     /* 4-byte aligned GPU VA of the method stream */
 	uint32_t dwords; /* 1..(1 << 21) - 1 */
 	uint32_t flags;  /* TegraGM20BPush* */
 };
+
 struct TegraGM20BAbiExec {
 	uint32_t channel;
 	uint32_t count; /* 0..TegraGM20BMaxPushes */
 	struct TegraGM20BAbiPush pushes[TegraGM20BMaxPushes];
 };
+
 struct TegraGM20BAbiExecReply {
 	uint32_t seqno; /* fence of this submission; compare with (int32_t)(a - b) >= 0 */
 	uint32_t reserved;
@@ -203,6 +211,7 @@ enum {
 	TegraGM20BMapFixed = 1u
 		<< 1, /* kIOMapOverwrite at `address`; else kIOMapAnywhere (address 0) */
 };
+
 /* Method 12. Maps the clientMemoryForType type `token` (a BO's map_token, a channel's fence_token) into the calling task, exactly
  * as IOConnectMapMemory64(conn, token, mach_task_self(), &address, &bytes, options) does, but from inside io_connect_method: a
  * sandbox may refuse the MIG routine io_connect_map_memory_into_task (WebKit's GPU process profile in 21H461 admits
@@ -213,10 +222,12 @@ struct TegraGM20BAbiMap {
 	uint32_t flags;   /* TegraGM20BMap* */
 	uint64_t address; /* Fixed only; else 0 */
 };
+
 struct TegraGM20BAbiMapReply {
 	uint64_t address;
 	uint64_t bytes; /* the mapping's length (IOConnectMapMemory64's size) */
 };
+
 /* Method 13. Removes the mapping method 12 made of `token` at `address` (IOConnectUnmapMemory64's work). */
 struct TegraGM20BAbiUnmap {
 	uint32_t token;
@@ -229,9 +240,11 @@ enum {
 	TegraGM20BOrderAfterTask = 1u << 0,  /* `channel` waits for the task's other channels */
 	TegraGM20BOrderBeforeTask = 1u << 1, /* the task's other channels wait for `channel` */
 };
+
 enum {
 	TegraGM20BMaxOrderWaits = 16, /* acquires one channel's next submission can have queued */
 };
+
 /* Method 14. Order on the GPU between the channels of the calling task (its connections: two drivers of one process, e.g.
  * the render server's raw GM20B path and NVK), with no CPU wait. The kext queues semaphore acquires (ACQ_GEQ, acquire switch
  * on: the host runs other channels meanwhile) that a channel's next Exec starts with, ahead of its pushes, on the fence words
@@ -250,6 +263,7 @@ struct TegraGM20BAbiOrder {
 	uint32_t seqno; /* BeforeTask */
 	uint32_t reserved;
 };
+
 struct TegraGM20BAbiOrderReply {
 	uint32_t waits;
 	uint32_t reserved;

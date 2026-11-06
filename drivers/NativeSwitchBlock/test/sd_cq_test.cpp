@@ -78,11 +78,13 @@ struct Card {
     double busyUs = 0;
     bool half = false;  // a CMD44 waiting for its CMD45
     uint32_t halfTask = 0, halfBlocks = 0;
+
     struct Task {
         bool used;
         uint32_t blocks;
         uint64_t lba;
     } tasks[32] = {};
+
     unsigned assigned = 0, executedNext = 0;
     uint32_t pendingB = 0;  // r18-sdcq: B-type bits for the next answered response
     unsigned openLeft = 0;
@@ -91,7 +93,11 @@ struct Card {
     long illegal = 0, cmd44s = 0, cmd46s = 0, statuses = 0;  // r18-sdcq
     std::vector<uint32_t> trace;                             // command indices in order
 
-    bool queueEmpty() const { return executedNext == assigned; }
+    bool queueEmpty() const
+    {
+        return executedNext == assigned;
+    }
+
     bool fails()
     {
         ++commands;
@@ -103,6 +109,7 @@ struct Card {
         }
         return false;
     }
+
     // r18-sdcq: an answer, carrying (and clearing) what the previous command left; no answer, and why in the next.
     uint32_t answer(uint32_t bits = 0)
     {
@@ -110,28 +117,34 @@ struct Card {
         pendingB = 0;
         return r1;
     }
+
     int noAnswer()
     {
         pendingB |= kIllegal;
         ++illegal;
         return 2;
     }
+
     void clearTasks()
     {
-        for (Task &t : tasks) t.used = false;
+        for (Task &t : tasks)
+            t.used = false;
         assigned = executedNext = 0;
         half = false;
         finished = 0;
     }
+
     int command(uint32_t index, uint32_t argument, bool busy, uint32_t *r1)
     {
         trace.push_back(index);
         *r1 = 0;
-        if (fails()) return 2;
+        if (fails())
+            return 2;
         // Class 1 commands are illegal outside CQ mode (4.19: no response, Illegal Command in the next R1), and before a
         // lazy card's queue is open.
         if (!cq || openLeft) {
-            if (openLeft) --openLeft;
+            if (openLeft)
+                --openLeft;
             half = false;
             return noAnswer();
         }
@@ -148,7 +161,8 @@ struct Card {
             REQUIRE(argument >> 30 == 1);        // read; bit 31 reserved 0
             REQUIRE(!(argument & 0x3fe00000u));  // extended address, priority, reserved: 0
             ++cmd44s;
-            if (cmd44s == refuse44At || (refuse44From > 0 && cmd44s >= refuse44From)) return noAnswer();
+            if (cmd44s == refuse44At || (refuse44From > 0 && cmd44s >= refuse44From))
+                return noAnswer();
             // Task ID already exists, beyond the depth, no blocks: no response (4.19.5).
             if (!blocks || task >= depth || task >= rejectId || tasks[task].used || (finished >> task & 1))
                 return noAnswer();
@@ -162,7 +176,8 @@ struct Card {
         }
         case 45:
             REQUIRE(!busy);
-            if (!half) return noAnswer();
+            if (!half)
+                return noAnswer();
             half = false;
             tasks[halfTask] = {true, halfBlocks, argument};
             ++assigned;
@@ -175,9 +190,12 @@ struct Card {
             ++aborts;
             *r1 = answer();
             return 0;
-        default: REQUIRE(false); return 1;
+        default:
+            REQUIRE(false);
+            return 1;
         }
     }
+
     // r18-sdcq: CMD13, legal in every state (Table 4-74). Card status, or in CQ mode with bit 15 the Task Status Register
     // (4.10.3: a ready bit per task). It invalidates a half-assigned CMD44 (4.19.5: "including CMD13").
     int status(bool taskStatus, uint32_t *r1)
@@ -185,28 +203,34 @@ struct Card {
         trace.push_back(13);
         ++statuses;
         *r1 = 0;
-        if (fails()) return 2;
+        if (fails())
+            return 2;
         half = false;
         if (taskStatus && cq) {
             uint32_t ready = 0;
             for (unsigned i = 0; i < 32; ++i)
-                if (tasks[i].used) ready |= 1u << i;
+                if (tasks[i].used)
+                    ready |= 1u << i;
             *r1 = ready;
             return 0;
         }
         *r1 = answer();
         return 0;
     }
+
     void settled()
     {
-        if (openLeft) --openLeft;
+        if (openLeft)
+            --openLeft;
     }
+
     int control(uint32_t byte, bool write, uint8_t *value, uint32_t *r1)
     {
         trace.push_back(write ? 49 : 48);
         busyUs += kRegisterUs;
         *r1 = 0;
-        if (fails()) return 2;
+        if (fails())
+            return 2;
         REQUIRE(!half);
         // The driver's control(): an R1 error bit is an error (30), the command executed all the same.
         const uint32_t carried = pendingB;
@@ -214,11 +238,14 @@ struct Card {
         const int result = carried ? 30 : 0;
         // r16-sdcq: the only bytes the driver may touch, and the only values it may write (switchSdPerfWriteAddress).
         REQUIRE(byte == kSdPerfCacheControl || byte == kSdPerfFlushControl || byte == kSdPerfCqControl);
-        if (write) REQUIRE(switchSdPerfWriteAddress(SwitchSdExtFunction{true, 2, 0}, byte, *value));
+        if (write)
+            REQUIRE(switchSdPerfWriteAddress(SwitchSdExtFunction{true, 2, 0}, byte, *value));
         if (byte == kSdPerfCacheControl) {
             if (!write) {
-                if (!result) *value = cacheLag ? 0 : byte260;
-                if (cacheLag) --cacheLag;
+                if (!result)
+                    *value = cacheLag ? 0 : byte260;
+                if (cacheLag)
+                    --cacheLag;
                 return result;
             }
             REQUIRE(!cq);  // the engine turns the cache on and off out of CQ mode only
@@ -232,13 +259,15 @@ struct Card {
                 // read-backs after it show the truth. What the cache holds stays held (nothing says disabling it
                 // commits it): only writes whose flush failed, which never completed.
                 cacheLag = 0;
-                if (!refuseDisable) byte260 = 0;
+                if (!refuseDisable)
+                    byte260 = 0;
             }
             return result;
         }
         if (byte == kSdPerfFlushControl) {
             if (!write) {
-                if (!result) *value = byte261;
+                if (!result)
+                    *value = byte261;
                 return result;
             }
             // Busy until the flush is done (4.17), so a read-back after it shows 00h. CMD49 is legal in CQ mode (Table
@@ -251,14 +280,17 @@ struct Card {
                 return result;
             }
             busyUs += kProgramUs * double(held.size());  // busy until what it holds is programmed
-            for (long id : held) onFlash.insert(id);
+            for (long id : held)
+                onFlash.insert(id);
             held.clear();
             byte261 = 0;
             return result;
         }
         if (!write) {
-            if (!result) *value = enableLag ? 0 : byte262;
-            if (enableLag) --enableLag;
+            if (!result)
+                *value = enableLag ? 0 : byte262;
+            if (enableLag)
+                --enableLag;
             if (lazy && !--lazy) {
                 cq = false;
                 byte262 = 0;
@@ -269,7 +301,8 @@ struct Card {
         REQUIRE(*value == 0 || *value == (kSdCqEnable | kSdCqSequential));
         if (*value) {
             ++enables;
-            if (refuseEnable || (requireCache && !byte260)) return result;
+            if (refuseEnable || (requireCache && !byte260))
+                return result;
             // Enabling needs an empty queue, nothing half-assigned (the engine only enables from legacy mode).
             REQUIRE(!cq || queueEmpty());
             cq = true;
@@ -287,10 +320,12 @@ struct Card {
             enableLag = 0;
             openLeft = 0;
             clearTasks();
-            if (staleTask) tasks[0].used = true;  // r18-sdcq: a Task ID 0 the card keeps across the session's end
+            if (staleTask)
+                tasks[0].used = true;  // r18-sdcq: a Task ID 0 the card keeps across the session's end
         }
         return result;
     }
+
     // r16-sdcq: a 4 KiB CMD25 (legacy, out of CQ mode), its busy ended: on flash with the cache off; with it on, the card
     // may only hold it. Returns the write's id.
     long legacyWrite()
@@ -309,6 +344,7 @@ struct Card {
         }
         return id;
     }
+
     // r16-sdcq: power off and initialize again (sleep, the driver's answer to a stuck card, or the power just going):
     // whatever the cache held is gone; every enable is back at 0.
     void powerCycle()
@@ -320,6 +356,7 @@ struct Card {
         pendingB = 0;
         clearTasks();
     }
+
     // CMD46 of a task (the driver's issue()+complete()): in Task ID order, an assigned task, in CQ mode. r18-sdcq: 0, or
     // the step a failure returns (no response to an illegal one; a data error on fail46At, the task still queued).
     int task46(uint32_t argument)
@@ -327,23 +364,33 @@ struct Card {
         trace.push_back(46);
         ++cmd46s;
         if (!cq || openLeft || half) {
-            if (openLeft) --openLeft;
+            if (openLeft)
+                --openLeft;
             half = false;
             return noAnswer();
         }
         const uint32_t task = argument >> 16 & 0x1f;
         REQUIRE(!(argument & ~(0x1fu << 16)));
-        if (task != executedNext || task >= assigned || !tasks[task].used) return noAnswer();  // 4.19.7
+        if (task != executedNext || task >= assigned || !tasks[task].used)
+            return noAnswer();  // 4.19.7
         pendingB = 0;
-        if (cmd46s == fail46At) return 2;
+        if (cmd46s == fail46At)
+            return 2;
         tasks[task].used = false;
-        if (keepsFinished) finished |= 1u << task;
+        if (keepsFinished)
+            finished |= 1u << task;
         ++executedNext;
         ++cqReads;
-        if (executedNext == assigned) assigned = executedNext = 0;  // the queue is empty again
+        if (executedNext == assigned)
+            assigned = executedNext = 0;  // the queue is empty again
         return 0;
     }
-    void execute(uint32_t argument) { REQUIRE(!task46(argument)); }
+
+    void execute(uint32_t argument)
+    {
+        REQUIRE(!task46(argument));
+    }
+
     // CMD17/18/24/25: illegal in CQ mode (Table 4-74).
     void legacy()
     {
@@ -357,23 +404,39 @@ struct Card {
 struct Bus {
     Card *card;
     long settles = 0;
+
     int command(uint32_t index, uint32_t argument, bool busy, uint32_t *r1)
     {
         return card->command(index, argument, busy, r1);
     }
+
     int control(uint32_t byte, bool write, uint8_t *value, uint32_t *r1)
     {
         return card->control(byte, write, value, r1);
     }
-    int status(bool tasks, uint32_t *r1) { return card->status(tasks, r1); }
+
+    int status(bool tasks, uint32_t *r1)
+    {
+        return card->status(tasks, r1);
+    }
+
     void settle()
     {
         ++settles;
         card->settled();
     }
-    uint8_t lastCommand() const { return card->trace.empty() ? 0 : static_cast<uint8_t>(card->trace.back()); }
-    uint32_t lastIrq() const { return 0; }
+
+    uint8_t lastCommand() const
+    {
+        return card->trace.empty() ? 0 : static_cast<uint8_t>(card->trace.back());
+    }
+
+    uint32_t lastIrq() const
+    {
+        return 0;
+    }
 };
+
 using Engine = SwitchCqEngine<Bus>;
 // r16-sdcq: each control byte is read back at most this many times (a card slow to show it, bounded).
 static_assert(Engine::kReadBacks == 10);
@@ -381,16 +444,19 @@ static_assert(Engine::kReadBacks == 10);
 static std::vector<SwitchCqTask> group(unsigned n, uint64_t base = 1000)
 {
     std::vector<SwitchCqTask> t;
-    for (unsigned i = 0; i < n; ++i) t.push_back({base + i * 977, 8u * (1 + i % 3)});
+    for (unsigned i = 0; i < n; ++i)
+        t.push_back({base + i * 977, 8u * (1 + i % 3)});
     return t;
 }
 
 // A whole group the way the driver ran one before r18-sdcq's runner: in, assign, execute in order (out: leave).
 static bool runGroup(Engine &e, Bus &bus, Card &card, unsigned n)
 {
-    if (!e.enter(bus)) return false;
+    if (!e.enter(bus))
+        return false;
     const std::vector<SwitchCqTask> t = group(n);
-    if (!e.submit(bus, t.data(), n)) return false;
+    if (!e.submit(bus, t.data(), n))
+        return false;
     while (e.pending()) {
         card.execute(e.argument());
         e.executed();
@@ -407,6 +473,7 @@ struct Chain {
     bool proven;
     int completions;
 };
+
 struct GroupHost {
     Card *card;
     std::vector<Chain> chains;
@@ -416,42 +483,55 @@ struct GroupHost {
     std::vector<SwitchCqError> errors;
     unsigned cycles = 0, issued = ~0u;
     uint32_t issuedArgument = 0;
-    GroupHost(Card *c, unsigned n, bool prove) : card(c), chains(n, Chain{0, false, 0}), proving(prove), proofs(n, 0) {}
+
+    GroupHost(Card *c, unsigned n, bool prove) : card(c), chains(n, Chain{0, false, 0}), proving(prove), proofs(n, 0)
+    {}
+
     void beginTask(unsigned i, uint32_t argument)
     {
         REQUIRE(i < chains.size() && !chains[i].completions && issued == ~0u);
         issued = i;
         issuedArgument = argument;
     }
+
     int endTask(unsigned i, uint32_t *r1)
     {
         REQUIRE(issued == i);
         issued = ~0u;
         *r1 = 0;
-        if (const int step = card->task46(issuedArgument)) return step;  // the driver: lines reset, CMD12
+        if (const int step = card->task46(issuedArgument))
+            return step;  // the driver: lines reset, CMD12
         chains[i].data = 'Q';
         chains[i].proven = false;
         return 0;
     }
+
     void beginLegacy(unsigned i)
     {
         REQUIRE(i < chains.size() && !chains[i].completions && issued == ~0u);
         card->legacy();  // out of CQ mode
         issued = i;
     }
+
     void endLegacy(unsigned i)
     {
         REQUIRE(issued == i);
         issued = ~0u;
         chains[i].data = 'L';
     }
+
     void complete(unsigned i)
     {
         REQUIRE(i < chains.size() && chains[i].data);
         REQUIRE(!(proving && chains[i].data == 'Q' && !chains[i].proven));
         REQUIRE(++chains[i].completions == 1);
     }
-    void completeEarlier() { REQUIRE(++earlier == 1); }
+
+    void completeEarlier()
+    {
+        REQUIRE(++earlier == 1);
+    }
+
     uint8_t prove(unsigned i)
     {
         REQUIRE(chains[i].data == 'Q' && !chains[i].completions);
@@ -461,18 +541,25 @@ struct GroupHost {
         chains[i].proven = proofs[i] != Engine::kProofDiffers;
         return proofs[i];
     }
-    void recovered(const SwitchCqError &e) { errors.push_back(e); }
+
+    void recovered(const SwitchCqError &e)
+    {
+        errors.push_back(e);
+    }
+
     void powerCycle()
     {
         card->powerCycle();
         ++cycles;
     }
+
     // After run: the caller completes the last chain; every chain then has exactly one completion.
     void finish()
     {
         complete(static_cast<unsigned>(chains.size() - 1));
         REQUIRE(earlier == 1);
-        for (const Chain &c : chains) REQUIRE(c.completions == 1 && c.data);
+        for (const Chain &c : chains)
+            REQUIRE(c.completions == 1 && c.data);
     }
 };
 
@@ -483,7 +570,8 @@ static Engine::Outcome runOne(Engine &e, Bus &bus, GroupHost &host, unsigned n, 
     unsigned matched = 0;
     const Engine::Outcome outcome = e.run(bus, host, t.data(), n, host.proving, &matched);
     host.finish();
-    if (proven) *proven = matched;
+    if (proven)
+        *proven = matched;
     return outcome;
 }
 
@@ -711,19 +799,23 @@ struct WriteResult {
     double us;
     long commands;
 };
+
 static WriteResult driverWrite(Engine &e, Bus &bus, Card &card, std::set<long> &completed)
 {
     const double before = card.busyUs;
     const long commandsBefore = card.commands + card.legacyCommands;
     const long id = card.legacyWrite();
     const bool ok = e.commitWrite(bus);
-    if (ok) completed.insert(id);
+    if (ok)
+        completed.insert(id);
     return {ok, card.busyUs - before, card.commands + card.legacyCommands - commandsBefore};
 }
+
 // No completed write is lost, whenever the power goes (called at every power cycle).
 static void assertKept(const Card &card, const std::set<long> &completed)
 {
-    for (long id : completed) REQUIRE(card.onFlash.count(id));
+    for (long id : completed)
+        REQUIRE(card.onFlash.count(id));
 }
 
 // r16-sdcq: what r7z's card could have been, and the cache's contract with the driver.
@@ -795,8 +887,7 @@ static void bringUp()
         REQUIRE(!e.enter(bus) && !card.cq && e.cqRead == kSdCqEnable && !e.cacheOn && card.byte260 == 0);
         REQUIRE(e.cacheRead == kSdCacheEnable);  // the cache did come on first
         REQUIRE(strstr(switchSdCqControlMeaning(e.cqRead), "voluntary"));
-        REQUIRE(strstr(switchSdCqControlMeaning(0), "disabled") &&
-                strstr(switchSdCqControlMeaning(3), "sequential"));
+        REQUIRE(strstr(switchSdCqControlMeaning(0), "disabled") && strstr(switchSdCqControlMeaning(3), "sequential"));
         card.legacy();
     }
     // A cache that will not come on (the card answers the enable): tried once (read back 00h, 00h written and read back),
@@ -894,9 +985,11 @@ static void bringUp()
 static void setupGroup(Engine &e, Bus &bus, Card &card)
 {
     REQUIRE(runGroup(e, bus, card, 16) && e.leave(bus));
-    for (unsigned i = 0; i < 16; ++i) card.legacy();  // the compare's legacy reads
+    for (unsigned i = 0; i < 16; ++i)
+        card.legacy();  // the compare's legacy reads
     e.resetCounts();
 }
+
 // The second session's first CMD44 gets no response (the 17th CMD44 of the boot).
 TEST(SdCommandQueue, R8cSecondSessionCmd44Unanswered)
 {
@@ -1015,7 +1108,8 @@ TEST(SdCommandQueue, R8cTaskDataFailure)
     GroupHost host(&card, 5, false);
     REQUIRE(runOne(e, bus, host, 5) == Engine::kGroupRetried && host.errors[0].command == 46);
     REQUIRE(host.errors[0].task == 2 && host.errors[0].outcome == Engine::kInPlace);
-    for (unsigned i = 0; i < 5; ++i) REQUIRE(host.chains[i].data == 'Q');
+    for (unsigned i = 0; i < 5; ++i)
+        REQUIRE(host.chains[i].data == 'Q');
     REQUIRE(e.tasks == 5 + 3);
 }
 
@@ -1042,7 +1136,8 @@ TEST(SdCommandQueue, R8cProofThatDiffersStops)
     GroupHost host(&card, 4, true);
     host.proofs[2] = Engine::kProofDiffers;
     REQUIRE(runOne(e, bus, host, 4) == Engine::kGroupStopped && e.stopped && !e.usable());
-    for (const Chain &c : host.chains) REQUIRE(c.data == 'L');
+    for (const Chain &c : host.chains)
+        REQUIRE(c.data == 'L');
     GroupHost after(&card, 2, false);
     REQUIRE(runOne(e, bus, after, 2) == Engine::kGroupStopped && after.chains[0].data == 'L');
     Engine::runLegacy(after, 0);
@@ -1073,7 +1168,8 @@ TEST(SdCommandQueue, R8cStuckAtProvingGroupEnd)
     e.start(32, true);
     GroupHost host(&card, 3, true);
     REQUIRE(runOne(e, bus, host, 3) == Engine::kGroupLegacy && host.cycles == 1 && e.usable() && !card.cq);
-    for (const Chain &c : host.chains) REQUIRE(c.data == 'L');
+    for (const Chain &c : host.chains)
+        REQUIRE(c.data == 'L');
 }
 
 // Chains too few for the queue (fewer than a group from legacy mode needs): each the legacy way, every one once.
@@ -1102,7 +1198,8 @@ TEST(SdCommandQueue, R8cPersistentFailuresPause)
             REQUIRE(runOne(e, bus, host, 2, 100 * ++groups) == Engine::kGroupLegacy);
         }
         REQUIRE(e.pausedNow && e.pauses == pause + 1 && e.pauseLeft == Engine::kPauseMin << pause);
-        for (unsigned i = 0; i < Engine::kPauseMin << pause; ++i) REQUIRE(!e.admit());
+        for (unsigned i = 0; i < Engine::kPauseMin << pause; ++i)
+            REQUIRE(!e.admit());
         REQUIRE(e.admit() && e.usable() && !e.stopped);
     }
     REQUIRE(e.skipped == Engine::kPauseMin * 7 && e.legacyGroups == 3 * Engine::kStrikes);
@@ -1132,7 +1229,9 @@ static void r8dSession(Engine &e, Bus &bus, Card &card)
     }
     REQUIRE(!card.illegal && !e.recoveries);
 }
+
 static const unsigned kR8dGroups[] = {31, 6, 16, 20, 26, 28, 30, 31, 31};
+
 TEST(SdCommandQueue, R8dWithoutAnAbortBetweenGroups)
 {
     Card card;
@@ -1176,6 +1275,7 @@ TEST(SdCommandQueue, R8dWithoutAnAbortBetweenGroups)
     EXPECT_EQ(e.legacyGroups, 0u);
     REQUIRE(e.leave(bus));
 }
+
 TEST(SdCommandQueue, R8dAbortBetweenGroups)
 {
     Card card;
@@ -1190,7 +1290,8 @@ TEST(SdCommandQueue, R8dAbortBetweenGroups)
         GroupHost host(&card, n, false);
         REQUIRE(runOne(e, bus, host, n, 50000 + 977 * 31 * ++g) == Engine::kGroupQueued && host.errors.empty());
         // The first group enters (its CMD43 opens the session); each after it starts with CMD43, then task 0's CMD44.
-        if (g > 1) REQUIRE(card.trace[before] == 43 && card.trace[before + 1] == 44 && card.trace[before - 1] == 46);
+        if (g > 1)
+            REQUIRE(card.trace[before] == 43 && card.trace[before + 1] == 44 && card.trace[before - 1] == 46);
     }
     const unsigned groups = unsigned(sizeof(kR8dGroups) / sizeof(kR8dGroups[0]));
     EXPECT_EQ(card.illegal, illegal);
@@ -1199,6 +1300,7 @@ TEST(SdCommandQueue, R8dAbortBetweenGroups)
     EXPECT_EQ(e.pauses, 0u);
     REQUIRE(e.leave(bus));
 }
+
 // r18-sdcq (r8d): groups whose retry goes through the queue never pause it, however many there are in a row.
 TEST(SdCommandQueue, RetriedGroupsNeverPause)
 {
@@ -1331,7 +1433,8 @@ static void randomWork()
                 }
                 const bool proving = proofsLeft != 0;
                 GroupHost host(&card, n, proving);
-                if (differs && proving) host.proofs[random() % n] = Engine::kProofDiffers;
+                if (differs && proving)
+                    host.proofs[random() % n] = Engine::kProofDiffers;
                 const std::vector<SwitchCqTask> t = group(n, random() % 100000);
                 unsigned proven = 0;
                 const Engine::Outcome outcome = e.run(bus, host, t.data(), n, proving, &proven);
@@ -1340,17 +1443,22 @@ static void randomWork()
                 ++groups;
                 proofsLeft = proofsLeft > proven ? proofsLeft - proven : 0;
                 recovered += unsigned(host.errors.size());
-                if (outcome == Engine::kGroupLegacy) ++legacyGroups;
-                if (!host.errors.empty()) ++failures;
+                if (outcome == Engine::kGroupLegacy)
+                    ++legacyGroups;
+                if (!host.errors.empty())
+                    ++failures;
                 if (outcome == Engine::kGroupStopped) {
                     ++stops;
                     REQUIRE(e.stopped && (differs || e.powerCycles >= Engine::kMaxStuck));
                 }
-                if (outcome == Engine::kGroupQueued) REQUIRE(host.errors.empty());
-                for (const SwitchCqError &err : host.errors) REQUIRE(err.attempt == 1 || err.attempt == 2);
+                if (outcome == Engine::kGroupQueued)
+                    REQUIRE(host.errors.empty());
+                for (const SwitchCqError &err : host.errors)
+                    REQUIRE(err.attempt == 1 || err.attempt == 2);
                 REQUIRE(e.state != Engine::kOn || card.cq);
             }
-            if (e.state == Engine::kOff) REQUIRE(e.why || card.depth < 2 || e.stuck);
+            if (e.state == Engine::kOff)
+                REQUIRE(e.why || card.depth < 2 || e.stuck);
             // The queue is off only when stopped for the boot (or never usable, or stuck until its power cycle).
             REQUIRE(e.usable() || e.stopped || e.stuck || card.depth < 2);
             // Whenever the engine is not in CQ mode and has not said the card is stuck, the card is out of CQ mode.
@@ -1359,9 +1467,11 @@ static void randomWork()
             // of CQ mode it is off unless it would not go off; nothing completed is only in the cache.
             REQUIRE(e.cacheOn || !card.byte260);
             REQUIRE(e.state == Engine::kOn || e.stuck || !card.byte260 || !e.useCache || card.cacheLag);
-            for (long id : card.held) REQUIRE(!completed.count(id));
+            for (long id : card.held)
+                REQUIRE(!completed.count(id));
         }
-        if (!gone) powerCycle();  // the end of every round: the power goes
+        if (!gone)
+            powerCycle();  // the end of every round: the power goes
     }
     // Every path was exercised.
     REQUIRE(powerCycles > 20000 && groups > 20000 && failures > 1000 && sleeps > 1000 && losses > 1000);
@@ -1383,14 +1493,17 @@ TEST(SdCommandQueue, Basics)
 {
     basics();
 }
+
 TEST(SdCommandQueue, Failures)
 {
     failures();
 }
+
 TEST(SdCommandQueue, BringUpAndTheCache)
 {
     bringUp();
 }
+
 TEST(SdCommandQueue, RandomWork)
 {
     randomWork();

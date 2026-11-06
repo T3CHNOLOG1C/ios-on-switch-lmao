@@ -22,6 +22,7 @@ bool used(uint32_t i)
 {
     return gUsed[i / 32] & (1u << (i % 32));
 }
+
 void setUsed(uint32_t first, uint32_t count, bool on)
 {
     for (uint32_t i = first; i < first + count; i++) {
@@ -34,7 +35,8 @@ void setUsed(uint32_t first, uint32_t count, bool on)
 
 template <bool Invalidate> void cacheOp(const void *va, size_t size)
 {
-    if (!size) return;
+    if (!size)
+        return;
     uint64_t ctr;
     __asm__ volatile("mrs %0, ctr_el0" : "=r"(ctr));
     const uintptr_t line = (uintptr_t)4 << ((ctr >> 16) & 15);
@@ -52,6 +54,7 @@ extern "C" void tegra_nvdec_cache_clean(const void *va, size_t size)
 {
     cacheOp<false>(va, size);
 }
+
 extern "C" void tegra_nvdec_cache_flush(const void *va, size_t size)
 {
     cacheOp<true>(va, size);
@@ -59,7 +62,8 @@ extern "C" void tegra_nvdec_cache_flush(const void *va, size_t size)
 
 extern "C" int tegra_nvdec_arena_init(uint64_t bytes)
 {
-    if (gArena) return 0;
+    if (gArena)
+        return 0;
     bytes = (bytes + kGranule - 1) & ~(kGranule - 1);
     gLock = IOLockAlloc();
     const IOOptionBits options = (IOOptionBits)kIODirectionInOut | (IOOptionBits)kIOMemoryPhysicallyContiguous |
@@ -71,7 +75,8 @@ extern "C" int tegra_nvdec_arena_init(uint64_t bytes)
     if (arena && arena->prepare() == kIOReturnSuccess)
         pa = arena->getPhysicalSegment(0, &contiguous, kIOMemoryMapperNone);
     if (!pa || contiguous < bytes || pa + bytes > (1ULL << 32)) {
-        if (arena) arena->release();
+        if (arena)
+            arena->release();
         return -12;
     }
     gGranules = (uint32_t)(bytes / kGranule);
@@ -89,7 +94,8 @@ extern "C" int tegra_nvdec_arena_init(uint64_t bytes)
 
 extern "C" void tegra_nvdec_arena_release(void)
 {
-    if (!gArena) return;
+    if (!gArena)
+        return;
     gArena->complete();
     gArena->release();
     gArena = nullptr;
@@ -100,7 +106,8 @@ extern "C" void tegra_nvdec_arena_release(void)
 
 extern "C" int tegra_nvdec_arena_alloc(uint64_t size, TegraNVDECBlock *block)
 {
-    if (!gArena || !size || size > (uint64_t)gGranules * kGranule) return -12;
+    if (!gArena || !size || size > (uint64_t)gGranules * kGranule)
+        return -12;
     const uint32_t count = (uint32_t)((size + kGranule - 1) / kGranule);
     IOLockLock(gLock);
     uint32_t run = 0, first = 0;
@@ -108,7 +115,8 @@ extern "C" int tegra_nvdec_arena_alloc(uint64_t size, TegraNVDECBlock *block)
         if (used(i)) {
             run = 0;
         } else {
-            if (!run) first = i;
+            if (!run)
+                first = i;
             run++;
         }
     }
@@ -132,7 +140,8 @@ extern "C" int tegra_nvdec_arena_alloc(uint64_t size, TegraNVDECBlock *block)
 
 extern "C" void tegra_nvdec_arena_free(const TegraNVDECBlock *block)
 {
-    if (!gArena || !block->count) return;
+    if (!gArena || !block->count)
+        return;
     IOLockLock(gLock);
     setUsed(block->first, block->count, false);
     gFree += block->count;

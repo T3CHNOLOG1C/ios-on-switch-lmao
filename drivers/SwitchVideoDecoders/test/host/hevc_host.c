@@ -42,14 +42,17 @@ static int nalUnits(const uint8_t *data, size_t size, Span *out, int max)
         }
         if (n) {
             size_t e = i;
-            while (e && !data[e - 1]) e--;
+            while (e && !data[e - 1])
+                e--;
             out[n - 1].size = (size_t)(data + e - out[n - 1].data);
         }
-        if (n == max) return -1;
+        if (n == max)
+            return -1;
         out[n++].data = data + i + 3;
         i += 3;
     }
-    if (n) out[n - 1].size = (size_t)(data + size - out[n - 1].data);
+    if (n)
+        out[n - 1].size = (size_t)(data + size - out[n - 1].data);
     return n;
 }
 
@@ -66,20 +69,26 @@ static void testSyntax(void)
         int au = -1;
         for (int i = 0; i < n; i++) {
             const int type = (nal[i].data[0] >> 1) & 0x3f;
-            if (type == HEVC_NAL_SPS) CHECK(!hevc_parse_sps(&params, nal[i].data, nal[i].size), "clip %d SPS", c);
-            if (type == HEVC_NAL_PPS) CHECK(!hevc_parse_pps(&params, nal[i].data, nal[i].size), "clip %d PPS", c);
-            if (type >= 32) continue;
+            if (type == HEVC_NAL_SPS)
+                CHECK(!hevc_parse_sps(&params, nal[i].data, nal[i].size), "clip %d SPS", c);
+            if (type == HEVC_NAL_PPS)
+                CHECK(!hevc_parse_pps(&params, nal[i].data, nal[i].size), "clip %d PPS", c);
+            if (type >= 32)
+                continue;
             HEVCSliceHeader h;
             const int ret = hevc_parse_slice_header(&params, nal[i].data, nal[i].size, &h);
-            if (h.first_slice) au++;
+            if (h.first_slice)
+                au++;
             CHECK(t < sizeof(kHEVCSlices) / sizeof(kHEVCSlices[0]), "more slices than FFmpeg saw");
-            if (t >= sizeof(kHEVCSlices) / sizeof(kHEVCSlices[0])) return;
+            if (t >= sizeof(kHEVCSlices) / sizeof(kHEVCSlices[0]))
+                return;
             const HEVCSliceTruth *e = &kHEVCSlices[t++];
             CHECK(!ret, "clip %d au %d slice parse", c, au);
             CHECK(e->clip == c && e->au == au && e->nal_type == h.nal_type && e->first == h.first_slice &&
                       e->dependent == h.dependent,
                   "clip %d au %d: nal %d/%d first %d/%d", c, au, h.nal_type, e->nal_type, h.first_slice, e->first);
-            if (h.dependent) continue;
+            if (h.dependent)
+                continue;
             CHECK(e->slice_type == h.slice_type && e->poc_lsb == h.poc_lsb && e->skip == h.skip_bits,
                   "clip %d au %d: slice_type %d/%d poc_lsb %d/%d skip %d/%d (FFmpeg's second)", c, au, h.slice_type,
                   e->slice_type, h.poc_lsb, e->poc_lsb, h.skip_bits, e->skip);
@@ -98,7 +107,10 @@ static void testSyntax(void)
           "default scaling lists");
 }
 
-enum { MAX_BUFFERS = 40 };
+enum {
+    MAX_BUFFERS = 40
+};
+
 typedef struct {
     uint8_t *va[MAX_BUFFERS + 1];
     uint64_t bytes[MAX_BUFFERS + 1];
@@ -110,7 +122,8 @@ static int fakeAlloc(void *ctx, uint64_t size, uint32_t *handle, void **va)
 {
     Fake *f = ctx;
     for (uint32_t h = 1; h <= MAX_BUFFERS; h++) {
-        if (f->va[h]) continue;
+        if (f->va[h])
+            continue;
         f->va[h] = calloc(1, size);
         f->bytes[h] = size;
         *handle = h;
@@ -133,8 +146,10 @@ static const char *fakeCheck(Fake *f, const TegraNVDECSubmit *s)
     uint64_t avail[TEGRA_NVDEC_MAX_ENTRIES] = {0};
     for (uint32_t i = 0; i < s->entry_count; i++) {
         const TegraNVDECEntry *e = &s->entries[i];
-        if (e->kind != TEGRA_NVDEC_ENTRY_RELOC) continue;
-        if (e->value > MAX_BUFFERS || !f->va[e->value] || e->offset > f->bytes[e->value]) return "bad relocation";
+        if (e->kind != TEGRA_NVDEC_ENTRY_RELOC)
+            continue;
+        if (e->value > MAX_BUFFERS || !f->va[e->value] || e->offset > f->bytes[e->value])
+            return "bad relocation";
         avail[i] = f->bytes[e->value] - e->offset;
     }
     return tegra_nvdec_check(s, avail);
@@ -165,7 +180,8 @@ static void *fakeDecoded(void *ctx, const H264Picture *p)
 static void fakeEmit(void *ctx, void *item)
 {
     Fake *f = ctx;
-    if (f->outCount < 64) f->out[f->outCount++] = (int)(intptr_t)item - 1;
+    if (f->outCount < 64)
+        f->out[f->outCount++] = (int)(intptr_t)item - 1;
 }
 
 static void fakeDiscard(void *ctx, void *item)
@@ -186,12 +202,14 @@ static int samples(const uint8_t *data, size_t size, uint8_t *buffer, uint8_t **
         const int type = (nal[i].data[0] >> 1) & 0x3f;
         const bool vcl = type < 32, starts = vcl && (nal[i].data[2] & 0x80);
         if ((starts && !pendingStart) || !count) {
-            if (count == max) return -1;
+            if (count == max)
+                return -1;
             sample[count] = buffer + used;
             sizes[count++] = 0;
         }
         pendingStart = !vcl && (pendingStart || starts);
-        if (vcl) pendingStart = false;
+        if (vcl)
+            pendingStart = false;
         uint8_t *p = buffer + used;
         p[0] = (uint8_t)(nal[i].size >> 24), p[1] = (uint8_t)(nal[i].size >> 16), p[2] = (uint8_t)(nal[i].size >> 8);
         p[3] = (uint8_t)nal[i].size;
@@ -215,7 +233,8 @@ static HEVCDecoder *decodeClip(Fake *f, const uint8_t *data, size_t size, int *a
     for (int i = 0; i < *aus; i++) {
         const int ret = hevc_decoder_decode(d, sample[i], sizes[i], 4, (void *)(intptr_t)i);
         CHECK(ret == 1, "access unit %d: hevc_decoder_decode %d", i, ret);
-        if (f->selftest) return d;
+        if (f->selftest)
+            return d;
     }
     hevc_decoder_flush(d);
     return d;
@@ -233,7 +252,8 @@ static void testDecode(void)
         CHECK(f.outCount == clip->shown && !f.discarded, "clip %c: %d out, %d discarded", clip->name, f.outCount,
               f.discarded);
         bool order = true;
-        for (int k = 0; k < f.outCount; k++) order &= clip->display[f.out[k]] == k;
+        for (int k = 0; k < f.outCount; k++)
+            order &= clip->display[f.out[k]] == k;
         CHECK(order, "clip %c: output order differs from FFmpeg's", clip->name);
         CHECK(!hevc_decoder_missing_refs(d), "clip %c: %u references missing", clip->name,
               hevc_decoder_missing_refs(d));
@@ -265,19 +285,45 @@ static void testDecode(void)
                 TegraNVDECSubmit s = good;
                 nvdec_hevc_pic_s *p = (nvdec_hevc_pic_s *)s.setup;
                 switch (i) {
-                case 0: p->enable_encryption = 1; break;
-                case 1: p->enable_histogram = 1; break;
-                case 2: p->ecdma_cfg.ecdma_enable = 1; break;
-                case 3: p->v3.slice_decoding_enable = 1; break;
-                case 4: p->disp_output_mode = 1; break;
-                case 5: p->framestride[0] = p->framestride[1] = 256; break;
-                case 6: p->pic_height_in_luma_samples = 4000; break;
-                case 7: p->colMvBuffersize /= 2; break;
-                case 8: p->HevcBsdCtrlOffset *= 4; break;
-                case 9: p->stream_len = 0x7fffffff; break;
-                case 10: p->curr_pic_idx = 16; break;
-                case 11: p->gptimer_timeout_value = 1u << 28; break;
-                case 12: p->pic_width_in_luma_samples = 64; break;
+                case 0:
+                    p->enable_encryption = 1;
+                    break;
+                case 1:
+                    p->enable_histogram = 1;
+                    break;
+                case 2:
+                    p->ecdma_cfg.ecdma_enable = 1;
+                    break;
+                case 3:
+                    p->v3.slice_decoding_enable = 1;
+                    break;
+                case 4:
+                    p->disp_output_mode = 1;
+                    break;
+                case 5:
+                    p->framestride[0] = p->framestride[1] = 256;
+                    break;
+                case 6:
+                    p->pic_height_in_luma_samples = 4000;
+                    break;
+                case 7:
+                    p->colMvBuffersize /= 2;
+                    break;
+                case 8:
+                    p->HevcBsdCtrlOffset *= 4;
+                    break;
+                case 9:
+                    p->stream_len = 0x7fffffff;
+                    break;
+                case 10:
+                    p->curr_pic_idx = 16;
+                    break;
+                case 11:
+                    p->gptimer_timeout_value = 1u << 28;
+                    break;
+                case 12:
+                    p->pic_width_in_luma_samples = 64;
+                    break;
                 default:  // slot 3's chroma 256 bytes before its surface's end
                     for (uint32_t k = 0; k < s.entry_count; k++)
                         if (s.entries[k].method == NVC5B0_SET_PICTURE_CHROMA_OFFSET0 + 12)
@@ -288,14 +334,16 @@ static void testDecode(void)
             printf("checker: %zu kinds of bad HEVC submit refused\n", kinds);
         }
         hevc_decoder_destroy(d);
-        for (int h = 1; h <= MAX_BUFFERS; h++) CHECK(!f.va[h], "clip %c: buffer %d not freed", clip->name, h);
+        for (int h = 1; h <= MAX_BUFFERS; h++)
+            CHECK(!f.va[h], "clip %c: buffer %d not freed", clip->name, h);
     }
 }
 
 static void dump(const char *name, const uint8_t *p, size_t n)
 {
     printf("static const uint8_t %s[%zu] = {", name, n);
-    for (size_t i = 0; i < n; i++) printf("%s0x%02x,", i % 16 ? "" : "\n    ", p[i]);
+    for (size_t i = 0; i < n; i++)
+        printf("%s0x%02x,", i % 16 ? "" : "\n    ", p[i]);
     printf("\n};\n");
 }
 
@@ -310,7 +358,8 @@ static int selftest(void)
     HEVCDecoder *d = decodeClip(&f, kHEVCClipKData, sizeof(kHEVCClipKData), &aus, false);
     const TegraNVDECSubmit *s = &f.last;
     const nvdec_hevc_pic_s *p = (const nvdec_hevc_pic_s *)s->setup;
-    if (gFailures || f.jobs != 1 || !f.va[3] || f.va[4]) return 1;
+    if (gFailures || f.jobs != 1 || !f.va[3] || f.va[4])
+        return 1;
     printf("// SPDX-License-Identifier: BSD-2-Clause-Patent\n"
            "// Generated by SwitchVideoDecoders/test/hevc_host --selftest from clip K (x265, 176x144 IDR, CTU 16); do "
            "not edit.\n");
@@ -334,7 +383,8 @@ static int selftest(void)
 
 int main(int argc, char **argv)
 {
-    if (argc > 1 && !strcmp(argv[1], "--selftest")) return selftest();
+    if (argc > 1 && !strcmp(argv[1], "--selftest"))
+        return selftest();
     testSyntax();
     testDecode();
     if (gFailures) {

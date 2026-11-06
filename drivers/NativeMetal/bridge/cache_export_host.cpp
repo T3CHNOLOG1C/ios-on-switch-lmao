@@ -20,12 +20,15 @@ static std::vector<uint8_t> slurp(const std::string &path)
 {
     std::vector<uint8_t> out;
     FILE *f = fopen(path.c_str(), "rb");
-    if (!f) return out;
+    if (!f)
+        return out;
     uint8_t b[4096];
-    for (size_t n; (n = fread(b, 1, sizeof b, f)) > 0;) out.insert(out.end(), b, b + n);
+    for (size_t n; (n = fread(b, 1, sizeof b, f)) > 0;)
+        out.insert(out.end(), b, b + n);
     fclose(f);
     return out;
 }
+
 static void spill(const std::string &path, const std::vector<uint8_t> &data)
 {
     FILE *f = fopen(path.c_str(), "wb");
@@ -65,7 +68,8 @@ int main(int argc, char **argv)
     CHECK(cacheexport::baked().empty());
     CHECK(cacheexport::importPack(blobPath.c_str(), dest) == (int)files.size());
     CHECK(cacheexport::baked().size() == files.size()); /* every entry of a pack read to its end is known as baked */
-    for (const auto &f : files) CHECK(slurp(source + "/" + f.path) == slurp(dest + "/" + f.path));
+    for (const auto &f : files)
+        CHECK(slurp(source + "/" + f.path) == slurp(dest + "/" + f.path));
     CHECK(cacheexport::importPack(blobPath.c_str(), dest) == 0); /* all present with their sizes: nothing rewritten */
     /* damaged packs: truncated, bad magic, flipped compressed byte */
     std::vector<uint8_t> bad = blob;

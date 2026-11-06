@@ -53,7 +53,8 @@ int main(int argc, char **argv)
             chain.push_back([dev newBufferWithLength:bytes options:MTLResourceStorageModeShared]);
             memset(chain.back().contents, 0, bytes);
         }
-        for (unsigned i = 0; i < bytes; i++) ((uint8_t *)chain[0].contents)[i] = uint8_t(i * 7 + 3);
+        for (unsigned i = 0; i < bytes; i++)
+            ((uint8_t *)chain[0].contents)[i] = uint8_t(i * 7 + 3);
         MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
                                                                                      width:64
                                                                                     height:64
@@ -98,7 +99,8 @@ int main(int argc, char **argv)
         const bool intact = !memcmp(chain[0].contents, chain[pairs].contents, bytes);
         printf("commits %u in %.3f ms, all complete after %.3f ms; chain %s\n", 2 * pairs, committed, done,
                intact ? "intact" : "BROKEN");
-        if (raw_metal_rates(line, sizeof line)) printf("rates: %s\n", line);
+        if (raw_metal_rates(line, sizeof line))
+            printf("rates: %s\n", line);
         return intact ? 0 : 1;
     }
 }

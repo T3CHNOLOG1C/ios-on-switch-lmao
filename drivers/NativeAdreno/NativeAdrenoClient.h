@@ -16,6 +16,7 @@ struct NativeAdrenoTransport {
     IOReturn (*call)(void *cookie, uint32_t method, const void *input, size_t input_size, void *output,
                      size_t output_size);
 };
+
 class NativeAdrenoClient final {
     NativeAdrenoTransport transport_{};
     NativeAdrenoAbiParams params_{};
@@ -47,7 +48,15 @@ public:
     IOReturn closeQueue(uint64_t queue);
     IOReturn setMetadata(uint64_t handle, const void *, uint32_t bytes);
     IOReturn getMetadata(uint64_t handle, void *out, uint32_t capacity, uint32_t *length);
-    bool isOpen() const { return open_; }
-    const NativeAdrenoAbiParams &info() const { return params_; }
+
+    bool isOpen() const
+    {
+        return open_;
+    }
+
+    const NativeAdrenoAbiParams &info() const
+    {
+        return params_;
+    }
 };
 #endif

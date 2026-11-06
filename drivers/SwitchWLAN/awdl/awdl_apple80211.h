@@ -49,6 +49,7 @@ enum {
     A80211_IOC_GATEWAY_ADDRESS = 450,
     A80211_IOC_UNICAST_INFRA_PEER_ADDRESS = 451,
 };
+
 enum {
     A80211_M_LINK_CHANGED = 4,
     A80211_M_PEER_STATE = 40,
@@ -57,15 +58,29 @@ enum {
     A80211_M_INTERFACE_STATE = 58,
     A80211_M_AWDL_CHAN_SEQ_CHANGED = 195,
 };
-enum { A80211_CAP_AWDL = 32, A80211_CAP_NAN = 72 };  // CARD_CAPABILITIES bit numbers wifip2pd tests
-enum { A80211_VIF_ROLE_AWDL = 6, A80211_VIF_ROLE_NAN = 9, A80211_VIF_ROLE_NAN_DATA = 10 };
+
+enum {
+    A80211_CAP_AWDL = 32,
+    A80211_CAP_NAN = 72
+};  // CARD_CAPABILITIES bit numbers wifip2pd tests
+
+enum {
+    A80211_VIF_ROLE_AWDL = 6,
+    A80211_VIF_ROLE_NAN = 9,
+    A80211_VIF_ROLE_NAN_DATA = 10
+};
+
 // apple80211_peer_presence_indication.state: which value means "present" is not settled by the binary (STATUS.md)
-enum { A80211_PEER_ABSENT = 0, A80211_PEER_PRESENT = 1 };
+enum {
+    A80211_PEER_ABSENT = 0,
+    A80211_PEER_PRESENT = 1
+};
 
 // ---- payloads (wifip2pd's Swift metadata names; sizes checked against its call sites) ------------------------------
 struct a80211_channel {
     uint32_t version, channel, flags;
 };
+
 struct a80211_virt_if_create {  // 32
     uint32_t unit;
     uint8_t mac[6];
@@ -73,34 +88,42 @@ struct a80211_virt_if_create {  // 32
     uint32_t role;
     char bsd_name[16];
 };
+
 struct a80211_virt_if_delete {  // 20
     uint32_t version;
     char name[16];
 };
+
 struct a80211_awdl_sync_enabled {  // 12
     uint32_t version, flags, enabled;
 };
+
 struct a80211_awdl_strategy {  // 24
     uint32_t version, strategy, param;
     uint64_t last_state_change;
 };
+
 struct a80211_awdl_oper_mode {
     uint32_t version, mode;
 };
+
 struct a80211_awdl_social_time_slots {
     uint32_t version;
     uint8_t enabled;
 };
+
 struct a80211_awdl_preferred_channels {
     uint32_t version;
     uint16_t preferred, master, secondary_preferred;
 };
+
 struct a80211_awdl_sync_channel_sequence {  // 400
     uint32_t version;
     uint8_t flags, length, encoding, step_count, duplicate_count, fill_chan_num;
     struct a80211_channel channel[32];
     uint32_t strategy;
 };
+
 struct a80211_awdl_peer_traffic_registration {  // 184
     uint32_t version;
     uint8_t address[6];
@@ -111,6 +134,7 @@ struct a80211_awdl_peer_traffic_registration {  // 184
     uint32_t active, rt_peer_indication;
     uint16_t desired_channel, desired_sec_channel, port;
 };
+
 struct a80211_peer_service_request {  // 20 + data
     uint32_t version;
     uint8_t peer[6];
@@ -118,6 +142,7 @@ struct a80211_peer_service_request {  // 20 + data
     uint32_t token;
     uint16_t data_len, expect_fragmented_response;
 };
+
 struct a80211_awdl_peer_advert {  // 44: awdl_peer_advert_add
     uint16_t aw_counter, tx_counter, tx_delay, period_tu, aw_cmn_length, aw_ext_length, aw_period;
     int8_t rssi;
@@ -125,18 +150,22 @@ struct a80211_awdl_peer_advert {  // 44: awdl_peer_advert_add
     uint32_t ms, self_metrics, top_master_metrics;
     uint8_t top_master[6], addr[6];
 };
+
 struct a80211_userspace_p2p_options {  // 16
     uint32_t version;
     uint64_t flags;
 };
+
 struct a80211_ppp_done {  // 12
     uint32_t version;
     uint8_t peer[6];
 };
+
 struct a80211_umi_data {  // 16
     uint32_t version, option;
     uint8_t peer[6];
 };
+
 struct a80211_peer_presence {  // 68
     uint8_t address[6];
     uint16_t handle;
@@ -150,6 +179,7 @@ struct a80211_peer_presence {  // 68
 #define A80211_RING_MAGIC_PAD   0x50u
 #define A80211_RING_HEADER      0x30u
 #define A80211_RING_MAX_PAYLOAD 0xff0u
+
 struct a80211_ring_header {
     uint32_t magic;
     uint8_t reserved[0x14];
@@ -157,12 +187,14 @@ struct a80211_ring_header {
     uint32_t event;
     char ifname[16];
 };
+
 struct a80211_ring {
     uint8_t *buf;              // the region userland maps read-only (memory type 1)
     uint32_t size;             // a multiple of 4
     volatile uint32_t *state;  // the region userland maps read-write (type 2): [0] read offset, [1] write offset
     uint32_t posted, dropped;
 };
+
 int a80211_ring_init(struct a80211_ring *r, void *buf, uint32_t size, volatile uint32_t *state);
 // Append one event. 0, or -1 when it does not fit (the event is dropped and counted: userland is not reading).
 int a80211_ring_post(struct a80211_ring *r, uint32_t event, const char *ifname, const void *payload, uint32_t len);
@@ -179,6 +211,7 @@ struct a80211_awdl_ops {
     void (*post)(void *ctx, uint32_t event, const void *payload, uint32_t len);
     void (*log)(void *ctx, const char *line);
 };
+
 struct a80211_awdl {
     struct awdl_core *core;
     struct a80211_awdl_ops ops;
@@ -192,6 +225,7 @@ struct a80211_awdl {
     uint16_t presence_handle;
     uint32_t unknown_seen[16];  // request types answered EOPNOTSUPP, logged once each
 };
+
 void a80211_awdl_init(struct a80211_awdl *f, struct awdl_core *core, const struct a80211_awdl_ops *ops,
                       const char *ifname, const char *parent, const uint8_t caps[12]);
 // One request. `data` holds `*len` bytes (copied in for a set; room for `capacity` bytes for a get, *len updated);
@@ -212,11 +246,13 @@ enum {
     A80211_IFF_MULTICAST = 0x8000,
     A80211_IFM_AVALID = 0x1,
 };
+
 struct a80211_awdl_down_if {
     uint16_t if_flags;
     uint32_t mtu;
     uint8_t lladdr[6];
 };
+
 // 0, or -1 when `station` is not a unicast address. The link-layer address is the station's made locally
 // administered, never equal to the station's.
 int a80211_awdl_down_if(const uint8_t station[6], struct a80211_awdl_down_if *out);

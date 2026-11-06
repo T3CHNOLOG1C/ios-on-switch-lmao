@@ -54,6 +54,7 @@ enum a64x_kind {
     A64X_KIND_ARM64,      /* plain arm64 (ALL/V8): only what the A57 lacks, no PAC rewrites */
     A64X_KIND_MARKED,     /* __TEXT,__a64x_target or the reserved marker: built or translated for this core */
 };
+
 const char *a64x_kind_name(enum a64x_kind kind);
 enum a64x_kind a64x_kind_of(uint32_t cputype, uint32_t cpusubtype, int marked);
 
@@ -96,6 +97,7 @@ struct a64x_slice {
     uint64_t offset, size;
     uint32_t cputype, cpusubtype;
 };
+
 int a64x_macho_slices(const uint8_t *file, size_t size, struct a64x_slice *out, int max);
 
 #define A64X_XLATE_PAGE 4096u /* the translator's page: the kernel's A64X_PAGE */

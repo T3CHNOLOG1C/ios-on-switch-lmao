@@ -96,7 +96,8 @@ static Decoder *storage(CMBaseObjectRef object)
 static double ticksToMs(uint64_t ticks)
 {
     static mach_timebase_info_data_t base;
-    if (!base.denom) mach_timebase_info(&base);
+    if (!base.denom)
+        mach_timebase_info(&base);
     return (double)ticks * base.numer / base.denom / 1e6;
 }
 
@@ -123,9 +124,11 @@ static OSStatus startSoftware(Decoder *d, VTVideoDecoderSession session, CMVideo
         software ? CMBaseObjectGetVTable(VTVideoDecoderGetCMBaseObject(software)) : NULL;
     if (!status && (!vtable || !vtable->decoderClass || !vtable->decoderClass->startSession))
         status = kVTCouldNotFindVideoDecoderErr;
-    if (!status) status = vtable->decoderClass->startSession(software, session, format);
+    if (!status)
+        status = vtable->decoderClass->startSession(software, session, format);
     if (status) {
-        if (software) CFRelease(software);
+        if (software)
+            CFRelease(software);
         os_log_error(gLog, "AVD: %{public}s: no software %{public}s decoder either (%d)", why,
                      d->codec == kCMVideoCodecType_HEVC ? "HEVC" : "H.264", (int)status);
         return status;
@@ -157,7 +160,8 @@ static bool presentPicture(Decoder *d, const H264Picture *picture, CVPixelBuffer
     CVPixelBufferLockBaseAddress(image, 0);  // a write lock, so the surface's seed moves as a CPU write moves it
     const int err = nvdec_present(d->client, &p);
     CVPixelBufferUnlockBaseAddress(image, 0);
-    if (!err) return true;
+    if (!err)
+        return true;
     if (err == kIOReturnUnsupported || err == kIOReturnBadArgument) {
         d->present = false;
         os_log_error(gLog,
@@ -177,10 +181,12 @@ static void *decoded(void *ctx, const H264Picture *picture)
 {
     Decoder *d = ctx;
     Output *out = calloc(1, sizeof(*out));
-    if (!out) return NULL;
+    if (!out)
+        return NULL;
     out->frame = picture->token;
     out->status = picture->status ? kVTVideoDecoderBadDataErr : noErr;
-    if (picture->status) d->errors++;
+    if (picture->status)
+        d->errors++;
     CVPixelBufferPoolRef pool = d->session ? VTDecoderSessionGetPixelBufferPool(d->session) : NULL;
     if (!pool || CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, pool, &out->image) != kCVReturnSuccess) {
         out->status = kVTVideoDecoderMalfunctionErr;
@@ -227,14 +233,16 @@ static void emit(void *ctx, void *item)
     if (d->session)
         VTDecoderSessionEmitDecodedFrame(d->session, out->frame, out->status,
                                          out->image ? 0 : kVTDecodeInfo_FrameDropped, out->image);
-    if (out->image) CVPixelBufferRelease(out->image);
+    if (out->image)
+        CVPixelBufferRelease(out->image);
     free(out);
 }
 
 static void discard(void *ctx, void *item)  // no_output_of_prior_pics: answered, without a picture
 {
     Output *out = item;
-    if (out->image) CVPixelBufferRelease(out->image);
+    if (out->image)
+        CVPixelBufferRelease(out->image);
     out->image = NULL;
     emit(ctx, out);
 }
@@ -243,14 +251,17 @@ static int bufferAlloc(void *ctx, uint64_t size, uint32_t *handle, void **va)
 {
     return nvdec_alloc(((Decoder *)ctx)->client, size, handle, va);
 }
+
 static void bufferFree(void *ctx, uint32_t handle)
 {
     nvdec_free(((Decoder *)ctx)->client, handle);
 }
+
 static int jobSubmit(void *ctx, const TegraNVDECSubmit *submit, uint32_t *fence)
 {
     return nvdec_submit(((Decoder *)ctx)->client, submit, fence);
 }
+
 static int jobWait(void *ctx, const TegraNVDECWait *wait)
 {
     return nvdec_wait(((Decoder *)ctx)->client, wait);
@@ -260,24 +271,34 @@ static int jobWait(void *ctx, const TegraNVDECWait *wait)
 static CFTypeRef colourTag(CMFormatDescriptionRef format, CFStringRef key, int code, int kind, uint32_t height)
 {
     CFTypeRef tag = CMFormatDescriptionGetExtension(format, key);
-    if (tag) return CFRetain(tag);
+    if (tag)
+        return CFRetain(tag);
     switch (kind) {
     case 0:  // matrix_coefficients
-        if (code == 1) return CFRetain(kCVImageBufferYCbCrMatrix_ITU_R_709_2);
-        if (code == 5 || code == 6) return CFRetain(kCVImageBufferYCbCrMatrix_ITU_R_601_4);
-        if (code == 9) return CFRetain(kCVImageBufferYCbCrMatrix_ITU_R_2020);
+        if (code == 1)
+            return CFRetain(kCVImageBufferYCbCrMatrix_ITU_R_709_2);
+        if (code == 5 || code == 6)
+            return CFRetain(kCVImageBufferYCbCrMatrix_ITU_R_601_4);
+        if (code == 9)
+            return CFRetain(kCVImageBufferYCbCrMatrix_ITU_R_2020);
         return CFRetain(height >= 720 ? kCVImageBufferYCbCrMatrix_ITU_R_709_2 : kCVImageBufferYCbCrMatrix_ITU_R_601_4);
     case 1:  // colour_primaries
-        if (code == 1) return CFRetain(kCVImageBufferColorPrimaries_ITU_R_709_2);
-        if (code == 5) return CFRetain(kCVImageBufferColorPrimaries_EBU_3213);
-        if (code == 6) return CFRetain(kCVImageBufferColorPrimaries_SMPTE_C);
-        if (code == 9) return CFRetain(kCVImageBufferColorPrimaries_ITU_R_2020);
+        if (code == 1)
+            return CFRetain(kCVImageBufferColorPrimaries_ITU_R_709_2);
+        if (code == 5)
+            return CFRetain(kCVImageBufferColorPrimaries_EBU_3213);
+        if (code == 6)
+            return CFRetain(kCVImageBufferColorPrimaries_SMPTE_C);
+        if (code == 9)
+            return CFRetain(kCVImageBufferColorPrimaries_ITU_R_2020);
         return NULL;
     default:  // transfer_characteristics
         if (code == 1 || code == 6 || code == 14 || code == 15)
             return CFRetain(kCVImageBufferTransferFunction_ITU_R_709_2);
-        if (code == 16) return CFRetain(kCVImageBufferTransferFunction_SMPTE_ST_2084_PQ);
-        if (code == 18) return CFRetain(kCVImageBufferTransferFunction_ITU_R_2100_HLG);
+        if (code == 16)
+            return CFRetain(kCVImageBufferTransferFunction_SMPTE_ST_2084_PQ);
+        if (code == 18)
+            return CFRetain(kCVImageBufferTransferFunction_ITU_R_2100_HLG);
         return NULL;
     }
 }
@@ -296,18 +317,22 @@ static int loadAvcC(Decoder *d, CFDataRef avcC)
 {
     const uint8_t *p = CFDataGetBytePtr(avcC);
     const size_t size = (size_t)CFDataGetLength(avcC);
-    if (size < 7 || p[0] != 1) return -1;
+    if (size < 7 || p[0] != 1)
+        return -1;
     d->lengthSize = (p[4] & 3) + 1;
     size_t pos = 5;
     for (unsigned list = 0; list < 2; list++) {
-        if (pos >= size) return -1;
+        if (pos >= size)
+            return -1;
         unsigned count = list ? p[pos] : p[pos] & 0x1f;
         pos++;
         while (count--) {
-            if (pos + 2 > size) return -1;
+            if (pos + 2 > size)
+                return -1;
             const size_t n = (size_t)p[pos] << 8 | p[pos + 1];
             pos += 2;
-            if (pos + n > size || h264_decoder_parameter_set(d->h264, p + pos, n)) return -1;
+            if (pos + n > size || h264_decoder_parameter_set(d->h264, p + pos, n))
+                return -1;
             pos += n;
         }
     }
@@ -334,7 +359,8 @@ static CFDataRef copyAtom(CMVideoFormatDescriptionRef format, CFStringRef name)
 static void setAlignment(const Decoder *d, CFMutableDictionaryRef attributes)
 {
     setNumber(attributes, kCVPixelBufferBytesPerRowAlignmentKey, d->present ? 256 : 64);
-    if (d->present) setNumber(attributes, kCVPixelBufferPlaneAlignmentKey, 256);
+    if (d->present)
+        setNumber(attributes, kCVPixelBufferPlaneAlignmentKey, 256);
 }
 
 static void setAttributes(Decoder *d, VTVideoDecoderSession session, bool fullRange, OSStatus *status)
@@ -399,18 +425,22 @@ static int loadHvcC(Decoder *d, CFDataRef hvcC)
 {
     const uint8_t *p = CFDataGetBytePtr(hvcC);
     const size_t size = (size_t)CFDataGetLength(hvcC);
-    if (size < 23 || p[0] != 1) return -1;
+    if (size < 23 || p[0] != 1)
+        return -1;
     d->lengthSize = (p[21] & 3) + 1;
     size_t pos = 23;
     for (unsigned arrays = p[22]; arrays--;) {
-        if (pos + 3 > size) return -1;
+        if (pos + 3 > size)
+            return -1;
         unsigned count = (unsigned)p[pos + 1] << 8 | p[pos + 2];
         pos += 3;
         while (count--) {
-            if (pos + 2 > size) return -1;
+            if (pos + 2 > size)
+                return -1;
             const size_t n = (size_t)p[pos] << 8 | p[pos + 1];
             pos += 2;
-            if (pos + n > size || hevc_decoder_parameter_set(d->hevc, p + pos, n)) return -1;
+            if (pos + n > size || hevc_decoder_parameter_set(d->hevc, p + pos, n))
+                return -1;
             pos += n;
         }
     }
@@ -520,11 +550,14 @@ static OSStatus decodeFrame(VTVideoDecoderRef ref, VTVideoDecoderFrame frame, CM
                             VTDecodeFrameFlags flags, VTDecodeInfoFlags *info)
 {
     Decoder *d = storage(ref);
-    if (d->software) return softwareVTable(d)->decoderClass->decodeFrame(d->software, frame, sample, flags, info);
-    if (info) *info = 0;
+    if (d->software)
+        return softwareVTable(d)->decoderClass->decodeFrame(d->software, frame, sample, flags, info);
+    if (info)
+        *info = 0;
     CMBlockBufferRef block = CMSampleBufferGetDataBuffer(sample);
     const size_t size = block ? CMBlockBufferGetDataLength(block) : 0;
-    if (!size) return kVTVideoDecoderBadDataErr;
+    if (!size)
+        return kVTVideoDecoderBadDataErr;
     char *data = NULL, *copy = NULL;
     if (!CMBlockBufferIsRangeContiguous(block, 0, size) ||
         CMBlockBufferGetDataPointer(block, 0, NULL, NULL, &data) != kCMBlockBufferNoErr) {
@@ -553,7 +586,8 @@ static OSStatus decodeFrame(VTVideoDecoderRef ref, VTVideoDecoderFrame frame, CM
     // frame has not been answered yet.
     const OSStatus error = ret <= -2 ? kVTVideoDecoderMalfunctionErr : ret < 0 ? kVTVideoDecoderBadDataErr : noErr;
     const bool answered = error && (d->vp9 || d->hevc) && d->session;
-    if (answered) VTDecoderSessionEmitDecodedFrame(d->session, frame, error, 0, NULL);
+    if (answered)
+        VTDecoderSessionEmitDecodedFrame(d->session, frame, error, 0, NULL);
     pthread_mutex_unlock(&d->lock);
     free(copy);
     if (ret <= -2) {
@@ -578,8 +612,10 @@ static OSStatus copySupportedPropertyDictionary(VTVideoDecoderRef ref, CFDiction
         software ? CFDictionaryCreateMutableCopy(kCFAllocatorDefault, 0, software)
                  : CFDictionaryCreateMutable(kCFAllocatorDefault, 0, &kCFTypeDictionaryKeyCallBacks,
                                              &kCFTypeDictionaryValueCallBacks);
-    if (software) CFRelease(software);
-    if (!supported) return kVTAllocationFailedErr;
+    if (software)
+        CFRelease(software);
+    if (!supported)
+        return kVTAllocationFailedErr;
     const void *keys[] = {kVTPropertyTypeKey, kVTPropertyReadWriteStatusKey};
     const void *values[] = {kVTPropertyType_Boolean, kVTPropertyReadWriteStatus_ReadOnly};
     CFDictionaryRef description = CFDictionaryCreate(kCFAllocatorDefault, keys, values, 2,
@@ -602,7 +638,8 @@ static Boolean canAcceptFormatDescription(VTVideoDecoderRef ref, CMVideoFormatDe
     if (d->hevc) {  // the same parameter sets keep this instance
         CFDataRef hvcC = copyAtom(format, CFSTR("hvcC"));
         const Boolean same = hvcC && d->avcC && CFEqual(hvcC, d->avcC);
-        if (hvcC) CFRelease(hvcC);
+        if (hvcC)
+            CFRelease(hvcC);
         return same;
     }
     if (d->vp9) {  // a new size or profile gets a fresh decoder; frames within one session may change size
@@ -610,12 +647,14 @@ static Boolean canAcceptFormatDescription(VTVideoDecoderRef ref, CMVideoFormatDe
         CFDataRef vpcC = copyAtom(format, CFSTR("vpcC"));
         const Boolean same = (uint32_t)size.width == d->width && (uint32_t)size.height == d->height &&
                              (vpcC == d->avcC || (vpcC && d->avcC && CFEqual(vpcC, d->avcC)));
-        if (vpcC) CFRelease(vpcC);
+        if (vpcC)
+            CFRelease(vpcC);
         return same;
     }
     CFDataRef avcC = copyAvcC(format);
     const Boolean same = avcC && d->avcC && CFEqual(avcC, d->avcC);
-    if (avcC) CFRelease(avcC);
+    if (avcC)
+        CFRelease(avcC);
     return same;
 }
 
@@ -627,8 +666,10 @@ static OSStatus finishDelayedFrames(VTVideoDecoderRef ref)
         return software->finishDelayedFrames ? software->finishDelayedFrames(d->software) : noErr;
     }
     pthread_mutex_lock(&d->lock);
-    if (d->h264) h264_decoder_flush(d->h264);  // VP9 frames go out as they are decoded
-    if (d->hevc) hevc_decoder_flush(d->hevc);
+    if (d->h264)
+        h264_decoder_flush(d->h264);  // VP9 frames go out as they are decoded
+    if (d->hevc)
+        hevc_decoder_flush(d->hevc);
     pthread_mutex_unlock(&d->lock);
     return noErr;
 }
@@ -656,15 +697,20 @@ static void finalize(CMBaseObjectRef ref)
                "%.2f ms out (%u pictures by VIC, %u by the CPU)",
                d->width, d->height, getprogname(), d->frames, d->errors, ticksToMs(d->decodeTicks) / d->frames,
                ticksToMs(d->copyTicks) / d->frames, d->presented, d->copied);
-    if (d->software) CFRelease(d->software);
+    if (d->software)
+        CFRelease(d->software);
     h264_decoder_destroy(d->h264);  // frees its buffers through the client, so before closing it
     vp9_decoder_destroy(d->vp9);
     hevc_decoder_destroy(d->hevc);
     nvdec_close(d->client);
-    if (d->avcC) CFRelease(d->avcC);
-    if (d->matrix) CFRelease(d->matrix);
-    if (d->primaries) CFRelease(d->primaries);
-    if (d->transfer) CFRelease(d->transfer);
+    if (d->avcC)
+        CFRelease(d->avcC);
+    if (d->matrix)
+        CFRelease(d->matrix);
+    if (d->primaries)
+        CFRelease(d->primaries);
+    if (d->transfer)
+        CFRelease(d->transfer);
     pthread_mutex_destroy(&d->lock);
 }
 
@@ -727,7 +773,8 @@ static const VTPluginDecoderVTable kVTable = {NULL, &kBaseClass, &kDecoderClass}
 
 static OSStatus createInstance(FourCharCode codec, CFAllocatorRef allocator, VTVideoDecoderRef *out)
 {
-    if (tSoftwareLookup) return kVTCouldNotFindVideoDecoderErr;  // VideoToolbox moves on to the next decoder
+    if (tSoftwareLookup)
+        return kVTCouldNotFindVideoDecoderErr;  // VideoToolbox moves on to the next decoder
     int error = 0;
     NVDECClient *client = nvdec_open(&error);
     const uint32_t needed = codec == kCMVideoCodecType_VP9    ? 1u << TEGRA_NVDEC_CODEC_VP9
@@ -784,7 +831,9 @@ static OSStatus createInstance(FourCharCode codec, CFAllocatorRef allocator, VTV
 #define kCheckDecoderID      CFSTR("com.brunostjohn.switch.avd.check.vp09")
 #define kCheckHEVCDecoderID  CFSTR("com.brunostjohn.switch.avd.check.hvc1")
 
-enum { kVerdictWaits = 10 };  // the kernel's 3 s waits for a verdict: a check that gives none in 30 s is stuck
+enum {
+    kVerdictWaits = 10
+};  // the kernel's 3 s waits for a verdict: a check that gives none in 30 s is stuck
 
 static bool gCheckOpen;  // the private registration makes instances (atomic)
 static bool gClaimer;    // this process runs the check (atomic)
@@ -828,19 +877,22 @@ static void registerHEVC(void)
     const OSStatus status = VTRegisterVideoDecoderWithInfo(kCMVideoCodecType_HEVC, info, createInstance);
     CFRelease(info);
     CFRelease(number);
-    if (status) os_log_error(gLog, "AVD: VTRegisterVideoDecoderWithInfo('hvc1') failed: %d", (int)status);
+    if (status)
+        os_log_error(gLog, "AVD: VTRegisterVideoDecoderWithInfo('hvc1') failed: %d", (int)status);
 }
 
 static void registerVP9(void)
 {
     const OSStatus status = VTRegisterVideoDecoder(kCMVideoCodecType_VP9, createInstance);
-    if (status) os_log_error(gLog, "AVD: VTRegisterVideoDecoder('vp09') failed: %d", (int)status);
+    if (status)
+        os_log_error(gLog, "AVD: VTRegisterVideoDecoder('vp09') failed: %d", (int)status);
 }
 
 // The private registration's factory: refuses outside an open check, so VideoToolbox takes the next decoder.
 static OSStatus createCheckInstance(FourCharCode codec, CFAllocatorRef allocator, VTVideoDecoderRef *out)
 {
-    if (!__atomic_load_n(&gCheckOpen, __ATOMIC_ACQUIRE)) return kVTCouldNotFindVideoDecoderErr;
+    if (!__atomic_load_n(&gCheckOpen, __ATOMIC_ACQUIRE))
+        return kVTCouldNotFindVideoDecoderErr;
     if (!__atomic_load_n(&gClaimer, __ATOMIC_ACQUIRE) && !tSoftwareLookup) {
         static int logged;  // shows that a remoted check session found this registration
         if (!__atomic_exchange_n(&logged, 1, __ATOMIC_RELAXED))
@@ -919,7 +971,8 @@ static void awaitVerdict(void *context)
                 return;
             }
         }
-        if (state != TEGRA_NVDEC_CHECK_RUNNING && state != TEGRA_NVDEC_CHECK_UNCLAIMED) break;
+        if (state != TEGRA_NVDEC_CHECK_RUNNING && state != TEGRA_NVDEC_CHECK_UNCLAIMED)
+            break;
         state = nvdec_check_wait(check->probe);
         waits++;
     }
@@ -941,7 +994,8 @@ __attribute__((visibility("default"))) void AVDRegister(void);
 void AVDRegister(void)
 {
     gLog = os_log_create("com.brunostjohn.switch.avd", "decoder");
-    if (!nvdec_service_present()) return;  // switch-no-nvdec, or NVDEC did not prove itself at boot: nothing changes
+    if (!nvdec_service_present())
+        return;  // switch-no-nvdec, or NVDEC did not prove itself at boot: nothing changes
     int error = 0;
     NVDECClient *probe = nvdec_open(&error);
     if (!probe) {
@@ -950,7 +1004,8 @@ void AVDRegister(void)
         return;
     }
     const OSStatus status = VTRegisterVideoDecoder(kCMVideoCodecType_H264, createInstance);
-    if (status) os_log_error(gLog, "AVD: VTRegisterVideoDecoder('avc1') failed: %d", (int)status);
+    if (status)
+        os_log_error(gLog, "AVD: VTRegisterVideoDecoder('avc1') failed: %d", (int)status);
     // VP9 and HEVC need the kernel's N3 picture (it matched libvpx / FFmpeg this boot) and then this boot's clip check.
     const uint32_t proven = nvdec_codecs(probe);
     const bool vp9Proven = proven & (1u << TEGRA_NVDEC_CODEC_VP9), hevcProven = proven & (1u << TEGRA_NVDEC_CODEC_HEVC);
@@ -959,14 +1014,16 @@ void AVDRegister(void)
     if (claimed || state == TEGRA_NVDEC_CHECK_RUNNING) {
         Check *check = calloc(1, sizeof(*check));
         if (!check) {
-            if (claimed) nvdec_check_report(probe, false, false, false);
+            if (claimed)
+                nvdec_check_report(probe, false, false, false);
             nvdec_close(probe);
             return;
         }
         check->probe = probe;
         check->vp9 = vp9Proven && !registerCheckDecoder(kCMVideoCodecType_VP9);
         check->hevc = hevcProven && !registerCheckDecoder(kCMVideoCodecType_HEVC);
-        if (!claimed) __atomic_store_n(&gCheckOpen, true, __ATOMIC_RELEASE);  // sessions remoted here by the claimer
+        if (!claimed)
+            __atomic_store_n(&gCheckOpen, true, __ATOMIC_RELEASE);  // sessions remoted here by the claimer
         // Off the registry's thread: the check's sessions look the registry up once this registration returns.
         dispatch_async_f(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), check, claimed ? selfTest : awaitVerdict);
         return;

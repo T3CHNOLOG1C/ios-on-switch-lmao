@@ -11,16 +11,20 @@ using GetServiceFn = unsigned (*)(unsigned, void *);
 int main()
 {
     void *iokit = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_NOW | RTLD_LOCAL);
-    if (!iokit) return 1;
+    if (!iokit)
+        return 1;
     auto matching = (MatchingFn)dlsym(iokit, "IOServiceMatching");
     auto getService = (GetServiceFn)dlsym(iokit, "IOServiceGetMatchingService");
-    if (!matching || !getService) return 2;
+    if (!matching || !getService)
+        return 2;
     // The service is published a few seconds into boot (after the GPU is powered); poll for up to two minutes.
     unsigned port = 0;
     for (unsigned i = 0; i < 240 && !port; ++i) {
         port = getService(0, matching("IOAcceleratorES"));
-        if (!port) usleep(500000);
+        if (!port)
+            usleep(500000);
     }
-    if (!port) return 3;
+    if (!port)
+        return 3;
     return adrenoUserTest(port, "adrenoprobed") >= 0 ? 0 : 4;
 }

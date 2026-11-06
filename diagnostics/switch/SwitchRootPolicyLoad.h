@@ -22,9 +22,11 @@ int switch_root_policy_load(void)
     vm_size_t sizes[2] = {0, 0}, index_size = 0;
     unsigned code = 400, disk = 0;
     int active = 0;
-    if (root_policy_attempted) return root_policies ? 0 : 400;
+    if (root_policy_attempted)
+        return root_policies ? 0 : 400;
     root_policy_attempted = 1;
-    if (source_ready(&reader) != SWITCH_BLOCK_OK) return 401;
+    if (source_ready(&reader) != SWITCH_BLOCK_OK)
+        return 401;
     if (kmem_alloc(kernel_map, &descriptors, PAGE_SIZE, KMA_KOBJECT | KMA_DATA | KMA_ZERO, VM_KERN_MEMORY_FILE) !=
         KERN_SUCCESS)
         return 402;
@@ -67,7 +69,8 @@ int switch_root_policy_load(void)
         SHA256_Init(&hash);
         for (uint32_t offset = 0; offset < e->bytes;) {
             uint32_t n = (uint32_t)e->bytes - offset;
-            if (n > FILES_BUFFER) n = FILES_BUFFER;
+            if (n > FILES_BUFFER)
+                n = FILES_BUFFER;
             uint8_t *dest = (uint8_t *)storage[disk] + offset;
             if (switch_fat_read_indexed(&volume, &file, offset, dest, n)) {
                 code = 409;
@@ -75,7 +78,8 @@ int switch_root_policy_load(void)
             }
             SHA256_Update(&hash, dest, n);
             offset += n;
-            if (!(offset & ((1u << 20) - 1)) || offset == e->bytes) switch_root_progress(2, disk, offset, e->bytes);
+            if (!(offset & ((1u << 20) - 1)) || offset == e->bytes)
+                switch_root_progress(2, disk, offset, e->bytes);
         }
         uint8_t actual[32];
         SHA256_Final(actual, &hash);
@@ -122,15 +126,19 @@ int switch_root_policy_load(void)
     __sync_synchronize();
     root_policies = (const struct switch_root_policy *)descriptors;
     switch_root_progress(4, 0, switch_root_expected[0].bytes + switch_root_expected[1].bytes,
-                           switch_root_expected[0].bytes + switch_root_expected[1].bytes);
+                         switch_root_expected[0].bytes + switch_root_expected[1].bytes);
     return 0;
 fail:
-    if (active) (void)source_end(&reader);
+    if (active)
+        (void)source_end(&reader);
     reader.offline = 1;
-    if (index) kmem_free(kernel_map, index, index_size);
+    if (index)
+        kmem_free(kernel_map, index, index_size);
     for (unsigned i = 0; i < 2; i++)
-        if (storage[i]) kmem_free(kernel_map, storage[i], sizes[i]);
-    if (descriptors) kmem_free(kernel_map, descriptors, PAGE_SIZE);
+        if (storage[i])
+            kmem_free(kernel_map, storage[i], sizes[i]);
+    if (descriptors)
+        kmem_free(kernel_map, descriptors, PAGE_SIZE);
     switch_root_progress(0x80000000u | code, disk, 0, 0);
     return (int)code;
 }

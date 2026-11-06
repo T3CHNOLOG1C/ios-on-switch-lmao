@@ -22,6 +22,7 @@ struct NativeAdrenoGpuBoard {
     IOReturn (*programSmmu)(void *); /* streams + native4K context enabled */
     IOReturn (*quiesce)(void *);     /* stop/fault masters after a failure */
 };
+
 struct NativeAdrenoGpuConfig {
     NativeAdrenoRingIo mmio;     /* powered GPU register window */
     NativeAdrenoRingCache cache; /* PoC publication for ring/fence */
@@ -37,7 +38,11 @@ struct NativeAdrenoGpuConfig {
     uint64_t sqe_iova; /* verified SQE microcode IOVA */
     uint64_t pwrup_reglist_iova;
 };
-enum { NativeAdrenoGpuSteps = 6 };
+
+enum {
+    NativeAdrenoGpuSteps = 6
+};
+
 class NativeAdrenoGpu final {
     NativeAdrenoGpuBoard board_{};
     NativeAdrenoRing ring_;
@@ -58,14 +63,46 @@ public:
     IOReturn start(const NativeAdrenoGpuBoard *, const NativeAdrenoGpuConfig *);
     /* Only a ready GPU may be stopped; requires every submission observed. */
     IOReturn stop();
-    bool ready() const { return ready_; }
-    bool failed() const { return failed_; }
-    bool quiesced() const { return quiesced_; }
-    uint32_t stepsCompleted() const { return steps_; }
-    uint32_t startFence() const { return fence_; }
-    NativeAdrenoRing *ring() { return ready_ ? &ring_ : nullptr; }
-    NativeAdrenoTimer *timer() { return ready_ && timerTimeOk_ ? &timer_ : nullptr; }
-    NativeAdrenoIrq *interrupts() { return ready_ ? &irq_ : nullptr; }
+
+    bool ready() const
+    {
+        return ready_;
+    }
+
+    bool failed() const
+    {
+        return failed_;
+    }
+
+    bool quiesced() const
+    {
+        return quiesced_;
+    }
+
+    uint32_t stepsCompleted() const
+    {
+        return steps_;
+    }
+
+    uint32_t startFence() const
+    {
+        return fence_;
+    }
+
+    NativeAdrenoRing *ring()
+    {
+        return ready_ ? &ring_ : nullptr;
+    }
+
+    NativeAdrenoTimer *timer()
+    {
+        return ready_ && timerTimeOk_ ? &timer_ : nullptr;
+    }
+
+    NativeAdrenoIrq *interrupts()
+    {
+        return ready_ ? &irq_ : nullptr;
+    }
 
 private:
     bool timerTimeOk_ = false;

@@ -8,13 +8,16 @@ extern "C" volatile uint32_t native_adreno_pool_stats[8], native_adreno_pool_sta
 extern "C" volatile uint32_t native_adreno_wc_enabled, native_adreno_pool_wc;
 static const uint64_t kIovas[GpuBufferCount] = {GpuSqeIova, GpuRingIova, GpuMemptrsIova, GpuPwrupIova, GpuScratchIova};
 static const size_t kBytes[GpuBufferCount] = {GpuSqeBytes, GpuRingBytes, GpuPageBytes, GpuPageBytes, GpuPageBytes};
+
 IOReturn NativeAdrenoGpuContext::bringUp(const ArmSmmu4KIo *io, unsigned bank, unsigned asid, const unsigned slots[2],
                                          const uint16_t sids[2], void (*progress)(uint32_t),
                                          NativeAdrenoGmuContextReport *report)
 {
-    if (!report) return kIOReturnBadArgument;
+    if (!report)
+        return kIOReturnBadArgument;
     *report = {};
-    if (used_) return kIOReturnBusy;
+    if (used_)
+        return kIOReturnBusy;
     if (!io || !slots || !sids || bank > 63 || !asid || asid > 0xffff || slots[0] > 127 || slots[1] > 127 ||
         slots[0] == slots[1])
         return kIOReturnBadArgument;
@@ -22,7 +25,8 @@ IOReturn NativeAdrenoGpuContext::bringUp(const ArmSmmu4KIo *io, unsigned bank, u
     IOReturn status = kIOReturnSuccess;
     auto step = [&](Step s) {
         report->step = s;
-        if (progress) progress(s);
+        if (progress)
+            progress(s);
     };
     step(Allocate);
     static const uint8_t oas_bits[16] = {32, 36, 40, 42, 44, 48};
@@ -31,8 +35,10 @@ IOReturn NativeAdrenoGpuContext::bringUp(const ArmSmmu4KIo *io, unsigned bank, u
     else {
         const unsigned code = (report->id2 >> 4) & 15;
         report->output_bits = code < 6 ? oas_bits[code] : 0;
-        if (report->output_bits > 40) report->output_bits = 40;
-        if (!report->output_bits) status = kIOReturnUnsupported;
+        if (report->output_bits > 40)
+            report->output_bits = 40;
+        if (!report->output_bits)
+            status = kIOReturnUnsupported;
     }
     /* The BO pool is taken first, while the VM still has long contiguous runs (the board sets the size from sheng-gpu-pool; 0 = scattered BOs only).
      * A pool that cannot be had at one size is tried at the next smaller; none is not an error. */
@@ -41,20 +47,23 @@ IOReturn NativeAdrenoGpuContext::bringUp(const ArmSmmu4KIo *io, unsigned bank, u
             const IOReturn pooled = NativeAdrenoMemory::reservePool(report->output_bits, (size_t)mib << 20);
             native_adreno_pool_stats[0] = pooled == kIOReturnSuccess ? mib : 0;
             native_adreno_pool_status = (uint32_t)pooled;
-            if (pooled == kIOReturnSuccess) break;
+            if (pooled == kIOReturnSuccess)
+                break;
         }
         /* Not fatal: without it each pooled BO changes its pages' attribute itself, as a scattered one does. */
         if (native_adreno_wc_enabled && NativeAdrenoMemory::poolBytes())
             native_adreno_pool_wc = (uint32_t)NativeAdrenoMemory::writeCombinePool() | 1u << 31;
     }
-    if (!status) status = tables_.allocate(TablePages * 0x1000, report->output_bits, true, TablePages * 0x1000);
+    if (!status)
+        status = tables_.allocate(TablePages * 0x1000, report->output_bits, true, TablePages * 0x1000);
     for (unsigned i = 0; !status && i < GpuBufferCount; ++i)
         status = buffers_[i].allocate(kBytes[i], report->output_bits, true, kBytes[i]);
     if (!status) {
         step(Prepare);
         status = smmu_.prepare(&tables_, 0, 0, GpuApertureBytes, NativeAdrenoSmmuContext::MaxLeaves, bank, asid, 1000,
                                report->output_bits);
-        if (!status) smmu_.setAliasScratch(alias_scratch_, sizeof alias_scratch_ / sizeof *alias_scratch_);
+        if (!status)
+            smmu_.setAliasScratch(alias_scratch_, sizeof alias_scratch_ / sizeof *alias_scratch_);
     }
     if (!status) {
         step(Program);
@@ -99,34 +108,45 @@ IOReturn NativeAdrenoGpuContext::bringUp(const ArmSmmu4KIo *io, unsigned bank, u
     report->status = status;
     return status;
 }
+
 static NativeAdrenoGpuContext *board_gpu_context;
+
 extern "C" IOReturn NativeAdrenoGpuContextBringup(volatile uint8_t *smmu, size_t bytes, unsigned bank, unsigned asid,
                                                   unsigned slot0, unsigned sid0, unsigned slot1, unsigned sid1,
                                                   void (*progress)(uint32_t), NativeAdrenoGmuContextReport *report)
 {
     static ArmSmmu4KMmio mmio;
     static ArmSmmu4KIo io;
-    if (!report || board_gpu_context || !smmu || !bytes || sid0 > 0xffff || sid1 > 0xffff) return kIOReturnBadArgument;
+    if (!report || board_gpu_context || !smmu || !bytes || sid0 > 0xffff || sid1 > 0xffff)
+        return kIOReturnBadArgument;
     mmio = {reinterpret_cast<volatile unsigned char *>(smmu), bytes};
-    if (ArmSmmu4KBindMmio(&mmio, &io) != ArmSmmu4KSuccess) return kIOReturnBadArgument;
+    if (ArmSmmu4KBindMmio(&mmio, &io) != ArmSmmu4KSuccess)
+        return kIOReturnBadArgument;
     board_gpu_context = new NativeAdrenoGpuContext;
-    if (!board_gpu_context) return kIOReturnNoMemory;
+    if (!board_gpu_context)
+        return kIOReturnNoMemory;
     const unsigned slots[2] = {slot0, slot1};
     const uint16_t sids[2] = {uint16_t(sid0), uint16_t(sid1)};
     return board_gpu_context->bringUp(&io, bank, asid, slots, sids, progress, report);
 }
+
 extern "C" IOReturn NativeAdrenoGpuContextBuffers(NativeAdrenoGpuBuffer out[5])
 {
-    if (!out) return kIOReturnBadArgument;
-    for (unsigned i = 0; i < GpuBufferCount; ++i) out[i] = {};
-    if (!board_gpu_context || !board_gpu_context->ready()) return kIOReturnNotReady;
+    if (!out)
+        return kIOReturnBadArgument;
+    for (unsigned i = 0; i < GpuBufferCount; ++i)
+        out[i] = {};
+    if (!board_gpu_context || !board_gpu_context->ready())
+        return kIOReturnNotReady;
     for (unsigned i = 0; i < GpuBufferCount; ++i) {
         const NativeAdrenoMemory &m = board_gpu_context->buffer(i);
-        if (m.spanCount() != 1 || m.spans()[0].bytes != m.bytes()) return kIOReturnUnsupported;
+        if (m.spanCount() != 1 || m.spans()[0].bytes != m.bytes())
+            return kIOReturnUnsupported;
         out[i] = {m.spans()[0].physical, m.bytes(), kIovas[i]};
     }
     return kIOReturnSuccess;
 }
+
 extern "C" NativeAdrenoVm *NativeAdrenoGpuContextVm()
 {
     return board_gpu_context ? board_gpu_context->vm() : nullptr;

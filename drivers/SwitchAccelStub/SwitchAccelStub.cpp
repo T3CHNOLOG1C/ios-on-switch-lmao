@@ -12,12 +12,14 @@
 class SwitchAccelStub : public IOAcceleratorES {
     OSDeclareDefaultStructors(SwitchAccelStub)
 };
+
 OSDefineMetaClassAndStructors(SwitchAccelStub, IOAcceleratorES)
 
     extern "C" IOService *switch_accel_stub_allocate(void)
 {
     return new SwitchAccelStub;
 }
+
 extern "C" unsigned switch_accel_stub_instance_size(void)
 {
     return sizeof(SwitchAccelStub);

@@ -35,18 +35,23 @@ struct Descriptor {
     uint32_t length;
     uint16_t flags, next;
 };
+
 struct Used {
     uint32_t id, length;
 };
+
 struct Event {
     uint16_t type, code;
     uint32_t value;
 };
+
 static_assert(sizeof(Descriptor) == 16 && sizeof(Used) == 8 && sizeof(Event) == 8, "VirtIO wire sizes");
+
 inline void dmaBarrier()
 {
     __asm__ volatile("dmb osh" ::: "memory");
 }
+
 inline uint32_t mmioRead32(uintptr_t address)
 {
     uint32_t value;
@@ -65,63 +70,93 @@ struct Device {
 
     // Plain loads and stores only: under HVF, QEMU emulates a register access from the fault syndrome, which a load
     // with writeback or a pair does not carry (it aborts on "isv"), and the compiler may emit those for volatile accesses.
-    uint32_t read32(unsigned at) const { return mmioRead32(registers + at); }
+    uint32_t read32(unsigned at) const
+    {
+        return mmioRead32(registers + at);
+    }
+
     uint8_t read8(unsigned at) const
     {
         uint32_t value;
         __asm__ volatile("ldrb %w0, [%1]" : "=r"(value) : "r"(registers + at) : "memory");
         return (uint8_t)value;
     }
+
     void write8(unsigned at, uint8_t value)
     {
         __asm__ volatile("strb %w0, [%1]\n\tdsb oshst" ::"r"((uint32_t)value), "r"(registers + at) : "memory");
     }
+
     void write32(unsigned at, uint32_t value)
     {
         __asm__ volatile("str %w0, [%1]\n\tdsb oshst" ::"r"(value), "r"(registers + at) : "memory");
     }
+
     void write64(unsigned at, uint64_t value)
     {
         write32(at, (uint32_t)value);
         write32(at + 4, (uint32_t)(value >> 32));
     }
-    unsigned char *memory() const { return static_cast<unsigned char *>(ring->getBytesNoCopy()); }
-    volatile uint16_t *availableRing() const { return reinterpret_cast<volatile uint16_t *>(memory() + 1024); }
-    volatile uint16_t *usedHeader() const { return reinterpret_cast<volatile uint16_t *>(memory() + 2048); }
-    volatile Used *usedRing() const { return reinterpret_cast<volatile Used *>(memory() + 2052); }
+
+    unsigned char *memory() const
+    {
+        return static_cast<unsigned char *>(ring->getBytesNoCopy());
+    }
+
+    volatile uint16_t *availableRing() const
+    {
+        return reinterpret_cast<volatile uint16_t *>(memory() + 1024);
+    }
+
+    volatile uint16_t *usedHeader() const
+    {
+        return reinterpret_cast<volatile uint16_t *>(memory() + 2048);
+    }
+
+    volatile Used *usedRing() const
+    {
+        return reinterpret_cast<volatile Used *>(memory() + 2052);
+    }
 
     // The maximum of an absolute axis (VIRTIO_INPUT_CFG_ABS_INFO); QEMU's tablet reports 0..0x7fff.
     uint32_t axisMaximum(uint8_t axis, uint32_t fallback)
     {
         write8(0x100, 0x12);
         write8(0x101, axis);
-        if (read8(0x102) < 8) return fallback;
+        if (read8(0x102) < 8)
+            return fallback;
         uint32_t maximum = read32(0x10c);
         return maximum ? maximum : fallback;
     }
+
     bool start()
     {
         write32(0x70, 0);
-        for (unsigned i = 0; read32(0x70) && i < 1000; i++) IODelay(10);
+        for (unsigned i = 0; read32(0x70) && i < 1000; i++)
+            IODelay(10);
         write32(0x70, 1);
         write32(0x70, 3);
         write32(0x14, 1);
-        if (!(read32(0x10) & 1)) return false;  // VIRTIO_F_VERSION_1
+        if (!(read32(0x10) & 1))
+            return false;  // VIRTIO_F_VERSION_1
         write32(0x24, 0);
         write32(0x20, 0);
         write32(0x24, 1);
         write32(0x20, 1);
         write32(0x70, 11);
-        if ((read32(0x70) & (8 | 64 | 128)) != 8) return false;
+        if ((read32(0x70) & (8 | 64 | 128)) != 8)
+            return false;
         maxX = axisMaximum(kAbsX, 0x7fff);
         maxY = axisMaximum(kAbsY, 0x7fff);
         write32(0x30, 0);  // the event queue
-        if (read32(0x44) || read32(0x34) < kQueueSize) return false;
+        if (read32(0x44) || read32(0x34) < kQueueSize)
+            return false;
         IOOptionBits options =
             static_cast<IOOptionBits>(kIODirectionInOut) | static_cast<IOOptionBits>(kIOMemoryPhysicallyContiguous);
         ring = IOBufferMemoryDescriptor::inTaskWithOptions(kernel_task, options, 4096, 4096);
         events = IOBufferMemoryDescriptor::inTaskWithOptions(kernel_task, options, 4096, 4096);
-        if (!ring || !events) return false;
+        if (!ring || !events)
+            return false;
         IOByteCount ringLength = 0, eventLength = 0;
         uint64_t ringPhysical = ring->getPhysicalSegment(0, &ringLength),
                  eventPhysical = events->getPhysicalSegment(0, &eventLength);
@@ -146,10 +181,12 @@ struct Device {
         write64(0xa0, ringPhysical + 2048);
         write32(0x44, 1);
         write32(0x70, 15);  // DRIVER_OK: QEMU routes its input here
-        if ((read32(0x70) & (15 | 64 | 128)) != 15) return false;
+        if ((read32(0x70) & (15 | 64 | 128)) != 15)
+            return false;
         write32(0x50, 0);
         return true;
     }
+
     void publish()
     {
         uint32_t seq = native_touch_seq;
@@ -168,6 +205,7 @@ struct Device {
         native_virtio_input_touches = native_virtio_input_touches + 1;
         native_touch_published();
     }
+
     void handle(const Event &event)
     {
         native_virtio_input_events = native_virtio_input_events + 1;
@@ -183,10 +221,12 @@ struct Device {
                 native_hid_input_command = 1;  // NativeHidInput presses and releases
         } else if (event.type == kEvSyn) {
             // A touch moves while the button is down, and ends once when it comes up.
-            if (button || touching) publish();
+            if (button || touching)
+                publish();
             touching = button;
         }
     }
+
     void poll()
     {
         if (read32(0x70) & (64 | 128)) {
@@ -217,7 +257,8 @@ struct Device {
             write32(0x50, 0);
         }
         uint32_t pending = read32(0x60);
-        if (pending & 3) write32(0x64, pending & 3);
+        if (pending & 3)
+            write32(0x64, pending & 3);
     }
 };
 
@@ -228,22 +269,27 @@ IOTimerEventSource *timer;
 
 void tick(OSObject *, IOTimerEventSource *source)
 {
-    for (unsigned i = 0; i < deviceCount; i++) devices[i].poll();
+    for (unsigned i = 0; i < deviceCount; i++)
+        devices[i].poll();
     source->setTimeoutMS(8);
 }
 }
 
 void native_virtio_input_probe(void)
 {
-    if (loop) return;
+    if (loop)
+        return;
     OSDictionary *matching = IOService::nameMatching("virtio,mmio");
     OSIterator *services = matching ? IOService::getMatchingServices(matching) : nullptr;
     OSSafeReleaseNULL(matching);
-    if (!services) return;
+    if (!services)
+        return;
     while (IOService *provider = OSDynamicCast(IOService, services->getNextObject())) {
-        if (deviceCount == sizeof(devices) / sizeof(devices[0])) break;
+        if (deviceCount == sizeof(devices) / sizeof(devices[0]))
+            break;
         IOMemoryMap *mapping = provider->mapDeviceMemoryWithIndex(0);
-        if (!mapping) continue;
+        if (!mapping)
+            continue;
         uintptr_t base = mapping->getVirtualAddress();
         if (mapping->getLength() < 0x200 || mmioRead32(base) != 0x74726976 || mmioRead32(base + 4) != 2 ||
             mmioRead32(base + 8) != kDeviceInput) {
@@ -267,8 +313,10 @@ void native_virtio_input_probe(void)
     }
     services->release();
     native_virtio_input_devices = deviceCount;
-    if (!deviceCount) return;
+    if (!deviceCount)
+        return;
     loop = IOWorkLoop::workLoop();
     timer = loop ? IOTimerEventSource::timerEventSource(loop, &tick) : nullptr;
-    if (timer && loop->addEventSource(timer) == kIOReturnSuccess) timer->setTimeoutMS(8);
+    if (timer && loop->addEventSource(timer) == kIOReturnSuccess)
+        timer->setTimeoutMS(8);
 }

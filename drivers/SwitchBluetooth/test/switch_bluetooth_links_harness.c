@@ -23,7 +23,8 @@ int bt_link_open(uint16_t handle, uint8_t kind, const uint8_t *addr, uint8_t rol
 int bt_link_close(uint16_t handle, uint32_t *out)
 {
     struct switch_bt_link last;
-    if (!switch_bt_link_close(&table, handle, &last)) return 0;
+    if (!switch_bt_link_close(&table, handle, &last))
+        return 0;
     out[0] = last.rx;
     out[1] = last.tx;
     out[2] = last.done;
@@ -35,10 +36,12 @@ void bt_link_rx(const uint8_t *header)
 {
     switch_bt_link_rx(&table, switch_bt_acl_handle(header));
 }
+
 void bt_link_tx(const uint8_t *header)
 {
     switch_bt_link_tx(&table, switch_bt_acl_handle(header));
 }
+
 int bt_links_completed(const uint8_t *params, uint32_t length)
 {
     return switch_bt_links_completed(&table, params, length);
@@ -50,7 +53,8 @@ int bt_link_counts(uint16_t handle, uint32_t *out)
     out[4] = table.strayTx;
     out[5] = table.strayDone;
     const struct switch_bt_link *link = switch_bt_link_find(&table, handle);
-    if (!link) return 0;
+    if (!link)
+        return 0;
     out[0] = link->rx;
     out[1] = link->tx;
     out[2] = link->done;

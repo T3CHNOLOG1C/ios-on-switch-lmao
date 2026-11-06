@@ -20,6 +20,7 @@ typedef enum {
     AdrenoHfiTimeout,
     AdrenoHfiPoisoned
 } AdrenoHfiStatus;
+
 typedef struct {
     volatile uint32_t *shared;
     uint32_t iova, sequence, pending_header, poisoned;
@@ -29,6 +30,7 @@ typedef struct {
      * another sequence number): their count and the first one's header, return header and code. */
     uint32_t skipped, skipped_header, skipped_ret, skipped_code;
 } AdrenoHfi;
+
 /* Modern (nonlegacy) GMU HFI only. Caller owns an exclusive, 16KiB extent
  * mapped with four native4K pages, coherent for CPU and GMU, and a valid 32bit
  * GMU IOVA. Coherence, ownership and active mappings are platform obligations,

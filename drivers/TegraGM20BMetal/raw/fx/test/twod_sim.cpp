@@ -16,18 +16,24 @@ static uint32_t formatBpp(uint32_t f)
     case 0xcf:
     case 0xd0:
     case 0xd5:
-    case 0xd6: return 4;
-    case 0xca: return 8;
-    case 0xea: return 2;
-    case 0xf3: return 1;
-    default: return 0;
+    case 0xd6:
+        return 4;
+    case 0xca:
+        return 8;
+    case 0xea:
+        return 2;
+    case 0xf3:
+        return 1;
+    default:
+        return 0;
     }
 }
 
 uint8_t *Sim::at(uint64_t va, uint64_t bytes)
 {
     for (Region &r : regions_)
-        if (va >= r.va && va + bytes <= r.va + r.bytes->size()) return r.bytes->data() + (va - r.va);
+        if (va >= r.va && va + bytes <= r.va + r.bytes->size())
+            return r.bytes->data() + (va - r.va);
     return host ? host(va, bytes) : nullptr;
 }
 
@@ -38,18 +44,23 @@ bool Sim::run(const uint32_t *w, size_t n)
         const uint32_t op = h >> 29, count = (h >> 16) & 0x1fff, subc = (h >> 13) & 7, mthd = (h & 0xfff) << 2;
         switch (op) {
         case 1:  // INC
-            for (uint32_t k = 0; k < count && i < n; k++) method(subc, mthd + 4 * k, w[i++]);
+            for (uint32_t k = 0; k < count && i < n; k++)
+                method(subc, mthd + 4 * k, w[i++]);
             break;
         case 3:  // NON_INC
-            for (uint32_t k = 0; k < count && i < n; k++) method(subc, mthd, w[i++]);
+            for (uint32_t k = 0; k < count && i < n; k++)
+                method(subc, mthd, w[i++]);
             break;
         case 4:  // IMMD: count is the data
             method(subc, mthd, count);
             break;
         case 5:  // ONE_INC
-            for (uint32_t k = 0; k < count && i < n; k++) method(subc, mthd + (k ? 4 : 0), w[i++]);
+            for (uint32_t k = 0; k < count && i < n; k++)
+                method(subc, mthd + (k ? 4 : 0), w[i++]);
             break;
-        default: err_ = "unknown header op " + std::to_string(op); return false;
+        default:
+            err_ = "unknown header op " + std::to_string(op);
+            return false;
         }
     }
     return !failed_;
@@ -60,11 +71,14 @@ void Sim::method(uint32_t subc, uint32_t mthd, uint32_t data)
     if (subc == 0) {  // MAXWELL_B: only the two the fx stream uses
         if (mthd == 0x0110) {
             waits3d++;
-            for (Range &r : pending_) r.waited = true;
-            if (launches) sawWait3dAfter2d_ = true;
+            for (Range &r : pending_)
+                r.waited = true;
+            if (launches)
+                sawWait3dAfter2d_ = true;
         } else if (mthd == 0x1288) {
             texInvalidates3d++;
-            if (sawWait3dAfter2d_) sawInv3dAfter2d_ = true;
+            if (sawWait3dAfter2d_)
+                sawInv3dAfter2d_ = true;
         } else {
             char b[64];
             snprintf(b, sizeof b, "unexpected 3D method 0x%04x", mthd);
@@ -87,13 +101,18 @@ void Sim::method(uint32_t subc, uint32_t mthd, uint32_t data)
     r2d_[mthd >> 2] = data;
     if (mthd == 0x0110) {  // 2D WAIT_FOR_IDLE
         waits2d++;
-        for (Range &r : pending_) r.waited = true;
+        for (Range &r : pending_)
+            r.waited = true;
     } else if (mthd == 0x0240) {  // TWOD_INVALIDATE_TEXTURE_DATA_CACHE: drops what a wait made visible
         texInvalidates2d++;
-        pending_.erase(std::remove_if(pending_.begin(), pending_.end(), [](const Range &r) { return r.waited; }),
+        pending_.erase(std::remove_if(pending_.begin(), pending_.end(),
+                                      [](const Range &r) {
+                                          return r.waited;
+                                      }),
                        pending_.end());
     } else if (mthd == 0x08dc) {  // the launch
-        if (!launch()) failed_ = true;
+        if (!launch())
+            failed_ = true;
         sawWait3dAfter2d_ = sawInv3dAfter2d_ = false;
         endsSampleable = false;
     }
@@ -117,7 +136,8 @@ Sim::Surface Sim::surface(uint32_t base) const
 uint64_t Sim::texel(const Surface &s, uint32_t x, uint32_t y) const
 {
     const uint32_t xb = x * s.bpp;
-    if (s.layout == 1) return s.va + uint64_t(y) * s.pitch + xb;
+    if (s.layout == 1)
+        return s.va + uint64_t(y) * s.pitch + xb;
     // block linear: blocks of one GOB (64 B) wide and 2^yLog2 GOBs (8 rows each) high, row-major; TegraColor inside a GOB
     const uint32_t gobsPerRow = (s.width * s.bpp + 63) / 64, blockRows = 8u << s.yLog2;
     const uint64_t block = uint64_t(y / blockRows) * gobsPerRow + xb / 64;

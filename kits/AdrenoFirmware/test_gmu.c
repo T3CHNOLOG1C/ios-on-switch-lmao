@@ -16,7 +16,8 @@ static void refusal(const uint8_t *data, size_t bytes, const AdrenoFirmwareRegio
     size_t count = 123;
     AdrenoFirmwareResult result = AdrenoFirmwarePlanGmu(data, bytes, ranges, range_count, blocks, capacity, &count);
     assert(result != AdrenoFirmwareSuccess);
-    if (expected != AdrenoFirmwareSuccess) assert(result == expected);
+    if (expected != AdrenoFirmwareSuccess)
+        assert(result == expected);
     assert(count == 0 && !memcmp(blocks, before, sizeof(blocks)));
 }
 
@@ -38,7 +39,8 @@ int main(int argc, char **argv)
     for (size_t i = 0; i < count; ++i) {
         payloads += blocks[i].bytes != 0;
         payload_bytes += blocks[i].bytes;
-        if (!blocks[i].bytes) assert(blocks[i].region_identifier == UINT32_MAX);
+        if (!blocks[i].bytes)
+            assert(blocks[i].region_identifier == UINT32_MAX);
     }
     assert(payloads == 4 && payload_bytes == 66604);
     assert(blocks[11].address == 0 && blocks[11].bytes == 0x1dc && blocks[11].region_identifier == 1);

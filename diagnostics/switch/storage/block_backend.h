@@ -55,7 +55,7 @@ int switch_block_get_info(struct switch_block_backend *backend, unsigned index, 
  * failure latches the backend unavailable; no automatic reset or retry.
  * This function never calls IOKit, invokes completion, or changes its lock. */
 int switch_block_read(struct switch_block_backend *backend, unsigned index, uint64_t byte_offset, void *destination,
-                    uint32_t length);
+                      uint32_t length);
 
 struct vr_view;
 struct vr_crypto;
@@ -64,9 +64,9 @@ struct vr_crypto;
  * On success the first length bytes contain the requested, fully verified
  * range. Every error requires discarding the entire scratch. Any transport or
  * integrity failure permanently offlines this backend, including both disks. */
-int switch_block_read_verified(struct switch_block_backend *, unsigned index, uint64_t byte_offset, void *private_scratch,
-                             uint32_t scratch_capacity, uint32_t length, const struct vr_view *,
-                             const struct vr_crypto *);
+int switch_block_read_verified(struct switch_block_backend *, unsigned index, uint64_t byte_offset,
+                               void *private_scratch, uint32_t scratch_capacity, uint32_t length,
+                               const struct vr_view *, const struct vr_crypto *);
 
 /* No published child or in-flight read may retain the backend when destroyed.
  * Releases only backend-owned allocations, never firmware/reference memory. */
@@ -76,7 +76,7 @@ void switch_block_destroy(struct switch_block_backend *backend);
  * All three disks share the controller owner's one sleepable lock. */
 struct switch_data_backend;
 int switch_data_create(const struct switch_block_allocator *, struct switch_block_backend *read_only_backend,
-                     struct switch_data_backend **out);
+                       struct switch_data_backend **out);
 int switch_data_get_info(struct switch_data_backend *, struct switch_block_info *);
 int switch_data_read(struct switch_data_backend *, uint64_t, void *, uint32_t);
 int switch_data_write(struct switch_data_backend *, uint64_t, const void *, uint32_t);
@@ -86,11 +86,12 @@ void switch_data_destroy(struct switch_data_backend *);
  * unique and valid for the exact same mounted volume. No media I/O. */
 struct switch_fat_volume;
 int switch_block_excludes_clusters(struct switch_block_backend *, const struct switch_fat_volume *, const uint32_t *,
-                                 uint32_t);
+                                   uint32_t);
 /* Check complete selected ancestor directory chains, including unused tails.
  * Caller holds the owner lock and an active metadata budget. Performs bounded
  * metadata reads only; it does not scan unrelated files or their contents. */
-int switch_block_excludes_directories(struct switch_block_backend *, struct switch_fat_volume *, const uint32_t *, uint32_t);
+int switch_block_excludes_directories(struct switch_block_backend *, struct switch_fat_volume *, const uint32_t *,
+                                      uint32_t);
 
 /* Built-in IOKit bridge. Called after the diagnostic qualification succeeds.
  * Returns switch_block_status; repeated calls never publish duplicate devices. */

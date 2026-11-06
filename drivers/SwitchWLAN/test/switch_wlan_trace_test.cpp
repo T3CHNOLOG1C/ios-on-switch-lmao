@@ -20,6 +20,7 @@ void put16(std::vector<uint8_t> &f, size_t at, uint16_t v)
     f[at] = static_cast<uint8_t>(v >> 8);
     f[at + 1] = static_cast<uint8_t>(v);
 }
+
 void put32(std::vector<uint8_t> &f, size_t at, uint32_t v)
 {
     put16(f, at, static_cast<uint16_t>(v >> 16));
@@ -43,18 +44,22 @@ std::vector<uint8_t> udp(uint32_t src, uint32_t dst, uint16_t sport, uint16_t dp
     f[44] = answer ? 0x81 : 0x01;
     return f;
 }
+
 std::vector<uint8_t> query(uint16_t port, uint16_t id)
 {
     return udp(kUs, kResolver, port, 53, id, false);
 }
+
 std::vector<uint8_t> answer(uint16_t port, uint16_t id)
 {
     return udp(kResolver, kUs, 53, port, id, true);
 }
+
 std::vector<uint8_t> arp(uint16_t op, uint32_t sender, uint32_t target, bool broadcast)
 {
     std::vector<uint8_t> f(42, 0);
-    if (broadcast) memset(f.data(), 0xFF, 6);
+    if (broadcast)
+        memset(f.data(), 0xFF, 6);
     put16(f, 12, 0x0806);
     put16(f, 14, 1);
     put16(f, 16, 0x0800);
@@ -117,7 +122,8 @@ TEST(SwitchWlanTrace, PairsAnswersWithQueriesAndTimesThem)
     EXPECT_EQ(t.c.dns_queries, 4u);
     EXPECT_EQ(t.c.dns_answers, 4u);
     EXPECT_EQ(t.c.dns_unmatched, 0u);
-    for (unsigned b = 0; b < SWLAN_DNS_BUCKETS; ++b) EXPECT_EQ(t.c.dns_within[b], 1u) << "bucket " << b;
+    for (unsigned b = 0; b < SWLAN_DNS_BUCKETS; ++b)
+        EXPECT_EQ(t.c.dns_within[b], 1u) << "bucket " << b;
     const std::vector<uint8_t> again = answer(ports[0], 100);
     swlan_trace_received(&t, again.data(), again.size(), 2000 * kMs);
     EXPECT_EQ(t.c.dns_unmatched, 1u);
@@ -200,7 +206,8 @@ std::vector<uint8_t> block(unsigned version, std::vector<uint32_t> slots)
     b[2] = static_cast<uint8_t>(b.size());
     b[3] = static_cast<uint8_t>(b.size() >> 8);
     for (size_t i = 0; i < slots.size(); ++i)
-        for (int k = 0; k < 4; ++k) b[4 + 4 * i + k] = static_cast<uint8_t>(slots[i] >> (8 * k));
+        for (int k = 0; k < 4; ++k)
+            b[4 + 4 * i + k] = static_cast<uint8_t>(slots[i] >> (8 * k));
     return b;
 }
 
@@ -224,7 +231,8 @@ TEST(SwitchWlanTrace, FirmwareCountersAsDeltasBySlot)
 TEST(SwitchWlanTrace, FirmwareCountersLineStaysInItsBuffer)
 {
     std::vector<uint32_t> was(200), now(200);
-    for (size_t i = 0; i < now.size(); ++i) now[i] = 1000000u + static_cast<uint32_t>(i);
+    for (size_t i = 0; i < now.size(); ++i)
+        now[i] = 1000000u + static_cast<uint32_t>(i);
     const std::vector<uint8_t> a = block(10, was), b = block(10, now);
     char text[120];
     memset(text, 'x', sizeof(text));

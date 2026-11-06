@@ -4,65 +4,88 @@
 #include <cstring>
 #include <vector>
 #include "../RootPublication.h"
+
 struct Operations {
     bool allocated[4] = {}, attached[4] = {}, started[4] = {};
     int failPrepare = -1, failStep = -1, failStart = -1, failWait = -1;
     bool valid = true, scheduleOk = true;
     unsigned schedules = 0;
     std::vector<unsigned> startOrder, waitOrder, discarded;
+
     bool prepare(unsigned index)
     {
         // Distinct failures before allocation, after allocation, and after attach.
-        if (int(index) == failPrepare && failStep == 0) return false;
+        if (int(index) == failPrepare && failStep == 0)
+            return false;
         allocated[index] = true;
-        if (int(index) == failPrepare && failStep == 1) return false;
+        if (int(index) == failPrepare && failStep == 1)
+            return false;
         attached[index] = true;
         return !(int(index) == failPrepare && failStep == 2);
     }
-    bool validate() { return valid; }
+
+    bool validate()
+    {
+        return valid;
+    }
+
     bool schedule()
     {
         ++schedules;
         return scheduleOk;
     }
+
     void discard(unsigned index)
     {
         assert(!started[index]);
         allocated[index] = attached[index] = false;
         discarded.push_back(index);
     }
+
     bool start(unsigned index)
     {
         assert(allocated[index] && attached[index] && !started[index]);
         startOrder.push_back(index);
-        if (int(index) == failStart) return false;
+        if (int(index) == failStart)
+            return false;
         started[index] = true;
         return true;
     }
+
     bool wait(unsigned index)
     {
         assert(started[index]);
         waitOrder.push_back(index);
         return int(index) != failWait;
     }
+
     bool empty() const
     {
         for (bool x : allocated)
-            if (x) return false;
+            if (x)
+                return false;
         return true;
     }
 };
+
 struct Iterator {
     std::vector<int *> entries;
     size_t position = 0;
     bool valid = true, invalidateOnNext = false;
-    bool isValid() { return valid; }
+
+    bool isValid()
+    {
+        return valid;
+    }
+
     int *getNextObject()
     {
-        if (invalidateOnNext) valid = false;
+        if (invalidateOnNext)
+            valid = false;
         return position < entries.size() ? entries[position++] : nullptr;
     }
 };
+
 int main()
 {
     const char *names[] = {"OS", "Aux", "SystemOS", "Other"};

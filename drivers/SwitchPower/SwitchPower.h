@@ -37,6 +37,7 @@ enum {
     SWITCH_PERF_HINT_LAUNCH = 3,
     SWITCH_PERF_HINT_BOOT_DONE = 4,
 };
+
 void switch_perf_hint(unsigned int hint);
 
 // The CPU clock the governor last applied, in kHz; 0 when the CPU is not governed (PLL or fixed DFLL mode). Any

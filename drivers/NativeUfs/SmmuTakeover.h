@@ -6,21 +6,30 @@ struct UfsSmmuPlan {
     bool reuse = false;
     const char *error = nullptr;
 };
+
 // ARM IHI 0062D.c sections 1.6 and 3.7: VA64=0 still rejects inputs above
 // 32 bits with SCTLR.M=0. With VA64=1 the bypass range is bounded by all
 // three hardware widths, not TCR2.PASize (which only limits translation).
 static unsigned ufsSmmuAddressBits(unsigned code)
 {
     switch (code) {
-    case 0: return 32;
-    case 1: return 36;
-    case 2: return 40;
-    case 3: return 42;
-    case 4: return 44;
-    case 5: return 48;
-    default: return 0;
+    case 0:
+        return 32;
+    case 1:
+        return 36;
+    case 2:
+        return 40;
+    case 3:
+        return 42;
+    case 4:
+        return 44;
+    case 5:
+        return 48;
+    default:
+        return 0;
     }
 }
+
 // One attempt with a given context bank (counted from the top). The caller falls back to lower banks when this one is held by another stream.
 template <class Read>
 static UfsSmmuPlan planUfsSmmuBank(uint16_t stream, uint64_t dma, uint64_t bytes, Read read, unsigned bankFromTop)
@@ -46,7 +55,8 @@ static UfsSmmuPlan planUfsSmmuBank(uint16_t stream, uint64_t dma, uint64_t bytes
         p.error = "unsupported SMMU geometry";
         return p;
     }
-    if (count > 128) count = 128;  // Firmware's reliably accessible groups only.
+    if (count > 128)
+        count = 128;  // Firmware's reliably accessible groups only.
     if (bankFromTop >= banks - 1) {
         p.error = "no free context bank";
         return p;
@@ -56,7 +66,8 @@ static UfsSmmuPlan planUfsSmmuBank(uint16_t stream, uint64_t dma, uint64_t bytes
     for (unsigned i = 0; i < count; ++i) {
         uint32_t smr = read(0x800 + 4 * i);
         if (!(smr & 0x80000000U)) {
-            if (!p.reuse) p.slot = i;
+            if (!p.reuse)
+                p.slot = i;
             continue;
         }
         uint32_t s2cr = read(0xc00 + 4 * i);
@@ -88,7 +99,8 @@ static UfsSmmuPlan planUfsSmmuBank(uint16_t stream, uint64_t dma, uint64_t bytes
         p.error = "reserved context bank not bypass";
         return p;
     }
-    if (p.slot == 0xffffffffU) p.error = "no free stream-match group";
+    if (p.slot == 0xffffffffU)
+        p.error = "no free stream-match group";
     return p;
 }
 
@@ -98,20 +110,27 @@ static UfsSmmuPlan planUfsSmmuBank(uint16_t stream, uint64_t dma, uint64_t bytes
 // is final and is reported as the first attempt saw it.
 template <class Read> static UfsSmmuPlan planUfsSmmu(uint16_t stream, uint64_t dma, uint64_t bytes, Read read)
 {
-    enum { kBankAttempts = 8 };
+    enum {
+        kBankAttempts = 8
+    };
+
     UfsSmmuPlan first = planUfsSmmuBank(stream, dma, bytes, read, 0);
-    if (!first.error) return first;
+    if (!first.error)
+        return first;
     // "conflicting" is retried too: our own stream may already sit on a lower bank from an earlier run that had to fall back.
     auto retryable = [](const char *e) {
         return !__builtin_strcmp(e, "reserved context bank already used") ||
                !__builtin_strcmp(e, "reserved context bank not bypass") ||
                !__builtin_strcmp(e, "conflicting UFS stream mapping");
     };
-    if (!retryable(first.error)) return first;
+    if (!retryable(first.error))
+        return first;
     for (unsigned attempt = 1; attempt < kBankAttempts; ++attempt) {
         UfsSmmuPlan next = planUfsSmmuBank(stream, dma, bytes, read, attempt);
-        if (!next.error) return next;
-        if (!retryable(next.error)) break;
+        if (!next.error)
+            return next;
+        if (!retryable(next.error))
+            break;
     }
     return first;
 }
@@ -122,19 +141,25 @@ template <class Read> static UfsSmmuPlan planUfsSmmu(uint16_t stream, uint64_t d
 template <class Read, class Write>
 static const char *configureUfsSmmu(const UfsSmmuPlan &p, uint16_t stream, Read read, Write write)
 {
-    if (p.error) return p.error;
+    if (p.error)
+        return p.error;
     unsigned cb = (p.pages + p.bank) * 4096;
-    if (!p.reuse) write(cb, 0);
-    if (read(cb) != 0) return "SMMU bypass disable readback";
+    if (!p.reuse)
+        write(cb, 0);
+    if (read(cb) != 0)
+        return "SMMU bypass disable readback";
     // Set VA64 before exposing a newly allocated stream. Repair an exclusive
     // existing 32-bit bypass too; do not silently reuse the faulty state.
-    if (read(0x1800 + 4 * p.bank) != 1) write(0x1800 + 4 * p.bank, 1);
-    if (!p.reuse) write(0x1000 + 4 * p.bank, 0x10000);
+    if (read(0x1800 + 4 * p.bank) != 1)
+        write(0x1800 + 4 * p.bank, 1);
+    if (!p.reuse)
+        write(0x1000 + 4 * p.bank, 0x10000);
     if (read(0x1800 + 4 * p.bank) != 1 || read(0x1000 + 4 * p.bank) != 0x10000 || read(cb) != 0)
         return "SMMU VA64 bypass readback";
     if (!p.reuse) {
         write(0xc00 + 4 * p.slot, p.bank);
-        if (read(0xc00 + 4 * p.slot) != p.bank) return "SMMU stream context readback";
+        if (read(0xc00 + 4 * p.slot) != p.bank)
+            return "SMMU stream context readback";
         write(0x800 + 4 * p.slot, 0x80000000U | stream);
     }
     if (read(0x800 + 4 * p.slot) != (0x80000000U | stream) || read(0xc00 + 4 * p.slot) != p.bank)

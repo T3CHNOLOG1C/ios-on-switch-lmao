@@ -69,14 +69,16 @@ std::pair<std::optional<Counts>, Strays> counts(uint16_t handle)
     uint32_t out[6] = {};
     const bool found = bt_link_counts(handle, out);
     std::optional<Counts> link;
-    if (found) link = Counts{out[0], out[1], out[2], out[3]};
+    if (found)
+        link = Counts{out[0], out[1], out[2], out[3]};
     return {link, Strays{out[4], out[5]}};
 }
 
 std::optional<Counts> close(uint16_t handle)
 {
     uint32_t out[4] = {};
-    if (!bt_link_close(handle, out)) return std::nullopt;
+    if (!bt_link_close(handle, out))
+        return std::nullopt;
     return Counts{out[0], out[1], out[2], out[3]};
 }
 
@@ -118,6 +120,7 @@ std::tuple<int, int, uint32_t> accept(const Bytes &addr, uint8_t role)
     const int changed = bt_accept_as_central(params.data(), 7, &cod);
     return {changed, params[6], cod};
 }
+
 std::tuple<int, int, uint32_t> accept(const std::string &addr, uint8_t role)
 {
     return accept(hciAddr(addr), role);
@@ -153,7 +156,8 @@ TEST_F(Links, LinkKeyReplyNeverPrintsTheKey)
 {
     const std::string right = kRight;
     Bytes key;
-    for (unsigned b = 0xa0; b < 0xb0; ++b) key.push_back((uint8_t)b);
+    for (unsigned b = 0xa0; b < 0xb0; ++b)
+        key.push_back((uint8_t)b);
     std::string line = command(0x040b, cat(hciAddr(right), key));
     EXPECT_EQ(line, "Link Key Request Reply " + right);
     EXPECT_THAT(line, Not(HasSubstr("a0a1")));
@@ -242,7 +246,8 @@ TEST_F(Links, RequestsKeptPerAddress)
     note(hciAddr(kLeft), 0x240418);   // the same address again: slot 0 updated, not a second entry
     EXPECT_EQ(accept(kLeft, 1), std::make_tuple(0, 1, 0u));  // its newest class (audio) decides, and it is consumed
     note(hciAddr(kLeft), 0x000508);                          // slot 2
-    for (uint8_t i = 0; i < 2; ++i) note({i, 1, 2, 3, 4, 5}, 0x000508);  // slots 3 and 0 (the oldest): four at most
+    for (uint8_t i = 0; i < 2; ++i)
+        note({i, 1, 2, 3, 4, 5}, 0x000508);  // slots 3 and 0 (the oldest): four at most
     EXPECT_EQ(accept(kRight, 1), std::make_tuple(1, 0, 0x000508u));
     EXPECT_EQ(accept(kLeft, 1), std::make_tuple(1, 0, 0x000508u));
     EXPECT_EQ(accept("05:04:03:02:01:01", 1), std::make_tuple(1, 0, 0x000508u));
@@ -262,7 +267,8 @@ TEST_F(Links, TwoJoyConsAndAirPodsShareTheCredits)
         rx(0x000b);
         rx(0x000c, 0x2);
     }
-    for (int i = 0; i < 200; ++i) tx(0x000d, 0x2);
+    for (int i = 0; i < 200; ++i)
+        tx(0x000d, 0x2);
     tx(0x000d, 0x1);  // a continuation fragment takes a buffer as well
     // The controller completes them in one event per round, several handles each.
     EXPECT_EQ(completed({{0x000b, 30}, {0x000c, 29}, {0x000d, 195}}), 254);
@@ -280,15 +286,18 @@ TEST_F(Links, TwoJoyConsAndAirPodsShareTheCredits)
 TEST_F(Links, PeakIsTheMostEverOutstanding)
 {
     open(0x0010, kAcl, kAirPods, 0);
-    for (int i = 0; i < 8; ++i) tx(0x0010);
+    for (int i = 0; i < 8; ++i)
+        tx(0x0010);
     completed({{0x0010, 6}});
-    for (int i = 0; i < 3; ++i) tx(0x0010);
+    for (int i = 0; i < 3; ++i)
+        tx(0x0010);
     EXPECT_EQ(counts(0x0010).first, (Counts{0, 11, 6, 8}));
 }
 
 TEST_F(Links, HandlesReusedAndTableFull)
 {
-    for (uint16_t handle = 0; handle < 8; ++handle) EXPECT_TRUE(open(handle, kAcl, kLeft, 0xff));
+    for (uint16_t handle = 0; handle < 8; ++handle)
+        EXPECT_TRUE(open(handle, kAcl, kLeft, 0xff));
     EXPECT_FALSE(open(0x0100, kLe, kRight, 1));
     tx(0x0100);
     EXPECT_EQ(counts(0x0003).second, (Strays{1, 0}));

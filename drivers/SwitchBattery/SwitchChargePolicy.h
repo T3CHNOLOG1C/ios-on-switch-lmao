@@ -112,6 +112,7 @@ enum : uint8_t {
     Fault = 0x09,
     VendorPart = 0x0a,
 };
+
 constexpr uint8_t kHiZ = 0x80, kVindpmMask = 0x78, kIinlimMask = 0x07;  // REG00
 constexpr uint8_t kChgConfigMask = 0x30, kChgConfigOff = 0x00, kChgConfigCharge = 0x10, kChgConfigOtg = 0x20,
                   kSysMinMask = 0x0e, kBoostLim1300 = 0x01, kWatchdogReset = 0x40;             // REG01
@@ -127,6 +128,7 @@ inline constexpr unsigned vbusStat(uint8_t reg08)
 {
     return reg08 >> 6;
 }
+
 inline constexpr unsigned chargeStat(uint8_t reg08)
 {
     return (reg08 >> 4) & 3;
@@ -136,9 +138,11 @@ inline constexpr unsigned chargeStat(uint8_t reg08)
 inline constexpr uint8_t encodeInputLimit(unsigned ma)
 {
     uint8_t step = 0;
-    while (step < 7 && kInputSteps[step + 1] <= ma) ++step;
+    while (step < 7 && kInputSteps[step + 1] <= ma)
+        ++step;
     return step;
 }
+
 inline constexpr unsigned decodeInputLimit(uint8_t reg)
 {
     return kInputSteps[reg & kIinlimMask];
@@ -150,6 +154,7 @@ inline constexpr uint8_t encodeChargeCurrent(unsigned ma)
     ma = ma > kChargeCurrentMaxMA ? kChargeCurrentMaxMA : ma < 512 ? 512 : ma;
     return (uint8_t)(((ma - 512) >> 6) << 2);
 }
+
 inline constexpr unsigned decodeChargeCurrent(uint8_t reg)
 {
     return 512 + ((unsigned)(reg & kIchgMask) << 4);
@@ -161,6 +166,7 @@ inline constexpr uint8_t encodeChargeVoltage(unsigned mv)
     mv = mv > kChargeVoltageMaxMV ? kChargeVoltageMaxMV : mv < 3504 ? 3504 : mv;
     return (uint8_t)(((mv - 3504) >> 4) << 2);
 }
+
 inline constexpr unsigned decodeChargeVoltage(uint8_t reg)
 {
     return 3504 + ((unsigned)(reg & kVregMask) << 2);
@@ -172,6 +178,7 @@ inline constexpr uint8_t encodeInputVoltage(unsigned mv)
     mv = mv > 5080 ? 5080 : mv < 3880 ? 3880 : mv;
     return (uint8_t)((((mv - 3880) / 80) & 0xf) << 3);
 }
+
 inline constexpr unsigned decodeInputVoltage(uint8_t reg)
 {
     return 3880 + ((reg & kVindpmMask) >> 3) * 80;
@@ -206,6 +213,7 @@ inline constexpr unsigned watchdogSeconds(uint8_t reg05)
 struct ChargerSetting {
     uint8_t reg02, reg03, reg04, reg05, reg06;
 };
+
 constexpr uint8_t kReg03Value = bq::encodePreChargeTermination(kPreChargeMA, kTerminationMA);
 constexpr uint8_t kReg05Mask = bq::kEnTerm | bq::kWatchdogMask | bq::kEnTimer;
 constexpr uint8_t kReg05Value = bq::kEnTerm;  // termination on, watchdog off, safety timer off
@@ -213,24 +221,33 @@ constexpr uint8_t kReg06Mask = bq::kBatCompMask | bq::kVclampMask | bq::kTregMas
 constexpr uint8_t kReg00Vindpm = bq::encodeInputVoltage(kInputVoltageLimitMV);
 constexpr uint8_t kReg01SysMin = bq::encodeSystemMinimum(kSystemMinimumMV);
 
-enum class Zone : uint8_t { Cold, Cool, Normal, Hot };
+enum class Zone : uint8_t {
+    Cold,
+    Cool,
+    Normal,
+    Hot
+};
 
 inline constexpr const char *zoneName(Zone z)
 {
     return z == Zone::Cold ? "cold" : z == Zone::Cool ? "cool" : z == Zone::Normal ? "normal" : "hot";
 }
+
 inline constexpr bool zoneCharges(Zone z)
 {
     return z == Zone::Cool || z == Zone::Normal;
 }
+
 inline constexpr unsigned zoneChargeCurrent(Zone z)
 {
     return z == Zone::Normal ? kChargeCurrentMaxMA : z == Zone::Cool ? kCoolChargeCurrentMA : kOffChargeCurrentMA;
 }
+
 inline constexpr unsigned zoneChargeVoltage(Zone)
 {
     return kChargeVoltageMaxMV;
 }
+
 inline constexpr unsigned zoneRank(Zone z)
 {
     return z == Zone::Normal ? 2 : z == Zone::Cool ? 1 : 0;
@@ -250,11 +267,14 @@ inline constexpr Zone rawZone(int centiC)
 inline constexpr Zone nextZone(Zone current, int centiC)
 {
     const Zone raw = rawZone(centiC);
-    if (zoneRank(raw) <= zoneRank(current)) return raw;
+    if (zoneRank(raw) <= zoneRank(current))
+        return raw;
     const Zone below = rawZone(centiC - kHysteresisCentiC), above = rawZone(centiC + kHysteresisCentiC);
     Zone safe = raw;
-    if (zoneRank(below) < zoneRank(safe)) safe = below;
-    if (zoneRank(above) < zoneRank(safe)) safe = above;
+    if (zoneRank(below) < zoneRank(safe))
+        safe = below;
+    if (zoneRank(above) < zoneRank(safe))
+        safe = above;
     return zoneRank(safe) > zoneRank(current) ? safe : current;
 }
 
@@ -342,15 +362,26 @@ inline constexpr uint16_t temperatureWindow(Zone z, int centiC)
 {
     int lo = -128, hi = 127;
     switch (z) {
-    case Zone::Cold: hi = kColdBelowC + 1; break;
-    case Zone::Cool: lo = kColdBelowC, hi = kCoolBelowC + 1; break;
-    case Zone::Normal: lo = kCoolBelowC, hi = kHotFromC; break;
-    case Zone::Hot: lo = kHotFromC - 1; break;
+    case Zone::Cold:
+        hi = kColdBelowC + 1;
+        break;
+    case Zone::Cool:
+        lo = kColdBelowC, hi = kCoolBelowC + 1;
+        break;
+    case Zone::Normal:
+        lo = kCoolBelowC, hi = kHotFromC;
+        break;
+    case Zone::Hot:
+        lo = kHotFromC - 1;
+        break;
     }
     const int whole = centiC >= 0 ? centiC / 100 : -((-centiC + 99) / 100);
-    if (whole < lo || whole >= hi) lo = whole - 1, hi = whole + 2;
-    if (lo < -128) lo = -128;
-    if (hi > 127) hi = 127;
+    if (whole < lo || whole >= hi)
+        lo = whole - 1, hi = whole + 2;
+    if (lo < -128)
+        lo = -128;
+    if (hi > 127)
+        hi = 127;
     return (uint16_t)((uint8_t)(int8_t)hi << 8 | (uint8_t)(int8_t)lo);
 }
 
@@ -362,7 +393,8 @@ inline constexpr uint16_t intersectWindows(uint16_t zone, uint16_t other)
     const int zoneHi = (int8_t)(zone >> 8), zoneLo = (int8_t)(zone & 0xff);
     const int otherHi = (int8_t)(other >> 8), otherLo = (int8_t)(other & 0xff);
     const int hi = zoneHi < otherHi ? zoneHi : otherHi, lo = zoneLo > otherLo ? zoneLo : otherLo;
-    if (lo > hi) return zone;
+    if (lo > hi)
+        return zone;
     return (uint16_t)((uint8_t)(int8_t)hi << 8 | (uint8_t)(int8_t)lo);
 }
 
@@ -372,26 +404,32 @@ inline constexpr unsigned pdoType(uint32_t p)
 {
     return p >> 30;
 }
+
 inline constexpr unsigned pdoMilliamps(uint32_t p)
 {
     return (p & 0x3ff) * 10;
 }
+
 inline constexpr unsigned pdoMillivolts(uint32_t p)
 {
     return ((p >> 10) & 0x3ff) * 50;
 }
+
 inline constexpr unsigned rdoPosition(uint32_t r)
 {
     return (r >> 28) & 7;
 }
+
 inline constexpr unsigned rdoOperatingMilliamps(uint32_t r)
 {
     return ((r >> 10) & 0x3ff) * 10;
 }
+
 inline constexpr unsigned rdoMaxMilliamps(uint32_t r)
 {
     return (r & 0x3ff) * 10;
 }
+
 constexpr uint32_t kRdoNoUsbSuspend = 1u << 24, kRdoUsbCommunications = 1u << 25, kRdoMismatch = 1u << 26;
 
 // The input limit for a PDO: its current, capped per voltage ([DTB] rohm,pd-*-current-limit-ma, the limit), then the
@@ -403,12 +441,15 @@ constexpr uint32_t kRdoNoUsbSuspend = 1u << 24, kRdoUsbCommunications = 1u << 25
 // subtraction wrapped to the cap), and 0 means "no usable contract".
 inline constexpr unsigned pdInputLimit(unsigned millivolts, unsigned milliamps, bool dock = false)
 {
-    if (!millivolts) return 0;
+    if (!millivolts)
+        return 0;
     const unsigned reserve = dock ? (millivolts > 5000 ? 4500000u : 2500000u) / millivolts : 0;
     unsigned limit = milliamps > reserve ? milliamps - reserve : 0;
     const unsigned cap = millivolts == 5000 ? 2000 : millivolts == 9000 ? 2000 : millivolts == 12000 ? 1500 : 1200;
-    if (limit > cap) limit = cap;
-    if (limit < kInputSteps[0]) return 0;
+    if (limit > cap)
+        limit = cap;
+    if (limit < kInputSteps[0])
+        return 0;
     return kInputSteps[bq::encodeInputLimit(limit)];
 }
 
@@ -429,8 +470,10 @@ struct PdChoice {
 inline constexpr PdChoice choosePdo(const uint32_t *pdos, unsigned count)
 {
     PdChoice choice{0, 0, 0, 0, 0, false, "no source PDOs (not USB-PD)"};
-    if (count > 7) count = 7;
-    if (!count) return choice;
+    if (count > 7)
+        count = 7;
+    if (!count)
+        return choice;
     if (count == 2 && pdoMillivolts(pdos[0]) == 5000 && pdoMilliamps(pdos[0]) == 500) {
         const uint32_t p = pdos[1];
         if (pdoType(p) == 0 && pdoMillivolts(p) == 15000 && pdoMilliamps(p) >= 2600 && pdoMilliamps(p) <= 3000) {
@@ -444,10 +487,13 @@ inline constexpr PdChoice choosePdo(const uint32_t *pdos, unsigned count)
     for (unsigned i = 0; i < count; ++i) {
         const uint32_t p = pdos[i];
         const unsigned mv = pdoMillivolts(p), ma = pdoMilliamps(p);
-        if (pdoType(p) != 0 || ma > kPdMaxMilliamps) continue;
-        if (mv != 5000 && mv != 9000 && mv != 12000 && mv != kPdMaxMillivolts) continue;
+        if (pdoType(p) != 0 || ma > kPdMaxMilliamps)
+            continue;
+        if (mv != 5000 && mv != 9000 && mv != 12000 && mv != kPdMaxMillivolts)
+            continue;
         const unsigned limit = pdInputLimit(mv, ma);
-        if (limit < kUnknownSourceMA) continue;
+        if (limit < kUnknownSourceMA)
+            continue;
         const unsigned watts = mv / 10 * limit;  // 10 mW units: fits 32 bits
         if (!choice.position || watts > bestWatts || (watts == bestWatts && mv > choice.millivolts)) {
             bestWatts = watts;

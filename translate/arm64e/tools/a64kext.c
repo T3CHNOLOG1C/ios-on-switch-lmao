@@ -30,10 +30,12 @@ static bool is_code(void *ctx, uint64_t va)
     (void)ctx;
     if (island && va >= island_lo && (va - island_lo) / 4 < island_words) {
         uint64_t w = (va - island_lo) / 4;
-        if (island[w / 8] & (1u << (w & 7))) return false;
+        if (island[w / 8] & (1u << (w & 7)))
+            return false;
     }
     for (int i = 0; i < cur->nr; i++)
-        if (va >= cur->r[i][0] && va < cur->r[i][0] + cur->r[i][1]) return true;
+        if (va >= cur->r[i][0] && va < cur->r[i][0] + cur->r[i][1])
+            return true;
     return false;
 }
 
@@ -95,12 +97,15 @@ int a64x_cmd_kext(int argc, char **argv)
             sscanf(line + 2, "%" SCNx64, &j.f[j.nf++]);
             continue;
         }
-        if (line[0] != 'E') continue;
+        if (line[0] != 'E')
+            continue;
         cur = &j;
         uint64_t lo = UINT64_MAX, hi = 0;
         for (int i = 0; i < j.nr; i++) {
-            if (j.r[i][0] < lo) lo = j.r[i][0];
-            if (j.r[i][0] + j.r[i][1] > hi) hi = j.r[i][0] + j.r[i][1];
+            if (j.r[i][0] < lo)
+                lo = j.r[i][0];
+            if (j.r[i][0] + j.r[i][1] > hi)
+                hi = j.r[i][0] + j.r[i][1];
         }
         lo &= ~4095ull;
         hi = (hi + 4095) & ~4095ull;
@@ -131,7 +136,8 @@ int a64x_cmd_kext(int argc, char **argv)
         uint64_t words = 0, changed = 0;
         for (uint64_t va = lo; va < hi; va += 4096) {
             uint32_t in[1024] = {0}, out[1024];
-            if (!(va >= base && va - base < n)) continue;
+            if (!(va >= base && va - base < n))
+                continue;
             size_t take = (va - base) + 4096 <= n ? 4096 : n - (va - base);
             memcpy(in, orig + (va - base), take);
             struct a64x_stub_region sr = {stubs_va, stubs, cap, 0};
@@ -140,8 +146,10 @@ int a64x_cmd_kext(int argc, char **argv)
                 /* only this kext's instruction sections (its data islands come back unchanged) */
                 bool mine = false;
                 for (int i = 0; i < j.nr; i++)
-                    if (va + 4 * w >= j.r[i][0] && va + 4 * w < j.r[i][0] + j.r[i][1]) mine = true;
-                if (!mine) continue;
+                    if (va + 4 * w >= j.r[i][0] && va + 4 * w < j.r[i][0] + j.r[i][1])
+                        mine = true;
+                if (!mine)
+                    continue;
                 words++;
                 if (in[w] != out[w]) {
                     changed++;
@@ -151,9 +159,11 @@ int a64x_cmd_kext(int argc, char **argv)
         }
         /* data islands inside this kext's instruction sections (the prelinker must not patch them either) */
         for (uint64_t w = 0; w < island_words; w++) {
-            if (!(isl[w / 8] & (1u << (w & 7)))) continue;
+            if (!(isl[w / 8] & (1u << (w & 7))))
+                continue;
             uint64_t e = w;
-            while (e + 1 < island_words && (isl[(e + 1) / 8] & (1u << ((e + 1) & 7)))) e++;
+            while (e + 1 < island_words && (isl[(e + 1) / 8] & (1u << ((e + 1) & 7))))
+                e++;
             printf("I %" PRIx64 " %" PRIu64 "\n", lo + 4 * w, e - w + 1);
             w = e;
         }

@@ -44,7 +44,8 @@ void missing(const char *cls, const char *selector)
 mach_port_t service(void *iokit, unsigned accelerator)
 {
     const char *self = getprogname();
-    if (!strcmp(self, "backboardd")) return accelerator;
+    if (!strcmp(self, "backboardd"))
+        return accelerator;
     // IOKit's objects are Mach ports (io_object_t, io_iterator_t).
     auto matching = (CFMutableDictionaryRef (*)(const char *))dlsym(iokit, "IOServiceMatching");
     auto services =
@@ -83,13 +84,16 @@ id open(unsigned port)
     auto map = iokit ? (MapFn)dlsym(iokit, "IOConnectMapMemory64") : nullptr;
     auto retain = iokit ? (RetainFn)dlsym(iokit, "IOObjectRetain") : nullptr;
     auto entryID = iokit ? (EntryFn)dlsym(iokit, "IORegistryEntryGetRegistryEntryID") : nullptr;
-    if (!serviceOpen || !map || !retain || !entryID) return nil;
+    if (!serviceOpen || !map || !retain || !entryID)
+        return nil;
     const mach_port_t target = service(iokit, port);
-    if (!target) return nil;
+    if (!target)
+        return nil;
     // The discovery releases the accelerator port once this returns; the connection keeps the service.
     retain(port);
     mach_port_t connection = MACH_PORT_NULL;
-    if (serviceOpen(target, mach_task_self(), kOpenType, &connection) != KERN_SUCCESS) return nil;
+    if (serviceOpen(target, mach_task_self(), kOpenType, &connection) != KERN_SUCCESS)
+        return nil;
     mach_vm_address_t address = 0;
     mach_vm_size_t size = 0;
     if (map(connection, 0, mach_task_self(), &address, &size, kMapAnywhere | kMapCopybackCache) != KERN_SUCCESS ||
@@ -120,7 +124,8 @@ id open(unsigned port)
     qemu_metal_complete_frontend((__bridge void *)device);
     qemu_metal_add_libraries(object_getClass(device));
     qemu_metal_answer_gaps(object_getClass(device));
-    if (Class objects = objc_getClass("NBObject")) qemu_metal_answer_gaps(objects);
+    if (Class objects = objc_getClass("NBObject"))
+        qemu_metal_answer_gaps(objects);
     qemu_metal_log("device %s registered for %s", [device name].UTF8String, getprogname());
     // The frontend's counters and its last refusals, every ten seconds, into the Mac's log.
     pthread_t monitor;
@@ -143,10 +148,12 @@ id open(unsigned port)
 }
 
 @implementation QemuMetalDevice
+
 - (id)initWithAcceleratorPort:(unsigned)port
 {
     self = [super init];
-    if (!self || !port) return nil;
+    if (!self || !port)
+        return nil;
     static id device;
     static bool tried;
     @synchronized([QemuMetalDevice class]) {
@@ -157,4 +164,5 @@ id open(unsigned port)
         return device;
     }
 }
+
 @end

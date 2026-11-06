@@ -97,7 +97,8 @@ static inline uint64_t tegra_vic_surface_extent(const TegraVICSurfaceDesc *d)
     const uint32_t planes = d->planes ? d->planes : 1;  // a surface without a plane array is one plane
     for (uint32_t p = 0; p < planes && p < 2; p++) {
         const uint64_t e = d->planeOffset[p] + d->planeBytesPerRow[p] * d->planeHeight[p];
-        if (e > end) end = e;
+        if (e > end)
+            end = e;
     }
     return end;
 }
@@ -107,15 +108,18 @@ static inline const char *tegra_vic_image_from(const TegraVICSurfaceDesc *d, uin
 {
     memset(im, 0, sizeof(*im));
     im->format = tegra_vic_format(d->fourcc);
-    if (!im->format) return "pixel format the scaler does not take";
+    if (!im->format)
+        return "pixel format the scaler does not take";
     if (d->planes != im->format->planes && !(d->planes == 0 && im->format->planes == 1))
         return "plane count does not match the pixel format";
     im->width = d->width;
     im->height = d->height;
     const uint64_t extent = tegra_vic_surface_extent(d);
-    if (extent > d->length) return "planes extend past the surface's memory";
+    if (extent > d->length)
+        return "planes extend past the surface's memory";
     for (uint32_t p = 0; p < im->format->planes; p++) {
-        if (d->planeBytesPerRow[p] > 0xffffffffu || d->planeHeight[p] > 0xffffffffu) return "plane geometry";
+        if (d->planeBytesPerRow[p] > 0xffffffffu || d->planeHeight[p] > 0xffffffffu)
+            return "plane geometry";
         im->pitch[p] = (uint32_t)d->planeBytesPerRow[p];
         im->rows[p] = (uint32_t)d->planeHeight[p];
         im->base[p] = window + d->planeOffset[p];
@@ -133,7 +137,11 @@ typedef struct {
     uint32_t callback;     // the caller asked for an asynchronous completion
 } TegraVICPlan;
 
-enum { TEGRA_VIC_PLAN_OK = 0, TEGRA_VIC_PLAN_BAD = 1, TEGRA_VIC_PLAN_UNSUPPORTED = 2 };
+enum {
+    TEGRA_VIC_PLAN_OK = 0,
+    TEGRA_VIC_PLAN_BAD = 1,
+    TEGRA_VIC_PLAN_UNSUPPORTED = 2
+};
 
 static inline void tegra_vic_rgb_fill(TegraVICOp *op, uint32_t r8, uint32_t g8, uint32_t b8, uint32_t a8)
 {
@@ -148,11 +156,14 @@ static inline void tegra_vic_rgb_fill(TegraVICOp *op, uint32_t r8, uint32_t g8, 
 // rounds a border fill the same way), within the surface.
 static inline void tegra_vic_even_rect(const TegraVICFormat *f, const TegraVICSurfaceDesc *d, TegraVICOp *o)
 {
-    if (!f->subsampled) return;
+    if (!f->subsampled)
+        return;
     uint32_t x0 = o->dstX & ~1u, y0 = o->dstY & ~1u, x1 = (o->dstX + o->dstW + 1) & ~1u,
              y1 = (o->dstY + o->dstH + 1) & ~1u;
-    if (x1 > d->width) x1 = d->width & ~1u;
-    if (y1 > d->height) y1 = d->height & ~1u;
+    if (x1 > d->width)
+        x1 = d->width & ~1u;
+    if (y1 > d->height)
+        y1 = d->height & ~1u;
     o->dstX = x0;
     o->dstY = y0;
     o->dstW = x1 > x0 ? x1 - x0 : 0;
@@ -168,18 +179,26 @@ static inline const char *tegra_vic_plan(const TegraVICRequest *r, const TegraVI
     memset(plan, 0, sizeof(*plan));
     *kind = TEGRA_VIC_PLAN_BAD;
     const uint64_t f = r->flags;
-    if (f & TEGRA_VIC_REQ_TRANSFORM_HIGH) return "transform value outside the 8 flips and rotations";
+    if (f & TEGRA_VIC_REQ_TRANSFORM_HIGH)
+        return "transform value outside the 8 flips and rotations";
     *kind = TEGRA_VIC_PLAN_UNSUPPORTED;
-    if (f & TEGRA_VIC_REQ_HISTOGRAM) return "histogram (none on VIC)";
-    if (f & (TEGRA_VIC_REQ_HDR | TEGRA_VIC_REQ_FILM_GRAIN)) return "HDR or film grain (capabilities say no)";
-    if (f & TEGRA_VIC_REQ_COLOR_REMAP) return "colour remap (capabilities say no)";
-    if (r->src_event_port || r->dst_event_port) return "shared events";
+    if (f & TEGRA_VIC_REQ_HISTOGRAM)
+        return "histogram (none on VIC)";
+    if (f & (TEGRA_VIC_REQ_HDR | TEGRA_VIC_REQ_FILM_GRAIN))
+        return "HDR or film grain (capabilities say no)";
+    if (f & TEGRA_VIC_REQ_COLOR_REMAP)
+        return "colour remap (capabilities say no)";
+    if (r->src_event_port || r->dst_event_port)
+        return "shared events";
     const TegraVICFormat *df = tegra_vic_format(dst->fourcc);
     const int writeOnly = (f & TEGRA_VIC_REQ_WRITE_ONLY) != 0;
-    if (!df || (!writeOnly && !tegra_vic_format(src->fourcc))) return "pixel format the scaler does not take";
-    if ((f & TEGRA_VIC_REQ_ALPHA_OVERRIDE) && df->alpha) return "alpha override into a surface with alpha";
+    if (!df || (!writeOnly && !tegra_vic_format(src->fourcc)))
+        return "pixel format the scaler does not take";
+    if ((f & TEGRA_VIC_REQ_ALPHA_OVERRIDE) && df->alpha)
+        return "alpha override into a surface with alpha";
     // Apple's driver answers kIOReturnUnsupported here too.
-    if (!writeOnly && (src->protection & ~dst->protection)) return "protected source into a less protected destination";
+    if (!writeOnly && (src->protection & ~dst->protection))
+        return "protected source into a less protected destination";
     *kind = TEGRA_VIC_PLAN_BAD;
     // Rectangles: an empty one is the whole surface (as AppleM2ScalerCSCDriver reads them).
     uint32_t dx = r->dst_x, dy = r->dst_y, dw = r->dst_w, dh = r->dst_h;

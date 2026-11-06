@@ -13,11 +13,13 @@
 static uint32_t output[WORDS], before[WORDS];
 static unsigned checks, refusals;
 static struct AdrenoConstantConfig config = {ADRENO_A740_CHIP_ID, AdrenoConstantVertex, 8192};
+
 static uint32_t reference_state(unsigned stage, unsigned destination, unsigned units)
 {
 #ifdef MESA_REFERENCE
     const enum a6xx_state_block blocks[] = {SB6_VS_SHADER, SB6_HS_SHADER, SB6_DS_SHADER,
                                             SB6_GS_SHADER, SB6_FS_SHADER, SB6_CS_SHADER};
+
     return CP_LOAD_STATE6_0_DST_OFF(destination) | CP_LOAD_STATE6_0_STATE_TYPE(ST6_CONSTANTS) |
            CP_LOAD_STATE6_0_STATE_SRC(SS6_DIRECT) | CP_LOAD_STATE6_0_STATE_BLOCK(blocks[stage]) |
            CP_LOAD_STATE6_0_NUM_UNIT(units);
@@ -26,11 +28,13 @@ static uint32_t reference_state(unsigned stage, unsigned destination, unsigned u
     return destination | 0x4000 | blocks[stage] | units * 0x400000;
 #endif
 }
+
 static void reset(void)
 {
     memset(output, 0x6b, sizeof(output));
     memcpy(before, output, sizeof(output));
 }
+
 static void rejected(const struct AdrenoConstantConfig *cfg, const struct AdrenoConstantSpan *spans, size_t count,
                      const uint8_t *data, size_t bytes, uint32_t *dst, size_t capacity, unsigned expected)
 {
@@ -40,6 +44,7 @@ static void rejected(const struct AdrenoConstantConfig *cfg, const struct Adreno
     assert(!memcmp(output, before, sizeof(output)));
     ++refusals;
 }
+
 static void positive(const struct AdrenoConstantSpan *spans, size_t count, const uint8_t *data, size_t bytes)
 {
     reset();
@@ -65,6 +70,7 @@ static void positive(const struct AdrenoConstantSpan *spans, size_t count, const
     assert(r.words == at && !memcmp(output + at, before + at, sizeof(output) - at * 4));
     ++checks;
 }
+
 int main(void)
 {
     long page = sysconf(_SC_PAGESIZE);
@@ -72,7 +78,8 @@ int main(void)
     uint8_t *mapping = mmap(NULL, (size_t)page * 3, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0);
     assert(mapping != MAP_FAILED && !mprotect(mapping + 2 * page, (size_t)page, PROT_NONE));
     uint8_t *data = mapping + 2 * page - 8192;
-    for (unsigned i = 0; i < 8192; ++i) data[i] = (uint8_t)(i * 7 + 3);
+    for (unsigned i = 0; i < 8192; ++i)
+        data[i] = (uint8_t)(i * 7 + 3);
     struct AdrenoConstantSpan one = {0, 0, 16};
     for (unsigned stage = 0; stage < 6; ++stage) {
         config.stage = stage;
@@ -93,7 +100,8 @@ int main(void)
     positive(&one, 1, data, 8192);
     config.chip_id = ADRENO_A740_CHIP_ID;
     struct AdrenoConstantSpan spans[64];
-    for (unsigned i = 0; i < 64; ++i) spans[i] = (struct AdrenoConstantSpan){i * 16, i * 32, 16};
+    for (unsigned i = 0; i < 64; ++i)
+        spans[i] = (struct AdrenoConstantSpan){i * 16, i * 32, 16};
     positive(spans, 64, data, 8192);
     /* An unaligned byte source is legal and reads exactly through its logical end. */
     one = (struct AdrenoConstantSpan){0, 0, 16};

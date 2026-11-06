@@ -27,6 +27,7 @@ const std::string &driver()
     static const std::string source = SourceText("../NativeSwitchBlock.cpp");
     return source;
 }
+
 std::string body(const char *signature)
 {
     return Body(driver(), signature);
@@ -93,9 +94,8 @@ TEST(SdAdmaSource, HighProofGuards)
     // Every table takes its limit and page filter from the proof state, per direction.
     const std::string build = body("SwitchAdmaRefusal NativeSwitchBlock::buildTable(");
     // r14-sdcq: a command-queue task stays below 4 GiB while that is unproven (its proof is a legacy command).
-    EXPECT_THAT(build,
-                HasSubstr("const uint64_t limit = task && high.state == SwitchAdmaHigh::kProving ? kAdma4GiB : "
-                          "high.limit(write);"));
+    EXPECT_THAT(build, HasSubstr("const uint64_t limit = task && high.state == SwitchAdmaHigh::kProving ? kAdma4GiB : "
+                                 "high.limit(write);"));
     EXPECT_EQ(Count(build, "table.limit = limit;"), 2u);
     EXPECT_THAT(build, HasSubstr("cacheableRam(page) && high.pageOk(page, write)"));
     // Writes never go above 4 GiB while that is unproven; the IRAM alias window stays out of proving reads.
@@ -109,8 +109,7 @@ TEST(SdAdmaSource, HighProofGuards)
     EXPECT_LT(Index(prove, "high.refuse();"), Index(prove, "stageChain(first, 0, length, checkBuffer, true)"));
     // A failed SDMA reference read proves nothing: the chain goes through the bounce buffer again.
     EXPECT_THAT(prove, HasSubstr("return bounceChain(first, sectors);"));
-    EXPECT_THAT(After(source, "void NativeSwitchBlock::beginBatch("),
-                HasSubstr("high.proofDue(b.write, table.high)"));
+    EXPECT_THAT(After(source, "void NativeSwitchBlock::beginBatch("), HasSubstr("high.proofDue(b.write, table.high)"));
     const std::string batch = body("void NativeSwitchBlock::endBatch(");
     EXPECT_THAT(batch, HasSubstr("if (!proveHigh(first, sectors)) result = kIOReturnIOError;"));
     // A write from pages above 4 GiB is read back while those checks last.

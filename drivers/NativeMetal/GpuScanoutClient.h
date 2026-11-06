@@ -55,7 +55,8 @@ public:
         note(0x6712);
         status = transport_.mapScanout(transport_.context, &address, &length);
         note(0x6713);
-        if (status || !address || length < mode.bytes) return fail(3, status);
+        if (status || !address || length < mode.bytes)
+            return fail(3, status);
         // The mapping covers whole pages; the framebuffer allocation ends on a page boundary, the copy never writes past the last row.
         gpupresent::Scanout scanout = {(void *)(uintptr_t)address, (size_t)((mode.bytes + page - 1) & ~(page - 1)),
                                        (size_t)mode.stride, (uint32_t)mode.width, (uint32_t)mode.height};
@@ -63,17 +64,20 @@ public:
         scanout_ = scanout;
         presenter_ = new gpupresent::Presenter(device, scanout);
         note(0x6715);
-        if (!presenter_->ready()) return fail(3, 0);
+        if (!presenter_->ready())
+            return fail(3, 0);
         stats_->step = 4;
         return true;
     }
+
     // One wait (at most timeoutMs) and, when the display driver offered a frame, one GPU copy and its completion. Returns false on a
     // protocol error that makes further serving pointless.
     bool serveOne(uint64_t timeoutMs)
     {
         NGPWait wait = {timeoutMs};
         NGPSwap swap = {};
-        if (!stats_->timeouts && !stats_->frames) note(0x6720);  // first wait
+        if (!stats_->timeouts && !stats_->frames)
+            note(0x6720);  // first wait
         const int status =
             transport_.call(transport_.context, NGP_METHOD_WAIT_SWAP, &wait, sizeof wait, &swap, sizeof swap);
         if (status) {
@@ -93,12 +97,14 @@ public:
                                  (size_t)swap.stride, swap.width, swap.height});
         {
             static mach_timebase_info_data_t base;
-            if (!base.denom) mach_timebase_info(&base);
+            if (!base.denom)
+                mach_timebase_info(&base);
             stats_->lastMs = (uint32_t)(((mach_absolute_time() - began) * base.numer / base.denom) / 1000000);
             stats_->totalMs += stats_->lastMs;
         }
         stats_->lastResult = (int)r;
-        if (r == gpupresent::kOk && stats_->verified < 4) verify(swap);
+        if (r == gpupresent::kOk && stats_->verified < 4)
+            verify(swap);
         note(0x6731);  // the GPU copy returned
         NGPComplete done = {swap.sequence, r == gpupresent::kOk ? 0u : 0xe00002bcu /* kIOReturnError */, 0};
         const int completed =
@@ -134,16 +140,20 @@ private:
         }
         ++stats_->verified;
     }
+
     void note(uint32_t value)
     {
-        if (transport_.mark) transport_.mark(transport_.context, value);
+        if (transport_.mark)
+            transport_.mark(transport_.context, value);
     }
+
     bool fail(int step, int error)
     {
         stats_->step = step;
         stats_->error = error;
         return false;
     }
+
     Transport transport_ = {};
     gpupresent::Presenter *presenter_ = nullptr;
     gpupresent::Scanout scanout_ = {};

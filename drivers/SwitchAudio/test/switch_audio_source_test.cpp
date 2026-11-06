@@ -19,8 +19,8 @@
 
 namespace {
 
-using switch_ios::test::SourceText;
 using switch_audio_linux::Fraction;
+using switch_ios::test::SourceText;
 using testing::HasSubstr;
 using testing::Not;
 
@@ -35,7 +35,8 @@ std::optional<int64_t> constant(const std::string &text, const std::string &name
 {
     const std::regex pattern("\\b" + name + "\\s*=\\s*(0x[0-9a-fA-F]+|[0-9]+)");
     std::smatch match;
-    if (!std::regex_search(text, match, pattern)) return std::nullopt;
+    if (!std::regex_search(text, match, pattern))
+        return std::nullopt;
     return std::stoll(match[1].str(), nullptr, 0);
 }
 

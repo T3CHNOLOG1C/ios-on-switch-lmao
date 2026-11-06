@@ -108,6 +108,7 @@ public:
         return request;
     }
 };
+
 static_assert(sizeof(IOService) == 0x88, "Pinned original IOService base size");
 static_assert(sizeof(IOUSBDeviceController) == 0x228, "Pinned original IOUSBDeviceController size");
 
@@ -122,10 +123,12 @@ public:
     void inputDataPacket(uint8_t *bytes, uint64_t length);
     void stallSetupRequest();
     void reset();
+
     int state() const
     {
         return *reinterpret_cast<const volatile int *>(reinterpret_cast<const unsigned char *>(this) + 12);
     }
+
     uint16_t setupLength() const
     {
         const unsigned char *setup = reinterpret_cast<const unsigned char *>(this) + 16;

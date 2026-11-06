@@ -51,6 +51,7 @@ static os_log_t rawLog()
 // freeze, the userland twin of the kernel's missing-interrupt panic. Nothing waits that long when it works: the kernel's own GPU
 // waits panic within 10 s.
 static constexpr auto kWaitLimit = std::chrono::seconds(20);
+
 [[noreturn]] static void waitTooLong(const char *what, const void *object)
 {
     os_log_fault(rawLog(), "raw: %{public}s %p not done after %lld s: abort() for the stack", what, object,
@@ -71,7 +72,8 @@ static void once(NSString *text)
     static std::set<std::string> seen;
     {
         std::lock_guard<std::mutex> l(lock);
-        if (seen.size() > 512 || !seen.insert(text.UTF8String).second) return;
+        if (seen.size() > 512 || !seen.insert(text.UTF8String).second)
+            return;
     }
     os_log_error(rawLog(), "raw: %{public}@", text);
 #if !TARGET_OS_IPHONE
@@ -88,6 +90,7 @@ static double hostSeconds()
     }();
     return double(mach_absolute_time()) * tb.numer / tb.denom / 1e9;
 }
+
 static uint64_t nowUs()
 {
     return clock_gettime_nsec_np(CLOCK_UPTIME_RAW) / 1000;
@@ -158,6 +161,7 @@ enum RMPred : uint8_t {
     PredEncNoTic,
     PredCount
 };
+
 static_assert(PredCount <= 64, "one mask word");
 static const char *const kPredNames[] = {"-",
                                          "tex.shape",
@@ -219,11 +223,13 @@ static inline bool predLogged(RMPred p)
 {
     return gPredLogged.load(std::memory_order_relaxed) >> p & 1;
 }
+
 // The predicate's first hit in the process: one line with its values (`detail`: the resource's, when it was made)
 static void logPred(RMPred p, uint64_t a, uint64_t b, NSString *detail)
 {
     const uint64_t bit = 1ull << p;
-    if (gPredLogged.fetch_or(bit, std::memory_order_relaxed) & bit) return;
+    if (gPredLogged.fetch_or(bit, std::memory_order_relaxed) & bit)
+        return;
     os_log_error(rawLog(), "raw: first %{public}s: a=%llu (0x%llx) b=%llu (0x%llx)%{public}s%{public}@", kPredNames[p],
                  (unsigned long long)a, (unsigned long long)a, (unsigned long long)b, (unsigned long long)b,
                  detail ? " " : "", detail ?: @"");
@@ -240,10 +246,12 @@ static const char *metalTypes(SEL selector)
     Protocol *__unsafe_unretained *protocols = objc_copyProtocolList(&count);
     const char *types = nullptr;
     for (unsigned i = 0; i < count && !types; ++i) {
-        if (strncmp(protocol_getName(protocols[i]), "MTL", 3) != 0) continue;
+        if (strncmp(protocol_getName(protocols[i]), "MTL", 3) != 0)
+            continue;
         for (int required = 1; required >= 0 && !types; --required) {
             const objc_method_description d = protocol_getMethodDescription(protocols[i], selector, required, YES);
-            if (d.name) types = d.types;
+            if (d.name)
+                types = d.types;
         }
     }
     free(protocols);
@@ -260,6 +268,7 @@ static bool rawShape(MTLTextureDescriptor *d)
     return d.textureType == MTLTextureType2D && d.mipmapLevelCount <= 1 && d.sampleCount <= 1 && d.arrayLength <= 1 &&
            d.depth <= 1 && !turned && raw::formatInfo(uint32_t(d.pixelFormat));
 }
+
 // A mipmapped texture the raw path keeps as a pool texture and a block-linear chain of its levels (raw::Device::createMipTexture,
 // raw/fx): 2D, one sample, one layer, no rotation, private or memoryless (no CPU access to any level: every write is GPU work the
 // tape orders; r7r: Core Animation makes 776x24 mipmapped surfaces memoryless too, kept here as private ones, a superset),
@@ -275,6 +284,7 @@ static bool chainShape(MTLTextureDescriptor *d)
            (d.storageMode == MTLStorageModePrivate || d.storageMode == MTLStorageModeMemoryless) && f && f->rt &&
            !f->srgb && raw::fx::twodFormat(uint32_t(d.pixelFormat));
 }
+
 // Diagnostics: which rawShape term fails (1 type, 2 levels, 3 samples, 4 array/depth, 5 rotation, 6 format; 0 none)
 static uint32_t rawShapeTerm(MTLTextureDescriptor *d)
 {
@@ -289,6 +299,7 @@ static uint32_t rawShapeTerm(MTLTextureDescriptor *d)
            : !raw::formatInfo(uint32_t(d.pixelFormat)) ? 6
                                                        : 0;
 }
+
 static NSString *describe(MTLTextureDescriptor *d)
 {
     static const SEL rotation = NSSelectorFromString(@"rotation");
@@ -314,38 +325,51 @@ static size_t constantBytes(uint64_t type)
     switch (type) {
     case 3:
     case 29:
-    case 33: return 4;
+    case 33:
+        return 4;
     case 4:
     case 30:
-    case 34: return 8;
+    case 34:
+        return 8;
     case 6:
     case 32:
-    case 36: return 16;
+    case 36:
+        return 16;
     case 16:
     case 37:
-    case 41: return 2;
+    case 41:
+        return 2;
     case 17:
     case 38:
-    case 42: return 4;
+    case 42:
+        return 4;
     case 19:
     case 40:
-    case 44: return 8;
+    case 44:
+        return 8;
     case 45:
     case 49:
-    case 53: return 1;
+    case 53:
+        return 1;
     case 46:
     case 50:
-    case 54: return 2;
+    case 54:
+        return 2;
     case 48:
     case 52:
-    case 56: return 4;
+    case 56:
+        return 4;
     case 81:
-    case 85: return 8;
+    case 85:
+        return 8;
     case 82:
-    case 86: return 16;
+    case 86:
+        return 16;
     case 84:
-    case 88: return 32;
-    default: return 0;
+    case 88:
+        return 32;
+    default:
+        return 0;
     }
 }
 
@@ -379,8 +403,10 @@ enum RMReason : uint8_t {
     WhyEncode,
     WhyCount
 };
+
 static const char *const kReasonNames[WhyCount] = {"raw",     "state",   "texture", "pass",  "call",
                                                    "compute", "mipmaps", "event",   "encode"};
+
 struct Stats {
     std::atomic<uint64_t> raw{0}, m2v{0}, deferred{0}, aborted{0}, encodeUs{0}, draws{0}, passes{0}, copies{0},
         reasons[WhyCount], switches{0}, cpuOrdered{0}, acquires{0}, eventsReleased{0}, heldReturns{0};
@@ -392,6 +418,7 @@ struct Stats {
     // command buffers completed (finish): with the commits, what the stall line (rawStall) watches
     std::atomic<uint64_t> finished{0};
 };
+
 struct RawState {
     raw::Device *raw = nullptr;
     id<MTLDevice> fallback;                 // the m2v device
@@ -420,6 +447,7 @@ struct RawState {
     dispatch_queue_t handlers;               // where scheduled handlers run (in order, never inside commit)
     Stats stats;
 };
+
 static RawState *gRM;
 static uint64_t signalled(NSMapTable *map, void *event);  // the order section's (below)
 
@@ -430,7 +458,8 @@ static uint64_t signalled(NSMapTable *map, void *event);  // the order section's
 static id twinPublish(id object, __strong id &slot, id made)
 {
     @synchronized(object) {
-        if (!slot) slot = made;
+        if (!slot)
+            slot = made;
         return slot;
     }
 }
@@ -450,14 +479,17 @@ static id twinPublish(id object, __strong id &slot, id made)
 @end
 
 @implementation RMObject
+
 - (id)rmTwin
 {
     return _twin;
 }
+
 - (id<MTLDevice>)device
 {
     return (id<MTLDevice>)_device;
 }
+
 // A selector this class does not answer goes to the twin (an m2v object: its answer is today's). respondsToSelector: says what the
 // twin's class says, so Core Animation's optional paths choose as they do on m2v.
 - (id)forwardingTargetForSelector:(SEL)selector
@@ -468,17 +500,22 @@ static id twinPublish(id object, __strong id &slot, id made)
                                         sel_getName(selector)]);
     return twin;
 }
+
 - (BOOL)respondsToSelector:(SEL)selector
 {
-    if ([super respondsToSelector:selector]) return YES;
-    if (_twin) return [_twin respondsToSelector:selector];
+    if ([super respondsToSelector:selector])
+        return YES;
+    if (_twin)
+        return [_twin respondsToSelector:selector];
     Class c = [[self class] twinClass];
     return c ? [c instancesRespondToSelector:selector] : NO;
 }
+
 + (Class)twinClass
 {
     return nil;
 }
+
 @end
 
 // ---- functions and libraries: the m2v library and functions, with the name and constants text the pack keys by ----
@@ -495,20 +532,24 @@ static id twinPublish(id object, __strong id &slot, id made)
 @property (nonatomic, copy) NSString *name;
 @end
 @implementation RMFunction
+
 + (Class)twinClass
 {
     return NSClassFromString(@"NBFunction");
 }
+
 - (MTLFunctionType)functionType
 {
     return [(id<MTLFunction>)_twin functionType];
 }
+
 @end
 
 static std::string constantsText(MTLFunctionConstantValues *values)
 {
     std::string text;
-    if (!values) return text;
+    if (!values)
+        return text;
     MTLFunctionConstantValues *snapshot = [values copy];
     NSArray *groups[2] = {[snapshot newIndexedConstantArray], [snapshot newNamedConstantArray]};
     for (int g = 0; g < 2; g++)
@@ -532,13 +573,16 @@ static std::string constantsText(MTLFunctionConstantValues *values)
 }
 
 @implementation RMLibrary
+
 + (Class)twinClass
 {
     return NSClassFromString(@"NBLibrary");
 }
+
 - (RMFunction *)wrap:(id<MTLFunction>)twin name:(NSString *)name constants:(MTLFunctionConstantValues *)values
 {
-    if (!twin) return nil;
+    if (!twin)
+        return nil;
     RMFunction *f = [RMFunction new];
     f->_device = _device;
     f->_twin = twin;
@@ -547,10 +591,12 @@ static std::string constantsText(MTLFunctionConstantValues *values)
     f.name = name;
     return f;
 }
+
 - (id<MTLFunction>)newFunctionWithName:(NSString *)name
 {
     return (id<MTLFunction>)[self wrap:[(id<MTLLibrary>)_twin newFunctionWithName:name] name:name constants:nil];
 }
+
 - (id<MTLFunction>)newFunctionWithName:(NSString *)name
                         constantValues:(MTLFunctionConstantValues *)values
                                  error:(NSError **)error
@@ -561,6 +607,7 @@ static std::string constantsText(MTLFunctionConstantValues *values)
                                   name:name
                              constants:values];
 }
+
 - (void)newFunctionWithName:(NSString *)name
              constantValues:(MTLFunctionConstantValues *)values
           completionHandler:(void (^)(id<MTLFunction>, NSError *))handler
@@ -573,17 +620,20 @@ static std::string constantsText(MTLFunctionConstantValues *values)
                                  handler((id<MTLFunction>)[me wrap:f name:name constants:copy], e);
                              }];
 }
+
 - (id<MTLFunction>)newFunctionWithDescriptor:(MTLFunctionDescriptor *)d error:(NSError **)error
 {
     return (id<MTLFunction>)[self wrap:[(id<MTLLibrary>)_twin newFunctionWithDescriptor:d error:error]
                                   name:d.name
                              constants:d.constantValues];
 }
+
 @end
 
 static RMLibrary *wrapLibrary(id device, id<MTLLibrary> twin, NSString *path)
 {
-    if (!twin) return nil;
+    if (!twin)
+        return nil;
     RMLibrary *l = [RMLibrary new];
     l->_device = device;
     l->_twin = twin;
@@ -602,7 +652,8 @@ NSString *raw_metal_pipeline_key(MTLRenderPipelineDescriptor *d)
     std::string key = head;
     for (unsigned i = 0; i < 8; i++) {
         MTLRenderPipelineColorAttachmentDescriptor *a = d.colorAttachments[i];
-        if (a.pixelFormat == MTLPixelFormatInvalid) continue;
+        if (a.pixelFormat == MTLPixelFormatInvalid)
+            continue;
         snprintf(head, sizeof head, "c%u=%lu:%lu:%d:%lu:%lu:%lu:%lu:%lu:%lu ", i, (unsigned long)a.pixelFormat,
                  (unsigned long)a.writeMask, (int)a.blendingEnabled, (unsigned long)a.sourceRGBBlendFactor,
                  (unsigned long)a.destinationRGBBlendFactor, (unsigned long)a.rgbBlendOperation,
@@ -613,7 +664,8 @@ NSString *raw_metal_pipeline_key(MTLRenderPipelineDescriptor *d)
     if (MTLVertexDescriptor *v = d.vertexDescriptor)
         for (unsigned i = 0; i < 31; i++) {
             MTLVertexAttributeDescriptor *a = v.attributes[i];
-            if (a.format == MTLVertexFormatInvalid) continue;
+            if (a.format == MTLVertexFormatInvalid)
+                continue;
             MTLVertexBufferLayoutDescriptor *l = v.layouts[a.bufferIndex < 31 ? a.bufferIndex : 0];
             snprintf(head, sizeof head, "a%u=%lu:%lu:%lu:%lu:%lu:%lu ", i, (unsigned long)a.format,
                      (unsigned long)a.offset, (unsigned long)a.bufferIndex, (unsigned long)l.stride,
@@ -624,7 +676,8 @@ NSString *raw_metal_pipeline_key(MTLRenderPipelineDescriptor *d)
     RMFunction *ff = [(id)d.fragmentFunction isKindOfClass:[RMFunction class]] ? (RMFunction *)d.fragmentFunction : nil;
     key += " | v " + std::string(vf ? vf.name.UTF8String : "-") + " " + (vf ? vf->_constants : "");
     key += " | f " + std::string(ff ? ff.name.UTF8String : "-") + " " + (ff ? ff->_constants : "");
-    while (!key.empty() && key.back() == ' ') key.pop_back();
+    while (!key.empty() && key.back() == ' ')
+        key.pop_back();
     return [NSString stringWithUTF8String:key.c_str()];
 }
 
@@ -653,23 +706,30 @@ NSString *raw_metal_pipeline_key(MTLRenderPipelineDescriptor *d)
 @end
 
 @implementation RMBuffer
+
 + (Class)twinClass
 {
     return NSClassFromString(@"NBBuffer");
 }
+
 - (void)dealloc
 {
     _twin = nil;  // m2v's import over these pages goes first
     void *bytes = _raw.cpu;
     const NSUInteger length = NSUInteger(_raw.length);
-    if (gRM) gRM->raw->destroyBuffer(_raw);
-    if (_heap) _heap->_used -= length;
-    if (_deallocator) _deallocator(bytes, length);
+    if (gRM)
+        gRM->raw->destroyBuffer(_raw);
+    if (_heap)
+        _heap->_used -= length;
+    if (_deallocator)
+        _deallocator(bytes, length);
 }
+
 - (id)rmTwin
 {
     @synchronized(self) {
-        if (_twin) return _twin;
+        if (_twin)
+            return _twin;
     }
     // made outside this object's lock (twinPublish): over the same pages, a pool span or the caller's no-copy pages, whole
     const size_t page = size_t(getpagesize());
@@ -679,53 +739,65 @@ NSString *raw_metal_pipeline_key(MTLRenderPipelineDescriptor *d)
                                                        options:_options
                                                    deallocator:nil]);
 }
+
 // A CPU read after a GPU write: the GPU's bytes, not lines the CPU cached before (clean+invalidate keeps any CPU write)
 - (void)invalidateForCpu
 {
-    if (!_gpuDirty.exchange(false) || _raw.wc) return;  // (write-combined: the CPU reads memory itself)
+    if (!_gpuDirty.exchange(false) || _raw.wc)
+        return;  // (write-combined: the CPU reads memory itself)
 #if defined(__aarch64__)
     for (uintptr_t a = uintptr_t(_raw.cpu) & ~uintptr_t(63); a < uintptr_t(_raw.cpu) + _raw.length; a += 64)
         __asm__ volatile("dc civac, %0" ::"r"(a) : "memory");
     __asm__ volatile("dsb sy" ::: "memory");
 #endif
 }
+
 - (void *)contents
 {
     [self invalidateForCpu];
     return _raw.cpu;
 }
+
 - (NSUInteger)length
 {
     return NSUInteger(_raw.length);
 }
+
 - (NSUInteger)allocatedSize
 {
     return NSUInteger(_raw.span.valid() ? _raw.span.bytes : _raw.length);
 }
+
 - (uint64_t)gpuAddress
 {
     return _raw.va;
 }
+
 - (MTLResourceOptions)resourceOptions
 {
     return _options;
 }
+
 - (MTLStorageMode)storageMode
 {
     return MTLStorageMode((_options & MTLResourceStorageModeMask) >> MTLResourceStorageModeShift);
 }
+
 - (MTLCPUCacheMode)cpuCacheMode
 {
     return MTLCPUCacheMode((_options & MTLResourceCPUCacheModeMask) >> MTLResourceCPUCacheModeShift);
 }
+
 - (MTLHazardTrackingMode)hazardTrackingMode
 {
     return MTLHazardTrackingMode((_options & MTLResourceHazardTrackingModeMask) >> MTLResourceHazardTrackingModeShift);
 }
+
 - (void)didModifyRange:(NSRange)range
 {
     (void)range;  // the draws that read it clean what they read (raw_gpu.cpp CommandBuffer::clean)
 }
+
 // The pages are never given back while the buffer lives: Volatile and Empty keep the contents (a later NonVolatile answers what
 // was asked before, never Empty), which is what a caller that refills on Empty needs.
 - (MTLPurgeableState)setPurgeableState:(MTLPurgeableState)state
@@ -735,20 +807,25 @@ NSString *raw_metal_pipeline_key(MTLRenderPipelineDescriptor *d)
         _purgeable = state == MTLPurgeableStateEmpty ? MTLPurgeableStateVolatile : state;
     return old;
 }
+
 - (id<MTLHeap>)heap
 {
     return (id<MTLHeap>)_heap;
 }
+
 - (void)makeAliasable
 {}
+
 - (BOOL)isAliasable
 {
     return NO;
 }
+
 - (IOSurfaceRef)iosurface
 {
     return nullptr;
 }
+
 @end
 
 typedef NS_ENUM(uint8_t, RMTextureKind) {
@@ -796,10 +873,12 @@ typedef NS_ENUM(uint8_t, RMTextureKind) {
 @end
 
 @implementation RMTexture
+
 + (Class)twinClass
 {
     return NSClassFromString(@"NBTexture");
 }
+
 // SPI: the descriptor's (0 for every texture the raw path keeps, rawShape)
 - (NSUInteger)rotation
 {
@@ -807,23 +886,30 @@ typedef NS_ENUM(uint8_t, RMTextureKind) {
     return [_descriptor respondsToSelector:rotation] ? ((NSUInteger (*)(id, SEL))objc_msgSend)(_descriptor, rotation)
                                                      : 0;
 }
+
 - (void)dealloc
 {
     _twin = nil;
     if (_rawOk)
-        if (gRM) gRM->raw->destroyTexture(_raw);
-    if (_surface) CFRelease(_surface);
+        if (gRM)
+            gRM->raw->destroyTexture(_raw);
+    if (_surface)
+        CFRelease(_surface);
 }
+
 - (id)rmTwin
 {
     @synchronized(self) {
-        if (_twin) return _twin;
+        if (_twin)
+            return _twin;
     }
     id<MTLDevice> m2v = gRM->fallback;
     id made = nil;  // outside this object's lock (twinPublish)
     {
         switch (_kind) {
-        case RMTextureSurface: made = [m2v newTextureWithDescriptor:_descriptor iosurface:_surface plane:_plane]; break;
+        case RMTextureSurface:
+            made = [m2v newTextureWithDescriptor:_descriptor iosurface:_surface plane:_plane];
+            break;
         case RMTexturePool: {  // m2v's in-place texture over the same pool pages (as an IOSurface's)
             const size_t page = size_t(getpagesize());
             id<MTLBuffer> pages = [m2v newBufferWithBytesNoCopy:_raw.span.cpu
@@ -834,7 +920,8 @@ typedef NS_ENUM(uint8_t, RMTextureKind) {
             if (_raw.chain) {  // level 0 (the chain's levels are the m2v texture of every level's: rmMipTwin)
                 d = [_descriptor copy];
                 d.mipmapLevelCount = 1;
-                if (d.storageMode == MTLStorageModeMemoryless) d.storageMode = MTLStorageModePrivate;  // (memory here)
+                if (d.storageMode == MTLStorageModeMemoryless)
+                    d.storageMode = MTLStorageModePrivate;  // (memory here)
             }
             if (pages && native_bridge_metal_texture_in_place)
                 made = native_bridge_metal_texture_in_place(pages, d, 0, _raw.pitch);
@@ -850,8 +937,11 @@ typedef NS_ENUM(uint8_t, RMTextureKind) {
         case RMTextureView:
             made = [(id<MTLTexture>)[_parent rmTwin] newTextureViewWithPixelFormat:_descriptor.pixelFormat];
             break;
-        case RMTextureMemoryless: made = [m2v newTextureWithDescriptor:_descriptor]; break;
-        case RMTextureTwinOnly: break;
+        case RMTextureMemoryless:
+            made = [m2v newTextureWithDescriptor:_descriptor];
+            break;
+        case RMTextureTwinOnly:
+            break;
         }
     }
     id twin = twinPublish(self, _twin, made);
@@ -860,19 +950,23 @@ typedef NS_ENUM(uint8_t, RMTextureKind) {
                                         _raw.height, (unsigned long)_descriptor.pixelFormat, unsigned(_kind)]);
     return twin;
 }
+
 // A mipmapped texture's m2v texture of every level (made on first need)
 - (id)rmMipTwin
 {
     @synchronized(self) {
-        if (_mipTwin) return _mipTwin;
+        if (_mipTwin)
+            return _mipTwin;
     }
     return twinPublish(self, _mipTwin, [gRM->fallback newTextureWithDescriptor:_descriptor]);
 }
+
 // Level `level`'s mirror (_mirrors): a pitch pool texture of the level's size and format, with its m2v in-place twin. nil:
 // none, and the levels cross between the drivers by being generated from level 0.
 - (RMTexture *)rmMirror:(NSUInteger)level
 {
-    if (!_raw.chain || !level || level >= _raw.chain->layout.levels) return nil;
+    if (!_raw.chain || !level || level >= _raw.chain->layout.levels)
+        return nil;
     @synchronized(self) {
         if (_mirrors && level < _mirrors.count && [_mirrors[level] isKindOfClass:[RMTexture class]])
             return _mirrors[level];
@@ -894,109 +988,137 @@ typedef NS_ENUM(uint8_t, RMTextureKind) {
         return nil;
     }
     @synchronized(self) {
-        if (!_mirrors) _mirrors = [NSMutableArray array];
-        while (_mirrors.count <= level) [_mirrors addObject:[NSNull null]];
-        if ([_mirrors[level] isKindOfClass:[RMTexture class]]) return _mirrors[level];
+        if (!_mirrors)
+            _mirrors = [NSMutableArray array];
+        while (_mirrors.count <= level)
+            [_mirrors addObject:[NSNull null]];
+        if ([_mirrors[level] isKindOfClass:[RMTexture class]])
+            return _mirrors[level];
         _mirrors[level] = m;
     }
     return m;
 }
+
 - (MTLTextureType)textureType
 {
     return _descriptor.textureType;
 }
+
 - (MTLPixelFormat)pixelFormat
 {
     return _descriptor.pixelFormat;
 }
+
 - (NSUInteger)width
 {
     return _descriptor.width;
 }
+
 - (NSUInteger)height
 {
     return _descriptor.height;
 }
+
 - (NSUInteger)depth
 {
     return _descriptor.depth;
 }
+
 - (NSUInteger)mipmapLevelCount
 {
     return _descriptor.mipmapLevelCount;
 }
+
 - (NSUInteger)arrayLength
 {
     return _descriptor.arrayLength;
 }
+
 - (NSUInteger)sampleCount
 {
     return _descriptor.sampleCount;
 }
+
 - (MTLTextureUsage)usage
 {
     return _descriptor.usage;
 }
+
 - (MTLStorageMode)storageMode
 {
     return _descriptor.storageMode;
 }
+
 - (MTLCPUCacheMode)cpuCacheMode
 {
     return _descriptor.cpuCacheMode;
 }
+
 - (MTLHazardTrackingMode)hazardTrackingMode
 {
     return _descriptor.hazardTrackingMode;
 }
+
 - (MTLResourceOptions)resourceOptions
 {
     return _descriptor.resourceOptions;
 }
+
 - (BOOL)isFramebufferOnly
 {
     return NO;
 }
+
 - (BOOL)allowGPUOptimizedContents
 {
     return _descriptor.allowGPUOptimizedContents;
 }
+
 - (IOSurfaceRef)iosurface
 {
     return _surface;
 }
+
 - (NSUInteger)iosurfacePlane
 {
     return _plane;
 }
+
 - (id<MTLTexture>)parentTexture
 {
     return (id<MTLTexture>)_parent;
 }
+
 - (id<MTLBuffer>)buffer
 {
     return (id<MTLBuffer>)_buffer;
 }
+
 - (NSUInteger)bufferOffset
 {
     return _offset;
 }
+
 - (NSUInteger)bufferBytesPerRow
 {
     return _rowBytes;
 }
+
 - (NSUInteger)parentRelativeLevel
 {
     return 0;
 }
+
 - (NSUInteger)parentRelativeSlice
 {
     return 0;
 }
+
 - (BOOL)isShareable
 {
     return NO;
 }
+
 - (MTLPurgeableState)setPurgeableState:(MTLPurgeableState)state
 {
     const MTLPurgeableState old = _purgeable ? _purgeable : MTLPurgeableStateNonVolatile;
@@ -1004,16 +1126,20 @@ typedef NS_ENUM(uint8_t, RMTextureKind) {
         _purgeable = state == MTLPurgeableStateEmpty ? MTLPurgeableStateVolatile : state;
     return old;
 }
+
 - (void)makeAliasable
 {}
+
 - (BOOL)isAliasable
 {
     return NO;
 }
+
 - (id<MTLHeap>)heap
 {
     return nil;
 }
+
 // CPU writes into the texture's own pages (level 0, slice 0, a 2D texture), cleaned to memory at once: a later command buffer's
 // GPU reads see them. Other textures are m2v's (their twin's replaceRegion).
 - (void)replaceRegion:(MTLRegion)r
@@ -1032,7 +1158,8 @@ typedef NS_ENUM(uint8_t, RMTextureKind) {
                                        bytesPerImage:image];
         return;
     }
-    if (r.origin.x + r.size.width > _raw.width || r.origin.y + r.size.height > _raw.height) return;
+    if (r.origin.x + r.size.width > _raw.width || r.origin.y + r.size.height > _raw.height)
+        return;
     const size_t line = r.size.width * _raw.bpp;
     for (NSUInteger y = 0; y < r.size.height; y++) {
         uint8_t *to = _raw.cpu + (r.origin.y + y) * _raw.pitch + r.origin.x * _raw.bpp;
@@ -1047,6 +1174,7 @@ typedef NS_ENUM(uint8_t, RMTextureKind) {
     __asm__ volatile("dsb sy" ::: "memory");
 #endif
 }
+
 - (void)replaceRegion:(MTLRegion)r
           mipmapLevel:(NSUInteger)level
             withBytes:(const void *)bytes
@@ -1054,6 +1182,7 @@ typedef NS_ENUM(uint8_t, RMTextureKind) {
 {
     [self replaceRegion:r mipmapLevel:level slice:0 withBytes:bytes bytesPerRow:row bytesPerImage:0];
 }
+
 // CPU reads of what the GPU wrote: its lines invalidated first (once per GPU write), then the rows
 - (void)getBytes:(void *)bytes
       bytesPerRow:(NSUInteger)row
@@ -1071,7 +1200,8 @@ typedef NS_ENUM(uint8_t, RMTextureKind) {
                                           slice:slice];
         return;
     }
-    if (r.origin.x + r.size.width > _raw.width || r.origin.y + r.size.height > _raw.height) return;
+    if (r.origin.x + r.size.width > _raw.width || r.origin.y + r.size.height > _raw.height)
+        return;
 #if defined(__aarch64__)
     if (_gpuDirty.exchange(false) && !_raw.wc) {
         for (uintptr_t a = uintptr_t(_raw.cpu) & ~uintptr_t(63);
@@ -1084,10 +1214,12 @@ typedef NS_ENUM(uint8_t, RMTextureKind) {
     for (NSUInteger y = 0; y < r.size.height; y++)
         memcpy((uint8_t *)bytes + y * row, _raw.cpu + (r.origin.y + y) * _raw.pitch + r.origin.x * _raw.bpp, line);
 }
+
 - (void)getBytes:(void *)bytes bytesPerRow:(NSUInteger)row fromRegion:(MTLRegion)r mipmapLevel:(NSUInteger)level
 {
     [self getBytes:bytes bytesPerRow:row bytesPerImage:0 fromRegion:r mipmapLevel:level slice:0];
 }
+
 // A view: the same memory under another format's header (raw), or m2v's view of the twin
 - (id<MTLTexture>)newTextureViewWithPixelFormat:(MTLPixelFormat)format
 {
@@ -1107,16 +1239,20 @@ typedef NS_ENUM(uint8_t, RMTextureKind) {
     if (!v->_rawOk)
         refuseTexture(v, PredTexView, format, _rawOk, @"view",
                       [NSString stringWithFormat:@"parent kind %u pred %s", unsigned(_kind), kPredNames[_pred]]);
-    if (!v->_rawOk && ![v rmTwin]) return nil;
+    if (!v->_rawOk && ![v rmTwin])
+        return nil;
     return (id<MTLTexture>)v;
 }
+
 @end
 
 static const char *ycbcr420Why(MTLTextureDescriptor *d, IOSurfaceRef s, NSUInteger plane);
+
 static NSString *surfaceShape(RMTexture *t)
 {
     IOSurfaceRef s = t->_surface;
-    if (!s) return @"";
+    if (!s)
+        return @"";
     const OSType fourcc = IOSurfaceGetPixelFormat(s);
     const size_t planes = IOSurfaceGetPlaneCount(s);
     NSMutableString *out =
@@ -1153,14 +1289,17 @@ static void refuseTexture(RMTexture *t, RMPred p, uint64_t a, uint64_t b, NSStri
                          (unsigned long)d.usage, (unsigned long)d.storageMode, surfaceShape(t)];
     {
         std::lock_guard<std::mutex> l(lock);
-        if (!seen) seen = [NSMutableSet set];
-        if (seen.count >= 32 || [seen containsObject:shape]) return;
+        if (!seen)
+            seen = [NSMutableSet set];
+        if (seen.count >= 32 || [seen containsObject:shape])
+            return;
         [seen addObject:shape];
     }
     os_log(rawLog(), "raw: texture on m2v: %{public}@", shape);
 }
 
 @implementation RMBuffer (Textures)
+
 // A texture over the buffer's bytes: the same memory under a texture header (raw), or m2v's in-place texture over the twin
 - (id<MTLTexture>)newTextureWithDescriptor:(MTLTextureDescriptor *)d
                                     offset:(NSUInteger)offset
@@ -1190,9 +1329,11 @@ static void refuseTexture(RMTexture *t, RMPred p, uint64_t a, uint64_t b, NSStri
         else
             refuseTexture(t, PredTexBufOther, offset + uint64_t(row) * d.height, _raw.length, @"buffer", extra);
     }
-    if (!t->_rawOk && ![t rmTwin]) return nil;
+    if (!t->_rawOk && ![t rmTwin])
+        return nil;
     return (id<MTLTexture>)t;
 }
+
 // SPI (Core Animation): the same, one 2D image
 - (id<MTLTexture>)newLinearTextureWithDescriptor:(MTLTextureDescriptor *)d
                                           offset:(NSUInteger)offset
@@ -1202,6 +1343,7 @@ static void refuseTexture(RMTexture *t, RMPred p, uint64_t a, uint64_t b, NSStri
     (void)image;
     return [self newTextureWithDescriptor:d offset:offset bytesPerRow:row];
 }
+
 @end
 
 // Resource calls Core Animation makes on every texture and buffer that need no m2v twin (forwarding them would make one, an m2v
@@ -1210,6 +1352,7 @@ static void refuseTexture(RMTexture *t, RMPred p, uint64_t a, uint64_t b, NSStri
 @interface RMObject (Resource)
 @end
 @implementation RMObject (Resource)
+
 - (kern_return_t)setOwnerWithIdentity:(mach_port_t)identity
 {
     id twin = _twin;
@@ -1217,16 +1360,21 @@ static void refuseTexture(RMTexture *t, RMPred p, uint64_t a, uint64_t b, NSStri
         return ((kern_return_t (*)(id, SEL, mach_port_t))objc_msgSend)(twin, _cmd, identity);
     return KERN_SUCCESS;
 }
+
 - (uint64_t)protectionOptions
 {
     return 0;
 }
+
 - (void)waitUntilComplete
 {
-    if (gRM && gRM->raw) gRM->raw->wait(gRM->raw->submitted());
+    if (gRM && gRM->raw)
+        gRM->raw->wait(gRM->raw->submitted());
     id twin = _twin;
-    if (twin && [twin respondsToSelector:_cmd]) ((void (*)(id, SEL))objc_msgSend)(twin, _cmd);
+    if (twin && [twin respondsToSelector:_cmd])
+        ((void (*)(id, SEL))objc_msgSend)(twin, _cmd);
 }
+
 @end
 
 @interface RMSampler : RMObject {
@@ -1236,21 +1384,27 @@ static void refuseTexture(RMTexture *t, RMPred p, uint64_t a, uint64_t b, NSStri
 }
 @end
 @implementation RMSampler
+
 + (Class)twinClass
 {
     return NSClassFromString(@"NBSampler");
 }
+
 - (void)dealloc
 {
-    if (gRM) gRM->raw->destroySampler(_raw);
+    if (gRM)
+        gRM->raw->destroySampler(_raw);
 }
+
 - (id)rmTwin
 {
     @synchronized(self) {
-        if (_twin) return _twin;
+        if (_twin)
+            return _twin;
     }
     return twinPublish(self, _twin, [gRM->fallback newSamplerStateWithDescriptor:_descriptor]);
 }
+
 @end
 
 @interface RMPipeline : RMObject {
@@ -1261,10 +1415,12 @@ static void refuseTexture(RMTexture *t, RMPred p, uint64_t a, uint64_t b, NSStri
 }
 @end
 @implementation RMPipeline
+
 + (Class)twinClass
 {
     return NSClassFromString(@"NBRenderPipeline");
 }
+
 @end
 
 @interface RMTwinObject : RMObject  // depth-stencil and compute states, and any m2v object the facade only carries
@@ -1273,53 +1429,65 @@ static void refuseTexture(RMTexture *t, RMPred p, uint64_t a, uint64_t b, NSStri
 @end
 
 @implementation RMHeap
+
 - (id)rmTwin
 {
     return nil;  // the facade's heap is its own: its buffers and textures are ordinary facade resources
 }
+
 - (NSUInteger)size
 {
     return _descriptor.size;
 }
+
 - (NSUInteger)usedSize
 {
     return NSUInteger(_used.load());
 }
+
 - (NSUInteger)currentAllocatedSize
 {
     return _descriptor.size;
 }
+
 - (NSUInteger)maxAvailableSizeWithAlignment:(NSUInteger)alignment
 {
     (void)alignment;
     const uint64_t used = _used.load();
     return used >= _descriptor.size ? 0 : NSUInteger(_descriptor.size - used);
 }
+
 - (MTLStorageMode)storageMode
 {
     return _descriptor.storageMode;
 }
+
 - (MTLCPUCacheMode)cpuCacheMode
 {
     return _descriptor.cpuCacheMode;
 }
+
 - (MTLHazardTrackingMode)hazardTrackingMode
 {
     return _descriptor.hazardTrackingMode;
 }
+
 - (MTLResourceOptions)resourceOptions
 {
     return _descriptor.resourceOptions;
 }
+
 - (MTLHeapType)type
 {
     return _descriptor.type;
 }
+
 - (MTLPurgeableState)setPurgeableState:(MTLPurgeableState)state
 {
     (void)state;
     return MTLPurgeableStateNonVolatile;
 }
+
 - (id<MTLBuffer>)newBufferWithLength:(NSUInteger)length options:(MTLResourceOptions)options
 {
     id b = [(id<MTLDevice>)_device newBufferWithLength:length options:options];
@@ -1329,20 +1497,24 @@ static void refuseTexture(RMTexture *t, RMPred p, uint64_t a, uint64_t b, NSStri
     }
     return (id<MTLBuffer>)b;
 }
+
 - (id<MTLBuffer>)newBufferWithLength:(NSUInteger)length options:(MTLResourceOptions)options offset:(NSUInteger)offset
 {
     (void)offset;
     return [self newBufferWithLength:length options:options];
 }
+
 - (id<MTLTexture>)newTextureWithDescriptor:(MTLTextureDescriptor *)d
 {
     return [(id<MTLDevice>)_device newTextureWithDescriptor:d];
 }
+
 - (id<MTLTexture>)newTextureWithDescriptor:(MTLTextureDescriptor *)d offset:(NSUInteger)offset
 {
     (void)offset;
     return [self newTextureWithDescriptor:d];
 }
+
 @end
 
 // ---- the tape ----
@@ -1383,6 +1555,7 @@ enum Op : uint8_t {
     OpDrawIndexed,
     OpVisibility,
 };
+
 // one record: `stage` 1 vertex, 2 fragment; `obj` unretained (the command buffer keeps it); `x` into the extras
 struct Cmd {
     Op op;
@@ -1392,6 +1565,7 @@ struct Cmd {
     uint64_t c, x;
     void *obj, *obj2;
 };
+
 inline Cmd cmd(Op op, uint8_t stage = 0, uint16_t index = 0)
 {
     Cmd c = {};
@@ -1471,7 +1645,8 @@ static inline void hit(RMCommandBuffer *cb, RMPred p, uint64_t a = 0, uint64_t b
         cb->_predA = a;
         cb->_predB = b;
     }
-    if (!predLogged(p)) logPred(p, a, b, nil);
+    if (!predLogged(p))
+        logPred(p, a, b, nil);
 }
 
 // ---- encoders: they record ----
@@ -1482,32 +1657,40 @@ static inline void hit(RMCommandBuffer *cb, RMPred p, uint64_t a = 0, uint64_t b
 }
 @end
 @implementation RMEncoder
+
 - (id)rmTwin
 {
     return nil;
 }
+
 // What the m2v encoder of the same kind answers (respondsToSelector: as Core Animation's optional paths ask it today)
 - (BOOL)respondsToSelector:(SEL)selector
 {
-    if ([super respondsToSelector:selector]) return YES;
+    if ([super respondsToSelector:selector])
+        return YES;
     Class c = [[self class] twinClass];
     return c && [c instancesRespondToSelector:selector];
 }
+
 // A selector this encoder does not record itself (one the m2v encoder implements, or some MTL protocol declares): recorded as an
 // invocation (objects mapped to twins at replay) and the command buffer goes to m2v.
 - (NSMethodSignature *)methodSignatureForSelector:(SEL)selector
 {
-    if (NSMethodSignature *s = [super methodSignatureForSelector:selector]) return s;
+    if (NSMethodSignature *s = [super methodSignatureForSelector:selector])
+        return s;
     Class c = [[self class] twinClass];
-    if (NSMethodSignature *s = c ? [c instanceMethodSignatureForSelector:selector] : nil) return s;
+    if (NSMethodSignature *s = c ? [c instanceMethodSignatureForSelector:selector] : nil)
+        return s;
     const char *types = metalTypes(selector);
     return types ? [NSMethodSignature signatureWithObjCTypes:types] : nil;
 }
+
 - (id)forwardingTargetForSelector:(SEL)selector
 {
     (void)selector;
     return nil;
 }
+
 - (void)forwardInvocation:(NSInvocation *)inv
 {
     [inv retainArguments];
@@ -1534,27 +1717,34 @@ static inline void hit(RMCommandBuffer *cb, RMPred p, uint64_t a = 0, uint64_t b
         free(zero);
     }
 }
+
 + (Class)twinClass
 {
     return nil;
 }
+
 - (void)endEncoding
 {
-    if (_ended) return;
+    if (_ended)
+        return;
     _ended = true;
     [_cb record:cmd(OpEnd)];
     _cb->_active = nil;
 }
+
 - (void)pushDebugGroup:(NSString *)s
 {
     (void)s;
 }
+
 - (void)popDebugGroup
 {}
+
 - (void)insertDebugSignpost:(NSString *)s
 {
     (void)s;
 }
+
 - (void)updateFence:(id<MTLFence>)fence
 {
     [_cb retain:fence];
@@ -1562,6 +1752,7 @@ static inline void hit(RMCommandBuffer *cb, RMPred p, uint64_t a = 0, uint64_t b
     c.obj = (__bridge void *)fence;
     [_cb record:c];
 }
+
 - (void)waitForFence:(id<MTLFence>)fence
 {
     [_cb retain:fence];
@@ -1569,6 +1760,7 @@ static inline void hit(RMCommandBuffer *cb, RMPred p, uint64_t a = 0, uint64_t b
     c.obj = (__bridge void *)fence;
     [_cb record:c];
 }
+
 @end
 
 // A render encoder keeps what its draws need to decide, as they are recorded, whether the raw path draws them exactly as m2v
@@ -1592,7 +1784,8 @@ static inline void hit(RMCommandBuffer *cb, RMPred p, uint64_t a = 0, uint64_t b
 
 static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger index, id object, uint64_t c)
 {
-    if (object) [cb retain:object];
+    if (object)
+        [cb retain:object];
     Cmd m = cmd(op, uint8_t(stage), uint16_t(index));
     m.obj = (__bridge void *)object;
     m.c = c;
@@ -1600,10 +1793,12 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
 }
 
 @implementation RMRenderEncoder
+
 + (Class)twinClass
 {
     return NSClassFromString(@"NBRenderEncoder");
 }
+
 // Core Animation's texture-and-sampler SPI (CA::OGL::MetalContext::draw, every textured draw), as the frontend answers it
 - (void)setFragmentTexture:(id<MTLTexture>)t
             atTextureIndex:(NSUInteger)ti
@@ -1613,6 +1808,7 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
     [self texture:2 object:t index:ti];
     [self sampler:2 object:s index:si];
 }
+
 // Core Animation sets the mode Disabled when its encoder state changes (update_encoder_state): nothing to do; any other mode
 // counts occlusion, which the raw path does not
 - (void)setVisibilityResultMode:(MTLVisibilityResultMode)mode offset:(NSUInteger)offset
@@ -1626,6 +1822,7 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
     m.c = offset;
     [_cb record:m];
 }
+
 - (void)drawIndexedPrimitives:(MTLPrimitiveType)type
                    indexCount:(NSUInteger)count
                     indexType:(MTLIndexType)indexType
@@ -1646,7 +1843,8 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
         hit(_cb, PredEncIndexedRange, offset, indexType == MTLIndexTypeUInt16 ? 2 : 4);
     }
     [self checkDraw:0];
-    if (buffer) [_cb retain:buffer];
+    if (buffer)
+        [_cb retain:buffer];
     Cmd m = cmd(OpDrawIndexed, uint8_t(type));
     m.a = uint32_t(count);
     m.b = uint32_t(indexType);
@@ -1658,6 +1856,7 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
     _cb->_extra.push_back(baseInstance);
     [_cb record:m];
 }
+
 - (void)drawIndexedPrimitives:(MTLPrimitiveType)type
                    indexCount:(NSUInteger)count
                     indexType:(MTLIndexType)indexType
@@ -1674,6 +1873,7 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
                      baseVertex:0
                    baseInstance:0];
 }
+
 - (void)drawIndexedPrimitives:(MTLPrimitiveType)type
                    indexCount:(NSUInteger)count
                     indexType:(MTLIndexType)indexType
@@ -1689,6 +1889,7 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
                      baseVertex:0
                    baseInstance:0];
 }
+
 - (void)setRenderPipelineState:(id<MTLRenderPipelineState>)state
 {
     RMPipeline *p = (RMPipeline *)state;
@@ -1705,12 +1906,14 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
     _pipe = [(id)p isKindOfClass:[RMPipeline class]] ? p : nil;
     setBinding(_cb, OpPipeline, 0, 0, state, 0);
 }
+
 // What raw::RenderEncoder::prepare would refuse of a draw with the encoder's bindings, decided here (the same tests)
 - (void)checkDraw:(NSUInteger)baseInstance
 {
     // no raw draw to decide (m2v drops a draw without a state too), or this encoder goes to m2v already (its pass refused: its
     // formats are not recorded, and every draw would hit enc.colorfmt for nothing, r7p5's "a=0 b=0")
-    if (!_pipe || !_pipe->_raw || _cb->_encRefused) return;
+    if (!_pipe || !_pipe->_raw || _cb->_encRefused)
+        return;
     const raw::Pipeline &pl = *_pipe->_raw;
     if (baseInstance) {
         [_cb takeReason:WhyEncode why:@"draw with a base instance"];
@@ -1740,6 +1943,7 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
         }
     }
 }
+
 - (void)bytes:(int)stage data:(const void *)bytes length:(NSUInteger)length index:(NSUInteger)index
 {
     if (stage >= 1 && stage <= 2 && index < 31) {
@@ -1753,14 +1957,17 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
     cb->_bytes.insert(cb->_bytes.end(), (const uint8_t *)bytes, (const uint8_t *)bytes + length);
     [cb record:m];
 }
+
 - (void)setVertexBytes:(const void *)bytes length:(NSUInteger)length atIndex:(NSUInteger)index
 {
     [self bytes:1 data:bytes length:length index:index];
 }
+
 - (void)setFragmentBytes:(const void *)bytes length:(NSUInteger)length atIndex:(NSUInteger)index
 {
     [self bytes:2 data:bytes length:length index:index];
 }
+
 - (void)buffer:(int)stage object:(id<MTLBuffer>)b offset:(NSUInteger)offset index:(NSUInteger)index
 {
     if (b && ![(id)b isKindOfClass:[RMBuffer class]]) {
@@ -1774,37 +1981,48 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
     }
     setBinding(_cb, OpBuffer, stage, index, b, offset);
 }
+
 - (void)setVertexBuffer:(id<MTLBuffer>)b offset:(NSUInteger)offset atIndex:(NSUInteger)index
 {
     [self buffer:1 object:b offset:offset index:index];
 }
+
 - (void)setFragmentBuffer:(id<MTLBuffer>)b offset:(NSUInteger)offset atIndex:(NSUInteger)index
 {
     [self buffer:2 object:b offset:offset index:index];
 }
+
 - (void)bufferOffset:(int)stage offset:(NSUInteger)offset index:(NSUInteger)index
 {
-    if (index < 31 && _buf[stage][index]) _bufVa[stage][index] = _buf[stage][index]->_raw.va + offset;
+    if (index < 31 && _buf[stage][index])
+        _bufVa[stage][index] = _buf[stage][index]->_raw.va + offset;
     setBinding(_cb, OpBufferOffset, stage, index, nil, offset);
 }
+
 - (void)setVertexBufferOffset:(NSUInteger)offset atIndex:(NSUInteger)index
 {
     [self bufferOffset:1 offset:offset index:index];
 }
+
 - (void)setFragmentBufferOffset:(NSUInteger)offset atIndex:(NSUInteger)index
 {
     [self bufferOffset:2 offset:offset index:index];
 }
+
 - (void)setVertexBuffers:(const id<MTLBuffer> __unsafe_unretained[])b offsets:(const NSUInteger[])o withRange:(NSRange)r
 {
-    for (NSUInteger k = 0; k < r.length; k++) [self buffer:1 object:b[k] offset:o[k] index:r.location + k];
+    for (NSUInteger k = 0; k < r.length; k++)
+        [self buffer:1 object:b[k] offset:o[k] index:r.location + k];
 }
+
 - (void)setFragmentBuffers:(const id<MTLBuffer> __unsafe_unretained[])b
                    offsets:(const NSUInteger[])o
                  withRange:(NSRange)r
 {
-    for (NSUInteger k = 0; k < r.length; k++) [self buffer:2 object:b[k] offset:o[k] index:r.location + k];
+    for (NSUInteger k = 0; k < r.length; k++)
+        [self buffer:2 object:b[k] offset:o[k] index:r.location + k];
 }
+
 - (void)texture:(int)stage object:(id<MTLTexture>)t index:(NSUInteger)index
 {
     RMTexture *x = [(id)t isKindOfClass:[RMTexture class]] ? (RMTexture *)t : nil;
@@ -1819,27 +2037,37 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
             hit(_cb, RMPred(x->_pred ?: (x->_rawOk ? PredEncNoTic : PredTexShape)), x->_descriptor.pixelFormat,
                 x->_kind);
     }
-    if (stage == 2 && index < 16) _tex[index] = x;
-    if (x && x->_raw.sampled) _cb->_sampledShadows = true;
-    if (x && (x->_raw.chain || (x->_parent && x->_parent->_raw.chain))) _cb->_chains = true;
+    if (stage == 2 && index < 16)
+        _tex[index] = x;
+    if (x && x->_raw.sampled)
+        _cb->_sampledShadows = true;
+    if (x && (x->_raw.chain || (x->_parent && x->_parent->_raw.chain)))
+        _cb->_chains = true;
     setBinding(_cb, OpTexture, stage, index, t, 0);
 }
+
 - (void)setFragmentTexture:(id<MTLTexture>)t atIndex:(NSUInteger)index
 {
     [self texture:2 object:t index:index];
 }
+
 - (void)setVertexTexture:(id<MTLTexture>)t atIndex:(NSUInteger)index
 {
     [self texture:1 object:t index:index];
 }
+
 - (void)setFragmentTextures:(const id<MTLTexture> __unsafe_unretained[])t withRange:(NSRange)r
 {
-    for (NSUInteger k = 0; k < r.length; k++) [self texture:2 object:t[k] index:r.location + k];
+    for (NSUInteger k = 0; k < r.length; k++)
+        [self texture:2 object:t[k] index:r.location + k];
 }
+
 - (void)setVertexTextures:(const id<MTLTexture> __unsafe_unretained[])t withRange:(NSRange)r
 {
-    for (NSUInteger k = 0; k < r.length; k++) [self texture:1 object:t[k] index:r.location + k];
+    for (NSUInteger k = 0; k < r.length; k++)
+        [self texture:1 object:t[k] index:r.location + k];
 }
+
 - (void)sampler:(int)stage object:(id<MTLSamplerState>)s index:(NSUInteger)index
 {
     if (s && ![(id)s isKindOfClass:[RMSampler class]]) {
@@ -1852,18 +2080,23 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
     }
     setBinding(_cb, OpSampler, stage, index, s, 0);
 }
+
 - (void)setFragmentSamplerState:(id<MTLSamplerState>)s atIndex:(NSUInteger)index
 {
     [self sampler:2 object:s index:index];
 }
+
 - (void)setVertexSamplerState:(id<MTLSamplerState>)s atIndex:(NSUInteger)index
 {
     [self sampler:1 object:s index:index];
 }
+
 - (void)setFragmentSamplerStates:(const id<MTLSamplerState> __unsafe_unretained[])s withRange:(NSRange)r
 {
-    for (NSUInteger k = 0; k < r.length; k++) [self sampler:2 object:s[k] index:r.location + k];
+    for (NSUInteger k = 0; k < r.length; k++)
+        [self sampler:2 object:s[k] index:r.location + k];
 }
+
 - (void)setScissorRect:(MTLScissorRect)r
 {
     Cmd m = cmd(OpScissor);
@@ -1872,6 +2105,7 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
     m.c = uint64_t(r.width) << 32 | uint32_t(r.height);
     [_cb record:m];
 }
+
 - (void)setViewport:(MTLViewport)v
 {
     Cmd m = cmd(OpViewport);
@@ -1884,6 +2118,7 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
     }
     [_cb record:m];
 }
+
 - (void)setCullMode:(MTLCullMode)mode
 {
     if (mode != MTLCullModeNone) {
@@ -1894,35 +2129,42 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
     m.a = uint32_t(mode);
     [_cb record:m];
 }
+
 - (void)setFrontFacingWinding:(MTLWinding)w
 {
     Cmd m = cmd(OpWinding);
     m.a = uint32_t(w);
     [_cb record:m];
 }
+
 - (void)setDepthStencilState:(id<MTLDepthStencilState>)s
 {
     setBinding(_cb, OpDepthStencil, 0, 0, s,
                0);  // no Core Animation pass has a depth or stencil attachment (checked at the pass)
 }
+
 // SPI: lines one pixel wide are what the raw path draws (its default); any other width goes to m2v with the call
 - (void)setLineWidth:(float)width
 {
-    if (width == 1.0f) return;
+    if (width == 1.0f)
+        return;
     NSInvocation *inv = [NSInvocation invocationWithMethodSignature:[self methodSignatureForSelector:_cmd]];
     inv.selector = _cmd;
     [inv setArgument:&width atIndex:2];
     [self forwardInvocation:inv];
 }
+
 // No tile shaders (as m2v: the device says so); their calls stay m2v's, which refuses them
 - (NSUInteger)tileWidth
 {
     return 0;
 }
+
 - (NSUInteger)tileHeight
 {
     return 0;
 }
+
 - (void)setTriangleFillMode:(MTLTriangleFillMode)mode
 {
     if (mode != MTLTriangleFillModeFill) {
@@ -1933,6 +2175,7 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
     m.a = uint32_t(mode);
     [_cb record:m];
 }
+
 - (void)setBlendColorRed:(float)r green:(float)g blue:(float)b alpha:(float)a
 {
     Cmd m = cmd(OpBlendColor);
@@ -1945,6 +2188,7 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
     }
     [_cb record:m];
 }
+
 - (void)setStencilReferenceValue:(uint32_t)value
 {
     Cmd m = cmd(OpStencilRef);
@@ -1952,6 +2196,7 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
     m.b = value;
     [_cb record:m];
 }
+
 - (void)setStencilFrontReferenceValue:(uint32_t)front backReferenceValue:(uint32_t)back
 {
     Cmd m = cmd(OpStencilRef);
@@ -1959,6 +2204,7 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
     m.b = back;
     [_cb record:m];
 }
+
 - (void)setDepthBias:(float)bias slopeScale:(float)slope clamp:(float)clamp
 {
     Cmd m = cmd(OpDepthBias);
@@ -1971,6 +2217,7 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
     }
     [_cb record:m];
 }
+
 - (void)drawPrimitives:(MTLPrimitiveType)type
            vertexStart:(NSUInteger)start
            vertexCount:(NSUInteger)count
@@ -1984,6 +2231,7 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
     m.c = uint64_t(instances) << 32 | uint32_t(base);
     [_cb record:m];
 }
+
 - (void)drawPrimitives:(MTLPrimitiveType)type
            vertexStart:(NSUInteger)start
            vertexCount:(NSUInteger)count
@@ -1991,10 +2239,12 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
 {
     [self drawPrimitives:type vertexStart:start vertexCount:count instanceCount:instances baseInstance:0];
 }
+
 - (void)drawPrimitives:(MTLPrimitiveType)type vertexStart:(NSUInteger)start vertexCount:(NSUInteger)count
 {
     [self drawPrimitives:type vertexStart:start vertexCount:count instanceCount:1 baseInstance:0];
 }
+
 - (void)memoryBarrierWithScope:(MTLBarrierScope)scope
                    afterStages:(MTLRenderStages)after
                   beforeStages:(MTLRenderStages)before
@@ -2005,9 +2255,11 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
     m.c = uint64_t(before);
     [_cb record:m];
 }
+
 - (void)useResource:(id<MTLResource>)resource usage:(MTLResourceUsage)usage stages:(MTLRenderStages)stages
 {
-    if (!resource) return;
+    if (!resource)
+        return;
     [_cb retain:resource];
     Cmd m = cmd(OpUse);
     m.obj = (__bridge void *)resource;
@@ -2015,36 +2267,44 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
     m.b = uint32_t(stages);
     [_cb record:m];
 }
+
 - (void)useResource:(id<MTLResource>)resource usage:(MTLResourceUsage)usage
 {
     [self useResource:resource usage:usage stages:MTLRenderStageVertex | MTLRenderStageFragment];
 }
+
 - (void)useHeap:(id<MTLHeap>)heap
 {
     (void)heap;  // the facade's heaps hold ordinary resources: nothing to make resident
 }
+
 - (void)useHeap:(id<MTLHeap>)heap stages:(MTLRenderStages)stages
 {
     (void)heap;
     (void)stages;
 }
+
 - (void)updateFence:(id<MTLFence>)fence afterStages:(MTLRenderStages)stages
 {
     (void)stages;
     [self updateFence:fence];
 }
+
 - (void)waitForFence:(id<MTLFence>)fence beforeStages:(MTLRenderStages)stages
 {
     (void)stages;
     [self waitForFence:fence];
 }
+
 @end
 
 @implementation RMBlitEncoder
+
 + (Class)twinClass
 {
     return NSClassFromString(@"NBBlitEncoder");
 }
+
 - (void)copyFromTexture:(id<MTLTexture>)s
             sourceSlice:(NSUInteger)ss
             sourceLevel:(NSUInteger)sl
@@ -2070,7 +2330,8 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
                               a->_raw.bpp == b->_raw.bpp && !a->_raw.memoryless && !b->_raw.memoryless &&
                               so.x + size.width <= a->_raw.width && so.y + size.height <= a->_raw.height &&
                               dorg.x + size.width <= b->_raw.width && dorg.y + size.height <= b->_raw.height);
-    if (both && (a->_raw.chain || b->_raw.chain)) _cb->_chains = true;
+    if (both && (a->_raw.chain || b->_raw.chain))
+        _cb->_chains = true;
     if (!ok) {
         [_cb takeReason:WhyTexture why:@"a texture copy the raw path does not do (levels, slices, formats)"];
         hit(_cb, PredBlitTexCopy, ss | sl << 8 | ds << 16 | dl << 24,
@@ -2101,6 +2362,7 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
     _cb->_extra.push_back(dorg.z);
     [_cb record:m];
 }
+
 - (void)copyFromTexture:(id<MTLTexture>)s toTexture:(id<MTLTexture>)d
 {
     [self copyFromTexture:s
@@ -2117,6 +2379,7 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
         hit(_cb, PredBlitWholeTexCopy, s.mipmapLevelCount, s.arrayLength);
     }
 }
+
 - (void)copyFromBuffer:(id<MTLBuffer>)s
           sourceOffset:(NSUInteger)so
               toBuffer:(id<MTLBuffer>)d
@@ -2141,6 +2404,7 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
     _cb->_extra.push_back(n);
     [_cb record:m];
 }
+
 - (void)copyFromBuffer:(id<MTLBuffer>)s
            sourceOffset:(NSUInteger)so
       sourceBytesPerRow:(NSUInteger)row
@@ -2153,7 +2417,8 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
 {
     RMBuffer *a = (RMBuffer *)s;
     RMTexture *b = (RMTexture *)d;
-    if ([(id)b isKindOfClass:[RMTexture class]] && b->_raw.chain) _cb->_chains = true;
+    if ([(id)b isKindOfClass:[RMTexture class]] && b->_raw.chain)
+        _cb->_chains = true;
     const bool ok = [(id)a isKindOfClass:[RMBuffer class]] && [(id)b isKindOfClass:[RMTexture class]] && b->_rawOk &&
                     !ds && !dl && size.depth == 1 && !b->_raw.memoryless &&
                     so + row * (size.height - 1) + size.width * b->_raw.bpp <= a->_raw.length &&
@@ -2180,6 +2445,7 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
     _cb->_extra.insert(_cb->_extra.end(), e, e + 10);
     [_cb record:m];
 }
+
 - (void)copyFromBuffer:(id<MTLBuffer>)s
            sourceOffset:(NSUInteger)so
       sourceBytesPerRow:(NSUInteger)row
@@ -2205,6 +2471,7 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
            destinationLevel:dl
           destinationOrigin:dorg];
 }
+
 - (void)copyFromTexture:(id<MTLTexture>)s
                  sourceSlice:(NSUInteger)ss
                  sourceLevel:(NSUInteger)sl
@@ -2217,7 +2484,8 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
 {
     RMTexture *a = (RMTexture *)s;
     RMBuffer *b = (RMBuffer *)d;
-    if ([(id)a isKindOfClass:[RMTexture class]] && a->_raw.chain) _cb->_chains = true;
+    if ([(id)a isKindOfClass:[RMTexture class]] && a->_raw.chain)
+        _cb->_chains = true;
     const bool ok = [(id)a isKindOfClass:[RMTexture class]] && [(id)b isKindOfClass:[RMBuffer class]] && a->_rawOk &&
                     !ss && !sl && size.depth == 1 && !a->_raw.memoryless &&
                     dof + row * (size.height - 1) + size.width * a->_raw.bpp <= b->_raw.length &&
@@ -2240,6 +2508,7 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
     _cb->_extra.insert(_cb->_extra.end(), e, e + 10);
     [_cb record:m];
 }
+
 - (void)copyFromTexture:(id<MTLTexture>)s
                  sourceSlice:(NSUInteger)ss
                  sourceLevel:(NSUInteger)sl
@@ -2265,6 +2534,7 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
           destinationBytesPerRow:row
         destinationBytesPerImage:image];
 }
+
 - (void)generateMipmapsForTexture:(id<MTLTexture>)t
 {
     RMTexture *x = [(id)t isKindOfClass:[RMTexture class]] ? (RMTexture *)t : nil;
@@ -2276,31 +2546,38 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
     }
     setBinding(_cb, OpMipmaps, 0, 0, t, 0);
 }
+
 - (void)synchronizeResource:(id<MTLResource>)r
 {
     (void)r;  // shared memory: nothing to make visible
 }
+
 - (void)synchronizeTexture:(id<MTLTexture>)t slice:(NSUInteger)s level:(NSUInteger)l
 {
     (void)t;
     (void)s;
     (void)l;
 }
+
 - (void)optimizeContentsForGPUAccess:(id<MTLTexture>)t
 {
     (void)t;  // pitch-linear memory either way
 }
+
 - (void)optimizeContentsForCPUAccess:(id<MTLTexture>)t
 {
     (void)t;
 }
+
 @end
 
 @implementation RMComputeEncoder  // everything recorded as invocations (the command buffer is m2v's): see RMEncoder
+
 + (Class)twinClass
 {
     return NSClassFromString(@"NBComputeEncoder");
 }
+
 @end
 
 // ---- the device's submission machinery ----
@@ -2311,85 +2588,106 @@ static void finish(RMCommandBuffer *cb, NSError *error);
 static bool heldBehindEvent();
 
 @implementation RMCommandBuffer
+
 - (void)retain:(id)object
 {
-    if (!object || (!_owners.empty() && _owners.back() == object)) return;
+    if (!object || (!_owners.empty() && _owners.back() == object))
+        return;
     _owners.push_back(object);
 }
+
 - (void)record:(const Cmd &)cmd
 {
     _tape.push_back(cmd);
 }
+
 // The encoder recorded last: whether it goes to m2v, into its first command
 - (void)closeEncoder
 {
-    if (_encOpen && _encAt < _tape.size()) _tape[_encAt].index = _encRefused ? 1 : 0;
+    if (_encOpen && _encAt < _tape.size())
+        _tape[_encAt].index = _encRefused ? 1 : 0;
     _encOpen = false;
 }
+
 - (void)takeReason:(RMReason)reason why:(NSString *)why
 {
     if (_active)
         _encRefused = true;  // this encoder goes to m2v
     else
         _whole = true;
-    if (_reason != WhyRaw) return;
+    if (_reason != WhyRaw)
+        return;
     _reason = reason;
     _why = why;
 }
+
 // A refusal of the command buffer's own (an event m2v must see, a call on the command buffer): the whole of it goes to m2v
 - (void)takeWholeReason:(RMReason)reason why:(NSString *)why
 {
     _whole = true;
     [self takeReason:reason why:why];
 }
+
 - (id)rmTwin
 {
     return nil;
 }
+
 - (MTLCommandBufferStatus)status
 {
     std::lock_guard<std::mutex> l(_lock);
     return _status;
 }
+
 - (NSError *)error
 {
     return _error;
 }
+
 - (id<MTLCommandQueue>)commandQueue
 {
     return (id<MTLCommandQueue>)_queue;
 }
+
 - (BOOL)retainedReferences
 {
     return YES;
 }
+
 - (MTLCommandBufferErrorOption)errorOptions
 {
     return MTLCommandBufferErrorOptionNone;
 }
+
 - (id<MTLLogContainer>)logs
 {
     return nil;
 }
+
 - (CFTimeInterval)GPUStartTime
 {
     return _gpuStart;
 }
+
 - (CFTimeInterval)GPUEndTime
 {
     return _gpuEnd;
 }
+
 - (CFTimeInterval)kernelStartTime
 {
     return _gpuStart;
 }
+
 - (CFTimeInterval)kernelEndTime
 {
     return _gpuEnd;
 }
+
 - (void)begin:(RMEncoder *)e
 {
-    if (_active) [(RMEncoder *)_active endEncoding];  // Metal: one encoder at a time
+    if (_active)
+        [(RMEncoder *)_active endEncoding];  // Metal: one encoder at a time
     e->_device = _device;
     e->_cb = self;
     _active = e;
@@ -2398,6 +2696,7 @@ static bool heldBehindEvent();
     _encOpen = true;
     _encRefused = false;
 }
+
 - (id<MTLRenderCommandEncoder>)renderCommandEncoderWithDescriptor:(MTLRenderPassDescriptor *)d
 {
     RMRenderEncoder *e = [RMRenderEncoder new];
@@ -2406,11 +2705,13 @@ static bool heldBehindEvent();
     [self retain:pass];
     for (unsigned c = 0; c < 8; c++) {
         id<MTLTexture> t = pass.colorAttachments[c].texture;
-        if (!t) continue;
+        if (!t)
+            continue;
         [self retain:t];
         [self retain:pass.colorAttachments[c].resolveTexture];
         RMTexture *x = (RMTexture *)t;
-        if ([(id)x isKindOfClass:[RMTexture class]] && x->_raw.chain) _chains = true;
+        if ([(id)x isKindOfClass:[RMTexture class]] && x->_raw.chain)
+            _chains = true;
         if (![(id)x isKindOfClass:[RMTexture class]] || !x->_rawOk || !(x->_raw.renderable || x->_raw.shadowTarget)) {
             [self takeReason:WhyPass why:@"a color attachment the raw path does not render to"];
             const bool own = [(id)x isKindOfClass:[RMTexture class]];
@@ -2461,6 +2762,7 @@ static bool heldBehindEvent();
     [self record:m];
     return (id<MTLRenderCommandEncoder>)e;
 }
+
 - (id<MTLBlitCommandEncoder>)blitCommandEncoder
 {
     RMBlitEncoder *e = [RMBlitEncoder new];
@@ -2468,11 +2770,13 @@ static bool heldBehindEvent();
     [self record:cmd(OpBlit)];
     return (id<MTLBlitCommandEncoder>)e;
 }
+
 - (id<MTLBlitCommandEncoder>)blitCommandEncoderWithDescriptor:(MTLBlitPassDescriptor *)d
 {
     (void)d;
     return [self blitCommandEncoder];
 }
+
 - (id<MTLComputeCommandEncoder>)computeCommandEncoderWithDispatchType:(MTLDispatchType)type
 {
     RMComputeEncoder *e = [RMComputeEncoder new];
@@ -2484,14 +2788,17 @@ static bool heldBehindEvent();
     hit(self, PredCompute, type);
     return (id<MTLComputeCommandEncoder>)e;
 }
+
 - (id<MTLComputeCommandEncoder>)computeCommandEncoder
 {
     return [self computeCommandEncoderWithDispatchType:MTLDispatchTypeSerial];
 }
+
 - (id<MTLComputeCommandEncoder>)computeCommandEncoderWithDescriptor:(MTLComputePassDescriptor *)d
 {
     return [self computeCommandEncoderWithDispatchType:d.dispatchType];
 }
+
 - (void)event:(id<MTLEvent>)event value:(uint64_t)value signal:(bool)signal
 {
     // the m2v device's shared events: the raw path signals them from the CPU once its work completes, and waits for them on the
@@ -2507,34 +2814,41 @@ static bool heldBehindEvent();
     m.c = value;
     [self record:m];
 }
+
 - (void)encodeSignalEvent:(id<MTLEvent>)event value:(uint64_t)value
 {
     [self event:event value:value signal:true];
 }
+
 - (void)encodeWaitForEvent:(id<MTLEvent>)event value:(uint64_t)value
 {
     [self event:event value:value signal:false];
 }
+
 - (void)encodeSignalEventScheduled:(id<MTLEvent>)event value:(uint64_t)value
 {
     [self event:event value:value signal:true];
 }
+
 // SPI Core Animation calls on every command buffer: content protection does not exist on this device (no protected surfaces,
 // no secure display), so the options are kept for the getter and change nothing
 - (uint64_t)protectionOptions
 {
     return _protection;
 }
+
 - (void)setProtectionOptions:(uint64_t)options
 {
     _protection = options;
 }
+
 - (void)encodeCacheHintTag:(uint64_t)tag resourceGroups:(const id __unsafe_unretained *)groups count:(NSUInteger)count
 {
     (void)tag;
     (void)groups;
     (void)count;  // no cache hints on this GPU
 }
+
 - (void)encodeCacheHintFinalize:(uint64_t)tag
                  resourceGroups:(const id __unsafe_unretained *)groups
                           count:(NSUInteger)count
@@ -2543,72 +2857,103 @@ static bool heldBehindEvent();
     (void)groups;
     (void)count;
 }
+
 - (void)pushDebugGroup:(NSString *)s
 {
     (void)s;
 }
+
 - (void)popDebugGroup
 {}
+
 - (void)addScheduledHandler:(MTLCommandBufferHandler)block
 {
-    if (!block) return;
+    if (!block)
+        return;
     bool now;
     {
         std::lock_guard<std::mutex> l(_lock);
         // once scheduled() took the handlers, one added is run behind them (was: until they ran, it joined a list no one read
         // again, and a presentDrawable added then never presented)
         now = _scheduledSent;
-        if (!now) [_scheduledHandlers addObject:[block copy]];
+        if (!now)
+            [_scheduledHandlers addObject:[block copy]];
     }
-    if (now) dispatch_async(gRM->handlers, ^{ block((id<MTLCommandBuffer>)self); });
+    if (now)
+        dispatch_async(gRM->handlers, ^{
+            block((id<MTLCommandBuffer>)self);
+        });
 }
+
 - (void)addCompletedHandler:(MTLCommandBufferHandler)block
 {
-    if (!block) return;
+    if (!block)
+        return;
     bool now;
     {
         std::lock_guard<std::mutex> l(_lock);
         now = _completedSent;  // as addScheduledHandler: once finish() took the handlers
-        if (!now) [_completedHandlers addObject:[block copy]];
+        if (!now)
+            [_completedHandlers addObject:[block copy]];
     }
-    if (now) block((id<MTLCommandBuffer>)self);
+    if (now)
+        block((id<MTLCommandBuffer>)self);
 }
+
 - (void)presentDrawable:(id<MTLDrawable>)drawable
 {
-    [self addScheduledHandler:^(id<MTLCommandBuffer>) { [drawable present]; }];
+    [self addScheduledHandler:^(id<MTLCommandBuffer>) {
+        [drawable present];
+    }];
 }
+
 - (void)presentDrawable:(id<MTLDrawable>)drawable atTime:(CFTimeInterval)t
 {
-    [self addScheduledHandler:^(id<MTLCommandBuffer>) { [drawable presentAtTime:t]; }];
+    [self addScheduledHandler:^(id<MTLCommandBuffer>) {
+        [drawable presentAtTime:t];
+    }];
 }
+
 - (void)presentDrawable:(id<MTLDrawable>)drawable afterMinimumDuration:(CFTimeInterval)d
 {
-    [self addScheduledHandler:^(id<MTLCommandBuffer>) { [drawable presentAfterMinimumDuration:d]; }];
+    [self addScheduledHandler:^(id<MTLCommandBuffer>) {
+        [drawable presentAfterMinimumDuration:d];
+    }];
 }
+
 - (void)enqueue
 {}
+
 - (void)commit
 {
     {
         std::lock_guard<std::mutex> l(_lock);
-        if (_committed) return;
+        if (_committed)
+            return;
         _committed = true;
         _status = MTLCommandBufferStatusCommitted;
     }
-    if (_active) [(RMEncoder *)_active endEncoding];
+    if (_active)
+        [(RMEncoder *)_active endEncoding];
     [(RMDevice *)_device rmCommit:self];
 }
+
 - (BOOL)commitAndWaitUntilSubmitted
 {
     [self commit];
     [self waitUntilScheduled];
     return YES;
 }
+
 - (void)waitUntilScheduled
 {
     std::unique_lock<std::mutex> l(_lock);
-    if (!_committed) return;
-    if (_changed.wait_for(l, kHeldGrace, [&] { return _scheduledDone; })) return;
+    if (!_committed)
+        return;
+    if (_changed.wait_for(l, kHeldGrace, [&] {
+            return _scheduledDone;
+        }))
+        return;
     // Behind a shared event no one reached yet (its own wait, or an earlier command buffer's that holds it in order): Metal's
     // command buffer is scheduled there, its GPU waiting for the event, so this returns. Core Animation's render thread flushes
     // with waitUntilScheduled every frame, and forces the per-surface event of a client that died or was suspended after 5 s
@@ -2623,36 +2968,49 @@ static bool heldBehindEvent();
         return;
     }
     l.lock();
-    if (!_changed.wait_for(l, kWaitLimit, [&] { return _scheduledDone; }))
+    if (!_changed.wait_for(l, kWaitLimit, [&] {
+            return _scheduledDone;
+        }))
         waitTooLong("waitUntilScheduled of command buffer", (__bridge void *)self);
 }
+
 - (void)waitUntilCompleted
 {
     std::unique_lock<std::mutex> l(_lock);
-    if (!_committed) return;
-    if (!_changed.wait_for(l, kWaitLimit, [&] { return _completedDone; }))
+    if (!_committed)
+        return;
+    if (!_changed.wait_for(l, kWaitLimit, [&] {
+            return _completedDone;
+        }))
         waitTooLong("waitUntilCompleted of command buffer", (__bridge void *)self);
 }
+
 // A selector a command buffer does not answer here: recorded for m2v (the command buffer goes there), answered zero.
 - (NSMethodSignature *)methodSignatureForSelector:(SEL)selector
 {
-    if (NSMethodSignature *s = [super methodSignatureForSelector:selector]) return s;
+    if (NSMethodSignature *s = [super methodSignatureForSelector:selector])
+        return s;
     Class c = NSClassFromString(@"NBCommandBuffer");
-    if (NSMethodSignature *s = c ? [c instanceMethodSignatureForSelector:selector] : nil) return s;
+    if (NSMethodSignature *s = c ? [c instanceMethodSignatureForSelector:selector] : nil)
+        return s;
     const char *types = metalTypes(selector);
     return types ? [NSMethodSignature signatureWithObjCTypes:types] : nil;
 }
+
 - (id)forwardingTargetForSelector:(SEL)selector
 {
     (void)selector;
     return nil;
 }
+
 - (BOOL)respondsToSelector:(SEL)selector
 {
-    if ([super respondsToSelector:selector]) return YES;
+    if ([super respondsToSelector:selector])
+        return YES;
     Class c = NSClassFromString(@"NBCommandBuffer");
     return c && [c instancesRespondToSelector:selector];
 }
+
 - (void)forwardInvocation:(NSInvocation *)inv
 {
     [inv retainArguments];
@@ -2670,7 +3028,8 @@ static bool heldBehindEvent();
         std::lock_guard<std::mutex> l(lock);
         fresh = seen.size() < 256 && seen.insert(inv.selector).second;
     }
-    if (fresh) once([NSString stringWithFormat:@"invocation -[MTLCommandBuffer %s]", sel_getName(inv.selector)]);
+    if (fresh)
+        once([NSString stringWithFormat:@"invocation -[MTLCommandBuffer %s]", sel_getName(inv.selector)]);
     const NSUInteger n = inv.methodSignature.methodReturnLength;
     if (n) {
         void *zero = calloc(1, n);
@@ -2678,20 +3037,25 @@ static bool heldBehindEvent();
         free(zero);
     }
 }
+
 @end
 
 @implementation RMQueue
+
 + (Class)twinClass
 {
     return NSClassFromString(@"NBQueue");
 }
+
 - (id)rmTwin
 {
     @synchronized(self) {
-        if (_twin) return _twin;
+        if (_twin)
+            return _twin;
     }
     return twinPublish(self, _twin, [gRM->fallback newCommandQueue]);
 }
+
 - (id<MTLCommandBuffer>)commandBuffer
 {
     RMCommandBuffer *b = [RMCommandBuffer new];
@@ -2705,32 +3069,40 @@ static bool heldBehindEvent();
     b->_bytes.reserve(16384);
     return (id<MTLCommandBuffer>)b;
 }
+
 - (id<MTLCommandBuffer>)commandBufferWithUnretainedReferences
 {
     return [self commandBuffer];  // retained anyway: lifetimes hang on it (raw_gpu.h)
 }
+
 - (id<MTLCommandBuffer>)commandBufferWithDescriptor:(MTLCommandBufferDescriptor *)d
 {
     (void)d;
     return [self commandBuffer];
 }
+
 - (void)insertDebugCaptureBoundary
 {}
+
 - (void)setCompletionQueue:(dispatch_queue_t)queue
 {
     _completionQueue = queue;
 }
+
 - (dispatch_queue_t)completionQueue
 {
     return _completionQueue;
 }
+
 @end
 
 // ---- object mapping for the m2v replay ----
 static inline id twinOf(id object)
 {
-    if (!object) return nil;
-    if ([object isKindOfClass:[RMObject class]]) return [(RMObject *)object rmTwin];
+    if (!object)
+        return nil;
+    if ([object isKindOfClass:[RMObject class]])
+        return [(RMObject *)object rmTwin];
     return object;  // an m2v object already (events, fences, anything the device forwarded)
 }
 
@@ -2755,7 +3127,8 @@ static void replayInvocation(NSInvocation *inv, id target)
     NSMethodSignature *sig = inv.methodSignature;
     for (NSUInteger i = 2; i < sig.numberOfArguments; i++) {
         const char *t = [sig getArgumentTypeAtIndex:i];
-        while (*t == 'r' || *t == 'n' || *t == 'N' || *t == 'o' || *t == 'O' || *t == 'R' || *t == 'V') t++;
+        while (*t == 'r' || *t == 'n' || *t == 'N' || *t == 'o' || *t == 'O' || *t == 'R' || *t == 'V')
+            t++;
         if (*t == '@') {
             __unsafe_unretained id arg = nil;
             [inv getArgument:&arg atIndex:i];
@@ -2785,7 +3158,8 @@ static void replayInvocation(NSInvocation *inv, id target)
                 NSMutableArray *keep = [NSMutableArray array];
                 for (NSUInteger k = 0; k < count; k++) {
                     id m = twinOf(array[k]);
-                    if (m) [keep addObject:m];
+                    if (m)
+                        [keep addObject:m];
                     out[k] = m;
                 }
                 objc_setAssociatedObject(inv, (__bridge const void *)copy, @[ copy, keep ], OBJC_ASSOCIATION_RETAIN);
@@ -2801,12 +3175,14 @@ static uint64_t extra(RMCommandBuffer *cb, uint64_t i)
 {
     return cb->_extra[i];
 }
+
 static double extraDouble(RMCommandBuffer *cb, uint64_t i)
 {
     double d;
     memcpy(&d, &cb->_extra[i], 8);
     return d;
 }
+
 static float extraFloat(RMCommandBuffer *cb, uint64_t i)
 {
     const uint32_t u = uint32_t(cb->_extra[i]);
@@ -2825,11 +3201,13 @@ static inline bool chained(void *o)
 {
     return o && [(__bridge id)o isKindOfClass:[RMTexture class]] && ((__bridge RMTexture *)o)->_raw.chain;
 }
+
 static id mipTwinOf(void *o, bool level0)
 {
     RMTexture *t = (__bridge RMTexture *)o;
     return chained(o) && !level0 ? [t rmMipTwin] : twinOf((__bridge id)o);
 }
+
 // The textures of every level the encoder at `at` uses, current in m2v first (a blit encoder of their own before it): level 0
 // copied from the raw texture where it was written since, the levels generated where the raw path generated them since (both
 // from level 0, as m2v's own generateMipmaps makes them). A generateMipmaps needs level 0 only.
@@ -2837,7 +3215,8 @@ static void mipSync(RMCommandBuffer *cb, id<MTLCommandBuffer> m, size_t at, size
 {
     std::vector<std::pair<RMTexture *, bool>> need;
     auto add = [&](void *o, bool levels) {
-        if (!chained(o)) return;
+        if (!chained(o))
+            return;
         RMTexture *t = (__bridge RMTexture *)o;
         for (auto &n : need)
             if (n.first == t) {
@@ -2850,7 +3229,8 @@ static void mipSync(RMCommandBuffer *cb, id<MTLCommandBuffer> m, size_t at, size
     if (cb->_tape[at].op == OpRender) {
         MTLRenderPassDescriptor *pass = (__bridge MTLRenderPassDescriptor *)cb->_tape[at].obj;
         for (unsigned j = 0; j < 8; j++)
-            if (pass.colorAttachments[j].level) add((__bridge void *)pass.colorAttachments[j].texture, true);
+            if (pass.colorAttachments[j].level)
+                add((__bridge void *)pass.colorAttachments[j].texture, true);
     }
     for (size_t k = at + 1; k < to && cb->_tape[k].op != OpEnd; k++) {
         const Cmd &c = cb->_tape[k];
@@ -2861,22 +3241,29 @@ static void mipSync(RMCommandBuffer *cb, id<MTLCommandBuffer> m, size_t at, size
                 add(t->_kind == RMTextureView && t->_parent ? (__bridge void *)t->_parent : c.obj, true);
             }
             break;
-        case OpMipmaps: add(c.obj, false); break;
+        case OpMipmaps:
+            add(c.obj, false);
+            break;
         case OpCopyTexture:
         case OpCopyTextureToBuffer:
-            if (extra(cb, c.x + 1)) add(c.obj, true);  // a level below the first, read
+            if (extra(cb, c.x + 1))
+                add(c.obj, true);  // a level below the first, read
             break;
-        default: break;
+        default:
+            break;
         }
     }
     bool any = false;
-    for (auto &n : need) any = any || !n.first->_mipL0 || (n.second && !n.first->_mipLevels);
-    if (!any) return;
+    for (auto &n : need)
+        any = any || !n.first->_mipL0 || (n.second && !n.first->_mipLevels);
+    if (!any)
+        return;
     id<MTLBlitCommandEncoder> b = [m blitCommandEncoder];
     for (auto &n : need) {
         RMTexture *t = n.first;
         id<MTLTexture> all = [t rmMipTwin];
-        if (!all) continue;
+        if (!all)
+            continue;
         if (!t->_mipL0) {
             [b copyFromTexture:(id<MTLTexture>)[t rmTwin]
                       sourceSlice:0
@@ -2914,20 +3301,24 @@ static void mipSync(RMCommandBuffer *cb, id<MTLCommandBuffer> m, size_t at, size
                         destinationOrigin:MTLOriginMake(0, 0, 0)];
                 }
             }
-            if (!copied) [b generateMipmapsForTexture:all];
+            if (!copied)
+                [b generateMipmapsForTexture:all];
             t->_mipLevels = true;
             t->_mirrored = false;
         }
     }
     [b endEncoding];
 }
+
 // m2v wrote level `level` of a mipmapped texture: level 0 (its in-place twin: the raw texture's pages) puts the chain's copy and
 // m2v's own behind it; another level (m2v's texture of every level) goes to the level's mirror once the encoder ends
 // (mirrorWrites). With no mirror the chain's levels are marked behind m2v's and are generated from level 0.
 using MirrorWrites = std::vector<std::pair<RMTexture *, uint32_t>>;
+
 static void mipWritten(void *o, uint64_t level, MirrorWrites *toMirrors)
 {
-    if (!chained(o)) return;
+    if (!chained(o))
+        return;
     RMTexture *t = (__bridge RMTexture *)o;
     if (level) {
         if (toMirrors && level < t->_raw.chain->layout.levels && [t rmMirror:level])
@@ -2939,10 +3330,12 @@ static void mipWritten(void *o, uint64_t level, MirrorWrites *toMirrors)
         t->_mipL0 = false;
     }
 }
+
 // Copies the levels the encoder that just ended wrote into their mirrors, in a blit encoder after it.
 static void mirrorWrites(id<MTLCommandBuffer> m, MirrorWrites &writes)
 {
-    if (writes.empty()) return;
+    if (writes.empty())
+        return;
     id<MTLBlitCommandEncoder> b = [m blitCommandEncoder];
     for (const auto &w : writes) {
         RMTexture *t = w.first, *mirror = [t rmMirror:w.second];
@@ -2972,7 +3365,8 @@ static id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, 
 {
     id<MTLCommandQueue> queue = [cb->_queue rmTwin];
     id<MTLCommandBuffer> m = [queue commandBuffer];
-    if (!m) return nil;
+    if (!m)
+        return nil;
     m.label = cb.label;
     id enc = nil;
     // What the CPU wrote that this work reads, cleaned to memory before m2v's submission (m2v cleans an import only when it
@@ -2981,11 +3375,13 @@ static id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, 
     // GPU's bytes); a whole buffer only where the tape does not say (a state not in the pack, a compute or other recorded call,
     // a resource it uses)
     std::set<RMBuffer *> buffers;  // whole
+
     struct Range {
         const uint8_t *at;
         uint64_t bytes;
         bool flush;
     };
+
     std::vector<Range> ranges;
     auto range = [&](RMBuffer *b, uint64_t offset, uint64_t bytes, bool flush = false) {
         if (!b || offset >= b->_raw.length || b->_raw.wc)
@@ -2994,7 +3390,8 @@ static id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, 
     };
     auto use = [&](void *o) -> id {
         id x = (__bridge id)o;
-        if ([x isKindOfClass:[RMBuffer class]]) buffers.insert((RMBuffer *)x);
+        if ([x isKindOfClass:[RMBuffer class]])
+            buffers.insert((RMBuffer *)x);
         return twinOf(x);
     };
     // a render encoder's bindings, for its draws' ranges
@@ -3005,19 +3402,23 @@ static id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, 
         if (!pipe || !pipe->_raw) {                     // not the pack's: every buffer bound, whole
             for (auto &stage : bound)
                 for (RMBuffer *b : stage)
-                    if (b) buffers.insert(b);
+                    if (b)
+                        buffers.insert(b);
             return;
         }
         const raw::PackPipeline &r = *pipe->_raw->rec;
         for (uint32_t i = 0; i < r.entries; i++) {
             const raw::PackEntry &e = r.entry[i];
-            if (e.kind != raw::EntryUbo || e.stage > 2 || e.slot > 30) continue;
+            if (e.kind != raw::EntryUbo || e.stage > 2 || e.slot > 30)
+                continue;
             RMBuffer *b = bound[e.stage][e.slot];
-            if (!b) continue;
+            if (!b)
+                continue;
             const uint64_t at = boundOffset[e.stage][e.slot], size = b->_raw.length - std::min(at, b->_raw.length);
             const uint64_t window = (uint32_t(e.sampler) | uint32_t(e.pad) << 8) * 16;
             uint64_t bytes = std::min<uint64_t>((size + 15) & ~uint64_t(15), 0x10000);
-            if (window && window < bytes) bytes = window;
+            if (window && window < bytes)
+                bytes = window;
             range(b, at, bytes);
         }
         if (r.vertexSlot <= 30 && r.vertexStride)
@@ -3036,8 +3437,10 @@ static id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, 
                 mipSync(cb, m, at, to);
                 for (unsigned j = 0; j < 8; j++) {  // a mipmapped attachment: level 0 in place, another level m2v's own
                     MTLRenderPassColorAttachmentDescriptor *a = pass.colorAttachments[j];
-                    if (!chained((__bridge void *)a.texture)) continue;
-                    if (a.level) twin.colorAttachments[j].texture = [(RMTexture *)a.texture rmMipTwin];
+                    if (!chained((__bridge void *)a.texture))
+                        continue;
+                    if (a.level)
+                        twin.colorAttachments[j].texture = [(RMTexture *)a.texture rmMipTwin];
                     mipWritten((__bridge void *)a.texture, a.level, &toMirrors);
                 }
             }
@@ -3047,11 +3450,13 @@ static id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, 
             break;
         }
         case OpBlit:
-            if (cb->_chains) mipSync(cb, m, at, to);
+            if (cb->_chains)
+                mipSync(cb, m, at, to);
             enc = [m blitCommandEncoder];
             break;
         case OpCompute:
-            if (cb->_chains) mipSync(cb, m, at, to);
+            if (cb->_chains)
+                mipSync(cb, m, at, to);
             enc = [m computeCommandEncoderWithDispatchType:MTLDispatchType(c.a)];
             break;
         case OpEnd:
@@ -3064,7 +3469,8 @@ static id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, 
             [enc setRenderPipelineState:twinOf((__bridge id)c.obj)];
             break;
         case OpBytes:
-            if (c.stage <= 2 && c.index <= 30) bound[c.stage][c.index] = nil;
+            if (c.stage <= 2 && c.index <= 30)
+                bound[c.stage][c.index] = nil;
             if (c.stage == 1)
                 [enc setVertexBytes:cb->_bytes.data() + c.a length:c.b atIndex:c.index];
             else
@@ -3083,7 +3489,8 @@ static id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, 
             break;
         }
         case OpBufferOffset:
-            if (c.stage <= 2 && c.index <= 30) boundOffset[c.stage][c.index] = c.c;
+            if (c.stage <= 2 && c.index <= 30)
+                boundOffset[c.stage][c.index] = c.c;
             if (c.stage == 1)
                 [enc setVertexBufferOffset:c.c atIndex:c.index];
             else
@@ -3117,17 +3524,27 @@ static id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, 
                   instanceCount:NSUInteger(c.c >> 32)
                    baseInstance:NSUInteger(uint32_t(c.c))];
             break;
-        case OpCull: [enc setCullMode:MTLCullMode(c.a)]; break;
-        case OpWinding: [enc setFrontFacingWinding:MTLWinding(c.a)]; break;
-        case OpDepthStencil: [enc setDepthStencilState:twinOf((__bridge id)c.obj)]; break;
-        case OpFillMode: [enc setTriangleFillMode:MTLTriangleFillMode(c.a)]; break;
+        case OpCull:
+            [enc setCullMode:MTLCullMode(c.a)];
+            break;
+        case OpWinding:
+            [enc setFrontFacingWinding:MTLWinding(c.a)];
+            break;
+        case OpDepthStencil:
+            [enc setDepthStencilState:twinOf((__bridge id)c.obj)];
+            break;
+        case OpFillMode:
+            [enc setTriangleFillMode:MTLTriangleFillMode(c.a)];
+            break;
         case OpBlendColor:
             [enc setBlendColorRed:extraFloat(cb, c.x)
                             green:extraFloat(cb, c.x + 1)
                              blue:extraFloat(cb, c.x + 2)
                             alpha:extraFloat(cb, c.x + 3)];
             break;
-        case OpStencilRef: [enc setStencilFrontReferenceValue:c.a backReferenceValue:c.b]; break;
+        case OpStencilRef:
+            [enc setStencilFrontReferenceValue:c.a backReferenceValue:c.b];
+            break;
         case OpDepthBias:
             [enc setDepthBias:extraFloat(cb, c.x) slopeScale:extraFloat(cb, c.x + 1) clamp:extraFloat(cb, c.x + 2)];
             break;
@@ -3136,13 +3553,16 @@ static id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, 
                             afterStages:MTLRenderStages(c.b)
                            beforeStages:MTLRenderStages(c.c)];
             break;
-        case OpUse: [enc useResource:use(c.obj) usage:MTLResourceUsage(c.a) stages:MTLRenderStages(c.b)]; break;
+        case OpUse:
+            [enc useResource:use(c.obj) usage:MTLResourceUsage(c.a) stages:MTLRenderStages(c.b)];
+            break;
         case OpUpdateFence:
             updated.insert(c.obj);
             [enc updateFence:(__bridge id<MTLFence>)c.obj];
             break;
         case OpWaitFence:
-            if (!part || updated.count(c.obj)) [enc waitForFence:(__bridge id<MTLFence>)c.obj];
+            if (!part || updated.count(c.obj))
+                [enc waitForFence:(__bridge id<MTLFence>)c.obj];
             break;
         case OpCopyTexture: {
             const uint64_t x = c.x, o = extra(cb, x + 10);
@@ -3232,15 +3652,19 @@ static id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, 
             for (NSUInteger i = 2; i < inv.methodSignature.numberOfArguments;
                  i++) {  // buffers it names get cleaned too
                 const char *t = [inv.methodSignature getArgumentTypeAtIndex:i];
-                if (*t != '@') continue;
+                if (*t != '@')
+                    continue;
                 __unsafe_unretained id arg = nil;
                 [inv getArgument:&arg atIndex:i];
-                if ([arg isKindOfClass:[RMBuffer class]]) buffers.insert((RMBuffer *)arg);
+                if ([arg isKindOfClass:[RMBuffer class]])
+                    buffers.insert((RMBuffer *)arg);
             }
             replayInvocation(inv, c.stage == 0xff ? m : enc);
             break;
         }
-        case OpSignalEvent: [m encodeSignalEvent:(__bridge id<MTLEvent>)c.obj value:c.c]; break;
+        case OpSignalEvent:
+            [m encodeSignalEvent:(__bridge id<MTLEvent>)c.obj value:c.c];
+            break;
         case OpWaitEvent:
             // a value raw work submitted before signals: the BeforeTask acquire orders this command buffer after it on the
             // GPU (the raw path signals its events from the CPU once complete, which m2v would wait for on the CPU)
@@ -3262,14 +3686,17 @@ static id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, 
                     for (uint32_t k = 0; k < c.a; k++) {
                         uint32_t v = 0;
                         memcpy(&v, ib->_raw.cpu + c.c + uint64_t(k) * size, size);
-                        if (v != (size == 2 ? 0xffffu : 0xffffffffu)) most = std::max(most, v);
+                        if (v != (size == 2 ? 0xffffu : 0xffffffffu))
+                            most = std::max(most, v);
                     }
                 drawn(0, c.a ? most + 1 : 0);
             } else {
-                if (ib) buffers.insert(ib);
+                if (ib)
+                    buffers.insert(ib);
                 for (auto &stage : bound)
                     for (RMBuffer *b : stage)
-                        if (b) buffers.insert(b);
+                        if (b)
+                            buffers.insert(b);
             }
         }
             [enc drawIndexedPrimitives:MTLPrimitiveType(c.stage)
@@ -3281,10 +3708,13 @@ static id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, 
                             baseVertex:NSInteger(extra(cb, c.x + 1))
                           baseInstance:extra(cb, c.x + 2)];
             break;
-        case OpVisibility: [enc setVisibilityResultMode:MTLVisibilityResultMode(c.a) offset:c.c]; break;
+        case OpVisibility:
+            [enc setVisibilityResultMode:MTLVisibilityResultMode(c.a) offset:c.c];
+            break;
         }
     }
-    if (enc) [enc endEncoding];
+    if (enc)
+        [enc endEncoding];
     // what the CPU wrote that it reads, to memory (above): the ranges, then the whole buffers
     uint64_t cleaned = 0;
     for (const Range &r : ranges) {
@@ -3299,7 +3729,8 @@ static id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, 
         cleaned += r.bytes;
     }
     for (RMBuffer *b : buffers) {
-        if (!b || b->_raw.wc) continue;
+        if (!b || b->_raw.wc)
+            continue;
 #if defined(__aarch64__)
         for (uintptr_t a = uintptr_t(b->_raw.cpu) & ~uintptr_t(63); a < uintptr_t(b->_raw.cpu) + b->_raw.length;
              a += 64)
@@ -3322,6 +3753,7 @@ static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **
     raw::CommandBuffer *rc = d.begin();
     raw::RenderEncoder *re = nullptr;
     raw::BlitEncoder *be = nullptr;
+
     // mipmapped textures' states this encode changes (raw::Texture::Chain, RMTexture's _mipL0/_mipLevels): put back when it is
     // abandoned (its work never runs; the command buffer or segment goes to m2v, whose replay keeps them from what ran)
     struct ChainState {
@@ -3329,11 +3761,13 @@ static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **
         bool l0, levels, mipL0, mipLevels;
         uint16_t rawLevels, mirrorLevels;
     };
+
     std::vector<ChainState> chainStates;
     auto touch = [&](RMTexture *t) -> raw::Texture::Chain & {
         raw::Texture::Chain &c = *t->_raw.chain;
         for (const ChainState &k : chainStates)
-            if (k.t == t) return c;
+            if (k.t == t)
+                return c;
         chainStates.push_back({t, c.l0Fresh, c.levelsFresh, t->_mipL0, t->_mipLevels, c.rawLevels, c.mirrorLevels});
         return c;
     };
@@ -3392,7 +3826,9 @@ static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **
     {
         std::vector<RMTexture *> planar;
         std::vector<RMSampler *> samplers;
-        auto isPlanar = [](void *o) { return o && ((__bridge RMTexture *)o)->_raw.addressMap; };
+        auto isPlanar = [](void *o) {
+            return o && ((__bridge RMTexture *)o)->_raw.addressMap;
+        };
         for (size_t at = from; at < to; at++) {
             const Cmd &c = cb->_tape[at];
             // Metal's copies of a planar texture move its planes' bytes, not the image: m2v's
@@ -3406,7 +3842,8 @@ static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **
                     planar.push_back(t);
             } else if (c.op == OpSampler && c.obj) {
                 RMSampler *sm = (__bridge RMSampler *)c.obj;
-                if (std::find(samplers.begin(), samplers.end(), sm) == samplers.end()) samplers.push_back(sm);
+                if (std::find(samplers.begin(), samplers.end(), sm) == samplers.end())
+                    samplers.push_back(sm);
             }
         }
         if (!planar.empty()) {
@@ -3429,11 +3866,13 @@ static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **
             planar.swap(stale);
             // 4:4:4 code textures: two copy-engine remaps each
             bool copies = false;
-            for (RMTexture *t : planar) copies |= t->_raw.planar;
+            for (RMTexture *t : planar)
+                copies |= t->_raw.planar;
             if (copies) {
                 raw::BlitEncoder *conv = rc->blit();
                 for (RMTexture *t : planar)
-                    if (t->_raw.planar) conv->convertPlanar(t->_raw);
+                    if (t->_raw.planar)
+                        conv->convertPlanar(t->_raw);
                 conv->end();
             }
             // 4:2:0 textures' planes whose rows or offset are 16 bytes apart but not 32 (ImageIO's photo thumbnails, a width of
@@ -3445,29 +3884,34 @@ static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **
                 if (t->_raw.ycbcr)
                     for (const raw::Texture *x : {t->_raw.luma, t->_raw.chroma})
                         if (x && x->sampled) {
-                            if (!fill) fill = rc->blit();
+                            if (!fill)
+                                fill = rc->blit();
                             fill->copyRect(x->va, x->pitch, x->sampled->va, x->sampled->pitch, x->width, x->height,
                                            x->bpp);
                         }
-            if (fill) fill->end();
+            if (fill)
+                fill->end();
             // 4:2:0 textures: a pass of the pack's conversion state each, into the image the draws sample
             for (RMTexture *t : planar) {
                 raw::Texture &x = t->_raw;
-                if (!x.ycbcr) continue;
+                if (!x.ycbcr)
+                    continue;
                 raw::PassDesc p;
                 p.color[0].texture = &x;
                 p.color[0].load = raw::ColorAttachment::DontCare;
                 p.color[0].store = true;
                 p.count = 1;
                 raw::RenderEncoder *conv = rc->render(p);
-                if (!conv) return fail(PredEncPassRender, "a 4:2:0 texture's image the raw path cannot render");
+                if (!conv)
+                    return fail(PredEncPassRender, "a 4:2:0 texture's image the raw path cannot render");
                 conv->setPipeline(d.ycbcrPipeline(x.ycbcr));
                 conv->setBytes(2, 0, x.shape, sizeof x.shape);
                 conv->setTexture(0, x.luma);
                 conv->setTexture(1, x.chroma);
                 conv->setViewport(0, 0, x.width, x.height, 0, 1);
                 conv->setScissor(0, 0, x.width, x.height);
-                if (!conv->draw(4 /* MTLPrimitiveTypeTriangleStrip */, 0, 4, 1, 0, why)) return refused();
+                if (!conv->draw(4 /* MTLPrimitiveTypeTriangleStrip */, 0, 4, 1, 0, why))
+                    return refused();
                 conv->end();
             }
         }
@@ -3477,20 +3921,24 @@ static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **
     // its shadow at each encoder that uses it once written since)
     std::set<RMTexture *> fresh;
     raw::Texture levelTargets[8];  // the open pass's level targets: the encoder reads them until its end()
+
     struct LevelCopy {
         RMTexture *t;
         uint32_t level;
         RMTexture *mirror;
     };
+
     std::vector<LevelCopy> afterPass;  // the open pass's levels rendered into their mirrors
     uint64_t levelPasses = 0;
     static std::atomic<bool> loggedLevel{false};
     auto refresh = [&](size_t pass) {
         for (size_t at = pass + 1; at < to && cb->_tape[at].op != OpEnd; at++) {
             const Cmd &c = cb->_tape[at];
-            if (c.op != OpTexture || !c.obj) continue;
+            if (c.op != OpTexture || !c.obj)
+                continue;
             RMTexture *t = (__bridge RMTexture *)c.obj;
-            if (!t->_raw.sampled || !fresh.insert(t).second) continue;
+            if (!t->_raw.sampled || !fresh.insert(t).second)
+                continue;
             const raw::Texture &x = t->_raw;
             raw::BlitEncoder *b = rc->blit();
             b->copyRect(x.va, x.pitch, x.sampled->va, x.sampled->pitch, x.width, x.height, x.bpp);
@@ -3502,7 +3950,8 @@ static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **
         switch (c.op) {
         case OpRender: {
             MTLRenderPassDescriptor *pass = (__bridge MTLRenderPassDescriptor *)c.obj;
-            if (cb->_sampledShadows) refresh(at);
+            if (cb->_sampledShadows)
+                refresh(at);
             if (cb->_chains) {  // the chains this pass samples, current first (one blit of the 2D engine's work)
                 raw::BlitEncoder *b = nullptr;
                 auto stale = [](const raw::Texture::Chain *c) {
@@ -3510,10 +3959,13 @@ static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **
                 };
                 for (size_t k = at + 1; k < to && cb->_tape[k].op != OpEnd; k++) {
                     const Cmd &u = cb->_tape[k];
-                    if (u.op != OpTexture || !u.obj) continue;
+                    if (u.op != OpTexture || !u.obj)
+                        continue;
                     RMTexture *t = (__bridge RMTexture *)u.obj;
-                    if (!stale(t->_raw.chain)) continue;
-                    if (!b) b = rc->blit();
+                    if (!stale(t->_raw.chain))
+                        continue;
+                    if (!b)
+                        b = rc->blit();
                     current(t, b);
                 }
                 // a level this pass renders: the chain current first, or a later generate from level 0 or copy from a
@@ -3521,11 +3973,14 @@ static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **
                 for (unsigned j = 0; j < 8; j++) {
                     MTLRenderPassColorAttachmentDescriptor *a = pass.colorAttachments[j];
                     RMTexture *t = (RMTexture *)a.texture;
-                    if (!t || !a.level || !stale(t->_raw.chain)) continue;
-                    if (!b) b = rc->blit();
+                    if (!t || !a.level || !stale(t->_raw.chain))
+                        continue;
+                    if (!b)
+                        b = rc->blit();
                     current(t, b);
                 }
-                if (b) b->end();
+                if (b)
+                    b->end();
             }
             // One memory layout for every color target of a pass (NVK renders a pass's linear targets through tiled
             // shadows once any is tiled): a level beside a pitch target renders into the level's mirror, which holds the
@@ -3535,7 +3990,8 @@ static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **
             for (unsigned j = 0; j < 8; j++) {
                 MTLRenderPassColorAttachmentDescriptor *a = pass.colorAttachments[j];
                 RMTexture *t = (RMTexture *)a.texture;
-                if (!t) continue;
+                if (!t)
+                    continue;
                 if (t->_raw.chain && a.level)
                     levels = true;
                 else
@@ -3547,9 +4003,12 @@ static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **
             for (unsigned j = 0; j < 8; j++) {
                 MTLRenderPassColorAttachmentDescriptor *a = pass.colorAttachments[j];
                 RMTexture *t = (RMTexture *)a.texture;
-                if (!t) continue;
-                if (t->_raw.planar) return fail(PredEncPlanarRT, "a planar texture as a render target", j);
-                if (!fresh.empty()) fresh.erase(t);  // this pass writes it
+                if (!t)
+                    continue;
+                if (t->_raw.planar)
+                    return fail(PredEncPlanarRT, "a planar texture as a render target", j);
+                if (!fresh.empty())
+                    fresh.erase(t);  // this pass writes it
                 if (t->_raw.chain && a.level) {
                     // the chain keeps the texture's levels (levelsFresh), m2v's are behind, and they are no longer what
                     // generating from level 0 gives (rawLevels)
@@ -3559,7 +4018,8 @@ static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **
                             return fail(PredEncPassRender, "a mip level beside a pitch target, with no mirror",
                                         a.level);
                         levelTargets[j] = mirror->_raw;
-                        if (!loads) loads = rc->blit();
+                        if (!loads)
+                            loads = rc->blit();
                         const raw::fx::MipLevel &lv = t->_raw.chain->layout.level[a.level];
                         loads->copyFromLevel(t->_raw, uint32_t(a.level), 0, 0, mirror->_raw, 0, 0, lv.width, lv.height);
                         afterPass.push_back({t, uint32_t(a.level), mirror});
@@ -3593,44 +4053,64 @@ static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **
             }
             p.width = uint32_t(std::min<NSUInteger>(pass.renderTargetWidth, UINT32_MAX));
             p.height = uint32_t(std::min<NSUInteger>(pass.renderTargetHeight, UINT32_MAX));
-            if (loads) loads->end();
-            if (!(re = rc->render(p))) return fail(PredEncPassRender, "a pass the raw path cannot render to", p.count);
+            if (loads)
+                loads->end();
+            if (!(re = rc->render(p)))
+                return fail(PredEncPassRender, "a pass the raw path cannot render to", p.count);
             break;
         }
-        case OpBlit: be = rc->blit(); break;
+        case OpBlit:
+            be = rc->blit();
+            break;
         case OpEnd:
-            if (re) re->end();
-            if (be) be->end();
+            if (re)
+                re->end();
+            if (be)
+                be->end();
             if (re && !afterPass.empty()) {
                 raw::BlitEncoder *x = rc->blit();
-                for (const LevelCopy &l : afterPass) x->copyToLevel(l.t->_raw, l.level, l.mirror->_raw);
+                for (const LevelCopy &l : afterPass)
+                    x->copyToLevel(l.t->_raw, l.level, l.mirror->_raw);
                 x->end();
                 afterPass.clear();
             }
             re = nullptr;
             be = nullptr;
             break;
-        case OpPipeline: re->setPipeline(((__bridge RMPipeline *)c.obj)->_raw); break;
-        case OpBytes: re->setBytes(c.stage, c.index, cb->_bytes.data() + c.a, c.b); break;
+        case OpPipeline:
+            re->setPipeline(((__bridge RMPipeline *)c.obj)->_raw);
+            break;
+        case OpBytes:
+            re->setBytes(c.stage, c.index, cb->_bytes.data() + c.a, c.b);
+            break;
         case OpBuffer:
             re->setBuffer(c.stage, c.index, c.obj ? &((__bridge RMBuffer *)c.obj)->_raw : nullptr, c.c);
             break;
-        case OpBufferOffset: re->setBufferOffset(c.stage, c.index, c.c); break;
+        case OpBufferOffset:
+            re->setBufferOffset(c.stage, c.index, c.c);
+            break;
         case OpTexture:
-            if (c.stage == 2) re->setTexture(c.index, c.obj ? &((__bridge RMTexture *)c.obj)->_raw : nullptr);
+            if (c.stage == 2)
+                re->setTexture(c.index, c.obj ? &((__bridge RMTexture *)c.obj)->_raw : nullptr);
             break;
         case OpSampler:
-            if (c.stage == 2) re->setSampler(c.index, c.obj ? &((__bridge RMSampler *)c.obj)->_raw : nullptr);
+            if (c.stage == 2)
+                re->setSampler(c.index, c.obj ? &((__bridge RMSampler *)c.obj)->_raw : nullptr);
             break;
-        case OpScissor: re->setScissor(c.a, c.b, uint32_t(c.c >> 32), uint32_t(c.c)); break;
+        case OpScissor:
+            re->setScissor(c.a, c.b, uint32_t(c.c >> 32), uint32_t(c.c));
+            break;
         case OpViewport:
             re->setViewport(extraDouble(cb, c.x), extraDouble(cb, c.x + 1), extraDouble(cb, c.x + 2),
                             extraDouble(cb, c.x + 3), extraDouble(cb, c.x + 4), extraDouble(cb, c.x + 5));
             break;
         case OpDraw:
-            if (!re->draw(c.stage, c.a, c.b, uint32_t(c.c >> 32), uint32_t(c.c), why)) return refused();
+            if (!re->draw(c.stage, c.a, c.b, uint32_t(c.c >> 32), uint32_t(c.c), why))
+                return refused();
             break;
-        case OpBarrier: re->barrier(); break;
+        case OpBarrier:
+            re->barrier();
+            break;
         case OpDrawIndexed:
             if (!re->drawIndexed(c.stage, c.a, c.b == MTLIndexTypeUInt16 ? 2 : 4, &((__bridge RMBuffer *)c.obj)->_raw,
                                  c.c, why))
@@ -3638,7 +4118,8 @@ static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **
             break;
         case OpCopyTexture: {
             RMTexture *s = (__bridge RMTexture *)c.obj, *t = (__bridge RMTexture *)c.obj2;
-            if (!fresh.empty()) fresh.erase(t);
+            if (!fresh.empty())
+                fresh.erase(t);
             const uint64_t x = c.x, o = extra(cb, x + 10), sl = extra(cb, x + 1);
             const uint64_t sx = extra(cb, x + 2), sy = extra(cb, x + 3), w = extra(cb, x + 5), h = extra(cb, x + 6);
             const uint64_t dx = uint32_t(o), dy = o >> 32;
@@ -3668,8 +4149,10 @@ static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **
         case OpCopyBuffer: {
             RMBuffer *s = (__bridge RMBuffer *)c.obj, *t = (__bridge RMBuffer *)c.obj2;
             const uint64_t n = extra(cb, c.x + 1), dof = extra(cb, c.x);
-            if (!s->_raw.wc) rc->clean(s->_raw.cpu + c.c, n);
-            if (!t->_raw.wc) rc->clean(t->_raw.cpu + dof, n, true);
+            if (!s->_raw.wc)
+                rc->clean(s->_raw.cpu + c.c, n);
+            if (!t->_raw.wc)
+                rc->clean(t->_raw.cpu + dof, n, true);
             be->copyBytes(s->_raw.va + c.c, t->_raw.va + dof, n);
             break;
         }
@@ -3684,7 +4167,8 @@ static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **
                 touch(t).l0Fresh = false;
                 t->_mipL0 = false;
             }
-            if (!s->_raw.wc) rc->clean(s->_raw.cpu + so, row * (h - 1) + w * t->_raw.bpp);
+            if (!s->_raw.wc)
+                rc->clean(s->_raw.cpu + so, row * (h - 1) + w * t->_raw.bpp);
             be->copyRect(s->_raw.va + so, uint32_t(row),
                          t->_raw.va + (o >> 32) * t->_raw.pitch + uint32_t(o) * t->_raw.bpp, t->_raw.pitch, uint32_t(w),
                          uint32_t(h), t->_raw.bpp);
@@ -3695,7 +4179,8 @@ static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **
             RMBuffer *t = (__bridge RMBuffer *)c.obj2;
             const uint64_t x = c.x, o = extra(cb, x + 2), w = extra(cb, x + 4), h = extra(cb, x + 5),
                            dof = extra(cb, x + 7), row = extra(cb, x + 8);
-            if (!t->_raw.wc) rc->clean(t->_raw.cpu + dof, row * (h - 1) + w * s->_raw.bpp, true);
+            if (!t->_raw.wc)
+                rc->clean(t->_raw.cpu + dof, row * (h - 1) + w * s->_raw.bpp, true);
             be->copyRect(s->_raw.va + (o >> 32) * s->_raw.pitch + uint32_t(o) * s->_raw.bpp, s->_raw.pitch,
                          t->_raw.va + dof, uint32_t(row), uint32_t(w), uint32_t(h), s->_raw.bpp);
             break;
@@ -3704,10 +4189,13 @@ static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **
             break;
         }
     }
-    if (re) re->end();
-    if (be) be->end();
+    if (re)
+        re->end();
+    if (be)
+        be->end();
     uint32_t seq = 0;
-    if (!rc->commit(seq)) return fail(PredEncKernel, "the kernel refused the submission");
+    if (!rc->commit(seq))
+        return fail(PredEncKernel, "the kernel refused the submission");
     for (const auto &c : converted) {  // (submitted: their images hold the surfaces at these seeds)
         c.first->_imageSeed = c.second;
         c.first->_imageCurrent = true;
@@ -3731,39 +4219,55 @@ static void markWritten(RMCommandBuffer *cb)
             MTLRenderPassDescriptor *pass = (__bridge MTLRenderPassDescriptor *)c.obj;
             for (unsigned j = 0; j < 8; j++)
                 if (RMTexture *t = (RMTexture *)pass.colorAttachments[j].texture)
-                    if ([t isKindOfClass:[RMTexture class]]) t->_gpuDirty = true;
+                    if ([t isKindOfClass:[RMTexture class]])
+                        t->_gpuDirty = true;
             break;
         }
-        case OpCompute: compute = true; break;
-        case OpBlit: compute = false; break;
-        case OpEnd: compute = false; break;
+        case OpCompute:
+            compute = true;
+            break;
+        case OpBlit:
+            compute = false;
+            break;
+        case OpEnd:
+            compute = false;
+            break;
         case OpCopyTexture:
         case OpCopyBufferToTexture:
         case OpMipmaps:
-            if (RMTexture *t = (__bridge RMTexture *)(c.op == OpMipmaps ? c.obj : c.obj2)) t->_gpuDirty = true;
+            if (RMTexture *t = (__bridge RMTexture *)(c.op == OpMipmaps ? c.obj : c.obj2))
+                t->_gpuDirty = true;
             break;
         case OpCopyBuffer:
-        case OpCopyTextureToBuffer: ((__bridge RMBuffer *)c.obj2)->_gpuDirty = true; break;
+        case OpCopyTextureToBuffer:
+            ((__bridge RMBuffer *)c.obj2)->_gpuDirty = true;
+            break;
         case OpBuffer:
         case OpTexture:
             if (compute && c.obj) {
                 id o = (__bridge id)c.obj;
-                if ([o isKindOfClass:[RMBuffer class]]) ((RMBuffer *)o)->_gpuDirty = true;
-                if ([o isKindOfClass:[RMTexture class]]) ((RMTexture *)o)->_gpuDirty = true;
+                if ([o isKindOfClass:[RMBuffer class]])
+                    ((RMBuffer *)o)->_gpuDirty = true;
+                if ([o isKindOfClass:[RMTexture class]])
+                    ((RMTexture *)o)->_gpuDirty = true;
             }
             break;
         case OpInvocation: {  // compute and other recorded calls: every buffer and texture they name
             NSInvocation *inv = (__bridge NSInvocation *)c.obj;
             for (NSUInteger i = 2; i < inv.methodSignature.numberOfArguments; i++) {
-                if (*[inv.methodSignature getArgumentTypeAtIndex:i] != '@') continue;
+                if (*[inv.methodSignature getArgumentTypeAtIndex:i] != '@')
+                    continue;
                 __unsafe_unretained id arg = nil;
                 [inv getArgument:&arg atIndex:i];
-                if ([arg isKindOfClass:[RMBuffer class]]) ((RMBuffer *)arg)->_gpuDirty = true;
-                if ([arg isKindOfClass:[RMTexture class]]) ((RMTexture *)arg)->_gpuDirty = true;
+                if ([arg isKindOfClass:[RMBuffer class]])
+                    ((RMBuffer *)arg)->_gpuDirty = true;
+                if ([arg isKindOfClass:[RMTexture class]])
+                    ((RMTexture *)arg)->_gpuDirty = true;
             }
             break;
         }
-        default: break;
+        default:
+            break;
         }
     }
 }
@@ -3776,7 +4280,8 @@ static std::set<RMCommandBuffer *> gHolders;
 static bool waitsForEvent(RMCommandBuffer *cb)
 {
     for (const Cmd &c : cb->_tape)
-        if (c.op == OpWaitEvent) return true;
+        if (c.op == OpWaitEvent)
+            return true;
     return false;
 }
 
@@ -3786,7 +4291,8 @@ static bool heldBehindEvent()
     std::lock_guard<std::mutex> l(gHoldersLock);
     for (RMCommandBuffer *cb : gHolders)
         for (const Cmd &c : cb->_tape)
-            if (c.op == OpWaitEvent && [(id<MTLSharedEvent>)(__bridge id)c.obj signaledValue] < c.c) return true;
+            if (c.op == OpWaitEvent && [(id<MTLSharedEvent>)(__bridge id)c.obj signaledValue] < c.c)
+                return true;
     return false;
 }
 
@@ -3802,15 +4308,18 @@ static void scheduled(RMCommandBuffer *cb)
     NSArray *handlers;
     {
         std::lock_guard<std::mutex> l(cb->_lock);
-        if (cb->_scheduledSent) return;  // once (eventHeld: at its commit; then its submission's)
+        if (cb->_scheduledSent)
+            return;  // once (eventHeld: at its commit; then its submission's)
         cb->_scheduledSent = true;
-        if (cb->_status == MTLCommandBufferStatusCommitted) cb->_status = MTLCommandBufferStatusScheduled;
+        if (cb->_status == MTLCommandBufferStatusCommitted)
+            cb->_status = MTLCommandBufferStatusScheduled;
         handlers = [cb->_scheduledHandlers copy];
         [cb->_scheduledHandlers removeAllObjects];
         cb->_gpuStart = hostSeconds();
     }
     dispatch_async(gRM->handlers, ^{
-        for (MTLCommandBufferHandler h in handlers) h((id<MTLCommandBuffer>)cb);
+        for (MTLCommandBufferHandler h in handlers)
+            h((id<MTLCommandBuffer>)cb);
         {
             std::lock_guard<std::mutex> l(cb->_lock);
             cb->_scheduledDone = true;
@@ -3829,7 +4338,8 @@ static void finish(RMCommandBuffer *cb, NSError *error)
     markWritten(cb);
     if (!cb->_m2v)
         for (const Cmd &c : cb->_tape)
-            if (c.op == OpSignalEvent) [(id<MTLSharedEvent>)(__bridge id)c.obj setSignaledValue:c.c];
+            if (c.op == OpSignalEvent)
+                [(id<MTLSharedEvent>)(__bridge id)c.obj setSignaledValue:c.c];
     NSArray *handlers;
     {
         std::lock_guard<std::mutex> l(cb->_lock);
@@ -3842,7 +4352,8 @@ static void finish(RMCommandBuffer *cb, NSError *error)
         cb->_scheduledSent = true;  // a completed command buffer is scheduled; its own scheduled() runs no more
     }
     void (^run)(void) = ^{
-        for (MTLCommandBufferHandler h in handlers) h((id<MTLCommandBuffer>)cb);
+        for (MTLCommandBufferHandler h in handlers)
+            h((id<MTLCommandBuffer>)cb);
         {
             std::lock_guard<std::mutex> l(cb->_lock);
             cb->_completedDone = true;
@@ -3861,10 +4372,12 @@ static void finish(RMCommandBuffer *cb, NSError *error)
 
 static void commitBuffer(RMCommandBuffer *cb);
 @implementation RMDevice
+
 - (void)rmCommit:(RMCommandBuffer *)cb
 {
     commitBuffer(cb);
 }
+
 // Alignments Core Animation lays its memory out by (QuartzCore 21H461), answered for what the raw path takes as it is; m2v takes
 // any multiple of 16 (its own answers), so the m2v twins of the same memory are unchanged in what they hold:
 //  - its buffer pool's suballocations (CA::OGL::MetalBufferPool::get_buffer: max(this, the argument's)): a uniform buffer the
@@ -3881,15 +4394,18 @@ static void commitBuffer(RMCommandBuffer *cb);
 {
     return 256;
 }
+
 - (NSUInteger)deviceLinearReadOnlyTextureAlignmentBytes
 {
     return 32;
 }
+
 - (NSUInteger)minimumLinearTextureAlignmentForPixelFormat:(MTLPixelFormat)format
 {
     const NSUInteger a = [gRM->fallback minimumLinearTextureAlignmentForPixelFormat:format];
     return a ? std::max<NSUInteger>(a, 32) : a;
 }
+
 // (every other selector: the m2v device's own method, which the device class inherits)
 - (id<MTLCommandQueue>)newCommandQueue
 {
@@ -3897,16 +4413,19 @@ static void commitBuffer(RMCommandBuffer *cb);
     q->_device = self;
     return (id<MTLCommandQueue>)q;
 }
+
 - (id<MTLCommandQueue>)newCommandQueueWithMaxCommandBufferCount:(NSUInteger)n
 {
     (void)n;
     return [self newCommandQueue];
 }
+
 - (id<MTLCommandQueue>)newCommandQueueWithDescriptor:(id)d
 {
     (void)d;
     return [self newCommandQueue];
 }
+
 - (id<MTLBuffer>)newBufferWithLength:(NSUInteger)n options:(MTLResourceOptions)o
 {
     RMBuffer *b = [RMBuffer new];
@@ -3919,7 +4438,8 @@ static void commitBuffer(RMCommandBuffer *cb);
     if (!gRM->raw->createBuffer(n ? n : 16, b->_raw,
                                 wc)) {  // the pool could not grow: m2v's buffer (its users go to m2v)
         once([NSString stringWithFormat:@"no raw memory for a %lu-byte buffer: m2v's", (unsigned long)n]);
-        if (!predLogged(PredCallBufForeign)) logPred(PredCallBufForeign, 0, n, @"(made: the pool had no room)");
+        if (!predLogged(PredCallBufForeign))
+            logPred(PredCallBufForeign, 0, n, @"(made: the pool had no room)");
         RMTwinObject *t = [RMTwinObject new];
         t->_device = self;
         t->_twin = [gRM->fallback newBufferWithLength:n options:o];
@@ -3927,6 +4447,7 @@ static void commitBuffer(RMCommandBuffer *cb);
     }
     return (id<MTLBuffer>)b;
 }
+
 - (id<MTLBuffer>)newBufferWithBytes:(const void *)p length:(NSUInteger)n options:(MTLResourceOptions)o
 {
     id<MTLBuffer> b = [self newBufferWithLength:n options:o];
@@ -3935,6 +4456,7 @@ static void commitBuffer(RMCommandBuffer *cb);
     }
     return b;
 }
+
 - (id<MTLBuffer>)newBufferWithBytesNoCopy:(void *)p
                                    length:(NSUInteger)n
                                   options:(MTLResourceOptions)o
@@ -3954,9 +4476,11 @@ static void commitBuffer(RMCommandBuffer *cb);
     b->_deallocator = [deallocator copy];
     return (id<MTLBuffer>)b;
 }
+
 - (id<MTLTexture>)wrapTwin:(id<MTLTexture>)twin descriptor:(MTLTextureDescriptor *)d
 {
-    if (!twin) return nil;
+    if (!twin)
+        return nil;
     RMTexture *t = [RMTexture new];
     t->_device = self;
     t->_twin = twin;
@@ -3964,6 +4488,7 @@ static void commitBuffer(RMCommandBuffer *cb);
     t->_descriptor = [d copy];
     return (id<MTLTexture>)t;
 }
+
 - (id<MTLTexture>)newTextureWithDescriptor:(MTLTextureDescriptor *)d
 {
     if (gRM->raw->chainsOn() && chainShape(d)) {  // mipmapped: level 0 a pool texture, the levels a chain (raw/fx)
@@ -3983,7 +4508,8 @@ static void commitBuffer(RMCommandBuffer *cb);
     }
     if (!rawShape(d)) {
         RMTexture *w = (RMTexture *)[self wrapTwin:[gRM->fallback newTextureWithDescriptor:d] descriptor:d];
-        if (w) refuseTexture(w, PredTexShape, rawShapeTerm(d), d.pixelFormat, @"twin-only", nil);
+        if (w)
+            refuseTexture(w, PredTexShape, rawShapeTerm(d), d.pixelFormat, @"twin-only", nil);
         return (id<MTLTexture>)w;
     }
     RMTexture *t = [RMTexture new];
@@ -4000,11 +4526,13 @@ static void commitBuffer(RMCommandBuffer *cb);
     }
     if (!t->_rawOk) {
         RMTexture *w = (RMTexture *)[self wrapTwin:[gRM->fallback newTextureWithDescriptor:d] descriptor:d];
-        if (w) refuseTexture(w, PredTexPoolAlloc, d.width, d.height, @"twin-only (pool)", nil);
+        if (w)
+            refuseTexture(w, PredTexPoolAlloc, d.width, d.height, @"twin-only (pool)", nil);
         return (id<MTLTexture>)w;
     }
     return (id<MTLTexture>)t;
 }
+
 // RGB8_444_2P (542) over plane 0 of a two-plane 4:4:4 surface of one byte a luma texel and two a chroma pair (CoreVideo's
 // '_RB4', the widget and poster snapshots Core Animation samples): Metal reads its codes, red Cr, green Y, blue Cb, alpha 1
 // (m2v ycbcr.rs), which the raw path holds in an RGBA8 image it writes from the planes with the copy engine before the work that
@@ -4022,6 +4550,7 @@ static bool planar444(MTLTextureDescriptor *d, IOSurfaceRef s, NSUInteger plane)
            IOSurfaceGetWidthOfPlane(s, 1) == d.width && IOSurfaceGetHeightOfPlane(s, 1) == d.height &&
            IOSurfaceGetBytesPerElementOfPlane(s, 0) == 1 && IOSurfaceGetBytesPerElementOfPlane(s, 1) == 2;
 }
+
 // YCBCR8_420_2P (500), YCBCR8_420_2P_sRGB (520) or RGB8_420_2P (540) over plane 0 of a CoreVideo '420v' or '420f' surface
 // (plane 0 the texture's size, as m2v takes it: a padded surface m2v cannot read stays m2v's, so no frame differs by driver)
 // (decoded photos and video frames, the photo wallpaper): Metal reads it converted by the surface's range and matrix (500), that
@@ -4033,10 +4562,12 @@ static bool planar444(MTLTextureDescriptor *d, IOSurfaceRef s, NSUInteger plane)
 static bool ycbcr420(MTLTextureDescriptor *d, IOSurfaceRef s, NSUInteger plane, uint32_t shape[9])
 {
     const NSUInteger f = d.pixelFormat;
-    if ((f != 500 && f != 520 && f != 540) || plane != 0 || IOSurfaceGetPlaneCount(s) != 2) return false;
+    if ((f != 500 && f != 520 && f != 540) || plane != 0 || IOSurfaceGetPlaneCount(s) != 2)
+        return false;
     const uint32_t fourcc = IOSurfaceGetPixelFormat(s);
     const bool full = fourcc == '420f';
-    if (!full && fourcc != '420v') return false;
+    if (!full && fourcc != '420v')
+        return false;
     static const SEL rotation = NSSelectorFromString(@"rotation");
     const NSUInteger turned =
         [d respondsToSelector:rotation] ? ((NSUInteger (*)(id, SEL))objc_msgSend)(d, rotation) : 0;
@@ -4075,22 +4606,28 @@ static bool ycbcr420(MTLTextureDescriptor *d, IOSurfaceRef s, NSUInteger plane, 
     shape[0] = uint32_t(w);
     shape[1] = uint32_t(h);
     shape[2] = full;
-    for (int i = 0; i < 6; i++) shape[3 + i] = uint32_t(k[full][matrix][i]);
+    for (int i = 0; i < 6; i++)
+        shape[3 + i] = uint32_t(k[full][matrix][i]);
     return true;
 }
 
 // Which of ycbcr420's terms a 4:2:0 texture failed (the per-shape line): its checks in its order
 static const char *ycbcr420Why(MTLTextureDescriptor *d, IOSurfaceRef s, NSUInteger plane)
 {
-    if (plane != 0) return "a plane other than 0";
-    if (IOSurfaceGetPlaneCount(s) != 2) return "not two planes";
+    if (plane != 0)
+        return "a plane other than 0";
+    if (IOSurfaceGetPlaneCount(s) != 2)
+        return "not two planes";
     const uint32_t fourcc = IOSurfaceGetPixelFormat(s);
-    if (fourcc != '420f' && fourcc != '420v') return "pixel format";
+    if (fourcc != '420f' && fourcc != '420v')
+        return "pixel format";
     static const SEL rotation = NSSelectorFromString(@"rotation");
     const NSUInteger turned =
         [d respondsToSelector:rotation] ? ((NSUInteger (*)(id, SEL))objc_msgSend)(d, rotation) : 0;
-    if (d.textureType != MTLTextureType2D || d.mipmapLevelCount != 1 || d.sampleCount != 1 || turned) return "shape";
-    if (d.usage & ~(MTLTextureUsageShaderRead | MTLTextureUsagePixelFormatView)) return "usage";
+    if (d.textureType != MTLTextureType2D || d.mipmapLevelCount != 1 || d.sampleCount != 1 || turned)
+        return "shape";
+    if (d.usage & ~(MTLTextureUsageShaderRead | MTLTextureUsagePixelFormatView))
+        return "usage";
     const size_t w = d.width, h = d.height;
     if (IOSurfaceGetWidthOfPlane(s, 0) != w || IOSurfaceGetHeightOfPlane(s, 0) != h ||
         IOSurfaceGetWidthOfPlane(s, 1) < (w + 1) / 2 || IOSurfaceGetHeightOfPlane(s, 1) < (h + 1) / 2)
@@ -4114,9 +4651,11 @@ static const char *ycbcr420Why(MTLTextureDescriptor *d, IOSurfaceRef s, NSUInteg
     }
     return "taken (refused later: the import or the pool)";
 }
+
 - (id<MTLTexture>)newTextureWithDescriptor:(MTLTextureDescriptor *)d iosurface:(IOSurfaceRef)s plane:(NSUInteger)plane
 {
-    if (!s) return nil;
+    if (!s)
+        return nil;
     RMTexture *t = [RMTexture new];
     t->_device = self;
     t->_descriptor = [d copy];
@@ -4192,10 +4731,12 @@ static const char *ycbcr420Why(MTLTextureDescriptor *d, IOSurfaceRef s, NSUInteg
             refuseTexture(t, PredTexSurfBase, base & 0xfff, 0, @"surface", extra);
         else
             refuseTexture(t, PredTexSurfImport, 1, 0, @"surface", extra);
-        if (![t rmTwin]) return nil;
+        if (![t rmTwin])
+            return nil;
     }
     return (id<MTLTexture>)t;
 }
+
 - (id<MTLSamplerState>)newSamplerStateWithDescriptor:(MTLSamplerDescriptor *)d
 {
     raw::SamplerDesc s;
@@ -4226,7 +4767,8 @@ static const char *ycbcr420Why(MTLTextureDescriptor *d, IOSurfaceRef s, NSUInteg
                                      (int)d.normalizedCoordinates, (unsigned long)d.sAddressMode,
                                      (unsigned long)d.tAddressMode, (unsigned long)d.borderColor, (int)d.lodAverage,
                                      (int)rawOk]);
-        if (![r rmTwin]) return nil;
+        if (![r rmTwin])
+            return nil;
         RMTwinObject *o =
             [RMTwinObject new];  // a sampler the raw path cannot use: a draw with it goes to m2v (not an RMSampler)
         o->_device = self;
@@ -4235,42 +4777,51 @@ static const char *ycbcr420Why(MTLTextureDescriptor *d, IOSurfaceRef s, NSUInteg
     }
     return (id<MTLSamplerState>)r;
 }
+
 - (id<MTLDepthStencilState>)newDepthStencilStateWithDescriptor:(MTLDepthStencilDescriptor *)d
 {
     id twin = [gRM->fallback newDepthStencilStateWithDescriptor:d];
-    if (!twin) return nil;
+    if (!twin)
+        return nil;
     RMTwinObject *o = [RMTwinObject new];
     o->_device = self;
     o->_twin = twin;
     o.label = d.label;
     return (id<MTLDepthStencilState>)o;
 }
+
 - (id<MTLLibrary>)newLibraryWithURL:(NSURL *)url error:(NSError **)error
 {
     return (id<MTLLibrary>)wrapLibrary(self, [gRM->fallback newLibraryWithURL:url error:error], url.path);
 }
+
 - (id<MTLLibrary>)newLibraryWithFile:(NSString *)path error:(NSError **)error
 {
     return (id<MTLLibrary>)wrapLibrary(self, [gRM->fallback newLibraryWithFile:path error:error], path);
 }
+
 - (id<MTLLibrary>)newLibraryWithData:(dispatch_data_t)data error:(NSError **)error
 {
     return (id<MTLLibrary>)wrapLibrary(self, [gRM->fallback newLibraryWithData:data error:error], nil);
 }
+
 - (id<MTLLibrary>)newDefaultLibrary
 {
     return (id<MTLLibrary>)wrapLibrary(self, [gRM->fallback newDefaultLibrary], nil);
 }
+
 - (id<MTLLibrary>)newDefaultLibraryWithBundle:(NSBundle *)bundle error:(NSError **)error
 {
     return (id<MTLLibrary>)wrapLibrary(self, [gRM->fallback newDefaultLibraryWithBundle:bundle error:error],
                                        [bundle.bundlePath stringByAppendingString:@"/default.metallib"]);
 }
+
 - (id<MTLLibrary>)newLibraryWithSource:(NSString *)source options:(MTLCompileOptions *)options error:(NSError **)error
 {
     return (id<MTLLibrary>)wrapLibrary(self, [gRM->fallback newLibraryWithSource:source options:options error:error],
                                        nil);
 }
+
 // A descriptor whose functions are this device's: a copy over their twins, for the m2v device
 static MTLRenderPipelineDescriptor *twinDescriptor(MTLRenderPipelineDescriptor *d)
 {
@@ -4279,6 +4830,7 @@ static MTLRenderPipelineDescriptor *twinDescriptor(MTLRenderPipelineDescriptor *
     t.fragmentFunction = twinOf(d.fragmentFunction);
     return t;
 }
+
 - (RMPipeline *)pipelineFor:(MTLRenderPipelineDescriptor *)d twin:(id<MTLRenderPipelineState>)twin
 {
     RMPipeline *p = [RMPipeline new];
@@ -4295,10 +4847,12 @@ static MTLRenderPipelineDescriptor *twinDescriptor(MTLRenderPipelineDescriptor *
     }
     for (unsigned i = 0; i < 8; i++) {
         MTLRenderPipelineColorAttachmentDescriptor *a = d.colorAttachments[i];
-        if (!a.blendingEnabled) continue;
+        if (!a.blendingEnabled)
+            continue;
         for (MTLBlendFactor f : {a.sourceRGBBlendFactor, a.destinationRGBBlendFactor, a.sourceAlphaBlendFactor,
                                  a.destinationAlphaBlendFactor})
-            if (f >= MTLBlendFactorBlendColor && f <= MTLBlendFactorOneMinusBlendAlpha) p->_constantBlend = true;
+            if (f >= MTLBlendFactorBlendColor && f <= MTLBlendFactorOneMinusBlendAlpha)
+                p->_constantBlend = true;
     }
     if (!p->_raw)
         once([NSString stringWithFormat:@"state not in the pack (m2v draws it)%s: %@",
@@ -4306,6 +4860,7 @@ static MTLRenderPipelineDescriptor *twinDescriptor(MTLRenderPipelineDescriptor *
                                         d.label ?: @"-"]);
     return p;
 }
+
 - (id<MTLRenderPipelineState>)newRenderPipelineStateWithDescriptor:(MTLRenderPipelineDescriptor *)d
                                                              error:(NSError **)error
 {
@@ -4314,10 +4869,13 @@ static MTLRenderPipelineDescriptor *twinDescriptor(MTLRenderPipelineDescriptor *
     id<MTLRenderPipelineState> twin = [gRM->fallback newRenderPipelineStateWithDescriptor:twinDescriptor(d)
                                                                                     error:error];
     RMPipeline *p = [self pipelineFor:d twin:twin];
-    if (!twin && !p->_raw) return nil;
-    if (error && p->_raw) *error = nil;
+    if (!twin && !p->_raw)
+        return nil;
+    if (error && p->_raw)
+        *error = nil;
     return (id<MTLRenderPipelineState>)p;
 }
+
 - (id<MTLRenderPipelineState>)newRenderPipelineStateWithDescriptor:(MTLRenderPipelineDescriptor *)d
                                                            options:(MTLPipelineOption)o
                                                         reflection:(MTLAutoreleasedRenderPipelineReflection *)reflection
@@ -4328,9 +4886,11 @@ static MTLRenderPipelineDescriptor *twinDescriptor(MTLRenderPipelineDescriptor *
                                                                                reflection:reflection
                                                                                     error:error];
     RMPipeline *p = [self pipelineFor:d twin:twin];
-    if (!twin && !p->_raw) return nil;
+    if (!twin && !p->_raw)
+        return nil;
     return (id<MTLRenderPipelineState>)p;
 }
+
 - (void)newRenderPipelineStateWithDescriptor:(MTLRenderPipelineDescriptor *)d
                            completionHandler:(MTLNewRenderPipelineStateCompletionHandler)handler
 {
@@ -4342,6 +4902,7 @@ static MTLRenderPipelineDescriptor *twinDescriptor(MTLRenderPipelineDescriptor *
                                           handler((!twin && !p->_raw) ? nil : (id<MTLRenderPipelineState>)p, e);
                                       }];
 }
+
 - (void)newRenderPipelineStateWithDescriptor:(MTLRenderPipelineDescriptor *)d
                                      options:(MTLPipelineOption)o
                            completionHandler:(MTLNewRenderPipelineStateWithReflectionCompletionHandler)handler
@@ -4356,18 +4917,22 @@ static MTLRenderPipelineDescriptor *twinDescriptor(MTLRenderPipelineDescriptor *
                                           handler((!twin && !p->_raw) ? nil : (id<MTLRenderPipelineState>)p, r, e);
                                       }];
 }
+
 - (id)wrapCarried:(id)twin
 {
-    if (!twin) return nil;
+    if (!twin)
+        return nil;
     RMTwinObject *o = [RMTwinObject new];
     o->_device = self;
     o->_twin = twin;
     return o;
 }
+
 - (id<MTLComputePipelineState>)newComputePipelineStateWithFunction:(id<MTLFunction>)f error:(NSError **)error
 {
     return [self wrapCarried:[gRM->fallback newComputePipelineStateWithFunction:twinOf(f) error:error]];
 }
+
 - (id<MTLComputePipelineState>)newComputePipelineStateWithFunction:(id<MTLFunction>)f
                                                            options:(MTLPipelineOption)o
                                                         reflection:(MTLAutoreleasedComputePipelineReflection *)r
@@ -4378,6 +4943,7 @@ static MTLRenderPipelineDescriptor *twinDescriptor(MTLRenderPipelineDescriptor *
                                                                      reflection:r
                                                                           error:error]];
 }
+
 - (id<MTLComputePipelineState>)newComputePipelineStateWithDescriptor:(MTLComputePipelineDescriptor *)d
                                                              options:(MTLPipelineOption)o
                                                           reflection:(MTLAutoreleasedComputePipelineReflection *)r
@@ -4390,6 +4956,7 @@ static MTLRenderPipelineDescriptor *twinDescriptor(MTLRenderPipelineDescriptor *
                                                                        reflection:r
                                                                             error:error]];
 }
+
 - (id<MTLRenderPipelineState>)newRenderPipelineStateWithTileDescriptor:(MTLTileRenderPipelineDescriptor *)d
                                                                options:(MTLPipelineOption)o
                                                             reflection:(MTLAutoreleasedRenderPipelineReflection *)r
@@ -4402,6 +4969,7 @@ static MTLRenderPipelineDescriptor *twinDescriptor(MTLRenderPipelineDescriptor *
                                                                           reflection:r
                                                                                error:error]];
 }
+
 - (id<MTLHeap>)newHeapWithDescriptor:(MTLHeapDescriptor *)d
 {
     RMHeap *h = [RMHeap new];
@@ -4409,12 +4977,14 @@ static MTLRenderPipelineDescriptor *twinDescriptor(MTLRenderPipelineDescriptor *
     h->_descriptor = [d copy];
     return (id<MTLHeap>)h;
 }
+
 - (id)newResourceGroupFromResources:(const id __unsafe_unretained *)resources count:(NSUInteger)count
 {
     (void)resources;
     (void)count;
     return [NSObject new];  // cache hints are no-ops here (encodeCacheHint...)
 }
+
 @end
 
 // ---- commit: order between the two drivers ----
@@ -4437,7 +5007,8 @@ static uint64_t signalled(NSMapTable *map, void *event)
 static void noteSignals(RMCommandBuffer *cb, NSMapTable *map)
 {
     for (const Cmd &c : cb->_tape)
-        if (c.op == OpSignalEvent && c.c > signalled(map, c.obj)) [map setObject:@(c.c) forKey:(__bridge id)c.obj];
+        if (c.op == OpSignalEvent && c.c > signalled(map, c.obj))
+            [map setObject:@(c.c) forKey:(__bridge id)c.obj];
 }
 
 // Whether the shared event wait `i` of `cb` is covered without a CPU wait: signalled already, earlier in `cb`, or (GPU order)
@@ -4446,15 +5017,18 @@ static bool waitCovered(RMCommandBuffer *cb, size_t i)
 {
     const Cmd &c = cb->_tape[i];
     for (size_t k = 0; k < i; k++)
-        if (cb->_tape[k].op == OpSignalEvent && cb->_tape[k].obj == c.obj && cb->_tape[k].c >= c.c) return true;
-    if ([(id<MTLSharedEvent>)(__bridge id)c.obj signaledValue] >= c.c) return true;
+        if (cb->_tape[k].op == OpSignalEvent && cb->_tape[k].obj == c.obj && cb->_tape[k].c >= c.c)
+            return true;
+    if ([(id<MTLSharedEvent>)(__bridge id)c.obj signaledValue] >= c.c)
+        return true;
     return gRM->gpuOrder && (signalled(gRM->rawSignals, c.obj) >= c.c || signalled(gRM->m2vSignals, c.obj) >= c.c);
 }
 
 static bool eventsReady(RMCommandBuffer *cb)
 {
     for (size_t i = 0; i < cb->_tape.size(); i++)
-        if (cb->_tape[i].op == OpWaitEvent && !waitCovered(cb, i)) return false;
+        if (cb->_tape[i].op == OpWaitEvent && !waitCovered(cb, i))
+            return false;
     return true;
 }
 
@@ -4465,7 +5039,8 @@ static constexpr int64_t kEventLimitNs = 10 * NSEC_PER_SEC;
 static void waitEvents(RMCommandBuffer *cb)
 {
     for (size_t i = 0; i < cb->_tape.size(); i++) {
-        if (cb->_tape[i].op != OpWaitEvent || waitCovered(cb, i)) continue;
+        if (cb->_tape[i].op != OpWaitEvent || waitCovered(cb, i))
+            continue;
         const Cmd &c = cb->_tape[i];
         once(@"CPU-ordered: a shared event signalled outside this device's submitted work (the host or another "
              @"process): "
@@ -4475,7 +5050,9 @@ static void waitEvents(RMCommandBuffer *cb)
         id<MTLSharedEvent> event = (__bridge id)c.obj;
         [event notifyListener:gRM->listener
                       atValue:c.c
-                        block:^(id<MTLSharedEvent>, uint64_t) { dispatch_semaphore_signal(reached); }];
+                        block:^(id<MTLSharedEvent>, uint64_t) {
+                            dispatch_semaphore_signal(reached);
+                        }];
         // A signaller that never reaches it (a client killed or suspended mid-frame: Core Animation's per-surface events,
         // CA::OGL::shared_event_submit) holds no one past kEventLimit: the command buffer goes on as if the event were reached,
         // as Core Animation's own SharedEvent::force_complete would make it (r7n: AegirPoster died, r7o: PosterKit's scenes
@@ -4509,7 +5086,8 @@ static void orderRefused(const char *what, int kr)
 static void countDriver(int driver)
 {
     RawState &r = *gRM;
-    if (r.lastDriver && r.lastDriver != driver) r.stats.switches++;
+    if (r.lastDriver && r.lastDriver != driver)
+        r.stats.switches++;
     r.lastDriver = driver;
 }
 
@@ -4519,12 +5097,14 @@ static void countDriver(int driver)
 static void countPreds(RMCommandBuffer *cb)
 {
     const uint64_t m = cb->_preds;
-    if (!m) return;
+    if (!m)
+        return;
     const bool only = !(m & (m - 1));
     for (uint64_t left = m; left; left &= left - 1) {
         const int p = __builtin_ctzll(left);
         gPredCbs[p].fetch_add(1, std::memory_order_relaxed);
-        if (only) gPredOnly[p].fetch_add(1, std::memory_order_relaxed);
+        if (only)
+            gPredOnly[p].fetch_add(1, std::memory_order_relaxed);
     }
 }
 
@@ -4535,14 +5115,18 @@ static void countPreds(RMCommandBuffer *cb)
 static void mirrorsForM2v(RMCommandBuffer *cb, size_t from, size_t to)
 {
     RawState &r = *gRM;
-    if (!cb->_chains || !r.gpuOrder) return;
+    if (!cb->_chains || !r.gpuOrder)
+        return;
     std::vector<RMTexture *> need;
     auto add = [&](void *o) {
-        if (!chained(o)) return;
+        if (!chained(o))
+            return;
         RMTexture *t = (__bridge RMTexture *)o;
         const raw::Texture::Chain &c = *t->_raw.chain;
-        if (t->_mipLevels || t->_mirrored || !c.rawLevels || !c.levelsFresh || c.mirrorLevels) return;
-        if (std::find(need.begin(), need.end(), t) == need.end()) need.push_back(t);
+        if (t->_mipLevels || t->_mirrored || !c.rawLevels || !c.levelsFresh || c.mirrorLevels)
+            return;
+        if (std::find(need.begin(), need.end(), t) == need.end())
+            need.push_back(t);
     };
     for (size_t at = from; at < to; at++) {
         const Cmd &c = cb->_tape[at];
@@ -4550,7 +5134,8 @@ static void mirrorsForM2v(RMCommandBuffer *cb, size_t from, size_t to)
         case OpRender: {
             MTLRenderPassDescriptor *pass = (__bridge MTLRenderPassDescriptor *)c.obj;
             for (unsigned j = 0; j < 8; j++)
-                if (pass.colorAttachments[j].level) add((__bridge void *)pass.colorAttachments[j].texture);
+                if (pass.colorAttachments[j].level)
+                    add((__bridge void *)pass.colorAttachments[j].texture);
             break;
         }
         case OpTexture:
@@ -4561,17 +5146,21 @@ static void mirrorsForM2v(RMCommandBuffer *cb, size_t from, size_t to)
             break;
         case OpCopyTexture:
         case OpCopyTextureToBuffer:
-            if (extra(cb, c.x + 1)) add(c.obj);
+            if (extra(cb, c.x + 1))
+                add(c.obj);
             break;
-        default: break;
+        default:
+            break;
         }
     }
     for (auto it = need.begin(); it != need.end();) {
         bool all = true;
-        for (uint32_t l = 1; all && l < (*it)->_raw.chain->layout.levels; l++) all = [*it rmMirror:l] != nil;
+        for (uint32_t l = 1; all && l < (*it)->_raw.chain->layout.levels; l++)
+            all = [*it rmMirror:l] != nil;
         it = all ? std::next(it) : need.erase(it);
     }
-    if (need.empty()) return;
+    if (need.empty())
+        return;
     if (r.m2vSinceRaw) {  // m2v work before may still read the mirrors
         uint32_t waits = 0;
         const int kr = r.raw->orderAfterOthers(waits);
@@ -4603,14 +5192,17 @@ static void mirrorsForM2v(RMCommandBuffer *cb, size_t from, size_t to)
     }
     r.rawSinceM2v = true;
     d.stats.mirrorsOut += levels;
-    for (RMTexture *t : need) t->_mirrored = true;
+    for (RMTexture *t : need)
+        t->_mirrored = true;
 }
 
 static bool submitSegments(RMCommandBuffer *cb);
+
 static bool submitLocked(RMCommandBuffer *cb)
 {
     RawState &r = *gRM;
-    if (!cb->_segs.empty()) return submitSegments(cb);
+    if (!cb->_segs.empty())
+        return submitSegments(cb);
     const char *why = nullptr;
     if (cb->_reason == WhyRaw) {
         if (r.gpuOrder && r.m2vSinceRaw) {  // its first entry: an acquire on what NVK's channels submitted
@@ -4622,7 +5214,8 @@ static bool submitLocked(RMCommandBuffer *cb)
             } else {
                 orderRefused("raw after m2v", kr);
                 std::lock_guard<std::mutex> m(r.m2vLock);
-                if (r.m2vPending) return false;
+                if (r.m2vPending)
+                    return false;
             }
         }
         const uint64_t began = nowUs();
@@ -4657,7 +5250,8 @@ static bool submitLocked(RMCommandBuffer *cb)
     }
     cb->_m2v = true;
     const uint64_t replayBegan = nowUs();
-    if (r.fallback) mirrorsForM2v(cb, 0, cb->_tape.size());
+    if (r.fallback)
+        mirrorsForM2v(cb, 0, cb->_tape.size());
     id<MTLCommandBuffer> m = r.fallback ? replay(cb, 0, cb->_tape.size(), false) : nil;
     if (!m) {
         finish(cb, [NSError errorWithDomain:MTLCommandBufferErrorDomain
@@ -4692,7 +5286,8 @@ static bool submitLocked(RMCommandBuffer *cb)
     [m addScheduledHandler:^(id<MTLCommandBuffer>) {
         {
             std::lock_guard<std::mutex> l(gRM->m2vLock);
-            if (!counted) gRM->m2vUnscheduled--;
+            if (!counted)
+                gRM->m2vUnscheduled--;
             counted = true;
         }
         gRM->m2vChanged.notify_all();
@@ -4702,7 +5297,8 @@ static bool submitLocked(RMCommandBuffer *cb)
         finish(cb, done.error);
         {
             std::lock_guard<std::mutex> l(gRM->m2vLock);
-            if (!counted) gRM->m2vUnscheduled--;  // a refused commit never schedules
+            if (!counted)
+                gRM->m2vUnscheduled--;  // a refused commit never schedules
             counted = true;
             gRM->m2vPending--;
         }
@@ -4719,12 +5315,14 @@ static bool submitLocked(RMCommandBuffer *cb)
 // every command buffer goes whole, as before r12. It comes back once the stall line (rawStall) or m2v's bounded queue slot wait
 // names the cause.
 static constexpr bool kSplit = false;
+
 static void planSegments(RMCommandBuffer *cb)
 {
     cb->_segs.clear();
     cb->_segNext = 0;
     [cb closeEncoder];
-    if (!kSplit || cb->_reason == WhyRaw || cb->_whole) return;
+    if (!kSplit || cb->_reason == WhyRaw || cb->_whole)
+        return;
     bool raw = false, m2v = false;
     for (size_t at = 0; at < cb->_tape.size(); at++) {
         const Cmd &c = cb->_tape[at];
@@ -4733,17 +5331,22 @@ static void planSegments(RMCommandBuffer *cb)
             return;
         }
         if (c.op != OpRender && c.op != OpBlit && c.op != OpCompute) {
-            if (cb->_segs.empty()) return;  // a command before the first encoder
+            if (cb->_segs.empty())
+                return;  // a command before the first encoder
             continue;
         }
         const bool r = !c.index;
         (r ? raw : m2v) = true;
-        if (!cb->_segs.empty()) cb->_segs.back().to = uint32_t(at);
-        if (!cb->_segs.empty() && cb->_segs.back().raw == r) continue;
+        if (!cb->_segs.empty())
+            cb->_segs.back().to = uint32_t(at);
+        if (!cb->_segs.empty() && cb->_segs.back().raw == r)
+            continue;
         cb->_segs.push_back({uint32_t(at), uint32_t(cb->_tape.size()), r});
     }
-    if (!cb->_segs.empty()) cb->_segs.back().to = uint32_t(cb->_tape.size());
-    if (!raw || !m2v) cb->_segs.clear();
+    if (!cb->_segs.empty())
+        cb->_segs.back().to = uint32_t(cb->_tape.size());
+    if (!raw || !m2v)
+        cb->_segs.clear();
 }
 
 // Whether what `cb` submits next is raw work (it needs the m2v work before it scheduled: m2vClear)
@@ -4768,7 +5371,8 @@ static bool submitSegments(RMCommandBuffer *cb)
         if (s.raw) {
             {
                 std::lock_guard<std::mutex> m(r.m2vLock);
-                if (!m2vClear()) return false;
+                if (!m2vClear())
+                    return false;
             }
             if (r.gpuOrder && r.m2vSinceRaw) {
                 uint32_t waits = 0;
@@ -4779,7 +5383,8 @@ static bool submitSegments(RMCommandBuffer *cb)
                 } else {
                     orderRefused("raw after m2v", kr);
                     std::lock_guard<std::mutex> m(r.m2vLock);
-                    if (r.m2vPending) return false;
+                    if (r.m2vPending)
+                        return false;
                 }
             }
             const char *why = nullptr;
@@ -4802,13 +5407,15 @@ static bool submitSegments(RMCommandBuffer *cb)
         } else {
             r.stats.splitM2v++;
             const uint64_t began = nowUs();
-            if (r.fallback) mirrorsForM2v(cb, s.from, s.to);
+            if (r.fallback)
+                mirrorsForM2v(cb, s.from, s.to);
             id<MTLCommandBuffer> m = r.fallback ? replay(cb, s.from, s.to, true) : nil;
             if (!m) {
                 cb->_segError = [NSError errorWithDomain:MTLCommandBufferErrorDomain
                                                     code:MTLCommandBufferErrorInternal
                                                 userInfo:nil];
-                if (last) finish(cb, cb->_segError);
+                if (last)
+                    finish(cb, cb->_segError);
                 cb->_segNext++;
                 continue;
             }
@@ -4836,18 +5443,23 @@ static bool submitSegments(RMCommandBuffer *cb)
             [m addScheduledHandler:^(id<MTLCommandBuffer>) {
                 {
                     std::lock_guard<std::mutex> l(gRM->m2vLock);
-                    if (!counted) gRM->m2vUnscheduled--;
+                    if (!counted)
+                        gRM->m2vUnscheduled--;
                     counted = true;
                 }
                 gRM->m2vChanged.notify_all();
-                if (last) scheduled(cb);
+                if (last)
+                    scheduled(cb);
             }];
             [m addCompletedHandler:^(id<MTLCommandBuffer> done) {
-                if (done.error && !cb->_segError) cb->_segError = done.error;
-                if (last) finish(cb, cb->_segError);
+                if (done.error && !cb->_segError)
+                    cb->_segError = done.error;
+                if (last)
+                    finish(cb, cb->_segError);
                 {
                     std::lock_guard<std::mutex> l(gRM->m2vLock);
-                    if (!counted) gRM->m2vUnscheduled--;
+                    if (!counted)
+                        gRM->m2vUnscheduled--;
                     counted = true;
                     gRM->m2vPending--;
                 }
@@ -4876,10 +5488,13 @@ static void commitBuffer(RMCommandBuffer *cb)
     if (now && nextRaw(cb)) {
         std::lock_guard<std::mutex> m(r.m2vLock);
         now = m2vClear();
-        if (!now && !r.gpuOrder) r.stats.cpuOrdered++;  // it waits for the m2v work before it to complete
+        if (!now && !r.gpuOrder)
+            r.stats.cpuOrdered++;  // it waits for the m2v work before it to complete
     }
-    if (now && cb->_reason == WhyRaw) now = eventsReady(cb);
-    if (now && submitLocked(cb)) return;
+    if (now && cb->_reason == WhyRaw)
+        now = eventsReady(cb);
+    if (now && submitLocked(cb))
+        return;
     r.stats.deferred++;
     r.waiting.push_back(cb);
     l.unlock();
@@ -4894,20 +5509,26 @@ static void submitLoop()
         RMCommandBuffer *cb;
         {
             std::unique_lock<std::mutex> l(r.submit);
-            r.waitingChanged.wait(l, [&] { return !r.waiting.empty(); });
+            r.waitingChanged.wait(l, [&] {
+                return !r.waiting.empty();
+            });
             cb = r.waiting.front();
         }
         if (nextRaw(cb)) {
             {
                 std::unique_lock<std::mutex> m(r.m2vLock);
-                if (!r.m2vChanged.wait_for(m, kWaitLimit, [&] { return m2vClear(); }))
+                if (!r.m2vChanged.wait_for(m, kWaitLimit, [&] {
+                        return m2vClear();
+                    }))
                     waitTooLong("raw command buffer waiting for the m2v work before it, command buffer",
                                 (__bridge void *)cb);
             }
-            if (cb->_reason == WhyRaw) waitEvents(cb);
+            if (cb->_reason == WhyRaw)
+                waitEvents(cb);
         }
         std::lock_guard<std::mutex> l(r.submit);
-        if (!submitLocked(cb)) continue;  // CPU order from now on: it waits for the m2v work before it to complete
+        if (!submitLocked(cb))
+            continue;  // CPU order from now on: it waits for the m2v work before it to complete
         r.waiting.pop_front();
     }
 }
@@ -4920,7 +5541,9 @@ static void completionLoop()
         RMCommandBuffer *cb;
         {
             std::unique_lock<std::mutex> l(r.doneLock);
-            r.doneChanged.wait(l, [&] { return !r.inflight.empty(); });
+            r.doneChanged.wait(l, [&] {
+                return !r.inflight.empty();
+            });
             cb = r.inflight.front();
         }
         r.raw->wait(cb->_seqno);
@@ -4951,20 +5574,25 @@ bool raw_metal_chains_on(void)
 
 const void *raw_metal_texture_image(id<MTLTexture> texture, size_t *pitch)
 {
-    if (![(id)texture isKindOfClass:[RMTexture class]]) return nullptr;
+    if (![(id)texture isKindOfClass:[RMTexture class]])
+        return nullptr;
     RMTexture *t = (RMTexture *)texture;
-    if (!t->_rawOk || !t->_raw.cpu) return nullptr;
-    if (pitch) *pitch = t->_raw.pitch;
+    if (!t->_rawOk || !t->_raw.cpu)
+        return nullptr;
+    if (pitch)
+        *pitch = t->_raw.pitch;
     return t->_raw.cpu;
 }
 
 size_t raw_metal_rates(char *out, size_t size)
 {
-    if (!gRM || !size) return 0;
+    if (!gRM || !size)
+        return 0;
     Stats &s = gRM->stats;
     const uint64_t raw = s.raw.load(), m2v = s.m2v.load(), now = nowUs();
     const uint64_t c = raw - gRates.raw, f = m2v - gRates.m2v, sp = s.splits.load() - gRates.splits;
-    if (!c && !f && !sp) return 0;
+    if (!c && !f && !sp)
+        return 0;
     const double secs = gRates.lastUs ? (now - gRates.lastUs) / 1e6 : 5.0;
     char reasons[160] = "";
     size_t at = 0;
@@ -4993,8 +5621,10 @@ size_t raw_metal_rates(char *out, size_t size)
         for (int shown = 0; shown < 10; shown++) {
             int best = 0;
             for (int i = 1; i < PredCount; i++)
-                if (cbs[i] > cbs[best]) best = i;
-            if (!best || !cbs[best] || pat >= sizeof preds) break;
+                if (cbs[i] > cbs[best])
+                    best = i;
+            if (!best || !cbs[best] || pat >= sizeof preds)
+                break;
             pat += snprintf(preds + pat, sizeof preds - pat, "%s%s:%llu/%llu", pat ? "," : "", kPredNames[best],
                             (unsigned long long)cbs[best], (unsigned long long)only[best]);
             cbs[best] = 0;
@@ -5070,7 +5700,8 @@ static void rawStallTick()
     static uint64_t lastCommits = ~0ull, lastDone = ~0ull;
     static int still = 0;
     static bool said = false;
-    if (said || !gRM) return;
+    if (said || !gRM)
+        return;
     RawState &r = *gRM;
     Stats &s = r.stats;
     const uint64_t commits = s.raw.load() + s.m2v.load() + s.splits.load(), done = s.finished.load();
@@ -5097,7 +5728,8 @@ static void rawStallTick()
     }
     {
         std::unique_lock<std::mutex> b(r.doneLock, std::try_to_lock);
-        if (b.owns_lock()) inflight = long(r.inflight.size());
+        if (b.owns_lock())
+            inflight = long(r.inflight.size());
     }
     {
         std::unique_lock<std::mutex> m(r.m2vLock, std::try_to_lock);
@@ -5119,7 +5751,8 @@ static void rawStallTick()
         still = 0;
         return;
     }
-    if (++still < 2) return;
+    if (++still < 2)
+        return;
     said = true;
     os_log_error(rawLog(),
                  "raw: stall: nothing committed or completed for 10 s with work pending: waiting %ld (front segment "
@@ -5188,7 +5821,8 @@ static raw::Device *openDevice(const char *packPath, uint64_t stack, std::string
 void raw_metal_prepare(const char *packPath, uint64_t stack)
 {
     std::lock_guard<std::mutex> l(gPrepared.lock);
-    if (gPrepared.started) return;
+    if (gPrepared.started)
+        return;
     gPrepared.started = true;
     gPrepared.path = packPath;
     gPrepared.stack = stack;
@@ -5207,7 +5841,8 @@ id<MTLDevice> raw_metal_device_open(const char *packPath, uint64_t stack, id<MTL
 {
     static std::mutex once;
     std::lock_guard<std::mutex> l(once);
-    if (gRM) return gRM->device;  // one per process
+    if (gRM)
+        return gRM->device;  // one per process
     raw::Device *dev = nullptr;
     std::string err;
     bool prepared = false;
@@ -5225,9 +5860,11 @@ id<MTLDevice> raw_metal_device_open(const char *packPath, uint64_t stack, id<MTL
             gPrepared.dev = nullptr;
         }
     }
-    if (!prepared) dev = openDevice(packPath, stack, err);
+    if (!prepared)
+        dev = openDevice(packPath, stack, err);
     if (!dev) {
-        if (error) *error = [NSString stringWithUTF8String:err.c_str()];
+        if (error)
+            *error = [NSString stringWithUTF8String:err.c_str()];
         return nil;
     }
     // The device class: a subclass of the m2v device's own (an _MTLDevice conforming to MTLDevice and MTLDeviceSPI on the iPad),
@@ -5235,7 +5872,8 @@ id<MTLDevice> raw_metal_device_open(const char *packPath, uint64_t stack, id<MTL
     Class base = fallback ? object_getClass(fallback) : [NSObject class];
     Class cls = objc_allocateClassPair(base, "RawGM20BMetalDevice", 0);
     if (!cls) {
-        if (error) *error = @"the device class could not be made";
+        if (error)
+            *error = @"the device class could not be made";
         delete dev;
         return nil;
     }
@@ -5259,14 +5897,17 @@ id<MTLDevice> raw_metal_device_open(const char *packPath, uint64_t stack, id<MTL
     if (fallback && [fallback respondsToSelector:limits] && [r->device respondsToSelector:limits]) {
         const void *from = ((const void *(*)(id, SEL))objc_msgSend)(fallback, limits);
         void *to = ((void *(*)(id, SEL))objc_msgSend)(r->device, limits);
-        if (from && to && from != to) memcpy(to, from, 0x100);  // kLimitFields' extent (NativeBridgeMetalFrontend.mm)
+        if (from && to && from != to)
+            memcpy(to, from, 0x100);  // kLimitFields' extent (NativeBridgeMetalFrontend.mm)
         // and this device's own answers (RMDevice) where the table holds them (kLimitFields' offsets)
         if (to && from != to) {
             static const struct {
                 uint16_t offset;
                 uint32_t value;
             } own[] = {{0x78, 256}, {0xb0, 32}};
-            for (const auto &o : own) memcpy(static_cast<uint8_t *>(to) + o.offset, &o.value, 4);
+
+            for (const auto &o : own)
+                memcpy(static_cast<uint8_t *>(to) + o.offset, &o.value, 4);
         }
     }
     r->handlers = dispatch_queue_create(
@@ -5287,8 +5928,10 @@ id<MTLDevice> raw_metal_device_open(const char *packPath, uint64_t stack, id<MTL
         const NSUInteger page = NSUInteger(getpagesize());
         if (dev->createBuffer(page, probe, true) && probe.wc && fallback)
             twin = [fallback newBufferWithBytesNoCopy:probe.cpu length:page options:0 deallocator:nil] != nil;
-        if (probe.cpu) dev->destroyBuffer(probe);
-        if (!twin) dev->setWc(false);
+        if (probe.cpu)
+            dev->destroyBuffer(probe);
+        if (!twin)
+            dev->setWc(false);
         os_log(rawLog(),
                "raw: write-combined buffers %{public}s (a GPU-pool page: %{public}s, m2v's twin over it %{public}s)",
                dev->wcOn() ? "on" : "off", probe.wc || twin ? "made" : "not made", twin ? "made" : "not made");
@@ -5312,7 +5955,9 @@ id<MTLDevice> raw_metal_device_open(const char *packPath, uint64_t stack, id<MTL
             dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_global_queue(QOS_CLASS_UTILITY, 0));
         dispatch_source_set_timer(stall, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC), 5 * NSEC_PER_SEC,
                                   NSEC_PER_SEC / 4);
-        dispatch_source_set_event_handler(stall, ^{ rawStallTick(); });
+        dispatch_source_set_event_handler(stall, ^{
+            rawStallTick();
+        });
         dispatch_resume(stall);
     }
     // both threads at the render thread's class: what they hold up is the frame

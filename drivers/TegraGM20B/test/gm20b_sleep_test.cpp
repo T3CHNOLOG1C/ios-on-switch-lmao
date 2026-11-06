@@ -96,6 +96,7 @@ struct Kernel {
 		std::lock_guard<std::mutex> hold(lock);
 		insideCv.notify_all();
 	}
+
 	void enter()  // gate_enter
 	{
 		tgm_gate_entry entry;
@@ -103,9 +104,12 @@ struct Kernel {
 			std::unique_lock<std::mutex> hold(lock);
 			if (entry == TGM_GATE_SHUT_WAKE)
 				insideCv.notify_all();
-			shutCv.wait(hold, [&] { return !tgm_gate_is_shut(&gate); });
+			shutCv.wait(hold, [&] {
+				return !tgm_gate_is_shut(&gate);
+			});
 		}
 	}
+
 	bool tryEnter()  // gate_try
 	{
 		const tgm_gate_entry entry = tgm_gate_try_enter(&gate);
@@ -113,18 +117,23 @@ struct Kernel {
 			wakeCloser();
 		return entry == TGM_GATE_IN;
 	}
+
 	void leave()  // gate_leave
 	{
 		if (tgm_gate_leave(&gate))
 			wakeCloser();
 	}
+
 	// sleep_gate; false: still not drained at the bound (where the kernel panics)
 	bool close(std::chrono::milliseconds bound)
 	{
 		std::unique_lock<std::mutex> hold(lock);
 		tgm_gate_close(&gate);
-		return insideCv.wait_for(hold, bound, [&] { return tgm_gate_drained(&gate) != 0; });
+		return insideCv.wait_for(hold, bound, [&] {
+			return tgm_gate_drained(&gate) != 0;
+		});
 	}
+
 	void open()  // wake_open
 	{
 		std::lock_guard<std::mutex> hold(lock);
@@ -213,7 +222,9 @@ TEST(GM20BSleepGate, TheCloserWaitsForASubmissionInProgress)
 	Kernel k;
 	k.enter();
 	std::atomic<bool> drained{false};
-	std::thread closer([&] { drained = k.close(std::chrono::seconds(5)); });
+	std::thread closer([&] {
+		drained = k.close(std::chrono::seconds(5));
+	});
 	std::this_thread::sleep_for(std::chrono::milliseconds(20));
 	EXPECT_FALSE(drained.load()) << "the GPU went down under a submission";
 	k.leave();

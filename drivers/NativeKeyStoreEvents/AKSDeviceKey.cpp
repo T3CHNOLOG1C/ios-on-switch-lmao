@@ -44,7 +44,8 @@ void sha256Parts(const void *const *parts, const size_t *lengths, size_t count, 
 {
     SHA256_CTX c;
     SHA256_Init(&c);
-    for (size_t i = 0; i < count; ++i) SHA256_Update(&c, parts[i], lengths[i]);
+    for (size_t i = 0; i < count; ++i)
+        SHA256_Update(&c, parts[i], lengths[i]);
     SHA256_Final(digest, &c);
 }
 
@@ -52,6 +53,7 @@ struct Kek {
     aes_encrypt_ctx encrypt;
     aes_decrypt_ctx decrypt;
 };
+
 void encryptBlock(void *context, const uint8_t in[16], uint8_t out[16])
 {
     uint8_t block[16];
@@ -59,6 +61,7 @@ void encryptBlock(void *context, const uint8_t in[16], uint8_t out[16])
     aes_encrypt(block, out, &static_cast<Kek *>(context)->encrypt);
     aks::wipe(block, sizeof block);
 }
+
 void decryptBlock(void *context, const uint8_t in[16], uint8_t out[16])
 {
     uint8_t block[16];
@@ -78,7 +81,8 @@ volatile uint32_t *mapRegisters(uint64_t physical, IOMemoryMap **map)
 // The class KEK for (keybag, class) keyed into both AES directions; false while corecrypto is not registered.
 bool keyKek(uint32_t keybag, uint32_t keyClass, Kek *kek)
 {
-    if (!g_crypto_funcs) return false;
+    if (!g_crypto_funcs)
+        return false;
     uint8_t key[32];
     aks::classKey(sha256Parts, gDeviceKey, keybag, keyClass, key);
     aes_encrypt_key256(key, &kek->encrypt);
@@ -91,11 +95,13 @@ bool keyKek(uint32_t keybag, uint32_t keyClass, Kek *kek)
 // From AppleKeyStore::start, once, before the service is registered and any user client exists.
 extern "C" void native_aks_device_key_start(void)
 {
-    if (gDeviceKeyReady) return;
+    if (gDeviceKeyReady)
+        return;
     IOMemoryMap *carMap = nullptr, *fuseMap = nullptr;
     volatile uint32_t *car = mapRegisters(kCarPA, &carMap);
     volatile uint32_t *fuse = mapRegisters(kFusePagePA, &fuseMap);
-    if (!car || !fuse) panic("AppleKeyStore: cannot map CAR/FUSE for the device key");
+    if (!car || !fuse)
+        panic("AppleKeyStore: cannot map CAR/FUSE for the device key");
     const uint32_t clocks = car[kCarClkOutEnbH / 4], resets = car[kCarRstDevicesH / 4];
     if (!(clocks & kFuseClockBit) || (resets & kFuseClockBit)) {
         panic("AppleKeyStore: FUSE clock off or in reset (CLK_OUT_ENB_H %#x RST_DEVICES_H %#x), no device key", clocks,
@@ -107,8 +113,10 @@ extern "C" void native_aks_device_key_start(void)
         (void)car[kCarMiscClkEnb / 4];
     }
     uint32_t uid[sizeof kFuseUid / sizeof kFuseUid[0]];
-    for (size_t i = 0; i < sizeof uid / sizeof uid[0]; ++i) uid[i] = fuse[(kFuseBase + kFuseUid[i]) / 4];
-    if (!(misc & kFuseVisible)) car[kCarMiscClkEnb / 4] = misc;
+    for (size_t i = 0; i < sizeof uid / sizeof uid[0]; ++i)
+        uid[i] = fuse[(kFuseBase + kFuseUid[i]) / 4];
+    if (!(misc & kFuseVisible))
+        car[kCarMiscClkEnb / 4] = misc;
     OSSafeReleaseNULL(fuseMap);
     OSSafeReleaseNULL(carMap);
     // lot code 0 (uid[2]) is what U-Boot already builds MACs from; zero or all ones means the fuses did not answer.
@@ -136,15 +144,20 @@ extern "C" void native_aks_device_key_start(void)
 extern "C" IOReturn native_aks_wrap(uint32_t keybag, uint32_t keyClass, const uint8_t *key, size_t length, uint8_t *out,
                                     size_t capacity, size_t *written)
 {
-    if (!aks::wrapLengthValid(length)) return (IOReturn)aks::kReturnBadArgument;
-    if (capacity < length + aks::kBlock) return (IOReturn)aks::kReturnNoSpace;
-    if (!gDeviceKeyReady) return (IOReturn)aks::kReturnNotReady;
+    if (!aks::wrapLengthValid(length))
+        return (IOReturn)aks::kReturnBadArgument;
+    if (capacity < length + aks::kBlock)
+        return (IOReturn)aks::kReturnNoSpace;
+    if (!gDeviceKeyReady)
+        return (IOReturn)aks::kReturnNotReady;
     Kek kek;
-    if (!keyKek(keybag, keyClass, &kek)) return (IOReturn)aks::kReturnNotReady;
+    if (!keyKek(keybag, keyClass, &kek))
+        return (IOReturn)aks::kReturnNotReady;
     const aks::Primitives p{&kek, encryptBlock, decryptBlock};
     const bool ok = aks::wrap(p, key, length, out);
     aks::wipe(&kek, sizeof kek);
-    if (!ok) return (IOReturn)aks::kReturnBadArgument;
+    if (!ok)
+        return (IOReturn)aks::kReturnBadArgument;
     *written = length + aks::kBlock;
     return kIOReturnSuccess;
 }
@@ -153,11 +166,15 @@ extern "C" IOReturn native_aks_wrap(uint32_t keybag, uint32_t keyClass, const ui
 extern "C" IOReturn native_aks_unwrap(uint32_t keybag, uint32_t keyClass, const uint8_t *wrapped, size_t length,
                                       uint8_t *out, size_t capacity, size_t *written)
 {
-    if (!aks::unwrappedLengthValid(length)) return (IOReturn)aks::kReturnBadArgument;
-    if (capacity < length - aks::kBlock) return (IOReturn)aks::kReturnNoSpace;
-    if (!gDeviceKeyReady) return (IOReturn)aks::kReturnNotReady;
+    if (!aks::unwrappedLengthValid(length))
+        return (IOReturn)aks::kReturnBadArgument;
+    if (capacity < length - aks::kBlock)
+        return (IOReturn)aks::kReturnNoSpace;
+    if (!gDeviceKeyReady)
+        return (IOReturn)aks::kReturnNotReady;
     Kek kek;
-    if (!keyKek(keybag, keyClass, &kek)) return (IOReturn)aks::kReturnNotReady;
+    if (!keyKek(keybag, keyClass, &kek))
+        return (IOReturn)aks::kReturnNotReady;
     const aks::Primitives p{&kek, encryptBlock, decryptBlock};
     const bool ok = aks::unwrap(p, wrapped, length, out);
     aks::wipe(&kek, sizeof kek);
@@ -176,7 +193,8 @@ extern "C" IOReturn native_aks_unwrap(uint32_t keybag, uint32_t keyClass, const 
 // aks_get_bag_uuid (selector 23): a stable UUID per keybag under this device key (RFC 9562 version 8, custom).
 extern "C" IOReturn native_aks_bag_uuid(uint32_t keybag, uint8_t uuid[16])
 {
-    if (!gDeviceKeyReady) return (IOReturn)aks::kReturnNotReady;
+    if (!gDeviceKeyReady)
+        return (IOReturn)aks::kReturnNotReady;
     static const char label[] = "Switch AppleKeyStore bag uuid v2";
     const uint8_t id[4] = {static_cast<uint8_t>(keybag >> 24), static_cast<uint8_t>(keybag >> 16),
                            static_cast<uint8_t>(keybag >> 8), static_cast<uint8_t>(keybag)};
@@ -196,7 +214,8 @@ extern "C" void native_aks_unsupported(uint32_t selector)
 {
     const uint32_t word = selector < 256 ? selector / 64 : 3, bit = selector < 256 ? selector % 64 : 63;
     const uint64_t mask = 1ull << bit;
-    if (__atomic_fetch_or(&gUnsupportedSeen[word], mask, __ATOMIC_RELAXED) & mask) return;
+    if (__atomic_fetch_or(&gUnsupportedSeen[word], mask, __ATOMIC_RELAXED) & mask)
+        return;
     char name[17] = {};
     proc_selfname(name, sizeof name);
     IOLog("AppleKeyStore: selector %u unsupported (first from %s)\n", selector, name);

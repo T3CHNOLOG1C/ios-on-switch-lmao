@@ -23,6 +23,7 @@ int main(int argc, char **argv)
         struct Use {
             const char *cls, *sel;
         };
+
         // QuartzCore's references by the object they go to (raw class); "-" marks the ones m2v keeps on purpose
         static const Use uses[] = {
             {"RMCommandBuffer", "GPUEndTime"},
@@ -161,11 +162,13 @@ int main(int argc, char **argv)
             [cb commit];
             [cb waitUntilCompleted];
             char line[1024];
-            if (raw_metal_rates(line, sizeof line)) printf("rates: %s\n", line);
+            if (raw_metal_rates(line, sizeof line))
+                printf("rates: %s\n", line);
             const char *g = strstr(line, " grow=");
             const int stalls = g ? atoi(g + 6) : -1;
             printf("pool growth on the allocating thread: %d\n", stalls);
-            if (stalls != 0) bad++;
+            if (stalls != 0)
+                bad++;
         }
         return bad ? 1 : 0;
     }

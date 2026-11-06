@@ -106,7 +106,8 @@ unsigned coex_pm(int bt_power, int sleep_return_set)
 int btc_status_describe(const uint8_t *buffer, size_t length, char *out, size_t size)
 {
     struct swlan_btc_status s;
-    if (!swlan_btc_status_parse(buffer, length, &s)) return -1;
+    if (!swlan_btc_status_parse(buffer, length, &s))
+        return -1;
     return swlan_btc_status_describe(&s, out, size);
 }
 

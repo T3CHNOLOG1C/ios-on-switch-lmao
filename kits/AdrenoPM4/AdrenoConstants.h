@@ -10,6 +10,7 @@ extern "C" {
 #define ADRENO_A740_FALLBACK_CHIP_ID UINT64_C(0xffff43050a01)
 #define ADRENO_CONSTANT_MAX_SPANS    64u
 #define ADRENO_CONSTANT_MAX_BYTES    8192u
+
 /* Values are this API's stage identities, not an external compiler enum. */
 enum AdrenoConstantStage {
     AdrenoConstantVertex,
@@ -19,13 +20,16 @@ enum AdrenoConstantStage {
     AdrenoConstantFragment,
     AdrenoConstantCompute
 };
+
 struct AdrenoConstantConfig {
     uint64_t chip_id; /* Complete identity; never implicitly truncate UAPI IDs. */
     uint32_t stage, constant_bytes;
 };
+
 struct AdrenoConstantSpan {
     uint32_t source_byte, destination_byte, bytes;
 };
+
 enum AdrenoConstantStatus {
     AdrenoConstantOK,
     AdrenoConstantArgument,
@@ -34,6 +38,7 @@ enum AdrenoConstantStatus {
     AdrenoConstantCapacity,
     AdrenoConstantAlias
 };
+
 struct AdrenoConstantResult {
     uint32_t status, words, packets;
 };

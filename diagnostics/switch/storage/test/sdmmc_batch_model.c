@@ -31,6 +31,7 @@ enum fault {
     STOPPED_TIMER,
     LATE_ERROR
 };
+
 struct model {
     uint32_t reg[128], reads[256];
     uint64_t now, frequency;
@@ -38,30 +39,40 @@ struct model {
     uint32_t busy_reads, tick_reads;
     enum fault fault;
 };
+
 static uint8_t byte_at(uint32_t lba, uint32_t at)
 {
     return (uint8_t)(lba * 13u + at * 7u + at / 512u);
 }
+
 static uint8_t read8(void *ctx, uint32_t off)
 {
     struct model *m = ctx;
     m->reads[off]++;
-    if (off == 0x28) return 2;
-    if (off == 0x29) return m->fault == BAD_POWER ? 0 : 11;
-    if (off == 0x2f) return 0;
+    if (off == 0x28)
+        return 2;
+    if (off == 0x29)
+        return m->fault == BAD_POWER ? 0 : 11;
+    if (off == 0x2f)
+        return 0;
     CHECK(0);
     return 0;
 }
+
 static uint16_t read16(void *ctx, uint32_t off)
 {
     struct model *m = ctx;
     m->reads[off]++;
-    if (off == 0xfe) return 0x0303;
-    if (off == 0x2c) return 7;
-    if (off == 0x3c) return m->fault == AUTO_STATUS_ONLY ? 4 : 0;
+    if (off == 0xfe)
+        return 0x0303;
+    if (off == 0x2c)
+        return 7;
+    if (off == 0x3c)
+        return m->fault == AUTO_STATUS_ONLY ? 4 : 0;
     CHECK(off == 4 || off == 6 || off == 12);
     return (uint16_t)m->reg[off / 2];
 }
+
 static uint32_t read32(void *ctx, uint32_t off)
 {
     struct model *m = ctx;
@@ -81,46 +92,63 @@ static uint32_t read32(void *ctx, uint32_t off)
         return p;
     }
     if (off == 0x30) {
-        if (m->phase == 0) return m->fault == PREEXISTING ? 0x8000 : 0;
+        if (m->phase == 0)
+            return m->fault == PREEXISTING ? 0x8000 : 0;
         if (m->phase == 1) {
-            if (m->fault == CMD_TIMEOUT || m->fault == STOPPED_TIMER) return 0;
+            if (m->fault == CMD_TIMEOUT || m->fault == STOPPED_TIMER)
+                return 0;
             return m->fault == CMD_ERROR ? 0x20001 : 1;
         }
         if (m->phase == 2) {
             if (m->blocks == m->fault_block) {
-                if (m->fault == DATA_ERROR) return 0x208020;
-                if (m->fault == DATA_TIMEOUT) return 0;
-                if (m->fault == EARLY_DONE) return 2;
-                if (m->fault == DONE_WITH_READY || m->fault == DONE_READY_NO_BUFFER) return 0x22;
-                if (m->fault == DONE_READY_ERROR) return 0x208022;
+                if (m->fault == DATA_ERROR)
+                    return 0x208020;
+                if (m->fault == DATA_TIMEOUT)
+                    return 0;
+                if (m->fault == EARLY_DONE)
+                    return 2;
+                if (m->fault == DONE_WITH_READY || m->fault == DONE_READY_NO_BUFFER)
+                    return 0x22;
+                if (m->fault == DONE_READY_ERROR)
+                    return 0x208022;
             }
             return m->armed ? 0 : 0x20;
         }
         if (m->phase == 3) {
-            if (m->fault == END_ERROR) return 0x208002;
-            if (m->fault == AUTO_ERROR) return 0x1008002;
-            if (m->fault == END_TIMEOUT) return 0;
+            if (m->fault == END_ERROR)
+                return 0x208002;
+            if (m->fault == AUTO_ERROR)
+                return 0x1008002;
+            if (m->fault == END_TIMEOUT)
+                return 0;
             return 2;
         }
-        if (m->phase == 4) return m->fault == LATE_ERROR ? 0x208000 : 0;
+        if (m->phase == 4)
+            return m->fault == LATE_ERROR ? 0x208000 : 0;
         CHECK(0);
     }
-    if (off == 0x10) return m->fault == CARD_ERROR ? 0x400000 : 0x900;
-    if (off == 0x1c) return m->fault == STOP_CARD_ERROR ? 0x400000 : 0x900;
+    if (off == 0x10)
+        return m->fault == CARD_ERROR ? 0x400000 : 0x900;
+    if (off == 0x1c)
+        return m->fault == STOP_CARD_ERROR ? 0x400000 : 0x900;
     if (off == 0x20) {
         CHECK(m->phase == 2 && m->words < m->requested * 128);
         /* In a batch, clearing readiness must precede reading. The next
          * block's event is latched immediately by the final FIFO read. */
-        if (m->requested > 1) CHECK(m->armed);
+        if (m->requested > 1)
+            CHECK(m->armed);
         uint32_t value = 0, at = m->words * 4;
-        for (unsigned i = 0; i < 4; i++) value |= (uint32_t)byte_at(m->reg[8 / 2], at + i) << (8 * i);
+        for (unsigned i = 0; i < 4; i++)
+            value |= (uint32_t)byte_at(m->reg[8 / 2], at + i) << (8 * i);
         m->words++;
         if (!(m->words & 127u)) {
             m->blocks++;
-            if (m->fault == TOTAL_TIMEOUT) m->now += m->frequency / 16;
+            if (m->fault == TOTAL_TIMEOUT)
+                m->now += m->frequency / 16;
             if (m->requested > 1) {
                 m->armed = 0;
-                if (m->blocks == m->requested) m->phase = 3;
+                if (m->blocks == m->requested)
+                    m->phase = 3;
             }
         }
         return value;
@@ -128,6 +156,7 @@ static uint32_t read32(void *ctx, uint32_t off)
     CHECK(off == 8 || off == 0x34 || off == 0x38);
     return m->reg[off / 2];
 }
+
 static void write16(void *ctx, uint32_t off, uint16_t value)
 {
     struct model *m = ctx;
@@ -148,6 +177,7 @@ static void write16(void *ctx, uint32_t off, uint16_t value)
     CHECK(off == 4 || off == 6 || off == 12);
     m->reg[off / 2] = value;
 }
+
 static void write32(void *ctx, uint32_t off, uint32_t value)
 {
     struct model *m = ctx;
@@ -176,6 +206,7 @@ static void write32(void *ctx, uint32_t off, uint32_t value)
     CHECK(off == 8 || off == 0x34 || off == 0x38);
     m->reg[off / 2] = value;
 }
+
 static uint64_t ticks(void *ctx)
 {
     struct model *m = ctx;
@@ -188,10 +219,12 @@ static uint64_t ticks(void *ctx)
     }
     return m->now;
 }
+
 static void barrier(void *ctx)
 {
     (void)ctx;
 }
+
 static void setup(struct model *m, struct switch_sd_host *h, enum fault fault)
 {
     *m = (struct model){.frequency = 1000000, .fault = fault};
@@ -202,14 +235,16 @@ static void setup(struct model *m, struct switch_sd_host *h, enum fault fault)
     m->reg[0x34 / 2] = 0x8003;
     m->reg[0x38 / 2] = 0x8002;
     *h = (struct switch_sd_host){.io = {read8, read16, read32, write16, write32, ticks, barrier},
-                               .context = m,
-                               .frequency = m->frequency,
-                               .capacity_sectors = UINT64_C(0x100000000),
-                               .permitted_first_sector = 100,
-                               .permitted_sector_count = 1000,
-                               .block_addressing_verified = 1};
+                                 .context = m,
+                                 .frequency = m->frequency,
+                                 .capacity_sectors = UINT64_C(0x100000000),
+                                 .permitted_first_sector = 100,
+                                 .permitted_sector_count = 1000,
+                                 .block_addressing_verified = 1};
 }
+
 static unsigned cases;
+
 static void run(uint32_t count, enum fault fault, uint32_t fault_block, int expected)
 {
     struct model m;
@@ -226,11 +261,13 @@ static void run(uint32_t count, enum fault fault, uint32_t fault_block, int expe
     CHECK(result == expected);
     CHECK(private_data[0] == 0xa5 && private_data[count * 512 + 1] == 0xa5);
     /* Real caller contract: incomplete private staging is never published. */
-    if (result == 0) memcpy(client, private_data + 1, count * 512);
+    if (result == 0)
+        memcpy(client, private_data + 1, count * 512);
     if (!result) {
         CHECK(r.stage == 5 && r.words_read == count * 128 && m.commands == 1 && !h.blocked);
         CHECK(!memcmp(original, m.reg, sizeof original));
-        for (uint32_t i = 0; i < count * 512; i++) CHECK(client[i] == byte_at(100, i));
+        for (uint32_t i = 0; i < count * 512; i++)
+            CHECK(client[i] == byte_at(100, i));
         if (count > 1)
             CHECK(r.stop_response == 0x900 && r.auto_cmd_error == 0 && m.reads[0x3c] == 1 && m.reads[0x1c] == 1);
         else
@@ -241,12 +278,14 @@ static void run(uint32_t count, enum fault fault, uint32_t fault_block, int expe
                    m.tick_reads);
         }
     } else {
-        for (uint32_t i = 0; i < sizeof client; i++) CHECK(client[i] == 0x5a);
+        for (uint32_t i = 0; i < sizeof client; i++)
+            CHECK(client[i] == 0x5a);
         if (fault == EARLY_DONE || fault == DONE_WITH_READY || fault == DONE_READY_NO_BUFFER ||
             fault == DONE_READY_ERROR)
             CHECK(m.words == m.fault_block * 128); /* Refused block never drained. */
         if (count == 1)
-            for (uint32_t i = 0; i < 514; i++) CHECK(private_data[i] == 0xa5);
+            for (uint32_t i = 0; i < 514; i++)
+                CHECK(private_data[i] == 0xa5);
         if (fault == BAD_POWER || fault == PREEXISTING)
             CHECK(!m.commands && !m.writes && !h.blocked);
         else {
@@ -257,10 +296,13 @@ static void run(uint32_t count, enum fault fault, uint32_t fault_block, int expe
         }
     }
     const unsigned once[] = {0xfe, 0x28, 0x29, 0x2c, 0x2f, 4};
-    for (unsigned i = 0; i < sizeof once / sizeof *once; i++) CHECK(m.reads[once[i]] == 1);
+    for (unsigned i = 0; i < sizeof once / sizeof *once; i++)
+        CHECK(m.reads[once[i]] == 1);
     cases++;
 }
+
 unsigned sdmmc_batch_cases(void);
+
 unsigned sdmmc_batch_cases(void)
 {
     run(1, NONE, 0, 0);
@@ -305,16 +347,26 @@ unsigned sdmmc_batch_cases(void)
         uint32_t count = 2;
         uint8_t out[65536];
         struct switch_sd_result r = {0};
-        if (scenario == 0) count = 0;
-        if (scenario == 1) count = 129;
-        if (scenario == 2) lba = 99;
-        if (scenario == 3) lba = 1099;
-        if (scenario == 4) lba = UINT64_MAX;
-        if (scenario == 5) h.block_addressing_verified = 0;
-        if (scenario == 6) h.capacity_sectors = UINT64_C(0x100000001);
-        if (scenario == 7) h.permitted_sector_count = UINT64_MAX;
-        if (scenario == 8) h.io.write16 = 0;
-        if (scenario == 9) h.frequency = 0;
+        if (scenario == 0)
+            count = 0;
+        if (scenario == 1)
+            count = 129;
+        if (scenario == 2)
+            lba = 99;
+        if (scenario == 3)
+            lba = 1099;
+        if (scenario == 4)
+            lba = UINT64_MAX;
+        if (scenario == 5)
+            h.block_addressing_verified = 0;
+        if (scenario == 6)
+            h.capacity_sectors = UINT64_C(0x100000001);
+        if (scenario == 7)
+            h.permitted_sector_count = UINT64_MAX;
+        if (scenario == 8)
+            h.io.write16 = 0;
+        if (scenario == 9)
+            h.frequency = 0;
         CHECK(switch_sd_read_sectors(&h, lba, count, out, &r) != 0 && !m.writes && !m.commands);
         cases++;
     }
@@ -327,7 +379,8 @@ unsigned sdmmc_batch_cases(void)
     uint8_t out[65536];
     struct switch_sd_result r = {0};
     CHECK(switch_sd_read_sectors(&h, UINT64_C(0xffffff80), 128, out, &r) == 0);
-    for (unsigned i = 0; i < sizeof out; i++) CHECK(out[i] == byte_at(0xffffff80, i));
+    for (unsigned i = 0; i < sizeof out; i++)
+        CHECK(out[i] == byte_at(0xffffff80, i));
     cases++;
     setup(&m, &h, NONE);
     h.capacity_sectors = h.permitted_sector_count = 1;

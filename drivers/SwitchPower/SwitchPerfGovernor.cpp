@@ -113,12 +113,14 @@ uint64_t absUs(uint64_t us)
 void csw(perfcontrol_event event, uint32_t cpu, uint64_t timestamp, uint32_t, struct perfcontrol_thread_data *,
          struct perfcontrol_thread_data *, struct perfcontrol_cpu_counters *, switchperf::CswTimeout)
 {
-    if (cpu >= kMaxCpus) return;
+    if (cpu >= kMaxCpus)
+        return;
     CpuLoad &l = gLoad[cpu];
     __atomic_store_n(&l.seq, l.seq + 1, __ATOMIC_RELAXED);
     __atomic_thread_fence(__ATOMIC_RELEASE);
     if (timestamp > l.since) {
-        if (l.busy) __atomic_store_n(&l.busyTotal, l.busyTotal + (timestamp - l.since), __ATOMIC_RELAXED);
+        if (l.busy)
+            __atomic_store_n(&l.busyTotal, l.busyTotal + (timestamp - l.since), __ATOMIC_RELAXED);
         __atomic_store_n(&l.since, timestamp, __ATOMIC_RELAXED);
     }
     __atomic_store_n(&l.busy, event == IDLE ? 0u : 1u, __ATOMIC_RELAXED);
@@ -137,7 +139,8 @@ uint64_t busyUpTo(unsigned cpu, uint64_t now)
         since = __atomic_load_n(&l.since, __ATOMIC_RELAXED);
         busy = __atomic_load_n(&l.busy, __ATOMIC_RELAXED);
         __atomic_thread_fence(__ATOMIC_ACQUIRE);
-        if (!(s1 & 1) && s1 == __atomic_load_n(&l.seq, __ATOMIC_RELAXED)) break;
+        if (!(s1 & 1) && s1 == __atomic_load_n(&l.seq, __ATOMIC_RELAXED))
+            break;
     }
     return total + (busy && now > since ? now - since : 0);
 }
@@ -151,19 +154,23 @@ uint32_t windowBusy(uint64_t now)
         const uint64_t total = busyUpTo(c, now), done = total > gPrevTotal[c] ? total - gPrevTotal[c] : 0;
         gPrevTotal[c] = total;
         uint64_t permille = span ? done * 1000 / span : 0;
-        if (permille > 1000) permille = 1000;
+        if (permille > 1000)
+            permille = 1000;
         sum += permille;
-        if (permille > peak) peak = permille;
+        if (permille > peak)
+            peak = permille;
     }
     gPrevNow = now;
-    if (sum > 1000) sum = 1000;
+    if (sum > 1000)
+        sum = 1000;
     return (uint32_t)(peak > sum ? peak : sum);
 }
 
 // Under gLock: whether the owner must be woken (the clock moves, or the log line is due), claiming the signal.
 bool claimSignal(uint64_t now)
 {
-    if (gGov.cur == gApplied && now < gLogDue) return false;
+    if (gGov.cur == gApplied && now < gLogDue)
+        return false;
     return __atomic_exchange_n(&gPending, 1u, __ATOMIC_ACQ_REL) == 0;
 }
 
@@ -176,7 +183,8 @@ bool applyLimits(uint64_t now)
     const bool capped = hi < top;  // the DFLL's cap binds (with none in force it reports the LUT's top voltage)
     const uint32_t share = __atomic_load_n(&gCltm, __ATOMIC_RELAXED);
     const unsigned cltm = switch_gov_index_at_fraction(gGov.khz, gGov.count, share);
-    if (cltm < hi) hi = cltm;
+    if (cltm < hi)
+        hi = cltm;
     gLimitHi = hi;
     if (hi < top && now < gBootUntil && !gClipNoted) {  // thermal limits clip the boot window: one line (noteClip)
         gClipNoted = true;
@@ -193,11 +201,13 @@ bool applyLimits(uint64_t now)
 // After applyLimits, outside the lock, thread context: the boot window's one thermal line, if it was clipped.
 void noteClip()
 {
-    if (!__atomic_exchange_n(&gClipNote, 0u, __ATOMIC_ACQ_REL)) return;
+    if (!__atomic_exchange_n(&gClipNote, 0u, __ATOMIC_ACQ_REL))
+        return;
     uint64_t ns = 0;
     absolutetime_to_nanoseconds(gClipAt, &ns);
     char cap[16] = "none";
-    if (gClipCapMv) snprintf(cap, sizeof(cap), "%u mV", gClipCapMv);
+    if (gClipCapMv)
+        snprintf(cap, sizeof(cap), "%u mV", gClipCapMv);
     IOLog("SwitchPerf: thermal limits clip the boot window at %llu.%llu s of uptime: CPU ceiling %u MHz (DFLL voltage "
           "cap %s, thermalmonitord %u%%)\n",
           ns / 1000000000, ns / 100000000 % 10, gClipKhz / 1000, cap,
@@ -207,7 +217,8 @@ void noteClip()
 // XNU's perfcontrol deadline: the window's tick (interrupts masked; context-switch, quantum or idle-wake context).
 void deadlinePassed(uint64_t)
 {
-    if (!__atomic_load_n(&gRunning, __ATOMIC_ACQUIRE)) return;
+    if (!__atomic_load_n(&gRunning, __ATOMIC_ACQUIRE))
+        return;
     const uint64_t now = mach_absolute_time();
     IOInterruptState state = IOSimpleLockLockDisableInterrupt(gLock);
     bool wake = false, boot = false;
@@ -215,18 +226,22 @@ void deadlinePassed(uint64_t)
         uint32_t busy = windowBusy(now);
         ++gWindows;
         gBusySum += busy;
-        if (busy > gBusyPeak) gBusyPeak = busy;
+        if (busy > gBusyPeak)
+            gBusyPeak = busy;
         boot = now < gBootUntil;
-        if (boot) busy = 1000;  // the boot runs at the top point (the ceiling: thermal limits still apply)
+        if (boot)
+            busy = 1000;  // the boot runs at the top point (the ceiling: thermal limits still apply)
         switch_gov_step(&gGov, now, busy);
         wake = claimSignal(now);
         sched_perfcontrol_update_callback_deadline(now + gWindow);
     }
     IOSimpleLockUnlockEnableInterrupt(gLock, state);
-    if (wake) gSignal(gCtx);
+    if (wake)
+        gSignal(gCtx);
     // The GPU's idle clock takes this tick too (loads; a work item once it is idle), from the end of the boot window:
     // until then the GPU never leaves its full clock.
-    if (!boot) tegra_gm20b_idle_tick();
+    if (!boot)
+        tegra_gm20b_idle_tick();
 }
 
 struct sched_perfcontrol_callbacks gCallbacks = {
@@ -252,16 +267,20 @@ bool switchperf::start(const uint32_t *khz, const uint32_t *mv, unsigned count, 
         snprintf(why, len, "no lock");
         return false;
     }
-    if (count > SWITCH_GOV_MAX_OPPS) count = SWITCH_GOV_MAX_OPPS;
+    if (count > SWITCH_GOV_MAX_OPPS)
+        count = SWITCH_GOV_MAX_OPPS;
     const uint64_t now = mach_absolute_time();
     gWindow = absUs(kCpuWindowUs);
     gCpus = ml_get_cpu_count();
-    if (gCpus > kMaxCpus) gCpus = kMaxCpus;
-    if (!gCpus) gCpus = 1;
+    if (gCpus > kMaxCpus)
+        gCpus = kMaxCpus;
+    if (!gCpus)
+        gCpus = 1;
     const switch_gov_tunables t = {kCpuUpPermille, kCpuTargetPermille, absUs(kCpuDownHoldUs)};
     IOInterruptState state = IOSimpleLockLockDisableInterrupt(gLock);
     switch_gov_init(&gGov, khz, count, startIndex, t, now);
-    for (unsigned i = 0; i < SWITCH_GOV_MAX_OPPS; ++i) gMv[i] = i < count ? mv[i] : 0;
+    for (unsigned i = 0; i < SWITCH_GOV_MAX_OPPS; ++i)
+        gMv[i] = i < count ? mv[i] : 0;
     for (unsigned c = 0; c < kMaxCpus; ++c) {
         gLoad[c].seq = 0;
         gLoad[c].busy = 0;
@@ -282,12 +301,14 @@ bool switchperf::start(const uint32_t *khz, const uint32_t *mv, unsigned count, 
     gLogDue = now + absUs(kLogWindowUs);
     gWindows = gBusyPeak = 0;
     gBusySum = 0;
-    for (uint32_t &h : gHints) h = 0;
+    for (uint32_t &h : gHints)
+        h = 0;
     __atomic_store_n(&gPending, 0u, __ATOMIC_RELEASE);
     __atomic_store_n(&gRunning, true, __ATOMIC_RELEASE);
     const bool wake = applyLimits(now);  // a ceiling thermalmonitord set before this start: the clock moves down
     IOSimpleLockUnlockEnableInterrupt(gLock, state);
-    if (wake) gSignal(gCtx);
+    if (wake)
+        gSignal(gCtx);
     noteClip();
     sched_perfcontrol_register_callbacks(&gCallbacks, 0);
     sched_perfcontrol_update_callback_deadline(now + gWindow);
@@ -296,13 +317,15 @@ bool switchperf::start(const uint32_t *khz, const uint32_t *mv, unsigned count, 
 
 void switchperf::stop()
 {
-    if (!gLock) return;
+    if (!gLock)
+        return;
     IOInterruptState state = IOSimpleLockLockDisableInterrupt(gLock);
     const bool was = gRunning;
     __atomic_store_n(&gRunning, false, __ATOMIC_RELEASE);
     __atomic_store_n(&gAppliedKhz, 0u, __ATOMIC_RELEASE);
     IOSimpleLockUnlockEnableInterrupt(gLock, state);
-    if (!was) return;
+    if (!was)
+        return;
     sched_perfcontrol_update_callback_deadline(0);
     sched_perfcontrol_register_callbacks(nullptr, 0);  // XNU's defaults again
 }
@@ -319,8 +342,10 @@ uint32_t switchperf::khzAt(unsigned index)
 
 unsigned switchperf::take(char *line, size_t len)
 {
-    if (line && len) line[0] = 0;
-    if (!gLock) return 0;
+    if (line && len)
+        line[0] = 0;
+    if (!gLock)
+        return 0;
     const uint64_t now = mach_absolute_time();
     uint64_t residency[SWITCH_GOV_MAX_OPPS], span = 0, busySum = 0;
     uint32_t hints[5], ups = 0, downs = 0, jumps = 0, boosted = 0, clamped = 0, windows = 0, peak = 0;
@@ -368,14 +393,16 @@ unsigned switchperf::take(char *line, size_t len)
               "%u MHz) and the GPU's idle clock decide from here\n",
               kBootFallbackUs / 1000000, ceilingKhz / 1000);
     }
-    if (!logDue || !line || !len) return index;
+    if (!logDue || !line || !len)
+        return index;
 
     uint64_t spanUs = 0;
     absolutetime_to_nanoseconds(span, &spanUs);
     spanUs /= 1000;
     size_t n = (size_t)snprintf(line, len, "SwitchPerf governor: %llu ms:", spanUs / 1000);
     for (unsigned i = 0; i < count && n < len; ++i) {
-        if (!residency[i] && (i < lo || i > hi)) continue;
+        if (!residency[i] && (i < lo || i > hi))
+            continue;
         const uint64_t pct = span ? residency[i] * 1000 / span : 0;
         n += (size_t)snprintf(line + n, len - n, " %u %llu.%llu%%", gGov.khz[i] / 1000, pct / 10, pct % 10);
     }
@@ -394,11 +421,14 @@ unsigned switchperf::take(char *line, size_t len)
     // Rows held down (the DFLL ran high at them as the ceiling) and rows back on trial, not yet measured right.
     for (unsigned pass = 0; pass < 2; ++pass) {
         const uint32_t rows = pass ? trial : held;
-        if (!rows || n >= len) continue;
+        if (!rows || n >= len)
+            continue;
         n += (size_t)snprintf(line + n, len - n, "; %s", pass ? "on trial" : "held down");
         for (unsigned i = 0; i < count && n < len; ++i)
-            if (rows >> i & 1u) n += (size_t)snprintf(line + n, len - n, " %u", gGov.khz[i] / 1000);
-        if (n < len) n += (size_t)snprintf(line + n, len - n, " MHz");
+            if (rows >> i & 1u)
+                n += (size_t)snprintf(line + n, len - n, " %u", gGov.khz[i] / 1000);
+        if (n < len)
+            n += (size_t)snprintf(line + n, len - n, " MHz");
     }
     bool external = false;
     const int ma = switch_battery_avg_ma(&external);
@@ -409,7 +439,8 @@ unsigned switchperf::take(char *line, size_t len)
 
 void switchperf::applied(unsigned index)
 {
-    if (!gLock || index >= gGov.count) return;
+    if (!gLock || index >= gGov.count)
+        return;
     IOInterruptState state = IOSimpleLockLockDisableInterrupt(gLock);
     gApplied = index;
     __atomic_store_n(&gAppliedKhz, gGov.khz[index], __ATOMIC_RELEASE);
@@ -418,27 +449,31 @@ void switchperf::applied(unsigned index)
 
 void switchperf::limits(unsigned floorMv, unsigned capMv)
 {
-    if (!gLock || !running()) return;
+    if (!gLock || !running())
+        return;
     const uint64_t now = mach_absolute_time();
     IOInterruptState state = IOSimpleLockLockDisableInterrupt(gLock);
     gFloorMv = floorMv;
     gCapMv = capMv;
     const bool wake = applyLimits(now);
     IOSimpleLockUnlockEnableInterrupt(gLock, state);
-    if (wake) gSignal(gCtx);
+    if (wake)
+        gSignal(gCtx);
     noteClip();
 }
 
 unsigned switchperf::indexAt(uint32_t khz)
 {
     unsigned i = 0;
-    while (i + 1 < gGov.count && gGov.khz[i + 1] <= khz) ++i;
+    while (i + 1 < gGov.count && gGov.khz[i + 1] <= khz)
+        ++i;
     return i;
 }
 
 unsigned switchperf::ceiling()
 {
-    if (!gLock) return 0;
+    if (!gLock)
+        return 0;
     IOInterruptState state = IOSimpleLockLockDisableInterrupt(gLock);
     const unsigned hi = gGov.hi;
     IOSimpleLockUnlockEnableInterrupt(gLock, state);
@@ -447,21 +482,26 @@ unsigned switchperf::ceiling()
 
 unsigned switchperf::hold(unsigned index, bool *again)
 {
-    if (again) *again = false;
-    if (!gLock || !running()) return 0;
+    if (again)
+        *again = false;
+    if (!gLock || !running())
+        return 0;
     const uint64_t now = mach_absolute_time();
     IOInterruptState state = IOSimpleLockLockDisableInterrupt(gLock);
-    if (again && index < SWITCH_GOV_MAX_OPPS) *again = (gRows.trial >> index & 1u) != 0;
+    if (again && index < SWITCH_GOV_MAX_OPPS)
+        *again = (gRows.trial >> index & 1u) != 0;
     const unsigned wait = switch_gov_rows_hold(&gRows, index);
     const bool wake = applyLimits(now);
     IOSimpleLockUnlockEnableInterrupt(gLock, state);
-    if (wake) gSignal(gCtx);
+    if (wake)
+        gSignal(gCtx);
     return wait;
 }
 
 bool switchperf::landed(unsigned index)
 {
-    if (!gLock) return false;
+    if (!gLock)
+        return false;
     IOInterruptState state = IOSimpleLockLockDisableInterrupt(gLock);
     const bool back = switch_gov_rows_landed(&gRows, index) != 0;
     IOSimpleLockUnlockEnableInterrupt(gLock, state);
@@ -470,21 +510,25 @@ bool switchperf::landed(unsigned index)
 
 uint32_t switchperf::retryHeld()
 {
-    if (!gLock || !running()) return 0;
+    if (!gLock || !running())
+        return 0;
     const uint64_t now = mach_absolute_time();
     IOInterruptState state = IOSimpleLockLockDisableInterrupt(gLock);
     const uint32_t back = switch_gov_rows_retry(&gRows, gLimitHi);
     const bool wake = back && applyLimits(now);
     IOSimpleLockUnlockEnableInterrupt(gLock, state);
-    if (wake) gSignal(gCtx);
+    if (wake)
+        gSignal(gCtx);
     return back;
 }
 
 extern "C" unsigned int switch_perf_cltm_ceiling(uint32_t fraction16)
 {
-    if (fraction16 > 0x10000u) fraction16 = 0x10000u;
+    if (fraction16 > 0x10000u)
+        fraction16 = 0x10000u;
     __atomic_store_n(&gCltm, fraction16, __ATOMIC_RELAXED);
-    if (!gLock || !__atomic_load_n(&gRunning, __ATOMIC_ACQUIRE)) return 0;
+    if (!gLock || !__atomic_load_n(&gRunning, __ATOMIC_ACQUIRE))
+        return 0;
     const uint64_t now = mach_absolute_time();
     IOInterruptState state = IOSimpleLockLockDisableInterrupt(gLock);
     bool wake = false;
@@ -494,7 +538,8 @@ extern "C" unsigned int switch_perf_cltm_ceiling(uint32_t fraction16)
         khz = gGov.khz[gGov.hi];
     }
     IOSimpleLockUnlockEnableInterrupt(gLock, state);
-    if (wake) gSignal(gCtx);
+    if (wake)
+        gSignal(gCtx);
     noteClip();
     return khz;
 }
@@ -502,7 +547,8 @@ extern "C" unsigned int switch_perf_cltm_ceiling(uint32_t fraction16)
 // System Boot Complete (XNU IOPMrootDomain, its thread): the boot window ends, once per boot, with one line.
 static void bootDone()
 {
-    if (__atomic_exchange_n(&gBootDone, true, __ATOMIC_ACQ_REL)) return;  // the fallback came first
+    if (__atomic_exchange_n(&gBootDone, true, __ATOMIC_ACQ_REL))
+        return;  // the fallback came first
     uint64_t ns = 0;
     absolutetime_to_nanoseconds(mach_absolute_time(), &ns);
     unsigned khz = 0;
@@ -516,7 +562,8 @@ static void bootDone()
         IOSimpleLockUnlockEnableInterrupt(gLock, state);
     }
     char cpu[48] = "not governed";
-    if (khz) snprintf(cpu, sizeof(cpu), "ceiling %u MHz", khz / 1000);
+    if (khz)
+        snprintf(cpu, sizeof(cpu), "ceiling %u MHz", khz / 1000);
     IOLog("SwitchPerf: boot done at %llu.%llu s of uptime (System Boot Complete): the CPU governor (%s) and the GPU's "
           "idle clock decide from here\n",
           ns / 1000000000, ns / 100000000 % 10, cpu);
@@ -529,7 +576,8 @@ extern "C" void switch_perf_hint(unsigned int hint)
         bootDone();
         return;
     }
-    if (!__atomic_load_n(&gRunning, __ATOMIC_ACQUIRE) || hint >= 5 || !hint) return;
+    if (!__atomic_load_n(&gRunning, __ATOMIC_ACQUIRE) || hint >= 5 || !hint)
+        return;
     const uint64_t now = mach_absolute_time();
     const uint32_t us = hint == SWITCH_PERF_HINT_TOUCH        ? kBoostTouchUs
                         : hint == SWITCH_PERF_HINT_FRAME_MISS ? kBoostFrameUs
@@ -543,7 +591,8 @@ extern "C" void switch_perf_hint(unsigned int hint)
         wake = gGov.cur > gApplied && claimSignal(now);
     }
     IOSimpleLockUnlockEnableInterrupt(gLock, state);
-    if (wake) gSignal(gCtx);
+    if (wake)
+        gSignal(gCtx);
 }
 
 extern "C" unsigned int switch_perf_cpu_khz(void)

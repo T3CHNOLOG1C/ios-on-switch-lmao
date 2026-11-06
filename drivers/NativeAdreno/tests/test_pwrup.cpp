@@ -12,6 +12,7 @@
             std::exit(1);                                        \
         }                                                        \
     } while (0)
+
 int main()
 {
     const uint32_t ir[] = {0x10, 0x20}, iv[] = {0xaa, 0xbb};
@@ -53,10 +54,12 @@ int main()
             unsigned calls;
             unsigned fail_at;
         } reader{0, 0};
+
         auto read = [](void *cookie, uint32_t reg, uint32_t *value) -> int {
             Reader *state = static_cast<Reader *>(cookie);
             ++state->calls;
-            if (state->calls == state->fail_at) return 1;
+            if (state->calls == state->fail_at)
+                return 1;
             *value = reg ^ 0xf0f0;
             return 0;
         };

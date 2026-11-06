@@ -38,6 +38,7 @@ public:
     // Known programs, by the hash of their 80-byte header; a bound program is identified by an exact match of its bytes.
     std::multimap<uint64_t, ProgramInfo> programs;
     bool loadPrograms(const char *path);
+
     // Set-0 layouts (tools/mkpack.py layouts.txt: "<vs id> <fs id> <set bytes> <offset>:<u|h>..."): only the bytes an entry covers
     // are compared (m2v recycles its descriptor memory and writes only its layout's entries; the rest is the last owner's)
     struct Layout {
@@ -45,6 +46,7 @@ public:
         std::vector<std::pair<uint32_t, uint32_t>> ranges;
         std::set<uint32_t> textureOnly;
     };
+
     std::map<std::string, Layout> layouts;
     bool loadLayouts(const char *path);
     bool fullStateAtFirstDraw = true;  // one STATE record of every non-address register at the first draw
@@ -58,6 +60,7 @@ private:
         uint32_t size = 0;
         bool valid = false;
     };
+
     MapFn map_;
     FILE *out_;
     // the host tests' 2D engine (raw/fx/test/twod_sim: the mip chains' blits), executed into the BOs' host memory where the
@@ -92,8 +95,16 @@ private:
     void clear(uint32_t data);
     void barrier(const std::string &what);
 
-    uint32_t r3(uint32_t mthd) const { return reg_[0][mthd >> 2]; }
-    uint64_t addr3(uint32_t hiMthd, uint32_t loMthd) const { return (uint64_t(r3(hiMthd) & 0xff) << 32) | r3(loMthd); }
+    uint32_t r3(uint32_t mthd) const
+    {
+        return reg_[0][mthd >> 2];
+    }
+
+    uint64_t addr3(uint32_t hiMthd, uint32_t loMthd) const
+    {
+        return (uint64_t(r3(hiMthd) & 0xff) << 32) | r3(loMthd);
+    }
+
     bool read(uint64_t va, void *dst, uint64_t bytes);  // CPU memory with the LOAD_CONSTANT_BUFFER writes over it
     std::string name(uint64_t va);
     std::string contentHash(uint64_t va, uint64_t bytes, int depth, bool handles, bool childHandles);

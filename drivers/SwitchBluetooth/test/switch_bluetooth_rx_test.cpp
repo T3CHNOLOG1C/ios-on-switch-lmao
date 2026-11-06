@@ -21,14 +21,16 @@ using switch_bt_pio::kTimeout;
 Packets joycons(int hz)
 {
     Packets packets;
-    for (int i = 0; i < 4 * hz; ++i) packets.emplace_back(i * (1e6 / (2 * hz)), 59);
+    for (int i = 0; i < 4 * hz; ++i)
+        packets.emplace_back(i * (1e6 / (2 * hz)), 59);
     return packets;
 }
 
 Packets every(double period, unsigned count, unsigned length)
 {
     Packets packets;
-    for (unsigned i = 0; i < count; ++i) packets.emplace_back(i * period, length);
+    for (unsigned i = 0; i < count; ++i)
+        packets.emplace_back(i * period, length);
     return packets;
 }
 
@@ -73,7 +75,8 @@ TEST(SwitchBluetoothRx, NoWaitBeyondTheRxTimeout)
     // that timeout plus the filter's entry and its drain, at either trigger.
     const double bound = kTimeout + 3.0 + 64 * 0.35;
     Packets alternating;
-    for (unsigned i = 0; i < 200; ++i) alternating.emplace_back(i * 1000.0, 7 + (i & 1));
+    for (unsigned i = 0; i < 200; ++i)
+        alternating.emplace_back(i * 1000.0, 7 + (i & 1));
     for (const Packets &packets : {joycons(60), joycons(120), alternating, every(45000, 40, 43)}) {
         for (unsigned trigger : {8u, 16u}) {
             const PerPacket p = perPacket(packets, trigger);

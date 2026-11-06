@@ -24,6 +24,7 @@ OSDeclareDefaultStructors(AGXAccelerator) public
     : IOReturn newUserClient(task_t owningTask, void *securityID, UInt32 type,
 			     OSDictionary *properties, IOUserClient **handler) APPLE_KEXT_OVERRIDE;
 };
+
 OSDefineMetaClassAndStructors(AGXAccelerator, IOAcceleratorES)
 
 	IOReturn AGXAccelerator::newUserClient(task_t owningTask, void *securityID, UInt32 type,
@@ -36,6 +37,7 @@ extern "C" IOService *tegra_gm20b_accelerator_allocate(void)
 {
 	return new AGXAccelerator;
 }
+
 extern "C" unsigned tegra_gm20b_accelerator_instance_size(void)
 {
 	return sizeof(AGXAccelerator);

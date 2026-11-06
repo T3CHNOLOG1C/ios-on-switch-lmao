@@ -47,16 +47,20 @@ static bool choosesStreamingCodecs(const char *process)
 {
     static const char *const kExact[] = {"mediaplaybackd", "mediaserverd", "videocodecd", "MobileSafari",
                                          "SafariViewService"};
-    if (!process) return false;
-    if (!strncmp(process, "com.apple.WebKit.", strlen("com.apple.WebKit."))) return true;
+    if (!process)
+        return false;
+    if (!strncmp(process, "com.apple.WebKit.", strlen("com.apple.WebKit.")))
+        return true;
     for (size_t i = 0; i < sizeof(kExact) / sizeof(kExact[0]); i++)
-        if (!strcmp(process, kExact[i])) return true;
+        if (!strcmp(process, kExact[i]))
+            return true;
     return false;
 }
 
 void HEVCH8Register(void)
 {
-    if (choosesStreamingCodecs(getprogname())) return;  // HEVC is software here, and this process is told so
+    if (choosesStreamingCodecs(getprogname()))
+        return;  // HEVC is software here, and this process is told so
     os_log_t log = os_log_create("com.brunostjohn.switch.hevc", "register");
     void *codec = dlopen("/System/Library/VideoCodecs/VCPHEVC.videocodec", RTLD_NOW | RTLD_LOCAL);
     CreateInstance create = codec ? (CreateInstance)dlsym(codec, "HEVCVideoDecoder_CreateInstance") : NULL;

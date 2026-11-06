@@ -24,9 +24,11 @@ void switch_accel_stub_publish(void)
     // before that exists and Metal would cache an empty device list for backboardd's lifetime, so it stays out of the
     // way then.
     unsigned noGpu = 0;
-    if (!(PE_parse_boot_argn("switch-no-gpu", &noGpu, sizeof(noGpu)) && noGpu)) return;
+    if (!(PE_parse_boot_argn("switch-no-gpu", &noGpu, sizeof(noGpu)) && noGpu))
+        return;
     const kern_return_t loaded = OSKextLoadKextWithIdentifier("com.apple.iokit.IOGPUFamily");
-    if (loaded) panic("SwitchAccelStub: IOGPUFamily load failed 0x%x", loaded);
+    if (loaded)
+        panic("SwitchAccelStub: IOGPUFamily load failed 0x%x", loaded);
     const OSSymbol *name = OSSymbol::withCString("IOAcceleratorES");
     const OSMetaClass *parent = name ? OSMetaClass::getMetaClassWithName(name) : nullptr;
     OSSafeReleaseNULL(name);
@@ -35,13 +37,17 @@ void switch_accel_stub_publish(void)
               switch_accel_stub_instance_size());
     }
     void *handle = OSMetaClass::preModLoad(g_kernel_kmod_info.name);
-    if (!handle) panic("SwitchAccelStub: preModLoad failed");
+    if (!handle)
+        panic("SwitchAccelStub: preModLoad failed");
     switch_accel_stub_static_init();
     const OSReturn registered = OSMetaClass::postModLoad(handle);
-    if (registered) panic("SwitchAccelStub: postModLoad 0x%x", registered);
+    if (registered)
+        panic("SwitchAccelStub: postModLoad 0x%x", registered);
     IOService *accelerator = switch_accel_stub_allocate();
-    if (!accelerator || !accelerator->init()) panic("SwitchAccelStub: allocation failed");
-    if (!accelerator->attach(IOService::getPlatform())) panic("SwitchAccelStub: attach to the platform failed");
+    if (!accelerator || !accelerator->init())
+        panic("SwitchAccelStub: allocation failed");
+    if (!accelerator->attach(IOService::getPlatform()))
+        panic("SwitchAccelStub: attach to the platform failed");
     accelerator->registerService();
     accelerator->release();
 }

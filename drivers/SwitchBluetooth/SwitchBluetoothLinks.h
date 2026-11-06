@@ -20,8 +20,15 @@ extern "C" {
 
 #define SWITCH_BT_LINKS 8  // more than the 7 active ACL links a BR/EDR piconet allows, plus LE
 
-enum { SWITCH_BT_LINK_FREE = 0, SWITCH_BT_LINK_ACL = 1, SWITCH_BT_LINK_LE = 2 };
-enum { SWITCH_BT_ROLE_UNKNOWN = 0xff };
+enum {
+    SWITCH_BT_LINK_FREE = 0,
+    SWITCH_BT_LINK_ACL = 1,
+    SWITCH_BT_LINK_LE = 2
+};
+
+enum {
+    SWITCH_BT_ROLE_UNKNOWN = 0xff
+};
 
 struct switch_bt_link {
     uint16_t handle;
@@ -57,7 +64,8 @@ static inline uint16_t switch_bt_acl_handle(const uint8_t header[2])
 static inline struct switch_bt_link *switch_bt_link_find(struct switch_bt_links *links, uint16_t handle)
 {
     for (unsigned i = 0; i < SWITCH_BT_LINKS; ++i)
-        if (links->link[i].kind != SWITCH_BT_LINK_FREE && links->link[i].handle == handle) return &links->link[i];
+        if (links->link[i].kind != SWITCH_BT_LINK_FREE && links->link[i].handle == handle)
+            return &links->link[i];
     return NULL;
 }
 
@@ -68,11 +76,14 @@ static inline struct switch_bt_link *switch_bt_link_open(struct switch_bt_links 
 {
     struct switch_bt_link *slot = switch_bt_link_find(links, handle);
     for (unsigned i = 0; !slot && i < SWITCH_BT_LINKS; ++i)
-        if (links->link[i].kind == SWITCH_BT_LINK_FREE) slot = &links->link[i];
-    if (!slot) return NULL;
+        if (links->link[i].kind == SWITCH_BT_LINK_FREE)
+            slot = &links->link[i];
+    if (!slot)
+        return NULL;
     const struct switch_bt_link fresh = {handle, kind, role, {0}, 0, 0, 0, 0, 0, 0, 0, 0};
     *slot = fresh;
-    for (unsigned i = 0; i < 6; ++i) slot->addr[i] = addr[i];
+    for (unsigned i = 0; i < 6; ++i)
+        slot->addr[i] = addr[i];
     return slot;
 }
 
@@ -80,8 +91,10 @@ static inline struct switch_bt_link *switch_bt_link_open(struct switch_bt_links 
 static inline bool switch_bt_link_close(struct switch_bt_links *links, uint16_t handle, struct switch_bt_link *last)
 {
     struct switch_bt_link *slot = switch_bt_link_find(links, handle);
-    if (!slot) return false;
-    if (last) *last = *slot;
+    if (!slot)
+        return false;
+    if (last)
+        *last = *slot;
     slot->kind = SWITCH_BT_LINK_FREE;
     return true;
 }
@@ -89,7 +102,8 @@ static inline bool switch_bt_link_close(struct switch_bt_links *links, uint16_t 
 static inline void switch_bt_link_rx(struct switch_bt_links *links, uint16_t handle)
 {
     struct switch_bt_link *slot = switch_bt_link_find(links, handle);
-    if (slot) ++slot->rx;
+    if (slot)
+        ++slot->rx;
 }
 
 static inline void switch_bt_link_tx(struct switch_bt_links *links, uint16_t handle)
@@ -100,15 +114,18 @@ static inline void switch_bt_link_tx(struct switch_bt_links *links, uint16_t han
         return;
     }
     ++slot->tx;
-    if (slot->tx - slot->done > slot->peak) slot->peak = slot->tx - slot->done;
-    if (slot->tx - slot->done > slot->window) slot->window = slot->tx - slot->done;
+    if (slot->tx - slot->done > slot->peak)
+        slot->peak = slot->tx - slot->done;
+    if (slot->tx - slot->done > slot->window)
+        slot->window = slot->tx - slot->done;
 }
 
 // HCI_Number_Of_Completed_Packets parameters (Num_Handles, then handle and count pairs): the counts added to their
 // links. Returns the packets completed, or -1 for parameters shorter than they say.
 static inline int switch_bt_links_completed(struct switch_bt_links *links, const uint8_t *params, uint32_t length)
 {
-    if (length < 1 || length < 1u + 4u * params[0]) return -1;
+    if (length < 1 || length < 1u + 4u * params[0])
+        return -1;
     int total = 0;
     for (unsigned i = 0; i < params[0]; ++i) {
         const uint16_t handle = (uint16_t)(switch_bt_le16(params + 1 + 4 * i) & 0x0fffu);
@@ -166,11 +183,15 @@ static inline void switch_bt_request_note(struct switch_bt_requests *requests, c
     for (unsigned i = 0; i < SWITCH_BT_REQUESTS && !slot; ++i) {
         struct switch_bt_request *e = &requests->entry[i];
         bool same = e->used;
-        for (unsigned b = 0; b < 6 && same; ++b) same = e->addr[b] == addr[b];
-        if (same) slot = e;
+        for (unsigned b = 0; b < 6 && same; ++b)
+            same = e->addr[b] == addr[b];
+        if (same)
+            slot = e;
     }
-    if (!slot) slot = &requests->entry[requests->next++ % SWITCH_BT_REQUESTS];
-    for (unsigned b = 0; b < 6; ++b) slot->addr[b] = addr[b];
+    if (!slot)
+        slot = &requests->entry[requests->next++ % SWITCH_BT_REQUESTS];
+    for (unsigned b = 0; b < 6; ++b)
+        slot->addr[b] = addr[b];
     slot->cod = cod;
     slot->used = 1;
 }
@@ -180,16 +201,21 @@ static inline void switch_bt_request_note(struct switch_bt_requests *requests, c
 static inline bool switch_bt_accept_as_central(struct switch_bt_requests *requests, uint8_t *params, uint32_t length,
                                                uint32_t *cod)
 {
-    if (length < 7) return false;
+    if (length < 7)
+        return false;
     for (unsigned i = 0; i < SWITCH_BT_REQUESTS; ++i) {
         struct switch_bt_request *e = &requests->entry[i];
         bool same = e->used;
-        for (unsigned b = 0; b < 6 && same; ++b) same = e->addr[b] == params[b];
-        if (!same) continue;
+        for (unsigned b = 0; b < 6 && same; ++b)
+            same = e->addr[b] == params[b];
+        if (!same)
+            continue;
         e->used = 0;
-        if (params[6] != 1 || !switch_bt_cod_is_gamepad(e->cod)) return false;
+        if (params[6] != 1 || !switch_bt_cod_is_gamepad(e->cod))
+            return false;
         params[6] = 0;
-        if (cod) *cod = e->cod;
+        if (cod)
+            *cod = e->cod;
         return true;
     }
     return false;
@@ -282,7 +308,8 @@ static const struct switch_bt_name switch_bt_link_commands[] = {
 static inline const char *switch_bt_lookup(const struct switch_bt_name *names, size_t count, uint16_t code)
 {
     for (size_t i = 0; i < count; ++i)
-        if (names[i].code == code) return names[i].name;
+        if (names[i].code == code)
+            return names[i].name;
     return NULL;
 }
 
@@ -342,26 +369,55 @@ static inline void switch_bt_describe_event(char *out, size_t size, uint8_t code
                  switch_bt_le16(timing + 4));
         return;
     }
-    if (!name) name = "event";
+    if (!name)
+        name = "event";
     uint32_t need = 0;
     switch (code) {
-    case SWITCH_BT_EV_CONNECTION_COMPLETE: need = 11; break;
-    case SWITCH_BT_EV_CONNECTION_REQUEST: need = 10; break;
+    case SWITCH_BT_EV_CONNECTION_COMPLETE:
+        need = 11;
+        break;
+    case SWITCH_BT_EV_CONNECTION_REQUEST:
+        need = 10;
+        break;
     case SWITCH_BT_EV_DISCONNECTION_COMPLETE:
-    case SWITCH_BT_EV_ENCRYPTION_CHANGE: need = 4; break;
+    case SWITCH_BT_EV_ENCRYPTION_CHANGE:
+        need = 4;
+        break;
     case SWITCH_BT_EV_AUTHENTICATION_COMPLETE:
-    case SWITCH_BT_EV_MAX_SLOTS_CHANGE: need = 3; break;
+    case SWITCH_BT_EV_MAX_SLOTS_CHANGE:
+        need = 3;
+        break;
     case SWITCH_BT_EV_HARDWARE_ERROR:
-    case SWITCH_BT_EV_DATA_BUFFER_OVERFLOW: need = 1; break;
-    case SWITCH_BT_EV_ROLE_CHANGE: need = 8; break;
-    case SWITCH_BT_EV_MODE_CHANGE: need = 6; break;
-    case SWITCH_BT_EV_LINK_KEY_NOTIFICATION: need = 23; break;
-    case SWITCH_BT_EV_SNIFF_SUBRATING: need = 11; break;
-    case SWITCH_BT_EV_IO_CAPABILITY_RESPONSE: need = 9; break;
-    case SWITCH_BT_EV_USER_CONFIRMATION_REQUEST: need = 10; break;
-    case SWITCH_BT_EV_SIMPLE_PAIRING_COMPLETE: need = 7; break;
-    case SWITCH_BT_EV_SUPERVISION_TIMEOUT_CHANGED: need = 4; break;
-    default: need = 6; break;  // the requests: an address
+    case SWITCH_BT_EV_DATA_BUFFER_OVERFLOW:
+        need = 1;
+        break;
+    case SWITCH_BT_EV_ROLE_CHANGE:
+        need = 8;
+        break;
+    case SWITCH_BT_EV_MODE_CHANGE:
+        need = 6;
+        break;
+    case SWITCH_BT_EV_LINK_KEY_NOTIFICATION:
+        need = 23;
+        break;
+    case SWITCH_BT_EV_SNIFF_SUBRATING:
+        need = 11;
+        break;
+    case SWITCH_BT_EV_IO_CAPABILITY_RESPONSE:
+        need = 9;
+        break;
+    case SWITCH_BT_EV_USER_CONFIRMATION_REQUEST:
+        need = 10;
+        break;
+    case SWITCH_BT_EV_SIMPLE_PAIRING_COMPLETE:
+        need = 7;
+        break;
+    case SWITCH_BT_EV_SUPERVISION_TIMEOUT_CHANGED:
+        need = 4;
+        break;
+    default:
+        need = 6;
+        break;  // the requests: an address
     }
     if (length < need) {
         snprintf(out, size, "%s (0x%02x) of %u bytes, too short", name, code, length);
@@ -388,7 +444,9 @@ static inline void switch_bt_describe_event(char *out, size_t size, uint8_t code
         snprintf(out, size, "%s %04x status 0x%02x on %u", name, switch_bt_le16(params + 1), params[0], params[3]);
         break;
     case SWITCH_BT_EV_HARDWARE_ERROR:
-    case SWITCH_BT_EV_DATA_BUFFER_OVERFLOW: snprintf(out, size, "%s 0x%02x", name, params[0]); break;
+    case SWITCH_BT_EV_DATA_BUFFER_OVERFLOW:
+        snprintf(out, size, "%s 0x%02x", name, params[0]);
+        break;
     case SWITCH_BT_EV_ROLE_CHANGE:
         switch_bt_format_addr(a, params + 1);
         snprintf(out, size, "%s %s status 0x%02x role %u", name, a, params[0], params[7]);
@@ -434,22 +492,26 @@ static inline void switch_bt_describe_command(char *out, size_t size, uint16_t o
 {
     char a[18];
     const char *name = switch_bt_link_command_name(opcode);
-    if (!name) name = "command";
+    if (!name)
+        name = "command";
     switch (opcode) {
     case 0x0405:  // address, packet types, page scan repetition, reserved, clock offset, allow role switch
-        if (length < 13) break;
+        if (length < 13)
+            break;
         switch_bt_format_addr(a, params);
         snprintf(out, size, "%s %s packet types 0x%04x allow role switch %u", name, a, switch_bt_le16(params + 6),
                  params[12]);
         return;
     case 0x0406:
-        if (length < 3) break;
+        if (length < 3)
+            break;
         snprintf(out, size, "%s %04x reason 0x%02x", name, switch_bt_le16(params), params[2]);
         return;
     case 0x0409:  // role 0: become central (the controller switches roles), 1: stay peripheral
     case 0x040a:  // reason
     case 0x080b:  // role
-        if (length < 7) break;
+        if (length < 7)
+            break;
         switch_bt_format_addr(a, params);
         snprintf(out, size, "%s %s %s %u", name, a, opcode == 0x040a ? "reason" : "role", params[6]);
         return;
@@ -458,66 +520,79 @@ static inline void switch_bt_describe_command(char *out, size_t size, uint16_t o
     case 0x040c:
     case 0x042c:
     case 0x042d:
-        if (length < 6) break;
+        if (length < 6)
+            break;
         switch_bt_format_addr(a, params);
         snprintf(out, size, "%s %s", name, a);
         return;
     case 0x042b:
-        if (length < 9) break;
+        if (length < 9)
+            break;
         switch_bt_format_addr(a, params);
         snprintf(out, size, "%s %s capability %u oob %u authentication 0x%02x", name, a, params[6], params[7],
                  params[8]);
         return;
     case 0x0434:
-        if (length < 7) break;
+        if (length < 7)
+            break;
         switch_bt_format_addr(a, params);
         snprintf(out, size, "%s %s reason 0x%02x", name, a, params[6]);
         return;
     case 0x0411:
     case 0x0804:
-        if (length < 2) break;
+        if (length < 2)
+            break;
         snprintf(out, size, "%s %04x", name, switch_bt_le16(params));
         return;
     case 0x0413:
-        if (length < 3) break;
+        if (length < 3)
+            break;
         snprintf(out, size, "%s %04x on %u", name, switch_bt_le16(params), params[2]);
         return;
     case 0x0803:
-        if (length < 10) break;
+        if (length < 10)
+            break;
         snprintf(out, size, "%s %04x interval %u-%u attempt %u timeout %u", name, switch_bt_le16(params),
                  switch_bt_le16(params + 4), switch_bt_le16(params + 2), switch_bt_le16(params + 6),
                  switch_bt_le16(params + 8));
         return;
     case 0x080d:
-        if (length < 4) break;
+        if (length < 4)
+            break;
         snprintf(out, size, "%s %04x policy 0x%04x", name, switch_bt_le16(params), switch_bt_le16(params + 2));
         return;
     case 0x080f:
-        if (length < 2) break;
+        if (length < 2)
+            break;
         snprintf(out, size, "%s policy 0x%04x", name, switch_bt_le16(params));
         return;
     case 0x0811:
-        if (length < 8) break;
+        if (length < 8)
+            break;
         snprintf(out, size, "%s %04x latency %u remote timeout %u local timeout %u", name, switch_bt_le16(params),
                  switch_bt_le16(params + 2), switch_bt_le16(params + 4), switch_bt_le16(params + 6));
         return;
     case 0x0c1a:
-        if (length < 1) break;
+        if (length < 1)
+            break;
         snprintf(out, size, "%s 0x%02x (inquiry scan %u, page scan %u)", name, params[0], params[0] & 1,
                  params[0] >> 1 & 1);
         return;
     case 0x0c1c:
-        if (length < 4) break;
+        if (length < 4)
+            break;
         snprintf(out, size, "%s interval %u window %u", name, switch_bt_le16(params), switch_bt_le16(params + 2));
         return;
     case 0x0c37:
-        if (length < 4) break;
+        if (length < 4)
+            break;
         snprintf(out, size, "%s %04x timeout %u", name, switch_bt_le16(params), switch_bt_le16(params + 2));
         return;
     default: {  // Set Event Filter and anything new: the parameters in hex, at most 12 bytes
         char hex[25];
         uint32_t i = 0;
-        for (; i < length && i < 12; ++i) snprintf(hex + 2 * i, 3, "%02x", params[i]);
+        for (; i < length && i < 12; ++i)
+            snprintf(hex + 2 * i, 3, "%02x", params[i]);
         hex[2 * i] = '\0';
         snprintf(out, size, "%s [%s]", name, hex);
         return;

@@ -30,7 +30,8 @@ static uint8_t *slurp(const char *path, size_t *size)
         }
     }
     fclose(f);
-    if (!buf) fprintf(stderr, "%s: cannot read\n", path);
+    if (!buf)
+        fprintf(stderr, "%s: cannot read\n", path);
     return buf;
 }
 
@@ -81,7 +82,8 @@ int a64x_cmd_translate(int argc, char **argv)
     const char *in = argv[optind], *outp = argv[optind + 1], *stubp = argc - optind == 3 ? argv[optind + 2] : NULL;
     size_t size = 0;
     uint8_t *file = slurp(in, &size);
-    if (!file) return 1;
+    if (!file)
+        return 1;
     struct a64x_slice slices[MAX_SLICES];
     int n = a64x_macho_slices(file, size, slices, MAX_SLICES);
     if (n < 0) {
@@ -92,7 +94,8 @@ int a64x_cmd_translate(int argc, char **argv)
     uint8_t *out = malloc(size ? size : 1);
     struct a64x_macho *m = malloc(sizeof(*m));
     int rc = out && m ? 0 : 1;
-    if (out) memcpy(out, file, size);
+    if (out)
+        memcpy(out, file, size);
     int with_stubs = 0;
     for (int i = 0; i < n && !rc; i++) {
         char err[256];
@@ -121,7 +124,8 @@ int a64x_cmd_translate(int argc, char **argv)
         }
         a64x_image_xlate_free(&x);
     }
-    if (!rc) rc = spill(outp, out, size) ? 1 : 0;
+    if (!rc)
+        rc = spill(outp, out, size) ? 1 : 0;
     if (!rc && memcmp(out, file, size))
         printf("note: the code signature no longer matches the translated pages (re-sign, or load the original "
                "through the a64x kernel)\n");
@@ -139,13 +143,15 @@ int a64x_cmd_fixups(int argc, char **argv)
     }
     size_t size = 0;
     uint8_t *file = slurp(argv[1], &size);
-    if (!file) return 1;
+    if (!file)
+        return 1;
     struct a64x_slice slices[MAX_SLICES];
     int n = a64x_macho_slices(file, size, slices, MAX_SLICES);
     uint8_t *out = malloc(size ? size : 1);
     struct a64x_macho *m = malloc(sizeof(*m));
     int rc = n >= 0 && out && m ? 0 : 1;
-    if (out) memcpy(out, file, size);
+    if (out)
+        memcpy(out, file, size);
     for (int i = 0; i < n && !rc; i++) {
         char err[256];
         struct a64x_fixup_stats st;
@@ -159,7 +165,8 @@ int a64x_cmd_fixups(int argc, char **argv)
                " authenticated), %" PRIu64 " written plain\n",
                i, st.rebases, st.auth_rebases, st.binds, st.auth_binds, st.stripped);
     }
-    if (!rc && argc == 3) rc = spill(argv[2], out, size) ? 1 : 0;
+    if (!rc && argc == 3)
+        rc = spill(argv[2], out, size) ? 1 : 0;
     free(m);
     free(out);
     free(file);

@@ -17,10 +17,10 @@
  * ends before hekate's ramoops at 0xB0000000 and is one reserved range (build_native_loader.py
  * 'bl33-and-kernel-window'). */
 #define SWITCH_STAGE_HEADER_PA UINT64_C(0xaa100000)
-#define SWITCH_STAGE_PA UINT64_C(0xaa101000)
-#define SWITCH_STAGE_END UINT64_C(0xb0000000)
-#define SWITCH_STAGE_MAGIC 0x48435753u   /* "SWCH" */
-#define SWITCH_STAGE_HEAD 0x4e49574bu    /* "KWIN" */
-#define SWITCH_STAGE_TAIL 0x444e454bu    /* "KEND" */
-#define SWITCH_STAGE_VERSION 1u
+#define SWITCH_STAGE_PA        UINT64_C(0xaa101000)
+#define SWITCH_STAGE_END       UINT64_C(0xb0000000)
+#define SWITCH_STAGE_MAGIC     0x48435753u /* "SWCH" */
+#define SWITCH_STAGE_HEAD      0x4e49574bu /* "KWIN" */
+#define SWITCH_STAGE_TAIL      0x444e454bu /* "KEND" */
+#define SWITCH_STAGE_VERSION   1u
 #endif

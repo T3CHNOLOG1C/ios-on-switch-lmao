@@ -7,17 +7,24 @@
 class IOCryptoAccelerator : public IOService {
     OSDeclareDefaultStructors(IOCryptoAccelerator)
 };
+
 struct IOAESIV {
     unsigned char bytes[16];
 };
+
 struct IOAESKeyData {
     uint32_t bits;
     unsigned char bytes[32];
     uint32_t selector;
 };
-enum IOAESOperation : unsigned { IOAESEncrypt = 0, IOAESDecrypt = 1 };
+
+enum IOAESOperation : unsigned {
+    IOAESEncrypt = 0,
+    IOAESDecrypt = 1
+};
 class IOAESAcceleratorCommand;
 using IOAESCompletion = void (*)(void *, int);
+
 class IOAESAccelerator : public IOCryptoAccelerator {
     OSDeclareDefaultStructors(IOAESAccelerator) unsigned char originalFields[0x98];
 
@@ -42,6 +49,7 @@ public:
     virtual void _startCommand();
     virtual void _completeAES(IOAESAcceleratorCommand *);
 };
+
 static_assert(sizeof(IOService) == 0x88, "source IOService ABI changed");
 static_assert(sizeof(IOCryptoAccelerator) == 0x88, "original crypto parent ABI changed");
 static_assert(sizeof(IOAESAccelerator) == 0x120, "original AES instance ABI changed");

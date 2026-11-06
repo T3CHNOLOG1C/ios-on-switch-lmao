@@ -47,7 +47,8 @@ static void bpmp_answer(void)
     uint32_t *d = &a[2];
     ++m.requests;
     CHECK(a[1] == 1u); /* DO_ACK, no RING_DOORBELL: the firmware must not interrupt the CPU */
-    if (m.dead_after >= 0 && (int)m.requests > m.dead_after) return; /* never ACKs */
+    if (m.dead_after >= 0 && (int)m.requests > m.dead_after)
+        return; /* never ACKs */
     a[0] = 0;
     if (mrq == 0) {
         d[0] = d[0] << 1;
@@ -100,7 +101,8 @@ static void i2c_run(void)
         m.rx_word = m.sd0;
         m.rx_ready = 1;
     } else {
-        if (m.tx_n < 4) return; /* data word still to come */
+        if (m.tx_n < 4)
+            return; /* data word still to come */
         m.reg_selected = m.tx[3] & 0xff;
         CHECK(header & (1u << 16)); /* repeat start before the read */
     }
@@ -109,20 +111,30 @@ static void i2c_run(void)
 
 uint32_t rd(uint64_t address)
 {
-    if (address == SEMA) return m.firmware ? m.sta | 0x10000u : 0; /* other channels' bits non-zero: handshake */
-    if (address == ATOMICS + 0xc00) return m.area;
-    if (address >= m.area && address < m.area + 128) return m.area_mem[(address - m.area) / 4];
-    if (address == CAR + 0x014) return m.clock_on ? 1u << 15 : 0;
-    if (address == CAR + 0x008) return 0;
-    if (address == I2C5 + 0x00) return m.cnfg;
-    if (address == I2C5 + 0x5c) return m.fifo_ctl;
-    if (address == I2C5 + 0x60) return m.rx_ready ? 1u : 0;
+    if (address == SEMA)
+        return m.firmware ? m.sta | 0x10000u : 0; /* other channels' bits non-zero: handshake */
+    if (address == ATOMICS + 0xc00)
+        return m.area;
+    if (address >= m.area && address < m.area + 128)
+        return m.area_mem[(address - m.area) / 4];
+    if (address == CAR + 0x014)
+        return m.clock_on ? 1u << 15 : 0;
+    if (address == CAR + 0x008)
+        return 0;
+    if (address == I2C5 + 0x00)
+        return m.cnfg;
+    if (address == I2C5 + 0x5c)
+        return m.fifo_ctl;
+    if (address == I2C5 + 0x60)
+        return m.rx_ready ? 1u : 0;
     if (address == I2C5 + 0x54) {
         m.rx_ready = 0;
         return m.rx_word;
     }
-    if (address == I2C5 + 0x68) return m.int_status;
-    if (address == I2C5 + 0x8c) return 0;
+    if (address == I2C5 + 0x68)
+        return m.int_status;
+    if (address == I2C5 + 0x8c)
+        return 0;
     fprintf(stderr, "read outside the model: %#llx\n", (unsigned long long)address);
     abort();
 }
@@ -161,7 +173,8 @@ void wr(uint64_t address, uint32_t value)
         m.cnfg = value;
         return;
     }
-    if (address == I2C5 + 0x8c) return;
+    if (address == I2C5 + 0x8c)
+        return;
     if (address == I2C5 + 0x64) {
         m.int_mask = value;
         return;
@@ -179,7 +192,8 @@ void wr(uint64_t address, uint32_t value)
     if (address == I2C5 + 0x50) {
         CHECK(m.tx_n < 8);
         m.tx[m.tx_n++] = value;
-        if (m.tx_n >= 3) i2c_run();
+        if (m.tx_n >= 3)
+            i2c_run();
         return;
     }
     fprintf(stderr, "write outside the model: %#llx = %#x\n", (unsigned long long)address, value);
@@ -207,6 +221,7 @@ static void reset(void)
 }
 
 unsigned emc_scenarios(void);
+
 unsigned emc_scenarios(void)
 {
     struct loader_emc_report r;

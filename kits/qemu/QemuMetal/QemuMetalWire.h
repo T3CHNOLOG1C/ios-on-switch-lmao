@@ -19,6 +19,7 @@
 // Every offset below is within a slot.
 #define QM_SLOTS          9u
 #define QM_SLOT_ALIGNMENT 0x4000ull
+
 static inline void qm_slot(uint64_t window, unsigned slot, uint64_t *offset, uint64_t *bytes)
 {
     const uint64_t half = window / 2 / QM_SLOT_ALIGNMENT * QM_SLOT_ALIGNMENT;
@@ -26,6 +27,7 @@ static inline void qm_slot(uint64_t window, unsigned slot, uint64_t *offset, uin
     *offset = slot ? half + (slot - 1) * each : 0;
     *bytes = slot ? each : half;
 }
+
 // A slot: the kernel's mailbox (SharedWindow.cpp) keeps the first 64 KiB of slot 0.
 #define QM_CONTROL          0x10000ull
 #define QM_REQUEST          0x20000ull
@@ -52,14 +54,17 @@ struct QMControl {
     uint64_t logWritten;          // guest: bytes written into the log ring
     uint64_t logRead;             // host: bytes it has copied out
 };
+
 struct QMRequestHeader {
     uint32_t op, bytes;
 };  // then bytes of the op's payload
+
 struct QMReplyHeader {
     int32_t status;
     uint32_t bytes;
     uint64_t handle;
 };  // status 0, or a failure whose payload is its reason (text)
+
 struct QMCompletion {
     uint64_t commandBuffer;  // the guest's number for it (QMCommit.commandBuffer)
     uint64_t status;         // MTLCommandBufferStatus: 4 completed, 5 error
@@ -95,6 +100,7 @@ enum QMOp {
     QM_EXTERN_NAMES,    // uint64_t library -> uint64_t count, then count NUL-terminated names (externFunctionNames)
     QM_SOURCE_LIBRARY,  // QMSource, then its macros -> handle, uint64_t count, then the names (QM_LIBRARY's)
 };
+
 enum {
     QM_FAILED = -1,
     QM_UNKNOWN = -2,
@@ -104,59 +110,75 @@ enum {
 struct QMOpen {
     uint64_t session, windowBytes;
 };
+
 struct QMDeviceInfo {
     char name[64], vendor[32];
     uint64_t maxBufferLength, maxThreads[3];
     uint64_t heapAddress;  // the GPU address of the window's heap on the Mac (buffers' gpuAddress)
 };
+
 struct QMAnswer {
     uint64_t known, value;
 };
+
 struct QMAnswerRequest {
     char selector[96];
     uint64_t argument;
 };
+
 struct QMHandleValue {
     uint64_t handle, value;
 };
+
 struct QMTextureDescriptor {
     uint64_t type, format, width, height, depth, levels, samples, arrayLength, usage, options;
 };
+
 struct QMTexture {
     QMTextureDescriptor descriptor;
 };
+
 // A linear texture over window bytes: a buffer (offset is the window's) or the shadow of an IOSurface.
 struct QMTextureOnBuffer {
     QMTextureDescriptor descriptor;
     uint64_t offset, bytesPerRow, bytesPerImage, surface;
 };
+
 struct QMTextureView {
     uint64_t texture, format, kind, levels[2], slices[2], whole;
 };
+
 // The texture region (x, y, z, width, height, depth), its level and slice, and the window's staging bytes in rows.
 struct QMTextureBytes {
     uint64_t texture, region[6], level, slice, offset, bytesPerRow, bytesPerImage, length;
 };
+
 struct QMLibrary {
     uint64_t offset, length;
 };
+
 // Then the name (nameBytes, NUL included), then each constant: QMConstant, its name (nameBytes), its value (valueBytes), each padded to 8.
 struct QMFunction {
     uint64_t library, nameBytes, constants;
 };
+
 struct QMConstant {
     uint64_t type, index, nameBytes, valueBytes;
 };
+
 struct QMColorAttachment {
     uint64_t format, writeMask, blending, sourceRGB, destinationRGB, rgbOperation, sourceAlpha, destinationAlpha,
         alphaOperation;
 };
+
 struct QMVertexAttribute {
     uint64_t format, offset, buffer;
 };
+
 struct QMVertexLayout {
     uint64_t stride, stepFunction, stepRate;
 };
+
 struct QMRenderPipeline {
     uint64_t vertex, fragment;  // function handles; fragment 0 for none
     QMColorAttachment colors[8];
@@ -164,25 +186,31 @@ struct QMRenderPipeline {
     QMVertexAttribute attributes[31];
     QMVertexLayout layouts[31];
 };
+
 struct QMComputePipeline {
     uint64_t function, maxThreads, multipleOfExecutionWidth, maxCallStackDepth, mutability[31];
 };
+
 struct QMSampler {
     uint64_t minFilter, magFilter, mipFilter, sAddress, tAddress, rAddress, borderColor, normalized, maxAnisotropy,
         compare, lodAverage;
     double lodMin, lodMax;
 };
+
 struct QMStencil {
     uint64_t compare, failure, depthFailure, pass, readMask, writeMask;
 };
+
 struct QMDepthStencil {
     uint64_t compare, write;
     QMStencil front, back;
 };
+
 // The command buffer's commands (QMCommand records) are the window's bytes [offset, offset + length).
 struct QMCommit {
     uint64_t queue, commandBuffer, offset, length;
 };
+
 // A stitched library (MTLStitchedLibraryDescriptor): the function handles, then each graph, a QMStitchGraph, its name (padded to 8), then
 // its nodes, each a QMStitchNode, its name (padded), its arguments and its control dependencies (uint64_t each). An argument is a node's
 // index, or QM_STITCH_INPUT | the graph argument's index. Nodes not in the graph's own list (listed 0) are only reached through others.
@@ -191,21 +219,26 @@ struct QMCommit {
 struct QMSource {
     uint64_t offset, length, fastMath, languageVersion, macros;
 };
+
 struct QMStitched {
     uint64_t functions, graphs;
 };
+
 struct QMStitchGraph {
     uint64_t nameBytes, nodes, output, inlined;
 };
+
 struct QMStitchNode {
     uint64_t nameBytes, arguments, dependencies, listed;
 };
+
 #define QM_STITCH_INPUT (1ull << 63)
 
 // ---- commands: QMCommandHeader, then the command's fields; bytes counts the header and is a multiple of 8 ----
 struct QMCommandHeader {
     uint32_t op, bytes;
 };
+
 enum QMCommand {
     QC_SIGNAL_EVENT = 1,    // QCEvent
     QC_WAIT_EVENT,          // QCEvent
@@ -241,38 +274,48 @@ enum QMCommand {
     QC_GENERATE_MIPMAPS,    // uint64_t texture
     QC_IMAGEBLOCK,  // uint64_t width, height: a compute encoder's imageblock (QemuMetalRemote.cpp adds the selector)
 };
+
 struct QCEvent {
     uint64_t event, value;
 };
+
 struct QCFence {
     uint64_t fence, stages;
 };
+
 struct QCBind {
     uint64_t stage, index, value;
 };  // stage: 0 compute, 1 vertex, 2 fragment
+
 struct QCDispatch {
     uint64_t size[3], perGroup[3], threads;
 };
+
 struct QCDraw {
     uint64_t primitive, start, count, instances, baseInstance;
 };
+
 struct QCDrawIndexed {
     uint64_t primitive, count, indexType, indices, instances;
     int64_t baseVertex;
     uint64_t baseInstance;
 };
+
 struct QCAttachment {
     uint64_t texture, level, slice, depthPlane, load, store;
     double clear[4];
 };
+
 struct QCRenderPass {
     QCAttachment colors[8], depth, stencil;
     uint64_t width, height, arrayLength, samples, visibility;
 };
+
 struct QCCopyTexture {
     uint64_t source, sourceSlice, sourceLevel, sourceOrigin[3], size[3], destination, destinationSlice,
         destinationLevel, destinationOrigin[3];
 };
+
 struct QCBufferTexture {
     uint64_t buffer, bytesPerRow, bytesPerImage, size[3], texture, slice, level, origin[3];
 };

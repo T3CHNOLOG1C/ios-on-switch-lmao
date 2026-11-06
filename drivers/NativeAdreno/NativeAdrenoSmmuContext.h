@@ -31,8 +31,12 @@ public:
     ~NativeAdrenoSmmuContext() = default;
     NativeAdrenoSmmuContext(const NativeAdrenoSmmuContext &) = delete;
     NativeAdrenoSmmuContext &operator=(const NativeAdrenoSmmuContext &) = delete;
+
     /* A 2 GiB lower aperture, the GMU's, is 524288 leaves. */
-    enum : size_t { MaxLeaves = size_t(1) << 19 };
+    enum : size_t {
+        MaxLeaves = size_t(1) << 19
+    };
+
     /* iova/bytes describe the aperture in the chosen region; the pool must be contiguous. */
     /* output_bits: the context's output size, at most the SMMU's ID2.OAS (Linux uses OAS for stage 1). */
     IOReturn prepare(NativeAdrenoMemory *tables, unsigned upper, uint64_t iova, size_t bytes, size_t leaf_budget,
@@ -45,14 +49,43 @@ public:
     IOReturn observe() const;
     /* Only after attach; leaves streams faulted by the caller's own recovery. */
     IOReturn disable();
-    bool prepared() const { return prepared_; }
-    bool programmed() const { return programmed_; }
-    bool attached() const { return attached_; }
-    bool poisoned() const { return poisoned_; }
-    const ArmSmmu4KContextConfig *configuration() const { return &config_; }
-    const ArmSmmu4KLiveArena *arena() const { return &arena_; }
+
+    bool prepared() const
+    {
+        return prepared_;
+    }
+
+    bool programmed() const
+    {
+        return programmed_;
+    }
+
+    bool attached() const
+    {
+        return attached_;
+    }
+
+    bool poisoned() const
+    {
+        return poisoned_;
+    }
+
+    const ArmSmmu4KContextConfig *configuration() const
+    {
+        return &config_;
+    }
+
+    const ArmSmmu4KLiveArena *arena() const
+    {
+        return &arena_;
+    }
+
     /* Handles for a NativeAdrenoVm that will map buffers through this bank. */
-    ArmSmmu4KLiveArena *arenaHandle() { return &arena_; }
+    ArmSmmu4KLiveArena *arenaHandle()
+    {
+        return &arena_;
+    }
+
     /* Scratch the kit's physical-alias checks sort in (ArmSmmu4KLiveArena::alias_scratch), owned by the caller for this context's
      * lifetime; without it those checks compare pairwise. Only after prepare. */
     void setAliasScratch(uint32_t *entries, size_t count)
@@ -60,14 +93,46 @@ public:
         arena_.alias_scratch = entries;
         arena_.alias_scratch_entries = entries ? count : 0;
     }
-    ArmSmmu4KLiveState *stateHandle() { return &state_; }
-    ArmSmmu4KContextConfig *configHandle() { return &config_; }
-    ArmSmmu4KStreamState *streamsHandle() { return &streams_; }
-    const ArmSmmu4KIo *ioHandle() const { return &io_; }
-    const ArmSmmu4KProgramResult *programResult() const { return &program_; }
-    const ArmSmmu4KStreamResult *streamResult() const { return &routes_; }
+
+    ArmSmmu4KLiveState *stateHandle()
+    {
+        return &state_;
+    }
+
+    ArmSmmu4KContextConfig *configHandle()
+    {
+        return &config_;
+    }
+
+    ArmSmmu4KStreamState *streamsHandle()
+    {
+        return &streams_;
+    }
+
+    const ArmSmmu4KIo *ioHandle() const
+    {
+        return &io_;
+    }
+
+    const ArmSmmu4KProgramResult *programResult() const
+    {
+        return &program_;
+    }
+
+    const ArmSmmu4KStreamResult *streamResult() const
+    {
+        return &routes_;
+    }
+
     /* The kit's own status of the last program/attach, which IOReturn folds into one error. */
-    ArmSmmu4KStatus programStatus() const { return program_status_; }
-    ArmSmmu4KStatus attachStatus() const { return attach_status_; }
+    ArmSmmu4KStatus programStatus() const
+    {
+        return program_status_;
+    }
+
+    ArmSmmu4KStatus attachStatus() const
+    {
+        return attach_status_;
+    }
 };
 #endif

@@ -24,8 +24,10 @@ inline std::vector<std::string> split(const std::string &s)
     size_t at = 0;
     while (at < s.size()) {
         size_t e = s.find(' ', at);
-        if (e == std::string::npos) e = s.size();
-        if (e > at) out.push_back(s.substr(at, e - at));
+        if (e == std::string::npos)
+            e = s.size();
+        if (e > at)
+            out.push_back(s.substr(at, e - at));
         at = e + 1;
     }
     return out;
@@ -37,15 +39,18 @@ inline std::string key(const std::string &line)
 {
     size_t bar1 = line.find(" | v "), bar2 = line.find(" | f "),
            bar3 = line.find(" | ", bar2 == std::string::npos ? 0 : bar2 + 5);
-    if (bar1 == std::string::npos || bar2 == std::string::npos) return "";
+    if (bar1 == std::string::npos || bar2 == std::string::npos)
+        return "";
     std::string k;
     for (const std::string &h : split(line.substr(0, bar1))) {
         const bool field = h.rfind("samples=", 0) == 0 || h.rfind("topo=", 0) == 0 || h.rfind("ds=", 0) == 0 ||
                            (h.size() > 1 && (h[0] == 'c' || h[0] == 'a') && isdigit(h[1]));
-        if (field) k += h + " ";
+        if (field)
+            k += h + " ";
     }
     k += line.substr(bar1, (bar3 == std::string::npos ? line.size() : bar3) - bar1);
-    while (!k.empty() && k.back() == ' ') k.pop_back();  // the pack's keys carry no trailing blank (tools/probelog.py)
+    while (!k.empty() && k.back() == ' ')
+        k.pop_back();  // the pack's keys carry no trailing blank (tools/probelog.py)
     return k;
 }
 
@@ -64,13 +69,16 @@ inline std::vector<State> states(const char *corpusPath)
 {
     std::vector<State> out;
     FILE *f = fopen(corpusPath, "r");
-    if (!f) return out;
+    if (!f)
+        return out;
     char buf[16384];
     std::vector<std::string> seen;
     while (fgets(buf, sizeof buf, f)) {
         std::string l(buf);
-        if (!l.empty() && l.back() == '\n') l.pop_back();
-        if (l.rfind("R ", 0) || l.find(" ok=1 ") == std::string::npos) continue;
+        if (!l.empty() && l.back() == '\n')
+            l.pop_back();
+        if (l.rfind("R ", 0) || l.find(" ok=1 ") == std::string::npos)
+            continue;
         if (l.find(" label=com.apple.coreanimation.") == std::string::npos)
             continue;  // the render server's (the pack's)
         for (size_t at; (at = l.find(" lib=")) != std::string::npos;)
@@ -84,7 +92,8 @@ inline std::vector<State> states(const char *corpusPath)
         State s{l, key(l), l.find("v fixed_vert_lph_spc") != std::string::npos,
                 l.find("v downsample_blur_vert_lph") != std::string::npos};
         // FRAME_ALL_STATES: every state that is not a blur goes in the main pass's rotation (else only the uber states)
-        if (getenv("FRAME_ALL_STATES") && !s.blur) s.uber = true;
+        if (getenv("FRAME_ALL_STATES") && !s.blur)
+            s.uber = true;
         // FRAME_KEYS=<file>: only the states whose key is a line of it (the pack's: test/eq.sh writes them)
         static std::vector<std::string> only = [] {
             std::vector<std::string> keys;
@@ -93,7 +102,8 @@ inline std::vector<State> states(const char *corpusPath)
                     char line[16384];
                     while (fgets(line, sizeof line, k)) {
                         std::string x(line);
-                        if (!x.empty() && x.back() == '\n') x.pop_back();
+                        if (!x.empty() && x.back() == '\n')
+                            x.pop_back();
                         keys.push_back(x);
                     }
                     fclose(k);
@@ -103,13 +113,16 @@ inline std::vector<State> states(const char *corpusPath)
         // FRAME_EXTRA: the states FRAME_KEYS leaves out are kept as extras (neither uber nor blur): nvkframe draws one of them in
         // an extra pass of every odd frame (a command buffer the raw facade hands to m2v, between raw ones)
         if (!only.empty() && std::find(only.begin(), only.end(), s.key) == only.end()) {
-            if (!getenv("FRAME_EXTRA") || s.blur) continue;
+            if (!getenv("FRAME_EXTRA") || s.blur)
+                continue;
             s.extra = true;
             s.uber = false;
         }
         bool dup = false;
-        for (auto &k : seen) dup |= k == s.key;
-        if (dup || s.key.empty()) continue;
+        for (auto &k : seen)
+            dup |= k == s.key;
+        if (dup || s.key.empty())
+            continue;
         seen.push_back(s.key);
         out.push_back(s);
     }
@@ -131,11 +144,13 @@ enum Tex : int {
     A3TARGET,
     TEX_COUNT
 };
+
 struct TexDesc {
     int w, h;
     bool iosurface, memoryless, renderTarget;
     uint32_t format = 80;  // MTLPixelFormat: BGRA8Unorm, or R32Float (55) for the A3 states' third attachment
 };
+
 // FRAME_PITCH: the surfaces' rows as clients' and the render server's can lie since r12a (its needed alignment back at 16): the
 // framebuffers 1272 wide (rows of 5088 bytes, not a multiple of 128: a pitch target the raw path renders through a pool image)
 // and IMAGE2 132 wide (rows of 528, not a multiple of 32: sampled through a pool image the copy engine fills)
@@ -144,29 +159,40 @@ inline bool pitchShapes(const char *which = nullptr)
     const char *v = getenv("FRAME_PITCH");
     return v && (!which || !strcmp(v, "1") || !strcmp(v, which));
 }
+
 inline TexDesc texture(int t)
 {
     switch (t) {
     case FB0:
-    case FB1: return {pitchShapes("fb") ? 1272 : 1280, 720, true, false, true};
-    case MEMORYLESS: return {1280, 720, false, true, true};
+    case FB1:
+        return {pitchShapes("fb") ? 1272 : 1280, 720, true, false, true};
+    case MEMORYLESS:
+        return {1280, 720, false, true, true};
     case BLUR0:
-    case BLUR1: return {320, 180, false, false, true};
-    case BLUR_MEMORYLESS: return {320, 180, false, true, true};
-    case IMAGE0: return {1280, 720, true, false, false};
-    case A3TARGET: return {1280, 720, false, false, true, 55};
-    default: return {t == IMAGE2 && pitchShapes("image") ? 132 : 128, 128, t == IMAGE2, false, false};
+    case BLUR1:
+        return {320, 180, false, false, true};
+    case BLUR_MEMORYLESS:
+        return {320, 180, false, true, true};
+    case IMAGE0:
+        return {1280, 720, true, false, false};
+    case A3TARGET:
+        return {1280, 720, false, false, true, 55};
+    default:
+        return {t == IMAGE2 && pitchShapes("image") ? 132 : 128, 128, t == IMAGE2, false, false};
     }
 }
+
 struct SamplerSpec {
     int minmag, mip, address;
 };  // MTLSamplerMinMagFilter, MTLSamplerMipFilter, MTLSamplerAddressMode
+
 // FRAME_MIP: IMAGE1 a mipmapped texture (private, every level: level 0 copied in and generateMipmaps at each frame's start), sampler
 // 0 trilinear (Core Animation's minification of icons and cards)
 inline bool mipImage()
 {
     return getenv("FRAME_MIP") != nullptr;
 }
+
 inline SamplerSpec sampler(int s)
 {
     return s == 0 ? SamplerSpec{1, mipImage() ? 2 : 0, 0} : SamplerSpec{0, 0, 2};
@@ -176,6 +202,7 @@ struct Bytes {
     int stage, slot;
     uint32_t length;
 };
+
 struct Draw {
     int state;  // index into the uber or blur list
     bool blur;
@@ -185,6 +212,7 @@ struct Draw {
     int samplers[16];                                             // sampler spec index or -1
     uint32_t primitive = 4, first = 0, count = 4, instances = 1;  // MTLPrimitiveType (4 triangle strip)
 };
+
 struct Pass {
     int color[3];  // Tex (-1: none)
     int load[3];   // 0 dontCare 1 load 2 clear
@@ -200,7 +228,9 @@ struct Shape {
     // draw and set*BufferOffset: after (Core Animation's per-frame ring, cabench mode 16), instead of set*Bytes
     bool ring = getenv("FRAME_RING") != nullptr;
 };
+
 constexpr uint32_t kRingBytes = 8 << 20;
+
 // FRAME_RTSIZE: the main pass's renderTargetWidth/Height 37 and 23 pixels short of its attachments' (the device's passes, r7o:
 // "a render target size other than the attachment's"), so its render area, default viewport and scissor, clears and the
 // scissors past it are the target size's
@@ -208,6 +238,7 @@ inline bool rtSize()
 {
     return getenv("FRAME_RTSIZE") != nullptr;
 }
+
 constexpr uint32_t kRtShortW = 37, kRtShortH = 23;
 
 // The frame's passes. `uniformBytes`: the setBytes length of every uniform slot (CA's are 64 and 128; 256 = a whole m2v upload chunk,
@@ -218,8 +249,10 @@ inline std::vector<Pass> passes(unsigned frameIndex, const Shape &s, size_t blur
     for (unsigned p = 0; p < s.blurPasses && blurCount; p++) {
         Pass bp{{p & 1 ? BLUR1 : BLUR0, BLUR_MEMORYLESS, -1}, {0, 0, 0}, {0, 0, 0, 0}, {}};
         Draw d{int(p % blurCount), true, {0, 0, 320, 180}, {}, {}, {}};
-        for (int &t : d.textures) t = -1;
-        for (int &t : d.samplers) t = -1;
+        for (int &t : d.textures)
+            t = -1;
+        for (int &t : d.samplers)
+            t = -1;
         d.bytes = {{1, 1, 192},
                    {1, 2, s.uniformBytes},
                    {1, 3, s.uniformBytes},
@@ -238,8 +271,10 @@ inline std::vector<Pass> passes(unsigned frameIndex, const Shape &s, size_t blur
                {},
                {},
                {}};
-        for (int &t : d.textures) t = -1;
-        for (int &t : d.samplers) t = -1;
+        for (int &t : d.textures)
+            t = -1;
+        for (int &t : d.samplers)
+            t = -1;
         d.bytes = {{1, 1, s.vertexBytes},  {1, 2, s.uniformBytes}, {1, 3, s.uniformBytes}, {2, 1, s.uniformBytes},
                    {2, 2, s.uniformBytes}, {2, 5, s.uniformBytes}, {2, 6, s.uniformBytes}};
         if (a3()) {  // the A3 states' vertex uniforms at 5 and fragment uniforms at 3 and 4 too
@@ -253,8 +288,10 @@ inline std::vector<Pass> passes(unsigned frameIndex, const Shape &s, size_t blur
                 d.primitive = 3;
                 d.count = 3;
             }
-            if (i % 5 == 2) d.first = 1, d.count = 3;
-            if (i % 7 == 3) d.instances = 2;
+            if (i % 5 == 2)
+                d.first = 1, d.count = 3;
+            if (i % 7 == 3)
+                d.instances = 2;
         }
         d.textures[3] = IMAGE1 + int(i % 3);
         d.textures[4] = IMAGE2;
@@ -279,7 +316,8 @@ inline void fill(std::vector<uint8_t> &out, const Bytes &b, unsigned frameIndex,
             f[v * 12 + 3] = 1.0f;
             f[v * 12 + 4] = float(v & 1);
             f[v * 12 + 5] = float((v >> 1) & 1);
-            for (int k = 8; k < 12; k++) f[v * 12 + k] = 0.25f * k;
+            for (int k = 8; k < 12; k++)
+                f[v * 12 + k] = 0.25f * k;
         }
         return;
     }

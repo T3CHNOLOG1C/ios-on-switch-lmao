@@ -32,10 +32,13 @@ constexpr int64_t kInt32Max = INT32_MAX, kInt32Min = INT32_MIN;
 // FCVTZS #31 on a float32: x * 2^31 rounded toward zero, saturated; NaN is 0.
 int64_t fcvtzs31(float x)
 {
-    if (std::isnan(x)) return 0;
+    if (std::isnan(x))
+        return 0;
     const double v = (double)x * 2147483648.0;
-    if (v >= 2147483648.0) return kInt32Max;
-    if (v <= -2147483648.0) return kInt32Min;
+    if (v >= 2147483648.0)
+        return kInt32Max;
+    if (v <= -2147483648.0)
+        return kInt32Min;
     return (int64_t)v;
 }
 
@@ -48,6 +51,7 @@ struct Build {
     void (*mix)(int32_t *, const float *, uint32_t, float);
     int (*neon)();
 };
+
 const Build kNeon{neon_h_mix, neon_h_neon};
 const Build kScalar{scalar_h_mix, scalar_h_neon};
 
@@ -60,7 +64,8 @@ std::vector<int32_t> mix(std::vector<int32_t> dst, const std::vector<float> &src
 
 TEST(SwitchAudioFormat, AdmaifWordsAreL4tS32)
 {
-    for (uint32_t channels : {1u, 2u}) EXPECT_EQ(neon_h_admaif_cif(channels), linux_::admaif("S32_LE", channels));
+    for (uint32_t channels : {1u, 2u})
+        EXPECT_EQ(neon_h_admaif_cif(channels), linux_::admaif("S32_LE", channels));
     // S16_LE, for contrast: PACK16 with 16-bit audio and client bits.
     EXPECT_EQ(linux_::admaif("S16_LE", 2), (1u << 30) | 0x00113300u);
 }
@@ -107,7 +112,8 @@ TEST(SwitchAudioFormat, FullScaleAndSaturation)
               (std::vector<int32_t>{INT32_MAX, INT32_MIN, 1 << 30, -(1 << 30), 0, 0, INT32_MAX, INT32_MIN}));
     EXPECT_EQ(std::vector<int32_t>(got.begin() + 8, got.begin() + 11), (std::vector<int32_t>{0, INT32_MAX, INT32_MIN}));
     EXPECT_EQ(got[11], 1);
-    for (size_t i = 0; i < src.size(); ++i) EXPECT_EQ(got[i], fcvtzs31(src[i])) << "sample " << i;
+    for (size_t i = 0; i < src.size(); ++i)
+        EXPECT_EQ(got[i], fcvtzs31(src[i])) << "sample " << i;
 }
 
 TEST(SwitchAudioFormat, ContextsSumWithSaturation)
@@ -116,7 +122,8 @@ TEST(SwitchAudioFormat, ContextsSumWithSaturation)
     const std::vector<float> b = {0.25f, 0.75f, -0.75f, -0.5f, -1.0f, -0.1f};
     const std::vector<int32_t> once = mix(std::vector<int32_t>(6, 0), a);
     const std::vector<int32_t> twice = mix(once, b);
-    for (size_t i = 0; i < a.size(); ++i) EXPECT_EQ(twice[i], saturate(fcvtzs31(a[i]) + fcvtzs31(b[i]))) << i;
+    for (size_t i = 0; i < a.size(); ++i)
+        EXPECT_EQ(twice[i], saturate(fcvtzs31(a[i]) + fcvtzs31(b[i]))) << i;
     EXPECT_EQ(std::vector<int32_t>(twice.begin(), twice.begin() + 5),
               (std::vector<int32_t>{1 << 30, INT32_MAX, INT32_MIN, 0, INT32_MIN}));
 }
@@ -136,20 +143,24 @@ TEST(SwitchAudioFormat, EveryLengthNeonMatchesScalar)
     EXPECT_EQ(kNeon.neon(), 1);
     EXPECT_EQ(kScalar.neon(), 0);
     std::vector<uint32_t> lengths;
-    for (uint32_t n = 0; n < 13; ++n) lengths.push_back(n);
+    for (uint32_t n = 0; n < 13; ++n)
+        lengths.push_back(n);
     lengths.push_back(1023);
     lengths.push_back(2048);
     for (uint32_t n : lengths) {
         std::vector<float> src(n);
-        for (float &s : src) s = (float)sample(rng);
+        for (float &s : src)
+            s = (float)sample(rng);
         std::vector<int32_t> dst(n);
-        for (int32_t &d : dst) d = (int32_t)any(rng);
+        for (int32_t &d : dst)
+            d = (int32_t)any(rng);
         const float gain = (float)unit(rng);
         const std::vector<int32_t> neon = mix(dst, src, gain, kNeon);
         const std::vector<int32_t> scalar = mix(dst, src, gain, kScalar);
         EXPECT_EQ(neon, scalar) << "length " << n;
         std::vector<int32_t> expect(n);
-        for (uint32_t i = 0; i < n; ++i) expect[i] = saturate(dst[i] + fcvtzs31(src[i] * gain));
+        for (uint32_t i = 0; i < n; ++i)
+            expect[i] = saturate(dst[i] + fcvtzs31(src[i] * gain));
         EXPECT_EQ(neon, expect) << "length " << n;
     }
 }
@@ -161,7 +172,8 @@ TEST(SwitchAudioFormat, RingWrap)
         for (uint32_t frames : {0u, 1u, 3u, 4u, 11u, 16u, 20u}) {
             std::vector<int32_t> ring(ringFrames * channels, 0);
             std::vector<float> src(std::max(1u, frames * channels), 0.0f);
-            for (uint32_t i = 0; i < frames * channels; ++i) src[i] = (float)((i + 1) / 64.0) * (i % 2 ? 1.0f : -1.0f);
+            for (uint32_t i = 0; i < frames * channels; ++i)
+                src[i] = (float)((i + 1) / 64.0) * (i % 2 ? 1.0f : -1.0f);
             const uint32_t run = neon_h_ring_mix(ring.data(), ringFrames, channels, first, src.data(), frames, 1.0f);
             const uint32_t total = std::min(frames, ringFrames);
             EXPECT_EQ(run, std::min(total, ringFrames - (uint32_t)(first % ringFrames)))
@@ -169,7 +181,8 @@ TEST(SwitchAudioFormat, RingWrap)
             std::vector<int64_t> expect(ringFrames * channels, 0);
             for (uint32_t i = 0; i < total; ++i) {
                 const uint64_t at = (first + i) % ringFrames;
-                for (uint32_t c = 0; c < channels; ++c) expect[at * channels + c] += fcvtzs31(src[i * channels + c]);
+                for (uint32_t c = 0; c < channels; ++c)
+                    expect[at * channels + c] += fcvtzs31(src[i * channels + c]);
             }
             EXPECT_EQ(std::vector<int64_t>(ring.begin(), ring.end()), expect)
                 << "first " << first << " frames " << frames;

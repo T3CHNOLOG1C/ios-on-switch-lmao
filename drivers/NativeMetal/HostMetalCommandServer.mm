@@ -24,36 +24,46 @@
 #include <cstring>
 #include <vector>
 #include <cmath>
+
 static bool exact(int fd, void *bytes, size_t size, bool sending)
 {
     unsigned char *p = (unsigned char *)bytes;
     while (size) {
         ssize_t n = sending ? write(fd, p, size) : read(fd, p, size);
-        if (n < 0 && errno == EINTR) continue;
-        if (n <= 0) return false;
+        if (n < 0 && errno == EINTR)
+            continue;
+        if (n <= 0)
+            return false;
         p += n;
         size -= n;
     }
     return true;
 }
+
 static NSString *hashBytes(const void *bytes, size_t size)
 {
-    if (size > UINT32_MAX) return nil;
+    if (size > UINT32_MAX)
+        return nil;
     unsigned char hash[32];
     CC_SHA256(bytes, (CC_LONG)size, hash);
     NSMutableString *s = [NSMutableString string];
-    for (unsigned i = 0; i < 32; i++) [s appendFormat:@"%02x", hash[i]];
+    for (unsigned i = 0; i < 32; i++)
+        [s appendFormat:@"%02x", hash[i]];
     return s;
 }
+
 static NSData *jsonBytes(id value)
 {
     return [NSJSONSerialization dataWithJSONObject:value options:0 error:nil];
 }
+
 NSDictionary *ServeOfflineMetalCommands(const char *path, id<MTLDevice> device, NSArray<id<MTLLibrary>> *libraries,
                                         NSArray *libraryRows, unsigned expectedSessions)
 {
-    if (expectedSessions > 128) return nil;
-    if (strlen(path) >= sizeof(((sockaddr_un *)nullptr)->sun_path)) return nil;
+    if (expectedSessions > 128)
+        return nil;
+    if (strlen(path) >= sizeof(((sockaddr_un *)nullptr)->sun_path))
+        return nil;
     NSMutableDictionary<NSNumber *, NSDictionary *> *fenceProducers = [NSMutableDictionary dictionary],
                                                     *eventProducers = [NSMutableDictionary dictionary];
     NSMutableArray *eventsCreated = [NSMutableArray array], *eventOperations = [NSMutableArray array],
@@ -70,7 +80,8 @@ NSDictionary *ServeOfflineMetalCommands(const char *path, id<MTLDevice> device, 
     NSMutableArray *fencesCreated = [NSMutableArray array], *fenceOperations = [NSMutableArray array],
                    *textureHazards = [NSMutableArray array];
     int listener = socket(AF_UNIX, SOCK_STREAM, 0);
-    if (listener < 0) return nil;
+    if (listener < 0)
+        return nil;
     sockaddr_un address = {};
     address.sun_family = AF_UNIX;
     strcpy(address.sun_path, path);
@@ -82,7 +93,8 @@ NSDictionary *ServeOfflineMetalCommands(const char *path, id<MTLDevice> device, 
     fflush(stderr);
     int fd = accept(listener, nullptr, nullptr);
     close(listener);
-    if (fd < 0) return nil;
+    if (fd < 0)
+        return nil;
     timeval timeout = {90, 0};
     setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
     setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
@@ -139,7 +151,8 @@ NSDictionary *ServeOfflineMetalCommands(const char *path, id<MTLDevice> device, 
     auto finishSubmitted = [&](uint64_t selected, bool all, NSString *reason) {
         for (NSNumber *handle in asyncCommands.allKeys) {
             NSDictionary *row = asyncCommands[handle];
-            if (!all && [row[@"session"] unsignedLongLongValue] != selected) continue;
+            if (!all && [row[@"session"] unsignedLongLongValue] != selected)
+                continue;
             id<MTLCommandBuffer> command = row[@"command"];
             [command waitUntilCompleted];
             observeCommand(handle.unsignedLongLongValue, command, reason);
@@ -149,7 +162,8 @@ NSDictionary *ServeOfflineMetalCommands(const char *path, id<MTLDevice> device, 
     auto abortEncoders = [&](uint64_t selected, bool all, NSString *reason) {
         for (NSNumber *handle in openEncoders.allKeys) {
             NSDictionary *row = openEncoders[handle];
-            if (!all && [row[@"session"] unsignedLongLongValue] != selected) continue;
+            if (!all && [row[@"session"] unsignedLongLongValue] != selected)
+                continue;
             id<MTLCommandEncoder> encoder = row[@"encoder"];
             id<MTLCommandBuffer> command = row[@"command_object"];
             uint64_t status = command.status;
@@ -168,14 +182,16 @@ NSDictionary *ServeOfflineMetalCommands(const char *path, id<MTLDevice> device, 
     };
     auto hasOpenEncoder = [&](uint64_t command) -> bool {
         for (NSDictionary *row in openEncoders.allValues)
-            if ([row[@"command_handle"] unsignedLongLongValue] == command) return true;
+            if ([row[@"command_handle"] unsignedLongLongValue] == command)
+                return true;
         return false;
     };
     auto cancelNotifications = [&](uint64_t selected, bool all) {
         [notificationLock lock];
         for (NSNumber *key in notifications.allKeys) {
             NSMutableDictionary *record = notifications[key];
-            if (!all && [record[@"session"] unsignedLongLongValue] != selected) continue;
+            if (!all && [record[@"session"] unsignedLongLongValue] != selected)
+                continue;
             record[@"cancelled"] = @YES;
             [notificationJournal addObject:@{
                 @"notification" : key,
@@ -195,7 +211,8 @@ NSDictionary *ServeOfflineMetalCommands(const char *path, id<MTLDevice> device, 
     uint32_t bootBytes = 0;
     bool finished = false, healthy = true;
     auto save = [&](id object) -> uint64_t {
-        if (!object) return 0;
+        if (!object)
+            return 0;
         uint64_t key = next++;
         objects[@(key)] = object;
         return key;
@@ -218,7 +235,8 @@ NSDictionary *ServeOfflineMetalCommands(const char *path, id<MTLDevice> device, 
                         break;
                     }
                 } while (count < 4 || prefix != OM_WIRE_MAGIC);
-                if (!healthy) break;
+                if (!healthy)
+                    break;
                 bootBytes = count - 4;
                 header.magic = prefix;
                 if (!exact(fd, (unsigned char *)&header + 4, sizeof(header) - 4, false)) {
@@ -246,12 +264,14 @@ NSDictionary *ServeOfflineMetalCommands(const char *path, id<MTLDevice> device, 
                     validSession = !session && header.request == 1 && !header.bytes;
                 else if (!session && header.operation == OM_SHARED_EXPORT_DROP) {
                     validSession = header.request == controlRequest;
-                    if (validSession) controlRequest++;
+                    if (validSession)
+                        controlRequest++;
                 } else {
                     objects = sessions[@(session)];
                     NSNumber *expected = sessionRequests[@(session)];
                     validSession = objects && expected && header.request == expected.unsignedIntValue;
-                    if (validSession) sessionRequests[@(session)] = @(header.request + 1);
+                    if (validSession)
+                        sessionRequests[@(session)] = @(header.request + 1);
                 }
             }
             std::vector<unsigned char> input(header.bytes);
@@ -343,7 +363,8 @@ NSDictionary *ServeOfflineMetalCommands(const char *path, id<MTLDevice> device, 
                             break;
                         }
                         result.handle = save([device newCommandQueue]);
-                        if (!result.handle) result.error = -3;
+                        if (!result.handle)
+                            result.error = -3;
                         break;
                     case OM_QUEUE_PRIORITY_GET:
                     case OM_QUEUE_PRIORITY_SET: {
@@ -387,10 +408,12 @@ NSDictionary *ServeOfflineMetalCommands(const char *path, id<MTLDevice> device, 
                     case OM_LIBRARY: {
                         REQUEST(OMLibrary);
                         NSMutableString *hash = [NSMutableString string];
-                        for (unsigned i = 0; i < 32; i++) [hash appendFormat:@"%02x", q.sha256[i]];
+                        for (unsigned i = 0; i < 32; i++)
+                            [hash appendFormat:@"%02x", q.sha256[i]];
                         NSUInteger i = 0;
                         for (; i < libraryRows.count; i++)
-                            if ([libraryRows[i][@"input_sha256"] isEqualToString:hash]) break;
+                            if ([libraryRows[i][@"input_sha256"] isEqualToString:hash])
+                                break;
                         if (i == libraryRows.count) {
                             result.error = -4;
                             break;
@@ -457,7 +480,8 @@ NSDictionary *ServeOfflineMetalCommands(const char *path, id<MTLDevice> device, 
                                 else
                                     [values setConstantValue:row.data type:(MTLDataType)row.type atIndex:row.index];
                                 NSMutableString *hex = [NSMutableString string];
-                                for (uint64_t j = 0; j < row.bytes; j++) [hex appendFormat:@"%02x", row.data[j]];
+                                for (uint64_t j = 0; j < row.bytes; j++)
+                                    [hex appendFormat:@"%02x", row.data[j]];
                                 [rows addObject:@{
                                     @"type" : @(row.type),
                                     @"index" : @(row.index),
@@ -466,7 +490,8 @@ NSDictionary *ServeOfflineMetalCommands(const char *path, id<MTLDevice> device, 
                                     @"data_hex" : hex
                                 }];
                             }
-                            if (result.error) break;
+                            if (result.error)
+                                break;
                             function = [library newFunctionWithName:name constantValues:values error:&error];
                             [specializations addObject:@{
                                 @"session" : @(session),
@@ -619,7 +644,8 @@ NSDictionary *ServeOfflineMetalCommands(const char *path, id<MTLDevice> device, 
                             bool used[31] = {};
                             for (unsigned i = 0; i < 31; i++) {
                                 const auto &a = vertexInput.attributes[i];
-                                if (!a.format) continue;
+                                if (!a.format)
+                                    continue;
                                 v.attributes[i].format = (MTLVertexFormat)a.format;
                                 v.attributes[i].offset = a.offset;
                                 v.attributes[i].bufferIndex = a.buffer;
@@ -669,9 +695,11 @@ NSDictionary *ServeOfflineMetalCommands(const char *path, id<MTLDevice> device, 
                                 a.alphaBlendOperation = (MTLBlendOperation)b.alphaOperation;
                             }
                         }
-                        if (result.error) break;
+                        if (result.error)
+                            break;
                         result.handle = save([device newRenderPipelineStateWithDescriptor:d error:&error]);
-                        if (!result.handle) result.error = -3;
+                        if (!result.handle)
+                            result.error = -3;
                         if (result.handle && hasVertexInput)
                             [vertexPipelines addObject:@{
                                 @"pipeline" : @(result.handle),
@@ -760,7 +788,8 @@ NSDictionary *ServeOfflineMetalCommands(const char *path, id<MTLDevice> device, 
                             @"render" : @(render),
                             @"update" : @(update)
                         }];
-                        if (update) fenceProducers[@(q.fence)] = @{@"encoder" : @(q.encoder), @"command" : command};
+                        if (update)
+                            fenceProducers[@(q.fence)] = @{@"encoder" : @(q.encoder), @"command" : command};
                         break;
                     }
                     case OM_SHARED_EVENT: {
@@ -915,7 +944,8 @@ NSDictionary *ServeOfflineMetalCommands(const char *path, id<MTLDevice> device, 
                             }
                         }
                         [notificationLock unlock];
-                        if (!result.error) body = [NSData dataWithBytes:&value length:sizeof(value)];
+                        if (!result.error)
+                            body = [NSData dataWithBytes:&value length:sizeof(value)];
                         break;
                     }
                     case OM_SHARED_EXPORT: {
@@ -1072,7 +1102,8 @@ NSDictionary *ServeOfflineMetalCommands(const char *path, id<MTLDevice> device, 
                             break;
                         }
                         result.handle = save([queue commandBuffer]);
-                        if (!result.handle) result.error = -3;
+                        if (!result.handle)
+                            result.error = -3;
                         break;
                     }
                     case OM_COMMAND_ENQUEUE: {
@@ -1090,7 +1121,8 @@ NSDictionary *ServeOfflineMetalCommands(const char *path, id<MTLDevice> device, 
                                 result.error = -4;
                                 break;
                             }
-                        if (result.error) break;
+                        if (result.error)
+                            break;
                         [command enqueue];
                         uint64_t status = command.status;
                         if (status != MTLCommandBufferStatusEnqueued) {
@@ -1193,7 +1225,8 @@ NSDictionary *ServeOfflineMetalCommands(const char *path, id<MTLDevice> device, 
                             result.error = -2;
                             break;
                         }
-                        if (result.error) break;
+                        if (result.error)
+                            break;
                         result.handle = save([command renderCommandEncoderWithDescriptor:d]);
                         if (!result.handle)
                             result.error = -3;
@@ -1225,7 +1258,8 @@ NSDictionary *ServeOfflineMetalCommands(const char *path, id<MTLDevice> device, 
                     case OM_DEPTH_STENCIL_STATE: {
                         REQUEST(OMDepthStencil);
                         auto validFace = [](const OMStencilFace &f) -> bool {
-                            if (f.enabled > 1) return false;
+                            if (f.enabled > 1)
+                                return false;
                             if (!f.enabled)
                                 return !(f.compare | f.failure | f.depthFailure | f.pass | f.readMask | f.writeMask);
                             return f.compare <= MTLCompareFunctionAlways &&
@@ -1240,7 +1274,8 @@ NSDictionary *ServeOfflineMetalCommands(const char *path, id<MTLDevice> device, 
                             break;
                         }
                         auto face = [](const OMStencilFace &f) -> MTLStencilDescriptor * {
-                            if (!f.enabled) return nil;
+                            if (!f.enabled)
+                                return nil;
                             MTLStencilDescriptor *s = [MTLStencilDescriptor new];
                             s.stencilCompareFunction = (MTLCompareFunction)f.compare;
                             s.stencilFailureOperation = (MTLStencilOperation)f.failure;
@@ -1363,7 +1398,8 @@ NSDictionary *ServeOfflineMetalCommands(const char *path, id<MTLDevice> device, 
                                 result.error = -4;
                                 break;
                             }
-                        if (result.error) break;
+                        if (result.error)
+                            break;
                         [command commit];
                         [pendingEnqueues removeObjectForKey:@(q.handle)];
                         if (header.operation == OM_COMMIT)
@@ -1488,7 +1524,8 @@ NSDictionary *ServeOfflineMetalCommands(const char *path, id<MTLDevice> device, 
                             break;
                         }
                         result.handle = save([device newBufferWithLength:q.bytes options:MTLResourceStorageModeShared]);
-                        if (!result.handle) result.error = -3;
+                        if (!result.handle)
+                            result.error = -3;
                         break;
                     }
                     case OM_WRITE_BUFFER: {
@@ -1743,14 +1780,17 @@ NSDictionary *ServeOfflineMetalCommands(const char *path, id<MTLDevice> device, 
                         finishSubmitted(0, true, @"finish");
                         finished = true;
                         break;
-                    default: result.error = -4; break;
+                    default:
+                        result.error = -4;
+                        break;
                     }
                 } @catch (NSException *exception) {
                     result.error = -5;
                     body = [exception.reason dataUsingEncoding:NSUTF8StringEncoding];
                 }
 #undef REQUEST
-            if (error) body = [error.localizedDescription dataUsingEncoding:NSUTF8StringEncoding];
+            if (error)
+                body = [error.localizedDescription dataUsingEncoding:NSUTF8StringEncoding];
             if (body.length > OFFLINE_METAL_MAX_REPLY) {
                 result.error = -2;
                 body = nil;

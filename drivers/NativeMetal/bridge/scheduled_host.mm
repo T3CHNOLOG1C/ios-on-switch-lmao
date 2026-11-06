@@ -12,23 +12,28 @@ static dispatch_time_t deadline()
 {
     return dispatch_time(DISPATCH_TIME_NOW, 3 * NSEC_PER_SEC);
 }
+
 __attribute__((noinline)) static id nothing()
 {
     return nil;
 }
+
 @protocol CompletionQueue
 - (void)setCompletionQueue:(dispatch_queue_t)queue;
 @end
 
 int main(int argc, char **argv)
 {
-    if (argc < 3) return 2;
+    if (argc < 3)
+        return 2;
     @autoreleasepool {
         id<MTLDevice> device = native_bridge_metal_open(argv[1], argv[2], 0x6e6d62, nullptr);
-        if (!device) return 2;
+        if (!device)
+            return 2;
         id<MTLCommandQueue> queue = [device newCommandQueue];
         id<MTLBuffer> buffer = [device newBufferWithLength:256 options:MTLResourceStorageModeShared];
-        if (!queue || !buffer) return 2;
+        if (!queue || !buffer)
+            return 2;
         for (unsigned variant : {0u, 1u, 2u, 3u}) {
             const bool refused = variant == 1 || variant == 3;
             [(id<CompletionQueue>)queue
@@ -40,7 +45,8 @@ int main(int argc, char **argv)
             auto scheduled = &scheduledCount, completed = &completedCount;
             [cb addScheduledHandler:^(id<MTLCommandBuffer> command) {
                 // This also catches callbacks deferred to Completed by the frontend.
-                if (command.status == MTLCommandBufferStatusScheduled) ++*scheduled;
+                if (command.status == MTLCommandBufferStatusScheduled)
+                    ++*scheduled;
             }];
             [cb addCompletedHandler:^(id<MTLCommandBuffer>) {
                 ++*completed;
@@ -54,7 +60,8 @@ int main(int argc, char **argv)
             } else {
                 [blit fillBuffer:buffer range:NSMakeRange(0, 256) value:0x5a];
             }
-            if (variant != 3) [blit endEncoding];  // variant 3: runtime refuses commit with an encoder open
+            if (variant != 3)
+                [blit endEncoding];  // variant 3: runtime refuses commit with an encoder open
             [cb commit];
             if (dispatch_semaphore_wait(entered, deadline())) {
                 std::puts("FAIL completion never arrived");
@@ -72,7 +79,8 @@ int main(int argc, char **argv)
                 return 1;
             }
             [cb waitUntilCompleted];
-            if (variant == 3) [blit endEncoding];
+            if (variant == 3)
+                [blit endEncoding];
             if (!independent || completedCount != 1 || scheduledCount != (refused ? 0u : 1u) ||
                 cb.status != (refused ? MTLCommandBufferStatusError : MTLCommandBufferStatusCompleted)) {
                 std::printf("FAIL variant=%u independent=%d scheduled=%u completed=%u status=%lu\n", variant,

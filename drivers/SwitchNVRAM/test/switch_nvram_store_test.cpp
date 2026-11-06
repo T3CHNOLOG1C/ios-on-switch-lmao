@@ -34,18 +34,21 @@ Bytes operator+(Bytes a, const Bytes &b)
 
 void put32(uint8_t *at, uint32_t v)
 {
-    for (int i = 0; i < 4; ++i) at[i] = (uint8_t)(v >> (8 * i));
+    for (int i = 0; i < 4; ++i)
+        at[i] = (uint8_t)(v >> (8 * i));
 }
 
 void append(Bytes &out, uint64_t v, int bytes)
 {
-    for (int i = 0; i < bytes; ++i) out.push_back((uint8_t)(v >> (8 * i)));
+    for (int i = 0; i < bytes; ++i)
+        out.push_back((uint8_t)(v >> (8 * i)));
 }
 
 uint32_t zlibCrc32(const Bytes &data)
 {
     return (uint32_t)crc32(0, data.data(), (uInt)data.size());
 }
+
 uint32_t zlibAdler32(const uint8_t *data, size_t length)
 {
     return (uint32_t)adler32(1, data, (uInt)length);
@@ -60,8 +63,10 @@ Bytes chrpHeader(const std::string &name, uint32_t size)
     raw[3] = (uint8_t)(size / 16 >> 8);
     std::memcpy(raw.data() + 4, name.data(), std::min<size_t>(name.size(), 12));
     uint32_t checksum = raw[0];
-    for (int i = 2; i < 16; ++i) checksum += raw[i];
-    while (checksum > 255) checksum = (checksum & 255) + (checksum >> 8);
+    for (int i = 2; i < 16; ++i)
+        checksum += raw[i];
+    while (checksum > 255)
+        checksum = (checksum & 255) + (checksum >> 8);
     raw[1] = (uint8_t)checksum;
     return raw;
 }
@@ -80,7 +85,8 @@ Bytes bank(const Variables &variables = {}, uint32_t generation = 1, uint32_t si
     place(32, chrpHeader("common", 16 + 2048));
     place(48 + 2048, chrpHeader("free", size - 48 - 2048));
     Bytes body;
-    for (const auto &[key, value] : variables) body = body + str(key) + Bytes{'='} + str(value) + Bytes{0};
+    for (const auto &[key, value] : variables)
+        body = body + str(key) + Bytes{'='} + str(value) + Bytes{0};
     place(48, body);
     put32(image.data() + 20, generation);
     put32(image.data() + 16, zlibAdler32(image.data() + 20, image.size() - 20));
@@ -116,7 +122,8 @@ Bytes randomBytes(size_t n, uint32_t seed)
 {
     std::mt19937 random(seed);
     Bytes out(n);
-    for (uint8_t &b : out) b = (uint8_t)random();
+    for (uint8_t &b : out)
+        b = (uint8_t)random();
     return out;
 }
 
@@ -147,7 +154,8 @@ Bytes imageOf(const Bytes &data, int index, uint32_t size = kBank)
 std::pair<Bytes, int> write(Bytes data, int current, const Bytes &image, uint64_t sequence)
 {
     const int target = current ^ 1;
-    if (data.size() < 2 * stride()) data.resize(2 * stride(), 0);
+    if (data.size() < 2 * stride())
+        data.resize(2 * stride(), 0);
     const Bytes filled = fill(image, sequence);
     std::memcpy(data.data() + (size_t)target * stride(), filled.data(), stride());
     return {data, target};
@@ -226,7 +234,8 @@ TEST(SwitchNVRAMStore, SequenceIs64Bit)
 TEST(SwitchNVRAMStore, TornNewestWriteFallsBackToThePreviousBank)
 {
     std::vector<Bytes> banks;
-    for (uint32_t n : {1u, 2u, 3u}) banks.push_back(bank({{"v", std::string(40, (char)('0' + n))}}, n));
+    for (uint32_t n : {1u, 2u, 3u})
+        banks.push_back(bank({{"v", std::string(40, (char)('0' + n))}}, n));
     auto [data, current] = write({}, 1, banks[0], 1);
     std::tie(data, current) = write(data, current, banks[1], 2);
     const auto [complete, target] = write(data, current, banks[2], 3);
@@ -245,7 +254,8 @@ TEST(SwitchNVRAMStore, AFlippedByteAnywhereCrcCoversRejectsThatSlot)
 {
     const Bytes good = fill(bank({{"boot-args", "-v"}}), 5);
     std::vector<size_t> positions;
-    for (size_t at = 0; at < kHeader; ++at) positions.push_back(at);
+    for (size_t at = 0; at < kHeader; ++at)
+        positions.push_back(at);
     positions.insert(positions.end(), {kHeader, kHeader + 48, kHeader + kBank - 1});
     for (size_t at : positions) {
         Bytes damaged = good;
@@ -307,7 +317,8 @@ TEST(SwitchNVRAMStore, EveryFileLengthUnderAddressSanitizer)
         std::free(copy);
         const int expected = length >= slotBytes + kHeader + kBank ? 1 : length >= kHeader + kBank ? 0 : -1;
         ASSERT_EQ(picked, expected) << "length " << length;
-        if (picked >= 0) ASSERT_EQ(sequence, (uint64_t)picked + 1) << "length " << length;
+        if (picked >= 0)
+            ASSERT_EQ(sequence, (uint64_t)picked + 1) << "length " << length;
         ++cases;
     }
     EXPECT_EQ(cases, 24577u);

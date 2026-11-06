@@ -20,7 +20,8 @@ namespace switch_ios::test {
 inline size_t Index(const std::string &text, std::string_view needle, size_t from = 0)
 {
     const size_t at = text.find(needle, from);
-    if (at == std::string::npos) ADD_FAILURE() << "not found: " << needle;
+    if (at == std::string::npos)
+        ADD_FAILURE() << "not found: " << needle;
     return at;
 }
 
@@ -28,7 +29,8 @@ inline size_t Index(const std::string &text, std::string_view needle, size_t fro
 inline size_t RIndex(const std::string &text, std::string_view needle)
 {
     const size_t at = text.rfind(needle);
-    if (at == std::string::npos) ADD_FAILURE() << "not found: " << needle;
+    if (at == std::string::npos)
+        ADD_FAILURE() << "not found: " << needle;
     return at;
 }
 
@@ -57,7 +59,8 @@ inline std::vector<std::string> LinesMatching(const std::string &text, const std
     std::vector<std::string> lines;
     std::istringstream in(text);
     for (std::string line; std::getline(in, line);)
-        if (std::regex_search(line, re)) lines.push_back(line);
+        if (std::regex_search(line, re))
+            lines.push_back(line);
     return lines;
 }
 

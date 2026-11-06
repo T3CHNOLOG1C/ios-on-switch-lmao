@@ -20,8 +20,10 @@ enum AdrenoRasterFlags {
     AdrenoRasterPointQuad = 2048u,
     AdrenoRasterPointSmooth = 4096u
 };
+
 #define ADRENO_RASTER_FLAGS     8191u
 #define ADRENO_RASTER_MAX_WORDS 60u
+
 /* polygon_mode: 1 points, 2 lines, 3 triangles. Fixed-point sizes are
  * explicit hardware units: point_size_q4 / 16 pixels, line_width_q1 / 2
  * pixels. The caller performs any API float quantization. Offset values
@@ -31,6 +33,7 @@ struct AdrenoRasterState {
     uint32_t flags, polygon_mode, point_size_q4, line_width_q1;
     uint32_t offset_scale_bits, offset_units_bits, offset_clamp_bits, reserved;
 };
+
 enum AdrenoRasterStatus {
     AdrenoRasterOK,
     AdrenoRasterArgument,
@@ -38,6 +41,7 @@ enum AdrenoRasterStatus {
     AdrenoRasterCapacity,
     AdrenoRasterAlias
 };
+
 struct AdrenoRasterResult {
     uint32_t status, words, registers;
 };

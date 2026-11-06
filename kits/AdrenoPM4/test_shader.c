@@ -19,11 +19,13 @@ static unsigned positives, refusals;
 static struct AdrenoShaderState state = {
     ADRENO_A740_CHIP_ID, AdrenoConstantVertex, 128, 1, 0, -1, 0, 1, 0, 0, 0, 0, 0, 0, 0};
 static struct AdrenoShaderMapping mapping = {1, UINT64_C(0x100000000), 4096, 0, 12, 1};
+
 static void reset(void)
 {
     memset(out, 0x6b, sizeof(out));
     memcpy(before, out, sizeof(out));
 }
+
 static void positive(void)
 {
     reset();
@@ -65,18 +67,25 @@ static void positive(void)
                   A6XX_SP_PS_CNTL_0_BRANCHSTACK(state.branch_stack_hw) |
                   A6XX_SP_PS_CNTL_0_THREADSIZE(state.double_threadsize ? THREAD128 : THREAD64) |
                   A6XX_SP_PS_CNTL_0_INOUTREGOVERLAP;
-        if (state.input_words) control |= A6XX_SP_PS_CNTL_0_VARYING;
-        if (state.need_full_quad) control |= A6XX_SP_PS_CNTL_0_LODPIXMASK;
-        if (state.need_pixel_lod) control |= A6XX_SP_PS_CNTL_0_PIXLODENABLE;
-        if (state.merged_registers) control |= A6XX_SP_PS_CNTL_0_MERGEDREGS;
-        if (state.early_preamble) control |= A6XX_SP_PS_CNTL_0_EARLYPREAMBLE;
+        if (state.input_words)
+            control |= A6XX_SP_PS_CNTL_0_VARYING;
+        if (state.need_full_quad)
+            control |= A6XX_SP_PS_CNTL_0_LODPIXMASK;
+        if (state.need_pixel_lod)
+            control |= A6XX_SP_PS_CNTL_0_PIXLODENABLE;
+        if (state.merged_registers)
+            control |= A6XX_SP_PS_CNTL_0_MERGEDREGS;
+        if (state.early_preamble)
+            control |= A6XX_SP_PS_CNTL_0_EARLYPREAMBLE;
     } else {
         assert(regs[2] == REG_A6XX_SP_VS_CNTL_0 && regs[3] == REG_A6XX_SP_VS_INSTR_SIZE &&
                regs[5] == REG_A6XX_SP_VS_BASE && regs[12] == REG_A7XX_SP_VS_VGS_CNTL);
         control = A6XX_SP_VS_CNTL_0_FULLREGFOOTPRINT(state.max_full_register + 1) |
                   A6XX_SP_VS_CNTL_0_BRANCHSTACK(state.branch_stack_hw);
-        if (state.merged_registers) control |= A6XX_SP_VS_CNTL_0_MERGEDREGS;
-        if (state.early_preamble) control |= A6XX_SP_VS_CNTL_0_EARLYPREAMBLE;
+        if (state.merged_registers)
+            control |= A6XX_SP_VS_CNTL_0_MERGEDREGS;
+        if (state.early_preamble)
+            control |= A6XX_SP_VS_CNTL_0_EARLYPREAMBLE;
     }
 #else
     control = (uint32_t)(state.max_full_register + 1) << 7 | state.branch_stack_hw << 13;
@@ -89,10 +98,12 @@ static void positive(void)
     assert(values[2] == control && values[3] == state.instruction_groups && !values[4]);
     uint64_t address = mapping.base + mapping.shader_offset;
     assert(values[5] == (uint32_t)address && values[6] == address >> 32);
-    for (unsigned i = 7; i < 13; i++) assert(!values[i]);
+    for (unsigned i = 7; i < 13; i++)
+        assert(!values[i]);
     assert(!memcmp(out + 24, before + 24, sizeof(out) - 24 * 4));
     ++positives;
 }
+
 static void rejected(const struct AdrenoShaderState *s, const struct AdrenoShaderMapping *m, uint32_t *destination,
                      size_t capacity, unsigned expected)
 {
@@ -101,6 +112,7 @@ static void rejected(const struct AdrenoShaderState *s, const struct AdrenoShade
     assert(r.status == expected && !r.words && !r.registers && !memcmp(out, before, sizeof(out)));
     ++refusals;
 }
+
 int main(void)
 {
     for (unsigned profile = 0; profile < 2; profile++) {
@@ -169,43 +181,105 @@ int main(void)
     for (unsigned i = 0; i < 19; i++) {
         struct AdrenoShaderState bad = state;
         switch (i) {
-        case 0: bad.chip_id ^= UINT64_C(1) << 63; break;
-        case 1: bad.stage = AdrenoConstantCompute; break;
-        case 2: bad.binary_bytes = 0; break;
-        case 3: bad.binary_bytes = 127; break;
-        case 4: bad.binary_bytes = 1024 * 1024 + 128; break;
-        case 5: bad.instruction_groups = 0; break;
-        case 6: bad.max_full_register = 63; break;
-        case 7: bad.max_full_register = -2; break;
-        case 8: bad.max_half_register = 0; break;
-        case 9: bad.branch_stack_hw = 1; break;
-        case 10: bad.branch_stack_hw = 128; break;
-        case 11: bad.merged_registers = 2; break;
-        case 12: bad.early_preamble = 2; break;
-        case 13: bad.double_threadsize = 2; break;
-        case 14: bad.input_words = 129; break;
-        case 15: bad.need_full_quad = 1; break;
-        case 16: bad.private_bytes = 16; break;
-        case 17: bad.constant_data_bytes = 16; break;
-        default: bad.instruction_groups = 2; break;
+        case 0:
+            bad.chip_id ^= UINT64_C(1) << 63;
+            break;
+        case 1:
+            bad.stage = AdrenoConstantCompute;
+            break;
+        case 2:
+            bad.binary_bytes = 0;
+            break;
+        case 3:
+            bad.binary_bytes = 127;
+            break;
+        case 4:
+            bad.binary_bytes = 1024 * 1024 + 128;
+            break;
+        case 5:
+            bad.instruction_groups = 0;
+            break;
+        case 6:
+            bad.max_full_register = 63;
+            break;
+        case 7:
+            bad.max_full_register = -2;
+            break;
+        case 8:
+            bad.max_half_register = 0;
+            break;
+        case 9:
+            bad.branch_stack_hw = 1;
+            break;
+        case 10:
+            bad.branch_stack_hw = 128;
+            break;
+        case 11:
+            bad.merged_registers = 2;
+            break;
+        case 12:
+            bad.early_preamble = 2;
+            break;
+        case 13:
+            bad.double_threadsize = 2;
+            break;
+        case 14:
+            bad.input_words = 129;
+            break;
+        case 15:
+            bad.need_full_quad = 1;
+            break;
+        case 16:
+            bad.private_bytes = 16;
+            break;
+        case 17:
+            bad.constant_data_bytes = 16;
+            break;
+        default:
+            bad.instruction_groups = 2;
+            break;
         }
         rejected(&bad, &mapping, out, 128, AdrenoShaderProfile);
     }
     for (unsigned i = 0; i < 12; i++) {
         struct AdrenoShaderMapping bad = mapping;
         switch (i) {
-        case 0: bad.context = 0; break;
-        case 1: bad.base = 0; break;
-        case 2: bad.base = UINT64_C(1) << 48; break;
-        case 3: bad.bytes = 0; break;
-        case 4: bad.bytes = UINT64_MAX; break;
-        case 5: bad.base++; break;
-        case 6: bad.bytes--; break;
-        case 7: bad.page_shift = 14; break;
-        case 8: bad.readonly = 0; break;
-        case 9: bad.shader_offset = 1; break;
-        case 10: bad.shader_offset = 8192; break;
-        default: bad.shader_offset = 4096; break;
+        case 0:
+            bad.context = 0;
+            break;
+        case 1:
+            bad.base = 0;
+            break;
+        case 2:
+            bad.base = UINT64_C(1) << 48;
+            break;
+        case 3:
+            bad.bytes = 0;
+            break;
+        case 4:
+            bad.bytes = UINT64_MAX;
+            break;
+        case 5:
+            bad.base++;
+            break;
+        case 6:
+            bad.bytes--;
+            break;
+        case 7:
+            bad.page_shift = 14;
+            break;
+        case 8:
+            bad.readonly = 0;
+            break;
+        case 9:
+            bad.shader_offset = 1;
+            break;
+        case 10:
+            bad.shader_offset = 8192;
+            break;
+        default:
+            bad.shader_offset = 4096;
+            break;
         }
         rejected(&state, &bad, out, 128, AdrenoShaderMappingError);
     }

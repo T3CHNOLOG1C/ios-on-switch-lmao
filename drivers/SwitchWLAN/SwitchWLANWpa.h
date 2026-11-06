@@ -47,11 +47,27 @@ public:
     void init(const uint8_t pmk[32], const uint8_t spa[6], Random random);
     void setIe(const uint8_t *ie, size_t length);  // the RSN element our association request carried
     void wipe();                                   // keys and nonces cleared
-    bool hasAa() const { return haveAa_; }
-    const uint8_t *aa() const { return aa_; }
+
+    bool hasAa() const
+    {
+        return haveAa_;
+    }
+
+    const uint8_t *aa() const
+    {
+        return aa_;
+    }
+
     // Message 1 answered but no valid message 3: what a wrong passphrase looks like.
-    bool unconfirmed() const { return haveTptk_ && !(havePtk_ && sameKey(ptk_, tptk_)); }
-    bool keyed() const { return havePtk_ && haveGtk_; }
+    bool unconfirmed() const
+    {
+        return haveTptk_ && !(havePtk_ && sameKey(ptk_, tptk_));
+    }
+
+    bool keyed() const
+    {
+        return havePtk_ && haveGtk_;
+    }
 
     // nullptr when `step` holds what to do; else why the frame was dropped (nothing to do).
     const char *receive(const uint8_t *frame, size_t length, Step &step);

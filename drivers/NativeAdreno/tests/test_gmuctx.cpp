@@ -13,24 +13,29 @@
             std::exit(1);                                        \
         }                                                        \
     } while (0)
+
 IOReturn NativeAdrenoQueryCpu4K(NativeAdrenoCpuState *state)
 {
     CHECK(state);
     *state = {};
     return kIOReturnSuccess;
 }
+
 IOReturn NativeAdrenoMaintainOwnedPages(void *mapping, size_t bytes, NativeAdrenoCacheOperation op)
 {
     CHECK(mapping && bytes && op <= NativeAdrenoInvalidate);
     return kIOReturnSuccess;
 }
+
 #define SMMU_BYTES 0x40000
 alignas(8) static uint32_t mmio[SMMU_BYTES / 4];
+
 static struct {
     unsigned ignore_writes_from;
     size_t frozen;
     unsigned tbi;
 } peer;
+
 static void reset()
 {
     std::memset(mmio, 0, sizeof(mmio));
@@ -39,50 +44,63 @@ static void reset()
     mmio[0x20 / 4] = 0x4c017e18;
     mmio[0x24 / 4] = 0x40000016;
     mmio[0x28 / 4] = 0x1433;
-    for (unsigned i = 0; i < 24; ++i) mmio[(0xc00 + 4 * i) / 4] = 0x20000; /* every S2CR FAULT, every SMR invalid */
+    for (unsigned i = 0; i < 24; ++i)
+        mmio[(0xc00 + 4 * i) / 4] = 0x20000; /* every S2CR FAULT, every SMR invalid */
 }
+
 static int read32(void *, size_t at, uint32_t *v)
 {
     CHECK(at % 4 == 0 && at <= SMMU_BYTES - 4);
     *v = mmio[at / 4];
     return 0;
 }
+
 static int read64(void *, size_t at, uint64_t *v)
 {
     CHECK(at % 8 == 0 && at <= SMMU_BYTES - 8);
     std::memcpy(v, mmio + at / 4, 8);
     return 0;
 }
+
 static int write32(void *, size_t at, uint32_t v)
 {
     CHECK(at % 4 == 0 && at <= SMMU_BYTES - 4);
-    if (peer.frozen && at == peer.frozen) return 0; /* accepted on the bus, not stored */
+    if (peer.frozen && at == peer.frozen)
+        return 0; /* accepted on the bus, not stored */
     if ((at & 0xfff) == 0x58 && at >= 0x20000) {
         mmio[at / 4] &= ~v;
         return 0;
     } /* context FSR is write-one-to-clear */
-    if (peer.tbi && (at & 0xfff) == 0x10 && at >= 0x20000) v |= 0x60;  /* int-008: TCR2 reads TBI0/TBI1 as 1 */
-    if (peer.tbi && (at & 0xfff) == 0 && at >= 0x20000) v &= ~0x1000u; /* int-009: SCTLR.ASIDPNE reads 0 */
+    if (peer.tbi && (at & 0xfff) == 0x10 && at >= 0x20000)
+        v |= 0x60; /* int-008: TCR2 reads TBI0/TBI1 as 1 */
+    if (peer.tbi && (at & 0xfff) == 0 && at >= 0x20000)
+        v &= ~0x1000u; /* int-009: SCTLR.ASIDPNE reads 0 */
     mmio[at / 4] = v;
     return 0;
 }
+
 static int write64(void *, size_t at, uint64_t v)
 {
     CHECK(at % 8 == 0 && at <= SMMU_BYTES - 8);
-    if (peer.frozen && at == peer.frozen) return 0;
+    if (peer.frozen && at == peer.frozen)
+        return 0;
     std::memcpy(mmio + at / 4, &v, 8);
     return 0;
 }
+
 static int barrier(void *)
 {
     return 0;
 }
+
 static unsigned steps[16], step_count;
+
 static void progress(uint32_t step)
 {
     CHECK(step_count < 16);
     steps[step_count++] = step;
 }
+
 int main()
 {
     const ArmSmmu4KIo io{&peer, SMMU_BYTES, read32, read64, write32, write64, barrier};
@@ -95,7 +113,8 @@ int main()
         CHECK(context.bringUp(&io, 1, 1, 2, 5, progress, &report) == kIOReturnSuccess);
         CHECK(report.step == NativeAdrenoGmuContext::Ready && report.status == kIOReturnSuccess && context.ready());
         CHECK(step_count == 7);
-        for (unsigned i = 0; i < 7; ++i) CHECK(steps[i] == i + 1);
+        for (unsigned i = 0; i < 7; ++i)
+            CHECK(steps[i] == i + 1);
         CHECK(report.program_enabled && report.program_readback_valid && report.routes_verified == 1);
         CHECK(report.mismatch == 0);
         CHECK(report.id1 == 0x40000016 && report.spans == 5);
@@ -223,19 +242,23 @@ int main()
         "context write, 1 enabled-bank refusal, 1 36-bit OAS context, 1 sheng-observed ID2/TCR2 context, 2 ID2 "
         "refusals, 5 argument refusals and 1 board entry with a stuck fault status over a software SMMU peer\n");
 }
+
 /* Physical-page maintenance (imported BOs): record it; no host page is touched. */
 /* Host double: the page attribute change of user BOs has no host equivalent (no host page is touched). */
 IOReturn NativeAdrenoSetPagesCacheMode(const NativeAdrenoPhysicalSpan *spans, size_t count, bool)
 {
     return spans && count ? kIOReturnSuccess : kIOReturnBadArgument;
 }
+
 IOReturn NativeAdrenoReassertWriteCombined(const NativeAdrenoPhysicalSpan *spans, size_t count, uint32_t *reset)
 {
     return spans && count && reset ? kIOReturnSuccess : kIOReturnBadArgument;
 }
+
 IOReturn NativeAdrenoMaintainPhysicalPages(uint64_t physical, size_t bytes, NativeAdrenoCacheOperation op)
 {
-    if (!physical || !bytes || ((physical | bytes) & 4095) || op > NativeAdrenoInvalidate) std::abort();
+    if (!physical || !bytes || ((physical | bytes) & 4095) || op > NativeAdrenoInvalidate)
+        std::abort();
     ++fixture.physical_calls;
     fixture.physical_bytes += bytes;
     return kIOReturnSuccess;

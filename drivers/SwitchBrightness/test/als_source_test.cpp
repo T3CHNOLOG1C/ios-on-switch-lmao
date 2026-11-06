@@ -71,14 +71,16 @@ TEST(SwitchALSSource, I2C2BusAndPads)
     const std::string i2c = SourceText("../../TegraI2C/TegraI2C.cpp");
     const auto table = busTable(i2c);
     std::vector<int> buses;
-    for (const auto &[bus, fields] : table) buses.push_back(bus);
+    for (const auto &[bus, fields] : table)
+        buses.push_back(bus);
     ASSERT_EQ(buses, (std::vector<int>{1, 2, 3, 4, 5}));
     // BusInfo: regs, reset, enable, source, resetState, enableState, bit, divider, scl, sda, spi, sclDrive, sdaDrive,
     // pullDown (then chained, dmaRequest, dmaChannel).
     const std::vector<std::string> &row = table.at(2);
     ASSERT_GE(row.size(), 14u);
     std::vector<uint64_t> f;
-    for (size_t i = 0; i < 14; ++i) f.push_back(std::stoull(row[i], nullptr, 0));
+    for (size_t i = 0; i < 14; ++i)
+        f.push_back(std::stoull(row[i], nullptr, 0));
     const uint64_t regs = f[0], reset = f[1], enable = f[2], source = f[3], resetState = f[4], enableState = f[5];
     const uint64_t bit = f[6], divider = f[7], scl = f[8], sda = f[9], spi = f[10], sclDrive = f[11], sdaDrive = f[12];
     const uint64_t pullDown = f[13];

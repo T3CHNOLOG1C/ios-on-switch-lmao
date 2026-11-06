@@ -48,7 +48,8 @@ static inline uint32_t switch_audio_ring_mix(int32_t *ring, uint32_t ring_frames
     const uint32_t at = (uint32_t)(first % ring_frames);
     const uint32_t run = total < ring_frames - at ? total : ring_frames - at;
     switch_audio_mix_s32(ring + (uint64_t)channels * at, src, channels * run, gain);
-    if (run < total) switch_audio_mix_s32(ring, src + (uint64_t)channels * run, channels * (total - run), gain);
+    if (run < total)
+        switch_audio_mix_s32(ring, src + (uint64_t)channels * run, channels * (total - run), gain);
     return run;
 }
 

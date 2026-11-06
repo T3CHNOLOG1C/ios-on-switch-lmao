@@ -31,9 +31,11 @@ __attribute__((format(printf, 1, 2))) std::string message(const char *format, ..
     va_end(ap);
     return text;
 }
+
 #define CHECK(cond, ...) EXPECT_TRUE(cond) << message(__VA_ARGS__)
 
 uint64_t state = 0x9e3779b97f4a7c15ull;
+
 unsigned rnd(unsigned n)
 {
     state ^= state << 13;
@@ -46,10 +48,13 @@ struct Dc {
     int assembly = 0, active = 0;
     bool request = false;
     bool deviant = false;  // ignores a START_ADDR store while a request is out
+
     void storeStart(int i)
     {
-        if (!(deviant && request)) assembly = i;
+        if (!(deviant && request))
+            assembly = i;
     }
+
     void boundary()
     {
         if (request) {
@@ -84,13 +89,17 @@ struct Sim {
         dc.deviant = deviant;
     }
 
-    bool latchable(int i) const { return i == dc.active || (dc.request && i == dc.assembly); }
+    bool latchable(int i) const
+    {
+        return i == dc.active || (dc.request && i == dc.assembly);
+    }
 
     void boundary()
     {
         dc.boundary();
         ++boundaries;
-        if (readyBefore > mustShow) mustShow = readyBefore;
+        if (readyBefore > mustShow)
+            mustShow = readyBefore;
         CHECK(dc.deviant || seq[dc.active] >= mustShow,
               "boundary %llu scans frame %llu, but frame %llu was ready before it", (unsigned long long)boundaries,
               (unsigned long long)seq[dc.active], (unsigned long long)mustShow);
@@ -98,11 +107,14 @@ struct Sim {
               copying);
         ++boundariesPending;
     }
+
     // A boundary may land anywhere a store can be torn from the next.
     void maybeBoundary()
     {
-        if (torn && !rnd(7)) boundary();
+        if (torn && !rnd(7))
+            boundary();
     }
+
     void write(int t)
     {
         CHECK(t != TegraScanoutRing::kNone, "no target");
@@ -110,6 +122,7 @@ struct Sim {
               "frame written into buffer %d, which DC A scans (%d) or may take (assembly %d, request %d)", t, dc.active,
               dc.assembly, dc.request);
     }
+
     // NativeLegacyDisplay::writeFlip: START_ADDR, then UPDATE and ACT_REQ.
     void writeFlip(int t)
     {
@@ -117,8 +130,10 @@ struct Sim {
         dc.storeStart(t);
         maybeBoundary();
         dc.request = true;
-        if (seq[t] > readyBefore) readyBefore = seq[t];
+        if (seq[t] > readyBefore)
+            readyBefore = seq[t];
     }
+
     void flip(int t)
     {
         switch (ring.ready(t)) {
@@ -130,16 +145,20 @@ struct Sim {
             ++replaced;
             CHECK(buffers == 3 && ring.replace, "a flip was replaced with %u buffers or after the fallback", buffers);
             break;
-        case TegraScanoutRing::kFlip: break;
+        case TegraScanoutRing::kFlip:
+            break;
         }
         writeFlip(t);
     }
+
     void kick()
     {
-        if (copying != TegraScanoutRing::kNone || !queued) return;
+        if (copying != TegraScanoutRing::kNone || !queued)
+            return;
         const int t = ring.target();
         if (t == TegraScanoutRing::kNone) {
-            if (!deferred) ++waited;
+            if (!deferred)
+                ++waited;
             deferred = true;
             return;
         }
@@ -156,15 +175,18 @@ struct Sim {
         } else
             flip(t);
     }
+
     void arrive()
     {
         newestQueued = ++arrived;
         ++queued;
         kick();
     }
+
     void copyDone()
     {
-        if (copying == TegraScanoutRing::kNone) return;
+        if (copying == TegraScanoutRing::kNone)
+            return;
         const int t = copying;
         CHECK(!latchable(t), "copy target %d became latchable before its flip", t);
         copying = TegraScanoutRing::kNone;
@@ -175,11 +197,14 @@ struct Sim {
             flip(t);
         kick();
     }
+
     void frameEndAction()
     {
-        if (!boundariesPending) return;
+        if (!boundariesPending)
+            return;
         boundariesPending = 0;
-        if (ring.pending == TegraScanoutRing::kNone) return;
+        if (ring.pending == TegraScanoutRing::kNone)
+            return;
         const int pending = ring.pending, superseded = ring.superseded, front = ring.front;
         const TegraScanoutRing::Latch latch = ring.latch(dc.active, dc.request);
         switch (latch) {
@@ -208,7 +233,8 @@ struct Sim {
                 shownAtRecovery = shown;
                 replacedAtRecovery = replaced;
                 const int again = ring.recover(dc.active);
-                if (again != TegraScanoutRing::kNone) writeFlip(again);
+                if (again != TegraScanoutRing::kNone)
+                    writeFlip(again);
             }
             return;
         }
@@ -216,13 +242,15 @@ struct Sim {
               ring.front, dc.active);
         if (latch != TegraScanoutRing::kWaiting) {
             const int held = ring.flipHeld();
-            if (held != TegraScanoutRing::kNone) writeFlip(held);
+            if (held != TegraScanoutRing::kNone)
+                writeFlip(held);
         }
         if (latch != TegraScanoutRing::kWaiting && deferred) {
             deferred = false;
             kick();
         }
     }
+
     void run(unsigned steps)
     {
         for (unsigned i = 0; i < steps; ++i) {
@@ -230,15 +258,22 @@ struct Sim {
             case 0:
             case 1:
                 boundary();
-                if (rnd(4)) frameEndAction();  // else folded: another event, or boundary, first
+                if (rnd(4))
+                    frameEndAction();  // else folded: another event, or boundary, first
                 break;
             case 2:
             case 3:
-            case 4: arrive(); break;
+            case 4:
+                arrive();
+                break;
             case 5:
             case 6:
-            case 7: copyDone(); break;
-            default: frameEndAction(); break;
+            case 7:
+                copyDone();
+                break;
+            default:
+                frameEndAction();
+                break;
             }
         }
     }
@@ -256,10 +291,13 @@ unsigned lateFramesAfterOneSlip(unsigned buffers)
         // the frame end action first (the latch), then the compositor's swap for this vsync, drawn a few ms after it
         s.frameEndAction();
         s.arrive();
-        if (frame != 10) s.copyDone();  // frame 10's copy finishes only after the next boundary
+        if (frame != 10)
+            s.copyDone();  // frame 10's copy finishes only after the next boundary
         s.boundary();
-        if (frame == 10) s.copyDone();
-        if (frame > 12 && s.seq[s.dc.active] < s.arrived) ++late;  // this vsync's frame is not what DC A scans
+        if (frame == 10)
+            s.copyDone();
+        if (frame > 12 && s.seq[s.dc.active] < s.arrived)
+            ++late;  // this vsync's frame is not what DC A scans
     }
     return late;
 }
@@ -273,7 +311,8 @@ TEST(ScanoutRing, TwoAndThreeBuffers)
             Sim s(buffers);
             s.run(4000);
             CHECK(s.shown > 100, "%u buffers, seed %u: only %llu presents", buffers, seed, (unsigned long long)s.shown);
-            if (buffers == 2) CHECK(s.replaced == 0, "double buffering replaced a flip");
+            if (buffers == 2)
+                CHECK(s.replaced == 0, "double buffering replaced a flip");
             if (buffers == 3 && seed == 1)
                 std::printf("3 buffers: %llu shown, %llu replaced, %llu collapsed, %llu waited of %llu boundaries\n",
                             (unsigned long long)s.shown, (unsigned long long)s.replaced,

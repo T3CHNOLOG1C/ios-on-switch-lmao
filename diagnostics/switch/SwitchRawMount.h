@@ -15,17 +15,19 @@ static int native_switch_raw_wait(const char *uuid, dev_t *device, char path[64]
     for (unsigned attempt = 0;; ++attempt) {
         uint64_t bytes = 0;
         int status = switch_raw_volume_status(uuid, device, path, 64, &bytes);
-        if (status == SWITCH_BLOCK_OK) return bytes ? 0 : EINVAL;
+        if (status == SWITCH_BLOCK_OK)
+            return bytes ? 0 : EINVAL;
         if (status != SWITCH_BLOCK_NOT_READY)
             return status == SWITCH_BLOCK_NOMEM ? ENOMEM : status == SWITCH_BLOCK_IO ? EIO : EINVAL;
-        if (attempt == 100) return ETIMEDOUT;
+        if (attempt == 100)
+            return ETIMEDOUT;
         struct timespec interval = {.tv_sec = 0, .tv_nsec = 100000000};
         (void)msleep((void *)&native_owner_cache_stage, NULL, PWAIT, "switchRaw", &interval);
     }
 }
 
 static int native_switch_raw_mount(proc_t p, user_addr_t scratch, const char *path, const char *device_path,
-                                     dev_t expected, int readonly, mount_t *observed_mount)
+                                   dev_t expected, int readonly, mount_t *observed_mount)
 {
     uint8_t payload[0x150] = {0};
     user64_addr_t spec = scratch + 0x160;
@@ -46,19 +48,23 @@ static int native_switch_raw_mount(proc_t p, user_addr_t scratch, const char *pa
         (error = copyout(payload, request.data, sizeof(payload))))
         return error;
     error = mount(p, &request, &result);
-    if (error) return error;
+    if (error)
+        return error;
     vnode_t root = NULLVP;
     error = vnode_lookup(path, 0, &root, vfs_context_current());
-    if (error) return error;
+    if (error)
+        return error;
     mount_t mounted = vnode_mount(root);
     vnode_t device = vfs_devvp(mounted);
     dev_t actual = device ? vnode_specrdev(device) : NODEV;
-    if (device) vnode_put(device);
+    if (device)
+        vnode_put(device);
     uint64_t actual_flags = vfs_flags(mounted);
     if (!vnode_isdir(root) || actual != expected || !!(actual_flags & MNT_RDONLY) != !!readonly ||
         (actual_flags & (MNT_IGNORE_OWNERSHIP | MNT_UNION)) || strcmp(vfs_statfs(mounted)->f_fstypename, "apfs"))
         error = EPERM;
-    if (!error && observed_mount) *observed_mount = mounted;
+    if (!error && observed_mount)
+        *observed_mount = mounted;
     vnode_put(root);
     return error;
 }
@@ -70,12 +76,16 @@ static int native_switch_raw_directory(proc_t p, user_addr_t scratch, const char
     if (error == ENOENT && create) {
         struct mkdir_args request = {.path = scratch + 0x900, .mode = 0755};
         int32_t result = 0;
-        if ((error = copyout(path, request.path, strlen(path) + 1))) return error;
-        if ((error = mkdir(p, &request, &result))) return error;
+        if ((error = copyout(path, request.path, strlen(path) + 1)))
+            return error;
+        if ((error = mkdir(p, &request, &result)))
+            return error;
         error = vnode_lookup(path, 0, &directory, vfs_context_current());
     }
-    if (error) return error;
-    if (vnode_mount(directory) != expected || !vnode_isdir(directory)) error = ENOTDIR;
+    if (error)
+        return error;
+    if (vnode_mount(directory) != expected || !vnode_isdir(directory))
+        error = ENOTDIR;
     vnode_put(directory);
     return error;
 }
@@ -99,13 +109,13 @@ static int native_switch_raw_union(proc_t p, user_addr_t scratch, const char *so
     return error;
 }
 
-#define SWITCH_RAW_STEP(step, call)                                        \
-    do {                                                                 \
-        error = (call);                                                  \
-        if (error) {                                                     \
+#define SWITCH_RAW_STEP(step, call)                                  \
+    do {                                                             \
+        error = (call);                                              \
+        if (error) {                                                 \
             printf("SwitchRawBoot: %s failed: %d\n", (step), error); \
-            return error;                                                \
-        }                                                                \
+            return error;                                            \
+        }                                                            \
     } while (0)
 
 /* Mount Preboot read-write, attach and mount the original System/App cryptex
@@ -116,7 +126,8 @@ static int native_switch_raw_cache_prepare(proc_t p, user_addr_t scratch, user_a
     mount_t os_mount = vnode_mount(original_root);
     vnode_t device = vfs_devvp(os_mount);
     dev_t os_device = device ? vnode_specrdev(device) : NODEV;
-    if (device) vnode_put(device);
+    if (device)
+        vnode_put(device);
     int error = 0;
     if (!(vfs_flags(os_mount) & MNT_RDONLY) || !native_verified_block_root_authorized(os_device)) {
         printf("SwitchRawBoot: root is not the read-only SD OS volume\n");
@@ -127,9 +138,9 @@ static int native_switch_raw_cache_prepare(proc_t p, user_addr_t scratch, user_a
     mount_t preboot_mount = NULL;
     SWITCH_RAW_STEP("Preboot volume lookup", native_switch_raw_wait(SWITCH_RAW_PREBOOT_UUID, &preboot_device, path));
     SWITCH_RAW_STEP("/private/preboot lookup",
-                  native_switch_raw_directory(p, scratch, "/private/preboot", os_mount, 0));
+                    native_switch_raw_directory(p, scratch, "/private/preboot", os_mount, 0));
     SWITCH_RAW_STEP("Preboot mount",
-                  native_switch_raw_mount(p, scratch, "/private/preboot", path, preboot_device, 0, &preboot_mount));
+                    native_switch_raw_mount(p, scratch, "/private/preboot", path, preboot_device, 0, &preboot_mount));
     static const char *const directories[] = {"/private/preboot/Cryptexes", "/private/preboot/Cryptexes/OS",
                                               "/private/preboot/Cryptexes/App"};
     for (unsigned i = 0; i < 3; ++i)
@@ -145,18 +156,18 @@ static int native_switch_raw_cache_prepare(proc_t p, user_addr_t scratch, user_a
         dev_t image_volume = NODEV;
         mount_t cryptex_mount = NULL;
         SWITCH_RAW_STEP(i ? "App cryptex attach" : "System cryptex attach",
-                      switch_cryptex_attach(i, preboot_device, &image_volume, path, sizeof(path)));
+                        switch_cryptex_attach(i, preboot_device, &image_volume, path, sizeof(path)));
         error = native_switch_raw_mount(p, scratch, directories[i + 1], path, image_volume, 1, &cryptex_mount);
         /* r17-launch: a volume on the image's direct read map that does not mount is mounted through DiskImages. */
         if (error && !switch_cryptex_fallback(i, &image_volume, path, sizeof(path))) {
-            printf("SwitchRawBoot: %s cryptex mount on its direct read map failed: %d\n", i ? "App" : "System",
-                   error);
+            printf("SwitchRawBoot: %s cryptex mount on its direct read map failed: %d\n", i ? "App" : "System", error);
             error = native_switch_raw_mount(p, scratch, directories[i + 1], path, image_volume, 1, &cryptex_mount);
         }
         SWITCH_RAW_STEP(i ? "App cryptex mount" : "System cryptex mount", error);
         native_owner_cryptex_mount[i] = cryptex_mount;
         switch_cryptex_mounted(i, cryptex_mount);  // SwitchCryptex.cpp: the cluster layer's record, the prefetch
-        if (!i) cache_device = image_volume;
+        if (!i)
+            cache_device = image_volume;
     }
     native_owner_cryptex_host = preboot_mount;
     /* dyld looks for code that only the OS cryptex has under the cryptex prefix that
@@ -207,6 +218,7 @@ static int native_switch_raw_cache_prepare(proc_t p, user_addr_t scratch, user_a
  * without root); code in them still needs its CDHash in the trust cache, which the packager adds as a module of its
  * own. A directory with nothing deployed is skipped; a failed union is logged and boot continues. */
 #include <pexpert/device_tree.h>
+
 static void native_switch_raw_overlay(proc_t p, user_addr_t scratch)
 {
     DTEntry chosen;
@@ -233,21 +245,26 @@ static void native_switch_raw_overlay(proc_t p, user_addr_t scratch)
             for (char *name = gate; name && off;) {
                 char *next = strchr(name, '|');
                 uint32_t value = 0;
-                if (next) *next++ = '\0';
+                if (next)
+                    *next++ = '\0';
                 off = PE_parse_boot_argn(name, &value, sizeof(value)) && value;
                 name = next;
             }
-            if (off) continue;
+            if (off)
+                continue;
         }
         snprintf(source, sizeof(source), "/private/var/Switch/overlay%s", directory);
         vnode_t probe = NULLVP;
         int error = vnode_lookup(source, 0, &probe, vfs_context_current());
-        if (error == ENOENT) continue;
+        if (error == ENOENT)
+            continue;
         if (!error) {
-            if (!vnode_isdir(probe)) error = ENOTDIR;
+            if (!vnode_isdir(probe))
+                error = ENOTDIR;
             vnode_put(probe);
         }
-        if (!error) error = native_switch_raw_union(p, scratch, source, directory);
+        if (!error)
+            error = native_switch_raw_union(p, scratch, source, directory);
         if (error)
             printf("SwitchOverlay: %s over %s failed: %d\n", source, directory, error);
         else

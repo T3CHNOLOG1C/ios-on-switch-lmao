@@ -9,16 +9,19 @@ typedef struct {
     unsigned slot;
     uint16_t sid;
 } ArmSmmu4KStream;
+
 typedef struct {
     unsigned attempted, attached, poisoned, count, bank;
     uint32_t id0, scr0;
     ArmSmmu4KStream streams[8];
 } ArmSmmu4KStreamState;
+
 typedef struct {
     unsigned phase, reads, writes, streams_verified, streams_faulted, must_retain_resources;
     uint32_t id0, scr0, global_fault;
     ArmSmmu4KProgramResult context;
 } ArmSmmu4KStreamResult;
+
 /* Read-only preflight of global fault policy, target faulting slots and all
  * conflicting live routes, including unrelated SIDs using the selected bank.
  * Intended before programming a disabled context under the same global lease. */

@@ -36,7 +36,11 @@ extern const uint8_t awdl_bssid[6];  // 00:25:00:ff:94:73, address 3 of every AW
 extern const uint8_t awdl_oui[3];    // 00:17:f2 (Apple)
 
 // Action frame subtypes and TLV types (Stute et al. §4; Wireshark's awdl dissector)
-enum { AWDL_SUBTYPE_PSF = 0, AWDL_SUBTYPE_MIF = 3 };
+enum {
+    AWDL_SUBTYPE_PSF = 0,
+    AWDL_SUBTYPE_MIF = 3
+};
+
 enum {
     AWDL_TLV_SERVICE_REQUEST = 1,
     AWDL_TLV_SERVICE_RESPONSE = 2,
@@ -52,8 +56,14 @@ enum {
     AWDL_TLV_VERSION = 21,
     AWDL_TLV_ELECTION_PARAMS_V2 = 24,
 };
+
 // Channel sequence encodings
-enum { AWDL_CHAN_ENC_SIMPLE = 0, AWDL_CHAN_ENC_LEGACY = 1, AWDL_CHAN_ENC_OPCLASS = 3 };
+enum {
+    AWDL_CHAN_ENC_SIMPLE = 0,
+    AWDL_CHAN_ENC_LEGACY = 1,
+    AWDL_CHAN_ENC_OPCLASS = 3
+};
+
 // Data path state flags (subset this stack writes and reads)
 enum {
     AWDL_DPS_INFRA_INFO = 0x0001,
@@ -71,6 +81,7 @@ struct awdl_chan {
     uint8_t number;
     uint8_t opclass;
 };
+
 uint16_t awdl_chan_freq(struct awdl_chan c);  // MHz of the primary 20 MHz channel; 0 for an empty slot
 uint8_t awdl_chan_primary(struct awdl_chan c);
 // The global operating class (IEEE 802.11 Annex E, table E-4) of a 20 MHz channel: 81 (0x51) for 1-13, 82 for 14,
@@ -86,6 +97,7 @@ struct awdl_chanseq {
     uint16_t fill_channel;
     struct awdl_chan chan[AWDL_SEQ_SLOTS];
 };
+
 struct awdl_sync_params {
     uint8_t tx_channel;
     uint16_t tx_counter;  // TU until the sender's next AW starts (wifip2pd: "downCounter")
@@ -99,6 +111,7 @@ struct awdl_sync_params {
     struct awdl_chanseq seq;
     uint8_t has_seq;
 };
+
 struct awdl_election_v1 {
     uint8_t flags;
     uint16_t id;
@@ -106,10 +119,12 @@ struct awdl_election_v1 {
     uint8_t master[6];
     uint32_t master_metric, self_metric;
 };
+
 struct awdl_election_v2 {
     uint8_t root[6], parent[6];
     uint32_t root_counter, hops, root_metric, self_metric, id, flags, self_counter;
 };
+
 struct awdl_data_path_state {
     uint16_t flags;
     char country[3];
@@ -191,10 +206,19 @@ struct awdl_config {
     uint8_t fw_api;
     uint32_t fw_absent;
 };
-enum { AWDL_BACKEND_SOFT = 0, AWDL_BACKEND_NATIVE = 1 };
+
+enum {
+    AWDL_BACKEND_SOFT = 0,
+    AWDL_BACKEND_NATIVE = 1
+};
+
 void awdl_config_default(struct awdl_config *c, const uint8_t addr[6]);
 
-enum awdl_role { AWDL_ROLE_OFF, AWDL_ROLE_ROOT, AWDL_ROLE_FOLLOWER };
+enum awdl_role {
+    AWDL_ROLE_OFF,
+    AWDL_ROLE_ROOT,
+    AWDL_ROLE_FOLLOWER
+};
 
 struct awdl_peer {
     uint8_t addr[6];
@@ -255,6 +279,7 @@ void awdl_core_rx_eth(struct awdl_core *c, const uint8_t *eth, size_t len, uint6
 void awdl_core_set_infra(struct awdl_core *c, uint16_t infra_mhz, uint64_t now);
 // The AWDL interface's firmware index once its WLC_E_IF arrived, -1 before.
 int awdl_core_fw_ifidx(const struct awdl_core *c);
+
 // The native schedule follows the AWDL states macOS was measured in (Stute, Kreitschmann, Hollick, MobiCom 2018,
 // table 2; p the 5 GHz social channel, s channel 6, i the access point's):
 //   idle (enabled, discoverable, browsing, no transfer): "Low Power", p in slots 0, 9, 10 and s in 8, the least any
@@ -263,7 +288,11 @@ int awdl_core_fw_ifidx(const struct awdl_core *c);
 //     (the paper: "at least 25 % of the time is reserved for the AP connection if the node is connected to an AP");
 //   transfer while unassociated: "Data", every slot AWDL's.
 // Bit n: slot n carries the 5 GHz social channel (slot 8 always carries channel 6).
-enum awdl_mode { AWDL_MODE_IDLE = 0, AWDL_MODE_TRANSFER = 1 };
+enum awdl_mode {
+    AWDL_MODE_IDLE = 0,
+    AWDL_MODE_TRANSFER = 1
+};
+
 #define AWDL_SLOTS_IDLE           0x0601u  // 0, 9, 10
 #define AWDL_SLOTS_TRANSFER_INFRA 0x3e3fu  // 0-5, 9-13
 #define AWDL_SLOTS_TRANSFER_ALL   0xfeffu  // all but 8
@@ -318,6 +347,7 @@ struct awdl_tsf_clock {
     int32_t ppm_x16;  // radio TSF rate relative to the host clock, in 1/16 ppm
     uint8_t valid;
 };
+
 void awdl_tsf_clock_anchor(struct awdl_tsf_clock *k, uint64_t tsf, uint64_t host_ns);
 uint64_t awdl_tsf_clock_now(const struct awdl_tsf_clock *k, uint64_t host_ns);
 uint64_t awdl_tsf_clock_host(const struct awdl_tsf_clock *k, uint64_t tsf);  // host ns at which the TSF reaches tsf

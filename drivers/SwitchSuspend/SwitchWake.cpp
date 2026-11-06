@@ -43,18 +43,21 @@ uint64_t gLastSource[SWITCH_WAKE_SOURCES], gLastShot;        // gLock
 char gShotWhy[96];                                           // gLock
 bool gCopiedPrevious, gWriteFailed;                          // gWriteLock
 char gRender[SWITCH_POWER_LINES * SWITCH_POWER_LINE + 256];  // gWriteLock
-switch_bt_buttons gButtons;  // SwitchBluetooth's receive path only (its ACL packets and link events)
-bool gButtonsLogged;         // the same: the first controller report of the boot was logged
+switch_bt_buttons gButtons;   // SwitchBluetooth's receive path only (its ACL packets and link events)
+bool gButtonsLogged;          // the same: the first controller report of the boot was logged
 volatile bool gButtonsStale;  // a client came or went: every connection's buttons go (switch_wake_bt_reset)
-uint64_t gReconnectUntil;      // switch_bt_reconnect_open's window after a Bluetooth wake (ns; atomic, 0 closed)
+uint64_t gReconnectUntil;     // switch_bt_reconnect_open's window after a Bluetooth wake (ns; atomic, 0 closed)
 
 IOLock *once(IOLock *volatile *slot)
 {
     IOLock *lock = __atomic_load_n(slot, __ATOMIC_ACQUIRE);
-    if (lock) return lock;
+    if (lock)
+        return lock;
     IOLock *fresh = IOLockAlloc(), *expected = nullptr;
-    if (!fresh) return nullptr;
-    if (__atomic_compare_exchange_n(slot, &expected, fresh, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) return fresh;
+    if (!fresh)
+        return nullptr;
+    if (__atomic_compare_exchange_n(slot, &expected, fresh, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
+        return fresh;
     IOLockFree(fresh);
     return expected;
 }
@@ -62,11 +65,14 @@ IOLock *once(IOLock *volatile *slot)
 thread_call_t onceCall(thread_call_t volatile *slot, thread_call_func_t func)
 {
     thread_call_t call = __atomic_load_n(slot, __ATOMIC_ACQUIRE);
-    if (call) return call;
+    if (call)
+        return call;
     thread_call_t fresh = thread_call_allocate_with_options(func, nullptr, THREAD_CALL_PRIORITY_KERNEL, 0),
                   expected = nullptr;
-    if (!fresh) return nullptr;
-    if (__atomic_compare_exchange_n(slot, &expected, fresh, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) return fresh;
+    if (!fresh)
+        return nullptr;
+    if (__atomic_compare_exchange_n(slot, &expected, fresh, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
+        return fresh;
     thread_call_free(fresh);
     return expected;
 }
@@ -103,11 +109,13 @@ int writeFile(const char *path, const void *bytes, size_t length, int mode, int 
     vfs_context_t ctx = vfs_context_kernel();
     vnode_t vp = NULLVP;
     int error = vnode_open(path, O_CREAT | FWRITE | O_NOFOLLOW, mode, 0, &vp, ctx);
-    if (error) return error;
+    if (error)
+        return error;
     int resid = 0;
     error = vn_rdwr(UIO_WRITE, vp, (caddr_t)(uintptr_t)bytes, (int)length, 0, UIO_SYSSPACE, IO_NOAUTH | IO_UNIT,
                     vfs_context_ucred(ctx), &resid, vfs_context_proc(ctx));
-    if (!error && resid) error = EIO;
+    if (!error && resid)
+        error = EIO;
     if (!error) {
         struct vnode_attr va;
         VATTR_INIT(&va);
@@ -118,7 +126,8 @@ int writeFile(const char *path, const void *bytes, size_t length, int mode, int 
         }
         error = vnode_setattr(vp, &va, ctx);
     }
-    if (!error) error = VNOP_FSYNC(vp, MNT_WAIT, ctx);
+    if (!error)
+        error = VNOP_FSYNC(vp, MNT_WAIT, ctx);
     const int closeError = vnode_close(vp, FWRITE, ctx);
     return error ? error : closeError;
 }
@@ -128,7 +137,8 @@ void copyPrevious()
 {
     vfs_context_t ctx = vfs_context_kernel();
     vnode_t vp = NULLVP;
-    if (vnode_open(kJournal, FREAD | O_NOFOLLOW, 0, 0, &vp, ctx)) return;  // none yet
+    if (vnode_open(kJournal, FREAD | O_NOFOLLOW, 0, 0, &vp, ctx))
+        return;  // none yet
     int resid = 0;
     const int error = vn_rdwr(UIO_READ, vp, gRender, (int)sizeof(gRender), 0, UIO_SYSSPACE, IO_NOAUTH,
                               vfs_context_ucred(ctx), &resid, vfs_context_proc(ctx));
@@ -140,7 +150,8 @@ void copyPrevious()
 void writeJournal()
 {
     IOLock *lock = once(&gLock), *writeLock = once(&gWriteLock);
-    if (!lock || !writeLock) return;
+    if (!lock || !writeLock)
+        return;
     IOLockLock(writeLock);
     if (!gCopiedPrevious) {
         gCopiedPrevious = true;
@@ -150,13 +161,15 @@ void writeJournal()
     utcStamp(stamp, sizeof(stamp));
     int used = snprintf(gRender, sizeof(gRender), "SwitchPower journal, written %s UTC at %llu ms uptime\n", stamp,
                         nanoseconds(mach_absolute_time()) / 1000000);
-    if (used < 0) used = 0;
+    if (used < 0)
+        used = 0;
     IOLockLock(lock);
     const size_t length =
         (size_t)used + switch_power_ring_render(&gRing, gRender + used, sizeof(gRender) - (size_t)used);
     IOLockUnlock(lock);
     const int error = writeFile(kJournal, gRender, length, 0644, -1);
-    if (error && !gWriteFailed) IOLog("SwitchPower: %s not written (%d)\n", kJournal, error);
+    if (error && !gWriteFailed)
+        IOLog("SwitchPower: %s not written (%d)\n", kJournal, error);
     gWriteFailed = error != 0;
     IOLockUnlock(writeLock);
 }
@@ -181,17 +194,20 @@ void shotCall(thread_call_param_t, thread_call_param_t)
     kern_return_t kr = KERN_FAILURE;
     for (;;) {
         buffer = IOMallocData(size);
-        if (!buffer) break;
+        if (!buffer)
+            break;
         bytes = 0;
         kr = stack_snapshot_from_kernel(-1, buffer, size, kShotFlags, 0, 0, &bytes);
-        if (kr != KERN_INSUFFICIENT_BUFFER_SIZE || size >= kShotMaxBytes) break;
+        if (kr != KERN_INSUFFICIENT_BUFFER_SIZE || size >= kShotMaxBytes)
+            break;
         IOFreeData(buffer, size);
         buffer = nullptr;
         size *= 2;
     }
     if (!buffer || kr != KERN_SUCCESS || !bytes) {
         switch_power_journal("wake stackshot (%s) failed: %#x, %u bytes of %u", why, kr, bytes, size);
-        if (buffer) IOFreeData(buffer, size);
+        if (buffer)
+            IOFreeData(buffer, size);
         switch_power_journal_flush(false);
         return;
     }
@@ -219,7 +235,8 @@ extern "C" void switch_power_journal(const char *format, ...)
     snprintf(line, sizeof(line), "%llu.%03llu %s", ms / 1000, ms % 1000, text);
     os_log(OS_LOG_DEFAULT, "SwitchPower: %s", line);
     IOLock *lock = once(&gLock);
-    if (!lock) return;
+    if (!lock)
+        return;
     IOLockLock(lock);
     switch_power_ring_append(&gRing, line);
     IOLockUnlock(lock);
@@ -231,20 +248,25 @@ extern "C" void switch_power_journal_flush(bool wait)
         writeJournal();
         return;
     }
-    if (thread_call_t call = onceCall(&gFlushCall, flushCall)) thread_call_enter(call);
+    if (thread_call_t call = onceCall(&gFlushCall, flushCall))
+        thread_call_enter(call);
 }
 
 extern "C" void switch_wake_event(unsigned source)
 {
-    if (source >= SWITCH_WAKE_SOURCES || switch_display_is_on()) return;
+    if (source >= SWITCH_WAKE_SOURCES || switch_display_is_on())
+        return;
     IOLock *lock = once(&gLock);
-    if (!lock) return;
+    if (!lock)
+        return;
     const uint64_t now = mach_absolute_time();
     IOLockLock(lock);
     const bool fresh = !gLastSource[source] || nanoseconds(now - gLastSource[source]) >= kSourceGapNS;
-    if (fresh) gLastSource[source] = now;
+    if (fresh)
+        gLastSource[source] = now;
     IOLockUnlock(lock);
-    if (!fresh) return;
+    if (!fresh)
+        return;
     switch_power_journal("wake source: %s with the panel off%s", switch_wake_source_name(source),
                          source == SWITCH_WAKE_BT_HOME ? " (console Home clicked for it)" : "");
     switch_backlight_expect_wake(source);
@@ -255,8 +277,10 @@ extern "C" void switch_wake_bt_acl(const uint8_t *acl, size_t length)
     uint16_t handle = 0;
     uint8_t report = 0;
     const int held = switch_wake_bt_buttons(acl, length, &handle, &report);
-    if (held < 0) return;
-    if (__atomic_exchange_n(&gButtonsStale, false, __ATOMIC_ACQ_REL)) bzero(&gButtons, sizeof(gButtons));
+    if (held < 0)
+        return;
+    if (__atomic_exchange_n(&gButtonsStale, false, __ATOMIC_ACQ_REL))
+        bzero(&gButtons, sizeof(gButtons));
     const bool dark = !switch_display_is_on();
     const switch_bt_buttons_step step =
         switch_bt_buttons_report(&gButtons, handle, (uint8_t)held, nanoseconds(mach_absolute_time()), dark);
@@ -277,22 +301,27 @@ extern "C" void switch_wake_bt_acl(const uint8_t *acl, size_t length)
     bool reconnect = false;
     if (until) {
         reconnect = switch_bt_reconnect_take(&until, nanoseconds(mach_absolute_time()), step.fresh, dark);
-        if (!until) __atomic_store_n(&gReconnectUntil, 0, __ATOMIC_RELEASE);
+        if (!until)
+            __atomic_store_n(&gReconnectUntil, 0, __ATOMIC_RELEASE);
     }
     if (reconnect && !(click & SWITCH_BT_HOME)) {
         switch_power_journal("Bluetooth controller %#x reconnected after a Bluetooth wake: console Home", handle);
         click |= SWITCH_BT_HOME;
     }
-    if ((step.pressed & SWITCH_BT_HOME) || reconnect) switch_wake_event(SWITCH_WAKE_BT_HOME);  // nothing when lit
-    if (click) switch_buttons_bt_click(click);
+    if ((step.pressed & SWITCH_BT_HOME) || reconnect)
+        switch_wake_event(SWITCH_WAKE_BT_HOME);  // nothing when lit
+    if (click)
+        switch_buttons_bt_click(click);
 }
 
 extern "C" unsigned switch_wake_bt_controllers(uint16_t *handles, unsigned max)
 {
-    if (__atomic_load_n(&gButtonsStale, __ATOMIC_ACQUIRE)) return 0;
+    if (__atomic_load_n(&gButtonsStale, __ATOMIC_ACQUIRE))
+        return 0;
     unsigned n = 0;
     for (unsigned i = 0; i < SWITCH_BT_BUTTON_LINKS && n < max; ++i)
-        if (gButtons.used[i]) handles[n++] = gButtons.handle[i];
+        if (gButtons.used[i])
+            handles[n++] = gButtons.handle[i];
     return n;
 }
 
@@ -317,7 +346,8 @@ extern "C" void switch_wake_stackshot(const char *why)
 {
     IOLock *lock = once(&gLock);
     thread_call_t call = onceCall(&gShotCall, shotCall);
-    if (!lock || !call) return;
+    if (!lock || !call)
+        return;
     const uint64_t now = mach_absolute_time();
     IOLockLock(lock);
     const bool fresh = !gLastShot || nanoseconds(now - gLastShot) >= kShotGapNS;
@@ -326,5 +356,6 @@ extern "C" void switch_wake_stackshot(const char *why)
         strlcpy(gShotWhy, why ? why : "", sizeof(gShotWhy));
     }
     IOLockUnlock(lock);
-    if (fresh) thread_call_enter(call);
+    if (fresh)
+        thread_call_enter(call);
 }

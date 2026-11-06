@@ -8,6 +8,7 @@ extern "C" {
 #endif
 #define AIR_LIBRARY_MAX_BYTES     (64u * 1024u * 1024u)
 #define AIR_LIBRARY_MAX_FUNCTIONS 4096u
+
 enum air_library_status {
     AIR_LIBRARY_OK,
     AIR_LIBRARY_ARGUMENT,
@@ -17,20 +18,24 @@ enum air_library_status {
     AIR_LIBRARY_INDEX,
     AIR_LIBRARY_ALIAS
 };
+
 /* The callback must hash all supplied bytes, write exactly 32 digest bytes and
  * return zero on success. It is trusted code, not a library-supplied callback. */
 typedef int (*air_library_sha256)(const uint8_t *, size_t, uint8_t[32], void *);
+
 struct air_library_view {
     const uint8_t *data;
     size_t bytes, slice_offset, slice_bytes;
     size_t functions_offset, functions_bytes;
     uint32_t count, reserved;
 };
+
 struct air_library_function {
     const uint8_t *name, *bitcode, *wrapper, *wrapper_sha256;
     size_t name_bytes, bitcode_bytes, wrapper_bytes;
     uint32_t index, stage;
 };
+
 /* The input, callback and output must be valid accessible storage. Opening
  * checks every record and complete module hash before publishing a view.
  * Only the observed AIR-bearing MTLB profile is accepted. Fat selection uses

@@ -10,6 +10,7 @@ size_t AdrenoRasterReference(const struct AdrenoRasterState *, uint32_t *, uint3
 static unsigned positives, refusals;
 static uint32_t out[80], saved[80];
 static struct AdrenoRasterState state;
+
 static void fixture(void)
 {
     state = (struct AdrenoRasterState){ADRENO_A740_CHIP_ID,
@@ -23,11 +24,13 @@ static void fixture(void)
                                        0,
                                        0};
 }
+
 static void reset(void)
 {
     memset(out, 0x6b, sizeof out);
     memcpy(saved, out, sizeof out);
 }
+
 static void positive_capacity(size_t capacity)
 {
     reset();
@@ -52,10 +55,12 @@ static void positive_capacity(size_t capacity)
 #endif
     positives++;
 }
+
 static void positive(void)
 {
     positive_capacity(80);
 }
+
 static void refusal(uint32_t status, size_t capacity)
 {
     reset();
@@ -63,6 +68,7 @@ static void refusal(uint32_t status, size_t capacity)
     assert(r.status == status && !r.words && !r.registers && !memcmp(out, saved, sizeof out));
     refusals++;
 }
+
 int main(void)
 {
     /* Every supported flag combination and polygon mode, for both full IDs. */
@@ -152,10 +158,12 @@ int main(void)
     assert(AdrenoA740Raster(&state, (void *)(UINTPTR_MAX - 3), 2).status == AdrenoRasterArgument &&
            !memcmp(out, saved, sizeof out));
     refusals++;
+
     union {
         struct AdrenoRasterState s;
         uint32_t words[80];
     } alias;
+
     for (unsigned i = 0; i < sizeof(state) / 4; i++) {
         memset(&alias, 0x6b, sizeof alias);
         alias.s = state;

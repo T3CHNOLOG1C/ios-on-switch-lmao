@@ -27,6 +27,7 @@ struct NativeAdrenoGmuContextReport {
     ArmSmmu4KContextImage image;
     uint32_t mismatch;
 };
+
 class NativeAdrenoGmuContext final {
     NativeAdrenoGmuAllocator gmu_;
     NativeAdrenoSmmuContext smmu_;
@@ -35,24 +36,50 @@ class NativeAdrenoGmuContext final {
 
 public:
     /* Allocate also reads ID2 first and refuses an output size the kit cannot encode. */
-    enum Step : uint32_t { Allocate = 1, Prepare, Program, Attach, VmAttach, Map, Ready };
+    enum Step : uint32_t {
+        Allocate = 1,
+        Prepare,
+        Program,
+        Attach,
+        VmAttach,
+        Map,
+        Ready
+    };
+
     /* Lower region: 1 L1 + 2 L2 + 1024 L3 pages for 2 GiB with a 32-bit input. */
-    enum : size_t { TablePages = 1027 };
+    enum : size_t {
+        TablePages = 1027
+    };
+
     NativeAdrenoGmuContext() = default;
     NativeAdrenoGmuContext(const NativeAdrenoGmuContext &) = delete;
     NativeAdrenoGmuContext &operator=(const NativeAdrenoGmuContext &) = delete;
     /* One attempt per object. progress (may be null) is called before each step. */
     IOReturn bringUp(const ArmSmmu4KIo *io, unsigned bank, unsigned asid, unsigned slot, uint16_t sid,
                      void (*progress)(uint32_t step), NativeAdrenoGmuContextReport *report);
-    bool ready() const { return ready_; }
-    NativeAdrenoGmuAllocator &allocator() { return gmu_; }
-    NativeAdrenoVm &vm() { return vm_; }
+
+    bool ready() const
+    {
+        return ready_;
+    }
+
+    NativeAdrenoGmuAllocator &allocator()
+    {
+        return gmu_;
+    }
+
+    NativeAdrenoVm &vm()
+    {
+        return vm_;
+    }
 };
+
 /* Board entry: binds the kit's direct MMIO adapter to an owned live mapping of the
  * whole SMMU window and runs bringUp on a context that lives forever. */
 extern "C" IOReturn NativeAdrenoGmuContextBringup(volatile uint8_t *smmu, size_t bytes, unsigned bank, unsigned asid,
                                                   unsigned slot, unsigned sid, void (*progress)(uint32_t),
                                                   NativeAdrenoGmuContextReport *report);
+
 /* The payloads of the context the board entry built, in ShengGmuConfig order (icache, dummy, debug,
  * log, hfi): physical base, size and GMU address of each physically contiguous object. Only after
  * that context reached Ready. The GMU maps them Normal non-cacheable (MAIR index 0), as Linux maps
@@ -60,5 +87,6 @@ extern "C" IOReturn NativeAdrenoGmuContextBringup(volatile uint8_t *smmu, size_t
 struct NativeAdrenoGmuPayload {
     uint64_t physical, bytes, iova;
 };
+
 extern "C" IOReturn NativeAdrenoGmuContextPayloads(NativeAdrenoGmuPayload out[5]);
 #endif

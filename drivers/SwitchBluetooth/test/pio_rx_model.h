@@ -46,6 +46,7 @@ inline Result run(const std::vector<std::pair<double, unsigned>> &packets, unsig
         size_t packet;
         bool last;
     };
+
     std::vector<Arrival> arrivals;
     for (size_t i = 0; i < packets.size(); ++i)
         for (unsigned b = 0; b < packets[i].second; ++b)
@@ -85,14 +86,17 @@ inline Result run(const std::vector<std::pair<double, unsigned>> &packets, unsig
                 lastArrival = arrivals[k].at;
                 ++k;
             }
-            if (fifo.empty()) break;
+            if (fifo.empty())
+                break;
             const Arrival byte = fifo.front();
             fifo.pop_front();
             t += perByte;
             touched.insert(byte.packet);
-            if (byte.last) result.perPacket[byte.packet].wait = t - byte.at;
+            if (byte.last)
+                result.perPacket[byte.packet].wait = t - byte.at;
         }
-        for (size_t packet : touched) ++result.perPacket[packet].interrupts;
+        for (size_t packet : touched)
+            ++result.perPacket[packet].interrupts;
         t += exitCost;
         busyUntil = t;
     }

@@ -8,7 +8,11 @@ extern "C" int avd_host_main(void);
 
 TEST(SwitchVideoDecoders, AvdPluginOnVideoToolbox)
 {
-    const HostRun run = RunHost([](int, char **) { return avd_host_main(); }, {"avd_host"});
+    const HostRun run = RunHost(
+        [](int, char **) {
+            return avd_host_main();
+        },
+        {"avd_host"});
     EXPECT_EQ(run.code, 0) << run.out;
     EXPECT_THAT(run.out, testing::HasSubstr("PASS avd"));
 }

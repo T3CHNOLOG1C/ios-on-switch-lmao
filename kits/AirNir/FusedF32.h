@@ -25,9 +25,11 @@ static nir_def *air_shift_jam(nir_builder *b, nir_def *v, nir_def *distance)
     nir_def *jammed = nir_ior(b, shifted, nir_b2iN(b, lost, bits));
     return nir_bcsel(b, small, jammed, nir_b2iN(b, nir_ine_imm(b, v, 0), bits));
 }
+
 struct air_sig_exp {
     nir_def *sig, *exp;
 };
+
 static struct air_sig_exp air_normalize_f32(nir_builder *b, nir_def *ui)
 {
     nir_def *exp = nir_iand_imm(b, nir_ushr_imm(b, ui, 23), 255);
@@ -37,6 +39,7 @@ static struct air_sig_exp air_normalize_f32(nir_builder *b, nir_def *ui)
     return (struct air_sig_exp){nir_bcsel(b, subnormal, nir_ishl(b, frac, shift), frac),
                                 nir_bcsel(b, subnormal, nir_isub(b, nir_imm_int(b, 1), shift), exp)};
 }
+
 static nir_def *air_round_f32(nir_builder *b, nir_def *sign, nir_def *exp, nir_def *sig)
 {
     nir_def *negative_exp = nir_ilt_imm(b, exp, 0);
@@ -53,6 +56,7 @@ static nir_def *air_round_f32(nir_builder *b, nir_def *sign, nir_def *exp, nir_d
     nir_def *packed = nir_iadd(b, nir_iadd(b, sign, nir_ishl_imm(b, exp, 23)), sig);
     return nir_bcsel(b, overflow, nir_ior_imm(b, sign, 0x7f800000), packed);
 }
+
 static nir_def *air_fused_f32(nir_builder *b, nir_def *a, nir_def *v, nir_def *c)
 {
     struct air_sig_exp na = air_normalize_f32(b, a), nb = air_normalize_f32(b, v);

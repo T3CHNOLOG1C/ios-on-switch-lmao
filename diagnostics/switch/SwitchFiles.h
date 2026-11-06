@@ -5,7 +5,12 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-enum { SWITCH_STORAGE_FAT = 0, SWITCH_STORAGE_RAW = 1, SWITCH_STORAGE_INVALID = -1 };
+enum {
+    SWITCH_STORAGE_FAT = 0,
+    SWITCH_STORAGE_RAW = 1,
+    SWITCH_STORAGE_INVALID = -1
+};
+
 /* Parsed once during probe; absent/fat retains the existing file backend.
  * Unknown values are fatal. raw is root-boot-only, never a fallback. */
 int switch_files_storage_profile(void);

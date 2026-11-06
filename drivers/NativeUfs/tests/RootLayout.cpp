@@ -16,10 +16,12 @@ static uint8_t header[4096], entries[16384], manifest[4096];
 static uint64_t userdata = 8;
 static unsigned reads;
 static bool failRead;
+
 static IOReturn hostRead4k(uint8_t, uint64_t lba, uint32_t blocks, void *out)
 {
     ++reads;
-    if (failRead) return 1;
+    if (failRead)
+        return 1;
     if (lba == 1 && blocks == 1)
         memcpy(out, header, 4096);
     else if (lba == 2 && blocks <= 4)
@@ -31,21 +33,28 @@ static IOReturn hostRead4k(uint8_t, uint64_t lba, uint32_t blocks, void *out)
     }
     return 0;
 }
+
 #include "../RootLayout.h"
+
 static void put32(uint8_t *p, uint32_t v)
 {
-    for (unsigned i = 0; i < 4; ++i) p[i] = uint8_t(v >> (i * 8));
+    for (unsigned i = 0; i < 4; ++i)
+        p[i] = uint8_t(v >> (i * 8));
 }
+
 static void put64(uint8_t *p, uint64_t v)
 {
-    for (unsigned i = 0; i < 8; ++i) p[i] = uint8_t(v >> (i * 8));
+    for (unsigned i = 0; i < 8; ++i)
+        p[i] = uint8_t(v >> (i * 8));
 }
+
 static void checksums()
 {
     SHA256(manifest, 4064, manifest + 4064);
     put32(header + 88, rootCrc32(entries, 32 * 128));
     put32(header + 16, rootCrc32(header, 92, true));
 }
+
 static void fixture()
 {
     memset(header, 0, sizeof(header));
@@ -68,7 +77,8 @@ static void fixture()
     entries[16] = 2;
     put64(entries + 32, 8);
     put64(entries + 40, 506);
-    for (unsigned i = 0; i < 8; ++i) entries[56 + 2 * i] = "userdata"[i];
+    for (unsigned i = 0; i < 8; ++i)
+        entries[56 + 2 * i] = "userdata"[i];
     memcpy(manifest, "SHNGROOT", 8);
     put32(manifest + 8, 1);
     put32(manifest + 12, 2);
@@ -83,35 +93,92 @@ static void fixture()
     }
     checksums();
 }
+
 static void expect(const std::function<void()> &change, bool gpt, uint32_t status, bool rehash = true)
 {
     fixture();
     change();
-    if (rehash) checksums();
+    if (rehash)
+        checksums();
     RootLayout layout;
     const char *why = nullptr;
     bool result = findRootLayout(&layout, &why);
     assert(result == gpt);
-    if (gpt) assert(layout.manifestStatus == status);
-    if (!result || status) assert(layout.windows == 0);
+    if (gpt)
+        assert(layout.manifestStatus == status);
+    if (!result || status)
+        assert(layout.windows == 0);
 }
+
 int main(int argc, char **argv)
 {
     assert(rootCrc32(reinterpret_cast<const uint8_t *>("123456789"), 9) == 0xcbf43926);
     expect([] {}, true, 0);
-    expect([] { header[16] ^= 1; }, false, 0, false);
-    expect([] { entries[16] ^= 1; }, false, 0, false);
-    expect([] { put32(header + 12, 4097); }, false, 0);
-    expect([] { put64(header + 24, 2); }, false, 0);
-    expect([] { put32(header + 20, 1); }, false, 0);
-    expect([] { put32(header + 80, 129); }, false, 0);
-    expect([] { put64(header + 32, UINT64_MAX); }, false, 0);
-    expect([] { put64(header + 40, 2); }, false, 0);
-    expect([] { put64(header + 48, 511); }, false, 0);
-    expect([] { put64(entries + 32, 1); }, false, 0);
-    expect([] { put64(entries + 40, UINT64_MAX); }, false, 0);
-    expect([] { entries[0] = 0; }, false, 0);
-    expect([] { memcpy(entries + 128, entries, 128); }, false, 0);
+    expect(
+        [] {
+            header[16] ^= 1;
+        },
+        false, 0, false);
+    expect(
+        [] {
+            entries[16] ^= 1;
+        },
+        false, 0, false);
+    expect(
+        [] {
+            put32(header + 12, 4097);
+        },
+        false, 0);
+    expect(
+        [] {
+            put64(header + 24, 2);
+        },
+        false, 0);
+    expect(
+        [] {
+            put32(header + 20, 1);
+        },
+        false, 0);
+    expect(
+        [] {
+            put32(header + 80, 129);
+        },
+        false, 0);
+    expect(
+        [] {
+            put64(header + 32, UINT64_MAX);
+        },
+        false, 0);
+    expect(
+        [] {
+            put64(header + 40, 2);
+        },
+        false, 0);
+    expect(
+        [] {
+            put64(header + 48, 511);
+        },
+        false, 0);
+    expect(
+        [] {
+            put64(entries + 32, 1);
+        },
+        false, 0);
+    expect(
+        [] {
+            put64(entries + 40, UINT64_MAX);
+        },
+        false, 0);
+    expect(
+        [] {
+            entries[0] = 0;
+        },
+        false, 0);
+    expect(
+        [] {
+            memcpy(entries + 128, entries, 128);
+        },
+        false, 0);
     expect(
         [] {
             memcpy(entries + 128, entries, 128);
@@ -119,21 +186,81 @@ int main(int argc, char **argv)
             put64(entries + 128 + 32, 101);
         },
         false, 0);
-    expect([] { failRead = true; }, false, 0);
-    expect([] { manifest[0] ^= 1; }, true, 1);
-    expect([] { put32(manifest + 12, 5); }, true, 2);
-    expect([] { manifest[4064] ^= 1; }, true, 3, false);
-    expect([] { put64(manifest + 16, UINT64_MAX); }, true, 4);
-    expect([] { put64(manifest + 24 + 32, 0); }, true, 4);
-    expect([] { put64(manifest + 24 + 40, UINT64_MAX - 511); }, true, 4);
-    expect([] { put64(manifest + 24 + 40, 512 + 1); }, true, 4);
-    expect([] { put64(manifest + 24 + 128 + 32, 8192); }, true, 6);
-    expect([] { strcpy(reinterpret_cast<char *>(manifest + 24 + 128), "OS"); }, true, 5);
-    expect([] { memset(manifest + 24, 'A', 32); }, true, 5);
-    expect([] { manifest[24] = '\n'; }, true, 5);
-    expect([] { manifest[24] = 0; }, true, 5);
-    expect([] { put32(manifest + 24 + 48, 4096); }, true, 7);
-    expect([] { put32(manifest + 24 + 52, 0); }, true, 7);
+    expect(
+        [] {
+            failRead = true;
+        },
+        false, 0);
+    expect(
+        [] {
+            manifest[0] ^= 1;
+        },
+        true, 1);
+    expect(
+        [] {
+            put32(manifest + 12, 5);
+        },
+        true, 2);
+    expect(
+        [] {
+            manifest[4064] ^= 1;
+        },
+        true, 3, false);
+    expect(
+        [] {
+            put64(manifest + 16, UINT64_MAX);
+        },
+        true, 4);
+    expect(
+        [] {
+            put64(manifest + 24 + 32, 0);
+        },
+        true, 4);
+    expect(
+        [] {
+            put64(manifest + 24 + 40, UINT64_MAX - 511);
+        },
+        true, 4);
+    expect(
+        [] {
+            put64(manifest + 24 + 40, 512 + 1);
+        },
+        true, 4);
+    expect(
+        [] {
+            put64(manifest + 24 + 128 + 32, 8192);
+        },
+        true, 6);
+    expect(
+        [] {
+            strcpy(reinterpret_cast<char *>(manifest + 24 + 128), "OS");
+        },
+        true, 5);
+    expect(
+        [] {
+            memset(manifest + 24, 'A', 32);
+        },
+        true, 5);
+    expect(
+        [] {
+            manifest[24] = '\n';
+        },
+        true, 5);
+    expect(
+        [] {
+            manifest[24] = 0;
+        },
+        true, 5);
+    expect(
+        [] {
+            put32(manifest + 24 + 48, 4096);
+        },
+        true, 7);
+    expect(
+        [] {
+            put32(manifest + 24 + 52, 0);
+        },
+        true, 7);
     // A final physical 4K read may include padding, but cannot enter another window.
     expect(
         [] {

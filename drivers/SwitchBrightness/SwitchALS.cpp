@@ -83,7 +83,14 @@ constexpr uint8_t kSensor = 0x29;
 
 // BH1730FVC: a command byte 0x80 | register (auto-increment) or 0xe0 | special command (datasheet COMMAND; bh1730.c,
 // hekate als.h).
-enum : uint8_t { RegControl = 0x00, RegTiming = 0x01, RegGain = 0x07, RegId = 0x12, RegData0 = 0x14 };
+enum : uint8_t {
+    RegControl = 0x00,
+    RegTiming = 0x01,
+    RegGain = 0x07,
+    RegId = 0x12,
+    RegData0 = 0x14
+};
+
 constexpr uint8_t kCommand = 0x80, kSoftwareReset = 0xe4;
 constexpr uint8_t kPowerOn = 1u << 0, kAdcEnable = 1u << 1;
 
@@ -126,10 +133,14 @@ void describeSupplies(char *buffer, size_t size)
     constexpr uint8_t kPmic = 0x3c, kLdo6Cfg = 0x2f, kGpio3 = 0x39, kAmeGpio = 0x40, kFpsLdo6 = 0x4c, kFpsGpio3 = 0x56;
     uint8_t ldo[2] = {}, gpio3 = 0, ame = 0, fps = 0, fpsGpio3 = 0;  // LDO6_CFG and LDO6_CFG2 (0x30): one read
     int err = tegra_i2c_read(kPmicBus, kPmic, kLdo6Cfg, ldo, sizeof(ldo));
-    if (!err) err = tegra_i2c_read(kPmicBus, kPmic, kGpio3, &gpio3, 1);
-    if (!err) err = tegra_i2c_read(kPmicBus, kPmic, kAmeGpio, &ame, 1);
-    if (!err) err = tegra_i2c_read(kPmicBus, kPmic, kFpsLdo6, &fps, 1);
-    if (!err) err = tegra_i2c_read(kPmicBus, kPmic, kFpsGpio3, &fpsGpio3, 1);
+    if (!err)
+        err = tegra_i2c_read(kPmicBus, kPmic, kGpio3, &gpio3, 1);
+    if (!err)
+        err = tegra_i2c_read(kPmicBus, kPmic, kAmeGpio, &ame, 1);
+    if (!err)
+        err = tegra_i2c_read(kPmicBus, kPmic, kFpsLdo6, &fps, 1);
+    if (!err)
+        err = tegra_i2c_read(kPmicBus, kPmic, kFpsGpio3, &fpsGpio3, 1);
     snprintf(buffer, size,
              "LDO6_CFG %#x (mode %u, %u mV) LDO6_CFG2 %#x (POK %u) FPS_LDO6 %#x, GPIO3 %#x AME %#x FPS_GPIO3 %#x (PMIC "
              "read %d)",
@@ -155,15 +166,18 @@ void describeBus(char *buffer, size_t size)
     uint32_t pmc[4] = {};
     if (auto *page = reinterpret_cast<volatile uint8_t *>(ml_io_map(0x7000E000, 0x1000))) {
         const uint32_t offsets[4] = {0x44, 0xe4, 0x1bc, 0x1c4};  // NO_IOPOWER, PWR_DET_VAL, IO_DPD(2)_STATUS
-        for (unsigned i = 0; i < 4; ++i) pmc[i] = *reinterpret_cast<volatile uint32_t *>(page + 0x400 + offsets[i]);
+        for (unsigned i = 0; i < 4; ++i)
+            pmc[i] = *reinterpret_cast<volatile uint32_t *>(page + 0x400 + offsets[i]);
     }
     char acks[64] = "";
     size_t used = 0;
     unsigned found = 0;
     for (uint8_t addr = 0x08; addr <= 0x77; ++addr) {
         uint8_t byte;
-        if (tegra_i2c_transfer(kBus, addr, nullptr, 0, &byte, 1) != TEGRA_I2C_OK) continue;
-        if (found++ < 10) used += (size_t)snprintf(acks + used, sizeof(acks) - used, " 0x%02x", addr);
+        if (tegra_i2c_transfer(kBus, addr, nullptr, 0, &byte, 1) != TEGRA_I2C_OK)
+            continue;
+        if (found++ < 10)
+            used += (size_t)snprintf(acks + used, sizeof(acks) - used, " 0x%02x", addr);
     }
     snprintf(buffer, size,
              "I2C2 as GPIO inputs SCL %d SDA %d (PJ2/PJ3 cnf|oe<<1|out<<2|in<<3 %#x %#x), SFIO GPIO_IN of the working "
@@ -211,10 +225,26 @@ public:
     bool start(IOService *provider) override;
     void free() override;
     void frameEnd();
-    void setLit(bool on) { setCondition(&SwitchALS::lit, on); }
-    void setSuspended(bool on) { setCondition(&SwitchALS::suspended, on); }
-    void setSupply(bool on) { setCondition(&SwitchALS::supply, on); }
-    bool published() const { return hid != nullptr; }
+
+    void setLit(bool on)
+    {
+        setCondition(&SwitchALS::lit, on);
+    }
+
+    void setSuspended(bool on)
+    {
+        setCondition(&SwitchALS::suspended, on);
+    }
+
+    void setSupply(bool on)
+    {
+        setCondition(&SwitchALS::supply, on);
+    }
+
+    bool published() const
+    {
+        return hid != nullptr;
+    }
 };
 
 OSDefineMetaClassAndStructors(SwitchALS, IOService)
@@ -225,7 +255,8 @@ static volatile bool gSupply;  // LDO6 as SwitchTouch last reported it, for a re
 // Primary interrupt context (TegraPanel's frame-end filter), every DC A FRAME_END.
 void SwitchALS::frameEnd()
 {
-    if (!__atomic_load_n(&running, __ATOMIC_ACQUIRE) || ++frames < kFramesPerSample) return;
+    if (!__atomic_load_n(&running, __ATOMIC_ACQUIRE) || ++frames < kFramesPerSample)
+        return;
     frames = 0;
     __atomic_fetch_add(&ticks, 1, __ATOMIC_RELAXED);
     clock->interruptOccurred(nullptr, nullptr, 0);
@@ -236,7 +267,8 @@ void SwitchALS::frameEnd()
 void SwitchALS::update()
 {
     const bool want = lit && !suspended && supply && !broken;
-    if (want == __atomic_load_n(&running, __ATOMIC_RELAXED)) return;
+    if (want == __atomic_load_n(&running, __ATOMIC_RELAXED))
+        return;
     if (want) {
         frames = 0;
         errors = 0;
@@ -247,7 +279,8 @@ void SwitchALS::update()
     }
     __atomic_store_n(&running, false, __ATOMIC_RELEASE);
     deadline->cancelTimeout();
-    if (configured) (void)writeRegister(RegControl, 0);  // power down; a sensor that is gone shows on the next start
+    if (configured)
+        (void)writeRegister(RegControl, 0);  // power down; a sensor that is gone shows on the next start
     configured = false;
 }
 
@@ -270,23 +303,28 @@ int SwitchALS::configure()
     int err;
     if (!identified) {
         uint8_t id = 0;
-        if ((err = tegra_i2c_init(kBus))) return err;
-        if ((err = tegra_i2c_read(kBus, kSensor, kCommand | RegId, &id, 1))) return err;
+        if ((err = tegra_i2c_init(kBus)))
+            return err;
+        if ((err = tegra_i2c_read(kBus, kSensor, kCommand | RegId, &id, 1)))
+            return err;
         // BH1730FVC PART_ID: part number 0111 in bits 7:4.
         if ((id >> 4) != 7) {
             IOLog("SwitchALS: off: I2C2 0x29 is not a BH1730 (id %#x)\n", id);
             broken = true;  // sample() turns the sensor off
             return -1;
         }
-        if ((err = tegra_i2c_write(kBus, kSensor, kSoftwareReset, nullptr, 0))) return err;
+        if ((err = tegra_i2c_write(kBus, kSensor, kSoftwareReset, nullptr, 0)))
+            return err;
         identified = true;
         IOLog("SwitchALS: started (BH1730 id %#x after %u failed tries, LDO6 on for %llu ms; a sample every %u frame "
               "ends)\n",
               id, errors, msSince(supplyAt), kFramesPerSample);
     }
     err = writeRegister(RegGain, (uint8_t)gain);
-    if (!err) err = writeRegister(RegTiming, (uint8_t)(256 - kCycles));
-    if (!err) err = writeRegister(RegControl, kPowerOn | kAdcEnable);
+    if (!err)
+        err = writeRegister(RegTiming, (uint8_t)(256 - kCycles));
+    if (!err)
+        err = writeRegister(RegControl, kPowerOn | kAdcEnable);
     skip = 1;
     return err;
 }
@@ -329,9 +367,12 @@ void SwitchALS::dispatch(uint32_t level, uint32_t visible, uint32_t ir)
 // lux), so a lit screen in steady light writes no line every 5 s.
 void SwitchALS::noteStats(uint32_t level, uint32_t visible, uint32_t ir)
 {
-    if (level < luxMin) luxMin = level;
-    if (level > luxMax) luxMax = level;
-    if (++samples < kStatsSamples) return;
+    if (level < luxMin)
+        luxMin = level;
+    if (level > luxMax)
+        luxMax = level;
+    if (++samples < kStatsSamples)
+        return;
     const int panel = tegra_panel_brightness();
     const unsigned tolerance = loggedLux / 8 > 2 ? loggedLux / 8 : 2;
     if (gain != loggedGain || panel != loggedPanel || luxMin + tolerance < loggedLux ||
@@ -356,7 +397,8 @@ void SwitchALS::failed(int err)
         giveUp();  // configure() logged why
         return;
     }
-    if (++errors < kErrorLimit) return;
+    if (++errors < kErrorLimit)
+        return;
     giveUp();
     char line[400];
     describeSupplies(line, sizeof(line));
@@ -365,7 +407,8 @@ void SwitchALS::failed(int err)
           errors, msSince(supplyAt), line);
     tegra_i2c_describe(kBus, line, sizeof(line));
     IOLog("SwitchALS: %s\n", line);
-    if (identified) return;
+    if (identified)
+        return;
     describeBus(line, sizeof(line));
     IOLog("SwitchALS: probe: %s\n", line);
 }
@@ -399,8 +442,10 @@ void SwitchALS::sample()
     }
 
     const unsigned next = nextGain(gain, visible, ir);
-    if (next == gain) return;
-    if (writeRegister(RegGain, (uint8_t)next)) return;  // counted on the next read if the sensor is gone
+    if (next == gain)
+        return;
+    if (writeRegister(RegGain, (uint8_t)next))
+        return;  // counted on the next read if the sensor is gone
     gain = next;
     skip = 1;  // the conversion in flight finishes at the old gain
 }
@@ -408,7 +453,8 @@ void SwitchALS::sample()
 void SwitchALS::ticked(OSObject *owner, IOInterruptEventSource *, int)
 {
     auto *self = static_cast<SwitchALS *>(owner);
-    if (__atomic_load_n(&self->running, __ATOMIC_ACQUIRE)) self->sample();
+    if (__atomic_load_n(&self->running, __ATOMIC_ACQUIRE))
+        self->sample();
 }
 
 // The frame ends stopped while the panel is lit: the display lost its interrupt. A tick this work loop has not taken
@@ -416,7 +462,8 @@ void SwitchALS::ticked(OSObject *owner, IOInterruptEventSource *, int)
 void SwitchALS::deadlinePassed(OSObject *owner, IOTimerEventSource *sender)
 {
     auto *self = static_cast<SwitchALS *>(owner);
-    if (!__atomic_load_n(&self->running, __ATOMIC_ACQUIRE)) return;
+    if (!__atomic_load_n(&self->running, __ATOMIC_ACQUIRE))
+        return;
     if (__atomic_load_n(&self->ticks, __ATOMIC_RELAXED) != self->ticksSeen) {
         sender->setTimeoutMS(kClockDeadlineMS);
         return;
@@ -428,7 +475,8 @@ void SwitchALS::deadlinePassed(OSObject *owner, IOTimerEventSource *sender)
 void SwitchALS::supplyLate(OSObject *owner, IOTimerEventSource *)
 {
     auto *self = static_cast<SwitchALS *>(owner);
-    if (self->supplied || self->broken) return;
+    if (self->supplied || self->broken)
+        return;
     IOLog("SwitchALS: off: LDO6, the sensor's I2C supply, did not come on in %u s (SwitchTouch turns it on with the "
           "touch panel)\n",
           kSupplyDeadlineMS / 1000);
@@ -443,6 +491,7 @@ void SwitchALS::setCondition(bool SwitchALS::*condition, bool value)
         bool SwitchALS::*condition;
         bool value;
     } change = {condition, value};
+
     loop->runAction(
         [](OSObject *owner, void *arg, void *, void *, void *) -> IOReturn {
             auto *self = static_cast<SwitchALS *>(owner);
@@ -461,7 +510,8 @@ void SwitchALS::setCondition(bool SwitchALS::*condition, bool value)
 
 bool SwitchALS::start(IOService *provider)
 {
-    if (!IOService::start(provider)) return false;
+    if (!IOService::start(provider))
+        return false;
     loop = IOWorkLoop::workLoop();
     clock = IOInterruptEventSource::interruptEventSource(this, &SwitchALS::ticked);
     deadline = IOTimerEventSource::timerEventSource(this, &SwitchALS::deadlinePassed);
@@ -480,9 +530,12 @@ bool SwitchALS::start(IOService *provider)
 void SwitchALS::free()
 {
     if (loop) {
-        if (clock) loop->removeEventSource(clock);
-        if (deadline) loop->removeEventSource(deadline);
-        if (supplyCheck) loop->removeEventSource(supplyCheck);
+        if (clock)
+            loop->removeEventSource(clock);
+        if (deadline)
+            loop->removeEventSource(deadline);
+        if (supplyCheck)
+            loop->removeEventSource(supplyCheck);
     }
     OSSafeReleaseNULL(clock);
     OSSafeReleaseNULL(deadline);
@@ -493,7 +546,8 @@ void SwitchALS::free()
 
 extern "C" int switch_als_start(void)
 {
-    if (gALS) return 0;
+    if (gALS)
+        return 0;
     IOService *resources = IOService::getResourceService();
     SwitchALS *candidate = OSTypeAlloc(SwitchALS);
     if (!resources || !candidate || !candidate->init() || !candidate->attach(resources) ||
@@ -516,26 +570,31 @@ extern "C" bool switch_als_published(void)
 
 extern "C" void switch_als_frame_end(void)
 {
-    if (SwitchALS *als = __atomic_load_n(&gALS, __ATOMIC_ACQUIRE)) als->frameEnd();
+    if (SwitchALS *als = __atomic_load_n(&gALS, __ATOMIC_ACQUIRE))
+        als->frameEnd();
 }
 
 extern "C" void switch_als_set_active(bool active)
 {
-    if (SwitchALS *als = __atomic_load_n(&gALS, __ATOMIC_ACQUIRE)) als->setLit(active);
+    if (SwitchALS *als = __atomic_load_n(&gALS, __ATOMIC_ACQUIRE))
+        als->setLit(active);
 }
 
 extern "C" void switch_als_supply(bool on)
 {
     __atomic_store_n(&gSupply, on, __ATOMIC_SEQ_CST);
-    if (SwitchALS *als = __atomic_load_n(&gALS, __ATOMIC_SEQ_CST)) als->setSupply(on);
+    if (SwitchALS *als = __atomic_load_n(&gALS, __ATOMIC_SEQ_CST))
+        als->setSupply(on);
 }
 
 extern "C" void switch_als_suspend(void)
 {
-    if (SwitchALS *als = __atomic_load_n(&gALS, __ATOMIC_ACQUIRE)) als->setSuspended(true);
+    if (SwitchALS *als = __atomic_load_n(&gALS, __ATOMIC_ACQUIRE))
+        als->setSuspended(true);
 }
 
 extern "C" void switch_als_resume(void)
 {
-    if (SwitchALS *als = __atomic_load_n(&gALS, __ATOMIC_ACQUIRE)) als->setSuspended(false);
+    if (SwitchALS *als = __atomic_load_n(&gALS, __ATOMIC_ACQUIRE))
+        als->setSuspended(false);
 }

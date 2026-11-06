@@ -40,7 +40,8 @@ template <class Body> [[noreturn]] void runAndExit(Body &&body)
     int failures = 0;
     for (int i = 0; i < results.size(); ++i) {
         const ::testing::TestPartResult &result = results.GetTestPartResult(i);
-        if (!result.failed()) continue;
+        if (!result.failed())
+            continue;
         ++failures;
         std::fprintf(stderr, "%s:%d: Failure\n%s\n", result.file_name() ? result.file_name() : "(unknown file)",
                      result.line_number(), result.message());
@@ -55,9 +56,7 @@ template <class Body> [[noreturn]] void runAndExit(Body &&body)
 template <class Body> void ExpectPassesInFreshProcess(Body &&body)
 {
     GTEST_FLAG_SET(death_test_style, "threadsafe");
-    EXPECT_EXIT(
-        detail::runAndExit(std::forward<Body>(body)),
-        ::testing::ExitedWithCode(0), "");
+    EXPECT_EXIT(detail::runAndExit(std::forward<Body>(body)), ::testing::ExitedWithCode(0), "");
 }
 
 // Runs `body` in a fresh process and expects it to exit with `code` after printing something matching `stderr_regex`
@@ -65,9 +64,7 @@ template <class Body> void ExpectPassesInFreshProcess(Body &&body)
 template <class Body> void ExpectExitInFreshProcess(Body &&body, int code, const std::string &stderr_regex)
 {
     GTEST_FLAG_SET(death_test_style, "threadsafe");
-    EXPECT_EXIT(
-        detail::runAndExit(std::forward<Body>(body)),
-        ::testing::ExitedWithCode(code), stderr_regex);
+    EXPECT_EXIT(detail::runAndExit(std::forward<Body>(body)), ::testing::ExitedWithCode(code), stderr_regex);
 }
 
 }  // namespace switch_ios::test

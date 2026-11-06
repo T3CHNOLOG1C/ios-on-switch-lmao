@@ -7,6 +7,7 @@ extern "C" {
 struct switch_sd_io;
 struct switch_sd_result;
 #define SWITCH_SD_DMA_BYTES 65536u
+
 /* One private wired contiguous allocation, retained for the entire boot.
  * Physical is the qualified device bus address, never the CPU virtual address.
  * bus_ready proves the SDMMC1 MC/SMMU path still bypasses translation. cache
@@ -27,13 +28,14 @@ struct switch_sd_dma {
     uint32_t polls, boundaries;
     uint64_t read_bytes, write_bytes;
 };
+
 /* Qualify and enable Tegra's SDHCI v4 64-bit SDMA. No clock, power, voltage,
  * tuning, card command, SMMU or memory-controller register is changed. */
 int switch_sd_dma_bind(struct switch_sd_dma *, const struct switch_sd_io *, void *, uint64_t frequency);
 /* Called after transfer/count/direction are configured, before the command.
  * Stages the COMPLETE write before any DMA address is submitted. */
-int switch_sd_dma_prepare(struct switch_sd_dma *, const struct switch_sd_io *, void *, uint32_t block_size, uint32_t count,
-                        const uint8_t *input);
+int switch_sd_dma_prepare(struct switch_sd_dma *, const struct switch_sd_io *, void *, uint32_t block_size,
+                          uint32_t count, const uint8_t *input);
 /* Command R1 has already succeeded. Accepts only error-free full transfer;
  * handles exact 512 KiB SDMA boundaries, never restarting beyond the request. */
 int switch_sd_dma_wait(struct switch_sd_dma *, const struct switch_sd_io *, void *, struct switch_sd_result *);

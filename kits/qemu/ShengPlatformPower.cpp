@@ -23,6 +23,7 @@ void sheng_original_pmgr_nub_write(IOService *, uint64_t);
 // stage,status,parent-size,own-size,provider,nub,bound-provider,read-before,
 // read-after,own-before,own-after,nub-before,nub-after,attached,registered,mode.
 volatile uint64_t sheng_pmgr_observation[16];
+
 __attribute__((noinline)) void sheng_pmgr_checkpoint(void)
 {
     __asm__ volatile("" ::: "memory");
@@ -42,17 +43,51 @@ OSDeclareDefaultStructors(ShengPlatformPower) public : void enableCPUCore(unsign
     {
         unavailable(168);
     }
-    void enableCPUCore(unsigned) override { unavailable(169); }
-    void disableCPUCore(unsigned) override { unavailable(170); }
-    void enableCPUCluster(unsigned) override { unavailable(171); }
-    void disableCPUCluster(unsigned) override { unavailable(172); }
-    void initCPUIdle(ml_processor_info_t *) override { unavailable(173); }
-    void enterCPUIdle(UInt64 *) override { unavailable(174); }
-    void exitCPUIdle(UInt64 *) override { unavailable(175); }
-    void updateCPUIdle(UInt64 *) override { unavailable(176); }
+
+    void enableCPUCore(unsigned) override
+    {
+        unavailable(169);
+    }
+
+    void disableCPUCore(unsigned) override
+    {
+        unavailable(170);
+    }
+
+    void enableCPUCluster(unsigned) override
+    {
+        unavailable(171);
+    }
+
+    void disableCPUCluster(unsigned) override
+    {
+        unavailable(172);
+    }
+
+    void initCPUIdle(ml_processor_info_t *) override
+    {
+        unavailable(173);
+    }
+
+    void enterCPUIdle(UInt64 *) override
+    {
+        unavailable(174);
+    }
+
+    void exitCPUIdle(UInt64 *) override
+    {
+        unavailable(175);
+    }
+
+    void updateCPUIdle(UInt64 *) override
+    {
+        unavailable(176);
+    }
+
 #include "GuardedPMGRSlots.inc"
     IOReturn setProperties(OSObject *properties) override;
 };
+
 OSDefineMetaClassWithInit(ShengPlatformPower, ApplePMGR, ) OSMetaClassConstructorInit(ShengPlatformPower, ApplePMGR, )
     OSDefineBasicStructors(ShengPlatformPower, ApplePMGR)
     // The original object's storage exceeds kalloc_type's 16 KiB size limit.
@@ -61,10 +96,12 @@ OSDefineMetaClassWithInit(ShengPlatformPower, ApplePMGR, ) OSMetaClassConstructo
 {
     return OSObject::operator new(size);
 }
+
 void ShengPlatformPower::operator delete(void *memory, size_t size)
 {
     OSObject::operator delete(memory, size);
 }
+
 static_assert(sizeof(ShengPlatformPower) == 0x4b8a8, "Exact original provider storage");
 
 // iPadOS's CPU ceiling. thermalmonitord (CLTM, 21H461 -[MitigationController updateCPU], CONTRACT.md) writes its
@@ -79,19 +116,23 @@ IOReturn ShengPlatformPower::setProperties(OSObject *properties)
     static uint32_t fraction[SWITCH_CLTM_CONTRIBUTORS] = {0x10000u, 0x10000u, 0x10000u, 0x10000u};
     static uint32_t ceiling = 0x10000u;
     OSDictionary *dict = OSDynamicCast(OSDictionary, properties);
-    if (!dict) return kIOReturnBadArgument;
+    if (!dict)
+        return kIOReturnBadArgument;
     unsigned taken = 0;
     for (unsigned i = 0; i < SWITCH_CLTM_CONTRIBUTORS; ++i) {
         OSNumber *value = OSDynamicCast(OSNumber, dict->getObject(switch_cltm_keys[i]));
-        if (!value) continue;
+        if (!value)
+            continue;
         const uint64_t v = value->unsigned64BitValue();
         __atomic_store_n(&fraction[i], v > 0x10000u ? 0x10000u : (uint32_t)v, __ATOMIC_RELAXED);
         setProperty(switch_cltm_keys[i], value);
         ++taken;
     }
-    if (!taken) return kIOReturnUnsupported;
+    if (!taken)
+        return kIOReturnUnsupported;
     uint32_t now[SWITCH_CLTM_CONTRIBUTORS];
-    for (unsigned i = 0; i < SWITCH_CLTM_CONTRIBUTORS; ++i) now[i] = __atomic_load_n(&fraction[i], __ATOMIC_RELAXED);
+    for (unsigned i = 0; i < SWITCH_CLTM_CONTRIBUTORS; ++i)
+        now[i] = __atomic_load_n(&fraction[i], __ATOMIC_RELAXED);
     const uint32_t next = switch_cltm_ceiling(now);
     if (__atomic_exchange_n(&ceiling, next, __ATOMIC_RELAXED) != next) {
         const unsigned khz = switch_perf_cltm_ceiling(next);
@@ -153,7 +194,8 @@ extern "C" void sheng_pmgr_run(void)
     IORegistryEntry *description = new IORegistryEntry;
     IOService *nub = nullptr;
     do {
-        if (!provider || !description || !provider->init() || !description->init()) break;
+        if (!provider || !description || !provider->init() || !description->init())
+            break;
         sheng_pmgr_observation[0] = 2;
         sheng_pmgr_observation[3] = provider->getMetaClass()->getClassSize();
         sheng_pmgr_observation[4] = reinterpret_cast<uintptr_t>(provider);
@@ -161,11 +203,13 @@ extern "C" void sheng_pmgr_run(void)
         description->setName("sheng-platform-power");
         nub = sheng_original_pmgr_nub_create(description, provider);
         sheng_pmgr_observation[5] = reinterpret_cast<uintptr_t>(nub);
-        if (!nub || nub->getMetaClass() != nubMeta || !provider->metaCast("ApplePMGR")) break;
+        if (!nub || nub->getMetaClass() != nubMeta || !provider->metaCast("ApplePMGR"))
+            break;
         uintptr_t bound = 0;
         memcpy(&bound, reinterpret_cast<const char *>(nub) + 0x88, sizeof(bound));
         sheng_pmgr_observation[6] = bound;
-        if (bound != reinterpret_cast<uintptr_t>(provider)) break;
+        if (bound != reinterpret_cast<uintptr_t>(provider))
+            break;
         sheng_pmgr_observation[0] = 3;
         uint32_t value = sheng_original_pmgr_nub_read(nub);
         sheng_pmgr_observation[7] = value;
@@ -178,7 +222,8 @@ extern "C" void sheng_pmgr_run(void)
             break;
         {
             IOService *platform = IOService::getPlatform();
-            if (!platform || !provider->attach(platform)) break;
+            if (!platform || !provider->attach(platform))
+                break;
             if (!provider->start(platform)) {
                 provider->detach(platform);
                 break;

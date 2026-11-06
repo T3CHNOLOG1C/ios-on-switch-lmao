@@ -33,6 +33,7 @@
 #define DRM_XRGB8888    0x34325258  // "XR24": blue, green, red, unused in memory, as the GOP's BGR mode
 
 #pragma pack(1)
+
 typedef struct {
     UINT64 Address;
     UINT32 FourCC;
@@ -41,6 +42,7 @@ typedef struct {
     UINT32 Height;
     UINT32 Stride;
 } RAMFB_CONFIG;
+
 #pragma pack()
 
 typedef struct {
@@ -53,6 +55,7 @@ STATIC EFI_GRAPHICS_OUTPUT_MODE_INFORMATION mInfo;
 STATIC UINT32 *mFrame;
 
 STATIC
+
 UINT32
 ReadBig32(VOID)
 {
@@ -70,6 +73,7 @@ ReadBig32(VOID)
   Select a fw_cfg file by name; its size in *Size. 0 when there is no such file.
 **/
 STATIC
+
 UINT16
 FindFile(IN CONST CHAR8 *Name, OUT UINT32 *Size)
 {
@@ -105,6 +109,7 @@ FindFile(IN CONST CHAR8 *Name, OUT UINT32 *Size)
   "WIDTHxHEIGHT" of opt/org.unixnu/ramfb-size.
 **/
 STATIC
+
 BOOLEAN
 ReadSize(OUT UINT32 *Width, OUT UINT32 *Height)
 {
@@ -144,6 +149,7 @@ ReadSize(OUT UINT32 *Width, OUT UINT32 *Height)
   Write RAMFB_CONFIG to etc/ramfb with fw_cfg DMA (the file is not writable through the data register).
 **/
 STATIC
+
 EFI_STATUS
 ConfigureRamfb(IN UINT16 Selector, IN EFI_PHYSICAL_ADDRESS Frame, IN UINT32 Width, IN UINT32 Height)
 {
@@ -186,6 +192,7 @@ ConfigureRamfb(IN UINT16 Selector, IN EFI_PHYSICAL_ADDRESS Frame, IN UINT32 Widt
 
 STATIC
 EFI_STATUS
+
 EFIAPI
 QueryMode(IN EFI_GRAPHICS_OUTPUT_PROTOCOL *This, IN UINT32 ModeNumber, OUT UINTN *SizeOfInfo,
           OUT EFI_GRAPHICS_OUTPUT_MODE_INFORMATION **Info)
@@ -205,6 +212,7 @@ QueryMode(IN EFI_GRAPHICS_OUTPUT_PROTOCOL *This, IN UINT32 ModeNumber, OUT UINTN
 
 STATIC
 EFI_STATUS
+
 EFIAPI
 SetMode(IN EFI_GRAPHICS_OUTPUT_PROTOCOL *This, IN UINT32 ModeNumber)
 {
@@ -221,6 +229,7 @@ SetMode(IN EFI_GRAPHICS_OUTPUT_PROTOCOL *This, IN UINT32 ModeNumber)
 **/
 STATIC
 EFI_STATUS
+
 EFIAPI
 Blt(IN EFI_GRAPHICS_OUTPUT_PROTOCOL *This, IN OUT EFI_GRAPHICS_OUTPUT_BLT_PIXEL *BltBuffer OPTIONAL,
     IN EFI_GRAPHICS_OUTPUT_BLT_OPERATION BltOperation, IN UINTN SourceX, IN UINTN SourceY, IN UINTN DestinationX,
@@ -299,11 +308,13 @@ Blt(IN EFI_GRAPHICS_OUTPUT_PROTOCOL *This, IN OUT EFI_GRAPHICS_OUTPUT_BLT_PIXEL 
 
         return EFI_SUCCESS;
 
-    default: return EFI_INVALID_PARAMETER;
+    default:
+        return EFI_INVALID_PARAMETER;
     }
 }
 
 EFI_STATUS
+
 EFIAPI
 QemuRamfbEntry(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable)
 {

@@ -10,43 +10,55 @@
             std::exit(1);                                        \
         }                                                        \
     } while (0)
+
 struct Peer {
     uint32_t regs[0x10000]{};
     unsigned reads = 0, writes = 0, barriers = 0, fail_read = 0, fail_write = 0, fail_barrier = 0;
     uint32_t cleared = 0xffffffff, last_write_reg = 0;
 };
+
 static Peer peer;
+
 static int write32(void *c, uint32_t reg, uint32_t v)
 {
     CHECK(c == &peer && reg < 0x10000);
     ++peer.writes;
-    if (peer.writes == peer.fail_write) return 1;
+    if (peer.writes == peer.fail_write)
+        return 1;
     peer.regs[reg] = v;
     peer.last_write_reg = reg;
-    if (reg == 0x0037) peer.cleared = v;
+    if (reg == 0x0037)
+        peer.cleared = v;
     return 0;
 }
+
 static int read32(void *c, uint32_t reg, uint32_t *v)
 {
     CHECK(c == &peer && v && reg < 0x10000);
     ++peer.reads;
-    if (peer.reads == peer.fail_read) return 1;
+    if (peer.reads == peer.fail_read)
+        return 1;
     *v = peer.regs[reg];
     return 0;
 }
+
 static int barrier(void *c)
 {
     CHECK(c == &peer);
     ++peer.barriers;
     return peer.barriers == peer.fail_barrier;
 }
+
 static NativeAdrenoRingIo io{&peer, write32, read32, barrier};
+
 static void reset(void)
 {
     peer = Peer{};
     peer.cleared = 0xffffffff;
-    for (auto &v : peer.regs) v = 0;
+    for (auto &v : peer.regs)
+        v = 0;
 }
+
 int main()
 {
     /* Mask programming matches the pinned A7XX enable set exactly. */

@@ -229,7 +229,8 @@ int tegra_bpmp_emc_boot(unsigned int khz, char *line, unsigned long size)
 		return err;
 	}
 	if (!khz) {
-		snprintf(line, size, "%lld MHz (BPMP firmware %s; EMC tables %s MHz; no rate asked)",
+		snprintf(line, size,
+			 "%lld MHz (BPMP firmware %s; EMC tables %s MHz; no rate asked)",
 			 before / 1000000, fw_tag, rates);
 		return 0;
 	}
@@ -311,8 +312,8 @@ int tegra_bpmp_sc7_suspend(char *line, unsigned long size)
 			emc_resume_hz = now;
 	}
 	if (err) {
-		snprintf(line, size, "EMC not lowered to 204 MHz for SC7 (MRQ_CLK %d, at %lld MHz)", err,
-			 now / 1000000);
+		snprintf(line, size, "EMC not lowered to 204 MHz for SC7 (MRQ_CLK %d, at %lld MHz)",
+			 err, now / 1000000);
 		return err;
 	}
 	err = tegra_bpmp_send_receive(MRQ_ENABLE_SUSPEND, enable, sizeof(enable), NULL, 0);
@@ -338,6 +339,7 @@ int tegra_bpmp_sc7_resume(char *line, unsigned long size)
 		err = clk_rate(CMD_CLK_SET_RATE, emc_resume_hz, &after);
 	if (!err)
 		err = clk_get_rate(&after);
-	snprintf(line, size, "EMC %lld -> %lld MHz after SC7 (MRQ_CLK %d)", now / 1000000, after / 1000000, err);
+	snprintf(line, size, "EMC %lld -> %lld MHz after SC7 (MRQ_CLK %d)", now / 1000000,
+		 after / 1000000, err);
 	return err;
 }

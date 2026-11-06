@@ -23,24 +23,29 @@ static double nowMs()
 {
     return clock_gettime_nsec_np(CLOCK_UPTIME_RAW) / 1e6;
 }
+
 static void missing(const char *c, const char *s)
 {
     std::fprintf(stderr, "missing %s %s\n", c, s);
 }
+
 static uint32_t lcg(uint32_t &s)
 {
     s = s * 1664525u + 1013904223u;
     return s >> 8;
 }
+
 // A half in [0, 1): sign 0, exponent 0..14, so any pair of them read as a float is finite too.
 static uint16_t unitHalf(uint32_t &s)
 {
     return uint16_t((lcg(s) % 15) << 10 | (lcg(s) & 0x3ff));
 }
+
 static uint64_t fnv(const uint8_t *p, size_t n)
 {
     uint64_t h = 1469598103934665603ull;
-    while (n--) h = (h ^ *p++) * 1099511628211ull;
+    while (n--)
+        h = (h ^ *p++) * 1099511628211ull;
     return h;
 }
 
@@ -110,11 +115,13 @@ int main(int argc, char **argv)
         // color, padding; 48 bytes), the identity MVP and texture matrices, a zero vertex config (layout 0), and finite pseudo-random
         // words for every other buffer and texel.
         uint32_t seed = 0x5eed1234u;
+
         struct Vertex {
             float position[4], tc0[2], tc1[2];
             uint16_t color[4];
             uint8_t pad[8];
         };
+
         static_assert(sizeof(Vertex) == 48);
         const float corners[6][2] = {{-1, -1}, {1, -1}, {-1, 1}, {-1, 1}, {1, -1}, {1, 1}};
         Vertex vertices[6] = {};
@@ -124,7 +131,8 @@ int main(int argc, char **argv)
             vertices[i].position[3] = 1;
             vertices[i].tc0[0] = vertices[i].tc1[1] = (corners[i][0] + 1) / 2;
             vertices[i].tc0[1] = vertices[i].tc1[0] = (1 - corners[i][1]) / 2;
-            for (int c = 0; c < 4; ++c) vertices[i].color[c] = unitHalf(seed);
+            for (int c = 0; c < 4; ++c)
+                vertices[i].color[c] = unitHalf(seed);
         }
         id<MTLBuffer> vertexBuffer = [device newBufferWithBytes:vertices
                                                          length:sizeof vertices
@@ -137,7 +145,8 @@ int main(int argc, char **argv)
         std::vector<id<MTLBuffer>> words;
         for (int i = 0; i < 9; ++i) {
             std::vector<uint16_t> w(131072 / 2 + 512);
-            for (uint16_t &x : w) x = unitHalf(seed);
+            for (uint16_t &x : w)
+                x = unitHalf(seed);
             if (i == 1) {
                 // CA::OGL::Metal::Uniform at its own layout: floats in [0, 1) at [6 x float4] (0..96), [2 x float4] and float4
                 // (128..176); halves in [0, 1) elsewhere; its two flag bytes (120, 121) and the trailing [8 x i8] zero.
@@ -146,8 +155,10 @@ int main(int argc, char **argv)
                     float f = float(lcg(seed) % 65536) / 65536.0f;
                     std::memcpy(bytes + at, &f, 4);
                 };
-                for (size_t at = 0; at < 96; at += 4) unitFloat(at);
-                for (size_t at = 128; at < 176; at += 4) unitFloat(at);
+                for (size_t at = 0; at < 96; at += 4)
+                    unitFloat(at);
+                for (size_t at = 128; at < 176; at += 4)
+                    unitFloat(at);
                 bytes[120] = bytes[121] = 0;
                 std::memset(bytes + 216, 0, 8);
             }
@@ -164,7 +175,8 @@ int main(int argc, char **argv)
         for (int i = 0; i < 12; ++i) {
             id<MTLTexture> t = [device newTextureWithDescriptor:xd];
             std::vector<uint16_t> texels(16 * 16 * 4);
-            for (uint16_t &x : texels) x = unitHalf(seed);
+            for (uint16_t &x : texels)
+                x = unitHalf(seed);
             [t replaceRegion:MTLRegionMake2D(0, 0, 16, 16) mipmapLevel:0 withBytes:texels.data() bytesPerRow:16 * 8];
             textures.push_back(t);
         }
@@ -176,8 +188,10 @@ int main(int argc, char **argv)
         double pipeTotal = 0, drawTotal = 0;
         while (std::fgets(line, sizeof line, recipes)) {
             std::vector<std::string> tokens;
-            for (char *t = std::strtok(line, " \t\n"); t; t = std::strtok(nullptr, " \t\n")) tokens.emplace_back(t);
-            if (tokens.empty() || tokens[0][0] == '#') continue;
+            for (char *t = std::strtok(line, " \t\n"); t; t = std::strtok(nullptr, " \t\n"))
+                tokens.emplace_back(t);
+            if (tokens.empty() || tokens[0][0] == '#')
+                continue;
             ++n;
             std::vector<std::string> specs(tokens.begin() + 1, tokens.end());
             double f0 = nowMs();
@@ -220,8 +234,10 @@ int main(int argc, char **argv)
             [encoder setVertexBuffer:matrix offset:0 atIndex:2];
             [encoder setVertexBuffer:matrix offset:0 atIndex:3];
             [encoder setVertexBuffer:matrix offset:0 atIndex:4];
-            for (NSUInteger i = 0; i < 9; ++i) [encoder setFragmentBuffer:words[i] offset:0 atIndex:i];
-            for (NSUInteger i = 0; i < 12; ++i) [encoder setFragmentTexture:textures[i] atIndex:i];
+            for (NSUInteger i = 0; i < 9; ++i)
+                [encoder setFragmentBuffer:words[i] offset:0 atIndex:i];
+            for (NSUInteger i = 0; i < 12; ++i)
+                [encoder setFragmentTexture:textures[i] atIndex:i];
             [encoder setFragmentSamplerState:sampler atIndex:0];
             [encoder setFragmentSamplerState:sampler atIndex:1];
             [encoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:6];
@@ -246,9 +262,11 @@ int main(int argc, char **argv)
             std::fflush(stdout);
         }
         static char table[8192];
-        if (!apple) native_bridge_metal_telemetry(table, sizeof table);
+        if (!apple)
+            native_bridge_metal_telemetry(table, sizeof table);
         for (char *l = std::strtok(table, "\n"); l; l = std::strtok(nullptr, "\n"))
-            if (l[0] == 'V' || l[0] == 'T') std::printf("TELEMETRY %s\n", l);
+            if (l[0] == 'V' || l[0] == 'T')
+                std::printf("TELEMETRY %s\n", l);
         std::printf("SUMMARY recipes=%u made=%u pipe=%.0f ms draw=%.0f ms\n", n, made, pipeTotal, drawTotal);
     }
     return 0;

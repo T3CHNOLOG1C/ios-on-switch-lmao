@@ -14,7 +14,8 @@ __attribute__((noinline)) static id nothing()
 int main(int argc, char **argv)
 {
     @autoreleasepool {
-        if (argc < 3) return 2;
+        if (argc < 3)
+            return 2;
         id<MTLDevice> device = native_bridge_metal_open(argv[1], argv[2], 0x6e6d62, nullptr);
         if (!device) {
             std::printf("FAIL device\n");
@@ -40,7 +41,9 @@ int main(int argc, char **argv)
                         destinationOffset:0
                                      size:16];
                     break;
-                case 1: [blit fillBuffer:(id<MTLBuffer>)nothing() range:NSMakeRange(0, 16) value:0]; break;
+                case 1:
+                    [blit fillBuffer:(id<MTLBuffer>)nothing() range:NSMakeRange(0, 16) value:0];
+                    break;
                 case 2:
                     [blit copyFromTexture:(id<MTLTexture>)nothing()
                                      sourceSlice:0
@@ -52,7 +55,9 @@ int main(int argc, char **argv)
                           destinationBytesPerRow:32
                         destinationBytesPerImage:256];
                     break;
-                default: [blit copyFromTexture:texture toTexture:(id<MTLTexture>)nothing()]; break;
+                default:
+                    [blit copyFromTexture:texture toTexture:(id<MTLTexture>)nothing()];
+                    break;
                 }
                 [blit endEncoding];
                 [cb commit];
@@ -66,7 +71,8 @@ int main(int argc, char **argv)
                 ++failed;
             }
         }
-        if (failed) return 1;
+        if (failed)
+            return 1;
         std::printf("PASS: a nil resource fails the command buffer in every blit variant, no exception\n");
     }
     return 0;

@@ -41,11 +41,14 @@ int main(int argc, char **argv)
         }
         int failed = 0;
         id<MTLCommandQueue> q = [dev newCommandQueue];
+
         struct Size {
             unsigned w, h, levels;
         };
+
         for (Size z : {Size{776, 24, 10}, Size{180, 180, 8}, Size{97, 3, 7}, Size{60, 60, 3}, Size{1, 1, 1}}) {
-            if (z.levels < 2) continue;
+            if (z.levels < 2)
+                continue;
             MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
                                                                                          width:z.w
                                                                                         height:z.h
@@ -62,7 +65,8 @@ int main(int argc, char **argv)
                 lh[l] = std::max(1u, z.h >> l);
                 want[l].resize(size_t(lw[l]) * lh[l] * 4);
             }
-            for (size_t i = 0; i < want[0].size(); i++) want[0][i] = uint8_t(i * 131u + (i >> 7) * 17u + 5u);
+            for (size_t i = 0; i < want[0].size(); i++)
+                want[0][i] = uint8_t(i * 131u + (i >> 7) * 17u + 5u);
             for (unsigned l = 1; l < z.levels; l++)
                 raw::fx::referenceDownsample(want[l - 1].data(), lw[l - 1] * 4, lw[l - 1], lh[l - 1], want[l].data(),
                                              lw[l] * 4, lw[l], lh[l], 4);
@@ -144,7 +148,8 @@ int main(int argc, char **argv)
                           fromRegion:MTLRegionMake2D(0, 0, lw[l], lh[l])
                          mipmapLevel:0];
                     size_t bad = 0;
-                    for (size_t i = 0; i < got.size(); i++) bad += got[i] != want[l][i];
+                    for (size_t i = 0; i < got.size(); i++)
+                        bad += got[i] != want[l][i];
                     printf("%s %ux%u level %u (%ux%u): %zu bytes, %zu differ\n", bad ? "FAIL" : "OK  ", z.w, z.h, l,
                            lw[l], lh[l], got.size(), bad);
                     failed += bad != 0;
@@ -152,7 +157,8 @@ int main(int argc, char **argv)
             }
         }
         char rates[1024];
-        if (raw_metal_rates(rates, sizeof rates)) printf("RATES %s\n", rates);
+        if (raw_metal_rates(rates, sizeof rates))
+            printf("RATES %s\n", rates);
         printf("mipframe: %d case(s) failed\n", failed);
         return failed ? 1 : 0;
     }

@@ -31,7 +31,11 @@
 extern "C" {
 #endif
 
-enum { VIC_MODEL_FLIP_RECT = 0, VIC_MODEL_FLIP_SURFACE = 1, VIC_MODEL_FLIP_AFTER = 2 };
+enum {
+    VIC_MODEL_FLIP_RECT = 0,
+    VIC_MODEL_FLIP_SURFACE = 1,
+    VIC_MODEL_FLIP_AFTER = 2
+};
 
 typedef struct {
     uint64_t iova;
@@ -50,7 +54,8 @@ static inline uint8_t *vic_model_at(VicModel *m, uint64_t iova, uint32_t bytes)
 {
     for (uint32_t i = 0; i < m->regions; i++) {
         const VicModelRegion *r = &m->region[i];
-        if (iova >= r->iova && iova + bytes <= r->iova + r->bytes) return r->va + (iova - r->iova);
+        if (iova >= r->iova && iova + bytes <= r->iova + r->bytes)
+            return r->va + (iova - r->iova);
     }
     m->faults++;
     return 0;
@@ -119,7 +124,8 @@ static inline int vic_model_read(VicModel *m, const VicModelSlot *s, uint32_t x,
     }
     if (s->format == TEGRA_VIC_T_A8R8G8B8 || s->format == TEGRA_VIC_T_A8B8G8R8) {
         const uint8_t *q = vic_model_at(m, s->luma + ((uint64_t)y * s->lw + x) * 4, 4);
-        if (!q) return 0;
+        if (!q)
+            return 0;
         uint32_t w;
         memcpy(&w, q, 4);
         const uint32_t r = s->format == TEGRA_VIC_T_A8R8G8B8 ? (w >> 16) & 0xff : w & 0xff;
@@ -131,7 +137,8 @@ static inline int vic_model_read(VicModel *m, const VicModelSlot *s, uint32_t x,
     } else if (s->format == TEGRA_VIC_T_Y8___U8V8_N420) {
         const uint8_t *yq = vic_model_at(m, s->luma + (uint64_t)y * s->lw + x, 1);
         const uint8_t *cq = vic_model_at(m, s->chroma + ((uint64_t)(y / 2) * s->cw + x / 2) * 2, 2);
-        if (!yq || !cq) return 0;
+        if (!yq || !cq)
+            return 0;
         p->c[0] = vic_model_widen(yq[0]);
         p->c[2] = vic_model_widen(cq[0]);  // Cb
         p->c[1] = vic_model_widen(cq[1]);  // Cr
@@ -206,8 +213,10 @@ static inline void vic_model_run(VicModel *m, const TegraVICJob *job)
             VicModelPixel p = background;
             if (slot && x >= DL && x <= DR && y >= DT && y <= DB) {
                 const uint32_t sx = vic_model_sample(SL, SR, DL, DR, x), sy = vic_model_sample(ST, SB, DT, DB, y);
-                if (!vic_model_read(m, &in, sx, sy, &p)) continue;
-                if (!sourceAlpha) p.a = 1023;
+                if (!vic_model_read(m, &in, sx, sy, &p))
+                    continue;
+                if (!sourceAlpha)
+                    p.a = 1023;
             }
             if (outMatrixOn) {
                 const uint32_t in10[3] = {p.c[0], p.c[1], p.c[2]};
@@ -224,7 +233,8 @@ static inline void vic_model_run(VicModel *m, const TegraVICJob *job)
             const uint64_t at = tr ? (uint64_t)wx * lh + wy : (uint64_t)wy * lw + wx;
             if (format == TEGRA_VIC_T_A8R8G8B8 || format == TEGRA_VIC_T_A8B8G8R8) {
                 uint8_t *q = vic_model_at(m, outLuma + at * 4, 4);
-                if (!q) continue;
+                if (!q)
+                    continue;
                 const uint32_t r = p.c[0] >> 2, g = p.c[1] >> 2, b = p.c[2] >> 2, a = p.a >> 2;
                 const uint32_t w =
                     a << 24 | (format == TEGRA_VIC_T_A8R8G8B8 ? (r << 16 | g << 8 | b) : (b << 16 | g << 8 | r));
@@ -232,17 +242,20 @@ static inline void vic_model_run(VicModel *m, const TegraVICJob *job)
                 m->writes++;
             } else if (format == TEGRA_VIC_T_Y8___U8V8_N420) {
                 uint8_t *q = vic_model_at(m, outLuma + at, 1);
-                if (!q) continue;
+                if (!q)
+                    continue;
                 q[0] = (uint8_t)(p.c[0] >> 2);
                 m->writes++;
-                if ((wx | wy) & 1) continue;  // one CbCr pair for each 2x2: the top-left written pixel's
+                if ((wx | wy) & 1)
+                    continue;  // one CbCr pair for each 2x2: the top-left written pixel's
                 if (wx / 2 >= cw || wy / 2 >= ch) {
                     m->clipped++;
                     continue;
                 }
                 const uint64_t cat = tr ? (uint64_t)(wx / 2) * ch + wy / 2 : (uint64_t)(wy / 2) * cw + wx / 2;
                 uint8_t *cq = vic_model_at(m, outChroma + cat * 2, 2);
-                if (!cq) continue;
+                if (!cq)
+                    continue;
                 cq[0] = (uint8_t)(p.c[2] >> 2);  // Cb
                 cq[1] = (uint8_t)(p.c[1] >> 2);  // Cr
                 m->writes++;

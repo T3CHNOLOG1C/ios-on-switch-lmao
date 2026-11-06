@@ -9,37 +9,53 @@
 #include <kern/clock.h>
 #include <kern/task.h>
 #include "NativeVirtioConsoleTransport.h"
+
 namespace {
 constexpr unsigned queueSize = 8, bufferSize = 4096;
+
 struct Descriptor {
     uint64_t address;
     uint32_t length;
     uint16_t flags, next;
 };
+
 struct Used {
     uint32_t id, length;
 };
+
 static_assert(sizeof(Descriptor) == 16 && sizeof(Used) == 8, "Actual VirtIO wire sizes");
+
 inline void dmaBarrier()
 {
     __asm__ volatile("dmb osh" ::: "memory");
 }
+
 struct Queue {
     IOBufferMemoryDescriptor *ring = nullptr, *buffer = nullptr;
     uint64_t physical = 0, dataPhysical = 0;
     uint16_t available = 0, used = 0;
     unsigned bytes = 0, offset = 0;
     bool pending = false;
-    unsigned char *memory() const { return static_cast<unsigned char *>(ring->getBytesNoCopy()); }
-    void *data() const { return buffer->getBytesNoCopy(); }
+
+    unsigned char *memory() const
+    {
+        return static_cast<unsigned char *>(ring->getBytesNoCopy());
+    }
+
+    void *data() const
+    {
+        return buffer->getBytesNoCopy();
+    }
 };
 }
+
 extern "C" {
 volatile uint32_t native_console_ready;
 volatile uint32_t native_console_tx_requests, native_console_rx_requests, native_console_failures;
 volatile uint64_t native_console_tx_bytes, native_console_rx_bytes, native_console_mmio;
 }
 class NativeVirtioConsoleClient;
+
 class NativeVirtioConsole : public IOService {
     OSDeclareDefaultStructors(NativeVirtioConsole) friend class NativeVirtioConsoleClient;
     friend IOReturn native_console_send(IOService *, IOService *, const void *, size_t);
@@ -50,17 +66,24 @@ class NativeVirtioConsole : public IOService {
     Queue queues[2];
     uintptr_t registers = 0;
     bool online = false, ownsDevice = false;
-    uint32_t read32(unsigned n) const { return *reinterpret_cast<volatile uint32_t *>(registers + n); }
+
+    uint32_t read32(unsigned n) const
+    {
+        return *reinterpret_cast<volatile uint32_t *>(registers + n);
+    }
+
     void write32(unsigned n, uint32_t v)
     {
         *reinterpret_cast<volatile uint32_t *>(registers + n) = v;
         __asm__ volatile("dsb oshst" ::: "memory");
     }
+
     void address(unsigned n, uint64_t v)
     {
         write32(n, (uint32_t)v);
         write32(n + 4, (uint32_t)(v >> 32));
     }
+
     bool reset();
     bool configure();
     bool configureQueue(unsigned);
@@ -80,6 +103,7 @@ public:
     bool handleIsOpen(const IOService *) const override;
     IOReturn newUserClient(task_t, void *, UInt32, OSDictionary *, IOUserClient **) override;
 };
+
 class NativeVirtioConsoleClient : public IOUserClient {
     OSDeclareDefaultStructors(NativeVirtioConsoleClient) NativeVirtioConsole *controller = nullptr;
     bool opened = false;
@@ -94,6 +118,7 @@ public:
     IOReturn externalMethod(uint32_t, IOExternalMethodArguments *, IOExternalMethodDispatch *, OSObject *,
                             void *) override;
 };
+
 OSDefineMetaClassAndStructors(NativeVirtioConsole, IOService)
     OSDefineMetaClassAndStructors(NativeVirtioConsoleClient, IOUserClient)
 
@@ -102,6 +127,7 @@ OSDefineMetaClassAndStructors(NativeVirtioConsole, IOService)
     NativeVirtioConsole *console = OSDynamicCast(NativeVirtioConsole, provider);
     return console && owner && console->isOpen(owner) ? console->send(bytes, size) : kIOReturnNotOpen;
 }
+
 extern "C" IOReturn native_console_receive(IOService *provider, IOService *owner, void *bytes, size_t *size)
 {
     NativeVirtioConsole *console = OSDynamicCast(NativeVirtioConsole, provider);
@@ -114,7 +140,8 @@ IOService *NativeVirtioConsole::probe(IOService *provider, SInt32 *score)
     if (!compatible || compatible->getLength() != 12 || memcmp(compatible->getBytesNoCopy(), "virtio,mmio", 12))
         return nullptr;
     IOMemoryMap *view = provider->mapDeviceMemoryWithIndex(0);
-    if (!view) return nullptr;
+    if (!view)
+        return nullptr;
     uintptr_t base = view->getVirtualAddress();
     bool matches = view->getLength() >= 0x100 && *reinterpret_cast<volatile uint32_t *>(base) == 0x74726976 &&
                    *reinterpret_cast<volatile uint32_t *>(base + 4) == 2 &&
@@ -122,31 +149,39 @@ IOService *NativeVirtioConsole::probe(IOService *provider, SInt32 *score)
     view->release();
     return matches ? IOService::probe(provider, score) : nullptr;
 }
+
 bool NativeVirtioConsole::reset()
 {
     online = false;
-    if (ownsDevice) native_console_ready = 0;
-    if (!registers || !ownsDevice) return true;
+    if (ownsDevice)
+        native_console_ready = 0;
+    if (!registers || !ownsDevice)
+        return true;
     write32(0x70, 0);
     uint64_t deadline;
     clock_interval_to_deadline(1000, kMillisecondScale, &deadline);
     while (read32(0x70)) {
-        if (mach_absolute_time() >= deadline) return false;
+        if (mach_absolute_time() >= deadline)
+            return false;
         IODelay(1);
     }
-    for (unsigned i = 0; i < 2; i++) queues[i].pending = false;
+    for (unsigned i = 0; i < 2; i++)
+        queues[i].pending = false;
     return true;
 }
+
 bool NativeVirtioConsole::configureQueue(unsigned id)
 {
     Queue &q = queues[id];
     write32(0x30, id);
-    if (read32(0x44) || read32(0x34) < queueSize) return false;
+    if (read32(0x44) || read32(0x34) < queueSize)
+        return false;
     IOOptionBits options =
         static_cast<IOOptionBits>(kIODirectionInOut) | static_cast<IOOptionBits>(kIOMemoryPhysicallyContiguous);
     q.ring = IOBufferMemoryDescriptor::inTaskWithOptions(kernel_task, options, 4096, 4096);
     q.buffer = IOBufferMemoryDescriptor::inTaskWithOptions(kernel_task, options, bufferSize, 4096);
-    if (!q.ring || !q.buffer) return false;
+    if (!q.ring || !q.buffer)
+        return false;
     IOByteCount rn = 0, bn = 0;
     q.physical = q.ring->getPhysicalSegment(0, &rn);
     q.dataPhysical = q.buffer->getPhysicalSegment(0, &bn);
@@ -163,26 +198,33 @@ bool NativeVirtioConsole::configureQueue(unsigned id)
     write32(0x44, 1);
     return true;
 }
+
 bool NativeVirtioConsole::configure()
 {
-    if (!reset()) return false;
+    if (!reset())
+        return false;
     write32(0x70, 1);
     write32(0x70, 3);
     write32(0x14, 1);
-    if (!(read32(0x10) & 1)) return false;
+    if (!(read32(0x10) & 1))
+        return false;
     // Port zero only. No MULTIPORT, event-index, indirect descriptors or DMA remapping.
     write32(0x24, 0);
     write32(0x20, 0);
     write32(0x24, 1);
     write32(0x20, 1);
     write32(0x70, 11);
-    if ((read32(0x70) & (8 | 64 | 128)) != 8) return false;
-    if (!configureQueue(0) || !configureQueue(1)) return false;
+    if ((read32(0x70) & (8 | 64 | 128)) != 8)
+        return false;
+    if (!configureQueue(0) || !configureQueue(1))
+        return false;
     write32(0x70, 15);
     online = (read32(0x70) & (15 | 64 | 128)) == 15;
-    if (online) post(0, bufferSize);
+    if (online)
+        post(0, bufferSize);
     return online;
 }
+
 void NativeVirtioConsole::post(unsigned id, unsigned bytes)
 {
     Queue &q = queues[id];
@@ -196,10 +238,12 @@ void NativeVirtioConsole::post(unsigned id, unsigned bytes)
     q.pending = true;
     write32(0x50, id);
 }
+
 IOReturn NativeVirtioConsole::complete(unsigned id, unsigned *length)
 {
     Queue &q = queues[id];
-    if (!q.pending) return kIOReturnNotReady;
+    if (!q.pending)
+        return kIOReturnNotReady;
     volatile uint16_t *used = reinterpret_cast<volatile uint16_t *>(q.memory() + 256);
     uint64_t deadline;
     clock_interval_to_deadline(2000, kMillisecondScale, &deadline);
@@ -208,7 +252,8 @@ IOReturn NativeVirtioConsole::complete(unsigned id, unsigned *length)
             online = false;
             return kIOReturnIOError;
         }
-        if (mach_absolute_time() >= deadline) return kIOReturnNotResponding;
+        if (mach_absolute_time() >= deadline)
+            return kIOReturnNotResponding;
         IODelay(50);
     }
     dmaBarrier();
@@ -226,12 +271,15 @@ IOReturn NativeVirtioConsole::complete(unsigned id, unsigned *length)
     q.pending = false;
     *length = n;
     uint32_t irq = read32(0x60);
-    if (irq & 3) write32(0x64, irq & 3);
+    if (irq & 3)
+        write32(0x64, irq & 3);
     return kIOReturnSuccess;
 }
+
 IOReturn NativeVirtioConsole::send(const void *data, size_t bytes)
 {
-    if (!data || !bytes || bytes > bufferSize) return kIOReturnBadArgument;
+    if (!data || !bytes || bytes > bufferSize)
+        return kIOReturnBadArgument;
     IOLockLock(gate);
     IOReturn status = kIOReturnNotReady;
     Queue &q = queues[1];
@@ -252,13 +300,16 @@ IOReturn NativeVirtioConsole::send(const void *data, size_t bytes)
             }
         }
     }
-    if (status != kIOReturnSuccess) native_console_failures = native_console_failures + 1;
+    if (status != kIOReturnSuccess)
+        native_console_failures = native_console_failures + 1;
     IOLockUnlock(gate);
     return status;
 }
+
 IOReturn NativeVirtioConsole::receive(void *data, size_t *bytes)
 {
-    if (!data || !bytes || !*bytes || *bytes > bufferSize) return kIOReturnBadArgument;
+    if (!data || !bytes || !*bytes || *bytes > bufferSize)
+        return kIOReturnBadArgument;
     size_t capacity = *bytes;
     *bytes = 0;
     IOLockLock(gate);
@@ -287,31 +338,39 @@ IOReturn NativeVirtioConsole::receive(void *data, size_t *bytes)
             }
         }
     }
-    if (status != kIOReturnSuccess) native_console_failures = native_console_failures + 1;
+    if (status != kIOReturnSuccess)
+        native_console_failures = native_console_failures + 1;
     IOLockUnlock(gate);
     return status;
 }
+
 bool NativeVirtioConsole::start(IOService *provider)
 {
     uint64_t tcr, sctlr;
     __asm__ volatile("mrs %0,tcr_el1" : "=r"(tcr));
     __asm__ volatile("mrs %0,sctlr_el1" : "=r"(sctlr));
-    if (((tcr >> 14) & 3) != 0 || ((tcr >> 30) & 3) != 2 || !(sctlr & 1) || !IOService::start(provider)) return false;
+    if (((tcr >> 14) & 3) != 0 || ((tcr >> 30) & 3) != 2 || !(sctlr & 1) || !IOService::start(provider))
+        return false;
     gate = IOLockAlloc();
     mapping = provider->mapDeviceMemoryWithIndex(0);
-    if (!gate || !mapping || mapping->getLength() < 0x100) return false;
+    if (!gate || !mapping || mapping->getLength() < 0x100)
+        return false;
     registers = mapping->getVirtualAddress();
-    if (read32(0) != 0x74726976 || read32(4) != 2 || read32(8) != 3) return false;
+    if (read32(0) != 0x74726976 || read32(4) != 2 || read32(8) != 3)
+        return false;
     ownsDevice = true;
-    if (!configure()) return false;
+    if (!configure())
+        return false;
     native_console_mmio = mapping->getPhysicalAddress();
     native_console_ready = 1;
     registerService();
     return true;
 }
+
 void NativeVirtioConsole::cleanup()
 {
-    if (gate) IOLockLock(gate);
+    if (gate)
+        IOLockLock(gate);
     bool stopped = reset();
     if (stopped) {
         for (unsigned i = 0; i < 2; i++) {
@@ -324,13 +383,16 @@ void NativeVirtioConsole::cleanup()
     }
     // If reset fails, preserve device-reachable allocations instead of freeing
     // storage while the device may still DMA. This path requires recovery.
-    if (gate) IOLockUnlock(gate);
+    if (gate)
+        IOLockUnlock(gate);
 }
+
 void NativeVirtioConsole::stop(IOService *provider)
 {
     cleanup();
     IOService::stop(provider);
 }
+
 void NativeVirtioConsole::free()
 {
     cleanup();
@@ -340,49 +402,63 @@ void NativeVirtioConsole::free()
     }
     IOService::free();
 }
+
 bool NativeVirtioConsole::handleOpen(IOService *client, IOOptionBits, void *)
 {
-    if (owner) return owner == client;
+    if (owner)
+        return owner == client;
     owner = client;
     return true;
 }
+
 void NativeVirtioConsole::handleClose(IOService *client, IOOptionBits)
 {
-    if (owner == client) owner = nullptr;
+    if (owner == client)
+        owner = nullptr;
 }
+
 bool NativeVirtioConsole::handleIsOpen(const IOService *client) const
 {
     return client ? owner == client : owner != nullptr;
 }
+
 IOReturn NativeVirtioConsole::newUserClient(task_t task, void *security, UInt32 type, OSDictionary *properties,
                                             IOUserClient **out)
 {
-    if (!out || type || !online) return kIOReturnBadArgument;
+    if (!out || type || !online)
+        return kIOReturnBadArgument;
     *out = nullptr;
     NativeVirtioConsoleClient *client = new NativeVirtioConsoleClient;
-    if (!client) return kIOReturnNoMemory;
+    if (!client)
+        return kIOReturnNoMemory;
     bool attached = false;
     if (!client->initWithTask(task, security, type, properties) || !(attached = client->attach(this)) ||
         !client->start(this)) {
-        if (attached) client->detach(this);
+        if (attached)
+            client->detach(this);
         client->release();
         return kIOReturnNotOpen;
     }
     *out = client;
     return kIOReturnSuccess;
 }
+
 bool NativeVirtioConsoleClient::initWithTask(task_t task, void *security, UInt32 type, OSDictionary *properties)
 {
-    if (type || clientHasPrivilege(security, kIOClientPrivilegeAdministrator) != kIOReturnSuccess) return false;
+    if (type || clientHasPrivilege(security, kIOClientPrivilegeAdministrator) != kIOReturnSuccess)
+        return false;
     return IOUserClient::initWithTask(task, security, type, properties);
 }
+
 bool NativeVirtioConsoleClient::start(IOService *provider)
 {
     controller = OSDynamicCast(NativeVirtioConsole, provider);
-    if (!controller || !IOUserClient::start(provider)) return false;
+    if (!controller || !IOUserClient::start(provider))
+        return false;
     opened = controller->open(this);
     return opened;
 }
+
 void NativeVirtioConsoleClient::stop(IOService *provider)
 {
     if (opened) {
@@ -392,34 +468,43 @@ void NativeVirtioConsoleClient::stop(IOService *provider)
     controller = nullptr;
     IOUserClient::stop(provider);
 }
+
 IOReturn NativeVirtioConsoleClient::clientClose()
 {
     terminate();
     return kIOReturnSuccess;
 }
+
 IOReturn NativeVirtioConsoleClient::sendAction(OSObject *target, void *, IOExternalMethodArguments *args)
 {
     NativeVirtioConsoleClient *client = OSDynamicCast(NativeVirtioConsoleClient, target);
-    if (!client || !client->opened || !client->controller) return kIOReturnNotOpen;
-    if (args->structureInputDescriptor) return kIOReturnUnsupported;
+    if (!client || !client->opened || !client->controller)
+        return kIOReturnNotOpen;
+    if (args->structureInputDescriptor)
+        return kIOReturnUnsupported;
     return client->controller->send(args->structureInput, args->structureInputSize);
 }
+
 IOReturn NativeVirtioConsoleClient::receiveAction(OSObject *target, void *, IOExternalMethodArguments *args)
 {
     NativeVirtioConsoleClient *client = OSDynamicCast(NativeVirtioConsoleClient, target);
-    if (!client || !client->opened || !client->controller) return kIOReturnNotOpen;
-    if (args->structureOutputDescriptor) return kIOReturnUnsupported;
+    if (!client || !client->opened || !client->controller)
+        return kIOReturnNotOpen;
+    if (args->structureOutputDescriptor)
+        return kIOReturnUnsupported;
     size_t size = args->structureOutputSize;
     IOReturn status = client->controller->receive(args->structureOutput, &size);
     args->structureOutputSize = (uint32_t)size;
     return status;
 }
+
 IOReturn NativeVirtioConsoleClient::externalMethod(uint32_t selector, IOExternalMethodArguments *args,
                                                    IOExternalMethodDispatch *, OSObject *, void *)
 {
     static const IOExternalMethodDispatch methods[] = {{sendAction, 0, kIOUCVariableStructureSize, 0, 0},
                                                        {receiveAction, 0, 0, 0, kIOUCVariableStructureSize}};
-    if (selector >= 2) return kIOReturnUnsupported;
+    if (selector >= 2)
+        return kIOReturnUnsupported;
     return IOUserClient::externalMethod(selector, args, const_cast<IOExternalMethodDispatch *>(methods + selector),
                                         this, nullptr);
 }

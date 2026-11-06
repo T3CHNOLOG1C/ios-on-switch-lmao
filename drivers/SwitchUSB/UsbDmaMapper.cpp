@@ -28,8 +28,10 @@ bool cacheable(IOMemoryDescriptor *memory)
     case kIODefaultCache:
     case kIOWriteThruCache:
     case kIOCopybackCache:
-    case kIOCopybackInnerCache: return true;
-    default: return false;
+    case kIOCopybackInnerCache:
+        return true;
+    default:
+        return false;
     }
 }
 }  // namespace
@@ -54,15 +56,29 @@ protected:
 public:
     uint64_t reach = 1ull << 32;
     void free() override;
-    uint64_t getPageSize(void) const override { return kPage; }
+
+    uint64_t getPageSize(void) const override
+    {
+        return kPage;
+    }
+
     IOReturn iovmMapMemory(IOMemoryDescriptor *memory, uint64_t descriptorOffset, uint64_t length, uint32_t mapOptions,
                            const IODMAMapSpecification *spec, IODMACommand *command, const IODMAMapPageList *pageList,
                            uint64_t *mapAddress, uint64_t *mapLength) override;
     IOReturn iovmUnmapMemory(IOMemoryDescriptor *memory, IODMACommand *command, uint64_t mapAddress,
                              uint64_t mapLength) override;
-    IOReturn iovmInsert(uint32_t, uint64_t, uint64_t, uint64_t, uint64_t) override { return kIOReturnUnsupported; }
-    uint64_t mapToPhysicalAddress(uint64_t mappedAddress) override { return mappedAddress; }
+
+    IOReturn iovmInsert(uint32_t, uint64_t, uint64_t, uint64_t, uint64_t) override
+    {
+        return kIOReturnUnsupported;
+    }
+
+    uint64_t mapToPhysicalAddress(uint64_t mappedAddress) override
+    {
+        return mappedAddress;
+    }
 };
+
 OSDefineMetaClassAndStructors(SwitchDMAMapper, IOMapper);
 
 bool SwitchDMAMapper::initHardware(IOService *)
@@ -70,7 +86,8 @@ bool SwitchDMAMapper::initHardware(IOService *)
     lock = IOLockAlloc();
     usedPages = IONewZero(uint8_t, kPoolPages);
     mappings = IONewZero(Mapping, kMaxMappings);
-    if (!lock || !usedPages || !mappings || !gPool) return false;
+    if (!lock || !usedPages || !mappings || !gPool)
+        return false;
     poolVA = static_cast<uint8_t *>(gPool->getBytesNoCopy());
     poolPA = gPool->getPhysicalSegment(0, nullptr, kIOMemoryMapperNone);
     return true;
@@ -78,9 +95,12 @@ bool SwitchDMAMapper::initHardware(IOService *)
 
 void SwitchDMAMapper::free()
 {
-    if (usedPages) IODeleteData(usedPages, uint8_t, kPoolPages);
-    if (mappings) IODelete(mappings, Mapping, kMaxMappings);
-    if (lock) IOLockFree(lock);
+    if (usedPages)
+        IODeleteData(usedPages, uint8_t, kPoolPages);
+    if (mappings)
+        IODelete(mappings, Mapping, kMaxMappings);
+    if (lock)
+        IOLockFree(lock);
     IOMapper::free();
 }
 
@@ -89,9 +109,11 @@ int SwitchDMAMapper::allocatePages(uint32_t count, uint64_t alignment)
     uint32_t step = alignment > kPage ? (uint32_t)(alignment / kPage) : 1;
     for (uint32_t first = 0; first + count <= kPoolPages; first += step) {
         uint32_t n = 0;
-        while (n < count && !usedPages[first + n]) ++n;
+        while (n < count && !usedPages[first + n])
+            ++n;
         if (n == count) {
-            for (uint32_t i = 0; i < count; ++i) usedPages[first + i] = 1;
+            for (uint32_t i = 0; i < count; ++i)
+                usedPages[first + i] = 1;
             return (int)first;
         }
     }
@@ -101,14 +123,16 @@ int SwitchDMAMapper::allocatePages(uint32_t count, uint64_t alignment)
 Mapping *SwitchDMAMapper::slot()
 {
     for (uint32_t i = 0; i < kMaxMappings; ++i)
-        if (!mappings[i].used) return &mappings[i];
+        if (!mappings[i].used)
+            return &mappings[i];
     return nullptr;
 }
 
 Mapping *SwitchDMAMapper::find(uint64_t address)
 {
     for (uint32_t i = 0; i < kMaxMappings; ++i)
-        if (mappings[i].used && mappings[i].address == address) return &mappings[i];
+        if (mappings[i].used && mappings[i].address == address)
+            return &mappings[i];
     return nullptr;
 }
 
@@ -116,7 +140,8 @@ IOReturn SwitchDMAMapper::iovmMapMemory(IOMemoryDescriptor *memory, uint64_t off
                                         uint32_t mapOptions, const IODMAMapSpecification *spec, IODMACommand *,
                                         const IODMAMapPageList *, uint64_t *mapAddress, uint64_t *mapLength)
 {
-    if (!memory || !length || !mapAddress || !mapLength) return kIOReturnBadArgument;
+    if (!memory || !length || !mapAddress || !mapLength)
+        return kIOReturnBadArgument;
     const uint64_t alignment = spec && spec->alignment > 1 ? spec->alignment : 1;
     IOByteCount segment = 0;
     const uint64_t physical = memory->getPhysicalSegment(offset, &segment, kIOMemoryMapperNone);
@@ -128,12 +153,14 @@ IOReturn SwitchDMAMapper::iovmMapMemory(IOMemoryDescriptor *memory, uint64_t off
     Mapping *m = slot();
     int first = -1;
     const uint32_t pages = direct ? 0 : (uint32_t)((length + kPage - 1) / kPage);
-    if (m && !direct) first = pages <= kPoolPages ? allocatePages(pages, alignment) : -1;
+    if (m && !direct)
+        first = pages <= kPoolPages ? allocatePages(pages, alignment) : -1;
     if (!m || (!direct && first < 0)) {
         const bool report = !reportedFull;
         reportedFull = true;
         IOLockUnlock(lock);
-        if (report) IOLog("SwitchUSB: DMA %s full (%llu bytes asked)\n", m ? "bounce pool" : "mapping table", length);
+        if (report)
+            IOLog("SwitchUSB: DMA %s full (%llu bytes asked)\n", m ? "bounce pool" : "mapping table", length);
         return kIOReturnNoResources;
     }
     const uint64_t address = direct ? physical : poolPA + (uint64_t)first * kPage;
@@ -145,7 +172,8 @@ IOReturn SwitchDMAMapper::iovmMapMemory(IOMemoryDescriptor *memory, uint64_t off
         memory->performOperation(kIOMemoryIncoherentIOStore, offset, length);  // clean: the controller reads memory
     } else if (!direct) {
         uint8_t *bounce = poolVA + (uint64_t)first * kPage;
-        if (memory->readBytes(offset, bounce, length) != length) bzero(bounce, length);
+        if (memory->readBytes(offset, bounce, length) != length)
+            bzero(bounce, length);
         __asm__ volatile("dsb sy" ::: "memory");  // non-cacheable stores reach memory before the doorbell
     }
     *mapAddress = address;
@@ -169,9 +197,11 @@ IOReturn SwitchDMAMapper::iovmUnmapMemory(IOMemoryDescriptor *memory, IODMAComma
         done.memory->performOperation(kIOMemoryIncoherentIOFlush, done.offset, done.length);  // drop stale lines
     } else if (done.pages) {
         __asm__ volatile("dsb sy" ::: "memory");
-        if (done.writable) done.memory->writeBytes(done.offset, poolVA + (uint64_t)done.firstPage * kPage, done.length);
+        if (done.writable)
+            done.memory->writeBytes(done.offset, poolVA + (uint64_t)done.firstPage * kPage, done.length);
         IOLockLock(lock);
-        for (uint32_t i = 0; i < done.pages; ++i) usedPages[done.firstPage + i] = 0;
+        for (uint32_t i = 0; i < done.pages; ++i)
+            usedPages[done.firstPage + i] = 0;
         reportedFull = false;
         IOLockUnlock(lock);
     }
@@ -181,7 +211,8 @@ IOReturn SwitchDMAMapper::iovmUnmapMemory(IOMemoryDescriptor *memory, IODMAComma
 
 int switch_usb_dma_reserve(void)
 {
-    if (gPool) return 0;
+    if (gPool)
+        return 0;
     IOBufferMemoryDescriptor *pool = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(
         kernel_task,
         static_cast<IOOptionBits>(kIODirectionInOut) | static_cast<IOOptionBits>(kIOMemoryPhysicallyContiguous) |
@@ -199,7 +230,8 @@ int switch_usb_dma_reserve(void)
 IOMapper *switch_usb_dma_mapper(uint64_t reach)
 {
     static SwitchDMAMapper *mapper;
-    if (mapper) return mapper;  // one caller: the host bring-up, on the USB role thread
+    if (mapper)
+        return mapper;  // one caller: the host bring-up, on the USB role thread
     IOService *resources = IOService::getResourceService();
     SwitchDMAMapper *candidate = OSTypeAlloc(SwitchDMAMapper);
     if (!resources || !candidate || !candidate->init() || !candidate->attach(resources)) {

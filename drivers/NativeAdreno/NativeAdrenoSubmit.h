@@ -9,6 +9,7 @@ struct NativeAdrenoSubmitBuffer {
     uint64_t iova;
     size_t bytes; /* Complete indirect-buffer range in bytes. */
 };
+
 /* Coherence samples (int-070): [0] submissions sampled; [1..3] the last one's first IB word through the kernel's cacheable alias,
  * through DRAM before and through DRAM after the CPU cache maintenance of every mapped BO (~0 when unreadable); [4] samples whose
  * three values differ and [5..7] the first such sample. */
@@ -16,10 +17,12 @@ extern "C" volatile uint32_t native_adreno_coherence[8];
 /* The write-combine audit (int-100), see NativeAdrenoSubmit.cpp, and the submission (1-based) that ended the trust; 0 = never. */
 extern "C" volatile uint32_t native_adreno_wc_audit[6];
 extern "C" volatile uint32_t native_adreno_wc_distrusted;
+
 struct NativeAdrenoSubmitStats {
     uint32_t submissions, completed, timeouts, poisoned_jobs;
     size_t references_held, references_retired, peak_jobs;
 };
+
 /* Kernel-side execbuf: turns validated indirect buffers into one ring
  * submission and owns a device reference per distinct buffer until the
  * timestamp fence is actually observed. This is not a userspace ABI and not a
@@ -37,6 +40,7 @@ class NativeAdrenoSubmit final {
         uint32_t queue = 0;
         bool active = false;
     } jobs_[8];
+
     NativeAdrenoVm *vm_ = nullptr;
     NativeAdrenoRing *ring_ = nullptr;
     NativeAdrenoSubmitStats stats_{};
@@ -75,8 +79,17 @@ public:
     /* Wait for an earlier fence without touching job references; a timeout
      * leaves every job and reference exactly as they were. */
     IOReturn observeFence(uint32_t fence, const NativeAdrenoRingClock *, uint32_t timeout_us);
-    bool poisoned() const { return poisoned_; }
+
+    bool poisoned() const
+    {
+        return poisoned_;
+    }
+
     size_t outstanding() const;
-    NativeAdrenoSubmitStats stats() const { return stats_; }
+
+    NativeAdrenoSubmitStats stats() const
+    {
+        return stats_;
+    }
 };
 #endif

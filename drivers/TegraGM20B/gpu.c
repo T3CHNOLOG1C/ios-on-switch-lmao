@@ -95,14 +95,17 @@ int tgm_stage(void)
 {
 	return gpu.stage;
 }
+
 uint32_t tgm_wake_seq(void)
 {
 	return nvxnu_wake_seq();
 }
+
 int tgm_idle(uint32_t seq, uint64_t deadline_ns)
 {
 	return nvxnu_idle(seq, deadline_ns);
 }
+
 void tgm_fence_unwoken(uint32_t seq, uint32_t seqno)
 {
 	nvxnu_wake_due(seq, "fence", seqno);
@@ -653,6 +656,7 @@ uint64_t tgm_pool_avail(void)
 	0x070004         /* nvgpu hw_flush_gm20b.h: bit 0 pending, bit 1 outstanding */
 #define L2_OP_NS 1000000 /* nvgpu allows 200 x 5 us for the invalidate */
 static DEFINE_MUTEX(l2_lock);
+
 static struct {
 	u64 sum, max;
 	u32 n;
@@ -696,15 +700,18 @@ struct tgm_vm {
 		imports; /* struct tgm_import: first pages of the host imports made in it (live_lock) */
 	int imports_lost; /* one could not be recorded: taken as importing every page */
 };
+
 struct tgm_import {
 	struct list_head head;
 	u64 pa;
 	u32 refs;
 };
+
 struct tgm_mem {
 	struct nvif_mem mem;
 	u64 bytes;
 };
+
 struct tgm_kmap {
 	struct list_head head;
 	struct nvif_vma vma;
@@ -722,6 +729,7 @@ static struct {
 	u64 pa;
 	struct tgm_mem *mem;
 } pfence;
+
 static DEFINE_MUTEX(pfence_lock);
 
 static int present_order_on(void)
@@ -928,6 +936,7 @@ struct tgm_stamp {
 	u32 payload, pad;
 	u64 ns;
 };
+
 struct tgm_stamps {
 	struct tgm_stamp start,
 		end; /* the GPU starts the submission (WFI: the one before finished) / finished it */
@@ -940,6 +949,7 @@ struct tgm_order {
 	u64 id;                  /* the source channel */
 	u32 seqno;
 };
+
 struct tgm_chan {
 	struct tgm_vm *vm;
 	struct nvif_object user;
@@ -968,7 +978,7 @@ struct tgm_chan {
 	u64 submit_ns;   /* when the last fence was kicked */
 	u32 stall_done;  /* tgm_chan_check_progress: completed seqno first seen stalled, and when */
 	u64 stall_ns;
-	u32 gov_done; /* idle clock: last seqno counted retired (gov_fenced) */
+	u32 gov_done;  /* idle clock: last seqno counted retired (gov_fenced) */
 	u32 stat_done; /* stats: last seqno whose latency was counted, submit times by seqno */
 	u64 stat_sub_ns[CHAN_NSTAMPS];
 	u64 stat_sub_ptimer[CHAN_NSTAMPS];
@@ -1072,12 +1082,14 @@ struct tgm_coh {
 	int writable;  /* some import lets the GPU write it: submissions mark it GPU-dirty */
 	int gpu_dirty; /* atomic: the GPU may have written it since the last CPU read lock */
 };
+
 /* Registers this driver's read_lock/write_unlock with the kernel's IOSurface lock/unlock hook (XNU IOUserClient.cpp). */
 extern void tegra_coherency_register(uint64_t (*read_lock)(uint64_t),
 				     uint64_t (*write_unlock)(uint64_t));
 #define TGM_COH_BUCKETS 256
 static struct tgm_coh *coh_hash[TGM_COH_BUCKETS];
 static DEFINE_MUTEX(coh_lock);
+
 /* stats: the IOSurface lock/unlock hooks' work (one 5 s window), on the push line */
 static struct {
 	u64 inval_n, inval_bytes, clean_n, clean_bytes;
@@ -1207,10 +1219,12 @@ uint32_t tgm_chan_submitted(struct tgm_chan *chan)
 {
 	return chan->submitted;
 }
+
 uint32_t tgm_chan_completed(struct tgm_chan *chan)
 {
 	return READ_ONCE(*chan->fence_cpu);
 }
+
 uint32_t tgm_chan_error(struct tgm_chan *chan)
 {
 	return chan->error;
@@ -1506,6 +1520,7 @@ static void iso_deadline(void *arg)
  * stamps are converted to nanoseconds with PTIMER's rate measured over that window against the CPU clock, which the
  * line prints ("PTIMER xR"). */
 #define STATS_WINDOW_NS (5 * NSEC_PER_SEC)
+
 static struct {
 	u64 since;      /* start of the current window, 0 before the first submission */
 	u64 cal_ptimer; /* PTIMER at `since`: its rate over the window */
@@ -1551,6 +1566,7 @@ static void stats_add(u64 *sum, u64 *max, u64 v)
  * keeping a released import around for a while would have saved. */
 #define REIMPORT_NS (2 * NSEC_PER_SEC)
 #define REIMPORT_RING 128
+
 static struct {
 	u64 cached_n, cached_bytes, cached_ns, cached_max, cached_phase[TGM_PHASES];
 	u64 pool_n, pool_bytes, pool_ns, pool_max, small_n;
@@ -1560,12 +1576,15 @@ static struct {
 		prefault_n, prefault_bytes;
 	u64 spare_n, spare_bytes, spare_ns, spare_max;
 } mstat;
+
 /* Who paid the window's slowest cached BoAlloc made on its own thread (best effort: the raiser of cached_max writes it). */
 static char mstat_max_owner[17];
 static u64 compositor_pool; /* the compositor's pool BOs (tgm_stats_compositor_pool) */
+
 static struct {
 	u64 pa, ns;
 } recent[REIMPORT_RING];
+
 static u32 recent_next;
 static DEFINE_MUTEX(recent_lock);
 
@@ -1891,6 +1910,7 @@ static void scrub_stats(char *buf, unsigned int len, u64 window_ms);
 #define NCGPCCLK_CFG_ENABLE 0x00100000
 #define NCGPCCLK_CFG_WRITE_EN 0x00010000
 #define NCGPCCLK_CYCLES 800
+
 static void clk_measure(char *buf, unsigned int len)
 {
 	static int started;
@@ -1923,6 +1943,7 @@ static void clk_measure(char *buf, unsigned int len)
  * them; the window's first EXEC_OWNERS - 1 processes by name, the rest as "(others)". `rate` converts PTIMER units to ns
  * (16.16, stats_tick). Called from the submission that won the window, never with live_lock held. */
 #define EXEC_OWNERS 5
+
 static void stats_exec_owners(char *line, unsigned int len, u64 rate)
 {
 	/* static: one caller at a time (the window's winner, stats_tick) */
@@ -2548,8 +2569,7 @@ static void chan_free(struct tgm_chan *chan)
 #define RAMFC_TIMESLICE 0xf8
 #define RAMFC_TIMESLICE_HIGH 0x10005080
 
-static int
-compositor_timeslice_on(void)
+static int compositor_timeslice_on(void)
 {
 	return 1;
 }
@@ -2578,10 +2598,12 @@ static int chan_new(struct tgm_vm *vm, volatile uint32_t *fence_cpu, uint64_t fe
 {
 	static const u32 classes[5] = {MAXWELL_B, MAXWELL_COMPUTE_B, KEPLER_INLINE_TO_MEMORY_B,
 				       FERMI_TWOD_A, MAXWELL_DMA_COPY_A};
+
 	union {
 		struct nvif_chan_v0 chan;
 		u8 raw[sizeof(struct nvif_chan_v0) + 32];
 	} args = {};
+
 	union {
 		struct nvif_event_v0 ev;
 		u8 raw[sizeof(struct nvif_event_v0) + sizeof(struct nvif_chan_event_v0)];
@@ -2775,6 +2797,7 @@ void tgm_chan_del(struct tgm_chan **pchan)
  * address space maps all of them once and waits on any user channel with a semaphore acquire. Pages are handed out
  * round-robin and zeroed, so a page freed with an acquire still pending on it is not reused at once. */
 #define TGM_FENCE_PAGES 64 /* one per connection (TegraGM20BUserClient.cpp kMaxConnections) */
+
 static struct {
 	void *va;
 	u64 pa;
@@ -3007,6 +3030,7 @@ int tegra_gm20b_sync_for_cpu(const void *va, uint64_t bytes, uint64_t timeout_ns
 		u64 id;
 		u32 seqno;
 	} want[TGM_SYNC_MAX]; /* 8 KiB: not on the kernel stack; sync_lock */
+
 	static DEFINE_MUTEX(sync_lock);
 	struct tgm_chan *chan;
 	unsigned int n = 0, i;
@@ -3284,19 +3308,20 @@ static struct {
 	void (*done)(void *);
 	void *arg;
 	u32 waits; /* the acquires of the present in flight, for the deadline's line */
+
 	struct {
 		u64 id;
 		u32 seqno;
 	} wait[TGM_SYNC_MAX];
-	volatile struct tgm_stamp *wait_end
-		[TGM_SYNC_MAX]; /* stats: their end stamps (pool memory, kept mapped) */
+	volatile struct tgm_stamp
+		*wait_end[TGM_SYNC_MAX]; /* stats: their end stamps (pool memory, kept mapped) */
 	u32 stamped; /* stats: seqno of the present in flight, whose copy is stamped */
 	u32 last;    /* seqno of the last present kicked, 0: none (order_lock) */
 	u64 last_src; /* its surface's first page, and whether address spaces importing it were found */
 	int last_matched;
 	int last_idle,
 		last_late; /* stats: it found no user work pending; a user submit then waited for it */
-	u32 presents; /* stats */
+	u32 presents;      /* stats */
 	u64 lat_sum, lat_max;
 } present = {.lock = {NULL}};
 
@@ -3661,10 +3686,12 @@ static struct {
 	u64 pool_va, fence_gpu, fence_pa;
 	volatile u32 *fence;
 	void *work, *deadline;
+
 	struct {
 		u64 pa, bytes, queued;
 		u32 seqno;
 	} job[SCRUB_JOBS];
+
 	u32 head,
 		tail; /* job[tail % SCRUB_JOBS .. head) queued; head moves under lock, tail in scrub_fenced only */
 	u64 inflight;  /* bytes queued (atomic) */
@@ -4400,9 +4427,7 @@ int tgm_bringup(int stage, char *line, unsigned int len)
 		gpu.stage = 1;
 	}
 	if (gpu.stage < 2 && stage >= 2) {
-		ret = clk_raise(
-			line,
-			len); /* GPCPLL above 76.8 MHz before ACR/PMU/GR */
+		ret = clk_raise(line, len); /* GPCPLL above 76.8 MHz before ACR/PMU/GR */
 		if (!ret)
 			ret = m2(line, len);
 		if (ret)

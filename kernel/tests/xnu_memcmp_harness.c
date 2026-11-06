@@ -18,7 +18,8 @@ static int reference_memcmp(const void *s1, const void *s2, size_t n)
     if (n != 0) {
         const unsigned char *p1 = s1, *p2 = s2;
         do {
-            if (*p1++ != *p2++) return *--p1 - *--p2;
+            if (*p1++ != *p2++)
+                return *--p1 - *--p2;
         } while (--n != 0);
     }
     return 0;
@@ -27,11 +28,14 @@ static int reference_memcmp(const void *s1, const void *s2, size_t n)
 static int reference_bcmp(const void *pa, const void *pb, size_t len)
 {
     const char *a = (const char *)pa, *b = (const char *)pb;
-    if (len == 0) return 0;
+    if (len == 0)
+        return 0;
     do {
-        if (*a++ != *b++) break;
+        if (*a++ != *b++)
+            break;
     } while (--len);
-    if ((len & 0xFFFFFFFF00000000ULL) && !(len & 0x00000000FFFFFFFFULL)) return ~0;
+    if ((len & 0xFFFFFFFF00000000ULL) && !(len & 0x00000000FFFFFFFFULL))
+        return ~0;
     return (int)len;
 }
 
@@ -46,7 +50,8 @@ static int fast_memcmp(const void *s1, const void *s2, size_t n)
 static int fast_bcmp(const void *pa, const void *pb, size_t len)
 {
     len -= switch_cmp_first_difference((const unsigned char *)pa, (const unsigned char *)pb, len);
-    if ((len & 0xFFFFFFFF00000000ULL) && !(len & 0x00000000FFFFFFFFULL)) return ~0;
+    if ((len & 0xFFFFFFFF00000000ULL) && !(len & 0x00000000FFFFFFFFULL))
+        return ~0;
     return (int)len;
 }
 
@@ -68,18 +73,21 @@ static void check(const unsigned char *a, const unsigned char *b, size_t n)
     const int m = fast_memcmp(a, b, n), rm = reference_memcmp(a, b, n);
     const int c = fast_bcmp(a, b, n), rc = reference_bcmp(a, b, n);
     if (m != rm || c != rc) {
-        if (failures++ < 10) printf("FAIL n=%zu memcmp %d vs %d, bcmp %d vs %d\n", n, m, rm, c, rc);
+        if (failures++ < 10)
+            printf("FAIL n=%zu memcmp %d vs %d, bcmp %d vs %d\n", n, m, rm, c, rc);
     }
 }
 
 // Random contents eight bytes per step (xorshift64*: random() per byte made the random half take a minute).
 static uint64_t contents = 0x9e3779b97f4a7c15ull;
+
 static void fill(unsigned char *a, unsigned char *b, size_t n)
 {
     for (size_t k = 0; k < n; k += 8) {
         contents ^= contents >> 12, contents ^= contents << 25, contents ^= contents >> 27;
         const uint64_t x = contents * 0x2545f4914f6cdd1dull;
-        for (size_t j = 0; j < 8 && k + j < n; j++) a[k + j] = b[k + j] = (unsigned char)(x >> (8 * j));
+        for (size_t j = 0; j < 8 && k + j < n; j++)
+            a[k + j] = b[k + j] = (unsigned char)(x >> (8 * j));
     }
 }
 
@@ -96,12 +104,15 @@ unsigned long xnu_memcmp_exhaustive(unsigned long *cases)
             unsigned char *a = enda - n - mis, *b = endb - n;
             for (size_t diff = 0; diff <= n; diff++) {
                 for (int sign = 0; sign < 3; sign++) {
-                    for (size_t k = 0; k < n; k++) a[k] = b[k] = (unsigned char)(0x41 + (k * 7) % 23);
+                    for (size_t k = 0; k < n; k++)
+                        a[k] = b[k] = (unsigned char)(0x41 + (k * 7) % 23);
                     if (diff < n) {
                         b[diff] = sign == 0 ? 0x00 : sign == 1 ? 0xff : (unsigned char)(a[diff] ^ 0x80);
-                        if (a[diff] == b[diff]) b[diff] ^= 1;
+                        if (a[diff] == b[diff])
+                            b[diff] ^= 1;
                         // Later bytes differ the other way, so only the first difference may decide.
-                        for (size_t k = diff + 1; k < n; k++) b[k] = (unsigned char)~a[k];
+                        for (size_t k = diff + 1; k < n; k++)
+                            b[k] = (unsigned char)~a[k];
                     }
                     check(a, b, n);
                     check(b, a, n);
@@ -124,7 +135,8 @@ unsigned long xnu_memcmp_random(unsigned seed, int rounds, unsigned long *cases)
         size_t n = (size_t)random() % (round & 1 ? 64 : 3 * page);
         unsigned char *a = big_a + random() % 8, *b = big_b + random() % 8;
         fill(a, b, n);
-        if (n && random() % 4) b[(size_t)random() % n] = (unsigned char)random();
+        if (n && random() % 4)
+            b[(size_t)random() % n] = (unsigned char)random();
         check(a, b, n);
         (*cases)++;
     }

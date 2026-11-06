@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <vector>
+
 int main(int argc, char **argv)
 {
     assert(argc == 2);
@@ -21,18 +22,26 @@ int main(int argc, char **argv)
     uint64_t logical = 0;
     assert(ramPackedLayout(input.data(), input.size(), &logical));
     RamSparseDisk d = {static_cast<uint8_t **>(calloc(logical / 4096, sizeof(uint8_t *))), logical, 0, 128ULL << 20};
+
     struct Ops {
-        uint8_t *allocate() { return static_cast<uint8_t *>(calloc(1, 4096)); }
+        uint8_t *allocate()
+        {
+            return static_cast<uint8_t *>(calloc(1, 4096));
+        }
     } op;
+
     assert(ramSparseImport(d, input.data(), input.size(), op));
     CC_SHA256_CTX context;
     CC_SHA256_Init(&context);
     const uint8_t zero[4096] = {};
     uint8_t digest[32];
-    for (uint64_t i = 0; i < logical / 4096; ++i) CC_SHA256_Update(&context, d.pages[i] ? d.pages[i] : zero, 4096);
+    for (uint64_t i = 0; i < logical / 4096; ++i)
+        CC_SHA256_Update(&context, d.pages[i] ? d.pages[i] : zero, 4096);
     CC_SHA256_Final(digest, &context);
-    for (uint8_t c : digest) printf("%02x", c);
+    for (uint8_t c : digest)
+        printf("%02x", c);
     printf(" %llu %llu\n", (unsigned long long)d.bytes, (unsigned long long)d.resident);
-    for (uint64_t i = 0; i < logical / 4096; ++i) free(d.pages[i]);
+    for (uint64_t i = 0; i < logical / 4096; ++i)
+        free(d.pages[i]);
     free(d.pages);
 }

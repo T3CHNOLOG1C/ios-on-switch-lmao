@@ -9,6 +9,7 @@
 // operational implementation is claimed. This header is not a system driver API.
 #include "OriginalAcceleratorABI.h"
 class IOMemoryDescriptor;
+
 class IOGPU : public IOAcceleratorES {
     OSDeclareAbstractStructors(IOGPU) unsigned char originalPrivateState[600];
 
@@ -73,4 +74,5 @@ protected:
     virtual void abiSlot213();
     virtual void abiSlot214();
 };
+
 static_assert(sizeof(IOGPU) == 736, "Exact original provider storage extent");

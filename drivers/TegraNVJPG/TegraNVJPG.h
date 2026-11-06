@@ -19,7 +19,12 @@ struct TegraNVJPGBuffer {
 
 // The two windows of NVJPG's address space a job's memory is mapped into, page by page: the scan's bytes (read-only)
 // and the destination surface. Below the DRAM aperture (0x80000000), so they never meet the 1:1 kernel buffers.
-enum { TEGRA_NVJPG_WINDOW_IN = 0, TEGRA_NVJPG_WINDOW_OUT = 1, TEGRA_NVJPG_WINDOWS = 2 };
+enum {
+    TEGRA_NVJPG_WINDOW_IN = 0,
+    TEGRA_NVJPG_WINDOW_OUT = 1,
+    TEGRA_NVJPG_WINDOWS = 2
+};
+
 constexpr uint64_t kTegraNVJPGWindowBase[TEGRA_NVJPG_WINDOWS] = {0x10000000ull, 0x20000000ull};
 constexpr uint64_t kTegraNVJPGWindowBytes[TEGRA_NVJPG_WINDOWS] = {64ull << 20, 256ull << 20};
 

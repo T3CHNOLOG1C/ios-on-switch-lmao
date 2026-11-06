@@ -48,6 +48,7 @@ struct FormatInfo {
     uint8_t bpp;
     bool srgb;
 };
+
 const FormatInfo *formatInfo(uint32_t mtlPixelFormat);
 
 // An import of this task's pages into the GPU VM, shared by everything over them.
@@ -63,7 +64,11 @@ struct Span {
     uint32_t chunk = ~0u;
     uint64_t offset = 0, bytes = 0, va = 0;
     uint8_t *cpu = nullptr;
-    bool valid() const { return chunk != ~0u; }
+
+    bool valid() const
+    {
+        return chunk != ~0u;
+    }
 };
 
 struct Texture {
@@ -82,6 +87,7 @@ struct Texture {
     uint32_t tic = 0;          // texture header index, 0: none (not sampleable)
     Import *import = nullptr;  // surface or no-copy pages, else
     Span span;                 // pool memory, else a view (memory of the texture it views)
+
     // A two-plane 4:4:4 surface's texture (RGB8_444_2P, Metal format 542): the image sampled is span (RGBA8, the codes as Metal
     // reads them: red Cr, green Y, blue Cb, alpha 1), which BlitEncoder::convertPlanar writes from the surface's planes (import)
     // before the work that samples it
@@ -89,6 +95,7 @@ struct Texture {
         uint64_t luma = 0, chroma = 0;  // GPU addresses of plane 0 (a Y code a texel) and plane 1 (Cb, Cr a texel)
         uint32_t lumaPitch = 0, chromaPitch = 0;
     } planes;
+
     bool planar = false;
     // A two-plane 4:2:0 surface's texture (YCBCR8_420_2P 500, its sRGB twin 520, RGB8_420_2P 540): the image sampled is span
     // (RGBA16Float, RGBA32Float, RGBA8Unorm), which a pass of the pack's conversion state draws from the planes' textures, luma
@@ -104,6 +111,7 @@ struct Texture {
     // through `sampled`, a pool image of its texels the copy engine refreshes from it (CommandBuffer::refresh) before work that
     // samples it, as m2v samples such a surface through a shadow image it copies in. tic is sampled's.
     Texture *sampled = nullptr;
+
     // A mipmapped texture's levels (r12, raw/fx): level 0 is this texture (pitch, pool memory: rendered, copied and cleared as any
     // other), and `chain` the block-linear image of every level that its texture header (tic) points at, which the 2D engine
     // fills from level 0 (BlitEncoder::generate). The chain's own level 0 is a copy: `l0Fresh` says it holds what the texture's
@@ -121,12 +129,14 @@ struct Texture {
         bool l0Fresh = false, levelsFresh = false;
         uint16_t rawLevels = 0, mirrorLevels = 0;
     } *chain = nullptr;
+
     // A chain level as a render target (chainLevelTarget: no memory or header of its own, tic 0): block-linear at the level's
     // address, pitch its row stride, `blockHeight` its block height (log2 GOBs), `layerBytes` the chain's size
     bool blockLinear = false;
     uint8_t blockHeight = 0;
     uint64_t layerBytes = 0;
 };
+
 struct Buffer {
     uint64_t va = 0, length = 0;
     uint8_t *cpu = nullptr;
@@ -137,18 +147,21 @@ struct Buffer {
     Import *import = nullptr;  // a caller's no-copy pages, else
     Span span;                 // pool memory
 };
+
 struct SamplerDesc {                                      // the MTLSamplerDescriptor fields the TSC takes
     uint8_t minFilter = 0, magFilter = 0, mipFilter = 0;  // MTLSamplerMinMagFilter / MTLSamplerMipFilter
     uint8_t sAddress = 0, tAddress = 0, rAddress = 0;     // MTLSamplerAddressMode (clampToBorderColor: not taken)
     uint8_t maxAnisotropy = 1;
     float lodMin = 0, lodMax = 3.402823466e+38f;
 };
+
 // Level `level` (1 .. levels - 1) of mipmapped texture `t`'s chain as a render target (raw_target.h: NVK's block-linear
 // target of that level), for a pass to render into: `out` names the chain's memory, it owns nothing. False: not a level of it.
 bool chainLevelTarget(const Texture &t, uint32_t level, Texture &out);
 // The sampler header NVK writes for the Vulkan sampler m2v makes of `d` (Mesa nvk_sampler_get_header; checked against the twin for
 // Core Animation's combinations: pack/mksamplers.py, test/samplercheck.cpp)
 void samplerHeader(const SamplerDesc &d, uint32_t w[8]);
+
 struct Sampler {
     uint32_t tsc = 0;
     SamplerDesc desc;
@@ -171,10 +184,17 @@ struct Pipeline {
 // A render pass's attachments (Core Animation: color 0 the target, color 1 a memoryless attachment, writeMask 0 or 15)
 struct ColorAttachment {
     Texture *texture = nullptr;
-    enum Load : uint8_t { DontCare, Load, Clear } load = DontCare;
+
+    enum Load : uint8_t {
+        DontCare,
+        Load,
+        Clear
+    } load = DontCare;
+
     bool store = true;  // Store or StoreAndMultisampleResolve
     float clear[4] = {};
 };
+
 struct PassDesc {
     ColorAttachment color[8];
     uint32_t count = 0;
@@ -185,18 +205,27 @@ struct PassDesc {
 
 class RenderEncoder {
 public:
-    void setPipeline(Pipeline *p) { pipeline_ = p; }
+    void setPipeline(Pipeline *p)
+    {
+        pipeline_ = p;
+    }
+
     void setBytes(int stage, uint32_t slot, const void *bytes, uint32_t length);  // stage 1 vertex, 2 fragment
     void setBuffer(int stage, uint32_t slot, const Buffer *buffer, uint64_t offset);
     void setBufferOffset(int stage, uint32_t slot, uint64_t offset);
+
     void setTexture(uint32_t slot, const Texture *t)
     {
-        if (slot < 16) textures_[slot] = t;
+        if (slot < 16)
+            textures_[slot] = t;
     }
+
     void setSampler(uint32_t slot, const Sampler *s)
     {
-        if (slot < 16) samplers_[slot] = s;
+        if (slot < 16)
+            samplers_[slot] = s;
     }
+
     void setScissor(uint32_t x, uint32_t y, uint32_t w, uint32_t h);
     void setViewport(double x, double y, double w, double h, double znear, double zfar);
     void barrier();  // memoryBarrier...: everything before is written and visible to what follows
@@ -211,12 +240,14 @@ public:
 
 private:
     friend class CommandBuffer;
+
     struct Bound {
         uint64_t va = 0;
         uint32_t size = 0;  // bytes from va (setBytes: its length)
         const Buffer *buffer = nullptr;
         uint64_t offset = 0;
     };
+
     CommandBuffer *cb_ = nullptr;
     Device *dev_ = nullptr;
     PassDesc pass_;
@@ -246,11 +277,13 @@ private:
     double vp_[4] = {};
     uint32_t sc_[4] = {};
     std::vector<std::array<uint32_t, 4>> rects_;
+
     struct Clear {
         uint32_t target, x0, y0, x1, y1;
         const float *value;
         bool own = false;  // cleared by a pass of its own before this one (a Clear load reaching past the render area)
     };
+
     std::vector<Clear> clears() const;
 };
 
@@ -287,7 +320,15 @@ private:
 };
 
 // Which encode-time predicate refused a draw (set beside *why; RawMetal.mm counts and logs it, r10-rawsweep diagnostics)
-enum RefusalId : uint8_t { RefNone, RefIndexedRange, RefBaseInstance, RefColorFormats, RefUboOffset, RefNoTic };
+enum RefusalId : uint8_t {
+    RefNone,
+    RefIndexedRange,
+    RefBaseInstance,
+    RefColorFormats,
+    RefUboOffset,
+    RefNoTic
+};
+
 struct Refusal {
     uint8_t id = RefNone;
     uint32_t a = 0, b = 0, c = 0;
@@ -328,7 +369,12 @@ class Device {
 public:
     ~Device();
     bool open(const char *packPath, uint64_t stack, std::string &err);
-    const Pack &pack() const { return pack_; }
+
+    const Pack &pack() const
+    {
+        return pack_;
+    }
+
     // A pack pipeline by its state key's FNV-1a (RawMetal.mm rawPipelineKey); null: not in the pack.
     Pipeline *pipeline(uint64_t keyHash);
 
@@ -361,28 +407,57 @@ public:
     // A mipmapped 2D texture of `levels` levels: level 0 a pool texture as createTexture's, its header the block-linear chain's
     // (Texture::chain). False: not one the raw path keeps (chainsOn() false, a format the 2D engine does not filter, no memory).
     bool createMipTexture(uint32_t width, uint32_t height, uint32_t format, uint32_t levels, Texture &t);
+
     // Whether mip chains are on: the 2D engine's self-test at open made the chain the design expects (fx_mip.h)
-    bool chainsOn() const { return chainsOn_; }
+    bool chainsOn() const
+    {
+        return chainsOn_;
+    }
+
     // Whether the device's resource lock is free now (try, never waits: the stall line's)
     bool lockFree()
     {
         std::unique_lock<std::mutex> l(lock_, std::try_to_lock);
         return l.owns_lock();
     }
+
     void destroyTexture(Texture &t);
     // `wc`: from the write-combined GPU pool (Buffer::wc) when wcOn(), else (or full) pool memory as before
     bool createBuffer(uint64_t length, Buffer &b, bool wc = false);
+
     // Whether write-combined buffers are on (RawMetal.mm turns them off at open when m2v cannot make its twin over one)
-    bool wcOn() const { return wcOn_; }
-    void setWc(bool on) { wcOn_ = on; }
+    bool wcOn() const
+    {
+        return wcOn_;
+    }
+
+    void setWc(bool on)
+    {
+        wcOn_ = on;
+    }
+
     // The write-combined chunks held (non-dedicated) and their bytes (test/poolcheck.cpp: they follow what is in them)
     uint32_t wcChunksHeld();
     uint64_t wcChunkBytesHeld();
+
     // How the pack's programs reached the heap at open: HeapByCpu (the kernel did not import the pack's pages), HeapByCopy (the
     // copy engine, and the bytes sampled after it match the pack), HeapCopyMismatch (they did not: copied on the CPU after all)
-    enum HeapUpload : uint8_t { HeapByCpu, HeapByCopy, HeapCopyMismatch };
-    HeapUpload heapUpload() const { return heapUpload_; }
-    uint64_t heapBytes() const { return heap_.bytes; }
+    enum HeapUpload : uint8_t {
+        HeapByCpu,
+        HeapByCopy,
+        HeapCopyMismatch
+    };
+
+    HeapUpload heapUpload() const
+    {
+        return heapUpload_;
+    }
+
+    uint64_t heapBytes() const
+    {
+        return heap_.bytes;
+    }
+
     bool createBufferNoCopy(void *bytes, uint64_t length, Buffer &b);
     void destroyBuffer(Buffer &b);
     bool createSampler(const SamplerDesc &d, Sampler &s);
@@ -395,20 +470,46 @@ public:
 
     // Submission. begin() opens the one command buffer (the caller serialises encoding and commit).
     CommandBuffer *begin();
-    uint32_t completed() const { return *fence_; }
-    uint32_t submitted() const { return lastSeqno_; }
-    bool done(uint32_t seqno) const { return int32_t(*fence_ - seqno) >= 0; }
+
+    uint32_t completed() const
+    {
+        return *fence_;
+    }
+
+    uint32_t submitted() const
+    {
+        return lastSeqno_;
+    }
+
+    bool done(uint32_t seqno) const
+    {
+        return int32_t(*fence_ - seqno) >= 0;
+    }
+
     bool wait(uint32_t seqno)
     {
         return done(seqno) || k_.wait(channel_, seqno);
     }  // in the kernel, on the fence interrupt
+
     // GPU-side order with the process's other driver (NVK's channels), through the kernel's Order (TegraGM20BInfoOrder; false:
     // it has none). orderAfterOthers: this channel's next submission starts with an acquire on what they submitted so far;
     // orderOthersAfter: their next submissions start with one on everything this channel submitted. The kern_return_t (0:
     // queued; else the caller orders on the CPU); `waits`: the acquires queued. Called where submissions are (serialised).
-    bool canOrder() const { return k_.canOrder(); }
-    int orderAfterOthers(uint32_t &waits) { return k_.order(channel_, TegraGM20BOrderAfterTask, 0, waits); }
-    int orderOthersAfter(uint32_t &waits) { return k_.order(channel_, TegraGM20BOrderBeforeTask, lastSeqno_, waits); }
+    bool canOrder() const
+    {
+        return k_.canOrder();
+    }
+
+    int orderAfterOthers(uint32_t &waits)
+    {
+        return k_.order(channel_, TegraGM20BOrderAfterTask, 0, waits);
+    }
+
+    int orderOthersAfter(uint32_t &waits)
+    {
+        return k_.order(channel_, TegraGM20BOrderBeforeTask, lastSeqno_, waits);
+    }
+
     struct Stats {
         std::atomic<uint64_t> commits{0}, pushBytes{0}, uploadBytes{0}, ringWaits{0}, imports{0}, importBytes{0},
             poolBytes{0}, poolChunks{0}, cleanBytes{0}, poolStalls{0};
@@ -425,6 +526,7 @@ public:
         // passes into a chain level, and levels copied between a chain and its mirrors (out: for m2v; in: what m2v rendered)
         std::atomic<uint64_t> levelPasses{0}, mirrorsOut{0}, mirrorsIn{0};
     } stats;
+
     // The self-test's result (open), per sampling candidate (fx::sampling(i)): bytes off by more than 1 in the CPU's Tegra and
     // Fermi views (~0u: not run); the one chains use (selfTestChosen, fx::kSamplings: none passed) and its view; the first
     // candidate's detail in the Tegra view (what the documented convention gave)
@@ -432,21 +534,29 @@ public:
     uint32_t selfTestChosen = fx::kSamplings;
     bool selfTestFermiView = false;
     fx::SelfTestReport selfTestFirst;
-    fx::Sampling sampling() const { return sampling_; }
+
+    fx::Sampling sampling() const
+    {
+        return sampling_;
+    }
 
 private:
     friend class CommandBuffer;
     friend class RenderEncoder;
     friend class BlitEncoder;
+
     struct Ring {
         Bo bo;
         uint64_t head = 0, since = 0;  // next free byte; where the open command buffer's use began
+
         struct Span {
             uint64_t begin, end;
             uint32_t seqno;  // 0: the open command buffer's
         };
+
         std::deque<Span> inflight;
     };
+
     struct Chunk {
         Bo bo;
         void *memory = nullptr;
@@ -455,6 +565,7 @@ private:
         uint64_t used = 0;
         bool dedicated = false;
     };
+
     std::mutex lock_;
     Kernel k_;
     Pack pack_;
@@ -485,12 +596,14 @@ private:
     bool blAlloc(uint64_t bytes, uint64_t align, Span &s);
     void blFree(Span &s);
     void selfTest();
+
     struct Backing {
         Texture texture;
         uint32_t tag = 0;
         uint32_t lastUse = 0;  // the seqno of the last submission that used it (0: never submitted)
         uint64_t lastCommit = 0;
     };
+
     std::vector<Backing *> backings_;  // memoryless attachments' memory, by size and format
     // the pool's growth ahead of need (lock_): free bytes of its shared chunks, a chunk being made by the grower thread
     uint64_t poolFree_ = 0;

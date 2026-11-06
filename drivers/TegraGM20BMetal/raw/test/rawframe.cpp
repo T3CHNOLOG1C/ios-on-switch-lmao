@@ -13,7 +13,8 @@
 #include "../runtime/raw_gpu.h"
 #include "frame.h"
 #if TARGET_OS_IPHONE
-static void pushcount_report(const char *) {}  // the mock GPU's counter exists on the host only
+static void pushcount_report(const char *)
+{}  // the mock GPU's counter exists on the host only
 #else
 extern "C" void pushcount_report(const char *what);
 #endif
@@ -38,10 +39,14 @@ int main(int argc, char **argv)
     }
     const unsigned frames = atoi(argv[3]);
     frame::Shape shape;
-    if (argc > 4) shape.blurPasses = atoi(argv[4]);
-    if (argc > 5) shape.draws = atoi(argv[5]);
-    if (argc > 6) shape.uniformBytes = atoi(argv[6]);
-    if (argc > 7) shape.vertexBytes = atoi(argv[7]);
+    if (argc > 4)
+        shape.blurPasses = atoi(argv[4]);
+    if (argc > 5)
+        shape.draws = atoi(argv[5]);
+    if (argc > 6)
+        shape.uniformBytes = atoi(argv[6]);
+    if (argc > 7)
+        shape.vertexBytes = atoi(argv[7]);
     raw::Device dev;
     std::string err;
     if (!dev.open(argv[1], 0, err)) {
@@ -50,9 +55,12 @@ int main(int argc, char **argv)
     }
     std::vector<raw::Pipeline *> uber, blur;
     for (auto &s : frame::states(argv[2])) {
-        if (!s.uber && !s.blur) continue;
-        if (s.uber && uber.size() >= shape.mainStates) continue;
-        if (s.blur && blur.size() >= 4 && !getenv("FRAME_ALL_STATES")) continue;
+        if (!s.uber && !s.blur)
+            continue;
+        if (s.uber && uber.size() >= shape.mainStates)
+            continue;
+        if (s.blur && blur.size() >= 4 && !getenv("FRAME_ALL_STATES"))
+            continue;
         raw::Pipeline *p = dev.pipeline(raw::Pack::fnv(s.key.data(), s.key.size()));
         if (!p) {
             fprintf(stderr, "NOT IN PACK %s\n", s.key.c_str());
@@ -110,7 +118,8 @@ int main(int argc, char **argv)
         unsigned drawIndex = 0;
         for (const frame::Pass &pass : frame::passes(f, shape, blur.size(), uber.size()))
             for (const frame::Draw &d : pass.draws) {
-                for (const frame::Bytes &b : d.bytes) frame::fill(bytes, b, f, drawIndex);
+                for (const frame::Bytes &b : d.bytes)
+                    frame::fill(bytes, b, f, drawIndex);
                 drawIndex++;
             }
         cpu.push_back((threadNs() - c0) / 1e6);
@@ -144,7 +153,8 @@ int main(int argc, char **argv)
                 for (const frame::Bytes &b : d.bytes) {
                     frame::fill(bytes, b, f, drawIndex);
                     if (shape.ring) {
-                        if (ringAt + b.length > frame::kRingBytes) ringAt = 0;
+                        if (ringAt + b.length > frame::kRingBytes)
+                            ringAt = 0;
                         memcpy(ring.cpu + ringAt, bytes.data(), b.length);
                         if (!bound[b.stage][b.slot]) {
                             e->setBuffer(b.stage, b.slot, &ring, ringAt);
@@ -157,9 +167,11 @@ int main(int argc, char **argv)
                     e->setBytes(b.stage, b.slot, bytes.data(), b.length);
                 }
                 for (int t = 0; t < 16; t++)
-                    if (d.textures[t] >= 0) e->setTexture(t, &tex[d.textures[t]]);
+                    if (d.textures[t] >= 0)
+                        e->setTexture(t, &tex[d.textures[t]]);
                 for (int s = 0; s < 16; s++)
-                    if (d.samplers[s] >= 0) e->setSampler(s, &smp[d.samplers[s]]);
+                    if (d.samplers[s] >= 0)
+                        e->setSampler(s, &smp[d.samplers[s]]);
                 e->setScissor(d.scissor[0], d.scissor[1], d.scissor[2], d.scissor[3]);
                 const char *why = nullptr;
                 if (!e->draw(d.primitive, d.first, d.count, d.instances, 0, &why)) {
@@ -182,7 +194,8 @@ int main(int argc, char **argv)
     std::vector<double> c(cpu.begin() + warm, cpu.end());
     std::sort(c.begin(), c.end());
     double sum = 0;
-    for (double x : c) sum += x;
+    for (double x : c)
+        sum += x;
     if (!c.empty())
         printf("%s frames=%zu blur=%u draws=%u: encode cpu mean %.3f ms p50 %.3f p90 %.3f | push %.1f KiB/frame upload "
                "%.1f KiB/frame ring waits %llu\n",

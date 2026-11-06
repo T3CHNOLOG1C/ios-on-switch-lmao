@@ -22,7 +22,8 @@ int main(void)
     assert(!switch_diag_video_matches(0xf5a00000, 1, 2880, 720, 1279, 32));
     assert(!switch_diag_video_matches(0xf5a00000, 1, 2880, 720, 1280, 32 | 0x300));
     switch_diag_clear(pixels);
-    for (unsigned i = 0; i < count; ++i) assert(pixels[i] == SWITCH_BACKGROUND);
+    for (unsigned i = 0; i < count; ++i)
+        assert(pixels[i] == SWITCH_BACKGROUND);
     switch_diag_pixel(pixels, 0, 0, 1);
     assert(pixels[1279 * 720] == 1);
     switch_diag_pixel(pixels, 1279, 0, 2);
@@ -38,13 +39,15 @@ int main(void)
     assert(!switch_diag_text(pixels, 16, 24, 704, "XNU VM INITIALIZED", 104, SWITCH_GREEN));
     unsigned changed = 0;
     for (unsigned i = 0; i < count; ++i)
-        if (pixels[i] != SWITCH_BACKGROUND) ++changed;
+        if (pixels[i] != SWITCH_BACKGROUND)
+            ++changed;
     assert(changed > 100 && changed < 3000);
     char long_text[2048];
     memset(long_text, 'W', sizeof(long_text));
     assert(switch_diag_text(pixels, 16, 324, 628, long_text, sizeof(long_text), SWITCH_WHITE));
     for (unsigned y = 628; y < 720; ++y)
-        for (unsigned x = 0; x < 1280; ++x) assert(pixels[(1279 - x) * 720 + y] == SWITCH_BACKGROUND);
+        for (unsigned x = 0; x < 1280; ++x)
+            assert(pixels[(1279 - x) * 720 + y] == SWITCH_BACKGROUND);
     assert(storage[0] == 0x12345678 && storage[count + 1] == 0x9abcdef0);
     free(storage);
     puts("SwitchRenderer whitelist, rotation, bounds, wrapping and canaries passed");

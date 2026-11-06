@@ -11,9 +11,11 @@ extern "C" {
 #endif
 
 #define TEGRA_SMMU_ATTACHMENTS 8u
+
 struct tegra_smmu_attachment {
     uint32_t asid, ptb, asidReg, translationReg, translationBits;
 };
+
 struct tegra_smmu_attachments {
     struct tegra_smmu_attachment entry[TEGRA_SMMU_ATTACHMENTS];
     uint32_t count;
@@ -28,7 +30,8 @@ static inline bool tegra_smmu_attachments_note(struct tegra_smmu_attachments *t,
             return true;
         }
     }
-    if (t->count >= TEGRA_SMMU_ATTACHMENTS) return false;
+    if (t->count >= TEGRA_SMMU_ATTACHMENTS)
+        return false;
     t->entry[t->count++] = *a;
     return true;
 }
@@ -38,7 +41,8 @@ static inline void tegra_smmu_attachments_forget(struct tegra_smmu_attachments *
 {
     uint32_t kept = 0;
     for (uint32_t i = 0; i < t->count; ++i)
-        if (t->entry[i].asidReg != asidReg) t->entry[kept++] = t->entry[i];
+        if (t->entry[i].asidReg != asidReg)
+            t->entry[kept++] = t->entry[i];
     t->count = kept;
 }
 

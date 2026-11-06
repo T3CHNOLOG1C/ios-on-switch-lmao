@@ -63,7 +63,8 @@ std::map<std::string, std::string> Bindings(const std::string &text)
 {
     std::map<std::string, std::string> table;
     const std::regex set(R"(\.set _(\w+), (0x[0-9a-f]+))");
-    for (std::sregex_iterator it(text.begin(), text.end(), set), end; it != end; ++it) table[(*it)[1]] = (*it)[2];
+    for (std::sregex_iterator it(text.begin(), text.end(), set), end; it != end; ++it)
+        table[(*it)[1]] = (*it)[2];
     return table;
 }
 
@@ -146,8 +147,7 @@ TEST(DisplayPlanesSource, BackboarddDetachesOnlyWhenTheDisplaySaysSo)
     // The weak default: never.
     EXPECT_THAT(xnu, HasSubstr("\nnative_legacy_detach_ready(void)\n{\n\treturn false;\n}"));
     EXPECT_THAT(xnu, HasSubstr("\t\tconst int single = !native_legacy_detach_ready();"));
-    const std::string exec =
-        Between(xnu, "\nnative_switch_exec_environment(const struct image_params *imgp)", "\n}\n");
+    const std::string exec = Between(xnu, "\nnative_switch_exec_environment(const struct image_params *imgp)", "\n}\n");
     ASSERT_FALSE(exec.empty());
     EXPECT_THAT(exec, Not(HasSubstr("if (single_layer) {")));
     EXPECT_THAT(exec, Not(HasSubstr("if (vbl && single_layer) {")));

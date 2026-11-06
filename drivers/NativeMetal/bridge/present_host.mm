@@ -16,6 +16,7 @@ static void *pages(size_t bytes)
     void *p = mmap(nullptr, bytes, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0);
     return p == MAP_FAILED ? nullptr : p;
 }
+
 static size_t roundUp(size_t n)
 {
     const size_t page = (size_t)getpagesize();
@@ -32,8 +33,10 @@ static bool run(id<MTLDevice> device, uint32_t w, uint32_t h, size_t srcStride, 
         std::printf("FAIL %s pages\n", name);
         return false;
     }
-    for (size_t i = 0; i < srcBytes; ++i) src[i] = (uint8_t)((i * 131 + seed) ^ (i >> 7));
-    for (size_t i = 0; i < dstBytes; ++i) dst[i] = 0xa5;
+    for (size_t i = 0; i < srcBytes; ++i)
+        src[i] = (uint8_t)((i * 131 + seed) ^ (i >> 7));
+    for (size_t i = 0; i < dstBytes; ++i)
+        dst[i] = 0xa5;
     gpupresent::Presenter presenter(device, {dst, dstBytes, dstStride, w, h});
     if (!presenter.ready()) {
         std::printf("FAIL %s scanout import\n", name);
@@ -64,7 +67,8 @@ static bool run(id<MTLDevice> device, uint32_t w, uint32_t h, size_t srcStride, 
 int main(int argc, char **argv)
 {
     @autoreleasepool {
-        if (argc < 3) return 2;
+        if (argc < 3)
+            return 2;
         id<MTLDevice> device = getenv("NMB_SYSTEM_DEVICE")
                                    ? MTLCreateSystemDefaultDevice()
                                    : native_bridge_metal_open(argv[1], argv[2], 0x6e6d62, nullptr);
@@ -77,7 +81,8 @@ int main(int argc, char **argv)
         ok &= run(device, 250, 61, 250 * 4 + 8, 256 * 4, 2, "surface pitch smaller");
         ok &= run(device, 250, 61, 256 * 4, 250 * 4 + 40, 3, "scanout pitch smaller");
         ok &= run(device, 254, 33, 254 * 4 + 8, 254 * 4 + 64, 4, "unaligned pitches");
-        if (!ok) return 1;
+        if (!ok)
+            return 1;
         std::printf("PASS: the GPU copied every pixel of four frames into the scanout pages, padding untouched\n");
     }
     return 0;

@@ -53,10 +53,13 @@
 typedef void *BTSession;
 typedef void *BTAccessoryManager;
 typedef void *BTDevice;
+
 typedef struct {
     uint8_t bytes[6];
 } BTDeviceAddress;
+
 typedef void (*BTSessionEventCallback)(BTSession session, int event, int result, void *context);
+
 // Event 0 with result 0 = attached, 1 detached, 2 terminated, 3 failed (GameController's JoyConHIDServicePlugin).
 typedef struct {
     BTSessionEventCallback sessionEvent;
@@ -71,7 +74,10 @@ static int (*BTAccessoryManagerSetLinkKeyEx)(BTAccessoryManager manager, const B
                                              const char *name, uint32_t classOfDevice, uint32_t serviceMask,
                                              const uint8_t key[16], BTDevice *device);
 
-enum { kServiceHID = 0x20 };
+enum {
+    kServiceHID = 0x20
+};
+
 static const char kStagedPath[] = "/private/var/Switch/bluetooth/joycon-pairing.plist";  // deploy's, read-only here
 static const char kImportedPath[] = "/private/var/mobile/Library/com.brunostjohn.switch.joycon-pairing.imported.plist";
 static const char kLockPath[] = "/private/var/tmp/com.brunostjohn.switch.joyconpaird.lock";
@@ -86,7 +92,8 @@ static CFTypeRef property(io_service_t service, const char *key, CFTypeID type)
 {
     CFStringRef name = CFStringCreateWithCString(kCFAllocatorDefault, key, kCFStringEncodingUTF8);
     CFTypeRef value = name ? IORegistryEntryCreateCFProperty(service, name, kCFAllocatorDefault, 0) : NULL;
-    if (name) CFRelease(name);
+    if (name)
+        CFRelease(name);
     if (value && CFGetTypeID(value) != type) {
         CFRelease(value);
         value = NULL;
@@ -121,9 +128,12 @@ static void import(io_service_t service)
     CFNumberRef cod = property(service, "ClassOfDevice", CFNumberGetTypeID());
     char address[18] = "", name[32] = "Joy-Con", source[16] = "?";
     uint32_t classOfDevice = 0x000508;
-    if (nameString) CFStringGetCString(nameString, name, sizeof(name), kCFStringEncodingUTF8);
-    if (sourceString) CFStringGetCString(sourceString, source, sizeof(source), kCFStringEncodingUTF8);
-    if (cod) CFNumberGetValue(cod, kCFNumberSInt32Type, &classOfDevice);
+    if (nameString)
+        CFStringGetCString(nameString, name, sizeof(name), kCFStringEncodingUTF8);
+    if (sourceString)
+        CFStringGetCString(sourceString, source, sizeof(source), kCFStringEncodingUTF8);
+    if (cod)
+        CFNumberGetValue(cod, kCFNumberSInt32Type, &classOfDevice);
     char from[32];
     snprintf(from, sizeof(from), "rail, %s", source);
     if (addressString && key && CFDataGetLength(key) == 16 &&
@@ -132,11 +142,16 @@ static void import(io_service_t service)
     } else {
         os_log_error(logger, "joyconpaird: a SwitchJoyConPairing record without address or 16-byte key");
     }
-    if (addressString) CFRelease(addressString);
-    if (nameString) CFRelease(nameString);
-    if (sourceString) CFRelease(sourceString);
-    if (key) CFRelease(key);
-    if (cod) CFRelease(cod);
+    if (addressString)
+        CFRelease(addressString);
+    if (nameString)
+        CFRelease(nameString);
+    if (sourceString)
+        CFRelease(sourceString);
+    if (key)
+        CFRelease(key);
+    if (cod)
+        CFRelease(cod);
 }
 
 static void matched(void *context, io_iterator_t iterator)
@@ -162,7 +177,8 @@ static bool railHas(const char *address)
         char other[18] = "";
         found = string && CFStringGetCString(string, other, sizeof(other), kCFStringEncodingUTF8) &&
                 !strcasecmp(other, address);
-        if (string) CFRelease(string);
+        if (string)
+            CFRelease(string);
         IOObjectRelease(service);
     }
     IOObjectRelease(iterator);
@@ -172,7 +188,8 @@ static bool railHas(const char *address)
 static CFDataRef readFile(const char *path)
 {
     int fd = open(path, O_RDONLY | O_NOFOLLOW);
-    if (fd < 0) return NULL;
+    if (fd < 0)
+        return NULL;
     struct stat st;
     CFMutableDataRef data = NULL;
     if (!fstat(fd, &st) && st.st_size > 0 && st.st_size < 65536) {
@@ -192,7 +209,8 @@ static bool writeFile(const char *path, CFDataRef data)
     char partial[PATH_MAX];
     snprintf(partial, sizeof(partial), "%s.partial", path);
     int fd = open(partial, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0644);
-    if (fd < 0) return false;
+    if (fd < 0)
+        return false;
     const bool ok = write(fd, CFDataGetBytePtr(data), CFDataGetLength(data)) == CFDataGetLength(data) && !fsync(fd);
     close(fd);
     return ok && !rename(partial, path);
@@ -202,10 +220,12 @@ static bool writeFile(const char *path, CFDataRef data)
 static void importStaged(void)
 {
     CFDataRef staged = readFile(kStagedPath);
-    if (!staged) return;
+    if (!staged)
+        return;
     CFDataRef imported = readFile(kImportedPath);
     const bool done = imported && CFEqual(staged, imported);
-    if (imported) CFRelease(imported);
+    if (imported)
+        CFRelease(imported);
     CFPropertyListRef plist =
         done ? NULL : CFPropertyListCreateWithData(kCFAllocatorDefault, staged, kCFPropertyListImmutable, NULL, NULL);
     CFArrayRef controllers = plist && CFGetTypeID(plist) == CFDictionaryGetTypeID()
@@ -241,7 +261,8 @@ static void importStaged(void)
     }
     if (!failures && !done && !writeFile(kImportedPath, staged))
         os_log_error(logger, "joyconpaird: cannot write %{public}s: %{errno}d", kImportedPath, errno);
-    if (plist) CFRelease(plist);
+    if (plist)
+        CFRelease(plist);
     CFRelease(staged);
 }
 
@@ -280,9 +301,11 @@ int main(void)
     bool locked = false;
     for (unsigned tries = 0; lock >= 0 && !locked && tries < 10; ++tries) {
         locked = !flock(lock, LOCK_EX | LOCK_NB);
-        if (!locked) usleep(200000);
+        if (!locked)
+            usleep(200000);
     }
-    if (!locked) return 0;
+    if (!locked)
+        return 0;
     queue = dispatch_queue_create("com.brunostjohn.switch.joyconpaird", DISPATCH_QUEUE_SERIAL);
     void *mb = dlopen("/System/Library/PrivateFrameworks/MobileBluetooth.framework/MobileBluetooth", RTLD_NOW);
     BTSessionAttachWithQueue = mb ? dlsym(mb, "BTSessionAttachWithQueue") : NULL;

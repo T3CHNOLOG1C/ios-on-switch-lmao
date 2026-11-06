@@ -41,13 +41,16 @@ static int fails = 0, checks = 0;
 static uint64_t bits(const uint32_t *w, unsigned hi, unsigned lo)
 {
     uint64_t v = 0;
-    for (unsigned b = hi + 1; b-- > lo;) v = v << 1 | ((w[b / 32] >> (b % 32)) & 1);
+    for (unsigned b = hi + 1; b-- > lo;)
+        v = v << 1 | ((w[b / 32] >> (b % 32)) & 1);
     return v;
 }
+
 struct TicView {
     uint64_t va;
     uint32_t version, yLog2, maxLevel, width, height, type, srgb, minView, maxView, normalized, border, xGobs;
 };
+
 static TicView decode(const uint32_t w[8])
 {
     TicView t;
@@ -66,26 +69,32 @@ static TicView decode(const uint32_t w[8])
     t.maxView = uint32_t(bits(w, 231, 228));
     return t;
 }
+
 // the level's block height the hardware uses: the header's, clamped below 2x the level's height in GOBs
 static uint32_t levelYLog2(const TicView &t, uint32_t l)
 {
     const uint32_t h = std::max(1u, t.height >> l), gobs = (h + 7) / 8;
     uint32_t c = 0;
-    while ((1u << c) < gobs) c++;
+    while ((1u << c) < gobs)
+        c++;
     return std::min(t.yLog2, c);
 }
+
 static uint64_t levelBytes(const TicView &t, uint32_t bpp, uint32_t l)
 {
     const uint32_t w = std::max(1u, t.width >> l), h = std::max(1u, t.height >> l), y = levelYLog2(t, l);
     const uint64_t rowB = (uint64_t(w) * bpp + 63) / 64 * 64, rows = (h + (8u << y) - 1) / (8u << y) * (8u << y);
     return rowB * rows;
 }
+
 static uint64_t levelBase(const TicView &t, uint32_t bpp, uint32_t l)
 {
     uint64_t at = 0;
-    for (uint32_t i = 0; i < l; i++) at += levelBytes(t, bpp, i);
+    for (uint32_t i = 0; i < l; i++)
+        at += levelBytes(t, bpp, i);
     return at;
 }
+
 static uint64_t ticTexel(const TicView &t, uint32_t bpp, uint32_t l, uint32_t x, uint32_t y)
 {
     const uint32_t w = std::max(1u, t.width >> l), yl = levelYLog2(t, l), xb = x * bpp;
@@ -102,16 +111,19 @@ struct Nil {
     uint64_t size, align;
     std::vector<uint64_t> off, row, lsize;
 };
+
 static std::vector<Nil> readNil(const char *path)
 {
     std::vector<Nil> out;
     FILE *f = fopen(path, "r");
-    if (!f) return out;
+    if (!f)
+        return out;
     char line[8192];
     while (fgets(line, sizeof line, f)) {
         Nil n;
         unsigned long long s, a;
-        if (sscanf(line, "%u %u %u %llu %llu", &n.w, &n.h, &n.l, &s, &a) != 5) continue;
+        if (sscanf(line, "%u %u %u %llu %llu", &n.w, &n.h, &n.l, &s, &a) != 5)
+            continue;
         n.size = s;
         n.align = a;
         const char *bar = strchr(line, '|');
@@ -130,6 +142,7 @@ static std::vector<Nil> readNil(const char *path)
     fclose(f);
     return out;
 }
+
 static void testLayout(const char *path, uint32_t bpp, uint32_t mtl)
 {
     const std::vector<Nil> nil = readNil(path);
@@ -139,7 +152,8 @@ static void testLayout(const char *path, uint32_t bpp, uint32_t mtl)
         fx::MipChain c;
         const bool ok = fx::mipChainLayout(n.w, n.h, n.l, bpp, c);
         CHECK(ok, "layout refused %ux%ux%u", n.w, n.h, n.l);
-        if (!ok) continue;
+        if (!ok)
+            continue;
         images++;
         CHECK(c.bytes == n.size, "%ux%ux%u bpp %u: size fx %llu NIL %llu", n.w, n.h, n.l, bpp,
               (unsigned long long)c.bytes, (unsigned long long)n.size);
@@ -196,14 +210,18 @@ struct Run {
     fx::Pitch l0;
     uint64_t chainVa = 0x2000000000ull;
 };
+
 static void fill(std::vector<uint8_t> &v, uint32_t seed)
 {
     std::mt19937 r(seed);
-    for (auto &b : v) b = uint8_t(r());
+    for (auto &b : v)
+        b = uint8_t(r());
 }
+
 static bool prepare(Run &run, uint32_t w, uint32_t h, uint32_t levels, uint32_t seed)
 {
-    if (!fx::mipChainLayout(w, h, levels, 4, run.c)) return false;
+    if (!fx::mipChainLayout(w, h, levels, 4, run.c))
+        return false;
     run.l0 = {0x1000000000ull, (w * 4 + 255) & ~255u, w, h};
     run.pitch.assign(size_t(run.l0.pitch) * h, 0);
     fill(run.pitch, seed);
@@ -211,6 +229,7 @@ static bool prepare(Run &run, uint32_t w, uint32_t h, uint32_t levels, uint32_t 
     run.push.assign(fx::twodInitWords() + fx::generateWords(run.c, 0, levels - 1) + 16, 0);
     return true;
 }
+
 static size_t emit(Run &run, uint32_t levels)
 {
     Push p{run.push.data(), run.push.data() + run.push.size()};
@@ -218,6 +237,7 @@ static size_t emit(Run &run, uint32_t levels)
     fx::emitGenerate(p, run.c, run.chainVa, &run.l0, 0xcf, 0, levels - 1);
     return size_t(p.at - run.push.data());
 }
+
 // the CPU reference chain from level 0 (each level from the reference level above)
 static std::vector<std::vector<uint8_t>> reference(const Run &run)
 {
@@ -233,6 +253,7 @@ static std::vector<std::vector<uint8_t>> reference(const Run &run)
     }
     return lv;
 }
+
 // compares the chain the model wrote, read through the header-only address model, with the reference: bytes that differ
 static uint64_t compare(const Run &run, const std::vector<std::vector<uint8_t>> &ref)
 {
@@ -248,11 +269,13 @@ static uint64_t compare(const Run &run, const std::vector<std::vector<uint8_t>> 
                 if (a + 4 > run.chain.size() || memcmp(&run.chain[a], &ref[l][(size_t(y) * lv.width + x) * 4], 4))
                     bad++;
                 // and fx's own CPU-view addressing agrees with the header model
-                if (fx::texelOffset(run.c, l, x * 4, y) != a) bad++;
+                if (fx::texelOffset(run.c, l, x * 4, y) != a)
+                    bad++;
             }
     }
     return bad;
 }
+
 static void testGenerate()
 {
     const uint32_t sizes[][2] = {{776, 24}, {180, 180}, {120, 120},   {60, 60},  {1280, 720}, {720, 1280},
@@ -277,7 +300,8 @@ static void testGenerate()
         const uint64_t bad = compare(run, reference(run));
         CHECK(bad == 0, "%ux%u: %llu texels differ from the reference chain", s[0], s[1], (unsigned long long)bad);
         images++;
-        for (uint32_t l = 0; l < levels; l++) texels += uint64_t(run.c.level[l].width) * run.c.level[l].height;
+        for (uint32_t l = 0; l < levels; l++)
+            texels += uint64_t(run.c.level[l].width) * run.c.level[l].height;
     }
     printf("generate: %u chains (%llu texels) through the 2D engine model equal the reference, ordered, sampleable\n",
            images, (unsigned long long)texels);
@@ -364,7 +388,8 @@ static void testTeeth()
                   "self-test's Fermi view does not tell the views apart");
             std::vector<uint8_t> seen(512, 0);  // both GOB arrangements are permutations of the 512 bytes
             for (uint32_t y = 0; y < 8; y++)
-                for (uint32_t x = 0; x < 64; x++) seen[fx::gobOffsetFermi(x, y)]++, seen[fx::gobOffset(x, y)] += 2;
+                for (uint32_t x = 0; x < 64; x++)
+                    seen[fx::gobOffsetFermi(x, y)]++, seen[fx::gobOffset(x, y)] += 2;
             CHECK(std::count(seen.begin(), seen.end(), 3) == 512, "GOB arrangements are not permutations");
         }
         if (quirk)
@@ -433,8 +458,10 @@ static void bench()
 
 int main(int argc, char **argv)
 {
-    if (argc > 1) testLayout(argv[1], 4, 80);
-    if (argc > 2) testLayout(argv[2], 8, 115);
+    if (argc > 1)
+        testLayout(argv[1], 4, 80);
+    if (argc > 2)
+        testLayout(argv[2], 8, 115);
     testTic();
     testGenerate();
     testTeeth();

@@ -45,8 +45,10 @@ NVDECClient *nvdec_open(int *error)
 
 void nvdec_close(NVDECClient *c)
 {
-    if (!c) return;
-    for (int i = 0; i < 64; i++) free(c->va[i]);
+    if (!c)
+        return;
+    for (int i = 0; i < 64; i++)
+        free(c->va[i]);
     free(c);
 }
 
@@ -96,7 +98,8 @@ int nvdec_present(NVDECClient *c, const TegraNVDECPresent *p)
     } else {
         gPresentBad++;
     }
-    if (s) CFRelease(s);
+    if (s)
+        CFRelease(s);
     return ok ? 0 : kIOReturnUnsupported;
 }
 
@@ -122,10 +125,13 @@ uint32_t nvdec_check_wait(NVDECClient *c)
 int nvdec_alloc(void *ctx, uint64_t size, uint32_t *handle, void **va)
 {
     NVDECClient *c = ctx;
-    if (gFull) return -1;
+    if (gFull)
+        return -1;
     for (uint32_t h = 1; h < 64; h++) {
-        if (c->va[h]) continue;
-        if (!(c->va[h] = calloc(1, size))) return -1;
+        if (c->va[h])
+            continue;
+        if (!(c->va[h] = calloc(1, size)))
+            return -1;
         c->size[h] = size;
         *handle = h;
         *va = c->va[h];
@@ -147,8 +153,10 @@ int nvdec_submit(void *ctx, const TegraNVDECSubmit *s, uint32_t *fence)
     uint64_t avail[TEGRA_NVDEC_MAX_ENTRIES] = {0};
     for (uint32_t i = 0; i < s->entry_count; i++) {
         const TegraNVDECEntry *e = &s->entries[i];
-        if (e->kind != TEGRA_NVDEC_ENTRY_RELOC) continue;
-        if (e->value >= 64 || !c->va[e->value] || e->offset > c->size[e->value]) return -1;
+        if (e->kind != TEGRA_NVDEC_ENTRY_RELOC)
+            continue;
+        if (e->value >= 64 || !c->va[e->value] || e->offset > c->size[e->value])
+            return -1;
         avail[i] = c->size[e->value] - e->offset;
     }
     if (tegra_nvdec_check(s, avail)) {

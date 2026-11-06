@@ -44,9 +44,11 @@ IOService *gRoot;
 
 extern "C" bool tegra_vic_surface_start(void)
 {
-    if (gRoot) return true;
+    if (gRoot)
+        return true;
     OSDictionary *match = IOService::nameMatching("IOCoreSurfaceRoot");
-    if (!match) return false;
+    if (!match)
+        return false;
     IOService *root = IOService::waitForMatchingService(match, 5ull * 1000 * 1000 * 1000);
     match->release();
     gRoot = root;  // kept (waitForMatchingService retained it)
@@ -56,9 +58,11 @@ extern "C" bool tegra_vic_surface_start(void)
 extern "C" IOReturn tegra_vic_surface_lookup(uint32_t id, task_t task, TegraVICSurface *out)
 {
     bzero(out, sizeof(*out));
-    if (!gRoot || !id) return kIOReturnBadArgument;
+    if (!gRoot || !id)
+        return kIOReturnBadArgument;
     OSObject *surface = tegra_vic_ios_lookup(gRoot, id, task);
-    if (!surface) return kIOReturnBadArgument;  // as AppleM2ScalerCSCDriver: not this task's surface
+    if (!surface)
+        return kIOReturnBadArgument;  // as AppleM2ScalerCSCDriver: not this task's surface
     out->surface = surface;
     out->memory = tegra_vic_ios_memory(surface);
     TegraVICSurfaceDesc *d = &out->desc;
@@ -79,7 +83,8 @@ extern "C" IOReturn tegra_vic_surface_lookup(uint32_t id, task_t task, TegraVICS
         d->planeHeight[0] = d->height;
     }
     d->length = out->memory ? out->memory->getLength() : 0;
-    if (tegra_vic_ios_alloc_size(surface) < d->length) d->length = tegra_vic_ios_alloc_size(surface);
+    if (tegra_vic_ios_alloc_size(surface) < d->length)
+        d->length = tegra_vic_ios_alloc_size(surface);
     d->protection = tegra_vic_ios_protection(surface);
     if (!out->memory) {
         tegra_vic_surface_release(out);
@@ -90,8 +95,10 @@ extern "C" IOReturn tegra_vic_surface_lookup(uint32_t id, task_t task, TegraVICS
 
 extern "C" void tegra_vic_surface_release(TegraVICSurface *s)
 {
-    if (s->prepared) tegra_vic_surface_complete(s);
-    if (s->surface) s->surface->release();  // IOSurface::release, as lookupSurface's caller must
+    if (s->prepared)
+        tegra_vic_surface_complete(s);
+    if (s->surface)
+        s->surface->release();  // IOSurface::release, as lookupSurface's caller must
     bzero(s, sizeof(*s));
 }
 
@@ -102,10 +109,12 @@ extern "C" IOReturn tegra_vic_surface_prepare(TegraVICSurface *s, uint64_t exten
 {
     *count = 0;
     const uint64_t bytes = (extent + 0xfff) & ~0xfffull;
-    if (!extent || bytes / 4096 > max || extent > s->memory->getLength()) return kIOReturnBadArgument;
+    if (!extent || bytes / 4096 > max || extent > s->memory->getLength())
+        return kIOReturnBadArgument;
     // IOSurface::prepare keeps the surface's own wire count (and returns 0 even when the descriptor's prepare fails);
     // the descriptor is prepared once more here, which is the result that counts.
-    if (tegra_vic_ios_prepare(s->surface) != kIOReturnSuccess) return kIOReturnNoMemory;
+    if (tegra_vic_ios_prepare(s->surface) != kIOReturnSuccess)
+        return kIOReturnNoMemory;
     if (s->memory->prepare() != kIOReturnSuccess) {
         (void)tegra_vic_ios_complete(s->surface);
         return kIOReturnNoMemory;
@@ -119,7 +128,8 @@ extern "C" IOReturn tegra_vic_surface_prepare(TegraVICSurface *s, uint64_t exten
             tegra_vic_surface_complete(s);
             return kIOReturnNotAligned;
         }
-        for (uint64_t at = 0; at < length && offset < bytes; at += 4096, offset += 4096) pages[n++] = pa + at;
+        for (uint64_t at = 0; at < length && offset < bytes; at += 4096, offset += 4096)
+            pages[n++] = pa + at;
     }
     *count = n;
     return kIOReturnSuccess;
@@ -131,12 +141,14 @@ extern "C" IOReturn tegra_vic_surface_prepare(TegraVICSurface *s, uint64_t exten
 // lock is taken inside. Its next CPU lock cleans the CPU's caches once, as after Apple's engines.
 extern "C" void tegra_vic_surface_written(TegraVICSurface *s)
 {
-    if (s->surface) (void)tegra_vic_ios_device_unlock(s->surface, 0);
+    if (s->surface)
+        (void)tegra_vic_ios_device_unlock(s->surface, 0);
 }
 
 extern "C" void tegra_vic_surface_complete(TegraVICSurface *s)
 {
-    if (!s->prepared) return;
+    if (!s->prepared)
+        return;
     s->memory->complete();
     (void)tegra_vic_ios_complete(s->surface);
     s->prepared = false;

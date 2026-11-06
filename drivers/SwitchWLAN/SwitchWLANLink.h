@@ -21,7 +21,10 @@ extern "C" {
 #endif
 
 // WLC_GET_VERSION's answer: brcmu_d11 BRCMU_D11N_IOTYPE (1) or BRCMU_D11AC_IOTYPE (2).
-enum { SWLAN_IOTYPE_D11N = 1, SWLAN_IOTYPE_D11AC = 2 };
+enum {
+    SWLAN_IOTYPE_D11N = 1,
+    SWLAN_IOTYPE_D11AC = 2
+};
 
 struct swlan_chanspec {
     uint8_t control;  // the 20 MHz channel beacons go on
@@ -39,19 +42,26 @@ static inline bool swlan_chanspec_decode(uint16_t cs, int iotype, struct swlan_c
     if (iotype == SWLAN_IOTYPE_D11N) {
         out->five_ghz = (cs & 0xF000) == 0x1000;
         switch (cs & 0x0C00) {
-        case 0x0800: out->bw_mhz = 20; return true;
+        case 0x0800:
+            out->bw_mhz = 20;
+            return true;
         case 0x0C00:
             out->bw_mhz = 40;
-            if ((cs & 0x0300) == 0x0100) out->control = (uint8_t)(ch - 2);
-            if ((cs & 0x0300) == 0x0200) out->control = (uint8_t)(ch + 2);
+            if ((cs & 0x0300) == 0x0100)
+                out->control = (uint8_t)(ch - 2);
+            if ((cs & 0x0300) == 0x0200)
+                out->control = (uint8_t)(ch + 2);
             return true;
-        default: return false;
+        default:
+            return false;
         }
     }
     out->five_ghz = (cs & 0xC000) == 0xC000;
     const unsigned sb = (cs & 0x0700) >> 8;
     switch (cs & 0x3800) {
-    case 0x1000: out->bw_mhz = 20; return true;
+    case 0x1000:
+        out->bw_mhz = 20;
+        return true;
     case 0x1800:
         out->bw_mhz = 40;
         out->control = (uint8_t)(sb ? ch + 2 : ch - 2);
@@ -69,7 +79,8 @@ static inline bool swlan_chanspec_decode(uint16_t cs, int iotype, struct swlan_c
         out->control = (uint8_t)(ch + offset[sb]);
         return true;
     }
-    default: return false;
+    default:
+        return false;
     }
 }
 
@@ -95,7 +106,8 @@ static inline void swlan_peer_parse(const uint8_t *ie, size_t length, struct swl
             out->sgi20 = (info & 0x20) != 0;
             out->sgi40 = (info & 0x40) != 0;
             for (unsigned s = 0; s < 4; ++s)
-                if (v[3 + s]) out->ht_nss = (uint8_t)(s + 1);
+                if (v[3 + s])
+                    out->ht_nss = (uint8_t)(s + 1);
         } else if (id == 61 && n >= 2) {  // HT Operation: primary channel, then the secondary offset and STA width
             out->primary = v[0];
             out->ht_width = ((v[1] & 0x03) && (v[1] & 0x04)) ? 40 : 20;
@@ -105,7 +117,8 @@ static inline void swlan_peer_parse(const uint8_t *ie, size_t length, struct swl
             out->vht = true;
             out->sgi80 = (info & 0x20) != 0;
             for (unsigned s = 0; s < 8; ++s)
-                if (((map >> (2 * s)) & 3) != 3) out->vht_nss = (uint8_t)(s + 1);
+                if (((map >> (2 * s)) & 3) != 3)
+                    out->vht_nss = (uint8_t)(s + 1);
         } else if (id == 192 && n >= 3) {  // VHT Operation: width 0 (20/40 as HT), 1 (80, or 160/80+80 by seg 1)
             out->vht_width = v[0] == 0 ? 40 : (v[0] == 1 ? (v[2] ? 160 : 80) : 160);
         } else if (id == 255 && n >= 1 && v[0] == 35) {  // HE Capabilities (element id extension 35)
@@ -115,7 +128,9 @@ static inline void swlan_peer_parse(const uint8_t *ie, size_t length, struct swl
 }
 
 // The station's own limits: the BCM4356 is 2x2 with short guard interval at every width it has.
-enum { SWLAN_OUR_NSS = 2 };
+enum {
+    SWLAN_OUR_NSS = 2
+};
 
 // The best PHY rate (kb/s) both ends allow on a link of `bw_mhz`: HT MCS 7 or VHT MCS 9 (MCS 8 at 20 MHz) per
 // stream, short guard interval where the access point takes it. 0 when nothing is known.
@@ -127,7 +142,8 @@ static inline uint32_t swlan_link_best_kbps(const struct swlan_peer *ap, uint16_
                           vht160[2] = {780000, 866700};
     const unsigned nss = ap->vht && ap->vht_nss ? ap->vht_nss : ap->ht_nss;
     const unsigned streams = nss < SWLAN_OUR_NSS ? nss : SWLAN_OUR_NSS;
-    if (!streams || !ap->ht) return 0;
+    if (!streams || !ap->ht)
+        return 0;
     const unsigned sgi = bw_mhz >= 80 ? ap->sgi80 : (bw_mhz >= 40 ? ap->sgi40 : ap->sgi20);
     const uint32_t *row;
     if (ap->vht)
@@ -139,8 +155,10 @@ static inline uint32_t swlan_link_best_kbps(const struct swlan_peer *ap, uint16_
 
 static inline int swlan_peer_describe(const struct swlan_peer *ap, char *out, size_t size)
 {
-    if (!size) return 0;
-    if (!ap->ht) return snprintf(out, size, "legacy (no HT)");
+    if (!size)
+        return 0;
+    if (!ap->ht)
+        return snprintf(out, size, "legacy (no HT)");
     int n = snprintf(out, size, "HT %u SS %u MHz%s", ap->ht_nss, ap->ht_width ? ap->ht_width : 20,
                      (ap->ht_width >= 40 ? ap->sgi40 : ap->sgi20) ? " SGI" : "");
     size_t at = n > 0 ? (size_t)n : 0;
@@ -162,15 +180,21 @@ static inline bool swlan_dump_value(const char *text, size_t length, const char 
 {
     const size_t n = strlen(name);
     for (size_t at = 0; at + n < length && text[at]; ++at) {
-        if (memcmp(text + at, name, n) != 0) continue;
+        if (memcmp(text + at, name, n) != 0)
+            continue;
         const char before = at ? text[at - 1] : ' ';
-        if ((before >= 'a' && before <= 'z') || (before >= 'A' && before <= 'Z') || before == '_') continue;
+        if ((before >= 'a' && before <= 'z') || (before >= 'A' && before <= 'Z') || before == '_')
+            continue;
         size_t p = at + n;
-        if (p >= length || (text[p] != ' ' && text[p] != ':' && text[p] != '=')) continue;
-        while (p < length && (text[p] == ' ' || text[p] == ':' || text[p] == '=')) ++p;
-        if (p >= length || text[p] < '0' || text[p] > '9') continue;
+        if (p >= length || (text[p] != ' ' && text[p] != ':' && text[p] != '='))
+            continue;
+        while (p < length && (text[p] == ' ' || text[p] == ':' || text[p] == '='))
+            ++p;
+        if (p >= length || text[p] < '0' || text[p] > '9')
+            continue;
         uint32_t v = 0;
-        while (p < length && text[p] >= '0' && text[p] <= '9') v = v * 10 + (uint32_t)(text[p++] - '0');
+        while (p < length && text[p] >= '0' && text[p] <= '9')
+            v = v * 10 + (uint32_t)(text[p++] - '0');
         *value = v;
         return true;
     }
@@ -180,7 +204,8 @@ static inline bool swlan_dump_value(const char *text, size_t length, const char 
 // A tenths figure for a log line without floating point (the kernel is built -mgeneral-regs-only): a / b as "12.3".
 static inline int swlan_tenths(uint64_t a, uint64_t b, char *out, size_t size)
 {
-    if (!b) return snprintf(out, size, "-");
+    if (!b)
+        return snprintf(out, size, "-");
     const uint64_t t = (a * 10 + b / 2) / b;
     return snprintf(out, size, "%llu.%llu", (unsigned long long)(t / 10), (unsigned long long)(t % 10));
 }

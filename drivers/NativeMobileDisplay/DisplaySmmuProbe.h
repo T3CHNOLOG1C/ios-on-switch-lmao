@@ -26,7 +26,18 @@
 #include <stdint.h>
 
 struct DisplaySmmuProbe {
-    enum Stage { kIdle, kCrc, kPixel, kRestored, kAttached, kIova, kBack, kDone, kFailed };
+    enum Stage {
+        kIdle,
+        kCrc,
+        kPixel,
+        kRestored,
+        kAttached,
+        kIova,
+        kBack,
+        kDone,
+        kFailed
+    };
+
     enum Action {
         kNothing,
         kTweakPixel,    // change the scanned buffer's first pixel's low bits
@@ -37,6 +48,7 @@ struct DisplaySmmuProbe {
         kFinish,        // detach (bypass), CRC unit off: passed
         kAbort,         // undo whatever is still changed (pixel, START_ADDR, attach, CRC unit): failed at `stage`
     };
+
     static constexpr unsigned kLatchFrames = 4;
     // A stage's sample: the latched CRC once two frame ends in a row read it, not 0. At most kZeroReads reads of 0 (the unit
     // has not latched a frame yet) and kSettleReads nonzero reads that do not repeat, then the stage fails.
@@ -53,7 +65,11 @@ struct DisplaySmmuProbe {
     bool pixelChanged = false, isAttached = false, onIova = false;
     const char *why = "";
 
-    bool active() const { return stage != kIdle && stage != kDone && stage != kFailed; }
+    bool active() const
+    {
+        return stage != kIdle && stage != kDone && stage != kFailed;
+    }
+
     // The caller has just turned the CRC unit on.
     void start()
     {
@@ -63,11 +79,13 @@ struct DisplaySmmuProbe {
         base = again = 0;
         settleReset();
     }
+
     void settleReset()
     {
         last = 0;
         zeros = reads = 0;
     }
+
     // One frame end's read of the latched CRC in a stage: true with the sample when the register settled (this read and the
     // one before it equal, not 0); *failed when the stage has read too long without one
     bool settle(uint32_t crc, Action *failed)
@@ -79,9 +97,11 @@ struct DisplaySmmuProbe {
                 *failed = fail(firstLatch ? "the CRC unit went back to 0" : "the CRC unit reads 0 (no frame latched)");
             return false;
         }
-        if (!firstLatch) firstLatch = frames;
+        if (!firstLatch)
+            firstLatch = frames;
         if (stage == kCrc) {  // for the line: the first CRC read, and the latest
-            if (!base) base = crc;
+            if (!base)
+                base = crc;
             again = crc;
         }
         if (crc == last) {
@@ -89,22 +109,29 @@ struct DisplaySmmuProbe {
             return true;
         }
         last = crc;
-        if (++reads >= kSettleReads) *failed = fail("the CRC is not stable on a still frame");
+        if (++reads >= kSettleReads)
+            *failed = fail("the CRC is not stable on a still frame");
         return false;
     }
+
     void attached(bool ok)
     {
         isAttached = ok;
-        if (!ok) why = "the domain did not attach";
+        if (!ok)
+            why = "the domain did not attach";
     }
+
     // At every DC A frame end while active: the latched CRC, whether a window A request is still out (ACT_REQ), and whether
     // window A underflowed in the frame that ended.
     Action frameEnd(uint32_t crc, bool requestOut, bool underflow)
     {
-        if (!active()) return kNothing;
+        if (!active())
+            return kNothing;
         ++frames;
-        if (stage == kAttached && !isAttached) return fail("the domain did not attach");
-        if (isAttached && underflow) return fail("window A underflowed through the SMMU");
+        if (stage == kAttached && !isAttached)
+            return fail("the domain did not attach");
+        if (isAttached && underflow)
+            return fail("window A underflowed through the SMMU");
         if (latchPending) {
             if (requestOut)
                 return ++latchFrames >= kLatchFrames ? fail("window A did not take the start address") : kNothing;
@@ -114,10 +141,12 @@ struct DisplaySmmuProbe {
                     // next frame end, one more in case the latched CRC trails a frame
             return kNothing;
         }
-        if (wait && --wait) return kNothing;
+        if (wait && --wait)
+            return kNothing;
         seen = crc;
         Action failed;
-        if (!settle(crc, &failed)) return failed;
+        if (!settle(crc, &failed))
+            return failed;
         switch (stage) {
         case kCrc:
             base = again = crc;
@@ -125,28 +154,35 @@ struct DisplaySmmuProbe {
             return next(kPixel, 2, kTweakPixel);
         case kPixel:
             tweaked = crc;
-            if (crc == base) return fail("the CRC did not change with a pixel");
+            if (crc == base)
+                return fail("the CRC did not change with a pixel");
             pixelChanged = false;
             return next(kRestored, 2, kRestorePixel);
         case kRestored:
-            if (crc != base) return fail("the CRC did not come back with the pixel");
+            if (crc != base)
+                return fail("the CRC did not come back with the pixel");
             return next(kAttached, 2, kAttach);
         case kAttached:
-            if (crc != base) return fail("the identity map changed the frame");
+            if (crc != base)
+                return fail("the identity map changed the frame");
             onIova = true;
             return latch(kIova, kScanIova);
         case kIova:
-            if (crc != base) return fail("the frame through the IOVA slot differs");
+            if (crc != base)
+                return fail("the frame through the IOVA slot differs");
             onIova = false;
             return latch(kBack, kScanPa);
         case kBack:
-            if (crc != base) return fail("the frame by physical address differs after the slot");
+            if (crc != base)
+                return fail("the frame by physical address differs after the slot");
             stage = kDone;
             isAttached = false;
             return kFinish;
-        default: return kNothing;
+        default:
+            return kNothing;
         }
     }
+
     Action next(Stage s, unsigned frameEnds, Action a)
     {
         stage = s;
@@ -154,6 +190,7 @@ struct DisplaySmmuProbe {
         settleReset();
         return a;
     }
+
     Action latch(Stage s, Action a)
     {
         stage = s;
@@ -162,6 +199,7 @@ struct DisplaySmmuProbe {
         settleReset();
         return a;
     }
+
     Action fail(const char *reason)
     {
         why = reason;
@@ -169,34 +207,50 @@ struct DisplaySmmuProbe {
         stage = kFailed;
         return kAbort;
     }
+
     // Carries out an action with the driver's (or the test model's) I/O: tweakPixel(), restorePixel(), attach() -> bool,
     // scan(bool iova) (window A START_ADDR and ACT_REQ), detach(), crcOff(). An abort undoes, in reverse, what is still
     // changed. Returns true when the probe is over (passed or failed).
     template <typename Io> bool perform(Action a, Io &io)
     {
         switch (a) {
-        case kNothing: return false;
-        case kTweakPixel: io.tweakPixel(); return false;
-        case kRestorePixel: io.restorePixel(); return false;
-        case kAttach: attached(io.attach()); return false;
-        case kScanIova: io.scan(true); return false;
-        case kScanPa: io.scan(false); return false;
+        case kNothing:
+            return false;
+        case kTweakPixel:
+            io.tweakPixel();
+            return false;
+        case kRestorePixel:
+            io.restorePixel();
+            return false;
+        case kAttach:
+            attached(io.attach());
+            return false;
+        case kScanIova:
+            io.scan(true);
+            return false;
+        case kScanPa:
+            io.scan(false);
+            return false;
         case kFinish:
             io.detach();
             io.crcOff();
             return true;
         case kAbort:
-            if (pixelChanged) io.restorePixel();
+            if (pixelChanged)
+                io.restorePixel();
             pixelChanged = false;
-            if (onIova || latchPending) io.scan(false);  // a START_ADDR request may be out: the physical address wins
+            if (onIova || latchPending)
+                io.scan(false);  // a START_ADDR request may be out: the physical address wins
             onIova = latchPending = false;
-            if (isAttached) io.detach();
+            if (isAttached)
+                io.detach();
             isAttached = false;
             io.crcOff();
             return true;
         }
         return false;
     }
+
     static const char *name(Stage s)
     {
         static const char *const names[] = {"idle", "crc",  "pixel", "pixel", "attach",

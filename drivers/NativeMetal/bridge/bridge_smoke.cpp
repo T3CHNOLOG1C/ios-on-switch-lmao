@@ -5,22 +5,27 @@
 #include <cstdio>
 #include <cstdlib>
 #include <vector>
+
 static void mark(uint32_t value)
 {
     std::printf("mark %x\n", value);
     std::fflush(stdout);
 }
+
 int main(int argc, char **argv)
 {
-    if (argc < 3) return 2;
+    if (argc < 3)
+        return 2;
     std::vector<uint8_t> qc;
     if (argc > 3) {
         FILE *f = std::fopen(argv[3], "rb");
-        if (!f) return 3;
+        if (!f)
+            return 3;
         std::fseek(f, 0, SEEK_END);
         qc.resize(size_t(std::ftell(f)));
         std::fseek(f, 0, SEEK_SET);
-        if (std::fread(qc.data(), 1, qc.size(), f) != qc.size()) return 4;
+        if (std::fread(qc.data(), 1, qc.size(), f) != qc.size())
+            return 4;
         std::fclose(f);
     }
     NmbSelftest r{};

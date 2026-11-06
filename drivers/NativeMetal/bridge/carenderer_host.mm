@@ -19,6 +19,7 @@
 extern "C" size_t native_bridge_metal_telemetry(char *, size_t);
 
 static std::set<std::string> missing;
+
 static void onMissing(const char *cls, const char *sel)
 {
     if (missing.insert(std::string(cls) + " " + sel).second)
@@ -52,10 +53,12 @@ static const char *protocolTypes(SEL selector)
     for (Protocol *p : protocols)
         for (BOOL required : {YES, NO}) {
             objc_method_description m = protocol_getMethodDescription(p, selector, required, YES);
-            if (m.types) return m.types;
+            if (m.types)
+                return m.types;
         }
     return nullptr;
 }
+
 static NSMethodSignature *discoverSignature(id self, SEL _cmd, SEL selector)
 {
     const char *types = protocolTypes(selector);
@@ -66,6 +69,7 @@ static NSMethodSignature *discoverSignature(id self, SEL _cmd, SEL selector)
     }
     return [NSMethodSignature signatureWithObjCTypes:types];
 }
+
 static void discoverForward(id self, SEL _cmd, NSInvocation *invocation)
 {
     onMissing(class_getName(object_getClass(self)), sel_getName(invocation.selector));
@@ -75,6 +79,7 @@ static void discoverForward(id self, SEL _cmd, NSInvocation *invocation)
         [invocation setReturnValue:zero.data()];
     }
 }
+
 static void discover(Class cls)
 {
     class_addMethod(cls, @selector(methodSignatureForSelector:), (IMP)discoverSignature, "@@::");
@@ -94,7 +99,8 @@ static CGColorRef rgba(double r, double g, double b, double a)
 int main(int argc, char **argv)
 {
     @autoreleasepool {
-        if (argc < 3) return 2;
+        if (argc < 3)
+            return 2;
         // NMB_SYSTEM_DEVICE=1: the Mac's own Metal device, the instrument's baseline.
         id<MTLDevice> device = getenv("NMB_SYSTEM_DEVICE")
                                    ? MTLCreateSystemDefaultDevice()
@@ -190,7 +196,10 @@ int main(int argc, char **argv)
         [target getBytes:pixels.data() bytesPerRow:side * 4 fromRegion:MTLRegionMake2D(0, 0, side, side) mipmapLevel:0];
         // BGRA. Row 0 of the texture is the layer tree's y 0 (the Mac's Metal device renders it so, NMB_SYSTEM_DEVICE=1): red top-left,
         // green bottom-right.
-        auto at = [&](NSUInteger x, NSUInteger y) { return &pixels[(y * side + x) * 4]; };
+        auto at = [&](NSUInteger x, NSUInteger y) {
+            return &pixels[(y * side + x) * 4];
+        };
+
         struct Probe {
             NSUInteger x, y;
             int b, g, r;
@@ -200,6 +209,7 @@ int main(int argc, char **argv)
             {side - 8, 8, 255, 0, 0},           // background
             {8, side - 8, 255, 0, 0},           // background
         };
+
         bool ok = true;
         for (auto &p : probes) {
             const uint8_t *px = at(p.x, p.y);
@@ -210,7 +220,8 @@ int main(int argc, char **argv)
             }
         }
         std::printf("missing selectors: %zu\n", missing.size());
-        if (!ok) return 1;
+        if (!ok)
+            return 1;
         std::printf("PASS: the Mac's CARenderer rendered a layer tree on %s\n", device.name.UTF8String);
         return 0;
     }

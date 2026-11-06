@@ -107,9 +107,11 @@ uint64_t timerHz()
 IOReturn setHostClock(task_t task, uint64_t address)
 {
     constexpr uint64_t kApple = 0x4176e36000000000ULL;  // 24000000.0
-    if ((address & 7) || address < 0x180000000ULL || address >= 0x400000000ULL) return kIOReturnBadArgument;
+    if ((address & 7) || address < 0x180000000ULL || address >= 0x400000000ULL)
+        return kIOReturnBadArgument;
     IOMemoryDescriptor *memory = IOMemoryDescriptor::withAddressRange(address, 8, kIODirectionOut, task);
-    if (!memory) return kIOReturnNoMemory;
+    if (!memory)
+        return kIOReturnNoMemory;
     IOReturn result = memory->prepare();  // wires the page while we write it
     if (result != kIOReturnSuccess) {
         memory->release();
@@ -158,6 +160,7 @@ inline uint32_t r32(volatile uint8_t *base, uint32_t o)
 {
     return *(volatile uint32_t *)(base + o);
 }
+
 inline void w32(volatile uint8_t *base, uint32_t o, uint32_t v)
 {
     *(volatile uint32_t *)(base + o) = v;
@@ -169,7 +172,8 @@ bool waitBits(volatile uint8_t *base, uint32_t reg, uint32_t mask, uint32_t want
     uint64_t deadline;
     clock_interval_to_deadline(us, kMicrosecondScale, &deadline);
     while ((r32(base, reg) & mask) != want) {
-        if (mach_absolute_time() > deadline) return (r32(base, reg) & mask) == want;
+        if (mach_absolute_time() > deadline)
+            return (r32(base, reg) & mask) == want;
     }
     return true;
 }
@@ -181,6 +185,7 @@ void cacheClean(const void *start, size_t bytes)
         __asm__ volatile("dc cvac, %0" ::"r"(at) : "memory");
     __asm__ volatile("dsb sy" ::: "memory");
 }
+
 void cacheFlush(const void *start, size_t bytes)
 {
     for (uintptr_t at = (uintptr_t)start & ~(uintptr_t)63, end = (uintptr_t)start + bytes; at < end; at += 64)
@@ -212,8 +217,10 @@ enum : uint32_t {
     RST_DEV_Y_SET = 0x2a8,
     RST_DEV_Y_CLR = 0x2ac,
 };
+
 // Clock numbers: i2s0 30 (L), d_audio 106, apb2ape 107, extern1 120 (V), ape 198 (Y).
 constexpr uint32_t kClkL = 1u << 30, kClkV = (1u << 10) | (1u << 11) | (1u << 24), kClkY = 1u << 6;
+
 enum : uint32_t {
     PLL_BYPASS = 1u << 31,
     PLL_ENABLE = 1u << 30,
@@ -223,6 +230,7 @@ enum : uint32_t {
     PLLA_LOCK_ENABLE = 0x10000000,  // PLLA_MISC0_DEFAULT_VALUE
     PLLA_EN_SDM = 1u << 26,         // MISC2
 };
+
 // PLLA = 38.4 MHz / m * (n + 1/2 + sdm / 8192) / p (clk-pll.c:653); p 2 is hardware 1 (pll_qlin_pdiv_to_hw).
 constexpr uint32_t kPllaM = 2, kPllaN = 38, kPllaP = 2, kPllaPHw = 1, kPllaSdm = 0xfccc;
 constexpr uint32_t kPllaMnp = (kPllaPHw << 20) | (kPllaN << 8) | kPllaM;
@@ -247,7 +255,8 @@ enum : uint32_t {
     IO_DPD_STATUS = 0x1bc,
     IO_DPD2_STATUS = 0x1c4,
 };
-constexpr uint32_t kPartitionAud = 1u << 27;          // POWER_RAIL_AUD
+
+constexpr uint32_t kPartitionAud = 1u << 27;  // POWER_RAIL_AUD
 constexpr uint32_t kPartitionAudId = 27, kToggleStart = 1u << 8;
 constexpr uint32_t kPad33V = (1u << 5) | (1u << 18);  // audio, audio-hv: 1 = 3.3 V
 constexpr uint32_t kNoIoPowerAudioHv = 1u << 18;
@@ -259,6 +268,7 @@ struct Pin {
     uint16_t offset;
     uint8_t value;
 };
+
 constexpr Pin kPins[] = {
     {0x124, 0x00},  // dap1_fs_pb0: i2s1, driven
     {0x128, 0x54},  // dap1_din_pb1: i2s1, pull-down, tristate, input
@@ -303,6 +313,7 @@ enum : uint32_t {
     I2S_CTRL = 0x10a0,
     I2S_TIMING = 0x10a4,
 };
+
 constexpr uint32_t kXbarFromAdmaif1 = 1u << 0, kXbarFromI2s1 = 1u << 16;  // MUX_VALUE(0, 0), MUX_VALUE(0, 16)
 // The S32 link's words (SwitchAudioFormat.h, as L4T's hw_params build them for S32_LE): audio CIFs 32/32 bits, the
 // ADMAIF unpacked (one sample per word), I2S1 master in LRCK frames with 32-bit slots (TIMING 31: half a 64 fs frame),
@@ -330,6 +341,7 @@ enum : uint32_t {
     GLOBAL_CG = 0xc08,
     GLOBAL_INT_CLEAR = 0xc20,
 };
+
 // CTRL: request 1 (ADMAIF1) at 28 (tx) / 24 (rx), direction MEM2AHUB 4 / AHUB2MEM 2 at 12, continuous mode, flow
 // control. CONFIG: 8 buffers at 28 (src) / 24 (trg), burst fls(16) = 5 at 20, WRR weight 1. FIFO_CTRL: size 3
 // (request <= 2) at 8 (tx) / 0 (rx).
@@ -359,6 +371,7 @@ constexpr unsigned kCodecBus = 1;
 constexpr uint8_t kCodecAddr = 0x1c;
 constexpr unsigned kCodecPower = TEGRA_GPIO(Z, 4), kCodecIrq = TEGRA_GPIO(BB, 4);
 constexpr unsigned kJackDetect = TEGRA_GPIO(V, 6);  // the headphone-detect net, 0 = plugged; diagnostics only
+
 // Registers (rt5640.h). Table entries at kPrivate + n are private registers (PRIV_INDEX n, then PRIV_DATA).
 enum : uint8_t {
     RESET = 0x00,
@@ -406,7 +419,9 @@ enum : uint8_t {
     GEN_CTRL2 = 0xfb,
     VENDOR_ID2 = 0xff,
 };
+
 constexpr uint16_t kPrivate = 0x100;
+
 enum : uint16_t {
     // PWR_DIG1, PWR_DIG2
     P_I2S1 = 1u << 15,
@@ -458,6 +473,7 @@ enum : uint16_t {
     // SPK_VOL / HP_VOL: left mute 15, left channel off 14, left volume 13:8 (0 = +12 dB, 1.5 dB steps), right 7/6/5:0
     V_MUTE = (1u << 15) | (1u << 7),
 };
+
 // nvaudio_conf.xml: "x Speaker Playback Volume" 30 (register 39 - 30 = 9, -1.5 dB), "x HP Playback Volume" 38
 // (1, +10.5 dB), both channel switches on. The DAC volume tops out at rt5640.c's own control limits:
 // CUSTOM_DAC_SPK_MAX_VAL_FRIG 150 (-9.4 dB, the OLED speakers, eq-config-type 2) and CUSTOM_DAC_HP_MAX_VAL 170 (-1.9 dB).
@@ -468,6 +484,7 @@ constexpr uint16_t kMicBoost = 1u << 12;  // IN1 boost +20 dB (no switchroot set
 struct RegValue {
     uint16_t reg, value;
 };
+
 // rt5640.c init_list (applied at probe).
 constexpr RegValue kInitList[] = {
     {0x11d, 0x0347}, {0x13d, 0x3600}, {0x112, 0x0aa8}, {0x114, 0x8aaa},
@@ -489,7 +506,11 @@ constexpr RegValue kMicEq[] = {
 // eq_normal_list_nx (rt5640_spk_event PRE_PMD).
 constexpr RegValue kEqOff[] = {{0x0b1, 0x0000}, {0x0b0, 0x6000}, {0x0b4, 0x2206}};
 
-enum Route : uint8_t { kRouteNone, kRouteSpeaker, kRouteHeadphones };
+enum Route : uint8_t {
+    kRouteNone,
+    kRouteSpeaker,
+    kRouteHeadphones
+};
 }  // namespace
 
 class SwitchAudio : public IOService {
@@ -530,10 +551,12 @@ class SwitchAudio : public IOService {
     uint64_t nowFrame() const
     {
         const uint64_t now = mach_absolute_time();
-        if (now <= control->anchor_host) return 0;
+        if (now <= control->anchor_host)
+            return 0;
         const uint64_t ticks = now - control->anchor_host;  // split so nothing overflows (no 128-bit helpers here)
         return ticks / hz * SWITCH_AUDIO_RATE + ticks % hz * SWITCH_AUDIO_RATE / hz;
     }
+
     switch_audio_sample_t *ring(uint32_t type) const
     {
         return static_cast<switch_audio_sample_t *>(memory[type]->getBytesNoCopy());
@@ -546,7 +569,8 @@ class SwitchAudio : public IOService {
         if (control->state & SwitchAudioOutputRunning) {
             switch_audio_sample_t *out = ring(SwitchAudioMemoryOutput);
             uint64_t from = control->out_frames;
-            if (now > from + SWITCH_AUDIO_RING_FRAMES) from = now - SWITCH_AUDIO_RING_FRAMES;
+            if (now > from + SWITCH_AUDIO_RING_FRAMES)
+                from = now - SWITCH_AUDIO_RING_FRAMES;
             while (from < now) {
                 const uint64_t at = from % SWITCH_AUDIO_RING_FRAMES;
                 const uint64_t run =
@@ -556,12 +580,15 @@ class SwitchAudio : public IOService {
             }
             control->out_frames = now;
         }
-        if (control->state & SwitchAudioInputRunning) control->in_frames = now;  // the capture ring stays silent
+        if (control->state & SwitchAudioInputRunning)
+            control->in_frames = now;  // the capture ring stays silent
     }
+
     static void tick(OSObject *owner, IOTimerEventSource *source)
     {
         auto *self = static_cast<SwitchAudio *>(owner);
-        if (!self->control->state) return;
+        if (!self->control->state)
+            return;
         self->advance();
         source->setTimeoutMS(kTickMS);
     }
@@ -569,7 +596,8 @@ class SwitchAudio : public IOService {
     static volatile uint8_t *map(vm_offset_t pa, vm_size_t size, const char *what)
     {
         auto *base = reinterpret_cast<volatile uint8_t *>(ml_io_map(pa, size));
-        if (!base) panic("SwitchAudio: cannot map %s at %#lx", what, (unsigned long)pa);
+        if (!base)
+            panic("SwitchAudio: cannot map %s at %#lx", what, (unsigned long)pa);
         return base;
     }
 
@@ -634,7 +662,8 @@ class SwitchAudio : public IOService {
             w32(pmc, PWR_DET_VAL, r32(pmc, PWR_DET_VAL) & ~kPad33V);
             IODelay(250);
         }
-        if (r32(pmc, NO_IOPOWER) & kNoIoPowerAudioHv) w32(pmc, NO_IOPOWER, r32(pmc, NO_IOPOWER) & ~kNoIoPowerAudioHv);
+        if (r32(pmc, NO_IOPOWER) & kNoIoPowerAudioHv)
+            w32(pmc, NO_IOPOWER, r32(pmc, NO_IOPOWER) & ~kNoIoPowerAudioHv);
 
         startPlla();
         w32(car, CLK_SOURCE_APE, kApeSource);
@@ -668,7 +697,8 @@ class SwitchAudio : public IOService {
         // tegra_adma_init: clear interrupts, soft reset, enable.
         w32(adma, GLOBAL_INT_CLEAR, 1);
         w32(adma, GLOBAL_SOFT_RESET, 1);
-        if (!waitBits(adma, GLOBAL_SOFT_RESET, 1, 0, 10000)) panic("SwitchAudio: ADMA soft reset did not finish");
+        if (!waitBits(adma, GLOBAL_SOFT_RESET, 1, 0, 10000))
+            panic("SwitchAudio: ADMA soft reset did not finish");
         w32(adma, GLOBAL_CMD, 1);
     }
 
@@ -677,7 +707,8 @@ class SwitchAudio : public IOService {
     void tegraAgic()
     {
         const uint32_t mask = r32(agic, GICD_ITARGETSR) & 0xff;  // banked: the interface our accesses come from
-        if (!mask) panic("SwitchAudio: AGIC CPU interface mask reads 0 (GICD_CTLR %#x)", r32(agic, GICD_CTLR));
+        if (!mask)
+            panic("SwitchAudio: AGIC CPU interface mask reads 0 (GICD_CTLR %#x)", r32(agic, GICD_CTLR));
         const unsigned channels = tegraCapture ? 2 : 1;
         for (unsigned ch = 0; ch < channels; ++ch) {
             const uint32_t id = kAgicAdma + ch, bit = 1u << (id % 32), word = 4 * (id / 32), shift = 8 * (id % 4);
@@ -734,8 +765,10 @@ class SwitchAudio : public IOService {
     void softReset(uint32_t reg, const char *what)
     {
         w32(ahub, reg, 1);
-        if (!waitBits(ahub, reg, 1, 0, 10000)) panic("SwitchAudio: %s soft reset did not finish", what);
+        if (!waitBits(ahub, reg, 1, 0, 10000))
+            panic("SwitchAudio: %s soft reset did not finish", what);
     }
+
     // tegra210_i2s_alt.c tegra210_i2s_sw_reset: the reset clears the CIF and stream controls and I2S_CTRL, so they are
     // saved around it. It completes on the I2S's interface clock, so I2S_CTRL must already say master (the bit clock then
     // comes from the CAR i2s0 clock; as a slave the I2S would wait for one from the codec, which is a slave too).
@@ -743,7 +776,8 @@ class SwitchAudio : public IOService {
     {
         const uint32_t saved[] = {I2S_TX_CIF, I2S_RX_CIF, I2S_TX_CTRL, I2S_RX_CTRL, I2S_CTRL};
         uint32_t values[5];
-        for (unsigned i = 0; i < 5; ++i) values[i] = r32(ahub, saved[i]);
+        for (unsigned i = 0; i < 5; ++i)
+            values[i] = r32(ahub, saved[i]);
         w32(ahub, reg, 1);
         if (!waitBits(ahub, reg, 1, 0, 10000)) {
             panic("SwitchAudio: %s soft reset did not finish (I2S CTRL %#x EN %#x TIMING %#x RX %#x TX %#x; CAR I2S0 "
@@ -753,8 +787,10 @@ class SwitchAudio : public IOService {
                   r32(ahub, I2S_TX_STATUS), r32(car, CLK_SOURCE_I2S0), !!(r32(car, CLK_OUT_ENB_L) & kClkL),
                   !!(r32(car, RST_DEVICES_L) & kClkL), r32(car, PLLA_BASE), r32(car, PLLA_OUT));
         }
-        for (unsigned i = 0; i < 5; ++i) w32(ahub, saved[i], values[i]);
+        for (unsigned i = 0; i < 5; ++i)
+            w32(ahub, saved[i], values[i]);
     }
+
     void stopUnit(uint32_t enable, uint32_t status, const char *what)
     {
         w32(ahub, enable, 0);
@@ -764,7 +800,8 @@ class SwitchAudio : public IOService {
 
     void tegraStart()
     {
-        if (hardwareLost) return;  // the play position stands still: the plug-in sees no progress, never noise
+        if (hardwareLost)
+            return;  // the play position stands still: the plug-in sees no progress, never noise
         switch_audio_sample_t *out = ring(SwitchAudioMemoryOutput), *in = ring(SwitchAudioMemoryInput);
         bzero(out, kOutBytes);
         cacheClean(out, kOutBytes);
@@ -785,7 +822,8 @@ class SwitchAudio : public IOService {
         w32(ahub, I2S_RX_CIF, switch_audio_i2s_rx_cif());  // playback: XBAR stereo -> DAP stereo
         w32(ahub, I2S_TX_CIF, switch_audio_i2s_tx_cif());  // capture: DAP stereo -> XBAR mono (left: IN1 is on both)
         i2sSoftReset(I2S_RX_SOFT_RESET, "I2S1 RX");
-        if (tegraCapture) i2sSoftReset(I2S_TX_SOFT_RESET, "I2S1 TX");
+        if (tegraCapture)
+            i2sSoftReset(I2S_TX_SOFT_RESET, "I2S1 TX");
         softReset(ADMAIF_TX_SOFT_RESET, "ADMAIF1 TX");
         softReset(ADMAIF_RX_SOFT_RESET, "ADMAIF1 RX");
         w32(ahub, ADMAIF_TX_CIF, switch_audio_admaif_cif(SWITCH_AUDIO_OUT_CHANNELS));
@@ -803,13 +841,16 @@ class SwitchAudio : public IOService {
             w32(adma, base + CH_CONFIG, kChConfig[ch]);
         }
         w32(ahub, I2S_RX_ENABLE, 1);
-        if (tegraCapture) w32(ahub, I2S_TX_ENABLE, 1);
+        if (tegraCapture)
+            w32(ahub, I2S_TX_ENABLE, 1);
         w32(ahub, ADMAIF_TX_ENABLE, 1);
-        if (tegraCapture) w32(ahub, ADMAIF_RX_ENABLE, 1);
+        if (tegraCapture)
+            w32(ahub, ADMAIF_RX_ENABLE, 1);
         // Sample time 0 is ring frame 0 leaving memory. tegra_adma_start brackets the start with the global clock gate.
         control->anchor_host = mach_absolute_time();
         w32(adma, GLOBAL_CG, 0);
-        for (unsigned ch = 0; ch < channels; ++ch) w32(adma, ch * CH_STRIDE + CH_CMD, 1);
+        for (unsigned ch = 0; ch < channels; ++ch)
+            w32(adma, ch * CH_STRIDE + CH_CMD, 1);
         w32(adma, GLOBAL_CG, 7);
         for (unsigned ch = 0; ch < channels; ++ch) {
             periods[ch] = 0;
@@ -840,7 +881,8 @@ class SwitchAudio : public IOService {
             softReset(ADMAIF_RX_SOFT_RESET, "ADMAIF1 RX");
         }
         stopUnit(I2S_RX_ENABLE, I2S_RX_STATUS, "I2S1 RX");
-        if (tegraCapture) stopUnit(I2S_TX_ENABLE, I2S_TX_STATUS, "I2S1 TX");
+        if (tegraCapture)
+            stopUnit(I2S_TX_ENABLE, I2S_TX_STATUS, "I2S1 TX");
         w32(ahub, I2S_ENABLE, 0);  // the bit and frame clocks stop until the next session (runtime suspend in Linux)
     }
 
@@ -852,17 +894,20 @@ class SwitchAudio : public IOService {
         switch_audio_sample_t *slot =
             ring(SwitchAudioMemoryOutput) + (n % kPeriods) * kPeriodFrames * SWITCH_AUDIO_OUT_CHANNELS;
         const uint64_t done = (n + 1) * kPeriodFrames, now = nowFrame();
-        if (statsTimer) notePlayed(slot, done);
+        if (statsTimer)
+            notePlayed(slot, done);
         bzero(slot, kOutPeriodBytes);
         cacheClean(slot, kOutPeriodBytes);
         control->out_frames = done;
-        if (!tegraCapture) control->in_frames = done;  // the capture ring stays silent, on the hardware's clock
+        if (!tegraCapture)
+            control->in_frames = done;  // the capture ring stays silent, on the hardware's clock
         if (done > now + kPeriodFrames) {
             panic(
                 "SwitchAudio: ADMA ch0 runs fast: %llu frames played at clock frame %llu (I2S %#x CTRL %#x TIMING %#x)",
                 done, now, r32(ahub, I2S_RX_STATUS), r32(ahub, I2S_CTRL), r32(ahub, I2S_TIMING));
         }
     }
+
     // The stats: the period that just played, before it is cleared: its loudest sample (in 16-bit units:
     // 32767 is full scale), an underrun when the plug-in had not written up to its end, how far past it the plug-in
     // had written (the write-ahead margin: the safety offset in use, less the IO thread's lateness), and how late this
@@ -880,18 +925,24 @@ class SwitchAudio : public IOService {
             const int64_t lagTicks = (int64_t)(mach_absolute_time() - control->anchor_host) -
                                      (int64_t)((done / kPeriodFrames) * periodTicksQ16 >> 16);
             const int64_t lagUs = lagTicks * 1000000 / (int64_t)hz;
-            if (lagUs < statLagMin) statLagMin = lagUs;
-            if (lagUs > statLagMax) statLagMax = lagUs;
+            if (lagUs < statLagMin)
+                statLagMin = lagUs;
+            if (lagUs > statLagMax)
+                statLagMax = lagUs;
         }
-        if (!(control->state & SwitchAudioOutputRunning)) return;
+        if (!(control->state & SwitchAudioOutputRunning))
+            return;
         const int64_t lead = (int64_t)control->out_written - (int64_t)done;
-        if (settled && lead < statLeadMin) statLeadMin = lead;
-        if (lead < 0) ++statUnderruns;
+        if (settled && lead < statLeadMin)
+            statLeadMin = lead;
+        if (lead < 0)
+            ++statUnderruns;
         int peak = statPeak;
         for (uint32_t i = 0; i < kPeriodFrames * SWITCH_AUDIO_OUT_CHANNELS; ++i) {
             const int sample = slot[i] >> 16;  // -32768..32767
             const int magnitude = sample < 0 ? -sample : sample;
-            if (magnitude > peak) peak = magnitude;
+            if (magnitude > peak)
+                peak = magnitude;
         }
         statPeak = peak;
     }
@@ -911,8 +962,10 @@ class SwitchAudio : public IOService {
     {
         const uint32_t base = ch * CH_STRIDE;
         const uint32_t status = r32(adma, base + CH_INT_STATUS);
-        if (status) w32(adma, base + CH_INT_CLEAR, status);
-        if (!control->state) return;  // the period that ended as the stream stopped
+        if (status)
+            w32(adma, base + CH_INT_CLEAR, status);
+        if (!control->state)
+            return;  // the period that ended as the stream stopped
         const uint16_t xfer = (uint16_t)r32(adma, base + CH_XFER_STATUS);
         uint32_t done = (uint16_t)(xfer - xferSeen[ch]);
         xferSeen[ch] = xfer;
@@ -920,8 +973,10 @@ class SwitchAudio : public IOService {
             panic("SwitchAudio: ADMA ch%u completed %u periods in one interrupt (XFER_STATUS %#x): lost track", ch,
                   done, xfer);
         }
-        for (; done; --done) ch == kChOut ? playedPeriod() : capturedPeriod();
-        if (ch != kChOut) return;
+        for (; done; --done)
+            ch == kChOut ? playedPeriod() : capturedPeriod();
+        if (ch != kChOut)
+            return;
         graced = false;
         timer->setTimeoutMS(kWatchdogMS);
         // Capture runs on the same clock from the same start: two periods behind playback, its interrupt is lost or its
@@ -943,7 +998,8 @@ class SwitchAudio : public IOService {
         auto *self = static_cast<SwitchAudio *>(owner);
         for (;;) {
             const uint32_t iar = r32(self->agic, GICC_IAR), id = iar & 0x3ff;
-            if (id >= 1020) break;
+            if (id >= 1020)
+                break;
             if (id == kAgicAdma + kChOut || (self->tegraCapture && id == kAgicAdma + kChIn)) {
                 self->channelInterrupt(id - kAgicAdma);
             } else {
@@ -960,7 +1016,8 @@ class SwitchAudio : public IOService {
     static void watchdogFired(OSObject *owner, IOTimerEventSource *sender)
     {
         auto *self = static_cast<SwitchAudio *>(owner);
-        if (!self->control->state) return;
+        if (!self->control->state)
+            return;
         volatile uint8_t *dma = self->adma, *gic = self->agic;
         const uint32_t xfer = r32(dma, CH_XFER_STATUS) & 0xffff;
         if (xfer != self->xferSeen[kChOut] && !self->graced) {
@@ -987,10 +1044,13 @@ class SwitchAudio : public IOService {
     {
         uint8_t bytes[2] = {};
         int error = tegra_i2c_read(kCodecBus, kCodecAddr, reg, bytes, sizeof(bytes));
-        if (error) error = tegra_i2c_read(kCodecBus, kCodecAddr, reg, bytes, sizeof(bytes));
-        if (error) panic("SwitchAudio: RT5639 read %#x failed: %d", reg, error);
+        if (error)
+            error = tegra_i2c_read(kCodecBus, kCodecAddr, reg, bytes, sizeof(bytes));
+        if (error)
+            panic("SwitchAudio: RT5639 read %#x failed: %d", reg, error);
         return (uint16_t)(bytes[0] << 8 | bytes[1]);  // 16-bit registers, big endian
     }
+
     void codecWrite(uint16_t reg, uint16_t value)
     {
         if (reg >= kPrivate) {
@@ -999,36 +1059,49 @@ class SwitchAudio : public IOService {
         }
         const uint8_t bytes[2] = {(uint8_t)(value >> 8), (uint8_t)value};
         int error = tegra_i2c_write(kCodecBus, kCodecAddr, (uint8_t)reg, bytes, sizeof(bytes));
-        if (error) error = tegra_i2c_write(kCodecBus, kCodecAddr, (uint8_t)reg, bytes, sizeof(bytes));
-        if (error) panic("SwitchAudio: RT5639 write %#x = %#x failed: %d", reg, value, error);
+        if (error)
+            error = tegra_i2c_write(kCodecBus, kCodecAddr, (uint8_t)reg, bytes, sizeof(bytes));
+        if (error)
+            panic("SwitchAudio: RT5639 write %#x = %#x failed: %d", reg, value, error);
     }
+
     void codecUpdate(uint8_t reg, uint16_t mask, uint16_t value)
     {
         const uint16_t old = codecRead(reg), now = (uint16_t)((old & ~mask) | (value & mask));
-        if (now != old) codecWrite(reg, now);
+        if (now != old)
+            codecWrite(reg, now);
     }
+
     template <size_t N> void codecList(const RegValue (&list)[N])
     {
-        for (const RegValue &entry : list) codecWrite(entry.reg, entry.value);
+        for (const RegValue &entry : list)
+            codecWrite(entry.reg, entry.value);
     }
+
     static bool jackPlugged(uint16_t irqStatus)
     {
         return !(irqStatus & (1u << 4));
     }  // JD_STATUS, inverted (jd_inverted)
-    Route wantedRoute() const { return jackIn && !speakerOnly ? kRouteHeadphones : kRouteSpeaker; }
+
+    Route wantedRoute() const
+    {
+        return jackIn && !speakerOnly ? kRouteHeadphones : kRouteSpeaker;
+    }
 
     // rt5640_i2c_probe, rt5640_probe, rt5640_enable_jack_detect, then the static link setup the machine driver and
     // hw_params give it (CBS_CFS, I2S, NB_NF; sysclk MCLK 12.288 MHz, 48 kHz, 24-bit, BCLK 64 fs) and the mixer
     // switches of nvaudio_conf.xml's rt5640-speaker and rt5640-headphone paths. Power follows the route later.
     void codecProbe(bool afterSleep = false)
     {
-        if (tegra_i2c_init(kCodecBus) != TEGRA_I2C_OK) panic("SwitchAudio: I2C1 did not start");
+        if (tegra_i2c_init(kCodecBus) != TEGRA_I2C_OK)
+            panic("SwitchAudio: I2C1 did not start");
         uint8_t id[2] = {};
         // After SC7 PZ4 held LDO1_EN high throughout: the codec answers at once and needs no 400 ms power-up.
         const bool powered = afterSleep && !tegra_i2c_read(kCodecBus, kCodecAddr, VENDOR_ID2, id, sizeof(id)) &&
                              id[0] == 0x62 && id[1] == 0x31;
         if (!powered) {
-            if (tegra_gpio_output(kCodecPower, 1)) panic("SwitchAudio: cannot drive PZ4 (RT5639 LDO1_EN)");
+            if (tegra_gpio_output(kCodecPower, 1))
+                panic("SwitchAudio: cannot drive PZ4 (RT5639 LDO1_EN)");
             IOSleep(400);
         }
         const int error = tegra_i2c_read(kCodecBus, kCodecAddr, VENDOR_ID2, id, sizeof(id));
@@ -1089,11 +1162,13 @@ class SwitchAudio : public IOService {
         codecUpdate(PWR_ANLG1, P_FV1 | P_FV2, P_FV1 | P_FV2);
         codecUpdate(GEN_CTRL1, 0x0301, 0x0201);
     }
+
     void codecBiasOff()
     {
         codecUpdate(DEPOP_M1, D_HP_CB | D_HP_CP | D_HP_CO | D_HP_CD_PD, D_HP_CD_PD);
         codecWrite(DEPOP_M2, 0x1100);
-        for (uint8_t reg = PWR_DIG1; reg <= PWR_VOL; ++reg) codecWrite(reg, 0);
+        for (uint8_t reg = PWR_DIG1; reg <= PWR_VOL; ++reg)
+            codecWrite(reg, 0);
         codecUpdate(GEN_CTRL1, 1u, 1u);  // the I2S clock stays: jack detect with an external microphone needs it
     }
 
@@ -1147,6 +1222,7 @@ class SwitchAudio : public IOService {
         }
         route = to;
     }
+
     void codecRouteDown()
     {
         codecMute(true);
@@ -1166,6 +1242,7 @@ class SwitchAudio : public IOService {
         }
         route = kRouteNone;
     }
+
     void codecMute(bool mute)
     {
         if (route == kRouteSpeaker)
@@ -1217,6 +1294,7 @@ class SwitchAudio : public IOService {
         }
         codecMute(false);
     }
+
     // The last stream stopped: mute now, power down after kIdleMS unless one starts again.
     void codecPause()
     {
@@ -1230,21 +1308,25 @@ class SwitchAudio : public IOService {
         run ? self->codecRun() : self->codecPause();
         return kIOReturnSuccess;
     }
+
     static void codecIdle(OSObject *owner, IOTimerEventSource *)
     {
         auto *self = static_cast<SwitchAudio *>(owner);
-        if (self->control->state || !self->codecOn) return;
+        if (self->control->state || !self->codecOn)
+            return;
         tegra_gpio_check_delivery(kCodecIrq, "SwitchAudio");
         self->codecRouteDown();
         self->codecBiasOff();
         self->headset = false;
         self->codecOn = false;
     }
+
     // PBB4, both edges (rt5640_irq: IRQF_TRIGGER_RISING | FALLING): wait for the contacts to settle.
     static void jackEdge(OSObject *owner, IOInterruptEventSource *, int)
     {
         static_cast<SwitchAudio *>(owner)->jackTimer->setTimeoutMS(kJackSettleMS);
     }
+
     // Also the first reading, kJackSettleMS after codecStart; until then the jack counts as empty (the speaker).
     static void jackSettled(OSObject *owner, IOTimerEventSource *)
     {
@@ -1260,12 +1342,16 @@ class SwitchAudio : public IOService {
             return;
         }
         self->jackIn = in;
-        if (!self->codecOn) return;  // the next stream routes
-        if (self->tegraCapture) self->codecDetectHeadset();
-        if (self->route == self->wantedRoute()) return;
+        if (!self->codecOn)
+            return;  // the next stream routes
+        if (self->tegraCapture)
+            self->codecDetectHeadset();
+        if (self->route == self->wantedRoute())
+            return;
         self->codecRouteDown();
         self->codecRouteUp(self->wantedRoute());
-        if (self->control->state) self->codecMute(false);
+        if (self->control->state)
+            self->codecMute(false);
     }
 
     // The stats line, every kStatsMS on the codec work loop (it reads the codec over I2C). "starts" counts the
@@ -1300,7 +1386,8 @@ class SwitchAudio : public IOService {
         self->statIoCyclesShown = ioCycles;
         self->statIoFramesShown = ioFrames;
         char lead[24] = "-", lag[48] = "-";
-        if (self->statLeadMin != INT64_MAX) snprintf(lead, sizeof(lead), "%lld", (long long)self->statLeadMin);
+        if (self->statLeadMin != INT64_MAX)
+            snprintf(lead, sizeof(lead), "%lld", (long long)self->statLeadMin);
         if (self->statLagMax != INT64_MIN) {
             snprintf(lag, sizeof(lag), "%lld..%lld", (long long)self->statLagMin, (long long)self->statLagMax);
         }
@@ -1323,10 +1410,12 @@ class SwitchAudio : public IOService {
         os_log(OS_LOG_DEFAULT, "%s", line);  // log only, never the boot console
         sender->setTimeoutMS(kStatsMS);
     }
+
     // Codec work loop: a stream starts; the stats line resumes if it had stopped (statsFired).
     void statsResume()
     {
-        if (!statsTimer || statsArmed) return;
+        if (!statsTimer || statsArmed)
+            return;
         statsArmed = true;
         statsTimer->setTimeoutMS(kStatsMS);
     }
@@ -1378,15 +1467,21 @@ class SwitchAudio : public IOService {
                 c->state = was | SwitchAudioOutputRunning;
             }
             break;
-        case SwitchAudioStopOutput: c->state = was & ~(uint32_t)SwitchAudioOutputRunning; break;
+        case SwitchAudioStopOutput:
+            c->state = was & ~(uint32_t)SwitchAudioOutputRunning;
+            break;
         case SwitchAudioStartInput:
             if (!(was & SwitchAudioInputRunning)) {
-                if (!self->tegra) c->in_frames = self->nowFrame();
+                if (!self->tegra)
+                    c->in_frames = self->nowFrame();
                 c->state = was | SwitchAudioInputRunning;
             }
             break;
-        case SwitchAudioStopInput: c->state = was & ~(uint32_t)SwitchAudioInputRunning; break;
-        default: return kIOReturnBadArgument;
+        case SwitchAudioStopInput:
+            c->state = was & ~(uint32_t)SwitchAudioInputRunning;
+            break;
+        default:
+            return kIOReturnBadArgument;
         }
         // Both directions share one clock and one start: the hardware runs while either is requested.
         if (!was && c->state) {
@@ -1408,7 +1503,8 @@ class SwitchAudio : public IOService {
     // back as powergate-t21x.c powers a partition on: modules in reset with clocks on, toggle, unclamp.
     bool apePartitionOn()
     {
-        if (r32(pmc, PWRGATE_STATUS) & kPartitionAud) return true;
+        if (r32(pmc, PWRGATE_STATUS) & kPartitionAud)
+            return true;
         w32(car, RST_DEV_Y_SET, kClkY);
         w32(car, RST_DEV_V_SET, kClkV);
         w32(car, RST_DEV_L_SET, kClkL);
@@ -1416,9 +1512,11 @@ class SwitchAudio : public IOService {
         w32(car, CLK_ENB_V_SET, kClkV);
         w32(car, CLK_ENB_L_SET, kClkL);
         IODelay(10);
-        if (!waitBits(pmc, PWRGATE_TOGGLE, kToggleStart, 0, 5000)) return false;
+        if (!waitBits(pmc, PWRGATE_TOGGLE, kToggleStart, 0, 5000))
+            return false;
         w32(pmc, PWRGATE_TOGGLE, kPartitionAudId | kToggleStart);
-        if (!waitBits(pmc, PWRGATE_STATUS, kPartitionAud, kPartitionAud, 5000)) return false;
+        if (!waitBits(pmc, PWRGATE_STATUS, kPartitionAud, kPartitionAud, 5000))
+            return false;
         IODelay(10);
         w32(pmc, REMOVE_CLAMPING, kPartitionAud);
         return waitBits(pmc, CLAMP_STATUS, kPartitionAud, 0, 5000);
@@ -1428,13 +1526,15 @@ class SwitchAudio : public IOService {
     {
         auto *self = static_cast<SwitchAudio *>(owner);
         if (entering) {
-            if (self->control->state) self->tegraStop();  // iOS holds sleep off while audio plays; nothing runs here
+            if (self->control->state)
+                self->tegraStop();  // iOS holds sleep off while audio plays; nothing runs here
             self->timer->cancelTimeout();
             self->cascade->disable();
             return kIOReturnSuccess;
         }
         if (!self->apePartitionOn()) {
-            IOLog("SwitchAudio: APE partition did not power on after sleep (PMC PWRGATE_STATUS %#x CLAMP %#x); audio off\n",
+            IOLog("SwitchAudio: APE partition did not power on after sleep (PMC PWRGATE_STATUS %#x CLAMP %#x); audio "
+                  "off\n",
                   r32(self->pmc, PWRGATE_STATUS), r32(self->pmc, CLAMP_STATUS));
             self->hardwareLost = true;
             return kIOReturnSuccess;
@@ -1443,7 +1543,8 @@ class SwitchAudio : public IOService {
         self->tegraAhubAndDma();
         self->tegraAgic();
         self->cascade->enable();
-        if (self->control->state) self->tegraStart();
+        if (self->control->state)
+            self->tegraStart();
         return kIOReturnSuccess;
     }
 
@@ -1454,7 +1555,8 @@ class SwitchAudio : public IOService {
             self->jackSource->disable();
             self->jackTimer->cancelTimeout();
             self->idleTimer->cancelTimeout();
-            if (self->statsTimer) self->statsTimer->cancelTimeout();
+            if (self->statsTimer)
+                self->statsTimer->cancelTimeout();
             if (self->codecOn) {
                 self->codecRouteDown();
                 self->codecBiasOff();
@@ -1463,13 +1565,15 @@ class SwitchAudio : public IOService {
             self->headset = false;
             return kIOReturnSuccess;
         }
-        if (self->hardwareLost) return kIOReturnSuccess;
+        if (self->hardwareLost)
+            return kIOReturnSuccess;
         self->route = kRouteNone;
         self->codecProbe(true);
         self->jackKnown = false;
         self->jackSource->enable();
         self->jackTimer->setTimeoutMS(kJackSettleMS);
-        if (self->statsTimer) self->statsResume();
+        if (self->statsTimer)
+            self->statsResume();
         return kIOReturnSuccess;
     }
 
@@ -1478,7 +1582,8 @@ public:
     // sleep; the reverse on wake. Null backend: nothing to do.
     void systemSleep(bool entering)
     {
-        if (!tegra) return;
+        if (!tegra)
+            return;
         if (entering) {
             gate->runAction(&SwitchAudio::sleepGated, reinterpret_cast<void *>(1));
             codecGate->runAction(&SwitchAudio::codecSleepGated, reinterpret_cast<void *>(1));
@@ -1490,7 +1595,8 @@ public:
 
     bool start(IOService *provider) override
     {
-        if (!IOService::start(provider)) return false;
+        if (!IOService::start(provider))
+            return false;
         uint32_t off = 0;
         tegra = !(PE_parse_boot_argn("switch-no-audio", &off, sizeof(off)) && off);
         const IOOptionBits options = (IOOptionBits)kIODirectionInOut | (IOOptionBits)kIOMemoryKernelUserShared |
@@ -1498,12 +1604,14 @@ public:
         const uint32_t sizes[3] = {(uint32_t)PAGE_SIZE, kOutBytes, kInBytes};
         for (int i = 0; i < 3; ++i) {
             memory[i] = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task, options, sizes[i], kDmaMask);
-            if (!memory[i]) return false;
+            if (!memory[i])
+                return false;
             bzero(memory[i]->getBytesNoCopy(), sizes[i]);
         }
         loop = IOWorkLoop::workLoop();
         gate = loop ? IOCommandGate::commandGate(this) : nullptr;
-        if (!gate || loop->addEventSource(gate) != kIOReturnSuccess) return false;
+        if (!gate || loop->addEventSource(gate) != kIOReturnSuccess)
+            return false;
 
         control = static_cast<SwitchAudioControl *>(memory[SwitchAudioMemoryControl]->getBytesNoCopy());
         control->magic = SWITCH_AUDIO_MAGIC;
@@ -1530,7 +1638,8 @@ public:
             control->ticks_per_frame_q32 = (hz << 32) / SWITCH_AUDIO_RATE;
             timer = IOTimerEventSource::timerEventSource(this, &SwitchAudio::tick);
         }
-        if (!timer || loop->addEventSource(timer) != kIOReturnSuccess) return false;
+        if (!timer || loop->addEventSource(timer) != kIOReturnSuccess)
+            return false;
         control->anchor_host = mach_absolute_time();
 
         // audiomxd's sandbox names no class of ours; the kernel's NativeSandboxGrantProcess check (IOUserClient.cpp)
@@ -1551,26 +1660,31 @@ public:
         }
         return true;
     }
+
     void free() override
     {
         if (timer) {
             timer->cancelTimeout();
-            if (loop) loop->removeEventSource(timer);
+            if (loop)
+                loop->removeEventSource(timer);
         }
         if (cascade && loop) {
             cascade->disable();
             loop->removeEventSource(cascade);
         }
-        if (gate && loop) loop->removeEventSource(gate);
+        if (gate && loop)
+            loop->removeEventSource(gate);
         if (codecLoop) {
             if (jackSource) {
                 jackSource->disable();
                 codecLoop->removeEventSource(jackSource);
             }
-            if (statsTimer) statsTimer->cancelTimeout();
+            if (statsTimer)
+                statsTimer->cancelTimeout();
             IOEventSource *sources[] = {jackTimer, idleTimer, statsTimer, codecGate};
             for (IOEventSource *source : sources) {
-                if (source) codecLoop->removeEventSource(source);
+                if (source)
+                    codecLoop->removeEventSource(source);
             }
         }
         OSSafeReleaseNULL(timer);
@@ -1583,30 +1697,37 @@ public:
         OSSafeReleaseNULL(idleTimer);
         OSSafeReleaseNULL(codecGate);
         OSSafeReleaseNULL(codecLoop);
-        for (auto &m : memory) OSSafeReleaseNULL(m);
+        for (auto &m : memory)
+            OSSafeReleaseNULL(m);
         IOService::free();
     }
+
     // The codec moves first both ways, as ASoC orders DAPM around a stream: powered and unmuted before the I2S clocks
     // data, muted before the clocks stop.
     IOReturn request(uint32_t selector)
     {
-        if (selector > SwitchAudioStopInput) return kIOReturnBadArgument;
+        if (selector > SwitchAudioStopInput)
+            return kIOReturnBadArgument;
         if (tegra) {
             const bool run = selector == SwitchAudioStartOutput || selector == SwitchAudioStartInput;
             const uint32_t bit = (selector == SwitchAudioStartOutput || selector == SwitchAudioStopOutput)
                                      ? SwitchAudioOutputRunning
                                      : SwitchAudioInputRunning;
-            if (run || !(control->state & ~bit)) codecGate->runAction(&SwitchAudio::codecGated, (void *)(uintptr_t)run);
+            if (run || !(control->state & ~bit))
+                codecGate->runAction(&SwitchAudio::codecGated, (void *)(uintptr_t)run);
         }
         return gate->runAction(&SwitchAudio::requestGated, (void *)(uintptr_t)selector);
     }
+
     IOMemoryDescriptor *copyMemory(uint32_t type)
     {
-        if (type > SwitchAudioMemoryInput) return nullptr;
+        if (type > SwitchAudioMemoryInput)
+            return nullptr;
         memory[type]->retain();
         return memory[type];
     }
 };
+
 OSDefineMetaClassAndStructors(SwitchAudio, IOService)
 
     class SwitchAudioUserClient : public IOUserClient {
@@ -1616,15 +1737,18 @@ OSDefineMetaClassAndStructors(SwitchAudio, IOService)
 public:
     bool initWithTask(task_t task, void *security, UInt32 type, OSDictionary *properties) override
     {
-        if (!IOUserClient::initWithTask(task, security, type, properties)) return false;
+        if (!IOUserClient::initWithTask(task, security, type, properties))
+            return false;
         owner = task;
         return true;
     }
+
     bool start(IOService *provider) override
     {
         audio = OSDynamicCast(SwitchAudio, provider);
         return audio && IOUserClient::start(provider);
     }
+
     IOReturn clientClose() override
     {
         audio->request(SwitchAudioStopOutput);
@@ -1632,14 +1756,17 @@ public:
         terminate();
         return kIOReturnSuccess;
     }
+
     IOReturn clientMemoryForType(UInt32 type, IOOptionBits *options, IOMemoryDescriptor **memory) override
     {
         IOMemoryDescriptor *m = audio->copyMemory(type);
-        if (!m) return kIOReturnBadArgument;
+        if (!m)
+            return kIOReturnBadArgument;
         *options = 0;
         *memory = m;  // the caller consumes the reference
         return kIOReturnSuccess;
     }
+
     IOReturn externalMethod(uint32_t selector, IOExternalMethodArguments *args, IOExternalMethodDispatch *dispatch,
                             OSObject *target, void *reference) override
     {
@@ -1647,10 +1774,12 @@ public:
             return kIOReturnBadArgument;
         if (selector == SwitchAudioSetHostClock)
             return args->scalarInputCount == 1 ? setHostClock(owner, args->scalarInput[0]) : kIOReturnBadArgument;
-        if (selector > SwitchAudioStopInput || args->scalarInputCount) return kIOReturnBadArgument;
+        if (selector > SwitchAudioStopInput || args->scalarInputCount)
+            return kIOReturnBadArgument;
         return audio->request(selector);
     }
 };
+
 OSDefineMetaClassAndStructors(SwitchAudioUserClient, IOUserClient)
 
     // Publishes the service under IOResources. Call once from the board thread (the Tegra backend sleeps on the GIC, the
@@ -1660,7 +1789,8 @@ OSDefineMetaClassAndStructors(SwitchAudioUserClient, IOUserClient)
 extern "C" int switch_audio_publish(void)
 {
     static bool published;
-    if (published) return 0;
+    if (published)
+        return 0;
     IOService *resources = IOService::getResourceService();
     SwitchAudio *audio = OSTypeAlloc(SwitchAudio);
     if (!resources || !audio || !audio->init() || !audio->attach(resources)) {
@@ -1683,10 +1813,12 @@ extern "C" int switch_audio_publish(void)
 
 extern "C" void switch_audio_suspend(void)
 {
-    if (SwitchAudio *audio = __atomic_load_n(&gAudio, __ATOMIC_ACQUIRE)) audio->systemSleep(true);
+    if (SwitchAudio *audio = __atomic_load_n(&gAudio, __ATOMIC_ACQUIRE))
+        audio->systemSleep(true);
 }
 
 extern "C" void switch_audio_resume(void)
 {
-    if (SwitchAudio *audio = __atomic_load_n(&gAudio, __ATOMIC_ACQUIRE)) audio->systemSleep(false);
+    if (SwitchAudio *audio = __atomic_load_n(&gAudio, __ATOMIC_ACQUIRE))
+        audio->systemSleep(false);
 }

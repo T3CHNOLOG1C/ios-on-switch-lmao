@@ -16,7 +16,8 @@
 
 int main(int argc, char **argv)
 {
-    if (argc != 4) return 2;
+    if (argc != 4)
+        return 2;
     const bool consume = !std::strcmp(argv[3], "consume");
     REQUIRE(consume || !std::strcmp(argv[3], "produce"));
     auto submissions = (unsigned (*)())dlsym(RTLD_DEFAULT, "host_gpu_submissions");

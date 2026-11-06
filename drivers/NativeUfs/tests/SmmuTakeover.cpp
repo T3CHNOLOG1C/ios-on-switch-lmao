@@ -6,6 +6,7 @@
 #include <vector>
 #include <utility>
 #include "../SmmuTakeover.h"
+
 int main()
 {
     std::array<uint32_t, 0xd0000 / 4> r{};
@@ -15,7 +16,11 @@ int main()
         r[0x24 / 4] = 0x60000046;
         r[0x28 / 4] = 0x5111;
     };
-    auto plan = [&] { return planUfsSmmu(0x60, 0x8cb5e9000ULL, 0x22000, [&](unsigned at) { return r.at(at / 4); }); };
+    auto plan = [&] {
+        return planUfsSmmu(0x60, 0x8cb5e9000ULL, 0x22000, [&](unsigned at) {
+            return r.at(at / 4);
+        });
+    };
     reset();
     auto p = plan();
     assert(!p.error && !p.reuse && p.slot == 127 && p.bank == 69);
@@ -75,7 +80,8 @@ int main()
     p = plan();
     assert(!p.error && p.bank == 68);  // translating top bank: use the next one
     reset();
-    for (unsigned k = 0; k < 8; ++k) r[(128 + 69 - k) * 4096 / 4] = 1;
+    for (unsigned k = 0; k < 8; ++k)
+        r[(128 + 69 - k) * 4096 / 4] = 1;
     assert(plan().error);
     reset();
     r[0x24 / 4] |= 0x80000000;
@@ -91,19 +97,24 @@ int main()
     reset();
     p = plan();
     assert(!p.error && p.pages == 128);
-    auto read = [&](unsigned at) { return r.at(at / 4); };
+    auto read = [&](unsigned at) {
+        return r.at(at / 4);
+    };
     std::vector<std::pair<unsigned, uint32_t>> writes;
     unsigned drop = 0xffffffffU;
     auto write = [&](unsigned at, uint32_t value) {
         writes.emplace_back(at, value);
-        if (at != drop) r.at(at / 4) = value;
+        if (at != drop)
+            r.at(at / 4) = value;
         if (at == 0x800 + 4 * p.slot) {
             assert(read(0x1800 + 4 * p.bank) == 1);
             assert(read(0x1000 + 4 * p.bank) == 0x10000);
             assert(read((p.pages + p.bank) * 4096) == 0);
         }
     };
-    auto configure = [&] { return configureUfsSmmu(p, 0x60, read, write); };
+    auto configure = [&] {
+        return configureUfsSmmu(p, 0x60, read, write);
+    };
     auto inputFault = [&](uint64_t address) {
         // Independent bypass-only architecture rule, not a hardware emulator.
         return !(read(0x1800 + 4 * p.bank) & 1) && (address >> 32);
@@ -125,7 +136,8 @@ int main()
         writes.clear();
         drop = offset;
         assert(configure());
-        if (offset != 0x800 + 4 * 127) assert(read(0x800 + 4 * 127) == 0);
+        if (offset != 0x800 + 4 * 127)
+            assert(read(0x800 + 4 * 127) == 0);
     }
     reset();
     p = plan();

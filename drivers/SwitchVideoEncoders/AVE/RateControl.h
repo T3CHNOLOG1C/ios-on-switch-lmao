@@ -66,30 +66,37 @@ static inline int rc_qp(const RateControl *rc, bool key)
 static inline double rc_window(const RateControl *rc, double seconds)
 {
     unsigned n = (unsigned)ceil(seconds * rc->fps);
-    if (n > rc->count) n = rc->count;
-    if (n > RC_LIMIT_HISTORY) n = RC_LIMIT_HISTORY;
+    if (n > rc->count)
+        n = rc->count;
+    if (n > RC_LIMIT_HISTORY)
+        n = RC_LIMIT_HISTORY;
     double sum = 0;
-    for (unsigned i = 0; i < n; i++) sum += rc->sizes[(rc->count - 1 - i) % RC_LIMIT_HISTORY];
+    for (unsigned i = 0; i < n; i++)
+        sum += rc->sizes[(rc->count - 1 - i) % RC_LIMIT_HISTORY];
     return sum;
 }
 
 static inline void rc_update(RateControl *rc, double bytes, bool key)
 {
     rc->sizes[rc->count++ % RC_LIMIT_HISTORY] = bytes;
-    if (rc->constQP >= 0 && !rc->limitBytes) return;
+    if (rc->constQP >= 0 && !rc->limitBytes)
+        return;
     int step = 0;
     if (rc->constQP < 0) {
         const double target = rc->bitrate / rc->fps;
         // A key picture is expected to cost about four P pictures: only the excess counts against the buffer.
         rc->fullness += bytes * 8 - target * (key ? 4 : 1);
-        if (rc->fullness < -rc->buffer) rc->fullness = -rc->buffer;
+        if (rc->fullness < -rc->buffer)
+            rc->fullness = -rc->buffer;
         const double level = rc->fullness / rc->buffer;
         step = level > 0.5 ? 2 : level > (rc->cbr ? 0.1 : 0.25) ? 1 : level < -0.5 ? -2 : level < -0.25 ? -1 : 0;
     }
-    if (rc->limitBytes && rc_window(rc, rc->limitSeconds) > 0.9 * rc->limitBytes) step = step > 2 ? step : 2;
+    if (rc->limitBytes && rc_window(rc, rc->limitSeconds) > 0.9 * rc->limitBytes)
+        step = step > 2 ? step : 2;
     const int base = rc->constQP >= 0 ? rc->constQP : rc->qpMin;
     rc->qp = rc_clamp(rc->qp + step, base, rc->qpMax);
-    if (rc->constQP >= 0 && step == 0 && rc->qp > rc->constQP) rc->qp--;  // back to the asked quality once under
+    if (rc->constQP >= 0 && step == 0 && rc->qp > rc->constQP)
+        rc->qp--;  // back to the asked quality once under
 }
 
 #endif

@@ -46,7 +46,8 @@ static void synth(vpx_image_t *img, int frame)
             for (int b = 0; b < 3; b++) {
                 const int bx = (40 + b * 150 + frame * (b + 2) * 2) % (w - 60),
                           by = 30 + b * 70 + (frame * (3 - b)) % 40;
-                if (x >= bx && x < bx + 60 && y >= by && y < by + 50) v = 40 + b * 80 + ((x - bx) ^ (y - by)) % 16;
+                if (x >= bx && x < bx + 60 && y >= by && y < by + 50)
+                    v = 40 + b * 80 + ((x - bx) ^ (y - by)) % 16;
             }
             row[x] = (uint8_t)(v < 0 ? 0 : v > 255 ? 255 : v);
         }
@@ -87,9 +88,11 @@ static void encode(int w, int h, int frames, int frameParallel, int keyOnly, Pac
         cfg.rc_target_bitrate = keyOnly ? 200 : 240, cfg.g_lag_in_frames = keyOnly ? 0 : 16, cfg.kf_max_dist = 10;
         cfg.g_threads = 1, cfg.rc_end_usage = VPX_VBR, cfg.g_error_resilient = 0;
         cfg.g_pass = keyOnly ? VPX_RC_ONE_PASS : pass ? VPX_RC_LAST_PASS : VPX_RC_FIRST_PASS;
-        if (pass && !keyOnly) cfg.rc_twopass_stats_in = stats;
+        if (pass && !keyOnly)
+            cfg.rc_twopass_stats_in = stats;
         vpx_codec_ctx_t enc;
-        if (vpx_codec_enc_init(&enc, vpx_codec_vp9_cx(), &cfg, 0)) exit(1);
+        if (vpx_codec_enc_init(&enc, vpx_codec_vp9_cx(), &cfg, 0))
+            exit(1);
         vpx_codec_control(&enc, VP8E_SET_CPUUSED, 2);
         vpx_codec_control(&enc, VP8E_SET_ENABLEAUTOALTREF, keyOnly ? 0 : 1);
         vpx_codec_control(&enc, VP9E_SET_AQ_MODE, keyOnly ? 0 : 1);
@@ -98,11 +101,13 @@ static void encode(int w, int h, int frames, int frameParallel, int keyOnly, Pac
         vpx_image_t *img = vpx_img_alloc(NULL, VPX_IMG_FMT_I420, (unsigned)w, (unsigned)h, 16);
         for (int f = 0; f < frames; f++) {
             synth(img, f);
-            if (vpx_codec_encode(&enc, img, f, 1, 0, VPX_DL_GOOD_QUALITY)) exit(2);
+            if (vpx_codec_encode(&enc, img, f, 1, 0, VPX_DL_GOOD_QUALITY))
+                exit(2);
             collect(&enc, pass ? out : NULL, pass ? NULL : &stats);
         }
         for (int i = 0; i < 32; i++) {  // drain the look-ahead
-            if (vpx_codec_encode(&enc, NULL, frames, 1, 0, VPX_DL_GOOD_QUALITY)) break;
+            if (vpx_codec_encode(&enc, NULL, frames, 1, 0, VPX_DL_GOOD_QUALITY))
+                break;
             collect(&enc, pass ? out : NULL, pass ? NULL : &stats);
         }
         vpx_img_free(img);
@@ -116,14 +121,17 @@ static int split(const uint8_t *d, size_t n, size_t off[8], size_t len[8])
 {
     off[0] = 0, len[0] = n;
     const uint8_t m = d[n - 1];
-    if ((m & 0xe0) != 0xc0) return 1;
+    if ((m & 0xe0) != 0xc0)
+        return 1;
     const int frames = (m & 7) + 1, mag = ((m >> 3) & 3) + 1;
     const size_t idx = 2 + (size_t)mag * frames;
-    if (n < idx || d[n - idx] != m) return 1;
+    if (n < idx || d[n - idx] != m)
+        return 1;
     size_t at = 0;
     for (int i = 0; i < frames; i++) {
         size_t s = 0;
-        for (int b = 0; b < mag; b++) s |= (size_t)d[n - idx + 1 + i * mag + b] << (8 * b);
+        for (int b = 0; b < mag; b++)
+            s |= (size_t)d[n - idx + 1 + i * mag + b] << (8 * b);
         off[i] = at, len[i] = s, at += s;
     }
     return frames;
@@ -177,14 +185,16 @@ static void toNvdec(const FRAME_COUNTS *c, nvdec_vp9EntropyCounts_t *n)
 static void dumpBytes(FILE *f, const char *name, const uint8_t *p, size_t n)
 {
     fprintf(f, "static const uint8_t %s[%zu] = {", name, n);
-    for (size_t i = 0; i < n; i++) fprintf(f, "%s0x%02x,", i % 20 ? " " : "\n    ", p[i]);
+    for (size_t i = 0; i < n; i++)
+        fprintf(f, "%s0x%02x,", i % 20 ? " " : "\n    ", p[i]);
     fprintf(f, "\n};\n");
 }
 
 static void dumpPackets(FILE *f, const char *prefix, const Packets *p)
 {
     size_t total = 0;
-    for (int i = 0; i < p->count; i++) total += p->size[i];
+    for (int i = 0; i < p->count; i++)
+        total += p->size[i];
     uint8_t *all = malloc(total);
     size_t at = 0;
     fprintf(f, "static const uint32_t %sSizes[%d] = {", prefix, p->count);
@@ -205,10 +215,12 @@ static int decode(const Packets *p, FILE *f, const char *prefix, uint32_t *crcs,
 {
     vpx_codec_ctx_t dec;
     vpx_codec_dec_cfg_t cfg = {1, 0, 0};
-    if (vpx_codec_dec_init(&dec, vpx_codec_vp9_dx(), &cfg, 0)) exit(3);
+    if (vpx_codec_dec_init(&dec, vpx_codec_vp9_dx(), &cfg, 0))
+        exit(3);
     int shown = 0, records = 0;
     uLong countsLen = 0;
-    if (f) fprintf(f, "static const VP9TraceFrame %sFrames[] = {\n", prefix);
+    if (f)
+        fprintf(f, "static const VP9TraceFrame %sFrames[] = {\n", prefix);
     uint8_t *packedCounts = malloc(64 * 2 * sizeof(nvdec_vp9EntropyCounts_t)), *cursor = packedCounts;
     for (int i = 0; i < p->count; i++) {
         size_t off[8], len[8];
@@ -229,7 +241,8 @@ static int decode(const Packets *p, FILE *f, const char *prefix, uint32_t *crcs,
                 const int adapted =
                     !cm->show_existing_frame && !cm->error_resilient_mode && !cm->frame_parallel_decoding_mode;
                 uint32_t contexts = crc32(0, NULL, 0);
-                for (int c = 0; c < 4; c++) contexts = crc32(contexts, (const Bytef *)&cm->frame_contexts[c], FC_BYTES);
+                for (int c = 0; c < 4; c++)
+                    contexts = crc32(contexts, (const Bytef *)&cm->frame_contexts[c], FC_BYTES);
                 uLong countsAt = countsLen;
                 if (adapted) {
                     nvdec_vp9EntropyCounts_t nv;
@@ -257,7 +270,8 @@ static int decode(const Packets *p, FILE *f, const char *prefix, uint32_t *crcs,
                 uLong crc = crc32(0, NULL, 0);
                 for (unsigned y = 0; y < img->d_h; y++)
                     crc = crc32(crc, img->planes[0] + (size_t)y * img->stride[0], img->d_w);
-                if (crcs) crcs[shown] = (uint32_t)crc;
+                if (crcs)
+                    crcs[shown] = (uint32_t)crc;
                 shown++;
             }
         }
@@ -327,7 +341,8 @@ int main(int argc, char **argv)
             "static const int kVP9ClipWidth = 512, kVP9ClipHeight = 288, kVP9ClipPackets = %d, kVP9ClipShown = %d;\n",
             a.count, shown);
     fprintf(c, "static const uint32_t kVP9ClipLumaCrc[%d] = {", shown);
-    for (int i = 0; i < shown; i++) fprintf(c, "%s%#010x", i ? ", " : "", crcA[i]);
+    for (int i = 0; i < shown; i++)
+        fprintf(c, "%s%#010x", i ? ", " : "", crcA[i]);
     fprintf(c, "};\n");
     dumpPackets(c, "kVP9Clip", &a);
     fclose(c);

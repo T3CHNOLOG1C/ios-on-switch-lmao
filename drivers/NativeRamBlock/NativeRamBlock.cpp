@@ -45,6 +45,7 @@ class NativeRamBlock : public IOBlockStorageDevice {
     bool online = false;
     bool claimed = false;
     void releaseBacking();
+
     bool failStart(uint32_t error)
     {
         native_ram_block_error = error;
@@ -55,15 +56,18 @@ class NativeRamBlock : public IOBlockStorageDevice {
 public:
     bool available()
     {
-        if (!gate) return false;
+        if (!gate)
+            return false;
         IOLockLock(gate);
         bool value = online;
         IOLockUnlock(gate);
         return value;
     }
+
     bool seedInfo(uint64_t *base, uint64_t *bytes, uint8_t hash[32])
     {
-        if (!gate || !base || !bytes || !hash) return false;
+        if (!gate || !base || !bytes || !hash)
+            return false;
         IOLockLock(gate);
         bool value = online;
         if (value) {
@@ -74,59 +78,121 @@ public:
         IOLockUnlock(gate);
         return value;
     }
+
     bool start(IOService *) override;
     void stop(IOService *) override;
     void free() override;
-    IOReturn doEjectMedia() override { return kIOReturnUnsupported; }
-    IOReturn doFormatMedia(UInt64) override { return kIOReturnUnsupported; }
-    UInt32 doGetFormatCapacities(UInt64 *, UInt32) const override { return 0; }
+
+    IOReturn doEjectMedia() override
+    {
+        return kIOReturnUnsupported;
+    }
+
+    IOReturn doFormatMedia(UInt64) override
+    {
+        return kIOReturnUnsupported;
+    }
+
+    UInt32 doGetFormatCapacities(UInt64 *, UInt32) const override
+    {
+        return 0;
+    }
+
     IOReturn doUnmap(IOBlockStorageDeviceExtent *, UInt32, IOStorageUnmapOptions) override
     {
         return kIOReturnUnsupported;
     }
-    char *getVendorString() override { return const_cast<char *>("Switch"); }
-    char *getProductString() override { return const_cast<char *>("Disposable RAM Data"); }
-    char *getRevisionString() override { return const_cast<char *>("2.0"); }
+
+    char *getVendorString() override
+    {
+        return const_cast<char *>("Switch");
+    }
+
+    char *getProductString() override
+    {
+        return const_cast<char *>("Disposable RAM Data");
+    }
+
+    char *getRevisionString() override
+    {
+        return const_cast<char *>("2.0");
+    }
+
     char *getAdditionalDeviceInfoString() override
     {
         return const_cast<char *>("volatile; 128 MiB resident page cap; no persistent writes");
     }
+
     IOReturn reportBlockSize(UInt64 *value) override
     {
-        if (!value) return kIOReturnBadArgument;
+        if (!value)
+            return kIOReturnBadArgument;
         *value = 512;
         return kIOReturnSuccess;
     }
+
     IOReturn reportMaxValidBlock(UInt64 *value) override
     {
-        if (!value || !sparse.bytes) return kIOReturnBadArgument;
+        if (!value || !sparse.bytes)
+            return kIOReturnBadArgument;
         *value = sparse.bytes / 512 - 1;
         return kIOReturnSuccess;
     }
+
     IOReturn reportEjectability(bool *value) override
     {
-        if (!value) return kIOReturnBadArgument;
+        if (!value)
+            return kIOReturnBadArgument;
         *value = false;
         return kIOReturnSuccess;
     }
-    IOReturn reportRemovability(bool *value) override { return reportEjectability(value); }
-    IOReturn reportWriteProtection(bool *value) override { return reportEjectability(value); }
+
+    IOReturn reportRemovability(bool *value) override
+    {
+        return reportEjectability(value);
+    }
+
+    IOReturn reportWriteProtection(bool *value) override
+    {
+        return reportEjectability(value);
+    }
+
     IOReturn reportMediaState(bool *present, bool *changed) override
     {
-        if (!present) return kIOReturnBadArgument;
+        if (!present)
+            return kIOReturnBadArgument;
         *present = available();
-        if (changed) *changed = false;
+        if (changed)
+            *changed = false;
         return kIOReturnSuccess;
     }
+
     // Writes commit to RAM while holding the same lock. Flush waits behind all
     // accepted writes; it promises RAM visibility only, never reboot durability.
-    IOReturn doSynchronizeCache() override { return available() ? kIOReturnSuccess : kIOReturnNotReady; }
-    IOReturn doSynchronize(UInt64, UInt64, IOOptionBits) override { return doSynchronizeCache(); }
-    IOReturn getWriteCacheState(bool *value) override { return reportEjectability(value); }
-    IOReturn setWriteCacheState(bool) override { return kIOReturnUnsupported; }
+    IOReturn doSynchronizeCache() override
+    {
+        return available() ? kIOReturnSuccess : kIOReturnNotReady;
+    }
+
+    IOReturn doSynchronize(UInt64, UInt64, IOOptionBits) override
+    {
+        return doSynchronizeCache();
+    }
+
+    IOReturn getWriteCacheState(bool *value) override
+    {
+        return reportEjectability(value);
+    }
+
+    IOReturn setWriteCacheState(bool) override
+    {
+        return kIOReturnUnsupported;
+    }
+
     IOReturn doAsyncReadWrite(IOMemoryDescriptor *, UInt64, UInt64, IOStorageAttributes *,
                               IOStorageCompletion *) override;
 };
+
 OSDefineMetaClassAndStructors(NativeRamBlock, IOBlockStorageDevice)
 
     bool NativeRamBlock::start(IOService *provider)
@@ -134,15 +200,18 @@ OSDefineMetaClassAndStructors(NativeRamBlock, IOBlockStorageDevice)
     // Native SD root boots (every boot of this port) publish persistent Data through the shared SD owner.
     // Refuse before claiming the seed or allocating its duplicate-UUID RAM disk.
     constexpr bool kNativeRootBoot = true;
-    if (kNativeRootBoot) return false;
+    if (kNativeRootBoot)
+        return false;
     // One Data seed/provider per boot. A failed first attempt is not retried.
     uint32_t expected = 0;
     if (!__atomic_compare_exchange_n(&native_ram_block_stage, &expected, 1, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
         return false;
     claimed = true;
-    if (!IOBlockStorageDevice::start(provider)) return failStart(1);
+    if (!IOBlockStorageDevice::start(provider))
+        return failStart(1);
     IORegistryEntry *map = IORegistryEntry::fromPath("/chosen/memory-map", gIODTPlane);
-    if (!map) return failStart(2);
+    if (!map)
+        return failStart(2);
     // Legacy control RAMDisk/PackedRAMDisk properties may coexist, but are never
     // read by this driver and cannot substitute for NativeDataSeed.
     OSData *range = OSDynamicCast(OSData, map->getProperty("NativeDataSeed"));
@@ -159,26 +228,36 @@ OSDefineMetaClassAndStructors(NativeRamBlock, IOBlockStorageDevice)
         reserved > boot->topOfKernelData - physical)
         return failStart(3);
     const uint8_t *input = reinterpret_cast<const uint8_t *>(ml_static_ptovirt(physical));
-    if (!input) return failStart(3);
+    if (!input)
+        return failStart(3);
     uint8_t encodedHash[32];
     SHA256_CTX hash;
     SHA256_Init(&hash);
     SHA256_Update(&hash, input, encoded);
     SHA256_Final(encodedHash, &hash);
-    if (memcmp(encodedHash, kNativeDataSeedEncodedSHA256, 32)) return failStart(4);
+    if (memcmp(encodedHash, kNativeDataSeedEncodedSHA256, 32))
+        return failStart(4);
     uint64_t logical = 0;
-    if (!ramPackedLayout(input, encoded, &logical) || logical != kNativeDataSeedLogicalBytes) return failStart(5);
+    if (!ramPackedLayout(input, encoded, &logical) || logical != kNativeDataSeedLogicalBytes)
+        return failStart(5);
     native_ram_block_stage = 2;
     gate = IOLockAlloc();
-    if (!gate) return failStart(6);
+    if (!gate)
+        return failStart(6);
     sparse.bytes = logical;
     sparse.residentLimit = kResidentLimit;
     sparse.pages = static_cast<uint8_t **>(IOMallocZero((logical / 4096) * sizeof(uint8_t *)));
     scratch = static_cast<uint8_t *>(IOMallocZero(kMaximumRequest));
-    if (!sparse.pages || !scratch) return failStart(6);
+    if (!sparse.pages || !scratch)
+        return failStart(6);
+
     struct ImportOps {
-        uint8_t *allocate() { return static_cast<uint8_t *>(IOMallocZero(4096)); }
+        uint8_t *allocate()
+        {
+            return static_cast<uint8_t *>(IOMallocZero(4096));
+        }
     } ops;
+
     native_ram_block_stage = 3;
     if (!ramSparseImport(sparse, input, encoded, ops) || sparse.resident != kNativeDataSeedNonzeroPages * 4096)
         return failStart(6);
@@ -210,7 +289,8 @@ IOReturn NativeRamBlock::doAsyncReadWrite(IOMemoryDescriptor *buffer, UInt64 blo
         block >= sparse.bytes / 512 || count > sparse.bytes / 512 - block || buffer->getLength() < count * 512 ||
         (buffer->getDirection() != kIODirectionIn && buffer->getDirection() != kIODirectionOut))
         return kIOReturnBadArgument;
-    if (!gate) return kIOReturnNotReady;
+    if (!gate)
+        return kIOReturnNotReady;
     IOLockLock(gate);
     if (!online) {
         IOLockUnlock(gate);
@@ -225,9 +305,17 @@ IOReturn NativeRamBlock::doAsyncReadWrite(IOMemoryDescriptor *buffer, UInt64 blo
             status = kIOReturnIOError;
         else {
             struct WriteOps {
-                uint8_t *allocate() { return static_cast<uint8_t *>(IOMallocZero(4096)); }
-                void release(uint8_t *page) { IOFree(page, 4096); }
+                uint8_t *allocate()
+                {
+                    return static_cast<uint8_t *>(IOMallocZero(4096));
+                }
+
+                void release(uint8_t *page)
+                {
+                    IOFree(page, 4096);
+                }
             } ops;
+
             if (ramSparseWriteAtomic(sparse, block * 512, scratch, bytes, ops))
                 actual = bytes;
             else
@@ -235,18 +323,34 @@ IOReturn NativeRamBlock::doAsyncReadWrite(IOMemoryDescriptor *buffer, UInt64 blo
         }
     } else {
         __atomic_fetch_add(&native_ram_block_reads, 1, __ATOMIC_RELAXED);
+
         struct ReadOps {
             IOMemoryDescriptor *buffer;
-            uint8_t *allocate() { return nullptr; }
-            uint64_t read(uint64_t, void *, uint64_t) { return 0; }
-            uint64_t copy(uint64_t offset, const void *data, uint64_t n) { return buffer->writeBytes(offset, data, n); }
+
+            uint8_t *allocate()
+            {
+                return nullptr;
+            }
+
+            uint64_t read(uint64_t, void *, uint64_t)
+            {
+                return 0;
+            }
+
+            uint64_t copy(uint64_t offset, const void *data, uint64_t n)
+            {
+                return buffer->writeBytes(offset, data, n);
+            }
         } ops = {buffer};
+
         bool unused = false;
         actual = ramSparseIO(sparse, false, block * 512, bytes, ops, unused);
-        if (actual != bytes) status = kIOReturnIOError;
+        if (actual != bytes)
+            status = kIOReturnIOError;
     }
     native_ram_block_resident_bytes = sparse.resident;
-    if (status) __atomic_fetch_add(&native_ram_block_failures, 1, __ATOMIC_RELAXED);
+    if (status)
+        __atomic_fetch_add(&native_ram_block_failures, 1, __ATOMIC_RELAXED);
     IOLockUnlock(gate);
     // Completed exactly once, outside the lock: callbacks may reenter the driver.
     completion->action(completion->target, completion->parameter, status, actual);
@@ -260,14 +364,17 @@ void NativeRamBlock::stop(IOService *provider)
         online = false;
         IOLockUnlock(gate);
     }
-    if (claimed) native_ram_block_ready = 0;
+    if (claimed)
+        native_ram_block_ready = 0;
     IOBlockStorageDevice::stop(provider);
 }
+
 void NativeRamBlock::releaseBacking()
 {
     if (sparse.pages) {
         for (uint64_t i = 0; i < sparse.bytes / 4096; ++i)
-            if (sparse.pages[i]) IOFree(sparse.pages[i], 4096);
+            if (sparse.pages[i])
+                IOFree(sparse.pages[i], 4096);
         IOFree(sparse.pages, (sparse.bytes / 4096) * sizeof(uint8_t *));
     }
     sparse = {};
@@ -280,32 +387,40 @@ void NativeRamBlock::releaseBacking()
         gate = nullptr;
     }
     online = false;
-    if (claimed) native_ram_block_resident_bytes = 0;
+    if (claimed)
+        native_ram_block_resident_bytes = 0;
 }
+
 void NativeRamBlock::free()
 {
     // IOKit owns this object's request lifetime. stop drains the serialized
     // request before final release; the loader's immutable seed is never freed.
     releaseBacking();
-    if (claimed) native_ram_block_ready = 0;
+    if (claimed)
+        native_ram_block_ready = 0;
     IOBlockStorageDevice::free();
 }
 
 static bool validBSDName(const char *name, size_t n)
 {
-    if (!name || !n || n > 57) return false;
+    if (!name || !n || n > 57)
+        return false;
     for (size_t i = 0; i < n; ++i)
         if (!((name[i] >= 'a' && name[i] <= 'z') || (name[i] >= 'A' && name[i] <= 'Z') ||
               (name[i] >= '0' && name[i] <= '9')))
             return false;
     return name[n] == 0;
 }
+
 static int selectVolumeSeed(const char *uuid, dev_t *device, char *path, size_t size, uint64_t *seedBase,
                             uint64_t *seedBytes, uint8_t seedDigest[32])
 {
-    if (device) *device = NODEV;
-    if (path && size) path[0] = 0;
-    if (!uuid || strcmp(uuid, kNativeDataSeedUUID) || !device || !path || size < 6) return 0;
+    if (device)
+        *device = NODEV;
+    if (path && size)
+        path[0] = 0;
+    if (!uuid || strcmp(uuid, kNativeDataSeedUUID) || !device || !path || size < 6)
+        return 0;
     OSDictionary *matching = IOService::serviceMatching("IOMedia");
     OSDictionary *properties = OSDictionary::withCapacity(1);
     OSString *wanted = OSString::withCString(uuid);
@@ -320,7 +435,8 @@ static int selectVolumeSeed(const char *uuid, dev_t *device, char *path, size_t 
     properties->release();
     OSIterator *iterator = ready ? IOService::getMatchingServices(matching) : nullptr;
     matching->release();
-    if (!iterator) return 0;
+    if (!iterator)
+        return 0;
     bool selected = false;
     unsigned matches = 0;
     dev_t candidate = NODEV;
@@ -329,7 +445,8 @@ static int selectVolumeSeed(const char *uuid, dev_t *device, char *path, size_t 
     uint8_t hash[32] = {};
     while (OSObject *object = iterator->getNextObject()) {
         IOService *media = OSDynamicCast(IOService, object);
-        if (!media) continue;
+        if (!media)
+            continue;
         if (++matches != 1) {
             selected = false;
             break;
@@ -359,30 +476,42 @@ static int selectVolumeSeed(const char *uuid, dev_t *device, char *path, size_t 
             entry->release();
             entry = parent;
         }
-        if (entry) entry->release();
+        if (entry)
+            entry->release();
     }
     iterator->release();
-    if (!selected || matches != 1) return 0;
+    if (!selected || matches != 1)
+        return 0;
     *device = candidate;
     strlcpy(path, candidatePath, size);
-    if (seedBase) *seedBase = base;
-    if (seedBytes) *seedBytes = bytes;
-    if (seedDigest) memcpy(seedDigest, hash, 32);
+    if (seedBase)
+        *seedBase = base;
+    if (seedBytes)
+        *seedBytes = bytes;
+    if (seedDigest)
+        memcpy(seedDigest, hash, 32);
     return 1;
 }
+
 extern "C" int native_ram_block_volume_device(const char *uuid, dev_t *device, char *path, size_t size)
 {
     return selectVolumeSeed(uuid, device, path, size, nullptr, nullptr, nullptr);
 }
+
 extern "C" int native_ram_block_volume_seed(const char *uuid, dev_t *device, char *path, size_t size, uint64_t *base,
                                             uint64_t *bytes, uint8_t digest[32])
 {
-    if (base) *base = 0;
-    if (bytes) *bytes = 0;
-    if (digest) memset(digest, 0, 32);
+    if (base)
+        *base = 0;
+    if (bytes)
+        *bytes = 0;
+    if (digest)
+        memset(digest, 0, 32);
     if (!base || !bytes || !digest) {
-        if (device) *device = NODEV;
-        if (path && size) path[0] = 0;
+        if (device)
+            *device = NODEV;
+        if (path && size)
+            path[0] = 0;
         return 0;
     }
     return selectVolumeSeed(uuid, device, path, size, base, bytes, digest);

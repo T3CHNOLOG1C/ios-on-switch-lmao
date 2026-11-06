@@ -49,10 +49,12 @@ void switch_battery_resume(void);
 // SWITCH_BATTERY_QH_UAH per count), AvgCurrent and Current in mA (positive = charging). Thread context, I2C up; 0, or
 // the I2C error.
 #define SWITCH_BATTERY_QH_UAH 500u
+
 struct switch_battery_gauge {
     uint16_t qh;
     int avg_ma, now_ma;
 };
+
 int switch_battery_gauge_sample(struct switch_battery_gauge *sample);
 
 #ifdef __cplusplus

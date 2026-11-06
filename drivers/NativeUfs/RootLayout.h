@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 #pragma once
+
 // Shared production parser. Requires hostRead4k, SHA256, diagnostics and C memory primitives.
 // ---- LUN 0 GPT and the root-image manifest -------------------------------------------------
 struct RootWindow {
@@ -42,7 +43,8 @@ static uint32_t rootCrc32(const uint8_t *data, size_t bytes, bool header = false
     uint32_t crc = 0xffffffffU;
     for (size_t i = 0; i < bytes; ++i) {
         crc ^= header && i >= 16 && i < 20 ? 0 : data[i];
-        for (unsigned bit = 0; bit < 8; ++bit) crc = (crc >> 1) ^ (0xedb88320U & (0U - (crc & 1)));
+        for (unsigned bit = 0; bit < 8; ++bit)
+            crc = (crc >> 1) ^ (0xedb88320U & (0U - (crc & 1)));
     }
     return ~crc;
 }
@@ -50,7 +52,8 @@ static uint32_t rootCrc32(const uint8_t *data, size_t bytes, bool header = false
 static bool rootEntryUsed(const uint8_t *entry)
 {
     uint8_t used = 0;
-    for (unsigned i = 0; i < 16; ++i) used |= entry[i];
+    for (unsigned i = 0; i < 16; ++i)
+        used |= entry[i];
     return used != 0;
 }
 
@@ -106,7 +109,8 @@ static bool findRootLayout(RootLayout *layout, const char **why)
     bool found = false;
     for (uint32_t index = 0; index < count; index++) {
         const uint8_t *entry = gScratch + index * 128;
-        if (!rootEntryUsed(entry)) continue;
+        if (!rootEntryUsed(entry))
+            continue;
         uint64_t entryFirst = le64(entry + 32), entryLast = le64(entry + 40);
         if (entryFirst < first || entryLast < entryFirst || entryLast > last) {
             *why = "GPT partition bounds";
@@ -182,7 +186,8 @@ static bool findRootLayout(RootLayout *layout, const char **why)
                         break;
                     }
                     unsigned length = 0;
-                    while (length < 32 && entry[length] >= 0x20 && entry[length] <= 0x7e) ++length;
+                    while (length < 32 && entry[length] >= 0x20 && entry[length] <= 0x7e)
+                        ++length;
                     if (!length || length == 32 || entry[length] != 0) {
                         layout->manifestStatus = 5;
                         bounds = false;
@@ -203,7 +208,8 @@ static bool findRootLayout(RootLayout *layout, const char **why)
                             break;
                         }
                     }
-                    if (!bounds) break;
+                    if (!bounds)
+                        break;
                     memcpy(layout->window[index].name, entry, 32);
                     layout->window[index].name[31] = 0;
                     layout->window[index].offset = offset;

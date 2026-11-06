@@ -41,20 +41,23 @@ constexpr int32_t kMarketingTable[] = {(int32_t)kNitsMin, (int32_t)kNitsMid, (in
 
 inline unsigned toRaw(uint32_t brightness)
 {
-    if (brightness > kMax) brightness = kMax;
+    if (brightness > kMax)
+        brightness = kMax;
     return kFloorRaw + (unsigned)(((uint64_t)brightness * kSpanRaw + kMax / 2) / kMax);
 }
 
 inline uint32_t toBrightness(unsigned raw)
 {
-    if (raw >= kPanelMax) return kMax;
+    if (raw >= kPanelMax)
+        return kMax;
     return raw <= kFloorRaw ? 0 : (uint32_t)((uint64_t)(raw - kFloorRaw) * kMax / kSpanRaw);
 }
 
 // A brightness-nits value (nits * 65536, signed as CoreBrightness sends it) as a panel level.
 inline unsigned nitsToRaw(int32_t nits)
 {
-    if (nits <= 0) return kFloorRaw;
+    if (nits <= 0)
+        return kFloorRaw;
     const uint64_t raw = ((uint64_t)nits * kPanelMax + kNitsMax / 2) / kNitsMax;
     return raw < kFloorRaw ? kFloorRaw : raw > kPanelMax ? kPanelMax : (unsigned)raw;
 }
@@ -64,8 +67,10 @@ inline unsigned nitsToRaw(int32_t nits)
 inline uint32_t nitsToBrightness(int32_t nits)
 {
     const unsigned raw = nitsToRaw(nits);
-    if (raw <= kFloorRaw) return 0;
-    if (raw >= kPanelMax) return kMax;
+    if (raw <= kFloorRaw)
+        return 0;
+    if (raw >= kPanelMax)
+        return kMax;
     // Round up so that toRaw() lands on raw exactly: toRaw rounds to nearest.
     return (uint32_t)(((uint64_t)(raw - kFloorRaw) * kMax + kSpanRaw - 1) / kSpanRaw);
 }
@@ -73,7 +78,8 @@ inline uint32_t nitsToBrightness(int32_t nits)
 // A panel level as nits * 65536 (the brightness-nits readback).
 inline uint32_t rawToNits(unsigned raw)
 {
-    if (raw > kPanelMax) raw = kPanelMax;
+    if (raw > kPanelMax)
+        raw = kPanelMax;
     return (uint32_t)(((uint64_t)raw * kNitsMax + kPanelMax / 2) / kPanelMax);
 }
 }  // namespace switch_backlight

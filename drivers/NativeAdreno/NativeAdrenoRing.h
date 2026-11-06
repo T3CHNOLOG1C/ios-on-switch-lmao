@@ -24,6 +24,7 @@ struct NativeAdrenoRingIo {
     int (*read32)(void *, uint32_t reg, uint32_t *value);
     int (*barrier)(void *);
 };
+
 struct NativeAdrenoRingCache {
     void *cookie;
     /* Clean owned ring bytes to PoC before the device reads them. */
@@ -31,18 +32,21 @@ struct NativeAdrenoRingCache {
     /* Invalidate the fence page before the CPU reads CP-written values. */
     int (*acquire)(void *, volatile uint32_t *words, size_t bytes);
 };
+
 struct NativeAdrenoRingClock {
     void *cookie;
     uint64_t (*now_us)(void *);
     /* Optional; may sleep. Never used before a successful submit. */
     int (*idle)(void *);
 };
+
 enum NativeAdrenoRingFence {
     NativeAdrenoRingFenceComplete = 0,
     NativeAdrenoRingFenceTimeout,
     NativeAdrenoRingFencePoisoned,
     NativeAdrenoRingFenceArgument
 };
+
 class NativeAdrenoRing final {
     NativeAdrenoRingIo io_{};
     NativeAdrenoRingCache cache_{};
@@ -79,9 +83,14 @@ public:
     /* User command buffers: the A7XX BR/BV thread framing of a7xx_submit() around the words (CP init and the kernel's own
      * bring-up packets keep the plain submit() above, as Linux sends them outside a7xx_submit()). */
     IOReturn submitFramed(const uint32_t *words, size_t word_count, uint32_t *fence);
+
     /* The next framed submission starts with the A7XX context entry of a6xx_set_pagetable() (BR/BV counters, on-chip
      * timestamps and resource table cleared between thread syncs); a new user client requests it, as Linux does per context. */
-    void requestContextReset() { reset_pending_ = true; }
+    void requestContextReset()
+    {
+        reset_pending_ = true;
+    }
+
     /* Polls the CP-written timestamp after invalidating the fence page. Never
      * writes registers and never advances the ring. Timeout is not poison. */
     NativeAdrenoRingFence wait(uint32_t fence, const NativeAdrenoRingClock *, uint32_t timeout_us, uint32_t *observed);
@@ -90,11 +99,35 @@ public:
      * this ring issued are accepted. Never writes a register. */
     NativeAdrenoRingFence observeFence(uint32_t fence, const NativeAdrenoRingClock *, uint32_t timeout_us,
                                        uint32_t *observed);
-    bool poisoned() const { return poisoned_; }
-    uint32_t outstanding() const { return seqno_ - completed_; }
-    uint32_t lastSubmitted() const { return seqno_; } /* the newest fence number handed out */
-    uint32_t completedFence() const { return completed_; }
-    uint32_t submissions() const { return submissions_; }
-    uint32_t readPointer() const { return rptr_shadow_; }
+
+    bool poisoned() const
+    {
+        return poisoned_;
+    }
+
+    uint32_t outstanding() const
+    {
+        return seqno_ - completed_;
+    }
+
+    uint32_t lastSubmitted() const
+    {
+        return seqno_;
+    } /* the newest fence number handed out */
+
+    uint32_t completedFence() const
+    {
+        return completed_;
+    }
+
+    uint32_t submissions() const
+    {
+        return submissions_;
+    }
+
+    uint32_t readPointer() const
+    {
+        return rptr_shadow_;
+    }
 };
 #endif

@@ -24,10 +24,12 @@ void native_qemu_metal_publish(void);
 // Stages: 1 IOGPUFamily load asked, 2 its IOAcceleratorES found, 3 own classes registered, 4 published.
 void native_qemu_metal_publish(void)
 {
-    if (native_qemu_metal_stage || native_shared_window_stage < 4) return;
+    if (native_qemu_metal_stage || native_shared_window_stage < 4)
+        return;
     native_qemu_metal_stage = 1;
     native_qemu_metal_status = OSKextLoadKextWithIdentifier("com.apple.iokit.IOGPUFamily");
-    if (native_qemu_metal_status) return;
+    if (native_qemu_metal_status)
+        return;
     const OSSymbol *name = OSSymbol::withCString("IOAcceleratorES");
     const OSMetaClass *parent = name ? OSMetaClass::getMetaClassWithName(name) : nullptr;
     OSSafeReleaseNULL(name);
@@ -43,7 +45,8 @@ void native_qemu_metal_publish(void)
     }
     native_qemu_metal_static_init();
     native_qemu_metal_status = OSMetaClass::postModLoad(handle);
-    if (native_qemu_metal_status) return;
+    if (native_qemu_metal_status)
+        return;
     if (native_qemu_metal_accelerator_instance_size() != 136) {
         native_qemu_metal_status = kIOReturnInvalid;
         return;
@@ -71,11 +74,15 @@ void native_qemu_metal_publish(void)
     native_qemu_metal_stage = 4;
     // A grant for each other process that gets a device (run-qemu.py --metal-clients: names separated by commas).
     char clients[256];
-    if (!native_fw_cfg_read("opt/org.unixnu/metal-clients", clients, sizeof clients)) return;
+    if (!native_fw_cfg_read("opt/org.unixnu/metal-clients", clients, sizeof clients))
+        return;
     for (char *name = clients, *next; *name; name = next) {
-        for (next = name; *next && *next != ','; next++) {}
-        if (*next) *next++ = 0;
-        if (!*name) continue;
+        for (next = name; *next && *next != ','; next++) {
+        }
+        if (*next)
+            *next++ = 0;
+        if (!*name)
+            continue;
         IOService *grant = native_qemu_metal_grant_allocate();
         if (!grant || !grant->init()) {
             OSSafeReleaseNULL(grant);

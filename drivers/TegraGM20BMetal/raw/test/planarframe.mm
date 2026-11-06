@@ -13,7 +13,8 @@
 #include "NativeBridgeMetalFrontend.h"
 #include "bridge/NativeMetalObjects.h"
 
-static void missing(const char *, const char *) {}
+static void missing(const char *, const char *)
+{}
 
 static IOSurfaceRef planarSurface(uint32_t w, uint32_t h, uint32_t lumaRow, uint32_t chromaRow)
 {
@@ -61,9 +62,11 @@ int main(int argc, char **argv)
         }
         id<MTLCommandQueue> q = [dev newCommandQueue];
         int failed = 0;
+
         struct Case {
             uint32_t w, h, lumaRow, chromaRow;
         };
+
         for (Case c : {Case{100, 60, 128, 256}, Case{37, 23, 64, 128}, Case{256, 128, 256, 512}}) {
             IOSurfaceRef s = planarSurface(c.w, c.h, c.lumaRow, c.chromaRow);
             if (!s) {
@@ -133,7 +136,8 @@ int main(int argc, char **argv)
             CFRelease(s);
         }
         char line[1024];
-        if (raw_metal_rates(line, sizeof line)) printf("rates: %s\n", line);
+        if (raw_metal_rates(line, sizeof line))
+            printf("rates: %s\n", line);
         printf("planarframe: %d case(s) failed\n", failed);
         return failed ? 1 : 0;
     }

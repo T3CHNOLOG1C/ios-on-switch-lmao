@@ -16,11 +16,13 @@ struct NativeAdrenoGmuWindow {
     volatile uint8_t *base;
     size_t bytes;
 };
+
 struct NativeAdrenoGmuTime {
     void *cookie;
     int (*now_us)(void *, uint64_t *);
     int (*wait_us)(void *, unsigned);
 };
+
 class NativeAdrenoGmuPlatform final {
     NativeAdrenoGmuWindow windows_[ShengGmuWindows]{};
     static int read32(void *, unsigned, size_t, uint32_t *);

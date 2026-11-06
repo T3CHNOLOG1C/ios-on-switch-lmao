@@ -9,7 +9,11 @@ extern "C" int vdectest_main(void);
 
 TEST(SwitchVideoDecoders, ClipCheckOnAppleDecoders)
 {
-    const HostRun run = RunHost([](int, char **) { return vdectest_main(); }, {"vdectest"});
+    const HostRun run = RunHost(
+        [](int, char **) {
+            return vdectest_main();
+        },
+        {"vdectest"});
     EXPECT_THAT(run.out, testing::HasSubstr("software: software decoder, 30/30 frames match x264"));
     EXPECT_THAT(run.out,
                 testing::HasSubstr("hevc-software: software decoder, frames matching FFmpeg: A 20/20, V 14/14"));

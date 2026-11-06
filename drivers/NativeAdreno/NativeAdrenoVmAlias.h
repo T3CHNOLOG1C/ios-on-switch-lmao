@@ -12,18 +12,26 @@ template <class Range> class NativeAdrenoPhysicalIndex final {
     const Range *ranges_;
     uint32_t *order_;
     size_t count_;
-    uint64_t end(uint32_t i) const { return ranges_[i].physical + ranges_[i].bytes; }
+
+    uint64_t end(uint32_t i) const
+    {
+        return ranges_[i].physical + ranges_[i].bytes;
+    }
+
     bool less(uint32_t a, uint32_t b) const
     {
         return ranges_[a].physical < ranges_[b].physical ||
                (ranges_[a].physical == ranges_[b].physical && ranges_[a].bytes < ranges_[b].bytes);
     }
+
     void sift(size_t root, size_t count)
     {
         while (root < count / 2) {
             size_t child = root * 2 + 1;
-            if (child + 1 < count && less(order_[child], order_[child + 1])) ++child;
-            if (!less(order_[root], order_[child])) break;
+            if (child + 1 < count && less(order_[child], order_[child + 1]))
+                ++child;
+            if (!less(order_[root], order_[child]))
+                break;
             uint32_t t = order_[root];
             order_[root] = order_[child];
             order_[child] = t;
@@ -35,7 +43,8 @@ public:
     NativeAdrenoPhysicalIndex(const Range *ranges, uint32_t *order, size_t count)
         : ranges_(ranges), order_(order), count_(count)
     {
-        for (size_t i = count / 2; i-- > 0;) sift(i, count);
+        for (size_t i = count / 2; i-- > 0;)
+            sift(i, count);
         for (size_t n = count; n > 1;) {
             --n;
             uint32_t t = order_[0];
@@ -49,10 +58,12 @@ public:
         size_t kept = 0;
         for (size_t i = 0; i < count; ++i) {
             uint32_t index = order_[i];
-            if (!kept || end(index) > end(order_[kept - 1])) order_[kept++] = index;
+            if (!kept || end(index) > end(order_[kept - 1]))
+                order_[kept++] = index;
         }
         count_ = kept;
     }
+
     bool overlaps(uint64_t physical, uint64_t bytes) const
     {
         size_t lo = 0, hi = count_;

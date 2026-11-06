@@ -97,11 +97,13 @@ void nvxnu_dcache_clean_inval(const void *va, nvxnu_u64 size);
 void nvxnu_dcache_clean_inval_pa(nvxnu_u64 pa, nvxnu_u64 size);
 /* the same over `count` 4 KiB pages, with one barrier pair for the whole list instead of one per page */
 void nvxnu_dcache_clean_inval_pages(const nvxnu_u64 *pas, nvxnu_u32 count);
+
 /* the system's page faults so far (every vm_fault) and the zero-filled ones among them (XNU's vm_stat counters); with the
  * kernel's user-fault timing, the user faults handled so far, their total time and the longest since the last call (ns) */
 struct nvxnu_faults {
 	nvxnu_u64 faults, zero_fill, user_n, user_ns, user_max_ns;
 };
+
 void nvxnu_vm_faults(struct nvxnu_faults *f);
 
 /* firmware embedded in the kernel image (shim/TegraGM20BFirmware.S); 0 on success */
@@ -147,7 +149,12 @@ nvxnu_u32 tegra_gm20b_fuse_read(nvxnu_u32 offset); /* Linux tegra_fuse_readl() o
 void tegra_gm20b_mc_errors(nvxnu_u32 *intstatus, nvxnu_u32 *status, nvxnu_u32 *addr);
 /* The MC's carveout 2, the GPU's WPR1: CFG0, BOM, SIZE_128KB, CLIENT_ACCESS2, CLIENT_ACCESS4 */
 void tegra_gm20b_mc_gpu_wpr(nvxnu_u32 v[5]);
-enum { TEGRA_GM20B_CLK_GPU = 0, TEGRA_GM20B_CLK_REF = 1, TEGRA_GM20B_CLK_PWR = 2 };
+
+enum {
+	TEGRA_GM20B_CLK_GPU = 0,
+	TEGRA_GM20B_CLK_REF = 1,
+	TEGRA_GM20B_CLK_PWR = 2
+};
 
 #ifdef __cplusplus
 }

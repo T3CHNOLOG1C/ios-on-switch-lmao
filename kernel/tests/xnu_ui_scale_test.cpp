@@ -163,7 +163,8 @@ TEST(XnuUiScaleSource, CoreUiRowBytesAndStockAtScaleOne)
     // both CoreUI sites: ... ucvtf d0, x24; fmul d0, dW, d0; fcvtzu x3, d0 -> mul x3, x0, x24; nop; nop
     const std::string row_bytes = "{ 0x03, 0x7c, 0x18, 0x9b, 0x1f, 0x20, 0x03, 0xd5, 0x1f, 0x20, 0x03, 0xd5 }";
     EXPECT_EQ(switch_ios::test::Count(vm_unix, row_bytes), 2u);
-    const std::string pager = switch_ios::test::Body(vm_unix, "switch_ui_scale_pager(const struct switch_us_site *site");
+    const std::string pager =
+        switch_ios::test::Body(vm_unix, "switch_ui_scale_pager(const struct switch_us_site *site");
     const size_t unit = pager.find("if (switch_ui_scale_is_unit(switch_ui_scale())) {");
     ASSERT_NE(unit, std::string::npos);
     EXPECT_LT(unit, pager.find("vn_rdwr("));

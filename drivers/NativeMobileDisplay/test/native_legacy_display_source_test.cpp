@@ -93,7 +93,8 @@ TEST(DirectScanoutSource, NeverReplacedAcrossLayouts)
 TEST(ScanoutRingSource, DisplayUsesTheRing)
 {
     EXPECT_THAT(display(), HasSubstr("#include \"../TegraDisplayFlip/TegraScanoutRing.h\""));
-    for (const char *gone : {"flipPending", "front ^ 1", "front ^= 1"}) EXPECT_THAT(display(), Not(HasSubstr(gone)));
+    for (const char *gone : {"flipPending", "front ^ 1", "front ^= 1"})
+        EXPECT_THAT(display(), Not(HasSubstr(gone)));
     // r14-direct: scan buffers and direct slots share presentEntry.
     EXPECT_THAT(method(display(), "    void flip()\n"), HasSubstr("presentEntry(target)"));
     EXPECT_THAT(method(display(), "    void presentEntry(int i)\n"), HasSubstr("ring.ready("));

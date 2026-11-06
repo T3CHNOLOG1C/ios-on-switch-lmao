@@ -30,6 +30,7 @@ namespace cacheexport {
 
 // kLimit: the largest export blob, one half of the kernel's 256 MiB export region.
 constexpr uint32_t kMethod = 0x7100, kPiece = 3968, kLimit = 128u << 20;
+
 struct File {
     std::string path;
     struct stat st;
@@ -47,29 +48,37 @@ static std::set<std::string> &baked()
     static std::set<std::string> files;
     return files;
 }
+
 static std::string bakedKey(const std::string &path, uint64_t size)
 {
     return path + '\n' + std::to_string(size);
 }
+
 static void dropBaked(std::vector<File> &files)
 {
-    if (baked().empty()) return;
+    if (baked().empty())
+        return;
     std::vector<File> fresh;
     for (File &f : files)
-        if (!baked().count(bakedKey(f.path, (uint64_t)f.st.st_size))) fresh.push_back(std::move(f));
+        if (!baked().count(bakedKey(f.path, (uint64_t)f.st.st_size)))
+            fresh.push_back(std::move(f));
     files.swap(fresh);
 }
 
 static void scan(const std::string &root, const std::string &relative, std::vector<File> &out, unsigned depth)
 {
-    if (depth > 8) return;
+    if (depth > 8)
+        return;
     DIR *dir = opendir((root + "/" + relative).c_str());
-    if (!dir) return;
+    if (!dir)
+        return;
     while (dirent *entry = readdir(dir)) {
-        if (!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, "..")) continue;
+        if (!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, ".."))
+            continue;
         const std::string path = relative.empty() ? std::string(entry->d_name) : relative + "/" + entry->d_name;
         struct stat st = {};
-        if (lstat((root + "/" + path).c_str(), &st) != 0) continue;
+        if (lstat((root + "/" + path).c_str(), &st) != 0)
+            continue;
         if (S_ISDIR(st.st_mode))
             scan(root, path, out, depth + 1);
         else if (S_ISREG(st.st_mode))
@@ -98,7 +107,8 @@ template <typename T> static void put(std::vector<uint8_t> &b, T v)
 static uint64_t streamBytes(const std::string &root, const std::vector<File> &files)
 {
     uint64_t n = 8 + 4 + root.size() + 4;
-    for (const File &f : files) n += 24 + f.path.size() + (uint64_t)f.st.st_size;
+    for (const File &f : files)
+        n += 24 + f.path.size() + (uint64_t)f.st.st_size;
     return n;
 }
 
@@ -114,11 +124,13 @@ template <typename Emit> static bool stream(const std::string &root, const std::
     put<uint32_t>(head, (uint32_t)root.size());
     head.insert(head.end(), root.begin(), root.end());
     put<uint32_t>(head, (uint32_t)files.size());
-    if (!emit(head.data(), head.size())) return false;
+    if (!emit(head.data(), head.size()))
+        return false;
     std::vector<uint8_t> chunk(65536);
     for (const File &f : files) {
         FILE *in = fopen((root + "/" + f.path).c_str(), "rb");
-        if (!in) return false;
+        if (!in)
+            return false;
         head.clear();
         put<uint32_t>(head, (uint32_t)f.path.size());
         put<uint32_t>(head, (uint32_t)f.st.st_mode);
@@ -135,7 +147,8 @@ template <typename Emit> static bool stream(const std::string &root, const std::
         }
         ok = ok && fgetc(in) == EOF;  // grown since the scan: refuse rather than send a short copy
         fclose(in);
-        if (!ok) return false;
+        if (!ok)
+            return false;
     }
     return true;
 }
@@ -148,10 +161,12 @@ static bool build(const std::string &root, const std::vector<File> &files, std::
     using BoundFn = unsigned long (*)(unsigned long);
     using CompressFn = int (*)(uint8_t *, unsigned long *, const uint8_t *, unsigned long, int);
     static void *z = dlopen("/usr/lib/libz.1.dylib", RTLD_NOW | RTLD_LOCAL);
-    if (!z) return false;
+    if (!z)
+        return false;
     auto bound = (BoundFn)dlsym(z, "compressBound");
     auto compress = (CompressFn)dlsym(z, "compress2");
-    if (!bound || !compress) return false;
+    if (!bound || !compress)
+        return false;
     std::vector<uint8_t> raw;
     if (!stream(root, files, [&](const uint8_t *p, size_t n) {
             raw.insert(raw.end(), p, p + n);
@@ -160,7 +175,8 @@ static bool build(const std::string &root, const std::vector<File> &files, std::
         return false;
     unsigned long zbytes = bound(raw.size());
     std::vector<uint8_t> zdata(zbytes);
-    if (compress(zdata.data(), &zbytes, raw.data(), raw.size(), 6) != 0) return false;
+    if (compress(zdata.data(), &zbytes, raw.data(), raw.size(), 6) != 0)
+        return false;
     out.clear();
     {
         static const char magic[] = "SHEXP001";
@@ -186,18 +202,23 @@ struct PackReader {
     uint64_t left = 0, produced = 0,
              expect = 0;  // compressed bytes not yet read from the file, stream bytes produced, stream bytes announced
     uint8_t input[65536];
+
     ~PackReader()
     {
-        if (open) endFn(&z);
-        if (in) fclose(in);
+        if (open)
+            endFn(&z);
+        if (in)
+            fclose(in);
     }
+
     bool start(const char *path)
     {
         static void *lib = dlopen("/usr/lib/libz.1.dylib", RTLD_NOW | RTLD_LOCAL);
         auto init = lib ? (InitFn)dlsym(lib, "inflateInit_") : nullptr;
         inflateFn = lib ? (InflateFn)dlsym(lib, "inflate") : nullptr;
         endFn = lib ? (EndFn)dlsym(lib, "inflateEnd") : nullptr;
-        if (!init || !inflateFn || !endFn || !(in = fopen(path, "rb"))) return false;
+        if (!init || !inflateFn || !endFn || !(in = fopen(path, "rb")))
+            return false;
         struct stat st = {};
         uint8_t head[16];
         uint32_t raw = 0, zbytes = 0;
@@ -206,21 +227,25 @@ struct PackReader {
             return false;
         memcpy(&raw, head + 8, 4);
         memcpy(&zbytes, head + 12, 4);
-        if ((uint64_t)zbytes != (uint64_t)st.st_size - 16) return false;
+        if ((uint64_t)zbytes != (uint64_t)st.st_size - 16)
+            return false;
         left = zbytes;
         expect = raw;
         open = init(&z, ZLIB_VERSION, (int)sizeof z) == Z_OK;
         return open;
     }
+
     bool read(void *out, size_t n)
     {
         z.next_out = static_cast<Bytef *>(out);
         z.avail_out = (uInt)n;
         while (z.avail_out) {
-            if (ended) return false;
+            if (ended)
+                return false;
             if (!z.avail_in && left) {
                 const size_t want = left < sizeof input ? (size_t)left : sizeof input;
-                if (fread(input, 1, want, in) != want) return false;
+                if (fread(input, 1, want, in) != want)
+                    return false;
                 left -= want;
                 z.next_in = input;
                 z.avail_in = (uInt)want;
@@ -232,26 +257,31 @@ struct PackReader {
                 ended = true;
             else if (r != Z_OK)
                 return false;
-            if (produced > expect) return false;
+            if (produced > expect)
+                return false;
         }
         return true;
     }
+
     bool skip(uint64_t n)
     {
         uint8_t scratch[16384];
         while (n) {
             const size_t k = n < sizeof scratch ? (size_t)n : sizeof scratch;
-            if (!read(scratch, k)) return false;
+            if (!read(scratch, k))
+                return false;
             n -= k;
         }
         return true;
     }
+
     // The whole stream was consumed: zlib's check passed at its end and nothing follows it.
     bool finished()
     {
         if (!ended) {
             uint8_t b;
-            if (read(&b, 1)) return false;
+            if (read(&b, 1))
+                return false;
         }
         return ended && produced == expect && !left && !z.avail_in;
     }
@@ -263,12 +293,15 @@ struct PackReader {
 // whole pack has been read and checked: a damaged pack imports nothing. Returns the number of files written, or -1.
 static int importPack(const char *pack, const std::string &directory)
 {
-    if (access(pack, R_OK) != 0) return 0;
+    if (access(pack, R_OK) != 0)
+        return 0;
     PackReader r;
-    if (!r.start(pack)) return -1;
+    if (!r.start(pack))
+        return -1;
     std::vector<std::string> written;
     auto fail = [&]() {
-        for (const std::string &f : written) unlink((f + ".import").c_str());
+        for (const std::string &f : written)
+            unlink((f + ".import").c_str());
         return -1;
     };
     char magic[8];
@@ -283,16 +316,19 @@ static int importPack(const char *pack, const std::string &directory)
         uint64_t size = 0;
         if (!r.read(&pathLength, 4) || !r.read(&mode, 4) || !r.read(&uid, 4) || !r.read(&gid, 4) || !r.read(&size, 8))
             return fail();
-        if (pathLength == 0 || pathLength > 1024 || size > r.expect) return fail();
+        if (pathLength == 0 || pathLength > 1024 || size > r.expect)
+            return fail();
         std::string path(pathLength, '\0');
-        if (!r.read(&path[0], pathLength)) return fail();
+        if (!r.read(&path[0], pathLength))
+            return fail();
         if (path[0] == '/' || path.find("..") != std::string::npos || path.find('\0') != std::string::npos)
             return fail();
         seen.insert(bakedKey(path, size));
         const std::string full = directory + "/" + path;
         struct stat st = {};
         if (stat(full.c_str(), &st) == 0 && (uint64_t)st.st_size == size) {
-            if (!r.skip(size)) return fail();
+            if (!r.skip(size))
+                return fail();
             continue;
         }
         for (size_t slash = full.find('/', directory.size() + 1); slash != std::string::npos;
@@ -300,7 +336,8 @@ static int importPack(const char *pack, const std::string &directory)
             mkdir(full.substr(0, slash).c_str(), 0700);
         written.push_back(full);
         FILE *out = fopen((full + ".import").c_str(), "wb");
-        if (!out) return fail();
+        if (!out)
+            return fail();
         bool ok = true;
         for (uint64_t left = size; ok && left;) {
             const size_t k = left < chunk.size() ? (size_t)left : chunk.size();
@@ -308,9 +345,11 @@ static int importPack(const char *pack, const std::string &directory)
             left -= k;
         }
         ok = fclose(out) == 0 && ok;
-        if (!ok) return fail();
+        if (!ok)
+            return fail();
     }
-    if (!r.finished()) return fail();
+    if (!r.finished())
+        return fail();
     int renamed = 0;
     for (const std::string &f : written)
         if (rename((f + ".import").c_str(), f.c_str()) == 0)
@@ -326,7 +365,8 @@ static int importPack(const char *pack, const std::string &directory)
 // f1 no selector, f2 a file changed or vanished while it was read, f3 a piece refused, f4 the new files exceed one export.
 static void run(Gpu &marker, std::string root)
 {
-    while (root.size() > 1 && root.back() == '/') root.pop_back();
+    while (root.size() > 1 && root.back() == '/')
+        root.pop_back();
     marker.mark(0x6900);
     Gpu link;
     link.call = marker.call;
@@ -353,7 +393,8 @@ static void run(Gpu &marker, std::string root)
         const uint64_t now = signature(files);
         const bool stable = now == previous;
         previous = now;
-        if (!stable || now == exported || files.empty()) continue;
+        if (!stable || now == exported || files.empty())
+            continue;
         const uint64_t total = 16 + streamBytes(root, files);
         if (total > kLimit) {
             marker.mark(0x69f4);
@@ -378,7 +419,8 @@ static void run(Gpu &marker, std::string root)
                 filled += (uint32_t)k;
                 p += k;
                 n -= k;
-                if (filled == kPiece && !flush()) return false;
+                if (filled == kPiece && !flush())
+                    return false;
             }
             return true;
         };
@@ -386,7 +428,8 @@ static void run(Gpu &marker, std::string root)
         const uint32_t streamed = (uint32_t)(total - 16);
         memcpy(head + 8, &streamed, 4);
         const bool read = emit(head, sizeof head) && stream(root, files, emit);
-        if (read && filled) flush();
+        if (read && filled)
+            flush();
         if (!sent) {
             marker.mark(0x69f3);
             continue;

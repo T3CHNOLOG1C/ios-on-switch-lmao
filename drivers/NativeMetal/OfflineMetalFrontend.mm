@@ -35,33 +35,40 @@ static NSMutableSet *pendingCommands;
 static NSMutableSet *pendingNotifications;
 static NSException *notificationFailure;
 static uint64_t notificationsRegistered, notificationsDelivered, notificationsCancelled, notificationsFailed;
+
 static void fail(NSString *reason)
 {
     @throw [NSException exceptionWithName:@"OfflineMetalTransport" reason:reason userInfo:nil];
 }
+
 static void receiveBytes(void *bytes, size_t size)
 {
     unsigned char *p = (unsigned char *)bytes;
     while (size) {
         size_t count = MIN(size, (size_t)4096);
         int status = ioMethod(connection, 1, nullptr, 0, nullptr, 0, nullptr, nullptr, p, &count);
-        if (status || !count || count > size) fail(@"Actual console receive failed");
+        if (status || !count || count > size)
+            fail(@"Actual console receive failed");
         p += count;
         size -= count;
     }
 }
+
 static NSData *call(uint16_t operation, const void *input, size_t size, OMResult *result)
 {
     [transaction lock];
     @try {
-        if (!live || size > 4080) fail(@"Invalid live transport request");
+        if (!live || size > 4080)
+            fail(@"Invalid live transport request");
         OMWireHeader header = {OM_WIRE_MAGIC, OFFLINE_METAL_VERSION, operation, (uint32_t)size, sequence + 1};
         unsigned char bytes[4096];
         memcpy(bytes, &header, sizeof(header));
-        if (size) memcpy(bytes + sizeof(header), input, size);
+        if (size)
+            memcpy(bytes + sizeof(header), input, size);
         int sendStatus =
             ioMethod(connection, 0, nullptr, 0, bytes, sizeof(header) + size, nullptr, nullptr, nullptr, nullptr);
-        if (sendStatus) fail([NSString stringWithFormat:@"Actual transport send failed: %08x", (unsigned)sendStatus]);
+        if (sendStatus)
+            fail([NSString stringWithFormat:@"Actual transport send failed: %08x", (unsigned)sendStatus]);
         sequence++;
         OMWireHeader reply = {};
         receiveBytes(&reply, sizeof(reply));
@@ -70,14 +77,17 @@ static NSData *call(uint16_t operation, const void *input, size_t size, OMResult
             reply.bytes < sizeof(*result) || reply.bytes - sizeof(*result) > OFFLINE_METAL_MAX_REPLY)
             fail(@"Invalid actual Metal reply");
         receiveBytes(result, sizeof(*result));
-        if (result->reserved) fail(@"Unknown reply flags");
+        if (result->reserved)
+            fail(@"Unknown reply flags");
         NSMutableData *body = [NSMutableData dataWithLength:reply.bytes - sizeof(*result)];
-        if (body.length) receiveBytes(body.mutableBytes, body.length);
+        if (body.length)
+            receiveBytes(body.mutableBytes, body.length);
         return body;
     } @finally {
         [transaction unlock];
     }
 }
+
 static NSData *checked(uint16_t operation, const void *input, size_t size, OMResult *result)
 {
     NSData *body = call(operation, input, size, result);
@@ -86,6 +96,7 @@ static NSData *checked(uint16_t operation, const void *input, size_t size, OMRes
                  ?: @"Unsupported or failed actual Metal operation");
     return body;
 }
+
 static NSError *operationError(OMResult result, NSData *body)
 {
     NSString *why = [[NSString alloc] initWithData:body encoding:NSUTF8StringEncoding]
@@ -94,16 +105,19 @@ static NSError *operationError(OMResult result, NSData *body)
                                code:result.error
                            userInfo:@{NSLocalizedDescriptionKey : why}];
 }
+
 @interface OMObject : NSObject
 @property (readonly) id<MTLDevice> device;
 @property (nonatomic) uint64_t handle;
 @property (atomic, copy) NSString *label;
 @end
 @implementation OMObject
+
 - (id<MTLDevice>)device
 {
     return remoteDevice;
 }
+
 - (void)dealloc
 {
     // Actual host Metal objects retain resources required by their recorded
@@ -120,6 +134,7 @@ static NSError *operationError(OMResult result, NSData *body)
         [transaction unlock];
     }
 }
+
 @end
 @interface OMFenceObject : OMObject <MTLFence>
 @end
@@ -136,6 +151,7 @@ static NSError *operationError(OMResult result, NSData *body)
 - (mach_port_t)eventPort;
 - (uint64_t)labelTraceID;
 @end
+
 static NSDictionary *sharedMetadata(NSData *body)
 {
     NSDictionary *info = [NSJSONSerialization JSONObjectWithData:body options:0 error:nil];
@@ -147,6 +163,7 @@ static NSDictionary *sharedMetadata(NSData *body)
         fail(@"Invalid actual shared-event metadata");
     return info;
 }
+
 enum {
     OMNotificationPending,
     OMNotificationQueued,
@@ -154,6 +171,7 @@ enum {
     OMNotificationFinished,
     OMNotificationCancelled
 };
+
 @interface OMSharedNotificationState : NSObject
 @property (nonatomic) uint64_t handle, value;
 @property (nonatomic, strong) id<MTLSharedEvent> event;
@@ -167,26 +185,31 @@ enum {
 - (void)start;
 @end
 @implementation OMSharedNotificationState
+
 - (void)start
 {
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         @autoreleasepool {
             @try {
                 struct timespec start = {}, now = {};
-                if (clock_gettime(CLOCK_MONOTONIC, &start)) fail(@"Actual listener clock unavailable");
+                if (clock_gettime(CLOCK_MONOTONIC, &start))
+                    fail(@"Actual listener clock unavailable");
                 for (;;) {
                     [pendingLock lock];
                     BOOL cancelled = self.phase == OMNotificationCancelled;
                     [pendingLock unlock];
-                    if (cancelled) return;
+                    if (cancelled)
+                        return;
                     OMSharedNotification reply = {};
                     [transaction lock];
                     @try {
-                        if (!live || closing) return;
+                        if (!live || closing)
+                            return;
                         OMHandle input = {self.handle};
                         OMResult result = {};
                         NSData *body = checked(OM_SHARED_NOTIFICATION_POLL, &input, sizeof(input), &result);
-                        if (body.length != sizeof(reply)) fail(@"Invalid actual listener reply");
+                        if (body.length != sizeof(reply))
+                            fail(@"Invalid actual listener reply");
                         memcpy(&reply, body.bytes, sizeof(reply));
                     } @finally {
                         [transaction unlock];
@@ -220,7 +243,8 @@ enum {
                                     self.block(self.event, actualValue);
                                 } @catch (NSException *exception) {
                                     [pendingLock lock];
-                                    if (!notificationFailure) notificationFailure = exception;
+                                    if (!notificationFailure)
+                                        notificationFailure = exception;
                                     notificationsFailed++;
                                     [pendingLock unlock];
                                 } @finally {
@@ -243,7 +267,8 @@ enum {
             } @catch (NSException *exception) {
                 [pendingLock lock];
                 if (self.phase != OMNotificationCancelled) {
-                    if (!notificationFailure) notificationFailure = exception;
+                    if (!notificationFailure)
+                        notificationFailure = exception;
                     notificationsFailed++;
                     self.phase = OMNotificationFinished;
                     [pendingNotifications removeObject:self];
@@ -253,6 +278,7 @@ enum {
         }
     });
 }
+
 @end
 @interface OMSharedEventObject : OMEventObject <MTLSharedEvent> {
     mach_port_t _exportPort;
@@ -263,46 +289,58 @@ enum {
 - (uint64_t)labelTraceID;
 @end
 @implementation OMSharedEventObject
+
 - (id<MTLDevice>)device
 {
     return self.deviceIsNil ? nil : remoteDevice;
 }
+
 - (void)dealloc
 {
-    if (_exportPort) mach_port_deallocate(mach_task_self(), _exportPort);
+    if (_exportPort)
+        mach_port_deallocate(mach_task_self(), _exportPort);
 }
+
 - (uint64_t)signaledValue
 {
     OMHandle input = {self.handle};
     OMResult result = {};
     NSData *body = checked(OM_SHARED_VALUE_GET, &input, sizeof(input), &result);
-    if (body.length != 8) fail(@"Invalid actual event counter");
+    if (body.length != 8)
+        fail(@"Invalid actual event counter");
     uint64_t value = 0;
     memcpy(&value, body.bytes, 8);
     return value;
 }
+
 - (void)setSignaledValue:(uint64_t)value
 {
     OMSharedEventValue input = {self.handle, value};
     OMResult result = {};
     NSData *body = checked(OM_SHARED_VALUE_SET, &input, sizeof(input), &result);
-    if (body.length != 8) fail(@"Missing actual event counter write result");
+    if (body.length != 8)
+        fail(@"Missing actual event counter write result");
 }
+
 - (void)setLabel:(NSString *)label
 {
-    if (label && ![label isKindOfClass:[NSString class]]) fail(@"Invalid shared-event label");
+    if (label && ![label isKindOfClass:[NSString class]])
+        fail(@"Invalid shared-event label");
     NSData *text = [label dataUsingEncoding:NSUTF8StringEncoding];
-    if (text.length > 512) fail(@"Excessive shared-event label");
+    if (text.length > 512)
+        fail(@"Excessive shared-event label");
     OMSharedLabel input = {self.handle, (uint64_t)(label != nil), text.length};
     NSMutableData *data = [NSMutableData dataWithBytes:&input length:sizeof(input)];
-    if (text) [data appendData:text];
+    if (text)
+        [data appendData:text];
     [transaction lock];
     @try {
         OMResult result = {};
         NSData *body = checked(OM_SHARED_LABEL_SET, data.bytes, data.length, &result);
         NSDictionary *info = [NSJSONSerialization JSONObjectWithData:body options:0 error:nil];
         id actual = info[@"label"];
-        if (actual != [NSNull null] && ![actual isKindOfClass:[NSString class]]) fail(@"Missing actual label result");
+        if (actual != [NSNull null] && ![actual isKindOfClass:[NSString class]])
+            fail(@"Missing actual label result");
         [super setLabel:actual == [NSNull null] ? nil : actual];
         if (_exportPort) {
             mach_port_deallocate(mach_task_self(), _exportPort);
@@ -313,12 +351,15 @@ enum {
         [transaction unlock];
     }
 }
+
 - (mach_port_t)eventPort
 {
     [transaction lock];
     @try {
-        if (!live || closing) fail(@"Shared export on a closing context");
-        if (_exportPort) return _exportPort;
+        if (!live || closing)
+            fail(@"Shared export on a closing context");
+        if (_exportPort)
+            return _exportPort;
         uint64_t output = 0, input = self.handle;
         unsigned count = 1;
         unsigned char bytes[4096];
@@ -340,17 +381,21 @@ enum {
         [transaction unlock];
     }
 }
+
 - (uint64_t)labelTraceID
 {
     (void)self.eventPort;
     return _traceID;
 }
+
 - (MTLSharedEventHandle *)newSharedEventHandle
 {
     Class cls = NSClassFromString(@"MTLSharedEventHandle");
-    if (!cls || class_getInstanceSize(cls) != 16) fail(@"Wrong original shared-handle ABI");
+    if (!cls || class_getInstanceSize(cls) != 16)
+        fail(@"Wrong original shared-handle ABI");
     return [[cls alloc] initWithSharedEvent:self];
 }
+
 - (void)notifyListener:(MTLSharedEventListener *)listener
                atValue:(uint64_t)value
                  block:(MTLSharedEventNotificationBlock)block
@@ -361,14 +406,17 @@ enum {
         strcmp(method_getTypeEncoding(getter), "@16@0:8"))
         fail(@"Unqualified original shared listener ABI");
     dispatch_queue_t queue = listener.dispatchQueue;
-    if (!queue) fail(@"Missing actual original listener queue");
+    if (!queue)
+        fail(@"Missing actual original listener queue");
     [transaction lock];
     @try {
-        if (!live || closing) fail(@"Listener registration on a closing context");
+        if (!live || closing)
+            fail(@"Listener registration on a closing context");
         OMSharedEventValue input = {self.handle, value};
         OMResult result = {};
         checked(OM_SHARED_NOTIFY, &input, sizeof(input), &result);
-        if (!result.handle) fail(@"Missing actual listener registration");
+        if (!result.handle)
+            fail(@"Missing actual listener registration");
         OMSharedNotificationState *state = [OMSharedNotificationState new];
         state.handle = result.handle;
         state.value = value;
@@ -390,22 +438,28 @@ enum {
         [transaction unlock];
     }
 }
+
 - (BOOL)waitUntilSignaledValue:(uint64_t)value timeoutMS:(uint64_t)milliseconds
 {
     struct timespec start = {}, now = {};
-    if (clock_gettime(CLOCK_MONOTONIC, &start)) fail(@"Actual monotonic clock unavailable");
+    if (clock_gettime(CLOCK_MONOTONIC, &start))
+        fail(@"Actual monotonic clock unavailable");
     for (;;) {
-        if (self.signaledValue >= value) return YES;
-        if (clock_gettime(CLOCK_MONOTONIC, &now)) fail(@"Actual monotonic clock unavailable");
+        if (self.signaledValue >= value)
+            return YES;
+        if (clock_gettime(CLOCK_MONOTONIC, &now))
+            fail(@"Actual monotonic clock unavailable");
         uint64_t elapsed = (uint64_t)(now.tv_sec - start.tv_sec) * 1000;
         if (now.tv_nsec >= start.tv_nsec)
             elapsed += (now.tv_nsec - start.tv_nsec) / 1000000;
         else
             elapsed -= (start.tv_nsec - now.tv_nsec + 999999) / 1000000;
-        if (elapsed >= milliseconds) return NO;
+        if (elapsed >= milliseconds)
+            return NO;
         usleep(1000);
     }
 }
+
 @end
 @interface OMFunctionObject : OMObject
 @property (nonatomic, strong) NSString *name;
@@ -423,17 +477,20 @@ enum {
 - (NSUInteger)index;
 - (NSString *)name;
 @end
+
 static bool methodABI(id object, SEL selector, const char *encoding)
 {
     Method method = class_getInstanceMethod(object_getClass(object), selector);
     return method && !strcmp(method_getTypeEncoding(method), encoding);
 }
+
 static NSError *constantError(NSString *reason)
 {
     return [NSError errorWithDomain:@"org.blu-sharky.offline-metal"
                                code:-4
                            userInfo:@{NSLocalizedDescriptionKey : reason}];
 }
+
 @interface OMLibraryObject : OMObject
 @property (nonatomic, strong) NSArray<NSString *> *functionNames;
 - (id<MTLFunction>)newFunctionWithName:(NSString *)name;
@@ -442,29 +499,35 @@ static NSError *constantError(NSString *reason)
                                  error:(NSError **)error;
 @end
 @implementation OMLibraryObject
+
 - (id<MTLFunction>)newFunctionWithName:(NSString *)name
 {
-    if (!name || [name lengthOfBytesUsingEncoding:NSUTF8StringEncoding] >= 128) return nil;
+    if (!name || [name lengthOfBytesUsingEncoding:NSUTF8StringEncoding] >= 128)
+        return nil;
     OMFunction request = {};
     request.library = self.handle;
     strcpy(request.name, name.UTF8String);
     OMResult result = {};
     NSData *body = call(OM_FUNCTION, &request, sizeof(request), &result);
-    if (result.error) return nil;
+    if (result.error)
+        return nil;
     NSDictionary *info = [NSJSONSerialization JSONObjectWithData:body options:0 error:nil];
-    if (![info isKindOfClass:[NSDictionary class]]) fail(@"Actual function metadata missing");
+    if (![info isKindOfClass:[NSDictionary class]])
+        fail(@"Actual function metadata missing");
     OMFunctionObject *object = [OMFunctionObject new];
     object.handle = result.handle;
     object.name = info[@"name"];
     object.functionType = (MTLFunctionType)[info[@"type"] unsignedIntegerValue];
     return (id<MTLFunction>)object;
 }
+
 - (id<MTLFunction>)newFunctionWithName:(NSString *)name
                         constantValues:(MTLFunctionConstantValues *)values
                                  error:(NSError **)error
 {
     auto refuse = [&](NSString *why) -> id<MTLFunction> {
-        if (error) *error = constantError(why);
+        if (error)
+            *error = constantError(why);
         return nil;
     };
     if (!name.length || [name lengthOfBytesUsingEncoding:NSUTF8StringEncoding] >= 128 ||
@@ -497,7 +560,8 @@ static NSError *constantError(NSString *reason)
             row.bytes = OMFunctionConstantBytes(row.type);
             row.named = group;
             const void *data = [descriptor data];
-            if (!row.bytes || !data) return refuse(@"Unsupported original constant type or missing actual value");
+            if (!row.bytes || !data)
+                return refuse(@"Unsupported original constant type or missing actual value");
             if (group) {
                 NSString *key = [descriptor name];
                 if (![key isKindOfClass:[NSString class]] || !key.length ||
@@ -507,7 +571,8 @@ static NSError *constantError(NSString *reason)
                 strcpy(row.name, key.UTF8String);
             } else {
                 row.index = [descriptor index];
-                if (row.index > 65535) return refuse(@"Original constant index exceeds qualified range");
+                if (row.index > 65535)
+                    return refuse(@"Original constant index exceeds qualified range");
             }
             memcpy(row.data, data, row.bytes);
             [packet appendBytes:&row length:sizeof(row)];
@@ -515,18 +580,22 @@ static NSError *constantError(NSString *reason)
     OMResult result = {};
     NSData *body = call(OM_FUNCTION, packet.bytes, packet.length, &result);
     if (result.error) {
-        if (error) *error = operationError(result, body);
+        if (error)
+            *error = operationError(result, body);
         return nil;
     }
     NSDictionary *info = [NSJSONSerialization JSONObjectWithData:body options:0 error:nil];
-    if (![info isKindOfClass:[NSDictionary class]]) fail(@"Actual specialized function metadata missing");
+    if (![info isKindOfClass:[NSDictionary class]])
+        fail(@"Actual specialized function metadata missing");
     OMFunctionObject *object = [OMFunctionObject new];
     object.handle = result.handle;
     object.name = info[@"name"];
     object.functionType = (MTLFunctionType)[info[@"type"] unsignedIntegerValue];
-    if (error) *error = nil;
+    if (error)
+        *error = nil;
     return (id<MTLFunction>)object;
 }
+
 @end
 @interface OMTextureObject : OMObject
 @property (nonatomic) OMTexture descriptor;
@@ -542,29 +611,38 @@ static NSError *constantError(NSString *reason)
      mipmapLevel:(NSUInteger)level;
 @end
 @implementation OMTextureObject
+
 - (void)dealloc
 {
-    if (_surface) CFRelease(_surface);
+    if (_surface)
+        CFRelease(_surface);
 }
+
 - (IOSurfaceRef)iosurface
 {
     return self.surface;
 }
+
 - (NSUInteger)iosurfacePlane
 {
     return 0;
 }
+
 - (void)uploadSurface
 {
     @synchronized(self) {
-        if (!self.surface) return;
+        if (!self.surface)
+            return;
         uint32_t seed = 0;
-        if (IOSurfaceLock(self.surface, kIOSurfaceLockReadOnly, &seed)) fail(@"Actual IOSurface read lock failed");
+        if (IOSurfaceLock(self.surface, kIOSurfaceLockReadOnly, &seed))
+            fail(@"Actual IOSurface read lock failed");
         @try {
-            if (self.surfaceSeedValid && seed == self.surfaceSeed) return;
+            if (self.surfaceSeedValid && seed == self.surfaceSeed)
+                return;
             const unsigned char *base = (const unsigned char *)IOSurfaceGetBaseAddress(self.surface);
             size_t row = IOSurfaceGetBytesPerRow(self.surface);
-            if (!base) fail(@"Missing actual IOSurface mapping");
+            if (!base)
+                fail(@"Missing actual IOSurface mapping");
             for (uint64_t y = 0; y < self.descriptor.height;) {
                 uint64_t width = MIN(self.descriptor.width, (4080 - sizeof(OMWriteTexture)) / 4);
                 uint64_t height = MIN(self.descriptor.height - y, (4080 - sizeof(OMWriteTexture)) / (width * 4));
@@ -589,79 +667,98 @@ static NSError *constantError(NSString *reason)
         }
     }
 }
+
 - (void)downloadSurface
 {
     @synchronized(self) {
-        if (!self.surface) return;
-        if (IOSurfaceLock(self.surface, 0, nullptr)) fail(@"Actual IOSurface write lock failed");
+        if (!self.surface)
+            return;
+        if (IOSurfaceLock(self.surface, 0, nullptr))
+            fail(@"Actual IOSurface write lock failed");
         @try {
             void *base = IOSurfaceGetBaseAddress(self.surface);
-            if (!base) fail(@"Missing actual IOSurface write mapping");
+            if (!base)
+                fail(@"Missing actual IOSurface write mapping");
             [self getBytes:base
                 bytesPerRow:IOSurfaceGetBytesPerRow(self.surface)
                  fromRegion:MTLRegionMake2D(0, 0, self.descriptor.width, self.descriptor.height)
                 mipmapLevel:0];
         } @finally {
-            if (IOSurfaceUnlock(self.surface, 0, nullptr)) fail(@"Actual IOSurface write unlock failed");
+            if (IOSurfaceUnlock(self.surface, 0, nullptr))
+                fail(@"Actual IOSurface write unlock failed");
         }
         self.surfaceSeed = IOSurfaceGetSeed(self.surface);
         self.surfaceSeedValid = YES;
     }
 }
+
 - (NSUInteger)width
 {
     return self.descriptor.width;
 }
+
 - (NSUInteger)height
 {
     return self.descriptor.height;
 }
+
 - (NSUInteger)depth
 {
     return self.descriptor.depth;
 }
+
 - (NSUInteger)mipmapLevelCount
 {
     return self.descriptor.levels;
 }
+
 - (NSUInteger)sampleCount
 {
     return self.descriptor.samples;
 }
+
 - (NSUInteger)arrayLength
 {
     return self.descriptor.array;
 }
+
 - (MTLTextureType)textureType
 {
     return (MTLTextureType)self.descriptor.type;
 }
+
 - (MTLPixelFormat)pixelFormat
 {
     return (MTLPixelFormat)self.descriptor.format;
 }
+
 - (MTLTextureUsage)usage
 {
     return self.descriptor.usage;
 }
+
 - (MTLHazardTrackingMode)hazardTrackingMode
 {
     return self.actualHazardMode;
 }
+
 - (MTLResourceOptions)resourceOptions
 {
     return (self.descriptor.storage << MTLResourceStorageModeShift) |
            (self.descriptor.cache << MTLResourceCPUCacheModeShift) |
            ((uint64_t)self.actualHazardMode << MTLResourceHazardTrackingModeShift);
 }
+
 - (MTLStorageMode)storageMode
 {
     return (MTLStorageMode)self.descriptor.storage;
 }
+
 - (MTLCPUCacheMode)cpuCacheMode
 {
     return (MTLCPUCacheMode)self.descriptor.cache;
 }
+
 - (void)getBytes:(void *)pixels
      bytesPerRow:(NSUInteger)stride
       fromRegion:(MTLRegion)region
@@ -681,6 +778,7 @@ static NSError *constantError(NSString *reason)
         memcpy((unsigned char *)pixels + row * stride, (const unsigned char *)body.bytes + row * region.size.width * 4,
                region.size.width * 4);
 }
+
 @end
 @interface OMPipelineObject : OMObject
 @end
@@ -696,35 +794,43 @@ static NSError *constantError(NSString *reason)
 - (void)download;
 @end
 @implementation OMBufferObject
+
 - (NSUInteger)length
 {
     return self.data.length;
 }
+
 - (void *)contents
 {
     return self.data.mutableBytes;
 }
+
 - (MTLStorageMode)storageMode
 {
     return MTLStorageModeShared;
 }
+
 - (MTLCPUCacheMode)cpuCacheMode
 {
     return MTLCPUCacheModeDefaultCache;
 }
+
 - (MTLResourceOptions)resourceOptions
 {
     return MTLResourceStorageModeShared;
 }
+
 - (MTLHazardTrackingMode)hazardTrackingMode
 {
     return MTLHazardTrackingModeDefault;
 }
+
 - (void)didModifyRange:(NSRange)range
 {
     if (range.location > self.data.length || range.length > self.data.length - range.location)
         fail(@"Invalid native buffer modification range");
 }
+
 - (void)upload
 {
     for (NSUInteger offset = 0; offset < self.data.length;) {
@@ -738,6 +844,7 @@ static NSError *constantError(NSString *reason)
         offset += bytes;
     }
 }
+
 - (void)download
 {
     for (NSUInteger offset = 0; offset < self.data.length;) {
@@ -745,11 +852,13 @@ static NSError *constantError(NSString *reason)
         OMBufferRegion request = {self.handle, offset, bytes};
         OMResult result = {};
         NSData *body = checked(OM_READ_BUFFER, &request, sizeof(request), &result);
-        if (body.length != bytes) fail(@"Incomplete actual GPU buffer readback");
+        if (body.length != bytes)
+            fail(@"Incomplete actual GPU buffer readback");
         memcpy((unsigned char *)self.data.mutableBytes + offset, body.bytes, bytes);
         offset += bytes;
     }
 }
+
 @end
 @protocol OMTextureDrawable <MTLDrawable>
 - (id<MTLTexture>)texture;
@@ -793,52 +902,64 @@ static NSError *constantError(NSString *reason)
 @property (nonatomic, strong) NSMutableDictionary<NSNumber *, OMBufferObject *> *fragmentBuffers;
 @end
 @implementation OMEncoderObject
+
 - (void)updateFence:(id<MTLFence>)fence afterStages:(MTLRenderStages)stages
 {
-    if (![(id)fence isKindOfClass:[OMFenceObject class]] || fence.device != remoteDevice) fail(@"Foreign render fence");
+    if (![(id)fence isKindOfClass:[OMFenceObject class]] || fence.device != remoteDevice)
+        fail(@"Foreign render fence");
     OMFenceDependency request = {self.handle, [(OMObject *)fence handle], (uint64_t)stages};
     OMResult result = {};
     checked(OM_RENDER_FENCE_UPDATE, &request, sizeof(request), &result);
     [self.command trackFence:fence];
 }
+
 - (void)waitForFence:(id<MTLFence>)fence beforeStages:(MTLRenderStages)stages
 {
-    if (![(id)fence isKindOfClass:[OMFenceObject class]] || fence.device != remoteDevice) fail(@"Foreign render fence");
+    if (![(id)fence isKindOfClass:[OMFenceObject class]] || fence.device != remoteDevice)
+        fail(@"Foreign render fence");
     OMFenceDependency request = {self.handle, [(OMObject *)fence handle], (uint64_t)stages};
     OMResult result = {};
     checked(OM_RENDER_FENCE_WAIT, &request, sizeof(request), &result);
     [self.command trackFence:fence];
 }
+
 - (void)setDepthStencilState:(id<MTLDepthStencilState>)state
 {
-    if (state && ![(id)state isKindOfClass:[OMDepthStateObject class]]) fail(@"Foreign depth/stencil state");
+    if (state && ![(id)state isKindOfClass:[OMDepthStateObject class]])
+        fail(@"Foreign depth/stencil state");
     OMSetDepthStencil request = {self.handle, state ? [(OMObject *)state handle] : 0};
     OMResult result = {};
     checked(OM_SET_DEPTH_STENCIL, &request, sizeof(request), &result);
 }
+
 - (void)setStencilFrontReferenceValue:(uint32_t)front backReferenceValue:(uint32_t)back
 {
     OMStencilReference request = {self.handle, front, back};
     OMResult result = {};
     checked(OM_STENCIL_REFERENCE, &request, sizeof(request), &result);
 }
+
 - (void)setStencilReferenceValue:(uint32_t)value
 {
     [self setStencilFrontReferenceValue:value backReferenceValue:value];
 }
+
 - (void)setRenderPipelineState:(id<MTLRenderPipelineState>)pipeline
 {
-    if (![(id)pipeline isKindOfClass:[OMPipelineObject class]]) fail(@"Foreign pipeline object");
+    if (![(id)pipeline isKindOfClass:[OMPipelineObject class]])
+        fail(@"Foreign pipeline object");
     OMSetPipeline request = {self.handle, [(OMObject *)pipeline handle]};
     OMResult result = {};
     checked(OM_SET_PIPELINE, &request, sizeof(request), &result);
 }
+
 - (void)setCullMode:(MTLCullMode)mode
 {
     OMSetCull request = {self.handle, (uint64_t)mode};
     OMResult result = {};
     checked(OM_SET_CULL, &request, sizeof(request), &result);
 }
+
 - (void)setViewport:(MTLViewport)viewport
 {
     OMViewport request = {self.handle,     viewport.originX, viewport.originY, viewport.width,
@@ -846,40 +967,49 @@ static NSError *constantError(NSString *reason)
     OMResult result = {};
     checked(OM_VIEWPORT, &request, sizeof(request), &result);
 }
+
 - (void)setScissorRect:(MTLScissorRect)rect
 {
     OMScissor request = {self.handle, rect.x, rect.y, rect.width, rect.height};
     OMResult result = {};
     checked(OM_SCISSOR, &request, sizeof(request), &result);
 }
+
 - (void)setBlendColorRed:(float)red green:(float)green blue:(float)blue alpha:(float)alpha
 {
     OMBlendColor request = {self.handle, red, green, blue, alpha};
     OMResult result = {};
     checked(OM_BLEND_COLOR, &request, sizeof(request), &result);
 }
+
 - (void)setTexture:(id<MTLTexture>)texture index:(NSUInteger)index vertex:(BOOL)vertex
 {
-    if (texture && ![(id)texture isKindOfClass:[OMTextureObject class]]) fail(@"Foreign texture object");
+    if (texture && ![(id)texture isKindOfClass:[OMTextureObject class]])
+        fail(@"Foreign texture object");
     OMSetTexture request = {self.handle, texture ? [(OMObject *)texture handle] : 0, index};
     OMResult result = {};
     checked(vertex ? OM_VERTEX_TEXTURE : OM_FRAGMENT_TEXTURE, &request, sizeof(request), &result);
-    if (texture) [self.command trackTexture:(OMTextureObject *)texture];
+    if (texture)
+        [self.command trackTexture:(OMTextureObject *)texture];
 }
+
 - (void)setVertexTexture:(id<MTLTexture>)texture atIndex:(NSUInteger)index
 {
     [self setTexture:texture index:index vertex:YES];
 }
+
 - (void)setFragmentTexture:(id<MTLTexture>)texture atIndex:(NSUInteger)index
 {
     [self setTexture:texture index:index vertex:NO];
 }
+
 - (void)drawPrimitives:(MTLPrimitiveType)type vertexStart:(NSUInteger)start vertexCount:(NSUInteger)count
 {
     OMDraw request = {self.handle, (uint64_t)type, start, count, 1};
     OMResult result = {};
     checked(OM_DRAW, &request, sizeof(request), &result);
 }
+
 - (void)setBuffer:(id<MTLBuffer>)buffer offset:(NSUInteger)offset index:(NSUInteger)index vertex:(BOOL)vertex
 {
     if (index >= 31 || (buffer && ![(id)buffer isKindOfClass:[OMBufferObject class]]))
@@ -887,47 +1017,61 @@ static NSError *constantError(NSString *reason)
     OMSetBuffer request = {self.handle, buffer ? [(OMObject *)buffer handle] : 0, offset, index};
     OMResult result = {};
     checked(vertex ? OM_VERTEX_BUFFER : OM_FRAGMENT_BUFFER, &request, sizeof(request), &result);
-    if (vertex && !self.vertexBuffers) self.vertexBuffers = [NSMutableDictionary dictionary];
-    if (!vertex && !self.fragmentBuffers) self.fragmentBuffers = [NSMutableDictionary dictionary];
+    if (vertex && !self.vertexBuffers)
+        self.vertexBuffers = [NSMutableDictionary dictionary];
+    if (!vertex && !self.fragmentBuffers)
+        self.fragmentBuffers = [NSMutableDictionary dictionary];
     NSMutableDictionary *bindings = vertex ? self.vertexBuffers : self.fragmentBuffers;
     if (buffer)
         bindings[@(index)] = buffer;
     else
         [bindings removeObjectForKey:@(index)];
-    if (buffer) [self.command trackBuffer:(OMBufferObject *)buffer];
+    if (buffer)
+        [self.command trackBuffer:(OMBufferObject *)buffer];
 }
+
 - (void)setVertexBuffer:(id<MTLBuffer>)buffer offset:(NSUInteger)offset atIndex:(NSUInteger)index
 {
     [self setBuffer:buffer offset:offset index:index vertex:YES];
 }
+
 - (void)setFragmentBuffer:(id<MTLBuffer>)buffer offset:(NSUInteger)offset atIndex:(NSUInteger)index
 {
     [self setBuffer:buffer offset:offset index:index vertex:NO];
 }
+
 - (void)setVertexBufferOffset:(NSUInteger)offset atIndex:(NSUInteger)index
 {
     OMBufferObject *buffer = self.vertexBuffers[@(index)];
-    if (!buffer) fail(@"No actual vertex buffer bound at this index");
+    if (!buffer)
+        fail(@"No actual vertex buffer bound at this index");
     [self setVertexBuffer:(id<MTLBuffer>)buffer offset:offset atIndex:index];
 }
+
 - (void)setFragmentBufferOffset:(NSUInteger)offset atIndex:(NSUInteger)index
 {
     OMBufferObject *buffer = self.fragmentBuffers[@(index)];
-    if (!buffer) fail(@"No actual fragment buffer bound at this index");
+    if (!buffer)
+        fail(@"No actual fragment buffer bound at this index");
     [self setFragmentBuffer:(id<MTLBuffer>)buffer offset:offset atIndex:index];
 }
+
 - (void)setVertexBytes:(const void *)bytes length:(NSUInteger)length atIndex:(NSUInteger)index
 {
     id<MTLBuffer> buffer = [remoteDevice newBufferWithBytes:bytes length:length options:MTLResourceStorageModeShared];
-    if (!buffer) fail(@"Invalid vertex-byte allocation");
+    if (!buffer)
+        fail(@"Invalid vertex-byte allocation");
     [self setVertexBuffer:buffer offset:0 atIndex:index];
 }
+
 - (void)setFragmentBytes:(const void *)bytes length:(NSUInteger)length atIndex:(NSUInteger)index
 {
     id<MTLBuffer> buffer = [remoteDevice newBufferWithBytes:bytes length:length options:MTLResourceStorageModeShared];
-    if (!buffer) fail(@"Invalid fragment-byte allocation");
+    if (!buffer)
+        fail(@"Invalid fragment-byte allocation");
     [self setFragmentBuffer:buffer offset:0 atIndex:index];
 }
+
 - (void)drawIndexedPrimitives:(MTLPrimitiveType)type
                    indexCount:(NSUInteger)count
                     indexType:(MTLIndexType)indexType
@@ -937,13 +1081,15 @@ static NSError *constantError(NSString *reason)
                    baseVertex:(NSInteger)baseVertex
                  baseInstance:(NSUInteger)baseInstance
 {
-    if (![(id)buffer isKindOfClass:[OMBufferObject class]]) fail(@"Foreign index buffer");
+    if (![(id)buffer isKindOfClass:[OMBufferObject class]])
+        fail(@"Foreign index buffer");
     OMDrawIndexed request = {self.handle, (uint64_t)type, count,      (uint64_t)indexType, [(OMObject *)buffer handle],
                              offset,      instances,      baseVertex, baseInstance};
     OMResult result = {};
     checked(OM_DRAW_INDEXED, &request, sizeof(request), &result);
     [self.command trackBuffer:(OMBufferObject *)buffer];
 }
+
 - (void)drawIndexedPrimitives:(MTLPrimitiveType)type
                    indexCount:(NSUInteger)count
                     indexType:(MTLIndexType)indexType
@@ -959,6 +1105,7 @@ static NSError *constantError(NSString *reason)
                      baseVertex:0
                    baseInstance:0];
 }
+
 - (void)drawIndexedPrimitives:(MTLPrimitiveType)type
                    indexCount:(NSUInteger)count
                     indexType:(MTLIndexType)indexType
@@ -975,32 +1122,39 @@ static NSError *constantError(NSString *reason)
                      baseVertex:0
                    baseInstance:0];
 }
+
 - (void)endEncoding
 {
     OMHandle request = {self.handle};
     OMResult result = {};
     checked(OM_END, &request, sizeof(request), &result);
 }
+
 @end
 @interface OMBlitEncoderObject : OMEncoderObject
 @end
 @implementation OMBlitEncoderObject
+
 - (void)updateFence:(id<MTLFence>)fence
 {
-    if (![(id)fence isKindOfClass:[OMFenceObject class]] || fence.device != remoteDevice) fail(@"Foreign blit fence");
+    if (![(id)fence isKindOfClass:[OMFenceObject class]] || fence.device != remoteDevice)
+        fail(@"Foreign blit fence");
     OMFenceDependency request = {self.handle, [(OMObject *)fence handle], 0};
     OMResult result = {};
     checked(OM_BLIT_FENCE_UPDATE, &request, sizeof(request), &result);
     [self.command trackFence:fence];
 }
+
 - (void)waitForFence:(id<MTLFence>)fence
 {
-    if (![(id)fence isKindOfClass:[OMFenceObject class]] || fence.device != remoteDevice) fail(@"Foreign blit fence");
+    if (![(id)fence isKindOfClass:[OMFenceObject class]] || fence.device != remoteDevice)
+        fail(@"Foreign blit fence");
     OMFenceDependency request = {self.handle, [(OMObject *)fence handle], 0};
     OMResult result = {};
     checked(OM_BLIT_FENCE_WAIT, &request, sizeof(request), &result);
     [self.command trackFence:fence];
 }
+
 - (void)copyFromTexture:(id<MTLTexture>)source
             sourceSlice:(NSUInteger)sourceSlice
             sourceLevel:(NSUInteger)sourceLevel
@@ -1018,8 +1172,12 @@ static NSError *constantError(NSString *reason)
                              [(OMObject *)destination handle],
                              sourceSlice,
                              sourceLevel,
-                             { sourceOrigin.x, sourceOrigin.y, sourceOrigin.z },
-                             { sourceSize.width, sourceSize.height, sourceSize.depth },
+                             {
+                                 sourceOrigin.x, sourceOrigin.y, sourceOrigin.z
+                             },
+                             {
+                                 sourceSize.width, sourceSize.height, sourceSize.depth
+                             },
                              destinationSlice,
                              destinationLevel,
                              {destinationOrigin.x, destinationOrigin.y, destinationOrigin.z}};
@@ -1028,6 +1186,7 @@ static NSError *constantError(NSString *reason)
     [self.command trackTexture:(OMTextureObject *)source];
     [self.command trackSurfaceTarget:(OMTextureObject *)destination];
 }
+
 - (void)copyFromTexture:(id<MTLTexture>)source toTexture:(id<MTLTexture>)destination
 {
     [self copyFromTexture:source
@@ -1040,6 +1199,7 @@ static NSError *constantError(NSString *reason)
          destinationLevel:0
         destinationOrigin:MTLOriginMake(0, 0, 0)];
 }
+
 - (void)copyFromBuffer:(id<MTLBuffer>)source
           sourceOffset:(NSUInteger)sourceOffset
               toBuffer:(id<MTLBuffer>)destination
@@ -1056,8 +1216,10 @@ static NSError *constantError(NSString *reason)
     [self.command trackBuffer:(OMBufferObject *)source];
     [self.command trackBuffer:(OMBufferObject *)destination];
 }
+
 @end
 @implementation OMCommandObject
+
 - (void)encodeSignalEvent:(id<MTLEvent>)event value:(uint64_t)value
 {
     if (self.submissionStarted || self.actualResult.status || ![(id)event isKindOfClass:[OMEventObject class]])
@@ -1065,9 +1227,12 @@ static NSError *constantError(NSString *reason)
     OMEventDependency request = {self.handle, [(OMObject *)event handle], value};
     OMResult result = {};
     checked(OM_EVENT_SIGNAL, &request, sizeof(request), &result);
-    if (!self.events) self.events = [NSMutableArray array];
-    if ([self.events indexOfObjectIdenticalTo:event] == NSNotFound) [self.events addObject:(OMEventObject *)event];
+    if (!self.events)
+        self.events = [NSMutableArray array];
+    if ([self.events indexOfObjectIdenticalTo:event] == NSNotFound)
+        [self.events addObject:(OMEventObject *)event];
 }
+
 - (void)encodeWaitForEvent:(id<MTLEvent>)event value:(uint64_t)value
 {
     if (self.submissionStarted || self.actualResult.status || ![(id)event isKindOfClass:[OMEventObject class]])
@@ -1075,12 +1240,16 @@ static NSError *constantError(NSString *reason)
     OMEventDependency request = {self.handle, [(OMObject *)event handle], value};
     OMResult result = {};
     checked(OM_EVENT_WAIT, &request, sizeof(request), &result);
-    if (!self.events) self.events = [NSMutableArray array];
-    if ([self.events indexOfObjectIdenticalTo:event] == NSNotFound) [self.events addObject:(OMEventObject *)event];
+    if (!self.events)
+        self.events = [NSMutableArray array];
+    if ([self.events indexOfObjectIdenticalTo:event] == NSNotFound)
+        [self.events addObject:(OMEventObject *)event];
 }
+
 - (void)commitAsync
 {
-    if (self.submissionStarted || self.actualResult.status) fail(@"Command already submitted");
+    if (self.submissionStarted || self.actualResult.status)
+        fail(@"Command already submitted");
     dispatch_group_t group = dispatch_group_create();
     dispatch_group_enter(group);
     self.callbackGroup = group;
@@ -1100,12 +1269,15 @@ static NSError *constantError(NSString *reason)
     [pendingCommands addObject:self];
     [pendingLock unlock];
     @try {
-        for (OMBufferObject *buffer in self.buffers) [buffer upload];
-        for (OMTextureObject *texture in self.textures) [texture uploadSurface];
+        for (OMBufferObject *buffer in self.buffers)
+            [buffer upload];
+        for (OMTextureObject *texture in self.textures)
+            [texture uploadSurface];
         OMHandle request = {self.handle};
         OMResult result = {};
         NSData *body = checked(OM_COMMAND_SUBMIT, &request, sizeof(request), &result);
-        if (body.length != sizeof(OMCommandResult)) fail(@"Missing actual asynchronous submission");
+        if (body.length != sizeof(OMCommandResult))
+            fail(@"Missing actual asynchronous submission");
         OMCommandResult initial = {};
         memcpy(&initial, body.bytes, sizeof(initial));
         if (initial.status < MTLCommandBufferStatusCommitted || initial.status > MTLCommandBufferStatusCompleted ||
@@ -1128,10 +1300,12 @@ static NSError *constantError(NSString *reason)
                     OMCommandResult value = initial;
                     unsigned polls = 0;
                     while (value.status != MTLCommandBufferStatusCompleted) {
-                        if (++polls > 4096) fail(@"Actual GPU completion observation exceeded its bound");
+                        if (++polls > 4096)
+                            fail(@"Actual GPU completion observation exceeded its bound");
                         OMResult observed = {};
                         NSData *reply = checked(OM_COMMAND_STATUS, &request, sizeof(request), &observed);
-                        if (reply.length != sizeof(value)) fail(@"Missing actual GPU status");
+                        if (reply.length != sizeof(value))
+                            fail(@"Missing actual GPU status");
                         memcpy(&value, reply.bytes, sizeof(value));
                         if (value.status < MTLCommandBufferStatusCommitted ||
                             value.status > MTLCommandBufferStatusCompleted ||
@@ -1147,13 +1321,17 @@ static NSError *constantError(NSString *reason)
                             usleep(1000);
                         }
                     }
-                    if (!value.start_ns || value.end_ns <= value.start_ns) fail(@"Missing actual completed GPU timing");
-                    for (OMTextureObject *texture in self.surfaceTargets) [texture downloadSurface];
-                    for (OMBufferObject *buffer in self.buffers) [buffer download];
+                    if (!value.start_ns || value.end_ns <= value.start_ns)
+                        fail(@"Missing actual completed GPU timing");
+                    for (OMTextureObject *texture in self.surfaceTargets)
+                        [texture downloadSurface];
+                    for (OMBufferObject *buffer in self.buffers)
+                        [buffer download];
                     self.actualResult = value;
                     self.resourcesVisible = YES;
                     @try {
-                        for (id<MTLDrawable> drawable in presentations) [drawable present];
+                        for (id<MTLDrawable> drawable in presentations)
+                            [drawable present];
                     } @catch (NSException *exception) {
                         self.deliveryFailure = exception;
                     }
@@ -1171,8 +1349,10 @@ static NSError *constantError(NSString *reason)
                 self.callbackThread = pthread_self();
                 @try {
                     if (self.resourcesVisible)
-                        for (MTLCommandBufferHandler handler in scheduled) handler((id<MTLCommandBuffer>)self);
-                    for (MTLCommandBufferHandler handler in completed) handler((id<MTLCommandBuffer>)self);
+                        for (MTLCommandBufferHandler handler in scheduled)
+                            handler((id<MTLCommandBuffer>)self);
+                    for (MTLCommandBufferHandler handler in completed)
+                        handler((id<MTLCommandBuffer>)self);
                 } @catch (NSException *exception) {
                     self.deliveryFailure = exception;
                 } @finally {
@@ -1198,11 +1378,15 @@ static NSError *constantError(NSString *reason)
         @throw;
     }
 }
+
 - (void)trackFence:(id<MTLFence>)fence
 {
-    if (!self.fences) self.fences = [NSMutableArray array];
-    if ([self.fences indexOfObjectIdenticalTo:fence] == NSNotFound) [self.fences addObject:(OMFenceObject *)fence];
+    if (!self.fences)
+        self.fences = [NSMutableArray array];
+    if ([self.fences indexOfObjectIdenticalTo:fence] == NSNotFound)
+        [self.fences addObject:(OMFenceObject *)fence];
 }
+
 - (void)presentDrawable:(id<MTLDrawable>)drawable
 {
     if (self.submissionStarted || self.actualResult.status || !drawable ||
@@ -1212,26 +1396,32 @@ static NSError *constantError(NSString *reason)
     id<MTLTexture> texture = [(id<OMTextureDrawable>)drawable texture];
     if (![(id)texture isKindOfClass:[OMTextureObject class]] || texture.device != remoteDevice || !texture.iosurface)
         fail(@"Drawable requires this device's actual IOSurface texture");
-    if (!self.presentations) self.presentations = [NSMutableArray array];
+    if (!self.presentations)
+        self.presentations = [NSMutableArray array];
     if (self.presentations.count >= 8 || [self.presentations indexOfObjectIdenticalTo:drawable] != NSNotFound)
         fail(@"Duplicate or excessive actual drawable presentation");
     [self trackSurfaceTarget:(OMTextureObject *)texture];
     [self.presentations addObject:drawable];
 }
+
 - (void)addCompletedHandler:(MTLCommandBufferHandler)handler
 {
     if (!handler || self.submissionStarted || self.actualResult.status)
         fail(@"Completion handler requires a valid uncommitted command");
-    if (!self.completedHandlers) self.completedHandlers = [NSMutableArray array];
+    if (!self.completedHandlers)
+        self.completedHandlers = [NSMutableArray array];
     [self.completedHandlers addObject:[handler copy]];
 }
+
 - (void)addScheduledHandler:(MTLCommandBufferHandler)handler
 {
     if (!handler || self.submissionStarted || self.actualResult.status)
         fail(@"Scheduled handler requires a valid uncommitted command");
-    if (!self.scheduledHandlers) self.scheduledHandlers = [NSMutableArray array];
+    if (!self.scheduledHandlers)
+        self.scheduledHandlers = [NSMutableArray array];
     [self.scheduledHandlers addObject:[handler copy]];
 }
+
 - (void)enqueue
 {
     if (self.submissionStarted || self.actualResult.status || self.actualEnqueueStatus)
@@ -1239,39 +1429,53 @@ static NSError *constantError(NSString *reason)
     OMHandle request = {self.handle};
     OMResult result = {};
     NSData *body = checked(OM_COMMAND_ENQUEUE, &request, sizeof(request), &result);
-    if (body.length != sizeof(uint64_t)) fail(@"Missing actual enqueue status");
+    if (body.length != sizeof(uint64_t))
+        fail(@"Missing actual enqueue status");
     uint64_t status = 0;
     memcpy(&status, body.bytes, sizeof(status));
-    if (status != MTLCommandBufferStatusEnqueued) fail(@"Actual GPU command was not enqueued");
+    if (status != MTLCommandBufferStatusEnqueued)
+        fail(@"Actual GPU command was not enqueued");
     self.actualEnqueueStatus = (MTLCommandBufferStatus)status;
 }
+
 - (void)trackBuffer:(OMBufferObject *)buffer
 {
-    if (!self.buffers) self.buffers = [NSMutableArray array];
-    if (![self.buffers containsObject:buffer]) [self.buffers addObject:buffer];
+    if (!self.buffers)
+        self.buffers = [NSMutableArray array];
+    if (![self.buffers containsObject:buffer])
+        [self.buffers addObject:buffer];
 }
+
 - (void)trackTexture:(OMTextureObject *)texture
 {
-    if (!self.textures) self.textures = [NSMutableArray array];
-    if (![self.textures containsObject:texture]) [self.textures addObject:texture];
+    if (!self.textures)
+        self.textures = [NSMutableArray array];
+    if (![self.textures containsObject:texture])
+        [self.textures addObject:texture];
 }
+
 - (void)trackSurfaceTarget:(OMTextureObject *)texture
 {
     [self trackTexture:texture];
     if (texture.surface) {
-        if (!self.surfaceTargets) self.surfaceTargets = [NSMutableArray array];
-        if (![self.surfaceTargets containsObject:texture]) [self.surfaceTargets addObject:texture];
+        if (!self.surfaceTargets)
+            self.surfaceTargets = [NSMutableArray array];
+        if (![self.surfaceTargets containsObject:texture])
+            [self.surfaceTargets addObject:texture];
     }
 }
+
 - (id<MTLRenderCommandEncoder>)renderCommandEncoderWithDescriptor:(MTLRenderPassDescriptor *)descriptor
 {
-    if (!descriptor) fail(@"Missing render pass descriptor");
+    if (!descriptor)
+        fail(@"Missing render pass descriptor");
     OMAttachmentRender extended = {};
     OMRender &request = extended.colors;
     request.command = self.handle;
     for (unsigned i = 0; i < 8; i++) {
         MTLRenderPassColorAttachmentDescriptor *a = descriptor.colorAttachments[i];
-        if (!a.texture) continue;
+        if (!a.texture)
+            continue;
         if (![(id)a.texture isKindOfClass:[OMTextureObject class]] || a.level || a.slice || a.depthPlane ||
             a.resolveTexture)
             fail(@"Unsupported or foreign render attachment");
@@ -1280,7 +1484,8 @@ static NSError *constantError(NSString *reason)
         request.colors[i].store = a.storeAction;
         OMTextureObject *texture = (OMTextureObject *)a.texture;
         [self trackSurfaceTarget:texture];
-        if (texture.surface) [texture uploadSurface];
+        if (texture.surface)
+            [texture uploadSurface];
         MTLClearColor color = a.clearColor;
         request.colors[i].clear[0] = color.red;
         request.colors[i].clear[1] = color.green;
@@ -1319,6 +1524,7 @@ static NSError *constantError(NSString *reason)
     object.command = self;
     return (id<MTLRenderCommandEncoder>)object;
 }
+
 - (id<MTLBlitCommandEncoder>)blitCommandEncoder
 {
     OMHandle request = {self.handle};
@@ -1329,25 +1535,32 @@ static NSError *constantError(NSString *reason)
     object.command = self;
     return (id<MTLBlitCommandEncoder>)object;
 }
+
 - (void)commit
 {
     if (self.useAsync) {
         [self commitAsync];
         return;
     }
-    if (self.actualResult.status) fail(@"Command already submitted");
-    for (OMBufferObject *buffer in self.buffers) [buffer upload];
-    for (OMTextureObject *texture in self.textures) [texture uploadSurface];
+    if (self.actualResult.status)
+        fail(@"Command already submitted");
+    for (OMBufferObject *buffer in self.buffers)
+        [buffer upload];
+    for (OMTextureObject *texture in self.textures)
+        [texture uploadSurface];
     OMHandle request = {self.handle};
     OMResult result = {};
     NSData *body = checked(OM_COMMIT, &request, sizeof(request), &result);
-    if (body.length != sizeof(OMCommandResult)) fail(@"Missing actual command result");
+    if (body.length != sizeof(OMCommandResult))
+        fail(@"Missing actual command result");
     OMCommandResult value = {};
     memcpy(&value, body.bytes, sizeof(value));
     if (value.status != MTLCommandBufferStatusCompleted || !value.start_ns || value.end_ns <= value.start_ns)
         fail(@"Actual GPU command did not complete");
-    for (OMTextureObject *texture in self.surfaceTargets) [texture downloadSurface];
-    for (OMBufferObject *buffer in self.buffers) [buffer download];
+    for (OMTextureObject *texture in self.surfaceTargets)
+        [texture downloadSurface];
+    for (OMBufferObject *buffer in self.buffers)
+        [buffer download];
     self.actualResult = value;
     self.resourcesVisible = YES;
     // Present the real original drawable only after actual GPU completion and
@@ -1358,7 +1571,8 @@ static NSError *constantError(NSString *reason)
     self.presentations = nil;
     NSException *presentationFailure = nil;
     @try {
-        for (id<MTLDrawable> drawable in presentations) [drawable present];
+        for (id<MTLDrawable> drawable in presentations)
+            [drawable present];
     } @catch (NSException *exception) {
         presentationFailure = exception;
     }
@@ -1382,22 +1596,28 @@ static NSError *constantError(NSString *reason)
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0), ^{
             self.callbackThread = pthread_self();
             @try {
-                for (MTLCommandBufferHandler handler in scheduled) handler((id<MTLCommandBuffer>)self);
-                for (MTLCommandBufferHandler handler in completed) handler((id<MTLCommandBuffer>)self);
+                for (MTLCommandBufferHandler handler in scheduled)
+                    handler((id<MTLCommandBuffer>)self);
+                for (MTLCommandBufferHandler handler in completed)
+                    handler((id<MTLCommandBuffer>)self);
             } @finally {
                 self.callbackThread = nullptr;
                 dispatch_group_leave(group);
             }
         });
-    if (presentationFailure) @throw presentationFailure;
+    if (presentationFailure)
+        @throw presentationFailure;
 }
+
 - (void)waitUntilScheduled
 {
     if (self.useAsync) {
-        if (!self.submissionStarted || !self.scheduledGroup) fail(@"Command has not actually been submitted");
+        if (!self.submissionStarted || !self.scheduledGroup)
+            fail(@"Command has not actually been submitted");
         if (dispatch_group_wait(self.scheduledGroup, dispatch_time(DISPATCH_TIME_NOW, 15 * NSEC_PER_SEC)))
             fail(@"Actual scheduling observation timed out");
-        if (self.asynchronousFailure) @throw self.asynchronousFailure;
+        if (self.asynchronousFailure)
+            @throw self.asynchronousFailure;
         if (self.actualScheduledStatus < MTLCommandBufferStatusScheduled)
             fail(@"Actual GPU scheduling has not been observed");
         return;
@@ -1405,6 +1625,7 @@ static NSError *constantError(NSString *reason)
     if (self.actualResult.status != MTLCommandBufferStatusCompleted)
         fail(@"Command has not actually been submitted and completed");
 }
+
 - (BOOL)commitAndWaitUntilSubmitted
 {
     // Original B16@0:8 ABI. Async success reports actual accepted submission,
@@ -1416,37 +1637,46 @@ static NSError *constantError(NSString *reason)
     [self waitUntilScheduled];
     return self.actualResult.status == MTLCommandBufferStatusCompleted;
 }
+
 - (void)waitUntilCompleted
 {
     if (self.useAsync) {
-        if (!self.submissionStarted || !self.callbackGroup) fail(@"Command has not actually been submitted");
+        if (!self.submissionStarted || !self.callbackGroup)
+            fail(@"Command has not actually been submitted");
         bool ownCallback = self.callbackThread && pthread_equal(self.callbackThread, pthread_self());
         if (!ownCallback &&
             dispatch_group_wait(self.callbackGroup, dispatch_time(DISPATCH_TIME_NOW, 15 * NSEC_PER_SEC)))
             fail(@"Actual asynchronous completion/visibility/callback wait timed out");
-        if (self.asynchronousFailure) @throw self.asynchronousFailure;
-        if (self.deliveryFailure) @throw self.deliveryFailure;
+        if (self.asynchronousFailure)
+            @throw self.asynchronousFailure;
+        if (self.deliveryFailure)
+            @throw self.deliveryFailure;
         if (!self.resourcesVisible || self.actualResult.status != MTLCommandBufferStatusCompleted)
             fail(@"Actual GPU resources are not completed and visible");
         return;
     }
-    if (self.actualResult.status != MTLCommandBufferStatusCompleted) fail(@"Command has not actually completed");
+    if (self.actualResult.status != MTLCommandBufferStatusCompleted)
+        fail(@"Command has not actually completed");
     if (self.callbackGroup && !(self.callbackThread && pthread_equal(self.callbackThread, pthread_self())) &&
         dispatch_group_wait(self.callbackGroup, dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC)))
         fail(@"Actual completion-handler delivery timed out");
 }
+
 - (MTLCommandBufferStatus)status
 {
-    if (self.asynchronousFailure) return MTLCommandBufferStatusError;
+    if (self.asynchronousFailure)
+        return MTLCommandBufferStatusError;
     OMCommandResult value = self.actualResult;
     if (self.useAsync && value.status == MTLCommandBufferStatusCompleted && !self.resourcesVisible) {
         if (dispatch_group_wait(self.visibilityGroup, dispatch_time(DISPATCH_TIME_NOW, 15 * NSEC_PER_SEC)))
             fail(@"Actual resource visibility timed out");
-        if (self.asynchronousFailure) return MTLCommandBufferStatusError;
+        if (self.asynchronousFailure)
+            return MTLCommandBufferStatusError;
         value = self.actualResult;
     }
     return value.status ? (MTLCommandBufferStatus)value.status : self.actualEnqueueStatus;
 }
+
 - (NSError *)error
 {
     if (self.asynchronousFailure)
@@ -1458,58 +1688,73 @@ static NSError *constantError(NSString *reason)
                                }];
     return nil;
 }
+
 - (CFTimeInterval)GPUStartTime
 {
     return self.actualResult.start_ns / 1e9;
 }
+
 - (CFTimeInterval)GPUEndTime
 {
     return self.actualResult.end_ns / 1e9;
 }
+
 @end
 @interface OMQueueObject : OMObject
 @end
 @implementation OMQueueObject
+
 - (NSUInteger)readPriority:(BOOL)background
 {
     OMQueuePriority request = {self.handle, (uint64_t)background, 0};
     OMResult result = {};
     NSData *body = checked(OM_QUEUE_PRIORITY_GET, &request, sizeof(request), &result);
-    if (body.length != sizeof(uint64_t)) fail(@"Missing actual queue priority");
+    if (body.length != sizeof(uint64_t))
+        fail(@"Missing actual queue priority");
     uint64_t value = 0;
     memcpy(&value, body.bytes, sizeof(value));
     return value;
 }
+
 - (BOOL)writePriority:(NSUInteger)priority background:(BOOL)background
 {
     // Exact original MTLIOAccelCommandQueue validation: 0..5, except 3 in foreground.
-    if (priority > 5 || (!background && priority == 3)) return NO;
+    if (priority > 5 || (!background && priority == 3))
+        return NO;
     OMQueuePriority request = {self.handle, (uint64_t)background, priority};
     OMResult result = {};
     NSData *body = call(OM_QUEUE_PRIORITY_SET, &request, sizeof(request), &result);
-    if (result.error) return NO;
-    if (body.length != sizeof(uint64_t)) fail(@"Missing actual queue priority-change result");
+    if (result.error)
+        return NO;
+    if (body.length != sizeof(uint64_t))
+        fail(@"Missing actual queue priority-change result");
     uint64_t value = 0;
     memcpy(&value, body.bytes, sizeof(value));
-    if (value > 1) fail(@"Invalid actual priority-change result");
+    if (value > 1)
+        fail(@"Invalid actual priority-change result");
     return value != 0;
 }
+
 - (NSUInteger)getGPUPriority
 {
     return [self readPriority:NO];
 }
+
 - (NSUInteger)getBackgroundGPUPriority
 {
     return [self readPriority:YES];
 }
+
 - (BOOL)setGPUPriority:(NSUInteger)priority
 {
     return [self writePriority:priority background:NO];
 }
+
 - (BOOL)setBackgroundGPUPriority:(NSUInteger)priority
 {
     return [self writePriority:priority background:YES];
 }
+
 - (id<MTLCommandBuffer>)commandBuffer
 {
     OMHandle request = {self.handle};
@@ -1521,36 +1766,44 @@ static NSError *constantError(NSString *reason)
     object.useAsync = asyncEnabled;
     return (id<MTLCommandBuffer>)object;
 }
+
 @end
 // This model contributes only own implementations to a dynamically allocated
 // real _MTLDevice subclass. No original method implementation is overwritten.
 @interface OMDeviceMethods : NSObject
 @end
 @implementation OMDeviceMethods
+
 - (NSString *)name
 {
     return deviceInfo[@"name"];
 }
+
 - (uint64_t)registryID
 {
     return [deviceInfo[@"registryID"] unsignedLongLongValue];
 }
+
 - (NSUInteger)maxBufferLength
 {
     return [deviceInfo[@"maxBufferLength"] unsignedIntegerValue];
 }
+
 - (BOOL)isLowPower
 {
     return [deviceInfo[@"lowPower"] boolValue];
 }
+
 - (BOOL)isRemovable
 {
     return [deviceInfo[@"removable"] boolValue];
 }
+
 - (BOOL)isHeadless
 {
     return [deviceInfo[@"headless"] boolValue];
 }
+
 // This partial offline device does not implement any complete GPU family or
 // feature set. The original base implementation needs Apple capability tables
 // which this independent device neither owns nor populates.
@@ -1559,27 +1812,34 @@ static NSError *constantError(NSString *reason)
     (void)family;
     return NO;
 }
+
 - (BOOL)supportsFeatureSet:(MTLFeatureSet)featureSet
 {
     (void)featureSet;
     return NO;
 }
+
 - (id<MTLEvent>)newEvent
 {
     OMResult result = {};
     call(OM_EVENT, nullptr, 0, &result);
-    if (result.error) return nil;
-    if (!result.handle) fail(@"Missing actual GPU event identity");
+    if (result.error)
+        return nil;
+    if (!result.handle)
+        fail(@"Missing actual GPU event identity");
     OMEventObject *object = [OMEventObject new];
     object.handle = result.handle;
     return (id<MTLEvent>)object;
 }
+
 - (id<MTLSharedEvent>)newSharedEvent
 {
     OMResult result = {};
     NSData *body = call(OM_SHARED_EVENT, nullptr, 0, &result);
-    if (result.error) return nil;
-    if (!result.handle) fail(@"Missing actual shared-event identity");
+    if (result.error)
+        return nil;
+    if (!result.handle)
+        fail(@"Missing actual shared-event identity");
     NSDictionary *info = sharedMetadata(body);
     OMSharedEventObject *object = [OMSharedEventObject new];
     object.handle = result.handle;
@@ -1589,22 +1849,28 @@ static NSError *constantError(NSString *reason)
         object, @selector(setLabel:), info[@"label"] == [NSNull null] ? nil : info[@"label"]);
     return object;
 }
+
 - (id<MTLSharedEvent>)newSharedEventWithHandle:(MTLSharedEventHandle *)handle
 {
     Class cls = NSClassFromString(@"MTLSharedEventHandle");
-    if (!handle || object_getClass(handle) != cls || class_getInstanceSize(cls) != 16) return nil;
+    if (!handle || object_getClass(handle) != cls || class_getInstanceSize(cls) != 16)
+        return nil;
     mach_port_t port = handle.eventPort;
-    if (!MACH_PORT_VALID(port)) return nil;
+    if (!MACH_PORT_VALID(port))
+        return nil;
     [transaction lock];
     @try {
-        if (!live || closing) return nil;
+        if (!live || closing)
+            return nil;
         uint64_t input = port, output = 0;
         unsigned count = 1;
         unsigned char bytes[4096];
         size_t size = sizeof(bytes);
         int status = ioMethod(connection, 3, &input, 1, nullptr, 0, &output, &count, bytes, &size);
-        if (status) return nil;
-        if (count != 1 || !output) fail(@"Missing actual imported shared event");
+        if (status)
+            return nil;
+        if (count != 1 || !output)
+            fail(@"Missing actual imported shared event");
         NSDictionary *info = sharedMetadata([NSData dataWithBytes:bytes length:size]);
         OMSharedEventObject *object = [OMSharedEventObject new];
         object.handle = output;
@@ -1616,16 +1882,20 @@ static NSError *constantError(NSString *reason)
         [transaction unlock];
     }
 }
+
 - (id<MTLFence>)newFence
 {
     OMResult result = {};
     call(OM_FENCE, nullptr, 0, &result);
-    if (result.error) return nil;
-    if (!result.handle) fail(@"Missing actual GPU fence identity");
+    if (result.error)
+        return nil;
+    if (!result.handle)
+        fail(@"Missing actual GPU fence identity");
     OMFenceObject *object = [OMFenceObject new];
     object.handle = result.handle;
     return (id<MTLFence>)object;
 }
+
 - (id<MTLCommandQueue>)newCommandQueue
 {
     OMResult result = {};
@@ -1634,26 +1904,33 @@ static NSError *constantError(NSString *reason)
     object.handle = result.handle;
     return (id<MTLCommandQueue>)object;
 }
+
 - (id<MTLBuffer>)newBufferWithLength:(NSUInteger)length options:(MTLResourceOptions)options
 {
-    if (!length || length > MIN((NSUInteger)OFFLINE_METAL_MAX_BUFFER, self.maxBufferLength) || options) return nil;
+    if (!length || length > MIN((NSUInteger)OFFLINE_METAL_MAX_BUFFER, self.maxBufferLength) || options)
+        return nil;
     OMBuffer request = {length, (uint64_t)options};
     OMResult result = {};
     call(OM_BUFFER, &request, sizeof(request), &result);
-    if (result.error) return nil;
+    if (result.error)
+        return nil;
     OMBufferObject *object = [OMBufferObject new];
     object.handle = result.handle;
     object.data = [NSMutableData dataWithLength:length];
     return (id<MTLBuffer>)object;
 }
+
 - (id<MTLBuffer>)newBufferWithBytes:(const void *)bytes length:(NSUInteger)length options:(MTLResourceOptions)options
 {
-    if (!bytes) return nil;
+    if (!bytes)
+        return nil;
     OMBufferObject *object = (OMBufferObject *)[self newBufferWithLength:length options:options];
-    if (!object) return nil;
+    if (!object)
+        return nil;
     memcpy(object.data.mutableBytes, bytes, length);
     return (id<MTLBuffer>)object;
 }
+
 - (id)newPipelineLibraryWithFilePath:(NSString *)path error:(NSError **)error
 {
     // This optional original directory contains Apple-family pipeline entries.
@@ -1671,6 +1948,7 @@ static NSError *constantError(NSString *reason)
     }
     return nil;
 }
+
 - (id<MTLLibrary>)newLibraryWithFile:(NSString *)path error:(NSError **)error
 {
     NSError *failure = nil;
@@ -1686,10 +1964,13 @@ static NSError *constantError(NSString *reason)
                                        }];
         return nil;
     }
-    dispatch_data_t data = dispatch_data_create(
-        bytes.bytes, bytes.length, dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0), ^{ (void)bytes.length; });
+    dispatch_data_t data =
+        dispatch_data_create(bytes.bytes, bytes.length, dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0), ^{
+            (void)bytes.length;
+        });
     return [(id<MTLDevice>)self newLibraryWithData:data error:error];
 }
+
 - (id<MTLLibrary>)newLibraryWithURL:(NSURL *)url error:(NSError **)error
 {
     if (!url.isFileURL) {
@@ -1702,6 +1983,7 @@ static NSError *constantError(NSString *reason)
     }
     return [(id<MTLDevice>)self newLibraryWithFile:url.path error:error];
 }
+
 - (id<MTLLibrary>)newDefaultLibraryWithBundle:(NSBundle *)bundle error:(NSError **)error
 {
     NSURL *url = [bundle URLForResource:@"default" withExtension:@"metallib"];
@@ -1715,6 +1997,7 @@ static NSError *constantError(NSString *reason)
     }
     return [(id<MTLDevice>)self newLibraryWithURL:url error:error];
 }
+
 - (id<MTLLibrary>)newLibraryWithData:(dispatch_data_t)data error:(NSError **)error
 {
     const void *bytes = nullptr;
@@ -1722,7 +2005,8 @@ static NSError *constantError(NSString *reason)
     dispatch_data_t mapped = dispatch_data_create_map(data, &bytes, &size);
     (void)mapped;
     if (!bytes || !size || size > 64 * 1024 * 1024) {
-        if (error) *error = [NSError errorWithDomain:@"org.blu-sharky.offline-metal" code:-2 userInfo:nil];
+        if (error)
+            *error = [NSError errorWithDomain:@"org.blu-sharky.offline-metal" code:-2 userInfo:nil];
         return nil;
     }
     OMLibrary request = {};
@@ -1730,20 +2014,25 @@ static NSError *constantError(NSString *reason)
     OMResult result = {};
     NSData *body = call(OM_LIBRARY, &request, sizeof(request), &result);
     if (result.error) {
-        if (error) *error = operationError(result, body);
+        if (error)
+            *error = operationError(result, body);
         return nil;
     }
     NSArray *names = [NSJSONSerialization JSONObjectWithData:body options:0 error:nil];
-    if (![names isKindOfClass:[NSArray class]]) fail(@"Missing actual library metadata");
+    if (![names isKindOfClass:[NSArray class]])
+        fail(@"Missing actual library metadata");
     OMLibraryObject *object = [OMLibraryObject new];
     object.handle = result.handle;
     object.functionNames = names;
-    if (error) *error = nil;
+    if (error)
+        *error = nil;
     return (id<MTLLibrary>)object;
 }
+
 - (id<MTLTexture>)newTextureWithDescriptor:(MTLTextureDescriptor *)d
 {
-    if (!d || d.hazardTrackingMode > MTLHazardTrackingModeTracked || !d.allowGPUOptimizedContents) return nil;
+    if (!d || d.hazardTrackingMode > MTLHazardTrackingModeTracked || !d.allowGPUOptimizedContents)
+        return nil;
     OMTexture request = {
         (uint64_t)d.textureType, (uint64_t)d.pixelFormat, d.width,       d.height,          d.depth,
         d.mipmapLevelCount,      d.sampleCount,           d.arrayLength, (uint64_t)d.usage, (uint64_t)d.storageMode,
@@ -1751,8 +2040,10 @@ static NSError *constantError(NSString *reason)
     OMHazardTexture extended = {request, (uint64_t)d.hazardTrackingMode};
     OMResult result = {};
     NSData *body = call(OM_TEXTURE_HAZARD, &extended, sizeof(extended), &result);
-    if (result.error) return nil;
-    if (body.length != sizeof(uint64_t)) fail(@"Missing actual texture hazard mode");
+    if (result.error)
+        return nil;
+    if (body.length != sizeof(uint64_t))
+        fail(@"Missing actual texture hazard mode");
     uint64_t actual = 0;
     memcpy(&actual, body.bytes, sizeof(actual));
     if (actual > MTLHazardTrackingModeTracked || (extended.hazard && actual != extended.hazard))
@@ -1763,11 +2054,14 @@ static NSError *constantError(NSString *reason)
     object.actualHazardMode = (MTLHazardTrackingMode)actual;
     return (id<MTLTexture>)object;
 }
+
 - (id<MTLDepthStencilState>)newDepthStencilStateWithDescriptor:(MTLDepthStencilDescriptor *)d
 {
-    if (!d) return nil;
+    if (!d)
+        return nil;
     auto face = [](MTLStencilDescriptor *s) -> OMStencilFace {
-        if (!s) return {};
+        if (!s)
+            return {};
         return {1,
                 (uint64_t)s.stencilCompareFunction,
                 (uint64_t)s.stencilFailureOperation,
@@ -1780,11 +2074,13 @@ static NSError *constantError(NSString *reason)
                               face(d.backFaceStencil)};
     OMResult result = {};
     call(OM_DEPTH_STENCIL_STATE, &request, sizeof(request), &result);
-    if (result.error) return nil;
+    if (result.error)
+        return nil;
     OMDepthStateObject *object = [OMDepthStateObject new];
     object.handle = result.handle;
     return (id<MTLDepthStencilState>)object;
 }
+
 - (id<MTLTexture>)newTextureWithDescriptor:(MTLTextureDescriptor *)d
                                  iosurface:(IOSurfaceRef)surface
                                      plane:(NSUInteger)plane
@@ -1804,11 +2100,13 @@ static NSError *constantError(NSString *reason)
         IOSurfaceGetAllocSize(surface) < IOSurfaceGetBytesPerRow(surface) * d.height)
         return nil;
     OMTextureObject *object = (OMTextureObject *)[self newTextureWithDescriptor:d];
-    if (!object) return nil;
+    if (!object)
+        return nil;
     object.surface = (IOSurfaceRef)CFRetain(surface);
     [object uploadSurface];
     return (id<MTLTexture>)object;
 }
+
 - (id<MTLRenderPipelineState>)newRenderPipelineStateWithDescriptor:(MTLRenderPipelineDescriptor *)d
                                                              error:(NSError **)error
 {
@@ -1821,7 +2119,8 @@ static NSError *constantError(NSString *reason)
     if (d.vertexDescriptor)
         for (unsigned i = 0; i < 31; i++) {
             MTLVertexAttributeDescriptor *a = d.vertexDescriptor.attributes[i];
-            if (a.format == MTLVertexFormatInvalid) continue;
+            if (a.format == MTLVertexFormatInvalid)
+                continue;
             vertexInputs = true;
             vertexPipeline.attributes[i] = {(uint64_t)a.format, a.offset, a.bufferIndex};
             if (a.bufferIndex < 31) {
@@ -1833,7 +2132,8 @@ static NSError *constantError(NSString *reason)
         ![(id)d.fragmentFunction isKindOfClass:[OMFunctionObject class]] ||
         (vertexInputs && !OMVertexInputsValid(vertexPipeline)) || !d.rasterizationEnabled || d.alphaToCoverageEnabled ||
         d.alphaToOneEnabled) {
-        if (error) *error = [NSError errorWithDomain:@"org.blu-sharky.offline-metal" code:-4 userInfo:nil];
+        if (error)
+            *error = [NSError errorWithDomain:@"org.blu-sharky.offline-metal" code:-4 userInfo:nil];
         return nil;
     }
     OMAttachmentPipeline attachments = {};
@@ -1871,45 +2171,57 @@ static NSError *constantError(NSString *reason)
                                      : sizeof(request),
                         &result);
     if (result.error) {
-        if (error) *error = operationError(result, body);
+        if (error)
+            *error = operationError(result, body);
         return nil;
     }
     OMPipelineObject *object = [OMPipelineObject new];
     object.handle = result.handle;
     return (id<MTLRenderPipelineState>)object;
 }
+
 @end
 extern "C" id<MTLDevice> offline_metal_frontend_open(void);
 extern "C" id<MTLDevice> offline_metal_frontend_open_service(const char *);
 extern "C" void offline_metal_frontend_finish(void);
+
 id<MTLDevice> offline_metal_frontend_open(void)
 {
     return offline_metal_frontend_open_service("NativeVirtioConsole");
 }
+
 id<MTLDevice> offline_metal_frontend_open_service(const char *serviceName)
 {
     if (!serviceName || (strcmp(serviceName, "NativeVirtioConsole") && strcmp(serviceName, "NativeOfflineGPU")))
         return nil;
-    if (live) return nil;
+    if (live)
+        return nil;
     void *iokit = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_NOW | RTLD_LOCAL);
-    if (!iokit) return nil;
+    if (!iokit)
+        return nil;
     auto matching = (void *(*)(const char *))dlsym(iokit, "IOServiceMatching");
     auto services = (int (*)(unsigned, void *, unsigned *))dlsym(iokit, "IOServiceGetMatchingServices");
     auto next = (unsigned (*)(unsigned))dlsym(iokit, "IOIteratorNext");
     auto release = (int (*)(unsigned))dlsym(iokit, "IOObjectRelease");
     auto open = (int (*)(unsigned, unsigned, unsigned, unsigned *))dlsym(iokit, "IOServiceOpen");
     ioMethod = (IOMethod)dlsym(iokit, "IOConnectCallMethod");
-    if (!matching || !services || !next || !release || !open || !ioMethod) return nil;
+    if (!matching || !services || !next || !release || !open || !ioMethod)
+        return nil;
     unsigned iterator = 0;
-    if (services(0, matching(serviceName), &iterator) || !iterator) return nil;
+    if (services(0, matching(serviceName), &iterator) || !iterator)
+        return nil;
     unsigned service = next(iterator);
     unsigned extra = next(iterator);
     int openStatus = -1;
-    if (service && !extra) openStatus = open(service, mach_task_self(), 0, &connection);
-    if (extra) release(extra);
-    if (service) release(service);
+    if (service && !extra)
+        openStatus = open(service, mach_task_self(), 0, &connection);
+    if (extra)
+        release(extra);
+    if (service)
+        release(service);
     release(iterator);
-    if (openStatus) return nil;
+    if (openStatus)
+        return nil;
     transaction = [NSRecursiveLock new];
     pendingLock = [NSLock new];
     pendingCommands = [NSMutableSet set];
@@ -1921,11 +2233,14 @@ id<MTLDevice> offline_metal_frontend_open_service(const char *serviceName)
     OMResult result = {};
     NSData *body = checked(OM_DEVICE, nullptr, 0, &result);
     deviceInfo = [NSJSONSerialization JSONObjectWithData:body options:0 error:nil];
-    if (![deviceInfo isKindOfClass:[NSDictionary class]]) fail(@"Actual device metadata missing");
+    if (![deviceInfo isKindOfClass:[NSDictionary class]])
+        fail(@"Actual device metadata missing");
     Class base = objc_getClass("_MTLDevice");
-    if (!base || class_getInstanceSize(base) != 536) fail(@"Wrong original Metal base ABI");
+    if (!base || class_getInstanceSize(base) != 536)
+        fail(@"Wrong original Metal base ABI");
     Class cls = objc_allocateClassPair(base, "NativeOfflineMetalDevice", 0);
-    if (!cls) fail(@"Own device class allocation failed");
+    if (!cls)
+        fail(@"Own device class allocation failed");
     unsigned count = 0;
     Method *methods = class_copyMethodList([OMDeviceMethods class], &count);
     for (unsigned i = 0; i < count; i++)
@@ -1937,15 +2252,19 @@ id<MTLDevice> offline_metal_frontend_open_service(const char *serviceName)
     remoteDevice = [(id)cls new];
     return remoteDevice;
 }
+
 extern "C" BOOL offline_metal_frontend_enable_async(void)
 {
-    if (!live) return NO;
+    if (!live)
+        return NO;
     [pendingLock lock];
     BOOL allowed = !closing && (asyncEnabled || !pendingCommands.count);
-    if (allowed) asyncEnabled = true;
+    if (allowed)
+        asyncEnabled = true;
     [pendingLock unlock];
     return allowed;
 }
+
 // Explicit diagnostic control: even a guessed real host export identifier may
 // not be submitted through the public raw endpoint. Do not consume a sequence
 // on a kernel framing refusal; the subsequent real operation proves usability.
@@ -1953,35 +2272,43 @@ extern "C" int offline_metal_frontend_raw_shared_import_control(uint64_t identif
 {
     [transaction lock];
     @try {
-        if (!live || closing) return -1;
+        if (!live || closing)
+            return -1;
+
         struct {
             OMWireHeader header;
             OMHandle input;
         } request = {{OM_WIRE_MAGIC, OFFLINE_METAL_VERSION, OM_SHARED_IMPORT, sizeof(OMHandle), sequence + 1},
                      {identifier}};
+
         int status = ioMethod(connection, 0, nullptr, 0, &request, sizeof(request), nullptr, nullptr, nullptr, nullptr);
-        if (!status) fail(@"Kernel unexpectedly accepted an unmediated shared identifier");
+        if (!status)
+            fail(@"Kernel unexpectedly accepted an unmediated shared identifier");
         return status;
     } @finally {
         [transaction unlock];
     }
 }
+
 extern "C" int offline_metal_frontend_stale_shared_port_control(mach_port_t port)
 {
     [transaction lock];
     @try {
-        if (!live || closing) return -1;
+        if (!live || closing)
+            return -1;
         uint64_t input = port, output = 0;
         unsigned count = 1;
         unsigned char bytes[4096];
         size_t size = sizeof(bytes);
         int status = ioMethod(connection, 3, &input, 1, nullptr, 0, &output, &count, bytes, &size);
-        if (!status) fail(@"Kernel unexpectedly accepted a stale shared-event port");
+        if (!status)
+            fail(@"Kernel unexpectedly accepted a stale shared-event port");
         return status;
     } @finally {
         [transaction unlock];
     }
 }
+
 void offline_metal_frontend_finish(void)
 {
     [pendingLock lock];
@@ -2005,15 +2332,18 @@ void offline_metal_frontend_finish(void)
         }
     [pendingLock unlock];
     NSException *failure = nil;
-    for (OMCommandObject *command in commands) @try {
+    for (OMCommandObject *command in commands)
+        @try {
             [command waitUntilCompleted];
         } @catch (NSException *exception) {
-            if (!failure) failure = exception;
+            if (!failure)
+                failure = exception;
         }
     for (OMSharedNotificationState *state in notifications)
         dispatch_group_wait(state.callbackGroup, DISPATCH_TIME_FOREVER);
     [pendingLock lock];
-    if (!failure) failure = notificationFailure;
+    if (!failure)
+        failure = notificationFailure;
     [pendingLock unlock];
     [transaction lock];
     @try {
@@ -2024,12 +2354,16 @@ void offline_metal_frontend_finish(void)
         [transaction unlock];
     }
     auto close = (int (*)(unsigned))dlsym(RTLD_DEFAULT, "IOServiceClose");
-    if (!close || close(connection)) fail(@"Actual userclient close failed");
-    if (failure) @throw failure;
+    if (!close || close(connection))
+        fail(@"Actual userclient close failed");
+    if (failure)
+        @throw failure;
 }
+
 extern "C" void offline_metal_frontend_notification_counts(uint64_t *values)
 {
-    if (!values) return;
+    if (!values)
+        return;
     [pendingLock lock];
     values[0] = notificationsRegistered;
     values[1] = notificationsDelivered;
@@ -2038,9 +2372,12 @@ extern "C" void offline_metal_frontend_notification_counts(uint64_t *values)
     values[4] = pendingNotifications.count;
     values[5] = values[6] = values[7] = 0;
     for (OMSharedNotificationState *state in pendingNotifications) {
-        if (state.phase == OMNotificationQueued) values[5]++;
-        if (state.phase == OMNotificationRunning) values[6]++;
-        if (state.phase == OMNotificationPending) values[7]++;
+        if (state.phase == OMNotificationQueued)
+            values[5]++;
+        if (state.phase == OMNotificationRunning)
+            values[6]++;
+        if (state.phase == OMNotificationPending)
+            values[7]++;
     }
     [pendingLock unlock];
 }

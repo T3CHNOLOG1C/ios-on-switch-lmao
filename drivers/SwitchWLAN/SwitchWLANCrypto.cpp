@@ -19,7 +19,8 @@ void compress(uint32_t h[5], const uint8_t block[64])
     for (int i = 0; i < 16; ++i)
         w[i] = (static_cast<uint32_t>(block[4 * i]) << 24) | (static_cast<uint32_t>(block[4 * i + 1]) << 16) |
                (static_cast<uint32_t>(block[4 * i + 2]) << 8) | block[4 * i + 3];
-    for (int i = 16; i < 80; ++i) w[i] = rotl(w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16], 1);
+    for (int i = 16; i < 80; ++i)
+        w[i] = rotl(w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16], 1);
     uint32_t a = h[0], b = h[1], c = h[2], d = h[3], e = h[4];
     for (int i = 0; i < 80; ++i) {
         uint32_t f, k;
@@ -54,16 +55,19 @@ constexpr uint8_t xtime(uint8_t x)
 {
     return static_cast<uint8_t>((x << 1) ^ ((x & 0x80) ? 0x1B : 0));
 }
+
 uint8_t gmul(uint8_t a, uint8_t b)
 {
     uint8_t p = 0;
     while (b) {
-        if (b & 1) p ^= a;
+        if (b & 1)
+            p ^= a;
         a = xtime(a);
         b >>= 1;
     }
     return p;
 }
+
 constexpr uint8_t rotl8(uint8_t x, unsigned n)
 {
     return static_cast<uint8_t>((x << n) | (x >> (8 - n)));
@@ -72,6 +76,7 @@ constexpr uint8_t rotl8(uint8_t x, unsigned n)
 // S-box and its inverse from the multiplicative inverse in GF(2^8) and the affine map (FIPS-197 5.1.1).
 struct Sboxes {
     uint8_t forward[256], inverse[256];
+
     constexpr Sboxes() : forward(), inverse()
     {
         uint8_t exp[256] = {}, log[256] = {};
@@ -90,19 +95,24 @@ struct Sboxes {
         }
     }
 };
+
 constexpr Sboxes kSbox;
 
 void addRoundKey(uint8_t b[16], const uint8_t k[16])
 {
-    for (int i = 0; i < 16; ++i) b[i] ^= k[i];
+    for (int i = 0; i < 16; ++i)
+        b[i] ^= k[i];
 }
+
 void shiftRows(uint8_t b[16], bool inverse)
 {
     uint8_t s[16];
     memcpy(s, b, 16);
     for (unsigned r = 1; r < 4; ++r)
-        for (unsigned c = 0; c < 4; ++c) b[r + 4 * c] = s[r + 4 * (inverse ? (c + 4 - r) % 4 : (c + r) % 4)];
+        for (unsigned c = 0; c < 4; ++c)
+            b[r + 4 * c] = s[r + 4 * (inverse ? (c + 4 - r) % 4 : (c + r) % 4)];
 }
+
 void mixColumns(uint8_t b[16], const uint8_t m[4])
 {
     for (unsigned c = 0; c < 4; ++c) {
@@ -110,7 +120,8 @@ void mixColumns(uint8_t b[16], const uint8_t m[4])
         memcpy(a, b + 4 * c, 4);
         for (unsigned r = 0; r < 4; ++r) {
             uint8_t acc = 0;
-            for (unsigned k = 0; k < 4; ++k) acc ^= gmul(m[(k + 4 - r) % 4], a[k]);
+            for (unsigned k = 0; k < 4; ++k)
+                acc ^= gmul(m[(k + 4 - r) % 4], a[k]);
             b[4 * c + r] = acc;
         }
     }
@@ -147,12 +158,15 @@ void Sha1::finish(uint8_t out[20])
     const uint64_t bits = length * 8;
     static const uint8_t pad = 0x80, zero = 0;
     update(&pad, 1);
-    while (used != 56) update(&zero, 1);
+    while (used != 56)
+        update(&zero, 1);
     uint8_t be[8];
-    for (int i = 0; i < 8; ++i) be[i] = static_cast<uint8_t>(bits >> (56 - 8 * i));
+    for (int i = 0; i < 8; ++i)
+        be[i] = static_cast<uint8_t>(bits >> (56 - 8 * i));
     update(be, 8);
     for (int i = 0; i < 5; ++i)
-        for (int j = 0; j < 4; ++j) out[4 * i + j] = static_cast<uint8_t>(h[i] >> (24 - 8 * j));
+        for (int j = 0; j < 4; ++j)
+            out[4 * i + j] = static_cast<uint8_t>(h[i] >> (24 - 8 * j));
 }
 
 void Hmac::init(const uint8_t *key, size_t keyLength)
@@ -167,10 +181,12 @@ void Hmac::init(const uint8_t *key, size_t keyLength)
         memcpy(k, key, keyLength);
     }
     uint8_t pad[64];
-    for (int i = 0; i < 64; ++i) pad[i] = k[i] ^ 0x36;
+    for (int i = 0; i < 64; ++i)
+        pad[i] = k[i] ^ 0x36;
     inner.init();
     inner.update(pad, 64);
-    for (int i = 0; i < 64; ++i) pad[i] = k[i] ^ 0x5C;
+    for (int i = 0; i < 64; ++i)
+        pad[i] = k[i] ^ 0x5C;
     outer.init();
     outer.update(pad, 64);
     memset(k, 0, sizeof(k));
@@ -180,7 +196,8 @@ void Hmac::init(const uint8_t *key, size_t keyLength)
 void Hmac::mac(const uint8_t *const *parts, const size_t *lengths, size_t count, uint8_t out[20]) const
 {
     Sha1 i = inner, o = outer;
-    for (size_t k = 0; k < count; ++k) i.update(parts[k], lengths[k]);
+    for (size_t k = 0; k < count; ++k)
+        i.update(parts[k], lengths[k]);
     uint8_t inside[20];
     i.finish(inside);
     o.update(inside, sizeof(inside));
@@ -211,7 +228,8 @@ void passphrasePmk(const uint8_t *passphrase, size_t passphraseLength, const uin
             const uint8_t *next[1] = {u};
             const size_t nextLength[1] = {sizeof(u)};
             prfKey.mac(next, nextLength, 1, u);
-            for (int j = 0; j < 20; ++j) t[j] ^= u[j];
+            for (int j = 0; j < 20; ++j)
+                t[j] ^= u[j];
         }
         memcpy(pmk + 20 * (block - 1), t, block == 1 ? 20 : 12);
     }
@@ -219,16 +237,21 @@ void passphrasePmk(const uint8_t *passphrase, size_t passphraseLength, const uin
 
 bool pmkFromHex(const uint8_t *text, size_t length, uint8_t pmk[32])
 {
-    if (length != 64) return false;
+    if (length != 64)
+        return false;
     auto digit = [](uint8_t c) -> int {
-        if (c >= '0' && c <= '9') return c - '0';
-        if (c >= 'a' && c <= 'f') return c - 'a' + 10;
-        if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+        if (c >= '0' && c <= '9')
+            return c - '0';
+        if (c >= 'a' && c <= 'f')
+            return c - 'a' + 10;
+        if (c >= 'A' && c <= 'F')
+            return c - 'A' + 10;
         return -1;
     };
     for (int i = 0; i < 32; ++i) {
         const int hi = digit(text[2 * i]), lo = digit(text[2 * i + 1]);
-        if (hi < 0 || lo < 0) return false;
+        if (hi < 0 || lo < 0)
+            return false;
         pmk[i] = static_cast<uint8_t>(hi * 16 + lo);
     }
     return true;
@@ -253,7 +276,8 @@ void prf(const uint8_t *key, size_t keyLength, const char *label, const uint8_t 
 bool same(const uint8_t *a, const uint8_t *b, size_t n)
 {
     uint8_t d = 0;
-    for (size_t i = 0; i < n; ++i) d |= a[i] ^ b[i];
+    for (size_t i = 0; i < n; ++i)
+        d |= a[i] ^ b[i];
     return d == 0;
 }
 
@@ -271,9 +295,11 @@ void Aes128::init(const uint8_t key[16])
             memcpy(t, r, 4);
             rcon = xtime(rcon);
         }
-        for (int j = 0; j < 4; ++j) w[i][j] = w[i - 4][j] ^ t[j];
+        for (int j = 0; j < 4; ++j)
+            w[i][j] = w[i - 4][j] ^ t[j];
     }
-    for (int r = 0; r < 11; ++r) memcpy(roundKeys[r], w[4 * r], 16);
+    for (int r = 0; r < 11; ++r)
+        memcpy(roundKeys[r], w[4 * r], 16);
 }
 
 void Aes128::encrypt(uint8_t b[16]) const
@@ -281,9 +307,11 @@ void Aes128::encrypt(uint8_t b[16]) const
     static const uint8_t mix[4] = {2, 3, 1, 1};
     addRoundKey(b, roundKeys[0]);
     for (int round = 1; round <= 10; ++round) {
-        for (int i = 0; i < 16; ++i) b[i] = kSbox.forward[b[i]];
+        for (int i = 0; i < 16; ++i)
+            b[i] = kSbox.forward[b[i]];
         shiftRows(b, false);
-        if (round != 10) mixColumns(b, mix);
+        if (round != 10)
+            mixColumns(b, mix);
         addRoundKey(b, roundKeys[round]);
     }
 }
@@ -294,15 +322,18 @@ void Aes128::decrypt(uint8_t b[16]) const
     addRoundKey(b, roundKeys[10]);
     for (int round = 9; round >= 0; --round) {
         shiftRows(b, true);
-        for (int i = 0; i < 16; ++i) b[i] = kSbox.inverse[b[i]];
+        for (int i = 0; i < 16; ++i)
+            b[i] = kSbox.inverse[b[i]];
         addRoundKey(b, roundKeys[round]);
-        if (round) mixColumns(b, mix);
+        if (round)
+            mixColumns(b, mix);
     }
 }
 
 bool keyUnwrap(const uint8_t kek[16], const uint8_t *wrapped, size_t wrappedLength, uint8_t *out)
 {
-    if (wrappedLength % 8 || wrappedLength < 24) return false;
+    if (wrappedLength % 8 || wrappedLength < 24)
+        return false;
     const size_t n = wrappedLength / 8 - 1;
     Aes128 aes;
     aes.init(kek);
@@ -313,7 +344,8 @@ bool keyUnwrap(const uint8_t kek[16], const uint8_t *wrapped, size_t wrappedLeng
         for (size_t i = n; i-- > 0;) {
             const uint64_t t = static_cast<uint64_t>(n) * static_cast<uint64_t>(j) + i + 1;
             uint8_t b[16];
-            for (int k = 0; k < 8; ++k) b[k] = a[k] ^ static_cast<uint8_t>(t >> (56 - 8 * k));
+            for (int k = 0; k < 8; ++k)
+                b[k] = a[k] ^ static_cast<uint8_t>(t >> (56 - 8 * k));
             memcpy(b + 8, out + 8 * i, 8);
             aes.decrypt(b);
             memcpy(a, b, 8);

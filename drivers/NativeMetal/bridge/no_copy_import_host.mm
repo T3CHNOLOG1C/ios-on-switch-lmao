@@ -19,6 +19,7 @@
 #include "../NativeBridgeMetalFrontend.h"
 
 constexpr unsigned workers = 16;
+
 struct State {
     std::array<std::atomic<unsigned>, workers> released{};
     std::atomic<unsigned> errors{0};
@@ -41,15 +42,18 @@ static bool creation(id<MTLDevice> device, bool mixed, uint64_t (*imports)(), vo
                 (id)kIOSurfaceBytesPerRow : @256,
                 (id)kIOSurfacePixelFormat : @((uint32_t)0x52474241)
             });
-            if (!surface) return false;
+            if (!surface)
+                return false;
             mapping = IOSurfaceGetBaseAddress(surface);
             bytes = IOSurfaceGetAllocSize(surface);
         } else {
             bytes = (size_t)getpagesize();
             mapping = mmap(nullptr, bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
-            if (mapping == MAP_FAILED) return false;
+            if (mapping == MAP_FAILED)
+                return false;
         }
-        if (!mapping || bytes < 4096) return false;
+        if (!mapping || bytes < 4096)
+            return false;
         memset(mapping, 0xcc, bytes);
         auto buffers = [NSMutableArray array], textures = [NSMutableArray array];
         std::mutex startLock;
@@ -65,7 +69,9 @@ static bool creation(id<MTLDevice> device, bool mixed, uint64_t (*imports)(), vo
                     std::unique_lock<std::mutex> lock(startLock);
                     ++waiting;
                     ready.notify_all();
-                    ready.wait(lock, [&] { return start; });
+                    ready.wait(lock, [&] {
+                        return start;
+                    });
                 }
                 @autoreleasepool {
                     if (mixed && (i & 1)) {
@@ -86,11 +92,12 @@ static bool creation(id<MTLDevice> device, bool mixed, uint64_t (*imports)(), vo
                     } else {
                         auto owner = state;
                         const unsigned ordinal = i;
-                        id<MTLBuffer> buffer =
-                            [device newBufferWithBytesNoCopy:mapping
-                                                      length:bytes
-                                                     options:MTLResourceStorageModeShared
-                                                 deallocator:^(void *, NSUInteger) { owner->released[ordinal]++; }];
+                        id<MTLBuffer> buffer = [device newBufferWithBytesNoCopy:mapping
+                                                                         length:bytes
+                                                                        options:MTLResourceStorageModeShared
+                                                                    deallocator:^(void *, NSUInteger) {
+                                                                        owner->released[ordinal]++;
+                                                                    }];
                         if (!buffer) {
                             state->errors++;
                             return;
@@ -103,18 +110,23 @@ static bool creation(id<MTLDevice> device, bool mixed, uint64_t (*imports)(), vo
             });
         {
             std::unique_lock<std::mutex> lock(startLock);
-            ready.wait(lock, [&] { return waiting == workers; });
+            ready.wait(lock, [&] {
+                return waiting == workers;
+            });
             start = true;
             ready.notify_all();
         }
-        for (auto &thread : threads) thread.join();
+        for (auto &thread : threads)
+            thread.join();
         allocated = imports() - before;
         const unsigned expected = mixed ? workers / 2 : workers;
-        if (state->errors || buffers.count != expected || textures.count != (mixed ? workers / 2 : 0)) return false;
+        if (state->errors || buffers.count != expected || textures.count != (mixed ? workers / 2 : 0))
+            return false;
         @autoreleasepool {
             // The API still returns distinct buffer objects and independent
             // callbacks; only the driver's import is shared.
-            if ([NSSet setWithArray:buffers].count != expected) return false;
+            if ([NSSet setWithArray:buffers].count != expected)
+                return false;
         }
         id<MTLCommandQueue> queue = [device newCommandQueue];
         id<MTLCommandBuffer> write = [queue commandBuffer];
@@ -128,7 +140,8 @@ static bool creation(id<MTLDevice> device, bool mixed, uint64_t (*imports)(), vo
         id<MTLBuffer> output = [device newBufferWithLength:workers * 4096 options:MTLResourceStorageModeShared];
         id<MTLCommandBuffer> read = [queue commandBuffer];
         id<MTLBlitCommandEncoder> copy = [read blitCommandEncoder];
-        if (!queue || !write || !fill || !output || !read || !copy) return false;
+        if (!queue || !write || !fill || !output || !read || !copy)
+            return false;
         NSUInteger at = 0;
         for (id<MTLBuffer> buffer in buffers) {
             [copy copyFromBuffer:buffer sourceOffset:0 toBuffer:output destinationOffset:at size:4096];
@@ -161,8 +174,10 @@ static bool creation(id<MTLDevice> device, bool mixed, uint64_t (*imports)(), vo
     for (unsigned attempt = 0; attempt < 300; ++attempt) {
         owners = true;
         for (unsigned i = 0; i < workers; ++i)
-            if (state->released[i].load() != (mixed && (i & 1) ? 0u : 1u)) owners = false;
-        if (owners) break;
+            if (state->released[i].load() != (mixed && (i & 1) ? 0u : 1u))
+                owners = false;
+        if (owners)
+            break;
         usleep(1000);
     }
     if (surface)
@@ -179,7 +194,8 @@ static bool reentry(id<MTLDevice> device)
 {
     const size_t page = (size_t)getpagesize();
     void *mapping = mmap(nullptr, page * 2, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
-    if (mapping == MAP_FAILED) return false;
+    if (mapping == MAP_FAILED)
+        return false;
     auto finished = dispatch_semaphore_create(0);
     auto state = std::make_shared<State>();
     @autoreleasepool {
@@ -191,39 +207,48 @@ static bool reentry(id<MTLDevice> device)
                              state->released[0]++;
                              dispatch_async(dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0), ^{
                                  @autoreleasepool {
-                                     id<MTLBuffer> nested = [device
-                                         newBufferWithBytesNoCopy:(char *)mapping + page
-                                                           length:page
-                                                          options:MTLResourceStorageModeShared
-                                                      deallocator:^(void *, NSUInteger) { state->released[1]++; }];
-                                     if (!nested) state->errors++;
+                                     id<MTLBuffer> nested =
+                                         [device newBufferWithBytesNoCopy:(char *)mapping + page
+                                                                   length:page
+                                                                  options:MTLResourceStorageModeShared
+                                                              deallocator:^(void *, NSUInteger) {
+                                                                  state->released[1]++;
+                                                              }];
+                                     if (!nested)
+                                         state->errors++;
                                  }
                                  dispatch_semaphore_signal(finished);
                              });
                              if (dispatch_semaphore_wait(finished, dispatch_time(DISPATCH_TIME_NOW, 3 * NSEC_PER_SEC)))
                                  state->errors++;
                          }];
-        if (!outer) return false;
+        if (!outer)
+            return false;
     }
     const bool ok = !state->errors && state->released[0] == 1 && state->released[1] == 1;
     // On a timeout keep the test-owned mapping alive until process exit;
     // never turn a lifetime failure into a submitted dangling pointer.
-    if (ok) munmap(mapping, page * 2);
+    if (ok)
+        munmap(mapping, page * 2);
     std::printf("deallocator cross-thread reentry=%s\n", ok ? "pass" : "FAIL");
     return ok;
 }
 
 int main(int argc, char **argv)
 {
-    if (argc != 4) return 2;
+    if (argc != 4)
+        return 2;
     @autoreleasepool {
         id<MTLDevice> device = native_bridge_metal_open(argv[1], argv[2], 0x6e6d62, nullptr);
-        if (!device) return 2;
+        if (!device)
+            return 2;
         void *loader = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
-        if (!loader) return 2;
+        if (!loader)
+            return 2;
         auto imports = (uint64_t (*)())dlsym(loader, "nmb_test_vk_host_import_count");
         auto delay = (void (*)(unsigned))dlsym(loader, "nmb_test_vk_host_import_delay");
-        if (!imports || !delay) return 2;
+        if (!imports || !delay)
+            return 2;
         bool ok = false;
         if (!strcmp(argv[3], "raw"))
             ok = creation(device, false, imports, delay);
@@ -231,7 +256,8 @@ int main(int argc, char **argv)
             ok = creation(device, true, imports, delay);
         else if (!strcmp(argv[3], "reentry"))
             ok = reentry(device);
-        if (!ok) return 1;
+        if (!ok)
+            return 1;
         std::puts("PASS: native no-copy construction coalesces real imports while retaining independent objects, GPU "
                   "bytes and callbacks");
     }

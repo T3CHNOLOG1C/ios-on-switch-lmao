@@ -29,7 +29,8 @@ static int check(const char *what, const uint8_t *got, const uint8_t *want, size
     for (size_t i = 0; i < n; i++)
         if (got[i] != want[i]) {
             bad++;
-            if (first == n) first = i;
+            if (first == n)
+                first = i;
         }
     if (bad && getenv("BLIT_DEBUG"))
         for (size_t i = first; i < n && i < first + 16; i++)
@@ -72,17 +73,20 @@ int main(int argc, char **argv)
             d.usage = MTLTextureUsageShaderRead | MTLTextureUsageRenderTarget;
             return [dev newTextureWithDescriptor:d];
         };
+
         struct Case {
             MTLPixelFormat f;
             unsigned bpp;
         };
+
         for (Case c :
              {Case{MTLPixelFormatBGRA8Unorm, 4}, Case{MTLPixelFormatRGBA16Float, 8}, Case{MTLPixelFormatR8Unorm, 1}}) {
             // texture to texture: a region to an offset
             const unsigned sw = 100, sh = 60, dw = 128, dh = 64;
             id<MTLTexture> s = texture(c.f, sw, sh), d = texture(c.f, dw, dh);
             std::vector<uint8_t> src(sw * sh * c.bpp), dst(dw * dh * c.bpp, 0), want;
-            for (size_t i = 0; i < src.size(); i++) src[i] = pattern(unsigned(i));
+            for (size_t i = 0; i < src.size(); i++)
+                src[i] = pattern(unsigned(i));
             [s replaceRegion:MTLRegionMake2D(0, 0, sw, sh) mipmapLevel:0 withBytes:src.data() bytesPerRow:sw * c.bpp];
             [d replaceRegion:MTLRegionMake2D(0, 0, dw, dh) mipmapLevel:0 withBytes:dst.data() bytesPerRow:dw * c.bpp];
             want = dst;
@@ -90,13 +94,15 @@ int main(int argc, char **argv)
                 memcpy(&want[((7 + y) * dw + 3) * c.bpp], &src[((5 + y) * sw + 10) * c.bpp], 40 * c.bpp);
             // buffer to texture (rows of 512 bytes) and texture to buffer (rows of 256)
             id<MTLBuffer> up = [dev newBufferWithLength:512 * 20 options:MTLResourceStorageModeShared];
-            for (unsigned i = 0; i < 512 * 20; i++) ((uint8_t *)up.contents)[i] = pattern(i + 999);
+            for (unsigned i = 0; i < 512 * 20; i++)
+                ((uint8_t *)up.contents)[i] = pattern(i + 999);
             for (unsigned y = 0; y < 20; y++)
                 memcpy(&want[((40 + y) * dw + 70) * c.bpp], (uint8_t *)up.contents + y * 512, 50 * c.bpp);
             id<MTLBuffer> down = [dev newBufferWithLength:256 * 10 options:MTLResourceStorageModeShared];
             memset(down.contents, 0xee, 256 * 10);
             std::vector<uint8_t> wantDown(256 * 10, 0xee);
-            for (unsigned y = 0; y < 10; y++) memcpy(&wantDown[y * 256], &src[((3 + y) * sw + 2) * c.bpp], 30 * c.bpp);
+            for (unsigned y = 0; y < 10; y++)
+                memcpy(&wantDown[y * 256], &src[((3 + y) * sw + 2) * c.bpp], 30 * c.bpp);
 
             id<MTLCommandBuffer> cb = [q commandBuffer];
             id<MTLBlitCommandEncoder> b = [cb blitCommandEncoder];
@@ -143,7 +149,8 @@ int main(int argc, char **argv)
             const unsigned n = 300000;
             id<MTLBuffer> a = [dev newBufferWithLength:n + 64 options:MTLResourceStorageModeShared];
             id<MTLBuffer> z = [dev newBufferWithLength:n + 64 options:MTLResourceStorageModeShared];
-            for (unsigned i = 0; i < n + 64; i++) ((uint8_t *)a.contents)[i] = pattern(i + 7);
+            for (unsigned i = 0; i < n + 64; i++)
+                ((uint8_t *)a.contents)[i] = pattern(i + 7);
             memset(z.contents, 0, n + 64);
             std::vector<uint8_t> want(n + 64, 0);
             memcpy(&want[64], (uint8_t *)a.contents + 16, n - 48);

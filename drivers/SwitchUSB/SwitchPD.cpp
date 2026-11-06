@@ -59,6 +59,7 @@ enum : uint8_t {
     FW_TYPE = 0x4b,
     FW_REVISION = 0x4c,
 };
+
 enum : uint16_t {
     CONFIG1_SPDSRC_SHIFT = 14,
     CONFIG1_SPDSRC_MASK = 3u << 14,
@@ -139,7 +140,8 @@ void formatPdos(char *out, size_t size, const uint32_t *pdos, unsigned count, un
                           ? snprintf(out + used, size - used, "%saugmented", i ? ", " : "")
                           : snprintf(out + used, size - used, "%s%s%s%s V %s A", i ? ", " : "",
                                      i + 1 == chosen ? "*" : "", kTypes[charge::pdoType(pdos[i])], volts, amps);
-        if (n < 0) break;
+        if (n < 0)
+            break;
         used += (size_t)n < size - used ? (size_t)n : size - used - 1;
     }
 }
@@ -148,9 +150,12 @@ void formatPdos(char *out, size_t size, const uint32_t *pdos, unsigned count, un
 const char *pinText(unsigned gpio)
 {
     const int config = tegra_gpio_config(gpio);
-    if (config < 0) return "?";
-    if (!(config & 1)) return "sfio";
-    if (config & 2) return (config & 4) ? "out 1" : "out 0";
+    if (config < 0)
+        return "?";
+    if (!(config & 1))
+        return "sfio";
+    if (config & 2)
+        return (config & 4) ? "out 1" : "out 0";
     return (config & 8) ? "in 1" : "in 0";
 }
 }  // namespace
@@ -198,12 +203,17 @@ class SwitchPD : public IOService {
     static void negoFired(OSObject *owner, IOTimerEventSource *);
 
 public:
-    IOWorkLoop *getWorkLoop() const override { return loop; }
+    IOWorkLoop *getWorkLoop() const override
+    {
+        return loop;
+    }
+
     bool begin(uint16_t &type, uint16_t &revision, uint16_t &config, bool &turnedOff);
     IOReturn addListener(Listener listener);
     void setAllowSource(bool allow);
     void describe(char *buffer, size_t size);
 };
+
 OSDefineMetaClassAndStructors(SwitchPD, IOService);
 
 namespace {
@@ -214,10 +224,13 @@ IOLock *gPDLock;
 IOLock *pdLock()
 {
     IOLock *lock = __atomic_load_n(&gPDLock, __ATOMIC_ACQUIRE);
-    if (lock) return lock;
+    if (lock)
+        return lock;
     IOLock *fresh = IOLockAlloc(), *none = nullptr;
-    if (!fresh) return nullptr;
-    if (__atomic_compare_exchange_n(&gPDLock, &none, fresh, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) return fresh;
+    if (!fresh)
+        return nullptr;
+    if (__atomic_compare_exchange_n(&gPDLock, &none, fresh, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
+        return fresh;
     IOLockFree(fresh);
     return none;
 }
@@ -229,8 +242,10 @@ IOLock *pdLock()
 bool SwitchPD::begin(uint16_t &type, uint16_t &revision, uint16_t &config, bool &turnedOff)
 {
     int err = tegra_i2c_init(kBus);
-    if (!err) err = read16(FW_TYPE, type);
-    if (!err) err = read16(FW_REVISION, revision);
+    if (!err)
+        err = read16(FW_TYPE, type);
+    if (!err)
+        err = read16(FW_REVISION, revision);
     if (err || revision <= 0x644) {  // bm92t_probe: older firmware is not supported
         IOLog("SwitchPD: BM92T36 not usable (I2C %d, firmware type %#x revision %#x)\n", err, type, revision);
         return false;
@@ -258,7 +273,8 @@ bool SwitchPD::begin(uint16_t &type, uint16_t &revision, uint16_t &config, bool 
             auto *self = static_cast<SwitchPD *>(owner);
             uint16_t alertBits = 0, status1 = 0, status2 = 0;
             (void)read16(ALERT_STATUS, alertBits);  // releases a latched ALERT; its event is the state read next
-            if (self->readStatus(status1, status2)) self->handle(0, status1, status2);
+            if (self->readStatus(status1, status2))
+                self->handle(0, status1, status2);
             return kIOReturnSuccess;
         },
         this);
@@ -269,8 +285,10 @@ bool SwitchPD::begin(uint16_t &type, uint16_t &revision, uint16_t &config, bool 
 bool SwitchPD::readStatus(uint16_t &status1, uint16_t &status2)
 {
     int err = read16(STATUS1, status1);
-    if (!err) err = read16(STATUS2, status2);
-    if (err && !reportedReadFailure) IOLog("SwitchPD: status read failed (I2C %d)\n", err);
+    if (!err)
+        err = read16(STATUS2, status2);
+    if (err && !reportedReadFailure)
+        IOLog("SwitchPD: status read failed (I2C %d)\n", err);
     reportedReadFailure = err != 0;
     return !err;
 }
@@ -295,18 +313,29 @@ void SwitchPD::notify()
     state.role = phase == SWITCH_PD_EMPTY    ? SWITCH_PD_ROLE_NONE
                  : phase == SWITCH_PD_SOURCE ? SWITCH_PD_ROLE_SOURCE
                                              : SWITCH_PD_ROLE_SINK;
-    for (unsigned i = 0; i < listenerCount; ++i) listeners[i].function(listeners[i].context, &state);
+    for (unsigned i = 0; i < listenerCount; ++i)
+        listeners[i].function(listeners[i].context, &state);
 }
 
 void SwitchPD::apply(const switch_pd_step &step)
 {
-    if (step.cancel_window) window->cancelTimeout();
+    if (step.cancel_window)
+        window->cancelTimeout();
     switch (step.act) {
-    case SWITCH_PD_NONE: break;
-    case SWITCH_PD_SAW_DETACH: sawDetach = true; break;
-    case SWITCH_PD_ENTER: enter(step.next, step.why); break;
-    case SWITCH_PD_START: startSourcing(); break;
-    case SWITCH_PD_END: endSourcing(step.next, step.why); break;
+    case SWITCH_PD_NONE:
+        break;
+    case SWITCH_PD_SAW_DETACH:
+        sawDetach = true;
+        break;
+    case SWITCH_PD_ENTER:
+        enter(step.next, step.why);
+        break;
+    case SWITCH_PD_START:
+        startSourcing();
+        break;
+    case SWITCH_PD_END:
+        endSourcing(step.next, step.why);
+        break;
     }
 }
 
@@ -317,22 +346,27 @@ void SwitchPD::enter(switch_pd_phase next, const char *why)
     phase = next;
     sawDetach = false;
     const bool switches = switch_pd_switches_on(next, allowSource), rails = switch_pd_rails_on(next);
-    if (!switches) setSwitches(false);
+    if (!switches)
+        setSwitches(false);
     const bool railsDone = setRails(rails);
     IOLog("SwitchPD: %s (alert %#x status1 %#x status2 %#x)\n", why, state.alert, state.status1, state.status2);
     if (rails && !railsDone) {
         enter(SWITCH_PD_HELD, "not sourcing: over-current protection or the source rails failed");
         return;
     }
-    if (switches) setSwitches(true);
-    if (next == SWITCH_PD_CLASSIFY) window->setTimeoutMS(kClassifyMS);
-    if (next == SWITCH_PD_REATTACH) window->setTimeoutMS(kReattachMS);
+    if (switches)
+        setSwitches(true);
+    if (next == SWITCH_PD_CLASSIFY)
+        window->setTimeoutMS(kClassifyMS);
+    if (next == SWITCH_PD_REATTACH)
+        window->setTimeoutMS(kReattachMS);
 }
 
 // CONFIG1 SPDSRC: both source switches on (SPDSRC12_ON, bm92t_set_source_mode) or off (SPDSRC12_OFF).
 void SwitchPD::setSwitches(bool on)
 {
-    if (on == switchesOn) return;
+    if (on == switchesOn)
+        return;
     uint16_t config = 0;
     int err = read16(CONFIG1, config);
     if (!err) {
@@ -352,15 +386,18 @@ void SwitchPD::setSwitches(bool on)
 // VCONN, the ramp. Never half on: a failure turns both GPIOs off again. True when the rails are as asked.
 bool SwitchPD::setRails(bool on)
 {
-    if (on == railsOn) return true;
+    if (on == railsOn)
+        return true;
     int err = 0;
     if (on) {
         uint16_t vendor = 0;
         err = read16(VENDOR_CONFIG, vendor);
         if (!err && (vendor & VENDOR_CONFIG_OCP_DISABLE))
             err = write16(VENDOR_CONFIG, vendor & ~VENDOR_CONFIG_OCP_DISABLE);
-        if (!err) err = tegra_gpio_output(kSourceRailGpio, 1);
-        if (!err) err = tegra_gpio_output(kVconnGpio, 1);
+        if (!err)
+            err = tegra_gpio_output(kSourceRailGpio, 1);
+        if (!err)
+            err = tegra_gpio_output(kVconnGpio, 1);
         if (!err) {
             IOSleep(kRailRampMS);
         } else {
@@ -370,10 +407,12 @@ bool SwitchPD::setRails(bool on)
         railsOn = !err;
     } else {
         err = tegra_gpio_output(kVconnGpio, 0);
-        if (const int rail = tegra_gpio_output(kSourceRailGpio, 0)) err = rail;
+        if (const int rail = tegra_gpio_output(kSourceRailGpio, 0))
+            err = rail;
         railsOn = err != 0;
     }
-    if (err) IOLog("SwitchPD: source rails %s failed (%d)\n", on ? "on" : "off", err);
+    if (err)
+        IOLog("SwitchPD: source rails %s failed (%d)\n", on ? "on" : "off", err);
     return !err;
 }
 
@@ -407,9 +446,11 @@ void SwitchPD::windowFired(OSObject *owner, IOTimerEventSource *)
 {
     auto *self = static_cast<SwitchPD *>(owner);
     uint16_t status1 = 0, status2 = 0;
-    if (!self->readStatus(status1, status2)) return;
+    if (!self->readStatus(status1, status2))
+        return;
     const switch_pd_step step = switch_pd_window_end(self->phase, self->sawDetach, status1);
-    if (step.act == SWITCH_PD_NONE) return;
+    if (step.act == SWITCH_PD_NONE)
+        return;
     self->state.alert = 0;
     self->state.status1 = status1;
     self->state.status2 = status2;
@@ -434,11 +475,13 @@ void SwitchPD::alertFired(OSObject *owner, IOInterruptEventSource *, int)
     uint16_t alertBits = 0, status1 = 0, status2 = 0;
     int err = read16(ALERT_STATUS, alertBits);
     if (err) {
-        if (!self->reportedReadFailure) IOLog("SwitchPD: status read failed (I2C %d)\n", err);
+        if (!self->reportedReadFailure)
+            IOLog("SwitchPD: status read failed (I2C %d)\n", err);
         self->reportedReadFailure = true;
         return;
     }
-    if (self->readStatus(status1, status2)) self->handle(alertBits, status1, status2);
+    if (self->readStatus(status1, status2))
+        self->handle(alertBits, status1, status2);
 }
 
 // ALERT stuck low (re-fires as fast as the work loop reads it): no storm. The pin is masked for the rest of the boot
@@ -465,7 +508,8 @@ void SwitchPD::stopEvents()
 
 IOReturn SwitchPD::addListener(Listener listener)
 {
-    if (listenerCount == kMaxListeners) return kIOReturnNoResources;
+    if (listenerCount == kMaxListeners)
+        return kIOReturnNoResources;
     listeners[listenerCount++] = listener;
     listener.function(listener.context, &state);  // the state as it is now
     return kIOReturnSuccess;
@@ -473,7 +517,8 @@ IOReturn SwitchPD::addListener(Listener listener)
 
 void SwitchPD::setAllowSource(bool allow)
 {
-    if (allow == allowSource || stuck) return;
+    if (allow == allowSource || stuck)
+        return;
     allowSource = allow;
     if (!allow && phase == SWITCH_PD_SOURCE) {
         endSourcing(SWITCH_PD_HELD, "not sourcing: host mode is off");
@@ -492,9 +537,12 @@ void SwitchPD::describe(char *buffer, size_t size)
 {
     uint16_t status1 = 0, status2 = 0, config = 0, vendor = 0;
     int err = read16(STATUS1, status1);
-    if (!err) err = read16(STATUS2, status2);
-    if (!err) err = read16(CONFIG1, config);
-    if (!err) err = read16(VENDOR_CONFIG, vendor);
+    if (!err)
+        err = read16(STATUS2, status2);
+    if (!err)
+        err = read16(CONFIG1, config);
+    if (!err)
+        err = read16(VENDOR_CONFIG, vendor);
     snprintf(
         buffer, size,
         "BM92T36 %s%s: STATUS1 %#x (switch1 %u switch2 %u VSAFE %u) STATUS2 %#x CONFIG1 %#x VENDOR %#x (OCP %s)%s; "
@@ -512,10 +560,12 @@ void SwitchPD::negotiate(uint16_t alertBits)
 {
     const bool sinkSession = phase == SWITCH_PD_SINK && state.plugged && !(state.status1 & SWITCH_PD_STATUS1_SRC_MODE);
     if (!sinkSession) {
-        if (nego != Nego::Idle || state.pdSource || state.contractMillivolts) endNegotiation();
+        if (nego != Nego::Idle || state.pdSource || state.contractMillivolts)
+            endNegotiation();
         return;
     }
-    if (alertBits & (SWITCH_PD_ALERT_CONTRACT | ALERT_PDO)) state.pdSource = true;
+    if (alertBits & (SWITCH_PD_ALERT_CONTRACT | ALERT_PDO))
+        state.pdSource = true;
     switch (nego) {
     case Nego::Idle:
     case Nego::NotPd:
@@ -531,7 +581,8 @@ void SwitchPD::negotiate(uint16_t alertBits)
         }
         break;
     case Nego::WaitPdos:
-        if (alertBits & ALERT_PDO) choose();
+        if (alertBits & ALERT_PDO)
+            choose();
         break;
     case Nego::RdoSent:
         if (alertBits & SWITCH_PD_ALERT_CONTRACT) {
@@ -567,7 +618,8 @@ void SwitchPD::negotiate(uint16_t alertBits)
         // A contract we did not ask for (a multi-port charger re-balancing, a source reset): start over.
         if (alertBits & SWITCH_PD_ALERT_CONTRACT) {
             withdraw();
-            if (nego == Nego::Failed && failedRequests >= kMaxFailedRequests) break;
+            if (nego == Nego::Failed && failedRequests >= kMaxFailedRequests)
+                break;
             choose();
         }
         break;
@@ -595,7 +647,8 @@ void SwitchPD::choose()
         return;
     }
     sourcePdoCount = raw[0] / 4 > 7 ? 7 : raw[0] / 4;
-    for (unsigned i = 0; i < sourcePdoCount; ++i) sourcePdos[i] = le32(raw + 1 + 4 * i);
+    for (unsigned i = 0; i < sourcePdoCount; ++i)
+        sourcePdos[i] = le32(raw + 1 + 4 * i);
     if (!sourcePdoCount) {
         if (nego != Nego::NotPd) {
             IOLog("SwitchPD: no USB-PD source capabilities: the charger keeps its own input detection (status1 %#x)\n",
@@ -699,11 +752,20 @@ void SwitchPD::negoFired(OSObject *owner, IOTimerEventSource *)
 {
     auto *self = static_cast<SwitchPD *>(owner);
     switch (self->nego) {
-    case Nego::WaitPdos: self->choose(); break;  // bm92txx goes on after its msleep(500) whatever came
-    case Nego::RdoSent: self->fail("no contract within 1.5 s of the request"); break;
-    case Nego::PsRdySent: self->fail("PS_RDY was not completed within 1.5 s"); break;
-    case Nego::Settling: self->publish(); break;
-    default: return;
+    case Nego::WaitPdos:
+        self->choose();
+        break;  // bm92txx goes on after its msleep(500) whatever came
+    case Nego::RdoSent:
+        self->fail("no contract within 1.5 s of the request");
+        break;
+    case Nego::PsRdySent:
+        self->fail("PS_RDY was not completed within 1.5 s");
+        break;
+    case Nego::Settling:
+        self->publish();
+        break;
+    default:
+        return;
     }
     self->notify();
 }
@@ -713,7 +775,8 @@ namespace {
 SwitchPD *startPD()
 {
     IOLock *lock = pdLock();
-    if (!lock) return nullptr;
+    if (!lock)
+        return nullptr;
     IOLockLock(lock);
     if (gPDStage == 0) {
         gPDStage = 3;
@@ -750,7 +813,8 @@ IOReturn listenerAction(OSObject *owner, void *function, void *context, void *, 
 extern "C" int switch_pd_add_listener(void (*listener)(void *, const SwitchPDState *), void *context)
 {
     SwitchPD *pd = startPD();
-    if (!pd || !listener) return -1;
+    if (!pd || !listener)
+        return -1;
     return pd->getWorkLoop()->runAction(&listenerAction, pd, reinterpret_cast<void *>(listener), context) ==
                    kIOReturnSuccess
                ? 0
@@ -759,13 +823,15 @@ extern "C" int switch_pd_add_listener(void (*listener)(void *, const SwitchPDSta
 
 extern "C" void switch_pd_check_delivery(const char *who)
 {
-    if (__atomic_load_n(&gPDStage, __ATOMIC_ACQUIRE) == 2) tegra_gpio_check_delivery(TEGRA_GPIO_PD_ALERT, who);
+    if (__atomic_load_n(&gPDStage, __ATOMIC_ACQUIRE) == 2)
+        tegra_gpio_check_delivery(TEGRA_GPIO_PD_ALERT, who);
 }
 
 extern "C" int switch_pd_allow_source(bool allow)
 {
     SwitchPD *pd = startPD();
-    if (!pd) return -1;
+    if (!pd)
+        return -1;
     pd->getWorkLoop()->runAction(
         [](OSObject *owner, void *allow, void *, void *, void *) -> IOReturn {
             static_cast<SwitchPD *>(owner)->setAllowSource(allow != nullptr);
@@ -777,7 +843,8 @@ extern "C" int switch_pd_allow_source(bool allow)
 
 extern "C" int switch_pd_describe(char *buffer, size_t size)
 {
-    if (!buffer || !size) return -1;
+    if (!buffer || !size)
+        return -1;
     SwitchPD *pd = __atomic_load_n(&gPDStage, __ATOMIC_ACQUIRE) == 2 ? gPD : nullptr;
     if (!pd) {
         snprintf(buffer, size, "BM92T36 not running");

@@ -57,18 +57,21 @@ constexpr uint32_t kBackgroundBit = 1u << 31, kLayerBits = 0xfu, kOpaqueBlack = 
 struct Rect {
     int32_t x, y, w, h;
 };
+
 inline Rect rectAt(const unsigned char *request, unsigned base, unsigned layer)
 {
     Rect r;
     memcpy(&r, request + base + 16 * layer, sizeof(r));
     return r;
 }
+
 inline uint32_t wordAt(const unsigned char *request, unsigned offset)
 {
     uint32_t value;
     memcpy(&value, request + offset, sizeof(value));
     return value;
 }
+
 // Bottom to top: layer 2, layer 0, layer 1 (A10X's blender order), then 3.
 inline unsigned stackPosition(unsigned layer)
 {
@@ -82,6 +85,7 @@ constexpr uint32_t fourcc(char a, char b, char c, char d)
     return (uint32_t)(unsigned char)a << 24 | (uint32_t)(unsigned char)b << 16 | (uint32_t)(unsigned char)c << 8 |
            (uint32_t)(unsigned char)d;
 }
+
 // An IOSurface as the kernel's IOSurface describes it (plane fields for planar formats only).
 struct Surface {
     uint32_t format = 0, planes = 0, width = 0, height = 0;
@@ -89,7 +93,15 @@ struct Surface {
     uint64_t offset[2] = {};
     uint32_t stride[2] = {}, planeHeight[2] = {};
 };
-enum Kind { kKindNone, kKindBgra, kKindRgba, kKindNv12Video, kKindNv12Full };
+
+enum Kind {
+    kKindNone,
+    kKindBgra,
+    kKindRgba,
+    kKindNv12Video,
+    kKindNv12Full
+};
+
 // The formats a window scans: 32-bit BGRA (also its lossless-compressed spelling '&BGA', which the GPU here writes as plain
 // rows), RGBA, and 8-bit 4:2:0 two-plane video or full range. Anything else (10-bit 'x420'/'xf20', 4:2:2, 'w30r', compressed
 // YUV) has no window format on T210.
@@ -97,11 +109,15 @@ inline Kind kindOf(uint32_t format, uint32_t planes)
 {
     if ((format == fourcc('B', 'G', 'R', 'A') && !planes) || (format == fourcc('&', 'B', 'G', 'A') && planes <= 1))
         return kKindBgra;
-    if (format == fourcc('R', 'G', 'B', 'A') && !planes) return kKindRgba;
-    if (format == fourcc('4', '2', '0', 'v') && planes == 2) return kKindNv12Video;
-    if (format == fourcc('4', '2', '0', 'f') && planes == 2) return kKindNv12Full;
+    if (format == fourcc('R', 'G', 'B', 'A') && !planes)
+        return kKindRgba;
+    if (format == fourcc('4', '2', '0', 'v') && planes == 2)
+        return kKindNv12Video;
+    if (format == fourcc('4', '2', '0', 'f') && planes == 2)
+        return kKindNv12Full;
     return kKindNone;
 }
+
 inline bool isNv12(Kind k)
 {
     return k == kKindNv12Video || k == kKindNv12Full;
@@ -136,6 +152,7 @@ enum Reason : unsigned {
     kFormat = 9,       // a format no window reads
     kAlignment = 10,   // a plane base or row not aligned as published
 };
+
 // A layer as a window would show it.
 struct Layer {
     Kind kind = kKindNone;
@@ -143,6 +160,7 @@ struct Layer {
     Rect src = {}, dst = {};
     uint32_t transform = 0;
 };
+
 // The composited UI on window A: one full-frame BGRA surface, untransformed (validateSwap's rule since r6).
 inline bool isUi(const Layer &l, uint32_t width, uint32_t height)
 {
@@ -150,10 +168,12 @@ inline bool isUi(const Layer &l, uint32_t width, uint32_t height)
            (uint32_t)l.src.h == height && l.dst.x == 0 && l.dst.y == 0 && (uint32_t)l.dst.w == width &&
            (uint32_t)l.dst.h == height && l.surface.width >= width && l.surface.height >= height;
 }
+
 inline bool aligned(uint64_t value, uint64_t to)
 {
     return to && !(value % to);
 }
+
 // --- Window B's registers -------------------------------------------------------------------------------------------------
 // Register words within a window's own blocks (DC_WIN 0x700 + i, DC_WINBUF 0x800 + i, WINC 0x500 + i); the driver adds the
 // window's direct-aperture base (mainline dc.c tegra_plane_offset: B at 0xd80 / 0xdc0 / 0xc00).
@@ -185,6 +205,7 @@ enum : uint32_t {
     kCscYof = 0x111,
     kVFilter0 = 0x119,  // WINC
 };
+
 constexpr uint32_t kWinEnable = 1u << 30, kCscEnable = 1u << 18, kHFilterOn = 1u << 8, kVFilterOn = 1u << 10;
 constexpr uint32_t kDepthB8G8R8A8 = 12, kDepthR8G8B8A8 = 13, kDepthYCbCr420SP = 43;
 constexpr uint32_t kBlendBypass = 1u << 24, kBlendPremultiplied = 0x00ffff00u, kBlendOver = 0x262;
@@ -192,6 +213,7 @@ constexpr uint32_t kBlendBypass = 1u << 24, kBlendPremultiplied = 0x00ffff00u, k
 constexpr uint32_t kHFilterTaps[16] = {0x00008000, 0x3e087ce1, 0x3b117ac1, 0x591b73aa, 0x57256d9a, 0x552f668b,
                                        0x73385e8b, 0x72435583, 0x714c4c8b, 0x70554393, 0x715e389b, 0x71662faa,
                                        0x536d25ba, 0x55731bca, 0x387a11d9, 0x3c7c08f1};
+
 inline uint32_t vFilterTap(unsigned i)
 {
     return 128 - 8 * i;
@@ -202,13 +224,18 @@ inline uint32_t vFilterTap(unsigned i)
 // the float conversion, and BT.601 video range within one step of the TRM default every source programs (f0 12a 0 198 39b 32f
 // 204 0). Which standard: BT.709 from 1280 wide or 720 high up, BT.601 below (CoreVideo's default for untagged buffers, the
 // rule TegraVIC uses) [I: the kernel does not read the surface's YCbCrMatrix attachment].
-enum Matrix { kBt601, kBt709 };
+enum Matrix {
+    kBt601,
+    kBt709
+};
+
 constexpr uint32_t kCsc[2][2][8] = {
     {{0x0f0, 0x12a, 0x000, 0x199, 0x39c, 0x330, 0x204, 0x000},
      {0x000, 0x100, 0x000, 0x167, 0x3a8, 0x349, 0x1c6, 0x000}},
     {{0x0f0, 0x12a, 0x000, 0x1cb, 0x3c9, 0x378, 0x21d, 0x000},
      {0x000, 0x100, 0x000, 0x193, 0x3d0, 0x388, 0x1db, 0x000}},
 };
+
 inline Matrix matrixOf(const Surface &s)
 {
     return s.width >= 1280 || s.height >= 720 ? kBt709 : kBt601;
@@ -233,6 +260,7 @@ struct Image {
     Matrix matrix = kBt601;
     bool fullRange = false;
 };
+
 // One axis of a window: the destination [d, d + dn) on a screen [0, screen), the source [s, s + sn) of a surface `limit`
 // long. Output pixel i (from the destination's own first) samples source s + (i + 1/2) * sn / dn - 1/2, Core Animation's own
 // mapping of pixel centres: a phase of (inc - 1) / 2 at the first pixel, plus whatever the screen's edge clipped off. The
@@ -241,14 +269,17 @@ struct Axis {
     bool visible;
     uint32_t pos, size, first, count, inc, initial;
 };
+
 inline bool axisOf(int32_t s, int32_t sn, int32_t d, int32_t dn, uint32_t screen, uint32_t limit, uint32_t maxWhole,
                    bool even, Axis &a)
 {
     a = {};
     const int64_t d0 = d<0 ? 0 : d, d1 = (int64_t)d + dn>(int64_t) screen ? (int64_t)screen : (int64_t)d + dn;
-    if (d1 <= d0) return true;  // nothing on the screen
+    if (d1 <= d0)
+        return true;  // nothing on the screen
     a.inc = ddaIncrement((uint32_t)sn, (uint32_t)dn, maxWhole);
-    if (!a.inc) return false;
+    if (!a.inc)
+        return false;
     a.visible = true;
     a.pos = (uint32_t)d0;
     a.size = (uint32_t)(d1 - d0);
@@ -256,7 +287,8 @@ inline bool axisOf(int32_t s, int32_t sn, int32_t d, int32_t dn, uint32_t screen
     const uint64_t phase = a.inc > 4096 ? (a.inc - 4096) / 2 : 0;
     uint64_t at = (uint64_t)s * 4096 + phase + (uint64_t)(d0 - d) * a.inc;
     uint64_t first = at >> 12;
-    if (even && (first & 1)) --first;
+    if (even && (first & 1))
+        --first;
     a.first = (uint32_t)first;
     a.initial = (uint32_t)(at - first * 4096);
     // The last output pixel's source pixel, and the one after it the filter may take, within the surface.
@@ -265,6 +297,7 @@ inline bool axisOf(int32_t s, int32_t sn, int32_t d, int32_t dn, uint32_t screen
     a.count = (uint32_t)(end > first ? end - first : 1);
     return a.initial <= 0xffff;
 }
+
 // The image of a layer checkDetached accepted: the destination clipped to the display with the source cut exactly where
 // the clipped edge samples it.
 inline bool imageOf(const Layer &l, uint32_t width, uint32_t height, Image &image)
@@ -277,7 +310,8 @@ inline bool imageOf(const Layer &l, uint32_t width, uint32_t height, Image &imag
     if (!axisOf(l.src.x, l.src.w, l.dst.x, l.dst.w, width, l.surface.width, hMax, image.yuv, x) ||
         !axisOf(l.src.y, l.src.h, l.dst.y, l.dst.h, height, l.surface.height, vMax, image.yuv, y))
         return false;
-    if (!x.visible || !y.visible) return true;
+    if (!x.visible || !y.visible)
+        return true;
     image.visible = true;
     image.colorDepth = image.yuv ? kDepthYCbCr420SP : l.kind == kKindRgba ? kDepthR8G8B8A8 : kDepthB8G8R8A8;
     image.position = y.pos << 16 | x.pos;
@@ -298,8 +332,10 @@ inline bool imageOf(const Layer &l, uint32_t width, uint32_t height, Image &imag
         image.start[p] = base + row0 * stride;
         const uint64_t a = image.start[p] + image.hOffset,
                        b = image.start[p] + (rows - 1) * stride + image.hOffset + (uint64_t)x.count * (p ? 1 : bpp);
-        if (a < low) low = a;
-        if (b > high) high = b;
+        if (a < low)
+            low = a;
+        if (b > high)
+            high = b;
     }
     image.lineStride = image.yuv ? f.stride[1] << 16 | f.stride[0] : f.stride[0];
     image.readLow = low & ~4095ull;
@@ -312,15 +348,18 @@ inline bool imageOf(const Layer &l, uint32_t width, uint32_t height, Image &imag
 // A detached layer: kAccepted when it is one Core Animation may send under the published limits and window B shows exactly.
 inline unsigned checkDetached(const Layer &l, uint32_t width, uint32_t height, const Limits &limits = Limits())
 {
-    if (l.kind == kKindNone) return kFormat;
-    if (l.transform) return kTransformed;
+    if (l.kind == kKindNone)
+        return kFormat;
+    if (l.transform)
+        return kTransformed;
     const Rect s = l.src, d = l.dst;
     if (s.x < 0 || s.y < 0 || s.w <= 0 || s.h <= 0 || d.w <= 0 || d.h <= 0 ||
         (uint64_t)s.x + (uint64_t)s.w > l.surface.width || (uint64_t)s.y + (uint64_t)s.h > l.surface.height ||
         l.surface.width > limits.maxSrcBuffer || l.surface.height > limits.maxSrcBuffer)
         return kGeometry;
     // Window coordinates are 13 bits; a layer wholly off the screen is accepted and shown as nothing.
-    if ((int64_t)d.x + d.w > 8191 || (int64_t)d.y + d.h > 8191 || d.x < -8191 || d.y < -8191) return kGeometry;
+    if ((int64_t)d.x + d.w > 8191 || (int64_t)d.y + d.h > 8191 || d.x < -8191 || d.y < -8191)
+        return kGeometry;
     const uint64_t up = limits.maxScale, down = limits.minScaleFraction;
     if ((uint64_t)d.w > (uint64_t)s.w * up || (uint64_t)d.h > (uint64_t)s.h * up ||
         (uint64_t)s.w > (uint64_t)d.w * down || (uint64_t)s.h > (uint64_t)d.h * down ||
@@ -351,6 +390,7 @@ struct Roles {
     int ui = -1, plane = -1;
     unsigned extra = 0;  // present layers neither window shows
 };
+
 inline Roles rolesOf(const bool present[kLayers], const Layer layers[kLayers], uint32_t width, uint32_t height)
 {
     Roles r;
@@ -362,13 +402,15 @@ inline Roles rolesOf(const bool present[kLayers], const Layer layers[kLayers], u
         }
     unsigned planePosition = 0;
     for (unsigned i = 0; i < kLayers; ++i) {
-        if (!present[i] || (int)i == r.ui) continue;
+        if (!present[i] || (int)i == r.ui)
+            continue;
         if (r.ui >= 0 && stackPosition(i) > uiPosition) {
             ++r.extra;
             continue;
         }
         if (r.plane < 0 || stackPosition(i) > planePosition) {
-            if (r.plane >= 0) ++r.extra;
+            if (r.plane >= 0)
+                ++r.extra;
             r.plane = (int)i;
             planePosition = stackPosition(i);
         } else
@@ -376,6 +418,7 @@ inline Roles rolesOf(const bool present[kLayers], const Layer layers[kLayers], u
     }
     return r;
 }
+
 // validateSwap's decision on the updated layers (the family checked each source rectangle against its surface, and a
 // surface ID that did not resolve refused the swap before this): every updated layer with a surface is the UI or a detached
 // layer window B can show; at most one UI among them; at most `maxLayers` with surfaces.
@@ -390,11 +433,14 @@ inline unsigned checkUpdated(uint32_t updated, uint32_t background, const bool h
     // A full-frame BGRA layer is the UI, or (the lower of two) a full-screen detached RGB layer window B takes as it is.
     unsigned surfaces = 0;
     for (unsigned i = 0; i < kLayers; ++i) {
-        if (!(updated & (1u << i)) || !hasSurface[i]) continue;
+        if (!(updated & (1u << i)) || !hasSurface[i])
+            continue;
         ++surfaces;
-        if (isUi(layers[i], width, height)) continue;
+        if (isUi(layers[i], width, height))
+            continue;
         const unsigned why = checkDetached(layers[i], width, height, limits);
-        if (why) return why;
+        if (why)
+            return why;
     }
     return surfaces > limits.maxLayers ? kTwoUi : kAccepted;
 }
@@ -408,20 +454,32 @@ inline unsigned checkUpdated(uint32_t updated, uint32_t background, const bool h
 struct PlaneLatch {
     static constexpr int kNone = -2, kOff = -1, kUnknown = -3;
     int active = kOff, armed = kNone, superseded = kNone;
-    bool requested() const { return armed != kNone; }
+
+    bool requested() const
+    {
+        return armed != kNone;
+    }
+
     // May a new set be written now? Not while one set is armed and another superseded: which of them the boundary took is
     // still open, so the new one waits for the next frame end (the driver holds it, newest wins).
-    bool mayWrite() const { return superseded == kNone; }
+    bool mayWrite() const
+    {
+        return superseded == kNone;
+    }
+
     void write(int set)
     {
-        if (armed != kNone) superseded = armed;
+        if (armed != kNone)
+            superseded = armed;
         armed = set;
     }
+
     // At a frame end with a set written: true when the scanned set changed (`active` is it), in which case every set no
     // longer named here is free.
     bool latched(bool actReqOut, int scanned)
     {
-        if (armed == kNone) return false;
+        if (armed == kNone)
+            return false;
         if (!actReqOut) {  // everything written is in: the last write wins
             active = armed;
             armed = superseded = kNone;
@@ -434,11 +492,17 @@ struct PlaneLatch {
         }
         return false;
     }
-    bool busy(int set) const { return set >= 0 && (set == active || set == armed || set == superseded); }
+
+    bool busy(int set) const
+    {
+        return set >= 0 && (set == active || set == armed || set == superseded);
+    }
+
     // SC7, a panic or a stop: the last request is what the window has (or gets back).
     void settle()
     {
-        if (armed != kNone) active = armed;
+        if (armed != kNone)
+            active = armed;
         armed = superseded = kNone;
     }
 };

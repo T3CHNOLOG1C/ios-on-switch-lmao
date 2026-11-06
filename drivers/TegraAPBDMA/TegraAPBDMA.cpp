@@ -25,8 +25,15 @@ constexpr vm_offset_t kDmaPA = 0x60020000, kDmaSize = 0x2000, kCarPA = 0x6000600
 constexpr uint32_t kChannelBase = 0x1000, kChannelStride = 0x40;
 
 // Controller (tegra20-apb-dma.c TEGRA_APBDMA_*).
-enum : uint32_t { GENERAL = 0x000, CONTROL = 0x010, IRQ_MASK = 0x01c, IRQ_MASK_SET = 0x020 };
+enum : uint32_t {
+    GENERAL = 0x000,
+    CONTROL = 0x010,
+    IRQ_MASK = 0x01c,
+    IRQ_MASK_SET = 0x020
+};
+
 constexpr uint32_t kGeneralEnable = 1u << 31;
+
 // Channel registers and bits.
 enum : uint32_t {
     CSR = 0x00,
@@ -39,6 +46,7 @@ enum : uint32_t {
     WCOUNT = 0x20,
     WORD_TRANSFER = 0x24,
 };
+
 enum : uint32_t {
     CSR_ENB = 1u << 31,
     CSR_IE_EOC = 1u << 30,
@@ -57,6 +65,7 @@ enum : uint32_t {
     APBSEQ_WRAP_WORD_1 = 1u << 16,   // the APB address stays on the one register
     COUNT_MASK = 0xfffc,
 };
+
 // CAR (hekate bdk/soc/clock.h; Linux clk-tegra210.c TEGRA210_CLK_APBDMA = 34: the H registers, bit 2).
 enum : uint32_t {
     RST_DEVICES_H = 0x008,
@@ -65,6 +74,7 @@ enum : uint32_t {
     RST_DEV_H_CLR = 0x30c,
     CLK_ENB_H_SET = 0x328,
 };
+
 constexpr uint32_t kApbDmaBit = 1u << 2;
 
 inline uint32_t intidOf(unsigned channel)
@@ -96,22 +106,27 @@ inline uint32_t rd(const tegra_apbdma_channel *ch, uint32_t reg)
 {
     return *reinterpret_cast<volatile uint32_t *>(ch->regs + reg);
 }
+
 inline void wr(tegra_apbdma_channel *ch, uint32_t reg, uint32_t value)
 {
     *reinterpret_cast<volatile uint32_t *>(ch->regs + reg) = value;
 }
+
 inline uint32_t grd(uint32_t reg)
 {
     return *reinterpret_cast<volatile uint32_t *>(gDma + reg);
 }
+
 inline void gwr(uint32_t reg, uint32_t value)
 {
     *reinterpret_cast<volatile uint32_t *>(gDma + reg) = value;
 }
+
 inline uint32_t crd(uint32_t reg)
 {
     return *reinterpret_cast<volatile uint32_t *>(gCar + reg);
 }
+
 inline void cwr(uint32_t reg, uint32_t value)
 {
     *reinterpret_cast<volatile uint32_t *>(gCar + reg) = value;
@@ -170,7 +185,8 @@ void stopLocked(tegra_apbdma_channel *ch)
     wr(ch, CSR, csr);
     wr(ch, CSR, csr & ~CSR_ENB);
     const uint32_t status = rd(ch, STATUS);
-    if (status & STATUS_ISE_EOC) wr(ch, STATUS, status);
+    if (status & STATUS_ISE_EOC)
+        wr(ch, STATUS, status);
 }
 
 // Primary interrupt context, CPU0: the end of count acknowledged (tegra_dma_isr writes STATUS back), then the owner.
@@ -178,24 +194,30 @@ void stopLocked(tegra_apbdma_channel *ch)
 bool filter(OSObject *, IOFilterInterruptEventSource *sender)
 {
     for (tegra_apbdma_channel &ch : gChannels) {
-        if (ch.source != sender) continue;
+        if (ch.source != sender)
+            continue;
         const uint32_t status = rd(&ch, STATUS);
-        if (!(status & STATUS_ISE_EOC)) return false;
+        if (!(status & STATUS_ISE_EOC))
+            return false;
         wr(&ch, STATUS, status);
         ch.interrupts = ch.interrupts + 1;
-        if (ch.handler) ch.handler(ch.context);
+        if (ch.handler)
+            ch.handler(ch.context);
         return false;
     }
     return false;
 }
-void action(OSObject *, IOInterruptEventSource *, int) {}
+
+void action(OSObject *, IOInterruptEventSource *, int)
+{}
 }  // namespace
 
 bool tegra_apbdma_alloc(uint32_t size, tegra_apbdma_buffer *out)
 {
     const IOOptionBits options = (IOOptionBits)kIODirectionInOut | (IOOptionBits)kIOMemoryPhysicallyContiguous;
     auto *memory = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task, options, size, 0x00000000fffff000ULL);
-    if (!memory) return false;
+    if (!memory)
+        return false;
     IOByteCount length = 0;
     const addr64_t pa = memory->getPhysicalSegment(0, &length, kIOMemoryMapperNone);
     if (!pa || length < size || pa + size > 0x100000000ULL) {
@@ -224,7 +246,8 @@ tegra_apbdma_channel *tegra_apbdma_open(unsigned channel, IOWorkLoop *loop, tegr
     if (!created) {
         IOLock *lock = IOLockAlloc();
         if (!lock || !__sync_bool_compare_and_swap(&created, nullptr, lock)) {
-            if (lock) IOLockFree(lock);
+            if (lock)
+                IOLockFree(lock);
         }
     }
     gLock = created;
@@ -244,8 +267,10 @@ tegra_apbdma_channel *tegra_apbdma_open(unsigned channel, IOWorkLoop *loop, tegr
     }
     tegra_apbdma_channel *ch = &gChannels[channel];
     const char *fail = nullptr;
-    if (!gUp) fail = gWhy;
-    if (!fail && gOpen[channel]) fail = "channel already open";
+    if (!gUp)
+        fail = gWhy;
+    if (!fail && gOpen[channel])
+        fail = "channel already open";
     if (!fail) {
         ch->number = channel;
         ch->regs = gDma + kChannelBase + channel * kChannelStride;
@@ -330,7 +355,8 @@ uint32_t tegra_apbdma_moved(tegra_apbdma_channel *ch, bool *endPending)
 {
     const uint32_t count = rd(ch, WORD_TRANSFER) & COUNT_MASK;
     const uint32_t status = rd(ch, STATUS);
-    if (endPending) *endPending = status & STATUS_ISE_EOC;
+    if (endPending)
+        *endPending = status & STATUS_ISE_EOC;
     const uint32_t left = count + 4;
     return left >= ch->size ? 0 : ch->size - left;
 }

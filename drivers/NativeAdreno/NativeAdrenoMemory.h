@@ -6,15 +6,24 @@
 #include <stdint.h>
 class IOBufferMemoryDescriptor;
 class IOMemoryDescriptor;
+
 struct NativeAdrenoPhysicalSpan {
     uint64_t offset, physical, bytes;
 };
+
 struct NativeAdrenoCpuState {
     uint64_t tcr, ttbr0, ttbr1, sctlr;
     uint64_t kernel_page_bytes, kernel_map_page_bytes;
 };
+
 IOReturn NativeAdrenoQueryCpu4K(NativeAdrenoCpuState *);
-enum NativeAdrenoCacheOperation { NativeAdrenoClean, NativeAdrenoCleanInvalidate, NativeAdrenoInvalidate };
+
+enum NativeAdrenoCacheOperation {
+    NativeAdrenoClean,
+    NativeAdrenoCleanInvalidate,
+    NativeAdrenoInvalidate
+};
+
 IOReturn NativeAdrenoMaintainOwnedPages(void *, size_t, NativeAdrenoCacheOperation);
 /* The same over whole physical pages of DRAM, through the kernel's physical aperture: data cache lines are physically tagged, so this
  * reaches lines another task's mapping left (an imported IOSurface). Apple's sys_dcache_flush is only a DSB, so user space cannot. */
@@ -73,13 +82,27 @@ public:
      * There is no kernel mapping: the owner keeps its CPU mapping and does its own cache maintenance around GPU use, so
      * publishForDevice/acquireDeviceWrites have nothing to do for this object. Spans and PA bounds are checked as for allocate. */
     IOReturn importTask(void *task, uint64_t address, size_t bytes, unsigned output_bits, size_t byte_budget);
-    bool imported() const { return imported_ != nullptr; }
+
+    bool imported() const
+    {
+        return imported_ != nullptr;
+    }
+
     /* An import of memory the owner maps read-only (the kernel could pin it for reading only): the GPU may read it, never write it. */
-    bool readOnly() const { return read_only_; }
+    bool readOnly() const
+    {
+        return read_only_;
+    }
+
     /* After allocate(), before any device or client mapping: cleans and invalidates the pages and makes every CPU mapping of them
      * write-combined, so publishForDevice/acquireDeviceWrites have nothing left to do. release() restores the default attribute. */
     IOReturn makeWriteCombined();
-    bool writeCombined() const { return write_combined_; }
+
+    bool writeCombined() const
+    {
+        return write_combined_;
+    }
+
     /* NativeAdrenoReassertWriteCombined over this object's pages; nothing for an object that is not write-combined, nor for one from the
      * BO pool: XNU set scattered BOs' pages back to the default attribute (int-160: 123847 pages), never a pool page (int-161: none in
      * 1280 submissions, while walking the pool's pages took 0.65 ms of each). The submissions' line audit still covers every object. */
@@ -89,13 +112,23 @@ public:
                    ? NativeAdrenoReassertWriteCombined(spans_, span_count_, reset)
                    : kIOReturnSuccess;
     }
-    bool backed() const { return descriptor_ || imported_ || pooled_; }
+
+    bool backed() const
+    {
+        return descriptor_ || imported_ || pooled_;
+    }
+
     /* Refuses device references/quarantine; only clears ownership after real
      * descriptor complete() succeeds. No automatic reset or resource recycling. */
     IOReturn release();
     IOReturn holdForDevice();
     IOReturn retireAfterQuiescence();
-    void quarantine() { quarantined_ = true; }
+
+    void quarantine()
+    {
+        quarantined_ = true;
+    }
+
     /* Requires real CPU/device exclusion and retained ownership. Before GPU
      * writes, clean+invalidate; after genuine completion, invalidate only.
      * CPU must not dirty these pages while the device owns access. */
@@ -103,14 +136,42 @@ public:
      * for a client whose view turned out to be cacheable after all (NativeAdrenoVm::distrustWriteCombined). */
     IOReturn publishForDevice(size_t offset, size_t bytes, bool device_writes, bool include_write_combined = false);
     IOReturn acquireDeviceWrites(size_t offset, size_t bytes);
-    bool quarantined() const { return quarantined_; }
-    uint32_t deviceReferences() const { return device_references_; }
-    size_t bytes() const { return bytes_; }
-    size_t spanCount() const { return span_count_; }
-    const NativeAdrenoPhysicalSpan *spans() const { return spans_; }
-    void *mapping() const { return mapping_; }
+
+    bool quarantined() const
+    {
+        return quarantined_;
+    }
+
+    uint32_t deviceReferences() const
+    {
+        return device_references_;
+    }
+
+    size_t bytes() const
+    {
+        return bytes_;
+    }
+
+    size_t spanCount() const
+    {
+        return span_count_;
+    }
+
+    const NativeAdrenoPhysicalSpan *spans() const
+    {
+        return spans_;
+    }
+
+    void *mapping() const
+    {
+        return mapping_;
+    }
+
     /* Borrowed descriptor, never release independently or expose table pools
      * through clientMemoryForType. Sharing requires a separate owner/task ABI. */
-    IOBufferMemoryDescriptor *descriptor() const { return descriptor_; }
+    IOBufferMemoryDescriptor *descriptor() const
+    {
+        return descriptor_;
+    }
 };
 #endif

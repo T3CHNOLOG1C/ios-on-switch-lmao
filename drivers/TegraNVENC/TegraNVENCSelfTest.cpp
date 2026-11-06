@@ -62,14 +62,16 @@ const char *const kLayoutName[TEGRA_NVENC_LAYOUTS] = {"pitch",        "BL2 (log2
 
 bool resolveEnc(void *, uint32_t handle, TegraNVENCBlock *block)
 {
-    if (!handle || handle >= kEncHandles) return false;
+    if (!handle || handle >= kEncHandles)
+        return false;
     *block = gEnc[handle];
     return true;
 }
 
 bool resolveDec(void *, uint32_t handle, TegraNVDECBlock *block)
 {
-    if (handle < kE3DecFirstHandle || handle >= kE3DecFirstHandle + kDecHandles) return false;
+    if (handle < kE3DecFirstHandle || handle >= kE3DecFirstHandle + kDecHandles)
+        return false;
     const TegraNVENCBlock &b = gDec[handle - kE3DecFirstHandle];
     *block = TegraNVDECBlock{b.pa, b.size, b.va, b.first, b.count};
     return true;
@@ -87,7 +89,8 @@ uint32_t crc32(uint32_t crc, const uint8_t *p, size_t n)
     crc = ~crc;
     while (n--) {
         crc ^= *p++;
-        for (int i = 0; i < 8; i++) crc = (crc >> 1) ^ (0xedb88320u & (0u - (crc & 1)));
+        for (int i = 0; i < 8; i++)
+            crc = (crc >> 1) ^ (0xedb88320u & (0u - (crc & 1)));
     }
     return ~crc;
 }
@@ -98,13 +101,16 @@ bool inSquare(uint32_t f, uint32_t x, uint32_t y)
 {
     return x >= 16 + 4 * f && x < 32 + 4 * f && y >= 20 + 2 * f && y < 36 + 2 * f;
 }
+
 uint8_t lumaAt(uint32_t f, uint32_t x, uint32_t y)
 {
     return inSquare(f, x, y) ? 200 : (uint8_t)(32 + 2 * x + y);
 }
+
 uint8_t chromaAt(uint32_t f, uint32_t x, uint32_t y, bool v)  // x, y in chroma samples
 {
-    if (inSquare(f, 2 * x, 2 * y)) return v ? 200 : 60;
+    if (inSquare(f, 2 * x, 2 * y))
+        return v ? 200 : 60;
     return v ? (uint8_t)(160 - y) : (uint8_t)(96 + x);
 }
 
@@ -113,20 +119,27 @@ size_t gob(uint32_t x, uint32_t y)
 {
     return ((x % 64) / 32) * 256 + ((y % 8) / 2) * 64 + ((x % 32) / 16) * 32 + (y % 2) * 16 + x % 16;
 }
+
 size_t blockLinear(uint32_t gobs, uint32_t pitch, uint32_t x, uint32_t y)
 {
     const uint32_t rows = 8 * gobs;
     return (size_t)(y / rows) * pitch * rows + (size_t)(x / 64) * 512 * gobs + ((y % rows) / 8) * 512 + gob(x, y);
 }
+
 size_t surfaceOffset(uint32_t layout, uint32_t pitch, uint32_t x, uint32_t y)
 {
     switch (layout) {
     case TEGRA_NVENC_LAYOUT_BL2_LOG:
-    case TEGRA_NVENC_LAYOUT_BL2_RAW: return blockLinear(2, pitch, x, y);
-    case TEGRA_NVENC_LAYOUT_BL4_LOG: return blockLinear(4, pitch, x, y);
-    case TEGRA_NVENC_LAYOUT_BL1: return blockLinear(1, pitch, x, y);
-    case TEGRA_NVENC_LAYOUT_TILED16: return (size_t)(y / 16) * pitch * 16 + (x / 16) * 256 + (y % 16) * 16 + x % 16;
-    default: return (size_t)y * pitch + x;
+    case TEGRA_NVENC_LAYOUT_BL2_RAW:
+        return blockLinear(2, pitch, x, y);
+    case TEGRA_NVENC_LAYOUT_BL4_LOG:
+        return blockLinear(4, pitch, x, y);
+    case TEGRA_NVENC_LAYOUT_BL1:
+        return blockLinear(1, pitch, x, y);
+    case TEGRA_NVENC_LAYOUT_TILED16:
+        return (size_t)(y / 16) * pitch * 16 + (x / 16) * 256 + (y % 16) * 16 + x % 16;
+    default:
+        return (size_t)y * pitch + x;
     }
 }
 
@@ -134,7 +147,8 @@ void putSource(uint32_t f, uint32_t layout)
 {
     uint8_t *in = gEnc[1].va;
     for (uint32_t y = 0; y < kE3Height; y++)
-        for (uint32_t x = 0; x < kE3Width; x++) in[surfaceOffset(layout, kE3Pitch, x, y)] = lumaAt(f, x, y);
+        for (uint32_t x = 0; x < kE3Width; x++)
+            in[surfaceOffset(layout, kE3Pitch, x, y)] = lumaAt(f, x, y);
     for (uint32_t y = 0; y < kE3Height / 2; y++)
         for (uint32_t x = 0; x < kE3Width / 2; x++) {
             in[kE3ChromaOffset + surfaceOffset(layout, kE3Pitch, 2 * x, y)] = chromaAt(f, x, y, false);
@@ -150,7 +164,11 @@ struct Outcome {
     uint32_t sliceCrc, lumaCrc, decodeErrors, us;
 };
 
-enum Mode { kEncode, kIpcm, kProbe };
+enum Mode {
+    kEncode,
+    kIpcm,
+    kProbe
+};
 
 // One NVENC picture (0: IDR, 1: P) in `layout` and `chroma`, then NVDEC on its slice (not for the probe).
 void encodeAndDecode(uint32_t f, uint32_t layout, uint32_t chroma, Mode mode, Outcome *o)
@@ -173,7 +191,8 @@ void encodeAndDecode(uint32_t f, uint32_t layout, uint32_t chroma, Mode mode, Ou
                                 : layout == TEGRA_NVENC_LAYOUT_BL2_RAW || layout == TEGRA_NVENC_LAYOUT_BL4_LOG ? 2
                                                                                                                : 0;
     p->input_cfg.tiled_16x16 = layout == TEGRA_NVENC_LAYOUT_TILED16;
-    if (mode == kIpcm) ((nvenc_h264_md_control_s *)(s->setup + p->pic_control.md_control_offset))->force_ipcm = 1;
+    if (mode == kIpcm)
+        ((nvenc_h264_md_control_s *)(s->setup + p->pic_control.md_control_offset))->force_ipcm = 1;
     const bool method = chroma == TEGRA_NVENC_CHROMA_METHOD;
     if (method)
         p->input_cfg.chroma_top_frm_offset = p->outputpic_cfg.chroma_top_frm_offset =
@@ -195,34 +214,41 @@ void encodeAndDecode(uint32_t f, uint32_t layout, uint32_t chroma, Mode mode, Ou
     o->ret = mode == kProbe ? tegra_nvenc_run_magic_probe(s, resolveEnc, nullptr, &fence, &why)
                             : tegra_nvenc_run(s, resolveEnc, nullptr, &fence, &why);
     IODelete(s, TegraNVENCSubmit, 1);
-    if (why) IOLog("TegraNVENC: E3 NVENC job refused by the checker: %s\n", why);  // -22 in the FAIL line
-    if (o->ret || (o->ret = tegra_nvenc_wait(fence))) return;
+    if (why)
+        IOLog("TegraNVENC: E3 NVENC job refused by the checker: %s\n", why);  // -22 in the FAIL line
+    if (o->ret || (o->ret = tegra_nvenc_wait(fence)))
+        return;
     o->us = (uint32_t)(nowUs() - began);
 
     tegra_nvenc_cache_flush(gEnc[5].va, sizeof(nvenc_pic_stat_s));
     const nvenc_pic_stat_s *stat = (const nvenc_pic_stat_s *)gEnc[5].va;
     o->bytes = (stat->total_bit_count + 7) / 8;
     o->status = (uint32_t)stat->error_status | (uint32_t)stat->ucode_error_status << 2;
-    if (o->bytes > kE3EncSizes[4]) o->bytes = kE3EncSizes[4];
+    if (o->bytes > kE3EncSizes[4])
+        o->bytes = kE3EncSizes[4];
     tegra_nvenc_cache_flush(gEnc[4].va, kE3EncSizes[4]);
     const uint8_t *bits = gEnc[4].va;
     memcpy(o->head, bits, sizeof(o->head));
     o->sliceCrc = crc32(0, bits, o->bytes);
-    if (mode == kProbe) return;
+    if (mode == kProbe)
+        return;
     // The slice: the first NAL unit of nal_unit_type 5 (IDR) or 1 (P) with nal_ref_idc set (NVENC may put an access
     // unit delimiter, SEI or filler ahead of it), up to the next start code; with room for a slice body. Only that NAL
     // unit goes to NVDEC, as H264NVDEC only ever gives it slices.
     uint32_t start = ~0u, end = o->bytes;
     for (uint32_t i = 0; i + 3 < o->bytes; i++) {
-        if (bits[i] || bits[i + 1] || bits[i + 2] != 1) continue;
+        if (bits[i] || bits[i + 1] || bits[i + 2] != 1)
+            continue;
         if (start != ~0u) {
             end = i && !bits[i - 1] ? i - 1 : i;  // a 4-byte start code's leading zero belongs to the next unit
             break;
         }
-        if ((bits[i + 3] & 0x9f) == (f ? 0x01 : 0x05) && (bits[i + 3] & 0x60)) start = i;
+        if ((bits[i + 3] & 0x9f) == (f ? 0x01 : 0x05) && (bits[i + 3] & 0x60))
+            start = i;
         i += 2;
     }
-    while (start != ~0u && end > start + 4 && !bits[end - 1]) end--;  // trailing_zero_8bits
+    while (start != ~0u && end > start + 4 && !bits[end - 1])
+        end--;  // trailing_zero_8bits
     if (start == ~0u || end - start < 12) {
         o->ret = -5;
         return;
@@ -246,7 +272,8 @@ void encodeAndDecode(uint32_t f, uint32_t layout, uint32_t chroma, Mode mode, Ou
     uint32_t surface = 0;
     for (uint32_t i = 0; i < decCount; i++) {
         d->entries[d->entry_count++] = {dec[i].method, dec[i].kind, dec[i].value, dec[i].offset};
-        if (dec[i].method == NVC5B0_SET_PICTURE_LUMA_OFFSET0 + 4 * pic->CurrPicIdx) surface = dec[i].value;
+        if (dec[i].method == NVC5B0_SET_PICTURE_LUMA_OFFSET0 + 4 * pic->CurrPicIdx)
+            surface = dec[i].value;
     }
     const uint32_t (*clean)[3] = f ? kE3DecClean1 : kE3DecClean0;
     const uint32_t input = clean[0][0];
@@ -263,8 +290,10 @@ void encodeAndDecode(uint32_t f, uint32_t layout, uint32_t chroma, Mode mode, Ou
     d->clean_count = 2;
     o->ret = tegra_nvdec_run(d, resolveDec, nullptr, &fence, &why);
     IODelete(d, TegraNVDECSubmit, 1);
-    if (why) IOLog("TegraNVENC: E3 NVDEC job refused by its checker: %s\n", why);
-    if (o->ret || (o->ret = tegra_nvdec_wait(fence))) return;
+    if (why)
+        IOLog("TegraNVENC: E3 NVDEC job refused by its checker: %s\n", why);
+    if (o->ret || (o->ret = tegra_nvdec_wait(fence)))
+        return;
 
     const TegraNVENCBlock &out = gDec[surface - kE3DecFirstHandle];
     tegra_nvdec_cache_flush(in.va, sizeof(nvdec_status_s));
@@ -302,7 +331,8 @@ bool good(uint32_t mse)
 void describe(char *line, size_t size, uint32_t layout, const Outcome &o)
 {
     const size_t used = strlen(line);
-    if (used + 80 > size) return;
+    if (used + 80 > size)
+        return;
     if (o.mse[0] != ~0u)
         snprintf(line + used, size - used, " %s: MSE %u.%02u/%u.%02u/%u.%02u;", kLayoutName[layout], o.mse[0] / 100,
                  o.mse[0] % 100, o.mse[1] / 100, o.mse[1] % 100, o.mse[2] / 100, o.mse[2] % 100);
@@ -369,10 +399,12 @@ int run(TegraNVENCProven *proven, char *line, size_t size)
             describe(line, size, layout, idr);
             return idr.ret;
         }
-        if (good(idr.mse[0])) break;
+        if (good(idr.mse[0]))
+            break;
         describe(line, size, layout, idr);
     }
-    if (tried == TEGRA_NVENC_LAYOUTS) return -5;
+    if (tried == TEGRA_NVENC_LAYOUTS)
+        return -5;
     if (!good(idr.mse[1]) || !good(idr.mse[2])) {
         const Outcome offset = idr;
         chroma = TEGRA_NVENC_CHROMA_METHOD;
@@ -430,8 +462,10 @@ extern "C" int tegra_nvenc_self_test(TegraNVENCProven *proven)
     const int ret = run(proven, line, sizeof(line));
     IOLog("TegraNVENC: %s\n", line);
     if (ret != -60 && ret != TEGRA_HOST1X_ELOST) {  // a job still in an engine keeps its buffers
-        for (uint32_t h = 1; h < kEncHandles; h++) tegra_nvenc_arena_free(&gEnc[h]);
-        for (uint32_t h = 0; h < kDecHandles; h++) tegra_nvenc_arena_free(&gDec[h]);
+        for (uint32_t h = 1; h < kEncHandles; h++)
+            tegra_nvenc_arena_free(&gEnc[h]);
+        for (uint32_t h = 0; h < kDecHandles; h++)
+            tegra_nvenc_arena_free(&gDec[h]);
     }
     return ret;
 }

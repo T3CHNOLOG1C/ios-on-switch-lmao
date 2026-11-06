@@ -50,10 +50,12 @@ TEST(NativeLegacyRequest, FillPixels)
     memset(frame, 0xcc, sizeof(frame));
     EXPECT_TRUE(native_legacy_fill_pixels(frame, 64, 16, 3, 4, 0xff000000U));
     for (unsigned row = 0; row < 4; ++row) {
-        for (unsigned column = 0; column < 3; ++column) EXPECT_TRUE(frame[row * 4 + column] == 0xff000000U);
+        for (unsigned column = 0; column < 3; ++column)
+            EXPECT_TRUE(frame[row * 4 + column] == 0xff000000U);
         EXPECT_TRUE(frame[row * 4 + 3] == 0xcccccccc);
     }
-    for (unsigned i = 16; i < 24; ++i) EXPECT_TRUE(frame[i] == 0xcccccccc);
+    for (unsigned i = 16; i < 24; ++i)
+        EXPECT_TRUE(frame[i] == 0xcccccccc);
     uint32_t before[24];
     memcpy(before, frame, sizeof(frame));
     EXPECT_TRUE(!native_legacy_fill_pixels((unsigned char *)frame + 1, 64, 16, 3, 4, 0));
@@ -95,7 +97,8 @@ TEST(NativeLegacyRequest, FrameColors)
     }
     EXPECT_TRUE(native_legacy_frame_colors(image, sizeof(image), 16, 4, 4, colors, counts, &other) &&
                 colors[0] == 0xff030201U && counts[0] == 16 && !counts[1] && !other);
-    for (unsigned i = 0; i < 6; ++i) image[i * 4] = (unsigned char)(10 + i); /* 6 distinct values + 10 original */
+    for (unsigned i = 0; i < 6; ++i)
+        image[i * 4] = (unsigned char)(10 + i); /* 6 distinct values + 10 original */
     EXPECT_TRUE(native_legacy_frame_colors(image, sizeof(image), 16, 4, 4, colors, counts, &other));
     EXPECT_TRUE(counts[0] + counts[1] + counts[2] + counts[3] + other == 16 && counts[0] == 1 && counts[3] == 1 &&
                 other == 2 + 10);
@@ -119,15 +122,18 @@ TEST(NativeLegacyRequest, CopyPixels)
     for (unsigned offset = 0; offset < 8; ++offset) {
         unsigned char storage[80];
         uint32_t target[20];
-        for (unsigned i = 0; i < sizeof(storage); ++i) storage[i] = (unsigned char)(i + 1);
+        for (unsigned i = 0; i < sizeof(storage); ++i)
+            storage[i] = (unsigned char)(i + 1);
         memset(target, 0xcc, sizeof(target));
         EXPECT_TRUE(native_legacy_copy_pixels(target, 60, 20, storage + offset, 51, 17, 3, 3));
         const unsigned char *result = (const unsigned char *)target;
         for (unsigned row = 0; row < 3; ++row) {
             EXPECT_TRUE(!memcmp(result + row * 20, storage + offset + row * 17, 12));
-            for (unsigned i = 12; i < 20; ++i) EXPECT_TRUE(result[row * 20 + i] == 0xcc);
+            for (unsigned i = 12; i < 20; ++i)
+                EXPECT_TRUE(result[row * 20 + i] == 0xcc);
         }
-        for (unsigned i = 60; i < sizeof(target); ++i) EXPECT_TRUE(result[i] == 0xcc);
+        for (unsigned i = 60; i < sizeof(target); ++i)
+            EXPECT_TRUE(result[i] == 0xcc);
         uint32_t before[20];
         memcpy(before, target, sizeof(target));
         EXPECT_TRUE(!native_legacy_copy_pixels((unsigned char *)target + 1, 60, 20, storage, 51, 17, 3, 3));

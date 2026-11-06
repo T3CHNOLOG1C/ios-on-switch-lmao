@@ -29,6 +29,7 @@ uint64_t blockLinearOffset(uint32_t rowBytes, uint32_t blockHeight, uint32_t xB,
 struct Size {
     uint32_t w, h, levels;
 };
+
 const Size kSizes[] = {{2, 2, 2},       {3, 5, 3},       {776, 24, 10},    {180, 180, 8}, {120, 120, 7},
                        {1280, 720, 11}, {720, 1280, 11}, {1024, 1, 11},    {1, 1024, 11}, {2048, 1536, 12},
                        {97, 3, 7},      {33, 65, 7},     {1366, 1024, 11}, {256, 8, 9},   {8, 256, 9},
@@ -45,7 +46,8 @@ TEST(RawTarget, PitchWordsAsBefore)
     uint32_t w[raw::kColorTargetWords];
     raw::colorTargetWords(d, w);
     const uint32_t want[raw::kColorTargetWords] = {0x123, 0x45678000, 5120, 720, 0xcf, 0x1000, 1, 0, 0};
-    for (uint32_t i = 0; i < raw::kColorTargetWords; i++) EXPECT_EQ(w[i], want[i]) << "word " << i;
+    for (uint32_t i = 0; i < raw::kColorTargetWords; i++)
+        EXPECT_EQ(w[i], want[i]) << "word " << i;
 }
 
 TEST(RawTarget, OnlyLaterLevels)
@@ -89,7 +91,8 @@ TEST(RawTarget, ChainLevelAddressesTheLayout)
                 // the rows the target spans stay inside the level and the chain
                 const uint64_t end = lv.offset + uint64_t(lv.rowBytes) * lv.rows;
                 EXPECT_LE(end, c.bytes);
-                if (l + 1 < c.levels) EXPECT_LE(end, c.level[l + 1].offset);
+                if (l + 1 < c.levels)
+                    EXPECT_LE(end, c.level[l + 1].offset);
                 const uint32_t gobsPerRow = (w[2] * bpp + 63) / 64;
                 const uint32_t stepX = lv.width > 64 ? 7 : 1, stepY = lv.height > 64 ? 5 : 1;
                 for (uint32_t y = 0; y < lv.height; y += stepY)

@@ -2,29 +2,34 @@
  * PC checkpoints. Registry discovery never substitutes a guessed disk name. */
 volatile uint64_t switch_block_record[24];
 uint64_t switch_block_user_results[40];
+
 static struct {
     uint64_t status;
     char path[2][64];
 } block_query;
+
 static uint8_t block_hash_buffer[4096];
 static uint64_t block_started, block_frequency;
 static unsigned block_enabled, block_finished;
+
 static uint64_t block_ticks(void)
 {
     uint64_t t;
     __asm__ volatile("isb\n\tmrs %0,cntpct_el0" : "=r"(t)::"memory");
     return t;
 }
+
 static void block_screen(void)
 {
     boolean_t previous = ml_set_interrupts_enabled(FALSE);
     for (unsigned y = 340; y < 660; y++)
-        for (unsigned x = 16; x < 1264; x++) switch_diag_pixel(framebuffer, x, y, SWITCH_BACKGROUND);
+        for (unsigned x = 16; x < 1264; x++)
+            switch_diag_pixel(framebuffer, x, y, SWITCH_BACKGROUND);
     const char *message = switch_block_record[3]        ? "NATIVE APFS TEST REFUSED OR FAILED"
                           : switch_block_record[2] == 5 ? "APFS FILES VERIFIED - READ ONLY"
                           : switch_block_record[2] >= 3 ? "APFS VOLUMES FOUND - READING FILES"
                           : switch_block_record[2] == 2 ? "READ ONLY BLOCK DEVICES PUBLISHED"
-                                                          : "BUILDING READ ONLY DISK INDEXES";
+                                                        : "BUILDING READ ONLY DISK INDEXES";
     text(360, message, 104, switch_block_record[2] == 5 ? SWITCH_GREEN : SWITCH_WHITE);
     hex_line(400, "BLOCK TEST STAGE=", switch_block_record[2]);
     hex_line(420, "BLOCK TEST ERROR=", switch_block_record[3]);
@@ -40,11 +45,14 @@ static void block_screen(void)
     sync_pixels();
     (void)ml_set_interrupts_enabled(previous);
 }
+
 /* The block test runs only from the signed PID 1 fixture (switch_diag_user_syscall), which this port never boots. */
 static const int block_test = 0;
+
 static void block_start(void)
 {
-    if (!block_test) return;
+    if (!block_test)
+        return;
     block_enabled = 1;
     block_query.status = SWITCH_BLOCK_NOT_READY;
     switch_block_record[0] = UINT64_C(0x53574348424c4f43);
@@ -70,31 +78,38 @@ static void block_start(void)
     switch_block_record[14] = block_ticks() - block_started;
     block_screen();
 }
+
 static int block_user_hash(uint64_t address, unsigned size, const uint8_t expected[32])
 {
     SHA256_CTX hash;
     SHA256_Init(&hash);
     for (unsigned offset = 0; offset < size;) {
         unsigned n = size - offset;
-        if (n > sizeof(block_hash_buffer)) n = sizeof(block_hash_buffer);
-        if (copyin(address + offset, block_hash_buffer, n)) return 0;
+        if (n > sizeof(block_hash_buffer))
+            n = sizeof(block_hash_buffer);
+        if (copyin(address + offset, block_hash_buffer, n))
+            return 0;
         SHA256_Update(&hash, block_hash_buffer, n);
         offset += n;
     }
     uint8_t got[32];
     SHA256_Final(got, &hash);
     for (unsigned i = 0; i < 32; i++)
-        if (got[i] != expected[i]) return 0;
+        if (got[i] != expected[i])
+            return 0;
     return 1;
 }
+
 static int block_volume_result_valid(const uint64_t *r, unsigned size)
 {
     static const unsigned flags[] = {1, 3, 5, 8, 10, 12};
     for (unsigned i = 0; i < sizeof(flags) / sizeof(flags[0]); i++)
-        if (r[flags[i]] & (1u << 29)) return 0;
+        if (r[flags[i]] & (1u << 29))
+            return 0;
     return !r[0] && !r[2] && r[4] <= 0x7fffffff && r[6] == size && r[7] && r[7] <= size && !r[9] && !r[11] && !r[13] &&
            !r[14] && !r[15];
 }
+
 static void block_checkpoint(uint64_t pc, uint64_t cpsr, int pid, int code, int error, int64_t result)
 {
     if (!block_enabled || block_finished || (cpsr & 0x1f) || pid != 1 || code != 20 || error || result != 1 ||
@@ -123,8 +138,10 @@ static void block_checkpoint(uint64_t pc, uint64_t cpsr, int pid, int code, int 
                 switch_block_record[2] = 3;
             }
         }
-        if (copyout(&block_query, SWITCH_USER_BLOCK_QUERY, sizeof(block_query))) switch_block_record[3] = 304;
-        if (switch_block_record[5] == 1 || switch_block_record[2] == 3 || switch_block_record[3]) block_screen();
+        if (copyout(&block_query, SWITCH_USER_BLOCK_QUERY, sizeof(block_query)))
+            switch_block_record[3] = 304;
+        if (switch_block_record[5] == 1 || switch_block_record[2] == 3 || switch_block_record[3])
+            block_screen();
         return;
     }
     block_finished = 1;
@@ -138,11 +155,12 @@ static void block_checkpoint(uint64_t pc, uint64_t cpsr, int pid, int code, int 
     switch_block_record[9] = r[1];
     switch_block_record[10] = r[14];
     switch_block_record[11] = r[30];
-    if (switch_block_record[3] || switch_block_record[2] != 3 || r[0] != 4 || r[1] ||
-        r[4] != switch_block_record[5] || r[4] < 1 || r[4] > 200 || r[5] + 1 != r[4] || r[6] || r[7] ||
+    if (switch_block_record[3] || switch_block_record[2] != 3 || r[0] != 4 || r[1] || r[4] != switch_block_record[5] ||
+        r[4] < 1 || r[4] > 200 || r[5] + 1 != r[4] || r[6] || r[7] ||
         !block_volume_result_valid(r + 8, switch_block_file_size_0) ||
         !block_volume_result_valid(r + 24, switch_block_file_size_1)) {
-        if (!switch_block_record[3]) switch_block_record[3] = 306;
+        if (!switch_block_record[3])
+            switch_block_record[3] = 306;
         block_screen();
         return;
     }

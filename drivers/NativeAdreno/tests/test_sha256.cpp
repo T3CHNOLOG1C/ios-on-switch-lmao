@@ -14,16 +14,20 @@
             std::exit(1);                                        \
         }                                                        \
     } while (0)
+
 static int hex(const char *text, uint8_t *out, size_t bytes)
 {
-    if (std::strlen(text) != bytes * 2) return 1;
+    if (std::strlen(text) != bytes * 2)
+        return 1;
     for (size_t i = 0; i < bytes; ++i) {
         unsigned value = 0;
-        if (std::sscanf(text + 2 * i, "%2x", &value) != 1) return 1;
+        if (std::sscanf(text + 2 * i, "%2x", &value) != 1)
+            return 1;
         out[i] = uint8_t(value);
     }
     return 0;
 }
+
 static void expect(const char *label, const char *message, const char *wanted)
 {
     uint8_t digest[32], expected[32];
@@ -34,6 +38,7 @@ static void expect(const char *label, const char *message, const char *wanted)
         std::exit(1);
     }
 }
+
 int main(int argc, char **argv)
 {
     uint8_t digest[32];

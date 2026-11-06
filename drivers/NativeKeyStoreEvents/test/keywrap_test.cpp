@@ -18,6 +18,7 @@ void encrypt(void *key, const uint8_t in[16], uint8_t out[16])
         moved != 16)
         std::abort();
 }
+
 void decrypt(void *key, const uint8_t in[16], uint8_t out[16])
 {
     size_t moved = 0;
@@ -25,26 +26,32 @@ void decrypt(void *key, const uint8_t in[16], uint8_t out[16])
         moved != 16)
         std::abort();
 }
+
 bool encrypt128(void *key, const uint8_t in[16], uint8_t out[16])
 {
     size_t moved = 0;
     return !CCCrypt(kCCEncrypt, kCCAlgorithmAES, kCCOptionECBMode, key, 16, nullptr, in, 16, out, 16, &moved) &&
            moved == 16;
 }
+
 bool failing(void *, const uint8_t[16], uint8_t[16])
 {
     return false;
 }
+
 void sha256(const void *const *parts, const size_t *lengths, size_t count, uint8_t digest[32])
 {
     CC_SHA256_CTX c;
     CC_SHA256_Init(&c);
-    for (size_t i = 0; i < count; ++i) CC_SHA256_Update(&c, parts[i], (CC_LONG)lengths[i]);
+    for (size_t i = 0; i < count; ++i)
+        CC_SHA256_Update(&c, parts[i], (CC_LONG)lengths[i]);
     CC_SHA256_Final(digest, &c);
 }
+
 void hex(const char *s, uint8_t *out)
 {
-    for (size_t i = 0; s[2 * i]; ++i) std::sscanf(s + 2 * i, "%2hhx", &out[i]);
+    for (size_t i = 0; s[2 * i]; ++i)
+        std::sscanf(s + 2 * i, "%2hhx", &out[i]);
 }
 }  // namespace
 
@@ -54,6 +61,7 @@ TEST(AKSKeyWrap, Rfc3394Vectors)
     uint8_t kek[32];
     hex("000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F", kek);
     aks::Primitives p{kek, encrypt, decrypt};
+
     struct {
         const char *data, *wrapped;
     } vectors[] = {
@@ -61,6 +69,7 @@ TEST(AKSKeyWrap, Rfc3394Vectors)
         {"00112233445566778899AABBCCDDEEFF000102030405060708090A0B0C0D0E0F",
          "28C9F404C4B810F4CBCCB35CFB87F8263F5786E2D80ED326CBC7F0E71A99F43BFB988B9B7A02DD21"},
     };
+
     for (auto &v : vectors) {
         uint8_t data[32], want[40], got[40], back[32];
         size_t n = std::strlen(v.data) / 2;
@@ -102,6 +111,7 @@ TEST(AKSCmac, Rfc4493)
         "1"
         "7ad2b417be66c3710",
         message);
+
     struct {
         size_t length;
         const char *tag;
@@ -111,6 +121,7 @@ TEST(AKSCmac, Rfc4493)
         {40, "dfa66747de9ae63030ca32611497c827"},
         {64, "51f0bebf7e3b9d92fc49741779363cfe"},
     };
+
     for (auto &c : cmacs) {
         uint8_t tag[16];
         hex(c.tag, want);
@@ -127,14 +138,16 @@ TEST(AKSCmac, Rfc4493)
 TEST(AKSKeyWrap, ClassKeysRoundTripsAndRefusals)
 {
     uint8_t device[32], classA[32], classB[32];
-    for (int i = 0; i < 32; ++i) device[i] = (uint8_t)(i * 7 + 1);
+    for (int i = 0; i < 32; ++i)
+        device[i] = (uint8_t)(i * 7 + 1);
     aks::classKey(sha256, device, 0, 11, classA);
     aks::classKey(sha256, device, 0, 6, classB);
     EXPECT_NE(std::memcmp(classA, classB, 32), 0);
     aks::Primitives a{classA, encrypt, decrypt}, b{classB, encrypt, decrypt};
     for (size_t n = aks::kMinKey; n <= aks::kMaxKey; n += aks::kBlock) {
         uint8_t data[aks::kMaxKey], blob[aks::kMaxKey + 8], back[aks::kMaxKey];
-        for (size_t i = 0; i < n; ++i) data[i] = (uint8_t)(i ^ n);
+        for (size_t i = 0; i < n; ++i)
+            data[i] = (uint8_t)(i ^ n);
         EXPECT_TRUE(aks::wrap(a, data, n, blob)) << n;
         EXPECT_TRUE(aks::unwrap(a, blob, n + 8, back) && !std::memcmp(back, data, n)) << n;
         EXPECT_FALSE(aks::unwrap(b, blob, n + 8, back)) << n << ": wrong class key";

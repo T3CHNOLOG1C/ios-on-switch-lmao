@@ -5,6 +5,7 @@
 // implementations must fail without returning; never advertise them as supported.
 #include <IOKit/IOService.h>
 #include <IOKit/IOUserClient.h>
+
 class IOMobileFramebuffer : public IOService {
     OSDeclareAbstractStructors(IOMobileFramebuffer) uint64_t familyPrivate;
 
@@ -104,4 +105,5 @@ public:
     virtual __attribute__((noreturn)) void unclassified260() = 0;
     virtual __attribute__((noreturn)) void unclassified261() = 0;
 };
+
 static_assert(sizeof(IOService) == 136 && sizeof(IOMobileFramebuffer) == 144);

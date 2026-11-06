@@ -28,9 +28,11 @@ __attribute__((format(printf, 1, 2))) std::string message(const char *format, ..
     va_end(ap);
     return text;
 }
+
 #define CHECK(cond, ...) EXPECT_TRUE(cond) << message(__VA_ARGS__)
 
 uint64_t rng = 0x243f6a8885a308d3ull;
+
 unsigned rnd(unsigned n)
 {
     rng ^= rng << 13;
@@ -70,9 +72,16 @@ struct Sim {
              lastReadyId = 0;
     unsigned renderTicks = 4, renderJitter = 0;
 
-    explicit Sim(bool early) : earlyRetire(early) { ring.reset(3); }
+    explicit Sim(bool early) : earlyRetire(early)
+    {
+        ring.reset(3);
+    }
 
-    bool latchable(int entry) const { return entry == active || (request && entry == assembly); }
+    bool latchable(int entry) const
+    {
+        return entry == active || (request && entry == assembly);
+    }
+
     // CA's completion callback for swap s: the surface of the previously completed swap is recycled.
     void complete(const Swap &s)
     {
@@ -81,12 +90,15 @@ struct Sim {
             caFree[lastCompletedSurface] = true;
         lastCompletedSurface = s.surface;
     }
+
     Swap *find(uint64_t id)
     {
         for (Swap &s : queue)
-            if (s.id == id) return &s;
+            if (s.id == id)
+                return &s;
         return nullptr;
     }
+
     void retireThrough(uint64_t seq)
     {
         while (!queue.empty() && queue.front().seq && queue.front().seq <= seq &&
@@ -95,10 +107,12 @@ struct Sim {
             queue.pop_front();
         }
     }
+
     void caDraw()
     {
         for (unsigned surface = 0; surface < kSurfaces; ++surface) {
-            if (!caFree[surface]) continue;
+            if (!caFree[surface])
+                continue;
             const int entry = kSlot0 + (int)surface;
             if (latchable(entry) || ring.busy(entry)) {
                 ++violations;  // CA draws into a surface DC A scans, may take, or the ring holds
@@ -113,16 +127,19 @@ struct Sim {
             return;
         }
     }
+
     void kick()
     {
-        if (inFlight) return;
+        if (inFlight)
+            return;
         Swap *next = nullptr;
         for (Swap &s : queue)
             if (!s.seq) {
                 next = &s;
                 break;
             }
-        if (!next) return;
+        if (!next)
+            return;
         if (ring.held != kNone || ring.superseded != kNone || ring.busy(kSlot0 + (int)next->surface)) {
             deferred = true;
             return;
@@ -139,9 +156,11 @@ struct Sim {
             }
         }
     }
+
     void fenceDone()
     {
-        if (!inFlight || tick < inFlightDoneTick) return;
+        if (!inFlight || tick < inFlightDoneTick)
+            return;
         inFlight = false;
         lastReadyId = inFlightId;
         const int entry = kSlot0 + (int)inFlightSurface;
@@ -151,11 +170,13 @@ struct Sim {
         entryId[entry] = inFlightId;
         if (how != TegraScanoutRing::kHold) {
             assembly = entry;  // START_ADDR, then (possibly after a boundary) ACT_REQ
-            if (!rnd(6)) boundary();
+            if (!rnd(6))
+                boundary();
             request = true;
         }
         kick();
     }
+
     void boundary()
     {
         if (request) {
@@ -164,34 +185,45 @@ struct Sim {
         }
         ++pendingActions;
     }
+
     void frameEndAction()
     {
-        if (!pendingActions) return;
+        if (!pendingActions)
+            return;
         pendingActions = 0;
-        if (ring.pending == kNone) return;
+        if (ring.pending == kNone)
+            return;
         const int asked = ring.pending, replaced = ring.superseded;
         switch (ring.latch(active, request)) {
         case TegraScanoutRing::kTaken:
             ++presents;
             noteShown(entryId[asked]);
-            if (!earlyRetire) retireThrough(entrySeq[asked]);
+            if (!earlyRetire)
+                retireThrough(entrySeq[asked]);
             break;
         case TegraScanoutRing::kTakenReplaced:
             ++presents;
             noteShown(entryId[replaced]);
-            if (!earlyRetire) retireThrough(entrySeq[replaced]);
+            if (!earlyRetire)
+                retireThrough(entrySeq[replaced]);
             break;
         case TegraScanoutRing::kInconsistent:
             CHECK(false, "inconsistent latch: active %d assembly %d request %d", active, assembly, request);
             break;
-        case TegraScanoutRing::kWaiting: return;
+        case TegraScanoutRing::kWaiting:
+            return;
         }
         if (deferred) {
             deferred = false;
             kick();
         }
     }
-    void noteShown(uint64_t id) { lastShownId = id > lastShownId ? id : lastShownId; }
+
+    void noteShown(uint64_t id)
+    {
+        lastShownId = id > lastShownId ? id : lastShownId;
+    }
+
     // One frame: the boundary, the frame-end action (sometimes folded into the next), CA's vsync-driven draw.
     void run(unsigned frames)
     {
@@ -205,11 +237,14 @@ struct Sim {
                         ++measured;
                         onTime += entryId[active] >= ready;  // what DC A scans from this boundary on
                     }
-                    if (rnd(8)) frameEndAction();
+                    if (rnd(8))
+                        frameEndAction();
                 }
-                if (t == 2) caDraw();  // CA renders on its vsync, a few ticks after the boundary
+                if (t == 2)
+                    caDraw();  // CA renders on its vsync, a few ticks after the boundary
                 fenceDone();
-                if (t == 9) frameEndAction();  // a late or folded frame-end action
+                if (t == 9)
+                    frameEndAction();  // a late or folded frame-end action
             }
         }
     }

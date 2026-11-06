@@ -7,9 +7,11 @@
 #include <vector>
 #include "../DirectDisk.h"
 using namespace persist;
+
 struct Medium {  // a store of any size: only written blocks exist
     std::map<uint64_t, std::vector<uint8_t>> blocks;
     unsigned writes = 0;
+
     bool read(uint64_t b, uint32_t n, void *d)
     {
         for (uint32_t i = 0; i < n; ++i) {
@@ -21,6 +23,7 @@ struct Medium {  // a store of any size: only written blocks exist
         }
         return true;
     }
+
     bool write(uint64_t b, uint32_t n, const void *s)
     {
         ++writes;
@@ -28,21 +31,29 @@ struct Medium {  // a store of any size: only written blocks exist
             blocks[b + i].assign((const uint8_t *)s + i * kBlock, (const uint8_t *)s + (i + 1) * kBlock);
         return true;
     }
-    bool sync() { return true; }
+
+    bool sync()
+    {
+        return true;
+    }
 };
+
 struct Buffer {
     std::vector<uint8_t> &data;
+
     uint64_t read(uint64_t at, void *p, uint64_t n)
     {
         memcpy(p, &data[at], n);
         return n;
     }
+
     uint64_t copy(uint64_t at, const void *p, uint64_t n)
     {
         memcpy(&data[at], p, n);
         return n;
     }
 };
+
 static std::vector<uint8_t> packed(uint64_t logical, const std::map<uint64_t, uint8_t> &pagesByIndex)
 {  // DBRDISK1 with one extent per page
     std::vector<uint8_t> out(32 + 16 * pagesByIndex.size());
@@ -60,16 +71,33 @@ static std::vector<uint8_t> packed(uint64_t logical, const std::map<uint64_t, ui
         memcpy(&out[40 + 16 * k], &len, 8);
         ++k;
     }
-    for (auto &p : pagesByIndex) out.insert(out.end(), 4096, p.second);
+    for (auto &p : pagesByIndex)
+        out.insert(out.end(), 4096, p.second);
     return out;
 }
+
 struct Ops {
-    uint8_t *allocate() { return (uint8_t *)calloc(1, 4096); }
+    uint8_t *allocate()
+    {
+        return (uint8_t *)calloc(1, 4096);
+    }
 };
+
 struct Sha {
-    static void init(CC_SHA256_CTX &c) { CC_SHA256_Init(&c); }
-    static void update(CC_SHA256_CTX &c, const void *p, size_t n) { CC_SHA256_Update(&c, p, (CC_LONG)n); }
-    static void fin(CC_SHA256_CTX &c, uint8_t *o) { CC_SHA256_Final(o, &c); }
+    static void init(CC_SHA256_CTX &c)
+    {
+        CC_SHA256_Init(&c);
+    }
+
+    static void update(CC_SHA256_CTX &c, const void *p, size_t n)
+    {
+        CC_SHA256_Update(&c, p, (CC_LONG)n);
+    }
+
+    static void fin(CC_SHA256_CTX &c, uint8_t *o)
+    {
+        CC_SHA256_Final(o, &c);
+    }
 };
 
 int main()
@@ -117,7 +145,8 @@ int main()
         memset(&flat[3 * 4096], 0x22, 4096);
         CC_SHA256(flat.data(), (CC_LONG)flat.size(), plain);
         assert(!memcmp(id, plain, 32));
-        for (auto p : pg) free(p);
+        for (auto p : pg)
+            free(p);
     }
     uint8_t idA[32], idB[32];
     CC_SHA256_CTX ctx;
@@ -166,15 +195,18 @@ int main()
                          : base == 2 ? (pages / 2 - 3) * 4096
                                      : ((uint64_t)rand() * 7919 % (pages - 40)) * 4096;
         uint64_t offset = where + (rand() & 1 ? 0 : (uint64_t)rand() % 4096);
-        if (offset + len > logical) len = logical - offset;
+        if (offset + len > logical)
+            len = logical - offset;
         Buffer b{io};
         if (rand() & 1) {
-            for (uint64_t k = 0; k < len; ++k) io[k] = (uint8_t)rand();
+            for (uint64_t k = 0; k < len; ++k)
+                io[k] = (uint8_t)rand();
             assert(directDiskIO(seed, ov, m, stage.data(), 32, true, offset, len, b, &storeError) == len &&
                    !storeError);
             for (uint64_t k = 0; k < len;) {
                 uint64_t at = offset + k, i = at / 4096, n = std::min<uint64_t>(4096 - (at & 4095), len - k);
-                if (!oracle.count(i)) oracle[i] = seedPage(i);
+                if (!oracle.count(i))
+                    oracle[i] = seedPage(i);
                 memcpy(&oracle[i][at & 4095], &io[k], n);
                 k += n;
             }
@@ -184,7 +216,8 @@ int main()
         }
     }
     assert(ov.present == oracle.size() && seed.count == 5);
-    for (uint64_t k = 0; k < seed.count; ++k) free(seed.page[k]);
+    for (uint64_t k = 0; k < seed.count; ++k)
+        free(seed.page[k]);
     puts("PASS: compact seed import, identity, and a 64 GiB direct disk against a sparse oracle");
     return 0;
 }

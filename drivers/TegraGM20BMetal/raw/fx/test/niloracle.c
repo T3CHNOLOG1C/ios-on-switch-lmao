@@ -27,7 +27,8 @@ int main(int argc, char **argv)
         return 1;
     }
     PFN_vkGetInstanceProcAddr gipa = (PFN_vkGetInstanceProcAddr)dlsym(lib, "vk_icdGetInstanceProcAddr");
-    if (!gipa) return 1;
+    if (!gipa)
+        return 1;
     const VkApplicationInfo app = {
         VK_STRUCTURE_TYPE_APPLICATION_INFO, NULL, "niloracle", 1, "fx", 1, VK_API_VERSION_1_3};
     const VkInstanceCreateInfo ici = {VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO, NULL, 0, &app, 0, NULL, 0, NULL};
@@ -64,7 +65,8 @@ int main(int argc, char **argv)
     const VkFormat format = (VkFormat)atoi(argv[2]);
     for (int a = 3; a < argc; a++) {
         unsigned w, h, l;
-        if (sscanf(argv[a], "%ux%ux%u", &w, &h, &l) != 3) continue;
+        if (sscanf(argv[a], "%ux%ux%u", &w, &h, &l) != 3)
+            continue;
         const VkImageCreateInfo ci = {VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
                                       NULL,
                                       0,

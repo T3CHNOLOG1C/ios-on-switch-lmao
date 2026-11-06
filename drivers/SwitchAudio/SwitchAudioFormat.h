@@ -30,7 +30,11 @@
 #endif
 
 /* TEGRA210_AUDIOCIF_BITS_* (CIF words) and TEGRA210_I2S_BITS_* (I2S_CTRL bit size) share one encoding. */
-enum { SWITCH_AUDIO_BITS_16 = 3, SWITCH_AUDIO_BITS_24 = 5, SWITCH_AUDIO_BITS_32 = 7 };
+enum {
+    SWITCH_AUDIO_BITS_16 = 3,
+    SWITCH_AUDIO_BITS_24 = 5,
+    SWITCH_AUDIO_BITS_32 = 7
+};
 
 #define SWITCH_AUDIO_SAMPLE_BITS  32u /* in memory, on the ADMAIF and the XBAR */
 #define SWITCH_AUDIO_SLOT_BITS    32u /* one channel's I2S slot */
@@ -46,17 +50,20 @@ SWITCH_AUDIO_FN uint32_t switch_audio_cif(uint32_t threshold, uint32_t audio_cha
     return threshold << 24 | (audio_channels - 1) << 20 | (client_channels - 1) << 16 | audio_bits << 12 |
            client_bits << 8;
 }
+
 /* ADMAIF channel CIF (TX_CTRL/RX_CTRL): PACK8 31, PACK16 30, both off for 32-bit data (tegra_admaif_set_pack_mode). */
 SWITCH_AUDIO_FN uint32_t switch_audio_admaif_cif(uint32_t channels)
 {
     return switch_audio_cif(0, channels, channels, SWITCH_AUDIO_BITS_32, SWITCH_AUDIO_BITS_32);
 }
+
 /* I2S1 playback (AXBAR RX: XBAR stereo -> DAP stereo) and capture (AXBAR TX: DAP stereo -> XBAR mono, the left slot;
  * the codec puts IN1 on both). */
 SWITCH_AUDIO_FN uint32_t switch_audio_i2s_rx_cif(void)
 {
     return switch_audio_cif(3, 2, 2, SWITCH_AUDIO_BITS_32, SWITCH_AUDIO_BITS_32);
 }
+
 SWITCH_AUDIO_FN uint32_t switch_audio_i2s_tx_cif(void)
 {
     return switch_audio_cif(0, 1, 2, SWITCH_AUDIO_BITS_32, SWITCH_AUDIO_BITS_32);
@@ -68,11 +75,13 @@ SWITCH_AUDIO_FN uint32_t switch_audio_i2s_ctrl(void)
 {
     return 31u << 24 | 1u << 10 | (uint32_t)SWITCH_AUDIO_BITS_32;
 }
+
 /* I2S_TIMING: the channel bit count, LRCK half a frame: (bclk / fs - 1) >> 1 = 31; symmetric (64 fs is even). */
 SWITCH_AUDIO_FN uint32_t switch_audio_i2s_timing(void)
 {
     return (SWITCH_AUDIO_BCLK_FS - 1) >> 1;
 }
+
 /* CAR CLK_SOURCE_I2S0 divider (7.1: value = 2 * ratio - 2) for the bit clock from PLLA_OUT0: 49.152 MHz / 3.072 MHz
  * = 16 -> 30. pllaout0_per_fs is PLLA_OUT0 / fs (1024 at 49.152 MHz and 48 kHz). */
 SWITCH_AUDIO_FN uint32_t switch_audio_i2s_divider(uint32_t pllaout0_per_fs)
@@ -94,12 +103,14 @@ SWITCH_AUDIO_FN uint64_t switch_audio_ticks_per_frame_q32_parts(uint64_t num, ui
 {
     return (num / den) << 32 | ((num % den) << 16) / den << 16 | (((((num % den) << 16) % den) << 16) / den);
 }
+
 SWITCH_AUDIO_FN uint64_t switch_audio_ticks_per_frame_q32(uint64_t host_hz, uint64_t ref_hz, uint64_t m, uint64_t p,
                                                           uint64_t n_eff, uint64_t out0_x2, uint64_t pllaout0_per_fs)
 {
     return switch_audio_ticks_per_frame_q32_parts(host_hz * 8192 * m * p * out0_x2 * pllaout0_per_fs,
                                                   2 * ref_hz * n_eff);
 }
+
 /* The same frame rate in mHz (for the log): 2 ref n_eff / (8192 m p out0_x2 pllaout0_per_fs), rounded down. */
 SWITCH_AUDIO_FN uint64_t switch_audio_rate_millihz(uint64_t ref_hz, uint64_t m, uint64_t p, uint64_t n_eff,
                                                    uint64_t out0_x2, uint64_t pllaout0_per_fs)

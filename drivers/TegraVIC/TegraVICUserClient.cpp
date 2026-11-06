@@ -97,6 +97,7 @@ struct Conn {
     IOLock *lock;
     uint32_t pending;  // jobs queued or running
 };
+
 Conn gConns[kMaxConnections];
 IOLock *gConnLock;
 
@@ -105,7 +106,8 @@ Conn *connOf(IOUserClient *client)
     Conn *found = nullptr;
     IOLockLock(gConnLock);
     for (uint32_t i = 0; i < kMaxConnections && !found; i++)
-        if (gConns[i].client == client) found = &gConns[i];
+        if (gConns[i].client == client)
+            found = &gConns[i];
     IOLockUnlock(gConnLock);
     return found;
 }
@@ -116,7 +118,8 @@ uintptr_t gServiceVtable[kVtableSlots], gClientVtable[kVtableSlots];
 int slotOf(const uintptr_t *vtable, const void *function)
 {
     for (int i = 0; i < 192; i++)
-        if (vtable[2 + i] == (uintptr_t)function) return i;
+        if (vtable[2 + i] == (uintptr_t)function)
+            return i;
     return -1;
 }
 
@@ -130,12 +133,18 @@ uint64_t nowUs()
 IOReturn ioreturn(int err)
 {
     switch (err) {
-    case 0: return kIOReturnSuccess;
-    case -12: return kIOReturnNoMemory;
-    case -22: return kIOReturnBadArgument;
-    case -60: return kIOReturnTimeout;
-    case -19: return kIOReturnNotReady;
-    default: return kIOReturnIOError;
+    case 0:
+        return kIOReturnSuccess;
+    case -12:
+        return kIOReturnNoMemory;
+    case -22:
+        return kIOReturnBadArgument;
+    case -60:
+        return kIOReturnTimeout;
+    case -19:
+        return kIOReturnNotReady;
+    default:
+        return kIOReturnIOError;
     }
 }
 
@@ -149,12 +158,14 @@ uint64_t *gPages[TEGRA_VIC_WINDOWS];
 struct {
     uint64_t windowStart, jobs, ops, refused, failed, engineUs, mapUs, bytes;
 } gStats;
+
 uint32_t gRefusedLogged;  // bit per kind of refusal logged once
 
 void refusedOnce(uint32_t bit, const char *why)
 {
     __atomic_add_fetch(&gStats.refused, 1, __ATOMIC_RELAXED);
-    if (__atomic_fetch_or(&gRefusedLogged, 1u << bit, __ATOMIC_RELAXED) & (1u << bit)) return;
+    if (__atomic_fetch_or(&gRefusedLogged, 1u << bit, __ATOMIC_RELAXED) & (1u << bit))
+        return;
     IOLog("TegraVIC: transform refused (first of its kind this boot): %s\n", why);
 }
 
@@ -186,7 +197,8 @@ IOReturn runJob(Job *job)
     if (!ret && job->plan.readsSource)
         ret = tegra_vic_surface_prepare(&job->src, tegra_vic_surface_extent(&job->src.desc),
                                         gPages[TEGRA_VIC_WINDOW_SRC], kWindowPages, &pages[0]);
-    if (ret) return ret;
+    if (ret)
+        return ret;
     tegra_vic_lock();
     const uint64_t dstBase = tegra_vic_window_map(TEGRA_VIC_WINDOW_DST, gPages[TEGRA_VIC_WINDOW_DST], pages[1], true);
     const uint64_t srcBase = job->plan.readsSource ? tegra_vic_window_map(TEGRA_VIC_WINDOW_SRC,
@@ -194,12 +206,16 @@ IOReturn runJob(Job *job)
                                                    : 0;
     why = tegra_vic_image_from(&job->dst.desc, dstBase, &dst);
     dst.chromaSite = job->chromaSite;
-    if (!why && job->plan.readsSource) why = tegra_vic_image_from(&job->src.desc, srcBase, &src);
-    if (why) ret = kIOReturnBadArgument;
+    if (!why && job->plan.readsSource)
+        why = tegra_vic_image_from(&job->src.desc, srcBase, &src);
+    if (why)
+        ret = kIOReturnBadArgument;
     // VIC does not snoop the CPU's caches: what the CPU wrote to the source must be in DRAM, and no dirty line of the
     // destination may be written back over what VIC writes.
-    if (!ret && job->plan.readsSource) tegra_vic_cache_clean_pages(gPages[TEGRA_VIC_WINDOW_SRC], pages[0]);
-    if (!ret) tegra_vic_cache_flush_pages(gPages[TEGRA_VIC_WINDOW_DST], pages[1]);
+    if (!ret && job->plan.readsSource)
+        tegra_vic_cache_clean_pages(gPages[TEGRA_VIC_WINDOW_SRC], pages[0]);
+    if (!ret)
+        tegra_vic_cache_flush_pages(gPages[TEGRA_VIC_WINDOW_DST], pages[1]);
     const uint64_t t1 = nowUs();
     uint64_t busy = 0;
     for (uint32_t i = 0; !ret && i < job->plan.count; i++) {
@@ -225,15 +241,18 @@ IOReturn runJob(Job *job)
     gStats.engineUs += busy;
     gStats.mapUs += (t1 - t0) + (nowUs() - t1 - busy);
     gStats.bytes += ((uint64_t)pages[0] + pages[1]) << 12;
-    if (why) IOLog("TegraVIC: a checked job was refused on the engine thread: %s\n", why);
+    if (why)
+        IOLog("TegraVIC: a checked job was refused on the engine thread: %s\n", why);
     return ret;
 }
 
 void statsLine()
 {
     const uint64_t now = nowUs();
-    if (!gStats.windowStart) gStats.windowStart = now;
-    if (now - gStats.windowStart < 5000000) return;
+    if (!gStats.windowStart)
+        gStats.windowStart = now;
+    if (now - gStats.windowStart < 5000000)
+        return;
     char line[200];
     snprintf(line, sizeof(line),
              "TegraVIC: %llus jobs=%llu ops=%llu refused=%llu failed=%llu engine=%lluus/job cpu=%lluus/job "
@@ -250,17 +269,20 @@ void engineThread(void *, wait_result_t)
 {
     for (;;) {
         IOLockLock(gQueueLock);
-        while (!gHead) IOLockSleep(gQueueLock, &gHead, THREAD_UNINT);
+        while (!gHead)
+            IOLockSleep(gQueueLock, &gHead, THREAD_UNINT);
         Job *job = gHead;
         gHead = job->next;
-        if (!gHead) gTail = nullptr;
+        if (!gHead)
+            gTail = nullptr;
         gQueued--;
         IOLockWakeup(gQueueLock, &gQueued, false);
         IOLockUnlock(gQueueLock);
 
         const IOReturn status = runJob(job);
         gStats.jobs++;
-        if (status) gStats.failed++;
+        if (status)
+            gStats.failed++;
         statsLine();
         // The destination's seed moves before the caller hears back (r18-planes): VIC wrote it, or may have in part.
         tegra_vic_surface_written(&job->dst);
@@ -293,15 +315,18 @@ void engineThread(void *, wait_result_t)
 constexpr uint32_t kPresentPages = 8192;  // 32 MiB a side: a 4096x4096 NV12 picture and its IOSurface
 uint64_t *gPresentPages[TEGRA_VIC_WINDOWS];
 TegraVICJob gPresentJob;  // under the engine lock
+
 struct {
     uint64_t windowStart, pictures, refused, failed, engineUs, cpuUs, bytes;
 } gPresentStats;  // under the engine lock, but the refusals (atomic)
+
 uint32_t gPresentRefusedLogged;
 
 void presentRefused(uint32_t bit, const char *why)
 {
     __atomic_add_fetch(&gPresentStats.refused, 1, __ATOMIC_RELAXED);
-    if (__atomic_fetch_or(&gPresentRefusedLogged, 1u << bit, __ATOMIC_RELAXED) & (1u << bit)) return;
+    if (__atomic_fetch_or(&gPresentRefusedLogged, 1u << bit, __ATOMIC_RELAXED) & (1u << bit))
+        return;
     IOLog("TegraVIC: present refused (first of its kind this boot): %s; the decoder copies on the CPU\n", why);
 }
 
@@ -309,8 +334,10 @@ void presentRefused(uint32_t bit, const char *why)
 void presentStatsLine()
 {
     const uint64_t now = nowUs();
-    if (!gPresentStats.windowStart) gPresentStats.windowStart = now;
-    if (now - gPresentStats.windowStart < 5000000) return;
+    if (!gPresentStats.windowStart)
+        gPresentStats.windowStart = now;
+    if (now - gPresentStats.windowStart < 5000000)
+        return;
     const uint64_t n = gPresentStats.pictures ? gPresentStats.pictures : 1;
     char line[200];
     snprintf(line, sizeof(line),
@@ -331,17 +358,23 @@ const char *presentPlan(const TegraVICPicture *p, const TegraVICSurfaceDesc *d, 
                         TegraVICImage *src, TegraVICImage *dst, TegraVICOp *op)
 {
     const char *why = tegra_vic_image_from(d, dstBase, dst);
-    if (why) return why;
-    if (dst->format->kind == TEGRA_VIC_KIND_RGB) return "destination is not 4:2:0";
-    if (tegra_vic_surface_extent(d) > (uint64_t)kPresentPages << 12) return "surface over 32 MiB";
+    if (why)
+        return why;
+    if (dst->format->kind == TEGRA_VIC_KIND_RGB)
+        return "destination is not 4:2:0";
+    if (tegra_vic_surface_extent(d) > (uint64_t)kPresentPages << 12)
+        return "surface over 32 MiB";
     if ((p->pa & 0xfff) || !p->bytes || p->bytes > (uint64_t)kPresentPages << 12)
         return "picture memory not page aligned or over 32 MiB";
     // Odd sizes are refused rather than rounded: the column or row VIC could not write would show what the buffer held.
-    if ((p->cropX | p->cropY) & 1) return "picture window on odd coordinates";
+    if ((p->cropX | p->cropY) & 1)
+        return "picture window on odd coordinates";
     const uint32_t w = p->width < dst->width ? p->width : dst->width;
     const uint32_t h = p->height < dst->height ? p->height : dst->height;
-    if ((w | h) & 1) return "picture of odd size";
-    if (w < TEGRA_VIC_MIN_DIM || h < TEGRA_VIC_MIN_DIM) return "picture under 2x2";
+    if ((w | h) & 1)
+        return "picture of odd size";
+    if (w < TEGRA_VIC_MIN_DIM || h < TEGRA_VIC_MIN_DIM)
+        return "picture under 2x2";
     bzero(src, sizeof(*src));
     src->format = dst->format;
     src->width = p->cropX + w;
@@ -397,11 +430,13 @@ extern "C" int tegra_vic_present(const TegraVICPicture *p, task_t task, const ch
     TegraVICOp op;
     *why = presentPlan(p, &surface.desc, srcWindow, dstWindow, &src, &dst, &op);
     TegraVICJob *check = *why ? nullptr : IONew(TegraVICJob, 1);
-    if (!*why && !check) *why = "no memory for the check";
+    if (!*why && !check)
+        *why = "no memory for the check";
     if (!*why)
         *why = tegra_vic_build(&src, &dst, &op, tegra_vic_traits(), tegra_vic_config_address(),
                                tegra_vic_filter_address(), check);
-    if (check) IODelete(check, TegraVICJob, 1);
+    if (check)
+        IODelete(check, TegraVICJob, 1);
     if (*why) {
         tegra_vic_surface_release(&surface);
         presentRefused(2, *why);
@@ -419,7 +454,8 @@ extern "C" int tegra_vic_present(const TegraVICPicture *p, task_t task, const ch
         return -12;
     }
     const uint32_t srcPages = (uint32_t)((p->bytes + 0xfff) >> 12);
-    for (uint32_t i = 0; i < srcPages; i++) gPresentPages[TEGRA_VIC_WINDOW_SRC][i] = p->pa + ((uint64_t)i << 12);
+    for (uint32_t i = 0; i < srcPages; i++)
+        gPresentPages[TEGRA_VIC_WINDOW_SRC][i] = p->pa + ((uint64_t)i << 12);
     const uint64_t dstBase =
         tegra_vic_window_map(TEGRA_VIC_WINDOW_DST, gPresentPages[TEGRA_VIC_WINDOW_DST], dstPages, true);
     const uint64_t srcBase =
@@ -435,12 +471,14 @@ extern "C" int tegra_vic_present(const TegraVICPicture *p, task_t task, const ch
                                tegra_vic_filter_address(), &gPresentJob);
     uint64_t busy = 0;
     int err = *why ? -95 : tegra_vic_run(&gPresentJob, &busy);
-    if (!*why && err) *why = "the job did not finish";
+    if (!*why && err)
+        *why = "the job did not finish";
     tegra_vic_cache_flush_pages(gPresentPages[TEGRA_VIC_WINDOW_DST], dstPages);
     tegra_vic_window_clear(TEGRA_VIC_WINDOW_DST);
     tegra_vic_window_clear(TEGRA_VIC_WINDOW_SRC);
     gPresentStats.pictures++;
-    if (err) gPresentStats.failed++;
+    if (err)
+        gPresentStats.failed++;
     gPresentStats.engineUs += busy;
     gPresentStats.cpuUs += (nowUs() - t0) - busy;
     gPresentStats.bytes += ((uint64_t)srcPages + dstPages) << 12;
@@ -455,7 +493,8 @@ namespace {
 void queueJob(Job *job)
 {
     IOLockLock(gQueueLock);
-    while (gQueued >= kQueueMax) IOLockSleep(gQueueLock, &gQueued, THREAD_UNINT);
+    while (gQueued >= kQueueMax)
+        IOLockSleep(gQueueLock, &gQueued, THREAD_UNINT);
     job->next = nullptr;
     if (gTail)
         gTail->next = job;
@@ -469,21 +508,26 @@ void queueJob(Job *job)
 
 IOReturn transform(Conn *conn, const void *in, uint32_t size)
 {
-    if (size != sizeof(TegraVICRequest)) return kIOReturnBadArgument;
-    if (!tegra_vic_ready()) return kIOReturnNotReady;
+    if (size != sizeof(TegraVICRequest))
+        return kIOReturnBadArgument;
+    if (!tegra_vic_ready())
+        return kIOReturnNotReady;
     TegraVICRequest r;
     memcpy(&r, in, sizeof(r));
     Job *job = IONewZero(Job, 1);
-    if (!job) return kIOReturnNoMemory;
+    if (!job)
+        return kIOReturnNoMemory;
     // Surfaces in the caller's task, as Apple's driver looks them up (not the task that opened the connection).
     IOReturn ret = tegra_vic_surface_lookup(r.dst_id, current_task(), &job->dst);
     const bool writeOnly = (r.flags & TEGRA_VIC_REQ_WRITE_ONLY) != 0;
-    if (!ret && !writeOnly) ret = tegra_vic_surface_lookup(r.src_id, current_task(), &job->src);
+    if (!ret && !writeOnly)
+        ret = tegra_vic_surface_lookup(r.src_id, current_task(), &job->src);
     uint32_t kind = TEGRA_VIC_PLAN_BAD;
     const char *why = ret ? "surface ID not found for this task" : nullptr;
     if (!ret) {
         why = tegra_vic_plan(&r, &job->src.desc, &job->dst.desc, &job->plan, &kind);
-        if (why) ret = kind == TEGRA_VIC_PLAN_UNSUPPORTED ? kIOReturnUnsupported : kIOReturnBadArgument;
+        if (why)
+            ret = kind == TEGRA_VIC_PLAN_UNSUPPORTED ? kIOReturnUnsupported : kIOReturnBadArgument;
     }
     // Every job checked now, against the surfaces as they will be mapped (window addresses are page-aligned, like the
     // real ones), so a refusal is this call's result and the caller can fall back at once.
@@ -491,7 +535,8 @@ IOReturn transform(Conn *conn, const void *in, uint32_t size)
         TegraVICImage src = {}, dst = {};
         why = tegra_vic_image_from(&job->dst.desc, kTegraVICWindowBase + TEGRA_VIC_WINDOW_DST * kTegraVICWindowBytes,
                                    &dst);
-        if (!why && job->plan.readsSource) why = tegra_vic_image_from(&job->src.desc, kTegraVICWindowBase, &src);
+        if (!why && job->plan.readsSource)
+            why = tegra_vic_image_from(&job->src.desc, kTegraVICWindowBase, &src);
         if (!why && (tegra_vic_surface_extent(&job->dst.desc) > kTegraVICWindowBytes ||
                      (job->plan.readsSource && tegra_vic_surface_extent(&job->src.desc) > kTegraVICWindowBytes)))
             why = "surface larger than a 128 MiB window";
@@ -499,7 +544,8 @@ IOReturn transform(Conn *conn, const void *in, uint32_t size)
         for (uint32_t i = 0; !why && i < job->plan.count; i++)
             why = tegra_vic_build(job->plan.op[i].fill ? nullptr : &src, &dst, &job->plan.op[i], tegra_vic_traits(),
                                   tegra_vic_config_address(), tegra_vic_filter_address(), &job->check);
-        if (why) ret = kIOReturnUnsupported;  // a shape VIC (or this unit, per its self-test) does not do
+        if (why)
+            ret = kIOReturnUnsupported;  // a shape VIC (or this unit, per its self-test) does not do
     }
     if (ret) {
         refusedOnce(ret == kIOReturnUnsupported ? 0 : ret == kIOReturnBadArgument ? 1 : 2, why ? why : "lookup");
@@ -514,7 +560,8 @@ IOReturn transform(Conn *conn, const void *in, uint32_t size)
     job->async = r.cb_fn != 0;
     const mach_port_t port = conn->port;
     job->reply = job->async && job->plan.callback && port != MACH_PORT_NULL;
-    if (job->reply) iouc_set_async_reference64(job->ref, port, r.cb_fn, r.cb_refcon, conn->task);
+    if (job->reply)
+        iouc_set_async_reference64(job->ref, port, r.cb_fn, r.cb_refcon, conn->task);
     job->info = r.cb_info;
     conn->client->retain();
     job->client = conn->client;
@@ -523,9 +570,11 @@ IOReturn transform(Conn *conn, const void *in, uint32_t size)
     conn->pending++;
     IOLockUnlock(conn->lock);
     queueJob(job);
-    if (job->async) return kIOReturnSuccess;
+    if (job->async)
+        return kIOReturnSuccess;
     IOLockLock(conn->lock);
-    while (!job->done) IOLockSleep(conn->lock, job, THREAD_UNINT);
+    while (!job->done)
+        IOLockSleep(conn->lock, job, THREAD_UNINT);
     IOLockUnlock(conn->lock);
     ret = job->status;
     IODelete(job, Job, 1);
@@ -538,13 +587,16 @@ IOReturn tegra_vic_external_method(IOUserClient *self, uint32_t selector, IOExte
 {
     (void)dispatch, (void)target, (void)reference;
     Conn *conn = connOf(self);
-    if (!conn || !a || a->structureInputDescriptor || a->structureOutputDescriptor) return kIOReturnBadArgument;
+    if (!conn || !a || a->structureInputDescriptor || a->structureOutputDescriptor)
+        return kIOReturnBadArgument;
     switch (selector) {
     case 1:  // transform
-        if (a->scalarInputCount || a->scalarOutputCount || a->structureOutputSize) return kIOReturnBadArgument;
+        if (a->scalarInputCount || a->scalarOutputCount || a->structureOutputSize)
+            return kIOReturnBadArgument;
         return transform(conn, a->structureInput, a->structureInputSize);
     case 5:  // GetID
-        if (a->scalarInputCount || a->scalarOutputCount != 1 || a->structureInputSize) return kIOReturnBadArgument;
+        if (a->scalarInputCount || a->scalarOutputCount != 1 || a->structureInputSize)
+            return kIOReturnBadArgument;
         a->scalarOutput[0] = 0x5d;  // host1x class of VIC; constant, as Apple's is per driver
         return kIOReturnSuccess;
     case 10:  // client properties {s32 PriorityBand; s64 DutyCycleDuration; s64 HistogramDuration}: kept by Apple's
@@ -552,15 +604,17 @@ IOReturn tegra_vic_external_method(IOUserClient *self, uint32_t selector, IOExte
         return a->structureInputSize == 0x18 ? kIOReturnSuccess : kIOReturnBadArgument;
     case 4:  // custom filter coefficients: accepted, VIC uses its own filter
         return a->structureInputSize == 0x20 ? kIOReturnSuccess : kIOReturnBadArgument;
-    case 6: return kIOReturnNotPermitted;  // kernel tests (Apple's: release kernels refuse)
-    case 0:                                // capture
-    case 2:                                // abort transfers
-    case 3:                                // abort captures
-    case 7:                                // histogram
-    case 8:                                // diagnostics
-    case 9:                                // transform estimation
+    case 6:
+        return kIOReturnNotPermitted;  // kernel tests (Apple's: release kernels refuse)
+    case 0:                            // capture
+    case 2:                            // abort transfers
+    case 3:                            // abort captures
+    case 7:                            // histogram
+    case 8:                            // diagnostics
+    case 9:                            // transform estimation
         return kIOReturnUnsupported;
-    default: return kIOReturnBadArgument;
+    default:
+        return kIOReturnBadArgument;
     }
 }
 
@@ -568,12 +622,14 @@ IOReturn tegra_vic_register_port(IOUserClient *self, mach_port_t port, UInt32 ty
 {
     (void)type, (void)refCon;  // Apple's driver keeps any type
     Conn *conn = connOf(self);
-    if (!conn) return kIOReturnBadArgument;
+    if (!conn)
+        return kIOReturnBadArgument;
     IOLockLock(conn->lock);
     const mach_port_t old = conn->port;
     conn->port = port;
     IOLockUnlock(conn->lock);
-    if (old != MACH_PORT_NULL && old != port) iouc_release_port(old);
+    if (old != MACH_PORT_NULL && old != port)
+        iouc_release_port(old);
     return kIOReturnSuccess;
 }
 
@@ -583,7 +639,8 @@ IOReturn tegra_vic_client_close(IOUserClient *self)
 {
     if (Conn *conn = connOf(self)) {
         IOLockLock(conn->lock);
-        while (conn->pending) IOLockSleep(conn->lock, &conn->pending, THREAD_UNINT);
+        while (conn->pending)
+            IOLockSleep(conn->lock, &conn->pending, THREAD_UNINT);
         IOLockUnlock(conn->lock);
     }
     self->terminate();
@@ -593,7 +650,8 @@ IOReturn tegra_vic_client_close(IOUserClient *self)
 void tegra_vic_client_free(IOUserClient *self)
 {
     if (Conn *conn = connOf(self)) {
-        if (conn->port != MACH_PORT_NULL) iouc_release_port(conn->port);
+        if (conn->port != MACH_PORT_NULL)
+            iouc_release_port(conn->port);
         IOLock *lock = conn->lock;
         IOLockLock(gConnLock);
         bzero(conn, sizeof(*conn));
@@ -608,15 +666,20 @@ void tegra_vic_client_free(IOUserClient *self)
 IOReturn tegra_vic_new_user_client(IOService *self, task_t task, void *securityID, UInt32 type,
                                    OSDictionary *properties, IOUserClient **handler)
 {
-    if (!tegra_vic_ready()) return kIOReturnNotReady;
+    if (!tegra_vic_ready())
+        return kIOReturnNotReady;
     Conn *conn = nullptr;
     IOLockLock(gConnLock);
     for (uint32_t i = 0; i < kMaxConnections && !conn; i++)
-        if (!gConns[i].client && !gConns[i].task) conn = &gConns[i];
-    if (conn) conn->task = task;  // claimed
+        if (!gConns[i].client && !gConns[i].task)
+            conn = &gConns[i];
+    if (conn)
+        conn->task = task;  // claimed
     IOLockUnlock(gConnLock);
-    if (!conn) return kIOReturnNoResources;
-    if (!conn->lock) conn->lock = IOLockAlloc();
+    if (!conn)
+        return kIOReturnNoResources;
+    if (!conn->lock)
+        conn->lock = IOLockAlloc();
     IOUserClient *client = OSDynamicCast(IOUserClient, OSMetaClass::allocClassWithName("IOSurfaceAcceleratorClient"));
     if (!conn->lock || !client) {
         OSSafeReleaseNULL(client);
@@ -656,7 +719,8 @@ bool swizzle(OSObject *object, const uintptr_t *base, uintptr_t *copy, const voi
     const uintptr_t *vtable = *(const uintptr_t *const *)object;  // address point
     copy[0] = vtable[-2];
     copy[1] = vtable[-1];
-    for (uint32_t i = 0; i < kVtableSlots - 2; i++) copy[2 + i] = vtable[i];
+    for (uint32_t i = 0; i < kVtableSlots - 2; i++)
+        copy[2 + i] = vtable[i];
     for (uint32_t f = 0; f < count; f++) {
         const int slot = slotOf(base, fns[f][0]);
         if (slot < 0) {
@@ -684,7 +748,8 @@ void putNumber(OSDictionary *d, const char *key, uint64_t value)
 OSDictionary *capabilities(const TegraVICTraits *t)
 {
     OSDictionary *d = OSDictionary::withCapacity(64);
-    if (!d) return nullptr;
+    if (!d)
+        return nullptr;
     putNumber(d, "IOSurfaceAcceleratorCapabilitiesMinSourceWidth", 4);
     putNumber(d, "IOSurfaceAcceleratorCapabilitiesMinSourceHeight", 4);
     putNumber(d, "IOSurfaceAcceleratorCapabilitiesMinDestWidth", 4);
@@ -799,7 +864,8 @@ extern "C" int tegra_vic_publish(void)
     gConnLock = IOLockAlloc();
     probe->release();  // through the copy's free (IOUserClient's): Apple's would release state its start never made
     gQueueLock = IOLockAlloc();
-    for (uint32_t w = 0; w < TEGRA_VIC_WINDOWS; w++) gPages[w] = IONew(uint64_t, kWindowPages);
+    for (uint32_t w = 0; w < TEGRA_VIC_WINDOWS; w++)
+        gPages[w] = IONew(uint64_t, kWindowPages);
     OSDictionary *caps = capabilities(tegra_vic_traits());
     if (!gConnLock || !gQueueLock || !gPages[0] || !gPages[1] || !caps || !service->init()) {
         OSSafeReleaseNULL(caps);
@@ -839,8 +905,10 @@ extern "C" int tegra_vic_publish(void)
             gPresentPages[TEGRA_VIC_WINDOW_DST] = dst;
             __atomic_store_n(&gPresentPages[TEGRA_VIC_WINDOW_SRC], src, __ATOMIC_RELEASE);
         } else {
-            if (src) IODelete(src, uint64_t, kPresentPages);
-            if (dst) IODelete(dst, uint64_t, kPresentPages);
+            if (src)
+                IODelete(src, uint64_t, kPresentPages);
+            if (dst)
+                IODelete(dst, uint64_t, kPresentPages);
         }
     }
     IOLog("TegraVIC: V5 ok AppleM2ScalerCSCDriver published (Apple's classes, VIC's slots: newUserClient %d; "

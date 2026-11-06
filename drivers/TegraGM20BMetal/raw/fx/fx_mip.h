@@ -41,6 +41,7 @@ struct MipLevel {
              rows = 0;  // the level's extent aligned to its tile (row stride; rows, a multiple of 8 << yLog2)
     uint8_t yLog2 = 0;  // the level's block height in GOBs, log2 (level 0's clamped to the level, as hardware does)
 };
+
 struct MipChain {
     uint32_t width = 0, height = 0, levels = 0, bpp = 0;
     uint8_t yLog2 =
@@ -57,11 +58,13 @@ bool mipChainLayout(uint32_t width, uint32_t height, uint32_t levels, uint32_t b
 // Byte offset of texel byte (xB, y) inside level `l` of the chain, from the chain's base, in the CPU's view (TegraColor GOBs;
 // `fermi`: the FermiColor arrangement instead, the self-test's second guess at the CPU's view of kind 0xFE memory)
 uint64_t texelOffset(const MipChain &c, uint32_t l, uint32_t xB, uint32_t y, bool fermi = false);
+
 // Byte offset inside one GOB (64 B x 8 rows) of byte xB % 64 of row y % 8, TegraColor (nil/copy.rs CopyGOBTegra)
 inline uint32_t gobOffset(uint32_t xB, uint32_t y)
 {
     return ((xB % 64) / 32) * 256 + ((y % 8) / 2) * 64 + ((xB % 32) / 16) * 32 + (y % 2) * 16 + (xB % 16);
 }
+
 // The same for FermiColor GOBs (nil/copy.rs CopyGOBFermi: the desktop parts' sector order)
 uint32_t gobOffsetFermi(uint32_t xB, uint32_t y);
 
@@ -98,6 +101,7 @@ struct Sampling {
     int8_t halfDu = 0;     // the origin's du/2 multiples
     int8_t halfTexel = 0;  // and its half-texel multiples
 };
+
 constexpr uint32_t kSamplings = 8;
 Sampling sampling(uint32_t i);  // the candidates, in the order the self-test tries them
 // "centre", "centre-0.5", "corner+du/2-0.5", ...: for the device line
@@ -127,18 +131,22 @@ void emitCopyFromLevel(Push &p, const MipChain &c, uint64_t chainVa, uint32_t le
 constexpr uint32_t kSelfTestW = 24, kSelfTestH = 10;  // odd steps on purpose: 24x10 -> 12x5 -> 6x2 -> 3x1 -> 1x1
 void selfTestPattern(uint8_t *pixels, uint32_t pitch);
 uint32_t selfTestCheck(const MipChain &c, const uint8_t *chainCpu, uint32_t *first, bool fermi = false);
+
 // The same check, said in detail (the device line when it fails): bytes off by more than 1 (per level), the largest difference
 // per byte of a texel (BGRA8: blue, green, red, alpha) and the first differing bytes. Every difference at most 2 reads as the
 // engine's rounding; larger ones as where it samples (a positional error: origin, half texel)
 struct SelfTestReport {
     uint32_t bad = 0, levelBad[kMaxLevels] = {};
     uint8_t maxDiff[4] = {};
+
     struct Byte {
         uint8_t level, channel, want, got;
         uint16_t x, y;
     } first[3] = {};
+
     uint32_t firsts = 0;
 };
+
 uint32_t selfTestDetail(const MipChain &c, const uint8_t *chainCpu, bool fermi, SelfTestReport &r);
 
 // The CPU reference of one chain step: level n+1 from level n exactly as the 2D engine's bilinear, centre-origin blit samples

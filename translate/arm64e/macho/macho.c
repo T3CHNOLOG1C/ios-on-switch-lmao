@@ -43,6 +43,7 @@ static uint64_t be64(const uint8_t *p)
 }
 
 static int fail(char *err, size_t errlen, const char *fmt, ...) __attribute__((format(printf, 3, 4)));
+
 static int fail(char *err, size_t errlen, const char *fmt, ...)
 {
     if (err && errlen) {
@@ -62,17 +63,22 @@ static int name16(const uint8_t *p, const char *name)
 const char *a64x_kind_name(enum a64x_kind kind)
 {
     switch (kind) {
-    case A64X_KIND_ARM64E: return "arm64e";
-    case A64X_KIND_ARM64: return "arm64";
-    case A64X_KIND_MARKED: return "marked";
-    case A64X_KIND_NATIVE: break;
+    case A64X_KIND_ARM64E:
+        return "arm64e";
+    case A64X_KIND_ARM64:
+        return "arm64";
+    case A64X_KIND_MARKED:
+        return "marked";
+    case A64X_KIND_NATIVE:
+        break;
     }
     return "native";
 }
 
 enum a64x_kind a64x_kind_of(uint32_t cputype, uint32_t cpusubtype, int marked)
 {
-    if (cputype != A64X_CPU_TYPE_ARM64) return A64X_KIND_NATIVE;
+    if (cputype != A64X_CPU_TYPE_ARM64)
+        return A64X_KIND_NATIVE;
     enum a64x_kind kind;
     /* arm64e is the ptrauth capability bit (a fat binary's versioned-ABI slices do not carry subtype 2 in the low
      * byte, but every one holds PAC): a64x_xnu.h a64x_image_kind decides the same way. */
@@ -80,10 +86,15 @@ enum a64x_kind a64x_kind_of(uint32_t cputype, uint32_t cpusubtype, int marked)
         kind = A64X_KIND_ARM64E;
     } else {
         switch (cpusubtype & ~A64X_CPU_SUBTYPE_MASK) {
-        case A64X_CPU_SUBTYPE_ARM64E: kind = A64X_KIND_ARM64E; break;
+        case A64X_CPU_SUBTYPE_ARM64E:
+            kind = A64X_KIND_ARM64E;
+            break;
         case A64X_CPU_SUBTYPE_ARM64_ALL:
-        case A64X_CPU_SUBTYPE_ARM64_V8: kind = A64X_KIND_ARM64; break;
-        default: return A64X_KIND_NATIVE;
+        case A64X_CPU_SUBTYPE_ARM64_V8:
+            kind = A64X_KIND_ARM64;
+            break;
+        default:
+            return A64X_KIND_NATIVE;
         }
     }
     /* the marker wins over the subtype (a64x_map_image: a marked image is mapped as is) */
@@ -95,23 +106,28 @@ int a64x_macho_parse(const uint8_t *base, size_t size, struct a64x_macho *m, cha
     memset(m, 0, sizeof(*m));
     m->base = base;
     m->size = size;
-    if (size < 32 || rd32(base) != A64X_MH_MAGIC_64) return fail(err, errlen, "not a 64-bit Mach-O");
+    if (size < 32 || rd32(base) != A64X_MH_MAGIC_64)
+        return fail(err, errlen, "not a 64-bit Mach-O");
     m->cputype = rd32(base + 4);
     m->cpusubtype = rd32(base + 8);
     m->filetype = rd32(base + 12);
     m->ncmds = rd32(base + 16);
     m->marked = rd32(base + 28) == A64X_PRETRANSLATED;
     uint32_t sizeofcmds = rd32(base + 20);
-    if (sizeofcmds > size - 32) return fail(err, errlen, "load commands (%u bytes) past the end", sizeofcmds);
+    if (sizeofcmds > size - 32)
+        return fail(err, errlen, "load commands (%u bytes) past the end", sizeofcmds);
     const uint8_t *p = base + 32, *end = p + sizeofcmds;
     for (uint32_t i = 0; i < m->ncmds; i++) {
-        if (end - p < 8) return fail(err, errlen, "load command %u past the end", i);
+        if (end - p < 8)
+            return fail(err, errlen, "load command %u past the end", i);
         uint32_t cmd = rd32(p), cmdsize = rd32(p + 4);
-        if (cmdsize < 8 || cmdsize > (size_t)(end - p)) return fail(err, errlen, "load command %u: bad size", i);
+        if (cmdsize < 8 || cmdsize > (size_t)(end - p))
+            return fail(err, errlen, "load command %u: bad size", i);
         if ((cmd == A64X_LC_FUNCTION_STARTS || cmd == A64X_LC_DATA_IN_CODE || cmd == A64X_LC_DYLD_CHAINED_FIXUPS) &&
             cmdsize >= 16) {
             uint32_t off = rd32(p + 8), len = rd32(p + 12);
-            if (off > size || len > size - off) return fail(err, errlen, "linkedit data of command %u past the end", i);
+            if (off > size || len > size - off)
+                return fail(err, errlen, "linkedit data of command %u past the end", i);
             if (cmd == A64X_LC_FUNCTION_STARTS) {
                 m->fs_off = off;
                 m->fs_size = len;
@@ -124,21 +140,26 @@ int a64x_macho_parse(const uint8_t *base, size_t size, struct a64x_macho *m, cha
             }
         }
         if (cmd == A64X_LC_SEGMENT_64) {
-            if (cmdsize < 72) return fail(err, errlen, "segment command %u too short", i);
+            if (cmdsize < 72)
+                return fail(err, errlen, "segment command %u too short", i);
             uint64_t vmaddr = rd64(p + 24), vmsize = rd64(p + 32), fileoff = rd64(p + 40), filesize = rd64(p + 48);
             uint32_t initprot = rd32(p + 60), nsects = rd32(p + 64);
             if (cmdsize < 72 + (uint64_t)nsects * 80)
                 return fail(err, errlen, "segment %u: sections past its command", i);
-            if (m->nsegs >= A64X_MAX_SEGMENTS) return fail(err, errlen, "more than %d segments", A64X_MAX_SEGMENTS);
+            if (m->nsegs >= A64X_MAX_SEGMENTS)
+                return fail(err, errlen, "more than %d segments", A64X_MAX_SEGMENTS);
             m->seg_vmaddr[m->nsegs] = vmaddr;
             m->seg_fileoff[m->nsegs] = fileoff;
             m->seg_filesize[m->nsegs] = filesize;
             m->nsegs++;
-            if (name16(p + 8, "__TEXT")) m->text_vmaddr = vmaddr;
-            if (!name16(p + 8, "__PAGEZERO") && vmaddr + vmsize > m->vm_end) m->vm_end = vmaddr + vmsize;
+            if (name16(p + 8, "__TEXT"))
+                m->text_vmaddr = vmaddr;
+            if (!name16(p + 8, "__PAGEZERO") && vmaddr + vmsize > m->vm_end)
+                m->vm_end = vmaddr + vmsize;
             const uint8_t *sc = p + 72;
             for (uint32_t s = 0; s < nsects; s++, sc += 80) {
-                if (name16(sc + 16, A64X_TARGET_SEGNAME) && name16(sc, A64X_TARGET_SECTNAME)) m->marked = 1;
+                if (name16(sc + 16, A64X_TARGET_SEGNAME) && name16(sc, A64X_TARGET_SECTNAME))
+                    m->marked = 1;
             }
             if (initprot & A64X_VM_PROT_EXECUTE) {
                 if (m->nexec++ == 0) {
@@ -179,10 +200,13 @@ int a64x_macho_parse(const uint8_t *base, size_t size, struct a64x_macho *m, cha
 
 int a64x_macho_slices(const uint8_t *file, size_t size, struct a64x_slice *out, int max)
 {
-    if (size < 8) return -1;
+    if (size < 8)
+        return -1;
     if (rd32(file) == A64X_MH_MAGIC_64) {
-        if (size < 32) return -1;
-        if (max < 1) return 0;
+        if (size < 32)
+            return -1;
+        if (max < 1)
+            return 0;
         out[0].offset = 0;
         out[0].size = size;
         out[0].cputype = rd32(file + 4);
@@ -190,16 +214,19 @@ int a64x_macho_slices(const uint8_t *file, size_t size, struct a64x_slice *out, 
         return out[0].cputype == A64X_CPU_TYPE_ARM64 ? 1 : 0;
     }
     uint32_t magic = be32(file);
-    if (magic != A64X_FAT_MAGIC && magic != A64X_FAT_MAGIC_64) return -1;
+    if (magic != A64X_FAT_MAGIC && magic != A64X_FAT_MAGIC_64)
+        return -1;
     uint32_t n = be32(file + 4), entry = magic == A64X_FAT_MAGIC ? 20 : 32;
-    if ((uint64_t)n * entry > size - 8) return -1;
+    if ((uint64_t)n * entry > size - 8)
+        return -1;
     int k = 0;
     for (uint32_t i = 0; i < n && k < max; i++) {
         const uint8_t *a = file + 8 + (size_t)i * entry;
         uint32_t ct = be32(a), st = be32(a + 4);
         uint64_t off = magic == A64X_FAT_MAGIC ? be32(a + 8) : be64(a + 8);
         uint64_t len = magic == A64X_FAT_MAGIC ? be32(a + 12) : be64(a + 16);
-        if (ct != A64X_CPU_TYPE_ARM64 || off > size || len > size - off) continue;
+        if (ct != A64X_CPU_TYPE_ARM64 || off > size || len > size - off)
+            continue;
         out[k].offset = off;
         out[k].size = len;
         out[k].cputype = ct;
@@ -222,7 +249,8 @@ static bool img_is_code(void *ctx, uint64_t off)
     if (c->data && off >= m->exec_fileoff) {
         uint64_t k = (off - m->exec_fileoff) / 4;
         uint64_t nwords = (m->exec_filesize + A64X_XLATE_PAGE - 1) / A64X_XLATE_PAGE * (A64X_XLATE_PAGE / 4);
-        if (k < nwords && (c->data[k >> 3] & (1u << (k & 7)))) return false;
+        if (k < nwords && (c->data[k >> 3] & (1u << (k & 7))))
+            return false;
     }
     uint32_t lo = 0, hi = m->nranges;
     while (lo < hi) {
@@ -252,10 +280,12 @@ static int find_islands(const struct a64x_macho *m, struct a64x_image_xlate *x, 
     uint8_t *fs = NULL;
     uint32_t page[A64X_XLATE_PAGE / 4];
     x->data = calloc(nbytes ? nbytes : 1, 1);
-    if (!x->data) return -1;
+    if (!x->data)
+        return -1;
     if (m->fs_size && m->fs_size <= (1u << 24)) {
         fs = calloc(nbytes ? nbytes : 1, 1);
-        if (!fs) return -1;
+        if (!fs)
+            return -1;
         const uint8_t *buf = m->base + m->fs_off;
         uint64_t addr = m->text_vmaddr;
         for (uint32_t q = 0; q < m->fs_size;) {
@@ -265,13 +295,16 @@ static int find_islands(const struct a64x_macho *m, struct a64x_image_xlate *x, 
                 uint8_t b = buf[q++];
                 v |= (uint64_t)(b & 0x7F) << sh;
                 sh += 7;
-                if (!(b & 0x80)) break;
+                if (!(b & 0x80))
+                    break;
             }
-            if (!v) break;
+            if (!v)
+                break;
             addr += v;
             if (addr >= m->exec_vmaddr) {
                 uint64_t k = (addr - m->exec_vmaddr) / 4;
-                if (k < nbits) fs[k >> 3] |= (uint8_t)(1u << (k & 7));
+                if (k < nbits)
+                    fs[k >> 3] |= (uint8_t)(1u << (k & 7));
             }
         }
     }
@@ -321,8 +354,10 @@ int a64x_translate_image(const struct a64x_macho *m, uint32_t map_page, uint32_t
 {
     memset(x, 0, sizeof(*x));
     x->kind = a64x_kind_of(m->cputype, m->cpusubtype, m->marked);
-    if (out) memcpy(out, m->base, m->size);
-    if (x->kind == A64X_KIND_NATIVE || x->kind == A64X_KIND_MARKED) return 0;
+    if (out)
+        memcpy(out, m->base, m->size);
+    if (x->kind == A64X_KIND_NATIVE || x->kind == A64X_KIND_MARKED)
+        return 0;
     if (m->nexec != 1) {
         /* a plain arm64 image the loader cannot lay out runs as is; arm64e text cannot */
         if (x->kind == A64X_KIND_ARM64) {
@@ -331,7 +366,8 @@ int a64x_translate_image(const struct a64x_macho *m, uint32_t map_page, uint32_t
         }
         return fail(err, errlen, m->nexec ? "more than one executable segment" : "no executable segment");
     }
-    if (!map_page || (map_page & (map_page - 1))) return fail(err, errlen, "map page size %u", map_page);
+    if (!map_page || (map_page & (map_page - 1)))
+        return fail(err, errlen, "map page size %u", map_page);
     x->map_flags = (x->kind == A64X_KIND_ARM64 ? A64X_MAP_NO_PAC : 0) | extra_flags;
     x->npages = (uint32_t)((m->exec_filesize + A64X_XLATE_PAGE - 1) / A64X_XLATE_PAGE);
     /* stubs go right after the image (same distance in every process) */
@@ -364,8 +400,10 @@ int a64x_translate_image(const struct a64x_macho *m, uint32_t map_page, uint32_t
         cursor = a64x_translate_page(page, dst, A64X_XLATE_PAGE / 4, off, &cm, &sr, cursor, &x->stats);
         uint64_t in_file = m->exec_filesize - (uint64_t)pg * A64X_XLATE_PAGE;
         size_t keep = in_file < A64X_XLATE_PAGE ? (size_t)in_file : A64X_XLATE_PAGE;
-        for (size_t i = 0; i < keep / 4; i++) x->changed += dst[i] != page[i];
-        if (out) memcpy(out + off, dst, keep);
+        for (size_t i = 0; i < keep / 4; i++)
+            x->changed += dst[i] != page[i];
+        if (out)
+            memcpy(out + off, dst, keep);
     }
     x->cursor[x->npages] = cursor;
     x->nstubs = cursor;
@@ -431,7 +469,8 @@ long a64x_verify_image(const struct a64x_macho *m, const uint8_t *out, const str
     int bad = 0;
     for (uint64_t off = m->exec_fileoff; off + 4 <= m->exec_fileoff + m->exec_filesize && !bad; off += 4) {
         uint32_t was = rd32(m->base + off), now = rd32(out + off);
-        if (was == now) continue;
+        if (was == now)
+            continue;
         struct img_ctx c = {m, x->data};
         if (!img_is_code(&c, off)) {
             bad = fail(err, errlen, "data word at 0x%llx changed", (unsigned long long)off);
@@ -439,7 +478,8 @@ long a64x_verify_image(const struct a64x_macho *m, const uint8_t *out, const str
         }
         uint64_t t;
         int kind = branch_target(now, off, &t);
-        if (kind != 1 || t < stub_lo || t >= stub_hi) continue;
+        if (kind != 1 || t < stub_lo || t >= stub_hi)
+            continue;
         sites++;
         /* every path from the entry stays in the region until it branches to off + 4 */
         memset(seen, 0, x->nstubs);
@@ -452,7 +492,8 @@ long a64x_verify_image(const struct a64x_macho *m, const uint8_t *out, const str
                     bad = fail(err, errlen, "site 0x%llx: its stub runs off the region", (unsigned long long)off);
                     break;
                 }
-                if (seen[k]) break;
+                if (seen[k])
+                    break;
                 seen[k] = 1;
                 uint64_t pc = stub_lo + 4ull * k;
                 uint32_t w = x->stubs[k];
@@ -481,7 +522,8 @@ long a64x_verify_image(const struct a64x_macho *m, const uint8_t *out, const str
                                (unsigned long long)t);
                     break;
                 }
-                if (bk == 2) stack[sp++] = k + 1;
+                if (bk == 2)
+                    stack[sp++] = k + 1;
                 k = (uint32_t)((t - stub_lo) / 4);
             }
         }
@@ -504,11 +546,14 @@ uint32_t a64x_fixup_stride(uint32_t format)
     case A64X_PTR_ARM64E_USERLAND:
     case A64X_PTR_ARM64E_USERLAND24:
     case A64X_PTR_64:
-    case A64X_PTR_64_OFFSET: return 8;
+    case A64X_PTR_64_OFFSET:
+        return 8;
     case A64X_PTR_ARM64E_KERNEL:
     case A64X_PTR_ARM64E_FIRMWARE:
-    case A64X_PTR_64_KERNEL_CACHE: return 4;
-    default: return 0;
+    case A64X_PTR_64_KERNEL_CACHE:
+        return 4;
+    default:
+        return 0;
     }
 }
 
@@ -570,7 +615,8 @@ int a64x_fixup_decode(uint32_t format, uint64_t raw, struct a64x_fixup *f)
 int a64x_fixup_strip_auth(uint32_t format, uint64_t raw, uint64_t preferred_base, uint64_t *out)
 {
     struct a64x_fixup f;
-    if (a64x_fixup_decode(format, raw, &f)) return -1;
+    if (a64x_fixup_decode(format, raw, &f))
+        return -1;
     if (!f.auth) {
         *out = raw;
         return 0;
@@ -588,8 +634,10 @@ int a64x_fixup_strip_auth(uint32_t format, uint64_t raw, uint64_t preferred_base
     }
     /* an auth rebase holds a runtime offset; the plain rebase of DYLD_CHAINED_PTR_ARM64E(_FIRMWARE) a vmaddr */
     uint64_t target = f.target;
-    if (format == A64X_PTR_ARM64E || format == A64X_PTR_ARM64E_FIRMWARE) target += preferred_base;
-    if (target >> 43) return -1;
+    if (format == A64X_PTR_ARM64E || format == A64X_PTR_ARM64E_FIRMWARE)
+        target += preferred_base;
+    if (target >> 43)
+        return -1;
     *out = target | next;
     return 0;
 }
@@ -598,29 +646,36 @@ int a64x_fixups_strip_auth(const struct a64x_macho *m, uint8_t *out, struct a64x
                            size_t errlen)
 {
     memset(st, 0, sizeof(*st));
-    if (!m->fixups_size) return 0;
+    if (!m->fixups_size)
+        return 0;
     const uint8_t *h = m->base + m->fixups_off;
-    if (m->fixups_size < 28) return fail(err, errlen, "chained fixups header too short");
+    if (m->fixups_size < 28)
+        return fail(err, errlen, "chained fixups header too short");
     uint32_t starts = rd32(h + 4);
-    if (starts > m->fixups_size - 4) return fail(err, errlen, "chained starts past the fixups");
+    if (starts > m->fixups_size - 4)
+        return fail(err, errlen, "chained starts past the fixups");
     const uint8_t *si = h + starts;
     uint32_t seg_count = rd32(si);
     if (seg_count > m->nsegs || (uint64_t)starts + 4 + 4ull * seg_count > m->fixups_size)
         return fail(err, errlen, "chained starts for %u segments, the image has %u", seg_count, m->nsegs);
     for (uint32_t s = 0; s < seg_count; s++) {
         uint32_t so = rd32(si + 4 + 4 * s);
-        if (!so) continue;
-        if ((uint64_t)starts + so + 22 > m->fixups_size) return fail(err, errlen, "segment %u: starts past the end", s);
+        if (!so)
+            continue;
+        if ((uint64_t)starts + so + 22 > m->fixups_size)
+            return fail(err, errlen, "segment %u: starts past the end", s);
         const uint8_t *ss = si + so;
         uint16_t page_size = rd16(ss + 4), format = rd16(ss + 6), page_count = rd16(ss + 20);
         uint32_t stride = a64x_fixup_stride(format);
-        if (!stride) return fail(err, errlen, "segment %u: pointer format %u", s, format);
+        if (!stride)
+            return fail(err, errlen, "segment %u: pointer format %u", s, format);
         if ((uint64_t)starts + so + 22 + 2ull * page_count > m->fixups_size)
             return fail(err, errlen, "segment %u: page starts past the end", s);
         uint64_t preferred = m->text_vmaddr;
         for (uint32_t p = 0; p < page_count; p++) {
             uint16_t start = rd16(ss + 22 + 2 * p);
-            if (start == 0xFFFF) continue; /* DYLD_CHAINED_PTR_START_NONE */
+            if (start == 0xFFFF)
+                continue; /* DYLD_CHAINED_PTR_START_NONE */
             uint32_t idx = p, nstarts = 1;
             uint16_t list[64];
             if (start & 0x8000) { /* DYLD_CHAINED_PTR_START_MULTI: a list ending in one with the LAST bit */
@@ -630,7 +685,8 @@ int a64x_fixups_strip_auth(const struct a64x_macho *m, uint8_t *out, struct a64x
                         return fail(err, errlen, "segment %u page %u: multi-start list past the end", s, p);
                     uint16_t v = rd16(ss + 22 + 2 * q);
                     list[nstarts++] = v & 0x7FFF;
-                    if (v & 0x8000) break;
+                    if (v & 0x8000)
+                        break;
                 }
             } else {
                 list[0] = start;
@@ -644,7 +700,8 @@ int a64x_fixups_strip_auth(const struct a64x_macho *m, uint8_t *out, struct a64x
                                     (unsigned long long)loc);
                     uint64_t raw = rd64(m->base + loc), plain;
                     struct a64x_fixup f;
-                    if (a64x_fixup_decode(format, raw, &f)) return fail(err, errlen, "format %u", format);
+                    if (a64x_fixup_decode(format, raw, &f))
+                        return fail(err, errlen, "format %u", format);
                     if (f.bind)
                         st->binds++;
                     else
@@ -657,10 +714,12 @@ int a64x_fixups_strip_auth(const struct a64x_macho *m, uint8_t *out, struct a64x
                         if (a64x_fixup_strip_auth(format, raw, preferred, &plain))
                             return fail(err, errlen, "0x%llx: auth target does not fit a plain rebase",
                                         (unsigned long long)loc);
-                        if (out) memcpy(out + loc, &plain, sizeof(plain));
+                        if (out)
+                            memcpy(out + loc, &plain, sizeof(plain));
                         st->stripped++;
                     }
-                    if (!f.next) break;
+                    if (!f.next)
+                        break;
                     loc += (uint64_t)f.next * stride;
                 }
             }

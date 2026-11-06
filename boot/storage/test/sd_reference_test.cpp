@@ -29,17 +29,21 @@ uint32_t Crc(const uint8_t *data, size_t size)
 
 void PutLe(Bytes &page, size_t at, uint32_t v)
 {
-    for (unsigned i = 0; i < 4; ++i) page[at + i] = (uint8_t)(v >> (8 * i));
+    for (unsigned i = 0; i < 4; ++i)
+        page[at + i] = (uint8_t)(v >> (8 * i));
 }
+
 void PutBe(Bytes &page, size_t at, uint32_t v)
 {
-    for (unsigned i = 0; i < 4; ++i) page[at + i] = (uint8_t)(v >> (24 - 8 * i));
+    for (unsigned i = 0; i < 4; ++i)
+        page[at + i] = (uint8_t)(v >> (24 - 8 * i));
 }
 
 Bytes Counting()
 {
     Bytes sector(DATA_BYTES);
-    for (size_t i = 0; i < sector.size(); ++i) sector[i] = (uint8_t)i;
+    for (size_t i = 0; i < sector.size(); ++i)
+        sector[i] = (uint8_t)i;
     return sector;
 }
 
@@ -47,7 +51,8 @@ Bytes Counting()
 Bytes MakePage(const Bytes &sector = Counting(), uint32_t commit = 0)
 {
     Bytes page(PAGE_BYTES);
-    for (size_t i = 0; i < HEADER.size(); ++i) PutLe(page, 4 * i, HEADER[i]);
+    for (size_t i = 0; i < HEADER.size(); ++i)
+        PutLe(page, 4 * i, HEADER[i]);
     PutBe(page, 0x28, Crc(sector.data(), sector.size()));
     PutLe(page, 0x2C, commit);
     std::memcpy(page.data() + DATA_OFFSET, sector.data(), DATA_BYTES);
@@ -89,7 +94,8 @@ TEST(SdReference, ValidLoaderAndKernelCommitsAndSectorPatterns)
 {
     std::mt19937 rng(0x49534452);
     Bytes random(DATA_BYTES);
-    for (uint8_t &b : random) b = (uint8_t)rng();
+    for (uint8_t &b : random)
+        b = (uint8_t)rng();
     const std::vector<Bytes> patterns{Bytes(DATA_BYTES, 0), Bytes(DATA_BYTES, 0xFF), Counting(), random};
     for (uint32_t commit : {0u, 1u})
         for (const Bytes &sector : patterns) {
@@ -105,12 +111,14 @@ TEST(SdReference, CrcAgainstZlibKnownVectorsAndNonWordLengths)
                                Bytes(512, 0xFF)};
     for (size_t length : {1, 2, 3, 4, 7, 8, 15, 16, 31, 32, 63, 64, 127, 128, 255, 256, 511, 512, 513, 1023, 4096}) {
         Bytes value(length);
-        for (uint8_t &b : value) b = (uint8_t)rng();
+        for (uint8_t &b : value)
+            b = (uint8_t)rng();
         vectors.push_back(value);
     }
     for (const Bytes &value : vectors) {
         auto raw = std::make_unique<uint8_t[]>(value.size() + 1);  // a C string's room
-        if (!value.empty()) std::memcpy(raw.get(), value.data(), value.size());
+        if (!value.empty())
+            std::memcpy(raw.get(), value.data(), value.size());
         EXPECT_EQ(switch_sd_crc32(raw.get(), (uint32_t)value.size()), Crc(value.data(), value.size()))
             << value.size() << " bytes";
     }
@@ -120,7 +128,8 @@ TEST(SdReference, CrcAgainstZlibKnownVectorsAndNonWordLengths)
 // A one-byte input is enough: every wrong size must fail before a header read (ASan reports any read past it).
 TEST(SdReference, RejectsWrongPageSizeBeforeReadingAnyPageBytes)
 {
-    for (uint32_t length : {0u, 1u, 511u, 512u, 1024u, 4095u, 4097u, 0xFFFFFFFFu}) Invoke(Bytes{0xEE}, 0, length, 1);
+    for (uint32_t length : {0u, 1u, 511u, 512u, 1024u, 4095u, 4097u, 0xFFFFFFFFu})
+        Invoke(Bytes{0xEE}, 0, length, 1);
 }
 
 TEST(SdReference, RejectsNullArgumentsAndInvalidExpectedCommit)
@@ -133,7 +142,8 @@ TEST(SdReference, RejectsNullArgumentsAndInvalidExpectedCommit)
     EXPECT_EQ(std::memcmp(&output, &before, sizeof(output)), 0);
     const Bytes page = MakePage();
     EXPECT_EQ(switch_sd_reference_validate(page.data(), 4096, 0, nullptr), 1);
-    for (uint32_t commit : {2u, 0xFFFFFFFFu}) Invoke(Bytes{0xEE}, commit, PAGE_BYTES, 1);
+    for (uint32_t commit : {2u, 0xFFFFFFFFu})
+        Invoke(Bytes{0xEE}, commit, PAGE_BYTES, 1);
 }
 
 TEST(SdReference, EveryHeaderWordAndEachHighBitIsFixed)
@@ -164,15 +174,18 @@ TEST(SdReference, CommitMustExactlyMatchTheCallersPhase)
 {
     Invoke(MakePage(Counting(), 0), 1, PAGE_BYTES, 2);
     Invoke(MakePage(Counting(), 1), 0, PAGE_BYTES, 2);
-    for (uint32_t commit : {2u, 0xFFFFFFFFu}) Invoke(MakePage(Counting(), commit), 0, PAGE_BYTES, 2);
+    for (uint32_t commit : {2u, 0xFFFFFFFFu})
+        Invoke(MakePage(Counting(), commit), 0, PAGE_BYTES, 2);
 }
 
 TEST(SdReference, EveryReservedByteMustBeZero)
 {
     Bytes page = MakePage();
     std::vector<size_t> offsets;
-    for (size_t at = 0x30; at < 0x200; ++at) offsets.push_back(at);
-    for (size_t at = 0x400; at < 0x1000; ++at) offsets.push_back(at);
+    for (size_t at = 0x30; at < 0x200; ++at)
+        offsets.push_back(at);
+    for (size_t at = 0x400; at < 0x1000; ++at)
+        offsets.push_back(at);
     for (size_t offset : offsets) {
         SCOPED_TRACE(testing::Message() << "offset 0x" << std::hex << offset);
         page[offset] = 1;

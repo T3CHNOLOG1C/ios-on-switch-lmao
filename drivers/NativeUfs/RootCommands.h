@@ -3,15 +3,32 @@
 // The host harness replaces only MMIO, DMA synchronization, clock and lock primitives.
 struct HardwareTransferPort {
     uint64_t deadline;
-    uint32_t doorbell() { return read32(gHost.hc, 0x58); }
-    uint32_t interrupt() { return read32(gHost.hc, 0x20); }
+
+    uint32_t doorbell()
+    {
+        return read32(gHost.hc, 0x58);
+    }
+
+    uint32_t interrupt()
+    {
+        return read32(gHost.hc, 0x20);
+    }
+
     uint32_t completedOcs()
     {
         cacheInvalidate(gHost.virt, 64);
         return *reinterpret_cast<volatile uint32_t *>(gHost.virt + 8) & 0xff;
     }
-    bool expired() { return mach_absolute_time() >= deadline; }
-    void delay() { IODelay(2); }
+
+    bool expired()
+    {
+        return mach_absolute_time() >= deadline;
+    }
+
+    void delay()
+    {
+        IODelay(2);
+    }
 };
 
 static void putBe32(uint8_t *at, uint32_t value)
@@ -37,7 +54,8 @@ static IOReturn hostSubmit(uint32_t direction, uint32_t dataBytes, uint32_t time
     if (!timeoutUs || dataBytes > kDataMax || (dataBytes & 3) ||
         (dataBytes ? (direction != 1 && direction != 2) : direction != 0))
         return kIOReturnBadArgument;
-    if (gHost.poisoned) return kIOReturnNotReady;
+    if (gHost.poisoned)
+        return kIOReturnNotReady;
     if (read32(gHost.hc, 0x58) != 0) {
         gHost.poisoned = true;
         gHost.ready = false;
@@ -102,7 +120,8 @@ static IOReturn hostSubmit(uint32_t direction, uint32_t dataBytes, uint32_t time
 
 static bool hostClearUcd(void)
 {
-    if (gHost.poisoned) return false;
+    if (gHost.poisoned)
+        return false;
     // Check before touching the command/response area, not just before ringing.
     if (read32(gHost.hc, 0x58) != 0) {
         gHost.poisoned = true;
@@ -137,26 +156,35 @@ static IOReturn hostProtocolError(uint32_t reason)
 static IOReturn hostResponseHeader(uint8_t type, uint8_t lun, uint8_t tag)
 {
     const uint8_t *rsp = gHost.virt + kUcdOffset + kRspOffset;
-    if (rsp[0] != type) return hostProtocolError(1);
-    if (rsp[3] != tag) return hostProtocolError(2);
-    if (rsp[2] != lun) return hostProtocolError(3);
+    if (rsp[0] != type)
+        return hostProtocolError(1);
+    if (rsp[3] != tag)
+        return hostProtocolError(2);
+    if (rsp[2] != lun)
+        return hostProtocolError(3);
     unsigned length = (unsigned(rsp[10]) << 8) | rsp[11];
-    if (rsp[8] || length > 512 - 32) return hostProtocolError(4);
+    if (rsp[8] || length > 512 - 32)
+        return hostProtocolError(4);
     return kIOReturnSuccess;
 }
 
 static IOReturn hostNop(void)
 {
-    if (!hostClearUcd()) return kIOReturnNotReady;
+    if (!hostClearUcd())
+        return kIOReturnNotReady;
     gHost.virt[kUcdOffset + 3] = 1;
     uint32_t ocs = 15;
     IOReturn result = hostSubmit(0, 0, 200000, &ocs);
-    if (result != kIOReturnSuccess) return result;
+    if (result != kIOReturnSuccess)
+        return result;
     result = hostResponseHeader(0x20, 0, 1);
-    if (result != kIOReturnSuccess) return result;
+    if (result != kIOReturnSuccess)
+        return result;
     const uint8_t *rsp = gHost.virt + kUcdOffset + kRspOffset;
-    if (rsp[10] || rsp[11]) return hostProtocolError(4);
-    if (rsp[6] || rsp[7]) return hostProtocolError(7);
+    if (rsp[10] || rsp[11])
+        return hostProtocolError(4);
+    if (rsp[6] || rsp[7])
+        return hostProtocolError(7);
     return kIOReturnSuccess;
 }
 
@@ -169,7 +197,8 @@ static IOReturn hostScsiDir(uint8_t lun, const uint8_t *cdb, unsigned cdbLength,
     if (!cdb || !cdbLength || cdbLength > 16 || dataBytes > kDataMax || direction > 2 || (dataBytes & 3) ||
         (dataBytes ? !direction : direction))
         return kIOReturnBadArgument;
-    if (!hostClearUcd()) return kIOReturnNotReady;
+    if (!hostClearUcd())
+        return kIOReturnNotReady;
     uint8_t *ucd = gHost.virt + kUcdOffset;
     ucd[0] = 0x01;                                                  // COMMAND UPIU
     ucd[1] = direction == 2 ? 0x40 : direction == 1 ? 0x20 : 0x00;  // R: data in, W: data out
@@ -180,9 +209,11 @@ static IOReturn hostScsiDir(uint8_t lun, const uint8_t *cdb, unsigned cdbLength,
     }
     uint32_t ocs = 0xf;
     IOReturn status = hostSubmit(direction ? direction : 0U, dataBytes, timeoutUs, &ocs);
-    if (status != kIOReturnSuccess) return status;
+    if (status != kIOReturnSuccess)
+        return status;
     status = hostResponseHeader(0x21, lun, 0);
-    if (status != kIOReturnSuccess) return status;
+    if (status != kIOReturnSuccess)
+        return status;
     const uint8_t *rsp = ucd + kRspOffset;
     *scsiStatus = (uint32_t(rsp[6]) << 8) | rsp[7];
     gRootDiagnostic.scsi = *scsiStatus;
@@ -190,14 +221,16 @@ static IOReturn hostScsiDir(uint8_t lun, const uint8_t *cdb, unsigned cdbLength,
     unsigned length = (unsigned(rsp[10]) << 8) | rsp[11];
     if (length) {
         unsigned senseLength = (unsigned(rsp[32]) << 8) | rsp[33];
-        if (length < 2 || senseLength > length - 2) return hostProtocolError(4);
+        if (length < 2 || senseLength > length - 2)
+            return hostProtocolError(4);
         const uint8_t *sense = rsp + 34;
         if (senseLength >= 14 && ((sense[0] & 0x7f) == 0x70 || (sense[0] & 0x7f) == 0x71))
             gRootDiagnostic.sense = (uint32_t(sense[2] & 15) << 16) | (uint32_t(sense[12]) << 8) | sense[13];
         else if (senseLength >= 4 && ((sense[0] & 0x7f) == 0x72 || (sense[0] & 0x7f) == 0x73))
             gRootDiagnostic.sense = (uint32_t(sense[1] & 15) << 16) | (uint32_t(sense[2]) << 8) | sense[3];
     }
-    if (!*scsiStatus && ((rsp[1] & 0x60) || gRootDiagnostic.residual)) return hostProtocolError(6);
+    if (!*scsiStatus && ((rsp[1] & 0x60) || gRootDiagnostic.residual))
+        return hostProtocolError(6);
     IOReturn result = *scsiStatus == 0 ? kIOReturnSuccess : kIOReturnNotReady;
     gRootDiagnostic.result = static_cast<uint32_t>(result);
     return result;
@@ -217,8 +250,10 @@ static IOReturn hostScsi(uint8_t lun, const uint8_t *cdb, unsigned cdbLength, bo
 // Query read request (opcode 0x03 READ ATTRIBUTE / 0x05 READ FLAG). Returns the value field.
 static IOReturn hostQueryRead(uint8_t opcode, uint8_t idn, uint32_t *value)
 {
-    if (!value || (opcode != 3 && opcode != 5)) return kIOReturnBadArgument;
-    if (!hostClearUcd()) return kIOReturnNotReady;
+    if (!value || (opcode != 3 && opcode != 5))
+        return kIOReturnBadArgument;
+    if (!hostClearUcd())
+        return kIOReturnNotReady;
     uint8_t *ucd = gHost.virt + kUcdOffset;
     ucd[0] = 0x16;  // QUERY REQUEST
     ucd[3] = 1;
@@ -231,10 +266,13 @@ static IOReturn hostQueryRead(uint8_t opcode, uint8_t idn, uint32_t *value)
         return status;
     }
     status = hostResponseHeader(0x36, 0, 1);
-    if (status != kIOReturnSuccess) return status;
+    if (status != kIOReturnSuccess)
+        return status;
     const uint8_t *rsp = ucd + kRspOffset;
-    if (rsp[10] || rsp[11]) return hostProtocolError(4);
-    if (rsp[12] != opcode || rsp[13] != idn || rsp[14] || rsp[15]) return hostProtocolError(5);
+    if (rsp[10] || rsp[11])
+        return hostProtocolError(4);
+    if (rsp[12] != opcode || rsp[13] != idn || rsp[14] || rsp[15])
+        return hostProtocolError(5);
     if (rsp[6] != 0) {
         gRootDiagnostic.result = static_cast<uint32_t>(kIOReturnError);
         return kIOReturnError;
@@ -271,8 +309,10 @@ static uint64_t gStoreFirst = 0, gStoreBlocks = 0, gLogFirst = 0, gLogBlocks = 0
 
 static bool hostLogOpen(uint64_t first, uint64_t blocks)
 {
-    if (gLogOpen || !blocks || first > 0xffffffffULL || blocks > 0xffffffffULL - first) return false;
-    if (gStoreOpen && first < gStoreFirst + gStoreBlocks && gStoreFirst < first + blocks) return false;
+    if (gLogOpen || !blocks || first > 0xffffffffULL || blocks > 0xffffffffULL - first)
+        return false;
+    if (gStoreOpen && first < gStoreFirst + gStoreBlocks && gStoreFirst < first + blocks)
+        return false;
     gLogFirst = first;
     gLogBlocks = blocks;
     gLogOpen = true;
@@ -289,8 +329,10 @@ static bool hostInWindow(uint64_t lba, uint32_t blocks)
 
 static bool hostStoreOpen(uint64_t first, uint64_t blocks)
 {
-    if (gStoreOpen || !blocks || first > 0xffffffffULL || blocks > 0xffffffffULL - first) return false;
-    if (gLogOpen && first < gLogFirst + gLogBlocks && gLogFirst < first + blocks) return false;
+    if (gStoreOpen || !blocks || first > 0xffffffffULL || blocks > 0xffffffffULL - first)
+        return false;
+    if (gLogOpen && first < gLogFirst + gLogBlocks && gLogFirst < first + blocks)
+        return false;
     gStoreFirst = first;
     gStoreBlocks = blocks;
     gStoreOpen = true;
@@ -325,7 +367,8 @@ static IOReturn hostWrite4k(uint8_t lun, uint64_t lba, uint32_t blocks, const vo
 // SYNCHRONIZE CACHE(10) for the whole LUN: everything written so far is on the medium when this returns.
 static IOReturn hostSyncCache(void)
 {
-    if (!gHost.ready || (!gStoreOpen && !gLogOpen)) return kIOReturnNotReady;
+    if (!gHost.ready || (!gStoreOpen && !gLogOpen))
+        return kIOReturnNotReady;
     IOLockLock(gHost.lock);
     uint8_t cdb[10] = {0x35};
     uint32_t scsi = 0;

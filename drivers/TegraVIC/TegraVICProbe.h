@@ -16,7 +16,13 @@ extern "C" {
 #endif
 
 // The card: 32x16 BGRA whose every pixel names its own coordinates; outputs in 256-byte rows.
-enum { TEGRA_VIC_CARD_W = 32, TEGRA_VIC_CARD_H = 16, TEGRA_VIC_PROBE_PITCH = 256, TEGRA_VIC_POISON_BYTE = 0xab };
+enum {
+    TEGRA_VIC_CARD_W = 32,
+    TEGRA_VIC_CARD_H = 16,
+    TEGRA_VIC_PROBE_PITCH = 256,
+    TEGRA_VIC_POISON_BYTE = 0xab
+};
+
 #define TEGRA_VIC_POISON_PIXEL 0xababababu
 
 static inline uint32_t tegra_vic_card_pixel(uint32_t x, uint32_t y)
@@ -35,8 +41,10 @@ static inline uint32_t tegra_vic_probe_pixel(const uint8_t *va, uint32_t x, uint
 static inline void tegra_vic_transform_point(uint32_t t, uint32_t w, uint32_t h, uint32_t x, uint32_t y, uint32_t *u,
                                              uint32_t *v)
 {
-    if (t & TEGRA_VIC_FLIP_H) x = w - 1 - x;
-    if (t & TEGRA_VIC_FLIP_V) y = h - 1 - y;
+    if (t & TEGRA_VIC_FLIP_H)
+        x = w - 1 - x;
+    if (t & TEGRA_VIC_FLIP_V)
+        y = h - 1 - y;
     if (t & TEGRA_VIC_ROT90) {
         *u = h - 1 - y;
         *v = x;
@@ -63,12 +71,14 @@ static inline void tegra_vic_probe_points(const uint8_t *va, uint32_t ow, uint32
 {
     const uint32_t at[6][2] = {{0, 0}, {1, 0}, {0, 1}, {ow - 1, 0}, {0, oh - 1}, {ow - 1, oh - 1}};
     size_t n = 0;
-    if (size) text[0] = 0;
+    if (size)
+        text[0] = 0;
     for (uint32_t i = 0; i < 6 && n < size; i++) {
         char from[16];
         tegra_vic_card_source(tegra_vic_probe_pixel(va, at[i][0], at[i][1]), from, sizeof(from));
         const int k = snprintf(text + n, size - n, " (%u,%u)<-%s", at[i][0], at[i][1], from);
-        if (k < 0) break;
+        if (k < 0)
+            break;
         n += (size_t)k;
     }
 }
@@ -76,7 +86,8 @@ static inline void tegra_vic_probe_points(const uint8_t *va, uint32_t ow, uint32
 static inline int64_t tegra_vic_probe_find(const uint8_t *va, uint64_t bytes, uint32_t value)
 {
     for (uint64_t i = 0; i + 4 <= bytes; i += 4)
-        if (*(const uint32_t *)(va + i) == value) return (int64_t)i;
+        if (*(const uint32_t *)(va + i) == value)
+            return (int64_t)i;
     return -1;
 }
 
@@ -95,7 +106,8 @@ static inline int tegra_vic_probe_recognise(const uint8_t *va, uint32_t ox, uint
                 tegra_vic_transform_point(t, TEGRA_VIC_CARD_W, TEGRA_VIC_CARD_H, x, y, &u, &v);
                 match = tegra_vic_probe_pixel(va, ox + u, oy + v) == tegra_vic_card_pixel(x, y);
             }
-        if (match) return (int)t;
+        if (match)
+            return (int)t;
     }
     return -1;
 }
@@ -171,7 +183,8 @@ static inline void tegra_vic_probe_note_transpose(const TegraVICProbeEnv *e, uin
                            (uint32_t)TEGRA_VIC_CARD_W, (uint32_t)TEGRA_VIC_CARD_H, what,
                            (long long)tegra_vic_probe_find(e->dstVa, e->dstBytes, tegra_vic_card_pixel(1, 0)),
                            (long long)tegra_vic_probe_find(e->dstVa, e->dstBytes, tegra_vic_card_pixel(0, 1)));
-    if (n > 0 && (size_t)n < sizeof(text)) tegra_vic_probe_points(e->dstVa, ow, oh, text + n, sizeof(text) - (size_t)n);
+    if (n > 0 && (size_t)n < sizeof(text))
+        tegra_vic_probe_points(e->dstVa, ow, oh, text + n, sizeof(text) - (size_t)n);
     e->note(e->ctx, text);
 }
 
@@ -194,8 +207,10 @@ static inline int tegra_vic_probe_transforms(const TegraVICProbeEnv *e, TegraVIC
         int found = -1;
         for (uint32_t k = 0; k < (tr ? 4u : 1u); k++) {
             const uint32_t convention = tr ? order[k] : 0;
-            if (found >= 0 && !plain) break;
-            if (tr && !plain && pre >= 0 && (int)convention != pre) continue;
+            if (found >= 0 && !plain)
+                break;
+            if (tr && !plain && pre >= 0 && (int)convention != pre)
+                continue;
             TegraVICTraits probe = *t;
             probe.vicFlips[0][0] = (uint8_t)fx;
             probe.vicFlips[0][1] = (uint8_t)fy;
@@ -212,13 +227,16 @@ static inline int tegra_vic_probe_transforms(const TegraVICProbeEnv *e, TegraVIC
                 return 0;
             }
             const int got = tegra_vic_probe_recognise(e->dstVa, 0, 0, ow, oh);
-            if (plain) tegra_vic_probe_note_transpose(e, convention, got, ow, oh);
+            if (plain)
+                tegra_vic_probe_note_transpose(e, convention, got, ow, oh);
             if (got >= 0 && found < 0) {
                 found = got;
-                if (tr && pre < 0) pre = (int)convention;
+                if (tr && pre < 0)
+                    pre = (int)convention;
             }
         }
-        if (found < 0 || (t->rotations & (1u << found))) continue;  // no transform, or one already had
+        if (found < 0 || (t->rotations & (1u << found)))
+            continue;  // no transform, or one already had
         t->vicFlips[found][0] = (uint8_t)fx;
         t->vicFlips[found][1] = (uint8_t)fy;
         t->vicFlips[found][2] = (uint8_t)tr;
@@ -239,7 +257,13 @@ static inline int tegra_vic_probe_transforms(const TegraVICProbeEnv *e, TegraVIC
 // surface at (8, 4), every pixel of the rectangle checked. A flip that mirrors around the surface, not the rectangle,
 // lands the card elsewhere: that transform keeps whole-surface jobs only (tegra_vic_build refuses the rest; callers fall
 // back) and one line says where it went. Never fails V4. Transform 0 needs no proof (fills and copies place it).
-enum { TEGRA_VIC_PLACE_W = 64, TEGRA_VIC_PLACE_H = 48, TEGRA_VIC_PLACE_X = 8, TEGRA_VIC_PLACE_Y = 4 };
+enum {
+    TEGRA_VIC_PLACE_W = 64,
+    TEGRA_VIC_PLACE_H = 48,
+    TEGRA_VIC_PLACE_X = 8,
+    TEGRA_VIC_PLACE_Y = 4
+};
+
 static inline void tegra_vic_probe_placement(const TegraVICProbeEnv *e, TegraVICTraits *t)
 {
     tegra_vic_probe_draw_card(e);
@@ -247,7 +271,8 @@ static inline void tegra_vic_probe_placement(const TegraVICProbeEnv *e, TegraVIC
     const TegraVICImage dst = tegra_vic_probe_bgra(e->dstIova, e->dstBytes, TEGRA_VIC_PLACE_W, TEGRA_VIC_PLACE_H);
     t->subRects = 1;
     for (uint32_t tr = 1; tr < 8; tr++) {
-        if (!(t->rotations & (1u << tr))) continue;
+        if (!(t->rotations & (1u << tr)))
+            continue;
         const int rot = (tr & TEGRA_VIC_ROT90) != 0;
         const uint32_t w = rot ? TEGRA_VIC_CARD_H : TEGRA_VIC_CARD_W, h = rot ? TEGRA_VIC_CARD_W : TEGRA_VIC_CARD_H;
         TegraVICOp op = tegra_vic_probe_op(TEGRA_VIC_CARD_W, TEGRA_VIC_CARD_H, w, h, tr);

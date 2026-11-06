@@ -71,30 +71,38 @@ static inline const char *switch_wake_source_name(unsigned source)
 
 static inline int switch_wake_bt_buttons(const uint8_t *acl, size_t length, uint16_t *handle, uint8_t *report)
 {
-    if (!acl || length < 4) return -1;
+    if (!acl || length < 4)
+        return -1;
     const unsigned flags = (unsigned)(acl[1] >> 4) & 3u;  // packet boundary: 1 = continuation
     const unsigned aclLength = (unsigned)(acl[2] | acl[3] << 8);
-    if (flags == 1u || length < 4 + 4 + 2 || aclLength < 4 + 2) return -1;
+    if (flags == 1u || length < 4 + 4 + 2 || aclLength < 4 + 2)
+        return -1;
     const unsigned l2capLength = (unsigned)(acl[4] | acl[5] << 8), cid = (unsigned)(acl[6] | acl[7] << 8);
-    if (cid < 0x40u || l2capLength + 4u != aclLength) return -1;  // signalling/fixed channels, or a fragmented frame
+    if (cid < 0x40u || l2capLength + 4u != aclLength)
+        return -1;  // signalling/fixed channels, or a fragmented frame
     const uint8_t *hid = acl + 8;
     const size_t have = length - 8 < l2capLength ? length - 8 : l2capLength;
-    if (hid[0] != 0xa1) return -1;
+    if (hid[0] != 0xa1)
+        return -1;
     const uint8_t id = hid[1];
     size_t at;
     if (id == 0x30 || id == 0x21) {
-        if (l2capLength != 1 + 49) return -1;  // HIDP header + the standard 49-byte report
+        if (l2capLength != 1 + 49)
+            return -1;  // HIDP header + the standard 49-byte report
         at = 1 + 4;
     } else if (id == 0x31) {
-        if (l2capLength != 1 + 362) return -1;  // HIDP header + the NFC/IR report
+        if (l2capLength != 1 + 362)
+            return -1;  // HIDP header + the NFC/IR report
         at = 1 + 4;
     } else if (id == 0x3f) {
-        if (l2capLength != 1 + 12) return -1;  // HIDP header + 0x3F's 12 bytes
+        if (l2capLength != 1 + 12)
+            return -1;  // HIDP header + 0x3F's 12 bytes
         at = 1 + 2;
     } else {
         return -1;
     }
-    if (have <= at) return -1;
+    if (have <= at)
+        return -1;
     *handle = (uint16_t)((unsigned)(acl[0] | acl[1] << 8) & 0x0fffu);
     *report = id;
     return (int)(((hid[at] & 0x10) ? SWITCH_BT_HOME : 0u) | ((hid[at] & 0x20) ? SWITCH_BT_CAPTURE : 0u));
@@ -116,6 +124,7 @@ static inline int switch_wake_bt_buttons(const uint8_t *acl, size_t length, uint
 // disconnection drops a connection's buttons without a click.
 #define SWITCH_BT_BUTTON_LINKS   8u
 #define SWITCH_BT_CLICK_LIMIT_NS 1000000000ull
+
 struct switch_bt_buttons {
     uint16_t handle[SWITCH_BT_BUTTON_LINKS];
     uint8_t held[SWITCH_BT_BUTTON_LINKS];
@@ -126,6 +135,7 @@ struct switch_bt_buttons {
     uint8_t spoiled;  // of those, the ones whose release clicks nothing
     uint64_t since[2];
 };
+
 struct switch_bt_buttons_step {
     uint8_t click;    // the system buttons to click now
     uint8_t pressed;  // the buttons that went down (any connection's first)
@@ -137,12 +147,14 @@ static inline void switch_bt_buttons_settle(struct switch_bt_buttons *b, uint64_
 {
     uint8_t down = 0;
     for (unsigned i = 0; i < SWITCH_BT_BUTTON_LINKS; ++i)
-        if (b->used[i]) down = (uint8_t)(down | b->held[i]);
+        if (b->used[i])
+            down = (uint8_t)(down | b->held[i]);
     const uint8_t pressed = (uint8_t)(down & ~b->down), released = (uint8_t)(b->down & ~down);
     for (unsigned k = 0; k < 2; ++k) {
         const uint8_t bit = (uint8_t)(1u << k);
         if (released & bit) {
-            if (!(b->spoiled & bit) && now - b->since[k] < SWITCH_BT_CLICK_LIMIT_NS) step->click |= bit;
+            if (!(b->spoiled & bit) && now - b->since[k] < SWITCH_BT_CLICK_LIMIT_NS)
+                step->click |= bit;
             b->spoiled = (uint8_t)(b->spoiled & ~bit);
         }
         if (pressed & bit) {
@@ -167,14 +179,17 @@ static inline struct switch_bt_buttons_step switch_bt_buttons_report(struct swit
     struct switch_bt_buttons_step step = {0, 0, false};
     unsigned slot = SWITCH_BT_BUTTON_LINKS;
     for (unsigned i = 0; i < SWITCH_BT_BUTTON_LINKS && slot == SWITCH_BT_BUTTON_LINKS; ++i)
-        if (b->used[i] && b->handle[i] == handle) slot = i;
+        if (b->used[i] && b->handle[i] == handle)
+            slot = i;
     if (slot == SWITCH_BT_BUTTON_LINKS) {
         for (unsigned i = 0; i < SWITCH_BT_BUTTON_LINKS && slot == SWITCH_BT_BUTTON_LINKS; ++i)
-            if (!b->used[i]) slot = i;
+            if (!b->used[i])
+                slot = i;
         if (slot == SWITCH_BT_BUTTON_LINKS) {
             slot = 0;
             for (unsigned i = 1; i < SWITCH_BT_BUTTON_LINKS; ++i)
-                if (b->age[i] < b->age[slot]) slot = i;
+                if (b->age[i] < b->age[slot])
+                    slot = i;
             b->used[slot] = 0;  // the oldest connection's buttons go, without a click
             struct switch_bt_buttons_step none = {0, 0, false};
             switch_bt_buttons_settle(b, now, dark, &none);
@@ -193,13 +208,15 @@ static inline struct switch_bt_buttons_step switch_bt_buttons_report(struct swit
 static inline void switch_bt_buttons_gone(struct switch_bt_buttons *b, uint16_t handle)
 {
     for (unsigned i = 0; i < SWITCH_BT_BUTTON_LINKS; ++i) {
-        if (!b->used[i] || b->handle[i] != handle) continue;
+        if (!b->used[i] || b->handle[i] != handle)
+            continue;
         b->used[i] = 0;
         b->held[i] = 0;
     }
     uint8_t down = 0;
     for (unsigned i = 0; i < SWITCH_BT_BUTTON_LINKS; ++i)
-        if (b->used[i]) down = (uint8_t)(down | b->held[i]);
+        if (b->used[i])
+            down = (uint8_t)(down | b->held[i]);
     b->spoiled = (uint8_t)(b->spoiled & down);
     b->down = down;
 }
@@ -208,6 +225,7 @@ static inline void switch_bt_buttons_gone(struct switch_bt_buttons *b, uint16_t 
 // Armed by a wake source while the panel is off; disarmed by a display-on request; fires when its deadline passes with
 // the panel still off and no display-on asked for. Times in any monotonic unit.
 #define SWITCH_WAKE_GUARD_MS 2500u
+
 struct switch_wake_guard {
     uint64_t deadline;
     uint8_t source;
@@ -218,7 +236,8 @@ struct switch_wake_guard {
 static inline bool switch_wake_guard_arm(struct switch_wake_guard *g, unsigned source, uint64_t now, uint64_t timeout,
                                          bool panelOn)
 {
-    if (panelOn || g->armed) return false;
+    if (panelOn || g->armed)
+        return false;
     g->armed = true;
     g->source = (uint8_t)source;
     g->deadline = now + timeout;
@@ -235,12 +254,14 @@ static inline void switch_wake_guard_display_on(struct switch_wake_guard *g)
 // or on was asked for), -1 not yet (still armed: look again at the deadline).
 static inline int switch_wake_guard_check(struct switch_wake_guard *g, uint64_t now, bool panelOn, bool onRequested)
 {
-    if (!g->armed) return 0;
+    if (!g->armed)
+        return 0;
     if (panelOn || onRequested) {
         g->armed = false;
         return 0;
     }
-    if (now < g->deadline) return -1;
+    if (now < g->deadline)
+        return -1;
     g->armed = false;
     return 1;
 }
@@ -249,6 +270,7 @@ static inline int switch_wake_guard_check(struct switch_wake_guard *g, uint64_t 
 // The last SWITCH_POWER_LINES lines (each cut at SWITCH_POWER_LINE - 1 bytes), oldest first when rendered.
 #define SWITCH_POWER_LINES 64u
 #define SWITCH_POWER_LINE  192u
+
 struct switch_power_ring {
     char line[SWITCH_POWER_LINES][SWITCH_POWER_LINE];
     uint32_t next;   // the slot the next line goes to
@@ -259,7 +281,8 @@ static inline void switch_power_ring_append(struct switch_power_ring *r, const c
 {
     char *slot = r->line[r->next % SWITCH_POWER_LINES];
     size_t i = 0;
-    for (; text[i] && text[i] != '\n' && i < SWITCH_POWER_LINE - 1; ++i) slot[i] = text[i];
+    for (; text[i] && text[i] != '\n' && i < SWITCH_POWER_LINE - 1; ++i)
+        slot[i] = text[i];
     slot[i] = 0;
     r->next = (r->next + 1) % SWITCH_POWER_LINES;
     ++r->total;
@@ -268,14 +291,17 @@ static inline void switch_power_ring_append(struct switch_power_ring *r, const c
 // Every kept line, oldest first, one per '\n', into out (NUL-terminated, cut at capacity). Returns the length.
 static inline size_t switch_power_ring_render(const struct switch_power_ring *r, char *out, size_t capacity)
 {
-    if (!capacity) return 0;
+    if (!capacity)
+        return 0;
     size_t used = 0;
     const uint32_t kept = r->total < SWITCH_POWER_LINES ? r->total : SWITCH_POWER_LINES;
     const uint32_t first = (r->next + SWITCH_POWER_LINES - kept) % SWITCH_POWER_LINES;
     for (uint32_t n = 0; n < kept; ++n) {
         const char *line = r->line[(first + n) % SWITCH_POWER_LINES];
-        for (size_t i = 0; line[i] && used + 1 < capacity; ++i) out[used++] = line[i];
-        if (used + 1 < capacity) out[used++] = '\n';
+        for (size_t i = 0; line[i] && used + 1 < capacity; ++i)
+            out[used++] = line[i];
+        if (used + 1 < capacity)
+            out[used++] = '\n';
     }
     out[used] = 0;
     return used;
@@ -287,7 +313,11 @@ static inline size_t switch_power_ring_render(const struct switch_power_ring *r,
 // Wi-Fi wake (8, PH2 WL_HOST_WAKE) and Bluetooth host wake (52, PH5 BT_HOST_WAKE, active low as the DTB's commented
 // host-wakeup-gpios) are commented out there (switchroot powers the chip down in suspend); here each is armed when its
 // driver has set the chip up to wake the host for this sleep.
-enum { SWITCH_WAKE_LOW = 0, SWITCH_WAKE_HIGH = 1 };
+enum {
+    SWITCH_WAKE_LOW = 0,
+    SWITCH_WAKE_HIGH = 1
+};
+
 struct switch_wake_pmc_event {
     uint8_t event, level, armed;
     const char *name;
@@ -313,7 +343,8 @@ static inline void switch_wake_pmc_registers(uint64_t events, uint32_t mask[2], 
     mask[0] = mask[1] = highSet[0] = highSet[1] = lowClear[0] = lowClear[1] = 0;
     for (size_t i = 0; i < SWITCH_WAKE_PMC_EVENTS; ++i) {
         const unsigned e = switch_wake_pmc_events[i].event;
-        if (!(events >> e & 1u)) continue;
+        if (!(events >> e & 1u))
+            continue;
         const unsigned bank = e / 32, bit = e % 32;
         mask[bank] |= 1u << bit;
         if (switch_wake_pmc_events[i].level == SWITCH_WAKE_HIGH)
@@ -333,10 +364,11 @@ static inline uint64_t switch_wake_pmc_armed(bool usbHigh, bool gaugeHigh, bool 
     for (size_t i = 0; i < SWITCH_WAKE_PMC_EVENTS; ++i) {
         const unsigned e = switch_wake_pmc_events[i].event;
         const bool wanted = switch_wake_pmc_events[i].armed ? (e != 14 || usbHigh) && (e != 27 || gaugeHigh)
-                            : e == 52                        ? btWake
-                            : e == 8                         ? wifiWake
-                                                             : false;
-        if (wanted) events |= (uint64_t)1 << e;
+                            : e == 52                       ? btWake
+                            : e == 8                        ? wifiWake
+                                                            : false;
+        if (wanted)
+            events |= (uint64_t)1 << e;
     }
     return events;
 }
@@ -347,7 +379,8 @@ static inline const char *switch_wake_pmc_reason(const uint32_t status[2], uint6
 {
     for (size_t i = 0; i < SWITCH_WAKE_PMC_EVENTS; ++i) {
         const unsigned e = switch_wake_pmc_events[i].event;
-        if ((armed >> e & 1u) && (status[e / 32] >> (e % 32) & 1u)) return switch_wake_pmc_events[i].name;
+        if ((armed >> e & 1u) && (status[e / 32] >> (e % 32) & 1u))
+            return switch_wake_pmc_events[i].name;
     }
     return "unknown";
 }
@@ -360,15 +393,18 @@ static inline const char *switch_wake_pmc_reason(const uint32_t status[2], uint6
 // host wake rather than hci_bcm's pulse, which the PMC's level-low wake event 52 needs held. Off: twelve zeros, as at
 // bring-up (BT_WAKE stays asserted, host wake unused).
 #define SWITCH_BT_SLEEP_PARAMS 12u
+
 static inline void switch_bt_sleep_mode_params(uint8_t out[SWITCH_BT_SLEEP_PARAMS], bool on)
 {
-    for (unsigned i = 0; i < SWITCH_BT_SLEEP_PARAMS; ++i) out[i] = 0;
-    if (!on) return;
-    out[0] = 1;   // UART
-    out[1] = 2;   // idle_host
-    out[2] = 2;   // idle_dev
-    out[5] = 1;   // allow_host_sleep
-    out[6] = 1;   // combine_modes
+    for (unsigned i = 0; i < SWITCH_BT_SLEEP_PARAMS; ++i)
+        out[i] = 0;
+    if (!on)
+        return;
+    out[0] = 1;  // UART
+    out[1] = 2;  // idle_host
+    out[2] = 2;  // idle_dev
+    out[5] = 1;  // allow_host_sleep
+    out[6] = 1;  // combine_modes
 }
 
 // Horizon drops its controllers' links when it sleeps and a Joy-Con's button press pages the console back: a
@@ -376,6 +412,7 @@ static inline void switch_bt_sleep_mode_params(uint8_t out[SWITCH_BT_SLEEP_PARAM
 // first report of a controller that connects within SWITCH_BT_RECONNECT_MS is the console's Home press (it lights
 // the panel), as Horizon wakes on a reconnecting controller. Times in nanoseconds; *until 0 is closed.
 #define SWITCH_BT_RECONNECT_MS 15000u
+
 static inline void switch_bt_reconnect_open(uint64_t *until, uint64_t now)
 {
     *until = now + (uint64_t)SWITCH_BT_RECONNECT_MS * 1000000u;
@@ -385,12 +422,14 @@ static inline void switch_bt_reconnect_open(uint64_t *until, uint64_t now)
 // closes without one.
 static inline bool switch_bt_reconnect_take(uint64_t *until, uint64_t now, bool fresh, bool dark)
 {
-    if (!*until) return false;
+    if (!*until)
+        return false;
     if (now >= *until) {
         *until = 0;
         return false;
     }
-    if (!fresh || !dark) return false;
+    if (!fresh || !dark)
+        return false;
     *until = 0;
     return true;
 }
@@ -415,7 +454,8 @@ static inline uint64_t switch_sleep_elapsed_ms(uint64_t before, uint64_t after)
 // discharging, as the gauge's Current register; 0 for an empty interval.
 static inline int32_t switch_sleep_average_ma(uint16_t before, uint16_t after, uint32_t lsb_uah, uint64_t elapsed_ms)
 {
-    if (!elapsed_ms) return 0;
+    if (!elapsed_ms)
+        return 0;
     const int64_t counts = (int16_t)(uint16_t)(after - before);
     return (int32_t)(counts * (int64_t)lsb_uah * 3600 / (int64_t)elapsed_ms);
 }

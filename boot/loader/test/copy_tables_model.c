@@ -47,12 +47,15 @@ static uint64_t *next_table(uint64_t descriptor)
 static uint64_t lookup(uint64_t va, unsigned *level)
 {
     uint64_t d = tables[0][va >> 30];
-    if (!d) return 0;
+    if (!d)
+        return 0;
     STOP_UNLESS((d & ~ADDRESS) == 3);
     uint64_t *l2 = next_table(d);
-    if (!l2) return 0;
+    if (!l2)
+        return 0;
     d = l2[(va >> 21) & 511];
-    if (!d) return 0;
+    if (!d)
+        return 0;
     if ((d & 3) == 1) {
         *level = 2;
         STOP_UNLESS((d & ADDRESS & ~(BLOCK - 1)) == (va & ~(BLOCK - 1)));
@@ -60,7 +63,8 @@ static uint64_t lookup(uint64_t va, unsigned *level)
     }
     STOP_UNLESS((d & ~ADDRESS) == 3);
     uint64_t *l3 = next_table(d);
-    if (!l3) return 0;
+    if (!l3)
+        return 0;
     d = l3[(va >> 12) & 511];
     if (d) {
         *level = 3;
@@ -73,14 +77,17 @@ static uint64_t lookup(uint64_t va, unsigned *level)
 static void guards(void)
 {
     for (unsigned i = 0; i < PAGE; ++i) {
-        if (!CHECK(allocation[i] == 0xa5)) return;
-        if (!CHECK(allocation[(LOADER_COPY_TABLE_PAGES + 1) * PAGE + i] == 0xa5)) return;
+        if (!CHECK(allocation[i] == 0xa5))
+            return;
+        if (!CHECK(allocation[(LOADER_COPY_TABLE_PAGES + 1) * PAGE + i] == 0xa5))
+            return;
     }
 }
 
 static void positive(struct loader_copy_bounds b)
 {
-    if (!CHECK(loader_copy_build_tables(tables, table_address, &b) == 0)) return;
+    if (!CHECK(loader_copy_build_tables(tables, table_address, &b) == 0))
+        return;
     broken = 0;
     for (uint64_t va = 0; va < UINT64_C(0x100000000); va += PAGE) {
         uint64_t expected = 0;
@@ -94,18 +101,24 @@ static void positive(struct loader_copy_bounds b)
             expected = AF | PXN | UXN;
         unsigned level = 0;
         uint64_t actual = lookup(va, &level);
-        if (broken) return;
+        if (broken)
+            return;
         if (!expected) {
-            if (!CHECK(actual == 0)) return;
+            if (!CHECK(actual == 0))
+                return;
         } else {
-            if (!CHECK(actual)) return;
-            if (!CHECK((actual & ~ADDRESS & ~UINT64_C(3)) == expected)) return;
+            if (!CHECK(actual))
+                return;
+            if (!CHECK((actual & ~ADDRESS & ~UINT64_C(3)) == expected))
+                return;
             if (level == 2) {
                 uint64_t begin = va & ~(BLOCK - 1);
                 if (va >= b.source && va < b.source + b.source_bytes)
-                    if (!CHECK(begin >= b.source && begin + BLOCK <= b.source + b.source_bytes)) return;
+                    if (!CHECK(begin >= b.source && begin + BLOCK <= b.source + b.source_bytes))
+                        return;
                 if (va >= b.destination && va < b.destination + b.bytes)
-                    if (!CHECK(begin >= b.destination && begin + BLOCK <= b.destination + b.bytes)) return;
+                    if (!CHECK(begin >= b.destination && begin + BLOCK <= b.destination + b.bytes))
+                        return;
             }
         }
     }
@@ -124,7 +137,8 @@ static const uint64_t offsets[] = {0, PAGE, UINT64_C(0x7c000), BLOCK - PAGE};
 
 int copy_tables_setup(void)
 {
-    if (!CHECK(posix_memalign((void **)&allocation, PAGE, (LOADER_COPY_TABLE_PAGES + 2) * PAGE) == 0)) return 0;
+    if (!CHECK(posix_memalign((void **)&allocation, PAGE, (LOADER_COPY_TABLE_PAGES + 2) * PAGE) == 0))
+        return 0;
     memset(allocation, 0xa5, (LOADER_COPY_TABLE_PAGES + 2) * PAGE);
     tables = (uint64_t (*)[512])(allocation + PAGE);
     return 1;
@@ -162,6 +176,7 @@ unsigned copy_tables_sizes(void)
 {
     return sizeof(sizes) / sizeof(sizes[0]);
 }
+
 unsigned copy_tables_offsets(void)
 {
     return sizeof(offsets) / sizeof(offsets[0]);
@@ -186,32 +201,76 @@ unsigned copy_tables_negatives(void)
         b = good;
         uint64_t pa = table_address;
         switch (kind) {
-        case 0: b.bytes = 0; break;
-        case 1: b.bytes = 1; break;
-        case 2: b.bytes = UINT64_MAX; break;
-        case 3: b.bytes = UINT64_C(0x6001000); break;
-        case 4: b.source += PAGE; break;
-        case 5: b.destination++; break;
-        case 6: b.destination = UINT64_C(0xb1fff000); break;
-        case 7: b.destination = UINT64_C(0xc0000000); break;
-        case 8: b.destination = UINT64_C(0xbffff000); break;
-        case 9: b.rx_end = UINT64_C(0xa0000000); break;
-        case 10: b.rx_end++; break;
-        case 11: b.ro_end = b.rx_end - PAGE; break;
-        case 12: b.ro_end++; break;
-        case 13: b.ro_end = pa + PAGE; break;
-        case 14: b.image_end++; break;
-        case 15: pa++; break;
-        case 16: pa = UINT64_C(0x9ffff000); break;
+        case 0:
+            b.bytes = 0;
+            break;
+        case 1:
+            b.bytes = 1;
+            break;
+        case 2:
+            b.bytes = UINT64_MAX;
+            break;
+        case 3:
+            b.bytes = UINT64_C(0x6001000);
+            break;
+        case 4:
+            b.source += PAGE;
+            break;
+        case 5:
+            b.destination++;
+            break;
+        case 6:
+            b.destination = UINT64_C(0xb1fff000);
+            break;
+        case 7:
+            b.destination = UINT64_C(0xc0000000);
+            break;
+        case 8:
+            b.destination = UINT64_C(0xbffff000);
+            break;
+        case 9:
+            b.rx_end = UINT64_C(0xa0000000);
+            break;
+        case 10:
+            b.rx_end++;
+            break;
+        case 11:
+            b.ro_end = b.rx_end - PAGE;
+            break;
+        case 12:
+            b.ro_end++;
+            break;
+        case 13:
+            b.ro_end = pa + PAGE;
+            break;
+        case 14:
+            b.image_end++;
+            break;
+        case 15:
+            pa++;
+            break;
+        case 16:
+            pa = UINT64_C(0x9ffff000);
+            break;
         case 17:
             pa = UINT64_C(0xa0018000);
             b.image_end = pa + LOADER_COPY_TABLE_PAGES * PAGE;
             break;
-        case 18: b.source_bytes = 0; break;
-        case 19: b.source_bytes = 1; break;
-        case 20: b.source_bytes = UINT64_C(0x6001000); break;
-        case 21: b.source_bytes = UINT64_MAX; break;
-        case 22: b.source_bytes = UINT64_C(0x5eff000); break; /* would reach ramoops */
+        case 18:
+            b.source_bytes = 0;
+            break;
+        case 19:
+            b.source_bytes = 1;
+            break;
+        case 20:
+            b.source_bytes = UINT64_C(0x6001000);
+            break;
+        case 21:
+            b.source_bytes = UINT64_MAX;
+            break;
+        case 22:
+            b.source_bytes = UINT64_C(0x5eff000);
+            break; /* would reach ramoops */
         }
         CHECK(loader_copy_build_tables(tables, pa, &b) != 0);
         CHECK(memcmp(before, tables, sizeof(before)) == 0);

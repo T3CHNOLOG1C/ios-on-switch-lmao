@@ -28,18 +28,22 @@ void spin_lock_init(spinlock_t *l)
 	l->lck = NULL;
 	(void)lock_of(l);
 }
+
 void spin_lock(spinlock_t *l)
 {
 	bpxnu_spin_lock(lock_of(l));
 }
+
 void spin_unlock(spinlock_t *l)
 {
 	bpxnu_spin_unlock(l->lck);
 }
+
 unsigned long bpxnu_linux_spin_lock_irqsave(spinlock_t *l)
 {
 	return bpxnu_spin_lock_irqsave(lock_of(l));
 }
+
 void spin_unlock_irqrestore(spinlock_t *l, unsigned long flags)
 {
 	bpxnu_spin_unlock_irqrestore(l->lck, flags);
@@ -47,10 +51,12 @@ void spin_unlock_irqrestore(spinlock_t *l, unsigned long flags)
 
 /* Only the atomic (interrupts-off) path of mail.c uses these; TegraBPMP never takes it. */
 static spinlock_t irq_lock;
+
 unsigned long bpxnu_local_irq_save(void)
 {
 	return bpxnu_spin_lock_irqsave(lock_of(&irq_lock));
 }
+
 void local_irq_restore(unsigned long flags)
 {
 	bpxnu_spin_unlock_irqrestore(irq_lock.lck, flags);

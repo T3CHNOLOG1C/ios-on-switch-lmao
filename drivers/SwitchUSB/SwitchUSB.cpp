@@ -43,13 +43,15 @@ bool railOn(char *why, size_t whySize)
     constexpr uint8_t kPmic = 0x3C, kLdo1Cfg = 0x25, kModeNormal = 3u << 6, kLdo1_1V05 = (1050000 - 800000) / 25000;
     uint8_t value = 0;
     int err = tegra_i2c_init(5);
-    if (!err) err = tegra_i2c_read(5, kPmic, kLdo1Cfg, &value, 1);
+    if (!err)
+        err = tegra_i2c_read(5, kPmic, kLdo1Cfg, &value, 1);
     if (!err && !(value & kModeNormal)) {
         const uint8_t on = kModeNormal | kLdo1_1V05;
         err = tegra_i2c_write(5, kPmic, kLdo1Cfg, &on, 1);
         IOSleep(1);
     }
-    if (err) snprintf(why, whySize, "PMIC LDO1 (avddio_usb) not readable: I2C5 error %d", err);
+    if (err)
+        snprintf(why, whySize, "PMIC LDO1 (avddio_usb) not readable: I2C5 error %d", err);
     return !err;
 }
 
@@ -65,7 +67,8 @@ void pdChanged(void *, const SwitchPDState *state)
     gWantHost = wantHost;
     gHostCable = hostCable;
     IOLockUnlock(gLock);
-    if (changed) thread_call_enter(gRoleCall);
+    if (changed)
+        thread_call_enter(gRoleCall);
 }
 
 // The role line, kReportMS after a role change (its own thread call, re-armed by every change: the last one wins):
@@ -107,7 +110,8 @@ void applyRole(thread_call_param_t, thread_call_param_t)
     IOLockLock(gLock);
     const bool wantHost = gWantHost, hostCable = gHostCable;
     IOLockUnlock(gLock);
-    if (__atomic_load_n(&gHostFailed, __ATOMIC_ACQUIRE)) gHostBroken = true;
+    if (__atomic_load_n(&gHostFailed, __ATOMIC_ACQUIRE))
+        gHostBroken = true;
     if (wantHost && !gHostRole && !gHostBroken) {
         char why[160] = "";
         switchxudc_set_host_owns_port(true);
@@ -138,7 +142,8 @@ void applyRole(thread_call_param_t, thread_call_param_t)
         IOLog("SwitchUSB: device role\n");
         armReport();
     }
-    if (hostCable && !gHostRole) switchxudc_host_expected();
+    if (hostCable && !gHostRole)
+        switchxudc_host_expected();
 }
 
 void usbThread(void *, wait_result_t)
@@ -163,7 +168,8 @@ void usbThread(void *, wait_result_t)
     }
     // The current state comes at once; the role thread call does the rest. Then a sink may attach.
     if (switch_pd_add_listener(&pdChanged, nullptr)) {
-        if (gHostPackaged && !gHostBroken) IOLog("SwitchUSB: host mode off: no PD controller\n");
+        if (gHostPackaged && !gHostBroken)
+            IOLog("SwitchUSB: host mode off: no PD controller\n");
     } else if (gHostPackaged && !gHostBroken) {
         (void)switch_pd_allow_source(true);
     }
@@ -194,13 +200,15 @@ void switch_usb_host_failed(void)
 extern "C" int switch_usb_start(void)
 {
     static uint32_t started;
-    if (__atomic_exchange_n(&started, 1, __ATOMIC_ACQ_REL)) return 0;
+    if (__atomic_exchange_n(&started, 1, __ATOMIC_ACQ_REL))
+        return 0;
     gDevicePort = publishedNode("/arm-io/usb-device");
     if (IOService *host = publishedNode("/arm-io/usb-xhci")) {
         gHostPackaged = true;
         host->release();
     }
-    if (!gDevicePort && !gHostPackaged) return 0;  // not packaged with USB
+    if (!gDevicePort && !gHostPackaged)
+        return 0;  // not packaged with USB
     gLock = IOLockAlloc();
     gRoleCall = gLock ? thread_call_allocate_with_options(&applyRole, nullptr, THREAD_CALL_PRIORITY_KERNEL,
                                                           THREAD_CALL_OPTIONS_ONCE)
@@ -219,11 +227,14 @@ extern "C" int switch_usb_start(void)
 
 extern "C" void switch_usb_suspend(void)
 {
-    if (gDevicePort) switchxudc_sleep(true);
+    if (gDevicePort)
+        switchxudc_sleep(true);
 }
 
 extern "C" void switch_usb_resume(void)
 {
-    if (gDevicePort) switchxudc_sleep(false);
-    if (gRoleCall) thread_call_enter(gRoleCall);  // a cable that came or went while asleep
+    if (gDevicePort)
+        switchxudc_sleep(false);
+    if (gRoleCall)
+        thread_call_enter(gRoleCall);  // a cable that came or went while asleep
 }

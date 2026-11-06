@@ -38,31 +38,47 @@ static inline const char *tegra_nvdec_check_value(const TegraNVDECSubmit *s, uin
     uint32_t bit;
     switch (e->method) {
     case NVC5B0_SET_APPLICATION_ID:
-        if (e->value != s->codec) return "application id";
+        if (e->value != s->codec)
+            return "application id";
         bit = 0;
         break;
     case NVC5B0_SET_CONTROL_PARAMS:  // codec type, GPTIMER_ON (required), RET_ERROR, ERR_CONCEAL_ON, MBTIMER_ON
-        if ((e->value & 0xf) != s->codec || (e->value & ~0x207fu) != 0 || !(e->value & 0x10)) return "control params";
+        if ((e->value & 0xf) != s->codec || (e->value & ~0x207fu) != 0 || !(e->value & 0x10))
+            return "control params";
         bit = 1;
         break;
-    case NVC5B0_SET_PICTURE_INDEX: bit = 2; break;
-    case NVC5B0_SET_WATCHDOG_TIMER: bit = 3; break;
+    case NVC5B0_SET_PICTURE_INDEX:
+        bit = 2;
+        break;
+    case NVC5B0_SET_WATCHDOG_TIMER:
+        bit = 3;
+        break;
     case NVC5B0_EXECUTE:  // AWAKEN only: NOTIFY would release a semaphore at a raw address
-        if (e->value & ~0x100u) return "execute flags";
-        if (i != s->entry_count - 1) return "execute not last";
+        if (e->value & ~0x100u)
+            return "execute flags";
+        if (i != s->entry_count - 1)
+            return "execute not last";
         bit = 4;
         break;
-    default: return "value method";
+    default:
+        return "value method";
     }
-    if (*seen & (1u << bit)) return "repeated method";
+    if (*seen & (1u << bit))
+        return "repeated method";
     *seen |= 1u << bit;
     return 0;
 }
 
 static inline const char *tegra_nvdec_check_h264(const TegraNVDECSubmit *s, const uint64_t *avail)
 {
-    enum { LUMA = NVC5B0_SET_PICTURE_LUMA_OFFSET0, CHROMA = NVC5B0_SET_PICTURE_CHROMA_OFFSET0, SLOTS = 17 };
-    if (s->setup_bytes != sizeof(nvdec_h264_pic_s)) return "setup size";
+    enum {
+        LUMA = NVC5B0_SET_PICTURE_LUMA_OFFSET0,
+        CHROMA = NVC5B0_SET_PICTURE_CHROMA_OFFSET0,
+        SLOTS = 17
+    };
+
+    if (s->setup_bytes != sizeof(nvdec_h264_pic_s))
+        return "setup size";
     uint64_t bitstream = 0, slices = 0, status = 0, coloc = 0, mbhist = 0, history = 0;
     uint64_t luma[SLOTS] = {0}, chroma[SLOTS] = {0};
     uint32_t seen = 0, pictures = 0;
@@ -71,20 +87,35 @@ static inline const char *tegra_nvdec_check_h264(const TegraNVDECSubmit *s, cons
         const uint16_t m = e->method;
         if (e->kind == TEGRA_NVDEC_ENTRY_VALUE) {
             const char *why = tegra_nvdec_check_value(s, i, &seen);
-            if (why) return why;
+            if (why)
+                return why;
             continue;
         }
-        if (e->kind != TEGRA_NVDEC_ENTRY_RELOC) return "entry kind";
-        if (e->offset & 0xff) return "relocation alignment";
+        if (e->kind != TEGRA_NVDEC_ENTRY_RELOC)
+            return "entry kind";
+        if (e->offset & 0xff)
+            return "relocation alignment";
         const uint64_t a = avail[i];
         uint64_t *slot = 0;
         switch (m) {
-        case NVC5B0_SET_IN_BUF_BASE_OFFSET: slot = &bitstream; break;
-        case NVC5B0_SET_SLICE_OFFSETS_BUF_OFFSET: slot = &slices; break;
-        case NVC5B0_SET_NVDEC_STATUS_OFFSET: slot = &status; break;
-        case NVC5B0_SET_COLOC_DATA_OFFSET: slot = &coloc; break;
-        case NVC5B0_H264_SET_MBHIST_BUF_OFFSET: slot = &mbhist; break;
-        case NVC5B0_SET_HISTORY_OFFSET: slot = &history; break;
+        case NVC5B0_SET_IN_BUF_BASE_OFFSET:
+            slot = &bitstream;
+            break;
+        case NVC5B0_SET_SLICE_OFFSETS_BUF_OFFSET:
+            slot = &slices;
+            break;
+        case NVC5B0_SET_NVDEC_STATUS_OFFSET:
+            slot = &status;
+            break;
+        case NVC5B0_SET_COLOC_DATA_OFFSET:
+            slot = &coloc;
+            break;
+        case NVC5B0_H264_SET_MBHIST_BUF_OFFSET:
+            slot = &mbhist;
+            break;
+        case NVC5B0_SET_HISTORY_OFFSET:
+            slot = &history;
+            break;
         default:
             if (m >= LUMA && m < LUMA + 4 * SLOTS && !(m & 3))
                 slot = &luma[(m - LUMA) / 4];
@@ -94,23 +125,31 @@ static inline const char *tegra_nvdec_check_h264(const TegraNVDECSubmit *s, cons
                 return "relocated method";
             pictures++;
         }
-        if (*slot) return "repeated relocation";
+        if (*slot)
+            return "repeated relocation";
         *slot = a ? a : 1;  // a relocation exactly at a buffer's end still counts as present
     }
-    if ((seen & 0x13) != 0x13) return "missing application id, control params or execute";
+    if ((seen & 0x13) != 0x13)
+        return "missing application id, control params or execute";
     if (!bitstream || !slices || !status || !coloc || !mbhist || !history || pictures != 2 * SLOTS)
         return "missing relocation";
 
     const nvdec_h264_pic_s *p = (const nvdec_h264_pic_s *)s->setup;
     const uint8_t *otf = (const uint8_t *)&p->encryption_params;
     for (uint32_t i = 0; i < sizeof(p->encryption_params); i++)
-        if (otf[i]) return "encryption parameters";
-    if (p->hint_dump_en) return "hint dump";
-    if (p->gptimer_timeout_value > (1u << 27)) return "GP timer limit";  // 0: the firmware's 1 << 27
+        if (otf[i])
+            return "encryption parameters";
+    if (p->hint_dump_en)
+        return "hint dump";
+    if (p->gptimer_timeout_value > (1u << 27))
+        return "GP timer limit";  // 0: the firmware's 1 << 27
     const uint32_t w = (uint32_t)p->PicWidthInMbs, h = (uint32_t)p->FrameHeightInMbs;
-    if (p->PicWidthInMbs < 3 || w > 256 || p->FrameHeightInMbs < 1 || h > 256) return "dimensions";
-    if (!p->frame_mbs_only_flag || p->field_pic_flag || p->MbaffFrameFlag) return "not progressive";
-    if (p->tileFormat || p->gob_height || p->output_memory_layout || p->chroma_format_idc != 1) return "surface format";
+    if (p->PicWidthInMbs < 3 || w > 256 || p->FrameHeightInMbs < 1 || h > 256)
+        return "dimensions";
+    if (!p->frame_mbs_only_flag || p->field_pic_flag || p->MbaffFrameFlag)
+        return "not progressive";
+    if (p->tileFormat || p->gob_height || p->output_memory_layout || p->chroma_format_idc != 1)
+        return "surface format";
     if (p->luma_top_offset || p->luma_bot_offset || p->luma_frame_offset || p->chroma_top_offset ||
         p->chroma_bot_offset || p->chroma_frame_offset)
         return "surface offsets";
@@ -118,21 +157,27 @@ static inline const char *tegra_nvdec_check_h264(const TegraNVDECSubmit *s, cons
         return "pitch";
     const uint64_t lumaBytes = (uint64_t)p->pitch_luma * ((h * 16 + 31) & ~31u);
     for (uint32_t i = 0; i < SLOTS; i++)
-        if (luma[i] < lumaBytes || chroma[i] < lumaBytes / 2) return "surface too small";
+        if (luma[i] < lumaBytes || chroma[i] < lumaBytes / 2)
+            return "surface too small";
     uint32_t cols = p->CurrColIdx;
-    if (p->CurrPicIdx >= SLOTS || p->CurrColIdx >= SLOTS) return "picture index";
+    if (p->CurrPicIdx >= SLOTS || p->CurrColIdx >= SLOTS)
+        return "picture index";
     for (uint32_t i = 0; i < 16; i++) {
         if (p->dpb[i].index >= SLOTS || p->dpb[i].col_idx >= SLOTS || p->dpb[i].output_memory_layout)
             return "dpb entry";
-        if (p->dpb[i].col_idx > cols) cols = p->dpb[i].col_idx;
+        if (p->dpb[i].col_idx > cols)
+            cols = p->dpb[i].col_idx;
     }
     const uint64_t colocBytes = ((((h + 1) & ~1u) * w * 64 - 63 + 255) & ~255u);
-    if (coloc < colocBytes * (cols + 1)) return "colocated buffer";
-    if (p->mbhist_buffer_size < ((w * 104 + 255) & ~255u) || mbhist < p->mbhist_buffer_size) return "mb history";
+    if (coloc < colocBytes * (cols + 1))
+        return "colocated buffer";
+    if (p->mbhist_buffer_size < ((w * 104 + 255) & ~255u) || mbhist < p->mbhist_buffer_size)
+        return "mb history";
     if ((uint64_t)p->HistBufferSize * 256 < ((w * 0x200 + 0x1100 + 0x1ff) & ~0x1ffu) ||
         history < (uint64_t)p->HistBufferSize * 256)
         return "history";
-    if (status < sizeof(nvdec_status_s)) return "status";
+    if (status < sizeof(nvdec_status_s))
+        return "status";
     if (!p->slice_count || slices < ((uint64_t)p->slice_count + 1) * 4 || !p->stream_len || bitstream < p->stream_len)
         return "bitstream";
     return 0;
@@ -141,9 +186,27 @@ static inline const char *tegra_nvdec_check_h264(const TegraNVDECSubmit *s, cons
 // VP9 (profile 0, 8-bit 4:2:0): picture slots 0-2 are the LAST, GOLDEN and ALTREF references, 3 the current frame.
 static inline const char *tegra_nvdec_check_vp9(const TegraNVDECSubmit *s, const uint64_t *avail)
 {
-    enum { LUMA = NVC5B0_SET_PICTURE_LUMA_OFFSET0, CHROMA = NVC5B0_SET_PICTURE_CHROMA_OFFSET0 };
-    enum { BITS, STATUS, PROBS, COUNTERS, TILES, MV_WRITE, MV_READ, SEG_READ, SEG_WRITE, FILTER, BUFFERS };
-    if (s->setup_bytes != sizeof(nvdec_vp9_pic_s)) return "setup size";
+    enum {
+        LUMA = NVC5B0_SET_PICTURE_LUMA_OFFSET0,
+        CHROMA = NVC5B0_SET_PICTURE_CHROMA_OFFSET0
+    };
+
+    enum {
+        BITS,
+        STATUS,
+        PROBS,
+        COUNTERS,
+        TILES,
+        MV_WRITE,
+        MV_READ,
+        SEG_READ,
+        SEG_WRITE,
+        FILTER,
+        BUFFERS
+    };
+
+    if (s->setup_bytes != sizeof(nvdec_vp9_pic_s))
+        return "setup size";
     uint64_t buf[BUFFERS] = {0}, luma[4] = {0}, chroma[4] = {0};
     uint32_t seen = 0;
     for (uint32_t i = 0; i < s->entry_count; i++) {
@@ -151,23 +214,46 @@ static inline const char *tegra_nvdec_check_vp9(const TegraNVDECSubmit *s, const
         const uint16_t m = e->method;
         if (e->kind == TEGRA_NVDEC_ENTRY_VALUE) {
             const char *why = tegra_nvdec_check_value(s, i, &seen);
-            if (why) return why;
+            if (why)
+                return why;
             continue;
         }
-        if (e->kind != TEGRA_NVDEC_ENTRY_RELOC) return "entry kind";
-        if (e->offset & 0xff) return "relocation alignment";
+        if (e->kind != TEGRA_NVDEC_ENTRY_RELOC)
+            return "entry kind";
+        if (e->offset & 0xff)
+            return "relocation alignment";
         uint64_t *slot;
         switch (m) {
-        case NVC5B0_SET_IN_BUF_BASE_OFFSET: slot = &buf[BITS]; break;
-        case NVC5B0_SET_NVDEC_STATUS_OFFSET: slot = &buf[STATUS]; break;
-        case NVC5B0_VP9_SET_PROB_TAB_BUF_OFFSET: slot = &buf[PROBS]; break;
-        case NVC5B0_VP9_SET_CTX_COUNTER_BUF_OFFSET: slot = &buf[COUNTERS]; break;
-        case NVC5B0_VP9_SET_TILE_SIZE_BUF_OFFSET: slot = &buf[TILES]; break;
-        case NVC5B0_VP9_SET_COL_MVWRITE_BUF_OFFSET: slot = &buf[MV_WRITE]; break;
-        case NVC5B0_VP9_SET_COL_MVREAD_BUF_OFFSET: slot = &buf[MV_READ]; break;
-        case NVC5B0_VP9_SET_SEGMENT_READ_BUF_OFFSET: slot = &buf[SEG_READ]; break;
-        case NVC5B0_VP9_SET_SEGMENT_WRITE_BUF_OFFSET: slot = &buf[SEG_WRITE]; break;
-        case NVC5B0_VP9_SET_FILTER_BUFFER_OFFSET: slot = &buf[FILTER]; break;
+        case NVC5B0_SET_IN_BUF_BASE_OFFSET:
+            slot = &buf[BITS];
+            break;
+        case NVC5B0_SET_NVDEC_STATUS_OFFSET:
+            slot = &buf[STATUS];
+            break;
+        case NVC5B0_VP9_SET_PROB_TAB_BUF_OFFSET:
+            slot = &buf[PROBS];
+            break;
+        case NVC5B0_VP9_SET_CTX_COUNTER_BUF_OFFSET:
+            slot = &buf[COUNTERS];
+            break;
+        case NVC5B0_VP9_SET_TILE_SIZE_BUF_OFFSET:
+            slot = &buf[TILES];
+            break;
+        case NVC5B0_VP9_SET_COL_MVWRITE_BUF_OFFSET:
+            slot = &buf[MV_WRITE];
+            break;
+        case NVC5B0_VP9_SET_COL_MVREAD_BUF_OFFSET:
+            slot = &buf[MV_READ];
+            break;
+        case NVC5B0_VP9_SET_SEGMENT_READ_BUF_OFFSET:
+            slot = &buf[SEG_READ];
+            break;
+        case NVC5B0_VP9_SET_SEGMENT_WRITE_BUF_OFFSET:
+            slot = &buf[SEG_WRITE];
+            break;
+        case NVC5B0_VP9_SET_FILTER_BUFFER_OFFSET:
+            slot = &buf[FILTER];
+            break;
         default:
             if (m >= LUMA && m < LUMA + 16 && !(m & 3))
                 slot = &luma[(m - LUMA) / 4];
@@ -176,14 +262,18 @@ static inline const char *tegra_nvdec_check_vp9(const TegraNVDECSubmit *s, const
             else
                 return "relocated method";
         }
-        if (*slot) return "repeated relocation";
+        if (*slot)
+            return "repeated relocation";
         *slot = avail[i] ? avail[i] : 1;  // a relocation exactly at a buffer's end still counts as present
     }
-    if ((seen & 0x13) != 0x13) return "missing application id, control params or execute";
+    if ((seen & 0x13) != 0x13)
+        return "missing application id, control params or execute";
     for (uint32_t i = 0; i < BUFFERS; i++)
-        if (!buf[i]) return "missing relocation";
+        if (!buf[i])
+            return "missing relocation";
     for (uint32_t i = 0; i < 4; i++)
-        if (!luma[i] || !chroma[i]) return "missing relocation";
+        if (!luma[i] || !chroma[i])
+            return "missing relocation";
 
     const nvdec_vp9_pic_s *p = (const nvdec_vp9_pic_s *)s->setup;
     for (uint32_t i = 0; i < 4; i++)
@@ -192,14 +282,19 @@ static inline const char *tegra_nvdec_check_vp9(const TegraNVDECSubmit *s, const
     if (p->enable_encryption || p->key_increment || p->encryption_mode || p->sw_hdr_skip_length || p->key_slot_index ||
         p->ssm_en)
         return "encryption parameters";
-    if (p->enable_histogram) return "histogram";
+    if (p->enable_histogram)
+        return "histogram";
     const uint8_t *unused = (const uint8_t *)&p->v1;  // NVDEC 3+ only; T210 takes none of it
     for (uint32_t i = 0; i < sizeof(p->v1) + sizeof(p->ssm); i++)
-        if (unused[i]) return "v1 fields";
-    if (p->gptimer_timeout_value > (1u << 27)) return "GP timer limit";
-    if (p->tileformat || p->gob_height || p->reserverd_surface_format) return "surface format";
+        if (unused[i])
+            return "v1 fields";
+    if (p->gptimer_timeout_value > (1u << 27))
+        return "GP timer limit";
+    if (p->tileformat || p->gob_height || p->reserverd_surface_format)
+        return "surface format";
     const uint32_t w = p->width, h = p->height;
-    if (w < 8 || w > 4096 || h < 8 || h > 4096) return "dimensions";
+    if (w < 8 || w > 4096 || h < 8 || h > 4096)
+        return "dimensions";
     if (p->log2_tile_columns < 0 || p->log2_tile_columns > 6 || p->log2_tile_rows < 0 || p->log2_tile_rows > 2)
         return "tiles";
     // Surfaces: the current one is written in whole 64x64 superblocks; references are read within their own.
@@ -210,34 +305,60 @@ static inline const char *tegra_nvdec_check_vp9(const TegraNVDECSubmit *s, const
     const uint32_t chromaStride[4] = {p->ref0_stride[1], p->ref1_stride[1], p->ref2_stride[1], p->framestride[1]};
     for (uint32_t i = 0; i < 4; i++) {
         const uint32_t rw = dims[i][0], rh = dims[i][1], pitch = dims[i][2];
-        if (rw < 8 || rw > 4096 || rh < 8 || rh > 4096) return "reference dimensions";
-        if (pitch != chromaStride[i] || (pitch & 63) || pitch < rw || pitch > 16384) return "pitch";
+        if (rw < 8 || rw > 4096 || rh < 8 || rh > 4096)
+            return "reference dimensions";
+        if (pitch != chromaStride[i] || (pitch & 63) || pitch < rw || pitch > 16384)
+            return "pitch";
         const uint64_t lumaBytes = (uint64_t)pitch * ((rh + 63) & ~63u);
-        if (luma[i] < lumaBytes || chroma[i] < lumaBytes / 2) return "surface too small";
+        if (luma[i] < lumaBytes || chroma[i] < lumaBytes / 2)
+            return "surface too small";
     }
     const uint64_t sb = (uint64_t)((((w + 15) & ~15u) + 63) / 64) * ((((h + 15) & ~15u) + 63) / 64);
     if (buf[SEG_WRITE] < ((sb * 32 + 255) & ~255ull) || buf[SEG_READ] < ((sb * 32 + 255) & ~255ull))
         return "segmentation map";
-    if (buf[MV_WRITE] < sb * 1024 || buf[MV_READ] < sb * 1024) return "motion vectors";
-    if (buf[COUNTERS] < sizeof(nvdec_vp9EntropyCounts_t)) return "counters";
-    if (buf[PROBS] < sizeof(nvdec_vp9EntropyProbs_t)) return "probabilities";
-    if (buf[TILES] < 0x700) return "tile sizes";
-    if (buf[STATUS] < sizeof(nvdec_status_s)) return "status";
+    if (buf[MV_WRITE] < sb * 1024 || buf[MV_READ] < sb * 1024)
+        return "motion vectors";
+    if (buf[COUNTERS] < sizeof(nvdec_vp9EntropyCounts_t))
+        return "counters";
+    if (buf[PROBS] < sizeof(nvdec_vp9EntropyProbs_t))
+        return "probabilities";
+    if (buf[TILES] < 0x700)
+        return "tile sizes";
+    if (buf[STATUS] < sizeof(nvdec_status_s))
+        return "status";
     // The filter buffer: filter rows (a multiple of 64, at least the frame's) x 912 bytes, then BSD control data at
     // Vp9BsdCtrlOffset (256-byte units), 988 bytes per row in all (averne's nvtegra_vp9.c layout).
     const uint64_t bsd = (uint64_t)p->Vp9BsdCtrlOffset * 256;
-    if (bsd % (64 * 912)) return "filter offset";
+    if (bsd % (64 * 912))
+        return "filter offset";
     const uint64_t rows = bsd / 912;
-    if (rows < ((h + 63) & ~63u) || rows > 4096 || buf[FILTER] < rows * 988) return "filter buffer";
-    if (!p->stream_len || buf[BITS] < p->stream_len) return "bitstream";
+    if (rows < ((h + 63) & ~63u) || rows > 4096 || buf[FILTER] < rows * 988)
+        return "filter buffer";
+    if (!p->stream_len || buf[BITS] < p->stream_len)
+        return "bitstream";
     return 0;
 }
 
 static inline const char *tegra_nvdec_check_hevc(const TegraNVDECSubmit *s, const uint64_t *avail)
 {
-    enum { LUMA = NVC5B0_SET_PICTURE_LUMA_OFFSET0, CHROMA = NVC5B0_SET_PICTURE_CHROMA_OFFSET0, SLOTS = 16 };
-    enum { BITS, STATUS, SCALING, TILES, FILTER, COLOC, BUFFERS };
-    if (s->setup_bytes != sizeof(nvdec_hevc_pic_s)) return "setup size";
+    enum {
+        LUMA = NVC5B0_SET_PICTURE_LUMA_OFFSET0,
+        CHROMA = NVC5B0_SET_PICTURE_CHROMA_OFFSET0,
+        SLOTS = 16
+    };
+
+    enum {
+        BITS,
+        STATUS,
+        SCALING,
+        TILES,
+        FILTER,
+        COLOC,
+        BUFFERS
+    };
+
+    if (s->setup_bytes != sizeof(nvdec_hevc_pic_s))
+        return "setup size";
     uint64_t buf[BUFFERS] = {0}, luma[SLOTS] = {0}, chroma[SLOTS] = {0};
     uint32_t seen = 0;
     for (uint32_t i = 0; i < s->entry_count; i++) {
@@ -245,19 +366,34 @@ static inline const char *tegra_nvdec_check_hevc(const TegraNVDECSubmit *s, cons
         const uint16_t m = e->method;
         if (e->kind == TEGRA_NVDEC_ENTRY_VALUE) {
             const char *why = tegra_nvdec_check_value(s, i, &seen);
-            if (why) return why;
+            if (why)
+                return why;
             continue;
         }
-        if (e->kind != TEGRA_NVDEC_ENTRY_RELOC) return "entry kind";
-        if (e->offset & 0xff) return "relocation alignment";
+        if (e->kind != TEGRA_NVDEC_ENTRY_RELOC)
+            return "entry kind";
+        if (e->offset & 0xff)
+            return "relocation alignment";
         uint64_t *slot;
         switch (m) {
-        case NVC5B0_SET_IN_BUF_BASE_OFFSET: slot = &buf[BITS]; break;
-        case NVC5B0_SET_NVDEC_STATUS_OFFSET: slot = &buf[STATUS]; break;
-        case NVC5B0_HEVC_SET_SCALING_LIST_OFFSET: slot = &buf[SCALING]; break;
-        case NVC5B0_HEVC_SET_TILE_SIZES_OFFSET: slot = &buf[TILES]; break;
-        case NVC5B0_HEVC_SET_FILTER_BUFFER_OFFSET: slot = &buf[FILTER]; break;
-        case NVC5B0_SET_COLOC_DATA_OFFSET: slot = &buf[COLOC]; break;
+        case NVC5B0_SET_IN_BUF_BASE_OFFSET:
+            slot = &buf[BITS];
+            break;
+        case NVC5B0_SET_NVDEC_STATUS_OFFSET:
+            slot = &buf[STATUS];
+            break;
+        case NVC5B0_HEVC_SET_SCALING_LIST_OFFSET:
+            slot = &buf[SCALING];
+            break;
+        case NVC5B0_HEVC_SET_TILE_SIZES_OFFSET:
+            slot = &buf[TILES];
+            break;
+        case NVC5B0_HEVC_SET_FILTER_BUFFER_OFFSET:
+            slot = &buf[FILTER];
+            break;
+        case NVC5B0_SET_COLOC_DATA_OFFSET:
+            slot = &buf[COLOC];
+            break;
         default:
             if (m >= LUMA && m < LUMA + 4 * SLOTS && !(m & 3))
                 slot = &luma[(m - LUMA) / 4];
@@ -266,14 +402,18 @@ static inline const char *tegra_nvdec_check_hevc(const TegraNVDECSubmit *s, cons
             else
                 return "relocated method";
         }
-        if (*slot) return "repeated relocation";
+        if (*slot)
+            return "repeated relocation";
         *slot = avail[i] ? avail[i] : 1;
     }
-    if ((seen & 0x13) != 0x13) return "missing application id, control params or execute";
+    if ((seen & 0x13) != 0x13)
+        return "missing application id, control params or execute";
     for (uint32_t i = 0; i < BUFFERS; i++)
-        if (!buf[i]) return "missing relocation";
+        if (!buf[i])
+            return "missing relocation";
     for (uint32_t i = 0; i < SLOTS; i++)
-        if (!luma[i] || !chroma[i]) return "missing relocation";
+        if (!luma[i] || !chroma[i])
+            return "missing relocation";
 
     const nvdec_hevc_pic_s *p = (const nvdec_hevc_pic_s *)s->setup;
     for (uint32_t i = 0; i < 4; i++)
@@ -281,18 +421,25 @@ static inline const char *tegra_nvdec_check_hevc(const TegraNVDECSubmit *s, cons
             return "encryption parameters";
     if (p->enable_encryption || p->key_increment || p->encryption_mode || p->key_slot_index || p->ssm_en)
         return "encryption parameters";
-    if (p->enable_histogram || p->enable_substream_decoding) return "histogram or substream decoding";
+    if (p->enable_histogram || p->enable_substream_decoding)
+        return "histogram or substream decoding";
     const uint8_t *unused = (const uint8_t *)&p->ecdma_cfg;  // error-concealment DMA, then NVDEC 3+ fields
     for (uint32_t i = 0; i < sizeof(p->ecdma_cfg); i++)
-        if (unused[i]) return "ecdma";
+        if (unused[i])
+            return "ecdma";
     unused = (const uint8_t *)&p->v1;
     for (uint32_t i = 0; i < sizeof(p->v1) + sizeof(p->v2) + sizeof(p->v3) + sizeof(p->ssm); i++)
-        if (unused[i]) return "v1-v3 fields";
-    if (p->gptimer_timeout_value > (1u << 27)) return "GP timer limit";
-    if (p->tileformat || p->gob_height || p->reserverd_surface_format) return "surface format";
+        if (unused[i])
+            return "v1-v3 fields";
+    if (p->gptimer_timeout_value > (1u << 27))
+        return "GP timer limit";
+    if (p->tileformat || p->gob_height || p->reserverd_surface_format)
+        return "surface format";
     const uint32_t w = p->pic_width_in_luma_samples, h = p->pic_height_in_luma_samples;
-    if (w < 144 || w > 4096 || h < 144 || h > 4096 || (w & 7) || (h & 7)) return "dimensions";
-    if (p->chroma_format_idc != 1 || p->bit_depth_luma != p->bit_depth_chroma) return "chroma format";
+    if (w < 144 || w > 4096 || h < 144 || h > 4096 || (w & 7) || (h & 7))
+        return "dimensions";
+    if (p->chroma_format_idc != 1 || p->bit_depth_luma != p->bit_depth_chroma)
+        return "chroma format";
     // 8-bit output only (mode 1 would write 16-bit samples into surfaces sized for 8): 0 for 8-bit, 2/3 for 10-bit.
     if (!((p->bit_depth_luma == 8 && p->disp_output_mode == 0) ||
           (p->bit_depth_luma == 10 && (p->disp_output_mode == 2 || p->disp_output_mode == 3))))
@@ -302,24 +449,33 @@ static inline const char *tegra_nvdec_check_hevc(const TegraNVDECSubmit *s, cons
         p->log2_max_luma_coding_block_size < 4 || p->log2_min_transform_block_size < 2 ||
         p->log2_max_transform_block_size > 5)
         return "block sizes";
-    if (p->num_tile_columns > 20 || p->num_tile_rows > 22 || p->curr_pic_idx >= SLOTS) return "tiles or slot";
+    if (p->num_tile_columns > 20 || p->num_tile_rows > 22 || p->curr_pic_idx >= SLOTS)
+        return "tiles or slot";
     // Surfaces: the current one is written in whole CTUs (64-aligned rows); references are read within their own.
     const uint32_t pitch = p->framestride[0];
-    if (pitch != p->framestride[1] || (pitch & 63) || pitch < ((w + 63) & ~63u) || pitch > 16384) return "pitch";
+    if (pitch != p->framestride[1] || (pitch & 63) || pitch < ((w + 63) & ~63u) || pitch > 16384)
+        return "pitch";
     const uint64_t rows = (h + 63) & ~63u, lumaBytes = (uint64_t)pitch * rows;
     for (uint32_t i = 0; i < SLOTS; i++)
-        if (luma[i] < lumaBytes || chroma[i] < lumaBytes / 2) return "surface too small";
+        if (luma[i] < lumaBytes || chroma[i] < lumaBytes / 2)
+            return "surface too small";
     // Colocated motion: 17 slots of colMvBuffersize x 256 bytes, each at least (64-aligned width x height) / 16.
     const uint64_t colmv = (uint64_t)p->colMvBuffersize * 256;
-    if (colmv < ((w + 63) & ~63u) * rows / 16 || buf[COLOC] < 17 * colmv) return "colocated motion";
+    if (colmv < ((w + 63) & ~63u) * rows / 16 || buf[COLOC] < 17 * colmv)
+        return "colocated motion";
     // The filter buffer: 480 bytes of deblocking per row, SAO (3840 per row) from HevcSaoBufferOffset and BSD control
     // (60 per row) from HevcBsdCtrlOffset, both in 256-byte units, over at least the 64-aligned height.
     const uint64_t sao = (uint64_t)p->HevcSaoBufferOffset * 256, bsd = (uint64_t)p->HevcBsdCtrlOffset * 256;
-    if (sao < 480 * rows || bsd < sao + 3840 * rows || buf[FILTER] < bsd + 60 * rows) return "filter buffer";
-    if (buf[TILES] < 0x900) return "tile sizes";
-    if (buf[SCALING] < sizeof(nvdec_hevc_scaling_list_s)) return "scaling lists";
-    if (buf[STATUS] < sizeof(nvdec_status_s)) return "status";
-    if (!p->stream_len || buf[BITS] < p->stream_len) return "bitstream";
+    if (sao < 480 * rows || bsd < sao + 3840 * rows || buf[FILTER] < bsd + 60 * rows)
+        return "filter buffer";
+    if (buf[TILES] < 0x900)
+        return "tile sizes";
+    if (buf[SCALING] < sizeof(nvdec_hevc_scaling_list_s))
+        return "scaling lists";
+    if (buf[STATUS] < sizeof(nvdec_status_s))
+        return "status";
+    if (!p->stream_len || buf[BITS] < p->stream_len)
+        return "bitstream";
     return 0;
 }
 
@@ -330,10 +486,14 @@ static inline const char *tegra_nvdec_check(const TegraNVDECSubmit *s, const uin
     if (s->entry_count < 1 || s->entry_count > TEGRA_NVDEC_MAX_ENTRIES || s->clean_count > TEGRA_NVDEC_MAX_RANGES)
         return "counts";
     switch (s->codec) {
-    case TEGRA_NVDEC_CODEC_H264: return tegra_nvdec_check_h264(s, avail);
-    case TEGRA_NVDEC_CODEC_VP9: return tegra_nvdec_check_vp9(s, avail);
-    case TEGRA_NVDEC_CODEC_HEVC: return tegra_nvdec_check_hevc(s, avail);
-    default: return "codec";
+    case TEGRA_NVDEC_CODEC_H264:
+        return tegra_nvdec_check_h264(s, avail);
+    case TEGRA_NVDEC_CODEC_VP9:
+        return tegra_nvdec_check_vp9(s, avail);
+    case TEGRA_NVDEC_CODEC_HEVC:
+        return tegra_nvdec_check_hevc(s, avail);
+    default:
+        return "codec";
     }
 }
 

@@ -26,7 +26,8 @@ static uint32_t crc32Update(uint32_t crc, const uint8_t *p, size_t n)  // zlib's
     crc = ~crc;
     while (n--) {
         crc ^= *p++;
-        for (int i = 0; i < 8; i++) crc = (crc >> 1) ^ (0xedb88320u & (0u - (crc & 1)));
+        for (int i = 0; i < 8; i++)
+            crc = (crc >> 1) ^ (0xedb88320u & (0u - (crc & 1)));
     }
     return ~crc;
 }
@@ -40,14 +41,16 @@ static void output(void *refcon, void *frameRefcon, OSStatus status, VTDecodeInf
     (void)frameRefcon, (void)flags, (void)duration;
     Result *r = refcon;
     if (status || !image) {
-        if (status) r->errors++;
+        if (status)
+            r->errors++;
         return;
     }
     CVPixelBufferLockBaseAddress(image, kCVPixelBufferLock_ReadOnly);
     const uint8_t *y = CVPixelBufferGetBaseAddressOfPlane(image, 0);
     const size_t pitch = CVPixelBufferGetBytesPerRowOfPlane(image, 0);
     uint32_t crc = 0;
-    for (int row = 0; row < r->height; row++) crc = crc32Update(crc, y + (size_t)row * pitch, (size_t)r->width);
+    for (int row = 0; row < r->height; row++)
+        crc = crc32Update(crc, y + (size_t)row * pitch, (size_t)r->width);
     CVPixelBufferUnlockBaseAddress(image, kCVPixelBufferLock_ReadOnly);
     const int index = (int)pts.value;
     if (index >= 0 && index < r->frames && crc == r->crcs[index]) {
@@ -56,7 +59,8 @@ static void output(void *refcon, void *frameRefcon, OSStatus status, VTDecodeInf
         r->first = index;
         r->firstCrc = crc;
     }
-    if (index < r->last) r->outOfOrder++;
+    if (index < r->last)
+        r->outOfOrder++;
     r->last = index;
     r->count++;
 }
@@ -73,7 +77,8 @@ static int splitH264(const uint8_t *sets[2], size_t setSizes[2], uint8_t *buffer
         if (kClip[i] == 0 && kClip[i + 1] == 0 && kClip[i + 2] == 1) {
             if (n) {
                 size_t e = i;
-                while (e && !kClip[e - 1]) e--;
+                while (e && !kClip[e - 1])
+                    e--;
                 length[n - 1] = (size_t)(kClip + e - nal[n - 1]);
             }
             nal[n++] = kClip + i + 3;
@@ -82,7 +87,8 @@ static int splitH264(const uint8_t *sets[2], size_t setSizes[2], uint8_t *buffer
             i++;
         }
     }
-    if (!n) return 0;
+    if (!n)
+        return 0;
     length[n - 1] = (size_t)(kClip + sizeof(kClip) - nal[n - 1]);
     int count = 0;
     size_t used = 0;
@@ -92,13 +98,16 @@ static int splitH264(const uint8_t *sets[2], size_t setSizes[2], uint8_t *buffer
             sets[type - 7] = nal[i], setSizes[type - 7] = length[i];
             continue;
         }
-        if (type != 1 && type != 5) continue;
+        if (type != 1 && type != 5)
+            continue;
         if (nal[i][1] & 0x80) {  // first_mb_in_slice == 0
-            if (count == maxSamples) break;
+            if (count == maxSamples)
+                break;
             samples[count] = buffer + used;
             sizes[count++] = 0;
         }
-        if (!count) continue;
+        if (!count)
+            continue;
         uint8_t *p = buffer + used;
         p[0] = (uint8_t)(length[i] >> 24), p[1] = (uint8_t)(length[i] >> 16), p[2] = (uint8_t)(length[i] >> 8);
         p[3] = (uint8_t)length[i];
@@ -137,17 +146,21 @@ static int splitHEVC(const HEVCClip *clip, const uint8_t *sets[3], size_t setSiz
     const uint8_t *nal = NULL;
     for (size_t i = 0; i + 3 <= clip->size || nal; i++) {
         const bool start = i + 3 <= clip->size && !clip->data[i] && !clip->data[i + 1] && clip->data[i + 2] == 1;
-        if (!start && i < clip->size) continue;
+        if (!start && i < clip->size)
+            continue;
         if (nal) {
             size_t e = start ? i : clip->size;
-            while (start && e && !clip->data[e - 1]) e--;
+            while (start && e && !clip->data[e - 1])
+                e--;
             const size_t length = (size_t)(clip->data + e - nal);
             const int type = (nal[0] >> 1) & 0x3f;
             if (type >= 32 && type <= 34) {
-                if (!sets[type - 32]) sets[type - 32] = nal, setSizes[type - 32] = length;
+                if (!sets[type - 32])
+                    sets[type - 32] = nal, setSizes[type - 32] = length;
             } else if (type < 32 || type == 39) {
                 if (type < 32 && (nal[2] & 0x80)) {  // first_slice_segment_in_pic_flag
-                    if (count == maxSamples) return count;
+                    if (count == maxSamples)
+                        return count;
                     samples[count] = buffer + used;
                     sizes[count++] = 0;
                 }
@@ -161,7 +174,8 @@ static int splitHEVC(const HEVCClip *clip, const uint8_t *sets[3], size_t setSiz
                 }
             }
         }
-        if (i >= clip->size) break;
+        if (i >= clip->size)
+            break;
         nal = clip->data + i + 3;
         i += 2;
     }
@@ -214,7 +228,8 @@ static bool hevcSession(const HEVCClip *clip, CFDictionaryRef spec, bool hardwar
     VTSessionCopyProperty(session, kVTDecompressionPropertyKey_UsingHardwareAcceleratedVideoDecoder, NULL,
                           &usingHardware);
     *onHardware = usingHardware == kCFBooleanTrue;
-    if (usingHardware) CFRelease(usingHardware);
+    if (usingHardware)
+        CFRelease(usingHardware);
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);
     int failed = 0;
@@ -315,7 +330,8 @@ bool clip_check(ClipCheckMode mode, CFDictionaryRef extraSpec, char *line, size_
     }
     if (!count || !format) {
         snprintf(line, size, "%s: could not build the clip's format description FAIL", name);
-        if (format) CFRelease(format);
+        if (format)
+            CFRelease(format);
         return false;
     }
 
@@ -329,7 +345,8 @@ bool clip_check(ClipCheckMode mode, CFDictionaryRef extraSpec, char *line, size_
         CFDictionarySetValue(spec, kVTVideoDecoderSpecification_RequireHardwareAcceleratedVideoDecoder, kCFBooleanTrue);
     else if (!hardware)
         CFDictionarySetValue(spec, kVTVideoDecoderSpecification_EnableHardwareAcceleratedVideoDecoder, kCFBooleanFalse);
-    if (vp9) CFDictionarySetValue(spec, kVTVideoDecoderSpecification_AllowVP9Decode, kCFBooleanTrue);
+    if (vp9)
+        CFDictionarySetValue(spec, kVTVideoDecoderSpecification_AllowVP9Decode, kCFBooleanTrue);
     int32_t pixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange;
     CFNumberRef pf = CFNumberCreate(NULL, kCFNumberSInt32Type, &pixelFormat);
     const void *attrKeys[] = {kCVPixelBufferPixelFormatTypeKey};
@@ -375,7 +392,8 @@ bool clip_check(ClipCheckMode mode, CFDictionaryRef extraSpec, char *line, size_
     CFRelease(format);
     const double ms = (double)(t1.tv_sec - t0.tv_sec) * 1e3 + (double)(t1.tv_nsec - t0.tv_nsec) / 1e6;
     const bool onHardware = usingHardware == kCFBooleanTrue;
-    if (usingHardware) CFRelease(usingHardware);
+    if (usingHardware)
+        CFRelease(usingHardware);
     const bool ok = result.match == result.frames && result.count == result.frames && (!hardware || onHardware);
     char mismatch[96] = "";
     if (result.first >= 0)

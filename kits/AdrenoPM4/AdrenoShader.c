@@ -1,18 +1,22 @@
 /* SPDX-License-Identifier: MIT */
 #include "AdrenoShader.h"
 #include "AdrenoPM4.h"
+
 static struct AdrenoShaderResult fail(uint32_t status)
 {
     return (struct AdrenoShaderResult){status, 0, 0};
 }
+
 static int wraps(uintptr_t p, size_t n)
 {
     return n > UINTPTR_MAX - p;
 }
+
 static int overlaps(uintptr_t a, size_t n, uintptr_t b, size_t m)
 {
     return a < b + m && b < a + n;
 }
+
 static void reg32(uint32_t **out, uint32_t reg, uint32_t value)
 {
     uint32_t header = 0;
@@ -20,6 +24,7 @@ static void reg32(uint32_t **out, uint32_t reg, uint32_t value)
     *(*out)++ = header;
     *(*out)++ = value;
 }
+
 static void reg64(uint32_t **out, uint32_t reg, uint64_t value)
 {
     uint32_t header = 0;
@@ -28,6 +33,7 @@ static void reg64(uint32_t **out, uint32_t reg, uint64_t value)
     *(*out)++ = (uint32_t)value;
     *(*out)++ = (uint32_t)(value >> 32);
 }
+
 struct AdrenoShaderResult AdrenoA740ShaderBind(const struct AdrenoShaderState *s, const struct AdrenoShaderMapping *m,
                                                uint32_t *output, size_t capacity)
 {
@@ -48,7 +54,8 @@ struct AdrenoShaderResult AdrenoA740ShaderBind(const struct AdrenoShaderState *s
         m->readonly != 1 || (m->shader_offset & 127) || m->shader_offset > m->bytes ||
         s->binary_bytes > m->bytes - m->shader_offset)
         return fail(AdrenoShaderMappingError);
-    if (capacity < ADRENO_SHADER_BIND_WORDS) return fail(AdrenoShaderCapacity);
+    if (capacity < ADRENO_SHADER_BIND_WORDS)
+        return fail(AdrenoShaderCapacity);
     if (overlaps((uintptr_t)output, ADRENO_SHADER_BIND_WORDS * 4, (uintptr_t)s, sizeof(*s)) ||
         overlaps((uintptr_t)output, ADRENO_SHADER_BIND_WORDS * 4, (uintptr_t)m, sizeof(*m)))
         return fail(AdrenoShaderAlias);

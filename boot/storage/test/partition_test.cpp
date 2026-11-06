@@ -19,7 +19,21 @@ extern "C" {
 }
 
 namespace {
-enum { OK, ARG, IO, MBR, HEADER, HEADER_CRC, GEOMETRY, ENTRIES, ARRAY_CRC, MISMATCH, NOT_FOUND, OVERLAP, DUPLICATE };
+enum {
+    OK,
+    ARG,
+    IO,
+    MBR,
+    HEADER,
+    HEADER_CRC,
+    GEOMETRY,
+    ENTRIES,
+    ARRAY_CRC,
+    MISMATCH,
+    NOT_FOUND,
+    OVERLAP,
+    DUPLICATE
+};
 
 using Bytes = std::vector<uint8_t>;
 using Guid = std::array<uint8_t, 16>;
@@ -31,22 +45,26 @@ Guid BytesLe(const std::array<uint8_t, 16> &big)
     std::swap(g[0], g[3]), std::swap(g[1], g[2]), std::swap(g[4], g[5]), std::swap(g[6], g[7]);
     return g;
 }
+
 Guid Uuid(const char *text)
 {
     std::array<uint8_t, 16> big{};
     unsigned n = 0;
     for (const char *p = text; *p && n < 32; ++p) {
-        if (*p == '-') continue;
+        if (*p == '-')
+            continue;
         const unsigned digit = (unsigned)(*p <= '9' ? *p - '0' : (*p | 0x20) - 'a' + 10);
         big[n / 2] = (uint8_t)(big[n / 2] << 4 | digit);
         ++n;
     }
     return BytesLe(big);
 }
+
 Guid UuidInt(uint64_t value)
 {
     std::array<uint8_t, 16> big{};
-    for (unsigned i = 0; i < 8; ++i) big[15 - i] = (uint8_t)(value >> (8 * i));
+    for (unsigned i = 0; i < 8; ++i)
+        big[15 - i] = (uint8_t)(value >> (8 * i));
     return BytesLe(big);
 }
 
@@ -57,8 +75,10 @@ constexpr uint64_t TARGET_SECTORS = 886121168896ull / 512;
 
 void Put(Bytes &b, size_t at, uint64_t v, unsigned width)
 {
-    for (unsigned i = 0; i < width; ++i) b[at + i] = (uint8_t)(v >> (8 * i));
+    for (unsigned i = 0; i < width; ++i)
+        b[at + i] = (uint8_t)(v >> (8 * i));
 }
+
 uint32_t Crc(const uint8_t *p, size_t n)
 {
     return (uint32_t)crc32(0, p, (uInt)n);
@@ -130,8 +150,10 @@ struct GptImage {
         Put(entry, 40, last, 8);
         Put(entry, 48, 0, 8);
         const char16_t name[] = u"TEST";
-        for (unsigned c = 0; c < 4; ++c) Put(entry, 56 + 2 * c, name[c], 2);
-        for (Bytes &array : arrays) std::memcpy(&array[(size_t)index * entry_size], entry.data(), entry_size);
+        for (unsigned c = 0; c < 4; ++c)
+            Put(entry, 56 + 2 * c, name[c], 2);
+        for (Bytes &array : arrays)
+            std::memcpy(&array[(size_t)index * entry_size], entry.data(), entry_size);
     }
 
     void FinishArrays()
@@ -150,9 +172,12 @@ struct GptImage {
 
     Bytes Sector(uint64_t lba) const
     {
-        if (lba == 0) return mbr;
-        if (lba == 1) return headers[0];
-        if (lba == capacity - 1) return headers[1];
+        if (lba == 0)
+            return mbr;
+        if (lba == 1)
+            return headers[0];
+        if (lba == capacity - 1)
+            return headers[1];
         for (unsigned i = 0; i < 2; ++i)
             if (array_lbas[i] <= lba && lba < array_lbas[i] + blocks) {
                 const size_t start = (size_t)(lba - array_lbas[i]) * 512;
@@ -183,6 +208,7 @@ struct GptImage {
 };
 
 GptImage *gImage;
+
 int Read512(void *, uint64_t lba, uint8_t output[512])
 {
     return gImage->Callback(lba, output);
@@ -193,7 +219,11 @@ protected:
     GptImage image;
     switch_gpt_workspace workspace{};
 
-    void SetUp() override { gImage = &image; }
+    void SetUp() override
+    {
+        gImage = &image;
+    }
+
     void Reset(GptImage next)
     {
         image = std::move(next);
@@ -202,14 +232,14 @@ protected:
 
     // Finds `guid` (nullptr: none given); `expected` OK commits exactly the target slice, anything else nothing.
     switch_gpt_slice Find(int expected = OK, std::optional<Guid> guid = TARGET, bool noGuid = false,
-                        std::optional<uint64_t> capacity = std::nullopt)
+                          std::optional<uint64_t> capacity = std::nullopt)
     {
         switch_gpt_slice output;
         std::memset(&output, 0xaa, sizeof(output));
         switch_gpt_slice before;
         std::memcpy(&before, &output, sizeof(output));
         EXPECT_EQ(switch_gpt_find(Read512, nullptr, capacity ? *capacity : image.capacity,
-                                noGuid ? nullptr : guid->data(), &workspace, &output),
+                                  noGuid ? nullptr : guid->data(), &workspace, &output),
                   expected);
         if (expected) {
             EXPECT_EQ(std::memcmp(&output, &before, sizeof(output)), 0) << "failure committed output";
@@ -271,7 +301,8 @@ TEST_F(NativePartition, HekateCreatedEntryCountAndFullReservedTable)
     // array at capacity-33. Eleven is a synthetic example, not an observed card-header count.
     Reset(GptImage(128, 11, 0x7731c000, 0));
     image.last_usable = image.capacity - 0x800 - 1;
-    for (unsigned index = 0; index < 2; ++index) image.Field(index, 48, 8, image.last_usable);
+    for (unsigned index = 0; index < 2; ++index)
+        image.Field(index, 48, 8, image.last_usable);
     EXPECT_EQ(image.array_lbas, (std::array<uint64_t, 2>{2, image.capacity - 33}));
     Find();
     EXPECT_EQ(image.reads.size(), 9u);
@@ -280,15 +311,51 @@ TEST_F(NativePartition, HekateCreatedEntryCountAndFullReservedTable)
 TEST_F(NativePartition, ShortTableRetainsReservationIntegrityAndEntryBounds)
 {
     const std::vector<std::tuple<const char *, std::function<void(GptImage &)>, int>> cases{
-        {"short_primary_reservation", [](GptImage &im) { im.Field(0, 72, 8, 3); }, GEOMETRY},
-        {"short_backup_reservation", [](GptImage &im) { im.Field(1, 72, 8, im.capacity - 32); }, GEOMETRY},
-        {"bad_header_crc", [](GptImage &im) { im.headers[0][16] ^= 1; }, HEADER_CRC},
-        {"different_array_bytes", [](GptImage &im) { im.arrays[1][56] ^= 1; }, MISMATCH},
-        {"zero_count", [](GptImage &im) { im.Field(0, 80, 4, 0); }, ENTRIES},
-        {"oversized_count", [](GptImage &im) { im.Field(0, 80, 4, 129); }, ENTRIES},
-        {"unsupported_entry_size", [](GptImage &im) { im.Field(0, 84, 4, 136); }, ENTRIES},
-        {"header_count_mismatch", [](GptImage &im) { im.Field(1, 80, 4, 12); }, MISMATCH},
-        {"used_entry_out_of_bounds", [](GptImage &im) { im.SetPartition(0, BASIC, TARGET, 1, 100); }, ENTRIES},
+        {"short_primary_reservation",
+         [](GptImage &im) {
+             im.Field(0, 72, 8, 3);
+         },
+         GEOMETRY},
+        {"short_backup_reservation",
+         [](GptImage &im) {
+             im.Field(1, 72, 8, im.capacity - 32);
+         },
+         GEOMETRY},
+        {"bad_header_crc",
+         [](GptImage &im) {
+             im.headers[0][16] ^= 1;
+         },
+         HEADER_CRC},
+        {"different_array_bytes",
+         [](GptImage &im) {
+             im.arrays[1][56] ^= 1;
+         },
+         MISMATCH},
+        {"zero_count",
+         [](GptImage &im) {
+             im.Field(0, 80, 4, 0);
+         },
+         ENTRIES},
+        {"oversized_count",
+         [](GptImage &im) {
+             im.Field(0, 80, 4, 129);
+         },
+         ENTRIES},
+        {"unsupported_entry_size",
+         [](GptImage &im) {
+             im.Field(0, 84, 4, 136);
+         },
+         ENTRIES},
+        {"header_count_mismatch",
+         [](GptImage &im) {
+             im.Field(1, 80, 4, 12);
+         },
+         MISMATCH},
+        {"used_entry_out_of_bounds",
+         [](GptImage &im) {
+             im.SetPartition(0, BASIC, TARGET, 1, 100);
+         },
+         ENTRIES},
     };
     for (const auto &[name, mutate, expected] : cases) {
         SCOPED_TRACE(name);
@@ -297,7 +364,8 @@ TEST_F(NativePartition, ShortTableRetainsReservationIntegrityAndEntryBounds)
         Find(expected);
     }
     Reset(GptImage(128, 11, 2000000000, 0));
-    for (Bytes &array : image.arrays) array[56] ^= 1;
+    for (Bytes &array : image.arrays)
+        array[56] ^= 1;
     Find(ARRAY_CRC);  // Agreeing copies cannot bypass their CRCs.
 }
 
@@ -345,6 +413,7 @@ TEST_F(NativePartition, HeaderGeometryAndArraySizeLimits)
         uint64_t value;
         int expected;
     };
+
     const std::vector<Case> cases{
         {24, 8, 123, GEOMETRY},        {32, 8, 123, GEOMETRY},        {40, 8, 33, GEOMETRY},
         {40, 8, UINT64_MAX, GEOMETRY}, {48, 8, UINT64_MAX, GEOMETRY}, {48, 8, 32, GEOMETRY},
@@ -397,7 +466,8 @@ TEST_F(NativePartition, ArrayByteDisagreementAndIndependentArrayCrcValidation)
     image.arrays[1][56] ^= 1;
     Find(MISMATCH);
     Reset(GptImage());
-    for (Bytes &array : image.arrays) array[56] ^= 1;  // Both copies agree, but stored CRC is stale.
+    for (Bytes &array : image.arrays)
+        array[56] ^= 1;  // Both copies agree, but stored CRC is stale.
     Find(ARRAY_CRC);
     EXPECT_EQ(image.reads.size(), 67u);
 }
@@ -433,7 +503,8 @@ TEST_F(NativePartition, PartitionAdjacencyIsAllowedAndExtendedReservedBytesAreZe
     image.FinishArrays();
     Find();
     Reset(GptImage(256, 64));
-    for (Bytes &array : image.arrays) array[128] = 1;
+    for (Bytes &array : image.arrays)
+        array[128] = 1;
     image.FinishArrays();
     Find(ENTRIES);
 }
@@ -442,7 +513,8 @@ TEST_F(NativePartition, CallbackFailureAtEveryMetadataSectorLeavesOutputUncommit
 {
     std::vector<uint64_t> lbas{0, 1, image.capacity - 1};
     for (uint64_t base : image.array_lbas)
-        for (uint64_t lba = base; lba < base + image.blocks; ++lba) lbas.push_back(lba);
+        for (uint64_t lba = base; lba < base + image.blocks; ++lba)
+            lbas.push_back(lba);
     for (uint64_t lba : lbas) {
         SCOPED_TRACE(testing::Message() << "failing LBA " << lba);
         image.failed = {lba};

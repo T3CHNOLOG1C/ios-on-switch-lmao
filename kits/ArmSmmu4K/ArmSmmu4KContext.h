@@ -17,6 +17,7 @@ typedef struct {
     unsigned coherent_walk;                        /* Explicit: 1=inner WBWA, 0=outer NC. */
     unsigned stall_on_fault, continue_after_fault; /* Each 0 or 1. */
 } ArmSmmu4KContextConfig;
+
 typedef struct {
     uint32_t cbar, cba2r, tcr, tcr2, mair0, mair1, sctlr, reserved_zero;
     uint64_t ttbr0, ttbr1;

@@ -17,32 +17,42 @@ OSDefineMetaClassAndStructors(NativeAdrenoGmuService, IOService)
 {
     OSObject *property = provider ? provider->getProperty("compatible") : nullptr;
     OSData *data = OSDynamicCast(OSData, property);
-    if (!data || !data->getBytesNoCopy() || !data->getLength()) return false;
+    if (!data || !data->getBytesNoCopy() || !data->getLength())
+        return false;
     const char *text = static_cast<const char *>(data->getBytesNoCopy());
     const size_t length = data->getLength();
     static const char needle[] = "qcom,adreno-gmu";
     for (size_t at = 0; at + sizeof(needle) - 1 <= length; ++at) {
         size_t index = 0;
-        while (index < sizeof(needle) - 1 && text[at + index] == needle[index]) ++index;
-        if (index == sizeof(needle) - 1) return true;
+        while (index < sizeof(needle) - 1 && text[at + index] == needle[index])
+            ++index;
+        if (index == sizeof(needle) - 1)
+            return true;
     }
     return false;
 }
+
 IOService *NativeAdrenoGmuService::probe(IOService *provider, SInt32 *score)
 {
-    if (!advertisesGmu(provider)) return nullptr;
-    if (score) *score = 1000;
+    if (!advertisesGmu(provider))
+        return nullptr;
+    if (score)
+        *score = 1000;
     return this;
 }
+
 bool NativeAdrenoGmuService::start(IOService *provider)
 {
-    if (!IOService::start(provider)) return false;
+    if (!IOService::start(provider))
+        return false;
     OSData *reg = OSDynamicCast(OSData, provider->getProperty("reg"));
     OSData *address = OSDynamicCast(OSData, provider->getProperty("#address-cells"));
     OSData *size = OSDynamicCast(OSData, provider->getProperty("#size-cells"));
     uint32_t address_cells = 2, size_cells = 2;
-    if (address && address->getLength() >= 4) address_cells = *static_cast<const uint32_t *>(address->getBytesNoCopy());
-    if (size && size->getLength() >= 4) size_cells = *static_cast<const uint32_t *>(size->getBytesNoCopy());
+    if (address && address->getLength() >= 4)
+        address_cells = *static_cast<const uint32_t *>(address->getBytesNoCopy());
+    if (size && size->getLength() >= 4)
+        size_cells = *static_cast<const uint32_t *>(size->getBytesNoCopy());
     if (!reg || NativeAdrenoBoard::parseReg(static_cast<const uint8_t *>(reg->getBytesNoCopy()), reg->getLength(),
                                             address_cells, size_cells, windows_, NativeAdrenoMaxWindows,
                                             &count_) != kIOReturnSuccess) {
@@ -81,9 +91,11 @@ bool NativeAdrenoGmuService::start(IOService *provider)
     registerService();
     return true;
 }
+
 void NativeAdrenoGmuService::stop(IOService *provider)
 {
-    for (auto &map : maps_) map.reset();
+    for (auto &map : maps_)
+        map.reset();
     count_ = 0;
     IOService::stop(provider);
 }

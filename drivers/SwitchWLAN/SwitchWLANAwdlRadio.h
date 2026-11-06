@@ -38,6 +38,7 @@ struct swlan_awdl_caps {
     // firmware generation's bring-up from it (bcm_awdl_api_of). NULL when the probe did not run.
     const struct bcm_awdl_probe *probe;
 };
+
 // <0 (negative errno): AWDL unavailable; the stack says so to wifip2pd and does not retry. Sets the firmware up for
 // AWDL (event_msgs): the stack calls it only once wifip2pd enables AWDL on awdl0.
 int swlan_awdl_open(const struct swlan_awdl_caps **caps_out);
@@ -55,7 +56,12 @@ struct swlan_rx_meta {
     uint8_t mcs;
     uint8_t _pad[3];
 };
-enum { SWLAN_RX_FCS_OK = 1, SWLAN_RX_FCS_PRESENT = 2 };
+
+enum {
+    SWLAN_RX_FCS_OK = 1,
+    SWLAN_RX_FCS_PRESENT = 2
+};
+
 typedef void (*swlan_rx_fn)(void *ctx, const uint8_t *frame, size_t len, const struct swlan_rx_meta *meta);
 int swlan_awdl_rx_start(swlan_rx_fn fn, void *ctx);
 int swlan_awdl_rx_stop(void);
@@ -69,13 +75,19 @@ struct swlan_tx_req {
     uint8_t flags;     // bit0 NO_ACK, bit1 fail-if-off-channel
     uint64_t tx_tsf;   // 0: asap
 };
-enum { SWLAN_TX_NO_ACK = 1, SWLAN_TX_ON_CHANNEL_ONLY = 2 };
+
+enum {
+    SWLAN_TX_NO_ACK = 1,
+    SWLAN_TX_ON_CHANNEL_ONLY = 2
+};
+
 int swlan_awdl_tx(const struct swlan_tx_req *req);  // >= 0 request id, < 0 errno
 
 struct swlan_chan_slot {
     uint16_t freq_mhz;
     uint16_t dwell_us;
 };
+
 struct swlan_chan_seq {
     uint64_t anchor_tsf;
     uint32_t period_us;
@@ -83,16 +95,24 @@ struct swlan_chan_seq {
     uint16_t infra_freq_mhz;
     const struct swlan_chan_slot *slots;
 };
+
 int swlan_awdl_chanseq_set(const struct swlan_chan_seq *seq);
 int swlan_awdl_chanseq_clear(void);
 
-enum swlan_awdl_evt { SWLAN_AWDL_TXDONE, SWLAN_AWDL_SEQ_WRAP, SWLAN_AWDL_CHIP_LOST, SWLAN_AWDL_OFFCHAN_DROP };
+enum swlan_awdl_evt {
+    SWLAN_AWDL_TXDONE,
+    SWLAN_AWDL_SEQ_WRAP,
+    SWLAN_AWDL_CHIP_LOST,
+    SWLAN_AWDL_OFFCHAN_DROP
+};
+
 struct swlan_awdl_event {
     uint32_t type;
     uint32_t id;
     uint16_t status;
     uint64_t tsf;
 };
+
 typedef void (*swlan_evt_fn)(void *ctx, const struct swlan_awdl_event *e);
 int swlan_awdl_events(swlan_evt_fn fn, void *ctx);
 int swlan_awdl_tsf_read(uint64_t *tsf_us);
@@ -106,16 +126,20 @@ int swlan_awdl_tsf_read(uint64_t *tsf_us);
 // errno when the request did not reach it (radio down, no answer).
 #define SWLAN_FWERR_BASE  1000
 #define SWLAN_FWERR(bcme) (-SWLAN_FWERR_BASE + (bcme))
+
 static inline int swlan_is_fwerr(int e)
 {
     return e < -SWLAN_FWERR_BASE && e > -2 * SWLAN_FWERR_BASE;  // BCME codes are -1 .. -60
 }
+
 static inline int swlan_fwerr_code(int e)
 {
     return e + SWLAN_FWERR_BASE;
 }
+
 int swlan_awdl_var(int set, uint8_t ifidx, const char *name, const void *in, size_t in_len, void *out, size_t out_len,
                    size_t *returned);
+
 // The firmware events of an AWDL session (WLC_E_IF for the AWDL interface, WLC_E_ACTION_FRAME_RX (75) and
 // WLC_E 96-98, 111-120 while AWDL is open; awdl_bcm.h):
 // enabled in "event_msgs" by swlan_awdl_open; this call only stores the callback. Delivered from the work loop,
@@ -125,6 +149,7 @@ struct swlan_fw_event {
     uint8_t addr[6];
     uint8_t ifidx, bsscfgidx;
 };
+
 typedef void (*swlan_fw_event_fn)(void *ctx, const struct swlan_fw_event *e, const uint8_t *data, size_t len);
 int swlan_awdl_fw_events(swlan_fw_event_fn fn, void *ctx);
 // Frames on the firmware's AWDL interface (the ifidx its WLC_E_IF ADD names; one msgbuf flow ring per destination):

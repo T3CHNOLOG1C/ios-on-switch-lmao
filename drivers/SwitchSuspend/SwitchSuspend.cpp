@@ -75,10 +75,22 @@ bool switch_display_power_enabled(void);  // SwitchBrightness
 
 namespace {
 constexpr vm_offset_t kPmcPagePA = 0x7000E000, kApbMiscPA = 0x70000000, kCarPA = 0x60006000;
+
 // The Tegra RTC at the start of the PMC page (Linux rtc-tegra.c); its APB clock is CAR L4.
-enum : uint32_t { RTC_SHADOW_SECONDS = 0x00c, RTC_MILLI_SECONDS = 0x010 };
-enum : uint32_t { CAR_RST_DEVICES_L = 0x004, CAR_CLK_OUT_ENB_L = 0x010, CAR_CLK_ENB_L_SET = 0x320, CAR_L_RTC = 1u << 4 };
+enum : uint32_t {
+    RTC_SHADOW_SECONDS = 0x00c,
+    RTC_MILLI_SECONDS = 0x010
+};
+
+enum : uint32_t {
+    CAR_RST_DEVICES_L = 0x004,
+    CAR_CLK_OUT_ENB_L = 0x010,
+    CAR_CLK_ENB_L_SET = 0x320,
+    CAR_L_RTC = 1u << 4
+};
+
 constexpr uint32_t kPmc = 0x400;  // PMC registers within their page
+
 enum : uint32_t {
     PMC_CNTRL = kPmc + 0x000,
     PMC_WAKE_MASK = kPmc + 0x00c,
@@ -94,6 +106,7 @@ enum : uint32_t {
     PMC_WAKE2_STATUS = kPmc + 0x168,
     PMC_SW_WAKE2_STATUS = kPmc + 0x16c,
 };
+
 enum : uint32_t {
     CNTRL_LATCH_WAKEUPS = 1u << 5,
     CNTRL_PWRREQ_POLARITY = 1u << 8,
@@ -102,6 +115,7 @@ enum : uint32_t {
     CNTRL_SIDE_EFFECT_LP0 = 1u << 14,
     CNTRL_CPU_PWRREQ_OE = 1u << 16,
 };
+
 // The wake events (SwitchWakeSources.h switch_wake_pmc_events): 51 pwr_int_n (MAX77620 nIRQ: power key, RTC alarm),
 // level low; 14 gpio_pk4 (BM92T36 USB-PD ALERT: plug, unplug, charger contract), level low (OLED DTB bm92t@18
 // nvidia,pmc-wakeup), armed only while the line is high, since SwitchPD masks a line stuck low for the boot.
@@ -132,8 +146,8 @@ class SwitchSuspend : public IOService {
     OSDeclareDefaultStructors(SwitchSuspend) volatile uint8_t *pmc = nullptr, *apb = nullptr, *car = nullptr;
     uint32_t pad[kPadWords] = {}, mux[kMuxWords] = {};
     uint32_t wakeStatus = 0, wake2Status = 0;
-    uint64_t wakeArmed = 0;  // PMC wake events, bit n = event n
-    bool btWake = false;     // the Bluetooth controller was set up to wake the console for this sleep
+    uint64_t wakeArmed = 0;              // PMC wake events, bit n = event n
+    bool btWake = false;                 // the Bluetooth controller was set up to wake the console for this sleep
     IOPMDriverAssertionID wakeHold = 0;  // after a radio wake, until its controller reconnects or the window ends
     thread_call_t wakeHoldBegin = nullptr, wakeHoldEnd = nullptr;
     static void beginWakeHold(thread_call_param_t owner, thread_call_param_t);
@@ -146,14 +160,24 @@ class SwitchSuspend : public IOService {
     unsigned sleeps = 0;
     IOPMDriverAssertionID hold = 0;
 
-    uint32_t rd(uint32_t o) const { return *reinterpret_cast<volatile uint32_t *>(pmc + o); }
+    uint32_t rd(uint32_t o) const
+    {
+        return *reinterpret_cast<volatile uint32_t *>(pmc + o);
+    }
+
     uint64_t rtcMS() const
     {
         const uint32_t millis = rd(RTC_MILLI_SECONDS);
         return switch_sleep_rtc_ms(rd(RTC_SHADOW_SECONDS), millis);
     }
+
     bool rtcClockOn(bool log);
-    void wr(uint32_t o, uint32_t v) { *reinterpret_cast<volatile uint32_t *>(pmc + o) = v; }
+
+    void wr(uint32_t o, uint32_t v)
+    {
+        *reinterpret_cast<volatile uint32_t *>(pmc + o) = v;
+    }
+
     const char *checkPmc(char *why, size_t size);
     void sleepDevices();
     void quiesce();
@@ -168,13 +192,16 @@ public:
 
 OSDefineMetaClassAndStructors(SwitchSuspend, IOService)
 
-// The RTC keeps time through SC7 by itself; only its register interface needs the APB clock, which nothing else here
-// turns off. In reset it reads nothing: the wake line then has no time asleep.
-bool SwitchSuspend::rtcClockOn(bool log)
+    // The RTC keeps time through SC7 by itself; only its register interface needs the APB clock, which nothing else here
+    // turns off. In reset it reads nothing: the wake line then has no time asleep.
+    bool SwitchSuspend::rtcClockOn(bool log)
 {
-    auto reg = [this](uint32_t o) { return reinterpret_cast<volatile uint32_t *>(car + o); };
+    auto reg = [this](uint32_t o) {
+        return reinterpret_cast<volatile uint32_t *>(car + o);
+    };
     if (*reg(CAR_RST_DEVICES_L) & CAR_L_RTC) {
-        if (log) IOLog("SwitchSuspend: the Tegra RTC is held in reset; no time asleep in the wake lines\n");
+        if (log)
+            IOLog("SwitchSuspend: the Tegra RTC is held in reset; no time asleep in the wake lines\n");
         return false;
     }
     if (!(*reg(CAR_CLK_OUT_ENB_L) & CAR_L_RTC)) {
@@ -225,7 +252,8 @@ void timed(const char *phase, unsigned index, const char *name, void (*hook)(voi
 
 bool SwitchSuspend::start(IOService *provider)
 {
-    if (!IOService::start(provider)) return false;
+    if (!IOService::start(provider))
+        return false;
     pmc = reinterpret_cast<volatile uint8_t *>(ml_io_map(kPmcPagePA, 0x1000));
     apb = reinterpret_cast<volatile uint8_t *>(ml_io_map(kApbMiscPA, 0x4000));
     car = reinterpret_cast<volatile uint8_t *>(ml_io_map(kCarPA, 0x1000));
@@ -304,7 +332,9 @@ void SwitchSuspend::sleepDevices()
     timed("sleep", 4, "audio", switch_audio_suspend);
     timed("sleep", 5, "thermal", switch_thermal_suspend);
     timed("sleep", 5, "se", tegra_se_suspend);  // idle for BL31's context save at SYSTEM_SUSPEND
-    timed("sleep", 6, "nvram", [] { PESyncNVRAM(); });  // the NVRAM controller's sync (SwitchNVRAM), SD still up
+    timed("sleep", 6, "nvram", [] {
+        PESyncNVRAM();
+    });  // the NVRAM controller's sync (SwitchNVRAM), SD still up
     // The journal to Data while the SD is up: what follows is in RAM only until the wake (and lost to a forced
     // power-off).
     switch_power_journal_flush(true);
@@ -358,8 +388,10 @@ void SwitchSuspend::quiesce()
 {
     const uint64_t start = mach_absolute_time();
     tegra_gpio_suspend();
-    for (uint32_t i = 0; i < kPadWords; ++i) pad[i] = *reinterpret_cast<volatile uint32_t *>(apb + kPadFirst + 4 * i);
-    for (uint32_t i = 0; i < kMuxWords; ++i) mux[i] = *reinterpret_cast<volatile uint32_t *>(apb + kMuxFirst + 4 * i);
+    for (uint32_t i = 0; i < kPadWords; ++i)
+        pad[i] = *reinterpret_cast<volatile uint32_t *>(apb + kPadFirst + 4 * i);
+    for (uint32_t i = 0; i < kMuxWords; ++i)
+        mux[i] = *reinterpret_cast<volatile uint32_t *>(apb + kMuxFirst + 4 * i);
     arm_gic_suspend();
     rtcBeforeMS = rtcUsable ? rtcMS() : 0;
     quiesceNS = nsSince(start);  // journaled at wake: nothing here may take a lock
@@ -370,8 +402,10 @@ void SwitchSuspend::activate()
 {
     const uint64_t start = mach_absolute_time();
     rtcAfterMS = rtcUsable && rtcClockOn(false) ? rtcMS() : rtcBeforeMS;
-    for (uint32_t i = 0; i < kMuxWords; ++i) *reinterpret_cast<volatile uint32_t *>(apb + kMuxFirst + 4 * i) = mux[i];
-    for (uint32_t i = 0; i < kPadWords; ++i) *reinterpret_cast<volatile uint32_t *>(apb + kPadFirst + 4 * i) = pad[i];
+    for (uint32_t i = 0; i < kMuxWords; ++i)
+        *reinterpret_cast<volatile uint32_t *>(apb + kMuxFirst + 4 * i) = mux[i];
+    for (uint32_t i = 0; i < kPadWords; ++i)
+        *reinterpret_cast<volatile uint32_t *>(apb + kPadFirst + 4 * i) = pad[i];
     __asm__ volatile("dsb sy" ::: "memory");
     tegra_gpio_resume();
     // The pads held their levels in deep power-down through SC7; released as Linux tegra_pmc_resume does, once the
@@ -398,12 +432,11 @@ void SwitchSuspend::wakeDevices()
                          "%llu ms by the timebase; quiesce %llu us, activate %llu us (interrupts off)",
                          sleeps + 1, sc7MS / 1000, sc7MS % 1000, asleepMS, quiesceNS / 1000, activateNS / 1000);
     if (!gaugeBeforeErr && !gaugeAfterErr) {
-        switch_power_journal("SwitchSuspend: wake %u battery: %d mA average asleep (QH %u -> %u, %u uAh a count), "
-                             "AvgCurrent %d mA, Current %d mA at wake",
-                             sleeps + 1,
-                             switch_sleep_average_ma(gaugeBefore.qh, gaugeAfter.qh, SWITCH_BATTERY_QH_UAH, sc7MS),
-                             gaugeBefore.qh, gaugeAfter.qh, SWITCH_BATTERY_QH_UAH, gaugeAfter.avg_ma,
-                             gaugeAfter.now_ma);
+        switch_power_journal(
+            "SwitchSuspend: wake %u battery: %d mA average asleep (QH %u -> %u, %u uAh a count), "
+            "AvgCurrent %d mA, Current %d mA at wake",
+            sleeps + 1, switch_sleep_average_ma(gaugeBefore.qh, gaugeAfter.qh, SWITCH_BATTERY_QH_UAH, sc7MS),
+            gaugeBefore.qh, gaugeAfter.qh, SWITCH_BATTERY_QH_UAH, gaugeAfter.avg_ma, gaugeAfter.now_ma);
     } else {
         switch_power_journal("SwitchSuspend: wake %u battery: gauge not read (I2C %d before, %d after)", sleeps + 1,
                              gaugeBeforeErr, gaugeAfterErr);
@@ -446,15 +479,18 @@ void SwitchSuspend::wakeDevices()
     const uint32_t status[2] = {wakeStatus, wake2Status};
     const char *reason = alarm ? "rtc" : switch_wake_pmc_reason(status, wakeArmed);
     IOPMrootDomain *root = getPMRootDomain();
-    if (root) root->claimSystemWakeEvent(this, kIOPMWakeEventSource, reason, nullptr);
+    if (root)
+        root->claimSystemWakeEvent(this, kIOPMWakeEventSource, reason, nullptr);
     if (!strcmp(reason, "bt")) {
         // The page that woke the console is a controller reconnecting: keep the system up while it does, and let its
         // first report light the panel (SwitchWake).
         switch_wake_bt_slept();
-        if (wakeHoldBegin) thread_call_enter(wakeHoldBegin);  // after IOCPUSleepKernel has let the root domain go
+        if (wakeHoldBegin)
+            thread_call_enter(wakeHoldBegin);  // after IOCPUSleepKernel has let the root domain go
         uint64_t deadline;
         clock_interval_to_deadline(SWITCH_BT_RECONNECT_MS, kMillisecondScale, &deadline);
-        if (wakeHoldEnd) thread_call_enter_delayed(wakeHoldEnd, deadline);
+        if (wakeHoldEnd)
+            thread_call_enter_delayed(wakeHoldEnd, deadline);
     }
     const uint64_t us = nsSince(start) / 1000;
     switch_power_journal("SwitchSuspend: wake %u: %s (PMC WAKE_STATUS %#x WAKE2_STATUS %#x), devices %llu.%03llu ms",
@@ -470,7 +506,8 @@ void SwitchSuspend::beginWakeHold(thread_call_param_t owner, thread_call_param_t
 {
     auto *self = static_cast<SwitchSuspend *>(owner);
     IOPMrootDomain *root = getPMRootDomain();
-    if (!root || __atomic_load_n(&self->wakeHold, __ATOMIC_ACQUIRE)) return;
+    if (!root || __atomic_load_n(&self->wakeHold, __ATOMIC_ACQUIRE))
+        return;
     const IOPMDriverAssertionID id = root->createPMAssertion(kIOPMDriverAssertionCPUBit, kIOPMDriverAssertionLevelOn,
                                                              self, "SwitchSuspend Bluetooth wake");
     IOPMDriverAssertionID none = 0;
@@ -483,18 +520,21 @@ void SwitchSuspend::endWakeHold(thread_call_param_t owner, thread_call_param_t)
     auto *self = static_cast<SwitchSuspend *>(owner);
     IOPMrootDomain *root = getPMRootDomain();
     const IOPMDriverAssertionID id = __atomic_exchange_n(&self->wakeHold, 0, __ATOMIC_ACQ_REL);
-    if (root && id) root->releasePMAssertion(id);
+    if (root && id)
+        root->releasePMAssertion(id);
 }
 
 extern "C" int switch_suspend_start(void)
 {
     static SwitchSuspend *suspend;
-    if (suspend) return 0;
+    if (suspend)
+        return 0;
     IOService *resources = IOService::getResourceService();
     SwitchSuspend *candidate = OSTypeAlloc(SwitchSuspend);
     if (!resources || !candidate || !candidate->init() || !candidate->attach(resources)) {
         OSSafeReleaseNULL(candidate);
-        if (resources) (void)switch_suspend_hold(resources, "SwitchSuspend could not attach");
+        if (resources)
+            (void)switch_suspend_hold(resources, "SwitchSuspend could not attach");
         return 0;
     }
     if (!candidate->start(resources)) {

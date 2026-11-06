@@ -5,6 +5,7 @@
 #define SWITCH_WRITABLE_DATA_BYTES      UINT64_C(17179869184)
 #define SWITCH_WRITABLE_DATA_PART_COUNT 8u
 #define SWITCH_WRITABLE_DATA_UUID       "CCD5A1A2-2FDC-4B25-B322-AE1722871BC9"
+
 struct switch_writable_part {
     const char *path;
     uint64_t offset;

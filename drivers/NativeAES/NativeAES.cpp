@@ -21,19 +21,38 @@ volatile uint32_t native_aes_unsupported_key = 0;
 
 class NativeAES : public IOAESAccelerator {
 OSDeclareDefaultStructors(NativeAES) public : bool start(IOService *) override;
-    IOWorkLoop *getWorkLoop() const override { return IOService::getWorkLoop(); }
+
+    IOWorkLoop *getWorkLoop() const override
+    {
+        return IOService::getWorkLoop();
+    }
+
     IOReturn callPlatformFunction(const OSSymbol *name, bool wait, void *a, void *b, void *c, void *d) override
     {
         return IOService::callPlatformFunction(name, wait, a, b, c, d);
     }
-    const char *getAlgorithmName() override { return "AES-CBC"; }
-    bool isKeySupported(unsigned selector) override { return selector == 0; }
-    unsigned getSupportedOptions() override { return 1; }
+
+    const char *getAlgorithmName() override
+    {
+        return "AES-CBC";
+    }
+
+    bool isKeySupported(unsigned selector) override
+    {
+        return selector == 0;
+    }
+
+    unsigned getSupportedOptions() override
+    {
+        return 1;
+    }
+
     IOReturn performAES(void *, void *, task_t, unsigned long long, IOAESIV *, IOAESOperation, IOAESKeyData *,
                         IOAESCompletion, void *) override;
     IOReturn performAES(IOMemoryDescriptor *, IOMemoryDescriptor *, unsigned long long, IOAESIV *, IOAESOperation,
                         IOAESKeyData *, unsigned long long, unsigned long long, IOAESCompletion, void *) override;
 };
+
 OSDefineMetaClassAndStructors(NativeAES, IOAESAccelerator)
 
     // No padding, hidden device keys, or change to the registered corecrypto modes.
@@ -44,6 +63,7 @@ OSDefineMetaClassAndStructors(NativeAES, IOAESAccelerator)
         aes_encrypt_ctx encrypt;
         aes_decrypt_ctx decrypt;
     } context;
+
     unsigned char nextIV[16];
     int result;
     // The Security Engine first (drivers/TegraSE: it updates iv the same way); the CPU if it declines.
@@ -52,13 +72,17 @@ OSDefineMetaClassAndStructors(NativeAES, IOAESAccelerator)
     if (operation == IOAESDecrypt) {
         memcpy(nextIV, input + bytes - 16, 16);
         result = aes_decrypt_key(key.bytes, key.bits / 8, &context.decrypt);
-        if (!result) result = aes_decrypt_cbc(input, iv, static_cast<unsigned>(bytes / 16), output, &context.decrypt);
+        if (!result)
+            result = aes_decrypt_cbc(input, iv, static_cast<unsigned>(bytes / 16), output, &context.decrypt);
     } else {
         result = aes_encrypt_key(key.bytes, key.bits / 8, &context.encrypt);
-        if (!result) result = aes_encrypt_cbc(input, iv, static_cast<unsigned>(bytes / 16), output, &context.encrypt);
-        if (!result) memcpy(nextIV, output + bytes - 16, 16);
+        if (!result)
+            result = aes_encrypt_cbc(input, iv, static_cast<unsigned>(bytes / 16), output, &context.encrypt);
+        if (!result)
+            memcpy(nextIV, output + bytes - 16, 16);
     }
-    if (!result) memcpy(iv, nextIV, 16);
+    if (!result)
+        memcpy(iv, nextIV, 16);
     cc_clear(sizeof(context), &context);
     cc_clear(sizeof(nextIV), nextIV);
     return result;
@@ -80,10 +104,12 @@ static bool knownAnswerTest(NativeAES *provider)
     IOAESKeyData key = {
         128, {0x2b, 0x7e, 0x15, 0x16, 0x28, 0xae, 0xd2, 0xa6, 0xab, 0xf7, 0x15, 0x88, 0x09, 0xcf, 0x4f, 0x3c}, 0};
     unsigned char iv[16], output[64];
-    for (unsigned i = 0; i < 16; ++i) iv[i] = static_cast<unsigned char>(i);
+    for (unsigned i = 0; i < 16; ++i)
+        iv[i] = static_cast<unsigned char>(i);
     bool result = !cbc(input, output, 64, iv, key, IOAESEncrypt) && !memcmp(output, expected, 64) &&
                   !memcmp(iv, expected + 48, 16);
-    for (unsigned i = 0; i < 16; ++i) iv[i] = static_cast<unsigned char>(i);
+    for (unsigned i = 0; i < 16; ++i)
+        iv[i] = static_cast<unsigned char>(i);
     result = result && !cbc(output, output, 16, iv, key, IOAESDecrypt) &&
              !cbc(output + 16, output + 16, 48, iv, key, IOAESDecrypt) && !memcmp(output, input, 64) &&
              !memcmp(iv, expected + 48, 16);
@@ -100,20 +126,25 @@ static bool knownAnswerTest(NativeAES *provider)
         {0x4f, 0x02, 0x1d, 0xb2, 0x43, 0xbc, 0x63, 0x3d, 0x71, 0x78, 0x18, 0x3a, 0x9f, 0xa0, 0x71, 0xe8},
         {0xf5, 0x8c, 0x4c, 0x04, 0xd6, 0xe5, 0xf1, 0xba, 0x77, 0x9e, 0xab, 0xfb, 0x5f, 0x7b, 0xfb, 0xd6}};
     for (unsigned n = 0; n < 2; ++n) {
-        for (unsigned i = 0; i < 16; ++i) iv[i] = static_cast<unsigned char>(i);
+        for (unsigned i = 0; i < 16; ++i)
+            iv[i] = static_cast<unsigned char>(i);
         result =
             result && !cbc(input, output, 16, iv, wideKeys[n], IOAESEncrypt) && !memcmp(output, wideExpected[n], 16);
-        for (unsigned i = 0; i < 16; ++i) iv[i] = static_cast<unsigned char>(i);
+        for (unsigned i = 0; i < 16; ++i)
+            iv[i] = static_cast<unsigned char>(i);
         result = result && !cbc(output, output, 16, iv, wideKeys[n], IOAESDecrypt) && !memcmp(output, input, 16);
     }
     IOBufferMemoryDescriptor *source = IOBufferMemoryDescriptor::withCapacity(128, kIODirectionInOut);
     IOBufferMemoryDescriptor *destination = IOBufferMemoryDescriptor::withCapacity(128, kIODirectionInOut);
     IOAESIV publicIV;
-    for (unsigned i = 0; i < 16; ++i) publicIV.bytes[i] = static_cast<unsigned char>(i);
+    for (unsigned i = 0; i < 16; ++i)
+        publicIV.bytes[i] = static_cast<unsigned char>(i);
+
     struct Completion {
         unsigned count;
         int status;
     } completion = {};
+
     auto callback = [](void *argument, int status) {
         Completion *state = static_cast<Completion *>(argument);
         state->count++;
@@ -136,19 +167,23 @@ static bool knownAnswerTest(NativeAES *provider)
                 provider->performAES(source, destination, 64, &publicIV, IOAESEncrypt, &key, 16, 80, callback,
                                      &completion) == kIOReturnBadArgument &&
                 completion.count == 1;
-    for (unsigned i = 0; i < 16; ++i) publicIV.bytes[i] = static_cast<unsigned char>(i);
+    for (unsigned i = 0; i < 16; ++i)
+        publicIV.bytes[i] = static_cast<unsigned char>(i);
     interface = interface &&
                 !provider->performAES(const_cast<unsigned char *>(input), output, kernel_task, 64, &publicIV,
                                       IOAESEncrypt, &key, nullptr, nullptr) &&
                 !memcmp(output, expected, 64);
-    for (unsigned i = 0; i < 16; ++i) publicIV.bytes[i] = static_cast<unsigned char>(i);
+    for (unsigned i = 0; i < 16; ++i)
+        publicIV.bytes[i] = static_cast<unsigned char>(i);
     interface =
         interface &&
         !provider->performAES(output, output, kernel_task, 64, &publicIV, IOAESDecrypt, &key, nullptr, nullptr) &&
         !memcmp(output, input, 64) && !memcmp(publicIV.bytes, expected + 48, 16);
     native_aes_interface_status = interface ? 1 : 2;
-    if (source) source->release();
-    if (destination) destination->release();
+    if (source)
+        source->release();
+    if (destination)
+        destination->release();
     result = result && interface;
     cc_clear(sizeof(key), &key);
     cc_clear(sizeof(output), output);
@@ -161,7 +196,8 @@ bool NativeAES::start(IOService *provider)
         !IOService::start(provider))
         return false;
     native_aes_kat_status = knownAnswerTest(this) ? 1 : 2;
-    if (native_aes_kat_status != 1) return false;
+    if (native_aes_kat_status != 1)
+        return false;
     setProperty("NativeAESSoftwareKeysOnly", true);
     native_aes_registered = 1;
     registerService();
@@ -183,7 +219,8 @@ IOReturn NativeAES::performAES(IOMemoryDescriptor *input, IOMemoryDescriptor *ou
         outputOffset > output->getLength() || bytes > output->getLength() - outputOffset)
         return kIOReturnBadArgument;
     unsigned char *buffer = static_cast<unsigned char *>(IOMalloc(4096));
-    if (!buffer) return kIOReturnNoMemory;
+    if (!buffer)
+        return kIOReturnNoMemory;
     IOReturn result = input->prepare();
     if (result) {
         IOFree(buffer, 4096);
@@ -226,14 +263,17 @@ IOReturn NativeAES::performAES(IOMemoryDescriptor *input, IOMemoryDescriptor *ou
 IOReturn NativeAES::performAES(void *input, void *output, task_t task, unsigned long long bytes, IOAESIV *iv,
                                IOAESOperation operation, IOAESKeyData *key, IOAESCompletion callback, void *refcon)
 {
-    if (!task || !input || !output || !bytes) return kIOReturnBadArgument;
+    if (!task || !input || !output || !bytes)
+        return kIOReturnBadArgument;
     IOMemoryDescriptor *source =
         IOMemoryDescriptor::withAddressRange(reinterpret_cast<mach_vm_address_t>(input), bytes, kIODirectionOut, task);
     IOMemoryDescriptor *destination =
         IOMemoryDescriptor::withAddressRange(reinterpret_cast<mach_vm_address_t>(output), bytes, kIODirectionIn, task);
     if (!source || !destination) {
-        if (source) source->release();
-        if (destination) destination->release();
+        if (source)
+            source->release();
+        if (destination)
+            destination->release();
         return kIOReturnNoMemory;
     }
     IOReturn result = performAES(source, destination, bytes, iv, operation, key, 0, 0, callback, refcon);

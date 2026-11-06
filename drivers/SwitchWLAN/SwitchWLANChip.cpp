@@ -101,7 +101,8 @@ void Chip::write(uint32_t address, uint32_t value)
 const Core *Chip::find(uint16_t coreId) const
 {
     for (unsigned i = 0; i < coreCount_; ++i)
-        if (cores_[i].id == coreId) return &cores_[i];
+        if (cores_[i].id == coreId)
+            return &cores_[i];
     return nullptr;
 }
 
@@ -111,7 +112,8 @@ uint32_t Chip::erom(uint32_t &at, uint32_t &type)
     const uint32_t value = read(at);
     at += 4;
     type = value & kDescType;
-    if ((type & ~kDescAddrsizeGt32) == kDescAddress) type = kDescAddress;
+    if ((type & ~kDescAddrsizeGt32) == kDescAddress)
+        type = kDescAddress;
     return value;
 }
 
@@ -143,16 +145,21 @@ bool Chip::regaddr(uint32_t &at, uint32_t &base, uint32_t &wrap)
             at -= 4;
             break;
         }  // the next component starts: keep what this one had
-        if (value & kDescAddrsizeGt32) (void)erom(at, type);
+        if (value & kDescAddrsizeGt32)
+            (void)erom(at, type);
         const uint32_t size = (value >> 4) & 3;
         if (size == kSizeDesc) {
             uint32_t sizeType;
-            if (erom(at, sizeType) & kDescAddrsizeGt32) (void)erom(at, sizeType);
+            if (erom(at, sizeType) & kDescAddrsizeGt32)
+                (void)erom(at, sizeType);
         }
-        if (size != kSize4K && size != kSize8K) continue;
+        if (size != kSize4K && size != kSize8K)
+            continue;
         const uint32_t slaveType = (value >> 6) & 3;
-        if (!base && slaveType == kSlaveSlave) base = value & ~0xFFFu;
-        if (!wrap && slaveType == wraptype) wrap = value & ~0xFFFu;
+        if (!base && slaveType == kSlaveSlave)
+            base = value & ~0xFFFu;
+        if (!wrap && slaveType == wraptype)
+            wrap = value & ~0xFFFu;
     }
     return true;
 }
@@ -166,15 +173,20 @@ void Chip::scanCores()
     while (at < end && coreCount_ < sizeof(cores_) / sizeof(cores_[0])) {
         uint32_t type;
         uint32_t value = erom(at, type);
-        if (type == kDescEot) break;
-        if (!(value & kDescValid) || type != kDescComponent) continue;
+        if (type == kDescEot)
+            break;
+        if (!(value & kDescValid) || type != kDescComponent)
+            continue;
         const uint16_t id = static_cast<uint16_t>((value >> 8) & 0xFFF);
         value = erom(at, type);
-        if (type != kDescComponent) break;
+        if (type != kDescComponent)
+            break;
         const uint32_t masters = (value >> 14) & 0x1F, slaves = (value >> 19) & 0x1F;
-        if (!(masters + slaves) && id != kCorePmu && id != kCoreGci) continue;
+        if (!(masters + slaves) && id != kCorePmu && id != kCoreGci)
+            continue;
         uint32_t base, wrap;
-        if (regaddr(at, base, wrap)) cores_[coreCount_++] = {id, static_cast<uint8_t>(value >> 24), base, wrap};
+        if (regaddr(at, base, wrap))
+            cores_[coreCount_++] = {id, static_cast<uint8_t>(value >> 24), base, wrap};
     }
 }
 
@@ -186,7 +198,8 @@ void Chip::coreDisable(const Core &core, uint32_t prereset, uint32_t reset)
         (void)read(core.wrap + kAiIoctl);
         write(core.wrap + kAiResetCtl, kAiReset);
         IODelay(20);
-        for (int i = 0; i < 30 && read(core.wrap + kAiResetCtl) != kAiReset; ++i) IODelay(10);
+        for (int i = 0; i < 30 && read(core.wrap + kAiResetCtl) != kAiReset; ++i)
+            IODelay(10);
     }
     write(core.wrap + kAiIoctl, reset | kIoctlFgc | kIoctlClk);
     (void)read(core.wrap + kAiIoctl);
@@ -209,7 +222,8 @@ void Chip::tcmCopy(uint32_t address, const uint8_t *data, size_t length)
 {
     for (size_t at = 0; at < length; at += 4) {
         uint8_t word[4] = {};
-        for (size_t i = 0; i < 4 && at + i < length; ++i) word[i] = data[at + i];
+        for (size_t i = 0; i < 4 && at + i < length; ++i)
+            word[i] = data[at + i];
         tcm_.w32(static_cast<uint32_t>(address + at), le32(word));
     }
 }
@@ -219,7 +233,8 @@ bool Chip::boot(const uint8_t *image, size_t imageLength, const uint8_t *nvram, 
 {
     const Core *arm = find(kCoreArmCr4), *pcie2 = find(kCorePcie2), *d11 = find(kCore80211);
     // A RAM size recorded in the image ("SMAR" at 0x6c) wins over the banks (brcmf_pcie_adjust_ramsize).
-    if (imageLength >= 0x6c + 8 && le32(image + 0x6c) == 0x534D4152) ramSize_ = le32(image + 0x70);
+    if (imageLength >= 0x6c + 8 && le32(image + 0x6c) == 0x534D4152)
+        ramSize_ = le32(image + 0x70);
     if (imageLength < 4 || imageLength + nvramLength > ramSize_) {
         snprintf(why, whyLength, "%zu + %zu bytes do not fit %u of RAM", imageLength, nvramLength, ramSize_);
         return false;
@@ -233,7 +248,8 @@ bool Chip::boot(const uint8_t *image, size_t imageLength, const uint8_t *nvram, 
     write(pcie2->base + kPcie2ConfigData, read(pcie2->base + kPcie2ConfigData));
     write(pcie2->base + kPcie2MailboxMask, 0);
     const uint32_t stale = read(pcie2->base + kPcie2MailboxInt);
-    if (stale && stale != 0xFFFFFFFF) write(pcie2->base + kPcie2MailboxInt, stale);
+    if (stale && stale != 0xFFFFFFFF)
+        write(pcie2->base + kPcie2MailboxInt, stale);
 
     const uint64_t t0 = nowNs();
     const uint32_t top = ramBase_ + ramSize_ - 4;
@@ -280,16 +296,20 @@ void Chip::crash(char *out, size_t length)
         size_t n = 0;
         for (uint32_t k = 0; k < 96 && n + 1 < size && address >= ramBase_ && address + k < ramBase_ + ramSize_; ++k) {
             const uint8_t c = tcm_.r8(address + k);
-            if (!c) break;
-            if (c >= 0x20 && c < 0x7F) buffer[n++] = static_cast<char>(c);
+            if (!c)
+                break;
+            if (c >= 0x20 && c < 0x7F)
+                buffer[n++] = static_cast<char>(c);
         }
         buffer[n] = 0;
     };
     const uint32_t flags = shared_ ? tcm_.r32(shared_) : 0;
     size_t used = 0;
     auto append = [&](int written) {
-        if (written > 0) used += static_cast<size_t>(written);
-        if (used >= length) used = length - 1;
+        if (written > 0)
+            used += static_cast<size_t>(written);
+        if (used >= length)
+            used = length - 1;
     };
     append(snprintf(out, length, "shared flags %#x", flags));
     if (flags & kSharedAssert) {
@@ -316,7 +336,8 @@ void Chip::crash(char *out, size_t length)
 void Chip::consoleTail(char *out, size_t length)
 {
     out[0] = 0;
-    if (!console_ || console_ < ramBase_ || console_ >= ramBase_ + ramSize_ || length < 2) return;
+    if (!console_ || console_ < ramBase_ || console_ >= ramBase_ + ramSize_ || length < 2)
+        return;
     const uint32_t buffer = tcm_.r32(console_ + 8), size = tcm_.r32(console_ + 12), index = tcm_.r32(console_ + 16);
     if (!size || size > 0x10000 || index >= size || buffer < ramBase_ || buffer + size > ramBase_ + ramSize_) {
         snprintf(out, length, "(console unreadable: buf %#x size %u index %u)", buffer, size, index);
@@ -341,24 +362,32 @@ void Chip::consoleTail(char *out, size_t length)
 
 size_t nvramConvert(const uint8_t *text, size_t textLength, uint8_t *out, size_t outLength)
 {
-    auto printable = [](uint8_t c) { return c >= 0x20 && c < 0x7F && c != '#'; };
+    auto printable = [](uint8_t c) {
+        return c >= 0x20 && c < 0x7F && c != '#';
+    };
     size_t n = 0;
     bool boardrev = false;
     size_t i = 0;
     while (i < textLength) {
         // One line: skip blanks, a `key=value` (value up to the first non-printable or '#'), the rest ignored.
         size_t lineEnd = i;
-        while (lineEnd < textLength && text[lineEnd] != '\n') ++lineEnd;
+        while (lineEnd < textLength && text[lineEnd] != '\n')
+            ++lineEnd;
         size_t at = i;
-        while (at < lineEnd && (text[at] == ' ' || !printable(text[at])) && text[at] != '#') ++at;
+        while (at < lineEnd && (text[at] == ' ' || !printable(text[at])) && text[at] != '#')
+            ++at;
         const size_t start = at;
-        while (at < lineEnd && printable(text[at]) && text[at] != '=' && text[at] != ' ') ++at;
+        while (at < lineEnd && printable(text[at]) && text[at] != '=' && text[at] != ' ')
+            ++at;
         if (at < lineEnd && text[at] == '=' && at > start) {
-            while (at < lineEnd && printable(text[at])) ++at;
+            while (at < lineEnd && printable(text[at]))
+                ++at;
             const size_t entry = at - start;
             if (!(entry >= 4 && !memcmp(text + start, "RAW1", 4))) {  // raw OTP dumps are not variables
-                if (n + entry + 1 > outLength) return 0;
-                if (entry >= 9 && !memcmp(text + start, "boardrev=", 9)) boardrev = true;
+                if (n + entry + 1 > outLength)
+                    return 0;
+                if (entry >= 9 && !memcmp(text + start, "boardrev=", 9))
+                    boardrev = true;
                 memcpy(out + n, text + start, entry);
                 n += entry;
                 out[n++] = 0;
@@ -368,14 +397,17 @@ size_t nvramConvert(const uint8_t *text, size_t textLength, uint8_t *out, size_t
     }
     static const char kBoardrev[] = "boardrev=0xff";
     if (!boardrev) {
-        if (n + sizeof(kBoardrev) > outLength) return 0;
+        if (n + sizeof(kBoardrev) > outLength)
+            return 0;
         memcpy(out + n, kBoardrev, sizeof(kBoardrev));
         n += sizeof(kBoardrev);
     }
     // At least one more NUL, padded to a word, then the length token: words in the low half, its complement high.
     const size_t padded = (n + 1 + 3) & ~static_cast<size_t>(3);
-    if (padded + 4 > outLength) return 0;
-    while (n < padded) out[n++] = 0;
+    if (padded + 4 > outLength)
+        return 0;
+    while (n < padded)
+        out[n++] = 0;
     const uint32_t words = static_cast<uint32_t>(padded / 4);
     put32(out + n, (~words << 16) | (words & 0xFFFF));
     return n + 4;

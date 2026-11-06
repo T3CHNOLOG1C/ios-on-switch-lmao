@@ -44,7 +44,9 @@ enum TegraNVENCMethod {
     TegraNVENCMethodClaimSelfTest = 6,  // -> TegraNVENCClaim: claimed = 1 for exactly one caller per boot
 };
 
-enum { TEGRA_NVENC_CODEC_H264 = 1 };  // NVENC application id (clc5b7.h NVC5B7_SET_APPLICATION_ID_ID_NVENC_H264)
+enum {
+    TEGRA_NVENC_CODEC_H264 = 1
+};  // NVENC application id (clc5b7.h NVC5B7_SET_APPLICATION_ID_ID_NVENC_H264)
 
 // Input picture layouts (nvenc_h264_surface_cfg_s of input_cfg). E3 tries them (16x16 tiles first, pitch linear last:
 // TegraNVENCSelfTest.cpp kSearch) and keeps the first whose picture NVDEC decodes back to the source;
@@ -63,7 +65,10 @@ enum {
 // bytes after luma inside one buffer and keep every reading of the methods inside it:
 //   OFFSET: the surface config's chroma offset is chroma_offset / 256 and the CHROMA method gets the luma address;
 //   METHOD: the CHROMA method gets the chroma address and the surface config's chroma offset is 0.
-enum { TEGRA_NVENC_CHROMA_OFFSET = 0, TEGRA_NVENC_CHROMA_METHOD = 1 };
+enum {
+    TEGRA_NVENC_CHROMA_OFFSET = 0,
+    TEGRA_NVENC_CHROMA_METHOD = 1
+};
 
 typedef struct {
     uint32_t abi_version, nvenc_version;  // nvenc_version 0x50: NVENC 5.0 (T210)
@@ -79,13 +84,16 @@ typedef struct {
 typedef struct {
     uint64_t size;
 } TegraNVENCBufferAlloc;
+
 typedef struct {
     uint32_t handle, reserved;
     uint64_t size;
 } TegraNVENCBufferReply;  // size rounded to 64 KiB
+
 typedef struct {
     uint32_t handle, reserved;
 } TegraNVENCBuffer;
+
 typedef struct {
     uint32_t handle, offset, length, reserved;
 } TegraNVENCRange;
@@ -98,13 +106,17 @@ typedef struct {
     uint32_t value, offset;
 } TegraNVENCEntry;
 
-enum { TEGRA_NVENC_ENTRY_VALUE = 0, TEGRA_NVENC_ENTRY_RELOC = 1 };
+enum {
+    TEGRA_NVENC_ENTRY_VALUE = 0,
+    TEGRA_NVENC_ENTRY_RELOC = 1
+};
 
 // The setup is nvenc_h264_drv_pic_setup_s followed by the control arrays its pic_control offsets name (slice, ME, MD,
 // quantisation), all inside setup_bytes.
 #define TEGRA_NVENC_MAX_ENTRIES 48
 #define TEGRA_NVENC_MAX_RANGES  4
 #define TEGRA_NVENC_MAX_SETUP   2048
+
 typedef struct {
     uint32_t codec;  // TEGRA_NVENC_CODEC_*
     uint32_t entry_count, clean_count;

@@ -19,6 +19,7 @@ static _Alignas(4096) uint64_t peer_tables[POOL_PAGES * 512];
 static ArmSmmu4KLiveArena peer_arena;
 static ArmSmmu4KLiveState peer_state;
 static unsigned pair_mode;
+
 typedef struct {
     uint64_t registers[MMIO_BYTES / 8];
     size_t calls, fail_call, publication_calls, fail_publication, tlbi_calls, sync_calls;
@@ -26,6 +27,7 @@ typedef struct {
     unsigned after_write, timeout, dirty, require_published, mutate_on_publish;
     unsigned synced, clean_observed;
 } Fixture;
+
 static Fixture f;
 static ArmSmmu4KLiveArena arena;
 static uint32_t alias_scratch[64]; /* the main arena's alias checks sort; the peer's compare pairwise */
@@ -34,49 +36,61 @@ static ArmSmmu4KContextConfig context;
 static ArmSmmu4KIo io;
 static ArmSmmu4KLiveVisibility visibility;
 static ArmSmmu4KLiveResult result;
+
 static uint32_t get32(size_t at)
 {
     uint32_t value;
     memcpy(&value, (char *)f.registers + at, 4);
     return value;
 }
+
 static uint64_t get64(size_t at)
 {
     uint64_t value;
     memcpy(&value, (char *)f.registers + at, 8);
     return value;
 }
+
 static void put32(size_t at, uint32_t value)
 {
     memcpy((char *)f.registers + at, &value, 4);
 }
+
 static void put64(size_t at, uint64_t value)
 {
     memcpy((char *)f.registers + at, &value, 8);
 }
+
 static int call(void *cookie, size_t at, size_t bytes)
 {
     CHECK(cookie == &f && !(at & (bytes - 1)) && at <= MMIO_BYTES - bytes);
     return ++f.calls == f.fail_call;
 }
+
 static int read32(void *cookie, size_t at, uint32_t *value)
 {
-    if (call(cookie, at, 4)) return 1;
+    if (call(cookie, at, 4))
+        return 1;
     *value = at == f.cb + 0x7f4 && f.timeout ? 1 : get32(at);
-    if (at == f.cb + 0x7f4 && !(*value & 1)) f.synced = 1;
+    if (at == f.cb + 0x7f4 && !(*value & 1))
+        f.synced = 1;
     return 0;
 }
+
 static int read64(void *cookie, size_t at, uint64_t *value)
 {
-    if (call(cookie, at, 8)) return 1;
+    if (call(cookie, at, 8))
+        return 1;
     *value = get64(at);
     return 0;
 }
+
 static int write32(void *cookie, size_t at, uint32_t value)
 {
     int fail = call(cookie, at, 4);
     ++f.writes;
-    if (fail && !f.after_write) return 1;
+    if (fail && !f.after_write)
+        return 1;
     if (f.require_published) {
         /* Live updates must not disable translation or change another bank,
          * roots, granules, stream routes or interrupt/fault registers. */
@@ -98,21 +112,25 @@ static int write32(void *cookie, size_t at, uint32_t value)
         put32(at, value);
     return fail;
 }
+
 static int write64(void *cookie, size_t at, uint64_t value)
 {
     int fail = call(cookie, at, 8);
     ++f.writes;
     CHECK(!f.require_published);
-    if (fail && !f.after_write) return 1;
+    if (fail && !f.after_write)
+        return 1;
     put64(at, value);
     return fail;
 }
+
 static int barrier(void *cookie)
 {
     CHECK(cookie == &f);
     ++f.barriers;
     return ++f.calls == f.fail_call;
 }
+
 static int publish(void *cookie, volatile uint64_t *page, size_t bytes)
 {
     CHECK(cookie == &f && bytes == 4096 && !((uintptr_t)page & 4095));
@@ -122,17 +140,23 @@ static int publish(void *cookie, volatile uint64_t *page, size_t bytes)
            at - (uintptr_t)peer_tables < peer_state.tables.table_pages * 4096));
     ++f.publication_calls;
     CHECK(!f.tlbi_calls && !f.sync_calls);
-    if (f.publication_calls == f.fail_publication) return 1;
+    if (f.publication_calls == f.fail_publication)
+        return 1;
     if (f.publication_calls == 1) {
-        if (f.mutate_on_publish == 1) put64(f.cb + 0x28, get64(f.cb + 0x28) ^ 4096);
-        if (f.mutate_on_publish == 2) tables[0] ^= 1;
-        if (f.mutate_on_publish == 3) put32(f.cb + 0x58, 2);
-        if (f.mutate_on_publish == 4) peer_tables[0] ^= 1;
+        if (f.mutate_on_publish == 1)
+            put64(f.cb + 0x28, get64(f.cb + 0x28) ^ 4096);
+        if (f.mutate_on_publish == 2)
+            tables[0] ^= 1;
+        if (f.mutate_on_publish == 3)
+            put32(f.cb + 0x58, 2);
+        if (f.mutate_on_publish == 4)
+            peer_tables[0] ^= 1;
     }
     f.dirty = 0;
     f.clean_observed = 1;
     return 0;
 }
+
 static void reset_counters(void)
 {
     f.calls = f.fail_call = f.publication_calls = f.fail_publication = 0;
@@ -140,6 +164,7 @@ static void reset_counters(void)
     f.after_write = f.timeout = f.mutate_on_publish = f.synced = f.clean_observed = 0;
     f.require_published = f.dirty = 1;
 }
+
 static void setup(unsigned bits, unsigned upper, unsigned output, unsigned spacing, uint64_t low)
 {
     memset(&state, 0, sizeof(state));
@@ -181,10 +206,12 @@ static void setup(unsigned bits, unsigned upper, unsigned output, unsigned spaci
     CHECK(ArmSmmu4KProgramDisabledContext(&io, 0, &context, 4, &r) == ArmSmmu4KSuccess);
     reset_counters();
 }
+
 static ArmSmmu4KRange resource(unsigned pages, unsigned permissions, unsigned cache)
 {
     return (ArmSmmu4KRange){arena.iova, 0x30000000, pages * 4096, permissions, cache, cache ? 3 : 2};
 }
+
 /* Deliberately different page-walk arithmetic and original Linux permission
  * oracle, not the live updater's traversal/descriptor helpers. */
 static uint64_t pte_from(const ArmSmmu4KLiveArena *a, const ArmSmmu4KLiveState *s, const uint64_t *pool, uint64_t va)
@@ -195,9 +222,11 @@ static uint64_t pte_from(const ArmSmmu4KLiveArena *a, const ArmSmmu4KLiveState *
         unsigned shift = 12 + 9 * (3 - level),
                  width = level == s->tables.start_level ? a->config.input_bits - shift : 9;
         uint64_t entry = pool[at + ((va >> shift) & ((1u << width) - 1))];
-        if (!entry) return 0;
+        if (!entry)
+            return 0;
         CHECK((entry & 3) == 3);
-        if (level == 3) return entry;
+        if (level == 3)
+            return entry;
         uint64_t physical = entry & UINT64_C(0x0000fffffffff000);
         CHECK(physical >= a->config.table_physical &&
               physical - a->config.table_physical < s->tables.table_pages * 4096);
@@ -205,14 +234,17 @@ static uint64_t pte_from(const ArmSmmu4KLiveArena *a, const ArmSmmu4KLiveState *
         ++level;
     }
 }
+
 static uint64_t pte(uint64_t va)
 {
     return pte_from(&arena, &state, tables, va);
 }
+
 static ArmSmmu4KStatus update(const ArmSmmu4KRange *before, size_t count, const ArmSmmu4KRange *change, unsigned map)
 {
     return ArmSmmu4KLiveUpdate(&arena, &state, &io, 0, &context, &visibility, before, count, change, map, 4, &result);
 }
+
 static void complete(unsigned removed, size_t pages)
 {
     CHECK(result.complete && result.translation_removed == removed && !result.must_retain_resources);
@@ -231,6 +263,7 @@ static void complete(unsigned removed, size_t pages)
     CHECK(result.whole_verification ? result.descriptor_reads >= state.tables.table_pages * 1024
                                     : result.descriptor_reads >= 2);
 }
+
 static unsigned profiles(void)
 {
     unsigned count = 0, outputs[] = {32, 36, 40, 42, 44, 48};
@@ -263,6 +296,7 @@ static unsigned profiles(void)
                     }
     return count;
 }
+
 static unsigned failures(void)
 {
     ArmSmmu4KRange r;
@@ -334,6 +368,7 @@ static unsigned failures(void)
     }
     return count;
 }
+
 static unsigned mutations(void)
 {
     setup(48, 1, 48, 0, 0x1ff000);
@@ -355,6 +390,7 @@ static unsigned mutations(void)
         }
     return count;
 }
+
 static void refusals_and_partial(void)
 {
     setup(48, 1, 48, 0, 0x1ff000);
@@ -434,6 +470,7 @@ static void refusals_and_partial(void)
     CHECK(ArmSmmu4KLivePrepare(&a, &s) == ArmSmmu4KArgument);
     CHECK(!memcmp(snapshot, tables, sizeof(tables)));
 }
+
 static void setup_pair(unsigned bits, unsigned output, unsigned spacing)
 {
     setup(bits, 0, output, spacing, 0x1ff000);
@@ -458,11 +495,13 @@ static void setup_pair(unsigned bits, unsigned output, unsigned spacing)
     CHECK(!ArmSmmu4KProgramDisabledContext(&io, 0, &context, 4, &programmed));
     reset_counters();
 }
+
 static ArmSmmu4KStatus pair_update(ArmSmmu4KLiveRegion *lo, ArmSmmu4KLiveRegion *hi, const ArmSmmu4KRange *change,
                                    unsigned upper, unsigned map)
 {
     return ArmSmmu4KLiveUpdateContext(&io, 0, &context, lo, hi, upper, &visibility, change, map, 4, &result);
 }
+
 static unsigned pair_profiles(void)
 {
     unsigned profiles = 0, outputs[] = {32, 36, 40, 42, 44, 48};
@@ -507,6 +546,7 @@ static unsigned pair_profiles(void)
                 }
     return profiles;
 }
+
 static unsigned pair_failures(void)
 {
     setup_pair(48, 48, 0);
@@ -524,7 +564,8 @@ static unsigned pair_failures(void)
                     lo = (ArmSmmu4KLiveRegion){&arena, &state, 0, 0};
                     hi = (ArmSmmu4KLiveRegion){&peer_arena, &peer_state, 0, 0};
                     ArmSmmu4KRange r = resource(2, 3, 1);
-                    if (upper) r.iova = peer_arena.iova;
+                    if (upper)
+                        r.iova = peer_arena.iova;
                     if (unmap) {
                         CHECK(!pair_update(&lo, &hi, &r, upper, 1));
                         if (upper) {
@@ -545,7 +586,8 @@ static unsigned pair_failures(void)
                     lo = (ArmSmmu4KLiveRegion){&arena, &state, 0, 0};
                     hi = (ArmSmmu4KLiveRegion){&peer_arena, &peer_state, 0, 0};
                     ArmSmmu4KRange r = resource(2, 3, 1);
-                    if (upper) r.iova = peer_arena.iova;
+                    if (upper)
+                        r.iova = peer_arena.iova;
                     if (unmap) {
                         CHECK(!pair_update(&lo, &hi, &r, upper, 1));
                         if (upper) {
@@ -620,18 +662,21 @@ static unsigned pair_failures(void)
     CHECK(!state.poisoned && !peer_state.poisoned);
     return controls;
 }
+
 static ArmSmmu4KStatus batch(const ArmSmmu4KRange *before, size_t count, const ArmSmmu4KRange *changes, size_t n,
                              unsigned map)
 {
     ArmSmmu4KLiveRegion lo = {&arena, &state, before, count};
     return ArmSmmu4KLiveUpdateContextBatch(&io, 0, &context, &lo, 0, 0, &visibility, changes, n, map, 4, &result);
 }
+
 /* Four scattered physical pages (descending addresses, never adjacent) over the arena's 2 MiB boundary. */
 static void scattered(ArmSmmu4KRange pages[4])
 {
     for (unsigned i = 0; i < 4; ++i)
         pages[i] = (ArmSmmu4KRange){arena.iova + 4096 * i, 0x30000000 + 0x20000 * (3 - i), 4096, 3, 0, 2};
 }
+
 static unsigned batches(void)
 {
     unsigned controls = 0;
@@ -662,7 +707,8 @@ static unsigned batches(void)
     CHECK(batch(0, 0, pages, 4, 1) == ArmSmmu4KSuccess);
     complete(0, 4);
     CHECK(result.descriptor_writes == 4 && result.published_pages == 2 && state.generation == 1);
-    for (unsigned i = 0; i < 4; ++i) CHECK(pte(pages[i].iova) == (pages[i].physical | source_permission_pte(3, 0) | 3));
+    for (unsigned i = 0; i < 4; ++i)
+        CHECK(pte(pages[i].iova) == (pages[i].physical | source_permission_pte(3, 0) | 3));
     ++controls;
     /* Any already mapped page refuses the whole batch before MMIO or a store. */
     reset_counters();
@@ -714,6 +760,7 @@ static unsigned batches(void)
         }
     return controls;
 }
+
 /* The leaf slot of va in the fixture's pool, by the oracle's own walk. */
 static uint64_t *leaf_of(uint64_t va)
 {
@@ -723,12 +770,14 @@ static uint64_t *leaf_of(uint64_t va)
         unsigned shift = 12 + 9 * (3 - level),
                  width = level == state.tables.start_level ? arena.config.input_bits - shift : 9;
         uint64_t *entry = &tables[at + ((va >> shift) & ((1u << width) - 1))];
-        if (level == 3) return entry;
+        if (level == 3)
+            return entry;
         CHECK((*entry & 3) == 3);
         at = (size_t)(((*entry & UINT64_C(0x0000fffffffff000)) - arena.config.table_physical) / 8);
         ++level;
     }
 }
+
 /* Between whole-region updates (every 64th of a region) an update proves the leaves it changes: a changed leaf holding something
  * else refuses before any store; a corrupted descriptor elsewhere is found by the next whole-region update. */
 static unsigned incremental(void)
@@ -766,6 +815,7 @@ static unsigned incremental(void)
     ++count;
     return count;
 }
+
 int main(void)
 {
     unsigned p = profiles(), fcount = failures(), m = mutations();

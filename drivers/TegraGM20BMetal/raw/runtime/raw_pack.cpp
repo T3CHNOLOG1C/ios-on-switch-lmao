@@ -15,13 +15,15 @@ uint64_t Pack::fnv(const void *p, size_t n)
 {
     uint64_t h = 0xcbf29ce484222325ull;
     const uint8_t *b = static_cast<const uint8_t *>(p);
-    for (size_t i = 0; i < n; i++) h = (h ^ b[i]) * 0x100000001b3ull;
+    for (size_t i = 0; i < n; i++)
+        h = (h ^ b[i]) * 0x100000001b3ull;
     return h;
 }
 
 Pack::~Pack()
 {
-    if (base_) munmap(const_cast<uint8_t *>(base_), size_);
+    if (base_)
+        munmap(const_cast<uint8_t *>(base_), size_);
 }
 
 bool Pack::load(const char *path, uint64_t stack, std::string &err)
@@ -56,7 +58,8 @@ bool Pack::load(const char *path, uint64_t stack, std::string &err)
             return false;
         }
     const PackPipeline *p = section<PackPipeline>(PackPipelines);
-    for (uint32_t i = 0; i < hdr_->pipelines; i++) index_.push_back({p[i].keyHash, i});
+    for (uint32_t i = 0; i < hdr_->pipelines; i++)
+        index_.push_back({p[i].keyHash, i});
     std::sort(index_.begin(), index_.end());
     return true;
 }
@@ -64,7 +67,8 @@ bool Pack::load(const char *path, uint64_t stack, std::string &err)
 const PackPipeline *Pack::find(uint64_t keyHash) const
 {
     auto it = std::lower_bound(index_.begin(), index_.end(), std::make_pair(keyHash, 0u));
-    if (it == index_.end() || it->first != keyHash) return nullptr;
+    if (it == index_.end() || it->first != keyHash)
+        return nullptr;
     return section<PackPipeline>(PackPipelines) + it->second;
 }
 

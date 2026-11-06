@@ -40,6 +40,7 @@ enum tegra_se_mode {
     TEGRA_SE_CTR = 2,  // 128-bit big-endian counter in iv, advanced by the blocks done; a tail is done here too
     TEGRA_SE_OFB = 3,
 };
+
 // AES-128/192/256 (keyBytes 16/24/32). ECB/CBC: len a multiple of 16. iv (16 bytes, not ECB) is updated to the next
 // operation's: CBC the last ciphertext block, CTR the next counter, OFB the next keystream input.
 int tegra_se_aes(enum tegra_se_mode mode, bool encrypt, const uint8_t *key, unsigned keyBytes, uint8_t *iv,

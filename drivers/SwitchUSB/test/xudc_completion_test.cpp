@@ -45,10 +45,24 @@ constexpr uint32_t kSerialBytes = 65536;
 
 struct Rng {
     std::mt19937_64 engine;
-    explicit Rng(uint64_t seed) : engine(seed) {}
-    uint64_t below(uint64_t n) { return std::uniform_int_distribution<uint64_t>(0, n - 1)(engine); }
-    uint64_t range(uint64_t lo, uint64_t hi) { return std::uniform_int_distribution<uint64_t>(lo, hi)(engine); }
-    bool chance(double p) { return std::uniform_real_distribution<double>(0.0, 1.0)(engine) < p; }
+
+    explicit Rng(uint64_t seed) : engine(seed)
+    {}
+
+    uint64_t below(uint64_t n)
+    {
+        return std::uniform_int_distribution<uint64_t>(0, n - 1)(engine);
+    }
+
+    uint64_t range(uint64_t lo, uint64_t hi)
+    {
+        return std::uniform_int_distribution<uint64_t>(lo, hi)(engine);
+    }
+
+    bool chance(double p)
+    {
+        return std::uniform_real_distribution<double>(0.0, 1.0)(engine) < p;
+    }
 };
 
 struct Ev {
@@ -58,11 +72,14 @@ struct Ev {
 // The event ring as the driver reads it: in order; one slot stays empty, as the xHCI producer counts it. An event
 // that finds it full is dropped (counted): the hardware's overflow.
 struct EventRing {
-    explicit EventRing(size_t slots) : capacity(slots) {}
+    explicit EventRing(size_t slots) : capacity(slots)
+    {}
+
     size_t capacity;
     std::deque<Ev> fifo;
     size_t deepest = 0;
     uint64_t dropped = 0;
+
     void raise(const Ev &e)
     {
         if (fifo.size() + 1 >= capacity) {
@@ -75,7 +92,11 @@ struct EventRing {
 };
 
 // What the controller does on a TD's last TRB after a short packet ended the TD before it.
-enum class Second { None, ShortCode, SuccessCode };
+enum class Second {
+    None,
+    ShortCode,
+    SuccessCode
+};
 
 struct Behaviour {
     bool perTd;     // the residue the whole TD's (else the event's TRB's)
@@ -87,6 +108,7 @@ template <uint32_t Slots> struct Wire {
         uint32_t length, flags;
         uint64_t request;  // which request's TD this TRB belongs to (the check's bookkeeping, not the hardware's)
     };
+
     Trb trb[Slots] = {};
     uint32_t enqueue = 0;     // the driver's producer position (Hardware::pushData)
     uint32_t dequeue = 0;     // the next TRB the controller reads
@@ -95,7 +117,8 @@ template <uint32_t Slots> struct Wire {
 
     uint32_t push(uint32_t length, uint32_t flags, uint64_t request)
     {
-        if (owned >= Slots) ++overwrites;
+        if (owned >= Slots)
+            ++overwrites;
         const uint32_t index = enqueue;
         trb[index] = {length, flags, request};
         enqueue = (enqueue + 1) % Slots;
@@ -122,12 +145,17 @@ template <uint32_t Slots> struct Controller {
     std::map<uint64_t, uint64_t> delivered;  // bytes the controller moved per request
     uint64_t babble = 0;  // a packet that did not fit its TRB (the layout's whole-packet rule broken)
 
-    static uint32_t at(uint32_t first, uint32_t i) { return (first + i) % Slots; }
+    static uint32_t at(uint32_t first, uint32_t i)
+    {
+        return (first + i) % Slots;
+    }
 
     bool load()
     {
-        if (cur.active) return true;
-        if (skipping || !wire.owned) return false;
+        if (cur.active)
+            return true;
+        if (skipping || !wire.owned)
+            return false;
         cur = {true, wire.dequeue, 0, 0, 0, 0, 0, wire.trb[wire.dequeue].request};
         for (uint32_t i = 0;; ++i) {
             const auto &t = wire.trb[at(cur.first, i)];
@@ -139,6 +167,7 @@ template <uint32_t Slots> struct Controller {
         }
         return true;
     }
+
     void pass(const Progress &p)
     {
         wire.dequeue = at(p.first, p.trbs);
@@ -148,7 +177,8 @@ template <uint32_t Slots> struct Controller {
     // OUT: the host's next packet (0..mps bytes). False: no TD to take it (the controller NAKs; the host retries).
     bool packet(uint32_t bytes)
     {
-        if (!load()) return false;
+        if (!load())
+            return false;
         const auto &t = wire.trb[at(cur.first, cur.j)];
         if (bytes > t.length - cur.fill) {
             ++babble;
@@ -186,11 +216,13 @@ template <uint32_t Slots> struct Controller {
     // The rest of a TD after its short packet: walked, its second event if this controller raises one.
     bool finishSkip()
     {
-        if (!skipping) return false;
+        if (!skipping)
+            return false;
         const uint32_t last = at(skip.first, skip.trbs - 1);
         if (how.second == Second::ShortCode)
             events->raise({dci, last, xudc::COMP_SHORT_PACKET, how.perTd ? skip.total - skip.got : 0});
-        if (how.second == Second::SuccessCode) events->raise({dci, last, xudc::COMP_SUCCESS, 0});
+        if (how.second == Second::SuccessCode)
+            events->raise({dci, last, xudc::COMP_SUCCESS, 0});
         pass(skip);
         skipping = false;
         return true;
@@ -199,7 +231,8 @@ template <uint32_t Slots> struct Controller {
     // IN: the next TD, all of it.
     bool sendIn()
     {
-        if (!load()) return false;
+        if (!load())
+            return false;
         delivered[cur.request] += cur.total;
         events->raise({dci, at(cur.first, cur.trbs - 1), xudc::COMP_SUCCESS, 0});
         pass(cur);
@@ -252,6 +285,7 @@ struct LegacyMatching {};
 template <uint32_t Slots, class Matching = void> struct Endpoint {
     using Tds = xudc::TdRing<Slots, 64>;
     static constexpr uint32_t kMaxPieces = Slots - 2;  // SwitchXUDC.cpp kMaxPieces = kDataRingTrbs - 3
+
     struct Req {
         uint64_t id;
         Layout layout;
@@ -268,9 +302,17 @@ template <uint32_t Slots, class Matching = void> struct Endpoint {
     Tally tally;
     uint8_t *known;  // the driver's OUT residue reading (one per driver, as SwitchXUDC::residue)
 
-    bool out() const { return !hw.in; }
+    bool out() const
+    {
+        return !hw.in;
+    }
 
-    enum class Admit { Queued, Wait, Serial };
+    enum class Admit {
+        Queued,
+        Wait,
+        Serial
+    };
+
     Admit admit(Req &r)
     {
         const bool probe = out() && *known == xudc::kResidueUnknown && r.layout.length >= 2 * kMps;
@@ -295,7 +337,8 @@ template <uint32_t Slots, class Matching = void> struct Endpoint {
             const uint32_t flags =
                 base | (last ? xudc::TRB_IOC : xudc::TRB_CHAIN) | (probe && i == 0 && !last ? xudc::TRB_IOC : 0);
             const uint32_t index = hw.wire.push(pieces[i].length, flags, r.id);
-            if (!i) first = index;
+            if (!i)
+                first = index;
         }
         tds.push({static_cast<uint16_t>(first), static_cast<uint16_t>(n), r.layout.length, probe && n > 1});
         return Admit::Queued;
@@ -314,8 +357,10 @@ template <uint32_t Slots, class Matching = void> struct Endpoint {
     {
         while (!serialBusy && !tds.fenced() && tds.onRing() < queue.size()) {
             const Admit a = admit(queue[tds.onRing()]);
-            if (a == Admit::Queued) continue;
-            if (a == Admit::Wait || tds.onRing()) break;
+            if (a == Admit::Queued)
+                continue;
+            if (a == Admit::Wait || tds.onRing())
+                break;
             ++tally.serial;
             serialBusy = true;
             queue.front().done = 0;
@@ -332,31 +377,43 @@ template <uint32_t Slots, class Matching = void> struct Endpoint {
 
     // The head is done: off the queue, the function told (it queues its next transfer), the ring refilled.
     std::function<void(Endpoint &)> onComplete;
+
     void completeHead(Outcome outcome, uint32_t actual)
     {
         const Req r = queue.front();
         queue.pop_front();
         completed.push_back({r.id, outcome, actual});
-        if (outcome != Outcome::Done) ++tally.failed;
-        if (onComplete) onComplete(*this);
+        if (outcome != Outcome::Done)
+            ++tally.failed;
+        if (onComplete)
+            onComplete(*this);
         kick();
     }
 
     // SwitchXUDC::transferEvent.
     void event(const Ev &e)
     {
-        if constexpr (std::is_same_v<Matching, LegacyMatching>) return legacyEvent(e);
-        const Decision d =
-            tds.decide(e.index, e.code, e.residue, hw.in, *known, [this](uint32_t t) { return hw.wire.trb[t].length; });
+        if constexpr (std::is_same_v<Matching, LegacyMatching>)
+            return legacyEvent(e);
+        const Decision d = tds.decide(e.index, e.code, e.residue, hw.in, *known, [this](uint32_t t) {
+            return hw.wire.trb[t].length;
+        });
         switch (d.verdict) {
-        case Verdict::Head: break;
+        case Verdict::Head:
+            break;
         case Verdict::SecondEvent:
             ++tally.second;
             tds.apply(d);
             return kick();
-        case Verdict::Stale: ++tally.stale; return;
-        case Verdict::Lost: ++tally.lost; return;
-        case Verdict::Unexplained: ++tally.unexplained; return;
+        case Verdict::Stale:
+            ++tally.stale;
+            return;
+        case Verdict::Lost:
+            ++tally.lost;
+            return;
+        case Verdict::Unexplained:
+            ++tally.unexplained;
+            return;
         }
         ++tally.heads;
         if (d.learned != xudc::kResidueUnknown && d.learned != *known && *known != xudc::kResidueBroken)
@@ -366,7 +423,8 @@ template <uint32_t Slots, class Matching = void> struct Endpoint {
             Req &r = queue.front();
             const uint32_t actual = d.outcome == Outcome::Done ? d.actual : 0;
             r.done += actual;
-            if (d.outcome == Outcome::Done && r.done < r.layout.length && actual == serialLength) return serialPiece();
+            if (d.outcome == Outcome::Done && r.done < r.layout.length && actual == serialLength)
+                return serialPiece();
             serialBusy = false;
             return completeHead(d.outcome, r.done);
         }
@@ -374,7 +432,8 @@ template <uint32_t Slots, class Matching = void> struct Endpoint {
             tds.apply(d);
             return kick();
         }
-        if (d.armTail) ++tally.shortEarly;
+        if (d.armTail)
+            ++tally.shortEarly;
         tds.apply(d);
         completeHead(d.outcome, d.outcome == Outcome::Done ? d.actual : 0);
     }
@@ -385,9 +444,11 @@ template <uint32_t Slots, class Matching = void> struct Endpoint {
         for (; k < tds.onRing(); ++k) {
             const auto &t = tds.td(k);
             pos = (e.index + Slots - t.first) % Slots;
-            if (pos < t.trbs) break;
+            if (pos < t.trbs)
+                break;
         }
-        if (k == tds.onRing()) return;  // no request holds it: ignored
+        if (k == tds.onRing())
+            return;  // no request holds it: ignored
         const auto &t = tds.td(k);
         const bool shortPacket = e.code == xudc::COMP_SHORT_PACKET;
         uint32_t actual = 0;
@@ -395,11 +456,13 @@ template <uint32_t Slots, class Matching = void> struct Endpoint {
             actual = e.residue <= t.bytes ? t.bytes - e.residue : 0;
         } else {
             std::vector<uint32_t> lengths;
-            for (uint32_t i = 0; i < t.trbs; ++i) lengths.push_back(hw.wire.trb[Tds::at(t.first, i)].length);
+            for (uint32_t i = 0; i < t.trbs; ++i)
+                lengths.push_back(hw.wire.trb[Tds::at(t.first, i)].length);
             const xudc::OutResult o = xudc::outEvent(*known, lengths.data(), t.trbs, pos, e.residue, shortPacket);
             if (o.learned != xudc::kResidueUnknown && o.learned != *known && *known != xudc::kResidueBroken)
                 *known = o.learned;
-            if (!o.done) return;
+            if (!o.done)
+                return;
             actual = o.failed ? 0 : o.actual;
         }
         for (uint32_t i = 0; i <= k; ++i) {
@@ -419,8 +482,10 @@ template <uint32_t Slots, class Matching = void> struct Endpoint {
         serialBusy = false;
         std::deque<Req> aborted;
         aborted.swap(queue);
-        if (tds.cancel() && !draining && events.fifo.empty()) tds.liftFence();
-        for (const Req &r : aborted) completed.push_back({r.id, Outcome::Error, 0});
+        if (tds.cancel() && !draining && events.fifo.empty())
+            tds.liftFence();
+        for (const Req &r : aborted)
+            completed.push_back({r.id, Outcome::Error, 0});
     }
 };
 
@@ -467,10 +532,13 @@ template <uint32_t Slots, class Matching = void> struct Session {
         outEp.known = inEp.known = &known;
         // AppleUSBDeviceMux: a new read for each one done, a new write while it has data.
         outEp.onComplete = [this](Ep &ep) {
-            if (cancelChance && rng.chance(cancelChance)) return cancel(rng.chance(0.5) ? inEp : ep);
+            if (cancelChance && rng.chance(cancelChance))
+                return cancel(rng.chance(0.5) ? inEp : ep);
             ep.queue.push_back({ep.nextId++, mbufs(rng, readBytes), 0});
         };
-        inEp.onComplete = [this](Ep &ep) { ep.queue.push_back({ep.nextId++, write(), 0}); };
+        inEp.onComplete = [this](Ep &ep) {
+            ep.queue.push_back({ep.nextId++, write(), 0});
+        };
         for (uint32_t i = 0; i < depth; ++i) {
             outEp.enqueue(mbufs(rng, readBytes));
             inEp.enqueue(write());
@@ -524,19 +592,24 @@ template <uint32_t Slots, class Matching = void> struct Session {
     {
         switch (rng.below(3)) {
         case 0:
-            if (packets.empty()) return false;
-            if (!outEp.hw.packet(packets.front())) return false;
+            if (packets.empty())
+                return false;
+            if (!outEp.hw.packet(packets.front()))
+                return false;
             packets.pop_front();
             return true;
-        case 1: return inEp.hw.sendIn();
-        default: return outEp.hw.finishSkip() || inEp.hw.finishSkip();
+        case 1:
+            return inEp.hw.sendIn();
+        default:
+            return outEp.hw.finishSkip() || inEp.hw.finishSkip();
         }
     }
 
     size_t pendingFor(uint32_t dci) const
     {
-        return static_cast<size_t>(
-            std::count_if(events.fifo.begin(), events.fifo.end(), [dci](const Ev &e) { return e.dci == dci; }));
+        return static_cast<size_t>(std::count_if(events.fifo.begin(), events.fifo.end(), [dci](const Ev &e) {
+            return e.dci == dci;
+        }));
     }
 
     // SwitchXUDC::serviceEvents: until the event ring is empty, the hardware going on meanwhile; then the fences lift.
@@ -548,25 +621,34 @@ template <uint32_t Slots, class Matching = void> struct Session {
             const Ev e = events.fifo.front();
             events.fifo.pop_front();
             (e.dci == 2 ? outEp : inEp).event(e);
-            while (rng.chance(concurrency)) hardwareStep();
+            while (rng.chance(concurrency))
+                hardwareStep();
         }
         draining = false;
         const bool liftOut = outEp.tds.fenced(), liftIn = inEp.tds.fenced();
-        if (liftOut) outEp.tds.liftFence();
-        if (liftIn) inEp.tds.liftFence();
-        if (liftOut) outEp.kick();
-        if (liftIn) inEp.kick();
+        if (liftOut)
+            outEp.tds.liftFence();
+        if (liftIn)
+            inEp.tds.liftFence();
+        if (liftOut)
+            outEp.kick();
+        if (liftIn)
+            inEp.kick();
     }
 
     // Runs the session for `count` host messages, then until everything sent has been read.
     void run(uint64_t count, double concurrency, uint32_t burst)
     {
         while (messages < count || !packets.empty() || outEp.hw.skipping || inEp.hw.skipping || !events.fifo.empty()) {
-            if (messages < count && packets.size() < 64) message();
+            if (messages < count && packets.size() < 64)
+                message();
             const uint32_t steps = static_cast<uint32_t>(rng.range(1, burst));
-            for (uint32_t i = 0; i < steps; ++i) hardwareStep();
-            if (rng.chance(0.5) || messages >= count) drain(concurrency);
-            if (outEp.tally.lost || inEp.tally.lost) return;
+            for (uint32_t i = 0; i < steps; ++i)
+                hardwareStep();
+            if (rng.chance(0.5) || messages >= count)
+                drain(concurrency);
+            if (outEp.tally.lost || inEp.tally.lost)
+                return;
         }
     }
 };
@@ -579,14 +661,16 @@ template <uint32_t Slots> void checkSession(Session<Slots> &s, bool aborts)
         EXPECT_EQ(ep->tally.unexplained, 0u) << "every event for a request or a cancel";
         EXPECT_EQ(ep->hw.wire.overwrites, 0u) << "never a TRB the controller had not passed";
         EXPECT_EQ(ep->hw.babble, 0u) << "every packet fit its TRB";
-        if (!aborts) EXPECT_EQ(ep->tally.failed, 0u) << "no request failed";
+        if (!aborts)
+            EXPECT_EQ(ep->tally.failed, 0u) << "no request failed";
         checkCompletions(*ep, aborts, ep->hw.in ? "IN" : "OUT");
         EXPECT_LE(s.perEndpointDeepest, Slots - 1) << "events owed per endpoint fit the event ring's sizing";
     }
     EXPECT_EQ(s.events.dropped, 0u) << "the event ring never filled";
     if (!aborts) {  // every byte the Mac sent reached a completed read, in order
         uint64_t got = 0;
-        for (const Completion &c : s.outEp.completed) got += c.actual;
+        for (const Completion &c : s.outEp.completed)
+            got += c.actual;
         EXPECT_EQ(got, s.hostBytes);
     }
 }
@@ -610,7 +694,11 @@ using Ring15 = xudc::TdRing<15, 8>;
 // A TD's TRB lengths for decide(): ring index -> length.
 struct Lengths {
     std::map<uint32_t, uint32_t> at;
-    uint32_t operator()(uint32_t index) const { return at.at(index); }
+
+    uint32_t operator()(uint32_t index) const
+    {
+        return at.at(index);
+    }
 };
 
 template <class R> void put(R &ring, Lengths &lengths, uint32_t first, std::vector<uint32_t> trbs, bool probe = false)
@@ -857,6 +945,7 @@ namespace {
 struct LegacyResult {
     uint64_t failed, wrong, overwrites, dropped;
 };
+
 LegacyResult legacy(Behaviour how, size_t eventCapacity, double concurrency, uint32_t burst)
 {
     Session<255, LegacyMatching> s(11, how, eventCapacity, 16384, 64);
@@ -864,7 +953,8 @@ LegacyResult legacy(Behaviour how, size_t eventCapacity, double concurrency, uin
     uint64_t wrong = 0;
     for (const Completion &c : s.outEp.completed) {
         const auto it = s.outEp.hw.delivered.find(c.request);
-        if (c.outcome == Outcome::Done && c.actual != (it == s.outEp.hw.delivered.end() ? 0 : it->second)) ++wrong;
+        if (c.outcome == Outcome::Done && c.actual != (it == s.outEp.hw.delivered.end() ? 0 : it->second))
+            ++wrong;
     }
     return {s.outEp.tally.failed, wrong, s.outEp.hw.wire.overwrites, s.events.dropped};
 }

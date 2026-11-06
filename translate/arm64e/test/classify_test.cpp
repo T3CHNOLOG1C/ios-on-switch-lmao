@@ -62,7 +62,8 @@ TEST(Classify, KnownEncodings)
         uint32_t out = 0;
         bool rewrote = a64x_rewrite1(c.word, &out);
         EXPECT_EQ(c.rewrites, rewrote) << c.what;
-        if (c.rewrites && rewrote) EXPECT_EQ(c.out, out) << c.what << std::hex << " got " << out;
+        if (c.rewrites && rewrote)
+            EXPECT_EQ(c.out, out) << c.what << std::hex << " got " << out;
     }
 }
 
@@ -79,7 +80,8 @@ TEST(Classify, EveryRewriteIsArmv80)
 {
     for (const Case &c : kCases) {
         uint32_t out;
-        if (a64x_rewrite1(c.word, &out)) EXPECT_EQ(A64X_OK, a64x_classify(out)) << c.what;
+        if (a64x_rewrite1(c.word, &out))
+            EXPECT_EQ(A64X_OK, a64x_classify(out)) << c.what;
     }
 }
 
@@ -127,7 +129,8 @@ TEST(Stubs, LseStubEndsWithTheReturnBranch)
     ASSERT_GT(n, 0);
     ASSERT_LE(n, A64X_STUB_MAX);
     EXPECT_EQ(a64x_branch(stub + 4ull * (n - 1), site + 4), st[n - 1]);
-    for (int i = 0; i < n; i++) EXPECT_FALSE(a64x_class_is_baseline(a64x_classify(st[i]))) << i;
+    for (int i = 0; i < n; i++)
+        EXPECT_FALSE(a64x_class_is_baseline(a64x_classify(st[i]))) << i;
     EXPECT_EQ(-1, a64x_stub(0x8B020020, site, stub, 0, st, A64X_STUB_MAX));  // nothing to replace
 }
 

@@ -16,9 +16,11 @@ enum NativeAdrenoIrqFlag {
     NativeAdrenoIrqUnknown = 1u << 8,  /* status outside the decoded mask */
     NativeAdrenoIrqFatal = 1u << 9     /* any class that cannot be ignored */
 };
+
 struct NativeAdrenoIrqResult {
     uint32_t flags, status, unknown, cp_status, protect_status;
 };
+
 /* A7XX RBBM/CP interrupt decode and acknowledgement, not an XNU interrupt
  * source. IO read/write take dword register indices. The hardware interrupt
  * must already be masked at the controller by the caller, and the caller must
@@ -47,7 +49,15 @@ public:
     IOReturn handle(NativeAdrenoIrqResult *);
     static uint32_t mask();
     static uint32_t cpErrorMask();
-    bool poisoned() const { return poisoned_; }
-    uint32_t enabled() const { return enabled_; }
+
+    bool poisoned() const
+    {
+        return poisoned_;
+    }
+
+    uint32_t enabled() const
+    {
+        return enabled_;
+    }
 };
 #endif

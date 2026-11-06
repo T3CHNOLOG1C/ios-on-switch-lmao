@@ -29,6 +29,7 @@ struct ctx {
     uint64_t out_nzcv;  /* 520 */
     uint64_t out_sp;    /* 528 */
 };
+
 #define OFF_HOSTSP 0
 #define OFF_INNZCV 8
 #define OFF_INSP   16
@@ -67,7 +68,8 @@ static void emit_frame(uint32_t *c)
         c[k++] = 0xF9400000u | ((uint32_t)((OFF_INX + 8 * i) / 8) << 10) | (0u << 5) | (uint32_t)i;
     }
     c[k++] = 0xF9400000u | ((uint32_t)(OFF_INX / 8) << 10) | 0; /* ldr x0, [x0, #24] */
-    while (k < TEST_SLOT) c[k++] = 0xD503201F;
+    while (k < TEST_SLOT)
+        c[k++] = 0xD503201F;
     k = TEST_SLOT + 1;
     c[k++] = 0xA9205FE0 | 0; /* placeholder, rewritten below */
     k = TEST_SLOT + 1;
@@ -102,6 +104,7 @@ static void emit_frame(uint32_t *c)
 
 static sigjmp_buf jb;
 static volatile int faulted;
+
 static void on_fault(int sig, siginfo_t *si, void *uc)
 {
     (void)si;
@@ -114,7 +117,8 @@ static int run(uint32_t slot_word, const uint32_t *stub, int nstub)
 {
     pthread_jit_write_protect_np(0);
     jit[TEST_SLOT] = slot_word;
-    for (int i = 0; i < nstub; i++) jit[STUB_AT + i] = stub[i];
+    for (int i = 0; i < nstub; i++)
+        jit[STUB_AT + i] = stub[i];
     pthread_jit_write_protect_np(1);
     sys_icache_invalidate(jit, jit_size);
     faulted = 0;
@@ -126,6 +130,7 @@ static int run(uint32_t slot_word, const uint32_t *stub, int nstub)
 }
 
 static uint64_t rs64;
+
 static uint64_t rnd(void)
 {
     rs64 ^= rs64 << 13;
@@ -152,8 +157,12 @@ static bool decode(uint32_t w, struct operands *o)
     o->size = (int)(w >> 30);
     switch (c) {
     case A64X_LSE_LDOP:
-    case A64X_LSE_SWP: o->kind = 0; return true;
-    case A64X_LSE_CAS: o->kind = 1; return true;
+    case A64X_LSE_SWP:
+        o->kind = 0;
+        return true;
+    case A64X_LSE_CAS:
+        o->kind = 1;
+        return true;
     case A64X_LSE_CASP:
         o->kind = 2;
         o->size = (w >> 30) & 1 ? 3 : 2;
@@ -162,7 +171,8 @@ static bool decode(uint32_t w, struct operands *o)
         o->kind = 3;
         o->size = 3;
         return true;
-    default: return false;
+    default:
+        return false;
     }
 }
 
@@ -171,14 +181,17 @@ static uint64_t stub_words_total, stub_words_n;
 
 static void setup_state(uint32_t w, const struct operands *o, struct ctx *s, uint8_t *mem_init)
 {
-    for (int i = 0; i < 31; i++) s->in_x[i] = rnd();
+    for (int i = 0; i < 31; i++)
+        s->in_x[i] = rnd();
     s->in_x[18] = 0; /* x18 is reserved on Darwin */
     s->in_nzcv = (rnd() & 0xF) << 28;
-    for (int i = 0; i < 256; i++) mem_init[i] = (uint8_t)rnd();
+    for (int i = 0; i < 256; i++)
+        mem_init[i] = (uint8_t)rnd();
     uint64_t target = (uint64_t)(memp + 64), addr = target;
     if (o->kind == 3) {
         int32_t imm = (int32_t)(((w >> 22) & 1) << 9 | ((w >> 12) & 0x1FF));
-        if (imm & 0x200) imm -= 0x400;
+        if (imm & 0x200)
+            imm -= 0x400;
         addr = target - (int64_t)imm * 8; /* Xn + offset == target */
     }
     uint64_t mv[2];
@@ -227,9 +240,12 @@ static void test_word(uint32_t w, int trials)
             uint32_t dead = 0;
             if (mode) {
                 for (int r = 0; r < 29; r++) {
-                    if (r == 18 || r == (int)o.rs || r == (int)o.rt || r == (int)o.rn) continue;
-                    if (o.kind == 2 && (r == (int)o.rs + 1 || r == (int)o.rt + 1)) continue;
-                    if (rnd() & 1) dead |= 1u << r;
+                    if (r == 18 || r == (int)o.rs || r == (int)o.rt || r == (int)o.rn)
+                        continue;
+                    if (o.kind == 2 && (r == (int)o.rs + 1 || r == (int)o.rt + 1))
+                        continue;
+                    if (rnd() & 1)
+                        dead |= 1u << r;
                 }
             }
             struct ctx s0;
@@ -285,7 +301,8 @@ static void test_word(uint32_t w, int trials)
             bool bad = r0 != r1;
             const char *why = bad ? "fault" : "";
             for (int i = 0; i < 31 && !bad; i++) {
-                if (dead & (1u << i)) continue;
+                if (dead & (1u << i))
+                    continue;
                 if (o0.out_x[i] != o1.out_x[i]) {
                     bad = true;
                     why = "reg";
@@ -317,9 +334,11 @@ static void test_word(uint32_t w, int trials)
                         if (o0.out_x[i] != o1.out_x[i] && !(dead & (1u << i)))
                             printf("   x%d orig=%016llx xl=%016llx in=%016llx\n", i, o0.out_x[i], o1.out_x[i],
                                    s0.in_x[i]);
-                    if (o0.out_nzcv != o1.out_nzcv) printf("   nzcv %llx %llx\n", o0.out_nzcv, o1.out_nzcv);
+                    if (o0.out_nzcv != o1.out_nzcv)
+                        printf("   nzcv %llx %llx\n", o0.out_nzcv, o1.out_nzcv);
                     printf("   stub:");
-                    for (int i = 0; i < n; i++) printf(" %08x", stub[i]);
+                    for (int i = 0; i < n; i++)
+                        printf(" %08x", stub[i]);
                     printf("\n");
                 }
                 return;
@@ -377,6 +396,7 @@ static void gen_words(uint32_t *out, int *n)
 
 static volatile uint64_t shared_counter __attribute__((aligned(64)));
 static uint32_t *mt_code;
+
 static void *mt_worker(void *arg)
 {
     void (*fn)(volatile uint64_t *, uint64_t) = (void (*)(volatile uint64_t *, uint64_t))arg;
@@ -401,14 +421,17 @@ static int mt_test(uint32_t lse_word, const char *name)
     uint32_t stub[A64X_STUB_MAX];
     uint64_t site_pc = (uint64_t)&c[site], stub_pc = (uint64_t)&c[256];
     int n = a64x_stub(lse_word, site_pc, stub_pc, 0, stub, A64X_STUB_MAX);
-    for (int i = 0; i < n; i++) c[256 + i] = stub[i];
+    for (int i = 0; i < n; i++)
+        c[256 + i] = stub[i];
     c[site] = a64x_branch(site_pc, stub_pc);
     pthread_jit_write_protect_np(1);
     sys_icache_invalidate(c, 4096);
     shared_counter = 0;
     pthread_t th[4];
-    for (int i = 0; i < 4; i++) pthread_create(&th[i], NULL, mt_worker, (void *)c);
-    for (int i = 0; i < 4; i++) pthread_join(th[i], NULL);
+    for (int i = 0; i < 4; i++)
+        pthread_create(&th[i], NULL, mt_worker, (void *)c);
+    for (int i = 0; i < 4; i++)
+        pthread_join(th[i], NULL);
     printf("MT %-28s stub %2d words: counter %llu (expect 4000000) %s\n", name, n, shared_counter,
            shared_counter == 4000000 ? "ok" : "WRONG");
     return shared_counter == 4000000 ? 0 : 1;
@@ -420,7 +443,8 @@ static void random_words(uint32_t *out, int n)
         uint32_t rs = (uint32_t)rnd() % 31, rt = (uint32_t)rnd() % 32, rn = (uint32_t)rnd() % 32,
                  size = (uint32_t)rnd() & 3;
         uint32_t ar = (uint32_t)rnd() & 3, pick = (uint32_t)rnd() % 11;
-        if (rs == 18 || rt == 18 || rn == 18) continue;
+        if (rs == 18 || rt == 18 || rn == 18)
+            continue;
         if (pick < 9) {
             uint32_t o3 = pick == 8, opc = pick == 8 ? 0 : pick;
             out[k++] = (size << 30) | 0x38200000u | ((ar >> 1) << 23) | ((ar & 1) << 22) | (rs << 16) | (o3 << 15) |
@@ -445,7 +469,8 @@ int lse_semantics_main(int argc, char **argv)
     }
     memp = stack_area + MEM_OFF;
     pthread_jit_write_protect_np(0);
-    for (size_t i = 0; i < jit_size / 4; i++) jit[i] = 0xD4200000; /* brk #0 */
+    for (size_t i = 0; i < jit_size / 4; i++)
+        jit[i] = 0xD4200000; /* brk #0 */
     emit_frame(jit);
     pthread_jit_write_protect_np(1);
     stack_t ss = {.ss_sp = malloc(1 << 16), .ss_size = 1 << 16, .ss_flags = 0};
@@ -463,14 +488,17 @@ int lse_semantics_main(int argc, char **argv)
         static uint32_t words[20000];
         int n;
         gen_words(words, &n);
-        for (int i = 0; i < n; i++) test_word(words[i], trials);
+        for (int i = 0; i < n; i++)
+            test_word(words[i], trials);
     } else if (argc > 2 && !strcmp(argv[1], "--random")) {
         static uint32_t words[20000];
         int n = atoi(argv[2]);
-        if (n > 20000) n = 20000;
+        if (n > 20000)
+            n = 20000;
         trials = argc > 3 ? atoi(argv[3]) : 4;
         random_words(words, n);
-        for (int i = 0; i < n; i++) test_word(words[i], trials);
+        for (int i = 0; i < n; i++)
+            test_word(words[i], trials);
     } else if (argc > 1) {
         FILE *f = fopen(argv[1], "r");
         char line[256];

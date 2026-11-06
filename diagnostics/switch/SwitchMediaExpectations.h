@@ -2,22 +2,26 @@
 #ifndef SWITCH_MEDIA_EXPECTATIONS_H
 #define SWITCH_MEDIA_EXPECTATIONS_H
 #include <stdint.h>
+
 struct switch_expected_part {
     const char *path;
     uint64_t size_bytes;
 };
+
 struct switch_expected_volume {
     const char *name;
     uint64_t size_bytes;
     uint32_t part_count;
     const struct switch_expected_part *parts;
 };
+
 struct switch_expected_range {
     uint32_t volume_index;
     uint64_t offset;
     uint32_t length;
     uint8_t sha256[32];
 };
+
 #define SWITCH_STORAGE_FIXTURE_PATH "IOS/VERIFY.BIN"
 #define SWITCH_STORAGE_FIXTURE_SIZE 131777u
 static const uint8_t switch_storage_fixture_sha256[32] = {

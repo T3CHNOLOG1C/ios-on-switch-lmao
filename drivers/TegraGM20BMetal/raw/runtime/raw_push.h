@@ -8,7 +8,13 @@
 
 namespace raw {
 
-enum : uint32_t { SUBC_3D = 0, SUBC_COMPUTE = 1, SUBC_M2MF = 2, SUBC_2D = 3, SUBC_COPY = 4 };
+enum : uint32_t {
+    SUBC_3D = 0,
+    SUBC_COMPUTE = 1,
+    SUBC_M2MF = 2,
+    SUBC_2D = 3,
+    SUBC_COPY = 4
+};
 
 struct Push {
     uint32_t *at = nullptr, *end = nullptr;
@@ -17,6 +23,7 @@ struct Push {
     {
         return op << 29 | count << 16 | subc << 13 | mthd >> 2;
     }
+
     // one method, one value: immediate when it fits 13 bits
     void m(uint32_t mthd, uint32_t v, uint32_t subc = SUBC_3D)
     {
@@ -27,18 +34,22 @@ struct Push {
             *at++ = v;
         }
     }
+
     // consecutive methods from mthd
     void inc(uint32_t mthd, std::initializer_list<uint32_t> v, uint32_t subc = SUBC_3D)
     {
         *at++ = hdr(1, subc, mthd, uint32_t(v.size()));
-        for (uint32_t x : v) *at++ = x;
+        for (uint32_t x : v)
+            *at++ = x;
     }
+
     void incArray(uint32_t mthd, const uint32_t *v, uint32_t n, uint32_t subc = SUBC_3D)
     {
         *at++ = hdr(1, subc, mthd, n);
         memcpy(at, v, n * 4);
         at += n;
     }
+
     // n values to one method (LOAD_CONSTANT_BUFFER)
     void nonInc(uint32_t mthd, const uint32_t *v, uint32_t n, uint32_t subc = SUBC_3D)
     {
@@ -46,12 +57,17 @@ struct Push {
         memcpy(at, v, n * 4);
         at += n;
     }
+
     void raw(const uint32_t *v, uint32_t n)
     {
         memcpy(at, v, n * 4);
         at += n;
     }
-    size_t room() const { return size_t(end - at); }
+
+    size_t room() const
+    {
+        return size_t(end - at);
+    }
 };
 
 }  // namespace raw

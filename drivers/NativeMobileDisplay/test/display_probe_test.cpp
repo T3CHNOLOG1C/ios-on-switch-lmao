@@ -28,6 +28,7 @@ __attribute__((format(printf, 1, 2))) std::string message(const char *format, ..
     va_end(ap);
     return text;
 }
+
 // Every CHECK is a GoogleTest expectation with a printf-formatted message.
 #define CHECK(cond, ...) EXPECT_TRUE(cond) << message(__VA_ARGS__)
 
@@ -69,23 +70,29 @@ struct Model {
             memory[kOtherPa + at] = 0xff00ff00u ^ (uint32_t)at;
         }
     }
+
     uint32_t read(uint64_t address) const
     {
         uint64_t pa = address;
         if (translated) {
             pa = domain.translate(address);
-            if (pa == UINT64_MAX) return 0;  // SMMU fault: the read returns nothing
+            if (pa == UINT64_MAX)
+                return 0;  // SMMU fault: the read returns nothing
         }
-        if (pa < kDram) return 0;  // not DRAM: no data
+        if (pa < kDram)
+            return 0;  // not DRAM: no data
         auto it = memory.find(pa);
         return it == memory.end() ? 0 : it->second;
     }
+
     uint32_t frameCrc() const
     {
         uint32_t h = 2166136261u;
-        for (uint64_t at = 0; at < kFrameBytes; at += 4) h = (h ^ read(active + at)) * 16777619u;
+        for (uint64_t at = 0; at < kFrameBytes; at += 4)
+            h = (h ^ read(active + at)) * 16777619u;
         return h;
     }
+
     // A frame boundary, then the frame-end interrupt: the CRC of the frame that just ended.
     bool boundary()
     {
@@ -109,6 +116,7 @@ struct Model {
         previous = crc;
         return fault == kUnderflow && translated && active == kSlot;
     }
+
     // NativeLegacyDisplay's side.
     void tweakPixel()
     {
@@ -116,31 +124,45 @@ struct Model {
         memory[kBufferPa] = savedPixel ^ 0x00010101u;
         pixelChanged = true;
     }
+
     void restorePixel()
     {
         memory[kBufferPa] = savedPixel;
         pixelChanged = false;
     }
+
     bool attach()
     {
         ++attaches;
-        if (fault == kAttachFails) return false;
+        if (fault == kAttachFails)
+            return false;
         domain.init(tables.data(), 0xe6000000ull, 16);
-        if (fault != kNoIdentity) domain.identity(kBufferPa, kFrameBytes, false);
+        if (fault != kNoIdentity)
+            domain.identity(kBufferPa, kFrameBytes, false);
         domain.identity(kOtherPa, kFrameBytes, false);
         uint64_t pages[3];
-        for (unsigned i = 0; i < 3; ++i) pages[i] = (fault == kWrongSlot ? kOtherPa : kBufferPa) + i * 4096ull;
+        for (unsigned i = 0; i < 3; ++i)
+            pages[i] = (fault == kWrongSlot ? kOtherPa : kBufferPa) + i * 4096ull;
         domain.map(kSlot, pages, 3, false);
         translated = fault != kNoTranslation;
         return true;
     }
+
     void scan(bool iova)
     {
         assembly = iova ? kSlot : kBufferPa;
         request = true;
     }
-    void detach() { translated = false; }
-    void crcOff() { crcOn = false; }
+
+    void detach()
+    {
+        translated = false;
+    }
+
+    void crcOff()
+    {
+        crcOn = false;
+    }
 };
 
 DisplaySmmuProbe run(Model &m)
@@ -150,7 +172,8 @@ DisplaySmmuProbe run(Model &m)
     probe.start();
     for (unsigned frame = 0; frame < 60 && probe.active(); ++frame) {
         const bool underflow = m.boundary();
-        if (probe.perform(probe.frameEnd(m.latched, m.request, underflow), m)) break;
+        if (probe.perform(probe.frameEnd(m.latched, m.request, underflow), m))
+            break;
     }
     // what the driver leaves behind: the last request taken at the next boundary
     m.boundary();
@@ -196,34 +219,42 @@ TEST(DisplaySmmuProbe, WorkingUnitPasses)
 {
     expect(kNone, DisplaySmmuProbe::kIdle, "working unit");
 }
+
 TEST(DisplaySmmuProbe, DeadCrcUnit)
 {
     expect(kDeadCrc, DisplaySmmuProbe::kCrc, "CRC unit reads 0");
 }
+
 TEST(DisplaySmmuProbe, StuckCrcUnit)
 {
     expect(kStuckCrc, DisplaySmmuProbe::kPixel, "CRC unit stuck");
 }
+
 TEST(DisplaySmmuProbe, AttachRefused)
 {
     expect(kAttachFails, DisplaySmmuProbe::kAttached, "attach refused");
 }
+
 TEST(DisplaySmmuProbe, ScannedBufferNotIdentityMapped)
 {
     expect(kNoIdentity, DisplaySmmuProbe::kAttached, "scanned buffer not identity-mapped");
 }
+
 TEST(DisplaySmmuProbe, SwgroupNotTranslated)
 {
     expect(kNoTranslation, DisplaySmmuProbe::kIova, "swgroup not translated");
 }
+
 TEST(DisplaySmmuProbe, SlotMappedToOtherPages)
 {
     expect(kWrongSlot, DisplaySmmuProbe::kIova, "slot mapped to other pages");
 }
+
 TEST(DisplaySmmuProbe, UnderflowThroughTheSmmu)
 {
     expect(kUnderflow, DisplaySmmuProbe::kIova, "underflow through the SMMU");
 }
+
 TEST(DisplaySmmuProbe, StartAddressNeverTaken)
 {
     expect(kNoLatch, DisplaySmmuProbe::kIova, "start address never taken");

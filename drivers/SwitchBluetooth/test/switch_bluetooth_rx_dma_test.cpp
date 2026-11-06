@@ -69,7 +69,12 @@ Bytes cat(Bytes a, const Bytes &b)
     return a;
 }
 
-enum Kind { kHid, kAclBurst, kNocp, kAdv };
+enum Kind {
+    kHid,
+    kAclBurst,
+    kNocp,
+    kAdv
+};
 
 struct Packet {
     double due;
@@ -82,7 +87,9 @@ struct Packet {
 std::vector<Packet> peak(double seconds = kSeconds, uint64_t seed = 1)
 {
     std::mt19937_64 rng(seed);
-    auto uniform = [&](double a, double b) { return std::uniform_real_distribution<double>(a, b)(rng); };
+    auto uniform = [&](double a, double b) {
+        return std::uniform_real_distribution<double>(a, b)(rng);
+    };
     std::vector<Packet> packets;
     for (const auto &[handle, phase] : {std::pair<uint16_t, double>{0x0040, 0.0}, {0x0041, 4100.0}}) {
         // two Joy-Cons, 120 Hz, a 0x30 report each
@@ -99,7 +106,9 @@ std::vector<Packet> peak(double seconds = kSeconds, uint64_t seed = 1)
         t += gap(rng);
         packets.push_back({t, kAdv, event(0x3E, cat({2, 1}, zeros(38)))});
     }
-    std::stable_sort(packets.begin(), packets.end(), [](const Packet &a, const Packet &b) { return a.due < b.due; });
+    std::stable_sort(packets.begin(), packets.end(), [](const Packet &a, const Packet &b) {
+        return a.due < b.due;
+    });
     return packets;
 }
 
@@ -165,7 +174,8 @@ DmaRun simulateDma(const std::vector<Arrival> &arrivals)
             t += kDmaLatency;
             trans.push_back(fifo.front());
             fifo.pop_front();
-            if (trans.size() == length) eoc = t;
+            if (trans.size() == length)
+                eoc = t;
         }
         nextFree = t;
     };
@@ -184,13 +194,18 @@ DmaRun simulateDma(const std::vector<Arrival> &arrivals)
     for (;;) {
         const double tArr = i < n ? arrivals[i].at : kInf;
         double tIrq = kInf;
-        if (eoc) tIrq = std::min(tIrq, *eoc);
-        if (eord) tIrq = std::min(tIrq, *eord);
-        if (dataSince && !eord) tIrq = std::min(tIrq, lastRx + kTimeout);
+        if (eoc)
+            tIrq = std::min(tIrq, *eoc);
+        if (eord)
+            tIrq = std::min(tIrq, *eord);
+        if (dataSince && !eord)
+            tIrq = std::min(tIrq, lastRx + kTimeout);
         const double start = std::max(tIrq, cpuFree);
-        if (tArr == kInf && tIrq == kInf) break;
+        if (tArr == kInf && tIrq == kInf)
+            break;
         if (tArr <= start) {
-            if (dataSince && !eord && tArr >= lastRx + kTimeout) eord = lastRx + kTimeout;
+            if (dataSince && !eord && tArr >= lastRx + kTimeout)
+                eord = lastRx + kTimeout;
             fifo.push_back(i);
             run.fifoPeak = std::max(run.fifoPeak, fifo.size());
             lastRx = tArr;
@@ -199,7 +214,8 @@ DmaRun simulateDma(const std::vector<Arrival> &arrivals)
             ++i;
             continue;
         }
-        if (dataSince && !eord && lastRx + kTimeout <= start) eord = lastRx + kTimeout;
+        if (dataSince && !eord && lastRx + kTimeout <= start)
+            eord = lastRx + kTimeout;
         const double now = start + kEntry;
         double cost;
         if (eoc && (!eord || *eoc <= *eord)) {  // the channel's end of count
@@ -230,7 +246,8 @@ std::vector<double> latencies(const std::vector<Arrival> &arrivals, const std::v
 {
     std::vector<double> out;
     for (size_t k = 0; k < arrivals.size(); ++k) {
-        if (!arrivals[k].last || spans[arrivals[k].packet].kind != kind) continue;
+        if (!arrivals[k].last || spans[arrivals[k].packet].kind != kind)
+            continue;
         REQUIRE(takenAt[k].has_value());
         out.push_back(*takenAt[k] - arrivals[k].at);
     }
@@ -255,7 +272,8 @@ PioRun pio(const std::vector<Span> &spans)
     const switch_bt_pio::Result r = switch_bt_pio::run(packets, 16);
     PioRun out{r.interrupts, 0.0, {}};
     out.cpu = r.interrupts * (kEntry + kExit + 2 * kRead) + total * 0.35;  // IIR twice per interrupt; LSR+RBR per byte
-    for (const switch_bt_pio::PacketResult &p : r.perPacket) out.waits.push_back(p.wait);
+    for (const switch_bt_pio::PacketResult &p : r.perPacket)
+        out.waits.push_back(p.wait);
     return out;
 }
 
@@ -277,7 +295,8 @@ protected:
         const std::vector<double> hidDma = latencies(*arrivals, *spans, dma->takenAt, kHid);
         const std::vector<double> hidPio = pioHid();
         unsigned total = 0;
-        for (const Span &s : *spans) total += s.length;
+        for (const Span &s : *spans)
+            total += s.length;
         const double busy = total * kByte / (kSeconds * 1e6);
         std::printf(
             "Bluetooth RX at peak (%zu packets/s, line %.0f%% busy): PIO %u interrupts/s, %.2f%% of CPU0; DMA %u "
@@ -288,6 +307,7 @@ protected:
             percentile(hidPio, 0.99), *std::max_element(hidPio.begin(), hidPio.end()), percentile(hidDma, 0.5),
             percentile(hidDma, 0.99), *std::max_element(hidDma.begin(), hidDma.end()));
     }
+
     static void TearDownTestSuite()
     {
         delete arrivals;
@@ -295,12 +315,14 @@ protected:
         delete dma;
         delete pioRun;
     }
+
     // The PIO last-byte waits of the HID reports (every one is taken: NoWaitBeyondTheRxTimeout's model property).
     static std::vector<double> pioHid()
     {
         std::vector<double> out;
         for (size_t i = 0; i < spans->size(); ++i) {
-            if ((*spans)[i].kind != kHid) continue;
+            if ((*spans)[i].kind != kHid)
+                continue;
             REQUIRE(pioRun->waits[i].has_value());
             out.push_back(*pioRun->waits[i]);
         }
@@ -312,6 +334,7 @@ protected:
     static DmaRun *dma;
     static PioRun *pioRun;
 };
+
 std::vector<Arrival> *PeakLoad::arrivals;
 std::vector<Span> *PeakLoad::spans;
 DmaRun *PeakLoad::dma;
@@ -320,8 +343,10 @@ PioRun *PeakLoad::pioRun;
 TEST_F(PeakLoad, EveryByteOnceInOrder)
 {
     ASSERT_EQ(dma->order.size(), arrivals->size());
-    for (size_t k = 0; k < dma->order.size(); ++k) ASSERT_EQ(dma->order[k], k);
-    for (const std::optional<double> &t : dma->takenAt) ASSERT_TRUE(t.has_value());
+    for (size_t k = 0; k < dma->order.size(); ++k)
+        ASSERT_EQ(dma->order[k], k);
+    for (const std::optional<double> &t : dma->takenAt)
+        ASSERT_TRUE(t.has_value());
 }
 
 TEST_F(PeakLoad, FifoNeverNeedsRts)
@@ -353,11 +378,16 @@ TEST_F(PeakLoad, NoHidReportWaitsLonger)
 // --- Transfers -----------------------------------------------------------------------------------------------------
 class Transfers : public testing::Test {
 protected:
-    void SetUp() override { bt_frame_reset(); }
+    void SetUp() override
+    {
+        bt_frame_reset();
+    }
+
     static std::vector<int> feed(const Bytes &data)
     {
         std::vector<int> out;
-        for (uint8_t b : data) out.push_back(bt_frame_byte(b));
+        for (uint8_t b : data)
+            out.push_back(bt_frame_byte(b));
         return out;
     }
 };
@@ -399,7 +429,8 @@ TEST_F(Transfers, PacketEnds)
     std::vector<size_t> ends;
     const std::vector<int> done = feed(stream);
     for (size_t i = 0; i < done.size(); ++i)
-        if (done[i]) ends.push_back(i);
+        if (done[i])
+            ends.push_back(i);
     EXPECT_EQ(ends, (std::vector<size_t>{6, 14, 17, 23}));
 }
 

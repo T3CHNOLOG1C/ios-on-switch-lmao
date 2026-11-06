@@ -10,16 +10,20 @@ extern "C" {
 #define AIR_CONSTANT_MAX_RANGES   32u
 #define AIR_CONSTANT_MAX_READS    4096u
 #define AIR_CONSTANT_MAX_BYTES    16384u
+
 struct air_constant_read {
     uint32_t binding, offset, bytes;
 };
+
 struct air_constant_range {
     uint32_t binding, source_begin, source_end, destination_begin;
 };
+
 struct air_constant_binding {
     const uint8_t *data;
     size_t bytes, minimum_bytes;
 };
+
 struct air_constant_layout {
     uint32_t constant_bytes, upload_alignment, ubo_begin, ubo_bytes;
     const struct air_constant_range *ranges;
@@ -29,6 +33,7 @@ struct air_constant_layout {
     uint32_t immediate_begin, immediate_words;
     const uint32_t *immediates;
 };
+
 enum air_constant_status {
     AIR_CONSTANT_OK,
     AIR_CONSTANT_ARGUMENT,
@@ -38,6 +43,7 @@ enum air_constant_status {
     AIR_CONSTANT_READ,
     AIR_CONSTANT_ALIAS
 };
+
 struct air_constant_result {
     uint32_t status, written_bytes, padded_bytes;
 };

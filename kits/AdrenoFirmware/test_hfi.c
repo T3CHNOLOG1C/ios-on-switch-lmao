@@ -25,31 +25,40 @@ static void response(unsigned count, unsigned id, uint32_t ret, uint32_t error)
     uint32_t *v = shared + 18;
     unsigned at = v[11];
     CHECK(count && count <= 255);
-    for (unsigned i = 0; i < count; ++i) shared[2048 + ((at + i) & 1023)] = i < 3 ? 0 : 0xfeed0000 + i;
+    for (unsigned i = 0; i < count; ++i)
+        shared[2048 + ((at + i) & 1023)] = i < 3 ? 0 : 0xfeed0000 + i;
     shared[2048 + at] = (1u << 16) | (count << 8) | id;
-    if (count > 1) shared[2048 + ((at + 1) & 1023)] = ret;
-    if (count > 2) shared[2048 + ((at + 2) & 1023)] = error;
+    if (count > 1)
+        shared[2048 + ((at + 1) & 1023)] = ret;
+    if (count > 2)
+        shared[2048 + ((at + 2) & 1023)] = error;
     v[11] = (at + ((count + 3) & ~3u)) & 1023;
 }
+
 static int notify(void *cookie)
 {
     CHECK(cookie == &h);
     ++notified;
-    if (auto_reply) response(4, 126, h.pending_header, 0);
+    if (auto_reply)
+        response(4, 126, h.pending_header, 0);
     return notify_fail;
 }
+
 static int wait_once(void *cookie)
 {
     CHECK(cookie == &h);
-    if (++waits == reply_at) response(4, 126, h.pending_header, 0);
+    if (++waits == reply_at)
+        response(4, 126, h.pending_header, 0);
     return 0;
 }
+
 static int failed_wait(void *cookie)
 {
     CHECK(cookie == &h);
     ++waits;
     return 1;
 }
+
 static void reset(void)
 {
     notified = notify_fail = auto_reply = waits = reply_at = 0;
@@ -68,13 +77,17 @@ static void reset(void)
     CHECK(!memcmp(shared, reference, sizeof(shared)));
 #endif
 }
+
 static void untouched_output(void)
 {
-    for (unsigned i = 0; i < 16; ++i) CHECK(output[i] == 0x5a5a5a5a);
+    for (unsigned i = 0; i < 16; ++i)
+        CHECK(output[i] == 0x5a5a5a5a);
 }
+
 int main(void)
 {
-    for (unsigned i = 0; i < 254; ++i) input[i] = 0xabcdef00 + i;
+    for (unsigned i = 0; i < 254; ++i)
+        input[i] = 0xabcdef00 + i;
     size_t count;
     uint32_t error, header;
     unsigned cases = 0;
@@ -86,15 +99,18 @@ int main(void)
             CHECK(AdrenoHfiSend(&h, 14, input, words, &header) == AdrenoHfiSuccess && notified == 1);
             CHECK(header == ((1u << 20) | ((words + 1) << 8) | 14) && h.pending_header == header);
             CHECK(shared[1024 + at] == header);
-            for (unsigned i = 0; i < words; ++i) CHECK(shared[1024 + ((at + 1 + i) & 1023)] == input[i]);
+            for (unsigned i = 0; i < words; ++i)
+                CHECK(shared[1024 + ((at + 1 + i) & 1023)] == input[i]);
             unsigned padded = (words + 4) & ~3u;
-            for (unsigned i = words + 1; i < padded; ++i) CHECK(shared[1024 + ((at + i) & 1023)] == 0xfafafafa);
+            for (unsigned i = words + 1; i < padded; ++i)
+                CHECK(shared[1024 + ((at + i) & 1023)] == 0xfafafafa);
             CHECK(shared[17] == ((at + padded) & 1023));
 #ifdef SOURCE_ORACLE
             reference[16] = reference[17] = at;
             uint32_t message[255];
             message[0] = header;
-            for (unsigned i = 0; i < words; ++i) message[i + 1] = input[i];
+            for (unsigned i = 0; i < words; ++i)
+                message[i + 1] = input[i];
             CHECK(!source_write(reference, h.iova, message, words + 1));
             CHECK(!memcmp(shared, reference, sizeof(shared)));
 #endif
@@ -105,8 +121,10 @@ int main(void)
             memset(output, 0x5a, sizeof(output));
             CHECK(AdrenoHfiPoll(&h, output, 16, &count, &error) == AdrenoHfiSuccess);
             CHECK(count == returned && !error && !h.pending_header && !h.poisoned);
-            for (unsigned i = 0; i < returned; ++i) CHECK(output[i] == 0xfeed0003 + i);
-            for (unsigned i = returned; i < 16; ++i) CHECK(output[i] == 0x5a5a5a5a);
+            for (unsigned i = 0; i < returned; ++i)
+                CHECK(output[i] == 0xfeed0003 + i);
+            for (unsigned i = returned; i < 16; ++i)
+                CHECK(output[i] == 0x5a5a5a5a);
             CHECK(shared[28] == shared[29]);
             ++cases;
         }
@@ -128,12 +146,24 @@ int main(void)
         memset(output, 0x5a, sizeof(output));
         AdrenoHfiStatus expected = AdrenoHfiCorrupt;
         switch (fault) {
-        case 0: shared[2048] &= ~0xff00u; break; /* zero length */
-        case 1: shared[2048] = (20u << 8) | 126; break;
-        case 2: shared[29] = 2; break; /* unaligned producer */
-        case 3: shared[28] = 1024; break;
-        case 4: shared[21] = 2048; break;              /* untrusted ring size */
-        case 5: shared[2048] = (1u << 8) | 100; break; /* error message without a code */
+        case 0:
+            shared[2048] &= ~0xff00u;
+            break; /* zero length */
+        case 1:
+            shared[2048] = (20u << 8) | 126;
+            break;
+        case 2:
+            shared[29] = 2;
+            break; /* unaligned producer */
+        case 3:
+            shared[28] = 1024;
+            break;
+        case 4:
+            shared[21] = 2048;
+            break; /* untrusted ring size */
+        case 5:
+            shared[2048] = (1u << 8) | 100;
+            break; /* error message without a code */
         case 6:
             shared[2048] = (2u << 8) | 126;
             expected = AdrenoHfiEmpty;
@@ -142,9 +172,15 @@ int main(void)
             shared[2050] = 7;
             expected = AdrenoHfiFirmwareError;
             break;
-        case 8: shared[2048] = (20u << 8) | 100; break;
-        case 9: shared[2048] = (5u << 8) | 126; break; /* incomplete packet */
-        case 10: shared[1] = 42; break;
+        case 8:
+            shared[2048] = (20u << 8) | 100;
+            break;
+        case 9:
+            shared[2048] = (5u << 8) | 126;
+            break; /* incomplete packet */
+        case 10:
+            shared[1] = 42;
+            break;
         }
         uint32_t read = shared[28];
         CHECK(AdrenoHfiPoll(&h, output, 16, &count, &error) == expected);

@@ -17,6 +17,7 @@ static inline uint16_t native(uint16_t a, uint16_t b, uint16_t c)
                      : "v0", "v1", "v2", "v3");
     return r;
 }
+
 static inline uint16_t scalar_emul(uint16_t a, uint16_t b, uint16_t c)
 {
     uint16_t r;
@@ -27,6 +28,7 @@ static inline uint16_t scalar_emul(uint16_t a, uint16_t b, uint16_t c)
                      : "v0", "v1", "v2", "v3");
     return r;
 }
+
 static inline uint16_t vector_emul(uint16_t a, uint16_t b, uint16_t c)
 {
     uint16_t r;
@@ -39,33 +41,41 @@ static inline uint16_t vector_emul(uint16_t a, uint16_t b, uint16_t c)
         : "v0", "v1", "v2", "v3");
     return r;
 }
+
 static int is_nan(uint16_t h)
 {
     return (h & 0x7C00) == 0x7C00 && (h & 0x3FF);
 }
+
 static int is_snan(uint16_t h)
 {
     return is_nan(h) && !(h & 0x200);
 }
 
 static const uint16_t cs[] = {0x3C00, 0xBE00, 0x0400, 0x3555, 0x7BFF, 0x0001, 0x8000, 0xD3FF};
+
 struct job {
     int t;
     uint64_t bad_s, bad_v, n;
 };
+
 static void *run(void *p)
 {
     struct job *j = p;
     for (uint32_t a = (uint32_t)j->t; a < 65536; a += 8) {
-        if (is_snan((uint16_t)a)) continue;
+        if (is_snan((uint16_t)a))
+            continue;
         for (uint32_t b = 0; b < 65536; b++) {
-            if (is_snan((uint16_t)b)) continue;
+            if (is_snan((uint16_t)b))
+                continue;
             for (unsigned k = 0; k < sizeof(cs) / 2; k++) {
                 uint16_t c = cs[k], x = native((uint16_t)a, (uint16_t)b, c);
                 uint16_t s = scalar_emul((uint16_t)a, (uint16_t)b, c), v = vector_emul((uint16_t)a, (uint16_t)b, c);
                 j->n++;
-                if (s != x && !(is_nan(s) && is_nan(x) && s == x)) j->bad_s++;
-                if (v != x) j->bad_v++;
+                if (s != x && !(is_nan(s) && is_nan(x) && s == x))
+                    j->bad_s++;
+                if (v != x)
+                    j->bad_v++;
                 if ((s != x || v != x) && j->bad_s + j->bad_v < 4)
                     printf("a=%04x b=%04x c=%04x native %04x scalar %04x vector %04x\n", a, b, c, x, s, v);
             }
@@ -73,6 +83,7 @@ static void *run(void *p)
     }
     return NULL;
 }
+
 int main(void)
 {
     pthread_t th[8];

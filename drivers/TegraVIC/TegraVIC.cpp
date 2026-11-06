@@ -83,18 +83,27 @@ enum : uint32_t {  // clock and reset controller, X bank
     SOURCE_PLLP = 2u << 29,  // this mux: pllc 1, pllp 2
     VIC_DIV_1 = 0,
 };
-enum : uint32_t { PWRGATE_TOGGLE = 0x30, REMOVE_CLAMPING = 0x34, PWRGATE_STATUS = 0x38, TOGGLE_START = 1u << 8 };
+
+enum : uint32_t {
+    PWRGATE_TOGGLE = 0x30,
+    REMOVE_CLAMPING = 0x34,
+    PWRGATE_STATUS = 0x38,
+    TOGGLE_START = 1u << 8
+};
+
 enum : uint32_t {  // the SMMU's own registers are TegraSMMU.h's
     MC_HOTRESET_CTRL = 0x200,
     MC_HOTRESET_VIC = 1u << 18,
     TRANSLATION_VIC = (1u << 12) | (1u << 13),  // vicsrd, vicswr in TRANSLATION_ENABLE_3
 };
+
 enum : uint32_t {  // VIC private registers
     THI_SLCG_OVERRIDE_LOW = 0x8c,
     SLCG_MBIST = (1u << 0) | (0x3fu << 2) | (1u << 24),
     MISC_PRI_VIC_CG = 0x16d0,
     VIC_CG_BOOT = 4u | (1u << 6) | (4u << 16),  // CG_IDLE_CG_DLY_CNT(4) | CG_IDLE_CG_EN | CG_WAKEUP_DLY_CNT(4)
 };
+
 enum : uint32_t {  // falcon (drm/tegra/falcon.h), relative to the engine
     FALCON_IRQSTAT = 0x1008,
     FALCON_IRQMSET = 0x1010,
@@ -144,11 +153,13 @@ uint32_t gWindowMapped[TEGRA_VIC_WINDOWS];  // pages mapped from each window's s
 // jobs may run first: up to 2 s by their own bounds) plus one microsecond per 8 pixels read and written (VIC does
 // several per clock at 408 MHz), at most kMaxBoundUs: only a hung engine gets there.
 constexpr uint64_t kQueueUs = 2000000, kMaxBoundUs = 30000000;
+
 inline uint32_t jobBoundUs(const TegraVICJob *job)
 {
     const uint64_t us = kQueueUs + job->pixels / 8;
     return (uint32_t)(us < kMaxBoundUs ? us : kMaxBoundUs);
 }
+
 IOLock *gJobLock;    // one job at a time: map, run, unmap
 IOLock *gStateLock;  // suspend/resume against jobs
 uint32_t gSyncpt, gNext;
@@ -160,10 +171,12 @@ inline uint32_t r32(volatile uint8_t *base, uint32_t o)
 {
     return *(volatile uint32_t *)(base + o);
 }
+
 inline void w32(volatile uint8_t *base, uint32_t o, uint32_t v)
 {
     *(volatile uint32_t *)(base + o) = v;
 }
+
 inline uint32_t le32(const uint8_t *p)
 {
     return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
@@ -172,7 +185,8 @@ inline uint32_t le32(const uint8_t *p)
 bool waitBits(volatile uint8_t *base, uint32_t o, uint32_t mask, uint32_t value, uint32_t us)
 {
     for (uint32_t i = 0; i <= us; ++i) {
-        if ((r32(base, o) & mask) == value) return true;
+        if ((r32(base, o) & mask) == value)
+            return true;
         IODelay(1);
     }
     return false;
@@ -187,7 +201,8 @@ uint64_t nowUs()
 
 template <bool Invalidate> void cacheOp(const void *va, size_t size)
 {
-    if (!size) return;
+    if (!size)
+        return;
     uint64_t ctr;
     __asm__ volatile("mrs %0, ctr_el0" : "=r"(ctr));
     const uintptr_t line = (uintptr_t)4 << ((ctr >> 16) & 15);
@@ -208,7 +223,8 @@ template <bool Invalidate> void cachePages(const uint64_t *pages, uint32_t count
     const uintptr_t line = (uintptr_t)4 << ((ctr >> 16) & 15);
     __asm__ volatile("dsb sy" ::: "memory");
     for (uint32_t i = 0; i < count; i++) {
-        if (!pmap_valid_page((ppnum_t)(pages[i] >> 12))) continue;
+        if (!pmap_valid_page((ppnum_t)(pages[i] >> 12)))
+            continue;
         const uintptr_t va = phystokv(pages[i] & ~0xfffULL);
         for (uintptr_t a = va; a < va + 4096; a += line) {
             if (Invalidate)
@@ -237,7 +253,8 @@ bool contiguous(uint64_t bytes, IOBufferMemoryDescriptor **md, TegraVICBuffer *o
     *md = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task, options, bytes, 0xfffff000ULL);
     IOByteCount length = 0;
     uint64_t pa = 0;
-    if (*md && (*md)->prepare() == kIOReturnSuccess) pa = (*md)->getPhysicalSegment(0, &length, kIOMemoryMapperNone);
+    if (*md && (*md)->prepare() == kIOReturnSuccess)
+        pa = (*md)->getPhysicalSegment(0, &length, kIOMemoryMapperNone);
     if (!pa || length < bytes || pa + bytes > (1ULL << 32)) {
         OSSafeReleaseNULL(*md);
         return false;
@@ -254,7 +271,8 @@ bool contiguous(uint64_t bytes, IOBufferMemoryDescriptor **md, TegraVICBuffer *o
 // inside the image, the FCE microcode inside the file.
 bool parse(const uint8_t *fw, size_t length, Image *image)
 {
-    if (length < 0x100 || (le32(fw) != 0x10de && le32(fw) != 0x10fe) || le32(fw + 4) != 1) return false;
+    if (length < 0x100 || (le32(fw) != 0x10de && le32(fw) != 0x10fe) || le32(fw + 4) != 1)
+        return false;
     image->size = le32(fw + 8);
     const uint32_t os = le32(fw + 12);
     image->binData = le32(fw + 16);
@@ -270,7 +288,8 @@ bool parse(const uint8_t *fw, size_t length, Image *image)
     image->dataSize = le32(fw + os + 12);
     image->apps = le32(fw + os + 16);
     // This firmware generation needs its FCE microcode handed over (vic_boot: data offset neither 0 nor 0xa5a5a5a5).
-    if (!fceHeader || fceHeader > image->size - 12 || !image->fceData || image->fceData == 0xa5a5a5a5u) return false;
+    if (!fceHeader || fceHeader > image->size - 12 || !image->fceData || image->fceData == 0xa5a5a5a5u)
+        return false;
     image->fceSize = le32(fw + fceHeader + 8);
     return image->codeSize && image->code <= image->binSize && image->codeSize <= image->binSize - image->code &&
            image->data <= image->binSize && image->dataSize <= image->binSize - image->data &&
@@ -288,7 +307,8 @@ inline uint32_t *table(uint32_t index)
 void cleanDomain()
 {
     uintptr_t low, high;
-    if (gDomain.takeDirty(&low, &high)) cacheOp<false>(reinterpret_cast<const void *>(low), high - low);
+    if (gDomain.takeDirty(&low, &high))
+        cacheOp<false>(reinterpret_cast<const void *>(low), high - low);
 }
 
 void smmuFlush()
@@ -340,7 +360,8 @@ bool smmuAttach()
 
 void smmuDetach()
 {
-    if (!gMc) return;
+    if (!gMc)
+        return;
     tegra_smmu_detach(kAsid, TEGRA_SMMU_VIC_ASID);
 }
 
@@ -398,7 +419,8 @@ bool powerUp(bool *wasOn)
 
 bool copyChunk(uint32_t from, uint32_t to, bool code)
 {
-    if (!waitBits(gVic, FALCON_DMATRFCMD, DMATRFCMD_FULL, 0, 100000)) return false;
+    if (!waitBits(gVic, FALCON_DMATRFCMD, DMATRFCMD_FULL, 0, 100000))
+        return false;
     w32(gVic, FALCON_DMATRFMOFFS, to);
     w32(gVic, FALCON_DMATRFFBOFFS, from);
     w32(gVic, FALCON_DMATRFCMD, DMATRFCMD_SIZE_256B | (code ? DMATRFCMD_IMEM : 0));
@@ -479,7 +501,8 @@ void timedOut(uint32_t fence, uint64_t us)
     if (gPublished)
         panic("TegraVIC: job fence %u not reached in %llu ms (syncpoint %u at %u); %s; %s", fence, us / 1000, gSyncpt,
               tegra_host1x_syncpt_read(gSyncpt), falconState(), host);
-    if (gWedged) return;
+    if (gWedged)
+        return;
     gWedged = true;
     IOLog("TegraVIC: job fence %u not reached in %llu us (syncpoint %u at %u); %s; %s\n", fence, us, gSyncpt,
           tegra_host1x_syncpt_read(gSyncpt), falconState(), host);
@@ -591,7 +614,8 @@ void bringUp(void *, wait_result_t)
     tegra_host1x_set_strict();
     // Proven: from here a job past its bound panics (TegraVIC.h).
     gPublished = true;
-    if (tegra_vic_publish()) gPublished = false;
+    if (tegra_vic_publish())
+        gPublished = false;
 }
 }  // namespace
 
@@ -613,7 +637,8 @@ extern "C" const TegraVICTraits *tegra_vic_traits(void)
 extern "C" int tegra_vic_buffer(uint64_t size, TegraVICBuffer *out)
 {
     size = (size + 0xfff) & ~0xfffull;
-    if (!gArena.va || gArenaUsed + size > gArena.size) return -12;
+    if (!gArena.va || gArenaUsed + size > gArena.size)
+        return -12;
     out->pa = gArena.pa + gArenaUsed;
     out->va = gArena.va + gArenaUsed;
     out->size = size;
@@ -625,6 +650,7 @@ extern "C" uint64_t tegra_vic_config_address(void)
 {
     return gConfig.pa;
 }
+
 extern "C" uint64_t tegra_vic_filter_address(void)
 {
     return gFilter.pa;
@@ -634,14 +660,17 @@ extern "C" void tegra_vic_cache_clean(const void *va, size_t size)
 {
     cacheOp<false>(va, size);
 }
+
 extern "C" void tegra_vic_cache_flush(const void *va, size_t size)
 {
     cacheOp<true>(va, size);
 }
+
 extern "C" void tegra_vic_cache_flush_pages(const uint64_t *pages, uint32_t count)
 {
     cachePages<true>(pages, count);
 }
+
 extern "C" void tegra_vic_cache_clean_pages(const uint64_t *pages, uint32_t count)
 {
     cachePages<false>(pages, count);
@@ -651,6 +680,7 @@ extern "C" void tegra_vic_lock(void)
 {
     IOLockLock(gJobLock);
 }
+
 extern "C" void tegra_vic_unlock(void)
 {
     IOLockUnlock(gJobLock);
@@ -662,10 +692,13 @@ extern "C" uint64_t tegra_vic_window_map(uint32_t window, const uint64_t *pages,
 {
     const uint64_t base = kTegraVICWindowBase + window * kTegraVICWindowBytes;
     const uint32_t limit = (uint32_t)(kTegraVICWindowBytes >> 12);
-    if (window >= TEGRA_VIC_WINDOWS || count > limit) return 0;
+    if (window >= TEGRA_VIC_WINDOWS || count > limit)
+        return 0;
     uint32_t *pt = table(1 + window * kWindowTables);  // the window's tables are consecutive pages
-    for (uint32_t i = 0; i < count; i++) pt[i] = TegraSMMUDomain::entry(pages[i], writable);
-    for (uint32_t i = count; i < gWindowMapped[window]; i++) pt[i] = 0;
+    for (uint32_t i = 0; i < count; i++)
+        pt[i] = TegraSMMUDomain::entry(pages[i], writable);
+    for (uint32_t i = count; i < gWindowMapped[window]; i++)
+        pt[i] = 0;
     cacheOp<false>(pt,
                    (uint64_t)(count > gWindowMapped[window] ? count : gWindowMapped[window]) * 4);  // pages in a row
     gWindowMapped[window] = count;
@@ -675,7 +708,8 @@ extern "C" uint64_t tegra_vic_window_map(uint32_t window, const uint64_t *pages,
 
 extern "C" void tegra_vic_window_clear(uint32_t window)
 {
-    if (window >= TEGRA_VIC_WINDOWS || !gWindowMapped[window]) return;
+    if (window >= TEGRA_VIC_WINDOWS || !gWindowMapped[window])
+        return;
     uint32_t *pt = table(1 + window * kWindowTables);
     bzero(pt, (uint64_t)gWindowMapped[window] * 4);
     cacheOp<false>(pt, (uint64_t)gWindowMapped[window] * 4);
@@ -686,7 +720,8 @@ extern "C" void tegra_vic_window_clear(uint32_t window)
 extern "C" void tegra_vic_identity_override(uint64_t iova, uint64_t pa)
 {
     uint32_t *p = gDomain.pte(iova, true);
-    if (!p) return;
+    if (!p)
+        return;
     *p = TegraSMMUDomain::entry(pa, true);
     gDomain.touch(p, sizeof(*p));
     cleanDomain();
@@ -697,9 +732,11 @@ extern "C" void tegra_vic_identity_override(uint64_t iova, uint64_t pa)
 // through THI METHOD0/METHOD1, then an OP_DONE increment of VIC's syncpoint, waited for by interrupt.
 extern "C" int tegra_vic_run(const TegraVICJob *job, uint64_t *busyUs)
 {
-    if (!gUp || job->count > TEGRA_VIC_MAX_METHODS) return -19;
+    if (!gUp || job->count > TEGRA_VIC_MAX_METHODS)
+        return -19;
     IOLockLock(gStateLock);
-    while (gSuspended) IOLockSleep(gStateLock, &gSuspended, THREAD_UNINT);
+    while (gSuspended)
+        IOLockSleep(gStateLock, &gSuspended, THREAD_UNINT);
     if (gWedged) {
         IOLockUnlock(gStateLock);
         return -19;
@@ -720,9 +757,11 @@ extern "C" int tegra_vic_run(const TegraVICJob *job, uint64_t *busyUs)
     if (!ret) {
         gNext = fence;
         ret = tegra_host1x_syncpt_wait(gSyncpt, fence, jobBoundUs(job));
-        if (ret == TEGRA_HOST1X_ETIMEDOUT) timedOut(fence, nowUs() - start);
+        if (ret == TEGRA_HOST1X_ETIMEDOUT)
+            timedOut(fence, nowUs() - start);
     }
-    if (busyUs) *busyUs = nowUs() - start;
+    if (busyUs)
+        *busyUs = nowUs() - start;
     IOLockUnlock(gStateLock);
     return ret;
 }
@@ -761,7 +800,8 @@ void engineResume()
             snprintf(gLine, sizeof(gLine), "%s did not answer (%d, syncpoint %u %u->%u); %s", stage, ret, gSyncpt, from,
                      tegra_host1x_syncpt_read(gSyncpt), falconState());
     }
-    if (gWedged) IOLog("TegraVIC: resume FAIL %s; VIC refuses work\n", gLine[0] ? gLine : "V1");
+    if (gWedged)
+        IOLog("TegraVIC: resume FAIL %s; VIC refuses work\n", gLine[0] ? gLine : "V1");
     gNext = tegra_host1x_syncpt_read(gSyncpt);
     gSuspended = false;
     IOLockWakeup(gStateLock, &gSuspended, false);
@@ -773,7 +813,8 @@ void engineResume()
 extern "C" int tegra_vic_probe(void)
 {
     static volatile int started;
-    if (__atomic_exchange_n(&started, 1, __ATOMIC_SEQ_CST)) return 0;
+    if (__atomic_exchange_n(&started, 1, __ATOMIC_SEQ_CST))
+        return 0;
     thread_t thread;
     if (kernel_thread_start(bringUp, nullptr, &thread) != KERN_SUCCESS) {
         IOLog("TegraVIC: could not start the bring-up thread\n");

@@ -50,18 +50,22 @@ extern char **environ;
 // Without the overlay's binary there is nothing to start.
 static void startPairingAgent(void)
 {
-    if (access(kPairingAgent, X_OK)) return;
+    if (access(kPairingAgent, X_OK))
+        return;
     char *argv[] = {(char *)kPairingAgent, NULL};
     pid_t pid;
     const int error = posix_spawn(&pid, kPairingAgent, NULL, NULL, argv, environ);
-    if (error) os_log_error(OS_LOG_DEFAULT, "BlueTool: %{public}s not started: %d", kPairingAgent, error);
+    if (error)
+        os_log_error(OS_LOG_DEFAULT, "BlueTool: %{public}s not started: %d", kPairingAgent, error);
 }
 
 static void answer(xpc_connection_t peer, xpc_object_t message)
 {
-    if (xpc_get_type(message) != XPC_TYPE_DICTIONARY) return;  // errors: the peer went away
+    if (xpc_get_type(message) != XPC_TYPE_DICTIONARY)
+        return;  // errors: the peer went away
     xpc_object_t reply = xpc_dictionary_create_reply(message);
-    if (!reply) return;
+    if (!reply)
+        return;
     const char *id = xpc_dictionary_get_string(message, "kMsgId");
     xpc_dictionary_set_int64(reply, "result", 0);
     if (id && !strcmp(id, "RunBuiltinScript")) {
@@ -70,7 +74,8 @@ static void answer(xpc_connection_t peer, xpc_object_t message)
     }
     xpc_connection_send_message(peer, reply);
     xpc_release(reply);
-    if (id && !strcmp(id, "RunBuiltinScript")) startPairingAgent();
+    if (id && !strcmp(id, "RunBuiltinScript"))
+        startPairingAgent();
 }
 
 int main(void)
@@ -80,9 +85,12 @@ int main(void)
     xpc_connection_t listener =
         ios_xpc_connection_create_mach_service(kService, NULL, XPC_CONNECTION_MACH_SERVICE_LISTENER);
     xpc_connection_set_event_handler(listener, ^(xpc_object_t peer) {
-        if (xpc_get_type(peer) != XPC_TYPE_CONNECTION) return;
+        if (xpc_get_type(peer) != XPC_TYPE_CONNECTION)
+            return;
         xpc_connection_t connection = (xpc_connection_t)peer;
-        xpc_connection_set_event_handler(connection, ^(xpc_object_t message) { answer(connection, message); });
+        xpc_connection_set_event_handler(connection, ^(xpc_object_t message) {
+            answer(connection, message);
+        });
         xpc_connection_resume(connection);
     });
     xpc_connection_resume(listener);

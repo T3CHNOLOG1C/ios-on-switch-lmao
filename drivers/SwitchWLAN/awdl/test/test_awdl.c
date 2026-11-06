@@ -39,6 +39,7 @@ static void hex(const char *s, uint8_t *out, size_t *n)
 
 // ---- the simulated air -------------------------------------------------------------------------------------------------
 #define NODES 4
+
 struct node {
     struct awdl_core *core;
     struct awdl_tsf_clock clock;
@@ -59,6 +60,7 @@ static struct node nodes[NODES];
 static int nnodes;
 static uint64_t sim_now;
 static int reach[NODES][NODES];  // can i hear j
+
 struct frame {
     uint64_t at;  // global
     int from;
@@ -74,11 +76,13 @@ static uint64_t local_of(int i, uint64_t g)
 {
     return (uint64_t)((int64_t)g + nodes[i].offset + (int64_t)g * nodes[i].ppm / 1000000);
 }
+
 static uint64_t global_of(int i, uint64_t l)
 {
     const int64_t x = (int64_t)l - nodes[i].offset;
     return (uint64_t)(x - x * nodes[i].ppm / 1000000);
 }
+
 static int node_index(void *ctx)
 {
     return (int)(intptr_t)ctx;
@@ -88,7 +92,8 @@ static int sim_tx(void *ctx, const uint8_t *frame, size_t len, uint16_t freq, ui
 {
     (void)no_ack;
     const int i = node_index(ctx);
-    if (nair == (int)(sizeof air / sizeof air[0]) || len > sizeof air[0].data) return -1;
+    if (nair == (int)(sizeof air / sizeof air[0]) || len > sizeof air[0].data)
+        return -1;
     struct frame *f = &air[nair++];
     f->from = i;
     f->freq = freq;
@@ -98,6 +103,7 @@ static int sim_tx(void *ctx, const uint8_t *frame, size_t len, uint16_t freq, ui
     air_tx_count++;
     return 0;
 }
+
 static void sim_schedule(void *ctx, const struct awdl_chan seq[AWDL_SEQ_SLOTS], uint64_t anchor)
 {
     struct node *n = &nodes[node_index(ctx)];
@@ -106,6 +112,7 @@ static void sim_schedule(void *ctx, const struct awdl_chan seq[AWDL_SEQ_SLOTS], 
     n->scheduled = 1;
     n->schedules++;
 }
+
 static void sim_peer(void *ctx, const uint8_t addr[6], int present, int8_t rssi)
 {
     (void)rssi;
@@ -115,8 +122,10 @@ static void sim_peer(void *ctx, const uint8_t addr[6], int present, int8_t rssi)
     else
         n->peers_lost++;
     memcpy(n->last_peer, addr, 6);
-    if (n->facade) a80211_awdl_peer(n->facade, addr, present, rssi);
+    if (n->facade)
+        a80211_awdl_peer(n->facade, addr, present, rssi);
 }
+
 static void sim_deliver(void *ctx, const uint8_t *eth, size_t len)
 {
     struct node *n = &nodes[node_index(ctx)];
@@ -124,25 +133,32 @@ static void sim_deliver(void *ctx, const uint8_t *eth, size_t len)
     n->delivered_len = len;
     n->deliveries++;
 }
+
 static int verbose;
+
 static void sim_log(void *ctx, const char *line)
 {
-    if (verbose) printf("  [node %d] %s\n", node_index(ctx), line);
+    if (verbose)
+        printf("  [node %d] %s\n", node_index(ctx), line);
 }
+
 // the radio of node i is on which frequency at global time g
 static uint16_t radio_freq(int i, uint64_t g)
 {
     struct node *n = &nodes[i];
-    if (!n->scheduled) return 0;
+    if (!n->scheduled)
+        return 0;
     const uint64_t l = local_of(i, g);
-    if (l < n->anchor) return awdl_chan_freq(n->sched[0]);
+    if (l < n->anchor)
+        return awdl_chan_freq(n->sched[0]);
     const uint64_t slot = ((l - n->anchor) / (64 * 1024)) % AWDL_SEQ_SLOTS;
     return awdl_chan_freq(n->sched[slot]);
 }
 
 static void sim_reset(int count)
 {
-    for (int i = 0; i < nnodes; ++i) free(nodes[i].core);
+    for (int i = 0; i < nnodes; ++i)
+        free(nodes[i].core);
     memset(nodes, 0, sizeof nodes);
     memset(reach, 0, sizeof reach);
     nair = 0;
@@ -150,8 +166,10 @@ static void sim_reset(int count)
     air_tx_count = air_lost_offchannel = 0;
     nnodes = count;
     for (int i = 0; i < count; ++i)
-        for (int j = 0; j < count; ++j) reach[i][j] = i != j;
+        for (int j = 0; j < count; ++j)
+            reach[i][j] = i != j;
 }
+
 static void sim_node(int i, uint8_t last, uint32_t metric, int64_t offset, int32_t ppm)
 {
     struct node *n = &nodes[i];
@@ -167,11 +185,13 @@ static void sim_node(int i, uint8_t last, uint32_t metric, int64_t offset, int32
     const struct awdl_host h = {(void *)(intptr_t)i, sim_tx, sim_schedule, sim_peer, sim_deliver, sim_log};
     CHECK(awdl_core_init(n->core, &h, &cfg) == 0);
 }
+
 static void sim_start(int i, uint64_t g)
 {
     awdl_core_start(nodes[i].core, local_of(i, g));
     nodes[i].deadline = awdl_core_timer(nodes[i].core, local_of(i, g));
 }
+
 // Run until global time `until`: timers and frame deliveries in time order.
 static void sim_run(uint64_t until)
 {
@@ -190,7 +210,8 @@ static void sim_run(uint64_t until)
         uint64_t next = until;
         int which = -1, kind = 0;
         for (int i = 0; i < nnodes; ++i) {
-            if (!awdl_core_running(nodes[i].core)) continue;
+            if (!awdl_core_running(nodes[i].core))
+                continue;
             const uint64_t g = global_of(i, nodes[i].deadline);
             if (g < next) {
                 next = g;
@@ -199,28 +220,34 @@ static void sim_run(uint64_t until)
             }
         }
         for (int k = 0; k < nair; ++k) {
-            if (!air[k].at) air[k].at = sim_now;
+            if (!air[k].at)
+                air[k].at = sim_now;
             if (air[k].at <= next) {
                 next = air[k].at;
                 which = k;
                 kind = 2;
             }
         }
-        if (next < sim_now) next = sim_now;
-        if (which < 0 || next > until) break;
+        if (next < sim_now)
+            next = sim_now;
+        if (which < 0 || next > until)
+            break;
         sim_now = next;
         if (kind == 1) {
             // the node's own clock reads at least its deadline (global -> local rounding must not stall it)
             struct node *n = &nodes[which];
             uint64_t l = local_of(which, sim_now);
-            if (l < n->deadline) l = n->deadline;
+            if (l < n->deadline)
+                l = n->deadline;
             n->deadline = awdl_core_timer(n->core, l);
-            if (n->deadline <= l) n->deadline = l + 1;
+            if (n->deadline <= l)
+                n->deadline = l + 1;
         } else {
             struct frame f = air[which];
             air[which] = air[--nair];
             for (int j = 0; j < nnodes; ++j) {
-                if (!reach[j][f.from] || !awdl_core_running(nodes[j].core)) continue;
+                if (!reach[j][f.from] || !awdl_core_running(nodes[j].core))
+                    continue;
                 if (radio_freq(j, f.at) != f.freq || radio_freq(f.from, f.at) != f.freq) {
                     air_lost_offchannel++;
                     continue;
@@ -304,7 +331,8 @@ static void test_parse_hand_frame(void)
         uint8_t r[300];
         memcpy(r, f, 40);
         const size_t len = 40 + (size_t)(rand() % 260);
-        for (size_t k = 40; k < len; ++k) r[k] = (uint8_t)rand();
+        for (size_t k = 40; k < len; ++k)
+            r[k] = (uint8_t)rand();
         uint8_t *copy = (uint8_t *)malloc(len);
         memcpy(copy, r, len);
         (void)awdl_af_parse(copy, len, &a);
@@ -363,7 +391,8 @@ static void test_data_encap(void)
     memcpy(eth + 6, self, 6);
     eth[12] = 0x86;
     eth[13] = 0xdd;
-    for (int i = 14; i < 200; ++i) eth[i] = (uint8_t)i;
+    for (int i = 14; i < 200; ++i)
+        eth[i] = (uint8_t)i;
     const size_t n = awdl_data_encap(eth, 200, self, 0x123, f, sizeof f);
     CHECK(n == 200 - 14 + 40);
     const uint8_t want[] = {0x08, 0x00, 0,    0,    0x33, 0x33, 0,    0,    0,    0xfb, 0x02, 1,    2,    3,
@@ -438,7 +467,8 @@ static void test_sync_two_nodes(void)
     memcpy(eth + 6, (const uint8_t[6]){0x02, 0x11, 0x22, 0x33, 0x44, 0x0b}, 6);
     eth[12] = 0x86;
     eth[13] = 0xdd;
-    for (int i = 14; i < 120; ++i) eth[i] = (uint8_t)(i * 3);
+    for (int i = 14; i < 120; ++i)
+        eth[i] = (uint8_t)(i * 3);
     CHECK(awdl_core_output(nodes[1].core, eth, sizeof eth, local_of(1, sim_now)) == 0);
     sim_run(sim_now + 200000);
     CHECK(nodes[0].deliveries == 1 && nodes[0].delivered_len == sizeof eth &&
@@ -492,7 +522,8 @@ static void test_election_chain(void)
     CHECK(awdl_core_role(nodes[1].core) == AWDL_ROLE_ROOT);
     CHECK(awdl_core_role(nodes[2].core) == AWDL_ROLE_FOLLOWER && awdl_core_election(nodes[2].core)->hops == 1);
     CHECK(!memcmp(awdl_core_election(nodes[2].core)->root, (const uint8_t[6]){0x02, 0x11, 0x22, 0x33, 0x44, 0x0b}, 6));
-    for (int i = 0; i < 3; ++i) awdl_core_stop(nodes[i].core);
+    for (int i = 0; i < 3; ++i)
+        awdl_core_stop(nodes[i].core);
 }
 
 // A sequence that alternates 149 and 6 slot by slot: frames only go out on the slot's channel, and the follower,
@@ -547,7 +578,8 @@ static void test_ring(void)
     uint8_t payload[200], out[4096];
     char ifname[16];
     uint32_t event, len;
-    for (int i = 0; i < 200; ++i) payload[i] = (uint8_t)(i ^ 0x5a);
+    for (int i = 0; i < 200; ++i)
+        payload[i] = (uint8_t)(i ^ 0x5a);
     // many rounds of uneven sizes force wraps of the payload and short tails
     for (int round = 0; round < 300; ++round) {
         const uint32_t n = (uint32_t)(round * 37 % 150);
@@ -559,7 +591,8 @@ static void test_ring(void)
     CHECK(a80211_ring_take(&r, &event, ifname, out, &len, sizeof out) == 0);
     // a reader that does not read: the ring fills, then drops (never overwrites unread events)
     int posted = 0;
-    while (a80211_ring_post(&r, 46, "awdl0", payload, 68) == 0) posted++;
+    while (a80211_ring_post(&r, 46, "awdl0", payload, 68) == 0)
+        posted++;
     CHECK(posted >= 3 && r.dropped == 1);
     for (int i = 0; i < posted; ++i)
         CHECK(a80211_ring_take(&r, &event, ifname, out, &len, sizeof out) == 1 && event == 46);
@@ -585,22 +618,26 @@ static void test_ring(void)
 // awdl0's requests as wifip2pd sends them, and the PEER_PRESENCE events the stack produces.
 static struct a80211_ring facade_ring;
 static int started, stopped;
+
 static int f_start(void *ctx)
 {
     (void)ctx;
     started++;
     return 0;
 }
+
 static void f_stop(void *ctx)
 {
     (void)ctx;
     stopped++;
 }
+
 static void f_post(void *ctx, uint32_t event, const void *payload, uint32_t len)
 {
     (void)ctx;
     a80211_ring_post(&facade_ring, event, "awdl0", payload, len);
 }
+
 static void test_facade(void)
 {
     static uint8_t buf[8192];
@@ -656,7 +693,8 @@ static void test_facade(void)
     uint8_t out[256];
     int presence = 0;
     while (a80211_ring_take(&facade_ring, &event, ifname, out, &len, sizeof out) == 1) {
-        if (event != A80211_M_PEER_PRESENCE) continue;
+        if (event != A80211_M_PEER_PRESENCE)
+            continue;
         struct a80211_peer_presence p;
         CHECK(len == sizeof p);
         memcpy(&p, out, sizeof p);

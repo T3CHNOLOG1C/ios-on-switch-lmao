@@ -3,31 +3,44 @@
 #include <IOKit/IOLib.h>
 #include <string.h>
 #include "NativeAdrenoPwrupRegs.h"
-enum : size_t { HeaderBytes = 16, PairBytes = 8, TripletBytes = 12 };
+
+enum : size_t {
+    HeaderBytes = 16,
+    PairBytes = 8,
+    TripletBytes = 12
+};
+
 size_t NativeAdrenoPwrupList::requiredBytes(const NativeAdrenoPwrupCounts &counts)
 {
     return HeaderBytes + size_t(counts.ifpc + counts.preemption) * PairBytes + size_t(counts.dynamic) * TripletBytes;
 }
+
 IOReturn NativeAdrenoPwrupList::buildA740(int (*read)(void *, uint32_t, uint32_t *), void *cookie, uint8_t *out,
                                           size_t capacity, size_t *written)
 {
-    if (!read || !out || !written) return kIOReturnBadArgument;
+    if (!read || !out || !written)
+        return kIOReturnBadArgument;
     uint32_t values[NATIVE_ADRENO_A740_PWRUP_COUNT] = {};
     for (size_t index = 0; index < NATIVE_ADRENO_A740_PWRUP_COUNT; ++index)
-        if (read(cookie, NativeAdrenoA740PwrupRegs[index], &values[index])) return kIOReturnIOError;
+        if (read(cookie, NativeAdrenoA740PwrupRegs[index], &values[index]))
+            return kIOReturnIOError;
     const NativeAdrenoPwrupCounts counts = {0, NATIVE_ADRENO_A740_PWRUP_COUNT, 0};
     return pack(counts, nullptr, nullptr, NativeAdrenoA740PwrupRegs, values, nullptr, out, capacity, written);
 }
+
 IOReturn NativeAdrenoPwrupList::pack(const NativeAdrenoPwrupCounts &counts, const uint32_t *ifpc_regs,
                                      const uint32_t *ifpc_values, const uint32_t *preemption_regs,
                                      const uint32_t *preemption_values, const uint32_t *dynamic_triplets, uint8_t *out,
                                      size_t capacity, size_t *written)
 {
-    if (!out || !written) return kIOReturnBadArgument;
+    if (!out || !written)
+        return kIOReturnBadArgument;
     *written = 0;
-    if (counts.ifpc > 0xff || counts.preemption > 0xff || counts.dynamic > 0xffff) return kIOReturnBadArgument;
+    if (counts.ifpc > 0xff || counts.preemption > 0xff || counts.dynamic > 0xffff)
+        return kIOReturnBadArgument;
     const size_t needed = requiredBytes(counts);
-    if (capacity < needed) return kIOReturnNoResources;
+    if (capacity < needed)
+        return kIOReturnNoResources;
     if ((counts.ifpc && (!ifpc_regs || !ifpc_values)) ||
         (counts.preemption && (!preemption_regs || !preemption_values)) || (counts.dynamic && !dynamic_triplets))
         return kIOReturnBadArgument;

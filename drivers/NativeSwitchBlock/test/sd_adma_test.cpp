@@ -19,15 +19,18 @@ constexpr uint32_t kIOMemoryMapperNone = 0x800;
 struct Run {
     uint64_t pa, bytes;
 };
+
 struct Memory {
     std::vector<Run> runs;
     int missingAt = -1;  // run index getPhysicalSegment pretends is not there
+
     uint64_t getPhysicalSegment(IOByteCount offset, IOByteCount *length, uint32_t options)
     {
         REQUIRE(options == kIOMemoryMapperNone);
         for (size_t i = 0; i < runs.size(); ++i) {
             if (offset < runs[i].bytes) {
-                if ((int)i == missingAt) break;
+                if ((int)i == missingAt)
+                    break;
                 *length = runs[i].bytes - offset;
                 return runs[i].pa + offset;
             }
@@ -46,12 +49,14 @@ static bool anyPage(uint64_t)
 struct Table {
     std::vector<SwitchAdmaDescriptor> entries;
     SwitchAdmaTable t;
+
     explicit Table(uint32_t capacity = 1024, uint64_t limit = 1ull << 34) : entries(capacity + 1)
     {
         t = {entries.data(), capacity, limit, 0, 0, 0, 0};
         // A guard entry past the capacity: the builder must never write it.
         entries[capacity] = {0xdead, 0xbeef, 0xdeadbeef, 0xdeadbeef, 0xdeadbeef};
     }
+
     ~Table()
     {
         const SwitchAdmaDescriptor &guard = entries[t.capacity];
@@ -67,7 +72,8 @@ static void checkTable(const SwitchAdmaTable &t, const std::vector<Run> &expecte
 {
     std::vector<uint64_t> want, got;
     for (const Run &r : expected)
-        for (uint64_t at = 0; at < r.bytes; at += kAdmaLine) want.push_back(r.pa + at);
+        for (uint64_t at = 0; at < r.bytes; at += kAdmaLine)
+            want.push_back(r.pa + at);
     REQUIRE(t.count >= 1);
     uint64_t bytes = 0;
     for (uint32_t i = 0; i < t.count; ++i) {
@@ -78,7 +84,8 @@ static void checkTable(const SwitchAdmaTable &t, const std::vector<Run> &expecte
         const uint64_t pa = switchAdmaAddress(d);
         REQUIRE(pa % kAdmaLine == 0 && pa + d.length <= t.limit);
         REQUIRE(pa >> 32 == (pa + d.length - 1) >> 32);  // never across a 4 GiB boundary
-        for (uint64_t at = 0; at < d.length; at += kAdmaLine) got.push_back(pa + at);
+        for (uint64_t at = 0; at < d.length; at += kAdmaLine)
+            got.push_back(pa + at);
         bytes += d.length;
     }
     REQUIRE(bytes == t.bytes);
@@ -121,13 +128,15 @@ static void splitsAtTheLengthCap()
     Table one;
     REQUIRE(one.t.add(0x100000000ull, 0x100000, anyPage) == kAdmaOk && one.t.finish());
     REQUIRE(one.t.count == 18);
-    for (uint32_t i = 0; i < 17; ++i) REQUIRE(one.t.entries[i].length == kAdmaMaxLength);
+    for (uint32_t i = 0; i < 17; ++i)
+        REQUIRE(one.t.entries[i].length == kAdmaMaxLength);
     REQUIRE(one.t.entries[17].length == 0x1000);
     checkTable(one.t, {{0x100000000ull, 0x100000}});
 
     // The same MiB as 256 physically contiguous 4 KiB segments (a UPL page by page): the same 18 descriptors.
     Memory pages;
-    for (uint64_t i = 0; i < 256; ++i) pages.runs.push_back({0x100000000ull + i * 0x1000, 0x1000});
+    for (uint64_t i = 0; i < 256; ++i)
+        pages.runs.push_back({0x100000000ull + i * 0x1000, 0x1000});
     Table merged;
     REQUIRE(merged.t.addMemory(&pages, 0x100000, anyPage) == kAdmaOk && merged.t.finish());
     REQUIRE(merged.t.count == 18);
@@ -150,7 +159,8 @@ static void splitsAtTheLengthCap()
 
     // Pages in falling physical order never merge.
     Memory falling;
-    for (uint64_t i = 0; i < 8; ++i) falling.runs.push_back({0x90008000 - i * 0x1000, 0x1000});
+    for (uint64_t i = 0; i < 8; ++i)
+        falling.runs.push_back({0x90008000 - i * 0x1000, 0x1000});
     Table fall;
     REQUIRE(fall.t.addMemory(&falling, 0x8000, anyPage) == kAdmaOk && fall.t.finish() && fall.t.count == 8);
     checkTable(fall.t, falling.runs);
@@ -172,7 +182,9 @@ static void refusals()
     REQUIRE(wide.t.add(0x17ffff000ull, 0x1000, anyPage) == kAdmaOk);
 
     // A page that is not cacheable RAM, anywhere in a run (also a run that only touches its first or last line).
-    auto notPage3 = [](uint64_t page) { return page != 0x100003000ull; };
+    auto notPage3 = [](uint64_t page) {
+        return page != 0x100003000ull;
+    };
     Table run, firstLine, lastLine, before;
     REQUIRE(run.t.add(0x100000000ull, 0x8000, notPage3) == kAdmaMemory);
     REQUIRE(firstLine.t.add(0x100002fc0ull, 0x80, notPage3) == kAdmaMemory);
@@ -188,7 +200,8 @@ static void refusals()
 
     // The table's capacity: exactly full is fine, one more is not (and the guard entry stays untouched).
     Memory five;
-    for (uint64_t i = 0; i < 5; ++i) five.runs.push_back({0x90000000 + i * 0x2000, 0x1000});
+    for (uint64_t i = 0; i < 5; ++i)
+        five.runs.push_back({0x90000000 + i * 0x2000, 0x1000});
     Table four(4), fits(5);
     REQUIRE(four.t.addMemory(&five, 0x5000, anyPage) == kAdmaFull && four.t.count == 4);
     REQUIRE(fits.t.addMemory(&five, 0x5000, anyPage) == kAdmaOk && fits.t.finish() && fits.t.count == 5);
@@ -239,12 +252,15 @@ static void randomRuns()
     std::mt19937_64 random(0x5d0adaa2);
     for (unsigned round = 0; round < 3000; ++round) {
         // Starts at least 16 MiB below the limit; 40 runs of at most 256 KiB stay below it even when they all continue.
-        auto anywhere = [&] { return (random() % ((1ull << 34) / kAdmaLine - 0x40000)) * kAdmaLine; };
+        auto anywhere = [&] {
+            return (random() % ((1ull << 34) / kAdmaLine - 0x40000)) * kAdmaLine;
+        };
         std::vector<Run> runs;
         uint64_t pa = anywhere();
         const unsigned count = 1 + random() % 40;
         for (unsigned i = 0; i < count; ++i) {
-            if (random() % 3) pa = anywhere();
+            if (random() % 3)
+                pa = anywhere();
             const uint64_t bytes = (1 + random() % (random() % 2 ? 64 : 4096)) * kAdmaLine;
             runs.push_back({pa, bytes});
             pa += bytes;
@@ -252,7 +268,8 @@ static void randomRuns()
         Memory memory;
         memory.runs = runs;
         uint64_t total = 0;
-        for (const Run &r : runs) total += r.bytes;
+        for (const Run &r : runs)
+            total += r.bytes;
         Table t(4096);
         REQUIRE(t.t.addMemory(&memory, total, anyPage) == kAdmaOk && t.t.finish());
         checkTable(t.t, runs);
@@ -318,7 +335,9 @@ static void highProof()
     // refused, a page next to it is not.
     {
         Table t(1024, h.limit(false));
-        auto ok = [&](uint64_t page) { return h.pageOk(page, false); };
+        auto ok = [&](uint64_t page) {
+            return h.pageOk(page, false);
+        };
         REQUIRE(t.t.add(kAdmaIramAlias + 0x1000, 0x1000, ok) == kAdmaMemory);
         REQUIRE(t.t.add(kAdmaIramAlias + kAdmaIramBytes, 0x1000, ok) == kAdmaOk && t.t.high == 0x1000);
         Table w(1024, h.limit(true));
@@ -442,7 +461,8 @@ static void stagingCases()
     // Too many separate stages, a table too small for the runs, a missing segment: no table at all.
     {
         Memory a;
-        for (uint64_t i = 0; i < 6; ++i) a.runs.push_back({0x123400000ull + i * 0x2000, 0x1000});
+        for (uint64_t i = 0; i < 6; ++i)
+            a.runs.push_back({0x123400000ull + i * 0x2000, 0x1000});
         Table t(1024, 1ull << 32);
         Staging st;
         std::vector<Staging::Stage> few(3);
@@ -489,10 +509,12 @@ static void stagingRandom()
             uint64_t left = sectors * 512;
             while (left) {
                 uint64_t n = random() % 3 ? 0x1000 : (random() % 2 ? 0x200 : 1 + random() % 0x400);
-                if (n > left) n = left;
+                if (n > left)
+                    n = left;
                 const bool up = random() % 3 == 0, odd = random() % 7 == 0;
                 uint64_t &next = up ? nextHigh : nextLow;
-                if (random() % 3) next += 0x1000 * (1 + random() % 4);
+                if (random() % 3)
+                    next += 0x1000 * (1 + random() % 4);
                 const uint64_t pa = next + (odd ? 8 * (1 + random() % 7) : 0);
                 m.runs.push_back({pa, n});
                 next = (pa + n + 0xfff) & ~0xfffull;
@@ -501,27 +523,34 @@ static void stagingRandom()
             lengths.push_back(sectors * 512);
             chain += sectors * 512;
         }
-        if (chain > kBounceSize) continue;
+        if (chain > kBounceSize)
+            continue;
         const uint64_t refusedPage = random() % 4 ? ~0ull : nextLow - 0x1000;
-        auto pageOk = [&](uint64_t page) { return page != refusedPage; };
+        auto pageOk = [&](uint64_t page) {
+            return page != refusedPage;
+        };
         Table t(1024, 1ull << 32);
         Staging st;
         st.reset(&t.t, kBounce, stages.data(), 256);
         bool built = true;
-        for (size_t i = 0; i < requests.size() && built; ++i) built = !st.addMemory(&requests[i], lengths[i], pageOk);
-        if (!built) continue;  // more stages than the array: the driver bounces the whole chain
+        for (size_t i = 0; i < requests.size() && built; ++i)
+            built = !st.addMemory(&requests[i], lengths[i], pageOk);
+        if (!built)
+            continue;  // more stages than the array: the driver bounces the whole chain
         REQUIRE(st.finish());
         checkStagedTable(t.t, chain);
         stagedTotal += st.staged;
         straightTotal += chain - st.staged;
         // The card's bytes, moved by the "engine" to wherever the table says, then the stages copied out.
         std::vector<uint8_t> card(chain);
-        for (uint8_t &b : card) b = uint8_t(random());
+        for (uint8_t &b : card)
+            b = uint8_t(random());
         std::unordered_map<uint64_t, uint8_t> phys;
         uint64_t at = 0;
         for (uint32_t i = 0; i < t.t.count; ++i) {
             const uint64_t pa = switchAdmaAddress(t.t.entries[i]);
-            for (uint64_t k = 0; k < t.t.entries[i].length; ++k) phys[pa + k] = card[at + k];
+            for (uint64_t k = 0; k < t.t.entries[i].length; ++k)
+                phys[pa + k] = card[at + k];
             at += t.t.entries[i].length;
         }
         for (uint32_t i = 0; i < st.count; ++i) {
@@ -531,7 +560,8 @@ static void stagingRandom()
                 IOByteCount segment = 0;
                 const uint64_t pa = s.memory->getPhysicalSegment(s.offset + k, &segment, kIOMemoryMapperNone);
                 REQUIRE(pa && segment);
-                for (uint64_t j = 0; j < segment && k < s.length; ++j, ++k) phys[pa + j] = phys.at(kBounce + s.at + k);
+                for (uint64_t j = 0; j < segment && k < s.length; ++j, ++k)
+                    phys[pa + j] = phys.at(kBounce + s.at + k);
             }
         }
         // Every request byte is the card's; every byte written is a request's or the bounce buffer's first `chain`.
@@ -653,42 +683,52 @@ TEST(SdAdma, DescriptorLayout)
 {
     layout();
 }
+
 TEST(SdAdma, SinglePages)
 {
     singlePages();
 }
+
 TEST(SdAdma, SplitsAtTheLengthCap)
 {
     splitsAtTheLengthCap();
 }
+
 TEST(SdAdma, Refusals)
 {
     refusals();
 }
+
 TEST(SdAdma, Chains)
 {
     chains();
 }
+
 TEST(SdAdma, RandomRuns)
 {
     randomRuns();
 }
+
 TEST(SdAdma, HighBytes)
 {
     highBytes();
 }
+
 TEST(SdAdma, HighProof)
 {
     highProof();
 }
+
 TEST(SdAdma, StagingCases)
 {
     stagingCases();
 }
+
 TEST(SdAdma, StagingRandom)
 {
     stagingRandom();
 }
+
 TEST(SdAdma, SinkCases)
 {
     sinkCases();

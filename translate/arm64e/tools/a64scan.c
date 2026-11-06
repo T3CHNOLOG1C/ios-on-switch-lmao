@@ -46,7 +46,8 @@ static void set_add(struct ent **tab, size_t *cap, size_t *len, uint32_t w)
         for (size_t i = 0; i < *cap; i++) {
             if ((*tab)[i].n) {
                 size_t h = ((*tab)[i].w * 2654435761u) & (ncap - 1);
-                while (nt[h].n) h = (h + 1) & (ncap - 1);
+                while (nt[h].n)
+                    h = (h + 1) & (ncap - 1);
                 nt[h] = (*tab)[i];
             }
         }
@@ -55,7 +56,8 @@ static void set_add(struct ent **tab, size_t *cap, size_t *len, uint32_t w)
         *cap = ncap;
     }
     size_t h = (w * 2654435761u) & (*cap - 1);
-    while ((*tab)[h].n && (*tab)[h].w != w) h = (h + 1) & (*cap - 1);
+    while ((*tab)[h].n && (*tab)[h].w != w)
+        h = (h + 1) & (*cap - 1);
     if (!(*tab)[h].n) {
         (*tab)[h].w = w;
         (*len)++;
@@ -68,11 +70,14 @@ static uintptr_t pg_cur = (uintptr_t)-1;
 static unsigned pg_any, pg_stub;
 static uint64_t pg_total, pg_with_any, pg_with_stub, pg_hist[8];
 static unsigned pg_max_stub;
+
 static void pg_flush(void)
 {
-    if (pg_cur == (uintptr_t)-1) return;
+    if (pg_cur == (uintptr_t)-1)
+        return;
     pg_total++;
-    if (pg_any) pg_with_any++;
+    if (pg_any)
+        pg_with_any++;
     if (pg_stub) {
         pg_with_stub++;
         int b = pg_stub <= 1     ? 0
@@ -85,9 +90,11 @@ static void pg_flush(void)
                                  : 7;
         pg_hist[b]++;
     }
-    if (pg_stub > pg_max_stub) pg_max_stub = pg_stub;
+    if (pg_stub > pg_max_stub)
+        pg_max_stub = pg_stub;
     pg_any = pg_stub = 0;
 }
+
 static bool needs_stub(enum a64x_class c)
 {
     return c == A64X_LSE_CAS || c == A64X_LSE_CASP || c == A64X_LSE_LDOP || c == A64X_LSE_SWP || c == A64X_FP16 ||
@@ -109,12 +116,15 @@ static void scan_words(const uint8_t *p, uint64_t size, uint64_t *img)
         enum a64x_class c = a64x_classify(w);
         if (c != A64X_OK && a64x_class_is_baseline(c)) {
             pg_any++;
-            if (needs_stub(c)) pg_stub++;
+            if (needs_stub(c))
+                pg_stub++;
         }
         if (c != A64X_OK) {
             g_total[c]++;
-            if (img) img[c]++;
-            if (f_uniq) set_add(&uniq, &uniq_cap, &uniq_len, w);
+            if (img)
+                img[c]++;
+            if (f_uniq)
+                set_add(&uniq, &uniq_cap, &uniq_len, w);
         } else if (a64x_is_pac_hint(w)) {
             g_pachint++;
         }
@@ -127,11 +137,14 @@ static void scan_words(const uint8_t *p, uint64_t size, uint64_t *img)
 static void print_image(const char *name, const uint64_t *img)
 {
     uint64_t t = 0;
-    for (int c = 1; c < A64X_NCLASSES; c++) t += img[c];
-    if (!t) return;
+    for (int c = 1; c < A64X_NCLASSES; c++)
+        t += img[c];
+    if (!t)
+        return;
     printf("IMG %-60s", name);
     for (int c = 1; c < A64X_NCLASSES; c++) {
-        if (img[c]) printf(" %s=%" PRIu64, a64x_class_name(c), img[c]);
+        if (img[c])
+            printf(" %s=%" PRIu64, a64x_class_name(c), img[c]);
     }
     printf("\n");
 }
@@ -172,6 +185,7 @@ static uint32_t u32(const uint8_t *p, uint64_t o)
     memcpy(&v, p + o, 4);
     return v;
 }
+
 static uint64_t u64(const uint8_t *p, uint64_t o)
 {
     uint64_t v;
@@ -233,7 +247,8 @@ static void scan_dsc(const char *mainpath)
             }
         }
     }
-    if (opt_images) print_image("[TEXT_STUBS mappings]", stubimg);
+    if (opt_images)
+        print_image("[TEXT_STUBS mappings]", stubimg);
     uint32_t img_off = u32(m, 0x1C0), img_cnt = u32(m, 0x1C4);
     fprintf(stderr, "%d cache files, %d mappings, %u images, %" PRIu64 " stub words\n", nfiles, nmaps, img_cnt,
             stub_words);
@@ -269,13 +284,15 @@ static void scan_dsc(const char *mainpath)
             }
             lc += csz;
         }
-        if (opt_images) print_image(name, img);
+        if (opt_images)
+            print_image(name, img);
     }
 }
 
 static void scan_macho_slice(const char *name, const uint8_t *mh, uint64_t len)
 {
-    if (len < 32 || u32(mh, 0) != 0xFEEDFACF) return;
+    if (len < 32 || u32(mh, 0) != 0xFEEDFACF)
+        return;
     uint32_t ncmds = u32(mh, 16);
     const uint8_t *lc = mh + 32;
     uint64_t img[A64X_NCLASSES] = {0};
@@ -295,7 +312,8 @@ static void scan_macho_slice(const char *name, const uint8_t *mh, uint64_t len)
         }
         lc += csz;
     }
-    if (opt_images) print_image(name, img);
+    if (opt_images)
+        print_image(name, img);
 }
 
 static int opt_any_arm64;
@@ -304,7 +322,8 @@ static void scan_macho(const char *path)
 {
     uint64_t sz;
     const uint8_t *b = mapfile(path, &sz);
-    if (sz < 32) return;
+    if (sz < 32)
+        return;
     uint32_t magic = u32(b, 0);
     if (magic == 0xBEBAFECA) { /* FAT_CIGAM: big-endian header */
         uint32_t n = __builtin_bswap32(u32(b, 4));
@@ -340,10 +359,17 @@ int a64x_cmd_scan(int argc, char **argv)
             f_sample = fopen(optarg, "w");
             samp = calloc(samp_cap, sizeof(*samp));
             break;
-        case 'S': sample_n = atoi(optarg); break;
-        case 'i': opt_images = 1; break;
-        case 'A': opt_any_arm64 = 1; break;
-        default: return 2;
+        case 'S':
+            sample_n = atoi(optarg);
+            break;
+        case 'i':
+            opt_images = 1;
+            break;
+        case 'A':
+            opt_any_arm64 = 1;
+            break;
+        default:
+            return 2;
         }
     }
     argc -= optind;
@@ -355,7 +381,8 @@ int a64x_cmd_scan(int argc, char **argv)
     if (!strcmp(argv[0], "dsc")) {
         scan_dsc(argv[1]);
     } else {
-        for (int i = 1; i < argc; i++) scan_macho(argv[i]);
+        for (int i = 1; i < argc; i++)
+            scan_macho(argv[i]);
     }
     pg_flush();
     printf("TOTAL words=%" PRIu64 " pac_hints(nop on v8.0)=%" PRIu64 "\n", g_words, g_pachint);
@@ -374,7 +401,8 @@ int a64x_cmd_scan(int argc, char **argv)
         struct ent *v = malloc(uniq_len * sizeof(*v));
         size_t k = 0;
         for (size_t i = 0; i < uniq_cap; i++)
-            if (uniq[i].n) v[k++] = uniq[i];
+            if (uniq[i].n)
+                v[k++] = uniq[i];
         qsort(v, k, sizeof(*v), cmp_ent);
         for (size_t i = 0; i < k; i++)
             fprintf(f_uniq, "%08x %s %u\n", v[i].w, a64x_class_name(a64x_classify(v[i].w)), v[i].n);
@@ -382,7 +410,8 @@ int a64x_cmd_scan(int argc, char **argv)
     }
     if (f_sample) {
         for (size_t i = 0; i < samp_cap; i++)
-            if (samp[i].n) fprintf(f_sample, "%08x %u\n", samp[i].w, samp[i].n);
+            if (samp[i].n)
+                fprintf(f_sample, "%08x %u\n", samp[i].w, samp[i].n);
         fclose(f_sample);
     }
     return 0;

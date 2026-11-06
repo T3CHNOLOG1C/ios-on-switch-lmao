@@ -21,10 +21,18 @@ enum : uint64_t {
     GpuScratchIova = 0x302000,
     GpuApertureBytes = 0x80000000
 };
-enum : size_t { GpuSqeBytes = 0x13000, GpuRingBytes = 0x8000, GpuPageBytes = 0x1000, GpuBufferCount = 5 };
+
+enum : size_t {
+    GpuSqeBytes = 0x13000,
+    GpuRingBytes = 0x8000,
+    GpuPageBytes = 0x1000,
+    GpuBufferCount = 5
+};
+
 struct NativeAdrenoGpuBuffer {
     uint64_t physical, bytes, iova;
 };
+
 class NativeAdrenoGpuContext final {
     NativeAdrenoMemory tables_, buffers_[GpuBufferCount];
     uint64_t handles_[GpuBufferCount]{};
@@ -35,18 +43,43 @@ class NativeAdrenoGpuContext final {
     bool ready_ = false, used_ = false;
 
 public:
-    enum Step : uint32_t { Allocate = 1, Prepare, Program, Attach, VmAttach, Map, Ready };
-    enum : size_t { TablePages = 1027 };
+    enum Step : uint32_t {
+        Allocate = 1,
+        Prepare,
+        Program,
+        Attach,
+        VmAttach,
+        Map,
+        Ready
+    };
+
+    enum : size_t {
+        TablePages = 1027
+    };
+
     NativeAdrenoGpuContext() = default;
     NativeAdrenoGpuContext(const NativeAdrenoGpuContext &) = delete;
     NativeAdrenoGpuContext &operator=(const NativeAdrenoGpuContext &) = delete;
     /* The report is the GMU context's: route counts cover both streams. */
     IOReturn bringUp(const ArmSmmu4KIo *io, unsigned bank, unsigned asid, const unsigned slots[2],
                      const uint16_t sids[2], void (*progress)(uint32_t step), NativeAdrenoGmuContextReport *report);
-    bool ready() const { return ready_; }
-    const NativeAdrenoMemory &buffer(unsigned index) const { return buffers_[index]; }
-    NativeAdrenoVm *vm() { return ready_ ? &vm_ : nullptr; }
+
+    bool ready() const
+    {
+        return ready_;
+    }
+
+    const NativeAdrenoMemory &buffer(unsigned index) const
+    {
+        return buffers_[index];
+    }
+
+    NativeAdrenoVm *vm()
+    {
+        return ready_ ? &vm_ : nullptr;
+    }
 };
+
 extern "C" IOReturn NativeAdrenoGpuContextBringup(volatile uint8_t *smmu, size_t bytes, unsigned bank, unsigned asid,
                                                   unsigned slot0, unsigned sid0, unsigned slot1, unsigned sid1,
                                                   void (*progress)(uint32_t), NativeAdrenoGmuContextReport *report);

@@ -23,6 +23,7 @@ inline uint16_t be16(const uint8_t *p)
 {
     return static_cast<uint16_t>((p[0] << 8) | p[1]);
 }
+
 inline uint16_t le16(const uint8_t *p)
 {
     return static_cast<uint16_t>(p[0] | (p[1] << 8));
@@ -40,7 +41,8 @@ void mic(const uint8_t kck[16], const uint8_t *eapol, size_t length, uint8_t out
 bool hasSuite(const uint8_t *suites, size_t count, const uint8_t want[4])
 {
     for (size_t i = 0; i < count; ++i)
-        if (!memcmp(suites + 4 * i, want, 4)) return true;
+        if (!memcmp(suites + 4 * i, want, 4))
+            return true;
     return false;
 }
 
@@ -66,7 +68,8 @@ const uint8_t *element(const uint8_t *ies, size_t length, uint8_t id, size_t *el
 {
     for (size_t k = 0; k + 2 <= length;) {
         const size_t end = k + 2 + ies[k + 1];
-        if (end > length) return nullptr;
+        if (end > length)
+            return nullptr;
         if (ies[k] == id) {
             *elementLength = end - k;
             return ies + k;
@@ -78,21 +81,30 @@ const uint8_t *element(const uint8_t *ies, size_t length, uint8_t id, size_t *el
 
 const char *checkRsn(const uint8_t *rsn, size_t length)
 {
-    if (!rsn || length < 2 + 8) return "no RSN element";
+    if (!rsn || length < 2 + 8)
+        return "no RSN element";
     const uint8_t *b = rsn + 2;
     const size_t n = length - 2;
-    if (le16(b) != 1) return "unknown RSN version";
-    if (memcmp(b + 2, kSuiteCcmp, 4)) return "group cipher is not CCMP (WPA/WPA2 mixed mode)";
+    if (le16(b) != 1)
+        return "unknown RSN version";
+    if (memcmp(b + 2, kSuiteCcmp, 4))
+        return "group cipher is not CCMP (WPA/WPA2 mixed mode)";
     const size_t pairwise = le16(b + 6);
-    if (8 + 4 * pairwise > n) return "truncated RSN element";
-    if (!hasSuite(b + 8, pairwise, kSuiteCcmp)) return "no CCMP pairwise cipher";
+    if (8 + 4 * pairwise > n)
+        return "truncated RSN element";
+    if (!hasSuite(b + 8, pairwise, kSuiteCcmp))
+        return "no CCMP pairwise cipher";
     const size_t akmAt = 8 + 4 * pairwise;
-    if (akmAt + 2 > n) return "no key management in the RSN element";
+    if (akmAt + 2 > n)
+        return "no key management in the RSN element";
     const size_t akm = le16(b + akmAt);
-    if (akmAt + 2 + 4 * akm > n) return "truncated RSN element";
-    if (!hasSuite(b + akmAt + 2, akm, kSuitePsk)) return "no PSK key management (WPA3-only or enterprise)";
+    if (akmAt + 2 + 4 * akm > n)
+        return "truncated RSN element";
+    if (!hasSuite(b + akmAt + 2, akm, kSuitePsk))
+        return "no PSK key management (WPA3-only or enterprise)";
     const size_t capsAt = akmAt + 2 + 4 * akm;
-    if (capsAt + 2 <= n && (le16(b + capsAt) & kRsnMfpRequired)) return "management frame protection required";
+    if (capsAt + 2 <= n && (le16(b + capsAt) & kRsnMfpRequired))
+        return "management frame protection required";
     return nullptr;
 }
 
@@ -164,7 +176,8 @@ void Supplicant::build(const Key &k, uint16_t info, const uint8_t nonce[32], con
     memcpy(e + kNonce, nonce, 32);
     e[kDataLength] = static_cast<uint8_t>(dataLength >> 8);
     e[kDataLength + 1] = static_cast<uint8_t>(dataLength);
-    if (dataLength) memcpy(e + kData, data, dataLength);
+    if (dataLength)
+        memcpy(e + kData, data, dataLength);
     uint8_t m[20];
     mic(kck, e, eapolLength, m);
     memcpy(e + kMicAt, m, kMicLength);
@@ -174,18 +187,24 @@ void Supplicant::build(const Key &k, uint16_t info, const uint8_t nonce[32], con
 // The GTK KDE (00-0F-AC type 1) in the key data, which the KEK wraps (RFC 3394).
 const char *Supplicant::unwrapGtk(const Key &k, const uint8_t ptk[48], Gtk &gtk) const
 {
-    if (!(k.info & kEncrypted)) return "key data not encrypted";
-    if (k.dataLength < 24 || k.dataLength > 256 || k.dataLength % 8) return "key data of an odd size";
+    if (!(k.info & kEncrypted))
+        return "key data not encrypted";
+    if (k.dataLength < 24 || k.dataLength > 256 || k.dataLength % 8)
+        return "key data of an odd size";
     uint8_t plain[256];
-    if (!crypto::keyUnwrap(ptk + 16, k.data, k.dataLength, plain)) return "key data does not unwrap";
+    if (!crypto::keyUnwrap(ptk + 16, k.data, k.dataLength, plain))
+        return "key data does not unwrap";
     const size_t n = k.dataLength - 8;
     for (size_t at = 0; at + 2 <= n;) {
         const uint8_t id = plain[at], length = plain[at + 1];
-        if (id == 0xDD && length == 0) break;  // padding
-        if (at + 2 + length > n) return "truncated key data element";
+        if (id == 0xDD && length == 0)
+            break;  // padding
+        if (at + 2 + length > n)
+            return "truncated key data element";
         const uint8_t *body = plain + at + 2;
         if (id == 0xDD && length >= 6 && body[0] == 0x00 && body[1] == 0x0F && body[2] == 0xAC && body[3] == 1) {
-            if (length - 6 != 16) return "group key is not a 16-byte CCMP key";
+            if (length - 6 != 16)
+                return "group key is not a 16-byte CCMP key";
             gtk.index = body[4] & 3;
             memcpy(gtk.key, body + 6, 16);
             memcpy(gtk.rsc, k.rsc, 6);
@@ -200,7 +219,8 @@ const char *Supplicant::unwrapGtk(const Key &k, const uint8_t ptk[48], Gtk &gtk)
 
 bool Supplicant::fresh(const Gtk &gtk)
 {
-    if (haveGtk_ && gtk.index == gtk_.index && crypto::same(gtk.key, gtk_.key, 16)) return false;
+    if (haveGtk_ && gtk.index == gtk_.index && crypto::same(gtk.key, gtk_.key, 16))
+        return false;
     gtk_ = gtk;
     haveGtk_ = true;
     return true;
@@ -210,12 +230,15 @@ const char *Supplicant::receive(const uint8_t *frame, size_t length, Step &step)
 {
     step.replyLength = 0;
     step.hasPtk = step.hasGtk = false;
-    if (!isEapol(frame, length)) return "not an EAPOL frame";
+    if (!isEapol(frame, length))
+        return "not an EAPOL frame";
     const uint8_t *e = frame + kEthHeader;
     const size_t available = length - kEthHeader;
-    if (available < kData || e[1] != kEapolKey || e[4] != kDescRsn) return "not an RSN EAPOL-Key frame";
+    if (available < kData || e[1] != kEapolKey || e[4] != kDescRsn)
+        return "not an RSN EAPOL-Key frame";
     const size_t eapolLength = kHeader + be16(e + 2);
-    if (eapolLength < kData || eapolLength > available) return "truncated EAPOL-Key frame";
+    if (eapolLength < kData || eapolLength > available)
+        return "truncated EAPOL-Key frame";
     Key k;
     memcpy(k.src, frame + 6, 6);
     k.version = e[0];
@@ -228,10 +251,14 @@ const char *Supplicant::receive(const uint8_t *frame, size_t length, Step &step)
     k.data = e + kData;
     k.eapol = e;
     k.eapolLength = eapolLength;
-    if (kData + k.dataLength > eapolLength) return "truncated key data";
-    if ((k.info & kInfoVersion) != kVersionAes) return "key descriptor is not version 2 (HMAC-SHA1, AES)";
-    if (haveAa_ && memcmp(aa_, k.src, 6)) return "EAPOL-Key frame from another station";
-    if (haveReplay_ && memcmp(k.replay, replay_, 8) <= 0) return "replay counter did not increase";
+    if (kData + k.dataLength > eapolLength)
+        return "truncated key data";
+    if ((k.info & kInfoVersion) != kVersionAes)
+        return "key descriptor is not version 2 (HMAC-SHA1, AES)";
+    if (haveAa_ && memcmp(aa_, k.src, 6))
+        return "EAPOL-Key frame from another station";
+    if (haveReplay_ && memcmp(k.replay, replay_, 8) <= 0)
+        return "replay counter did not increase";
 
     const bool pairwise = k.info & kPairwise, withMic = k.info & kMic;
     uint8_t m[20];
@@ -251,12 +278,16 @@ const char *Supplicant::receive(const uint8_t *frame, size_t length, Step &step)
     if (pairwise && withMic && (k.info & (kAck | kInstall)) == (kAck | kInstall)) {
         // Message 3: MIC under the temporary PTK, the GTK unwrapped; message 4 goes back in the clear before the keys
         // are installed.
-        if (!haveTptk_) return "message 3 before message 1";
-        if (memcmp(k.nonce, anonce_, 32)) return "ANonce differs between messages 1 and 3";
+        if (!haveTptk_)
+            return "message 3 before message 1";
+        if (memcmp(k.nonce, anonce_, 32))
+            return "ANonce differs between messages 1 and 3";
         mic(tptk_, k.eapol, k.eapolLength, m);
-        if (!crypto::same(m, k.micField, kMicLength)) return "message 3 MIC mismatch";
+        if (!crypto::same(m, k.micField, kMicLength))
+            return "message 3 MIC mismatch";
         Gtk gtk;
-        if (const char *why = unwrapGtk(k, tptk_, gtk)) return why;
+        if (const char *why = unwrapGtk(k, tptk_, gtk))
+            return why;
         memcpy(replay_, k.replay, 8);
         haveReplay_ = true;
         static const uint8_t zero[32] = {};
@@ -275,11 +306,14 @@ const char *Supplicant::receive(const uint8_t *frame, size_t length, Step &step)
     }
     if (!pairwise && withMic && (k.info & kAck)) {
         // Group key handshake message 1: a new GTK under the PTK.
-        if (!havePtk_) return "group key before the pairwise handshake";
+        if (!havePtk_)
+            return "group key before the pairwise handshake";
         mic(ptk_, k.eapol, k.eapolLength, m);
-        if (!crypto::same(m, k.micField, kMicLength)) return "group message 1 MIC mismatch";
+        if (!crypto::same(m, k.micField, kMicLength))
+            return "group message 1 MIC mismatch";
         Gtk gtk;
-        if (const char *why = unwrapGtk(k, ptk_, gtk)) return why;
+        if (const char *why = unwrapGtk(k, ptk_, gtk))
+            return why;
         memcpy(replay_, k.replay, 8);
         haveReplay_ = true;
         static const uint8_t zero[32] = {};

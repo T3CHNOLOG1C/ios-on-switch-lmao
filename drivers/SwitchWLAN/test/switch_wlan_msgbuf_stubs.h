@@ -28,6 +28,7 @@ void swlan_test_mmio(const void *mmio, char kind, uint32_t offset);
 #define SWLAN_MMIO_TRACE(mmio, kind, offset) swlan_test_mmio(mmio, kind, offset)
 
 inline std::vector<std::string> gLog;
+
 __attribute__((format(printf, 1, 2))) inline void IOLog(const char *format, ...)
 {
     char line[1024];
@@ -36,12 +37,15 @@ __attribute__((format(printf, 1, 2))) inline void IOLog(const char *format, ...)
     vsnprintf(line, sizeof(line), format, ap);
     va_end(ap);
     std::string text = line;
-    if (!text.empty() && text.back() == '\n') text.pop_back();
+    if (!text.empty() && text.back() == '\n')
+        text.pop_back();
     gLog.push_back(text);
 }
+
 struct Panic : std::runtime_error {
     using std::runtime_error::runtime_error;
 };
+
 __attribute__((format(printf, 1, 2), noreturn)) inline void panic(const char *format, ...)
 {
     char line[1024];
@@ -51,27 +55,34 @@ __attribute__((format(printf, 1, 2), noreturn)) inline void panic(const char *fo
     va_end(ap);
     throw Panic(line);
 }
+
 inline uint64_t gDelayedUs = 0;
+
 inline void IODelay(unsigned us)
 {
     gDelayedUs += us;
 }
+
 inline void IOSleep(unsigned ms)
 {
     gDelayedUs += ms * 1000ull;
 }
+
 inline void bzero(void *p, size_t n)
 {
     memset(p, 0, n);
 }
+
 inline void *IOMallocZeroData(size_t n)
 {
     return calloc(1, n);
 }
+
 inline void IOFree(void *p, size_t)
 {
     free(p);
 }
+
 extern "C" inline vm_offset_t ml_io_map(vm_offset_t pa, vm_size_t)
 {
     return pa;
@@ -89,7 +100,8 @@ class IOBufferMemoryDescriptor {
 public:
     static IOBufferMemoryDescriptor *inTaskWithPhysicalMask(void *, IOOptionBits, size_t length, uint64_t)
     {
-        if (gFailAllocationsFrom && length >= gFailAllocationsFrom) return nullptr;
+        if (gFailAllocationsFrom && length >= gFailAllocationsFrom)
+            return nullptr;
         auto *m = new IOBufferMemoryDescriptor;
         m->length_ = length;
         if (posix_memalign(&m->bytes_, 16384, length)) {
@@ -100,12 +112,19 @@ public:
         gAreaLength = length;
         return m;
     }
+
     uint64_t getPhysicalSegment(uint64_t offset, IOByteCount *segment, IOOptionBits)
     {
-        if (segment) *segment = length_ - offset;
+        if (segment)
+            *segment = length_ - offset;
         return kFakeAreaPA + offset;
     }
-    void *getBytesNoCopy() { return bytes_; }
+
+    void *getBytesNoCopy()
+    {
+        return bytes_;
+    }
+
     void release()
     {
         free(bytes_);
@@ -116,10 +135,12 @@ private:
     void *bytes_ = nullptr;
     size_t length_ = 0;
 };
-#define OSSafeReleaseNULL(p)   \
-    do {                       \
-        if (p) (p)->release(); \
-        (p) = nullptr;         \
+
+#define OSSafeReleaseNULL(p) \
+    do {                     \
+        if (p)               \
+            (p)->release();  \
+        (p) = nullptr;       \
     } while (0)
 
 #endif

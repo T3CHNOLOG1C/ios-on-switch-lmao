@@ -18,7 +18,8 @@ namespace {
 std::string ReadRunfile(const char *path)
 {
     std::ifstream file(path, std::ios::binary);
-    if (!file) ADD_FAILURE() << "cannot read " << path;
+    if (!file)
+        ADD_FAILURE() << "cannot read " << path;
     std::ostringstream text;
     text << file.rdbuf();
     return text.str();
@@ -35,7 +36,8 @@ TEST(XnuMemcmpSource, SubrsUsesItOnArm64Only)
 {
     const std::string patched = ReadRunfile(SUBRS_PATCHED), base = ReadRunfile(SUBRS_BASE);
     EXPECT_THAT(patched, HasSubstr("#include <arm64/switch_memcmp.h>"));
-    for (const char *line : kBodies) EXPECT_THAT(patched, HasSubstr(line));
+    for (const char *line : kBodies)
+        EXPECT_THAT(patched, HasSubstr(line));
     // The patch adds exactly two arm64-only blocks: other architectures keep the byte loops.
     EXPECT_EQ(Count(patched, "#if defined(__arm64__)\n") - Count(base, "#if defined(__arm64__)\n"), 2u);
 }
@@ -43,5 +45,6 @@ TEST(XnuMemcmpSource, SubrsUsesItOnArm64Only)
 TEST(XnuMemcmpSource, HarnessCopiesSubrsBodies)
 {
     const std::string harness = SourceText("xnu_memcmp_harness.c");
-    for (const char *line : kBodies) EXPECT_THAT(harness, HasSubstr(line));
+    for (const char *line : kBodies)
+        EXPECT_THAT(harness, HasSubstr(line));
 }

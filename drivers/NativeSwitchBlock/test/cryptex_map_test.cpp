@@ -19,6 +19,7 @@
 // counted; a test passes only with none.
 static unsigned long failures;
 static void report(const char *file, int line, const char *format, ...) __attribute__((format(printf, 3, 4)));
+
 static void report(const char *file, int line, const char *format, ...)
 {
     char text[256];
@@ -28,11 +29,13 @@ static void report(const char *file, int line, const char *format, ...)
     va_end(ap);
     ADD_FAILURE_AT(file, line) << text;
 }
-#define CHECK(cond, ...)                                                  \
-    do {                                                                  \
-        if (!(cond)) {                                                    \
-            if (failures++ < 20) report(__FILE__, __LINE__, __VA_ARGS__); \
-        }                                                                 \
+
+#define CHECK(cond, ...)                                 \
+    do {                                                 \
+        if (!(cond)) {                                   \
+            if (failures++ < 20)                         \
+                report(__FILE__, __LINE__, __VA_ARGS__); \
+        }                                                \
     } while (0)
 
 // One random stream for both tests, in order, as when they were one program: the logs' cases follow the maps'.
@@ -55,13 +58,16 @@ TEST(CryptexMap, RequestsSplitIntoPiecesOfOneExtent)
             const uint64_t length = (1 + rng() % 600) * kBlock;
             if (rng() % 7 == 0) {  // a hole (sparse file): zeros, no card read
                 CHECK(switchAppendExtent(map.data(), &count, parts, file, kSwitchHole, length), "append refused\n");
-                for (uint64_t b = 0; b < length / kBlock; ++b) diskOf.push_back(kSwitchHole);
+                for (uint64_t b = 0; b < length / kBlock; ++b)
+                    diskOf.push_back(kSwitchHole);
                 file += length;
                 continue;
             }
-            if (rng() % 3) disk += (1 + rng() % 5000) * 512;  // else contiguous with the previous part: merged
+            if (rng() % 3)
+                disk += (1 + rng() % 5000) * 512;  // else contiguous with the previous part: merged
             CHECK(switchAppendExtent(map.data(), &count, parts, file, disk, length), "append refused\n");
-            for (uint64_t b = 0; b < length / kBlock; ++b) diskOf.push_back(disk + b * kBlock);
+            for (uint64_t b = 0; b < length / kBlock; ++b)
+                diskOf.push_back(disk + b * kBlock);
             file += length;
             disk += length;
         }
@@ -85,7 +91,8 @@ TEST(CryptexMap, RequestsSplitIntoPiecesOfOneExtent)
                 const SwitchPiece piece =
                     switchNextPiece(map.data(), count, &at, start * kBlock + done, n * kBlock - done, maxPiece);
                 CHECK(piece.length && piece.length <= maxPiece && piece.length % kBlock == 0, "bad piece length\n");
-                if (!piece.length) break;
+                if (!piece.length)
+                    break;
                 for (uint64_t b = 0; b < piece.length / kBlock; ++b) {
                     const uint64_t want = diskOf[start + done / kBlock + b];
                     CHECK(piece.disk == kSwitchHole ? want == kSwitchHole : piece.disk + b * kBlock == want,
@@ -125,17 +132,20 @@ TEST(CryptexMap, PrefetchLogsMergeIntoRuns)
             r.when = uint16_t(1 + rng() % 300);
             pages += r.end - r.first;
         }
-        std::sort(ranges.begin(), ranges.end(),
-                  [](const SwitchRange &x, const SwitchRange &y) { return switchCompareRanges(x, y) < 0; });
+        std::sort(ranges.begin(), ranges.end(), [](const SwitchRange &x, const SwitchRange &y) {
+            return switchCompareRanges(x, y) < 0;
+        });
         const uint64_t capacity = switchRunCapacity(n, pages, kMaxRun, kMaxGap);
         std::vector<SwitchRun> runs(capacity);
         uint32_t files = 0;
         const uint32_t count = switchMergeRuns(ranges.data(), n, runs.data(), capacity, kMaxRun, kMaxGap, &files);
         CHECK(count < capacity, "capacity reached (%u of %llu)\n", count, (unsigned long long)capacity);
         std::set<std::pair<uint64_t, uint8_t>> distinct;
-        for (auto &r : ranges) distinct.insert({r.fileId, r.index});
+        for (auto &r : ranges)
+            distinct.insert({r.fileId, r.index});
         CHECK(files == distinct.size(), "files %u, expected %zu\n", files, distinct.size());
-        for (uint32_t i = 0; i < count; ++i) CHECK(runs[i].pages && runs[i].pages <= kMaxRun, "run size\n");
+        for (uint32_t i = 0; i < count; ++i)
+            CHECK(runs[i].pages && runs[i].pages <= kMaxRun, "run size\n");
         for (auto &r : ranges) {
             for (uint32_t page = r.first; page < r.end; ++page) {
                 unsigned holding = 0;
@@ -159,9 +169,11 @@ TEST(CryptexMap, PrefetchLogsMergeIntoRuns)
                 CHECK(near, "run page %u far from any read\n", page);
             }
         }
-        std::sort(runs.begin(), runs.begin() + count,
-                  [](const SwitchRun &x, const SwitchRun &y) { return switchCompareRuns(x, y) < 0; });
-        for (uint32_t i = 1; i < count; ++i) CHECK(runs[i - 1].when <= runs[i].when, "replay order\n");
+        std::sort(runs.begin(), runs.begin() + count, [](const SwitchRun &x, const SwitchRun &y) {
+            return switchCompareRuns(x, y) < 0;
+        });
+        for (uint32_t i = 1; i < count; ++i)
+            CHECK(runs[i - 1].when <= runs[i].when, "replay order\n");
         ++logs;
     }
     EXPECT_EQ(failures, 0u) << "checks failed (the first 20 reported above)";
@@ -175,7 +187,8 @@ TEST(CryptexMap, PrefetchLogsMergeIntoRuns)
 namespace {
 void put(std::vector<uint8_t> &bytes, size_t at, uint64_t value, unsigned size)
 {
-    for (unsigned i = 0; i < size; ++i) bytes[at + i] = uint8_t(value >> (8 * i));  // little-endian, as the device
+    for (unsigned i = 0; i < size; ++i)
+        bytes[at + i] = uint8_t(value >> (8 * i));  // little-endian, as the device
 }
 }  // namespace
 
@@ -203,11 +216,12 @@ TEST(CryptexMap, TheSavedListFormatStaysReadable)
 
     // A saved list: header, then two runs.
     std::vector<uint8_t> file(96 + 2 * 16, 0);
-    for (unsigned i = 0; i < 8; ++i) file[i] = uint8_t("SWCHPF02"[i]);
+    for (unsigned i = 0; i < 8; ++i)
+        file[i] = uint8_t("SWCHPF02"[i]);
     put(file, 8, 2, 4);
     put(file, 12, 96, 4);
     const SwitchImageKey keys[2] = {{3303014400ull, 0x1d2e3full, 1730800000, 123456789},
-                                      {10485760ull, 0x4a5bull, 1730800001, 987654321}};
+                                    {10485760ull, 0x4a5bull, 1730800001, 987654321}};
     for (unsigned i = 0; i < 2; ++i) {
         put(file, 16 + 32 * i, keys[i].bytes, 8);
         put(file, 24 + 32 * i, keys[i].fileId, 8);

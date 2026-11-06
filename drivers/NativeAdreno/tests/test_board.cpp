@@ -11,6 +11,7 @@
             std::exit(1);                                        \
         }                                                        \
     } while (0)
+
 static void put(uint8_t *at, uint32_t value)
 {
     at[0] = uint8_t(value >> 24);
@@ -18,13 +19,17 @@ static void put(uint8_t *at, uint32_t value)
     at[2] = uint8_t(value >> 8);
     at[3] = uint8_t(value);
 }
+
 static size_t reg(uint8_t *out, const uint32_t (*cells)[4], size_t windows)
 {
     for (size_t i = 0; i < windows; ++i)
-        for (size_t c = 0; c < 4; ++c) put(out + i * 16 + c * 4, cells[i][c]);
+        for (size_t c = 0; c < 4; ++c)
+            put(out + i * 16 + c * 4, cells[i][c]);
     return windows * 16;
 }
+
 static NativeAdrenoWindow windows[NativeAdrenoMaxWindows];
+
 int main()
 {
     /* sm8550.dtsi gpu@3d00000: three reg windows, #address/size-cells = 2. */
@@ -75,7 +80,8 @@ int main()
         static const uint32_t cells[][3] = {{0x1a, 0, 0}, {0x1a, 1, 0}};
         uint8_t raw[32];
         for (size_t i = 0; i < 2; ++i)
-            for (size_t c = 0; c < 3; ++c) put(raw + i * 12 + c * 4, cells[i][c]);
+            for (size_t c = 0; c < 3; ++c)
+                put(raw + i * 12 + c * 4, cells[i][c]);
         uint16_t sids[4]{};
         size_t count = 0;
         CHECK(NativeAdrenoBoard::parseIommus(raw, 24, 2, sids, 4, &count) == kIOReturnSuccess);

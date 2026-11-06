@@ -47,6 +47,7 @@ void dumpLastJob(const char *what)
     char falcon[200];
     tegra_vic_describe(falcon, sizeof(falcon));
     IOLog("TegraVIC: diag %s: %s\n", what, falcon);
+
     struct {
         const char *name;
         uint32_t offset, bytes;
@@ -59,6 +60,7 @@ void dumpLastJob(const char *what)
         {"slot 0 surface", TEGRA_VIC_SLOTS + TEGRA_VIC_SLOT_SURFACE, 16},
         {"slot 0 matrix", TEGRA_VIC_SLOTS + TEGRA_VIC_SLOT_MATRIX, 32},
     };
+
     for (const auto &part : parts) {
         int n = snprintf(text, sizeof(text), "TegraVIC: diag %s: %s @%#x:", what, part.name, part.offset);
         for (uint32_t i = 0; i < part.bytes / 4 && n > 0 && n < (int)sizeof(text); i++)
@@ -70,6 +72,7 @@ void dumpLastJob(const char *what)
         n += snprintf(text + n, sizeof(text) - n, " %03x=%08x", j.method[i], j.value[i]);
     IOLog("%s\n", text);
 }
+
 uint64_t nowUs()
 {
     uint64_t ns;
@@ -125,8 +128,10 @@ int run(const TegraVICImage *src, const TegraVICImage *dst, const TegraVICOp *op
 {
     TegraVICJob &job = gLastJob;
     *why = tegra_vic_build(src, dst, op, t, tegra_vic_config_address(), tegra_vic_filter_address(), &job);
-    if (*why) return -22;
-    if (!op->fill) tegra_vic_cache_clean(gSrc.va, gSrc.size);
+    if (*why)
+        return -22;
+    if (!op->fill)
+        tegra_vic_cache_clean(gSrc.va, gSrc.size);
     memset(gDst.va, 0xab, gDst.size);  // poison: what the engine does not write shows
     tegra_vic_cache_flush(gDst.va, gDst.size);
     uint64_t us = 0;
@@ -134,7 +139,8 @@ int run(const TegraVICImage *src, const TegraVICImage *dst, const TegraVICOp *op
     tegra_vic_cache_flush(gDst.va, gDst.size);
     gJobs++;
     gBusyUs += us;
-    if (ret) *why = "job did not complete";
+    if (ret)
+        *why = "job did not complete";
     return ret;
 }
 
@@ -230,11 +236,13 @@ bool transforms(TegraVICTraits *t, char *line, size_t size)
 // Flat-patch cards: 4 x 2 patches of 16 x 16 in 64 x 32 (BGRA) with these colours.
 constexpr uint32_t kPatches[8] = {0xff000000, 0xffffffff, 0xffff0000, 0xff00ff00,
                                   0xff0000ff, 0xff808080, 0xffc04020, 0xff2090e0};
+
 void drawPatches(uint32_t pitch, uint32_t width = 64)
 {
     bzero(gSrc.va, gSrc.size);
     for (uint32_t y = 0; y < 32; y++)
-        for (uint32_t x = 0; x < width; x++) ((uint32_t *)(gSrc.va + y * pitch))[x] = kPatches[(y / 16) * 4 + x / 16];
+        for (uint32_t x = 0; x < width; x++)
+            ((uint32_t *)(gSrc.va + y * pitch))[x] = kPatches[(y / 16) * 4 + x / 16];
 }
 
 inline uint32_t near(uint32_t a, uint32_t b)
@@ -264,9 +272,11 @@ bool checkNv12(uint32_t w, uint32_t h, uint32_t patchW, uint32_t patchH, const u
             const uint32_t *e = want[py * cols + px];
             for (uint32_t y = py * patchH + patchH / 4; y < (py + 1) * patchH - patchH / 4; y++)
                 for (uint32_t x = px * patchW + patchW / 4; x < (px + 1) * patchW - patchW / 4; x++) {
-                    if (!near(yp[y * kPitch + x], e[0])) (*bad)++;
+                    if (!near(yp[y * kPitch + x], e[0]))
+                        (*bad)++;
                     const uint8_t *c = uv + (y / 2) * kPitch + (x / 2) * 2;
-                    if (!near(c[0], e[1]) || !near(c[1], e[2])) (*bad)++;
+                    if (!near(c[0], e[1]) || !near(c[1], e[2]))
+                        (*bad)++;
                 }
         }
     return *bad == 0;
@@ -302,7 +312,8 @@ bool yccSource(TegraVICTraits *t, char *line, size_t size, char *note, size_t no
         probe.in = orders[o];
         probe.yccIn = TEGRA_VIC_YCC_IN_RGB;
         TegraVICImage rgb = bgra(gDst, 64, 32, kPitch);
-        if (run(&ysrc, &rgb, &op, &probe, &refused[o])) continue;
+        if (run(&ysrc, &rgb, &op, &probe, &refused[o]))
+            continue;
         TegraVICMatrix toRgb;
         tegra_vic_matrix_ycc_to_rgb(TEGRA_VIC_YCC_709, 1, &orders[o], &toRgb);
         worst[o][0] = worst[o][1] = 0;
@@ -324,7 +335,8 @@ bool yccSource(TegraVICTraits *t, char *line, size_t size, char *note, size_t no
                         for (int k = 0; k < 3; k++) {
                             want[law][k] = out10[k] >> 2;
                             const uint32_t d = got[k] > want[law][k] ? got[k] - want[law][k] : want[law][k] - got[k];
-                            if (d > worst[o][law]) worst[o][law] = d;
+                            if (d > worst[o][law])
+                                worst[o][law] = d;
                         }
                     }
                     if (x == (i % 4) * 16 + 8 && y == (i / 4) * 16 + 8) {
@@ -338,7 +350,8 @@ bool yccSource(TegraVICTraits *t, char *line, size_t size, char *note, size_t no
     uint32_t best = 0, law = 0;
     for (uint32_t o = 0; o < 2; o++)
         for (uint32_t l = 0; l < 2; l++)
-            if (worst[o][l] < worst[best][law]) best = o, law = l;
+            if (worst[o][l] < worst[best][law])
+                best = o, law = l;
     const uint32_t *e = centre[best][6];  // the c0 40 20 patch
     if (worst[best][law] > 1) {
         // The one-boot diagnostic: what the engine read and wrote at each patch centre in both orders, then the
@@ -383,9 +396,11 @@ bool yccSource(TegraVICTraits *t, char *line, size_t size, char *note, size_t no
             copyBad = UINT32_MAX;
         } else {
             for (uint32_t at = 0; at < (uint32_t)kPitch * 48; at++) {
-                if (at % kPitch >= 64) continue;
+                if (at % kPitch >= 64)
+                    continue;
                 if (!near(gDst.va[at], gSrc.va[at])) {
-                    if (firstBad == UINT32_MAX) firstBad = at;
+                    if (firstBad == UINT32_MAX)
+                        firstBad = at;
                     copyBad++;
                 }
             }
@@ -431,7 +446,8 @@ bool colour(TegraVICTraits *t, char *line, size_t size, char *note, size_t noteS
         TegraVICMatrix m;
         tegra_vic_matrix_rgb_to_ycc(TEGRA_VIC_YCC_709, 1, &t->out, &m);
         uint32_t want[8][3];
-        for (uint32_t i = 0; i < 8; i++) expectYcc(&m, &t->out, kPatches[i], want[i]);
+        for (uint32_t i = 0; i < 8; i++)
+            expectYcc(&m, &t->out, kPatches[i], want[i]);
         if (checkNv12(64, 32, 16, 16, want, 4, &bad)) {
             outOrder = o;
         } else {
@@ -461,7 +477,8 @@ bool colour(TegraVICTraits *t, char *line, size_t size, char *note, size_t noteS
 
     // That 420f (the patches, as the engine wrote them) is the source of the 4:2:0-in checks.
     memcpy(gSrc.va, gDst.va, (uint64_t)kPitch * 48);
-    if (!yccSource(t, line, size, note, noteSize)) return false;
+    if (!yccSource(t, line, size, note, noteSize))
+        return false;
 
     // A fill of a 420f surface (Core Animation's border clears): the background colour through the output matrix, or
     // converted by the driver into the output channels.
@@ -483,8 +500,10 @@ bool colour(TegraVICTraits *t, char *line, size_t size, char *note, size_t noteS
         TegraVICMatrix m;
         tegra_vic_matrix_rgb_to_ycc(TEGRA_VIC_YCC_709, 1, &t->out, &m);
         uint32_t want[8][3];
-        for (uint32_t i = 0; i < 8; i++) expectYcc(&m, &t->out, 0xffc04020u, want[i]);
-        if (checkNv12(64, 32, 16, 16, want, 4, &bad)) break;
+        for (uint32_t i = 0; i < 8; i++)
+            expectYcc(&m, &t->out, 0xffc04020u, want[i]);
+        if (checkNv12(64, 32, 16, 16, want, 4, &bad))
+            break;
         if (!through) {
             const uint8_t *p = gDst.va, *uv = gDst.va + kPitch * 32;
             snprintf(line, size, "V4 FAIL 420f fill of RGB c0 40 20 is Y %u Cb %u Cr %u, want %u %u %u", p[0], uv[0],
@@ -515,9 +534,11 @@ bool scaling(TegraVICTraits *t, char *line, size_t size)
                 for (uint32_t x = (i % 4) * 8 + 2; x < (i % 4) * 8 + 6; x++) {
                     const uint32_t got = ((const uint32_t *)(gDst.va + y * kPitch))[x];
                     for (int c = 0; c < 24; c += 8)
-                        if (!near((got >> c) & 0xff, (kPatches[i] >> c) & 0xff)) bad++;
+                        if (!near((got >> c) & 0xff, (kPatches[i] >> c) & 0xff))
+                            bad++;
                 }
-        if (!bad) return true;
+        if (!bad)
+            return true;
         if (!bilinear) {
             snprintf(line, size, "V4 FAIL 2:1 downscale of flat patches is off (%u samples) with either filter", bad);
             return false;
@@ -549,7 +570,8 @@ bool pitch(TegraVICTraits *t, char *line, size_t size)
         for (uint32_t y = 0; y < 32; y++)
             for (uint32_t x = 0; x < w; x++) {
                 const uint32_t px = ((const uint32_t *)(gDst.va + y * kPitch))[x];
-                if (px != kPatches[(y / 16) * 4 + x / 16] && !bad++) firstX = x, firstY = y, got = px;
+                if (px != kPatches[(y / 16) * 4 + x / 16] && !bad++)
+                    firstX = x, firstY = y, got = px;
             }
         if (!bad) {
             t->pitchAlign = kNarrow[i][1];
@@ -574,7 +596,8 @@ void recording(TegraVICTraits *t, char *note, size_t size)
 {
     static const uint32_t kTurns[2] = {TEGRA_VIC_ROT90, TEGRA_VIC_ROT90 | TEGRA_VIC_FLIP_H | TEGRA_VIC_FLIP_V};
     for (uint32_t turn : kTurns) {
-        if (!(t->rotations & (1u << turn))) continue;  // unproven: such requests are refused anyway
+        if (!(t->rotations & (1u << turn)))
+            continue;  // unproven: such requests are refused anyway
         drawPatches(kPitch);
         TegraVICImage src = bgra(gSrc, 64, 32, kPitch);
         TegraVICImage dst = nv12(gDst, 32, 64);
@@ -592,7 +615,8 @@ void recording(TegraVICTraits *t, char *note, size_t size)
                 tegra_vic_transform_point(turn, 4, 2, i % 4, i / 4, &u, &v);
                 expectYcc(&m, &t->out, kPatches[i], want[v * 2 + u]);
             }
-            if (checkNv12(32, 64, 16, 16, want, 2, &bad)) continue;
+            if (checkNv12(32, 64, 16, 16, want, 2, &bad))
+                continue;
         }
         const uint8_t *yp = gDst.va, *uv = gDst.va + (uint64_t)kPitch * 64;
         snprintf(note, size, "off: transform %u into 420f %s (%u samples off; output patch 0,0 Y %u Cb %u Cr %u)", turn,
@@ -611,10 +635,12 @@ inline size_t tbl(uint32_t pitch, uint32_t x, uint32_t y)
     return (size_t)(y / 16) * pitch * 16 + (x / 64) * 1024 + ((y % 16) / 8) * 512 + ((x % 64) / 32) * 256 +
            ((y % 8) / 2) * 64 + ((x % 32) / 16) * 32 + (y % 2) * 16 + x % 16;
 }
+
 inline uint8_t blLuma(uint32_t x, uint32_t y)
 {
     return (uint8_t)(x * 3 + y * 5 + 7);
 }
+
 inline uint8_t blChroma(uint32_t x, uint32_t y)  // x: the byte in the CbCr row
 {
     return (uint8_t)(x * 5 + y * 11 + 50);
@@ -631,9 +657,11 @@ void blockLinear(TegraVICTraits *t, char *note, size_t size)
         return;
     }
     for (uint32_t y = 0; y < kH; y++)
-        for (uint32_t x = 0; x < kW; x++) gSrc.va[tbl(kW, x, y)] = blLuma(x, y);
+        for (uint32_t x = 0; x < kW; x++)
+            gSrc.va[tbl(kW, x, y)] = blLuma(x, y);
     for (uint32_t y = 0; y < kH / 2; y++)
-        for (uint32_t x = 0; x < kW; x++) gSrc.va[kLuma + tbl(kW, x, y)] = blChroma(x, y);
+        for (uint32_t x = 0; x < kW; x++)
+            gSrc.va[kLuma + tbl(kW, x, y)] = blChroma(x, y);
     TegraVICImage src = {};
     src.format = tegra_vic_format(TEGRA_VIC_FOURCC('4', '2', '0', 'f'));
     src.width = kW;
@@ -664,8 +692,10 @@ void blockLinear(TegraVICTraits *t, char *note, size_t size)
             for (uint32_t x = 0; x < kW; x++) {
                 const uint8_t g = gDst.va[(plane ? (size_t)kPitch * kH : 0) + (size_t)y * kPitch + x];
                 const uint8_t w = plane ? blChroma(x, y) : blLuma(x, y);
-                if (near(g, w)) continue;
-                if (!bad++) firstX = x, firstY = y, got = g, want = w, chroma = plane;
+                if (near(g, w))
+                    continue;
+                if (!bad++)
+                    firstX = x, firstY = y, got = g, want = w, chroma = plane;
             }
     if (!bad) {
         t->blockLinearIn = 1;

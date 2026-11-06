@@ -36,6 +36,7 @@ constexpr uint64_t kGiB4 = 1ull << 32;
 constexpr uint32_t kPage = 4096;
 
 using Runs = std::vector<xudc::Run>;
+
 struct Plan {
     std::vector<xudc::Piece> pieces;
     xudc::PlanStats stats = {};
@@ -58,7 +59,8 @@ std::optional<std::pair<uint64_t, uint32_t>> paAt(const Runs &runs, uint32_t off
 {
     uint32_t start = 0;
     for (const xudc::Run &r : runs) {
-        if (offset < start + r.length) return std::make_pair(r.pa + (offset - start), start + r.length - offset);
+        if (offset < start + r.length)
+            return std::make_pair(r.pa + (offset - start), start + r.length - offset);
         start += r.length;
     }
     return std::nullopt;
@@ -69,7 +71,8 @@ uint32_t runOffset(const Runs &runs, uint32_t offset)
 {
     uint32_t start = 0;
     for (const xudc::Run &r : runs) {
-        if (offset < start + r.length) return start;
+        if (offset < start + r.length)
+            return start;
         start += r.length;
     }
     ADD_FAILURE() << "offset " << offset << " beyond the runs";
@@ -79,14 +82,36 @@ uint32_t runOffset(const Runs &runs, uint32_t offset)
 // The Python reference's random.Random calls, over a fixed-seed generator.
 struct Rng {
     std::mt19937_64 engine;
-    explicit Rng(uint64_t seed) : engine(seed) {}
-    uint64_t randrange(uint64_t n) { return std::uniform_int_distribution<uint64_t>(0, n - 1)(engine); }
-    uint64_t randint(uint64_t lo, uint64_t hi) { return std::uniform_int_distribution<uint64_t>(lo, hi)(engine); }
-    double random() { return std::uniform_real_distribution<double>(0.0, 1.0)(engine); }
-    template <class T> T choice(const std::vector<T> &options) { return options[randrange(options.size())]; }
+
+    explicit Rng(uint64_t seed) : engine(seed)
+    {}
+
+    uint64_t randrange(uint64_t n)
+    {
+        return std::uniform_int_distribution<uint64_t>(0, n - 1)(engine);
+    }
+
+    uint64_t randint(uint64_t lo, uint64_t hi)
+    {
+        return std::uniform_int_distribution<uint64_t>(lo, hi)(engine);
+    }
+
+    double random()
+    {
+        return std::uniform_real_distribution<double>(0.0, 1.0)(engine);
+    }
+
+    template <class T> T choice(const std::vector<T> &options)
+    {
+        return options[randrange(options.size())];
+    }
 };
 
-enum class Kind { Pages, Mbufs, Buffer };
+enum class Kind {
+    Pages,
+    Mbufs,
+    Buffer
+};
 
 // Physically contiguous runs (merged as the driver merges them) and their total.
 std::pair<Runs, uint32_t> randomLayout(Rng &rng, Kind kind)
@@ -131,7 +156,8 @@ void checkPlan(const Runs &runs, uint32_t total, uint32_t mps, bool out, bool pr
         const xudc::Piece &piece = p.pieces[k];
         SCOPED_TRACE("piece " + std::to_string(k));
         ASSERT_EQ(piece.offset, offset);
-        if (k + 1 < p.pieces.size()) ASSERT_EQ(piece.length % mps, 0u) << "whole packets but in the last TRB";
+        if (k + 1 < p.pieces.size())
+            ASSERT_EQ(piece.length % mps, 0u) << "whole packets but in the last TRB";
         if (piece.bounce) {
             ASSERT_LE(piece.length, kPage);
             bounced += piece.length;
@@ -155,15 +181,18 @@ void checkPlan(const Runs &runs, uint32_t total, uint32_t mps, bool out, bool pr
         offset += piece.length;
     }
     ASSERT_EQ(offset, total);
-    if (probe && total >= 2 * mps) ASSERT_EQ(p.pieces[0].length, mps) << "the probe packet alone";
+    if (probe && total >= 2 * mps)
+        ASSERT_EQ(p.pieces[0].length, mps) << "the probe packet alone";
     ASSERT_EQ(p.stats.bounceBytes, bounced);
-    if (result) *result = p;
+    if (result)
+        *result = p;
 }
 
 std::vector<bool> bounces(const Plan &p)
 {
     std::vector<bool> b;
-    for (const xudc::Piece &piece : p.pieces) b.push_back(piece.bounce);
+    for (const xudc::Piece &piece : p.pieces)
+        b.push_back(piece.bounce);
     return b;
 }
 
@@ -190,7 +219,8 @@ TEST(XudcPlanner, WholePagesGoDirect)
     Rng rng(3);
     for (unsigned i = 0; i < 200; ++i) {
         Runs pages;
-        for (unsigned k = 0; k < 16; ++k) pages.push_back({0x8000'0000 + rng.randrange(1u << 18) * kPage, kPage});
+        for (unsigned k = 0; k < 16; ++k)
+            pages.push_back({0x8000'0000 + rng.randrange(1u << 18) * kPage, kPage});
         for (const bool out : {false, true}) {
             Plan p;
             ASSERT_NO_FATAL_FAILURE(checkPlan(pages, 16 * kPage, 512, out, false, &p));
@@ -233,7 +263,8 @@ TEST(XudcPlanner, BouncedOnlyWhatMustBe)
 TEST(XudcPlanner, TooManyPiecesAndZeroLength)
 {
     Runs pages;
-    for (uint64_t k = 0; k < 40; ++k) pages.push_back({0x8000'0000 + k * 2 * kPage, kPage});
+    for (uint64_t k = 0; k < 40; ++k)
+        pages.push_back({0x8000'0000 + k * 2 * kPage, kPage});
     EXPECT_TRUE(plan(pages, 40 * kPage, 512, false, false, kGiB4, 39).pieces.empty());
     const Plan empty = plan({}, 0, 512);
     ASSERT_EQ(empty.pieces.size(), 1u);
@@ -249,12 +280,14 @@ namespace {
 // first): the transfer events it raises (TRB index, residue, short packet), residue reported per TD or per TRB.
 struct Controller {
     bool perTd;
+
     // The transfer ends short (a short packet, or a zero-length one on a TRB's end) unless all of it came.
     std::vector<std::tuple<uint32_t, uint32_t, bool>> events(const std::vector<uint32_t> &lengths, uint32_t sent,
                                                              bool probe) const
     {
         uint32_t total = 0, filled = 0;
-        for (uint32_t length : lengths) total += length;
+        for (uint32_t length : lengths)
+            total += length;
         std::vector<std::tuple<uint32_t, uint32_t, bool>> out;
         for (uint32_t k = 0; k < lengths.size(); ++k) {
             const uint32_t length = lengths[k], got = std::min(length, sent - filled);
@@ -262,7 +295,8 @@ struct Controller {
                 filled += length;
                 if (k == lengths.size() - 1 || (probe && k == 0))
                     out.emplace_back(k, perTd ? total - filled : 0, false);
-                if (filled == total) return out;
+                if (filled == total)
+                    return out;
                 continue;
             }
             out.emplace_back(k, perTd ? total - sent : length - got, true);
@@ -281,11 +315,13 @@ uint8_t runProtocol(bool perTd, uint64_t seed)
     for (unsigned i = 0; i < 400; ++i) {
         const uint32_t mps = 512;
         const auto [runs, total] = randomLayout(rng, rng.choice<Kind>({Kind::Pages, Kind::Mbufs}));
-        if (total < 2) continue;
+        if (total < 2)
+            continue;
         const bool probe = known == xudc::kResidueUnknown && total >= 2 * mps;
         const Plan p = plan(runs, total, mps, true, probe);
         std::vector<uint32_t> lengths;
-        for (const xudc::Piece &piece : p.pieces) lengths.push_back(piece.length);
+        for (const xudc::Piece &piece : p.pieces)
+            lengths.push_back(piece.length);
         if (lengths.size() > 1 && (known == xudc::kResidueBroken || (known == xudc::kResidueUnknown && !probe)))
             continue;  // the serial path: one TRB at a time, nothing to read
         const uint32_t sent = rng.random() < 0.3 ? total : static_cast<uint32_t>(rng.randint(0, total));
@@ -348,6 +384,7 @@ struct CacheModel {
         std::array<uint8_t, 64> bytes;
         bool dirty;
     };
+
     std::unordered_map<uint64_t, std::array<uint8_t, 64>> memory;  // by line address; untouched memory reads 0xC1
     std::map<uint64_t, Line> cached;
 
@@ -361,34 +398,52 @@ struct CacheModel {
         }
         return it->second;
     }
+
     Line &fill(uint64_t line)
     {
         auto it = cached.find(line);
-        if (it == cached.end()) it = cached.emplace(line, Line{mem(line), false}).first;
+        if (it == cached.end())
+            it = cached.emplace(line, Line{mem(line), false}).first;
         return it->second;
     }
+
     void cpuWrite(uint64_t pa, uint8_t v)
     {
         Line &l = fill(pa & ~63ull);
         l.bytes[pa & 63] = v;
         l.dirty = true;
     }
-    uint8_t cpuRead(uint64_t pa) { return fill(pa & ~63ull).bytes[pa & 63]; }
-    void dmaWrite(uint64_t pa, uint8_t v) { mem(pa & ~63ull)[pa & 63] = v; }
+
+    uint8_t cpuRead(uint64_t pa)
+    {
+        return fill(pa & ~63ull).bytes[pa & 63];
+    }
+
+    void dmaWrite(uint64_t pa, uint8_t v)
+    {
+        mem(pa & ~63ull)[pa & 63] = v;
+    }
+
     void evict(uint64_t line)
     {
         const auto it = cached.find(line);
-        if (it == cached.end()) return;
-        if (it->second.dirty) mem(line) = it->second.bytes;
+        if (it == cached.end())
+            return;
+        if (it->second.dirty)
+            mem(line) = it->second.bytes;
         cached.erase(it);
     }
+
     void civac(uint64_t pa, uint64_t length)  // dc civac over [pa, pa + length)
     {
-        for (uint64_t line = pa & ~63ull; line < pa + length; line += 64) evict(line);
+        for (uint64_t line = pa & ~63ull; line < pa + length; line += 64)
+            evict(line);
     }
+
     void evictAny(Rng &rng)
     {
-        if (cached.empty()) return;
+        if (cached.empty())
+            return;
         evict(std::next(cached.begin(), static_cast<long>(rng.randrange(cached.size())))->first);
     }
 };
@@ -399,7 +454,8 @@ template <class F> void forRange(const Runs &runs, uint32_t from, uint32_t to, F
     uint32_t start = 0;
     for (const xudc::Run &r : runs) {
         const uint32_t a = std::max(from, start), b = std::min(to, start + r.length);
-        if (a < b) f(r.pa + (a - start), b - a);
+        if (a < b)
+            f(r.pa + (a - start), b - a);
         start += r.length;
     }
 }
@@ -415,17 +471,21 @@ bool outThroughCache(Rng &rng, const Runs &runs, uint32_t total, uint32_t mps)
     std::map<uint64_t, uint8_t> owner;  // every byte of every line the runs touch: 0 the request's, 1 a neighbour's
     forRange(runs, 0, total, [&](uint64_t pa, uint32_t length) {
         for (uint64_t line = pa & ~63ull; line < pa + length; line += 64)
-            for (uint64_t b = line; b < line + 64; ++b) owner.emplace(b, 1);
+            for (uint64_t b = line; b < line + 64; ++b)
+                owner.emplace(b, 1);
     });
     forRange(runs, 0, total, [&](uint64_t pa, uint32_t length) {
-        for (uint64_t b = pa; b < pa + length; ++b) owner[b] = 0;
+        for (uint64_t b = pa; b < pa + length; ++b)
+            owner[b] = 0;
     });
     CacheModel cache;
     std::map<uint64_t, uint8_t> neighbour;  // what each neighbour byte should read
     std::vector<uint64_t> neighbours, lines;
     for (const auto &[b, who] : owner) {
-        if (who) neighbours.push_back(b);
-        if ((b & 63) == 0) lines.push_back(b);
+        if (who)
+            neighbours.push_back(b);
+        if ((b & 63) == 0)
+            lines.push_back(b);
     }
     auto neighbourWrites = [&](unsigned n) {
         for (unsigned i = 0; i < n && !neighbours.empty(); ++i) {
@@ -437,40 +497,55 @@ bool outThroughCache(Rng &rng, const Runs &runs, uint32_t total, uint32_t mps)
     };
     auto background = [&]() {  // neighbours at work, speculative fills, evictions
         neighbourWrites(static_cast<unsigned>(rng.randrange(3)));
-        if (!lines.empty() && rng.random() < 0.5) cache.fill(lines[rng.randrange(lines.size())]);
-        if (rng.random() < 0.3) cache.evictAny(rng);
+        if (!lines.empty() && rng.random() < 0.5)
+            cache.fill(lines[rng.randrange(lines.size())]);
+        if (rng.random() < 0.3)
+            cache.evictAny(rng);
     };
     neighbourWrites(64);
-    for (int i = 0; i < 8; ++i) background();
+    for (int i = 0; i < 8; ++i)
+        background();
 
     Plan p = plan(runs, total, mps, true, false);
-    if (p.pieces.empty()) return true;  // the serial path
+    if (p.pieces.empty())
+        return true;  // the serial path
     for (size_t k = 0; k < p.pieces.size(); ++k)
-        if (p.pieces[k].bounce) p.pieces[k].pa = 0x7000'0000 + k * kPage;
+        if (p.pieces[k].bounce)
+            p.pieces[k].pa = 0x7000'0000 + k * kPage;
     // admit: bounce pages and the request cleaned and invalidated before the doorbell.
     for (const xudc::Piece &piece : p.pieces)
-        if (piece.bounce) cache.civac(piece.pa, piece.length ? piece.length : 1);
-    forRange(runs, 0, total, [&](uint64_t pa, uint32_t length) { cache.civac(pa, length); });
+        if (piece.bounce)
+            cache.civac(piece.pa, piece.length ? piece.length : 1);
+    forRange(runs, 0, total, [&](uint64_t pa, uint32_t length) {
+        cache.civac(pa, length);
+    });
     // The host sends `actual` bytes (a short transfer, or all of it); the controller writes them, packet by packet.
     const uint32_t actual = rng.random() < 0.3 ? total : static_cast<uint32_t>(rng.randint(0, total));
     std::vector<uint8_t> host(actual);
-    for (uint8_t &b : host) b = static_cast<uint8_t>(rng.randrange(256));
+    for (uint8_t &b : host)
+        b = static_cast<uint8_t>(rng.randrange(256));
     for (const xudc::Piece &piece : p.pieces) {
         for (uint32_t i = 0; i < piece.length && piece.offset + i < actual; ++i) {
             cache.dmaWrite(piece.pa + i, host[piece.offset + i]);
-            if (i % mps == 0) background();
+            if (i % mps == 0)
+                background();
         }
     }
     background();
     // releaseTrbs: the request's first `actual` bytes cleaned and invalidated, then the bounced bytes copied in.
-    forRange(runs, 0, actual, [&](uint64_t pa, uint32_t length) { cache.civac(pa, length); });
+    forRange(runs, 0, actual, [&](uint64_t pa, uint32_t length) {
+        cache.civac(pa, length);
+    });
     for (const xudc::Piece &piece : p.pieces) {
-        if (!piece.bounce || piece.offset >= actual) continue;
+        if (!piece.bounce || piece.offset >= actual)
+            continue;
         const uint32_t got = std::min(actual - piece.offset, piece.length);
         cache.civac(piece.pa, got);
-        for (uint32_t i = 0; i < got; ++i) cache.cpuWrite(paOf(runs, piece.offset + i), cache.cpuRead(piece.pa + i));
+        for (uint32_t i = 0; i < got; ++i)
+            cache.cpuWrite(paOf(runs, piece.offset + i), cache.cpuRead(piece.pa + i));
     }
-    for (int i = 0; i < 16; ++i) background();
+    for (int i = 0; i < 16; ++i)
+        background();
     bool ok = true;
     for (uint32_t i = 0; i < actual && ok; ++i) {
         const uint8_t got = cache.cpuRead(paOf(runs, i));
@@ -502,7 +577,8 @@ TEST(XudcOutCache, NoStaleOrPartialData)
             for (size_t j = i + 1; j < runs.size(); ++j)
                 if (runs[i].pa < runs[j].pa + runs[j].length && runs[j].pa < runs[i].pa + runs[i].length)
                     overlap = true;
-        if (overlap || total > 32768) continue;
+        if (overlap || total > 32768)
+            continue;
         SCOPED_TRACE("case " + std::to_string(c) + ": " + std::to_string(runs.size()) + " runs, " +
                      std::to_string(total) + " bytes");
         ASSERT_TRUE(outThroughCache(rng, runs, total, 512));
@@ -525,7 +601,8 @@ double perRequest(double request, double bounced, bool fresh, bool out)
 {
     const double pages = request / kPage;
     double cost = 6 + 6 + 0.3 * pages + 0.3 * pages + 0.006 * request / 64 * (out ? 2 : 1);
-    if (fresh) cost += 0.02 * request / 512 + 0.1 * pages;
+    if (fresh)
+        cost += 0.02 * request / 512 + 0.1 * pages;
     cost += (fresh ? bounced : 1.0) * request / 1024 * 0.5;
     return cost;
 }

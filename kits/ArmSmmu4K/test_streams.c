@@ -14,11 +14,13 @@
 #define BYTES 0x40000
 #define CB    0x22000
 static uint32_t memory[BYTES / 4];
+
 static struct {
     unsigned calls, fail_call, after, writes, events, corrupt, cleanup_fail;
     size_t at[1024];
     uint32_t value[1024];
 } f;
+
 static ArmSmmu4KIo io;
 static ArmSmmu4KStreamState state;
 static ArmSmmu4KStream routes[2] = {{2, 0}, {4, 1}};
@@ -35,20 +37,25 @@ static int event(void)
 {
     return ++f.calls == f.fail_call;
 }
+
 static int read32(void *cookie, size_t at, uint32_t *v)
 {
     CHECK(cookie == &f && at % 4 == 0 && at <= BYTES - 4);
-    if (event()) return 1;
+    if (event())
+        return 1;
     *v = memory[at / 4];
     return 0;
 }
+
 static int read64(void *cookie, size_t at, uint64_t *v)
 {
     CHECK(cookie == &f && at % 8 == 0 && at <= BYTES - 8);
-    if (event()) return 1;
+    if (event())
+        return 1;
     memcpy(v, memory + at / 4, 8);
     return 0;
 }
+
 static int write32(void *cookie, size_t at, uint32_t v)
 {
     CHECK(cookie == &f && at % 4 == 0 && at <= BYTES - 4 && f.events < 1024);
@@ -56,12 +63,16 @@ static int write32(void *cookie, size_t at, uint32_t v)
     f.at[f.events] = at;
     f.value[f.events++] = v;
     int fail = event();
-    if (fail && !f.after) return 1;
-    if (f.cleanup_fail && v == 0x20000) return 1;
+    if (fail && !f.after)
+        return 1;
+    if (f.cleanup_fail && v == 0x20000)
+        return 1;
     memory[at / 4] = v;
-    if (f.corrupt && at == 0x808) memory[at / 4] ^= 2;
+    if (f.corrupt && at == 0x808)
+        memory[at / 4] ^= 2;
     return fail;
 }
+
 static int write64(void *cookie, size_t at, uint64_t v)
 {
     (void)cookie;
@@ -70,11 +81,13 @@ static int write64(void *cookie, size_t at, uint64_t v)
     CHECK(0);
     return 1;
 }
+
 static int barrier(void *cookie)
 {
     CHECK(cookie == &f);
     return event();
 }
+
 static void reset(unsigned exid)
 {
     memset(memory, 0, sizeof(memory));
@@ -100,30 +113,36 @@ static void reset(unsigned exid)
     memcpy(memory + (CB + 0x20) / 4, &image.ttbr0, 8);
     memcpy(memory + (CB + 0x28) / 4, &image.ttbr1, 8);
     memory[(CB + 0x38) / 4] = image.mair0;
-    for (unsigned i = 0; i < 8; ++i) memory[(0xc00 + 4 * i) / 4] = 0x20000;
+    for (unsigned i = 0; i < 8; ++i)
+        memory[(0xc00 + 4 * i) / 4] = 0x20000;
     /* An unrelated live route, never to be altered by attachment/recovery. */
     memory[0x800 / 4] = (exid ? 0 : 1u << 31) | 9;
     memory[0xc00 / 4] = (exid ? 1u << 10 : 0) | 3;
 }
+
 static ArmSmmu4KStatus attach(void)
 {
     return ArmSmmu4KAttachStreams(&io, &state, routes, 2, 2, &config, &result);
 }
+
 static void isolated(unsigned exid)
 {
     CHECK(memory[0x800 / 4] == ((exid ? 0 : 1u << 31) | 9) && memory[0xc00 / 4] == ((exid ? 1u << 10 : 0) | 3));
     for (unsigned i = 0; i < f.events; ++i) {
         CHECK(f.at[i] == 0x808 || f.at[i] == 0x810 || f.at[i] == 0xc08 || f.at[i] == 0xc10);
-        if (f.at[i] >= 0xc00) CHECK(((f.value[i] >> 16) & 3) != 1); /* Never BYPASS. */
+        if (f.at[i] >= 0xc00)
+            CHECK(((f.value[i] >> 16) & 3) != 1); /* Never BYPASS. */
     }
 }
+
 int main(void)
 {
     ArmSmmu4KRange range = {0, 0x20000000, 4096, 3, 0, 2};
     CHECK(!ArmSmmu4KBuild(&lower, &range, 1, tables, 4, &built));
 #ifdef SOURCE_ORACLE
     const uint32_t offsets[] = {0, 0x20, 0x48, 0x808, 0xc08, 0x80000000, 0x400, 0x400};
-    for (unsigned i = 0; i < sizeof(offsets) / sizeof(offsets[0]); ++i) CHECK(source_stream_register(i) == offsets[i]);
+    for (unsigned i = 0; i < sizeof(offsets) / sizeof(offsets[0]); ++i)
+        CHECK(source_stream_register(i) == offsets[i]);
 #endif
     unsigned fault_cases = 0;
     for (unsigned exid = 0; exid < 2; ++exid) {
@@ -192,25 +211,55 @@ int main(void)
         for (unsigned control = 0; control < 16; ++control) {
             reset(exid);
             switch (control) {
-            case 0: memory[0] |= 1; break;
-            case 1: memory[0] &= ~0x400; break;
-            case 2: memory[0] ^= 8; break;
-            case 3: memory[0x48 / 4] = 2; break;
-            case 4: memory[(CB + 0x30) / 4] ^= 1u << 14; break;
-            case 5: memory[CB / 4] &= ~1; break;
-            case 6: memory[(CB + 0x58) / 4] = 2; break;
-            case 7: memory[0xc08 / 4] = 0x10000; break;
-            case 8: memory[0x800 / 4] = (exid ? 0 : 1u << 31) | 0; break;               /* exact collision */
-            case 9: memory[0x800 / 4] = (exid ? 0 : 1u << 31) | (15u << 16) | 8; break; /* masked collision */
-            case 10: memory[0x20 / 4] &= ~(1u << 27); break;
+            case 0:
+                memory[0] |= 1;
+                break;
+            case 1:
+                memory[0] &= ~0x400;
+                break;
+            case 2:
+                memory[0] ^= 8;
+                break;
+            case 3:
+                memory[0x48 / 4] = 2;
+                break;
+            case 4:
+                memory[(CB + 0x30) / 4] ^= 1u << 14;
+                break;
+            case 5:
+                memory[CB / 4] &= ~1;
+                break;
+            case 6:
+                memory[(CB + 0x58) / 4] = 2;
+                break;
+            case 7:
+                memory[0xc08 / 4] = 0x10000;
+                break;
+            case 8:
+                memory[0x800 / 4] = (exid ? 0 : 1u << 31) | 0;
+                break; /* exact collision */
+            case 9:
+                memory[0x800 / 4] = (exid ? 0 : 1u << 31) | (15u << 16) | 8;
+                break; /* masked collision */
+            case 10:
+                memory[0x20 / 4] &= ~(1u << 27);
+                break;
             case 11:
                 memory[0x808 / 4] = (exid ? 0 : 1u << 31) | 7;
                 memory[0xc08 / 4] |= exid ? 1u << 10 : 0;
                 break;
-            case 12: memory[0x20 / 4] &= ~255u; break;
-            case 13: memory[0xc00 / 4] = (exid ? 1u << 10 : 0) | 2; break;
-            case 14: memory[0] &= ~2u; break; /* no global fault reporting */
-            case 15: memory[0] &= ~4u; break; /* no global fault interrupt */
+            case 12:
+                memory[0x20 / 4] &= ~255u;
+                break;
+            case 13:
+                memory[0xc00 / 4] = (exid ? 1u << 10 : 0) | 2;
+                break;
+            case 14:
+                memory[0] &= ~2u;
+                break; /* no global fault reporting */
+            case 15:
+                memory[0] &= ~4u;
+                break; /* no global fault interrupt */
             }
             CHECK(attach() != ArmSmmu4KSuccess && !f.writes && !state.attempted && result.must_retain_resources);
         }

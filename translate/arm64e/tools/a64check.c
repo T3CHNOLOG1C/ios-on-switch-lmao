@@ -21,6 +21,7 @@
 #include <unistd.h>
 
 #define CPU_TYPE_ARM64_ 0x0100000Cu
+
 struct range {
     uint64_t lo, hi;
 };
@@ -29,13 +30,15 @@ static int nranges;
 
 static uint8_t *island; /* data islands of the current image (a64x_islands_*), by word of its segment */
 static uint64_t island_base, island_words_total;
+
 static bool is_code(void *ctx, uint64_t off)
 {
     (void)ctx;
     if (island && off >= island_base && (island[(off - island_base) / 32] & (1u << (((off - island_base) / 4) & 7))))
         return false;
     for (int i = 0; i < nranges; i++)
-        if (off >= ranges[i].lo && off < ranges[i].hi) return true;
+        if (off >= ranges[i].lo && off < ranges[i].hi)
+            return true;
     return false;
 }
 
@@ -45,6 +48,7 @@ static uint32_t rd32(const uint8_t *p)
     memcpy(&v, p, 4);
     return v;
 }
+
 static uint64_t rd64(const uint8_t *p)
 {
     uint64_t v;
@@ -55,6 +59,7 @@ static uint64_t rd64(const uint8_t *p)
 static bool quiet;
 static const char *cur_name = "", *list_match;
 static uint64_t fs_tot[A64X_NCLASSES][3], fs_stub_words, fs_changed;
+
 static int check_image(const uint8_t *base, uint64_t mh_off, uint64_t slice_off, bool all, bool kernel)
 {
     const uint8_t *mh = base + mh_off;
@@ -126,8 +131,10 @@ static int check_image(const uint8_t *base, uint64_t mh_off, uint64_t slice_off,
         uint32_t fs_off = 0, fs_size = 0;
         for (uint32_t i = 0; i < ncmds; i++) {
             uint32_t cmd = rd32(lc2);
-            if (cmd == 0x19 && !strncmp((const char *)lc2 + 8, "__TEXT", 16)) text_vm = rd64(lc2 + 24);
-            if (cmd == 0x19 && (rd32(lc2 + 60) & 4)) exec_vm = rd64(lc2 + 24);
+            if (cmd == 0x19 && !strncmp((const char *)lc2 + 8, "__TEXT", 16))
+                text_vm = rd64(lc2 + 24);
+            if (cmd == 0x19 && (rd32(lc2 + 60) & 4))
+                exec_vm = rd64(lc2 + 24);
             if (cmd == 0x26) {
                 fs_off = rd32(lc2 + 8);
                 fs_size = rd32(lc2 + 12);
@@ -143,9 +150,11 @@ static int check_image(const uint8_t *base, uint64_t mh_off, uint64_t slice_off,
                 uint8_t b = d[q++];
                 v |= (uint64_t)(b & 0x7F) << sh;
                 sh += 7;
-                if (!(b & 0x80)) break;
+                if (!(b & 0x80))
+                    break;
             }
-            if (!v) break;
+            if (!v)
+                break;
             a += v;
             if (a >= exec_vm && (a - exec_vm) / 4 < nw_seg)
                 fsb[(a - exec_vm) / 32] |= (uint8_t)(1u << (((a - exec_vm) / 4) & 7));
@@ -174,7 +183,8 @@ static int check_image(const uint8_t *base, uint64_t mh_off, uint64_t slice_off,
         memcpy(in, base + off, n);
         struct a64x_stub_region sr = {exec_off + exec_size + 0x4000, stubs, cap, 0};
         cursor = a64x_translate_page(in, out, 1024, off, &cm, &sr, cursor, &st);
-        for (int i = 0; i < 1024; i++) changed += in[i] != out[i];
+        for (int i = 0; i < 1024; i++)
+            changed += in[i] != out[i];
         if (list_match && strstr(cur_name, list_match)) {
             for (uint64_t i = 0; i < n / 4; i++) {
                 enum a64x_class c = a64x_classify(in[i]);
@@ -197,13 +207,15 @@ static int check_image(const uint8_t *base, uint64_t mh_off, uint64_t slice_off,
             island = NULL;
         }
         uint64_t left = 0, lse = 0;
-        for (int c = 1; c < A64X_NCLASSES; c++) left += st.left[c];
+        for (int c = 1; c < A64X_NCLASSES; c++)
+            left += st.left[c];
         lse = st.stubs[A64X_LSE_CAS] + st.stubs[A64X_LSE_CASP] + st.stubs[A64X_LSE_LDOP] + st.stubs[A64X_LSE_SWP];
         printf(" %-7s %8llu words, %7llu changed, %5llu LSE stubs, %6u stub words, %llu left", kind,
                (unsigned long long)words, (unsigned long long)changed, (unsigned long long)lse, cursor,
                (unsigned long long)left);
         for (int c = 1; c < A64X_NCLASSES; c++)
-            if (st.left[c]) printf(" %s:%llu", a64x_class_name(c), (unsigned long long)st.left[c]);
+            if (st.left[c])
+                printf(" %s:%llu", a64x_class_name(c), (unsigned long long)st.left[c]);
         printf("\n");
         free(stubs);
         return 0;

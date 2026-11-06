@@ -37,7 +37,8 @@ inline Bytes Cells(std::initializer_list<uint64_t> values)
 
 inline void PutU32(Bytes &data, size_t offset, uint32_t value)
 {
-    for (unsigned i = 0; i < 4; ++i) data[offset + i] = (uint8_t)(value >> (24 - 8 * i));
+    for (unsigned i = 0; i < 4; ++i)
+        data[offset + i] = (uint8_t)(value >> (24 - 8 * i));
 }
 
 struct Property {
@@ -86,7 +87,8 @@ inline void Pad(Bytes &out, size_t length)
 inline Bytes Build(const Node &node, Bytes &keys)
 {
     std::vector<Bytes> children;
-    for (const Node &child : node.children) children.push_back(Build(child, keys));
+    for (const Node &child : node.children)
+        children.push_back(Build(child, keys));
     Bytes data = U32(1);
     data.insert(data.end(), node.name.begin(), node.name.end());
     data.push_back(0);
@@ -101,7 +103,8 @@ inline Bytes Build(const Node &node, Bytes &keys)
         Append(data, p.value);
         Pad(data, p.value.size());
     }
-    for (const Bytes &child : children) Append(data, child);
+    for (const Bytes &child : children)
+        Append(data, child);
     Append(data, U32(2));
     return data;
 }
@@ -117,7 +120,8 @@ inline Bytes Tree(const Options &o = {})
     Bytes reservedNode = detail::Build(reserved, keys);
     Node root{"", {{"#address-cells", U32(o.root_cells)}, {"#size-cells", U32(2)}}, {}};
     Bytes structure = detail::Build(root, keys);
-    if (o.include_reserved) structure.insert(structure.end() - 4, reservedNode.begin(), reservedNode.end());
+    if (o.include_reserved)
+        structure.insert(structure.end() - 4, reservedNode.begin(), reservedNode.end());
     Append(structure, U32(9));
     Bytes reserves;
     for (const Reservation &r : o.reservations ? *o.reservations : DefaultReservations())

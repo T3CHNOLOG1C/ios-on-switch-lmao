@@ -119,7 +119,12 @@ public:
     void haltCPU(void) override;
     kern_return_t startCPU(vm_offset_t, vm_offset_t) override;
     void signalCPU(IOCPU *target) override;
-    uint64_t signalTarget(void) const { return affinity; }
+
+    uint64_t signalTarget(void) const
+    {
+        return affinity;
+    }
+
     void enableCPUTimeBase(bool enabled) override;
     const OSSymbol *getCPUName(void) override;
 };
@@ -422,8 +427,7 @@ bool ArmCpu::wakeRedistributor(bool local)
 bool ArmCpu::prepareGicV2(void)
 {
     const unsigned cpus = static_cast<unsigned>(ml_get_max_cpu_number()) + 1;
-    if ((cpus != 1 && (!gNativeSmp || cpus != SWITCH_SMP_CORE_COUNT)) ||
-        cpus > (((read32(dist, 4) >> 5) & 7) + 1)) {
+    if ((cpus != 1 && (!gNativeSmp || cpus != SWITCH_SMP_CORE_COUNT)) || cpus > (((read32(dist, 4) >> 5) & 7) + 1)) {
         return false;
     }
     // Only the boot CPU touches global SPI state. Secondaries must never reset
@@ -1095,6 +1099,7 @@ void ArmCpu::signalCPU(IOCPU *target)
 // armcpu_gic_diag_stage names the access in progress, so a read that never returns is identified from another thread:
 // 0x100+frame walk, 2 IGROUPR0, 3 ISENABLER0, 4 ISPENDR0, 5 IGRPMODR0, 6 WAKER, 7 GICD_CTLR, 8 IPRIORITYR0, 9 done, 0xe not found.
 volatile uint32_t armcpu_gic_diag_stage = 0;
+
 extern "C" void armcpu_gic_diag(uint64_t aff, uint32_t *out)
 {
     for (unsigned i = 0; i < 8; i++) {
@@ -1262,8 +1267,7 @@ void ArmCpu::quiesceCPU(void)
 {
     __atomic_fetch_add(&armcpu_quiesce_calls, 1U, __ATOMIC_RELAXED);
     if (!gSystemSleep || !gicV2) {
-        panic("ArmCpu: CPU%u quiesce for system sleep, but SwitchSuspend did not enable SC7",
-              logicalId);
+        panic("ArmCpu: CPU%u quiesce for system sleep, but SwitchSuspend did not enable SC7", logicalId);
     }
     if (!secondary) {
         const kern_return_t result = IOCPURunPlatformQuiesceActions();
@@ -1288,8 +1292,7 @@ void ArmCpu::haltCPU(void)
 {
     __atomic_fetch_add(&armcpu_halt_calls, 1U, __ATOMIC_RELAXED);
     if (!gSystemSleep) {
-        panic("ArmCpu: CPU%u halt requested, but SwitchSuspend did not enable SC7",
-              logicalId);
+        panic("ArmCpu: CPU%u halt requested, but SwitchSuspend did not enable SC7", logicalId);
     }
     const kern_return_t result = processor_exit(machProcessor);
     if (result != KERN_SUCCESS) {

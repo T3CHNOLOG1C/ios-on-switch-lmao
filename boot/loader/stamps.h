@@ -17,13 +17,14 @@
  * The loader samples the microsecond timer and CNTPCT together, converts U-Boot's samples to counter values, adds its
  * own and writes the record into the ADT placeholder /chosen/switch-boot-stamps (LE64 words, SWITCH_STAMP_* order);
  * XNU logs it once (startup.c switch_log_boot_stamps, which keeps its own copy of this layout). */
-#define SWITCH_BOOT_STAMPS_PA UINT64_C(0xa001ef00)
-#define SWITCH_BOOT_STAMPS_BYTES 0x100u
+#define SWITCH_BOOT_STAMPS_PA          UINT64_C(0xa001ef00)
+#define SWITCH_BOOT_STAMPS_BYTES       0x100u
 #define SWITCH_BOOT_STAMPS_UBOOT_MAGIC 0x544f4255u /* "UBOT" */
 #define SWITCH_BOOT_STAMPS_UBOOT_COUNT 10u
-#define SWITCH_TIMERUS_PA UINT64_C(0x60005010) /* TIMERUS_CNTR_1US */
+#define SWITCH_TIMERUS_PA              UINT64_C(0x60005010) /* TIMERUS_CNTR_1US */
 
 #define SWITCH_STAMP_RECORD_MAGIC UINT64_C(0x33504d4154534f49) /* "IOSTAMP3" */
+
 enum switch_stamp {
     SWITCH_STAMP_MAGIC = 0,
     SWITCH_STAMP_WORDS,          /* SWITCH_STAMP_COUNT */
@@ -53,5 +54,6 @@ enum switch_stamp {
     SWITCH_STAMP_EMC_CORE,       /* VDD_CORE mV | BPMP channel 0 area << 32 */
     SWITCH_STAMP_COUNT
 };
+
 #define SWITCH_STAMP_RECORD_BYTES (SWITCH_STAMP_COUNT * 8u)
 #endif

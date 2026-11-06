@@ -33,65 +33,90 @@ struct TegraSMMUDomain {
         clear(va, kEntries);
         return true;
     }
-    uint32_t *table(uint32_t index) const { return va + (uint64_t)index * kEntries; }
-    uint64_t tablePa(uint32_t index) const { return pa + (uint64_t)index * kPage; }
+
+    uint32_t *table(uint32_t index) const
+    {
+        return va + (uint64_t)index * kEntries;
+    }
+
+    uint64_t tablePa(uint32_t index) const
+    {
+        return pa + (uint64_t)index * kPage;
+    }
+
     // PTB_DATA for this directory.
-    uint32_t ptb() const { return (uint32_t)(pa >> 12) | kRead | kWrite | kNonSecure; }
+    uint32_t ptb() const
+    {
+        return (uint32_t)(pa >> 12) | kRead | kWrite | kNonSecure;
+    }
+
     static uint32_t entry(uint64_t page, bool writable)
     {
         return (uint32_t)(page >> 12) | kRead | kNonSecure | (writable ? kWrite : 0);
     }
+
     // The table covering iova; installed (the next free page) when create. nullptr: out of range, out of tables, or a
     // directory entry that is not one of this buffer's tables.
     uint32_t *tableFor(uint64_t iova, bool create)
     {
-        if (!va || iova >= kLimit) return nullptr;
+        if (!va || iova >= kLimit)
+            return nullptr;
         uint32_t &pde = va[iova >> 22];
         if (!(pde & kNext)) {
-            if (!create || used == pages) return nullptr;
+            if (!create || used == pages)
+                return nullptr;
             const uint32_t index = used++;
             clear(table(index), kEntries);
             pde = (uint32_t)(tablePa(index) >> 12) | kRead | kWrite | kNonSecure | kNext;
             touch(&pde, sizeof(pde));
         }
         const uint64_t at = (uint64_t)(pde & kPfnMask) << 12;
-        if (at < pa + kPage || at >= pa + (uint64_t)pages * kPage) return nullptr;
+        if (at < pa + kPage || at >= pa + (uint64_t)pages * kPage)
+            return nullptr;
         return table((uint32_t)((at - pa) / kPage));
     }
+
     uint32_t *pte(uint64_t iova, bool create)
     {
         uint32_t *t = tableFor(iova, create);
         return t ? &t[(iova >> 12) & (kEntries - 1)] : nullptr;
     }
+
     // Tables for [iova, iova + bytes), installed now; a range not yet covered gets consecutive pages. False when out of tables.
     bool reserve(uint64_t iova, uint64_t bytes)
     {
         for (uint64_t at = iova & ~(kSpan - 1); at < iova + bytes; at += kSpan)
-            if (!tableFor(at, true)) return false;
+            if (!tableFor(at, true))
+                return false;
         return true;
     }
+
     // [at, at + bytes) mapped to itself (bytes rounded up to pages).
     bool identity(uint64_t at, uint64_t bytes, bool writable)
     {
         for (uint64_t page = at & ~(kPage - 1); page < at + bytes; page += kPage) {
             uint32_t *p = pte(page, true);
-            if (!p) return false;
+            if (!p)
+                return false;
             *p = entry(page, writable);
             touch(p, sizeof(*p));
         }
         return true;
     }
+
     // count pages (physical addresses) from iova on; their tables must exist or be installable.
     bool map(uint64_t iova, const uint64_t *pagesPa, uint32_t count, bool writable)
     {
         for (uint32_t i = 0; i < count; ++i) {
             uint32_t *p = pte(iova + (uint64_t)i * kPage, true);
-            if (!p) return false;
+            if (!p)
+                return false;
             *p = entry(pagesPa[i], writable);
             touch(p, sizeof(*p));
         }
         return true;
     }
+
     void unmap(uint64_t iova, uint32_t count)
     {
         for (uint32_t i = 0; i < count; ++i)
@@ -100,36 +125,47 @@ struct TegraSMMUDomain {
                 touch(p, sizeof(*p));
             }
     }
+
     // The physical address iova translates to; UINT64_MAX when unmapped (the SMMU would fault).
     uint64_t translate(uint64_t iova) const
     {
-        if (!va || iova >= kLimit) return UINT64_MAX;
+        if (!va || iova >= kLimit)
+            return UINT64_MAX;
         const uint32_t pde = va[iova >> 22];
-        if (!(pde & kNext)) return UINT64_MAX;
+        if (!(pde & kNext))
+            return UINT64_MAX;
         const uint64_t at = (uint64_t)(pde & kPfnMask) << 12;
-        if (at < pa + kPage || at >= pa + (uint64_t)pages * kPage) return UINT64_MAX;
+        if (at < pa + kPage || at >= pa + (uint64_t)pages * kPage)
+            return UINT64_MAX;
         const uint32_t e = table((uint32_t)((at - pa) / kPage))[(iova >> 12) & (kEntries - 1)];
         return (e & kRead) ? ((uint64_t)(e & kPfnMask) << 12) | (iova & (kPage - 1)) : UINT64_MAX;
     }
+
     // The bytes written since the last call (cache maintenance for the caller); false when none.
     bool takeDirty(uintptr_t *low, uintptr_t *high)
     {
-        if (dirtyLow >= dirtyHigh) return false;
+        if (dirtyLow >= dirtyHigh)
+            return false;
         *low = dirtyLow;
         *high = dirtyHigh;
         dirtyLow = UINTPTR_MAX;
         dirtyHigh = 0;
         return true;
     }
+
     void touch(const void *p, uintptr_t bytes)
     {
         const uintptr_t at = reinterpret_cast<uintptr_t>(p);
-        if (at < dirtyLow) dirtyLow = at;
-        if (at + bytes > dirtyHigh) dirtyHigh = at + bytes;
+        if (at < dirtyLow)
+            dirtyLow = at;
+        if (at + bytes > dirtyHigh)
+            dirtyHigh = at + bytes;
     }
+
     void clear(uint32_t *p, uint32_t count)
     {
-        for (uint32_t i = 0; i < count; ++i) p[i] = 0;
+        for (uint32_t i = 0; i < count; ++i)
+            p[i] = 0;
         touch(p, (uintptr_t)count * sizeof(*p));
     }
 };

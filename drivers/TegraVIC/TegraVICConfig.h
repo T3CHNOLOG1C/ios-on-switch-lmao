@@ -45,6 +45,7 @@ enum {
     TEGRA_VIC_M_OUTPUT_CHROMA_U = 0x724,
     TEGRA_VIC_M_SET_FCE_UCODE_OFFSET = 0x72c,
 };
+
 #define TEGRA_VIC_EXECUTE_AWAKEN         (1u << 8)
 #define TEGRA_VIC_CONTROL_GPTIMER_ON     (1u << 0)
 #define TEGRA_VIC_CONTROL_FALCON_CONTROL (1u << 8)
@@ -95,6 +96,7 @@ static inline void tegra_vic_put(uint8_t *cfg, uint32_t offset, uint32_t bit, ui
             *p = (uint8_t)(*p & ~(1u << (b % 8)));
     }
 }
+
 static inline uint64_t tegra_vic_get(const uint8_t *cfg, uint32_t offset, uint32_t bit, uint32_t width)
 {
     uint64_t v = 0;
@@ -106,7 +108,11 @@ static inline uint64_t tegra_vic_get(const uint8_t *cfg, uint32_t offset, uint32
 }
 
 // Field positions (bit offset in its structure, width), from libdrm vic40.h.
-#define TEGRA_VIC_F(name, bit, width) enum { name##_BIT = (bit), name##_WIDTH = (width) };
+#define TEGRA_VIC_F(name, bit, width) \
+    enum {                            \
+        name##_BIT = (bit),           \
+        name##_WIDTH = (width)        \
+    };
 TEGRA_VIC_F(PIPE_DOWNSAMPLE_HORIZ, 0, 11)
 TEGRA_VIC_F(PIPE_DOWNSAMPLE_VERT, 16, 11)
 TEGRA_VIC_F(OUT_ALPHA_FILL_MODE, 0, 3)
@@ -217,7 +223,10 @@ static inline int32_t tegra_vic_fix(int64_t micros, int64_t one)
     return (int32_t)(n >= 0 ? (n + 500000) / 1000000 : -((-n + 500000) / 1000000));
 }
 
-enum { TEGRA_VIC_YCC_601 = 0, TEGRA_VIC_YCC_709 = 1 };
+enum {
+    TEGRA_VIC_YCC_601 = 0,
+    TEGRA_VIC_YCC_709 = 1
+};
 
 // Luma weights (Kr, Kb) in millionths: BT.601 0.299/0.114, BT.709 0.2126/0.0722.
 static inline void tegra_vic_kr_kb(uint32_t standard, int64_t *kr, int64_t *kb)
@@ -300,11 +309,13 @@ static inline void tegra_vic_ideal_rgb709_full(const uint32_t ycc[3], uint32_t r
 // --- Formats ------------------------------------------------------------------------------------------------------
 #define TEGRA_VIC_FOURCC(a, b, c, d) \
     (((uint32_t)(a) << 24) | ((uint32_t)(b) << 16) | ((uint32_t)(c) << 8) | (uint32_t)(d))
+
 enum {
     TEGRA_VIC_KIND_RGB = 0,
     TEGRA_VIC_KIND_YCC_VIDEO = 1,
     TEGRA_VIC_KIND_YCC_FULL = 2,
 };
+
 typedef struct {
     uint32_t fourcc;
     uint8_t vic, planes, kind, alpha;
@@ -323,7 +334,8 @@ static inline const TegraVICFormat *tegra_vic_format(uint32_t fourcc)
         {TEGRA_VIC_FOURCC('4', '2', '0', 'f'), TEGRA_VIC_T_Y8___U8V8_N420, 2, TEGRA_VIC_KIND_YCC_FULL, 0, {1, 2}, 1},
     };
     for (unsigned i = 0; i < sizeof(formats) / sizeof(formats[0]); i++)
-        if (formats[i].fourcc == fourcc) return &formats[i];
+        if (formats[i].fourcc == fourcc)
+            return &formats[i];
     return 0;
 }
 
@@ -347,10 +359,17 @@ typedef struct {
 
 // Reading 4:2:0 (TegraVICTraits.yccIn): to RGB through the slot matrix (within a few steps of the float conversion),
 // and the same-format copy that passes the channels through. Without the bit those jobs are refused (callers fall back).
-enum { TEGRA_VIC_YCC_IN_RGB = 1, TEGRA_VIC_YCC_IN_COPY = 2 };
+enum {
+    TEGRA_VIC_YCC_IN_RGB = 1,
+    TEGRA_VIC_YCC_IN_COPY = 2
+};
 
 // IOSurfaceAccelerator's transform bits (the request's Transform option, flags bits 0..2).
-enum { TEGRA_VIC_FLIP_H = 1, TEGRA_VIC_FLIP_V = 2, TEGRA_VIC_ROT90 = 4 };
+enum {
+    TEGRA_VIC_FLIP_H = 1,
+    TEGRA_VIC_FLIP_V = 2,
+    TEGRA_VIC_ROT90 = 4
+};
 
 typedef struct {
     uint64_t srcX, srcY, srcW, srcH;  // source rectangle, 16.16 fixed
@@ -380,6 +399,7 @@ typedef struct {
 } TegraVICTraits;
 
 #define TEGRA_VIC_MAX_METHODS 12
+
 typedef struct {
     uint8_t config[TEGRA_VIC_CONFIG_BYTES];
     uint32_t method[TEGRA_VIC_MAX_METHODS], value[TEGRA_VIC_MAX_METHODS];
@@ -400,6 +420,7 @@ static inline uint32_t tegra_vic_chroma_horiz(uint32_t site)
     // 1 Left, 2 Center, 3 TopLeft, 4 Top, 5 BottomLeft, 6 Bottom (IOSurfaceAccelerator); 0 unspecified = Left.
     return (site == 2 || site == 4 || site == 6) ? 1 : 0;
 }
+
 static inline uint32_t tegra_vic_chroma_vert(uint32_t site)
 {
     return (site == 3 || site == 4) ? 0 : (site == 5 || site == 6) ? 2 : 1;
@@ -410,22 +431,31 @@ static inline const char *tegra_vic_check_image(const TegraVICImage *im, const T
 {
     (void)which;
     const TegraVICFormat *f = im->format;
-    if (!f) return "pixel format the scaler does not take";
+    if (!f)
+        return "pixel format the scaler does not take";
     if (im->width < TEGRA_VIC_MIN_DIM || im->height < TEGRA_VIC_MIN_DIM || im->width > TEGRA_VIC_MAX_DIM ||
         im->height > TEGRA_VIC_MAX_DIM)
         return "surface size outside 2..8192";
-    if (f->subsampled && ((im->width | im->height) & 1)) return "4:2:0 surface with an odd size";
-    if (im->blockLinear && (!f->subsampled || im->blockHeightLog2 > 5)) return "block-linear surface VIC does not read";
+    if (f->subsampled && ((im->width | im->height) & 1))
+        return "4:2:0 surface with an odd size";
+    if (im->blockLinear && (!f->subsampled || im->blockHeightLog2 > 5))
+        return "block-linear surface VIC does not read";
     for (uint32_t p = 0; p < f->planes; p++) {
         const uint32_t w = f->subsampled && p ? im->width / 2 : im->width;
         const uint32_t h = f->subsampled && p ? im->height / 2 : im->height;
         const uint32_t align = im->blockLinear ? 64 : t && t->pitchAlign ? t->pitchAlign : 256;  // GOBs are 64 wide
-        if (im->base[p] & 0xff) return "plane not 256-byte aligned";
-        if (im->pitch[p] % align || im->pitch[p] % f->bpe[p]) return "row pitch the engine cannot address";
-        if (im->blockLinear && im->rows[p] % (8u << im->blockHeightLog2)) return "block-linear plane of partial blocks";
-        if ((uint64_t)w * f->bpe[p] > im->pitch[p]) return "row pitch shorter than a row";
-        if (im->pitch[p] / f->bpe[p] > 16384) return "row pitch over 16384 elements";
-        if (im->rows[p] < h) return "plane shorter than the surface";
+        if (im->base[p] & 0xff)
+            return "plane not 256-byte aligned";
+        if (im->pitch[p] % align || im->pitch[p] % f->bpe[p])
+            return "row pitch the engine cannot address";
+        if (im->blockLinear && im->rows[p] % (8u << im->blockHeightLog2))
+            return "block-linear plane of partial blocks";
+        if ((uint64_t)w * f->bpe[p] > im->pitch[p])
+            return "row pitch shorter than a row";
+        if (im->pitch[p] / f->bpe[p] > 16384)
+            return "row pitch over 16384 elements";
+        if (im->rows[p] < h)
+            return "plane shorter than the surface";
         // The engine reads or writes (LumaHeight + 1) rows of (LumaWidth + 1) elements: h rows of pitch bytes (a
         // block-linear plane: all its rows, whole blocks).
         if ((uint64_t)im->pitch[p] * (im->blockLinear ? im->rows[p] : h) > im->span[p])
@@ -441,18 +471,25 @@ static inline const char *tegra_vic_build(const TegraVICImage *src, const TegraV
                                           TegraVICJob *job)
 {
     const char *why;
-    if (dst->blockLinear) return "block-linear destination";
-    if ((why = tegra_vic_check_image(dst, t, "destination"))) return why;
-    if (!op->fill && (why = tegra_vic_check_image(src, t, "source"))) return why;
-    if (op->transform > 7) return "transform outside the 8 flips and rotations";
-    if (!(t->rotations & (1u << op->transform))) return "transform this engine has not proven";
+    if (dst->blockLinear)
+        return "block-linear destination";
+    if ((why = tegra_vic_check_image(dst, t, "destination")))
+        return why;
+    if (!op->fill && (why = tegra_vic_check_image(src, t, "source")))
+        return why;
+    if (op->transform > 7)
+        return "transform outside the 8 flips and rotations";
+    if (!(t->rotations & (1u << op->transform)))
+        return "transform this engine has not proven";
     if (!op->dstW || !op->dstH || op->dstX + (uint64_t)op->dstW > dst->width ||
         op->dstY + (uint64_t)op->dstH > dst->height)
         return "destination rectangle outside the destination";
-    if ((configAddr | filterAddr) & 0xff) return "configuration not 256-byte aligned";
+    if ((configAddr | filterAddr) & 0xff)
+        return "configuration not 256-byte aligned";
     const int transpose = t->vicFlips[op->transform][2];
     if (!op->fill) {
-        if (op->srcW < (1u << 16) || op->srcH < (1u << 16)) return "source rectangle under one pixel";
+        if (op->srcW < (1u << 16) || op->srcH < (1u << 16))
+            return "source rectangle under one pixel";
         if (op->srcX + op->srcW > ((uint64_t)src->width << 16) || op->srcY + op->srcH > ((uint64_t)src->height << 16))
             return "source rectangle outside the source";
         // Scale per output axis: a transposed job's destination width comes from the source height.
@@ -469,7 +506,8 @@ static inline const char *tegra_vic_build(const TegraVICImage *src, const TegraV
     if (!op->fill && op->transform && !(t->subRects & (1u << op->transform)) &&
         (op->dstX || op->dstY || op->dstW != dst->width || op->dstH != dst->height))
         return "destination sub-rectangle this transform has not proven";
-    if (!op->fill && src->blockLinear && !t->blockLinearIn) return "block-linear source this engine has not proven";
+    if (!op->fill && src->blockLinear && !t->blockLinearIn)
+        return "block-linear source this engine has not proven";
     if (!op->fill && src->format->kind != TEGRA_VIC_KIND_RGB) {
         const int same = dst->format->kind == src->format->kind && src->standard == dst->standard &&
                          t->in.cbChannel == t->out.cbChannel;  // the pass-through tegra_vic_build programs below
@@ -610,10 +648,12 @@ static inline const char *tegra_vic_build(const TegraVICImage *src, const TegraV
     TEGRA_VIC_METHOD(TEGRA_VIC_M_SET_CONFIG_STRUCT_OFFSET, configAddr >> 8);
     TEGRA_VIC_METHOD(TEGRA_VIC_M_SET_FILTER_STRUCT_OFFSET, filterAddr >> 8);
     TEGRA_VIC_METHOD(TEGRA_VIC_M_OUTPUT_LUMA, dst->base[0] >> 8);
-    if (df->planes > 1) TEGRA_VIC_METHOD(TEGRA_VIC_M_OUTPUT_CHROMA_U, dst->base[1] >> 8);
+    if (df->planes > 1)
+        TEGRA_VIC_METHOD(TEGRA_VIC_M_OUTPUT_CHROMA_U, dst->base[1] >> 8);
     if (!op->fill) {
         TEGRA_VIC_METHOD(TEGRA_VIC_M_SURFACE0_SLOT0_LUMA, src->base[0] >> 8);
-        if (src->format->planes > 1) TEGRA_VIC_METHOD(TEGRA_VIC_M_SURFACE0_SLOT0_CHROMA_U, src->base[1] >> 8);
+        if (src->format->planes > 1)
+            TEGRA_VIC_METHOD(TEGRA_VIC_M_SURFACE0_SLOT0_CHROMA_U, src->base[1] >> 8);
     }
     TEGRA_VIC_METHOD(TEGRA_VIC_M_EXECUTE, TEGRA_VIC_EXECUTE_AWAKEN);
 #undef TEGRA_VIC_METHOD

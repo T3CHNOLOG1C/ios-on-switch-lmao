@@ -41,10 +41,26 @@ OSDeclareDefaultStructors(TegraDisplayFlip) public :
     // frame-latched updates (REG_ACT_CONTROL) and lets V_BLANK/FRAME_END latch in INT_STATUS; free() restores both.
     static TegraDisplayFlip *create();
 
-    uint32_t width() const { return width_; }
-    uint32_t height() const { return height_; }
-    uint32_t stride() const { return stride_; }
-    uint64_t bufferLength() const { return (uint64_t)stride_ * height_; }
+    uint32_t width() const
+    {
+        return width_;
+    }
+
+    uint32_t height() const
+    {
+        return height_;
+    }
+
+    uint32_t stride() const
+    {
+        return stride_;
+    }
+
+    uint64_t bufferLength() const
+    {
+        return (uint64_t)stride_ * height_;
+    }
+
     // The address the hardware is scanning out now (active copy of DC_WINBUF_START_ADDR).
     uint64_t scanoutAddress();
 
@@ -75,8 +91,17 @@ protected:
 
 private:
     bool attach();
-    uint32_t read(uint32_t index) const { return dc_[index]; }
-    void write(uint32_t index, uint32_t value) { dc_[index] = value; }
+
+    uint32_t read(uint32_t index) const
+    {
+        return dc_[index];
+    }
+
+    void write(uint32_t index, uint32_t value)
+    {
+        dc_[index] = value;
+    }
+
     uint32_t readWindowAActive(uint32_t index);
 
     IOMemoryMap *registers_;

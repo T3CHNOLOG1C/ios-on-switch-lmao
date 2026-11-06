@@ -35,12 +35,15 @@ typedef struct {
     uint8_t comp_inter_prob[5];
     uint8_t single_ref_prob[5][2];
     uint8_t comp_ref_prob[5];
+
     struct {
         uint8_t p32x32[2][3];
         uint8_t p16x16[2][2];
         uint8_t p8x8[2][1];
     } tx;
+
     uint8_t skip_probs[3];
+
     struct {
         uint8_t joints[3];
         VP9MVComponent comps[2];
@@ -71,21 +74,37 @@ typedef struct {
     uint32_t comp_inter[5][2];
     uint32_t single_ref[5][2][2];
     uint32_t comp_ref[5][2];
+
     struct {
         uint32_t p32x32[2][4];
         uint32_t p16x16[2][3];
         uint32_t p8x8[2][2];
         uint32_t totals[4];
     } tx;
+
     uint32_t skip[3][2];
+
     struct {
         uint32_t joints[4];
         VP9MVComponentCounts comps[2];
     } mv;
 } VP9Counts;
 
-enum { VP9_TX_ONLY_4X4, VP9_TX_ALLOW_8X8, VP9_TX_ALLOW_16X16, VP9_TX_ALLOW_32X32, VP9_TX_MODE_SELECT };
-enum { VP9_FILTER_EIGHTTAP, VP9_FILTER_SMOOTH, VP9_FILTER_SHARP, VP9_FILTER_BILINEAR, VP9_FILTER_SWITCHABLE };
+enum {
+    VP9_TX_ONLY_4X4,
+    VP9_TX_ALLOW_8X8,
+    VP9_TX_ALLOW_16X16,
+    VP9_TX_ALLOW_32X32,
+    VP9_TX_MODE_SELECT
+};
+
+enum {
+    VP9_FILTER_EIGHTTAP,
+    VP9_FILTER_SMOOTH,
+    VP9_FILTER_SHARP,
+    VP9_FILTER_BILINEAR,
+    VP9_FILTER_SWITCHABLE
+};
 
 // The defaults every context starts from (vp9_setup_past_independence).
 void vp9_default_frame_context(VP9FrameContext *fc);

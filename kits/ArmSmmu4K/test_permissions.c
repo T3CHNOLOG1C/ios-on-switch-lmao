@@ -11,6 +11,7 @@
     } while (0)
 extern uint64_t source_permission_pte(unsigned, unsigned);
 static uint64_t tables[8 * 512];
+
 static uint64_t walk(const ArmSmmu4KConfig *c, const ArmSmmu4KResult *r, uint64_t va)
 {
     size_t page = 0;
@@ -19,7 +20,8 @@ static uint64_t walk(const ArmSmmu4KConfig *c, const ArmSmmu4KResult *r, uint64_
         size_t index = (va >> (12 + 9 * (3 - level))) & ((1u << width) - 1);
         uint64_t entry = tables[page * 512 + index];
         CHECK((entry & 3) == 3);
-        if (level == 3) return entry;
+        if (level == 3)
+            return entry;
         uint64_t physical = entry & UINT64_C(0xfffffffff000);
         CHECK(physical >= r->root_physical);
         page = (physical - r->root_physical) / 4096;
@@ -28,6 +30,7 @@ static uint64_t walk(const ArmSmmu4KConfig *c, const ArmSmmu4KResult *r, uint64_
     CHECK(0);
     return 0;
 }
+
 int main(void)
 {
     unsigned count = 0;

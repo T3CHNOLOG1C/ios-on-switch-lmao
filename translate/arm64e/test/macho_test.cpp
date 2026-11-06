@@ -45,10 +45,12 @@ void put32(std::vector<uint8_t> &b, size_t at, uint32_t v)
 {
     memcpy(&b[at], &v, 4);
 }
+
 void put64(std::vector<uint8_t> &b, size_t at, uint64_t v)
 {
     memcpy(&b[at], &v, 8);
 }
+
 uint32_t get32(const uint8_t *p)
 {
     uint32_t v;
@@ -152,7 +154,8 @@ std::vector<uint8_t> build(const Spec &s)
         memcpy(&b[ss + 20], &one, 2);
         memcpy(&b[ss + 22], &zero, 2);
         linkedit(A64X_LC_DYLD_CHAINED_FIXUPS, kFixups, 32 + 16 + 24);
-        for (auto [off, raw] : s.pointers) put64(b, kSeg + off, raw);
+        for (auto [off, raw] : s.pointers)
+            put64(b, kSeg + off, raw);
     }
     put32(b, 0, A64X_MH_MAGIC_64);
     put32(b, 4, A64X_CPU_TYPE_ARM64);
@@ -160,7 +163,8 @@ std::vector<uint8_t> build(const Spec &s)
     put32(b, 12, 2);  // MH_EXECUTE
     put32(b, 16, ncmds);
     put32(b, 20, static_cast<uint32_t>(lc - 32));
-    for (size_t i = 0; i < s.code.size(); i++) put32(b, kTextOff + 4 * i, s.code[i]);
+    for (size_t i = 0; i < s.code.size(); i++)
+        put32(b, kTextOff + 4 * i, s.code[i]);
     return b;
 }
 
@@ -171,8 +175,16 @@ struct Translated {
     int rc = -1;
     long sites = -1;
     std::string err;
-    ~Translated() { a64x_image_xlate_free(&x); }
-    uint32_t word(size_t i) const { return get32(&out[kTextOff + 4 * i]); }
+
+    ~Translated()
+    {
+        a64x_image_xlate_free(&x);
+    }
+
+    uint32_t word(size_t i) const
+    {
+        return get32(&out[kTextOff + 4 * i]);
+    }
 };
 
 void translate(const Spec &s, Translated &t, uint32_t flags = 0)
@@ -213,7 +225,8 @@ TEST(Image, Arm64eIsTranslatedInFull)
     EXPECT_EQ(3u, t.x.changed);
     EXPECT_GT(t.x.nstubs, 0u);
     EXPECT_EQ(int64_t{3 * kSeg}, t.x.stub_delta) << "stubs right after the image's address space";
-    for (size_t i = 0; i < 8; i++) EXPECT_FALSE(a64x_class_is_baseline(a64x_classify(t.word(i)))) << i;
+    for (size_t i = 0; i < 8; i++)
+        EXPECT_FALSE(a64x_class_is_baseline(a64x_classify(t.word(i)))) << i;
 }
 
 TEST(Image, Arm64KeepsItsPacWordsButNotLse)
@@ -307,9 +320,11 @@ bool windowIsCode(void *ctx, uint64_t off)
 {
     auto *c = static_cast<WindowCtx *>(ctx);
     uint64_t k = (off - c->m->exec_fileoff) / 4;
-    if (off >= c->m->exec_fileoff && (c->data[k >> 3] & (1u << (k & 7)))) return false;
+    if (off >= c->m->exec_fileoff && (c->data[k >> 3] & (1u << (k & 7))))
+        return false;
     for (uint32_t i = 0; i < c->m->nranges; i++)
-        if (off >= c->m->ranges[i].lo && off < c->m->ranges[i].hi) return true;
+        if (off >= c->m->ranges[i].lo && off < c->m->ranges[i].hi)
+            return true;
     return false;
 }
 
@@ -317,7 +332,8 @@ TEST(Image, PagerWindowsReproduceTheScan)
 {
     Spec s;
     s.function_starts = {0};
-    for (int i = 0; i < 700; i++) s.code.push_back(i % 7 == 3 ? kLdaddal : i % 11 == 5 ? kRetab : kAdd);
+    for (int i = 0; i < 700; i++)
+        s.code.push_back(i % 7 == 3 ? kLdaddal : i % 11 == 5 ? kRetab : kAdd);
     Translated t;
     translate(s, t);
     ASSERT_EQ(0, t.rc) << t.err;
@@ -355,7 +371,8 @@ TEST(Image, FatSlices)
     std::vector<uint8_t> b = build(plainFunction(A64X_CPU_SUBTYPE_ARM64_ALL));
     std::vector<uint8_t> fat(0x4000 + a.size() + b.size(), 0);
     auto be = [&](size_t at, uint32_t v) {
-        for (int i = 0; i < 4; i++) fat[at + i] = static_cast<uint8_t>(v >> (24 - 8 * i));
+        for (int i = 0; i < 4; i++)
+            fat[at + i] = static_cast<uint8_t>(v >> (24 - 8 * i));
     };
     be(0, A64X_FAT_MAGIC);
     be(4, 2);
@@ -390,10 +407,12 @@ constexpr uint64_t auth(uint64_t v)
 {
     return v | 1ull << 63;
 }
+
 constexpr uint64_t bind(uint64_t v)
 {
     return v | 1ull << 62;
 }
+
 constexpr uint64_t next(uint64_t n)
 {
     return n << 51;

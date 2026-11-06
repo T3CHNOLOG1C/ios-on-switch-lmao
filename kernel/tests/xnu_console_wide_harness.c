@@ -21,10 +21,13 @@ typedef int boolean_t;
 #define WIDTH 720 /* pixels per portrait row */
 #define LINE  16
 static uint32_t a[ROWS * WIDTH] __attribute__((aligned(64))), b[ROWS * WIDTH] __attribute__((aligned(64)));
+
 static void fill(void)
 {
-    for (unsigned i = 0; i < ROWS * WIDTH; ++i) a[i] = b[i] = (uint32_t)rand();
+    for (unsigned i = 0; i < ROWS * WIDTH; ++i)
+        a[i] = b[i] = (uint32_t)rand();
 }
+
 int main(void)
 {
     srand(1104);
@@ -37,8 +40,10 @@ int main(void)
                 for (unsigned x = 0; x < ROWS; x += 37) { /* scroll up */
                     volatile uint32_t *p = a + x * WIDTH, *q = b + x * WIDTH;
                     CHECK(vc_rotate3_wide(q + first, q + first + shift, last - shift - first));
-                    for (unsigned y = first; y < last - shift; ++y) p[y] = p[y + shift];
-                    for (unsigned y = first; y < last - shift; y += 4) vc_rotate3_copy4(q + y, q + y + shift);
+                    for (unsigned y = first; y < last - shift; ++y)
+                        p[y] = p[y + shift];
+                    for (unsigned y = first; y < last - shift; y += 4)
+                        vc_rotate3_copy4(q + y, q + y + shift);
                 }
                 CHECK(!memcmp(a, b, sizeof a));
                 ++checks;
@@ -46,8 +51,10 @@ int main(void)
                 for (unsigned x = 0; x < ROWS; x += 37) { /* scroll down */
                     volatile uint32_t *p = a + x * WIDTH, *q = b + x * WIDTH;
                     CHECK(vc_rotate3_wide(q + first + shift, q + first, last - shift - first));
-                    for (unsigned y = last; y > first + shift; --y) p[y - 1] = p[y - 1 - shift];
-                    for (unsigned y = last; y > first + shift; y -= 4) vc_rotate3_copy4(q + y - 4, q + y - 4 - shift);
+                    for (unsigned y = last; y > first + shift; --y)
+                        p[y - 1] = p[y - 1 - shift];
+                    for (unsigned y = last; y > first + shift; y -= 4)
+                        vc_rotate3_copy4(q + y - 4, q + y - 4 - shift);
                 }
                 CHECK(!memcmp(a, b, sizeof a));
                 ++checks;
@@ -56,8 +63,10 @@ int main(void)
                 const uint64_t wide = (uint64_t)back << 32 | back;
                 for (unsigned x = 0; x < ROWS; x += 37) { /* clear */
                     volatile uint32_t *p = a + x * WIDTH, *q = b + x * WIDTH;
-                    for (unsigned y = first; y < last; ++y) p[y] = back;
-                    for (unsigned y = first; y < last; y += 4) vc_rotate3_store4(q + y, wide, wide);
+                    for (unsigned y = first; y < last; ++y)
+                        p[y] = back;
+                    for (unsigned y = first; y < last; y += 4)
+                        vc_rotate3_store4(q + y, wide, wide);
                 }
                 CHECK(!memcmp(a, b, sizeof a));
                 ++checks;
@@ -74,11 +83,13 @@ int main(void)
         }
         uint32_t out[16], changed = 0;
         for (int i = 0; i < 16; ++i) {
-            if (cur[i] != prev[i]) changed |= 1u << i;
+            if (cur[i] != prev[i])
+                changed |= 1u << i;
             out[i] = (backc & ~cur[i]) | (fore & cur[i]);
         }
         for (int i = 0; i < 16; ++i)
-            if (cur[i] != prev[i]) screen1[i] = out[i]; /* original */
+            if (cur[i] != prev[i])
+                screen1[i] = out[i]; /* original */
         for (int i = 0; i < 16; i += 4)
             if (changed & (0xfu << i))
                 vc_rotate3_store4(screen2 + i, (uint64_t)out[i + 1] << 32 | out[i],

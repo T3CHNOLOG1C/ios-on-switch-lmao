@@ -18,22 +18,28 @@ enum : uint32_t {
     CpMeInitWords = 8,
     CpInitWords = 10
 };
+
 IOReturn NativeAdrenoCpInit::poison()
 {
     poisoned_ = true;
     return kIOReturnIOError;
 }
+
 uint32_t NativeAdrenoCpInit::meInitMask()
 {
     return (1u << 0) | (1u << 1) | (1u << 3) | (1u << 6) | (1u << 8);
 }
+
 IOReturn NativeAdrenoCpInit::run(const NativeAdrenoRingIo *io, NativeAdrenoRing *ring,
                                  const NativeAdrenoCpInitConfig *config, uint32_t *fence)
 {
-    if (!fence) return kIOReturnBadArgument;
+    if (!fence)
+        return kIOReturnBadArgument;
     *fence = 0;
-    if (done_ || poisoned_) return kIOReturnNotReady;
-    if (!io || !io->write32 || !ring || ring->poisoned()) return kIOReturnBadArgument;
+    if (done_ || poisoned_)
+        return kIOReturnNotReady;
+    if (!io || !io->write32 || !ring || ring->poisoned())
+        return kIOReturnBadArgument;
     if (!config || !config->sqe_iova || (config->sqe_iova & 4095) || config->sqe_iova >= UINT64_C(1) << 48 ||
         !config->pwrup_reglist_iova || (config->pwrup_reglist_iova & 3) ||
         config->pwrup_reglist_iova >= UINT64_C(1) << 48)
@@ -60,7 +66,8 @@ IOReturn NativeAdrenoCpInit::run(const NativeAdrenoRingIo *io, NativeAdrenoRing 
     words[9] = 1u << 31; /* read registers from the list */
     uint32_t value = 0;
     const IOReturn status = ring->submit(words, CpInitWords, &value);
-    if (status) return poison();
+    if (status)
+        return poison();
     done_ = true;
     *fence = value;
     return kIOReturnSuccess;

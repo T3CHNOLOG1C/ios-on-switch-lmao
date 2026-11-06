@@ -18,6 +18,7 @@ struct NativeAdrenoPwrupCounts {
     uint32_t preemption;
     uint32_t dynamic;
 };
+
 class NativeAdrenoPwrupList final {
     NativeAdrenoPwrupList() = delete;
 

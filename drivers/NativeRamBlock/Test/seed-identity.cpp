@@ -7,9 +7,14 @@
 #include <stdlib.h>
 #include <vector>
 #include "../SeedDisk.h"
+
 struct Ops {
-    uint8_t *allocate() { return static_cast<uint8_t *>(calloc(1, 4096)); }
+    uint8_t *allocate()
+    {
+        return static_cast<uint8_t *>(calloc(1, 4096));
+    }
 };
+
 int main(int argc, char **argv)
 {
     assert(argc == 2);
@@ -35,9 +40,18 @@ int main(int argc, char **argv)
     CC_SHA256_CTX ctx;
     uint8_t out[32];
     seedIdentity(
-        d, ctx, [](CC_SHA256_CTX &c) { CC_SHA256_Init(&c); },
-        [](CC_SHA256_CTX &c, const void *p, size_t k) { CC_SHA256_Update(&c, p, (CC_LONG)k); },
-        [](CC_SHA256_CTX &c, uint8_t *o) { CC_SHA256_Final(o, &c); }, out);
-    for (uint8_t c : out) printf("%02x", c);
+        d, ctx,
+        [](CC_SHA256_CTX &c) {
+            CC_SHA256_Init(&c);
+        },
+        [](CC_SHA256_CTX &c, const void *p, size_t k) {
+            CC_SHA256_Update(&c, p, (CC_LONG)k);
+        },
+        [](CC_SHA256_CTX &c, uint8_t *o) {
+            CC_SHA256_Final(o, &c);
+        },
+        out);
+    for (uint8_t c : out)
+        printf("%02x", c);
     printf("\n");
 }

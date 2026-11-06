@@ -175,7 +175,8 @@ static void colour(void)
                                                  out10[kMeasured.crChannel] >> 2};
                         for (int c = 0; c < 3; c++) {
                             const double d = fabs(got[c] - clamp255(ideal[c]));
-                            if (d > worst) worst = d;
+                            if (d > worst)
+                                worst = d;
                         }
                         // Round trip through the engine's 8-bit storage.
                         uint32_t back10[3], mid[3] = {(out10[0] >> 2) << 2, (out10[1] >> 2) << 2, (out10[2] >> 2) << 2};
@@ -183,7 +184,8 @@ static void colour(void)
                         const int rgb[3] = {r, g, b};
                         for (int c = 0; c < 3; c++) {
                             const double d = fabs((double)(back10[c] >> 2) - rgb[c]);
-                            if (d > worstBack) worstBack = d;
+                            if (d > worstBack)
+                                worstBack = d;
                         }
                     }
             // One 8-bit step against the float conversion; a round trip (two quantisations, 4:2:0 storage aside)
@@ -216,7 +218,8 @@ static void colour(void)
                         const double ideal[3] = {clamp255(255 * R), clamp255(255 * G), clamp255(255 * B)};
                         for (int c = 0; c < 3; c++) {
                             const double d = fabs((double)(out10[c] >> 2) - ideal[c]);
-                            if (d > worst) worst = d;
+                            if (d > worst)
+                                worst = d;
                         }
                     }
             CHECK(worst <= 1.0, "BT.%s %s Y'CbCr -> RGB off by %.2f steps", standard ? "709" : "601",
@@ -238,7 +241,8 @@ static void idealReference(void)
                 const double R = y + 2 * (1 - kr) * pr, B = y + 2 * (1 - kb) * pb, G = (y - kr * R - kb * B) / kg;
                 const double ideal[3] = {clamp255(R), clamp255(G), clamp255(B)};
                 for (int c = 0; c < 3; c++)
-                    if (fabs(rgb[c] - ideal[c]) > worst) worst = fabs(rgb[c] - ideal[c]);
+                    if (fabs(rgb[c] - ideal[c]) > worst)
+                        worst = fabs(rgb[c] - ideal[c]);
             }
     CHECK(worst <= 0.51, "integer BT.709 reference off the float one by %.3f", worst);
 }
@@ -440,6 +444,7 @@ static void jobs(void)
         {16, "configuration not 256-byte aligned"},
         {17, "destination sub-rectangle this transform has not proven"},
     };
+
     for (unsigned i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
         TegraVICImage s2 = src, d2 = dst;
         TegraVICOp o2;
@@ -452,13 +457,27 @@ static void jobs(void)
         TegraVICTraits t2 = t;
         uint64_t cfg = 0x80001000;
         switch (cases[i].what) {
-        case 0: s2.span[0] -= 1; break;
-        case 1: s2.pitch[0] = 2880 + 32; break;
-        case 2: d2.base[1] += 64; break;
-        case 3: d2.width = 1279; break;
-        case 4: o2.dstX = 2; break;
-        case 5: o2.srcY = 1u << 16; break;
-        case 6: t2.rotations = 0xef; break;
+        case 0:
+            s2.span[0] -= 1;
+            break;
+        case 1:
+            s2.pitch[0] = 2880 + 32;
+            break;
+        case 2:
+            d2.base[1] += 64;
+            break;
+        case 3:
+            d2.width = 1279;
+            break;
+        case 4:
+            o2.dstX = 2;
+            break;
+        case 5:
+            o2.srcY = 1u << 16;
+            break;
+        case 6:
+            t2.rotations = 0xef;
+            break;
         case 7:
             o2.srcW = 40u << 16;
             o2.srcH = 1280u << 16;
@@ -474,17 +493,31 @@ static void jobs(void)
             o2.dstW = 40;
             o2.dstH = 40;
             break;
-        case 9: s2.format = tegra_vic_format(TEGRA_VIC_FOURCC('x', '4', '2', '0')); break;
-        case 10: s2.width = 1; break;
-        case 11: s2.pitch[0] = 2048; break;
+        case 9:
+            s2.format = tegra_vic_format(TEGRA_VIC_FOURCC('x', '4', '2', '0'));
+            break;
+        case 10:
+            s2.width = 1;
+            break;
+        case 11:
+            s2.pitch[0] = 2048;
+            break;
         case 12:
             o2.dstX = 1;
             o2.dstW = 1278;
             break;
-        case 13: o2.srcW = 0x8000; break;
-        case 14: o2.transform = 8; break;
-        case 15: d2.rows[1] = 359; break;
-        case 16: cfg = 0x80001080; break;
+        case 13:
+            o2.srcW = 0x8000;
+            break;
+        case 14:
+            o2.transform = 8;
+            break;
+        case 15:
+            d2.rows[1] = 359;
+            break;
+        case 16:
+            cfg = 0x80001080;
+            break;
         case 17:
             t2.subRects = 0x01;
             o2.dstY = 2;
@@ -542,7 +575,8 @@ static const char *buildAll(const TegraVICPlan *plan, const TegraVICSurfaceDesc 
     memset(&src, 0, sizeof(src));
     const char *why = tegra_vic_image_from(dd, 0x18000000, &dst);
     dst.chromaSite = site;
-    if (!why && plan->readsSource) why = tegra_vic_image_from(sd, 0x10000000, &src);
+    if (!why && plan->readsSource)
+        why = tegra_vic_image_from(sd, 0x10000000, &src);
     for (uint32_t i = 0; !why && i < plan->count; i++)
         why = tegra_vic_build(plan->op[i].fill ? NULL : &src, &dst, &plan->op[i], t, 0x80001000, 0x80002000, last);
     return why;
@@ -646,23 +680,42 @@ static void requests(void)
         {8, TEGRA_VIC_PLAN_UNSUPPORTED, "HDR or film grain (capabilities say no)"},
         {9, TEGRA_VIC_PLAN_UNSUPPORTED, "shared events"},
     };
+
     for (unsigned i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
         TegraVICRequest q = cloneRequest(0);
         TegraVICSurfaceDesc sd = lcd, dd = wb;
         switch (cases[i].what) {
-        case 0: q.flags |= 0x8; break;
-        case 1: q.flags |= TEGRA_VIC_REQ_HISTOGRAM; break;
-        case 2: q.flags |= TEGRA_VIC_REQ_HDR; break;
-        case 3: q.flags |= 1ull << 36; break;
-        case 4: q.src_event_port = 0x1503; break;
-        case 5: dd.fourcc = TEGRA_VIC_FOURCC('x', '4', '2', '0'); break;
-        case 6: sd.protection = 1; break;
+        case 0:
+            q.flags |= 0x8;
+            break;
+        case 1:
+            q.flags |= TEGRA_VIC_REQ_HISTOGRAM;
+            break;
+        case 2:
+            q.flags |= TEGRA_VIC_REQ_HDR;
+            break;
+        case 3:
+            q.flags |= 1ull << 36;
+            break;
+        case 4:
+            q.src_event_port = 0x1503;
+            break;
+        case 5:
+            dd.fourcc = TEGRA_VIC_FOURCC('x', '4', '2', '0');
+            break;
+        case 6:
+            sd.protection = 1;
+            break;
         case 7:
             q.flags |= TEGRA_VIC_REQ_ALPHA_OVERRIDE;
             dd = lcd;
             break;
-        case 8: q.flags |= TEGRA_VIC_REQ_FILM_GRAIN; break;
-        case 9: q.dst_event_port = 0x1603; break;
+        case 8:
+            q.flags |= TEGRA_VIC_REQ_FILM_GRAIN;
+            break;
+        case 9:
+            q.dst_event_port = 0x1603;
+            break;
         }
         why = tegra_vic_plan(&q, &sd, &dd, &plan, &kind);
         CHECK(why && !strcmp(why, cases[i].why) && kind == (uint32_t)cases[i].kind, "request case %d: got \"%s\"",
@@ -761,6 +814,7 @@ static void blockLinear(void)
               TEGRA_VIC_GET(job.config, sf, SURF_CACHE_WIDTH) == TEGRA_VIC_CACHE_64Bx4 &&
               TEGRA_VIC_GET(job.config, sf, SURF_LUMA_HEIGHT) == 1079,
           "pitch-linear source setup changed: %s", why ? why : "");
+
     struct {
         int what;
         const char *why;
@@ -771,15 +825,26 @@ static void blockLinear(void)
         {3, "plane extends past its mapping"},
         {4, "block-linear destination"},
     };
+
     for (unsigned i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
         TegraVICTraits tt = t;
         TegraVICImage s = src, d = dst;
         switch (cases[i].what) {
-        case 0: tt.blockLinearIn = 0; break;
-        case 1: s.pitch[0] = s.pitch[1] = 1952; break;  // 32 bytes past a GOB
-        case 2: s.rows[0] = 1080, s.rows[1] = 540; break;
-        case 3: s.span[1] = 1920 * 540; break;
-        case 4: d.blockLinear = 1; break;
+        case 0:
+            tt.blockLinearIn = 0;
+            break;
+        case 1:
+            s.pitch[0] = s.pitch[1] = 1952;
+            break;  // 32 bytes past a GOB
+        case 2:
+            s.rows[0] = 1080, s.rows[1] = 540;
+            break;
+        case 3:
+            s.span[1] = 1920 * 540;
+            break;
+        case 4:
+            d.blockLinear = 1;
+            break;
         }
         why = tegra_vic_build(&s, &d, &op, &tt, 0x80001000, 0x80002000, &job);
         CHECK(why && !strcmp(why, cases[i].why), "block-linear case %d: wanted \"%s\", got \"%s\"", cases[i].what,

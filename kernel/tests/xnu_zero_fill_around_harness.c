@@ -85,6 +85,7 @@ static int enter_result = KERN_SUCCESS;
 static bool enter_retry; /* vm_fault_enter reports a pmap_enter that would block */
 static unsigned int enter_fail_after = 100;
 static bool lock_held = true;
+
 static struct {
     int n;
 } vm_statistics_zero_fill_count;
@@ -268,15 +269,33 @@ int main(void)
 
         reset(1 << 20, 0, 1 << 20);
         switch (k) {
-        case 0: object.shadow = &other; break;
-        case 1: object.vo_copy = &other; break;
-        case 2: object.pager_created = true; break;
-        case 3: object.purgable = VM_PURGABLE_NONVOLATILE; break;
-        case 4: object.all_reusable = true; break;
-        case 5: object.kernel = true; break;
-        case 6: pmap = kernel_pmap; break;
-        case 7: prot |= VM_PROT_EXECUTE; break;
-        case 8: dynamic_paging = false; break;
+        case 0:
+            object.shadow = &other;
+            break;
+        case 1:
+            object.vo_copy = &other;
+            break;
+        case 2:
+            object.pager_created = true;
+            break;
+        case 3:
+            object.purgable = VM_PURGABLE_NONVOLATILE;
+            break;
+        case 4:
+            object.all_reusable = true;
+            break;
+        case 5:
+            object.kernel = true;
+            break;
+        case 6:
+            pmap = kernel_pmap;
+            break;
+        case 7:
+            prot |= VM_PROT_EXECUTE;
+            break;
+        case 8:
+            dynamic_paging = false;
+            break;
         }
         resident[nresident++] = 0x8000;
         CHECK(switch_zero_fill_around(&object, 0x8000, pmap, base, prot, VM_PROT_WRITE, &info) == 0);

@@ -21,7 +21,12 @@ struct TegraVICBuffer {
 };
 
 // The two windows of VIC's address space a job's surfaces are mapped into, page by page.
-enum { TEGRA_VIC_WINDOW_SRC = 0, TEGRA_VIC_WINDOW_DST = 1, TEGRA_VIC_WINDOWS = 2 };
+enum {
+    TEGRA_VIC_WINDOW_SRC = 0,
+    TEGRA_VIC_WINDOW_DST = 1,
+    TEGRA_VIC_WINDOWS = 2
+};
+
 constexpr uint64_t kTegraVICWindowBase = 0x10000000ull, kTegraVICWindowBytes = 128ull << 20;
 
 extern "C" {

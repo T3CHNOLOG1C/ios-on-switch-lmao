@@ -29,8 +29,16 @@ static_assert(sizeof(loader_memory_report) <= REPORT_BYTES);
 
 struct Rng {
     std::mt19937_64 engine{1104};
-    uint64_t below(uint64_t n) { return std::uniform_int_distribution<uint64_t>(0, n - 1)(engine); }
-    template <class T> const T &choice(const std::vector<T> &v) { return v[below(v.size())]; }
+
+    uint64_t below(uint64_t n)
+    {
+        return std::uniform_int_distribution<uint64_t>(0, n - 1)(engine);
+    }
+
+    template <class T> const T &choice(const std::vector<T> &v)
+    {
+        return v[below(v.size())];
+    }
 };
 
 // The generated and damaged trees: the default one, 300 with shuffled extra reservations and carve-outs, and 300
@@ -58,7 +66,8 @@ std::vector<Bytes> Trees(Rng &rng)
     const Bytes base = Tree();
     for (int t = 0; t < 300; ++t) {
         Bytes damaged = base;
-        for (uint64_t n = 1 + rng.below(3); n; --n) damaged[rng.below(damaged.size())] = (uint8_t)rng.below(256);
+        for (uint64_t n = 1 + rng.below(3); n; --n)
+            damaged[rng.below(damaged.size())] = (uint8_t)rng.below(256);
         trees.push_back(damaged);
     }
     return trees;
@@ -90,9 +99,11 @@ TEST(LoaderMemoryRanges, SingleAndMultiRangeMatchThePreviousParser)
                                                   picks[index].end, (loader_memory_report *)previous);
             EXPECT_EQ(now, before) << std::hex << "range " << picks[index].start << ", tree of " << std::dec
                                    << data.size() << " bytes";
-            if (!before) EXPECT_EQ(std::memcmp(current, previous, REPORT_BYTES), 0) << "the passing walk's report";
+            if (!before)
+                EXPECT_EQ(std::memcmp(current, previous, REPORT_BYTES), 0) << "the passing walk's report";
             ++checked;
-            if (!expected && before) expected = std::make_pair(before, index);
+            if (!expected && before)
+                expected = std::make_pair(before, index);
         }
         unsigned failed = 99;
         alignas(8) unsigned char report[REPORT_BYTES] = {};

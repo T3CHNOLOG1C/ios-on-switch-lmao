@@ -51,7 +51,8 @@ int main(int argc, char **)
         int result =
             formatUfsRootDiagnostics(reinterpret_cast<char *>(storage + 1), size, d, "transport timeout fixture");
         assert(result == length && storage[0] == 0xa5 && storage[size + 1] == 0xa5);
-        if (size) assert(storage[1 + (size <= size_t(length) ? size - 1 : size_t(length))] == 0);
+        if (size)
+            assert(storage[1 + (size <= size_t(length) ? size - 1 : size_t(length))] == 0);
     }
     if (argc > 1) {
         // Maximum-width numeric fields plus all eight bounded media entries.

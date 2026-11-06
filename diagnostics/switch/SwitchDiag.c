@@ -67,10 +67,10 @@ __attribute__((no_stack_protector)) static void early_hex(unsigned y, const char
     }
     line[n++] = '0';
     line[n++] = 'X';
-    for (unsigned i = 0; i < 16; ++i) line[n++] = "0123456789ABCDEF"[(value >> (60 - 4 * i)) & 15];
+    for (unsigned i = 0; i < 16; ++i)
+        line[n++] = "0123456789ABCDEF"[(value >> (60 - 4 * i)) & 15];
     line[n] = 0;
-    (void)switch_diag_text((volatile uint32_t *)(uintptr_t)SWITCH_FB_PA, 16, y, 704, line, sizeof(line),
-                             SWITCH_WHITE);
+    (void)switch_diag_text((volatile uint32_t *)(uintptr_t)SWITCH_FB_PA, 16, y, 704, line, sizeof(line), SWITCH_WHITE);
 }
 
 // Records the last early stage reached (shown as LAST STAGE on an early exception or panic screen). Nothing is drawn:
@@ -78,13 +78,15 @@ __attribute__((no_stack_protector)) static void early_hex(unsigned y, const char
 __attribute__((no_stack_protector)) void switch_diag_early_stage(unsigned stage, const char *message)
 {
     (void)message;
-    if (!switch_early_record[0] || switch_early_record[2] || stage < 7 || stage > 21) return;
+    if (!switch_early_record[0] || switch_early_record[2] || stage < 7 || stage > 21)
+        return;
     switch_early_record[1] = stage;
 }
 
 __attribute__((no_stack_protector)) void switch_diag_early_leave(void)
 {
-    if (!switch_early_record[0]) return;
+    if (!switch_early_record[0])
+        return;
     /* The new TTBR1 is active; old TTBR0 still maps the framebuffer. Restore
      * normal exception vectors and disable early rendering BEFORE TTBR0 dies. */
     switch_early_record[0] = 0;
@@ -97,7 +99,8 @@ __attribute__((noreturn, no_stack_protector)) void switch_diag_early_fault(void)
         volatile uint32_t *pixels = (volatile uint32_t *)(uintptr_t)SWITCH_FB_PA;
         // Erase only the bounded early-C text area, preserving loader status.
         for (unsigned y = 320; y < 620; ++y)
-            for (unsigned x = 16; x < 1264; ++x) switch_diag_pixel(pixels, x, y, SWITCH_BACKGROUND);
+            for (unsigned x = 16; x < 1264; ++x)
+                switch_diag_pixel(pixels, x, y, SWITCH_BACKGROUND);
         (void)switch_diag_text(pixels, 16, 340, 704, "EARLY XNU EXCEPTION - HALTED", 104, SWITCH_RED);
         early_hex(380, "VECTOR=", switch_early_record[3]);
         early_hex(400, "LAST STAGE=", switch_early_record[1]);
@@ -106,10 +109,11 @@ __attribute__((noreturn, no_stack_protector)) void switch_diag_early_fault(void)
         early_hex(460, "ELR=", switch_early_record[6]);
         early_hex(480, "SCTLR=", switch_early_record[7]);
         (void)switch_diag_text(pixels, 16, 540, 704, "PHOTOGRAPH THIS SCREEN - HOLD POWER TO TURN OFF", 104,
-                                 SWITCH_RED);
+                               SWITCH_RED);
         __asm__ volatile("dsb sy" ::: "memory");
     }
-    for (;;) __asm__ volatile("wfe" ::: "memory");
+    for (;;)
+        __asm__ volatile("wfe" ::: "memory");
 }
 
 static void sync_pixels(void)
@@ -119,7 +123,8 @@ static void sync_pixels(void)
 
 static void text(unsigned y, const char *message, unsigned limit, uint32_t color)
 {
-    if (!framebuffer || native_text_console) return;
+    if (!framebuffer || native_text_console)
+        return;
     (void)switch_diag_text(framebuffer, 16, y, 704, message, limit, color);
 }
 
@@ -169,7 +174,8 @@ void switch_diag_graphics_takeover(void)
 /* NativeLegacyDisplay reserves scanout just before copying a real surface. */
 int boot_progress_prepare_scanout(void)
 {
-    if (switch_diag_record.panicked) return 0;
+    if (switch_diag_record.panicked)
+        return 0;
     if (native_text_console) {
         if (!graphics_owns_display) {
             PE_initialize_console(NULL, kPEReleaseScreen);
@@ -200,7 +206,8 @@ void boot_progress_cancel_scanout(void)
 
 static void console_blank(unsigned row)
 {
-    for (unsigned i = 0; i < CONSOLE_COLUMNS; i++) console_lines[row][i] = ' ';
+    for (unsigned i = 0; i < CONSOLE_COLUMNS; i++)
+        console_lines[row][i] = ' ';
     console_lines[row][CONSOLE_COLUMNS] = 0;
 }
 
@@ -210,7 +217,8 @@ static void console_flush(void)
     uint64_t now, freq;
     __asm__ volatile("mrs %0,cntpct_el0" : "=r"(now));
     __asm__ volatile("mrs %0,cntfrq_el0" : "=r"(freq));
-    if (console_last_draw && freq && now - console_last_draw < freq / 5) return;
+    if (console_last_draw && freq && now - console_last_draw < freq / 5)
+        return;
     console_last_draw = now;
     unsigned first = console_used == CONSOLE_ROWS ? (console_head + 1) % CONSOLE_ROWS : 0;
     for (unsigned row = 0; row < CONSOLE_ROWS; row++) {
@@ -219,14 +227,16 @@ static void console_flush(void)
             text(180 + row * 20, line, CONSOLE_COLUMNS + 1, SWITCH_WHITE);
         else
             for (unsigned y = 180 + row * 20; y < 194 + row * 20; y++)
-                for (unsigned x = 16; x < 1264; x++) switch_diag_pixel(framebuffer, x, y, SWITCH_BACKGROUND);
+                for (unsigned x = 16; x < 1264; x++)
+                    switch_diag_pixel(framebuffer, x, y, SWITCH_BACKGROUND);
     }
     sync_pixels();
 }
 
 void switch_diag_console_putc(char c)
 {
-    if (!switch_diag_console_active()) return;
+    if (!switch_diag_console_active())
+        return;
     boolean_t previous = ml_set_interrupts_enabled(FALSE);
     if (console_busy) {
         (void)ml_set_interrupts_enabled(previous);
@@ -236,14 +246,16 @@ void switch_diag_console_putc(char c)
     if (c != '\r') {
         if (c == '\n' || console_column == CONSOLE_COLUMNS) {
             console_head = (console_head + 1) % CONSOLE_ROWS;
-            if (console_used < CONSOLE_ROWS) console_used++;
+            if (console_used < CONSOLE_ROWS)
+                console_used++;
             console_blank(console_head);
             console_column = 0;
             console_flush();
         }
         if (c != '\n') {
             if (c == '\b') {
-                if (console_column) console_lines[console_head][--console_column] = ' ';
+                if (console_column)
+                    console_lines[console_head][--console_column] = ' ';
             } else
                 console_lines[console_head][console_column++] = (c == '\t') ? ' '
                                                                 : ((unsigned char)c >= 32 && (unsigned char)c < 127)
@@ -266,7 +278,8 @@ void switch_diag_process_event(int pid, const char *name, const char *event, int
 void switch_diag_init(const boot_args *args)
 {
     const int cpus = (int)ml_get_max_cpu_number() + 1;
-    if (!switch_native_cpu_profile_matches(cpus)) return;
+    if (!switch_native_cpu_profile_matches(cpus))
+        return;
     /* The native profile belongs exclusively to XNU's video console (text mode) or to the boot logo (graphics mode).
      * Keep observations in RAM, but never map or arm the custom HUD renderer. */
     if (args->Video.v_baseAddr == SWITCH_FB_PA && args->Video.v_display <= 1 && args->Video.v_rowBytes == 2880 &&
@@ -276,13 +289,15 @@ void switch_diag_init(const boot_args *args)
         switch_diag_record.magic = UINT64_C(0x53574348584e5531);
         return;
     }
-    if (cpus != 1) return; /* Four-core native uses only the stock video console. */
+    if (cpus != 1)
+        return; /* Four-core native uses only the stock video console. */
     if (!switch_diag_video_matches(args->Video.v_baseAddr, args->Video.v_display, args->Video.v_rowBytes,
-                                     args->Video.v_width, args->Video.v_height, args->Video.v_depth))
+                                   args->Video.v_width, args->Video.v_height, args->Video.v_depth))
         return;
     /* io_map's bootstrap path is available once arm_vm_init returned. */
     vm_offset_t mapped = ml_io_map((vm_offset_t)SWITCH_FB_PA, (vm_size_t)SWITCH_FB_BYTES);
-    if (!mapped) return;
+    if (!mapped)
+        return;
     framebuffer = (volatile uint32_t *)mapped;
     switch_diag_record.magic = UINT64_C(0x53574348584e5531); /* SWCHXNU1 */
     switch_diag_record.framebuffer_va = mapped;
@@ -296,14 +311,17 @@ void switch_diag_init(const boot_args *args)
 
 void switch_diag_stage(const char *message)
 {
-    if (!switch_diag_record.ready || switch_diag_record.panicked) return;
+    if (!switch_diag_record.ready || switch_diag_record.panicked)
+        return;
     boolean_t previous = ml_set_interrupts_enabled(FALSE);
     unsigned n = 0;
-    for (; message[n] && n < sizeof(switch_diag_record.stage) - 1; ++n) switch_diag_record.stage[n] = message[n];
+    for (; message[n] && n < sizeof(switch_diag_record.stage) - 1; ++n)
+        switch_diag_record.stage[n] = message[n];
     switch_diag_record.stage[n] = 0;
     ++switch_diag_record.stages;
     for (unsigned y = 100; y < 120; ++y)
-        for (unsigned x = 16; x < 1264; ++x) switch_diag_pixel(framebuffer, x, y, SWITCH_BACKGROUND);
+        for (unsigned x = 16; x < 1264; ++x)
+            switch_diag_pixel(framebuffer, x, y, SWITCH_BACKGROUND);
     text(100, switch_diag_record.stage, sizeof(switch_diag_record.stage), SWITCH_GREEN);
     sync_pixels();
     (void)ml_set_interrupts_enabled(previous);
@@ -314,17 +332,20 @@ void (*volatile switch_display_panic_hook)(const char *message);
 __attribute__((no_stack_protector)) void switch_diag_panic(const char *format, va_list *args, unsigned long caller)
 {
     void (*const display)(const char *) = switch_display_panic_hook;
-    if (display) display(format);
+    if (display)
+        display(format);
     if (switch_early_record[0]) {
         __asm__ volatile("msr daifset, #15" ::: "memory");
         if (switch_early_record[2] || switch_diag_record.panicked)
-            for (;;) __asm__ volatile("wfe" ::: "memory");
+            for (;;)
+                __asm__ volatile("wfe" ::: "memory");
         switch_early_record[2] = 1;
         switch_diag_record.panicked = 1;
         switch_diag_record.caller = caller;
         volatile uint32_t *pixels = (volatile uint32_t *)(uintptr_t)SWITCH_FB_PA;
         for (unsigned y = 320; y < 620; ++y)
-            for (unsigned x = 16; x < 1264; ++x) switch_diag_pixel(pixels, x, y, SWITCH_BACKGROUND);
+            for (unsigned x = 16; x < 1264; ++x)
+                switch_diag_pixel(pixels, x, y, SWITCH_BACKGROUND);
         (void)switch_diag_text(pixels, 16, 340, 704, "EARLY XNU PANIC - HALTED", 104, SWITCH_RED);
         early_hex(380, "LAST STAGE=", switch_early_record[1]);
         early_hex(400, "CALLER=", caller);
@@ -334,11 +355,12 @@ __attribute__((no_stack_protector)) void switch_diag_panic(const char *format, v
         int count = vsnprintf(switch_diag_record.panic_text, sizeof(switch_diag_record.panic_text), format, copy);
         va_end(copy);
         switch_diag_record.truncated = count < 0 || (unsigned)count >= sizeof(switch_diag_record.panic_text);
-        if (switch_diag_text(pixels, 16, 440, 620, switch_diag_record.panic_text,
-                               sizeof(switch_diag_record.panic_text), SWITCH_WHITE))
+        if (switch_diag_text(pixels, 16, 440, 620, switch_diag_record.panic_text, sizeof(switch_diag_record.panic_text),
+                             SWITCH_WHITE))
             switch_diag_record.truncated = 1;
         __asm__ volatile("dsb sy" ::: "memory");
-        for (;;) __asm__ volatile("wfe" ::: "memory");
+        for (;;)
+            __asm__ volatile("wfe" ::: "memory");
     }
     if (native_profile) {
         const int first = !switch_diag_record.panicked;
@@ -359,13 +381,16 @@ __attribute__((no_stack_protector)) void switch_diag_panic(const char *format, v
         graphics_owns_display = 0;
         switch_diag_record.ready = 1;
     }
-    if (!switch_diag_record.ready) return;
+    if (!switch_diag_record.ready)
+        return;
     __asm__ volatile("msr daifset, #15" ::: "memory");
     /* One CPU is required at init. A recursive formatter fault must not redraw. */
-    if (switch_diag_record.panicked) panic_spin_forever();
+    if (switch_diag_record.panicked)
+        panic_spin_forever();
     switch_diag_record.panicked = 1;
     for (unsigned y = 140; y < 660; y++)
-        for (unsigned x = 16; x < 1264; x++) switch_diag_pixel(framebuffer, x, y, SWITCH_BACKGROUND);
+        for (unsigned x = 16; x < 1264; x++)
+            switch_diag_pixel(framebuffer, x, y, SWITCH_BACKGROUND);
     switch_diag_record.caller = caller;
     __asm__ volatile("mrs %0, CurrentEL" : "=r"(switch_diag_record.current_el));
     __asm__ volatile("mrs %0, sctlr_el1" : "=r"(switch_diag_record.sctlr));
@@ -387,11 +412,13 @@ __attribute__((no_stack_protector)) void switch_diag_panic(const char *format, v
     va_end(copy);
     switch_diag_record.truncated = count < 0 || (unsigned)count >= sizeof(switch_diag_record.panic_text);
     if (switch_diag_text(framebuffer, 16, 324, 628, switch_diag_record.panic_text,
-                           sizeof(switch_diag_record.panic_text), SWITCH_WHITE))
+                         sizeof(switch_diag_record.panic_text), SWITCH_WHITE))
         switch_diag_record.truncated = 1;
-    if (switch_diag_record.truncated) text(644, "PANIC TEXT TRUNCATED", 104, SWITCH_RED);
+    if (switch_diag_record.truncated)
+        text(644, "PANIC TEXT TRUNCATED", 104, SWITCH_RED);
     for (unsigned y = 680; y < 700; ++y)
-        for (unsigned x = 16; x < 1264; ++x) switch_diag_pixel(framebuffer, x, y, SWITCH_BACKGROUND);
+        for (unsigned x = 16; x < 1264; ++x)
+            switch_diag_pixel(framebuffer, x, y, SWITCH_BACKGROUND);
     text(680, "HALTED ON PANIC - PHOTOGRAPH THIS SCREEN", 104, SWITCH_RED);
     sync_pixels();
     panic_spin_forever();
@@ -416,18 +443,19 @@ static void files_digest_line(unsigned y, const char *label, const uint8_t diges
     line[at] = 0;
     text(y, line, 104, SWITCH_WHITE);
 }
+
 void switch_diag_files_update(void)
 {
     if (!switch_diag_record.ready || switch_diag_record.panicked || switch_files_record[0] != SWITCH_FILES_MAGIC)
         return;
     boolean_t previous = ml_set_interrupts_enabled(FALSE);
     for (unsigned y = 350; y < 660; y++)
-        for (unsigned x = 16; x < 1264; x++) switch_diag_pixel(framebuffer, x, y, SWITCH_BACKGROUND);
+        for (unsigned x = 16; x < 1264; x++)
+            switch_diag_pixel(framebuffer, x, y, SWITCH_BACKGROUND);
     const char *message = switch_files_record[3]        ? "FILE CHECK REFUSED OR FAILED - NO RETRY"
                           : switch_files_record[2] == 9 ? "FAT FILE SAMPLES VERIFIED - READ ONLY"
-                                                          : "READ-ONLY FAT FILE CHECK IN PROGRESS";
-    text(360, message, 104,
-         switch_files_record[2] == 9 && !switch_files_record[3] ? SWITCH_GREEN : SWITCH_WHITE);
+                                                        : "READ-ONLY FAT FILE CHECK IN PROGRESS";
+    text(360, message, 104, switch_files_record[2] == 9 && !switch_files_record[3] ? SWITCH_GREEN : SWITCH_WHITE);
     hex_line(400, "FILE STAGE / ERROR=", (switch_files_record[2] << 32) | switch_files_record[3]);
     if (switch_files_record[32])
         hex_line(420, "GPT ERROR=", switch_files_record[32]);
@@ -435,8 +463,7 @@ void switch_diag_files_update(void)
         hex_line(420, "FAT ERROR / SD ERROR=", (switch_files_record[4] << 32) | switch_files_record[5]);
     hex_line(440, "CARD CAPACITY SECTORS=", switch_files_record[6]);
     if (switch_files_record[32])
-        hex_line(460,
-                 "GPT ENTRY COUNT / BYTES=", (switch_files_record[35] << 32) | (uint32_t)switch_files_record[36]);
+        hex_line(460, "GPT ENTRY COUNT / BYTES=", (switch_files_record[35] << 32) | (uint32_t)switch_files_record[36]);
     else
         hex_line(460, "FAT PARTITION FIRST=", switch_files_record[7]);
     hex_line(480, "FAT PARTITION SECTORS=", switch_files_record[8]);
@@ -467,8 +494,8 @@ void switch_diag_user_syscall(unsigned code, int error, int pid, uint64_t pc, ui
 #if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
     root_syscall(code, error, pid, pc, cpsr);
 #endif
-    if (!switch_diag_record.ready || switch_diag_record.panicked || !switch_user_record[1] ||
-        switch_user_record[3] || (cpsr & 0x1f) != 0 || pid != 1)
+    if (!switch_diag_record.ready || switch_diag_record.panicked || !switch_user_record[1] || switch_user_record[3] ||
+        (cpsr & 0x1f) != 0 || pid != 1)
         return;
     if (switch_user_record[2] == 3) {
         block_checkpoint(pc, cpsr, pid, code, error, result);
@@ -495,7 +522,8 @@ void switch_diag_user_syscall(unsigned code, int error, int pid, uint64_t pc, ui
             switch_user_record[3] = 0x200;
             return;
         }
-        for (unsigned i = 0; i < 4; ++i) switch_user_record[8 + i] = results[i];
+        for (unsigned i = 0; i < 4; ++i)
+            switch_user_record[8 + i] = results[i];
         switch_user_record[12] = page;
         switch_user_record[13] = length;
         if (results[0] != 1 || results[1] != 0 || (results[2] & (1u << 29)) || (results[3] & (1u << 29)) ||
@@ -505,10 +533,12 @@ void switch_diag_user_syscall(unsigned code, int error, int pid, uint64_t pc, ui
         }
     }
     switch_user_record[2] = step + 1;
-    if (step == 2) switch_diag_stage("SIGNED PID1 TEST PROCESS RUNNING");
+    if (step == 2)
+        switch_diag_stage("SIGNED PID1 TEST PROCESS RUNNING");
     boolean_t previous = ml_set_interrupts_enabled(FALSE);
     for (unsigned y = 144; y < 164; ++y)
-        for (unsigned x = 16; x < 1264; ++x) switch_diag_pixel(framebuffer, x, y, SWITCH_BACKGROUND);
+        for (unsigned x = 16; x < 1264; ++x)
+            switch_diag_pixel(framebuffer, x, y, SWITCH_BACKGROUND);
     text(144,
          step == 0   ? "EL0 ENTERED - GETPID RETURNED 1"
          : step == 1 ? "EL0 SYSCTL COMPLETED - WAITING FOR USER ACKNOWLEDGEMENT"
@@ -522,7 +552,8 @@ void switch_diag_user_syscall(unsigned code, int error, int pid, uint64_t pc, ui
         hex_line(284, "SYSCTL RESULT=", switch_user_record[9]);
         hex_line(304, "USER PAGE SIZE=", switch_user_record[12]);
         for (unsigned y = 680; y < 700; ++y)
-            for (unsigned x = 16; x < 1264; ++x) switch_diag_pixel(framebuffer, x, y, SWITCH_BACKGROUND);
+            for (unsigned x = 16; x < 1264; ++x)
+                switch_diag_pixel(framebuffer, x, y, SWITCH_BACKGROUND);
         text(680, "OWN SIGNED TEST PROCESS - IPADOS APPS ARE NOT RUNNING", 104, SWITCH_WHITE);
     }
     sync_pixels();
@@ -534,7 +565,7 @@ void switch_diag_user_syscall(unsigned code, int error, int pid, uint64_t pc, ui
             previous = ml_set_interrupts_enabled(FALSE);
             const char *message = switch_sd_record[2] == 5     ? "SD SECTOR 0 MATCHES U-BOOT - READ ONLY"
                                   : switch_sd_record[3] == 123 ? "SD SECTOR 0 MISMATCH - NO RETRY"
-                                                                 : "SD REFUSED OR FAILED - NO RETRY";
+                                                               : "SD REFUSED OR FAILED - NO RETRY";
             text(360, message, 104, switch_sd_record[2] == 5 ? SWITCH_GREEN : SWITCH_WHITE);
             hex_line(400, "SD ERROR=", switch_sd_record[3]);
             hex_line(420, "TRANSPORT STAGE=", switch_sd_record[11]);

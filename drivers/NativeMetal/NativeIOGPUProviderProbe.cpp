@@ -7,6 +7,7 @@
 #include "OriginalGPUProviderABI.h"
 extern "C" __attribute__((noreturn)) void native_original_provider_required(unsigned, const unsigned long long *);
 extern "C" IOMemoryDescriptor *native_original_provider_descriptor(const unsigned long long *);
+
 class NativeIOGPUProviderProbe : public IOGPU {
 OSDeclareDefaultStructors(NativeIOGPUProviderProbe) public
     : __attribute__((noreturn)) void registerService(IOOptionBits = 0) override;
@@ -50,6 +51,7 @@ OSDefineMetaClassAndStructors(NativeIOGPUProviderProbe, IOGPU)
 {
     CAPTURE_REQUIRED(84);
 }
+
 __attribute__((naked)) IOMemoryDescriptor *NativeIOGPUProviderProbe::abiSlot170(UInt32 *)
 {
     __asm__ volatile(SAVE_REQUIRED_FRAME "mov x0, sp\n"
@@ -58,46 +60,57 @@ __attribute__((naked)) IOMemoryDescriptor *NativeIOGPUProviderProbe::abiSlot170(
                                          "add sp, sp, #128\n"
                                          "ret\n");
 }
+
 __attribute__((naked, noreturn)) void NativeIOGPUProviderProbe::abiSlot174()
 {
     CAPTURE_REQUIRED(174);
 }
+
 __attribute__((naked, noreturn)) void NativeIOGPUProviderProbe::abiSlot189()
 {
     CAPTURE_REQUIRED(189);
 }
+
 __attribute__((naked, noreturn)) void NativeIOGPUProviderProbe::abiSlot192(void *)
 {
     CAPTURE_REQUIRED(192);
 }
+
 __attribute__((naked, noreturn)) bool NativeIOGPUProviderProbe::abiSlot195(IOService *)
 {
     CAPTURE_REQUIRED(195);
 }
+
 __attribute__((naked, noreturn)) void NativeIOGPUProviderProbe::abiSlot196()
 {
     CAPTURE_REQUIRED(196);
 }
+
 __attribute__((naked, noreturn)) void NativeIOGPUProviderProbe::abiSlot197()
 {
     CAPTURE_REQUIRED(197);
 }
+
 __attribute__((naked, noreturn)) void NativeIOGPUProviderProbe::abiSlot200()
 {
     CAPTURE_REQUIRED(200);
 }
+
 __attribute__((naked, noreturn)) void NativeIOGPUProviderProbe::abiSlot202()
 {
     CAPTURE_REQUIRED(202);
 }
+
 __attribute__((naked, noreturn)) void NativeIOGPUProviderProbe::abiSlot205()
 {
     CAPTURE_REQUIRED(205);
 }
+
 extern "C" IOService *native_original_provider_allocate(void)
 {
     return new NativeIOGPUProviderProbe;
 }
+
 extern "C" unsigned native_original_provider_instances(void)
 {
     return NativeIOGPUProviderProbe::gMetaClass.getInstanceCount();

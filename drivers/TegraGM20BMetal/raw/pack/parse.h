@@ -1,10 +1,12 @@
 constexpr uint32_t kScanEvery = 4;
 constexpr uint64_t kScanMaxBytes = 512 << 10, kScanWindowNs = 5000000000ULL;
+
 struct PushCounts {
     uint64_t submits, scanned, bytes, readBytes, unparsed;
     uint64_t passes, targets, linearTargets, draws, wfi, texInval, shaderInval, clears, ceCopies, ceBytes, blits,
         dispatches, acquires, hostFlushes;
 };
+
 PushCounts gPush;
 uint64_t gPushSince;
 
@@ -64,7 +66,8 @@ void pushMethod(PushCounts &c, PushParse &p, uint32_t subc, uint32_t mthd, uint3
             c.ceBytes += uint64_t(p.ceLine) * ((data & (1u << 9)) ? p.ceCount : 1);
         }
         break;
-    default: break;
+    default:
+        break;
     }
 }
 
@@ -84,8 +87,9 @@ void pushParse(PushCounts &c, PushParse &p, const uint32_t *w, uint64_t n)
         }
         const uint32_t h = w[i], op = h >> 29, count = (h >> 16) & 0x1fff, subc = (h >> 13) & 7,
                        mthd = (h & 0xfff) << 2;
-        if (!h) continue;  // padding
-        if (op == 4) {     // IMMD_DATA_METHOD: the data is the count field
+        if (!h)
+            continue;   // padding
+        if (op == 4) {  // IMMD_DATA_METHOD: the data is the count field
             pushMethod(c, p, subc, mthd, count);
         } else if (op == 1 || op == 3 || op == 5) {  // INC, NON_INC, ONE_INC
             p = PushParse{op, subc, mthd, count, p.ceLine, p.ceCount};

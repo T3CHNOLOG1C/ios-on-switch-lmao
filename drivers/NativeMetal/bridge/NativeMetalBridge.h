@@ -18,6 +18,7 @@ struct NmbSelftest {
     uint32_t reserved;
     char message[96];
 };
+
 /* Markers: 0x6501 device, 0x6502 fixture library, 0x6503 compute, 0x6504 render, 0x6505 import, 0x6506 QuartzCore, 0x650f done. */
 uint32_t nmb_selftest(const char *loader, const char *cache_dir, const uint8_t *quartzcore, size_t quartzcore_bytes,
                       void (*mark)(uint32_t), struct NmbSelftest *out);

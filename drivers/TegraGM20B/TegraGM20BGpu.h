@@ -83,6 +83,7 @@ void tgm_pool_free_zeroed(void *va, uint64_t bytes, uint64_t pa);
  * range) the caller zeroes it. */
 int tgm_pool_scrub(uint64_t pa, uint64_t bytes);
 void tgm_chan_del(struct tgm_chan **pchan);
+
 struct tgm_push {
 	uint64_t va;
 	uint32_t dwords;
@@ -103,6 +104,7 @@ int tgm_chan_exec(struct tgm_chan *chan, const struct tgm_push *push, uint32_t c
  * are split by their pass's first color target: its size (full >= 600k pixels, mid >= 100k, small), pitch-linear or
  * block-linear, multisampled or not. */
 #define TGM_PROF_MAX 128
+
 enum {
 	TGM_PC_DRAW = 0,   /* + size * 4 + pitch * 2 + msaa */
 	TGM_PC_CLEAR = 12, /* + the same */
@@ -117,11 +119,13 @@ enum {
 	TGM_PC_SKIP =
 		0xff, /* no stamp after this push: a method may continue into the next one, or it was not read */
 };
+
 struct tgm_prof {
 	uint8_t cls[TGM_PROF_MAX];
 	/* each push's draws, and those shaded per sample (PushCounts::sampleDraws) */
 	uint16_t draws[TGM_PROF_MAX], sampleDraws[TGM_PROF_MAX];
 };
+
 uint32_t tgm_chan_submitted(struct tgm_chan *chan);
 uint32_t tgm_chan_completed(struct tgm_chan *chan);
 /* The group a channel belongs to (its connection's task): tgm_chan_order relates the channels of one group. */
@@ -196,17 +200,26 @@ uint64_t tgm_coherency_write_unlock(uint64_t pa);
  * tgm_stats_import(+bytes, first page) for each host import made, (-bytes, first page) for each one released. */
 int tgm_stats_on(void);
 void tgm_stats_import(int64_t bytes, uint64_t pa);
+
 /* With the stats, what making and dropping GPU memory costs the CPU ("tegra-gm20b: mem", per 5 s window):
  * a BoAlloc of `bytes` (pool: write-combined pool memory; else cached pages, phase_ns = kernel allocation and wiring,
  * cache clean, page list, GPU memory object), a host import (phase_ns = wiring, page list, GPU memory object, cache
  * clean; skipped: always 0, the import always cleans), a VmBind map or unmap of `pages`, a BoFree, a cached BO's view
  * mapped with its pages entered at once (prefault). */
-enum { TGM_PHASES = 4 };
+enum {
+	TGM_PHASES = 4
+};
+
 /* kind: TGM_BO_CACHED (made on the caller's thread: allocated, zero-filled, cleaned), TGM_BO_POOL, TGM_BO_SPARE (a cached
  * BO taken from TegraGM20BUserClient.cpp's spares: zeroed and cleaned off every client's thread); owner: the process.
  * tgm_stats_compositor_pool: the compositor's pool BOs, +/-. tgm_spare_counts and tgm_owner_stats (each process's BoAllocs
  * this window, then cleared) are TegraGM20BUserClient.cpp's, for the "mem" and "mem3" lines. */
-enum { TGM_BO_CACHED = 0, TGM_BO_POOL = 1, TGM_BO_SPARE = 2 };
+enum {
+	TGM_BO_CACHED = 0,
+	TGM_BO_POOL = 1,
+	TGM_BO_SPARE = 2
+};
+
 void tgm_stats_bo_alloc(uint64_t bytes, int kind, uint64_t ns, const uint64_t phase_ns[TGM_PHASES],
 			const char *owner);
 void tgm_stats_compositor_pool(int64_t bytes);

@@ -12,10 +12,13 @@
             std::exit(1);                                        \
         }                                                        \
     } while (0)
+
 struct Range {
     uint64_t physical, bytes;
 };
+
 static uint64_t randomState = 0x28372934;
+
 static uint64_t next()
 {
     randomState ^= randomState << 13;
@@ -23,22 +26,28 @@ static uint64_t next()
     randomState ^= randomState << 17;
     return randomState;
 }
+
 static bool oracle(const std::vector<Range> &ranges, uint64_t start, uint64_t bytes)
 {
     for (const auto &r : ranges)
-        if (start < r.physical + r.bytes && r.physical < start + bytes) return true;
+        if (start < r.physical + r.bytes && r.physical < start + bytes)
+            return true;
     return false;
 }
+
 int main()
 {
     unsigned cases = 0, queries = 0;
     for (unsigned profile = 0; profile < 2048; ++profile) {
         std::vector<Range> ranges;
         const unsigned count = profile % 65;
-        for (unsigned i = 0; i < count; ++i) ranges.push_back({(next() % 128) * 4096, (1 + next() % 64) * 4096});
+        for (unsigned i = 0; i < count; ++i)
+            ranges.push_back({(next() % 128) * 4096, (1 + next() % 64) * 4096});
         // Explicit nesting plus a gap catches a binary search using starts alone.
-        if (profile == 1) ranges = {{0x1000, 0x10000}, {0x2000, 0x1000}, {0x3000, 0x1000}, {0x20000, 0x1000}};
-        if (profile == 2) ranges = {{0x1000, 0x1000}, {0x1000, 0x1000}, {0x2000, 0x1000}, {0x4000, 0x1000}};
+        if (profile == 1)
+            ranges = {{0x1000, 0x10000}, {0x2000, 0x1000}, {0x3000, 0x1000}, {0x20000, 0x1000}};
+        if (profile == 2)
+            ranges = {{0x1000, 0x1000}, {0x1000, 0x1000}, {0x2000, 0x1000}, {0x4000, 0x1000}};
         const auto original = ranges;
         // Filtered index subsets exercise caller-provided nonconsecutive indices.
         std::vector<uint32_t> scratch(ranges.size() + 2, 0xdeadbeef);

@@ -39,24 +39,29 @@ static int bytes_eq(const uint8_t *got, size_t n, const char *hex)
             continue;
         }
         unsigned v;
-        if (k == sizeof want || sscanf(hex, "%2x", &v) != 1) return 0;
+        if (k == sizeof want || sscanf(hex, "%2x", &v) != 1)
+            return 0;
         want[k++] = (uint8_t)v;
         hex += 2;
     }
     if (k != n || memcmp(got, want, n)) {
         fprintf(stderr, "  got:");
-        for (size_t i = 0; i < n; ++i) fprintf(stderr, " %02x", got[i]);
+        for (size_t i = 0; i < n; ++i)
+            fprintf(stderr, " %02x", got[i]);
         fprintf(stderr, "\n");
         return 0;
     }
     return 1;
 }
+
 static int zero(const uint8_t *p, size_t n)
 {
     for (size_t i = 0; i < n; ++i)
-        if (p[i]) return 0;
+        if (p[i])
+            return 0;
     return 1;
 }
+
 static uint32_t rd32(const uint8_t *p)
 {
     return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
@@ -74,23 +79,28 @@ static struct fw_call calls[96];
 static int ncalls, presents, absents, eths, delivered;
 static uint8_t last_presence[6], last_eth[1600], last_rx[1600];
 static size_t last_eth_len, last_rx_len;
+
 static int mock_iovar(void *ctx, int32_t ifidx, int get, const char *name, const void *buf, size_t len)
 {
     (void)ctx;
-    if (ncalls == 96 || len > sizeof calls[0].buf) return -1;
+    if (ncalls == 96 || len > sizeof calls[0].buf)
+        return -1;
     struct fw_call *c = &calls[ncalls++];
     snprintf(c->name, sizeof c->name, "%s", name);
     c->ifidx = ifidx;
     c->get = get;
-    if (len) memcpy(c->buf, buf, len);
+    if (len)
+        memcpy(c->buf, buf, len);
     c->len = len;
     return 0;
 }
+
 static int mock_tx(void *ctx, const uint8_t *f, size_t n, uint16_t freq, uint64_t tsf, int no_ack)
 {
     (void)ctx, (void)f, (void)n, (void)freq, (void)tsf, (void)no_ack;
     return -1;  // the native backend never injects
 }
+
 static int mock_tx_eth(void *ctx, const uint8_t *eth, size_t len)
 {
     (void)ctx;
@@ -99,6 +109,7 @@ static int mock_tx_eth(void *ctx, const uint8_t *eth, size_t len)
     last_eth_len = len;
     return 0;
 }
+
 static void mock_deliver(void *ctx, const uint8_t *eth, size_t len)
 {
     (void)ctx;
@@ -107,6 +118,7 @@ static void mock_deliver(void *ctx, const uint8_t *eth, size_t len)
     last_rx_len = len;
 }
 static struct a80211_awdl *facade;
+
 static void mock_peer(void *ctx, const uint8_t addr[6], int present, int8_t rssi)
 {
     (void)ctx;
@@ -115,14 +127,18 @@ static void mock_peer(void *ctx, const uint8_t addr[6], int present, int8_t rssi
     else
         absents++;
     memcpy(last_presence, addr, 6);
-    if (facade) a80211_awdl_peer(facade, addr, present, rssi);
+    if (facade)
+        a80211_awdl_peer(facade, addr, present, rssi);
 }
+
 static const struct fw_call *find_call(const char *name, int nth)
 {
     for (int i = 0; i < ncalls; ++i)
-        if (!strcmp(calls[i].name, name) && nth-- == 0) return &calls[i];
+        if (!strcmp(calls[i].name, name) && nth-- == 0)
+            return &calls[i];
     return NULL;
 }
+
 static void reset_calls(void)
 {
     ncalls = presents = absents = eths = delivered = 0;
@@ -203,7 +219,8 @@ static void test_encoders(void)
            bytes_eq(b, 28, "01000000 95 00 1000 1000 6e00 f401 0800 0300 1000 0200 ffffffffffff"));
     // 7.x awdl_channel_sequence_t, operating-class pairs
     struct awdl_chan seq[16];
-    for (int i = 0; i < 16; ++i) seq[i] = (struct awdl_chan){155, 0x80};
+    for (int i = 0; i < 16; ++i)
+        seq[i] = (struct awdl_chan){155, 0x80};
     seq[1] = (struct awdl_chan){6, 81};
     NCHECK(
         bcm_awdl_chan_seq(b, sizeof b, seq, 16) == 38 &&
@@ -235,7 +252,8 @@ static void test_encoders(void)
     want[0x0c] = 9;
     for (int i = 0; i < 16; ++i) {
         uint8_t *s0 = want + 0x4c + 2 * i, *s1 = want + 0x78 + 2 * i;
-        if (!(s0[0] | s0[1])) memcpy(s0, s1, 2);
+        if (!(s0[0] | s0[1]))
+            memcpy(s0, s1, 2);
         memset(s1, 0, 2);
     }
     NCHECK(bcm_slot_bss(b, AWDL_SLOTS_TRACE) == 158 && !memcmp(b, want, 158));
@@ -298,7 +316,8 @@ static void test_probe(void)
     struct bcm_awdl_probe p;
     memset(&p, 0, sizeof p);
     NCHECK(bcm_awdl_api_of(&p) == BCM_AWDL_API_NONE);  // not run: nothing
-    for (unsigned i = 0; i < BCM_PROBE_COUNT; ++i) bcm_probe_record(&p, i, BCME_UNSUPPORTED, NULL, 0);
+    for (unsigned i = 0; i < BCM_PROBE_COUNT; ++i)
+        bcm_probe_record(&p, i, BCME_UNSUPPORTED, NULL, 0);
     p.done = 1;
     NCHECK(bcm_awdl_api_of(&p) == BCM_AWDL_API_NONE && bcm_probe_absent(&p) == (1u << BCM_PROBE_COUNT) - 1);
     // a 7.x table: awdl_if answers BADARG (exists), interface_create UNSUPPORTED (the BCM4350's answer)
@@ -323,7 +342,8 @@ static void test_probe(void)
 static void probe_7_35_252_108(struct bcm_awdl_probe *p)
 {
     memset(p, 0, sizeof *p);
-    for (unsigned i = 0; i < BCM_PROBE_COUNT; ++i) bcm_probe_record(p, i, BCME_UNSUPPORTED, NULL, 0);
+    for (unsigned i = 0; i < BCM_PROBE_COUNT; ++i)
+        bcm_probe_record(p, i, BCME_UNSUPPORTED, NULL, 0);
     bcm_probe_record(p, BCM_PROBE_EVENT_MSGS_EXT, -37, NULL, 0);
     p->done = 1;
 }
@@ -394,9 +414,11 @@ static void test_down_interface(void)
 static int count_primary(const struct awdl_chan *s, uint8_t ch)
 {
     int n = 0;
-    for (int i = 0; i < 16; ++i) n += awdl_chan_primary(s[i]) == ch;
+    for (int i = 0; i < 16; ++i)
+        n += awdl_chan_primary(s[i]) == ch;
     return n;
 }
+
 static void test_schedule(void)
 {
     NCHECK(awdl_opclass_20mhz(6) == 81 && awdl_opclass_20mhz(14) == 82 && awdl_opclass_20mhz(36) == 115 &&
@@ -465,6 +487,7 @@ static struct awdl_core *make_phone(const uint8_t addr[6], uint32_t metric)
     awdl_core_start(phone, 5000000);
     return phone;
 }
+
 static struct awdl_core *make_native(const uint8_t me[6], uint8_t api, uint32_t absent, struct a80211_awdl *f)
 {
     struct awdl_core *core = (struct awdl_core *)calloc(1, awdl_core_size());
@@ -481,6 +504,7 @@ static struct awdl_core *make_native(const uint8_t me[6], uint8_t api, uint32_t 
     facade = f;
     return core;
 }
+
 static void sync_enabled(struct a80211_awdl *f, int on, uint64_t now)
 {
     struct a80211_awdl_sync_enabled s = {1, 0, (uint32_t)on};
@@ -488,6 +512,7 @@ static void sync_enabled(struct a80211_awdl *f, int on, uint64_t now)
     int32_t val = 0;
     NCHECK(a80211_awdl_request(f, 1, A80211_IOC_AWDL_SYNC_ENABLED, &val, &s, &len, sizeof s, now) == 0);
 }
+
 static void if_event(struct awdl_core *core, const uint8_t addr[6], uint8_t ifidx, uint8_t opcode, uint64_t now)
 {
     struct awdl_fw_event ev;
@@ -497,6 +522,7 @@ static void if_event(struct awdl_core *core, const uint8_t addr[6], uint8_t ifid
     const uint8_t d[5] = {ifidx, opcode, 0, ifidx, 9};
     awdl_core_fw_event(core, &ev, d, sizeof d, now);
 }
+
 // The phone's frame as WLC_E_ACTION_FRAME_RX: the v1 header (rssi -60, big endian), then the frame from its category
 static void phone_frame(struct awdl_core *core, struct awdl_core *phone, const uint8_t addr[6], uint8_t subtype,
                         uint64_t phone_now, uint64_t now)
@@ -595,9 +621,12 @@ static void test_flow_ifc_v3(void)
     NCHECK(awdl_core_role(core) == AWDL_ROLE_FOLLOWER && !memcmp(awdl_core_election(core)->root, phone_addr, 6));
     const struct fw_call *add = NULL, *slave = NULL, *tree = NULL;
     for (int i = before; i < ncalls; ++i) {
-        if (!strcmp(calls[i].name, "awdl_peer_op")) add = &calls[i];
-        if (!strcmp(calls[i].name, "awdl_opmode")) slave = &calls[i];
-        if (!strcmp(calls[i].name, "awdl_election_tree")) tree = &calls[i];
+        if (!strcmp(calls[i].name, "awdl_peer_op"))
+            add = &calls[i];
+        if (!strcmp(calls[i].name, "awdl_opmode"))
+            slave = &calls[i];
+        if (!strcmp(calls[i].name, "awdl_election_tree"))
+            tree = &calls[i];
     }
     NCHECK(add && add->len == 0x25 && bytes_eq(add->buf, 16, "00 00 0a1b2c3d4e5f 01 2d 1a ce11 17 ff ff"));
     NCHECK(slave && slave->buf[0] == 1 && slave->buf[1] == BCM_AWDL_ROLE_SLAVE &&
@@ -649,7 +678,8 @@ static void test_flow_ifc_v3(void)
         bcm_slot_bss(want_sb, AWDL_SLOTS_TRANSFER_INFRA);
         const struct fw_call *sbt = NULL;
         for (int i = before; i < ncalls; ++i)
-            if (!strcmp(calls[i].name, "slot_bss")) sbt = &calls[i];
+            if (!strcmp(calls[i].name, "slot_bss"))
+                sbt = &calls[i];
         NCHECK(sbt && !memcmp(sbt->buf, want_sb, 158) && awdl_core_stats(core)->mode_changes == 1);
     }
     eth[14] = eth[20] = 0;
@@ -674,7 +704,8 @@ static void test_flow_ifc_v3(void)
     NCHECK(absents == 1);
     const struct fw_call *del = NULL;
     for (int i = before; i < ncalls; ++i)
-        if (!strcmp(calls[i].name, "awdl_peer_op")) del = &calls[i];
+        if (!strcmp(calls[i].name, "awdl_peer_op"))
+            del = &calls[i];
     NCHECK(del && del->len == 9 && del->buf[1] == BCM_AWDL_PEER_OP_DEL);
     NCHECK(awdl_core_role(core) == AWDL_ROLE_ROOT);
     NCHECK(awdl_core_mode(core) == AWDL_MODE_IDLE && awdl_core_stats(core)->mode_changes == 2);  // 3 s after 2.3 s
@@ -750,7 +781,8 @@ static void test_flow_awdl_if(void)
     NCHECK(awdl_core_role(core) == AWDL_ROLE_FOLLOWER && count_primary(awdl_core_sequence(core), 149) == 3);
     const struct fw_call *cs2 = NULL;
     for (int i = before; i < ncalls; ++i)
-        if (!strcmp(calls[i].name, "awdl_chan_seq")) cs2 = &calls[i];
+        if (!strcmp(calls[i].name, "awdl_chan_seq"))
+            cs2 = &calls[i];
     NCHECK(cs2 && cs2->buf[6 + 2 * 9] == 155);
     // a roam to 5 GHz channel 36: the free slots move there (opclass 115), sent again
     before = ncalls;
@@ -784,7 +816,8 @@ static void test_flow_awdl_if(void)
         awdl_core_timer(core, 5500000);
         NCHECK(awdl_core_mode(core) == AWDL_MODE_IDLE && awdl_slots_away(awdl_core_sequence(core), 5180) == 4);
         int resent = 0;
-        for (int i = before; i < ncalls; ++i) resent += !strcmp(calls[i].name, "awdl_chan_seq");
+        for (int i = before; i < ncalls; ++i)
+            resent += !strcmp(calls[i].name, "awdl_chan_seq");
         NCHECK(resent == 1);
         // wifip2pd's traffic registration (a session start) switches to transfer before any data
         struct a80211_awdl_peer_traffic_registration t;

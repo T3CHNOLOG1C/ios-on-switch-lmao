@@ -18,17 +18,21 @@ enum : uint64_t {
     GmuDebugIova = 0x60400000,
     GmuApertureBytes = 0x80000000
 };
+
 struct NativeAdrenoGmuSizes {
     uint64_t icache, dummy, debug, log, hfi, tables;
 };
+
 /* Exact sizes of the qualified startup; table pool is caller sized. */
 NativeAdrenoGmuSizes NativeAdrenoGmuDefaultSizes(size_t table_bytes);
+
 struct NativeAdrenoGmuMemoryLayout {
     uint64_t icache_iova, dummy_iova, debug_iova, log_iova, hfi_iova;
     uint64_t tables_iova;
     size_t tables_bytes;
     uint64_t end_iova; /* first address after the whole reservation */
 };
+
 class NativeAdrenoGmuAllocator final {
     NativeAdrenoMemory icache_, dummy_, debug_, log_, hfi_, tables_;
     NativeAdrenoGmuMemoryLayout layout_{};
@@ -53,19 +57,75 @@ public:
     /* Only when every object has been released; on any refusal nothing is
      * destroyed and the caller keeps the quarantined objects alive. */
     IOReturn release();
-    bool ready() const { return ready_; }
-    const NativeAdrenoGmuMemoryLayout &layout() const { return layout_; }
-    NativeAdrenoMemory &icache() { return icache_; }
-    NativeAdrenoMemory &dummy() { return dummy_; }
-    NativeAdrenoMemory &debug() { return debug_; }
-    NativeAdrenoMemory &log() { return log_; }
-    NativeAdrenoMemory &hfi() { return hfi_; }
-    NativeAdrenoMemory &tables() { return tables_; }
-    const NativeAdrenoMemory &icache() const { return icache_; }
-    const NativeAdrenoMemory &dummy() const { return dummy_; }
-    const NativeAdrenoMemory &debug() const { return debug_; }
-    const NativeAdrenoMemory &log() const { return log_; }
-    const NativeAdrenoMemory &hfi() const { return hfi_; }
-    const NativeAdrenoMemory &tables() const { return tables_; }
+
+    bool ready() const
+    {
+        return ready_;
+    }
+
+    const NativeAdrenoGmuMemoryLayout &layout() const
+    {
+        return layout_;
+    }
+
+    NativeAdrenoMemory &icache()
+    {
+        return icache_;
+    }
+
+    NativeAdrenoMemory &dummy()
+    {
+        return dummy_;
+    }
+
+    NativeAdrenoMemory &debug()
+    {
+        return debug_;
+    }
+
+    NativeAdrenoMemory &log()
+    {
+        return log_;
+    }
+
+    NativeAdrenoMemory &hfi()
+    {
+        return hfi_;
+    }
+
+    NativeAdrenoMemory &tables()
+    {
+        return tables_;
+    }
+
+    const NativeAdrenoMemory &icache() const
+    {
+        return icache_;
+    }
+
+    const NativeAdrenoMemory &dummy() const
+    {
+        return dummy_;
+    }
+
+    const NativeAdrenoMemory &debug() const
+    {
+        return debug_;
+    }
+
+    const NativeAdrenoMemory &log() const
+    {
+        return log_;
+    }
+
+    const NativeAdrenoMemory &hfi() const
+    {
+        return hfi_;
+    }
+
+    const NativeAdrenoMemory &tables() const
+    {
+        return tables_;
+    }
 };
 #endif

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 #pragma once
 #include <stdint.h>
+
 // Original SwapSetLayer sets the update bit and clears the disable bit for
 // a nonnull surface; a null surface sets both. SwapSetBackgroundColor sets
 // bit 31 in both masks and writes opaque RGB. These are masks, not counts.
@@ -9,8 +10,10 @@
 static inline int native_legacy_single_layer_state(uint32_t updated, uint32_t disabled, uint32_t background)
 {
     const uint32_t known = 0x8000000fU;
-    if (((updated | disabled) & ~known) || (disabled & ~updated) || (updated & ~disabled) != 1U) return 0;
-    if (updated & 0x80000000U) return (disabled & 0x80000000U) && background == 0xff000000U;
+    if (((updated | disabled) & ~known) || (disabled & ~updated) || (updated & ~disabled) != 1U)
+        return 0;
+    if (updated & 0x80000000U)
+        return (disabled & 0x80000000U) && background == 0xff000000U;
     return background == 0;
 }
 
@@ -20,8 +23,10 @@ static inline int native_legacy_single_layer_state(uint32_t updated, uint32_t di
 static inline int native_legacy_blank_state(uint32_t updated, uint32_t disabled, uint32_t background)
 {
     const uint32_t known = 0x8000000fU;
-    if (((updated | disabled) & ~known) || !updated || updated != disabled) return 0;
-    if (updated & 0x80000000U) return background == 0xff000000U;
+    if (((updated | disabled) & ~known) || !updated || updated != disabled)
+        return 0;
+    if (updated & 0x80000000U)
+        return background == 0xff000000U;
     return background == 0;
 }
 
@@ -52,6 +57,7 @@ static inline int native_legacy_copy_layout(volatile void *destination, uint64_t
         return 0;
     return 1;
 }
+
 static inline int native_legacy_fill_pixels(volatile void *destination, uint64_t destinationBytes,
                                             uint64_t destinationStride, uint32_t width, uint32_t height, uint32_t value)
 {
@@ -62,10 +68,12 @@ static inline int native_legacy_fill_pixels(volatile void *destination, uint64_t
         return 0;
     for (uint32_t row = 0; row < height; ++row) {
         volatile uint32_t *out = (volatile uint32_t *)(dst + row * destinationStride);
-        for (uint32_t column = 0; column < width; ++column) out[column] = value;
+        for (uint32_t column = 0; column < width; ++column)
+            out[column] = value;
     }
     return 1;
 }
+
 // Observation only: count pixels whose color channels are not all zero and their bounding box, so
 // hardware photographs can tell an empty compositor frame from a display-path loss. out = count, minx,
 // miny, maxx, maxy (min fields are UINT64_MAX and max fields 0 when every pixel is black).
@@ -87,15 +95,20 @@ static inline int native_legacy_frame_scan(const void *source, uint64_t sourceBy
             const unsigned char *pixel = in + (uint64_t)column * 4;
             if (pixel[0] | pixel[1] | pixel[2]) {
                 ++out[0];
-                if (column < out[1]) out[1] = column;
-                if (row < out[2]) out[2] = row;
-                if (column > out[3]) out[3] = column;
-                if (row > out[4]) out[4] = row;
+                if (column < out[1])
+                    out[1] = column;
+                if (row < out[2])
+                    out[2] = row;
+                if (column > out[3])
+                    out[3] = column;
+                if (row > out[4])
+                    out[4] = row;
             }
         }
     }
     return 1;
 }
+
 // Observation only: first-fit table of the first four distinct pixel values (with alpha) and their
 // counts; every further distinct value is counted in *other.
 static inline int native_legacy_frame_colors(const void *source, uint64_t sourceBytes, uint64_t sourceStride,
@@ -119,7 +132,8 @@ static inline int native_legacy_frame_colors(const void *source, uint64_t source
             uint32_t value = (uint32_t)pixel[0] | ((uint32_t)pixel[1] << 8) | ((uint32_t)pixel[2] << 16) |
                              ((uint32_t)pixel[3] << 24);
             unsigned i = 0;
-            while (i < used && colors[i] != value) ++i;
+            while (i < used && colors[i] != value)
+                ++i;
             if (i < used)
                 ++counts[i];
             else if (used < 4) {
@@ -132,6 +146,7 @@ static inline int native_legacy_frame_colors(const void *source, uint64_t source
     }
     return 1;
 }
+
 static inline int native_legacy_copy_pixels(volatile void *destination, uint64_t destinationBytes,
                                             uint64_t destinationStride, const void *source, uint64_t sourceBytes,
                                             uint64_t sourceStride, uint32_t width, uint32_t height)
@@ -183,7 +198,8 @@ static inline uint64_t native_legacy_copy_diff(volatile void *destination, uint6
                                    width, height))
         return UINT64_MAX;
     uintptr_t dst = (uintptr_t)destination, src = (uintptr_t)source;
-    if (!shadow || ((uintptr_t)shadow & 7) || (dst & 7) || (destinationStride & 7) || (width & 1)) return UINT64_MAX;
+    if (!shadow || ((uintptr_t)shadow & 7) || (dst & 7) || (destinationStride & 7) || (width & 1))
+        return UINT64_MAX;
     uint64_t stored = 0;
     const uint32_t words = width / 2;
     for (uint32_t row = 0; row < height; ++row) {
@@ -206,7 +222,8 @@ static inline uint64_t native_legacy_copy_diff(volatile void *destination, uint6
         for (; w < words; ++w) {
             uint64_t v;
             __builtin_memcpy(&v, in + (uint64_t)w * 8, 8);
-            if (valid && v == old[w]) continue;
+            if (valid && v == old[w])
+                continue;
             out[w] = v;
             old[w] = v;
             stored += 8;

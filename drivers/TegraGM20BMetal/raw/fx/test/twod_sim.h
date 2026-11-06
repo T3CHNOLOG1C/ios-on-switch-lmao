@@ -29,19 +29,31 @@ struct Region {
 
 class Sim {
 public:
-    void map(uint64_t va, std::vector<uint8_t> &bytes) { regions_.push_back({va, &bytes}); }
+    void map(uint64_t va, std::vector<uint8_t> &bytes)
+    {
+        regions_.push_back({va, &bytes});
+    }
+
     // memory outside the mapped regions (r8-rawca: the host tests' mock GPU, pack/nvdec.cpp with NVDEC_TWOD: every BO it maps)
     std::function<uint8_t *(uint64_t va, uint64_t bytes)> host;
+
     // one method of a submission (the mock GPU's decoder feeds the 2D subchannel's, and the 3D wait and texture invalidate);
     // false once a launch failed (error())
     bool feed(uint32_t subc, uint32_t mthd, uint32_t data)
     {
-        if (subc == 3 || (subc == 0 && (mthd == 0x0110 || mthd == 0x1288))) method(subc, mthd, data);
+        if (subc == 3 || (subc == 0 && (mthd == 0x0110 || mthd == 0x1288)))
+            method(subc, mthd, data);
         return !failed_;
     }
+
     // runs `n` push words; false (and error()) on an unknown header, an unmapped access, an unsupported format or a hazard
     bool run(const uint32_t *w, size_t n);
-    const std::string &error() const { return err_; }
+
+    const std::string &error() const
+    {
+        return err_;
+    }
+
     uint32_t launches = 0, waits2d = 0, waits3d = 0, texInvalidates2d = 0, texInvalidates3d = 0;
     bool endsSampleable =
         false;  // the last 2D launch is followed by a 3D WAIT_FOR_IDLE and a 3D texture data cache invalidate
@@ -57,6 +69,7 @@ private:
         uint64_t begin, end;
         bool waited;  // a WAIT_FOR_IDLE came after the write
     };
+
     std::vector<Region> regions_;
     uint32_t r2d_[0x1000] = {};
     std::vector<Range> pending_;  // written by launches, not yet invalidated in the texture data cache
@@ -65,10 +78,12 @@ private:
     uint8_t *at(uint64_t va, uint64_t bytes);
     void method(uint32_t subc, uint32_t mthd, uint32_t data);
     bool launch();
+
     struct Surface {
         uint32_t format, bpp, layout, yLog2, pitch, width, height;
         uint64_t va;
     };
+
     Surface surface(uint32_t base) const;
     uint64_t texel(const Surface &s, uint32_t x, uint32_t y) const;  // GPU address of texel (x, y)
     bool failed_ = false;

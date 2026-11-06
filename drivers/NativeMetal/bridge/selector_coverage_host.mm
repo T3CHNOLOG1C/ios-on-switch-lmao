@@ -19,7 +19,8 @@ static id N(id object)
 int main(int argc, char **argv)
 {
     @autoreleasepool {
-        if (argc < 4) return 2;
+        if (argc < 4)
+            return 2;
         id<MTLDevice> device = native_bridge_metal_open(argv[1], argv[2], 0x6e6d62, nullptr);
         if (!device) {
             std::printf("FAIL device\n");
@@ -92,8 +93,10 @@ int main(int argc, char **argv)
             NSMutableArray *missing = [NSMutableArray array];
             for (id entry in selectors) {
                 NSString *name = entry;
-                if ([name hasPrefix:@"."]) continue;
-                if (![object respondsToSelector:NSSelectorFromString(name)]) [missing addObject:name];
+                if ([name hasPrefix:@"."])
+                    continue;
+                if (![object respondsToSelector:NSSelectorFromString(name)])
+                    [missing addObject:name];
             }
             total += missing.count;
             std::printf("%-18s %lu referenced, %lu missing%s%s\n", kind.UTF8String, (unsigned long)selectors.count,

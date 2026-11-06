@@ -24,7 +24,9 @@ struct Report {
     bool
         hostSimulation;  // the host simulation's IOKit shim hides IOSurface (steps 3-4 skipped) and Metal's listener (none is made)
 };
+
 static Report *gReport;
+
 __attribute__((format(printf, 2, 3))) static void fail(Report *r, const char *format, ...)
 {
     char text[160];
@@ -33,17 +35,23 @@ __attribute__((format(printf, 2, 3))) static void fail(Report *r, const char *fo
     vsnprintf(text, sizeof text, format, args);
     va_end(args);
     std::printf("FAIL %s\n", text);
-    if (!r->failed++) snprintf(r->first, sizeof r->first, "%x %s", r->last, text);
+    if (!r->failed++)
+        snprintf(r->first, sizeof r->first, "%x %s", r->last, text);
 }
+
 static void step(Report *r, uint32_t marker)
 {
     r->last = marker;
-    if (r->mark) r->mark(marker);
+    if (r->mark)
+        r->mark(marker);
 }
-#define CHECK(c, ...)                         \
-    do {                                      \
-        if (!(c)) fail(gReport, __VA_ARGS__); \
+
+#define CHECK(c, ...)                   \
+    do {                                \
+        if (!(c))                       \
+            fail(gReport, __VA_ARGS__); \
     } while (0)
+
 static bool completed(id<MTLCommandBuffer> cb, const char *what)
 {
     [cb waitUntilCompleted];
@@ -54,11 +62,13 @@ static bool completed(id<MTLCommandBuffer> cb, const char *what)
     }
     return true;
 }
+
 static bool finish(id<MTLCommandBuffer> cb, const char *what)
 {
     [cb commit];
     return completed(cb, what);
 }
+
 // The fixture's picture: top-left quarter (255, 51, 0, 255), the rest cleared blue; `bgra` swaps red and blue in memory.
 static unsigned wrongTexels(const uint8_t *bytes, size_t row, unsigned side, bool bgra = false)
 {
@@ -68,11 +78,14 @@ static unsigned wrongTexels(const uint8_t *bytes, size_t row, unsigned side, boo
             const bool inside = x < side / 2 && y < side / 2;
             uint8_t e[4] = {inside ? (uint8_t)255 : (uint8_t)0, inside ? (uint8_t)51 : (uint8_t)0,
                             inside ? (uint8_t)0 : (uint8_t)255, 255};
-            if (bgra) std::swap(e[0], e[2]);
-            if (memcmp(bytes + y * row + x * 4, e, 4)) ++bad;
+            if (bgra)
+                std::swap(e[0], e[2]);
+            if (memcmp(bytes + y * row + x * 4, e, 4))
+                ++bad;
         }
     return bad;
 }
+
 static IOSurfaceRef surface(unsigned side, OSType format)
 {
     NSDictionary *p = @{
@@ -83,6 +96,7 @@ static IOSurfaceRef surface(unsigned side, OSType format)
     };
     return IOSurfaceCreate((__bridge CFDictionaryRef)p);
 }
+
 static id<MTLRenderPipelineState> pipeline(id<MTLDevice> device, id<MTLLibrary> library, NSString *fragment,
                                            MTLPixelFormat format)
 {
@@ -95,6 +109,7 @@ static id<MTLRenderPipelineState> pipeline(id<MTLDevice> device, id<MTLLibrary> 
     CHECK(state, "render pipeline %s: %s", fragment.UTF8String, error.localizedDescription.UTF8String);
     return state;
 }
+
 // Draws the fixture quad (vertex positions/colors at buffers 0/1) into `target`, cleared blue first.
 static void drawQuad(id<MTLCommandBuffer> cb, id<MTLRenderPipelineState> state, id<MTLTexture> target,
                      id<MTLTexture> sampled, const float (*positions)[2], unsigned count)
@@ -108,12 +123,15 @@ static void drawQuad(id<MTLCommandBuffer> cb, id<MTLRenderPipelineState> state, 
     [e setRenderPipelineState:state];
     [e setVertexBytes:positions length:sizeof(float) * 2 * count atIndex:0];
     std::vector<float> colors;
-    for (unsigned i = 0; i < count; ++i) colors.insert(colors.end(), {1.0f, 0.2f, 0.0f, 1.0f});
+    for (unsigned i = 0; i < count; ++i)
+        colors.insert(colors.end(), {1.0f, 0.2f, 0.0f, 1.0f});
     [e setVertexBytes:colors.data() length:colors.size() * sizeof(float) atIndex:1];
-    if (sampled) [e setFragmentTexture:sampled atIndex:0];
+    if (sampled)
+        [e setFragmentTexture:sampled atIndex:0];
     [e drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:count];
     [e endEncoding];
 }
+
 static const float kQuarter[6][2] = {{-1, 1}, {0, 1}, {-1, 0}, {0, 1}, {0, 0}, {-1, 0}};
 static const float kFull[6][2] = {{-1, 1}, {1, 1}, {-1, -1}, {1, 1}, {1, -1}, {-1, -1}};
 
@@ -127,7 +145,8 @@ static void run(id<MTLDevice> device, id<MTLLibrary> library, id<MTLLibrary> fcL
         CHECK(![library newFunctionWithName:@"no_such_function"], "a missing function must be nil");
         id<MTLCommandQueue> queue = [device newCommandQueue];
         CHECK(queue, "command queue");
-        if (!queue) return;
+        if (!queue)
+            return;
 
         step(r, 0x6601);
         // 1. compute: out[i] = 3 * in[i] (the fixture's scale_and_offset with scale 2)
@@ -138,7 +157,8 @@ static void run(id<MTLDevice> device, id<MTLLibrary> library, id<MTLLibrary> fcL
             id<MTLComputePipelineState> state = [device newComputePipelineStateWithFunction:f error:&error];
             CHECK(state, "compute pipeline: %s", error.localizedDescription.UTF8String);
             std::vector<float> in(1000);
-            for (unsigned i = 0; i < in.size(); ++i) in[i] = (float)i;
+            for (unsigned i = 0; i < in.size(); ++i)
+                in[i] = (float)i;
             id<MTLBuffer> input = [device newBufferWithBytes:in.data()
                                                       length:in.size() * 4
                                                      options:MTLResourceStorageModeShared];
@@ -155,7 +175,8 @@ static void run(id<MTLDevice> device, id<MTLLibrary> library, id<MTLLibrary> fcL
             if (finish(cb, "compute")) {
                 const float *v = (const float *)output.contents;
                 unsigned bad = 0;
-                for (unsigned i = 0; i < in.size(); ++i) bad += v[i] != 3.0f * i;
+                for (unsigned i = 0; i < in.size(); ++i)
+                    bad += v[i] != 3.0f * i;
                 CHECK(!bad, "compute: %u wrong outputs", bad);
             }
         }
@@ -234,7 +255,8 @@ static void run(id<MTLDevice> device, id<MTLLibrary> library, id<MTLLibrary> fcL
                 IOSurfaceLock(screen, kIOSurfaceLockReadOnly, nullptr);
                 const uint8_t *p = (const uint8_t *)IOSurfaceGetBaseAddress(screen);
                 std::vector<uint8_t> corner(8 * 8 * 4);
-                for (unsigned y = 0; y < 8; ++y) memcpy(&corner[y * 32], p + y * IOSurfaceGetBytesPerRow(screen), 32);
+                for (unsigned y = 0; y < 8; ++y)
+                    memcpy(&corner[y * 32], p + y * IOSurfaceGetBytesPerRow(screen), 32);
                 const unsigned bad = wrongTexels(corner.data(), 32, 8);
                 const uint8_t *outside = p + 20 * IOSurfaceGetBytesPerRow(screen) + 20 * 4;
                 CHECK(!bad, "composition: %u wrong texels in the sampled corner", bad);
@@ -253,7 +275,8 @@ static void run(id<MTLDevice> device, id<MTLLibrary> library, id<MTLLibrary> fcL
             d.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
             id<MTLTexture> src = [device newTextureWithDescriptor:d], dst = [device newTextureWithDescriptor:d];
             std::vector<uint8_t> texels(16 * 16 * 4);
-            for (size_t i = 0; i < texels.size(); ++i) texels[i] = (uint8_t)(i * 7);
+            for (size_t i = 0; i < texels.size(); ++i)
+                texels[i] = (uint8_t)(i * 7);
             [src replaceRegion:MTLRegionMake2D(0, 0, 16, 16) mipmapLevel:0 withBytes:texels.data() bytesPerRow:64];
             NSError *error = nil;
             id<MTLComputePipelineState> state =
@@ -287,7 +310,9 @@ static void run(id<MTLDevice> device, id<MTLLibrary> library, id<MTLLibrary> fcL
             id<MTLBuffer> buffer = [device newBufferWithLength:4096 options:MTLResourceStorageModeShared];
             [b fillBuffer:buffer range:NSMakeRange(0, 4096) value:0xa5];
             [b endEncoding];
-            [cb addScheduledHandler:^(id<MTLCommandBuffer>) { scheduled = order++; }];
+            [cb addScheduledHandler:^(id<MTLCommandBuffer>) {
+                scheduled = order++;
+            }];
             __block MTLCommandBufferStatus seen = MTLCommandBufferStatusNotEnqueued;
             [cb addCompletedHandler:^(id<MTLCommandBuffer> c) {
                 seen = c.status;
@@ -316,7 +341,9 @@ static void run(id<MTLDevice> device, id<MTLLibrary> library, id<MTLLibrary> fcL
             [e drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];  // no pipeline set
             [e endEncoding];
             __block bool ran = false;
-            [cb addCompletedHandler:^(id<MTLCommandBuffer>) { ran = true; }];
+            [cb addCompletedHandler:^(id<MTLCommandBuffer>) {
+                ran = true;
+            }];
             [cb commit];
             [cb waitUntilCompleted];
             CHECK(cb.status == MTLCommandBufferStatusError && cb.error,
@@ -336,7 +363,8 @@ static void run(id<MTLDevice> device, id<MTLLibrary> library, id<MTLLibrary> fcL
                 id<MTLComputePipelineState> state =
                     f ? [device newComputePipelineStateWithFunction:f error:&error] : nil;
                 CHECK(state, "specialized pipeline: %s", error.localizedDescription.UTF8String);
-                if (!state) continue;
+                if (!state)
+                    continue;
                 const float in = 2;
                 id<MTLBuffer> input = [device newBufferWithBytes:&in length:4 options:MTLResourceStorageModeShared];
                 id<MTLBuffer> output = [device newBufferWithLength:32 * 4 options:MTLResourceStorageModeShared];
@@ -369,7 +397,8 @@ static void run(id<MTLDevice> device, id<MTLLibrary> library, id<MTLLibrary> fcL
                     kernelsOk += [device newComputePipelineStateWithFunction:f error:nil] != nil;
                 } else if (f.functionType == MTLFunctionTypeVertex) {
                     NSString *fragment = [name stringByReplacingOccurrencesOfString:@"_vert_" withString:@"_frag_"];
-                    if ([fragment isEqualToString:name] || ![names containsObject:fragment]) continue;
+                    if ([fragment isEqualToString:name] || ![names containsObject:fragment])
+                        continue;
                     ++pairs;
                     MTLRenderPipelineDescriptor *d = [MTLRenderPipelineDescriptor new];
                     d.vertexFunction = f;
@@ -515,7 +544,8 @@ static void run(id<MTLDevice> device, id<MTLLibrary> library, id<MTLLibrary> fcL
                 [e setVisibilityResultMode:MTLVisibilityResultModeBoolean offset:0];
                 [e setDepthBias:0 slopeScale:0 clamp:0];
                 std::vector<float> colors;
-                for (unsigned i = 0; i < 6; ++i) colors.insert(colors.end(), {1.0f, 0.2f, 0.0f, 1.0f});
+                for (unsigned i = 0; i < 6; ++i)
+                    colors.insert(colors.end(), {1.0f, 0.2f, 0.0f, 1.0f});
                 [e setVertexBytes:kQuarter length:sizeof(float) * 2 * 6 atIndex:0];
                 [e setVertexBytes:colors.data() length:colors.size() * sizeof(float) atIndex:1];
                 [e drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:6];
@@ -524,11 +554,14 @@ static void run(id<MTLDevice> device, id<MTLLibrary> library, id<MTLLibrary> fcL
                     CHECK(*(const uint64_t *)visible.contents != 0, "visibility result stayed 0 for a visible quad");
             }
         }
-        if (layer) CFRelease(layer);
-        if (screen) CFRelease(screen);
+        if (layer)
+            CFRelease(layer);
+        if (screen)
+            CFRelease(screen);
     }
     step(r, 0x660f);
     gReport = nullptr;
 }
+
 #undef CHECK
 }  // namespace frontendchecks

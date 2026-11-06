@@ -13,15 +13,19 @@
 /* Compiler basic-block coverage counts, test-only. Production needs no hook or
  * counter. Volatile keeps the caller's reads intact before coverage insertion. */
 static volatile uint64_t alias_steps;
+
 __attribute__((no_sanitize("coverage"))) void __sanitizer_cov_trace_pc_guard(uint32_t *guard)
 {
     (void)guard;
     ++alias_steps;
 }
+
 __attribute__((no_sanitize("coverage"))) void __sanitizer_cov_trace_pc_guard_init(uint32_t *start, uint32_t *end)
 {
-    if (start == end || *start) return;
-    for (uint32_t *p = start; p < end; ++p) *p = 1;
+    if (start == end || *start)
+        return;
+    for (uint32_t *p = start; p < end; ++p)
+        *p = 1;
 }
 #endif
 #define CHECK(x)                                                    \
@@ -32,6 +36,7 @@ __attribute__((no_sanitize("coverage"))) void __sanitizer_cov_trace_pc_guard_ini
         }                                                           \
     } while (0)
 static uint64_t seed = 0x9e3779b97f4a7c15ull;
+
 static uint64_t rnd(void)
 {
     seed ^= seed << 13;
@@ -39,6 +44,7 @@ static uint64_t rnd(void)
     seed ^= seed << 17;
     return seed;
 }
+
 static int pairwise(const ArmSmmu4KRange *a, size_t na, const ArmSmmu4KRange *b, size_t nb)
 {
     for (size_t i = 0; i < na; ++i)
@@ -50,6 +56,7 @@ static int pairwise(const ArmSmmu4KRange *a, size_t na, const ArmSmmu4KRange *b,
         }
     return 0;
 }
+
 static void fill(ArmSmmu4KRange *r, size_t n, unsigned classes, uint64_t span)
 {
     for (size_t i = 0; i < n; ++i) {
@@ -63,7 +70,9 @@ static void fill(ArmSmmu4KRange *r, size_t n, unsigned classes, uint64_t span)
                                 (c & 4u) ? 3u : 2u};
     }
 }
+
 static uint32_t scratch[1u << 18];
+
 int main(void)
 {
     static ArmSmmu4KRange a[4096], b[4096];
@@ -89,8 +98,13 @@ int main(void)
         cases += 5;
         conflicts += (unsigned)(cross + self);
     }
+
     /* int-144's shape: 23855 coherent import pages and 82000 non-cacheable pages, disjoint, then one aliased page. */
-    enum { Imports = 23855, Owned = 82000 };
+    enum {
+        Imports = 23855,
+        Owned = 82000
+    };
+
     ArmSmmu4KRange *all = calloc(Imports + Owned, sizeof *all);
     CHECK(all);
     for (size_t i = 0; i < Imports + Owned; ++i) {
@@ -116,14 +130,19 @@ int main(void)
            "little scratch; "
            "a 23855+82000-page mixed-class set checked 4 times in %.0f ms\n",
            cases, conflicts, ms);
+
     /* One long interval lies beyond every probe. Its length must not make each
      * gap probe scan all preceding small intervals. Equal interval lengths in
      * the earlier large case do not expose that degeneration. */
-    enum { Mixed = 8192 };
+    enum {
+        Mixed = 8192
+    };
+
     ArmSmmu4KRange *left = calloc(Mixed + 1, sizeof *left), *right = calloc(Mixed + 2, sizeof *right);
     CHECK(left && right);
     for (size_t i = 0; i < Mixed + 2; ++i) {
-        if (i < Mixed) left[i] = (ArmSmmu4KRange){0, 0x40000000 + i * 8192, 4096, 3, 0, 2};
+        if (i < Mixed)
+            left[i] = (ArmSmmu4KRange){0, 0x40000000 + i * 8192, 4096, 3, 0, 2};
         right[i] = (ArmSmmu4KRange){0, 0x40001000 + i * 8192, 4096, 3, 1, 3};
     }
     left[Mixed] = (ArmSmmu4KRange){0, UINT64_C(0x200000000), UINT64_C(0x10000000), 3, 0, 2};

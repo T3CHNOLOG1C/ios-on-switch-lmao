@@ -13,33 +13,40 @@
             std::exit(1);                                        \
         }                                                        \
     } while (0)
+
 struct Board {
     std::vector<const char *> order;
     unsigned fail_call = 0, quiesce_fail = 0, quiesce_calls = 0;
     unsigned calls = 0;
 };
+
 static Board board;
+
 static int step(const char *name)
 {
     ++board.calls;
     board.order.push_back(name);
     return board.calls == board.fail_call ? kIOReturnIOError : 0;
 }
+
 static int reserve(void *c)
 {
     CHECK(c == &board);
     return step("reserve");
 }
+
 static int bootGmu(void *c)
 {
     CHECK(c == &board);
     return step("gmu");
 }
+
 static int programSmmu(void *c)
 {
     CHECK(c == &board);
     return step("smmu");
 }
+
 static int quiesce(void *c)
 {
     CHECK(c == &board);
@@ -47,15 +54,21 @@ static int quiesce(void *c)
     board.order.push_back("quiesce");
     return board.quiesce_fail;
 }
+
 static NativeAdrenoGpuBoard ops{&board, reserve, bootGmu, programSmmu, quiesce};
+
 struct Registers {
     std::vector<uint32_t> values;
     std::vector<uint32_t> writes;
     unsigned publish = 0, acquire = 0, barriers = 0;
-    Registers() : values(0x10000, 0) {}
+
+    Registers() : values(0x10000, 0)
+    {}
 };
+
 static Registers regs;
 static uint32_t ringmem[8192], fencemem[1024];
+
 static int write32(void *c, uint32_t reg, uint32_t value)
 {
     CHECK(c == &regs && reg < regs.values.size());
@@ -63,43 +76,51 @@ static int write32(void *c, uint32_t reg, uint32_t value)
     regs.writes.push_back(reg);
     return 0;
 }
+
 static int read32(void *c, uint32_t reg, uint32_t *value)
 {
     CHECK(c == &regs && value && reg < regs.values.size());
     *value = regs.values[reg];
     return 0;
 }
+
 static int barrier(void *c)
 {
     CHECK(c == &regs);
     ++regs.barriers;
     return 0;
 }
+
 static int publish(void *c, const volatile uint32_t *words, size_t bytes)
 {
     CHECK(c == &regs && words && bytes == sizeof(ringmem));
     ++regs.publish;
     return 0;
 }
+
 static int acquire(void *c, volatile uint32_t *words, size_t bytes)
 {
     CHECK(c == &regs && words && bytes == sizeof(fencemem));
     ++regs.acquire;
     return 0;
 }
+
 static int timeRead(void *c, uint32_t address, uint32_t *value)
 {
     CHECK(c == &regs && value && address < regs.values.size());
     *value = regs.values[address];
     return 0;
 }
+
 static unsigned start_pending = 0;
 static uint64_t clock_us = 0;
+
 static uint64_t now(void *c)
 {
     CHECK(c == &board);
     return clock_us;
 }
+
 static int idle(void *c)
 {
     CHECK(c == &board);
@@ -110,6 +131,7 @@ static int idle(void *c)
     }
     return 0;
 }
+
 static NativeAdrenoGpuConfig config()
 {
     NativeAdrenoGpuConfig c{};
@@ -128,6 +150,7 @@ static NativeAdrenoGpuConfig config()
     c.pwrup_reglist_iova = 0x400000;
     return c;
 }
+
 static void reset(void)
 {
     board = Board{};
@@ -137,6 +160,7 @@ static void reset(void)
     start_pending = 1;
     clock_us = 0;
 }
+
 int main()
 {
     /* Happy path: fixed order, real ring/CP/IRQ programming, ready. */
@@ -173,7 +197,8 @@ int main()
             CHECK(board.quiesce_calls == (failure == 1 ? 0 : 1));
             CHECK(board.order.size() == (failure == 1 ? 1 : failure + 1));
             CHECK(!gpu.ring() && !gpu.interrupts() && gpu.stop() == kIOReturnNotReady);
-            if (failure > 1) CHECK(!std::strcmp(board.order.back(), "quiesce"));
+            if (failure > 1)
+                CHECK(!std::strcmp(board.order.back(), "quiesce"));
             CHECK(regs.writes.empty());
         }
     }

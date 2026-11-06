@@ -19,7 +19,7 @@ struct mount;
  * map is refused (one log line), the original DiskImages hook. Returns BSD
  * errno (0 success), not switch_block_status. A failure latches for this index. */
 int switch_cryptex_attach(unsigned index, dev_t expectedPrebootDevice, dev_t *volume, char *devicePath,
-                            size_t capacity);
+                          size_t capacity);
 /* The direct-attached image's volume did not mount: detach the map and attach
  * the image through DiskImages instead (one log line). EINVAL if it already is. */
 int switch_cryptex_fallback(unsigned index, dev_t *volume, char *devicePath, size_t capacity);

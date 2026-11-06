@@ -33,25 +33,32 @@ enum {
 };
 
 // Syncpoint increment conditions (host1x uclass INCR_SYNCPT bits 15:8).
-enum { TEGRA_HOST1X_COND_IMMEDIATE = 0, TEGRA_HOST1X_COND_OP_DONE = 1 };
+enum {
+    TEGRA_HOST1X_COND_IMMEDIATE = 0,
+    TEGRA_HOST1X_COND_OP_DONE = 1
+};
 
 // Opcodes (Linux drivers/gpu/host1x/hw/opcodes.h). Method offsets are in words.
 static inline uint32_t tegra_host1x_op_setclass(uint32_t cls, uint32_t offset, uint32_t mask)
 {
     return (offset << 16) | (cls << 6) | mask;
 }
+
 static inline uint32_t tegra_host1x_op_incr(uint32_t offset, uint32_t count)
 {
     return (1u << 28) | (offset << 16) | count;
 }
+
 static inline uint32_t tegra_host1x_op_nonincr(uint32_t offset, uint32_t count)
 {
     return (2u << 28) | (offset << 16) | count;
 }
+
 static inline uint32_t tegra_host1x_op_imm(uint32_t offset, uint32_t value)
 {
     return (4u << 28) | (offset << 16) | (value & 0xffff);
 }
+
 // INCR_SYNCPT (method 0 of every class: the engine's THI implements the host methods) with a condition.
 static inline uint32_t tegra_host1x_op_incr_syncpt(uint32_t cond, uint32_t syncpt)
 {

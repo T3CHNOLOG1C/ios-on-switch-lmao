@@ -7,15 +7,18 @@
 #include "bridge/NativeMetalBridge.h"
 #include "bridge/NativeMetalObjects.h"
 #include "NativeBridgeMetalFrontend.h"
+
 static void mark(uint32_t v)
 {
     std::printf("mark %x\n", v);
     std::fflush(stdout);
 }
+
 static void missing(const char *c, const char *s)
 {
     std::printf("missing %s %s\n", c, s);
 }
+
 int main(int, char **argv)
 {
     NmbSelftest r{};

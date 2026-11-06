@@ -48,7 +48,13 @@
 #include <xpc/xpc.h>
 
 typedef struct __IOHIDDevice *IOHIDDeviceRef;
-typedef enum { kIOHIDReportTypeInput = 0, kIOHIDReportTypeOutput, kIOHIDReportTypeFeature } IOHIDReportType;
+
+typedef enum {
+    kIOHIDReportTypeInput = 0,
+    kIOHIDReportTypeOutput,
+    kIOHIDReportTypeFeature
+} IOHIDReportType;
+
 typedef void (*IOHIDReportCallback)(void *context, IOReturn result, void *sender, IOHIDReportType type,
                                     uint32_t reportID, uint8_t *report, CFIndex reportLength);
 extern IOHIDDeviceRef IOHIDDeviceCreate(CFAllocatorRef allocator, io_service_t service);
@@ -75,11 +81,37 @@ enum {
     kSettleSeconds = 3,
     kReplyMS = 250,
 };
-enum { kSubReportMode = 0x03, kSubMcuConfig = 0x21, kSubMcuState = 0x22 };
-enum { kMcuStatus = 0x01, kMcuNfc = 0x02 };  // byte 10 of output report 0x11
-enum { kModeStandby = 1, kModeNfc = 4 };
-enum { kNfcStartPolling = 0x01, kNfcStopPolling = 0x02, kNfcNextPackage = 0x04, kNfcReadNtag = 0x06 };
-enum { kNfcReady = 0x00, kNfcPolling = 0x01, kNfcLastPackage = 0x04, kNfcTagLost = 0x07, kNfcTag = 0x09 };
+
+enum {
+    kSubReportMode = 0x03,
+    kSubMcuConfig = 0x21,
+    kSubMcuState = 0x22
+};
+
+enum {
+    kMcuStatus = 0x01,
+    kMcuNfc = 0x02
+};  // byte 10 of output report 0x11
+
+enum {
+    kModeStandby = 1,
+    kModeNfc = 4
+};
+
+enum {
+    kNfcStartPolling = 0x01,
+    kNfcStopPolling = 0x02,
+    kNfcNextPackage = 0x04,
+    kNfcReadNtag = 0x06
+};
+
+enum {
+    kNfcReady = 0x00,
+    kNfcPolling = 0x01,
+    kNfcLastPackage = 0x04,
+    kNfcTagLost = 0x07,
+    kNfcTag = 0x09
+};
 
 typedef struct {
     IOHIDDeviceRef device;
@@ -101,7 +133,8 @@ static uint8_t mcuCrc(const uint8_t *data, size_t length)
     uint8_t crc = 0;
     while (length--) {
         crc ^= *data++;
-        for (int bit = 0; bit < 8; ++bit) crc = (crc & 0x80) ? (uint8_t)((crc << 1) ^ 0x07) : (uint8_t)(crc << 1);
+        for (int bit = 0; bit < 8; ++bit)
+            crc = (crc & 0x80) ? (uint8_t)((crc << 1) ^ 0x07) : (uint8_t)(crc << 1);
     }
     return crc;
 }
@@ -110,10 +143,13 @@ static void inputReport(void *context, IOReturn result, void *sender, IOHIDRepor
                         uint8_t *report, CFIndex length)
 {
     Pad *pad = context;
-    if (result != kIOReturnSuccess || length < 1 || (report[0] != 0x21 && report[0] != 0x31)) return;
-    if (length > kMcuReportLength) length = kMcuReportLength;
+    if (result != kIOReturnSuccess || length < 1 || (report[0] != 0x21 && report[0] != 0x31))
+        return;
+    if (length > kMcuReportLength)
+        length = kMcuReportLength;
     os_unfair_lock_lock(&pad->lock);
-    if (pad->tail - pad->head == kQueued) pad->head++;
+    if (pad->tail - pad->head == kQueued)
+        pad->head++;
     const unsigned at = pad->tail++ % kQueued;
     memset(pad->queue[at], 0, kMcuReportLength);
     memcpy(pad->queue[at], report, (size_t)length);
@@ -139,8 +175,10 @@ static bool await(Pad *pad, Match match, const void *arg, uint8_t *out, int ms)
             }
         }
         os_unfair_lock_unlock(&pad->lock);
-        if (found) return true;
-        if (dispatch_semaphore_wait(pad->arrived, deadline)) return false;
+        if (found)
+            return true;
+        if (dispatch_semaphore_wait(pad->arrived, deadline))
+            return false;
     }
 }
 
@@ -149,7 +187,8 @@ static void flush(Pad *pad)
     os_unfair_lock_lock(&pad->lock);
     pad->head = pad->tail;
     os_unfair_lock_unlock(&pad->lock);
-    while (!dispatch_semaphore_wait(pad->arrived, DISPATCH_TIME_NOW)) {}
+    while (!dispatch_semaphore_wait(pad->arrived, DISPATCH_TIME_NOW)) {
+    }
 }
 
 static IOReturn send(Pad *pad, uint8_t id, uint8_t command, const uint8_t *data, size_t length)
@@ -157,7 +196,8 @@ static IOReturn send(Pad *pad, uint8_t id, uint8_t command, const uint8_t *data,
     uint8_t report[kOutputLength] = {
         id, (uint8_t)(pad->counter++ & 0xf), 0x00, 0x01, 0x40, 0x40, 0x00, 0x01, 0x40, 0x40, command};
     memcpy(report + 11, data, length);
-    if (id == 0x11 && command == kMcuNfc) report[47] = mcuCrc(report + 11, 36);
+    if (id == 0x11 && command == kMcuNfc)
+        report[47] = mcuCrc(report + 11, 36);
     return IOHIDDeviceSetReport(pad->device, kIOHIDReportTypeOutput, id, report, sizeof(report));
 }
 
@@ -172,8 +212,10 @@ static bool subcommand(Pad *pad, uint8_t sub, const uint8_t *data, size_t length
     uint8_t reply[kMcuReportLength];
     for (int attempt = 0; attempt < 3; ++attempt) {
         flush(pad);
-        if (send(pad, 0x01, sub, data, length) != kIOReturnSuccess) return false;
-        if (await(pad, isReply, &sub, reply, kReplyMS)) return true;
+        if (send(pad, 0x01, sub, data, length) != kIOReturnSuccess)
+            return false;
+        if (await(pad, isReply, &sub, reply, kReplyMS))
+            return true;
     }
     return false;
 }
@@ -188,8 +230,10 @@ static bool waitMcuMode(Pad *pad, uint8_t mode)
     uint8_t reply[kMcuReportLength];
     for (int attempt = 0; attempt < 16; ++attempt) {
         flush(pad);
-        if (send(pad, 0x11, kMcuStatus, NULL, 0) != kIOReturnSuccess) return false;
-        if (await(pad, isMcuMode, &mode, reply, kReplyMS)) return true;
+        if (send(pad, 0x11, kMcuStatus, NULL, 0) != kIOReturnSuccess)
+            return false;
+        if (await(pad, isMcuMode, &mode, reply, kReplyMS))
+            return true;
     }
     return false;
 }
@@ -210,7 +254,8 @@ static bool isNfcAnswer(const uint8_t *r, const void *arg)
 static IOReturn nfcCommand(Pad *pad, uint8_t command, uint8_t package, const uint8_t *data, uint8_t length)
 {
     uint8_t request[36] = {command, 0x00, package, 0x08, length};
-    if (length) memcpy(request + 5, data, length);
+    if (length)
+        memcpy(request + 5, data, length);
     return send(pad, 0x11, kMcuNfc, request, sizeof(request));
 }
 
@@ -219,8 +264,10 @@ static bool waitNfcState(Pad *pad, uint8_t state, uint8_t *reply)
 {
     for (int attempt = 0; attempt < 20; ++attempt) {
         flush(pad);
-        if (nfcCommand(pad, kNfcNextPackage, 0, NULL, 0) != kIOReturnSuccess) return false;
-        if (await(pad, isNfcState, NULL, reply, kReplyMS) && reply[55] == 0x31 && reply[56] == state) return true;
+        if (nfcCommand(pad, kNfcNextPackage, 0, NULL, 0) != kIOReturnSuccess)
+            return false;
+        if (await(pad, isNfcState, NULL, reply, kReplyMS) && reply[55] == 0x31 && reply[56] == state)
+            return true;
     }
     return false;
 }
@@ -228,17 +275,20 @@ static bool waitNfcState(Pad *pad, uint8_t state, uint8_t *reply)
 static void saveTag(const Pad *pad, const uint8_t *uid, unsigned uidLength, const uint8_t *pages, size_t length)
 {
     char hex[2 * 10 + 1] = "";
-    for (unsigned i = 0; i < uidLength; ++i) snprintf(hex + 2 * i, 3, "%02X", uid[i]);
+    for (unsigned i = 0; i < uidLength; ++i)
+        snprintf(hex + 2 * i, 3, "%02X", uid[i]);
     os_log(logger, "joyconnfc: %{public}s: tag %{public}s, %zu bytes of pages", pad->name, hex, length);
     printf("%s: tag %s, %zu bytes of pages\n", pad->name, hex, length);
     for (size_t at = 0; at < length; at += 128) {
         char line[2 * 128 + 1] = "";
         const size_t end = at + 128 < length ? at + 128 : length;
-        for (size_t i = at; i < end; ++i) snprintf(line + 2 * (i - at), 3, "%02x", pages[i]);
+        for (size_t i = at; i < end; ++i)
+            snprintf(line + 2 * (i - at), 3, "%02x", pages[i]);
         os_log(logger, "joyconnfc: %{public}s: page %zu: %{public}s", hex, at / 4, line);
         printf("  page %3zu: %s\n", at / 4, line);
     }
-    if (!length) return;
+    if (!length)
+        return;
     char path[96];
     mkdir("/private/var/Switch", 0755);
     mkdir("/private/var/Switch/nfc", 0755);
@@ -247,7 +297,8 @@ static void saveTag(const Pad *pad, const uint8_t *uid, unsigned uidLength, cons
     if (fd < 0 || write(fd, pages, length) != (ssize_t)length) {
         os_log_error(logger, "joyconnfc: %{public}s: %{public}s", path, strerror(errno));
     }
-    if (fd >= 0) close(fd);
+    if (fd >= 0)
+        close(fd);
 }
 
 // Reads the tag found by polling (yuzu GetAmiiboData): one NTAG read of pages 0-0x86 in three ranges (jc_toolkit's
@@ -260,12 +311,15 @@ static size_t readPages(Pad *pad, uint8_t *pages, uint8_t *reply)
     size_t have = 0;
     uint8_t package = 0;
     flush(pad);
-    if (nfcCommand(pad, kNfcReadNtag, 0, request, sizeof(request)) != kIOReturnSuccess) return 0;
+    if (nfcCommand(pad, kNfcReadNtag, 0, request, sizeof(request)) != kIOReturnSuccess)
+        return 0;
     (void)await(pad, isNfcAnswer, NULL, reply, kReplyMS);
     for (int attempt = 0; attempt < 60; ++attempt) {
         flush(pad);
-        if (nfcCommand(pad, kNfcNextPackage, package, NULL, 0) != kIOReturnSuccess) return 0;
-        if (!await(pad, isNfcAnswer, NULL, reply, kReplyMS)) continue;
+        if (nfcCommand(pad, kNfcNextPackage, package, NULL, 0) != kIOReturnSuccess)
+            return 0;
+        if (!await(pad, isNfcAnswer, NULL, reply, kReplyMS))
+            continue;
         const bool data = reply[49] == 0x3a && reply[51] == 0x07;  // otherwise byte 56 is the NFC state
         if (!data && reply[56] == kNfcTagLost) {
             os_log_error(logger, "joyconnfc: %{public}s: tag lost or read error %#x", pad->name, reply[50]);
@@ -284,7 +338,8 @@ static size_t readPages(Pad *pad, uint8_t *pages, uint8_t *reply)
             ++package;
             continue;
         }
-        if (reply[49] == 0x2a && reply[56] == kNfcLastPackage) return have;
+        if (reply[49] == 0x2a && reply[56] == kNfcLastPackage)
+            return have;
     }
     return 0;
 }
@@ -324,7 +379,8 @@ static void scan(Pad *pad)
         // The MCU reports only when asked: one "next package" request per answer until a tag shows (yuzu IsTagInRange).
         while (!tag && dispatch_time(DISPATCH_TIME_NOW, 0) < end) {
             flush(pad);
-            if (nfcCommand(pad, kNfcNextPackage, 0, NULL, 0) != kIOReturnSuccess) break;
+            if (nfcCommand(pad, kNfcNextPackage, 0, NULL, 0) != kIOReturnSuccess)
+                break;
             tag =
                 await(pad, isNfcState, NULL, reply, kReplyMS) && (reply[56] == kNfcTag || reply[56] == kNfcLastPackage);
         }
@@ -363,7 +419,8 @@ static void scanService(io_service_t service, dispatch_group_t group, int64_t se
     pad->device = device;
     pad->lock = OS_UNFAIR_LOCK_INIT;
     pad->arrived = dispatch_semaphore_create(0);
-    if (group) dispatch_group_enter(group);
+    if (group)
+        dispatch_group_enter(group);
     // Let JoyConHIDServicePlugin finish its own set-up (it sets report mode 0x30 when it activates) before taking over.
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, settle * (int64_t)NSEC_PER_SEC), scanQueue, ^{
         const IOReturn opened = IOHIDDeviceOpen(device, 0);
@@ -373,7 +430,9 @@ static void scanService(io_service_t service, dispatch_group_t group, int64_t se
             IOHIDDeviceRegisterInputReportCallback(device, pad->buffer, sizeof(pad->buffer), inputReport, pad);
             IOHIDDeviceSetDispatchQueue(device, hidQueue);
             dispatch_semaphore_t cancelled = dispatch_semaphore_create(0);
-            IOHIDDeviceSetCancelHandler(device, ^{ dispatch_semaphore_signal(cancelled); });
+            IOHIDDeviceSetCancelHandler(device, ^{
+                dispatch_semaphore_signal(cancelled);
+            });
             IOHIDDeviceActivate(device);
             scan(pad);
             IOHIDDeviceCancel(device);
@@ -382,7 +441,8 @@ static void scanService(io_service_t service, dispatch_group_t group, int64_t se
         }
         CFRelease(device);
         free(pad);
-        if (group) dispatch_group_leave(group);
+        if (group)
+            dispatch_group_leave(group);
     });
 }
 
@@ -435,7 +495,9 @@ int main(int argc, char **argv)
     void (*setStreamHandler)(const char *, dispatch_queue_t, xpc_handler_t) =
         (void (*)(const char *, dispatch_queue_t, xpc_handler_t))dlsym(RTLD_DEFAULT, "xpc_set_event_stream_handler");
     if (setStreamHandler)
-        setStreamHandler("com.apple.iokit.matching", scanQueue, ^(xpc_object_t event) { (void)event; });
+        setStreamHandler("com.apple.iokit.matching", scanQueue, ^(xpc_object_t event) {
+            (void)event;
+        });
     IONotificationPortRef port = IONotificationPortCreate(kIOMainPortDefault);
     IONotificationPortSetDispatchQueue(port, scanQueue);
     for (unsigned i = 0; i < sizeof(products) / sizeof(products[0]); ++i) {

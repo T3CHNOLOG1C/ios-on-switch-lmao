@@ -63,21 +63,33 @@ void switchxudc_static_init(void) __asm__("__GLOBAL__sub_I_SwitchXUDC.cpp");
 namespace {
 // _IOUSBDeviceIORequestTag fields (IOUSBDeviceController::io, completeEndpointIO; 21H461 code).
 constexpr size_t kReqEndpoint = 0, kReqBuffer = 8, kReqStatus = 40, kReqIsoc = 48, kReqLength = 64, kReqActual = 72;
+
 template <typename T> T get(const _IOUSBDeviceIORequestTag *r, size_t off)
 {
     T value;
     memcpy(&value, reinterpret_cast<const uint8_t *>(r) + off, sizeof(value));
     return value;
 }
+
 template <typename T> void put(_IOUSBDeviceIORequestTag *r, size_t off, T value)
 {
     memcpy(reinterpret_cast<uint8_t *>(r) + off, &value, sizeof(value));
 }
 
 // IOUSBDeviceControlRequest states that need the controller (see OriginalIOUSBDeviceFamily.h).
-enum : int { kStateOutData = 5, kStateOutDataLong = 6, kStateInStatus = 7, kStateOutStatus = 8 };
+enum : int {
+    kStateOutData = 5,
+    kStateOutDataLong = 6,
+    kStateInStatus = 7,
+    kStateOutStatus = 8
+};
+
 // USB transfer types as passed to activateEndpoint.
-enum : int { kTypeBulk = 2, kTypeInterrupt = 3 };
+enum : int {
+    kTypeBulk = 2,
+    kTypeInterrupt = 3
+};
+
 constexpr int kSpeedFull = 1, kSpeedHigh = 2, kSpeedNone = -1;
 
 constexpr uint32_t kEp0Depth = 16;
@@ -126,6 +138,7 @@ class SwitchXUDC : public IOUSBDeviceController {
         uint32_t length, done;
         bool prepared;
     };
+
     // queue: kQueueDepth requests from head, the first tds->onRing() of them with TDs on the ring. queue and tds are
     // allocated at the first activation: SwitchXUDC itself is capped at 16 KiB. serial: the head request runs alone one
     // TRB at a time through `serial` (its one-TRB TD in tds, serialLength in flight).
@@ -136,6 +149,7 @@ class SwitchXUDC : public IOUSBDeviceController {
         Tds *tds;
         DmaBuffer serial;
     };
+
     // Bytes, requests, failed requests and bounced bytes per direction (0 OUT, 1 IN), requests by the serial path, why
     // packets were bounced (XudcTransfer.h PlanStats), interrupts, events, time in the filter, the event drain and
     // queueing; transfer events by kind (XudcTransfer.h Verdict): TDs ended at a short packet before their last TRB,
@@ -146,7 +160,13 @@ class SwitchXUDC : public IOUSBDeviceController {
         uint32_t events, shortEarly, second, stale, unexplained;
         uint64_t ticks;
     };
-    enum class Stage : uint8_t { Idle, DataIn, StatusIn, DataOut, StatusOut };
+    enum class Stage : uint8_t {
+        Idle,
+        DataIn,
+        StatusIn,
+        DataOut,
+        StatusOut
+    };
 
     Hardware hw;
     IOWorkLoop *loop;
@@ -181,7 +201,7 @@ class SwitchXUDC : public IOUSBDeviceController {
     bool asleep, busAfterSleep, lostToSleep;  // systemSleep: between suspend and resume; resume could not power on
     IOPMDriverAssertionID idleHold;           // while a host is attached (setHostPresent; idleHoldCall only)
     thread_call_t idleHoldCall;
-    volatile bool idleWanted;                 // what setHostPresent last asked idleHoldCall for
+    volatile bool idleWanted;  // what setHostPresent last asked idleHoldCall for
     void setHostPresent(bool present);
     static void applyIdleHold(thread_call_param_t owner, thread_call_param_t);
     uint8_t deliveryStage;
@@ -201,7 +221,12 @@ class SwitchXUDC : public IOUSBDeviceController {
     IOReturn ep0Io(_IOUSBDeviceIORequestTag *request, bool in);
     void ep0Kick();
     void ep0Cancel(IOReturn status);
-    enum class Admit : uint8_t { Queued, Wait, Serial, Failed };
+    enum class Admit : uint8_t {
+        Queued,
+        Wait,
+        Serial,
+        Failed
+    };
     void kick(uint32_t dci);
     void kickWaiting();
     Admit admit(uint32_t dci, Request &r);
@@ -214,7 +239,12 @@ class SwitchXUDC : public IOUSBDeviceController {
     void oddEvent(uint32_t dci, const Event &e, uint32_t index, const char *what);
     int poolTake();
     void poolGive(uint64_t pa);
-    bool inPool(uint64_t pa) const { return pool.va && pa >= pool.pa && pa < (uint64_t)pool.pa + pool.size; }
+
+    bool inPool(uint64_t pa) const
+    {
+        return pool.va && pa >= pool.pa && pa < (uint64_t)pool.pa + pool.size;
+    }
+
     void logStats(uint64_t now);
     void cancel(uint32_t dci, IOReturn status);
     void finish(_IOUSBDeviceIORequestTag *request, IOReturn status, uint32_t actual);
@@ -230,33 +260,68 @@ public:
     bool start(IOService *provider) override;
     void stop(IOService *provider) override;
     void free() override;
-    IOWorkLoop *getWorkLoop() const override { return loop; }
+
+    IOWorkLoop *getWorkLoop() const override
+    {
+        return loop;
+    }
 
     void softDisconnect(uint32_t reason) override;
     void goOnBus(bool on) override;
-    bool connectedWithAccessoryCable() override { return false; }
+
+    bool connectedWithAccessoryCable() override
+    {
+        return false;
+    }
+
     IOReturn handleStallEndpoint(int address, bool stall) override;
     IOReturn handleAbortEndpoint(int address) override;
     IOReturn handleSetAddressPreStatusPhase(int address) override;
-    IOReturn handleSetAddressPostStatusPhase(int) override { return kIOReturnSuccess; }
-    int getConnectionSpeed() override { return speed == kSpeedNone ? kSpeedHigh : speed; }  // always a cable
+
+    IOReturn handleSetAddressPostStatusPhase(int) override
+    {
+        return kIOReturnSuccess;
+    }
+
+    int getConnectionSpeed() override
+    {
+        return speed == kSpeedNone ? kSpeedHigh : speed;
+    }  // always a cable
+
     IOReturn provideEndpointIDsForConfiguration(OSArray *interfaces, uint8_t *ids) override;
-    IOReturn prepareConfiguration(OSArray *) override { return kIOReturnSuccess; }
+
+    IOReturn prepareConfiguration(OSArray *) override
+    {
+        return kIOReturnSuccess;
+    }
+
     IOReturn activateEndpoint(int address, int type, int maxPacketSize, int interval, int property) override;
     IOReturn deactivateEndpoint(int address) override;
     IOBufferMemoryDescriptor *createIOBuffer(IOOptionBits options, uint64_t capacity) override;
-    bool isEndpointStalled(int address) override { return hw.halted(dciFor(address)); }
+
+    bool isEndpointStalled(int address) override
+    {
+        return hw.halted(dciFor(address));
+    }
+
     IOReturn resetEndpointDataToggle(int address) override;
     void forceReEnumeration() override;
-    IOReturn doRemoteWakeGated() override { return kIOReturnUnsupported; }
+
+    IOReturn doRemoteWakeGated() override
+    {
+        return kIOReturnUnsupported;
+    }
+
     void handleControlRequestStateChange(int oldState, int newState) override;
     IOReturn ioGated(_IOUSBDeviceIORequestTag *request) override;
+
     IOReturn getBufferOptions(uint32_t &options) override
     {
         options = 0;
         return kIOReturnSuccess;
     }
 };
+
 OSDefineMetaClassAndStructors(SwitchXUDC, IOUSBDeviceController) SwitchXUDC *SwitchXUDC::running;
 
 // ---------------------------------------------------------------------------
@@ -293,8 +358,10 @@ bool SwitchXUDC::begin(IOService *provider, char *why, size_t whySize)
 bool SwitchXUDC::start(IOService *provider)
 {
     // The family builds its command gate, pool and timers on getWorkLoop().
-    if (!IOUSBDeviceController::start(provider)) return false;
-    if (loop->addEventSource(delivery) != kIOReturnSuccess) return false;
+    if (!IOUSBDeviceController::start(provider))
+        return false;
+    if (loop->addEventSource(delivery) != kIOReturnSuccess)
+        return false;
     attachInterrupt();  // sleeps until the GIC is up; panics if the interrupt cannot be had
     readyForHost();     // control request, USB device description defaults, registerService()
     return true;
@@ -302,11 +369,15 @@ bool SwitchXUDC::start(IOService *provider)
 
 void SwitchXUDC::stop(IOService *provider)
 {
-    if (delivery) delivery->cancelTimeout();
-    if (interrupt) interrupt->disable();
+    if (delivery)
+        delivery->cancelTimeout();
+    if (interrupt)
+        interrupt->disable();
     setBus(false);
-    if (delivery && loop) loop->removeEventSource(delivery);
-    if (interrupt && loop) loop->removeEventSource(interrupt);
+    if (delivery && loop)
+        loop->removeEventSource(delivery);
+    if (interrupt && loop)
+        loop->removeEventSource(interrupt);
     IOUSBDeviceController::stop(provider);
 }
 
@@ -316,8 +387,10 @@ void SwitchXUDC::free()
     OSSafeReleaseNULL(interrupt);
     for (Endpoint &ep : endpoints) {
         ep.serial.release();
-        if (ep.queue) IODelete(ep.queue, Request, kQueueDepth);
-        if (ep.tds) IODelete(ep.tds, Tds, 1);
+        if (ep.queue)
+            IODelete(ep.queue, Request, kQueueDepth);
+        if (ep.tds)
+            IODelete(ep.tds, Tds, 1);
         ep.queue = nullptr;
         ep.tds = nullptr;
     }
@@ -345,7 +418,8 @@ bool SwitchXUDC::interruptFilter(OSObject *owner, IOFilterInterruptEventSource *
 {
     auto *self = static_cast<SwitchXUDC *>(owner);
     const uint64_t entered = mach_absolute_time();
-    if (!self->hw.takeInterrupt()) return false;
+    if (!self->hw.takeInterrupt())
+        return false;
     __atomic_fetch_add(&self->interrupts, 1, __ATOMIC_RELAXED);
     __atomic_fetch_add(&self->filterTicks, mach_absolute_time() - entered, __ATOMIC_RELAXED);
     return true;
@@ -377,10 +451,17 @@ void SwitchXUDC::serviceEvents()
                   "%08x)",
                   e.type(), e.dci(), e.trb(), e.d[0], e.d[1], e.d[2], e.d[3]);
         switch (e.type()) {
-        case TRB_TRANSFER_EVENT: transferEvent(e); break;
-        case TRB_PORT_EVENT: portEvent(); break;
-        case TRB_SETUP_EVENT: setupEvent(e); break;
-        default: break;
+        case TRB_TRANSFER_EVENT:
+            transferEvent(e);
+            break;
+        case TRB_PORT_EVENT:
+            portEvent();
+            break;
+        case TRB_SETUP_EVENT:
+            setupEvent(e);
+            break;
+        default:
+            break;
         }
     }
     draining = false;
@@ -393,17 +474,20 @@ void SwitchXUDC::serviceEvents()
     if (emptied) {
         uint32_t lifted = 0;
         for (uint32_t dci = 2; dci < kMaxDci; ++dci) {
-            if (!endpoints[dci].tds || !endpoints[dci].tds->fenced()) continue;
+            if (!endpoints[dci].tds || !endpoints[dci].tds->fenced())
+                continue;
             endpoints[dci].tds->liftFence();
             lifted |= 1u << dci;
         }
         for (uint32_t dci = 2; dci < kMaxDci; ++dci)
-            if (lifted & (1u << dci) && endpoints[dci].queue) kick(dci);
+            if (lifted & (1u << dci) && endpoints[dci].queue)
+                kick(dci);
     }
     kickWaiting();
     const uint64_t now = mach_absolute_time();
     st.ticks += now - entered;
-    if (now - statsAt >= statsWindow) logStats(now);
+    if (now - statsAt >= statsWindow)
+        logStats(now);
 }
 
 // Work loop: one os_log line per kStatsMs at most, only after data moved (never the console): MB/s, requests and what
@@ -426,8 +510,11 @@ void SwitchXUDC::logStats(uint64_t now)
     uint64_t ns = 0, busy = 0;
     absolutetime_to_nanoseconds(now - statsAt, &ns);
     absolutetime_to_nanoseconds(st.ticks - o.ticks, &busy);
-    if (!ns) ns = 1;
-    auto rate = [ns](uint64_t bytes) { return bytes * 100000ULL / ns; };  // hundredths of a MB/s (10^6 bytes)
+    if (!ns)
+        ns = 1;
+    auto rate = [ns](uint64_t bytes) {
+        return bytes * 100000ULL / ns;
+    };  // hundredths of a MB/s (10^6 bytes)
     const uint64_t in = rate(st.bytes[1] - o.bytes[1]), out = rate(st.bytes[0] - o.bytes[0]);
     const uint64_t cpu = busy * 10000ULL / ns;  // hundredths of a percent of one core
     static const char *const kResidueName[] = {"unknown", "per TRB", "per TD", "broken"};
@@ -538,8 +625,10 @@ void SwitchXUDC::setupEvent(const Event &e)
     // A new setup packet ends the previous control transfer: what it left on the ring is dropped. Our own OUT stages
     // end here; a family request still pending is aborted by the family itself (premature setup -> abortEndpoint ->
     // handleAbortEndpoint -> ep0Cancel).
-    if (stage != Stage::Idle) hw.dropQueued(0);
-    if (stage == Stage::DataOut || stage == Stage::StatusOut) stage = Stage::Idle;
+    if (stage != Stage::Idle)
+        hw.dropQueued(0);
+    if (stage == Stage::DataOut || stage == Stage::StatusOut)
+        stage = Stage::Idle;
     request->inputSetupPacket(setup);
     request->processSetupPacket();
 }
@@ -547,7 +636,8 @@ void SwitchXUDC::setupEvent(const Event &e)
 void SwitchXUDC::handleControlRequestStateChange(int, int newState)
 {
     IOUSBDeviceControlRequest *request = controlRequest();
-    if (!request || stage != Stage::Idle) return;
+    if (!request || stage != Stage::Idle)
+        return;
     DmaBuffer &buffer = ep0Buffer;
     if (newState == kStateOutData || newState == kStateOutDataLong) {
         ep0Length = request->setupLength() < buffer.size ? request->setupLength() : buffer.size;
@@ -566,8 +656,10 @@ void SwitchXUDC::handleControlRequestStateChange(int, int newState)
 // once by a zero-length one (IOUSBDeviceControlRequest::sendControlInDataGated, zlpCompletion).
 IOReturn SwitchXUDC::ep0Io(_IOUSBDeviceIORequestTag *request, bool in)
 {
-    if (!in || !controlRequest()) return kIOReturnUnsupported;  // OUT data arrives through inputDataPacket
-    if (get<uint64_t>(request, kReqLength) > ep0Buffer.size || ep0Count == kEp0Depth) return kIOReturnNoResources;
+    if (!in || !controlRequest())
+        return kIOReturnUnsupported;  // OUT data arrives through inputDataPacket
+    if (get<uint64_t>(request, kReqLength) > ep0Buffer.size || ep0Count == kEp0Depth)
+        return kIOReturnNoResources;
     ep0Queue[(ep0Head + ep0Count++) % kEp0Depth] = request;
     ep0Kick();
     return kIOReturnSuccess;
@@ -603,7 +695,8 @@ void SwitchXUDC::ep0Kick()
 
 void SwitchXUDC::ep0Complete(const Event &e)
 {
-    if (stage == Stage::Idle || e.trb() != ep0Trb) return;  // a superseded control transfer
+    if (stage == Stage::Idle || e.trb() != ep0Trb)
+        return;  // a superseded control transfer
     bool ok = e.code() == COMP_SUCCESS || e.code() == COMP_SHORT_PACKET;
     uint32_t actual = ok && e.residue() <= ep0Length ? ep0Length - e.residue() : 0;
     Stage done = stage;
@@ -613,8 +706,12 @@ void SwitchXUDC::ep0Complete(const Event &e)
     IOUSBDeviceControlRequest *control = controlRequest();
     DmaBuffer &buffer = ep0Buffer;
     switch (done) {
-    case Stage::DataIn: finish(request, ok ? kIOReturnSuccess : kIOReturnAborted, actual); break;  // -> state 8
-    case Stage::StatusIn: finish(request, ok ? kIOReturnSuccess : kIOReturnAborted, 0); break;     // -> state 1
+    case Stage::DataIn:
+        finish(request, ok ? kIOReturnSuccess : kIOReturnAborted, actual);
+        break;  // -> state 8
+    case Stage::StatusIn:
+        finish(request, ok ? kIOReturnSuccess : kIOReturnAborted, 0);
+        break;  // -> state 1
     case Stage::DataOut:
         if (ok && control) {
             cacheFlush(buffer.va, actual ? actual : 1);
@@ -622,24 +719,30 @@ void SwitchXUDC::ep0Complete(const Event &e)
         }
         break;
     case Stage::StatusOut:
-        if (ok && control) control->inputDataPacket(buffer.va, 0);
+        if (ok && control)
+            control->inputDataPacket(buffer.va, 0);
         break;
-    case Stage::Idle: break;
+    case Stage::Idle:
+        break;
     }
     ep0Kick();
 }
 
 void SwitchXUDC::ep0Cancel(IOReturn status)
 {
-    if (stage != Stage::Idle) hw.dropQueued(0);
+    if (stage != Stage::Idle)
+        hw.dropQueued(0);
     stage = Stage::Idle;
     _IOUSBDeviceIORequestTag *pending[kEp0Depth + 1];
     uint32_t count = 0;
-    if (ep0Request) pending[count++] = ep0Request;
+    if (ep0Request)
+        pending[count++] = ep0Request;
     ep0Request = nullptr;
-    for (uint32_t i = 0; i < ep0Count; ++i) pending[count++] = ep0Queue[(ep0Head + i) % kEp0Depth];
+    for (uint32_t i = 0; i < ep0Count; ++i)
+        pending[count++] = ep0Queue[(ep0Head + i) % kEp0Depth];
     ep0Head = ep0Count = 0;
-    for (uint32_t i = 0; i < count; ++i) finish(pending[i], status, 0);
+    for (uint32_t i = 0; i < count; ++i)
+        finish(pending[i], status, 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -662,10 +765,12 @@ void SwitchXUDC::ep0Cancel(IOReturn status)
 
 int SwitchXUDC::poolTake()
 {
-    if (!poolFree) return -1;
+    if (!poolFree)
+        return -1;
     for (uint32_t n = 0; n < kPoolPages; ++n) {
         const uint32_t page = (poolCursor + n) % kPoolPages;
-        if (poolUsed[page]) continue;
+        if (poolUsed[page])
+            continue;
         poolUsed[page] = 1;
         --poolFree;
         poolCursor = (page + 1) % kPoolPages;
@@ -689,24 +794,31 @@ void SwitchXUDC::poolGive(uint64_t pa)
 // gave pages back, every data endpoint with requests off the ring tries again.
 void SwitchXUDC::kickWaiting()
 {
-    if (!poolFreed || !onBus) return;  // off the bus (setBus cancelling every endpoint): nothing to start
+    if (!poolFreed || !onBus)
+        return;  // off the bus (setBus cancelling every endpoint): nothing to start
     poolFreed = false;
     for (uint32_t dci = 2; dci < kMaxDci; ++dci) {
         const Endpoint &ep = endpoints[dci];
-        if (ep.active && ep.queue && !ep.serialBusy && ep.tds->onRing() < ep.count) kick(dci);
+        if (ep.active && ep.queue && !ep.serialBusy && ep.tds->onRing() < ep.count)
+            kick(dci);
     }
 }
 
 IOReturn SwitchXUDC::ioGated(_IOUSBDeviceIORequestTag *request)
 {
-    if (!onBus) return kIOReturnNotReady;
+    if (!onBus)
+        return kIOReturnNotReady;
     int address = get<int32_t>(request, kReqEndpoint);
-    if (!(address & 0x7f)) return ep0Io(request, address & 0x80);
+    if (!(address & 0x7f))
+        return ep0Io(request, address & 0x80);
     uint32_t dci = dciFor(address);
-    if (dci >= kMaxDci || !endpoints[dci].active) return kIOReturnNotReady;
+    if (dci >= kMaxDci || !endpoints[dci].active)
+        return kIOReturnNotReady;
     Endpoint &ep = endpoints[dci];
-    if (get<uint8_t>(request, kReqIsoc)) return kIOReturnUnsupported;
-    if (get<uint64_t>(request, kReqLength) > UINT32_MAX || ep.count == kQueueDepth) return kIOReturnNoResources;
+    if (get<uint8_t>(request, kReqIsoc))
+        return kIOReturnUnsupported;
+    if (get<uint64_t>(request, kReqLength) > UINT32_MAX || ep.count == kQueueDepth)
+        return kIOReturnNoResources;
     const uint64_t entered = mach_absolute_time();
     Request &r = ep.queue[(ep.head + ep.count++) % kQueueDepth];
     r = {request, get<IOMemoryDescriptor *>(request, kReqBuffer), (uint32_t)get<uint64_t>(request, kReqLength), 0,
@@ -730,14 +842,16 @@ void SwitchXUDC::kick(uint32_t dci)
             queued = true;
             continue;
         }
-        if (a == Admit::Wait || ep.tds->onRing()) break;  // room comes with completions; the rest waits for the head
+        if (a == Admit::Wait || ep.tds->onRing())
+            break;  // room comes with completions; the rest waits for the head
         if (a == Admit::Serial) {
             startSerial(dci);
             break;
         }
         complete(dci, kIOReturnDMAError, 0, nullptr);  // Failed, at the head (not on the ring)
     }
-    if (queued) hw.doorbell(dci);
+    if (queued)
+        hw.doorbell(dci);
 }
 
 // One request onto the ring (see the section comment). Queued, or why not.
@@ -745,9 +859,11 @@ SwitchXUDC::Admit SwitchXUDC::admit(uint32_t dci, Request &r)
 {
     Endpoint &ep = endpoints[dci];
     const bool out = !ep.in;
-    if (!r.md) return r.length ? Admit::Failed : Admit::Serial;
+    if (!r.md)
+        return r.length ? Admit::Failed : Admit::Serial;
     if (!r.prepared) {
-        if (r.md->prepare() != kIOReturnSuccess) return Admit::Failed;
+        if (r.md->prepare() != kIOReturnSuccess)
+            return Admit::Failed;
         r.prepared = true;
     }
     Run *const runs = scratchRuns;
@@ -755,7 +871,8 @@ SwitchXUDC::Admit SwitchXUDC::admit(uint32_t dci, Request &r)
     while (offset < r.length && runCount < kMaxRuns) {
         IOByteCount segment = 0;
         const addr64_t pa = r.md->getPhysicalSegment(offset, &segment, kIOMemoryMapperNone);
-        if (!pa || !segment) return Admit::Failed;
+        if (!pa || !segment)
+            return Admit::Failed;
         const uint32_t take = segment < r.length - offset ? (uint32_t)segment : r.length - offset;
         if (runCount && runs[runCount - 1].pa + runs[runCount - 1].length == pa)
             runs[runCount - 1].length += take;
@@ -763,7 +880,8 @@ SwitchXUDC::Admit SwitchXUDC::admit(uint32_t dci, Request &r)
             runs[runCount++] = {pa, take};
         offset += take;
     }
-    if (offset < r.length) return Admit::Serial;
+    if (offset < r.length)
+        return Admit::Serial;
     const bool probe = out && residue == kResidueUnknown && r.length >= 2 * ep.mps;
     const uint32_t room = ep.tds->room();
     Piece *const pieces = scratchPieces;
@@ -777,31 +895,39 @@ SwitchXUDC::Admit SwitchXUDC::admit(uint32_t dci, Request &r)
         // controller's next event, so this one goes serial (one TRB, which always fits beside a tail: kMaxPieces).
         return fits && ep.tds->onRing() ? Admit::Wait : Admit::Serial;
     }
-    if (out && n > 1 && (residue == kResidueBroken || (residue == kResidueUnknown && !probe))) return Admit::Serial;
+    if (out && n > 1 && (residue == kResidueBroken || (residue == kResidueUnknown && !probe)))
+        return Admit::Serial;
     uint32_t bounces = 0;
-    for (uint32_t i = 0; i < n; ++i) bounces += pieces[i].bounce;
-    if (bounces > poolFree) return bounces > (pool.va ? kPoolPages : 0) ? Admit::Serial : Admit::Wait;
+    for (uint32_t i = 0; i < n; ++i)
+        bounces += pieces[i].bounce;
+    if (bounces > poolFree)
+        return bounces > (pool.va ? kPoolPages : 0) ? Admit::Serial : Admit::Wait;
     for (uint32_t i = 0; i < n; ++i) {
         Piece &piece = pieces[i];
-        if (!piece.bounce) continue;
+        if (!piece.bounce)
+            continue;
         const uint32_t page = (uint32_t)poolTake();
         uint8_t *va = pool.va + page * kBouncePageBytes;
         piece.pa = pool.pa + page * kBouncePageBytes;
-        if (!out) r.md->readBytes(piece.offset, va, piece.length);
+        if (!out)
+            r.md->readBytes(piece.offset, va, piece.length);
         cacheFlush(va, piece.length ? piece.length : 1);
     }
-    if (r.length) r.md->performOperation(out ? kIOMemoryIncoherentIOFlush : kIOMemoryIncoherentIOStore, 0, r.length);
+    if (r.length)
+        r.md->performOperation(out ? kIOMemoryIncoherentIOFlush : kIOMemoryIncoherentIOStore, 0, r.length);
     const uint32_t base = trbType(TRB_NORMAL) | (out ? TRB_ISP : 0);
     uint32_t first = 0;
     for (uint32_t i = 0; i < n; ++i) {
         const bool last = i + 1 == n;
         const uint32_t flags = base | (last ? TRB_IOC : TRB_CHAIN) | (probe && i == 0 && !last ? TRB_IOC : 0);
         const uint32_t index = hw.pushData(dci, pieces[i].pa, pieces[i].length, n - 1 - i, flags);
-        if (!i) first = index;
+        if (!i)
+            first = index;
     }
     ep.tds->push({(uint16_t)first, (uint16_t)n, r.length, probe && n > 1});
     const uint32_t d = out ? 0 : 1;
-    if (n > mostTrbs[d]) mostTrbs[d] = n;
+    if (n > mostTrbs[d])
+        mostTrbs[d] = n;
     st.bounced[d] += why.bounceBytes;
     st.why.discontinuity += why.discontinuity;
     st.why.boundary += why.boundary;
@@ -815,7 +941,8 @@ SwitchXUDC::Admit SwitchXUDC::admit(uint32_t dci, Request &r)
 // data), then bounce pages copied out (OUT, up to `actual`) and freed. The TRB slots themselves are the TdRing's.
 void SwitchXUDC::releaseTrbs(uint32_t dci, const Tds::Td &td, Request &r, bool copyBack, uint32_t actual)
 {
-    if (copyBack && actual) r.md->performOperation(kIOMemoryIncoherentIOFlush, 0, actual);
+    if (copyBack && actual)
+        r.md->performOperation(kIOMemoryIncoherentIOFlush, 0, actual);
     uint32_t index = td.first, offset = 0;
     for (uint32_t i = 0; i < td.trbs; ++i, index = hw.nextIndex(dci, index)) {
         const uint64_t pa = hw.trbBuffer(dci, index);
@@ -838,19 +965,22 @@ void SwitchXUDC::releaseTrbs(uint32_t dci, const Tds::Td &td, Request &r, bool c
 void SwitchXUDC::complete(uint32_t dci, IOReturn status, uint32_t actual, const Decision *event)
 {
     Endpoint &ep = endpoints[dci];
-    if (!ep.count) return;
+    if (!ep.count)
+        return;
     Request r = ep.queue[ep.head];
     if (event) {
         releaseTrbs(dci, ep.tds->td(0), r, !ep.in && status == kIOReturnSuccess, actual);
         ep.tds->apply(*event);
     }
-    if (r.prepared) r.md->complete();
+    if (r.prepared)
+        r.md->complete();
     ep.head = (ep.head + 1) % kQueueDepth;
     ep.count--;
     const uint32_t d = ep.in ? 1 : 0;
     st.bytes[d] += actual;
     ++st.requests[d];
-    if (status != kIOReturnSuccess) ++st.failed[d];
+    if (status != kIOReturnSuccess)
+        ++st.failed[d];
     finish(r.tag, status, actual);
     kick(dci);
 }
@@ -860,9 +990,11 @@ void SwitchXUDC::startSerial(uint32_t dci)
 {
     Endpoint &ep = endpoints[dci];
     Request &r = ep.queue[ep.head];
-    if (!ep.serial.va && !ep.serial.allocate(kSerialBytes)) return complete(dci, kIOReturnNoMemory, 0, nullptr);
+    if (!ep.serial.va && !ep.serial.allocate(kSerialBytes))
+        return complete(dci, kIOReturnNoMemory, 0, nullptr);
     if (r.md && !r.prepared) {
-        if (r.md->prepare() != kIOReturnSuccess) return complete(dci, kIOReturnDMAError, 0, nullptr);
+        if (r.md->prepare() != kIOReturnSuccess)
+            return complete(dci, kIOReturnDMAError, 0, nullptr);
         r.prepared = true;
     }
     r.done = 0;
@@ -905,10 +1037,12 @@ void SwitchXUDC::serialEvent(uint32_t dci, const Decision &d)
     IOReturn status = statusOf(d.outcome);
     if (status == kIOReturnSuccess && !ep.in && actual) {
         cacheFlush(ep.serial.va, actual);
-        if (r.md->writeBytes(r.done, ep.serial.va, actual) != actual) status = kIOReturnDMAError;
+        if (r.md->writeBytes(r.done, ep.serial.va, actual) != actual)
+            status = kIOReturnDMAError;
     }
     r.done += actual;
-    if (status == kIOReturnSuccess && r.done < r.length && actual == ep.serialLength) return serialPiece(dci);
+    if (status == kIOReturnSuccess && r.done < r.length && actual == ep.serialLength)
+        return serialPiece(dci);
     ep.serialBusy = false;
     const uint32_t moved = r.done;
     st.bounced[ep.in ? 1 : 0] += moved;
@@ -919,19 +1053,24 @@ void SwitchXUDC::serialEvent(uint32_t dci, const Decision &d)
 void SwitchXUDC::transferEvent(const Event &e)
 {
     uint32_t dci = e.dci();
-    if (dci == 0) return ep0Complete(e);
-    if (dci >= kMaxDci) return;
+    if (dci == 0)
+        return ep0Complete(e);
+    if (dci >= kMaxDci)
+        return;
     Endpoint &ep = endpoints[dci];
     uint32_t index;
-    if (!hw.trbIndex(dci, e.trb(), &index)) index = Tds::kNoTrb;
+    if (!hw.trbIndex(dci, e.trb(), &index))
+        index = Tds::kNoTrb;
     if (!ep.tds) {  // never configured
         ++st.unexplained;
         return oddEvent(dci, e, index, "for an endpoint never configured");
     }
-    const Decision d = ep.tds->decide(index, e.code(), e.residue(), ep.in, residue,
-                                      [this, dci](uint32_t t) { return hw.trbLength(dci, t); });
+    const Decision d = ep.tds->decide(index, e.code(), e.residue(), ep.in, residue, [this, dci](uint32_t t) {
+        return hw.trbLength(dci, t);
+    });
     switch (d.verdict) {
-    case Verdict::Head: break;
+    case Verdict::Head:
+        break;
     case Verdict::SecondEvent:
         ++st.second;
         if (!secondLogged) {
@@ -942,9 +1081,14 @@ void SwitchXUDC::transferEvent(const Event &e)
         }
         ep.tds->apply(d);  // the tail's TRBs are free: room for what waits
         return kick(dci);
-    case Verdict::Stale: ++st.stale; return;
-    case Verdict::Lost: return lostEvent(dci, e, index, d);
-    case Verdict::Unexplained: ++st.unexplained; return oddEvent(dci, e, index, "for no request on the ring");
+    case Verdict::Stale:
+        ++st.stale;
+        return;
+    case Verdict::Lost:
+        return lostEvent(dci, e, index, d);
+    case Verdict::Unexplained:
+        ++st.unexplained;
+        return oddEvent(dci, e, index, "for no request on the ring");
     }
     if (d.learned != kResidueUnknown && d.learned != residue && residue != kResidueBroken) {
         residue = d.learned;
@@ -954,13 +1098,16 @@ void SwitchXUDC::transferEvent(const Event &e)
                                           : "as neither the TD's nor the TRB's",
               residue == kResidueBroken ? ": multi-TRB OUT requests go one TRB at a time from now" : "");
     }
-    if (d.outcome == Outcome::Error || d.outcome == Outcome::Stall) oddEvent(dci, e, index, "with an error");
-    if (ep.serialBusy) return serialEvent(dci, d);
+    if (d.outcome == Outcome::Error || d.outcome == Outcome::Stall)
+        oddEvent(dci, e, index, "with an error");
+    if (ep.serialBusy)
+        return serialEvent(dci, d);
     if (d.outcome == Outcome::Pending) {  // the probe's packet: the rest of the TD is coming
         ep.tds->apply(d);
         return kick(dci);  // a tail it released makes room
     }
-    if (d.armTail) ++st.shortEarly;
+    if (d.armTail)
+        ++st.shortEarly;
     complete(dci, statusOf(d.outcome), d.outcome == Outcome::Done ? d.actual : 0, &d);
 }
 
@@ -978,7 +1125,8 @@ void SwitchXUDC::lostEvent(uint32_t dci, const Event &e, uint32_t index, const D
 // Events that lose nothing but should not happen.
 void SwitchXUDC::oddEvent(uint32_t dci, const Event &e, uint32_t index, const char *what)
 {
-    if (eventsLogged >= 8) return;
+    if (eventsLogged >= 8)
+        return;
     ++eventsLogged;
     const Tds *tds = endpoints[dci].tds;
     const uint32_t onRing = tds ? tds->onRing() : 0;
@@ -995,23 +1143,30 @@ void SwitchXUDC::oddEvent(uint32_t dci, const Event &e, uint32_t index, const ch
 void SwitchXUDC::cancel(uint32_t dci, IOReturn status)
 {
     Endpoint &ep = endpoints[dci];
-    if (!ep.queue || !ep.tds) return;
-    if (ep.tds->busy()) hw.dropQueued(dci);
+    if (!ep.queue || !ep.tds)
+        return;
+    if (ep.tds->busy())
+        hw.dropQueued(dci);
+
     struct {
         _IOUSBDeviceIORequestTag *tag;
         IOMemoryDescriptor *prepared;
     } pending[kQueueDepth];
+
     const uint32_t count = ep.count;
     for (uint32_t i = 0; i < count; ++i) {
         Request &r = ep.queue[(ep.head + i) % kQueueDepth];
-        if (!ep.serialBusy && i < ep.tds->onRing()) releaseTrbs(dci, ep.tds->td(i), r, false, 0);
+        if (!ep.serialBusy && i < ep.tds->onRing())
+            releaseTrbs(dci, ep.tds->td(i), r, false, 0);
         pending[i] = {r.tag, r.prepared ? r.md : nullptr};
     }
     ep.head = ep.count = 0;
     ep.serialBusy = false;
-    if (ep.tds->cancel() && !draining && !hw.eventPending()) ep.tds->liftFence();
+    if (ep.tds->cancel() && !draining && !hw.eventPending())
+        ep.tds->liftFence();
     for (uint32_t i = 0; i < count; ++i) {
-        if (pending[i].prepared) pending[i].prepared->complete();
+        if (pending[i].prepared)
+            pending[i].prepared->complete();
         finish(pending[i].tag, status, 0);
     }
     kickWaiting();
@@ -1027,9 +1182,11 @@ void SwitchXUDC::finish(_IOUSBDeviceIORequestTag *request, IOReturn status, uint
 bool SwitchXUDC::copy(_IOUSBDeviceIORequestTag *request, uint32_t offset, uint8_t *bytes, uint32_t length,
                       bool toDevice)
 {
-    if (!length) return true;
+    if (!length)
+        return true;
     IOMemoryDescriptor *md = get<IOMemoryDescriptor *>(request, kReqBuffer);
-    if (!md || md->prepare() != kIOReturnSuccess) return false;
+    if (!md || md->prepare() != kIOReturnSuccess)
+        return false;
     IOByteCount done = toDevice ? md->readBytes(offset, bytes, length) : md->writeBytes(offset, bytes, length);
     md->complete();
     return done == length;
@@ -1049,7 +1206,8 @@ void SwitchXUDC::goOnBus(bool on)
 // The PD controller saw a cable from a host (SwitchUSB.cpp): its bus reset is due, so the interrupt can be checked.
 IOReturn SwitchXUDC::hostExpected()
 {
-    if (onBus && !hostPresent && !deliveryStage) armDeliveryCheck(kDeliveryCheckMS, 1);
+    if (onBus && !hostPresent && !deliveryStage)
+        armDeliveryCheck(kDeliveryCheckMS, 1);
     return kIOReturnSuccess;
 }
 
@@ -1057,14 +1215,16 @@ IOReturn SwitchXUDC::hostExpected()
 // again if the family wants it.
 IOReturn SwitchXUDC::portOwner(bool host)
 {
-    if (host == hostOwnsPort) return kIOReturnSuccess;
+    if (host == hostOwnsPort)
+        return kIOReturnSuccess;
     if (host) {
         wantBus = onBus;
         setBus(false);
         hostOwnsPort = true;
     } else {
         hostOwnsPort = false;
-        if (wantBus) setBus(true);
+        if (wantBus)
+            setBus(true);
     }
     return kIOReturnSuccess;
 }
@@ -1073,9 +1233,11 @@ extern "C" void switchxudc_host_expected(void)
 {
     SwitchXUDC *controller = __atomic_load_n(&SwitchXUDC::running, __ATOMIC_ACQUIRE);
     if (controller)
-        controller->getWorkLoop()->runAction([](OSObject *owner, void *, void *, void *,
-                                                void *) { return static_cast<SwitchXUDC *>(owner)->hostExpected(); },
-                                             controller);
+        controller->getWorkLoop()->runAction(
+            [](OSObject *owner, void *, void *, void *, void *) {
+                return static_cast<SwitchXUDC *>(owner)->hostExpected();
+            },
+            controller);
 }
 
 extern "C" void switchxudc_set_host_owns_port(bool host)
@@ -1096,16 +1258,19 @@ extern "C" void switchxudc_set_host_owns_port(bool host)
 IOReturn SwitchXUDC::systemSleep(bool entering)
 {
     if (entering) {
-        if (asleep) return kIOReturnSuccess;
+        if (asleep)
+            return kIOReturnSuccess;
         asleep = true;
         delivery->cancelTimeout();
         deliveryStage = 0;
         busAfterSleep = hostOwnsPort ? wantBus : onBus;
-        if (!hostOwnsPort) setBus(false);
+        if (!hostOwnsPort)
+            setBus(false);
         interrupt->disable();
         return kIOReturnSuccess;
     }
-    if (!asleep) return kIOReturnSuccess;
+    if (!asleep)
+        return kIOReturnSuccess;
     asleep = false;
     char why[160] = "";
     if (!hw.powerOn(why, sizeof(why))) {
@@ -1114,7 +1279,8 @@ IOReturn SwitchXUDC::systemSleep(bool entering)
         return kIOReturnSuccess;
     }
     for (uint32_t dci = 2; dci < kMaxDci; ++dci)
-        if (endpoints[dci].tds) endpoints[dci].tds->liftFence();
+        if (endpoints[dci].tds)
+            endpoints[dci].tds->liftFence();
     interrupt->enable();
     if (hostOwnsPort)
         wantBus = busAfterSleep;
@@ -1136,8 +1302,10 @@ void switchxudc_sleep(bool entering)
 
 void SwitchXUDC::setBus(bool on)
 {
-    if (on == onBus) return;
-    if (on && lostToSleep) return;
+    if (on == onBus)
+        return;
+    if (on && lostToSleep)
+        return;
     if (on) {
         ep0Cancel(kIOReturnAborted);
         hw.initEndpoint(0, EP_CONTROL, 64, 0);
@@ -1153,7 +1321,8 @@ void SwitchXUDC::setBus(bool on)
     onBus = false;
     hw.disconnect();
     ep0Cancel(kIOReturnAborted);
-    for (uint32_t dci = 2; dci < kMaxDci; ++dci) cancel(dci, kIOReturnAborted);
+    for (uint32_t dci = 2; dci < kMaxDci; ++dci)
+        cancel(dci, kIOReturnAborted);
     speed = kSpeedNone;
     suspended = false;
     setHostPresent(false);
@@ -1168,9 +1337,11 @@ void SwitchXUDC::setBus(bool on)
 void SwitchXUDC::setHostPresent(bool present)
 {
     hostPresent = present;
-    if (idleWanted == present) return;
+    if (idleWanted == present)
+        return;
     idleWanted = present;
-    if (idleHoldCall) thread_call_enter(idleHoldCall);
+    if (idleHoldCall)
+        thread_call_enter(idleHoldCall);
 }
 
 void SwitchXUDC::applyIdleHold(thread_call_param_t owner, thread_call_param_t)
@@ -1178,7 +1349,8 @@ void SwitchXUDC::applyIdleHold(thread_call_param_t owner, thread_call_param_t)
     auto *self = static_cast<SwitchXUDC *>(owner);
     IOPMrootDomain *root = getPMRootDomain();
     const bool want = self->idleWanted;
-    if (!root || want == (self->idleHold != 0)) return;
+    if (!root || want == (self->idleHold != 0))
+        return;
     if (want) {
         self->idleHold = root->createPMAssertion(kIOPMDriverAssertionPreventSystemIdleSleepBit,
                                                  kIOPMDriverAssertionLevelOn, self, "SwitchUSB host attached");
@@ -1197,7 +1369,8 @@ void SwitchXUDC::softDisconnect(uint32_t)
 // The family's own off-and-on (userland GoOffAndOnBus). 100 ms off so the host sees the detach.
 void SwitchXUDC::forceReEnumeration()
 {
-    if (hostOwnsPort) return;
+    if (hostOwnsPort)
+        return;
     setBus(false);
     IOSleep(100);
     setBus(true);
@@ -1206,9 +1379,11 @@ void SwitchXUDC::forceReEnumeration()
 IOReturn SwitchXUDC::handleStallEndpoint(int address, bool stall)
 {
     uint32_t dci = dciFor(address);
-    if (dci >= kMaxDci) return kIOReturnBadArgument;
+    if (dci >= kMaxDci)
+        return kIOReturnBadArgument;
     if (!dci) {
-        if (stall) ep0Cancel(kIOReturnAborted);
+        if (stall)
+            ep0Cancel(kIOReturnAborted);
         hw.setHalt(0, stall);
     } else if (stall) {
         hw.setHalt(dci, true);
@@ -1222,7 +1397,8 @@ IOReturn SwitchXUDC::handleStallEndpoint(int address, bool stall)
 IOReturn SwitchXUDC::handleAbortEndpoint(int address)
 {
     uint32_t dci = dciFor(address);
-    if (dci >= kMaxDci) return kIOReturnBadArgument;
+    if (dci >= kMaxDci)
+        return kIOReturnBadArgument;
     if (!dci)
         ep0Cancel(kIOReturnAborted);
     else
@@ -1240,7 +1416,8 @@ IOReturn SwitchXUDC::handleSetAddressPreStatusPhase(int address)
 IOReturn SwitchXUDC::resetEndpointDataToggle(int address)
 {
     uint32_t dci = dciFor(address);
-    if (!dci || dci >= kMaxDci) return kIOReturnSuccess;
+    if (!dci || dci >= kMaxDci)
+        return kIOReturnSuccess;
     hw.resetSequence(dci);
     kick(dci);
     return kIOReturnSuccess;
@@ -1250,11 +1427,13 @@ IOReturn SwitchXUDC::resetEndpointDataToggle(int address)
 // from the next free IN/OUT endpoint; the widest alternate setting decides how many numbers the interface uses.
 IOReturn SwitchXUDC::provideEndpointIDsForConfiguration(OSArray *interfaces, uint8_t *ids)
 {
-    if (!interfaces || !ids) return kIOReturnBadArgument;
+    if (!interfaces || !ids)
+        return kIOReturnBadArgument;
     uint32_t nextIn = 1, nextOut = 1, written = 0;
     for (unsigned i = 0; i < interfaces->getCount(); ++i) {
         auto *interface = reinterpret_cast<IOUSBDeviceInterface *>(interfaces->getObject(i));
-        if (!interface) continue;
+        if (!interface)
+            continue;
         uint32_t widestIn = 0, widestOut = 0;
         int alternates = interface->getAlternateSettingCount();
         for (int alternate = 0; alternate < alternates; ++alternate) {
@@ -1264,15 +1443,19 @@ IOReturn SwitchXUDC::provideEndpointIDsForConfiguration(OSArray *interfaces, uin
                 IOUSBDevicePipe *pipe = interface->getPipeForAlternateSetting(p, (uint8_t)alternate);
                 int direction = pipe ? pipe->getDirection() : -1;
                 if (direction == 1) {
-                    if (nextIn + in > 15) return kIOReturnNoResources;
+                    if (nextIn + in > 15)
+                        return kIOReturnNoResources;
                     ids[written++] = (uint8_t)(0x80 | (nextIn + in++));
                 } else if (direction == 0) {
-                    if (nextOut + out > 15) return kIOReturnNoResources;
+                    if (nextOut + out > 15)
+                        return kIOReturnNoResources;
                     ids[written++] = (uint8_t)(nextOut + out++);
                 }
             }
-            if (in > widestIn) widestIn = in;
-            if (out > widestOut) widestOut = out;
+            if (in > widestIn)
+                widestIn = in;
+            if (out > widestOut)
+                widestOut = out;
         }
         nextIn += widestIn;
         nextOut += widestOut;
@@ -1283,8 +1466,10 @@ IOReturn SwitchXUDC::provideEndpointIDsForConfiguration(OSArray *interfaces, uin
 IOReturn SwitchXUDC::activateEndpoint(int address, int type, int maxPacketSize, int interval, int)
 {
     uint32_t dci = dciFor(address);
-    if (!dci) return kIOReturnSuccess;  // EP0 is always ours
-    if (dci >= kMaxDci || maxPacketSize <= 0) return kIOReturnBadArgument;
+    if (!dci)
+        return kIOReturnSuccess;  // EP0 is always ours
+    if (dci >= kMaxDci || maxPacketSize <= 0)
+        return kIOReturnBadArgument;
     bool in = address & 0x80;
     uint32_t kind, period = 0;
     if (type == kTypeBulk) {
@@ -1299,15 +1484,20 @@ IOReturn SwitchXUDC::activateEndpoint(int address, int type, int maxPacketSize, 
     Endpoint &ep = endpoints[dci];
     if (ep.queue && ep.tds && (ep.count || ep.tds->busy()))
         cancel(dci, kIOReturnAborted);  // activated without a deactivation
-    if (!ep.queue) ep.queue = IONewZero(Request, kQueueDepth);
-    if (!ep.tds) ep.tds = IONewZero(Tds, 1);  // zeroed: empty, unfenced
-    if (!ep.queue || !ep.tds) return kIOReturnNoMemory;
+    if (!ep.queue)
+        ep.queue = IONewZero(Request, kQueueDepth);
+    if (!ep.tds)
+        ep.tds = IONewZero(Tds, 1);  // zeroed: empty, unfenced
+    if (!ep.queue || !ep.tds)
+        return kIOReturnNoMemory;
     ep.head = ep.count = 0;
     ep.serialBusy = false;
     ep.in = in;
     ep.mps = (uint32_t)maxPacketSize;
-    if (!hw.initEndpoint(dci, kind, (uint32_t)maxPacketSize, period)) return kIOReturnNoMemory;
-    if (!hw.reloadEndpoint(dci)) return kIOReturnTimeout;
+    if (!hw.initEndpoint(dci, kind, (uint32_t)maxPacketSize, period))
+        return kIOReturnNoMemory;
+    if (!hw.reloadEndpoint(dci))
+        return kIOReturnTimeout;
     ep.active = true;
     hw.run();  // hekate starts the controller at SET_CONFIGURATION
     return kIOReturnSuccess;
@@ -1316,7 +1506,8 @@ IOReturn SwitchXUDC::activateEndpoint(int address, int type, int maxPacketSize, 
 IOReturn SwitchXUDC::deactivateEndpoint(int address)
 {
     uint32_t dci = dciFor(address);
-    if (!dci || dci >= kMaxDci) return kIOReturnSuccess;
+    if (!dci || dci >= kMaxDci)
+        return kIOReturnSuccess;
     endpoints[dci].active = false;
     cancel(dci, kIOReturnAborted);
     hw.disableEndpoint(dci);

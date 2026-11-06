@@ -8,18 +8,33 @@
 struct Sample {
     uint32_t db, ocs, is;
 };
+
 struct FakePort {
     std::vector<Sample> samples;
     unsigned index = 0, reads = 0;
-    uint32_t doorbell() { return samples[index].db; }
-    uint32_t interrupt() { return samples[index].is; }
+
+    uint32_t doorbell()
+    {
+        return samples[index].db;
+    }
+
+    uint32_t interrupt()
+    {
+        return samples[index].is;
+    }
+
     uint32_t completedOcs()
     {
         assert(!(samples[index].db & 1));  // Never inspect a descriptor still owned by HC.
         ++reads;
         return samples[index].ocs;
     }
-    bool expired() { return index + 1 == samples.size(); }
+
+    bool expired()
+    {
+        return index + 1 == samples.size();
+    }
+
     void delay()
     {
         assert(!expired());
@@ -55,7 +70,8 @@ int main()
 
     for (unsigned bit = 0; bit < 32; ++bit) {
         uint32_t mask = uint32_t(1) << bit;
-        if (!(mask & kUfsFatalStatus)) continue;
+        if (!(mask & kUfsFatalStatus))
+            continue;
         FakePort fatal{{{0, 0, mask}}};
         UfsTransferPoll f;
         assert(pollUfsTransfer(fatal, f) == UfsTransferEnd::Fatal);

@@ -52,7 +52,8 @@ enum {
 VP9Decoder *vp9_decoder_create(const H264Backend *backend)
 {
     VP9Decoder *d = calloc(1, sizeof(*d));
-    if (!d) return NULL;
+    if (!d)
+        return NULL;
     d->b = *backend;
     memset(d->slot, -1, sizeof(d->slot));
     return d;
@@ -60,22 +61,27 @@ VP9Decoder *vp9_decoder_create(const H264Backend *backend)
 
 static void freeSurface(VP9Decoder *d, Surface *s)
 {
-    if (s->handle) d->b.free(d->b.ctx, s->handle);
+    if (s->handle)
+        d->b.free(d->b.ctx, s->handle);
     memset(s, 0, sizeof(*s));
 }
 
 static void releaseBuffers(VP9Decoder *d)
 {
-    if (d->aux) d->b.free(d->b.ctx, d->aux);
-    if (d->input) d->b.free(d->b.ctx, d->input);
+    if (d->aux)
+        d->b.free(d->b.ctx, d->aux);
+    if (d->input)
+        d->b.free(d->b.ctx, d->input);
     d->aux = d->input = 0;
     d->aux_va = d->input_va = NULL;
 }
 
 void vp9_decoder_destroy(VP9Decoder *d)
 {
-    if (!d) return;
-    for (int i = 0; i < MAX_SURFACES; i++) freeSurface(d, &d->surf[i]);
+    if (!d)
+        return;
+    for (int i = 0; i < MAX_SURFACES; i++)
+        freeSurface(d, &d->surf[i]);
     releaseBuffers(d);
     free(d);
 }
@@ -84,10 +90,12 @@ const VP9FrameContext *vp9_decoder_frame_context(const VP9Decoder *d)
 {
     return &d->fc;
 }
+
 const VP9State *vp9_decoder_state(const VP9Decoder *d)
 {
     return &d->state;
 }
+
 const VP9FrameHeader *vp9_decoder_last_header(const VP9Decoder *d)
 {
     return &d->header;
@@ -101,9 +109,12 @@ static uint32_t superblocks(uint32_t w, uint32_t h)
 
 int vp9_decoder_configure(VP9Decoder *d, uint32_t width, uint32_t height)
 {
-    if (width <= d->max_width && height <= d->max_height && d->aux) return 0;
-    if (width < d->max_width) width = d->max_width;
-    if (height < d->max_height) height = d->max_height;
+    if (width <= d->max_width && height <= d->max_height && d->aux)
+        return 0;
+    if (width < d->max_width)
+        width = d->max_width;
+    if (height < d->max_height)
+        height = d->max_height;
     releaseBuffers(d);
     const uint32_t sb = superblocks(width, height);
     d->seg_bytes = ALIGN(sb * 32, 256);
@@ -117,7 +128,8 @@ int vp9_decoder_configure(VP9Decoder *d, uint32_t width, uint32_t height)
     d->filter_off = d->colmv_off[1] + colmv;
     d->aux_bytes = d->filter_off + d->filter_rows * 988;
     void *va;
-    if (d->b.alloc(d->b.ctx, d->aux_bytes, &d->aux, &va)) return -3;
+    if (d->b.alloc(d->b.ctx, d->aux_bytes, &d->aux, &va))
+        return -3;
     d->aux_va = va;  // zeroed: segmentation maps, motion vectors and counters start clear
     // The tile size table's tail entries as averne's driver sets them (meaning undocumented).
     ((uint16_t *)(d->aux_va + kTilesOff))[0x37a] = 9;
@@ -137,11 +149,14 @@ int vp9_decoder_configure(VP9Decoder *d, uint32_t width, uint32_t height)
 static int growInput(VP9Decoder *d, uint64_t needed)
 {
     uint64_t bytes = d->input_bytes;
-    while (bytes < needed) bytes *= 2;
-    if (bytes > (32u << 20)) return -1;
+    while (bytes < needed)
+        bytes *= 2;
+    if (bytes > (32u << 20))
+        return -1;
     uint32_t handle;
     void *va;
-    if (d->b.alloc(d->b.ctx, bytes, &handle, &va)) return -1;
+    if (d->b.alloc(d->b.ctx, bytes, &handle, &va))
+        return -1;
     d->b.free(d->b.ctx, d->input);
     d->input = handle;
     d->input_va = va;
@@ -157,11 +172,15 @@ static int takeSurface(VP9Decoder *d, uint32_t width, uint32_t height)
     int empty = -1;
     for (int i = 0; i < MAX_SURFACES; i++) {
         Surface *s = &d->surf[i];
-        if (s->refs) continue;
-        if (s->handle && s->pitch >= pitch && s->rows >= rows) return i;
-        if (empty < 0 || !d->surf[empty].handle) empty = i;
+        if (s->refs)
+            continue;
+        if (s->handle && s->pitch >= pitch && s->rows >= rows)
+            return i;
+        if (empty < 0 || !d->surf[empty].handle)
+            empty = i;
     }
-    if (empty < 0) return -1;
+    if (empty < 0)
+        return -1;
     Surface *s = &d->surf[empty];
     freeSurface(d, s);
     s->pitch = pitch;
@@ -194,7 +213,8 @@ static void fillProbs(nvdec_vp9EntropyProbs_t *p, const VP9FrameContext *fc, con
     else
         memset(p->segment_pred_probs, 255, 3);
     nvdec_vp9AdaptiveEntropyProbs_t *a = &p->a;
-    for (int i = 0; i < 7; i++) memcpy(a->inter_mode_prob[i], fc->inter_mode_probs[i], 3);
+    for (int i = 0; i < 7; i++)
+        memcpy(a->inter_mode_prob[i], fc->inter_mode_probs[i], 3);
     memcpy(a->intra_inter_prob, fc->intra_inter_prob, 4);
     for (int i = 0; i < 10; i++) {
         memcpy(a->uv_mode_prob[i], fc->uv_mode_prob[i], 8);
@@ -316,7 +336,8 @@ static void fillSetup(const VP9Decoder *d, nvdec_vp9_pic_s *p, const VP9FrameHea
     p->errorResilient = h->error_resilient;
     p->prevShowFrame = d->have_last && d->last_show;
     p->intraOnly = h->intra_only;
-    for (int i = 1; i < 4; i++) p->refFrameSignBias[i] = h->sign_bias[i];
+    for (int i = 1; i < 4; i++)
+        p->refFrameSignBias[i] = h->sign_bias[i];
     p->loopFilterLevel = (char)h->lf_level;
     p->loopFilterSharpness = (char)h->lf_sharpness;
     p->qpYAc = h->base_qindex;
@@ -338,8 +359,10 @@ static void fillSetup(const VP9Decoder *d, nvdec_vp9_pic_s *p, const VP9FrameHea
     p->segmentMapTemporalUpdate = s->seg.temporal_update;
     p->segmentFeatureMode = s->seg.abs_delta;
     for (int i = 0; i < 8; i++) {
-        for (int j = 0; j < 4; j++) p->segmentFeatureEnable[i][j] = s->seg.feature_enabled[i][j];
-        for (int j = 0; j < 3; j++) p->segmentFeatureData[i][j] = s->seg.feature_data[i][j];
+        for (int j = 0; j < 4; j++)
+            p->segmentFeatureEnable[i][j] = s->seg.feature_enabled[i][j];
+        for (int j = 0; j < 3; j++)
+            p->segmentFeatureData[i][j] = s->seg.feature_data[i][j];
     }
     p->modeRefLfEnabled = h->lf_delta_enabled;
     memcpy(p->mbRefLfDelta, s->ref_deltas, 4);
@@ -383,40 +406,50 @@ static void output(VP9Decoder *d, const Surface *s, int status, void *token)
         .token = token,
     };
     void *item = d->b.decoded(d->b.ctx, &picture);
-    if (item) d->b.emit(d->b.ctx, item);
+    if (item)
+        d->b.emit(d->b.ctx, item);
 }
 
 static int decodeFrame(VP9Decoder *d, const uint8_t *data, size_t size, void *token, bool *shown)
 {
     VP9State *st = &d->state;
     VP9FrameHeader h;
-    if (vp9_parse_uncompressed(st, data, size, &h)) return -1;
+    if (vp9_parse_uncompressed(st, data, size, &h))
+        return -1;
     // One sample carries one frame token: a second shown frame in a superframe (not produced by encoders) is dropped.
     if (h.show_existing_frame) {  // libvpx: no decode and no state change, the slot's frame is shown again
-        if (!*shown) output(d, &d->surf[d->slot[h.frame_to_show]], 0, token);
+        if (!*shown)
+            output(d, &d->surf[d->slot[h.frame_to_show]], 0, token);
         *shown = true;
         return 0;
     }
-    if (h.width < 144 || h.height < 144) return -1;  // NVDEC's VP9 floor (averne); the session start refuses it too
-    if ((h.width > d->max_width || h.height > d->max_height) && vp9_decoder_configure(d, h.width, h.height)) return -3;
+    if (h.width < 144 || h.height < 144)
+        return -1;  // NVDEC's VP9 floor (averne); the session start refuses it too
+    if ((h.width > d->max_width || h.height > d->max_height) && vp9_decoder_configure(d, h.width, h.height))
+        return -3;
     VP9FrameContext pre = st->contexts[h.frame_context_idx], fc = pre;
     const uint8_t *compressed = data + h.uncompressed_bytes, *tiles = compressed + h.compressed_bytes;
     const size_t tileBytes = size - h.uncompressed_bytes - h.compressed_bytes;
-    if (vp9_parse_compressed(&h, compressed, h.compressed_bytes, &fc) || !tileBytes) return -1;
+    if (vp9_parse_compressed(&h, compressed, h.compressed_bytes, &fc) || !tileBytes)
+        return -1;
 
     const int curIdx = takeSurface(d, h.width, h.height);
-    if (curIdx < 0) return -3;
+    if (curIdx < 0)
+        return -3;
     Surface *cur = &d->surf[curIdx];
     cur->width = h.width;
     cur->height = h.height;
     const bool intra = h.key_frame || h.intra_only;
     const Surface *refs[3];
-    for (int i = 0; i < 3; i++) refs[i] = intra ? cur : &d->surf[d->slot[h.ref_idx[i]]];
+    for (int i = 0; i < 3; i++)
+        refs[i] = intra ? cur : &d->surf[d->slot[h.ref_idx[i]]];
 
     // vp9_setup_past_independence clears the segmentation map; NVDEC reads it from the read buffer.
     const bool clearMaps = h.key_frame || h.intra_only || h.error_resilient;
-    if (clearMaps) memset(d->aux_va + d->seg_off[0], 0, 2 * d->seg_bytes);
-    if (kBitsOff + tileBytes + 64 > d->input_bytes && growInput(d, kBitsOff + tileBytes + 64)) return -3;
+    if (clearMaps)
+        memset(d->aux_va + d->seg_off[0], 0, 2 * d->seg_bytes);
+    if (kBitsOff + tileBytes + 64 > d->input_bytes && growInput(d, kBitsOff + tileBytes + 64))
+        return -3;
     memcpy(d->input_va + kBitsOff, tiles, tileBytes);
     memset(d->input_va + kBitsOff + tileBytes, 0, 64);
     fillProbs((nvdec_vp9EntropyProbs_t *)(d->input_va + kProbOff), &fc, st);
@@ -461,7 +494,8 @@ static int decodeFrame(VP9Decoder *d, const uint8_t *data, size_t size, void *to
     wait.invalidate[1] = (TegraNVDECRange){d->aux, d->counters_off, sizeof(nvdec_vp9EntropyCounts_t), 0};
     if (!d->b.cpu_reads || d->b.cpu_reads(d->b.ctx))  // hidden frames too: show_existing_frame reads them later
         wait.invalidate[wait.invalidate_count++] = (TegraNVDECRange){cur->handle, 0, cur->bytes, 0};
-    if (d->b.submit(d->b.ctx, &submit, &wait.fence) || d->b.wait(d->b.ctx, &wait)) return -2;
+    if (d->b.submit(d->b.ctx, &submit, &wait.fence) || d->b.wait(d->b.ctx, &wait))
+        return -2;
     const nvdec_status_s *status = (const nvdec_status_s *)(d->input_va + kStatusOff);
     const int error = status->error_status && !status->mbs_correctly_decoded ? (int)status->error_status : 0;
 
@@ -475,20 +509,24 @@ static int decodeFrame(VP9Decoder *d, const uint8_t *data, size_t size, void *to
             vp9_adapt_mv_probs(&fc, &pre, &counts, h.allow_high_precision_mv);
         }
     }
-    if (h.refresh_frame_context) st->contexts[h.frame_context_idx] = fc;
+    if (h.refresh_frame_context)
+        st->contexts[h.frame_context_idx] = fc;
     d->fc = fc;
     d->header = h;
 
     // The reference slots (swap_frame_buffers), then the buffers that alternate.
     for (int i = 0; i < 8; i++) {
-        if (!(h.refresh_frame_flags & (1u << i))) continue;
-        if (d->slot[i] >= 0) d->surf[d->slot[i]].refs--;
+        if (!(h.refresh_frame_flags & (1u << i)))
+            continue;
+        if (d->slot[i] >= 0)
+            d->surf[d->slot[i]].refs--;
         d->slot[i] = (int8_t)curIdx;
         cur->refs++;
         st->ref_width[i] = h.width;
         st->ref_height[i] = h.height;
     }
-    if (st->seg.enabled && st->seg.update_map) d->seg_read = segWrite;
+    if (st->seg.enabled && st->seg.update_map)
+        d->seg_read = segWrite;
     d->colmv_write ^= 1;
     d->have_last = true;
     d->last_show = h.show_frame;
@@ -496,7 +534,8 @@ static int decodeFrame(VP9Decoder *d, const uint8_t *data, size_t size, void *to
     d->last_width = h.width;
     d->last_height = h.height;
     if (h.show_frame) {
-        if (!*shown) output(d, cur, error, token);
+        if (!*shown)
+            output(d, cur, error, token);
         *shown = true;
     }
     return 0;
@@ -504,15 +543,19 @@ static int decodeFrame(VP9Decoder *d, const uint8_t *data, size_t size, void *to
 
 int vp9_decoder_decode(VP9Decoder *d, const uint8_t *data, size_t size, void *token)
 {
-    if (!d->aux) return -3;
+    if (!d->aux)
+        return -3;
     size_t offsets[8], sizes[8];
     const unsigned frames = vp9_superframe_split(data, size, offsets, sizes);
-    if (!frames) return -1;
+    if (!frames)
+        return -1;
     bool shown = false;
     for (unsigned i = 0; i < frames; i++) {
-        if (!sizes[i]) continue;
+        if (!sizes[i])
+            continue;
         const int ret = decodeFrame(d, data + offsets[i], sizes[i], token, &shown);
-        if (ret) return ret;
+        if (ret)
+            return ret;
     }
     return shown ? 1 : 0;
 }

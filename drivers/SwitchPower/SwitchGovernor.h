@@ -50,14 +50,17 @@ struct switch_gov {
 
 static inline unsigned switch_gov_clamp(const struct switch_gov *g, unsigned index)
 {
-    if (index < g->lo) index = g->lo;
-    if (index > g->hi) index = g->hi;
+    if (index < g->lo)
+        index = g->lo;
+    if (index > g->hi)
+        index = g->hi;
     return index;
 }
 
 static inline void switch_gov_account(struct switch_gov *g, uint64_t now)
 {
-    if (now > g->last) g->residency[g->cur] += now - g->last;
+    if (now > g->last)
+        g->residency[g->cur] += now - g->last;
     g->last = now;
 }
 
@@ -66,8 +69,10 @@ static inline void switch_gov_init(struct switch_gov *g, const uint32_t *khz, un
                                    struct switch_gov_tunables t, uint64_t now)
 {
     unsigned i;
-    if (count > SWITCH_GOV_MAX_OPPS) count = SWITCH_GOV_MAX_OPPS;
-    if (!count) count = 1;  // a caller with no table gets a one-point governor (index 0, whatever khz[0] is)
+    if (count > SWITCH_GOV_MAX_OPPS)
+        count = SWITCH_GOV_MAX_OPPS;
+    if (!count)
+        count = 1;  // a caller with no table gets a one-point governor (index 0, whatever khz[0] is)
     g->t = t;
     g->count = count;
     for (i = 0; i < SWITCH_GOV_MAX_OPPS; ++i) {
@@ -92,8 +97,10 @@ static inline unsigned switch_gov_limit(struct switch_gov *g, unsigned lo, unsig
 {
     unsigned before = g->cur;
     switch_gov_account(g, now);
-    if (hi >= g->count) hi = g->count - 1;
-    if (lo > hi) lo = hi;
+    if (hi >= g->count)
+        hi = g->count - 1;
+    if (lo > hi)
+        lo = hi;
     g->lo = lo;
     g->hi = hi;
     g->cur = switch_gov_clamp(g, g->cur);
@@ -109,19 +116,22 @@ static inline unsigned switch_gov_limit(struct switch_gov *g, unsigned lo, unsig
 static inline unsigned switch_gov_boost(struct switch_gov *g, unsigned index, uint64_t until, uint64_t now)
 {
     switch_gov_account(g, now);
-    if (index >= g->count) index = g->count - 1;
+    if (index >= g->count)
+        index = g->count - 1;
     if (now >= g->boost_until)
         g->boost = index;  // the last one expired: this one alone
     else if (index > g->boost)
         g->boost = index;
-    if (until > g->boost_until) g->boost_until = until;
+    if (until > g->boost_until)
+        g->boost_until = until;
     index = switch_gov_clamp(g, g->boost);
     if (index > g->cur) {
         g->cur = index;
         ++g->boosted;
         ++g->ups;
     }
-    if (index >= g->cur) g->lowering = 0;  // a boost at the clock in force restarts its down hold
+    if (index >= g->cur)
+        g->lowering = 0;  // a boost at the clock in force restarts its down hold
     return g->cur;
 }
 
@@ -129,16 +139,19 @@ static inline unsigned switch_gov_boost(struct switch_gov *g, unsigned index, ui
 static inline unsigned switch_gov_target(const struct switch_gov *g, uint32_t busy_permille, uint64_t now)
 {
     unsigned want;
-    if (busy_permille > 1000) busy_permille = 1000;
+    if (busy_permille > 1000)
+        busy_permille = 1000;
     if (busy_permille >= g->t.up_permille) {
         want = g->hi;
     } else {
         // demand in kHz x permille: what the window needed at the clock it ran at
         const uint64_t demand = (uint64_t)g->khz[g->cur] * busy_permille;
         want = g->lo;
-        while (want < g->hi && (uint64_t)g->khz[want] * g->t.target_permille < demand) ++want;
+        while (want < g->hi && (uint64_t)g->khz[want] * g->t.target_permille < demand)
+            ++want;
     }
-    if (now < g->boost_until && g->boost > want) want = g->boost;
+    if (now < g->boost_until && g->boost > want)
+        want = g->boost;
     return switch_gov_clamp(g, want);
 }
 
@@ -150,7 +163,8 @@ static inline unsigned switch_gov_step(struct switch_gov *g, uint64_t now, uint3
     if (want >= g->cur) {
         if (want > g->cur) {
             ++g->ups;
-            if (want == g->hi && busy_permille >= g->t.up_permille) ++g->jumps;
+            if (want == g->hi && busy_permille >= g->t.up_permille)
+                ++g->jumps;
         }
         g->cur = want;
         g->lowering = 0;
@@ -176,7 +190,8 @@ static inline unsigned switch_gov_step(struct switch_gov *g, uint64_t now, uint3
 static inline unsigned switch_gov_index_at_mv(const uint32_t *mv, unsigned count, uint32_t limit_mv)
 {
     unsigned i = 0;
-    while (i + 1 < count && mv[i + 1] <= limit_mv) ++i;
+    while (i + 1 < count && mv[i + 1] <= limit_mv)
+        ++i;
     return i;
 }
 
@@ -187,10 +202,13 @@ static inline unsigned switch_gov_index_at_fraction(const uint32_t *khz, unsigne
 {
     uint64_t limit;
     unsigned i = 0;
-    if (!count) return 0;
-    if (fraction16 >= 0x10000u) return count - 1;
+    if (!count)
+        return 0;
+    if (fraction16 >= 0x10000u)
+        return count - 1;
     limit = (uint64_t)khz[count - 1] * fraction16 >> 16;
-    while (i + 1 < count && khz[i + 1] <= limit) ++i;
+    while (i + 1 < count && khz[i + 1] <= limit)
+        ++i;
     return i;
 }
 
@@ -206,8 +224,10 @@ static inline unsigned switch_gov_cpu_table(const uint32_t *khz, const uint32_t 
 {
     unsigned first = 0, i, n = 0;
     for (i = 0; i < rows; ++i) {
-        if (khz[i] > max_khz) break;
-        if (mv[i] <= vmin_mv) first = i;
+        if (khz[i] > max_khz)
+            break;
+        if (mv[i] <= vmin_mv)
+            first = i;
     }
     for (i = first; i < rows && khz[i] <= max_khz && n < cap; ++i, ++n) {
         khz_out[n] = khz[i];
@@ -260,8 +280,10 @@ static inline void switch_gov_rows_init(struct switch_gov_rows *r, uint32_t held
 // The ceiling: the highest row at or below `hi` (the thermal limits' ceiling) that is not held; 0 if every one is.
 static inline unsigned switch_gov_rows_ceiling(const struct switch_gov_rows *r, unsigned hi)
 {
-    if (hi >= SWITCH_GOV_MAX_OPPS) hi = SWITCH_GOV_MAX_OPPS - 1;
-    while (hi && (r->held >> hi & 1u)) --hi;
+    if (hi >= SWITCH_GOV_MAX_OPPS)
+        hi = SWITCH_GOV_MAX_OPPS - 1;
+    while (hi && (r->held >> hi & 1u))
+        --hi;
     return hi;
 }
 
@@ -270,8 +292,10 @@ static inline unsigned switch_gov_rows_ceiling(const struct switch_gov_rows *r, 
 static inline uint32_t switch_gov_rows_hold(struct switch_gov_rows *r, unsigned row)
 {
     uint32_t wait;
-    if (row >= SWITCH_GOV_MAX_OPPS) return 0;
-    if ((r->trial >> row & 1u) && r->misses[row] < SWITCH_GOV_HOLD_MAX_MISSES) ++r->misses[row];
+    if (row >= SWITCH_GOV_MAX_OPPS)
+        return 0;
+    if ((r->trial >> row & 1u) && r->misses[row] < SWITCH_GOV_HOLD_MAX_MISSES)
+        ++r->misses[row];
     wait = 1u << r->misses[row];
     r->trial &= ~(1u << row);
     r->held |= 1u << row;
@@ -282,7 +306,8 @@ static inline uint32_t switch_gov_rows_hold(struct switch_gov_rows *r, unsigned 
 // `row`, the ceiling with the clock on it, measured right: a row on trial is restored. 1 if it was on trial.
 static inline int switch_gov_rows_landed(struct switch_gov_rows *r, unsigned row)
 {
-    if (row >= SWITCH_GOV_MAX_OPPS || !(r->trial >> row & 1u)) return 0;
+    if (row >= SWITCH_GOV_MAX_OPPS || !(r->trial >> row & 1u))
+        return 0;
     r->trial &= ~(1u << row);
     r->misses[row] = 0;
     return 1;
@@ -301,7 +326,8 @@ static inline uint32_t switch_gov_rows_retry(struct switch_gov_rows *r, unsigned
     uint32_t back = 0;
     unsigned i;
     for (i = 0; i <= hi && i < SWITCH_GOV_MAX_OPPS; ++i)
-        if ((r->held >> i & 1u) && (int32_t)(r->window - r->due[i]) >= 0) back |= 1u << i;
+        if ((r->held >> i & 1u) && (int32_t)(r->window - r->due[i]) >= 0)
+            back |= 1u << i;
     r->held &= ~back;
     r->trial |= back;
     return back;

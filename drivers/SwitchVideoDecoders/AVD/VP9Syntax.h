@@ -11,19 +11,25 @@
 #include <stdint.h>
 #include "VP9Probs.h"
 
-enum { VP9_REFERENCE_SINGLE, VP9_REFERENCE_COMPOUND, VP9_REFERENCE_SELECT };
+enum {
+    VP9_REFERENCE_SINGLE,
+    VP9_REFERENCE_COMPOUND,
+    VP9_REFERENCE_SELECT
+};
 
 // What persists between frames (libvpx VP9_COMMON's share of it).
 typedef struct {
     VP9FrameContext contexts[4];
     bool contexts_valid;  // a key frame (or a resetting intra-only frame) has set them up
     int8_t ref_deltas[4], mode_deltas[2];
+
     struct {
         bool enabled, update_map, temporal_update, update_data, abs_delta;
         uint8_t tree_probs[7], pred_probs[3];
         bool feature_enabled[8][4];
         int16_t feature_data[8][4];
     } seg;
+
     uint16_t ref_width[8], ref_height[8];  // the frame each slot holds; 0: empty
 } VP9State;
 

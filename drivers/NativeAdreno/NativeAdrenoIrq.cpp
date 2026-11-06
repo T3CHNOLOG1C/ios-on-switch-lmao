@@ -39,6 +39,7 @@ enum : uint32_t {
     IrqBitIsdbCpu = 1u << 30,
     IrqBitIsdbDebug = 1u << 31
 };
+
 /* Every A7XX status bit that this decoder knows and may clear. */
 static constexpr uint32_t kKnown = IrqBitIdle | IrqBitAhb | IrqBitAtbAsync | IrqBitGpc | IrqBitCpSw | IrqBitCpHw |
                                    IrqBitCpCcuDepth | IrqBitCpCcuColor | IrqBitCpCcuResolve | IrqBitCpIb1 |
@@ -51,75 +52,106 @@ static constexpr uint32_t kEnable = IrqBitAhb | IrqBitAtbAsync | IrqBitGpc | Irq
                                     IrqBitUcheTrap | IrqBitTsbWrite | IrqBitFuse;
 /* CP_INTERRUPT_STATUS error bits, including the A7XX LPAC/BV replicas. */
 static constexpr uint32_t kCpErrors = 0x3fff7u;
+
 IOReturn NativeAdrenoIrq::poison()
 {
     poisoned_ = true;
     return kIOReturnIOError;
 }
+
 uint32_t NativeAdrenoIrq::mask()
 {
     return kEnable;
 }
+
 uint32_t NativeAdrenoIrq::cpErrorMask()
 {
     return kCpErrors;
 }
+
 IOReturn NativeAdrenoIrq::attach(const NativeAdrenoRingIo *io)
 {
-    if (attached_ || poisoned_) return kIOReturnBusy;
-    if (!io || !io->read32 || !io->write32 || !io->barrier) return kIOReturnBadArgument;
+    if (attached_ || poisoned_)
+        return kIOReturnBusy;
+    if (!io || !io->read32 || !io->write32 || !io->barrier)
+        return kIOReturnBadArgument;
     io_ = *io;
     attached_ = true;
     enabled_ = 0;
     return kIOReturnSuccess;
 }
+
 IOReturn NativeAdrenoIrq::detach()
 {
-    if (poisoned_ || !attached_) return kIOReturnNotReady;
+    if (poisoned_ || !attached_)
+        return kIOReturnNotReady;
     attached_ = false;
     io_ = {};
     enabled_ = 0;
     return kIOReturnSuccess;
 }
+
 IOReturn NativeAdrenoIrq::programMask(uint32_t *programmed)
 {
-    if (!attached_ || poisoned_) return kIOReturnNotReady;
-    if (programmed) *programmed = 0;
+    if (!attached_ || poisoned_)
+        return kIOReturnNotReady;
+    if (programmed)
+        *programmed = 0;
     uint32_t readback = 0;
-    if (io_.write32(io_.cookie, IrqRbbmMask, kEnable)) return poison();
-    if (io_.read32(io_.cookie, IrqRbbmMask, &readback)) return poison();
-    if (readback != kEnable) return poison();
+    if (io_.write32(io_.cookie, IrqRbbmMask, kEnable))
+        return poison();
+    if (io_.read32(io_.cookie, IrqRbbmMask, &readback))
+        return poison();
+    if (readback != kEnable)
+        return poison();
     enabled_ = readback;
-    if (programmed) *programmed = readback;
+    if (programmed)
+        *programmed = readback;
     return kIOReturnSuccess;
 }
+
 IOReturn NativeAdrenoIrq::handle(NativeAdrenoIrqResult *result)
 {
-    if (!result) return kIOReturnBadArgument;
+    if (!result)
+        return kIOReturnBadArgument;
     *result = {};
-    if (!attached_ || poisoned_) return kIOReturnNotReady;
+    if (!attached_ || poisoned_)
+        return kIOReturnNotReady;
     uint32_t status = 0;
-    if (io_.read32(io_.cookie, IrqRbbmStatus, &status)) return poison();
+    if (io_.read32(io_.cookie, IrqRbbmStatus, &status))
+        return poison();
     /* Linux acknowledges the whole read status before decoding it. */
-    if (io_.write32(io_.cookie, IrqRbbmClear, status)) return poison();
-    if (io_.barrier(io_.cookie)) return poison();
+    if (io_.write32(io_.cookie, IrqRbbmClear, status))
+        return poison();
+    if (io_.barrier(io_.cookie))
+        return poison();
     uint32_t flags = 0, cp_status = 0, protect = 0;
-    if (status & IrqBitCpFence) flags |= NativeAdrenoIrqFence;
-    if (status & IrqBitCpSw) flags |= NativeAdrenoIrqPreempt;
-    if (status & (IrqBitIdle)) flags |= NativeAdrenoIrqIdle;
-    if (status & (IrqBitHang)) flags |= NativeAdrenoIrqHang;
-    if (status & (IrqBitUcheOob | IrqBitUcheTrap)) flags |= NativeAdrenoIrqUche;
-    if (status & (IrqBitAhb | IrqBitGpc | IrqBitAtbAsync | IrqBitAtbBus)) flags |= NativeAdrenoIrqBusError;
-    if (status & (IrqBitTsbWrite | IrqBitFuse)) flags |= NativeAdrenoIrqSecurity;
+    if (status & IrqBitCpFence)
+        flags |= NativeAdrenoIrqFence;
+    if (status & IrqBitCpSw)
+        flags |= NativeAdrenoIrqPreempt;
+    if (status & (IrqBitIdle))
+        flags |= NativeAdrenoIrqIdle;
+    if (status & (IrqBitHang))
+        flags |= NativeAdrenoIrqHang;
+    if (status & (IrqBitUcheOob | IrqBitUcheTrap))
+        flags |= NativeAdrenoIrqUche;
+    if (status & (IrqBitAhb | IrqBitGpc | IrqBitAtbAsync | IrqBitAtbBus))
+        flags |= NativeAdrenoIrqBusError;
+    if (status & (IrqBitTsbWrite | IrqBitFuse))
+        flags |= NativeAdrenoIrqSecurity;
     if (status & IrqBitCpHw) {
-        if (io_.read32(io_.cookie, IrqCpStatus, &cp_status)) return poison();
+        if (io_.read32(io_.cookie, IrqCpStatus, &cp_status))
+            return poison();
         if (cp_status & kCpErrors) {
-            if (io_.read32(io_.cookie, IrqCpProtect, &protect)) return poison();
+            if (io_.read32(io_.cookie, IrqCpProtect, &protect))
+                return poison();
             flags |= NativeAdrenoIrqCpError;
         }
     }
     const uint32_t unknown = status & ~kKnown;
-    if (unknown) flags |= NativeAdrenoIrqUnknown;
+    if (unknown)
+        flags |= NativeAdrenoIrqUnknown;
     if (flags & (NativeAdrenoIrqHang | NativeAdrenoIrqCpError | NativeAdrenoIrqUche | NativeAdrenoIrqBusError |
                  NativeAdrenoIrqSecurity | NativeAdrenoIrqUnknown))
         flags |= NativeAdrenoIrqFatal;

@@ -9,13 +9,24 @@
 #include "NativeBridgeMetalFrontend.h"
 #include "bridge/NativeMetalObjects.h"
 extern "C" void mock_iokit_report(void);
-static void missing(const char *cls, const char *sel) { fprintf(stderr, "MISSING -[%s %s]\n", cls, sel); }
-int main(int argc, char **argv) {
+
+static void missing(const char *cls, const char *sel)
+{
+    fprintf(stderr, "MISSING -[%s %s]\n", cls, sel);
+}
+
+int main(int argc, char **argv)
+{
     @autoreleasepool {
-        if (argc < 3) return 2;
+        if (argc < 3)
+            return 2;
         setenv("NMB_DEVICE_BASE_NSOBJECT", "1", 1);
         id device = native_bridge_metal_open(argv[1], argv[2], 0, missing);
-        if (!device) { fprintf(stderr, "NO DEVICE: %s\n", nmb_last_error()); mock_iokit_report(); return 1; }
+        if (!device) {
+            fprintf(stderr, "NO DEVICE: %s\n", nmb_last_error());
+            mock_iokit_report();
+            return 1;
+        }
         printf("device: %s\n", [[(id<MTLDevice>)device name] UTF8String]);
         char status[512] = {};
         native_bridge_metal_status(status, sizeof status);

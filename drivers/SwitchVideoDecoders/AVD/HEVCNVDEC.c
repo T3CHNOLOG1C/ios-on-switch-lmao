@@ -49,7 +49,8 @@ struct HEVCDecoder {
 HEVCDecoder *hevc_decoder_create(const H264Backend *backend)
 {
     HEVCDecoder *d = calloc(1, sizeof(*d));
-    if (!d) return NULL;
+    if (!d)
+        return NULL;
     d->b = *backend;
     d->first_sps = -1;
     d->stream_start = true;
@@ -59,7 +60,8 @@ HEVCDecoder *hevc_decoder_create(const H264Backend *backend)
 static void freeSurfaces(HEVCDecoder *d)
 {
     for (int i = 0; i < SLOTS; i++) {
-        if (d->dpb[i].handle) d->b.free(d->b.ctx, d->dpb[i].handle);
+        if (d->dpb[i].handle)
+            d->b.free(d->b.ctx, d->dpb[i].handle);
         d->dpb[i].handle = 0;
         d->dpb[i].va = NULL;
     }
@@ -67,8 +69,10 @@ static void freeSurfaces(HEVCDecoder *d)
 
 static void releaseBuffers(HEVCDecoder *d)
 {
-    if (d->aux) d->b.free(d->b.ctx, d->aux);
-    if (d->input) d->b.free(d->b.ctx, d->input);
+    if (d->aux)
+        d->b.free(d->b.ctx, d->aux);
+    if (d->input)
+        d->b.free(d->b.ctx, d->input);
     d->aux = d->input = 0;
     d->aux_va = d->input_va = NULL;
 }
@@ -77,7 +81,8 @@ static void dropAll(HEVCDecoder *d)  // the DPB emptied without output
 {
     for (int i = 0; i < SLOTS; i++) {
         Entry *e = &d->dpb[i];
-        if (e->item) d->b.discard(d->b.ctx, e->item);
+        if (e->item)
+            d->b.discard(d->b.ctx, e->item);
         e->item = NULL;
         e->used = e->ref = e->long_term = e->output = false;
     }
@@ -85,7 +90,8 @@ static void dropAll(HEVCDecoder *d)  // the DPB emptied without output
 
 void hevc_decoder_destroy(HEVCDecoder *d)
 {
-    if (!d) return;
+    if (!d)
+        return;
     dropAll(d);
     freeSurfaces(d);
     releaseBuffers(d);
@@ -94,17 +100,21 @@ void hevc_decoder_destroy(HEVCDecoder *d)
 
 int hevc_decoder_parameter_set(HEVCDecoder *d, const uint8_t *nal, size_t size)
 {
-    if (size < 3) return -1;
+    if (size < 3)
+        return -1;
     const int type = (nal[0] >> 1) & 0x3f;
     if (type == HEVC_NAL_SPS) {
-        if (hevc_parse_sps(&d->params, nal, size)) return -1;
+        if (hevc_parse_sps(&d->params, nal, size))
+            return -1;
         if (d->first_sps < 0) {  // its id: the SPS just parsed is the only valid one with this content
             for (int i = 0; i < 16; i++)
-                if (d->params.sps[i].valid) d->first_sps = i;
+                if (d->params.sps[i].valid)
+                    d->first_sps = i;
         }
         return 0;
     }
-    if (type == HEVC_NAL_PPS) return hevc_parse_pps(&d->params, nal, size);
+    if (type == HEVC_NAL_PPS)
+        return hevc_parse_pps(&d->params, nal, size);
     return 0;  // VPS, SEI: nothing NVDEC needs
 }
 
@@ -133,9 +143,11 @@ unsigned hevc_decoder_missing_refs(const HEVCDecoder *d)
 static int configure(HEVCDecoder *d, const HEVCSPS *sps)
 {
     const uint32_t pitch = ALIGN(sps->width, 64), rows = ALIGN(sps->height, 64);
-    if (d->aux && pitch == d->pitch && rows == d->rows) return 0;
+    if (d->aux && pitch == d->pitch && rows == d->rows)
+        return 0;
     for (int i = 0; i < SLOTS; i++)
-        if (d->dpb[i].used) return -1;
+        if (d->dpb[i].used)
+            return -1;
     freeSurfaces(d);
     releaseBuffers(d);
     d->width = sps->width, d->height = sps->height, d->pitch = pitch, d->rows = rows;
@@ -147,7 +159,8 @@ static int configure(HEVCDecoder *d, const HEVCSPS *sps)
     d->filter_off = ALIGN(17 * d->colmv_bytes, 256);
     d->aux_bytes = d->filter_off + kFilterBytesPerRow * rows;
     void *va;
-    if (d->b.alloc(d->b.ctx, d->aux_bytes, &d->aux, &va)) return -3;
+    if (d->b.alloc(d->b.ctx, d->aux_bytes, &d->aux, &va))
+        return -3;
     d->aux_va = va;
     d->input_bytes = kBitsOff + ALIGN((uint64_t)sps->width * sps->height / 2 + 0x10000, 0x10000);
     if (d->b.alloc(d->b.ctx, d->input_bytes, &d->input, &va)) {
@@ -161,14 +174,17 @@ static int configure(HEVCDecoder *d, const HEVCSPS *sps)
 int hevc_decoder_configure(HEVCDecoder *d)
 {
     const HEVCSPS *sps = hevc_decoder_sps(d);
-    if (!sps) return -1;
+    if (!sps)
+        return -1;
     const int ret = configure(d, sps);
-    if (ret) return ret;
+    if (ret)
+        return ret;
     // Surfaces for the DPB the SPS declares (the current picture included), so the arena is known to hold them.
     for (unsigned i = 0; i < sps->max_dec_pic_buffering && i < SLOTS; i++) {
         Entry *e = &d->dpb[i];
         void *va = NULL;
-        if (e->handle) continue;
+        if (e->handle)
+            continue;
         if (d->b.alloc(d->b.ctx, d->surface_bytes, &e->handle, &va)) {
             e->handle = 0;
             freeSurfaces(d);
@@ -183,11 +199,14 @@ int hevc_decoder_configure(HEVCDecoder *d)
 static int growInput(HEVCDecoder *d, uint64_t needed)
 {
     uint64_t bytes = d->input_bytes;
-    while (bytes < needed) bytes *= 2;
-    if (bytes > (32u << 20)) return -1;
+    while (bytes < needed)
+        bytes *= 2;
+    if (bytes > (32u << 20))
+        return -1;
     uint32_t handle;
     void *va;
-    if (d->b.alloc(d->b.ctx, bytes, &handle, &va)) return -1;
+    if (d->b.alloc(d->b.ctx, bytes, &handle, &va))
+        return -1;
     d->b.free(d->b.ctx, d->input);
     d->input = handle;
     d->input_va = va;
@@ -198,14 +217,16 @@ static int growInput(HEVCDecoder *d, uint64_t needed)
 static unsigned countWhere(const HEVCDecoder *d, bool output)
 {
     unsigned n = 0;
-    for (int i = 0; i < SLOTS; i++) n += d->dpb[i].used && (!output || d->dpb[i].output);
+    for (int i = 0; i < SLOTS; i++)
+        n += d->dpb[i].used && (!output || d->dpb[i].output);
     return n;
 }
 
 static void removeUnneeded(HEVCDecoder *d)
 {
     for (int i = 0; i < SLOTS; i++)
-        if (d->dpb[i].used && !d->dpb[i].output && !d->dpb[i].ref) d->dpb[i].used = d->dpb[i].long_term = false;
+        if (d->dpb[i].used && !d->dpb[i].output && !d->dpb[i].ref)
+            d->dpb[i].used = d->dpb[i].long_term = false;
 }
 
 // C.5.2.4: the picture needed for output with the smallest POC goes out.
@@ -213,11 +234,14 @@ static bool bump(HEVCDecoder *d)
 {
     int best = -1;
     for (int i = 0; i < SLOTS; i++)
-        if (d->dpb[i].used && d->dpb[i].output && (best < 0 || d->dpb[i].poc < d->dpb[best].poc)) best = i;
-    if (best < 0) return false;
+        if (d->dpb[i].used && d->dpb[i].output && (best < 0 || d->dpb[i].poc < d->dpb[best].poc))
+            best = i;
+    if (best < 0)
+        return false;
     Entry *e = &d->dpb[best];
     e->output = false;
-    if (e->item) d->b.emit(d->b.ctx, e->item);
+    if (e->item)
+        d->b.emit(d->b.ctx, e->item);
     e->item = NULL;
     removeUnneeded(d);
     return true;
@@ -225,17 +249,20 @@ static bool bump(HEVCDecoder *d)
 
 static bool latencyDue(const HEVCDecoder *d, const HEVCSPS *sps)
 {
-    if (!sps->max_latency_increase_plus1) return false;
+    if (!sps->max_latency_increase_plus1)
+        return false;
     const uint64_t limit =
         (uint64_t)sps->max_num_reorder + sps->max_latency_increase_plus1 - 1;  // SpsMaxLatencyPictures
     for (int i = 0; i < SLOTS; i++)
-        if (d->dpb[i].used && d->dpb[i].output && d->dpb[i].latency >= limit) return true;
+        if (d->dpb[i].used && d->dpb[i].output && d->dpb[i].latency >= limit)
+            return true;
     return false;
 }
 
 void hevc_decoder_flush(HEVCDecoder *d)
 {
-    while (bump(d)) {}
+    while (bump(d)) {
+    }
 }
 
 static void entry(TegraNVDECSubmit *s, uint16_t method, uint16_t kind, uint32_t value, uint32_t offset)
@@ -253,7 +280,8 @@ static bool tileGrid(const HEVCSPS *sps, const HEVCPPS *pps, uint16_t *col, uint
     const unsigned ctb = sps->log2_min_cb + sps->log2_diff_max_min_cb;
     const uint32_t wc = (sps->width + (1u << ctb) - 1) >> ctb, hc = (sps->height + (1u << ctb) - 1) >> ctb;
     const unsigned cols = pps->num_tile_columns, rows = pps->num_tile_rows;
-    if (cols > wc || rows > hc) return false;
+    if (cols > wc || rows > hc)
+        return false;
     uint32_t sw = 0, sh = 0;
     for (unsigned i = 0; i < cols; i++) {
         col[i] = (uint16_t)(pps->uniform_spacing || !pps->tiles ? (i + 1) * wc / cols - i * wc / cols
@@ -279,18 +307,23 @@ static void tileTable(uint16_t *t, const HEVCSPS *sps, const HEVCPPS *pps, const
         return;
     }
     uint16_t *bound = t + 0x380, sum = 0;
-    for (unsigned i = 0; i < pps->num_tile_columns; i++) *bound++ = (uint16_t)((sum += col[i]) << shift);
+    for (unsigned i = 0; i < pps->num_tile_columns; i++)
+        *bound++ = (uint16_t)((sum += col[i]) << shift);
     sum = 0;
-    for (unsigned i = 0; i < pps->num_tile_rows; i++) *bound++ = (uint16_t)((sum += row[i]) << shift);
     for (unsigned i = 0; i < pps->num_tile_rows; i++)
-        for (unsigned j = 0; j < pps->num_tile_columns; j++) *t++ = col[j], *t++ = row[i];
+        *bound++ = (uint16_t)((sum += row[i]) << shift);
+    for (unsigned i = 0; i < pps->num_tile_rows; i++)
+        for (unsigned j = 0; j < pps->num_tile_columns; j++)
+            *t++ = col[j], *t++ = row[i];
 }
 
 static void scalingTable(nvdec_hevc_scaling_list_s *out, const HEVCScalingList *sl)
 {
     memset(out, 0, sizeof(*out));
-    for (int i = 0; i < 6; i++) out->ScalingListDCCoeff16x16[i] = sl->dc[0][i];
-    for (int i = 0; i < 2; i++) out->ScalingListDCCoeff32x32[i] = sl->dc[1][i * 3];
+    for (int i = 0; i < 6; i++)
+        out->ScalingListDCCoeff16x16[i] = sl->dc[0][i];
+    for (int i = 0; i < 2; i++)
+        out->ScalingListDCCoeff32x32[i] = sl->dc[1][i * 3];
     for (int i = 0; i < 6; i++) {
         memcpy(out->ScalingList4x4[i], sl->sl[0][i], 16);
         memcpy(out->ScalingList8x8[i], sl->sl[1][i], 64);
@@ -387,18 +420,21 @@ static void fillSetup(const HEVCDecoder *d, nvdec_hevc_pic_s *p, const HEVCSPS *
     p->sw_hdr_skip_length = sh->skip_bits;
     const int32_t scratchDiff = scratch == cur ? 0 : clip8(poc - d->dpb[scratch].poc);
     for (int i = 0; i < SLOTS; i++) {
-        if (i == cur) continue;
+        if (i == cur)
+            continue;
         const Entry *e = &d->dpb[i];
         if (e->used && e->ref) {
             p->RefDiffPicOrderCnts[i] = clip8(poc - e->poc);
-            if (e->long_term) p->longtermflag |= (unsigned short)(1u << (15 - i));
+            if (e->long_term)
+                p->longtermflag |= (unsigned short)(1u << (15 - i));
         } else {
             p->RefDiffPicOrderCnts[i] = (short)scratchDiff;
         }
     }
     // The initial reference picture lists (8.3.4), cycled to 16 entries; NVDEC applies the slices' modifications.
     const unsigned total = r->nb + r->na + r->nl;
-    if (!total) return;
+    if (!total)
+        return;
     const int8_t *order[2][3] = {{r->before, r->after, r->lt}, {r->after, r->before, r->lt}};
     const uint8_t counts[2][3] = {{r->nb, r->na, r->nl}, {r->na, r->nb, r->nl}};
     unsigned char *lists[2] = {p->initreflistidxl0, p->initreflistidxl1};
@@ -418,8 +454,10 @@ static int findRef(const HEVCDecoder *d, int32_t poc, bool lsbOnly, int32_t mask
 {
     for (int i = 0; i < SLOTS; i++) {
         const Entry *e = &d->dpb[i];
-        if (!e->used || !e->ref || taken[i] || (shortOnly && e->long_term)) continue;
-        if (lsbOnly ? (e->poc & mask) == poc : e->poc == poc) return i;
+        if (!e->used || !e->ref || taken[i] || (shortOnly && e->long_term))
+            continue;
+        if (lsbOnly ? (e->poc & mask) == poc : e->poc == poc)
+            return i;
     }
     return -1;
 }
@@ -435,9 +473,12 @@ static int decodePicture(HEVCDecoder *d, const Span *seg, int count, const HEVCS
     const bool irap = nal >= HEVC_NAL_BLA_W_LP && nal <= 23,
                idr = nal == HEVC_NAL_IDR_W_RADL || nal == HEVC_NAL_IDR_N_LP;
     const bool noRaslOutput = irap && (nal != HEVC_NAL_CRA || d->stream_start);
-    if (irap) d->skip_rasl = noRaslOutput;
-    if ((nal == HEVC_NAL_RASL_N || nal == HEVC_NAL_RASL_R) && d->skip_rasl) return 0;  // 8.1.3: not decodable
-    if (!irap && !d->decoded_any) return 0;  // a stream that starts without an IRAP picture: wait for one
+    if (irap)
+        d->skip_rasl = noRaslOutput;
+    if ((nal == HEVC_NAL_RASL_N || nal == HEVC_NAL_RASL_R) && d->skip_rasl)
+        return 0;  // 8.1.3: not decodable
+    if (!irap && !d->decoded_any)
+        return 0;  // a stream that starts without an IRAP picture: wait for one
 
     // 8.3.1: the picture order count.
     const int32_t maxLsb = 1 << sps->log2_max_poc_lsb;
@@ -456,28 +497,38 @@ static int decodePicture(HEVCDecoder *d, const Span *seg, int count, const HEVCS
     memset(&r, 0, sizeof(r));
     bool keep[SLOTS] = {false}, lt[SLOTS] = {false};
     if (irap && noRaslOutput)
-        for (int i = 0; i < SLOTS; i++) d->dpb[i].ref = false;
+        for (int i = 0; i < SLOTS; i++)
+            d->dpb[i].ref = false;
     if (!idr) {
         for (unsigned i = 0; i < sh->num_lt; i++) {
             int32_t value = sh->lt[i].poc_lsb;
-            if (sh->lt[i].msb_present) value += poc - (int32_t)sh->lt[i].msb_cycle * maxLsb - (poc & (maxLsb - 1));
+            if (sh->lt[i].msb_present)
+                value += poc - (int32_t)sh->lt[i].msb_cycle * maxLsb - (poc & (maxLsb - 1));
             const int j = findRef(d, value, !sh->lt[i].msb_present, maxLsb - 1, false, keep);
-            if (j >= 0) keep[j] = lt[j] = true;
-            if (sh->lt[i].used && r.nl < 16) r.lt[r.nl++] = (int8_t)j;
+            if (j >= 0)
+                keep[j] = lt[j] = true;
+            if (sh->lt[i].used && r.nl < 16)
+                r.lt[r.nl++] = (int8_t)j;
         }
         for (int s = 0; s < 2; s++) {
             const unsigned n = s ? sh->st_rps.num_positive : sh->st_rps.num_negative;
             for (unsigned i = 0; i < n; i++) {
                 const int j = findRef(d, poc + sh->st_rps.delta[s][i], false, 0, true, keep);
-                if (j >= 0) keep[j] = true;
-                if (!sh->st_rps.used[s][i]) continue;
-                if (s && r.na < 16) r.after[r.na++] = (int8_t)j;
-                if (!s && r.nb < 16) r.before[r.nb++] = (int8_t)j;
+                if (j >= 0)
+                    keep[j] = true;
+                if (!sh->st_rps.used[s][i])
+                    continue;
+                if (s && r.na < 16)
+                    r.after[r.na++] = (int8_t)j;
+                if (!s && r.nb < 16)
+                    r.before[r.nb++] = (int8_t)j;
             }
         }
         for (int i = 0; i < SLOTS; i++) {
-            if (!keep[i]) d->dpb[i].ref = false;
-            if (lt[i]) d->dpb[i].long_term = true;
+            if (!keep[i])
+                d->dpb[i].ref = false;
+            if (lt[i])
+                d->dpb[i].long_term = true;
         }
     }
 
@@ -485,22 +536,27 @@ static int decodePicture(HEVCDecoder *d, const Span *seg, int count, const HEVCS
     if (irap && noRaslOutput && d->decoded_any) {
         // NoOutputOfPriorPicsFlag: the flag of an IDR or BLA picture; a CRA that starts a sequence after an end of
         // sequence outputs what came before it (as FFmpeg does) rather than dropping it.
-        if (nal != HEVC_NAL_CRA && sh->no_output_of_prior_pics) dropAll(d);
+        if (nal != HEVC_NAL_CRA && sh->no_output_of_prior_pics)
+            dropAll(d);
         hevc_decoder_flush(d);
         removeUnneeded(d);
     } else {
         removeUnneeded(d);
         while (countWhere(d, true) > sps->max_num_reorder || latencyDue(d, sps) ||
                countWhere(d, false) >= sps->max_dec_pic_buffering)
-            if (!bump(d)) break;
+            if (!bump(d))
+                break;
     }
     const int configured = configure(d, sps);
-    if (configured) return configured;
+    if (configured)
+        return configured;
 
     int cur = -1;
     for (int i = 0; i < SLOTS && cur < 0; i++)
-        if (!d->dpb[i].used) cur = i;
-    if (cur < 0) return -1;  // a DPB larger than its SPS allows
+        if (!d->dpb[i].used)
+            cur = i;
+    if (cur < 0)
+        return -1;  // a DPB larger than its SPS allows
     Entry *e = &d->dpb[cur];
     if (!e->handle) {
         void *va;
@@ -520,12 +576,15 @@ static int decodePicture(HEVCDecoder *d, const Span *seg, int count, const HEVCS
             else if (scratch < 0)
                 scratch = sets[s][k];
         }
-    if (scratch < 0) scratch = cur;
+    if (scratch < 0)
+        scratch = cur;
 
     // The bitstream: every slice segment of the picture after a 4-byte start code (sw_start_code_e).
     uint64_t length = 0;
-    for (int i = 0; i < count; i++) length += 4 + seg[i].size;
-    if (kBitsOff + length + 64 > d->input_bytes && growInput(d, kBitsOff + length + 64)) return -3;
+    for (int i = 0; i < count; i++)
+        length += 4 + seg[i].size;
+    if (kBitsOff + length + 64 > d->input_bytes && growInput(d, kBitsOff + length + 64))
+        return -3;
     uint8_t *bits = d->input_va + kBitsOff;
     for (int i = 0; i < count; i++) {
         bits[0] = bits[1] = bits[2] = 0, bits[3] = 1;
@@ -534,7 +593,8 @@ static int decodePicture(HEVCDecoder *d, const Span *seg, int count, const HEVCS
     }
     memset(bits, 0, 64);
     uint16_t col[20], row[22];
-    if (!tileGrid(sps, pps, col, row)) return -1;
+    if (!tileGrid(sps, pps, col, row))
+        return -1;
     tileTable((uint16_t *)(d->input_va + kTilesOff), sps, pps, col, row);
     scalingTable((nvdec_hevc_scaling_list_s *)(d->input_va + kScalingOff), hevc_scaling_list(sps, pps));
 
@@ -566,7 +626,8 @@ static int decodePicture(HEVCDecoder *d, const Span *seg, int count, const HEVCS
     wait.invalidate[0] = (TegraNVDECRange){d->input, kStatusOff, sizeof(nvdec_status_s), 0};
     if (!d->b.cpu_reads || d->b.cpu_reads(d->b.ctx))
         wait.invalidate[wait.invalidate_count++] = (TegraNVDECRange){e->handle, 0, d->surface_bytes, 0};
-    if (d->b.submit(d->b.ctx, &submit, &wait.fence) || d->b.wait(d->b.ctx, &wait)) return -2;
+    if (d->b.submit(d->b.ctx, &submit, &wait.fence) || d->b.wait(d->b.ctx, &wait))
+        return -2;
     const nvdec_status_s *status = (const nvdec_status_s *)(d->input_va + kStatusOff);
     const int error = status->error_status && !status->mbs_correctly_decoded ? (int)status->error_status : 0;
 
@@ -601,43 +662,54 @@ static int decodePicture(HEVCDecoder *d, const Span *seg, int count, const HEVCS
             .token = token,
         };
         e->item = d->b.decoded(d->b.ctx, &picture);
-        if (!e->item) e->output = false;
+        if (!e->item)
+            e->output = false;
     }
     // C.5.2.3: latency counts, then the additional bumping.
     for (int i = 0; i < SLOTS; i++)
-        if (i != cur && d->dpb[i].used && d->dpb[i].output) d->dpb[i].latency++;
+        if (i != cur && d->dpb[i].used && d->dpb[i].output)
+            d->dpb[i].latency++;
     while (countWhere(d, true) > sps->max_num_reorder || latencyDue(d, sps))
-        if (!bump(d)) break;
+        if (!bump(d))
+            break;
     return sh->pic_output ? 1 : 0;  // a picture not output is answered at once, as a dropped frame
 }
 
 int hevc_decoder_decode(HEVCDecoder *d, const uint8_t *data, size_t size, unsigned lengthSize, void *token)
 {
-    if (lengthSize < 1 || lengthSize > 4) return -1;
+    if (lengthSize < 1 || lengthSize > 4)
+        return -1;
     Span seg[MAX_SEGMENTS];  // 9.6 KB of stack: each session's decode thread its own
     int count = 0;
     bool eos = false;
     HEVCSliceHeader first;
     for (size_t at = 0; at < size;) {
-        if (size - at < lengthSize) return -1;
+        if (size - at < lengthSize)
+            return -1;
         size_t n = 0;
-        for (unsigned i = 0; i < lengthSize; i++) n = n << 8 | data[at + i];
+        for (unsigned i = 0; i < lengthSize; i++)
+            n = n << 8 | data[at + i];
         at += lengthSize;
-        if (n < 2 || n > size - at) return -1;
+        if (n < 2 || n > size - at)
+            return -1;
         const uint8_t *nal = data + at;
         at += n;
         const int type = (nal[0] >> 1) & 0x3f;
         if (type == HEVC_NAL_SPS || type == HEVC_NAL_PPS) {
-            if (hevc_decoder_parameter_set(d, nal, n)) return -1;
+            if (hevc_decoder_parameter_set(d, nal, n))
+                return -1;
         } else if (type == HEVC_NAL_EOS || type == HEVC_NAL_EOB) {
             eos = true;
         } else if (type <= HEVC_NAL_CRA && (type <= HEVC_NAL_RASL_R || type >= HEVC_NAL_BLA_W_LP)) {
-            if (!count && (hevc_parse_slice_header(&d->params, nal, n, &first) || !first.first_slice)) return -1;
-            if (count == MAX_SEGMENTS) return -1;
+            if (!count && (hevc_parse_slice_header(&d->params, nal, n, &first) || !first.first_slice))
+                return -1;
+            if (count == MAX_SEGMENTS)
+                return -1;
             seg[count].data = nal, seg[count++].size = n;
         }
     }
     const int ret = count ? decodePicture(d, seg, count, &first, token) : 0;
-    if (eos) d->stream_start = true;  // 8.1.3: the next IRAP picture starts a coded video sequence anew
+    if (eos)
+        d->stream_start = true;  // 8.1.3: the next IRAP picture starts a coded video sequence anew
     return ret;
 }

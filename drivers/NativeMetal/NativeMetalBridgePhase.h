@@ -30,18 +30,25 @@ struct Job {
     volatile uint32_t last;
     volatile bool done;
 };
+
 static Gpu *gGpu;
 static Job *gJob;
 static id gDevice;  // the frontend device of the checks, kept for the scanout stage
+
 static void mark(uint32_t value)
 {
-    if (gJob) gJob->last = value;
-    if (gGpu) gGpu->mark(value);
+    if (gJob)
+        gJob->last = value;
+    if (gGpu)
+        gGpu->mark(value);
 }
+
 static void missingSelector(const char *cls, const char *selector)
 {
-    if (gJob && !gJob->missing[0]) snprintf(gJob->missing, sizeof gJob->missing, "FM %.20s %.36s", cls, selector);
+    if (gJob && !gJob->missing[0])
+        snprintf(gJob->missing, sizeof gJob->missing, "FM %.20s %.36s", cls, selector);
 }
+
 // The frontend checks on the native frontend over Turnip (QuartzCore is already translated by the self-test, so it is not repeated).
 static void frontend(Job *job)
 {
@@ -73,6 +80,7 @@ static void frontend(Job *job)
         snprintf(job->frontend.first, sizeof job->frontend.first, "exception %.40s", exception.name.UTF8String ?: "?");
     }
 }
+
 static void *worker(void *arg)
 {
     Job *job = static_cast<Job *>(arg);
@@ -88,13 +96,17 @@ static void *worker(void *arg)
             qcBytes = (size_t)st.st_size;
         }
     }
-    if (fd >= 0) close(fd);
+    if (fd >= 0)
+        close(fd);
     job->code = nmb_selftest(job->turnip, job->cache, qc, qcBytes, mark, &job->result);
-    if (qc) munmap(const_cast<uint8_t *>(qc), qcBytes);
-    if (!job->code) frontend(job);
+    if (qc)
+        munmap(const_cast<uint8_t *>(qc), qcBytes);
+    if (!job->code)
+        frontend(job);
     __atomic_store_n(&job->done, true, __ATOMIC_RELEASE);
     return nullptr;
 }
+
 // Serves the display driver's frames with the GPU on `device` (the kernel never offers them on this port). The calls go through a hand-off-only
 // connection to the accelerator (open type 0x4148: no GPU slot is taken): the original sandbox profiles admit that class and not the presenter's own
 // service. Reports on GPU7 only when the state changes: "P<step> e<hex>" (0 no connection, 1 no selector, 2 mode refused, 3 scanout not
@@ -104,6 +116,7 @@ struct ScanoutContext {
     Gpu link;
     Gpu *marker;
 };
+
 static void serveScanout(Gpu &gpu, id device)
 {
     ScanoutContext context;
@@ -134,7 +147,9 @@ static void serveScanout(Gpu &gpu, id device)
                 Gpu &g = static_cast<ScanoutContext *>(c)->link;
                 return g.map(g.conn, 0x5343, mach_task_self(), address, length, 0x101);  // anywhere + inhibit cache
             },
-            [](void *c, uint32_t value) { static_cast<ScanoutContext *>(c)->marker->mark(value); }};
+            [](void *c, uint32_t value) {
+                static_cast<ScanoutContext *>(c)->marker->mark(value);
+            }};
         gpuscanout::Client client;
         const bool opened = client.open((id<MTLDevice>)device, transport, &st);
         snprintf(line, sizeof line, "P%d e%x", st.step, (unsigned)st.error);
@@ -160,6 +175,7 @@ static void serveScanout(Gpu &gpu, id device)
     }
     streamText7(gpu, line);
 }
+
 static void run(Gpu &gpu, const char *turnipPath)
 {
     gpu.mark(0x6500);
@@ -215,7 +231,8 @@ static void run(Gpu &gpu, const char *turnipPath)
     streamText7(gpu, text);
     const bool ok = !job->code && !r.compute_bad && !r.render_bad && !r.import_bad;
     gpu.mark(ok ? 0x65f0 : 0x65f1);
-    if (!job->code) gpu.mark(job->frontendRan && !job->frontend.failed ? 0x66f0 : 0x66f1);
+    if (!job->code)
+        gpu.mark(job->frontendRan && !job->frontend.failed ? 0x66f0 : 0x66f1);
     const bool scanout = ok && job->frontendRan && !job->frontend.failed && gDevice;
     gJob = nullptr;
     delete job;

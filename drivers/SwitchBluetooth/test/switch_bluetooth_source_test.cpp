@@ -23,7 +23,8 @@ TEST(SwitchBluetoothSource, PioProgramsTheTrigger)
     std::istringstream lines(source);
     unsigned writes = 0;
     for (std::string line; std::getline(lines, line);)
-        if (line.find("FCR_RX_TRIG_16 | FCR_TX_TRIG_16") != std::string::npos) ++writes;
+        if (line.find("FCR_RX_TRIG_16 | FCR_TX_TRIG_16") != std::string::npos)
+            ++writes;
     EXPECT_EQ(writes, 3u) << "setupUart, resetRxFifoLocked and leaving RX DMA mode";
     EXPECT_THAT(source, HasSubstr("FCR_RX_TRIG_16 = 3u << 6"));
     EXPECT_THAT(source, HasSubstr("MCR_CTS_EN | MCR_RTS_EN | MCR_RTS"));  // flow control holds the chip at a full FIFO

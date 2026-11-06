@@ -42,6 +42,7 @@ extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
 namespace {
 constexpr unsigned kPmicBus = 5;
 constexpr uint8_t kPmic = 0x3c;
+
 enum : uint8_t {
     IrqTop = 0x05,
     IrqTopMask = 0x0d,
@@ -50,6 +51,7 @@ enum : uint8_t {
     OnOffIrqMask = 0x12,
     OnOffStat = 0x15
 };
+
 constexpr uint8_t kTopOnOff = 1u << 1, kTopRtc = 1u << 3, kGlobalMask = 1u << 0, kEn0Falling = 1u << 2,
                   kEn0Rising = 1u << 3, kEn0Pressed = 1u << 2;
 constexpr uint32_t kPmicIntid = 118;  // GIC SPI 86
@@ -63,6 +65,7 @@ struct Volume {
     uint8_t button;
     const char *name;
 };
+
 constexpr Volume kVolume[] = {
     {TEGRA_GPIO_VOLUME_UP, kSwitchButtonVolumeUp, "volume up (PX6)"},
     {TEGRA_GPIO_VOLUME_DOWN, kSwitchButtonVolumeDown, "volume down (PX7)"},
@@ -73,6 +76,7 @@ int pmicRead(uint8_t reg, uint8_t *value)
 {
     return tegra_i2c_read(kPmicBus, kPmic, reg, value, 1);
 }
+
 int pmicWrite(uint8_t reg, uint8_t value)
 {
     return tegra_i2c_write(kPmicBus, kPmic, reg, &value, 1);
@@ -104,6 +108,7 @@ class SwitchButtons : public IOService {
 public:
     bool start(IOService *provider) override;
     void free() override;
+
     void click(uint8_t which)
     {
         __atomic_fetch_or(&clicks, which, __ATOMIC_ACQ_REL);
@@ -117,7 +122,8 @@ OSDefineMetaClassAndStructors(SwitchButtons, IOService)
 
     bool SwitchButtons::start(IOService *provider)
 {
-    if (!IOService::start(provider)) return false;
+    if (!IOService::start(provider))
+        return false;
     hid = switch_hid_create(kSwitchHIDButtons);
     loop = IOWorkLoop::workLoop();
     watchdog = IOTimerEventSource::timerEventSource(this, &SwitchButtons::watchdogFired);
@@ -136,7 +142,8 @@ OSDefineMetaClassAndStructors(SwitchButtons, IOService)
         if (!volume[i] || loop->addEventSource(volume[i]) != kIOReturnSuccess) {
             panic("SwitchButtons: cannot attach %s", kVolume[i].name);
         }
-        if (tegra_gpio_read(kVolume[i].gpio) == 0) buttons |= kVolume[i].button;
+        if (tegra_gpio_read(kVolume[i].gpio) == 0)
+            buttons |= kVolume[i].button;
     }
 
     setUpPmic();
@@ -146,9 +153,11 @@ OSDefineMetaClassAndStructors(SwitchButtons, IOService)
         panic("SwitchButtons: cannot attach the MAX77620 interrupt (INTID 118)");
 
     home = IOInterruptEventSource::interruptEventSource(this, &SwitchButtons::btClicks);
-    if (!home || loop->addEventSource(home) != kIOReturnSuccess) panic("SwitchButtons: click source setup failed");
+    if (!home || loop->addEventSource(home) != kIOReturnSuccess)
+        panic("SwitchButtons: click source setup failed");
 
-    for (auto *source : volume) source->enable();
+    for (auto *source : volume)
+        source->enable();
     pmic->enable();
     home->enable();
     switch_check_after_ms(watchdog, kWatchdogMS);
@@ -160,13 +169,18 @@ void SwitchButtons::free()
 {
     if (loop) {
         for (auto *source : volume) {
-            if (source) loop->removeEventSource(source);
+            if (source)
+                loop->removeEventSource(source);
         }
-        if (pmic) loop->removeEventSource(pmic);
-        if (home) loop->removeEventSource(home);
-        if (watchdog) loop->removeEventSource(watchdog);
+        if (pmic)
+            loop->removeEventSource(pmic);
+        if (home)
+            loop->removeEventSource(home);
+        if (watchdog)
+            loop->removeEventSource(watchdog);
     }
-    for (auto *&source : volume) OSSafeReleaseNULL(source);
+    for (auto *&source : volume)
+        OSSafeReleaseNULL(source);
     OSSafeReleaseNULL(pmic);
     OSSafeReleaseNULL(home);
     OSSafeReleaseNULL(watchdog);
@@ -179,7 +193,8 @@ void SwitchButtons::free()
 void SwitchButtons::setUpPmic()
 {
     auto *pmc = reinterpret_cast<volatile uint32_t *>(ml_io_map(kPmcPA, 0x1000));
-    if (!pmc) panic("SwitchButtons: cannot map the PMC");
+    if (!pmc)
+        panic("SwitchButtons: cannot map the PMC");
     uint32_t control = pmc[0];
     if (!(control & kPmcIntrPolarity)) {
         pmc[0] = control | kPmcIntrPolarity;
@@ -194,14 +209,22 @@ void SwitchButtons::setUpPmic()
 
     uint8_t stale = 0, global = 0, state = 0;
     int err = tegra_i2c_init(kPmicBus);
-    if (!err) err = pmicRead(OnOffIrq, &stale);
-    if (!err) err = pmicWrite(OnOffIrqMask, (uint8_t)~(kEn0Falling | kEn0Rising));
-    if (!err) err = pmicWrite(IrqTopMask, (uint8_t)~kTopOnOff);
-    if (!err) err = pmicRead(IntEnLbt, &global);
-    if (!err && (global & kGlobalMask)) err = pmicWrite(IntEnLbt, (uint8_t)(global & ~kGlobalMask));
-    if (!err) err = pmicRead(OnOffStat, &state);
-    if (err) panic("SwitchButtons: MAX77620 (I2C5 0x3c) power-key interrupt setup failed: I2C error %d", err);
-    if (state & kEn0Pressed) buttons |= kSwitchButtonPower;
+    if (!err)
+        err = pmicRead(OnOffIrq, &stale);
+    if (!err)
+        err = pmicWrite(OnOffIrqMask, (uint8_t)~(kEn0Falling | kEn0Rising));
+    if (!err)
+        err = pmicWrite(IrqTopMask, (uint8_t)~kTopOnOff);
+    if (!err)
+        err = pmicRead(IntEnLbt, &global);
+    if (!err && (global & kGlobalMask))
+        err = pmicWrite(IntEnLbt, (uint8_t)(global & ~kGlobalMask));
+    if (!err)
+        err = pmicRead(OnOffStat, &state);
+    if (err)
+        panic("SwitchButtons: MAX77620 (I2C5 0x3c) power-key interrupt setup failed: I2C error %d", err);
+    if (state & kEn0Pressed)
+        buttons |= kSwitchButtonPower;
 }
 
 void SwitchButtons::post()
@@ -213,7 +236,8 @@ void SwitchButtons::post()
 void SwitchButtons::change(uint8_t button, bool pressed, bool pulse)
 {
     const bool was = buttons & button;
-    if (pressed == was && !pulse) return;
+    if (pressed == was && !pulse)
+        return;
     if (pressed == was) {  // a whole press (or release) happened before we got here: report both halves
         buttons ^= button;
         post();
@@ -226,7 +250,8 @@ void SwitchButtons::change(uint8_t button, bool pressed, bool pulse)
 void SwitchButtons::volumeChanged(OSObject *owner, IOInterruptEventSource *sender, int count)
 {
     auto *self = OSDynamicCast(SwitchButtons, owner);
-    if (!self) return;
+    if (!self)
+        return;
     for (unsigned i = 0; i < kVolumeCount; ++i) {
         if (self->volume[i] == sender)
             self->change(kVolume[i].button, tegra_gpio_read(kVolume[i].gpio) == 0, count >= 2);
@@ -237,14 +262,19 @@ void SwitchButtons::volumeChanged(OSObject *owner, IOInterruptEventSource *sende
 void SwitchButtons::pmicInterrupt(OSObject *owner, IOInterruptEventSource *, int)
 {
     auto *self = OSDynamicCast(SwitchButtons, owner);
-    if (!self) return;
+    if (!self)
+        return;
     uint8_t top = 0, edges = 0, state = 0;
     int err = pmicRead(IrqTop, &top);
-    if (!err && (top & kTopOnOff)) err = pmicRead(OnOffIrq, &edges);
+    if (!err && (top & kTopOnOff))
+        err = pmicRead(OnOffIrq, &edges);
     // The RTC alarm shares nIRQ; it is unmasked only around system sleep (SwitchPMIC's wake alarm).
-    if (!err && (top & kTopRtc)) switch_rtc_interrupt();
-    if (!err) err = pmicRead(OnOffStat, &state);
-    if (err) panic("SwitchButtons: reading the MAX77620 interrupt status failed: I2C error %d", err);
+    if (!err && (top & kTopRtc))
+        switch_rtc_interrupt();
+    if (!err)
+        err = pmicRead(OnOffStat, &state);
+    if (err)
+        panic("SwitchButtons: reading the MAX77620 interrupt status failed: I2C error %d", err);
 
     const uint64_t now = mach_absolute_time();
     uint64_t elapsedNS = 0;
@@ -273,13 +303,17 @@ void SwitchButtons::pmicInterrupt(OSObject *owner, IOInterruptEventSource *, int
 void SwitchButtons::btClicks(OSObject *owner, IOInterruptEventSource *, int)
 {
     auto *self = OSDynamicCast(SwitchButtons, owner);
-    if (!self) return;
+    if (!self)
+        return;
     const uint8_t which = __atomic_exchange_n(&self->clicks, (uint8_t)0, __ATOMIC_ACQ_REL);
+
     const struct {
         uint8_t bt, button;
     } kClicks[] = {{SWITCH_BT_HOME, kSwitchButtonHome}, {SWITCH_BT_CAPTURE, kSwitchButtonSnapshot}};
+
     for (const auto &c : kClicks) {
-        if (!(which & c.bt)) continue;
+        if (!(which & c.bt))
+            continue;
         self->buttons |= c.button;
         self->post();
         self->buttons &= (uint8_t)~c.button;
@@ -289,14 +323,16 @@ void SwitchButtons::btClicks(OSObject *owner, IOInterruptEventSource *, int)
 
 void SwitchButtons::watchdogFired(OSObject *owner, IOTimerEventSource *sender)
 {
-    for (const Volume &v : kVolume) tegra_gpio_check_delivery(v.gpio, "SwitchButtons");
+    for (const Volume &v : kVolume)
+        tegra_gpio_check_delivery(v.gpio, "SwitchButtons");
     switch_check_after_ms(sender, kWatchdogMS);
 }
 
 extern "C" int switch_buttons_start(void)
 {
     static SwitchButtons *buttons;
-    if (buttons) return 0;
+    if (buttons)
+        return 0;
     IOService *resources = IOService::getResourceService();
     SwitchButtons *candidate = OSTypeAlloc(SwitchButtons);
     if (!resources || !candidate || !candidate->init() || !candidate->attach(resources) ||
@@ -311,5 +347,6 @@ extern "C" int switch_buttons_start(void)
 
 extern "C" void switch_buttons_bt_click(uint8_t which)
 {
-    if (SwitchButtons *buttons = __atomic_load_n(&gButtons, __ATOMIC_ACQUIRE)) buttons->click(which);
+    if (SwitchButtons *buttons = __atomic_load_n(&gButtons, __ATOMIC_ACQUIRE))
+        buttons->click(which);
 }

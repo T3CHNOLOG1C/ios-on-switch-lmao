@@ -20,11 +20,13 @@
 #endif
 
 extern "C" void pushcount_report(const char *what);
+
 // What Core Animation does with every command buffer it makes: no content protection (setProtectionOptions:, SPI)
 static void caCommandBuffer(id<MTLCommandBuffer> cb)
 {
     static const SEL protection = NSSelectorFromString(@"setProtectionOptions:");
-    if ([(id)cb respondsToSelector:protection]) ((void (*)(id, SEL, uint64_t))objc_msgSend)(cb, protection, 0);
+    if ([(id)cb respondsToSelector:protection])
+        ((void (*)(id, SEL, uint64_t))objc_msgSend)(cb, protection, 0);
 }
 
 static void missing(const char *cls, const char *sel)
@@ -43,12 +45,14 @@ static uint64_t threadNs()
             (uint64_t)t.system_time.seconds * 1000000 + t.system_time.microseconds) *
            1000;
 }
+
 static MTLFunctionConstantValues *constants(const std::vector<std::string> &items)
 {
     MTLFunctionConstantValues *v = [MTLFunctionConstantValues new];
     for (const std::string &item : items) {
         size_t a = item.rfind(':'), b = a == std::string::npos ? a : item.rfind(':', a - 1);
-        if (a == std::string::npos || b == std::string::npos) continue;
+        if (a == std::string::npos || b == std::string::npos)
+            continue;
         std::string name = item.substr(0, b), type = item.substr(b + 1, a - b - 1), hex = item.substr(a + 1);
         uint8_t bytes[64] = {};
         for (size_t i = 0; i + 1 < hex.size() && i / 2 < sizeof bytes; i += 2)
@@ -62,15 +66,19 @@ static MTLFunctionConstantValues *constants(const std::vector<std::string> &item
     }
     return v;
 }
+
 static id<MTLFunction> function(id<MTLLibrary> qc, const std::vector<std::string> &stage)
 {
-    if (stage.empty()) return nil;
-    if (stage.size() == 1) return [qc newFunctionWithName:@(stage[0].c_str())];
+    if (stage.empty())
+        return nil;
+    if (stage.size() == 1)
+        return [qc newFunctionWithName:@(stage[0].c_str())];
     NSError *e = nil;
     return [qc newFunctionWithName:@(stage[0].c_str())
                     constantValues:constants(std::vector<std::string>(stage.begin() + 1, stage.end()))
                              error:&e];
 }
+
 static MTLRenderPipelineDescriptor *descriptor(id<MTLLibrary> qc, const std::string &line)
 {
     size_t bar1 = line.find(" | v "), bar2 = line.find(" | f "), bar3 = line.find(" | ", bar2 + 5);
@@ -78,7 +86,8 @@ static MTLRenderPipelineDescriptor *descriptor(id<MTLLibrary> qc, const std::str
     MTLVertexDescriptor *vd = nil;
     for (const std::string &h : frame::split(line.substr(0, bar1))) {
         if (h.rfind("label=", 0) == 0) {
-            if (h != "label=-") d.label = @(h.substr(6).c_str());
+            if (h != "label=-")
+                d.label = @(h.substr(6).c_str());
         } else if (h.rfind("samples=", 0) == 0)
             d.rasterSampleCount = strtoul(h.c_str() + 8, nullptr, 10);
         else if (h.rfind("topo=", 0) == 0)
@@ -100,8 +109,10 @@ static MTLRenderPipelineDescriptor *descriptor(id<MTLLibrary> qc, const std::str
             c.alphaBlendOperation = (MTLBlendOperation)x[8];
         } else if (h[0] == 'a' && isdigit(h[1])) {
             unsigned i, x[6] = {};
-            if (sscanf(h.c_str(), "a%u=%u:%u:%u:%u:%u:%u", &i, x, x + 1, x + 2, x + 3, x + 4, x + 5) != 7) continue;
-            if (!vd) vd = [MTLVertexDescriptor vertexDescriptor];
+            if (sscanf(h.c_str(), "a%u=%u:%u:%u:%u:%u:%u", &i, x, x + 1, x + 2, x + 3, x + 4, x + 5) != 7)
+                continue;
+            if (!vd)
+                vd = [MTLVertexDescriptor vertexDescriptor];
             vd.attributes[i].format = (MTLVertexFormat)x[0];
             vd.attributes[i].offset = x[1];
             vd.attributes[i].bufferIndex = x[2];
@@ -127,10 +138,14 @@ int main(int argc, char **argv)
         }
         const unsigned frames = atoi(argv[5]);
         frame::Shape shape;
-        if (argc > 6) shape.blurPasses = atoi(argv[6]);
-        if (argc > 7) shape.draws = atoi(argv[7]);
-        if (argc > 8) shape.uniformBytes = atoi(argv[8]);
-        if (argc > 9) shape.vertexBytes = atoi(argv[9]);
+        if (argc > 6)
+            shape.blurPasses = atoi(argv[6]);
+        if (argc > 7)
+            shape.draws = atoi(argv[7]);
+        if (argc > 8)
+            shape.uniformBytes = atoi(argv[8]);
+        if (argc > 9)
+            shape.vertexBytes = atoi(argv[9]);
 #ifdef RAW_FACADE
         // argv[1]: the pack. FRAME_FALLBACK=<nvk dylib>: the m2v device under it (the render server's arrangement), else none
         id<MTLDevice> fallback = nil;
@@ -169,9 +184,12 @@ int main(int argc, char **argv)
                 }
                 continue;
             }
-            if (!s.uber && !s.blur) continue;
-            if (s.uber && uber.size() >= shape.mainStates) continue;
-            if (s.blur && blur.size() >= 4 && !getenv("FRAME_ALL_STATES")) continue;
+            if (!s.uber && !s.blur)
+                continue;
+            if (s.uber && uber.size() >= shape.mainStates)
+                continue;
+            if (s.blur && blur.size() >= 4 && !getenv("FRAME_ALL_STATES"))
+                continue;
             id<MTLRenderPipelineState> p = [dev newRenderPipelineStateWithDescriptor:descriptor(qc, s.line)
                                                                                error:&error];
             if (!p) {
@@ -204,7 +222,8 @@ int main(int argc, char **argv)
                 const bool padded = !strcmp(getenv("FRAME_YCBCR"), "padded"),
                            pitch16 = !strcmp(getenv("FRAME_YCBCR"), "pitch16"), full = getenv("FRAME_YCBCR_FULL");
                 frame::TexDesc yt = td;
-                if (const char *size = getenv("FRAME_YCBCR_SIZE")) sscanf(size, "%dx%d", &yt.w, &yt.h);
+                if (const char *size = getenv("FRAME_YCBCR_SIZE"))
+                    sscanf(size, "%dx%d", &yt.w, &yt.h);
                 auto odd16 = [](size_t n) {
                     n = (n + 15) & ~size_t(15);
                     return n & 31 ? n : n + 16;
@@ -237,7 +256,8 @@ int main(int argc, char **argv)
                     (id)kIOSurfacePlaneInfo : @[ p0, p1 ]
                 });
                 uint8_t *base = (uint8_t *)IOSurfaceGetBaseAddress(surfaces[t]);
-                for (size_t i = 0; i < off1 + row1 * ((h + 1) / 2); i++) base[i] = uint8_t(i * 37u + (i >> 8));
+                for (size_t i = 0; i < off1 + row1 * ((h + 1) / 2); i++)
+                    base[i] = uint8_t(i * 37u + (i >> 8));
                 {  // the planes' texels as the conversion must sample them (nvdec NVDEC_TEXELS hashes each pitch header's)
                     auto rows = [&](size_t at, size_t row, size_t bytes, size_t count) {
                         uint64_t hash = 0xcbf29ce484222325ull;
@@ -376,8 +396,10 @@ int main(int argc, char **argv)
                 [e setVertexBytes:bytes.data() length:u.length atIndex:slot == 1 ? 7 : slot];
                 [e setFragmentBytes:bytes.data() length:u.length atIndex:slot];
             }
-            for (int t = 0; t < 16; t++) [e setFragmentTexture:tex[frame::IMAGE1] atIndex:t];
-            for (int s2 = 0; s2 < 16; s2++) [e setFragmentSamplerState:smp[s2 & 1] atIndex:s2];
+            for (int t = 0; t < 16; t++)
+                [e setFragmentTexture:tex[frame::IMAGE1] atIndex:t];
+            for (int s2 = 0; s2 < 16; s2++)
+                [e setFragmentSamplerState:smp[s2 & 1] atIndex:s2];
             [e drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
             [e endEncoding];
         };
@@ -387,7 +409,8 @@ int main(int argc, char **argv)
             const frame::TexDesc td = frame::texture(frame::IMAGE1);
             mipSource = [dev newBufferWithLength:NSUInteger(td.w) * td.h * 4 options:MTLResourceStorageModeShared];
             uint8_t *b = (uint8_t *)mipSource.contents;
-            for (NSUInteger i = 0; i < NSUInteger(td.w) * td.h * 4; i++) b[i] = uint8_t(i * 131u + (i >> 9) * 7u + 3u);
+            for (NSUInteger i = 0; i < NSUInteger(td.w) * td.h * 4; i++)
+                b[i] = uint8_t(i * 131u + (i >> 9) * 7u + 3u);
         }
         // FRAME_YCBCR_WRITE=k: every k-th frame from the k-th, the 4:2:0 surface written under a write lock (its seed moves:
         // a decoder's next frame), so the raw path converts its image again then and only then (RMTexture _imageSeed)
@@ -438,7 +461,8 @@ int main(int argc, char **argv)
                     }
                     MTLRenderPassDescriptor *rp = [MTLRenderPassDescriptor renderPassDescriptor];
                     for (int c = 0; c < 3; c++) {
-                        if (pass.color[c] < 0) continue;
+                        if (pass.color[c] < 0)
+                            continue;
                         rp.colorAttachments[c].texture = tex[pass.color[c]];
                         rp.colorAttachments[c].loadAction = pass.load[c] == 2   ? MTLLoadActionClear
                                                             : pass.load[c] == 1 ? MTLLoadActionLoad
@@ -459,7 +483,8 @@ int main(int argc, char **argv)
                         for (const frame::Bytes &b : d.bytes) {
                             frame::fill(bytes, b, f, drawIndex);
                             if (shape.ring) {
-                                if (ringAt + b.length > frame::kRingBytes) ringAt = 0;
+                                if (ringAt + b.length > frame::kRingBytes)
+                                    ringAt = 0;
                                 memcpy((uint8_t *)ring.contents + ringAt, bytes.data(), b.length);
                                 if (!bound[b.stage][b.slot]) {
                                     if (b.stage == 1)
@@ -484,9 +509,11 @@ int main(int argc, char **argv)
                                 [e setFragmentBytes:bytes.data() length:b.length atIndex:b.slot];
                         }
                         for (int t = 0; t < 16; t++)
-                            if (d.textures[t] >= 0) [e setFragmentTexture:tex[d.textures[t]] atIndex:t];
+                            if (d.textures[t] >= 0)
+                                [e setFragmentTexture:tex[d.textures[t]] atIndex:t];
                         for (int s = 0; s < 16; s++)
-                            if (d.samplers[s] >= 0) [e setFragmentSamplerState:smp[d.samplers[s]] atIndex:s];
+                            if (d.samplers[s] >= 0)
+                                [e setFragmentSamplerState:smp[d.samplers[s]] atIndex:s];
                         if (getenv("FRAME_SAMPLER_SLOT"))
                             [e setFragmentSamplerState:smp[0] atIndex:atoi(getenv("FRAME_SAMPLER_SLOT"))];
                         [e setScissorRect:(MTLScissorRect){d.scissor[0], d.scissor[1], d.scissor[2], d.scissor[3]}];
@@ -494,7 +521,8 @@ int main(int argc, char **argv)
                         // 16-bit indices written into its buffer pool at 4-byte alignment, drawIndexedPrimitives on triangles)
                         if (getenv("FRAME_INDEXED") && !d.blur && drawIndex % 3 == 1) {
                             static NSUInteger ibAt = 0;
-                            if (ibAt + 64 > 65536) ibAt = 0;
+                            if (ibAt + 64 > 65536)
+                                ibAt = 0;
                             static const uint16_t quad[6] = {0, 1, 2, 2, 1, 3};
                             memcpy((uint8_t *)indices.contents + ibAt, quad, sizeof quad);
                             [e drawIndexedPrimitives:MTLPrimitiveTypeTriangle
@@ -534,14 +562,16 @@ int main(int argc, char **argv)
         std::vector<double> c(cpu.begin() + warm, cpu.end());
         std::sort(c.begin(), c.end());
         double sum = 0;
-        for (double x : c) sum += x;
+        for (double x : c)
+            sum += x;
         if (!c.empty())
             printf(FRAME_PATH " frames=%zu blur=%u draws=%u: encode cpu mean %.3f ms p50 %.3f p90 %.3f\n", c.size(),
                    shape.blurPasses, shape.draws, sum / c.size(), c[c.size() / 2], c[c.size() * 9 / 10]);
 #ifdef RAW_FACADE
         {
             char rates[2048];
-            if (raw_metal_rates(rates, sizeof rates)) printf("RATES %s\n", rates);
+            if (raw_metal_rates(rates, sizeof rates))
+                printf("RATES %s\n", rates);
         }
 #endif
         pushcount_report("nvkframe");

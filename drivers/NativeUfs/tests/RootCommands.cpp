@@ -31,7 +31,8 @@ static bool released;
 
 static uint64_t io(unsigned op, uint64_t address, uint64_t value, void *bytes)
 {
-    if (op == 0) return registers.at(address / 4);
+    if (op == 0)
+        return registers.at(address / 4);
     if (op == 1) {
         ++writes;
         if (address == 0x20)
@@ -47,24 +48,35 @@ static uint64_t io(unsigned op, uint64_t address, uint64_t value, void *bytes)
                 return 0;
             }
             registers[0x58 / 4] = 0;
-            if (fault == Fault::Timeout) return 0;
+            if (fault == Fault::Timeout)
+                return 0;
             uint8_t *cmd = device.data() + kUcdOffset, *rsp = cmd + kRspOffset;
             std::fill(rsp, rsp + 512, 0);
             memset(device.data() + kDataOffset, 0x7b, kDataMax);
             *reinterpret_cast<uint32_t *>(device.data() + 8) = 0;
-            if (fault == Fault::Empty) return 0;
+            if (fault == Fault::Empty)
+                return 0;
             memcpy(rsp, cmd, 32);
             rsp[0] = cmd[0] + 0x20;
             rsp[1] = 0;
-            if (cmd[0] == 1) putBe32(rsp + 12, 0);
-            if (cmd[0] == 0x16) putBe32(rsp + 20, 0x11);
-            if (fault == Fault::Type) rsp[0] = 0x3f;
-            if (fault == Fault::Tag) ++rsp[3];
-            if (fault == Fault::Lun) ++rsp[2];
-            if (fault == Fault::Query) ++rsp[13];
-            if (fault == Fault::Residual) putBe32(rsp + 12, 4096);
-            if (fault == Fault::Underflow) rsp[1] = 0x20;
-            if (fault == Fault::Oversize) rsp[10] = 0xff;
+            if (cmd[0] == 1)
+                putBe32(rsp + 12, 0);
+            if (cmd[0] == 0x16)
+                putBe32(rsp + 20, 0x11);
+            if (fault == Fault::Type)
+                rsp[0] = 0x3f;
+            if (fault == Fault::Tag)
+                ++rsp[3];
+            if (fault == Fault::Lun)
+                ++rsp[2];
+            if (fault == Fault::Query)
+                ++rsp[13];
+            if (fault == Fault::Residual)
+                putBe32(rsp + 12, 4096);
+            if (fault == Fault::Underflow)
+                rsp[1] = 0x20;
+            if (fault == Fault::Oversize)
+                rsp[10] = 0xff;
             if (fault == Fault::SenseLength) {
                 rsp[11] = 2;
                 rsp[33] = 18;
@@ -90,10 +102,13 @@ static uint64_t io(unsigned op, uint64_t address, uint64_t value, void *bytes)
         } else
             memcpy(bytes, at, value);
     }
-    if (op == 4) return now;
-    if (op == 5) now += value;
+    if (op == 4)
+        return now;
+    if (op == 5)
+        now += value;
     return 0;
 }
+
 static void reset(Fault f = Fault::None)
 {
     fault = f;
@@ -107,6 +122,7 @@ static void reset(Fault f = Fault::None)
     registers[0x60 / 4] = 1;
     ufs_test_reset(io, 0x8cb5e9000);
 }
+
 static void assertQuarantined()
 {
     assert(ufs_test_poisoned());
@@ -121,6 +137,7 @@ static void assertQuarantined()
     assert(writes == oldWrites && releases == oldReleases);
     assert(!memcmp(old.data(), memory, sizeof(memory)));
 }
+
 int main()
 {
     reset();
@@ -129,7 +146,9 @@ int main()
     assert(ufs_test_query(3, 2, &value) == 0 && value == 0x11);
     std::array<uint8_t, 131072> out;
     assert(ufs_test_read(0, 1, 32, out.data()) == 0);
-    assert(std::all_of(out.begin(), out.end(), [](uint8_t x) { return x == 0x7b; }));
+    assert(std::all_of(out.begin(), out.end(), [](uint8_t x) {
+        return x == 0x7b;
+    }));
     assert(*reinterpret_cast<uint32_t *>(device.data() + 20) == 8);
     assert(*reinterpret_cast<uint32_t *>(device.data() + 4096 + 1024 + 4) == 8);
     assert(ufs_test_read(0, 0xffffffffULL, 1, out.data()) == 0);  // Last READ(10) LBA is valid.
@@ -140,7 +159,9 @@ int main()
         reset(f);
         out.fill(0xa5);
         assert(ufs_test_read(0, 1, 1, out.data()) != 0);
-        assert(std::all_of(out.begin(), out.end(), [](uint8_t x) { return x == 0xa5; }));
+        assert(std::all_of(out.begin(), out.end(), [](uint8_t x) {
+            return x == 0xa5;
+        }));
         assertQuarantined();
     }
     reset(Fault::Query);

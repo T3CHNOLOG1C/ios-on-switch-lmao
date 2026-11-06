@@ -12,10 +12,12 @@ static bool outputWidth(unsigned bits)
 {
     return bits == 32 || bits == 36 || bits == 40 || bits == 42 || bits == 44 || bits == 48;
 }
+
 /* Where the last import stopped (10..19, 19 = done), and for a refused page the physical address and offset: the board log shows them. */
 enum : IOReturn {
     kNativeAdrenoProtectionFailure = 2
 }; /* KERN_PROTECTION_FAILURE, as prepare() reports a range that cannot be wired for writing */
+
 extern "C" {
 volatile uint32_t native_adreno_pool_mib = 0, native_adreno_pool_status = 0;
 volatile uint32_t native_adreno_import_stage;
@@ -29,10 +31,12 @@ volatile uint32_t native_adreno_pool_stats[8];
 extern "C" {
 volatile uint32_t native_adreno_pool_wc;
 } /* [0] pool MiB, [1] BOs from the pool, [2] fell back, [3] MiB in use, [4] peak MiB, [5] scattered BOs, [6] their spans, [7] import spans */
+
 namespace {
 struct PoolExtent {
     size_t offset, bytes;
 };
+
 struct Pool {
     IOBufferMemoryDescriptor *descriptor = nullptr;
     unsigned char *virt = nullptr;
@@ -42,84 +46,105 @@ struct Pool {
     unsigned count = 0;
     bool write_combined = false;
 } pool;
+
 bool poolTake(size_t bytes, size_t *offset)
 {
     int best = -1;
     for (unsigned i = 0; i < pool.count; ++i)
-        if (pool.free[i].bytes >= bytes && (best < 0 || pool.free[i].bytes < pool.free[best].bytes)) best = (int)i;
-    if (best < 0) return false;
+        if (pool.free[i].bytes >= bytes && (best < 0 || pool.free[i].bytes < pool.free[best].bytes))
+            best = (int)i;
+    if (best < 0)
+        return false;
     *offset = pool.free[best].offset;
     pool.free[best].offset += bytes;
     pool.free[best].bytes -= bytes;
     if (!pool.free[best].bytes) {
-        for (unsigned i = (unsigned)best; i + 1 < pool.count; ++i) pool.free[i] = pool.free[i + 1];
+        for (unsigned i = (unsigned)best; i + 1 < pool.count; ++i)
+            pool.free[i] = pool.free[i + 1];
         --pool.count;
     }
     pool.used += bytes;
-    if (pool.used > pool.peak) pool.peak = pool.used;
+    if (pool.used > pool.peak)
+        pool.peak = pool.used;
     native_adreno_pool_stats[3] = (uint32_t)(pool.used >> 20);
     native_adreno_pool_stats[4] = (uint32_t)(pool.peak >> 20);
     return true;
 }
+
 void poolGive(size_t offset, size_t bytes)
 {
     unsigned at = 0;
-    while (at < pool.count && pool.free[at].offset < offset) ++at;
+    while (at < pool.count && pool.free[at].offset < offset)
+        ++at;
     if (pool.count >= 512) {
         pool.used -= bytes;
         return;
     } /* cannot happen with bounded fragmentation; the extent is lost, not reused */
-    for (unsigned i = pool.count; i > at; --i) pool.free[i] = pool.free[i - 1];
+    for (unsigned i = pool.count; i > at; --i)
+        pool.free[i] = pool.free[i - 1];
     pool.free[at] = {offset, bytes};
     ++pool.count;
     if (at + 1 < pool.count && pool.free[at].offset + pool.free[at].bytes == pool.free[at + 1].offset) {
         pool.free[at].bytes += pool.free[at + 1].bytes;
-        for (unsigned i = at + 1; i + 1 < pool.count; ++i) pool.free[i] = pool.free[i + 1];
+        for (unsigned i = at + 1; i + 1 < pool.count; ++i)
+            pool.free[i] = pool.free[i + 1];
         --pool.count;
     }
     if (at && pool.free[at - 1].offset + pool.free[at - 1].bytes == pool.free[at].offset) {
         pool.free[at - 1].bytes += pool.free[at].bytes;
-        for (unsigned i = at; i + 1 < pool.count; ++i) pool.free[i] = pool.free[i + 1];
+        for (unsigned i = at; i + 1 < pool.count; ++i)
+            pool.free[i] = pool.free[i + 1];
         --pool.count;
     }
     pool.used -= bytes;
     native_adreno_pool_stats[3] = (uint32_t)(pool.used >> 20);
 }
 }
+
 size_t NativeAdrenoMemory::poolBytes()
 {
     return pool.bytes;
 }
+
 /* int-152: a user BO's pages changed attribute one pmap_set_cache_attributes call at a time (each walks the page's mappings, flushes the
  * TLB and cleans the page), on allocation and again on release, under the connection lock: 3 ms a BO on average and 90-130 ms for a
  * surface-sized one, while every other GPU call of every client waited. The pool is the BOs' own block and nothing else maps it, so
  * its pages take the attribute once here and keep it while the pool lives. */
 IOReturn NativeAdrenoMemory::writeCombinePool()
 {
-    if (!pool.descriptor || !pool.virt || !pool.bytes) return kIOReturnNotReady;
-    if (pool.write_combined) return kIOReturnSuccess;
+    if (!pool.descriptor || !pool.virt || !pool.bytes)
+        return kIOReturnNotReady;
+    if (pool.write_combined)
+        return kIOReturnSuccess;
     IOReturn status = NativeAdrenoMaintainOwnedPages(pool.virt, pool.bytes, NativeAdrenoCleanInvalidate);
-    if (status) return status;
+    if (status)
+        return status;
     const NativeAdrenoPhysicalSpan span = {0, pool.physical, pool.bytes};
     status = NativeAdrenoSetPagesCacheMode(&span, 1, true);
-    if (status) return status;
+    if (status)
+        return status;
     pool.write_combined = true;
     return kIOReturnSuccess;
 }
+
 IOReturn NativeAdrenoMemory::reservePool(unsigned bits, size_t bytes)
 {
-    if (pool.descriptor) return kIOReturnBusy;
-    if (!bytes || (bytes & 4095) || !outputWidth(bits)) return kIOReturnBadArgument;
+    if (pool.descriptor)
+        return kIOReturnBusy;
+    if (!bytes || (bytes & 4095) || !outputWidth(bits))
+        return kIOReturnBadArgument;
     NativeAdrenoCpuState cpu{};
     IOReturn status = NativeAdrenoQueryCpu4K(&cpu);
-    if (status != kIOReturnSuccess) return status;
+    if (status != kIOReturnSuccess)
+        return status;
     const uint64_t limit = UINT64_C(1) << bits;
     IOBufferMemoryDescriptor *descriptor = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(
         kernel_task,
         static_cast<IOOptionBits>(kIODirectionInOut) | static_cast<IOOptionBits>(kIOMemoryMapperNone) |
             kIOMemoryPhysicallyContiguous,
         bytes, (limit - 1) & ~UINT64_C(4095));
-    if (!descriptor) return kIOReturnNoMemory;
+    if (!descriptor)
+        return kIOReturnNoMemory;
     status = descriptor->prepare();
     if (status != kIOReturnSuccess) {
         descriptor->release();
@@ -145,15 +170,19 @@ IOReturn NativeAdrenoMemory::reservePool(unsigned bits, size_t bytes)
     native_adreno_pool_stats[0] = (uint32_t)(bytes >> 20);
     return kIOReturnSuccess;
 }
+
 IOReturn NativeAdrenoMemory::allocate(size_t bytes, unsigned bits, bool contiguous, size_t budget, bool pooled)
 {
-    if (descriptor_ || spans_ || quarantined_) return kIOReturnBusy;
+    if (descriptor_ || spans_ || quarantined_)
+        return kIOReturnBusy;
     if (!bytes || (bytes & 4095) || !outputWidth(bits) || !budget || budget > 256u * 1024u * 1024u)
         return kIOReturnBadArgument;
-    if (bytes > budget) return kIOReturnNoResources;
+    if (bytes > budget)
+        return kIOReturnNoResources;
     NativeAdrenoCpuState cpu{};
     IOReturn status = NativeAdrenoQueryCpu4K(&cpu);
-    if (status != kIOReturnSuccess) return status;
+    if (status != kIOReturnSuccess)
+        return status;
     uint64_t limit = UINT64_C(1) << bits;
     if (pooled && pool.descriptor && bytes <= pool.bytes) {
         size_t offset = 0;
@@ -193,10 +222,12 @@ IOReturn NativeAdrenoMemory::allocate(size_t bytes, unsigned bits, bool contiguo
     }
     IOOptionBits options =
         static_cast<IOOptionBits>(kIODirectionInOut) | static_cast<IOOptionBits>(kIOMemoryMapperNone);
-    if (contiguous) options |= kIOMemoryPhysicallyContiguous;
+    if (contiguous)
+        options |= kIOMemoryPhysicallyContiguous;
     descriptor_ =
         IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task, options, bytes, (limit - 1) & ~UINT64_C(4095));
-    if (!descriptor_) return kIOReturnNoMemory;
+    if (!descriptor_)
+        return kIOReturnNoMemory;
     status = descriptor_->prepare();
     if (status != kIOReturnSuccess) {
         descriptor_->release();
@@ -234,7 +265,8 @@ IOReturn NativeAdrenoMemory::allocate(size_t bytes, unsigned bits, bool contiguo
     }
     bzero(mapping_, bytes);
     status = NativeAdrenoMaintainOwnedPages(mapping_, bytes, NativeAdrenoClean);
-    if (status != kIOReturnSuccess) goto failed;
+    if (status != kIOReturnSuccess)
+        goto failed;
     native_adreno_pool_stats[5] = native_adreno_pool_stats[5] + 1;
     native_adreno_pool_stats[6] = native_adreno_pool_stats[6] + (uint32_t)span_count_;
     return kIOReturnSuccess;
@@ -245,26 +277,31 @@ failed:
     (void)release();
     return status;
 }
+
 IOReturn NativeAdrenoMemory::importTask(void *task, uint64_t address, size_t bytes, unsigned bits, size_t budget)
 {
     native_adreno_import_stage = 10;
-    if (descriptor_ || imported_ || spans_ || quarantined_) return kIOReturnBusy;
+    if (descriptor_ || imported_ || spans_ || quarantined_)
+        return kIOReturnBusy;
     native_adreno_import_stage = 11;
     if (!task || !address || (address & 4095) || !bytes || (bytes & 4095) || address > UINT64_MAX - bytes ||
         !outputWidth(bits) || !budget || budget > 256u * 1024u * 1024u)
         return kIOReturnBadArgument;
     native_adreno_import_stage = 12;
-    if (bytes > budget) return kIOReturnNoResources;
+    if (bytes > budget)
+        return kIOReturnNoResources;
     NativeAdrenoCpuState cpu{};
     native_adreno_import_stage = 13;
     IOReturn status = NativeAdrenoQueryCpu4K(&cpu);
-    if (status != kIOReturnSuccess) return status;
+    if (status != kIOReturnSuccess)
+        return status;
     const uint64_t limit = UINT64_C(1) << bits;
     imported_ = IOMemoryDescriptor::withAddressRange(
         address, bytes, static_cast<IOOptionBits>(kIODirectionInOut) | static_cast<IOOptionBits>(kIOMemoryMapperNone),
         static_cast<task_t>(task));
     native_adreno_import_stage = 14;
-    if (!imported_) return kIOReturnNoMemory;
+    if (!imported_)
+        return kIOReturnNoMemory;
     native_adreno_import_stage = 15;
     status = imported_->prepare();
     if (status == kNativeAdrenoProtectionFailure) {
@@ -275,9 +312,11 @@ IOReturn NativeAdrenoMemory::importTask(void *task, uint64_t address, size_t byt
         imported_ = IOMemoryDescriptor::withAddressRange(
             address, bytes, static_cast<IOOptionBits>(kIODirectionOut) | static_cast<IOOptionBits>(kIOMemoryMapperNone),
             static_cast<task_t>(task));
-        if (!imported_) return kIOReturnNoMemory;
+        if (!imported_)
+            return kIOReturnNoMemory;
         status = imported_->prepare();
-        if (status == kIOReturnSuccess) read_only_ = true;
+        if (status == kIOReturnSuccess)
+            read_only_ = true;
     }
     if (status != kIOReturnSuccess) {
         imported_->release();
@@ -288,7 +327,8 @@ IOReturn NativeAdrenoMemory::importTask(void *task, uint64_t address, size_t byt
     bytes_ = bytes;
     status = kIOReturnUnsupported;
     native_adreno_import_stage = 16;
-    if (imported_->getLength() != bytes) goto failed;
+    if (imported_->getLength() != bytes)
+        goto failed;
     native_adreno_import_stage = 17;
     span_capacity_ = bytes / 4096;
     spans_ = IONewData(NativeAdrenoPhysicalSpan, span_capacity_);
@@ -318,6 +358,7 @@ failed:
     (void)release();
     return status;
 }
+
 IOReturn NativeAdrenoMemory::makeWriteCombined()
 {
     if (!(descriptor_ || pooled_) || imported_ || !prepared_ || quarantined_ || device_references_ || write_combined_ ||
@@ -328,16 +369,20 @@ IOReturn NativeAdrenoMemory::makeWriteCombined()
         return kIOReturnSuccess;
     }
     IOReturn status = NativeAdrenoMaintainOwnedPages(mapping_, bytes_, NativeAdrenoCleanInvalidate);
-    if (status) return status;
+    if (status)
+        return status;
     status = NativeAdrenoSetPagesCacheMode(spans_, span_count_, true);
-    if (status) return status;
+    if (status)
+        return status;
     write_combined_ = true;
     return kIOReturnSuccess;
 }
+
 IOReturn NativeAdrenoMemory::release()
 {
     native_adreno_trace_stage = 30;
-    if (device_references_ || quarantined_) return kIOReturnBusy;
+    if (device_references_ || quarantined_)
+        return kIOReturnBusy;
     if (write_combined_ && pooled_ && pool.write_combined)
         write_combined_ = false; /* the pool's pages keep the attribute */
     if (write_combined_) {
@@ -383,32 +428,43 @@ IOReturn NativeAdrenoMemory::release()
         prepared_ = false;
         pool_offset_ = 0;
     }
-    if (spans_) IODeleteData(spans_, NativeAdrenoPhysicalSpan, span_capacity_);
+    if (spans_)
+        IODeleteData(spans_, NativeAdrenoPhysicalSpan, span_capacity_);
     mapping_ = nullptr;
     spans_ = nullptr;
     bytes_ = span_count_ = span_capacity_ = 0;
     read_only_ = false;
     return kIOReturnSuccess;
 }
+
 IOReturn NativeAdrenoMemory::holdForDevice()
 {
-    if (!backed() || !prepared_ || !span_count_ || quarantined_) return kIOReturnNotReady;
-    if (device_references_ == UINT32_MAX) return kIOReturnNoResources;
+    if (!backed() || !prepared_ || !span_count_ || quarantined_)
+        return kIOReturnNotReady;
+    if (device_references_ == UINT32_MAX)
+        return kIOReturnNoResources;
     ++device_references_;
     return kIOReturnSuccess;
 }
+
 IOReturn NativeAdrenoMemory::retireAfterQuiescence()
 {
-    if (!device_references_) return kIOReturnBadArgument;
-    if (quarantined_) return kIOReturnNotReady;
+    if (!device_references_)
+        return kIOReturnBadArgument;
+    if (quarantined_)
+        return kIOReturnNotReady;
     --device_references_;
     return kIOReturnSuccess;
 }
+
 IOReturn NativeAdrenoMemory::publishForDevice(size_t offset, size_t bytes, bool writes, bool include_write_combined)
 {
-    if (!backed() || !prepared_ || quarantined_) return kIOReturnNotReady;
-    if (!bytes || ((offset | bytes) & 4095) || offset > bytes_ || bytes > bytes_ - offset) return kIOReturnBadArgument;
-    if (imported_) return maintainImported(offset, bytes, writes ? NativeAdrenoCleanInvalidate : NativeAdrenoClean);
+    if (!backed() || !prepared_ || quarantined_)
+        return kIOReturnNotReady;
+    if (!bytes || ((offset | bytes) & 4095) || offset > bytes_ || bytes > bytes_ - offset)
+        return kIOReturnBadArgument;
+    if (imported_)
+        return maintainImported(offset, bytes, writes ? NativeAdrenoCleanInvalidate : NativeAdrenoClean);
     if (write_combined_) /* no CPU mapping should cache these pages; if one does, reach its lines through the physical pages */
         return include_write_combined
                    ? maintainImported(offset, bytes, writes ? NativeAdrenoCleanInvalidate : NativeAdrenoClean)
@@ -416,16 +472,22 @@ IOReturn NativeAdrenoMemory::publishForDevice(size_t offset, size_t bytes, bool 
     return NativeAdrenoMaintainOwnedPages(static_cast<unsigned char *>(mapping_) + offset, bytes,
                                           writes ? NativeAdrenoCleanInvalidate : NativeAdrenoClean);
 }
+
 IOReturn NativeAdrenoMemory::acquireDeviceWrites(size_t offset, size_t bytes)
 {
-    if (!backed() || !prepared_ || quarantined_) return kIOReturnNotReady;
-    if (!bytes || ((offset | bytes) & 4095) || offset > bytes_ || bytes > bytes_ - offset) return kIOReturnBadArgument;
+    if (!backed() || !prepared_ || quarantined_)
+        return kIOReturnNotReady;
+    if (!bytes || ((offset | bytes) & 4095) || offset > bytes_ || bytes > bytes_ - offset)
+        return kIOReturnBadArgument;
     /* Imported pages may hold the owner's unrelated dirty lines next to the GPU's writes: clean as well as invalidate. */
-    if (imported_) return maintainImported(offset, bytes, NativeAdrenoCleanInvalidate);
-    if (write_combined_) return kIOReturnSuccess;
+    if (imported_)
+        return maintainImported(offset, bytes, NativeAdrenoCleanInvalidate);
+    if (write_combined_)
+        return kIOReturnSuccess;
     return NativeAdrenoMaintainOwnedPages(static_cast<unsigned char *>(mapping_) + offset, bytes,
                                           NativeAdrenoInvalidate);
 }
+
 /* Imported pages have no kernel mapping here (and write-combined ones only a non-cacheable one); maintain each span's part of
  * [offset, offset+bytes) by physical address. */
 IOReturn NativeAdrenoMemory::maintainImported(size_t offset, size_t bytes, NativeAdrenoCacheOperation op)
@@ -434,10 +496,12 @@ IOReturn NativeAdrenoMemory::maintainImported(size_t offset, size_t bytes, Nativ
         const NativeAdrenoPhysicalSpan &span = spans_[i];
         const size_t begin = offset > span.offset ? offset : span.offset;
         const size_t end = offset + bytes < span.offset + span.bytes ? offset + bytes : span.offset + span.bytes;
-        if (begin >= end) continue;
+        if (begin >= end)
+            continue;
         const IOReturn status =
             NativeAdrenoMaintainPhysicalPages(span.physical + (begin - span.offset), end - begin, op);
-        if (status) return status;
+        if (status)
+            return status;
     }
     return kIOReturnSuccess;
 }

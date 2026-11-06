@@ -25,6 +25,7 @@ uint64_t content(uint8_t image, uint64_t block)
     z = (z ^ (z >> 27)) * 0x94d049bb133111ebull;
     return z ^ (z >> 31);
 }
+
 constexpr uint64_t kPoison = 0xdeadbeefdeadbeefull;
 
 // The cache with its windows, each window's "bytes" one uint64_t per block (the block's content id).
@@ -38,12 +39,18 @@ struct Rig {
     Rig(uint32_t count, uint32_t bucketCount, uint64_t image0, uint64_t image1)
         : windows(count), slots(count, std::vector<uint64_t>(kSwitchWindowBlocks, kPoison)), buckets(bucketCount)
     {
-        for (uint32_t i = 0; i < count; ++i) windows[i].bytes = slots[i].data();
+        for (uint32_t i = 0; i < count; ++i)
+            windows[i].bytes = slots[i].data();
         cache.init(windows.data(), count, buckets.data(), bucketCount);
         imageBlocks[0] = image0;
         imageBlocks[1] = image1;
     }
-    uint64_t *bytes(SwitchWindow *w) { return static_cast<uint64_t *>(w->bytes); }
+
+    uint64_t *bytes(SwitchWindow *w)
+    {
+        return static_cast<uint64_t *>(w->bytes);
+    }
+
     // The card's read: the image's blocks into the window, or poison for a failed one.
     SwitchCacheRequest *finish(const SwitchCacheRead &r, bool ok)
     {
@@ -51,17 +58,21 @@ struct Rig {
             bytes(r.window)[b] = ok ? content(r.window->image, r.window->tag + b) : kPoison;
         return cache.finished(r.window, r.first, r.count, ok);
     }
+
     // Copies a ready request's blocks out of its windows; false if any differs from the image.
     bool copyOut(const SwitchCacheRequest &r, uint8_t image, uint64_t first, uint32_t blocks)
     {
         const uint64_t firstTag = first - first % kSwitchWindowBlocks;
         for (uint64_t b = first; b < first + blocks; ++b) {
             const uint32_t i = uint32_t((b - firstTag) / kSwitchWindowBlocks);
-            if (i >= r.windows) return false;
+            if (i >= r.windows)
+                return false;
             SwitchWindow *w = r.window[i];
             const uint32_t at = uint32_t(b - w->tag);
-            if (w->image != image || w->tag != firstTag + uint64_t(i) * kSwitchWindowBlocks || at >= 32) return false;
-            if (!(w->valid & (1u << at)) || bytes(w)[at] != content(image, b)) return false;
+            if (w->image != image || w->tag != firstTag + uint64_t(i) * kSwitchWindowBlocks || at >= 32)
+                return false;
+            if (!(w->valid & (1u << at)) || bytes(w)[at] != content(image, b))
+                return false;
         }
         return true;
     }
@@ -70,7 +81,8 @@ struct Rig {
 std::vector<SwitchCacheRequest *> list(SwitchCacheRequest *ready)
 {
     std::vector<SwitchCacheRequest *> out;
-    for (; ready; ready = ready->nextReady) out.push_back(ready);
+    for (; ready; ready = ready->nextReady)
+        out.push_back(ready);
     return out;
 }
 
@@ -171,7 +183,8 @@ TEST(CryptexCache, ALargeRequestIsTakenOnlyWhenItsBlocksAreAllHere)
     SwitchCacheRequest big{};
     EXPECT_FALSE(rig.cache.plan(&big, 0, 0, 64, 300, SwitchCache::kCoveredOnly, reads, 32, &n));
     EXPECT_EQ(rig.cache.stats().refused, 1u);
-    for (uint64_t at = 0; at < 64;) at += rig.cache.readAhead(0, at, 64 - at, 300, reads + (at ? 1 : 0), &n);
+    for (uint64_t at = 0; at < 64;)
+        at += rig.cache.readAhead(0, at, 64 - at, 300, reads + (at ? 1 : 0), &n);
     ASSERT_TRUE(rig.cache.plan(&big, 0, 0, 64, 300, SwitchCache::kCoveredOnly, reads + 2, 30, &n));
     EXPECT_EQ(n, 0u);
     EXPECT_EQ(big.waiting, 2u);
@@ -284,13 +297,16 @@ TEST(CryptexCache, RandomTrafficAgainstAModel)
             uint32_t blocks = 0;
             bool ready = false, done = false, mayFail = false;
         };
+
         std::deque<std::unique_ptr<Request>> live;
         std::vector<Request *> ready;
+
         struct Read {
             SwitchCacheRead r;
             uint8_t image;
             uint64_t tag;
         };
+
         std::vector<Read> inflight;
         std::map<std::pair<uint8_t, uint64_t>, int> reading;  // (image, block) -> reads in flight
 
@@ -336,7 +352,8 @@ TEST(CryptexCache, RandomTrafficAgainstAModel)
                     ++refused;
                     continue;
                 }
-                if (mode == SwitchCache::kCoveredOnly) ASSERT_EQ(n, 0u) << "a large request read something";
+                if (mode == SwitchCache::kCoveredOnly)
+                    ASSERT_EQ(n, 0u) << "a large request read something";
                 issue(reads, n);
                 ++requests;
                 if (!q->cr.waiting) {
@@ -352,7 +369,8 @@ TEST(CryptexCache, RandomTrafficAgainstAModel)
                     SwitchCacheRead reads[kSwitchWindowReads];
                     uint32_t n = 0;
                     const uint32_t covered = rig.cache.readAhead(image, at, end - at, size, reads, &n);
-                    if (!covered) break;
+                    if (!covered)
+                        break;
                     issue(reads, n);
                     at += covered;
                 }
@@ -362,7 +380,8 @@ TEST(CryptexCache, RandomTrafficAgainstAModel)
                 inflight.erase(inflight.begin() + long(i));
                 ASSERT_EQ(r.r.window->tag, r.tag) << "a window renamed while a read fills it";
                 ASSERT_FALSE(r.r.window->retired);
-                for (uint32_t b = r.r.first; b < r.r.first + r.r.count; ++b) --reading[{r.image, r.tag + b}];
+                for (uint32_t b = r.r.first; b < r.r.first + r.r.count; ++b)
+                    --reading[{r.image, r.tag + b}];
                 const bool ok = !failures || rng() % 8;
                 if (!ok)
                     for (auto &q : live)
@@ -402,7 +421,8 @@ TEST(CryptexCache, RandomTrafficAgainstAModel)
             if (!inflight.empty()) {
                 const Read r = inflight.back();
                 inflight.pop_back();
-                for (uint32_t b = r.r.first; b < r.r.first + r.r.count; ++b) --reading[{r.image, r.tag + b}];
+                for (uint32_t b = r.r.first; b < r.r.first + r.r.count; ++b)
+                    --reading[{r.image, r.tag + b}];
                 becameReady(rig.finish(r.r, true));
             }
             while (!ready.empty()) {
@@ -414,7 +434,8 @@ TEST(CryptexCache, RandomTrafficAgainstAModel)
                 q->done = true;
             }
         }
-        for (auto &q : live) ASSERT_TRUE(q->done) << "a request never completed";
+        for (auto &q : live)
+            ASSERT_TRUE(q->done) << "a request never completed";
         ASSERT_EQ(rig.cache.check(), nullptr);
         const SwitchCacheStats &s = rig.cache.stats();
         ASSERT_LE(s.aheadServed, s.aheadBlocks);

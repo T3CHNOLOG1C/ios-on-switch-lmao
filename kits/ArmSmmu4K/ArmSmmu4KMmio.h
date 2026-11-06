@@ -9,6 +9,7 @@ typedef struct {
     volatile unsigned char *mapping;
     size_t bytes;
 } ArmSmmu4KMmio;
+
 /* AArch64 little-endian direct volatile MMIO adapter, with dsb sy barriers.
  * Caller supplies an owned live Device mapping. This allocates/maps nothing,
  * powers nothing and cannot recover a synchronous external bus abort. All

@@ -63,6 +63,7 @@ enum : uint32_t {
     CE_SET_REMAP_CONST_A = 0x0700,
     CE_SET_REMAP_COMPONENTS = 0x0708,
 };
+
 constexpr uint32_t kRootBytes = 0x800, kSetBytes = 0x100, kUboChunk = 0x100;
 constexpr uint32_t kTicCount = 8192, kTscCount = 1024;
 constexpr uint64_t kPushRing = 2 << 20, kUploadRing = 4 << 20;
@@ -129,7 +130,8 @@ size_t pageSize()
 const FormatInfo *formatInfo(uint32_t mtl)
 {
     for (const FormatInfo &f : kFormats)
-        if (f.mtl == mtl) return &f;
+        if (f.mtl == mtl)
+            return &f;
     return nullptr;
 }
 
@@ -145,7 +147,8 @@ uint32_t nvTopology(uint32_t mtl)
 uint8_t *Device::alloc(Ring &r, uint32_t bytes, uint32_t align, uint64_t &va)
 {
     uint64_t at = (r.head + align - 1) & ~uint64_t(align - 1);
-    if (at + bytes > r.bo.bytes) at = 0;  // wrap: the tail [head, end) counts as used by the open command buffer
+    if (at + bytes > r.bo.bytes)
+        at = 0;  // wrap: the tail [head, end) counts as used by the open command buffer
     // [at, at + bytes) may still be read by an earlier submission: retire what the GPU finished (the fence page, no call) and
     // block in the kernel (WaitFence: the fence interrupt) for what overlaps. Sized so a Core Animation frame never waits.
     for (auto it = r.inflight.begin(); it != r.inflight.end();) {
@@ -173,8 +176,10 @@ uint8_t *Device::alloc(Ring &r, uint32_t bytes, uint32_t align, uint64_t &va)
 void Device::retire(Ring &r, uint32_t seqno)
 {
     for (auto &s : r.inflight)
-        if (!s.seqno) s.seqno = seqno;
-    if (r.head > r.since) r.inflight.push_back({r.since, r.head, seqno});
+        if (!s.seqno)
+            s.seqno = seqno;
+    if (r.head > r.since)
+        r.inflight.push_back({r.since, r.head, seqno});
     r.since = r.head;
 }
 
@@ -188,13 +193,16 @@ Device::~Device()
         stopping_ = true;
     }
     grow_.notify_all();
-    if (grower_.joinable()) grower_.join();
+    if (grower_.joinable())
+        grower_.join();
 }
 
 bool Device::open(const char *packPath, uint64_t stack, std::string &err)
 {
-    if (!pack_.load(packPath, stack, err)) return false;
-    if (!k_.open(err)) return false;
+    if (!pack_.load(packPath, stack, err))
+        return false;
+    if (!k_.open(err))
+        return false;
     if (k_.info().cls_eng3d != 0xb197 || k_.info().cls_copy != 0xb0b5) {
         err = "not a MAXWELL_B with MAXWELL_DMA_COPY_A";
         return false;
@@ -218,7 +226,8 @@ bool Device::init(std::string &err)
     Bo heapSource;
     const bool heapByCopy =
         heapBytes && k_.import(const_cast<uint8_t *>(heapImage), heapBytes, heapSource, kPteKindPitch);
-    if (!heapByCopy) memcpy(heap_.cpu, heapImage, heapBytes);
+    if (!heapByCopy)
+        memcpy(heap_.cpu, heapImage, heapBytes);
     memset(tic_.cpu, 0, tic_.bytes);
     memset(tsc_.cpu, 0, tsc_.bytes);
     memset(root_.cpu, 0, root_.bytes);
@@ -275,24 +284,50 @@ bool Device::init(std::string &err)
     for (uint32_t i = 0; i < initCount; i++) {
         uint32_t d = im[i].data;
         switch (im[i].reloc) {
-        case RelocHeapHi: d = uint32_t(heap_.va >> 32); break;
-        case RelocHeapLo: d = uint32_t(heap_.va); break;
-        case RelocZeroHi: d = uint32_t(zero_.va >> 32); break;
-        case RelocZeroLo: d = uint32_t(zero_.va); break;
-        case RelocRootHi: d = uint32_t(root_.va >> 32); break;
-        case RelocRootLo: d = uint32_t(root_.va); break;
-        case RelocTicHi: d = uint32_t(tic_.va >> 32); break;
-        case RelocTicLo: d = uint32_t(tic_.va); break;
-        case RelocTicMax: d = kTicCount - 1; break;
-        case RelocTscHi: d = uint32_t(tsc_.va >> 32); break;
-        case RelocTscLo: d = uint32_t(tsc_.va); break;
-        case RelocTscMax: d = kTscCount - 1; break;
-        default: break;
+        case RelocHeapHi:
+            d = uint32_t(heap_.va >> 32);
+            break;
+        case RelocHeapLo:
+            d = uint32_t(heap_.va);
+            break;
+        case RelocZeroHi:
+            d = uint32_t(zero_.va >> 32);
+            break;
+        case RelocZeroLo:
+            d = uint32_t(zero_.va);
+            break;
+        case RelocRootHi:
+            d = uint32_t(root_.va >> 32);
+            break;
+        case RelocRootLo:
+            d = uint32_t(root_.va);
+            break;
+        case RelocTicHi:
+            d = uint32_t(tic_.va >> 32);
+            break;
+        case RelocTicLo:
+            d = uint32_t(tic_.va);
+            break;
+        case RelocTicMax:
+            d = kTicCount - 1;
+            break;
+        case RelocTscHi:
+            d = uint32_t(tsc_.va >> 32);
+            break;
+        case RelocTscLo:
+            d = uint32_t(tsc_.va);
+            break;
+        case RelocTscMax:
+            d = kTscCount - 1;
+            break;
+        default:
+            break;
         }
         p.m(im[i].mthd, d, im[i].subc);
     }
     const uint32_t *base = pack_.section<uint32_t>(PackBaseline);
-    for (uint64_t i = 0; i < pack_.bytes(PackBaseline) / 8; i++) p.m(base[2 * i], base[2 * i + 1]);
+    for (uint64_t i = 0; i < pack_.bytes(PackBaseline) / 8; i++)
+        p.m(base[2 * i], base[2 * i + 1]);
     // root table selected for LOAD_CONSTANT_BUFFER from here on (draws reselect it after binding set 0 as a cbuf); NVK's init
     // above zeroed it, so sample 0's location (the pixel centre, nvk_root_descriptor_table.draw.sample_locations) goes in now
     p.inc(CB_SELECTOR_A, {kRootBytes, uint32_t(root_.va >> 32), uint32_t(root_.va)});
@@ -307,7 +342,8 @@ bool Device::init(std::string &err)
     lastSeqno_ = seq;
     retire(push_, seq);
     const bool waited = k_.wait(channel_, seq);
-    if (heapByCopy) k_.free(heapSource);  // (the copy is done: the context's submission completed)
+    if (heapByCopy)
+        k_.free(heapSource);  // (the copy is done: the context's submission completed)
     if (!waited) {
         err = k_.error();
         return false;
@@ -327,7 +363,8 @@ bool Device::init(std::string &err)
                 }
             }
         }
-        if (heapUpload_ == HeapCopyMismatch) memcpy(heap_.cpu, heapImage, heapBytes);
+        if (heapUpload_ == HeapCopyMismatch)
+            memcpy(heap_.cpu, heapImage, heapBytes);
     }
     // pipelines: the pack's register blobs as push words, program offsets relocated into our heap (the heap image is the pack's)
     const PackPipeline *pp = pack_.section<PackPipeline>(PackPipelines);
@@ -358,7 +395,8 @@ bool Device::init(std::string &err)
             unsigned c = 0, f = 0, mask = 0, blend = 0;
             if (sscanf(at, " c%u=%u:%u:%u", &c, &f, &mask, &blend) == 4 && c < 8) {
                 pl.colorFormats[c] = f;
-                if (mask && (blend || mask != 15)) pl.readBits |= uint8_t(1u << c);
+                if (mask && (blend || mask != 15))
+                    pl.readBits |= uint8_t(1u << c);
             }
         }
         for (uint32_t k = 0; k < pp[i].entries; k++)
@@ -372,7 +410,8 @@ bool Device::init(std::string &err)
     if (chainsOn_) {
         std::lock_guard<std::mutex> l(lock_);
         Span first;
-        if (blAlloc(1, 0, first)) blFree(first);
+        if (blAlloc(1, 0, first))
+            blFree(first);
     }
     // the first pool chunk now, at the render server's start, not under its first frame
     uint32_t chunk;
@@ -400,21 +439,26 @@ constexpr uint64_t kLowMark =
 bool Device::newChunk(uint64_t size, bool dedicated, std::unique_lock<std::mutex> *unlocked, uint32_t &index)
 {
     vm_address_t memory = 0;
-    if (vm_allocate(mach_task_self(), &memory, size, VM_FLAGS_ANYWHERE) != KERN_SUCCESS) return false;
+    if (vm_allocate(mach_task_self(), &memory, size, VM_FLAGS_ANYWHERE) != KERN_SUCCESS)
+        return false;
     Chunk ch;
     ch.memory = reinterpret_cast<void *>(memory);
     ch.bytes = size;
     ch.dedicated = dedicated;
-    if (unlocked) unlocked->unlock();
+    if (unlocked)
+        unlocked->unlock();
     const bool wired = k_.importPages(ch.memory, size, ch.bo);
-    if (unlocked) unlocked->lock();
+    if (unlocked)
+        unlocked->lock();
     if (!wired || !k_.bindImport(ch.memory, ch.bo, kPteKindPitch)) {
         vm_deallocate(mach_task_self(), memory, size);
         return false;
     }
     uint32_t c = 0;
-    while (c < chunks_.size() && chunks_[c].memory) c++;
-    if (c == chunks_.size()) chunks_.emplace_back();
+    while (c < chunks_.size() && chunks_[c].memory)
+        c++;
+    if (c == chunks_.size())
+        chunks_.emplace_back();
     if (!dedicated) {
         ch.free[0] = size;
         poolFree_ += size;
@@ -430,8 +474,11 @@ void Device::growLoop()
 {
     std::unique_lock<std::mutex> l(lock_);
     for (;;) {
-        grow_.wait(l, [&] { return stopping_ || growing_; });
-        if (stopping_) return;
+        grow_.wait(l, [&] {
+            return stopping_ || growing_;
+        });
+        if (stopping_)
+            return;
         uint32_t c;
         newChunk(kChunk, false, &l, c);  // failing, the render thread's next allocation tries itself
         growing_ = false;
@@ -446,7 +493,8 @@ bool Device::poolAlloc(uint64_t bytes, Span &s)
     if (bytes >
         kDedicated) {  // its own chunk, made now (rare: no Core Animation texture of the 720p screen is that large)
         uint32_t c;
-        if (!newChunk(bytes, true, nullptr, c)) return false;
+        if (!newChunk(bytes, true, nullptr, c))
+            return false;
         chunks_[c].used = bytes;
         s = {c, 0, bytes, chunks_[c].bo.va, static_cast<uint8_t *>(chunks_[c].memory)};
         return true;
@@ -454,12 +502,15 @@ bool Device::poolAlloc(uint64_t bytes, Span &s)
     for (int pass = 0; pass < 3; pass++) {
         for (uint32_t c = 0; c < chunks_.size(); c++) {
             Chunk &ch = chunks_[c];
-            if (ch.dedicated || !ch.memory) continue;
+            if (ch.dedicated || !ch.memory)
+                continue;
             for (auto it = ch.free.begin(); it != ch.free.end(); ++it) {
-                if (it->second < bytes) continue;
+                if (it->second < bytes)
+                    continue;
                 const uint64_t offset = it->first, left = it->second - bytes;
                 ch.free.erase(it);
-                if (left) ch.free[offset + bytes] = left;
+                if (left)
+                    ch.free[offset + bytes] = left;
                 ch.used += bytes;
                 poolFree_ -= bytes;
                 s = {c, offset, bytes, ch.bo.va + offset, static_cast<uint8_t *>(ch.memory) + offset};
@@ -470,13 +521,16 @@ bool Device::poolAlloc(uint64_t bytes, Span &s)
                 return true;
             }
         }
-        if (pass == 2) break;
+        if (pass == 2)
+            break;
         stats.poolStalls++;
         if (growing_) {  // the grower is making one: wait for it rather than wire a second
             std::unique_lock<std::mutex> l(lock_, std::adopt_lock);
             // bounded, as every wait of the plugin's: a chunk not wired in 20 s is a stuck kernel import, said once and
             // stopped for the stack (a wait with no bound froze r7p8's compositor with nothing in the log)
-            if (!grown_.wait_for(l, std::chrono::seconds(20), [&] { return !growing_; })) {
+            if (!grown_.wait_for(l, std::chrono::seconds(20), [&] {
+                    return !growing_;
+                })) {
                 os_log_fault(os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "raw"),
                              "raw: pool chunk not wired after 20 s (the grower's import): abort() for the stack");
                 abort();
@@ -485,7 +539,8 @@ bool Device::poolAlloc(uint64_t bytes, Span &s)
             continue;
         }
         uint32_t c;
-        if (!newChunk(kChunk, false, nullptr, c)) return false;
+        if (!newChunk(kChunk, false, nullptr, c))
+            return false;
     }
     return false;
 }
@@ -495,7 +550,8 @@ void Device::warm()
     {
         std::lock_guard<std::mutex> l(lock_);
         uint32_t c;
-        while (poolFree_ <= kLowMark && newChunk(kChunk, false, nullptr, c)) {}  // the first and the one ahead of it
+        while (poolFree_ <= kLowMark && newChunk(kChunk, false, nullptr, c)) {
+        }  // the first and the one ahead of it
     }
     if (!grower_.joinable())
         grower_ = std::thread([this] {
@@ -507,7 +563,8 @@ void Device::warm()
 
 void Device::poolFree(Span &s)
 {
-    if (!s.valid() || s.chunk >= chunks_.size()) return;
+    if (!s.valid() || s.chunk >= chunks_.size())
+        return;
     Chunk &ch = chunks_[s.chunk];
     ch.used -= s.bytes;
     if (ch.dedicated) {  // nothing else is in it
@@ -534,7 +591,8 @@ void Device::poolFree(Span &s)
             merged = true;
         }
     }
-    if (!merged) ch.free[offset] = bytes;
+    if (!merged)
+        ch.free[offset] = bytes;
     s = {};
     // an empty chunk goes back while the others keep a chunk's worth free (kLowMark: the grower's own mark), so the pool
     // shrinks after a burst instead of holding its peak for good (r8a: 320 MB in 20 chunks from 15:18 on, the screen idle)
@@ -567,8 +625,10 @@ Import *Device::importSurface(uint64_t id, void *base, uint64_t bytes, const voi
     i->id = id;
     i->base = uintptr_t(base);
     i->bytes = bytes;
-    if (owner) i->owner = CFRetain(owner);
-    if (id) surfaces_[key] = i;
+    if (owner)
+        i->owner = CFRetain(owner);
+    if (id)
+        surfaces_[key] = i;
     stats.imports++;
     stats.importBytes += i->bo.bytes;
     return i;
@@ -576,12 +636,15 @@ Import *Device::importSurface(uint64_t id, void *base, uint64_t bytes, const voi
 
 void Device::release(Import *i)
 {
-    if (!i || --i->refs) return;
-    if (i->id) surfaces_.erase(std::make_tuple(i->id, i->base, i->bytes));
+    if (!i || --i->refs)
+        return;
+    if (i->id)
+        surfaces_.erase(std::make_tuple(i->id, i->base, i->bytes));
     stats.imports--;
     stats.importBytes -= i->bo.bytes;
     k_.free(i->bo);
-    if (i->owner) CFRelease(i->owner);
+    if (i->owner)
+        CFRelease(i->owner);
     delete i;
 }
 
@@ -630,7 +693,8 @@ static bool linearTarget(const Texture &t)
 static bool shape(uint32_t width, uint32_t height, uint32_t format, Texture &t)
 {
     const FormatInfo *f = formatInfo(format);
-    if (!f || !width || !height || width > 16384 || height > 16384) return false;
+    if (!f || !width || !height || width > 16384 || height > 16384)
+        return false;
     t = {};
     t.width = width;
     t.height = height;
@@ -642,7 +706,8 @@ static bool shape(uint32_t width, uint32_t height, uint32_t format, Texture &t)
 
 bool Device::createTexture(uint32_t width, uint32_t height, uint32_t format, Texture &t, bool wc)
 {
-    if (!shape(width, height, format, t)) return false;
+    if (!shape(width, height, format, t))
+        return false;
     t.pitch = (width * t.bpp + 255) & ~255u;
     std::lock_guard<std::mutex> l(lock_);
     const uint64_t bytes = uint64_t(t.pitch) * height;
@@ -650,8 +715,10 @@ bool Device::createTexture(uint32_t width, uint32_t height, uint32_t format, Tex
         t.wc = true;
         stats.wcBytes += t.span.bytes;
     } else {
-        if (wc) stats.wcFallbacks++;
-        if (!poolAlloc(bytes, t.span)) return false;
+        if (wc)
+            stats.wcFallbacks++;
+        if (!poolAlloc(bytes, t.span))
+            return false;
     }
     t.va = t.span.va;
     t.cpu = t.span.cpu;
@@ -726,7 +793,8 @@ bool Device::createPlanarTexture(uint64_t surfaceId, void *base, uint64_t allocB
         std::lock_guard<std::mutex> l(lock_);
         planes = importSurface(surfaceId, base, (allocBytes + pageSize() - 1) & ~uint64_t(pageSize() - 1), surface);
     }
-    if (!planes) return false;
+    if (!planes)
+        return false;
     if (!createTexture(width, height, kRGBA8Unorm, t)) {  // the image: pool memory, its texture header
         std::lock_guard<std::mutex> l(lock_);
         release(planes);
@@ -751,16 +819,19 @@ bool Device::createBufferTexture(const Buffer &b, uint64_t offset, uint32_t widt
     t.shadowTarget = t.renderable && !linearTarget(t);
     t.renderable = t.renderable && linearTarget(t);
     t.cpu = b.cpu + offset;
-    if (!(t.tic = allocTic())) return false;
+    if (!(t.tic = allocTic()))
+        return false;
     writeTic(t);
     return true;
 }
 
 bool Device::createView(const Texture &of, uint32_t format, Texture &t)
 {
-    if (of.chain) return false;  // a view of a mipmapped texture: m2v's
+    if (of.chain)
+        return false;  // a view of a mipmapped texture: m2v's
     const FormatInfo *f = formatInfo(format);
-    if (!f || f->bpp != of.bpp || of.memoryless || of.sampled) return false;
+    if (!f || f->bpp != of.bpp || of.memoryless || of.sampled)
+        return false;
     std::lock_guard<std::mutex> l(lock_);
     t = of;
     t.format = format;
@@ -768,14 +839,16 @@ bool Device::createView(const Texture &of, uint32_t format, Texture &t)
     t.shadowTarget = f->rt != 0 && !linearTarget(t);
     t.import = nullptr;  // the viewed texture owns the memory (RawMetal.mm keeps it alive while a view lives)
     t.span = {};
-    if (!(t.tic = allocTic())) return false;
+    if (!(t.tic = allocTic()))
+        return false;
     writeTic(t);
     return true;
 }
 
 bool Device::createMemoryless(uint32_t width, uint32_t height, uint32_t format, Texture &t)
 {
-    if (!shape(width, height, format, t)) return false;
+    if (!shape(width, height, format, t))
+        return false;
     t.memoryless = true;
     return true;
 }
@@ -794,36 +867,45 @@ bool Device::blAlloc(uint64_t bytes, uint64_t align, Span &s)
     for (int pass = 0; pass < 2; pass++) {
         for (uint32_t c = 0; c < blChunks_.size(); c++) {
             Chunk &ch = blChunks_[c];
-            if (!ch.memory || ch.dedicated) continue;
+            if (!ch.memory || ch.dedicated)
+                continue;
             for (auto it = ch.free.begin(); it != ch.free.end(); ++it) {
                 const uint64_t start = it->first, len = it->second, at = (start + align - 1) & ~(align - 1);
-                if (at + bytes > start + len) continue;
+                if (at + bytes > start + len)
+                    continue;
                 ch.free.erase(it);
-                if (at > start) ch.free[start] = at - start;
-                if (at + bytes < start + len) ch.free[at + bytes] = start + len - at - bytes;
+                if (at > start)
+                    ch.free[start] = at - start;
+                if (at + bytes < start + len)
+                    ch.free[at + bytes] = start + len - at - bytes;
                 ch.used += bytes;
                 s = {c, at, bytes, ch.bo.va + at, static_cast<uint8_t *>(ch.memory) + at};
                 return true;
             }
         }
-        if (pass) break;
+        if (pass)
+            break;
         const bool dedicated = bytes > kBlChunk / 2;
         const uint64_t size = dedicated ? bytes : kBlChunk;
         vm_address_t memory = 0;
-        if (vm_allocate(mach_task_self(), &memory, size, VM_FLAGS_ANYWHERE) != KERN_SUCCESS) return false;
+        if (vm_allocate(mach_task_self(), &memory, size, VM_FLAGS_ANYWHERE) != KERN_SUCCESS)
+            return false;
         Chunk ch;
         ch.memory = reinterpret_cast<void *>(memory);
         ch.bytes = size;
         ch.dedicated = dedicated;
         if (!k_.importPages(ch.memory, size, ch.bo) || !k_.bindImport(ch.memory, ch.bo, fx::kBlockLinearKind) ||
             (ch.bo.va & (kBlAlign - 1))) {
-            if (ch.bo.handle) k_.free(ch.bo);
+            if (ch.bo.handle)
+                k_.free(ch.bo);
             vm_deallocate(mach_task_self(), memory, size);
             return false;
         }
         uint32_t c = 0;
-        while (c < blChunks_.size() && blChunks_[c].memory) c++;
-        if (c == blChunks_.size()) blChunks_.emplace_back();
+        while (c < blChunks_.size() && blChunks_[c].memory)
+            c++;
+        if (c == blChunks_.size())
+            blChunks_.emplace_back();
         stats.poolBytes += size;
         stats.poolChunks++;
         if (dedicated) {
@@ -841,7 +923,8 @@ bool Device::blAlloc(uint64_t bytes, uint64_t align, Span &s)
 // lock_ held
 void Device::blFree(Span &s)
 {
-    if (!s.valid() || s.chunk >= blChunks_.size()) return;
+    if (!s.valid() || s.chunk >= blChunks_.size())
+        return;
     Chunk &ch = blChunks_[s.chunk];
     ch.used -= s.bytes;
     if (ch.dedicated) {
@@ -867,7 +950,8 @@ void Device::blFree(Span &s)
             merged = true;
         }
     }
-    if (!merged) ch.free[offset] = bytes;
+    if (!merged)
+        ch.free[offset] = bytes;
     s = {};
 }
 
@@ -875,7 +959,8 @@ bool Device::createMipTexture(uint32_t width, uint32_t height, uint32_t format, 
 {
     const FormatInfo *f = formatInfo(format);
     const uint32_t fmt2d = fx::twodFormat(format);
-    if (!chainsOn_ || !f || !fmt2d || f->srgb || levels < 2 || !f->rt) return false;
+    if (!chainsOn_ || !f || !fmt2d || f->srgb || levels < 2 || !f->rt)
+        return false;
     Texture::Chain *c = new Texture::Chain;
     if (!fx::mipChainLayout(width, height, levels, f->bpp, c->layout) || !createTexture(width, height, format, t)) {
         delete c;
@@ -909,13 +994,15 @@ bool Device::createMipTexture(uint32_t width, uint32_t height, uint32_t format, 
 // coherent allocation: the CPU reads it without an invalidate. Nothing but this submission's own fence is waited for.
 void Device::selfTest()
 {
-    for (uint32_t i = 0; i < fx::kSamplings; i++) selfTestTegra[i] = selfTestFermi[i] = ~0u;
+    for (uint32_t i = 0; i < fx::kSamplings; i++)
+        selfTestTegra[i] = selfTestFermi[i] = ~0u;
     fx::MipChain c;
     if (!fx::mipChainLayout(fx::kSelfTestW, fx::kSelfTestH, fx::fullLevels(fx::kSelfTestW, fx::kSelfTestH), 4, c))
         return;
     const uint64_t stride = (c.bytes + 16383) & ~uint64_t(16383);
     Bo chains, src;
-    if (!k_.alloc(stride * fx::kSamplings, true, chains, fx::kBlockLinearKind)) return;
+    if (!k_.alloc(stride * fx::kSamplings, true, chains, fx::kBlockLinearKind))
+        return;
     if (!k_.alloc(4096, true, src)) {
         k_.free(chains);
         return;
@@ -983,7 +1070,8 @@ void Device::destroyTexture(Texture &t)
         delete t.chain;
         t.chain = nullptr;
     }
-    if (t.import) release(t.import);
+    if (t.import)
+        release(t.import);
     if (t.span.valid()) {
         if (t.wc)
             wcFree(t.span);
@@ -996,7 +1084,8 @@ void Device::destroyTexture(Texture &t)
 bool Device::createBuffer(uint64_t length, Buffer &b, bool wc)
 {
     b = {};
-    if (!length) length = 16;
+    if (!length)
+        length = 16;
     std::lock_guard<std::mutex> l(lock_);
     if (wc && wcOn_) {
         if (wcAlloc(length, b.span)) {
@@ -1009,7 +1098,8 @@ bool Device::createBuffer(uint64_t length, Buffer &b, bool wc)
         }
         stats.wcFallbacks++;
     }
-    if (!poolAlloc(length, b.span)) return false;
+    if (!poolAlloc(length, b.span))
+        return false;
     b.va = b.span.va;
     b.cpu = b.span.cpu;
     b.length = length;
@@ -1028,28 +1118,35 @@ bool Device::wcAlloc(uint64_t bytes, Span &s)
     for (int pass = 0; pass < 2; pass++) {
         for (uint32_t c = 0; c < wcChunks_.size(); c++) {
             Chunk &ch = wcChunks_[c];
-            if (!ch.bo.handle || ch.dedicated) continue;
+            if (!ch.bo.handle || ch.dedicated)
+                continue;
             for (auto it = ch.free.begin(); it != ch.free.end(); ++it) {
-                if (it->second < bytes) continue;
+                if (it->second < bytes)
+                    continue;
                 const uint64_t at = it->first, left = it->second - bytes;
                 ch.free.erase(it);
-                if (left) ch.free[at + bytes] = left;
+                if (left)
+                    ch.free[at + bytes] = left;
                 ch.used += bytes;
                 s = {c, at, bytes, ch.bo.va + at, ch.bo.cpu + at};
                 return true;
             }
         }
-        if (pass) break;
+        if (pass)
+            break;
         const bool dedicated = bytes > kWcChunk / 2;
         const uint64_t size = dedicated ? bytes : kWcChunk;
         Chunk ch;
-        if (!k_.alloc(size, true, ch.bo)) return false;  // the GPU pool is full: pool memory instead (createBuffer)
+        if (!k_.alloc(size, true, ch.bo))
+            return false;  // the GPU pool is full: pool memory instead (createBuffer)
         ch.memory = ch.bo.cpu;
         ch.bytes = size;
         ch.dedicated = dedicated;
         uint32_t c = 0;
-        while (c < wcChunks_.size() && wcChunks_[c].bo.handle) c++;
-        if (c == wcChunks_.size()) wcChunks_.emplace_back();
+        while (c < wcChunks_.size() && wcChunks_[c].bo.handle)
+            c++;
+        if (c == wcChunks_.size())
+            wcChunks_.emplace_back();
         if (dedicated) {
             ch.used = bytes;
             s = {c, 0, bytes, ch.bo.va, ch.bo.cpu};
@@ -1065,7 +1162,8 @@ bool Device::wcAlloc(uint64_t bytes, Span &s)
 // lock_ held
 void Device::wcFree(Span &s)
 {
-    if (!s.valid() || s.chunk >= wcChunks_.size()) return;
+    if (!s.valid() || s.chunk >= wcChunks_.size())
+        return;
     Chunk &ch = wcChunks_[s.chunk];
     ch.used -= s.bytes;
     stats.wcBytes -= s.bytes;
@@ -1089,7 +1187,8 @@ void Device::wcFree(Span &s)
             merged = true;
         }
     }
-    if (!merged) ch.free[offset] = bytes;
+    if (!merged)
+        ch.free[offset] = bytes;
     s = {};
     // an empty chunk goes back to the GPU pool while another empty one stays for the next burst: the compositor's pool
     // share follows what Core Animation holds, not its peak (r8a: the compositor 107 MiB of the pool at 15:16, 63 after,
@@ -1108,7 +1207,8 @@ uint32_t Device::wcChunksHeld()
 {
     std::lock_guard<std::mutex> l(lock_);
     uint32_t n = 0;
-    for (const Chunk &ch : wcChunks_) n += ch.bo.handle && !ch.dedicated;
+    for (const Chunk &ch : wcChunks_)
+        n += ch.bo.handle && !ch.dedicated;
     return n;
 }
 
@@ -1116,14 +1216,16 @@ uint64_t Device::wcChunkBytesHeld()
 {
     std::lock_guard<std::mutex> l(lock_);
     uint64_t n = 0;
-    for (const Chunk &ch : wcChunks_) n += ch.bo.handle && !ch.dedicated ? ch.bytes : 0;
+    for (const Chunk &ch : wcChunks_)
+        n += ch.bo.handle && !ch.dedicated ? ch.bytes : 0;
     return n;
 }
 
 bool Device::createBufferNoCopy(void *bytes, uint64_t length, Buffer &b)
 {
     b = {};
-    if (!bytes || !length || (uintptr_t(bytes) & (pageSize() - 1))) return false;
+    if (!bytes || !length || (uintptr_t(bytes) & (pageSize() - 1)))
+        return false;
     std::lock_guard<std::mutex> l(lock_);
     if (!(b.import = importSurface(0, bytes, (length + pageSize() - 1) & ~uint64_t(pageSize() - 1), nullptr)))
         return false;
@@ -1136,7 +1238,8 @@ bool Device::createBufferNoCopy(void *bytes, uint64_t length, Buffer &b)
 void Device::destroyBuffer(Buffer &b)
 {
     std::lock_guard<std::mutex> l(lock_);
-    if (b.import) release(b.import);
+    if (b.import)
+        release(b.import);
     if (b.span.valid()) {
         if (b.wc)
             wcFree(b.span);
@@ -1154,13 +1257,16 @@ float levelOnGrid(float c)
     c = std::max(c, 0.0f);
     return c >= 64.0f ? c : std::floor(c * 64.0f) / 64.0f;
 }
+
 float nearestLevel(float c)
 {
     c = levelOnGrid(c);
-    if (c >= 15.0f) return 15.0f;
+    if (c >= 15.0f)
+        return 15.0f;
     const float whole = std::floor(c);
     return std::min(15.0f, whole + (c - whole > 0.5f ? 1.0f : 0.0f));
 }
+
 // Mesa's __set_ufixed for the 4.8 LOD fields: clamped to what 12 bits hold, truncated
 uint32_t lodField(float v)
 {
@@ -1176,37 +1282,46 @@ void samplerHeader(const SamplerDesc &d, uint32_t w[8])
     memset(w, 0, 32);
     auto address = [](uint8_t m) -> uint32_t {  // MTLSamplerAddressMode -> NV9097_TEXSAMP0_ADDRESS_U_*
         switch (m) {
-        case 0: return 2;   // clampToEdge -> CLAMP_TO_EDGE
-        case 1: return 5;   // mirrorClampToEdge -> MIRROR_ONCE_CLAMP_TO_EDGE
-        case 2: return 0;   // repeat -> WRAP
-        case 3: return 1;   // mirrorRepeat -> MIRROR
-        default: return 3;  // clampToZero -> BORDER (transparent black)
+        case 0:
+            return 2;  // clampToEdge -> CLAMP_TO_EDGE
+        case 1:
+            return 5;  // mirrorClampToEdge -> MIRROR_ONCE_CLAMP_TO_EDGE
+        case 2:
+            return 0;  // repeat -> WRAP
+        case 3:
+            return 1;  // mirrorRepeat -> MIRROR
+        default:
+            return 3;  // clampToZero -> BORDER (transparent black)
         }
     };
     // m2v hands anisotropy to a device that samples Metal's way (its profile's device_samples, NVK's) whatever the filters
     uint32_t aniso = 0;  // 0: off
     if (d.maxAnisotropy > 1) {
         aniso = 1;
-        while (aniso < d.maxAnisotropy) aniso <<= 1;
+        while (aniso < d.maxAnisotropy)
+            aniso <<= 1;
         aniso = std::min(aniso, 16u);
     }
     setField(w, 2, 0, address(d.sAddress));
     setField(w, 5, 3, address(d.tAddress));
     setField(w, 8, 6, address(d.rAddress));
-    setField(w, 13, 13, 1);                                                          // S_R_G_B_CONVERSION
-    setField(w, 16, 14, 1);                                                          // FONT_FILTER_WIDTH SIZE_2
-    setField(w, 19, 17, 1);                                                          // FONT_FILTER_HEIGHT SIZE_2
-    if (aniso) setField(w, 22, 20, aniso >= 16 ? 7 : aniso >= 12 ? 6 : aniso >> 1);  // MAX_ANISOTROPY
-    setField(w + 1, 2, 0, d.magFilter ? 2 : 1);                                      // MAG_LINEAR / MAG_POINT
-    setField(w + 1, 5, 4, d.minFilter ? (aniso ? 3 : 2) : 1);  // MIN_ANISO / MIN_LINEAR / MIN_POINT
-    setField(w + 1, 7, 6, d.mipFilter == 2 ? 3 : 2);           // MIP_LINEAR / MIP_POINT
-    setField(w + 1, 9, 9, 1);                                  // CUBEMAP_INTERFACE_FILTERING AUTO_SPAN_SEAM
+    setField(w, 13, 13, 1);  // S_R_G_B_CONVERSION
+    setField(w, 16, 14, 1);  // FONT_FILTER_WIDTH SIZE_2
+    setField(w, 19, 17, 1);  // FONT_FILTER_HEIGHT SIZE_2
+    if (aniso)
+        setField(w, 22, 20, aniso >= 16 ? 7 : aniso >= 12 ? 6 : aniso >> 1);  // MAX_ANISOTROPY
+    setField(w + 1, 2, 0, d.magFilter ? 2 : 1);                               // MAG_LINEAR / MAG_POINT
+    setField(w + 1, 5, 4, d.minFilter ? (aniso ? 3 : 2) : 1);                 // MIN_ANISO / MIN_LINEAR / MIN_POINT
+    setField(w + 1, 7, 6, d.mipFilter == 2 ? 3 : 2);                          // MIP_LINEAR / MIP_POINT
+    setField(w + 1, 9, 9, 1);  // CUBEMAP_INTERFACE_FILTERING AUTO_SPAN_SEAM
     // TRILIN_OPT from the descriptor's maxAnisotropy as Vulkan's (vk_to_9097_trilin_opt: 1 when anisotropy is off)
     const float va = aniso ? float(aniso) : 1.0f;
     setField(w + 1, 30, 26, va >= 12 ? 0 : va >= 4 ? 6 : va >= 2 ? 4 : 0);
     const float lo = d.lodMin, hi = d.lodMax;
     const bool grid = d.mipFilter != 0 && d.minFilter == d.magFilter && d.maxAnisotropy <= 1;
-    auto onGrid = [&](float bound, float level) { return (!grid && bound > 0.0f && level <= 0.0f) ? bound : level; };
+    auto onGrid = [&](float bound, float level) {
+        return (!grid && bound > 0.0f && level <= 0.0f) ? bound : level;
+    };
     float minLod, maxLod;
     if (d.mipFilter == 0) {
         if (hi > 0.0f) {
@@ -1248,9 +1363,11 @@ bool Device::createSampler(const SamplerDesc &d, Sampler &s)
 void Device::destroySampler(Sampler &s)
 {
     std::lock_guard<std::mutex> l(lock_);
-    if (s.tsc) freeTsc_.push_back(s.tsc);
+    if (s.tsc)
+        freeTsc_.push_back(s.tsc);
     for (uint32_t m : s.mapped)
-        if (m && m != s.tsc && std::find(freeTsc_.begin(), freeTsc_.end(), m) == freeTsc_.end()) freeTsc_.push_back(m);
+        if (m && m != s.tsc && std::find(freeTsc_.begin(), freeTsc_.end(), m) == freeTsc_.end())
+            freeTsc_.push_back(m);
     s = {};
 }
 
@@ -1261,12 +1378,15 @@ void Device::destroySampler(Sampler &s)
 // every mode of a converted 4:2:0 texture to the edge: its clamps to zero read the edge texels, not the border m2v reads.)
 bool Device::samplerVariant(Sampler &s, uint8_t map)
 {
-    if (!map || map > 3) return false;
-    if (s.mapped[map]) return true;
+    if (!map || map > 3)
+        return false;
+    if (s.mapped[map])
+        return true;
     SamplerDesc d = s.desc;
     const bool wrapped = map == 1 || map == 3, clamps = map == 2 || map == 3;
     for (uint8_t *m : {&d.sAddress, &d.tAddress, &d.rAddress})
-        if ((wrapped && *m >= 1 && *m <= 3) || (clamps && (*m == 4 || *m == 5))) *m = 0;
+        if ((wrapped && *m >= 1 && *m <= 3) || (clamps && (*m == 4 || *m == 5)))
+            *m = 0;
     if (d.sAddress == s.desc.sAddress && d.tAddress == s.desc.tAddress && d.rAddress == s.desc.rAddress) {
         s.mapped[map] = s.tsc;
         return true;
@@ -1292,7 +1412,8 @@ Pipeline *Device::ycbcrPipeline(uint8_t output)
 {
     static const char *const names[] = {"", "raw.ycbcr.ycbcr_converted_frag", "raw.ycbcr.ycbcr_srgb_frag",
                                         "raw.ycbcr.ycbcr_codes_frag"};
-    if (!output || output > 3) return nullptr;
+    if (!output || output > 3)
+        return nullptr;
     return pipeline(Pack::fnv(names[output], strlen(names[output])));
 }
 
@@ -1303,7 +1424,8 @@ bool Device::createYcbcrTexture(uint64_t surfaceId, void *base, uint64_t allocBy
     constexpr uint32_t kR8Unorm = 10, kRG8Unorm = 30;
     const uint8_t output = format == 500 ? 1 : format == 520 ? 2 : format == 540 ? 3 : 0;
     const uint32_t image = output == 1 ? 115 : output == 2 ? 125 : 70;
-    if (!output || !ycbcrPipeline(output)) return false;
+    if (!output || !ycbcrPipeline(output))
+        return false;
     Texture *y = new Texture, *c = new Texture;
     if (!createSurfaceTexture(surfaceId, base, allocBytes, surface, luma, width, height, lumaPitch, kR8Unorm, *y)) {
         delete y;
@@ -1411,7 +1533,8 @@ CommandBuffer *Device::begin()
     cb.drawn_ = false;
     {
         std::lock_guard<std::mutex> l(lock_);
-        if (commitCount_ % 64 == 0) trimBackings();
+        if (commitCount_ % 64 == 0)
+            trimBackings();
     }
     // submission prologue, as NVK opens each submission: header/sampler caches (headers written since), shader and texture caches
     uint64_t va;
@@ -1429,7 +1552,8 @@ CommandBuffer *Device::begin()
 
 void CommandBuffer::segment(uint32_t *from, uint32_t *to)
 {
-    if (to == from) return;
+    if (to == from)
+        return;
     const uint64_t va = dev_->push_.bo.va + (reinterpret_cast<uint8_t *>(from) - dev_->push_.bo.cpu);
     // contiguous with the last segment: one GPFIFO entry
     if (!segments_.empty() && segments_.back().va + uint64_t(segments_.back().dwords) * 4 == va &&
@@ -1442,7 +1566,8 @@ void CommandBuffer::segment(uint32_t *from, uint32_t *to)
 
 void CommandBuffer::clean(const void *cpu, uint64_t bytes, bool invalidate)
 {
-    if (!cpu || !bytes) return;
+    if (!cpu || !bytes)
+        return;
     auto &list = invalidate ? flush_ : clean_;
     const uintptr_t a = uintptr_t(cpu);
     if (!list.empty() && a >= list.back().first &&
@@ -1463,19 +1588,24 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
     // the render hardware takes one memory layout for all of a pass's color targets
     bool blockLinear = false, pitch = false;
     for (uint32_t j = 0; j < pass.count && j < 8; j++)
-        if (const Texture *t = pass.color[j].texture) (t->blockLinear ? blockLinear : pitch) = true;
-    if (blockLinear && pitch) return nullptr;
+        if (const Texture *t = pass.color[j].texture)
+            (t->blockLinear ? blockLinear : pitch) = true;
+    if (blockLinear && pitch)
+        return nullptr;
     for (uint32_t j = 0; j < pass.count && j < 8; j++) {
         const Texture *t = pass.color[j].texture;
-        if (!t) continue;
-        if (!t->renderable && !t->shadowTarget) return nullptr;
+        if (!t)
+            continue;
+        if (!t->renderable && !t->shadowTarget)
+            return nullptr;
         if (t->shadowTarget) {  // rendered through a pool image (end(): copied in before, back after)
             dev_->stats.rtUnaligned++;
             dev_->stats.rtUnalignedPitch = t->pitch;
             dev_->stats.rtUnalignedVa = uint32_t(t->va & 255);
             std::lock_guard<std::mutex> l(dev_->lock_);
             Texture *b = dev_->backing(*t, 1 + j);
-            if (!b || !b->renderable) return nullptr;
+            if (!b || !b->renderable)
+                return nullptr;
             e.pass_.color[j].texture = b;
             e.shadowOf_[j] = t;
             backings_.push_back(b);
@@ -1484,7 +1614,8 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
         if (t->memoryless) {  // back it for this pass
             std::lock_guard<std::mutex> l(dev_->lock_);
             Texture *b = dev_->backing(*t);
-            if (!b) return nullptr;
+            if (!b)
+                return nullptr;
             e.pass_.color[j].texture = b;
             e.memoryless_[j] = true;
             backings_.push_back(b);
@@ -1497,8 +1628,10 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
             e.areaW_ = e.areaW_ ? std::min(e.areaW_, t->width) : t->width;
             e.areaH_ = e.areaH_ ? std::min(e.areaH_, t->height) : t->height;
         }
-    if (pass.width) e.areaW_ = std::min(e.areaW_, pass.width);
-    if (pass.height) e.areaH_ = std::min(e.areaH_, pass.height);
+    if (pass.width)
+        e.areaW_ = std::min(e.areaW_, pass.width);
+    if (pass.height)
+        e.areaH_ = std::min(e.areaH_, pass.height);
     // the body goes straight into the push ring; the pass prologue (targets, clears) is written at end() and runs first
     e.reserve();
     e.setViewport(0, 0, e.areaW_, e.areaH_, 0, 1);
@@ -1542,13 +1675,15 @@ bool CommandBuffer::commit(uint32_t &seqno)
     // the cleans, and the write-combined ring writes, complete before the kernel rings GP_PUT
     __asm__ volatile("dsb sy" ::: "memory");
 #else
-    for (const auto &r : clean_) cleaned += r.second;
+    for (const auto &r : clean_)
+        cleaned += r.second;
 #endif
     d.stats.cleanBytes += cleaned;
     uint32_t seq = 0;
     for (size_t at = 0; at < segments_.size(); at += kMaxSegments) {
         const uint32_t n = uint32_t(std::min<size_t>(kMaxSegments, segments_.size() - at));
-        if (!d.k_.exec(d.channel_, segments_.data() + at, n, d.lastSeqno_, seq)) return false;
+        if (!d.k_.exec(d.channel_, segments_.data() + at, n, d.lastSeqno_, seq))
+            return false;
         d.lastSeqno_ = seq;
     }
     seqno = seq;
@@ -1560,7 +1695,8 @@ bool CommandBuffer::commit(uint32_t &seqno)
         std::lock_guard<std::mutex> l(d.lock_);
         for (Texture *b : backings_)
             for (Device::Backing *k : d.backings_)
-                if (&k->texture == b) k->lastUse = seq;
+                if (&k->texture == b)
+                    k->lastUse = seq;
         d.commitCount_++;
     }
     d.stats.commits++;
@@ -1587,8 +1723,10 @@ void CommandBuffer::abandon()
 // in a new one, so a pass never drops a draw.
 void RenderEncoder::reserve()
 {
-    if (bodyStart_ && p_.at > bodyStart_) bodies_.push_back({bodyStart_, p_.at});
-    if (bodyStart_) dev_->push_.head = uint64_t(reinterpret_cast<uint8_t *>(p_.at) - dev_->push_.bo.cpu);
+    if (bodyStart_ && p_.at > bodyStart_)
+        bodies_.push_back({bodyStart_, p_.at});
+    if (bodyStart_)
+        dev_->push_.head = uint64_t(reinterpret_cast<uint8_t *>(p_.at) - dev_->push_.bo.cpu);
     uint64_t va;
     const uint32_t room = 1 << 14;
     bodyStart_ = reinterpret_cast<uint32_t *>(dev_->alloc(dev_->push_, room * 4, 256, va));
@@ -1597,7 +1735,8 @@ void RenderEncoder::reserve()
 
 void RenderEncoder::setBytes(int stage, uint32_t slot, const void *bytes, uint32_t length)
 {
-    if (slot >= 31 || stage < 1 || stage > 2) return;
+    if (slot >= 31 || stage < 1 || stage > 2)
+        return;
     uint64_t va;
     const uint32_t chunk = (length + kUboChunk - 1) & ~(kUboChunk - 1);
     uint8_t *m = dev_->alloc(dev_->upload_, chunk ? chunk : kUboChunk, kUboChunk, va);
@@ -1610,7 +1749,8 @@ void RenderEncoder::setBytes(int stage, uint32_t slot, const void *bytes, uint32
 
 void RenderEncoder::setBuffer(int stage, uint32_t slot, const Buffer *b, uint64_t offset)
 {
-    if (slot >= 31 || stage < 1 || stage > 2) return;
+    if (slot >= 31 || stage < 1 || stage > 2)
+        return;
     if (!b) {
         bufs_[stage][slot] = {};
         return;
@@ -1621,7 +1761,8 @@ void RenderEncoder::setBuffer(int stage, uint32_t slot, const Buffer *b, uint64_
 
 void RenderEncoder::setBufferOffset(int stage, uint32_t slot, uint64_t offset)
 {
-    if (slot >= 31 || stage < 1 || stage > 2 || !bufs_[stage][slot].buffer) return;
+    if (slot >= 31 || stage < 1 || stage > 2 || !bufs_[stage][slot].buffer)
+        return;
     setBuffer(stage, slot, bufs_[stage][slot].buffer, offset);
 }
 
@@ -1666,7 +1807,8 @@ void RenderEncoder::setViewport(double x, double y, double w, double h, double z
 
 void RenderEncoder::barrier()
 {
-    if (p_.room() < 64) reserve();
+    if (p_.room() < 64)
+        reserve();
     p_.m(WAIT_FOR_IDLE, 0);
     p_.m(INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI, 0);
     colorWritten_ = false;
@@ -1676,11 +1818,14 @@ bool RenderEncoder::draw(uint32_t primitive, uint32_t first, uint32_t count, uin
                          const char **why)
 {
     Pipeline *pl = pipeline_;
-    if (!pl) return true;  // m2v drops a draw without a pipeline (parity 0006) the same way
+    if (!pl)
+        return true;  // m2v drops a draw without a pipeline (parity 0006) the same way
     called_ = true;
     readBits_ |= pl->fetchBits;
-    if (!count || !instances) return true;
-    if (!prepare(pl, primitive, first, first, count, baseInstance, false, why)) return false;
+    if (!count || !instances)
+        return true;
+    if (!prepare(pl, primitive, first, first, count, baseInstance, false, why))
+        return false;
     for (uint32_t i = 0; i < instances; i++) {
         p_.m(BEGIN, i ? 1u << 26 : 0);  // INSTANCE_ID FIRST, then SUBSEQUENT (Maxwell has no instance count)
         p_.inc(VERTEX_ARRAY_START, {first, count});
@@ -1710,10 +1855,12 @@ bool RenderEncoder::drawIndexed(uint32_t primitive, uint32_t count, uint32_t ind
                                 uint64_t offset, const char **why)
 {
     Pipeline *pl = pipeline_;
-    if (!pl) return true;
+    if (!pl)
+        return true;
     called_ = true;
     readBits_ |= pl->fetchBits;
-    if (!count) return true;
+    if (!count)
+        return true;
     if (!ib || (indexSize != 2 && indexSize != 4) || offset % indexSize ||
         offset + uint64_t(count) * indexSize > ib->length) {
         *why = "an indexed draw the raw path does not take";
@@ -1730,8 +1877,10 @@ bool RenderEncoder::drawIndexed(uint32_t primitive, uint32_t count, uint32_t ind
     const uint32_t most = !vb || vb->wc || !pl->rec->vertexStride ? 0
                           : indexSize == 2                        ? largestIndex<uint16_t>(at, count)
                                                                   : largestIndex<uint32_t>(at, count);
-    if (!ib->wc) cb_->clean(at, uint64_t(count) * indexSize);
-    if (!prepare(pl, primitive, 0, 0, most + 1, 0, true, why)) return false;
+    if (!ib->wc)
+        cb_->clean(at, uint64_t(count) * indexSize);
+    if (!prepare(pl, primitive, 0, 0, most + 1, 0, true, why))
+        return false;
     const uint64_t va = ib->va + offset, end = va + uint64_t(count) * indexSize - 1;
     if (va != ibVa_ || end != ibEnd_ || indexSize != ibSize_) {
         p_.inc(INDEX_BUFFER_A, {uint32_t(va >> 32), uint32_t(va), uint32_t(end >> 32), uint32_t(end)});
@@ -1770,7 +1919,8 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, uint32_t first, ui
         axis(vp_[1], empty ? 0 : vp_[3], areaH_, sc_[1], sc_[1] + sc_[3], y);
         if (x[1] > x[0] && y[1] > y[0]) {
             const std::array<uint32_t, 4> r = {x[0], y[0], x[1], y[1]};
-            if (std::find(rects_.begin(), rects_.end(), r) == rects_.end()) rects_.push_back(r);
+            if (std::find(rects_.begin(), rects_.end(), r) == rects_.end())
+                rects_.push_back(r);
             if (rects_.size() > 1024) {
                 whole_ = true;
                 rects_.clear();
@@ -1790,7 +1940,8 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, uint32_t first, ui
             return false;
         }
     }
-    if (p_.room() < 1024) reserve();
+    if (p_.room() < 1024)
+        reserve();
     Device &d = *dev_;
     Push &p = p_;
     // NVK's dynamic state is dirty at a command buffer's first draw: its primitive restart index (0 then; an index buffer bind
@@ -1817,8 +1968,10 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, uint32_t first, ui
             const Bound &b = bufs_[e.stage][e.slot];
             const uint32_t window = (uint32_t(e.sampler) | uint32_t(e.pad) << 8) * 16;
             uint32_t range = std::min<uint32_t>((b.size + 15) & ~15u, 0x10000u);  // a uniform range is at most 64 KiB
-            if (window && window < range) range = window;
-            if (!e.samplerKind) range = (range + 255) & ~255u;
+            if (window && window < range)
+                range = window;
+            if (!e.samplerKind)
+                range = (range + 255) & ~255u;
             // A Metal offset that is not a multiple of 256 needs m2v's SlotBindOffset residual in the push window: not in the pack
             // (every probe bound at offset 0)
             if ((b.va & 255) && !e.samplerKind) {
@@ -1827,7 +1980,8 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, uint32_t first, ui
                                 uint32_t(std::min<uint64_t>(b.offset, ~0u))};
                 return false;
             }
-            if (b.buffer && !b.buffer->wc) cb_->clean(b.buffer->cpu + b.offset, std::min<uint64_t>(range, b.size));
+            if (b.buffer && !b.buffer->wc)
+                cb_->clean(b.buffer->cpu + b.offset, std::min<uint64_t>(range, b.size));
             at[0] = uint32_t(b.va);
             at[1] = uint32_t(b.va >> 32);
             at[2] = b.va ? range : 0;
@@ -1879,7 +2033,8 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, uint32_t first, ui
                 continue;
             }
             int j = i;
-            while (j < 32 && (pl->pushMask >> j & 1) && root[j] != pl->push[j]) j++;
+            while (j < 32 && (pl->pushMask >> j & 1) && root[j] != pl->push[j])
+                j++;
             p.m(LOAD_CB_OFFSET, 0x700 + 4 * i);
             p.nonInc(LOAD_CB, pl->push + i, j - i);
             memcpy(root + i, pl->push + i, (j - i) * 4);
@@ -1931,8 +2086,10 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, uint32_t first, ui
     }
     if (pl->vsSetCbuf || pl->fsSetCbuf) {
         p.inc(CB_SELECTOR_A, {kSetBytes, uint32_t(setVa >> 32), uint32_t(setVa)});
-        if (pl->vsSetCbuf) p.m(BIND_GROUP_CB + 0x20 * 0, 1 | 1 << 4);
-        if (pl->fsSetCbuf) p.m(BIND_GROUP_CB + 0x20 * 4, 1 | 1 << 4);
+        if (pl->vsSetCbuf)
+            p.m(BIND_GROUP_CB + 0x20 * 0, 1 | 1 << 4);
+        if (pl->fsSetCbuf)
+            p.m(BIND_GROUP_CB + 0x20 * 4, 1 | 1 << 4);
         p.inc(CB_SELECTOR_A, {kRootBytes, uint32_t(d.root_.va >> 32), uint32_t(d.root_.va)});
     }
     // framebuffer fetch reads the color attachment through the texture unit: m2v's barrier (0106: only after a draw wrote color)
@@ -1964,14 +2121,27 @@ static void clearValue(uint32_t format, const float in[4], uint32_t out[4])
         const double v = std::isnan(x) ? 0.0 : std::clamp(double(x), 0.0, 1.0);
         return fbits(float(std::nearbyint(v * 255.0) / 255.0));
     };
-    auto exact = [](float x) { return std::isnan(x) ? (fbits(x) | 0x7fc00000u) : fbits(x); };
-    auto half = [&](float x) { return std::isnan(x) ? exact(x) : fbits(float(_Float16(x))); };
-    for (int i = 0; i < 4; i++) switch (format) {
+    auto exact = [](float x) {
+        return std::isnan(x) ? (fbits(x) | 0x7fc00000u) : fbits(x);
+    };
+    auto half = [&](float x) {
+        return std::isnan(x) ? exact(x) : fbits(float(_Float16(x)));
+    };
+    for (int i = 0; i < 4; i++)
+        switch (format) {
         case 70:
-        case 80: out[i] = unorm8(in[i]); break;
-        case 55: out[i] = i ? 0u : exact(in[i]); break;
-        case 115: out[i] = half(in[i]); break;
-        default: out[i] = exact(in[i]); break;  // RGBA32Float
+        case 80:
+            out[i] = unorm8(in[i]);
+            break;
+        case 55:
+            out[i] = i ? 0u : exact(in[i]);
+            break;
+        case 115:
+            out[i] = half(in[i]);
+            break;
+        default:
+            out[i] = exact(in[i]);
+            break;  // RGBA32Float
         }
 }
 
@@ -1981,7 +2151,8 @@ namespace {
 void copyRows(Push &p, uint64_t src, uint32_t srcPitch, uint64_t dst, uint32_t dstPitch, uint32_t width, uint32_t lines,
               uint32_t bpp, Device::Stats &stats)
 {
-    if (!width || !lines || !bpp) return;
+    if (!width || !lines || !bpp)
+        return;
     stats.ceOps++;
     stats.ceBytes += uint64_t(width) * bpp * lines;
     const uint32_t comp = std::min(bpp, 4u), n = bpp / comp;
@@ -2015,7 +2186,8 @@ bool chainLevelTarget(const Texture &t, uint32_t level, Texture &out)
 {
     const FormatInfo *f = formatInfo(t.format);
     ColorTargetDesc d;
-    if (!t.chain || !f || !f->rt || !chainLevelDesc(t.chain->layout, t.chain->va, level, f->rt, d)) return false;
+    if (!t.chain || !f || !f->rt || !chainLevelDesc(t.chain->layout, t.chain->va, level, f->rt, d))
+        return false;
     out = Texture();
     out.va = d.va;
     out.width = t.chain->layout.level[level].width;
@@ -2033,7 +2205,8 @@ bool chainLevelTarget(const Texture &t, uint32_t level, Texture &out)
 void RenderEncoder::end()
 {
     Device &d = *dev_;
-    if (p_.at > bodyStart_) bodies_.push_back({bodyStart_, p_.at});
+    if (p_.at > bodyStart_)
+        bodies_.push_back({bodyStart_, p_.at});
     d.push_.head = uint64_t(reinterpret_cast<uint8_t *>(p_.at) - d.push_.bo.cpu);  // give back the unused reservation
     // pass prologue: the full barrier m2v puts between passes, the targets, then the clears
     const std::vector<Clear> cl = clears();
@@ -2049,7 +2222,8 @@ void RenderEncoder::end()
     bool copied = false;
     for (uint32_t j = 0; j < pass_.count && j < 8; j++)
         if (const Texture *o = shadowOf_[j]) {
-            if (pass_.color[j].load == ColorAttachment::Clear) continue;
+            if (pass_.color[j].load == ColorAttachment::Clear)
+                continue;
             const Texture *s = pass_.color[j].texture;
             copyRows(p, o->va, o->pitch, s->va, s->pitch, areaW_, areaH_, o->bpp, d.stats);
             copied = true;
@@ -2062,12 +2236,14 @@ void RenderEncoder::end()
     // as target 0, over its reach, then the barrier between passes
     bool own = false;
     for (const Clear &c : cl) {
-        if (!c.own) continue;
+        if (!c.own)
+            continue;
         const Texture *t = pass_.color[c.target].texture;
         targetWords(p, COLOR_TARGET, *t);
         p.m(COLOR_COMPRESSION, 0);
         uint32_t map = 0;
-        for (uint32_t k = 0; k < 8; k++) map |= k << (4 + 3 * k);
+        for (uint32_t k = 0; k < 8; k++)
+            map |= k << (4 + 3 * k);
         p.m(CT_SELECT, map | 1);
         p.inc(SURFACE_CLIP_H, {c.x1 << 16, c.y1 << 16});
         p.m(ZT_SELECT, 0);
@@ -2089,18 +2265,21 @@ void RenderEncoder::end()
     uint32_t ct = 0, count = 0;
     for (uint32_t j = 0; j < pass_.count && j < 8; j++) {
         const Texture *t = pass_.color[j].texture;
-        if (!t) continue;
+        if (!t)
+            continue;
         targetWords(p, COLOR_TARGET + 0x40 * j, *t);
         p.m(COLOR_COMPRESSION + 4 * j, 0);
         count++;
     }
     // targets map to themselves (NVK writes all eight slots of the map; the hardware reads the first `count`)
-    for (uint32_t k = 0; k < 8; k++) ct |= k << (4 + 3 * k);
+    for (uint32_t k = 0; k < 8; k++)
+        ct |= k << (4 + 3 * k);
     p.m(CT_SELECT, ct | count);
     p.inc(SURFACE_CLIP_H, {areaW_ << 16, areaH_ << 16});  // the render area (nvk_CmdBeginRendering)
     p.m(ZT_SELECT, 0);
     for (const Clear &c : cl) {
-        if (c.own) continue;
+        if (c.own)
+            continue;
         uint32_t v[4];
         clearValue(pass_.color[c.target].texture->format, c.value, v);
         p.inc(COLOR_CLEAR_VALUE, {v[0], v[1], v[2], v[3]});
@@ -2121,7 +2300,8 @@ void RenderEncoder::end()
     // shadow targets the pass stores: their pool images back over what it rendered (the render area; a Clear's reach past it),
     // after the 3D engine is done with them
     bool stores = false;
-    for (uint32_t j = 0; j < pass_.count && j < 8; j++) stores |= shadowOf_[j] && pass_.color[j].store;
+    for (uint32_t j = 0; j < pass_.count && j < 8; j++)
+        stores |= shadowOf_[j] && pass_.color[j].store;
     if (stores) {
         const uint32_t room2 = 8 + 8 * 16;
         uint32_t *at = reinterpret_cast<uint32_t *>(d.alloc(d.push_, room2 * 4, 256, va));
@@ -2129,7 +2309,8 @@ void RenderEncoder::end()
         q.m(WAIT_FOR_IDLE, 0);
         for (uint32_t j = 0; j < pass_.count && j < 8; j++) {
             const Texture *o = shadowOf_[j];
-            if (!o || !pass_.color[j].store) continue;
+            if (!o || !pass_.color[j].store)
+                continue;
             uint32_t w = areaW_, h = areaH_;
             for (const Clear &c : cl)
                 if (c.target == j && pass_.color[j].load == ColorAttachment::Clear) {
@@ -2154,13 +2335,20 @@ void RenderEncoder::end()
 std::vector<RenderEncoder::Clear> RenderEncoder::clears() const
 {
     std::vector<Clear> out;
-    enum { Nothing, Every, Draws } reach = Nothing;
+
+    enum {
+        Nothing,
+        Every,
+        Draws
+    } reach = Nothing;
+
     bool clearStored = false;
     for (uint32_t j = 0; j < pass_.count && j < 8; j++) {
         const ColorAttachment &a = pass_.color[j];
         clearStored |= a.texture && a.load == ColorAttachment::Clear && a.store && !memoryless_[j];
     }
-    if (called_) reach = clearStored ? Every : drew_ ? Draws : Nothing;
+    if (called_)
+        reach = clearStored ? Every : drew_ ? Draws : Nothing;
     // the reached tiles where that is not every tile (none: every tile)
     constexpr uint32_t kTile = 32;
     const uint32_t perRow = (areaW_ + kTile - 1) / kTile, rows = (areaH_ + kTile - 1) / kTile;
@@ -2185,7 +2373,8 @@ std::vector<RenderEncoder::Clear> RenderEncoder::clears() const
     static const float zero[4] = {};
     for (uint32_t j = 0; j < pass_.count && j < 8; j++) {
         const ColorAttachment &a = pass_.color[j];
-        if (!a.texture) continue;
+        if (!a.texture)
+            continue;
         const uint32_t w = areaW_, h = areaH_;  // NVK's clears cover the render area (nvk_CmdBeginRendering)
         if (a.load == ColorAttachment::Clear) {
             // Metal's Clear load of a stored attachment reaches past the render area: over it rounded up to whole 32-pixel
@@ -2202,13 +2391,16 @@ std::vector<RenderEncoder::Clear> RenderEncoder::clears() const
             out.push_back(c);
             continue;
         }
-        if (a.load != ColorAttachment::DontCare || reach == Nothing) continue;
+        if (a.load != ColorAttachment::DontCare || reach == Nothing)
+            continue;
         const bool read = readBits_ >> j & 1;
         if (memoryless_[j]) {
-            if (read || a.store) out.push_back({j, 0, 0, w, h, zero});
+            if (read || a.store)
+                out.push_back({j, 0, 0, w, h, zero});
             continue;
         }
-        if (!a.store || !read) continue;
+        if (!a.store || !read)
+            continue;
         if (tiles.empty()) {
             out.push_back({j, 0, 0, w, h, zero});
             continue;
@@ -2220,10 +2412,12 @@ std::vector<RenderEncoder::Clear> RenderEncoder::clears() const
                     continue;
                 }
                 const uint32_t first = tx;
-                while (tx < perRow && tiles[size_t(ty) * perRow + tx]) tx++;
+                while (tx < perRow && tiles[size_t(ty) * perRow + tx])
+                    tx++;
                 const uint32_t x0 = first * kTile, y0 = ty * kTile, x1 = std::min(tx * kTile, w),
                                y1 = std::min((ty + 1) * kTile, h);
-                if (x0 < x1 && y0 < y1) out.push_back({j, x0, y0, x1, y1, zero});
+                if (x0 < x1 && y0 < y1)
+                    out.push_back({j, x0, y0, x1, y1, zero});
             }
     }
     return out;
@@ -2237,7 +2431,8 @@ std::vector<RenderEncoder::Clear> RenderEncoder::clears() const
 
 void BlitEncoder::room(uint32_t words)
 {
-    if (p_.room() >= words + 8) return;
+    if (p_.room() >= words + 8)
+        return;
     cb_->segment(start_, p_.at);  // a new reservation: the copies so far become a segment
     dev_->push_.head = uint64_t(reinterpret_cast<uint8_t *>(p_.at) - dev_->push_.bo.cpu);
     uint64_t va;
@@ -2264,7 +2459,8 @@ void BlitEncoder::copyBytes(uint64_t src, uint64_t dst, uint64_t bytes)
 void BlitEncoder::copyRect(uint64_t src, uint32_t srcPitch, uint64_t dst, uint32_t dstPitch, uint32_t width,
                            uint32_t lines, uint32_t bpp)
 {
-    if (!width || !lines || !bpp) return;
+    if (!width || !lines || !bpp)
+        return;
     room();
     copyRows(p_, src, srcPitch, dst, dstPitch, width, lines, bpp, dev_->stats);
 }
@@ -2274,7 +2470,8 @@ void BlitEncoder::copyRect(uint64_t src, uint32_t srcPitch, uint64_t dst, uint32
 // NO_WRITE 6 (clb0b5 SET_REMAP_COMPONENTS); one byte a component, four destination components.
 void BlitEncoder::convertPlanar(const Texture &t)
 {
-    if (!t.planar || !t.width || !t.height) return;
+    if (!t.planar || !t.width || !t.height)
+        return;
     dev_->stats.ceOps += 2;
     dev_->stats.ceBytes +=
         uint64_t(t.width) * t.height * 4 * 2;  // (each launch writes the image's rows, through NO_WRITE)
@@ -2301,7 +2498,8 @@ void BlitEncoder::convertPlanar(const Texture &t)
 void BlitEncoder::generate(Texture &t, bool all)
 {
     Texture::Chain *c = t.chain;
-    if (!c) return;
+    if (!c)
+        return;
     const uint32_t last = all ? c->layout.levels - 1 : 0;
     room(uint32_t(fx::generateWords(c->layout, 0, last)));
     const fx::Pitch l0{t.va, t.pitch, t.width, t.height};
@@ -2320,7 +2518,8 @@ void BlitEncoder::copyFromLevel(const Texture &t, uint32_t level, uint32_t sx, u
                                 uint32_t dx, uint32_t dy, uint32_t w, uint32_t h)
 {
     const Texture::Chain *c = t.chain;
-    if (!c) return;
+    if (!c)
+        return;
     room(uint32_t(fx::copyWords()));
     const fx::Pitch d{dst.va, dst.pitch, dst.width, dst.height};
     fx::emitCopyFromLevel(p_, c->layout, c->va, level, d, c->fmt2d, sx, sy, dx, dy, w, h);
@@ -2330,7 +2529,8 @@ void BlitEncoder::copyFromLevel(const Texture &t, uint32_t level, uint32_t sx, u
 void BlitEncoder::copyToLevel(Texture &t, uint32_t level, const Texture &src)
 {
     Texture::Chain *c = t.chain;
-    if (!c || !level || level >= c->layout.levels) return;
+    if (!c || !level || level >= c->layout.levels)
+        return;
     const fx::MipLevel &l = c->layout.level[level];
     room(uint32_t(fx::copyWords()));
     const fx::Pitch s{src.va, src.pitch, src.width, src.height};

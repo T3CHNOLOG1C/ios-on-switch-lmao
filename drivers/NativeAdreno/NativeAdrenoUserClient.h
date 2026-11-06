@@ -13,12 +13,17 @@
  * pointer values. A mapping is retirable only through freeBo, which unmaps
  * first and then releases the backing object; both steps must succeed.
  * Up to NativeAdrenoClientMaxObjects live objects and the execbuf's own eight-job limit apply. */
-enum : size_t { NativeAdrenoClientMaxObjects = 1024, NativeAdrenoClientContiguousFirstBytes = 65536 };
+enum : size_t {
+    NativeAdrenoClientMaxObjects = 1024,
+    NativeAdrenoClientContiguousFirstBytes = 65536
+};
+
 class NativeAdrenoUserClient final {
     struct Queue {
         uint32_t id = 0;
         bool active = false;
     };
+
     struct Entry {
         NativeAdrenoMemory memory;
         uint64_t handle = 0;
@@ -32,6 +37,7 @@ class NativeAdrenoUserClient final {
         uint32_t mapping_leases = 0;
         char metadata[NativeAdrenoAbiMetadataBytes]{};
     };
+
     /* Allocated at open(), all-zero is the free state. */
     Entry *entries_ = nullptr;
     size_t entry_count_ = 0;
@@ -65,8 +71,13 @@ public:
     /* One client of several on the same VM, submit object and ring: its queue range (queue_base a multiple of NativeAdrenoAbiMaxQueues) and
      * GPU address window (4 KiB aligned, inside the input range; bytes 0 = unrestricted). Only while open with no live object or job. */
     IOReturn setScope(uint32_t queue_base, uint64_t window_start, uint64_t window_bytes);
+
     /* Highest end address (exclusive) any mapping of this client has reached, 0 before the first. */
-    uint64_t windowPeak() const { return window_peak_; }
+    uint64_t windowPeak() const
+    {
+        return window_peak_;
+    }
+
     /* Refuses while any object is live or any of this client's jobs is unobserved. */
     IOReturn close();
     /* Connection teardown: waits for every outstanding job, then unmaps and frees every object, closes every queue and

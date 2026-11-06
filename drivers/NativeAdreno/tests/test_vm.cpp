@@ -14,12 +14,14 @@
     } while (0)
 #define BYTES 0x40000
 #define CB    0x22000
+
 IOReturn NativeAdrenoQueryCpu4K(NativeAdrenoCpuState *out)
 {
     CHECK(out);
     *out = {};
     return kIOReturnSuccess;
 }
+
 IOReturn NativeAdrenoMaintainOwnedPages(void *mapping, size_t bytes, NativeAdrenoCacheOperation op)
 {
     CHECK(mapping && bytes && !(((uintptr_t)mapping | bytes) & 4095));
@@ -27,10 +29,13 @@ IOReturn NativeAdrenoMaintainOwnedPages(void *mapping, size_t bytes, NativeAdren
     ++fixture.cache_calls;
     return fixture.cache_calls == fixture.cache_fail_call ? kIOReturnIOError : kIOReturnSuccess;
 }
+
 static uint32_t memory[BYTES / 4];
+
 static struct {
     unsigned calls, fail_call, after;
 } f;
+
 static ArmSmmu4KIo io;
 static ArmSmmu4KStreamState streams;
 static ArmSmmu4KStream routes[2] = {{2, 0}, {4, 1}};
@@ -41,38 +46,47 @@ extern "C" {
 extern uint64_t (*native_adreno_vm_now_us)(void);
 extern volatile uint64_t native_adreno_vm_phase_us[2][8];
 }
+
 static uint64_t nowUs()
 {
     return (uint64_t)std::chrono::duration_cast<std::chrono::microseconds>(
                std::chrono::steady_clock::now().time_since_epoch())
         .count();
 }
+
 static int event(void)
 {
     return ++f.calls == f.fail_call;
 }
+
 static int read32(void *cookie, size_t at, uint32_t *v)
 {
     CHECK(cookie == &f && at % 4 == 0 && at <= BYTES - 4);
-    if (event()) return 1;
+    if (event())
+        return 1;
     *v = memory[at / 4];
     return 0;
 }
+
 static int read64(void *cookie, size_t at, uint64_t *v)
 {
     CHECK(cookie == &f && at % 8 == 0 && at <= BYTES - 8);
-    if (event()) return 1;
+    if (event())
+        return 1;
     std::memcpy(v, memory + at / 4, 8);
     return 0;
 }
+
 static int write32(void *cookie, size_t at, uint32_t v)
 {
     CHECK(cookie == &f && at % 4 == 0 && at <= BYTES - 4);
     int fail = event();
-    if (fail && !f.after) return 1;
+    if (fail && !f.after)
+        return 1;
     memory[at / 4] = v;
     return fail;
 }
+
 static int write64(void *cookie, size_t at, uint64_t v)
 {
     (void)at;
@@ -81,11 +95,13 @@ static int write64(void *cookie, size_t at, uint64_t v)
     CHECK(0);
     return 1;
 }
+
 static int barrier(void *cookie)
 {
     CHECK(cookie == &f);
     return event();
 }
+
 struct Fixture {
     NativeAdrenoMemory tables, object;
     ArmSmmu4KLiveArena arena;
@@ -94,6 +110,7 @@ struct Fixture {
     NativeAdrenoVm vm;
     std::vector<uint32_t> aliasScratch;
 };
+
 static void mmioReset(void)
 {
     std::memset(memory, 0, sizeof(memory));
@@ -104,20 +121,24 @@ static void mmioReset(void)
     memory[0x24 / 4] = 0x40000010;
     memory[0x28 / 4] = 0x1433;
     memory[0] = 0x436;
-    for (unsigned i = 0; i < 8; ++i) memory[(0xc00 + 4 * i) / 4] = 0x20000;
+    for (unsigned i = 0; i < 8; ++i)
+        memory[(0xc00 + 4 * i) / 4] = 0x20000;
     memory[0x800 / 4] = 1u << 31 | 9;
     memory[0xc00 / 4] = 3;
 }
+
 /* Real prepared arena, enabled actual context image and exact stream routes. */
 static IOReturn exposed(Fixture &s, size_t capacity = 32, size_t pages = 16)
 {
     mmioReset();
     const size_t tablePages = std::max(size_t(32), pages / 512 + 8);
     IOReturn status = s.tables.allocate(tablePages * 4096, 40, true, tablePages * 4096);
-    if (status) return status;
+    if (status)
+        return status;
     IOReturn smmu = NativeAdrenoPrepareSmmuMemory(&s.tables, 32, 40, 0x800000, pages * 4096, 0, pages, &s.arena,
                                                   &s.state, &s.visibility);
-    if (smmu) return smmu;
+    if (smmu)
+        return smmu;
     context = (ArmSmmu4KContextConfig){.lower = &s.arena.config,
                                        .lower_tables = &s.state.tables,
                                        .id0 = memory[0x20 / 4],
@@ -141,10 +162,12 @@ static IOReturn exposed(Fixture &s, size_t capacity = 32, size_t pages = 16)
     NativeAdrenoVmRegion lower = {&s.tables, &s.arena, &s.state};
     return s.vm.attach(&io, &context, &streams, &lower, nullptr, capacity, 1000);
 }
+
 static IOReturn object(Fixture &s, size_t pages)
 {
     return s.object.allocate(pages * 4096, 40, false, pages * 4096);
 }
+
 int main()
 {
     /* A real map/hold/unmap transaction across the actual code paths. */
@@ -317,19 +340,23 @@ int main()
     std::printf("PASS: 1 native map/hold/unmap transaction, 13 pre-ownership refusals, 1 scattered-span ordering and "
                 "capacity case and 1 post-hold poison/retention case over a software SMMU register peer\n");
 }
+
 /* Physical-page maintenance (imported BOs): record it; no host page is touched. */
 /* Host double: the page attribute change of user BOs has no host equivalent (no host page is touched). */
 IOReturn NativeAdrenoSetPagesCacheMode(const NativeAdrenoPhysicalSpan *spans, size_t count, bool)
 {
     return spans && count ? kIOReturnSuccess : kIOReturnBadArgument;
 }
+
 IOReturn NativeAdrenoReassertWriteCombined(const NativeAdrenoPhysicalSpan *spans, size_t count, uint32_t *reset)
 {
     return spans && count && reset ? kIOReturnSuccess : kIOReturnBadArgument;
 }
+
 IOReturn NativeAdrenoMaintainPhysicalPages(uint64_t physical, size_t bytes, NativeAdrenoCacheOperation op)
 {
-    if (!physical || !bytes || ((physical | bytes) & 4095) || op > NativeAdrenoInvalidate) std::abort();
+    if (!physical || !bytes || ((physical | bytes) & 4095) || op > NativeAdrenoInvalidate)
+        std::abort();
     ++fixture.physical_calls;
     fixture.physical_bytes += bytes;
     return kIOReturnSuccess;

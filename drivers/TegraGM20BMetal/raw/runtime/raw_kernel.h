@@ -27,7 +27,12 @@ class Kernel {
 public:
     ~Kernel();
     bool open(std::string &err);
-    const TegraGM20BAbiInfo &info() const { return info_; }
+
+    const TegraGM20BAbiInfo &info() const
+    {
+        return info_;
+    }
+
     bool alloc(uint64_t bytes, bool coherent, Bo &bo, uint32_t kind = 0, uint64_t align = 0x10000);
     // Wires [addr, addr + bytes) of this task (whole pages) and binds them; bo.va/bo.cpu name addr itself.
     bool import(void *addr, uint64_t bytes, Bo &bo, uint32_t kind = 0);
@@ -46,9 +51,21 @@ public:
     // Order (method 14, TegraGM20BInfoOrder): GPU-side acquires between `channel` and the task's other channels (NVK's).
     // The kern_return_t; `waits`: the acquires queued.
     int order(uint32_t channel, uint32_t flags, uint32_t seqno, uint32_t &waits);
-    bool canOrder() const { return (info_.flags & TegraGM20BInfoOrder) != 0; }
-    const std::string &error() const { return err_; }
-    uint64_t vaInUse() const { return vaUsed_; }
+
+    bool canOrder() const
+    {
+        return (info_.flags & TegraGM20BInfoOrder) != 0;
+    }
+
+    const std::string &error() const
+    {
+        return err_;
+    }
+
+    uint64_t vaInUse() const
+    {
+        return vaUsed_;
+    }
 
 private:
     int call(uint32_t method, const void *in, size_t inSize, void *out, size_t outSize);

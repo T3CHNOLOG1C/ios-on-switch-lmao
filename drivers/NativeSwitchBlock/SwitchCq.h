@@ -103,13 +103,35 @@ struct SwitchCqError {
 // the index of the last command the card got, whoever sent it; uint32_t lastIrq(): the controller's interrupt status for
 // the last command (0 if the bus has none).
 template <typename Bus> struct SwitchCqEngine {
-    enum State : uint8_t { kOff, kIdle, kOn };
+    enum State : uint8_t {
+        kOff,
+        kIdle,
+        kOn
+    };
+
     // r18-sdcq: what a recovery left (SwitchCqError::outcome): the card in CQ mode with its queue empty (a group may be
     // assigned at once), out of CQ mode (idle), or stuck in it (the driver power-cycles it).
-    enum Recovery : uint8_t { kInPlace, kOut, kStuck };
+    enum Recovery : uint8_t {
+        kInPlace,
+        kOut,
+        kStuck
+    };
+
     // r18-sdcq: a chain's proof (the driver's compareChain) and how a group ended.
-    enum Proof : uint8_t { kProofMatches, kProofDiffers, kProofUnproven, kProofBroken };
-    enum Outcome : uint8_t { kGroupQueued, kGroupRetried, kGroupLegacy, kGroupStopped };
+    enum Proof : uint8_t {
+        kProofMatches,
+        kProofDiffers,
+        kProofUnproven,
+        kProofBroken
+    };
+
+    enum Outcome : uint8_t {
+        kGroupQueued,
+        kGroupRetried,
+        kGroupLegacy,
+        kGroupStopped
+    };
+
     static constexpr uint32_t kR1Errors = 0xfdf90008u;  // the driver's R1_ERRORS
     // r18-sdcq: COM_CRC_ERROR and ILLEGAL_COMMAND, clear condition B: they describe the command before the one whose
     // response carries them (Table 4-42; 4.6.1: an illegal or CRC-failed command gets no response).
@@ -161,30 +183,43 @@ template <typename Bus> struct SwitchCqEngine {
         state = depth >= 2 ? kIdle : kOff;
         useCache = cache && state == kIdle;
     }
+
     // r18-sdcq: setup's test group done: the counts start again, so the data path's lines count its own groups only.
-    void resetCounts() { enters = leaves = groups = tasks = settles = recoveries = probes = 0; }
+    void resetCounts()
+    {
+        enters = leaves = groups = tasks = settles = recoveries = probes = 0;
+    }
+
     // The card was powered off and initialized again (system sleep, or the driver's answer to `stuck`): CQ mode and the
     // cache (Cache Enable is 0 after power-up) did not survive it; the next session turns the cache on again. r18-sdcq: a
     // card power-cycled out of CQ mode gets the queue back (kMaxStuck times a boot).
     void powerCycled()
     {
-        if (state == kOn) state = kIdle;
+        if (state == kOn)
+            state = kIdle;
         if (stuck) {
             stuck = false;
             if (++powerCycles >= kMaxStuck && !stopped) {
                 stopped = true;
                 why = "the card stayed in CQ mode three times";
             }
-            if (!stopped && depth >= 2) state = kIdle;
+            if (!stopped && depth >= 2)
+                state = kIdle;
         }
         queued = next = 0;
         cacheOn = false;
     }
-    bool usable() const { return state != kOff; }
+
+    bool usable() const
+    {
+        return state != kOff;
+    }
+
     // r18-sdcq: the backoff's gate, once per read that could start a group: false (counted) while a pause lasts.
     bool admit()
     {
-        if (!pauseLeft) return true;
+        if (!pauseLeft)
+            return true;
         --pauseLeft;
         ++skipped;
         return false;
@@ -195,37 +230,46 @@ template <typename Bus> struct SwitchCqEngine {
     // whether the card answered the CMD49 (only a card that answered and then did not show it on has refused it).
     bool enableCache(Bus &bus, bool *answered = nullptr)
     {
-        if (answered) *answered = false;
-        if (state == kOn) return false;
+        if (answered)
+            *answered = false;
+        if (state == kOn)
+            return false;
         cacheOn = true;
         uint8_t value = kSdCacheEnable;
         uint32_t r1 = 0;
         const bool written = !bus.control(kSdPerfCacheControl, true, &value, &r1);
-        if (answered) *answered = written;
+        if (answered)
+            *answered = written;
         const bool taken = written && readBack(bus, kSdPerfCacheControl, 1, kSdCacheEnable);
         cacheRead = lastRead[0];
         cacheReads = lastReads;
-        if (taken) return true;
+        if (taken)
+            return true;
         (void)disableCache(bus);
         return false;
     }
+
     // r16-sdcq: Flush Cache (byte 261 = 01h): the card busy on DAT0 while it commits its cache (at most 1 s: 4.17), then
     // the bit reads 0. Out of CQ mode only (early SanDisk A2 cards never finished a flush in CQ mode: Linux quirks.h).
     // True with nothing to flush. A CMD49 that failed proves nothing (bit 0 also reads 0 when no flush was asked for): it
     // is sent once more (asking for a flush twice is harmless), and only one the card answered counts.
     bool flush(Bus &bus)
     {
-        if (!cacheOn) return true;
-        if (state == kOn || stuck) return false;
+        if (!cacheOn)
+            return true;
+        if (state == kOn || stuck)
+            return false;
         ++flushes;
         uint8_t value = kSdFlushCache;
         uint32_t r1 = 0;
         if (bus.control(kSdPerfFlushControl, true, &value, &r1)) {
             value = kSdFlushCache;
-            if (bus.control(kSdPerfFlushControl, true, &value, &r1)) return false;
+            if (bus.control(kSdPerfFlushControl, true, &value, &r1))
+                return false;
         }
         return readBack(bus, kSdPerfFlushControl, kSdFlushCache, 0);
     }
+
     // r16-sdcq: the cache off (byte 260 = 00h, resent once if its CMD49 failed on the bus, read back), out of CQ mode. No
     // flush first: nothing written while it was on has completed without one (commitWrite). False when the card does not
     // show it off: cacheOn stays, and writes are flushed. Only a CMD49 the card answered makes a 00h read-back mean off
@@ -233,21 +277,29 @@ template <typename Bus> struct SwitchCqEngine {
     // power cycle clears it.
     bool disableCache(Bus &bus)
     {
-        if (!cacheOn) return true;
-        if (state == kOn || stuck) return false;
+        if (!cacheOn)
+            return true;
+        if (state == kOn || stuck)
+            return false;
         uint8_t value = 0;
         uint32_t r1 = 0;
         if (bus.control(kSdPerfCacheControl, true, &value, &r1)) {
             value = 0;
-            if (bus.control(kSdPerfCacheControl, true, &value, &r1)) return false;
+            if (bus.control(kSdPerfCacheControl, true, &value, &r1))
+                return false;
         }
-        if (!readBack(bus, kSdPerfCacheControl, 1, 0)) return false;
+        if (!readBack(bus, kSdPerfCacheControl, 1, 0))
+            return false;
         cacheOn = false;
         return true;
     }
+
     // r16-sdcq: what a legacy write needs before it completes: nothing while the cache is off (every session's end turns
     // it off), a flush while it may be on. False: the write is not known to be on flash (the driver fails it).
-    bool commitWrite(Bus &bus) { return !cacheOn || flush(bus); }
+    bool commitWrite(Bus &bus)
+    {
+        return !cacheOn || flush(bus);
+    }
 
     // Into CQ mode (from kIdle): CMD49 03h, read back 03h (lazily: kReadBacks). r16-sdcq: the cache on first while the
     // card offers it (4.19.1); a card that answers the enable and will not show it on keeps it off for the boot and still
@@ -261,11 +313,14 @@ template <typename Bus> struct SwitchCqEngine {
     // False with `error` set: out of CQ mode again (idle), or stuck (the driver power-cycles it). Never off for the boot.
     bool enter(Bus &bus)
     {
-        if (state == kOn) return true;
-        if (state != kIdle) return false;
+        if (state == kOn)
+            return true;
+        if (state != kIdle)
+            return false;
         if (useCache && !cacheOn) {
             bool answered = false;
-            if (!enableCache(bus, &answered) && answered) useCache = false;
+            if (!enableCache(bus, &answered) && answered)
+                useCache = false;
         }
         uint8_t value = kEnabled;
         uint32_t r1 = 0;
@@ -293,8 +348,10 @@ template <typename Bus> struct SwitchCqEngine {
             before = bus.lastCommand();
             r1 = 0;
             step = bus.command(43, switchSdCmd43(kSdAbortQueue, 0), true, &r1);
-            if (!step && !(r1 & kR1Errors & (attempt ? ~kR1PreviousErrors : ~0u))) break;
-            if (!step) step = 30;
+            if (!step && !(r1 & kR1Errors & (attempt ? ~kR1PreviousErrors : ~0u)))
+                break;
+            if (!step)
+                step = 30;
         }
         if (step) {
             note(43, 0, before, step, r1, bus);
@@ -314,7 +371,8 @@ template <typename Bus> struct SwitchCqEngine {
     // stuck card is not off for the boot: the power cycle gives the queue back (powerCycled).
     bool leave(Bus &bus)
     {
-        if (state != kOn) return true;
+        if (state != kOn)
+            return true;
         if (queued != next) {
             uint32_t r1 = 0;
             (void)bus.command(43, switchSdCmd43(kSdAbortQueue, 0), true, &r1);
@@ -330,8 +388,10 @@ template <typename Bus> struct SwitchCqEngine {
     // finished group's Task IDs taken until the host aborts the queue (6.00 4.19.1.2; the header's r8d paragraph).
     bool submit(Bus &bus, const SwitchCqTask *t, unsigned n)
     {
-        if (state != kOn || queued != next) return fail(bus, "tasks assigned to a busy queue"), false;
-        if (!n || n > depth) return fail(bus, "a group larger than the queue"), false;
+        if (state != kOn || queued != next)
+            return fail(bus, "tasks assigned to a busy queue"), false;
+        if (!n || n > depth)
+            return fail(bus, "a group larger than the queue"), false;
         for (unsigned i = 0; i < n; ++i)
             if (!t[i].sectors || t[i].sectors > 0xffff || t[i].lba > 0xffffffffull)
                 return fail(bus, "a task the queue cannot take"), false;
@@ -373,10 +433,25 @@ template <typename Bus> struct SwitchCqEngine {
     }
 
     // The CMD46 argument of the next task, in Task ID order; executed() once its data is in.
-    bool pending() const { return state == kOn && next < queued; }
-    uint32_t argument() const { return switchSdTaskArgument(static_cast<uint8_t>(next)); }
-    void executed() { ++next; }
-    bool empty() const { return next == queued; }
+    bool pending() const
+    {
+        return state == kOn && next < queued;
+    }
+
+    uint32_t argument() const
+    {
+        return switchSdTaskArgument(static_cast<uint8_t>(next));
+    }
+
+    void executed()
+    {
+        ++next;
+    }
+
+    bool empty() const
+    {
+        return next == queued;
+    }
 
     // r18-sdcq: after a command of a session failed (`error` holds it). CMD13 first, while the card still holds the
     // B-type bits of a command it did not answer (they show in the next response, then clear: Table 4-42), so its status
@@ -433,7 +508,8 @@ template <typename Bus> struct SwitchCqEngine {
             stuck = !out;
         }
         useCache = false;
-        if (out) (void)disableCache(bus);
+        if (out)
+            (void)disableCache(bus);
         return out;
     }
 
@@ -458,7 +534,11 @@ template <typename Bus> struct SwitchCqEngine {
     template <typename Host>
     Outcome run(Bus &bus, Host &host, const SwitchCqTask *t, unsigned n, bool proving, unsigned *proven)
     {
-        enum : int { kEarlier = -1, kNothing = -2 };
+        enum : int {
+            kEarlier = -1,
+            kNothing = -2
+        };
+
         int owed = kEarlier;  // whose completions are still to run: the caller's batch, a chain, or nothing
         const auto pay = [&]() {
             if (owed == kEarlier)
@@ -485,12 +565,15 @@ template <typename Bus> struct SwitchCqEngine {
                     break;
                 }
                 executed();
-                if (!proving) owed = static_cast<int>(done);
+                if (!proving)
+                    owed = static_cast<int>(done);
                 ++done;
             }
-            if (ok) break;
+            if (ok)
+                break;
             legacy = true;
-            if (stopped || (state == kOff && !stuck)) break;  // a caller's bug stopped it: nothing to recover
+            if (stopped || (state == kOff && !stuck))
+                break;  // a caller's bug stopped it: nothing to recover
             errors = true;
             error.attempt = static_cast<uint8_t>(attempt + 1);
             error.tasks = static_cast<uint8_t>(m);
@@ -523,15 +606,18 @@ template <typename Bus> struct SwitchCqEngine {
                 bool differs = false;
                 for (unsigned i = 0; i < n && !differs; ++i) {
                     const uint8_t proof = host.prove(i);
-                    if (proof == kProofMatches) ++matched;
-                    if (proof == kProofDiffers) differs = true;
+                    if (proof == kProofMatches)
+                        ++matched;
+                    if (proof == kProofDiffers)
+                        differs = true;
                 }
                 if (differs) {
                     (void)fail(bus, "a task differs from its legacy read");
                     legacy = true;
                 } else {
                     *proven = matched;
-                    for (unsigned i = 0; i + 1 < n; ++i) host.complete(i);
+                    for (unsigned i = 0; i + 1 < n; ++i)
+                        host.complete(i);
                     owed = static_cast<int>(n - 1);
                 }
             }
@@ -549,8 +635,10 @@ template <typename Bus> struct SwitchCqEngine {
             }
         }
         const Outcome outcome = stopped ? kGroupStopped : legacy ? kGroupLegacy : errors ? kGroupRetried : kGroupQueued;
-        if (outcome == kGroupLegacy) ++legacyGroups;
-        if (outcome == kGroupRetried) ++retried;
+        if (outcome == kGroupLegacy)
+            ++legacyGroups;
+        if (outcome == kGroupRetried)
+            ++retried;
         ended(outcome == kGroupLegacy);
         return outcome;
     }
@@ -591,17 +679,20 @@ private:
         pausedNow = false;
         if (!failed) {
             strikes = 0;
-            if (clean < kForgive && ++clean == kForgive) pauseLength = kPauseMin;
+            if (clean < kForgive && ++clean == kForgive)
+                pauseLength = kPauseMin;
             return;
         }
         clean = 0;
-        if (stopped || ++strikes < kStrikes) return;
+        if (stopped || ++strikes < kStrikes)
+            return;
         strikes = 0;
         pauseLeft = pauseLength;
         pauseLength = pauseLength * 2 > kPauseMax ? kPauseMax : pauseLength * 2;
         ++pauses;
         pausedNow = true;
     }
+
     // A session's end after an error (enter's own), as leave() ends one: false (and stuck) when the card stays in CQ
     // mode, else idle.
     bool abandon(Bus &bus, const char *reason)
@@ -612,6 +703,7 @@ private:
         (void)quit(bus, "the card stays in CQ mode");
         return false;
     }
+
     // Out of CQ mode from kOn with an empty queue (leave, recover, abandon): idle with the cache off (r16-sdcq: a cache
     // that will not go off is left alone from here, no session turns it on again, and writes are flushed while it may be
     // on), or stuck (kOff until the driver's power cycle: powerCycled).
@@ -626,9 +718,11 @@ private:
         state = kIdle;
         queued = next = 0;
         ++leaves;
-        if (useCache && !disableCache(bus)) useCache = false;
+        if (useCache && !disableCache(bus))
+            useCache = false;
         return true;
     }
+
     // r16-sdcq: CMD48 of `byte` until (value & mask) == want, at most kReadBacks times; a settle() before each but the
     // first. The last value read in lastRead.
     bool readBack(Bus &bus, uint32_t byte, uint8_t mask, uint8_t want)
@@ -640,14 +734,17 @@ private:
             }
             uint8_t value = static_cast<uint8_t>(~want);
             uint32_t r1 = 0;
-            if (bus.control(byte, false, &value, &r1)) continue;
+            if (bus.control(byte, false, &value, &r1))
+                continue;
             lastRead[byte - kSdPerfCacheControl] = value;
             lastReads = attempt + 1;
-            if ((value & mask) == want) return true;
+            if ((value & mask) == want)
+                return true;
         }
         lastReads = kReadBacks;
         return false;
     }
+
     // CMD49 00h, then read back until the enable bit is clear. False when it never is. r16-sdcq: a CMD49 that failed on
     // the bus is sent once more (00h is idempotent): a lazy card that has not shown its enable yet reads 00h either way,
     // so only a write the card answered makes that 00h mean out (if the second fails too, read back anyway: the card may

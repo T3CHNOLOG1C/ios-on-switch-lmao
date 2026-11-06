@@ -18,6 +18,7 @@ static void air_json_string(FILE *f, const char *s)
     }
     fputc('"', f);
 }
+
 static const char *air_allocation_name(unsigned i)
 {
     const char *names[] = {"push_consts",
@@ -35,6 +36,7 @@ static const char *air_allocation_name(unsigned i)
                            "bindless_base_addresses"};
     return i < sizeof(names) / sizeof(names[0]) ? names[i] : "unknown";
 }
+
 static int air_export_backend_abi(FILE *f, const struct ir3_shader_variant *v, const struct air_constant_read *reads,
                                   unsigned count)
 {
@@ -79,7 +81,8 @@ static int air_export_backend_abi(FILE *f, const struct ir3_shader_variant *v, c
             c->max_const_pipeline, c->max_const_geom, c->max_const_frag, c->max_const_safe);
     fprintf(f, "\"allocations\":[");
     for (unsigned i = 0; i < IR3_CONST_ALLOC_MAX; i++) {
-        if (i) fputc(',', f);
+        if (i)
+            fputc(',', f);
         const struct ir3_const_allocation *a = &cs->allocs.consts[i];
         fprintf(f,
                 "{\"type\":%u,\"name\":\"%s\",\"begin\":%u,\"bytes\":%u,\"reserved_vec4\":%u,"
@@ -89,7 +92,8 @@ static int air_export_backend_abi(FILE *f, const struct ir3_shader_variant *v, c
     }
     fprintf(f, "],\n\"ubo_ranges\":[");
     for (unsigned i = 0; i < cs->ubo_state.num_enabled; i++) {
-        if (i) fputc(',', f);
+        if (i)
+            fputc(',', f);
         const struct ir3_ubo_range *r = &cs->ubo_state.range[i];
         fprintf(f,
                 "{\"binding\":%u,\"source_begin\":%u,\"source_end\":%u,\"destination_begin\":%u,"
@@ -99,7 +103,8 @@ static int air_export_backend_abi(FILE *f, const struct ir3_shader_variant *v, c
     }
     fprintf(f, "],\n\"source_reads\":[");
     for (unsigned i = 0; i < count; i++) {
-        if (i) fputc(',', f);
+        if (i)
+            fputc(',', f);
         fprintf(f, "{\"binding\":%u,\"offset\":%u,\"bytes\":%u}", reads[i].binding, reads[i].offset, reads[i].bytes);
     }
     fprintf(f,
@@ -108,12 +113,14 @@ static int air_export_backend_abi(FILE *f, const struct ir3_shader_variant *v, c
             cs->allocs.max_const_offset_vec4 * 16, v->imm_state.count, v->imm_state.size,
             c->info->props.load_shader_consts_via_preamble ? "false" : "true");
     for (unsigned i = 0; i < v->imm_state.size; i++) {
-        if (i) fputc(',', f);
+        if (i)
+            fputc(',', f);
         fprintf(f, "%u", v->imm_state.values[i]);
     }
     fprintf(f, "]},\n\"inputs\":[");
     for (unsigned i = 0; i < v->inputs_count; i++) {
-        if (i) fputc(',', f);
+        if (i)
+            fputc(',', f);
         fprintf(f,
                 "{\"slot\":%u,\"register_id\":%u,\"component_mask\":%u,\"inloc\":%u,\"system_"
                 "value\":%s,\"half\":%s}",
@@ -122,7 +129,8 @@ static int air_export_backend_abi(FILE *f, const struct ir3_shader_variant *v, c
     }
     fprintf(f, "],\n\"outputs\":[");
     for (unsigned i = 0; i < v->outputs_count; i++) {
-        if (i) fputc(',', f);
+        if (i)
+            fputc(',', f);
         fprintf(f, "{\"slot\":%u,\"register_id\":%u,\"view\":%u,\"aliased_components\":%u,\"half\":%s}",
                 v->outputs[i].slot, v->outputs[i].regid, v->outputs[i].view, v->outputs[i].aliased_components,
                 v->outputs[i].half ? "true" : "false");

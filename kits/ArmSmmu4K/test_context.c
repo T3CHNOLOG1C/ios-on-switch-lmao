@@ -16,6 +16,7 @@ static uint64_t low[PAGES * 512], high[PAGES * 512], before[PAGES * 512];
 /* Built separately from the pinned original arm-smmu.h inline helpers. */
 extern uint32_t source_tcr(unsigned, unsigned, unsigned);
 extern uint32_t source_tcr2(unsigned);
+
 static uint64_t walk(const uint64_t *tables, const ArmSmmu4KConfig *c, const ArmSmmu4KResult *r, uint64_t va)
 {
     unsigned level = 4 - (c->input_bits - 12 + 8) / 9;
@@ -24,15 +25,18 @@ static uint64_t walk(const uint64_t *tables, const ArmSmmu4KConfig *c, const Arm
         unsigned shift = 39 - 9 * level;
         unsigned bits = level == r->start_level ? c->input_bits - shift : 9;
         uint64_t entry = tables[page * 512 + ((va >> shift) & ((1u << bits) - 1))];
-        if (!entry) return 0;
+        if (!entry)
+            return 0;
         CHECK((entry & 3) == 3); /* Never block descriptors. */
-        if (level == 3) return entry;
+        if (level == 3)
+            return entry;
         uint64_t physical = entry & UINT64_C(0xfffffffff000);
         CHECK(physical >= r->root_physical && physical - r->root_physical < r->table_pages * 4096);
         page = (physical - r->root_physical) / 4096;
     }
     exit(1);
 }
+
 static void upper_tables(void)
 {
     for (unsigned bits = 32; bits <= 48; ++bits) {
@@ -43,7 +47,8 @@ static void upper_tables(void)
                                    {base + 0x3ffff000, 0x22000000, 12288, 1, 1, 3},
                                    {base + UINT64_C(0x7ffffff000), 0x23000000, 12288, 3, 0, 2},
                                    {UINT64_MAX - 4095, 0x24000000, 4096, 1, 0, 2}};
-        if (bits < 40) ranges[3] = ranges[4];
+        if (bits < 40)
+            ranges[3] = ranges[4];
         size_t count = bits < 40 ? 4 : 5;
         ArmSmmu4KResult r;
         memset(high, 0xa5, sizeof(high));
@@ -51,7 +56,8 @@ static void upper_tables(void)
         CHECK(ArmSmmu4KBuildUpper(&c, ranges, count, high, PAGES, &r) == ArmSmmu4KSuccess);
         CHECK(r.upper_region == 1);
         unsigned shift = 39 - 9 * r.start_level, root_entries = 1u << (bits - shift);
-        for (unsigned i = root_entries; i < 512; ++i) CHECK(!high[i]);
+        for (unsigned i = root_entries; i < 512; ++i)
+            CHECK(!high[i]);
         size_t leaves = 0;
         for (size_t i = 0; i < count; ++i)
             for (uint64_t off = 0; off < ranges[i].bytes; off += 4096) {
@@ -79,6 +85,7 @@ static void upper_tables(void)
         CHECK(!memcmp(high, before, sizeof(high)));
     }
 }
+
 static void refusal(ArmSmmu4KContextConfig c, ArmSmmu4KStatus status)
 {
     ArmSmmu4KContextImage image;
@@ -87,6 +94,7 @@ static void refusal(ArmSmmu4KContextConfig c, ArmSmmu4KStatus status)
     unsigned char zero[sizeof(image)] = {0};
     CHECK(!memcmp(&image, zero, sizeof(image)));
 }
+
 int main(void)
 {
     upper_tables();
@@ -119,9 +127,12 @@ int main(void)
                             ArmSmmu4KContextImage v;
                             CHECK(ArmSmmu4KEncodeContext(&c, &v) == ArmSmmu4KSuccess);
                             uint32_t expected = UINT32_C(2) << 30;
-                            if (mode & 1) expected |= source_tcr(input, 0, coherent);
-                            if (mode & 2) expected |= source_tcr(input, 1, coherent);
-                            if (mode == 3) expected &= ~((1u << 7) | (1u << 23));
+                            if (mode & 1)
+                                expected |= source_tcr(input, 0, coherent);
+                            if (mode & 2)
+                                expected |= source_tcr(input, 1, coherent);
+                            if (mode == 3)
+                                expected &= ~((1u << 7) | (1u << 23));
                             CHECK(v.tcr == expected && v.tcr2 == (source_tcr2(output) | (1u << 4)));
                             CHECK(v.cbar == 0x1f300 && v.cba2r == 1 && v.mair0 == 0xff44 && !v.mair1 &&
                                   !v.reserved_zero);
@@ -194,7 +205,8 @@ int main(void)
             refusal(bad, ArmSmmu4KArgument);
             bad = c;
             bad.id2 = 0x1000;
-            if (input > 32 || widths[output] > 32) refusal(bad, ArmSmmu4KUnsupported);
+            if (input > 32 || widths[output] > 32)
+                refusal(bad, ArmSmmu4KUnsupported);
             uint64_t saved = br.root_physical;
             br.root_physical++;
             refusal(c, ArmSmmu4KArgument);

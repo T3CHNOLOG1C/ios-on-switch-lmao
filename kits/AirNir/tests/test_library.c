@@ -8,26 +8,34 @@
 #include <sys/mman.h>
 #include <unistd.h>
 static unsigned positive, negative, hash_calls;
+
 static void put32(uint8_t *p, uint32_t v)
 {
-    for (unsigned i = 0; i < 4; i++) p[i] = v >> (i * 8);
+    for (unsigned i = 0; i < 4; i++)
+        p[i] = v >> (i * 8);
 }
+
 static void put64(uint8_t *p, uint64_t v)
 {
     put32(p, v);
     put32(p + 4, v >> 32);
 }
+
 static void big32(uint8_t *p, uint32_t v)
 {
-    for (unsigned i = 0; i < 4; i++) p[3 - i] = v >> (i * 8);
+    for (unsigned i = 0; i < 4; i++)
+        p[3 - i] = v >> (i * 8);
 }
+
 static int digest(const uint8_t *p, size_t n, uint8_t out[32], void *ctx)
 {
     hash_calls++;
-    if (ctx) return 1;
+    if (ctx)
+        return 1;
     assert(n <= UINT32_MAX);
     return CC_SHA256(p, (CC_LONG)n, out) ? 0 : 1;
 }
+
 static size_t tag(uint8_t *p, size_t at, const char *name, const uint8_t *value, size_t n)
 {
     memcpy(p + at, name, 4);
@@ -36,6 +44,7 @@ static size_t tag(uint8_t *p, size_t at, const char *name, const uint8_t *value,
     memcpy(p + at + 6, value, n);
     return at + 6 + n;
 }
+
 static size_t fixture(uint8_t *p)
 {
     memset(p, 0, 512);
@@ -75,16 +84,19 @@ static size_t fixture(uint8_t *p)
     memcpy(p + 244, "ENDT", 4);
     return 288;
 }
+
 static void refuse(const uint8_t *p, size_t n, air_library_sha256 hash, void *ctx)
 {
     struct air_library_view v, saved;
     memset(&v, 0xa5, sizeof v);
     saved = v;
     uint32_t status = air_library_open(p, n, hash, ctx, &v);
-    if (!status) fprintf(stderr, "Unexpected acceptance at negative %u\n", negative);
+    if (!status)
+        fprintf(stderr, "Unexpected acceptance at negative %u\n", negative);
     assert(status && status <= AIR_LIBRARY_ALIAS && !memcmp(&v, &saved, sizeof v));
     negative++;
 }
+
 static void accept(const uint8_t *p, size_t n)
 {
     struct air_library_view v;
@@ -105,12 +117,14 @@ static void accept(const uint8_t *p, size_t n)
     assert(air_library_get(&v, 0, &f) == AIR_LIBRARY_FORMAT && !memcmp(&f, &saved, sizeof f));
     negative++;
 }
+
 int main(int argc, char **argv)
 {
     uint8_t good[512], p[1024];
     size_t n = fixture(good);
     accept(good, n);
-    for (size_t i = 0; i < n; i++) refuse(good, i, digest, 0);
+    for (size_t i = 0; i < n; i++)
+        refuse(good, i, digest, 0);
     refuse(0, n, digest, 0);
     refuse(good, n, 0, 0);
     refuse(good, n, digest, (void *)1);

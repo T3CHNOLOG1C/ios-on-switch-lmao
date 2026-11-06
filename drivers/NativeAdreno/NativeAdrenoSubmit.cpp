@@ -14,6 +14,7 @@ enum : uint32_t {
     SubmitMaxIbBytes = 0xfffffu * 4u,
     SubmitAuditBytes = 256u * 1024u
 }; /* IB bytes the write-combine audit compares per submission */
+
 extern "C" {
 volatile uint32_t native_adreno_coherence[8];
 }
@@ -37,34 +38,43 @@ extern "C" {
 volatile uint32_t native_adreno_ib_log[4][4 + 28];
 volatile uint32_t native_adreno_ib_log_count;
 }
+
 IOReturn NativeAdrenoSubmit::poison()
 {
     poisoned_ = true;
     return kIOReturnIOError;
 }
+
 NativeAdrenoSubmit::Job *NativeAdrenoSubmit::find(uint32_t fence)
 {
     if (fence)
         for (auto &job : jobs_)
-            if (job.active && job.fence == fence) return &job;
+            if (job.active && job.fence == fence)
+                return &job;
     return nullptr;
 }
+
 NativeAdrenoSubmit::Job *NativeAdrenoSubmit::free()
 {
     for (auto &job : jobs_)
-        if (!job.active) return &job;
+        if (!job.active)
+            return &job;
     return nullptr;
 }
+
 IOReturn NativeAdrenoSubmit::attach(NativeAdrenoVm *vm, NativeAdrenoRing *ring)
 {
-    if (attached_ || poisoned_ || vm_ || ring_) return kIOReturnBusy;
-    if (!vm || !ring || vm->poisoned() || ring->poisoned()) return kIOReturnBadArgument;
+    if (attached_ || poisoned_ || vm_ || ring_)
+        return kIOReturnBusy;
+    if (!vm || !ring || vm->poisoned() || ring->poisoned())
+        return kIOReturnBadArgument;
     vm_ = vm;
     ring_ = ring;
     attached_ = true;
     stats_ = {};
     return kIOReturnSuccess;
 }
+
 IOReturn NativeAdrenoSubmit::release(Job &job)
 {
     IOReturn status = kIOReturnSuccess;
@@ -75,44 +85,58 @@ IOReturn NativeAdrenoSubmit::release(Job &job)
         else
             ++stats_.references_retired;
     }
-    if (status) return poison();
-    if (vm_->acquireImported()) return poison();
+    if (status)
+        return poison();
+    if (vm_->acquireImported())
+        return poison();
     job = {};
     return kIOReturnSuccess;
 }
+
 IOReturn NativeAdrenoSubmit::detach()
 {
-    if (poisoned_ || outstanding()) return kIOReturnBusy;
-    if (!attached_) return kIOReturnNotReady;
+    if (poisoned_ || outstanding())
+        return kIOReturnBusy;
+    if (!attached_)
+        return kIOReturnNotReady;
     attached_ = false;
     vm_ = nullptr;
     ring_ = nullptr;
     return kIOReturnSuccess;
 }
+
 bool NativeAdrenoSubmit::queueOutstanding(uint32_t queue) const
 {
     return rangeOutstanding(queue, 1);
 }
+
 bool NativeAdrenoSubmit::rangeOutstanding(uint32_t first, uint32_t count) const
 {
     for (const auto &job : jobs_)
-        if (job.active && job.queue - first < count) return true;
+        if (job.active && job.queue - first < count)
+            return true;
     return false;
 }
+
 size_t NativeAdrenoSubmit::outstanding() const
 {
     size_t count = 0;
     for (const auto &job : jobs_)
-        if (job.active) ++count;
+        if (job.active)
+            ++count;
     return count;
 }
+
 IOReturn NativeAdrenoSubmit::submit(const NativeAdrenoSubmitBuffer *buffers, size_t count, uint32_t queue,
                                     uint32_t *fence)
 {
-    if (!fence) return kIOReturnBadArgument;
+    if (!fence)
+        return kIOReturnBadArgument;
     *fence = 0;
-    if (!attached_ || poisoned_) return kIOReturnNotReady;
-    if (!buffers || !count || count > SubmitMaxBuffers) return kIOReturnBadArgument;
+    if (!attached_ || poisoned_)
+        return kIOReturnNotReady;
+    if (!buffers || !count || count > SubmitMaxBuffers)
+        return kIOReturnBadArgument;
     /* Every buffer is validated against the live VM before any reference. */
     uint64_t handles[SubmitMaxBuffers];
     size_t handle_count = 0;
@@ -126,12 +150,14 @@ IOReturn NativeAdrenoSubmit::submit(const NativeAdrenoSubmitBuffer *buffers, siz
         size_t bytes = 0;
         unsigned permissions = 0;
         IOReturn status = vm_->describe(buffer.handle, &iova, &bytes, &permissions);
-        if (status) return status;
+        if (status)
+            return status;
         if (!(permissions & ArmSmmu4KRead) || buffer.iova < iova || buffer.iova - iova > bytes ||
             buffer.bytes > bytes - (buffer.iova - iova))
             return kIOReturnBadArgument;
         uint32_t header = 0;
-        if (AdrenoPM4Type7(SubmitIndirectBuffer, SubmitIbWords, &header) != AdrenoPM4Success) return poison();
+        if (AdrenoPM4Type7(SubmitIndirectBuffer, SubmitIbWords, &header) != AdrenoPM4Success)
+            return poison();
         words[word_count++] = header;
         words[word_count++] = (uint32_t)buffer.iova;
         words[word_count++] = (uint32_t)(buffer.iova >> 32);
@@ -142,12 +168,15 @@ IOReturn NativeAdrenoSubmit::submit(const NativeAdrenoSubmitBuffer *buffers, siz
                 known = true;
                 break;
             }
-        if (!known) handles[handle_count++] = buffer.handle;
+        if (!known)
+            handles[handle_count++] = buffer.handle;
     }
     IOReturn swept = retireCompleted();
-    if (swept) return swept;
+    if (swept)
+        return swept;
     Job *job = free();
-    if (!job) return kIOReturnBusy;
+    if (!job)
+        return kIOReturnBusy;
     for (size_t i = 0; i < handle_count; ++i) {
         IOReturn status = vm_->holdJob(handles[i]);
         if (status) {
@@ -181,7 +210,8 @@ IOReturn NativeAdrenoSubmit::submit(const NativeAdrenoSubmitBuffer *buffers, siz
          * 133798, so after the first 16 submissions it compares every eighth one's IBs (it cost about 2 ms each). */
         ++audit_tick_;
         const bool audit_now = audit_tick_ <= 16 || (audit_tick_ & 7) == 1;
-        if (!audit_now) budget = 0;
+        if (!audit_now)
+            budget = 0;
         for (size_t i = 0; i < count && budget && !audited;
              ++i) { /* a failed re-assertion skips the audit and ends the trust */
             const size_t bytes = buffers[i].bytes < budget ? (size_t)buffers[i].bytes : budget;
@@ -193,7 +223,8 @@ IOReturn NativeAdrenoSubmit::submit(const NativeAdrenoSubmitBuffer *buffers, siz
             native_adreno_wc_audit[1] = native_adreno_wc_audit[1] + lines;
             native_adreno_wc_audit[2] = native_adreno_wc_audit[2] + dirty;
             native_adreno_wc_audit[3] = native_adreno_wc_audit[3] + stale;
-            if (audited) native_adreno_wc_audit[4] = audited;
+            if (audited)
+                native_adreno_wc_audit[4] = audited;
         }
         if (dirty || (audited && audited != kIOReturnUnsupported)) {
             vm_->distrustWriteCombined();
@@ -233,7 +264,8 @@ IOReturn NativeAdrenoSubmit::submit(const NativeAdrenoSubmitBuffer *buffers, siz
         native_adreno_ib_log[slot][1] = (uint32_t)buffers[0].iova;
         native_adreno_ib_log[slot][2] = (uint32_t)(buffers[0].iova >> 32);
         native_adreno_ib_log[slot][3] = (uint32_t)buffers[0].bytes;
-        for (unsigned i = 0; i < 28; ++i) native_adreno_ib_log[slot][4 + i] = head[i];
+        for (unsigned i = 0; i < 28; ++i)
+            native_adreno_ib_log[slot][4 + i] = head[i];
         native_adreno_ib_log_count = native_adreno_ib_log_count + 1;
     }
     status = ring_->submitFramed(words, word_count, &value);
@@ -243,7 +275,8 @@ IOReturn NativeAdrenoSubmit::submit(const NativeAdrenoSubmitBuffer *buffers, siz
         if (ring_->poisoned()) {
             *job = Job{};
             ++stats_.poisoned_jobs;
-            for (size_t i = 0; i < handle_count; ++i) job->handles[i] = handles[i];
+            for (size_t i = 0; i < handle_count; ++i)
+                job->handles[i] = handles[i];
             job->count = handle_count;
             job->queue = queue;
             job->active = true;
@@ -255,36 +288,47 @@ IOReturn NativeAdrenoSubmit::submit(const NativeAdrenoSubmitBuffer *buffers, siz
         }
         return status;
     }
-    for (size_t i = 0; i < handle_count; ++i) job->handles[i] = handles[i];
+    for (size_t i = 0; i < handle_count; ++i)
+        job->handles[i] = handles[i];
     job->count = handle_count;
     job->fence = value;
     job->queue = queue;
     job->active = true;
     ++stats_.submissions;
-    if (outstanding() > stats_.peak_jobs) stats_.peak_jobs = outstanding();
+    if (outstanding() > stats_.peak_jobs)
+        stats_.peak_jobs = outstanding();
     *fence = value;
     return kIOReturnSuccess;
 }
+
 IOReturn NativeAdrenoSubmit::observeFence(uint32_t fence, const NativeAdrenoRingClock *clock, uint32_t timeout_us)
 {
-    if (!attached_ || poisoned_) return kIOReturnNotReady;
-    if (!fence) return kIOReturnBadArgument;
+    if (!attached_ || poisoned_)
+        return kIOReturnNotReady;
+    if (!fence)
+        return kIOReturnBadArgument;
     const NativeAdrenoRingFence result = ring_->observeFence(fence, clock, timeout_us, nullptr);
-    if (result == NativeAdrenoRingFencePoisoned) return poison();
-    if (result == NativeAdrenoRingFenceArgument) return kIOReturnBadArgument;
-    if (result == NativeAdrenoRingFenceTimeout) return kIOReturnTimeout;
+    if (result == NativeAdrenoRingFencePoisoned)
+        return poison();
+    if (result == NativeAdrenoRingFenceArgument)
+        return kIOReturnBadArgument;
+    if (result == NativeAdrenoRingFenceTimeout)
+        return kIOReturnTimeout;
     return kIOReturnSuccess;
 }
+
 IOReturn NativeAdrenoSubmit::wait(uint32_t fence, const NativeAdrenoRingClock *clock, uint32_t timeout_us)
 {
-    if (!attached_ || poisoned_) return kIOReturnNotReady;
+    if (!attached_ || poisoned_)
+        return kIOReturnNotReady;
     Job *job = find(fence);
     uint32_t observed = 0;
     native_adreno_fence_wait[0] = native_adreno_fence_wait[0] + 1;
     if (!job) {
         native_adreno_fence_wait[6] = native_adreno_fence_wait[6] + 1;
         const NativeAdrenoRingFence passed = ring_->observeFence(fence, clock, timeout_us, &observed);
-        if (passed == NativeAdrenoRingFencePoisoned) return poison();
+        if (passed == NativeAdrenoRingFencePoisoned)
+            return poison();
         if (passed == NativeAdrenoRingFenceArgument) {
             native_adreno_fence_wait[7] = fence;
             return kIOReturnBadArgument;
@@ -301,7 +345,8 @@ IOReturn NativeAdrenoSubmit::wait(uint32_t fence, const NativeAdrenoRingClock *c
         return kIOReturnSuccess;
     }
     const NativeAdrenoRingFence result = ring_->wait(fence, clock, timeout_us, &observed);
-    if (result == NativeAdrenoRingFencePoisoned) return poison();
+    if (result == NativeAdrenoRingFencePoisoned)
+        return poison();
     if (result == NativeAdrenoRingFenceArgument) {
         native_adreno_fence_wait[7] = fence;
         return kIOReturnBadArgument;
@@ -316,46 +361,60 @@ IOReturn NativeAdrenoSubmit::wait(uint32_t fence, const NativeAdrenoRingClock *c
         return kIOReturnTimeout;
     }
     IOReturn status = release(*job);
-    if (status) return status;
+    if (status)
+        return status;
     ++stats_.completed;
     return kIOReturnSuccess;
 }
+
 IOReturn NativeAdrenoSubmit::waitAll(const NativeAdrenoRingClock *clock, uint32_t timeout_us)
 {
-    if (!attached_ || poisoned_) return kIOReturnNotReady;
+    if (!attached_ || poisoned_)
+        return kIOReturnNotReady;
     while (outstanding()) {
         Job *oldest = nullptr;
         for (auto &job : jobs_)
-            if (job.active && (!oldest || job.fence - oldest->fence > 0x80000000u)) oldest = &job;
+            if (job.active && (!oldest || job.fence - oldest->fence > 0x80000000u))
+                oldest = &job;
         const IOReturn status = wait(oldest->fence, clock, timeout_us);
-        if (status) return status;
+        if (status)
+            return status;
     }
     return kIOReturnSuccess;
 }
+
 IOReturn NativeAdrenoSubmit::waitRange(uint32_t first, uint32_t count, const NativeAdrenoRingClock *clock,
                                        uint32_t timeout_us)
 {
-    if (!attached_ || poisoned_) return kIOReturnNotReady;
+    if (!attached_ || poisoned_)
+        return kIOReturnNotReady;
     while (rangeOutstanding(first, count)) {
         Job *oldest = nullptr;
         for (auto &job : jobs_)
             if (job.active && job.queue - first < count && (!oldest || job.fence - oldest->fence > 0x80000000u))
                 oldest = &job;
         const IOReturn status = wait(oldest->fence, clock, timeout_us);
-        if (status) return status;
+        if (status)
+            return status;
     }
     return kIOReturnSuccess;
 }
+
 IOReturn NativeAdrenoSubmit::retireCompleted()
 {
-    if (!attached_ || poisoned_) return kIOReturnNotReady;
+    if (!attached_ || poisoned_)
+        return kIOReturnNotReady;
     for (auto &job : jobs_) {
-        if (!job.active) continue;
+        if (!job.active)
+            continue;
         const NativeAdrenoRingFence state = ring_->observeFence(job.fence, nullptr, 0, nullptr);
-        if (state == NativeAdrenoRingFencePoisoned) return poison();
-        if (state != NativeAdrenoRingFenceComplete) continue;
+        if (state == NativeAdrenoRingFencePoisoned)
+            return poison();
+        if (state != NativeAdrenoRingFenceComplete)
+            continue;
         const IOReturn status = release(job);
-        if (status) return status;
+        if (status)
+            return status;
         ++stats_.completed;
     }
     return kIOReturnSuccess;

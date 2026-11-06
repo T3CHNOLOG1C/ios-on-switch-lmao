@@ -3,13 +3,16 @@
 #include <stdint.h>
 #include <stddef.h>
 extern "C" int snprintf(char *, size_t, const char *, ...);
+
 extern "C" void *memcpy(void *out, const void *in, size_t n)
 {
     auto d = static_cast<uint8_t *>(out);
     auto s = static_cast<const uint8_t *>(in);
-    for (size_t i = 0; i < n; ++i) d[i] = s[i];
+    for (size_t i = 0; i < n; ++i)
+        d[i] = s[i];
     return out;
 }
+
 #include "../RootDiagnostics.h"
 #include "../TransferPoll.h"
 #include "../RootTransportLayout.h"
@@ -18,6 +21,7 @@ constexpr IOReturn kIOReturnSuccess = 0, kIOReturnError = 0xe00002bc, kIOReturnB
                    kIOReturnIOError = 0xe00002ca, kIOReturnBusy = 0xe00002d5, kIOReturnTimeout = 0xe00002d6,
                    kIOReturnNotReady = 0xe00002d8;
 constexpr unsigned kMicrosecondScale = 1, kMillisecondScale = 1000;
+
 struct Host {
     uint8_t *virt;
     uint64_t phys;
@@ -25,49 +29,63 @@ struct Host {
     uintptr_t hc;
     void *lock;
 };
+
 static Host gHost;
 static UfsRootDiagnostics gRootDiagnostic;
 // Runner extracts these functions verbatim from NativeUfs.cpp, including
 // actual DC CIVAC/DC IVAC/DSB and volatile read32/write32. No DMA callbacks.
 #include "RootHardwareExtracted.h"
+
 static uint64_t mach_absolute_time()
 {
     uint64_t ticks;
     asm volatile("mrs %0, cntpct_el0" : "=r"(ticks));
     return ticks;
 }
+
 static uint64_t frequency()
 {
     uint64_t value;
     asm volatile("mrs %0, cntfrq_el0" : "=r"(value));
     return value;
 }
+
 static void clock_interval_to_deadline(uint32_t interval, unsigned scale, uint64_t *end)
 {
     *end = mach_absolute_time() + uint64_t(interval) * scale * frequency() / 1000000;
 }
+
 static void IODelay(uint32_t us)
 {
     uint64_t end;
     clock_interval_to_deadline(us, 1, &end);
-    while (mach_absolute_time() < end) asm volatile("yield");
+    while (mach_absolute_time() < end)
+        asm volatile("yield");
 }
+
 // Single EL1 CPU, interrupts masked. This does not test XNU lock scheduling.
-static void IOLockLock(void *) {}
-static void IOLockUnlock(void *) {}
+static void IOLockLock(void *)
+{}
+
+static void IOLockUnlock(void *)
+{}
+
 static IOReturn recordTransport(IOReturn result, uint32_t ocs)
 {
     gRootDiagnostic.result = result;
     gRootDiagnostic.ocs = ocs;
     return result;
 }
+
 #include "../RootCommands.h"
 #include "../RootQueue.h"
 
 static void puts(const char *s)
 {
-    for (; *s; ++s) *reinterpret_cast<volatile uint32_t *>(0x09000000) = *s;
+    for (; *s; ++s)
+        *reinterpret_cast<volatile uint32_t *>(0x09000000) = *s;
 }
+
 static void number(const char *name, uint64_t value)
 {
     puts(name);
@@ -78,17 +96,21 @@ static void number(const char *name, uint64_t value)
     }
     puts("\n");
 }
+
 [[noreturn]] static void finish(unsigned status)
 {
     uint64_t args[2] = {0x20026, status};
     register uint64_t x0 asm("x0") = 0x20;
     register uint64_t x1 asm("x1") = reinterpret_cast<uintptr_t>(args);
     asm volatile("hlt #0xf000" ::"r"(x0), "r"(x1) : "memory");
-    for (;;) asm volatile("wfe");
+    for (;;)
+        asm volatile("wfe");
 }
+
 static void check(bool okay, const char *label)
 {
-    if (okay) return;
+    if (okay)
+        return;
     puts("FAIL ");
     puts(label);
     puts("\n");
@@ -99,6 +121,7 @@ static void check(bool okay, const char *label)
     number("isSeen", gRootDiagnostic.isSeen);
     finish(1);
 }
+
 extern "C" [[noreturn]] void guest_exception()
 {
     puts("FAIL exception\n");
@@ -111,9 +134,11 @@ extern "C" [[noreturn]] void guest_exception()
     number("ELR", v);
     finish(1);
 }
+
 alignas(4096) static uint64_t l1[512], l2[512], l3[512];
 alignas(4096) static uint8_t output[kDataMax];
 extern "C" void enable_translation(uint64_t, uint64_t);
+
 extern "C" void guest_main()
 {
     uint64_t el;
@@ -126,10 +151,12 @@ extern "C" void guest_main()
     constexpr uint64_t share = TEST_SHAREABILITY;
     static_assert(share == 2 || share == 3, "Test outer or inner sharing");
     constexpr uint64_t tcr = (0x50080351aULL & ~0x3000ULL) | (share << 12);
-    for (unsigned i = 0; i < 64; ++i) l2[i] = (0x40000000ULL + i * 0x200000ULL) | 0x401 | (share << 8);
+    for (unsigned i = 0; i < 64; ++i)
+        l2[i] = (0x40000000ULL + i * 0x200000ULL) | 0x401 | (share << 8);
     l2[128] = reinterpret_cast<uintptr_t>(l3) | 3;
     constexpr uint64_t physical = TEST_DMA_PHYS;
-    for (unsigned i = 0; i < kDmaBytes / 4096; ++i) l3[i] = (physical + i * 4096) | 0x403 | (share << 8);
+    for (unsigned i = 0; i < kDmaBytes / 4096; ++i)
+        l3[i] = (physical + i * 4096) | 0x403 | (share << 8);
     enable_translation(reinterpret_cast<uintptr_t>(l1), tcr);
     uint64_t state;
     asm volatile("mrs %0, tcr_el1" : "=r"(state));
@@ -158,7 +185,8 @@ extern "C" void guest_main()
     check(state & 1, "4K guard page");
 
     gHost = {reinterpret_cast<uint8_t *>(0x50000000), physical, true, false, 0x10000000, nullptr};
-    for (unsigned i = 0; i < kDmaBytes; ++i) gHost.virt[i] = 0;
+    for (unsigned i = 0; i < kDmaBytes; ++i)
+        gHost.virt[i] = 0;
     cacheCivac(gHost.virt, kDmaBytes);
     constexpr uintptr_t pci = 0x3f008000;
     check(read32(pci, 0) == 0x00131b36, "QEMU UFS PCI identity");
@@ -201,7 +229,8 @@ extern "C" void guest_main()
     uint32_t scsi;
     for (unsigned i = 0; i < 3; ++i) {
         result = hostScsi(0, tur, 6, false, 0, 200000, &scsi);
-        if (!result) break;
+        if (!result)
+            break;
         check(result == kIOReturnNotReady && (scsi == 2 || scsi == 0x102), "TUR check condition");
     }
     check(result == 0, "TUR ready");
@@ -215,9 +244,11 @@ extern "C" void guest_main()
               "PRDT upper PA");
     }
     puts("PASS READ4K READ128K\n");
-    for (unsigned i = 0; i < 4096; ++i) output[i] = 0xa5;
+    for (unsigned i = 0; i < 4096; ++i)
+        output[i] = 0xa5;
     check(hostRead4k(0, 0x10000, 1, output) != 0, "bad LBA accepted");
-    for (unsigned i = 0; i < 4096; ++i) check(output[i] == 0xa5, "bad LBA copied stale data");
+    for (unsigned i = 0; i < 4096; ++i)
+        check(output[i] == 0xa5, "bad LBA copied stale data");
     puts("PASS bad-LBA-no-copy\nPASS ALL\n");
     finish(0);
 }

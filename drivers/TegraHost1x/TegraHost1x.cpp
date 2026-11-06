@@ -46,7 +46,14 @@ enum : uint32_t {  // clock and reset controller (Linux clk.h, clk-tegra-periph.
     SOURCE_PLLP = 4u << 29,
     HOST1X_DIV_2_5 = 3,  // 7.1 divider: 408 MHz * 2 / (3 + 2) = 163.2 MHz
 };
-enum : uint32_t { MC_HOTRESET_CTRL = 0x200, MC_HOTRESET_HC = 1u << 6, MC_SMMU_HC_ASID = 0x250, SMMU_ENABLE = 1u << 31 };
+
+enum : uint32_t {
+    MC_HOTRESET_CTRL = 0x200,
+    MC_HOTRESET_HC = 1u << 6,
+    MC_SMMU_HC_ASID = 0x250,
+    SMMU_ENABLE = 1u << 31
+};
+
 enum : uint32_t {  // channel registers, channel 0 at the start of the aperture
     CH_FIFOSTAT = 0x00,
     CH_DMASTART = 0x14,
@@ -58,6 +65,7 @@ enum : uint32_t {  // channel registers, channel 0 at the start of the aperture
     DMACTRL_GETRST = 1u << 1,
     DMACTRL_INITGET = 1u << 2,
 };
+
 enum : uint32_t {  // sync unit, relative to kSyncOffset
     SYNC_CMDPROC_STOP = 0x0ac,
     SYNC_USEC_CLK = 0x1a4,
@@ -71,10 +79,12 @@ enum : uint32_t {  // sync unit, relative to kSyncOffset
     SYNC_SYNCPT = 0xf80,
     SYNC_INT_THRESH = 0x1380,
 };
+
 constexpr uint32_t opRestart(uint32_t byteOffset)
 {
     return (5u << 28) | (byteOffset >> 4);
 }
+
 constexpr uint32_t kOpNop = 2u << 28;  // NONINCR, offset 0, count 0
 
 volatile uint8_t *gHost, *gCar, *gMc;
@@ -98,18 +108,22 @@ inline uint32_t r32(volatile uint8_t *base, uint32_t o)
 {
     return *(volatile uint32_t *)(base + o);
 }
+
 inline void w32(volatile uint8_t *base, uint32_t o, uint32_t v)
 {
     *(volatile uint32_t *)(base + o) = v;
 }
+
 inline uint32_t sync(uint32_t o)
 {
     return r32(gHost, kSyncOffset + o);
 }
+
 inline void syncWrite(uint32_t o, uint32_t v)
 {
     w32(gHost, kSyncOffset + o, v);
 }
+
 inline bool reached(uint32_t value, uint32_t threshold)
 {
     return (int32_t)(value - threshold) >= 0;
@@ -133,7 +147,8 @@ void interruptOccurred(OSObject *, IOInterruptEventSource *, int)
     IOLockLock(gLock);
     for (uint32_t i = 0; i < kSyncpts / 32; i++) {
         const uint32_t status = sync(SYNC_INT_STATUS + 4 * i) & gArmed[i];
-        if (!status) continue;
+        if (!status)
+            continue;
         syncWrite(SYNC_INT_DISABLE + 4 * i, status);
         syncWrite(SYNC_INT_STATUS + 4 * i, status);
         gArmed[i] &= ~status;
@@ -178,7 +193,8 @@ bool channelAlloc()
                                  (IOOptionBits)kIOMemoryMapperNone;
     gPush =
         IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task, options, kPushBytes + PAGE_SIZE, 0xfffff000ULL);
-    if (!gPush || gPush->prepare() != kIOReturnSuccess) return false;
+    if (!gPush || gPush->prepare() != kIOReturnSuccess)
+        return false;
     IOByteCount length = 0;
     gPushPA = gPush->getPhysicalSegment(0, &length, kIOMemoryMapperNone);
     gPushVA = (uint32_t *)gPush->getBytesNoCopy();
@@ -206,7 +222,8 @@ void syncConfigure()
 {
     syncWrite(SYNC_IP_BUSY_TIMEOUT, 0);
     syncWrite(SYNC_CTXSW_TIMEOUT_CFG, 0xff);
-    if (gClockMHz) syncWrite(SYNC_USEC_CLK, gClockMHz);
+    if (gClockMHz)
+        syncWrite(SYNC_USEC_CLK, gClockMHz);
     for (uint32_t i = 0; i < kSyncpts / 32; i++) {
         syncWrite(SYNC_INT_DISABLE + 4 * i, 0xffffffffu);
         syncWrite(SYNC_INT_STATUS + 4 * i, 0xffffffffu);
@@ -220,7 +237,8 @@ bool attachInterrupt()
     gLoop = IOWorkLoop::workLoop();
     IOService *nub = switch_interrupt_nub(kIntid, false);
     gIrq = gLoop && nub ? IOInterruptEventSource::interruptEventSource(gLoop, &interruptOccurred, nub, 0) : nullptr;
-    if (!gIrq || gLoop->addEventSource(gIrq) != kIOReturnSuccess) return false;
+    if (!gIrq || gLoop->addEventSource(gIrq) != kIOReturnSuccess)
+        return false;
     gIrq->enable();
     return true;
 }
@@ -239,7 +257,8 @@ int bringUp()
     gMc = (volatile uint8_t *)ml_io_map(kMcPA, 0x1000);
     gLock = IOLockAlloc();
     gSubmitLock = IOLockAlloc();
-    if (!gHost || !gCar || !gMc || !gLock || !gSubmitLock) return fail("no mapping", 0);
+    if (!gHost || !gCar || !gMc || !gLock || !gSubmitLock)
+        return fail("no mapping", 0);
     bool enabled = false;
     if (!clockOn(&gClockMHz, &enabled))
         return fail("clock or reset stuck, CAR CLK_OUT_ENB_L", r32(gCar, CLK_OUT_ENB_L));
@@ -248,8 +267,10 @@ int bringUp()
     if (r32(gMc, MC_HOTRESET_CTRL) & MC_HOTRESET_HC)
         w32(gMc, MC_HOTRESET_CTRL, r32(gMc, MC_HOTRESET_CTRL) & ~MC_HOTRESET_HC);
     syncConfigure();
-    if (!attachInterrupt()) return fail("cannot attach the syncpoint interrupt, INTID", kIntid);
-    if (!channelAlloc()) return fail("no push buffer below 4 GiB", 0);
+    if (!attachInterrupt())
+        return fail("cannot attach the syncpoint interrupt, INTID", kIntid);
+    if (!channelAlloc())
+        return fail("no push buffer below 4 GiB", 0);
     channelProgram();
     gState = 1;
 
@@ -262,7 +283,8 @@ int bringUp()
     };
     const uint64_t began = nowUs();
     int ret = tegra_host1x_submit(stream, 2);
-    if (!ret) ret = tegra_host1x_syncpt_wait(id, before + 1, 100000);
+    if (!ret)
+        ret = tegra_host1x_syncpt_wait(id, before + 1, 100000);
     if (ret) {
         char state[160];
         tegra_host1x_describe(state, sizeof(state));
@@ -299,7 +321,8 @@ extern "C" int tegra_host1x_start(void)
 extern "C" int tegra_host1x_syncpt_alloc(uint32_t *id)
 {
     const uint32_t next = __atomic_fetch_add(&gNextSyncpt, 1, __ATOMIC_RELAXED);
-    if (next >= kSyncpts) return TEGRA_HOST1X_ENOMEM;
+    if (next >= kSyncpts)
+        return TEGRA_HOST1X_ENOMEM;
     *id = next;
     return TEGRA_HOST1X_OK;
 }
@@ -315,8 +338,10 @@ extern "C" uint32_t tegra_host1x_syncpt_read(uint32_t id)
 // strict (an engine was proven and published), TEGRA_HOST1X_ELOST while its probe is still running.
 extern "C" int tegra_host1x_syncpt_wait(uint32_t id, uint32_t threshold, uint32_t timeoutUs)
 {
-    if (gState != 1) return TEGRA_HOST1X_ENODEV;
-    if (id >= kSyncpts) return TEGRA_HOST1X_EINVAL;
+    if (gState != 1)
+        return TEGRA_HOST1X_ENODEV;
+    if (id >= kSyncpts)
+        return TEGRA_HOST1X_EINVAL;
     const uint32_t word = id / 32, bit = 1u << (id % 32);
     IOLockLock(gLock);
     syncWrite(SYNC_INT_THRESH + 4 * id, threshold);
@@ -327,12 +352,14 @@ extern "C" int tegra_host1x_syncpt_wait(uint32_t id, uint32_t threshold, uint32_
     clock_interval_to_deadline(timeoutUs, kMicrosecondScale, &deadline);
     int ret = TEGRA_HOST1X_OK;
     for (bool grace = false; !reached(tegra_host1x_syncpt_read(id), threshold);) {
-        if (IOLockSleepDeadline(gLock, &gWake, deadline, THREAD_UNINT) != THREAD_TIMED_OUT) continue;
+        if (IOLockSleepDeadline(gLock, &gWake, deadline, THREAD_UNINT) != THREAD_TIMED_OUT)
+            continue;
         if (!reached(tegra_host1x_syncpt_read(id), threshold)) {
             ret = TEGRA_HOST1X_ETIMEDOUT;  // the engine did not get there: its failure, not the interrupt's
             break;
         }
-        if (!(sync(SYNC_INT_STATUS + 4 * word) & bit)) break;
+        if (!(sync(SYNC_INT_STATUS + 4 * word) & bit))
+            break;
         if (grace) {
             if (!__atomic_load_n(&gStrict, __ATOMIC_ACQUIRE)) {
                 ret = TEGRA_HOST1X_ELOST;
@@ -363,8 +390,10 @@ extern "C" void tegra_host1x_set_strict(void)
 // DMAPUT moves past them. The space check uses DMAGET, which host1x keeps relative to DMASTART like PUT.
 extern "C" int tegra_host1x_submit(const uint32_t *words, uint32_t count)
 {
-    if (gState != 1) return TEGRA_HOST1X_ENODEV;
-    if (!words || !count || count >= kPushBytes / 4) return TEGRA_HOST1X_EINVAL;
+    if (gState != 1)
+        return TEGRA_HOST1X_ENODEV;
+    if (!words || !count || count >= kPushBytes / 4)
+        return TEGRA_HOST1X_EINVAL;
     IOLockLock(gSubmitLock);
     const uint32_t get = r32(gHost, CH_DMAGET) % kPushBytes;
     const uint32_t room = (get + kPushBytes - gPut - 4) % kPushBytes;
@@ -379,12 +408,14 @@ extern "C" int tegra_host1x_submit(const uint32_t *words, uint32_t count)
         return TEGRA_HOST1X_ENOMEM;
     }
     if (pad) {
-        for (uint32_t at = gPut; at < kPushBytes; at += 4) gPushVA[at / 4] = kOpNop;
+        for (uint32_t at = gPut; at < kPushBytes; at += 4)
+            gPushVA[at / 4] = kOpNop;
         cleanToPoC((uint8_t *)gPushVA + gPut, pad);
         gPut = 0;
     }
     const uint32_t from = gPut;
-    for (uint32_t i = 0; i < count; i++) gPushVA[from / 4 + i] = words[i];
+    for (uint32_t i = 0; i < count; i++)
+        gPushVA[from / 4 + i] = words[i];
     cleanToPoC((uint8_t *)gPushVA + from, bytes);
     gPut = (from + bytes) % kPushBytes;  // a job that ends exactly at the RESTART slot leaves PUT at 0
     w32(gHost, CH_DMAPUT, gPut);
@@ -409,9 +440,11 @@ extern "C" void tegra_host1x_describe(char *buffer, size_t size)
 // syncpoint values handed out are saved (Linux host1x_syncpt_save) and channel 0 is stopped.
 extern "C" void tegra_host1x_suspend(void)
 {
-    if (gState != 1) return;
+    if (gState != 1)
+        return;
     IOLockLock(gSubmitLock);
-    for (uint32_t id = kFirstOwn; id < kSyncpts && id < gNextSyncpt; id++) gSaved[id] = sync(SYNC_SYNCPT + 4 * id);
+    for (uint32_t id = kFirstOwn; id < kSyncpts && id < gNextSyncpt; id++)
+        gSaved[id] = sync(SYNC_SYNCPT + 4 * id);
     w32(gHost, CH_DMACTRL, DMACTRL_STOP);
     gState = 2;
     IOLockUnlock(gSubmitLock);
@@ -421,7 +454,8 @@ extern "C" void tegra_host1x_suspend(void)
 // (host1x_syncpt_restore) so outstanding fence numbers stay meaningful, and channel 0 restarted on its push buffer.
 extern "C" void tegra_host1x_resume(void)
 {
-    if (gState != 2) return;
+    if (gState != 2)
+        return;
     IOLockLock(gSubmitLock);
     // SC7 resets the CAR: put host1x back on the boot chain's PLLP / 2.5 if it came back on another source (it is
     // idle, and nothing behind it has resumed yet: the display's wake hook runs after this one).
@@ -438,9 +472,11 @@ extern "C" void tegra_host1x_resume(void)
     }
     IOLockLock(gLock);
     syncConfigure();
-    for (uint32_t i = 0; i < kSyncpts / 32; i++) gArmed[i] = 0;
+    for (uint32_t i = 0; i < kSyncpts / 32; i++)
+        gArmed[i] = 0;
     IOLockUnlock(gLock);
-    for (uint32_t id = kFirstOwn; id < kSyncpts && id < gNextSyncpt; id++) syncWrite(SYNC_SYNCPT + 4 * id, gSaved[id]);
+    for (uint32_t id = kFirstOwn; id < kSyncpts && id < gNextSyncpt; id++)
+        syncWrite(SYNC_SYNCPT + 4 * id, gSaved[id]);
     channelProgram();
     gState = 1;
     IOLockUnlock(gSubmitLock);
@@ -454,9 +490,11 @@ extern "C" void tegra_host1x_resume(void)
 // half-written entry and a fifth client can never write past the table.
 namespace {
 constexpr uint32_t kSleepClients = 4;
+
 struct SleepClient {
     void (*suspend)(void), (*resume)(void);
 } gSleepClients[kSleepClients];
+
 uint32_t gSleepClientCount;
 
 IOLock *lazyLock(IOLock **slot)
@@ -468,6 +506,7 @@ IOLock *lazyLock(IOLock **slot)
     }
     return *slot;
 }
+
 IOLock *gRegisterLock;
 }  // namespace
 
@@ -487,7 +526,8 @@ extern "C" void tegra_host1x_set_sleep_client(void (*suspend)(void), void (*resu
 
 extern "C" void tegra_nvdec_suspend(void)
 {
-    for (uint32_t i = __atomic_load_n(&gSleepClientCount, __ATOMIC_ACQUIRE); i-- > 0;) gSleepClients[i].suspend();
+    for (uint32_t i = __atomic_load_n(&gSleepClientCount, __ATOMIC_ACQUIRE); i-- > 0;)
+        gSleepClients[i].suspend();
     tegra_host1x_suspend();
 }
 
@@ -495,5 +535,6 @@ extern "C" void tegra_nvdec_resume(void)
 {
     tegra_host1x_resume();
     const uint32_t count = __atomic_load_n(&gSleepClientCount, __ATOMIC_ACQUIRE);
-    for (uint32_t i = 0; i < count; i++) gSleepClients[i].resume();
+    for (uint32_t i = 0; i < count; i++)
+        gSleepClients[i].resume();
 }

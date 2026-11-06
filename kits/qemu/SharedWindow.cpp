@@ -40,6 +40,7 @@ struct Mailbox {
     uint64_t seed;      // host: the guest block holds seed + index
     uint64_t busy;      // guest: mach_absolute_time ticks the round took
 };
+
 static_assert(sizeof(Mailbox) == 64, "mailbox layout of scripts/guest-ram.py");
 
 // Plain loads and stores: fw_cfg is emulated by QEMU, which needs the fault syndrome of the access under HVF.
@@ -49,13 +50,16 @@ uint8_t fwRead8(uintptr_t base)
     __asm__ volatile("ldrb %w0, [%1]" : "=r"(value) : "r"(base) : "memory");
     return (uint8_t)value;
 }
+
 void fwSelect(uintptr_t base, uint16_t item)
 {
     __asm__ volatile("strh %w0, [%1]\n\tdsb sy" ::"r"((uint32_t)__builtin_bswap16(item)), "r"(base + 8) : "memory");
 }
+
 void fwRead(uintptr_t base, void *out, size_t length)
 {
-    for (size_t i = 0; i < length; i++) static_cast<uint8_t *>(out)[i] = fwRead8(base);
+    for (size_t i = 0; i < length; i++)
+        static_cast<uint8_t *>(out)[i] = fwRead8(base);
 }
 
 uint64_t hex(const char *&text)
@@ -67,7 +71,8 @@ uint64_t hex(const char *&text)
                     : c >= 'a' && c <= 'f' ? c - 'a' + 10
                     : c >= 'A' && c <= 'F' ? c - 'A' + 10
                                            : -1;
-        if (digit < 0) return value;
+        if (digit < 0)
+            return value;
         value = value << 4 | (uint64_t)digit;
     }
 }
@@ -78,26 +83,33 @@ uint64_t hex(const char *&text)
 bool native_fw_cfg_read(const char *name, char *text, size_t capacity)
 {
     static uintptr_t base;
-    if (!base) base = ml_io_map(kFwCfg, 0x1000);
-    if (!base) return false;
+    if (!base)
+        base = ml_io_map(kFwCfg, 0x1000);
+    if (!base)
+        return false;
     char signature[4];
     fwSelect(base, kFwCfgSignature);
     fwRead(base, signature, 4);
-    if (memcmp(signature, "QEMU", 4)) return false;
+    if (memcmp(signature, "QEMU", 4))
+        return false;
     uint32_t count;
     fwSelect(base, kFwCfgFileDir);
     fwRead(base, &count, 4);
     count = __builtin_bswap32(count);
+
     struct {
         uint32_t size;
         uint16_t select, reserved;
         char name[56];
     } file;
+
     for (uint32_t i = 0; i < count && i < 256; i++) {
         fwRead(base, &file, sizeof(file));
-        if (strncmp(file.name, name, sizeof(file.name))) continue;
+        if (strncmp(file.name, name, sizeof(file.name)))
+            continue;
         size_t size = __builtin_bswap32(file.size);
-        if (!size || size >= capacity) return false;
+        if (!size || size >= capacity)
+            return false;
         fwSelect(base, __builtin_bswap16(file.select));
         fwRead(base, text, size);
         text[size] = 0;
@@ -124,8 +136,10 @@ void tick(OSObject *, IOTimerEventSource *source)
         uint64_t start = mach_absolute_time(), length = mailbox->length, sum = 0, seed = mailbox->seed;
         if (length % 8 == 0 && kBlocks + 2 * length <= windowSize) {
             const uint64_t count = length / 8;
-            for (uint64_t i = 0; i < count; i++) sum += words[i];
-            for (uint64_t i = 0; i < count; i++) words[count + i] = seed + i;
+            for (uint64_t i = 0; i < count; i++)
+                sum += words[i];
+            for (uint64_t i = 0; i < count; i++)
+                words[count + i] = seed + i;
         }
         mailbox->sum = sum;
         mailbox->busy = mach_absolute_time() - start;
@@ -139,17 +153,22 @@ void tick(OSObject *, IOTimerEventSource *source)
 
 void native_shared_window_probe(void)
 {
-    if (loop) return;
+    if (loop)
+        return;
     char text[64];
-    if (!native_fw_cfg_read("opt/org.unixnu/shared-window", text, sizeof(text))) return;
+    if (!native_fw_cfg_read("opt/org.unixnu/shared-window", text, sizeof(text)))
+        return;
     native_shared_window_stage = 1;
     const char *cursor = text;
     uint64_t base = hex(cursor);
-    if (*cursor++ != ':') return;
+    if (*cursor++ != ':')
+        return;
     uint64_t size = hex(cursor);
-    if (*cursor++ != ':') return;
+    if (*cursor++ != ':')
+        return;
     bool writeBack = !strcmp(cursor, "wb");
-    if (!writeBack && strcmp(cursor, "device")) return;
+    if (!writeBack && strcmp(cursor, "device"))
+        return;
     // Page aligned, room for both blocks, and memory the kernel does not manage.
     if ((base | size) & 0x3fff || size < 2 * kBlocks || pmap_valid_address(base) || pmap_valid_address(base + size - 1))
         return;
@@ -163,7 +182,8 @@ void native_shared_window_probe(void)
                            kernel_task, 0, kIOMapAnywhere | (writeBack ? kIOMapCopybackCache : kIOMapInhibitCache))
                      : nullptr;
     OSSafeReleaseNULL(memory);
-    if (!mapping) return;
+    if (!mapping)
+        return;
     native_shared_window_stage = 3;
     mailbox = reinterpret_cast<volatile Mailbox *>(mapping->getVirtualAddress());
     words = reinterpret_cast<volatile uint64_t *>(mapping->getVirtualAddress() + kBlocks);

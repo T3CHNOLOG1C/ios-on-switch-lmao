@@ -37,7 +37,10 @@
 #include <stdlib.h>
 #include <string.h>
 
-enum { MAX_AUS = 64, MAX_SLICES = 512 };
+enum {
+    MAX_AUS = 64,
+    MAX_SLICES = 512
+};
 
 typedef struct {
     uint8_t *data;
@@ -56,6 +59,7 @@ typedef struct {
 
 static Slice gSlices[MAX_SLICES];
 static int gSliceCount, gClip, gAu;
+
 static struct {
     bool open;
     int nal_type, first, dependent, slice_type, poc_lsb, type_end, skip_end;
@@ -63,9 +67,11 @@ static struct {
 
 static void finishNal(void)
 {
-    if (!gNal.open) return;
+    if (!gNal.open)
+        return;
     gNal.open = false;
-    if (gNal.nal_type >= 32 || gSliceCount == MAX_SLICES) return;
+    if (gNal.nal_type >= 32 || gSliceCount == MAX_SLICES)
+        return;
     Slice *s = &gSlices[gSliceCount++];
     s->clip = gClip, s->au = gAu, s->nal_type = gNal.nal_type, s->first = gNal.first, s->dependent = gNal.dependent;
     s->slice_type = gNal.slice_type, s->poc_lsb = gNal.poc_lsb;
@@ -99,7 +105,8 @@ static bool inSkip(const char *name)
                                          "delta_poc_msb_present_flag",
                                          "delta_poc_msb_cycle_lt"};
     for (size_t i = 0; i < sizeof(kNames) / sizeof(kNames[0]); i++)
-        if (!strcmp(name, kNames[i])) return true;
+        if (!strcmp(name, kNames[i]))
+            return true;
     return false;
 }
 
@@ -113,9 +120,11 @@ static void onLog(void *avcl, int level, const char *fmt, va_list vl)
     p = p ? p + 2 : line;
     int pos = 0, value = 0;
     char name[128], bits[128];
-    if (sscanf(p, "%d %127s %127s = %d", &pos, name, bits, &value) != 4) return;
+    if (sscanf(p, "%d %127s %127s = %d", &pos, name, bits, &value) != 4)
+        return;
     char *bracket = strchr(name, '[');
-    if (bracket) *bracket = 0;
+    if (bracket)
+        *bracket = 0;
     const int end = pos + (int)strlen(bits);
     if (!strcmp(name, "forbidden_zero_bit")) {
         finishNal();
@@ -124,7 +133,8 @@ static void onLog(void *avcl, int level, const char *fmt, va_list vl)
         gNal.slice_type = -1;
         return;
     }
-    if (!gNal.open) return;
+    if (!gNal.open)
+        return;
     if (!strcmp(name, "nal_unit_type"))
         gNal.nal_type = value;
     else if (!strcmp(name, "first_slice_segment_in_pic_flag"))
@@ -133,8 +143,10 @@ static void onLog(void *avcl, int level, const char *fmt, va_list vl)
         gNal.dependent = value;
     else if (!strcmp(name, "slice_type"))
         gNal.slice_type = value, gNal.type_end = end;
-    if (!strcmp(name, "slice_pic_order_cnt_lsb")) gNal.poc_lsb = value;
-    if (gNal.slice_type >= 0 && inSkip(name) && end > gNal.skip_end) gNal.skip_end = end;
+    if (!strcmp(name, "slice_pic_order_cnt_lsb"))
+        gNal.poc_lsb = value;
+    if (gNal.slice_type >= 0 && inSkip(name) && end > gNal.skip_end)
+        gNal.skip_end = end;
 }
 
 static bool load(Clip *c, const char *dir, const char *name)
@@ -142,28 +154,34 @@ static bool load(Clip *c, const char *dir, const char *name)
     char path[1024];
     snprintf(path, sizeof(path), "%s/%s", dir, name);
     FILE *f = fopen(path, "rb");
-    if (!f) return false;
+    if (!f)
+        return false;
     fseek(f, 0, SEEK_END);
     c->size = (size_t)ftell(f);
     fseek(f, 0, SEEK_SET);
     c->data = malloc(c->size);
     const bool ok = fread(c->data, 1, c->size, f) == c->size;
     fclose(f);
-    if (!ok) return false;
+    if (!ok)
+        return false;
     // Access units: a VCL NAL with first_slice_segment_in_pic_flag starts one; the parameter sets, SEI and AUD before
     // it belong to it.
     size_t pending = 0;
     bool havePending = false;
     for (size_t i = 0; i + 4 < c->size; i++) {
-        if (c->data[i] || c->data[i + 1] || c->data[i + 2] != 1) continue;
+        if (c->data[i] || c->data[i + 1] || c->data[i + 2] != 1)
+            continue;
         size_t start = i && !c->data[i - 1] ? i - 1 : i;
         const int type = (c->data[i + 3] >> 1) & 0x3f;
-        if (type >= 32 && type <= 40 && !havePending) pending = start, havePending = true;
+        if (type >= 32 && type <= 40 && !havePending)
+            pending = start, havePending = true;
         if (type < 32 && (c->data[i + 5] & 0x80)) {
-            if (c->aus == MAX_AUS) return false;
+            if (c->aus == MAX_AUS)
+                return false;
             c->au_start[c->aus++] = havePending ? pending : start;
         }
-        if (type < 32) havePending = false;
+        if (type < 32)
+            havePending = false;
         i += 2;
     }
     c->au_start[c->aus] = c->size;
@@ -175,7 +193,8 @@ static uint32_t crc32Update(uint32_t crc, const uint8_t *p, size_t n)
     crc = ~crc;
     while (n--) {
         crc ^= *p++;
-        for (int i = 0; i < 8; i++) crc = (crc >> 1) ^ (0xedb88320u & (0u - (crc & 1)));
+        for (int i = 0; i < 8; i++)
+            crc = (crc >> 1) ^ (0xedb88320u & (0u - (crc & 1)));
     }
     return ~crc;
 }
@@ -190,7 +209,8 @@ static uint32_t lumaCrc(const AVFrame *f, int depth)
             crc = crc32Update(crc, src, (size_t)f->width);
             continue;
         }
-        for (int x = 0; x < f->width; x++) row[x] = (uint8_t)(((const uint16_t *)src)[x] >> 2);
+        for (int x = 0; x < f->width; x++)
+            row[x] = (uint8_t)(((const uint16_t *)src)[x] >> 2);
         crc = crc32Update(crc, row, (size_t)f->width);
     }
     return crc;
@@ -203,12 +223,15 @@ static bool run(Clip *c, int index)
     ctx->thread_count = 1;
     const AVBitStreamFilter *trace = av_bsf_get_by_name("trace_headers");
     AVBSFContext *bsf = NULL;
-    if (!ctx || avcodec_open2(ctx, codec, NULL) < 0 || !trace || av_bsf_alloc(trace, &bsf) < 0) return false;
+    if (!ctx || avcodec_open2(ctx, codec, NULL) < 0 || !trace || av_bsf_alloc(trace, &bsf) < 0)
+        return false;
     bsf->par_in->codec_id = AV_CODEC_ID_HEVC;
-    if (av_bsf_init(bsf) < 0) return false;
+    if (av_bsf_init(bsf) < 0)
+        return false;
     AVPacket *pkt = av_packet_alloc(), *out = av_packet_alloc();
     AVFrame *frame = av_frame_alloc();
-    for (int i = 0; i < c->aus; i++) c->display[i] = -1;
+    for (int i = 0; i < c->aus; i++)
+        c->display[i] = -1;
     gClip = index;
     for (int i = 0; i <= c->aus; i++) {
         if (i < c->aus) {
@@ -219,11 +242,13 @@ static bool run(Clip *c, int index)
             gAu = i;
             av_log_set_callback(onLog);
             av_bsf_send_packet(bsf, copy);
-            while (av_bsf_receive_packet(bsf, out) == 0) av_packet_unref(out);
+            while (av_bsf_receive_packet(bsf, out) == 0)
+                av_packet_unref(out);
             finishNal();
             av_log_set_callback(av_log_default_callback);
             av_packet_free(&copy);
-            if (avcodec_send_packet(ctx, pkt) < 0) return false;
+            if (avcodec_send_packet(ctx, pkt) < 0)
+                return false;
             av_packet_unref(pkt);
         } else {
             avcodec_send_packet(ctx, NULL);
@@ -231,8 +256,10 @@ static bool run(Clip *c, int index)
         while (avcodec_receive_frame(ctx, frame) == 0) {
             c->width = frame->width, c->height = frame->height;
             c->depth = frame->format == AV_PIX_FMT_YUV420P10LE ? 10 : 8;
-            if (frame->format != AV_PIX_FMT_YUV420P && frame->format != AV_PIX_FMT_YUV420P10LE) return false;
-            if (frame->pts < 0 || frame->pts >= c->aus) return false;
+            if (frame->format != AV_PIX_FMT_YUV420P && frame->format != AV_PIX_FMT_YUV420P10LE)
+                return false;
+            if (frame->pts < 0 || frame->pts >= c->aus)
+                return false;
             c->display[frame->pts] = c->shown;
             c->crc[c->shown++] = lumaCrc(frame, c->depth);
             av_frame_unref(frame);
@@ -249,7 +276,8 @@ static bool run(Clip *c, int index)
 static void bytes(FILE *f, const char *name, const uint8_t *p, size_t n)
 {
     fprintf(f, "static const uint8_t %s[%zu] = {", name, n);
-    for (size_t i = 0; i < n; i++) fprintf(f, "%s0x%02x,", i % 20 ? "" : "\n    ", p[i]);
+    for (size_t i = 0; i < n; i++)
+        fprintf(f, "%s0x%02x,", i % 20 ? "" : "\n    ", p[i]);
     fprintf(f, "\n};\n");
 }
 
@@ -259,15 +287,18 @@ static void clipTables(FILE *f, const Clip *c, char letter)
     snprintf(name, sizeof(name), "kHEVCClip%cData", letter);
     bytes(f, name, c->data, c->size);
     fprintf(f, "static const int16_t kHEVCClip%cDisplay[%d] = {", letter, c->aus);
-    for (int i = 0; i < c->aus; i++) fprintf(f, "%s%d,", i % 16 ? " " : "\n    ", c->display[i]);
+    for (int i = 0; i < c->aus; i++)
+        fprintf(f, "%s%d,", i % 16 ? " " : "\n    ", c->display[i]);
     fprintf(f, "\n};\nstatic const uint32_t kHEVCClip%cCrc[%d] = {", letter, c->shown);
-    for (int i = 0; i < c->shown; i++) fprintf(f, "%s0x%08x,", i % 6 ? " " : "\n    ", c->crc[i]);
+    for (int i = 0; i < c->shown; i++)
+        fprintf(f, "%s0x%08x,", i % 6 ? " " : "\n    ", c->crc[i]);
     fprintf(f, "\n};\n");
 }
 
 int main(int argc, char **argv)
 {
-    if (argc != 3) return fprintf(stderr, "usage: hevcgen <clip dir> <output dir>\n"), 2;
+    if (argc != 3)
+        return fprintf(stderr, "usage: hevcgen <clip dir> <output dir>\n"), 2;
     static const char *const kFiles[4] = {"clipA.hevc", "clipV.hevc", "clipT.hevc", "clipK.hevc"};
     static const char kLetters[4] = {'A', 'V', 'T', 'K'};
     static Clip clips[4];
@@ -280,7 +311,8 @@ int main(int argc, char **argv)
     char path[1024];
     snprintf(path, sizeof(path), "%s/HEVCClip.h", argv[2]);
     FILE *f = fopen(path, "w");
-    if (!f) return 1;
+    if (!f)
+        return 1;
     fprintf(f,
             "// SPDX-License-Identifier: BSD-2-Clause-Patent\n"
             "// Generated by test/hevcgen (FFmpeg's HEVC decoder is the reference); do not edit.\n"
@@ -290,7 +322,8 @@ int main(int argc, char **argv)
             "#ifndef HEVC_CLIP_H\n#define HEVC_CLIP_H\n#include <stddef.h>\n#include <stdint.h>\n\n"
             "typedef struct {\n    char name;\n    int width, height, depth, aus, shown;\n    const uint8_t *data;\n"
             "    size_t size;\n    const int16_t *display;\n    const uint32_t *crc;\n} HEVCClip;\n\n");
-    for (int i = 0; i < 3; i++) clipTables(f, &clips[i], kLetters[i]);
+    for (int i = 0; i < 3; i++)
+        clipTables(f, &clips[i], kLetters[i]);
     fprintf(f, "\nstatic const HEVCClip kHEVCClips[3] = {\n");
     for (int i = 0; i < 3; i++)
         fprintf(f,
@@ -303,7 +336,8 @@ int main(int argc, char **argv)
 
     snprintf(path, sizeof(path), "%s/HEVCTrace.h", argv[2]);
     f = fopen(path, "w");
-    if (!f) return 1;
+    if (!f)
+        return 1;
     fprintf(
         f,
         "// SPDX-License-Identifier: BSD-2-Clause-Patent\n"

@@ -23,6 +23,7 @@
 extern "C" void mock_iokit_report(void);
 extern "C" void pushcount_report(const char *what);
 static void (*const r8_set_stats)(void) = nullptr;  // r8-nullmoth's instrumented bridge only
+
 static void missing(const char *cls, const char *sel)
 {
     fprintf(stderr, "MISSING -[%s %s]\n", cls, sel);
@@ -39,6 +40,7 @@ static uint64_t threadNs()
             (uint64_t)t.system_time.seconds * 1000000 + t.system_time.microseconds) *
            1000;
 }
+
 static uint64_t wallNs()
 {
     return clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
@@ -50,7 +52,8 @@ static MTLFunctionConstantValues *constants(const std::vector<std::string> &item
     MTLFunctionConstantValues *v = [MTLFunctionConstantValues new];
     for (const std::string &item : items) {
         size_t a = item.rfind(':'), b = item.rfind(':', a - 1);
-        if (a == std::string::npos || b == std::string::npos) continue;
+        if (a == std::string::npos || b == std::string::npos)
+            continue;
         std::string name = item.substr(0, b), type = item.substr(b + 1, a - b - 1), hex = item.substr(a + 1);
         uint8_t bytes[64] = {};
         for (size_t i = 0; i + 1 < hex.size() && i / 2 < sizeof bytes; i += 2)
@@ -78,8 +81,10 @@ static std::vector<std::string> split(const std::string &s)
     size_t at = 0;
     while (at < s.size()) {
         size_t e = s.find(' ', at);
-        if (e == std::string::npos) e = s.size();
-        if (e > at) out.push_back(s.substr(at, e - at));
+        if (e == std::string::npos)
+            e = s.size();
+        if (e > at)
+            out.push_back(s.substr(at, e - at));
         at = e + 1;
     }
     return out;
@@ -88,12 +93,14 @@ static std::vector<std::string> split(const std::string &s)
 static bool recipe(id<MTLLibrary> qc, const std::string &line, Recipe &r)
 {
     size_t bar1 = line.find(" | v "), bar2 = line.find(" | f "), bar3 = line.find(" | qc");
-    if (bar1 == std::string::npos || bar2 == std::string::npos) return false;
+    if (bar1 == std::string::npos || bar2 == std::string::npos)
+        return false;
     std::vector<std::string> head = split(line.substr(0, bar1));
     std::vector<std::string> v = split(line.substr(bar1 + 5, bar2 - bar1 - 5));
     std::vector<std::string> f =
         split(line.substr(bar2 + 5, (bar3 == std::string::npos ? line.size() : bar3) - bar2 - 5));
-    if (v.empty() || f.empty()) return false;
+    if (v.empty() || f.empty())
+        return false;
     MTLRenderPipelineDescriptor *d = [MTLRenderPipelineDescriptor new];
     MTLVertexDescriptor *vd = nil;
     for (const std::string &h : head) {
@@ -126,8 +133,10 @@ static bool recipe(id<MTLLibrary> qc, const std::string &line, Recipe &r)
             c.alphaBlendOperation = (MTLBlendOperation)x[8];
         } else if (h[0] == 'a' && isdigit(h[1])) {
             unsigned i, x[6] = {};
-            if (sscanf(h.c_str(), "a%u=%u:%u:%u:%u:%u:%u", &i, x, x + 1, x + 2, x + 3, x + 4, x + 5) != 7) continue;
-            if (!vd) vd = [MTLVertexDescriptor vertexDescriptor];
+            if (sscanf(h.c_str(), "a%u=%u:%u:%u:%u:%u:%u", &i, x, x + 1, x + 2, x + 3, x + 4, x + 5) != 7)
+                continue;
+            if (!vd)
+                vd = [MTLVertexDescriptor vertexDescriptor];
             vd.attributes[i].format = (MTLVertexFormat)x[0];
             vd.attributes[i].offset = x[1];
             vd.attributes[i].bufferIndex = x[2];
@@ -165,6 +174,7 @@ static id<MTLTexture> surfaceTexture(id<MTLDevice> dev, IOSurfaceRef s, MTLTextu
     td.storageMode = MTLStorageModeShared;
     return [dev newTextureWithDescriptor:td iosurface:s plane:0];
 }
+
 static IOSurfaceRef newSurface(unsigned w, unsigned h)
 {
     NSDictionary *p = @{
@@ -212,21 +222,28 @@ int main(int argc, char **argv)
             NSString *text = [NSString stringWithContentsOfFile:@(argv[4]) encoding:NSUTF8StringEncoding error:nil];
             unsigned seen = 0;
             for (NSString *l in [text componentsSeparatedByString:@"\n"]) {
-                if (![l hasPrefix:@"R "] || [l containsString:@" ok=0 "]) continue;
+                if (![l hasPrefix:@"R "] || [l containsString:@" ok=0 "])
+                    continue;
                 std::string line = l.UTF8String;
                 for (size_t at; (at = line.find(" lib=")) != std::string::npos;)
                     line.erase(at, line.find(' ', at + 1) - at);
                 Recipe r;
                 bool uber = line.find("v fixed_vert_lph_spc") != std::string::npos,
                      ds = line.find("downsample_blur_vert") != std::string::npos;
-                if (!uber && !ds) continue;
-                if (line.find(" c0=80:") == std::string::npos || line.find(" c1=80:") == std::string::npos) continue;
+                if (!uber && !ds)
+                    continue;
+                if (line.find(" c0=80:") == std::string::npos || line.find(" c1=80:") == std::string::npos)
+                    continue;
                 if (uber && getenv("CABENCH_MATCH") && line.find(getenv("CABENCH_MATCH")) == std::string::npos)
                     continue;
-                if (uber && main.size() >= 12) continue;
-                if (ds && blur.size() >= 4) continue;
-                if (!recipe(qc, line, r)) continue;
-                if (uber && (mode & 8) && !r.fetch) continue;
+                if (uber && main.size() >= 12)
+                    continue;
+                if (ds && blur.size() >= 4)
+                    continue;
+                if (!recipe(qc, line, r))
+                    continue;
+                if (uber && (mode & 8) && !r.fetch)
+                    continue;
                 ++seen;
                 (uber ? main : blur).push_back(r);
             }
@@ -235,7 +252,8 @@ int main(int argc, char **argv)
         std::vector<id<MTLRenderPipelineState>> mainStates, blurStates;
         uint64_t t0 = wallNs();
         for (Recipe &r : main) {
-            if (getenv("R4_PROBE")) fprintf(stderr, "recipe %s fetch=%d\n", r.label.c_str(), r.fetch);
+            if (getenv("R4_PROBE"))
+                fprintf(stderr, "recipe %s fetch=%d\n", r.label.c_str(), r.fetch);
             id<MTLRenderPipelineState> s = [dev newRenderPipelineStateWithDescriptor:r.d error:&error];
             if (!s) {
                 fprintf(stderr, "REFUSED %s: %s\n", r.label.c_str(), error.localizedDescription.UTF8String);
@@ -253,7 +271,8 @@ int main(int argc, char **argv)
         }
         fprintf(stderr, "states: main %zu blur %zu in %.0f ms\n", mainStates.size(), blurStates.size(),
                 (wallNs() - t0) / 1e6);
-        if (mainStates.empty()) return 1;
+        if (mainStates.empty())
+            return 1;
         id<MTLCommandQueue> queue = [dev newCommandQueue];
         // The framebuffers: two 1280x720 BGRA IOSurfaces (double buffered), CA's second attachment memoryless.
         IOSurfaceRef fb[2] = {newSurface(1280, 720), newSurface(1280, 720)};
@@ -327,7 +346,8 @@ int main(int argc, char **argv)
                 char t[2048];
                 native_bridge_metal_rates(t, sizeof t);
                 pushcount_report("warm-up");
-                if (r8_set_stats) r8_set_stats();
+                if (r8_set_stats)
+                    r8_set_stats();
             }
             if (pause && frame == warm) {
                 fprintf(stderr, "pid %d warm; press enter\n", getpid());
@@ -358,13 +378,16 @@ int main(int argc, char **argv)
                         [e setRenderPipelineState:blurStates[p % blurStates.size()]];
                         [e setVertexBytes:vertices length:sizeof vertices atIndex:1];
                         if (!(mode & 32))
-                            for (unsigned v : {2u, 3u}) [e setVertexBytes:uniforms length:64 atIndex:v];
+                            for (unsigned v : {2u, 3u})
+                                [e setVertexBytes:uniforms length:64 atIndex:v];
                         [e setFragmentBytes:uniforms length:64 atIndex:0];
                         if (!(mode & 32))
-                            for (unsigned f : {1u, 6u}) [e setFragmentBytes:uniforms length:64 atIndex:f];
+                            for (unsigned f : {1u, 6u})
+                                [e setFragmentBytes:uniforms length:64 atIndex:f];
                         [e setFragmentTexture:p ? blurTex[(p + 1) & 1] : imageTex[0] atIndex:0];
                         [e setFragmentSamplerState:sampler atIndex:0];
-                        if (mode & 256) [e setScissorRect:(MTLScissorRect){0, 0, 160, 90}];
+                        if (mode & 256)
+                            [e setScissorRect:(MTLScissorRect){0, 0, 160, 90}];
                         [e drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
                         [e endEncoding];
                     }
@@ -394,21 +417,26 @@ int main(int argc, char **argv)
                         memcpy(at, vertices, sizeof vertices);
                         memcpy(at + 256, uniforms, sizeof uniforms);
                         if (i == 0) {
-                            for (unsigned v : {1u, 2u, 3u}) [e setVertexBuffer:ring offset:ringAt atIndex:v];
+                            for (unsigned v : {1u, 2u, 3u})
+                                [e setVertexBuffer:ring offset:ringAt atIndex:v];
                             for (unsigned f : {0u, 1u, 2u, 5u, 6u})
                                 [e setFragmentBuffer:ring offset:ringAt + 256 atIndex:f];
                         } else {
-                            for (unsigned v : {1u, 2u, 3u}) [e setVertexBufferOffset:ringAt atIndex:v];
-                            for (unsigned f : {0u, 1u, 2u, 5u, 6u}) [e setFragmentBufferOffset:ringAt + 256 atIndex:f];
+                            for (unsigned v : {1u, 2u, 3u})
+                                [e setVertexBufferOffset:ringAt atIndex:v];
+                            for (unsigned f : {0u, 1u, 2u, 5u, 6u})
+                                [e setFragmentBufferOffset:ringAt + 256 atIndex:f];
                         }
                         ringAt = (ringAt + 512) % (ringBytes - 512);
                     } else {
                         [e setVertexBytes:vertices length:sizeof vertices atIndex:1];
                         if (!(mode & 32))
-                            for (unsigned v : {2u, 3u}) [e setVertexBytes:uniforms length:64 atIndex:v];
+                            for (unsigned v : {2u, 3u})
+                                [e setVertexBytes:uniforms length:64 atIndex:v];
                         [e setFragmentBytes:uniforms length:sizeof uniforms atIndex:0];
                         if (!(mode & 32))
-                            for (unsigned f : {1u, 2u, 5u, 6u}) [e setFragmentBytes:uniforms length:64 atIndex:f];
+                            for (unsigned f : {1u, 2u, 5u, 6u})
+                                [e setFragmentBytes:uniforms length:64 atIndex:f];
                     }
                     if (main[k].image) {
                         [e setFragmentTexture:(mode & 4) && (i & 7) == 7 ? glyphs : imageTex[i % imageTex.size()]
@@ -425,7 +453,8 @@ int main(int argc, char **argv)
                     cpu.push_back((c1 - c0) / 1e6);
                     wall.push_back((w1 - w0) / 1e6);
                 }
-                if (last) [last waitUntilCompleted];
+                if (last)
+                    [last waitUntilCompleted];
                 if (last.error)
                     fprintf(stderr, "frame %u error: %s\n", frame, last.error.localizedDescription.UTF8String);
                 last = cb;
@@ -435,7 +464,8 @@ int main(int argc, char **argv)
         std::sort(cpu.begin(), cpu.end());
         std::sort(wall.begin(), wall.end());
         double sum = 0;
-        for (double c : cpu) sum += c;
+        for (double c : cpu)
+            sum += c;
         printf("frames=%zu draws=%u mode=%u: encode thread cpu mean %.3f ms p50 %.3f p90 %.3f | wall p50 %.3f ms | per "
                "draw %.1f us\n",
                cpu.size(), draws, mode, sum / cpu.size(), cpu[cpu.size() / 2], cpu[cpu.size() * 9 / 10],
@@ -443,12 +473,14 @@ int main(int argc, char **argv)
         char text[2048] = {};
         native_bridge_metal_rates(text, sizeof text);
         printf("rates: %s\n", text);
-        if (getenv("CABENCH_RAW") && raw_metal_rates(text, sizeof text)) printf("raw rates: %s\n", text);
+        if (getenv("CABENCH_RAW") && raw_metal_rates(text, sizeof text))
+            printf("raw rates: %s\n", text);
         native_bridge_metal_status(text, sizeof text);
         printf("status: %s\n", text);
         mock_iokit_report();
         pushcount_report("steady");
-        if (r8_set_stats) r8_set_stats();
+        if (r8_set_stats)
+            r8_set_stats();
     }
     return 0;
 }

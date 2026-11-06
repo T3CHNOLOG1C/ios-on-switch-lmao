@@ -25,12 +25,36 @@ constexpr uint32_t kImodUs = 40;
 // Event TRB as copied out of the ring.
 struct Event {
     uint32_t d[4];
-    uint32_t type() const { return (d[3] >> 10) & 0x3f; }
-    uint32_t dci() const { return (d[3] >> 16) & 0x1f; }
-    uint32_t code() const { return d[2] >> 24; }
-    uint32_t residue() const { return d[2] & 0xffffff; }
-    uint32_t trb() const { return d[0]; }  // transfer events: TRB physical address
-    uint16_t setupSequence() const { return d[2] & 0xffff; }
+
+    uint32_t type() const
+    {
+        return (d[3] >> 10) & 0x3f;
+    }
+
+    uint32_t dci() const
+    {
+        return (d[3] >> 16) & 0x1f;
+    }
+
+    uint32_t code() const
+    {
+        return d[2] >> 24;
+    }
+
+    uint32_t residue() const
+    {
+        return d[2] & 0xffffff;
+    }
+
+    uint32_t trb() const
+    {
+        return d[0];
+    }  // transfer events: TRB physical address
+
+    uint16_t setupSequence() const
+    {
+        return d[2] & 0xffff;
+    }
 };
 
 // Physically contiguous, cacheable DMA memory below 4 GiB.
@@ -87,15 +111,34 @@ public:
     // the cycle bit); returns its ring index. The ring's indices, the TRB at one (as written), the index of a TRB
     // address.
     uint32_t pushData(uint32_t dci, uint64_t bufferPA, uint32_t length, uint32_t tdSize, uint32_t flags);
-    uint32_t ringTrbs(uint32_t dci) const { return rings[dci].trbs; }
-    uint32_t nextIndex(uint32_t dci, uint32_t index) const { return index + 1 == rings[dci].trbs - 1 ? 0 : index + 1; }
-    uint32_t trbLength(uint32_t dci, uint32_t index) const { return rings[dci].trb[index * 4 + 2] & 0x1ffff; }
+
+    uint32_t ringTrbs(uint32_t dci) const
+    {
+        return rings[dci].trbs;
+    }
+
+    uint32_t nextIndex(uint32_t dci, uint32_t index) const
+    {
+        return index + 1 == rings[dci].trbs - 1 ? 0 : index + 1;
+    }
+
+    uint32_t trbLength(uint32_t dci, uint32_t index) const
+    {
+        return rings[dci].trb[index * 4 + 2] & 0x1ffff;
+    }
+
     uint64_t trbBuffer(uint32_t dci, uint32_t index) const
     {
         return rings[dci].trb[index * 4] | (uint64_t)rings[dci].trb[index * 4 + 1] << 32;
     }
+
     bool trbIndex(uint32_t dci, uint32_t trbPA, uint32_t *index) const;
-    bool ringReady(uint32_t dci) const { return rings[dci].trb != nullptr; }
+
+    bool ringReady(uint32_t dci) const
+    {
+        return rings[dci].trb != nullptr;
+    }
+
     void doorbell(uint32_t dci, uint16_t sequence = 0);
     void setAddress(uint32_t address);
     void run();  // CTRL.RUN (first data endpoint)
@@ -106,6 +149,7 @@ private:
         uint32_t pa = 0, enqueue = 0, cycle = 1, trbs = kRingTrbs;
         DmaBuffer own;  // a data endpoint's ring (EP0's is in `control`)
     };
+
     volatile uint8_t *car = nullptr, *pmcPage = nullptr, *fusePage = nullptr, *mc = nullptr, *padctl = nullptr,
                      *xudc = nullptr;
     DmaBuffer control;  // contexts, EP0's transfer ring
@@ -113,12 +157,29 @@ private:
     Ring rings[kMaxDci];
     uint32_t eventIndex = 0, eventCycle = 1;
 
-    static uint32_t r(volatile uint8_t *b, uint32_t o) { return *(volatile uint32_t *)(b + o); }
-    static void w(volatile uint8_t *b, uint32_t o, uint32_t v) { *(volatile uint32_t *)(b + o) = v; }
+    static uint32_t r(volatile uint8_t *b, uint32_t o)
+    {
+        return *(volatile uint32_t *)(b + o);
+    }
+
+    static void w(volatile uint8_t *b, uint32_t o, uint32_t v)
+    {
+        *(volatile uint32_t *)(b + o) = v;
+    }
+
     uint32_t pmc(uint32_t o);
     void pmcWrite(uint32_t o, uint32_t v);
-    uint32_t xr(uint32_t o) { return r(xudc, o); }
-    void xw(uint32_t o, uint32_t v) { w(xudc, o, v); }
+
+    uint32_t xr(uint32_t o)
+    {
+        return r(xudc, o);
+    }
+
+    void xw(uint32_t o, uint32_t v)
+    {
+        w(xudc, o, v);
+    }
+
     bool waitBits(volatile uint8_t *b, uint32_t o, uint32_t mask, uint32_t value, uint32_t us);
     bool powerUp(uint32_t partition, uint32_t clockSet, uint32_t resetSet, uint32_t bit);
     bool initPhy();

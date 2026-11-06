@@ -85,7 +85,11 @@ constexpr unsigned kStuckLimit = 64;    // data-ready interrupts in a row with n
 // LandscapeOnly: face up/down and the two landscapes only (the interface can turn 180 degrees, never to portrait).
 // All: every UIDeviceOrientation, as on an iPad (r17, the user's choice: the Switch rotates, and the rotation lock is
 // SpringBoard's own again, Control Center's, no longer rewritten by the kernel every boot).
-enum class OrientationPolicy { Off, LandscapeOnly, All };
+enum class OrientationPolicy {
+    Off,
+    LandscapeOnly,
+    All
+};
 constexpr OrientationPolicy kOrientationPolicy = OrientationPolicy::All;
 constexpr uint32_t kOrientationMilliHz = 25000;  // the detector's accelerometer rate (ST 26 Hz, ICM 25 Hz)
 constexpr unsigned kOrientationStable = 10;      // consecutive detector samples (0.4 s) before a new orientation counts
@@ -93,25 +97,45 @@ constexpr uint32_t kOrientationBatchUS = 200000;  // FIFO batch for the detector
 // A detector sample further than this from the filtered gravity vector (micro-g) means the console is being moved;
 // kOrientationStable samples back within it, and the orientation is announced again (detectOrientation).
 constexpr int64_t kOrientationMovingMicroG = 100000;
-enum : uint8_t { Unknown, Portrait, PortraitUpsideDown, LandscapeLeft, LandscapeRight, FaceUp, FaceDown };
 
-enum Sensor : unsigned { Accel = 0, Gyro = 1 };
-enum class Family : uint8_t { ST, ICM40607, ICM42607 };
+enum : uint8_t {
+    Unknown,
+    Portrait,
+    PortraitUpsideDown,
+    LandscapeLeft,
+    LandscapeRight,
+    FaceUp,
+    FaceDown
+};
+
+enum Sensor : unsigned {
+    Accel = 0,
+    Gyro = 1
+};
+enum class Family : uint8_t {
+    ST,
+    ICM40607,
+    ICM42607
+};
+
 struct Axis {
     uint8_t index;
     int8_t sign;
 };
+
 // An output data rate: its register code and, for the ICM-42607 only, its UI low-pass filter's bandwidth code
 // (GYRO_CONFIG1, ACCEL_CONFIG1).
 struct Rate {
     uint32_t milliHz;
     uint8_t code, filter;
 };
+
 struct Part {
     const char *name;
     Family family;
     uint8_t whoAmI;
 };
+
 // The ICM parts first: their WHO_AM_I at 0x75 decides before the ST one at 0x0f, which on an ICM-42607 is
 // ACCEL_DATA_Z1 and holds live data if an earlier OS left the accelerometer on. On the ST parts 0x75 is not WHO_AM_I
 // (not checked against their datasheets: reserved or a user register). WHO_AM_I 0x67 is the ICM-42607 and also the
@@ -121,6 +145,7 @@ const Part kParts[] = {
     {"ICM-40607", Family::ICM40607, 0x38},   {"LSM6DS3H", Family::ST, 0x69},
     {"LSM6DSE", Family::ST, 0x6a},           {"LSM6DSO", Family::ST, 0x6c},
 };
+
 // Per family: the DT mount matrix (rows: console X, Y, Z), data rates, LSB scale to micro-g and micro-rad/s, and how
 // long a sensor's first samples are dropped after it is turned on (ST: DRDY_MASK already holds data-ready until the
 // filters settle; ICM-40607: inv_icm42600 ACCEL_STARTUP 20 ms, GYRO_STOP 150 ms; ICM-42607: TDK drops 20 ms of
@@ -131,6 +156,7 @@ struct FamilyInfo {
     int64_t accelNum, accelDen, gyroNum, gyroDen;
     uint32_t accelSettleMS, gyroSettleMS;
 };
+
 const FamilyInfo kST = {
     {{1, +1}, {0, +1}, {2, -1}},
     {{12500, 0x1, 0}, {26000, 0x2, 0}, {52000, 0x3, 0}, {104000, 0x4, 0}, {208000, 0x5, 0}},
@@ -178,6 +204,7 @@ enum : uint8_t {
     Ctrl4C = 0x13,
     Status = 0x1e,  // the burst: STATUS, 0x1f, OUT_TEMP, OUTX_L_G .. OUTZ_H_G, OUTX_L_XL .. OUTZ_H_XL
 };
+
 enum : uint8_t {
     SwReset = 1u << 0,
     IfInc = 1u << 2,
@@ -188,6 +215,7 @@ enum : uint8_t {
     DrdyXl = 1u << 0,  // INT2_CTRL and STATUS bit 0, accelerometer
     DrdyG = 1u << 1,   // gyroscope
 };
+
 constexpr size_t kBurst = 16;
 }  // namespace st
 
@@ -209,6 +237,7 @@ enum : uint8_t {
     IntSource3 = 0x68,
     WhoAmI = 0x75,
 };
+
 enum : uint8_t {
     SoftReset = 1u << 0,
     ResetDone = 1u << 4,
@@ -225,6 +254,7 @@ enum : uint8_t {
     Fs2000dps = 0u << 5,
     Fs8g = 1u << 5,
 };
+
 constexpr size_t kBurst = 15;
 }  // namespace icm40607
 
@@ -265,6 +295,7 @@ enum : uint8_t {
     MR = 0x7e,
     FifoConfig5Mreg1 = 0x01,  // MREG1: FIFO_WM_GT_TH bit 5, FIFO_GYRO_EN bit 1, FIFO_ACCEL_EN bit 0 (reset 0x20)
 };
+
 // FIFO (DS-000451 FIFO; TDK inv_imu_configure_fifo / inv_imu_get_data_from_fifo / inv_imu_decode_fifo_frame): 16-byte
 // records of header, accelerometer X/Y/Z, gyroscope X/Y/Z (big-endian, -32768 for a sensor that is off), temperature
 // (1 byte) and a 2-byte timestamp. FIFO_WM_GT_TH raises FIFO_THS at every ODR tick while the count is at or above the
@@ -283,9 +314,11 @@ enum : uint8_t {
     FifoHeaderGyro = 0x20,
     FifoHeader20 = 0x10,  // 20-byte records (FIFO_HIRES_EN): never configured here
 };
+
 constexpr size_t kFifoRecord = 16;
 constexpr unsigned kFifoRecordsPerRead = 3;  // 3 x 16 bytes after the address byte: one TegraSPI transfer (64)
 constexpr unsigned kFifoRecords = 144;       // 2.25 KiB of 16-byte records
+
 enum : uint8_t {
     Spi4Wire = 1u << 2,
     SoftReset = 1u << 4,
@@ -307,8 +340,10 @@ enum : uint8_t {
     GyroConfig1Upper = 0x30,   // GYRO_CONFIG1 7:3 (reserved), as reset (0x31)
     AccelConfig1Upper = 0x40,  // ACCEL_CONFIG1 7:3, as reset (0x41: 32x averaging, low-power mode only)
 };
+
 constexpr size_t kBurst = 12;
 }  // namespace icm42607
+
 static_assert((unsigned)icm40607::WhoAmI == (unsigned)icm42607::WhoAmI, "both ICM maps have WHO_AM_I at 0x75");
 
 // Sample decode (host tests: test/switch_motion_test.cpp). ST: STATUS, then gyroscope and accelerometer
@@ -331,8 +366,10 @@ void decodeICM(const uint8_t *b, bool dataReady, int16_t accel[3], int16_t gyro[
     for (unsigned i = 0; i < 3; ++i) {
         accel[i] = (int16_t)(b[2 * i] << 8 | b[1 + 2 * i]);
         gyro[i] = (int16_t)(b[6 + 2 * i] << 8 | b[7 + 2 * i]);
-        if (accel[i] == kInvalid) fresh[Accel] = false;
-        if (gyro[i] == kInvalid) fresh[Gyro] = false;
+        if (accel[i] == kInvalid)
+            fresh[Accel] = false;
+        if (gyro[i] == kInvalid)
+            fresh[Gyro] = false;
     }
 }
 
@@ -342,7 +379,8 @@ void decodeICM(const uint8_t *b, bool dataReady, int16_t accel[3], int16_t gyro[
 bool decodeFifoRecord(const uint8_t *record, int16_t accel[3], int16_t gyro[3], bool fresh[2])
 {
     const uint8_t header = record[0];
-    if (header & (icm42607::FifoHeaderMsg | icm42607::FifoHeader20)) return false;
+    if (header & (icm42607::FifoHeaderMsg | icm42607::FifoHeader20))
+        return false;
     decodeICM(record + 1, true, accel, gyro, fresh);
     fresh[Accel] = fresh[Accel] && (header & icm42607::FifoHeaderAccel);
     fresh[Gyro] = fresh[Gyro] && (header & icm42607::FifoHeaderGyro);
@@ -354,11 +392,14 @@ bool decodeFifoRecord(const uint8_t *record, int16_t accel[3], int16_t gyro[3], 
 // most kMaxWatermark and at most kMaxBatchUS of samples (well inside the 1 s data-ready watchdog).
 constexpr unsigned kMaxWatermark = 24;
 constexpr uint32_t kMaxBatchUS = 250000;
+
 unsigned watermarkFor(uint32_t batchUS, uint32_t periodUS)
 {
-    if (!batchUS || !periodUS) return 1;
+    if (!batchUS || !periodUS)
+        return 1;
     uint32_t records = (batchUS < kMaxBatchUS ? batchUS : kMaxBatchUS) / periodUS;
-    if (records > kMaxWatermark) records = kMaxWatermark;
+    if (records > kMaxWatermark)
+        records = kMaxWatermark;
     return records ? records : 1;
 }
 
@@ -368,7 +409,8 @@ unsigned watermarkFor(uint32_t batchUS, uint32_t periodUS)
 SwitchMotionReport deviceReport(const FamilyInfo &info, Sensor sensor, const int16_t raw[3])
 {
     int32_t console[3];
-    for (unsigned i = 0; i < 3; ++i) console[i] = info.mount[i].sign * (int32_t)raw[info.mount[i].index];
+    for (unsigned i = 0; i < 3; ++i)
+        console[i] = info.mount[i].sign * (int32_t)raw[info.mount[i].index];
     const int32_t sign = sensor == Accel ? -1 : 1;
     const int32_t device[3] = {-console[1] * sign, console[0] * sign, console[2] * sign};
     const int64_t num = sensor == Accel ? info.accelNum : info.gyroNum;
@@ -470,7 +512,8 @@ OSDefineMetaClassAndStructors(SwitchMotion, IOService)
     uint8_t tx[TEGRA_SPI_MAX_TRANSFER] = {}, rx[TEGRA_SPI_MAX_TRANSFER];
     tx[0] = (uint8_t)(0x80 | reg);
     const int err = tegra_spi_transfer(kBus, kChipSelect, tx, rx, length + 1);
-    if (err) panic("SwitchMotion: SPI4 read of %s register %#x failed (%d)", part ? part->name : "IMU", reg, err);
+    if (err)
+        panic("SwitchMotion: SPI4 read of %s register %#x failed (%d)", part ? part->name : "IMU", reg, err);
     memcpy(buffer, rx + 1, length);
 }
 
@@ -478,7 +521,8 @@ void SwitchMotion::writeRegister(uint8_t reg, uint8_t value)
 {
     const uint8_t tx[2] = {reg, value};
     const int err = tegra_spi_transfer(kBus, kChipSelect, tx, nullptr, sizeof(tx));
-    if (err) panic("SwitchMotion: SPI4 write of %s register %#x failed (%d)", part ? part->name : "IMU", reg, err);
+    if (err)
+        panic("SwitchMotion: SPI4 write of %s register %#x failed (%d)", part ? part->name : "IMU", reg, err);
 }
 
 // Both WHO_AM_I addresses, read only: nothing is written to a part before it is known (as the Linux drivers, which read
@@ -493,7 +537,8 @@ bool SwitchMotion::identify()
     readRegisters(icm42607::WhoAmI, &icmId, 1);
     readRegisters(st::WhoAmI, &stId, 1);
     for (const Part &p : kParts) {
-        if ((p.family == Family::ST ? stId : icmId) != p.whoAmI) continue;
+        if ((p.family == Family::ST ? stId : icmId) != p.whoAmI)
+            continue;
         part = &p;
         info = p.family == Family::ST ? &kST : p.family == Family::ICM40607 ? &kICM40607 : &kICM42607;
         return true;
@@ -616,23 +661,28 @@ void SwitchMotion::program(bool accel, bool gyro, unsigned rateIndex, unsigned f
     switch (part->family) {
     case Family::ST: {
         const uint8_t route = gyro ? st::DrdyG : (accel ? st::DrdyXl : 0);
-        if (!route) writeRegister(st::Int2Ctrl, 0);
+        if (!route)
+            writeRegister(st::Int2Ctrl, 0);
         writeRegister(st::Ctrl1Xl, accel ? (uint8_t)(r.code << 4 | st::Fs8g) : 0);
         writeRegister(st::Ctrl2G, gyro ? (uint8_t)(r.code << 4 | st::Fs2000dps) : 0);
-        if (route) writeRegister(st::Int2Ctrl, route);
+        if (route)
+            writeRegister(st::Int2Ctrl, route);
         break;
     }
     case Family::ICM40607:
-        if (!any) writeRegister(icm40607::IntSource3, 0);
+        if (!any)
+            writeRegister(icm40607::IntSource3, 0);
         writeRegister(icm40607::GyroConfig0, (uint8_t)(icm40607::Fs2000dps | r.code));
         writeRegister(icm40607::AccelConfig0, (uint8_t)(icm40607::Fs8g | r.code));
         writeRegister(icm40607::PwrMgmt0, (uint8_t)(icm40607::TempDisable | (gyro ? icm40607::GyroLowNoise : 0) |
                                                     (accel ? icm40607::AccelLowNoise : 0)));
         IODelay(200);  // no register writes for 200 us after a sensor leaves off (datasheet)
-        if (any) writeRegister(icm40607::IntSource3, icm40607::DataReady);
+        if (any)
+            writeRegister(icm40607::IntSource3, icm40607::DataReady);
         break;
     case Family::ICM42607:
-        if (!any || fifoOn || fifoWatermark > 1) writeRegister(icm42607::IntSource3, 0);
+        if (!any || fifoOn || fifoWatermark > 1)
+            writeRegister(icm42607::IntSource3, 0);
         writeRegister(icm42607::GyroConfig0, (uint8_t)(icm42607::Fs2000dps | r.code));
         writeRegister(icm42607::AccelConfig0, (uint8_t)(icm42607::Fs8g | r.code));
         writeRegister(icm42607::GyroConfig1, (uint8_t)(icm42607::GyroConfig1Upper | r.filter));
@@ -651,11 +701,13 @@ void SwitchMotion::program(bool accel, bool gyro, unsigned rateIndex, unsigned f
 void SwitchMotion::route(bool any, unsigned fifoWatermark)
 {
     bool fifo = any && fifoWatermark > 1 && !fifoOff && configureFifo(fifoWatermark);
-    if (!fifo && fifoOn) writeRegister(icm42607::FifoConfig1, icm42607::FifoBypass);  // empty, out of the way
+    if (!fifo && fifoOn)
+        writeRegister(icm42607::FifoConfig1, icm42607::FifoBypass);  // empty, out of the way
     fifoOn = fifo;
     watermark = fifo ? fifoWatermark : 1;
     const uint8_t source = fifo ? (uint8_t)icm42607::FifoThsInt2 : (uint8_t)icm42607::DrdyInt2;
-    if (any) writeRegister(icm42607::IntSource3, source);
+    if (any)
+        writeRegister(icm42607::IntSource3, source);
 }
 
 // Work loop, ICM-42607, sensors on, INT2's sources off: the FIFO from empty with a new watermark (DS-000451 FIFO_WM:
@@ -724,9 +776,11 @@ void SwitchMotion::giveUp()
 // and decimation.
 void SwitchMotion::apply()
 {
-    if (suspended || broken) return;
+    if (suspended || broken)
+        return;
     uint32_t interval[2];
-    for (unsigned s = 0; s < 2; ++s) interval[s] = __atomic_load_n(&intervalUS[s], __ATOMIC_ACQUIRE);
+    for (unsigned s = 0; s < 2; ++s)
+        interval[s] = __atomic_load_n(&intervalUS[s], __ATOMIC_ACQUIRE);
     const bool detector = orientationHid && __atomic_load_n(&displayLit, __ATOMIC_ACQUIRE);
     if (detector != detecting) {
         // Starts afresh each time: a new filter, nothing announced, so the first stable orientation is announced.
@@ -740,20 +794,25 @@ void SwitchMotion::apply()
     uint32_t need = detector ? kOrientationMilliHz : 0;
     for (unsigned s = 0; s < 2; ++s) {
         const uint32_t milliHz = interval[s] ? (uint32_t)((1000000000ull + interval[s] - 1) / interval[s]) : 0;
-        if (milliHz > need) need = milliHz;
+        if (milliHz > need)
+            need = milliHz;
     }
     unsigned next = 0;
-    while (next + 1 < 5 && info->rates[next].milliHz < need) ++next;
+    while (next + 1 < 5 && info->rates[next].milliHz < need)
+        ++next;
     // FIFO batching (file comment): the shortest batch interval among the sensors a client wants and the detector's.
     unsigned fifoWatermark = 1;
     uint32_t batch = 0;
     if (part->family == Family::ICM42607 && timedPosts && !fifoOff) {
         bool seen = detector;
-        if (detector) batch = kOrientationBatchUS;
+        if (detector)
+            batch = kOrientationBatchUS;
         for (unsigned s = 0; s < 2; ++s) {
-            if (!interval[s]) continue;
+            if (!interval[s])
+                continue;
             const uint32_t b = __atomic_load_n(&batchUS[s], __ATOMIC_ACQUIRE);
-            if (!seen || b < batch) batch = b;
+            if (!seen || b < batch)
+                batch = b;
             seen = true;
         }
         fifoWatermark = watermarkFor(batch, (uint32_t)(1000000000ull / info->rates[next].milliHz));
@@ -773,7 +832,8 @@ void SwitchMotion::apply()
     if (!converting || next != rate || want[Accel] != on[Accel] || want[Gyro] != on[Gyro]) {
         const uint64_t now = mach_absolute_time();
         for (unsigned s = 0; s < 2; ++s) {
-            if (want[s] && !on[s]) settle[s] = now + msToAbs(s == Accel ? info->accelSettleMS : info->gyroSettleMS);
+            if (want[s] && !on[s])
+                settle[s] = now + msToAbs(s == Accel ? info->accelSettleMS : info->gyroSettleMS);
         }
         program(want[Accel], want[Gyro], next, fifoWatermark);
         on[Accel] = want[Accel];
@@ -811,8 +871,10 @@ void SwitchMotion::apply()
 // console's bottom).
 void SwitchMotion::post(Sensor sensor, const int16_t raw[3], uint64_t now)
 {
-    if (!fifoOn) lastPosted[sensor] = now;
-    if (now < settle[sensor]) return;
+    if (!fifoOn)
+        lastPosted[sensor] = now;
+    if (now < settle[sensor])
+        return;
     const SwitchMotionReport report = deviceReport(*info, sensor, raw);
     if (sensor == Accel && !firstLogged) {
         firstLogged = true;
@@ -825,11 +887,13 @@ void SwitchMotion::post(Sensor sensor, const int16_t raw[3], uint64_t now)
         const int32_t vector[3] = {report.x, report.y, report.z};
         detectOrientation(vector);
     }
-    if (!__atomic_load_n(&intervalUS[sensor], __ATOMIC_RELAXED) || ++count[sensor] < every[sensor]) return;
+    if (!__atomic_load_n(&intervalUS[sensor], __ATOMIC_RELAXED) || ++count[sensor] < every[sensor])
+        return;
     count[sensor] = 0;
     // Dropped until the event driver has opened it. A batched sample carries its own time, later than the last.
     if (fifoOn) {
-        if (now <= lastPosted[sensor]) now = lastPosted[sensor] + 1;
+        if (now <= lastPosted[sensor])
+            now = lastPosted[sensor] + 1;
         lastPosted[sensor] = now;
         (void)switch_hid_post_at(hid[sensor], &report, sizeof(report), now);
     } else {
@@ -858,7 +922,8 @@ void SwitchMotion::detectOrientation(const int32_t accel[3])
     }
     const int64_t x2 = (int64_t)gravity[0] * gravity[0], y2 = (int64_t)gravity[1] * gravity[1],
                   z2 = (int64_t)gravity[2] * gravity[2], n2 = x2 + y2 + z2;
-    if (n2 < 562500000000ll || n2 > 1562500000000ll) return;  // |g| outside 0.75 .. 1.25 g
+    if (n2 < 562500000000ll || n2 > 1562500000000ll)
+        return;  // |g| outside 0.75 .. 1.25 g
     const bool face = orientation == FaceUp || orientation == FaceDown;
     const bool upright = orientation >= Portrait && orientation <= LandscapeRight;
     uint8_t next = orientation;
@@ -877,14 +942,16 @@ void SwitchMotion::detectOrientation(const int32_t accel[3])
     }
     if (next == orientation) {
         candidateCount = 0;
-        if (orientation != Unknown && !announced && still >= kOrientationStable) announce(orientation);
+        if (orientation != Unknown && !announced && still >= kOrientationStable)
+            announce(orientation);
         return;
     }
     if (next != candidate) {
         candidate = next;
         candidateCount = 0;
     }
-    if (++candidateCount < kOrientationStable) return;
+    if (++candidateCount < kOrientationStable)
+        return;
     candidateCount = 0;
     static const char *const names[] = {
         "unknown", "portrait", "portrait upside down", "landscape left", "landscape right", "face up", "face down"};
@@ -900,13 +967,15 @@ void SwitchMotion::detectOrientation(const int32_t accel[3])
 void SwitchMotion::announce(uint8_t which)
 {
     uint64_t stamp = mach_absolute_time();
-    if (stamp <= orientationStamp) stamp = orientationStamp + 1;
+    if (stamp <= orientationStamp)
+        stamp = orientationStamp + 1;
     orientationStamp = stamp;
     SwitchOrientationReport report = {1, {0, 0}, stamp};
     report.orientation[orientationSet] = (uint8_t)(1u << which);
     const IOReturn taken = timedOrientation ? switch_hid_post_at(orientationHid, &report, sizeof(report), stamp)
                                             : switch_hid_post(orientationHid, &report, sizeof(report));
-    if (taken == kIOReturnSuccess) orientationSet ^= 1;
+    if (taken == kIOReturnSuccess)
+        orientationSet ^= 1;
     announced = true;
 }
 
@@ -956,8 +1025,10 @@ void SwitchMotion::sample()
     }
     empty = 0;
     ++samples;
-    if (fresh[Gyro]) post(Gyro, gyro, now);
-    if (fresh[Accel]) post(Accel, accel, now);
+    if (fresh[Gyro])
+        post(Gyro, gyro, now);
+    if (fresh[Accel])
+        post(Accel, accel, now);
 }
 
 // Work loop, PX2 masked until return, FIFO batching: INT_STATUS through FIFO_COUNTL in one burst (the read clears
@@ -1002,7 +1073,8 @@ void SwitchMotion::drainFifo(uint64_t now)
         return;
     }
     uint64_t newest = n >= watermark ? now + (uint64_t)(n - watermark) * periodAbs : read - periodAbs / 2;
-    if (newest > read) newest = read;
+    if (newest > read)
+        newest = read;
     uint8_t b[icm42607::kFifoRecordsPerRead * icm42607::kFifoRecord];
     unsigned taken = 0;
     uint8_t firstHeader = 0;
@@ -1013,7 +1085,8 @@ void SwitchMotion::drainFifo(uint64_t now)
             const uint8_t *record = b + i * icm42607::kFifoRecord;
             int16_t accel[3], gyro[3];
             bool fresh[2];
-            if (!taken) firstHeader = record[0];
+            if (!taken)
+                firstHeader = record[0];
             if (!decodeFifoRecord(record, accel, gyro, fresh)) {
                 if (record[0] == icm42607::FifoHeaderMsg) {
                     done = n;  // the empty marker: the count was ahead of the data
@@ -1027,17 +1100,21 @@ void SwitchMotion::drainFifo(uint64_t now)
             }
             const uint64_t at = newest - (uint64_t)(n - 1 - (done + i)) * periodAbs;
             ++taken;
-            if (fresh[Gyro] && on[Gyro]) post(Gyro, gyro, at);
-            if (fresh[Accel] && on[Accel]) post(Accel, accel, at);
+            if (fresh[Gyro] && on[Gyro])
+                post(Gyro, gyro, at);
+            if (fresh[Accel] && on[Accel])
+                post(Accel, accel, at);
         }
-        if (done < n) done += chunk;
+        if (done < n)
+            done += chunk;
     }
     if (!fifoLogged) {
         fifoLogged = true;
         IOLog("SwitchMotion: %s FIFO batching on: watermark %u at %u mHz, first drain %u of %u records (header %#x)\n",
               part->name, watermark, info->rates[rate].milliHz, taken, n, firstHeader);
     }
-    if (!taken) return;
+    if (!taken)
+        return;
     empty = 0;
     ++samples;
     ++drains;
@@ -1047,12 +1124,14 @@ void SwitchMotion::drainFifo(uint64_t now)
 void SwitchMotion::interruptOccurred(OSObject *owner, IOInterruptEventSource *, int)
 {
     auto *self = OSDynamicCast(SwitchMotion, owner);
-    if (self && self->converting) self->sample();
+    if (self && self->converting)
+        self->sample();
 }
 
 void SwitchMotion::kicked(OSObject *owner, IOInterruptEventSource *, int)
 {
-    if (auto *self = OSDynamicCast(SwitchMotion, owner)) self->apply();
+    if (auto *self = OSDynamicCast(SwitchMotion, owner))
+        self->apply();
 }
 
 // Armed only while converting. No sample in a whole period: either the latched line is high and its interrupt never
@@ -1060,7 +1139,8 @@ void SwitchMotion::kicked(OSObject *owner, IOInterruptEventSource *, int)
 void SwitchMotion::watchdogFired(OSObject *owner, IOTimerEventSource *sender)
 {
     auto *self = OSDynamicCast(SwitchMotion, owner);
-    if (!self || !self->converting) return;
+    if (!self || !self->converting)
+        return;
     if (!self->samples) {
         tegra_gpio_check_delivery(TEGRA_GPIO_IMU_INT, "SwitchMotion");
         const uint32_t milliHz = self->info->rates[self->rate].milliHz;
@@ -1078,7 +1158,8 @@ void SwitchMotion::watchdogFired(OSObject *owner, IOTimerEventSource *sender)
 void SwitchMotion::featureReceived(void *context, const uint8_t *report, size_t length)
 {
     auto *channel = static_cast<Channel *>(context);
-    if (length < 8) return;
+    if (length < 8)
+        return;
     // Report Interval and Report Latency (BatchInterval) end the report (after the ID, if any): SwitchHIDDevice.cpp.
     const uint8_t *value = report + length - 8;
     const uint32_t interval =
@@ -1092,10 +1173,13 @@ void SwitchMotion::featureReceived(void *context, const uint8_t *report, size_t 
 
 bool SwitchMotion::start(IOService *provider)
 {
-    if (!IOService::start(provider)) return false;
+    if (!IOService::start(provider))
+        return false;
     const int err = tegra_spi_init(kBus);
-    if (err) panic("SwitchMotion: SPI4 init failed (%d)", err);
-    if (!identify() || !reset()) return false;
+    if (err)
+        panic("SwitchMotion: SPI4 init failed (%d)", err);
+    if (!identify() || !reset())
+        return false;
     configurePart();
 
     IOService *nub = tegra_gpio_interrupt_nub(TEGRA_GPIO_IMU_INT, TEGRA_GPIO_LEVEL_HIGH);
@@ -1143,9 +1227,12 @@ bool SwitchMotion::start(IOService *provider)
 void SwitchMotion::free()
 {
     if (loop) {
-        if (irq) loop->removeEventSource(irq);
-        if (kick) loop->removeEventSource(kick);
-        if (watchdog) loop->removeEventSource(watchdog);
+        if (irq)
+            loop->removeEventSource(irq);
+        if (kick)
+            loop->removeEventSource(kick);
+        if (watchdog)
+            loop->removeEventSource(watchdog);
     }
     OSSafeReleaseNULL(irq);
     OSSafeReleaseNULL(kick);
@@ -1161,7 +1248,8 @@ void SwitchMotion::suspend()
     loop->runAction(
         [](OSObject *owner, void *, void *, void *, void *) -> IOReturn {
             auto *self = static_cast<SwitchMotion *>(owner);
-            if (self->suspended) return kIOReturnSuccess;
+            if (self->suspended)
+                return kIOReturnSuccess;
             if (self->converting) {
                 self->program(false, false, 0);
                 self->irq->disable();
@@ -1182,7 +1270,8 @@ void SwitchMotion::resume()
     loop->runAction(
         [](OSObject *owner, void *, void *, void *, void *) -> IOReturn {
             auto *self = static_cast<SwitchMotion *>(owner);
-            if (!self->suspended) return kIOReturnSuccess;
+            if (!self->suspended)
+                return kIOReturnSuccess;
             self->suspended = false;
             self->configurePart();  // the part stays powered through SC7; this only restates the pin setup
             self->apply();
@@ -1204,7 +1293,8 @@ SwitchMotion *volatile gMotion;
 
 extern "C" int switch_motion_start(void)
 {
-    if (gMotion) return 0;
+    if (gMotion)
+        return 0;
     IOService *resources = IOService::getResourceService();
     SwitchMotion *candidate = OSTypeAlloc(SwitchMotion);
     if (!resources || !candidate || !candidate->init() || !candidate->attach(resources)) {
@@ -1222,15 +1312,18 @@ extern "C" int switch_motion_start(void)
 
 extern "C" void switch_motion_suspend(void)
 {
-    if (SwitchMotion *motion = __atomic_load_n(&gMotion, __ATOMIC_ACQUIRE)) motion->suspend();
+    if (SwitchMotion *motion = __atomic_load_n(&gMotion, __ATOMIC_ACQUIRE))
+        motion->suspend();
 }
 
 extern "C" void switch_motion_resume(void)
 {
-    if (SwitchMotion *motion = __atomic_load_n(&gMotion, __ATOMIC_ACQUIRE)) motion->resume();
+    if (SwitchMotion *motion = __atomic_load_n(&gMotion, __ATOMIC_ACQUIRE))
+        motion->resume();
 }
 
 extern "C" void switch_motion_display_power(bool on)
 {
-    if (SwitchMotion *motion = __atomic_load_n(&gMotion, __ATOMIC_ACQUIRE)) motion->displayPower(on);
+    if (SwitchMotion *motion = __atomic_load_n(&gMotion, __ATOMIC_ACQUIRE))
+        motion->displayPower(on);
 }

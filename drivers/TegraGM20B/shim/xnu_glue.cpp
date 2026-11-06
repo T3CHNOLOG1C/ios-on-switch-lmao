@@ -141,6 +141,7 @@ extern "C" void nvxnu_errors_fatal(int (*contained)(const char *errors))
 	gErrorsContained = contained;
 	__atomic_store_n(&gErrorsFatal, 1, __ATOMIC_RELEASE);
 }
+
 extern "C" const char *nvxnu_gpu_errors(void)
 {
 	return gIrqErrors;
@@ -176,64 +177,79 @@ extern "C" void *nvxnu_mutex_alloc(void)
 {
 	return lck_mtx_alloc_init(nvxnu_grp(), LCK_ATTR_NULL);
 }
+
 extern "C" void nvxnu_mutex_free(void *m)
 {
 	if (m)
 		lck_mtx_free(static_cast<lck_mtx_t *>(m), nvxnu_grp());
 }
+
 extern "C" void nvxnu_mutex_lock(void *m)
 {
 	lck_mtx_lock(static_cast<lck_mtx_t *>(m));
 }
+
 extern "C" void nvxnu_mutex_unlock(void *m)
 {
 	lck_mtx_unlock(static_cast<lck_mtx_t *>(m));
 }
+
 extern "C" int nvxnu_mutex_trylock(void *m)
 {
 	return lck_mtx_try_lock(static_cast<lck_mtx_t *>(m)) ? 1 : 0;
 }
+
 extern "C" void *nvxnu_spin_alloc(void)
 {
 	return lck_spin_alloc_init(nvxnu_grp(), LCK_ATTR_NULL);
 }
+
 extern "C" void nvxnu_spin_free(void *s)
 {
 	if (s)
 		lck_spin_free(static_cast<lck_spin_t *>(s), nvxnu_grp());
 }
+
 extern "C" void nvxnu_spin_lock(void *s)
 {
 	lck_spin_lock(static_cast<lck_spin_t *>(s));
 }
+
 extern "C" void nvxnu_spin_unlock(void *s)
 {
 	lck_spin_unlock(static_cast<lck_spin_t *>(s));
 }
+
 extern "C" unsigned long nvxnu_irq_save(void)
 {
 	return ml_set_interrupts_enabled(FALSE) ? 1UL : 0UL;
 }
+
 extern "C" void nvxnu_irq_restore(unsigned long flags)
 {
 	ml_set_interrupts_enabled(static_cast<boolean_t>(flags));
 }
+
 extern "C" void *nvxnu_rw_alloc(void)
 {
 	return lck_rw_alloc_init(nvxnu_grp(), LCK_ATTR_NULL);
 }
+
 extern "C" void nvxnu_rw_lock_shared(void *rw)
 {
 	lck_rw_lock_shared(static_cast<lck_rw_t *>(rw));
 }
+
 extern "C" void nvxnu_rw_unlock_shared(void *rw)
 {
 	lck_rw_unlock_shared(static_cast<lck_rw_t *>(rw));
 }
+
 extern "C" void nvxnu_rw_lock_exclusive(void *rw)
 {
 	lck_rw_lock_exclusive(static_cast<lck_rw_t *>(rw));
 }
+
 extern "C" void nvxnu_rw_unlock_exclusive(void *rw)
 {
 	lck_rw_unlock_exclusive(static_cast<lck_rw_t *>(rw));
@@ -245,14 +261,17 @@ extern "C" nvxnu_u64 nvxnu_nanotime(void)
 	absolutetime_to_nanoseconds(mach_absolute_time(), &ns);
 	return ns;
 }
+
 extern "C" void nvxnu_udelay(nvxnu_u32 us)
 {
 	IODelay(us);
 }
+
 extern "C" void nvxnu_usleep(nvxnu_u32 us)
 {
 	delay(static_cast<int>(us));
 }
+
 extern "C" void nvxnu_yield(void)
 {
 	delay(1);
@@ -472,16 +491,19 @@ extern "C" void *nvxnu_work_alloc(void (*fn)(void *), void *arg)
 	return thread_call_allocate(
 		reinterpret_cast<thread_call_func_t>(reinterpret_cast<void *>(fn)), arg);
 }
+
 extern "C" void nvxnu_work_schedule(void *w)
 {
 	if (w)
 		thread_call_enter(static_cast<thread_call_t>(w));
 }
+
 extern "C" void nvxnu_work_cancel_wait(void *w)
 {
 	if (w)
 		thread_call_cancel_wait(static_cast<thread_call_t>(w));
 }
+
 extern "C" void nvxnu_work_schedule_after(void *w, nvxnu_u64 ns)
 {
 	uint64_t interval, deadline;
@@ -490,6 +512,7 @@ extern "C" void nvxnu_work_schedule_after(void *w, nvxnu_u64 ns)
 	if (w)
 		thread_call_enter_delayed(static_cast<thread_call_t>(w), deadline);
 }
+
 extern "C" void nvxnu_work_cancel(void *w)
 {
 	if (w)
@@ -501,6 +524,7 @@ extern "C" volatile void *nvxnu_ioremap(nvxnu_u64 pa, nvxnu_u64 size, int write_
 	vm_offset_t va = write_combined ? ml_io_map_wcomb(pa, size) : ml_io_map(pa, size);
 	return reinterpret_cast<volatile void *>(va);
 }
+
 extern "C" void nvxnu_iounmap(volatile void *va, nvxnu_u64 size)
 {
 	(void)va;
@@ -523,14 +547,17 @@ static void dcache_op(const void *va, nvxnu_u64 size, bool invalidate)
 	}
 	__asm__ volatile("dsb sy" ::: "memory");
 }
+
 extern "C" void nvxnu_dcache_clean(const void *va, nvxnu_u64 size)
 {
 	dcache_op(va, size, false);
 }
+
 extern "C" void nvxnu_dcache_clean_inval(const void *va, nvxnu_u64 size)
 {
 	dcache_op(va, size, true);
 }
+
 // Pages outside the kernel's RAM (device memory a task mapped) have no cacheable alias to maintain.
 extern "C" void nvxnu_dcache_clean_inval_pa(nvxnu_u64 pa, nvxnu_u64 size)
 {
@@ -632,14 +659,17 @@ extern "C" int nvxnu_pool_init(int *zeroed)
 	*zeroed = 1;
 	return 0;
 }
+
 extern "C" nvxnu_u64 nvxnu_pool_base_pa(void)
 {
 	return pool.pa;
 }
+
 extern "C" nvxnu_u64 nvxnu_pool_size(void)
 {
 	return pool.size;
 }
+
 extern "C" void *nvxnu_pool_base_va(void)
 {
 	return pool.va;
@@ -651,6 +681,7 @@ struct nvxnu_vmapping {
 	IOMemoryMap *map;
 	void *va;
 };
+
 static nvxnu_vmapping *vmaps;
 static IOLock *vmaps_lock;
 
@@ -716,6 +747,7 @@ struct nvxnu_fw_entry {
 	const char *name;
 	const unsigned char *start, *end;
 };
+
 extern "C" const nvxnu_fw_entry tegra_gm20b_firmware[];
 
 extern "C" int nvxnu_firmware_find(const char *name, const void **data, unsigned long *size)

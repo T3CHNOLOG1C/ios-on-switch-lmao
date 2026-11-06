@@ -950,6 +950,7 @@ int clk_register_clkdev(struct clk *clk, const char *con_id, const char *dev_fmt
 }
 
 void tegra_clk_debugfs_add(struct clk *clk);
+
 void tegra_clk_debugfs_add(struct clk *clk)
 {
 }

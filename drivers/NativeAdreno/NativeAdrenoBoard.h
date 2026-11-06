@@ -16,7 +16,11 @@ struct NativeAdrenoWindow {
     uint64_t base;
     uint64_t bytes;
 };
-enum { NativeAdrenoMaxWindows = 8 };
+
+enum {
+    NativeAdrenoMaxWindows = 8
+};
+
 class NativeAdrenoBoard final {
     NativeAdrenoBoard() = delete;
 

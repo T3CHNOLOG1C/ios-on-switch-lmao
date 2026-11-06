@@ -17,15 +17,35 @@ class IOWatchdog : public IOService {
 protected:
     // 0xa9: IOKit quiesce monitoring on (what watchdogd's method 9 reports; then it waits 60 s for a quiet registry and
     // the kernel panics on timeout). The start sets it from gIOKitDebug's kIOWaitQuietPanics, on by default.
-    void clearIOKitMonitoring() { original_[0xa9 - 0x88] = 0; }
+    void clearIOKitMonitoring()
+    {
+        original_[0xa9 - 0x88] = 0;
+    }
+
     // The check-in state the original's check and watchdogd's methods share, under the spinlock at 0xa0 (lck_spin with
     // interrupts off, as they take it). 0xa8: userspace monitoring on (methods 3/4 turn it off/on around system sleep).
     // 0xc8: the check-in deadline (mach_absolute_time): start +600 s, each check-in (method 1) and re-enable (method 4)
     // now +90 s, method 3 clears it.
-    IOSimpleLock *checkinLock() const { return load<IOSimpleLock *>(0xa0); }
-    bool userspaceMonitoring() const { return original_[0xa8 - 0x88] != 0; }
-    void setUserspaceMonitoring(bool on) { original_[0xa8 - 0x88] = on; }  // as methods 3/4 do, under the lock
-    uint64_t checkinDeadline() const { return load<uint64_t>(0xc8); }
+    IOSimpleLock *checkinLock() const
+    {
+        return load<IOSimpleLock *>(0xa0);
+    }
+
+    bool userspaceMonitoring() const
+    {
+        return original_[0xa8 - 0x88] != 0;
+    }
+
+    void setUserspaceMonitoring(bool on)
+    {
+        original_[0xa8 - 0x88] = on;
+    }  // as methods 3/4 do, under the lock
+
+    uint64_t checkinDeadline() const
+    {
+        return load<uint64_t>(0xc8);
+    }
+
     void setCheckinDeadline(uint64_t deadline)
     {
         __builtin_memcpy(&original_[0xc8 - 0x88], &deadline, sizeof(deadline));
@@ -47,6 +67,7 @@ public:
     virtual void disableWatchdog() = 0;  // slot 169: called by stop
     virtual void petWatchdog() = 0;      // slot 170: AppleARMWatchdogTimer pets from its own interrupt
 };
+
 static_assert(sizeof(IOService) == 0x88 && sizeof(IOWatchdog) == 0xf8, "Pinned original IOWatchdog extent");
 
 extern "C" {

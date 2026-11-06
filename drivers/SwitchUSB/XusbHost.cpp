@@ -26,12 +26,14 @@ enum : uint32_t {  // clock and reset controller
     CLK_SOURCE_XUSB_FS = 0x608,
     CLK_SOURCE_XUSB_SS = 0x610,
 };
+
 enum : uint32_t {
     U_XUSB_HOST = 1u << 25,
     W_XUSB_PADCTL = 1u << 14,
     W_XUSB = 1u << 15,
     W_XUSB_SS = 1u << 28,
 };
+
 enum : uint32_t {  // PMC (from 0x7000E400)
     PWRGATE_TOGGLE = 0x30,
     REMOVE_CLAMPING = 0x34,
@@ -41,7 +43,10 @@ enum : uint32_t {  // PMC (from 0x7000E400)
     PART_XUSBA = 20,
     PART_XUSBC = 22,
 };
-enum : uint32_t { MC_SMMU_XUSB_HOST_ASID = 0x288 };  // next to XUSB_DEV's 0x28c (XudcHardware.cpp)
+
+enum : uint32_t {
+    MC_SMMU_XUSB_HOST_ASID = 0x288
+};  // next to XUSB_DEV's 0x28c (XudcHardware.cpp)
 
 enum : uint32_t {  // FPCI configuration space of the host (xhci-tegra.c)
     XUSB_CFG_1 = 0x004,
@@ -67,6 +72,7 @@ enum : uint32_t {  // FPCI configuration space of the host (xhci-tegra.c)
     SMI_INTR_FW_HANG = 1u << 1,
     SMI_INTR_EN = 1u << 3,
 };
+
 enum : uint32_t {  // IPFS
     IPFS_MSI_EN_VEC0 = 0x140,
     IPFS_CONFIGURATION = 0x180,
@@ -76,6 +82,7 @@ enum : uint32_t {  // IPFS
     IPFS_EN_FPCI = 1u << 0,
     IPFS_IP_INT_MASK = 1u << 16,
 };
+
 enum : uint32_t {  // falcon and its memory pool, through the CSB window (xhci-tegra.c)
     FALC_CPUCTL = 0x100,
     FALC_BOOTVEC = 0x104,
@@ -96,6 +103,7 @@ enum : uint32_t {  // falcon and its memory pool, through the CSB window (xhci-t
     L2IMEMOP_RESULT_VLD = 1u << 31,
     IMEM_BLOCK = 256,
 };
+
 enum : uint32_t {  // XUSB pad controller (xusb-tegra210.c); port 0's role registers are XusbPorts.h's
     USB2_PAD_MUX = 0x004,
     SS_PORT_MAP = 0x014,
@@ -125,7 +133,8 @@ xudc::DmaBuffer gFirmware;
 bool Controller::waitBits(volatile uint8_t *b, uint32_t o, uint32_t mask, uint32_t value, uint32_t us)
 {
     for (uint32_t i = 0; i <= us; ++i) {
-        if ((r(b, o) & mask) == value) return true;
+        if ((r(b, o) & mask) == value)
+            return true;
         IODelay(1);
     }
     return false;
@@ -135,6 +144,7 @@ uint32_t Controller::pmc(uint32_t o) const
 {
     return r(pmcPage, kPmcOffset + o);
 }
+
 void Controller::pmcWrite(uint32_t o, uint32_t v)
 {
     w(pmcPage, kPmcOffset + o, v);
@@ -142,7 +152,8 @@ void Controller::pmcWrite(uint32_t o, uint32_t v)
 
 bool Controller::map()
 {
-    if (isMapped) return true;
+    if (isMapped)
+        return true;
     car = (volatile uint8_t *)ml_io_map(kCarPA, 0x1000);
     pmcPage = (volatile uint8_t *)ml_io_map(kPmcPagePA, 0x1000);
     fusePage = (volatile uint8_t *)ml_io_map(kFusePagePA, 0x1000);
@@ -172,9 +183,11 @@ bool Controller::powerUp(uint32_t partition, uint32_t clockSet, uint32_t resetSe
         return true;
     }
     w(car, resetSet, bit);
-    if (!waitBits(pmcPage, kPmcOffset + PWRGATE_TOGGLE, TOGGLE_START, 0, 5000)) return false;
+    if (!waitBits(pmcPage, kPmcOffset + PWRGATE_TOGGLE, TOGGLE_START, 0, 5000))
+        return false;
     pmcWrite(PWRGATE_TOGGLE, partition | TOGGLE_START);
-    if (!waitBits(pmcPage, kPmcOffset + PWRGATE_STATUS, 1u << partition, 1u << partition, 5000)) return false;
+    if (!waitBits(pmcPage, kPmcOffset + PWRGATE_STATUS, 1u << partition, 1u << partition, 5000))
+        return false;
     IODelay(10);
     w(car, clockSet, bit);
     IODelay(10);
@@ -243,6 +256,7 @@ uint32_t Controller::csbRead(uint32_t offset)
     w(fpci, XUSB_CFG_ARU_C11_CSBRANGE, (offset >> 9) & 0x7fffff);
     return r(fpci, XUSB_CFG_CSB_BASE_ADDR + (offset & 0x1ff));
 }
+
 void Controller::csbWrite(uint32_t offset, uint32_t value)
 {
     w(fpci, XUSB_CFG_ARU_C11_CSBRANGE, (offset >> 9) & 0x7fffff);
@@ -254,7 +268,8 @@ void Controller::csbWrite(uint32_t offset, uint32_t value)
 // firmware (we never reset it after this).
 bool Controller::loadFirmware(const uint8_t *image, size_t size, char *why, size_t whySize)
 {
-    if (csbRead(CSB_MP_ILOAD_BASE_LO) != 0) return true;
+    if (csbRead(CSB_MP_ILOAD_BASE_LO) != 0)
+        return true;
     uint32_t length = size >= kFwHeader ? le32(image + kFwLength) : 0;
     if (length < kFwHeader || length > size) {
         snprintf(why, whySize, "XUSB firmware header says %u bytes, the image has %zu", length, size);
@@ -283,7 +298,8 @@ bool Controller::loadFirmware(const uint8_t *image, size_t size, char *why, size
     bool loaded = false;
     for (int i = 0; i < 200 && !loaded; ++i) {  // Linux: 10 ms in 50 us steps
         loaded = csbRead(CSB_MP_L2IMEMOP_RESULT) & L2IMEMOP_RESULT_VLD;
-        if (!loaded) IODelay(50);
+        if (!loaded)
+            IODelay(50);
     }
     if (!loaded) {
         snprintf(why, whySize, "falcon DMA not ready (L2IMEMOP_RESULT %#x)", csbRead(CSB_MP_L2IMEMOP_RESULT));
@@ -292,7 +308,8 @@ bool Controller::loadFirmware(const uint8_t *image, size_t size, char *why, size
     csbWrite(FALC_BOOTVEC, codeTag);
     csbWrite(FALC_CPUCTL, CPUCTL_STARTCPU);
     const uint32_t usbsts = capLength() + 0x04;
-    for (int i = 0; i < 200 && (xhci(usbsts) & (1u << 11)); ++i) IOSleep(1);  // STS_CNR, Linux: 200 ms
+    for (int i = 0; i < 200 && (xhci(usbsts) & (1u << 11)); ++i)
+        IOSleep(1);  // STS_CNR, Linux: 200 ms
     if (xhci(usbsts) & (1u << 11)) {
         snprintf(why, whySize, "xHCI not ready after the firmware started (USBSTS %#x, falcon CPUCTL %#x)",
                  xhci(usbsts), csbRead(FALC_CPUCTL));
@@ -338,7 +355,8 @@ uint32_t readCapability(void *context, uint32_t offset)
 
 unsigned Controller::otgPort()
 {
-    if (!isPowered) return 0;
+    if (!isPowered)
+        return 0;
     if (!usb2First) {
         const xhci_port_range usb2 = xhci_find_ports(&readCapability, (void *)regs, (uint32_t)kXhciBytes, 2);
         usb2First = usb2.first;
@@ -355,13 +373,15 @@ bool Controller::cyclePortPower(unsigned port, uint32_t trace[3])
     bool off = false, on = false;
     for (int i = 0; i < 100 && !off; ++i) {
         off = !(xhci(at) & XHCI_PORTSC_PP);
-        if (!off) IODelay(10);
+        if (!off)
+            IODelay(10);
     }
     trace[1] = xhci(at);
     w(regs, at, xhci_portsc_power(trace[1], true));
     for (int i = 0; i < 100 && !on; ++i) {
         on = xhci(at) & XHCI_PORTSC_PP;
-        if (!on) IODelay(10);
+        if (!on)
+            IODelay(10);
     }
     trace[2] = xhci(at);
     return off && on;
@@ -403,10 +423,12 @@ void Controller::describePorts(char *buffer, size_t size)
 bool Controller::takeMailboxInterrupt()
 {
     uint32_t smi = r(fpci, XUSB_CFG_ARU_SMI_INTR);
-    if (!(smi & (SMI_INTR_EN | SMI_INTR_FW_HANG))) return false;
+    if (!(smi & (SMI_INTR_EN | SMI_INTR_FW_HANG)))
+        return false;
     w(fpci, XUSB_CFG_ARU_SMI_INTR, smi);
     (void)r(fpci, XUSB_CFG_ARU_SMI_INTR);  // Linux reads again against a spurious ARU SMI
-    if (smi & SMI_INTR_FW_HANG) mailboxHang = true;
+    if (smi & SMI_INTR_FW_HANG)
+        mailboxHang = true;
     return true;
 }
 
@@ -421,15 +443,19 @@ bool Controller::sendMailbox(uint32_t cmd, uint32_t data)
 {
     const bool reply = cmd == MBOX_ACK || cmd == MBOX_NAK;
     if (!reply) {
-        if (r(fpci, XUSB_CFG_ARU_MBOX_OWNER) != MBOX_OWNER_NONE) return false;
+        if (r(fpci, XUSB_CFG_ARU_MBOX_OWNER) != MBOX_OWNER_NONE)
+            return false;
         w(fpci, XUSB_CFG_ARU_MBOX_OWNER, MBOX_OWNER_SW);
-        if (r(fpci, XUSB_CFG_ARU_MBOX_OWNER) != MBOX_OWNER_SW) return false;
+        if (r(fpci, XUSB_CFG_ARU_MBOX_OWNER) != MBOX_OWNER_SW)
+            return false;
     }
     w(fpci, XUSB_CFG_ARU_MBOX_DATA_IN, (cmd & 0xff) << 24 | (data & 0xffffff));
     rmw(fpci, XUSB_CFG_ARU_MBOX_CMD, 0, MBOX_INT_EN | MBOX_DEST_FALC);
-    if (reply) return true;
+    if (reply)
+        return true;
     for (int i = 0; i < 250; ++i) {
-        if (r(fpci, XUSB_CFG_ARU_MBOX_OWNER) == MBOX_OWNER_NONE) return true;
+        if (r(fpci, XUSB_CFG_ARU_MBOX_OWNER) == MBOX_OWNER_NONE)
+            return true;
         IOSleep(1);
     }
     return false;
@@ -440,7 +466,8 @@ bool Controller::sendMailbox(uint32_t cmd, uint32_t data)
 // context and LFPS detection are acknowledged as is, SET_BW needs no answer.
 bool Controller::serviceMailbox()
 {
-    if (mailboxHang) return false;
+    if (mailboxHang)
+        return false;
     uint32_t message = r(fpci, XUSB_CFG_ARU_MBOX_DATA_OUT), cmd = message >> 24, data = message & 0xffffff;
     rmw(fpci, XUSB_CFG_ARU_MBOX_CMD, MBOX_DEST_SMI, 0);
     if (cmd == MBOX_SET_BW || cmd == MBOX_ACK || cmd == MBOX_NAK) {
@@ -460,13 +487,15 @@ bool Controller::serviceMailbox()
     case MBOX_START_HSIC_IDLE:
     case MBOX_STOP_HSIC_IDLE:
     case MBOX_DISABLE_SS_LFPS_DETECTION:
-    case MBOX_ENABLE_SS_LFPS_DETECTION: break;
+    case MBOX_ENABLE_SS_LFPS_DETECTION:
+        break;
     default:
         IOLog("SwitchUSB: unknown XUSB falcon mailbox message %#x\n", message);
         reply = MBOX_NAK;
         break;
     }
-    if (!sendMailbox(reply, replyData)) IOLog("SwitchUSB: falcon mailbox reply %u to %u failed\n", reply, cmd);
+    if (!sendMailbox(reply, replyData))
+        IOLog("SwitchUSB: falcon mailbox reply %u to %u failed\n", reply, cmd);
     return true;
 }
 
@@ -491,7 +520,8 @@ void Controller::describe(char *buffer, size_t size) const
 
 bool Controller::interruptSample(uint32_t &iman, uint32_t &usbcmd, uint32_t &usbsts, uint32_t &erdp) const
 {
-    if (!isPowered) return false;
+    if (!isPowered)
+        return false;
     const uint32_t op = capLength(), rt = runtimeOffset();
     iman = xhci(rt + 0x20);
     usbcmd = xhci(op);

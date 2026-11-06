@@ -92,8 +92,10 @@ TEST(SwitchXudcSource, StatsLinesFitTheKernelsOsLogBuffer)
         std::string format;
         size_t i = at + 22;
         for (;;) {  // the adjacent string literals
-            while (i < source.size() && (source[i] == ' ' || source[i] == '\n')) ++i;
-            if (i >= source.size() || source[i] != '"') break;
+            while (i < source.size() && (source[i] == ' ' || source[i] == '\n'))
+                ++i;
+            if (i >= source.size() || source[i] != '"')
+                break;
             const size_t end = source.find('"', i + 1);
             format += source.substr(i + 1, end - i - 1);
             i = end + 1;
@@ -101,7 +103,8 @@ TEST(SwitchXudcSource, StatsLinesFitTheKernelsOsLogBuffer)
         size_t bytes = 2;
         for (size_t k = format.find('%'); k != std::string::npos; k = format.find('%', k + 1)) {
             size_t c = k + 1;
-            while (c < format.size() && std::string("0123456789#-+ .").find(format[c]) != std::string::npos) ++c;
+            while (c < format.size() && std::string("0123456789#-+ .").find(format[c]) != std::string::npos)
+                ++c;
             if (c < format.size() && format[c] == '%') {  // %%
                 k = c;
                 continue;
@@ -120,12 +123,13 @@ TEST(SwitchXudcSource, SleepPowersOnWholeBeforeTheBus)
 {
     const std::string source = SourceText("../SwitchXUDC.cpp");
     const std::string sleep = switch_ios::test::Between(source, "IOReturn SwitchXUDC::systemSleep(bool entering)",
-                                                      "void switchxudc_sleep(bool entering)");
+                                                        "void switchxudc_sleep(bool entering)");
     const size_t cancel = sleep.find("delivery->cancelTimeout();"), off = sleep.find("setBus(false);"),
                  masked = sleep.find("interrupt->disable();"), power = sleep.find("hw.powerOn(why, sizeof(why))"),
                  lift = sleep.find("liftFence();"), unmasked = sleep.find("interrupt->enable();"),
                  on = sleep.find("setBus(true);");
-    for (const size_t at : {cancel, off, masked, power, lift, unmasked, on}) ASSERT_NE(at, std::string::npos);
+    for (const size_t at : {cancel, off, masked, power, lift, unmasked, on})
+        ASSERT_NE(at, std::string::npos);
     EXPECT_LT(cancel, off);
     EXPECT_LT(off, masked);
     EXPECT_LT(masked, power);

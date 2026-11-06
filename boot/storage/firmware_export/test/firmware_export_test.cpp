@@ -47,18 +47,36 @@ protected:
     unsigned gd_reads = 0;
     switch_fw_reader reader{this, Copy};
 
-    void P16(uint64_t p, uint16_t v) { Put(p, v, 2); }
-    void P32(uint64_t p, uint32_t v) { Put(p, v, 4); }
-    void P64(uint64_t p, uint64_t v) { Put(p, v, 8); }
+    void P16(uint64_t p, uint16_t v)
+    {
+        Put(p, v, 2);
+    }
+
+    void P32(uint64_t p, uint32_t v)
+    {
+        Put(p, v, 4);
+    }
+
+    void P64(uint64_t p, uint64_t v)
+    {
+        Put(p, v, 8);
+    }
+
     void Put(uint64_t p, uint64_t v, unsigned width)
     {
-        for (unsigned i = 0; i < width; ++i) mem[p - GD + i] = (uint8_t)(v >> (8 * i));
+        for (unsigned i = 0; i < width; ++i)
+            mem[p - GD + i] = (uint8_t)(v >> (8 * i));
     }
+
     Bytes Get(uint64_t p, size_t n) const
     {
         return Bytes(mem.begin() + (long)(p - GD), mem.begin() + (long)(p - GD + n));
     }
-    void Set(uint64_t p, const Bytes &b) { std::copy(b.begin(), b.end(), mem.begin() + (long)(p - GD)); }
+
+    void Set(uint64_t p, const Bytes &b)
+    {
+        std::copy(b.begin(), b.end(), mem.begin() + (long)(p - GD));
+    }
 
     void SetUp() override
     {
@@ -80,7 +98,8 @@ protected:
         P64(MMC, PLAT), P32(MMC + 8, 0x80030000), P64(MMC + 0x10, PARENT);
         P32(MMC + 0x18, 1), P32(MMC + 0x1c, 1), P32(MMC + 0x20, 4), P32(MMC + 0x24, 48000000);
         P32(MMC + 0x2c, 0xc0ff8000), P32(MMC + 0x40, 0x40000000);
-        for (unsigned i = 0; i < 16; ++i) mem[MMC + 0x50 - GD + i] = (uint8_t)(i + 1);
+        for (unsigned i = 0; i < 16; ++i)
+            mem[MMC + 0x50 - GD + i] = (uint8_t)(i + 1);
         P16(MMC + 0x60, 0xabcd), P32(MMC + 0x6c, 512), P32(MMC + 0x70, 512), P64(MMC + 0xe0, PARENT);
         Capacity(CAPACITY);
     }
@@ -111,9 +130,11 @@ protected:
         self->accesses.push_back({p, n});
         if (p == GD) {
             ++self->gd_reads;
-            if (self->gd_reads == 2 && self->change_at_second) self->change_at_second();
+            if (self->gd_reads == 2 && self->change_at_second)
+                self->change_at_second();
         }
-        if (self->reject_at && p <= *self->reject_at && *self->reject_at < p + n) return 1;
+        if (self->reject_at && p <= *self->reject_at && *self->reject_at < p + n)
+            return 1;
         if (!(GD <= p && p <= END - n)) {
             ADD_FAILURE() << "out of fixture read " << std::hex << p;
             return 1;
@@ -126,7 +147,8 @@ protected:
     {
         Bytes out(256, 0xa5);
         EXPECT_EQ(switch_fw_capture(&reader, gd, out.data()), expected);
-        if (expected) EXPECT_EQ(out, Bytes(256, 0xa5)) << "failure wrote the record";
+        if (expected)
+            EXPECT_EQ(out, Bytes(256, 0xa5)) << "failure wrote the record";
         return out;
     }
 
@@ -145,7 +167,8 @@ protected:
 
 void Le(Bytes &b, size_t at, uint64_t v, unsigned width)
 {
-    for (unsigned i = 0; i < width; ++i) b[at + i] = (uint8_t)(v >> (8 * i));
+    for (unsigned i = 0; i < width; ++i)
+        b[at + i] = (uint8_t)(v >> (8 * i));
 }
 }  // namespace
 
@@ -154,15 +177,18 @@ TEST_F(FirmwareExport, ExactSuccessRecord)
     const Bytes out = RunCapture();
     Bytes expected(256, 0);
     const uint32_t words[8] = {0x4d435349, 1, 256, 1, 0x700b0000, 1, 512, 1};
-    for (unsigned i = 0; i < 8; ++i) Le(expected, 4 * i, words[i], 4);
+    for (unsigned i = 0; i < 8; ++i)
+        Le(expected, 4 * i, words[i], 4);
     Le(expected, 32, CAPACITY, 8);
     Le(expected, 40, CAPACITY * 512, 8);
     const uint32_t tail[4] = {0xc0ff8000, 0xabcd, 0x80030000, 0};
-    for (unsigned i = 0; i < 4; ++i) Le(expected, 48 + 4 * i, tail[i], 4);
+    for (unsigned i = 0; i < 4; ++i)
+        Le(expected, 48 + 4 * i, tail[i], 4);
     const Bytes card = Get(MMC + 0x40, 0x20);
     std::copy(card.begin(), card.end(), expected.begin() + 0x40);
     const uint64_t links[4] = {MMC, DESC, GD, BASE - 0x88110000};
-    for (unsigned i = 0; i < 4; ++i) Le(expected, 0x60 + 8 * i, links[i], 8);
+    for (unsigned i = 0; i < 4; ++i)
+        Le(expected, 0x60 + 8 * i, links[i], 8);
     uint8_t digest[CC_SHA256_DIGEST_LENGTH];
     CC_SHA256(Bl33().data(), (CC_LONG)Bl33().size(), digest);
     std::memcpy(&expected[0x80], digest, 32);
@@ -296,7 +322,8 @@ TEST_F(FirmwareExport, EveryReadCanFailWithoutOutput)
 {
     RunCapture();
     std::set<uint64_t> points;
-    for (auto [p, n] : accesses) points.insert(p);
+    for (auto [p, n] : accesses)
+        points.insert(p);
     for (uint64_t p : points) {
         SCOPED_TRACE(testing::Message() << std::hex << "failing the read at 0x" << p);
         reject_at = p;
@@ -309,12 +336,16 @@ TEST_F(FirmwareExport, EveryReadCanFailWithoutOutput)
 
 TEST_F(FirmwareExport, ChangedValidSnapshot)
 {
-    change_at_second = [this] { P16(MMC + 0x60, 0xabce); };
+    change_at_second = [this] {
+        P16(MMC + 0x60, 0xabce);
+    };
     RunCapture(10);
 }
 
 TEST_F(FirmwareExport, ChangedInvalidSnapshot)
 {
-    change_at_second = [this] { P32(MMC + 0x1c, 0); };
+    change_at_second = [this] {
+        P32(MMC + 0x1c, 0);
+    };
     RunCapture(8);
 }

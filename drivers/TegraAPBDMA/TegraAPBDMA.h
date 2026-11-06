@@ -31,6 +31,7 @@ enum : unsigned {
     TEGRA_APBDMA_REQ_UARTD = 19,
     TEGRA_APBDMA_REQ_I2C3 = 23,  // i2c@7000c500 dmas = <&apbdma 23>, <&apbdma 23> (rx, tx)
 };
+
 enum : unsigned {
     TEGRA_APBDMA_CH_UARTB_RX = 0,  // Joy-Con (R) rail
     TEGRA_APBDMA_CH_UARTC_RX = 1,  // Joy-Con (L) rail

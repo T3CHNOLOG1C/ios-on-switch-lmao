@@ -40,6 +40,7 @@
 
 namespace switchclk {
 constexpr uint64_t kCarPA = 0x60006000;
+
 enum : uint32_t {
     CCLK_BURST_POLICY = 0x020,
     SUPER_CCLK_DIVIDER = 0x024,
@@ -52,6 +53,7 @@ enum : uint32_t {
     SPARE_REG0 = 0x55c,
     PLLMB_BASE = 0x5e8,
 };
+
 constexpr uint32_t kPllBypass = 1u << 31, kPllEnable = 1u << 30, kPllLock = 1u << 27, kPllxLockEnable = 1u << 18;
 constexpr uint32_t kPllDividers = (0x1fu << 20) | (0xffu << 8) | 0xffu;
 constexpr unsigned kSourcePllp = 4, kSourcePllx = 8, kSourceDfll = 15;
@@ -60,6 +62,7 @@ constexpr unsigned kPllpKHz = 408000;
 constexpr unsigned kPmicBus = 5;
 constexpr uint8_t kMax77812Addresses[] = {0x33, 0x31};
 constexpr uint8_t kM4Vout = 0x26;
+
 inline unsigned voutMilliVolts(uint8_t code)
 {
     return 250u + 5u * code;
@@ -74,6 +77,7 @@ inline unsigned refKHz(volatile uint8_t *car)
 {
     return 38400u >> ((reg32(car, OSC_CTRL) >> 26) & 3);
 }
+
 inline unsigned clkmKHz(volatile uint8_t *car)
 {
     return 38400u / (((reg32(car, SPARE_REG0) >> 2) & 3) + 1);
@@ -90,10 +94,13 @@ inline unsigned qlinDivider(uint32_t base)
 // PLL output in kHz (0 when off or unreadable). `divnShift` is 8 for PLLX/PLLM/PLLMB and 10 for PLLC.
 inline unsigned pllKHz(uint32_t base, unsigned ref, unsigned divnShift, bool undivided)
 {
-    if (!(base & kPllEnable)) return 0;
-    if (base & kPllBypass) return ref;
+    if (!(base & kPllEnable))
+        return 0;
+    if (base & kPllBypass)
+        return ref;
     const uint32_t m = base & 0xff, n = (base >> divnShift) & 0xff, p = qlinDivider(base);
-    if (!m || !p) return 0;
+    if (!m || !p)
+        return 0;
     return (unsigned)((uint64_t)ref * n / m / (undivided ? 1 : p));
 }
 
@@ -115,7 +122,8 @@ inline Cpu readCpu(volatile uint8_t *car)
         kHz = kPllpKHz;
     else if (cpu.source == kSourcePllx)
         kHz = pllKHz(cpu.pllx, refKHz(car), 8, false);
-    if (cpu.divider & (1u << 31)) kHz = kHz * (((cpu.divider >> 8) & 0xff) + 1) / ((cpu.divider & 0xff) + 1);
+    if (cpu.divider & (1u << 31))
+        kHz = kHz * (((cpu.divider >> 8) & 0xff) + 1) / ((cpu.divider & 0xff) + 1);
     cpu.kHz = (unsigned)kHz;
     return cpu;
 }
@@ -141,14 +149,28 @@ inline Emc readEmc(volatile uint8_t *car)
     const unsigned ref = refKHz(car);
     unsigned parent = 0;
     switch (emc.source) {
-    case 0: parent = pllKHz(reg32(car, PLLM_BASE), ref, 8, false); break;
-    case 1: parent = pllKHz(reg32(car, PLLC_BASE), ref, 10, false); break;
+    case 0:
+        parent = pllKHz(reg32(car, PLLM_BASE), ref, 8, false);
+        break;
+    case 1:
+        parent = pllKHz(reg32(car, PLLC_BASE), ref, 10, false);
+        break;
     case 2:
-    case 7: parent = kPllpKHz; break;
-    case 3: parent = clkmKHz(car); break;
-    case 4: parent = pllKHz(reg32(car, PLLM_BASE), ref, 8, true); break;
-    case 5: parent = pllKHz(reg32(car, PLLMB_BASE), ref, 8, true); break;
-    case 6: parent = pllKHz(reg32(car, PLLMB_BASE), ref, 8, false); break;
+    case 7:
+        parent = kPllpKHz;
+        break;
+    case 3:
+        parent = clkmKHz(car);
+        break;
+    case 4:
+        parent = pllKHz(reg32(car, PLLM_BASE), ref, 8, true);
+        break;
+    case 5:
+        parent = pllKHz(reg32(car, PLLMB_BASE), ref, 8, true);
+        break;
+    case 6:
+        parent = pllKHz(reg32(car, PLLMB_BASE), ref, 8, false);
+        break;
     }
     emc.kHz = (unsigned)((uint64_t)parent * 2 / (emc.divider + 2));
     return emc;
@@ -168,18 +190,21 @@ inline int readCpuRail(uint8_t *address, uint8_t *vout)
     int err = tegra_i2c_init(kPmicBus);
     for (unsigned i = 0; !err && i < sizeof(kMax77812Addresses); ++i) {
         err = tegra_i2c_read(kPmicBus, kMax77812Addresses[i], kM4Vout, vout, 1);
-        if (err == TEGRA_I2C_EARB) err = tegra_i2c_read(kPmicBus, kMax77812Addresses[i], kM4Vout, vout, 1);
+        if (err == TEGRA_I2C_EARB)
+            err = tegra_i2c_read(kPmicBus, kMax77812Addresses[i], kM4Vout, vout, 1);
         if (!err) {
             // Only a MAX77812 with its CPU output (M4, EN_CTRL 0x06 bit 6, hekate max77812.h) on and a VDD_CPU code inside
             // hekate's CPU range (600..1525 mV) is VDD_CPU: anything else at that address is never written.
             uint8_t enable = 0;
             int checked = tegra_i2c_read(kPmicBus, kMax77812Addresses[i], 0x06, &enable, 1);
             const unsigned mv = voutMilliVolts(*vout);
-            if (checked || !(enable & (1u << 6)) || mv < 600 || mv > 1525) return TEGRA_I2C_ENACK;
+            if (checked || !(enable & (1u << 6)) || mv < 600 || mv > 1525)
+                return TEGRA_I2C_ENACK;
             *address = kMax77812Addresses[i];
             return 0;
         }
-        if (err == TEGRA_I2C_ENACK && i + 1 < sizeof(kMax77812Addresses)) err = 0;
+        if (err == TEGRA_I2C_ENACK && i + 1 < sizeof(kMax77812Addresses))
+            err = 0;
     }
     return err ? err : TEGRA_I2C_ENACK;
 }

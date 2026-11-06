@@ -33,10 +33,29 @@ constexpr IOReturn kIOReturnNotReady = (IOReturn)0xe00002d8;
 
 // --- Time and the event queue ---------------------------------------------------------------------------------------
 inline uint64_t gNow = 0;
-inline uint64_t mach_absolute_time() { return gNow; }
-inline void absolutetime_to_nanoseconds(uint64_t abs, uint64_t *ns) { *ns = abs; }
-inline void nanoseconds_to_absolutetime(uint64_t ns, uint64_t *abs) { *abs = ns; }
-enum { kNanosecondScale = 1, kMicrosecondScale = 1000, kMillisecondScale = 1000000, kSecondScale = 1000000000 };
+
+inline uint64_t mach_absolute_time()
+{
+    return gNow;
+}
+
+inline void absolutetime_to_nanoseconds(uint64_t abs, uint64_t *ns)
+{
+    *ns = abs;
+}
+
+inline void nanoseconds_to_absolutetime(uint64_t ns, uint64_t *abs)
+{
+    *abs = ns;
+}
+
+enum {
+    kNanosecondScale = 1,
+    kMicrosecondScale = 1000,
+    kMillisecondScale = 1000000,
+    kSecondScale = 1000000000
+};
+
 inline void clock_interval_to_deadline(uint32_t interval, uint32_t scale, uint64_t *deadline)
 {
     *deadline = gNow + (uint64_t)interval * scale;
@@ -45,40 +64,59 @@ inline void clock_interval_to_deadline(uint32_t interval, uint32_t scale, uint64
 // The harness's scheduler: runs `what` at `when` (never before gNow). gRunUntil runs every event due by `until` in time
 // order and leaves gNow there; it returns early (true) once `stop` says so.
 inline std::multimap<uint64_t, std::function<void()>> gQueue;
+
 inline void gSchedule(uint64_t when, std::function<void()> what)
 {
     gQueue.emplace(when < gNow ? gNow : when, std::move(what));
 }
+
 inline std::function<void()> gAfterEvent;  // the harness's line checks after each event (interrupt delivery)
+
 inline bool gRunUntil(uint64_t until, const std::function<bool()> &stop = nullptr)
 {
     for (;;) {
-        if (gAfterEvent) gAfterEvent();  // a register write may have raised a line since the last event
-        if (stop && stop()) return true;
+        if (gAfterEvent)
+            gAfterEvent();  // a register write may have raised a line since the last event
+        if (stop && stop())
+            return true;
         auto first = gQueue.begin();
-        if (first == gQueue.end() || first->first > until) break;
+        if (first == gQueue.end() || first->first > until)
+            break;
         gNow = first->first;
         auto what = std::move(first->second);
         gQueue.erase(first);
         what();
-        if (gAfterEvent) gAfterEvent();
+        if (gAfterEvent)
+            gAfterEvent();
     }
-    if (until > gNow) gNow = until;
+    if (until > gNow)
+        gNow = until;
     return stop && stop();
 }
-inline void IODelay(unsigned us) { gRunUntil(gNow + us * 1000ull); }
-inline void IOSleep(unsigned ms) { gRunUntil(gNow + ms * 1000000ull); }
+
+inline void IODelay(unsigned us)
+{
+    gRunUntil(gNow + us * 1000ull);
+}
+
+inline void IOSleep(unsigned ms)
+{
+    gRunUntil(gNow + ms * 1000000ull);
+}
 
 // --- Logs and panics ------------------------------------------------------------------------------------------------
 inline std::vector<std::string> gLog;
+
 inline void stubLog(const char *channel, const char *format, va_list ap)
 {
     char line[2048];
     vsnprintf(line, sizeof(line), format, ap);
     std::string text = std::string(channel) + line;
-    if (!text.empty() && text.back() == '\n') text.pop_back();
+    if (!text.empty() && text.back() == '\n')
+        text.pop_back();
     gLog.push_back(text);
 }
+
 __attribute__((format(printf, 1, 2))) inline void IOLog(const char *format, ...)
 {
     va_list ap;
@@ -86,6 +124,7 @@ __attribute__((format(printf, 1, 2))) inline void IOLog(const char *format, ...)
     stubLog("IOLog: ", format, ap);
     va_end(ap);
 }
+
 __attribute__((format(printf, 1, 2))) inline void stubOsLog(const char *format, ...)
 {
     va_list ap;
@@ -93,12 +132,14 @@ __attribute__((format(printf, 1, 2))) inline void stubOsLog(const char *format, 
     stubLog("os_log: ", format, ap);
     va_end(ap);
 }
-#define OS_LOG_DEFAULT nullptr
+
+#define OS_LOG_DEFAULT   nullptr
 #define os_log(log, ...) stubOsLog(__VA_ARGS__)
 
 struct Panic : std::runtime_error {
     using std::runtime_error::runtime_error;
 };
+
 [[noreturn]] __attribute__((format(printf, 1, 2))) inline void panic(const char *format, ...)
 {
     char line[2048];
@@ -109,18 +150,28 @@ struct Panic : std::runtime_error {
     throw Panic(line);
 }
 
-inline bool PE_parse_boot_argn(const char *, void *, int) { return false; }
-inline bool PE_parse_boot_arg_str(const char *, char *, int) { return false; }
+inline bool PE_parse_boot_argn(const char *, void *, int)
+{
+    return false;
+}
+
+inline bool PE_parse_boot_arg_str(const char *, char *, int)
+{
+    return false;
+}
 
 inline bool OSCompareAndSwapPtr(void *oldValue, void *newValue, void *volatile *address)
 {
-    if (*address != oldValue) return false;
+    if (*address != oldValue)
+        return false;
     *address = newValue;
     return true;
 }
+
 template <typename T> inline bool OSCompareAndSwapPtr(void *oldValue, T *newValue, T *volatile *address)
 {
-    if (*address != oldValue) return false;
+    if (*address != oldValue)
+        return false;
     *address = newValue;
     return true;
 }
@@ -128,7 +179,7 @@ template <typename T> inline bool OSCompareAndSwapPtr(void *oldValue, T *newValu
 // --- Objects ----------------------------------------------------------------------------------------------------
 #define OSDeclareDefaultStructors(cls)
 #define OSDefineMetaClassAndStructors(cls, super)
-#define OSTypeAlloc(cls) (new cls)
+#define OSTypeAlloc(cls)        (new cls)
 #define OSDynamicCast(cls, obj) dynamic_cast<cls *>(obj)
 #define OSSafeReleaseNULL(obj) \
     do {                       \
@@ -143,8 +194,15 @@ class OSObject {
 
 public:
     virtual ~OSObject() = default;
-    virtual void free() {}
-    void retain() { ++refs; }
+
+    virtual void free()
+    {}
+
+    void retain()
+    {
+        ++refs;
+    }
+
     void release()
     {
         if (--refs == 0) {
@@ -157,15 +215,27 @@ public:
 class IOService : public OSObject {
 public:
     IOService *provider = nullptr;
-    virtual bool init() { return true; }
-    virtual bool start(IOService *) { return true; }
-    void free() override {}
+
+    virtual bool init()
+    {
+        return true;
+    }
+
+    virtual bool start(IOService *)
+    {
+        return true;
+    }
+
+    void free() override
+    {}
+
     bool attach(IOService *to)
     {
         provider = to;
         retain();
         return true;
     }
+
     static IOService *getResourceService()
     {
         static IOService *resources = new IOService;
@@ -177,16 +247,37 @@ class IOEventSource : public OSObject {
 public:
     OSObject *owner = nullptr;
     bool enabled = false;
-    virtual void enable() { enabled = true; }
-    virtual void disable() { enabled = false; }
+
+    virtual void enable()
+    {
+        enabled = true;
+    }
+
+    virtual void disable()
+    {
+        enabled = false;
+    }
 };
 
 class IOWorkLoop : public OSObject {
 public:
     typedef IOReturn (*Action)(OSObject *target, void *arg0, void *arg1, void *arg2, void *arg3);
-    static IOWorkLoop *workLoop() { return new IOWorkLoop; }
-    IOReturn addEventSource(IOEventSource *) { return kIOReturnSuccess; }
-    IOReturn removeEventSource(IOEventSource *) { return kIOReturnSuccess; }
+
+    static IOWorkLoop *workLoop()
+    {
+        return new IOWorkLoop;
+    }
+
+    IOReturn addEventSource(IOEventSource *)
+    {
+        return kIOReturnSuccess;
+    }
+
+    IOReturn removeEventSource(IOEventSource *)
+    {
+        return kIOReturnSuccess;
+    }
+
     IOReturn runAction(Action action, OSObject *target, void *a0 = nullptr, void *a1 = nullptr, void *a2 = nullptr,
                        void *a3 = nullptr)
     {
@@ -198,6 +289,7 @@ public:
 // the work loop's latency); a provider-less one is software-triggered: interruptOccurred() runs its action on the work
 // loop gWorkLoopUs later, as IOInterruptEventSource::normalInterruptOccurred's signal would.
 inline uint64_t gWorkLoopNs = 40000;  // primary interrupt to work-loop action (r7z display stats: fe-late 35-47 us)
+
 class IOInterruptEventSource : public IOEventSource {
 public:
     typedef void (*Action)(OSObject *owner, IOInterruptEventSource *sender, int count);
@@ -205,8 +297,9 @@ public:
     IOService *provider = nullptr;
     unsigned actions = 0;
     static inline std::vector<IOInterruptEventSource *> all;
+
     static IOInterruptEventSource *interruptEventSource(OSObject *owner, Action action, IOService *provider = nullptr,
-                                                       int = 0)
+                                                        int = 0)
     {
         auto *source = new IOInterruptEventSource;
         source->owner = owner;
@@ -215,15 +308,18 @@ public:
         all.push_back(source);
         return source;
     }
+
     void run()
     {
         ++actions;
         action(owner, this, 1);
     }
+
     void interruptOccurred(void *, IOService *, int)
     {
         gSchedule(gNow + gWorkLoopNs, [this] {
-            if (enabled) run();
+            if (enabled)
+                run();
         });
     }
 };
@@ -233,8 +329,9 @@ public:
     typedef bool (*Filter)(OSObject *owner, IOFilterInterruptEventSource *sender);
     Filter filter = nullptr;
     static inline std::vector<IOFilterInterruptEventSource *> filters;
+
     static IOFilterInterruptEventSource *filterInterruptEventSource(OSObject *owner, Action action, Filter filter,
-                                                                   IOService *provider = nullptr, int = 0)
+                                                                    IOService *provider = nullptr, int = 0)
     {
         auto *source = new IOFilterInterruptEventSource;
         source->owner = owner;
@@ -253,6 +350,7 @@ public:
     bool armed = false;
     uint32_t ms = 0;
     static inline IOTimerEventSource *last = nullptr;
+
     static IOTimerEventSource *timerEventSource(OSObject *owner, Action action)
     {
         auto *source = new IOTimerEventSource;
@@ -261,47 +359,75 @@ public:
         last = source;
         return source;
     }
+
     IOReturn setTimeoutMS(uint32_t timeout)
     {
         armed = true;
         ms = timeout;
         return kIOReturnSuccess;
     }
-    void cancelTimeout() { armed = false; }
+
+    void cancelTimeout()
+    {
+        armed = false;
+    }
 };
 
 // --- Locks ------------------------------------------------------------------------------------------------------
 // A non-recursive lock (a second holder fails the test). Sleep releases it while the queue runs; a wakeup reaches the
 // sleeper gWakeNs later (the scheduler's thread wake).
-enum { THREAD_UNINT = 0, THREAD_AWAKENED = 0, THREAD_TIMED_OUT = 1 };
+enum {
+    THREAD_UNINT = 0,
+    THREAD_AWAKENED = 0,
+    THREAD_TIMED_OUT = 1
+};
+
 inline uint64_t gWakeNs = 30000;
+
 struct IOLock {
     bool held = false;
 };
+
 inline std::map<void *, uint64_t> gWakeups;  // event -> when its sleeper runs again
-inline IOLock *IOLockAlloc() { return new IOLock; }
-inline void IOLockFree(IOLock *lock) { delete lock; }
+
+inline IOLock *IOLockAlloc()
+{
+    return new IOLock;
+}
+
+inline void IOLockFree(IOLock *lock)
+{
+    delete lock;
+}
+
 inline void IOLockLock(IOLock *lock)
 {
-    if (lock->held) throw std::logic_error("IOLockLock: already held (deadlock)");
+    if (lock->held)
+        throw std::logic_error("IOLockLock: already held (deadlock)");
     lock->held = true;
 }
+
 inline bool IOLockTryLock(IOLock *lock)
 {
-    if (lock->held) return false;
+    if (lock->held)
+        return false;
     lock->held = true;
     return true;
 }
+
 inline void IOLockUnlock(IOLock *lock)
 {
-    if (!lock->held) throw std::logic_error("IOLockUnlock: not held");
+    if (!lock->held)
+        throw std::logic_error("IOLockUnlock: not held");
     lock->held = false;
 }
+
 inline void IOLockWakeup(IOLock *, void *event, bool)
 {
     gWakeups[event] = gNow + gWakeNs;
     gSchedule(gNow + gWakeNs, [] {});  // the sleeper's turn is an event of its own
 }
+
 inline int IOLockSleepDeadline(IOLock *lock, void *event, uint64_t deadline, uint32_t)
 {
     IOLockUnlock(lock);
@@ -310,7 +436,8 @@ inline int IOLockSleepDeadline(IOLock *lock, void *event, uint64_t deadline, uin
         auto it = gWakeups.find(event);
         return it != gWakeups.end() && it->second <= gNow;
     });
-    if (woken) gWakeups.erase(event);
+    if (woken)
+        gWakeups.erase(event);
     IOLockLock(lock);
     return woken ? THREAD_AWAKENED : THREAD_TIMED_OUT;
 }

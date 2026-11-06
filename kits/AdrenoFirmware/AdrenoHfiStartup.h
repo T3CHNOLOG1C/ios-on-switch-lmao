@@ -10,6 +10,7 @@ typedef struct {
     uint64_t hz;
     uint32_t vote;
 } AdrenoHfiPerformanceLevel;
+
 typedef struct {
     unsigned gpu_count, gmu_count;
     AdrenoHfiPerformanceLevel gpu[16], gmu[4];
@@ -20,6 +21,7 @@ typedef struct {
     uint32_t acd_version, acd_enable_mask, acd_stride, acd_count, acd_data[32];
     unsigned enable_ifpc;
 } AdrenoHfiStartupConfig;
+
 typedef enum {
     AdrenoHfiStageNone,
     AdrenoHfiStagePerformance,
@@ -31,6 +33,7 @@ typedef enum {
     AdrenoHfiStageStart,
     AdrenoHfiStageComplete
 } AdrenoHfiStartupStage;
+
 typedef enum {
     AdrenoHfiStartupSuccess,
     AdrenoHfiStartupInvalid,
@@ -42,6 +45,7 @@ typedef enum {
     AdrenoHfiStartupPlatformFault,
     AdrenoHfiStartupTransportError
 } AdrenoHfiStartupStatus;
+
 typedef struct {
     void *cookie;
     int (*now_us)(void *, uint64_t *);
@@ -50,9 +54,11 @@ typedef struct {
     unsigned polls_per_command, wait_interval_us;
     uint64_t command_timeout_us, total_timeout_us;
 } AdrenoHfiStartupServices;
+
 typedef struct {
     unsigned attempted, poisoned, completed;
 } AdrenoHfiStartup;
+
 typedef struct {
     AdrenoHfiStartupStage stage;
     AdrenoHfiStatus transport_status;
@@ -60,6 +66,7 @@ typedef struct {
     unsigned published_commands, poll_reads, resources_must_retain;
     uint64_t elapsed_us;
 } AdrenoHfiStartupResult;
+
 /* Validate every input before any queue publication. Frequencies include the
  * zero/off entry, are strictly ascending, exactly representable in wire kHz.
  * Votes and command-db addresses are trusted platform inputs, never guessed

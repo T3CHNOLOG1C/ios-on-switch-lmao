@@ -23,6 +23,7 @@
 extern "C" void mock_iokit_report(void);
 extern "C" void pushcount_report(const char *what);
 static uint32_t gSlots = getenv("PROBE_SLOTS") ? atoi(getenv("PROBE_SLOTS")) : 8;
+
 static void missing(const char *cls, const char *sel)
 {
     fprintf(stderr, "MISSING -[%s %s]\n", cls, sel);
@@ -34,18 +35,22 @@ static std::vector<std::string> split(const std::string &s)
     size_t at = 0;
     while (at < s.size()) {
         size_t e = s.find(' ', at);
-        if (e == std::string::npos) e = s.size();
-        if (e > at) out.push_back(s.substr(at, e - at));
+        if (e == std::string::npos)
+            e = s.size();
+        if (e > at)
+            out.push_back(s.substr(at, e - at));
         at = e + 1;
     }
     return out;
 }
+
 static MTLFunctionConstantValues *constants(const std::vector<std::string> &items)
 {
     MTLFunctionConstantValues *v = [MTLFunctionConstantValues new];
     for (const std::string &item : items) {
         size_t a = item.rfind(':'), b = a == std::string::npos ? a : item.rfind(':', a - 1);
-        if (a == std::string::npos || b == std::string::npos) continue;
+        if (a == std::string::npos || b == std::string::npos)
+            continue;
         std::string name = item.substr(0, b), type = item.substr(b + 1, a - b - 1), hex = item.substr(a + 1);
         uint8_t bytes[64] = {};
         for (size_t i = 0; i + 1 < hex.size() && i / 2 < sizeof bytes; i += 2)
@@ -59,25 +64,31 @@ static MTLFunctionConstantValues *constants(const std::vector<std::string> &item
     }
     return v;
 }
+
 static id<MTLFunction> function(id<MTLLibrary> qc, const std::vector<std::string> &stage)
 {
-    if (stage.empty() || stage[0] == "-") return nil;
-    if (stage.size() == 1) return [qc newFunctionWithName:@(stage[0].c_str())];
+    if (stage.empty() || stage[0] == "-")
+        return nil;
+    if (stage.size() == 1)
+        return [qc newFunctionWithName:@(stage[0].c_str())];
     NSError *e = nil;
     return [qc newFunctionWithName:@(stage[0].c_str())
                     constantValues:constants(std::vector<std::string>(stage.begin() + 1, stage.end()))
                              error:&e];
 }
+
 struct State {
     std::string key, label;
     MTLRenderPipelineDescriptor *d;
     unsigned vertexBuffer = 99, vertexStride = 0;
 };
+
 // precompile.mm's R-line parser (the frontend's journal format), key = every descriptor field but the label.
 static bool parseState(id<MTLLibrary> qc, const std::string &line, State &s)
 {
     size_t bar1 = line.find(" | v "), bar2 = line.find(" | f "), bar3 = line.find(" | ", bar2 + 5);
-    if (bar1 == std::string::npos || bar2 == std::string::npos) return false;
+    if (bar1 == std::string::npos || bar2 == std::string::npos)
+        return false;
     std::vector<std::string> head = split(line.substr(0, bar1));
     std::vector<std::string> v = split(line.substr(bar1 + 5, bar2 - bar1 - 5));
     std::vector<std::string> f =
@@ -88,7 +99,8 @@ static bool parseState(id<MTLLibrary> qc, const std::string &line, State &s)
     for (const std::string &h : head) {
         if (h.rfind("label=", 0) == 0) {
             s.label = h.substr(6);
-            if (s.label != "-") d.label = @(s.label.c_str());
+            if (s.label != "-")
+                d.label = @(s.label.c_str());
         } else if (h.rfind("samples=", 0) == 0)
             d.rasterSampleCount = strtoul(h.c_str() + 8, nullptr, 10);
         else if (h.rfind("topo=", 0) == 0)
@@ -119,7 +131,8 @@ static bool parseState(id<MTLLibrary> qc, const std::string &line, State &s)
             if (sscanf(h.c_str(), "a%u=%u:%u:%u:%u:%u:%u", &i, x, x + 1, x + 2, x + 3, x + 4, x + 5) != 7 || i >= 31 ||
                 x[2] >= 31)
                 continue;
-            if (!vd) vd = [MTLVertexDescriptor vertexDescriptor];
+            if (!vd)
+                vd = [MTLVertexDescriptor vertexDescriptor];
             vd.attributes[i].format = (MTLVertexFormat)x[0];
             vd.attributes[i].offset = x[1];
             vd.attributes[i].bufferIndex = x[2];
@@ -130,16 +143,19 @@ static bool parseState(id<MTLLibrary> qc, const std::string &line, State &s)
             s.vertexStride = x[3];
         } else
             continue;
-        if (h.rfind("label=", 0) != 0) key += h + " ";
+        if (h.rfind("label=", 0) != 0)
+            key += h + " ";
     }
     d.vertexDescriptor = vd;
     d.vertexFunction = function(qc, v);
     d.fragmentFunction = function(qc, f);
-    if (!d.vertexFunction || (!d.fragmentFunction && !f.empty() && f[0] != "-")) return false;
+    if (!d.vertexFunction || (!d.fragmentFunction && !f.empty() && f[0] != "-"))
+        return false;
     s.key = key + line.substr(bar1, (bar3 == std::string::npos ? line.size() : bar3) - bar1);
     s.d = d;
     return true;
 }
+
 static IOSurfaceRef newSurface(unsigned w, unsigned h)
 {
     NSDictionary *p = @{
@@ -177,8 +193,10 @@ int main(int argc, char **argv)
         const char *labelPrefix = getenv("PROBE_LABEL") ? getenv("PROBE_LABEL") : "com.apple.coreanimation.";
         NSRegularExpression *lib = [NSRegularExpression regularExpressionWithPattern:@" lib=\\S+" options:0 error:nil];
         for (NSString *l in [text componentsSeparatedByString:@"\n"]) {
-            if (![l hasPrefix:@"R "] || ![l containsString:@" ok=1 "]) continue;
-            if (*labelPrefix && ![l containsString:[@" label=" stringByAppendingString:@(labelPrefix)]]) continue;
+            if (![l hasPrefix:@"R "] || ![l containsString:@" ok=1 "])
+                continue;
+            if (*labelPrefix && ![l containsString:[@" label=" stringByAppendingString:@(labelPrefix)]])
+                continue;
             NSString *plain = [lib stringByReplacingMatchesInString:l
                                                             options:0
                                                               range:NSMakeRange(0, l.length)
@@ -259,7 +277,8 @@ int main(int argc, char **argv)
                     td.storageMode = MTLStorageModePrivate;
                     t = [dev newTextureWithDescriptor:td];
                 }
-                if (t) targets[k] = t;
+                if (t)
+                    targets[k] = t;
             }
             return targets[k];
         };
@@ -302,7 +321,8 @@ int main(int argc, char **argv)
                                 MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
                                 for (NSUInteger c = 0; c < 8; c++) {
                                     MTLRenderPipelineColorAttachmentDescriptor *ca = st.d.colorAttachments[c];
-                                    if (ca.pixelFormat == MTLPixelFormatInvalid) continue;
+                                    if (ca.pixelFormat == MTLPixelFormatInvalid)
+                                        continue;
                                     pass.colorAttachments[c].texture = target(ca.pixelFormat, ca.writeMask == 0);
                                     pass.colorAttachments[c].loadAction = MTLLoadActionDontCare;
                                     pass.colorAttachments[c].storeAction = MTLStoreActionDontCare;
@@ -390,7 +410,8 @@ int main(int argc, char **argv)
                 MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
                 for (NSUInteger c = 0; c < 8; c++) {
                     MTLRenderPipelineColorAttachmentDescriptor *ca = st.d.colorAttachments[c];
-                    if (ca.pixelFormat == MTLPixelFormatInvalid) continue;
+                    if (ca.pixelFormat == MTLPixelFormatInvalid)
+                        continue;
                     pass.colorAttachments[c].texture = target(ca.pixelFormat, ca.writeMask == 0);
                     pass.colorAttachments[c].loadAction = MTLLoadActionDontCare;
                     pass.colorAttachments[c].storeAction = MTLStoreActionDontCare;
@@ -423,13 +444,16 @@ int main(int argc, char **argv)
         // use) gives it index 0 and a handle naming index 0 means "no sampler"
         for (const std::string &line : lines) {
             State s;
-            if (line.find("downsample_4_frag") == std::string::npos || !parseState(qc, line, s)) continue;
+            if (line.find("downsample_4_frag") == std::string::npos || !parseState(qc, line, s))
+                continue;
             id<MTLRenderPipelineState> state = [dev newRenderPipelineStateWithDescriptor:s.d error:&error];
-            if (!state) continue;
+            if (!state)
+                continue;
             MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
             for (NSUInteger c = 0; c < 8; c++) {
                 MTLRenderPipelineColorAttachmentDescriptor *ca = s.d.colorAttachments[c];
-                if (ca.pixelFormat == MTLPixelFormatInvalid) continue;
+                if (ca.pixelFormat == MTLPixelFormatInvalid)
+                    continue;
                 pass.colorAttachments[c].texture = target(ca.pixelFormat, ca.writeMask == 0);
                 pass.colorAttachments[c].loadAction = MTLLoadActionDontCare;
                 pass.colorAttachments[c].storeAction = MTLStoreActionDontCare;
@@ -462,9 +486,11 @@ int main(int argc, char **argv)
                 refused++;
                 continue;
             }
-            if (!seen.insert(s.key).second) continue;
+            if (!seen.insert(s.key).second)
+                continue;
             const unsigned i = index++;
-            if (i < first || i >= first + count) continue;
+            if (i < first || i >= first + count)
+                continue;
             id<MTLRenderPipelineState> state = [dev newRenderPipelineStateWithDescriptor:s.d error:&error];
             if (!state) {
                 refused++;
@@ -476,7 +502,8 @@ int main(int argc, char **argv)
             bool usedFb = false;
             for (NSUInteger c = 0; c < 8; c++) {
                 MTLRenderPipelineColorAttachmentDescriptor *ca = s.d.colorAttachments[c];
-                if (ca.pixelFormat == MTLPixelFormatInvalid) continue;
+                if (ca.pixelFormat == MTLPixelFormatInvalid)
+                    continue;
                 const bool memoryless = ca.writeMask == 0;
                 id<MTLTexture> t = (!memoryless && !usedFb && ca.pixelFormat == MTLPixelFormatBGRA8Unorm)
                                        ? fb
@@ -497,14 +524,17 @@ int main(int argc, char **argv)
                 for (uint32_t slot = 0; slot < gSlots; slot++) {
                     tag[0] = 0xC0DE0000u | stage << 8 | slot;
                     tag[1] = i;
-                    for (uint32_t k = 2; k < tag.size(); k++) tag[k] = 0xA0000000u | stage << 20 | slot << 16 | k;
+                    for (uint32_t k = 2; k < tag.size(); k++)
+                        tag[k] = 0xA0000000u | stage << 20 | slot << 16 | k;
                     if (stage == 1)
                         [enc setVertexBytes:tag.data() length:bytes atIndex:slot];
                     else
                         [enc setFragmentBytes:tag.data() length:bytes atIndex:slot];
                 }
-            for (unsigned t = 0; t < 16; t++) [enc setFragmentTexture:textures[t] atIndex:t];
-            for (unsigned t = 0; t < 16; t++) [enc setFragmentSamplerState:samplers[t] atIndex:t];
+            for (unsigned t = 0; t < 16; t++)
+                [enc setFragmentTexture:textures[t] atIndex:t];
+            for (unsigned t = 0; t < 16; t++)
+                [enc setFragmentSamplerState:samplers[t] atIndex:t];
             [enc drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
             [enc endEncoding];
             printf("PROBE %u %s\n", i, s.key.c_str());

@@ -77,6 +77,7 @@ struct Mapping {
 	uint64_t page;
 	vm_offset_t va;
 };
+
 constexpr uint64_t kWindow =
 	0x1000;  // every block here fits one 4 KiB window (CAR, FUSE, APB_MISC, I2C5, DFLL)
 Mapping gMappings[8];
@@ -130,14 +131,17 @@ extern "C" unsigned long dfllxnu_irq_save(void)
 {
 	return ml_set_interrupts_enabled(FALSE) ? 1UL : 0UL;
 }
+
 extern "C" void dfllxnu_irq_restore(unsigned long flags)
 {
 	ml_set_interrupts_enabled(static_cast<boolean_t>(flags));
 }
+
 extern "C" void dfllxnu_udelay(dfllxnu_u32 us)
 {
 	IODelay(us);
 }
+
 extern "C" void dfllxnu_msleep(dfllxnu_u32 ms)
 {
 	IOSleep(ms);
@@ -216,6 +220,7 @@ extern "C" void dfllxnu_mutex_lock(void *m)
 {
 	lck_mtx_lock(static_cast<lck_mtx_t *>(m));
 }
+
 extern "C" void dfllxnu_mutex_unlock(void *m)
 {
 	lck_mtx_unlock(static_cast<lck_mtx_t *>(m));

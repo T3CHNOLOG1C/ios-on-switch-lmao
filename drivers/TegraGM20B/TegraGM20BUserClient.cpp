@@ -64,6 +64,7 @@ struct PoolOrphan {
 	// a coherent BO from ordinary pages (tgm_pool::FromSystem): its pages, released after the view instead of va's
 	IOBufferMemoryDescriptor *backing;
 };
+
 PoolOrphan *gPoolOrphans;
 // Coherent BOs the pool did not serve (tgm_pool::FromSystem), since boot: count and bytes (the stats line's "system")
 volatile uint64_t gSystemCoherent, gSystemCoherentBytes;
@@ -122,6 +123,7 @@ void releaseOrphans()
 }
 
 thread_call_t gOrphanCall;
+
 void orphanCallMain(thread_call_param_t, thread_call_param_t)
 {
 	releaseOrphans();
@@ -164,6 +166,7 @@ uint64_t nowNs()
 // never opened (r7j). A refused BoAlloc is kIOReturnNoMemory, logged once per connection with the rule that refused it.
 constexpr uint64_t kPoolSmallBytes = 1ULL << 20, kPoolFloorBytes = 16ULL << 20;
 constexpr uint64_t kClientPoolBytes = 64ULL << 20, kPoolReserveBytes = 32ULL << 20;
+
 uint64_t clientPoolBytes()
 {
 	return kClientPoolBytes;
@@ -211,10 +214,12 @@ const char *poolRefusal(uint64_t bytes, uint64_t held, bool compositor)
 // Each window's BoAllocs by process go to the "mem3" line (tgm_owner_stats).
 constexpr uint32_t kClasses = 53;  // 4 KiB .. 256 MiB (kMaxBoBytes)
 constexpr uint64_t kSpareCapBytes = 96ULL << 20, kLearnMaxBytes = 16ULL << 20;
+
 struct WarmClass {
 	uint64_t bytes;
 	uint16_t ready;
 };
+
 constexpr WarmClass kWarm[] = {
 	{64ULL << 10, 8}, {4ULL << 20, 2}, {8ULL << 20, 1}, {16ULL << 20, 2}};
 constexpr uint32_t kOwners = 16;
@@ -239,16 +244,19 @@ struct Spare {
 	uint64_t *pas;
 	uint64_t bytes;
 };
+
 struct PoolZero {
 	PoolZero *next;
 	void *va;
 	uint64_t pa, bytes;
 };
+
 struct OwnerStat {
 	char name[17];
 	uint64_t n, bytes, ns, max_ns,
 		made;  // made: cached BOs made on the caller's thread (a miss)
 };
+
 struct SparePool {
 	IOLock *lock;
 	thread_call_t call;
@@ -261,6 +269,7 @@ struct SparePool {
 		poolZeroing;  // bytes ready, freed and waiting, pool bytes waiting
 	OwnerStat owners[kOwners];
 };
+
 SparePool *gSpares;
 // XNU's vm_pressure_level_t: 0 normal, 1 warning, 2 urgent, 4 critical.
 extern "C" int memorystatus_vm_pressure_level;
@@ -577,10 +586,12 @@ void ownerNote(const char *owner, uint64_t bytes, uint64_t ns, bool made)
 constexpr uint32_t kScanEvery = 4, kPushOwners = 4,
 		   kProfileEvery = 16;  // 1 submission in 64 profiled (its pushes WFI-stamped)
 constexpr uint64_t kScanMaxBytes = 512 << 10, kScanWindowNs = 5000000000ULL;
+
 struct PushOwner {
 	char name[17];
 	PushCounts c;
 };
+
 PushOwner gPushOwners[kPushOwners];
 uint64_t gPushSince;
 IOLock *gPushLock;
@@ -688,11 +699,13 @@ class AGXDeviceUserClient : public IOUserClient
 		tgm_coh *coh;  // imports: the surface's coherency registry entry (gpu.c), held
 		uint32_t snapshot[kMaxChannels];  // submitted seqnos when freed (zombies only)
 	};
+
 	struct Binding {
 		uint64_t va, range;
 		Bo *bo;
 		uint64_t bo_offset;
 	};
+
 	// A mapping method 12 (Map) made into the client's task: what IOKit's io_connect_map_memory_into_task keeps in the
 	// client's mapping set, kept here (that set is IOKit's own). Unmap and close release it, and its release unmaps it.
 	struct Mapping {
@@ -759,10 +772,12 @@ class AGXDeviceUserClient : public IOUserClient
 
 public:
 	bool setUp(task_t task);
+
 	void countConnection()
 	{
 		counted_ = true;
 	}
+
 	IOReturn clientClose() APPLE_KEXT_OVERRIDE;
 	void free() APPLE_KEXT_OVERRIDE;
 	IOReturn clientMemoryForType(UInt32 type, IOOptionBits *options,
@@ -771,6 +786,7 @@ public:
 				IOExternalMethodDispatch *dispatch, OSObject *target,
 				void *reference) APPLE_KEXT_OVERRIDE;
 };
+
 OSDefineMetaClassAndStructors(AGXDeviceUserClient, IOUserClient)
 
 	bool AGXDeviceUserClient::setUp(task_t task)
@@ -2027,11 +2043,13 @@ namespace
 {
 constexpr uint64_t kPresentTarget = 0x10000000, kPresentTargetSpan = 4ULL << 20;
 constexpr uint64_t kPresentSurface = 0x40000000, kPresentSurfaceSpan = 16ULL << 20;
+
 struct PresentTarget {
 	uint64_t pa, bytes;
 	uint64_t *pas;
 	tgm_mem *mem;
 };
+
 struct PresentSurface {
 	IOMemoryDescriptor *memory;
 	uint64_t bytes, used;
@@ -2039,6 +2057,7 @@ struct PresentSurface {
 	uint64_t *pas;
 	tgm_mem *mem;
 };
+
 // TegraScanoutCopy.h: the boot framebuffer and the display's two other buffers
 constexpr unsigned kPresentTargets = 3;
 PresentTarget gTargets[kPresentTargets];

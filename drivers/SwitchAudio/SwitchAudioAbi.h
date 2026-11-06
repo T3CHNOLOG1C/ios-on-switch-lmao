@@ -33,7 +33,12 @@
 #define SWITCH_AUDIO_RING_FRAMES   16384u /* 341 ms: 8 ADMA periods of 2048 frames */
 typedef int32_t switch_audio_sample_t;    /* a ring sample: S32_LE */
 
-enum { SwitchAudioMemoryControl = 0, SwitchAudioMemoryOutput = 1, SwitchAudioMemoryInput = 2 };
+enum {
+    SwitchAudioMemoryControl = 0,
+    SwitchAudioMemoryOutput = 1,
+    SwitchAudioMemoryInput = 2
+};
+
 enum {
     SwitchAudioStartOutput = 0,
     SwitchAudioStopOutput = 1,
@@ -42,8 +47,16 @@ enum {
     /* One scalar: the address, in the caller, of CoreAudio's 24 MHz host clock constant (see SwitchAudio.cpp). */
     SwitchAudioSetHostClock = 4
 };
-enum { SwitchAudioOutputRunning = 1u << 0, SwitchAudioInputRunning = 1u << 1 };
-enum { SwitchAudioBackendNull = 0, SwitchAudioBackendTegraI2S = 1 };
+
+enum {
+    SwitchAudioOutputRunning = 1u << 0,
+    SwitchAudioInputRunning = 1u << 1
+};
+
+enum {
+    SwitchAudioBackendNull = 0,
+    SwitchAudioBackendTegraI2S = 1
+};
 
 typedef struct {
     uint32_t magic, version;

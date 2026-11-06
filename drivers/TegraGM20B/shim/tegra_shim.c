@@ -17,12 +17,15 @@
 struct clk {
 	int id;
 };
+
 struct regulator {
 	int enabled;
 };
+
 struct reset_control {
 	int dummy;
 };
+
 struct tegra_pmc {
 	int dummy;
 };
@@ -63,27 +66,33 @@ int clk_prepare_enable(struct clk *c)
 								      : "pll_p_out5");
 	return tegra_gm20b_clk_enable(c->id, 1);
 }
+
 void clk_disable_unprepare(struct clk *c)
 {
 	if (c)
 		tegra_gm20b_clk_enable(c->id, 0);
 }
+
 int clk_enable(struct clk *c)
 {
 	return clk_prepare_enable(c);
 }
+
 void clk_disable(struct clk *c)
 {
 	clk_disable_unprepare(c);
 }
+
 unsigned long clk_get_rate(struct clk *c)
 {
 	return c ? tegra_gm20b_clk_get_rate(c->id) : 0;
 }
+
 int clk_set_rate(struct clk *c, unsigned long rate)
 {
 	return c ? tegra_gm20b_clk_set_rate(c->id, rate) : 0;
 }
+
 long clk_round_rate(struct clk *c, unsigned long rate)
 {
 	(void)c;

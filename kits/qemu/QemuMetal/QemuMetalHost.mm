@@ -40,6 +40,7 @@ static uint64_t gSession;
 static std::mutex gRingLock;
 static std::atomic<uint64_t> gGeneration;                          // a new session's completions only
 static NSMutableDictionary<NSData *, id<MTLLibrary>> *gLibraries;  // by the SHA-256 of the file, across sessions
+
 static struct {
     uint64_t requests, commits, failures, completions;
 } gCount;
@@ -48,15 +49,19 @@ static QMControl *control()
 {
     return reinterpret_cast<QMControl *>(gWindow + QM_CONTROL);
 }
+
 static uint64_t load(const uint64_t *word)
 {
     return __atomic_load_n(word, __ATOMIC_ACQUIRE);
 }
+
 static void store(uint64_t *word, uint64_t value)
 {
     __atomic_store_n(word, value, __ATOMIC_RELEASE);
 }
+
 static void note(const char *format, ...) __attribute__((format(printf, 1, 2)));
+
 static void note(const char *format, ...)
 {
     va_list arguments;
@@ -72,22 +77,28 @@ struct Failure {
     std::string why;
     int32_t status = QM_FAILED;
 };
+
 [[noreturn]] static void refuse(const std::string &why)
 {
     throw Failure{why};
 }
+
 template <class T> static T object(uint64_t handle, const char *what)
 {
     auto it = gObjects.find(handle);
-    if (it == gObjects.end()) refuse(std::string("no ") + what + " " + std::to_string(handle));
+    if (it == gObjects.end())
+        refuse(std::string("no ") + what + " " + std::to_string(handle));
     return (T)it->second;
 }
+
 static uint64_t keep(id value, const char *what)
 {
-    if (!value) refuse(std::string("Metal made no ") + what);
+    if (!value)
+        refuse(std::string("Metal made no ") + what);
     gObjects[gNextHandle] = value;
     return gNextHandle++;
 }
+
 // Window bytes at a window offset, as the heap buffer's offset; the range must lie in the heap.
 static uint64_t heapOffset(uint64_t offset, uint64_t length)
 {
@@ -100,17 +111,25 @@ static uint64_t heapOffset(uint64_t offset, uint64_t length)
 struct Out {
     uint64_t handle = 0;
     std::vector<unsigned char> data;
-    void word(uint64_t value) { append(&value, 8); }
+
+    void word(uint64_t value)
+    {
+        append(&value, 8);
+    }
+
     void append(const void *bytes, size_t n)
     {
         data.insert(data.end(), (const unsigned char *)bytes, (const unsigned char *)bytes + n);
     }
 };
+
 template <class T> static const T &fields(const std::vector<unsigned char> &in)
 {
-    if (in.size() < sizeof(T)) refuse("short request");
+    if (in.size() < sizeof(T))
+        refuse("short request");
     return *reinterpret_cast<const T *>(in.data());
 }
+
 static void describe(id<MTLTexture> texture, Out &out)
 {
     const QMTextureDescriptor d = {(uint64_t)texture.textureType,
@@ -125,6 +144,7 @@ static void describe(id<MTLTexture> texture, Out &out)
                                    (uint64_t)texture.resourceOptions};
     out.append(&d, sizeof d);
 }
+
 static MTLTextureDescriptor *textureDescriptor(const QMTextureDescriptor &w)
 {
     MTLTextureDescriptor *d = [MTLTextureDescriptor new];
@@ -140,6 +160,7 @@ static MTLTextureDescriptor *textureDescriptor(const QMTextureDescriptor &w)
     d.resourceOptions = (MTLResourceOptions)w.options;
     return d;
 }
+
 // Bytes per texel of the uncompressed formats a linear texture or a staged copy uses (0: not known here).
 static uint64_t texelBytes(uint64_t format)
 {
@@ -150,7 +171,8 @@ static uint64_t texelBytes(uint64_t format)
     case MTLPixelFormatR8Snorm:
     case MTLPixelFormatR8Uint:
     case MTLPixelFormatR8Sint:
-    case MTLPixelFormatStencil8: return 1;
+    case MTLPixelFormatStencil8:
+        return 1;
     case MTLPixelFormatR16Unorm:
     case MTLPixelFormatR16Snorm:
     case MTLPixelFormatR16Uint:
@@ -165,7 +187,8 @@ static uint64_t texelBytes(uint64_t format)
     case MTLPixelFormatA1BGR5Unorm:
     case MTLPixelFormatABGR4Unorm:
     case MTLPixelFormatBGR5A1Unorm:
-    case MTLPixelFormatDepth16Unorm: return 2;
+    case MTLPixelFormatDepth16Unorm:
+        return 2;
     case MTLPixelFormatR32Uint:
     case MTLPixelFormatR32Sint:
     case MTLPixelFormatR32Float:
@@ -188,7 +211,8 @@ static uint64_t texelBytes(uint64_t format)
     case MTLPixelFormatBGR10A2Unorm:
     case MTLPixelFormatBGR10_XR:
     case MTLPixelFormatBGR10_XR_sRGB:
-    case MTLPixelFormatDepth32Float: return 4;
+    case MTLPixelFormatDepth32Float:
+        return 4;
     case MTLPixelFormatRG32Uint:
     case MTLPixelFormatRG32Sint:
     case MTLPixelFormatRG32Float:
@@ -198,13 +222,17 @@ static uint64_t texelBytes(uint64_t format)
     case MTLPixelFormatRGBA16Sint:
     case MTLPixelFormatRGBA16Float:
     case MTLPixelFormatBGRA10_XR:
-    case MTLPixelFormatBGRA10_XR_sRGB: return 8;
+    case MTLPixelFormatBGRA10_XR_sRGB:
+        return 8;
     case MTLPixelFormatRGBA32Uint:
     case MTLPixelFormatRGBA32Sint:
-    case MTLPixelFormatRGBA32Float: return 16;
-    default: return 0;
+    case MTLPixelFormatRGBA32Float:
+        return 16;
+    default:
+        return 0;
     }
 }
+
 static void waitUtility(id<MTLCommandBuffer> commandBuffer)
 {
     [commandBuffer commit];
@@ -223,11 +251,13 @@ static void reset(uint64_t session)
     store(&control()->completionsWritten, 0);
     note("session %llx", (unsigned long long)session);
 }
+
 static void writeCompletion(uint64_t generation, uint64_t number, uint64_t status, double start, double end,
                             const char *error)
 {
     std::lock_guard<std::mutex> lock(gRingLock);
-    if (generation != gGeneration) return;
+    if (generation != gGeneration)
+        return;
     const uint64_t written = load(&control()->completionsWritten);
     // The guest takes them in order; a full ring waits for it (it never stops taking while it lives).
     for (unsigned round = 0; written - load(&control()->completionsRead) >= QM_COMPLETION_SLOTS; round++) {
@@ -238,7 +268,8 @@ static void writeCompletion(uint64_t generation, uint64_t number, uint64_t statu
         usleep(100);
     }
     QMCompletion record = {number, status, start, end, {}};
-    if (error) snprintf(record.error, sizeof record.error, "%s", error);
+    if (error)
+        snprintf(record.error, sizeof record.error, "%s", error);
     memcpy(gWindow + QM_COMPLETIONS + (written % QM_COMPLETION_SLOTS) * sizeof record, &record, sizeof record);
     store(&control()->completionsWritten, written + 1);
     gCount.completions++;
@@ -249,9 +280,11 @@ static bool answerSelector(const char *name, bool argument, uint64_t value, uint
 {
     SEL selector = sel_registerName(name);
     Method method = class_getInstanceMethod(object_getClass(gDevice), selector);
-    if (!method) return false;
+    if (!method)
+        return false;
     const char *types = method_getTypeEncoding(method);
-    if (!types) return false;
+    if (!types)
+        return false;
     switch (types[0]) {
     case 'B':
     case 'c':
@@ -264,9 +297,11 @@ static bool answerSelector(const char *name, bool argument, uint64_t value, uint
     case 'i':
         out = argument ? ((NSUInteger (*)(id, SEL, NSUInteger))objc_msgSend)(gDevice, selector, value)
                        : ((NSUInteger (*)(id, SEL))objc_msgSend)(gDevice, selector);
-        if (types[0] == 'I' || types[0] == 'i') out &= 0xffffffffu;
+        if (types[0] == 'I' || types[0] == 'i')
+            out &= 0xffffffffu;
         return true;
-    default: return false;
+    default:
+        return false;
     }
 }
 
@@ -280,10 +315,12 @@ struct Encoding {
     uint64_t visibility = QM_NONE;
     std::vector<std::pair<id<MTLBuffer>, uint64_t>>
         visibilityCopies;  // a pass's results, into the window once complete
+
     id<MTLCommandEncoder> current() const
     {
         return render ? (id<MTLCommandEncoder>)render : compute ? (id<MTLCommandEncoder>)compute : blit;
     }
+
     void end()
     {
         [current() endEncoding];
@@ -292,11 +329,13 @@ struct Encoding {
         blit = nil;
     }
 };
+
 static MTLRenderPassDescriptor *passDescriptor(const QCRenderPass &p, Encoding &e)
 {
     MTLRenderPassDescriptor *d = [MTLRenderPassDescriptor renderPassDescriptor];
     auto attach = [&](const QCAttachment &a, MTLRenderPassAttachmentDescriptor *out) {
-        if (!a.texture) return;
+        if (!a.texture)
+            return;
         id<MTLTexture> texture = object<id<MTLTexture>>(a.texture, "attachment texture");
         out.texture = texture;
         out.level = a.level;
@@ -320,14 +359,18 @@ static MTLRenderPassDescriptor *passDescriptor(const QCRenderPass &p, Encoding &
     d.stencilAttachment.clearStencil = (uint32_t)p.stencil.clear[0];
     if (p.width) {
         d.renderTargetWidth = p.width;
-        if (!e.width) e.width = p.width;
+        if (!e.width)
+            e.width = p.width;
     }
     if (p.height) {
         d.renderTargetHeight = p.height;
-        if (!e.height) e.height = p.height;
+        if (!e.height)
+            e.height = p.height;
     }
-    if (p.arrayLength) d.renderTargetArrayLength = p.arrayLength;
-    if (p.samples) d.defaultRasterSampleCount = p.samples;
+    if (p.arrayLength)
+        d.renderTargetArrayLength = p.arrayLength;
+    if (p.samples)
+        d.defaultRasterSampleCount = p.samples;
     if (p.visibility != QM_NONE) {
         // Visibility offsets are limited (maxVisibilityQueryOffset): the pass gets a buffer of its own, copied into the window afterwards.
         id<MTLBuffer> results = [gDevice newBufferWithLength:65536 options:MTLResourceStorageModeShared];
@@ -337,18 +380,22 @@ static MTLRenderPassDescriptor *passDescriptor(const QCRenderPass &p, Encoding &
     }
     return d;
 }
+
 template <class T> static const T &take(const unsigned char *body, uint32_t bytes)
 {
-    if (bytes < sizeof(T)) refuse("short command");
+    if (bytes < sizeof(T))
+        refuse("short command");
     return *reinterpret_cast<const T *>(body);
 }
+
 static void bind(Encoding &e, const QCBind &b, id<MTLBuffer> buffer, uint64_t offset, id<MTLTexture> texture,
                  id<MTLSamplerState> sampler, int kind)
 {
     const NSUInteger index = (NSUInteger)b.index;
     switch (b.stage) {
     case 0:
-        if (!e.compute) refuse("compute binding outside a compute encoder");
+        if (!e.compute)
+            refuse("compute binding outside a compute encoder");
         if (kind == 0)
             [e.compute setBuffer:buffer offset:offset atIndex:index];
         else if (kind == 1)
@@ -358,7 +405,8 @@ static void bind(Encoding &e, const QCBind &b, id<MTLBuffer> buffer, uint64_t of
         break;
     case 1:
     case 2:
-        if (!e.render) refuse("render binding outside a render encoder");
+        if (!e.render)
+            refuse("render binding outside a render encoder");
         if (b.stage == 1) {
             if (kind == 0)
                 [e.render setVertexBuffer:buffer offset:offset atIndex:index];
@@ -375,16 +423,19 @@ static void bind(Encoding &e, const QCBind &b, id<MTLBuffer> buffer, uint64_t of
                 [e.render setFragmentSamplerState:sampler atIndex:index];
         }
         break;
-    default: refuse("bad stage");
+    default:
+        refuse("bad stage");
     }
 }
+
 static void encode(Encoding &e, uint32_t op, const unsigned char *body, uint32_t bytes)
 {
     switch (op) {
     case QC_SIGNAL_EVENT:
     case QC_WAIT_EVENT: {
         const QCEvent &f = take<QCEvent>(body, bytes);
-        if (e.current()) refuse("event inside an encoder");
+        if (e.current())
+            refuse("event inside an encoder");
         id<MTLEvent> event = object<id<MTLEvent>>(f.event, "event");
         if (op == QC_SIGNAL_EVENT)
             [e.commandBuffer encodeSignalEvent:event value:f.value];
@@ -393,23 +444,28 @@ static void encode(Encoding &e, uint32_t op, const unsigned char *body, uint32_t
         break;
     }
     case QC_RENDER: {
-        if (e.current()) refuse("encoder inside an encoder");
+        if (e.current())
+            refuse("encoder inside an encoder");
         e.width = e.height = 0;
         e.render =
             [e.commandBuffer renderCommandEncoderWithDescriptor:passDescriptor(take<QCRenderPass>(body, bytes), e)];
-        if (!e.render) refuse("no render encoder");
+        if (!e.render)
+            refuse("no render encoder");
         break;
     }
     case QC_COMPUTE:
-        if (e.current()) refuse("encoder inside an encoder");
+        if (e.current())
+            refuse("encoder inside an encoder");
         e.compute = [e.commandBuffer computeCommandEncoder];
         break;
     case QC_BLIT:
-        if (e.current()) refuse("encoder inside an encoder");
+        if (e.current())
+            refuse("encoder inside an encoder");
         e.blit = [e.commandBuffer blitCommandEncoder];
         break;
     case QC_END:
-        if (!e.current()) refuse("end without an encoder");
+        if (!e.current())
+            refuse("end without an encoder");
         e.end();
         break;
     case QC_UPDATE_FENCE:
@@ -446,7 +502,8 @@ static void encode(Encoding &e, uint32_t op, const unsigned char *body, uint32_t
     }
     case QC_BYTES: {
         const QCBind &b = take<QCBind>(body, bytes);
-        if (b.value > bytes - sizeof b) refuse("short bytes");
+        if (b.value > bytes - sizeof b)
+            refuse("short bytes");
         const unsigned char *data = body + sizeof b;
         if (b.value <= 4096) {
             if (b.stage == 0 && e.compute)
@@ -475,19 +532,22 @@ static void encode(Encoding &e, uint32_t op, const unsigned char *body, uint32_t
         break;
     }
     case QC_COMPUTE_PIPELINE:
-        if (!e.compute) refuse("pipeline outside a compute encoder");
+        if (!e.compute)
+            refuse("pipeline outside a compute encoder");
         [e.compute setComputePipelineState:object<id<MTLComputePipelineState>>(take<uint64_t>(body, bytes),
                                                                                "compute pipeline")];
         break;
     case QC_THREADGROUP_MEMORY: {
-        if (!e.compute || bytes < 16) refuse("threadgroup memory outside a compute encoder");
+        if (!e.compute || bytes < 16)
+            refuse("threadgroup memory outside a compute encoder");
         const uint64_t *f = (const uint64_t *)body;
         [e.compute setThreadgroupMemoryLength:f[0] atIndex:f[1]];
         break;
     }
     case QC_DISPATCH: {
         const QCDispatch &f = take<QCDispatch>(body, bytes);
-        if (!e.compute) refuse("dispatch outside a compute encoder");
+        if (!e.compute)
+            refuse("dispatch outside a compute encoder");
         const MTLSize size = MTLSizeMake(f.size[0], f.size[1], f.size[2]),
                       group = MTLSizeMake(f.perGroup[0], f.perGroup[1], f.perGroup[2]);
         if (f.threads)
@@ -497,24 +557,28 @@ static void encode(Encoding &e, uint32_t op, const unsigned char *body, uint32_t
         break;
     }
     case QC_RENDER_PIPELINE:
-        if (!e.render) refuse("pipeline outside a render encoder");
+        if (!e.render)
+            refuse("pipeline outside a render encoder");
         [e.render
             setRenderPipelineState:object<id<MTLRenderPipelineState>>(take<uint64_t>(body, bytes), "render pipeline")];
         break;
     case QC_DEPTH_STENCIL: {
-        if (!e.render) refuse("depth state outside a render encoder");
+        if (!e.render)
+            refuse("depth state outside a render encoder");
         const uint64_t handle = take<uint64_t>(body, bytes);
         [e.render setDepthStencilState:handle ? object<id<MTLDepthStencilState>>(handle, "depth stencil state") : nil];
         break;
     }
     case QC_VIEWPORT: {
-        if (!e.render || bytes < 48) refuse("viewport outside a render encoder");
+        if (!e.render || bytes < 48)
+            refuse("viewport outside a render encoder");
         const double *v = (const double *)body;
         [e.render setViewport:(MTLViewport){v[0], v[1], v[2], v[3], v[4], v[5]}];
         break;
     }
     case QC_SCISSOR: {
-        if (!e.render || bytes < 32) refuse("scissor outside a render encoder");
+        if (!e.render || bytes < 32)
+            refuse("scissor outside a render encoder");
         const uint64_t *r = (const uint64_t *)body;
         // Metal refuses a scissor beyond the attachments; the guest's GPU clipped it.
         uint64_t x = std::min(r[0], e.width), y = std::min(r[1], e.height);
@@ -523,7 +587,8 @@ static void encode(Encoding &e, uint32_t op, const unsigned char *body, uint32_t
         break;
     }
     case QC_RASTER: {
-        if (!e.render || bytes < 24) refuse("raster state outside a render encoder");
+        if (!e.render || bytes < 24)
+            refuse("raster state outside a render encoder");
         const uint64_t *f = (const uint64_t *)body;
         [e.render setCullMode:(MTLCullMode)f[0]];
         [e.render setFrontFacingWinding:(MTLWinding)f[1]];
@@ -531,33 +596,39 @@ static void encode(Encoding &e, uint32_t op, const unsigned char *body, uint32_t
         break;
     }
     case QC_STENCIL_REFERENCE: {
-        if (!e.render || bytes < 16) refuse("stencil reference outside a render encoder");
+        if (!e.render || bytes < 16)
+            refuse("stencil reference outside a render encoder");
         const uint64_t *f = (const uint64_t *)body;
         [e.render setStencilFrontReferenceValue:(uint32_t)f[0] backReferenceValue:(uint32_t)f[1]];
         break;
     }
     case QC_BLEND_COLOR: {
-        if (!e.render || bytes < 32) refuse("blend color outside a render encoder");
+        if (!e.render || bytes < 32)
+            refuse("blend color outside a render encoder");
         const double *c = (const double *)body;
         [e.render setBlendColorRed:c[0] green:c[1] blue:c[2] alpha:c[3]];
         break;
     }
     case QC_DEPTH_BIAS: {
-        if (!e.render || bytes < 24) refuse("depth bias outside a render encoder");
+        if (!e.render || bytes < 24)
+            refuse("depth bias outside a render encoder");
         const double *f = (const double *)body;
         [e.render setDepthBias:f[0] slopeScale:f[1] clamp:f[2]];
         break;
     }
     case QC_VISIBILITY: {
-        if (!e.render || bytes < 16) refuse("visibility outside a render encoder");
+        if (!e.render || bytes < 16)
+            refuse("visibility outside a render encoder");
         const uint64_t *f = (const uint64_t *)body;
-        if (f[1] >= 65536) refuse("visibility offset past 64 KiB");
+        if (f[1] >= 65536)
+            refuse("visibility offset past 64 KiB");
         [e.render setVisibilityResultMode:(MTLVisibilityResultMode)f[0] offset:f[1]];
         break;
     }
     case QC_DRAW: {
         const QCDraw &f = take<QCDraw>(body, bytes);
-        if (!e.render) refuse("draw outside a render encoder");
+        if (!e.render)
+            refuse("draw outside a render encoder");
         [e.render drawPrimitives:(MTLPrimitiveType)f.primitive
                      vertexStart:f.start
                      vertexCount:f.count
@@ -567,7 +638,8 @@ static void encode(Encoding &e, uint32_t op, const unsigned char *body, uint32_t
     }
     case QC_DRAW_INDEXED: {
         const QCDrawIndexed &f = take<QCDrawIndexed>(body, bytes);
-        if (!e.render) refuse("draw outside a render encoder");
+        if (!e.render)
+            refuse("draw outside a render encoder");
         [e.render drawIndexedPrimitives:(MTLPrimitiveType)f.primitive
                              indexCount:f.count
                               indexType:(MTLIndexType)f.indexType
@@ -579,7 +651,8 @@ static void encode(Encoding &e, uint32_t op, const unsigned char *body, uint32_t
         break;
     }
     case QC_COPY_BUFFER: {
-        if (!e.blit || bytes < 24) refuse("copy outside a blit encoder");
+        if (!e.blit || bytes < 24)
+            refuse("copy outside a blit encoder");
         const uint64_t *f = (const uint64_t *)body;
         [e.blit copyFromBuffer:gHeap
                   sourceOffset:heapOffset(f[0], f[2])
@@ -589,14 +662,16 @@ static void encode(Encoding &e, uint32_t op, const unsigned char *body, uint32_t
         break;
     }
     case QC_FILL_BUFFER: {
-        if (!e.blit || bytes < 24) refuse("fill outside a blit encoder");
+        if (!e.blit || bytes < 24)
+            refuse("fill outside a blit encoder");
         const uint64_t *f = (const uint64_t *)body;
         [e.blit fillBuffer:gHeap range:NSMakeRange(heapOffset(f[0], f[1]), f[1]) value:(uint8_t)f[2]];
         break;
     }
     case QC_COPY_TEXTURE: {
         const QCCopyTexture &f = take<QCCopyTexture>(body, bytes);
-        if (!e.blit) refuse("copy outside a blit encoder");
+        if (!e.blit)
+            refuse("copy outside a blit encoder");
         [e.blit copyFromTexture:object<id<MTLTexture>>(f.source, "texture")
                     sourceSlice:f.sourceSlice
                     sourceLevel:f.sourceLevel
@@ -611,7 +686,8 @@ static void encode(Encoding &e, uint32_t op, const unsigned char *body, uint32_t
     case QC_BUFFER_TO_TEXTURE:
     case QC_TEXTURE_TO_BUFFER: {
         const QCBufferTexture &f = take<QCBufferTexture>(body, bytes);
-        if (!e.blit) refuse("copy outside a blit encoder");
+        if (!e.blit)
+            refuse("copy outside a blit encoder");
         id<MTLTexture> texture = object<id<MTLTexture>>(f.texture, "texture");
         const MTLSize size = MTLSizeMake(f.size[0], f.size[1], f.size[2]);
         const MTLOrigin origin = MTLOriginMake(f.origin[0], f.origin[1], f.origin[2]);
@@ -639,18 +715,22 @@ static void encode(Encoding &e, uint32_t op, const unsigned char *body, uint32_t
         break;
     }
     case QC_GENERATE_MIPMAPS:
-        if (!e.blit) refuse("mipmaps outside a blit encoder");
+        if (!e.blit)
+            refuse("mipmaps outside a blit encoder");
         [e.blit generateMipmapsForTexture:object<id<MTLTexture>>(take<uint64_t>(body, bytes), "texture")];
         break;
     case QC_IMAGEBLOCK: {
-        if (!e.compute || bytes < 16) refuse("imageblock outside a compute encoder");
+        if (!e.compute || bytes < 16)
+            refuse("imageblock outside a compute encoder");
         const uint64_t *f = (const uint64_t *)body;
         [e.compute setImageblockWidth:f[0] height:f[1]];
         break;
     }
-    default: refuse("unknown command " + std::to_string(op));
+    default:
+        refuse("unknown command " + std::to_string(op));
     }
 }
+
 static void commit(const QMCommit &c)
 {
     id<MTLCommandQueue> queue = object<id<MTLCommandQueue>>(c.queue, "queue");
@@ -660,10 +740,12 @@ static void commit(const QMCommit &c)
     const uint64_t generation = gGeneration, number = c.commandBuffer;
     try {
         for (uint64_t at = 0; at < c.length;) {
-            if (c.length - at < sizeof(QMCommandHeader)) refuse("truncated commands");
+            if (c.length - at < sizeof(QMCommandHeader))
+                refuse("truncated commands");
             QMCommandHeader header;
             memcpy(&header, gWindow + c.offset + at, sizeof header);
-            if (header.bytes < sizeof header || header.bytes > c.length - at) refuse("bad command length");
+            if (header.bytes < sizeof header || header.bytes > c.length - at)
+                refuse("bad command length");
             if (gVerbose) {
                 const uint64_t *w = (const uint64_t *)(gWindow + c.offset + at + sizeof header);
                 const unsigned words = (header.bytes - (uint32_t)sizeof header) / 8;
@@ -673,9 +755,11 @@ static void commit(const QMCommit &c)
             encode(e, header.op, gWindow + c.offset + at + sizeof header, header.bytes - (uint32_t)sizeof header);
             at += header.bytes;
         }
-        if (e.current()) refuse("an encoder was left open");
+        if (e.current())
+            refuse("an encoder was left open");
     } catch (Failure &f) {
-        if (e.current()) e.end();
+        if (e.current())
+            e.end();
         gCount.failures++;
         note("command buffer %llu refused: %s", (unsigned long long)number, f.why.c_str());
         writeCompletion(generation, number, 5, 0, 0, f.why.c_str());
@@ -685,7 +769,8 @@ static void commit(const QMCommit &c)
     [e.commandBuffer addCompletedHandler:^(id<MTLCommandBuffer> done) {
         const bool ok = done.status == MTLCommandBufferStatusCompleted;
         if (ok)
-            for (const auto &copy : copies) memcpy(gWindow + copy.second, copy.first.contents, 65536);
+            for (const auto &copy : copies)
+                memcpy(gWindow + copy.second, copy.first.contents, 65536);
         if (!ok)
             note("command buffer %llu failed: %s", (unsigned long long)number,
                  done.error.localizedDescription.UTF8String ?: "?");
@@ -702,7 +787,8 @@ static id<MTLLibrary> library(const unsigned char *bytes, uint64_t length)
     uint8_t digest[32];
     CC_SHA256(bytes, (CC_LONG)length, digest);
     NSData *key = [NSData dataWithBytes:digest length:32];
-    if (id<MTLLibrary> known = gLibraries[key]) return known;
+    if (id<MTLLibrary> known = gLibraries[key])
+        return known;
     air_library_view view = {};
     const uint8_t *slice = bytes;
     size_t sliceBytes = length;
@@ -718,12 +804,14 @@ static id<MTLLibrary> library(const unsigned char *bytes, uint64_t length)
     dispatch_data_t data = dispatch_data_create(slice, sliceBytes, nullptr, DISPATCH_DATA_DESTRUCTOR_DEFAULT);
     NSError *error = nil;
     id<MTLLibrary> made = [gDevice newLibraryWithData:data error:&error];
-    if (!made) refuse(error.localizedDescription.UTF8String ?: "library refused");
+    if (!made)
+        refuse(error.localizedDescription.UTF8String ?: "library refused");
     made.label = [NSString stringWithFormat:@"%zu bytes", (size_t)length];
     gLibraries[key] = made;
     note("library %zu bytes: %lu functions", (size_t)length, (unsigned long)made.functionNames.count);
     return made;
 }
+
 static void handle(uint32_t op, const std::vector<unsigned char> &in, Out &out)
 {
     switch (op) {
@@ -743,15 +831,18 @@ static void handle(uint32_t op, const std::vector<unsigned char> &in, Out &out)
     }
     case QM_RELEASE: {
         const uint64_t count = fields<uint64_t>(in);
-        if (in.size() < (count + 1) * 8) refuse("short release");
-        for (uint64_t i = 0; i < count; i++) gObjects.erase(((const uint64_t *)in.data())[1 + i]);
+        if (in.size() < (count + 1) * 8)
+            refuse("short release");
+        for (uint64_t i = 0; i < count; i++)
+            gObjects.erase(((const uint64_t *)in.data())[1 + i]);
         break;
     }
     case QM_ANSWERS: {
         const uint64_t count = fields<uint64_t>(in);
         size_t at = 8;
         for (uint64_t i = 0; i < count; i++) {
-            if (at >= in.size()) refuse("short answers");
+            if (at >= in.size())
+                refuse("short answers");
             const char *name = (const char *)in.data() + at;
             at += strnlen(name, in.size() - at) + 1;
             QMAnswer answer = {0, 0};
@@ -764,7 +855,8 @@ static void handle(uint32_t op, const std::vector<unsigned char> &in, Out &out)
         QMAnswerRequest request = fields<QMAnswerRequest>(in);
         request.selector[sizeof request.selector - 1] = 0;
         uint64_t value = 0;
-        if (!answerSelector(request.selector, true, request.argument, value)) throw Failure{"", QM_UNKNOWN};
+        if (!answerSelector(request.selector, true, request.argument, value))
+            throw Failure{"", QM_UNKNOWN};
         out.word(value);
         break;
     }
@@ -839,7 +931,8 @@ static void handle(uint32_t op, const std::vector<unsigned char> &in, Out &out)
         waitUtility(commandBuffer);
         if (gVerbose) {
             uint64_t nonzero = 0;
-            for (uint64_t i = 0; i < f.length; i++) nonzero += gWindow[f.offset + i] != 0;
+            for (uint64_t i = 0; i < f.length; i++)
+                nonzero += gWindow[f.offset + i] != 0;
             note("  %s texture %llu: format %lu %lux%lu storage %lu usage %lu, region %llux%llu, %llu of %llu bytes "
                  "nonzero",
                  op == QM_TEXTURE_REPLACE ? "replace" : "get bytes", f.texture, (unsigned long)texture.pixelFormat,
@@ -854,19 +947,23 @@ static void handle(uint32_t op, const std::vector<unsigned char> &in, Out &out)
         out.handle = keep(made, "library");
         NSArray<NSString *> *names = made.functionNames;
         out.word(names.count);
-        for (NSString *name in names) out.append(name.UTF8String, strlen(name.UTF8String) + 1);
+        for (NSString *name in names)
+            out.append(name.UTF8String, strlen(name.UTF8String) + 1);
         break;
     }
     case QM_STITCHED_LIBRARY: {
         // The guest's graphs, rebuilt from QemuMetalLibraries.mm's request, stitched from this Mac's functions.
         size_t at = 0;
         auto take = [&](size_t n) {
-            if (at + n > in.size()) refuse("short stitching request");
+            if (at + n > in.size())
+                refuse("short stitching request");
             const unsigned char *p = in.data() + at;
             at = (at + n + 7) / 8 * 8;
             return p;
         };
-        auto word = [&] { return *(const uint64_t *)take(8); };
+        auto word = [&] {
+            return *(const uint64_t *)take(8);
+        };
         const QMStitched header = *(const QMStitched *)take(sizeof(QMStitched));
         NSMutableArray<id<MTLFunction>> *functions = [NSMutableArray array];
         for (uint64_t i = 0; i < header.functions; i++)
@@ -875,7 +972,8 @@ static void handle(uint32_t op, const std::vector<unsigned char> &in, Out &out)
         for (uint64_t g = 0; g < header.graphs; g++) {
             const QMStitchGraph graph = *(const QMStitchGraph *)take(sizeof(QMStitchGraph));
             NSString *name = @((const char *)take(graph.nameBytes));
-            if (graph.output >= graph.nodes) refuse("stitching output node out of range");
+            if (graph.output >= graph.nodes)
+                refuse("stitching output node out of range");
             NSMutableArray<MTLFunctionStitchingFunctionNode *> *nodes = [NSMutableArray array],
                                                                *listed = [NSMutableArray array];
             std::vector<std::vector<uint64_t>> arguments, dependencies;
@@ -886,11 +984,14 @@ static void handle(uint32_t op, const std::vector<unsigned char> &in, Out &out)
                                                                  arguments:@[]
                                                        controlDependencies:@[]];
                 arguments.emplace_back();
-                for (uint64_t a = 0; a < node.arguments; a++) arguments.back().push_back(word());
+                for (uint64_t a = 0; a < node.arguments; a++)
+                    arguments.back().push_back(word());
                 dependencies.emplace_back();
-                for (uint64_t d = 0; d < node.dependencies; d++) dependencies.back().push_back(word());
+                for (uint64_t d = 0; d < node.dependencies; d++)
+                    dependencies.back().push_back(word());
                 [nodes addObject:made];
-                if (node.listed) [listed addObject:made];
+                if (node.listed)
+                    [listed addObject:made];
             }
             for (uint64_t n = 0; n < graph.nodes; n++) {
                 NSMutableArray *nodeArguments = [NSMutableArray array];
@@ -905,7 +1006,8 @@ static void handle(uint32_t op, const std::vector<unsigned char> &in, Out &out)
                 }
                 NSMutableArray *nodeDependencies = [NSMutableArray array];
                 for (uint64_t d : dependencies[n]) {
-                    if (d >= graph.nodes) refuse("stitching dependency out of range");
+                    if (d >= graph.nodes)
+                        refuse("stitching dependency out of range");
                     [nodeDependencies addObject:nodes[d]];
                 }
                 nodes[n].arguments = nodeArguments;
@@ -930,7 +1032,8 @@ static void handle(uint32_t op, const std::vector<unsigned char> &in, Out &out)
         out.handle = keep(made, "stitched library");
         NSArray<NSString *> *names = made.functionNames;
         out.word(names.count);
-        for (NSString *n in names) out.append(n.UTF8String, strlen(n.UTF8String) + 1);
+        for (NSString *n in names)
+            out.append(n.UTF8String, strlen(n.UTF8String) + 1);
         break;
     }
     case QM_SOURCE_LIBRARY: {
@@ -939,22 +1042,26 @@ static void handle(uint32_t op, const std::vector<unsigned char> &in, Out &out)
         NSString *source = [[NSString alloc] initWithBytes:gWindow + QM_HEAP + heapOffset(f.offset, f.length)
                                                     length:f.length
                                                   encoding:NSUTF8StringEncoding];
-        if (!source) refuse("source is not UTF-8");
+        if (!source)
+            refuse("source is not UTF-8");
         MTLCompileOptions *options = [MTLCompileOptions new];
         options.mathMode = f.fastMath ? MTLMathModeFast : MTLMathModeSafe;
-        if (f.languageVersion) options.languageVersion = (MTLLanguageVersion)f.languageVersion;
+        if (f.languageVersion)
+            options.languageVersion = (MTLLanguageVersion)f.languageVersion;
         NSMutableDictionary *macros = [NSMutableDictionary dictionary];
         size_t at = sizeof f;
         for (uint64_t i = 0; i < f.macros && at < in.size(); i++) {
             const char *text = (const char *)in.data() + at;
             at += strnlen(text, in.size() - at) + 1;
             const char *equals = strchr(text, '=');
-            if (!equals) continue;
+            if (!equals)
+                continue;
             macros[[[NSString alloc] initWithBytes:text
                                             length:(NSUInteger)(equals - text)
                                           encoding:NSUTF8StringEncoding]] = @(equals + 1);
         }
-        if (macros.count) options.preprocessorMacros = macros;
+        if (macros.count)
+            options.preprocessorMacros = macros;
         NSError *error = nil;
         id<MTLLibrary> made = [gDevice newLibraryWithSource:source options:options error:&error];
         if (!made)
@@ -965,16 +1072,19 @@ static void handle(uint32_t op, const std::vector<unsigned char> &in, Out &out)
         out.handle = keep(made, "source library");
         NSArray<NSString *> *names = made.functionNames;
         out.word(names.count);
-        for (NSString *n in names) out.append(n.UTF8String, strlen(n.UTF8String) + 1);
+        for (NSString *n in names)
+            out.append(n.UTF8String, strlen(n.UTF8String) + 1);
         break;
     }
     case QM_EXTERN_NAMES: {
         id<MTLLibrary> owner = object<id<MTLLibrary>>(fields<uint64_t>(in), "library");
         SEL selector = sel_registerName("externFunctionNames");
-        if (![owner respondsToSelector:selector]) throw Failure{"", QM_UNKNOWN};
+        if (![owner respondsToSelector:selector])
+            throw Failure{"", QM_UNKNOWN};
         NSArray<NSString *> *names = ((NSArray<NSString *> * (*)(id, SEL)) objc_msgSend)(owner, selector);
         out.word(names.count);
-        for (NSString *n in names) out.append(n.UTF8String, strlen(n.UTF8String) + 1);
+        for (NSString *n in names)
+            out.append(n.UTF8String, strlen(n.UTF8String) + 1);
         break;
     }
     case QM_FUNCTION: {
@@ -982,7 +1092,8 @@ static void handle(uint32_t op, const std::vector<unsigned char> &in, Out &out)
         id<MTLLibrary> owner = object<id<MTLLibrary>>(f.library, "library");
         size_t at = sizeof f;
         auto take = [&](size_t n) {
-            if (at + n > in.size()) refuse("short function request");
+            if (at + n > in.size())
+                refuse("short function request");
             const unsigned char *p = in.data() + at;
             at = (at + n + 7) / 8 * 8;
             return p;
@@ -1014,7 +1125,8 @@ static void handle(uint32_t op, const std::vector<unsigned char> &in, Out &out)
         // Metal's own text for a name the library has not (QemuMetalLibraries.mm makes it Metal's error again: Core Image goes on to its
         // next library only on that one).
         if (!function && !error) {
-            if (gVerbose) note("  not in %s", owner.label.UTF8String ?: "?");
+            if (gVerbose)
+                note("  not in %s", owner.label.UTF8String ?: "?");
             throw Failure{[NSString stringWithFormat:@"Function %@ was not found in the library", name].UTF8String,
                           QM_NOT_FOUND};
         }
@@ -1032,7 +1144,8 @@ static void handle(uint32_t op, const std::vector<unsigned char> &in, Out &out)
         const QMRenderPipeline &f = fields<QMRenderPipeline>(in);
         MTLRenderPipelineDescriptor *d = [MTLRenderPipelineDescriptor new];
         d.vertexFunction = object<id<MTLFunction>>(f.vertex, "vertex function");
-        if (f.fragment) d.fragmentFunction = object<id<MTLFunction>>(f.fragment, "fragment function");
+        if (f.fragment)
+            d.fragmentFunction = object<id<MTLFunction>>(f.fragment, "fragment function");
         for (unsigned i = 0; i < 8; i++) {
             const QMColorAttachment &c = f.colors[i];
             MTLRenderPipelineColorAttachmentDescriptor *a = d.colorAttachments[i];
@@ -1048,13 +1161,15 @@ static void handle(uint32_t op, const std::vector<unsigned char> &in, Out &out)
         }
         d.depthAttachmentPixelFormat = (MTLPixelFormat)f.depthFormat;
         d.stencilAttachmentPixelFormat = (MTLPixelFormat)f.stencilFormat;
-        if (f.samples) d.rasterSampleCount = f.samples;
+        if (f.samples)
+            d.rasterSampleCount = f.samples;
         d.inputPrimitiveTopology = (MTLPrimitiveTopologyClass)f.topology;
         d.rasterizationEnabled = f.rasterization != 0;
         if (f.vertexInputs) {
             MTLVertexDescriptor *v = [MTLVertexDescriptor vertexDescriptor];
             for (unsigned i = 0; i < 31; i++) {
-                if (!f.attributes[i].format) continue;
+                if (!f.attributes[i].format)
+                    continue;
                 v.attributes[i].format = (MTLVertexFormat)f.attributes[i].format;
                 v.attributes[i].offset = f.attributes[i].offset;
                 v.attributes[i].bufferIndex = f.attributes[i].buffer;
@@ -1080,13 +1195,17 @@ static void handle(uint32_t op, const std::vector<unsigned char> &in, Out &out)
         const QMComputePipeline &f = fields<QMComputePipeline>(in);
         MTLComputePipelineDescriptor *d = [MTLComputePipelineDescriptor new];
         d.computeFunction = object<id<MTLFunction>>(f.function, "kernel function");
-        if (f.maxThreads) d.maxTotalThreadsPerThreadgroup = f.maxThreads;
+        if (f.maxThreads)
+            d.maxTotalThreadsPerThreadgroup = f.maxThreads;
         d.threadGroupSizeIsMultipleOfThreadExecutionWidth = f.multipleOfExecutionWidth != 0;
-        if (f.maxCallStackDepth) d.maxCallStackDepth = f.maxCallStackDepth;
+        if (f.maxCallStackDepth)
+            d.maxCallStackDepth = f.maxCallStackDepth;
         for (unsigned i = 0; i < 31; i++)
-            if (f.mutability[i]) d.buffers[i].mutability = (MTLMutability)f.mutability[i];
+            if (f.mutability[i])
+                d.buffers[i].mutability = (MTLMutability)f.mutability[i];
         NSError *error = nil;
-        if (gVerbose) note("  compute pipeline %s", d.computeFunction.name.UTF8String);
+        if (gVerbose)
+            note("  compute pipeline %s", d.computeFunction.name.UTF8String);
         id<MTLComputePipelineState> pipeline = [gDevice newComputePipelineStateWithDescriptor:d
                                                                                       options:MTLPipelineOptionNone
                                                                                    reflection:nil
@@ -1138,34 +1257,44 @@ static void handle(uint32_t op, const std::vector<unsigned char> &in, Out &out)
         out.handle = keep([gDevice newDepthStencilStateWithDescriptor:d], "depth stencil state");
         break;
     }
-    case QM_QUEUE: out.handle = keep([gDevice newCommandQueueWithMaxCommandBufferCount:256], "queue"); break;
+    case QM_QUEUE:
+        out.handle = keep([gDevice newCommandQueueWithMaxCommandBufferCount:256], "queue");
+        break;
     case QM_EVENT:
         out.handle = keep(fields<uint64_t>(in) ? (id)[gDevice newSharedEvent] : (id)[gDevice newEvent], "event");
         break;
     case QM_EVENT_VALUE: {
         id event = object<id>(fields<uint64_t>(in), "event");
-        if (![event conformsToProtocol:@protocol(MTLSharedEvent)]) refuse("not a shared event");
+        if (![event conformsToProtocol:@protocol(MTLSharedEvent)])
+            refuse("not a shared event");
         out.word([(id<MTLSharedEvent>)event signaledValue]);
         break;
     }
     case QM_EVENT_SET_VALUE: {
         const QMHandleValue &f = fields<QMHandleValue>(in);
         id event = object<id>(f.handle, "event");
-        if (![event conformsToProtocol:@protocol(MTLSharedEvent)]) refuse("not a shared event");
+        if (![event conformsToProtocol:@protocol(MTLSharedEvent)])
+            refuse("not a shared event");
         [(id<MTLSharedEvent>)event setSignaledValue:f.value];
         break;
     }
-    case QM_FENCE: out.handle = keep([gDevice newFence], "fence"); break;
-    case QM_COMMIT: commit(fields<QMCommit>(in)); break;
+    case QM_FENCE:
+        out.handle = keep([gDevice newFence], "fence");
+        break;
+    case QM_COMMIT:
+        commit(fields<QMCommit>(in));
+        break;
     case QM_LINEAR_BYTES_PER_ROW: {
         const QMHandleValue &f = fields<QMHandleValue>(in);
         const uint64_t texel = texelBytes(f.handle);
-        if (!texel) refuse("no linear layout for pixel format " + std::to_string(f.handle));
+        if (!texel)
+            refuse("no linear layout for pixel format " + std::to_string(f.handle));
         const uint64_t alignment = [gDevice minimumLinearTextureAlignmentForPixelFormat:(MTLPixelFormat)f.handle];
         out.word((f.value * texel + alignment - 1) / alignment * alignment);
         break;
     }
-    default: refuse("unknown request " + std::to_string(op));
+    default:
+        refuse("unknown request " + std::to_string(op));
     }
 }
 
@@ -1175,8 +1304,10 @@ static void drainLog()
     static std::string partial;
     const uint64_t written = load(&control()->logWritten);
     uint64_t read = control()->logRead;
-    if (written == read) return;
-    if (written - read > QM_LOG_BYTES) read = written - QM_LOG_BYTES;
+    if (written == read)
+        return;
+    if (written - read > QM_LOG_BYTES)
+        read = written - QM_LOG_BYTES;
     for (; read < written; read++) {
         const char c = (char)gWindow[QM_LOG + read % QM_LOG_BYTES];
         if (c != '\n') {
@@ -1238,7 +1369,8 @@ static void serve(uint64_t number)
     }
     const QMReplyHeader reply = {status, (uint32_t)out.data.size(), out.handle};
     memcpy(gWindow + QM_REPLY, &reply, sizeof reply);
-    if (!out.data.empty()) memcpy(gWindow + QM_REPLY + sizeof reply, out.data.data(), out.data.size());
+    if (!out.data.empty())
+        memcpy(gWindow + QM_REPLY + sizeof reply, out.data.data(), out.data.size());
     store(&control()->reply, number);
 }
 
@@ -1305,7 +1437,8 @@ int main(int argc, char **argv)
                 continue;
             }
             store(&control()->hostBeat, control()->hostBeat + 1);
-            if ((idle & 1023) == 0) drainLog();
+            if ((idle & 1023) == 0)
+                drainLog();
             // Spin while the guest is busy, then poll ever more slowly.
             if (idle < 20000) {
                 idle++;

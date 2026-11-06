@@ -13,7 +13,8 @@
 #include "NativeBridgeMetalFrontend.h"
 #include "bridge/NativeMetalObjects.h"
 
-static void missing(const char *, const char *) {}
+static void missing(const char *, const char *)
+{}
 
 static IOSurfaceRef biplanar(OSType fourcc, size_t w, size_t h, size_t bytesPerElement)
 {
@@ -49,18 +50,21 @@ static IOSurfaceRef biplanar(OSType fourcc, size_t w, size_t h, size_t bytesPerE
 int main(int argc, char **argv)
 {
     @autoreleasepool {
-        if (argc < 4) return 2;
+        if (argc < 4)
+            return 2;
         setenv("NMB_DEVICE_BASE_NSOBJECT", "1", 1);
         id<MTLDevice> m2v = native_bridge_metal_open(argv[3], argv[2], 0, missing);
         NSString *why = nil;
         id<MTLDevice> dev = m2v ? raw_metal_device_open(argv[1], 0, m2v, &why) : nil;
-        if (!dev) return 1;
+        if (!dev)
+            return 1;
         int failed = 0;
         auto verdict = [&](const char *what, id<MTLTexture> t, bool want) {
             const bool raw = t && raw_metal_texture_kept(t);
             printf("%s %-58s %s\n", raw == want ? "OK  " : "FAIL", what, raw ? "raw" : "m2v");
             failed += raw != want;
         };
+
         struct Case {
             const char *what;
             OSType fourcc;
@@ -73,6 +77,7 @@ int main(int argc, char **argv)
             {"420v 640x360, texture 648x360 (larger than its planes)", '420v', 640, 360, 1, 648, 360, false},
             {"x420 1280x720 (10-bit: m2v's)", 'x420', 1280, 720, 2, 1280, 720, false},
         };
+
         for (const Case &c : cases) {
             IOSurfaceRef s = biplanar(c.fourcc, c.sw, c.sh, c.bpe);
             MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormat(500)

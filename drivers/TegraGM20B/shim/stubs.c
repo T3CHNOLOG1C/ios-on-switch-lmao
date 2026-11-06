@@ -36,23 +36,27 @@ int bit_entry(struct nvkm_bios *b, u8 id, struct bit_entry *e)
 	(void)e;
 	return -ENOENT;
 }
+
 u8 nvbios_rd08(struct nvkm_bios *b, u32 a)
 {
 	(void)b;
 	(void)a;
 	return 0;
 }
+
 u32 nvbios_rd32(struct nvkm_bios *b, u32 a)
 {
 	(void)b;
 	(void)a;
 	return 0;
 }
+
 int nvbios_exec(struct nvbios_init *i)
 {
 	(void)i;
 	return -ENODEV;
 }
+
 u32 nvbios_boostEm(struct nvkm_bios *b, u8 i, u8 *v, u8 *h, u8 *c, u8 *l, struct nvbios_boostE *e)
 {
 	(void)b;
@@ -64,6 +68,7 @@ u32 nvbios_boostEm(struct nvkm_bios *b, u8 i, u8 *v, u8 *h, u8 *c, u8 *l, struct
 	(void)e;
 	return 0;
 }
+
 u32 nvbios_boostSp(struct nvkm_bios *b, int i, u32 d, u8 *v, u8 *h, u8 c, u8 l,
 		   struct nvbios_boostS *s)
 {
@@ -77,6 +82,7 @@ u32 nvbios_boostSp(struct nvkm_bios *b, int i, u32 d, u8 *v, u8 *h, u8 c, u8 l,
 	(void)s;
 	return 0;
 }
+
 u32 nvbios_cstepEm(struct nvkm_bios *b, u8 p, u8 *v, u8 *h, struct nvbios_cstepE *e)
 {
 	(void)b;
@@ -86,6 +92,7 @@ u32 nvbios_cstepEm(struct nvkm_bios *b, u8 p, u8 *v, u8 *h, struct nvbios_cstepE
 	(void)e;
 	return 0;
 }
+
 u32 nvbios_cstepXp(struct nvkm_bios *b, int i, u8 *v, u8 *h, struct nvbios_cstepX *x)
 {
 	(void)b;
@@ -95,6 +102,7 @@ u32 nvbios_cstepXp(struct nvkm_bios *b, int i, u8 *v, u8 *h, struct nvbios_cstep
 	(void)x;
 	return 0;
 }
+
 u32 nvbios_M0203Em(struct nvkm_bios *b, u8 r, u8 *v, u8 *h, struct nvbios_M0203E *e)
 {
 	(void)b;
@@ -104,6 +112,7 @@ u32 nvbios_M0203Em(struct nvkm_bios *b, u8 r, u8 *v, u8 *h, struct nvbios_M0203E
 	(void)e;
 	return 0;
 }
+
 u32 nvbios_P0260Ep(struct nvkm_bios *b, int i, u8 *v, u8 *h, struct nvbios_P0260E *e)
 {
 	(void)b;
@@ -113,6 +122,7 @@ u32 nvbios_P0260Ep(struct nvkm_bios *b, int i, u8 *v, u8 *h, struct nvbios_P0260
 	(void)e;
 	return 0;
 }
+
 u32 nvbios_P0260Xp(struct nvkm_bios *b, int i, u8 *v, u8 *h, struct nvbios_P0260X *x)
 {
 	(void)b;
@@ -122,6 +132,7 @@ u32 nvbios_P0260Xp(struct nvkm_bios *b, int i, u8 *v, u8 *h, struct nvbios_P0260
 	(void)x;
 	return 0;
 }
+
 u32 nvbios_perfEp(struct nvkm_bios *b, int i, u8 *v, u8 *h, u8 *c, u8 *l, struct nvbios_perfE *e)
 {
 	(void)b;
@@ -133,6 +144,7 @@ u32 nvbios_perfEp(struct nvkm_bios *b, int i, u8 *v, u8 *h, u8 *c, u8 *l, struct
 	(void)e;
 	return 0;
 }
+
 u32 nvbios_perfSp(struct nvkm_bios *b, u32 d, int i, u8 *v, u8 *h, u8 c, u8 l,
 		  struct nvbios_perfS *s)
 {
@@ -146,6 +158,7 @@ u32 nvbios_perfSp(struct nvkm_bios *b, u32 d, int i, u8 *v, u8 *h, u8 c, u8 l,
 	(void)s;
 	return 0;
 }
+
 u32 nvbios_vmap_parse(struct nvkm_bios *b, u8 *v, u8 *h, u8 *c, u8 *l, struct nvbios_vmap *m)
 {
 	(void)b;
@@ -156,6 +169,7 @@ u32 nvbios_vmap_parse(struct nvkm_bios *b, u8 *v, u8 *h, u8 *c, u8 *l, struct nv
 	(void)m;
 	return 0;
 }
+
 u32 nvbios_vmap_entry_parse(struct nvkm_bios *b, int i, u8 *v, u8 *l, struct nvbios_vmap_entry *e)
 {
 	(void)b;
@@ -165,6 +179,7 @@ u32 nvbios_vmap_entry_parse(struct nvkm_bios *b, int i, u8 *v, u8 *l, struct nvb
 	(void)e;
 	return 0;
 }
+
 u32 nvbios_volt_parse(struct nvkm_bios *b, u8 *v, u8 *h, u8 *c, u8 *l, struct nvbios_volt *t)
 {
 	(void)b;
@@ -175,6 +190,7 @@ u32 nvbios_volt_parse(struct nvkm_bios *b, u8 *v, u8 *h, u8 *c, u8 *l, struct nv
 	(void)t;
 	return 0;
 }
+
 u32 nvbios_volt_entry_parse(struct nvkm_bios *b, int i, u8 *v, u8 *l, struct nvbios_volt_entry *e)
 {
 	(void)b;
@@ -184,12 +200,14 @@ u32 nvbios_volt_entry_parse(struct nvkm_bios *b, int i, u8 *v, u8 *l, struct nvb
 	(void)e;
 	return 0;
 }
+
 int nvbios_vpstate_parse(struct nvkm_bios *b, struct nvbios_vpstate_header *h)
 {
 	(void)b;
 	(void)h;
 	return -ENODEV;
 }
+
 int nvbios_vpstate_entry(struct nvkm_bios *b, struct nvbios_vpstate_header *h, u8 i,
 			 struct nvbios_vpstate_entry *e)
 {
@@ -206,10 +224,12 @@ bool nvkm_lockvgac(struct nvkm_device *d, bool lock)
 	(void)lock;
 	return false;
 }
+
 void nvkm_pci_msi_rearm(struct nvkm_device *d)
 {
 	(void)d;
 }
+
 int nvkm_pcie_set_link(struct nvkm_pci *p, enum nvkm_pcie_speed s, u8 w)
 {
 	(void)p;
@@ -224,21 +244,25 @@ int gf100_ram_new(struct nvkm_fb *fb, struct nvkm_ram **r)
 	*r = NULL;
 	return -ENODEV;
 }
+
 int gm200_ram_new(struct nvkm_fb *fb, struct nvkm_ram **r)
 {
 	(void)fb;
 	*r = NULL;
 	return -ENODEV;
 }
+
 int nvkm_ram_init(struct nvkm_ram *r)
 {
 	(void)r;
 	return 0;
 }
+
 void nvkm_ram_del(struct nvkm_ram **r)
 {
 	*r = NULL;
 }
+
 int nvkm_ram_get(struct nvkm_device *d, u8 heap, u8 type, u8 page, u64 size, bool contig, bool back,
 		 struct nvkm_memory **m)
 {
@@ -257,16 +281,19 @@ void nvkm_therm_clkgate_enable(struct nvkm_therm *t)
 {
 	(void)t;
 }
+
 void nvkm_therm_clkgate_fini(struct nvkm_therm *t, bool s)
 {
 	(void)t;
 	(void)s;
 }
+
 void nvkm_therm_clkgate_init(struct nvkm_therm *t, const struct nvkm_therm_clkgate_pack *p)
 {
 	(void)t;
 	(void)p;
 }
+
 int nvkm_therm_cstate(struct nvkm_therm *t, int f, int d)
 {
 	(void)t;
@@ -279,6 +306,7 @@ void r535_mmu_vaspace_del(struct nvkm_vmm *v)
 {
 	(void)v;
 }
+
 int nvkm_gsp_gcx_ready(struct nvkm_gsp *g)
 {
 	(void)g;

@@ -39,6 +39,7 @@ enum : uint32_t {
     CLK_SOURCE_DSIA_LP = 0x620,
     CLK_SOURCE_UART_FST_MIPI_CAL = 0x66C,
 };
+
 constexpr uint32_t kDisp1 = 1u << 27, kHost1x = 1u << 28, kDsi = 1u << 16, kMipiCal = 1u << 24;
 constexpr uint32_t kUartFstMipiCal = 1u << 17, kDsiaLp = 1u << 19;
 constexpr uint32_t kDiv6 = 10, kDiv2p5 = 3;  // CLK_SRC_DIV(6), CLK_SRC_DIV(2.5)
@@ -52,6 +53,7 @@ enum : uint32_t {
     IO_DPD2_STATUS = 0x1C4,
     SECURE_SCRATCH113 = 0xB1C
 };
+
 constexpr uint32_t kDpdOff = 1u << 30, kDpdDsi = 1u << 2, kDpdDsib = 1u << 7;
 
 // APB_MISC (bytes): GP_DSI_PAD_CONTROL (T210B01 only), PINMUX_AUX_LCD_RST (pull-down, function 0).
@@ -97,6 +99,7 @@ enum : uint32_t {
     DC_WIN_DV_CONTROL = 0x70E,
     DC_WINBUF_BLEND_LAYER_CONTROL = 0x716,
 };
+
 constexpr uint32_t kGeneralActReq = 1u << 0, kGeneralUpdate = 1u << 8, kAllActReq = 0x1F, kAllUpdate = 0x1F00;
 
 // DSI A (words).
@@ -130,6 +133,7 @@ enum : uint32_t {
     DSI_PAD_CONTROL_1 = 0x4F,
     DSI_INIT_SEQ_DATA_15_B01 = 0x62,
 };
+
 constexpr uint32_t kDsiTriggerHost = 1u << 1;
 constexpr uint32_t kDsiPadsDown =
     (1u << 24) | (0xFu << 16) | (1u << 8) | 0xFu;  // VS1_PULLDN_CLK|PULLDN(F)|PDIO_CLK|PDIO(F)
@@ -336,12 +340,15 @@ volatile uint32_t *gCar, *gDc, *gDsi, *gMipiCal, *gApbMisc, *gPmc;
 
 template <size_t N> void write(volatile uint32_t *base, const Reg (&table)[N])
 {
-    for (const Reg &reg : table) base[reg.index] = reg.value;
+    for (const Reg &reg : table)
+        base[reg.index] = reg.value;
 }
+
 volatile uint32_t &car(uint32_t offset)
 {
     return gCar[offset / 4];
 }
+
 volatile uint32_t &pmc(uint32_t offset)
 {
     return gPmc[(0x400 + offset) / 4];
@@ -349,7 +356,8 @@ volatile uint32_t &pmc(uint32_t offset)
 
 void map()
 {
-    if (gCar) return;
+    if (gCar)
+        return;
     gCar = (volatile uint32_t *)ml_io_map(kCarPA, 0x1000);
     gDc = (volatile uint32_t *)ml_io_map(kDisplayAPA, 0x4000);
     gDsi = (volatile uint32_t *)ml_io_map(kDsiPA, 0x1000);
@@ -381,11 +389,14 @@ void sendLp(uint32_t word, unsigned ms = 0)
 {
     gDsi[DSI_WR_DATA] = word;
     gDsi[DSI_TRIGGER] = kDsiTriggerHost;
-    if (ms) IOSleep(ms);
+    if (ms)
+        IOSleep(ms);
 }
+
 void sendLp(const uint32_t *words, unsigned count)
 {
-    for (unsigned i = 0; i < count; ++i) gDsi[DSI_WR_DATA] = words[i];
+    for (unsigned i = 0; i < count; ++i)
+        gDsi[DSI_WR_DATA] = words[i];
     gDsi[DSI_TRIGGER] = kDsiTriggerHost;
 }
 }  // namespace

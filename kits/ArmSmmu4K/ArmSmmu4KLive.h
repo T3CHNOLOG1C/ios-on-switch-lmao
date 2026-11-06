@@ -16,6 +16,7 @@ typedef struct {
     uint32_t *alias_scratch;
     size_t alias_scratch_entries;
 } ArmSmmu4KLiveArena;
+
 typedef struct {
     ArmSmmu4KResult tables;
     uint64_t generation;
@@ -23,6 +24,7 @@ typedef struct {
     /* The context bank's register offset the last whole-verification update observed its image at; 0 before the first. */
     uint64_t context_offset;
 } ArmSmmu4KLiveState;
+
 typedef struct {
     void *cookie;
     /* Clean/publish the actual mapped table page for device walks. Required
@@ -30,18 +32,21 @@ typedef struct {
      * Return zero only after visibility is established. No fake success. */
     int (*publish_table_page)(void *, volatile uint64_t *, size_t bytes);
 } ArmSmmu4KLiveVisibility;
+
 typedef struct {
     const ArmSmmu4KLiveArena *arena;
     ArmSmmu4KLiveState *state;
     const ArmSmmu4KRange *ranges;
     size_t count;
 } ArmSmmu4KLiveRegion;
+
 typedef struct {
     size_t descriptor_reads, descriptor_writes, published_pages;
     unsigned complete, translation_removed, must_retain_resources;
     unsigned whole_verification; /* this update re-proved the whole region (every 64th of a region) */
     ArmSmmu4KProgramResult synchronization;
 } ArmSmmu4KLiveResult;
+
 /* Prepare an INACTIVE empty native4K arena. Preallocate only real intermediate
  * table pages; all leaf slots remain invalid. No MMIO, TLB, allocator or cache
  * operations. The explicit leaf budget bounds aperture size and traversal.

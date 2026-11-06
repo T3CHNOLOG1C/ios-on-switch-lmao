@@ -116,10 +116,12 @@ struct switch_panic_record {
     uint32_t block_crc[CONSOLE_BYTES / BLOCK_BYTES];
     uint32_t header_crc; /* of everything above */
 };
+
 struct switch_panic_console {
     uint32_t sig, start, size;
     char text[];
 };
+
 struct switch_panic_stackshot {
     uint64_t magic;
     uint32_t bytes, crc;  /* the stackshot at SHOT_OFFSET and its CRC32 */
@@ -144,18 +146,22 @@ static volatile struct switch_panic_record *record(void)
 {
     return (volatile struct switch_panic_record *)(region + RECORD_OFFSET);
 }
+
 static volatile struct switch_panic_console *console(void)
 {
     return (volatile struct switch_panic_console *)(region + CONSOLE_OFFSET);
 }
+
 static volatile struct switch_panic_stackshot *shot(void)
 {
     return (volatile struct switch_panic_stackshot *)(region + SHOT_HEADER);
 }
+
 static void drain(void)
 {
     __asm__ volatile("dsb sy" ::: "memory");
 }
+
 static uint32_t crc_of(const volatile void *bytes, size_t length)
 {
     return crc32(0, (const void *)(uintptr_t)bytes, length);
@@ -164,15 +170,19 @@ static uint32_t crc_of(const volatile void *bytes, size_t length)
 /* --- the record --------------------------------------------------------------------------------------------- */
 
 static uint32_t text_at; /* bytes of console()->text written so far */
+
 static void put(const char *bytes, size_t length)
 {
     volatile char *text = console()->text;
-    for (size_t i = 0; i < length && text_at < TEXT_MAX; ++i) text[text_at++] = bytes[i];
+    for (size_t i = 0; i < length && text_at < TEXT_MAX; ++i)
+        text[text_at++] = bytes[i];
 }
+
 static void puts_(const char *s)
 {
     size_t n = 0;
-    while (s[n]) ++n;
+    while (s[n])
+        ++n;
     put(s, n);
 }
 
@@ -180,7 +190,8 @@ static void puts_(const char *s)
 static void msgbuf_tail(uint32_t limit, void (*out)(const char *, size_t))
 {
     const struct msgbuf *mb = msgbufp;
-    if (!mb || mb->msg_magic != MSG_MAGIC || mb->msg_size <= 0 || mb->msg_size > MAX_MSG_BSIZE || !mb->msg_bufc) return;
+    if (!mb || mb->msg_magic != MSG_MAGIC || mb->msg_size <= 0 || mb->msg_size > MAX_MSG_BSIZE || !mb->msg_bufc)
+        return;
     const uint32_t size = (uint32_t)mb->msg_size, x = (uint32_t)mb->msg_bufx % size;
     const uint32_t n = limit < size ? limit : size;
     uint32_t at = (x + size - n) % size, left = n;
@@ -196,10 +207,12 @@ static void msgbuf_tail(uint32_t limit, void (*out)(const char *, size_t))
         uint32_t from = at;
         for (uint32_t i = at; i < at + run; ++i) /* an unwrapped ring is NUL past bufx */
             if (!mb->msg_bufc[i]) {
-                if (i > from) out(mb->msg_bufc + from, i - from);
+                if (i > from)
+                    out(mb->msg_bufc + from, i - from);
                 from = i + 1;
             }
-        if (at + run > from) out(mb->msg_bufc + from, at + run - from);
+        if (at + run > from)
+            out(mb->msg_bufc + from, at + run - from);
         at = (at + run) % size;
         left -= run;
     }
@@ -209,16 +222,19 @@ static void msgbuf_tail(uint32_t limit, void (*out)(const char *, size_t))
 static int append_xnu_log(const volatile uint8_t *base, uint32_t bytes)
 {
     const volatile struct embedded_panic_header *h = (const volatile struct embedded_panic_header *)base;
-    if (h->eph_magic != EMBEDDED_PANIC_MAGIC) return 0;
+    if (h->eph_magic != EMBEDDED_PANIC_MAGIC)
+        return 0;
     const uint32_t parts[2][2] = {{h->eph_panic_log_offset, h->eph_panic_log_len},
                                   {h->eph_other_log_offset, h->eph_other_log_len}};
     puts_("\n--- XNU panic log ---\n");
     for (int i = 0; i < 2; ++i) {
         const uint32_t offset = parts[i][0], length = parts[i][1];
-        if (!offset || offset >= bytes || length > bytes - offset) continue;
+        if (!offset || offset >= bytes || length > bytes - offset)
+            continue;
         for (uint32_t j = 0; j < length && text_at < TEXT_MAX; ++j) {
             const char c = (char)base[offset + j];
-            if (c) put(&c, 1);
+            if (c)
+                put(&c, 1);
         }
     }
     return 1;
@@ -233,7 +249,8 @@ static void keep_stackshot(const volatile uint8_t *base, uint32_t bytes)
     char line[160];
     k->magic = 0;
     drain();
-    if (h->eph_magic != EMBEDDED_PANIC_MAGIC) return;
+    if (h->eph_magic != EMBEDDED_PANIC_MAGIC)
+        return;
     const uint32_t offset = h->eph_stackshot_offset, length = h->eph_stackshot_len;
     const uint64_t flags = h->eph_panic_flags;
     if (!(flags & EMBEDDED_PANIC_HEADER_FLAG_STACKSHOT_SUCCEEDED) || !offset || !length || offset >= bytes ||
@@ -244,7 +261,8 @@ static void keep_stackshot(const volatile uint8_t *base, uint32_t bytes)
                  SHOT_MAX >> 10);
     } else {
         volatile uint8_t *to = region + SHOT_OFFSET;
-        for (uint32_t i = 0; i < length; ++i) to[i] = base[offset + i];
+        for (uint32_t i = 0; i < length; ++i)
+            to[i] = base[offset + i];
         k->bytes = length;
         k->crc = crc_of(to, length);
         k->panic_flags = flags;
@@ -305,19 +323,23 @@ static const uint32_t kBlack = 0xff000000u, kGrey = 0xffc0c0c0u;
 
 static void glyph(unsigned col, unsigned row, unsigned char ch, uint32_t color)
 {
-    if (ch < 32 || ch > 126) ch = '?';
+    if (ch < 32 || ch > 126)
+        ch = '?';
     const unsigned char *rows = iso_font + ch * 16u;
     for (unsigned y = 0; y < 16; ++y)
         for (unsigned x = 0; x < 8; ++x)
             switch_diag_pixel(screen, col * 8 + x, row * 16 + y, (rows[y] >> x) & 1 ? color : kBlack);
 }
+
 static void clear_rows(unsigned first, unsigned last)
 {
     for (unsigned x = 0; x < 1280; ++x) {
         volatile uint32_t *column = screen + (uint64_t)(1279 - x) * 720;
-        for (unsigned y = first * 16; y < last * 16 && y < 720; ++y) column[y] = kBlack;
+        for (unsigned y = first * 16; y < last * 16 && y < 720; ++y)
+            column[y] = kBlack;
     }
 }
+
 /* `text` from row `row` to row `last` (exclusive), wrapped at COLS: the next free row. */
 static unsigned draw(unsigned row, unsigned last, const char *text, size_t length, uint32_t color)
 {
@@ -329,35 +351,42 @@ static unsigned draw(unsigned row, unsigned last, const char *text, size_t lengt
             ++row;
             continue;
         }
-        if (c == '\r') continue;
+        if (c == '\r')
+            continue;
         if (col == COLS) {
             col = 0;
-            if (++row == last) break;
+            if (++row == last)
+                break;
         }
         glyph(col++, row, (unsigned char)(c == '\t' ? ' ' : c), color);
     }
     return col ? row + 1 : row;
 }
+
 static unsigned drawz(unsigned row, unsigned last, const char *s, uint32_t color)
 {
     size_t n = 0;
-    while (s[n]) ++n;
+    while (s[n])
+        ++n;
     return draw(row, last, s, n, color);
 }
 
 /* The last rows-worth of lines of the kernel log, into the log area. */
 static char tail_text[ROWS * COLS];
 static size_t tail_used;
+
 static void tail_out(const char *bytes, size_t length)
 {
     for (size_t i = 0; i < length; ++i) {
         if (tail_used == sizeof(tail_text)) { /* keep the newest: drop the oldest half */
-            for (size_t j = 0; j < sizeof(tail_text) / 2; ++j) tail_text[j] = tail_text[j + sizeof(tail_text) / 2];
+            for (size_t j = 0; j < sizeof(tail_text) / 2; ++j)
+                tail_text[j] = tail_text[j + sizeof(tail_text) / 2];
             tail_used = sizeof(tail_text) / 2;
         }
         tail_text[tail_used++] = bytes[i];
     }
 }
+
 static void draw_log_area(const char *title, const char *text, size_t length)
 {
     clear_rows(LOG_ROW, ROWS - 1);
@@ -367,22 +396,28 @@ static void draw_log_area(const char *title, const char *text, size_t length)
     unsigned rows = 0;
     while (start > 0) {
         size_t line = start - 1;
-        while (line > 0 && text[line - 1] != '\n') --line;
+        while (line > 0 && text[line - 1] != '\n')
+            --line;
         const size_t chars = start - line;
         const unsigned need = chars > COLS ? (unsigned)((chars - 2) / COLS + 1) : 1; /* its newline takes no column */
-        if (rows + need > ROWS - 2 - LOG_ROW) break;
+        if (rows + need > ROWS - 2 - LOG_ROW)
+            break;
         rows += need;
         start = line;
     }
     draw(LOG_ROW + 1, ROWS - 1, text + start, length - start, kGrey);
 }
+
 static int watchdog_panic; /* the panic string is a watchdog timeout (switch_panic_begin) */
+
 static int starts_with(const char *s, const char *prefix)
 {
     while (*prefix)
-        if (*s++ != *prefix++) return 0;
+        if (*s++ != *prefix++)
+            return 0;
     return 1;
 }
+
 static void draw_status(void)
 {
     char line[COLS + 1];
@@ -404,10 +439,13 @@ static void draw_status(void)
     drawz(ROWS - 1, ROWS, line, save_on && region ? SWITCH_GREEN : SWITCH_RED);
     drain();
 }
+
 static void draw_screen(void)
 {
-    if (!screen_taken) return;
-    for (uint32_t i = 0; i < SWITCH_FB_BYTES / 4; ++i) screen[i] = kBlack;
+    if (!screen_taken)
+        return;
+    for (uint32_t i = 0; i < SWITCH_FB_BYTES / 4; ++i)
+        screen[i] = kBlack;
     char title[COLS + 1];
     uint64_t ns = 0;
     absolutetime_to_nanoseconds(panic_at, &ns);
@@ -425,19 +463,23 @@ static void draw_screen(void)
 
 static void arm_watchdog(unsigned seconds)
 {
-    if (!tmr || !seconds) return;
-    if (seconds > 255) seconds = 255;
+    if (!tmr || !seconds)
+        return;
+    if (seconds > 255)
+        seconds = 255;
     tmr[TMR5_PTV / 4] = (1u << 31) | (1u << 30) | 250000u; /* TMR5: enabled, periodic, 250 ms */
     tmr[WDT0_CFG / 4] = 5u | (seconds << 4) | (1u << 15);  /* WDT0: source TMR5, period, PMC2CAR reset */
     tmr[WDT0_CMD / 4] = 1u;                                /* START_COUNTER */
     drain();
 }
+
 static void __attribute__((noreturn)) pmc_reset(void)
 {
     pmc[PMC_SCRATCH0 / 4] = pmc[PMC_SCRATCH0 / 4] & ~PMC_SCRATCH0_MODES; /* no warmboot, RCM or hekate mode request */
     drain();
     pmc[PMC_CNTRL / 4] = pmc[PMC_CNTRL / 4] | PMC_MAIN_RST;
-    for (;;) __asm__ volatile("wfe" ::: "memory");
+    for (;;)
+        __asm__ volatile("wfe" ::: "memory");
 }
 
 /* --- hooks ------------------------------------------------------------------------------------------------- */
@@ -462,7 +504,8 @@ void switch_panic_save_init(void)
         return;
     }
     last_reset = pmc[PMC_RST_STATUS / 4] & 7;
-    if (pmc[PMC_SCRATCH37 / 4] == TPAN) pmc[PMC_SCRATCH37 / 4] = 0; /* hekate clears it; never leave it for later */
+    if (pmc[PMC_SCRATCH37 / 4] == TPAN)
+        pmc[PMC_SCRATCH37 / 4] = 0; /* hekate clears it; never leave it for later */
     /* The last boot's record, checked now; written to Data by kern_exec.c (switch_panic_save_pending). */
     volatile struct switch_panic_record *r = record();
     volatile struct switch_panic_console *c = console();
@@ -474,7 +517,8 @@ void switch_panic_save_init(void)
     pending = 1;
     for (uint32_t b = 0; b < r->blocks; ++b) {
         const uint32_t at = b * BLOCK_BYTES, n = r->text_bytes - at < BLOCK_BYTES ? r->text_bytes - at : BLOCK_BYTES;
-        if (r->block_crc[b] != crc_of(c->text + at, n)) ++pending_damaged;
+        if (r->block_crc[b] != crc_of(c->text + at, n))
+            ++pending_damaged;
     }
     /* Reset before the panic log was appended (by the watchdog): it is still in the last boot's XNU buffer, which XNU
      * clears only later (check_for_panic_log). Appended as DRAM kept it, and sealed again (the damage count stays). */
@@ -487,7 +531,8 @@ void switch_panic_save_init(void)
 
 int switch_panic_save_xnu_buffer(uintptr_t *base, unsigned int *bytes)
 {
-    if (!save_on || !region) return 0;
+    if (!save_on || !region)
+        return 0;
     *base = (uintptr_t)region;
     *bytes = XNU_LOG_BYTES;
     return 1;
@@ -495,19 +540,23 @@ int switch_panic_save_xnu_buffer(uintptr_t *base, unsigned int *bytes)
 
 int switch_panic_begin(const char *format, va_list *args, unsigned long caller, int take_screen)
 {
-    if (__atomic_exchange_n(&begun, 1u, __ATOMIC_ACQ_REL)) return screen_taken;
+    if (__atomic_exchange_n(&begun, 1u, __ATOMIC_ACQ_REL))
+        return screen_taken;
     panic_at = mach_absolute_time();
     panic_cpu = (unsigned)cpu_number();
     va_list copy;
     va_copy(copy, *args);
     const int length = vsnprintf(panic_line, sizeof(panic_line), format, copy);
     va_end(copy);
-    if (length < 0) panic_line[0] = 0;
+    if (length < 0)
+        panic_line[0] = 0;
     /* watchdogd's (AppleARMWatchdogTimer's IOWatchdogUserClient) and the kernel's own check of watchdogd. */
     watchdog_panic = starts_with(panic_line, "userspace watchdog timeout:") ||
                      starts_with(panic_line, "watchdog timeout: no checkins from ");
-    if (watchdog_panic && !reboot_arg) reboot_s = WATCHDOG_REBOOT_S;
-    if (!switch_display_is_on() && !reboot_arg && !reboot_s) reboot_s = DARK_REBOOT_S; /* nothing to photograph */
+    if (watchdog_panic && !reboot_arg)
+        reboot_s = WATCHDOG_REBOOT_S;
+    if (!switch_display_is_on() && !reboot_arg && !reboot_s)
+        reboot_s = DARK_REBOOT_S; /* nothing to photograph */
     screen_taken = take_screen && screen;
     if (save_on && region) {
         clock_sec_t secs = 0;
@@ -534,7 +583,8 @@ int switch_panic_begin(const char *format, va_list *args, unsigned long caller, 
         r->time_s = secs;
         r->time_ns = nsecs;
         seal(1);
-        if (hekate_on) pmc[PMC_SCRATCH37 / 4] = TPAN;
+        if (hekate_on)
+            pmc[PMC_SCRATCH37 / 4] = TPAN;
         arm_watchdog(reboot_s ? reboot_s + 15 : 0); /* the reset below, should the panic path hang */
     }
     draw_screen();
@@ -543,16 +593,19 @@ int switch_panic_begin(const char *format, va_list *args, unsigned long caller, 
 
 void switch_panic_halted(void)
 {
-    if (!begun || !screen_taken) return;
+    if (!begun || !screen_taken)
+        return;
     void (*const display)(const char *) = switch_display_panic_hook;
-    if (display) display(""); /* the display puts window A back again, should a flip have moved it */
+    if (display)
+        display(""); /* the display puts window A back again, should a flip have moved it */
     draw_screen();
 }
 
 void switch_panic_logged(void)
 {
     static uint32_t once;
-    if (!begun || __atomic_exchange_n(&once, 1u, __ATOMIC_ACQ_REL)) return;
+    if (!begun || __atomic_exchange_n(&once, 1u, __ATOMIC_ACQ_REL))
+        return;
     const volatile uint8_t *xnu = (const volatile uint8_t *)gPanicBase;
     if (save_on && region && xnu == region && record()->magic == RECORD_MAGIC && append_xnu_log(xnu, XNU_LOG_BYTES)) {
         keep_stackshot(xnu, XNU_LOG_BYTES);
@@ -566,20 +619,25 @@ void switch_panic_logged(void)
         static const char marker[] = "Panicked task ";
         for (uint32_t i = 0; i + sizeof(marker) < length && !from; ++i) {
             uint32_t n = 0;
-            while (n + 1 < sizeof(marker) && log[i + n] == marker[n]) ++n;
-            if ((i == 0 || log[i - 1] == '\n') && n + 1 == sizeof(marker)) from = i;
+            while (n + 1 < sizeof(marker) && log[i + n] == marker[n])
+                ++n;
+            if ((i == 0 || log[i - 1] == '\n') && n + 1 == sizeof(marker))
+                from = i;
         }
         draw_log_area("XNU panic log:", log + from, length - from);
         draw_status();
     }
     /* Still on XNU's verbose text console (a panic before the GUI took the screen): the panic log has scrolled the
      * panic string off the top, so it is printed again under the backtrace, where a photo of the screen finds it. */
-    if (!screen_taken && panic_line[0]) kdb_printf_unbuffered("\npanic (cpu %u): %s\n", panic_cpu, panic_line);
-    if (!save_on || !region || !reboot_s) return;
+    if (!screen_taken && panic_line[0])
+        kdb_printf_unbuffered("\npanic (cpu %u): %s\n", panic_cpu, panic_line);
+    if (!save_on || !region || !reboot_s)
+        return;
     uint64_t deadline = 0;
     nanoseconds_to_absolutetime((uint64_t)reboot_s * 1000000000ull, &deadline);
     deadline += panic_at;
-    while (mach_absolute_time() < deadline) __asm__ volatile("isb" ::: "memory");
+    while (mach_absolute_time() < deadline)
+        __asm__ volatile("isb" ::: "memory");
     pmc_reset();
 }
 
@@ -588,7 +646,8 @@ const char *switch_panic_save_pending(uint32_t *bytes, char *path, size_t path_b
     static const char *const resets[8] = {"power-on", "watchdog", "thermal sensor", "software (PMC)",
                                           "LP0 wake", "AOTAG",    "unknown 6",      "unknown 7"};
     if (!save_on || !region) {
-        if (save_on) os_log(OS_LOG_DEFAULT, "SwitchPanicSave: off: %s", save_off_reason);
+        if (save_on)
+            os_log(OS_LOG_DEFAULT, "SwitchPanicSave: off: %s", save_off_reason);
         return NULL;
     }
     if (!pending) {
@@ -610,7 +669,8 @@ const char *switch_panic_save_pending(uint32_t *bytes, char *path, size_t path_b
 
 const void *switch_panic_save_pending_stackshot(uint32_t *bytes)
 {
-    if (!save_on || !region || !pending) return NULL;
+    if (!save_on || !region || !pending)
+        return NULL;
     const volatile struct switch_panic_stackshot *k = shot();
     if (k->magic != SHOT_MAGIC || k->header_crc != crc_of(k, offsetof(struct switch_panic_stackshot, header_crc)) ||
         !k->bytes || k->bytes > SHOT_MAX)
@@ -627,7 +687,8 @@ const void *switch_panic_save_pending_stackshot(uint32_t *bytes)
 
 void switch_panic_save_done(int error, const char *path)
 {
-    if (!pending) return;
+    if (!pending)
+        return;
     if (error) {
         os_log(OS_LOG_DEFAULT, "SwitchPanicSave: writing %s failed: %d (kept for the next boot)", path, error);
         return;

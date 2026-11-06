@@ -24,26 +24,36 @@ struct Request {
 struct Queue {
     std::vector<Request> storage;
     Request *head = nullptr, *tail = nullptr;
+
     explicit Queue(const std::vector<std::tuple<uint64_t, uint32_t, bool>> &items) : storage(items.size())
     {
         for (size_t i = 0; i < items.size(); ++i) {
             storage[i] = {nullptr, std::get<0>(items[i]), std::get<1>(items[i]), std::get<2>(items[i]), false, int(i)};
-            if (i) storage[i - 1].next = &storage[i];
+            if (i)
+                storage[i - 1].next = &storage[i];
         }
         head = storage.empty() ? nullptr : &storage[0];
         tail = storage.empty() ? nullptr : &storage.back();
     }
-    Request *at(int id) { return &storage[size_t(id)]; }
+
+    Request *at(int id)
+    {
+        return &storage[size_t(id)];
+    }
+
     std::vector<int> ids() const
     {
         std::vector<int> out;
-        for (const Request *r = head; r; r = r->next) out.push_back(r->id);
+        for (const Request *r = head; r; r = r->next)
+            out.push_back(r->id);
         return out;
     }
+
     void checkTail() const
     {
         const Request *last = nullptr;
-        for (const Request *r = head; r; r = r->next) last = r;
+        for (const Request *r = head; r; r = r->next)
+            last = r;
         REQUIRE(tail == last);
     }
 };
@@ -62,7 +72,8 @@ static Picked pick(Queue &q, int first, uint32_t limit = 2048, uint32_t maxCount
         switchGatherReads(q.head, q.at(first), limit, maxCount, scan, &p.start, &p.sectors, maxGap, budget);
     // What the driver checks before unlinking.
     REQUIRE(switchChainFits(q.head, p.start, p.sectors, count, maxGap, budget));
-    if (!maxGap && !budget) REQUIRE(switchChainTiles(q.head, p.start, p.sectors, count));
+    if (!maxGap && !budget)
+        REQUIRE(switchChainTiles(q.head, p.start, p.sectors, count));
     Request *chain = switchUnlinkChain(q.head, q.tail, count);
     uint64_t at = p.start, gaps = 0;
     for (Request *r = chain; r; r = r->next) {
@@ -74,7 +85,8 @@ static Picked pick(Queue &q, int first, uint32_t limit = 2048, uint32_t maxCount
     }
     REQUIRE(chain->lba == p.start && gaps <= budget);
     REQUIRE(p.chain.size() == count && at == p.start + p.sectors && p.sectors <= limit);
-    for (const Request *r = q.head; r; r = r->next) REQUIRE(!r->chained);
+    for (const Request *r = q.head; r; r = r->next)
+        REQUIRE(!r->chained);
     q.checkTail();
     return p;
 }
@@ -156,7 +168,8 @@ static void limits()
     // The command's length: 1 MiB of sectors, never more; what does not fit stays queued.
     {
         std::vector<std::tuple<uint64_t, uint32_t, bool>> items;
-        for (int i = 0; i < 300; ++i) items.push_back({uint64_t(i) * 8, 8, false});
+        for (int i = 0; i < 300; ++i)
+            items.push_back({uint64_t(i) * 8, 8, false});
         Queue q(items);
         Picked p = pick(q, 0, 2048, 256, 1000);
         REQUIRE(p.chain.size() == 256 && p.sectors == 2048);
@@ -185,7 +198,8 @@ static void limits()
     // Falling order still gathers everything (one request per pass).
     {
         std::vector<std::tuple<uint64_t, uint32_t, bool>> items;
-        for (int i = 0; i < 40; ++i) items.push_back({uint64_t(39 - i) * 8, 8, false});
+        for (int i = 0; i < 40; ++i)
+            items.push_back({uint64_t(39 - i) * 8, 8, false});
         Queue q(items);
         Picked p = pick(q, 0);
         REQUIRE(p.chain.size() == 40 && p.start == 0 && p.chain.front() == 39 && !q.head);
@@ -207,34 +221,44 @@ static void randomQueues()
         Queue q(items);
         std::vector<int> reads;
         for (unsigned i = 0; i < n; ++i)
-            if (!std::get<2>(items[i])) reads.push_back(int(i));
-        if (reads.empty()) continue;
+            if (!std::get<2>(items[i]))
+                reads.push_back(int(i));
+        if (reads.empty())
+            continue;
         const int first = reads[random() % reads.size()];
         const uint32_t limit = random() % 2 ? 2048 : 8 * uint32_t(1 + random() % 16);
-        if (std::get<1>(items[size_t(first)]) > limit) continue;
+        if (std::get<1>(items[size_t(first)]) > limit)
+            continue;
         const std::vector<int> before = q.ids();
         Picked p = pick(q, first, limit, 256, 128);
         std::vector<bool> taken(n);
-        for (int id : p.chain) taken[size_t(id)] = true;
+        for (int id : p.chain)
+            taken[size_t(id)] = true;
         REQUIRE(taken[size_t(first)]);
         // Every member other than `first` overlaps no older request that is still queued.
         for (int id : p.chain) {
-            if (id == first) continue;
+            if (id == first)
+                continue;
             const Request &r = q.storage[size_t(id)];
             for (int older = 0; older < id; ++older)
-                if (!taken[size_t(older)]) REQUIRE(!switchOverlaps(&q.storage[size_t(older)], &r));
+                if (!taken[size_t(older)])
+                    REQUIRE(!switchOverlaps(&q.storage[size_t(older)], &r));
         }
         // The rest of the queue keeps its order.
         std::vector<int> rest;
         for (int id : before)
-            if (!taken[size_t(id)]) rest.push_back(id);
+            if (!taken[size_t(id)])
+                rest.push_back(id);
         REQUIRE(q.ids() == rest);
         // Maximal: no queued read continues the chain within the limit without overlapping an older queued request.
         for (int id : rest) {
             const Request &r = q.storage[size_t(id)];
-            if (r.write) continue;
-            if (r.lba != p.start + p.sectors && r.lba + r.sectors != p.start) continue;
-            if (p.sectors + r.sectors > limit) continue;
+            if (r.write)
+                continue;
+            if (r.lba != p.start + p.sectors && r.lba + r.sectors != p.start)
+                continue;
+            if (p.sectors + r.sectors > limit)
+                continue;
             bool overlaps = false;
             for (int older = 0; older < id && !overlaps; ++older)
                 overlaps = !taken[size_t(older)] && switchOverlaps(&q.storage[size_t(older)], &r);
@@ -250,7 +274,8 @@ static void tiling()
     Queue q({{100, 8, false}, {108, 8, false}, {104, 8, false}, {116, 8, true}, {124, 8, false}});
     auto mark = [&](std::vector<int> ids) {
         switchClearChain(q.head);
-        for (int id : ids) q.at(id)->chained = true;
+        for (int id : ids)
+            q.at(id)->chained = true;
     };
     mark({0, 1});
     REQUIRE(switchChainTiles(q.head, 100, 16, 2));
@@ -265,7 +290,8 @@ static void tiling()
     REQUIRE(switchChainTiles(q.head, 100, 0, 0));
     mark({4, 0});
     switchClearChain(q.head);
-    for (const Request *r = q.head; r; r = r->next) REQUIRE(!r->chained);
+    for (const Request *r = q.head; r; r = r->next)
+        REQUIRE(!r->chained);
     REQUIRE((q.ids() == std::vector<int>{0, 1, 2, 3, 4}));
 }
 
@@ -334,7 +360,8 @@ static void gaps()
         Queue q({{100, 8, false}, {116, 8, false}, {180, 8, false}});
         auto mark = [&](std::vector<int> ids) {
             switchClearChain(q.head);
-            for (int id : ids) q.at(id)->chained = true;
+            for (int id : ids)
+                q.at(id)->chained = true;
         };
         mark({0, 1});
         REQUIRE(switchChainFits(q.head, 100, 24, 2, 8, 8) && !switchChainFits(q.head, 100, 24, 2, 7, 8) &&
@@ -359,17 +386,22 @@ static void randomGaps()
         Queue q(items);
         std::vector<int> reads;
         for (unsigned i = 0; i < n; ++i)
-            if (!std::get<2>(items[i])) reads.push_back(int(i));
-        if (reads.empty()) continue;
+            if (!std::get<2>(items[i]))
+                reads.push_back(int(i));
+        if (reads.empty())
+            continue;
         const int first = reads[random() % reads.size()];
         const uint32_t maxGap = uint32_t(random() % 3) * 16, budget = maxGap * uint32_t(random() % 3);
         const uint32_t limit = random() % 2 ? 2048 : 16 * uint32_t(1 + random() % 8);
-        if (std::get<1>(items[size_t(first)]) > limit) continue;
+        if (std::get<1>(items[size_t(first)]) > limit)
+            continue;
         Picked p = pick(q, first, limit, 256, 128, maxGap, budget);  // pick() checks bounds, order and fit
         std::vector<bool> taken(n);
-        for (int id : p.chain) taken[size_t(id)] = true;
+        for (int id : p.chain)
+            taken[size_t(id)] = true;
         for (int id : p.chain) {
-            if (id == first) continue;
+            if (id == first)
+                continue;
             for (int older = 0; older < id; ++older)
                 if (!taken[size_t(older)])
                     REQUIRE(!switchOverlaps(&q.storage[size_t(older)], &q.storage[size_t(id)]));
@@ -417,14 +449,16 @@ static void independent()
         for (unsigned i = 0; i < n; ++i) {
             const Request &r = q.storage[i];
             bool ok = !r.write && r.sectors <= maxSectors;
-            for (unsigned older = 0; older < i && ok; ++older) ok = !switchOverlaps(&q.storage[older], &r);
+            for (unsigned older = 0; older < i && ok; ++older)
+                ok = !switchOverlaps(&q.storage[older], &r);
             if (ok) {
                 REQUIRE(found == &r);
                 break;
             }
             REQUIRE(found != &r);
         }
-        if (found) REQUIRE(!found->write && found->sectors <= maxSectors);
+        if (found)
+            REQUIRE(!found->write && found->sectors <= maxSectors);
     }
 }
 
@@ -432,30 +466,37 @@ TEST(SdQueue, Tiling)
 {
     tiling();
 }
+
 TEST(SdQueue, Basics)
 {
     basics();
 }
+
 TEST(SdQueue, Ordering)
 {
     ordering();
 }
+
 TEST(SdQueue, Limits)
 {
     limits();
 }
+
 TEST(SdQueue, RandomQueues)
 {
     randomQueues();
 }
+
 TEST(SdQueue, Gaps)
 {
     gaps();
 }
+
 TEST(SdQueue, RandomGaps)
 {
     randomGaps();
 }
+
 TEST(SdQueue, IndependentReads)
 {
     independent();

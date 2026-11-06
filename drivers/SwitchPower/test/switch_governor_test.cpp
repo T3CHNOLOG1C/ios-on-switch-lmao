@@ -37,6 +37,7 @@ struct CvbRow {
     uint32_t khz;
     int64_t c0, c1, c2;
 };
+
 constexpr CvbRow kCpuB01Cvb[] = {
     {204000, 721589, -12695, 27},   {306000, 747134, -14195, 27},   {408000, 776324, -15705, 27},
     {510000, 809160, -17205, 27},   {612000, 845641, -18715, 27},   {714000, 885768, -20215, 27},
@@ -128,20 +129,26 @@ public:
     explicit Governor(const std::vector<uint32_t> &khz, unsigned start = 0, uint64_t now = 0)
         : Governor(khz, start, tunables().up, tunables().target, tunables().hold, now)
     {}
+
     Governor(const std::vector<uint32_t> &khz, unsigned start, uint64_t up, uint64_t target, uint64_t hold,
              uint64_t now)
         : storage_((gov_size() + sizeof(uint64_t) - 1) / sizeof(uint64_t))
     {
         gov_init(g(), khz.data(), (unsigned)khz.size(), start, (uint32_t)up, (uint32_t)target, hold, now);
     }
-    switch_gov *g() { return reinterpret_cast<switch_gov *>(storage_.data()); }
+
+    switch_gov *g()
+    {
+        return reinterpret_cast<switch_gov *>(storage_.data());
+    }
 
     // busy: one permille per window; returns the index after each window.
     std::vector<unsigned> trace(const std::vector<uint32_t> &busy, uint64_t start = 0, uint64_t window = 0)
     {
         window = window ? window : tunables().window;
         std::vector<uint64_t> times;
-        for (size_t i = 0; i < busy.size(); ++i) times.push_back(start + (i + 1) * window);
+        for (size_t i = 0; i < busy.size(); ++i)
+            times.push_back(start + (i + 1) * window);
         std::vector<unsigned> out(busy.size());
         gov_run(g(), times.data(), busy.data(), (unsigned)busy.size(), out.data());
         return out;
@@ -154,7 +161,8 @@ private:
 std::vector<uint32_t> repeat(std::vector<uint32_t> pattern, size_t times)
 {
     std::vector<uint32_t> out;
-    for (size_t i = 0; i < times; ++i) out.insert(out.end(), pattern.begin(), pattern.end());
+    for (size_t i = 0; i < times; ++i)
+        out.insert(out.end(), pattern.begin(), pattern.end());
     return out;
 }
 
@@ -188,8 +196,9 @@ TEST(SwitchGovernor, CpuTableNeverAboveHorizonBoost)
         ASSERT_FALSE(t.khz.empty()) << speedo;
         const uint32_t top = *std::max_element(t.khz.begin(), t.khz.end());
         EXPECT_LE(top, kNintendoCpuMaxKhz) << speedo;
-        EXPECT_EQ(top, kNintendoCpuMaxKhz) << speedo;                 // every speedo's CVB reaches it under 1235 mV
-        for (uint32_t k : t.khz) EXPECT_EQ(k % 25500, 0u) << speedo;  // whole DFLL steps (51 MHz ref / 2)
+        EXPECT_EQ(top, kNintendoCpuMaxKhz) << speedo;  // every speedo's CVB reaches it under 1235 mV
+        for (uint32_t k : t.khz)
+            EXPECT_EQ(k % 25500, 0u) << speedo;  // whole DFLL steps (51 MHz ref / 2)
         const Rows rows = cpuRows(speedo);
         for (size_t i = 0; i < t.khz.size(); ++i)  // each pair is a CVB row, voltage and all
             EXPECT_NE(std::find(rows.begin(), rows.end(), std::make_pair(t.khz[i], t.mv[i])), rows.end())
@@ -206,12 +215,14 @@ TEST(SwitchGovernor, ThermalCapCeiling)
     for (const auto &[speedo, ceilings] : cases) {
         const Table t = cpuTable(speedo);
         unsigned got[2];
-        for (int c = 0; c < 2; ++c) got[c] = gov_index_at_mv(t.mv.data(), (unsigned)t.mv.size(), kCpuCapsMv[c]);
+        for (int c = 0; c < 2; ++c)
+            got[c] = gov_index_at_mv(t.mv.data(), (unsigned)t.mv.size(), kCpuCapsMv[c]);
         EXPECT_EQ(t.khz[got[0]], ceilings.first) << speedo;
         EXPECT_EQ(t.khz[got[1]], ceilings.second) << speedo;
         for (int c = 0; c < 2; ++c) {
             EXPECT_LE(t.mv[got[c]], kCpuCapsMv[c]) << speedo;
-            if (got[c] + 1 < t.mv.size()) EXPECT_GT(t.mv[got[c] + 1], kCpuCapsMv[c]) << speedo;
+            if (got[c] + 1 < t.mv.size())
+                EXPECT_GT(t.mv[got[c] + 1], kCpuCapsMv[c]) << speedo;
         }
     }
 }
@@ -235,7 +246,8 @@ TEST(SwitchGovernor, DfllTopCheckOnR7zMeasurements)
         EXPECT_TRUE(gov_over_step(measured, 1785000, step)) << measured;
     for (uint32_t measured : {1782000u, 1785000u, 1787000u, 1797000u, 1708500u})
         EXPECT_FALSE(gov_over_step(measured, 1785000, step)) << measured;
-    for (uint32_t measured : {1664000u, 1668000u}) EXPECT_FALSE(gov_over_step(measured, 1670400, step)) << measured;
+    for (uint32_t measured : {1664000u, 1668000u})
+        EXPECT_FALSE(gov_over_step(measured, 1670400, step)) << measured;
     EXPECT_TRUE(gov_over_step(1708500, 1683000, step));  // 1683 asked, one step high: not "landed right"
 }
 
@@ -248,7 +260,11 @@ public:
     {
         rows_init(r(), held);
     }
-    switch_gov_rows *r() { return reinterpret_cast<switch_gov_rows *>(storage_.data()); }
+
+    switch_gov_rows *r()
+    {
+        return reinterpret_cast<switch_gov_rows *>(storage_.data());
+    }
 
 private:
     std::vector<uint64_t> storage_;
@@ -260,7 +276,8 @@ std::vector<unsigned> bits(uint32_t mask)
 {
     std::vector<unsigned> out;
     for (unsigned i = 0; i < 24; ++i)
-        if (mask >> i & 1u) out.push_back(i);
+        if (mask >> i & 1u)
+            out.push_back(i);
     return out;
 }
 
@@ -291,7 +308,8 @@ unsigned dfllLine(HeldRows &rows, const std::vector<uint32_t> &khz, unsigned lim
     };
     rows_tick(rows.r());
     check(rows_ceiling(rows.r(), limitHi));
-    if (rows_retry(rows.r(), limitHi)) check(rows_ceiling(rows.r(), limitHi));
+    if (rows_retry(rows.r(), limitHi))
+        check(rows_ceiling(rows.r(), limitHi));
     return rows_ceiling(rows.r(), limitHi);
 }
 
@@ -301,10 +319,12 @@ public:
     Reader(const std::vector<uint32_t> &khz, std::map<unsigned, std::vector<uint32_t>> script)
         : khz_(khz), script_(std::move(script))
     {}
+
     uint32_t operator()(unsigned row)
     {
         std::vector<uint32_t> &queue = script_[row];
-        if (queue.empty()) return khz_[row];
+        if (queue.empty())
+            return khz_[row];
         const uint32_t value = queue.front();
         queue.erase(queue.begin());
         return value;
@@ -350,8 +370,10 @@ TEST(SwitchGovernor, R8aOneOvershootDoesNotCostTheBoot)
     EXPECT_EQ(std::vector<Reading>(log.begin(), log.begin() + 3),
               (std::vector<Reading>{{top - 1, 1702000}, {top - 1, 1703000}, {top, 1785000}}));
     EXPECT_EQ(bits(rows_held(rows.r())), std::vector<unsigned>{top - 1});  // 1683 alone, for a line
-    for (int line = 0; line < 5; ++line) ceilings.push_back(dfllLine(rows, t.khz, top, read, log));
-    for (unsigned c : ceilings) EXPECT_EQ(t.khz[c], 1785000u);
+    for (int line = 0; line < 5; ++line)
+        ceilings.push_back(dfllLine(rows, t.khz, top, read, log));
+    for (unsigned c : ceilings)
+        EXPECT_EQ(t.khz[c], 1785000u);
     EXPECT_EQ(rows_held(rows.r()), 0u);
     EXPECT_EQ(bits(rows_trial(rows.r())), std::vector<unsigned>{top - 1});  // 1683: measured if it is ever the ceiling
     EXPECT_EQ(rows_ceiling(rows.r(), top - 1), top - 1);                    // e.g. under thermalmonitord's ceiling
@@ -385,20 +407,25 @@ TEST(SwitchGovernor, RowThatKeepsRunningHighWaitsLongerAndIsNeverKept)
 {
     const Table t = cpuTable(1659);
     const unsigned top = (unsigned)t.khz.size() - 1;
-    const auto alwaysHigh = [&](unsigned row) { return row == top ? t.khz[row] + 25500 : t.khz[row]; };
+    const auto alwaysHigh = [&](unsigned row) {
+        return row == top ? t.khz[row] + 25500 : t.khz[row];
+    };
     HeldRows rows(1u << top);
     std::vector<Reading> log;
     std::vector<unsigned> linesWithTrial;
     for (unsigned line = 0; line < 60; ++line) {
         const size_t before = log.size();
         EXPECT_NE(dfllLine(rows, t.khz, top, alwaysHigh, log), top) << "line " << line;  // never kept
-        if (std::any_of(log.begin() + (long)before, log.end(), [&](const Reading &r) { return r.first == top; }))
+        if (std::any_of(log.begin() + (long)before, log.end(), [&](const Reading &r) {
+                return r.first == top;
+            }))
             linesWithTrial.push_back(line);
     }
     REQUIRE(linesWithTrial.size() > 3);
     EXPECT_EQ(linesWithTrial[0], 0u);
     std::vector<unsigned> gaps, want{2, 4};
-    for (size_t i = 1; i < linesWithTrial.size(); ++i) gaps.push_back(linesWithTrial[i] - linesWithTrial[i - 1]);
+    for (size_t i = 1; i < linesWithTrial.size(); ++i)
+        gaps.push_back(linesWithTrial[i] - linesWithTrial[i - 1]);
     want.resize(gaps.size(), 8);
     EXPECT_EQ(gaps, want);
 }
@@ -443,25 +470,33 @@ TEST(SwitchGovernor, BootFloorRunsTheCeilingUnderThermalLimitsAndHeldRows)
 TEST(SwitchGovernor, FuzzRowsNeverLeaveAHighCeiling)
 {
     std::mt19937 random(1105);
-    const auto below = [&](uint32_t n) { return std::uniform_int_distribution<uint32_t>(0, n - 1)(random); };
+    const auto below = [&](uint32_t n) {
+        return std::uniform_int_distribution<uint32_t>(0, n - 1)(random);
+    };
     const Table t = cpuTable(1659);
     const unsigned top = (unsigned)t.khz.size() - 1;
     const uint32_t over[] = {0, 0, 0, 3000, 13000, 19000, 25500, 96000};
-    const auto read = [&](unsigned row) { return t.khz[row] + over[below(8)]; };
+    const auto read = [&](unsigned row) {
+        return t.khz[row] + over[below(8)];
+    };
     for (int trial = 0; trial < 40; ++trial) {
         HeldRows rows(below(2) ? 1u << top : 0u);
         unsigned limit = top;
         for (int line = 0; line < 200; ++line) {
-            if (below(10) == 0) limit = top - 3 + below(4);
+            if (below(10) == 0)
+                limit = top - 3 + below(4);
             std::vector<Reading> log;
             const unsigned ceiling = dfllLine(rows, t.khz, limit, read, log);
             ASSERT_LE(ceiling, limit) << "trial " << trial << " line " << line;
-            if (ceiling == 0) continue;
+            if (ceiling == 0)
+                continue;
             ASSERT_FALSE(rows_held(rows.r()) >> ceiling & 1u) << "trial " << trial << " line " << line;
             uint32_t last = 0;
             for (const Reading &r : log)
-                if (r.first == ceiling) last = r.second;
-            if (last) ASSERT_FALSE(gov_over_step(last, t.khz[ceiling], 25500)) << "trial " << trial << " line " << line;
+                if (r.first == ceiling)
+                    last = r.second;
+            if (last)
+                ASSERT_FALSE(gov_over_step(last, t.khz[ceiling], 25500)) << "trial " << trial << " line " << line;
         }
     }
 }
@@ -499,7 +534,9 @@ TEST(SwitchGovernor, IdleDropsOnlyAfterTheHold)
     Governor g(t.khz, top);
     const size_t windows = tunables().hold / tunables().window + 3;
     const std::vector<unsigned> out = g.trace(std::vector<uint32_t>(windows, 0));
-    const auto firstLow = std::find_if(out.begin(), out.end(), [&](unsigned x) { return x != top; });
+    const auto firstLow = std::find_if(out.begin(), out.end(), [&](unsigned x) {
+        return x != top;
+    });
     REQUIRE(firstLow != out.end());
     // the targets first fall at window 0's end; the clock follows at the first window that ends a hold later
     const uint64_t windowsInHold = (tunables().hold + tunables().window - 1) / tunables().window;
@@ -517,7 +554,8 @@ TEST(SwitchGovernor, ShortDipsKeepTheClock)
     std::vector<uint32_t> pattern(3, 1000);
     pattern.insert(pattern.end(), dip, 0);
     const std::vector<unsigned> out = g.trace(repeat(pattern, 20));
-    for (size_t i = 0; i < out.size(); ++i) EXPECT_EQ(out[i], t.khz.size() - 1) << "window " << i;
+    for (size_t i = 0; i < out.size(); ++i)
+        EXPECT_EQ(out[i], t.khz.size() - 1) << "window " << i;
     EXPECT_EQ(gov_counter(g.g(), 1), 0u);
 }
 
@@ -533,7 +571,8 @@ TEST(SwitchGovernor, HoldDropsToTheHighestTargetItSaw)
     loads.resize(windows);
     const std::vector<unsigned> out = g.trace(loads, tunables().window);
     EXPECT_EQ(out.back(), indexOf(t.khz, 1326000)) << t.khz[out.back()] << " kHz";
-    for (size_t i = 0; i + 1 < out.size(); ++i) EXPECT_EQ(out[i], top) << "window " << i;
+    for (size_t i = 0; i + 1 < out.size(); ++i)
+        EXPECT_EQ(out[i], top) << "window " << i;
 }
 
 // Half busy at 1785 MHz is 892 MHz of work: the lowest point that covers it at the target load.
@@ -545,7 +584,8 @@ TEST(SwitchGovernor, ProportionalPoint)
     const double need = 1785000.0 * 500 / (double)tunables().target;
     uint32_t expect = 0;
     for (uint32_t k : t.khz)
-        if (k >= need && (!expect || k < expect)) expect = k;
+        if (k >= need && (!expect || k < expect))
+            expect = k;
     EXPECT_EQ(t.khz[out.back()], expect);
 }
 
@@ -561,8 +601,10 @@ TEST(SwitchGovernor, TouchBoostIsImmediateAndExpires)
     uint64_t lastTop = 0;
     for (size_t i = 0; i < idle; ++i) {
         const uint64_t at = now + (i + 1) * window;
-        if (at < now + touch) EXPECT_EQ(out[i], top) << at;  // held for the whole boost, idle or not
-        if (out[i] == top) lastTop = std::max(lastTop, at);
+        if (at < now + touch)
+            EXPECT_EQ(out[i], top) << at;  // held for the whole boost, idle or not
+        if (out[i] == top)
+            lastTop = std::max(lastTop, at);
     }
     EXPECT_EQ(out.back(), 0u);
     EXPECT_GE(lastTop, now + touch);
@@ -577,7 +619,8 @@ TEST(SwitchGovernor, BoostsCombine)
     EXPECT_EQ(gov_cur(g.g()), 6u);
     const std::vector<unsigned> out = g.trace(std::vector<uint32_t>(30, 0));  // every window idle: the floor is 6 until
     for (size_t i = 0; i < out.size(); ++i)                                   // 100 ms, then the hold
-        if ((i + 1) * tunables().window < 100 * kMs) EXPECT_GE(out[i], 6u) << "window " << i;
+        if ((i + 1) * tunables().window < 100 * kMs)
+            EXPECT_GE(out[i], 6u) << "window " << i;
 }
 
 TEST(SwitchGovernor, ThermalCeilingClampsAtOnceAndLifts)
@@ -599,7 +642,8 @@ TEST(SwitchGovernor, ColdFloorRaisesAtOnce)
     Governor g(t.khz, 0);
     const unsigned floor = indexOf(t.khz, 1428000);
     EXPECT_EQ(gov_limit(g.g(), floor, (unsigned)t.khz.size() - 1, 1), floor);
-    for (unsigned x : g.trace(std::vector<uint32_t>(40, 0))) EXPECT_GE(x, floor);
+    for (unsigned x : g.trace(std::vector<uint32_t>(40, 0)))
+        EXPECT_GE(x, floor);
 }
 
 // A load alternating every window between saturation and idle moves the clock at most once per hold.
@@ -609,7 +653,8 @@ TEST(SwitchGovernor, FlappingLoadIsRateLimited)
     Governor g(t.khz, 0);
     const size_t windows = 2000;
     std::vector<uint32_t> busy;
-    for (size_t i = 0; i < windows; ++i) busy.push_back(i % 2 == 0 ? 1000 : 0);
+    for (size_t i = 0; i < windows; ++i)
+        busy.push_back(i % 2 == 0 ? 1000 : 0);
     g.trace(busy);
     const uint64_t elapsed = windows * tunables().window;
     EXPECT_LE(gov_counter(g.g(), 1), elapsed / tunables().hold + 1);
@@ -623,17 +668,21 @@ TEST(SwitchGovernor, ResidencyAddsUp)
     std::uniform_int_distribution<uint32_t> load(0, 1000);
     const size_t n = 500;
     std::vector<uint32_t> busy;
-    for (size_t i = 0; i < n; ++i) busy.push_back(load(random));
+    for (size_t i = 0; i < n; ++i)
+        busy.push_back(load(random));
     g.trace(busy);
     uint64_t total = 0;
-    for (unsigned i = 0; i < t.khz.size(); ++i) total += gov_residency(g.g(), i);
+    for (unsigned i = 0; i < t.khz.size(); ++i)
+        total += gov_residency(g.g(), i);
     EXPECT_EQ(total, n * tunables().window);
 }
 
 TEST(SwitchGovernor, FuzzLimitsAndResponsiveness)
 {
     std::mt19937_64 random(1105);
-    const auto below = [&](uint64_t n) { return std::uniform_int_distribution<uint64_t>(0, n - 1)(random); };
+    const auto below = [&](uint64_t n) {
+        return std::uniform_int_distribution<uint64_t>(0, n - 1)(random);
+    };
     const Table t = cpuTable();
     const unsigned count = (unsigned)t.khz.size();
     for (int trial = 0; trial < 60; ++trial) {
@@ -655,7 +704,8 @@ TEST(SwitchGovernor, FuzzLimitsAndResponsiveness)
             ASSERT_GE(cur, gov_lo(g.g())) << "trial " << trial << " step " << step;
             ASSERT_LE(cur, gov_hi(g.g())) << "trial " << trial << " step " << step;
             ASSERT_LE(gov_khz(g.g(), cur), kNintendoCpuMaxKhz) << "trial " << trial << " step " << step;
-            if (busy >= tunables().up) ASSERT_EQ(cur, gov_hi(g.g())) << "trial " << trial << " step " << step;
+            if (busy >= tunables().up)
+                ASSERT_EQ(cur, gov_hi(g.g())) << "trial " << trial << " step " << step;
         }
     }
 }

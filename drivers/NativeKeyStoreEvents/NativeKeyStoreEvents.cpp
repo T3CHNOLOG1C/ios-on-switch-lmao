@@ -54,6 +54,7 @@ struct DerWriter {
     uint8_t *p;
     size_t cap, n = 0;
     bool ok = true;
+
     void put(uint8_t b)
     {
         if (n < cap)
@@ -61,6 +62,7 @@ struct DerWriter {
         else
             ok = false;
     }
+
     void len(size_t l)
     {
         if (l < 0x80)
@@ -71,23 +73,30 @@ struct DerWriter {
         }
     }  // entries stay below 256 bytes
 };
+
 // Smallest two's-complement big-endian INTEGER content for a non-negative value.
 size_t derIntegerContent(uint64_t v, uint8_t out[9])
 {
     uint8_t raw[8];
-    for (int i = 0; i < 8; ++i) raw[i] = (uint8_t)(v >> (56 - 8 * i));
+    for (int i = 0; i < 8; ++i)
+        raw[i] = (uint8_t)(v >> (56 - 8 * i));
     size_t start = 0;
-    while (start < 7 && raw[start] == 0) ++start;
+    while (start < 7 && raw[start] == 0)
+        ++start;
     size_t n = 0;
-    if (raw[start] & 0x80) out[n++] = 0;
-    while (start < 8) out[n++] = raw[start++];
+    if (raw[start] & 0x80)
+        out[n++] = 0;
+    while (start < 8)
+        out[n++] = raw[start++];
     return n;
 }
+
 size_t entrySize(const char *key, uint64_t value)
 {
     uint8_t c[9];
     size_t kl = 0;
-    while (key[kl]) ++kl;
+    while (key[kl])
+        ++kl;
     size_t body = (2 + kl) + (2 + derIntegerContent(value, c));
     return 2 + body;
 }
@@ -100,26 +109,31 @@ extern "C" size_t native_aks_encode_state(uint8_t *out, size_t capacity, uint32_
         const char *key;
         uint64_t value;
     };
+
     const Entry entries[] = {{"ss", kStateFlags}, {"sls", lockState}, {"sb", 0},   {"sfa", 0}, {"sgs", 0},
                              {"sas", 0},          {"sgpe", 0},        {"srcd", 0}, {"sms", 0}, {"bh", 0}};
     size_t total = 0;
-    for (const Entry &e : entries) total += entrySize(e.key, e.value);
+    for (const Entry &e : entries)
+        total += entrySize(e.key, e.value);
     DerWriter w{out, capacity};
     w.put(0x31);
     w.len(total);
     for (const Entry &e : entries) {
         uint8_t c[9];
         size_t kl = 0;
-        while (e.key[kl]) ++kl;
+        while (e.key[kl])
+            ++kl;
         size_t il = derIntegerContent(e.value, c);
         w.put(0x30);
         w.len((2 + kl) + (2 + il));
         w.put(0x0c);
         w.put((uint8_t)kl);
-        for (size_t i = 0; i < kl; ++i) w.put((uint8_t)e.key[i]);
+        for (size_t i = 0; i < kl; ++i)
+            w.put((uint8_t)e.key[i]);
         w.put(0x02);
         w.put((uint8_t)il);
-        for (size_t i = 0; i < il; ++i) w.put(c[i]);
+        for (size_t i = 0; i < il; ++i)
+            w.put(c[i]);
     }
     return w.ok ? w.n : 0;
 }
@@ -128,16 +142,20 @@ extern "C" size_t native_aks_encode_state(uint8_t *out, size_t capacity, uint32_
 IOReturn writeStructure(IOExternalMethodArguments *args, const uint8_t *bytes, size_t n)
 {
     if (args->structureOutputDescriptor) {
-        if (n > args->structureOutputDescriptor->getLength()) return kIOReturnNoSpace;
+        if (n > args->structureOutputDescriptor->getLength())
+            return kIOReturnNoSpace;
         args->structureOutputDescriptor->writeBytes(0, bytes, n);
         args->structureOutputDescriptorSize = (uint32_t)n;
         return kIOReturnSuccess;
     }
-    if (!args->structureOutput || n > args->structureOutputSize) return kIOReturnNoSpace;
-    for (size_t k = 0; k < n; ++k) ((uint8_t *)args->structureOutput)[k] = bytes[k];
+    if (!args->structureOutput || n > args->structureOutputSize)
+        return kIOReturnNoSpace;
+    for (size_t k = 0; k < n; ++k)
+        ((uint8_t *)args->structureOutput)[k] = bytes[k];
     args->structureOutputSize = (uint32_t)n;
     return kIOReturnSuccess;
 }
+
 size_t structureCapacity(const IOExternalMethodArguments *args)
 {
     return args->structureOutputDescriptor ? args->structureOutputDescriptor->getLength()
@@ -154,19 +172,24 @@ IOReturn keyOperation(uint32_t selector, IOExternalMethodArguments *args)
         return kAksBadArgument;
     }
     const int64_t bag = (int64_t)args->scalarInput[0], keyClass = (int64_t)args->scalarInput[1];
-    if (bag != (int64_t)kSystemHandle) return bag < 0 ? kAksBadArgument : kAksNotFound;
-    if (keyClass < 1 || keyClass > (int64_t)kMaxKeyClass) return kAksBadArgument;
+    if (bag != (int64_t)kSystemHandle)
+        return bag < 0 ? kAksBadArgument : kAksNotFound;
+    if (keyClass < 1 || keyClass > (int64_t)kMaxKeyClass)
+        return kAksBadArgument;
     uint8_t out[aks::kMaxKey + aks::kBlock];
     size_t written = 0, capacity = structureCapacity(args);
-    if (capacity > sizeof out) capacity = sizeof out;
+    if (capacity > sizeof out)
+        capacity = sizeof out;
     const uint8_t *in = (const uint8_t *)args->structureInput;
     IOReturn rc = wrapping ? native_aks_wrap((uint32_t)bag, (uint32_t)keyClass, in, args->structureInputSize, out,
                                              capacity, &written)
                            : native_aks_unwrap((uint32_t)bag, (uint32_t)keyClass, in, args->structureInputSize, out,
                                                capacity, &written);
-    if (rc == kIOReturnSuccess) rc = writeStructure(args, out, written);
+    if (rc == kIOReturnSuccess)
+        rc = writeStructure(args, out, written);
     aks::wipe(out, sizeof out);
-    if (rc != kIOReturnSuccess) return rc;
+    if (rc != kIOReturnSuccess)
+        return rc;
     if (wrapping) {
         args->scalarOutput[0] = (uint64_t)keyClass;
         args->scalarOutputCount = 1;
@@ -180,6 +203,7 @@ OSDeclareDefaultStructors(AppleKeyStoreUserClient) public : IOReturn clientClose
         terminate();
         return kIOReturnSuccess;
     }
+
     IOReturn externalMethod(uint32_t selector, IOExternalMethodArguments *args, IOExternalMethodDispatch *, OSObject *,
                             void *) override
     {
@@ -217,7 +241,8 @@ OSDeclareDefaultStructors(AppleKeyStoreUserClient) public : IOReturn clientClose
                 rc = (args->scalarInputCount == 1 && args->scalarOutputCount == 1 && args->scalarOutput)
                          ? kIOReturnSuccess
                          : kIOReturnBadArgument;
-                if (rc == kIOReturnSuccess) args->scalarOutput[0] = kUnlockedSinceBoot;
+                if (rc == kIOReturnSuccess)
+                    args->scalarOutput[0] = kUnlockedSinceBoot;
                 break;
             case kSelDeviceState:
             case kSelExtendedDeviceState: {
@@ -245,32 +270,38 @@ OSDeclareDefaultStructors(AppleKeyStoreUserClient) public : IOReturn clientClose
                 }
                 uint8_t uuid[16];
                 rc = native_aks_bag_uuid((uint32_t)kSystemHandle, uuid);
-                if (rc == kIOReturnSuccess) rc = writeStructure(args, uuid, sizeof uuid);
+                if (rc == kIOReturnSuccess)
+                    rc = writeStructure(args, uuid, sizeof uuid);
                 break;
             }
             case kSelGetConfiguration:
             case kSelMementoState:
                 rc = (args->scalarInputCount == 1 && args->scalarOutputCount == 0) ? kAksNotFound : kAksBadArgument;
                 break;
-            default: native_aks_unsupported(selector); break;
+            default:
+                native_aks_unsupported(selector);
+                break;
             }
         native_aks_call(selector, (int32_t)rc);
         return rc;
     }
 };
+
 OSDefineMetaClassAndStructors(AppleKeyStoreUserClient, IOUserClient)
 
     class AppleKeyStore final : public IOService {
     OSDeclareDefaultStructors(AppleKeyStore) IOReturn
         open(task_t task, void *security, UInt32 type, OSDictionary *properties, IOUserClient **out)
     {
-        if (out) *out = nullptr;
+        if (out)
+            *out = nullptr;
         if (!native_aks_state_enabled() || !out) {
             native_keyevents_open_refused();
             return kIOReturnNotReady;
         }
         AppleKeyStoreUserClient *client = new AppleKeyStoreUserClient;
-        if (!client) return kIOReturnNoMemory;
+        if (!client)
+            return kIOReturnNoMemory;
         if (!client->initWithTask(task, security, type, properties) || !client->attach(this)) {
             client->release();
             return kIOReturnError;
@@ -288,10 +319,12 @@ OSDefineMetaClassAndStructors(AppleKeyStoreUserClient, IOUserClient)
 public:
     bool start(IOService *provider) override
     {
-        if (!IOService::start(provider)) return false;
+        if (!IOService::start(provider))
+            return false;
         setName("Native keystore state service");
         // Panics without a device key: securityd would otherwise drop every item it wrapped in an earlier boot.
-        if (native_aks_state_enabled()) native_aks_device_key_start();
+        if (native_aks_state_enabled())
+            native_aks_device_key_start();
         // CloudKeychainProxy's open is the one MACF refuses (its sandbox report is the kernel error line on its own thread at each
         // "failed to open connection to AppleKeyStore"); our IOUserClient.cpp grants the one named process in its place.
         if (!setProperty("NativeKeyStoreEvents", true) ||
@@ -303,15 +336,18 @@ public:
         registerService();
         return true;
     }
+
     IOReturn newUserClient(task_t t, void *s, UInt32 type, OSDictionary *p, IOUserClient **out) override
     {
         return open(t, s, type, p, out);
     }
+
     IOReturn newUserClient(task_t t, void *s, UInt32 type, IOUserClient **out) override
     {
         return open(t, s, type, nullptr, out);
     }
 };
+
 OSDefineMetaClassAndStructors(AppleKeyStore, IOService) extern "C" IOService *native_keyevents_allocate(void)
 {
     return new AppleKeyStore;

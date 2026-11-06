@@ -8,8 +8,21 @@
 #include <stddef.h>
 #include <stdint.h>
 
-enum { H264_NAL_SLICE = 1, H264_NAL_IDR = 5, H264_NAL_SEI = 6, H264_NAL_SPS = 7, H264_NAL_PPS = 8 };
-enum { H264_SLICE_P = 0, H264_SLICE_B = 1, H264_SLICE_I = 2, H264_SLICE_SP = 3, H264_SLICE_SI = 4 };
+enum {
+    H264_NAL_SLICE = 1,
+    H264_NAL_IDR = 5,
+    H264_NAL_SEI = 6,
+    H264_NAL_SPS = 7,
+    H264_NAL_PPS = 8
+};
+
+enum {
+    H264_SLICE_P = 0,
+    H264_SLICE_B = 1,
+    H264_SLICE_I = 2,
+    H264_SLICE_SP = 3,
+    H264_SLICE_SI = 4
+};
 
 typedef struct {
     bool valid;

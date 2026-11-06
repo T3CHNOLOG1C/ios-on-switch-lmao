@@ -200,6 +200,7 @@ struct geni_spi {
     // through two caller-provided buffers that the serial engine's DMA master can reach at tx_phys/rx_phys. The caller owns
     // the translation (SMMU) and cache policy; the callbacks maintain the CPU caches around each transfer.
     int use_dma;
+
     struct geni_dma {
         void *ctx;
         void (*clean)(void *ctx, void *virt, size_t len);        // write back CPU-dirty lines before the engine reads
@@ -209,6 +210,7 @@ struct geni_spi {
         uint64_t tx_phys, rx_phys;
         size_t size;
     } dma;
+
     int allow_fifo_disabled;  // try FIFO mode even when FIFO_IF_DISABLE is set (the Linux fallback when no GPI channel exists)
 };
 

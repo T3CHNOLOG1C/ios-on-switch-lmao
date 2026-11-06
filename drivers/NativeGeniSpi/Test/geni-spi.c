@@ -13,12 +13,14 @@
         printf("\n");                               \
         exit(1);                                    \
     } while (0)
-#define CHECK(c)                  \
-    do {                          \
-        if (!(c)) FAIL("%s", #c); \
+#define CHECK(c)            \
+    do {                    \
+        if (!(c))           \
+            FAIL("%s", #c); \
     } while (0)
 
 #define DEPTH 16
+
 struct sim {
     uint32_t reg[0x1000 / 4];
     uint32_t wrap_ver, hw_param0, fw_rev, if_disable;
@@ -58,7 +60,8 @@ static void finish_rx_word(struct sim *m)
 
 static void tick(struct sim *m)
 {
-    if (!m->active || m->stuck) return;
+    if (!m->active || m->stuck)
+        return;
     if (m->inject_error) {
         m->irq |= GENI_M_CMD_OVERRUN;
         return;
@@ -68,8 +71,10 @@ static void tick(struct sim *m)
         size_t pos = m->tx_total ? m->tx_total - m->tx_bytes_left : m->rx_total - m->rx_bytes_left;
         uint8_t in = 0;
         if (m->tx_ops) {
-            if (m->tx_bytes_left == 0) break;
-            if (m->txn == 0) break;  // underrun: wait for firmware
+            if (m->tx_bytes_left == 0)
+                break;
+            if (m->txn == 0)
+                break;  // underrun: wait for firmware
             in = (uint8_t)(m->txq[0] >> 0);
             // pop one byte from the packed word
             uint8_t b = (uint8_t)(m->txq[0] & 0xff);
@@ -80,20 +85,24 @@ static void tick(struct sim *m)
             static unsigned used;  // bytes consumed from txq[0]
             used = (used + 1) % 4;
             if (used == 0 || m->tx_bytes_left == 0) {
-                for (unsigned i = 1; i < m->txn; i++) m->txq[i - 1] = m->txq[i];
+                for (unsigned i = 1; i < m->txn; i++)
+                    m->txq[i - 1] = m->txq[i];
                 m->txn--;
                 used = 0;
             }
         } else {
-            if (m->rx_bytes_left == 0) break;
+            if (m->rx_bytes_left == 0)
+                break;
         }
         if (m->rx_ops) {
-            if (m->rx_bytes_left == 0) break;
+            if (m->rx_bytes_left == 0)
+                break;
             uint8_t out = slave(in, pos);
             m->cur_word |= (uint32_t)out << (8 * m->cur_bytes);
             m->cur_bytes++;
             m->rx_bytes_left--;
-            if (m->cur_bytes == 4) finish_rx_word(m);
+            if (m->cur_bytes == 4)
+                finish_rx_word(m);
             if (m->rx_bytes_left == 0 && m->cur_bytes) {
                 m->last_valid = m->cur_bytes;
                 finish_rx_word(m);
@@ -119,12 +128,17 @@ static void tick(struct sim *m)
 // between the buffers the pointer registers name (the test uses host addresses as bus addresses).
 static void dma_maybe_run(struct sim *m)
 {
-    if (!m->active || !(m->reg[SE_GENI_DMA_MODE_EN / 4] & 1)) return;
-    if ((m->tx_ops && !m->dma_tx_set) || (m->rx_ops && !m->dma_rx_set)) return;
-    if (m->stuck) return;
+    if (!m->active || !(m->reg[SE_GENI_DMA_MODE_EN / 4] & 1))
+        return;
+    if ((m->tx_ops && !m->dma_tx_set) || (m->rx_ops && !m->dma_rx_set))
+        return;
+    if (m->stuck)
+        return;
     if (m->inject_error) {
-        if (m->tx_ops) m->dma_tx_stat |= 4;
-        if (m->rx_ops) m->dma_rx_stat |= 4;
+        if (m->tx_ops)
+            m->dma_tx_stat |= 4;
+        if (m->rx_ops)
+            m->dma_rx_stat |= 4;
         return;
     }
     uint8_t *txp = (uint8_t *)(uintptr_t)(((uint64_t)m->reg[SE_DMA_TX_PTR_H / 4] << 32) | m->reg[SE_DMA_TX_PTR_L / 4]);
@@ -134,11 +148,15 @@ static void dma_maybe_run(struct sim *m)
     CHECK(!m->tx_ops || m->reg[SE_DMA_TX_ATTR / 4] == 1);
     for (size_t i = 0; i < n; i++) {
         uint8_t in = m->tx_ops ? txp[i] : 0;
-        if (m->tx_ops) m->seen_tx[m->seen_n++] = in;
-        if (m->rx_ops) rxp[i] = slave(in, i);
+        if (m->tx_ops)
+            m->seen_tx[m->seen_n++] = in;
+        if (m->rx_ops)
+            rxp[i] = slave(in, i);
     }
-    if (m->tx_ops) m->dma_tx_stat |= 1;
-    if (m->rx_ops) m->dma_rx_stat |= 1;
+    if (m->tx_ops)
+        m->dma_tx_stat |= 1;
+    if (m->rx_ops)
+        m->dma_rx_stat |= 1;
     m->active = 0;
 }
 
@@ -146,20 +164,29 @@ static uint32_t se_rd(void *ctx, uint32_t r)
 {
     struct sim *m = ctx;
     switch (r) {
-    case GENI_FW_REVISION_RO: return m->fw_rev;
-    case GENI_IF_DISABLE_RO: return m->if_disable;
-    case SE_DMA_TX_IRQ_STAT: return m->dma_tx_stat;
-    case SE_DMA_RX_IRQ_STAT: return m->dma_rx_stat;
-    case SE_HW_PARAM_0: return m->hw_param0;
-    case SE_GENI_M_IRQ_STATUS: tick(m); return m->irq;
+    case GENI_FW_REVISION_RO:
+        return m->fw_rev;
+    case GENI_IF_DISABLE_RO:
+        return m->if_disable;
+    case SE_DMA_TX_IRQ_STAT:
+        return m->dma_tx_stat;
+    case SE_DMA_RX_IRQ_STAT:
+        return m->dma_rx_stat;
+    case SE_HW_PARAM_0:
+        return m->hw_param0;
+    case SE_GENI_M_IRQ_STATUS:
+        tick(m);
+        return m->irq;
     case SE_GENI_RX_FIFO_STATUS: {
         unsigned words = m->rxt - m->rxh;
         return words | ((m->irq & GENI_M_RX_FIFO_LAST) && words <= 1
                             ? GENI_RX_LAST | (m->last_valid << GENI_RX_LAST_VALID_SHIFT)
                             : 0);
     }
-    case SE_GENI_RX_FIFOn: return m->rxh < m->rxt ? m->rxq[m->rxh++ % 4096] : 0xdeadbeef;
-    default: return m->reg[r / 4];
+    case SE_GENI_RX_FIFOn:
+        return m->rxh < m->rxt ? m->rxq[m->rxh++ % 4096] : 0xdeadbeef;
+    default:
+        return m->reg[r / 4];
     }
 }
 
@@ -167,11 +194,19 @@ static void se_wr(void *ctx, uint32_t r, uint32_t v)
 {
     struct sim *m = ctx;
     switch (r) {
-    case SE_GENI_M_IRQ_CLEAR: m->irq &= ~v; return;
-    case SE_DMA_TX_IRQ_CLR: m->dma_tx_stat &= ~v; return;
-    case SE_DMA_RX_IRQ_CLR: m->dma_rx_stat &= ~v; return;
+    case SE_GENI_M_IRQ_CLEAR:
+        m->irq &= ~v;
+        return;
+    case SE_DMA_TX_IRQ_CLR:
+        m->dma_tx_stat &= ~v;
+        return;
+    case SE_DMA_RX_IRQ_CLR:
+        m->dma_rx_stat &= ~v;
+        return;
     case SE_DMA_TX_FSM_RST:
-    case SE_DMA_RX_FSM_RST: m->fsm_rst++; return;
+    case SE_DMA_RX_FSM_RST:
+        m->fsm_rst++;
+        return;
     case SE_DMA_TX_LEN:
         m->dma_tx_len = v;
         m->dma_tx_set = 1;
@@ -190,7 +225,8 @@ static void se_wr(void *ctx, uint32_t r, uint32_t v)
             return;
         }
         m->txq[m->txn++] = v;
-        if ((int)m->txn > m->max_txn) m->max_txn = (int)m->txn;
+        if ((int)m->txn > m->max_txn)
+            m->max_txn = (int)m->txn;
         return;
     case SE_GENI_M_CMD0: {
         m->last_cmd0 = v;
@@ -212,7 +248,8 @@ static void se_wr(void *ctx, uint32_t r, uint32_t v)
     case SE_GENI_M_CMD_CTRL_REG:
         if (v & GENI_M_CMD_CANCEL) {
             m->writes_cancel++;
-            if (!m->stuck) m->irq |= GENI_M_CMD_CANCEL_DONE;
+            if (!m->stuck)
+                m->irq |= GENI_M_CMD_CANCEL_DONE;
         }
         if (v & GENI_M_CMD_ABORT) {
             m->writes_abort++;
@@ -230,6 +267,7 @@ static uint32_t wr_rd(void *ctx, uint32_t r)
     CHECK(r == QUPV3_HW_VER_REG);
     return m->wrap_ver;
 }
+
 static void wr_wr(void *ctx, uint32_t r, uint32_t v)
 {
     (void)ctx;
@@ -253,6 +291,7 @@ static void make(struct sim *m, struct geni_spi *s)
 static struct {
     unsigned clean, clean_inval, inval;
 } cache;
+
 static void clean(void *c, void *v, size_t l)
 {
     (void)c;
@@ -260,6 +299,7 @@ static void clean(void *c, void *v, size_t l)
     (void)l;
     cache.clean++;
 }
+
 static void clean_inval(void *c, void *v, size_t l)
 {
     (void)c;
@@ -267,6 +307,7 @@ static void clean_inval(void *c, void *v, size_t l)
     (void)l;
     cache.clean_inval++;
 }
+
 static void inval(void *c, void *v, size_t l)
 {
     (void)c;
@@ -277,7 +318,8 @@ static void inval(void *c, void *v, size_t l)
 
 static void fill(uint8_t *b, size_t n, unsigned seed)
 {
-    for (size_t i = 0; i < n; i++) b[i] = (uint8_t)(seed + i * 7 + (i >> 3));
+    for (size_t i = 0; i < n; i++)
+        b[i] = (uint8_t)(seed + i * 7 + (i >> 3));
 }
 
 int main(void)
@@ -338,12 +380,14 @@ int main(void)
         fill(tx, n, (unsigned)li);
         memset(rx, 0, sizeof rx);
         int r = geni_spi_transfer(&s, tx, rx, n, 0);
-        if (r) FAIL("full duplex len %zu -> %d", n, r);
+        if (r)
+            FAIL("full duplex len %zu -> %d", n, r);
         CHECK(m.last_cmd0 >> GENI_M_OPCODE_SHIFT == GENI_M_CMD_TX_RX);
         CHECK((m.last_cmd0 & GENI_M_PARAMS_MASK) == 0);
         CHECK(m.seen_n == n && memcmp(m.seen_tx, tx, n) == 0);
         for (size_t i = 0; i < n; i++)
-            if (rx[i] != slave(tx[i], i)) FAIL("rx mismatch len %zu at %zu", n, i);
+            if (rx[i] != slave(tx[i], i))
+                FAIL("rx mismatch len %zu at %zu", n, i);
         CHECK(m.max_txn <= DEPTH);
         CHECK(m.reg[SE_SPI_TX_TRANS_LEN / 4] == n && m.reg[SE_SPI_RX_TRANS_LEN / 4] == n);
     }
@@ -359,7 +403,8 @@ int main(void)
     memset(rx, 0, 70);
     CHECK(geni_spi_transfer(&s, 0, rx, 70, 0) == 0);
     CHECK(m.last_cmd0 >> GENI_M_OPCODE_SHIFT == 2);
-    for (size_t i = 0; i < 70; i++) CHECK(rx[i] == slave(0, i));
+    for (size_t i = 0; i < 70; i++)
+        CHECK(rx[i] == slave(0, i));
     // packing registers for 8-bit words, MSB first, four per FIFO word
     CHECK(m.reg[SE_GENI_TX_PACKING_CFG0 / 4] == 522494u && m.reg[SE_GENI_TX_PACKING_CFG1 / 4] == 1048318u);
     CHECK(m.reg[SE_GENI_RX_PACKING_CFG0 / 4] == 522494u && m.reg[SE_GENI_RX_PACKING_CFG1 / 4] == 1048318u);
@@ -406,12 +451,14 @@ int main(void)
             fill(tx, n, (unsigned)li + 40);
             memset(rx, 0, sizeof rx);
             int r = geni_spi_transfer(&s, tx, rx, n, li & 1);
-            if (r) FAIL("dma full duplex len %zu -> %d", n, r);
+            if (r)
+                FAIL("dma full duplex len %zu -> %d", n, r);
             CHECK(m.last_cmd0 >> GENI_M_OPCODE_SHIFT == GENI_M_CMD_TX_RX);
             CHECK(!!(m.last_cmd0 & GENI_M_PARAM_FRAGMENTATION) == (int)(li & 1));
             CHECK(m.seen_n == n && memcmp(m.seen_tx, tx, n) == 0);
             for (size_t i = 0; i < n; i++)
-                if (rx[i] != slave(tx[i], i)) FAIL("dma rx mismatch len %zu at %zu", n, i);
+                if (rx[i] != slave(tx[i], i))
+                    FAIL("dma rx mismatch len %zu at %zu", n, i);
             CHECK(m.dma_tx_stat == 0 && m.dma_rx_stat == 0);  // status cleared after each transfer
         }
         CHECK(cache.clean == sizeof dl / sizeof *dl && cache.clean_inval == cache.clean && cache.inval == cache.clean);
@@ -421,7 +468,8 @@ int main(void)
               memcmp(m.seen_tx, tx, 33) == 0);
         memset(rx, 0, 20);
         CHECK(geni_spi_transfer(&s, 0, rx, 20, 0) == 0 && m.last_cmd0 >> GENI_M_OPCODE_SHIFT == 2);
-        for (size_t i = 0; i < 20; i++) CHECK(rx[i] == slave(0, i));
+        for (size_t i = 0; i < 20; i++)
+            CHECK(rx[i] == slave(0, i));
         CHECK(geni_spi_transfer(&s, tx, rx, sizeof dtx + 1, 0) == GENI_ERR_PARAM);  // larger than the DMA buffer
         // errors: DMA bus error status, then a stuck engine (cancel/abort and FSM resets, snapshot kept)
         m.inject_error = 1;

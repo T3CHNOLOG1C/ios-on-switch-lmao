@@ -19,6 +19,7 @@ struct PushCounts {
 	uint64_t wfi, shaderInval, shaderInvalNoWfi, texInval, setRef, l2Inval, hostWfi;
 	uint64_t ceCopies, ceBytes, ceWfi, blits, dispatches, acquires;
 };
+
 struct PushParse {
 	uint32_t op, subc, mthd,
 		left;  // the method in progress (it may continue in the next push of the submission)

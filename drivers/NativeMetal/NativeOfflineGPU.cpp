@@ -25,6 +25,7 @@ volatile uint64_t native_gpu_broker_cpu_contexts[8][8];
 }
 class NativeOfflineGPUClient;
 class NativeGPUSharedEventToken;
+
 class NativeOfflineGPU : public IOService {
     OSDeclareDefaultStructors(NativeOfflineGPU) friend class NativeOfflineGPUClient;
     friend class NativeGPUSharedEventToken;
@@ -32,19 +33,23 @@ class NativeOfflineGPU : public IOService {
     IOLock *gate = nullptr;
     bool online = false;
     uint32_t nextControlRequest = 1;
+
     IOReturn readExact(void *bytes, size_t size)
     {
         auto p = static_cast<unsigned char *>(bytes);
         while (size) {
             size_t count = size > 4096 ? 4096 : size;
             IOReturn status = native_console_receive(transport, this, p, &count);
-            if (status != kIOReturnSuccess) return status;
-            if (!count || count > size) return kIOReturnIOError;
+            if (status != kIOReturnSuccess)
+                return status;
+            if (!count || count > size)
+                return kIOReturnIOError;
             p += count;
             size -= count;
         }
         return kIOReturnSuccess;
     }
+
     // gate covers the complete actual request/reply, including every byte
     // beyond a VirtIO descriptor. Userclients retain separate reply buffers.
     IOReturn exchange(uint64_t session, const OMWireHeader &request, const void *input, unsigned char **reply,
@@ -52,7 +57,8 @@ class NativeOfflineGPU : public IOService {
     {
         *reply = nullptr;
         *length = 0;
-        if (!online) return kIOReturnNotReady;
+        if (!online)
+            return kIOReturnNotReady;
         OMSessionWireHeader header = {request, session};
         header.wire.version = OFFLINE_METAL_SESSION_VERSION;
         IOReturn status = native_console_send(transport, this, &header, sizeof(header));
@@ -60,20 +66,24 @@ class NativeOfflineGPU : public IOService {
             status = native_console_send(transport, this, input, request.bytes);
         OMSessionWireHeader response = {};
         OMResult result = {};
-        if (status == kIOReturnSuccess) status = readExact(&response, sizeof(response));
+        if (status == kIOReturnSuccess)
+            status = readExact(&response, sizeof(response));
         if (status == kIOReturnSuccess &&
             (response.wire.magic != OM_WIRE_MAGIC || response.wire.version != OFFLINE_METAL_SESSION_VERSION ||
              response.wire.operation != (request.operation | OM_WIRE_RESPONSE) ||
              response.wire.request != request.request || response.session != session ||
              response.wire.bytes < sizeof(result) || response.wire.bytes - sizeof(result) > OFFLINE_METAL_MAX_REPLY))
             status = kIOReturnIOError;
-        if (status == kIOReturnSuccess) status = readExact(&result, sizeof(result));
-        if (status == kIOReturnSuccess && result.reserved) status = kIOReturnIOError;
+        if (status == kIOReturnSuccess)
+            status = readExact(&result, sizeof(result));
+        if (status == kIOReturnSuccess && result.reserved)
+            status = kIOReturnIOError;
         unsigned char *buffer = nullptr;
         size_t size = sizeof(OMWireHeader) + response.wire.bytes;
         if (status == kIOReturnSuccess) {
             buffer = static_cast<unsigned char *>(IOMallocData(size));
-            if (!buffer) status = kIOReturnNoMemory;
+            if (!buffer)
+                status = kIOReturnNoMemory;
         }
         if (status == kIOReturnSuccess) {
             response.wire.version = OFFLINE_METAL_VERSION;
@@ -83,7 +93,8 @@ class NativeOfflineGPU : public IOService {
         }
         native_gpu_broker_status = status;
         if (status != kIOReturnSuccess) {
-            if (buffer) IOFreeData(buffer, size);
+            if (buffer)
+                IOFreeData(buffer, size);
             // A partial stream cannot be reused for another client's reply.
             online = false;
             native_gpu_broker_failures = native_gpu_broker_failures + 1;
@@ -91,11 +102,13 @@ class NativeOfflineGPU : public IOService {
         }
         native_gpu_broker_requests = native_gpu_broker_requests + 1;
         native_gpu_broker_reply_bytes = native_gpu_broker_reply_bytes + size;
-        if (result.error) native_gpu_broker_refusals = native_gpu_broker_refusals + 1;
+        if (result.error)
+            native_gpu_broker_refusals = native_gpu_broker_refusals + 1;
         *reply = buffer;
         *length = size;
         return kIOReturnSuccess;
     }
+
     IOReturn createSession(task_t owner, uint64_t *session)
     {
         *session = 0;
@@ -111,7 +124,8 @@ class NativeOfflineGPU : public IOService {
         if (index < 8) {
             uint64_t values[8] = {(uint64_t)proc_selfpid(), 0, tcr, ttbr0, ttbr1, sctlr, (uintptr_t)owner,
                                   (uint64_t)native4k};
-            for (unsigned n = 0; n < 8; n++) native_gpu_broker_cpu_contexts[index][n] = values[n];
+            for (unsigned n = 0; n < 8; n++)
+                native_gpu_broker_cpu_contexts[index][n] = values[n];
         }
         if (!native4k) {
             native_gpu_broker_status = kIOReturnUnsupported;
@@ -132,13 +146,16 @@ class NativeOfflineGPU : public IOService {
                 *session = result.handle;
                 native_gpu_broker_clients = native_gpu_broker_clients + 1;
                 native_gpu_broker_active = native_gpu_broker_active + 1;
-                if (index < 8) native_gpu_broker_cpu_contexts[index][1] = result.handle;
+                if (index < 8)
+                    native_gpu_broker_cpu_contexts[index][1] = result.handle;
             }
         }
-        if (reply) IOFreeData(reply, length);
+        if (reply)
+            IOFreeData(reply, length);
         IOLockUnlock(gate);
         return status;
     }
+
     void closeSession(uint64_t session, uint32_t number)
     {
         IOLockLock(gate);
@@ -154,12 +171,15 @@ class NativeOfflineGPU : public IOService {
                 native_gpu_broker_active = native_gpu_broker_active - 1;
             }
         }
-        if (reply) IOFreeData(reply, length);
+        if (reply)
+            IOFreeData(reply, length);
         IOLockUnlock(gate);
     }
+
     void dropSharedExport(uint64_t exported)
     {
-        if (!exported) return;
+        if (!exported)
+            return;
         IOLockLock(gate);
         OMWireHeader header = {OM_WIRE_MAGIC, OFFLINE_METAL_VERSION, OM_SHARED_EXPORT_DROP, sizeof(OMHandle),
                                nextControlRequest};
@@ -171,16 +191,19 @@ class NativeOfflineGPU : public IOService {
             nextControlRequest++;
             OMResult result = {};
             memcpy(&result, reply + sizeof(OMWireHeader), sizeof(result));
-            if (!result.error) __atomic_fetch_add(&native_gpu_shared_drops, 1, __ATOMIC_RELAXED);
+            if (!result.error)
+                __atomic_fetch_add(&native_gpu_shared_drops, 1, __ATOMIC_RELAXED);
         }
-        if (reply) IOFreeData(reply, length);
+        if (reply)
+            IOFreeData(reply, length);
         IOLockUnlock(gate);
     }
 
 public:
     bool start(IOService *provider) override
     {
-        if (!IOService::start(provider)) return false;
+        if (!IOService::start(provider))
+            return false;
         gate = IOLockAlloc();
         if (!gate) {
             IOService::stop(provider);
@@ -197,17 +220,20 @@ public:
         native_gpu_broker_stage = 2;
         return true;
     }
+
     void stop(IOService *provider) override
     {
         if (gate) {
             IOLockLock(gate);
             online = false;
-            if (transport) transport->close(this);
+            if (transport)
+                transport->close(this);
             transport = nullptr;
             IOLockUnlock(gate);
         }
         IOService::stop(provider);
     }
+
     void free() override
     {
         if (transport) {
@@ -220,23 +246,28 @@ public:
         }
         IOService::free();
     }
+
     IOReturn newUserClient(task_t, void *, UInt32, OSDictionary *, IOUserClient **) override;
 };
+
 // A real kernel OSObject carried exclusively by an IKOT_IOKIT_IDENT Mach
 // right. No user-supplied integer can stand in for this object's authority.
 class NativeGPUSharedEventToken : public OSObject {
     OSDeclareDefaultStructors(NativeGPUSharedEventToken) friend class NativeOfflineGPUClient;
     NativeOfflineGPU *controller = nullptr;
     uint64_t exported = 0;
+
     bool initWithExport(NativeOfflineGPU *owner, uint64_t identifier)
     {
-        if (!owner || !identifier || !OSObject::init()) return false;
+        if (!owner || !identifier || !OSObject::init())
+            return false;
         controller = owner;
         controller->retain();
         exported = identifier;
         __atomic_fetch_add(&native_gpu_shared_tokens_live, 1, __ATOMIC_RELAXED);
         return true;
     }
+
     void free() override
     {
         if (controller) {
@@ -250,6 +281,7 @@ class NativeGPUSharedEventToken : public OSObject {
         OSObject::free();
     }
 };
+
 class NativeOfflineGPUClient : public IOUserClient {
     OSDeclareDefaultStructors(NativeOfflineGPUClient) NativeOfflineGPU *controller = nullptr;
     task_t owner = nullptr;  // The native IOUserClient base owns this task reference.
@@ -258,26 +290,35 @@ class NativeOfflineGPUClient : public IOUserClient {
     uint32_t nextRequest = 1, nextHostRequest = 1;
     unsigned char *reply = nullptr;
     size_t replyLength = 0, replyOffset = 0;
+
     void clearReply()
     {
-        if (reply) IOFreeData(reply, replyLength);
+        if (reply)
+            IOFreeData(reply, replyLength);
         reply = nullptr;
         replyLength = replyOffset = 0;
     }
+
     void closeContext()
     {
-        if (gate) IOLockLock(gate);
+        if (gate)
+            IOLockLock(gate);
         clearReply();
-        if (session && controller) controller->closeSession(session, nextHostRequest);
+        if (session && controller)
+            controller->closeSession(session, nextHostRequest);
         session = 0;
         controller = nullptr;
-        if (gate) IOLockUnlock(gate);
+        if (gate)
+            IOLockUnlock(gate);
     }
+
     static IOReturn sendAction(OSObject *target, void *, IOExternalMethodArguments *args)
     {
         auto self = OSDynamicCast(NativeOfflineGPUClient, target);
-        if (!self || !self->gate) return kIOReturnNotOpen;
-        if (args->structureInputDescriptor) return kIOReturnUnsupported;
+        if (!self || !self->gate)
+            return kIOReturnNotOpen;
+        if (args->structureInputDescriptor)
+            return kIOReturnUnsupported;
         if (!args->structureInput || args->structureInputSize < sizeof(OMWireHeader) || args->structureInputSize > 4096)
             return kIOReturnBadArgument;
         OMWireHeader header = {};
@@ -295,7 +336,8 @@ class NativeOfflineGPUClient : public IOUserClient {
             else {
                 self->clearReply();
                 uint16_t operation = header.operation;
-                if (operation == OM_FINISH) header.operation = OM_SESSION_CLOSE;
+                if (operation == OM_FINISH)
+                    header.operation = OM_SESSION_CLOSE;
                 IOLockLock(self->controller->gate);
                 OMWireHeader hostHeader = header;
                 hostHeader.request = self->nextHostRequest;
@@ -325,17 +367,21 @@ class NativeOfflineGPUClient : public IOUserClient {
         IOLockUnlock(self->gate);
         return status;
     }
+
     static IOReturn receiveAction(OSObject *target, void *, IOExternalMethodArguments *args)
     {
         auto self = OSDynamicCast(NativeOfflineGPUClient, target);
-        if (!self || !self->gate) return kIOReturnNotOpen;
-        if (args->structureOutputDescriptor) return kIOReturnUnsupported;
+        if (!self || !self->gate)
+            return kIOReturnNotOpen;
+        if (args->structureOutputDescriptor)
+            return kIOReturnUnsupported;
         if (!args->structureOutput || !args->structureOutputSize || args->structureOutputSize > 4096)
             return kIOReturnBadArgument;
         IOLockLock(self->gate);
         size_t available = self->replyLength - self->replyOffset;
         size_t count = args->structureOutputSize;
-        if (count > available) count = available;
+        if (count > available)
+            count = available;
         if (count) {
             memcpy(args->structureOutput, self->reply + self->replyOffset, count);
             self->replyOffset += count;
@@ -344,24 +390,30 @@ class NativeOfflineGPUClient : public IOUserClient {
         IOLockUnlock(self->gate);
         return count ? kIOReturnSuccess : kIOReturnNotReady;
     }
+
     IOReturn sharedExchange(uint16_t operation, uint64_t identifier, unsigned char **output, size_t *length)
     {
         *output = nullptr;
         *length = 0;
-        if (!session || !controller) return kIOReturnNotOpen;
-        if (replyOffset != replyLength) return kIOReturnBusy;
+        if (!session || !controller)
+            return kIOReturnNotOpen;
+        if (replyOffset != replyLength)
+            return kIOReturnBusy;
         OMWireHeader header = {OM_WIRE_MAGIC, OFFLINE_METAL_VERSION, operation, sizeof(OMHandle), nextHostRequest};
         OMHandle input = {identifier};
         IOLockLock(controller->gate);
         IOReturn status = controller->exchange(session, header, &input, output, length);
-        if (status == kIOReturnSuccess) nextHostRequest++;
+        if (status == kIOReturnSuccess)
+            nextHostRequest++;
         IOLockUnlock(controller->gate);
         return status;
     }
+
     static IOReturn exportSharedAction(OSObject *target, void *, IOExternalMethodArguments *args)
     {
         auto self = OSDynamicCast(NativeOfflineGPUClient, target);
-        if (!self || !self->gate) return kIOReturnNotOpen;
+        if (!self || !self->gate)
+            return kIOReturnNotOpen;
         if (current_task() != self->owner || args->structureOutputDescriptor || !args->structureOutput ||
             !args->structureOutputSize || args->structureOutputSize > 4096)
             return kIOReturnBadArgument;
@@ -405,15 +457,19 @@ class NativeOfflineGPUClient : public IOUserClient {
                 }
             }
         }
-        if (bytes) IOFreeData(bytes, length);
+        if (bytes)
+            IOFreeData(bytes, length);
         IOLockUnlock(self->gate);
-        if (status != kIOReturnSuccess) __atomic_fetch_add(&native_gpu_shared_refusals, 1, __ATOMIC_RELAXED);
+        if (status != kIOReturnSuccess)
+            __atomic_fetch_add(&native_gpu_shared_refusals, 1, __ATOMIC_RELAXED);
         return status;
     }
+
     static IOReturn importSharedAction(OSObject *target, void *, IOExternalMethodArguments *args)
     {
         auto self = OSDynamicCast(NativeOfflineGPUClient, target);
-        if (!self || !self->gate) return kIOReturnNotOpen;
+        if (!self || !self->gate)
+            return kIOReturnNotOpen;
         if (current_task() != self->owner || args->scalarInput[0] > UINT32_MAX || args->structureOutputDescriptor ||
             !args->structureOutput || !args->structureOutputSize || args->structureOutputSize > 4096)
             return kIOReturnBadArgument;
@@ -441,7 +497,8 @@ class NativeOfflineGPUClient : public IOUserClient {
                     unsigned char *released = nullptr;
                     size_t releasedLength = 0;
                     (void)self->sharedExchange(OM_RELEASE, result.handle, &released, &releasedLength);
-                    if (released) IOFreeData(released, releasedLength);
+                    if (released)
+                        IOFreeData(released, releasedLength);
                     status = kIOReturnNoSpace;
                 } else {
                     args->scalarOutput[0] = result.handle;
@@ -451,10 +508,12 @@ class NativeOfflineGPUClient : public IOUserClient {
                 }
             }
         }
-        if (bytes) IOFreeData(bytes, length);
+        if (bytes)
+            IOFreeData(bytes, length);
         OSSafeReleaseNULL(object);
         IOLockUnlock(self->gate);
-        if (status != kIOReturnSuccess) __atomic_fetch_add(&native_gpu_shared_refusals, 1, __ATOMIC_RELAXED);
+        if (status != kIOReturnSuccess)
+            __atomic_fetch_add(&native_gpu_shared_refusals, 1, __ATOMIC_RELAXED);
         return status;
     }
 
@@ -468,10 +527,12 @@ public:
         gate = IOLockAlloc();
         return gate != nullptr;
     }
+
     bool start(IOService *provider) override
     {
         controller = OSDynamicCast(NativeOfflineGPU, provider);
-        if (!controller || !IOUserClient::start(provider)) return false;
+        if (!controller || !IOUserClient::start(provider))
+            return false;
         if (controller->createSession(owner, &session) != kIOReturnSuccess) {
             controller = nullptr;
             IOUserClient::stop(provider);
@@ -479,11 +540,13 @@ public:
         }
         return true;
     }
+
     void stop(IOService *provider) override
     {
         closeContext();
         IOUserClient::stop(provider);
     }
+
     void free() override
     {
         closeContext();
@@ -493,11 +556,13 @@ public:
         }
         IOUserClient::free();
     }
+
     IOReturn clientClose() override
     {
         terminate();
         return kIOReturnSuccess;
     }
+
     IOReturn externalMethod(uint32_t selector, IOExternalMethodArguments *args, IOExternalMethodDispatch *, OSObject *,
                             void *) override
     {
@@ -505,30 +570,36 @@ public:
                                                            {receiveAction, 0, 0, 0, kIOUCVariableStructureSize},
                                                            {exportSharedAction, 1, 0, 1, kIOUCVariableStructureSize},
                                                            {importSharedAction, 1, 0, 1, kIOUCVariableStructureSize}};
-        if (selector >= 4) return kIOReturnUnsupported;
+        if (selector >= 4)
+            return kIOReturnUnsupported;
         return IOUserClient::externalMethod(selector, args, const_cast<IOExternalMethodDispatch *>(methods + selector),
                                             this, nullptr);
     }
 };
+
 OSDefineMetaClassAndStructors(NativeOfflineGPU, IOService)
     OSDefineMetaClassAndStructors(NativeOfflineGPUClient, IOUserClient)
         OSDefineMetaClassAndStructors(NativeGPUSharedEventToken, OSObject) IOReturn NativeOfflineGPU::newUserClient(
             task_t task, void *security, UInt32 type, OSDictionary *properties, IOUserClient **out)
 {
-    if (!out) return kIOReturnBadArgument;
+    if (!out)
+        return kIOReturnBadArgument;
     *out = nullptr;
     auto client = new NativeOfflineGPUClient;
-    if (!client) return kIOReturnNoMemory;
+    if (!client)
+        return kIOReturnNoMemory;
     bool attached = false;
     if (!client->initWithTask(task, security, type, properties) || !(attached = client->attach(this)) ||
         !client->start(this)) {
-        if (attached) client->detach(this);
+        if (attached)
+            client->detach(this);
         client->release();
         return kIOReturnNotOpen;
     }
     *out = client;
     return kIOReturnSuccess;
 }
+
 extern "C" IOService *native_offline_gpu_create(void)
 {
     return new NativeOfflineGPU;

@@ -12,6 +12,7 @@
             std::exit(1);                                        \
         }                                                        \
     } while (0)
+
 struct Peer {
     std::vector<uint32_t> regs;
     std::vector<std::pair<uint32_t, uint32_t>> writes;
@@ -19,75 +20,97 @@ struct Peer {
     unsigned fail_write = 0, fail_read = 0, fail_barrier = 0, fail_publish = 0, fail_acquire = 0;
     bool log_order = false;
     std::vector<const char *> order;
-    Peer() : regs(0x10000, 0) {}
+
+    Peer() : regs(0x10000, 0)
+    {}
 };
+
 static Peer peer;
 static uint64_t clock_us = 0;
+
 static int write32(void *cookie, uint32_t reg, uint32_t value)
 {
     CHECK(cookie == &peer && reg < peer.regs.size());
-    if (peer.writes.size() + 1 == peer.fail_write) return 1;
+    if (peer.writes.size() + 1 == peer.fail_write)
+        return 1;
     peer.regs[reg] = value;
     peer.writes.emplace_back(reg, value);
-    if (peer.log_order) peer.order.push_back("write");
+    if (peer.log_order)
+        peer.order.push_back("write");
     return 0;
 }
+
 static int read32(void *cookie, uint32_t reg, uint32_t *value)
 {
     CHECK(cookie == &peer && value && reg < peer.regs.size());
     ++peer.read_calls;
-    if (peer.read_calls == peer.fail_read) return 1;
+    if (peer.read_calls == peer.fail_read)
+        return 1;
     *value = peer.regs[reg];
     return 0;
 }
+
 static int barrier(void *cookie)
 {
     CHECK(cookie == &peer);
     ++peer.barriers;
-    if (peer.barriers == peer.fail_barrier) return 1;
-    if (peer.log_order) peer.order.push_back("barrier");
+    if (peer.barriers == peer.fail_barrier)
+        return 1;
+    if (peer.log_order)
+        peer.order.push_back("barrier");
     return 0;
 }
+
 static int publish(void *cookie, const volatile uint32_t *words, size_t bytes)
 {
     CHECK(cookie == &peer && words && bytes == 32768);
     ++peer.publish;
-    if (peer.log_order) peer.order.push_back("publish");
+    if (peer.log_order)
+        peer.order.push_back("publish");
     return peer.publish == peer.fail_publish;
 }
+
 static int acquire(void *cookie, volatile uint32_t *words, size_t bytes)
 {
     CHECK(cookie == &peer && words && bytes == 4096);
     ++peer.acquire;
     return peer.acquire == peer.fail_acquire;
 }
+
 static uint64_t now(void *cookie)
 {
     CHECK(cookie == &peer);
     return clock_us;
 }
+
 static int idle(void *cookie)
 {
     CHECK(cookie == &peer);
     clock_us += 1000;
     return 0;
 }
+
 static uint32_t ring[8192];
 static uint32_t fence[1024];
 static NativeAdrenoRingIo io{&peer, write32, read32, barrier};
 static NativeAdrenoRingCache cache{&peer, publish, acquire};
 static NativeAdrenoRingClock clock_{&peer, now, idle};
+
 static void reset(void)
 {
     peer = Peer{};
     clock_us = 0;
-    for (auto &v : ring) v = 0xdeadbeef;
-    for (auto &v : fence) v = 0xa5a5a5a5;
+    for (auto &v : ring)
+        v = 0xdeadbeef;
+    for (auto &v : fence)
+        v = 0xa5a5a5a5;
 }
+
 static int attach(NativeAdrenoRing &r)
 {
     return r.attach(&io, &cache, ring, sizeof(ring), 0x100000, fence, sizeof(fence), 0x108000);
 }
+
 int main()
 {
     /* Exact register programming and one complete submission. */
@@ -109,12 +132,15 @@ int main()
         CHECK(peer.writes.back().first == 0x0807 && peer.writes.back().second == 46);
         /* a7xx_submit() framing: BR sync, the BR-only GPU cache flush/invalidate (CACHE_FLUSH7, CACHE_INVALIDATE7, a one-word
          * CP_WAIT_FOR_IDLE), both threads and IFPC off around the user words, then the fence epilogue. */
-        auto op = [](uint32_t header) { return (header >> 28) == 7u ? (header >> 16) & 0x7fu : 0xffu; };
+        auto op = [](uint32_t header) {
+            return (header >> 28) == 7u ? (header >> 16) & 0x7fu : 0xffu;
+        };
         CHECK(op(ring[0]) == 0x17 && ring[1] == 0x80000001u);
         CHECK(op(ring[2]) == 0x46 && ring[3] == 0x32 && op(ring[4]) == 0x46 && ring[5] == 0x33 && op(ring[6]) == 0x26 &&
               (ring[6] & 0x3fffu) == 0);
         CHECK(op(ring[7]) == 0x17 && ring[8] == 3 && op(ring[9]) == 0x65 && ring[10] == 0x101);
-        for (unsigned i = 0; i < 4; ++i) CHECK(ring[11 + i] == words[i]);
+        for (unsigned i = 0; i < 4; ++i)
+            CHECK(ring[11 + i] == words[i]);
         CHECK((ring[15] >> 8 & 0x3ffffu) == 0x885 && (ring[15] & 0x3fu) == 1 && ring[16] == 1);
         CHECK(op(ring[17]) == 0x17 && ring[18] == 1 && op(ring[19]) == 0x46 && ring[20] == 0x18 &&
               op(ring[21]) == 0x46 && ring[22] == 0x19);
@@ -149,7 +175,9 @@ int main()
         r.requestContextReset();
         CHECK(r.submitFramed(words, 1, &end) == kIOReturnSuccess && end == 1);
         CHECK(peer.writes.back().first == 0x0807 && peer.writes.back().second == 11 + 26 + 1 + 31);
-        auto op = [](uint32_t header) { return (header >> 28) == 7u ? (header >> 16) & 0x7fu : 0xffu; };
+        auto op = [](uint32_t header) {
+            return (header >> 28) == 7u ? (header >> 16) & 0x7fu : 0xffu;
+        };
         CHECK(op(ring[0]) == 0x17 && ring[1] == 0x80000001u);
         CHECK(op(ring[2]) == 0x14 && ring[3] == 0 && ring[4] == 0x108004 && ring[5] == 0 &&
               ring[6] == 0); /* wait for the last fence */
@@ -186,7 +214,8 @@ int main()
         NativeAdrenoRing r;
         CHECK(attach(r) == kIOReturnSuccess);
         uint32_t words[sizeof(ring) / 4 - 53];
-        for (auto &w : words) w = 0x5a5a5a5a;
+        for (auto &w : words)
+            w = 0x5a5a5a5a;
         uint32_t end = 0;
         CHECK(r.submitFramed(words, sizeof(words) / sizeof(words[0]), &end) == kIOReturnSuccess);
         /* Consume the whole submission, then a second one wraps past the end. */
@@ -260,9 +289,12 @@ int main()
             reset();
             NativeAdrenoRing r;
             CHECK(attach(r) == kIOReturnSuccess);
-            if (kind == 0) peer.fail_publish = 1;
-            if (kind == 1) peer.fail_barrier = 1;
-            if (kind == 2) peer.fail_write = peer.writes.size() + 1;
+            if (kind == 0)
+                peer.fail_publish = 1;
+            if (kind == 1)
+                peer.fail_barrier = 1;
+            if (kind == 2)
+                peer.fail_write = peer.writes.size() + 1;
             const uint32_t one = 0x1234;
             uint32_t end = 0;
             CHECK(r.submit(&one, 1, &end) == kIOReturnIOError && !end && r.poisoned());

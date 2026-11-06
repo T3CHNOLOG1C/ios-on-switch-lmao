@@ -54,7 +54,11 @@ public:
     // PLLs and pad (shared with the XUDC), partitions XUSBA+XUSBC, clocks, IPFS/FPCI; false with the reason.
     bool powerOn(char *why, size_t whySize);
     bool loadFirmware(const uint8_t *image, size_t size, char *why, size_t whySize);
-    bool powered() const { return isPowered; }  // powerOn succeeded: the xHCI registers can be read
+
+    bool powered() const
+    {
+        return isPowered;
+    }  // powerOn succeeded: the xHCI registers can be read
 
     // USB2 port 0 (the USB-C port's D+/D-), XusbPorts.h: OTG capability, then the ID override (xusb-tegra210.c):
     // host grounds ID (the VBUS override off first, 1.5 ms, as Linux) and clears what a boot stage's charger detection
@@ -76,9 +80,20 @@ public:
     void describePorts(char *buffer, size_t size);
 
     // xHCI registers through our own mapping (bring-up, the lost-interrupt check).
-    uint32_t xhci(uint32_t offset) const { return *reinterpret_cast<volatile uint32_t *>(regs + offset); }
-    uint32_t capLength() const { return xhci(0) & 0xff; }
-    uint32_t runtimeOffset() const { return xhci(0x18) & ~0x1fu; }
+    uint32_t xhci(uint32_t offset) const
+    {
+        return *reinterpret_cast<volatile uint32_t *>(regs + offset);
+    }
+
+    uint32_t capLength() const
+    {
+        return xhci(0) & 0xff;
+    }
+
+    uint32_t runtimeOffset() const
+    {
+        return xhci(0x18) & ~0x1fu;
+    }
 
     // Mailbox. takeMailboxInterrupt() runs in the primary interrupt filter: it acknowledges SMI_INTR (W1C) and says
     // whether a message waits (or the firmware hung). serviceMailbox() runs on the work loop: reads the message,
@@ -102,12 +117,21 @@ private:
 
     void padctlUp();
 
-    static uint32_t r(volatile uint8_t *b, uint32_t o) { return *reinterpret_cast<volatile uint32_t *>(b + o); }
-    static void w(volatile uint8_t *b, uint32_t o, uint32_t v) { *reinterpret_cast<volatile uint32_t *>(b + o) = v; }
+    static uint32_t r(volatile uint8_t *b, uint32_t o)
+    {
+        return *reinterpret_cast<volatile uint32_t *>(b + o);
+    }
+
+    static void w(volatile uint8_t *b, uint32_t o, uint32_t v)
+    {
+        *reinterpret_cast<volatile uint32_t *>(b + o) = v;
+    }
+
     static void rmw(volatile uint8_t *b, uint32_t o, uint32_t clear, uint32_t set)
     {
         w(b, o, (r(b, o) & ~clear) | set);
     }
+
     static bool waitBits(volatile uint8_t *b, uint32_t o, uint32_t mask, uint32_t value, uint32_t us);
     uint32_t pmc(uint32_t o) const;
     void pmcWrite(uint32_t o, uint32_t v);

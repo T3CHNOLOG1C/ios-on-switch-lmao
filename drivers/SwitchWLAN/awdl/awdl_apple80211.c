@@ -21,7 +21,8 @@ _Static_assert(sizeof(struct a80211_ring_header) == A80211_RING_HEADER, "ring he
 // ---- event ring -------------------------------------------------------------------------------------------------------
 int a80211_ring_init(struct a80211_ring *r, void *buf, uint32_t size, volatile uint32_t *state)
 {
-    if (!buf || !state || size < 2 * A80211_RING_HEADER || (size & 3)) return -1;
+    if (!buf || !state || size < 2 * A80211_RING_HEADER || (size & 3))
+        return -1;
     r->buf = (uint8_t *)buf;
     r->size = size;
     r->state = state;
@@ -46,7 +47,8 @@ static void ring_copy_in(struct a80211_ring *r, uint32_t at, const void *src, ui
 
 int a80211_ring_post(struct a80211_ring *r, uint32_t event, const char *ifname, const void *payload, uint32_t len)
 {
-    if (len > A80211_RING_MAX_PAYLOAD) return -1;
+    if (len > A80211_RING_MAX_PAYLOAD)
+        return -1;
     uint32_t w = r->state[1];
     const uint32_t rd = __atomic_load_n(&r->state[0], __ATOMIC_ACQUIRE);
     if (w >= r->size || rd >= r->size || ((w | rd) & 3)) {  // userland wrote nonsense into the state page
@@ -67,14 +69,16 @@ int a80211_ring_post(struct a80211_ring *r, uint32_t event, const char *ifname, 
         const uint32_t p = A80211_RING_MAGIC_PAD;
         memcpy(r->buf + w + i, &p, 4);
     }
-    if (skip) w = 0;
+    if (skip)
+        w = 0;
     struct a80211_ring_header h;
     memset(&h, 0, sizeof h);
     h.magic = A80211_RING_MAGIC_EVENT;
     h.payload_len = (uint16_t)len;
     h.pad_len = (uint16_t)pad;
     h.event = event;
-    for (unsigned i = 0; i < sizeof h.ifname - 1 && ifname && ifname[i]; ++i) h.ifname[i] = ifname[i];
+    for (unsigned i = 0; i < sizeof h.ifname - 1 && ifname && ifname[i]; ++i)
+        h.ifname[i] = ifname[i];
     memcpy(r->buf + w, &h, sizeof h);
     ring_copy_in(r, (w + A80211_RING_HEADER) % r->size, payload, len);
     ring_copy_in(r, (w + A80211_RING_HEADER + len) % r->size, NULL, pad);
@@ -89,8 +93,10 @@ int a80211_ring_take(struct a80211_ring *r, uint32_t *event, char ifname[16], vo
     for (;;) {
         uint32_t rd = r->state[0];
         const uint32_t w = __atomic_load_n(&r->state[1], __ATOMIC_ACQUIRE);
-        if (rd == w) return 0;
-        if (rd >= r->size || (rd & 3)) return -1;
+        if (rd == w)
+            return 0;
+        if (rd >= r->size || (rd & 3))
+            return -1;
         uint32_t magic;
         memcpy(&magic, r->buf + rd, 4);
         if (r->size - rd < A80211_RING_HEADER || magic == A80211_RING_MAGIC_PAD) {
@@ -99,7 +105,8 @@ int a80211_ring_take(struct a80211_ring *r, uint32_t *event, char ifname[16], vo
         }
         struct a80211_ring_header h;
         memcpy(&h, r->buf + rd, sizeof h);
-        if (h.magic != A80211_RING_MAGIC_EVENT || h.payload_len > A80211_RING_MAX_PAYLOAD) return -1;
+        if (h.magic != A80211_RING_MAGIC_EVENT || h.payload_len > A80211_RING_MAX_PAYLOAD)
+            return -1;
         const uint32_t n = h.payload_len < capacity ? h.payload_len : capacity;
         const uint32_t at = (rd + A80211_RING_HEADER) % r->size;
         const uint32_t first = n < r->size - at ? n : r->size - at;
@@ -121,16 +128,20 @@ void a80211_awdl_init(struct a80211_awdl *f, struct awdl_core *core, const struc
     memset(f, 0, sizeof *f);
     f->core = core;
     f->ops = *ops;
-    for (unsigned i = 0; i < sizeof f->ifname - 1 && ifname[i]; ++i) f->ifname[i] = ifname[i];
-    for (unsigned i = 0; i < sizeof f->parent - 1 && parent[i]; ++i) f->parent[i] = parent[i];
+    for (unsigned i = 0; i < sizeof f->ifname - 1 && ifname[i]; ++i)
+        f->ifname[i] = ifname[i];
+    for (unsigned i = 0; i < sizeof f->parent - 1 && parent[i]; ++i)
+        f->parent[i] = parent[i];
     memcpy(f->caps, caps, 12);
     f->preferred = f->master_channel = 149;
 }
 
 static void flog(struct a80211_awdl *f, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
+
 static void flog(struct a80211_awdl *f, const char *fmt, ...)
 {
-    if (!f->ops.log) return;
+    if (!f->ops.log)
+        return;
     char line[160];
     va_list ap;
     va_start(ap, fmt);
@@ -141,12 +152,14 @@ static void flog(struct a80211_awdl *f, const char *fmt, ...)
 
 static int answer(void *data, uint32_t *len, uint32_t capacity, const void *src, uint32_t n)
 {
-    if (!data || !capacity) return EINVAL;
+    if (!data || !capacity)
+        return EINVAL;
     const uint32_t k = n < capacity ? n : capacity;
     memcpy(data, src, k);
     *len = k;
     return 0;
 }
+
 static int answer_u32(void *data, uint32_t *len, uint32_t capacity, int32_t *val, uint32_t version, uint32_t v)
 {
     if (!data || !capacity) {  // a get without a buffer takes the value in req_val
@@ -156,6 +169,7 @@ static int answer_u32(void *data, uint32_t *len, uint32_t capacity, int32_t *val
     const uint32_t w[2] = {version, v};
     return answer(data, len, capacity, w, sizeof w);
 }
+
 static void fill_channel(struct a80211_channel *ch, struct awdl_chan c)
 {
     const uint8_t p = awdl_chan_primary(c);
@@ -177,7 +191,8 @@ int a80211_awdl_request(struct a80211_awdl *f, int set, int32_t type, int32_t *v
             memcpy(&s, data, in < sizeof s ? in : sizeof s);
             f->sync_flags = s.flags;
             const int on = s.enabled != 0;
-            if (on == f->enabled) return 0;
+            if (on == f->enabled)
+                return 0;
             if (on) {
                 const int e = f->ops.start ? f->ops.start(f->ops.ctx) : 0;
                 if (e) {
@@ -187,7 +202,8 @@ int a80211_awdl_request(struct a80211_awdl *f, int set, int32_t type, int32_t *v
                 awdl_core_start(f->core, now);
             } else {
                 awdl_core_stop(f->core);
-                if (f->ops.stop) f->ops.stop(f->ops.ctx);
+                if (f->ops.stop)
+                    f->ops.stop(f->ops.ctx);
             }
             f->enabled = (uint8_t)on;
             return 0;
@@ -254,8 +270,10 @@ int a80211_awdl_request(struct a80211_awdl *f, int set, int32_t type, int32_t *v
         case A80211_IOC_AWDL_ADVERTISERS:           // peer hints from Bluetooth: the air tells us anyway
         case A80211_IOC_AWDL_UMI_TX_PEER:
         case A80211_IOC_GATEWAY_ADDRESS:
-        case A80211_IOC_UNICAST_INFRA_PEER_ADDRESS: return 0;
-        default: break;
+        case A80211_IOC_UNICAST_INFRA_PEER_ADDRESS:
+            return 0;
+        default:
+            break;
         }
     } else {
         switch (type) {
@@ -267,7 +285,8 @@ int a80211_awdl_request(struct a80211_awdl *f, int set, int32_t type, int32_t *v
             const struct a80211_awdl_strategy s = {1, f->strategy, f->strategy_param, 0};
             return answer(data, len, capacity, &s, sizeof s);
         }
-        case A80211_IOC_AWDL_OPER_MODE: return answer_u32(data, len, capacity, val, 1, f->oper_mode);
+        case A80211_IOC_AWDL_OPER_MODE:
+            return answer_u32(data, len, capacity, val, 1, f->oper_mode);
         case A80211_IOC_AWDL_PREFERRED_CHANNELS: {
             const struct a80211_awdl_preferred_channels p = {1, f->preferred, f->master_channel,
                                                              f->secondary_preferred};
@@ -282,7 +301,8 @@ int a80211_awdl_request(struct a80211_awdl *f, int set, int32_t type, int32_t *v
             s.step_count = 3;
             s.fill_chan_num = 0xff;
             const struct awdl_chan *seq = awdl_core_sequence(f->core);
-            for (unsigned i = 0; i < AWDL_SEQ_SLOTS; ++i) fill_channel(&s.channel[i], seq[i]);
+            for (unsigned i = 0; i < AWDL_SEQ_SLOTS; ++i)
+                fill_channel(&s.channel[i], seq[i]);
             s.strategy = f->strategy;
             return answer(data, len, capacity, &s, sizeof s);
         }
@@ -291,16 +311,21 @@ int a80211_awdl_request(struct a80211_awdl *f, int set, int32_t type, int32_t *v
             fill_channel((struct a80211_channel *)(void *)(w + 1), awdl_core_channel_at(f->core, now));
             return answer(data, len, capacity, w, sizeof w);
         }
-        case A80211_IOC_BSSID: return answer(data, len, capacity, awdl_bssid, 6);
-        case A80211_IOC_SSID: return ENOENT;
-        case A80211_IOC_CARD_CAPABILITIES: return answer(data, len, capacity, f->caps, sizeof f->caps);
+        case A80211_IOC_BSSID:
+            return answer(data, len, capacity, awdl_bssid, 6);
+        case A80211_IOC_SSID:
+            return ENOENT;
+        case A80211_IOC_CARD_CAPABILITIES:
+            return answer(data, len, capacity, f->caps, sizeof f->caps);
         case A80211_IOC_VIRTUAL_IF_PARENT: {
             char name[16];
             memcpy(name, f->parent, sizeof name);
             return answer(data, len, capacity, name, sizeof name);
         }
-        case A80211_IOC_VIRTUAL_IF_ROLE: return answer_u32(data, len, capacity, val, 1, A80211_VIF_ROLE_AWDL);
-        case A80211_IOC_STATE: return answer_u32(data, len, capacity, val, 1, f->enabled ? 4 : 0);
+        case A80211_IOC_VIRTUAL_IF_ROLE:
+            return answer_u32(data, len, capacity, val, 1, A80211_VIF_ROLE_AWDL);
+        case A80211_IOC_STATE:
+            return answer_u32(data, len, capacity, val, 1, f->enabled ? 4 : 0);
         case A80211_IOC_POWER: {
             const uint32_t w[6] = {1, 1, 1, 0, 0, 0};
             return answer(data, len, capacity, w, sizeof w);
@@ -310,14 +335,16 @@ int a80211_awdl_request(struct a80211_awdl *f, int set, int32_t type, int32_t *v
             char text[256];
             memset(text, 0, sizeof text);
             const char *s = type == A80211_IOC_DRIVER_VERSION ? "SwitchWLAN AWDL 1" : "BCM4356A3";
-            for (unsigned i = 0; s[i]; ++i) text[i] = s[i];
+            for (unsigned i = 0; s[i]; ++i)
+                text[i] = s[i];
             return answer(data, len, capacity, text, sizeof text);
         }
         case A80211_IOC_AWDL_STATISTICS:
         case A80211_IOC_AWDL_LOW_LATENCY_STATISTICS:
         case A80211_IOC_LOWLATENCY_STATISTICS:
             // all counters zero: valid for every version (the caller sized the buffer)
-            if (!data || !capacity) return EINVAL;
+            if (!data || !capacity)
+                return EINVAL;
             memset(data, 0, capacity);
             ((uint32_t *)data)[0] = 1;
             *len = capacity;
@@ -327,7 +354,8 @@ int a80211_awdl_request(struct a80211_awdl *f, int set, int32_t type, int32_t *v
             uint32_t n = 0;
             for (unsigned i = 0; i < AWDL_MAX_PEERS; ++i) {
                 const struct awdl_peer *p = awdl_core_peer(f->core, i);
-                if (!p || (n + 1) * sizeof(struct a80211_awdl_peer_advert) > capacity) continue;
+                if (!p || (n + 1) * sizeof(struct a80211_awdl_peer_advert) > capacity)
+                    continue;
                 struct a80211_awdl_peer_advert a;
                 memset(&a, 0, sizeof a);
                 a.aw_counter = p->sync.aw_seq;
@@ -350,12 +378,14 @@ int a80211_awdl_request(struct a80211_awdl *f, int set, int32_t type, int32_t *v
             *len = n * (uint32_t)sizeof(struct a80211_awdl_peer_advert);
             return 0;
         }
-        default: break;
+        default:
+            break;
         }
     }
     // not ours: once per type in the log
     for (unsigned i = 0; i < sizeof f->unknown_seen / sizeof f->unknown_seen[0]; ++i) {
-        if (f->unknown_seen[i] == (uint32_t)type + 1) return EOPNOTSUPP;
+        if (f->unknown_seen[i] == (uint32_t)type + 1)
+            return EOPNOTSUPP;
         if (!f->unknown_seen[i]) {
             f->unknown_seen[i] = (uint32_t)type + 1;
             flog(f, "AWDL: %s: %s %d not handled", f->ifname, set ? "set" : "get", type);
@@ -374,18 +404,21 @@ void a80211_awdl_peer(struct a80211_awdl *f, const uint8_t addr[6], int present,
     p.state = present ? A80211_PEER_PRESENT : A80211_PEER_ABSENT;
     p.rssi = rssi;
     p.link_quality = present ? 100 : 0;
-    if (f->ops.post) f->ops.post(f->ops.ctx, A80211_M_PEER_PRESENCE, &p, sizeof p);
+    if (f->ops.post)
+        f->ops.post(f->ops.ctx, A80211_M_PEER_PRESENCE, &p, sizeof p);
 }
 
 int a80211_awdl_down_if(const uint8_t station[6], struct a80211_awdl_down_if *out)
 {
     static const uint8_t zero[6];
-    if (station[0] & 0x01 || !memcmp(station, zero, 6)) return -1;
+    if (station[0] & 0x01 || !memcmp(station, zero, 6))
+        return -1;
     out->if_flags = A80211_IFF_BROADCAST | A80211_IFF_SIMPLEX | A80211_IFF_MULTICAST;
     out->mtu = 1500;
     memcpy(out->lladdr, station, 6);
     out->lladdr[0] |= 0x02;
-    if (!memcmp(out->lladdr, station, 6)) out->lladdr[0] ^= 0x04;
+    if (!memcmp(out->lladdr, station, 6))
+        out->lladdr[0] ^= 0x04;
     return 0;
 }
 

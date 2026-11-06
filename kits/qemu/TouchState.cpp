@@ -33,5 +33,6 @@ void native_touch_published(void)
 {
     void (*sink)(void *) = gSink;
     __asm__ volatile("dmb ish" ::: "memory");
-    if (sink) sink(gSinkContext);
+    if (sink)
+        sink(gSinkContext);
 }

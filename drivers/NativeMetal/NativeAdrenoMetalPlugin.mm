@@ -34,25 +34,31 @@ namespace publish {
 static bool requestedPath(const char *name, char *path, size_t size)
 {
     Dl_info info = {};
-    if (!dladdr(reinterpret_cast<const void *>(&requestedPath), &info) || !info.dli_fname) return false;
+    if (!dladdr(reinterpret_cast<const void *>(&requestedPath), &info) || !info.dli_fname)
+        return false;
     snprintf(path, size, "%s", info.dli_fname);
     char *slash = strrchr(path, '/');  // the bundle's executable: <dir>/NativeAdrenoMetal.bundle/NativeAdrenoMetal
-    if (!slash) return false;
+    if (!slash)
+        return false;
     *slash = 0;
     slash = strrchr(path, '/');
-    if (!slash) return false;
+    if (!slash)
+        return false;
     snprintf(slash + 1, size - size_t(slash + 1 - path), "%s", name);
     return access(path, R_OK) == 0;
 }
+
 static bool requested()
 {
     char path[1024];
     return requestedPath("NativeAdrenoMetal.publish", path, sizeof path);
 }
+
 static Gpu *makeGpu(unsigned port)
 {
     void *iokit = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_NOW | RTLD_LOCAL);
-    if (!iokit) return nullptr;
+    if (!iokit)
+        return nullptr;
     Gpu *gpu = new Gpu;
     gpu->call = (CallFn)dlsym(iokit, "IOConnectCallStructMethod");
     gpu->map = (MapFn)dlsym(iokit, "IOConnectMapMemory64");
@@ -62,10 +68,12 @@ static Gpu *makeGpu(unsigned port)
     gpu->port = port;
     return gpu;
 }
+
 static std::string
     gCacheDirectory;  // the runtime's cache directory (the one that opened the device), exported by CacheExport.h
 // Progress markers 0x68xx (GPU6): 6800 entered, 6801 Turnip found, 6802 device made, 6803 returned to the discovery, 68f1 no Turnip, 68f2 no device.
 static unsigned gDiagBits;
+
 // Reads of the render server's own state for the framebuffer-format question (diagnostic only, for the exact QuartzCore of the target image; a read
 // that fails or a build that differs reports zeros). Each value is one marker, 0x7Kvv: K picks the item, vv the value.
 static bool readTask(uintptr_t address, void *out, size_t size)
@@ -73,18 +81,22 @@ static bool readTask(uintptr_t address, void *out, size_t size)
     vm_size_t got = 0;
     return vm_read_overwrite(mach_task_self(), address, size, (vm_address_t)out, &got) == KERN_SUCCESS && got == size;
 }
+
 static bool writeTask(uintptr_t address, const void *data, size_t size)
 {
     return vm_write(mach_task_self(), address, (vm_offset_t)data, (mach_msg_type_number_t)size) == KERN_SUCCESS;
 }
+
 // EXPERIMENT (second report onward): this display path takes plain 8-bit BGRA only, so tell the render server's display that it has neither the deep
 // (10-bit) framebuffer nor universal buffer compression. Whether the state it reads those from is the whole story is what the markers show.
 static unsigned gReports;
+
 struct DisplaySample {
     unsigned flags = 0, mode = 0, behaviour = 0, globals = 0;
     uint16_t display = 0;
     uintptr_t object = 0;
 };
+
 static DisplaySample sampleDisplay(id first, intptr_t slide)
 {
     DisplaySample out;
@@ -113,6 +125,7 @@ static DisplaySample sampleDisplay(id first, intptr_t slide)
     out.globals = (v[0] ? 1 : 0) | (v[1] ? 2 : 0) | (v[2] ? 4 : 0) | (v[3] ? 8 : 0);
     return out;
 }
+
 static void markSample(Gpu &gpu, const DisplaySample &x, unsigned base)
 {
     gpu.mark(base | (x.flags << 4) |
@@ -120,6 +133,7 @@ static void markSample(Gpu &gpu, const DisplaySample &x, unsigned base)
     gpu.mark((base + 0x1000) | (x.display >> 4));  // display limits word: 0x200 compression support, 0x1c00 type
     gpu.mark((base + 0x2000) | (x.mode << 4) | x.behaviour);  // mode colour field, ICC/other behaviour bytes
 }
+
 static void reportDisplayState(Gpu &gpu)
 {
     ++gReports;
@@ -127,7 +141,8 @@ static void reportDisplayState(Gpu &gpu)
     static bool changed;
     Class serverClass = NSClassFromString(@"CAWindowServer");
     void *start = dlsym(RTLD_DEFAULT, "CARenderServerStart");
-    if (!serverClass || !start) return;
+    if (!serverClass || !start)
+        return;
     const intptr_t slide = (intptr_t)start - 0x189651efc;
     @try {
         id server = ((id (*)(id, SEL))objc_msgSend)(serverClass, NSSelectorFromString(@"serverIfRunning"));
@@ -150,15 +165,19 @@ static void reportDisplayState(Gpu &gpu)
         }
         markSample(gpu, before, 0x7000);
         markSample(gpu, now, 0xA000);
-    } @catch (NSException *) {}
+    } @catch (NSException *) {
+    }
 }
+
 // Whether NativeAdrenoMetal.clients names this process (names separated by blanks, commas or new lines; "*" names every process).
 static bool listedClient()
 {
     char path[1024];
-    if (!requestedPath("NativeAdrenoMetal.clients", path, sizeof path)) return false;
+    if (!requestedPath("NativeAdrenoMetal.clients", path, sizeof path))
+        return false;
     FILE *file = fopen(path, "r");
-    if (!file) return false;
+    if (!file)
+        return false;
     char text[1024] = {};
     const size_t length = fread(text, 1, sizeof text - 1, file);
     fclose(file);
@@ -166,33 +185,42 @@ static bool listedClient()
     const char *self = getprogname();
     for (char *save = nullptr, *name = strtok_r(text, " ,\t\r\n", &save); name;
          name = strtok_r(nullptr, " ,\t\r\n", &save))
-        if (!strcmp(name, "*") || !strcmp(name, self)) return true;
+        if (!strcmp(name, "*") || !strcmp(name, self))
+            return true;
     return false;
 }
+
 // A listed process other than the render server: the same runtime on its own connection, with none of the render server's threads (no
 // display hand-off, telemetry, benchmark or cache export). Its shader cache lives in its own cache or temp directory.
 static id clientDevice(unsigned port)
 {
-    if (!listedClient()) return nil;
+    if (!listedClient())
+        return nil;
     char turnip[1024];
-    if (!turnip::libraryPath(turnip, sizeof turnip) || access(turnip, R_OK) != 0) return nil;
+    if (!turnip::libraryPath(turnip, sizeof turnip) || access(turnip, R_OK) != 0)
+        return nil;
     uint64_t registryID = 0;
     if (void *iokit = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_NOW | RTLD_LOCAL)) {
-        if (auto retain = (int (*)(unsigned))dlsym(iokit, "IOObjectRetain")) retain(port);
+        if (auto retain = (int (*)(unsigned))dlsym(iokit, "IOObjectRetain"))
+            retain(port);
         if (auto entryID = (int (*)(unsigned, uint64_t *))dlsym(iokit, "IORegistryEntryGetRegistryEntryID"))
             entryID(port, &registryID);
     }
     // IOSurfaces this GPU reads or writes must be plain rows, as in the render server.
     CFPreferencesSetAppValue(CFSTR("CAEnableIOSurfaceCompression"), kCFBooleanFalse, kCFPreferencesCurrentApplication);
     char candidates[2][512] = {};
-    if (!confstr(_CS_DARWIN_USER_CACHE_DIR, candidates[0], sizeof candidates[0] - 16)) candidates[0][0] = 0;
-    if (!confstr(_CS_DARWIN_USER_TEMP_DIR, candidates[1], sizeof candidates[1] - 16)) candidates[1][0] = 0;
+    if (!confstr(_CS_DARWIN_USER_CACHE_DIR, candidates[0], sizeof candidates[0] - 16))
+        candidates[0][0] = 0;
+    if (!confstr(_CS_DARWIN_USER_TEMP_DIR, candidates[1], sizeof candidates[1] - 16))
+        candidates[1][0] = 0;
     id device = nil;
     for (unsigned i = 0; i < 2 && !device; ++i) {
-        if (!candidates[i][0]) continue;
+        if (!candidates[i][0])
+            continue;
         strlcat(candidates[i], "m2v", sizeof candidates[i]);
         mkdir(candidates[i], 0700);
-        if (access(candidates[i], W_OK) != 0) continue;
+        if (access(candidates[i], W_OK) != 0)
+            continue;
         @try {
             device = native_bridge_metal_open(turnip, candidates[i], registryID, nullptr);
         } @catch (NSException *exception) {
@@ -201,20 +229,25 @@ static id clientDevice(unsigned port)
     }
     return device;
 }
+
 static id deviceForPort(unsigned port)
 {
     static id device;
     static bool tried;
     @synchronized([NativeAdrenoMetalDeviceBase class]) {
-        if (tried) return device;
+        if (tried)
+            return device;
         tried = true;
-        if (strcmp(getprogname(), "backboardd") != 0) return device = clientDevice(port);
+        if (strcmp(getprogname(), "backboardd") != 0)
+            return device = clientDevice(port);
         // The discovery releases the accelerator port when it is done; the monitor and the scanout client keep using it.
         if (void *iokit = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_NOW | RTLD_LOCAL)) {
-            if (auto retain = (int (*)(unsigned))dlsym(iokit, "IOObjectRetain")) retain(port);
+            if (auto retain = (int (*)(unsigned))dlsym(iokit, "IOObjectRetain"))
+                retain(port);
         }
         Gpu *gpu = makeGpu(port);
-        if (!gpu) return nil;
+        if (!gpu)
+            return nil;
         gpu->mark(0x6800);
         char turnip[1024];
         if (!turnip::libraryPath(turnip, sizeof turnip) || access(turnip, R_OK) != 0) {
@@ -237,13 +270,15 @@ static id deviceForPort(unsigned port)
             if (CFTypeRef value =
                     CFPreferencesCopyAppValue(CFSTR("CAEnableDeepFramebuffer"), kCFPreferencesCurrentApplication)) {
                 bits |= 1;
-                if (CFGetTypeID(value) == CFBooleanGetTypeID() && !CFBooleanGetValue((CFBooleanRef)value)) bits |= 2;
+                if (CFGetTypeID(value) == CFBooleanGetTypeID() && !CFBooleanGetValue((CFBooleanRef)value))
+                    bits |= 2;
                 CFRelease(value);
             }
             if (auto copyAnswer = (CFTypeRef (*)(CFStringRef))dlsym(RTLD_DEFAULT, "MGCopyAnswer")) {
                 if (CFTypeRef deep = copyAnswer(CFSTR("Aixt/MEN2O2B7f+8m4TxUA"))) {
                     bits |= 8;
-                    if (CFGetTypeID(deep) == CFBooleanGetTypeID() && CFBooleanGetValue((CFBooleanRef)deep)) bits |= 4;
+                    if (CFGetTypeID(deep) == CFBooleanGetTypeID() && CFBooleanGetValue((CFBooleanRef)deep))
+                        bits |= 4;
                     CFRelease(deep);
                 }
                 if (CFTypeRef caps = copyAnswer(CFSTR("AoKnINTLPoKML3ctoP0AZg"))) {
@@ -251,7 +286,8 @@ static id deviceForPort(unsigned port)
                     CFRelease(caps);
                 }
             }
-            if (getuid() != 0) bits |= 32;
+            if (getuid() != 0)
+                bits |= 32;
             gDiagBits = bits;
             gpu->mark(0x6A00 | bits);
         }
@@ -264,20 +300,25 @@ static id deviceForPort(unsigned port)
         CFPreferencesSetAppValue(CFSTR("CAEnableIOSurfaceCompression"), kCFBooleanFalse,
                                  kCFPreferencesCurrentApplication);
         char candidates[4][512] = {};
-        if (!confstr(_CS_DARWIN_USER_CACHE_DIR, candidates[0], sizeof candidates[0] - 16)) candidates[0][0] = 0;
-        if (!confstr(_CS_DARWIN_USER_TEMP_DIR, candidates[1], sizeof candidates[1] - 16)) candidates[1][0] = 0;
+        if (!confstr(_CS_DARWIN_USER_CACHE_DIR, candidates[0], sizeof candidates[0] - 16))
+            candidates[0][0] = 0;
+        if (!confstr(_CS_DARWIN_USER_TEMP_DIR, candidates[1], sizeof candidates[1] - 16))
+            candidates[1][0] = 0;
         strlcpy(candidates[2], "/tmp/", sizeof candidates[2]);
         strlcpy(candidates[3], "/private/var/tmp/", sizeof candidates[3]);
         for (unsigned i = 0; i < 4 && !device; ++i) {
-            if (!candidates[i][0]) continue;
+            if (!candidates[i][0])
+                continue;
             strlcat(candidates[i], "m2v", sizeof candidates[i]);
             mkdir(candidates[i], 0700);
-            if (access(candidates[i], W_OK) != 0) continue;
+            if (access(candidates[i], W_OK) != 0)
+                continue;
             // The image's pipeline pack (an earlier boot's export), into this directory before the runtime reads it. Marker 0x6Cnn: files written
             // (saturated at 0xfe), 0x6Cff the pack was refused.
             if (char pack[1024]; requestedPath("NativeAdrenoMetal.m2vpack", pack, sizeof pack)) {
                 const int imported = cacheexport::importPack(pack, candidates[i]);
-                if (imported) gpu->mark(0x6C00 | (imported < 0 ? 0xff : imported > 0xfe ? 0xfe : imported));
+                if (imported)
+                    gpu->mark(0x6C00 | (imported < 0 ? 0xff : imported > 0xfe ? 0xfe : imported));
             }
             @try {
                 device = native_bridge_metal_open(turnip, candidates[i], registryID, nullptr);
@@ -359,7 +400,8 @@ static id deviceForPort(unsigned port)
                     unsigned row = 0;
                     for (char *line = table; *line && row < 48;) {
                         char *end = strchr(line, '\n');
-                        if (end) *end = 0;
+                        if (end)
+                            *end = 0;
                         g->mark(0xC000u | row);
                         const size_t length = strlen(line) < 90 ? strlen(line) : 90;
                         for (size_t i = 0; i < length; i += 2) {
@@ -368,7 +410,8 @@ static id deviceForPort(unsigned port)
                             g->mark(0x8000u | (a << 7) | b);
                         }
                         ++row;
-                        if (!end) break;
+                        if (!end)
+                            break;
                         line = end + 1;
                     }
                     sleep(6);
@@ -405,13 +448,17 @@ static id deviceForPort(unsigned port)
 }  // namespace publish
 
 @implementation NativeAdrenoMetalDevice
+
 - (id)initWithAcceleratorPort:(unsigned)port
 {
     self = [super init];
-    if (!self || !port) return nil;
-    if (publish::requested()) return publish::deviceForPort(port);
+    if (!self || !port)
+        return nil;
+    if (publish::requested())
+        return publish::deviceForPort(port);
     static bool attempted;
-    if (attempted) return nil;
+    if (attempted)
+        return nil;
     attempted = true;
     // The test runs on its own thread: a kernel call that never returns (int-042: BoFree) then stalls that thread only, not SpringBoard's
     // main thread (the UI froze with the test running inline).
@@ -419,12 +466,15 @@ static id deviceForPort(unsigned port)
     // marker (and every later open) then went to a dead name and never reached the kernel (K0 in int-043..052, with the plugin file opened by
     // SpringBoard). Keep one extra user reference on the port, and let the thread look the service up itself as well.
     if (void *iokit = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_NOW | RTLD_LOCAL)) {
-        if (auto retain = (int (*)(unsigned))dlsym(iokit, "IOObjectRetain")) retain(port);
+        if (auto retain = (int (*)(unsigned))dlsym(iokit, "IOObjectRetain"))
+            retain(port);
     }
+
     struct Job {
         unsigned port;
         char name[32];
     };
+
     Job *job = new Job{port, {}};
     strlcpy(job->name, getprogname(), sizeof job->name);
     pthread_t thread;
@@ -441,7 +491,8 @@ static id deviceForPort(unsigned port)
                     auto getService = (unsigned (*)(unsigned, void *))dlsym(iokit, "IOServiceGetMatchingService");
                     if (matching && getService) {
                         const unsigned own = getService(0, matching("IOAcceleratorES"));
-                        if (own) port = own;
+                        if (own)
+                            port = own;
                     }
                 }
                 gAfterTurnip = bridgephase::run;
@@ -454,4 +505,5 @@ static id deviceForPort(unsigned port)
     pthread_attr_destroy(&attributes);
     return nil;
 }
+
 @end

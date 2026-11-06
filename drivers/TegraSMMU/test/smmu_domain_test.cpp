@@ -23,6 +23,7 @@ __attribute__((format(printf, 1, 2))) std::string message(const char *format, ..
     va_end(ap);
     return text;
 }
+
 #define CHECK(cond, ...) EXPECT_TRUE(cond) << message(__VA_ARGS__)
 
 constexpr uint32_t R = 1u << 31, W = 1u << 30, NS = 1u << 29, NEXT = 1u << 28;
@@ -30,8 +31,14 @@ constexpr uint32_t R = 1u << 31, W = 1u << 30, NS = 1u << 29, NEXT = 1u << 28;
 struct Buffer {
     std::vector<uint32_t> words;
     uint64_t pa;
-    Buffer(uint32_t pages, uint64_t at) : words((size_t)pages * 1024, 0xdeadbeef), pa(at) {}
-    uint32_t *va() { return words.data(); }
+
+    Buffer(uint32_t pages, uint64_t at) : words((size_t)pages * 1024, 0xdeadbeef), pa(at)
+    {}
+
+    uint32_t *va()
+    {
+        return words.data();
+    }
 };
 
 // TegraVIC's original tables (TegraVIC.cpp at eae4371: smmuSetUp, pte, identity), on its own buffer.
@@ -40,33 +47,47 @@ struct OldVic {
     static constexpr uint32_t kWindows = 2, kWindowTables = (uint32_t)(kWindowBytes >> 22), kIdentityTables = 4;
     Buffer b;
     uint32_t identityUsed = 0;
+
     explicit OldVic(uint64_t pa) : b(1 + kWindows * kWindowTables + kIdentityTables, pa)
     {
         std::fill(b.words.begin(), b.words.end(), 0);  // contiguous() zeroes the buffer
     }
-    uint32_t *table(uint32_t i) { return b.va() + (size_t)i * 1024; }
-    uint64_t tablePa(uint32_t i) { return b.pa + (uint64_t)i * 4096; }
+
+    uint32_t *table(uint32_t i)
+    {
+        return b.va() + (size_t)i * 1024;
+    }
+
+    uint64_t tablePa(uint32_t i)
+    {
+        return b.pa + (uint64_t)i * 4096;
+    }
+
     uint32_t *pte(uint64_t iova)
     {
         uint32_t *pd = table(0);
         const uint32_t pdi = (uint32_t)(iova >> 22);
         if (!(pd[pdi] & NEXT)) {
-            if (identityUsed == kIdentityTables) return nullptr;
+            if (identityUsed == kIdentityTables)
+                return nullptr;
             const uint32_t index = 1 + kWindows * kWindowTables + identityUsed++;
             pd[pdi] = (uint32_t)(tablePa(index) >> 12) | R | W | NS | NEXT;
         }
         const uint64_t index = (((uint64_t)(pd[pdi] & 0x3fffff) << 12) - b.pa) / 4096;
         return &table((uint32_t)index)[(iova >> 12) & 1023];
     }
+
     bool identity(uint64_t pa, uint64_t size, bool writable)
     {
         for (uint64_t at = pa; at < pa + size; at += 4096) {
             uint32_t *p = pte(at);
-            if (!p) return false;
+            if (!p)
+                return false;
             *p = (uint32_t)(at >> 12) | R | NS | (writable ? W : 0);
         }
         return true;
     }
+
     bool setUp(uint64_t fwPa, uint64_t fwSize, uint64_t arenaPa, uint64_t arenaSize)
     {
         uint32_t *pd = table(0);
@@ -83,9 +104,11 @@ struct OldVic {
 bool newVic(Buffer &b, uint64_t fwPa, uint64_t fwSize, uint64_t arenaPa, uint64_t arenaSize)
 {
     TegraSMMUDomain d;
-    if (!d.init(b.va(), b.pa, (uint32_t)(b.words.size() / 1024))) return false;
+    if (!d.init(b.va(), b.pa, (uint32_t)(b.words.size() / 1024)))
+        return false;
     for (uint32_t w = 0; w < OldVic::kWindows; w++)
-        if (!d.reserve(OldVic::kWindowBase + w * OldVic::kWindowBytes, OldVic::kWindowBytes)) return false;
+        if (!d.reserve(OldVic::kWindowBase + w * OldVic::kWindowBytes, OldVic::kWindowBytes))
+            return false;
     return d.identity(fwPa, fwSize, false) && d.identity(arenaPa, arenaSize, true);
 }
 
@@ -98,6 +121,7 @@ void vicTablesUnchanged()
         {0xf0000000, 0xf03fe000, 0x14000, 0xf07ff000, 1 << 20},  // firmware and arena across section boundaries
         {0x90000000, 0xa0000000, 0x40000, 0xb0000000, 1 << 20},  // far apart
     };
+
     for (const Case &c : cases) {
         OldVic old(c.tables);
         Buffer now(1 + OldVic::kWindows * OldVic::kWindowTables + OldVic::kIdentityTables, c.tables);
@@ -122,7 +146,8 @@ void basics()
     CHECK(!d.init(b.va(), 0xe2000800, 8), "unaligned table buffer accepted");
     CHECK(!d.init(b.va(), 0xfffff000, 8), "table buffer past 4 GiB accepted");
     CHECK(d.init(b.va(), b.pa, 8), "init");
-    for (uint32_t i = 0; i < 1024; ++i) CHECK(b.words[i] == 0, "directory entry %u not cleared", i);
+    for (uint32_t i = 0; i < 1024; ++i)
+        CHECK(b.words[i] == 0, "directory entry %u not cleared", i);
     CHECK(d.ptb() == ((uint32_t)(b.pa >> 12) | R | W | NS), "PTB %#x", d.ptb());
     CHECK(d.translate(0x10000000) == UINT64_MAX, "unmapped address translates");
 
@@ -141,7 +166,8 @@ void basics()
 
     CHECK(!d.pte(1ull << 32, true), "address past 4 GiB accepted");
     uint32_t got = 0;
-    for (uint64_t at = 0x40000000; at < 0x80000000 && d.reserve(at, 4096); at += 4ull << 20) ++got;
+    for (uint64_t at = 0x40000000; at < 0x80000000 && d.reserve(at, 4096); at += 4ull << 20)
+        ++got;
     // directory + 2 (the framebuffer spans two 4 MiB sections) + 1 (0xe3000000) + 1 (the slot) = 5 used before, 3 left
     CHECK(d.used == d.pages && got == 3, "tables handed out %u (used %u of %u)", got, d.used, d.pages);
     CHECK(!d.identity(0x70000000, 4096, true), "a map with no table left succeeded");

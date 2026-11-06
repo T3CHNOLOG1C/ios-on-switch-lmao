@@ -20,6 +20,7 @@ using window_vectors::Words;
 
 namespace {
 unsigned gCalls;
+
 void progress(uint64_t, uint64_t, uint64_t)
 {
     ++gCalls;
@@ -66,7 +67,8 @@ TEST_F(LoaderUnpack, DamagedStreamsStayInBounds)
         std::memcpy(copy.data.get(), stream.data.get(), stream.size);
         const unsigned at = (unsigned)std::rand() % stream.size;
         copy.data[at] ^= (unsigned char)(1u << (std::rand() % 8));
-        if (trial % 4 == 0) std::memset(copy.data.get() + at, 0xff, stream.size - at > 64 ? 64 : stream.size - at);
+        if (trial % 4 == 0)
+            std::memset(copy.data.get() + at, 0xff, stream.size - at > 64 ? 64 : stream.size - at);
         refused += run(copy.data.get()) != 0;
     }
     EXPECT_GT(refused, 0u);
@@ -81,12 +83,24 @@ TEST_F(LoaderUnpack, DamagedTablesRefused)
     for (unsigned kind = 0; kind < 6; ++kind) {
         blocks = saved;
         switch (kind) {
-        case 0: blocks[1][0] = blocks[0][0]; break;
-        case 1: blocks[0][0] += 512; break;
-        case 2: blocks[count - 1][1] += window.size; break;
-        case 3: blocks[count - 1][2] += 1; break;
-        case 4: blocks[count - 1][3] -= 1; break;
-        case 5: blocks[0][3] |= LOADER_BLOCK_STORED; break;
+        case 0:
+            blocks[1][0] = blocks[0][0];
+            break;
+        case 1:
+            blocks[0][0] += 512;
+            break;
+        case 2:
+            blocks[count - 1][1] += window.size;
+            break;
+        case 3:
+            blocks[count - 1][2] += 1;
+            break;
+        case 4:
+            blocks[count - 1][3] -= 1;
+            break;
+        case 5:
+            blocks[0][3] |= LOADER_BLOCK_STORED;
+            break;
         }
         EXPECT_NE(run(stream.data.get()), 0) << "damaged table kind " << kind;
     }

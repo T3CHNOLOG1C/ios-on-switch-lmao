@@ -78,7 +78,8 @@ static void expect(const char *name, const TegraNVJPGDecodeRequest *r, const Teg
     const char *why = tegra_nvjpg_plan(r, img, d, a, kSink, p, &got);
     CHECK(got == kind, "%s: kind %u want %u (%s)", name, got, kind, why ? why : "ok");
     CHECK(!!why == (kind != TEGRA_NVJPG_PLAN_OK), "%s: reason/kind disagree", name);
-    if (reason) CHECK(why && strstr(why, reason), "%s: refused as '%s', want '%s'", name, why ? why : "ok", reason);
+    if (reason)
+        CHECK(why && strstr(why, reason), "%s: refused as '%s', want '%s'", name, why ? why : "ok", reason);
 }
 
 int main(void)

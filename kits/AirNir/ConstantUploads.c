@@ -5,27 +5,34 @@ static int inside(size_t begin, size_t bytes, size_t limit)
 {
     return begin <= limit && bytes <= limit - begin;
 }
+
 static int overlap(uintptr_t a, size_t an, uintptr_t b, size_t bn)
 {
-    if (!an || !bn) return 0;
-    if (an > UINTPTR_MAX - a || bn > UINTPTR_MAX - b) return 1;
+    if (!an || !bn)
+        return 0;
+    if (an > UINTPTR_MAX - a || bn > UINTPTR_MAX - b)
+        return 1;
     return a < b + bn && b < a + an;
 }
+
 static struct air_constant_result failure(uint32_t status)
 {
     return (struct air_constant_result){status, 0, 0};
 }
+
 struct air_constant_result air_pack_constants(const struct air_constant_layout *l,
                                               const struct air_constant_binding bindings[AIR_CONSTANT_MAX_BINDINGS],
                                               uint8_t *dst, size_t dst_bytes)
 {
-    if (!l || !bindings || !dst) return failure(AIR_CONSTANT_ARGUMENT);
+    if (!l || !bindings || !dst)
+        return failure(AIR_CONSTANT_ARGUMENT);
     if (!l->constant_bytes || l->constant_bytes > AIR_CONSTANT_MAX_BYTES || l->constant_bytes % 16 ||
         l->range_count > AIR_CONSTANT_MAX_RANGES || l->read_count > AIR_CONSTANT_MAX_READS ||
         (l->range_count && !l->ranges) || (l->read_count && !l->reads) ||
         l->immediate_words > AIR_CONSTANT_MAX_BYTES / 4 || (l->immediate_words && !l->immediates))
         return failure(AIR_CONSTANT_ARGUMENT);
-    if (dst_bytes < l->constant_bytes) return failure(AIR_CONSTANT_CAPACITY);
+    if (dst_bytes < l->constant_bytes)
+        return failure(AIR_CONSTANT_CAPACITY);
     uint32_t align = l->upload_alignment;
     if (align < 16 || align > 256 || (align & (align - 1)) || !inside(l->ubo_begin, l->ubo_bytes, l->constant_bytes) ||
         l->ubo_begin % 16 || l->ubo_bytes % 16 ||
@@ -70,9 +77,11 @@ struct air_constant_result air_pack_constants(const struct air_constant_layout *
                 inside(read->offset - r->source_begin, read->bytes, bytes))
                 used = 1;
         }
-        if (!used) return failure(AIR_CONSTANT_READ);
+        if (!used)
+            return failure(AIR_CONSTANT_READ);
         size_t available = r->source_begin < b->bytes ? b->bytes - r->source_begin : 0;
-        if (available > bytes) available = bytes;
+        if (available > bytes)
+            available = bytes;
         padded += bytes - (uint32_t)available;
         written += bytes;
     }
@@ -90,7 +99,8 @@ struct air_constant_result air_pack_constants(const struct air_constant_layout *
                 inside(read->offset - r->source_begin, read->bytes, r->source_end - r->source_begin))
                 covered = 1;
         }
-        if (!covered) return failure(AIR_CONSTANT_READ);
+        if (!covered)
+            return failure(AIR_CONSTANT_READ);
     }
     /* No condition below can fail. Padding is transport alignment only, and
      * no recorded shader read may reference a byte that would be padded. */

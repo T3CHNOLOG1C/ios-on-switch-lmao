@@ -41,6 +41,7 @@ OSDeclareDefaultStructors(AGXAccelerator) public
     : IOReturn newUserClient(task_t owningTask, void *securityID, UInt32 type, OSDictionary *properties,
                              IOUserClient **handler) APPLE_KEXT_OVERRIDE;
 };
+
 OSDefineMetaClassAndStructors(AGXAccelerator, IOAcceleratorES)
 
     class AGXDeviceUserClient : public IOUserClient {
@@ -53,6 +54,7 @@ public:
     IOReturn clientClose() APPLE_KEXT_OVERRIDE;
     IOReturn clientMemoryForType(UInt32 type, IOOptionBits *options, IOMemoryDescriptor **memory) APPLE_KEXT_OVERRIDE;
 };
+
 OSDefineMetaClassAndStructors(AGXDeviceUserClient, IOUserClient)
 
     // A process besides the render server opens a grant of its own instead of the accelerator: the kernel's open path grants a service's
@@ -64,6 +66,7 @@ OSDeclareDefaultStructors(QemuMetalGrant) public
     : IOReturn newUserClient(task_t owningTask, void *securityID, UInt32 type, OSDictionary *properties,
                              IOUserClient **handler) APPLE_KEXT_OVERRIDE;
 };
+
 OSDefineMetaClassAndStructors(QemuMetalGrant, IOService)
 
     static IOReturn
@@ -88,12 +91,14 @@ OSDefineMetaClassAndStructors(QemuMetalGrant, IOService)
     *handler = client;
     return kIOReturnSuccess;
 }
+
 IOReturn AGXAccelerator::newUserClient(task_t owningTask, void *securityID, UInt32 type, OSDictionary *properties,
                                        IOUserClient **handler)
 {
     (void)properties;
     return openClient(this, owningTask, securityID, type, handler);
 }
+
 IOReturn QemuMetalGrant::newUserClient(task_t owningTask, void *securityID, UInt32 type, OSDictionary *properties,
                                        IOUserClient **handler)
 {
@@ -103,46 +108,56 @@ IOReturn QemuMetalGrant::newUserClient(task_t owningTask, void *securityID, UInt
 
 bool AGXDeviceUserClient::start(IOService *provider)
 {
-    if (!IOUserClient::start(provider)) return false;
+    if (!IOUserClient::start(provider))
+        return false;
     // A slot has one heap allocator, in its owner's process. The opener is the calling process.
     char name[17] = {};
     proc_selfname(name, sizeof name);
     const bool server = !strncmp(name, "backboardd", sizeof name);
     for (unsigned i = server ? 0 : 1; i < (server ? 1u : QM_SLOTS); i++) {
-        if (!OSCompareAndSwap8(0, 1, &gSlots[i])) continue;
+        if (!OSCompareAndSwap8(0, 1, &gSlots[i]))
+            continue;
         slot = (int)i;
-        for (unsigned c = 0; c < sizeof name; c++) native_qemu_metal_owners[i][c] = name[c];
+        for (unsigned c = 0; c < sizeof name; c++)
+            native_qemu_metal_owners[i][c] = name[c];
         return true;
     }
     return false;
 }
+
 void AGXDeviceUserClient::giveBack()
 {
-    if (slot < 0) return;
+    if (slot < 0)
+        return;
     native_qemu_metal_owners[slot][0] = 0;
     gSlots[slot] = 0;
     slot = -1;
 }
+
 void AGXDeviceUserClient::stop(IOService *provider)
 {
     giveBack();
     IOUserClient::stop(provider);
 }
+
 IOReturn AGXDeviceUserClient::clientClose()
 {
     giveBack();
     terminate();
     return kIOReturnSuccess;
 }
+
 IOReturn AGXDeviceUserClient::clientMemoryForType(UInt32 type, IOOptionBits *options, IOMemoryDescriptor **memory)
 {
-    if (type != 0 || slot < 0 || !memory || native_shared_window_stage < 2) return kIOReturnBadArgument;
+    if (type != 0 || slot < 0 || !memory || native_shared_window_stage < 2)
+        return kIOReturnBadArgument;
     uint64_t offset = 0, bytes = 0;
     qm_slot(native_shared_window_size, (unsigned)slot, &offset, &bytes);
     const IOOptionBits direction =
         static_cast<IOOptionBits>(kIODirectionInOut) | static_cast<IOOptionBits>(kIOMemoryMapperNone);
     *memory = IOMemoryDescriptor::withAddressRange(native_shared_window_base + offset, bytes, direction, TASK_NULL);
-    if (options) *options = 0;
+    if (options)
+        *options = 0;
     return *memory ? kIOReturnSuccess : kIOReturnNoMemory;
 }
 
@@ -150,10 +165,12 @@ IOService *native_qemu_metal_accelerator_allocate(void)
 {
     return new AGXAccelerator;
 }
+
 unsigned native_qemu_metal_accelerator_instance_size(void)
 {
     return sizeof(AGXAccelerator);
 }
+
 IOService *native_qemu_metal_grant_allocate(void)
 {
     return new QemuMetalGrant;

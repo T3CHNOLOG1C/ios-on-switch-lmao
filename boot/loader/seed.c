@@ -16,20 +16,21 @@ enum {
     SE_STATUS = 0x800,
     SE_ERR_STATUS = 0x804,
 };
-#define SE_SECURITY_ENG_DIS (1u << 1)
+
+#define SE_SECURITY_ENG_DIS        (1u << 1)
 #define SE_SECURITY_SOFT_NONSECURE (1u << 16)
-#define SE_OP_START 1u
-#define SE_INT_OP_DONE (1u << 4)
-#define SE_INT_ERROR (1u << 16)
-#define SE_STATUS_BUSY 7u /* STATE (bits 1:0) not idle, or MEM_IF_BUSY (bit 2, T210B01) */
+#define SE_OP_START                1u
+#define SE_INT_OP_DONE             (1u << 4)
+#define SE_INT_ERROR               (1u << 16)
+#define SE_STATUS_BUSY             7u /* STATE (bits 1:0) not idle, or MEM_IF_BUSY (bit 2, T210B01) */
 /* ENC_ALG RNG (2 << 12), ENC_MODE KEY192 (1 << 24), DEC_ALG NOP, DST MEMORY. */
 #define SE_CONFIG_RNG 0x01002000u
 /* INPUT_SEL RANDOM (1 << 3), XOR_BYPASS, CORE_SEL ENCRYPT (1 << 8), key index 0, original IV, AHB memory interface. */
-#define SE_CRYPTO_RNG 0x00000108u
-#define SE_RNG_SRC_ENTROPY (1u << 2)
+#define SE_CRYPTO_RNG              0x00000108u
+#define SE_RNG_SRC_ENTROPY         (1u << 2)
 #define SE_RNG_FORCE_INSTANTIATION 1u
-#define SE_RNG_FORCE_RESEED 2u
-#define SE_RNG_RO_ENT_SRC (1u << 1) /* bit 0 is its lock: never set here */
+#define SE_RNG_FORCE_RESEED        2u
+#define SE_RNG_RO_ENT_SRC          (1u << 1) /* bit 0 is its lock: never set here */
 
 enum {
     CAR_RST_DEVICES_V = 0x358,
@@ -39,10 +40,11 @@ enum {
     CAR_RST_DEV_W_CLR = 0x43c,
     CAR_CLK_ENB_W_SET = 0x448,
 };
-#define CAR_SE (1u << 31)      /* CLK_V_SE, shared by SE1, SE2 and PKA1 */
-#define CAR_ENTROPY (1u << 21) /* CLK_W_ENTROPY */
+
+#define CAR_SE               (1u << 31) /* CLK_V_SE, shared by SE1, SE2 and PKA1 */
+#define CAR_ENTROPY          (1u << 21) /* CLK_W_ENTROPY */
 #define AHB_MEM_WRQUE_MST_ID 0x0fc
-#define AHB_MASTER_SE2 (1u << 13) /* nvidia,ahb-master-id of se@70412000 (SE1 is 14) */
+#define AHB_MASTER_SE2       (1u << 13) /* nvidia,ahb-master-id of se@70412000 (SE1 is 14) */
 
 #define SEED_WORDS (SWITCH_SEED_BYTES / 4u)
 
@@ -76,7 +78,8 @@ volatile uint32_t *switch_seed_dma_words(void)
     return seed_dma;
 }
 
-static void barrier(void) {}
+static void barrier(void)
+{}
 #endif
 
 static uint32_t se_read(uint32_t offset)
@@ -106,7 +109,8 @@ static uint32_t generate(uint32_t mode, uint64_t (*ticks)(void), uint64_t timeou
     seed_dma[0] = 0; /* last entry index */
     seed_dma[1] = output;
     seed_dma[2] = SWITCH_SEED_BYTES;
-    for (unsigned i = 16; i < 32; ++i) seed_dma[i] = 0;
+    for (unsigned i = 16; i < 32; ++i)
+        seed_dma[i] = 0;
     barrier();
 
     se_write(SE_CONFIG, SE_CONFIG_RNG);
@@ -163,13 +167,17 @@ static uint32_t generate(uint32_t mode, uint64_t (*ticks)(void), uint64_t timeou
 static int output_plausible(void)
 {
     uint32_t any = 0;
-    for (unsigned i = 16; i < 32; ++i) any |= seed_dma[i];
-    if (!any) return 0;
+    for (unsigned i = 16; i < 32; ++i)
+        any |= seed_dma[i];
+    if (!any)
+        return 0;
     for (unsigned a = 0; a < 4; ++a) {
         for (unsigned b = a + 1; b < 4; ++b) {
             unsigned same = 0;
-            for (unsigned w = 0; w < 4; ++w) same += seed_dma[16 + 4 * a + w] == seed_dma[16 + 4 * b + w];
-            if (same == 4) return 0;
+            for (unsigned w = 0; w < 4; ++w)
+                same += seed_dma[16 + 4 * a + w] == seed_dma[16 + 4 * b + w];
+            if (same == 4)
+                return 0;
         }
     }
     return 1;
@@ -199,8 +207,10 @@ static uint32_t engine_seed(uint64_t (*ticks)(void), uint64_t timeout, uint32_t 
         }
     }
     uint32_t status = generate(SE_RNG_FORCE_RESEED, ticks, timeout, detail);
-    if (status == SWITCH_SEED_STATUS_ERROR) status = generate(SE_RNG_FORCE_INSTANTIATION, ticks, timeout, detail);
-    if (status == SWITCH_SEED_STATUS_MIXED && !output_plausible()) status = SWITCH_SEED_STATUS_OUTPUT;
+    if (status == SWITCH_SEED_STATUS_ERROR)
+        status = generate(SE_RNG_FORCE_INSTANTIATION, ticks, timeout, detail);
+    if (status == SWITCH_SEED_STATUS_MIXED && !output_plausible())
+        status = SWITCH_SEED_STATUS_OUTPUT;
     return status;
 }
 
@@ -221,7 +231,8 @@ uint32_t switch_seed_mix(uint64_t seed_pa, uint64_t source_pa, uint64_t (*ticks)
     /* The counter too, whatever the engine did: a little variation even for the pinned seed. */
     switch_seed_write32(seed_pa, switch_seed_read32(seed_pa) ^ (uint32_t)now);
     switch_seed_write32(seed_pa + 4, switch_seed_read32(seed_pa + 4) ^ (uint32_t)(now >> 32));
-    for (unsigned i = 16; i < 32; ++i) seed_dma[i] = 0;
+    for (unsigned i = 16; i < 32; ++i)
+        seed_dma[i] = 0;
     const uint32_t word = status | flags | (detail & 0xffffu) << 16;
     switch_seed_write32(source_pa, SWITCH_SEED_MAGIC);
     switch_seed_write32(source_pa + 4, word);

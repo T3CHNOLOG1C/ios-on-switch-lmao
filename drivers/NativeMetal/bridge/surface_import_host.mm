@@ -20,6 +20,7 @@ static std::atomic<unsigned> imports, releases;
 static std::mutex handlesLock;
 static std::set<NmbBuffer *> handles;
 static uint64_t (*vkImports)();
+
 extern "C" NmbBuffer *tracked_surface_import(NmbDevice *d, void *p, uint64_t n, uint64_t options)
 {
     NmbBuffer *buffer = nmb_buffer_new_no_copy(d, p, n, options);
@@ -30,19 +31,24 @@ extern "C" NmbBuffer *tracked_surface_import(NmbDevice *d, void *p, uint64_t n, 
     }
     return buffer;
 }
+
 extern "C" void tracked_buffer_release(NmbBuffer *buffer)
 {
     {
         std::lock_guard<std::mutex> lock(handlesLock);
-        if (handles.erase(buffer)) releases++;
+        if (handles.erase(buffer))
+            releases++;
     }
     nmb_buffer_release(buffer);
 }
+
 static bool drained(unsigned expected)
 {
-    for (unsigned i = 0; i < 300 && releases.load() != expected; ++i) usleep(1000);
+    for (unsigned i = 0; i < 300 && releases.load() != expected; ++i)
+        usleep(1000);
     return releases.load() == expected;
 }
+
 static IOSurfaceRef makeSurface(unsigned byte)
 {
     IOSurfaceRef surface = IOSurfaceCreate((__bridge CFDictionaryRef) @{
@@ -52,7 +58,8 @@ static IOSurfaceRef makeSurface(unsigned byte)
         (id)kIOSurfaceBytesPerRow : @256,
         (id)kIOSurfacePixelFormat : @((uint32_t)0x52474241)
     });
-    if (!surface || IOSurfaceLock(surface, 0, nullptr)) return nullptr;
+    if (!surface || IOSurfaceLock(surface, 0, nullptr))
+        return nullptr;
     memset(IOSurfaceGetBaseAddress(surface), byte, IOSurfaceGetAllocSize(surface));
     if (IOSurfaceUnlock(surface, 0, nullptr)) {
         CFRelease(surface);
@@ -60,6 +67,7 @@ static IOSurfaceRef makeSurface(unsigned byte)
     }
     return surface;
 }
+
 static MTLTextureDescriptor *descriptor()
 {
     auto d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
@@ -80,7 +88,8 @@ static bool aliases(id<MTLDevice> device, unsigned count, unsigned allocations, 
         std::vector<IOSurfaceRef> surfaces;
         for (unsigned i = 0; i < allocations; ++i) {
             auto s = makeSurface(i ? 0xa7 : 0xcc);
-            if (!s) return false;
+            if (!s)
+                return false;
             surfaces.push_back(s);
         }
         auto textures = [NSMutableArray array];
@@ -111,10 +120,12 @@ static bool aliases(id<MTLDevice> device, unsigned count, unsigned allocations, 
                 if (i & 1)
                     texture = [[texture newTextureViewWithPixelFormat:MTLPixelFormatRGBA8Unorm]
                         newTextureViewWithPixelFormat:MTLPixelFormatRGBA8Unorm];
-                if (!texture) return false;
+                if (!texture)
+                    return false;
                 [textures addObject:texture];
             }
-        if (textures.count != count) return false;
+        if (textures.count != count)
+            return false;
         std::vector<unsigned char> data(4096, 0x5a);
         id<MTLBuffer> input = [device newBufferWithBytes:data.data()
                                                   length:data.size()
@@ -122,7 +133,8 @@ static bool aliases(id<MTLDevice> device, unsigned count, unsigned allocations, 
         id<MTLBuffer> output = [device newBufferWithLength:count * 4096 options:MTLResourceStorageModeShared];
         id<MTLCommandBuffer> command = [[device newCommandQueue] commandBuffer];
         id<MTLBlitCommandEncoder> copy = [command blitCommandEncoder];
-        if (!input || !output || !copy) return false;
+        if (!input || !output || !copy)
+            return false;
         [copy copyFromBuffer:input
                    sourceOffset:0
               sourceBytesPerRow:256
@@ -157,7 +169,8 @@ static bool aliases(id<MTLDevice> device, unsigned count, unsigned allocations, 
                     mismatch = true;
                     ok = false;
                 }
-        for (IOSurfaceRef surface : surfaces) CFRelease(surface);
+        for (IOSurfaceRef surface : surfaces)
+            CFRelease(surface);
     }
     const unsigned made = imports.load() - before;
     const bool retired = drained(released + made);
@@ -176,12 +189,14 @@ static bool expires(id<MTLDevice> device)
 {
     const unsigned before = imports.load(), released = releases.load();
     IOSurfaceRef surface = makeSurface(0x35);
-    if (!surface) return false;
+    if (!surface)
+        return false;
     bool ok = true;
     for (unsigned i = 0; i < 2; ++i) {
         @autoreleasepool {
             id<MTLTexture> texture = [device newTextureWithDescriptor:descriptor() iosurface:surface plane:0];
-            if (!texture) ok = false;
+            if (!texture)
+                ok = false;
         }
         ok &= drained(released + i + 1) && imports.load() == before + i + 1;
     }
@@ -197,14 +212,17 @@ static bool pending(id<MTLDevice> device)
     bool ok = true;
     @autoreleasepool {
         IOSurfaceRef surface = makeSurface(0x79);
-        if (!surface) return false;
+        if (!surface)
+            return false;
         id<MTLSharedEvent> event = [device newSharedEvent];
         id<MTLCommandBuffer> command = [[device newCommandQueue] commandBuffer];
         id<MTLBuffer> output = [device newBufferWithLength:4096 options:MTLResourceStorageModeShared];
-        if (!event || !command || !output) return false;
+        if (!event || !command || !output)
+            return false;
         @autoreleasepool {
             id<MTLTexture> texture = [device newTextureWithDescriptor:descriptor() iosurface:surface plane:0];
-            if (!texture) return false;
+            if (!texture)
+                return false;
             [command encodeWaitForEvent:event value:1];
             id<MTLBlitCommandEncoder> copy = [command blitCommandEncoder];
             [copy copyFromTexture:texture
@@ -226,19 +244,24 @@ static bool pending(id<MTLDevice> device)
             }
             dispatch_semaphore_signal(finished);
         });
-        if (!dispatch_semaphore_wait(finished, dispatch_time(DISPATCH_TIME_NOW, 100 * NSEC_PER_MSEC))) ok = false;
+        if (!dispatch_semaphore_wait(finished, dispatch_time(DISPATCH_TIME_NOW, 100 * NSEC_PER_MSEC)))
+            ok = false;
         @autoreleasepool {
             id<MTLTexture> alias = [device newTextureWithDescriptor:descriptor() iosurface:surface plane:0];
-            if (!alias || imports.load() != before + 1 || releases.load() != released) ok = false;
+            if (!alias || imports.load() != before + 1 || releases.load() != released)
+                ok = false;
             // Drop the caller's last surface reference before the GPU reads it.
             CFRelease(surface);
             surface = nullptr;
         }
         event.signaledValue = 1;
-        if (dispatch_semaphore_wait(finished, dispatch_time(DISPATCH_TIME_NOW, 3 * NSEC_PER_SEC))) return false;
-        if (command.status != MTLCommandBufferStatusCompleted) ok = false;
+        if (dispatch_semaphore_wait(finished, dispatch_time(DISPATCH_TIME_NOW, 3 * NSEC_PER_SEC)))
+            return false;
+        if (command.status != MTLCommandBufferStatusCompleted)
+            ok = false;
         for (unsigned i = 0; i < 4096; ++i)
-            if (((const unsigned char *)output.contents)[i] != 0x79) ok = false;
+            if (((const unsigned char *)output.contents)[i] != 0x79)
+                ok = false;
         // Completed commands must release the import even if still retained.
         ok &= drained(released + 1);
     }
@@ -249,15 +272,20 @@ static bool pending(id<MTLDevice> device)
 
 int main(int argc, char **argv)
 {
-    if (argc != 3 && !(argc == 4 && !strcmp(argv[3], "parallel"))) return 2;
+    if (argc != 3 && !(argc == 4 && !strcmp(argv[3], "parallel")))
+        return 2;
     @autoreleasepool {
         id<MTLDevice> device = native_bridge_metal_open(argv[1], argv[2], 0x6e6d62, nullptr);
-        if (!device) return 2;
+        if (!device)
+            return 2;
         void *loader = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
-        if (!loader) return 2;
+        if (!loader)
+            return 2;
         vkImports = reinterpret_cast<uint64_t (*)()>(dlsym(loader, "nmb_test_vk_host_import_count"));
-        if (getenv("NMB_TEST_REAL_VULKAN_LOADER") && !vkImports) return 2;
-        if (argc == 4) return aliases(device, 64, 1, true) ? 0 : 1;
+        if (getenv("NMB_TEST_REAL_VULKAN_LOADER") && !vkImports)
+            return 2;
+        if (argc == 4)
+            return aliases(device, 64, 1, true) ? 0 : 1;
         bool ok = aliases(device, 1, 1, false);
         ok &= aliases(device, 128, 1, false);
         ok &= aliases(device, 128, 2, false);

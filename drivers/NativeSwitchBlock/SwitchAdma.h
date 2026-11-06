@@ -31,6 +31,7 @@ struct SwitchAdmaDescriptor {
     uint32_t addressHigh;
     uint32_t reserved;  // always 0
 };
+
 static_assert(sizeof(SwitchAdmaDescriptor) == 16, "ADMA2 64-bit addressing descriptors are 128 bits in v4 mode");
 
 // Attribute bits: Valid, End, and Act = transfer (sdhci.h ADMA2_TRAN_VALID 0x21, | End = 0x23). No Int: the driver waits
@@ -70,19 +71,25 @@ struct SwitchAdmaTable {
     // Why [pa, pa + length) may not go straight to the card, or kAdmaOk; changes nothing.
     template <typename PageOk> SwitchAdmaRefusal check(uint64_t pa, uint64_t length, PageOk pageOk) const
     {
-        if (!length) return kAdmaMissing;
-        if ((pa | length) & (kAdmaLine - 1)) return kAdmaAlign;
-        if (pa >= limit || length > limit - pa) return kAdmaHigh;
+        if (!length)
+            return kAdmaMissing;
+        if ((pa | length) & (kAdmaLine - 1))
+            return kAdmaAlign;
+        if (pa >= limit || length > limit - pa)
+            return kAdmaHigh;
         for (uint64_t page = pa & ~(kAdmaPage - 1); page < pa + length; page += kAdmaPage)
-            if (!pageOk(page)) return kAdmaMemory;
+            if (!pageOk(page))
+                return kAdmaMemory;
         return kAdmaOk;
     }
 
     // [pa, pa + length) as transfer descriptors, continuing the previous descriptor when the memory continues it.
     template <typename PageOk> SwitchAdmaRefusal add(uint64_t pa, uint64_t length, PageOk pageOk)
     {
-        if (const SwitchAdmaRefusal refusal = check(pa, length, pageOk)) return refusal;
-        if (pa + length > kAdma4GiB) high += pa >= kAdma4GiB ? length : pa + length - kAdma4GiB;
+        if (const SwitchAdmaRefusal refusal = check(pa, length, pageOk))
+            return refusal;
+        if (pa + length > kAdma4GiB)
+            high += pa >= kAdma4GiB ? length : pa + length - kAdma4GiB;
         while (length) {
             // No descriptor crosses a 4 GiB boundary (r12-sdio: the engine's address word pair is only proven per
             // descriptor; Linux's default DMA segment boundary is 0xffffffff too): what fits up to the next one.
@@ -94,12 +101,14 @@ struct SwitchAdmaTable {
                 pa != (pa & ~(kAdma4GiB - 1)))
                 room = kAdmaMaxLength - last->length;
             if (!room) {
-                if (count == capacity) return kAdmaFull;
+                if (count == capacity)
+                    return kAdmaFull;
                 last = &entries[count++];
                 *last = {kAdmaValid | kAdmaTransfer, 0, static_cast<uint32_t>(pa), static_cast<uint32_t>(pa >> 32), 0};
                 room = kAdmaMaxLength;
             }
-            if (room > boundary - pa) room = boundary - pa;
+            if (room > boundary - pa)
+                room = boundary - pa;
             const uint64_t n = length < room ? length : room;
             last->length = static_cast<uint16_t>(last->length + n);
             pa += n;
@@ -116,7 +125,9 @@ struct SwitchAdmaTable {
     SwitchAdmaRefusal addSealed(uint64_t pa, uint64_t length)
     {
         sealed = count;
-        const SwitchAdmaRefusal refusal = add(pa, length, [](uint64_t) { return true; });
+        const SwitchAdmaRefusal refusal = add(pa, length, [](uint64_t) {
+            return true;
+        });
         sealed = count;
         return refusal;
     }
@@ -128,9 +139,12 @@ struct SwitchAdmaTable {
         for (uint64_t done = 0; done < length;) {
             IOByteCount segment = 0;
             const uint64_t pa = memory->getPhysicalSegment(done, &segment, kIOMemoryMapperNone);
-            if (!pa || !segment) return kAdmaMissing;
-            if (segment > length - done) segment = length - done;
-            if (const SwitchAdmaRefusal refusal = add(pa, segment, pageOk)) return refusal;
+            if (!pa || !segment)
+                return kAdmaMissing;
+            if (segment > length - done)
+                segment = length - done;
+            if (const SwitchAdmaRefusal refusal = add(pa, segment, pageOk))
+                return refusal;
             done += segment;
         }
         return kAdmaOk;
@@ -139,7 +153,8 @@ struct SwitchAdmaTable {
     // End on the last descriptor; false for an empty table.
     bool finish()
     {
-        if (!count) return false;
+        if (!count)
+            return false;
         entries[count - 1].attributes |= kAdmaEnd;
         return true;
     }
@@ -166,6 +181,7 @@ template <typename Memory> struct SwitchAdmaStaging {
         uint32_t at;      // in the chain, so also in the bounce buffer
         uint32_t length;
     };
+
     static constexpr uint64_t kNoRun = ~0ull;
     SwitchAdmaTable *table;
     uint64_t bouncePA;  // physically contiguous, cacheable RAM below 4 GiB, as long as the longest chain
@@ -184,14 +200,16 @@ template <typename Memory> struct SwitchAdmaStaging {
         at = 0;
         run = kNoRun;
         staged = 0;
-        for (uint32_t &r : refused) r = 0;
+        for (uint32_t &r : refused)
+            r = 0;
         table->reset();
     }
 
     // The open run's descriptor (it precedes whatever comes next).
     SwitchAdmaRefusal closeRun()
     {
-        if (run == kNoRun) return kAdmaOk;
+        if (run == kNoRun)
+            return kAdmaOk;
         const SwitchAdmaRefusal refusal = table->addSealed(bouncePA + run, at - run);
         run = kNoRun;
         return refusal;
@@ -204,21 +222,28 @@ template <typename Memory> struct SwitchAdmaStaging {
         for (uint64_t done = 0; done < length;) {
             IOByteCount segment = 0;
             const uint64_t pa = memory->getPhysicalSegment(done, &segment, kIOMemoryMapperNone);
-            if (!pa || !segment) return kAdmaMissing;
-            if (segment > length - done) segment = length - done;
+            if (!pa || !segment)
+                return kAdmaMissing;
+            if (segment > length - done)
+                segment = length - done;
             const SwitchAdmaRefusal why = (at & (kAdmaLine - 1)) ? kAdmaAlign : table->check(pa, segment, pageOk);
-            if (why == kAdmaMissing) return why;
+            if (why == kAdmaMissing)
+                return why;
             if (!why) {
-                if (const SwitchAdmaRefusal refusal = closeRun()) return refusal;
-                if (const SwitchAdmaRefusal refusal = table->add(pa, segment, pageOk)) return refusal;
+                if (const SwitchAdmaRefusal refusal = closeRun())
+                    return refusal;
+                if (const SwitchAdmaRefusal refusal = table->add(pa, segment, pageOk))
+                    return refusal;
             } else {
-                if (run == kNoRun) run = at;
+                if (run == kNoRun)
+                    run = at;
                 Stage *last = count ? &stages[count - 1] : nullptr;
                 if (last && last->memory == memory && last->offset + last->length == done &&
                     last->at + last->length == at) {
                     last->length += static_cast<uint32_t>(segment);
                 } else {
-                    if (count == capacity) return kAdmaFull;
+                    if (count == capacity)
+                        return kAdmaFull;
                     stages[count++] = {memory, done, static_cast<uint32_t>(at), static_cast<uint32_t>(segment)};
                 }
                 ++refused[why];
@@ -235,14 +260,19 @@ template <typename Memory> struct SwitchAdmaStaging {
     // contiguous, cacheable RAM below 4 GiB, line-aligned, as long as the longest gap.
     SwitchAdmaRefusal addSink(uint64_t pa, uint64_t length)
     {
-        if (const SwitchAdmaRefusal refusal = closeRun()) return refusal;
-        if (const SwitchAdmaRefusal refusal = table->addSealed(pa, length)) return refusal;
+        if (const SwitchAdmaRefusal refusal = closeRun())
+            return refusal;
+        if (const SwitchAdmaRefusal refusal = table->addSealed(pa, length))
+            return refusal;
         at += length;
         return kAdmaOk;
     }
 
     // The last run's descriptor and End. False for an empty table or a full one.
-    bool finish() { return !closeRun() && table->finish(); }
+    bool finish()
+    {
+        return !closeRun() && table->finish();
+    }
 };
 
 // r12-sdio: whether ADMA2 may reach the requests' pages above 4 GiB (this board's RAM is 0x80000000-0x17fffffff, so half
@@ -262,7 +292,12 @@ constexpr uint64_t kAdmaDmaLimit = 1ull << 34;  // mainline Linux's DMA mask for
 constexpr uint64_t kAdmaIramAlias = 0x140000000ull, kAdmaIramBytes = 0x40000;
 
 struct SwitchAdmaHigh {
-    enum State : uint8_t { kProving, kOn, kOff };
+    enum State : uint8_t {
+        kProving,
+        kOn,
+        kOff
+    };
+
     static constexpr uint32_t kProofs = 16, kWriteProofs = 16;
     State state = kProving;
     uint32_t proofsLeft = kProofs, writeProofsLeft = kWriteProofs;
@@ -273,28 +308,49 @@ struct SwitchAdmaHigh {
     {
         return state == kOn || (state == kProving && !write) ? kAdmaDmaLimit : kAdma4GiB;
     }
+
     // Whether a page may go straight to the card in this direction (on top of the driver's own RAM check).
     bool pageOk(uint64_t page, bool write) const
     {
         return !(state == kProving && !write && page - kAdmaIramAlias < kAdmaIramBytes);
     }
+
     // A direct read whose table reaches above 4 GiB, while proving: compare it with SDMA before it completes.
-    bool proofDue(bool write, uint64_t high) const { return state == kProving && !write && high; }
+    bool proofDue(bool write, uint64_t high) const
+    {
+        return state == kProving && !write && high;
+    }
+
     // A matching proof; true when it was the last one needed (the caller logs that once).
     bool proved(uint64_t high)
     {
         provenBytes += high;
-        if (state != kProving || --proofsLeft) return false;
+        if (state != kProving || --proofsLeft)
+            return false;
         state = kOn;
         return true;
     }
-    void refuse() { state = kOff; }
+
+    void refuse()
+    {
+        state = kOff;
+    }
+
     // A direct write whose table reaches above 4 GiB, while its read-backs last.
-    bool writeCheckDue(bool write, uint64_t high) const { return state == kOn && write && high && writeProofsLeft; }
+    bool writeCheckDue(bool write, uint64_t high) const
+    {
+        return state == kOn && write && high && writeProofsLeft;
+    }
+
     void writeChecked()
     {
-        if (writeProofsLeft) --writeProofsLeft;
+        if (writeProofsLeft)
+            --writeProofsLeft;
     }
+
     // Whether proofs are still to come (reads; with `writes`, ADMA2 writes being on, the writes' read-backs too).
-    bool checking(bool writes) const { return state == kProving || (writes && state == kOn && writeProofsLeft); }
+    bool checking(bool writes) const
+    {
+        return state == kProving || (writes && state == kOn && writeProofsLeft);
+    }
 };

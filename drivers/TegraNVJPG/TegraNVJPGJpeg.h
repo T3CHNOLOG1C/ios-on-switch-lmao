@@ -77,7 +77,8 @@ static inline int tegra_nvjpg_huffman_fits(const uint8_t bits[16])
     uint32_t code = 0;
     for (uint32_t l = 1; l <= 16; l++) {
         code += bits[l - 1];
-        if (code > (1u << l)) return 0;
+        if (code > (1u << l))
+            return 0;
         code <<= 1;
     }
     return 1;
@@ -85,29 +86,37 @@ static inline int tegra_nvjpg_huffman_fits(const uint8_t bits[16])
 
 static inline const char *tegra_nvjpg_sof(const uint8_t *p, uint32_t length, TegraNVJPGImage *img)
 {
-    if (length < 6) return "SOF too short";
-    if (p[0] != 8) return "not 8-bit samples";
+    if (length < 6)
+        return "SOF too short";
+    if (p[0] != 8)
+        return "not 8-bit samples";
     img->height = tegra_nvjpg_be16(p + 1);
     img->width = tegra_nvjpg_be16(p + 3);
     img->components = p[5];
-    if (!img->height) return "height 0 (DNL)";
+    if (!img->height)
+        return "height 0 (DNL)";
     if (!img->width || img->width > TEGRA_NVJPG_MAX_SIDE || img->height > TEGRA_NVJPG_MAX_SIDE)
         return "size outside 1..16384";
-    if (img->components != 1 && img->components != 3) return "not 1 or 3 components";
-    if (length != 6 + 3 * img->components) return "SOF length";
+    if (img->components != 1 && img->components != 3)
+        return "not 1 or 3 components";
+    if (length != 6 + 3 * img->components)
+        return "SOF length";
     for (uint32_t i = 0; i < img->components; i++) {
         TegraNVJPGComponent *c = &img->comp[i];
         c->id = p[6 + 3 * i];
         c->h = p[7 + 3 * i] >> 4;
         c->v = p[7 + 3 * i] & 15;
         c->tq = p[8 + 3 * i];
-        if (c->tq > 3) return "quantisation table above 3";
+        if (c->tq > 3)
+            return "quantisation table above 3";
         for (uint32_t j = 0; j < i; j++)
-            if (img->comp[j].id == c->id) return "duplicate component ID";
+            if (img->comp[j].id == c->id)
+                return "duplicate component ID";
     }
     if (img->components == 1) {
         // A grey scan is non-interleaved: its MCU is one block whatever the factors say; NVJPG is trusted with 1x1.
-        if (img->comp[0].h != 1 || img->comp[0].v != 1) return "grey with sampling factors above 1x1";
+        if (img->comp[0].h != 1 || img->comp[0].v != 1)
+            return "grey with sampling factors above 1x1";
         img->chroma = TEGRA_NVJPG_CHROMA_MONO;
         img->mcuW = img->mcuH = 8;
     } else {
@@ -124,7 +133,8 @@ static inline const char *tegra_nvjpg_sof(const uint8_t *p, uint32_t length, Teg
             img->chroma = TEGRA_NVJPG_CHROMA_444;
         else
             return "luma sampling other than 1 or 2 (4:1:1)";
-        if (img->comp[0].id == 'R' && img->comp[1].id == 'G' && img->comp[2].id == 'B') return "RGB components";
+        if (img->comp[0].id == 'R' && img->comp[1].id == 'G' && img->comp[2].id == 'B')
+            return "RGB components";
         img->mcuW = 8u * y->h;
         img->mcuH = 8u * y->v;
     }
@@ -137,11 +147,15 @@ static inline const char *tegra_nvjpg_dqt(const uint8_t *p, uint32_t length, Teg
 {
     for (uint32_t at = 0; at < length;) {
         const uint32_t pq = p[at] >> 4, tq = p[at] & 15;
-        if (pq != 0) return "16-bit quantisation table";
-        if (tq > 3) return "quantisation table above 3";
-        if (length - at < 65) return "DQT too short";
+        if (pq != 0)
+            return "16-bit quantisation table";
+        if (tq > 3)
+            return "quantisation table above 3";
+        if (length - at < 65)
+            return "DQT too short";
         for (uint32_t i = 0; i < 64; i++) {
-            if (!p[at + 1 + i]) return "quantisation value 0";
+            if (!p[at + 1 + i])
+                return "quantisation value 0";
             img->quant[tq][i] = p[at + 1 + i];
         }
         img->quantMask |= 1u << tq;
@@ -153,20 +167,27 @@ static inline const char *tegra_nvjpg_dqt(const uint8_t *p, uint32_t length, Teg
 static inline const char *tegra_nvjpg_dht(const uint8_t *p, uint32_t length, TegraNVJPGImage *img)
 {
     for (uint32_t at = 0; at < length;) {
-        if (length - at < 17) return "DHT too short";
+        if (length - at < 17)
+            return "DHT too short";
         const uint32_t tc = p[at] >> 4, th = p[at] & 15;
-        if (tc > 1 || th > 3) return "Huffman table class or index";
+        if (tc > 1 || th > 3)
+            return "Huffman table class or index";
         uint32_t n = 0;
-        for (uint32_t i = 0; i < 16; i++) n += p[at + 1 + i];
-        if (n > (tc ? 162u : 12u)) return "Huffman table too long";
-        if (length - at - 17 < n) return "DHT too short";
-        if (!tegra_nvjpg_huffman_fits(p + at + 1)) return "Huffman code lengths do not fit";
+        for (uint32_t i = 0; i < 16; i++)
+            n += p[at + 1 + i];
+        if (n > (tc ? 162u : 12u))
+            return "Huffman table too long";
+        if (length - at - 17 < n)
+            return "DHT too short";
+        if (!tegra_nvjpg_huffman_fits(p + at + 1))
+            return "Huffman code lengths do not fit";
         memcpy(img->bits[tc][th], p + at + 1, 16);
         memset(img->vals[tc][th], 0, sizeof(img->vals[tc][th]));
         memcpy(img->vals[tc][th], p + at + 17, n);
         if (!tc)
             for (uint32_t i = 0; i < n; i++)
-                if (img->vals[0][th][i] > 11) return "DC symbol above 11";
+                if (img->vals[0][th][i] > 11)
+                    return "DC symbol above 11";
         img->count[tc][th] = n;
         img->huffMask[tc] |= 1u << th;
         at += 17 + n;
@@ -206,12 +227,14 @@ static inline void tegra_nvjpg_std_table(TegraNVJPGImage *img, uint32_t tc, uint
 {
     uint32_t n = 0;
     memcpy(img->bits[tc][th], kTegraNVJPGStdBits[tc][th], 16);
-    for (uint32_t i = 0; i < 16; i++) n += img->bits[tc][th][i];
+    for (uint32_t i = 0; i < 16; i++)
+        n += img->bits[tc][th][i];
     memset(img->vals[tc][th], 0, sizeof(img->vals[tc][th]));
     if (tc)
         memcpy(img->vals[1][th], kTegraNVJPGStdAcVals[th], n);
     else
-        for (uint32_t i = 0; i < n; i++) img->vals[0][th][i] = (uint8_t)i;  // DC symbols 0..11 in order
+        for (uint32_t i = 0; i < n; i++)
+            img->vals[0][th][i] = (uint8_t)i;  // DC symbols 0..11 in order
     img->count[tc][th] = n;
     img->huffMask[tc] |= 1u << th;
     img->stdTables |= 1u << (tc * 4 + th);
@@ -219,23 +242,32 @@ static inline void tegra_nvjpg_std_table(TegraNVJPGImage *img, uint32_t tc, uint
 
 static inline const char *tegra_nvjpg_sos(const uint8_t *p, uint32_t length, TegraNVJPGImage *img)
 {
-    if (!img->components) return "SOS before SOF";
-    if (length < 1 || p[0] != img->components) return "scan does not hold every component (non-interleaved)";
-    if (length != 4 + 2 * img->components) return "SOS length";
+    if (!img->components)
+        return "SOS before SOF";
+    if (length < 1 || p[0] != img->components)
+        return "scan does not hold every component (non-interleaved)";
+    if (length != 4 + 2 * img->components)
+        return "SOS length";
     for (uint32_t i = 0; i < img->components; i++) {
         TegraNVJPGComponent *c = &img->comp[i];
-        if (p[1 + 2 * i] != c->id) return "scan component order";
+        if (p[1 + 2 * i] != c->id)
+            return "scan component order";
         c->td = p[2 + 2 * i] >> 4;
         c->ta = p[2 + 2 * i] & 15;
-        if (c->td > 3 || c->ta > 3) return "Huffman table above 3";
-        if (!(img->huffMask[0] & (1u << c->td)) && c->td < 2) tegra_nvjpg_std_table(img, 0, c->td);
-        if (!(img->huffMask[1] & (1u << c->ta)) && c->ta < 2) tegra_nvjpg_std_table(img, 1, c->ta);
+        if (c->td > 3 || c->ta > 3)
+            return "Huffman table above 3";
+        if (!(img->huffMask[0] & (1u << c->td)) && c->td < 2)
+            tegra_nvjpg_std_table(img, 0, c->td);
+        if (!(img->huffMask[1] & (1u << c->ta)) && c->ta < 2)
+            tegra_nvjpg_std_table(img, 1, c->ta);
         if (!(img->huffMask[0] & (1u << c->td)) || !(img->huffMask[1] & (1u << c->ta)))
             return "scan uses an undefined Huffman table";
-        if (!(img->quantMask & (1u << c->tq))) return "component uses an undefined quantisation table";
+        if (!(img->quantMask & (1u << c->tq)))
+            return "component uses an undefined quantisation table";
     }
     const uint8_t *s = p + 1 + 2 * img->components;
-    if (s[0] != 0 || s[1] != 63 || s[2] != 0) return "spectral selection or approximation (not sequential)";
+    if (s[0] != 0 || s[1] != 63 || s[2] != 0)
+        return "spectral selection or approximation (not sequential)";
     return NULL;
 }
 
@@ -253,14 +285,16 @@ static inline const char *tegra_nvjpg_scan_end(const uint8_t *data, size_t lengt
             return NULL;
         }
         at = (size_t)(ff - data) + 1;
-        while (at < length && data[at] == 0xff) at++;
+        while (at < length && data[at] == 0xff)
+            at++;
         if (at == length) {
             img->scanEnd = (uint32_t)length;
             img->eoi = 0;
             return NULL;
         }
         const uint8_t marker = data[at++];
-        if (marker == 0x00 || (marker >= 0xd0 && marker <= 0xd7)) continue;
+        if (marker == 0x00 || (marker >= 0xd0 && marker <= 0xd7))
+            continue;
         if (marker == 0xd9) {
             img->scanEnd = (uint32_t)at;
             img->eoi = 1;
@@ -275,55 +309,78 @@ static inline const char *tegra_nvjpg_scan_end(const uint8_t *data, size_t lengt
 static inline const char *tegra_nvjpg_parse_headers(const uint8_t *data, size_t length, TegraNVJPGImage *img)
 {
     memset(img, 0, sizeof(*img));
-    if (length < 4 || length > 0xffffffffu) return "length";
-    if (data[0] != 0xff || data[1] != 0xd8) return "no SOI";
+    if (length < 4 || length > 0xffffffffu)
+        return "length";
+    if (data[0] != 0xff || data[1] != 0xd8)
+        return "no SOI";
     size_t at = 2;
     int sof = 0;
     for (;;) {
-        if (at >= length || data[at] != 0xff) return "marker expected";
-        while (at < length && data[at] == 0xff) at++;
-        if (at >= length) return "data ends in a marker";
+        if (at >= length || data[at] != 0xff)
+            return "marker expected";
+        while (at < length && data[at] == 0xff)
+            at++;
+        if (at >= length)
+            return "data ends in a marker";
         const uint8_t marker = data[at++];
-        if (marker == 0xd8) return "second SOI";
-        if (marker == 0xd9) return "EOI before any scan";
-        if (marker == 0x01 || (marker >= 0xd0 && marker <= 0xd7)) continue;  // TEM, stray RSTn: no length
-        if (length - at < 2) return "segment length missing";
+        if (marker == 0xd8)
+            return "second SOI";
+        if (marker == 0xd9)
+            return "EOI before any scan";
+        if (marker == 0x01 || (marker >= 0xd0 && marker <= 0xd7))
+            continue;  // TEM, stray RSTn: no length
+        if (length - at < 2)
+            return "segment length missing";
         const uint32_t segment = tegra_nvjpg_be16(data + at);
-        if (segment < 2 || segment > length - at) return "segment length";
+        if (segment < 2 || segment > length - at)
+            return "segment length";
         const uint8_t *p = data + at + 2;
         const uint32_t n = segment - 2;
         const char *why = NULL;
         switch (marker) {
         case 0xc0:
         case 0xc1:
-            if (sof) return "second SOF";
+            if (sof)
+                return "second SOF";
             sof = 1;
             why = tegra_nvjpg_sof(p, n, img);
             break;
         case 0xc2:
         case 0xc6:
         case 0xca:
-        case 0xce: return "progressive";
+        case 0xce:
+            return "progressive";
         case 0xc3:
         case 0xc7:
         case 0xcb:
-        case 0xcf: return "lossless";
+        case 0xcf:
+            return "lossless";
         case 0xc5:
         case 0xcd:
         case 0xde:
-        case 0xdf: return "hierarchical";
+        case 0xdf:
+            return "hierarchical";
         case 0xc9:
-        case 0xcc: return "arithmetic coding";
-        case 0xf7: return "JPEG-LS";
-        case 0xdc: return "DNL marker";
-        case 0xc4: why = tegra_nvjpg_dht(p, n, img); break;
-        case 0xdb: why = tegra_nvjpg_dqt(p, n, img); break;
+        case 0xcc:
+            return "arithmetic coding";
+        case 0xf7:
+            return "JPEG-LS";
+        case 0xdc:
+            return "DNL marker";
+        case 0xc4:
+            why = tegra_nvjpg_dht(p, n, img);
+            break;
+        case 0xdb:
+            why = tegra_nvjpg_dqt(p, n, img);
+            break;
         case 0xdd:
-            if (n != 2) return "DRI length";
+            if (n != 2)
+                return "DRI length";
             img->restart = tegra_nvjpg_be16(p);
             break;
         case 0xe0:
-            if (n >= 5 && !memcmp(p, "JFIF\0", 5)) img->jfif = 1;
+            if (n >= 5 && !memcmp(p, "JFIF\0", 5))
+                img->jfif = 1;
             break;
         case 0xee:
             if (n >= 12 && !memcmp(p, "Adobe", 5)) {
@@ -332,15 +389,20 @@ static inline const char *tegra_nvjpg_parse_headers(const uint8_t *data, size_t 
             }
             break;
         case 0xda:
-            if (!sof) return "SOS before SOF";
-            if ((why = tegra_nvjpg_sos(p, n, img))) return why;
+            if (!sof)
+                return "SOS before SOF";
+            if ((why = tegra_nvjpg_sos(p, n, img)))
+                return why;
             // Three components without JFIF are YCbCr unless an Adobe marker says transform 0 (libjpeg's guess).
-            if (img->components == 3 && img->adobe && img->adobeTransform == 0 && !img->jfif) return "Adobe RGB";
+            if (img->components == 3 && img->adobe && img->adobeTransform == 0 && !img->jfif)
+                return "Adobe RGB";
             img->scanOffset = (uint32_t)(at + segment);
             return NULL;
-        default: break;  // APPn, COM, JPGn: skipped
+        default:
+            break;  // APPn, COM, JPGn: skipped
         }
-        if (why) return why;
+        if (why)
+            return why;
         at += segment;
     }
 }
@@ -363,7 +425,8 @@ static inline void tegra_nvjpg_setup_image(const TegraNVJPGImage *img, uint32_t 
     memset(s, 0, sizeof(*s));
     for (uint32_t tc = 0; tc < 2; tc++)
         for (uint32_t t = 0; t < 4; t++) {
-            for (uint32_t i = 0; i < 16; i++) s->huffTab[tc][t].codeNum[i] = img->bits[tc][t][i];
+            for (uint32_t i = 0; i < 16; i++)
+                s->huffTab[tc][t].codeNum[i] = img->bits[tc][t][i];
             memcpy(s->huffTab[tc][t].symbol, img->vals[tc][t], 162);
         }
     for (uint32_t i = 0; i < img->components; i++) {
@@ -401,8 +464,17 @@ enum {
 };
 
 // nvjpg_drv.h output_pixel_format and memory_mode values.
-enum { TEGRA_NVJPG_PIXEL_YUV = 0, TEGRA_NVJPG_PIXEL_RGBA = 3, TEGRA_NVJPG_PIXEL_BGRA = 4, TEGRA_NVJPG_PIXEL_ARGB = 6 };
-enum { TEGRA_NVJPG_MEMORY_NV12 = 0, TEGRA_NVJPG_MEMORY_PLANAR = 3 };
+enum {
+    TEGRA_NVJPG_PIXEL_YUV = 0,
+    TEGRA_NVJPG_PIXEL_RGBA = 3,
+    TEGRA_NVJPG_PIXEL_BGRA = 4,
+    TEGRA_NVJPG_PIXEL_ARGB = 6
+};
+
+enum {
+    TEGRA_NVJPG_MEMORY_NV12 = 0,
+    TEGRA_NVJPG_MEMORY_PLANAR = 3
+};
 
 typedef struct {
     uint32_t format;    // TEGRA_NVJPG_OUT_*
@@ -440,9 +512,12 @@ static inline const char *tegra_nvjpg_setup_output(const TegraNVJPGImage *img, c
                                                    nvjpg_dec_drv_pic_setup_s *s, TegraNVJPGExtent *e)
 {
     memset(e, 0, sizeof(*e));
-    if (t->format >= TEGRA_NVJPG_OUT_COUNT) return "output format";
-    if (t->scale > 3) return "scale";
-    if (t->format == TEGRA_NVJPG_OUT_GREY && img->components != 1) return "grey output from a colour file";
+    if (t->format >= TEGRA_NVJPG_OUT_COUNT)
+        return "output format";
+    if (t->scale > 3)
+        return "scale";
+    if (t->format == TEGRA_NVJPG_OUT_GREY && img->components != 1)
+        return "grey output from a colour file";
     if (img->components == 1 && (t->format == TEGRA_NVJPG_OUT_NV12 || t->format == TEGRA_NVJPG_OUT_I420))
         return "YUV 4:2:0 output from a grey file";  // the service writes grey, then fills the chroma itself
     const uint32_t gridW = img->mcusX * img->mcuW, gridH = img->mcusY * img->mcuH;
@@ -461,16 +536,23 @@ static inline const char *tegra_nvjpg_setup_output(const TegraNVJPGImage *img, c
         e->rows[1] = e->rows[2] = ch;
         e->rowBytes[1] = e->rowBytes[2] = cw;
         break;
-    case TEGRA_NVJPG_OUT_GREY: e->rows[0] = h, e->rowBytes[0] = w; break;
-    default: e->rows[0] = h, e->rowBytes[0] = 4 * w; break;
+    case TEGRA_NVJPG_OUT_GREY:
+        e->rows[0] = h, e->rowBytes[0] = w;
+        break;
+    default:
+        e->rows[0] = h, e->rowBytes[0] = 4 * w;
+        break;
     }
     // The engine may write a row in 64-byte bursts (its strides are 64-byte multiples): the extent covers them.
     for (uint32_t p = 0; p < e->planes; p++) {
         e->rowBytes[p] = (e->rowBytes[p] + 63) & ~63u;
-        if (!t->pitch[p] || (t->pitch[p] & 63)) return "stride not a multiple of 64";
-        if (t->pitch[p] < e->rowBytes[p]) return "stride below the row";
+        if (!t->pitch[p] || (t->pitch[p] & 63))
+            return "stride not a multiple of 64";
+        if (t->pitch[p] < e->rowBytes[p])
+            return "stride below the row";
     }
-    if (e->planes == 3 && t->pitch[1] != t->pitch[2]) return "chroma strides differ";
+    if (e->planes == 3 && t->pitch[1] != t->pitch[2])
+        return "chroma strides differ";
     s->output_stride_luma = (int)t->pitch[0];
     s->output_stride_chroma = e->planes > 1 ? (int)t->pitch[1] : 0;
     s->power2_downscale = (int)t->scale;
@@ -495,7 +577,8 @@ static inline const char *tegra_nvjpg_setup_output(const TegraNVJPGImage *img, c
         s->output_chroma_mode = (int)img->chroma;
         s->memory_mode = TEGRA_NVJPG_MEMORY_PLANAR;
         s->alpha_value = (int)(t->alpha & 0xff);
-        for (uint32_t i = 0; i < 6; i++) s->yuv2rgb_param[i] = kTegraNVJPGJfif[i];
+        for (uint32_t i = 0; i < 6; i++)
+            s->yuv2rgb_param[i] = kTegraNVJPGJfif[i];
         break;
     }
     return NULL;
@@ -507,6 +590,7 @@ static inline uint8_t tegra_nvjpg_clamp8(int32_t v)
 {
     return (uint8_t)(v < 0 ? 0 : v > 255 ? 255 : v);
 }
+
 static inline void tegra_nvjpg_jfif_rgb(uint32_t y, uint32_t cb, uint32_t cr, uint8_t rgb[3])
 {
     const int32_t Y = (int32_t)y * kTegraNVJPGJfif[0], u = (int32_t)cb - 128, v = (int32_t)cr - 128;

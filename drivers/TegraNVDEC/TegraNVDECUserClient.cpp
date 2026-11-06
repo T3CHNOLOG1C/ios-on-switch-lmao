@@ -29,12 +29,18 @@ volatile uint32_t gConnections;
 IOReturn ioreturn(int err)
 {
     switch (err) {
-    case 0: return kIOReturnSuccess;
-    case -12: return kIOReturnNoMemory;
-    case -22: return kIOReturnBadArgument;
-    case -60: return kIOReturnTimeout;
-    case -19: return kIOReturnNotReady;
-    default: return kIOReturnError;
+    case 0:
+        return kIOReturnSuccess;
+    case -12:
+        return kIOReturnNoMemory;
+    case -22:
+        return kIOReturnBadArgument;
+    case -60:
+        return kIOReturnTimeout;
+    case -19:
+        return kIOReturnNotReady;
+    default:
+        return kIOReturnError;
     }
 }
 }  // namespace
@@ -47,6 +53,7 @@ class AppleD5500UserClient : public IOUserClient {
         TegraNVDECBlock block;
         IOMemoryDescriptor *view;  // what clientMemoryForType hands out for this handle
     };
+
     IOLock *lock_ = nullptr;
     Buffer buffers_[kMaxBuffers] = {};
     uint32_t nextHandle_ = 1, lastFence_ = 0;
@@ -59,34 +66,46 @@ class AppleD5500UserClient : public IOUserClient {
     static bool resolve(void *context, uint32_t handle, TegraNVDECBlock *block);
 
 public:
-    bool setUp() { return (lock_ = IOLockAlloc()) != nullptr; }
-    void countConnection() { counted_ = true; }
+    bool setUp()
+    {
+        return (lock_ = IOLockAlloc()) != nullptr;
+    }
+
+    void countConnection()
+    {
+        counted_ = true;
+    }
+
     IOReturn clientClose() APPLE_KEXT_OVERRIDE;
     void free() APPLE_KEXT_OVERRIDE;
     IOReturn clientMemoryForType(UInt32 type, IOOptionBits *options, IOMemoryDescriptor **memory) APPLE_KEXT_OVERRIDE;
     IOReturn externalMethod(uint32_t selector, IOExternalMethodArguments *arguments, IOExternalMethodDispatch *dispatch,
                             OSObject *target, void *reference) APPLE_KEXT_OVERRIDE;
 };
+
 OSDefineMetaClassAndStructors(AppleD5500UserClient, IOUserClient)
 
     AppleD5500UserClient::Buffer *AppleD5500UserClient::find(uint32_t handle)
 {
     for (uint32_t i = 0; handle && i < kMaxBuffers; i++)
-        if (buffers_[i].handle == handle) return &buffers_[i];
+        if (buffers_[i].handle == handle)
+            return &buffers_[i];
     return nullptr;
 }
 
 bool AppleD5500UserClient::resolve(void *context, uint32_t handle, TegraNVDECBlock *block)
 {
     Buffer *b = static_cast<AppleD5500UserClient *>(context)->find(handle);
-    if (b) *block = b->block;
+    if (b)
+        *block = b->block;
     return b != nullptr;
 }
 
 // The connection's jobs are done (or the engine is wedged and will never touch memory again before a resume resets it).
 bool AppleD5500UserClient::quiesce()
 {
-    if (!submitted_) return true;
+    if (!submitted_)
+        return true;
     const int ret = tegra_nvdec_wait(lastFence_);
     return ret == 0 || !tegra_nvdec_ready();
 }
@@ -99,7 +118,8 @@ void AppleD5500UserClient::drop(Buffer *b, bool returnMemory)
         map->release();
     }
     b->view->release();
-    if (returnMemory) tegra_nvdec_arena_free(&b->block);
+    if (returnMemory)
+        tegra_nvdec_arena_free(&b->block);
     b->handle = 0;
     b->view = nullptr;
 }
@@ -109,9 +129,11 @@ IOReturn AppleD5500UserClient::clientClose()
     tegra_nvdec_check_release(this);  // a clip check this connection claimed and never reported goes to the next
     IOLockLock(lock_);
     const bool idle = quiesce();
-    if (!idle) IOLog("TegraNVDEC: a closing client's job never finished; its buffers stay out of the arena\n");
+    if (!idle)
+        IOLog("TegraNVDEC: a closing client's job never finished; its buffers stay out of the arena\n");
     for (uint32_t i = 0; i < kMaxBuffers; i++)
-        if (buffers_[i].handle) drop(&buffers_[i], idle);
+        if (buffers_[i].handle)
+            drop(&buffers_[i], idle);
     IOLockUnlock(lock_);
     terminate();
     return kIOReturnSuccess;
@@ -122,11 +144,13 @@ void AppleD5500UserClient::free()
     tegra_nvdec_check_release(this);
     if (lock_) {
         for (uint32_t i = 0; i < kMaxBuffers; i++)
-            if (buffers_[i].handle) drop(&buffers_[i], quiesce());
+            if (buffers_[i].handle)
+                drop(&buffers_[i], quiesce());
         IOLockFree(lock_);
         lock_ = nullptr;
     }
-    if (counted_) __atomic_sub_fetch(&gConnections, 1, __ATOMIC_SEQ_CST);
+    if (counted_)
+        __atomic_sub_fetch(&gConnections, 1, __ATOMIC_SEQ_CST);
     IOUserClient::free();
 }
 
@@ -159,6 +183,7 @@ IOReturn AppleD5500UserClient::run(uint32_t method, const void *in, uint32_t inS
         {0, sizeof(TegraNVDECClaim)},
         {sizeof(TegraNVDECPresent), 0},
     };
+
     if (method < TegraNVDECMethodGetInfo || method > TegraNVDECMethodPresent || inSize != kSizes[method].in ||
         *outSize < kSizes[method].out)
         return kIOReturnBadArgument;
@@ -172,9 +197,11 @@ IOReturn AppleD5500UserClient::run(uint32_t method, const void *in, uint32_t inS
     }
     if (method == TegraNVDECMethodWait) {  // no lock: other calls of this connection may proceed while it sleeps
         const TegraNVDECWait *w = static_cast<const TegraNVDECWait *>(in);
-        if (w->invalidate_count > TEGRA_NVDEC_MAX_RANGES) return kIOReturnBadArgument;
+        if (w->invalidate_count > TEGRA_NVDEC_MAX_RANGES)
+            return kIOReturnBadArgument;
         const int ret = tegra_nvdec_wait(w->fence);  // bounded by the kernel, whatever timeout_us says
-        if (ret) return ioreturn(ret);
+        if (ret)
+            return ioreturn(ret);
         IOLockLock(lock_);
         IOReturn result = kIOReturnSuccess;
         for (uint32_t i = 0; i < w->invalidate_count; i++) {
@@ -208,19 +235,22 @@ IOReturn AppleD5500UserClient::run(uint32_t method, const void *in, uint32_t inS
         const uint64_t size = static_cast<const TegraNVDECBufferAlloc *>(in)->size;
         Buffer *slot = nullptr;
         for (uint32_t i = 0; i < kMaxBuffers && !slot; i++)
-            if (!buffers_[i].handle) slot = &buffers_[i];
+            if (!buffers_[i].handle)
+                slot = &buffers_[i];
         if (!slot || !size || size > kMaxBufferBytes) {
             ret = slot ? kIOReturnBadArgument : kIOReturnNoResources;
             break;
         }
-        if ((ret = ioreturn(tegra_nvdec_arena_alloc(size, &slot->block)))) break;
+        if ((ret = ioreturn(tegra_nvdec_arena_alloc(size, &slot->block))))
+            break;
         if (!(slot->view = tegra_nvdec_arena_descriptor(&slot->block))) {
             tegra_nvdec_arena_free(&slot->block);
             ret = kIOReturnNoMemory;
             break;
         }
         slot->handle = nextHandle_++;
-        if (!nextHandle_) nextHandle_ = 1;
+        if (!nextHandle_)
+            nextHandle_ = 1;
         TegraNVDECBufferReply *reply = static_cast<TegraNVDECBufferReply *>(out);
         reply->handle = slot->handle;
         reply->reserved = 0;
@@ -305,7 +335,9 @@ IOReturn AppleD5500UserClient::run(uint32_t method, const void *in, uint32_t inS
             ioreturn(tegra_nvdec_check_report(this, report->vp9_ok != 0, report->hevc_ok != 0, report->hevc10_ok != 0));
         break;
     }
-    default: ret = kIOReturnUnsupported; break;
+    default:
+        ret = kIOReturnUnsupported;
+        break;
     }
     IOLockUnlock(lock_);
     return ret;
@@ -319,16 +351,21 @@ IOReturn AppleD5500UserClient::externalMethod(uint32_t selector, IOExternalMetho
         arguments->scalarInputCount || arguments->scalarOutputCount || arguments->structureInputSize < 8)
         return kIOReturnBadArgument;
     const uint32_t *header = static_cast<const uint32_t *>(arguments->structureInput);
-    if (header[0] != TEGRA_NVDEC_TUNNEL_MAGIC) return kIOReturnBadArgument;
-    if (header[1] == TEGRA_NVDEC_TUNNEL_PROBE) return kIOReturnSuccess;
+    if (header[0] != TEGRA_NVDEC_TUNNEL_MAGIC)
+        return kIOReturnBadArgument;
+    if (header[1] == TEGRA_NVDEC_TUNNEL_PROBE)
+        return kIOReturnSuccess;
     // Records are naturally aligned structs and the caller's buffer may not be: copy the input (Submit is the largest).
     const uint32_t inSize = arguments->structureInputSize - 8;
     void *copy = inSize ? IOMallocData(inSize) : nullptr;
-    if (inSize && !copy) return kIOReturnNoMemory;
-    if (inSize) memcpy(copy, header + 2, inSize);
+    if (inSize && !copy)
+        return kIOReturnNoMemory;
+    if (inSize)
+        memcpy(copy, header + 2, inSize);
     uint32_t outSize = arguments->structureOutputSize;
     const IOReturn ret = run(header[1], copy, inSize, arguments->structureOutput, &outSize);
-    if (copy) IOFreeData(copy, inSize);
+    if (copy)
+        IOFreeData(copy, inSize);
     arguments->structureOutputSize = ret ? 0 : outSize;
     return ret;
 }
@@ -339,6 +376,7 @@ OSDeclareDefaultStructors(TegraNVDEC)
     public : IOReturn newUserClient(task_t task, void *securityID, UInt32 type, OSDictionary *properties,
                                     IOUserClient **handler) APPLE_KEXT_OVERRIDE;
 };
+
 OSDefineMetaClassAndStructors(TegraNVDEC, IOService)
 
     extern "C" void proc_selfname(char *buf, int size);
@@ -346,15 +384,18 @@ OSDefineMetaClassAndStructors(TegraNVDEC, IOService)
 IOReturn TegraNVDEC::newUserClient(task_t task, void *securityID, UInt32 type, OSDictionary *properties,
                                    IOUserClient **handler)
 {
-    if (type != TEGRA_NVDEC_OPEN_TYPE) return kIOReturnBadArgument;
-    if (!tegra_nvdec_ready()) return kIOReturnNotReady;
+    if (type != TEGRA_NVDEC_OPEN_TYPE)
+        return kIOReturnBadArgument;
+    if (!tegra_nvdec_ready())
+        return kIOReturnNotReady;
     if (__atomic_add_fetch(&gConnections, 1, __ATOMIC_SEQ_CST) > kMaxConnections) {
         __atomic_sub_fetch(&gConnections, 1, __ATOMIC_SEQ_CST);
         return kIOReturnNoResources;
     }
     AppleD5500UserClient *client = OSTypeAlloc(AppleD5500UserClient);
     if (!client || !client->initWithTask(task, securityID, type, properties)) {
-        if (client) client->release();
+        if (client)
+            client->release();
         __atomic_sub_fetch(&gConnections, 1, __ATOMIC_SEQ_CST);
         return kIOReturnNoMemory;
     }

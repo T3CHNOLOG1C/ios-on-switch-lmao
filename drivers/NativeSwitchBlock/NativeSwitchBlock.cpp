@@ -121,8 +121,14 @@ constexpr uint32_t kGapSectors = 32 * 1024 / kSector, kGapBudget = 64 * 1024 / k
 constexpr uint32_t kCqTaskSectors = kSafeSectors, kCqGroupSectors = kBounceSectors, kCqMaxTasks = 32, kCqProofs = 32;
 // issue()'s `task` when the command is not a CQ task's CMD46.
 constexpr uint32_t kNoTask = 0xffffffffu;
+
 // cqCommand()'s data: none, one 512-byte block from the card, or to it.
-enum : int { kRegNone, kRegRead, kRegWrite };
+enum : int {
+    kRegNone,
+    kRegRead,
+    kRegWrite
+};
+
 // r12-sdio: what a read that proves ADMA2 above 4 GiB fills those pages with first (prepareDirect, proveHigh).
 constexpr uint8_t kPoison = 0x5a;
 // r12-sdio: the most separate stretches of a read chain staged through the bounce buffer (SwitchAdmaStaging; consecutive
@@ -184,6 +190,7 @@ enum : uint32_t {
     AUTOCAL_STATUS = 0x1ec,
     IO_SPARE = 0x1f0,
 };
+
 enum : uint32_t {
     INT_COMMAND = 1u << 0,
     INT_TRANSFER = 1u << 1,
@@ -231,6 +238,7 @@ enum : uint32_t {
     CONTROL2_EXEC_TUNING = 1u << 6,
     CONTROL2_TUNED = 1u << 7,
 };
+
 // Clock and reset controller (hekate bdk/soc/clock.h:25/73/106/107/148/149/177/179/196/197; CLK_L_SDMMC1 = 14
 // at :488), APB_MISC/pinmux (t210.h:242, pinmux.h:24/26/30-35/130) and PMC (pmc_t210.h:113-114) offsets.
 enum : uint32_t {
@@ -264,6 +272,7 @@ enum : uint32_t {
     PMC_NO_IOPOWER = 0x400 + 0x44,
     PMC_SDMMC1_NO_POWER = 1u << 12,
 };
+
 // System sleep (hekate sdmmc1_disable_power / _sdmmc_config_sdmmc1 / sdmmc_init): the card's own supply is switched by
 // GPIO PE4 (DMIC3_CLK), its I/O supply is LDO2; U-Boot's card clock is PLLP / 8.5 = 48 MHz (CLK_SOURCE U7.1 divider 15),
 // and B01's SDMMC1 trimmer is 14 (VENDOR_CLOCK 28:24, hekate trim_values_t210b01).
@@ -275,6 +284,7 @@ constexpr unsigned kPmicBus = 5;
 constexpr uint8_t kPmicAddress = 0x3c, kPmicLdo2 = 0x27, kLdoVoltage = 0x3f, kLdo3V3 = 50, kLdo1V8 = 20;
 // T210B01 SDMMC1 default sampling tap (hekate sdmmc_driver.c:131; U-Boot tegra_mmc.c:540 the same).
 constexpr uint32_t kTapB01 = 11;
+
 // SDR104 clocks, fastest first. The card stays in the SDR104 mode it switched to and the host in SDR104
 // timing, re-tuned at each clock, as hekate's own fallback SDR82 does (sdmmc.c:1556-1561 sets the card to
 // SDR104, sdmmc_driver.c:340 the host to SDR104 timing, clock.c:772-774 PLLP / 2.5, sdmmc_driver.c:771
@@ -284,6 +294,7 @@ constexpr uint32_t kTapB01 = 11;
 struct Speed {
     uint32_t source, carDivider, divider, kHz;
 };
+
 constexpr Speed kSpeeds[] = {{SOURCE_PLLC4_OUT2, 0, 0, 199680},
                              {SOURCE_PLLP, 3, 0, 163200},
                              {SOURCE_PLLC4_OUT2, 0, 1, 99840},
@@ -296,27 +307,33 @@ inline uint64_t nowNs()
     absolutetime_to_nanoseconds(mach_absolute_time(), &ns);
     return ns;
 }
+
 inline uint32_t le32(const uint8_t *p)
 {
     return p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
 }
+
 inline uint64_t le64(const uint8_t *p)
 {
     return le32(p) | (uint64_t)le32(p + 4) << 32;
 }
+
 bool partitionNamed(const uint8_t *entry, const char *name)
 {
     const uint8_t *field = entry + 56;
     unsigned i = 0;
     for (; name[i]; ++i) {
-        if (i == 36 || field[2 * i] != (uint8_t)name[i] || field[2 * i + 1]) return false;
+        if (i == 36 || field[2 * i] != (uint8_t)name[i] || field[2 * i + 1])
+            return false;
     }
     return i == 36 || (!field[2 * i] && !field[2 * i + 1]);
 }
+
 inline uint32_t rd(volatile uint8_t *base, uint32_t o)
 {
     return *(volatile uint32_t *)(base + o);
 }
+
 inline void wr(volatile uint8_t *base, uint32_t o, uint32_t v)
 {
     *(volatile uint32_t *)(base + o) = v;
@@ -335,6 +352,7 @@ struct Request {
     uint64_t queuedNs;
     bool chained;  // r12-sdio: taken into the chain being picked (SwitchQueue.h), under queueLock
 };
+
 // r12-sdio: one chain's way through the worker (worker()): picked, begun (beginBatch: the table built and, when the chain is
 // one ADMA2 command, its pages synced and the command issued), ended (endBatch: that command waited for, retried and
 // checked; or the whole bounce path), then completed (completeBatch). The worker begins the next chain before it completes
@@ -351,10 +369,12 @@ struct Batch {
     uint64_t beganNs, overlapNs;  // when beginBatch started; the previous chain's completions that ran inside this one
     IOReturn result;              // endBatch's, for every request of the chain
 };
+
 // r6-lows: a high-class read may be taken before older requests of lower classes (worker), never before an older request it
 // overlaps, and never once the oldest request has waited kAgeNs (then FIFO again, so nothing starves). Writes keep FIFO order.
 constexpr unsigned kClasses = 4;
 constexpr uint64_t kAgeNs = 100000000;  // 100 ms
+
 // Queue time (submit to the command that carries it) per class over one throughput line's interval.
 struct ClassWait {
     uint64_t n, sumNs, maxNs;
@@ -400,59 +420,109 @@ class NativeSwitchBlockDevice : public IOBlockStorageDevice {
 
 public:
     bool configure(NativeSwitchBlock *, uint64_t sectors);
-    IOReturn doEjectMedia() override { return kIOReturnUnsupported; }
-    IOReturn doFormatMedia(UInt64) override { return kIOReturnUnsupported; }
-    UInt32 doGetFormatCapacities(UInt64 *, UInt32) const override { return 0; }
+
+    IOReturn doEjectMedia() override
+    {
+        return kIOReturnUnsupported;
+    }
+
+    IOReturn doFormatMedia(UInt64) override
+    {
+        return kIOReturnUnsupported;
+    }
+
+    UInt32 doGetFormatCapacities(UInt64 *, UInt32) const override
+    {
+        return 0;
+    }
+
     IOReturn doUnmap(IOBlockStorageDeviceExtent *, UInt32, IOStorageUnmapOptions) override
     {
         return kIOReturnUnsupported;
     }
-    char *getVendorString() override { return const_cast<char *>("Switch"); }
-    char *getProductString() override { return const_cast<char *>("SD APFS"); }
-    char *getRevisionString() override { return const_cast<char *>("2.0"); }
-    char *getAdditionalDeviceInfoString() override { return const_cast<char *>("SDMMC1 APFS partition"); }
+
+    char *getVendorString() override
+    {
+        return const_cast<char *>("Switch");
+    }
+
+    char *getProductString() override
+    {
+        return const_cast<char *>("SD APFS");
+    }
+
+    char *getRevisionString() override
+    {
+        return const_cast<char *>("2.0");
+    }
+
+    char *getAdditionalDeviceInfoString() override
+    {
+        return const_cast<char *>("SDMMC1 APFS partition");
+    }
+
     IOReturn reportBlockSize(UInt64 *value) override
     {
         *value = kSector;
         return kIOReturnSuccess;
     }
+
     IOReturn reportMaxValidBlock(UInt64 *value) override
     {
         *value = blocks - 1;
         return kIOReturnSuccess;
     }
+
     IOReturn reportEjectability(bool *value) override
     {
         *value = false;
         return kIOReturnSuccess;
     }
+
     IOReturn reportRemovability(bool *value) override
     {
         *value = false;
         return kIOReturnSuccess;
     }
+
     IOReturn reportWriteProtection(bool *value) override
     {
         *value = false;
         return kIOReturnSuccess;
     }
+
     IOReturn reportMediaState(bool *present, bool *changed) override
     {
         *present = true;
-        if (changed) *changed = false;
+        if (changed)
+            *changed = false;
         return kIOReturnSuccess;
     }
+
     // Writes complete only after the card releases busy and with no card cache enabled, so every completed write is
     // already durable. r16-sdcq: the card's cache is on only inside a CQ session, which carries reads only; a cache that
     // would not go off has every write flushed before it completes (commitWrite). Write-through either way.
-    IOReturn doSynchronize(UInt64, UInt64, IOOptionBits) override { return kIOReturnSuccess; }
-    IOReturn doSynchronizeCache() override { return kIOReturnSuccess; }
+    IOReturn doSynchronize(UInt64, UInt64, IOOptionBits) override
+    {
+        return kIOReturnSuccess;
+    }
+
+    IOReturn doSynchronizeCache() override
+    {
+        return kIOReturnSuccess;
+    }
+
     IOReturn getWriteCacheState(bool *value) override
     {
         *value = false;
         return kIOReturnSuccess;
     }
-    IOReturn setWriteCacheState(bool) override { return kIOReturnUnsupported; }
+
+    IOReturn setWriteCacheState(bool) override
+    {
+        return kIOReturnUnsupported;
+    }
+
     IOReturn doAsyncReadWrite(IOMemoryDescriptor *, UInt64, UInt64, IOStorageAttributes *,
                               IOStorageCompletion *) override;
 };
@@ -515,7 +585,12 @@ class NativeSwitchBlock : public IOService {
     uint64_t sinkPA = 0;
     bool gapsOn = false;
     uint32_t gapProofs = 0;
-    bool inSink(uint64_t pa) const { return sinkPA && pa >= sinkPA && pa - sinkPA < uint64_t(kGapSectors) * kSector; }
+
+    bool inSink(uint64_t pa) const
+    {
+        return sinkPA && pa >= sinkPA && pa - sinkPA < uint64_t(kGapSectors) * kSector;
+    }
+
     // r14-sdcq: the command queue (SwitchCq.h): the engine and its bus (this controller), the CQ control byte's place
     // (identify()), the DMA buffer CMD48/CMD49 move their block through, the two task arrays the worker alternates (a
     // group's last task may still wait for its completions while the next group fills the other one), and the tasks
@@ -527,10 +602,23 @@ class NativeSwitchBlock : public IOService {
         int command(uint32_t index, uint32_t argument, bool busy, uint32_t *r1);
         int control(uint32_t byte, bool write, uint8_t *value, uint32_t *r1);
         int status(bool tasks, uint32_t *r1);
-        void settle() { IOSleep(1); }
-        uint8_t lastCommand() const { return self->cardLast; }
-        uint32_t lastIrq() const { return self->cardLastIrq; }
+
+        void settle()
+        {
+            IOSleep(1);
+        }
+
+        uint8_t lastCommand() const
+        {
+            return self->cardLast;
+        }
+
+        uint32_t lastIrq() const
+        {
+            return self->cardLastIrq;
+        }
     };
+
     using CqEngine = SwitchCqEngine<CqBus>;
     CqBus cqBus{this};
     CqEngine cq;
@@ -548,7 +636,12 @@ class NativeSwitchBlock : public IOService {
     uint32_t cardLastIrq = 0;
     bool cqStopLogged = false;
     char cqStopWhy[160] = {};
-    void noteCommand(uint8_t index) { cardLast = index; }
+
+    void noteCommand(uint8_t index)
+    {
+        cardLast = index;
+    }
+
     // r16-sdcq: from legacy mode a group needs this many chains: entering and leaving CQ mode cost what checkCq measured,
     // so a group must save at least that much at the per-task saving its test group showed (setup()).
     unsigned cqMinChains = 2;
@@ -584,13 +677,41 @@ class NativeSwitchBlock : public IOService {
     SwitchSdPower power = {};
     const char *extWhy = nullptr;
 
-    uint8_t r8(uint32_t o) { return regs[o]; }
-    uint16_t r16(uint32_t o) { return *(volatile uint16_t *)(regs + o); }
-    uint32_t r32(uint32_t o) { return *(volatile uint32_t *)(regs + o); }
-    void w8(uint32_t o, uint8_t v) { regs[o] = v; }
-    void w16(uint32_t o, uint16_t v) { *(volatile uint16_t *)(regs + o) = v; }
-    void w32(uint32_t o, uint32_t v) { *(volatile uint32_t *)(regs + o) = v; }
-    static void barrier() { __asm__ volatile("dsb sy" ::: "memory"); }
+    uint8_t r8(uint32_t o)
+    {
+        return regs[o];
+    }
+
+    uint16_t r16(uint32_t o)
+    {
+        return *(volatile uint16_t *)(regs + o);
+    }
+
+    uint32_t r32(uint32_t o)
+    {
+        return *(volatile uint32_t *)(regs + o);
+    }
+
+    void w8(uint32_t o, uint8_t v)
+    {
+        regs[o] = v;
+    }
+
+    void w16(uint32_t o, uint16_t v)
+    {
+        *(volatile uint16_t *)(regs + o) = v;
+    }
+
+    void w32(uint32_t o, uint32_t v)
+    {
+        *(volatile uint32_t *)(regs + o) = v;
+    }
+
+    static void barrier()
+    {
+        __asm__ volatile("dsb sy" ::: "memory");
+    }
+
     bool stage(IOMemoryDescriptor *memory, uint32_t from, uint8_t *at, uint32_t length, bool toClient)
     {
         if (copyFlush)
@@ -653,8 +774,15 @@ class NativeSwitchBlock : public IOService {
     bool proveWrite(Request *first, uint32_t sectors, bool cmd23);
     bool proveHigh(Request *first, uint32_t sectors);
     bool proveGaps(Request *first, uint32_t sectors);
+
     // r14-sdcq: a read chain compared with the same blocks read by SDMA (proveGaps, the command queue's proofs).
-    enum ChainProof : uint8_t { kChainMatches, kChainDiffers, kChainUnproven, kChainBroken };
+    enum ChainProof : uint8_t {
+        kChainMatches,
+        kChainDiffers,
+        kChainUnproven,
+        kChainBroken
+    };
+
     ChainProof compareChain(Request *first, uint32_t sectors, uint64_t *at);
     void releaseChecks();
     bool copyStaged();
@@ -749,16 +877,19 @@ bool NativeSwitchBlockDevice::configure(NativeSwitchBlock *provider, uint64_t se
 }
 
 IOReturn NativeSwitchBlockDevice::doAsyncReadWrite(IOMemoryDescriptor *buffer, UInt64 block, UInt64 count,
-                                                     IOStorageAttributes *attributes, IOStorageCompletion *completion)
+                                                   IOStorageAttributes *attributes, IOStorageCompletion *completion)
 {
     if (!buffer || !completion || !count || block >= blocks || count > blocks - block || count > owner->maxSectors ||
         buffer->getLength() < count * kSector)
         return kIOReturnBadArgument;
     IODirection direction = buffer->getDirection();
-    if (direction != kIODirectionIn && direction != kIODirectionOut) return kIOReturnBadArgument;
-    if (direction == kIODirectionOut && count > owner->maxWriteSectors) return kIOReturnBadArgument;
+    if (direction != kIODirectionIn && direction != kIODirectionOut)
+        return kIOReturnBadArgument;
+    if (direction == kIODirectionOut && count > owner->maxWriteSectors)
+        return kIOReturnBadArgument;
     auto *request = static_cast<Request *>(IOMalloc(sizeof(Request)));
-    if (!request) return kIOReturnNoMemory;
+    if (!request)
+        return kIOReturnNoMemory;
     buffer->retain();
     // No attributes: the default class, as IOStorage's own default priority. The boot prefetch: high.
     const IOStoragePriority priority = current_thread() == __atomic_load_n(&gPrefetchThread, __ATOMIC_ACQUIRE)
@@ -783,10 +914,13 @@ bool NativeSwitchBlock::waitIdle(bool dat0, uint64_t timeoutNs)
     uint64_t start = nowNs();
     for (;;) {
         uint32_t present = r32(PRESENT);
-        if (!(present & PRESENT_BUSY) && (!dat0 || (present & PRESENT_DAT0))) return true;
+        if (!(present & PRESENT_BUSY) && (!dat0 || (present & PRESENT_DAT0)))
+            return true;
         uint64_t elapsed = nowNs() - start;
-        if (elapsed >= timeoutNs) return false;
-        if (elapsed > 1000000) IOSleep(1);
+        if (elapsed >= timeoutNs)
+            return false;
+        if (elapsed > 1000000)
+            IOSleep(1);
     }
 }
 
@@ -795,7 +929,8 @@ bool NativeSwitchBlock::waitIdle(bool dat0, uint64_t timeoutNs)
 bool NativeSwitchBlock::interruptFilter(OSObject *owner, IOFilterInterruptEventSource *)
 {
     auto *self = static_cast<NativeSwitchBlock *>(owner);
-    if (!(self->r32(STATUS) & self->r32(SIGNAL_ENABLE))) return false;
+    if (!(self->r32(STATUS) & self->r32(SIGNAL_ENABLE)))
+        return false;
     self->w32(SIGNAL_ENABLE, 0);
     (void)self->r32(SIGNAL_ENABLE);  // the line is low before ArmCpu ends the interrupt
     __atomic_fetch_add(&self->stats.interrupts, 1, __ATOMIC_RELAXED);
@@ -836,7 +971,8 @@ bool NativeSwitchBlock::startInterrupt()
 void NativeSwitchBlock::resetLines()
 {
     w8(RESET, 0x06);
-    for (uint64_t start = nowNs(); (r8(RESET) & 0x06) && nowNs() - start < 100000000;) {}
+    for (uint64_t start = nowNs(); (r8(RESET) & 0x06) && nowNs() - start < 100000000;) {
+    }
 }
 
 // Reset the CMD and DAT state machines; for a failed data command,
@@ -845,8 +981,10 @@ void NativeSwitchBlock::recover(bool data)
 {
     resetLines();
     w32(STATUS, 0xffffffff);
-    if (!data) return;
-    if (!waitIdle(false, 100000000)) return;
+    if (!data)
+        return;
+    if (!waitIdle(false, 100000000))
+        return;
     w16(TRANSFER, 0);
     w32(ARGUMENT, 0);
     barrier();
@@ -854,7 +992,8 @@ void NativeSwitchBlock::recover(bool data)
     noteCommand(12);
     for (uint64_t start = nowNs(); nowNs() - start < 100000000;) {
         uint32_t s = r32(STATUS);
-        if (s & (INT_COMMAND | INT_ERROR)) break;
+        if (s & (INT_COMMAND | INT_ERROR))
+            break;
     }
     w32(STATUS, 0xffffffff);
     if (!waitIdle(true, 2000000000)) {
@@ -867,17 +1006,18 @@ void NativeSwitchBlock::recover(bool data)
 // caller), else by SDMA into/out of the bounce buffer. Returns 0 or a nonzero step code; *status receives the last
 // interrupt status sample. r12-sdio: issue() then complete(); the worker's ADMA2 commands call the two apart.
 int NativeSwitchBlock::command(uint32_t lba, uint32_t sectors, bool write, unsigned descriptors, uint32_t *status,
-                                 bool cmd23)
+                               bool cmd23)
 {
     *status = 0;
-    if (const int step = issue(lba, sectors, write, descriptors, cmd23)) return step;
+    if (const int step = issue(lba, sectors, write, descriptors, cmd23))
+        return step;
     return complete(sectors, write, descriptors, status, nullptr, cmd23);
 }
 
 // The command's first half: the partition check, the registers and the command itself. 0, or step 1 when the controller
 // never went idle (then nothing was issued).
 int NativeSwitchBlock::issue(uint32_t lba, uint32_t sectors, bool write, unsigned descriptors, bool cmd23,
-                               uint32_t task)
+                             uint32_t task)
 {
     // Every card write passes here, whichever path staged it: none may reach outside the APFS partition. (Until setup()
     // has found the partition, sectorCount is 0 and so no write can be issued at all.)
@@ -885,8 +1025,10 @@ int NativeSwitchBlock::issue(uint32_t lba, uint32_t sectors, bool write, unsigne
         panic("SwitchSD: write lba=%u n=%u outside the APFS partition [%llu, +%llu)", lba, sectors, firstSector,
               sectorCount);
     // r14-sdcq: the command queue carries reads only (a CQ write would need CMD47 and its own proofs).
-    if (write && task != kNoTask) panic("SwitchSD: write lba=%u n=%u as a command-queue task", lba, sectors);
-    if (!waitIdle(write, 2000000000)) return 1;
+    if (write && task != kNoTask)
+        panic("SwitchSD: write lba=%u n=%u as a command-queue task", lba, sectors);
+    if (!waitIdle(write, 2000000000))
+        return 1;
     w32(STATUS, 0xffffffff);
     // DMA select per command: the bring-up commands' SDMA (cardCommand) and the data path share the controller.
     const uint64_t address = descriptors ? tablePA : bouncePA;
@@ -901,7 +1043,8 @@ int NativeSwitchBlock::issue(uint32_t lba, uint32_t sectors, bool write, unsigne
     // multi, as the qualified sequence.
     const SwitchSdFrame frame =
         task != kNoTask ? switchSdTaskFrame(sectors) : switchSdBlockFrame(sectors, write, cmd23);
-    if (frame.argument2) w32(ARGUMENT2, frame.argument2);
+    if (frame.argument2)
+        w32(ARGUMENT2, frame.argument2);
     w16(TRANSFER, frame.transfer);
     barrier();
     w16(COMMAND, frame.command);
@@ -913,7 +1056,7 @@ int NativeSwitchBlock::issue(uint32_t lba, uint32_t sectors, bool write, unsigne
 // not from issue(): the worker may have completed the previous chain's requests in between. `*early` (when asked): the
 // command had already finished when this began, so it took no interrupt.
 int NativeSwitchBlock::complete(uint32_t sectors, bool write, unsigned descriptors, uint32_t *status, bool *early,
-                                  bool cmd23, bool task)
+                                bool cmd23, bool task)
 {
     *status = 0;
     const bool multi = sectors > 1;
@@ -937,19 +1080,23 @@ int NativeSwitchBlock::complete(uint32_t sectors, bool write, unsigned descripto
             admaErrorAddress = r32(DMA_LOW) | static_cast<uint64_t>(r32(DMA_HIGH)) << 32;
             return kStepAdmaError;
         }
-        if (s & INT_ERRORS) return (s & INT_COMMAND) ? 3 : 2;
-        if (s & INT_TRANSFER) break;
+        if (s & INT_ERRORS)
+            return (s & INT_COMMAND) ? 3 : 2;
+        if (s & INT_TRANSFER)
+            break;
         if (!descriptors && (s & INT_DMA)) {
             // Paused at the next 512 KiB boundary of the (boundary-aligned) bounce buffer: give it the address there.
             resume += kSdmaBoundary;
-            if (resume > sectors * kSector) return 5;
+            if (resume > sectors * kSector)
+                return 5;
             w32(STATUS, INT_DMA);
             w32(DMA_LOW, static_cast<uint32_t>(bouncePA + resume));
             w32(DMA_HIGH, static_cast<uint32_t>((bouncePA + resume) >> 32));
             continue;
         }
         uint64_t elapsed = nowNs() - start;
-        if (elapsed >= limit) return (s & INT_COMMAND) ? 6 : 7;
+        if (elapsed >= limit)
+            return (s & INT_COMMAND) ? 6 : 7;
         waited = true;
         if (irqMode) {
             // Sleep until the transfer completes or fails. A wait that times out with an awaited
@@ -963,37 +1110,47 @@ int NativeSwitchBlock::complete(uint32_t sectors, bool write, unsigned descripto
             continue;
         }
         // Spin through ordinary reads; yield the CPU for long writes and slow reads.
-        if (elapsed > (write ? 1000000ull : 3000000ull)) IOSleep(1);
+        if (elapsed > (write ? 1000000ull : 3000000ull))
+            IOSleep(1);
     }
-    if (early) *early = !waited;
+    if (early)
+        *early = !waited;
     w32(STATUS, INT_COMMAND | INT_TRANSFER);
-    if (!(s & INT_COMMAND) || (r32(RESPONSE) & R1_ERRORS)) return 4;
+    if (!(s & INT_COMMAND) || (r32(RESPONSE) & R1_ERRORS))
+        return 4;
     if (multi && !task) {
         // Auto CMD12's or (r14-sdcq) Auto CMD23's errors; only a CMD12 leaves a response in STOP_RESPONSE. A CQ task
         // has no auto command.
-        if (r16(AUTO_CMD_ERROR) & 0x9f) return 8;
-        if (!cmd23 && (r32(STOP_RESPONSE) & R1_STOP_ERRORS)) return 9;
+        if (r16(AUTO_CMD_ERROR) & 0x9f)
+            return 8;
+        if (!cmd23 && (r32(STOP_RESPONSE) & R1_STOP_ERRORS))
+            return 9;
     }
     // Transfer complete follows the write busy period; DAT0 confirms it.
-    if (!waitIdle(write, 2000000000)) return 10;
+    if (!waitIdle(write, 2000000000))
+        return 10;
     return 0;
 }
 
 int NativeSwitchBlock::transfer(uint64_t lba, uint32_t sectors, bool write, uint8_t *bytes)
 {
     const uint32_t length = sectors * kSector;
-    if (lba > UINT32_MAX || sectors == 0 || sectors > (write ? kSafeSectors : kBounceSectors)) return -1;
-    if (write && bytes != bounce) memcpy(bounce, bytes, length);
+    if (lba > UINT32_MAX || sectors == 0 || sectors > (write ? kSafeSectors : kBounceSectors))
+        return -1;
+    if (write && bytes != bounce)
+        memcpy(bounce, bytes, length);
     // Clean (write) or clean+invalidate (read) before the device owns the lines.
     for (uintptr_t at = (uintptr_t)bounce, end = at + length; at < end; at += 64)
         __asm__ volatile("dc civac, %0" ::"r"(at) : "memory");
     barrier();
-    if (const int step = run(lba, sectors, write, 0)) return step;
+    if (const int step = run(lba, sectors, write, 0))
+        return step;
     if (!write) {
         for (uintptr_t at = (uintptr_t)bounce, end = at + length; at < end; at += 64)
             __asm__ volatile("dc ivac, %0" ::"r"(at) : "memory");
         barrier();
-        if (bytes != bounce) memcpy(bytes, bounce, length);
+        if (bytes != bounce)
+            memcpy(bytes, bounce, length);
     }
     return 0;
 }
@@ -1001,7 +1158,7 @@ int NativeSwitchBlock::transfer(uint64_t lba, uint32_t sectors, bool write, uint
 // Logs a failed data command and recovers the card. True when ADMA2 itself failed (the host's DMA, not the card or the
 // bus): no retry and no re-tune then; the caller moves the data through the bounce buffer instead.
 bool NativeSwitchBlock::failed(int step, uint32_t status, uint64_t lba, uint32_t sectors, bool write,
-                                 unsigned descriptors, bool retry)
+                               unsigned descriptors, bool retry)
 {
     IOLog("SwitchSD: %s%s lba=%llu n=%u failed step=%d status=0x%08x present=0x%08x acmd=0x%04x\n",
           retry ? "retry " : "", write ? "write" : "read", lba, sectors, step, status, r32(PRESENT),
@@ -1034,11 +1191,13 @@ int NativeSwitchBlock::run(uint64_t lba, uint32_t sectors, bool write, unsigned 
 // run()'s error handling for a command that failed with `step` (also for the worker's split ADMA2 commands): logged and
 // recovered, re-tuned, issued once more. r14-sdcq: the retry stops by Auto CMD12 whatever the first try's framing was.
 int NativeSwitchBlock::retry(int step, uint32_t status, uint64_t lba, uint32_t sectors, bool write,
-                               unsigned descriptors)
+                             unsigned descriptors)
 {
-    if (failed(step, status, lba, sectors, write, descriptors, false)) return step;
+    if (failed(step, status, lba, sectors, write, descriptors, false))
+        return step;
     stats.retries++;
-    if (tuned) retune(false);
+    if (tuned)
+        retune(false);
     if (write && !descriptors) {
         for (uintptr_t at = (uintptr_t)bounce, end = at + sectors * kSector; at < end; at += 64)
             __asm__ volatile("dc civac, %0" ::"r"(at) : "memory");
@@ -1059,9 +1218,12 @@ void NativeSwitchBlock::submit(Request *request)
     else
         head = request;
     tail = request;
-    if (++queued > stats.maxQueued) stats.maxQueued = queued;
-    if (!request->write) ++queuedReads[request->klass];
-    if (!stats.firstNs) stats.firstNs = statsLastNs = request->queuedNs;
+    if (++queued > stats.maxQueued)
+        stats.maxQueued = queued;
+    if (!request->write)
+        ++queuedReads[request->klass];
+    if (!stats.firstNs)
+        stats.firstNs = statsLastNs = request->queuedNs;
     __atomic_fetch_add(&submitted, 1, __ATOMIC_RELAXED);
     IOLockWakeup(queueLock, &head, true);
     IOLockUnlock(queueLock);
@@ -1085,7 +1247,8 @@ template <int op> static void syncLines(const SwitchAdmaTable &table, uint64_t s
 {
     for (uint32_t i = 0; i < table.count; ++i) {
         uint64_t pa = switchAdmaAddress(table.entries[i]);
-        if (pa - skip < skipBytes) continue;
+        if (pa - skip < skipBytes)
+            continue;
         for (const uint64_t end = pa + table.entries[i].length; pa < end;) {
             const uint64_t page = (pa | (kAdmaPage - 1)) + 1, stop = page < end ? page : end;
             for (uintptr_t at = phystokv(pa), last = at + (stop - pa); at < last; at += kAdmaLine) {
@@ -1111,10 +1274,14 @@ SwitchAdmaRefusal NativeSwitchBlock::buildTable(Request *first, uint32_t sectors
     staging.count = 0;
     const uint64_t limit = task && high.state == SwitchAdmaHigh::kProving ? kAdma4GiB : high.limit(write);
     table.limit = limit;
-    const auto pageOk = [&](uint64_t page) { return cacheableRam(page) && high.pageOk(page, write); };
+    const auto pageOk = [&](uint64_t page) {
+        return cacheableRam(page) && high.pageOk(page, write);
+    };
     // r14-sdcq: a read chain's gaps go to the sink, one descriptor each (no gap is longer than the sink).
     uint64_t lba = first->lba;
-    const auto gap = [&](const Request *r) -> uint64_t { return (r->lba - lba) * kSector; };
+    const auto gap = [&](const Request *r) -> uint64_t {
+        return (r->lba - lba) * kSector;
+    };
     if (!write && stagingOn) {
         // r12-sdio: a read's refused segments alone through the bounce buffer (SwitchAdmaStaging).
         staging.reset(&table, bouncePA, stages, kStages);
@@ -1124,7 +1291,8 @@ SwitchAdmaRefusal NativeSwitchBlock::buildTable(Request *first, uint32_t sectors
             if (gap(r))
                 why = gap(r) > uint64_t(kGapSectors) * kSector || !sinkPA ? kAdmaMissing
                                                                           : staging.addSink(sinkPA, gap(r));
-            if (!why) why = staging.addMemory(r->buffer, uint64_t(r->sectors) * kSector, pageOk);
+            if (!why)
+                why = staging.addMemory(r->buffer, uint64_t(r->sectors) * kSector, pageOk);
             if (why) {
                 staging.count = 0;
                 return why;
@@ -1141,8 +1309,10 @@ SwitchAdmaRefusal NativeSwitchBlock::buildTable(Request *first, uint32_t sectors
         SwitchAdmaRefusal why = kAdmaOk;
         if (gap(r))
             why = gap(r) > uint64_t(kGapSectors) * kSector || !sinkPA ? kAdmaMissing : table.addSealed(sinkPA, gap(r));
-        if (!why) why = table.addMemory(r->buffer, uint64_t(r->sectors) * kSector, pageOk);
-        if (why) return why;
+        if (!why)
+            why = table.addMemory(r->buffer, uint64_t(r->sectors) * kSector, pageOk);
+        if (why)
+            return why;
         lba = r->lba + r->sectors;
     }
     return table.bytes == uint64_t(sectors) * kSector && table.finish() ? kAdmaOk : kAdmaMissing;
@@ -1163,7 +1333,8 @@ void NativeSwitchBlock::prepareDirect(bool write, bool poison)
         uint64_t pa = switchAdmaAddress(table.entries[i]);
         for (const uint64_t end = pa + table.entries[i].length; pa < end;) {
             const uint64_t page = (pa | (kAdmaPage - 1)) + 1, stop = page < end ? page : end;
-            if (pa >= kAdma4GiB) memset(reinterpret_cast<void *>(phystokv(pa)), kPoison, stop - pa);
+            if (pa >= kAdma4GiB)
+                memset(reinterpret_cast<void *>(phystokv(pa)), kPoison, stop - pa);
             pa = stop;
         }
     }
@@ -1191,7 +1362,8 @@ bool NativeSwitchBlock::copyStaged()
 
 void NativeSwitchBlock::finishDirect(bool write)
 {
-    if (write) return;
+    if (write)
+        return;
     const uint64_t began = nowNs();
     syncLines<2>(table, sinkPA, sinkPA ? uint64_t(kGapSectors) * kSector : 0);
     barrier();
@@ -1206,7 +1378,9 @@ bool NativeSwitchBlock::stageChain(Request *first, uint32_t from, uint32_t lengt
     const uint64_t began = nowNs();
     const bool ok = switchChainCopy(
         first, from, length, buffer,
-        [&](Request *r, uint32_t offset, uint8_t *at, uint32_t n) { return stage(r->buffer, offset, at, n, toClient); },
+        [&](Request *r, uint32_t offset, uint8_t *at, uint32_t n) {
+            return stage(r->buffer, offset, at, n, toClient);
+        },
         toClient);
     stats.copyNs += nowNs() - began;
     return ok;
@@ -1220,9 +1394,12 @@ bool NativeSwitchBlock::bounceChain(Request *first, uint32_t sectors)
     const uint32_t limit = write ? kSafeSectors : sdmaReadSectors;
     for (uint32_t done = 0; done < sectors;) {
         const uint32_t n = sectors - done < limit ? sectors - done : limit;
-        if (write && !stageChain(first, done * kSector, n * kSector, bounce, false)) return false;
-        if (transfer(first->lba + done, n, write, bounce)) return false;
-        if (!write && !stageChain(first, done * kSector, n * kSector, bounce, true)) return false;
+        if (write && !stageChain(first, done * kSector, n * kSector, bounce, false))
+            return false;
+        if (transfer(first->lba + done, n, write, bounce))
+            return false;
+        if (!write && !stageChain(first, done * kSector, n * kSector, bounce, true))
+            return false;
         done += n;
     }
     return true;
@@ -1235,43 +1412,48 @@ bool NativeSwitchBlock::bounceChain(Request *first, uint32_t sectors)
 bool NativeSwitchBlock::proveWrite(Request *first, uint32_t sectors, bool cmd23)
 {
     const uint32_t length = sectors * kSector;
-    if (!checkBuffer || sectors > kBounceSectors) return true;
+    if (!checkBuffer || sectors > kBounceSectors)
+        return true;
     for (uint32_t done = 0; done < sectors;) {
         const uint32_t n = sectors - done < kSafeSectors ? sectors - done : kSafeSectors;
-        if (transfer(first->lba + done, n, false, checkBuffer + done * kSector)) return true;
+        if (transfer(first->lba + done, n, false, checkBuffer + done * kSector))
+            return true;
         done += n;
     }
-    if (!stageChain(first, 0, length, bounce, false)) return true;
+    if (!stageChain(first, 0, length, bounce, false))
+        return true;
     if (!memcmp(bounce, checkBuffer, length)) {
         stats.verified++;
-        if (writeChecks) --writeChecks;
-        if (table.high) high.writeChecked();
-        if (sectors > kSafeSectors && largeWriteChecks) --largeWriteChecks;
-        if (cmd23 && cmd23WriteChecks) --cmd23WriteChecks;
+        if (writeChecks)
+            --writeChecks;
+        if (table.high)
+            high.writeChecked();
+        if (sectors > kSafeSectors && largeWriteChecks)
+            --largeWriteChecks;
+        if (cmd23 && cmd23WriteChecks)
+            --cmd23WriteChecks;
         releaseChecks();
         return true;
     }
     uint32_t at = 0;
-    while (bounce[at] == checkBuffer[at]) ++at;
+    while (bounce[at] == checkBuffer[at])
+        ++at;
     if (cmd23) {
         // r14-sdcq: Auto CMD23 is what is new about this write (ADMA2 writes have read back equal for many boots).
-        IOLog(
-            "SwitchSD: CMD23 write lba=%llu n=%u reads back different from byte %u; written again through the bounce "
-            "buffer, writes stop by CMD12 until reboot\n",
-            first->lba, sectors, at);
+        IOLog("SwitchSD: CMD23 write lba=%llu n=%u reads back different from byte %u; written again through the bounce "
+              "buffer, writes stop by CMD12 until reboot\n",
+              first->lba, sectors, at);
         cmd23Writes = false;
     } else if (sectors > kSafeSectors) {
         // r12-sdio: only writes over 256 KiB are new: they take the bounce path's 256 KiB SDMA commands from now on.
-        IOLog(
-            "SwitchSD: ADMA2 write lba=%llu n=%u (%llu bytes above 4 GiB) reads back different from byte %u; written "
-            "again through the bounce buffer, writes over 256 KiB in 256 KiB commands until reboot\n",
-            first->lba, sectors, table.high, at);
+        IOLog("SwitchSD: ADMA2 write lba=%llu n=%u (%llu bytes above 4 GiB) reads back different from byte %u; written "
+              "again through the bounce buffer, writes over 256 KiB in 256 KiB commands until reboot\n",
+              first->lba, sectors, table.high, at);
         writeSectors = kSafeSectors;
     } else {
-        IOLog(
-            "SwitchSD: ADMA2 write lba=%llu n=%u (%llu bytes above 4 GiB) reads back different from byte %u; written "
-            "again through the bounce buffer, ADMA2 writes off until reboot\n",
-            first->lba, sectors, table.high, at);
+        IOLog("SwitchSD: ADMA2 write lba=%llu n=%u (%llu bytes above 4 GiB) reads back different from byte %u; written "
+              "again through the bounce buffer, ADMA2 writes off until reboot\n",
+              first->lba, sectors, table.high, at);
         admaWrites = false;
     }
     releaseChecks();
@@ -1289,10 +1471,12 @@ bool NativeSwitchBlock::proveHigh(Request *first, uint32_t sectors)
     const uint32_t length = sectors * kSector;
     for (uint32_t done = 0; checkBuffer && done < sectors;) {
         const uint32_t n = sectors - done < kSafeSectors ? sectors - done : kSafeSectors;
-        if (transfer(first->lba + done, n, false, checkBuffer + done * kSector)) return bounceChain(first, sectors);
+        if (transfer(first->lba + done, n, false, checkBuffer + done * kSector))
+            return bounceChain(first, sectors);
         done += n;
     }
-    if (!checkBuffer) return bounceChain(first, sectors);
+    if (!checkBuffer)
+        return bounceChain(first, sectors);
     // The table's descriptors are in chain order: compare the requests' own pages page by page through the kernel's
     // physical aperture (as syncLines reaches them), counting what still holds the poison. Runs staged in the bounce
     // buffer were copied out already (and the buffer has been read into since): their bytes are skipped here.
@@ -1308,12 +1492,14 @@ bool NativeSwitchBlock::proveHigh(Request *first, uint32_t sectors)
             const auto *memory = reinterpret_cast<const uint8_t *>(phystokv(pa));
             if (memcmp(memory, checkBuffer + at, stop - pa)) {
                 for (uint64_t k = 0; k < stop - pa; ++k) {
-                    if (memory[k] == checkBuffer[at + k]) continue;
+                    if (memory[k] == checkBuffer[at + k])
+                        continue;
                     if (differs == UINT64_MAX) {
                         differs = at + k;
                         differsPA = pa + k;
                     }
-                    if (memory[k] == kPoison) ++poisoned;
+                    if (memory[k] == kPoison)
+                        ++poisoned;
                 }
             }
             at += stop - pa;
@@ -1331,10 +1517,9 @@ bool NativeSwitchBlock::proveHigh(Request *first, uint32_t sectors)
         return true;
     }
     high.refuse();
-    IOLog(
-        "SwitchSD: ADMA2 read lba=%llu n=%u (%llu bytes above 4 GiB) differs from SDMA at byte %llu (PA 0x%llx, %llu "
-        "bytes still poisoned); SDMA's copy used, ADMA2 stays below 4 GiB until reboot\n",
-        first->lba, sectors, table.high, differs, differsPA, poisoned);
+    IOLog("SwitchSD: ADMA2 read lba=%llu n=%u (%llu bytes above 4 GiB) differs from SDMA at byte %llu (PA 0x%llx, %llu "
+          "bytes still poisoned); SDMA's copy used, ADMA2 stays below 4 GiB until reboot\n",
+          first->lba, sectors, table.high, differs, differsPA, poisoned);
     const bool repaired = stageChain(first, 0, length, checkBuffer, true);
     releaseChecks();
     return repaired;
@@ -1348,7 +1533,8 @@ bool NativeSwitchBlock::proveHigh(Request *first, uint32_t sectors)
 NativeSwitchBlock::ChainProof NativeSwitchBlock::compareChain(Request *first, uint32_t sectors, uint64_t *at)
 {
     *at = 0;
-    if (!checkBuffer || sectors > kBounceSectors) return kChainUnproven;
+    if (!checkBuffer || sectors > kBounceSectors)
+        return kChainUnproven;
     for (uint32_t done = 0; done < sectors;) {
         const uint32_t n = sectors - done < kSafeSectors ? sectors - done : kSafeSectors;
         if (transfer(first->lba + done, n, false, checkBuffer + done * kSector))
@@ -1359,10 +1545,12 @@ NativeSwitchBlock::ChainProof NativeSwitchBlock::compareChain(Request *first, ui
     for (Request *r = first; r; r = r->next) {
         const uint32_t from = static_cast<uint32_t>(r->lba - first->lba) * kSector, length = r->sectors * kSector;
         const bool copied = stage(r->buffer, 0, bounce + from, length, false);
-        if (copied && !memcmp(bounce + from, checkBuffer + from, length)) continue;
+        if (copied && !memcmp(bounce + from, checkBuffer + from, length))
+            continue;
         if (copied) {
             *at = from;
-            while (bounce[*at] == checkBuffer[*at]) ++*at;
+            while (bounce[*at] == checkBuffer[*at])
+                ++*at;
         }
         const bool repaired = stageChain(first, 0, sectors * kSector, checkBuffer, true);
         return !repaired ? kChainBroken : copied ? kChainDiffers : kChainUnproven;
@@ -1420,7 +1608,8 @@ void NativeSwitchBlock::beginBatch(Batch &b)
     // r14-sdcq: the sectors no request of the chain covers (a read chain's gaps). A write chain has none: every byte it
     // puts on the card comes from its requests (pickLocked takes only the requests right behind a write).
     uint64_t payload = 0;
-    for (const Request *r = first; r; r = r->next) payload += r->sectors;
+    for (const Request *r = first; r; r = r->next)
+        payload += r->sectors;
     if (first->write && payload != sectors)
         panic("SwitchSD: write chain lba=%llu n=%u carries %llu sectors of requests", first->lba, sectors, payload);
     b.gapSectors = static_cast<uint32_t>(sectors - payload);
@@ -1438,7 +1627,8 @@ void NativeSwitchBlock::beginBatch(Batch &b)
     b.proving = b.direct && high.proofDue(b.write, table.high);
     b.staged = b.direct && staging.count;
     b.cmd23 = b.direct && sectors > 1 && (b.write ? cmd23Writes : cmd23Reads);
-    if (!b.direct) return;
+    if (!b.direct)
+        return;
     prepareDirect(b.write, b.proving);
     b.issueStep = issue(static_cast<uint32_t>(first->lba), sectors, b.write, table.count, b.cmd23);
     b.issued = true;
@@ -1456,16 +1646,20 @@ void NativeSwitchBlock::endBatch(Batch &b)
         uint32_t status = 0;
         bool early = false;
         int step = b.issueStep ? b.issueStep : complete(sectors, write, table.count, &status, &early, b.cmd23);
-        if (b.cmd23) ++stats.cmd23;
+        if (b.cmd23)
+            ++stats.cmd23;
         if (!b.issueStep && b.overlapNs) {
             ++stats.overlapped;
-            if (early) ++stats.early;
+            if (early)
+                ++stats.early;
         }
-        if (step) step = retry(step, status, first->lba, sectors, write, table.count);
+        if (step)
+            step = retry(step, status, first->lba, sectors, write, table.count);
         finishDirect(write);
         // r12-sdio: staged segments out to their requests before any proof reuses the bounce buffer.
         if (!step && b.staged) {
-            if (!copyStaged()) result = kIOReturnIOError;
+            if (!copyStaged())
+                result = kIOReturnIOError;
             ++stats.stagedChains;
             stats.stagedBytes += staging.staged;
         }
@@ -1473,10 +1667,9 @@ void NativeSwitchBlock::endBatch(Batch &b)
             // Only the pages above 4 GiB are new to the engine: they stay out of it, and this chain goes by SDMA.
             high.refuse();
             b.direct = false;
-            IOLog(
-                "SwitchSD: ADMA2 error on a read above 4 GiB (state 0x%02x at 0x%llx); ADMA2 stays below 4 GiB until "
-                "reboot\n",
-                admaErrorState, admaErrorAddress);
+            IOLog("SwitchSD: ADMA2 error on a read above 4 GiB (state 0x%02x at 0x%llx); ADMA2 stays below 4 GiB until "
+                  "reboot\n",
+                  admaErrorState, admaErrorAddress);
             releaseChecks();
         } else if (step == kStepAdmaError) {
             // The host's DMA failed, not the card: this chain and every later one through the bounce buffer.
@@ -1486,9 +1679,11 @@ void NativeSwitchBlock::endBatch(Batch &b)
         } else if (step) {
             result = kIOReturnIOError;
         } else if (b.proving) {
-            if (!proveHigh(first, sectors)) result = kIOReturnIOError;
+            if (!proveHigh(first, sectors))
+                result = kIOReturnIOError;
         } else if (b.gapSectors && gapProofs) {
-            if (!proveGaps(first, sectors)) result = kIOReturnIOError;
+            if (!proveGaps(first, sectors))
+                result = kIOReturnIOError;
         } else if (write &&
                    (writeChecks || high.writeCheckDue(write, table.high) ||
                     (sectors > kSafeSectors && largeWriteChecks) || (b.cmd23 && cmd23WriteChecks)) &&
@@ -1500,12 +1695,14 @@ void NativeSwitchBlock::endBatch(Batch &b)
         stats.direct += b.count;
         stats.descriptors += table.count;
     } else {
-        if (!bounceChain(first, sectors)) result = kIOReturnIOError;
+        if (!bounceChain(first, sectors))
+            result = kIOReturnIOError;
         stats.bounced[b.why] += b.count;
     }
     // r16-sdcq: a write completes on flash: with the card's cache off (always, but for one that would not go off) the
     // card's busy said so already; otherwise a flush first (commitWrite), and the write fails if that does.
-    if (write && !result && !commitWrite()) result = kIOReturnIOError;
+    if (write && !result && !commitWrite())
+        result = kIOReturnIOError;
     b.result = result;
     account(b);
 }
@@ -1521,13 +1718,17 @@ void NativeSwitchBlock::account(Batch &b)
         const uint32_t length = r->sectors * kSector;
         if (write) {
             stats.writes++;
-            if (!result) stats.writeBytes += length;
+            if (!result)
+                stats.writeBytes += length;
         } else {
             stats.reads++;
-            if (!result) stats.readBytes += length;
+            if (!result)
+                stats.readBytes += length;
         }
-        if (r->sectors <= 8) stats.small++;
-        if (r->lba == lastEnd) stats.sequential++;
+        if (r->sectors <= 8)
+            stats.small++;
+        if (r->lba == lastEnd)
+            stats.sequential++;
         lastEnd = r->lba + r->sectors;
     }
     const uint64_t span = nowNs() - b.beganNs, latency = span > b.overlapNs ? span - b.overlapNs : 0;
@@ -1539,7 +1740,8 @@ void NativeSwitchBlock::account(Batch &b)
     stats.busyNs += latency;
     (write ? stats.writeNs : stats.readNs) += latency;
     stats.merged += b.count - 1;
-    if (latency > stats.maxLatencyNs) stats.maxLatencyNs = latency;
+    if (latency > stats.maxLatencyNs)
+        stats.maxLatencyNs = latency;
 }
 
 // completeBatch: every request of the chain completes with endBatch's result.
@@ -1578,7 +1780,8 @@ void NativeSwitchBlock::completeBatch(Batch &b)
 int NativeSwitchBlock::cqCommand(uint32_t index, uint32_t argument, uint32_t flags, uint32_t *response, int data)
 {
     *response = 0;
-    if (!waitIdle(false, 100000000)) return 1;
+    if (!waitIdle(false, 100000000))
+        return 1;
     w32(STATUS, 0xffffffff);
     if (data != kRegNone) {
         for (uintptr_t at = (uintptr_t)regBuffer, end = at + kSector; at < end; at += kAdmaLine)
@@ -1606,7 +1809,8 @@ int NativeSwitchBlock::cqCommand(uint32_t index, uint32_t argument, uint32_t fla
             step = (s & INT_COMMAND) ? 3 : 2;
             break;
         }
-        if (s & done) break;
+        if (s & done)
+            break;
         const uint64_t elapsed = nowNs() - start;
         if (elapsed >= limit) {
             step = (s & INT_COMMAND) ? 6 : 7;
@@ -1619,15 +1823,18 @@ int NativeSwitchBlock::cqCommand(uint32_t index, uint32_t argument, uint32_t fla
             panic("SwitchSD: SDMMC1 interrupt lost: STATUS %#x awaited %#x, %s", r32(STATUS), awaited, gic);
         }
     }
-    if (!step && !(s & INT_COMMAND)) step = 4;
+    if (!step && !(s & INT_COMMAND))
+        step = 4;
     // r16-sdcq: transfer complete follows a CMD49's busy (the card applying the byte, or flushing its cache); DAT0
     // confirms it before the read-back that checks it. r18-sdcq: and an R1b's (CMD43).
-    if (!step && (data == kRegWrite || (flags & 3) == 3) && !waitIdle(true, 1000000000)) step = 10;
+    if (!step && (data == kRegWrite || (flags & 3) == 3) && !waitIdle(true, 1000000000))
+        step = 10;
     cardLastIrq = s;
     if (step) {
         // r18-sdcq (r8d): not after a command error (timeout, CRC, end bit, index): this controller sets command complete
         // with a timeout too (irq 0x00018001) and RESPONSE still holds the previous command's.
-        if ((s & INT_COMMAND) && !(s & 0x000f0000u)) *response = r32(RESPONSE);
+        if ((s & INT_COMMAND) && !(s & 0x000f0000u))
+            *response = r32(RESPONSE);
         stats.errors++;
         stats.lastError = static_cast<uint32_t>(step);
         stats.lastStatus = s;
@@ -1673,9 +1880,12 @@ int NativeSwitchBlock::CqBus::control(uint32_t byte, bool write, uint8_t *value,
     *r1 = 0;
     const int step = self->cqCommand(write ? 49 : 48, switchSdExtArgument(self->extInfo.perf.fno, address, 1), RSP_R1,
                                      r1, write ? kRegWrite : kRegRead);
-    if (step) return step;
-    if (*r1 & R1_ERRORS) return 30;
-    if (!write) *value = self->regBuffer[0];
+    if (step)
+        return step;
+    if (*r1 & R1_ERRORS)
+        return 30;
+    if (!write)
+        *value = self->regBuffer[0];
     return 0;
 }
 
@@ -1691,7 +1901,8 @@ int NativeSwitchBlock::CqBus::status(bool tasks, uint32_t *r1)
 // power-cycled (cqPowerCycle) and the queue stays on (SwitchCq.h powerCycled), kMaxStuck times a boot.
 void NativeSwitchBlock::cqLeave()
 {
-    if (cq.state != CqEngine::kOn || cq.leave(cqBus)) return;
+    if (cq.state != CqEngine::kOn || cq.leave(cqBus))
+        return;
     cq.error = {};
     cq.error.command = 48;  // its read-backs never showed 00h
     cq.error.previous = 49;
@@ -1709,20 +1920,21 @@ void NativeSwitchBlock::cqPowerCycle()
 {
     resetCard();
     cq.powerCycled();
-    if (cq.stopped) cqStopped();
+    if (cq.stopped)
+        cqStopped();
 }
 
 // r18-sdcq: the one IOLog line of a queue stopped for the boot (a proof differed, or the card had to be power-cycled out
 // of CQ mode kMaxStuck times), once; the proofs' buffer released.
 void NativeSwitchBlock::cqStopped()
 {
-    if (cqStopLogged) return;
+    if (cqStopLogged)
+        return;
     cqStopLogged = true;
-    IOLog(
-        "SwitchSD: command queue off until reboot (%s) after %llu tasks in %llu groups, %llu errors recovered, %llu "
-        "groups read the legacy way%s\n",
-        cqStopWhy[0] ? cqStopWhy : cq.why, cq.tasks, cq.groups, cq.recoveries, cq.legacyGroups,
-        cq.cacheOn ? "; its cache would not go off: every write is flushed" : "");
+    IOLog("SwitchSD: command queue off until reboot (%s) after %llu tasks in %llu groups, %llu errors recovered, %llu "
+          "groups read the legacy way%s\n",
+          cqStopWhy[0] ? cqStopWhy : cq.why, cq.tasks, cq.groups, cq.recoveries, cq.legacyGroups,
+          cq.cacheOn ? "; its cache would not go off: every write is flushed" : "");
     releaseChecks();
 }
 
@@ -1733,7 +1945,8 @@ void NativeSwitchBlock::cqStopped()
 void NativeSwitchBlock::cqRecovered(const SwitchCqError &e)
 {
     constexpr uint64_t kLoggedErrors = 8;
-    if (cq.recoveries > kLoggedErrors && cq.recoveries % 64) return;
+    if (cq.recoveries > kLoggedErrors && cq.recoveries % 64)
+        return;
     char bits[96], status[96];
     switchSdR1ErrorNames(e.r1, bits, sizeof(bits));
     switchSdR1ErrorNames(e.cardStatus, status, sizeof(status));
@@ -1761,10 +1974,12 @@ void NativeSwitchBlock::resetCard()
     // r16-sdcq: nothing to flush first: every completed write is on flash (the cache is off for writes, or each was
     // flushed: commitWrite); the power cycle clears Cache Enable.
     dmaSuspend();
-    if (irqSource) irqSource->disable();
+    if (irqSource)
+        irqSource->disable();
     powerOffCard();
     powerOnController();
-    if (irqSource) irqSource->enable();
+    if (irqSource)
+        irqSource->enable();
     const bool uhs = lowVoltageBus && enablePllc4();
     if (lowVoltageBus && !uhs)
         panic("SwitchSD: PLLC4 does not lock after the card's power cycle (PLLC4_BASE 0x%08x)",
@@ -1783,26 +1998,26 @@ void NativeSwitchBlock::resetCard()
 // flush and the first time one fails; false: the write is not known to be on flash (it fails, nothing panics).
 bool NativeSwitchBlock::commitWrite()
 {
-    if (!cq.cacheOn) return true;
+    if (!cq.cacheOn)
+        return true;
     if (!flushingWrites) {
         flushingWrites = true;
-        IOLog(
-            "SwitchSD: the card's cache would not go off (Cache Enable reads 0x%02x): every write is flushed before "
-            "it completes\n",
-            unsigned(cq.lastRead[0]));
+        IOLog("SwitchSD: the card's cache would not go off (Cache Enable reads 0x%02x): every write is flushed before "
+              "it completes\n",
+              unsigned(cq.lastRead[0]));
     }
     const uint64_t began = nowNs();
     const bool flushed = cq.commitWrite(cqBus);
     ++stats.flushes;
     stats.flushNs += nowNs() - began;
-    if (flushed) return true;
+    if (flushed)
+        return true;
     ++stats.flushErrors;
     if (!flushFailed) {
         flushFailed = true;
-        IOLog(
-            "SwitchSD: a write's cache flush failed (Flush Cache reads 0x%02x after %u read-backs): that write, and "
-            "any later one whose flush fails, completes with an I/O error\n",
-            unsigned(cq.lastRead[kSdPerfFlushControl - kSdPerfCacheControl]), cq.lastReads);
+        IOLog("SwitchSD: a write's cache flush failed (Flush Cache reads 0x%02x after %u read-backs): that write, and "
+              "any later one whose flush fails, completes with an I/O error\n",
+              unsigned(cq.lastRead[kSdPerfFlushControl - kSdPerfCacheControl]), cq.lastReads);
     }
     return false;
 }
@@ -1818,9 +2033,11 @@ void NativeSwitchBlock::describeCq(char *out, size_t size)
         regBuffer &&
         !cqCommand(48, switchSdExtArgument(extInfo.perf.fno, extInfo.perf.address, 16), RSP_R1, &r1, kRegRead) &&
         !(r1 & R1_ERRORS);
-    for (unsigned i = 0; read && i < 8; ++i) errors |= static_cast<uint64_t>(regBuffer[8 + i]) << (8 * i);
+    for (unsigned i = 0; read && i < 8; ++i)
+        errors |= static_cast<uint64_t>(regBuffer[8 + i]) << (8 * i);
     char tasks[24] = "unread";
-    if (read) snprintf(tasks, sizeof(tasks), "0x%016llx", errors);
+    if (read)
+        snprintf(tasks, sizeof(tasks), "0x%016llx", errors);
     char cacheState[64] = "not offered";
     if (perf.cache && cq.cacheReads)
         snprintf(cacheState, sizeof(cacheState), "read 0x%02x after 01h, %s now", unsigned(cache),
@@ -1847,11 +2064,15 @@ void NativeSwitchBlock::describeCq(char *out, size_t size)
 unsigned NativeSwitchBlock::groupLocked(Request *first, uint32_t sectors, uint32_t count, bool *queue)
 {
     *queue = false;
-    if (!cq.usable() || suspended || first->write || sectors > kCqTaskSectors) return 0;
+    if (!cq.usable() || suspended || first->write || sectors > kCqTaskSectors)
+        return 0;
     uint64_t payload = 0;
-    for (const Request *r = first; r; r = r->next) payload += r->sectors;
-    if (payload != sectors && gapProofs) return 0;
-    if (!cq.admit()) return 0;
+    for (const Request *r = first; r; r = r->next)
+        payload += r->sectors;
+    if (payload != sectors && gapProofs)
+        return 0;
+    if (!cq.admit())
+        return 0;
     Batch *const group = cqGroups[cqTurn];
     group[0] = {};
     group[0].first = first;
@@ -1864,7 +2085,8 @@ unsigned NativeSwitchBlock::groupLocked(Request *first, uint32_t sectors, uint32
     const uint64_t pickNs = nowNs();
     while (n < limit && total < kCqGroupSectors && merge && mergeAnywhere) {
         Request *const r = switchNextIndependentRead(head, kCqTaskSectors, kMergeScan);
-        if (!r) break;
+        if (!r)
+            break;
         uint64_t start = 0;
         uint32_t chainSectors = 0;
         const uint32_t chainCount =
@@ -1893,7 +2115,8 @@ void NativeSwitchBlock::beginTask(Batch &b, uint32_t argument)
 {
     Request *const first = b.first;
     uint64_t payload = 0;
-    for (const Request *r = first; r; r = r->next) payload += r->sectors;
+    for (const Request *r = first; r; r = r->next)
+        payload += r->sectors;
     b.gapSectors = static_cast<uint32_t>(b.sectors - payload);
     b.write = false;
     b.beganNs = nowNs();
@@ -1928,9 +2151,11 @@ int NativeSwitchBlock::endTask(Batch &b, uint32_t *r1)
     const int step = b.issueStep ? b.issueStep : complete(b.sectors, false, descriptors, &status, &early, false, true);
     if (!b.issueStep && b.overlapNs) {
         ++stats.overlapped;
-        if (early) ++stats.early;
+        if (early)
+            ++stats.early;
     }
-    if (b.direct) finishDirect(false);
+    if (b.direct)
+        finishDirect(false);
     if (step) {
         *r1 = (status & INT_COMMAND) ? r32(RESPONSE) : 0;
         cardLastIrq = status;
@@ -1947,7 +2172,8 @@ int NativeSwitchBlock::endTask(Batch &b, uint32_t *r1)
     IOReturn result = kIOReturnSuccess;
     if (b.direct) {
         if (b.staged) {
-            if (!copyStaged()) result = kIOReturnIOError;
+            if (!copyStaged())
+                result = kIOReturnIOError;
             ++stats.stagedChains;
             stats.stagedBytes += staging.staged;
         }
@@ -1957,7 +2183,8 @@ int NativeSwitchBlock::endTask(Batch &b, uint32_t *r1)
         for (uintptr_t at = (uintptr_t)bounce, end = at + b.sectors * kSector; at < end; at += kAdmaLine)
             __asm__ volatile("dc ivac, %0" ::"r"(at) : "memory");
         barrier();
-        if (!stageChain(b.first, 0, b.sectors * kSector, bounce, true)) result = kIOReturnIOError;
+        if (!stageChain(b.first, 0, b.sectors * kSector, bounce, true))
+            result = kIOReturnIOError;
         stats.bounced[b.why] += b.count;
     }
     b.result = result;
@@ -1977,48 +2204,67 @@ int NativeSwitchBlock::endTask(Batch &b, uint32_t *r1)
 Batch *NativeSwitchBlock::runGroup(Batch *group, unsigned n, Batch *pending, bool queue)
 {
     const uint64_t began = nowNs();
+
     // The engine's view of the group: chain i is group[i]; completions that run while a command moves data are that
     // command's overlap (account() takes them out of its latency).
     struct Host {
         NativeSwitchBlock *self;
         Batch *group, *earlier;
         unsigned current;
+
         void overlapped(uint64_t since)
         {
-            if (group[current].issued) group[current].overlapNs += nowNs() - since;
+            if (group[current].issued)
+                group[current].overlapNs += nowNs() - since;
         }
+
         void beginTask(unsigned i, uint32_t argument)
         {
             current = i;
             self->beginTask(group[i], argument);
         }
-        int endTask(unsigned i, uint32_t *r1) { return self->endTask(group[i], r1); }
+
+        int endTask(unsigned i, uint32_t *r1)
+        {
+            return self->endTask(group[i], r1);
+        }
+
         void beginLegacy(unsigned i)
         {
             current = i;
             self->beginBatch(group[i]);
         }
-        void endLegacy(unsigned i) { self->endBatch(group[i]); }
+
+        void endLegacy(unsigned i)
+        {
+            self->endBatch(group[i]);
+        }
+
         void complete(unsigned i)
         {
             const uint64_t since = nowNs();
             self->completeBatch(group[i]);
             overlapped(since);
         }
+
         void completeEarlier()
         {
-            if (!earlier) return;
+            if (!earlier)
+                return;
             const uint64_t since = nowNs();
             self->completeBatch(*earlier);
             earlier = nullptr;
             overlapped(since);
         }
+
         uint8_t prove(unsigned i)
         {
             uint64_t at = 0;
             const ChainProof proof = self->compareChain(group[i].first, group[i].sectors, &at);
-            if (proof == kChainMatches) return CqEngine::kProofMatches;
-            if (proof == kChainUnproven) return CqEngine::kProofUnproven;
+            if (proof == kChainMatches)
+                return CqEngine::kProofMatches;
+            if (proof == kChainUnproven)
+                return CqEngine::kProofUnproven;
             if (proof == kChainBroken) {
                 group[i].result = kIOReturnIOError;
                 return CqEngine::kProofBroken;
@@ -2030,9 +2276,18 @@ Batch *NativeSwitchBlock::runGroup(Batch *group, unsigned n, Batch *pending, boo
                      group[i].sectors, at);
             return CqEngine::kProofDiffers;
         }
-        void recovered(const SwitchCqError &e) { self->cqRecovered(e); }
-        void powerCycle() { self->resetCard(); }
+
+        void recovered(const SwitchCqError &e)
+        {
+            self->cqRecovered(e);
+        }
+
+        void powerCycle()
+        {
+            self->resetCard();
+        }
     } host{this, group, pending, 0};
+
     if (!queue) {
         cqLeave();  // never in CQ mode here (only legacy mode asks for more chains than one), but legacy needs it out
         CqEngine::runLegacy(host, n);
@@ -2058,7 +2313,8 @@ Batch *NativeSwitchBlock::runGroup(Batch *group, unsigned n, Batch *pending, boo
             IOLog("SwitchSD: command queue proven: %u tasks read back the same the legacy way\n", kCqProofs);
         releaseChecks();
     }
-    if (outcome == CqEngine::kGroupStopped) cqStopped();
+    if (outcome == CqEngine::kGroupStopped)
+        cqStopped();
     if (cq.pausedNow)
         os_log(OS_LOG_DEFAULT,
                "SwitchSD: command queue paused for %u groups (%u groups in a row read the legacy way; %llu errors "
@@ -2082,16 +2338,19 @@ Request *NativeSwitchBlock::pickLocked(uint32_t *chainSectors, uint32_t *chainCo
     // request or the head has waited kAgeNs.
     if (first->next && first->klass && pickNs - first->queuedNs < kAgeNs) {
         unsigned better = 0;
-        while (better < first->klass && !queuedReads[better]) ++better;
+        while (better < first->klass && !queuedReads[better])
+            ++better;
         if (better < first->klass) {
             for (Request *before = first, *candidate = first->next; candidate;
                  before = candidate, candidate = candidate->next) {
-                if (candidate->write || candidate->klass != better) continue;
+                if (candidate->write || candidate->klass != better)
+                    continue;
                 bool overlaps = false;
                 for (Request *older = head; older != candidate && !overlaps; older = older->next)
                     overlaps = older->lba < candidate->lba + candidate->sectors &&
                                candidate->lba < older->lba + older->sectors;
-                if (overlaps) continue;
+                if (overlaps)
+                    continue;
                 prev = before;
                 first = candidate;
                 ++passed;
@@ -2129,9 +2388,11 @@ Request *NativeSwitchBlock::pickLocked(uint32_t *chainSectors, uint32_t *chainCo
         const uint32_t limit = first->write ? writeSectors : maxSectors;
         // A passing read's chain passes the older requests too: each request it takes must not overlap any of them either.
         auto overlapsOlder = [&](const Request *later) {
-            if (!prev) return false;
+            if (!prev)
+                return false;
             for (const Request *older = head; older != first; older = older->next)
-                if (older->lba < later->lba + later->sectors && later->lba < older->lba + older->sectors) return true;
+                if (older->lba < later->lba + later->sectors && later->lba < older->lba + older->sectors)
+                    return true;
             return false;
         };
         while (merge && count < kMaxChain && last->next && last->next->write == first->write &&
@@ -2146,7 +2407,8 @@ Request *NativeSwitchBlock::pickLocked(uint32_t *chainSectors, uint32_t *chainCo
             prev->next = last->next;
         else
             head = last->next;
-        if (tail == last) tail = prev;
+        if (tail == last)
+            tail = prev;
         last->next = nullptr;
     }
     takenLocked(first, count, pickNs);
@@ -2160,12 +2422,14 @@ void NativeSwitchBlock::takenLocked(Request *first, uint32_t count, uint64_t pic
 {
     queued -= count;
     for (Request *r = first; r; r = r->next) {
-        if (!r->write) --queuedReads[r->klass];
+        if (!r->write)
+            --queuedReads[r->klass];
         ClassWait &wait = waits[r->klass];
         const uint64_t waited = pickNs > r->queuedNs ? pickNs - r->queuedNs : 0;
         ++wait.n;
         wait.sumNs += waited;
-        if (waited > wait.maxNs) wait.maxNs = waited;
+        if (waited > wait.maxNs)
+            wait.maxNs = waited;
     }
 }
 
@@ -2186,11 +2450,13 @@ void NativeSwitchBlock::worker(void *context, wait_result_t)
             self->cqLeave();
             IOLockLock(self->queueLock);
             self->working = false;
-            if (self->suspended) IOLockWakeup(self->queueLock, &self->working, false);
+            if (self->suspended)
+                IOLockWakeup(self->queueLock, &self->working, false);
             IOLockUnlock(self->queueLock);
             continue;
         }
-        while (!pending && (!self->head || self->suspended)) IOLockSleep(self->queueLock, &self->head, THREAD_UNINT);
+        while (!pending && (!self->head || self->suspended))
+            IOLockSleep(self->queueLock, &self->head, THREAD_UNINT);
         Batch *next = nullptr, *group = nullptr;
         unsigned tasks = 0;
         bool queue = false;
@@ -2212,24 +2478,29 @@ void NativeSwitchBlock::worker(void *context, wait_result_t)
             pending = self->runGroup(group, tasks, pending, queue);
         } else {
             // r14-sdcq: a legacy command needs the card out of CQ mode.
-            if (next) self->cqLeave();
+            if (next)
+                self->cqLeave();
             // The next chain's command goes to the card first; the previous chain's completions run while it moves
             // data. A chain that is not one ADMA2 command (the bounce path) only has its table built here, so those
             // completions are not held behind its several commands.
-            if (next) self->beginBatch(*next);
+            if (next)
+                self->beginBatch(*next);
             if (pending) {
                 const uint64_t began = nowNs();
                 self->completeBatch(*pending);
-                if (next && next->issued) next->overlapNs = nowNs() - began;
+                if (next && next->issued)
+                    next->overlapNs = nowNs() - began;
                 pending = nullptr;
             }
-            if (!next) continue;
+            if (!next)
+                continue;
             self->endBatch(*next);
             pending = next;
         }
         IOLockLock(self->queueLock);
         self->working = false;
-        if (self->suspended) IOLockWakeup(self->queueLock, &self->working, false);
+        if (self->suspended)
+            IOLockWakeup(self->queueLock, &self->working, false);
         IOLockUnlock(self->queueLock);
         // Throughput line every statsEveryNs while I/O is happening (one log line).
         {
@@ -2300,10 +2571,12 @@ void NativeSwitchBlock::logThroughput()
             if (stats.bounced[i] && at < sizeof(bounces))
                 at += (size_t)snprintf(bounces + at, sizeof(bounces) - at, "%s%s %llu", at ? " " : " (", names[i],
                                        stats.bounced[i]);
-        if (at && at < sizeof(bounces)) snprintf(bounces + at, sizeof(bounces) - at, ")");
+        if (at && at < sizeof(bounces))
+            snprintf(bounces + at, sizeof(bounces) - at, ")");
     }
     uint64_t bounced = 0;
-    for (unsigned i = 0; i < kAdmaRefusals; ++i) bounced += stats.bounced[i];
+    for (unsigned i = 0; i < kAdmaRefusals; ++i)
+        bounced += stats.bounced[i];
     const uint64_t perRequest = stats.direct ? stats.descriptors * 10 / stats.direct : 0;
     // r14-sdcq: the command queue: tasks/groups, times into CQ mode, the worker's ms in groups (all of it: assignment,
     // tasks, proofs), "proving" while the first tasks are read again; or off (never on, or stopped: then "off" after
@@ -2421,9 +2694,11 @@ int NativeSwitchBlock::cardCommand(uint32_t index, uint32_t arg, uint32_t flags,
         recover(false);
         return (s & INT_ERRORS) ? 2 : 3;
     }
-    if (response) *response = r32(RESPONSE);
+    if (response)
+        *response = r32(RESPONSE);
     w32(STATUS, 0xffffffff);
-    if ((flags & 3) == 3 && !waitIdle(true, 1000000000)) return 4;  // R1b: card busy on DAT0
+    if ((flags & 3) == 3 && !waitIdle(true, 1000000000))
+        return 4;  // R1b: card busy on DAT0
     if (data) {
         for (uintptr_t at = (uintptr_t)bounce, end = at + data; at < end; at += 64)
             __asm__ volatile("dc ivac, %0" ::"r"(at) : "memory");
@@ -2436,8 +2711,10 @@ int NativeSwitchBlock::cardCommand(uint32_t index, uint32_t arg, uint32_t flags,
 int NativeSwitchBlock::appCommand(uint32_t index, uint32_t arg, uint32_t flags, uint32_t *response, uint32_t data)
 {
     uint32_t r55 = 0;
-    if (int error = cardCommand(55, rca << 16, RSP_R1, &r55)) return error;
-    if (!(r55 & R1_APP_CMD) || (r55 & R1_ERRORS)) return 5;
+    if (int error = cardCommand(55, rca << 16, RSP_R1, &r55))
+        return error;
+    if (!(r55 & R1_APP_CMD) || (r55 & R1_ERRORS))
+        return 5;
     return cardCommand(index, arg, flags, response, data);
 }
 
@@ -2465,7 +2742,8 @@ int NativeSwitchBlock::switchFunction(bool set, unsigned group, uint32_t value)
 bool NativeSwitchBlock::extRead(uint8_t fno, uint32_t address, uint32_t length, uint8_t *out)
 {
     uint32_t r = 0;
-    if (!switchSdExtRange(address, length)) return false;
+    if (!switchSdExtRange(address, length))
+        return false;
     if (cardCommand(48, switchSdExtArgument(fno, address, length), RSP_R1, &r, kSector) || (r & R1_ERRORS))
         return false;
     memcpy(out, bounce, length);
@@ -2567,7 +2845,8 @@ void NativeSwitchBlock::identify()
     static const unsigned lengths[4] = {16, 16, 8, 25};  // SD Status: bits 511..312, every field defined
     for (unsigned k = 0; k < 4; ++k) {
         hex[k][0] = 0;
-        for (unsigned i = 0; i < lengths[k]; ++i) snprintf(hex[k] + 2 * i, sizeof(hex[k]) - 2 * i, "%02x", raw[k][i]);
+        for (unsigned i = 0; i < lengths[k]; ++i)
+            snprintf(hex[k] + 2 * i, sizeof(hex[k]) - 2 * i, "%02x", raw[k][i]);
     }
     char ext[256];
     if (extWhy || !extInfo.extensions) {
@@ -2586,8 +2865,8 @@ void NativeSwitchBlock::identify()
             unsigned(perf.cache), unsigned(perf.cacheEnable & 1), unsigned(perf.cqDepth), unsigned(perf.cqControl),
             unsigned(perf.taskErrors));
     }
-    IOLog("SwitchSD: card registers CID %s CSD %s SCR %s SSR %s | %s\n", haveCid ? hex[0] : "-",
-          haveCsd ? hex[1] : "-", haveScr ? hex[2] : "-", haveSsr ? hex[3] : "-", ext);
+    IOLog("SwitchSD: card registers CID %s CSD %s SCR %s SSR %s | %s\n", haveCid ? hex[0] : "-", haveCsd ? hex[1] : "-",
+          haveScr ? hex[2] : "-", haveSsr ? hex[3] : "-", ext);
 }
 
 // hekate sdmmc_setup_clock (sdmmc_driver.c:307): card clock gated, default tap (TAP_HW_UPDATED
@@ -2618,8 +2897,10 @@ void NativeSwitchBlock::setTiming(int uhs, bool highSpeed, int source, uint32_t 
     }
     const uint16_t next = static_cast<uint16_t>((clock & ~0xffc4u) | (divider & 0xff) << 8 | (divider >> 8 & 3) << 6);
     w16(CLOCK, next);
-    for (uint64_t start = nowNs(); !(r16(CLOCK) & 2) && nowNs() - start < 10000000;) {}
-    if (clock & 4) w16(CLOCK, next | 4);
+    for (uint64_t start = nowNs(); !(r16(CLOCK) & 2) && nowNs() - start < 10000000;) {
+    }
+    if (clock & 4)
+        w16(CLOCK, next | 4);
 }
 
 // hekate _sdmmc_autocal_config_offset + _sdmmc_autocal_execute (sdmmc_driver.c:845/178) for SDMMC1
@@ -2641,14 +2922,16 @@ bool NativeSwitchBlock::calibratePads()
     (void)r16(CLOCK);
     IODelay(2);
     bool done = false;
-    for (uint64_t start = nowNs(); !done && nowNs() - start < 10000000;) done = !(r32(AUTOCAL_STATUS) & 0x80000000u);
+    for (uint64_t start = nowNs(); !done && nowNs() - start < 10000000;)
+        done = !(r32(AUTOCAL_STATUS) & 0x80000000u);
     if (!done) {
         w32(AUTOCAL_CONFIG, r32(AUTOCAL_CONFIG) & ~(1u << 29));
         wr(apb, APB_SDMMC1_PAD_CONFIG, (rd(apb, APB_SDMMC1_PAD_CONFIG) & 0xf8080fffu) | 0x808u << 12);
         (void)rd(apb, APB_SDMMC1_PAD_CONFIG);
     }
     w32(PAD_CONTROL, r32(PAD_CONTROL) & ~0x80000000u);
-    if (clock & 4) w16(CLOCK, r16(CLOCK) | 4);
+    if (clock & 4)
+        w16(CLOCK, r16(CLOCK) | 4);
     return done;
 }
 
@@ -2665,7 +2948,8 @@ bool NativeSwitchBlock::switchTo1V8(uint8_t ldo2)
     int error = TEGRA_I2C_EIO;
     // hekate _max7762x_set_reg retries a PMIC write 100 times 50 us apart (max7762x.c).
     for (unsigned attempt = 0; attempt < 100 && error; ++attempt) {
-        if ((error = tegra_i2c_write(kPmicBus, kPmicAddress, kPmicLdo2, &value, 1))) IODelay(50);
+        if ((error = tegra_i2c_write(kPmicBus, kPmicAddress, kPmicLdo2, &value, 1)))
+            IODelay(50);
     }
     uint8_t check = 0;
     if (error || tegra_i2c_read(kPmicBus, kPmicAddress, kPmicLdo2, &check, 1) || (check & kLdoVoltage) != kLdo1V8) {
@@ -2678,7 +2962,8 @@ bool NativeSwitchBlock::switchTo1V8(uint8_t ldo2)
     (void)rd(pmc, PMC_PWR_DET_VAL);
     for (uint32_t pad = 0; pad < 6; ++pad)
         wr(apb, PINMUX_SDMMC1 + pad * 4, rd(apb, PINMUX_SDMMC1 + pad * 4) | PINMUX_SCHMITT);
-    if (!calibratePads()) IOLog("SwitchSD: SDMMC1 pad calibration timed out; fixed B01 drive codes used\n");
+    if (!calibratePads())
+        IOLog("SwitchSD: SDMMC1 pad calibration timed out; fixed B01 drive codes used\n");
     w8(POWER, 0x0a);  // hekate _sdmmc_set_io_power(1.8 V): voltage select, then bus power on
     w8(POWER, 0x0b);
     (void)r16(CLOCK);
@@ -2694,15 +2979,18 @@ bool NativeSwitchBlock::switchTo1V8(uint8_t ldo2)
 bool NativeSwitchBlock::enablePllc4()
 {
     const uint32_t base = rd(car, CAR_PLLC4_BASE);
-    if (base & PLL_ENABLE) return (base & PLLC4_DIVIDERS) == PLLC4_CONFIG && (base & PLL_LOCK);
+    if (base & PLL_ENABLE)
+        return (base & PLLC4_DIVIDERS) == PLLC4_CONFIG && (base & PLL_LOCK);
     wr(car, CAR_PLLC4_MISC, PLLC4_LOCK_DETECT);
     wr(car, CAR_PLLC4_BASE, rd(car, CAR_PLLC4_BASE) & ~PLLC4_IDDQ);
     IODelay(10);
     wr(car, CAR_PLLC4_BASE, PLLC4_CONFIG);
     wr(car, CAR_PLLC4_BASE, PLLC4_CONFIG | PLL_ENABLE);
-    for (unsigned us = 0; us < 1000 && !(rd(car, CAR_PLLC4_BASE) & PLL_LOCK); ++us) IODelay(1);
+    for (unsigned us = 0; us < 1000 && !(rd(car, CAR_PLLC4_BASE) & PLL_LOCK); ++us)
+        IODelay(1);
     IODelay(2);
-    if (rd(car, CAR_PLLC4_BASE) & PLL_LOCK) return true;
+    if (rd(car, CAR_PLLC4_BASE) & PLL_LOCK)
+        return true;
     wr(car, CAR_PLLC4_BASE, (rd(car, CAR_PLLC4_BASE) & ~PLL_ENABLE) | PLLC4_IDDQ);  // back as it was
     return false;
 }
@@ -2756,9 +3044,11 @@ bool NativeSwitchBlock::tune()
     w32(VENDOR_TUNING0, (r32(VENDOR_TUNING0) & 0xffffe03fu) | 1u << 6);
     w32(VENDOR_TUNING0, r32(VENDOR_TUNING0) | 1u << 17);
     w16(HOST_CONTROL2, r16(HOST_CONTROL2) | CONTROL2_EXEC_TUNING);
-    for (unsigned i = 0; i < 128 && (r16(HOST_CONTROL2) & CONTROL2_EXEC_TUNING); ++i) tuneStep();
+    for (unsigned i = 0; i < 128 && (r16(HOST_CONTROL2) & CONTROL2_EXEC_TUNING); ++i)
+        tuneStep();
     w32(STATUS, 0xffffffff);
-    if ((r16(HOST_CONTROL2) & (CONTROL2_EXEC_TUNING | CONTROL2_TUNED)) == CONTROL2_TUNED) return true;
+    if ((r16(HOST_CONTROL2) & (CONTROL2_EXEC_TUNING | CONTROL2_TUNED)) == CONTROL2_TUNED)
+        return true;
     // No window: leave tuning mode and fixed sampling, as Linux sdhci_reset_tuning does.
     w16(HOST_CONTROL2, r16(HOST_CONTROL2) & ~(CONTROL2_EXEC_TUNING | CONTROL2_TUNED));
     resetLines();
@@ -2873,33 +3163,43 @@ bool NativeSwitchBlock::reinitialize(uint32_t baseKHz, uint8_t ldo2, bool uhs, b
     IODelay(1000 + 200);
     uint32_t r = 0;
     int error;
-    if ((error = cardCommand(0, 0, RSP_NONE, nullptr))) fail("CMD0", error);
+    if ((error = cardCommand(0, 0, RSP_NONE, nullptr)))
+        fail("CMD0", error);
     if ((error = cardCommand(8, 0x1aa, RSP_R1, &r)) || (r & 0xfff) != 0x1aa)
         fail("CMD8", error ? error : int(r & 0xfff));
     // ACMD41 until the card leaves busy: block addressing, max performance, ask for 1.8 V.
     for (uint64_t ready = nowNs();;) {
         if ((error = appCommand(41, OCR_CCS | OCR_XPC | (uhs ? OCR_S18 : 0) | OCR_VDD_32_33, RSP_R3, &r)))
             fail("ACMD41", error);
-        if (r & OCR_READY) break;
-        if (nowNs() - ready > 1500000000ull) fail("ACMD41 busy", int(r >> 24));
+        if (r & OCR_READY)
+            break;
+        if (nowNs() - ready > 1500000000ull)
+            fail("ACMD41 busy", int(r >> 24));
         IOSleep(10);
     }
-    if (!(r & OCR_CCS)) fail("ACMD41 byte-addressed card", int(r >> 24));
+    if (!(r & OCR_CCS))
+        fail("ACMD41 byte-addressed card", int(r >> 24));
     const bool lowVoltage = uhs && (r & OCR_S18);
     if (lowVoltage) {
         uint32_t r11 = 0;
-        if ((error = cardCommand(11, 0, RSP_R1, &r11)) || (r11 & R1_ERRORS)) fail("CMD11", error ? error : 6);
-        if (!switchTo1V8(ldo2)) fail("1.8 V switch (DAT[3:0] not released)", int((r32(PRESENT) >> 20) & 0xf));
+        if ((error = cardCommand(11, 0, RSP_R1, &r11)) || (r11 & R1_ERRORS))
+            fail("CMD11", error ? error : 6);
+        if (!switchTo1V8(ldo2))
+            fail("1.8 V switch (DAT[3:0] not released)", int((r32(PRESENT) >> 20) & 0xf));
     }
-    if ((error = cardCommand(2, 0, RSP_R2, nullptr))) fail("CMD2", error);
+    if ((error = cardCommand(2, 0, RSP_R2, nullptr)))
+        fail("CMD2", error);
     if (!resume) {
         readR2(cid);
         haveCid = true;
     }
     for (uint64_t ready = nowNs(); !rca;) {
-        if ((error = cardCommand(3, 0, RSP_R1, &r))) fail("CMD3", error);
-        if ((rca = r >> 16)) break;
-        if (nowNs() - ready > 1500000000ull) fail("CMD3 RCA 0", 0);
+        if ((error = cardCommand(3, 0, RSP_R1, &r)))
+            fail("CMD3", error);
+        if ((rca = r >> 16))
+            break;
+        if (nowNs() - ready > 1500000000ull)
+            fail("CMD3 RCA 0", 0);
         IOSleep(1);  // hekate _sd_storage_get_rca: ask again 1 ms later
     }
     // r14-sdcq: the CSD while the card is in stand-by (CMD9 is a class 0 command of that state only). Logged by identify();
@@ -2910,12 +3210,17 @@ bool NativeSwitchBlock::reinitialize(uint32_t baseKHz, uint8_t ldo2, bool uhs, b
     }
     // Out of identification: default speed (24 MHz) at 3.3 V as hekate (sdmmc.c:2054); the 1.8 V path
     // already runs SDR12 at that clock since switchTo1V8.
-    if (!lowVoltage) setTiming(-1, false, -1, 0, 1);
-    if ((error = cardCommand(7, rca << 16, RSP_R1B, &r)) || (r & R1_ERRORS)) fail("CMD7", error ? error : 6);
-    if ((error = appCommand(42, 0, RSP_R1, &r)) || (r & R1_ERRORS)) fail("ACMD42", error ? error : 6);
-    if ((error = appCommand(6, 2, RSP_R1, &r)) || (r & R1_ERRORS)) fail("ACMD6", error ? error : 6);
+    if (!lowVoltage)
+        setTiming(-1, false, -1, 0, 1);
+    if ((error = cardCommand(7, rca << 16, RSP_R1B, &r)) || (r & R1_ERRORS))
+        fail("CMD7", error ? error : 6);
+    if ((error = appCommand(42, 0, RSP_R1, &r)) || (r & R1_ERRORS))
+        fail("ACMD42", error ? error : 6);
+    if ((error = appCommand(6, 2, RSP_R1, &r)) || (r & R1_ERRORS))
+        fail("ACMD6", error ? error : 6);
     w8(HOST_CONTROL, r8(HOST_CONTROL) | 2);
-    if ((error = switchFunction(false, 0, 0xf))) fail("CMD6 query", error);
+    if ((error = switchFunction(false, 0, 0xf)))
+        fail("CMD6 query", error);
     const uint32_t access = bounce[13] | bounce[12] << 8, power = bounce[7] | bounce[6] << 8;
     const char *limit = "";
     if (lowVoltage && (access & 1u << UHS_SDR104)) {
@@ -2925,12 +3230,14 @@ bool NativeSwitchBlock::reinitialize(uint32_t baseKHz, uint8_t ldo2, bool uhs, b
         limit = switchFunction(true, 3, power & 2 ? 1 : 0) ? ", power limit unchanged"
                 : ((bounce[15] >> 4) & 0xf) == 1           ? ", 1.44 W"
                                                            : ", 0.72 W";
-        if ((error = switchFunction(false, 0, UHS_SDR104))) fail("CMD6 check SDR104", error);
+        if ((error = switchFunction(false, 0, UHS_SDR104)))
+            fail("CMD6 check SDR104", error);
         if ((bounce[16] & 0xf) == UHS_SDR104 && (bounce[0] << 8 | bounce[1]) <= 800) {
             if ((error = switchFunction(true, 0, UHS_SDR104)) || (bounce[16] & 0xf) != UHS_SDR104)
                 fail("CMD6 SDR104", error);
             // 199.68 MHz, or the first slower clock that tunes (the card stays in SDR104).
-            if (!clockAndTune(0)) fail("SDR104 tuning (no window down to 49.92 MHz)", r16(HOST_CONTROL2));
+            if (!clockAndTune(0))
+                fail("SDR104 tuning (no window down to 49.92 MHz)", r16(HOST_CONTROL2));
         }
     }
     if (!tuned) {
@@ -2938,7 +3245,8 @@ bool NativeSwitchBlock::reinitialize(uint32_t baseKHz, uint8_t ldo2, bool uhs, b
         // 3.3 V, both the inherited 48 MHz (group 1 function 1 is the same CMD6 for either); a card
         // without even that stays at default speed, 24 MHz.
         const bool fast = access & 2;
-        if (fast && ((error = switchFunction(true, 0, 1)) || (bounce[16] & 0xf) != 1)) fail("CMD6 high speed", error);
+        if (fast && ((error = switchFunction(true, 0, 1)) || (bounce[16] & 0xf) != 1))
+            fail("CMD6 high speed", error);
         setTiming(fast && lowVoltage ? int(UHS_SDR25)
                   : lowVoltage       ? int(UHS_SDR12)
                                      : -1,
@@ -2969,9 +3277,11 @@ void NativeSwitchBlock::powerOffCard()
         const uint8_t off = static_cast<uint8_t>(ldo2 & kLdoVoltage);  // power mode 7:6 = 0: off
         error = tegra_i2c_write(kPmicBus, kPmicAddress, kPmicLdo2, &off, 1);
     }
-    if (error) panic("SwitchSD: LDO2 off before sleep failed (I2C5 %d)", error);
+    if (error)
+        panic("SwitchSD: LDO2 off before sleep failed (I2C5 %d)", error);
     IOSleep(4);
-    if (tegra_gpio_output(kCardPowerGpio, 0)) panic("SwitchSD: cannot switch the card supply (GPIO PE4) off");
+    if (tegra_gpio_output(kCardPowerGpio, 0))
+        panic("SwitchSD: cannot switch the card supply (GPIO PE4) off");
     IOSleep(10);
     wr(pmc, PMC_NO_IOPOWER, rd(pmc, PMC_NO_IOPOWER) | PMC_SDMMC1_NO_POWER);
     wr(pmc, PMC_PWR_DET_VAL, rd(pmc, PMC_PWR_DET_VAL) | PMC_SDMMC1_3V3);
@@ -2992,23 +3302,27 @@ void NativeSwitchBlock::powerOnController()
     (void)rd(car, CAR_RST_DEVICES_L);
     wr(pmc, PMC_NO_IOPOWER, rd(pmc, PMC_NO_IOPOWER) & ~PMC_SDMMC1_NO_POWER);
     (void)rd(pmc, PMC_NO_IOPOWER);
-    if (tegra_gpio_output(kCardPowerGpio, 1)) panic("SwitchSD: cannot switch the card supply (GPIO PE4) on");
+    if (tegra_gpio_output(kCardPowerGpio, 1))
+        panic("SwitchSD: cannot switch the card supply (GPIO PE4) on");
     IOSleep(10);
     wr(pmc, PMC_PWR_DET_VAL, rd(pmc, PMC_PWR_DET_VAL) | PMC_SDMMC1_3V3);
     const uint8_t on = static_cast<uint8_t>(0xc0 | kLdo3V3);  // power mode normal, 3.3 V
     int error = tegra_i2c_write(kPmicBus, kPmicAddress, kPmicLdo2, &on, 1);
-    if (error) panic("SwitchSD: LDO2 3.3 V after sleep failed (I2C5 %d)", error);
+    if (error)
+        panic("SwitchSD: LDO2 3.3 V after sleep failed (I2C5 %d)", error);
     IOSleep(1);
     w8(RESET, 1);
     for (uint64_t begin = nowNs(); r8(RESET) & 1;) {
-        if (nowNs() - begin > 100000000ull) panic("SwitchSD: SDMMC1 reset did not complete after sleep");
+        if (nowNs() - begin > 100000000ull)
+            panic("SwitchSD: SDMMC1 reset did not complete after sleep");
     }
     w32(IO_SPARE, r32(IO_SPARE) | 1u << 19);
     w32(VENDOR_IO_TRIM, r32(VENDOR_IO_TRIM) & ~4u);
     w32(VENDOR_CLOCK, (r32(VENDOR_CLOCK) & 0xe0fffffbu) | kTrimB01 << 24);
     w16(CLOCK, 1 | 0x80 << 8);  // internal clock on, slowest divider until setTiming
     for (uint64_t begin = nowNs(); !(r16(CLOCK) & 2);) {
-        if (nowNs() - begin > 20000000ull) panic("SwitchSD: SDMMC1 internal clock not stable after sleep");
+        if (nowNs() - begin > 20000000ull)
+            panic("SwitchSD: SDMMC1 internal clock not stable after sleep");
     }
     w8(POWER, 0x0e);  // 3.3 V, then bus power on (hekate _sdmmc_set_io_power)
     w8(POWER, 0x0f);
@@ -3028,15 +3342,18 @@ void NativeSwitchBlock::suspend()
 {
     IOLockLock(queueLock);
     suspended = true;
-    while (working) IOLockSleep(queueLock, &working, THREAD_UNINT);
+    while (working)
+        IOLockSleep(queueLock, &working, THREAD_UNINT);
     IOLockUnlock(queueLock);
     // r14-sdcq: the worker leaves CQ mode before it sleeps; this only covers a card that is somehow still in it (the
     // card is about to lose power either way, and CQ mode does not survive that).
-    if (cq.state == CqEngine::kOn) (void)cq.leave(cqBus);
+    if (cq.state == CqEngine::kOn)
+        (void)cq.leave(cqBus);
     // r16-sdcq: leaving CQ mode turned the card's cache off; nothing to flush either way (every completed write is on
     // flash: commitWrite), and the power-off clears Cache Enable.
     dmaSuspend();
-    if (irqSource) irqSource->disable();
+    if (irqSource)
+        irqSource->disable();
     powerOffCard();
 }
 
@@ -3055,21 +3372,23 @@ void NativeSwitchBlock::dmaSuspend()
 
 void NativeSwitchBlock::dmaResume()
 {
-    if (!adma) return;
+    if (!adma)
+        return;
     const uint16_t control2 = r16(HOST_CONTROL2);
     const bool translated = mc[0xa94 / 4] & 0x80000000u;
-    if ((control2 & CONTROL2_V4_64BIT) == CONTROL2_V4_64BIT && !translated) return;
+    if ((control2 & CONTROL2_V4_64BIT) == CONTROL2_V4_64BIT && !translated)
+        return;
     adma = false;
-    IOLog(
-        "SwitchSD: ADMA2 off after sleep (HOST_CONTROL2 0x%04x, SMMU %s for SDMMC1); requests go through the bounce "
-        "buffer\n",
-        control2, translated ? "on" : "off");
+    IOLog("SwitchSD: ADMA2 off after sleep (HOST_CONTROL2 0x%04x, SMMU %s for SDMMC1); requests go through the bounce "
+          "buffer\n",
+          control2, translated ? "on" : "off");
 }
 
 void NativeSwitchBlock::resume()
 {
     powerOnController();
-    if (irqSource) irqSource->enable();
+    if (irqSource)
+        irqSource->enable();
     const bool uhs = lowVoltageBus && enablePllc4();
     if (lowVoltageBus && !uhs)
         panic("SwitchSD: PLLC4 does not lock after sleep (PLLC4_BASE 0x%08x)", rd(car, CAR_PLLC4_BASE));
@@ -3082,7 +3401,8 @@ void NativeSwitchBlock::resume()
     }
     dmaResume();
     cq.powerCycled();
-    if (cq.stopped) cqStopped();  // r18-sdcq: a card stuck at sleep may have been the kMaxStuck-th
+    if (cq.stopped)
+        cqStopped();  // r18-sdcq: a card stuck at sleep may have been the kMaxStuck-th
     IOLockLock(queueLock);
     suspended = false;
     IOLockWakeup(queueLock, &head, false);
@@ -3100,18 +3420,21 @@ void NativeSwitchBlock::resume()
 // have reached RAM: 4 GiB lower lies below DRAM at 0x80000000, outside the memory controller's EMEM aperture; pages
 // whose alias would fall in IRAM at 0x40000000 are not used.)
 const char *NativeSwitchBlock::checkAdma(const uint8_t *reference, uint32_t *descriptors, uint32_t *highPages,
-                                           uint32_t *highOk, uint32_t *staged)
+                                         uint32_t *highOk, uint32_t *staged)
 {
     *descriptors = *highPages = *highOk = *staged = 0;
-    if (copyFlush) return "copyFlush";
-    if (!(r32(CAPABILITIES) & (1u << 19))) return "the controller reports no ADMA2";
+    if (copyFlush)
+        return "copyFlush";
+    if (!(r32(CAPABILITIES) & (1u << 19)))
+        return "the controller reports no ADMA2";
     if ((r16(HOST_CONTROL2) & CONTROL2_V4_64BIT) != CONTROL2_V4_64BIT)
         return "HOST_CONTROL2 does not keep v4 64-bit addressing";
     tableMemory = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(
         kernel_task,
         static_cast<IOOptionBits>(kIODirectionInOut) | static_cast<IOOptionBits>(kIOMemoryPhysicallyContiguous),
         kAdmaTableBytes, 0x00000000ffffffffull & ~(kAdmaPage - 1));
-    if (!tableMemory) return "no memory for the descriptor table";
+    if (!tableMemory)
+        return "no memory for the descriptor table";
     table.entries = static_cast<SwitchAdmaDescriptor *>(tableMemory->getBytesNoCopy());
     tablePA = tableMemory->getPhysicalSegment(0, nullptr, kIOMemoryMapperNone);
     if (!table.entries || !tablePA || (tablePA & (kAdmaPage - 1)) || tablePA + kAdmaTableBytes > (1ull << 32))
@@ -3122,17 +3445,20 @@ const char *NativeSwitchBlock::checkAdma(const uint8_t *reference, uint32_t *des
     constexpr uint32_t kTestPages = 128;
     IOBufferMemoryDescriptor *pages =
         IOBufferMemoryDescriptor::inTaskWithOptions(kernel_task, kIODirectionInOut, kTestPages * kAdmaPage, kAdmaPage);
-    if (!pages) return "no memory for the test pages";
+    if (!pages)
+        return "no memory for the test pages";
     if (pages->prepare() != kIOReturnSuccess) {
         pages->release();
         return "the test pages cannot be wired";
     }
     auto *const pageBytes = static_cast<uint8_t *>(pages->getBytesNoCopy());
+
     struct Run {
         uint64_t pa;
         uint8_t *at;
         uint32_t length;
     };
+
     static Run runs[kTestPages + 3];  // setup() runs once; ~3 KiB is too much for its stack
     unsigned count = 0;
     uint32_t streamed = 0;
@@ -3148,18 +3474,23 @@ const char *NativeSwitchBlock::checkAdma(const uint8_t *reference, uint32_t *des
         take(bouncePA + 0x30000, bounce + 0x30000, 0x1c0);  // ...which this one completes
         for (uint32_t i = kTestPages - 1; i; --i) {
             const uint64_t pa = pages->getPhysicalSegment(i * kAdmaPage, nullptr, kIOMemoryMapperNone);
-            if (pa && pa - kAdmaIramAlias >= kAdmaIramBytes) take(pa, pageBytes + i * kAdmaPage, kAdmaPage);
+            if (pa && pa - kAdmaIramAlias >= kAdmaIramBytes)
+                take(pa, pageBytes + i * kAdmaPage, kAdmaPage);
         }
         take(bouncePA + 0x40000, bounce + 0x40000, kBounceBytes - streamed);  // the rest, in the bounce buffer
         table.reset();
         uint32_t at = 0;
         for (unsigned i = 0; i < count && !why; ++i) {
-            for (uint32_t k = 0; k < runs[i].length; ++k) runs[i].at[k] = static_cast<uint8_t>(~reference[at + k]);
-            if (runs[i].pa >= (1ull << 32)) ++*highPages;
-            if (table.add(runs[i].pa, runs[i].length, cacheableRam)) why = "the builder refused the test memory";
+            for (uint32_t k = 0; k < runs[i].length; ++k)
+                runs[i].at[k] = static_cast<uint8_t>(~reference[at + k]);
+            if (runs[i].pa >= (1ull << 32))
+                ++*highPages;
+            if (table.add(runs[i].pa, runs[i].length, cacheableRam))
+                why = "the builder refused the test memory";
             at += runs[i].length;
         }
-        if (!why && !table.finish()) why = "no descriptors";
+        if (!why && !table.finish())
+            why = "no descriptors";
     } else {
         why = "the test pages have no physical address";
     }
@@ -3186,7 +3517,8 @@ const char *NativeSwitchBlock::checkAdma(const uint8_t *reference, uint32_t *des
     unsigned highMissing = 0;
     for (uint32_t i = 0, at = 0; !why && i < count; at += runs[i++].length) {
         if (!memcmp(runs[i].at, reference + at, runs[i].length)) {
-            if (runs[i].pa >= (1ull << 32)) ++*highOk;
+            if (runs[i].pa >= (1ull << 32))
+                ++*highOk;
             continue;
         }
         bool untouched = runs[i].pa >= (1ull << 32);
@@ -3206,10 +3538,13 @@ const char *NativeSwitchBlock::checkAdma(const uint8_t *reference, uint32_t *des
     const char *stagingWhy = why ? "" : !stages ? "no memory for the stages" : nullptr;
     if (!stagingWhy) {
         constexpr uint32_t kTestBytes = kTestPages * kAdmaPage;
-        for (uint32_t k = 0; k < kTestBytes; ++k) pageBytes[k] = static_cast<uint8_t>(~reference[k]);
+        for (uint32_t k = 0; k < kTestBytes; ++k)
+            pageBytes[k] = static_cast<uint8_t>(~reference[k]);
         staging.reset(&table, bouncePA, stages, kStages);
         table.limit = kAdma4GiB;
-        const auto refuseEveryThird = [](uint64_t page) { return cacheableRam(page) && atop_64(page) % 3; };
+        const auto refuseEveryThird = [](uint64_t page) {
+            return cacheableRam(page) && atop_64(page) % 3;
+        };
         if (staging.addMemory(pages, kTestBytes, refuseEveryThird) || !staging.finish() || table.bytes != kTestBytes ||
             !staging.count || staging.staged == kTestBytes) {
             stagingWhy = "the builder refused the test pages";
@@ -3255,7 +3590,8 @@ const char *NativeSwitchBlock::checkCmd23(uint64_t *withNs, uint64_t *withoutNs)
     constexpr uint32_t kSectors = 8, kBytes = kSectors * kSector;
     *withNs = *withoutNs = 0;
     const uint64_t blocks = sectorCount / kSectors;
-    if (blocks < kCmd23Pairs) return "the partition is too small";
+    if (blocks < kCmd23Pairs)
+        return "the partition is too small";
     const char *why = nullptr;
     for (uint32_t i = 0; i < kCmd23Pairs && !why; ++i) {
         // A multiplicative hash spreads the reads over the whole partition, 4 KiB-aligned.
@@ -3284,7 +3620,8 @@ const char *NativeSwitchBlock::checkCmd23(uint64_t *withNs, uint64_t *withoutNs)
         }
         if (!why && memcmp(bounce, bounce + kBytes, kBytes)) {
             uint32_t at = 0;
-            while (bounce[at] == bounce[kBytes + at]) ++at;
+            while (bounce[at] == bounce[kBytes + at])
+                ++at;
             snprintf(cmd23Why, sizeof(cmd23Why), "read %u (lba %llu) differs from CMD12's at byte %u", i, lba, at);
             why = cmd23Why;
         }
@@ -3310,14 +3647,17 @@ const char *NativeSwitchBlock::checkCmd23(uint64_t *withNs, uint64_t *withoutNs)
 // left on goes off before any write. kTests 16: a steadier measurement for setup()'s decision whether the queue is
 // faster at all.
 const char *NativeSwitchBlock::checkCq(uint64_t *queuedNs, uint64_t *serialNs, uint64_t *enterNs, uint64_t *leaveNs,
-                                         unsigned *tasks)
+                                       unsigned *tasks)
 {
     *queuedNs = *serialNs = *enterNs = *leaveNs = 0;
     *tasks = 0;
-    if (!havePerf) return extWhy ? extWhy : "no performance enhancement function";
+    if (!havePerf)
+        return extWhy ? extWhy : "no performance enhancement function";
     cqControlAddress = switchSdCqControlAddress(extInfo.perf);
-    if (!cqControlAddress) return "its control byte crosses a page";
-    if (!irqMode) return "no SDMMC1 interrupt";
+    if (!cqControlAddress)
+        return "its control byte crosses a page";
+    if (!irqMode)
+        return "no SDMMC1 interrupt";
     regMemory = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(
         kernel_task,
         static_cast<IOOptionBits>(kIODirectionInOut) | static_cast<IOOptionBits>(kIOMemoryPhysicallyContiguous),
@@ -3334,14 +3674,18 @@ const char *NativeSwitchBlock::checkCq(uint64_t *queuedNs, uint64_t *serialNs, u
         cq.cacheOn = true;
         (void)cq.disableCache(cqBus);
     }
-    if (perf.cqDepth < 2) return "the card offers no queue";
-    if (perf.cqControl & kSdCqEnable) return "its queue is enabled already";
-    if (!checkBuffer) return "no buffer for its proofs";
+    if (perf.cqDepth < 2)
+        return "the card offers no queue";
+    if (perf.cqControl & kSdCqEnable)
+        return "its queue is enabled already";
+    if (!checkBuffer)
+        return "no buffer for its proofs";
     constexpr uint32_t kSectors = 8, kBytes = kSectors * kSector, kTests = 16;
     const uint8_t depth = static_cast<uint8_t>(perf.cqDepth > 2 ? perf.cqDepth - 1 : perf.cqDepth);
     const unsigned n = depth < kTests ? depth : kTests;
     const uint64_t blocks = sectorCount / kSectors;
-    if (blocks < 2 * kTests) return "the partition is too small";
+    if (blocks < 2 * kTests)
+        return "the partition is too small";
     // Blocks spread over the partition (another hash than checkCmd23's): [0, n) the group's, [n, 2n) the serial reads'.
     const auto lbaOf = [&](unsigned i) {
         return firstSector + (static_cast<uint64_t>(i + 101) * 2246822519ull % blocks) * kSectors;
@@ -3352,7 +3696,8 @@ const char *NativeSwitchBlock::checkCq(uint64_t *queuedNs, uint64_t *serialNs, u
     };
     uint32_t status = 0;
     for (unsigned i = 0; i < n; ++i) {
-        if (!oneRun(i * kBytes)) return "the builder refused the bounce buffer";
+        if (!oneRun(i * kBytes))
+            return "the builder refused the bounce buffer";
         prepareDirect(false, false);
         const uint64_t t0 = nowNs();
         const int step =
@@ -3369,7 +3714,8 @@ const char *NativeSwitchBlock::checkCq(uint64_t *queuedNs, uint64_t *serialNs, u
     // the card's cache, which enter() turns on first and leaving turns off again (both inside enterNs/leaveNs).
     cq.start(depth, perf.cache);
     SwitchCqTask test[kTests];
-    for (unsigned i = 0; i < n; ++i) test[i] = {lbaOf(i), kSectors};
+    for (unsigned i = 0; i < n; ++i)
+        test[i] = {lbaOf(i), kSectors};
     const char *why = nullptr;
     for (unsigned attempt = 0; attempt < 2; ++attempt) {
         why = nullptr;
@@ -3394,7 +3740,8 @@ const char *NativeSwitchBlock::checkCq(uint64_t *queuedNs, uint64_t *serialNs, u
             prepareDirect(false, false);
             const uint8_t before = cardLast, task = static_cast<uint8_t>(cq.next);
             int step = issue(static_cast<uint32_t>(test[i].lba), kSectors, false, table.count, false, cq.argument());
-            if (!step) step = complete(kSectors, false, table.count, &status, nullptr, false, true);
+            if (!step)
+                step = complete(kSectors, false, table.count, &status, nullptr, false, true);
             finishDirect(false);
             if (step) {
                 const uint32_t r1 = (status & INT_COMMAND) ? r32(RESPONSE) : 0;
@@ -3418,11 +3765,14 @@ const char *NativeSwitchBlock::checkCq(uint64_t *queuedNs, uint64_t *serialNs, u
                 resetCard();
                 cq.powerCycled();
             }
-            if (cq.usable()) continue;
+            if (cq.usable())
+                continue;
         }
-        if (why) break;
+        if (why)
+            break;
         t0 = nowNs();
-        if (!cq.leave(cqBus)) why = "the card stays in CQ mode";
+        if (!cq.leave(cqBus))
+            why = "the card stays in CQ mode";
         *leaveNs = nowNs() - t0;
         // The same blocks the legacy way (out of CQ mode now), compared.
         for (unsigned i = 0; !why && i < n; ++i) {
@@ -3430,7 +3780,8 @@ const char *NativeSwitchBlock::checkCq(uint64_t *queuedNs, uint64_t *serialNs, u
                 why = "a legacy re-read failed";
             } else if (memcmp(bounce + i * kBytes, checkBuffer + i * kBytes, kBytes)) {
                 uint32_t at = 0;
-                while (bounce[i * kBytes + at] == checkBuffer[i * kBytes + at]) ++at;
+                while (bounce[i * kBytes + at] == checkBuffer[i * kBytes + at])
+                    ++at;
                 snprintf(cqWhy, sizeof(cqWhy), "test task %u (lba %llu) differs from the legacy read at byte %u", i,
                          test[i].lba, at);
                 why = cqWhy;
@@ -3529,8 +3880,8 @@ bool NativeSwitchBlock::setup()
         uint8_t again[kSector];
         int step = transfer(1, 1, false, again);
         if (step || memcmp(header, again, sizeof(header)))
-            panic("SwitchSD: LBA 1 differs after switching to %s (read step %d); boot with switch-no-sd-uhs",
-                  busMode, step);
+            panic("SwitchSD: LBA 1 differs after switching to %s (read step %d); boot with switch-no-sd-uhs", busMode,
+                  step);
     }
     identify();
     uint64_t entriesLBA = le64(header + 72);
@@ -3553,9 +3904,11 @@ bool NativeSwitchBlock::setup()
     unsigned found = 0;
     for (uint32_t i = 0; i < entryCount; ++i) {
         const uint8_t *e = entries + i * entrySize;
-        if (memcmp(e, kApfsType, 16) && !partitionNamed(e, kPartitionName)) continue;
+        if (memcmp(e, kApfsType, 16) && !partitionNamed(e, kPartitionName))
+            continue;
         uint64_t first = le64(e + 32), last = le64(e + 40);
-        if (!first || last < first) continue;
+        if (!first || last < first)
+            continue;
         firstSector = first;
         sectorCount = last - first + 1;
         ++found;
@@ -3591,7 +3944,8 @@ bool NativeSwitchBlock::setup()
             // Writes over 256 KiB only by ADMA2 with their read-backs; without the buffer for those, 256 KiB commands.
             writeSectors = admaWrites ? kDirectWriteSectors : kSafeSectors;
             // Without the buffer nothing above 4 GiB can be proven: it stays below.
-            if (!checkBuffer && high.state == SwitchAdmaHigh::kProving) high.refuse();
+            if (!checkBuffer && high.state == SwitchAdmaHigh::kProving)
+                high.refuse();
             static const char *const states[] = {" (above 4 GiB: proven by the first reads that reach there)", "",
                                                  " (ADMA2 stays below 4 GiB)"};
             if (stagingOn)
@@ -3652,8 +4006,8 @@ bool NativeSwitchBlock::setup()
                       kGapSectors * kSector / 1024, kGapBudget * kSector / 1024, kGapProofs);
             else
                 IOLog("SwitchSD: gap reads off (%s)\n", !checkBuffer ? "no buffer for their proofs"
-                                                          : !merge     ? "merge off"
-                                                                       : "no sink page below 4 GiB");
+                                                        : !merge     ? "merge off"
+                                                                     : "no sink page below 4 GiB");
             // r14-sdcq: the command queue, when the card offers one and its test group reads what the legacy path reads.
             uint64_t queuedNs = 0, serialNs = 0, enterNs = 0, leaveNs = 0;
             unsigned tested = 0;
@@ -3709,7 +4063,8 @@ bool NativeSwitchBlock::setup()
                 IOLog("SwitchSD: 1 MiB commands failed their check (step %d, %s); keeping 256 KiB\n", step,
                       step ? "error" : "data differs");
         }
-        if (reference) IOFreeData(reference, kBounceBytes);
+        if (reference)
+            IOFreeData(reference, kBounceBytes);
     }
 
     thread_t thread = THREAD_NULL;
@@ -3723,17 +4078,20 @@ bool NativeSwitchBlock::setup()
 
 extern "C" void switch_block_suspend(void)
 {
-    if (gOwner) gOwner->suspend();
+    if (gOwner)
+        gOwner->suspend();
 }
 
 extern "C" void switch_block_resume(void)
 {
-    if (gOwner) gOwner->resume();
+    if (gOwner)
+        gOwner->resume();
 }
 
 extern "C" int switch_block_publish(void)
 {
-    if (gPublishStatus >= 0) return gPublishStatus;
+    if (gPublishStatus >= 0)
+        return gPublishStatus;
     gPublishStatus = SWITCH_BLOCK_NOT_READY;
     IOService *resources = IOService::getResourceService();
     auto *owner = OSTypeAlloc(NativeSwitchBlock);
@@ -3760,18 +4118,20 @@ extern "C" int switch_block_publish(void)
 // cryptex devices attach to, the window's size and largest read in sectors, and the BSD device of the window's
 // whole-disk IOMedia (what DKIOCGETPHYSICALEXTENT names for an APFS file on it). nullptr until published.
 extern "C" IOBlockStorageDevice *switch_block_device(IOService **controller, dev_t *whole, uint64_t *sectors,
-                                                       uint32_t *maxReadSectors)
+                                                     uint32_t *maxReadSectors)
 {
     *controller = nullptr;
     *whole = NODEV;
     *sectors = 0;
     *maxReadSectors = 0;
-    if (!gOwner || !gOwner->device) return nullptr;
+    if (!gOwner || !gOwner->device)
+        return nullptr;
     // device -> IOBlockStorageDriver -> IOMedia (the whole window)
     if (OSIterator *drivers = gOwner->device->getChildIterator(gIOServicePlane)) {
         while (IORegistryEntry *driver = OSDynamicCast(IORegistryEntry, drivers->getNextObject())) {
             OSIterator *medias = driver->getChildIterator(gIOServicePlane);
-            if (!medias) continue;
+            if (!medias)
+                continue;
             while (IORegistryEntry *media = OSDynamicCast(IORegistryEntry, medias->getNextObject())) {
                 auto *whole_ = OSDynamicCast(OSBoolean, media->getProperty(kIOMediaWholeKey));
                 auto *majorNumber = OSDynamicCast(OSNumber, media->getProperty(kIOBSDMajorKey));
@@ -3797,8 +4157,10 @@ namespace {
 int findVolume(const char *uuid, dev_t *device, char *path, size_t capacity)
 {
     *device = NODEV;
-    if (path && capacity) path[0] = 0;
-    if (!gOwner || !gOwner->device) return SWITCH_BLOCK_NOT_READY;
+    if (path && capacity)
+        path[0] = 0;
+    if (!gOwner || !gOwner->device)
+        return SWITCH_BLOCK_NOT_READY;
     OSDictionary *match = IOService::serviceMatching("IOMedia");
     OSDictionary *properties = OSDictionary::withCapacity(1);
     OSString *wanted = OSString::withCString(uuid);
@@ -3814,7 +4176,8 @@ int findVolume(const char *uuid, dev_t *device, char *path, size_t capacity)
     match->release();
     properties->release();
     wanted->release();
-    if (!it) return SWITCH_BLOCK_NOT_READY;
+    if (!it)
+        return SWITCH_BLOCK_NOT_READY;
     int status = SWITCH_BLOCK_NOT_READY;
     while (auto *media = OSDynamicCast(IOService, it->getNextObject())) {
         bool ours = false;
@@ -3826,13 +4189,16 @@ int findVolume(const char *uuid, dev_t *device, char *path, size_t capacity)
             entry = parent;
         }
         OSSafeReleaseNULL(entry);
-        if (!ours) continue;
+        if (!ours)
+            continue;
         auto *name = OSDynamicCast(OSString, media->getProperty(kIOBSDNameKey));
         auto *majorNumber = OSDynamicCast(OSNumber, media->getProperty(kIOBSDMajorKey));
         auto *minorNumber = OSDynamicCast(OSNumber, media->getProperty(kIOBSDMinorKey));
-        if (!name || !majorNumber || !minorNumber) continue;  // BSD client not attached yet
+        if (!name || !majorNumber || !minorNumber)
+            continue;  // BSD client not attached yet
         *device = makedev(majorNumber->unsigned32BitValue(), minorNumber->unsigned32BitValue());
-        if (path && capacity) snprintf(path, capacity, "/dev/%s", name->getCStringNoCopy());
+        if (path && capacity)
+            snprintf(path, capacity, "/dev/%s", name->getCStringNoCopy());
         status = SWITCH_BLOCK_OK;
         break;
     }
@@ -3843,7 +4209,8 @@ int findVolume(const char *uuid, dev_t *device, char *path, size_t capacity)
 // Whether a BSD device is media below our block device with the given UUID (or any).
 bool ownsDevice(dev_t device, const char *uuid)
 {
-    if (device == NODEV || !gOwner || !gOwner->device) return false;
+    if (device == NODEV || !gOwner || !gOwner->device)
+        return false;
     OSDictionary *match = IOService::serviceMatching("IOMedia");
     OSDictionary *properties = OSDictionary::withCapacity(2);
     OSNumber *majorNumber = OSNumber::withNumber(major(device), 32);
@@ -3859,7 +4226,8 @@ bool ownsDevice(dev_t device, const char *uuid)
     OSSafeReleaseNULL(properties);
     OSSafeReleaseNULL(majorNumber);
     OSSafeReleaseNULL(minorNumber);
-    if (!it) return false;
+    if (!it)
+        return false;
     bool result = false;
     if (auto *media = OSDynamicCast(IOService, it->getNextObject())) {
         auto *identity = OSDynamicCast(OSString, media->getProperty("UUID"));
@@ -3881,16 +4249,19 @@ bool ownsDevice(dev_t device, const char *uuid)
 
 extern "C" int switch_raw_volume_status(const char *uuid, dev_t *device, char *path, size_t capacity, uint64_t *bytes)
 {
-    if (!uuid || !device || !path || !bytes || capacity < 6) return SWITCH_BLOCK_INVALID;
+    if (!uuid || !device || !path || !bytes || capacity < 6)
+        return SWITCH_BLOCK_INVALID;
     *bytes = 0;
     int status = findVolume(uuid, device, path, capacity);
-    if (!status) *bytes = gOwner->sectorCount * kSector;
+    if (!status)
+        *bytes = gOwner->sectorCount * kSector;
     return status;
 }
 
 extern "C" int native_verified_block_volume_device(const char *uuid, dev_t *device, char *path, size_t capacity)
 {
-    if (!uuid || !device || !path || capacity < 6) return 0;
+    if (!uuid || !device || !path || capacity < 6)
+        return 0;
     // Only the OS root is reported here; other volumes use the raw query.
     if (strcmp(uuid, kRootUUID)) {
         *device = NODEV;
@@ -3912,9 +4283,11 @@ extern "C" int native_verified_block_os_root_authorized(dev_t actual, dev_t sele
 
 extern "C" int native_verified_block_manifest_sha384(dev_t device, const char *uuid, uint8_t digest[48])
 {
-    if (!digest) return 0;
+    if (!digest)
+        return 0;
     bzero(digest, 48);
-    if (!uuid || strcmp(uuid, kRootUUID) || !ownsDevice(device, kRootUUID)) return 0;
+    if (!uuid || strcmp(uuid, kRootUUID) || !ownsDevice(device, kRootUUID))
+        return 0;
     memcpy(digest, kRootIdentifier, sizeof(kRootIdentifier));
     return 1;
 }
@@ -3928,7 +4301,8 @@ namespace {
 const char *kextName(const void *address)
 {
     OSKext *kext = OSKext::lookupKextWithAddress(reinterpret_cast<vm_address_t>(address));
-    if (!kext) return nullptr;
+    if (!kext)
+        return nullptr;
     const char *name = kext->getIdentifierCString();
     kext->release();
     return name;
@@ -3938,7 +4312,8 @@ const char *kextName(const void *address)
 // IOService state bits (2 registered, 4 matched, 8 first published, 0x10 first matched).
 void printServiceTree(IORegistryEntry *entry, unsigned depth, unsigned *budget)
 {
-    if (!*budget) return;
+    if (!*budget)
+        return;
     --*budget;
     auto *service = OSDynamicCast(IOService, entry);
     IOLog("SwitchSD: %*s%s %s busy=%u state=0x%x\n", static_cast<int>(depth * 2), "",
@@ -3954,9 +4329,9 @@ void printServiceTree(IORegistryEntry *entry, unsigned depth, unsigned *budget)
 
 extern "C" void switch_raw_root_wait_diagnostic(void)
 {
-    IOLog("SwitchSD: per-core timer/IPI interrupts %u/%u %u/%u %u/%u %u/%u\n", armcpu_core_timer[0],
-          armcpu_core_sgi[0], armcpu_core_timer[1], armcpu_core_sgi[1], armcpu_core_timer[2], armcpu_core_sgi[2],
-          armcpu_core_timer[3], armcpu_core_sgi[3]);
+    IOLog("SwitchSD: per-core timer/IPI interrupts %u/%u %u/%u %u/%u %u/%u\n", armcpu_core_timer[0], armcpu_core_sgi[0],
+          armcpu_core_timer[1], armcpu_core_sgi[1], armcpu_core_timer[2], armcpu_core_sgi[2], armcpu_core_timer[3],
+          armcpu_core_sgi[3]);
     if (!gOwner) {
         IOLog("SwitchSD: not published (status %d)\n", gPublishStatus);
         return;
@@ -3976,17 +4351,23 @@ extern "C" void switch_raw_root_wait_diagnostic(void)
 // FAT-profile entry points: the FAT image path is gone.
 extern "C" int switch_data_volume_status(const char *, dev_t *device, char *path, size_t capacity, uint64_t *bytes)
 {
-    if (device) *device = NODEV;
-    if (path && capacity) path[0] = 0;
-    if (bytes) *bytes = 0;
+    if (device)
+        *device = NODEV;
+    if (path && capacity)
+        path[0] = 0;
+    if (bytes)
+        *bytes = 0;
     return SWITCH_BLOCK_INVALID;
 }
+
 extern "C" int switch_data_volume_path(const char *uuid, dev_t *device, char *path, size_t capacity, uint64_t *bytes)
 {
     return switch_data_volume_status(uuid, device, path, capacity, bytes) == SWITCH_BLOCK_OK;
 }
+
 extern "C" int switch_block_volume_path(unsigned, char *path, unsigned capacity)
 {
-    if (path && capacity) path[0] = 0;
+    if (path && capacity)
+        path[0] = 0;
     return SWITCH_BLOCK_NOT_READY;
 }

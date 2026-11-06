@@ -66,10 +66,10 @@ inline uint64_t usNow()
 }
 
 struct Policy {
-    bool on = true;         // sync API creations in this process are made on a worker
-    bool api = true;        // the completion-handler API is made on a worker
-    bool redraw = true;     // invalidate the displays once a skipped-for state is made
-    int onscreen = 0;       // 0: IOSurface passes of minPixels and more; 1: every pass; 2: none
+    bool on = true;      // sync API creations in this process are made on a worker
+    bool api = true;     // the completion-handler API is made on a worker
+    bool redraw = true;  // invalidate the displays once a skipped-for state is made
+    int onscreen = 0;    // 0: IOSurface passes of minPixels and more; 1: every pass; 2: none
     uint64_t waitUs = 4000, frameUs = 4000, minPixels = 1280 * 720 / 2;
     unsigned threads = 2;
 };
@@ -77,7 +77,8 @@ struct Policy {
 inline uint64_t envNumber(const char *name, uint64_t otherwise)
 {
     const char *v = getenv(name);
-    if (!v || !*v) return otherwise;
+    if (!v || !*v)
+        return otherwise;
     char *end = nullptr;
     const unsigned long long n = strtoull(v, &end, 10);
     return end && *end == 0 ? (uint64_t)n : otherwise;
@@ -102,50 +103,63 @@ inline const Policy &policy()
         p.waitUs = envNumber("NMB_ASYNC_PSO_WAIT_US", p.waitUs);
         p.frameUs = envNumber("NMB_ASYNC_PSO_FRAME_US", p.frameUs);
         p.minPixels = envNumber("NMB_ASYNC_PSO_MIN_PIXELS", p.minPixels);
-        p.threads = (unsigned)std::max<uint64_t>(1, std::min<uint64_t>(4, envNumber("NMB_ASYNC_PSO_THREADS", p.threads)));
-        if (const char *o = getenv("NMB_ASYNC_PSO_ONSCREEN")) p.onscreen = !strcmp(o, "all") ? 1 : !strcmp(o, "none") ? 2 : 0;
+        p.threads =
+            (unsigned)std::max<uint64_t>(1, std::min<uint64_t>(4, envNumber("NMB_ASYNC_PSO_THREADS", p.threads)));
+        if (const char *o = getenv("NMB_ASYNC_PSO_ONSCREEN"))
+            p.onscreen = !strcmp(o, "all") ? 1 : !strcmp(o, "none") ? 2 : 0;
         if (p.on || p.api)
             NSLog(@"native-metal: async pipelines: sync API %s (wait %llu us, frame %llu us, onscreen %s, redraw %s), "
                   @"completion API %s, %u workers",
                   p.on ? "on" : "off", (unsigned long long)p.waitUs, (unsigned long long)p.frameUs,
-                  p.onscreen == 1 ? "all" : p.onscreen == 2 ? "none" : "surfaces", p.redraw ? "on" : "off",
-                  p.api ? "on" : "off", p.threads);
+                  p.onscreen == 1   ? "all"
+                  : p.onscreen == 2 ? "none"
+                                    : "surfaces",
+                  p.redraw ? "on" : "off", p.api ? "on" : "off", p.threads);
     });
     return p;
 }
 
 // The counters behind the rates line's apso= part, taken (and cleared) by appendRates.
 struct Counters {
-    std::atomic<uint64_t> started{0}, made{0}, failed{0};   // creations handed to a worker, made, refused
-    std::atomic<uint64_t> pending{0}, caught{0};             // sets that found a state being made, and of them made in the wait
-    std::atomic<uint64_t> skippedSets{0}, skippedDraws{0};   // sets that gave up (or found it failed), draws skipped
-    std::atomic<uint64_t> offWaits{0}, offWaitUs{0};         // sets in other passes that waited it out, and for how long
+    std::atomic<uint64_t> started{0}, made{0}, failed{0};  // creations handed to a worker, made, refused
+    std::atomic<uint64_t> pending{0}, caught{0};  // sets that found a state being made, and of them made in the wait
+    std::atomic<uint64_t> skippedSets{0}, skippedDraws{0};  // sets that gave up (or found it failed), draws skipped
+    std::atomic<uint64_t> offWaits{0}, offWaitUs{0};        // sets in other passes that waited it out, and for how long
     std::atomic<uint64_t> readyN{0}, readyUs{0}, readyMaxUs{0};  // asked to made (worker creations)
-    std::atomic<uint64_t> waitedUs{0}, waitedMaxUs{0};       // bounded waits' time on the asking thread
+    std::atomic<uint64_t> waitedUs{0}, waitedMaxUs{0};           // bounded waits' time on the asking thread
     std::atomic<uint64_t> redraws{0};
 };
+
 inline Counters &counters()
 {
     static Counters c;
     return c;
 }
+
 inline void raiseMax(std::atomic<uint64_t> &max, uint64_t v)
 {
     uint64_t seen = max.load(std::memory_order_relaxed);
-    while (v > seen && !max.compare_exchange_weak(seen, v, std::memory_order_relaxed)) {}
+    while (v > seen && !max.compare_exchange_weak(seen, v, std::memory_order_relaxed)) {
+    }
 }
 
 // One creation in flight. `work` makes it with the synchronous path (on a worker, or on a set that waits it out) and returns
 // the state it made (an NBRenderPipeline that owns its handle), or nil with `failure`.
 struct Making {
-    enum State { Queued, Running, Made, Failed };
+    enum State {
+        Queued,
+        Running,
+        Made,
+        Failed
+    };
+
     std::mutex lock;
     std::condition_variable finished;
     State state = Queued;
-    bool skipped = false;      // a draw was skipped for it: draw the displays again once it is made
+    bool skipped = false;  // a draw was skipped for it: draw the displays again once it is made
     uint64_t asked = 0;
     pthread_t runner = nullptr;  // the thread making it, once one does
-    __strong id result = nil;  // the state the synchronous path made
+    __strong id result = nil;    // the state the synchronous path made
     std::function<id(NSString **failure)> work;
     std::string label;
 
@@ -163,7 +177,8 @@ inline bool run(const std::shared_ptr<Making> &m)
     std::function<id(NSString **)> work;
     {
         std::lock_guard<std::mutex> g(m->lock);
-        if (m->state != Making::Queued) return false;
+        if (m->state != Making::Queued)
+            return false;
         m->state = Making::Running;
         m->runner = pthread_self();
         work.swap(m->work);
@@ -172,7 +187,8 @@ inline bool run(const std::shared_ptr<Making> &m)
     NSString *failure = nil;
     @autoreleasepool {
         made = work(&failure);
-        if (!made) NSLog(@"native-metal: async pipeline %s refused: %@", m->label.c_str(), failure ?: @"?");
+        if (!made)
+            NSLog(@"native-metal: async pipeline %s refused: %@", m->label.c_str(), failure ?: @"?");
     }
     bool skipped;
     {
@@ -188,7 +204,8 @@ inline bool run(const std::shared_ptr<Making> &m)
     c.readyN++;
     c.readyUs += took;
     raiseMax(c.readyMaxUs, took);
-    if (made && skipped) scheduleRedraw();
+    if (made && skipped)
+        scheduleRedraw();
     return true;
 }
 
@@ -225,12 +242,15 @@ public:
         jobs.push_back(std::move(job));
         if (idle == 0 && threads < policy().threads) {
             threads++;
-            std::thread([this] { serve(); }).detach();
+            std::thread([this] {
+                serve();
+            }).detach();
         } else {
             wake.notify_one();
         }
     }
 };
+
 inline Workers &workers()
 {
     static Workers *w = new Workers();  // never destroyed: workers outlive static destruction
@@ -242,13 +262,16 @@ inline void start(const std::shared_ptr<Making> &m)
 {
     m->asked = usNow();
     counters().started++;
-    workers().submit([m] { run(m); });
+    workers().submit([m] {
+        run(m);
+    });
 }
 
 // This thread's waits in the current frame (16.7 ms of its time from its first wait).
 struct FrameWaits {
     uint64_t start = 0, waited = 0;
 };
+
 inline FrameWaits &frameWaits()
 {
     static thread_local FrameWaits f;
@@ -259,16 +282,22 @@ inline FrameWaits &frameWaits()
 // caller's class: a render thread (no class: Core Animation's is a fixed priority) lends the user-interactive class.
 struct Lend {
     pthread_override_t override = nullptr;
+
     Lend(const Making &m)
     {
-        if (m.state != Making::Running || !m.runner || pthread_equal(m.runner, pthread_self())) return;
+        if (m.state != Making::Running || !m.runner || pthread_equal(m.runner, pthread_self()))
+            return;
         qos_class_t mine = qos_class_self();
-        if (mine == QOS_CLASS_UNSPECIFIED) mine = QOS_CLASS_USER_INTERACTIVE;
-        if (mine > QOS_CLASS_USER_INITIATED) override = pthread_override_qos_class_start_np(m.runner, mine, 0);
+        if (mine == QOS_CLASS_UNSPECIFIED)
+            mine = QOS_CLASS_USER_INTERACTIVE;
+        if (mine > QOS_CLASS_USER_INITIATED)
+            override = pthread_override_qos_class_start_np(m.runner, mine, 0);
     }
+
     ~Lend()
     {
-        if (override) pthread_override_qos_class_end_np(override);
+        if (override)
+            pthread_override_qos_class_end_np(override);
     }
 };
 
@@ -285,7 +314,8 @@ inline bool ready(const std::shared_ptr<Making> &m, bool skips)
 {
     {
         std::lock_guard<std::mutex> g(m->lock);
-        if (m->state == Making::Made) return true;
+        if (m->state == Making::Made)
+            return true;
         if (m->state == Making::Failed) {
             counters().skippedSets++;
             return false;
@@ -300,7 +330,9 @@ inline bool ready(const std::shared_ptr<Making> &m, bool skips)
         std::unique_lock<std::mutex> g(m->lock);
         Lend lend(*m);
         // Bounded, as is every userland wait: a making past a minute is a hang, not a compile.
-        if (!m->finished.wait_for(g, std::chrono::seconds(60), [&] { return m->done(); })) {
+        if (!m->finished.wait_for(g, std::chrono::seconds(60), [&] {
+                return m->done();
+            })) {
             os_log_fault(OS_LOG_DEFAULT,
                          "native-metal: render pipeline state %{public}s not made after 60 s: abort() for the stack",
                          m->label.c_str());
@@ -309,7 +341,8 @@ inline bool ready(const std::shared_ptr<Making> &m, bool skips)
         const uint64_t took = usNow() - began;
         c.offWaits++;
         c.offWaitUs += took;
-        if (m->state == Making::Failed) c.skippedSets++;
+        if (m->state == Making::Failed)
+            c.skippedSets++;
         return m->state == Making::Made;
     }
     const Policy &p = policy();
@@ -322,7 +355,9 @@ inline bool ready(const std::shared_ptr<Making> &m, bool skips)
     std::unique_lock<std::mutex> g(m->lock);
     if (allowed && !m->done()) {
         Lend lend(*m);
-        m->finished.wait_for(g, std::chrono::microseconds(allowed), [&] { return m->done(); });
+        m->finished.wait_for(g, std::chrono::microseconds(allowed), [&] {
+            return m->done();
+        });
     }
     const uint64_t took = usNow() - began;
     f.waited += took;
@@ -343,22 +378,28 @@ inline void redrawDisplays()
     Class server = objc_getClass("CAWindowServer");
     SEL running = sel_registerName("serverIfRunning"), displays = sel_registerName("displays");
     SEL get = sel_registerName("invertsColors"), set = sel_registerName("setInvertsColors:");
-    if (!server || ![server respondsToSelector:running]) return;
-    id s = ((id(*)(id, SEL))objc_msgSend)(server, running);
-    if (!s || ![s respondsToSelector:displays]) return;
-    NSArray *list = ((id(*)(id, SEL))objc_msgSend)(s, displays);
+    if (!server || ![server respondsToSelector:running])
+        return;
+    id s = ((id (*)(id, SEL))objc_msgSend)(server, running);
+    if (!s || ![s respondsToSelector:displays])
+        return;
+    NSArray *list = ((id (*)(id, SEL))objc_msgSend)(s, displays);
     for (id d in list) {
-        if (![d respondsToSelector:get] || ![d respondsToSelector:set]) continue;
-        const BOOL inverted = ((BOOL(*)(id, SEL))objc_msgSend)(d, get);
+        if (![d respondsToSelector:get] || ![d respondsToSelector:set])
+            continue;
+        const BOOL inverted = ((BOOL (*)(id, SEL))objc_msgSend)(d, get);
         ((void (*)(id, SEL, BOOL))objc_msgSend)(d, set, inverted);
     }
     counters().redraws++;
 }
+
 inline void scheduleRedraw()
 {
-    if (!policy().redraw) return;
+    if (!policy().redraw)
+        return;
     static std::atomic<bool> scheduled{false};
-    if (scheduled.exchange(true)) return;
+    if (scheduled.exchange(true))
+        return;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 16 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
         scheduled = false;
         @autoreleasepool {
@@ -377,8 +418,10 @@ inline size_t appendRates(char *out, size_t size)
     const uint64_t pending = c.pending.exchange(0), caught = c.caught.exchange(0), sets = c.skippedSets.exchange(0);
     const uint64_t draws = c.skippedDraws.exchange(0), off = c.offWaits.exchange(0), offUs = c.offWaitUs.exchange(0);
     const uint64_t readyN = c.readyN.exchange(0), readyUs = c.readyUs.exchange(0), readyMax = c.readyMaxUs.exchange(0);
-    const uint64_t waited = c.waitedUs.exchange(0), waitedMax = c.waitedMaxUs.exchange(0), redraws = c.redraws.exchange(0);
-    if (!size || (!started && !pending && !draws && !made && !failed)) return 0;
+    const uint64_t waited = c.waitedUs.exchange(0), waitedMax = c.waitedMaxUs.exchange(0),
+                   redraws = c.redraws.exchange(0);
+    if (!size || (!started && !pending && !draws && !made && !failed))
+        return 0;
     const int n = snprintf(out, size,
                            " apso=%llu/%llu/%llu set=%llu/%llu wait=%llu/%llums skip=%llu/%llu off=%llu/%llums "
                            "rdy=%llu/%llums redraw=%llu",

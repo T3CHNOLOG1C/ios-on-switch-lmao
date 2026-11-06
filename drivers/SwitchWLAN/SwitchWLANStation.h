@@ -23,6 +23,7 @@ enum {
     SWLAN_STA_KEYS,
     SWLAN_STA_UP
 };
+
 enum {
     SWLAN_RES_OK,
     SWLAN_RES_NOT_FOUND,
@@ -115,6 +116,7 @@ struct swlan_net_counters {
     uint32_t rx_batches;                             // frame batches handed to the stack (one ifnet_input each)
     uint8_t start_model;                             // 1: en0 runs the stack's output queue (0: legacy if_output)
 };
+
 void switch_wlan_net_counters(struct swlan_net_counters *out);
 // The link's transmit PHY rate (b/s) as en0's baud rate, what the stack and its clients read for the link speed.
 void switch_wlan_net_rate(uint64_t bps);

@@ -14,8 +14,18 @@
 
 #define ALIGN(v, a) (((v) + (a) - 1) & ~((uint32_t)(a) - 1))
 
-enum { LOG2_MAX_FRAME_NUM = 16, LOG2_MAX_POC_LSB = 16, SLICE_OFF = 512, ME_OFF = 640, MD_OFF = 832, Q_OFF = 960 };
-enum { SETUP_BYTES = Q_OFF + 192 };
+enum {
+    LOG2_MAX_FRAME_NUM = 16,
+    LOG2_MAX_POC_LSB = 16,
+    SLICE_OFF = 512,
+    ME_OFF = 640,
+    MD_OFF = 832,
+    Q_OFF = 960
+};
+
+enum {
+    SETUP_BYTES = Q_OFF + 192
+};
 
 void h264bits_init(H264Bits *b, uint8_t *data, size_t cap)
 {
@@ -44,7 +54,8 @@ void h264bits_ue(H264Bits *b, uint32_t value)
 {
     const uint64_t v = (uint64_t)value + 1;
     unsigned bits = 0;
-    while ((v >> bits) > 1) bits++;
+    while ((v >> bits) > 1)
+        bits++;
     h264bits_u(b, 0, bits);
     h264bits_u(b, (uint32_t)v, bits + 1);
 }
@@ -61,7 +72,8 @@ bool h264bits_aligned(const H264Bits *b)
 
 void h264bits_align_zero(H264Bits *b)
 {
-    while (b->count) h264bits_u(b, 0, 1);
+    while (b->count)
+        h264bits_u(b, 0, 1);
 }
 
 void h264bits_trailing(H264Bits *b)
@@ -79,15 +91,18 @@ size_t h264enc_nal(uint8_t header, const uint8_t *rbsp, size_t size, uint8_t *ou
 {
     size_t n = 0;
     unsigned zeros = 0;
-    if (cap < 1) return 0;
+    if (cap < 1)
+        return 0;
     out[n++] = header;
     for (size_t i = 0; i < size; i++) {
         if (zeros == 2 && rbsp[i] <= 3) {
-            if (n == cap) return 0;
+            if (n == cap)
+                return 0;
             out[n++] = 3;
             zeros = 0;
         }
-        if (n == cap) return 0;
+        if (n == cap)
+            return 0;
         out[n++] = rbsp[i];
         zeros = rbsp[i] ? 0 : zeros + 1;
     }
@@ -111,13 +126,17 @@ int h264enc_configure(H264EncConfig *c)
         (c->height & 1))
         return -1;
     const uint32_t mbs = h264enc_width_mbs(c) * h264enc_height_mbs(c);
-    if (mbs > TEGRA_NVENC_MAX_MBS) return -1;
+    if (mbs > TEGRA_NVENC_MAX_MBS)
+        return -1;
     if (c->profile_idc != H264_PROFILE_BASELINE && c->profile_idc != H264_PROFILE_MAIN &&
         c->profile_idc != H264_PROFILE_HIGH)
         return -1;
-    if (c->profile_idc == H264_PROFILE_BASELINE) c->cabac = false;
-    if (c->profile_idc != H264_PROFILE_HIGH) c->transform8x8 = false;
-    if (c->input_layout >= TEGRA_NVENC_LAYOUTS || c->chroma_mode > TEGRA_NVENC_CHROMA_METHOD) return -1;
+    if (c->profile_idc == H264_PROFILE_BASELINE)
+        c->cabac = false;
+    if (c->profile_idc != H264_PROFILE_HIGH)
+        c->transform8x8 = false;
+    if (c->input_layout >= TEGRA_NVENC_LAYOUTS || c->chroma_mode > TEGRA_NVENC_CHROMA_METHOD)
+        return -1;
     if (!c->level_idc) {
         static const struct {
             uint8_t level;
@@ -127,6 +146,7 @@ int h264enc_configure(H264EncConfig *c)
             {31, 3600, 108000},  {32, 5120, 216000},  {40, 8192, 245760},   {42, 8704, 522240},
             {50, 22080, 589824}, {51, 36864, 983040}, {52, 36864, 2073600},
         };
+
         const uint64_t fps = c->fps_num && c->fps_den ? ((uint64_t)c->fps_num + c->fps_den - 1) / c->fps_den : 60;
         const uint32_t wmbs = h264enc_width_mbs(c), hmbs = h264enc_height_mbs(c);
         c->level_idc = 52;
@@ -271,7 +291,8 @@ size_t h264enc_write_avcc(const H264EncConfig *c, uint8_t *out, size_t cap)
     uint8_t sps[160], pps[48];
     const size_t spsSize = h264enc_write_sps(c, sps, sizeof(sps)), ppsSize = h264enc_write_pps(c, pps, sizeof(pps));
     const size_t n = 6 + 2 + spsSize + 1 + 2 + ppsSize + (c->profile_idc == H264_PROFILE_HIGH ? 4 : 0);
-    if (!spsSize || !ppsSize || n > cap) return 0;
+    if (!spsSize || !ppsSize || n > cap)
+        return 0;
     size_t i = 0;
     out[i++] = 1;         // configurationVersion
     out[i++] = sps[1];    // AVCProfileIndication
@@ -304,7 +325,8 @@ void h264enc_slice_header(const H264EncConfig *c, const H264EncPicture *p, H264B
     h264bits_ue(b, intra ? 7 : 5);  // slice_type: every slice of the picture I (7) or P (5)
     h264bits_ue(b, 0);              // pic_parameter_set_id
     h264bits_u(b, p->frame_num & 0xffff, LOG2_MAX_FRAME_NUM);
-    if (idr) h264bits_ue(b, p->idr_pic_id);
+    if (idr)
+        h264bits_ue(b, p->idr_pic_id);
     h264bits_u(b, p->poc_lsb & 0xffff, LOG2_MAX_POC_LSB);
     if (!intra) {
         h264bits_u(b, 0, 1);  // num_ref_idx_active_override_flag
@@ -316,11 +338,12 @@ void h264enc_slice_header(const H264EncConfig *c, const H264EncPicture *p, H264B
     } else {
         h264bits_u(b, 0, 1);  // adaptive_ref_pic_marking_mode_flag: sliding window
     }
-    if (c->cabac && !intra) h264bits_ue(b, 0);  // cabac_init_idc
-    h264bits_se(b, (int32_t)p->qp - 26);        // slice_qp_delta
-    h264bits_ue(b, 0);                          // disable_deblocking_filter_idc: on
-    h264bits_se(b, 0);                          // slice_alpha_c0_offset_div2
-    h264bits_se(b, 0);                          // slice_beta_offset_div2
+    if (c->cabac && !intra)
+        h264bits_ue(b, 0);                // cabac_init_idc
+    h264bits_se(b, (int32_t)p->qp - 26);  // slice_qp_delta
+    h264bits_ue(b, 0);                    // disable_deblocking_filter_idc: on
+    h264bits_se(b, 0);                    // slice_alpha_c0_offset_div2
+    h264bits_se(b, 0);                    // slice_beta_offset_div2
 }
 
 static void surfaceConfig(const H264EncConfig *c, const H264EncSurface *s, nvenc_h264_surface_cfg_s *cfg, bool input)
@@ -335,11 +358,18 @@ static void surfaceConfig(const H264EncConfig *c, const H264EncSurface *s, nvenc
         return;
     }
     switch (c->input_layout) {
-    case TEGRA_NVENC_LAYOUT_BL2_LOG: cfg->block_height = 1; break;
+    case TEGRA_NVENC_LAYOUT_BL2_LOG:
+        cfg->block_height = 1;
+        break;
     case TEGRA_NVENC_LAYOUT_BL2_RAW:
-    case TEGRA_NVENC_LAYOUT_BL4_LOG: cfg->block_height = 2; break;
-    case TEGRA_NVENC_LAYOUT_TILED16: cfg->tiled_16x16 = 1; break;
-    default: break;  // PITCH and BL1: block_height 0
+    case TEGRA_NVENC_LAYOUT_BL4_LOG:
+        cfg->block_height = 2;
+        break;
+    case TEGRA_NVENC_LAYOUT_TILED16:
+        cfg->tiled_16x16 = 1;
+        break;
+    default:
+        break;  // PITCH and BL1: block_height 0
     }
 }
 
@@ -508,7 +538,8 @@ void h264enc_fill_submit(const H264EncConfig *c, const H264EncLayout *l, const H
     if (pPicture) {
         pc->l0[0] = 0;  // the previous picture, in reference slot 0
         pc->temp_dist_l0[0] = 1;
-        for (int i = 0; i < 8; i++) pc->dist_scale_factor[i][0] = 256;
+        for (int i = 0; i < 8; i++)
+            pc->dist_scale_factor[i][0] = 256;
     }
     pc->frame_num = (unsigned short)p->frame_num;
     pc->pic_order_cnt_lsb = (unsigned short)p->poc_lsb;
@@ -579,11 +610,16 @@ size_t h264enc_surface_offset(uint32_t layout, uint32_t pitch, uint32_t x, uint3
 {
     switch (layout) {
     case TEGRA_NVENC_LAYOUT_BL2_LOG:
-    case TEGRA_NVENC_LAYOUT_BL2_RAW: return blockLinear(2, pitch, x, y);
-    case TEGRA_NVENC_LAYOUT_BL4_LOG: return blockLinear(4, pitch, x, y);
-    case TEGRA_NVENC_LAYOUT_BL1: return blockLinear(1, pitch, x, y);
-    case TEGRA_NVENC_LAYOUT_TILED16: return (size_t)(y / 16) * pitch * 16 + (x / 16) * 256 + (y % 16) * 16 + x % 16;
-    default: return (size_t)y * pitch + x;
+    case TEGRA_NVENC_LAYOUT_BL2_RAW:
+        return blockLinear(2, pitch, x, y);
+    case TEGRA_NVENC_LAYOUT_BL4_LOG:
+        return blockLinear(4, pitch, x, y);
+    case TEGRA_NVENC_LAYOUT_BL1:
+        return blockLinear(1, pitch, x, y);
+    case TEGRA_NVENC_LAYOUT_TILED16:
+        return (size_t)(y / 16) * pitch * 16 + (x / 16) * 256 + (y % 16) * 16 + x % 16;
+    default:
+        return (size_t)y * pitch + x;
     }
 }
 
@@ -596,7 +632,8 @@ static void putPlane(uint32_t layout, uint32_t pitch, uint8_t *dst, const uint8_
         const uint8_t *row = src + (size_t)(y < h ? y : h - 1) * stride;
         if (layout == TEGRA_NVENC_LAYOUT_PITCH) {
             memcpy(dst + (size_t)y * pitch, row, w);
-            for (uint32_t x = w; x < codedW; x++) dst[(size_t)y * pitch + x] = row[pairs ? w - 2 + (x & 1) : w - 1];
+            for (uint32_t x = w; x < codedW; x++)
+                dst[(size_t)y * pitch + x] = row[pairs ? w - 2 + (x & 1) : w - 1];
             continue;
         }
         for (uint32_t x = 0; x < codedW; x += 16) {
@@ -632,12 +669,16 @@ size_t h264enc_annexb_to_avcc(const uint8_t *in, size_t size, uint8_t *out, size
         }
         const size_t start = i + 3;
         size_t end = start;
-        while (end + 3 <= size && !(in[end] == 0 && in[end + 1] == 0 && (in[end + 2] == 1 || in[end + 2] == 0))) end++;
-        if (end + 3 > size) end = size;
-        while (end > start && in[end - 1] == 0) end--;  // trailing_zero_8bits and the next start code's zero byte
+        while (end + 3 <= size && !(in[end] == 0 && in[end + 1] == 0 && (in[end + 2] == 1 || in[end + 2] == 0)))
+            end++;
+        if (end + 3 > size)
+            end = size;
+        while (end > start && in[end - 1] == 0)
+            end--;  // trailing_zero_8bits and the next start code's zero byte
         const size_t length = end - start;
         if (length) {
-            if (n + 4 + length > cap) return 0;
+            if (n + 4 + length > cap)
+                return 0;
             out[n++] = (uint8_t)(length >> 24);
             out[n++] = (uint8_t)(length >> 16);
             out[n++] = (uint8_t)(length >> 8);

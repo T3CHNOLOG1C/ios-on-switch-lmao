@@ -14,6 +14,7 @@ struct switch_sd_io {
     uint64_t (*ticks)(void *);
     void (*barrier)(void *);
 };
+
 struct switch_sd_host {
     struct switch_sd_io io;
     void *context;
@@ -26,6 +27,7 @@ struct switch_sd_host {
     uint32_t block_addressing_verified;
     uint32_t blocked;
 };
+
 struct switch_sd_result {
     uint32_t stage;
     uint32_t status;
@@ -42,21 +44,33 @@ struct switch_sd_result {
     uint32_t block_size;
     uint32_t initial_status;
 };
+
 enum switch_sd_readiness_failure {
-    SWITCH_SD_READY_VERSION=1u<<0, SWITCH_SD_READY_ACTIVE=1u<<1,
-    SWITCH_SD_READY_CARD=1u<<2, SWITCH_SD_READY_BUS=1u<<3,
-    SWITCH_SD_READY_POWER=1u<<4, SWITCH_SD_READY_CLOCK=1u<<5,
-    SWITCH_SD_READY_RESET=1u<<6, SWITCH_SD_READY_BLOCK_SIZE=1u<<7
+    SWITCH_SD_READY_VERSION = 1u << 0,
+    SWITCH_SD_READY_ACTIVE = 1u << 1,
+    SWITCH_SD_READY_CARD = 1u << 2,
+    SWITCH_SD_READY_BUS = 1u << 3,
+    SWITCH_SD_READY_POWER = 1u << 4,
+    SWITCH_SD_READY_CLOCK = 1u << 5,
+    SWITCH_SD_READY_RESET = 1u << 6,
+    SWITCH_SD_READY_BLOCK_SIZE = 1u << 7
 };
+
 enum switch_sd_error {
-    SWITCH_SD_OK=0, SWITCH_SD_ARGUMENT=1, SWITCH_SD_UNQUALIFIED=2,
-    SWITCH_SD_NOT_READY=3, SWITCH_SD_PREEXISTING_ERROR=4,
-    SWITCH_SD_TIMEOUT=5, SWITCH_SD_CONTROLLER_ERROR=6, SWITCH_SD_CARD_ERROR=7,
-    SWITCH_SD_BUFFER_STATE=8, SWITCH_SD_ALREADY_BLOCKED=9
+    SWITCH_SD_OK = 0,
+    SWITCH_SD_ARGUMENT = 1,
+    SWITCH_SD_UNQUALIFIED = 2,
+    SWITCH_SD_NOT_READY = 3,
+    SWITCH_SD_PREEXISTING_ERROR = 4,
+    SWITCH_SD_TIMEOUT = 5,
+    SWITCH_SD_CONTROLLER_ERROR = 6,
+    SWITCH_SD_CARD_ERROR = 7,
+    SWITCH_SD_BUFFER_STATE = 8,
+    SWITCH_SD_ALREADY_BLOCKED = 9
 };
+
 /* Returns a full verified 512-byte sector or leaves output unchanged.
  * A post-command error blocks this host for the rest of the boot. This module
  * never attempts recovery, reset, reinitialization, erase or a media write. */
-int switch_sd_read_sector(struct switch_sd_host *, uint64_t lba, uint8_t output[512],
-                       struct switch_sd_result *);
+int switch_sd_read_sector(struct switch_sd_host *, uint64_t lba, uint8_t output[512], struct switch_sd_result *);
 #endif

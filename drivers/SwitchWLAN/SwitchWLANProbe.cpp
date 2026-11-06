@@ -64,11 +64,14 @@ volatile uint32_t *map(vm_offset_t pa)
 {
     return reinterpret_cast<volatile uint32_t *>(ml_io_map(pa, 0x4000));
 }
+
 volatile uint32_t *gCar, *gFuse;  // kept: switch_wlan_mac may be called again
+
 inline uint32_t rd(volatile uint32_t *base, uint32_t offset)
 {
     return base[offset / 4];
 }
+
 inline unsigned bit(uint32_t value, unsigned n)
 {
     return (value >> n) & 1;
@@ -80,19 +83,26 @@ inline unsigned bit(uint32_t value, unsigned n)
 // fuse (+2 Wi-Fi, +1 Bluetooth). bt may be null.
 extern "C" int switch_wlan_mac(uint8_t wifi[6], uint8_t bt[6])
 {
-    if (!gCar) gCar = map(kCarPA);
-    if (!gFuse) gFuse = map(kFusePA);
-    if (!gCar || !gFuse) return -1;
-    if (!(rd(gCar, kClkEnbH) & kHFuse) || !(rd(gCar, kMiscClkEnb) & kFuseVisible)) return -1;
+    if (!gCar)
+        gCar = map(kCarPA);
+    if (!gFuse)
+        gFuse = map(kFusePA);
+    if (!gCar || !gFuse)
+        return -1;
+    if (!(rd(gCar, kClkEnbH) & kHFuse) || !(rd(gCar, kMiscClkEnb) & kFuseVisible))
+        return -1;
     const uint32_t lot0 = rd(gFuse, kFuseLot0);
-    if (!lot0) return -1;
+    if (!lot0)
+        return -1;
     const uint8_t prefix[5] = {0x98, 0xB6, 0xE9, static_cast<uint8_t>(lot0 >> 16), static_cast<uint8_t>(lot0 >> 8)};
     for (unsigned i = 0; i < 5; ++i) {
         wifi[i] = prefix[i];
-        if (bt) bt[i] = prefix[i];
+        if (bt)
+            bt[i] = prefix[i];
     }
     wifi[5] = static_cast<uint8_t>(lot0 + 2);
-    if (bt) bt[5] = static_cast<uint8_t>(lot0 + 1);
+    if (bt)
+        bt[5] = static_cast<uint8_t>(lot0 + 1);
     return 0;
 }
 

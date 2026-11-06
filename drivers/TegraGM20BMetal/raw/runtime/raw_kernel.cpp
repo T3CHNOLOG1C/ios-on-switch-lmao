@@ -16,7 +16,8 @@ constexpr uint64_t kVaGranule = 0x10000;  // the GMMU big page: every range star
 
 Kernel::~Kernel()
 {
-    if (conn_) IOServiceClose(conn_);
+    if (conn_)
+        IOServiceClose(conn_);
 }
 
 int Kernel::call(uint32_t method, const void *in, size_t inSize, void *out, size_t outSize)
@@ -26,10 +27,12 @@ int Kernel::call(uint32_t method, const void *in, size_t inSize, void *out, size
         return IOConnectCallStructMethod(conn_, method, in, inSize, outSize ? out : nullptr,
                                          outSize ? &outBytes : nullptr);
     uint32_t buffer[1024];
-    if (inSize > sizeof buffer - 8) return kIOReturnBadArgument;
+    if (inSize > sizeof buffer - 8)
+        return kIOReturnBadArgument;
     buffer[0] = TegraGM20BTunnelMagic;
     buffer[1] = method;
-    if (inSize) memcpy(&buffer[2], in, inSize);
+    if (inSize)
+        memcpy(&buffer[2], in, inSize);
     return IOConnectCallStructMethod(conn_, selector_, buffer, 8 + inSize, outSize ? out : nullptr,
                                      outSize ? &outBytes : nullptr);
 }
@@ -37,7 +40,8 @@ int Kernel::call(uint32_t method, const void *in, size_t inSize, void *out, size
 bool Kernel::open(std::string &err)
 {
     const char *name = getenv("NVK_DARWIN_SERVICE");
-    if (!name || !*name) name = "IOAcceleratorES";
+    if (!name || !*name)
+        name = "IOAcceleratorES";
     io_service_t service = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching(name));
     if (!service) {
         err = std::string("no ") + name;
@@ -59,7 +63,8 @@ bool Kernel::open(std::string &err)
                 tunnel_ = true;
                 selector_ = s;
             }
-        if (tunnel_) kr = call(TegraGM20BMethodGetInfo, nullptr, 0, &info_, sizeof info_);
+        if (tunnel_)
+            kr = call(TegraGM20BMethodGetInfo, nullptr, 0, &info_, sizeof info_);
     }
     if (kr != KERN_SUCCESS || info_.abi_version != TegraGM20BAbiVersion) {
         err = "GetInfo failed";
@@ -75,14 +80,18 @@ bool Kernel::open(std::string &err)
 uint64_t Kernel::allocVa(uint64_t bytes, uint64_t align)
 {
     bytes = (bytes + kVaGranule - 1) & ~(kVaGranule - 1);
-    if (align < kVaGranule) align = kVaGranule;
+    if (align < kVaGranule)
+        align = kVaGranule;
     for (auto it = vaFree_.begin(); it != vaFree_.end(); ++it) {
         const uint64_t at = (it->first + align - 1) & ~(align - 1), end = it->first + it->second;
-        if (at + bytes > end) continue;
+        if (at + bytes > end)
+            continue;
         const uint64_t start = it->first;
         vaFree_.erase(it);
-        if (at > start) vaFree_[start] = at - start;
-        if (at + bytes < end) vaFree_[at + bytes] = end - at - bytes;
+        if (at > start)
+            vaFree_[start] = at - start;
+        if (at + bytes < end)
+            vaFree_[at + bytes] = end - at - bytes;
         vaUsed_ += bytes;
         return at;
     }
@@ -92,7 +101,8 @@ uint64_t Kernel::allocVa(uint64_t bytes, uint64_t align)
 void Kernel::freeVa(uint64_t va, uint64_t bytes)
 {
     bytes = (bytes + kVaGranule - 1) & ~(kVaGranule - 1);
-    if (!va || !bytes) return;
+    if (!va || !bytes)
+        return;
     vaUsed_ -= bytes;
     auto next = vaFree_.lower_bound(va);
     if (next != vaFree_.end() && va + bytes == next->first) {  // merge with the range after
@@ -173,7 +183,8 @@ bool Kernel::importPages(void *addr, uint64_t bytes, Bo &bo)
     TegraGM20BAbiBoImport in = {base, span};
     TegraGM20BAbiBoAllocReply r = {};
     bo = {};
-    if (call(TegraGM20BMethodBoImport, &in, sizeof in, &r, sizeof r) != KERN_SUCCESS) return false;
+    if (call(TegraGM20BMethodBoImport, &in, sizeof in, &r, sizeof r) != KERN_SUCCESS)
+        return false;
     bo.handle = r.handle;
     bo.bytes = span;
     return true;
@@ -199,12 +210,14 @@ bool Kernel::bindImport(void *addr, Bo &bo, uint32_t kind)
 
 void Kernel::free(Bo &bo)
 {
-    if (bo.token && bo.cpu) unmap(bo.token, uint64_t(uintptr_t(bo.cpu)));
+    if (bo.token && bo.cpu)
+        unmap(bo.token, uint64_t(uintptr_t(bo.cpu)));
     if (bo.handle) {
         TegraGM20BAbiBoFree f = {bo.handle};
         call(TegraGM20BMethodBoFree, &f, sizeof f, nullptr, 0);
     }
-    if (bo.vaBase) freeVa(bo.vaBase, bo.bytes);
+    if (bo.vaBase)
+        freeVa(bo.vaBase, bo.bytes);
     bo = {};
 }
 
@@ -233,7 +246,8 @@ bool Kernel::map(uint32_t token, bool readOnly, uint64_t &address, uint64_t &byt
     if (info_.flags & TegraGM20BInfoKernelMap) {
         const TegraGM20BAbiMap in = {token, readOnly ? uint32_t(TegraGM20BMapReadOnly) : 0u, 0};
         TegraGM20BAbiMapReply r = {};
-        if (call(TegraGM20BMethodMap, &in, sizeof in, &r, sizeof r) != KERN_SUCCESS) return false;
+        if (call(TegraGM20BMethodMap, &in, sizeof in, &r, sizeof r) != KERN_SUCCESS)
+            return false;
         address = r.address;
         bytes = r.bytes;
         return true;
@@ -286,7 +300,8 @@ bool Kernel::exec(uint32_t channel, const TegraGM20BAbiPush *pushes, uint32_t co
             return false;
         }
         // GPFIFO full: block on the last submission's fence (interrupt-driven in the kext), never spin
-        if (!wait(channel, last)) return false;
+        if (!wait(channel, last))
+            return false;
     }
 }
 

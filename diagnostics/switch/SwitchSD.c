@@ -33,6 +33,7 @@ static struct switch_sd_reference reference;
 static struct switch_sd_card qualified_card;
 volatile uint64_t switch_card_record[16];
 static unsigned attempted;
+
 struct board_io {
     volatile uint8_t *registers;
     uint32_t bounds_error;
@@ -60,6 +61,7 @@ static uint8_t r8(void *context, uint32_t offset)
     }
     return b->registers[offset];
 }
+
 static uint16_t r16(void *context, uint32_t offset)
 {
     struct board_io *b = context;
@@ -69,6 +71,7 @@ static uint16_t r16(void *context, uint32_t offset)
     }
     return *(volatile uint16_t *)(b->registers + offset);
 }
+
 static uint32_t r32(void *context, uint32_t offset)
 {
     struct board_io *b = context;
@@ -79,6 +82,7 @@ static uint32_t r32(void *context, uint32_t offset)
     }
     return *(volatile uint32_t *)(b->registers + offset);
 }
+
 static void w16(void *context, uint32_t offset, uint16_t value)
 {
     struct board_io *b = context;
@@ -100,6 +104,7 @@ static void w16(void *context, uint32_t offset, uint16_t value)
     }
     *(volatile uint16_t *)(b->registers + offset) = value;
 }
+
 static void w32(void *context, uint32_t offset, uint32_t value)
 {
     struct board_io *b = context;
@@ -109,6 +114,7 @@ static void w32(void *context, uint32_t offset, uint32_t value)
     }
     *(volatile uint32_t *)(b->registers + offset) = value;
 }
+
 static uint64_t ticks(void *context)
 {
     uint64_t value;
@@ -116,6 +122,7 @@ static uint64_t ticks(void *context)
     __asm__ volatile("isb\n\tmrs %0, cntpct_el0" : "=r"(value)::"memory");
     return value;
 }
+
 /* Physical-address DMA requires the readable SDMMC1A per-SWGROUP bypass.
  * Tegra210 global config/client masks are TrustZone-only and can read all ones
  * at non-secure EL1. Linux/Hekate use ASID MC+0xa94 bit31 for group translation;
@@ -123,10 +130,12 @@ static uint64_t ticks(void *context)
  * against the photographed OLED's 4096 MiB EMEM_CFG, then recheck every phase.
  * Never modify the SMMU or another client's mapping. */
 volatile uint64_t switch_dma_record[13];
+
 static int dma_bus_ready(void *context)
 {
     struct board_io *b = context;
-    if (b != &board || !b->mc) return -1;
+    if (b != &board || !b->mc)
+        return -1;
     uint32_t config = *(volatile uint32_t *)(b->mc + 0x10);
     uint32_t asid = *(volatile uint32_t *)(b->mc + 0xa94);
     uint32_t clients = *(volatile uint32_t *)(b->mc + 0x234);
@@ -139,6 +148,7 @@ static int dma_bus_ready(void *context)
      * identity independently of the secure global enable/client registers. */
     return emem != 4096u || (asid & ~0x7fu) ? -1 : 0;
 }
+
 static void dma_write8(void *context, uint32_t offset, uint8_t value)
 {
     struct board_io *b = context;
@@ -148,11 +158,12 @@ static void dma_write8(void *context, uint32_t offset, uint8_t value)
     }
     b->registers[offset] = value;
 }
+
 static int dma_cache(void *context, void *address, uint32_t length, int after_read)
 {
     struct board_io *b = context;
-    if (b != &board || address != b->dma.bytes || !length || length > SWITCH_SD_DMA_BYTES || ((uintptr_t)address & 63) ||
-        (after_read != 0 && after_read != 1))
+    if (b != &board || address != b->dma.bytes || !length || length > SWITCH_SD_DMA_BYTES ||
+        ((uintptr_t)address & 63) || (after_read != 0 && after_read != 1))
         return -1;
     uintptr_t end = (uintptr_t)address + ((length + 63u) & ~63u);
     for (uintptr_t at = (uintptr_t)address; at < end; at += 64) {
@@ -164,6 +175,7 @@ static int dma_cache(void *context, void *address, uint32_t length, int after_re
     __asm__ volatile("dsb sy" ::: "memory");
     return 0;
 }
+
 static int dma_install(struct switch_sd_host *host)
 {
     struct switch_sd_dma *d = &board.dma;
@@ -178,10 +190,12 @@ static int dma_install(struct switch_sd_host *host)
     uint64_t midr, ctr;
     __asm__ volatile("mrs %0,midr_el1" : "=r"(midr));
     __asm__ volatile("mrs %0,ctr_el0" : "=r"(ctr));
-    if ((midr & UINT64_C(0xff0ffff0)) != UINT64_C(0x410fd070) || ((ctr >> 16) & 15) != 4) goto failed;
+    if ((midr & UINT64_C(0xff0ffff0)) != UINT64_C(0x410fd070) || ((ctr >> 16) & 15) != 4)
+        goto failed;
     switch_dma_record[1] = 2;
     board.mc = (volatile uint8_t *)ml_io_map((vm_offset_t)UINT64_C(0x70019000), 0x1000);
-    if (!board.mc || dma_bus_ready(&board)) goto failed;
+    if (!board.mc || dma_bus_ready(&board))
+        goto failed;
     switch_dma_record[1] = 3;
     /* This C entry point delegates to XNU's actual contiguous allocator.
      * Its deprecated physical-address argument is deliberately unused. */
@@ -189,7 +203,8 @@ static int dma_install(struct switch_sd_host *host)
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
     d->bytes = IOMallocContiguous(SWITCH_SD_DMA_BYTES, SWITCH_SD_DMA_BYTES, NULL);
 #pragma clang diagnostic pop
-    if (!d->bytes) goto failed;
+    if (!d->bytes)
+        goto failed;
     switch_dma_record[1] = 4;
     d->capacity = SWITCH_SD_DMA_BYTES;
     d->physical = ml_vtophys((vm_offset_t)d->bytes);
@@ -201,14 +216,17 @@ static int dma_install(struct switch_sd_host *host)
         d->physical > UINT64_C(0x1000000000) - SWITCH_SD_DMA_BYTES)
         goto failed;
     for (uint32_t at = 0; at < SWITCH_SD_DMA_BYTES; at += 4096)
-        if (ml_vtophys((vm_offset_t)(d->bytes + at)) != d->physical + at) goto failed;
-    if (ml_vtophys((vm_offset_t)(d->bytes + SWITCH_SD_DMA_BYTES - 1)) != d->physical + SWITCH_SD_DMA_BYTES - 1) goto failed;
+        if (ml_vtophys((vm_offset_t)(d->bytes + at)) != d->physical + at)
+            goto failed;
+    if (ml_vtophys((vm_offset_t)(d->bytes + SWITCH_SD_DMA_BYTES - 1)) != d->physical + SWITCH_SD_DMA_BYTES - 1)
+        goto failed;
     d->write8 = dma_write8;
     d->bus_ready = dma_bus_ready;
     d->cache = dma_cache;
     switch_dma_record[1] = 5;
     status = switch_sd_dma_bind(d, &host->io, &board, host->frequency);
-    if (status) goto failed;
+    if (status)
+        goto failed;
     host->dma = d;
     switch_dma_record[1] = 6;
     switch_dma_record[2] = 0;
@@ -232,19 +250,24 @@ volatile uint64_t switch_sd_bridge_record[8];
 uint8_t switch_sd_model_cache[65536] __attribute__((aligned(4096)));
 static uint64_t model_cache_lba = UINT64_MAX;
 static uint64_t model_cache_count;
+
 __attribute__((noinline)) void switch_sd_model_request_checkpoint(void)
 {
     __asm__ volatile("nop" ::: "memory");
 }
+
 static const uint8_t *model_bridge_sector(uint64_t lba)
 {
     if (model_cache_lba == UINT64_MAX || lba < model_cache_lba || lba - model_cache_lba >= model_cache_count) {
         uint64_t base = lba & ~UINT64_C(127), count = 128;
-        if (base >= qualified_card.capacity_sectors) return 0;
-        if (count > qualified_card.capacity_sectors - base) count = qualified_card.capacity_sectors - base;
+        if (base >= qualified_card.capacity_sectors)
+            return 0;
+        if (count > qualified_card.capacity_sectors - base)
+            count = qualified_card.capacity_sectors - base;
         switch_sd_bridge_record[0] = UINT64_C(0x5357434842524447);
         uint64_t sequence = switch_sd_bridge_record[1] + 1;
-        if (!sequence) return 0;
+        if (!sequence)
+            return 0;
         switch_sd_bridge_record[1] = sequence;
         switch_sd_bridge_record[2] = base;
         switch_sd_bridge_record[3] = count;
@@ -265,21 +288,26 @@ static const uint8_t *model_bridge_sector(uint64_t lba)
     }
     return switch_sd_model_cache + (lba - model_cache_lba) * 512;
 }
+
 static uint32_t model_u32(const uint8_t *p)
 {
     return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
 }
+
 static uint64_t model_u64(const uint8_t *p)
 {
     return (uint64_t)model_u32(p) | (uint64_t)model_u32(p + 4) << 32;
 }
+
 static int model_image_init(struct board_io *b)
 {
     const uint8_t *image = (const uint8_t *)ml_io_map_with_prot(UINT64_C(0xe8000000), 4096, VM_PROT_READ);
     static const uint8_t magic[8] = {'S', 'W', 'C', 'H', 'B', 'L', 'K', '1'};
-    if (!image) return 0;
+    if (!image)
+        return 0;
     for (unsigned i = 0; i < 8; i++)
-        if (image[i] != magic[i]) return 0;
+        if (image[i] != magic[i])
+            return 0;
     uint32_t count = model_u32(image + 12), offset = model_u32(image + 24);
     uint64_t size = model_u64(image + 40), capacity = model_u64(image + 32);
     if (model_u32(image + 8) != 1 || !count || count > 30000 || model_u32(image + 16) != 64 ||
@@ -291,12 +319,14 @@ static int model_image_init(struct board_io *b)
      * page-rounded size instead of reserving the full upper bound. */
     image = (const uint8_t *)ml_io_map_with_prot(UINT64_C(0xe8000000), (vm_size_t)((size + 4095) & ~UINT64_C(4095)),
                                                  VM_PROT_READ);
-    if (!image) return 0;
+    if (!image)
+        return 0;
     uint64_t previous = 0;
     for (unsigned i = 0; i < count; i++) {
         const uint8_t *entry = image + 64 + i * 16;
         uint64_t lba = model_u64(entry);
-        if (lba >= capacity || (i && lba <= previous) || model_u32(entry + 8) != offset + i * 512) return 0;
+        if (lba >= capacity || (i && lba <= previous) || model_u32(entry + 8) != offset + i * 512)
+            return 0;
         previous = lba;
     }
     b->image = image;
@@ -307,12 +337,14 @@ static int model_image_init(struct board_io *b)
     switch_sd_model_record[7] = count;
     return 1;
 }
+
 static const uint8_t *model_sector(struct board_io *b, uint32_t lba)
 {
     if (b->mode == 101) {
         switch_sd_model_record[6]++;
         const uint8_t *sector = model_bridge_sector(lba);
-        if (!sector) switch_sd_model_record[3] = lba;
+        if (!sector)
+            switch_sd_model_record[3] = lba;
         return sector;
     }
     uint32_t low = 0, high = b->image_count;
@@ -331,22 +363,29 @@ static const uint8_t *model_sector(struct board_io *b, uint32_t lba)
     }
     const uint8_t *entry = b->image + 64 + low * 16;
     uint32_t offset = model_u32(entry + 8);
-    if (offset > b->image_size || b->image_size - offset < 512) return 0;
+    if (offset > b->image_size || b->image_size - offset < 512)
+        return 0;
     const uint8_t *sector = b->image + offset;
-    if (switch_sd_crc32(sector, 512) != model_u32(entry + 12)) return 0;
+    if (switch_sd_crc32(sector, 512) != model_u32(entry + 12))
+        return 0;
     return sector;
 }
+
 /* Compile-time model adapter. No physical MMIO dereference exists in this
  * branch. Its sole data source is the checked reference page in model RAM. */
 static uint8_t r8(void *context, uint32_t offset)
 {
     struct board_io *b = context;
-    if (offset == 0x28) return 2;
-    if (offset == 0x29) return b->mode == 7 ? 0 : b->mode >= 9 ? 15 : 11;
-    if (offset == 0x2f) return b->mode == 8 ? 1 : 0;
+    if (offset == 0x28)
+        return 2;
+    if (offset == 0x29)
+        return b->mode == 7 ? 0 : b->mode >= 9 ? 15 : 11;
+    if (offset == 0x2f)
+        return b->mode == 8 ? 1 : 0;
     b->bounds_error = 1;
     return 0;
 }
+
 static uint16_t r16(void *context, uint32_t offset)
 {
     struct board_io *b = context;
@@ -358,37 +397,49 @@ static uint16_t r16(void *context, uint32_t offset)
                : b->mode == 11 ? 0x0300
                : b->mode == 12 ? 0x03ff
                                : 2;
-    if (offset == 0x2c) return 7;
-    if (offset == 4 && b->mode == 2) return 513;
-    if (offset == 4 || offset == 6 || offset == 12) return (uint16_t)b->reg[offset / 2];
+    if (offset == 0x2c)
+        return 7;
+    if (offset == 4 && b->mode == 2)
+        return 513;
+    if (offset == 4 || offset == 6 || offset == 12)
+        return (uint16_t)b->reg[offset / 2];
     b->bounds_error = 1;
     return 0;
 }
+
 static uint32_t r32(void *context, uint32_t offset)
 {
     struct board_io *b = context;
-    if (offset == 0x24) return 0x1fb0000u | (b->phase == 2 ? 0x800u : 0);
+    if (offset == 0x24)
+        return 0x1fb0000u | (b->phase == 2 ? 0x800u : 0);
     if (offset == 0x30) {
-        if (b->phase == 1) return b->mode == 3 ? 0x20001u : b->mode == 4 ? 0 : 1;
-        if (b->phase == 2) return 0x20;
-        if (b->phase == 3) return 2;
+        if (b->phase == 1)
+            return b->mode == 3 ? 0x20001u : b->mode == 4 ? 0 : 1;
+        if (b->phase == 2)
+            return 0x20;
+        if (b->phase == 3)
+            return 2;
         return 0;
     }
-    if (offset == 0x10) return 0x900;
+    if (offset == 0x10)
+        return 0x900;
     if (offset == 0x20 && b->phase == 2 && b->words < 128) {
         uint32_t v = 0, at = b->words++ * 4;
         for (unsigned i = 0; i < 4; ++i) {
             uint8_t octet = b->mode >= 100 ? (b->sector ? b->sector[at + i] : 0) : reference.sector[at + i];
-            if (b->mode == 5 && at + i == 7) octet ^= 1;
+            if (b->mode == 5 && at + i == 7)
+                octet ^= 1;
             v |= (uint32_t)octet << (8 * i);
         }
         switch_sd_model_record[1]++;
         return v;
     }
-    if (offset == 8 || offset == 0x34 || offset == 0x38) return b->reg[offset / 2];
+    if (offset == 8 || offset == 0x34 || offset == 0x38)
+        return b->reg[offset / 2];
     b->bounds_error = 1;
     return 0;
 }
+
 static void w16(void *context, uint32_t offset, uint16_t value)
 {
     struct board_io *b = context;
@@ -418,12 +469,14 @@ static void w16(void *context, uint32_t offset, uint16_t value)
     }
     b->bounds_error = 1;
 }
+
 static void w32(void *context, uint32_t offset, uint32_t value)
 {
     struct board_io *b = context;
     ++b->writes;
     if (offset == 0x30) {
-        if (!b->phase && value == 0x23) return;
+        if (!b->phase && value == 0x23)
+            return;
         if (b->phase == 3 && value == 2) {
             b->phase = 4;
             return;
@@ -449,6 +502,7 @@ static void w32(void *context, uint32_t offset, uint32_t value)
     }
     b->bounds_error = 1;
 }
+
 static uint64_t ticks(void *context)
 {
     struct board_io *b = context;
@@ -466,27 +520,35 @@ static void barrier(void *context)
     (void)context;
     __asm__ volatile("dsb sy" ::: "memory");
 }
+
 static uint64_t le64(const uint8_t *p)
 {
     uint64_t value = 0;
-    for (unsigned i = 0; i < 8; ++i) value |= (uint64_t)p[i] << (8 * i);
+    for (unsigned i = 0; i < 8; ++i)
+        value |= (uint64_t)p[i] << (8 * i);
     return value;
 }
+
 static void refuse(uint64_t error)
 {
     switch_sd_record[3] = error;
 }
+
 static int native_sd_cpu_profile_matches(int cpus, int root_boot)
 {
-    if (cpus == 1) return __atomic_load_n(&real_ncpus, __ATOMIC_ACQUIRE) == 1;
+    if (cpus == 1)
+        return __atomic_load_n(&real_ncpus, __ATOMIC_ACQUIRE) == 1;
 #if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT && !SWITCH_SD_MODEL
-    if (!root_boot || !switch_native_cpu_profile_matches(cpus)) return 0;
+    if (!root_boot || !switch_native_cpu_profile_matches(cpus))
+        return 0;
     /* Registration is asynchronous matching, not scheduler-online evidence.
      * Yield so the remaining CPU nubs can register; the driver owns online proof. */
     for (unsigned waited = 0; waited <= 2000; ++waited) {
         unsigned registered = __atomic_load_n(&real_ncpus, __ATOMIC_ACQUIRE);
-        if (registered == 4) return 1;
-        if (!registered || registered > 4 || waited == 2000) return 0;
+        if (registered == 4)
+            return 1;
+        if (!registered || registered > 4 || waited == 2000)
+            return 0;
         IOSleep(10);
     }
 #else
@@ -494,9 +556,11 @@ static int native_sd_cpu_profile_matches(int cpus, int root_boot)
 #endif
     return 0;
 }
+
 void switch_sd_probe(void)
 {
-    if (attempted) return;
+    if (attempted)
+        return;
     attempted = 1;
     switch_sd_record[0] = SWITCH_SD_DIAG_MAGIC;
     switch_sd_record[1] = 1;
@@ -533,16 +597,18 @@ void switch_sd_probe(void)
     }
     /* The reference lies below managed physBase. Use a read-only explicit map,
      * never phystokv. Loader has committed the checked external page. */
-    vm_offset_t mapped = ml_io_map_with_prot((vm_offset_t)SWITCH_SD_REFERENCE_PA, SWITCH_SD_REFERENCE_BYTES, VM_PROT_READ);
+    vm_offset_t mapped =
+        ml_io_map_with_prot((vm_offset_t)SWITCH_SD_REFERENCE_PA, SWITCH_SD_REFERENCE_BYTES, VM_PROT_READ);
     if (!mapped) {
         refuse(102);
         return;
     }
     barrier(NULL);
     int reference_error =
-        files ? switch_sd_card_reference_validate((const volatile uint8_t *)mapped, SWITCH_SD_REFERENCE_BYTES, 1,
+        files
+            ? switch_sd_card_reference_validate((const volatile uint8_t *)mapped, SWITCH_SD_REFERENCE_BYTES, 1,
                                                 &reference, &qualified_card)
-              : switch_sd_reference_validate((const volatile uint8_t *)mapped, SWITCH_SD_REFERENCE_BYTES, 1, &reference);
+            : switch_sd_reference_validate((const volatile uint8_t *)mapped, SWITCH_SD_REFERENCE_BYTES, 1, &reference);
     switch_sd_record[7] = (uint64_t)reference_error;
     if (reference_error) {
         refuse(110 + (unsigned)reference_error);
@@ -561,7 +627,8 @@ void switch_sd_probe(void)
             switch_card_record[11 + i] = qualified_card.cid[i];
         }
     }
-    for (unsigned i = 0; i < 512; ++i) switch_sd_reference_bytes[i] = reference.sector[i];
+    for (unsigned i = 0; i < 512; ++i)
+        switch_sd_reference_bytes[i] = reference.sector[i];
     switch_sd_record[9] = reference.crc32;
     switch_sd_record[30] = (uint32_t)reference.sector[510] | (uint32_t)reference.sector[511] << 8;
     switch_sd_record[2] = 2;
@@ -608,20 +675,20 @@ void switch_sd_probe(void)
     switch_sd_record[8] = frequency;
     static struct switch_sd_host host;
     host = (struct switch_sd_host){.io = {r8, r16, r32, w16, w32, ticks, barrier},
-                                 .context = &board,
-                                 .frequency = frequency,
-                                 .capacity_sectors = 1,
-                                 .permitted_first_sector = 0,
-                                 .permitted_sector_count = 1,
-                                 .block_addressing_verified = 0};
+                                   .context = &board,
+                                   .frequency = frequency,
+                                   .capacity_sectors = 1,
+                                   .permitted_first_sector = 0,
+                                   .permitted_sector_count = 1,
+                                   .block_addressing_verified = 0};
 #if !SWITCH_SD_MODEL
     int dma_error = dma_install(&host);
     if (dma_error) {
         printf("native SD DMA init failed: %d stage=%llu version=%llx caps=%llx hc=%llx hc2=%llx MC=%llx ASID=%llx "
                "clients=%llx EMEM=%llx\n",
-               dma_error, switch_dma_record[1], switch_dma_record[8], switch_dma_record[9],
-               switch_dma_record[10], switch_dma_record[11], switch_dma_record[5], switch_dma_record[6],
-               switch_dma_record[7], switch_dma_record[12]);
+               dma_error, switch_dma_record[1], switch_dma_record[8], switch_dma_record[9], switch_dma_record[10],
+               switch_dma_record[11], switch_dma_record[5], switch_dma_record[6], switch_dma_record[7],
+               switch_dma_record[12]);
         refuse(128);
         return;
     }
@@ -650,14 +717,17 @@ void switch_sd_probe(void)
     switch_sd_record[28] = board.bounds_error;
     switch_sd_record[2] = 4;
     switch_sd_record[3] = (unsigned)error;
-    if (board.bounds_error) switch_sd_record[3] = 122;
+    if (board.bounds_error)
+        switch_sd_record[3] = 122;
     (void)ml_set_interrupts_enabled(previous);
-    if (switch_sd_record[3]) return;
+    if (switch_sd_record[3])
+        return;
     switch_sd_record[10] = switch_sd_crc32(switch_sd_bytes, 512);
     switch_sd_record[29] = (uint32_t)switch_sd_bytes[510] | (uint32_t)switch_sd_bytes[511] << 8;
     for (unsigned i = 0; i < 512; ++i)
         if (switch_sd_bytes[i] != reference.sector[i]) {
-            if (!switch_sd_record[16]) switch_sd_record[17] = i;
+            if (!switch_sd_record[16])
+                switch_sd_record[17] = i;
             ++switch_sd_record[16];
         }
     if (switch_sd_record[16] || switch_sd_record[10] != reference.crc32) {

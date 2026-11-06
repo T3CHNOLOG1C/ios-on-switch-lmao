@@ -3,16 +3,19 @@
 #define NATIVE_ADRENO_VM_H
 #include "NativeAdrenoSmmuMemory.h"
 #include "ArmSmmu4KStreams.h"
+
 struct NativeAdrenoVmRegion {
     NativeAdrenoMemory *tables;
     ArmSmmu4KLiveArena *arena;
     ArmSmmu4KLiveState *state;
 };
+
 struct NativeAdrenoVmResult {
     ArmSmmu4KStatus operation, quarantine;
     size_t completed_spans;
     bool complete;
 };
+
 /* Kernel-owned BO mapping transactions, not a userspace ABI or GPU scheduler.
  * Attach only under the actual bank/ASID/stream and powered-MMIO lease, with
  * fault IRQ handling installed and empty native4K arenas already active.
@@ -26,7 +29,10 @@ struct NativeAdrenoVmResult {
  * only the owned streams. Uncertain resources require independent real reset.
  * No VM may be advertised to apps until per-client isolation, submission
  * validation/protection, genuine IRQ fences and reset are implemented. */
-enum : size_t { NativeAdrenoVmMaxObjects = 1024 };
+enum : size_t {
+    NativeAdrenoVmMaxObjects = 1024
+};
+
 /* Board hook for sampleWord(): reads one aligned word of physical memory through a fresh uncached mapping; 0 on success. */
 extern "C" int (*native_adreno_dram_read32)(uint64_t physical, uint32_t *value);
 /* The board's reader through the kernel's cacheable physical aperture (null on the host: the BO's own mapping is read). */
@@ -35,6 +41,7 @@ extern "C" int (*native_adreno_cached_read32)(uint64_t physical, uint32_t *value
  * DRAM (a fresh uncached mapping) read it. A line that differs is cleaned and invalidated and DRAM read again: when DRAM then holds the
  * cached copy the line was dirty (*dirty), when DRAM is unchanged it was a stale clean copy (*stale). 0 on success. */
 extern "C" int (*native_adreno_line_audit)(uint64_t physical, size_t bytes, uint32_t *dirty, uint32_t *stale);
+
 class NativeAdrenoVm final {
     struct Mapping {
         NativeAdrenoMemory *memory = nullptr;
@@ -42,6 +49,7 @@ class NativeAdrenoVm final {
         size_t spans = 0, mapped_spans = 0;
         unsigned permissions = 0, writeback = 0, shareability = 0, jobs = 0;
     };
+
     Mapping *mappings_ = nullptr;
     NativeAdrenoVmRegion regions_[2]{};
     ArmSmmu4KLiveVisibility visibility_[2]{};
@@ -91,10 +99,19 @@ public:
      * no CPU cache line can hold data the GPU should see or hide what it wrote. Lines are physically tagged, so this also reaches
      * lines a user mapping of the same pages left behind. int-070 runs it before every submission. */
     IOReturn publishMapped();
+
     /* The submit path saw a CPU-cached word that DRAM did not hold yet in a client's BO: from now on write-combined BOs are maintained
      * like any other (sticky; the safe behaviour of int-070..097). */
-    void distrustWriteCombined() { distrust_write_combined_ = true; }
-    bool writeCombinedTrusted() const { return !distrust_write_combined_; }
+    void distrustWriteCombined()
+    {
+        distrust_write_combined_ = true;
+    }
+
+    bool writeCombinedTrusted() const
+    {
+        return !distrust_write_combined_;
+    }
+
     /* After a submission completed: cleans and invalidates the CPU caches over every GPU-writable imported BO, so the owner's mapping
      * (an IOSurface) reads what the GPU wrote, not a line prefetched while the GPU ran. Jobs name only their IBs, so every such BO
      * is covered. int-071: an imported render target read back 672 of 4096 texels stale. */
@@ -117,9 +134,25 @@ public:
     /* Only a scheduler's actual successful GPU completion may call this.
      * A timeout, interrupt bit alone or CPU-written timestamp is insufficient. */
     IOReturn retireJobAfterCompletion(uint64_t handle);
-    bool poisoned() const { return poisoned_; }
-    size_t objectCount() const { return objects_; }
-    size_t spanCount() const { return lower_count_ + upper_count_; }
-    NativeAdrenoVmResult lastResult() const { return result_; }
+
+    bool poisoned() const
+    {
+        return poisoned_;
+    }
+
+    size_t objectCount() const
+    {
+        return objects_;
+    }
+
+    size_t spanCount() const
+    {
+        return lower_count_ + upper_count_;
+    }
+
+    NativeAdrenoVmResult lastResult() const
+    {
+        return result_;
+    }
 };
 #endif

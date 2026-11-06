@@ -72,10 +72,12 @@ class NativeAdrenoGpuService : public IOService {
     NativeAdrenoSubmit *execbuf_ = nullptr;
     NativeAdrenoUserClient *core_ = nullptr;
     bool core_ready_ = false;
+
     struct RingCache {
         NativeAdrenoMemory *ring;
         NativeAdrenoMemory *fence;
     };
+
     RingCache ring_cache_{};
     static int gpu_read32(void *, uint32_t, uint32_t *);
     static int gpu_write32(void *, uint32_t, uint32_t);
@@ -91,129 +93,163 @@ public:
     IOReturn newUserClient(task_t owningTask, void *securityID, UInt32 type, OSDictionary *properties,
                            IOUserClient **handler) APPLE_KEXT_OVERRIDE;
 };
+
 OSDefineMetaClassAndStructors(NativeAdrenoGpuService, IOService)
 
     static bool advertisesAdreno(IOService *provider)
 {
     OSObject *property = provider ? provider->getProperty("compatible") : nullptr;
     OSData *data = OSDynamicCast(OSData, property);
-    if (!data || !data->getBytesNoCopy() || !data->getLength()) return false;
+    if (!data || !data->getBytesNoCopy() || !data->getLength())
+        return false;
     const char *text = static_cast<const char *>(data->getBytesNoCopy());
     const size_t length = data->getLength();
     static const char needle[] = "qcom,adreno";
     for (size_t at = 0; at + sizeof(needle) - 1 <= length; ++at) {
         size_t index = 0;
-        while (index < sizeof(needle) - 1 && text[at + index] == needle[index]) ++index;
-        if (index == sizeof(needle) - 1) return true;
+        while (index < sizeof(needle) - 1 && text[at + index] == needle[index])
+            ++index;
+        if (index == sizeof(needle) - 1)
+            return true;
     }
     return false;
 }
+
 struct NativeAdrenoSmmuWindow {
     volatile uint8_t *base;
     size_t bytes;
 };
+
 static int smmu_read32(void *cookie, size_t at, uint32_t *value)
 {
     NativeAdrenoSmmuWindow *window = static_cast<NativeAdrenoSmmuWindow *>(cookie);
-    if (!window || !value || !window->base || (at & 3) || at + 4 > window->bytes) return 1;
+    if (!window || !value || !window->base || (at & 3) || at + 4 > window->bytes)
+        return 1;
     *value = *reinterpret_cast<volatile uint32_t *>(window->base + at);
     return 0;
 }
+
 static int smmu_read64(void *cookie, size_t at, uint64_t *value)
 {
     NativeAdrenoSmmuWindow *window = static_cast<NativeAdrenoSmmuWindow *>(cookie);
-    if (!window || !value || !window->base || (at & 7) || at + 8 > window->bytes) return 1;
+    if (!window || !value || !window->base || (at & 7) || at + 8 > window->bytes)
+        return 1;
     *value = *reinterpret_cast<volatile uint64_t *>(window->base + at);
     return 0;
 }
+
 static int smmu_write32(void *cookie, size_t at, uint32_t value)
 {
     NativeAdrenoSmmuWindow *window = static_cast<NativeAdrenoSmmuWindow *>(cookie);
-    if (!window || !window->base || (at & 3) || at + 4 > window->bytes) return 1;
+    if (!window || !window->base || (at & 3) || at + 4 > window->bytes)
+        return 1;
     *reinterpret_cast<volatile uint32_t *>(window->base + at) = value;
     return 0;
 }
+
 static int smmu_write64(void *cookie, size_t at, uint64_t value)
 {
     NativeAdrenoSmmuWindow *window = static_cast<NativeAdrenoSmmuWindow *>(cookie);
-    if (!window || !window->base || (at & 7) || at + 8 > window->bytes) return 1;
+    if (!window || !window->base || (at & 7) || at + 8 > window->bytes)
+        return 1;
     *reinterpret_cast<volatile uint64_t *>(window->base + at) = value;
     return 0;
 }
+
 static int smmu_barrier(void *cookie)
 {
-    if (!cookie) return 1;
+    if (!cookie)
+        return 1;
     __atomic_thread_fence(__ATOMIC_SEQ_CST);
     return 0;
 }
+
 struct NativeAdrenoGpuWindow {
     volatile uint8_t *base;
     size_t bytes;
 };
+
 int NativeAdrenoGpuService::gpu_read32(void *cookie, uint32_t reg, uint32_t *value)
 {
     NativeAdrenoGpuWindow *window = static_cast<NativeAdrenoGpuWindow *>(cookie);
     const size_t at = size_t(reg) * 4;
-    if (!window || !value || !window->base || at + 4 > window->bytes) return 1;
+    if (!window || !value || !window->base || at + 4 > window->bytes)
+        return 1;
     *value = *reinterpret_cast<volatile uint32_t *>(window->base + at);
     return 0;
 }
+
 int NativeAdrenoGpuService::gpu_write32(void *cookie, uint32_t reg, uint32_t value)
 {
     NativeAdrenoGpuWindow *window = static_cast<NativeAdrenoGpuWindow *>(cookie);
     const size_t at = size_t(reg) * 4;
-    if (!window || !window->base || at + 4 > window->bytes) return 1;
+    if (!window || !window->base || at + 4 > window->bytes)
+        return 1;
     *reinterpret_cast<volatile uint32_t *>(window->base + at) = value;
     return 0;
 }
+
 int NativeAdrenoGpuService::gpu_barrier(void *cookie)
 {
-    if (!cookie) return 1;
+    if (!cookie)
+        return 1;
     __atomic_thread_fence(__ATOMIC_SEQ_CST);
     return 0;
 }
+
 int NativeAdrenoGpuService::ring_publish(void *cookie, const volatile uint32_t *words, size_t bytes)
 {
     NativeAdrenoGpuService::RingCache *cache = static_cast<RingCache *>(cookie);
     return cache && cache->ring && cache->ring->publishForDevice(0, bytes, false) == kIOReturnSuccess ? 0 : 1;
 }
+
 int NativeAdrenoGpuService::fence_acquire(void *cookie, volatile uint32_t *words, size_t bytes)
 {
     NativeAdrenoGpuService::RingCache *cache = static_cast<RingCache *>(cookie);
     return cache && cache->fence && cache->fence->acquireDeviceWrites(0, bytes) == kIOReturnSuccess ? 0 : 1;
 }
+
 uint64_t NativeAdrenoGpuService::ring_now(void *)
 {
     uint64_t microseconds = 0;
     NativeAdrenoKernelTime::now_us(nullptr, &microseconds);
     return microseconds;
 }
+
 extern "C" uint64_t (*native_adreno_vm_now_us)(void);
 extern "C" volatile uint32_t native_adreno_pool_mib;
+
 static uint64_t vm_clock_us(void)
 {
     uint64_t microseconds = 0;
     NativeAdrenoKernelTime::now_us(nullptr, &microseconds);
     return microseconds;
 }
+
 IOService *NativeAdrenoGpuService::probe(IOService *provider, SInt32 *score)
 {
     native_adreno_vm_now_us = vm_clock_us;
-    if (!advertisesAdreno(provider)) return nullptr;
-    if (score) *score = 1000;
+    if (!advertisesAdreno(provider))
+        return nullptr;
+    if (score)
+        *score = 1000;
     return this;
 }
+
 bool NativeAdrenoGpuService::start(IOService *provider)
 {
-    if (!IOService::start(provider)) return false;
+    if (!IOService::start(provider))
+        return false;
     OSData *reg = OSDynamicCast(OSData, provider->getProperty("reg"));
     OSData *address = OSDynamicCast(OSData, provider->getProperty("#address-cells"));
     OSData *size = OSDynamicCast(OSData, provider->getProperty("#size-cells"));
     NativeAdrenoWindow windows[NativeAdrenoMaxWindows]{};
     size_t count = 0;
     uint32_t address_cells = 2, size_cells = 2;
-    if (address && address->getLength() >= 4) address_cells = *static_cast<const uint32_t *>(address->getBytesNoCopy());
-    if (size && size->getLength() >= 4) size_cells = *static_cast<const uint32_t *>(size->getBytesNoCopy());
+    if (address && address->getLength() >= 4)
+        address_cells = *static_cast<const uint32_t *>(address->getBytesNoCopy());
+    if (size && size->getLength() >= 4)
+        size_cells = *static_cast<const uint32_t *>(size->getBytesNoCopy());
     if (!reg || NativeAdrenoBoard::parseReg(static_cast<const uint8_t *>(reg->getBytesNoCopy()), reg->getLength(),
                                             address_cells, size_cells, windows, NativeAdrenoMaxWindows,
                                             &count) != kIOReturnSuccess) {
@@ -247,7 +283,8 @@ bool NativeAdrenoGpuService::start(IOService *provider)
      * firmware and the SMMU context before any register may be touched. */
     OSDictionary *matching = IOService::serviceMatching("NativeAdrenoGmuService");
     IOService *gmu = matching ? IOService::copyMatchingService(matching) : nullptr;
-    if (matching) matching->release();
+    if (matching)
+        matching->release();
     if (gmu) {
         NativeAdrenoGmuService *node = OSDynamicCast(NativeAdrenoGmuService, gmu);
         const unsigned published = node ? static_cast<unsigned>(node->windowCount()) : 0;
@@ -276,7 +313,8 @@ bool NativeAdrenoGpuService::start(IOService *provider)
      * the SMMU node. Nothing is assumed when either is missing. */
     OSDictionary *smmu_match = IOService::serviceMatching("NativeAdrenoSmmuService");
     IOService *smmu = smmu_match ? IOService::copyMatchingService(smmu_match) : nullptr;
-    if (smmu_match) smmu_match->release();
+    if (smmu_match)
+        smmu_match->release();
     if (smmu) {
         OSNumber *cells = OSDynamicCast(OSNumber, smmu->getProperty("iommu-cells"));
         OSData *iommus = OSDynamicCast(OSData, provider->getProperty("iommus"));
@@ -351,7 +389,8 @@ bool NativeAdrenoGpuService::start(IOService *provider)
                         reinterpret_cast<uintptr_t>(&native_adreno_firmware_image_size)) {
                         NativeAdrenoFirmwareRules rules{};
                         rules.bytes = SHENG_GMU_FIRMWARE_BYTES;
-                        for (unsigned i = 0; i < 32; ++i) rules.sha256[i] = sheng_gmu_firmware_sha256[i];
+                        for (unsigned i = 0; i < 32; ++i)
+                            rules.sha256[i] = sheng_gmu_firmware_sha256[i];
                         const IOReturn checked = NativeAdrenoFirmware::validate(
                             native_adreno_firmware_image, native_adreno_firmware_image_size, &rules, &firmware_);
                         if (checked)
@@ -493,7 +532,8 @@ bool NativeAdrenoGpuService::start(IOService *provider)
                                                     }
                                                     if (!ring_status) {
                                                         ring_status = irq_.attach(&cp_io);
-                                                        if (!ring_status) ring_status = irq_.programMask(nullptr);
+                                                        if (!ring_status)
+                                                            ring_status = irq_.programMask(nullptr);
                                                     }
                                                     if (ring_status)
                                                         IOLog("NativeAdreno: CP start stopped at 0x%x\n", ring_status);
@@ -537,19 +577,26 @@ bool NativeAdrenoGpuService::start(IOService *provider)
     IOService::stop(provider);
     return false;
 }
+
 void NativeAdrenoGpuService::stop(IOService *provider)
 {
-    for (auto &map : maps_) map.reset();
+    for (auto &map : maps_)
+        map.reset();
     IOService::stop(provider);
 }
+
 IOReturn NativeAdrenoGpuService::newUserClient(task_t owningTask, void *securityID, UInt32 type,
                                                OSDictionary *properties, IOUserClient **handler)
 {
-    if (handler) *handler = nullptr;
-    if (!core_ready_) return kIOReturnNotReady;
+    if (handler)
+        *handler = nullptr;
+    if (!core_ready_)
+        return kIOReturnNotReady;
     IOUserClient *client = createGpuClient(owningTask, securityID, type, properties, core_);
-    if (!client) return kIOReturnNoResources;
-    if (handler) *handler = client;
+    if (!client)
+        return kIOReturnNoResources;
+    if (handler)
+        *handler = client;
     return kIOReturnSuccess;
 }
 
@@ -559,21 +606,28 @@ class NativeAdrenoGpuClient : public IOUserClient {
     static IOReturn action(OSObject *target, void *reference, IOExternalMethodArguments *arguments);
 
 public:
-    void setCore(NativeAdrenoUserClient *core) { core_ = core; }
+    void setCore(NativeAdrenoUserClient *core)
+    {
+        core_ = core;
+    }
+
     bool initWithTask(task_t owningTask, void *securityID, UInt32 type, OSDictionary *properties) APPLE_KEXT_OVERRIDE;
     IOReturn clientClose() APPLE_KEXT_OVERRIDE;
     IOReturn clientMemoryForType(UInt32 type, IOOptionBits *options, IOMemoryDescriptor **memory) APPLE_KEXT_OVERRIDE;
     IOReturn externalMethod(uint32_t selector, IOExternalMethodArguments *arguments, IOExternalMethodDispatch *dispatch,
                             OSObject *target, void *reference) APPLE_KEXT_OVERRIDE;
 };
+
 OSDefineMetaClassAndStructors(NativeAdrenoGpuClient, IOUserClient)
 
     bool NativeAdrenoGpuClient::initWithTask(task_t owningTask, void *securityID, UInt32 type, OSDictionary *properties)
 {
-    if (!IOUserClient::initWithTask(owningTask, securityID, type, properties)) return false;
+    if (!IOUserClient::initWithTask(owningTask, securityID, type, properties))
+        return false;
     task_ = owningTask;
     return true;
 }
+
 IOReturn NativeAdrenoGpuClient::clientClose()
 {
     core_ = nullptr;
@@ -581,24 +635,31 @@ IOReturn NativeAdrenoGpuClient::clientClose()
     terminate();
     return kIOReturnSuccess;
 }
+
 IOReturn NativeAdrenoGpuClient::clientMemoryForType(UInt32 type, IOOptionBits *options, IOMemoryDescriptor **memory)
 {
-    if (memory) *memory = nullptr;
-    if (options) *options = kIOMapAnywhere;
+    if (memory)
+        *memory = nullptr;
+    if (options)
+        *options = kIOMapAnywhere;
     /* The type is a BO mapping token; no client can hold one before the GPU
      * and its core client exist, and the descriptor handoff is not written. */
     return kIOReturnUnsupported;
 }
+
 IOReturn NativeAdrenoGpuClient::action(OSObject *target, void *reference, IOExternalMethodArguments *arguments)
 {
     NativeAdrenoGpuClient *client = OSDynamicCast(NativeAdrenoGpuClient, target);
-    if (!client || !arguments) return kIOReturnBadArgument;
-    if (!client->core_) return kIOReturnNotReady;
+    if (!client || !arguments)
+        return kIOReturnBadArgument;
+    if (!client->core_)
+        return kIOReturnNotReady;
     (void)reference;
     /* Waits need a real time base, supplied by the service once bring-up exists. */
     return client->core_->dispatch(arguments->selector, arguments->structureInput, arguments->structureInputSize,
                                    arguments->structureOutput, arguments->structureOutputSize, nullptr);
 }
+
 IOReturn NativeAdrenoGpuClient::externalMethod(uint32_t selector, IOExternalMethodArguments *arguments,
                                                IOExternalMethodDispatch *dispatch, OSObject *target, void *reference)
 {
@@ -618,7 +679,8 @@ IOReturn NativeAdrenoGpuClient::externalMethod(uint32_t selector, IOExternalMeth
         {&action, 0, sizeof(NativeAdrenoAbiQueue), 0, 0},
         {&action, 0, sizeof(NativeAdrenoAbiBoCpuMap), 0, sizeof(NativeAdrenoAbiBoCpuMapReply)},
         {&action, 0, sizeof(NativeAdrenoAbiBoCpuUnmap), 0, 0}};
-    if (selector < 1 || selector > sizeof(table) / sizeof(table[0])) return kIOReturnUnsupported;
+    if (selector < 1 || selector > sizeof(table) / sizeof(table[0]))
+        return kIOReturnUnsupported;
     return IOUserClient::externalMethod(selector, arguments,
                                         const_cast<IOExternalMethodDispatch *>(&table[selector - 1]),
                                         target ? target : this, reference);
@@ -628,7 +690,8 @@ static IOUserClient *createGpuClient(task_t owningTask, void *securityID, UInt32
                                      NativeAdrenoUserClient *core)
 {
     NativeAdrenoGpuClient *client = new NativeAdrenoGpuClient;
-    if (!client) return nullptr;
+    if (!client)
+        return nullptr;
     if (!client->initWithTask(owningTask, securityID, type, properties)) {
         client->release();
         return nullptr;

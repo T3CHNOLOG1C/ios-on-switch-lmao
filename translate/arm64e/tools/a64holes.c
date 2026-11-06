@@ -20,6 +20,7 @@ static uint32_t u32(const uint8_t *p, uint64_t o)
     memcpy(&v, p + o, 4);
     return v;
 }
+
 static uint64_t u64(const uint8_t *p, uint64_t o)
 {
     uint64_t v;
@@ -75,7 +76,8 @@ static void mark_code(const uint8_t *m, const uint8_t **fb)
                 hf = fm[q].file;
                 hoff = fm[q].off + addr - fm[q].addr;
             }
-        if (hf < 0) continue;
+        if (hf < 0)
+            continue;
         const uint8_t *mh = fb[hf] + hoff;
         uint32_t ncmds = u32(mh, 16);
         const uint8_t *lc = mh + 32;
@@ -85,7 +87,8 @@ static void mark_code(const uint8_t *m, const uint8_t **fb)
                 for (uint32_t k = 0; k < ns; k++) {
                     const uint8_t *sp = lc + 72 + 80 * k;
                     uint64_t sa = u64(sp, 32), ss = u64(sp, 40);
-                    if (!(u32(sp, 64) & 0x80000400) || !ss) continue;
+                    if (!(u32(sp, 64) & 0x80000400) || !ss)
+                        continue;
                     for (int q = 0; q < nfm; q++)
                         if (sa >= fm[q].addr && sa + ss <= fm[q].addr + fm[q].size) {
                             uint64_t fo = fm[q].off + sa - fm[q].addr;
@@ -98,6 +101,7 @@ static void mark_code(const uint8_t *m, const uint8_t **fb)
         }
     }
 }
+
 static inline bool iscode(int f, uint64_t fileoff)
 {
     uint64_t x = fileoff / 4;
@@ -144,7 +148,8 @@ int a64x_cmd_holes(int argc, char **argv)
         uint32_t moff = u32(b, 0x10), mcnt = u32(b, 0x14);
         for (uint32_t i = 0; i < mcnt; i++) {
             const uint8_t *e = b + moff + 32 * i;
-            if (!(u32(e, 28) & 4)) continue;
+            if (!(u32(e, 28) & 4))
+                continue;
             uint64_t off = u64(e, 16), size = u64(e, 8);
             uint64_t n = size / 4;
             const uint8_t *t = b + off;
@@ -152,7 +157,8 @@ int a64x_cmd_holes(int argc, char **argv)
             uint8_t *freew = calloc(n, 1);
             for (uint64_t k = 0; k < n; k++) {
                 uint32_t w = u32(t, k * 4);
-                if (!iscode((int)f, off + k * 4)) continue;
+                if (!iscode((int)f, off + k * 4))
+                    continue;
                 total_words++;
                 if (is_auth_check_brk(w)) {
                     brk_checks++;
@@ -183,7 +189,8 @@ int a64x_cmd_holes(int argc, char **argv)
                 uint32_t w = u32(t, k * 4);
                 if ((w == 0xD503201F || w == 0) && iscode((int)f, off + k * 4)) {
                     uint64_t j = k;
-                    while (j < n && u32(t, j * 4) == w && iscode((int)f, off + j * 4)) j++;
+                    while (j < n && u32(t, j * 4) == w && iscode((int)f, off + j * 4))
+                        j++;
                     uint64_t len = j - k;
                     int bkt = len < 2      ? 0
                               : len < 4    ? 1
@@ -196,7 +203,8 @@ int a64x_cmd_holes(int argc, char **argv)
                     (w ? nop_runs : zero_runs)[bkt]++;
                     uint64_t usable = w ? (len >= 2 ? len - 1 : 0) : len;
                     if (usable >= 3) {
-                        for (uint64_t q = j - usable; q < j; q++) freew[q] = 1;
+                        for (uint64_t q = j - usable; q < j; q++)
+                            freew[q] = 1;
                         free_words += usable;
                     }
                     k = j;
@@ -209,33 +217,40 @@ int a64x_cmd_holes(int argc, char **argv)
             int64_t *next_free = malloc(n * sizeof(int64_t));
             int64_t nf = 1000000000000LL;
             for (int64_t k = (int64_t)n - 1; k >= 0; k--) {
-                if (freew[k]) nf = k;
+                if (freew[k])
+                    nf = k;
                 next_free[k] = nf;
             }
             for (uint64_t k = 0; k < n; k++) {
-                if (freew[k]) last_free = (int64_t)k;
-                if (!iscode((int)f, off + k * 4)) continue;
+                if (freew[k])
+                    last_free = (int64_t)k;
+                if (!iscode((int)f, off + k * 4))
+                    continue;
                 enum a64x_class c = a64x_classify(u32(t, k * 4));
                 if (needs_stub(c)) {
                     sites++;
                     int64_t d1 = (int64_t)k - last_free, d2 = next_free[k] - (int64_t)k;
                     int64_t d = d1 < d2 ? d1 : d2;
-                    if (d * 4 > (1 << 14)) far_sites++;
+                    if (d * 4 > (1 << 14))
+                        far_sites++;
                 }
             }
             /* per 16 KB chunk (by file offset): do the chunk's own free words cover its sites' stubs? */
             for (uint64_t c0 = 0; c0 < n; c0 += 4096) {
                 uint64_t c1 = c0 + 4096 < n ? c0 + 4096 : n, fw = 0, need = 0, ns = 0;
                 for (uint64_t k = c0; k < c1; k++) {
-                    if (freew[k]) fw++;
-                    if (!iscode((int)f, off + k * 4)) continue;
+                    if (freew[k])
+                        fw++;
+                    if (!iscode((int)f, off + k * 4))
+                        continue;
                     enum a64x_class c = a64x_classify(u32(t, k * 4));
                     if (needs_stub(c)) {
                         ns++;
                         need += (c == A64X_FP16 || c == A64X_FCMA) ? 14 : c == A64X_JSCVT ? 24 : 12;
                     }
                 }
-                if (!ns) continue;
+                if (!ns)
+                    continue;
                 chunks++;
                 chunk_sites += ns;
                 /* holes come in 3-word pieces: 2 usable words + a branch each */

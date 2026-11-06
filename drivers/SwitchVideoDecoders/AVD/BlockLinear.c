@@ -21,8 +21,10 @@ static void copyRow(uint8_t *dst, const uint8_t *row, uint32_t x0, uint32_t widt
         memcpy(dst, row + chunk(x) + x % 16, n);
         x += n, out += n;
     }
-    for (; out + 16 <= width; x += 16, out += 16) memcpy(dst + out, row + chunk(x), 16);
-    if (out < width) memcpy(dst + out, row + chunk(x), width - out);
+    for (; out + 16 <= width; x += 16, out += 16)
+        memcpy(dst + out, row + chunk(x), 16);
+    if (out < width)
+        memcpy(dst + out, row + chunk(x), width - out);
 }
 
 void block_linear_copy(uint8_t *dst, size_t dstPitch, const uint8_t *src, uint32_t srcPitch, uint32_t x0, uint32_t y0,
@@ -46,5 +48,6 @@ void block_linear_copy(uint8_t *dst, size_t dstPitch, const uint8_t *src, uint32
             copyRow(d1, even + 16, x0, width);
         }
     }
-    if (r < height) copyRow(dst + (size_t)r * dstPitch, rowBase(src, srcPitch, y0 + r), x0, width);
+    if (r < height)
+        copyRow(dst + (size_t)r * dstPitch, rowBase(src, srcPitch, y0 + r), x0, width);
 }

@@ -8,8 +8,15 @@
 namespace {
 class LoaderCopyTables : public testing::Test {
 protected:
-    void SetUp() override { ASSERT_TRUE(copy_tables_setup()); }
-    void TearDown() override { copy_tables_teardown(); }
+    void SetUp() override
+    {
+        ASSERT_TRUE(copy_tables_setup());
+    }
+
+    void TearDown() override
+    {
+        copy_tables_teardown();
+    }
 };
 
 class LoaderCopyTablesBySize : public LoaderCopyTables, public testing::WithParamInterface<unsigned> {};

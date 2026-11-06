@@ -22,6 +22,7 @@ OSDeclareDefaultStructors(AGXAccelerator) public
     OSObject *copyProperty(const OSString *key) const APPLE_KEXT_OVERRIDE;
     OSObject *copyProperty(const char *key) const APPLE_KEXT_OVERRIDE;
 };
+
 OSDefineMetaClassAndStructors(AGXAccelerator, IOAcceleratorES)
 
     IOReturn AGXAccelerator::newUserClient(task_t owningTask, void *securityID, UInt32 type, OSDictionary *properties,
@@ -31,25 +32,30 @@ OSDefineMetaClassAndStructors(AGXAccelerator, IOAcceleratorES)
     PE_parse_boot_argn("sheng-gpu-metal-opens", &limit, sizeof(limit));
     return native_adreno_new_user_client(this, owningTask, securityID, type, properties, handler, limit);
 }
+
 OSObject *AGXAccelerator::copyProperty(const OSSymbol *key) const
 {
     native_adreno_note_property_read(key ? key->getCStringNoCopy() : nullptr);
     return IORegistryEntry::copyProperty(key);
 }
+
 OSObject *AGXAccelerator::copyProperty(const OSString *key) const
 {
     native_adreno_note_property_read(key ? key->getCStringNoCopy() : nullptr);
     return IORegistryEntry::copyProperty(key);
 }
+
 OSObject *AGXAccelerator::copyProperty(const char *key) const
 {
     native_adreno_note_property_read(key);
     return IORegistryEntry::copyProperty(key);
 }
+
 extern "C" IOService *native_adreno_accelerator_allocate(void)
 {
     return new AGXAccelerator;
 }
+
 extern "C" unsigned native_adreno_accelerator_instance_size(void)
 {
     return sizeof(AGXAccelerator);

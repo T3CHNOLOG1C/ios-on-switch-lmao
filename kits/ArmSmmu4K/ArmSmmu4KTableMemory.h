@@ -10,10 +10,12 @@ typedef struct {
     uint64_t physical;
     size_t pages;
 } ArmSmmu4KTableMapping;
+
 typedef struct {
     unsigned count;
     ArmSmmu4KTableMapping pools[2];
 } ArmSmmu4KTableMemory;
+
 /* Concrete aligned volatile 64-bit descriptor reads through already existing
  * CPU mappings of one/two physically contiguous owned table pools. Validates
  * CPU/physical bounds and aliasing; it cannot create or establish the claimed

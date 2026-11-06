@@ -8,7 +8,8 @@
 
 extern "C" int switch_test_check(int ok, const char *expression, const char *file, int line)
 {
-    if (!ok) ADD_FAILURE_AT(file, line) << "CHECK(" << expression << ") failed";
+    if (!ok)
+        ADD_FAILURE_AT(file, line) << "CHECK(" << expression << ") failed";
     return ok;
 }
 

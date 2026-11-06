@@ -24,7 +24,8 @@
 static inline bool tegra_block_swizzle_aligned(void *destination, const void *source, uint64_t sourceStride,
                                                uint32_t gobLines, uint32_t gobColumns, uint64_t blockRowBytes)
 {
-    if (((uintptr_t)source | sourceStride) & 15 || ((uintptr_t)destination & 511)) return false;
+    if (((uintptr_t)source | sourceStride) & 15 || ((uintptr_t)destination & 511))
+        return false;
     const uint64_t words = sourceStride / 8;    // a source line, in 8-byte words
     const uint64_t columnWords = 512 * 16 / 8;  // one block column (16 GOBs stacked), in 8-byte words
     for (uint32_t gobLine = 0; gobLine < gobLines; ++gobLine) {

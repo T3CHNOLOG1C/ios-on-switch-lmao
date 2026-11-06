@@ -11,6 +11,7 @@
 
 extern "C" {
 struct mme_fermi_inst;
+
 struct mme_sim_state_ops {
     uint32_t (*load)(void *handler);
     uint32_t (*state)(void *handler, uint16_t addr);
@@ -18,6 +19,7 @@ struct mme_sim_state_ops {
     void (*barrier)(void *handler);
     uint32_t *(*map_dram)(void *handler, uint32_t idx);
 };
+
 void mme_fermi_decode(struct mme_fermi_inst *insts, const uint32_t *in, uint32_t inst_count);
 void cap_describe(uint64_t va) __attribute__((weak));
 void cap_scrub(uint64_t va, uint64_t bytes) __attribute__((weak));
@@ -89,20 +91,26 @@ struct Sim {
     std::function<void(uint16_t, uint32_t)> emit;
     std::function<uint32_t(uint16_t)> state;
 };
+
 uint32_t simLoad(void *h)
 {
     Sim *s = static_cast<Sim *>(h);
     return s->at < s->params->size() ? (*s->params)[s->at++] : 0;
 }
+
 uint32_t simState(void *h, uint16_t addr)
 {
     return static_cast<Sim *>(h)->state(addr);
 }
+
 void simMthd(void *h, uint16_t addr, uint32_t data)
 {
     static_cast<Sim *>(h)->emit(addr, data);
 }
-void simBarrier(void *) {}
+
+void simBarrier(void *)
+{}
+
 uint32_t *simDram(void *, uint32_t)
 {
     return nullptr;
@@ -115,7 +123,8 @@ std::string nameless(const std::string &s)
     std::string out;
     for (size_t i = 0; i < s.size(); i++) {
         if (s[i] == 'R' && i + 1 < s.size() && isdigit(s[i + 1]) && (i == 0 || !isalnum(s[i - 1]))) {
-            while (i + 1 < s.size() && isdigit(s[i + 1])) i++;
+            while (i + 1 < s.size() && isdigit(s[i + 1]))
+                i++;
             out += 'R';
             continue;
         }
@@ -135,25 +144,37 @@ std::string hex(uint64_t v)
 // bookkeeping: never compared as plain values.
 bool ignored3d(uint32_t m)
 {
-    if (m < 0x0200) return true;  // control, MME RAM loads, WFI
+    if (m < 0x0200)
+        return true;  // control, MME RAM loads, WFI
     if (m == INVALIDATE_SHADER_CACHES || m == INVALIDATE_SHADER_CACHES_NO_WFI || m == INVALIDATE_TEXTURE_DATA_CACHE ||
         m == INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI || m == INVALIDATE_SAMPLER_CACHE_NO_WFI ||
         m == INVALIDATE_TEXTURE_HEADER_CACHE_NO_WFI || m == FLUSH_PENDING_WRITES)
         return true;
     if (m >= CLEAR_RECT_H && m <= COLOR_CLEAR_VALUE + 0xc)
         return true;  // clear rect/vertex array triggers/clear values
-    if (m == CLEAR_SURFACE_CONTROL || m == CLEAR_SURFACE || m == RENDER_ENABLE_OVERRIDE) return true;
-    if (m == BEGIN || m == END) return true;
-    if (m >= REPORT_SEMAPHORE_A && m <= REPORT_SEMAPHORE_D) return true;
-    if (m >= CB_SELECTOR_A && m < 0x2600) return true;  // cbuf selector/loads/binds (compared as cbufs)
-    if (m >= MME_SCRATCH) return true;                  // MME shadow scratch, macro calls
+    if (m == CLEAR_SURFACE_CONTROL || m == CLEAR_SURFACE || m == RENDER_ENABLE_OVERRIDE)
+        return true;
+    if (m == BEGIN || m == END)
+        return true;
+    if (m >= REPORT_SEMAPHORE_A && m <= REPORT_SEMAPHORE_D)
+        return true;
+    if (m >= CB_SELECTOR_A && m < 0x2600)
+        return true;  // cbuf selector/loads/binds (compared as cbufs)
+    if (m >= MME_SCRATCH)
+        return true;  // MME shadow scratch, macro calls
     // addresses (printed by name or by content instead)
-    if (m >= COLOR_TARGET && m < COLOR_TARGET + 0x200 && ((m & 0x3f) == 0 || (m & 0x3f) == 4)) return true;
-    if (m == ZT_A || m == ZT_B || m == PROGRAM_REGION_A || m == PROGRAM_REGION_B) return true;
-    if (m == TIC_POOL_A || m == TIC_POOL_B || m == TSC_POOL_A || m == TSC_POOL_B) return true;
-    if (m >= VERTEX_STREAM_A && m < VERTEX_STREAM_A + 0x200 && ((m & 0xf) == 4 || (m & 0xf) == 8)) return true;
-    if (m >= VERTEX_STREAM_LIMIT && m < VERTEX_STREAM_LIMIT + 0x100) return true;
-    if (m >= PIPELINE && m < PIPELINE + 0x180 && (m & 0x3f) == 4) return true;  // program offsets: compared as programs
+    if (m >= COLOR_TARGET && m < COLOR_TARGET + 0x200 && ((m & 0x3f) == 0 || (m & 0x3f) == 4))
+        return true;
+    if (m == ZT_A || m == ZT_B || m == PROGRAM_REGION_A || m == PROGRAM_REGION_B)
+        return true;
+    if (m == TIC_POOL_A || m == TIC_POOL_B || m == TSC_POOL_A || m == TSC_POOL_B)
+        return true;
+    if (m >= VERTEX_STREAM_A && m < VERTEX_STREAM_A + 0x200 && ((m & 0xf) == 4 || (m & 0xf) == 8))
+        return true;
+    if (m >= VERTEX_STREAM_LIMIT && m < VERTEX_STREAM_LIMIT + 0x100)
+        return true;
+    if (m >= PIPELINE && m < PIPELINE + 0x180 && (m & 0x3f) == 4)
+        return true;  // program offsets: compared as programs
     // other address-bearing state NVK sets once (shader local memory, zcull, query/ICB, index buffer, MME DMA)
     static const uint32_t addrs[] = {0x0790, 0x0794, 0x07e0, 0x07e4, 0x07e8, 0x07ec, 0x07f0, 0x07f4, 0x07f8, 0x07fc,
                                      0x0f84, 0x0f88, 0x1550, 0x1554, 0x17c8, 0x17cc, 0x17d0, 0x17d4, 0x17d8};
@@ -164,11 +185,13 @@ bool ignored3d(uint32_t m)
 uint64_t Decoder::fnv(const void *p, size_t n, uint64_t h)
 {
     const uint8_t *b = static_cast<const uint8_t *>(p);
-    for (size_t i = 0; i < n; i++) h = (h ^ b[i]) * 0x100000001b3ull;
+    for (size_t i = 0; i < n; i++)
+        h = (h ^ b[i]) * 0x100000001b3ull;
     return h;
 }
 
-Decoder::Decoder(MapFn map, FILE *out) : map_(std::move(map)), out_(out) {}
+Decoder::Decoder(MapFn map, FILE *out) : map_(std::move(map)), out_(out)
+{}
 #ifdef NVDEC_TWOD
 void Decoder::twod(uint32_t subc, uint32_t mthd, uint32_t data)
 {
@@ -187,13 +210,15 @@ void Decoder::twod(uint32_t subc, uint32_t mthd, uint32_t data)
     }
     if (!sim->feed(subc, mthd, data)) {
         fprintf(stderr, "nvdec: 2D engine: %s\n", sim->error().c_str());
-        if (out_) fprintf(out_, "TWOD_ERROR %s\n", sim->error().c_str());
+        if (out_)
+            fprintf(out_, "TWOD_ERROR %s\n", sim->error().c_str());
         delete sim;
         twod_ = nullptr;
     }
 }
 #else
-void Decoder::twod(uint32_t, uint32_t, uint32_t) {}
+void Decoder::twod(uint32_t, uint32_t, uint32_t)
+{}
 #endif
 
 void Decoder::submitBegin()
@@ -205,7 +230,8 @@ void Decoder::submitBegin()
 
 void Decoder::submitEnd()
 {
-    if (pendingMacro_ >= 0) runMacro();
+    if (pendingMacro_ >= 0)
+        runMacro();
     static const uint64_t trace = getenv("NVDEC_TRACE") ? strtoull(getenv("NVDEC_TRACE"), nullptr, 0) : 0;
     if (submits == trace) {
         for (int sc = 0; sc < 2; sc++) {
@@ -221,7 +247,8 @@ void Decoder::submitEnd()
     }
     if (!pendingBarriers_.empty()) {
         std::string s;
-        for (auto &b : pendingBarriers_) s += (s.empty() ? "" : ",") + b;
+        for (auto &b : pendingBarriers_)
+            s += (s.empty() ? "" : ",") + b;
         fprintf(out_, "END-OF-SUBMIT barriers=%s\n", s.c_str());
         pendingBarriers_.clear();
     }
@@ -243,7 +270,8 @@ void Decoder::push(const uint32_t *w, uint64_t n)
             continue;
         }
         const uint32_t h = w[i];
-        if (!h) continue;
+        if (!h)
+            continue;
         const uint32_t op = h >> 29, count = (h >> 16) & 0x1fff, subc = (h >> 13) & 7, mthd = (h & 0xfff) << 2;
         if (op == 4)
             method(subc, mthd, count, false);
@@ -266,15 +294,18 @@ void Decoder::barrier(const std::string &what)
 
 void Decoder::method(uint32_t subc, uint32_t mthd, uint32_t data, bool fromMme)
 {
-    if (subc > 4) return;
+    if (subc > 4)
+        return;
     // NVDEC_TRACE=N: every method the stream itself writes in submissions 1..N (the context init NVK records), for tools/mkpack.py
     static const uint64_t trace = getenv("NVDEC_TRACE") ? strtoull(getenv("NVDEC_TRACE"), nullptr, 0) : 0;
-    if (!fromMme && submits <= trace) fprintf(out_, "T %u %x %x\n", subc, mthd, data);
+    if (!fromMme && submits <= trace)
+        fprintf(out_, "T %u %x %x\n", subc, mthd, data);
     if (!fromMme && pendingMacro_ >= 0 && subc == 0 && mthd == CALL_MME + 8 * uint32_t(pendingMacro_) + 4) {
         params_.push_back(data);
         return;
     }
-    if (!fromMme && pendingMacro_ >= 0) runMacro();
+    if (!fromMme && pendingMacro_ >= 0)
+        runMacro();
     if (mthd < 0x100) {  // host class methods on any subchannel
         reg_[subc][mthd >> 2] = data;
         if (mthd == 0x78)
@@ -287,19 +318,23 @@ void Decoder::method(uint32_t subc, uint32_t mthd, uint32_t data, bool fromMme)
     }
     if (subc != 0) {
         reg_[subc][mthd >> 2] = data;
-        if (subc == 1 && mthd == 0x02b4) fprintf(out_, "DISPATCH\n");
+        if (subc == 1 && mthd == 0x02b4)
+            fprintf(out_, "DISPATCH\n");
         if (subc == 4 && mthd == 0x0300) {
             barrier("CE_COPY");
             copyEngine(data);
         }
-        if (subc == 3 && mthd == 0x08dc) fprintf(out_, "BLIT2D\n");
+        if (subc == 3 && mthd == 0x08dc)
+            fprintf(out_, "BLIT2D\n");
 #ifdef NVDEC_TWOD
-        if (subc == 3) twod(subc, mthd, data);
+        if (subc == 3)
+            twod(subc, mthd, data);
 #endif
         return;
     }
 #ifdef NVDEC_TWOD
-    if (mthd == 0x0110 || mthd == 0x1288) twod(subc, mthd, data);
+    if (mthd == 0x0110 || mthd == 0x1288)
+        twod(subc, mthd, data);
 #endif
     // 3D
     if (!fromMme && mthd >= CALL_MME && mthd < CALL_MME + 0x800) {
@@ -309,22 +344,39 @@ void Decoder::method(uint32_t subc, uint32_t mthd, uint32_t data, bool fromMme)
         return;
     }
     switch (mthd) {
-    case LOAD_MME_INSTRUCTION_RAM_POINTER: mmeRamPtr_ = data; break;
+    case LOAD_MME_INSTRUCTION_RAM_POINTER:
+        mmeRamPtr_ = data;
+        break;
     case LOAD_MME_INSTRUCTION_RAM:
-        if (mmeRamPtr_ < mmeRam_.size()) mmeRam_[mmeRamPtr_++] = data;
+        if (mmeRamPtr_ < mmeRam_.size())
+            mmeRam_[mmeRamPtr_++] = data;
         break;
-    case LOAD_MME_START_ADDRESS_RAM_POINTER: mmeStartPtr_ = data; break;
+    case LOAD_MME_START_ADDRESS_RAM_POINTER:
+        mmeStartPtr_ = data;
+        break;
     case LOAD_MME_START_ADDRESS_RAM:
-        if (mmeStartPtr_ < mmeStart_.size()) mmeStart_[mmeStartPtr_++] = data;
+        if (mmeStartPtr_ < mmeStart_.size())
+            mmeStart_[mmeStartPtr_++] = data;
         break;
-    case WAIT_FOR_IDLE: barrier("WFI"); break;
+    case WAIT_FOR_IDLE:
+        barrier("WFI");
+        break;
     case INVALIDATE_TEXTURE_DATA_CACHE:
-    case INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI: barrier("TEXINV"); break;
-    case INVALIDATE_TEXTURE_HEADER_CACHE_NO_WFI: barrier("TICINV"); break;
-    case INVALIDATE_SAMPLER_CACHE_NO_WFI: barrier("TSCINV"); break;
+    case INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI:
+        barrier("TEXINV");
+        break;
+    case INVALIDATE_TEXTURE_HEADER_CACHE_NO_WFI:
+        barrier("TICINV");
+        break;
+    case INVALIDATE_SAMPLER_CACHE_NO_WFI:
+        barrier("TSCINV");
+        break;
     case INVALIDATE_SHADER_CACHES:
-    case INVALIDATE_SHADER_CACHES_NO_WFI: barrier("SHINV"); break;
-    default: break;
+    case INVALIDATE_SHADER_CACHES_NO_WFI:
+        barrier("SHINV");
+        break;
+    default:
+        break;
     }
     if (mthd >= LOAD_CB && mthd < LOAD_CB + 0x40) {
         const uint64_t base = addr3(CB_SELECTOR_B, CB_SELECTOR_C);
@@ -416,7 +468,8 @@ void Decoder::copyEngine(uint32_t launch)
         ndst = ((comp >> 24) & 3) + 1;
         elem = csize * ndst;
         srcElem = csize * nsrc;
-        for (uint32_t c = 0; c < ndst; c++) plain = plain && ((comp >> (4 * c)) & 7) == c && c < nsrc;
+        for (uint32_t c = 0; c < ndst; c++)
+            plain = plain && ((comp >> (4 * c)) & 7) == c && c < nsrc;
         plain = plain && nsrc == ndst;
     }
     const uint64_t bytes = uint64_t(length) * elem;
@@ -425,8 +478,10 @@ void Decoder::copyEngine(uint32_t launch)
         if (remap && !plain) {  // component by component, over what the destination holds
             read(dst + uint64_t(y) * pitchOut, line.data(), bytes);
             bool reads = false;
-            for (uint32_t c = 0; c < ndst; c++) reads = reads || ((comp >> (4 * c)) & 7) < 4;
-            if (reads) read(src + uint64_t(y) * pitchIn, from.data(), from.size());
+            for (uint32_t c = 0; c < ndst; c++)
+                reads = reads || ((comp >> (4 * c)) & 7) < 4;
+            if (reads)
+                read(src + uint64_t(y) * pitchIn, from.data(), from.size());
             for (uint32_t e = 0; e < length; e++)
                 for (uint32_t c = 0; c < ndst; c++) {
                     const uint32_t sel = (comp >> (4 * c)) & 7;
@@ -434,7 +489,8 @@ void Decoder::copyEngine(uint32_t launch)
                     if (sel < 4 && sel < nsrc)
                         memcpy(out, &from[uint64_t(e) * srcElem + sel * csize], csize);
                     else if (sel == 4 || sel == 5)
-                        for (uint32_t k = 0; k < csize; k++) out[k] = uint8_t(consts[sel - 4] >> (8 * k));
+                        for (uint32_t k = 0; k < csize; k++)
+                            out[k] = uint8_t(consts[sel - 4] >> (8 * k));
                 }
         } else {
             read(src + uint64_t(y) * pitchIn, line.data(), bytes);
@@ -480,8 +536,13 @@ void Decoder::runMacro()
     std::vector<uint8_t> insts(size_t(count) * 64);  // sizeof(struct mme_fermi_inst) is well under 64 bytes
     mme_fermi_decode(reinterpret_cast<mme_fermi_inst *>(insts.data()), mmeRam_.data() + start, count);
     std::vector<uint32_t> params = params_;
-    Sim sim{this, &params, 0, [this](uint16_t a, uint32_t d) { method(0, a, d, true); },
-            [this](uint16_t a) { return reg_[0][(a >> 2) & 0x3fff]; }};
+    Sim sim{this, &params, 0,
+            [this](uint16_t a, uint32_t d) {
+                method(0, a, d, true);
+            },
+            [this](uint16_t a) {
+                return reg_[0][(a >> 2) & 0x3fff];
+            }};
     static const mme_sim_state_ops ops = {simLoad, simState, simMthd, simBarrier, simDram};
     mme_fermi_sim_core(count, reinterpret_cast<mme_fermi_inst *>(insts.data()), &ops, &sim);
 }
@@ -526,12 +587,14 @@ std::map<uint64_t, int> &Decoder::names()
 
 std::string Decoder::name(uint64_t va)
 {
-    if (!va) return "null";
+    if (!va)
+        return "null";
     const uint8_t *host = map_ ? map_(va, 1) : nullptr;
     const uint64_t key = host ? uint64_t(uintptr_t(host)) : va;
     auto &n = names();
     auto it = n.find(key);
-    if (it == n.end()) it = n.emplace(key, int(n.size()) + 1).first;
+    if (it == n.end())
+        it = n.emplace(key, int(n.size()) + 1).first;
     return "R" + std::to_string(it->second);
 }
 
@@ -540,18 +603,22 @@ std::string Decoder::name(uint64_t va)
 // texture/sampler header. Printed as a hash plus the decoded words.
 std::string Decoder::contentHash(uint64_t va, uint64_t bytes, int depth, bool handles, bool childHandles)
 {
-    if (!bytes) return "empty";
+    if (!bytes)
+        return "empty";
     bytes = std::min<uint64_t>(bytes, 1 << 16);
     std::vector<uint8_t> b(bytes);
-    if (!read(va, b.data(), bytes)) return "unmapped:" + hex(bytes);
+    if (!read(va, b.data(), bytes))
+        return "unmapped:" + hex(bytes);
     std::string words;
     std::vector<bool> done(bytes / 4 + 1, false);
     if (handles && layout_) {  // a descriptor set: keep only the bytes its layout's entries cover
         std::vector<uint8_t> keep(bytes, 0);
         for (auto &r : layout_->ranges)
-            for (uint32_t k = r.first; k < r.first + r.second && k < bytes; k++) keep[k] = 1;
+            for (uint32_t k = r.first; k < r.first + r.second && k < bytes; k++)
+                keep[k] = 1;
         for (uint64_t k = 0; k < bytes; k++)
-            if (!keep[k]) b[k] = 0;
+            if (!keep[k])
+                b[k] = 0;
         if (getenv("NVDEC_SETWORDS")) {
             std::string l = "set:";
             for (uint64_t k = 0; k + 4 <= bytes && k < 96; k += 4) {
@@ -568,12 +635,14 @@ std::string Decoder::contentHash(uint64_t va, uint64_t bytes, int depth, bool ha
         uint64_t v;
         memcpy(&v, &b[i], 8);
         const uint64_t hi = v >> 32;
-        if (hi < 1 || hi >= 0x80 || !map_ || !map_(v, 1) || depth >= 3) continue;
+        if (hi < 1 || hi >= 0x80 || !map_ || !map_(v, 1) || depth >= 3)
+            continue;
         uint32_t size = 64, z = 1;
         if (i % 16 == 0 && i + 16 <= bytes) {
             memcpy(&size, &b[i + 8], 4);
             memcpy(&z, &b[i + 12], 4);
-            if (z != 0 || size == 0 || size > (1u << 16)) size = 64;
+            if (z != 0 || size == 0 || size > (1u << 16))
+                size = 64;
         }
         const std::string inner = contentHash(v, size, depth + 1, childHandles, false);
         const std::string innerKey = nameless(inner);
@@ -592,16 +661,20 @@ std::string Decoder::contentHash(uint64_t va, uint64_t bytes, int depth, bool ha
     if (handles) {
         const uint32_t ticMax = r3(TIC_POOL_C), tscMax = r3(TSC_POOL_C);
         for (uint64_t i = 0; i + 4 <= bytes; i += 4) {
-            if (done[i / 4]) continue;
+            if (done[i / 4])
+                continue;
             uint32_t w;
             memcpy(&w, &b[i], 4);
-            if (!w) continue;
+            if (!w)
+                continue;
             const uint32_t tic = w & 0xfffff, tsc = w >> 20;
-            if (tic > ticMax || tsc > tscMax) continue;
+            if (tic > ticMax || tsc > tscMax)
+                continue;
             // NVK gives out sampler index 0 like any other: resolve it, unless the layout says the program reads no sampler there
             const bool noSampler = layout_ && layout_->textureOnly.count(uint32_t(i));
             const std::string t = tic ? ticEntry(tic) : "-", s = noSampler ? "-" : tscEntry(tsc);
-            if (t == "zero" || s == "zero") continue;
+            if (t == "zero" || s == "zero")
+                continue;
             const std::string both = t + "/" + s, bothKey = nameless(both);
             const uint32_t h = uint32_t(fnv(bothKey.data(), bothKey.size()));
             memcpy(&b[i], &h, 4);
@@ -616,8 +689,10 @@ std::string Decoder::ticEntry(uint32_t index)
     uint32_t t[8];
     read(addr3(TIC_POOL_A, TIC_POOL_B) + uint64_t(index) * 32, t, 32);
     bool any = false;
-    for (uint32_t w : t) any |= w != 0;
-    if (!any) return "zero";
+    for (uint32_t w : t)
+        any |= w != 0;
+    if (!any)
+        return "zero";
     const uint32_t version = (t[2] >> 21) & 7;
     const uint32_t mask = version == 3 || version == 4 ? 0xfffffe00u : version == 0 ? 0xffffffffu : 0xffffffe0u;
     const uint64_t address = (uint64_t(t[2] & 0xffff) << 32) | (t[1] & mask);
@@ -628,19 +703,31 @@ std::string Decoder::ticEntry(uint32_t index)
     if (wantTexels && version == 2) {
         uint32_t bpp = 0;
         switch (t[0] & 0x7f) {
-        case 0x1d: bpp = 1; break;   // R8
-        case 0x18: bpp = 2; break;   // G8R8
-        case 0x08: bpp = 4; break;   // A8B8G8R8
-        case 0x03: bpp = 8; break;   // R16G16B16A16
-        case 0x01: bpp = 16; break;  // R32G32B32A32
-        default: break;
+        case 0x1d:
+            bpp = 1;
+            break;  // R8
+        case 0x18:
+            bpp = 2;
+            break;  // G8R8
+        case 0x08:
+            bpp = 4;
+            break;  // A8B8G8R8
+        case 0x03:
+            bpp = 8;
+            break;  // R16G16B16A16
+        case 0x01:
+            bpp = 16;
+            break;  // R32G32B32A32
+        default:
+            break;
         }
         const uint32_t pitch = (t[3] & 0xffff) << 5, w = (t[4] & 0xffff) + 1, h = (t[5] & 0xffff) + 1;
         if (bpp && pitch >= w * bpp && h <= 16384) {
             std::vector<uint8_t> row(size_t(w) * bpp);
             uint64_t hash = 0xcbf29ce484222325ull;
             for (uint32_t y = 0; y < h; y++) {
-                if (!read(address + uint64_t(y) * pitch, row.data(), row.size())) break;
+                if (!read(address + uint64_t(y) * pitch, row.data(), row.size()))
+                    break;
                 hash = fnv(row.data(), row.size(), hash);
             }
             snprintf(texels, sizeof texels, " texels=%016llx", (unsigned long long)hash);
@@ -659,8 +746,10 @@ std::string Decoder::tscEntry(uint32_t index)
     uint32_t t[8];
     read(addr3(TSC_POOL_A, TSC_POOL_B) + uint64_t(index) * 32, t, 32);
     bool any = false;
-    for (uint32_t w : t) any |= w != 0;
-    if (!any) return "zero";
+    for (uint32_t w : t)
+        any |= w != 0;
+    if (!any)
+        return "zero";
     char b[120];
     snprintf(b, sizeof b, "tsc[%08x %08x %08x %08x %08x %08x %08x %08x]", t[0], t[1], t[2], t[3], t[4], t[5], t[6],
              t[7]);
@@ -670,18 +759,22 @@ std::string Decoder::tscEntry(uint32_t index)
 bool Decoder::loadLayouts(const char *path)
 {
     FILE *f = fopen(path, "r");
-    if (!f) return false;
+    if (!f)
+        return false;
     char line[2048];
     while (fgets(line, sizeof line, f)) {
         std::vector<std::string> w;
-        for (char *tok = strtok(line, " \n"); tok; tok = strtok(nullptr, " \n")) w.push_back(tok);
-        if (w.size() < 3) continue;
+        for (char *tok = strtok(line, " \n"); tok; tok = strtok(nullptr, " \n"))
+            w.push_back(tok);
+        if (w.size() < 3)
+            continue;
         Layout l;
         l.bytes = uint32_t(strtoul(w[2].c_str(), nullptr, 16));
         for (size_t i = 3; i < w.size(); i++) {
             const uint32_t off = uint32_t(strtoul(w[i].c_str(), nullptr, 10));
             l.ranges.push_back({off, w[i].back() == 'u' ? 16u : 4u});
-            if (w[i].back() == 't') l.textureOnly.insert(off);
+            if (w[i].back() == 't')
+                l.textureOnly.insert(off);
         }
         layouts[w[0] + " " + w[1]] = l;
     }
@@ -692,15 +785,18 @@ bool Decoder::loadLayouts(const char *path)
 bool Decoder::loadPrograms(const char *path)
 {
     FILE *f = fopen(path, "rb");
-    if (!f) return false;
+    if (!f)
+        return false;
     std::vector<uint8_t> b;
     uint8_t chunk[65536];
     size_t n;
-    while ((n = fread(chunk, 1, sizeof chunk, f)) > 0) b.insert(b.end(), chunk, chunk + n);
+    while ((n = fread(chunk, 1, sizeof chunk, f)) > 0)
+        b.insert(b.end(), chunk, chunk + n);
     fclose(f);
     for (size_t at = 0; at + 12 <= b.size();) {
         uint32_t code, count;
-        if (memcmp(&b[at], "NVPG", 4)) return false;
+        if (memcmp(&b[at], "NVPG", 4))
+            return false;
         memcpy(&code, &b[at + 4], 4);
         memcpy(&count, &b[at + 8], 4);
         at += 12;
@@ -755,7 +851,8 @@ void Decoder::clear(uint32_t data)
 {
     clears++;
     std::string bar;
-    for (auto &b : pendingBarriers_) bar += (bar.empty() ? "" : ",") + b;
+    for (auto &b : pendingBarriers_)
+        bar += (bar.empty() ? "" : ",") + b;
     pendingBarriers_.clear();
     const uint32_t rt = (data >> 6) & 0xf;
     const uint32_t m = COLOR_TARGET + 0x40 * rt;
@@ -811,7 +908,8 @@ void Decoder::probeDump(uint32_t first, uint32_t count)
     for (int set = 0; set < 2; set++) {
         const uint64_t sa = (uint64_t(r[(0x38 + 16 * set) / 4 + 1]) << 32) | r[(0x38 + 16 * set) / 4];
         const uint32_t ss = r[(0x38 + 16 * set) / 4 + 2];
-        if (!sa || !ss) continue;
+        if (!sa || !ss)
+            continue;
         char tag[16];
         snprintf(tag, sizeof tag, "set%d", set);
         std::vector<uint32_t> d = words(tag, sa, std::min<uint32_t>(ss, 0x1000));
@@ -837,22 +935,27 @@ void Decoder::probeDump(uint32_t first, uint32_t count)
     }
     // the texture and sampler headers any set-0 word could name (tic in bits 19:0, tsc in 31:20), plus entry 0 of each pool
     std::set<uint32_t> tics = {0}, tscs = {0};
-    for (const std::string &tag : {std::string("set0"), std::string("set1")}) (void)tag;
+    for (const std::string &tag : {std::string("set0"), std::string("set1")})
+        (void)tag;
     {
         const uint64_t sa = (uint64_t(r[0x38 / 4 + 1]) << 32) | r[0x38 / 4];
         const uint32_t ss = std::min<uint32_t>(r[0x38 / 4 + 2], 0x1000);
         std::vector<uint32_t> d(ss / 4);
-        if (sa && ss) read(sa, d.data(), ss);
+        if (sa && ss)
+            read(sa, d.data(), ss);
         for (uint32_t w : d) {
-            if ((w & 0xfffff) <= r3(TIC_POOL_C)) tics.insert(w & 0xfffff);
-            if ((w >> 20) <= r3(TSC_POOL_C)) tscs.insert(w >> 20);
+            if ((w & 0xfffff) <= r3(TIC_POOL_C))
+                tics.insert(w & 0xfffff);
+            if ((w >> 20) <= r3(TSC_POOL_C))
+                tscs.insert(w >> 20);
         }
     }
     for (uint32_t t : tics) {
         uint32_t e[8];
         read(addr3(TIC_POOL_A, TIC_POOL_B) + 32ull * t, e, 32);
         bool any = false;
-        for (uint32_t x : e) any |= x != 0;
+        for (uint32_t x : e)
+            any |= x != 0;
         if (any)
             fprintf(out_, "P tic %u %s %x %x %x %x %x %x %x %x\n", t,
                     name((uint64_t(e[2] & 0xffff) << 32) | (e[1] & 0xffffffe0u)).c_str(), e[0], e[1], e[2], e[3], e[4],
@@ -862,12 +965,15 @@ void Decoder::probeDump(uint32_t first, uint32_t count)
         uint32_t e[8];
         read(addr3(TSC_POOL_A, TSC_POOL_B) + 32ull * t, e, 32);
         bool any = false;
-        for (uint32_t x : e) any |= x != 0;
-        if (any) fprintf(out_, "P tsc %u %x %x %x %x %x %x %x %x\n", t, e[0], e[1], e[2], e[3], e[4], e[5], e[6], e[7]);
+        for (uint32_t x : e)
+            any |= x != 0;
+        if (any)
+            fprintf(out_, "P tsc %u %x %x %x %x %x %x %x %x\n", t, e[0], e[1], e[2], e[3], e[4], e[5], e[6], e[7]);
     }
     for (uint32_t j = 0; j < 16; j++) {
         const uint32_t fmt = r3(VERTEX_STREAM_A + 0x10 * j);
-        if (!(fmt & (1u << 12))) continue;
+        if (!(fmt & (1u << 12)))
+            continue;
         const uint64_t loc = addr3(VERTEX_STREAM_A + 0x10 * j + 4, VERTEX_STREAM_A + 0x10 * j + 8);
         const uint64_t limit = addr3(VERTEX_STREAM_LIMIT + 8 * j, VERTEX_STREAM_LIMIT + 8 * j + 4);
         char tag[16];
@@ -876,7 +982,8 @@ void Decoder::probeDump(uint32_t first, uint32_t count)
         words(tag, loc, 256);
     }
     for (int i = 0; i < 6; i++) {
-        if (!(r3(PIPELINE + 0x40 * i) & 1)) continue;
+        if (!(r3(PIPELINE + 0x40 * i) & 1))
+            continue;
         std::string id;
         const ProgramInfo *p = program(i, id);
         fprintf(out_, "P prog %d %s %x %s\n", i, id.c_str(), r3(PIPELINE + 0x40 * i + 4), p ? "known" : "unknown");
@@ -893,13 +1000,15 @@ void Decoder::probeDump(uint32_t first, uint32_t count)
             read(sa, d.data(), ss);
             for (size_t i = 0; i + 1 < d.size(); i += 2) {
                 const uint64_t v = (uint64_t(d[i + 1]) << 32) | d[i];
-                if ((v >> 32) >= 1 && (v >> 32) < 0x80 && map_ && map_(v, 1)) cap_scrub(v, 256);
+                if ((v >> 32) >= 1 && (v >> 32) < 0x80 && map_ && map_(v, 1))
+                    cap_scrub(v, 256);
             }
             cap_scrub(sa, ss);
         }
         for (uint32_t j = 0; j < 16; j++) {
             const uint32_t fmt = r3(VERTEX_STREAM_A + 0x10 * j);
-            if (fmt & (1u << 12)) cap_scrub(addr3(VERTEX_STREAM_A + 0x10 * j + 4, VERTEX_STREAM_A + 0x10 * j + 8), 256);
+            if (fmt & (1u << 12))
+                cap_scrub(addr3(VERTEX_STREAM_A + 0x10 * j + 4, VERTEX_STREAM_A + 0x10 * j + 8), 256);
         }
     }
 }
@@ -908,7 +1017,8 @@ void Decoder::draw(const char *kind, uint32_t first, uint32_t count)
 {
     draws++;
     std::string bar;
-    for (auto &b : pendingBarriers_) bar += (bar.empty() ? "" : ",") + b;
+    for (auto &b : pendingBarriers_)
+        bar += (bar.empty() ? "" : ",") + b;
     pendingBarriers_.clear();
     fprintf(out_, "%s first=%u count=%u begin=%08x barriers=%s\n", indexed_ ? "DRAW-INDEXED" : kind, first, count,
             r3(BEGIN), bar.c_str());
@@ -916,17 +1026,22 @@ void Decoder::draw(const char *kind, uint32_t first, uint32_t count)
     // Which render targets, vertex streams and stages are live: their registers are compared, the others are not.
     const uint32_t ct = r3(CT_SELECT), ctCount = ct & 0xf;
     bool rtLive[8] = {};
-    for (uint32_t k = 0; k < ctCount && k < 8; k++) rtLive[(ct >> (4 + 3 * k)) & 7] = true;
+    for (uint32_t k = 0; k < ctCount && k < 8; k++)
+        rtLive[(ct >> (4 + 3 * k)) & 7] = true;
     bool stageLive[6] = {};
-    for (int i = 0; i < 6; i++) stageLive[i] = r3(PIPELINE + 0x40 * i) & 1;
+    for (int i = 0; i < 6; i++)
+        stageLive[i] = r3(PIPELINE + 0x40 * i) & 1;
     auto live = [&](uint32_t m) {
-        if (m >= COLOR_TARGET && m < COLOR_TARGET + 0x200) return rtLive[(m - COLOR_TARGET) / 0x40];
-        if (m >= COLOR_COMPRESSION && m < COLOR_COMPRESSION + 0x20) return rtLive[(m - COLOR_COMPRESSION) / 4];
+        if (m >= COLOR_TARGET && m < COLOR_TARGET + 0x200)
+            return rtLive[(m - COLOR_TARGET) / 0x40];
+        if (m >= COLOR_COMPRESSION && m < COLOR_COMPRESSION + 0x20)
+            return rtLive[(m - COLOR_COMPRESSION) / 4];
         if (m >= VERTEX_STREAM_A && m < VERTEX_STREAM_A + 0x200) {
             const uint32_t j = (m - VERTEX_STREAM_A) / 0x10;
             return bool(r3(VERTEX_STREAM_A + 0x10 * j) & (1u << 12));
         }
-        if (m >= 0x1880 && m < 0x18c0) return bool(r3(VERTEX_STREAM_A + 0x10 * ((m - 0x1880) / 4)) & (1u << 12));
+        if (m >= 0x1880 && m < 0x18c0)
+            return bool(r3(VERTEX_STREAM_A + 0x10 * ((m - 0x1880) / 4)) & (1u << 12));
         if (m >= PIPELINE && m < PIPELINE + 0x180) {
             const uint32_t i = (m - PIPELINE) / 0x40;
             return (m & 0x3f) == 0 || stageLive[i];
@@ -937,18 +1052,21 @@ void Decoder::draw(const char *kind, uint32_t first, uint32_t count)
     if (firstDraw_ && fullStateAtFirstDraw) {
         for (uint32_t i = 0x200 / 4; i < 0x4000; i++) {
             const uint32_t m = i * 4;
-            if (!ignored3d(m) && live(m) && reg_[0][i]) fprintf(out_, "  STATE %04x=%08x\n", m, reg_[0][i]);
+            if (!ignored3d(m) && live(m) && reg_[0][i])
+                fprintf(out_, "  STATE %04x=%08x\n", m, reg_[0][i]);
         }
     }
     firstDraw_ = false;
 
-    if (getenv("NVDEC_PROBE")) probeDump(first, count);
+    if (getenv("NVDEC_PROBE"))
+        probeDump(first, count);
     // every live, comparable register (the record differs between two streams iff the GPU state they leave differs)
     std::string regs;
     uint64_t regHash = 0xcbf29ce484222325ull;
     for (uint32_t i = 0x200 / 4; i < 0x4000; i++) {
         const uint32_t m = i * 4;
-        if (ignored3d(m) || !live(m) || !reg_[0][i]) continue;
+        if (ignored3d(m) || !live(m) || !reg_[0][i])
+            continue;
         regHash = fnv(&m, 4, regHash);
         regHash = fnv(&reg_[0][i], 4, regHash);
     }
@@ -957,7 +1075,8 @@ void Decoder::draw(const char *kind, uint32_t first, uint32_t count)
         std::string l = "  R";
         for (uint32_t i = 0x200 / 4; i < 0x4000; i++) {
             const uint32_t m = i * 4;
-            if (ignored3d(m) || !live(m) || !reg_[0][i]) continue;
+            if (ignored3d(m) || !live(m) || !reg_[0][i])
+                continue;
             char b[24];
             snprintf(b, sizeof b, " %x=%x", m, reg_[0][i]);
             l += b;
@@ -966,24 +1085,29 @@ void Decoder::draw(const char *kind, uint32_t first, uint32_t count)
     }
     // render targets and depth target by name
     for (uint32_t j = 0; j < 8; j++) {
-        if (!rtLive[j]) continue;
+        if (!rtLive[j])
+            continue;
         const uint32_t m = COLOR_TARGET + 0x40 * j;
         fprintf(out_, "  rt%u=%s %ux%u fmt=%x mem=%x pitch=%x\n", j, name(addr3(m, m + 4)).c_str(), r3(m + 8),
                 r3(m + 0xc), r3(m + 0x10), r3(m + 0x14), r3(m + 0x1c));
     }
-    if (r3(ZT_SELECT) & 1) fprintf(out_, "  zt=%s\n", name(addr3(ZT_A, ZT_B)).c_str());
+    if (r3(ZT_SELECT) & 1)
+        fprintf(out_, "  zt=%s\n", name(addr3(ZT_A, ZT_B)).c_str());
     // vertex streams: the bytes the draw reads
     for (uint32_t j = 0; j < 16; j++) {
         const uint32_t fmt = r3(VERTEX_STREAM_A + 0x10 * j);
-        if (!(fmt & (1u << 12))) continue;
+        if (!(fmt & (1u << 12)))
+            continue;
         const uint64_t loc = addr3(VERTEX_STREAM_A + 0x10 * j + 4, VERTEX_STREAM_A + 0x10 * j + 8);
         const uint64_t limit = addr3(VERTEX_STREAM_LIMIT + 8 * j, VERTEX_STREAM_LIMIT + 8 * j + 4);
         const uint32_t stride = fmt & 0xfff;
         uint64_t bytes = uint64_t(first + count) * stride;
-        if (limit >= loc) bytes = std::min<uint64_t>(bytes, limit - loc + 1);
+        if (limit >= loc)
+            bytes = std::min<uint64_t>(bytes, limit - loc + 1);
         uint32_t head[4] = {};
         read(loc, head, 16);
-        if (cap_describe && getenv("NVDEC_DESCRIBE")) cap_describe(loc);
+        if (cap_describe && getenv("NVDEC_DESCRIBE"))
+            cap_describe(loc);
         fprintf(out_, "  vb%u stride=%u data=%s head=%08x,%08x,%08x,%08x\n", j, stride,
                 contentHash(loc, bytes, 2, false, false).c_str(), head[0], head[1], head[2], head[3]);
     }
@@ -991,8 +1115,10 @@ void Decoder::draw(const char *kind, uint32_t first, uint32_t count)
     layout_ = nullptr;
     {
         std::string vs, fs;
-        if (stageLive[1]) program(1, vs);
-        if (stageLive[5]) program(5, fs);
+        if (stageLive[1])
+            program(1, vs);
+        if (stageLive[5])
+            program(5, fs);
         auto it = layouts.find(vs + " " + fs);
         if (it != layouts.end())
             layout_ = &it->second;
@@ -1001,18 +1127,21 @@ void Decoder::draw(const char *kind, uint32_t first, uint32_t count)
     }
     // programs and the constant buffers each live stage's program uses
     for (int i = 0; i < 6; i++) {
-        if (!stageLive[i]) continue;
+        if (!stageLive[i])
+            continue;
         std::string prog;
         const ProgramInfo *info = program(i, prog);
         const uint32_t group = r3(PIPELINE + 0x40 * i + 0x10);
         fprintf(out_, "  stage%d prog=%s regs=%u group=%u\n", i, prog.c_str(), r3(PIPELINE + 0x40 * i + 0xc), group);
-        if (group >= 5) continue;
+        if (group >= 5)
+            continue;
         const size_t slots = info ? info->cbufTypes.size() : 18;
         for (size_t s = 0; s < slots; s++) {
             const Bind &b = binds_[group][s];
             const uint8_t type = info ? info->cbufTypes[s] : 0;
             if (!b.valid) {
-                if (info) fprintf(out_, "    cb%zu INVALID\n", s);
+                if (info)
+                    fprintf(out_, "    cb%zu INVALID\n", s);
                 continue;
             }
             if (type == 1 || (type == 0 && s == 0)) {

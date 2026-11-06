@@ -16,9 +16,12 @@ struct vnode;
 static int kernel_to_host(int kind)
 {
     switch (kind) {
-    case A64X_IMAGE_ARM64E: return A64X_KIND_ARM64E;
-    case A64X_IMAGE_ARM64: return A64X_KIND_ARM64;
-    default: return A64X_KIND_NATIVE;
+    case A64X_IMAGE_ARM64E:
+        return A64X_KIND_ARM64E;
+    case A64X_IMAGE_ARM64:
+        return A64X_KIND_ARM64;
+    default:
+        return A64X_KIND_NATIVE;
     }
 }
 

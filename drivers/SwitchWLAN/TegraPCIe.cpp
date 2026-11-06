@@ -60,6 +60,7 @@ enum : uint32_t {
     PLLP_MISC1 = 0x680,
     UPHY_MGMT_DIV = 0x6D0,
 };
+
 constexpr uint32_t kUPcie = 1u << 6, kUAfi = 1u << 8, kUPcieX = 1u << 10;  // bank U
 constexpr uint32_t kWPadctl = 1u << 14;                                    // bank W, reset only
 constexpr uint32_t kYPexUphy = 1u << 13;                                   // bank Y, reset only (Linux reset 205)
@@ -87,6 +88,7 @@ enum : uint32_t {
     PMC_IO_DPD_REQ = 0x5B8,
     PMC_IO_DPD_STATUS = 0x5BC,
 };
+
 constexpr uint32_t kPartPcie = 3, kToggleStart = 1u << 8;
 constexpr uint32_t kDpdPexPads = 7u << 4, kDpdOff = 1u << 30;  // PEX_BIAS, PEX_CLK1, PEX_CLK2 (Linux pmc.c)
 
@@ -94,7 +96,13 @@ constexpr uint32_t kDpdPexPads = 7u << 4, kDpdOff = 1u << 30;  // PEX_BIAS, PEX_
 constexpr uint32_t kMcSmmuAfiAsid = 0x238, kAsidEnable = 1u << 31;
 
 // Pinmux pads (hekate bdk/soc/pinmux.h; nxk PADS) and their fields.
-enum : uint32_t { PIN_PEX_WAKE = 0x040, PIN_PEX_L1_RST = 0x044, PIN_PEX_L1_CLKREQ = 0x048, PIN_WIFI_RST = 0x1B8 };
+enum : uint32_t {
+    PIN_PEX_WAKE = 0x040,
+    PIN_PEX_L1_RST = 0x044,
+    PIN_PEX_L1_CLKREQ = 0x048,
+    PIN_WIFI_RST = 0x1B8
+};
+
 constexpr uint32_t kPinPm = 3u, kPinPupd = 3u << 2, kPinTristate = 1u << 4, kPinPark = 1u << 5;
 constexpr uint32_t kPinInput = 1u << 6, kPinIoHv = 1u << 10, kPinOd = 1u << 11;
 
@@ -115,6 +123,7 @@ enum : uint32_t {
     UPHY_MISC_PAD_P0_CTL1 = 0x460,
     UPHY_MISC_PAD_P0_CTL8 = 0x47C,
 };
+
 constexpr uint32_t kAuxMuxLp0[3] = {1u << 29, 1u << 30, 1u << 31};  // CLAMP_EN, CLAMP_EN_EARLY, VCORE_DOWN
 constexpr uint32_t kLane0FunctionMask = 3u << 12;                   // pcie-0 function 0 = pcie-x1
 constexpr uint32_t kLane0IddqDisable = 1u << 1;                     // FORCE_PCIE_PAD_IDDQ_DISABLE(0)
@@ -126,16 +135,19 @@ constexpr uint32_t kCtl4TxclkrefUsb = 2u << 12, kCtl4TxclkrefEn = 1u << 15;
 constexpr uint32_t kCtl8RcalEn = 1u << 12, kCtl8RcalClkEn = 1u << 13, kCtl8RcalOvrd = 1u << 15;
 constexpr uint32_t kCtl8RcalDone = 1u << 31;
 constexpr uint32_t kAuxRxIdleTh = 3u << 24, kAuxRxIdleTh1 = 1u << 24;
+
 // UPHY register-file writes: CFG_ADDR(a) | CFG_WDATA(d) | CFG_RESET | CFG_WS.
 constexpr uint32_t uphyCfg(uint32_t address, uint32_t data)
 {
     return ((address & 0xFF) << 16) | (data & 0xFFFF) | (1u << 27) | (1u << 24);
 }
+
 constexpr uint32_t kPllG1Init[4][2] = {{0x02, 0x0000}, {0x03, 0x7051}, {0x25, 0x0130}, {0x1E, 0x0017}};
 constexpr uint32_t kPcieLaneInit[2] = {0x97, 0x0080};
 
 // PCIe block: root port 1 at +0x1000, PADS at +0x3000, AFI at +0x3800 (pci-tegra.c register list).
 constexpr uint32_t kRp = 0x1000, kPads = 0x3000, kAfi = 0x3800;
+
 enum : uint32_t {
     AFI_AXI_BAR0_SZ = 0x00,
     AFI_AXI_BAR0_START = 0x18,
@@ -158,6 +170,7 @@ enum : uint32_t {
     AFI_PEXBIAS_CTRL = 0x168,
     PADS_REFCLK_CFG0 = 0xC8,
 };
+
 constexpr uint32_t kAfiEnFpci = 1u << 0, kAfiClkenOverride = 1u << 31;
 constexpr uint32_t kAfiIntrMaskInt = 1u << 0, kAfiIntrMaskMsi = 1u << 8;
 constexpr uint32_t kAfiIntrErrors = 0x7F;  // INI/TGT slave and decode errors, write error, DFPCI/AXI decode
@@ -166,6 +179,7 @@ constexpr uint32_t kAfiCfgXbarX4X1 = 1u << 20, kAfiCfgPort1 = (1u << 2) | (1u <<
 constexpr uint32_t kAfiFuseGen2Disable = 1u << 2;
 constexpr uint32_t kPexRst = 1u << 0, kPexClkreqEn = 1u << 1, kPexRefclkEn = 1u << 3, kPexOverrideEn = 1u << 4;
 constexpr uint32_t kPadsRefclkCfg0B01 = 0xB0B880B8;  // tegra210b01-soc-prods.dtsi prod_c_pad
+
 // Root port registers (pci-tegra.c:141-370).
 enum : uint32_t {
     RP_INTR_BCR = 0x03C,
@@ -187,6 +201,7 @@ enum : uint32_t {
     RP_VEND_XP_PAD_PWRDN = 0xF50,
     RP_PRIV_MISC = 0xFE0,
 };
+
 constexpr uint32_t kLinkDlActive = 1u << 29, kVendXpDlUp = 1u << 30;
 constexpr uint32_t kVendXpOppAck = 1u << 27, kVendXpOppUpdateFc = 1u << 28, kVendXpUpdateFcMask = 0xFFu << 18;
 constexpr uint32_t kPrivMiscPrsntMask = 0xF, kPrivMiscPrsnt = 0xE;
@@ -205,14 +220,18 @@ enum : uint32_t {
     CFG_PREF_LIMIT_UPPER = 0x2C,
     CFG_CAP_PTR = 0x34,
 };
+
 constexpr uint32_t kCmdIo = 1u << 0, kCmdMemory = 1u << 1, kCmdMaster = 1u << 2, kCmdIntxOff = 1u << 10;
 constexpr uint32_t kCapMsi = 0x05;
 
 uint32_t bridgeWindow(uint32_t base, uint32_t length)
 {
-    auto field = [](uint32_t a) { return (a >> 16) & 0xFFF0u; };
+    auto field = [](uint32_t a) {
+        return (a >> 16) & 0xFFF0u;
+    };
     return (field(base + length - 1) << 16) | field(base);
 }
+
 uint32_t fpciBar(uint32_t axi)
 {
     return ((((axi >> 12) & 0x0FFFFFFFu) << 4) | 1u);
@@ -229,7 +248,8 @@ uint64_t nowNs()
 
 bool TegraPcie::map()
 {
-    if (mapped_) return true;
+    if (mapped_)
+        return true;
     mapped_ = car_.map(kCarPA, 0x1000) && gpio_.map(kGpioPA, 0x1000) && pinmux_.map(kPinmuxPA, 0x1000) &&
               pmc_.map(kPmcPA, 0x1000) && mc_.map(kMcPA, 0x1000) && padctl_.map(kPadctlPA, 0x1000) &&
               pcie_.map(kPciePA, 0x4000) && cs_.map(kCsPA, 0x1000) && mselect_.map(kMselectPA, 0x1000);
@@ -240,10 +260,12 @@ uint32_t TegraPcie::rpRead(uint32_t offset) const
 {
     return pcie_.r32(kRp + offset);
 }
+
 void TegraPcie::rpWrite(uint32_t offset, uint32_t value) const
 {
     pcie_.w32(kRp + offset, value);
 }
+
 void TegraPcie::rpModify(uint32_t offset, uint32_t clear, uint32_t set) const
 {
     pcie_.modify(kRp + offset, clear, set);
@@ -256,14 +278,16 @@ bool TegraPcie::rail(char *why, size_t whyLength)
     constexpr uint8_t kPmic = 0x3C, kLdo1Cfg = 0x25, kModeNormal = 3u << 6, kLdo1_1V05 = (1050000 - 800000) / 25000;
     int err = tegra_i2c_init(5);
     uint8_t value = 0;
-    if (!err) err = tegra_i2c_read(5, kPmic, kLdo1Cfg, &value, 1);
+    if (!err)
+        err = tegra_i2c_read(5, kPmic, kLdo1Cfg, &value, 1);
     if (!err && !(value & kModeNormal)) {
         const uint8_t on = kModeNormal | kLdo1_1V05;
         err = tegra_i2c_write(5, kPmic, kLdo1Cfg, &on, 1);
         IOSleep(1);
         IOLog("SwitchWLAN: PMIC LDO1 was off (cfg %02x), switched on at 1.05 V\n", value);
     }
-    if (err) snprintf(why, whyLength, "PMIC LDO1 (I2C5 0x3c reg 0x25): I2C error %d", err);
+    if (err)
+        snprintf(why, whyLength, "PMIC LDO1 (I2C5 0x3c reg 0x25): I2C error %d", err);
     return !err;
 }
 
@@ -332,7 +356,8 @@ bool TegraPcie::powerUp(char *why, size_t whyLength)
         snprintf(why, whyLength, "PCIe partition stays clamped (PMC clamp %08x)", pmc_.r32(PMC_CLAMP_STATUS));
         return false;
     }
-    if (!plle(why, whyLength)) return false;
+    if (!plle(why, whyLength))
+        return false;
     if (pmc_.r32(PMC_IO_DPD_STATUS) & kDpdPexPads) {
         pmc_.w32(PMC_IO_DPD_REQ, kDpdOff | kDpdPexPads);
         pmc_.wait(PMC_IO_DPD_STATUS, kDpdPexPads, 0, 250000);
@@ -374,7 +399,8 @@ bool TegraPcie::uphy(char *why, size_t whyLength)
     // Lane 0 (PCIe): idle detect threshold 1 (compliance), then its B01 register-file defaults.
     p.modify(UPHY_MISC_PAD_P0_CTL1, kAuxRxIdleTh, kAuxRxIdleTh1);
     p.w32(UPHY_MISC_PAD_P0_CTL8, uphyCfg(kPcieLaneInit[0], kPcieLaneInit[1]));
-    for (const auto &init : kPllG1Init) p.w32(UPHY_PLL_P0_CTL10, uphyCfg(init[0], init[1]));
+    for (const auto &init : kPllG1Init)
+        p.w32(UPHY_PLL_P0_CTL10, uphyCfg(init[0], init[1]));
 
     p.modify(UPHY_PLL_P0_CTL1, 0, kCtl1PwrOvrd);
     p.modify(UPHY_PLL_P0_CTL2, 0, kCtl2CalOvrd);
@@ -388,22 +414,27 @@ bool TegraPcie::uphy(char *why, size_t whyLength)
 
     const char *step = nullptr;
     p.modify(UPHY_PLL_P0_CTL2, 0, kCtl2CalEn);
-    if (!p.wait(UPHY_PLL_P0_CTL2, kCtl2CalDone, kCtl2CalDone, 100000)) step = "calibration start";
+    if (!p.wait(UPHY_PLL_P0_CTL2, kCtl2CalDone, kCtl2CalDone, 100000))
+        step = "calibration start";
     if (!step) {
         p.modify(UPHY_PLL_P0_CTL2, kCtl2CalEn, 0);
-        if (!p.wait(UPHY_PLL_P0_CTL2, kCtl2CalDone, 0, 100000)) step = "calibration stop";
+        if (!p.wait(UPHY_PLL_P0_CTL2, kCtl2CalDone, 0, 100000))
+            step = "calibration stop";
     }
     if (!step) {
         p.modify(UPHY_PLL_P0_CTL1, 0, kCtl1Enable);
-        if (!p.wait(UPHY_PLL_P0_CTL1, kCtl1Lockdet, kCtl1Lockdet, 100000)) step = "lock";
+        if (!p.wait(UPHY_PLL_P0_CTL1, kCtl1Lockdet, kCtl1Lockdet, 100000))
+            step = "lock";
     }
     if (!step) {
         p.modify(UPHY_PLL_P0_CTL8, 0, kCtl8RcalEn | kCtl8RcalClkEn);
-        if (!p.wait(UPHY_PLL_P0_CTL8, kCtl8RcalDone, kCtl8RcalDone, 100000)) step = "resistor calibration start";
+        if (!p.wait(UPHY_PLL_P0_CTL8, kCtl8RcalDone, kCtl8RcalDone, 100000))
+            step = "resistor calibration start";
     }
     if (!step) {
         p.modify(UPHY_PLL_P0_CTL8, kCtl8RcalEn, 0);
-        if (!p.wait(UPHY_PLL_P0_CTL8, kCtl8RcalDone, 0, 100000)) step = "resistor calibration stop";
+        if (!p.wait(UPHY_PLL_P0_CTL8, kCtl8RcalDone, 0, 100000))
+            step = "resistor calibration stop";
     }
     if (step) {
         snprintf(why, whyLength, "UPHY PLL %s timed out (CTL1 %08x CTL2 %08x CTL4 %08x CTL8 %08x, mgmt clk %08x)", step,
@@ -484,7 +515,8 @@ void TegraPcie::controller()
     for (uint32_t i = 0; i < 6; ++i) {
         pcie_.w32(kAfi + AFI_AXI_BAR0_START + 4 * i, windows[i][0]);
         pcie_.w32(kAfi + AFI_AXI_BAR0_SZ + 4 * i, windows[i][1]);
-        if (i) pcie_.w32(kAfi + AFI_FPCI_BAR0 + 4 * i, windows[i][2]);
+        if (i)
+            pcie_.w32(kAfi + AFI_FPCI_BAR0 + 4 * i, windows[i][2]);
     }
     cfgPage_ = ~0u;
     pcie_.w32(kAfi + AFI_MSI_FPCI_BAR_ST, 0);
@@ -549,7 +581,8 @@ bool TegraPcie::portLink()
 void TegraPcie::selectConfigPage(uint32_t address)
 {
     const uint32_t page = address & ~0xFFFu;
-    if (page == cfgPage_) return;
+    if (page == cfgPage_)
+        return;
     pcie_.w32(kAfi + AFI_FPCI_BAR0, 0xFE100000u + (page >> 8));
     (void)pcie_.r32(kAfi + AFI_FPCI_BAR0);
     cfgPage_ = page;
@@ -567,7 +600,8 @@ void TegraPcie::epConfigWrite(uint32_t offset, uint32_t value)
     const uint32_t address = ((offset & 0xF00u) << 16) | (1u << 16) | (offset & 0xFCu);
     selectConfigPage(address);
     cs_.w32(address & 0xFFC, value);
-    if (cs_.r32(address & 0xFFC) != value) cs_.w32(address & 0xFFC, value);
+    if (cs_.r32(address & 0xFFC) != value)
+        cs_.w32(address & 0xFFC, value);
 }
 
 // nxk `enumerate`: root port 1 as a bridge to bus 1 with its memory windows, then the endpoint's BARs sized and
@@ -619,9 +653,12 @@ bool TegraPcie::enumerate(Endpoint &ep, char *why, size_t whyLength)
             return false;
         }
         epConfigWrite(offset, address);
-        if (wide) epConfigWrite(offset + 4, 0);
-        if (i == 0) ep.bar0 = address;
-        if (i == 2) ep.bar2 = address;
+        if (wide)
+            epConfigWrite(offset + 4, 0);
+        if (i == 0)
+            ep.bar0 = address;
+        if (i == 2)
+            ep.bar2 = address;
         at = address + size;
         i += wide ? 2 : 1;
     }
@@ -665,7 +702,8 @@ bool TegraPcie::bringUp(Endpoint &ep, char *why, size_t whyLength)
         snprintf(why, whyLength, "register mapping failed");
         return false;
     }
-    if (!rail(why, whyLength)) return false;
+    if (!rail(why, whyLength))
+        return false;
     // MSELECT: wrap transactions for normal non-cacheable/GRE mappings, no error responses (tegra_pcie_enable_wrap;
     // hekate's L4T launcher sets the same bits).
     mselect_.modify(0, 1u << 24, 1u << 28);
@@ -674,7 +712,8 @@ bool TegraPcie::bringUp(Endpoint &ep, char *why, size_t whyLength)
         IOLog("SwitchWLAN: AFI was routed through the SMMU (asid %08x), now direct\n", mc_.r32(kMcSmmuAfiAsid));
         mc_.w32(kMcSmmuAfiAsid, 0);
     }
-    if (!powerUp(why, whyLength) || !uphyManagementClock(why, whyLength)) return false;
+    if (!powerUp(why, whyLength) || !uphyManagementClock(why, whyLength))
+        return false;
     // First AFI/root-port access: powered, clocked and out of reset by now. A hang right after this line means the
     // partition or clocks are not what their status registers said.
     IOLog("SwitchWLAN: PCIe controller powered (PLLE %08x, partition on), probing the root port\n",
@@ -686,7 +725,8 @@ bool TegraPcie::bringUp(Endpoint &ep, char *why, size_t whyLength)
     }
     pads();
     moduleReset();
-    if (!uphy(why, whyLength)) return false;
+    if (!uphy(why, whyLength))
+        return false;
     controller();
     portEnable();
     IODelay(100);  // clocks latch before PCIEXCLK leaves reset (tegra_pcie_check_ports)
@@ -751,7 +791,8 @@ bool TegraPcie::msiEnable(uint32_t msiPA, char *why, size_t whyLength)
     const uint32_t control = epConfigRead(cap) >> 16;
     const bool wide = control & (1u << 7);
     epConfigWrite(cap + 4, msiPA);
-    if (wide) epConfigWrite(cap + 8, 0);
+    if (wide)
+        epConfigWrite(cap + 8, 0);
     const uint32_t dataOffset = cap + (wide ? 0xC : 0x8);
     epConfigWrite(dataOffset, epConfigRead(dataOffset) & 0xFFFF0000u);      // message data 0 = vector 0
     epConfigWrite(cap, (epConfigRead(cap) & ~(0x7Fu << 16)) | (1u << 16));  // one vector, enabled
@@ -762,7 +803,8 @@ bool TegraPcie::msiEnable(uint32_t msiPA, char *why, size_t whyLength)
 uint32_t TegraPcie::msiTake()
 {
     const uint32_t pending = pcie_.r32(kAfi + AFI_MSI_VEC0);
-    if (pending) pcie_.w32(kAfi + AFI_MSI_VEC0, pending);
+    if (pending)
+        pcie_.w32(kAfi + AFI_MSI_VEC0, pending);
     return pending;
 }
 

@@ -10,17 +10,21 @@
             std::exit(1);                                        \
         }                                                        \
     } while (0)
+
 struct Peer {
     uint32_t low = 0, high = 0;
     unsigned reads = 0, fail_read = 0, unstable = 0;
     uint32_t last_low_address = 0, last_high_address = 0;
 };
+
 static Peer peer;
+
 static int read32(void *cookie, uint32_t address, uint32_t *value)
 {
     CHECK(cookie == &peer && value);
     ++peer.reads;
-    if (peer.reads == peer.fail_read) return 1;
+    if (peer.reads == peer.fail_read)
+        return 1;
     if (address == NativeAdrenoTimer::gmuLowOffset() || address == NativeAdrenoTimer::cpLowRegister()) {
         peer.last_low_address = address;
         *value = peer.low;
@@ -39,8 +43,10 @@ static int read32(void *cookie, uint32_t address, uint32_t *value)
     CHECK(0);
     return 1;
 }
+
 static NativeAdrenoTimeIo io{&peer, read32};
 static unsigned unsettled_reads = 0;
+
 static int unsettled(void *cookie, uint32_t address, uint32_t *value)
 {
     (void)cookie;
@@ -48,6 +54,7 @@ static int unsettled(void *cookie, uint32_t address, uint32_t *value)
     *value = ++unsettled_reads;
     return 0;
 }
+
 int main()
 {
     /* The derived A740 GMU offsets are the pinned values. */

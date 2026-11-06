@@ -6,14 +6,17 @@ static struct AdrenoConstantResult fail(uint32_t status)
 {
     return (struct AdrenoConstantResult){status, 0, 0};
 }
+
 static int wraps(uintptr_t pointer, size_t bytes)
 {
     return bytes > UINTPTR_MAX - pointer;
 }
+
 static int overlaps(uintptr_t a, size_t an, uintptr_t b, size_t bn)
 {
     return an && bn && a < b + bn && b < a + an;
 }
+
 struct AdrenoConstantResult AdrenoA740Constants(const struct AdrenoConstantConfig *cfg,
                                                 const struct AdrenoConstantSpan *spans, size_t count,
                                                 const uint8_t *source, size_t source_bytes, uint32_t *output,
@@ -43,7 +46,8 @@ struct AdrenoConstantResult AdrenoA740Constants(const struct AdrenoConstantConfi
         }
         words += 4 + s->bytes / 4;
     }
-    if (words > capacity) return fail(AdrenoConstantCapacity);
+    if (words > capacity)
+        return fail(AdrenoConstantCapacity);
     size_t bytes = words * sizeof(*output);
     uintptr_t dest = (uintptr_t)output;
     if (overlaps(dest, bytes, (uintptr_t)cfg, sizeof(*cfg)) ||

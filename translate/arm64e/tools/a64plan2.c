@@ -28,6 +28,7 @@ static uint32_t u32(const uint8_t *p, uint64_t o)
     memcpy(&v, p + o, 4);
     return v;
 }
+
 static uint64_t u64(const uint8_t *p, uint64_t o)
 {
     uint64_t v;
@@ -60,15 +61,18 @@ static int nfm;
 static const uint8_t *fb[512];
 static uint64_t fsz[512];
 static uint8_t *codebits[512], *hotbits[512];
+
 struct vrange {
     uint64_t lo, hi;
 };
+
 struct sec {
     uint64_t lo, hi;
     char name[34];
 };
 static struct sec *secs;
 static size_t nsecs, capsecs;
+
 static int cmp_sec(const void *x, const void *y)
 {
     const struct sec *a = x, *b = y;
@@ -121,7 +125,8 @@ static void mark_code(const uint8_t *m)
         const char *ipath = (const char *)(m + u32(m + img_off + 32 * i, 24));
         bool hot = false;
         for (int h = 0; hot_images[h]; h++)
-            if (strstr(ipath, hot_images[h])) hot = true;
+            if (strstr(ipath, hot_images[h]))
+                hot = true;
         int hf = -1;
         uint64_t hoff = 0;
         for (int q = 0; q < nfm; q++)
@@ -129,7 +134,8 @@ static void mark_code(const uint8_t *m)
                 hf = fm[q].file;
                 hoff = fm[q].off + addr - fm[q].addr;
             }
-        if (hf < 0) continue;
+        if (hf < 0)
+            continue;
         const uint8_t *mh = fb[hf] + hoff;
         uint32_t ncmds = u32(mh, 16);
         const uint8_t *lc = mh + 32;
@@ -139,7 +145,8 @@ static void mark_code(const uint8_t *m)
                 for (uint32_t k = 0; k < ns; k++) {
                     const uint8_t *sp = lc + 72 + 80 * k;
                     uint64_t sa = u64(sp, 32), ss = u64(sp, 40);
-                    if (!(u32(sp, 64) & 0x80000400u) || !ss) continue;
+                    if (!(u32(sp, 64) & 0x80000400u) || !ss)
+                        continue;
                     if (nvr == capvr) {
                         capvr = capvr ? capvr * 2 : 65536;
                         vr = realloc(vr, capvr * sizeof(*vr));
@@ -161,7 +168,8 @@ static void mark_code(const uint8_t *m)
                             uint64_t fo = fm[q].off + sa - fm[q].addr;
                             for (uint64_t x = fo / 4; x < (fo + ss) / 4; x++) {
                                 codebits[fm[q].file][x >> 3] |= 1 << (x & 7);
-                                if (hot) hotbits[fm[q].file][x >> 3] |= 1 << (x & 7);
+                                if (hot)
+                                    hotbits[fm[q].file][x >> 3] |= 1 << (x & 7);
                             }
                         }
                 }
@@ -182,7 +190,8 @@ static void mark_stub_mappings(int nfiles)
         for (uint32_t i = 0; i < sc; i++) {
             const uint8_t *e = fb[f] + so + 56 * i;
             uint64_t addr = u64(e, 0), size = u64(e, 8), off = u64(e, 16);
-            if (!(u64(e, 40) & (1u << 3))) continue;
+            if (!(u64(e, 40) & (1u << 3)))
+                continue;
             if (nvr == capvr) {
                 capvr = capvr ? capvr * 2 : 65536;
                 vr = realloc(vr, capvr * sizeof(*vr));
@@ -196,7 +205,8 @@ static void mark_stub_mappings(int nfiles)
             secs[nsecs].hi = addr + size;
             snprintf(secs[nsecs].name, sizeof(secs[nsecs].name), "[TEXT_STUBS]");
             nsecs++;
-            for (uint64_t x = off / 4; x < (off + size) / 4; x++) codebits[f][x >> 3] |= 1 << (x & 7);
+            for (uint64_t x = off / 4; x < (off + size) / 4; x++)
+                codebits[f][x >> 3] |= 1 << (x & 7);
         }
     }
 }
@@ -205,24 +215,29 @@ static void mark_stub_mappings(int nfiles)
 static uint64_t *fstarts;
 static size_t nfstarts, capfs;
 static int map_of(uint64_t va);
+
 static const uint8_t *vmptr(uint64_t va, uint64_t len)
 {
     int q = map_of(va);
-    if (q < 0 || va + len > fm[q].addr + fm[q].size) return NULL;
+    if (q < 0 || va + len > fm[q].addr + fm[q].size)
+        return NULL;
     return fb[fm[q].file] + fm[q].off + (va - fm[q].addr);
 }
+
 static int cmp_u64(const void *a, const void *b)
 {
     uint64_t x = *(const uint64_t *)a, y = *(const uint64_t *)b;
     return x < y ? -1 : x > y;
 }
+
 static void load_function_starts(const uint8_t *m)
 {
     uint32_t img_off = u32(m, 0x1C0), img_cnt = u32(m, 0x1C4);
     for (uint32_t i = 0; i < img_cnt; i++) {
         uint64_t addr = u64(m + img_off + 32 * i, 0);
         const uint8_t *mh = vmptr(addr, 32);
-        if (!mh) continue;
+        if (!mh)
+            continue;
         uint32_t ncmds = u32(mh, 16);
         const uint8_t *lc = mh + 32;
         uint64_t text_vm = 0, le_vm = 0, le_fo = 0;
@@ -230,7 +245,8 @@ static void load_function_starts(const uint8_t *m)
         for (uint32_t c = 0; c < ncmds; c++) {
             uint32_t cmd = u32(lc, 0);
             if (cmd == 0x19) {
-                if (!memcmp(lc + 8, "__TEXT\0", 7)) text_vm = u64(lc, 24);
+                if (!memcmp(lc + 8, "__TEXT\0", 7))
+                    text_vm = u64(lc, 24);
                 if (!memcmp(lc + 8, "__LINKEDIT", 10)) {
                     le_vm = u64(lc, 24);
                     le_fo = u64(lc, 40);
@@ -241,9 +257,11 @@ static void load_function_starts(const uint8_t *m)
             }
             lc += u32(lc, 4);
         }
-        if (!fs_size || !le_vm) continue;
+        if (!fs_size || !le_vm)
+            continue;
         const uint8_t *data = vmptr(le_vm + (fs_off - le_fo), fs_size);
-        if (!data) continue;
+        if (!data)
+            continue;
         uint64_t cur = text_vm;
         for (uint32_t q = 0; q < fs_size;) {
             uint64_t v = 0;
@@ -252,9 +270,11 @@ static void load_function_starts(const uint8_t *m)
                 uint8_t b = data[q++];
                 v |= (uint64_t)(b & 0x7f) << sh;
                 sh += 7;
-                if (!(b & 0x80)) break;
+                if (!(b & 0x80))
+                    break;
             }
-            if (!v) break;
+            if (!v)
+                break;
             cur += v;
             if (nfstarts == capfs) {
                 capfs = capfs ? capfs * 2 : 1 << 22;
@@ -266,6 +286,7 @@ static void load_function_starts(const uint8_t *m)
     qsort(fstarts, nfstarts, sizeof(uint64_t), cmp_u64);
     printf("function starts: %zu\n", nfstarts);
 }
+
 /* [start, end) of the function holding va, or 0 if unknown */
 static uint64_t function_of(uint64_t va, uint64_t *end)
 {
@@ -277,7 +298,8 @@ static uint64_t function_of(uint64_t va, uint64_t *end)
         else
             hi = mid;
     }
-    if (!lo) return 0;
+    if (!lo)
+        return 0;
     *end = lo < nfstarts ? fstarts[lo] : va + 4;
     return fstarts[lo - 1];
 }
@@ -285,18 +307,22 @@ static uint64_t function_of(uint64_t va, uint64_t *end)
 static int map_of(uint64_t va)
 {
     for (int q = 0; q < nfm; q++)
-        if (va >= fm[q].addr && va < fm[q].addr + fm[q].size) return q;
+        if (va >= fm[q].addr && va < fm[q].addr + fm[q].size)
+            return q;
     return -1;
 }
+
 static bool plan_is_code(void *ctx, uint64_t va)
 {
     (void)ctx;
     int q = map_of(va);
-    if (q < 0) return false;
+    if (q < 0)
+        return false;
     uint64_t x = (fm[q].off + va - fm[q].addr) / 4;
     return codebits[fm[q].file][x >> 3] & (1 << (x & 7));
 }
 static const struct a64x_code_map plan_code_map = {NULL, plan_is_code, 0};
+
 static uint32_t word_at(uint64_t va)
 {
     int q = map_of(va);
@@ -306,20 +332,24 @@ static uint32_t word_at(uint64_t va)
 static uint8_t *reachbits[512];
 static uint64_t *dic_lo, *dic_hi;
 static size_t ndic, capdic;
+
 static bool __attribute__((unused)) reached(uint64_t va)
 {
     int q = map_of(va);
-    if (q < 0) return false;
+    if (q < 0)
+        return false;
     uint64_t x = (fm[q].off + va - fm[q].addr) / 4;
     return reachbits[fm[q].file][x >> 3] & (1 << (x & 7));
 }
+
 static void load_data_in_code(const uint8_t *m)
 {
     uint32_t img_off = u32(m, 0x1C0), img_cnt = u32(m, 0x1C4);
     for (uint32_t i = 0; i < img_cnt; i++) {
         uint64_t addr = u64(m + img_off + 32 * i, 0);
         const uint8_t *mh = vmptr(addr, 32);
-        if (!mh) continue;
+        if (!mh)
+            continue;
         uint32_t ncmds = u32(mh, 16);
         const uint8_t *lc = mh + 32;
         uint64_t le_vm = 0, le_fo = 0;
@@ -335,9 +365,11 @@ static void load_data_in_code(const uint8_t *m)
             }
             lc += u32(lc, 4);
         }
-        if (!size || !le_vm) continue;
+        if (!size || !le_vm)
+            continue;
         const uint8_t *d = vmptr(le_vm + (off - le_fo), size);
-        if (!d) continue;
+        if (!d)
+            continue;
         for (uint32_t k = 0; k + 8 <= size; k += 8) {
             if (ndic == capdic) {
                 capdic = capdic ? capdic * 2 : 65536;
@@ -351,16 +383,20 @@ static void load_data_in_code(const uint8_t *m)
     }
     printf("data-in-code ranges: %zu\n", ndic);
 }
+
 static bool in_dic(uint64_t va)
 {
     for (size_t i = 0; i < ndic; i++)
-        if (va >= dic_lo[i] && va < dic_hi[i]) return true;
+        if (va >= dic_lo[i] && va < dic_hi[i])
+            return true;
     return false;
 }
+
 /* landing pads: __unwind_info's LSDA index, then each LSDA's call-site table (offsets from the function start) */
 static uint64_t *lpads;
 static size_t nlpads, caplpads;
 static uint64_t n_lsda, n_lsda_bad;
+
 static uint64_t read_enc(const uint8_t **pp, const uint8_t *end, uint8_t enc, bool *ok)
 {
     const uint8_t *p = *pp;
@@ -377,7 +413,8 @@ static uint64_t read_enc(const uint8_t **pp, const uint8_t *end, uint8_t enc, bo
             v |= (uint64_t)(*p & 0x7F) << sh;
             sh += 7;
         } while (*p++ & 0x80);
-        if ((enc & 0x0F) == 0x09 && sh < 64 && (p[-1] & 0x40)) v |= ~0ull << sh;
+        if ((enc & 0x0F) == 0x09 && sh < 64 && (p[-1] & 0x40))
+            v |= ~0ull << sh;
         break;
     case 0x02:
     case 0x0A:
@@ -386,7 +423,8 @@ static uint64_t read_enc(const uint8_t **pp, const uint8_t *end, uint8_t enc, bo
             return 0;
         }
         v = p[0] | p[1] << 8;
-        if (enc & 8) v = (uint64_t)(int16_t)v;
+        if (enc & 8)
+            v = (uint64_t)(int16_t)v;
         p += 2;
         break;
     case 0x03:
@@ -397,7 +435,8 @@ static uint64_t read_enc(const uint8_t **pp, const uint8_t *end, uint8_t enc, bo
         }
         memcpy(&v, p, 4);
         v &= 0xFFFFFFFFu;
-        if (enc & 8) v = (uint64_t)(int32_t)v;
+        if (enc & 8)
+            v = (uint64_t)(int32_t)v;
         p += 4;
         break;
     case 0x04:
@@ -409,18 +448,22 @@ static uint64_t read_enc(const uint8_t **pp, const uint8_t *end, uint8_t enc, bo
         memcpy(&v, p, 8);
         p += 8;
         break;
-    default: *ok = false; return 0;
+    default:
+        *ok = false;
+        return 0;
     }
     *pp = p;
     return v;
 }
+
 static void load_landing_pads(const uint8_t *m)
 {
     uint32_t img_off = u32(m, 0x1C0), img_cnt = u32(m, 0x1C4);
     for (uint32_t i = 0; i < img_cnt; i++) {
         uint64_t base = u64(m + img_off + 32 * i, 0);
         const uint8_t *mh = vmptr(base, 32);
-        if (!mh) continue;
+        if (!mh)
+            continue;
         uint32_t ncmds = u32(mh, 16);
         const uint8_t *lc = mh + 32;
         uint64_t ui = 0, uisz = 0;
@@ -437,11 +480,14 @@ static void load_landing_pads(const uint8_t *m)
             lc += u32(lc, 4);
         }
         const uint8_t *u = ui ? vmptr(ui, uisz) : NULL;
-        if (!u || uisz < 28 || u32(u, 0) != 1) continue;
+        if (!u || uisz < 28 || u32(u, 0) != 1)
+            continue;
         uint32_t idx = u32(u, 20), nidx = u32(u, 24);
-        if (!nidx || idx + 12ull * nidx > uisz) continue;
+        if (!nidx || idx + 12ull * nidx > uisz)
+            continue;
         uint32_t l0 = u32(u, idx + 8), l1 = u32(u, idx + 12 * (nidx - 1) + 8);
-        if (l1 < l0 || l1 > uisz) continue;
+        if (l1 < l0 || l1 > uisz)
+            continue;
         for (uint32_t o = l0; o + 8 <= l1; o += 8) {
             uint64_t fstart = base + u32(u, o), lsda = base + u32(u, o + 4);
             const uint8_t *p = vmptr(lsda, 16), *end;
@@ -459,7 +505,8 @@ static void load_landing_pads(const uint8_t *m)
                 lpstart = read_enc(&p, end, lpenc, &ok);
             }
             uint8_t ttenc = *p++;
-            if (ttenc != 0xFF) (void)read_enc(&p, end, 0x01, &ok);
+            if (ttenc != 0xFF)
+                (void)read_enc(&p, end, 0x01, &ok);
             uint8_t csenc = *p++;
             uint64_t cslen = read_enc(&p, end, 0x01, &ok);
             const uint8_t *cs_end = p + cslen;
@@ -480,13 +527,16 @@ static void load_landing_pads(const uint8_t *m)
                     lpads[nlpads++] = lpstart + lp;
                 }
             }
-            if (!ok) n_lsda_bad++;
+            if (!ok)
+                n_lsda_bad++;
         }
     }
     printf("landing pads: %zu from %llu LSDAs (%llu unreadable)\n", nlpads, (unsigned long long)n_lsda,
            (unsigned long long)n_lsda_bad);
 }
+
 static uint64_t n_indirect_br, n_jt, n_jt_targets, n_jt_unresolved;
+
 /*
  * arm64e hardened jump table (BR_JumpTable):
  *   cmp x16, #N | csel x16, x16, xzr, ls | adrp x17, T | add x17, x17, T | ldrsw x16, [x17, x16, lsl #2] | adr x17, B |
@@ -496,7 +546,8 @@ static uint64_t n_indirect_br, n_jt, n_jt_targets, n_jt_unresolved;
 static int jump_table(uint64_t va, uint64_t **stack, size_t *sp, size_t *cap)
 {
     uint32_t w[8];
-    for (int k = 0; k < 8; k++) w[k] = word_at(va - 4 * (7 - k));
+    for (int k = 0; k < 8; k++)
+        w[k] = word_at(va - 4 * (7 - k));
     if (w[7] != 0xD61F0200u || w[6] != 0x8B100230u || (w[5] & 0x9F00001Fu) != 0x10000011u || w[4] != 0xB8B07A30u ||
         (w[3] & 0xFFC003FFu) != 0x91000231u || (w[2] & 0x9F00001Fu) != 0x90000011u || w[1] != 0x9A9F9210u) {
         return -1;
@@ -506,7 +557,8 @@ static int jump_table(uint64_t va, uint64_t **stack, size_t *sp, size_t *cap)
         n = (w[0] >> 10) & 0xFFF;
     } else if (w[0] == 0xEB11021Fu) {
         uint32_t mv = word_at(va - 32);
-        if ((mv & 0xFFE0001Fu) != 0xD2800011u) return 0;
+        if ((mv & 0xFFE0001Fu) != 0xD2800011u)
+            return 0;
         n = (mv >> 5) & 0xFFFF;
     } else {
         return 0;
@@ -517,7 +569,8 @@ static int jump_table(uint64_t va, uint64_t **stack, size_t *sp, size_t *cap)
     int64_t al = (int64_t)(((w[5] >> 5) & 0x7FFFF) << 2 | ((w[5] >> 29) & 3)) << 43 >> 43;
     uint64_t bse = pc_adr + (uint64_t)al;
     const uint8_t *t = vmptr(table, 4 * (n + 1));
-    if (!t) return 0;
+    if (!t)
+        return 0;
     for (uint64_t i = 0; i <= n; i++) {
         int32_t d;
         memcpy(&d, t + 4 * i, 4);
@@ -529,12 +582,14 @@ static int jump_table(uint64_t va, uint64_t **stack, size_t *sp, size_t *cap)
     }
     return (int)(n + 1);
 }
+
 /* a word no A12-class code can hold: unallocated top-level groups, non-zero reserved space, SVE/SME, Apple AMX */
 static bool impossible_word(uint32_t w)
 {
     uint32_t op0 = (w >> 25) & 0xF;
     return (op0 == 0 && (w >> 16)) || op0 == 1 || op0 == 2 || op0 == 3;
 }
+
 /*
  * Unallocated in every A-profile ISA up to v9.6 (SVE/SME/AMX are allocated: real code for newer cores sits behind feature
  * checks in functions A12-class cores also run): the top-level groups 0001 and 0011, and the reserved group without SME
@@ -545,22 +600,27 @@ static bool unallocated_word(uint32_t w)
     uint32_t op0 = (w >> 25) & 0xF;
     return op0 == 1 || op0 == 3 || (op0 == 0 && !(w >> 31) && (w >> 16) && (w & 0xFFFFF000u) != 0x00201000u);
 }
+
 static uint8_t *fsbits[512];
 static uint64_t n_roots_rejected;
 #define BITV(b, x) ((b)[(x) >> 3] & (1 << ((x) & 7)))
+
 static bool va_index(uint64_t va, int *f, uint64_t *x)
 {
     int q = map_of(va);
-    if (q < 0) return false;
+    if (q < 0)
+        return false;
     *f = fm[q].file;
     *x = (fm[q].off + va - fm[q].addr) / 4;
     return true;
 }
+
 static bool is_terminator(uint32_t e)
 {
     return (e & 0xFFE0001Fu) == 0xD4200000u || (e & 0xFFFF0000u) == 0 || e == 0xD65F03C0u ||
            (e & 0xFFFFFC1Fu) == 0xD61F0000u || (e & 0xFC000000u) == 0x14000000u;
 }
+
 /*
  * A function start is taken as code only if its first straight-line run (to the first terminator, the next function start, or
  * 64 words) holds no word that A12-class code cannot hold: assembler data tables in __text carry symbols, hence starts.
@@ -569,17 +629,24 @@ static bool probe_root(uint64_t va)
 {
     int f;
     uint64_t x;
-    if (!va_index(va, &f, &x)) return false;
+    if (!va_index(va, &f, &x))
+        return false;
     for (int k = 0; k < 64; k++, x++) {
-        if (!BITV(codebits[f], x)) return k > 0;
-        if (k && BITV(fsbits[f], x)) return true;
+        if (!BITV(codebits[f], x))
+            return k > 0;
+        if (k && BITV(fsbits[f], x))
+            return true;
         uint32_t e = u32(fb[f], 4 * x), c;
-        if (unallocated_word(e)) return false;
-        if (a64x_rewrite1(e, &c)) e = c;
-        if (is_terminator(e)) return true;
+        if (unallocated_word(e))
+            return false;
+        if (a64x_rewrite1(e, &c))
+            e = c;
+        if (is_terminator(e))
+            return true;
     }
     return true;
 }
+
 static void reach_pass(void)
 {
     size_t cap = 1 << 25, sp = 0;
@@ -592,7 +659,8 @@ static void reach_pass(void)
     for (size_t i = 0; i < nfstarts; i++) {
         int f;
         uint64_t x;
-        if (va_index(fstarts[i], &f, &x)) fsbits[f][x >> 3] |= 1 << (x & 7);
+        if (va_index(fstarts[i], &f, &x))
+            fsbits[f][x >> 3] |= 1 << (x & 7);
     }
     for (size_t i = 0; i < nfstarts; i++) {
         if (!probe_root(fstarts[i])) {
@@ -617,16 +685,20 @@ static void reach_pass(void)
         bool fell = false;
         for (;;) {
             int q = map_of(va);
-            if (q < 0) break;
+            if (q < 0)
+                break;
             uint64_t x = (fm[q].off + va - fm[q].addr) / 4;
             int f = fm[q].file;
-            if (!BITV(codebits[f], x)) break;
-            if (BITV(reachbits[f], x)) break;
+            if (!BITV(codebits[f], x))
+                break;
+            if (BITV(reachbits[f], x))
+                break;
             if (fell && BITV(fsbits[f], x))
                 break; /* falling into the next function start: it is judged as its own root */
             reachbits[f][x >> 3] |= 1 << (x & 7);
             uint32_t e = u32(fb[f], 4 * x), c;
-            if (a64x_rewrite1(e, &c)) e = c;
+            if (a64x_rewrite1(e, &c))
+                e = c;
             if ((e & 0xFFE0001Fu) == 0xD4200000u || (e & 0xFFFF0000u) == 0 || e == 0xD65F03C0u)
                 break;                              /* BRK, UDF, RET */
             if ((e & 0xFFFFFC1Fu) == 0xD61F0000u) { /* BR */
@@ -664,7 +736,8 @@ static void reach_pass(void)
                     stack = realloc(stack, cap * 8);
                 }
                 stack[sp++] = va + 4 * tgt;
-                if (uncond) break;
+                if (uncond)
+                    break;
             }
             va += 4;
             fell = true;
@@ -691,6 +764,7 @@ static uint64_t isl_runs, isl_words, isl_mod, isl_sites, code_runs, code_runs_mo
 static FILE *isl_out;
 static uint64_t ri_hist[4];
 static uint64_t cls_unreached_code[64];
+
 static const char *sec_of(uint64_t va)
 {
     size_t lo = 0, hi = nsecs;
@@ -703,15 +777,18 @@ static const char *sec_of(uint64_t va)
     }
     return lo && va < secs[lo - 1].hi ? secs[lo - 1].name : "?";
 }
+
 static void drop_data_islands(void)
 {
     struct {
         char name[34];
         uint64_t words;
     } bysec[64];
+
     int nbysec = 0;
     for (int q = 0; q < nfm; q++) {
-        if (!(fm[q].prot & 4)) continue;
+        if (!(fm[q].prot & 4))
+            continue;
         int f = fm[q].file;
         uint64_t x0 = fm[q].off / 4, xn = x0 + fm[q].size / 4;
         for (uint64_t x = x0; x < xn;) {
@@ -742,8 +819,10 @@ static void drop_data_islands(void)
             int nmod = 0, nsite = 0, nun = 0;
             for (; y < xn && BITV(codebits[f], y) && !BITV(reachbits[f], y); y++) {
                 uint32_t w = u32(fb[f], 4 * y), one;
-                if (!(w >> 16)) break;
-                if (unallocated_word(w)) nun++;
+                if (!(w >> 16))
+                    break;
+                if (unallocated_word(w))
+                    nun++;
                 enum a64x_class c = a64x_classify(w);
                 bool st = c == A64X_LSE_CAS || c == A64X_LSE_CASP || c == A64X_LSE_LDOP || c == A64X_LSE_SWP;
                 bool md = st || a64x_rewrite1(w, &one);
@@ -755,7 +834,8 @@ static void drop_data_islands(void)
 			 * Tables are dense in unallocated words (8-50% here); obfuscated code (CoreALD, MFAAuthentication) reached only
 			 * through register branches carries a stray junk word per few hundred instructions. One in 32 separates them.
 			 */
-            if (nun && (uint64_t)nun * 32 >= y - x) bad = true;
+            if (nun && (uint64_t)nun * 32 >= y - x)
+                bad = true;
             if (bad) {
                 isl_runs++;
                 isl_words += y - x;
@@ -765,7 +845,8 @@ static void drop_data_islands(void)
                     fprintf(isl_out, "DATA %llx +%llu rewrites %d sites %d %s unalloc %d fs %d\n",
                             (unsigned long long)va, (unsigned long long)(y - x), nmod, nsite, sec_of(va), nun,
                             BITV(fsbits[f], x) ? 1 : 0);
-                for (uint64_t z = x; z < y; z++) codebits[f][z >> 3] &= (uint8_t)~(1 << (z & 7));
+                for (uint64_t z = x; z < y; z++)
+                    codebits[f][z >> 3] &= (uint8_t)~(1 << (z & 7));
             } else {
                 code_runs++;
                 code_runs_mod += nmod > 0;
@@ -774,16 +855,19 @@ static void drop_data_islands(void)
                 if (nmod) {
                     const char *sn = sec_of(va);
                     int b;
-                    for (b = 0; b < nbysec && strcmp(bysec[b].name, sn); b++) {}
+                    for (b = 0; b < nbysec && strcmp(bysec[b].name, sn); b++) {
+                    }
                     if (b == nbysec && nbysec < 64) {
                         strcpy(bysec[nbysec].name, sn);
                         bysec[nbysec++].words = 0;
                     }
-                    if (b < nbysec) bysec[b].words += nmod;
+                    if (b < nbysec)
+                        bysec[b].words += nmod;
                     for (uint64_t z = x; z < y; z++) {
                         uint32_t w = u32(fb[f], 4 * z), one;
                         enum a64x_class c = a64x_classify(w);
-                        if (c != A64X_OK || a64x_rewrite1(w, &one)) cls_unreached_code[c & 63]++;
+                        if (c != A64X_OK || a64x_rewrite1(w, &one))
+                            cls_unreached_code[c & 63]++;
                     }
                 }
                 if (isl_out && nmod && strstr(sec_of(va), "__text"))
@@ -802,18 +886,22 @@ static void drop_data_islands(void)
     printf("unreached code-like runs: %llu (%llu with %llu rewrites, %llu LSE sites); by section:",
            (unsigned long long)code_runs, (unsigned long long)code_runs_mod, (unsigned long long)code_mod_words,
            (unsigned long long)code_sites);
-    for (int b = 0; b < nbysec; b++) printf(" %s %llu", bysec[b].name, (unsigned long long)bysec[b].words);
+    for (int b = 0; b < nbysec; b++)
+        printf(" %s %llu", bysec[b].name, (unsigned long long)bysec[b].words);
     printf("\n  by class:");
     for (int c = 0; c < 64; c++)
-        if (cls_unreached_code[c]) printf(" %s %llu", a64x_class_name(c), (unsigned long long)cls_unreached_code[c]);
+        if (cls_unreached_code[c])
+            printf(" %s %llu", a64x_class_name(c), (unsigned long long)cls_unreached_code[c]);
     printf("\n");
 }
+
 /* code ranges for the plan, from the code map (after data islands left it) */
 static void ranges_from_codebits(void)
 {
     nvr = 0;
     for (int q = 0; q < nfm; q++) {
-        if (!(fm[q].prot & 4)) continue;
+        if (!(fm[q].prot & 4))
+            continue;
         int f = fm[q].file;
         uint64_t x0 = fm[q].off / 4, xn = x0 + fm[q].size / 4;
         for (uint64_t x = x0; x < xn;) {
@@ -822,7 +910,8 @@ static void ranges_from_codebits(void)
                 continue;
             }
             uint64_t y = x;
-            while (y < xn && (codebits[f][y >> 3] & (1 << (y & 7)))) y++;
+            while (y < xn && (codebits[f][y >> 3] & (1 << (y & 7))))
+                y++;
             if (nvr == capvr) {
                 capvr = capvr ? capvr * 2 : 65536;
                 vr = realloc(vr, capvr * sizeof(*vr));
@@ -842,6 +931,7 @@ struct hole {
 static struct hole *holes;
 static size_t nholes, capholes;
 static uint64_t hole_page_va, n3, n5;
+
 static void add_hole(void *ctx, uint32_t index, uint32_t nwords)
 {
     (void)ctx;
@@ -855,6 +945,7 @@ static void add_hole(void *ctx, uint32_t index, uint32_t nwords)
     else
         n5++;
 }
+
 static int cmp_hole(const void *x, const void *y)
 {
     const struct hole *a = x, *b = y;
@@ -868,12 +959,14 @@ struct dsu {
     int64_t *nx, *pv;
 };
 static struct dsu d3, d5;
+
 static void dsu_build(struct dsu *d, int size)
 {
     d->n = 0;
     d->idx = malloc(nholes * sizeof(int64_t));
     for (size_t i = 0; i < nholes; i++)
-        if (holes[i].size == size) d->idx[d->n++] = (int64_t)i;
+        if (holes[i].size == size)
+            d->idx[d->n++] = (int64_t)i;
     d->nx = malloc((d->n + 1) * sizeof(int64_t));
     d->pv = malloc((d->n + 1) * sizeof(int64_t));
     for (size_t i = 0; i <= d->n; i++) {
@@ -881,10 +974,12 @@ static void dsu_build(struct dsu *d, int size)
         d->pv[i] = (int64_t)i;
     }
 }
+
 static int64_t dfind_r(struct dsu *d, int64_t i)
 {
     int64_t r = i;
-    while (r < (int64_t)d->n && d->nx[r] != r) r = d->nx[r];
+    while (r < (int64_t)d->n && d->nx[r] != r)
+        r = d->nx[r];
     while (i < (int64_t)d->n && d->nx[i] != i) {
         int64_t t = d->nx[i];
         d->nx[i] = r;
@@ -892,10 +987,12 @@ static int64_t dfind_r(struct dsu *d, int64_t i)
     }
     return r;
 }
+
 static int64_t dfind_l(struct dsu *d, int64_t i)
 {
     int64_t r = i;
-    while (r >= 0 && d->pv[r] != r) r = d->pv[r];
+    while (r >= 0 && d->pv[r] != r)
+        r = d->pv[r];
     while (i >= 0 && d->pv[i] != i) {
         int64_t t = d->pv[i];
         d->pv[i] = r;
@@ -903,12 +1000,14 @@ static int64_t dfind_l(struct dsu *d, int64_t i)
     }
     return r;
 }
+
 static void dsu_take(struct dsu *d, int64_t i)
 {
     d->nx[i] = i + 1;
     d->pv[i] = i - 1;
     holes[d->idx[i]].used = 1;
 }
+
 /* nearest unused hole of this class to `va`, within `range`; returns hole index or -1 */
 static int64_t nearest(struct dsu *d, uint64_t va, uint64_t range, int64_t *dsu_pos)
 {
@@ -925,7 +1024,8 @@ static int64_t nearest(struct dsu *d, uint64_t va, uint64_t range, int64_t *dsu_
     uint64_t dl = l >= 0 ? va - holes[d->idx[l]].va : UINT64_MAX;
     int64_t pick = dl <= dr ? l : r;
     uint64_t dist = dl <= dr ? dl : dr;
-    if (dist == UINT64_MAX || dist > range) return -1;
+    if (dist == UINT64_MAX || dist > range)
+        return -1;
     *dsu_pos = pick;
     return d->idx[pick];
 }
@@ -938,6 +1038,7 @@ static struct patch *patches;
 static size_t npatch, cappatch;
 static const char *ctx_tag = "?";
 static uint64_t ctx_site;
+
 static void add_patch(uint64_t va, uint32_t w)
 {
     (void)ctx_tag;
@@ -954,13 +1055,18 @@ static void add_patch(uint64_t va, uint32_t w)
 static int64_t br_off(uint32_t w, bool *is)
 {
     *is = true;
-    if ((w & 0x7C000000u) == 0x14000000u) return (int64_t)(int32_t)((w & 0x3FFFFFFu) << 6) >> 4;
-    if ((w & 0x7E000000u) == 0x34000000u) return (int64_t)(int32_t)(((w >> 5) & 0x7FFFFu) << 13) >> 11;
-    if ((w & 0xFF000010u) == 0x54000000u) return (int64_t)(int32_t)(((w >> 5) & 0x7FFFFu) << 13) >> 11;
-    if ((w & 0x7E000000u) == 0x36000000u) return (int64_t)(int32_t)(((w >> 5) & 0x3FFFu) << 18) >> 16;
+    if ((w & 0x7C000000u) == 0x14000000u)
+        return (int64_t)(int32_t)((w & 0x3FFFFFFu) << 6) >> 4;
+    if ((w & 0x7E000000u) == 0x34000000u)
+        return (int64_t)(int32_t)(((w >> 5) & 0x7FFFFu) << 13) >> 11;
+    if ((w & 0xFF000010u) == 0x54000000u)
+        return (int64_t)(int32_t)(((w >> 5) & 0x7FFFFu) << 13) >> 11;
+    if ((w & 0x7E000000u) == 0x36000000u)
+        return (int64_t)(int32_t)(((w >> 5) & 0x3FFFu) << 18) >> 16;
     *is = false;
     return 0;
 }
+
 static uint32_t br_set(uint32_t w, int64_t off, bool *ok)
 {
     *ok = true;
@@ -988,6 +1094,7 @@ static uint32_t br_set(uint32_t w, int64_t off, bool *ok)
     *ok = false;
     return 0;
 }
+
 static uint32_t enc_bl(uint64_t from, uint64_t to)
 {
     return 0x94000000u | (uint32_t)(((int64_t)(to - from) >> 2) & 0x3FFFFFF);
@@ -1021,15 +1128,18 @@ static bool commit(const uint32_t *st, int n, uint64_t dummy, const uint64_t *ad
         nt++;
         if (li < nlinks && j + 1 < n && addr[j + 1] != addr[j] + 4) {
             uint32_t b = a64x_branch(links[li], addr[j + 1]);
-            if (!b) ok = false;
+            if (!b)
+                ok = false;
             tmp[nt].va = links[li];
             tmp[nt].w = b;
             nt++;
             li++;
         }
     }
-    if (!ok) return false;
-    for (int i = 0; i < nt; i++) add_patch(tmp[i].va, tmp[i].w);
+    if (!ok)
+        return false;
+    for (int i = 0; i < nt; i++)
+        add_patch(tmp[i].va, tmp[i].w);
     return true;
 }
 
@@ -1062,7 +1172,8 @@ static uint64_t place(const uint32_t *st, int n, uint64_t dummy, uint64_t near, 
                 fprintf(stderr, "place: DSU returned a used hole %llx (size %d, pos %lld)\n",
                         (unsigned long long)holes[h].va, holes[h].size, (long long)pos);
         }
-        for (int j = 0; j < n; j++) addr[j] = holes[h].va + 4 * (uint64_t)j;
+        for (int j = 0; j < n; j++)
+            addr[j] = holes[h].va + 4 * (uint64_t)j;
         if (commit(st, n, dummy, addr, NULL, 0)) {
             dsu_take(dd, pos);
             int64_t bb = (int64_t)((holes[h].va - bin_base) >> BIN_SHIFT);
@@ -1080,16 +1191,20 @@ static uint64_t place(const uint32_t *st, int n, uint64_t dummy, uint64_t near, 
     for (int64_t dlt = 0; dlt <= maxd && chosen < 0; dlt++) {
         for (int sg = 0; sg < 2 && chosen < 0; sg++) {
             int64_t b = sg ? sb - dlt : sb + dlt;
-            if ((dlt == 0 && sg) || b < 0 || b >= nbins || bin_room[b] < n + 3) continue;
+            if ((dlt == 0 && sg) || b < 0 || b >= nbins || bin_room[b] < n + 3)
+                continue;
             uint64_t bva = bin_base + ((uint64_t)b << BIN_SHIFT);
-            if ((bva > near ? bva + (1u << BIN_SHIFT) - near : near - bva) > range) continue;
+            if ((bva > near ? bva + (1u << BIN_SHIFT) - near : near - bva) > range)
+                continue;
             nu = 0;
             cap = 0;
             for (int64_t i = bin_first[b]; i < bin_end[b] && cap < n && nu < A64X_STUB_MAX; i++) {
-                if (holes[i].used) continue;
+                if (holes[i].used)
+                    continue;
                 used[nu++] = i;
                 cap += holes[i].size - 1;
-                if (cap + 1 >= n) cap = n;
+                if (cap + 1 >= n)
+                    cap = n;
             }
             if (cap < n) {
                 bin_room[b] = 0;
@@ -1098,16 +1213,20 @@ static uint64_t place(const uint32_t *st, int n, uint64_t dummy, uint64_t near, 
             chosen = b;
         }
     }
-    if (chosen < 0) return 0;
+    if (chosen < 0)
+        return 0;
     uint64_t links[A64X_STUB_MAX];
     int nl = 0, ki = 0;
     for (int i = 0; i < nu && ki < n; i++) {
         int room = holes[used[i]].size, take = n - ki <= room ? n - ki : room - 1;
-        for (int j = 0; j < take; j++) addr[ki + j] = holes[used[i]].va + 4 * (uint64_t)j;
+        for (int j = 0; j < take; j++)
+            addr[ki + j] = holes[used[i]].va + 4 * (uint64_t)j;
         ki += take;
-        if (ki < n) links[nl++] = holes[used[i]].va + 4 * (uint64_t)take;
+        if (ki < n)
+            links[nl++] = holes[used[i]].va + 4 * (uint64_t)take;
     }
-    if (!commit(st, n, dummy, addr, links, nl)) return 0;
+    if (!commit(st, n, dummy, addr, links, nl))
+        return 0;
     for (int i = 0; i < nu; i++) {
         holes[used[i]].used = 1;
         bin_room[chosen] -= holes[used[i]].size - 1;
@@ -1121,9 +1240,11 @@ static uint64_t place(const uint32_t *st, int n, uint64_t dummy, uint64_t near, 
             else
                 hi = mid;
         }
-        if (lo < dc->n && dc->idx[lo] == used[i]) dsu_take(dc, (int64_t)lo);
+        if (lo < dc->n && dc->idx[lo] == used[i])
+            dsu_take(dc, (int64_t)lo);
     }
-    while (bin_first[chosen] < bin_end[chosen] && holes[bin_first[chosen]].used) bin_first[chosen]++;
+    while (bin_first[chosen] < bin_end[chosen] && holes[bin_first[chosen]].used)
+        bin_first[chosen]++;
     *pieces_out = nu;
     stat_pieces_sites++;
     stat_pieces_total += (uint64_t)nu;
@@ -1136,6 +1257,7 @@ struct shared {
     uint64_t va;
     struct shared *next;
 };
+
 #define SH_BUCKETS (1u << 16)
 static struct shared *sh_tab[SH_BUCKETS];
 static uint64_t sh_copies, sh_words;
@@ -1156,10 +1278,12 @@ static uint64_t shared_stub(uint32_t w, uint8_t variant, uint64_t site, int *pie
     uint64_t dummy = site + 8;
     int n = a64x_stub_v(w, site, dummy, (variant & 1) ? ((1u << 16) | (1u << 17)) : 0, (variant & 2) ? 0xFFFF0000u : 0,
                         st, A64X_STUB_MAX);
-    if (n <= 0 || n > A64X_STUB_MAX) return 0;
+    if (n <= 0 || n > A64X_STUB_MAX)
+        return 0;
     st[n - 1] = 0xD65F03C0; /* ret */
     uint64_t va = place(st, n, dummy, site, 100u << 20, pieces);
-    if (!va) return 0;
+    if (!va)
+        return 0;
     struct shared *s = malloc(sizeof(*s));
     *s = (struct shared){w, variant, va, sh_tab[key]};
     sh_tab[key] = s;
@@ -1173,6 +1297,7 @@ static int cmp_patch(const void *x, const void *y)
     const struct patch *a = x, *b = y;
     return a->va < b->va ? -1 : a->va > b->va;
 }
+
 static int cmp_vr(const void *x, const void *y)
 {
     const struct vrange *a = x, *b = y;
@@ -1186,15 +1311,18 @@ static void write_plan(const char *path, const uint8_t *m)
     size_t nm = 0;
     for (size_t i = 0; i < nvr; i++) {
         if (nm && vr[i].lo <= vr[nm - 1].hi) {
-            if (vr[i].hi > vr[nm - 1].hi) vr[nm - 1].hi = vr[i].hi;
+            if (vr[i].hi > vr[nm - 1].hi)
+                vr[nm - 1].hi = vr[i].hi;
         } else
             vr[nm++] = vr[i];
     }
     nvr = nm;
+
     struct pp {
         uint64_t va;
         uint32_t first, count;
     } *pages = NULL;
+
     size_t np = 0, capp = 0;
     for (size_t i = 0; i < npatch; i++) {
         uint64_t pva = patches[i].va & ~4095ull;
@@ -1210,12 +1338,14 @@ static void write_plan(const char *path, const uint8_t *m)
         }
         pages[np - 1].count++;
     }
+
     struct {
         char magic[8];
         uint8_t uuid[16];
         uint32_t nranges, npages;
         uint64_t ranges_off, pages_off, words_off, size;
     } h;
+
     memcpy(h.magic, "A64XPLN1", 8);
     memcpy(h.uuid, m + 0x58, 16);
     h.nranges = (uint32_t)nvr;
@@ -1270,29 +1400,38 @@ static int follow(uint64_t site, uint32_t w)
         for (int step = 0; step < 512; step++) {
             bool dup = false;
             for (int k = 0; k < ns; k++)
-                if (seen[k] == pc) dup = true;
-            if (dup) break;
-            if (ns == 512) return 0;
+                if (seen[k] == pc)
+                    dup = true;
+            if (dup)
+                break;
+            if (ns == 512)
+                return 0;
             seen[ns++] = pc;
             bool f;
             uint32_t x = patch_at(pc, &f);
-            if (!f) return 0;
-            if (bl && x == 0xD65F03C0u) break;
+            if (!f)
+                return 0;
+            if (bl && x == 0xD65F03C0u)
+                break;
             if ((x & 0xFC000000u) == 0x14000000u) {
                 uint64_t t = pc + ((int64_t)(int32_t)((x & 0x3FFFFFFu) << 6) >> 4);
-                if (!bl && t == site + 4) break;
+                if (!bl && t == site + 4)
+                    break;
                 pc = t;
                 continue;
             }
             bool isb;
             int64_t off = br_off(x, &isb);
             if (isb) { /* conditional: both ways */
-                if (nw == 64) return 0;
+                if (nw == 64)
+                    return 0;
                 work[nw++] = pc + (uint64_t)off;
             }
-            if (x == 0xD65F03C0u || (x & 0xFFFFFC1Fu) == 0xD61F0000u) return 0; /* stray return / indirect branch */
+            if (x == 0xD65F03C0u || (x & 0xFFFFFC1Fu) == 0xD61F0000u)
+                return 0; /* stray return / indirect branch */
             pc += 4;
-            if (step == 511) return 0;
+            if (step == 511)
+                return 0;
         }
     }
     return 1;
@@ -1307,8 +1446,10 @@ static int64_t nearest_bin_any(uint64_t near, int n)
     for (int64_t dlt = 0; dlt < nbins; dlt++) {
         for (int sg = 0; sg < 2; sg++) {
             int64_t b = sg ? sb - dlt : sb + dlt;
-            if ((dlt == 0 && sg) || b < 0 || b >= nbins) continue;
-            if (bin_room[b] >= n + 3) return b;
+            if ((dlt == 0 && sg) || b < 0 || b >= nbins)
+                continue;
+            if (bin_room[b] >= n + 3)
+                return b;
         }
     }
     return -1;
@@ -1322,11 +1463,13 @@ static bool place_chain(uint32_t w, uint32_t dead, uint64_t site)
 {
     uint32_t st[A64X_STUB_MAX];
     int n0 = a64x_stub(w, site, site + 8, dead, st, A64X_STUB_MAX);
-    if (n0 <= 0 || n0 > A64X_STUB_MAX) return false;
+    if (n0 <= 0 || n0 > A64X_STUB_MAX)
+        return false;
     int64_t tb = nearest_bin_any(site, n0);
     static int dbg;
     if (tb < 0) {
-        if (getenv("CHAIN_DEBUG") && dbg++ < 10) fprintf(stderr, "chain %llx: no bin\n", (unsigned long long)site);
+        if (getenv("CHAIN_DEBUG") && dbg++ < 10)
+            fprintf(stderr, "chain %llx: no bin\n", (unsigned long long)site);
         return false;
     }
     uint64_t target = bin_base + ((uint64_t)tb << BIN_SHIFT) + (1u << (BIN_SHIFT - 1));
@@ -1429,6 +1572,7 @@ static bool place_chain(uint32_t w, uint32_t dead, uint64_t site)
 }
 
 double *g_dens;
+
 int cmpd(const void *a, const void *b2)
 {
     double x = g_dens[*(const size_t *)a], y = g_dens[*(const size_t *)b2];
@@ -1440,7 +1584,9 @@ struct site {
     uint32_t w, dead, vdead;
     uint8_t cls, lr_dead, hot;
 };
+
 static uint64_t fp_sites, fp_vspill_before, fp_vspill_after, fp_words_before, fp_words_after;
+
 /* V temporaries the stub for w uses when V16-V31 are all free (the shared "V dead" variant) */
 static uint32_t vtemps_of(uint32_t w)
 {
@@ -1454,6 +1600,7 @@ static uint32_t vtemps_of(uint32_t w)
                    (1u << ((w >> 10) & 31));
     return m & 0xFFFF0000u & ~ops;
 }
+
 static bool has_vspill(const uint32_t *st, int n)
 {
     for (int k = 0; k < n; k++) {
@@ -1462,6 +1609,7 @@ static bool has_vspill(const uint32_t *st, int n)
     }
     return false;
 }
+
 static int wide_budget = 2000;
 static FILE *cmp_out;
 static uint64_t size_hist[A64X_STUB_MAX + 1];
@@ -1472,11 +1620,16 @@ int a64x_cmd_plan2(int argc, char **argv)
     const char *outp = NULL, *dump = NULL, *unplaced_path = NULL;
     int no_shared = 0, no_hops = 0;
     while ((ch = getopt(argc, argv, "o:d:u:SH")) != -1) {
-        if (ch == 'u') unplaced_path = optarg;
-        if (ch == 'o') outp = optarg;
-        if (ch == 'd') dump = optarg;
-        if (ch == 'S') no_shared = 1;
-        if (ch == 'H') no_hops = 1;
+        if (ch == 'u')
+            unplaced_path = optarg;
+        if (ch == 'o')
+            outp = optarg;
+        if (ch == 'd')
+            dump = optarg;
+        if (ch == 'S')
+            no_shared = 1;
+        if (ch == 'H')
+            no_hops = 1;
     }
     const char *mainpath = argv[optind];
     uint64_t msz;
@@ -1500,11 +1653,13 @@ int a64x_cmd_plan2(int argc, char **argv)
     mark_code(m);
     mark_stub_mappings((int)sub_cnt + 1);
     load_function_starts(m);
-    if (getenv("A64X_CMP")) cmp_out = fopen(getenv("A64X_CMP"), "w");
+    if (getenv("A64X_CMP"))
+        cmp_out = fopen(getenv("A64X_CMP"), "w");
     qsort(secs, nsecs, sizeof(*secs), cmp_sec);
     load_landing_pads(m);
     reach_pass();
-    if (getenv("A64X_ISLANDS")) isl_out = fopen(getenv("A64X_ISLANDS"), "w");
+    if (getenv("A64X_ISLANDS"))
+        isl_out = fopen(getenv("A64X_ISLANDS"), "w");
     uint8_t *orig_code[512] = {0};
     if (getenv("A64X_SIMPLE"))
         for (int f = 0; f < 512; f++)
@@ -1520,17 +1675,21 @@ int a64x_cmd_plan2(int argc, char **argv)
 		 */
         uint64_t miss_rw = 0, miss_words = 0, lost_code = 0, lost_rw = 0, simple_words = 0;
         for (int q = 0; q < nfm; q++) {
-            if (!(fm[q].prot & 4)) continue;
+            if (!(fm[q].prot & 4))
+                continue;
             int f = fm[q].file;
             uint64_t x0 = fm[q].off / 4, n = fm[q].size / 4;
             uint8_t *data = calloc(n / 8 + 1, 1), *fsl = calloc(n / 8 + 1, 1);
             for (uint64_t k = 0; k < n; k++)
-                if (BITV(fsbits[f], x0 + k)) fsl[k >> 3] |= 1 << (k & 7);
+                if (BITV(fsbits[f], x0 + k))
+                    fsl[k >> 3] |= 1 << (k & 7);
             struct a64x_islands is = {data, fsl, 0, 0, false, false, 0, 0};
+
             struct ctx_t {
                 uint8_t *bits;
                 uint64_t base, x0;
             } cx = {orig_code[f], fm[q].addr, x0};
+
             (void)cx;
             for (uint64_t k = 0; k < n; k += 1024) {
                 uint32_t nw = k + 1024 <= n ? 1024 : (uint32_t)(n - k), wbuf[1024];
@@ -1545,7 +1704,8 @@ int a64x_cmd_plan2(int argc, char **argv)
             simple_words += is.words;
             for (uint64_t k = 0; k < n; k++) {
                 uint64_t x = x0 + k;
-                if (!BITV(orig_code[f], x)) continue;
+                if (!BITV(orig_code[f], x))
+                    continue;
                 uint32_t w = u32(fb[f], 4 * x), one;
                 enum a64x_class c = a64x_classify(w);
                 bool rw = c == A64X_LSE_CAS || c == A64X_LSE_CASP || c == A64X_LSE_LDOP || c == A64X_LSE_SWP ||
@@ -1575,17 +1735,20 @@ int a64x_cmd_plan2(int argc, char **argv)
                (unsigned long long)lost_code, (unsigned long long)lost_rw);
         return 0;
     }
-    if (isl_out) fclose(isl_out);
+    if (isl_out)
+        fclose(isl_out);
     ranges_from_codebits();
     if (getenv("A64X_CLASSDUMP")) {
         /* every reached code word of the FP16/FCMA/JSCVT/RDM classes: "class word va" */
         FILE *o = fopen(getenv("A64X_CLASSDUMP"), "w");
         for (int q = 0; q < nfm; q++) {
-            if (!(fm[q].prot & 4)) continue;
+            if (!(fm[q].prot & 4))
+                continue;
             int f = fm[q].file;
             for (uint64_t k = 0; k < fm[q].size / 4; k++) {
                 uint64_t x = fm[q].off / 4 + k;
-                if (!BITV(codebits[f], x)) continue;
+                if (!BITV(codebits[f], x))
+                    continue;
                 uint32_t w = u32(fb[f], 4 * x);
                 enum a64x_class c = a64x_classify(w);
                 if (c == A64X_FP16 || c == A64X_FCMA || c == A64X_JSCVT || c == A64X_RDM)
@@ -1602,11 +1765,13 @@ int a64x_cmd_plan2(int argc, char **argv)
         for (char *t = strtok(getenv("A64X_FIND"), ","); t && nw < 8; t = strtok(NULL, ","))
             want[nw++] = (uint32_t)strtoul(t, NULL, 16);
         for (int q = 0; q < nfm; q++) {
-            if (!(fm[q].prot & 4)) continue;
+            if (!(fm[q].prot & 4))
+                continue;
             int f = fm[q].file;
             for (uint64_t k = 0; k < fm[q].size / 4; k++) {
                 uint64_t x = fm[q].off / 4 + k;
-                if (!BITV(codebits[f], x)) continue;
+                if (!BITV(codebits[f], x))
+                    continue;
                 uint32_t w = u32(fb[f], 4 * x);
                 for (int i = 0; i < nw; i++)
                     if (w == want[i])
@@ -1621,11 +1786,13 @@ int a64x_cmd_plan2(int argc, char **argv)
         FILE *ro = fopen(getenv("A64X_REACH"), "w");
         uint64_t code = 0, rch = 0, mod = 0, mod_un = 0, site = 0, site_un = 0, site_dic = 0, mod_dic = 0;
         for (int q = 0; q < nfm; q++) {
-            if (!(fm[q].prot & 4)) continue;
+            if (!(fm[q].prot & 4))
+                continue;
             int f = fm[q].file;
             for (uint64_t k = 0; k < fm[q].size / 4; k++) {
                 uint64_t x = fm[q].off / 4 + k;
-                if (!(codebits[f][x >> 3] & (1 << (x & 7)))) continue;
+                if (!(codebits[f][x >> 3] & (1 << (x & 7))))
+                    continue;
                 code++;
                 bool r = reachbits[f][x >> 3] & (1 << (x & 7));
                 rch += r;
@@ -1633,7 +1800,8 @@ int a64x_cmd_plan2(int argc, char **argv)
                 enum a64x_class c = a64x_classify(w);
                 bool st = c == A64X_LSE_CAS || c == A64X_LSE_CASP || c == A64X_LSE_LDOP || c == A64X_LSE_SWP;
                 bool md = st || a64x_rewrite1(w, &one) || c != A64X_OK;
-                if (!md) continue;
+                if (!md)
+                    continue;
                 uint64_t va = fm[q].addr + 4 * k;
                 bool dic = ndic && in_dic(va);
                 mod++;
@@ -1663,26 +1831,30 @@ int a64x_cmd_plan2(int argc, char **argv)
     struct site *sites = NULL;
     size_t nsites = 0, capsites = 0;
     for (int q = 0; q < nfm; q++) {
-        if (!(fm[q].prot & 4)) continue;
+        if (!(fm[q].prot & 4))
+            continue;
         const uint8_t *t = fb[fm[q].file] + fm[q].off;
         uint64_t n = fm[q].size / 4, base = fm[q].addr, fo0 = fm[q].off;
         int f = fm[q].file;
         for (uint64_t pg = 0; pg < n; pg += 1024) {
             uint32_t in[1024], out[1024];
             uint32_t nw = pg + 1024 <= n ? 1024 : (uint32_t)(n - pg);
-            for (uint32_t x = 0; x < 1024; x++) in[x] = x < nw ? u32(t, (pg + x) * 4) : 0;
+            for (uint32_t x = 0; x < 1024; x++)
+                in[x] = x < nw ? u32(t, (pg + x) * 4) : 0;
             memcpy(out, in, sizeof(in));
             hole_page_va = base + 4 * pg;
             a64x_dead_checks(in, out, nw, base + 4 * pg, &plan_code_map, add_hole, NULL);
             for (uint32_t x = 0; x < nw; x++) {
                 uint64_t fo = fo0 + 4 * (pg + x);
-                if (!(codebits[f][(fo / 4) >> 3] & (1 << ((fo / 4) & 7)))) continue;
+                if (!(codebits[f][(fo / 4) >> 3] & (1 << ((fo / 4) & 7))))
+                    continue;
                 uint32_t w = in[x], one;
                 enum a64x_class c = a64x_classify(w);
                 bool stub_class = c == A64X_LSE_CAS || c == A64X_LSE_CASP || c == A64X_LSE_LDOP || c == A64X_LSE_SWP ||
                                   c == A64X_JSCVT || c == A64X_FCMA || c == A64X_FP16 || c == A64X_RDM ||
                                   (c == A64X_PAC_LDRA && !a64x_rewrite1(w, &one));
-                if (!stub_class) continue;
+                if (!stub_class)
+                    continue;
                 if (nsites == capsites) {
                     capsites = capsites ? capsites * 2 : 1 << 20;
                     sites = realloc(sites, capsites * sizeof(*sites));
@@ -1725,10 +1897,12 @@ int a64x_cmd_plan2(int argc, char **argv)
                     } else {
                         vd = a64x_dead_vregs_flow(wp, wn, 0, 0xFFFFFFFFu, wide_budget, false);
                     }
-                    if (getenv("A64X_NO_VLIVE")) vd = 0;
+                    if (getenv("A64X_NO_VLIVE"))
+                        vd = 0;
                     static FILE *vdump;
                     static uint64_t vn;
-                    if (!vdump && getenv("A64X_VDUMP")) vdump = fopen(getenv("A64X_VDUMP"), "w");
+                    if (!vdump && getenv("A64X_VDUMP"))
+                        vdump = fopen(getenv("A64X_VDUMP"), "w");
                     if (vdump && vn++ % 9001 == 0)
                         fprintf(vdump, "%llx %08x vdead %08x\n", (unsigned long long)(base + 4 * k0), w, vd);
                 }
@@ -1752,7 +1926,8 @@ int a64x_cmd_plan2(int argc, char **argv)
             }
             holes[o++] = holes[i];
         }
-        if (dup) printf("dropped %zu overlapping hole records\n", dup);
+        if (dup)
+            printf("dropped %zu overlapping hole records\n", dup);
         nholes = o;
     }
     dsu_build(&d3, 3);
@@ -1762,17 +1937,21 @@ int a64x_cmd_plan2(int argc, char **argv)
     bin_room = calloc((size_t)nbins, sizeof(int64_t));
     bin_first = calloc((size_t)nbins, sizeof(int64_t));
     bin_end = calloc((size_t)nbins, sizeof(int64_t));
-    for (int64_t b = 0; b < nbins; b++) bin_first[b] = -1;
+    for (int64_t b = 0; b < nbins; b++)
+        bin_first[b] = -1;
     for (size_t i = 0; i < nholes; i++) {
         int64_t b = (int64_t)((holes[i].va - bin_base) >> BIN_SHIFT);
-        if (bin_first[b] < 0) bin_first[b] = (int64_t)i;
+        if (bin_first[b] < 0)
+            bin_first[b] = (int64_t)i;
         bin_end[b] = (int64_t)i + 1;
         bin_room[b] += holes[i].size - 1;
     }
     for (int64_t b = 0; b < nbins; b++)
-        if (bin_first[b] < 0) bin_first[b] = 0;
+        if (bin_first[b] < 0)
+            bin_first[b] = 0;
     uint64_t hw = 0;
-    for (size_t i = 0; i < nholes; i++) hw += holes[i].size;
+    for (size_t i = 0; i < nholes; i++)
+        hw += holes[i].size;
     printf("holes: %" PRIu64 " x3 + %" PRIu64 " x5 = %" PRIu64 " words; sites %zu\n", n3, n5, hw, nsites);
 
     /* placement: hot first, then the rest */
@@ -1792,9 +1971,11 @@ int a64x_cmd_plan2(int argc, char **argv)
         for (size_t i = 0; i < nsites; i++)
             if (!sites[i].lr_dead && sites[i].va >= bin_base) {
                 int64_t b = (int64_t)((sites[i].va - bin_base) >> BIN_SHIFT);
-                if (b < nbins) cnt[b + 1]++;
+                if (b < nbins)
+                    cnt[b + 1]++;
             }
-        for (int64_t b = 1; b <= nbins; b++) cnt[b] += cnt[b - 1];
+        for (int64_t b = 1; b <= nbins; b++)
+            cnt[b] += cnt[b - 1];
         for (size_t i = 0; i < nsites; i++) {
             int64_t b = sites[i].va >= bin_base ? (int64_t)((sites[i].va - bin_base) >> BIN_SHIFT) : 0;
             int64_t lo = b - 64 < 0 ? 0 : b - 64, hi = b + 65 > nbins ? nbins : b + 65;
@@ -1807,7 +1988,8 @@ int a64x_cmd_plan2(int argc, char **argv)
         for (int hot = 1; hot >= 0; hot--) {
             size_t start = no;
             for (size_t i = 0; i < nsites; i++)
-                if (!done[i] && sites[i].hot == hot && (phase || sites[i].lr_dead)) ord[no++] = i;
+                if (!done[i] && sites[i].hot == hot && (phase || sites[i].lr_dead))
+                    ord[no++] = i;
             if (phase == 1 && !hot) {
                 /* densest first: simple insertion into buckets by density */
                 size_t m2 = no - start;
@@ -1825,10 +2007,12 @@ int a64x_cmd_plan2(int argc, char **argv)
             size_t i = ord[oi];
             struct site *s = &sites[i];
             if (phase == 0) {
-                if (s->hot) hot_sites++;
+                if (s->hot)
+                    hot_sites++;
                 lr_dead += s->lr_dead;
             }
-            if (phase == 1 && s->hot && !s->lr_dead) hot_sites++;
+            if (phase == 1 && s->hot && !s->lr_dead)
+                hot_sites++;
             int pieces = 0;
             bool ok = false;
             ctx_site = s->va;
@@ -1855,7 +2039,8 @@ int a64x_cmd_plan2(int argc, char **argv)
                     add_patch(s->va, enc_bl(s->va, va));
                     ok = true;
                     by_shared++;
-                    if (!two_free) spill_sites++;
+                    if (!two_free)
+                        spill_sites++;
                     extra_branches += 2 + (pieces > 1 ? (uint64_t)(pieces - 1) : 0);
                 }
             }
@@ -1867,7 +2052,8 @@ int a64x_cmd_plan2(int argc, char **argv)
                 uint32_t st[A64X_STUB_MAX];
                 uint64_t dummy = s->va + 8;
                 int n = a64x_stub_v(s->w, s->va, dummy, s->dead, s->vdead, st, A64X_STUB_MAX);
-                if (n > 0 && n <= A64X_STUB_MAX) size_hist[n]++;
+                if (n > 0 && n <= A64X_STUB_MAX)
+                    size_hist[n]++;
                 if (n > 0 && a64x_class_uses_vtemps(s->cls)) {
                     uint32_t st0[A64X_STUB_MAX];
                     int n0 = a64x_stub_v(s->w, s->va, dummy, s->dead, 0, st0, A64X_STUB_MAX);
@@ -1886,7 +2072,8 @@ int a64x_cmd_plan2(int argc, char **argv)
                             by_single++;
                         else
                             by_pieces++;
-                        if ((st[0] & 0xFFC003FFu) == 0xD10003FFu) spill_sites++;
+                        if ((st[0] & 0xFFC003FFu) == 0xD10003FFu)
+                            spill_sites++;
                         extra_branches += 2 + (uint64_t)(pieces - 1);
                     }
                 }
@@ -1898,13 +2085,15 @@ int a64x_cmd_plan2(int argc, char **argv)
                 extra_branches += 2 + 2 * (chain_hops ? 1 : 0);
             }
             done[i] = 1;
-            if (ok && s->hot) hot_ok++;
+            if (ok && s->hot)
+                hot_ok++;
             if (!ok) {
                 failed++;
                 failed_cls[s->cls]++;
                 if (unplaced_path) {
                     static FILE *uf;
-                    if (!uf) uf = fopen(unplaced_path, "w");
+                    if (!uf)
+                        uf = fopen(unplaced_path, "w");
                     fprintf(uf, "%llx %08x %u\n", (unsigned long long)s->va, s->w, s->lr_dead);
                 }
             }
@@ -1928,10 +2117,12 @@ int a64x_cmd_plan2(int argc, char **argv)
     printf("cost: %.2f taken branches per placed site on average (inline LL/SC = 0); spilling at %" PRIu64 " sites\n",
            placed ? (double)extra_branches / placed : 0.0, spill_sites);
     for (int c = 1; c < A64X_NCLASSES; c++)
-        if (failed_cls[c]) printf("  trap: %-10s %" PRIu64 "\n", a64x_class_name(c), failed_cls[c]);
+        if (failed_cls[c])
+            printf("  trap: %-10s %" PRIu64 "\n", a64x_class_name(c), failed_cls[c]);
     printf("per-site stub sizes:");
     for (int k = 1; k <= A64X_STUB_MAX; k++)
-        if (size_hist[k]) printf(" %d:%" PRIu64, k, size_hist[k]);
+        if (size_hist[k])
+            printf(" %d:%" PRIu64, k, size_hist[k]);
     printf("\n");
 
     if (outp)
@@ -1955,25 +2146,30 @@ int a64x_cmd_plan2(int argc, char **argv)
     static uint8_t seen[1u << 29];
     FILE *d = dump ? fopen(dump, "w") : NULL;
     for (int q = 0; q < nfm; q++) {
-        if (!(fm[q].prot & 4)) continue;
+        if (!(fm[q].prot & 4))
+            continue;
         const uint8_t *t = fb[fm[q].file] + fm[q].off;
         uint64_t n = fm[q].size / 4, base = fm[q].addr;
         for (uint64_t pg = 0; pg < n; pg += 1024) {
             uint32_t in[1024], out[1024];
             uint32_t nw = pg + 1024 <= n ? 1024 : (uint32_t)(n - pg);
-            for (uint32_t x = 0; x < 1024; x++) in[x] = x < nw ? u32(t, (pg + x) * 4) : 0;
+            for (uint32_t x = 0; x < 1024; x++)
+                in[x] = x < nw ? u32(t, (pg + x) * 4) : 0;
             uint64_t va = base + 4 * pg;
             a64x_translate_page(in, out, nw, va, &plan_code_map, NULL, 0, NULL);
             a64x_dead_checks(in, out, nw, va, &plan_code_map, NULL, NULL);
             for (uint32_t x = 0; x < nw; x++) {
                 bool f;
                 uint32_t w = patch_at(va + 4 * x, &f);
-                if (f) out[x] = w;
+                if (f)
+                    out[x] = w;
             }
             pages++;
             for (uint32_t x = 0; x < nw; x++) {
-                if (!plan_is_code(NULL, va + 4 * x)) continue;
-                if (out[x] != in[x]) changed++;
+                if (!plan_is_code(NULL, va + 4 * x))
+                    continue;
+                if (out[x] != in[x])
+                    changed++;
                 if (d && !(seen[out[x] >> 3] & (1 << (out[x] & 7)))) {
                     seen[out[x] >> 3] |= 1 << (out[x] & 7);
                     fprintf(d, "%08x\n", out[x]);
@@ -1996,7 +2192,8 @@ int a64x_cmd_plan2(int argc, char **argv)
                                 uint32_t ww = patch_at(pc, &f2);
                                 fprintf(stderr, "   %llx %s %08x\n", (unsigned long long)pc, f2 ? "plan" : "ORIG",
                                         f2 ? ww : word_at(pc));
-                                if (!f2) break;
+                                if (!f2)
+                                    break;
                                 if ((ww & 0xFC000000u) == 0x14000000u)
                                     pc += ((int64_t)(int32_t)((ww & 0x3FFFFFFu) << 6) >> 4);
                                 else
@@ -2008,12 +2205,14 @@ int a64x_cmd_plan2(int argc, char **argv)
             }
         }
     }
-    if (d) fclose(d);
+    if (d)
+        fclose(d);
     printf("verify: %" PRIu64 " pages, %" PRIu64
            " code words changed; stub sites with every path reaching their return %" PRIu64 ", broken %" PRIu64 " (",
            pages, changed, ok, bad);
     for (int c = 1; c < A64X_NCLASSES; c++)
-        if (vcls[c]) printf(" %s %" PRIu64, a64x_class_name(c), vcls[c]);
+        if (vcls[c])
+            printf(" %s %" PRIu64, a64x_class_name(c), vcls[c]);
     printf(" )\n");
     (void)word_at;
     return bad ? 1 : 0;

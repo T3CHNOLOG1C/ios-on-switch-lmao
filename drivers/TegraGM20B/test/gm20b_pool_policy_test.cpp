@@ -20,15 +20,18 @@ constexpr tgm_pool::Limits kLimits = {1 * MiB, 16 * MiB, 32 * MiB, 64 * MiB};
 
 struct Pool {
 	uint64_t size = 256 * MiB, used = 0;
+
 	uint64_t avail() const
 	{
 		return size - used;
 	}
 };
+
 struct Client {
 	bool compositor;
 	uint64_t held = 0;
 };
+
 struct Result {
 	unsigned failed = 0, fromPool = 0, fromSystem = 0;
 	uint64_t systemBytes = 0;

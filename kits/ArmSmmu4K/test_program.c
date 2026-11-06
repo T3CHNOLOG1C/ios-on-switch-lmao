@@ -14,11 +14,13 @@
 #define BYTES 0x40000
 #ifdef SOURCE_ORACLE
 extern uint32_t source_register(unsigned);
+
 static void source_definitions(void)
 {
     const uint32_t expected[] = {0x20, 0x24, 0x28,  0,     0x10,  0x20,       0x28,  0x30,      0x38,
                                  0x3c, 0x58, 0x610, 0x7f0, 0x7f4, 0xc00001fe, 0x800, UINT32_MAX};
-    for (unsigned i = 0; i < sizeof(expected) / sizeof(expected[0]); ++i) CHECK(source_register(i) == expected[i]);
+    for (unsigned i = 0; i < sizeof(expected) / sizeof(expected[0]); ++i)
+        CHECK(source_register(i) == expected[i]);
 }
 #endif
 typedef struct {
@@ -26,6 +28,7 @@ typedef struct {
     size_t at;
     uint64_t value;
 } Event;
+
 typedef struct {
     uint64_t memory[BYTES / 8];
     Event events[512];
@@ -34,56 +37,68 @@ typedef struct {
     unsigned bank, enabled_seen, timeout, corrupt_tcr, corrupt_enable;
     unsigned fault_on_enable, fail_disable, fail_after_write, sheng_bits;
 } Fixture;
+
 static Fixture f;
 static ArmSmmu4KConfig lower = {48, 48, 0x10000000, 16}, upper = {48, 48, 0x11000000, 16};
 static ArmSmmu4KResult lr, ur;
 static uint64_t lower_tables[8 * 512], upper_tables[8 * 512];
 static ArmSmmu4KContextConfig config;
+
 static uint32_t get32(size_t at)
 {
     uint32_t v;
     memcpy(&v, (unsigned char *)f.memory + at, 4);
     return v;
 }
+
 static uint64_t get64(size_t at)
 {
     uint64_t v;
     memcpy(&v, (unsigned char *)f.memory + at, 8);
     return v;
 }
+
 static void put32(size_t at, uint32_t v)
 {
     memcpy((unsigned char *)f.memory + at, &v, 4);
 }
+
 static void put64(size_t at, uint64_t v)
 {
     memcpy((unsigned char *)f.memory + at, &v, 8);
 }
+
 static int event(unsigned kind, size_t at, uint64_t value)
 {
     CHECK(f.event_count < 512 && at < BYTES);
     f.events[f.event_count++] = (Event){kind, at, value};
     return ++f.calls == f.fail_call;
 }
+
 static int read32(void *cookie, size_t at, uint32_t *out)
 {
     CHECK(cookie == &f && !(at & 3) && at <= BYTES - 4);
-    if (event(0, at, 0)) return 1;
+    if (event(0, at, 0))
+        return 1;
     *out = (at == f.cb + 0x7f4 && f.timeout) ? 1 : get32(at);
     return 0;
 }
+
 static int read64(void *cookie, size_t at, uint64_t *out)
 {
     CHECK(cookie == &f && !(at & 7) && at <= BYTES - 8);
-    if (event(1, at, 0)) return 1;
+    if (event(1, at, 0))
+        return 1;
     *out = get64(at);
     return 0;
 }
+
 static int write32(void *cookie, size_t at, uint32_t value)
 {
     CHECK(cookie == &f && !(at & 3) && at <= BYTES - 4);
     int fail = event(2, at, value);
-    if ((fail && !f.fail_after_write) || (at == f.cb && value == 0 && f.enabled_seen && f.fail_disable)) return 1;
+    if ((fail && !f.fail_after_write) || (at == f.cb && value == 0 && f.enabled_seen && f.fail_disable))
+        return 1;
     if (at == f.cb + 0x58)
         put32(at, get32(at) & ~value); /* actual W1C semantics */
     else if (at == f.cb + 0x30 && f.corrupt_tcr)
@@ -91,27 +106,33 @@ static int write32(void *cookie, size_t at, uint32_t value)
     else if (at == f.cb + 0x10 && f.sheng_bits)
         put32(at, value | 0x60); /* int-008: TCR2 TBI0/TBI1 read 1 */
     else if (at == f.cb && value & 1) {
-        if (f.sheng_bits) value &= ~0x1000u; /* int-009: SCTLR.ASIDPNE reads 0 */
+        if (f.sheng_bits)
+            value &= ~0x1000u; /* int-009: SCTLR.ASIDPNE reads 0 */
         f.enabled_seen = 1;
         put32(at, f.corrupt_enable ? value ^ 1 : value);
-        if (f.fault_on_enable) put32(f.cb + 0x58, 2);
+        if (f.fault_on_enable)
+            put32(f.cb + 0x58, 2);
     } else
         put32(at, value);
     return fail;
 }
+
 static int write64(void *cookie, size_t at, uint64_t value)
 {
     CHECK(cookie == &f && !(at & 7) && at <= BYTES - 8);
     int fail = event(3, at, value);
-    if (fail && !f.fail_after_write) return 1;
+    if (fail && !f.fail_after_write)
+        return 1;
     put64(at, value);
     return fail;
 }
+
 static int barrier(void *cookie)
 {
     CHECK(cookie == &f);
     return event(4, 0, 0);
 }
+
 static ArmSmmu4KIo reset(unsigned register_64k)
 {
     memset(&f, 0, sizeof(f));
@@ -127,21 +148,27 @@ static ArmSmmu4KIo reset(unsigned register_64k)
     ArmSmmu4KIo io = {&f, BYTES, read32, read64, write32, write64, barrier};
     return io;
 }
+
 static size_t first(unsigned kind, size_t at)
 {
     for (size_t i = 0; i < f.event_count; ++i)
-        if (f.events[i].kind == kind && f.events[i].at == at) return i;
+        if (f.events[i].kind == kind && f.events[i].at == at)
+            return i;
     exit(1);
 }
+
 static void no_writes(void)
 {
-    for (size_t i = 0; i < f.event_count; ++i) CHECK(f.events[i].kind != 2 && f.events[i].kind != 3);
+    for (size_t i = 0; i < f.event_count; ++i)
+        CHECK(f.events[i].kind != 2 && f.events[i].kind != 3);
 }
+
 static void never_enabled(void)
 {
     for (size_t i = 0; i < f.event_count; ++i)
         CHECK(!(f.events[i].kind == 2 && f.events[i].at == f.cb && (f.events[i].value & 1)));
 }
+
 static void direct_adapter(void)
 {
     /* Explicit host-memory unit buffer, never described as an MMIO device. */
@@ -166,6 +193,7 @@ static void direct_adapter(void)
     mapping.bytes = 64;
     CHECK(ArmSmmu4KBindMmio(&mapping, &io) == ArmSmmu4KArgument);
 }
+
 int main(void)
 {
 #ifdef SOURCE_ORACLE
@@ -192,7 +220,8 @@ int main(void)
                 size_t at = f.events[i].at;
                 CHECK((at >= f.cb && at < f.cb + 0x800) || at == f.gr1 + f.bank * 4 ||
                       at == f.gr1 + 0x800 + f.bank * 4);
-                if (at == f.cb && f.events[i].value & 1) CHECK(i > first(2, f.cb + 0x7f0));
+                if (at == f.cb && f.events[i].value & 1)
+                    CHECK(i > first(2, f.cb + 0x7f0));
             }
         successful_calls = f.calls;
         /* Synchronize uses TLBIASID with the ASID; InvalidateAll uses TLBIALL; both sync and change nothing else. */
@@ -200,13 +229,15 @@ int main(void)
         CHECK(ArmSmmu4KSynchronizeOwnedContext(&io, f.bank, &config, 4, &r) == ArmSmmu4KSuccess && r.tlb_synchronized);
         CHECK(f.events[first(2, f.cb + 0x610)].value == 0xabcd && first(2, f.cb + 0x610) < first(2, f.cb + 0x7f0));
         for (size_t i = 0; i < f.event_count; ++i)
-            if (f.events[i].kind == 2) CHECK(f.events[i].at == f.cb + 0x610 || f.events[i].at == f.cb + 0x7f0);
+            if (f.events[i].kind == 2)
+                CHECK(f.events[i].at == f.cb + 0x610 || f.events[i].at == f.cb + 0x7f0);
         f.event_count = f.calls = 0;
         CHECK(ArmSmmu4KInvalidateAllOwnedContext(&io, f.bank, &config, 4, &r) == ArmSmmu4KSuccess &&
               r.tlb_synchronized && get32(f.cb) & 1);
         CHECK(first(2, f.cb + 0x618) < first(2, f.cb + 0x7f0));
         for (size_t i = 0; i < f.event_count; ++i)
-            if (f.events[i].kind == 2) CHECK(f.events[i].at == f.cb + 0x618 || f.events[i].at == f.cb + 0x7f0);
+            if (f.events[i].kind == 2)
+                CHECK(f.events[i].at == f.cb + 0x618 || f.events[i].at == f.cb + 0x7f0);
         ArmSmmu4KContextConfig other = config;
         other.asid++;
         f.event_count = f.calls = 0;

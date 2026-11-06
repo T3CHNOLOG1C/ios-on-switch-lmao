@@ -28,13 +28,15 @@ constexpr int kSwitchCopyFromClient = cppvPsrc | cppvNoRefSrc | cppvKmap;
 // copypv. False when a segment is missing or a copy fails (the request then completes with an I/O error).
 template <typename Memory, typename Copy>
 inline bool switchClientCopy(Memory *memory, uint8_t *bounce, uint32_t length, bool toClient, Copy copy,
-                               uint32_t from = 0)
+                             uint32_t from = 0)
 {
     for (uint32_t done = 0; done < length;) {
         IOByteCount segment = 0;
         const addr64_t pa = memory->getPhysicalSegment(from + done, &segment, kIOMemoryMapperNone);
-        if (!pa || !segment) return false;
-        if (segment > length - done) segment = length - done;
+        if (!pa || !segment)
+            return false;
+        if (segment > length - done)
+            segment = length - done;
         const addr64_t va = reinterpret_cast<uintptr_t>(bounce + done);
         const auto unsignedSegment = static_cast<unsigned int>(segment);
         if (toClient ? copy(va, pa, unsignedSegment, kSwitchCopyToClient)
@@ -54,14 +56,15 @@ inline bool switchClientCopy(Memory *memory, uint8_t *bounce, uint32_t length, b
 // gap: what a write puts on the card must all come from its requests).
 template <typename Request, typename Stage>
 inline bool switchChainCopy(Request *first, uint32_t from, uint32_t length, uint8_t *bounce, Stage stage,
-                              bool gaps = false)
+                            bool gaps = false)
 {
     const uint64_t base = first->lba, window = static_cast<uint64_t>(from) + length;
     uint64_t covered = 0;
     for (Request *r = first; r; r = r->next) {
         const uint64_t at = (r->lba - base) * 512, end = at + static_cast<uint64_t>(r->sectors) * 512;
         const uint64_t low = at > from ? at : from, high = end < window ? end : window;
-        if (low >= high) continue;
+        if (low >= high)
+            continue;
         if (!stage(r, static_cast<uint32_t>(low - at), bounce + (low - from), static_cast<uint32_t>(high - low)))
             return false;
         covered += high - low;

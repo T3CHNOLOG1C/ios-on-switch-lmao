@@ -52,6 +52,7 @@ std::vector<Sensor> j120apHidSensors()
             sensors.emplace_back("Tc" + std::to_string(n) + k, std::string(p) + "ACC Temp Sensor" + std::to_string(n));
     return sensors;
 }
+
 constexpr uint64_t kExpectedMask = 0x3fffffffffull;  // "is_alive_func returned unhealthy : current 0, mask 3fffffffff,
                                                      // expected 3fffffffff"
 
@@ -71,9 +72,11 @@ struct Tsensor {
     uint32_t base, fuse;
     int64_t alpha, beta;
 };
+
 constexpr Tsensor kB01Tsensors[] = {{"cpu0", 0xc0, 0x098, 1085000, 3244200},  {"cpu1", 0xe0, 0x084, 1126200, -67500},
                                     {"cpu2", 0x100, 0x088, 1098400, 2251100}, {"cpu3", 0x120, 0x12c, 1108000, 602700},
                                     {"gpu", 0x180, 0x154, 1074300, 2734900},  {"pllx", 0x1a0, 0x160, 1039700, 6829100}};
+
 constexpr struct {
     int64_t tall = 16300, tiddqEn = 1, tenCount = 1, tsample = 240, tsampleAte = 480, pdiv = 12, pdivAte = 6;
 } kB01;
@@ -82,10 +85,12 @@ int64_t s32(int64_t x)
 {
     return (int32_t)(uint32_t)(uint64_t)x;
 }
+
 int64_t s16(int64_t x)
 {
     return (int16_t)(uint16_t)(uint64_t)x;
 }
+
 int64_t signExtend32(uint32_t value, int index)
 {
     const int shift = 31 - index;
@@ -110,7 +115,8 @@ std::optional<uint32_t> l4tCalib(uint32_t common, uint32_t fuse, int64_t alpha, 
     const int64_t cp = baseCp * 64 + signExtend32(fuse, 12);
     const int64_t ft = baseFt * 32 + signExtend32((fuse & (0x1fffu << 13)) >> 13, 12);
     const int64_t deltaSens = ft - cp, deltaTemp = actualFt - actualCp;
-    if (deltaSens == 0) return std::nullopt;
+    if (deltaSens == 0)
+        return std::nullopt;
     const int64_t mult = kB01.pdiv * kB01.tsampleAte, div = kB01.tsample * kB01.pdivAte;
     int64_t therma = s16(div64S64Precise(deltaTemp * (1 << 13) * mult, deltaSens * div));
     int64_t thermb = s16(div64S64Precise(ft * actualCp - cp * actualFt, deltaSens));
@@ -127,7 +133,8 @@ struct Entry {
 std::vector<Entry> sensors()
 {
     std::vector<Entry> out;
-    for (unsigned i = 0; i < sensors_count(); ++i) out.push_back({sensor_fourcc(i), sensor_name(i), sensor_source(i)});
+    for (unsigned i = 0; i < sensors_count(); ++i)
+        out.push_back({sensor_fourcc(i), sensor_name(i), sensor_source(i)});
     return out;
 }
 
@@ -142,16 +149,19 @@ TEST(SwitchThermalSensors, TableIsThePlist)
 {
     const std::vector<Entry> table = sensors();
     std::vector<Sensor> pairs;
-    for (const Entry &e : table) pairs.emplace_back(e.fourcc, e.name);
+    for (const Entry &e : table)
+        pairs.emplace_back(e.fourcc, e.name);
     EXPECT_EQ(pairs, j120apHidSensors());
     REQUIRE(table.size() < 64);
     EXPECT_EQ((1ull << table.size()) - 1, kExpectedMask);  // requiresWatchDog defaults to true: one bit each
     std::set<std::string> names;
-    for (const Entry &e : table) names.insert(e.name);
+    for (const Entry &e : table)
+        names.insert(e.name);
     EXPECT_EQ(names.size(), table.size());  // Product is the key: all distinct
     for (unsigned i = 0; i < table.size(); ++i) {
         uint32_t big = 0;
-        for (char c : table[i].fourcc) big = big << 8 | (uint8_t)c;
+        for (char c : table[i].fourcc)
+            big = big << 8 | (uint8_t)c;
         EXPECT_EQ(sensor_fourcc_value(i), big) << table[i].fourcc;  // LocationID match
     }
 }
@@ -165,7 +175,8 @@ TEST(SwitchThermalSensors, InfoOnlyIsThePlist)
     uint64_t infoBits = 0;
     for (unsigned i = 0; i < sensors_count(); ++i) {
         EXPECT_EQ(sensor_info_only(i), infoOnly.count(sensor_fourcc(i)) ? 1 : 0) << sensor_fourcc(i);
-        if (infoOnly.count(sensor_fourcc(i))) infoBits |= 1ull << i;
+        if (infoOnly.count(sensor_fourcc(i)))
+            infoBits |= 1ull << i;
     }
     EXPECT_EQ(infoBits, 0x9249276baull);
     EXPECT_EQ(sensors_read_mask(), kExpectedMask & ~0x9249276baull);
@@ -180,7 +191,8 @@ TEST(SwitchThermalSensors, EveryValueIsTheNearestMeasurement)
         SCOPED_TRACE(e.fourcc);
         sources.insert(e.source);
         bool acc = false;
-        for (int n = 0; n < 4; ++n) acc = acc || endsWith(e.name, "ACC Temp Sensor" + std::to_string(n));
+        for (int n = 0; n < 4; ++n)
+            acc = acc || endsWith(e.name, "ACC Temp Sensor" + std::to_string(n));
         if (acc) {
             EXPECT_EQ(e.source, kSocCpu[e.name.back() - '0']);  // core n's own tsensor
         } else if (e.name.find("PMGR SOC Die Temp Sensor") != std::string::npos) {
@@ -200,9 +212,11 @@ TEST(SwitchThermalSensors, EveryValueIsTheNearestMeasurement)
     for (const Entry &e : sensors())
         if (e.fourcc.rfind("Th", 0) == 0 || e.fourcc.rfind("Tc", 0) == 0)
             groups[e.fourcc.substr(0, 3)].insert(e.source);
-    for (const auto &[group, points] : groups) EXPECT_EQ(points.size(), 1u) << group;
+    for (const auto &[group, points] : groups)
+        EXPECT_EQ(points.size(), 1u) << group;
     // Each of the six SOC_THERM sensors and both TMP451 channels feed something.
-    for (int s = 0; s < 10; ++s) EXPECT_TRUE(sources.count(s)) << "source " << s;
+    for (int s = 0; s < 10; ++s)
+        EXPECT_TRUE(sources.count(s)) << "source " << s;
 }
 
 TEST(SwitchThermalSensors, CltmUnits)
@@ -221,7 +235,8 @@ TEST(SwitchThermalSensors, CltmUnits)
     EXPECT_TRUE(cltm_valid(0));
     // Whatever the kernel hands over passes it.
     for (int milli = -39999; milli < 150000; milli += 37)
-        if (plausible(milli)) EXPECT_TRUE(cltm_valid(cltm_centi(fixed_of(milli)))) << milli;
+        if (plausible(milli))
+            EXPECT_TRUE(cltm_valid(cltm_centi(fixed_of(milli)))) << milli;
     EXPECT_FALSE(plausible(-40000));
     EXPECT_FALSE(plausible(150000));
 }
@@ -297,7 +312,8 @@ TEST(SwitchThermalSensors, FuseCalibrationMatchesL4t)
 TEST(SwitchThermalSensors, CltmCeiling)
 {
     std::vector<std::string> keys;
-    for (unsigned i = 0; i < 4; ++i) keys.emplace_back(cltm_key(i));
+    for (unsigned i = 0; i < 4; ++i)
+        keys.emplace_back(cltm_key(i));
     EXPECT_EQ(keys, kCltmKeys);
     EXPECT_EQ(cltm_ceiling(0x10000, 0x10000, 0x10000, 0x10000), 0x10000u);
     EXPECT_EQ(cltm_ceiling(0x10000, 24248, 0x10000, 0x10000), 24248u);
@@ -306,7 +322,9 @@ TEST(SwitchThermalSensors, CltmCeiling)
     const std::vector<uint32_t> khz = {918000, 1020000, 1122000, 1224000, 1326000, 1428000, 1581000, 1683000, 1785000};
     const unsigned top = (unsigned)khz.size() - 1;
     // MitigationController scaleToFixedPoint
-    const auto fraction = [](uint32_t percent) { return percent < 100 ? percent * 65536 / 100 : 0x10000u; };
+    const auto fraction = [](uint32_t percent) {
+        return percent < 100 ? percent * 65536 / 100 : 0x10000u;
+    };
     const auto index = [&](uint32_t percent) {
         return index_at_fraction(khz.data(), (unsigned)khz.size(), fraction(percent));
     };

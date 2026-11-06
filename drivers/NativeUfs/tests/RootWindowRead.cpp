@@ -11,6 +11,7 @@ using IOReturn = uint32_t;
 constexpr IOReturn kIOReturnSuccess = 0, kIOReturnBadArgument = 1, kIOReturnIOError = 2, kIOReturnNotPrivileged = 3;
 constexpr uint64_t kDataMax = 131072;
 #include "../RootWindowRead.h"
+
 struct Shared {
     std::mutex window, control;
     std::condition_variable changed;
@@ -18,16 +19,20 @@ struct Shared {
     bool concurrent = false;
     uint8_t bounce[kDataMax];
 };
+
 struct Ops {
     Shared &shared;
     std::vector<uint8_t> disk, output;
     bool held = false, parked = false;
     unsigned reads = 0, copies = 0, checks = 0, badRead = 0, badVerify = 0;
     uint64_t shortCopy = UINT64_MAX;
+
     Ops(Shared &s, unsigned blocks = 70) : shared(s), disk(blocks * 4096), output(disk.size(), 0xa5)
     {
-        for (size_t i = 0; i < disk.size(); ++i) disk[i] = uint8_t(i * 17 + i / 4096);
+        for (size_t i = 0; i < disk.size(); ++i)
+            disk[i] = uint8_t(i * 17 + i / 4096);
     }
+
     void lock()
     {
         {
@@ -38,21 +43,25 @@ struct Ops {
         shared.window.lock();
         held = true;
     }
+
     void unlock()
     {
         assert(held);
         held = false;
         shared.window.unlock();
     }
+
     IOReturn read(uint64_t lba, uint32_t blocks, void *out)
     {
         assert(held && blocks <= 32);
         ++reads;
-        if (reads == badRead) return kIOReturnIOError;
+        if (reads == badRead)
+            return kIOReturnIOError;
         assert(lba * 4096 + blocks * 4096 <= disk.size());
         memcpy(out, disk.data() + lba * 4096, blocks * 4096);
         return 0;
     }
+
     IOReturn verify(uint64_t index, const void *data, size_t bytes)
     {
         assert(held);
@@ -60,13 +69,17 @@ struct Ops {
         if (shared.concurrent && !parked) {
             parked = true;
             std::unique_lock<std::mutex> guard(shared.control);
-            shared.changed.wait(guard, [&] { return shared.attempts >= 2; });
+            shared.changed.wait(guard, [&] {
+                return shared.attempts >= 2;
+            });
         }
-        if (checks == badVerify) return kIOReturnNotPrivileged;
+        if (checks == badVerify)
+            return kIOReturnNotPrivileged;
         assert(index * 4096 + bytes <= disk.size());
         assert(!memcmp(data, disk.data() + index * 4096, bytes));
         return 0;
     }
+
     uint64_t copy(uint64_t offset, const void *data, uint64_t bytes)
     {
         assert(held);
@@ -77,6 +90,7 @@ struct Ops {
         return n;
     }
 };
+
 int main()
 {
     Shared s;
@@ -135,12 +149,18 @@ int main()
     s.concurrent = true;
     Ops first(s), second(s);
     UfsWindowResult a{}, b{};
-    std::thread one([&] { a = ufsReadWindow(first, 0, first.disk.size(), 0, 8, s.bounce); });
+    std::thread one([&] {
+        a = ufsReadWindow(first, 0, first.disk.size(), 0, 8, s.bounce);
+    });
     {
         std::unique_lock<std::mutex> guard(s.control);
-        s.changed.wait(guard, [&] { return s.attempts == 1; });
+        s.changed.wait(guard, [&] {
+            return s.attempts == 1;
+        });
     }
-    std::thread two([&] { b = ufsReadWindow(second, 0, second.disk.size(), 8, 8, s.bounce); });
+    std::thread two([&] {
+        b = ufsReadWindow(second, 0, second.disk.size(), 8, 8, s.bounce);
+    });
     one.join();
     two.join();
     assert(a.status == 0 && b.status == 0);

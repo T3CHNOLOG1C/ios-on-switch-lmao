@@ -25,24 +25,37 @@ struct Frame {
     uint32_t width, height;
 };
 
-enum Result { kOk = 0, kBadFrame, kBadScanout, kNoResource, kGpuFailed };
+enum Result {
+    kOk = 0,
+    kBadFrame,
+    kBadScanout,
+    kNoResource,
+    kGpuFailed
+};
 
 class Presenter {
 public:
     Presenter(id<MTLDevice> device, const Scanout &scanout) : device_(device), scanout_(scanout)
     {
         queue_ = [device newCommandQueue];
-        if (!validScanout() || !queue_) return;
+        if (!validScanout() || !queue_)
+            return;
         target_ = [device newBufferWithBytesNoCopy:scanout.base
                                             length:scanout.bytes
                                            options:MTLResourceStorageModeShared
                                        deallocator:nil];
     }
-    bool ready() const { return target_ != nil; }
+
+    bool ready() const
+    {
+        return target_ != nil;
+    }
+
     // One frame: encodes the GPU copy, commits, waits for the GPU. Rows are copied as whole rows of width*4 bytes.
     Result present(const Frame &frame)
     {
-        if (!ready()) return kBadScanout;
+        if (!ready())
+            return kBadScanout;
         const size_t page = (size_t)getpagesize(), row = (size_t)frame.width * 4;
         if (!frame.base || ((uintptr_t)frame.base & (page - 1)) || !frame.bytes || (frame.bytes & (page - 1)) ||
             frame.width != scanout_.width || frame.height != scanout_.height || frame.stride < row ||
@@ -52,10 +65,12 @@ public:
                                                           length:frame.bytes
                                                          options:MTLResourceStorageModeShared
                                                      deallocator:nil];
-        if (!source) return kNoResource;
+        if (!source)
+            return kNoResource;
         id<MTLCommandBuffer> commands = [queue_ commandBuffer];
         id<MTLBlitCommandEncoder> blit = commands ? [commands blitCommandEncoder] : nil;
-        if (!blit) return kNoResource;
+        if (!blit)
+            return kNoResource;
         if (frame.stride == scanout_.stride) {
             // Equal pitch: the rows are one contiguous run.
             [blit copyFromBuffer:source
@@ -109,6 +124,7 @@ private:
                !(scanout_.bytes & (page - 1)) && scanout_.width && scanout_.height &&
                scanout_.stride >= (size_t)scanout_.width * 4 && scanout_.stride * scanout_.height <= scanout_.bytes;
     }
+
     id<MTLDevice> device_;
     Scanout scanout_;
     id<MTLCommandQueue> queue_;

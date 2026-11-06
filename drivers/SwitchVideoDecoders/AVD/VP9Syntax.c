@@ -26,7 +26,8 @@ static uint32_t rbBit(BitReader *r)  // zeros past the end (as libvpx), still co
 static uint32_t rbLiteral(BitReader *r, int bits)
 {
     uint32_t v = 0;
-    while (bits-- > 0) v = (v << 1) | rbBit(r);
+    while (bits-- > 0)
+        v = (v << 1) | rbBit(r);
     return v;
 }
 
@@ -65,7 +66,8 @@ static bool boolRead(BoolDecoder *d, uint32_t prob)
 static uint32_t boolLiteral(BoolDecoder *d, int bits)
 {
     uint32_t v = 0;
-    while (bits-- > 0) v = (v << 1) | boolRead(d, 128);
+    while (bits-- > 0)
+        v = (v << 1) | boolRead(d, 128);
     return v;
 }
 
@@ -80,7 +82,8 @@ static bool boolInit(BoolDecoder *d, const uint8_t *data, size_t size)
 // vp9_dsubexp.c
 static int invRecenterNonneg(int v, int m)
 {
-    if (v > 2 * m) return v;
+    if (v > 2 * m)
+        return v;
     return (v & 1) ? m - ((v + 1) >> 1) : m + (v >> 1);
 }
 
@@ -106,22 +109,27 @@ static int invRemapProb(int v, int m)
 
 static int decodeTermSubexp(BoolDecoder *d)
 {
-    if (!boolRead(d, 128)) return (int)boolLiteral(d, 4);
-    if (!boolRead(d, 128)) return (int)boolLiteral(d, 4) + 16;
-    if (!boolRead(d, 128)) return (int)boolLiteral(d, 5) + 32;
+    if (!boolRead(d, 128))
+        return (int)boolLiteral(d, 4);
+    if (!boolRead(d, 128))
+        return (int)boolLiteral(d, 4) + 16;
+    if (!boolRead(d, 128))
+        return (int)boolLiteral(d, 5) + 32;
     const int v = (int)boolLiteral(d, 7);  // decode_uniform: l = 8, m = 65
     return (v < 65 ? v : (v << 1) - 65 + (int)boolRead(d, 128)) + 64;
 }
 
 static void diffUpdate(BoolDecoder *d, uint8_t *p)
 {
-    if (boolRead(d, 252)) *p = (uint8_t)invRemapProb(decodeTermSubexp(d), *p);  // DIFF_UPDATE_PROB
+    if (boolRead(d, 252))
+        *p = (uint8_t)invRemapProb(decodeTermSubexp(d), *p);  // DIFF_UPDATE_PROB
 }
 
 static void mvUpdate(BoolDecoder *d, uint8_t *p, int n)
 {
     for (int i = 0; i < n; i++)
-        if (boolRead(d, 252)) p[i] = (uint8_t)((boolLiteral(d, 7) << 1) | 1);  // MV_UPDATE_PROB
+        if (boolRead(d, 252))
+            p[i] = (uint8_t)((boolLiteral(d, 7) << 1) | 1);  // MV_UPDATE_PROB
 }
 
 // ---- Superframes (VP9 bitstream spec Annex B) ----------------------------------------------------------------------
@@ -130,18 +138,23 @@ unsigned vp9_superframe_split(const uint8_t *data, size_t size, size_t offsets[8
 {
     offsets[0] = 0;
     sizes[0] = size;
-    if (!size) return 0;
+    if (!size)
+        return 0;
     const uint8_t marker = data[size - 1];
-    if ((marker & 0xe0) != 0xc0) return 1;
+    if ((marker & 0xe0) != 0xc0)
+        return 1;
     const unsigned frames = (marker & 7) + 1, mag = ((marker >> 3) & 3) + 1;
     const size_t index = 2 + (size_t)mag * frames;
-    if (size < index || data[size - index] != marker) return 1;
+    if (size < index || data[size - index] != marker)
+        return 1;
     const uint8_t *p = data + size - index + 1;
     size_t at = 0;
     for (unsigned i = 0; i < frames; i++) {
         size_t n = 0;
-        for (unsigned b = 0; b < mag; b++) n |= (size_t)*p++ << (8 * b);
-        if (n > size - index - at) return 0;
+        for (unsigned b = 0; b < mag; b++)
+            n |= (size_t)*p++ << (8 * b);
+        if (n > size - index - at)
+            return 0;
         offsets[i] = at;
         sizes[i] = n;
         at += n;
@@ -161,7 +174,8 @@ static bool colorConfig(BitReader *r, VP9FrameHeader *h)
 {
     h->bit_depth = 8;
     h->color_space = (uint8_t)rbLiteral(r, 3);
-    if (h->color_space == 7) return false;  // VPX_CS_SRGB
+    if (h->color_space == 7)
+        return false;  // VPX_CS_SRGB
     h->full_range = rbBit(r);
     h->subsampled = true;
     return true;
@@ -195,7 +209,8 @@ static void setupPastIndependence(VP9State *s, VP9FrameHeader *h)
     VP9FrameContext defaults;
     vp9_default_frame_context(&defaults);
     if (h->key_frame || h->error_resilient || h->reset_frame_context == 3) {
-        for (int i = 0; i < 4; i++) s->contexts[i] = defaults;
+        for (int i = 0; i < 4; i++)
+            s->contexts[i] = defaults;
         s->contexts_valid = true;
     } else if (h->reset_frame_context == 2) {
         s->contexts[h->frame_context_idx] = defaults;
@@ -208,24 +223,31 @@ static void tileInfo(BitReader *r, VP9FrameHeader *h)
 {
     const int sb64Cols = (((h->width + 7) >> 3) + 7) >> 3;  // mi_cols_aligned_to_sb >> MI_BLOCK_SIZE_LOG2
     int minLog2 = 0, maxLog2 = 1;
-    while ((64 << minLog2) < sb64Cols) minLog2++;  // MAX_TILE_WIDTH_B64
-    while ((sb64Cols >> maxLog2) >= 4) maxLog2++;  // MIN_TILE_WIDTH_B64
+    while ((64 << minLog2) < sb64Cols)
+        minLog2++;  // MAX_TILE_WIDTH_B64
+    while ((sb64Cols >> maxLog2) >= 4)
+        maxLog2++;  // MIN_TILE_WIDTH_B64
     maxLog2--;
     int ones = maxLog2 - minLog2;
     h->log2_tile_cols = (uint8_t)minLog2;
-    while (ones-- > 0 && rbBit(r)) h->log2_tile_cols++;
+    while (ones-- > 0 && rbBit(r))
+        h->log2_tile_cols++;
     h->log2_tile_rows = (uint8_t)rbBit(r);
-    if (h->log2_tile_rows) h->log2_tile_rows += (uint8_t)rbBit(r);
+    if (h->log2_tile_rows)
+        h->log2_tile_rows += (uint8_t)rbBit(r);
 }
 
 int vp9_parse_uncompressed(VP9State *s, const uint8_t *data, size_t size, VP9FrameHeader *h)
 {
     BitReader r = {data, size, 0, false};
     memset(h, 0, sizeof(*h));
-    if (rbLiteral(&r, 2) != 2) return -1;  // frame marker
+    if (rbLiteral(&r, 2) != 2)
+        return -1;  // frame marker
     h->profile = (uint8_t)(rbBit(&r) | rbBit(&r) << 1);
-    if (h->profile > 2) h->profile += (uint8_t)rbBit(&r);
-    if (h->profile) return -1;  // NVDEC on T210 decodes profile 0 (8-bit 4:2:0)
+    if (h->profile > 2)
+        h->profile += (uint8_t)rbBit(&r);
+    if (h->profile)
+        return -1;  // NVDEC on T210 decodes profile 0 (8-bit 4:2:0)
     h->show_existing_frame = rbBit(&r);
     if (h->show_existing_frame) {
         h->frame_to_show = (uint8_t)rbLiteral(&r, 3);
@@ -237,7 +259,8 @@ int vp9_parse_uncompressed(VP9State *s, const uint8_t *data, size_t size, VP9Fra
     h->show_frame = rbBit(&r);
     h->error_resilient = rbBit(&r);
     if (h->key_frame) {
-        if (!syncCode(&r) || !colorConfig(&r, h)) return -1;
+        if (!syncCode(&r) || !colorConfig(&r, h))
+            return -1;
         h->refresh_frame_flags = 0xff;
         frameSize(&r, h);
         renderSize(&r, h);
@@ -245,7 +268,8 @@ int vp9_parse_uncompressed(VP9State *s, const uint8_t *data, size_t size, VP9Fra
         h->intra_only = h->show_frame ? false : rbBit(&r);
         h->reset_frame_context = h->error_resilient ? 0 : (uint8_t)rbLiteral(&r, 2);
         if (h->intra_only) {
-            if (!syncCode(&r)) return -1;
+            if (!syncCode(&r))
+                return -1;
             h->bit_depth = 8;  // profile 0 intra-only frames are BT.601 studio-range 4:2:0 (normative)
             h->color_space = 2;
             h->subsampled = true;
@@ -253,12 +277,14 @@ int vp9_parse_uncompressed(VP9State *s, const uint8_t *data, size_t size, VP9Fra
             frameSize(&r, h);
             renderSize(&r, h);
         } else {
-            if (!s->contexts_valid) return -1;  // an inter frame before any key frame
+            if (!s->contexts_valid)
+                return -1;  // an inter frame before any key frame
             h->refresh_frame_flags = (uint8_t)rbLiteral(&r, 8);
             for (int i = 0; i < 3; i++) {
                 h->ref_idx[i] = (uint8_t)rbLiteral(&r, 3);
                 h->sign_bias[1 + i] = rbBit(&r);
-                if (!s->ref_width[h->ref_idx[i]]) return -1;
+                if (!s->ref_width[h->ref_idx[i]])
+                    return -1;
             }
             bool found = false;
             for (int i = 0; i < 3 && !found; i++) {
@@ -268,7 +294,8 @@ int vp9_parse_uncompressed(VP9State *s, const uint8_t *data, size_t size, VP9Fra
                     found = true;
                 }
             }
-            if (!found) frameSize(&r, h);
+            if (!found)
+                frameSize(&r, h);
             renderSize(&r, h);
             h->allow_high_precision_mv = rbBit(&r);
             static const uint8_t kLiteralToFilter[4] = {VP9_FILTER_SMOOTH, VP9_FILTER_EIGHTTAP, VP9_FILTER_SHARP,
@@ -276,7 +303,8 @@ int vp9_parse_uncompressed(VP9State *s, const uint8_t *data, size_t size, VP9Fra
             h->interp_filter = rbBit(&r) ? VP9_FILTER_SWITCHABLE : kLiteralToFilter[rbLiteral(&r, 2)];
         }
     }
-    if (h->width > 4096 || h->height > 4096) return -1;
+    if (h->width > 4096 || h->height > 4096)
+        return -1;
     if (!h->error_resilient) {
         h->refresh_frame_context = rbBit(&r);
         h->frame_parallel = rbBit(&r);
@@ -285,8 +313,10 @@ int vp9_parse_uncompressed(VP9State *s, const uint8_t *data, size_t size, VP9Fra
         h->frame_parallel = true;
     }
     h->frame_context_idx = (uint8_t)rbLiteral(&r, 2);
-    if (h->key_frame || h->intra_only || h->error_resilient) setupPastIndependence(s, h);
-    if (!s->contexts_valid) return -1;  // an intra-only frame that did not reset them, before any key frame
+    if (h->key_frame || h->intra_only || h->error_resilient)
+        setupPastIndependence(s, h);
+    if (!s->contexts_valid)
+        return -1;  // an intra-only frame that did not reset them, before any key frame
 
     // setup_loopfilter
     h->lf_level = (uint8_t)rbLiteral(&r, 6);
@@ -296,9 +326,11 @@ int vp9_parse_uncompressed(VP9State *s, const uint8_t *data, size_t size, VP9Fra
         h->lf_delta_update = rbBit(&r);
         if (h->lf_delta_update) {
             for (int i = 0; i < 4; i++)
-                if (rbBit(&r)) s->ref_deltas[i] = (int8_t)rbSigned(&r, 6);
+                if (rbBit(&r))
+                    s->ref_deltas[i] = (int8_t)rbSigned(&r, 6);
             for (int i = 0; i < 2; i++)
-                if (rbBit(&r)) s->mode_deltas[i] = (int8_t)rbSigned(&r, 6);
+                if (rbBit(&r))
+                    s->mode_deltas[i] = (int8_t)rbSigned(&r, 6);
         }
     }
     // setup_quantization
@@ -313,7 +345,8 @@ int vp9_parse_uncompressed(VP9State *s, const uint8_t *data, size_t size, VP9Fra
     if (s->seg.enabled) {
         s->seg.update_map = rbBit(&r);
         if (s->seg.update_map) {
-            for (int i = 0; i < 7; i++) s->seg.tree_probs[i] = (uint8_t)(rbBit(&r) ? rbLiteral(&r, 8) : 255);
+            for (int i = 0; i < 7; i++)
+                s->seg.tree_probs[i] = (uint8_t)(rbBit(&r) ? rbLiteral(&r, 8) : 255);
             s->seg.temporal_update = rbBit(&r);
             for (int i = 0; i < 3; i++)
                 s->seg.pred_probs[i] = (uint8_t)(s->seg.temporal_update && rbBit(&r) ? rbLiteral(&r, 8) : 255);
@@ -332,8 +365,10 @@ int vp9_parse_uncompressed(VP9State *s, const uint8_t *data, size_t size, VP9Fra
                     int data = 0;
                     if ((s->seg.feature_enabled[i][j] = rbBit(&r))) {
                         data = (int)rbLiteral(&r, kBits[j]);
-                        if (data > kMax[j]) data = kMax[j];
-                        if (kSigned[j] && rbBit(&r)) data = -data;
+                        if (data > kMax[j])
+                            data = kMax[j];
+                        if (kSigned[j] && rbBit(&r))
+                            data = -data;
                     }
                     s->seg.feature_data[i][j] = (int16_t)data;
                 }
@@ -343,10 +378,12 @@ int vp9_parse_uncompressed(VP9State *s, const uint8_t *data, size_t size, VP9Fra
         s->seg.temporal_update = false;
     }
     tileInfo(&r, h);
-    if (h->log2_tile_cols > 6) return -1;
+    if (h->log2_tile_cols > 6)
+        return -1;
     h->compressed_bytes = rbLiteral(&r, 16);
     h->uncompressed_bytes = (r.bit + 7) >> 3;
-    if (r.overrun || !h->compressed_bytes || h->compressed_bytes > size - h->uncompressed_bytes) return -1;
+    if (r.overrun || !h->compressed_bytes || h->compressed_bytes > size - h->uncompressed_bytes)
+        return -1;
     return 0;
 }
 
@@ -355,38 +392,49 @@ int vp9_parse_uncompressed(VP9State *s, const uint8_t *data, size_t size, VP9Fra
 int vp9_parse_compressed(VP9FrameHeader *h, const uint8_t *data, size_t size, VP9FrameContext *fc)
 {
     BoolDecoder d;
-    if (!boolInit(&d, data, size)) return -1;
+    if (!boolInit(&d, data, size))
+        return -1;
     if (h->lossless) {
         h->tx_mode = VP9_TX_ONLY_4X4;
     } else {
         h->tx_mode = (uint8_t)boolLiteral(&d, 2);
-        if (h->tx_mode == VP9_TX_ALLOW_32X32) h->tx_mode += (uint8_t)boolRead(&d, 128);
+        if (h->tx_mode == VP9_TX_ALLOW_32X32)
+            h->tx_mode += (uint8_t)boolRead(&d, 128);
     }
     if (h->tx_mode == VP9_TX_MODE_SELECT) {
-        for (int i = 0; i < 2; i++) diffUpdate(&d, &fc->tx.p8x8[i][0]);
         for (int i = 0; i < 2; i++)
-            for (int j = 0; j < 2; j++) diffUpdate(&d, &fc->tx.p16x16[i][j]);
+            diffUpdate(&d, &fc->tx.p8x8[i][0]);
         for (int i = 0; i < 2; i++)
-            for (int j = 0; j < 3; j++) diffUpdate(&d, &fc->tx.p32x32[i][j]);
+            for (int j = 0; j < 2; j++)
+                diffUpdate(&d, &fc->tx.p16x16[i][j]);
+        for (int i = 0; i < 2; i++)
+            for (int j = 0; j < 3; j++)
+                diffUpdate(&d, &fc->tx.p32x32[i][j]);
     }
     static const int kBiggestTx[5] = {0, 1, 2, 3, 3};
     for (int t = 0; t <= kBiggestTx[h->tx_mode]; t++) {
-        if (!boolRead(&d, 128)) continue;
+        if (!boolRead(&d, 128))
+            continue;
         for (int i = 0; i < 2; i++)
             for (int j = 0; j < 2; j++)
                 for (int k = 0; k < 6; k++)
                     for (int l = 0; l < (k ? 6 : 3); l++)
-                        for (int m = 0; m < 3; m++) diffUpdate(&d, &fc->coef_probs[t][i][j][k][l][m]);
+                        for (int m = 0; m < 3; m++)
+                            diffUpdate(&d, &fc->coef_probs[t][i][j][k][l][m]);
     }
-    for (int k = 0; k < 3; k++) diffUpdate(&d, &fc->skip_probs[k]);
+    for (int k = 0; k < 3; k++)
+        diffUpdate(&d, &fc->skip_probs[k]);
     h->reference_mode = VP9_REFERENCE_SINGLE;
     if (!h->key_frame && !h->intra_only) {
         for (int i = 0; i < 7; i++)
-            for (int j = 0; j < 3; j++) diffUpdate(&d, &fc->inter_mode_probs[i][j]);
+            for (int j = 0; j < 3; j++)
+                diffUpdate(&d, &fc->inter_mode_probs[i][j]);
         if (h->interp_filter == VP9_FILTER_SWITCHABLE)
             for (int j = 0; j < 4; j++)
-                for (int i = 0; i < 2; i++) diffUpdate(&d, &fc->switchable_interp_prob[j][i]);
-        for (int i = 0; i < 4; i++) diffUpdate(&d, &fc->intra_inter_prob[i]);
+                for (int i = 0; i < 2; i++)
+                    diffUpdate(&d, &fc->switchable_interp_prob[j][i]);
+        for (int i = 0; i < 4; i++)
+            diffUpdate(&d, &fc->intra_inter_prob[i]);
         // vp9_compound_reference_allowed / read_frame_reference_mode / vp9_setup_compound_reference_mode
         h->compound_allowed = h->sign_bias[2] != h->sign_bias[1] || h->sign_bias[3] != h->sign_bias[1];
         if (h->compound_allowed && boolRead(&d, 128))
@@ -401,18 +449,22 @@ int vp9_parse_compressed(VP9FrameHeader *h, const uint8_t *data, size_t size, VP
             }
         }
         if (h->reference_mode == VP9_REFERENCE_SELECT)
-            for (int i = 0; i < 5; i++) diffUpdate(&d, &fc->comp_inter_prob[i]);
+            for (int i = 0; i < 5; i++)
+                diffUpdate(&d, &fc->comp_inter_prob[i]);
         if (h->reference_mode != VP9_REFERENCE_COMPOUND)
             for (int i = 0; i < 5; i++) {
                 diffUpdate(&d, &fc->single_ref_prob[i][0]);
                 diffUpdate(&d, &fc->single_ref_prob[i][1]);
             }
         if (h->reference_mode != VP9_REFERENCE_SINGLE)
-            for (int i = 0; i < 5; i++) diffUpdate(&d, &fc->comp_ref_prob[i]);
+            for (int i = 0; i < 5; i++)
+                diffUpdate(&d, &fc->comp_ref_prob[i]);
         for (int j = 0; j < 4; j++)
-            for (int i = 0; i < 9; i++) diffUpdate(&d, &fc->y_mode_prob[j][i]);
+            for (int i = 0; i < 9; i++)
+                diffUpdate(&d, &fc->y_mode_prob[j][i]);
         for (int j = 0; j < 16; j++)
-            for (int i = 0; i < 3; i++) diffUpdate(&d, &fc->partition_prob[j][i]);
+            for (int i = 0; i < 3; i++)
+                diffUpdate(&d, &fc->partition_prob[j][i]);
         // read_mv_probs
         mvUpdate(&d, fc->nmvc.joints, 3);
         for (int i = 0; i < 2; i++) {
@@ -424,7 +476,8 @@ int vp9_parse_compressed(VP9FrameHeader *h, const uint8_t *data, size_t size, VP
         }
         for (int i = 0; i < 2; i++) {
             VP9MVComponent *c = &fc->nmvc.comps[i];
-            for (int j = 0; j < 2; j++) mvUpdate(&d, c->class0_fp[j], 3);
+            for (int j = 0; j < 2; j++)
+                mvUpdate(&d, c->class0_fp[j], 3);
             mvUpdate(&d, c->fp, 3);
         }
         if (h->allow_high_precision_mv)

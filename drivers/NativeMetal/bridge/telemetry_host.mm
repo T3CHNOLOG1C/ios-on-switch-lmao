@@ -9,10 +9,12 @@
 
 int main(int argc, char **argv)
 {
-    if (argc != 3) return 2;
+    if (argc != 3)
+        return 2;
     @autoreleasepool {
         id<MTLDevice> device = native_bridge_metal_open(argv[1], argv[2], 0x6e6d62, nullptr);
-        if (!device) return 2;
+        if (!device)
+            return 2;
         size_t length = 0;
         const void *air = nmb_fixture_air(&length);
         id<MTLLibrary> library = native_bridge_metal_library_with_air(air, length);
@@ -29,7 +31,8 @@ int main(int argc, char **argv)
         id<MTLBuffer> buffer = [device newBufferWithLength:256 options:MTLResourceStorageModeShared];
         id<MTLCommandBuffer> render = [[device newCommandQueue] commandBuffer];
         id<MTLCommandBuffer> copy = [[device newCommandQueue] commandBuffer];
-        if (!library || !pipeline || !texture || !buffer || !render || !copy) return 2;
+        if (!library || !pipeline || !texture || !buffer || !render || !copy)
+            return 2;
         frontendchecks::drawQuad(render, pipeline, texture, nil, frontendchecks::kQuarter, 6);
         for (unsigned i = 0; i < 3; ++i) {
             id<MTLBlitCommandEncoder> blit = [copy blitCommandEncoder];
@@ -39,7 +42,8 @@ int main(int argc, char **argv)
         frontendchecks::drawQuad(render, pipeline, texture, nil, frontendchecks::kQuarter, 6);
         [copy commit];
         [render commit];
-        if (!frontendchecks::completed(copy, "blit") || !frontendchecks::completed(render, "render")) return 1;
+        if (!frontendchecks::completed(copy, "blit") || !frontendchecks::completed(render, "render"))
+            return 1;
         char text[4608] = {};
         native_bridge_metal_telemetry(text, sizeof text);
         std::map<unsigned, std::pair<unsigned, unsigned>> counts;
@@ -61,9 +65,11 @@ int main(int argc, char **argv)
         }
         uint8_t pixels[16 * 16 * 4] = {};
         [texture getBytes:pixels bytesPerRow:64 fromRegion:MTLRegionMake2D(0, 0, 16, 16) mipmapLevel:0];
-        if (frontendchecks::wrongTexels(pixels, 64, 16)) return 1;
+        if (frontendchecks::wrongTexels(pixels, 64, 16))
+            return 1;
         for (unsigned i = 0; i < 256; ++i)
-            if (((const uint8_t *)buffer.contents)[i] != 0x5a) return 1;
+            if (((const uint8_t *)buffer.contents)[i] != 0x5a)
+                return 1;
         std::puts(
             "PASS: opposite encode/commit orders retain per-buffer render/blit counts and correct host GPU pixels");
     }

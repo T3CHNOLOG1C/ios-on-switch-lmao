@@ -21,10 +21,12 @@ static uint32_t inc(uint32_t subc, uint32_t mthd, uint32_t count)
 {
 	return (1u << 29) | (count << 16) | (subc << 13) | (mthd >> 2);
 }
+
 static uint32_t one_inc(uint32_t subc, uint32_t mthd, uint32_t count)
 {
 	return (5u << 29) | (count << 16) | (subc << 13) | (mthd >> 2);
 }
+
 static uint32_t immd(uint32_t subc, uint32_t mthd, uint32_t data)
 {
 	return (4u << 29) | (data << 16) | (subc << 13) | (mthd >> 2);
@@ -79,6 +81,7 @@ static Result scan(const std::vector<const Push *> &pushes)
 
 struct CoreAnimation {
 	Push p0, p1, p2, p3, p4, p5;
+
 	CoreAnimation()
 	{
 		prologue(p0);

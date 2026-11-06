@@ -24,6 +24,7 @@
 
 // Every check is a GoogleTest failure at its call site.
 #define check(ok, what) EXPECT_TRUE(ok) << (what)
+
 static std::string hex(unsigned v)
 {
     char text[8];
@@ -36,18 +37,34 @@ struct Chip {
     std::vector<std::string> ops;     // "R 75", "R 0b x12", "W 02 10"
     std::vector<std::string> errors;  // broken datasheet rules
     virtual ~Chip() = default;
-    virtual void access() {}
+
+    virtual void access()
+    {}
+
     virtual uint8_t read(uint8_t reg) = 0;  // one byte of a read, with its side effects
     virtual void write(uint8_t reg, uint8_t value) = 0;
-    virtual bool stays(uint8_t) const { return false; }  // a burst read that does not advance (FIFO_DATA)
-    virtual void endTransfer() {}                        // chip select released
-    virtual bool line() const = 0;                       // INT2, which drives PX2
+
+    virtual bool stays(uint8_t) const
+    {
+        return false;
+    }  // a burst read that does not advance (FIFO_DATA)
+
+    virtual void endTransfer()
+    {}  // chip select released
+
+    virtual bool line() const = 0;                                            // INT2, which drives PX2
     virtual void produce(const int16_t accel[3], const int16_t gyro[3]) = 0;  // the next output data rate tick
-    void fail(const std::string &why) { errors.push_back(why); }
+
+    void fail(const std::string &why)
+    {
+        errors.push_back(why);
+    }
 };
+
 static Chip *gChip;
 
 static const int16_t kNoData[3] = {-32768, -32768, -32768};  // what a sensor that is off reads
+
 static void storeBigEndian(uint8_t *r, const int16_t v[3])
 {
     for (unsigned i = 0; i < 3; ++i) {
@@ -69,7 +86,12 @@ struct Icm42607 : Chip {
     std::deque<std::array<uint8_t, 16>> fifo;
     unsigned fifoByte = 0;  // bytes of the front record read in this transfer
     uint16_t tick = 0;
-    explicit Icm42607(uint8_t whoAmI = 0x60) : who(whoAmI) { resetValues(); }
+
+    explicit Icm42607(uint8_t whoAmI = 0x60) : who(whoAmI)
+    {
+        resetValues();
+    }
+
     void resetValues()
     {
         memset(r, 0, sizeof(r));
@@ -77,37 +99,59 @@ struct Icm42607 : Chip {
                                     {0x09, 0x80}, {0x20, 0x06}, {0x21, 0x06}, {0x23, 0x31}, {0x24, 0x41},
                                     {0x25, 0x08}, {0x26, 0x02}, {0x28, 0x01}, {0x2b, 0x10}, {0x34, 0x04},
                                     {0x35, 0x30}, {0x36, 0x4d}, {0x3a, 0x10}, {0x3f, 0xff}};
-        for (const auto &v : reset) r[v[0]] = v[1];
-        for (uint8_t a = 0x0b; a <= 0x16; a += 2) r[a] = 0x80;  // -32768: no data
+        for (const auto &v : reset)
+            r[v[0]] = v[1];
+        for (uint8_t a = 0x0b; a <= 0x16; a += 2)
+            r[a] = 0x80;  // -32768: no data
         r[0x75] = who;
         memset(mreg1, 0, sizeof(mreg1));
         mreg1[0x01] = 0x20;  // FIFO_CONFIG5: FIFO_WM_GT_TH
         fifo.clear();
         fifoByte = 0;
     }
-    unsigned watermark() const { return r[0x29] | (r[0x2a] & 0x0f) << 8; }
-    unsigned countValue() const { return (r[0x35] & 0x40) ? (unsigned)fifo.size() : (unsigned)fifo.size() * 16; }
-    bool stays(uint8_t reg) const override { return reg == 0x3f; }
+
+    unsigned watermark() const
+    {
+        return r[0x29] | (r[0x2a] & 0x0f) << 8;
+    }
+
+    unsigned countValue() const
+    {
+        return (r[0x35] & 0x40) ? (unsigned)fifo.size() : (unsigned)fifo.size() * 16;
+    }
+
+    bool stays(uint8_t reg) const override
+    {
+        return reg == 0x3f;
+    }
+
     void endTransfer() override
     {
-        if (fifoByte) fail("a transfer ended inside a FIFO record");
+        if (fifoByte)
+            fail("a transfer ended inside a FIFO record");
         fifoByte = 0;
     }
+
     static bool writable(uint8_t reg)
     {
         return (reg >= 0x01 && reg <= 0x06) || (reg >= 0x1f && reg <= 0x2e) || reg == 0x35 || reg == 0x36 ||
                (reg >= 0x79 && reg <= 0x7e);
     }
+
     static bool listed(uint8_t reg)
     {
         return writable(reg) || reg == 0x00 || (reg >= 0x09 && reg <= 0x18) || reg == 0x1d || reg == 0x1e ||
                (reg >= 0x2f && reg <= 0x34) || (reg >= 0x39 && reg <= 0x3f) || reg == 0x75;
     }
+
     void access() override
     {
-        if (gNow < accessFrom) fail("access within 1 ms of the soft reset");
-        if (gNow < mregFrom) fail("access within 10 us of an MREG access");
+        if (gNow < accessFrom)
+            fail("access within 1 ms of the soft reset");
+        if (gNow < mregFrom)
+            fail("access within 10 us of an MREG access");
     }
+
     uint8_t read(uint8_t reg) override
     {
         if (reg >= 0x80 || !listed(reg)) {
@@ -117,196 +161,277 @@ struct Icm42607 : Chip {
         if (reg == 0x3d || reg == 0x3e) {
             const unsigned count = countValue();
             const bool big = r[0x35] & 0x20;
-            if (countBroken) return 0xff;
+            if (countBroken)
+                return 0xff;
             return (uint8_t)((reg == 0x3d) == big ? count >> 8 : count);
         }
         if (reg == 0x3f) {
-            if (fifo.empty()) return 0x80;
+            if (fifo.empty())
+                return 0x80;
             const uint8_t value = fifo.front()[fifoByte++];
-            if (fifoByte == 16) fifo.pop_front(), fifoByte = 0;
+            if (fifoByte == 16)
+                fifo.pop_front(), fifoByte = 0;
             return value;
         }
         if (reg == 0x7e) {
-            if (!(r[0x00] & 0x08)) fail("M_R read without MCLK");
+            if (!(r[0x00] & 0x08))
+                fail("M_R read without MCLK");
             mregFrom = gNow + 10000;
             return mreg1[maddrR];
         }
         const uint8_t value = r[reg];
-        if (reg >= 0x39 && reg <= 0x3c) r[reg] = 0;  // INT_STATUS_DRDY .. INT_STATUS3: cleared by the read
+        if (reg >= 0x39 && reg <= 0x3c)
+            r[reg] = 0;  // INT_STATUS_DRDY .. INT_STATUS3: cleared by the read
         return value;
     }
+
     void write(uint8_t reg, uint8_t value) override
     {
-        if (reg >= 0x80 || !writable(reg)) return fail("write of " + hex(value) + " to read-only/unlisted " + hex(reg));
-        if (gNow < writesFrom) fail("write to " + hex(reg) + " within 200 us of a sensor leaving off");
+        if (reg >= 0x80 || !writable(reg))
+            return fail("write of " + hex(value) + " to read-only/unlisted " + hex(reg));
+        if (gNow < writesFrom)
+            fail("write to " + hex(reg) + " within 200 us of a sensor leaving off");
         switch (reg) {
         case 0x01:
-            if ((value & 0x05) != 0x04) fail("DEVICE_CONFIG " + hex(value) + ": not 4-wire SPI mode 0/3");
+            if ((value & 0x05) != 0x04)
+                fail("DEVICE_CONFIG " + hex(value) + ": not 4-wire SPI mode 0/3");
             r[reg] = value & 0x05;
             return;
         case 0x02:
             if (value & 0x10) {
                 resetValues();
-                if (resetBroken) r[0x3a] = 0;
+                if (resetBroken)
+                    r[0x3a] = 0;
                 accessFrom = gNow + 1000000;
             }
             return;
-        case 0x7a: maddrW = value; return;
+        case 0x7a:
+            maddrW = value;
+            return;
         case 0x7d:
             maddrR = value;
             mregFrom = gNow + 10000;
             return;
         case 0x7b:
-            if (!(r[0x00] & 0x08)) fail("M_W write without MCLK");
-            if (r[0x79]) fail("M_W with BLK_SEL_W not MREG1");
-            if (!mregBroken) mreg1[maddrW] = value;
+            if (!(r[0x00] & 0x08))
+                fail("M_W write without MCLK");
+            if (r[0x79])
+                fail("M_W with BLK_SEL_W not MREG1");
+            if (!mregBroken)
+                mreg1[maddrW] = value;
             mregFrom = gNow + 10000;
             return;
         case 0x28:
-            if (value & 1) fifo.clear(), fifoByte = 0;  // bypassed: empty
+            if (value & 1)
+                fifo.clear(), fifoByte = 0;  // bypassed: empty
             r[reg] = value;
             return;
         case 0x29:
         case 0x2a:
-            if (!fifo.empty()) fail("FIFO_WM written with records in the FIFO");
+            if (!fifo.empty())
+                fail("FIFO_WM written with records in the FIFO");
             r[reg] = value;
             return;
         case 0x1f: {
             const uint8_t old = r[0x1f];
-            if ((value & 0x0c) == 0x08 || (value & 0x60)) fail("PWR_MGMT0 " + hex(value) + ": reserved bits/mode");
+            if ((value & 0x0c) == 0x08 || (value & 0x60))
+                fail("PWR_MGMT0 " + hex(value) + ": reserved bits/mode");
             if (((old & 0x0c) == 0 && (value & 0x0c)) || ((old & 0x03) < 2 && (value & 0x03) >= 2)) {
                 writesFrom = gNow + 200000;
             }
-            if ((value & 0x03) < 2) storeBigEndian(r + 0x0b, kNoData);
-            if ((value & 0x0c) != 0x0c) storeBigEndian(r + 0x11, kNoData);
+            if ((value & 0x03) < 2)
+                storeBigEndian(r + 0x0b, kNoData);
+            if ((value & 0x0c) != 0x0c)
+                storeBigEndian(r + 0x11, kNoData);
             r[reg] = value;
             return;
         }
-        default: r[reg] = value;
+        default:
+            r[reg] = value;
         }
     }
+
     bool line() const override
     {
         const bool latched = (r[0x06] & 0x38) == 0x38;
         return stuck || ((r[0x2d] & 0x08) && (r[0x39] & 1) && latched) ||
                ((r[0x2d] & 0x04) && (r[0x3a] & 0x04) && latched);
     }
+
     void produce(const int16_t accel[3], const int16_t gyro[3]) override
     {
         const bool accelOn = (r[0x1f] & 0x03) == 0x03, gyroOn = (r[0x1f] & 0x0c) == 0x0c;
-        if (!accelOn && !gyroOn) return fail("a sample with both sensors off");
+        if (!accelOn && !gyroOn)
+            return fail("a sample with both sensors off");
         for (uint8_t config : {(uint8_t)0x20, (uint8_t)0x21}) {
             const unsigned code = r[config] & 0x0f;
-            if (code < 5 || code > 12) fail("ODR code " + hex(code) + " in " + hex(config) + " (low-noise: 5..12)");
+            if (code < 5 || code > 12)
+                fail("ODR code " + hex(code) + " in " + hex(config) + " (low-noise: 5..12)");
         }
-        if (accelOn) storeBigEndian(r + 0x0b, accel);
-        if (gyroOn) storeBigEndian(r + 0x11, gyro);
+        if (accelOn)
+            storeBigEndian(r + 0x0b, accel);
+        if (gyroOn)
+            storeBigEndian(r + 0x11, gyro);
         r[0x39] |= 1;
         const bool fifoAccel = accelOn && (mreg1[0x01] & 0x01), fifoGyro = gyroOn && (mreg1[0x01] & 0x02);
-        if ((r[0x28] & 1) || (!fifoAccel && !fifoGyro)) return;
+        if ((r[0x28] & 1) || (!fifoAccel && !fifoGyro))
+            return;
         std::array<uint8_t, 16> record = {};
         record[0] = (uint8_t)((fifoAccel ? 0x40 : 0) | (fifoGyro ? 0x20 : 0) | 0x08);
         storeBigEndian(record.data() + 1, fifoAccel ? accel : kNoData);
         storeBigEndian(record.data() + 7, fifoGyro ? gyro : kNoData);
         record[14] = (uint8_t)(tick >> 8), record[15] = (uint8_t)tick;
         tick = (uint16_t)(tick + 5000 / 16);
-        if (fifo.size() == 144) fifo.pop_front(), r[0x3a] |= 0x02;  // stream mode: the oldest goes, FIFO_FULL
+        if (fifo.size() == 144)
+            fifo.pop_front(), r[0x3a] |= 0x02;  // stream mode: the oldest goes, FIFO_FULL
         fifo.push_back(record);
-        if (watermark() && countValue() >= watermark() && (mreg1[0x01] & 0x20)) r[0x3a] |= 0x04;  // FIFO_THS
+        if (watermark() && countValue() >= watermark() && (mreg1[0x01] & 0x20))
+            r[0x3a] |= 0x04;  // FIFO_THS
     }
 };
 
 struct Icm40607 : Chip {
     uint8_t r[0x80] = {};
-    Icm40607() { resetValues(); }
+
+    Icm40607()
+    {
+        resetValues();
+    }
+
     void resetValues()
     {
         memset(r, 0, sizeof(r));
         const uint8_t reset[][2] = {{0x13, 0x05}, {0x2d, 0x10}, {0x4c, 0x30}, {0x4f, 0x06},
                                     {0x50, 0x06}, {0x64, 0x10}, {0x65, 0x10}, {0x75, 0x38}};
-        for (const auto &v : reset) r[v[0]] = v[1];
-        for (uint8_t a = 0x1f; a <= 0x2a; a += 2) r[a] = 0x80;
+        for (const auto &v : reset)
+            r[v[0]] = v[1];
+        for (uint8_t a = 0x1f; a <= 0x2a; a += 2)
+            r[a] = 0x80;
     }
+
     uint8_t read(uint8_t reg) override
     {
         const uint8_t value = r[reg & 0x7f];
-        if (reg == 0x2d) r[reg] = 0;  // INT_STATUS: cleared by the read
+        if (reg == 0x2d)
+            r[reg] = 0;  // INT_STATUS: cleared by the read
         return value;
     }
+
     void write(uint8_t reg, uint8_t value) override
     {
         const bool writable = reg == 0x11 || reg == 0x13 || reg == 0x14 || reg == 0x16 ||
                               (reg >= 0x4c && reg <= 0x50) || (reg >= 0x63 && reg <= 0x68) || reg == 0x76;
-        if (!writable) return fail("write of " + hex(value) + " to read-only/unlisted " + hex(reg));
-        if (reg == 0x11 && (value & 1)) return resetValues();
+        if (!writable)
+            return fail("write of " + hex(value) + " to read-only/unlisted " + hex(reg));
+        if (reg == 0x11 && (value & 1))
+            return resetValues();
         r[reg] = value;
     }
+
     bool line() const override
     {
         return (r[0x68] & 0x08) && (r[0x2d] & 0x08) && (r[0x14] & 0x38) == 0x38 && !(r[0x64] & 0x10);
     }
+
     void produce(const int16_t accel[3], const int16_t gyro[3]) override
     {
-        if ((r[0x4e] & 0x03) == 0x03) storeBigEndian(r + 0x1f, accel);
-        if ((r[0x4e] & 0x0c) == 0x0c) storeBigEndian(r + 0x25, gyro);
+        if ((r[0x4e] & 0x03) == 0x03)
+            storeBigEndian(r + 0x1f, accel);
+        if ((r[0x4e] & 0x0c) == 0x0c)
+            storeBigEndian(r + 0x25, gyro);
         r[0x2d] |= 0x08;
     }
 };
 
 struct Lsm6ds3h : Chip {
     uint8_t r[0x80] = {};
-    Lsm6ds3h() { resetValues(); }
+
+    Lsm6ds3h()
+    {
+        resetValues();
+    }
+
     void resetValues()
     {
         memset(r, 0, sizeof(r));
         r[0x0f] = 0x69;
         r[0x12] = 0x04;  // CTRL3_C: IF_INC
     }
+
     uint8_t read(uint8_t reg) override
     {
         const uint8_t value = r[reg & 0x7f];
-        if (reg == 0x27) r[0x1e] &= ~2;  // OUTZ_H_G read: GDA clears
-        if (reg == 0x2d) r[0x1e] &= ~1;  // OUTZ_H_XL read: XLDA clears
+        if (reg == 0x27)
+            r[0x1e] &= ~2;  // OUTZ_H_G read: GDA clears
+        if (reg == 0x2d)
+            r[0x1e] &= ~1;  // OUTZ_H_XL read: XLDA clears
         return value;
     }
+
     void write(uint8_t reg, uint8_t value) override
     {
-        if (reg < 0x01 || reg > 0x19 || reg == 0x0f) return fail("write to read-only/unlisted " + hex(reg));
-        if (reg == 0x12 && (value & 1)) return resetValues();
+        if (reg < 0x01 || reg > 0x19 || reg == 0x0f)
+            return fail("write to read-only/unlisted " + hex(reg));
+        if (reg == 0x12 && (value & 1))
+            return resetValues();
         r[reg] = value;
     }
-    bool line() const override { return r[0x0e] & r[0x1e] & 0x03; }
+
+    bool line() const override
+    {
+        return r[0x0e] & r[0x1e] & 0x03;
+    }
+
     void produce(const int16_t accel[3], const int16_t gyro[3]) override
     {
         for (unsigned i = 0; i < 3; ++i) {
-            if (r[0x11] >> 4) r[0x22 + 2 * i] = (uint8_t)gyro[i], r[0x23 + 2 * i] = (uint8_t)((uint16_t)gyro[i] >> 8);
-            if (r[0x10] >> 4) r[0x28 + 2 * i] = (uint8_t)accel[i], r[0x29 + 2 * i] = (uint8_t)((uint16_t)accel[i] >> 8);
+            if (r[0x11] >> 4)
+                r[0x22 + 2 * i] = (uint8_t)gyro[i], r[0x23 + 2 * i] = (uint8_t)((uint16_t)gyro[i] >> 8);
+            if (r[0x10] >> 4)
+                r[0x28 + 2 * i] = (uint8_t)accel[i], r[0x29 + 2 * i] = (uint8_t)((uint16_t)accel[i] >> 8);
         }
         r[0x1e] |= (r[0x10] >> 4 ? 1 : 0) | (r[0x11] >> 4 ? 2 : 0);
     }
 };
 
 struct UnknownPart : Chip {
-    uint8_t read(uint8_t reg) override { return reg == 0x75 ? 0x12 : reg == 0x0f ? 0x34 : 0; }
-    void write(uint8_t reg, uint8_t) override { fail("write to an unidentified part: " + hex(reg)); }
-    bool line() const override { return false; }
-    void produce(const int16_t *, const int16_t *) override {}
+    uint8_t read(uint8_t reg) override
+    {
+        return reg == 0x75 ? 0x12 : reg == 0x0f ? 0x34 : 0;
+    }
+
+    void write(uint8_t reg, uint8_t) override
+    {
+        fail("write to an unidentified part: " + hex(reg));
+    }
+
+    bool line() const override
+    {
+        return false;
+    }
+
+    void produce(const int16_t *, const int16_t *) override
+    {}
 };
 
 // --- Kernel interfaces the driver calls -------------------------------------------------------------------------------
 static unsigned gSpiSuspends = 0, gSpiResumes = 0;
+
 extern "C" int tegra_spi_init(unsigned bus)
 {
     return bus == 4 ? 0 : -1;
 }
+
 extern "C" void tegra_spi_suspend(unsigned bus)
 {
     gSpiSuspends += bus == 4;
 }
+
 extern "C" void tegra_spi_resume(unsigned bus)
 {
     gSpiResumes += bus == 4;
 }
+
 extern "C" int tegra_spi_transfer(unsigned bus, unsigned cs, const void *txv, void *rxv, size_t len)
 {
     REQUIRE(bus == 4 && cs == 0 && txv && len >= 2 && len <= TEGRA_SPI_MAX_TRANSFER);
@@ -318,9 +443,11 @@ extern "C" int tegra_spi_transfer(unsigned bus, unsigned cs, const void *txv, vo
         REQUIRE(rx);
         gChip->ops.push_back("R " + hex(reg) + (len > 2 ? " x" + std::to_string(len - 1) : ""));
         rx[0] = 0xff;
-        for (size_t i = 1; i < len; ++i) rx[i] = gChip->read(gChip->stays(reg) ? reg : (uint8_t)(reg + i - 1));
+        for (size_t i = 1; i < len; ++i)
+            rx[i] = gChip->read(gChip->stays(reg) ? reg : (uint8_t)(reg + i - 1));
     } else {
-        if (len != 2) gChip->fail("multi-byte write at " + hex(reg));
+        if (len != 2)
+            gChip->fail("multi-byte write at " + hex(reg));
         gChip->ops.push_back("W " + hex(reg) + " " + hex(tx[1]));
         gChip->write(reg, tx[1]);
     }
@@ -329,19 +456,24 @@ extern "C" int tegra_spi_transfer(unsigned bus, unsigned cs, const void *txv, vo
 }
 
 static IOService gNub;  // PX2's interrupt nub
+
 extern "C" IOService *tegra_gpio_interrupt_nub(unsigned gpio, unsigned trigger)
 {
     REQUIRE(gpio == TEGRA_GPIO_IMU_INT && trigger == TEGRA_GPIO_LEVEL_HIGH);
     return &gNub;
 }
+
 extern "C" void tegra_gpio_describe(unsigned gpio, char *buffer, size_t size)
 {
     std::snprintf(buffer, size, "GPIO %u (stub)", gpio);
 }
+
 extern "C" void tegra_gpio_check_delivery(unsigned gpio, const char *who)
 {
-    if (gChip->line()) panic("%s: GPIO %u interrupt lost (stub)", who, gpio);
+    if (gChip->line())
+        panic("%s: GPIO %u interrupt lost (stub)", who, gpio);
 }
+
 // ArmGIC's leeway timer (r16-idle): the harness only sees the interval.
 int switch_check_after_ms(IOTimerEventSource *timer, uint32_t ms)
 {
@@ -351,6 +483,7 @@ int switch_check_after_ms(IOTimerEventSource *timer, uint32_t ms)
 // SwitchBacklight's panel state (switch_display_is_on): off unless a scenario lights it, so the orientation detector
 // stays out of the scenarios written before it ran (r17).
 static bool gDisplayLit = false;
+
 extern "C" bool switch_display_is_on(void)
 {
     return gDisplayLit;
@@ -370,8 +503,10 @@ struct HidDevice : IOService {
     std::vector<uint8_t> orientations;
     unsigned refuse = 0, refused = 0;
 };
+
 static bool gTimedPosts = true;  // switch_hid_supports_timestamps
 static std::vector<HidDevice *> gHid;
+
 IOService *switch_hid_create(SwitchHIDKind kind)
 {
     auto *device = new HidDevice;
@@ -379,7 +514,9 @@ IOService *switch_hid_create(SwitchHIDKind kind)
     gHid.push_back(device);
     return device;
 }
+
 constexpr IOReturn kNotReady = (IOReturn)0xe00002d7;  // IOHIDDevice::handleReport before it is ready
+
 static IOReturn postOrientation(HidDevice *device, const void *report, size_t length, uint64_t time)
 {
     REQUIRE(length == sizeof(SwitchOrientationReport));
@@ -397,6 +534,7 @@ static IOReturn postOrientation(HidDevice *device, const void *report, size_t le
     device->orientations.push_back((uint8_t)(copy.orientation[0] | copy.orientation[1]));
     return kIOReturnSuccess;
 }
+
 IOReturn switch_hid_post(IOService *device, const void *report, size_t length)
 {
     if (static_cast<HidDevice *>(device)->kind == kSwitchHIDOrientation)
@@ -408,6 +546,7 @@ IOReturn switch_hid_post(IOService *device, const void *report, size_t length)
     static_cast<HidDevice *>(device)->times.push_back(0);
     return kIOReturnSuccess;
 }
+
 IOReturn switch_hid_post_at(IOService *device, const void *report, size_t length, uint64_t timestamp)
 {
     REQUIRE(gTimedPosts);
@@ -420,10 +559,12 @@ IOReturn switch_hid_post_at(IOService *device, const void *report, size_t length
     static_cast<HidDevice *>(device)->times.push_back(timestamp);
     return kIOReturnSuccess;
 }
+
 bool switch_hid_supports_timestamps(IOService *)
 {
     return gTimedPosts;
 }
+
 void switch_hid_set_feature_handler(IOService *device, SwitchHIDFeatureHandler handler, void *context)
 {
     static_cast<HidDevice *>(device)->handler = handler;
@@ -434,9 +575,11 @@ void switch_hid_set_feature_handler(IOService *device, SwitchHIDFeatureHandler h
 static HidDevice *hid(SwitchHIDKind kind)
 {
     for (HidDevice *device : gHid)
-        if (device->kind == kind) return device;
+        if (device->kind == kind)
+            return device;
     return nullptr;
 }
+
 // A client's ReportInterval and BatchInterval (microseconds) as IOHIDEventDriver sends them: report ID 1, then the
 // Report Interval and Report Latency fields, 32 bits each (SwitchHIDDevice.cpp MOTION_DESCRIPTOR).
 static void setFeature(SwitchHIDKind kind, uint32_t us, uint32_t batch)
@@ -454,16 +597,20 @@ static void setFeature(SwitchHIDKind kind, uint32_t us, uint32_t batch)
                                (uint8_t)(batch >> 24)};
     device->handler(device->context, report, sizeof(report));
 }
+
 static void setInterval(SwitchHIDKind kind, uint32_t us)
 {
     setFeature(kind, us, 0);
 }
+
 static IOInterruptEventSource *dataReady()
 {
     for (IOInterruptEventSource *source : IOInterruptEventSource::all)
-        if (source->provider == &gNub) return source;
+        if (source->provider == &gNub)
+            return source;
     return nullptr;
 }
+
 // PX2 is level-triggered: while INT2 is high and the source enabled, its action runs again (at most `limit` times).
 static unsigned deliver(unsigned limit = 4)
 {
@@ -474,63 +621,80 @@ static unsigned deliver(unsigned limit = 4)
     }
     return fired;
 }
+
 static void expectOps(const std::vector<std::string> &want, const std::string &what)
 {
     const bool same = gChip->ops == want;
     check(same, what + ": register traffic");
     if (!same) {
         std::fprintf(stderr, "  want:");
-        for (const std::string &op : want) std::fprintf(stderr, " [%s]", op.c_str());
+        for (const std::string &op : want)
+            std::fprintf(stderr, " [%s]", op.c_str());
         std::fprintf(stderr, "\n  got: ");
-        for (const std::string &op : gChip->ops) std::fprintf(stderr, " [%s]", op.c_str());
+        for (const std::string &op : gChip->ops)
+            std::fprintf(stderr, " [%s]", op.c_str());
         std::fprintf(stderr, "\n");
     }
     gChip->ops.clear();
 }
+
 static bool logged(const std::string &line)
 {
     for (const std::string &l : gLog)
-        if (l == line) return true;
+        if (l == line)
+            return true;
     return false;
 }
+
 static void expectLog(const std::string &line, const std::string &what)
 {
     check(logged(line), what + ": log line \"" + line + "\"");
     if (!logged(line))
-        for (const std::string &l : gLog) std::fprintf(stderr, "  log: %s\n", l.c_str());
+        for (const std::string &l : gLog)
+            std::fprintf(stderr, "  log: %s\n", l.c_str());
 }
+
 static bool sameReport(const SwitchMotionReport &r, int32_t x, int32_t y, int32_t z)
 {
     return r.id == 1 && r.x == x && r.y == y && r.z == z;
 }
+
 static void expectReports(SwitchHIDKind kind, size_t count, int32_t x, int32_t y, int32_t z, const std::string &what)
 {
     const std::vector<SwitchMotionReport> &reports = hid(kind)->reports;
     bool ok = reports.size() == count;
-    for (const SwitchMotionReport &r : reports) ok = ok && sameReport(r, x, y, z);
+    for (const SwitchMotionReport &r : reports)
+        ok = ok && sameReport(r, x, y, z);
     check(ok, what + ": " + std::to_string(count) + " reports of (" + std::to_string(x) + ", " + std::to_string(y) +
                   ", " + std::to_string(z) + ")");
     if (!ok)
-        for (const SwitchMotionReport &r : reports) std::fprintf(stderr, "  report: %d %d %d\n", r.x, r.y, r.z);
+        for (const SwitchMotionReport &r : reports)
+            std::fprintf(stderr, "  report: %d %d %d\n", r.x, r.y, r.z);
 }
+
 static void expectClean(const std::string &what)
 {
     check(gChip->errors.empty(), what + ": datasheet rules kept");
-    for (const std::string &e : gChip->errors) std::fprintf(stderr, "  %s: %s\n", what.c_str(), e.c_str());
+    for (const std::string &e : gChip->errors)
+        std::fprintf(stderr, "  %s: %s\n", what.c_str(), e.c_str());
 }
+
 static bool start(Chip &chip)
 {
     gChip = &chip;
     gLog.clear();
     return switch_motion_start() == 0;
 }
+
 static void teardown()
 {
-    if (gMotion) gMotion->detach(IOService::getResourceService());  // the attachment's reference: frees it
+    if (gMotion)
+        gMotion->detach(IOService::getResourceService());  // the attachment's reference: frees it
     gMotion = nullptr;
     IOInterruptEventSource::all.clear();
     IOTimerEventSource::last = nullptr;
-    for (HidDevice *device : gHid) device->release();
+    for (HidDevice *device : gHid)
+        device->release();
     gHid.clear();
     gLog.clear();
     gChip = nullptr;
@@ -577,7 +741,9 @@ static void decodeAndMapping()
     // Device frame (portrait panel: +X = console bottom, +Y = console right, +Z out of the screen), gravity vector.
     // ICM (X = -y, Y = +x, Z = +z): chip +z out of the screen, so lying face up (+1 g on z) reads z = -1 g.
     const int16_t up[3] = {0, 0, 4096}, chipX[3] = {4096, 0, 0}, chipY[3] = {0, 4096, 0}, a[3] = {100, -200, 4096};
-    const auto r = [](const FamilyInfo &f, Sensor s, const int16_t *v) { return deviceReport(f, s, v); };
+    const auto r = [](const FamilyInfo &f, Sensor s, const int16_t *v) {
+        return deviceReport(f, s, v);
+    };
     check(sameReport(r(kICM42607, Accel, up), 0, 0, -1000000), "ICM-42607 face up: z = -1 g");
     check(sameReport(r(kICM42607, Accel, chipX), 1000000, 0, 0), "ICM-42607 chip +x up: device x = +1 g (bottom)");
     check(sameReport(r(kICM42607, Accel, chipY), 0, 1000000, 0), "ICM-42607 chip +y up: device y = +1 g (right)");
@@ -654,7 +820,8 @@ static void icm42607Session()
         "mg (face up: z near -1000; upright: x near +1000)",
         "42607 first sample");
     unsigned firstLines = 0;
-    for (const std::string &l : gLog) firstLines += l.find("first accelerometer sample") != std::string::npos;
+    for (const std::string &l : gLog)
+        firstLines += l.find("first accelerometer sample") != std::string::npos;
     check(firstLines == 1, "42607: the first sample is logged once");
     IOTimerEventSource::last->fire();
     check(IOTimerEventSource::last->armed, "42607: watchdog re-armed after samples");
@@ -839,7 +1006,8 @@ static void icm42607Fifo()
         expectOps({"R 3a x5", "R 3f x48", "R 3f x32"}, "FIFO late drain: whole records, three a transfer");
         const std::vector<uint64_t> &times = hid(kSwitchHIDGyro)->times;
         bool forward = times.size() == 8 && times.back() <= gNow;
-        for (size_t i = 1; i < times.size(); ++i) forward = forward && times[i] > times[i - 1];
+        for (size_t i = 1; i < times.size(); ++i)
+            forward = forward && times[i] > times[i - 1];
         check(forward, "FIFO: times only go forward and stop at now");
 
         // The accelerometer joins at 50 Hz with 20 ms batches: still 15 ms, both sensors' records, accel 4:1.
@@ -898,7 +1066,8 @@ static void icm42607Fifo()
         check(start(chip), "count: started");
         setFeature(kSwitchHIDGyro, 5000, 15000);
         gNow += 80000000;
-        for (unsigned i = 0; i < 3; ++i) chip.produce(accel, gyro);
+        for (unsigned i = 0; i < 3; ++i)
+            chip.produce(accel, gyro);
         gChip->ops.clear();
         check(deliver() == 2, "count: the FIFO interrupt, then data-ready's for the latest sample");
         expectOps({"R 3a x5", "W 2d 00", "W 28 01", "W 2d 08", "R 39", "R 0b x12"},
@@ -959,29 +1128,34 @@ static void expectCoreMotionTakesEvery(const std::string &what)
         const SwitchOrientationReport &r = device->orientationReports[i];
         const std::string which = what + ": report " + std::to_string(i);
         check(r.orientation[i % 2] != 0 && r.orientation[1 - i % 2] == 0, which + " in the other set than the last");
-        if (gTimedPosts) check(device->orientationTimes[i] == r.timestamp, which + ": the report's time is its own");
+        if (gTimedPosts)
+            check(device->orientationTimes[i] == r.timestamp, which + ": the report's time is its own");
         const size_t before = driver.dispatched.size();
         driver.report(reinterpret_cast<const uint8_t *>(&r), sizeof(r), device->orientationTimes[i]);
         check(driver.dispatched.size() == before + 1, which + ": one event");
         for (size_t e = before; e < driver.dispatched.size(); ++e) {
             const orientation_model::Event &event = driver.dispatched[e];
             check(event.type == 10 && event.children.size() == 1, which + ": an orientation event with one child");
-            if (event.children.size() != 1) continue;
+            if (event.children.size() != 1)
+                continue;
             const orientation_model::Event &child = event.children.front();
             uint64_t stamp = 0;
-            if (child.data.size() == sizeof(stamp)) memcpy(&stamp, child.data.data(), sizeof(stamp));
+            if (child.data.size() == sizeof(stamp))
+                memcpy(&stamp, child.data.data(), sizeof(stamp));
             check(child.type == 1 && child.page == 0xff15 && child.usage == 2 && child.data.size() == 8 &&
                       stamp == r.timestamp,
                   which + ": the child is the 0xff15 / 2 vendor event with the report's 8-byte time");
         }
         want.push_back((uint8_t)__builtin_ctz(device->orientations[i]));
     }
-    for (const orientation_model::Event &event : driver.dispatched) coreMotion.onEvent(event);
+    for (const orientation_model::Event &event : driver.dispatched)
+        coreMotion.onEvent(event);
     const bool taken = coreMotion.delivered == want && coreMotion.stale == 0 && coreMotion.noChildren == 0 &&
                        coreMotion.badChild == 0 && coreMotion.wrongType == 0;
     check(taken, what + ": CoreMotion takes every orientation, none stale");
     if (!taken)
-        for (const std::string &line : coreMotion.log) std::fprintf(stderr, "  CoreMotion: %s\n", line.c_str());
+        for (const std::string &line : coreMotion.log)
+            std::fprintf(stderr, "  CoreMotion: %s\n", line.c_str());
     for (size_t i = 1; i < coreMotion.times.size(); ++i)
         check(coreMotion.times[i] > coreMotion.times[i - 1], what + ": sample times strictly increase");
 }
@@ -1000,7 +1174,8 @@ static void icm42607Orientation()
     const std::vector<std::string> fifo5 = {"R 00",    "R 35",    "W 28 01", "W 29 05", "W 2a 00", "W 7a 01",
                                             "W 7b 23", "W 7d 01", "R 7e",    "W 28 00", "W 2d 04"};
     std::vector<std::string> want = k42607Start;
-    for (const char *op : {"W 2d 00", "W 20 0b", "W 21 2b", "W 23 37", "W 24 47", "W 1f 03"}) want.push_back(op);
+    for (const char *op : {"W 2d 00", "W 20 0b", "W 21 2b", "W 23 37", "W 24 47", "W 1f 03"})
+        want.push_back(op);
     want.insert(want.end(), fifo5.begin(), fifo5.end());
     expectOps(want, "orientation: the accelerometer alone at 25 Hz, 5-record FIFO batches, FIFO_THS on INT2");
     expectLog("os_log: SwitchMotion: 25000 mHz, accel 1 (0 us), gyro 0 (0 us), batch 200000 us, FIFO watermark 5",
@@ -1149,34 +1324,42 @@ TEST(SwitchMotion, DecodeAndMapping)
 {
     decodeAndMapping();
 }
+
 TEST(SwitchMotion, Icm42607Session)
 {
     icm42607Session();
 }
+
 TEST(SwitchMotion, Icm42607LeftRunning)
 {
     icm42607LeftRunning();
 }
+
 TEST(SwitchMotion, Icm42607Faults)
 {
     icm42607Faults();
 }
+
 TEST(SwitchMotion, Icm42607Fifo)
 {
     icm42607Fifo();
 }
+
 TEST(SwitchMotion, Icm42607Orientation)
 {
     icm42607Orientation();
 }
+
 TEST(SwitchMotion, Icm42607OrientationUntimed)
 {
     icm42607OrientationUntimed();
 }
+
 TEST(SwitchMotion, Icm40607Session)
 {
     icm40607Session();
 }
+
 TEST(SwitchMotion, Lsm6ds3hSession)
 {
     lsm6ds3hSession();

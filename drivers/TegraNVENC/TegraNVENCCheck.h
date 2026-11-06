@@ -68,19 +68,25 @@ static inline uint32_t tegra_nvenc_surface_rows(uint32_t height)
 static inline const char *tegra_nvenc_check_surface(const nvenc_h264_surface_cfg_s *c, uint32_t width, uint32_t height,
                                                     uint64_t lumaAvail, uint64_t chromaAvail, bool reference)
 {
-    if (c->frame_width_minus1 + 1u != width || c->frame_height_minus1 + 1u != height) return "surface dimensions";
+    if (c->frame_width_minus1 + 1u != width || c->frame_height_minus1 + 1u != height)
+        return "surface dimensions";
     if (c->sfc_trans_mode || c->reserved2 || c->memory_mode || c->nv21_enable || c->input_bl_mode || c->reserved)
         return "surface mode";
-    if (c->luma_top_frm_offset || c->luma_bot_offset || c->chroma_bot_offset) return "surface field offsets";
-    if (reference ? (!c->tiled_16x16 || c->block_height) : (c->tiled_16x16 && c->block_height)) return "surface tiling";
-    if (c->block_height > 2) return "block height";
+    if (c->luma_top_frm_offset || c->luma_bot_offset || c->chroma_bot_offset)
+        return "surface field offsets";
+    if (reference ? (!c->tiled_16x16 || c->block_height) : (c->tiled_16x16 && c->block_height))
+        return "surface tiling";
+    if (c->block_height > 2)
+        return "block height";
     const uint32_t pitch = c->sfc_pitch;
     if (pitch != c->sfc_pitch_chroma || (pitch & 63) || pitch < tegra_nvenc_align(width, 16) || pitch > 16384)
         return "surface pitch";
     const uint64_t rows = tegra_nvenc_surface_rows(height), luma = (uint64_t)pitch * rows, chroma = luma / 2;
     const uint64_t offset = (uint64_t)c->chroma_top_frm_offset * 256;
-    if (offset && offset < luma) return "chroma overlaps luma";
-    if (lumaAvail < luma || lumaAvail < offset + chroma || chromaAvail < offset + chroma) return "surface too small";
+    if (offset && offset < luma)
+        return "chroma overlaps luma";
+    if (lumaAvail < luma || lumaAvail < offset + chroma || chromaAvail < offset + chroma)
+        return "surface too small";
     return 0;
 }
 
@@ -88,11 +94,16 @@ static inline const char *tegra_nvenc_check_surface(const nvenc_h264_surface_cfg
 // Returns NULL when the submit is acceptable, else the reason.
 static inline const char *tegra_nvenc_check(const TegraNVENCSubmit *s, const uint64_t *avail)
 {
-    enum { REFS = 16 };
-    if (s->codec != TEGRA_NVENC_CODEC_H264) return "codec";
+    enum {
+        REFS = 16
+    };
+
+    if (s->codec != TEGRA_NVENC_CODEC_H264)
+        return "codec";
     if (s->entry_count < 1 || s->entry_count > TEGRA_NVENC_MAX_ENTRIES || s->clean_count > TEGRA_NVENC_MAX_RANGES)
         return "counts";
-    if (s->setup_bytes < TEGRA_NVENC_SETUP_HEADER || s->setup_bytes > TEGRA_NVENC_MAX_SETUP) return "setup size";
+    if (s->setup_bytes < TEGRA_NVENC_SETUP_HEADER || s->setup_bytes > TEGRA_NVENC_MAX_SETUP)
+        return "setup size";
     uint64_t cur = 0, curChroma = 0, out = 0, outChroma = 0, bits = 0, status = 0, history = 0, colocOut = 0;
     uint64_t refLuma[REFS] = {0}, refChroma[REFS] = {0};
     uint32_t seen = 0, control = 0;
@@ -103,8 +114,10 @@ static inline const char *tegra_nvenc_check(const TegraNVENCSubmit *s, const uin
             uint32_t bit;
             switch (m) {
             case NVC5B7_SET_APPLICATION_ID:  // first: the OS selects the app before methods are stored for it
-                if (e->value != s->codec) return "application id";
-                if (i) return "application id not first";
+                if (e->value != s->codec)
+                    return "application id";
+                if (i)
+                    return "application id not first";
                 bit = 0;
                 break;
             case NVC5B7_SET_CONTROL_PARAMS:  // H.264, GPTIMER_ON (required), SLICE_STAT_ON, constant QP, nothing else
@@ -114,32 +127,58 @@ static inline const char *tegra_nvenc_check(const TegraNVENCSubmit *s, const uin
                 control = e->value;
                 bit = 1;
                 break;
-            case NVC5B7_SET_PICTURE_INDEX: bit = 2; break;
-            case NVC5B7_SET_WATCHDOG_TIMER: bit = 3; break;
+            case NVC5B7_SET_PICTURE_INDEX:
+                bit = 2;
+                break;
+            case NVC5B7_SET_WATCHDOG_TIMER:
+                bit = 3;
+                break;
             case NVC5B7_EXECUTE:  // AWAKEN only: NOTIFY would release a semaphore at a raw address
-                if (e->value & ~0x100u) return "execute flags";
-                if (i != s->entry_count - 1) return "execute not last";
+                if (e->value & ~0x100u)
+                    return "execute flags";
+                if (i != s->entry_count - 1)
+                    return "execute not last";
                 bit = 4;
                 break;
-            default: return "value method";
+            default:
+                return "value method";
             }
-            if (seen & (1u << bit)) return "repeated method";
+            if (seen & (1u << bit))
+                return "repeated method";
             seen |= 1u << bit;
             continue;
         }
-        if (e->kind != TEGRA_NVENC_ENTRY_RELOC) return "entry kind";
-        if (e->offset & 0xff) return "relocation alignment";
+        if (e->kind != TEGRA_NVENC_ENTRY_RELOC)
+            return "entry kind";
+        if (e->offset & 0xff)
+            return "relocation alignment";
         const uint64_t a = avail[i];
         uint64_t *slot = 0;
         switch (m) {
-        case NVC5B7_SET_IN_CUR_PIC: slot = &cur; break;
-        case NVC5B7_SET_IN_CUR_PIC_CHROMA_U: slot = &curChroma; break;
-        case NVC5B7_SET_OUT_REF_PIC_LUMA: slot = &out; break;
-        case NVC5B7_SET_OUT_REF_PIC_CHROMA: slot = &outChroma; break;
-        case NVC5B7_SET_OUT_BITSTREAM: slot = &bits; break;
-        case NVC5B7_SET_OUT_ENC_STATUS: slot = &status; break;
-        case NVC5B7_SET_IOHISTORY: slot = &history; break;
-        case NVC5B7_SET_OUT_COLOC_DATA: slot = &colocOut; break;
+        case NVC5B7_SET_IN_CUR_PIC:
+            slot = &cur;
+            break;
+        case NVC5B7_SET_IN_CUR_PIC_CHROMA_U:
+            slot = &curChroma;
+            break;
+        case NVC5B7_SET_OUT_REF_PIC_LUMA:
+            slot = &out;
+            break;
+        case NVC5B7_SET_OUT_REF_PIC_CHROMA:
+            slot = &outChroma;
+            break;
+        case NVC5B7_SET_OUT_BITSTREAM:
+            slot = &bits;
+            break;
+        case NVC5B7_SET_OUT_ENC_STATUS:
+            slot = &status;
+            break;
+        case NVC5B7_SET_IOHISTORY:
+            slot = &history;
+            break;
+        case NVC5B7_SET_OUT_COLOC_DATA:
+            slot = &colocOut;
+            break;
         default:
             if (m >= NVC5B7_SET_IN_REF_PIC0_LUMA && m < NVC5B7_SET_IN_REF_PIC0_LUMA + 4 * REFS && !(m & 3))
                 slot = &refLuma[(m - NVC5B7_SET_IN_REF_PIC0_LUMA) / 4];
@@ -148,29 +187,38 @@ static inline const char *tegra_nvenc_check(const TegraNVENCSubmit *s, const uin
             else
                 return "relocated method";
         }
-        if (*slot) return "repeated relocation";
+        if (*slot)
+            return "repeated relocation";
         *slot = a ? a : 1;  // a relocation exactly at a buffer's end still counts as present
     }
-    if ((seen & 0x13) != 0x13) return "missing application id, control params or execute";
+    if ((seen & 0x13) != 0x13)
+        return "missing application id, control params or execute";
     if (!cur || !curChroma || !out || !outChroma || !bits || !status || !history || !colocOut)
         return "missing relocation";
 
     const nvenc_h264_drv_pic_setup_s *p = (const nvenc_h264_drv_pic_setup_s *)s->setup;
-    if (p->magic != 0xd0b70006u) return "magic";  // nvenc_drv.h NV_NVENC_5_0
-    if (!p->gpTimer_timeout_val || p->gpTimer_timeout_val > TEGRA_NVENC_GPTIMER_MAX) return "GP timer limit";
+    if (p->magic != 0xd0b70006u)
+        return "magic";  // nvenc_drv.h NV_NVENC_5_0
+    if (!p->gpTimer_timeout_val || p->gpTimer_timeout_val > TEGRA_NVENC_GPTIMER_MAX)
+        return "GP timer limit";
     const uint32_t width = p->input_cfg.frame_width_minus1 + 1u, height = p->input_cfg.frame_height_minus1 + 1u;
     if (width < TEGRA_NVENC_MIN_DIMENSION || width > TEGRA_NVENC_MAX_DIMENSION || height < TEGRA_NVENC_MIN_DIMENSION ||
         height > TEGRA_NVENC_MAX_DIMENSION)
         return "dimensions";
     const uint32_t wmbs = (width + 15) / 16, hmbs = (height + 15) / 16, mbs = wmbs * hmbs;
-    if (mbs > TEGRA_NVENC_MAX_MBS) return "too many macroblocks";
+    if (mbs > TEGRA_NVENC_MAX_MBS)
+        return "too many macroblocks";
     const char *why;
-    if ((why = tegra_nvenc_check_surface(&p->input_cfg, width, height, cur, curChroma, false))) return why;
-    if ((why = tegra_nvenc_check_surface(&p->outputpic_cfg, width, height, out, outChroma, true))) return why;
-    if ((why = tegra_nvenc_check_surface(&p->refpic_cfg, width, height, ~0ull, ~0ull, true))) return why;
+    if ((why = tegra_nvenc_check_surface(&p->input_cfg, width, height, cur, curChroma, false)))
+        return why;
+    if ((why = tegra_nvenc_check_surface(&p->outputpic_cfg, width, height, out, outChroma, true)))
+        return why;
+    if ((why = tegra_nvenc_check_surface(&p->refpic_cfg, width, height, ~0ull, ~0ull, true)))
+        return why;
     const uint8_t *half = (const uint8_t *)&p->half_scaled_outputpic_cfg;
     for (uint32_t i = 0; i < sizeof(p->half_scaled_outputpic_cfg); i++)
-        if (half[i]) return "half-scaled output";
+        if (half[i])
+            return "half-scaled output";
 
     const nvenc_h264_sps_data_s *sps = &p->sps_data;
     if ((sps->profile_idc != 66 && sps->profile_idc != 77 && sps->profile_idc != 100) || sps->chroma_format_idc != 1 ||
@@ -184,13 +232,15 @@ static inline const char *tegra_nvenc_check(const TegraNVENCSubmit *s, const uin
 
     const nvenc_h264_rc_s *rc = &p->rate_control;
     for (int i = 0; i < 3; i++)
-        if (rc->QP[i] > 51 || rc->minQP[i] > 51 || rc->maxQP[i] > 51) return "rate control QP";
+        if (rc->QP[i] > 51 || rc->minQP[i] > 51 || rc->maxQP[i] > 51)
+            return "rate control QP";
     if (rc->two_pass_rc || rc->aqMode || rc->dump_aq_stats || rc->first_pass_source_half_scaled ||
         rc->ext_picture_rc_hints)
         return "rate control mode";
 
     const nvenc_h264_pic_control_s *pc = &p->pic_control;
-    if (pc->pic_struct || pc->pic_type == 1) return "picture structure or type";
+    if (pc->pic_struct || pc->pic_type == 1)
+        return "picture structure or type";
     if (pc->base_view != 0 || pc->view_id || pc->priority_id || pc->temporal_id || pc->anchor_pic_flag ||
         pc->inter_view_flag || pc->opm_enable)
         return "MVC or encryption";
@@ -203,7 +253,9 @@ static inline const char *tegra_nvenc_check(const TegraNVENCSubmit *s, const uin
     if (pc->num_forced_slices_minus1 || pc->num_me_controls_minus1 || pc->num_md_controls_minus1 ||
         pc->num_q_controls_minus1 || pc->num_wp_controls_minus1)
         return "control counts";
-    if (pc->slice_mode || pc->max_slice_size < mbs) return "slice mode";
+    if (pc->slice_mode || pc->max_slice_size < mbs)
+        return "slice mode";
+
     struct {
         uint32_t offset, size;
     } controls[] = {
@@ -213,20 +265,25 @@ static inline const char *tegra_nvenc_check(const TegraNVENCSubmit *s, const uin
         {pc->q_control_offset, sizeof(nvenc_h264_quant_control_s)},
         {pc->wp_control_offset, sizeof(nvenc_pred_weight_table_s)},
     };
+
     for (uint32_t i = 0; i < 5; i++) {
-        if (i == 4 && !controls[i].offset) continue;  // no weighted prediction table
+        if (i == 4 && !controls[i].offset)
+            continue;  // no weighted prediction table
         if (controls[i].offset < TEGRA_NVENC_SETUP_HEADER || (controls[i].offset & 3) ||
             controls[i].offset + controls[i].size > s->setup_bytes)
             return "control offset";
     }
     const nvenc_h264_slice_control_s *slice = (const nvenc_h264_slice_control_s *)(s->setup + pc->slice_control_offset);
-    if (slice->num_mb < mbs || slice->ROI_enable || slice->force_intra > 1) return "slice control";
+    if (slice->num_mb < mbs || slice->ROI_enable || slice->force_intra > 1)
+        return "slice control";
     const nvenc_h264_me_control_s *me = (const nvenc_h264_me_control_s *)(s->setup + pc->me_control_offset);
-    if (me->me_only_mode || me->mv_only_enable) return "ME-only";
+    if (me->me_only_mode || me->mv_only_enable)
+        return "ME-only";
     // List-1 and bi-predicted partition enables pass (NVIDIA's T210 driver sets them in IDR and P pictures): with B
     // pictures refused and every list-1 entry unused (below) they name no reference. Direct and B skip do not.
     const nvenc_h264_md_control_s *md = (const nvenc_h264_md_control_s *)(s->setup + pc->md_control_offset);
-    if (md->bdirect_mode || md->bskip_enable || md->ssim_rdo || md->calc_ssim) return "mode decision";
+    if (md->bdirect_mode || md->bskip_enable || md->ssim_rdo || md->calc_ssim)
+        return "mode decision";
 
     // References: every list-0 entry a P picture may use names a slot with both planes relocated and big enough. An
     // unused entry is -2, as NVIDIA's T210 driver writes it (the firmware keeps an entry's low 5 bits as its DPB index,
@@ -236,13 +293,16 @@ static inline const char *tegra_nvenc_check(const TegraNVENCSubmit *s, const uin
         slice->num_ref_idx_l0_active_minus1 != pps->num_ref_idx_l0_active_minus1)
         return "reference count override";
     for (uint32_t i = 0; i < 8; i++) {
-        if ((signed char)pc->l1[i] != -2) return "list 1";  // char's signedness is the ABI's
+        if ((signed char)pc->l1[i] != -2)
+            return "list 1";  // char's signedness is the ABI's
         if (i >= refs) {
-            if ((signed char)pc->l0[i] != -2) return "list 0 length";
+            if ((signed char)pc->l0[i] != -2)
+                return "list 0 length";
             continue;
         }
         const int slot = (signed char)pc->l0[i];
-        if (slot < 0 || slot >= REFS || !refLuma[slot] || !refChroma[slot]) return "reference slot";
+        if (slot < 0 || slot >= REFS || !refLuma[slot] || !refChroma[slot])
+            return "reference slot";
         if ((why = tegra_nvenc_check_surface(&p->refpic_cfg, width, height, refLuma[slot], refChroma[slot], true)))
             return why;
     }
@@ -250,9 +310,12 @@ static inline const char *tegra_nvenc_check(const TegraNVENCSubmit *s, const uin
     if (pc->bitstream_buf_size < 4096 || pc->bitstream_buf_size > bits || pc->bitstream_start_pos >= 256 ||
         pc->bitstream_start_pos >= pc->bitstream_buf_size)
         return "bitstream";
-    if (pc->hist_buf_size < tegra_nvenc_history_bytes(width, height) || pc->hist_buf_size > history) return "history";
-    if (colocOut < (uint64_t)mbs * sizeof(nvenc_h264_coloc_mb_s)) return "colocated buffer";
-    if (status < TEGRA_NVENC_STATUS_BYTES) return "status";
+    if (pc->hist_buf_size < tegra_nvenc_history_bytes(width, height) || pc->hist_buf_size > history)
+        return "history";
+    if (colocOut < (uint64_t)mbs * sizeof(nvenc_h264_coloc_mb_s))
+        return "colocated buffer";
+    if (status < TEGRA_NVENC_STATUS_BYTES)
+        return "status";
     if ((control & (1u << 11)) && (pc->slice_stat_offset < 128 || pc->slice_stat_offset + 16 * 4 > status))
         return "slice statistics";
     return 0;

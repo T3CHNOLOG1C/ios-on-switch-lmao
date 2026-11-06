@@ -35,8 +35,22 @@
 
 namespace {
 
-enum Phase { EMPTY, SINK, CLASSIFY, REATTACH, SOURCE, HELD };
-enum Act { NONE, SAW_DETACH, ENTER, START, END };
+enum Phase {
+    EMPTY,
+    SINK,
+    CLASSIFY,
+    REATTACH,
+    SOURCE,
+    HELD
+};
+
+enum Act {
+    NONE,
+    SAW_DETACH,
+    ENTER,
+    START,
+    END
+};
 
 // BM92T36 bits (bm92txx.c).
 constexpr uint16_t SRC_FAULT = 1 << 1, PLUGPULL = 1 << 3, CONTRACT = 1 << 12;
@@ -74,6 +88,7 @@ Decision decide(int phase, uint16_t alert, uint16_t status1, uint16_t status2, b
     const int act = pd_decide(phase, alert, status1, status2, allow ? 1 : 0, &next, &cancel, why, sizeof(why));
     return {act, next, cancel != 0, why};
 }
+
 Decision decide(int phase, uint16_t alert, Status status, bool allow = true)
 {
     return decide(phase, alert, status.first, status.second, allow);
@@ -100,7 +115,8 @@ using Event = std::pair<std::string, bool>;
 
 // SwitchPD.cpp's apply/enter/startSourcing/endSourcing/windowFired, with the hardware as recorded outputs.
 struct Port {
-    explicit Port(bool allow = true, int boostResult = 0) : allow(allow), boostResult(boostResult) {}
+    explicit Port(bool allow = true, int boostResult = 0) : allow(allow), boostResult(boostResult)
+    {}
 
     int phase = EMPTY;
     bool allow, saw = false, window = false;
@@ -117,6 +133,7 @@ struct Port {
             events.emplace_back("switches", on);
         }
     }
+
     void setRails(bool on)
     {
         if (on != rails) {
@@ -131,11 +148,14 @@ struct Port {
         saw = false;
         const bool on = pd_switches_on(next, allow ? 1 : 0) != 0;
         const bool railsOn = pd_rails_on(next) != 0;
-        if (!on) setSwitches(false);
+        if (!on)
+            setSwitches(false);
         setRails(railsOn);
         lines.push_back(why);
-        if (on) setSwitches(true);
-        if (next == CLASSIFY || next == REATTACH) window = true;
+        if (on)
+            setSwitches(true);
+        if (next == CLASSIFY || next == REATTACH)
+            window = true;
     }
 
     void start()
@@ -161,7 +181,8 @@ struct Port {
 
     void apply(const Decision &d)
     {
-        if (d.cancel) window = false;
+        if (d.cancel)
+            window = false;
         if (d.act == SAW_DETACH)
             saw = true;
         else if (d.act == ENTER)
@@ -181,10 +202,12 @@ struct Port {
 
     void windowEnds(Status status)
     {
-        if (!window) return;
+        if (!window)
+            return;
         window = false;
         const Decision d = windowEnd(phase, saw, status.first);
-        if (d.act == NONE) return;
+        if (d.act == NONE)
+            return;
         status1 = status.first;
         apply({d.act, d.next, false, d.why});
         apply(decide(phase, 0, status.first, status.second, allow));
@@ -286,7 +309,8 @@ TEST(SwitchUsbHostPowerRole, MacIsDualRole)
     port.alert(R7W_MAC_SOURCES);
     EXPECT_EQ(port.phase, SINK);
     EXPECT_FALSE(port.window);
-    for (const Event &e : port.events) EXPECT_NE(e, Event("rails", true));
+    for (const Event &e : port.events)
+        EXPECT_NE(e, Event("rails", true));
     ASSERT_FALSE(port.lines.empty());
     EXPECT_THAT(port.lines.back(), testing::HasSubstr("dual-role"));
 }
@@ -305,7 +329,9 @@ TEST(SwitchUsbHostPowerRole, ChargerAtBootAndNoHostMode)
 
 TEST(SwitchUsbHostPowerRole, ClassifyWindows)
 {
-    const auto actNext = [](const Decision &d) { return std::make_pair(d.act, d.next); };
+    const auto actNext = [](const Decision &d) {
+        return std::make_pair(d.act, d.next);
+    };
     // no detach: no proof
     EXPECT_EQ(actNext(windowEnd(CLASSIFY, false, R7W_SINK_ATTACH.first)), std::make_pair((int)ENTER, (int)SINK));
     // back already
@@ -316,12 +342,15 @@ TEST(SwitchUsbHostPowerRole, ClassifyWindows)
     d = windowEnd(REATTACH, false, 0);
     EXPECT_EQ(actNext(d), std::make_pair((int)ENTER, (int)EMPTY));
     EXPECT_THAT(d.why, testing::HasSubstr("rails off"));
-    for (int phase : {EMPTY, SINK, SOURCE, HELD}) EXPECT_EQ(windowEnd(phase, true, 0).act, NONE) << phase;
+    for (int phase : {EMPTY, SINK, SOURCE, HELD})
+        EXPECT_EQ(windowEnd(phase, true, 0).act, NONE) << phase;
 }
 
 TEST(SwitchUsbHostPowerRole, LeavingSource)
 {
-    const auto actNext = [](const Decision &d) { return std::make_pair(d.act, d.next); };
+    const auto actNext = [](const Decision &d) {
+        return std::make_pair(d.act, d.next);
+    };
     EXPECT_EQ(actNext(decide(SOURCE, CONTRACT, R7W_SINK_ATTACH)), std::make_pair((int)END, (int)HELD));
     EXPECT_EQ(actNext(decide(SOURCE, SRC_FAULT, R7W_SINK_ATTACH)), std::make_pair((int)END, (int)HELD));
     EXPECT_EQ(actNext(decide(SOURCE, 0, R7W_SINK_ATTACH.first | 1, 0x2000)), std::make_pair((int)END, (int)HELD));
@@ -333,7 +362,9 @@ TEST(SwitchUsbHostPowerRole, LeavingSource)
 TEST(SwitchUsbHostPowerRole, FuzzedWalk)
 {
     std::mt19937_64 random(1105);
-    const auto below = [&](size_t n) { return (size_t)std::uniform_int_distribution<uint64_t>(0, n - 1)(random); };
+    const auto below = [&](size_t n) {
+        return (size_t)std::uniform_int_distribution<uint64_t>(0, n - 1)(random);
+    };
     const std::vector<Status> statuses = {{0, 0},
                                           R7W_SINK_ATTACH,
                                           R7W_SINK_ATTACH_CC2,
@@ -363,9 +394,11 @@ TEST(SwitchUsbHostPowerRole, FuzzedWalk)
                         ASSERT_TRUE((s1 & INSERT) && (s1 & SRC_MODE) && (s2 & OTG_INSERT)) << "step " << step;
                         ASSERT_TRUE(!(s1 & VSAFE) || (s1 & (SPDSRC1 | SPDSRC2))) << "step " << step;
                     }
-                    if (before == SOURCE && !(status.first & INSERT)) ASSERT_NE(port.phase, SOURCE) << "step " << step;
+                    if (before == SOURCE && !(status.first & INSERT))
+                        ASSERT_NE(port.phase, SOURCE) << "step " << step;
                 }
-                if (port.phase == SOURCE) ASSERT_TRUE(port.rails && port.switches) << "step " << step;
+                if (port.phase == SOURCE)
+                    ASSERT_TRUE(port.rails && port.switches) << "step " << step;
             }
         }
     }
@@ -379,7 +412,10 @@ struct Cap {
 
 class SwitchUsbHostRole : public testing::Test {
 protected:
-    void SetUp() override { fake_reset(); }
+    void SetUp() override
+    {
+        fake_reset();
+    }
 
     // entries laid out from xecp; an entry after one whose next is 0 still gets its own place (unreachable).
     static void caps(const std::vector<Cap> &entries, uint32_t xecp = 0x500)
@@ -423,8 +459,9 @@ TEST_F(SwitchUsbHostRole, BrokenLists)
     EXPECT_EQ(find(2).first, Range(0, 0));  // no xECP at all
     fake_reset();
     fake_write(0x10, (0x100 >> 2) << 16);
-    for (uint32_t k = 0; k < 200; ++k) fake_write(0x100 + 4 * k, 1 << 8 | 0xc0);  // a long chain of other capabilities:
-    const auto [result, reads] = find(2);                                         // the walk stops after 64
+    for (uint32_t k = 0; k < 200; ++k)
+        fake_write(0x100 + 4 * k, 1 << 8 | 0xc0);  // a long chain of other capabilities:
+    const auto [result, reads] = find(2);          // the walk stops after 64
     EXPECT_EQ(result, Range(0, 0));
     EXPECT_LE(reads, 1u + 64);
 }
@@ -474,7 +511,12 @@ TEST_F(SwitchUsbHostRole, ChargerDetectAndOc)
 
 // --- Interrupt check -------------------------------------------------------------------------------------------------
 
-enum Verdict { FINE, CONFIRM, OFF, PANIC };
+enum Verdict {
+    FINE,
+    CONFIRM,
+    OFF,
+    PANIC
+};
 
 struct Sample {
     uint32_t count, erdp;
@@ -491,7 +533,8 @@ int judge(const Sample &armed, const Sample &now, bool first = false, unsigned s
 int runCheck(const Sample &armed, const Sample &stage1, const Sample &stage2, bool first = false)
 {
     const int verdict = judge(armed, stage1, first, 1);
-    if (verdict != CONFIRM) return verdict;
+    if (verdict != CONFIRM)
+        return verdict;
     return judge(stage1, stage2, first, 2);
 }
 

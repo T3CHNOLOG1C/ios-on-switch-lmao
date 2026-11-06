@@ -33,7 +33,10 @@ typedef IOReturn (*SwitchJoyConOutput)(void *context, const uint8_t *report, siz
 // must only take note and wake the rail's work loop.
 typedef void (*SwitchJoyConSessionEnded)(void *context, int32_t servedPid, int32_t openerPid);
 
-enum : uint32_t { kSwitchJoyConLeftPID = 0x2006, kSwitchJoyConRightPID = 0x2007 };
+enum : uint32_t {
+    kSwitchJoyConLeftPID = 0x2006,
+    kSwitchJoyConRightPID = 0x2007
+};
 
 // Once, before any game controller can appear (switch_joycon_start calls it first): removes
 // AppleGameControllerPersonality.kext's personalities if it is prelinked. Thread context.

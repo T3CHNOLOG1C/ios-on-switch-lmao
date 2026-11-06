@@ -3,6 +3,7 @@
 #include "fat32.h"
 
 #define SWITCH_GPT_MAX_ENTRIES 128u
+
 enum switch_gpt_error {
     SWITCH_GPT_OK = 0,
     SWITCH_GPT_ARGUMENT = 1,
@@ -20,21 +21,25 @@ enum switch_gpt_error {
     SWITCH_GPT_PROBE = 13,
     SWITCH_GPT_AMBIGUOUS = 14
 };
+
 struct switch_gpt_slice {
     uint64_t first_sector, sector_count;
     uint32_t partition_index; /* Zero-based GPT array index. */
     uint8_t unique_guid[16];  /* Exact on-disk GUID byte order. */
 };
+
 struct switch_gpt_header {
     uint64_t first_usable, last_usable, entry_lba;
     uint32_t entry_count, entry_size, array_crc;
     uint8_t disk_guid[16];
 };
+
 struct switch_gpt_extent {
     uint64_t first, last;
     uint8_t guid[16], type_guid[16];
     uint32_t partition_index, basic_data;
 };
+
 /* Caller-owned scratch, normally static for kernel callers. No initialization
  * needed, no heap, and no pointers into scratch are retained by the result. */
 struct switch_gpt_workspace {
@@ -48,7 +53,7 @@ struct switch_gpt_workspace {
  * CRC/copy/geometry/overlap/unique-GUID checks and <=259 reads apply. No MBR
  * fallback and no probes; *used_count is untouched on failure. */
 int switch_gpt_scan(switch_fat_read512, void *, uint64_t capacity_sectors, struct switch_gpt_workspace *,
-                  uint32_t *used_count);
+                    uint32_t *used_count);
 
 /* Return 1 only if the slice contains this build's required image paths, 0 if
  * incompatible, or a negative value if bounded metadata probing failed.
@@ -72,8 +77,8 @@ typedef int (*switch_gpt_probe_slice)(void *, const struct switch_gpt_slice *);
  * read callback semantics are as in fat32.h. GPT validation performs at most
  * 259 sector reads, in addition to the caller's bounded per-slice probes.
  * Failure leaves *output entirely unchanged. */
-int switch_gpt_find(switch_fat_read512, void *context, uint64_t capacity_sectors, switch_gpt_probe_slice, void *probe_context,
-                  struct switch_gpt_workspace *, struct switch_gpt_slice *output);
+int switch_gpt_find(switch_fat_read512, void *context, uint64_t capacity_sectors, switch_gpt_probe_slice,
+                    void *probe_context, struct switch_gpt_workspace *, struct switch_gpt_slice *output);
 /* Runtime partition discovery. A protective MBR selects the strict GPT path
  * above. Otherwise validate all four primary MBR entries and probe only FAT32
  * types 0x0B/0x0C. Require one compatible slice, valid bounds, no overlaps and
@@ -83,5 +88,5 @@ int switch_gpt_find(switch_fat_read512, void *context, uint64_t capacity_sectors
  * MBR results have an all-zero unique_guid. The callback and untouched-output
  * failure contracts are identical to switch_gpt_find. */
 int switch_partition_find(switch_fat_read512, void *context, uint64_t capacity_sectors, switch_gpt_probe_slice,
-                        void *probe_context, struct switch_gpt_workspace *, struct switch_gpt_slice *output);
+                          void *probe_context, struct switch_gpt_workspace *, struct switch_gpt_slice *output);
 #endif

@@ -18,19 +18,22 @@ using testing::HasSubstr;
 TEST(TegraSMMUSource, OneOwnerOfTheGlobalRegisters)
 {
     std::string root = PackagePath("../../");  // the drivers/ directory of the tree, as the test's data holds it
-    if (!root.empty() && root.back() == '/') root.pop_back();
+    if (!root.empty() && root.back() == '/')
+        root.pop_back();
     const std::filesystem::path drivers = root;
     unsigned units = 0;
     bool sawOwner = false;
     for (const auto &entry : std::filesystem::recursive_directory_iterator(drivers)) {
         const std::filesystem::path &path = entry.path();
-        if (path.extension() != ".cpp" || !std::filesystem::is_regular_file(path)) continue;
+        if (path.extension() != ".cpp" || !std::filesystem::is_regular_file(path))
+            continue;
         const std::string name = path.lexically_relative(drivers).generic_string();
         if (name == "TegraSMMU/TegraSMMU.cpp") {
             sawOwner = true;
             continue;
         }
-        if (name.find("NativeAdreno") != std::string::npos) continue;  // the Qualcomm port's own SMMU
+        if (name.find("NativeAdreno") != std::string::npos)
+            continue;  // the Qualcomm port's own SMMU
         ++units;
         std::ifstream file(path, std::ios::binary);
         std::ostringstream text;

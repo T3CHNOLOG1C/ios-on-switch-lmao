@@ -36,11 +36,13 @@ enum {
 static inline int swlan_bt_flags_describe(uint32_t flags, char *out, size_t size)
 {
     static const char *const names[] = {"SCO", "A2DP", "inquiry", "paging"};
-    if (!size) return 0;
+    if (!size)
+        return 0;
     out[0] = 0;
     size_t at = 0;
     for (unsigned i = 0; i < 4; ++i) {
-        if (!(flags & (1u << i)) || at >= size) continue;
+        if (!(flags & (1u << i)) || at >= size)
+            continue;
         const int n = snprintf(out + at, size - at, "%s%s", at ? "+" : "", names[i]);
         at += n > 0 ? (size_t)n : 0;
     }
@@ -48,7 +50,8 @@ static inline int swlan_bt_flags_describe(uint32_t flags, char *out, size_t size
         const int n = snprintf(out + at, size - at, "%s0x%x", at ? "+" : "", flags & ~0xfu);
         at += n > 0 ? (size_t)n : 0;
     }
-    if (!at) return snprintf(out, size, "none");
+    if (!at)
+        return snprintf(out, size, "none");
     return (int)(at < size ? at : size - 1);
 }
 
@@ -78,12 +81,15 @@ static inline uint32_t swlan_coex_le32(const uint8_t *p)
 // tx_pkts_retried 160, tx_pkts_retry_exhausted 164.
 static inline bool swlan_sta_parse(const uint8_t *b, size_t n, struct swlan_sta *out)
 {
-    for (size_t i = 0; i < sizeof(*out); ++i) ((uint8_t *)out)[i] = 0;
-    if (n < 16) return false;
+    for (size_t i = 0; i < sizeof(*out); ++i)
+        ((uint8_t *)out)[i] = 0;
+    if (n < 16)
+        return false;
     out->ver = (uint16_t)(b[0] | b[1] << 8);
     out->len = (uint16_t)(b[2] | b[3] << 8);
     size_t len = out->len < n ? out->len : n;
-    if (len < 16) return false;
+    if (len < 16)
+        return false;
     out->flags = swlan_coex_le32(b + 8);
     out->idle = swlan_coex_le32(b + 12);
     if (out->ver >= 3 && len >= 84) {
@@ -114,9 +120,11 @@ static inline bool swlan_sta_parse(const uint8_t *b, size_t n, struct swlan_sta 
 // 70 multicast 9 decrypt-failed 0, rates 65/39 Mb/s, idle 0 s". Empty when the newer reading has no version 3 fields.
 static inline int swlan_sta_describe(const struct swlan_sta *was, const struct swlan_sta *now, char *out, size_t size)
 {
-    if (!size) return 0;
+    if (!size)
+        return 0;
     out[0] = 0;
-    if (!(now->have & SWLAN_STA_V3)) return 0;
+    if (!(now->have & SWLAN_STA_V3))
+        return 0;
     const bool base = (was->have & SWLAN_STA_V3) != 0;
     int n = snprintf(out, size, "AP: tx %u failed %u", base ? now->tx_pkts - was->tx_pkts : now->tx_pkts,
                      base ? now->tx_failures - was->tx_failures : now->tx_failures);
@@ -154,14 +162,19 @@ static inline int swlan_sta_describe(const struct swlan_sta *was, const struct s
 // Either way the vendor's operating point is the one to run: while Bluetooth is on, HOS's sleep return, then PM 2;
 // PM 0 when it is off. The radio stays up 2-5 s after any frame, so traffic in progress sees no added latency; only
 // the first frame the access point sends after 2 s of silence waits for the next beacon (at most ~100 ms).
-enum { SWLAN_PM_OFF = 0, SWLAN_PM_FAST = 2 };
+enum {
+    SWLAN_PM_OFF = 0,
+    SWLAN_PM_FAST = 2
+};
+
 #define SWLAN_PM2_SLEEP_RET_EXT_SIZE 24u
 
 // wl_pm2_sleep_ret_ext_t {u8 logic, pad, u16 low_ms, high_ms, rx/tx/txrx packet thresholds, u32 rx/tx/txrx byte
 // thresholds}, little-endian, as HOS fills it for mode 0.
 static inline void swlan_pm2_sleep_ret_ext(uint8_t out[SWLAN_PM2_SLEEP_RET_EXT_SIZE])
 {
-    for (unsigned i = 0; i < SWLAN_PM2_SLEEP_RET_EXT_SIZE; ++i) out[i] = 0;
+    for (unsigned i = 0; i < SWLAN_PM2_SLEEP_RET_EXT_SIZE; ++i)
+        out[i] = 0;
     out[0] = 2;  // WL_DFRTS_LOGIC_AND
     out[2] = 2000 & 0xff;
     out[3] = 2000 >> 8;
@@ -190,7 +203,8 @@ struct swlan_btc_status {
 
 static inline bool swlan_btc_status_parse(const uint8_t *b, size_t n, struct swlan_btc_status *out)
 {
-    if (n < 8) return false;
+    if (n < 8)
+        return false;
     out->bt_pwr = (int8_t)b[3];
     out->bt_rssi = (int8_t)b[4];
     out->wl_rssi = (int8_t)b[5];
@@ -214,13 +228,17 @@ static inline int swlan_btc_status_describe(const struct swlan_btc_status *s, ch
 // nothing received through Bluetooth's transmissions, so nothing to desense against; what Apple's BCM4355C0 iPads and
 // the Nexus 6's BCM4356 ship). With no link the firmware runs its own coexistence as the NVRAM configures it (dynamic
 // control on, mode 5, no desense), the state HOS runs: mode 5 with the dynamic control off has no such baseline.
-enum { SWLAN_BTC_FULL_TDM = 1, SWLAN_BTC_HYBRID = 5 };
+enum {
+    SWLAN_BTC_FULL_TDM = 1,
+    SWLAN_BTC_HYBRID = 5
+};
 
 // dctl_prof_t (50 bytes, version 1) with the dynamic control off: flags 0 (no dynamic control, desense or mode
 // switching); the rest as the NVRAM made it. False for any other layout (the profile is left alone).
 static inline bool swlan_btc_profile_static(uint8_t *b, size_t n)
 {
-    if (n < 50 || b[0] != 1) return false;
+    if (n < 50 || b[0] != 1)
+        return false;
     b[1] = 0;
     return true;
 }
@@ -229,9 +247,12 @@ static inline bool swlan_btc_profile_static(uint8_t *b, size_t n)
 // link, the NVRAM's as it is with none. False (out untouched) unless that is a version 1 profile.
 static inline bool swlan_btc_profile_for(const uint8_t *nvram, size_t n, unsigned links, uint8_t out[50])
 {
-    if (n < 50 || nvram[0] != 1) return false;
-    for (unsigned i = 0; i < 50; ++i) out[i] = nvram[i];
-    if (links) out[1] = 0;
+    if (n < 50 || nvram[0] != 1)
+        return false;
+    for (unsigned i = 0; i < 50; ++i)
+        out[i] = nvram[i];
+    if (links)
+        out[1] = 0;
     return true;
 }
 
@@ -245,9 +266,11 @@ static inline unsigned swlan_coex_mode(unsigned links, unsigned idle_mode)
 // answer is too short or not version 1.
 static inline int swlan_btc_profile_describe(const uint8_t *b, size_t n, char *out, size_t size)
 {
-    if (!size) return 0;
+    if (!size)
+        return 0;
     out[0] = 0;
-    if (n < 50 || b[0] != 1) return 0;
+    if (n < 50 || b[0] != 1)
+        return 0;
     int k = snprintf(out, size, "btcdyn v1 flags %#x, desense levels %u/%u/%u/%u, default mode %u, desense rows", b[1],
                      b[2], b[3], b[4], b[5], b[7]);
     size_t at = k > 0 ? (size_t)k : 0;
@@ -276,13 +299,16 @@ static inline int swlan_btc_profile_describe(const uint8_t *b, size_t n, char *o
 static inline bool swlan_nvram_value(const char *text, size_t length, const char *key, uint32_t *out)
 {
     size_t keyLength = 0;
-    while (key[keyLength]) ++keyLength;
+    while (key[keyLength])
+        ++keyLength;
     for (size_t at = 0; at < length;) {
         size_t end = at;
-        while (end < length && text[end] != '\n' && text[end] != 0) ++end;
+        while (end < length && text[end] != '\n' && text[end] != 0)
+            ++end;
         if (end - at > keyLength && text[at + keyLength] == '=') {
             bool same = true;
-            for (size_t i = 0; i < keyLength && same; ++i) same = text[at + i] == key[i];
+            for (size_t i = 0; i < keyLength && same; ++i)
+                same = text[at + i] == key[i];
             if (same) {
                 size_t i = at + keyLength + 1;
                 unsigned base = 10;
@@ -306,7 +332,8 @@ static inline bool swlan_nvram_value(const char *text, size_t length, const char
                     v = v * base + d;
                     any = true;
                 }
-                if (!any) return false;
+                if (!any)
+                    return false;
                 *out = v;
                 return true;
             }

@@ -22,6 +22,7 @@ struct Chunk {
     uint32_t granules, free;
     uint32_t *used;  // one bit per granule
 };
+
 Chunk gChunks[kMaxChunks];
 uint32_t gCount;
 uint64_t gTotal;
@@ -31,6 +32,7 @@ bool used(const Chunk &c, uint32_t i)
 {
     return c.used[i / 32] & (1u << (i % 32));
 }
+
 void setUsed(Chunk &c, uint32_t first, uint32_t count, bool on)
 {
     for (uint32_t i = first; i < first + count; i++) {
@@ -43,7 +45,8 @@ void setUsed(Chunk &c, uint32_t first, uint32_t count, bool on)
 
 template <bool Invalidate> void cacheOp(const void *va, size_t size)
 {
-    if (!size) return;
+    if (!size)
+        return;
     uint64_t ctr;
     __asm__ volatile("mrs %0, ctr_el0" : "=r"(ctr));
     const uintptr_t line = (uintptr_t)4 << ((ctr >> 16) & 15);
@@ -60,16 +63,19 @@ template <bool Invalidate> void cacheOp(const void *va, size_t size)
 bool addChunk(uint64_t bytes)
 {
     bytes = (bytes + kGranule - 1) & ~(kGranule - 1);
-    if (gCount == kMaxChunks || gTotal + bytes > kMaxBytes) return false;
+    if (gCount == kMaxChunks || gTotal + bytes > kMaxBytes)
+        return false;
     const IOOptionBits options = (IOOptionBits)kIODirectionInOut | (IOOptionBits)kIOMemoryPhysicallyContiguous |
                                  (IOOptionBits)kIOMemoryMapperNone | (IOOptionBits)kIOMemoryKernelUserShared;
     IOBufferMemoryDescriptor *md =
         IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task, options, bytes, 0xffff0000ULL);
     IOByteCount contiguous = 0;
     uint64_t pa = 0;
-    if (md && md->prepare() == kIOReturnSuccess) pa = md->getPhysicalSegment(0, &contiguous, kIOMemoryMapperNone);
+    if (md && md->prepare() == kIOReturnSuccess)
+        pa = md->getPhysicalSegment(0, &contiguous, kIOMemoryMapperNone);
     if (!pa || contiguous < bytes || pa + bytes > (1ULL << 32)) {
-        if (md) md->release();
+        if (md)
+            md->release();
         return false;
     }
     Chunk &c = gChunks[gCount];
@@ -96,7 +102,8 @@ bool fit(uint32_t chunk, uint32_t count, uint32_t *first)
         if (used(c, i)) {
             run = 0;
         } else {
-            if (!run) *first = i;
+            if (!run)
+                *first = i;
             run++;
         }
     }
@@ -108,6 +115,7 @@ extern "C" void tegra_nvenc_cache_clean(const void *va, size_t size)
 {
     cacheOp<false>(va, size);
 }
+
 extern "C" void tegra_nvenc_cache_flush(const void *va, size_t size)
 {
     cacheOp<true>(va, size);
@@ -115,7 +123,8 @@ extern "C" void tegra_nvenc_cache_flush(const void *va, size_t size)
 
 extern "C" int tegra_nvenc_arena_init(uint64_t bytes)
 {
-    if (!gLock && !(gLock = IOLockAlloc())) return -12;
+    if (!gLock && !(gLock = IOLockAlloc()))
+        return -12;
     IOLockLock(gLock);
     const bool ok = gCount || addChunk(bytes);
     IOLockUnlock(gLock);
@@ -124,7 +133,8 @@ extern "C" int tegra_nvenc_arena_init(uint64_t bytes)
 
 extern "C" void tegra_nvenc_arena_release(void)
 {
-    if (!gLock) return;
+    if (!gLock)
+        return;
     IOLockLock(gLock);
     for (uint32_t i = 0; i < gCount; i++) {
         gChunks[i].md->complete();
@@ -139,11 +149,13 @@ extern "C" void tegra_nvenc_arena_release(void)
 
 extern "C" int tegra_nvenc_arena_alloc(uint64_t size, TegraNVENCBlock *block)
 {
-    if (!gLock || !size || size > kMaxBytes) return -12;
+    if (!gLock || !size || size > kMaxBytes)
+        return -12;
     const uint32_t count = (uint32_t)((size + kGranule - 1) / kGranule);
     IOLockLock(gLock);
     uint32_t chunk = 0, first = 0;
-    while (chunk < gCount && !fit(chunk, count, &first)) chunk++;
+    while (chunk < gCount && !fit(chunk, count, &first))
+        chunk++;
     if (chunk == gCount) {  // a new chunk, at least the usual size and big enough for this buffer
         const uint64_t bytes = (uint64_t)count * kGranule > kGrowChunk ? (uint64_t)count * kGranule : kGrowChunk;
         if (!gCount || !addChunk(bytes) || !fit(chunk, count, &first)) {
@@ -169,7 +181,8 @@ extern "C" int tegra_nvenc_arena_alloc(uint64_t size, TegraNVENCBlock *block)
 
 extern "C" void tegra_nvenc_arena_free(const TegraNVENCBlock *block)
 {
-    if (!gLock || !block->count) return;
+    if (!gLock || !block->count)
+        return;
     IOLockLock(gLock);
     if (block->chunk < gCount) {
         setUsed(gChunks[block->chunk], block->first, block->count, false);
@@ -190,9 +203,12 @@ extern "C" IOMemoryDescriptor *tegra_nvenc_arena_descriptor(const TegraNVENCBloc
 extern "C" void tegra_nvenc_arena_usage(uint64_t *total, uint64_t *free)
 {
     uint64_t f = 0;
-    if (gLock) IOLockLock(gLock);
-    for (uint32_t i = 0; i < gCount; i++) f += (uint64_t)gChunks[i].free * kGranule;
+    if (gLock)
+        IOLockLock(gLock);
+    for (uint32_t i = 0; i < gCount; i++)
+        f += (uint64_t)gChunks[i].free * kGranule;
     *total = gTotal;
-    if (gLock) IOLockUnlock(gLock);
+    if (gLock)
+        IOLockUnlock(gLock);
     *free = f;
 }

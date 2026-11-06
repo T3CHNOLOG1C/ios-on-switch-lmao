@@ -24,6 +24,7 @@
             return 1;                                                                                \
         }                                                                                            \
     } while (0)
+
 static NmbRenderPipelineDescriptor descriptor(NmbLibrary *library, const std::string &vertex,
                                               const std::string &fragment, bool blur)
 {
@@ -53,14 +54,17 @@ static NmbRenderPipelineDescriptor descriptor(NmbLibrary *library, const std::st
         const uint64_t formats[] = {MTLVertexFormatFloat4, MTLVertexFormatFloat2, MTLVertexFormatFloat2,
                                     MTLVertexFormatFloat4, MTLVertexFormatFloat};
         const uint64_t offsets[] = {0, 16, 24, 32, 48};
-        for (unsigned i = 0; i < 5; ++i) d.attributes[i] = {formats[i], offsets[i], 0};
+        for (unsigned i = 0; i < 5; ++i)
+            d.attributes[i] = {formats[i], offsets[i], 0};
         d.layouts[0] = {64, MTLVertexStepFunctionPerVertex, 1};
     }
     return d;
 }
+
 int main(int argc, char **argv)
 {
-    if (argc != 4) return 2;
+    if (argc != 4)
+        return 2;
     const bool produce = !std::strcmp(argv[3], "produce"), consume = !std::strcmp(argv[3], "consume"),
                uuid = !std::strcmp(argv[3], "uuid-miss"), empty = !std::strcmp(argv[3], "empty-driver");
     REQUIRE(produce || consume || uuid || empty);
@@ -71,7 +75,8 @@ int main(int argc, char **argv)
             !setenv("NMB_TEST_REAL_VULKAN_LOADER", argv[1], 1));
     std::string path = argv[1];
     path = path.substr(0, path.find_last_of('/') + 1) + "libOfflineGraphicsCacheControl.dylib";
-    if (const char *override = getenv("NMB_TEST_GRAPHICS_CACHE_LOADER")) path = override;
+    if (const char *override = getenv("NMB_TEST_GRAPHICS_CACHE_LOADER"))
+        path = override;
     void *loader = dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
     REQUIRE(loader);
     auto control = reinterpret_cast<void (*)(bool, bool)>(dlsym(loader, "nmb_test_graphics_cache_control"));
@@ -88,7 +93,8 @@ int main(int argc, char **argv)
     counters(deviceCounts);
     control(!produce, uuid);
     const char *libraryPath = "/System/Library/Frameworks/QuartzCore.framework/default.metallib";
-    if (const char *override = getenv("NMB_TEST_QUARTZCORE_LIBRARY")) libraryPath = override;
+    if (const char *override = getenv("NMB_TEST_QUARTZCORE_LIBRARY"))
+        libraryPath = override;
     std::ifstream input(libraryPath, std::ios::binary);
     REQUIRE(input);
     std::vector<char> bytes(9670832);
@@ -97,7 +103,8 @@ int main(int argc, char **argv)
     unsigned char digest[CC_SHA256_DIGEST_LENGTH];
     CC_SHA256(bytes.data(), (CC_LONG)bytes.size(), digest);
     char digestHex[65] = {};
-    for (unsigned i = 0; i < 32; ++i) std::snprintf(digestHex + 2 * i, 3, "%02x", digest[i]);
+    for (unsigned i = 0; i < 32; ++i)
+        std::snprintf(digestHex + 2 * i, 3, "%02x", digest[i]);
     REQUIRE(!std::strcmp(digestHex, "606f913adf520420f9b4bb666efb782a68c830f082f1e559e17b20d0d13adbc9"));
     NmbLibrary *library = nmb_library_new(device, bytes.data(), bytes.size(), false);
     REQUIRE(library && nmb_library_function_count(library) == 167);
@@ -110,10 +117,12 @@ int main(int argc, char **argv)
     std::vector<NmbRenderPipelineDescriptor> recipes;
     for (const auto &name : names) {
         const auto marker = name.find("_vert_");
-        if (marker == std::string::npos) continue;
+        if (marker == std::string::npos)
+            continue;
         auto fragment = name;
         fragment.replace(marker, 6, "_frag_");
-        if (std::find(names.begin(), names.end(), fragment) == names.end()) continue;
+        if (std::find(names.begin(), names.end(), fragment) == names.end())
+            continue;
         recipes.push_back(descriptor(library, name, fragment, false));
     }
     REQUIRE(recipes.size() == 22);
@@ -133,7 +142,8 @@ int main(int argc, char **argv)
         control(true, false);
         auto cold = nmb_render_pipeline_new(device, &recipes.back());
         coldObject = cold != nullptr;
-        if (cold) nmb_render_pipeline_release(cold);
+        if (cold)
+            nmb_render_pipeline_release(cold);
         uint64_t counts[10] = {};
         counters(counts);
         coldRequired = counts[2];
@@ -144,10 +154,12 @@ int main(int argc, char **argv)
     counters(before);
     unsigned made = 0;
     for (const auto &d : recipes) {
-        if (produce) REQUIRE(nmb_binary_archive_add_render(archive, &d));
+        if (produce)
+            REQUIRE(nmb_binary_archive_add_render(archive, &d));
         NmbRenderPipeline *state = nmb_render_pipeline_new_with_options(device, &d, &options);
         if (uuid || empty) {
-            if (state) nmb_render_pipeline_release(state);
+            if (state)
+                nmb_render_pipeline_release(state);
             break;
         }
         REQUIRE(state);
@@ -165,18 +177,21 @@ int main(int argc, char **argv)
         (unsigned long long)(counts[8] - before[8]), (unsigned long long)(counts[9] - before[9]));
     if (uuid || empty) {
         REQUIRE(counts[2] > before[2]);
-        if (uuid) REQUIRE(counts[5] > before[5]);
+        if (uuid)
+            REQUIRE(counts[5] > before[5]);
     } else
         REQUIRE(made == 24 && counts[1] > before[1]);
     if (consume)
         REQUIRE(counts[2] == before[2] && counts[7] > before[7] && counts[8] - before[8] == counts[7] - before[7] &&
                 counts[9] - before[9] == counts[7] - before[7]);
-    if (produce) REQUIRE(nmb_binary_archive_serialize(archive, archivePath.c_str()));
+    if (produce)
+        REQUIRE(nmb_binary_archive_serialize(archive, archivePath.c_str()));
     NmbShaderCacheStats stats = {};
     REQUIRE(nmb_device_shader_cache_stats(device, &stats));
     REQUIRE(!stats.rejected && !stats.read_failures && !stats.write_failures && !stats.driver_truncated &&
             !stats.driver_mismatched);
-    if (consume) REQUIRE(!stats.misses && !stats.writes && !stats.driver_misses && stats.driver_loads);
+    if (consume)
+        REQUIRE(!stats.misses && !stats.writes && !stats.driver_misses && stats.driver_loads);
     const unsigned initializationSubmissions = submitted() - submissions;
     std::printf("PASS: QuartzCore compiler %s pid=%d recipes=%u calls=%llu success=%llu required=%llu valid=%llu "
                 "hits=%llu uuid_mutations=%llu devices=%llu artifacts=%llu/%llu/%llu driver=%llu/%llu/%llu/%llu "

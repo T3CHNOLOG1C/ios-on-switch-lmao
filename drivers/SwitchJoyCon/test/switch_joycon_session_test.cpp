@@ -41,19 +41,26 @@ public:
     V *find(const K &key)
     {
         for (auto &entry : entries)
-            if (entry.first == key) return &entry.second;
+            if (entry.first == key)
+                return &entry.second;
         return nullptr;
     }
+
     bool contains(const K &key) const
     {
-        return std::any_of(entries.begin(), entries.end(), [&](const auto &e) { return e.first == key; });
+        return std::any_of(entries.begin(), entries.end(), [&](const auto &e) {
+            return e.first == key;
+        });
     }
+
     V &operator[](const K &key)
     {
-        if (V *v = find(key)) return *v;
+        if (V *v = find(key))
+            return *v;
         entries.emplace_back(key, V{});
         return entries.back().second;
     }
+
     std::optional<V> pop(const K &key)
     {
         for (auto it = entries.begin(); it != entries.end(); ++it)
@@ -64,9 +71,21 @@ public:
             }
         return std::nullopt;
     }
-    std::vector<std::pair<K, V>> items() const { return entries; }
-    bool empty() const { return entries.empty(); }
-    void clear() { entries.clear(); }
+
+    std::vector<std::pair<K, V>> items() const
+    {
+        return entries;
+    }
+
+    bool empty() const
+    {
+        return entries.empty();
+    }
+
+    void clear()
+    {
+        entries.clear();
+    }
 
 private:
     std::vector<std::pair<K, V>> entries;
@@ -81,6 +100,7 @@ struct Connection {
     std::string kind;  // "filter" or "driver"
     uint64_t client;
 };
+
 using ConnectionRef = std::shared_ptr<Connection>;  // compared by identity
 
 // SwitchJoyConDevice: a registry ID and, with the rule on, the header's session (handleOpen/handleClose).
@@ -107,7 +127,9 @@ struct Rail {
     bool off = false;
     std::vector<std::string> logged;
 
-    explicit Rail(World *w) : world(w) {}
+    explicit Rail(World *w) : world(w)
+    {}
+
     void publish(char side);
     void destroy(char side);  // dropHid
     void sessionEnded(char side, int32_t served, int32_t opener);
@@ -138,7 +160,9 @@ struct Backboardd {
     bool alive = true;
     Ordered<uint64_t, Plugin *> services;
 
-    Backboardd(World *w, int32_t p) : world(w), pid(p) {}
+    Backboardd(World *w, int32_t p) : world(w), pid(p)
+    {}
+
     void start();
     void addService(Device *device);
     void removeService(uint64_t ident);
@@ -163,7 +187,9 @@ struct Gamecontrollerd {
     std::map<uint64_t, PendingDevice> pending;
     std::map<uint64_t, PhysicalDevice> physical;
 
-    explicit Gamecontrollerd(World *w) : world(w) {}
+    explicit Gamecontrollerd(World *w) : world(w)
+    {}
+
     void serverUp(Backboardd *s);         // __IOHIDEventSystemClientRefresh -> SetMatchingMultiple
     void serviceAdded(uint64_t ident);    // "HID Service Added" -> claimHIDService:
     void serviceRemoved(uint64_t ident);  // "HID Service Removed" -> relinquishHIDService:
@@ -176,14 +202,20 @@ struct Gamecontrollerd {
 struct World {
     bool rule;
     double now = 0.0;
+
     struct Event {
         double at;
         uint64_t order;
         std::function<void()> fn;
     };
+
     struct Later {
-        bool operator()(const Event &a, const Event &b) const { return a.at != b.at ? a.at > b.at : a.order > b.order; }
+        bool operator()(const Event &a, const Event &b) const
+        {
+            return a.at != b.at ? a.at > b.at : a.order > b.order;
+        }
     };
+
     std::priority_queue<Event, std::vector<Event>, Later> queue;
     uint64_t order = 0;
     uint64_t nextClient = 0x1000;
@@ -198,9 +230,19 @@ struct World {
     std::vector<std::unique_ptr<Plugin>> allPlugins;
     std::vector<std::unique_ptr<Backboardd>> allServers;
 
-    explicit World(bool r) : rule(r) {}
-    uint64_t client() { return nextClient++; }
-    void at(double delay, std::function<void()> fn) { queue.push({now + delay, order++, std::move(fn)}); }
+    explicit World(bool r) : rule(r)
+    {}
+
+    uint64_t client()
+    {
+        return nextClient++;
+    }
+
+    void at(double delay, std::function<void()> fn)
+    {
+        queue.push({now + delay, order++, std::move(fn)});
+    }
+
     void run(double until)
     {
         while (!queue.empty() && queue.top().at <= until && connections < kBudget) {
@@ -209,20 +251,25 @@ struct World {
             now = e.at;
             e.fn();
         }
-        if (connections < kBudget) now = std::max(now, until);
+        if (connections < kBudget)
+            now = std::max(now, until);
     }
+
     void startBackboardd(int32_t pid)
     {
         allServers.push_back(std::make_unique<Backboardd>(this, pid));
         backboardd = allServers.back().get();
         backboardd->start();
     }
+
     void boot()
     {
-        for (char side : {'L', 'R'}) rail.publish(side);
+        for (char side : {'L', 'R'})
+            rail.publish(side);
         startBackboardd(52);
         run(2000);
     }
+
     void respring(int32_t pid, bool closesLost = false, double gap = 400)
     {
         backboardd->die(closesLost);
@@ -230,16 +277,21 @@ struct World {
         startBackboardd(pid);
         run(now + 5000);
     }
+
     // gamecontrollerd has one live controller per seated Joy-Con: the current device, driven by the plugin of the
     // backboardd that runs now.
     bool healthy()
     {
         std::set<uint64_t> current, physicalIds;
-        for (const auto &[side, device] : rail.devices.items()) current.insert(device->id);
-        for (const auto &[ident, device] : gcd.physical) physicalIds.insert(ident);
-        if (physicalIds != current || !gcd.pending.empty()) return false;
+        for (const auto &[side, device] : rail.devices.items())
+            current.insert(device->id);
         for (const auto &[ident, device] : gcd.physical)
-            if (!device.driver || device.driver->plugin->server != backboardd) return false;
+            physicalIds.insert(ident);
+        if (physicalIds != current || !gcd.pending.empty())
+            return false;
+        for (const auto &[ident, device] : gcd.physical)
+            if (!device.driver || device.driver->plugin->server != backboardd)
+                return false;
         return true;
     }
 };
@@ -250,15 +302,19 @@ Device::Device(World *w, char s, std::string serialNumber)
 
 void Device::open(uint64_t client, int32_t pid, const std::string &name)
 {
-    if (!world->rule || !attached) return;
+    if (!world->rule || !attached)
+        return;
     const int event = jc_session_open(&session, (uintptr_t)client, pid, name == "backboardd");
-    if (event) world->rail.sessionEnded(side, session.pid, pid);
+    if (event)
+        world->rail.sessionEnded(side, session.pid, pid);
 }
 
 void Device::close(uint64_t client)
 {
-    if (!world->rule || !attached) return;
-    if (jc_session_close(&session, (uintptr_t)client)) world->rail.sessionEnded(side, session.pid, 0);
+    if (!world->rule || !attached)
+        return;
+    if (jc_session_close(&session, (uintptr_t)client))
+        world->rail.sessionEnded(side, session.pid, 0);
 }
 
 void Rail::publish(char side)
@@ -270,7 +326,10 @@ void Rail::publish(char side)
     world->devices[device->id] = device;
     device->open(0, 0, "kernel_task");  // IOHIDEventDummyService: a kernel client
     Backboardd *server = world->backboardd;
-    if (server && server->alive) world->at(1, [server, device] { server->addService(device); });
+    if (server && server->alive)
+        world->at(1, [server, device] {
+            server->addService(device);
+        });
 }
 
 void Rail::destroy(char side)
@@ -280,7 +339,10 @@ void Rail::destroy(char side)
         world->devices.erase((*device)->id);
         Backboardd *server = world->backboardd;
         const uint64_t ident = (*device)->id;
-        if (server && server->alive) world->at(0.5, [server, ident] { server->removeService(ident); });
+        if (server && server->alive)
+            world->at(0.5, [server, ident] {
+                server->removeService(ident);
+            });
     }
     marks.pop(side);
 }
@@ -288,18 +350,23 @@ void Rail::destroy(char side)
 void Rail::sessionEnded(char side, int32_t served, int32_t opener)
 {
     marks[side] = {served, opener};
-    world->at(0.1, [this] { work(); });  // interruptOccurred on the software source
+    world->at(0.1, [this] {
+        work();
+    });  // interruptOccurred on the software source
 }
 
 void Rail::work()
 {
     std::vector<char> sides;
-    for (const auto &[side, mark] : marks.items()) sides.push_back(side);
+    for (const auto &[side, mark] : marks.items())
+        sides.push_back(side);
     for (char side : sides) {
         const std::optional<std::pair<int32_t, int32_t>> mark = marks.pop(side);
-        if (!mark) continue;
+        if (!mark)
+            continue;
         const int32_t served = mark->first;
-        if (off || !devices.contains(side)) continue;
+        if (off || !devices.contains(side))
+            continue;
         switch_joycon_republish_guard &guard = guards[side];
         if (!jc_republish_allowed(&guard, served, (uint64_t)world->now)) {
             off = true;
@@ -313,23 +380,31 @@ void Rail::work()
     }
 }
 
-Plugin::Plugin(Backboardd *s, Device *d) : server(s), device(d), world(s->world), client(world->client()) {}
+Plugin::Plugin(Backboardd *s, Device *d) : server(s), device(d), world(s->world), client(world->client())
+{}
 
 void Plugin::start()
 {
     device->open(client, server->pid, "backboardd");
-    world->at(14, [this] { connect("filter"); });
-    world->at(80, [this] { connect("driver"); });
+    world->at(14, [this] {
+        connect("filter");
+    });
+    world->at(80, [this] {
+        connect("driver");
+    });
 }
 
 void Plugin::connect(const std::string &kind)
 {
-    if (cancelled) return;
+    if (cancelled)
+        return;
     ++world->connections;
     ConnectionRef connection = std::make_shared<Connection>(Connection{this, kind, world->client()});
     connections[kind] = connection;
     Gamecontrollerd *gcd = &world->gcd;
-    world->at(1, [gcd, connection] { gcd->incoming(connection); });
+    world->at(1, [gcd, connection] {
+        gcd->incoming(connection);
+    });
 }
 
 void Plugin::interrupted(const ConnectionRef &connection)
@@ -337,35 +412,48 @@ void Plugin::interrupted(const ConnectionRef &connection)
     auto it = connections.find(connection->kind);
     if (!cancelled && it != connections.end() && it->second == connection) {
         const std::string kind = connection->kind;
-        world->at(0.5, [this, kind] { connect(kind); });
+        world->at(0.5, [this, kind] {
+            connect(kind);
+        });
     }
 }
 
 void Plugin::cancel(std::optional<double> closesAfter)
 {
     cancelled = true;
-    for (const auto &[kind, connection] : connections) world->gcd.peerInvalidated(connection);
-    if (closesAfter) world->at(*closesAfter, [this] { device->close(client); });
+    for (const auto &[kind, connection] : connections)
+        world->gcd.peerInvalidated(connection);
+    if (closesAfter)
+        world->at(*closesAfter, [this] {
+            device->close(client);
+        });
 }
 
 void Backboardd::start()
 {
     std::vector<Device *> current;
-    for (const auto &[id, device] : world->devices) current.push_back(device);
-    for (Device *device : current) addService(device);
-    world->at(70, [this] { world->gcd.serverUp(this); });  // "IOHIDEventSystemServer died. Reestablishing connection."
+    for (const auto &[id, device] : world->devices)
+        current.push_back(device);
+    for (Device *device : current)
+        addService(device);
+    world->at(70, [this] {
+        world->gcd.serverUp(this);
+    });  // "IOHIDEventSystemServer died. Reestablishing connection."
 }
 
 void Backboardd::addService(Device *device)
 {
-    if (!alive || !world->devices.count(device->id) || services.contains(device->id)) return;
+    if (!alive || !world->devices.count(device->id) || services.contains(device->id))
+        return;
     world->allPlugins.push_back(std::make_unique<Plugin>(this, device));
     Plugin *plugin = world->allPlugins.back().get();
     services[device->id] = plugin;
     plugin->start();
     if (world->gcd.server == this) {
         const uint64_t ident = device->id;
-        world->at(2, [this, ident] { world->gcd.serviceAdded(ident); });
+        world->at(2, [this, ident] {
+            world->gcd.serviceAdded(ident);
+        });
     }
 }
 
@@ -373,7 +461,10 @@ void Backboardd::removeService(uint64_t ident)
 {
     if (std::optional<Plugin *> plugin = services.pop(ident)) {
         (*plugin)->cancel(0.2);
-        if (world->gcd.server == this) world->at(1, [this, ident] { world->gcd.serviceRemoved(ident); });
+        if (world->gcd.server == this)
+            world->at(1, [this, ident] {
+                world->gcd.serviceRemoved(ident);
+            });
     }
 }
 
@@ -388,28 +479,34 @@ void Backboardd::die(bool closesLost)
 
 void Gamecontrollerd::serverUp(Backboardd *s)
 {
-    if (!s->alive) return;
+    if (!s->alive)
+        return;
     const std::set<uint64_t> old = cache;
     server = s;
     cache.clear();
-    for (const auto &[ident, plugin] : s->services.items()) cache.insert(ident);
     for (const auto &[ident, plugin] : s->services.items())
-        if (!old.count(ident)) serviceAdded(ident);  // RefreshServiceCallback: only IDs the cache did not hold
+        cache.insert(ident);
+    for (const auto &[ident, plugin] : s->services.items())
+        if (!old.count(ident))
+            serviceAdded(ident);  // RefreshServiceCallback: only IDs the cache did not hold
 }
 
 void Gamecontrollerd::serviceAdded(uint64_t ident)
 {
     auto device = world->devices.find(ident);
-    if (device == world->devices.end() || claimed.count(ident)) return;
+    if (device == world->devices.end() || claimed.count(ident))
+        return;
     cache.insert(ident);
     known.insert(ident);
     claimed.insert(ident);
     pending[ident] = PendingDevice{device->second->serial, {}};
     auto waiting = parked.find(ident);
-    if (waiting == parked.end()) return;
+    if (waiting == parked.end())
+        return;
     const std::vector<ConnectionRef> connections = waiting->second;
     parked.erase(waiting);
-    for (const ConnectionRef &connection : connections) accept(connection);
+    for (const ConnectionRef &connection : connections)
+        accept(connection);
 }
 
 void Gamecontrollerd::serviceRemoved(uint64_t ident)
@@ -449,8 +546,10 @@ void Gamecontrollerd::accept(const ConnectionRef &connection)
         const std::string identifier = found->second.identifier;
         std::vector<uint64_t> same;
         for (const auto &[other, device] : physical)  // block .110: the same identifier
-            if (device.identifier == identifier) same.push_back(other);
-        for (uint64_t other : same) relinquish(other);
+            if (device.identifier == identifier)
+                same.push_back(other);
+        for (uint64_t other : same)
+            relinquish(other);
         physical[ident] = PhysicalDevice{identifier, connection};
         pending.erase(ident);
     }
@@ -459,7 +558,8 @@ void Gamecontrollerd::accept(const ConnectionRef &connection)
 void Gamecontrollerd::peerInvalidated(const ConnectionRef &connection)
 {
     for (auto &[ident, device] : physical)
-        if (device.driver == connection) device.driver = nullptr;
+        if (device.driver == connection)
+            device.driver = nullptr;
 }
 
 TEST(SwitchJoyConSession, Layout)
@@ -510,7 +610,9 @@ TEST(SwitchJoyConSession, Guard)
     const unsigned gap = jc_republish_gap_ms();
     EXPECT_EQ(gap, 10000u);
     switch_joycon_republish_guard guard{};
-    auto allowed = [&](int32_t pid, uint64_t now) { return jc_republish_allowed(&guard, pid, now) != 0; };
+    auto allowed = [&](int32_t pid, uint64_t now) {
+        return jc_republish_allowed(&guard, pid, now) != 0;
+    };
     EXPECT_TRUE(allowed(52, 0));   // the first, even at boot time 0
     EXPECT_TRUE(allowed(272, 1));  // a new backboardd at once: always
     EXPECT_TRUE(allowed(300, 2));
@@ -539,7 +641,8 @@ TEST(SwitchJoyConSession, RespringWithTheRule)
     World world(true);
     world.boot();
     std::map<char, uint64_t> before;
-    for (const auto &[side, device] : world.rail.devices.items()) before[side] = device->id;
+    for (const auto &[side, device] : world.rail.devices.items())
+        before[side] = device->id;
     EXPECT_EQ(world.rail.republished, 0u);
     world.respring(272);
     EXPECT_EQ(world.rejected, 0u);
@@ -551,7 +654,8 @@ TEST(SwitchJoyConSession, RespringWithTheRule)
         EXPECT_NE((*device)->id, before[side]) << side;
     }
     EXPECT_TRUE(world.healthy());
-    for (const auto &[side, id] : before) EXPECT_EQ(world.gcd.physical.count(id), 0u) << "block .110 retired " << side;
+    for (const auto &[side, id] : before)
+        EXPECT_EQ(world.gcd.physical.count(id), 0u) << "block .110 retired " << side;
     world.respring(300, false, 100);  // again at once, as a backboardd crash right after a respring would
     EXPECT_EQ(world.rejected, 0u);
     EXPECT_TRUE(world.healthy());
@@ -575,9 +679,11 @@ TEST(SwitchJoyConSession, DisplayCycleIsNotASessionEnd)
 {
     World world(true);
     world.boot();
-    for (char side : {'L', 'R'}) world.rail.destroy(side);  // pause() then run(): the rail's own destroy detaches first
+    for (char side : {'L', 'R'})
+        world.rail.destroy(side);  // pause() then run(): the rail's own destroy detaches first
     world.run(world.now + 100);
-    for (char side : {'L', 'R'}) world.rail.publish(side);
+    for (char side : {'L', 'R'})
+        world.rail.publish(side);
     world.run(world.now + 2000);
     EXPECT_EQ(world.rail.republished, 0u);
     EXPECT_EQ(world.rejected, 0u);
@@ -591,7 +697,9 @@ TEST(SwitchJoyConSession, APluginThatDropsEveryDeviceTurnsRepublishingOff)
     Backboardd *server = world.backboardd;
     for (int round = 0; round < 3; ++round) {  // the same backboardd closing the devices it serves, again and again
         for (const auto &[ident, plugin] : server->services.items())
-            world.at(0, [plugin] { plugin->device->close(plugin->client); });
+            world.at(0, [plugin] {
+                plugin->device->close(plugin->client);
+            });
         world.run(world.now + 500);
     }
     EXPECT_TRUE(world.rail.off);

@@ -20,19 +20,24 @@ static ArmSmmu4KRange ranges[3];
 static ArmSmmu4KAuditRegion a;
 static ArmSmmu4KTableAuditResult result;
 static size_t calls, fail_at;
+
 static int read_descriptor(void *cookie, uint64_t pa, uint64_t *out)
 {
     CHECK(cookie == tables && !(pa & 7) && pa >= c.table_physical && pa - c.table_physical < sizeof(tables));
-    if (++calls == fail_at) return 1;
+    if (++calls == fail_at)
+        return 1;
     *out = tables[(pa - c.table_physical) / 8];
     return 0;
 }
+
 static ArmSmmu4KTableIo io = {tables, read_descriptor};
+
 static ArmSmmu4KStatus audit(void)
 {
     calls = 0;
     return ArmSmmu4KAuditTables(&io, &c, &built, &a, c.table_physical, &result);
 }
+
 static void setup(unsigned bits, unsigned oas, unsigned upper, unsigned permissions)
 {
     c = (ArmSmmu4KConfig){bits, oas, 0x1000000, 8};
@@ -45,6 +50,7 @@ static void setup(unsigned bits, unsigned oas, unsigned upper, unsigned permissi
     a = (ArmSmmu4KAuditRegion){ranges, 3, CAP, CAP * 512, visited, sizeof(visited)};
     fail_at = 0;
 }
+
 int main(void)
 {
     unsigned widths[] = {32, 36, 40, 42, 44, 48}, profiles = 0, mutations = 0, failures = 0;

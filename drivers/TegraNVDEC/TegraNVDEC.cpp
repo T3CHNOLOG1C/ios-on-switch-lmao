@@ -77,13 +77,21 @@ enum : uint32_t {  // clock and reset controller
     SOURCE_PLLP = 4u << 29,
     NVDEC_DIV_1 = 0,  // 7.1 divider: 408 MHz * 2 / (0 + 2) = 408 MHz
 };
-enum : uint32_t { PWRGATE_TOGGLE = 0x30, REMOVE_CLAMPING = 0x34, PWRGATE_STATUS = 0x38, TOGGLE_START = 1u << 8 };
+
+enum : uint32_t {
+    PWRGATE_TOGGLE = 0x30,
+    REMOVE_CLAMPING = 0x34,
+    PWRGATE_STATUS = 0x38,
+    TOGGLE_START = 1u << 8
+};
+
 enum : uint32_t {
     MC_HOTRESET_CTRL_1 = 0x970,
     MC_HOTRESET_NVDEC = 1u << 5,
     MC_SMMU_NVDEC_ASID = 0xab4,
     SMMU_ENABLE = 1u << 31,
 };
+
 enum : uint32_t {  // falcon (drm/tegra/falcon.h), relative to the engine
     FALCON_IRQSTAT = 0x1008,
     FALCON_IRQMSET = 0x1010,
@@ -140,10 +148,12 @@ inline uint32_t r32(volatile uint8_t *base, uint32_t o)
 {
     return *(volatile uint32_t *)(base + o);
 }
+
 inline void w32(volatile uint8_t *base, uint32_t o, uint32_t v)
 {
     *(volatile uint32_t *)(base + o) = v;
 }
+
 inline uint32_t le32(const uint8_t *p)
 {
     return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
@@ -152,7 +162,8 @@ inline uint32_t le32(const uint8_t *p)
 bool waitBits(volatile uint8_t *base, uint32_t o, uint32_t mask, uint32_t value, uint32_t us)
 {
     for (uint32_t i = 0; i <= us; ++i) {
-        if ((r32(base, o) & mask) == value) return true;
+        if ((r32(base, o) & mask) == value)
+            return true;
         IODelay(1);
     }
     return false;
@@ -187,7 +198,8 @@ const char *falconState()
 // falcon_parse_firmware_image: magic 0x10de (or 0x10fe), version 1, the OS header and data inside the image.
 bool parse(const uint8_t *fw, size_t length, Image *image)
 {
-    if (length < 0x100 || (le32(fw) != 0x10de && le32(fw) != 0x10fe) || le32(fw + 4) != 1) return false;
+    if (length < 0x100 || (le32(fw) != 0x10de && le32(fw) != 0x10fe) || le32(fw + 4) != 1)
+        return false;
     image->size = le32(fw + 8);
     const uint32_t os = le32(fw + 12);
     image->binData = le32(fw + 16);
@@ -242,13 +254,15 @@ bool powerUp(bool *wasOn)
     IODelay(10);
     // tegra210_generic_mbist_war with NVDEC's slcg clock (NVJPG's) running for the pulse.
     const bool nvjpgOn = r32(gCar, CLK_OUT_ENB_Y) & Y_NVJPG;
-    if (!nvjpgOn) w32(gCar, CLK_ENB_Y_SET, Y_NVJPG);
+    if (!nvjpgOn)
+        w32(gCar, CLK_ENB_Y_SET, Y_NVJPG);
     const uint32_t ovre = r32(gCar, LVL2_CLK_GATE_OVRE);
     w32(gCar, LVL2_CLK_GATE_OVRE, ovre | OVRE_NVDEC_MBIST);
     IODelay(1);
     w32(gCar, LVL2_CLK_GATE_OVRE, ovre);
     IODelay(1);
-    if (!nvjpgOn) w32(gCar, CLK_ENB_Y_CLR, Y_NVJPG);
+    if (!nvjpgOn)
+        w32(gCar, CLK_ENB_Y_CLR, Y_NVJPG);
     if (!(r32(gCar, CLK_OUT_ENB_Y) & Y_NVDEC) || (r32(gCar, RST_DEVICES_Y) & Y_NVDEC)) {
         snprintf(gLine, sizeof(gLine), "N1 FAIL clock or reset stuck (CLK_OUT_ENB_Y %#x RST_DEVICES_Y %#x)",
                  r32(gCar, CLK_OUT_ENB_Y), r32(gCar, RST_DEVICES_Y));
@@ -290,7 +304,8 @@ bool loadImage()
 
 bool copyChunk(uint32_t from, uint32_t to, bool code)
 {
-    if (!waitBits(gNvdec, FALCON_DMATRFCMD, DMATRFCMD_FULL, 0, 100000)) return false;
+    if (!waitBits(gNvdec, FALCON_DMATRFCMD, DMATRFCMD_FULL, 0, 100000))
+        return false;
     w32(gNvdec, FALCON_DMATRFMOFFS, to);
     w32(gNvdec, FALCON_DMATRFFBOFFS, from);
     w32(gNvdec, FALCON_DMATRFCMD, DMATRFCMD_SIZE_256B | (code ? DMATRFCMD_IMEM : 0));
@@ -306,7 +321,8 @@ bool bootFalcon()
         return false;
     }
     w32(gNvdec, FALCON_DMACTL, 0);
-    if (!loadImage()) return false;
+    if (!loadImage())
+        return false;
     bool queued = true;
     for (uint32_t offset = 0; queued && offset < gImage.dataSize; offset += 256)
         queued = copyChunk(gImage.data + offset, offset, false);
@@ -374,7 +390,8 @@ void timedOut(uint32_t fence)
     if (gPublished)
         panic("TegraNVDEC: job fence %u not reached in %u ms (syncpoint %u at %u, GP timer bound passed); %s; %s",
               fence, kWaitBoundUs / 1000, gSyncpt, tegra_host1x_syncpt_read(gSyncpt), falconState(), host);
-    if (gWedged) return;
+    if (gWedged)
+        return;
     gWedged = true;
     IOLog("TegraNVDEC: job fence %u not reached in %u ms (syncpoint %u at %u); %s; %s\n", fence, kWaitBoundUs / 1000,
           gSyncpt, tegra_host1x_syncpt_read(gSyncpt), falconState(), host);
@@ -416,7 +433,8 @@ void bringUpStages(uint32_t stage)
     // A failed bring-up leaves nothing behind: the engine back in reset with its clock off (once it was touched), and
     // the arena returned.
     auto giveUp = [](bool touched) {
-        if (touched) park();
+        if (touched)
+            park();
         tegra_nvdec_arena_release();
     };
     // The arena first, while physical memory is least fragmented.
@@ -462,7 +480,8 @@ void bringUpStages(uint32_t stage)
     }
     IOLog("TegraNVDEC: N2 ok host interface and falcon incremented syncpoint %u %u->%u by interrupt in %llu us; %s\n",
           id, from, tegra_host1x_syncpt_read(id), us, falconState());
-    if (stage < 2) return;
+    if (stage < 2)
+        return;
     if (tegra_nvdec_arena_alloc(kSetupSlots * kSetupSlotBytes, &gSetup)) {
         IOLog("TegraNVDEC: N3 FAIL no setup slots in the arena\n");
         giveUp(true);
@@ -480,7 +499,8 @@ void bringUpStages(uint32_t stage)
     // VP9 has a picture of its own: a failure that leaves the engine answering keeps VP9 off and H.264 on; one that
     // does not (a job past its bound, a lost interrupt) is the engine's, and everything stays off.
     const int vp9 = tegra_nvdec_self_test_vp9();
-    if (!vp9) gCodecs |= 1u << TEGRA_NVDEC_CODEC_VP9;
+    if (!vp9)
+        gCodecs |= 1u << TEGRA_NVDEC_CODEC_VP9;
     if (vp9 == -60 || vp9 == TEGRA_HOST1X_ELOST || gWedged) {
         gUp = false;
         giveUp(true);
@@ -489,14 +509,16 @@ void bringUpStages(uint32_t stage)
     // HEVC likewise; its 8-bit picture also opens Main 10 (8-bit output), which the userland clip check proves or
     // turns off on its own.
     const int hevc = tegra_nvdec_self_test_hevc();
-    if (!hevc) gCodecs |= (1u << TEGRA_NVDEC_CODEC_HEVC) | TEGRA_NVDEC_HEVC_MAIN10;
+    if (!hevc)
+        gCodecs |= (1u << TEGRA_NVDEC_CODEC_HEVC) | TEGRA_NVDEC_HEVC_MAIN10;
     if (hevc == -60 || hevc == TEGRA_HOST1X_ELOST || gWedged) {
         gUp = false;
         giveUp(true);
         return;
     }
     tegra_host1x_set_sleep_client(engineSuspend, engineResume);
-    if (stage < 3) return;
+    if (stage < 3)
+        return;
     // Proven: from here a lost interrupt or a job past its bound panics (TegraNVDEC.h).
     gPublished = true;
     tegra_host1x_set_strict();
@@ -521,7 +543,8 @@ extern "C" int tegra_nvdec_await(uint32_t timeoutMs)
     uint64_t deadline;
     clock_interval_to_deadline(timeoutMs, kMillisecondScale, &deadline);
     IOLockLock(lock);
-    while (!gSettled && IOLockSleepDeadline(lock, &gSettled, deadline, THREAD_UNINT) != THREAD_TIMED_OUT) {}
+    while (!gSettled && IOLockSleepDeadline(lock, &gSettled, deadline, THREAD_UNINT) != THREAD_TIMED_OUT) {
+    }
     const int settled = gSettled;
     IOLockUnlock(lock);
     return settled == 1;
@@ -536,7 +559,8 @@ extern "C" int tegra_nvdec_run(const TegraNVDECSubmit *s, TegraNVDECResolve reso
                                const char **why)
 {
     *why = nullptr;
-    if (!gUp) return -19;
+    if (!gUp)
+        return -19;
     if (s->entry_count > TEGRA_NVDEC_MAX_ENTRIES || s->clean_count > TEGRA_NVDEC_MAX_RANGES ||
         s->setup_bytes > kSetupSlotBytes) {
         *why = "counts";
@@ -546,14 +570,16 @@ extern "C" int tegra_nvdec_run(const TegraNVDECSubmit *s, TegraNVDECResolve reso
     uint64_t avail[TEGRA_NVDEC_MAX_ENTRIES] = {};
     for (uint32_t i = 0; i < s->entry_count; i++) {
         const TegraNVDECEntry *e = &s->entries[i];
-        if (e->kind != TEGRA_NVDEC_ENTRY_RELOC) continue;
+        if (e->kind != TEGRA_NVDEC_ENTRY_RELOC)
+            continue;
         if (!resolve(context, e->value, &blocks[i]) || e->offset > blocks[i].size) {
             *why = "relocation outside a buffer";
             return -22;
         }
         avail[i] = blocks[i].size - e->offset;
     }
-    if ((*why = tegra_nvdec_check(s, avail))) return -22;
+    if ((*why = tegra_nvdec_check(s, avail)))
+        return -22;
     for (uint32_t i = 0; i < s->clean_count; i++) {
         const TegraNVDECRange *r = &s->clean[i];
         TegraNVDECBlock b;
@@ -573,7 +599,8 @@ extern "C" int tegra_nvdec_run(const TegraNVDECSubmit *s, TegraNVDECResolve reso
         words[n++] = value;
     };
     IOLockLock(gEngineLock);
-    while (gSuspended) IOLockSleep(gEngineLock, &gSuspended, THREAD_UNINT);
+    while (gSuspended)
+        IOLockSleep(gEngineLock, &gSuspended, THREAD_UNINT);
     if (gWedged) {
         IOLockUnlock(gEngineLock);
         return -19;
@@ -582,7 +609,8 @@ extern "C" int tegra_nvdec_run(const TegraNVDECSubmit *s, TegraNVDECResolve reso
     if (job > kInFlight) {
         const int ret = tegra_host1x_syncpt_wait(gSyncpt, gBase + job - kInFlight, kWaitBoundUs);
         if (ret) {
-            if (ret == TEGRA_HOST1X_ETIMEDOUT) timedOut(gBase + job - kInFlight);
+            if (ret == TEGRA_HOST1X_ETIMEDOUT)
+                timedOut(gBase + job - kInFlight);
             IOLockUnlock(gEngineLock);
             return ret;
         }
@@ -608,9 +636,11 @@ extern "C" int tegra_nvdec_run(const TegraNVDECSubmit *s, TegraNVDECResolve reso
 
 extern "C" int tegra_nvdec_wait(uint32_t fence)
 {
-    if (!gUp) return -19;
+    if (!gUp)
+        return -19;
     // A fence no job will reach would never be reached: refused, so it cannot pass for an engine fault.
-    if ((int32_t)(fence - (gBase + __atomic_load_n(&gIssued, __ATOMIC_ACQUIRE))) > 0) return -22;
+    if ((int32_t)(fence - (gBase + __atomic_load_n(&gIssued, __ATOMIC_ACQUIRE))) > 0)
+        return -22;
     const int ret = tegra_host1x_syncpt_wait(gSyncpt, fence, kWaitBoundUs);
     if (ret == TEGRA_HOST1X_ETIMEDOUT) {
         IOLockLock(gEngineLock);
@@ -645,6 +675,7 @@ extern "C" int tegra_nvdec_check_report(const void *owner, bool vp9Ok, bool hevc
         {TEGRA_NVDEC_HEVC_MAIN10,
          "TegraNVDEC: the HEVC Main 10 clip check failed in userland; Main 10 is off until reboot (Main stays on)\n"},
     };
+
     const bool ok[3] = {vp9Ok, hevcOk, hevc10Ok || !hevcOk};  // a failed Main check says all there is about Main 10
     IOLockLock(gCheckLock);
     const bool mine = gCheckState == TEGRA_NVDEC_CHECK_RUNNING && gCheckOwner == owner;
@@ -654,12 +685,14 @@ extern "C" int tegra_nvdec_check_report(const void *owner, bool vp9Ok, bool hevc
         gCheckState = ok[0] && ok[1] && ok[2] ? TEGRA_NVDEC_CHECK_PASSED : TEGRA_NVDEC_CHECK_FAILED;
         gCheckOwner = nullptr;
         for (int i = 0; i < 3; i++)
-            if (!ok[i]) __atomic_and_fetch(&gCodecs, ~kOff[i].bit, __ATOMIC_SEQ_CST);
+            if (!ok[i])
+                __atomic_and_fetch(&gCodecs, ~kOff[i].bit, __ATOMIC_SEQ_CST);
         IOLockWakeup(gCheckLock, &gCheckState, false);
     }
     IOLockUnlock(gCheckLock);
     for (int i = 0; mine && i < 3; i++)
-        if (!ok[i] && (had & kOff[i].bit) == kOff[i].bit) IOLog("%s", kOff[i].line);
+        if (!ok[i] && (had & kOff[i].bit) == kOff[i].bit)
+            IOLog("%s", kOff[i].line);
     return mine ? 0 : -22;
 }
 
@@ -670,7 +703,8 @@ extern "C" uint32_t tegra_nvdec_check_wait(void)
     clock_interval_to_deadline(3, kSecondScale, &deadline);
     IOLockLock(gCheckLock);
     while (gCheckState == TEGRA_NVDEC_CHECK_RUNNING)  // uninterruptible like every wait here: the 3 s bound ends it
-        if (IOLockSleepDeadline(gCheckLock, &gCheckState, deadline, THREAD_UNINT) == THREAD_TIMED_OUT) break;
+        if (IOLockSleepDeadline(gCheckLock, &gCheckState, deadline, THREAD_UNINT) == THREAD_TIMED_OUT)
+            break;
     const uint32_t state = gCheckState;
     IOLockUnlock(gCheckLock);
     return state;
@@ -724,7 +758,8 @@ void engineResume()
             snprintf(gLine, sizeof(gLine), "falcon did not answer (%d, syncpoint %u %u->%u); %s", ret, gSyncpt, from,
                      tegra_host1x_syncpt_read(gSyncpt), falconState());
     }
-    if (gWedged) IOLog("TegraNVDEC: resume FAIL %s; NVDEC refuses work\n", gLine[0] ? gLine : "N1");
+    if (gWedged)
+        IOLog("TegraNVDEC: resume FAIL %s; NVDEC refuses work\n", gLine[0] ? gLine : "N1");
     // Jobs lost to a wedge never incremented the syncpoint: number from where it really is.
     gBase = tegra_host1x_syncpt_read(gSyncpt);
     __atomic_store_n(&gIssued, 0, __ATOMIC_RELEASE);
@@ -743,7 +778,8 @@ extern "C" int tegra_nvdec_probe(void)
         settle(-1);
         return 0;
     }
-    if (__atomic_exchange_n(&started, 1, __ATOMIC_SEQ_CST)) return 0;
+    if (__atomic_exchange_n(&started, 1, __ATOMIC_SEQ_CST))
+        return 0;
     thread_t thread;
     if (kernel_thread_start(bringUp, (void *)(uintptr_t)stage, &thread) != KERN_SUCCESS) {
         IOLog("TegraNVDEC: could not start the bring-up thread\n");

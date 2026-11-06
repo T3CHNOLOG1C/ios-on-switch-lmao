@@ -24,52 +24,67 @@ volatile uint32_t native_hid_input_command;
 char native_hid_input_registry[2048];
 char native_hid_input_props[1024];
 extern volatile uint32_t native_legacy_transfer_calls;
+
 bool native_hid_input_requested(void)
 {
-    if (native_legacy_transfer_calls < 2) return false;
-    if (native_hid_input_command != 1) return false;
+    if (native_legacy_transfer_calls < 2)
+        return false;
+    if (native_hid_input_command != 1)
+        return false;
     native_hid_input_command = 0;
     return true;
 }
+
 static void describeInput(IORegistryEntry *entry, unsigned depth, size_t &used)
 {
-    if (depth > 4 || used >= sizeof(native_hid_input_registry) - 128) return;
+    if (depth > 4 || used >= sizeof(native_hid_input_registry) - 128)
+        return;
     int count = snprintf(native_hid_input_registry + used, sizeof(native_hid_input_registry) - used, "%u %s [%s]\n",
                          depth, entry->getName(), entry->getMetaClass()->getClassName());
-    if (count <= 0 || (size_t)count >= sizeof(native_hid_input_registry) - used) return;
+    if (count <= 0 || (size_t)count >= sizeof(native_hid_input_registry) - used)
+        return;
     used += count;
     OSIterator *it = entry->getChildIterator(gIOServicePlane);
-    if (!it) return;
+    if (!it)
+        return;
     while (OSObject *child = it->getNextObject()) {
         IORegistryEntry *next = OSDynamicCast(IORegistryEntry, child);
-        if (next) describeInput(next, depth + 1, used);
+        if (next)
+            describeInput(next, depth + 1, used);
     }
     it->release();
 }
+
 // Compact one property of the first IOHIDEventDriver below entry: XML tags dropped, key end -> '=', value end -> ' '.
 static IORegistryEntry *findEventDriver(IORegistryEntry *parent, unsigned depth)
 {
-    if (!depth) return nullptr;
+    if (!depth)
+        return nullptr;
     OSIterator *it = parent->getChildIterator(gIOServicePlane);
-    if (!it) return nullptr;
+    if (!it)
+        return nullptr;
     IORegistryEntry *found = nullptr;
     while (OSObject *child = it->getNextObject()) {
         IORegistryEntry *entry = OSDynamicCast(IORegistryEntry, child);
-        if (!entry) continue;
+        if (!entry)
+            continue;
         if (entry->metaCast("IOHIDEventDriver")) {
             found = entry;
             break;
         }
-        if ((found = findEventDriver(entry, depth - 1))) break;
+        if ((found = findEventDriver(entry, depth - 1)))
+            break;
     }
     it->release();
     return found;
 }
+
 static void appendProperty(IORegistryEntry *driver, const char *key, const char *label, size_t &used)
 {
     OSObject *value = driver->copyProperty(key);
     int n = snprintf(native_hid_input_props + used, sizeof(native_hid_input_props) - used, "%s:", label);
-    if (n > 0) used += n;
+    if (n > 0)
+        used += n;
     if (value) {
         OSSerialize *text = OSSerialize::withCapacity(4096);
         if (text && value->serialize(text)) {
@@ -100,7 +115,8 @@ static void appendProperty(IORegistryEntry *driver, const char *key, const char 
                         name[nameLen++] = c;
                     continue;
                 }
-                if (c == '\n' || c == '\t') continue;
+                if (c == '\n' || c == '\t')
+                    continue;
                 native_hid_input_props[used++] = c;
             }
         }
@@ -112,6 +128,7 @@ static void appendProperty(IORegistryEntry *driver, const char *key, const char 
     }
     native_hid_input_props[used] = 0;
 }
+
 __attribute__((noinline)) void native_hid_live_checkpoint(IOService *device)
 {
     size_t used = 0;
@@ -153,6 +170,7 @@ __attribute__((noinline)) void native_hid_live_checkpoint(IOService *device)
     }
     __asm__ volatile("" ::: "memory");
 }
+
 void native_hid_input_observed(unsigned event, int result)
 {
     if (event < 8) {
@@ -160,6 +178,7 @@ void native_hid_input_observed(unsigned event, int result)
         native_hid_input_results[event] = result;
     }
 }
+
 __attribute__((noinline)) void native_hid_checkpoint(void)
 {
     __asm__ volatile("" ::: "memory");

@@ -108,13 +108,23 @@ private:
     void global(unsigned tag, uint32_t data)
     {
         switch (tag) {
-        case 0: page = data; break;
-        case 7: reportSize = data; break;
-        case 8: reportID = static_cast<uint8_t>(data); break;
-        case 9: reportCount = data; break;
+        case 0:
+            page = data;
+            break;
+        case 7:
+            reportSize = data;
+            break;
+        case 8:
+            reportID = static_cast<uint8_t>(data);
+            break;
+        case 9:
+            reportCount = data;
+            break;
         case 10:
-        case 11: fail("push/pop");
-        default: break;
+        case 11:
+            fail("push/pop");
+        default:
+            break;
         }
     }
 
@@ -220,7 +230,8 @@ struct EventDriver {
     std::vector<Event> dispatched;
     std::vector<Event> held;
 
-    explicit EventDriver(const Descriptor &d) : descriptor(d) {}
+    explicit EventDriver(const Descriptor &d) : descriptor(d)
+    {}
 
     void dispatch(Event event)
     {

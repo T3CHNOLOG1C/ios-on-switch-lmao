@@ -10,6 +10,7 @@ static int hash(const void *data, size_t n, uint8_t out[32])
     unsigned size = 0;
     return EVP_Digest(data, n, out, &size, EVP_sha256(), NULL) == 1 && size == 32;
 }
+
 static int verify(const uint8_t key[VR_KEY_BYTES], const uint8_t digest[32], const uint8_t sig[VR_SIGNATURE_BYTES])
 {
     int ok = 0;
@@ -43,10 +44,12 @@ done:
     return ok;
 }
 static const struct vr_crypto provider = {hash, verify};
+
 int vr_host_open(const uint8_t *p, size_t n, const uint8_t *key, uint64_t generation, struct vr_view *view)
 {
     return vr_open(p, n, key, generation, &provider, view);
 }
+
 int vr_host_block(const struct vr_view *view, uint64_t index, const void *data, size_t n)
 {
     return vr_verify_block(view, index, data, n, &provider);

@@ -30,6 +30,7 @@ const std::string &client()
 	static const std::string source = SourceText("../TegraGM20BUserClient.cpp");
 	return source;
 }
+
 const std::string &gpu()
 {
 	static const std::string source = SourceText("../gpu.c");
@@ -141,8 +142,9 @@ TEST(GM20BPoolScrubSource, NoCpuClearOfTheReservedPool)
 {
 	const std::string init = definition(SourceText("../shim/xnu_glue.cpp"),
 					    "extern \"C\" int nvxnu_pool_init(int *zeroed)");
-	EXPECT_THAT(Between(init, "pmap_switch_gpu_pool(&start, &end)", "IOBufferMemoryDescriptor *md"),
-		    Not(HasSubstr("memset")));
+	EXPECT_THAT(
+		Between(init, "pmap_switch_gpu_pool(&start, &end)", "IOBufferMemoryDescriptor *md"),
+		Not(HasSubstr("memset")));
 	EXPECT_THAT(init, HasSubstr("*zeroed = 0;"));
 	EXPECT_THAT(init, HasSubstr("*zeroed = 1;"));  // the fallback still zeroes its own pages
 	EXPECT_THAT(definition(SourceText("../shim/linux.c"), "int nvxnu_pool_setup(void)"),

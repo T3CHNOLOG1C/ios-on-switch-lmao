@@ -1,9 +1,11 @@
 /* SPDX-License-Identifier: MIT */
 #include "ArmSmmu4KTableMemory.h"
+
 static int read_descriptor(void *cookie, uint64_t physical, uint64_t *value)
 {
     const ArmSmmu4KTableMemory *memory = cookie;
-    if (!value || (physical & 7)) return 1;
+    if (!value || (physical & 7))
+        return 1;
     for (unsigned i = 0; i < memory->count; ++i) {
         const ArmSmmu4KTableMapping *p = &memory->pools[i];
         if (physical >= p->physical && physical - p->physical < (uint64_t)p->pages * 4096) {
@@ -13,11 +15,14 @@ static int read_descriptor(void *cookie, uint64_t physical, uint64_t *value)
     }
     return 1;
 }
+
 ArmSmmu4KStatus ArmSmmu4KBindTableMemory(const ArmSmmu4KTableMemory *memory, ArmSmmu4KTableIo *io)
 {
-    if (!io) return ArmSmmu4KArgument;
+    if (!io)
+        return ArmSmmu4KArgument;
     *io = (ArmSmmu4KTableIo){0};
-    if (!memory || !memory->count || memory->count > 2) return ArmSmmu4KArgument;
+    if (!memory || !memory->count || memory->count > 2)
+        return ArmSmmu4KArgument;
     for (unsigned i = 0; i < memory->count; ++i) {
         const ArmSmmu4KTableMapping *p = &memory->pools[i];
         uintptr_t cpu = (uintptr_t)p->mapping;

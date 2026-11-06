@@ -96,6 +96,7 @@ class OriginalBacklightMetaClass : public OSMetaClass {
 public:
     OSObject *alloc() const override;
 };
+
 extern const OriginalBacklightMetaClass gOriginalAppleARMBacklightMeta __asm__("__ZN17AppleARMBacklight10gMetaClassE");
 
 // The display driver's strong definition wins when it is linked; without it the panel still goes dark but the DC keeps
@@ -106,9 +107,12 @@ extern "C" __attribute__((weak)) bool native_legacy_display_set_scanout(bool)
 }
 
 // SwitchTouch's strong definition wins when it is linked (SwitchTouch.h).
-extern "C" __attribute__((weak)) void switch_touch_display_power(bool) {}
+extern "C" __attribute__((weak)) void switch_touch_display_power(bool)
+{}
+
 // SwitchMotion's likewise (SwitchMotion.h): its orientation detector runs only while the panel is lit.
-extern "C" __attribute__((weak)) void switch_motion_display_power(bool) {}
+extern "C" __attribute__((weak)) void switch_motion_display_power(bool)
+{}
 
 namespace {
 using namespace switch_backlight;
@@ -123,13 +127,16 @@ volatile bool gSawNits, gSawNitsCap, gSawDisplay;  // the first of each is logge
 OSDictionary *range(uint32_t max, uint32_t value)
 {
     OSDictionary *dict = OSDictionary::withCapacity(3);
+
     const struct {
         const char *key;
         uint32_t value;
     } entries[] = {{"min", 0}, {"max", max}, {"value", value}};
+
     for (const auto &entry : entries) {
         OSNumber *number = OSNumber::withNumber(entry.value, 32);
-        if (dict && number) dict->setObject(entry.key, number);
+        if (dict && number)
+            dict->setObject(entry.key, number);
         OSSafeReleaseNULL(number);
     }
     return dict;
@@ -162,6 +169,7 @@ OSDictionary *calibration()
         {"lMidPanel", kNitsMid},
         {"lMinPanel", kNitsMin},
     };
+
     OSDictionary *dict = OSDictionary::withCapacity(sizeof(entries) / sizeof(entries[0]));
     for (const auto &entry : entries) {
         OSNumber *number = OSNumber::withNumber(entry.value, 32);
@@ -225,7 +233,12 @@ class SwitchBacklight : public IOService {
 
     static void workFired(OSObject *owner, IOTimerEventSource *sender);
     static void guardFired(OSObject *owner, IOTimerEventSource *sender);
-    void kick() { work->setTimeoutUS(1); }
+
+    void kick()
+    {
+        work->setTimeoutUS(1);
+    }
+
     void startRamp(uint32_t value, uint64_t fadeNS);
     void step();
     void powerOff();
@@ -248,12 +261,18 @@ public:
 SwitchBacklight::MetaClass SwitchBacklight::gMetaClass;
 const OSMetaClass *const SwitchBacklight::metaClass = &SwitchBacklight::gMetaClass;
 const OSMetaClass *const SwitchBacklight::superClass = &gOriginalAppleARMBacklightMeta;
-SwitchBacklight::SwitchBacklight(const OSMetaClass *meta) : IOService(meta) {}
-SwitchBacklight::~SwitchBacklight() {}
+
+SwitchBacklight::SwitchBacklight(const OSMetaClass *meta) : IOService(meta)
+{}
+
+SwitchBacklight::~SwitchBacklight()
+{}
+
 const OSMetaClass *SwitchBacklight::getMetaClass() const
 {
     return &gMetaClass;
 }
+
 OSMetaClassConstructorInit(SwitchBacklight, IOService, ) OSDefineDefaultStructors(SwitchBacklight, IOService)
 
     static SwitchBacklight *volatile gBacklight;
@@ -276,10 +295,12 @@ void SwitchBacklight::publishParameters()
 
 bool SwitchBacklight::send(unsigned raw)
 {
-    if (raw == sentRaw) return true;
+    if (raw == sentRaw)
+        return true;
     const int err = tegra_panel_set_brightness(raw);
     if (err) {
-        if (!reportedFailure) IOLog("SwitchBacklight: panel brightness %u failed (%d)\n", raw, err);
+        if (!reportedFailure)
+            IOLog("SwitchBacklight: panel brightness %u failed (%d)\n", raw, err);
         reportedFailure = true;
         return false;
     }
@@ -293,7 +314,8 @@ void SwitchBacklight::startRamp(uint32_t value, uint64_t fadeNS)
 {
     from = current;
     target = value > kMax ? kMax : value;
-    if (target) lit = target;
+    if (target)
+        lit = target;
     rampStart = mach_absolute_time();
     nanoseconds_to_absolutetime(fadeNS > kLongestFadeNS ? kLongestFadeNS : fadeNS, &rampLength);
 }
@@ -310,7 +332,8 @@ void SwitchBacklight::powerOff()
     switch_motion_display_power(false);  // stores and kicks its work loop, never waits
     const uint64_t touch = mach_absolute_time();
     const int err = tegra_panel_power_off();
-    if (err) IOLog("SwitchBacklight: panel off failed (%d): the display is not running\n", err);
+    if (err)
+        IOLog("SwitchBacklight: panel off failed (%d): the display is not running\n", err);
     const uint64_t panel = mach_absolute_time();
     scanoutStopped = native_legacy_display_set_scanout(false);
     panelOn = false;
@@ -335,11 +358,13 @@ void SwitchBacklight::powerOn()
     const uint64_t scanout = mach_absolute_time();
     const int level = (int)toRaw(target ? target : lit);
     const int err = tegra_panel_power_on(level);
-    if (err) IOLog("SwitchBacklight: panel on failed (%d): the display is not running\n", err);
+    if (err)
+        IOLog("SwitchBacklight: panel on failed (%d): the display is not running\n", err);
     const uint64_t panel = mach_absolute_time();
     panelOn = true;
     sentRaw = err || level < 0 ? ~0u : (unsigned)level;
-    if (target == 0 && level >= 0) target = current = lit;
+    if (target == 0 && level >= 0)
+        target = current = lit;
     gDisplayOn = true;
     switch_als_set_active(true);  // last: frame ends run again, and LDO6 came back with the touch panel meanwhile
     switch_motion_display_power(true);
@@ -363,7 +388,8 @@ void SwitchBacklight::step()
     nitsRequests = brightnessRequests = 0;
     IOLockUnlock(requestLock);
 
-    if (fresh) startRamp(value, fadeNS);
+    if (fresh)
+        startRamp(value, fadeNS);
     if (on != panelOn) {
         if (on) {
             powerOn();
@@ -392,13 +418,15 @@ void SwitchBacklight::step()
         }
         lastSend = now;
     }
-    if (!send(raw)) next = target;  // give up on this ramp, keep the request
+    if (!send(raw))
+        next = target;  // give up on this ramp, keep the request
     current = next;
     if (current != target) {
         work->setTimeoutMS(1);
     } else {
         publishParameters();
-        if (settleNits || settleBrightness) quiet->setTimeoutMS(kQuietMS);  // the line once the requests stop
+        if (settleNits || settleBrightness)
+            quiet->setTimeoutMS(kQuietMS);  // the line once the requests stop
     }
 }
 
@@ -408,7 +436,8 @@ void SwitchBacklight::step()
 void SwitchBacklight::quietFired(OSObject *owner, IOTimerEventSource *)
 {
     auto *self = OSDynamicCast(SwitchBacklight, owner);
-    if (!self || (!self->settleNits && !self->settleBrightness)) return;
+    if (!self || (!self->settleNits && !self->settleBrightness))
+        return;
     const unsigned raw = toRaw(self->current);
     const uint32_t nits = rawToNits(raw);
     os_log(OS_LOG_DEFAULT,
@@ -419,7 +448,8 @@ void SwitchBacklight::quietFired(OSObject *owner, IOTimerEventSource *)
 
 void SwitchBacklight::workFired(OSObject *owner, IOTimerEventSource *)
 {
-    if (auto *self = OSDynamicCast(SwitchBacklight, owner)) self->step();
+    if (auto *self = OSDynamicCast(SwitchBacklight, owner))
+        self->step();
 }
 
 // Work loop, at the wake guarantee's deadline: with the panel still off and no display-on asked for, light it as the
@@ -427,17 +457,20 @@ void SwitchBacklight::workFired(OSObject *owner, IOTimerEventSource *)
 void SwitchBacklight::guardFired(OSObject *owner, IOTimerEventSource *sender)
 {
     auto *self = OSDynamicCast(SwitchBacklight, owner);
-    if (!self) return;
+    if (!self)
+        return;
     IOLockLock(self->requestLock);
     const unsigned source = self->guard.source;
     const int verdict = switch_wake_guard_check(&self->guard, mach_absolute_time(), self->panelOn, self->wantOn);
-    if (verdict == 1) self->wantOn = true;
+    if (verdict == 1)
+        self->wantOn = true;
     IOLockUnlock(self->requestLock);
     if (verdict < 0) {
         sender->setTimeoutMS(50);  // a timer that came early: look again
         return;
     }
-    if (verdict == 0) return;
+    if (verdict == 0)
+        return;
     switch_power_journal("SwitchBacklight: %s with the panel off and no display-on request from the render server in "
                          "%u ms: the kernel lights the panel (SpringBoard or backboardd not answering?)",
                          switch_wake_source_name(source), SWITCH_WAKE_GUARD_MS);
@@ -448,7 +481,8 @@ void SwitchBacklight::guardFired(OSObject *owner, IOTimerEventSource *sender)
 IOReturn SwitchBacklight::setProperties(OSObject *properties)
 {
     OSDictionary *dict = OSDynamicCast(OSDictionary, properties);
-    if (!dict) return kIOReturnBadArgument;
+    if (!dict)
+        return kIOReturnBadArgument;
     // DisplayBrightnessNitsNVRAM (lMidPanel, nits * 65536): DisplayCreateWithID's first write here under the new
     // architecture (0x1b62b0f44, straight through IORegistryEntrySetCFProperty while display+0x78 is still NULL), past all
     // five of its failures and just before __DisplayCheckEDRSupport starts libEDR's server, so the first one says
@@ -471,7 +505,8 @@ IOReturn SwitchBacklight::setProperties(OSObject *properties)
     }
     OSNumber *nits = OSDynamicCast(OSNumber, dict->getObject("brightness-nits"));
     OSNumber *brightness = OSDynamicCast(OSNumber, dict->getObject("brightness"));
-    if (!nits && !brightness) return kIOReturnSuccess;  // FadePeriod / backlight-level alone: nothing to do
+    if (!nits && !brightness)
+        return kIOReturnSuccess;  // FadePeriod / backlight-level alone: nothing to do
     uint32_t value;
     uint64_t fadeNS = 0;
     if (nits) {
@@ -499,10 +534,12 @@ IOReturn SwitchBacklight::setProperties(OSObject *properties)
 
 void SwitchBacklight::requestPower(bool on)
 {
-    if (!on) gDisplayOn = false;  // input is ignored from the request on, not only once the panel is dark
+    if (!on)
+        gDisplayOn = false;  // input is ignored from the request on, not only once the panel is dark
     IOLockLock(requestLock);
     wantOn = on;
-    if (on) switch_wake_guard_display_on(&guard);
+    if (on)
+        switch_wake_guard_display_on(&guard);
     IOLockUnlock(requestLock);
     kick();
 }
@@ -513,12 +550,14 @@ void SwitchBacklight::expectWake(unsigned source)
     IOLockLock(requestLock);
     const bool armed = switch_wake_guard_arm(&guard, source, mach_absolute_time(), guardTimeout, gDisplayOn || wantOn);
     IOLockUnlock(requestLock);
-    if (armed) guardTimer->setTimeoutMS(SWITCH_WAKE_GUARD_MS);
+    if (armed)
+        guardTimer->setTimeoutMS(SWITCH_WAKE_GUARD_MS);
 }
 
 bool SwitchBacklight::start(IOService *provider)
 {
-    if (!IOService::start(provider)) return false;
+    if (!IOService::start(provider))
+        return false;
     nanoseconds_to_absolutetime(kSendIntervalNS, &sendInterval);
     sleepEnabled = switch_display_power_enabled();
     nanoseconds_to_absolutetime(SWITCH_WAKE_GUARD_MS * 1000000ull, &guardTimeout);
@@ -535,7 +574,8 @@ bool SwitchBacklight::start(IOService *provider)
     // Start from what the boot chain left on the panel; nothing is sent until CoreBrightness asks.
     const int boot = tegra_panel_boot_brightness();
     current = target = boot >= 0 ? toBrightness((unsigned)boot) : kMax / 2;
-    if (current) lit = current;
+    if (current)
+        lit = current;
     setName("backlight");
     // Everything DisplayCreateWithID needs from this service first, backlight-control last and only with it (see the
     // top): a backlight that CoreBrightness cannot make a display of leaves libEDR's server down while Core Animation's
@@ -588,27 +628,32 @@ void SwitchBacklight::free()
 {
     if (work) {
         work->cancelTimeout();
-        if (loop) loop->removeEventSource(work);
+        if (loop)
+            loop->removeEventSource(work);
         work->release();
     }
     if (quiet) {
         quiet->cancelTimeout();
-        if (loop) loop->removeEventSource(quiet);
+        if (loop)
+            loop->removeEventSource(quiet);
         quiet->release();
     }
     if (guardTimer) {
         guardTimer->cancelTimeout();
-        if (loop) loop->removeEventSource(guardTimer);
+        if (loop)
+            loop->removeEventSource(guardTimer);
         guardTimer->release();
     }
     OSSafeReleaseNULL(loop);
-    if (requestLock) IOLockFree(requestLock);
+    if (requestLock)
+        IOLockFree(requestLock);
     IOService::free();
 }
 
 extern "C" int switch_backlight_start(void)
 {
-    if (gBacklight) return 0;
+    if (gBacklight)
+        return 0;
     const OSSymbol *name = OSSymbol::withCStringNoCopy("AppleARMBacklight");
     const OSMetaClass *original = name ? OSMetaClass::getMetaClassWithName(name) : nullptr;
     OSSafeReleaseNULL(name);
@@ -636,7 +681,8 @@ extern "C" int switch_backlight_start(void)
 extern "C" bool switch_display_power_request(bool on)
 {
     SwitchBacklight *backlight = __atomic_load_n(&gBacklight, __ATOMIC_ACQUIRE);
-    if (!backlight || !backlight->sleepEnabled) return false;
+    if (!backlight || !backlight->sleepEnabled)
+        return false;
     backlight->requestPower(on);
     return true;
 }
@@ -649,5 +695,6 @@ extern "C" bool switch_display_is_on(void)
 extern "C" void switch_backlight_expect_wake(unsigned source)
 {
     SwitchBacklight *backlight = __atomic_load_n(&gBacklight, __ATOMIC_ACQUIRE);
-    if (backlight && backlight->sleepEnabled) backlight->expectWake(source);
+    if (backlight && backlight->sleepEnabled)
+        backlight->expectWake(source);
 }

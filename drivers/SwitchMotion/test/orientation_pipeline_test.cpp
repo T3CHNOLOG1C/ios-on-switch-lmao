@@ -21,9 +21,11 @@ void post(EventDriver &driver, const SwitchOrientationReport &report)
 {
     driver.report(reinterpret_cast<const uint8_t *>(&report), sizeof(report), report.timestamp);
 }
+
 void deliver(const EventDriver &driver, Notifier &coreMotion)
 {
-    for (const orientation_model::Event &event : driver.dispatched) coreMotion.onEvent(event);
+    for (const orientation_model::Event &event : driver.dispatched)
+        coreMotion.onEvent(event);
 }
 }  // namespace
 

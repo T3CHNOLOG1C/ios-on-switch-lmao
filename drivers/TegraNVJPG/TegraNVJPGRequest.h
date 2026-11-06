@@ -105,16 +105,25 @@ typedef struct {
     uint64_t fillStart, fillRowBytes, fillPitch, fillRows;
 } TegraNVJPGPlan;
 
-enum { TEGRA_NVJPG_PLAN_OK = 0, TEGRA_NVJPG_PLAN_UNSUPPORTED = 1, TEGRA_NVJPG_PLAN_BAD = 2 };
+enum {
+    TEGRA_NVJPG_PLAN_OK = 0,
+    TEGRA_NVJPG_PLAN_UNSUPPORTED = 1,
+    TEGRA_NVJPG_PLAN_BAD = 2
+};
 
 static inline uint32_t tegra_nvjpg_sub_of(const TegraNVJPGImage *img)
 {
     switch (img->chroma) {
-    case TEGRA_NVJPG_CHROMA_420: return TEGRA_NVJPG_SUB_420;
-    case TEGRA_NVJPG_CHROMA_422H: return TEGRA_NVJPG_SUB_422;
-    case TEGRA_NVJPG_CHROMA_444: return TEGRA_NVJPG_SUB_444;
-    case TEGRA_NVJPG_CHROMA_MONO: return TEGRA_NVJPG_SUB_GREY;
-    default: return 0xffffffffu;  // 4:4:0: no code
+    case TEGRA_NVJPG_CHROMA_420:
+        return TEGRA_NVJPG_SUB_420;
+    case TEGRA_NVJPG_CHROMA_422H:
+        return TEGRA_NVJPG_SUB_422;
+    case TEGRA_NVJPG_CHROMA_444:
+        return TEGRA_NVJPG_SUB_444;
+    case TEGRA_NVJPG_CHROMA_MONO:
+        return TEGRA_NVJPG_SUB_GREY;
+    default:
+        return 0xffffffffu;  // 4:4:0: no code
     }
 }
 
@@ -132,16 +141,21 @@ static inline const char *tegra_nvjpg_plan(const TegraNVJPGDecodeRequest *r, con
     if (r->dst_size < 7 || r->width < 4 || r->height < 2 || r->out_width < 4 || r->out_height < 2 ||
         r->x_offset >= 0x2000 || r->y_offset >= 0x2000)
         return "sizes or offsets outside Apple's bounds";
-    if (r->width != img->width || r->height != img->height) return "request size is not the file's";
+    if (r->width != img->width || r->height != img->height)
+        return "request size is not the file's";
     *kind = TEGRA_NVJPG_PLAN_UNSUPPORTED;
-    if (r->subsampling != tegra_nvjpg_sub_of(img)) return "subsampling code is not the file's (or 4:4:0)";
-    if (!(a->chroma >> img->chroma & 1)) return "sampling not proven on this unit";
+    if (r->subsampling != tegra_nvjpg_sub_of(img))
+        return "subsampling code is not the file's (or 4:4:0)";
+    if (!(a->chroma >> img->chroma & 1))
+        return "sampling not proven on this unit";
     uint32_t scale = 0;
     while (scale < 4 && (tegra_nvjpg_shr_up(img->width, scale) != r->out_width ||
                          tegra_nvjpg_shr_up(img->height, scale) != r->out_height))
         scale++;
-    if (scale == 4) return "decode size is not the file's size / 1, 2, 4 or 8";
-    if (!(a->scales >> scale & 1)) return "scale not proven on this unit";
+    if (scale == 4)
+        return "decode size is not the file's size / 1, 2, 4 or 8";
+    if (!(a->scales >> scale & 1))
+        return "scale not proven on this unit";
     const int grey = img->components == 1;
     uint32_t format, planes;
     switch (d->fourcc) {
@@ -149,16 +163,27 @@ static inline const char *tegra_nvjpg_plan(const TegraNVJPGDecodeRequest *r, con
         format = grey ? TEGRA_NVJPG_OUT_GREY : TEGRA_NVJPG_OUT_NV12;
         planes = 2;
         break;
-    case TEGRA_NVJPG_FOURCC('B', 'G', 'R', 'A'): format = TEGRA_NVJPG_OUT_BGRA, planes = 1; break;
-    case TEGRA_NVJPG_FOURCC('R', 'G', 'B', 'A'): format = TEGRA_NVJPG_OUT_RGBA, planes = 1; break;
-    case 0x20: format = TEGRA_NVJPG_OUT_ARGB, planes = 1; break;  // kCVPixelFormatType_32ARGB
-    default: return "destination pixel format (NVJPG writes 420f, BGRA, RGBA, ARGB)";
+    case TEGRA_NVJPG_FOURCC('B', 'G', 'R', 'A'):
+        format = TEGRA_NVJPG_OUT_BGRA, planes = 1;
+        break;
+    case TEGRA_NVJPG_FOURCC('R', 'G', 'B', 'A'):
+        format = TEGRA_NVJPG_OUT_RGBA, planes = 1;
+        break;
+    case 0x20:
+        format = TEGRA_NVJPG_OUT_ARGB, planes = 1;
+        break;  // kCVPixelFormatType_32ARGB
+    default:
+        return "destination pixel format (NVJPG writes 420f, BGRA, RGBA, ARGB)";
     }
-    if (!(a->formats >> format & 1)) return "output format not proven on this unit";
-    if (grey && format != TEGRA_NVJPG_OUT_GREY && !a->greyRgb) return "grey to RGB not proven on this unit";
+    if (!(a->formats >> format & 1))
+        return "output format not proven on this unit";
+    if (grey && format != TEGRA_NVJPG_OUT_GREY && !a->greyRgb)
+        return "grey to RGB not proven on this unit";
     *kind = TEGRA_NVJPG_PLAN_BAD;
-    if ((d->planes ? d->planes : 1) != planes) return "destination plane count";
-    if (d->protection) return "protected destination";
+    if ((d->planes ? d->planes : 1) != planes)
+        return "destination plane count";
+    if (d->protection)
+        return "protected destination";
     if ((uint64_t)r->x_offset + r->out_width > d->width || (uint64_t)r->y_offset + r->out_height > d->height)
         return "picture does not fit the destination";
     *kind = TEGRA_NVJPG_PLAN_UNSUPPORTED;
@@ -167,30 +192,37 @@ static inline const char *tegra_nvjpg_plan(const TegraNVJPGDecodeRequest *r, con
     t->scale = scale;
     t->alpha = 0xff;
     for (uint32_t i = 0; i < planes && i < 3; i++) {
-        if (d->planeBytesPerRow[i] > 0xffffffffull) return "stride";
+        if (d->planeBytesPerRow[i] > 0xffffffffull)
+            return "stride";
         t->pitch[i] = (uint32_t)d->planeBytesPerRow[i];
     }
     nvjpg_dec_drv_pic_setup_s scratch;
     memset(&scratch, 0, sizeof(scratch));
     const char *why = tegra_nvjpg_setup_output(img, t, !a->clipped, &scratch, &p->extent);
-    if (why) return why;
+    if (why)
+        return why;
     // Where each engine plane starts: the destination's plane plus the picture's offset in it.
     const uint32_t bpp = format == TEGRA_NVJPG_OUT_NV12 || format == TEGRA_NVJPG_OUT_GREY ? 1 : 4;
-    if (planes == 2 && ((r->x_offset | r->y_offset) & 1)) return "odd offset into 4:2:0";
+    if (planes == 2 && ((r->x_offset | r->y_offset) & 1))
+        return "odd offset into 4:2:0";
     p->planes = p->extent.planes;
     p->planeStart[0] = d->planeOffset[0] + (uint64_t)r->y_offset * t->pitch[0] + (uint64_t)r->x_offset * bpp;
     if (format == TEGRA_NVJPG_OUT_NV12)
         p->planeStart[1] = d->planeOffset[1] + (uint64_t)(r->y_offset / 2) * t->pitch[1] + r->x_offset;
     for (uint32_t i = 0; i < p->planes; i++)
-        if (p->planeStart[i] & 0xff) return "a plane does not start on 256 bytes (NVJPG takes address >> 8)";
+        if (p->planeStart[i] & 0xff)
+            return "a plane does not start on 256 bytes (NVJPG takes address >> 8)";
     // Each plane's writes stay off every other plane, and inside the surface plus the sink.
     for (uint32_t i = 0; i < p->planes; i++) {
         const uint64_t end = p->planeStart[i] + (uint64_t)(p->extent.rows[i] - 1) * t->pitch[i] + p->extent.rowBytes[i];
-        if (end > p->writeEnd) p->writeEnd = end;
+        if (end > p->writeEnd)
+            p->writeEnd = end;
         for (uint32_t j = 0; j < planes; j++) {
-            if (j == i) continue;
+            if (j == i)
+                continue;
             const uint64_t start = d->planeOffset[j], stop = start + d->planeBytesPerRow[j] * d->planeHeight[j];
-            if (p->planeStart[i] < stop && end > start) return "writes would run into another plane";
+            if (p->planeStart[i] < stop && end > start)
+                return "writes would run into another plane";
         }
     }
     // The picture itself lies inside the surface; only the MCU padding past its last row may reach the sink.
@@ -203,7 +235,8 @@ static inline const char *tegra_nvjpg_plan(const TegraNVJPGDecodeRequest *r, con
             return "picture runs past the destination";
         }
     }
-    if (p->writeEnd > d->length + sink) return "MCU padding would run past the destination and its sink";
+    if (p->writeEnd > d->length + sink)
+        return "MCU padding would run past the destination and its sink";
     if (format == TEGRA_NVJPG_OUT_GREY) {
         // '420f' from a grey file: the chroma plane is the CPU's, neutral (0x80), over the picture's rows.
         p->fillChroma = 1;

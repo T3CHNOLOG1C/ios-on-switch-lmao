@@ -61,7 +61,8 @@ extern "C" __attribute__((weak)) bool switch_display_is_on(void)
 
 // SwitchBrightness (SwitchALS.cpp): LDO6 also feeds the ambient light sensor's I2C side, which waits for it. Weak, as
 // above.
-extern "C" __attribute__((weak)) void switch_als_supply(bool) {}
+extern "C" __attribute__((weak)) void switch_als_supply(bool)
+{}
 
 // For NativeLegacyDisplay's touch->swap / touch->scan (below, after the driver).
 static void switch_touch_note_report(uint64_t stamp);
@@ -81,8 +82,21 @@ enum : uint8_t {  // FTM4 commands (hekate touch.h FTS4_CMD_*, Linux ftm4.h)
     CmdHwReg = 0xb6,
     CmdSenseMode = 0xc3,
 };
-enum : uint8_t { EvEnter = 0x03, EvLeave = 0x04, EvMotion = 0x05, EvReady = 0x10 };
-enum : uint16_t { RegChipId = 0x0004, RegEventCount = 0x0023, RegReset = 0x0028, RegInterrupt = 0x002c };
+
+enum : uint8_t {
+    EvEnter = 0x03,
+    EvLeave = 0x04,
+    EvMotion = 0x05,
+    EvReady = 0x10
+};
+
+enum : uint16_t {
+    RegChipId = 0x0004,
+    RegEventCount = 0x0023,
+    RegReset = 0x0028,
+    RegInterrupt = 0x002c
+};
+
 constexpr uint8_t kFingerMode = 0x01, kResetValue = 0x80, kInterruptEnable = 0x48;
 constexpr uint16_t kChipId = 0x3670;
 constexpr unsigned kEventSize = 8, kFifoDepth = 32, kSlots = kSwitchTouchSlots;
@@ -121,7 +135,8 @@ int distance(int dx, int dy)
 unsigned strength(const uint8_t *event)
 {
     unsigned gain = event[6] & 0x3f;
-    if (gain == 1 || gain == 0x3f) gain = 0x40;
+    if (gain == 1 || gain == 0x3f)
+        gain = 0x40;
     return (((unsigned)event[4] | (unsigned)event[5] << 8) << 6) / (gain + 0x40);
 }
 
@@ -142,38 +157,53 @@ struct Spread {
     static constexpr unsigned kBuckets = 16 + 8 * 20;
     uint32_t n = 0, hist[kBuckets] = {};
     uint64_t sum = 0, max = 0, min = UINT64_MAX;
+
     static unsigned bucket(uint64_t us)
     {
-        if (us < 16) return (unsigned)us;
+        if (us < 16)
+            return (unsigned)us;
         const unsigned msb = 63u - (unsigned)__builtin_clzll(us);
         const unsigned b = 16 + (msb - 4) * 8 + (unsigned)((us >> (msb - 3)) & 7);
         return b < kBuckets ? b : kBuckets - 1;
     }
+
     static uint64_t lower(unsigned b)
     {
-        if (b < 16) return b;
+        if (b < 16)
+            return b;
         return (8ull + (b - 16) % 8) << ((b - 16) / 8 + 1);
     }
+
     void add(uint64_t us)
     {
         ++n;
         sum += us;
-        if (us > max) max = us;
-        if (us < min) min = us;
+        if (us > max)
+            max = us;
+        if (us < min)
+            min = us;
         ++hist[bucket(us)];
     }
-    uint64_t mean() const { return n ? sum / n : 0; }
+
+    uint64_t mean() const
+    {
+        return n ? sum / n : 0;
+    }
+
     void reset()
     {
         n = 0;
         sum = max = 0;
         min = UINT64_MAX;
-        for (uint32_t &h : hist) h = 0;
+        for (uint32_t &h : hist)
+            h = 0;
     }
+
     // The smallest bucket bound at or above `permille` of the values (never above the maximum).
     uint64_t quantile(unsigned permille) const
     {
-        if (!n) return 0;
+        if (!n)
+            return 0;
         const uint64_t want = ((uint64_t)n * permille + 999) / 1000;
         uint64_t seen = 0;
         for (unsigned b = 0; b < kBuckets; ++b) {
@@ -220,7 +250,8 @@ bool waitEvent(uint8_t type, unsigned timeoutMS)
         if (!eventCount(&count) && count) {
             const uint8_t cmd = CmdReadOneEvent;
             uint8_t event[kEventSize] = {};
-            if (!tegra_i2c_transfer(kBus, kTouch, &cmd, 1, event, sizeof(event)) && event[0] == type) return true;
+            if (!tegra_i2c_transfer(kBus, kTouch, &cmd, 1, event, sizeof(event)) && event[0] == type)
+                return true;
         }
         IOSleep(1);
     }
@@ -229,8 +260,10 @@ bool waitEvent(uint8_t type, unsigned timeoutMS)
 
 uint16_t scale(unsigned raw, unsigned realMax, unsigned size)
 {
-    if (raw < kEdgeOffset) raw = kEdgeOffset;
-    if (raw > realMax) raw = realMax;
+    if (raw < kEdgeOffset)
+        raw = kEdgeOffset;
+    if (raw > realMax)
+        raw = realMax;
     return (uint16_t)((raw - kEdgeOffset) * (size - 1) / (realMax - kEdgeOffset));
 }
 }  // namespace
@@ -266,6 +299,7 @@ class SwitchTouch : public IOService {
         // contact strength; taps reported moving, re-touches, palms.
         Spread settle, tapRaw, edgeStart, arrival, strength;
         uint32_t tapsMoved = 0, retouches = 0, palms = 0;
+
         void reset()
         {
             start = 0;
@@ -274,7 +308,8 @@ class SwitchTouch : public IOService {
             i2c = {};
             Spread *const spreads[] = {&wake,   &countRead, &eventRead, &post,    &total,   &interval,
                                        &settle, &tapRaw,    &edgeStart, &arrival, &strength};
-            for (Spread *spread : spreads) spread->reset();
+            for (Spread *spread : spreads)
+                spread->reset();
         }
     };
 
@@ -330,7 +365,8 @@ OSDefineMetaClassAndStructors(SwitchTouch, IOService)
 
     bool SwitchTouch::start(IOService *provider)
 {
-    if (!IOService::start(provider)) return false;
+    if (!IOService::start(provider))
+        return false;
     hid = switch_hid_create(kSwitchHIDTouch);
     timed = switch_hid_supports_timestamps(hid);
     if (!timed)
@@ -357,8 +393,10 @@ OSDefineMetaClassAndStructors(SwitchTouch, IOService)
 void SwitchTouch::free()
 {
     if (loop) {
-        if (irq) loop->removeEventSource(irq);
-        if (timer) loop->removeEventSource(timer);
+        if (irq)
+            loop->removeEventSource(irq);
+        if (timer)
+            loop->removeEventSource(timer);
     }
     OSSafeReleaseNULL(irq);
     OSSafeReleaseNULL(timer);
@@ -369,12 +407,14 @@ void SwitchTouch::free()
 // hekate touch_power_on.
 void SwitchTouch::powerUp()
 {
-    if (tegra_gpio_output(TEGRA_GPIO_TOUCH_RESET, 0)) panic("SwitchTouch: cannot drive the touch reset line (PJ7)");
+    if (tegra_gpio_output(TEGRA_GPIO_TOUCH_RESET, 0))
+        panic("SwitchTouch: cannot drive the touch reset line (PJ7)");
     IODelay(20);
 
     uint8_t ldo = 0;
     int err = tegra_i2c_init(kPmicBus);
-    if (!err) err = tegra_i2c_read(kPmicBus, kPmic, kLdo6Cfg, &ldo, 1);
+    if (!err)
+        err = tegra_i2c_read(kPmicBus, kPmic, kLdo6Cfg, &ldo, 1);
     if (!err) {
         ldo = (uint8_t)((ldo & ~kLdoVoltMask) | kLdo6Volt);
         err = tegra_i2c_write(kPmicBus, kPmic, kLdo6Cfg, &ldo, 1);
@@ -389,7 +429,8 @@ void SwitchTouch::powerUp()
     IOSleep(1);
 
     err = tegra_i2c_init(kBus);
-    if (err) panic("SwitchTouch: I2C3 init failed: %d", err);
+    if (err)
+        panic("SwitchTouch: I2C3 init failed: %d", err);
     IOSleep(1);
     tegra_gpio_output(TEGRA_GPIO_TOUCH_RESET, 1);
     IOSleep(10);
@@ -404,11 +445,13 @@ void SwitchTouch::bringUp()
     uint8_t id[7] = {};
     for (unsigned attempt = 0; attempt < 3; ++attempt) {
         err = readRegister(RegChipId, id, sizeof(id));
-        if (err || (id[1] << 8 | id[2]) != kChipId) continue;
+        if (err || (id[1] << 8 | id[2]) != kChipId)
+            continue;
         checkPaths(id, sizeof(id));
         err = writeRegister(RegReset, kResetValue);
         IOSleep(10);
-        if (err || !waitEvent(EvReady, 20)) continue;
+        if (err || !waitEvent(EvReady, 20))
+            continue;
         enableSensing();
         if (!announced)
             IOLog("SwitchTouch: started (FTM4 firmware %02x%02x, config %02x/%02x)\n", id[3], id[4], id[5], id[6]);
@@ -435,7 +478,8 @@ bool SwitchTouch::checkPath(bool dma, const uint8_t *id, size_t size, char *why,
     }
     const int err = dma ? tegra_i2c_transfer_dma(kBus, kTouch, tx, sizeof(tx), again, size, why, whySize)
                         : tegra_i2c_transfer_chained(kBus, kTouch, tx, sizeof(tx), again, size, why, whySize);
-    if (err) return false;
+    if (err)
+        return false;
     if (memcmp(again + 1, id + 1, size - 1) != 0) {
         snprintf(
             why, whySize,
@@ -448,7 +492,8 @@ bool SwitchTouch::checkPath(bool dma, const uint8_t *id, size_t size, char *why,
 
 void SwitchTouch::checkPaths(const uint8_t *id, size_t size)
 {
-    if (pathsChecked) return;
+    if (pathsChecked)
+        return;
     pathsChecked = true;
     char why[224] = "";
     const uint64_t began = mach_absolute_time();
@@ -474,16 +519,21 @@ void SwitchTouch::enableSensing()
     const uint8_t mode[2] = {CmdSenseMode, kFingerMode}, on = CmdSenseOn, clear = CmdClearEvents;
     int err = command(mode, sizeof(mode));
     IOSleep(10);
-    if (!err) err = command(&on, 1);
-    if (!err) err = command(&clear, 1);
-    if (!err) err = writeRegister(RegInterrupt, kInterruptEnable);
-    if (err) panic("SwitchTouch: FTM4 sense/interrupt enable failed: I2C error %d", err);
+    if (!err)
+        err = command(&on, 1);
+    if (!err)
+        err = command(&clear, 1);
+    if (!err)
+        err = writeRegister(RegInterrupt, kInterruptEnable);
+    if (err)
+        panic("SwitchTouch: FTM4 sense/interrupt enable failed: I2C error %d", err);
 }
 
 void SwitchTouch::timerFired(OSObject *owner, IOTimerEventSource *sender)
 {
     auto *self = OSDynamicCast(SwitchTouch, owner);
-    if (!self) return;
+    if (!self)
+        return;
     if (!self->running) {
         self->powerUp();
         self->bringUp();
@@ -504,7 +554,8 @@ bool SwitchTouch::filterInterrupt(OSObject *owner, IOFilterInterruptEventSource 
 {
     auto *self = static_cast<SwitchTouch *>(owner);
     self->irqStamp = mach_absolute_time();
-    if (switch_display_is_on()) switch_perf_hint(SWITCH_PERF_HINT_TOUCH);
+    if (switch_display_is_on())
+        switch_perf_hint(SWITCH_PERF_HINT_TOUCH);
     return true;
 }
 
@@ -515,7 +566,8 @@ bool SwitchTouch::filterInterrupt(OSObject *owner, IOFilterInterruptEventSource 
 void SwitchTouch::interruptOccurred(OSObject *owner, IOInterruptEventSource *, int)
 {
     auto *self = OSDynamicCast(SwitchTouch, owner);
-    if (!self) return;
+    if (!self)
+        return;
     const uint64_t irqAt = self->irqStamp, began = mach_absolute_time();
     Stats &st = self->stats;
     if (!st.start) {  // a window begins with its first interrupt, before that interrupt's transfers
@@ -528,11 +580,13 @@ void SwitchTouch::interruptOccurred(OSObject *owner, IOInterruptEventSource *, i
     const uint64_t counted = mach_absolute_time();
     uint8_t events[kFifoDepth * kEventSize];
     if (!err && count) {
-        if (count > kFifoDepth) count = kFifoDepth;  // the rest keep INT low: the next interrupt takes them
+        if (count > kFifoDepth)
+            count = kFifoDepth;  // the rest keep INT low: the next interrupt takes them
         const uint8_t cmd = CmdReadAllEvents;
         err = tegra_i2c_transfer(kBus, kTouch, &cmd, 1, events, count * kEventSize);
     }
-    if (err) panic("SwitchTouch: reading the FTM4 event FIFO failed: I2C error %d", err);
+    if (err)
+        panic("SwitchTouch: reading the FTM4 event FIFO failed: I2C error %d", err);
     const uint64_t read = mach_absolute_time();
     self->reportStamp = irqAt && irqAt <= began ? irqAt : began;
     self->postTicks = 0;
@@ -541,7 +595,8 @@ void SwitchTouch::interruptOccurred(OSObject *owner, IOInterruptEventSource *, i
     for (unsigned i = 0; i < count; ++i) {
         const uint8_t type = events[i * kEventSize] & 0x0f;
         contactEvents |= type == EvEnter || type == EvMotion || type == EvLeave;
-        if (shown || events[i * kEventSize] == EvReady) self->handle(events + i * kEventSize);
+        if (shown || events[i * kEventSize] == EvReady)
+            self->handle(events + i * kEventSize);
     }
     if (shown) {
         self->flush();
@@ -559,28 +614,36 @@ void SwitchTouch::interruptOccurred(OSObject *owner, IOInterruptEventSource *, i
     }
 
     ++st.irqs;
-    if (!count) ++st.empty;
+    if (!count)
+        ++st.empty;
     st.events += count;
-    if (count > st.maxEvents) st.maxEvents = count;
+    if (count > st.maxEvents)
+        st.maxEvents = count;
     if (irqAt && irqAt <= began) {
         st.wake.add(ticksToUs(began - irqAt));
-        if (st.reports != reportsBefore) st.total.add(ticksToUs(done - irqAt));
+        if (st.reports != reportsBefore)
+            st.total.add(ticksToUs(done - irqAt));
         // The FTM4's report period: from the last interrupt with contact events after which a contact stayed down.
         if (contactEvents && self->lastContactIrq && irqAt > self->lastContactIrq) {
             const uint64_t us = ticksToUs(irqAt - self->lastContactIrq);
-            if (us < kIntervalLimitUs) st.interval.add(us);
+            if (us < kIntervalLimitUs)
+                st.interval.add(us);
         }
-        if (contactEvents) self->lastContactIrq = self->anyDown() ? irqAt : 0;
+        if (contactEvents)
+            self->lastContactIrq = self->anyDown() ? irqAt : 0;
     }
     st.countRead.add(ticksToUs(counted - began));
-    if (count) st.eventRead.add(ticksToUs(read - counted));
-    if (st.reports != reportsBefore) st.post.add(ticksToUs(self->postTicks));
+    if (count)
+        st.eventRead.add(ticksToUs(read - counted));
+    if (st.reports != reportsBefore)
+        st.post.add(ticksToUs(self->postTicks));
 }
 
 bool SwitchTouch::anyDown() const
 {
     for (const Contact &contact : contacts) {
-        if (contact.down) return true;
+        if (contact.down)
+            return true;
     }
     return false;
 }
@@ -591,7 +654,8 @@ bool SwitchTouch::anyDown() const
 void SwitchTouch::logStats()
 {
     Stats &st = stats;
-    if (!st.irqs) return;
+    if (!st.irqs)
+        return;
     const uint64_t now = mach_absolute_time();
     const uint64_t ms = ticksToUs(now - st.start) / 1000;
     tegra_i2c_counters i2c = {};
@@ -600,7 +664,8 @@ void SwitchTouch::logStats()
     char line[768];
     size_t at = 0;
     auto add = [&](const char *format, auto... values) {
-        if (at < sizeof(line)) at += (size_t)snprintf(line + at, sizeof(line) - at, format, values...);
+        if (at < sizeof(line))
+            at += (size_t)snprintf(line + at, sizeof(line) - at, format, values...);
     };
     auto span = [&](const char *name, const Spread &value) {
         add("%s %llu/%llu/%llu", name, (unsigned long long)value.mean(), (unsigned long long)value.quantile(990),
@@ -675,7 +740,8 @@ void SwitchTouch::begin(Contact &contact, int x, int y, uint64_t now)
     // The nearest edge (0 left, 1 right, 2 top, 3 bottom of the report frame) and how far the first point is from it.
     const int d[4] = {x, (int)kSwitchTouchReportWidth - 1 - x, y, (int)kSwitchTouchReportHeight - 1 - y};
     unsigned nearest = 0;
-    for (unsigned i = 1; i < 4; ++i) nearest = d[i] < d[nearest] ? i : nearest;
+    for (unsigned i = 1; i < 4; ++i)
+        nearest = d[i] < d[nearest] ? i : nearest;
     contact.nearEdge = (uint8_t)nearest;
     contact.edgeDistance = (uint16_t)d[nearest];
     contact.edgeCandidate = d[nearest] < kEdgeNear;
@@ -684,7 +750,8 @@ void SwitchTouch::begin(Contact &contact, int x, int y, uint64_t now)
 // The touch-down drift, once a contact (after kDriftMs, or at its lift if sooner).
 void SwitchTouch::noteDrift(Contact &contact)
 {
-    if (contact.driftSeen) return;
+    if (contact.driftSeen)
+        return;
     contact.driftSeen = true;
     stats.settle.add(contact.drift);
 }
@@ -694,10 +761,12 @@ void SwitchTouch::noteDrift(Contact &contact)
 bool SwitchTouch::track(Contact &contact, int x, int y, uint64_t now)
 {
     const int fromStart = distance(x - contact.startX, y - contact.startY);
-    if (fromStart > contact.rawTravel) contact.rawTravel = (uint16_t)fromStart;
+    if (fromStart > contact.rawTravel)
+        contact.rawTravel = (uint16_t)fromStart;
     const uint64_t ms = now > contact.downAt ? ticksToUs(now - contact.downAt) / 1000 : 0;
     if (ms < kDriftMs) {
-        if (fromStart > contact.drift) contact.drift = (uint16_t)fromStart;
+        if (fromStart > contact.drift)
+            contact.drift = (uint16_t)fromStart;
     } else {
         noteDrift(contact);
     }
@@ -709,10 +778,12 @@ bool SwitchTouch::track(Contact &contact, int x, int y, uint64_t now)
         }
     }
     if (contact.slop) {
-        if (fromStart < kSlop) return false;
+        if (fromStart < kSlop)
+            return false;
         contact.slop = false;
     }
-    if (x == contact.x && y == contact.y) return false;
+    if (x == contact.x && y == contact.y)
+        return false;
     contact.moved = true;
     report(contact, x, y);
     return true;
@@ -725,7 +796,8 @@ void SwitchTouch::ended(Contact &contact, uint64_t now)
     if (contact.downAt && now >= contact.downAt && ticksToUs(now - contact.downAt) < kTapMs * 1000 &&
         contact.rawTravel < kTapTravel) {
         stats.tapRaw.add(contact.rawTravel);
-        if (contact.moved) ++stats.tapsMoved;
+        if (contact.moved)
+            ++stats.tapsMoved;
     }
     contact.leftAt = now;
     contact.leftX = (int16_t)contact.x;
@@ -741,14 +813,17 @@ void SwitchTouch::handle(const uint8_t *event)
         return;
     }
     const uint8_t type = event[0] & 0x0f, id = event[0] >> 4;
-    if (id >= kSlots || (type != EvEnter && type != EvMotion && type != EvLeave)) return;
+    if (id >= kSlots || (type != EvEnter && type != EvMotion && type != EvLeave))
+        return;
     Contact &contact = contacts[id];
     const uint32_t bit = 1u << id;
     const uint64_t now = reportStamp ? reportStamp : mach_absolute_time();
     if (type == EvLeave) {  // its coordinates are noise (hekate skips them too)
         contact.palm = false;
-        if (!contact.down) return;
-        if (changed & bit) flush();
+        if (!contact.down)
+            return;
+        if (changed & bit)
+            flush();
         contact.down = false;
         changed |= bit;
         ended(contact, now);
@@ -757,22 +832,28 @@ void SwitchTouch::handle(const uint8_t *event)
     }
     const unsigned z = strength(event);
     if (z >= kPalmStrength) {  // a palm: lifted once if it was a contact, ignored until it leaves
-        if (!contact.palm) ++stats.palms;
+        if (!contact.palm)
+            ++stats.palms;
         contact.palm = true;
-        if (!contact.down) return;
-        if (changed & bit) flush();
+        if (!contact.down)
+            return;
+        if (changed & bit)
+            flush();
         contact.down = false;
         changed |= bit;
         ended(contact, now);
         dirty = true;
         return;
     }
-    if (contact.palm) return;
+    if (contact.palm)
+        return;
     int x = 0, y = 0;
     position(event, x, y);
     if (!contact.down) {
-        if (type == EvMotion) return;  // as Linux: motion of a contact that has left is stale
-        if (changed & bit) flush();
+        if (type == EvMotion)
+            return;  // as Linux: motion of a contact that has left is stale
+        if (changed & bit)
+            flush();
         begin(contact, x, y, now);
         stats.strength.add(z);
         contact.down = true;
@@ -784,20 +865,25 @@ void SwitchTouch::handle(const uint8_t *event)
         unsigned down = 0;
         uint64_t earliest = now;
         for (const Contact &c : contacts) {
-            if (!c.down) continue;
+            if (!c.down)
+                continue;
             ++down;
-            if (c.downAt < earliest) earliest = c.downAt;
+            if (c.downAt < earliest)
+                earliest = c.downAt;
         }
-        if (down == 4) stats.arrival.add(ticksToUs(now - earliest) / 1000);
+        if (down == 4)
+            stats.arrival.add(ticksToUs(now - earliest) / 1000);
         dirty = true;
         return;
     }
-    if (track(contact, x, y, now)) dirty = true;
+    if (track(contact, x, y, now))
+        dirty = true;
 }
 
 void SwitchTouch::flush()
 {
-    if (!dirty) return;
+    if (!dirty)
+        return;
     SwitchTouchReport report = {};
     report.id = 1;
     for (unsigned i = 0; i < kSlots; ++i) {
@@ -812,7 +898,8 @@ void SwitchTouch::flush()
     // stamps only changed values), so two reports with one time would repeat the first one's lifts.
     const uint64_t began = mach_absolute_time();
     uint64_t stamp = reportStamp ? reportStamp : began;
-    if (stamp <= lastStamp) stamp = lastStamp + 1;
+    if (stamp <= lastStamp)
+        stamp = lastStamp + 1;
     lastStamp = stamp;
     // Dropped by IOHIDFamily until the event driver has opened the device.
     if (timed)
@@ -821,7 +908,8 @@ void SwitchTouch::flush()
         switch_hid_post(hid, &report, sizeof(report));
     postTicks += mach_absolute_time() - began;
     ++stats.reports;
-    if (reportStamp && switch_display_is_on()) switch_touch_note_report(stamp);  // an interrupt's, on a lit screen
+    if (reportStamp && switch_display_is_on())
+        switch_touch_note_report(stamp);  // an interrupt's, on a lit screen
     changed = 0;
     dirty = false;
 }
@@ -843,7 +931,8 @@ void SwitchTouch::releaseAll()
 void SwitchTouch::powerDown()
 {
     timer->cancelTimeout();
-    if (!running) return;
+    if (!running)
+        return;
     irq->disable();
     releaseAll();
     running = false;
@@ -874,7 +963,8 @@ void SwitchTouch::resume()
     loop->runAction(
         [](OSObject *owner, void *, void *, void *, void *) -> IOReturn {
             auto *self = static_cast<SwitchTouch *>(owner);
-            if (!self->screenOff) self->timer->setTimeoutMS(1);
+            if (!self->screenOff)
+                self->timer->setTimeoutMS(1);
             return kIOReturnSuccess;
         },
         this);
@@ -909,7 +999,8 @@ volatile uint64_t gUnansweredReport;
 extern "C" uint64_t switch_touch_take_report(uint64_t before)
 {
     uint64_t stamp = __atomic_load_n(&gUnansweredReport, __ATOMIC_ACQUIRE);
-    if (!stamp || stamp >= before) return 0;
+    if (!stamp || stamp >= before)
+        return 0;
     if (!__atomic_compare_exchange_n(&gUnansweredReport, &stamp, 0, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
         return 0;
     uint64_t stale = 0;
@@ -925,22 +1016,26 @@ static void switch_touch_note_report(uint64_t stamp)
 
 extern "C" void switch_touch_suspend(void)
 {
-    if (touch) touch->suspend();
+    if (touch)
+        touch->suspend();
 }
 
 extern "C" void switch_touch_resume(void)
 {
-    if (touch) touch->resume();
+    if (touch)
+        touch->resume();
 }
 
 extern "C" void switch_touch_display_power(bool on)
 {
-    if (touch) touch->displayPower(on);
+    if (touch)
+        touch->displayPower(on);
 }
 
 extern "C" int switch_touch_start(void)
 {
-    if (touch) return 0;
+    if (touch)
+        return 0;
     IOService *resources = IOService::getResourceService();
     SwitchTouch *candidate = OSTypeAlloc(SwitchTouch);
     if (!resources || !candidate || !candidate->init() || !candidate->attach(resources) ||

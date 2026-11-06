@@ -23,7 +23,9 @@
 
 extern const CFStringRef kVTVideoEncoderSpecification_EncoderID;
 
-enum { MAX_HANDLES = 64 };
+enum {
+    MAX_HANDLES = 64
+};
 
 struct NVENCClient {
     uint8_t *va[MAX_HANDLES];
@@ -51,8 +53,10 @@ NVENCClient *nvenc_open(int *error)
 
 void nvenc_close(NVENCClient *c)
 {
-    if (!c) return;
-    for (int i = 0; i < MAX_HANDLES; i++) free(c->va[i]);
+    if (!c)
+        return;
+    for (int i = 0; i < MAX_HANDLES; i++)
+        free(c->va[i]);
     free(c);
 }
 
@@ -80,8 +84,10 @@ int nvenc_alloc(void *ctx, uint64_t size, uint32_t *handle, void **va)
     NVENCClient *c = ctx;
     size = (size + 65535) & ~65535ull;  // the kernel's granule
     for (uint32_t h = 1; h < MAX_HANDLES; h++) {
-        if (c->va[h]) continue;
-        if (!(c->va[h] = calloc(1, size))) return -1;
+        if (c->va[h])
+            continue;
+        if (!(c->va[h] = calloc(1, size)))
+            return -1;
         c->size[h] = size;
         *handle = h;
         *va = c->va[h];
@@ -106,7 +112,8 @@ int nvenc_wait(void *ctx, const TegraNVENCWait *w)
 static const TegraNVENCEntry *find(const TegraNVENCSubmit *s, uint16_t method)
 {
     for (uint32_t i = 0; i < s->entry_count; i++)
-        if (s->entries[i].method == method) return &s->entries[i];
+        if (s->entries[i].method == method)
+            return &s->entries[i];
     return NULL;
 }
 
@@ -127,9 +134,12 @@ static void readMacroblock(const uint8_t *surface, uint32_t layout, uint32_t pit
 
 static uint32_t layoutOf(const nvenc_h264_surface_cfg_s *cfg)
 {
-    if (cfg->tiled_16x16) return TEGRA_NVENC_LAYOUT_TILED16;
-    if (cfg->block_height == 1) return TEGRA_NVENC_LAYOUT_BL2_LOG;
-    if (cfg->block_height == 2) return gLayout == TEGRA_NVENC_LAYOUT_BL4_LOG ? gLayout : TEGRA_NVENC_LAYOUT_BL2_RAW;
+    if (cfg->tiled_16x16)
+        return TEGRA_NVENC_LAYOUT_TILED16;
+    if (cfg->block_height == 1)
+        return TEGRA_NVENC_LAYOUT_BL2_LOG;
+    if (cfg->block_height == 2)
+        return gLayout == TEGRA_NVENC_LAYOUT_BL4_LOG ? gLayout : TEGRA_NVENC_LAYOUT_BL2_RAW;
     return gLayout == TEGRA_NVENC_LAYOUT_BL1 ? gLayout : TEGRA_NVENC_LAYOUT_PITCH;  // block height 0: pitch or BL1
 }
 
@@ -141,7 +151,8 @@ static int engine(NVENCClient *c, const TegraNVENCSubmit *s)
     const uint32_t width = p->input_cfg.frame_width_minus1 + 1u, height = p->input_cfg.frame_height_minus1 + 1u;
     const uint32_t wmbs = (width + 15) / 16, hmbs = (height + 15) / 16;
     const bool pPicture = pc->pic_type == H264ENC_P, idr = pc->pic_type == H264ENC_IDR;
-    if (p->pps_data.entropy_coding_mode_flag) return -1;  // CAVLC only (see above)
+    if (p->pps_data.entropy_coding_mode_flag)
+        return -1;  // CAVLC only (see above)
     const TegraNVENCEntry *in = find(s, NVC5B7_SET_IN_CUR_PIC), *out = find(s, NVC5B7_SET_OUT_REF_PIC_LUMA);
     const TegraNVENCEntry *ref = find(s, NVC5B7_SET_IN_REF_PIC0_LUMA), *bits = find(s, NVC5B7_SET_OUT_BITSTREAM);
     const TegraNVENCEntry *status = find(s, NVC5B7_SET_OUT_ENC_STATUS);
@@ -188,7 +199,8 @@ static int engine(NVENCClient *c, const TegraNVENCSubmit *s)
             }
             h264bits_ue(&b, pPicture ? 30 : 25);  // mb_type I_PCM (5 + 25 in a P slice)
             h264bits_align_zero(&b);
-            for (int i = 0; i < 384; i++) h264bits_u(&b, mb[i], 8);
+            for (int i = 0; i < 384; i++)
+                h264bits_u(&b, mb[i], 8);
             gPcm++;
             for (uint32_t y = 0; y < 16; y++)  // the reconstruction is the picture itself (pitch linear here)
                 memcpy(recon + (size_t)(mby * 16 + y) * rpitch + mbx * 16, mb + y * 16, 16);
@@ -199,7 +211,8 @@ static int engine(NVENCClient *c, const TegraNVENCSubmit *s)
                     cr[1] = mb[320 + y * 8 + x];
                 }
         }
-    if (skip) h264bits_ue(&b, skip);  // the run that ends the slice
+    if (skip)
+        h264bits_ue(&b, skip);  // the run that ends the slice
     // Skipped macroblocks keep the reference's samples (P_Skip with a zero vector: every neighbour is I_PCM or
     // skipped with vector 0).
     if (pPicture)
@@ -208,7 +221,8 @@ static int engine(NVENCClient *c, const TegraNVENCSubmit *s)
                 uint8_t mb[384], prev[384];
                 readMacroblock(input, layout, pitch, inOff, mbx, mby, mb);
                 readMacroblock(reference, TEGRA_NVENC_LAYOUT_PITCH, rpitch, refOff, mbx, mby, prev);
-                if (memcmp(mb, prev, sizeof(mb))) continue;
+                if (memcmp(mb, prev, sizeof(mb)))
+                    continue;
                 for (uint32_t y = 0; y < 16; y++)
                     memcpy(recon + (size_t)(mby * 16 + y) * rpitch + mbx * 16,
                            reference + (size_t)(mby * 16 + y) * rpitch + mbx * 16, 16);
@@ -222,14 +236,17 @@ static int engine(NVENCClient *c, const TegraNVENCSubmit *s)
     bs[3] = 1;
     const size_t n = h264enc_nal(idr ? 0x65 : 0x61, rbsp, h264bits_size(&b), bs + 4, pc->bitstream_buf_size - 4);
     free(rbsp);
-    if (!n) return -1;
+    if (!n)
+        return -1;
     nvenc_pic_stat_s *stat = (nvenc_pic_stat_s *)(c->va[status->value] + status->offset);
     memset(stat, 0, sizeof(*stat));
     stat->total_bit_count = (uint32_t)(n + 4) * 8;
     stat->num_slices = 1;
     stat->pic_type = (unsigned short)pc->pic_type;
-    if (idr) gIdr++;
-    if (pPicture) gP++;
+    if (idr)
+        gIdr++;
+    if (pPicture)
+        gP++;
     return 0;
 }
 
@@ -239,8 +256,10 @@ int nvenc_submit(void *ctx, const TegraNVENCSubmit *s, uint32_t *fence)
     uint64_t avail[TEGRA_NVENC_MAX_ENTRIES] = {0};
     for (uint32_t i = 0; i < s->entry_count; i++) {
         const TegraNVENCEntry *e = &s->entries[i];
-        if (e->kind != TEGRA_NVENC_ENTRY_RELOC) continue;
-        if (e->value >= MAX_HANDLES || !c->va[e->value] || e->offset > c->size[e->value]) return -1;
+        if (e->kind != TEGRA_NVENC_ENTRY_RELOC)
+            continue;
+        if (e->value >= MAX_HANDLES || !c->va[e->value] || e->offset > c->size[e->value])
+            return -1;
         avail[i] = c->size[e->value] - e->offset;
     }
     const char *why = tegra_nvenc_check(s, avail);
@@ -255,7 +274,8 @@ int nvenc_submit(void *ctx, const TegraNVENCSubmit *s, uint32_t *fence)
         memcpy(gFirstPAvail, avail, sizeof(avail));
         gHaveP = true;
     }
-    if (engine(c, s)) return -1;
+    if (engine(c, s))
+        return -1;
     *fence = (uint32_t)++gSubmits;
     return 0;
 }
@@ -329,7 +349,11 @@ static void parameterSets(void)
 
 static void layouts(void)
 {
-    enum { PITCH = 128, ROWS = 64 };
+    enum {
+        PITCH = 128,
+        ROWS = 64
+    };
+
     static uint8_t seen[PITCH * ROWS];
     for (uint32_t layout = 0; layout < TEGRA_NVENC_LAYOUTS; layout++) {
         memset(seen, 0, sizeof(seen));
@@ -337,7 +361,8 @@ static void layouts(void)
         for (uint32_t y = 0; y < ROWS; y++)
             for (uint32_t x = 0; x < PITCH; x++) {
                 const size_t o = h264enc_surface_offset(layout, PITCH, x, y);
-                if (o >= sizeof(seen) || seen[o]++) ok = false;
+                if (o >= sizeof(seen) || seen[o]++)
+                    ok = false;
             }
         EXPECT(ok, "layout %u is not a bijection on %ux%u", layout, PITCH, ROWS);
     }
@@ -395,9 +420,11 @@ static const uint8_t kDriverSlice[12] = {0x10, 0x0e, 0xc0, 0x00, 0x00, 0x00, 0x0
 // Block `b` (`size` bytes) is `expect` (`n` bytes) followed by zeros.
 static bool sameBlock(const uint8_t *b, size_t size, const uint8_t *expect, size_t n)
 {
-    if (memcmp(b, expect, n)) return false;
+    if (memcmp(b, expect, n))
+        return false;
     for (size_t i = n; i < size; i++)
-        if (b[i]) return false;
+        if (b[i])
+            return false;
     return true;
 }
 
@@ -444,7 +471,8 @@ static void driverControls(void)
         if (k) {
             lists[0] = 0;
             lists[16] = 1;
-            for (int r = 0; r < 8; r++) lists[32 + 16 * r] = 0x00, lists[33 + 16 * r] = 0x01;
+            for (int r = 0; r < 8; r++)
+                lists[32 + 16 * r] = 0x00, lists[33 + 16 * r] = 0x01;
         }
         EXPECT(!memcmp(pc->l0, lists, sizeof(lists)), "%s: reference lists differ from NVIDIA's T210 driver's", name);
         // The flags word (pic_struct .. cabac_zero_word_enable): 0x9c for the driver's IDR, 0x90 for its P.
@@ -484,6 +512,7 @@ static void refusals(void)
         EXPECT(false, "no P picture reached the engine");
         return;
     }
+
     static const struct {
         const char *name, *why;
     } cases[] = {
@@ -509,6 +538,7 @@ static void refusals(void)
         {"history of one 128-byte row (nvenc_drv.h 2.3), below the T210 driver's size", "history"},
         {"direct prediction", "mode decision"},
     };
+
     for (unsigned k = 0; k < sizeof(cases) / sizeof(cases[0]); k++) {
         TegraNVENCSubmit s = gFirstP;
         uint64_t avail[TEGRA_NVENC_MAX_ENTRIES];
@@ -516,24 +546,38 @@ static void refusals(void)
         nvenc_h264_drv_pic_setup_s *p = (nvenc_h264_drv_pic_setup_s *)s.setup;
         nvenc_h264_pic_control_s *pc = &p->pic_control;
         switch (k) {
-        case 0: p->magic = 0xc9b70006u; break;
+        case 0:
+            p->magic = 0xc9b70006u;
+            break;
         case 1:
             for (uint32_t i = 0; i < s.entry_count; i++)  // moved to an unused reference slot
                 if (s.entries[i].method == NVC5B7_SET_OUT_ENC_STATUS)
                     s.entries[i].method = NVC5B7_SET_IN_REF_PIC0_LUMA + 4 * 5;
             break;
-        case 2: pc->bitstream_buf_size = 0x7fffff00u; break;
-        case 3: pc->hist_buf_size = 128; break;
-        case 4: ((nvenc_h264_me_control_s *)(s.setup + pc->me_control_offset))->me_only_mode = 1; break;
-        case 5: pc->pic_type = 1; break;
-        case 6: pc->l0[0] = 3; break;
+        case 2:
+            pc->bitstream_buf_size = 0x7fffff00u;
+            break;
+        case 3:
+            pc->hist_buf_size = 128;
+            break;
+        case 4:
+            ((nvenc_h264_me_control_s *)(s.setup + pc->me_control_offset))->me_only_mode = 1;
+            break;
+        case 5:
+            pc->pic_type = 1;
+            break;
+        case 6:
+            pc->l0[0] = 3;
+            break;
         case 7:
         case 8:
             for (uint32_t i = 0; i < s.entry_count; i++)
                 if (s.entries[i].method == NVC5B7_SET_CONTROL_PARAMS)
                     s.entries[i].value = k == 7 ? s.entries[i].value | (1u << 15) : s.entries[i].value & ~(1u << 12);
             break;
-        case 9: pc->q_control_offset = s.setup_bytes - 8; break;
+        case 9:
+            pc->q_control_offset = s.setup_bytes - 8;
+            break;
         case 10: {
             const TegraNVENCEntry last = s.entries[s.entry_count - 1];
             s.entries[s.entry_count - 1] = s.entries[0];
@@ -545,10 +589,15 @@ static void refusals(void)
         }
         case 11:
             for (uint32_t i = 0; i < s.entry_count; i++)
-                if (s.entries[i].method == NVC5B7_SET_IN_CUR_PIC) avail[i] = 4096;
+                if (s.entries[i].method == NVC5B7_SET_IN_CUR_PIC)
+                    avail[i] = 4096;
             break;
-        case 12: pc->stats_fifo_enable = 1; break;
-        case 13: pc->num_forced_slices_minus1 = 1; break;
+        case 12:
+            pc->stats_fifo_enable = 1;
+            break;
+        case 13:
+            pc->num_forced_slices_minus1 = 1;
+            break;
         case 14: {
             const TegraNVENCEntry first = s.entries[0];
             s.entries[0] = s.entries[1];
@@ -558,17 +607,27 @@ static void refusals(void)
             avail[1] = a;
             break;
         }
-        case 15: pc->slice_mode = 1; break;
-        case 16: pc->max_slice_size = 1; break;
-        case 17: pc->l1[3] = -1; break;
-        case 18: pc->l0[1] = -1; break;
+        case 15:
+            pc->slice_mode = 1;
+            break;
+        case 16:
+            pc->max_slice_size = 1;
+            break;
+        case 17:
+            pc->l1[3] = -1;
+            break;
+        case 18:
+            pc->l0[1] = -1;
+            break;
         case 19: {
             const uint32_t width = p->input_cfg.frame_width_minus1 + 1u, height = p->input_cfg.frame_height_minus1 + 1u;
             pc->hist_buf_size = (((width - 1 + 16) / 16) + 16) * 128;
             EXPECT(pc->hist_buf_size < tegra_nvenc_history_bytes(width, height), "the clip's row is the larger");
             break;
         }
-        case 20: ((nvenc_h264_md_control_s *)(s.setup + pc->md_control_offset))->bdirect_mode = 1; break;
+        case 20:
+            ((nvenc_h264_md_control_s *)(s.setup + pc->md_control_offset))->bdirect_mode = 1;
+            break;
         }
         const char *why = tegra_nvenc_check(&s, avail);
         EXPECT(why && !strcmp(why, cases[k].why), "%s: checker said \"%s\", expected \"%s\"", cases[k].name,
@@ -588,7 +647,8 @@ static void rateControl(void)
         const double bytes = complexity * pow(2, (26.0 - rc_qp(&rc, key)) / 6);
         rc_update(&rc, bytes, key);
         total += bytes;
-        if (i >= 450) late += bytes;
+        if (i >= 450)
+            late += bytes;
     }
     const double rate = total * 8 / 20, lateRate = late * 8 / 5;
     EXPECT(rate > 3.2e6 && rate < 4.8e6 && lateRate > 3.2e6 && lateRate < 4.8e6,
@@ -620,6 +680,7 @@ int main(void)
     const void *specValues[] = {CFSTR("com.brunostjohn.switch.ave-host")};
     CFDictionaryRef spec = CFDictionaryCreate(NULL, specKeys, specValues, 1, &kCFTypeDictionaryKeyCallBacks,
                                               &kCFTypeDictionaryValueCallBacks);
+
     static const struct {
         uint32_t layout, chroma;
     } runs[] = {
@@ -627,6 +688,7 @@ int main(void)
         {TEGRA_NVENC_LAYOUT_BL2_LOG, TEGRA_NVENC_CHROMA_METHOD},
         {TEGRA_NVENC_LAYOUT_TILED16, TEGRA_NVENC_CHROMA_OFFSET},
     };
+
     for (unsigned r = 0; r < sizeof(runs) / sizeof(runs[0]); r++) {
         gLayout = runs[r].layout;
         gChroma = runs[r].chroma;

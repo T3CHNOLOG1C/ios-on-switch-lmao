@@ -88,6 +88,7 @@ enum {
     TEGRA_GPIO_PORT_EE,
     TEGRA_GPIO_PORT_FF,
 };
+
 #define TEGRA_GPIO(port, pin) (TEGRA_GPIO_PORT_##port * 8 + (pin))
 
 // Named pins of this board (table above).

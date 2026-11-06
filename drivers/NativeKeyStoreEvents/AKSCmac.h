@@ -16,7 +16,8 @@ using BlockEncrypt = bool (*)(void *context, const uint8_t in[16], uint8_t out[1
 inline void cmacDouble(const uint8_t in[16], uint8_t out[16])
 {
     const uint8_t carry = in[0] >> 7;
-    for (size_t i = 0; i < 15; ++i) out[i] = static_cast<uint8_t>((in[i] << 1) | (in[i + 1] >> 7));
+    for (size_t i = 0; i < 15; ++i)
+        out[i] = static_cast<uint8_t>((in[i] << 1) | (in[i + 1] >> 7));
     out[15] = static_cast<uint8_t>((in[15] << 1) ^ (carry ? 0x87 : 0));
 }
 
@@ -32,7 +33,8 @@ inline bool cmac(BlockEncrypt encrypt, void *context, const uint8_t *message, si
         const size_t blocks = length ? (length + 15) / 16 : 1;
         const bool complete = length && length % 16 == 0;
         for (size_t i = 0; ok && i + 1 < blocks; ++i) {
-            for (size_t k = 0; k < 16; ++k) block[k] = static_cast<uint8_t>(x[k] ^ message[16 * i + k]);
+            for (size_t k = 0; k < 16; ++k)
+                block[k] = static_cast<uint8_t>(x[k] ^ message[16 * i + k]);
             ok = encrypt(context, block, x);
         }
         if (ok) {
@@ -44,7 +46,8 @@ inline bool cmac(BlockEncrypt encrypt, void *context, const uint8_t *message, si
             ok = encrypt(context, block, mac);
         }
     }
-    if (!ok) wipe(mac, 16);
+    if (!ok)
+        wipe(mac, 16);
     wipe(l, sizeof l);
     wipe(k1, sizeof k1);
     wipe(k2, sizeof k2);

@@ -42,22 +42,27 @@ namespace {
 constexpr uint64_t kRefCycles = 38, kRefMultiplier = 3600, kRefMaxLux = 100000;
 constexpr uint64_t kRefItimeUs = 2700 * kRefCycles;
 constexpr uint64_t kRefGains[] = {1, 2, 64, 128};
+
 struct Row {
     double rc, cv, ci;
 };
+
 const std::vector<Row> kWindowRows = {{231, 9697, 30300}, {993, 3333, 2778}, {1478, 1621, 1053}, {7500, 81, 10}};
 const std::vector<Row> kDtWindow = {{231, 9697, 7502}, {993, 3333, 2778}, {1478, 1621, 1053}, {7500, 81, 10}};
 const std::vector<Row> kIcosaWindow = {
     {500, 5002, 7502}, {754, 2250, 2000}, {1029, 1999, 1667}, {1373, 884, 583}, {1879, 309, 165}};  // hekate
+
 struct Coeff {
     uint64_t cl, fl;
 };
+
 constexpr Coeff kGainCoeff[] = {{2500, 0}, {1600, 7800}, {10, 50000}, {0, 1000}};  // (cl, fl), tegra210b01-fric.dts
 
 // bh1730_get_lux: u64 arithmetic, three truncating steps.
 uint64_t linuxLux(uint64_t visible, uint64_t ir, unsigned gain)
 {
-    if (visible == 0) return 0;
+    if (visible == 0)
+        return 0;
     uint64_t lux = 0;
     for (const Row &w : kWindowRows) {
         if (1000 * ir / visible < (uint64_t)w.rc) {
@@ -78,8 +83,10 @@ unsigned linuxGain(unsigned gain, uint64_t visible, uint64_t ir)
 {
     const uint64_t highest = std::max(visible, ir);
     const Coeff c = kGainCoeff[gain];
-    if (highest > c.fl && gain != 0) return gain - 1;
-    if (highest < c.cl && gain != 3) return gain + 1;
+    if (highest > c.fl && gain != 0)
+        return gain - 1;
+    if (highest < c.cl && gain != 3)
+        return gain + 1;
     return gain;
 }
 
@@ -87,9 +94,12 @@ unsigned linuxGain(unsigned gain, uint64_t visible, uint64_t ir)
 std::vector<unsigned> gridValues()
 {
     std::set<unsigned> values;
-    for (unsigned v = 0; v < 64; ++v) values.insert(v);
-    for (int k = 64; k < 165; ++k) values.insert((unsigned)std::pow(1.07, k));
-    for (unsigned v : {100u, 132u, 372u, 1000u, 65534u, 65535u}) values.insert(v);
+    for (unsigned v = 0; v < 64; ++v)
+        values.insert(v);
+    for (int k = 64; k < 165; ++k)
+        values.insert((unsigned)std::pow(1.07, k));
+    for (unsigned v : {100u, 132u, 372u, 1000u, 65534u, 65535u})
+        values.insert(v);
     return {values.begin(), values.end()};
 }
 
@@ -147,7 +157,8 @@ TEST(SwitchALSMath, LuxAndGainAgainstBh1730)
                 const uint64_t reference = linuxLux(v, i, g);
                 EXPECT_TRUE(reference <= ours && ours <= reference + 4)
                     << g << " " << v << " " << i << ": " << ours << " vs Linux " << reference;
-                if (ours >= reference) worst = std::max<uint64_t>(worst, ours - reference);
+                if (ours >= reference)
+                    worst = std::max<uint64_t>(worst, ours - reference);
                 const unsigned stepped = linuxGain(g, v, i);
                 if (stepped > g) {
                     const bool held = std::max(v, i) * kRefGains[stepped] / kRefGains[g] < kGainCoeff[stepped].fl;
@@ -156,7 +167,9 @@ TEST(SwitchALSMath, LuxAndGainAgainstBh1730)
                     EXPECT_EQ(next, stepped) << g << " " << v << " " << i;
                 }
             }
-    const size_t unclipped = std::count_if(values.begin(), values.end(), [](unsigned v) { return v < 65535; });
+    const size_t unclipped = std::count_if(values.begin(), values.end(), [](unsigned v) {
+        return v < 65535;
+    });
     EXPECT_EQ(rows, 4 * values.size() * values.size());
     EXPECT_EQ(saturatedCases, 4 * (values.size() * values.size() - unclipped * unclipped));
     std::printf("SwitchALS: %zu lux/gain cases match bh1730.c (worst +%llu lux)\n", rows, (unsigned long long)worst);
@@ -168,8 +181,10 @@ TEST(SwitchALSMath, LuxAndGainAgainstBh1730)
 
 TEST(SwitchALSMath, WindowTablesAndScale)
 {
-    for (bool join : joins(kIcosaWindow)) EXPECT_TRUE(join) << "Icosa";
-    for (bool join : joins(kWindowRows)) EXPECT_TRUE(join) << "Aula with ci0 30300";
+    for (bool join : joins(kIcosaWindow))
+        EXPECT_TRUE(join) << "Icosa";
+    for (bool join : joins(kWindowRows))
+        EXPECT_TRUE(join) << "Aula with ci0 30300";
     EXPECT_EQ(joins(kDtWindow), (std::vector<bool>{false, true, true})) << "7964 against 2691 at 231";
     // Scale: a logged uncovered reading, 64x DATA0 372 DATA1 132 (ratio 0.355), against the datasheet's own formula for
     // the bare part (ratio < 0.55: (0.795 DATA0 - 0.859 DATA1) / gain * 102.6 / ITIME ms): the optical window's factor.
@@ -187,7 +202,8 @@ constexpr double kR7s[] = {37.7215, 47.7215, 51.0549, 84.3882, 137.9125, 103.523
 // The panel level nearest to `nits` (16.16), as nitsToRaw must give it.
 int64_t nearestLevel(int64_t nits)
 {
-    if (nits <= 0) return kFloor;
+    if (nits <= 0)
+        return kFloor;
     return std::min(kPanel, std::max(kFloor, (nits * kPanel + kNitsMaxFixed / 2) / kNitsMaxFixed));
 }
 }  // namespace
@@ -202,12 +218,16 @@ TEST(SwitchBacklightMath, PanelModel)
     EXPECT_EQ(toRaw(0), (unsigned)kFloor) << "the legacy brightness mapping, as before";
     EXPECT_EQ(toRaw(kMax), (unsigned)kPanel);
     for (unsigned raw = 0; raw <= kPanelMax + 2; ++raw)
-        if (raw >= kFloorRaw && raw <= kPanelMax) EXPECT_EQ(toRaw(toBrightness(raw)), raw) << "round trip";
+        if (raw >= kFloorRaw && raw <= kPanelMax)
+            EXPECT_EQ(toRaw(toBrightness(raw)), raw) << "round trip";
 
     std::vector<int64_t> probe;
-    for (double n : kR7s) probe.push_back((int64_t)(n * 65536));
-    for (int64_t n = -65536; n < (420 << 16); n += 4099) probe.push_back(n);
-    for (int64_t n : {int64_t{0}, kNitsMaxFixed, kNitsMaxFixed + 1, int64_t{0x7fffffff}}) probe.push_back(n);
+    for (double n : kR7s)
+        probe.push_back((int64_t)(n * 65536));
+    for (int64_t n = -65536; n < (420 << 16); n += 4099)
+        probe.push_back(n);
+    for (int64_t n : {int64_t{0}, kNitsMaxFixed, kNitsMaxFixed + 1, int64_t{0x7fffffff}})
+        probe.push_back(n);
     std::map<int32_t, unsigned> shown;
     bool havePrevious = false;
     int32_t previousNits = 0;
@@ -218,14 +238,16 @@ TEST(SwitchBacklightMath, PanelModel)
         EXPECT_EQ(raw, nearestLevel(v)) << v;
         EXPECT_EQ(ramp, raw) << v << ": the ramp's brightness shows that level";
         EXPECT_LE(std::fabs(back - (double)raw * kNitsMaxFixed / kPanel), 1.0) << v << ": that level's nits";
-        if (havePrevious && v >= previousNits) EXPECT_GE(raw, previousRaw) << v << ": monotonic";
+        if (havePrevious && v >= previousNits)
+            EXPECT_GE(raw, previousRaw) << v << ": monotonic";
         havePrevious = true;
         previousNits = v;
         previousRaw = raw;
         shown[v] = raw;
     }
     std::vector<unsigned> targets;
-    for (double n : kR7s) targets.push_back(shown[(int32_t)(n * 65536)]);
+    for (double n : kR7s)
+        targets.push_back(shown[(int32_t)(n * 65536)]);
     // 38..138 nits: panel 193..706.
     EXPECT_EQ(targets, (std::vector<unsigned>{193, 244, 261, 432, 706, 530}));
     EXPECT_EQ(shown[0], (unsigned)kFloor);
@@ -239,7 +261,8 @@ constexpr double kL0a = 5.000001907348633, kL0b = 67.16605377197266;
 
 double aabCurve(double lux)
 {
-    if (lux < kE0b) return kL0a + (kL0b - kL0a) * lux / kE0b;
+    if (lux < kE0b)
+        return kL0a + (kL0b - kL0a) * lux / kE0b;
     return kL1 + (kL2 - kL1) * (lux - kE1) / (kE2 - kE1);
 }
 
@@ -258,9 +281,11 @@ TEST(SwitchBacklightMath, R7vAutoBrightnessHolds)
     const double threshold = 0.2 * 0.5;
     int brighten = -1, dim = -1;
     for (int lux = 61; lux <= 2000 && brighten < 0; ++lux)
-        if (perceptual(aabCurve(lux)) - perceptual(aabCurve(61)) > threshold) brighten = lux;
+        if (perceptual(aabCurve(lux)) - perceptual(aabCurve(61)) > threshold)
+            brighten = lux;
     for (int lux = 61; lux >= 0 && dim < 0; --lux)
-        if (perceptual(aabCurve(61)) - perceptual(aabCurve(lux)) > threshold) dim = lux;
+        if (perceptual(aabCurve(61)) - perceptual(aabCurve(lux)) > threshold)
+            dim = lux;
     EXPECT_TRUE(250 < brighten && brighten < 400) << brighten;
     EXPECT_TRUE(5 < dim && dim < 25) << dim;
     std::printf("r7v at 61 lux holds from %d to %d lux (perceptual step to 135 lux %.3f)\n", dim, brighten, delta);
@@ -316,13 +341,18 @@ TEST(SwitchALSMath, StepsThroughSaturation)
         const unsigned want = phase == 1 ? 50000 : 0;
         std::vector<Event> events;
         for (const Event &e : trace)
-            if (e.phase == phase) events.push_back(e);
-        const auto first = std::find_if(events.begin(), events.end(), [](const Event &e) { return e.kind == "lux"; });
+            if (e.phase == phase)
+                events.push_back(e);
+        const auto first = std::find_if(events.begin(), events.end(), [](const Event &e) {
+            return e.kind == "lux";
+        });
         ASSERT_NE(first, events.end()) << "phase " << phase;
         EXPECT_LE(first->tick, 4u) << "phase " << phase << ": a valid reading within four samples";
         for (const Event &e : events) {
-            if (e.kind == "clipped") clippedInLight |= phase == 1;
-            if (e.kind != "lux") continue;
+            if (e.kind == "clipped")
+                clippedInLight |= phase == 1;
+            if (e.kind != "lux")
+                continue;
             EXPECT_LE(std::abs((int)e.value - (int)want), (int)std::max(2u, want / 50))
                 << "phase " << phase << " tick " << e.tick << ": never an under-read";
             settled[phase] = e.gain;
@@ -356,8 +386,10 @@ TEST(SwitchBacklightMath, MarketingTableAsDisplayCreateWithIDReadsIt)
     EXPECT_EQ(table, (std::vector<int32_t>{(int32_t)kNitsMin, (int32_t)kNitsMid, (int32_t)kNitsMax}))
         << "the calibration's product range: min, mid, max";
     std::vector<float> marketing;  // scvtf s0, w8; fdiv by 65536.0 (0x1b62ae128..0x1b62ae138)
-    for (int32_t v : table) marketing.push_back(f32((double)f32(v) / 65536));
-    for (size_t i = 0; i + 1 < marketing.size(); ++i) EXPECT_LT(marketing[i], marketing[i + 1]);
+    for (int32_t v : table)
+        marketing.push_back(f32((double)f32(v) / 65536));
+    for (size_t i = 0; i + 1 < marketing.size(); ++i)
+        EXPECT_LT(marketing[i], marketing[i + 1]);
     // display+0x50c/0x510/0x514 = lMax/Mid/MinProduct, 0x518/0x51c/0x520 = lMax/Mid/MinPanel (0x1b62ad334..0x1b62ad460).
     const float product[] = {f32(kNitsMax / 65536.0), f32(kNitsMid / 65536.0), f32(kNitsMin / 65536.0)};
     const float *panel = product;  // calibration(): the same values
@@ -372,12 +404,15 @@ TEST(SwitchBacklightMath, MarketingTableAsDisplayCreateWithIDReadsIt)
         const float m = index < marketing.size() - 1 ? interpolate((double)index, marketing[index], (double)index + 1,
                                                                    marketing[index + 1], position)
                                                      : marketing.back();
-        if (m < product[1]) return interpolate(product[2], panel[2], product[1], panel[1], m);
+        if (m < product[1])
+            return interpolate(product[2], panel[2], product[1], panel[1], m);
         return interpolate(product[1], panel[1], product[0], panel[0], m);
     };
     std::vector<float> curve;
-    for (int i = 0; i <= 100; ++i) curve.push_back(sliderToNits(i / 100.0));
-    for (size_t i = 0; i + 1 < curve.size(); ++i) EXPECT_LE(curve[i], curve[i + 1]) << "monotonic at " << i;
+    for (int i = 0; i <= 100; ++i)
+        curve.push_back(sliderToNits(i / 100.0));
+    for (size_t i = 0; i + 1 < curve.size(); ++i)
+        EXPECT_LE(curve[i], curve[i + 1]) << "monotonic at " << i;
     EXPECT_EQ(curve[0], panel[2]);
     EXPECT_EQ(curve[50], panel[1]);
     EXPECT_EQ(curve[100], panel[0]);

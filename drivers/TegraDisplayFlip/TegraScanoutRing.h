@@ -41,32 +41,51 @@ struct TegraScanoutRing {
         pending = superseded = drawing = held = kNone;
         replace = true;
     }
-    bool busy(int i) const { return i == front || i == pending || i == superseded || i == drawing || i == held; }
+
+    bool busy(int i) const
+    {
+        return i == front || i == pending || i == superseded || i == drawing || i == held;
+    }
+
     // The buffer the next frame is written into: the one being drawn, else the first after front that is not busy; kNone when every
     // buffer is busy or, double-buffered, while a flip is out or a frame waits for one: the frame waits for a frame end.
     int target() const
     {
-        if (drawing != kNone) return drawing;
-        if (held != kNone || (!replace && (pending != kNone || superseded != kNone))) return kNone;
+        if (drawing != kNone)
+            return drawing;
+        if (held != kNone || (!replace && (pending != kNone || superseded != kNone)))
+            return kNone;
         for (unsigned k = 1; k < buffers; ++k) {
             const int i = (int)(((unsigned)front + k) % buffers);
-            if (!busy(i)) return i;
+            if (!busy(i))
+                return i;
         }
         return kNone;
     }
+
     // A copy that finishes later (GPU or copy thread) writes i from now on; one that failed leaves nothing in it to show.
-    void claim(int i) { drawing = i; }
-    void release() { drawing = kNone; }
+    void claim(int i)
+    {
+        drawing = i;
+    }
+
+    void release()
+    {
+        drawing = kNone;
+    }
+
     enum Ready {
         kFlip,  // point window A at it (no flip was out)
         kReplace,  // point window A at it, replacing a flip not yet seen taken (whose frame is not shown unless the boundary beat
                    // the replacement: latch() says which)
         kHold,  // double-buffered with a flip out: leave window A alone; flipHeld() hands it back at that flip's latch
     };
+
     // The frame in i is complete; mayReplace false: it may not replace a flip still out (another window layout).
     Ready ready(int i, bool mayReplace = true)
     {
-        if (drawing == i) drawing = kNone;
+        if (drawing == i)
+            drawing = kNone;
         if (pending == kNone) {
             pending = i;
             return kFlip;
@@ -80,21 +99,25 @@ struct TegraScanoutRing {
         pending = i;
         return kReplace;
     }
+
     // After a latch, or at an SC7 resume: the held frame, now asked for (the caller points window A at it); kNone when there is none
     // or a flip is still out.
     int flipHeld()
     {
-        if (held == kNone || pending != kNone) return kNone;
+        if (held == kNone || pending != kNone)
+            return kNone;
         pending = held;
         held = kNone;
         return pending;
     }
+
     enum Latch {
         kWaiting,        // nothing taken yet (asked for after the boundary): look again at the next frame end
         kTaken,          // pending is scanned now (front); a superseded buffer is free again, its frame never shown
         kTakenReplaced,  // the replaced flip was taken at this boundary and is scanned now; pending is still out
         kInconsistent,   // window A scans none of what was asked for: the controller did not do what was modelled
     };
+
     // At a frame end or vblank with a flip out (pending != kNone): window A's active START_ADDR as a buffer index (kNone: none of
     // these buffers) and whether STATE_CONTROL still holds an ACT_REQ. A boundary between the START_ADDR store and the ACT_REQ store
     // takes the new address under the old request and leaves the new request standing, so "taken" is decided by the address alone.
@@ -102,10 +125,13 @@ struct TegraScanoutRing {
     // no START_ADDR is ever stored while a request is out.
     Latch latch(int active, bool requested)
     {
-        if (pending == kNone) return kWaiting;
+        if (pending == kNone)
+            return kWaiting;
         if (!replace) {
-            if (requested) return active == front || active == pending ? kWaiting : kInconsistent;
-            if (active != pending) return kInconsistent;
+            if (requested)
+                return active == front || active == pending ? kWaiting : kInconsistent;
+            if (active != pending)
+                return kInconsistent;
             front = pending;
             pending = superseded = kNone;
             return kTaken;
@@ -115,7 +141,8 @@ struct TegraScanoutRing {
             pending = superseded = kNone;
             return kTaken;
         }
-        if (!requested) return kInconsistent;
+        if (!requested)
+            return kInconsistent;
         if (superseded != kNone && active == superseded) {
             front = superseded;
             superseded = kNone;
@@ -123,6 +150,7 @@ struct TegraScanoutRing {
         }
         return active == front ? kWaiting : kInconsistent;
     }
+
     // After kInconsistent with replacement on: DC A scans active (kNone: none of these buffers). Replacement is off from here. The
     // buffer to ask for again is returned (the newest complete frame or, when window A scans none of these, the one believed
     // scanned); the caller points window A at it. A replaced buffer it does not scan stays busy until a frame end shows a plain
@@ -131,17 +159,23 @@ struct TegraScanoutRing {
     int recover(int active)
     {
         replace = false;
-        if (active != kNone) front = active;
-        if (superseded == active) superseded = kNone;
-        if (pending == active) pending = kNone;
-        if (pending == kNone && active == kNone) pending = front;
+        if (active != kNone)
+            front = active;
+        if (superseded == active)
+            superseded = kNone;
+        if (pending == active)
+            pending = kNone;
+        if (pending == kNone && active == kNone)
+            pending = front;
         return pending;
     }
+
     // SC7: the last request is what window A gets back at the resume (its assembly registers are restored as they were); a held
     // frame stays held for flipHeld() at the resume.
     void settle()
     {
-        if (pending != kNone) front = pending;
+        if (pending != kNone)
+            front = pending;
         pending = superseded = kNone;
     }
 };

@@ -7,6 +7,7 @@
 #include "NativeMetalObjects.h"
 
 static std::vector<std::string> missing;
+
 static void onMissing(const char *cls, const char *sel)
 {
     missing.push_back(std::string(cls) + " " + sel);
@@ -16,7 +17,8 @@ static void onMissing(const char *cls, const char *sel)
 int main(int argc, char **argv)
 {
     @autoreleasepool {
-        if (argc < 3) return 2;
+        if (argc < 3)
+            return 2;
         id<MTLDevice> device = native_bridge_metal_open(argv[1], argv[2], 0x6e6d62, onMissing);
         if (!device) {
             std::printf("FAIL device\n");
@@ -37,7 +39,8 @@ int main(int argc, char **argv)
             std::printf("QuartzCore bare-descriptor probe: %u functions, kernels %u/%u, pairs %u/%u (not complete "
                         "shader coverage)\n",
                         r.qcFunctions, r.qcKernelsOk, r.qcKernels, r.qcPairsOk, r.qcPairs);
-        for (auto &m : missing) std::printf("missing selector: %s\n", m.c_str());
+        for (auto &m : missing)
+            std::printf("missing selector: %s\n", m.c_str());
         if (r.failed) {
             std::printf("FAILED %u checks, first: %s\n", r.failed, r.first);
             return 1;

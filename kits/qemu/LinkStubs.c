@@ -9,12 +9,15 @@
 
 // offline-component-load-probes.patch, bsd_init: called whether or not NativeLegacyDisplay is linked.
 void native_legacy_display_probe(void);
-STUB void native_legacy_display_probe(void) {}
+
+STUB void native_legacy_display_probe(void)
+{}
 
 // NativeVirtioBlock in verified mode (qemu_root_defconfig) asks NativeUfs whether a provider is one of its windows.
 // It declares the hook weak, but a static kernel link still requires a definition; -1 means "not a UFS window", the
 // same as the hook being absent.
 int native_ufs_block_authenticates(void *provider, const char *uuid, uint8_t *digest);
+
 STUB int native_ufs_block_authenticates(void *provider, const char *uuid, uint8_t *digest)
 {
     (void)provider;
@@ -26,21 +29,25 @@ STUB int native_ufs_block_authenticates(void *provider, const char *uuid, uint8_
 // NativeRamBlock keeps the Data overlay in a UFS store when NativeUfs reports a store mode (sheng-data-persist). Mode 0
 // is no store, so the Data ramdisk stays in memory and the other hooks are never called; they refuse if they are.
 unsigned native_ufs_store_mode(void);
+
 STUB unsigned native_ufs_store_mode(void)
 {
     return 0;
 }
 
 int native_ufs_store_open(uint64_t blocks, uint64_t *first, const char **why);
+
 STUB int native_ufs_store_open(uint64_t blocks, uint64_t *first, const char **why)
 {
     (void)blocks;
     (void)first;
-    if (why) *why = "no UFS store on this board";
+    if (why)
+        *why = "no UFS store on this board";
     return 0;
 }
 
 int native_ufs_store_read(uint64_t block, uint32_t count, void *buffer);
+
 STUB int native_ufs_store_read(uint64_t block, uint32_t count, void *buffer)
 {
     (void)block;
@@ -50,6 +57,7 @@ STUB int native_ufs_store_read(uint64_t block, uint32_t count, void *buffer)
 }
 
 int native_ufs_store_write(uint64_t block, uint32_t count, const void *buffer);
+
 STUB int native_ufs_store_write(uint64_t block, uint32_t count, const void *buffer)
 {
     (void)block;
@@ -59,12 +67,14 @@ STUB int native_ufs_store_write(uint64_t block, uint32_t count, const void *buff
 }
 
 int native_ufs_store_sync(void);
+
 STUB int native_ufs_store_sync(void)
 {
     return 0;
 }
 
 unsigned native_ufs_store_gpt_check(void);
+
 STUB unsigned native_ufs_store_gpt_check(void)
 {
     return 0;
@@ -74,15 +84,19 @@ STUB unsigned native_ufs_store_gpt_check(void)
 // board does not have. Each definition behaves as the absent hook: the display may always draw, keeps no diagnostic
 // mapping and reports no stages.
 int boot_progress_prepare_scanout(void);
+
 STUB int boot_progress_prepare_scanout(void)
 {
     return 1;
 }
 
 void boot_progress_cancel_scanout(void);
-STUB void boot_progress_cancel_scanout(void) {}
+
+STUB void boot_progress_cancel_scanout(void)
+{}
 
 void boot_progress_stage(const char *message);
+
 STUB void boot_progress_stage(const char *message)
 {
     (void)message;
@@ -92,6 +106,7 @@ STUB void boot_progress_stage(const char *message)
 STUB char boot_progress_ext[8][48];
 
 int boot_progress_pulse_anchor(uintptr_t address, uint64_t bytes, unsigned width, unsigned height, unsigned row);
+
 STUB int boot_progress_pulse_anchor(uintptr_t address, uint64_t bytes, unsigned width, unsigned height, unsigned row)
 {
     (void)address;

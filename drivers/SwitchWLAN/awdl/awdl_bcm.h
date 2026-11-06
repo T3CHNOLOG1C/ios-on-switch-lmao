@@ -39,6 +39,7 @@ enum {
     BCME_BADLEN = -24,
     BCME_NOTFOUND = -30,
 };
+
 // "UNSUPPORTED" and so on for a BCME code (0 "OK"); "?" past the table.
 const char *bcme_name(int status);
 
@@ -60,6 +61,7 @@ enum {
     WLC_E_AWDL_AW_EXT = 119,
     WLC_E_AWDL_PEER_CACHE_CONTROL = 120,
 };
+
 // The event mask bits the host sets in "event_msgs" while AWDL is open (WLC_E_IF is always on). All below 128: the
 // series' 150/152 (AWDL_STATS, SDB_STATE) need event_msgs_ext and the series drops them anyway.
 extern const uint8_t bcm_awdl_events[];
@@ -99,21 +101,25 @@ enum bcm_probe_item {
     BCM_PROBE_AWDL_IF2,  // the struct's name (wl_awdl_if2_t), in case this build names the variable after it
     BCM_PROBE_COUNT
 };
+
 #define BCM_PROBE_NO_ANSWER (-32768)  // the request did not reach the firmware (no answer, chip down)
 extern const char *const bcm_probe_names[BCM_PROBE_COUNT];
 // The GET_VAR request for one item: name, NUL, parameters. Returns its length (0 if `size` is too small).
 size_t bcm_probe_request(unsigned item, uint8_t *out, size_t size);
+
 struct bcm_awdl_probe {
     int16_t status[BCM_PROBE_COUNT];  // BCME code, or BCM_PROBE_NO_ANSWER
     uint16_t returned[BCM_PROBE_COUNT];
     uint32_t ifc_version;  // interface_create's answer (0 when not OK)
     uint8_t done;
 };
+
 void bcm_probe_record(struct bcm_awdl_probe *p, unsigned item, int status, const uint8_t *reply, size_t length);
 // The handler exists (the probe ran and the firmware answered with anything but UNSUPPORTED).
 int bcm_probe_has(const struct bcm_awdl_probe *p, unsigned item);
 // Bit `item` set for every probe item this firmware lacks (the bring-up skips those iovars).
 uint32_t bcm_probe_absent(const struct bcm_awdl_probe *p);
+
 enum bcm_awdl_api {
     BCM_AWDL_API_NONE = 0,     // no way to make an AWDL interface: neither interface_create v3 nor awdl_if
     BCM_AWDL_API_AWDL_IF = 1,  // 7.x: awdl_if, awdl_chan_seq, 28-byte awdl_config, u32 payload length
@@ -132,7 +138,11 @@ enum bcm_monitor_probe_item {
     BCM_MONITOR_PROBE_STA_MONITOR,
     BCM_MONITOR_PROBE_COUNT
 };
-enum { BCM_WLC_GET_MONITOR = 107 };
+
+enum {
+    BCM_WLC_GET_MONITOR = 107
+};
+
 extern const char *const bcm_monitor_probe_names[BCM_MONITOR_PROBE_COUNT];
 // The GET_VAR request for a variable item; 0 for the ioctl item, past the table or when `size` is too small.
 size_t bcm_monitor_probe_request(unsigned item, uint8_t *out, size_t size);
@@ -143,6 +153,7 @@ enum awdl_radio_mode {
     AWDL_RADIO_NATIVE = 1,
     AWDL_RADIO_SOFT = 2,
 };
+
 enum awdl_radio_off {
     AWDL_OFF_NOT = 0,
     AWDL_OFF_NO_RADIO,
@@ -152,6 +163,7 @@ enum awdl_radio_off {
     // BCM4350/4356 family lists it (its cap table is generic) and none registers an awdl_* iovar.
     AWDL_OFF_NO_API,
 };
+
 struct awdl_radio_verdict {
     enum awdl_radio_mode mode;
     enum awdl_radio_off off;
@@ -168,6 +180,7 @@ enum {
     BCM_AWDL_IF2_LEN = 20,
     BCM_AWDL_IFIDX = 2,  // the firmware interface index the host asks for (the series' BRCMF_AWDL_IFIDX)
 };
+
 // interface_create v3 for the AWDL interface: iftype 2, flags MAC_USE|IF_INDEX_USE|BSSID_USE (0x1a), our address,
 // the AWDL BSSID, if_index 2. Sent as a GET on the station's interface (brcmf_fil_iovar_data_get).
 size_t bcm_ifc_v3_awdl(uint8_t *out, const uint8_t mac[6]);
@@ -195,9 +208,23 @@ enum {
     BCM_RX_MGMT_V2_LEN = 24,
     BCM_HT_CAP_IE_LEN = 28,  // element id 45, length 26
 };
-enum { BCM_AWDL_PEER_OP_ADD = 0, BCM_AWDL_PEER_OP_DEL = 1, BCM_AWDL_PEER_OP_INFO = 2 };
-enum { BCM_AWDL_ROLE_SLAVE = 0, BCM_AWDL_ROLE_NE_MASTER = 1, BCM_AWDL_ROLE_MASTER = 2 };
-enum { BCM_AWDL_OPMODE_AUTO = 0, BCM_AWDL_OPMODE_FIXED = 1 };
+
+enum {
+    BCM_AWDL_PEER_OP_ADD = 0,
+    BCM_AWDL_PEER_OP_DEL = 1,
+    BCM_AWDL_PEER_OP_INFO = 2
+};
+
+enum {
+    BCM_AWDL_ROLE_SLAVE = 0,
+    BCM_AWDL_ROLE_NE_MASTER = 1,
+    BCM_AWDL_ROLE_MASTER = 2
+};
+
+enum {
+    BCM_AWDL_OPMODE_AUTO = 0,
+    BCM_AWDL_OPMODE_FIXED = 1
+};
 
 // 7.x awdl_config_params_t
 struct bcm_awdl_config {
@@ -206,6 +233,7 @@ struct bcm_awdl_config {
     uint16_t nmode;   // 0 legacy, 1 11n rates only, 2 11n + A-MPDU
     uint8_t dest[6];  // where the firmware sends PSF/MIF (broadcast)
 };
+
 size_t bcm_awdl_config_encode(uint8_t *out, const struct bcm_awdl_config *c);
 size_t bcm_u32(uint8_t *out, uint32_t v);
 // awdl_sync_params_t: type 0, param_len 36, master channel, AW period 16 TU, action frame period 110 TU, AW extension
@@ -246,7 +274,10 @@ uint8_t bcm_chanspec_primary(uint16_t chanspec);
 // ---- the data path on the AWDL interface -------------------------------------------------------------------------
 // The firmware carries AWDL data as 802.3 frames: DA, SA, length, then LLC/SNAP aa aa 03 00 17 f2 08 00, the AWDL
 // data header 03 04, le16 sequence, 00 00, and the original ethertype (be16).
-enum { BCM_AWDL_DATA_HDR_LEN = 16 };
+enum {
+    BCM_AWDL_DATA_HDR_LEN = 16
+};
+
 // Ethernet frame -> the 802.3 frame for the firmware. Returns its length (0 if malformed or `size` is too small).
 size_t bcm_awdl_encap(const uint8_t *eth, size_t length, uint16_t seq, uint8_t *out, size_t size);
 // The 802.3 frame from the firmware -> Ethernet. Returns its length, 0 for frames that are not AWDL data.
@@ -256,12 +287,15 @@ size_t bcm_awdl_decap(const uint8_t *frame, size_t length, uint8_t *out, size_t 
 struct bcm_if_event {  // WLC_E_IF: wl_event_data_if_t {ifidx, opcode (1 add, 2 del, 3 change), flags, bssidx, role}
     uint8_t ifidx, opcode, flags, bssidx, role;
 };
+
 int bcm_if_event_decode(const uint8_t *data, size_t len, struct bcm_if_event *out);
+
 struct bcm_rx_frame {  // brcmf_rx_mgmt_data, big endian: version, chanspec, rssi, mactime, rate
     uint16_t version, chanspec;
     int32_t rssi;
     uint32_t mactime, rate;
 };
+
 // A received AWDL action frame (WLC_E_ACTION_FRAME_RX, WLC_E_AWDL_EVENT, WHD's WLC_E_AWDL_RX_ACT_FRAME): the header
 // (be16 version 1: 16 bytes, 2: 24), then the frame body from the category (7f 00 17 f2 08 ...). A whole 802.11
 // frame after the header, or alone, is accepted too (*body then skips its 24 bytes). *body points into data.

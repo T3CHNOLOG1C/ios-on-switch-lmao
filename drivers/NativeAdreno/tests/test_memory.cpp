@@ -11,12 +11,14 @@
             std::exit(1);                                        \
         }                                                        \
     } while (0)
+
 IOReturn NativeAdrenoQueryCpu4K(NativeAdrenoCpuState *out)
 {
     CHECK(out);
     *out = {};
     return fixture.cpu_status;
 }
+
 IOReturn NativeAdrenoMaintainOwnedPages(void *mapping, size_t bytes, NativeAdrenoCacheOperation op)
 {
     CHECK(mapping && bytes && !(((uintptr_t)mapping | bytes) & 4095));
@@ -30,18 +32,23 @@ IOReturn NativeAdrenoMaintainOwnedPages(void *mapping, size_t bytes, NativeAdren
     fixture.cache_operations.push_back(op);
     return fixture.cache_calls == fixture.cache_fail_call ? kIOReturnIOError : kIOReturnSuccess;
 }
+
 static void reset()
 {
     CHECK(fixture.live.empty() && fixture.metadata.empty());
     fixture = MemoryFixture{};
 }
+
 /* Host fixture teardown only. This is not a production reset/release path. */
 static void discardFixtureAfterQuarantine()
 {
-    while (!fixture.live.empty()) fixture.live.back()->release();
-    while (!fixture.metadata.empty()) fixtureMetadataFree(fixture.metadata.back());
+    while (!fixture.live.empty())
+        fixture.live.back()->release();
+    while (!fixture.metadata.empty())
+        fixtureMetadataFree(fixture.metadata.back());
     reset();
 }
+
 static unsigned successes()
 {
     unsigned profiles = 0, outputs[] = {32, 36, 40, 42, 44, 48};
@@ -54,7 +61,8 @@ static unsigned successes()
             CHECK(memory.bytes() == 16384 && memory.mapping() && memory.descriptor() && !memory.quarantined());
             size_t count = mode == Contiguous ? 1 : mode == Scattered ? 4 : 2;
             CHECK(memory.spanCount() == count && fixture.prepared == 1 && fixture.segment_calls == 4);
-            for (size_t i = 0; i < 16384; ++i) CHECK(static_cast<unsigned char *>(memory.mapping())[i] == 0);
+            for (size_t i = 0; i < 16384; ++i)
+                CHECK(static_cast<unsigned char *>(memory.mapping())[i] == 0);
             uint64_t bytes = 0;
             for (size_t i = 0; i < count; ++i) {
                 const auto &span = memory.spans()[i];
@@ -85,6 +93,7 @@ static unsigned successes()
         }
     return profiles;
 }
+
 static unsigned failures()
 {
     unsigned controls = 0;
@@ -100,15 +109,20 @@ static unsigned failures()
             fixture.prepare_fail = true;
             expected = kIOReturnIOError;
         }
-        if (failure == 2) fixture.null_mapping = true;
-        if (failure == 3) fixture.unaligned_mapping = true;
-        if (failure == 4) fixture.wrong_length = true;
+        if (failure == 2)
+            fixture.null_mapping = true;
+        if (failure == 3)
+            fixture.unaligned_mapping = true;
+        if (failure == 4)
+            fixture.wrong_length = true;
         if (failure == 5) {
             fixture.metadata_fail = true;
             expected = kIOReturnNoMemory;
         }
-        if (failure >= 6 && failure <= 9) fixture.mode = static_cast<SegmentMode>(ZeroPhysical + (failure - 6));
-        if (failure == 10) fixture.mode = Scattered;
+        if (failure >= 6 && failure <= 9)
+            fixture.mode = static_cast<SegmentMode>(ZeroPhysical + (failure - 6));
+        if (failure == 10)
+            fixture.mode = Scattered;
         if (failure == 11) {
             fixture.cache_fail_call = 1;
             expected = kIOReturnIOError;
@@ -122,8 +136,10 @@ static unsigned failures()
     for (unsigned cleanup_failure = 0; cleanup_failure < 3; ++cleanup_failure) {
         reset();
         NativeAdrenoMemory memory;
-        if (cleanup_failure == 1) fixture.mode = ZeroPhysical;
-        if (cleanup_failure == 2) fixture.cache_fail_call = 1;
+        if (cleanup_failure == 1)
+            fixture.mode = ZeroPhysical;
+        if (cleanup_failure == 2)
+            fixture.cache_fail_call = 1;
         fixture.complete_fail = true;
         IOReturn allocated = memory.allocate(16384, 32, false, 16384);
         if (!cleanup_failure) {
@@ -151,6 +167,7 @@ static unsigned failures()
     ++controls;
     return controls;
 }
+
 static unsigned arguments()
 {
     reset();
@@ -187,6 +204,7 @@ static unsigned arguments()
     CHECK(memory.release() == kIOReturnSuccess);
     return controls;
 }
+
 int main()
 {
     auto profiles = successes(), failure_controls = failures(), argument_controls = arguments();
@@ -197,19 +215,23 @@ int main()
     std::puts("Host IOKit doubles only; no real kernel allocation, physical provenance, cache/DMA, SMMU, GPU or fence "
               "qualification");
 }
+
 /* Physical-page maintenance (imported BOs): record it; no host page is touched. */
 /* Host double: the page attribute change of user BOs has no host equivalent (no host page is touched). */
 IOReturn NativeAdrenoSetPagesCacheMode(const NativeAdrenoPhysicalSpan *spans, size_t count, bool)
 {
     return spans && count ? kIOReturnSuccess : kIOReturnBadArgument;
 }
+
 IOReturn NativeAdrenoReassertWriteCombined(const NativeAdrenoPhysicalSpan *spans, size_t count, uint32_t *reset)
 {
     return spans && count && reset ? kIOReturnSuccess : kIOReturnBadArgument;
 }
+
 IOReturn NativeAdrenoMaintainPhysicalPages(uint64_t physical, size_t bytes, NativeAdrenoCacheOperation op)
 {
-    if (!physical || !bytes || ((physical | bytes) & 4095) || op > NativeAdrenoInvalidate) std::abort();
+    if (!physical || !bytes || ((physical | bytes) & 4095) || op > NativeAdrenoInvalidate)
+        std::abort();
     ++fixture.physical_calls;
     fixture.physical_bytes += bytes;
     return kIOReturnSuccess;

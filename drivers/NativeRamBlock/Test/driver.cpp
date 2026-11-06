@@ -8,12 +8,14 @@ unsigned long gPhysBase = 0x80000000ULL, gPhysSize = 0x10000000ULL;
 static std::vector<uint8_t> original;
 static boot_args args;
 static NativeRamBlock *driver = nullptr;
+
 static void property(IOService *object, const char *key, const char *text)
 {
     auto *s = OSString::withCString(text);
     object->setProperty(key, s);
     s->release();
 }
+
 static void range(const char *key, uint64_t physical = 0x80020000ULL, uint64_t bytes = kNativeDataSeedEncodedBytes,
                   unsigned length = 16)
 {
@@ -22,6 +24,7 @@ static void range(const char *key, uint64_t physical = 0x80020000ULL, uint64_t b
     IOService::memoryMap->setProperty(key, d);
     d->release();
 }
+
 static void setup(bool present = true)
 {
     mappedSeed = original;
@@ -29,12 +32,14 @@ static void setup(bool present = true)
     PE_state.bootArgs = &args;
     IOService::resource = new IOService;
     IOService::memoryMap = new IOService;
-    if (present) range("NativeDataSeed");
+    if (present)
+        range("NativeDataSeed");
     range("RAMDisk", UINT64_MAX, UINT64_MAX);
     range("PackedRAMDisk", 1, 1);
     driver = new NativeRamBlock;
     assert(driver->attach(IOService::resource));
 }
+
 static void cleanup()
 {
     for (auto *m : IOService::candidates) {
@@ -43,7 +48,8 @@ static void cleanup()
     }
     IOService::candidates.clear();
     driver->stop(IOService::resource);
-    for (auto *d : IOService::registered) d->release();
+    for (auto *d : IOService::registered)
+        d->release();
     IOService::registered.clear();
     driver->detach(IOService::resource);
     driver->release();
@@ -67,17 +73,20 @@ static void cleanup()
     native_ram_block_failures = 0;
     native_ram_block_resident_bytes = 0;
 }
+
 static void start()
 {
     assert(driver->start(IOService::resource));
     assert(native_ram_block_ready && native_ram_block_stage == 4 && !native_ram_block_error);
     assert(IOService::legacySeedLookups == 0 && IOService::nativeSeedLookups == 1);
 }
+
 struct Result {
     unsigned calls = 0;
     IOReturn status = 99;
     uint64_t bytes = 99;
 };
+
 static void complete(void *ctx, void *, IOReturn status, UInt64 bytes)
 {
     assert(!heldLocks);
@@ -86,10 +95,12 @@ static void complete(void *ctx, void *, IOReturn status, UInt64 bytes)
     r.status = status;
     r.bytes = bytes;
 }
+
 static IOStorageCompletion completion(Result &r)
 {
     return {&r, complete, nullptr};
 }
+
 static Result request(IOMemoryDescriptor &bytes, uint64_t block, uint64_t count)
 {
     Result r;
@@ -97,16 +108,19 @@ static Result request(IOMemoryDescriptor &bytes, uint64_t block, uint64_t count)
     assert(driver->doAsyncReadWrite(&bytes, block, count, nullptr, &c) == 0 && r.calls == 1);
     return r;
 }
+
 static uint8_t expectedByte(uint64_t at)
 {
     uint64_t count = ramU64(original.data() + 24), cursor = 32 + count * 16;
     for (uint64_t i = 0; i < count; ++i) {
         uint64_t start = ramU64(original.data() + 32 + i * 16), n = ramU64(original.data() + 40 + i * 16);
-        if (at >= start && at - start < n) return original[cursor + at - start];
+        if (at >= start && at - start < n)
+            return original[cursor + at - start];
         cursor += n;
     }
     return 0;
 }
+
 static void basic()
 {
     setup();
@@ -119,7 +133,8 @@ static void basic()
         IOMemoryDescriptor b(65536);
         auto r = request(b, offset / 512, 128);
         assert(!r.status && r.bytes == 65536);
-        for (unsigned i = 0; i < b.bytes.size(); ++i) assert(b.bytes[i] == expectedByte(offset + i));
+        for (unsigned i = 0; i < b.bytes.size(); ++i)
+            assert(b.bytes[i] == expectedByte(offset + i));
     }
     uint64_t n = 0;
     bool b = false;
@@ -133,6 +148,7 @@ static void basic()
         assert(dynamic_cast<OSNumber *>(driver->getProperty(key))->unsigned64BitValue() == 65536);
     cleanup();
 }
+
 static void badStartup()
 {
     setup(false);
@@ -140,14 +156,22 @@ static void badStartup()
     cleanup();
     for (unsigned i = 0; i < 8; ++i) {
         setup();
-        if (i == 0) range("NativeDataSeed", 0x80020001);
-        if (i == 1) range("NativeDataSeed", 0x80020000, kNativeDataSeedEncodedBytes - 1);
-        if (i == 2) range("NativeDataSeed", 0x80020000, kNativeDataSeedEncodedBytes, 8);
-        if (i == 3) range("NativeDataSeed", 0x7ffff000);
-        if (i == 4) range("NativeDataSeed", 0x90000000);
-        if (i == 5) args.topOfKernelData -= 4096;
-        if (i == 6) PE_state.bootArgs = nullptr;
-        if (i == 7) mappedSeed[90] ^= 1;
+        if (i == 0)
+            range("NativeDataSeed", 0x80020001);
+        if (i == 1)
+            range("NativeDataSeed", 0x80020000, kNativeDataSeedEncodedBytes - 1);
+        if (i == 2)
+            range("NativeDataSeed", 0x80020000, kNativeDataSeedEncodedBytes, 8);
+        if (i == 3)
+            range("NativeDataSeed", 0x7ffff000);
+        if (i == 4)
+            range("NativeDataSeed", 0x90000000);
+        if (i == 5)
+            args.topOfKernelData -= 4096;
+        if (i == 6)
+            PE_state.bootArgs = nullptr;
+        if (i == 7)
+            mappedSeed[90] ^= 1;
         assert(!driver->start(IOService::resource) && !native_ram_block_ready && IOService::registered.empty());
         assert(!driver->start(IOService::resource));  // same boot never retries
         cleanup();
@@ -182,6 +206,7 @@ static void badStartup()
     assert(native_ram_block_ready);
     cleanup();
 }
+
 static void bounds()
 {
     setup();
@@ -216,6 +241,7 @@ static void bounds()
     assert(!r.calls && !native_ram_block_reads && !native_ram_block_writes);
     cleanup();
 }
+
 static void writes()
 {
     setup();
@@ -229,13 +255,17 @@ static void writes()
     assert(r.status == kIOReturnIOError && !r.bytes && native_ram_block_resident_bytes == before);
     IOMemoryDescriptor b(65536);
     r = request(b, offset / 512, 128);
-    assert(!r.status && std::all_of(b.bytes.begin(), b.bytes.end(), [](auto x) { return x == 0; }));
+    assert(!r.status && std::all_of(b.bytes.begin(), b.bytes.end(), [](auto x) {
+        return x == 0;
+    }));
     w.copyLimit = UINT64_MAX;
     failMallocCall = mallocCalls + 9;
     r = request(w, offset / 512, 128);
     assert(r.status == kIOReturnNoMemory && !r.bytes && native_ram_block_resident_bytes == before);
     r = request(b, offset / 512, 128);
-    assert(!r.status && std::all_of(b.bytes.begin(), b.bytes.end(), [](auto x) { return x == 0; }));
+    assert(!r.status && std::all_of(b.bytes.begin(), b.bytes.end(), [](auto x) {
+        return x == 0;
+    }));
     failMallocCall = 0;
     r = request(w, offset / 512, 128);
     assert(!r.status && r.bytes == 65536 && native_ram_block_resident_bytes == before + 17 * 4096);
@@ -261,6 +291,7 @@ static void writes()
     assert(driver->reportMediaState(&present, nullptr) == 0 && !present);
     cleanup();
 }
+
 static void cap()
 {
     setup();
@@ -282,13 +313,17 @@ static void cap()
     assert(!r.status && r.bytes == 65536 && mallocLive == live);
     IOMemoryDescriptor b(4096);
     r = request(b, at / 512, 8);
-    assert(!r.status && std::all_of(b.bytes.begin(), b.bytes.end(), [](auto x) { return x == 0; }));
+    assert(!r.status && std::all_of(b.bytes.begin(), b.bytes.end(), [](auto x) {
+        return x == 0;
+    }));
     cleanup();
 }
+
 struct Reentry {
     Result first, second;
     IOMemoryDescriptor bytes{512};
 };
+
 static void reenter(void *ctx, void *, IOReturn status, UInt64 bytes)
 {
     assert(!heldLocks);
@@ -299,6 +334,7 @@ static void reenter(void *ctx, void *, IOReturn status, UInt64 bytes)
     auto c = completion(r.second);
     assert(driver->doAsyncReadWrite(&r.bytes, 0, 1, nullptr, &c) == 0);
 }
+
 static void concurrent()
 {
     setup();
@@ -323,6 +359,7 @@ static void concurrent()
     bthread.join();
     cleanup();
 }
+
 static IOService *media(const char *name, IOService *parent = nullptr, const char *uuid = kNativeDataSeedUUID)
 {
     auto *m = new IOService;
@@ -334,6 +371,7 @@ static IOService *media(const char *name, IOService *parent = nullptr, const cha
     IOService::candidates.push_back(m);
     return m;
 }
+
 static void registry()
 {
     setup();
@@ -359,14 +397,18 @@ static void registry()
         setup();
         start();
         auto *m = media(which == 0 ? "../../disk1" : "disk9s1", which == 1 ? IOService::resource : nullptr);
-        if (which == 2) m->inactive = true;
-        if (which == 3) m->setProperty(kIOBSDMajorKey, uint64_t{256}, 32);
-        if (which == 4) driver->stop(IOService::resource);
+        if (which == 2)
+            m->inactive = true;
+        if (which == 3)
+            m->setProperty(kIOBSDMajorKey, uint64_t{256}, 32);
+        if (which == 4)
+            driver->stop(IOService::resource);
         assert(!native_ram_block_volume_seed(kNativeDataSeedUUID, &device, path, sizeof(path), &base, &bytes, digest) &&
                device == NODEV && !path[0]);
         cleanup();
     }
 }
+
 int main(int argc, char **argv)
 {
     assert(argc == 2);

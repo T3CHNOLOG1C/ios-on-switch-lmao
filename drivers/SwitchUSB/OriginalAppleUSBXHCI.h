@@ -202,6 +202,7 @@ public:
         return *reinterpret_cast<uint32_t *>(reinterpret_cast<unsigned char *>(this) + 1172);
     }
 };
+
 static_assert(sizeof(IOService) == 0x88, "Pinned original IOService base size");
 static_assert(sizeof(AppleUSBXHCI) == 0xe48, "Pinned original AppleUSBXHCI size");
 

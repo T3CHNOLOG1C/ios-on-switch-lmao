@@ -77,12 +77,18 @@ uint64_t nowUs()
 IOReturn ioreturn(int err)
 {
     switch (err) {
-    case 0: return kIOReturnSuccess;
-    case -12: return kIOReturnNoMemory;
-    case -22: return kIOReturnBadArgument;
-    case -60: return kIOReturnTimeout;
-    case -19: return kIOReturnNotReady;
-    default: return kIOReturnIOError;
+    case 0:
+        return kIOReturnSuccess;
+    case -12:
+        return kIOReturnNoMemory;
+    case -22:
+        return kIOReturnBadArgument;
+    case -60:
+        return kIOReturnTimeout;
+    case -19:
+        return kIOReturnNotReady;
+    default:
+        return kIOReturnIOError;
     }
 }
 
@@ -90,6 +96,7 @@ IOReturn ioreturn(int err)
 struct {
     uint64_t windowStart, decodes, refused, failed, engineUs, cpuUs, pixels, bytes;
 } gStats;
+
 const char *gRefusals[32];  // reasons already logged once
 IOLock *gStatsLock;
 bool gFirstLogged;
@@ -100,8 +107,10 @@ void refused(const char *why)
     gStats.refused++;
     bool seen = false;
     uint32_t i = 0;
-    for (; i < 32 && gRefusals[i]; i++) seen = seen || gRefusals[i] == why;
-    if (!seen && i < 32) gRefusals[i] = why;
+    for (; i < 32 && gRefusals[i]; i++)
+        seen = seen || gRefusals[i] == why;
+    if (!seen && i < 32)
+        gRefusals[i] = why;
     IOLockUnlock(gStatsLock);
     if (!seen)
         IOLog("TegraNVJPG: decode refused (first of its kind this boot; the caller decodes on the CPU): %s\n", why);
@@ -111,7 +120,8 @@ void statsLine()
 {
     IOLockLock(gStatsLock);
     const uint64_t now = nowUs();
-    if (!gStats.windowStart) gStats.windowStart = now;
+    if (!gStats.windowStart)
+        gStats.windowStart = now;
     if (now - gStats.windowStart < 5000000 || !(gStats.decodes + gStats.refused)) {
         IOLockUnlock(gStatsLock);
         return;
@@ -146,6 +156,7 @@ struct Job {
     uint64_t engineUs;
     bool done;
 };
+
 Job *gHead, *gTail;
 uint32_t gQueued;
 
@@ -167,7 +178,8 @@ void fillChroma(const TegraNVJPGPlan &p, uint32_t pages)
         for (uint64_t at = p.fillStart + row * p.fillPitch, end = at + p.fillRowBytes; at < end;) {
             const uint32_t page = (uint32_t)(at >> 12);
             const uint64_t stop = ((at >> 12) + 1) << 12 < end ? ((at >> 12) + 1) << 12 : end;
-            if (page >= pages || !pmap_valid_page((ppnum_t)(gOutList[page] >> 12))) return;  // the plan bounded it
+            if (page >= pages || !pmap_valid_page((ppnum_t)(gOutList[page] >> 12)))
+                return;  // the plan bounded it
             uint8_t *va = (uint8_t *)phystokv(gOutList[page]) + (at & 0xfff);
             memset(va, 0x80, stop - at);
             for (uintptr_t a = (uintptr_t)va & ~(line - 1); a < (uintptr_t)va + (stop - at); a += line)
@@ -185,10 +197,12 @@ IOReturn runJob(Job *job)
     uint32_t pages = 0;
     const uint64_t surfaceBytes = (job->dst.desc.length + 0xfff) & ~0xfffull;
     IOReturn ret = tegra_vic_surface_prepare(&job->dst, job->dst.desc.length, gOutList, kOutPages, &pages);
-    if (ret) return ret == kIOReturnNotAligned ? kIOReturnIOError : ret;
+    if (ret)
+        return ret == kIOReturnNotAligned ? kIOReturnIOError : ret;
     // Sink entries for the MCU padding the plan allowed past the surface's pages.
     uint32_t mapped = pages;
-    while (((uint64_t)mapped << 12) < p.writeEnd && mapped < kOutPages) gOutList[mapped++] = gSink.pa;
+    while (((uint64_t)mapped << 12) < p.writeEnd && mapped < kOutPages)
+        gOutList[mapped++] = gSink.pa;
     if (((uint64_t)mapped << 12) < p.writeEnd || surfaceBytes > ((uint64_t)pages << 12)) {
         tegra_vic_surface_complete(&job->dst);
         return kIOReturnBadArgument;
@@ -201,23 +215,28 @@ IOReturn runJob(Job *job)
     tegra_nvjpg_lock();
     const uint64_t out = tegra_nvjpg_window_map(TEGRA_NVJPG_WINDOW_OUT, gOutList, mapped, true);
     const uint64_t in = tegra_nvjpg_window_map(TEGRA_NVJPG_WINDOW_IN, gInList, job->bitPages + 1, false);
-    if (!out || !in) ret = kIOReturnNoSpace;
+    if (!out || !in)
+        ret = kIOReturnNoSpace;
     // NVJPG does not snoop the CPU's caches: no dirty line of the destination may be written back over the picture.
-    if (!ret) tegra_nvjpg_cache_flush_pages(gOutList, pages);
+    if (!ret)
+        tegra_nvjpg_cache_flush_pages(gOutList, pages);
     nvjpg_dec_status status = {};
     uint64_t busy = 0;
     if (!ret) {
         job->engine.bitstream = in;
-        for (uint32_t i = 0; i < p.planes; i++) job->engine.plane[i] = out + p.planeStart[i];
+        for (uint32_t i = 0; i < p.planes; i++)
+            job->engine.plane[i] = out + p.planeStart[i];
         ret = ioreturn(tegra_nvjpg_run(&job->engine, &status, &busy));
-        if (!ret && (status.error_status || !status.bytes_offset)) ret = kIOReturnIOError;
+        if (!ret && (status.error_status || !status.bytes_offset))
+            ret = kIOReturnIOError;
     }
     // The CPU may have pulled destination lines in while NVJPG wrote: readers must see DRAM.
     tegra_nvjpg_cache_flush_pages(gOutList, pages);
     tegra_nvjpg_window_clear(TEGRA_NVJPG_WINDOW_OUT);
     tegra_nvjpg_window_clear(TEGRA_NVJPG_WINDOW_IN);
     tegra_nvjpg_unlock();
-    if (!ret && p.fillChroma) fillChroma(p, pages);
+    if (!ret && p.fillChroma)
+        fillChroma(p, pages);
     tegra_vic_surface_complete(&job->dst);
     job->engineUs = busy;
     job->bytesUsed = status.bytes_offset;
@@ -235,17 +254,20 @@ void engineThread(void *, wait_result_t)
 {
     for (;;) {
         IOLockLock(gQueueLock);
-        while (!gHead) IOLockSleep(gQueueLock, &gHead, THREAD_UNINT);
+        while (!gHead)
+            IOLockSleep(gQueueLock, &gHead, THREAD_UNINT);
         Job *job = gHead;
         gHead = job->next;
-        if (!gHead) gTail = nullptr;
+        if (!gHead)
+            gTail = nullptr;
         gQueued--;
         IOLockWakeup(gQueueLock, &gQueued, false);
         IOLockUnlock(gQueueLock);
         job->status = runJob(job);
         IOLockLock(gStatsLock);
         gStats.decodes++;
-        if (job->status) gStats.failed++;
+        if (job->status)
+            gStats.failed++;
         gStats.engineUs += job->engineUs;
         gStats.cpuUs += job->cpuUs;
         gStats.pixels += (uint64_t)job->plan.extent.width * job->plan.extent.height;
@@ -267,7 +289,8 @@ void engineThread(void *, wait_result_t)
 void queueJob(Job *job)
 {
     IOLockLock(gQueueLock);
-    while (gQueued >= kQueueMax) IOLockSleep(gQueueLock, &gQueued, THREAD_UNINT);
+    while (gQueued >= kQueueMax)
+        IOLockSleep(gQueueLock, &gQueued, THREAD_UNINT);
     job->next = nullptr;
     if (gTail)
         gTail->next = job;
@@ -285,7 +308,8 @@ void queueJob(Job *job)
 const char *readSource(TegraVICSurface *src, uint64_t size, TegraNVJPGImage *img, Job *job, IOReturn *ret)
 {
     *ret = kIOReturnBadArgument;
-    if (size < 4 || size > src->desc.length) return "source size";
+    if (size < 4 || size > src->desc.length)
+        return "source size";
     const uint32_t pageCount = (uint32_t)((size + 0xfff) >> 12);
     uint64_t *pages = IONewData(uint64_t, pageCount);
     if (!pages) {
@@ -295,8 +319,10 @@ const char *readSource(TegraVICSurface *src, uint64_t size, TegraNVJPGImage *img
     uint32_t count = 0;
     *ret = tegra_vic_surface_prepare(src, size, pages, pageCount, &count);
     IODeleteData(pages, uint64_t, pageCount);
-    if (*ret == kIOReturnNotAligned) *ret = kIOReturnUnsupported;  // never NotAligned: CMPhoto would copy and retry
-    if (*ret) return "source not wired";
+    if (*ret == kIOReturnNotAligned)
+        *ret = kIOReturnUnsupported;  // never NotAligned: CMPhoto would copy and retry
+    if (*ret)
+        return "source not wired";
     const char *why = nullptr;
     uint32_t chunk = (uint32_t)(size < kHeaderChunk ? size : kHeaderChunk);
     uint8_t *head = nullptr;
@@ -308,14 +334,17 @@ const char *readSource(TegraVICSurface *src, uint64_t size, TegraNVJPGImage *img
             break;
         }
         why = tegra_nvjpg_parse_headers(head, chunk, img);
-        if (!why || chunk == size || chunk >= kHeaderMax) break;
+        if (!why || chunk == size || chunk >= kHeaderMax)
+            break;
         IODeleteData(head, uint8_t, chunk);
         head = nullptr;
         chunk = (uint32_t)(size < kHeaderMax ? size : kHeaderMax);  // headers past the first chunk: read further
     }
-    if (head) IODeleteData(head, uint8_t, chunk);
+    if (head)
+        IODeleteData(head, uint8_t, chunk);
     if (why) {
-        if (*ret != kIOReturnNoMemory) *ret = kIOReturnUnsupported;
+        if (*ret != kIOReturnNoMemory)
+            *ret = kIOReturnUnsupported;
         tegra_vic_surface_complete(src);
         return why;
     }
@@ -341,7 +370,8 @@ const char *readSource(TegraVICSurface *src, uint64_t size, TegraNVJPGImage *img
         return why;
     }
     uint32_t used = scanned.scanEnd;
-    if (!scanned.eoi) bytes[used++] = 0xff, bytes[used++] = 0xd9;
+    if (!scanned.eoi)
+        bytes[used++] = 0xff, bytes[used++] = 0xd9;
     tegra_nvjpg_cache_clean(bytes, used);
     img->scanEnd = img->scanOffset + scanned.scanEnd;
     img->eoi = scanned.eoi;
@@ -378,6 +408,7 @@ public:
     IOReturn externalMethod(uint32_t selector, IOExternalMethodArguments *arguments, IOExternalMethodDispatch *dispatch,
                             OSObject *target, void *reference) APPLE_KEXT_OVERRIDE;
 };
+
 OSDefineMetaClassAndStructors(AppleJPEGDriverUserClient, IOUserClient)
 
     namespace
@@ -422,11 +453,14 @@ void AppleJPEGDriverUserClient::finished(Job *job)
 IOReturn AppleJPEGDriverUserClient::decode(const void *in, uint32_t inSize, void *out, uint32_t *outSize, bool ext)
 {
     const uint64_t began = nowUs();
+
     union {
         TegraNVJPGDecodeRequest base;
         TegraNVJPGDecodeRequestExt ext;
     } *req = (decltype(req))IOMallocData(sizeof(*req));  // 4 KiB: not on the kernel stack
-    if (!req) return kIOReturnNoMemory;
+
+    if (!req)
+        return kIOReturnNoMemory;
     memcpy(req, in, inSize);
     const TegraNVJPGDecodeRequest &r = req->base;
     IOReturn ret = kIOReturnSuccess;
@@ -434,7 +468,8 @@ IOReturn AppleJPEGDriverUserClient::decode(const void *in, uint32_t inSize, void
     Job *job = IONewZero(Job, 1);
     TegraVICSurface src = {};
     TegraNVJPGImage img;
-    if (!job) ret = kIOReturnNoMemory;
+    if (!job)
+        ret = kIOReturnNoMemory;
     if (!ret && ext && req->ext.crop) {
         ret = kIOReturnUnsupported;
         why = "cropped decode (selector 5 crop rectangle)";
@@ -482,7 +517,8 @@ IOReturn AppleJPEGDriverUserClient::decode(const void *in, uint32_t inSize, void
         const TegraNVJPGAbility a = ability();
         uint32_t kind = 0;
         why = tegra_nvjpg_plan(&r, &img, &d, &a, kSinkBytes, &job->plan, &kind);
-        if (why) ret = kind == TEGRA_NVJPG_PLAN_UNSUPPORTED ? kIOReturnUnsupported : kIOReturnBadArgument;
+        if (why)
+            ret = kind == TEGRA_NVJPG_PLAN_UNSUPPORTED ? kIOReturnUnsupported : kIOReturnBadArgument;
     }
     if (!ret) {
         const int bytes = job->engine.setup.bitstream_size;
@@ -497,9 +533,11 @@ IOReturn AppleJPEGDriverUserClient::decode(const void *in, uint32_t inSize, void
         job->engine.pixels = (uint64_t)img.mcusX * img.mcuW * img.mcusY * img.mcuH;
     }
     if (ret) {
-        if (why) refused(why);
+        if (why)
+            refused(why);
         statsLine();
-        if (job) dropJob(job);
+        if (job)
+            dropJob(job);
         IOFreeData(req, sizeof(*req));
         return ret;
     }
@@ -522,7 +560,8 @@ IOReturn AppleJPEGDriverUserClient::decode(const void *in, uint32_t inSize, void
         return kIOReturnSuccess;  // the job is the engine thread's now
     }
     IOLockLock(lock_);
-    while (!job->done) IOLockSleep(lock_, job, THREAD_UNINT);
+    while (!job->done)
+        IOLockSleep(lock_, job, THREAD_UNINT);
     pending_--;
     IOLockWakeup(lock_, &pending_, false);
     IOLockUnlock(lock_);
@@ -557,16 +596,19 @@ IOReturn AppleJPEGDriverUserClient::externalMethod(uint32_t selector, IOExternal
         return kIOReturnBadArgument;
     // Apple's IOExternalMethodDispatch2022 table: exact struct sizes, in == out.
     static const uint32_t kSize[10] = {0, 0x58, 0, 0x58, 0x1000, 0x1000, 0xda0, 0xda0, 0, 0};
-    if (selector >= 10) return kIOReturnBadArgument;
+    if (selector >= 10)
+        return kIOReturnBadArgument;
     if (a->structureInputSize != kSize[selector] ||
         (a->structureOutputSize != kSize[selector] && a->structureOutputSize != 0))
         return kIOReturnBadArgument;
     switch (selector) {
     case 0:
-    case 2: return kIOReturnSuccess;
+    case 2:
+        return kIOReturnSuccess;
     case 1:
     case 5: {
-        if (!tegra_nvjpg_ready()) return kIOReturnNotReady;
+        if (!tegra_nvjpg_ready())
+            return kIOReturnNotReady;
         uint32_t outSize = a->structureOutputSize;
         const IOReturn ret = decode(a->structureInput, a->structureInputSize, outSize ? a->structureOutput : nullptr,
                                     &outSize, selector == 5);
@@ -574,8 +616,10 @@ IOReturn AppleJPEGDriverUserClient::externalMethod(uint32_t selector, IOExternal
         return ret;
     }
     case 8:
-    case 9: return powerEntitled_ ? kIOReturnSuccess : kIOReturnError;
-    default: return kIOReturnUnsupported;  // 3, 4, 6 encode; 7 the 2024 decode
+    case 9:
+        return powerEntitled_ ? kIOReturnSuccess : kIOReturnError;
+    default:
+        return kIOReturnUnsupported;  // 3, 4, 6 encode; 7 the 2024 decode
     }
 }
 
@@ -585,7 +629,8 @@ IOReturn AppleJPEGDriverUserClient::registerNotificationPort(mach_port_t port, U
     (void)type, (void)refCon;
     IOLockLock(lock_);
     const bool busy = port_ != MACH_PORT_NULL && port_ != port;
-    if (!busy) port_ = port;
+    if (!busy)
+        port_ = port;
     IOLockUnlock(lock_);
     if (busy) {
         IOUserClient::releaseNotificationPort(port);
@@ -599,7 +644,8 @@ IOReturn AppleJPEGDriverUserClient::registerNotificationPort(mach_port_t port, U
 IOReturn AppleJPEGDriverUserClient::clientClose()
 {
     IOLockLock(lock_);
-    while (pending_) IOLockSleep(lock_, &pending_, THREAD_UNINT);
+    while (pending_)
+        IOLockSleep(lock_, &pending_, THREAD_UNINT);
     IOLockUnlock(lock_);
     terminate();
     return kIOReturnSuccess;
@@ -607,11 +653,14 @@ IOReturn AppleJPEGDriverUserClient::clientClose()
 
 void AppleJPEGDriverUserClient::free()
 {
-    if (port_ != MACH_PORT_NULL) IOUserClient::releaseNotificationPort(port_);
+    if (port_ != MACH_PORT_NULL)
+        IOUserClient::releaseNotificationPort(port_);
     port_ = MACH_PORT_NULL;
-    if (lock_) IOLockFree(lock_);
+    if (lock_)
+        IOLockFree(lock_);
     lock_ = nullptr;
-    if (counted_) __atomic_sub_fetch(&gConnections, 1, __ATOMIC_SEQ_CST);
+    if (counted_)
+        __atomic_sub_fetch(&gConnections, 1, __ATOMIC_SEQ_CST);
     IOUserClient::free();
 }
 
@@ -620,12 +669,14 @@ OSDeclareDefaultStructors(AppleJPEGDriver)
 
     public : IOReturn newUserClient(task_t task, void *securityID, UInt32 type, OSDictionary *properties,
                                     IOUserClient **handler) APPLE_KEXT_OVERRIDE;
+
     IOReturn setProperties(OSObject *properties) APPLE_KEXT_OVERRIDE
     {
         (void)properties;
         return kIOReturnUnsupported;
     }
 };
+
 OSDefineMetaClassAndStructors(AppleJPEGDriver, IOService)
 
     // Apple's (0x43f08) ignores `type`, securityID and properties and checks no entitlement: any process the sandbox
@@ -633,14 +684,16 @@ OSDefineMetaClassAndStructors(AppleJPEGDriver, IOService)
     IOReturn AppleJPEGDriver::newUserClient(task_t task, void *securityID, UInt32 type, OSDictionary *properties,
                                             IOUserClient **handler)
 {
-    if (!tegra_nvjpg_ready()) return kIOReturnNotReady;
+    if (!tegra_nvjpg_ready())
+        return kIOReturnNotReady;
     if (__atomic_add_fetch(&gConnections, 1, __ATOMIC_SEQ_CST) > kMaxConnections) {
         __atomic_sub_fetch(&gConnections, 1, __ATOMIC_SEQ_CST);
         return kIOReturnNoResources;
     }
     AppleJPEGDriverUserClient *client = OSTypeAlloc(AppleJPEGDriverUserClient);
     if (!client || !client->initWithTask(task, securityID, type, properties)) {
-        if (client) client->release();
+        if (client)
+            client->release();
         __atomic_sub_fetch(&gConnections, 1, __ATOMIC_SEQ_CST);
         return kIOReturnNoMemory;
     }

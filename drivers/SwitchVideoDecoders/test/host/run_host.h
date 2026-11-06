@@ -17,7 +17,8 @@ struct HostRun {
 template <class Main> HostRun RunHost(Main main, std::vector<std::string> args = {})
 {
     std::vector<char *> argv;
-    for (std::string &arg : args) argv.push_back(arg.data());
+    for (std::string &arg : args)
+        argv.push_back(arg.data());
     argv.push_back(nullptr);
     testing::internal::CaptureStdout();
     const int code = main(static_cast<int>(args.size()), argv.data());

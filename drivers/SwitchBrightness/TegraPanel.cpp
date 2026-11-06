@@ -42,7 +42,13 @@ constexpr uint32_t kDisplayAInterrupt =
     105;  // GIC SPI 73 (hekate irq.h IRQ_DISPLAY, mainline tegra210.dtsi dc@54200000)
 
 // Clock and reset controller, byte offsets (hekate bdk/soc/clock.h): DISP1 is L27, DSI is H16.
-enum : uint32_t { RST_DEVICES_L = 0x004, RST_DEVICES_H = 0x008, CLK_OUT_ENB_L = 0x010, CLK_OUT_ENB_H = 0x014 };
+enum : uint32_t {
+    RST_DEVICES_L = 0x004,
+    RST_DEVICES_H = 0x008,
+    CLK_OUT_ENB_L = 0x010,
+    CLK_OUT_ENB_H = 0x014
+};
+
 constexpr uint32_t kDisp1 = 1u << 27, kDsiClock = 1u << 16;
 
 // Display controller A, word indices. DISPLAY_COMMAND bits 6:5 are the controller mode, 0 = stopped.
@@ -54,6 +60,7 @@ enum : uint32_t {
     DC_COM_SCRATCH_REGISTER_B = 0x326,
     DC_DISP_DISPLAY_DBG_TIMING = 0x4f6,
 };
+
 constexpr uint32_t kDisplayModeMask = 3u << 5, kFrameEndInt = 1u << 1;
 constexpr uint32_t kDbgVBlank = 1u << 15;  // DBG_TIMING DBG_V_BLANK; V_COUNT is bits 14:0, H_COUNT bits 30:16
 
@@ -66,6 +73,7 @@ enum : uint32_t {
     DSI_STATUS = 0x15,
     DSI_VIDEO_MODE_CONTROL = 0x4e,
 };
+
 constexpr uint32_t kSyncptSoftReset = 1u << 0, kDsiPowerEnable = 1u << 0, kDsiVideoEnable = 1u << 1;
 constexpr uint32_t kCommandsInVideo = 1u << 0, kOnLine4 = 4u << 1;  // DSI_CMD_PKT_VID_ENABLE, DSI_DSI_LINE_TYPE(4)
 constexpr uint32_t kLineBufferErrors = 3u << 8;  // DSI_STATUS LB_OVERFLOW (8), LB_UNDERFLOW (9), L4T dsi_regs.h
@@ -81,7 +89,15 @@ constexpr unsigned kResetDeferrals = 2;      // frame ends step 4 may wait for v
 
 // The one command out, shared with the filter. The thread fills it and publishes step = kQueued; from then on only the
 // filter writes it until it publishes kDone.
-enum : uint32_t { kIdle, kQueued, kEnabled, kWritten, kSettled, kDone };
+enum : uint32_t {
+    kIdle,
+    kQueued,
+    kEnabled,
+    kWritten,
+    kSettled,
+    kDone
+};
+
 struct Command {
     uint32_t step;
     uint32_t words[2];
@@ -90,6 +106,7 @@ struct Command {
     uint32_t timing;  // DC_DISP_DISPLAY_DBG_TIMING at step 4
     uint32_t status;  // DSI_STATUS at step 4
 };
+
 Command gCommand;
 uint64_t gFrames;       // frame ends the filter took while a command was out (atomic)
 bool gFrameEndsDriven;  // the display calls the filter (atomic)
@@ -103,7 +120,8 @@ IOLock *makeLock(IOLock *volatile *slot)
 {
     if (!*slot) {
         IOLock *lock = IOLockAlloc();
-        if (lock && !OSCompareAndSwapPtr(nullptr, lock, slot)) IOLockFree(lock);
+        if (lock && !OSCompareAndSwapPtr(nullptr, lock, slot))
+            IOLockFree(lock);
     }
     return *slot;
 }
@@ -117,7 +135,8 @@ bool displayRunning()
         gDsi = (volatile uint32_t *)ml_io_map(kDsiPA, 0x1000);
         gCar = (volatile uint32_t *)ml_io_map(kCarPA, 0x1000);
     }
-    if (!gCar || !gDc || !gDsi) return false;
+    if (!gCar || !gDc || !gDsi)
+        return false;
     if (!(gCar[CLK_OUT_ENB_L / 4] & kDisp1) || (gCar[RST_DEVICES_L / 4] & kDisp1) ||
         !(gCar[CLK_OUT_ENB_H / 4] & kDsiClock) || (gCar[RST_DEVICES_H / 4] & kDsiClock)) {
         return false;
@@ -130,6 +149,7 @@ uint32_t step()
 {
     return __atomic_load_n(&gCommand.step, __ATOMIC_ACQUIRE);
 }
+
 uint64_t frames()
 {
     return __atomic_load_n(&gFrames, __ATOMIC_ACQUIRE);
@@ -166,7 +186,8 @@ void play(const uint32_t *words, unsigned count, const char *what)
         panic("TegraPanel: %s: DC A FRAME_END is not enabled and unmasked (INT_ENABLE %#x MASK %#x)", what, enable,
               mask);
     }
-    for (unsigned i = 0; i < count; ++i) gCommand.words[i] = words[i];
+    for (unsigned i = 0; i < count; ++i)
+        gCommand.words[i] = words[i];
     gCommand.count = count;
     gCommand.deferrals = 0;
     const uint32_t before = gDsi[DSI_STATUS];
@@ -180,7 +201,8 @@ void play(const uint32_t *words, unsigned count, const char *what)
         } else {
             result = thread_block(THREAD_CONTINUE_NULL);
         }
-        if (step() == kDone) break;
+        if (step() == kDone)
+            break;
         if (frames() != seen) {
             seen = frames();
             deadline = frameDeadline();
@@ -189,7 +211,8 @@ void play(const uint32_t *words, unsigned count, const char *what)
         }
     }
     __atomic_store_n(&gCommand.step, kIdle, __ATOMIC_RELAXED);
-    if (!count) return;
+    if (!count)
+        return;
     static bool lateReset, lineBuffer;
     if (!(gCommand.timing & kDbgVBlank) && !lateReset) {
         lateReset = true;
@@ -206,7 +229,8 @@ void play(const uint32_t *words, unsigned count, const char *what)
 // hekate display_dsi_vblank_write() for an already encoded packet.
 int sendPacket(const uint32_t *words, unsigned count, const char *what)
 {
-    if (!displayRunning()) return -1;
+    if (!displayRunning())
+        return -1;
     play(words, count, what);
     return 0;
 }
@@ -238,22 +262,26 @@ int setBrightness(unsigned level)
         result = sendCommand(kControlDisplay, kBrightnessControl | kDimmingControl, "brightness control");
         gControlSent = result == 0;
     }
-    if (!result) result = sendBrightness(level);
+    if (!result)
+        result = sendBrightness(level);
     return result;
 }
 
 int bootLevel()
 {
-    if (!displayRunning()) return -1;
+    if (!displayRunning())
+        return -1;
     const uint32_t duty = gDc[DC_COM_SCRATCH_REGISTER_B];
-    if (!duty || duty > 255) return -1;
+    if (!duty || duty > 255)
+        return -1;
     return (int)(duty * TEGRA_PANEL_BRIGHTNESS_MAX / 255);
 }
 
 template <typename F> int locked(F body)
 {
     IOLock *lock = makeLock(&gLock);
-    if (!lock) return -1;
+    if (!lock)
+        return -1;
     IOLockLock(lock);
     const int result = body();
     IOLockUnlock(lock);
@@ -263,7 +291,8 @@ template <typename F> int locked(F body)
 
 extern "C" int tegra_panel_set_brightness(unsigned level)
 {
-    if (level > TEGRA_PANEL_BRIGHTNESS_MAX) level = TEGRA_PANEL_BRIGHTNESS_MAX;
+    if (level > TEGRA_PANEL_BRIGHTNESS_MAX)
+        level = TEGRA_PANEL_BRIGHTNESS_MAX;
     return locked([level] {
         const int result = setBrightness(level);
         if (!result) {
@@ -286,11 +315,14 @@ extern "C" int tegra_panel_power_off(void)
             }
         }
         int result = sendBrightness(0);
-        if (result) return result;
+        if (result)
+            return result;
         IOSleep(100);  // hekate _display_dsi_backlight_brightness: the panel's dimming ramp
-        if ((result = sendCommand(kDisplayOff, "display off"))) return result;
+        if ((result = sendCommand(kDisplayOff, "display off")))
+            return result;
         IOSleep(40);
-        if ((result = sendCommand(kEnterSleep, "sleep in"))) return result;
+        if ((result = sendCommand(kEnterSleep, "sleep in")))
+            return result;
         IOSleep(120);
         gControlSent = false;  // sent again on wake, as L4T's init list does
         return 0;
@@ -300,19 +332,24 @@ extern "C" int tegra_panel_power_off(void)
 extern "C" int tegra_panel_power_on(int level)
 {
     return locked([level] {
-        if (!displayRunning()) return -1;
+        if (!displayRunning())
+            return -1;
         play(nullptr, 0, "scanout restart");
         int result = sendCommand(kExitSleep, "sleep out");
-        if (result) return result;
+        if (result)
+            return result;
         IOSleep(180);
         if ((result = sendCommand(kControlDisplay, kBrightnessControl | kDimmingControl, "brightness control")))
             return result;
         gControlSent = true;
-        if ((result = sendCommand(kDisplayOn, "display on"))) return result;
+        if ((result = sendCommand(kDisplayOn, "display on")))
+            return result;
         IOSleep(20);
         unsigned target = level >= 0 ? (unsigned)level : gHaveLevel ? gLevel : TEGRA_PANEL_BRIGHTNESS_MAX / 2;
-        if (target > TEGRA_PANEL_BRIGHTNESS_MAX) target = TEGRA_PANEL_BRIGHTNESS_MAX;
-        if ((result = sendBrightness(target))) return result;
+        if (target > TEGRA_PANEL_BRIGHTNESS_MAX)
+            target = TEGRA_PANEL_BRIGHTNESS_MAX;
+        if ((result = sendBrightness(target)))
+            return result;
         gLevel = target;
         gHaveLevel = true;
         return 0;
@@ -321,7 +358,9 @@ extern "C" int tegra_panel_power_on(int level)
 
 extern "C" int tegra_panel_boot_brightness(void)
 {
-    return locked([] { return bootLevel(); });
+    return locked([] {
+        return bootLevel();
+    });
 }
 
 extern "C" int tegra_panel_brightness(void)
@@ -346,10 +385,13 @@ extern "C" void tegra_panel_frame_end_filter(void)
         next = kEnabled;
         break;
     case kEnabled:
-        for (unsigned i = 0; i < gCommand.count; ++i) gDsi[DSI_WR_DATA] = gCommand.words[i];
+        for (unsigned i = 0; i < gCommand.count; ++i)
+            gDsi[DSI_WR_DATA] = gCommand.words[i];
         next = kWritten;
         break;
-    case kWritten: next = kSettled; break;
+    case kWritten:
+        next = kSettled;
+        break;
     case kSettled:
         IODelay(14);
         gCommand.timing = gDc[DC_DISP_DISPLAY_DBG_TIMING];

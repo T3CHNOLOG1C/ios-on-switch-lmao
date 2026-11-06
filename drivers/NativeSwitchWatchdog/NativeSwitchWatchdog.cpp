@@ -75,11 +75,19 @@ public:
     bool start(IOService *provider) override;
     IOReturn newUserClient(task_t owningTask, void *securityID, UInt32 type, OSDictionary *properties,
                            IOUserClient **handler) override;
-    void enableWatchdog() override {}
-    void disableWatchdog() override {}
-    void petWatchdog() override {}
+
+    void enableWatchdog() override
+    {}
+
+    void disableWatchdog() override
+    {}
+
+    void petWatchdog() override
+    {}
+
     void daemonCrashed(int pid, int signal);
 };
+
 OSDefineMetaClassAndStructors(NativeSwitchWatchdog, IOWatchdog)
 
     bool NativeSwitchWatchdog::start(IOService *provider)
@@ -89,11 +97,13 @@ OSDefineMetaClassAndStructors(NativeSwitchWatchdog, IOWatchdog)
     leeway_ = overdue_;
     loop_ = IOWorkLoop::workLoop();
     timer_ = IOTimerEventSource::timerEventSource(this, &NativeSwitchWatchdog::expired);
-    if (!loop_ || !timer_ || loop_->addEventSource(timer_) != kIOReturnSuccess) return false;
+    if (!loop_ || !timer_ || loop_->addEventSource(timer_) != kIOReturnSuccess)
+        return false;
     // Before it registers: watchdogd's sandbox would refuse its open of a class it does not name.
     setProperty("NativeSandboxGrantProcess", "watchdogd");
     // Registers the service (launchd starts watchdogd) and arms the first check-in deadline.
-    if (!switch_original_watchdog_start(this, provider, nullptr, 0)) return false;
+    if (!switch_original_watchdog_start(this, provider, nullptr, 0))
+        return false;
     // Userspace monitoring only: no IOKit quiesce watch. Our registry has never been measured quiet within watchdogd's
     // 60 s, and that failure is a boot panic. Cleared before watchdogd can connect (launchd has yet to spawn it).
     clearIOKitMonitoring();
@@ -105,19 +115,22 @@ OSDefineMetaClassAndStructors(NativeSwitchWatchdog, IOWatchdog)
 
 // The original user client (entitlement-checked). watchdogd's first connection starts the deadline checks. Before the
 // first one, thermalmonitord's verdict (see the top of the file).
-IOReturn NativeSwitchWatchdog::newUserClient(task_t owningTask, void *securityID, UInt32 type,
-                                               OSDictionary *properties, IOUserClient **handler)
+IOReturn NativeSwitchWatchdog::newUserClient(task_t owningTask, void *securityID, UInt32 type, OSDictionary *properties,
+                                             IOUserClient **handler)
 {
-    if (verdictLock_) IOLockLock(verdictLock_);
+    if (verdictLock_)
+        IOLockLock(verdictLock_);
     if (!verdictTaken_) {
         verdictTaken_ = true;
         char why[256] = "";
         if (!switch_sensors_wait_ready(kSensorWaitMS, why, sizeof(why)))
             loop_->runAction(&NativeSwitchWatchdog::thermalOffGated, this, why);
     }
-    if (verdictLock_) IOLockUnlock(verdictLock_);
+    if (verdictLock_)
+        IOLockUnlock(verdictLock_);
     const IOReturn opened = IOWatchdog::newUserClient(owningTask, securityID, type, properties, handler);
-    if (opened == kIOReturnSuccess) loop_->runAction(&NativeSwitchWatchdog::connectedGated, this);
+    if (opened == kIOReturnSuccess)
+        loop_->runAction(&NativeSwitchWatchdog::connectedGated, this);
     return opened;
 }
 
@@ -166,7 +179,8 @@ void NativeSwitchWatchdog::expired(OSObject *owner, IOTimerEventSource *timer)
 IOReturn NativeSwitchWatchdog::connectedGated(OSObject *owner, void *, void *, void *, void *)
 {
     auto *self = static_cast<NativeSwitchWatchdog *>(owner);
-    if (self->connected_ || self->off_) return kIOReturnSuccess;  // off: the relaunch reads "disabled" and exits
+    if (self->connected_ || self->off_)
+        return kIOReturnSuccess;  // off: the relaunch reads "disabled" and exits
     self->connected_ = true;
     // The root domain's last kernel clients: watchdogd has already turned monitoring off for sleep (and back on at
     // wake) by the time these arrive.
@@ -183,7 +197,8 @@ IOReturn NativeSwitchWatchdog::connectedGated(OSObject *owner, void *, void *, v
 IOReturn NativeSwitchWatchdog::crashedGated(OSObject *owner, void *pid, void *signal, void *, void *)
 {
     auto *self = static_cast<NativeSwitchWatchdog *>(owner);
-    if (self->off_) return kIOReturnSuccess;
+    if (self->off_)
+        return kIOReturnSuccess;
     self->off_ = true;
     IOSimpleLock *lock = self->checkinLock();
     const IOInterruptState state = IOSimpleLockLockDisableInterrupt(lock);
@@ -191,9 +206,8 @@ IOReturn NativeSwitchWatchdog::crashedGated(OSObject *owner, void *pid, void *si
     self->setCheckinDeadline(0);
     IOSimpleLockUnlockEnableInterrupt(lock, state);
     self->timer_->cancelTimeout();
-    IOLog(
-        "SwitchWatchdog: watchdogd[%d] crashed (signal %d): no panic for it; userspace watchdog off for this boot\n",
-        (int)(intptr_t)pid, (int)(intptr_t)signal);
+    IOLog("SwitchWatchdog: watchdogd[%d] crashed (signal %d): no panic for it; userspace watchdog off for this boot\n",
+          (int)(intptr_t)pid, (int)(intptr_t)signal);
     return kIOReturnSuccess;
 }
 
@@ -203,7 +217,8 @@ IOReturn NativeSwitchWatchdog::crashedGated(OSObject *owner, void *pid, void *si
 IOReturn NativeSwitchWatchdog::thermalOffGated(OSObject *owner, void *why, void *, void *, void *)
 {
     auto *self = static_cast<NativeSwitchWatchdog *>(owner);
-    if (self->off_) return kIOReturnSuccess;
+    if (self->off_)
+        return kIOReturnSuccess;
     self->off_ = true;
     IOSimpleLock *lock = self->checkinLock();
     const IOInterruptState state = IOSimpleLockLockDisableInterrupt(lock);
@@ -225,7 +240,8 @@ void NativeSwitchWatchdog::daemonCrashed(int pid, int signal)
 IOReturn NativeSwitchWatchdog::sleepGated(OSObject *owner, void *, void *, void *, void *)
 {
     auto *self = static_cast<NativeSwitchWatchdog *>(owner);
-    if (self->asleep_) return kIOReturnSuccess;
+    if (self->asleep_)
+        return kIOReturnSuccess;
     self->asleep_ = true;
     self->timer_->cancelTimeout();
     bool monitoring;
@@ -238,7 +254,8 @@ IOReturn NativeSwitchWatchdog::sleepGated(OSObject *owner, void *, void *, void 
 IOReturn NativeSwitchWatchdog::wakeGated(OSObject *owner, void *, void *, void *, void *)
 {
     auto *self = static_cast<NativeSwitchWatchdog *>(owner);
-    if (!self->asleep_) return kIOReturnSuccess;
+    if (!self->asleep_)
+        return kIOReturnSuccess;
     self->asleep_ = false;
     if (self->pausedDeadline_) {
         // Unless watchdogd changed it meanwhile, the deadline resumes with the time it had left.
@@ -276,8 +293,8 @@ extern "C" void switch_watchdogd_crashed(int pid, int signal)
     if (watchdog)
         watchdog->daemonCrashed(pid, signal);
     else
-        IOLog("SwitchWatchdog: watchdogd[%d] crashed (signal %d) with no NativeSwitchWatchdog: no panic for it\n",
-              pid, signal);
+        IOLog("SwitchWatchdog: watchdogd[%d] crashed (signal %d) with no NativeSwitchWatchdog: no panic for it\n", pid,
+              signal);
 }
 
 // The primary PMU watchdogd requires (IOService with IOPropertyMatch {IOPMUPrimary: 1}, else os_crash()). The Switch's
@@ -290,11 +307,13 @@ OSDeclareDefaultStructors(NativeSwitchPMU)
     public : bool start(IOService *provider) override;
     IOReturn setProperties(OSObject *properties) override;
 };
+
 OSDefineMetaClassAndStructors(NativeSwitchPMU, IOService)
 
     bool NativeSwitchPMU::start(IOService *provider)
 {
-    if (!IOService::start(provider)) return false;
+    if (!IOService::start(provider))
+        return false;
     setProperty("IOPMUPrimary", 1ULL, 32);  // an OSNumber: watchdogd matches @1, which a boolean would not equal
     setProperty("NativeSandboxGrantProcess", "watchdogd");  // its property writes, as for the watchdog's open
     registerService();
@@ -304,12 +323,14 @@ OSDefineMetaClassAndStructors(NativeSwitchPMU, IOService)
 IOReturn NativeSwitchPMU::setProperties(OSObject *properties)
 {
     OSDictionary *dict = OSDynamicCast(OSDictionary, properties);
-    if (!dict) return kIOReturnBadArgument;
+    if (!dict)
+        return kIOReturnBadArgument;
     static const char *const keys[] = {"IOPMUBootStage", "IOPMUBootAppName"};
     unsigned taken = 0;
     for (const char *key : keys) {
         OSObject *value = dict->getObject(key);
-        if (!value) continue;
+        if (!value)
+            continue;
         if (!OSDynamicCast(OSNumber, value) && !OSDynamicCast(OSString, value) && !OSDynamicCast(OSData, value))
             return kIOReturnBadArgument;
         setProperty(key, value);

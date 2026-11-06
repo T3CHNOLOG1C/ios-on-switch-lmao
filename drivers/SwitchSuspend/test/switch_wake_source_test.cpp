@@ -41,7 +41,8 @@ TEST(SwitchWakeSource, ButtonsDescriptorHasHome)
         const unsigned prefix = data[i];
         const unsigned n = prefix & 3;
         unsigned value = 0;
-        for (unsigned b = 0; b < n && i + 1 + b < data.size(); ++b) value |= data[i + 1 + b] << (8 * b);
+        for (unsigned b = 0; b < n && i + 1 + b < data.size(); ++b)
+            value |= data[i + 1 + b] << (8 * b);
         const unsigned tag = prefix & 0xfc;
         if (tag == 0xa0)
             usages.clear();  // Collection: the usages before it name the collection, not a field

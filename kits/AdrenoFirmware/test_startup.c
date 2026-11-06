@@ -17,6 +17,7 @@ static AdrenoHfiStartup state;
 static AdrenoHfiStartupConfig config;
 static AdrenoHfiStartupServices services;
 static AdrenoHfiStartupResult result;
+
 static struct {
     uint64_t time, jump;
     unsigned count, waits, health_calls, now_calls;
@@ -38,6 +39,7 @@ static void response(uint32_t command)
     shared[2048 + ((at + 3) & 1023)] = 0xfafafafa;
     q[11] = (at + 4) & 1023;
 }
+
 static int notify(void *cookie)
 {
     CHECK(cookie == &peer && peer.count < 8);
@@ -47,35 +49,46 @@ static int notify(void *cookie)
     unsigned index = peer.count++;
     peer.ids[index] = header & 255;
     peer.words[index] = n - 1;
-    for (unsigned i = 1; i < n; ++i) peer.messages[index][i - 1] = shared[1024 + ((at + i) & 1023)];
+    for (unsigned i = 1; i < n; ++i)
+        peer.messages[index][i - 1] = shared[1024 + ((at + i) & 1023)];
     shared[16] = shared[17];
-    if (peer.fail_at == peer.count && peer.mode == 2) return 1;
-    if (!(peer.fail_at == peer.count && peer.mode >= 3)) response(header);
+    if (peer.fail_at == peer.count && peer.mode == 2)
+        return 1;
+    if (!(peer.fail_at == peer.count && peer.mode >= 3))
+        response(header);
     peer.time += peer.jump;
     return 0;
 }
+
 static int now(void *cookie, uint64_t *value)
 {
     CHECK(cookie == &peer);
     ++peer.now_calls;
-    if (peer.clock_fail && peer.now_calls == peer.clock_fail) return 1;
-    if (peer.clock_reverse && peer.now_calls >= peer.clock_reverse) --peer.time;
+    if (peer.clock_fail && peer.now_calls == peer.clock_fail)
+        return 1;
+    if (peer.clock_reverse && peer.now_calls >= peer.clock_reverse)
+        --peer.time;
     *value = peer.time;
     return 0;
 }
+
 static int wait_us(void *cookie, unsigned us)
 {
     CHECK(cookie == &peer && us == 10);
     ++peer.waits;
-    if (peer.wait_fail) return 1;
-    if (!peer.clock_stall) peer.time += us;
+    if (peer.wait_fail)
+        return 1;
+    if (!peer.clock_stall)
+        peer.time += us;
     return 0;
 }
+
 static int health(void *cookie)
 {
     CHECK(cookie == &peer);
     return ++peer.health_calls == peer.health_fail;
 }
+
 static void setup(unsigned acd, unsigned ifpc)
 {
     memset(&peer, 0, sizeof(peer));
@@ -85,8 +98,10 @@ static void setup(unsigned acd, unsigned ifpc)
     config = (AdrenoHfiStartupConfig){0};
     config.gpu_count = 4;
     config.gmu_count = 3;
-    for (unsigned i = 0; i < 4; ++i) config.gpu[i] = (AdrenoHfiPerformanceLevel){i * 100000000ULL, i * 3};
-    for (unsigned i = 0; i < 3; ++i) config.gmu[i] = (AdrenoHfiPerformanceLevel){i * 200000000ULL, i * 4};
+    for (unsigned i = 0; i < 4; ++i)
+        config.gpu[i] = (AdrenoHfiPerformanceLevel){i * 100000000ULL, i * 3};
+    for (unsigned i = 0; i < 3; ++i)
+        config.gmu[i] = (AdrenoHfiPerformanceLevel){i * 200000000ULL, i * 4};
     config.bandwidth_count = 3;
     config.cnoc_count = 2;
     config.ddr_count = 3;
@@ -99,7 +114,8 @@ static void setup(unsigned acd, unsigned ifpc)
     }
     for (unsigned i = 0; i < 3; ++i) {
         config.ddr_addresses[i] = 0x2000 + 4 * i;
-        for (unsigned j = 0; j < 3; ++j) config.ddr_data[j][i] = 0x40000000 + i + j;
+        for (unsigned j = 0; j < 3; ++j)
+            config.ddr_data[j][i] = 0x40000000 + i + j;
     }
     if (acd) {
         config.acd_version = 1;
@@ -112,10 +128,12 @@ static void setup(unsigned acd, unsigned ifpc)
     config.enable_ifpc = ifpc;
     services = (AdrenoHfiStartupServices){&peer, now, wait_us, health, 5, 10, 100, 500};
 }
+
 static AdrenoHfiStartupStatus run(void)
 {
     return AdrenoHfiStartupRun(&state, &hfi, &config, &services, &result);
 }
+
 static void refused(void)
 {
     uint32_t before[4096];
@@ -123,6 +141,7 @@ static void refused(void)
     CHECK(run() == AdrenoHfiStartupInvalid && !state.attempted && !peer.count);
     CHECK(!memcmp(before, shared, sizeof(before)) && result.resources_must_retain);
 }
+
 int main(void)
 {
     CHECK(!posix_memalign((void **)&shared, 4096, 16384));
@@ -205,7 +224,8 @@ int main(void)
         peer.health_fail = i;
         AdrenoHfiStartupStatus s = run();
         CHECK(s == AdrenoHfiStartupPlatformFault || s == AdrenoHfiStartupSuccess);
-        if (s) CHECK(state.poisoned && !state.completed);
+        if (s)
+            CHECK(state.poisoned && !state.completed);
     }
     setup(1, 1);
     config.gpu_count = 17;

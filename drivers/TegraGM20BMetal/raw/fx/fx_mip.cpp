@@ -36,18 +36,37 @@ enum : uint32_t {
     TWOD_SET_PIXELS_FROM_MEMORY_DU_DX_FRAC = 0x08c0,   // DU_DX_FRAC, DU_DX_INT, DV_DY_FRAC, DV_DY_INT
     TWOD_SET_PIXELS_FROM_MEMORY_SRC_X0_FRAC = 0x08d0,  // SRC_X0_FRAC, SRC_X0_INT, SRC_Y0_FRAC, SRC_Y0_INT (the launch)
 };
-enum : uint32_t { LAYOUT_BLOCKLINEAR = 0, LAYOUT_PITCH = 1 };
-enum : uint32_t { SAMPLE_CENTER = 0, FILTER_POINT = 0, FILTER_BILINEAR = 1u << 4 };
-enum : uint32_t { OPERATION_SRCCOPY = 3, RENDER_ENABLE_TRUE = 1, TEXCACHE_L1 = 0 };
+
+enum : uint32_t {
+    LAYOUT_BLOCKLINEAR = 0,
+    LAYOUT_PITCH = 1
+};
+
+enum : uint32_t {
+    SAMPLE_CENTER = 0,
+    FILTER_POINT = 0,
+    FILTER_BILINEAR = 1u << 4
+};
+
+enum : uint32_t {
+    OPERATION_SRCCOPY = 3,
+    RENDER_ENABLE_TRUE = 1,
+    TEXCACHE_L1 = 0
+};
+
 // MAXWELL_B (clb197.h), as raw_gpu.cpp names them
-enum : uint32_t { M3D_WAIT_FOR_IDLE = 0x0110, M3D_INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI = 0x1288 };
+enum : uint32_t {
+    M3D_WAIT_FOR_IDLE = 0x0110,
+    M3D_INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI = 0x1288
+};
 
 constexpr uint32_t kSubc2D = SUBC_2D, kSubc3D = SUBC_3D;
 
 uint32_t log2Ceil(uint32_t v)
 {
     uint32_t l = 0;
-    while ((1u << l) < v) l++;
+    while ((1u << l) < v)
+        l++;
     return l;
 }
 
@@ -70,13 +89,15 @@ void surface(Push &p, uint32_t base, uint32_t fmt, bool blockLinear, uint32_t yL
 {
     if (blockLinear) {
         p.inc(base, {fmt, LAYOUT_BLOCKLINEAR, yLog2 << 4, 1}, kSubc2D);
-        if (base == TWOD_SET_DST_FORMAT) p.m(base + 0x10, 0, kSubc2D);  // DST_LAYER
+        if (base == TWOD_SET_DST_FORMAT)
+            p.m(base + 0x10, 0, kSubc2D);  // DST_LAYER
         p.inc(base + 0x18, {w, h, uint32_t(va >> 32), uint32_t(va)}, kSubc2D);
     } else {
         p.inc(base, {fmt, LAYOUT_PITCH}, kSubc2D);
         p.inc(base + 0x14, {pitch, w, h, uint32_t(va >> 32), uint32_t(va)}, kSubc2D);
     }
 }
+
 constexpr size_t kSurfaceWords = 1 + 4 + 2 + 1 + 4;  // the larger (block-linear destination) form
 
 // One blit: the whole destination rectangle (dx, dy, w, h) from source rectangle origin (sx, sy) with steps du, dv (32.32), the
@@ -92,6 +113,7 @@ void blit(Push &p, uint32_t filter, uint32_t dx, uint32_t dy, uint32_t w, uint32
     p.inc(TWOD_SET_PIXELS_FROM_MEMORY_SRC_X0_FRAC, {uint32_t(sx), uint32_t(sx >> 32), uint32_t(sy), uint32_t(sy >> 32)},
           kSubc2D);
 }
+
 constexpr size_t kBlitWords = 1 + 1 + 5 + 5 + 5;
 
 void begin(Push &p)
@@ -99,11 +121,13 @@ void begin(Push &p)
     p.m(M3D_WAIT_FOR_IDLE, 0, kSubc3D);  // the 3D or copy work before wrote the source
     p.m(TWOD_SET_DST_COLOR_RENDER_TO_ZETA_SURFACE, 0, kSubc2D);
 }
+
 void end(Push &p)
 {
     p.m(M3D_WAIT_FOR_IDLE, 0, kSubc3D);  // the 2D writes are done before draws sample them
     p.m(M3D_INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI, 0, kSubc3D);
 }
+
 constexpr size_t kBeginWords = 2, kEndWords = 2, kStepWaitWords = 1;
 
 uint64_t ratio(uint32_t from, uint32_t to)
@@ -220,12 +244,18 @@ uint32_t twodFormat(uint32_t mtl)
     // forms (BGRA8Unorm_sRGB 81 -> A8RL8GL8BL8 0xd0, RGBA8Unorm_sRGB 71 -> A8BL8GL8RL8 0xd6) are left out until a device check
     // shows the 2D engine filters them in linear space as m2v's blit does (Core Animation's mip textures are BGRA8Unorm, 80).
     switch (mtl) {
-    case 80: return 0xcf;   // BGRA8Unorm -> A8R8G8B8
-    case 70: return 0xd5;   // RGBA8Unorm -> A8B8G8R8
-    case 115: return 0xca;  // RGBA16Float -> RF16_GF16_BF16_AF16
-    case 10: return 0xf3;   // R8Unorm -> Y8
-    case 30: return 0xea;   // RG8Unorm -> G8R8
-    default: return 0;
+    case 80:
+        return 0xcf;  // BGRA8Unorm -> A8R8G8B8
+    case 70:
+        return 0xd5;  // RGBA8Unorm -> A8B8G8R8
+    case 115:
+        return 0xca;  // RGBA16Float -> RF16_GF16_BF16_AF16
+    case 10:
+        return 0xf3;  // R8Unorm -> Y8
+    case 30:
+        return 0xea;  // RG8Unorm -> G8R8
+    default:
+        return 0;
     }
 }
 
@@ -265,15 +295,18 @@ Sampling sampling(uint32_t i)
 void samplingName(const Sampling &s, char *out, size_t size)
 {
     char du[16] = "", ht[16] = "";
-    if (s.halfDu) snprintf(du, sizeof du, "%+d*du/2", s.halfDu);
-    if (s.halfTexel) snprintf(ht, sizeof ht, "%+.1f", s.halfTexel * 0.5);
+    if (s.halfDu)
+        snprintf(du, sizeof du, "%+d*du/2", s.halfDu);
+    if (s.halfTexel)
+        snprintf(ht, sizeof ht, "%+.1f", s.halfTexel * 0.5);
     snprintf(out, size, "%s%s%s", s.corner ? "corner" : "centre", du, ht);
 }
 
 void emitGenerate(Push &p, const MipChain &c, uint64_t chainVa, const Pitch *level0, uint32_t fmt2d,
                   uint32_t firstLevel, uint32_t lastLevel, Sampling sampling)
 {
-    if (!c.levels || lastLevel >= c.levels || firstLevel > lastLevel || (level0 && firstLevel)) return;
+    if (!c.levels || lastLevel >= c.levels || firstLevel > lastLevel || (level0 && firstLevel))
+        return;
     begin(p);
     if (level0) {  // pitch level 0 -> chain level 0: 1:1, point (a layout conversion, no filtering)
         const MipLevel &d = c.level[0];
@@ -304,9 +337,11 @@ size_t copyWords()
 void emitCopyToLevel(Push &p, const MipChain &c, uint64_t chainVa, uint32_t level, const Pitch &src, uint32_t fmt2d,
                      uint32_t sx, uint32_t sy, uint32_t dx, uint32_t dy, uint32_t w, uint32_t h)
 {
-    if (level >= c.levels || !w || !h) return;
+    if (level >= c.levels || !w || !h)
+        return;
     const MipLevel &d = c.level[level];
-    if (dx + w > d.width || dy + h > d.height || sx + w > src.width || sy + h > src.height) return;
+    if (dx + w > d.width || dy + h > d.height || sx + w > src.width || sy + h > src.height)
+        return;
     begin(p);
     surface(p, TWOD_SET_DST_FORMAT, fmt2d, true, d.yLog2, 0, d.width, d.height, chainVa + d.offset);
     surface(p, TWOD_SET_SRC_FORMAT, fmt2d, false, 0, src.pitch, src.width, src.height, src.va);
@@ -317,9 +352,11 @@ void emitCopyToLevel(Push &p, const MipChain &c, uint64_t chainVa, uint32_t leve
 void emitCopyFromLevel(Push &p, const MipChain &c, uint64_t chainVa, uint32_t level, const Pitch &dst, uint32_t fmt2d,
                        uint32_t sx, uint32_t sy, uint32_t dx, uint32_t dy, uint32_t w, uint32_t h)
 {
-    if (level >= c.levels || !w || !h) return;
+    if (level >= c.levels || !w || !h)
+        return;
     const MipLevel &s = c.level[level];
-    if (sx + w > s.width || sy + h > s.height || dx + w > dst.width || dy + h > dst.height) return;
+    if (sx + w > s.width || sy + h > s.height || dx + w > dst.width || dy + h > dst.height)
+        return;
     begin(p);
     surface(p, TWOD_SET_DST_FORMAT, fmt2d, false, 0, dst.pitch, dst.width, dst.height, dst.va);
     surface(p, TWOD_SET_SRC_FORMAT, fmt2d, true, s.yLog2, 0, s.width, s.height, chainVa + s.offset);
@@ -381,7 +418,8 @@ void selfTestPattern(uint8_t *pixels, uint32_t pitch)
 uint32_t selfTestDetail(const MipChain &c, const uint8_t *chainCpu, bool fermi, SelfTestReport &r)
 {
     r = SelfTestReport{};
-    if (c.width != kSelfTestW || c.height != kSelfTestH || c.bpp != 4) return r.bad = ~0u;
+    if (c.width != kSelfTestW || c.height != kSelfTestH || c.bpp != 4)
+        return r.bad = ~0u;
     uint8_t want[kSelfTestW * kSelfTestH * 4], above[kSelfTestW * kSelfTestH * 4];
     selfTestPattern(want, kSelfTestW * 4);
     for (uint32_t l = 0; l < c.levels; l++) {
@@ -397,8 +435,10 @@ uint32_t selfTestDetail(const MipChain &c, const uint8_t *chainCpu, bool fermi, 
             for (uint32_t xb = 0; xb < lv.width * 4; xb++) {
                 const int got = chainCpu[texelOffset(c, l, xb, y, fermi)], w = want[size_t(y) * lv.width * 4 + xb];
                 const int d = std::abs(got - w);
-                if (d > r.maxDiff[xb % 4]) r.maxDiff[xb % 4] = uint8_t(d);
-                if (d <= 1) continue;
+                if (d > r.maxDiff[xb % 4])
+                    r.maxDiff[xb % 4] = uint8_t(d);
+                if (d <= 1)
+                    continue;
                 r.bad++;
                 r.levelBad[l]++;
                 if (r.firsts < 3)
@@ -411,8 +451,10 @@ uint32_t selfTestDetail(const MipChain &c, const uint8_t *chainCpu, bool fermi, 
 
 uint32_t selfTestCheck(const MipChain &c, const uint8_t *chainCpu, uint32_t *first, bool fermi)
 {
-    if (first) *first = ~0u;
-    if (c.width != kSelfTestW || c.height != kSelfTestH || c.bpp != 4) return ~0u;
+    if (first)
+        *first = ~0u;
+    if (c.width != kSelfTestW || c.height != kSelfTestH || c.bpp != 4)
+        return ~0u;
     // each level against the reference step from the level above as the GPU made it (so one step's rounding is not carried)
     uint8_t want[kSelfTestW * kSelfTestH * 4], above[kSelfTestW * kSelfTestH * 4];
     selfTestPattern(want, kSelfTestW * 4);
@@ -431,7 +473,8 @@ uint32_t selfTestCheck(const MipChain &c, const uint8_t *chainCpu, uint32_t *fir
             for (uint32_t xb = 0; xb < lv.width * 4; xb++) {
                 const int got = chainCpu[texelOffset(c, l, xb, y, fermi)], want = cur[size_t(y) * lv.width * 4 + xb];
                 if (std::abs(got - want) > 1) {
-                    if (!bad && first) *first = l << 24 | y << 12 | xb;
+                    if (!bad && first)
+                        *first = l << 24 | y << 12 | xb;
                     bad++;
                 }
             }

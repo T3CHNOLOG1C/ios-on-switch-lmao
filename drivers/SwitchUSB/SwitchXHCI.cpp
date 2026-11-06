@@ -90,7 +90,12 @@ class SwitchXHCI : public AppleUSBXHCI {
 
 public:
     static SwitchXHCI *running;
-    IOWorkLoop *tegraLoopForCheck() const { return tegraLoop; }
+
+    IOWorkLoop *tegraLoopForCheck() const
+    {
+        return tegraLoop;
+    }
+
     IOReturn expectPortChange();
     bool start(IOService *provider) override;
     void stop(IOService *provider) override;
@@ -99,14 +104,21 @@ public:
     uint64_t regRead64(uint64_t base, uint32_t offset) override;
     void regWrite32(uint64_t base, uint32_t offset, uint32_t value) override;
     void regWrite64(uint64_t base, uint32_t offset, uint64_t value) override;
-    static uint64_t dmaReach() { return (gHost.xhci(0x10) & 1) ? (1ull << 40) : (1ull << 32); }  // HCCPARAMS1.AC64
+
+    static uint64_t dmaReach()
+    {
+        return (gHost.xhci(0x10) & 1) ? (1ull << 40) : (1ull << 32);
+    }  // HCCPARAMS1.AC64
+
     IOMapper *copyMapper() override
     {
         IOMapper *mapper = switch_usb_dma_mapper(dmaReach());
-        if (mapper) mapper->retain();
+        if (mapper)
+            mapper->retain();
         return mapper;
     }
 };
+
 OSDefineMetaClassAndStructors(SwitchXHCI, AppleUSBXHCI);
 SwitchXHCI *SwitchXHCI::running;
 
@@ -118,13 +130,15 @@ bool SwitchXHCI::start(IOService *provider)
     // AppleUSBHostController::init picked (AppleNubT8011USBXHCI clears it: its fabric is coherent; ours is not).
     ringBufferOptions() = (ringBufferOptions() & ~(uint32_t)kIOMapCacheMask) | (uint32_t)kIOMapWriteCombineCache;
     // Without the mapper AppleUSBXHCI would run on (copyMapper NULL is no error to it) there is no cache maintenance.
-    if (!switch_usb_dma_mapper(dmaReach())) return false;
+    if (!switch_usb_dma_mapper(dmaReach()))
+        return false;
 
     tegraLoop = IOWorkLoop::workLoop();
     check = tegraLoop ? IOTimerEventSource::timerEventSource(
                             this, OSMemberFunctionCast(IOTimerEventSource::Action, this, &SwitchXHCI::checkFired))
                       : nullptr;
-    if (!check || tegraLoop->addEventSource(check) != kIOReturnSuccess) return false;
+    if (!check || tegraLoop->addEventSource(check) != kIOReturnSuccess)
+        return false;
     IOService *nub = switch_interrupt_nub(xhost::kMailboxIntid, false);
     mailbox = IOFilterInterruptEventSource::filterInterruptEventSource(this, &SwitchXHCI::mailboxAction,
                                                                        &SwitchXHCI::mailboxFilter, nub, 0);
@@ -132,9 +146,11 @@ bool SwitchXHCI::start(IOService *provider)
         panic("SwitchUSB: cannot attach the XUSB mailbox interrupt (INTID %u)", xhost::kMailboxIntid);
     }
     mailbox->enable();
-    if (!AppleUSBXHCI::start(provider)) return false;
+    if (!AppleUSBXHCI::start(provider))
+        return false;
     // xhci-tegra.c tegra_xusb_probe_finish: firmware messages on, then USBCMD.EU3S (bit 11, MFINDEX stops in U3).
-    if (!gHost.sendMailbox(xhost::MBOX_MSG_ENABLED, 0)) IOLog("SwitchUSB: XUSB falcon did not take MSG_ENABLED\n");
+    if (!gHost.sendMailbox(xhost::MBOX_MSG_ENABLED, 0))
+        IOLog("SwitchUSB: XUSB falcon did not take MSG_ENABLED\n");
     if (capBase) {
         const uint32_t usbcmd = gHost.capLength();
         regWrite32(capBase, usbcmd, regRead32(capBase, usbcmd) | 1u << 11);
@@ -144,16 +160,20 @@ bool SwitchXHCI::start(IOService *provider)
 
 void SwitchXHCI::stop(IOService *provider)
 {
-    if (check) check->cancelTimeout();
-    if (mailbox) mailbox->disable();
+    if (check)
+        check->cancelTimeout();
+    if (mailbox)
+        mailbox->disable();
     AppleUSBXHCI::stop(provider);
 }
 
 void SwitchXHCI::free()
 {
     if (tegraLoop) {
-        if (check) tegraLoop->removeEventSource(check);
-        if (mailbox) tegraLoop->removeEventSource(mailbox);
+        if (check)
+            tegraLoop->removeEventSource(check);
+        if (mailbox)
+            tegraLoop->removeEventSource(mailbox);
     }
     OSSafeReleaseNULL(check);
     OSSafeReleaseNULL(mailbox);
@@ -172,7 +192,8 @@ bool SwitchXHCI::mailboxFilter(OSObject *owner, IOFilterInterruptEventSource *)
         __atomic_fetch_add(&self->mailboxInterrupts, 1, __ATOMIC_RELAXED);
         return true;
     }
-    if (++self->unclaimed < kUnclaimedLimit) return false;
+    if (++self->unclaimed < kUnclaimedLimit)
+        return false;
     self->mailboxStorm = true;
     return true;
 }
@@ -199,7 +220,8 @@ void SwitchXHCI::mailboxAction(OSObject *owner, IOInterruptEventSource *, int)
 // controller's start, a port event is due even if none is pending (the device was on the port as it powered up).
 IOReturn SwitchXHCI::expectPortChange()
 {
-    if (checkStage || gaveUp) return kIOReturnSuccess;
+    if (checkStage || gaveUp)
+        return kIOReturnSuccess;
     firstCheck = !checked;
     checked = true;
     armCheck(kCheckMS, 1);
@@ -264,18 +286,22 @@ void SwitchXHCI::checkFired(IOTimerEventSource *)
 // Interrupter register sets (runtime base + 0x20 + 32 * n) that the hardware does not have.
 uint32_t *SwitchXHCI::shadowFor(uint64_t address)
 {
-    if (!capBase || hardwareInterrupters >= kRequiredInterrupters) return nullptr;
+    if (!capBase || hardwareInterrupters >= kRequiredInterrupters)
+        return nullptr;
     const uint64_t first = capBase + runtimeOffset + 0x20;
     const uint64_t from = first + 32ull * hardwareInterrupters, to = first + 32ull * kRequiredInterrupters;
-    if (address < from || address >= to) return nullptr;
+    if (address < from || address >= to)
+        return nullptr;
     const uint64_t at = address - first;
     return &shadow[at / 32][(at % 32) / 4];
 }
 
 uint32_t SwitchXHCI::regRead32(uint64_t base, uint32_t offset)
 {
-    if (!capBase && offset == 4) capBase = base;  // start reads the capability registers first
-    if (uint32_t *s = shadowFor(base + offset)) return *s;
+    if (!capBase && offset == 4)
+        capBase = base;  // start reads the capability registers first
+    if (uint32_t *s = shadowFor(base + offset))
+        return *s;
     uint32_t value = AppleUSBXHCI::regRead32(base, offset);
     if (capBase && base + offset == capBase + 4 && hardwareInterrupters < kRequiredInterrupters) {
         value = (value & ~(0x7ffu << 8)) | kRequiredInterrupters << 8;
@@ -285,7 +311,8 @@ uint32_t SwitchXHCI::regRead32(uint64_t base, uint32_t offset)
 
 uint64_t SwitchXHCI::regRead64(uint64_t base, uint32_t offset)
 {
-    if (uint32_t *s = shadowFor(base + offset)) return s[0] | (uint64_t)s[1] << 32;
+    if (uint32_t *s = shadowFor(base + offset))
+        return s[0] | (uint64_t)s[1] << 32;
     return AppleUSBXHCI::regRead64(base, offset);
 }
 
@@ -368,7 +395,8 @@ IOService *makeNub()
     OSSafeReleaseNULL(dict);
     OSSafeReleaseNULL(window);
     OSSafeReleaseNULL(memory);
-    if (!ok) OSSafeReleaseNULL(nub);
+    if (!ok)
+        OSSafeReleaseNULL(nub);
     return nub;
 }
 }  // namespace
@@ -379,7 +407,8 @@ bool switchxhci_start(char *why, size_t whySize)
         snprintf(why, whySize, "MMIO map failed");
         return false;
     }
-    if (!gHost.powerOn(why, whySize)) return false;
+    if (!gHost.powerOn(why, whySize))
+        return false;
     if (!gHost.loadFirmware(switch_xusb_firmware, (size_t)(switch_xusb_firmware_end - switch_xusb_firmware), why,
                             whySize))
         return false;
@@ -405,7 +434,8 @@ bool switchxhci_start(char *why, size_t whySize)
         "com.apple.driver.usb.IOUSBHostHIDDevice", "com.apple.iokit.IOUSBMassStorageDriver",
         "com.apple.iokit.IOSCSIBlockCommandsDevice"};
     for (const char *kext : kClasses) {
-        if (OSKext::loadKextWithIdentifier(kext, false) != KERN_SUCCESS) IOLog("SwitchUSB: %s did not load\n", kext);
+        if (OSKext::loadKextWithIdentifier(kext, false) != KERN_SUCCESS)
+            IOLog("SwitchUSB: %s did not load\n", kext);
     }
     const OSMetaClass *parent = lookupClass("AppleUSBXHCI");
     if (parent != &AppleUSBXHCI::gMetaClass || parent->getClassSize() != sizeof(AppleUSBXHCI)) {
@@ -457,14 +487,17 @@ struct PowerCycle {
 // ran with it on after every r7w host session).
 void switchxhci_set_host_role(bool host)
 {
-    if (!gHost.map()) return;
+    if (!gHost.map())
+        return;
     gHost.setHostRole(host);
     SwitchXHCI *controller = __atomic_load_n(&SwitchXHCI::running, __ATOMIC_ACQUIRE);
-    if (!host || !controller) return;
+    if (!host || !controller)
+        return;
     controller->getWorkLoop()->runAction(
         [](OSObject *, void *, void *, void *, void *) -> IOReturn {
             PowerCycle cycle = {gHost.otgPort(), {}, false};
-            if (cycle.port) cycle.followed = gHost.cyclePortPower(cycle.port, cycle.trace);
+            if (cycle.port)
+                cycle.followed = gHost.cyclePortPower(cycle.port, cycle.trace);
             gCycle = cycle;
             return kIOReturnSuccess;
         },
@@ -473,7 +506,8 @@ void switchxhci_set_host_role(bool host)
 
 void switchxhci_describe(char *buffer, size_t size)
 {
-    if (!size) return;
+    if (!size)
+        return;
     if (!gHost.map()) {
         snprintf(buffer, size, "XUSB not mapped");
         return;
@@ -498,7 +532,9 @@ void switchxhci_expect_port_change(void)
     SwitchXHCI *controller = __atomic_load_n(&SwitchXHCI::running, __ATOMIC_ACQUIRE);
     IOWorkLoop *loop = controller ? controller->tegraLoopForCheck() : nullptr;
     if (loop)
-        loop->runAction([](OSObject *owner, void *, void *, void *,
-                           void *) { return static_cast<SwitchXHCI *>(owner)->expectPortChange(); },
-                        controller);
+        loop->runAction(
+            [](OSObject *owner, void *, void *, void *, void *) {
+                return static_cast<SwitchXHCI *>(owner)->expectPortChange();
+            },
+            controller);
 }

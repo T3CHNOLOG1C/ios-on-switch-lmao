@@ -29,8 +29,10 @@ int a64x_cmd_gen_toptable(int argc, char **argv)
     (void)argc;
     (void)argv;
     pthread_t th[16];
-    for (long i = 0; i < 16; i++) pthread_create(&th[i], NULL, worker, (void *)i);
-    for (int i = 0; i < 16; i++) pthread_join(th[i], NULL);
+    for (long i = 0; i < 16; i++)
+        pthread_create(&th[i], NULL, worker, (void *)i);
+    for (int i = 0; i < 16; i++)
+        pthread_join(th[i], NULL);
     int n = 0;
     printf("static const uint32_t a64x_top16_maybe[2048] = {");
     for (int b = 0; b < 65536; b += 32) {

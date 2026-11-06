@@ -76,29 +76,34 @@ static inline unsigned switch_coex_bt_command(struct switch_coex_bt *s, uint16_t
     unsigned changed = 0;
     switch (opcode) {
     case SWITCH_COEX_OP_LE_SCAN_PARAMS:
-        if (length < 5) return 0;
+        if (length < 5)
+            return 0;
         s->le_active = p[0] == 1;
         s->le_interval = switch_coex_le16(p + 1);
         s->le_window = switch_coex_le16(p + 3);
         break;
     case SWITCH_COEX_OP_LE_EXT_SCAN_PARAMS:  // own address, filter, PHYs, then per PHY {type, interval, window}
-        if (length < 8) return 0;
+        if (length < 8)
+            return 0;
         s->le_active = p[3] == 1;
         s->le_interval = switch_coex_le16(p + 4);
         s->le_window = switch_coex_le16(p + 6);
         break;
     case SWITCH_COEX_OP_LE_SCAN_ENABLE:
     case SWITCH_COEX_OP_LE_EXT_SCAN_ENABLE:
-        if (length < 1) return 0;
+        if (length < 1)
+            return 0;
         s->le_on = p[0] != 0;
         break;
     case SWITCH_COEX_OP_WRITE_SCAN_ENABLE:
-        if (length < 1) return 0;
+        if (length < 1)
+            return 0;
         s->scan_enable = p[0] & 3u;
         break;
     case SWITCH_COEX_OP_PAGE_SCAN_ACTIVITY:
     case SWITCH_COEX_OP_INQUIRY_SCAN_ACTIVITY:
-        if (length < 4) return 0;
+        if (length < 4)
+            return 0;
         if (opcode == SWITCH_COEX_OP_PAGE_SCAN_ACTIVITY) {
             s->page_interval = switch_coex_le16(p);
             s->page_window = switch_coex_le16(p + 2);
@@ -108,7 +113,8 @@ static inline unsigned switch_coex_bt_command(struct switch_coex_bt *s, uint16_t
         }
         break;
     case SWITCH_COEX_OP_BCM_ACL_PRIORITY: {
-        if (length < 3) return 0;
+        if (length < 3)
+            return 0;
         const uint16_t handle = (uint16_t)(switch_coex_le16(p) & 0x0fffu);
         if (p[2]) {
             s->priority_high = 1;
@@ -119,25 +125,29 @@ static inline unsigned switch_coex_bt_command(struct switch_coex_bt *s, uint16_t
         }
         break;
     }
-    default: return 0;
+    default:
+        return 0;
     }
     if (s->le_interval != was.le_interval || s->le_window != was.le_window || s->le_active != was.le_active)
         changed |= SWITCH_COEX_LE_PARAMS;
-    if (s->le_on != was.le_on) changed |= SWITCH_COEX_LE_ENABLE;
+    if (s->le_on != was.le_on)
+        changed |= SWITCH_COEX_LE_ENABLE;
     if (s->scan_enable != was.scan_enable || s->page_interval != was.page_interval ||
         s->page_window != was.page_window || s->inquiry_interval != was.inquiry_interval ||
         s->inquiry_window != was.inquiry_window)
         changed |= SWITCH_COEX_CLASSIC_SCAN;
     if (s->priority_high != was.priority_high || s->priority_handle != was.priority_handle)
         changed |= SWITCH_COEX_PRIORITY;
-    if (changed) ++s->changes;
+    if (changed)
+        ++s->changes;
     return changed;
 }
 
 // A scan's duty cycle in percent (window over interval, at most 100); 0 when either is unknown.
 static inline unsigned switch_coex_duty(uint16_t interval, uint16_t window)
 {
-    if (!interval || !window) return 0;
+    if (!interval || !window)
+        return 0;
     const unsigned duty = (unsigned)window * 100u / interval;
     return duty > 100 ? 100 : duty;
 }
@@ -151,7 +161,8 @@ static inline unsigned switch_coex_ms(uint16_t slots)
 // The LE scan as one phrase: "LE scan on 30/300 ms passive (10%)", "LE scan off (30/300 ms)", "LE scan unset".
 static inline int switch_coex_describe_le(const struct switch_coex_bt *s, char *out, size_t size)
 {
-    if (!s->le_interval) return snprintf(out, size, "LE scan %s, unset", s->le_on ? "on" : "off");
+    if (!s->le_interval)
+        return snprintf(out, size, "LE scan %s, unset", s->le_on ? "on" : "off");
     if (!s->le_on)
         return snprintf(out, size, "LE scan off (%u/%u ms)", switch_coex_ms(s->le_window),
                         switch_coex_ms(s->le_interval));
@@ -164,7 +175,8 @@ static inline int switch_coex_describe_le(const struct switch_coex_bt *s, char *
 // "LE scan on 30/300 ms passive (10%), page scan 11/1280 ms, ACL 000b high priority"
 static inline int switch_coex_describe(const struct switch_coex_bt *s, char *out, size_t size)
 {
-    if (!size) return 0;
+    if (!size)
+        return 0;
     out[0] = 0;
     int n = switch_coex_describe_le(s, out, size);
     size_t at = n > 0 ? (size_t)n : 0;
@@ -195,7 +207,11 @@ static inline int switch_coex_describe(const struct switch_coex_bt *s, char *out
 // plus 1 MHz either side is marked bad (channel 6, 2437 MHz: Bluetooth channels 24-46, 56 left; the spec wants at
 // least 20). On a 5 GHz network, or none, every channel is usable again. Read AFH Channel Map (0x1406) {handle} ->
 // {status, handle, mode, map[10]} shows what a link hops on.
-enum { SWITCH_COEX_OP_SET_AFH_CLASSIFICATION = 0x0c3f, SWITCH_COEX_OP_READ_AFH_MAP = 0x1406 };
+enum {
+    SWITCH_COEX_OP_SET_AFH_CLASSIFICATION = 0x0c3f,
+    SWITCH_COEX_OP_READ_AFH_MAP = 0x1406
+};
+
 #define SWITCH_COEX_AFH_CHANNELS 79u
 
 // The classification for a Wi-Fi channel (MHz; 0 for none); *first/*last get the channels marked bad (both
@@ -211,14 +227,17 @@ static inline unsigned switch_coex_afh_map(uint32_t wifi_mhz, uint8_t map[10], u
     unsigned usable = 0;
     for (unsigned n = 0; n < 80; ++n) {
         const bool bad = n >= SWITCH_COEX_AFH_CHANNELS || (lo < SWITCH_COEX_AFH_CHANNELS && n >= lo && n <= hi);
-        if (!(n & 7)) map[n / 8] = 0;
+        if (!(n & 7))
+            map[n / 8] = 0;
         if (!bad) {
             map[n / 8] = (uint8_t)(map[n / 8] | 1u << (n & 7));
             ++usable;
         }
     }
-    if (first) *first = lo;
-    if (last) *last = hi;
+    if (first)
+        *first = lo;
+    if (last)
+        *last = hi;
     return usable;
 }
 
@@ -228,11 +247,14 @@ static inline unsigned switch_coex_afh_used(const uint8_t map[10], unsigned firs
 {
     unsigned used = 0, inside = 0;
     for (unsigned n = 0; n < SWITCH_COEX_AFH_CHANNELS; ++n) {
-        if (!(map[n / 8] & (1u << (n & 7)))) continue;
+        if (!(map[n / 8] & (1u << (n & 7))))
+            continue;
         ++used;
-        if (n >= first && n <= last) ++inside;
+        if (n >= first && n <= last)
+            ++inside;
     }
-    if (in_range) *in_range = inside;
+    if (in_range)
+        *in_range = inside;
     return used;
 }
 

@@ -112,7 +112,8 @@ static uint8_t modeMVMergeProbs(uint8_t pre, const uint32_t ct[2])
     static const int kCountToUpdateFactor[21] = {0,  6,  12, 19, 25, 32,  38,  44,  51,  57, 64,
                                                  70, 76, 83, 89, 96, 102, 108, 115, 121, 128};
     const uint32_t den = ct[0] + ct[1];
-    if (!den) return pre;
+    if (!den)
+        return pre;
     return weightedProb(pre, getProb(ct[0], den), kCountToUpdateFactor[den < 20 ? den : 20]);
 }
 
@@ -183,11 +184,14 @@ void vp9_adapt_mode_probs(VP9FrameContext *fc, const VP9FrameContext *pre, const
             const uint32_t b32[3][2] = {
                 {c32[0], c32[1] + c32[2] + c32[3]}, {c32[1], c32[2] + c32[3]}, {c32[2], c32[3]}};
             fc->tx.p8x8[i][0] = modeMVMergeProbs(pre->tx.p8x8[i][0], b8[0]);
-            for (int j = 0; j < 2; j++) fc->tx.p16x16[i][j] = modeMVMergeProbs(pre->tx.p16x16[i][j], b16[j]);
-            for (int j = 0; j < 3; j++) fc->tx.p32x32[i][j] = modeMVMergeProbs(pre->tx.p32x32[i][j], b32[j]);
+            for (int j = 0; j < 2; j++)
+                fc->tx.p16x16[i][j] = modeMVMergeProbs(pre->tx.p16x16[i][j], b16[j]);
+            for (int j = 0; j < 3; j++)
+                fc->tx.p32x32[i][j] = modeMVMergeProbs(pre->tx.p32x32[i][j], b32[j]);
         }
     }
-    for (int i = 0; i < 3; i++) fc->skip_probs[i] = modeMVMergeProbs(pre->skip_probs[i], counts->skip[i]);
+    for (int i = 0; i < 3; i++)
+        fc->skip_probs[i] = modeMVMergeProbs(pre->skip_probs[i], counts->skip[i]);
 }
 
 void vp9_adapt_mv_probs(VP9FrameContext *fc, const VP9FrameContext *pre, const VP9Counts *counts, bool allowHP)
@@ -200,8 +204,10 @@ void vp9_adapt_mv_probs(VP9FrameContext *fc, const VP9FrameContext *pre, const V
         comp->sign = modeMVMergeProbs(p->sign, c->sign);
         treeMergeProbs(kMVClassTree, p->classes, c->classes, comp->classes);
         treeMergeProbs(kMVClass0Tree, p->class0, c->class0, comp->class0);
-        for (int j = 0; j < 10; j++) comp->bits[j] = modeMVMergeProbs(p->bits[j], c->bits[j]);
-        for (int j = 0; j < 2; j++) treeMergeProbs(kMVFPTree, p->class0_fp[j], c->class0_fp[j], comp->class0_fp[j]);
+        for (int j = 0; j < 10; j++)
+            comp->bits[j] = modeMVMergeProbs(p->bits[j], c->bits[j]);
+        for (int j = 0; j < 2; j++)
+            treeMergeProbs(kMVFPTree, p->class0_fp[j], c->class0_fp[j], comp->class0_fp[j]);
         treeMergeProbs(kMVFPTree, p->fp, c->fp, comp->fp);
         if (allowHP) {
             comp->class0_hp = modeMVMergeProbs(p->class0_hp, c->class0_hp);

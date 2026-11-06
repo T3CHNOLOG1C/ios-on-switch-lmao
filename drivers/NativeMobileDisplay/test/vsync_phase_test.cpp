@@ -36,10 +36,12 @@ static Result run(const Model &m, bool phase, double seconds, uint64_t seed)
     std::uniform_real_distribution<double> u(0, 1);
     VsyncPhase vp(T);
     Result r;
+
     struct Flip {
         uint64_t submit, ready, boundary;  // boundary: the one it was drawn for
         bool live;
     };
+
     std::vector<Flip> pending;
     double latchSum = 0, s2sSum = 0;
     uint64_t lastPresent = 0;
@@ -52,14 +54,16 @@ static Result run(const Model &m, bool phase, double seconds, uint64_t seed)
         vp.vsync(vsync, lead);
         if (f % m.drawEvery == 0) {
             double cpu = m.cpuMin + (m.cpuMax - m.cpuMin) * u(rng), gpu = m.gpuMin + (m.gpuMax - m.gpuMin) * u(rng);
-            if (m.stallEvery && u(rng) < 1.0 / m.stallEvery) cpu += m.stallMs;
+            if (m.stallEvery && u(rng) < 1.0 / m.stallEvery)
+                cpu += m.stallMs;
             const uint64_t submit = vsync + (uint64_t)(cpu * 1000), ready = submit + (uint64_t)(gpu * 1000);
             pending.push_back({submit, ready, lead ? boundary : boundary, true});
         }
         // Boundary f latches the newest flip ready before it; older ready ones are replaced (latest frame wins).
         int newest = -1;
         for (int i = 0; i < (int)pending.size(); ++i)
-            if (pending[i].live && pending[i].ready < boundary) newest = i;
+            if (pending[i].live && pending[i].ready < boundary)
+                newest = i;
         if (newest >= 0) {
             for (int i = 0; i < newest; ++i)
                 if (pending[i].live) {
@@ -72,19 +76,22 @@ static Result run(const Model &m, bool phase, double seconds, uint64_t seed)
             fl.live = false;
             ++r.shown;
             const uint64_t intended = phase && lead ? fl.boundary : fl.boundary;  // the boundary it was drawn for
-            if (boundary > intended) ++r.late;
+            if (boundary > intended)
+                ++r.late;
             latchSum += (double)(boundary - fl.ready) / 1000;
             s2sSum += (double)(boundary - fl.submit) / 1000;
             const VsyncPhase::Outcome o = vp.present(fl.submit, fl.ready, boundary);
             if (lastPresent && boundary - lastPresent > T * 3 / 2) {
                 ++r.longPresents;
-                if (o.paced) ++r.pacedLong;
+                if (o.paced)
+                    ++r.pacedLong;
             }
             lastPresent = boundary;
         }
         std::vector<Flip> keep;
         for (const Flip &fl : pending)
-            if (fl.live) keep.push_back(fl);
+            if (fl.live)
+                keep.push_back(fl);
         pending.swap(keep);
     }
     r.latchMeanMs = r.shown ? latchSum / r.shown : 0;

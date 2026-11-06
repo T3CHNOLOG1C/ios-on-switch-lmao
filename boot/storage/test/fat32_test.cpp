@@ -19,7 +19,18 @@ extern "C" {
 }
 
 namespace {
-enum { OK, ARG, IO, FORMAT, RANGE, NOT_FOUND, NOT_FILE, CHAIN, LIMIT, MIRROR };
+enum {
+    OK,
+    ARG,
+    IO,
+    FORMAT,
+    RANGE,
+    NOT_FOUND,
+    NOT_FILE,
+    CHAIN,
+    LIMIT,
+    MIRROR
+};
 
 using Bytes = std::vector<uint8_t>;
 using Sector = std::array<uint8_t, 512>;
@@ -28,9 +39,11 @@ void Put16(uint8_t *p, uint16_t v)
 {
     p[0] = (uint8_t)v, p[1] = (uint8_t)(v >> 8);
 }
+
 void Put32(uint8_t *p, uint32_t v)
 {
-    for (unsigned i = 0; i < 4; ++i) p[i] = (uint8_t)(v >> (8 * i));
+    for (unsigned i = 0; i < 4; ++i)
+        p[i] = (uint8_t)(v >> (8 * i));
 }
 
 Bytes Dirent(const std::string &name, uint32_t first, uint32_t size = 0, uint8_t attr = 0x20)
@@ -89,8 +102,16 @@ struct FatImage {
         Directory(4, {Dirent("PART0000.BIN", 5, 1200)});
     }
 
-    uint64_t fat_start() const { return first + reserved; }
-    uint64_t data_start() const { return fat_start() + (uint64_t)fats * fat_sectors; }
+    uint64_t fat_start() const
+    {
+        return first + reserved;
+    }
+
+    uint64_t data_start() const
+    {
+        return fat_start() + (uint64_t)fats * fat_sectors;
+    }
+
     uint64_t lba(uint32_t cluster, uint32_t sector = 0) const
     {
         return data_start() + (uint64_t)(cluster - 2) * spc + sector;
@@ -110,8 +131,10 @@ struct FatImage {
 
     uint32_t Fat(unsigned index, uint32_t cluster) const
     {
-        if (auto o = fat_overrides.find({index, cluster}); o != fat_overrides.end()) return o->second;
-        if (auto e = entries.find(cluster); e != entries.end()) return e->second;
+        if (auto o = fat_overrides.find({index, cluster}); o != fat_overrides.end())
+            return o->second;
+        if (auto e = entries.find(cluster); e != entries.end())
+            return e->second;
         for (auto [start, count] : runs)
             if (start <= cluster && cluster < start + count)
                 return cluster + 1 < start + count ? cluster + 1 : 0x0fffffff;
@@ -122,23 +145,29 @@ struct FatImage {
     static Sector Payload(uint64_t lba)
     {
         Sector s;
-        for (unsigned i = 0; i < 512; ++i) s[i] = (uint8_t)((lba * 17 + (lba >> 16) + i * 13) & 255);
+        for (unsigned i = 0; i < 512; ++i)
+            s[i] = (uint8_t)((lba * 17 + (lba >> 16) + i * 13) & 255);
         return s;
     }
 
     Sector Read(uint64_t lba) const
     {
-        if (lba == 0) return mbr;
-        if (lba == first) return bpb;
+        if (lba == 0)
+            return mbr;
+        if (lba == first)
+            return bpb;
         if (fat_start() <= lba && lba < data_start()) {
             const uint64_t index = (lba - fat_start()) / fat_sectors, local = (lba - fat_start()) % fat_sectors;
             Sector s;
-            for (uint32_t i = 0; i < 128; ++i) Put32(&s[4 * i], Fat((unsigned)index, (uint32_t)(local * 128 + i)));
+            for (uint32_t i = 0; i < 128; ++i)
+                Put32(&s[4 * i], Fat((unsigned)index, (uint32_t)(local * 128 + i)));
             return s;
         }
-        if (auto s = sectors.find(lba); s != sectors.end()) return s->second;
+        if (auto s = sectors.find(lba); s != sectors.end())
+            return s->second;
         if (synthetic_sector)
-            if (auto s = synthetic_sector(lba)) return *s;
+            if (auto s = synthetic_sector(lba))
+                return *s;
         return Payload(lba);
     }
 
@@ -161,6 +190,7 @@ struct FatImage {
 
 // The reader's callback carries no context of ours: the image under test.
 FatImage *gImage;
+
 int Read512(void *, uint64_t lba, uint8_t output[512])
 {
     return gImage->Callback(lba, output);
@@ -172,7 +202,11 @@ protected:
     std::unique_ptr<switch_fat_volume> volume = std::make_unique<switch_fat_volume>();
     switch_fat_file file{};
 
-    void SetUp() override { gImage = image.get(); }
+    void SetUp() override
+    {
+        gImage = image.get();
+    }
+
     void Replace(std::unique_ptr<FatImage> next)
     {
         image = std::move(next);
@@ -185,7 +219,11 @@ protected:
                   expected);
         EXPECT_TRUE(image->out_of_bounds.empty());
     }
-    int Open(const char *path) { return switch_fat_open(volume.get(), path, &file); }
+
+    int Open(const char *path)
+    {
+        return switch_fat_open(volume.get(), path, &file);
+    }
 
     // Reads `count` bytes into a buffer with a guard byte on each side; returns what landed between them.
     Bytes Read(uint64_t offset, uint32_t count, int expected = OK)
@@ -202,7 +240,8 @@ protected:
 Bytes Concat(std::initializer_list<Sector> parts)
 {
     Bytes out;
-    for (const Sector &s : parts) out.insert(out.end(), s.begin(), s.end());
+    for (const Sector &s : parts)
+        out.insert(out.end(), s.begin(), s.end());
     return out;
 }
 }  // namespace
@@ -256,7 +295,8 @@ TEST_F(NativeFat32, PathsAreBoundedAnd83Only)
                                            "IOS/VERI*.BIN",
                                            std::string(105, 'A')};
     const size_t before = image->reads.size();
-    for (const std::string &path : invalid) EXPECT_EQ(Open(path.c_str()), ARG) << '"' << path << '"';
+    for (const std::string &path : invalid)
+        EXPECT_EQ(Open(path.c_str()), ARG) << '"' << path << '"';
     EXPECT_EQ(Open("A/A/A/A/A/A/A/A/A"), LIMIT);
     EXPECT_EQ(image->reads.size(), before);
 }
@@ -309,6 +349,7 @@ TEST_F(NativeFat32, BpbGeometryIsValidatedBeforeDataAccess)
         uint32_t value;
         int expected;
     };
+
     const std::vector<Case> cases{{11, 2, 1024, FORMAT},
                                   {13, 1, 0, FORMAT},
                                   {13, 1, 3, FORMAT},
@@ -331,14 +372,16 @@ TEST_F(NativeFat32, BpbGeometryIsValidatedBeforeDataAccess)
     const Sector original = image->bpb;
     for (const Case &c : cases) {
         image->bpb = original;
-        for (unsigned i = 0; i < c.width; ++i) image->bpb[c.offset + i] = (uint8_t)(c.value >> (8 * i));
+        for (unsigned i = 0; i < c.width; ++i)
+            image->bpb[c.offset + i] = (uint8_t)(c.value >> (8 * i));
         SCOPED_TRACE(testing::Message() << "BPB offset " << c.offset << " = " << c.value);
         Mount(c.expected);
     }
     image->bpb = original;
     Put32(&image->bpb[32], (uint32_t)image->total - 1);
     Mount(FORMAT);  // 65524 clusters is FAT16, regardless of label.
-    for (uint64_t lba : image->reads) EXPECT_TRUE(lba == 0 || lba == image->first) << lba;
+    for (uint64_t lba : image->reads)
+        EXPECT_TRUE(lba == 0 || lba == image->first) << lba;
 }
 
 TEST_F(NativeFat32, MirrorDisagreementAndReservedHighBits)
@@ -396,7 +439,8 @@ namespace {
 Sector DeletedEntries()
 {
     Sector s{};
-    for (unsigned i = 0; i < 16; ++i) s[32 * i] = 0xe5;
+    for (unsigned i = 0; i < 16; ++i)
+        s[32 * i] = 0xe5;
     return s;
 }
 }  // namespace
@@ -425,7 +469,8 @@ TEST_F(NativeFat32, DirectoryHasFiniteSectorBudget)
     image->sectors[image->lba(3)] = deleted;
     FatImage *im = image.get();
     image->synthetic_sector = [im, deleted](uint64_t lba) -> std::optional<Sector> {
-        if (im->lba(100) <= lba && lba < im->lba(5100)) return deleted;
+        if (im->lba(100) <= lba && lba < im->lba(5100))
+            return deleted;
         return std::nullopt;
     };
     Mount();
@@ -451,7 +496,9 @@ TEST_F(NativeFat32, FileChainAndCallbackBudgetsAreFinite)
     image->Directory(3, {Dirent("LARGE.BIN", 100, size)});
     Sector x;
     x.fill('x');
-    image->synthetic_sector = [x](uint64_t) -> std::optional<Sector> { return x; };
+    image->synthetic_sector = [x](uint64_t) -> std::optional<Sector> {
+        return x;
+    };
     Mount();
     ASSERT_EQ(Open("IOS/LARGE.BIN"), OK);
     before = image->reads.size();

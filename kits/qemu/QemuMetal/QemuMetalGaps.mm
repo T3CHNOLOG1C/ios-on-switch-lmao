@@ -21,6 +21,7 @@ void qemu_metal_answer_gaps(Class cls);
 namespace {
 std::mutex gGapLock;
 std::set<std::string> gGaps;
+
 const char *protocolTypes(SEL selector)
 {
     Protocol *protocols[] = {@protocol(MTLDevice),
@@ -46,10 +47,12 @@ const char *protocolTypes(SEL selector)
     for (Protocol *p : protocols)
         for (BOOL required : {YES, NO}) {
             objc_method_description m = protocol_getMethodDescription(p, selector, required, YES);
-            if (m.types) return m.types;
+            if (m.types)
+                return m.types;
         }
     return nullptr;
 }
+
 NSMethodSignature *gapSignature(id self, SEL, SEL selector)
 {
     if (Method m = class_getInstanceMethod(object_getClass(self), selector))
@@ -61,10 +64,12 @@ NSMethodSignature *gapSignature(id self, SEL, SEL selector)
         flag |= !strncmp(name, prefix, strlen(prefix)) && isupper((unsigned char)name[strlen(prefix)]);
     std::string guess = flag ? "B@:" : "Q@:";
     for (const char *c = name; *c; c++)
-        if (*c == ':') guess += "Q";
+        if (*c == ':')
+            guess += "Q";
     const char *types = protocolTypes(selector);
     return [NSMethodSignature signatureWithObjCTypes:types ?: guess.c_str()];
 }
+
 void gapForward(id self, SEL, NSInvocation *invocation)
 {
     const char *name = sel_getName(invocation.selector);
@@ -84,9 +89,11 @@ void gapForward(id self, SEL, NSInvocation *invocation)
     if (first)
         qemu_metal_log("gap: %s %s answered %s%llu", class_getName(object_getClass(self)), name,
                        asked ? "by the Mac: " : "zero: ", (unsigned long long)answer);
-    if (!length) return;
+    if (!length)
+        return;
     std::vector<uint8_t> value(length);
-    if (asked) memcpy(value.data(), &answer, std::min<size_t>(length, 8));
+    if (asked)
+        memcpy(value.data(), &answer, std::min<size_t>(length, 8));
     [invocation setReturnValue:value.data()];
 }
 }

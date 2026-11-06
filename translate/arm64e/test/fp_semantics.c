@@ -42,26 +42,30 @@ static int emit_frame(uint32_t *c, const uint32_t *body, int nbody)
                  (19u + 2 * i); /* stp x19+2i.. */
     for (int i = 0; i < 4; i++)
         c[n++] = 0x6D000000u | ((uint32_t)(10 + 2 * i) << 15) | ((9u + 2 * i) << 10) | (31u << 5) |
-                 (8u + 2 * i);                                                            /* stp d8+2i.. */
-    c[n++] = 0xF9004BE0u;                                                                 /* str x0, [sp, #144] */
-    for (uint32_t i = 0; i < 32; i++) c[n++] = 0x3DC00000u | ((256u / 16 + i) << 10) | i; /* ldr qi, [x0, #256+16i] */
-    c[n++] = 0xF9407C01u;                                                                 /* ldr x1, [x0, #248] */
-    c[n++] = 0xD51B4201u;                                                                 /* msr nzcv, x1 */
+                 (8u + 2 * i); /* stp d8+2i.. */
+    c[n++] = 0xF9004BE0u;      /* str x0, [sp, #144] */
+    for (uint32_t i = 0; i < 32; i++)
+        c[n++] = 0x3DC00000u | ((256u / 16 + i) << 10) | i; /* ldr qi, [x0, #256+16i] */
+    c[n++] = 0xF9407C01u;                                   /* ldr x1, [x0, #248] */
+    c[n++] = 0xD51B4201u;                                   /* msr nzcv, x1 */
     for (uint32_t i = 1; i < 31; i++)
-        if (i != 18) c[n++] = 0xF9400000u | (i << 10) | i; /* ldr xi, [x0, #8i] */
-    c[n++] = 0xF9400000u;                                  /* ldr x0, [x0] */
+        if (i != 18)
+            c[n++] = 0xF9400000u | (i << 10) | i; /* ldr xi, [x0, #8i] */
+    c[n++] = 0xF9400000u;                         /* ldr x0, [x0] */
     memcpy(c + n, body, (size_t)nbody * 4);
     n += nbody;
     c[n++] = 0xA9BF07E0u; /* stp x0, x1, [sp, #-16]! */
     c[n++] = 0xF94053E0u; /* ldr x0, [sp, #160] (state) */
     for (uint32_t i = 2; i < 31; i++)
-        if (i != 18) c[n++] = 0xF9000000u | (i << 10) | i;                                /* str xi, [x0, #8i] */
-    c[n++] = 0xD53B4201u;                                                                 /* mrs x1, nzcv */
-    c[n++] = 0xF9007C01u;                                                                 /* str x1, [x0, #248] */
-    c[n++] = 0xA8C10FE2u;                                                                 /* ldp x2, x3, [sp], #16 */
-    c[n++] = 0xF9000002u;                                                                 /* str x2, [x0] */
-    c[n++] = 0xF9000403u;                                                                 /* str x3, [x0, #8] */
-    for (uint32_t i = 0; i < 32; i++) c[n++] = 0x3D800000u | ((256u / 16 + i) << 10) | i; /* str qi */
+        if (i != 18)
+            c[n++] = 0xF9000000u | (i << 10) | i; /* str xi, [x0, #8i] */
+    c[n++] = 0xD53B4201u;                         /* mrs x1, nzcv */
+    c[n++] = 0xF9007C01u;                         /* str x1, [x0, #248] */
+    c[n++] = 0xA8C10FE2u;                         /* ldp x2, x3, [sp], #16 */
+    c[n++] = 0xF9000002u;                         /* str x2, [x0] */
+    c[n++] = 0xF9000403u;                         /* str x3, [x0, #8] */
+    for (uint32_t i = 0; i < 32; i++)
+        c[n++] = 0x3D800000u | ((256u / 16 + i) << 10) | i; /* str qi */
     for (int i = 0; i < 5; i++)
         c[n++] = 0xA9400000u | ((uint32_t)(2 * i) << 15) | ((20u + 2 * i) << 10) | (31u << 5) | (19u + 2 * i);
     for (int i = 0; i < 4; i++)
@@ -74,6 +78,7 @@ static int emit_frame(uint32_t *c, const uint32_t *body, int nbody)
 
 /* the stub sits inline: its final `b site+4` must land right after it, so site = stub_end - 4 */
 static uint32_t cur_vdead;
+
 static fn_t build(uint32_t *at, uint32_t w, bool stub, uint32_t dead, int *nwords)
 {
     uint32_t body[256];
@@ -89,7 +94,8 @@ static fn_t build(uint32_t *at, uint32_t w, bool stub, uint32_t dead, int *nword
         int head = 2 + 5 + 4 + 1 + 32 + 2 + 29 + 1; /* prologue words before body */
         uint64_t stub_pc = (uint64_t)(uintptr_t)(at + head);
         int n = a64x_stub_v(w, 0, stub_pc, dead, cur_vdead, body, 256);
-        if (n <= 0 || n > 256) return NULL;
+        if (n <= 0 || n > 256)
+            return NULL;
         /* regenerate with the right site: the trailing branch must go to stub_pc + 4n */
         n = a64x_stub_v(w, stub_pc + 4 * (uint64_t)n - 4, stub_pc, dead, cur_vdead, body, 256);
         nb = n;
@@ -103,6 +109,7 @@ static fn_t build(uint32_t *at, uint32_t w, bool stub, uint32_t dead, int *nword
 }
 
 static uint64_t rng = 0x9E3779B97F4A7C15ull;
+
 static uint64_t rnd(void)
 {
     rng ^= rng << 13;
@@ -110,6 +117,7 @@ static uint64_t rnd(void)
     rng ^= rng << 17;
     return rng;
 }
+
 static const uint16_t h_special[] = {0x0000, 0x8000, 0x7C00, 0xFC00, 0x7E00, 0xFE00, 0x7D00, 0x7C01,
                                      0x0001, 0x8001, 0x03FF, 0x0400, 0x7BFF, 0xFBFF, 0x3C00, 0xBC00,
                                      0x3800, 0x3C01, 0x4000, 0x5640, 0x1400, 0x0200, 0x7BFE, 0x3555};
@@ -196,26 +204,32 @@ static void fill_q(uint64_t q[2], int kind)
         }
         for (int i = 0; i < 4; i++) {
             uint64_t r = rnd();
-            if ((r & 3) == 0) s[i] = (r >> 8) & 1 ? 0x80000000u : 0x7FFFFFFFu;
+            if ((r & 3) == 0)
+                s[i] = (r >> 8) & 1 ? 0x80000000u : 0x7FFFFFFFu;
         }
         break;
     }
-    default: q[0] = rnd(); q[1] = rnd();
+    default:
+        q[0] = rnd();
+        q[1] = rnd();
     }
 }
 
 static bool no_snan;
+
 static void quiet_all(uint64_t q[2], int kind)
 {
     uint16_t *h = (uint16_t *)q;
     uint32_t *s = (uint32_t *)q;
     if (kind == 0)
         for (int i = 0; i < 8; i++) {
-            if ((h[i] & 0x7C00) == 0x7C00 && (h[i] & 0x3FF)) h[i] |= 0x200;
+            if ((h[i] & 0x7C00) == 0x7C00 && (h[i] & 0x3FF))
+                h[i] |= 0x200;
         }
     if (kind == 1)
         for (int i = 0; i < 4; i++) {
-            if ((s[i] & 0x7F800000u) == 0x7F800000u && (s[i] & 0x7FFFFF)) s[i] |= 0x400000;
+            if ((s[i] & 0x7F800000u) == 0x7F800000u && (s[i] & 0x7FFFFF))
+                s[i] |= 0x400000;
         }
     if (kind == 2)
         for (int i = 0; i < 2; i++) {
@@ -223,24 +237,30 @@ static void quiet_all(uint64_t q[2], int kind)
                 q[i] |= 0x8000000000000ull;
         }
 }
+
 static void random_state(struct state *s, int kind)
 {
-    for (int i = 0; i < 31; i++) s->x[i] = rnd();
+    for (int i = 0; i < 31; i++)
+        s->x[i] = rnd();
     s->x[18] = 0;
     s->nzcv = (rnd() & 0xF) << 28;
     for (int i = 0; i < 32; i++) {
         fill_q(s->q[i], kind);
-        if (no_snan) quiet_all(s->q[i], kind);
+        if (no_snan)
+            quiet_all(s->q[i], kind);
     }
 }
 
 static bool is_snan_lane(uint64_t v, int kind)
 {
-    if (kind == 0) return (v & 0x7C00) == 0x7C00 && (v & 0x3FF) && !(v & 0x200);
-    if (kind == 1) return (v & 0x7F800000u) == 0x7F800000u && (v & 0x7FFFFF) && !(v & 0x400000);
+    if (kind == 0)
+        return (v & 0x7C00) == 0x7C00 && (v & 0x3FF) && !(v & 0x200);
+    if (kind == 1)
+        return (v & 0x7F800000u) == 0x7F800000u && (v & 0x7FFFFF) && !(v & 0x400000);
     return (v & 0x7FF0000000000000ull) == 0x7FF0000000000000ull && (v & 0xFFFFFFFFFFFFFull) &&
            !(v & 0x8000000000000ull);
 }
+
 static bool has_snan(const struct state *s, int kind)
 {
     for (int i = 0; i < 32; i++)
@@ -248,17 +268,20 @@ static bool has_snan(const struct state *s, int kind)
             uint64_t v = kind == 0   ? ((const uint16_t *)s->q[i])[l]
                          : kind == 1 ? ((const uint32_t *)s->q[i])[l]
                                      : s->q[i][l];
-            if (is_snan_lane(v, kind)) return true;
+            if (is_snan_lane(v, kind))
+                return true;
         }
     return false;
 }
 
 /* compare; returns a description of the first difference or NULL */
 static uint32_t ignore_v;
+
 static const char *diff(const struct state *a, const struct state *b, uint32_t ignore_x, char *buf)
 {
     for (int i = 0; i < 31; i++) {
-        if (i == 18 || (ignore_x & (1u << i))) continue;
+        if (i == 18 || (ignore_x & (1u << i)))
+            continue;
         if (a->x[i] != b->x[i]) {
             snprintf(buf, 160, "x%d %016llx vs %016llx", i, (unsigned long long)a->x[i], (unsigned long long)b->x[i]);
             return buf;
@@ -281,9 +304,12 @@ static const char *diff(const struct state *a, const struct state *b, uint32_t i
 static int kind_of(uint32_t w)
 {
     enum a64x_class c = a64x_classify(w);
-    if (c == A64X_JSCVT) return 2;
-    if (c == A64X_FP16) return 0;
-    if (c == A64X_RDM) return 4;
+    if (c == A64X_JSCVT)
+        return 2;
+    if (c == A64X_FP16)
+        return 0;
+    if (c == A64X_RDM)
+        return 4;
     if (c == A64X_FCMA) {
         uint32_t size = (w >> 22) & 3;
         if ((w & 0xFF000000u) == 0x2F000000u || (w & 0xFF000000u) == 0x6F000000u)
@@ -296,6 +322,7 @@ static int kind_of(uint32_t w)
 static uint64_t total_runs, total_fail, total_snan_skip, words_ok, words_fail, words_nostub, words_host_invalid;
 
 static sigjmp_buf probe_jb;
+
 static void on_sigill(int sig)
 {
     (void)sig;
@@ -343,7 +370,8 @@ static void test_word(uint32_t w, int iters, bool verbose)
     }
     if (!f1 || !f2 || !f3) {
         words_nostub++;
-        if (verbose) printf("%08x %-10s no stub\n", w, a64x_class_name(a64x_classify(w)));
+        if (verbose)
+            printf("%08x %-10s no stub\n", w, a64x_class_name(a64x_classify(w)));
         return;
     }
     int fails = 0, snan = 0;
@@ -361,11 +389,13 @@ static void test_word(uint32_t w, int iters, bool verbose)
         f3(&d3);
         total_runs++;
         const char *d1 = diff(&a, &b, 0, buf);
-        if (!d1) d1 = diff(&a, &c, (1u << 16) | (1u << 17), buf);
+        if (!d1)
+            d1 = diff(&a, &c, (1u << 16) | (1u << 17), buf);
         if (!d1) {
             /* dead V registers may hold anything afterwards, except the instruction's own destination */
             uint32_t rd = w & 31, keep = 1u << rd;
-            if (a64x_classify(w) == A64X_JSCVT) keep = 0;
+            if (a64x_classify(w) == A64X_JSCVT)
+                keep = 0;
             ignore_v = vd & ~keep;
             d1 = diff(&a, &d3, 0, buf);
             ignore_v = 0;
@@ -376,7 +406,8 @@ static void test_word(uint32_t w, int iters, bool verbose)
                 total_snan_skip++;
                 continue;
             }
-            if (!fails) snprintf(first, sizeof(first), "%s", d1);
+            if (!fails)
+                snprintf(first, sizeof(first), "%s", d1);
             fails++;
         }
     }
@@ -404,10 +435,13 @@ static int gen_words(uint32_t *out, int max, int samples, enum a64x_class want)
     for (int i = 0; i < samples && n < max; i++) {
         uint64_t r = rnd();
         uint32_t w = (uint32_t)tops[(r >> 40) % sizeof(tops)] << 24 | ((uint32_t)r & 0xFFFFFFu);
-        if (a64x_classify(w) != want) continue;
+        if (a64x_classify(w) != want)
+            continue;
         uint32_t h = ((w & ~0x001F03FFu) * 2654435761u) >> 6;
-        if (seen[h >> 3] & (1u << (h & 7))) continue;
-        if (a64x_stub(w, 0x100000, 0x200000, 0, st, A64X_STUB_MAX) <= 0) continue;
+        if (seen[h >> 3] & (1u << (h & 7)))
+            continue;
+        if (a64x_stub(w, 0x100000, 0x200000, 0, st, A64X_STUB_MAX) <= 0)
+            continue;
         seen[h >> 3] |= (uint8_t)(1u << (h & 7));
         out[n++] = w;
     }
@@ -442,9 +476,11 @@ int fp_semantics_main(int argc, char **argv)
     } else if (argc > 4 && !strcmp(argv[2], "--gen")) {
         static uint32_t words[4096];
         int n = gen_words(words, 4096, atoi(argv[3]), (enum a64x_class)atoi(argv[4]));
-        for (int i = 0; i < n; i++) test_word(words[i], iters, false);
+        for (int i = 0; i < n; i++)
+            test_word(words[i], iters, false);
     } else if (argc > 2) {
-        for (int i = 2; i < argc; i++) test_word((uint32_t)strtoul(argv[i], NULL, 16), iters, true);
+        for (int i = 2; i < argc; i++)
+            test_word((uint32_t)strtoul(argv[i], NULL, 16), iters, true);
     }
     printf("words ok %llu, failing %llu, without stub %llu, not executed by this host %llu; runs %llu, mismatches %llu "
            "(+%llu with signaling-NaN inputs)\n",

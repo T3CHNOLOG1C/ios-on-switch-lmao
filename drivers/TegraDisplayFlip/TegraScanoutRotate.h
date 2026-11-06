@@ -29,7 +29,8 @@ static inline void tegra_scanout_rotate_tiled(void *destination, uint64_t destin
                         __builtin_memcpy(&hi, in + sourceStride, 4);
                         *(uint64_t *)out = (uint64_t)lo | ((uint64_t)hi << 32);
                     }
-                for (; y < y1; ++y, in += sourceStride, ++out) __builtin_memcpy(out, in, 4);
+                for (; y < y1; ++y, in += sourceStride, ++out)
+                    __builtin_memcpy(out, in, 4);
             }
         }
     }

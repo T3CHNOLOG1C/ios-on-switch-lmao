@@ -34,7 +34,8 @@ static inline uint32_t switch_nvram_get32(const uint8_t *p)
 
 static inline void switch_nvram_put32(uint8_t *p, uint32_t value)
 {
-    for (int i = 0; i < 4; ++i) p[i] = (uint8_t)(value >> (8 * i));
+    for (int i = 0; i < 4; ++i)
+        p[i] = (uint8_t)(value >> (8 * i));
 }
 
 static inline uint32_t switch_nvram_crc32(uint32_t crc, const uint8_t *p, size_t length)
@@ -42,7 +43,8 @@ static inline uint32_t switch_nvram_crc32(uint32_t crc, const uint8_t *p, size_t
     crc = ~crc;
     while (length--) {
         crc ^= *p++;
-        for (int bit = 0; bit < 8; ++bit) crc = (crc >> 1) ^ (0xedb88320u & (0u - (crc & 1u)));
+        for (int bit = 0; bit < 8; ++bit)
+            crc = (crc >> 1) ^ (0xedb88320u & (0u - (crc & 1u)));
     }
     return ~crc;
 }
@@ -56,12 +58,17 @@ static inline uint32_t switch_nvram_store_stride(uint32_t bytes)
 // (nvram_validate_header_v1v2), then the adler32 of everything from the generation on (adler32_with_version).
 static inline int switch_nvram_chrp_valid(const uint8_t *image, uint32_t bytes)
 {
-    if (bytes < 32 || bytes > SWITCH_NVRAM_STORE_MAX_IMAGE) return 0;
-    if (memcmp(image + 4, "nvram", 5) && memcmp(image + 4, "2nvram", 6)) return 0;
+    if (bytes < 32 || bytes > SWITCH_NVRAM_STORE_MAX_IMAGE)
+        return 0;
+    if (memcmp(image + 4, "nvram", 5) && memcmp(image + 4, "2nvram", 6))
+        return 0;
     uint32_t sum = image[0];
-    for (int i = 2; i < 16; ++i) sum += image[i];
-    while (sum > 0xff) sum = (sum & 0xff) + (sum >> 8);
-    if (sum != image[1]) return 0;
+    for (int i = 2; i < 16; ++i)
+        sum += image[i];
+    while (sum > 0xff)
+        sum = (sum & 0xff) + (sum >> 8);
+    if (sum != image[1])
+        return 0;
     uint32_t low = 1, high = 0;
     for (uint32_t i = 20; i < bytes; ++i) {
         low = (low + image[i]) % 65521u;
@@ -97,7 +104,8 @@ static inline const uint8_t *switch_nvram_store_slot(const uint8_t *file, size_t
         switch_nvram_get32(slot + 24) != 0)
         return NULL;
     const uint32_t crc = switch_nvram_crc32(switch_nvram_crc32(0, slot, 28), image, bytes);
-    if (crc != switch_nvram_get32(slot + 28) || !switch_nvram_chrp_valid(image, bytes)) return NULL;
+    if (crc != switch_nvram_get32(slot + 28) || !switch_nvram_chrp_valid(image, bytes))
+        return NULL;
     *sequence = (uint64_t)switch_nvram_get32(slot + 16) | (uint64_t)switch_nvram_get32(slot + 20) << 32;
     return image;
 }
@@ -108,7 +116,8 @@ static inline int switch_nvram_store_pick(const uint8_t *file, size_t length, ui
     uint64_t found[2] = {0, 0};
     const int ok0 = switch_nvram_store_slot(file, length, bytes, 0, &found[0]) != NULL;
     const int ok1 = switch_nvram_store_slot(file, length, bytes, 1, &found[1]) != NULL;
-    if (!ok0 && !ok1) return -1;
+    if (!ok0 && !ok1)
+        return -1;
     const int pick = ok1 && (!ok0 || found[1] > found[0]);
     *sequence = found[pick];
     return pick;

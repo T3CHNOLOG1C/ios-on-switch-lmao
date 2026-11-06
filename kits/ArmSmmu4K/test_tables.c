@@ -13,14 +13,17 @@
 #define CAPACITY 1024
 static uint64_t tables[CAPACITY * 512], before[CAPACITY * 512];
 static unsigned visited[CAPACITY];
+
 static uint64_t walk_at(const uint64_t *base, const ArmSmmu4KResult *result, uint64_t va)
 {
     size_t page = 0;
     for (unsigned level = result->start_level; level <= 3; ++level) {
         uint64_t entry = base[page * 512 + ((va >> (39 - 9 * level)) & 511)];
-        if (!entry) return 0;
+        if (!entry)
+            return 0;
         CHECK((entry & 3) == 3); /* No block leaves anywhere. */
-        if (level == 3) return entry;
+        if (level == 3)
+            return entry;
         uint64_t address = entry & UINT64_C(0xfffffffff000);
         CHECK(address >= result->root_physical);
         page = (address - result->root_physical) >> 12;
@@ -28,6 +31,7 @@ static uint64_t walk_at(const uint64_t *base, const ArmSmmu4KResult *result, uin
     }
     exit(1);
 }
+
 static size_t graph(size_t page, unsigned level, const ArmSmmu4KResult *result, size_t *leaves)
 {
     CHECK(page < result->table_pages && !visited[page]);
@@ -35,7 +39,8 @@ static size_t graph(size_t page, unsigned level, const ArmSmmu4KResult *result, 
     size_t count = 1;
     for (size_t slot = 0; slot < 512; ++slot) {
         uint64_t entry = tables[page * 512 + slot];
-        if (!entry) continue;
+        if (!entry)
+            continue;
         CHECK((entry & 3) == 3);
         if (level == 3) {
             ++*leaves;
@@ -48,6 +53,7 @@ static size_t graph(size_t page, unsigned level, const ArmSmmu4KResult *result, 
     }
     return count;
 }
+
 static void verify(const ArmSmmu4KConfig *config, const ArmSmmu4KRange *ranges, size_t n, const ArmSmmu4KResult *result)
 {
     CHECK(result->root_physical == config->table_physical && result->mair == 0xff44 && !result->upper_region);
@@ -76,6 +82,7 @@ static void verify(const ArmSmmu4KConfig *config, const ArmSmmu4KRange *ranges, 
     CHECK(!memcmp(tables + result->table_pages * 512, before + result->table_pages * 512,
                   (CAPACITY - result->table_pages) * 4096));
 }
+
 static void refusal(ArmSmmu4KConfig c, const ArmSmmu4KRange *r, size_t n, size_t capacity, ArmSmmu4KStatus status)
 {
     ArmSmmu4KResult result;
@@ -87,6 +94,7 @@ static void refusal(ArmSmmu4KConfig c, const ArmSmmu4KRange *r, size_t n, size_t
           !result.upper_region);
     CHECK(!memcmp(tables, before, sizeof(tables)));
 }
+
 static void success(ArmSmmu4KConfig c, const ArmSmmu4KRange *r, size_t n)
 {
     ArmSmmu4KResult result;
@@ -95,6 +103,7 @@ static void success(ArmSmmu4KConfig c, const ArmSmmu4KRange *r, size_t n)
     CHECK(ArmSmmu4KBuild(&c, r, n, tables, CAPACITY, &result) == ArmSmmu4KSuccess);
     verify(&c, r, n, &result);
 }
+
 int main(void)
 {
     ArmSmmu4KConfig c = {48, 48, 0x10000000, 4096};

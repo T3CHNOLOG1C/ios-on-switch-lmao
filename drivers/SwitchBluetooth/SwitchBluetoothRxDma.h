@@ -30,7 +30,11 @@ extern "C" {
 #define SWITCH_BT_RX_DMA_REACH 5u     // bytes a transfer runs past the end of the packet it was started in
 #define SWITCH_BT_RX_DMA_WORDS 2048u  // the channel's buffer: one word per byte, every transfer from word 0
 
-enum { SWITCH_BT_H4_ACL = 2, SWITCH_BT_H4_SCO = 3, SWITCH_BT_H4_EVENT = 4 };
+enum {
+    SWITCH_BT_H4_ACL = 2,
+    SWITCH_BT_H4_SCO = 3,
+    SWITCH_BT_H4_EVENT = 4
+};
 
 // The controller's H4 stream as the interrupt path takes it: state 0 a packet type next, 1 in the header (have of
 // need bytes after the type), 2 in the payload (left bytes to go). lost: not following (a line error or a byte that is
@@ -45,7 +49,8 @@ struct switch_bt_h4_frame {
 // One more byte; true when it ends a packet.
 static inline bool switch_bt_h4_frame_byte(struct switch_bt_h4_frame *f, uint8_t byte)
 {
-    if (f->lost) return false;
+    if (f->lost)
+        return false;
     if (f->state == 0) {
         f->type = byte;
         f->need = byte == SWITCH_BT_H4_EVENT ? 2 : byte == SWITCH_BT_H4_ACL ? 4 : byte == SWITCH_BT_H4_SCO ? 3 : 0;
@@ -56,14 +61,16 @@ static inline bool switch_bt_h4_frame_byte(struct switch_bt_h4_frame *f, uint8_t
     }
     if (f->state == 1) {
         f->header[f->have++] = byte;
-        if (f->have < f->need) return false;
+        if (f->have < f->need)
+            return false;
         f->left = f->type == SWITCH_BT_H4_EVENT ? f->header[1]
                   : f->type == SWITCH_BT_H4_ACL ? (uint32_t)(f->header[2] | f->header[3] << 8)
                                                 : f->header[2];
         f->state = f->left ? 2 : 0;
         return !f->left;
     }
-    if (--f->left) return false;
+    if (--f->left)
+        return false;
     f->state = 0;
     return true;
 }
@@ -83,7 +90,8 @@ static inline uint32_t switch_bt_rx_dma_length(const struct switch_bt_h4_frame *
     uint32_t left = 0;
     const bool known = switch_bt_h4_frame_left(f, &left);
     uint32_t words = (known ? left : 0) + SWITCH_BT_RX_DMA_REACH;
-    if (words > SWITCH_BT_RX_DMA_WORDS) words = SWITCH_BT_RX_DMA_WORDS;
+    if (words > SWITCH_BT_RX_DMA_WORDS)
+        words = SWITCH_BT_RX_DMA_WORDS;
     return words;
 }
 
@@ -93,7 +101,8 @@ static inline uint32_t switch_bt_rx_dma_length(const struct switch_bt_h4_frame *
 static inline uint32_t switch_bt_rx_dma_visible(uint32_t length, uint32_t movedBytes, bool ended, uint32_t taken)
 {
     uint32_t words = ended ? length : movedBytes / 4;
-    if (words > length) words = length;
+    if (words > length)
+        words = length;
     return words < taken ? taken : words;
 }
 

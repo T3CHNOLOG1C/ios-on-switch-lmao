@@ -8,10 +8,12 @@ uint32_t nv_crc32(const uint8_t *data, size_t length)
 {
     return switch_nvram_crc32(0, data, length);
 }
+
 uint32_t nv_stride(uint32_t bytes)
 {
     return switch_nvram_store_stride(bytes);
 }
+
 int nv_chrp_valid(const uint8_t *image, uint32_t bytes)
 {
     return switch_nvram_chrp_valid(image, bytes);

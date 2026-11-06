@@ -2,6 +2,7 @@
 #ifndef NATIVE_ADRENO_CPINIT_H
 #define NATIVE_ADRENO_CPINIT_H
 #include "NativeAdrenoRing.h"
+
 struct NativeAdrenoCpInitConfig {
     uint64_t sqe_iova;           /* CP_SQE_INSTR_BASE, 4 KiB aligned, nonzero */
     uint64_t pwrup_reglist_iova; /* Power-up register list, 4-byte aligned */
@@ -9,6 +10,7 @@ struct NativeAdrenoCpInitConfig {
      * then read back and compared instead of rewritten after the SQE started. */
     uint32_t sqe_base_programmed;
 };
+
 /* One-shot A7XX command-processor start sequence, not a GPU power or reset
  * driver. The caller must have completed GMU boot, powered GX/core clocks,
  * released the CP reset, loaded and hash-verified the SQE microcode into the
@@ -29,8 +31,17 @@ public:
     NativeAdrenoCpInit(const NativeAdrenoCpInit &) = delete;
     NativeAdrenoCpInit &operator=(const NativeAdrenoCpInit &) = delete;
     IOReturn run(const NativeAdrenoRingIo *, NativeAdrenoRing *, const NativeAdrenoCpInitConfig *, uint32_t *fence);
-    bool completed() const { return done_; }
-    bool poisoned() const { return poisoned_; }
+
+    bool completed() const
+    {
+        return done_;
+    }
+
+    bool poisoned() const
+    {
+        return poisoned_;
+    }
+
     static uint32_t meInitMask();
 };
 #endif

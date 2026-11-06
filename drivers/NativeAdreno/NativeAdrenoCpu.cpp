@@ -19,6 +19,7 @@ volatile uint64_t native_adreno_cache_stats[5];
 extern "C" {
 volatile uint64_t native_adreno_reassert_ticks;
 }
+
 static void noteMaintenance(uint64_t began, size_t bytes)
 {
     const uint64_t ticks = mach_absolute_time() - began;
@@ -27,12 +28,14 @@ static void noteMaintenance(uint64_t began, size_t bytes)
     __atomic_fetch_add(&native_adreno_cache_stats[3], 1, __ATOMIC_RELAXED);
     uint64_t longest = __atomic_load_n(&native_adreno_cache_stats[2], __ATOMIC_RELAXED);
     while (ticks > longest && !__atomic_compare_exchange_n(&native_adreno_cache_stats[2], &longest, ticks, true,
-                                                           __ATOMIC_RELAXED, __ATOMIC_RELAXED)) {}
+                                                           __ATOMIC_RELAXED, __ATOMIC_RELAXED)) {
+    }
 }
 
 IOReturn NativeAdrenoQueryCpu4K(NativeAdrenoCpuState *out)
 {
-    if (!out) return kIOReturnBadArgument;
+    if (!out)
+        return kIOReturnBadArgument;
     *out = {};
     disable_preemption();
     __asm__ volatile("mrs %0, tcr_el1" : "=r"(out->tcr));
@@ -47,6 +50,7 @@ IOReturn NativeAdrenoQueryCpu4K(NativeAdrenoCpuState *out)
                   (out->ttbr1 & UINT64_C(0x0000fffffffff000));
     return native ? kIOReturnSuccess : kIOReturnUnsupported;
 }
+
 static IOReturn maintainOwnedPages(void *mapping, size_t bytes, NativeAdrenoCacheOperation op)
 {
     /* Whole owned pages avoid IVAC corruption of a neighbour's dirty line.
@@ -77,13 +81,16 @@ static IOReturn maintainOwnedPages(void *mapping, size_t bytes, NativeAdrenoCach
     enable_preemption();
     return kIOReturnSuccess;
 }
+
 IOReturn NativeAdrenoMaintainOwnedPages(void *mapping, size_t bytes, NativeAdrenoCacheOperation op)
 {
     const uint64_t began = mach_absolute_time();
     const IOReturn status = maintainOwnedPages(mapping, bytes, op);
-    if (!status) noteMaintenance(began, bytes);
+    if (!status)
+        noteMaintenance(began, bytes);
     return status;
 }
+
 IOReturn NativeAdrenoMaintainPhysicalPages(uint64_t physical, size_t bytes, NativeAdrenoCacheOperation op)
 {
     if (!physical || !bytes || ((physical | bytes) & 4095) || physical > UINT64_MAX - bytes ||
@@ -107,7 +114,8 @@ IOReturn NativeAdrenoMaintainPhysicalPages(uint64_t physical, size_t bytes, Nati
              * uncached (kIOMapInhibitCache), no cache line of it exists to maintain, and phystokv would panic on it (int-080: illegal PA
              * 0xb8000000). */
             const uint64_t page = physical + offset;
-            if (page < gPhysBase || page - gPhysBase >= gPhysSize) continue;
+            if (page < gPhysBase || page - gPhysBase >= gPhysSize)
+                continue;
             const vm_offset_t alias = phystokv(page);
             if (!alias) {
                 __asm__ volatile("dsb sy" ::: "memory");
@@ -129,6 +137,7 @@ IOReturn NativeAdrenoMaintainPhysicalPages(uint64_t physical, size_t bytes, Nati
     noteMaintenance(began, bytes);
     return kIOReturnSuccess;
 }
+
 /* A user BO's pages become Normal non-cacheable (write-combined) for every CPU mapping the pmap tracks: the kernel's own mapping and each
  * client view. The views did not get the cache mode their mapping asked for (int-070: Turnip's write-combine view left IB words in a CPU
  * cache line), but they do take the page's own attribute. That is the Linux msm model for its WC BOs: CPU writes reach DRAM, the GPU's
@@ -137,7 +146,8 @@ IOReturn NativeAdrenoMaintainPhysicalPages(uint64_t physical, size_t bytes, Nati
  * Before the pages go back to the VM they get the default attribute again. */
 IOReturn NativeAdrenoSetPagesCacheMode(const NativeAdrenoPhysicalSpan *spans, size_t count, bool write_combined)
 {
-    if (!spans || !count) return kIOReturnBadArgument;
+    if (!spans || !count)
+        return kIOReturnBadArgument;
     uint64_t pages = 0;
     for (size_t i = 0; i < count; ++i) {
         const NativeAdrenoPhysicalSpan &span = spans[i];
@@ -156,9 +166,11 @@ IOReturn NativeAdrenoSetPagesCacheMode(const NativeAdrenoPhysicalSpan *spans, si
         __atomic_fetch_sub(&native_adreno_cache_stats[4], pages, __ATOMIC_RELAXED);
     return kIOReturnSuccess;
 }
+
 IOReturn NativeAdrenoReassertWriteCombined(const NativeAdrenoPhysicalSpan *spans, size_t count, uint32_t *reset)
 {
-    if (!spans || !count || !reset) return kIOReturnBadArgument;
+    if (!spans || !count || !reset)
+        return kIOReturnBadArgument;
     const uint64_t began = mach_absolute_time();
     for (size_t i = 0; i < count; ++i) {
         const NativeAdrenoPhysicalSpan &span = spans[i];

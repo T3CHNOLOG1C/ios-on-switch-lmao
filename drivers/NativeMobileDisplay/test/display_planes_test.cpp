@@ -30,13 +30,16 @@ __attribute__((format(printf, 1, 2))) std::string format(const char *f, ...)
     va_end(ap);
     return text;
 }
+
 // A GoogleTest failure at this line, described printf-style; the test goes on.
-#define CHECK(cond, ...)                                   \
-    do {                                                   \
-        if (!(cond)) ADD_FAILURE() << format(__VA_ARGS__); \
+#define CHECK(cond, ...)                          \
+    do {                                          \
+        if (!(cond))                              \
+            ADD_FAILURE() << format(__VA_ARGS__); \
     } while (0)
 
 uint64_t rng = 0x9e3779b97f4a7c15ull;
+
 uint32_t rnd(uint32_t n)
 {
     rng ^= rng << 13;
@@ -44,7 +47,9 @@ uint32_t rnd(uint32_t n)
     rng ^= rng << 17;
     return n ? (uint32_t)(rng % n) : 0;
 }
+
 constexpr uint32_t W = 720, H = 1280;
+
 uint32_t roundUp(uint32_t v, uint32_t a)
 {
     return (v + a - 1) / a * a;
@@ -73,6 +78,7 @@ Surface makeSurface(Kind kind, uint32_t width, uint32_t height)
     s.descriptorBytes = (s.allocation + 16383) & ~16383ull;
     return s;
 }
+
 Layer uiLayer()
 {
     Layer l;
@@ -94,7 +100,8 @@ Layer randomDetached()
     l.surface = makeSurface(l.kind, sw, sh);
     int32_t w = 1 + (int32_t)rnd(limits.maxSrcRectWidth < sw ? limits.maxSrcRectWidth : sw);
     int32_t h = 1 + (int32_t)rnd(sh);
-    while ((uint64_t)w * (uint64_t)h > limits.maxSrcRectTotal) h = h / 2 + 1;
+    while ((uint64_t)w * (uint64_t)h > limits.maxSrcRectTotal)
+        h = h / 2 + 1;
     l.src = {(int32_t)rnd(sw - (uint32_t)w + 1), (int32_t)rnd(sh - (uint32_t)h + 1), w, h};
     // dst in [ceil(src/4), src*4], kept inside 13-bit window coordinates
     auto pick = [](int32_t s) {
@@ -137,11 +144,13 @@ void testAcceptance()
               "swap within the limits refused (reason %u): kind %d src %d,%d %dx%d of %ux%u dst %d,%d %dx%d", why,
               d.kind, d.src.x, d.src.y, d.src.w, d.src.h, d.surface.width, d.surface.height, d.dst.x, d.dst.y, d.dst.w,
               d.dst.h);
-        if (why) continue;
+        if (why)
+            continue;
         ++accepted;
         Image image;
         CHECK(imageOf(d, W, H, image), "accepted layer has no window image");
-        if (!image.visible) continue;
+        if (!image.visible)
+            continue;
         ++visible;
         // The window's registers stay in their fields and the read range inside the surface.
         const uint32_t px = image.position & 0xffff, py = image.position >> 16, dw = image.size & 0xffff,
@@ -284,6 +293,7 @@ void testCsc()
     struct Std {
         double kr, kb;
     } const stds[2] = {{0.299, 0.114}, {0.2126, 0.0722}};
+
     for (unsigned s = 0; s < 2; ++s)
         for (unsigned full = 0; full < 2; ++full) {
             const double kg = 1 - stds[s].kr - stds[s].kb, cy = full ? 1.0 : 255.0 / 219, cc = full ? 1.0 : 255.0 / 224;
@@ -298,7 +308,8 @@ void testCsc()
             const unsigned bits[8] = {8, 10, 11, 11, 10, 10, 11, 11};
             for (unsigned i = 0; i < 8; ++i) {
                 int32_t v = (int32_t)kCsc[s][full][i];
-                if (v & (1 << (bits[i] - 1)) && i != 1) v -= 1 << bits[i];  // KYRGB is unsigned
+                if (v & (1 << (bits[i] - 1)) && i != 1)
+                    v -= 1 << bits[i];  // KYRGB is unsigned
                 const double got = i ? v / 256.0 : (double)v;
                 CHECK(std::fabs(got - want[i]) <= (i ? 0.5 / 256 + 1e-9 : 0.5), "csc %u/%u[%u] %f want %f", s, full, i,
                       got, want[i]);
@@ -339,6 +350,7 @@ void testRoles()
 struct WindowModel {
     int assembly = PlaneLatch::kOff, arm = PlaneLatch::kOff, active = PlaneLatch::kOff;
     bool request = false;
+
     void boundary()
     {
         if (request) {
@@ -347,6 +359,7 @@ struct WindowModel {
         }
     }
 };
+
 void testLatch()
 {
     unsigned latches = 0, holds = 0;
@@ -379,9 +392,11 @@ void testLatch()
                 }
                 latch.write(set);
                 dc.assembly = set;
-                if (rnd(3) == 0) dc.boundary();  // between the registers and UPDATE
+                if (rnd(3) == 0)
+                    dc.boundary();  // between the registers and UPDATE
                 dc.arm = dc.assembly;
-                if (rnd(3) == 0) dc.boundary();  // between UPDATE and ACT_REQ
+                if (rnd(3) == 0)
+                    dc.boundary();  // between UPDATE and ACT_REQ
                 dc.request = true;
             }
             // Safety: whatever the window scans now, or may take at the next boundary, is busy.
@@ -399,22 +414,27 @@ TEST(DisplayPlanes, AcceptanceWithinThePublishedLimits)
 {
     testAcceptance();
 }
+
 TEST(DisplayPlanes, RefusalsForTheirReason)
 {
     testRefusals();
 }
+
 TEST(DisplayPlanes, WindowBImageAgainstDrmTegra)
 {
     testImage();
 }
+
 TEST(DisplayPlanes, CscAgainstFloatConversions)
 {
     testCsc();
 }
+
 TEST(DisplayPlanes, LayerRoles)
 {
     testRoles();
 }
+
 TEST(DisplayPlanes, LatchAgainstDcAModel)
 {
     testLatch();

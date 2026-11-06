@@ -40,9 +40,11 @@ int switch_watchdog_publish(void)
         return -1;
     }
     void *handle = OSMetaClass::preModLoad(g_kernel_kmod_info.name);
-    if (!handle) return -1;
+    if (!handle)
+        return -1;
     switch_watchdog_static_init();
-    if (OSMetaClass::postModLoad(handle)) return -1;
+    if (OSMetaClass::postModLoad(handle))
+        return -1;
     IOService *provider = IOService::getResourceService();
     IOService *watchdog = switch_watchdog_allocate();
     if (!provider || !watchdog || !watchdog->init() || !watchdog->attach(provider)) {
@@ -61,7 +63,8 @@ int switch_watchdog_publish(void)
         __atomic_store_n(&watchdog_ready, 1, __ATOMIC_RELEASE);
         return 0;
     }
-    if (attached) pmu->detach(provider);
+    if (attached)
+        pmu->detach(provider);
     OSSafeReleaseNULL(pmu);
     IOLog("SwitchWatchdog: NativeSwitchPMU did not start: watchdogd stays disabled\n");
     return -1;

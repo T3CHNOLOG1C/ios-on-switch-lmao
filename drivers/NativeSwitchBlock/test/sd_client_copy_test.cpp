@@ -27,17 +27,20 @@ struct Run {
     addr64_t pa;
     IOByteCount bytes;
 };
+
 struct Memory {
     std::vector<Run> runs;
     int missingAt = -1;  // run index getPhysicalSegment pretends is not there
     unsigned lookups = 0;
+
     addr64_t getPhysicalSegment(IOByteCount offset, IOByteCount *length, uint32_t options)
     {
         REQUIRE(options == kIOMemoryMapperNone);
         ++lookups;
         for (size_t i = 0; i < runs.size(); ++i) {
             if (offset < runs[i].bytes) {
-                if ((int)i == missingAt) break;
+                if ((int)i == missingAt)
+                    break;
                 *length = runs[i].bytes - offset;
                 return runs[i].pa + offset;
             }
@@ -53,20 +56,24 @@ struct Call {
     unsigned size;
     int which;
 };
+
 static std::vector<Call> calls;
 static int failAt = -1;
 
 static int fakeCopypv(addr64_t source, addr64_t sink, unsigned size, int which)
 {
     calls.push_back({source, sink, size, which});
-    if ((int)calls.size() - 1 == failAt) return 5;  // KERN_FAILURE-ish
+    if ((int)calls.size() - 1 == failAt)
+        return 5;  // KERN_FAILURE-ish
     // Exactly one side physical, the other a kernel virtual address (copypv's own rule).
     REQUIRE(((which & cppvPsrc) != 0) != ((which & cppvPsnk) != 0));
     REQUIRE(which & cppvKmap);
     uint8_t *src = (which & cppvPsrc) ? &phys.at(source - kBase) : reinterpret_cast<uint8_t *>(source);
     uint8_t *dst = (which & cppvPsnk) ? &phys.at(sink - kBase) : reinterpret_cast<uint8_t *>(sink);
-    if (which & cppvPsrc) REQUIRE(source - kBase + size <= phys.size());
-    if (which & cppvPsnk) REQUIRE(sink - kBase + size <= phys.size());
+    if (which & cppvPsrc)
+        REQUIRE(source - kBase + size <= phys.size());
+    if (which & cppvPsnk)
+        REQUIRE(sink - kBase + size <= phys.size());
     memcpy(dst, src, size);
     return 0;
 }
@@ -92,10 +99,12 @@ static void reset()
 
 // The bounce buffer of a request that ends inside scattered()'s last run, holding a pattern.
 constexpr uint32_t length = 0x4000 + 0x200 + 0x4000 + 0x3e00 + 0x1000;
+
 static std::vector<uint8_t> bounceBuffer()
 {
     std::vector<uint8_t> bounce(length + 64, 0);
-    for (uint32_t i = 0; i < length; ++i) bounce[i] = static_cast<uint8_t>(i * 7 + (i >> 9));
+    for (uint32_t i = 0; i < length; ++i)
+        bounce[i] = static_cast<uint8_t>(i * 7 + (i >> 9));
     return bounce;
 }
 
@@ -120,9 +129,11 @@ TEST(SdClientCopy, CardReadAndWriteWalkEverySegmentWithoutTheFlush)
     for (const ::Run &r : m.runs) {  // (::Run: inside a TEST, Run names testing::Test::Run)
         const uint64_t take = std::min<uint64_t>(r.bytes, length - offset);
         REQUIRE(!memcmp(&phys[r.pa - kBase], bounce.data() + offset, take));
-        if (take < r.bytes) REQUIRE(phys[r.pa - kBase + take] == 0xee);  // not one byte past the request
+        if (take < r.bytes)
+            REQUIRE(phys[r.pa - kBase + take] == 0xee);  // not one byte past the request
         offset += take;
-        if (offset == length) break;
+        if (offset == length)
+            break;
     }
 
     // A card write: client -> bounce, the same walk the other way.
@@ -201,6 +212,7 @@ struct Request {
     uint64_t lba;
     uint32_t sectors;
 };
+
 struct Stage {
     const Request *request;
     uint32_t offset;
@@ -237,8 +249,9 @@ TEST(SdClientCopy, ChainWindows)
     staged2.clear();
     REQUIRE(!switchChainCopy(&a, 4096, 25 * 512, window, record));
     unsigned stages = 0;
-    REQUIRE(!switchChainCopy(&a, 0, 25 * 512, window,
-                               [&](Request *, uint32_t, uint8_t *, uint32_t) { return ++stages < 2; }));
+    REQUIRE(!switchChainCopy(&a, 0, 25 * 512, window, [&](Request *, uint32_t, uint8_t *, uint32_t) {
+        return ++stages < 2;
+    }));
     REQUIRE(stages == 2);
 }
 

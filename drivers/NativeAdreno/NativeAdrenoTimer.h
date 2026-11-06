@@ -16,11 +16,16 @@
  * power, reset or window discovery. Reads retry while the high word changes,
  * so a counter rollover cannot return a torn value; exceeding the retry bound
  * is an error. A failed read reports an I/O error and never fabricates ticks. */
-enum NativeAdrenoTimeSource { NativeAdrenoTimeGmu = 0, NativeAdrenoTimeCp = 1 };
+enum NativeAdrenoTimeSource {
+    NativeAdrenoTimeGmu = 0,
+    NativeAdrenoTimeCp = 1
+};
+
 struct NativeAdrenoTimeIo {
     void *cookie;
     int (*read32)(void *, uint32_t address, uint32_t *value);
 };
+
 class NativeAdrenoTimer final {
     NativeAdrenoTimeIo io_{};
     uint32_t source_ = NativeAdrenoTimeGmu;

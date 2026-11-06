@@ -16,9 +16,11 @@
             return 1;                                                                               \
         }                                                                                           \
     } while (0)
+
 int main(int argc, char **argv)
 {
-    if (argc != 4) return 2;
+    if (argc != 4)
+        return 2;
     const bool produce = !std::strcmp(argv[3], "produce"), consume = !std::strcmp(argv[3], "consume"),
                uuid = !std::strcmp(argv[3], "uuid-miss"), cold = !std::strcmp(argv[3], "cold-miss");
     REQUIRE(produce || consume || uuid || cold);
@@ -44,11 +46,13 @@ int main(int argc, char **argv)
     graphics(g);
     if (cold || uuid) {
         REQUIRE(!device && c[2] > 0);
-        if (uuid) REQUIRE(g[5] > 0);
+        if (uuid)
+            REQUIRE(g[5] > 0);
     } else {
         REQUIRE(device && c[0] && c[1] == c[0] && !c[2] && c[3] == c[0] && g[0] && g[1] == g[0] && !g[2] &&
                 g[3] == g[0]);
-        if (consume) REQUIRE(c[4] == c[0] && g[4] == g[0]);
+        if (consume)
+            REQUIRE(c[4] == c[0] && g[4] == g[0]);
         nmb_device_release(device);
     }
     REQUIRE(live() == 0);

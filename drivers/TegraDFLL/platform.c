@@ -113,6 +113,7 @@ static u32 rd(volatile u8 *base, u32 off)
 {
 	return *(volatile u32 *)(base + off);
 }
+
 static void wr(volatile u8 *base, u32 off, u32 v)
 {
 	__asm__ __volatile__("dmb oshst" ::: "memory");
@@ -123,6 +124,7 @@ static void wr(volatile u8 *base, u32 off, u32 v)
 }
 
 static int fail(char *why, size_t len, int err, const char *fmt, ...) __printf(4, 5);
+
 static int fail(char *why, size_t len, int err, const char *fmt, ...)
 {
 	va_list ap;
@@ -412,6 +414,7 @@ struct cl_dvfs_clk {
 	struct clk_hw hw;
 	u32 source;
 };
+
 static unsigned int cl_dvfs_gate_refcnt;
 
 static int cl_dvfs_enable(struct clk_hw *hw)
@@ -656,9 +659,10 @@ int tdfll_platform_resume(char *why, size_t len)
 	wr(car, CLK_SOURCE_DFLL_REF, (SRC_PLLP << 30) | DFLL_SRC_51MHZ);
 	udelay(2);
 	if (!i2c5_running() || !i2c5_recalc(&i2c5_hw, 0))
-		return fail(why, len, -ENODEV,
-			    "I2C5 is not clocked after SC7 (CLK_SOURCE_I2C5 %#x, CLK_OUT_ENB_H %#x)",
-			    rd(car, CLK_SOURCE_I2C5), rd(car, CLK_OUT_ENB_H));
+		return fail(
+			why, len, -ENODEV,
+			"I2C5 is not clocked after SC7 (CLK_SOURCE_I2C5 %#x, CLK_OUT_ENB_H %#x)",
+			rd(car, CLK_SOURCE_I2C5), rd(car, CLK_OUT_ENB_H));
 	return 0;
 }
 

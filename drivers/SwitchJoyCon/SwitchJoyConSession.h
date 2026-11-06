@@ -58,13 +58,15 @@ struct switch_joycon_session {
 static inline enum switch_joycon_session_event
 switch_joycon_session_open(struct switch_joycon_session *session, uintptr_t client, int32_t pid, bool backboardd)
 {
-    if (!client || !backboardd || session->ended) return kSwitchJoyConSessionNone;
+    if (!client || !backboardd || session->ended)
+        return kSwitchJoyConSessionNone;
     if (!session->client) {
         session->client = client;
         session->pid = pid;
         return kSwitchJoyConSessionNone;
     }
-    if (pid == session->pid) return kSwitchJoyConSessionNone;  // another client in the same backboardd
+    if (pid == session->pid)
+        return kSwitchJoyConSessionNone;  // another client in the same backboardd
     session->ended = true;
     return kSwitchJoyConSessionReplaced;
 }
@@ -73,7 +75,8 @@ switch_joycon_session_open(struct switch_joycon_session *session, uintptr_t clie
 static inline enum switch_joycon_session_event switch_joycon_session_close(struct switch_joycon_session *session,
                                                                            uintptr_t client)
 {
-    if (!client || session->ended || client != session->client) return kSwitchJoyConSessionNone;
+    if (!client || session->ended || client != session->client)
+        return kSwitchJoyConSessionNone;
     session->ended = true;
     return kSwitchJoyConSessionClosed;
 }
@@ -82,7 +85,9 @@ static inline enum switch_joycon_session_event switch_joycon_session_close(struc
 // pid, so republishing for each one is fine however often it comes; two sessions ended by the same backboardd within
 // kSwitchJoyConRepublishGapMS of each other would be a plugin that drops every new device, which republishing would
 // only feed.
-enum { kSwitchJoyConRepublishGapMS = 10000 };
+enum {
+    kSwitchJoyConRepublishGapMS = 10000
+};
 
 struct switch_joycon_republish_guard {
     uint64_t at;  // ms of the last republish, 0 if none
@@ -93,7 +98,8 @@ struct switch_joycon_republish_guard {
 static inline bool switch_joycon_republish_allowed(struct switch_joycon_republish_guard *guard, int32_t pid,
                                                    uint64_t now_ms)
 {
-    if (guard->at && guard->pid == pid && now_ms - guard->at < kSwitchJoyConRepublishGapMS) return false;
+    if (guard->at && guard->pid == pid && now_ms - guard->at < kSwitchJoyConRepublishGapMS)
+        return false;
     guard->at = now_ms ? now_ms : 1;
     guard->pid = pid;
     return true;

@@ -18,7 +18,8 @@
 inline uint32_t switchSdBits(const uint8_t *reg, unsigned bits, unsigned hi, unsigned lo)
 {
     uint32_t value = 0;
-    for (unsigned bit = hi + 1; bit-- > lo;) value = value << 1 | ((reg[(bits - 1 - bit) / 8] >> (bit % 8)) & 1u);
+    for (unsigned bit = hi + 1; bit-- > lo;)
+        value = value << 1 | ((reg[(bits - 1 - bit) / 8] >> (bit % 8)) & 1u);
     return value;
 }
 
@@ -46,11 +47,14 @@ struct SwitchSdCid {
 inline SwitchSdCid switchSdParseCid(const uint8_t cid[16])
 {
     SwitchSdCid c = {};
-    const auto printable = [](uint32_t ch) { return static_cast<char>(ch >= 0x20 && ch < 0x7f ? ch : '?'); };
+    const auto printable = [](uint32_t ch) {
+        return static_cast<char>(ch >= 0x20 && ch < 0x7f ? ch : '?');
+    };
     c.mid = static_cast<uint8_t>(switchSdBits(cid, 128, 127, 120));
     c.oid[0] = printable(switchSdBits(cid, 128, 119, 112));
     c.oid[1] = printable(switchSdBits(cid, 128, 111, 104));
-    for (unsigned i = 0; i < 5; ++i) c.pnm[i] = printable(switchSdBits(cid, 128, 103 - 8 * i, 96 - 8 * i));
+    for (unsigned i = 0; i < 5; ++i)
+        c.pnm[i] = printable(switchSdBits(cid, 128, 103 - 8 * i, 96 - 8 * i));
     c.prv = static_cast<uint8_t>(switchSdBits(cid, 128, 63, 56));
     c.psn = switchSdBits(cid, 128, 55, 24);
     c.year = static_cast<uint16_t>(2000 + switchSdBits(cid, 128, 19, 12));
@@ -62,22 +66,38 @@ inline SwitchSdCid switchSdParseCid(const uint8_t cid[16])
 inline const char *switchSdMaker(uint8_t mid)
 {
     switch (mid) {
-    case 0x01: return "Panasonic";
-    case 0x02: return "Toshiba/Kioxia";
-    case 0x03: return "SanDisk";
-    case 0x1b: return "Samsung";
-    case 0x1d: return "ADATA";
-    case 0x27: return "Phison";
-    case 0x28: return "Lexar";
-    case 0x31: return "Silicon Power";
-    case 0x41: return "Kingston";
-    case 0x6f: return "STEC";
-    case 0x74: return "Transcend";
-    case 0x76: return "Patriot";
-    case 0x82: return "Sony";
-    case 0x9c: return "Angelbird";
-    case 0xad: return "Longsys";
-    default: return nullptr;
+    case 0x01:
+        return "Panasonic";
+    case 0x02:
+        return "Toshiba/Kioxia";
+    case 0x03:
+        return "SanDisk";
+    case 0x1b:
+        return "Samsung";
+    case 0x1d:
+        return "ADATA";
+    case 0x27:
+        return "Phison";
+    case 0x28:
+        return "Lexar";
+    case 0x31:
+        return "Silicon Power";
+    case 0x41:
+        return "Kingston";
+    case 0x6f:
+        return "STEC";
+    case 0x74:
+        return "Transcend";
+    case 0x76:
+        return "Patriot";
+    case 0x82:
+        return "Sony";
+    case 0x9c:
+        return "Angelbird";
+    case 0xad:
+        return "Longsys";
+    default:
+        return nullptr;
     }
 }
 
@@ -165,6 +185,7 @@ inline uint32_t switchSdExtArgument(uint8_t fno, uint32_t address, uint32_t leng
 {
     return static_cast<uint32_t>(fno & 0xf) << 27 | (address & 0x1ffff) << 9 | ((length - 1) & 0x1ff);
 }
+
 // Whether [address, address + length) is a valid single-page access.
 inline bool switchSdExtRange(uint32_t address, uint32_t length)
 {
@@ -176,17 +197,19 @@ struct SwitchSdExtFunction {
     uint8_t fno;
     uint32_t address;  // linear: page * 512 + offset
 };
+
 struct SwitchSdGeneralInfo {
     uint16_t revision, length;
     uint8_t extensions;
     SwitchSdExtFunction power, perf;  // Standard Function Codes 1 and 2
-    const char *why;                    // nullptr, or why the layout is not one this parser trusts
+    const char *why;                  // nullptr, or why the layout is not one this parser trusts
 };
 
 inline uint16_t switchLe16(const uint8_t *p)
 {
     return static_cast<uint16_t>(p[0] | p[1] << 8);
 }
+
 inline uint32_t switchLe32(const uint8_t *p)
 {
     return p[0] | static_cast<uint32_t>(p[1]) << 8 | static_cast<uint32_t>(p[2]) << 16 |
@@ -203,22 +226,30 @@ inline SwitchSdGeneralInfo switchSdParseGeneralInfo(const uint8_t *info, uint32_
     g.revision = switchLe16(info);
     g.length = switchLe16(info + 2);
     g.extensions = info[4];
-    if (g.revision != 0) return g.why = "general information revision not 0", g;
-    if (g.length > 1024 || g.length < 16) return g.why = "general information length out of range", g;
-    if (g.length > available) return g.why = "general information continues on page 1", g;
+    if (g.revision != 0)
+        return g.why = "general information revision not 0", g;
+    if (g.length > 1024 || g.length < 16)
+        return g.why = "general information length out of range", g;
+    if (g.length > available)
+        return g.why = "general information continues on page 1", g;
     uint32_t ext = 16;
     for (unsigned i = 0; i < g.extensions; ++i) {
-        if (ext + 48 > g.length) return g.why = "an extension runs past the general information", g;
+        if (ext + 48 > g.length)
+            return g.why = "an extension runs past the general information", g;
         const uint16_t sfc = switchLe16(info + ext);
         const uint32_t next = switchLe16(info + ext + 40) & 0x3ff;
         if (info[ext + 42] == 1) {
             const uint32_t set = switchLe32(info + ext + 44);
             SwitchSdExtFunction f = {true, static_cast<uint8_t>(set >> 18 & 0xf), set & 0x1ffff};
-            if (sfc == 1 && !g.power.found) g.power = f;
-            if (sfc == 2 && !g.perf.found) g.perf = f;
+            if (sfc == 1 && !g.power.found)
+                g.power = f;
+            if (sfc == 2 && !g.perf.found)
+                g.perf = f;
         }
-        if (i + 1 == g.extensions) break;
-        if (next <= ext) return g.why = "an extension pointer goes backwards", g;
+        if (i + 1 == g.extensions)
+            break;
+        if (next <= ext)
+            return g.why = "an extension pointer goes backwards", g;
         ext = next;
     }
     return g;
@@ -229,6 +260,7 @@ struct SwitchSdPower {
     uint8_t revision;
     bool offNotification, sustenance, powerDown;
 };
+
 inline SwitchSdPower switchSdParsePower(const uint8_t *reg)
 {
     return {static_cast<uint8_t>(reg[0] & 0xf), (reg[1] & 0x10) != 0, (reg[1] & 0x20) != 0, (reg[1] & 0x40) != 0};
@@ -244,6 +276,7 @@ inline SwitchSdPower switchSdParsePower(const uint8_t *reg)
 // the cache first, and the latter takes CQ support only from cards that also offer the cache and Power Off Notification.
 constexpr uint32_t kSdPerfCqSupport = 6, kSdPerfCacheControl = 260, kSdPerfFlushControl = 261, kSdPerfCqControl = 262;
 constexpr uint8_t kSdCqEnable = 1, kSdCqSequential = 2, kSdCacheEnable = 1, kSdFlushCache = 1;
+
 struct SwitchSdPerf {
     uint8_t revision;
     bool fxEvent, cardMaintenance, hostMaintenance, cache;
@@ -251,6 +284,7 @@ struct SwitchSdPerf {
     uint8_t taskErrors;                                           // bytes 8-15 nonzero
     uint8_t fxEnable, maintenanceEnable, cacheEnable, cqControl;  // bytes 257, 258, 260, 262 as read
 };
+
 inline SwitchSdPerf switchSdParsePerf(const uint8_t *reg)
 {
     SwitchSdPerf p = {};
@@ -260,46 +294,62 @@ inline SwitchSdPerf switchSdParsePerf(const uint8_t *reg)
     p.hostMaintenance = (reg[2] & 2) != 0;
     p.cache = reg[4] & 1;
     p.cqDepth = static_cast<uint8_t>(reg[6] && reg[6] <= 0x1f ? reg[6] + 1 : 0);
-    for (unsigned i = 8; i < 16; ++i) p.taskErrors |= reg[i];
+    for (unsigned i = 8; i < 16; ++i)
+        p.taskErrors |= reg[i];
     p.fxEnable = reg[257];
     p.maintenanceEnable = reg[258];
     p.cacheEnable = reg[260];
     p.cqControl = reg[kSdPerfCqControl];
     return p;
 }
+
 // Where the CQ control byte is, when the whole performance register set (its first 263 bytes) sits in one page so a CMD48
 // of it and the CMD49 of byte 262 stay inside that page. 0 when it does not (the driver then leaves CQ alone).
 inline uint32_t switchSdCqControlAddress(const SwitchSdExtFunction &perf)
 {
-    if (!perf.found || !switchSdExtRange(perf.address, kSdPerfCqControl + 1)) return 0;
+    if (!perf.found || !switchSdExtRange(perf.address, kSdPerfCqControl + 1))
+        return 0;
     return perf.address + kSdPerfCqControl;
 }
+
 // r16-sdcq: the host bytes the driver writes (SwitchCq.h): Cache Enable, Flush Cache and the CQ control byte, and
 // only these values. 0 for any other byte or value (the driver panics on 0 before a command is built), else the byte's
 // address under the same one-page rule as the CQ control byte (they are its neighbours).
 inline uint32_t switchSdPerfWriteAddress(const SwitchSdExtFunction &perf, uint32_t byte, uint8_t value)
 {
     const uint32_t cq = switchSdCqControlAddress(perf);
-    if (!cq) return 0;
+    if (!cq)
+        return 0;
     switch (byte) {
-    case kSdPerfCacheControl: return value == 0 || value == kSdCacheEnable ? cq - 2 : 0;
-    case kSdPerfFlushControl: return value == kSdFlushCache ? cq - 1 : 0;
-    case kSdPerfCqControl: return value == 0 || value == (kSdCqEnable | kSdCqSequential) ? cq : 0;
-    default: return 0;
+    case kSdPerfCacheControl:
+        return value == 0 || value == kSdCacheEnable ? cq - 2 : 0;
+    case kSdPerfFlushControl:
+        return value == kSdFlushCache ? cq - 1 : 0;
+    case kSdPerfCqControl:
+        return value == 0 || value == (kSdCqEnable | kSdCqSequential) ? cq : 0;
+    default:
+        return 0;
     }
 }
+
 // What a read-back of the CQ control byte says, for the one line a failed enable leaves: whether the enable bit or the
 // mode bit (or reserved bits) did not take.
 inline const char *switchSdCqControlMeaning(uint8_t value)
 {
-    if (value & 0xfc) return "reserved bits set";
+    if (value & 0xfc)
+        return "reserved bits set";
     switch (value & 3) {
-    case 0: return "the queue stays disabled";
-    case 1: return "enabled in voluntary mode: the card did not take sequential mode";
-    case 2: return "sequential mode set but the queue disabled";
-    default: return "enabled, sequential";
+    case 0:
+        return "the queue stays disabled";
+    case 1:
+        return "enabled in voluntary mode: the card did not take sequential mode";
+    case 2:
+        return "sequential mode set but the queue disabled";
+    default:
+        return "enabled, sequential";
     }
 }
+
 // r18-sdcq: the error and event bits set in an R1 card status (Table 4-42), by name, for the queue's error lines: "-" when
 // none. COM_CRC and ILLEGAL (clear condition B) describe the command before the one whose response carries them.
 inline void switchSdR1ErrorNames(uint32_t r1, char *out, unsigned long size)
@@ -312,15 +362,21 @@ inline void switchSdR1ErrorNames(uint32_t r1, char *out, unsigned long size)
         {1u << 27, "ERASE_PARAM"},  {1u << 26, "WP"},          {1u << 24, "LOCK"},      {1u << 23, "COM_CRC"},
         {1u << 22, "ILLEGAL"},      {1u << 21, "ECC"},         {1u << 20, "CC"},        {1u << 19, "ERROR"},
         {1u << 16, "CSD_OW"},       {1u << 13, "ERASE_RESET"}, {1u << 6, "FX_EVENT"},   {1u << 3, "AKE_SEQ"}};
-    if (!size) return;
+
+    if (!size)
+        return;
     unsigned long at = 0;
     out[0] = 0;
     for (const auto &b : kBits) {
-        if (!(r1 & b.bit)) continue;
-        for (const char *c = at ? "|" : ""; *c && at + 1 < size; ++c) out[at++] = *c;
-        for (const char *c = b.name; *c && at + 1 < size; ++c) out[at++] = *c;
+        if (!(r1 & b.bit))
+            continue;
+        for (const char *c = at ? "|" : ""; *c && at + 1 < size; ++c)
+            out[at++] = *c;
+        for (const char *c = b.name; *c && at + 1 < size; ++c)
+            out[at++] = *c;
     }
-    if (!at && size > 1) out[at++] = '-';
+    if (!at && size > 1)
+        out[at++] = '-';
     out[at] = 0;
 }
 
@@ -360,15 +416,19 @@ inline uint32_t switchSdCmd44(bool read, uint8_t task, uint32_t blocks)
 {
     return (read ? 1u << 30 : 0u) | static_cast<uint32_t>(task & 0x1f) << 16 | (blocks & 0xffff);
 }
+
 inline uint32_t switchSdTaskArgument(uint8_t task)
 {
     return static_cast<uint32_t>(task & 0x1f) << 16;
 }
+
 constexpr uint32_t kSdAbortQueue = 1, kSdAbortTask = 2;
+
 inline uint32_t switchSdCmd43(uint32_t operation, uint8_t task)
 {
     return static_cast<uint32_t>(task & 0x1f) << 16 | (operation & 0xf);
 }
+
 // CMD46 of a read task: no Auto CMD12 or CMD23, the block count was given in CMD44; the card sends that many blocks
 // (4.19.7) and the host stops after BLOCK_COUNT of them.
 inline SwitchSdFrame switchSdTaskFrame(uint32_t sectors)

@@ -21,6 +21,7 @@ struct switch_sd_reference {
     uint32_t crc32;
     uint8_t sector[512];
 };
+
 /* Version2 reference pages additionally carry a checked snapshot of the
  * active pinned firmware's SD descriptor. Pointers are provenance only;
  * neither this validator nor the kernel dereferences them. */
@@ -29,6 +30,7 @@ struct switch_sd_card {
     uint32_t ocr, rca, version;
     uint32_t csd[4], cid[4];
 };
+
 enum switch_sd_reference_error {
     SWITCH_SD_REF_OK = 0,
     SWITCH_SD_REF_ARGUMENT = 1,
@@ -38,12 +40,13 @@ enum switch_sd_reference_error {
     SWITCH_SD_REF_CHANGED = 5,
     SWITCH_SD_REF_CARD = 6
 };
+
 uint32_t switch_sd_crc32(const uint8_t *, uint32_t);
 /* No MMIO and no writes to the page. Output changes only on full success. */
 int switch_sd_reference_validate(const volatile uint8_t *page, uint32_t bytes, uint32_t expected_commit,
-                               struct switch_sd_reference *output);
+                                 struct switch_sd_reference *output);
 /* Explicit version2-only entry. Both outputs change only after the complete
  * sector and card evidence pass. Legacy version1 cannot qualify block reads. */
 int switch_sd_card_reference_validate(const volatile uint8_t *page, uint32_t bytes, uint32_t expected_commit,
-                                    struct switch_sd_reference *output, struct switch_sd_card *card);
+                                      struct switch_sd_reference *output, struct switch_sd_card *card);
 #endif

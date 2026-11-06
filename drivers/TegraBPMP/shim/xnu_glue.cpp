@@ -31,22 +31,26 @@ extern "C" int cpu_number(void);
 namespace
 {
 constexpr vm_offset_t kLicPA = 0x60004000;
+
 enum : uint32_t {
 	ICTLR_CPU_IEP_FIR = 0x14,
 	ICTLR_CPU_IEP_FIR_SET = 0x18,
 	ICTLR_CPU_IEP_FIR_CLR = 0x1c,
 	ICTLR_CPU_IER = 0x20
 };
+
 constexpr unsigned kDoorbells = 4;
 constexpr uint32_t kInboundSpi[kDoorbells] = {4, 5, 7, 18};
 constexpr uint32_t kOutboundBit = 6;
 constexpr unsigned kOutboundDoorbell = 4;  // mail_t210.c CPU_OB_DOORBELL
 
 volatile uint8_t *gLic;
+
 struct Doorbell {
 	void (*handler)(void *data);
 	void *data;
 };
+
 Doorbell gDoorbells[kDoorbells];
 
 volatile uint8_t *lic()
@@ -55,10 +59,12 @@ volatile uint8_t *lic()
 		gLic = reinterpret_cast<volatile uint8_t *>(ml_io_map(kLicPA, 0x1000));
 	return gLic;
 }
+
 inline uint32_t licRead(uint32_t offset)
 {
 	return *reinterpret_cast<volatile uint32_t *>(lic() + offset);
 }
+
 inline void licWrite(uint32_t offset, uint32_t value)
 {
 	*reinterpret_cast<volatile uint32_t *>(lic() + offset) = value;
@@ -222,14 +228,17 @@ void *bpxnu_spin_alloc(void)
 {
 	return IOSimpleLockAlloc();
 }
+
 void bpxnu_spin_free(void *lock)
 {
 	IOSimpleLockFree(static_cast<IOSimpleLock *>(lock));
 }
+
 void bpxnu_spin_lock(void *lock)
 {
 	IOSimpleLockLock(static_cast<IOSimpleLock *>(lock));
 }
+
 void bpxnu_spin_unlock(void *lock)
 {
 	IOSimpleLockUnlock(static_cast<IOSimpleLock *>(lock));
@@ -251,6 +260,7 @@ int bpxnu_interrupts_disabled(void)
 {
 	return !ml_get_interrupts_enabled();
 }
+
 int bpxnu_cpu_number(void)
 {
 	return cpu_number();
@@ -274,6 +284,7 @@ int bpxnu_block(void)
 {
 	return thread_block(THREAD_CONTINUE_NULL) == THREAD_TIMED_OUT;
 }
+
 void bpxnu_wakeup(const void *event)
 {
 	thread_wakeup((event_t)event);

@@ -26,15 +26,18 @@ const std::string &driver()
     static const std::string source = SourceText("../NativeSwitchBlock.cpp");
     return source;
 }
+
 std::string body(const char *signature)
 {
     return Body(driver(), signature);
 }
+
 const std::string &engine()
 {
     static const std::string source = SourceText("../SwitchCq.h");
     return source;
 }
+
 // One of the engine's member functions (indented four spaces in its class).
 std::string member(const char *signature)
 {

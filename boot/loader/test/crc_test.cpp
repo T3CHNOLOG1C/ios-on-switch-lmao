@@ -28,18 +28,22 @@ std::vector<uint8_t> input()
 {
     std::mt19937 rng(7801);
     std::vector<uint8_t> data(65544);
-    for (uint8_t &b : data) b = (uint8_t)rng();
+    for (uint8_t &b : data)
+        b = (uint8_t)rng();
     return data;
 }
 
 std::vector<Sample> samples(const std::vector<uint8_t> &data)
 {
     std::vector<uint32_t> sizes;
-    for (uint32_t size = 0; size <= 16; ++size) sizes.push_back(size);
-    for (uint32_t size : {31u, 32u, 33u, 255u, 256u, 257u, 4096u, 65535u, 65536u}) sizes.push_back(size);
+    for (uint32_t size = 0; size <= 16; ++size)
+        sizes.push_back(size);
+    for (uint32_t size : {31u, 32u, 33u, 255u, 256u, 257u, 4096u, 65535u, 65536u})
+        sizes.push_back(size);
     std::vector<Sample> cases;
     for (uint32_t offset = 0; offset < 8; ++offset)
-        for (uint32_t size : sizes) cases.push_back({offset, size, (uint32_t)crc32(0, data.data() + offset, size)});
+        for (uint32_t size : sizes)
+            cases.push_back({offset, size, (uint32_t)crc32(0, data.data() + offset, size)});
     return cases;
 }
 }  // namespace
@@ -55,7 +59,8 @@ TEST(LoaderCrc32, MatchesZlibAtAllAlignmentsAndChunkBoundaries)
         uint32_t crc = UINT32_MAX;
         for (uint32_t offset = 0; offset < s.size;) {
             uint32_t size = s.size - offset;
-            if (size > 113) size = 113;
+            if (size > 113)
+                size = 113;
             crc = loader_crc32_update(crc, data.data() + s.offset + offset, size);
             offset += size;
         }

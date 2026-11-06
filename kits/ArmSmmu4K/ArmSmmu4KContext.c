@@ -1,32 +1,50 @@
 /* SPDX-License-Identifier: MIT */
 #include "ArmSmmu4KContext.h"
+
 static int width_code(unsigned bits)
 {
     switch (bits) {
-    case 32: return 0;
-    case 36: return 1;
-    case 40: return 2;
-    case 42: return 3;
-    case 44: return 4;
-    case 48: return 5;
-    default: return -1;
+    case 32:
+        return 0;
+    case 36:
+        return 1;
+    case 40:
+        return 2;
+    case 42:
+        return 3;
+    case 44:
+        return 4;
+    case 48:
+        return 5;
+    default:
+        return -1;
     }
 }
+
 static unsigned width_bits(unsigned code)
 {
     switch (code) {
-    case 0: return 32;
-    case 1: return 36;
-    case 2: return 40;
-    case 3: return 42;
-    case 4: return 44;
-    case 5: return 48;
-    default: return 0;
+    case 0:
+        return 32;
+    case 1:
+        return 36;
+    case 2:
+        return 40;
+    case 3:
+        return 42;
+    case 4:
+        return 44;
+    case 5:
+        return 48;
+    default:
+        return 0;
     }
 }
+
 static int region_valid(const ArmSmmu4KConfig *c, const ArmSmmu4KResult *r, unsigned upper)
 {
-    if (!c || !r) return !c && !r;
+    if (!c || !r)
+        return !c && !r;
     if (c->input_bits < 32 || c->input_bits > 48 || width_code(c->output_bits) < 0 || (c->table_physical & 4095) ||
         r->root_physical != c->table_physical || r->mair != 0xff44 || r->upper_region != upper || !r->table_pages ||
         r->leaf_pages > c->leaf_budget || r->table_pages > UINT64_MAX / 4096 ||
@@ -35,9 +53,11 @@ static int region_valid(const ArmSmmu4KConfig *c, const ArmSmmu4KResult *r, unsi
     uint64_t limit = UINT64_C(1) << c->output_bits;
     return r->root_physical < limit && (uint64_t)r->table_pages * 4096 <= limit - r->root_physical;
 }
+
 ArmSmmu4KStatus ArmSmmu4KEncodeContext(const ArmSmmu4KContextConfig *c, ArmSmmu4KContextImage *out)
 {
-    if (!out) return ArmSmmu4KArgument;
+    if (!out)
+        return ArmSmmu4KArgument;
     out->cbar = out->cba2r = out->tcr = out->tcr2 = out->mair0 = out->mair1 = out->sctlr = 0;
     out->reserved_zero = 0;
     out->ttbr0 = out->ttbr1 = 0;
@@ -46,7 +66,8 @@ ArmSmmu4KStatus ArmSmmu4KEncodeContext(const ArmSmmu4KContextConfig *c, ArmSmmu4
         !region_valid(c->upper, c->upper_tables, 1))
         return ArmSmmu4KArgument;
     unsigned va = width_bits((c->id2 >> 8) & 15), pa = width_bits((c->id2 >> 4) & 15);
-    if (!(c->id0 & (UINT32_C(1) << 30)) || !(c->id2 & (1u << 12)) || !va || !pa) return ArmSmmu4KUnsupported;
+    if (!(c->id0 & (UINT32_C(1) << 30)) || !(c->id2 & (1u << 12)) || !va || !pa)
+        return ArmSmmu4KUnsupported;
     const ArmSmmu4KConfig *basis = c->lower ? c->lower : c->upper;
     if (basis->output_bits > pa || (c->lower && c->lower->input_bits > va) ||
         (c->upper && (c->upper->input_bits > va || c->upper->output_bits != basis->output_bits)))
@@ -73,8 +94,10 @@ ArmSmmu4KStatus ArmSmmu4KEncodeContext(const ArmSmmu4KContextConfig *c, ArmSmmu4
     v.tcr2 = (7u << 15) | (1u << 4) | (unsigned)width_code(basis->output_bits);
     v.ttbr0 = (uint64_t)c->asid << 48;
     v.ttbr1 = v.ttbr0;
-    if (c->lower) v.ttbr0 |= c->lower_tables->root_physical;
-    if (c->upper) v.ttbr1 |= c->upper_tables->root_physical;
+    if (c->lower)
+        v.ttbr0 |= c->lower_tables->root_physical;
+    if (c->upper)
+        v.ttbr1 |= c->upper_tables->root_physical;
     v.mair0 = 0xff44;
     v.mair1 = 0;
     v.sctlr = 0x1067 | (c->stall_on_fault << 7) | (c->continue_after_fault << 8);
@@ -82,12 +105,15 @@ ArmSmmu4KStatus ArmSmmu4KEncodeContext(const ArmSmmu4KContextConfig *c, ArmSmmu4
     *out = v;
     return ArmSmmu4KSuccess;
 }
+
 ArmSmmu4KStatus ArmSmmu4KValidateContextReadback(const ArmSmmu4KContextConfig *c, const ArmSmmu4KContextImage *observed)
 {
-    if (!observed) return ArmSmmu4KArgument;
+    if (!observed)
+        return ArmSmmu4KArgument;
     ArmSmmu4KContextImage expected;
     ArmSmmu4KStatus status = ArmSmmu4KEncodeContext(c, &expected);
-    if (status != ArmSmmu4KSuccess) return status;
+    if (status != ArmSmmu4KSuccess)
+        return status;
     /* TCR2.TBI0/TBI1 (bits 5/6, top-byte ignore) are written 0 but may read 1: the sheng Adreno MMU-500 reads
      * 0x38071 for 0x38011 (int-008). Linux neither sets nor reads them back. With a 48-bit upstream bus the top
      * byte of a device address is zero, so ignoring it changes no translation. Only 0 -> 1 is accepted here. */

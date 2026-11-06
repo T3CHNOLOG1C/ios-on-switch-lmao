@@ -22,7 +22,7 @@
 constexpr uint32_t kSwitchCacheBlock = 4096;
 constexpr uint32_t kSwitchWindowBlocks = 32;  // 128 KiB: one bit per block in a uint32_t
 constexpr uint32_t kSwitchWindowBytes = kSwitchWindowBlocks * kSwitchCacheBlock;
-constexpr uint32_t kSwitchSpanWindows = 9;                          // windows a request of up to 1 MiB can touch
+constexpr uint32_t kSwitchSpanWindows = 9;                        // windows a request of up to 1 MiB can touch
 constexpr uint32_t kSwitchWindowReads = kSwitchWindowBlocks / 2;  // most separate reads one window can need
 constexpr uint32_t kSwitchAroundWindows = 2;  // windows a read-around request may touch (at most 16 blocks)
 constexpr uint64_t kSwitchNoTag = ~0ull;
@@ -37,15 +37,15 @@ struct SwitchWait {
 };
 
 struct SwitchWindow {
-    uint64_t tag;    // the window's first image block (a multiple of kSwitchWindowBlocks), kSwitchNoTag while empty
-    uint32_t valid;  // blocks holding the image's bytes
+    uint64_t tag;      // the window's first image block (a multiple of kSwitchWindowBlocks), kSwitchNoTag while empty
+    uint32_t valid;    // blocks holding the image's bytes
     uint32_t reading;  // blocks a read is filling (never valid at the same time)
     uint32_t served;   // held blocks copied to a request since the window was filled
     uint32_t ahead;    // blocks read ahead for the prefetch, not for a request
     uint32_t users;    // requests holding the window: waiting for it or copying out of it
     uint8_t image;
-    bool idle;                      // on the idle list: no users, nothing reading, reusable
-    bool retired;                   // given back to the caller (its memory freed): never used again
+    bool idle;                    // on the idle list: no users, nothing reading, reusable
+    bool retired;                 // given back to the caller (its memory freed): never used again
     SwitchWindow *older, *newer;  // the idle list
     SwitchWindow *chain;          // the hash bucket's
     SwitchWait *waits;
@@ -54,7 +54,7 @@ struct SwitchWindow {
 
 // One request's hold on the cache, from plan() until release().
 struct SwitchCacheRequest {
-    void *owner;                      // the caller's
+    void *owner;                    // the caller's
     SwitchCacheRequest *nextReady;  // finished()'s list
     SwitchWindow *window[kSwitchSpanWindows];
     uint32_t need[kSwitchSpanWindows];  // the request's blocks in each window
@@ -110,7 +110,8 @@ public:
         allCount = count;
         table = buckets;
         mask = bucketCount - 1;
-        for (uint32_t i = 0; i < bucketCount; ++i) table[i] = nullptr;
+        for (uint32_t i = 0; i < bucketCount; ++i)
+            table[i] = nullptr;
         oldest = newest = nullptr;
         liveCount = 0;
         st = {};
@@ -137,7 +138,8 @@ public:
         r->windows = r->waiting = 0;
         r->failed = false;
         r->nextReady = nullptr;
-        if (!blocks || first >= imageBlocks || blocks > imageBlocks - first) return refuse(r, 0);
+        if (!blocks || first >= imageBlocks || blocks > imageBlocks - first)
+            return refuse(r, 0);
         const uint64_t firstTag = first - first % kSwitchWindowBlocks;
         const uint64_t last = first + blocks - 1, lastTag = last - last % kSwitchWindowBlocks;
         const uint32_t n = static_cast<uint32_t>((lastTag - firstTag) / kSwitchWindowBlocks + 1);
@@ -146,13 +148,14 @@ public:
             return refuse(r, 0);
         for (uint32_t i = 0; i < n; ++i) {
             const uint64_t tag = firstTag + uint64_t(i) * kSwitchWindowBlocks;
-            const uint64_t from = first > tag ? first : tag, to = first + blocks < tag + kSwitchWindowBlocks
-                                                                      ? first + blocks
-                                                                      : tag + kSwitchWindowBlocks;
+            const uint64_t from = first > tag ? first : tag,
+                           to = first + blocks < tag + kSwitchWindowBlocks ? first + blocks : tag + kSwitchWindowBlocks;
             const uint32_t need = switchWindowMask(uint32_t(from - tag), uint32_t(to - tag));
             SwitchWindow *w = lookup(image, tag);
-            if (mode == kCoveredOnly && (!w || (need & ~(w->valid | w->reading)))) return refuse(r, i);
-            if (!w && !(w = take(image, tag))) return refuse(r, i);
+            if (mode == kCoveredOnly && (!w || (need & ~(w->valid | w->reading))))
+                return refuse(r, i);
+            if (!w && !(w = take(image, tag)))
+                return refuse(r, i);
             pin(w);
             r->window[i] = w;
             r->need[i] = need;
@@ -173,7 +176,8 @@ public:
             }
         }
         ++st.requests;
-        if (!r->waiting) ++st.ready;
+        if (!r->waiting)
+            ++st.ready;
         return true;
     }
 
@@ -185,15 +189,18 @@ public:
                        uint32_t *count)
     {
         *count = 0;
-        if (!blocks || first >= imageBlocks) return 0;
-        if (blocks > imageBlocks - first) blocks = imageBlocks - first;
+        if (!blocks || first >= imageBlocks)
+            return 0;
+        if (blocks > imageBlocks - first)
+            blocks = imageBlocks - first;
         const uint64_t tag = first - first % kSwitchWindowBlocks;
-        const uint64_t end =
-            first + blocks < tag + kSwitchWindowBlocks ? first + blocks : tag + kSwitchWindowBlocks;
+        const uint64_t end = first + blocks < tag + kSwitchWindowBlocks ? first + blocks : tag + kSwitchWindowBlocks;
         SwitchWindow *w = lookup(image, tag);
-        if (!w && !(w = take(image, tag))) return 0;
+        if (!w && !(w = take(image, tag)))
+            return 0;
         const uint32_t want = switchWindowMask(uint32_t(first - tag), uint32_t(end - tag)) & ~(w->valid | w->reading);
-        if (w->idle && want) unlinkIdle(w);  // reading from here on: not reusable until the reads finish
+        if (w->idle && want)
+            unlinkIdle(w);  // reading from here on: not reusable until the reads finish
         *count = emit(w, want, true, reads);
         makeIdleIfUnused(w);  // (a window taken for nothing goes straight back)
         return uint32_t(end - first);
@@ -255,53 +262,75 @@ public:
     // One idle window beyond `keep` live ones, taken out for the caller to free, or nullptr.
     SwitchWindow *retire(uint32_t keep)
     {
-        if (liveCount <= keep || !oldest) return nullptr;
+        if (liveCount <= keep || !oldest)
+            return nullptr;
         SwitchWindow *w = oldest;
         unlinkIdle(w);
-        if (w->tag != kSwitchNoTag) unhash(w);
+        if (w->tag != kSwitchNoTag)
+            unhash(w);
         w->tag = kSwitchNoTag;
         w->retired = true;
         --liveCount;
         return w;
     }
 
-    uint32_t live() const { return liveCount; }
-    const SwitchCacheStats &stats() const { return st; }
+    uint32_t live() const
+    {
+        return liveCount;
+    }
+
+    const SwitchCacheStats &stats() const
+    {
+        return st;
+    }
 
     // The invariants, or nullptr (for the tests).
     const char *check() const
     {
         uint32_t idle = 0, live = 0;
         for (const SwitchWindow *w = oldest, *prev = nullptr; w; prev = w, w = w->newer) {
-            if (!w->idle || w->older != prev) return "idle list broken";
-            if (++idle > allCount) return "idle list loops";
+            if (!w->idle || w->older != prev)
+                return "idle list broken";
+            if (++idle > allCount)
+                return "idle list loops";
         }
         for (uint32_t i = 0; i < allCount; ++i) {
             const SwitchWindow &w = all[i];
             if (w.retired) {
-                if (w.idle || w.users || w.reading || w.waits) return "retired window in use";
+                if (w.idle || w.users || w.reading || w.waits)
+                    return "retired window in use";
                 continue;
             }
             ++live;
-            if (w.valid & w.reading) return "a block both held and being read";
-            if (w.idle && (w.users || w.reading || w.waits)) return "idle window in use";
-            if (!w.idle && !w.users && !w.reading) return "unused window not idle";
-            if (w.tag == kSwitchNoTag && (w.valid || w.reading || w.users)) return "empty window in use";
+            if (w.valid & w.reading)
+                return "a block both held and being read";
+            if (w.idle && (w.users || w.reading || w.waits))
+                return "idle window in use";
+            if (!w.idle && !w.users && !w.reading)
+                return "unused window not idle";
+            if (w.tag == kSwitchNoTag && (w.valid || w.reading || w.users))
+                return "empty window in use";
             if (w.tag != kSwitchNoTag && (w.tag % kSwitchWindowBlocks || lookup(w.image, w.tag) != &w))
                 return "window not found by its tag";
-            if (w.served & ~w.valid) return "served block not held";
+            if (w.served & ~w.valid)
+                return "served block not held";
             uint32_t waits = 0;
             for (const SwitchWait *wait = w.waits; wait; wait = wait->next) {
-                if (!wait->need || (wait->need & ~w.reading)) return "a wait for blocks nothing is reading";
-                if (++waits > w.users) return "more waits than users";
+                if (!wait->need || (wait->need & ~w.reading))
+                    return "a wait for blocks nothing is reading";
+                if (++waits > w.users)
+                    return "more waits than users";
             }
         }
-        if (live != liveCount) return "live count";
+        if (live != liveCount)
+            return "live count";
         for (uint32_t b = 0; b <= mask; ++b)
             for (const SwitchWindow *w = table[b]; w; w = w->chain)
-                if (w->retired || w->tag == kSwitchNoTag || bucket(w->image, w->tag) != b) return "hash chain";
+                if (w->retired || w->tag == kSwitchNoTag || bucket(w->image, w->tag) != b)
+                    return "hash chain";
         uint32_t idleFlags = 0;
-        for (uint32_t i = 0; i < allCount; ++i) idleFlags += all[i].idle;
+        for (uint32_t i = 0; i < allCount; ++i)
+            idleFlags += all[i].idle;
         return idleFlags == idle ? nullptr : "idle flags";
     }
 
@@ -315,12 +344,15 @@ private:
         uint64_t h = (tag / kSwitchWindowBlocks) * 0x9e3779b97f4a7c15ull ^ (uint64_t(image) << 61);
         return static_cast<uint32_t>(h >> 32) & mask;
     }
+
     SwitchWindow *lookup(uint8_t image, uint64_t tag) const
     {
         for (SwitchWindow *w = table[bucket(image, tag)]; w; w = w->chain)
-            if (w->tag == tag && w->image == image) return w;
+            if (w->tag == tag && w->image == image)
+                return w;
         return nullptr;
     }
+
     void unhash(SwitchWindow *w)
     {
         for (SwitchWindow **link = &table[bucket(w->image, w->tag)]; *link; link = &(*link)->chain)
@@ -330,28 +362,35 @@ private:
             }
         w->chain = nullptr;
     }
+
     // The window's blocks inside an image of imageBlocks blocks.
     static uint32_t within(uint64_t tag, uint64_t imageBlocks)
     {
         return imageBlocks - tag >= kSwitchWindowBlocks ? ~0u : switchWindowMask(0, uint32_t(imageBlocks - tag));
     }
+
     void linkIdle(SwitchWindow *w, bool cold)
     {
         w->idle = true;
         if (cold) {
             w->older = nullptr;
             w->newer = oldest;
-            if (oldest) oldest->older = w;
+            if (oldest)
+                oldest->older = w;
             oldest = w;
-            if (!newest) newest = w;
+            if (!newest)
+                newest = w;
         } else {
             w->newer = nullptr;
             w->older = newest;
-            if (newest) newest->newer = w;
+            if (newest)
+                newest->newer = w;
             newest = w;
-            if (!oldest) oldest = w;
+            if (!oldest)
+                oldest = w;
         }
     }
+
     void unlinkIdle(SwitchWindow *w)
     {
         (w->older ? w->older->newer : oldest) = w->newer;
@@ -359,30 +398,38 @@ private:
         w->older = w->newer = nullptr;
         w->idle = false;
     }
+
     // Idle once nothing holds or fills it: at the cold end when nothing it holds is still unserved.
     void makeIdleIfUnused(SwitchWindow *w)
     {
-        if (w->users || w->reading || w->idle || w->retired) return;
+        if (w->users || w->reading || w->idle || w->retired)
+            return;
         linkIdle(w, !(w->valid & ~w->served));
     }
+
     void pin(SwitchWindow *w)
     {
-        if (w->idle) unlinkIdle(w);
+        if (w->idle)
+            unlinkIdle(w);
         ++w->users;
     }
+
     void unpin(SwitchWindow *w)
     {
         --w->users;
         makeIdleIfUnused(w);
     }
+
     // The least recently used idle window, emptied and named (image, tag); nullptr when every window is in use.
     SwitchWindow *take(uint8_t image, uint64_t tag)
     {
         SwitchWindow *w = oldest;
-        if (!w) return nullptr;
+        if (!w)
+            return nullptr;
         unlinkIdle(w);
         if (w->tag != kSwitchNoTag) {
-            if (w->valid & ~w->served) ++st.evicted;
+            if (w->valid & ~w->served)
+                ++st.evicted;
             unhash(w);
         }
         w->tag = tag;
@@ -394,30 +441,36 @@ private:
         table[b] = w;
         return w;
     }
+
     // The contiguous runs of `want` as reads (marked reading); returns how many.
     uint32_t emit(SwitchWindow *w, uint32_t want, bool ahead, SwitchCacheRead *reads)
     {
         uint32_t n = 0;
         w->reading |= want;
-        if (ahead) w->ahead |= want;
+        if (ahead)
+            w->ahead |= want;
         for (uint32_t b = 0; b < kSwitchWindowBlocks;) {
             if (!(want & (1u << b))) {
                 ++b;
                 continue;
             }
             uint32_t e = b;
-            while (e < kSwitchWindowBlocks && (want & (1u << e))) ++e;
+            while (e < kSwitchWindowBlocks && (want & (1u << e)))
+                ++e;
             reads[n++] = {w, b, e - b};
             st.blocksRead += e - b;
-            if (ahead) st.aheadBlocks += e - b;
+            if (ahead)
+                st.aheadBlocks += e - b;
             b = e;
         }
         st.reads += n;
         return n;
     }
+
     bool refuse(SwitchCacheRequest *r, uint32_t held)
     {
-        for (uint32_t i = 0; i < held; ++i) unpin(r->window[i]);
+        for (uint32_t i = 0; i < held; ++i)
+            unpin(r->window[i]);
         r->windows = 0;
         ++st.refused;
         return false;

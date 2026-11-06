@@ -10,6 +10,7 @@ extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
 
 namespace {
 constexpr vm_offset_t kMcPA = 0x70019000;
+
 enum : uint32_t {
     PTB_ASID = 0x1c,
     PTB_DATA = 0x20,
@@ -18,6 +19,7 @@ enum : uint32_t {
     ASID_ENABLE = 1u << 31,
     TLB_FLUSH_ASID_MATCH = 1u << 31,
 };
+
 volatile uint8_t *gMc;
 IOSimpleLock *gLock;
 tegra_smmu_attachments gAttached;  // under gLock
@@ -27,26 +29,31 @@ inline uint32_t r32(uint32_t o)
 {
     return *(volatile uint32_t *)(gMc + o);
 }
+
 inline void w32(uint32_t o, uint32_t v)
 {
     *(volatile uint32_t *)(gMc + o) = v;
 }
+
 // The registers and the lock, made by the first caller (thread context).
 bool ready()
 {
     if (!__atomic_load_n(&gLock, __ATOMIC_ACQUIRE)) {
         IOSimpleLock *fresh = IOSimpleLockAlloc(), *expected = nullptr;
-        if (!fresh) return false;
+        if (!fresh)
+            return false;
         if (!__atomic_compare_exchange_n(&gLock, &expected, fresh, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
             IOSimpleLockFree(fresh);
     }
     if (!__atomic_load_n(&gMc, __ATOMIC_ACQUIRE)) {
         volatile uint8_t *mc = (volatile uint8_t *)ml_io_map(kMcPA, 0x1000), *expected = nullptr;
-        if (!mc) return false;
+        if (!mc)
+            return false;
         __atomic_compare_exchange_n(&gMc, &expected, mc, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
     }
     return true;
 }
+
 // Lock held.
 void flushLocked(uint32_t asid)
 {
@@ -97,7 +104,8 @@ extern "C" int tegra_smmu_attach(uint32_t asid, uint32_t ptb, uint32_t asidReg, 
     {
         const tegra_smmu_attachment attachment = {asid, ptb, asidReg, translationReg, translationBits};
         ret = programLocked(attachment, line, size);
-        if (!ret && !tegra_smmu_attachments_note(&gAttached, &attachment)) gAttachedFull = true;
+        if (!ret && !tegra_smmu_attachments_note(&gAttached, &attachment))
+            gAttachedFull = true;
     }
 out:
     IOSimpleLockUnlock(gLock);
@@ -106,7 +114,8 @@ out:
 
 extern "C" void tegra_smmu_detach(uint32_t asid, uint32_t asidReg)
 {
-    if (!ready()) return;
+    if (!ready())
+        return;
     IOSimpleLockLock(gLock);
     tegra_smmu_attachments_forget(&gAttached, asidReg);
     w32(asidReg, 0);
@@ -119,7 +128,8 @@ extern "C" void tegra_smmu_detach(uint32_t asid, uint32_t asidReg)
 
 extern "C" void tegra_smmu_flush(uint32_t asid)
 {
-    if (!ready()) return;
+    if (!ready())
+        return;
     IOSimpleLockLock(gLock);
     flushLocked(asid);
     IOSimpleLockUnlock(gLock);
@@ -132,19 +142,23 @@ extern "C" uint32_t tegra_smmu_read(uint32_t offset)
 
 extern "C" int tegra_smmu_resume(void)
 {
-    if (!__atomic_load_n(&gLock, __ATOMIC_ACQUIRE) || !ready()) return 0;
+    if (!__atomic_load_n(&gLock, __ATOMIC_ACQUIRE) || !ready())
+        return 0;
     char failed[TEGRA_SMMU_ATTACHMENTS][96] = {};
     IOSimpleLockLock(gLock);
     const uint32_t count = gAttached.count;
     const bool full = gAttachedFull;
-    for (uint32_t i = 0; i < count; ++i) (void)programLocked(gAttached.entry[i], failed[i], sizeof(failed[i]));
+    for (uint32_t i = 0; i < count; ++i)
+        (void)programLocked(gAttached.entry[i], failed[i], sizeof(failed[i]));
     IOSimpleLockUnlock(gLock);
     int bad = full ? 1 : 0;
     for (uint32_t i = 0; i < count; ++i) {
-        if (!failed[i][0]) continue;
+        if (!failed[i][0])
+            continue;
         IOLog("TegraSMMU: resume: %s\n", failed[i]);
         ++bad;
     }
-    if (full) IOLog("TegraSMMU: resume: over %u swgroups were attached; one was not restored\n", TEGRA_SMMU_ATTACHMENTS);
+    if (full)
+        IOLog("TegraSMMU: resume: over %u swgroups were attached; one was not restored\n", TEGRA_SMMU_ATTACHMENTS);
     return bad;
 }

@@ -77,13 +77,21 @@ enum : uint32_t {  // clock and reset controller
     SOURCE_PLLP = 4u << 29,
     NVENC_DIV_1 = 0,  // 7.1 divider: 408 MHz * 2 / (0 + 2) = 408 MHz
 };
-enum : uint32_t { PWRGATE_TOGGLE = 0x30, REMOVE_CLAMPING = 0x34, PWRGATE_STATUS = 0x38, TOGGLE_START = 1u << 8 };
+
+enum : uint32_t {
+    PWRGATE_TOGGLE = 0x30,
+    REMOVE_CLAMPING = 0x34,
+    PWRGATE_STATUS = 0x38,
+    TOGGLE_START = 1u << 8
+};
+
 enum : uint32_t {
     MC_HOTRESET_CTRL = 0x200,
     MC_HOTRESET_NVENC = 1u << 11,
     MC_SMMU_NVENC_ASID = 0x264,
     SMMU_ENABLE = 1u << 31,
 };
+
 enum : uint32_t {  // falcon (drm/tegra/falcon.h), relative to the engine
     FALCON_IRQSTAT = 0x1008,
     FALCON_IRQMSET = 0x1010,
@@ -154,10 +162,12 @@ inline uint32_t r32(volatile uint8_t *base, uint32_t o)
 {
     return *(volatile uint32_t *)(base + o);
 }
+
 inline void w32(volatile uint8_t *base, uint32_t o, uint32_t v)
 {
     *(volatile uint32_t *)(base + o) = v;
 }
+
 inline uint32_t le32(const uint8_t *p)
 {
     return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
@@ -166,7 +176,8 @@ inline uint32_t le32(const uint8_t *p)
 bool waitBits(volatile uint8_t *base, uint32_t o, uint32_t mask, uint32_t value, uint32_t us)
 {
     for (uint32_t i = 0; i <= us; ++i) {
-        if ((r32(base, o) & mask) == value) return true;
+        if ((r32(base, o) & mask) == value)
+            return true;
         IODelay(1);
     }
     return false;
@@ -215,7 +226,8 @@ const char *falconDump(bool debugger)
         w32(gNvenc, FALCON_TRACEIDX, i);
         n += snprintf(text + n, sizeof(text) - (size_t)n, " %#x", r32(gNvenc, FALCON_TRACEPC) & 0xffffff);
     }
-    if (debugger) n += snprintf(text + n, sizeof(text) - (size_t)n, " PC/SP");
+    if (debugger)
+        n += snprintf(text + n, sizeof(text) - (size_t)n, " PC/SP");
     for (int i = 0; debugger && i < 3; i++) {
         w32(gNvenc, FALCON_ICD_CMD, ICD_RREG | 21u << 8);
         const uint32_t pc = r32(gNvenc, FALCON_ICD_RDATA);
@@ -228,7 +240,8 @@ const char *falconDump(bool debugger)
 // falcon_parse_firmware_image: magic 0x10de (or 0x10fe), version 1, the OS header and data inside the image.
 bool parse(const uint8_t *fw, size_t length, Image *image)
 {
-    if (length < 0x100 || (le32(fw) != 0x10de && le32(fw) != 0x10fe) || le32(fw + 4) != 1) return false;
+    if (length < 0x100 || (le32(fw) != 0x10de && le32(fw) != 0x10fe) || le32(fw + 4) != 1)
+        return false;
     image->size = le32(fw + 8);
     const uint32_t os = le32(fw + 12);
     image->binData = le32(fw + 16);
@@ -328,7 +341,8 @@ bool loadImage()
 
 bool copyChunk(uint32_t from, uint32_t to, bool code)
 {
-    if (!waitBits(gNvenc, FALCON_DMATRFCMD, DMATRFCMD_FULL, 0, 100000)) return false;
+    if (!waitBits(gNvenc, FALCON_DMATRFCMD, DMATRFCMD_FULL, 0, 100000))
+        return false;
     w32(gNvenc, FALCON_DMATRFMOFFS, to);
     w32(gNvenc, FALCON_DMATRFFBOFFS, from);
     w32(gNvenc, FALCON_DMATRFCMD, DMATRFCMD_SIZE_256B | (code ? DMATRFCMD_IMEM : 0));
@@ -344,7 +358,8 @@ bool bootFalcon()
         return false;
     }
     w32(gNvenc, FALCON_DMACTL, 0);
-    if (!loadImage()) return false;
+    if (!loadImage())
+        return false;
     bool queued = true;
     for (uint32_t offset = 0; queued && offset < gImage.dataSize; offset += 256)
         queued = copyChunk(gImage.data + offset, offset, false);
@@ -419,7 +434,8 @@ void timedOut(uint32_t fence)
     if (gPublished)
         panic("TegraNVENC: job fence %u not reached in %u ms (syncpoint %u at %u, GP timer bound passed); %s; %s",
               fence, kWaitBoundUs / 1000, gSyncpt, tegra_host1x_syncpt_read(gSyncpt), falconDump(true), host);
-    if (gWedged) return;
+    if (gWedged)
+        return;
     gWedged = true;
     IOLog("TegraNVENC: job fence %u not reached in %u ms (syncpoint %u at %u); %s; %s\n", fence, kWaitBoundUs / 1000,
           gSyncpt, tegra_host1x_syncpt_read(gSyncpt), falconDump(true), host);
@@ -438,14 +454,15 @@ void bringUp(void *, wait_result_t)
     // A failed bring-up leaves nothing behind: the engine back in reset with its clock off (once it was touched), and
     // the arena returned.
     auto giveUp = [](bool touched) {
-        if (touched) park();
+        if (touched)
+            park();
         tegra_nvenc_arena_release();
     };
     // NVDEC first: its 48 MiB arena is reserved while memory is least fragmented, and this chunk must not land in the
     // run it needs; E3 decodes on NVDEC anyway. With NVDEC off or failed, NVENC allocates nothing.
     if (!tegra_nvdec_await(kNvdecWaitMs)) {
-        IOLog(
-            "TegraNVENC: E0 FAIL NVDEC is not decoding (its N lines, or switch-no-nvdec): nothing to check NVENC with\n");
+        IOLog("TegraNVENC: E0 FAIL NVDEC is not decoding (its N lines, or switch-no-nvdec): nothing to check NVENC "
+              "with\n");
         return;
     }
     const uint64_t arenaStart = nowUs();
@@ -527,7 +544,8 @@ int run(const TegraNVENCSubmit *s, TegraNVENCResolve resolve, void *context, uin
         bool probeMagic)
 {
     *why = nullptr;
-    if (!gUp) return -19;
+    if (!gUp)
+        return -19;
     if (s->entry_count > TEGRA_NVENC_MAX_ENTRIES || s->clean_count > TEGRA_NVENC_MAX_RANGES ||
         s->setup_bytes > kSetupSlotBytes) {
         *why = "counts";
@@ -537,14 +555,16 @@ int run(const TegraNVENCSubmit *s, TegraNVENCResolve resolve, void *context, uin
     uint64_t avail[TEGRA_NVENC_MAX_ENTRIES] = {};
     for (uint32_t i = 0; i < s->entry_count; i++) {
         const TegraNVENCEntry *e = &s->entries[i];
-        if (e->kind != TEGRA_NVENC_ENTRY_RELOC) continue;
+        if (e->kind != TEGRA_NVENC_ENTRY_RELOC)
+            continue;
         if (!resolve(context, e->value, &blocks[i]) || e->offset > blocks[i].size) {
             *why = "relocation outside a buffer";
             return -22;
         }
         avail[i] = blocks[i].size - e->offset;
     }
-    if ((*why = tegra_nvenc_check(s, avail))) return -22;
+    if ((*why = tegra_nvenc_check(s, avail)))
+        return -22;
     for (uint32_t i = 0; i < s->clean_count; i++) {
         const TegraNVENCRange *r = &s->clean[i];
         TegraNVENCBlock b;
@@ -568,7 +588,8 @@ int run(const TegraNVENCSubmit *s, TegraNVENCResolve resolve, void *context, uin
         words[n++] = value;
     };
     IOLockLock(gEngineLock);
-    while (gSuspended) IOLockSleep(gEngineLock, &gSuspended, THREAD_UNINT);
+    while (gSuspended)
+        IOLockSleep(gEngineLock, &gSuspended, THREAD_UNINT);
     if (gWedged) {
         IOLockUnlock(gEngineLock);
         return -19;
@@ -577,19 +598,22 @@ int run(const TegraNVENCSubmit *s, TegraNVENCResolve resolve, void *context, uin
     if (job > kInFlight) {
         const int ret = tegra_host1x_syncpt_wait(gSyncpt, gBase + job - kInFlight, kWaitBoundUs);
         if (ret) {
-            if (ret == TEGRA_HOST1X_ETIMEDOUT) timedOut(gBase + job - kInFlight);
+            if (ret == TEGRA_HOST1X_ETIMEDOUT)
+                timedOut(gBase + job - kInFlight);
             IOLockUnlock(gEngineLock);
             return ret;
         }
     }
     const uint32_t slot = job % kSetupSlots;
     memcpy(gSetup.va + slot * kSetupSlotBytes, s->setup, s->setup_bytes);
-    if (probeMagic) ((nvenc_h264_drv_pic_setup_s *)(gSetup.va + slot * kSetupSlotBytes))->magic = 0;
+    if (probeMagic)
+        ((nvenc_h264_drv_pic_setup_s *)(gSetup.va + slot * kSetupSlotBytes))->magic = 0;
     tegra_nvenc_cache_clean(gSetup.va + slot * kSetupSlotBytes, s->setup_bytes);
     for (uint32_t i = 0; i < s->entry_count; i++) {
         const TegraNVENCEntry *e = &s->entries[i];
         if (i == s->entry_count - 1) {  // EXECUTE, last by the check
-            for (uint32_t k = 0; k < kSinks; k++) method(kSinkMethods[k], (uint32_t)(gSink.pa >> 8));
+            for (uint32_t k = 0; k < kSinks; k++)
+                method(kSinkMethods[k], (uint32_t)(gSink.pa >> 8));
             method(NVC5B7_SET_IN_DRV_PIC_SETUP, (uint32_t)((gSetup.pa + slot * kSetupSlotBytes) >> 8));
         }
         method(e->method, e->kind == TEGRA_NVENC_ENTRY_RELOC ? (uint32_t)((blocks[i].pa + e->offset) >> 8) : e->value);
@@ -624,9 +648,11 @@ extern "C" const char *tegra_nvenc_falcon_dump(void)
 
 extern "C" int tegra_nvenc_wait(uint32_t fence)
 {
-    if (!gUp) return -19;
+    if (!gUp)
+        return -19;
     // A fence no job will reach would never be reached: refused, so it cannot pass for an engine fault.
-    if ((int32_t)(fence - (gBase + __atomic_load_n(&gIssued, __ATOMIC_ACQUIRE))) > 0) return -22;
+    if ((int32_t)(fence - (gBase + __atomic_load_n(&gIssued, __ATOMIC_ACQUIRE))) > 0)
+        return -22;
     const int ret = tegra_host1x_syncpt_wait(gSyncpt, fence, kWaitBoundUs);
     if (ret == TEGRA_HOST1X_ETIMEDOUT) {
         IOLockLock(gEngineLock);
@@ -674,7 +700,8 @@ void engineResume()
             snprintf(gLine, sizeof(gLine), "%s did not answer (%d, syncpoint %u %u->%u); %s", stage, ret, gSyncpt, from,
                      tegra_host1x_syncpt_read(gSyncpt), falconState());
     }
-    if (gWedged) IOLog("TegraNVENC: resume FAIL %s; NVENC refuses work\n", gLine[0] ? gLine : "E1");
+    if (gWedged)
+        IOLog("TegraNVENC: resume FAIL %s; NVENC refuses work\n", gLine[0] ? gLine : "E1");
     // Jobs lost to a wedge never incremented the syncpoint: number from where it really is.
     gBase = tegra_host1x_syncpt_read(gSyncpt);
     __atomic_store_n(&gIssued, 0, __ATOMIC_RELEASE);
@@ -690,8 +717,10 @@ extern "C" int tegra_nvenc_probe(void)
 {
     static volatile int started;
     uint32_t noNvdec = 0;
-    if (PE_parse_boot_argn("switch-no-nvdec", &noNvdec, sizeof(noNvdec)) && noNvdec) return 0;
-    if (__atomic_exchange_n(&started, 1, __ATOMIC_SEQ_CST)) return 0;
+    if (PE_parse_boot_argn("switch-no-nvdec", &noNvdec, sizeof(noNvdec)) && noNvdec)
+        return 0;
+    if (__atomic_exchange_n(&started, 1, __ATOMIC_SEQ_CST))
+        return 0;
     thread_t thread;
     if (kernel_thread_start(bringUp, nullptr, &thread) != KERN_SUCCESS) {
         IOLog("TegraNVENC: could not start the bring-up thread\n");

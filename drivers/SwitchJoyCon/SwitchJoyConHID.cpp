@@ -132,7 +132,12 @@ constexpr uint32_t kButtonsProduct = 0x5104;   // after ../SwitchTouch's 0x5101-
 constexpr uint32_t kEventDriverScore = 10000;  // as SwitchHIDDevice.cpp: over IOHIDEventDriver's own and the dext's 1
 constexpr size_t kSharedButtons = 4;           // report byte: Minus, Plus, sticks, Home 0x10, Capture 0x20
 constexpr uint8_t kHome = 0x10, kCapture = 0x20;
-enum : uint8_t { kMenu = 1u << 0, kSnapshot = 1u << 1 };
+
+enum : uint8_t {
+    kMenu = 1u << 0,
+    kSnapshot = 1u << 1
+};
+
 const uint8_t kButtonsDescriptor[] = {
     0x05, 0x0c, 0x09, 0x01, 0xa1, 0x01, 0x85, 0x01,  // Consumer: Consumer Control, Collection (Application), Report ID 1
     0x09, 0x40, 0x09, 0x65,                          // Menu, Snapshot
@@ -154,7 +159,8 @@ class SwitchJoyConDevice : public IOHIDDevice {
     // Reports the end of the backboardd session (SwitchJoyConHID.h) once, while the rail still listens.
     void noteSession(switch_joycon_session_event event, int32_t openerPid)
     {
-        if (event == kSwitchJoyConSessionNone || !ended) return;
+        if (event == kSwitchJoyConSessionNone || !ended)
+            return;
         ended(outputContext, session.pid, openerPid);
     }
 
@@ -172,11 +178,27 @@ public:
         return outputLock && init();
     }
 
-    bool isLeft() const { return left; }
-    IOWorkLoop *getWorkLoop() const override { return loop; }
+    bool isLeft() const
+    {
+        return left;
+    }
+
+    IOWorkLoop *getWorkLoop() const override
+    {
+        return loop;
+    }
+
     // What the plugin and gamecontrollerd see for a Bluetooth Joy-Con; see the file comment.
-    OSString *newTransportString() const override { return OSString::withCString("Bluetooth"); }
-    OSString *newProductString() const override { return OSString::withCString(left ? "Joy-Con (L)" : "Joy-Con (R)"); }
+    OSString *newTransportString() const override
+    {
+        return OSString::withCString("Bluetooth");
+    }
+
+    OSString *newProductString() const override
+    {
+        return OSString::withCString(left ? "Joy-Con (L)" : "Joy-Con (R)");
+    }
+
     IOReturn newReportDescriptor(IOMemoryDescriptor **out) const override
     {
         *out = IOBufferMemoryDescriptor::withBytes(kJoyConDescriptor, sizeof(kJoyConDescriptor), kIODirectionNone);
@@ -195,17 +217,22 @@ public:
 
     IOReturn sendReport(IOMemoryDescriptor *report, uint32_t type, IOOptionBits options)
     {
-        if (type != 1 /* kIOHIDReportTypeOutput */ || !report) return kIOReturnUnsupported;
+        if (type != 1 /* kIOHIDReportTypeOutput */ || !report)
+            return kIOReturnUnsupported;
         uint8_t bytes[64];
         const uint8_t id = (uint8_t)(options & 0xff);
         const size_t length = report->getLength();
-        if (!length || length > sizeof(bytes) - 1) return kIOReturnBadArgument;
+        if (!length || length > sizeof(bytes) - 1)
+            return kIOReturnBadArgument;
         // HIDDevice/IOHIDDeviceSetReport hand over the report with its ID byte first (the plugin builds it that way);
         // a caller that left it out still gets a report that starts with the ID.
         size_t at = 0;
-        if (report->readBytes(0, bytes, 1) != 1) return kIOReturnError;
-        if (id && bytes[0] != id) bytes[at++] = id;
-        if (report->readBytes(0, bytes + at, length) != length) return kIOReturnError;
+        if (report->readBytes(0, bytes, 1) != 1)
+            return kIOReturnError;
+        if (id && bytes[0] != id)
+            bytes[at++] = id;
+        if (report->readBytes(0, bytes + at, length) != length)
+            return kIOReturnError;
         IOLockLock(outputLock);
         const IOReturn result = output ? output(outputContext, bytes, at + length) : kIOReturnOffline;
         IOLockUnlock(outputLock);
@@ -227,8 +254,10 @@ public:
     // only the client's identity, compared and never dereferenced.
     bool handleOpen(IOService *client, IOOptionBits options, void *arg) override
     {
-        if (!IOHIDDevice::handleOpen(client, options, arg)) return false;
-        if (!OSDynamicCast(IOUserClient, client)) return true;
+        if (!IOHIDDevice::handleOpen(client, options, arg))
+            return false;
+        if (!OSDynamicCast(IOUserClient, client))
+            return true;
         char name[MAXCOMLEN + 1] = {};
         proc_selfname(name, sizeof(name));
         const int32_t pid = proc_selfpid();
@@ -252,7 +281,8 @@ public:
     {
         loop = IOWorkLoop::workLoop();
         input = IOBufferMemoryDescriptor::withCapacity(kLargestInput, kIODirectionNone);
-        if (!loop || !input) return false;
+        if (!loop || !input)
+            return false;
         // bluetoothd's HID devices carry these (com.apple.MobileBluetooth.InputDevice); HIDServiceSupport is what the
         // property-merger personality would add, set here as well so the device does not depend on its probe order.
         setProperty("VendorID", (unsigned long long)kNintendo, 32);
@@ -276,15 +306,18 @@ public:
     {
         OSSafeReleaseNULL(input);
         OSSafeReleaseNULL(loop);
-        if (outputLock) IOLockFree(outputLock);
+        if (outputLock)
+            IOLockFree(outputLock);
         outputLock = nullptr;
         IOHIDDevice::free();
     }
 
     IOReturn deliver(const uint8_t *report, size_t length)
     {
-        if (!length) return kIOReturnBadArgument;
-        if (length > kLargestInput) length = kLargestInput;
+        if (!length)
+            return kIOReturnBadArgument;
+        if (length > kLargestInput)
+            length = kLargestInput;
         // The rail sends the reports the Joy-Con would send over Bluetooth, but without the padding to the report size
         // the descriptor declares; the plugin drops a 0x30 shorter than 49 bytes.
         const size_t size =
@@ -323,9 +356,21 @@ class SwitchJoyConButtons : public IOHIDDevice {
     uint8_t posted = 0;    // kMenu | kSnapshot as last reported
 
 public:
-    IOWorkLoop *getWorkLoop() const override { return loop; }
-    OSString *newTransportString() const override { return OSString::withCString("UART"); }
-    OSString *newProductString() const override { return OSString::withCString("Joy-Con System Buttons"); }
+    IOWorkLoop *getWorkLoop() const override
+    {
+        return loop;
+    }
+
+    OSString *newTransportString() const override
+    {
+        return OSString::withCString("UART");
+    }
+
+    OSString *newProductString() const override
+    {
+        return OSString::withCString("Joy-Con System Buttons");
+    }
+
     IOReturn newReportDescriptor(IOMemoryDescriptor **out) const override
     {
         *out = IOBufferMemoryDescriptor::withBytes(kButtonsDescriptor, sizeof(kButtonsDescriptor), kIODirectionNone);
@@ -336,7 +381,8 @@ public:
     {
         loop = IOWorkLoop::workLoop();
         report = IOBufferMemoryDescriptor::withCapacity(2, kIODirectionNone);
-        if (!loop || !report) return false;
+        if (!loop || !report)
+            return false;
         // Matched by this file's IOHIDEventDriver personality; Built-In makes backboardd treat it as the console buttons.
         setProperty("VendorID", (unsigned long long)kNintendo, 32);
         setProperty("ProductID", (unsigned long long)kButtonsProduct, 32);
@@ -345,7 +391,10 @@ public:
         return IOHIDDevice::start(provider);
     }
 
-    void stop(IOService *provider) override { IOHIDDevice::stop(provider); }
+    void stop(IOService *provider) override
+    {
+        IOHIDDevice::stop(provider);
+    }
 
     void free() override
     {
@@ -360,9 +409,11 @@ public:
         held[isLeft ? 1 : 0] = pressed;
         const uint8_t any = held[0] | held[1];
         const uint8_t now = (uint8_t)(((any & kHome) ? kMenu : 0) | ((any & kCapture) ? kSnapshot : 0));
-        if (now == posted) return;
+        if (now == posted)
+            return;
         // Home down with the panel off: a wake source (journal, wake guarantee); the Menu press below does the waking.
-        if ((now & kMenu) && !(posted & kMenu)) switch_wake_event(SWITCH_WAKE_RAIL_HOME);
+        if ((now & kMenu) && !(posted & kMenu))
+            switch_wake_event(SWITCH_WAKE_RAIL_HOME);
         posted = now;
         uint8_t *bytes = static_cast<uint8_t *>(report->getBytesNoCopy());
         bytes[0] = 1;
@@ -381,7 +432,8 @@ OSDefineMetaClassAndStructors(SwitchJoyConButtons, IOHIDDevice)
     {
         OSDictionary *dict = OSDictionary::withCapacity(count);
         for (unsigned i = 0; dict && i < count; ++i) {
-            if (!values[i] || !dict->setObject(keys[i], values[i])) OSSafeReleaseNULL(dict);
+            if (!values[i] || !dict->setObject(keys[i], values[i]))
+                OSSafeReleaseNULL(dict);
         }
         return dict;
     }
@@ -419,7 +471,8 @@ OSDefineMetaClassAndStructors(SwitchJoyConButtons, IOHIDDevice)
         OSObject *all[] = {vendor,      product, dummyScore, mergerScore, bundle, dummyClass, interface,
                            mergerClass, device,  dummy,      match,       merge,  merger};
         for (OSObject *object : all) {
-            if (object) object->release();
+            if (object)
+                object->release();
         }
         return ok;
     }
@@ -445,13 +498,15 @@ static void addButtonsPersonality()
     OSObject *values[] = {bundle, driverClass, interface, score, vendor, product, pairs};
     OSDictionary *driver = dictionary(keys, values, 7);
     OSArray *personalities = driver ? OSArray::withObjects((const OSObject **)&driver, 1) : nullptr;
-    if (!personalities) panic("SwitchJoyCon: no memory for the system-buttons personality");
+    if (!personalities)
+        panic("SwitchJoyCon: no memory for the system-buttons personality");
     if (!gIOCatalogue->addDrivers(personalities, true)) {
         panic("SwitchJoyCon: IOCatalogue::addDrivers refused the system-buttons personality");
     }
     OSObject *all[] = {page,        usage,     vendor, product, score,  bundle,
                        driverClass, interface, pair,   pairs,   driver, personalities};
-    for (OSObject *object : all) object->release();
+    for (OSObject *object : all)
+        object->release();
 }
 
 static void addNintendoPersonalities()
@@ -471,9 +526,11 @@ static OSDictionary *catalogueMatch(const char *key, const char *value)
 {
     OSString *string = OSString::withCString(value);
     OSDictionary *dict = string ? OSDictionary::withCapacity(1) : nullptr;
-    if (dict && !dict->setObject(key, string)) OSSafeReleaseNULL(dict);
+    if (dict && !dict->setObject(key, string))
+        OSSafeReleaseNULL(dict);
     OSSafeReleaseNULL(string);
-    if (!dict) panic("SwitchJoyCon: no memory for a catalogue lookup");
+    if (!dict)
+        panic("SwitchJoyCon: no memory for a catalogue lookup");
     return dict;
 }
 
@@ -487,7 +544,8 @@ static OSDictionary *catalogueMatch(const char *key, const char *value)
 void switch_joycon_hid_select_personalities(void)
 {
     static bool done;
-    if (done) return;
+    if (done)
+        return;
     done = true;
     OSDictionary *byClass = catalogueMatch("IOClass", "AppleGCHIDEventDummyService");
     SInt32 generation = 0;
@@ -495,7 +553,8 @@ void switch_joycon_hid_select_personalities(void)
     const bool present = found && found->getCount();
     OSSafeReleaseNULL(found);
     OSSafeReleaseNULL(byClass);
-    if (!present) return;
+    if (!present)
+        return;
     static const char *const keys[] = {kIOPersonalityPublisherKey, kCFBundleIdentifierKey};
     for (const char *key : keys) {
         OSDictionary *match = catalogueMatch(key, kAppleGCBundle);
@@ -510,15 +569,19 @@ void switch_joycon_hid_prepare(void)
     static bool ready;
     if (!lock) {
         IOLock *fresh = IOLockAlloc();
-        if (fresh && !OSCompareAndSwapPtr(nullptr, fresh, &lock)) IOLockFree(fresh);
+        if (fresh && !OSCompareAndSwapPtr(nullptr, fresh, &lock))
+            IOLockFree(fresh);
     }
-    if (!lock) panic("SwitchJoyCon: no memory for the HID lock");
+    if (!lock)
+        panic("SwitchJoyCon: no memory for the HID lock");
     IOLockLock(lock);
     if (!ready) {
         const OSReturn loaded = OSKextLoadKextWithIdentifier("com.apple.iokit.IOHIDFamily");
-        if (loaded != kOSReturnSuccess) panic("SwitchJoyCon: loading com.apple.iokit.IOHIDFamily failed: %#x", loaded);
+        if (loaded != kOSReturnSuccess)
+            panic("SwitchJoyCon: loading com.apple.iokit.IOHIDFamily failed: %#x", loaded);
         void *handle = OSMetaClass::preModLoad(g_kernel_kmod_info.name);
-        if (!handle) panic("SwitchJoyCon: OSMetaClass::preModLoad failed");
+        if (!handle)
+            panic("SwitchJoyCon: OSMetaClass::preModLoad failed");
         switch_joycon_hid_static_init();
         const OSReturn registered = OSMetaClass::postModLoad(handle);
         if (registered != kOSReturnSuccess)
@@ -543,7 +606,8 @@ IOService *switch_joycon_hid_create(bool left, const uint8_t mac[6], SwitchJoyCo
         if (!resources || !buttons || !buttons->init() || !buttons->attach(resources)) {
             panic("SwitchJoyCon: system-buttons HID device: attach failed");
         }
-        if (!buttons->start(resources)) panic("SwitchJoyCon: system-buttons HID device: IOHIDDevice::start failed");
+        if (!buttons->start(resources))
+            panic("SwitchJoyCon: system-buttons HID device: IOHIDDevice::start failed");
         gButtons = buttons;  // kept for the boot
     }
     auto *device = OSTypeAlloc(SwitchJoyConDevice);
@@ -558,7 +622,8 @@ IOService *switch_joycon_hid_create(bool left, const uint8_t mac[6], SwitchJoyCo
 IOReturn switch_joycon_hid_input(IOService *device, const uint8_t *report, size_t length)
 {
     auto *joycon = OSDynamicCast(SwitchJoyConDevice, device);
-    if (!joycon) return kIOReturnBadArgument;
+    if (!joycon)
+        return kIOReturnBadArgument;
     const IOReturn result = joycon->deliver(report, length);
     // Reports 0x21, 0x30 and 0x31 start with the standard input (timer, battery, three button bytes); 0x3F does not.
     if (gButtons && length > kSharedButtons && (report[0] == 0x21 || report[0] == 0x30 || report[0] == 0x31)) {
@@ -570,8 +635,10 @@ IOReturn switch_joycon_hid_input(IOService *device, const uint8_t *report, size_
 void switch_joycon_hid_destroy(IOService *device)
 {
     auto *joycon = OSDynamicCast(SwitchJoyConDevice, device);
-    if (!joycon) return;
-    if (gButtons) gButtons->update(joycon->isLeft(), 0);  // a Joy-Con pulled off with its button down releases it
+    if (!joycon)
+        return;
+    if (gButtons)
+        gButtons->update(joycon->isLeft(), 0);  // a Joy-Con pulled off with its button down releases it
     joycon->detachOutput();
     joycon->terminate();
     joycon->release();

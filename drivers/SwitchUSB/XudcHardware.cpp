@@ -42,6 +42,7 @@ enum : uint32_t {  // clock and reset controller (hekate bdk/soc/clock.h)
     CLK_SOURCE_XUSB_SS = 0x610,
     CLK_SOURCE_USB2_HSIC_TRK = 0x6cc,
 };
+
 enum : uint32_t {
     L_USBD = 1u << 22,
     H_FUSE = 1u << 7,
@@ -54,6 +55,7 @@ enum : uint32_t {
     PLL_ENABLE = 1u << 30,
     UTMIPLL_LOCK = 1u << 31,
 };
+
 enum : uint32_t {  // PMC (from 0x7000E400; hekate bdk/soc/pmc_t210.h)
     PWRGATE_TOGGLE = 0x30,
     REMOVE_CLAMPING = 0x34,
@@ -63,9 +65,17 @@ enum : uint32_t {  // PMC (from 0x7000E400; hekate bdk/soc/pmc_t210.h)
     PART_XUSBA = 20,
     PART_XUSBB = 21,
 };
-enum : uint32_t { FUSE_USB_CALIB = 0x1f0, FUSE_USB_CALIB_EXT = 0x350 };  // from 0x7000F800
-enum : uint32_t { MC_SMMU_XUSB_DEV_ASID = 0x28c };                       // Linux tegra210.c, bit 31 = translate
-enum : uint32_t {                                                        // XUSB pad controller (hekate usb_t210.h)
+
+enum : uint32_t {
+    FUSE_USB_CALIB = 0x1f0,
+    FUSE_USB_CALIB_EXT = 0x350
+};  // from 0x7000F800
+
+enum : uint32_t {
+    MC_SMMU_XUSB_DEV_ASID = 0x28c
+};  // Linux tegra210.c, bit 31 = translate
+
+enum : uint32_t {  // XUSB pad controller (hekate usb_t210.h)
     USB2_PAD_MUX = 0x004,
     USB2_PORT_CAP = 0x008,
     SS_PORT_MAP = 0x014,
@@ -79,6 +89,7 @@ enum : uint32_t {                                                        // XUSB
     BIAS_PAD_CTL_1 = 0x288,
     USB2_VBUS_ID = 0xc60,
 };
+
 enum : uint32_t {  // XUDC: xHCI-like block at +0, FPCI config at +0x8000, IPFS at +0x9000 (Linux tegra_xudc.c)
     DB = 0x04,
     ERSTSZ = 0x08,
@@ -110,6 +121,7 @@ enum : uint32_t {  // XUDC: xHCI-like block at +0, FPCI config at +0x8000, IPFS 
     IPFS_CONFIGURATION = 0x9180,
     IPFS_INTR_MASK = 0x9188,
 };
+
 enum : uint32_t {
     CTRL_RUN = 1u << 0,
     CTRL_LSE = 1u << 1,
@@ -165,7 +177,8 @@ inline void barrier()
 void cacheFlush(const volatile void *p, size_t n)
 {
     uintptr_t at = (uintptr_t)p & ~(uintptr_t)63, end = (uintptr_t)p + n;
-    for (; at < end; at += 64) __asm__ volatile("dc civac, %0" ::"r"(at) : "memory");
+    for (; at < end; at += 64)
+        __asm__ volatile("dc civac, %0" ::"r"(at) : "memory");
     barrier();
 }
 
@@ -190,7 +203,8 @@ bool DmaBuffer::allocate(uint32_t bytes)
 
 void DmaBuffer::release()
 {
-    if (md) md->release();
+    if (md)
+        md->release();
     md = nullptr;
     va = nullptr;
     pa = 0;
@@ -201,6 +215,7 @@ uint32_t Hardware::pmc(uint32_t o)
 {
     return r(pmcPage, kPmcOffset + o);
 }
+
 void Hardware::pmcWrite(uint32_t o, uint32_t v)
 {
     w(pmcPage, kPmcOffset + o, v);
@@ -210,7 +225,8 @@ void Hardware::pmcWrite(uint32_t o, uint32_t v)
 bool Hardware::waitBits(volatile uint8_t *b, uint32_t o, uint32_t mask, uint32_t value, uint32_t us)
 {
     for (uint32_t i = 0; i <= us; ++i) {
-        if ((r(b, o) & mask) == value) return true;
+        if ((r(b, o) & mask) == value)
+            return true;
         IODelay(1);
     }
     return false;
@@ -231,11 +247,14 @@ bool Hardware::map()
 // caller releases the reset later. A partition already on (the boot chain's) is left as it is.
 bool Hardware::powerUp(uint32_t partition, uint32_t clockSet, uint32_t resetSet, uint32_t bit)
 {
-    if (pmc(PWRGATE_STATUS) & (1u << partition)) return true;
+    if (pmc(PWRGATE_STATUS) & (1u << partition))
+        return true;
     w(car, resetSet, bit);
-    if (!waitBits(pmcPage, kPmcOffset + PWRGATE_TOGGLE, TOGGLE_START, 0, 5000)) return false;
+    if (!waitBits(pmcPage, kPmcOffset + PWRGATE_TOGGLE, TOGGLE_START, 0, 5000))
+        return false;
     pmcWrite(PWRGATE_TOGGLE, partition | TOGGLE_START);
-    if (!waitBits(pmcPage, kPmcOffset + PWRGATE_STATUS, 1u << partition, 1u << partition, 5000)) return false;
+    if (!waitBits(pmcPage, kPmcOffset + PWRGATE_STATUS, 1u << partition, 1u << partition, 5000))
+        return false;
     IODelay(10);
     w(car, clockSet, bit);
     IODelay(10);
@@ -249,11 +268,16 @@ bool Hardware::powerUp(uint32_t partition, uint32_t clockSet, uint32_t resetSet,
 // whichever controller owns the port.
 bool usb2PadInit(volatile uint8_t *car, volatile uint8_t *fusePage, volatile uint8_t *padctl)
 {
-    auto r = [](volatile uint8_t *b, uint32_t o) { return *(volatile uint32_t *)(b + o); };
-    auto w = [](volatile uint8_t *b, uint32_t o, uint32_t v) { *(volatile uint32_t *)(b + o) = v; };
+    auto r = [](volatile uint8_t *b, uint32_t o) {
+        return *(volatile uint32_t *)(b + o);
+    };
+    auto w = [](volatile uint8_t *b, uint32_t o, uint32_t v) {
+        *(volatile uint32_t *)(b + o) = v;
+    };
     auto waitBits = [&](volatile uint8_t *b, uint32_t o, uint32_t mask, uint32_t value, uint32_t us) {
         for (uint32_t i = 0; i <= us; ++i) {
-            if ((r(b, o) & mask) == value) return true;
+            if ((r(b, o) & mask) == value)
+                return true;
             IODelay(1);
         }
         return false;
@@ -264,7 +288,8 @@ bool usb2PadInit(volatile uint8_t *car, volatile uint8_t *fusePage, volatile uin
         uint32_t cfg = (pllu & 0xffe00000u) | (1u << 24) | (1u << 16) | (0x19u << 8) | 2;
         w(car, PLLU_BASE, cfg);
         w(car, PLLU_BASE, cfg | PLL_ENABLE);
-        if (!waitBits(car, PLLU_BASE, PLL_LOCK, PLL_LOCK, 1000)) return false;
+        if (!waitBits(car, PLLU_BASE, PLL_LOCK, PLL_LOCK, 1000))
+            return false;
         IODelay(8);
     }
     w(car, PLLU_BASE, r(car, PLLU_BASE) | 0x2e00000u);  // USB, HSIC, ICUSB and 48 MHz outputs
@@ -287,7 +312,8 @@ bool usb2PadInit(volatile uint8_t *car, volatile uint8_t *fusePage, volatile uin
     }
     uint32_t calib = r(fusePage, kFuseOffset + FUSE_USB_CALIB);
     uint32_t calibExt = r(fusePage, kFuseOffset + FUSE_USB_CALIB_EXT);
-    if (!fuseClock) w(car, CLK_ENB_H_CLR, H_FUSE);
+    if (!fuseClock)
+        w(car, CLK_ENB_H_CLR, H_FUSE);
     w(padctl, OTG_PAD0_CTL_0, (r(padctl, OTG_PAD0_CTL_0) & 0xffffffc0u) | (calib & 0x3f));  // HS_CURR_LEVEL
     w(padctl, OTG_PAD0_CTL_1,
       (r(padctl, OTG_PAD0_CTL_1) & 0x83ffff87u) |                       // TERM_RANGE_ADJ,
@@ -434,7 +460,8 @@ bool Hardware::nextEvent(Event &event)
     volatile uint32_t *e = (volatile uint32_t *)events.va + eventIndex * 4;
     cacheFlush(e, 16);
     uint32_t d3 = e[3];
-    if ((d3 & TRB_CYCLE) != eventCycle) return false;
+    if ((d3 & TRB_CYCLE) != eventCycle)
+        return false;
     event.d[0] = e[0];
     event.d[1] = e[1];
     event.d[2] = e[2];
@@ -476,7 +503,8 @@ void Hardware::describeInterrupt(char *buffer, size_t size)
 // Linux tegra_xudc_irq(): acknowledge ST.IP alone (ST.RC is W1C too), before the ring is drained.
 bool Hardware::takeInterrupt()
 {
-    if (!(xr(ST) & ST_IP)) return false;
+    if (!(xr(ST) & ST_IP))
+        return false;
     xw(ST, ST_IP);
     return true;
 }
@@ -503,7 +531,8 @@ void Hardware::resetEp0()
     xw(CTRL, xr(CTRL) & ~(0x7fu << 24));
     if (uint32_t halted = xr(EP_HALT)) {  // Linux ep_unhalt_all
         xw(EP_HALT, 0);
-        if (waitBits(xudc, EP_STCHG, halted, halted, 1000)) xw(EP_STCHG, halted);
+        if (waitBits(xudc, EP_STCHG, halted, halted, 1000))
+            xw(EP_STCHG, halted);
     }
     xw(EP_RELOAD, 1u);
     (void)waitBits(xudc, EP_RELOAD, 1u, 0, 1000);
@@ -517,10 +546,12 @@ PortChange Hardware::portChange()
     PortChange change;
     for (unsigned pass = 0; pass < 8; ++pass) {
         uint32_t halt = xr(PORTHALT);
-        if ((halt & PORTHALT_STCHG_REQ) && (halt & PORTHALT_HALT_LTSSM)) xw(PORTHALT, halt & ~PORTHALT_HALT_LTSSM);
+        if ((halt & PORTHALT_STCHG_REQ) && (halt & PORTHALT_HALT_LTSSM))
+            xw(PORTHALT, halt & ~PORTHALT_HALT_LTSSM);
 
         uint32_t sc = xr(PORTSC);
-        if ((sc & PORTSC_PRC) && (sc & PORTSC_PR)) clearPortChange(PORTSC_PRC | PORTSC_PED);  // reset still going
+        if ((sc & PORTSC_PRC) && (sc & PORTSC_PR))
+            clearPortChange(PORTSC_PRC | PORTSC_PED);  // reset still going
         bool connectNow = false;
         if ((sc & PORTSC_PRC) && !(sc & PORTSC_PR)) {
             clearPortChange(PORTSC_PRC | PORTSC_PED);
@@ -548,16 +579,21 @@ PortChange Hardware::portChange()
         if (connectNow) {
             change.fullSpeed = (xr(PORTSC) & PORTSC_PS_MASK) == PORTSC_PS_FS;
             xw(PORTPM, (xr(PORTPM) & ~PORTPM_L1S_MASK) | PORTPM_L1S_NYET);
-            if (xr(ST) & ST_RC) xw(ST, ST_RC);
+            if (xr(ST) & ST_RC)
+                xw(ST, ST_RC);
         }
         sc = xr(PORTSC);
         if (sc & PORTSC_PLC) {
             clearPortChange(PORTSC_PLC);
-            if ((sc & PORTSC_PLS_MASK) == PORTSC_PLS_U3) change.suspended = true;
-            if ((sc & PORTSC_PLS_MASK) == PORTSC_PLS_U0) change.resumed = true;
+            if ((sc & PORTSC_PLS_MASK) == PORTSC_PLS_U3)
+                change.suspended = true;
+            if ((sc & PORTSC_PLS_MASK) == PORTSC_PLS_U0)
+                change.resumed = true;
         }
-        if (sc & PORTSC_CEC) clearPortChange(PORTSC_CEC);
-        if (!(xr(PORTSC) & PORTSC_CHANGES) && !(xr(PORTHALT) & PORTHALT_STCHG_REQ)) break;
+        if (sc & PORTSC_CEC)
+            clearPortChange(PORTSC_CEC);
+        if (!(xr(PORTSC) & PORTSC_CHANGES) && !(xr(PORTHALT) & PORTHALT_STCHG_REQ))
+            break;
     }
     return change;
 }
@@ -570,7 +606,8 @@ volatile uint32_t *Hardware::context(uint32_t dci)
 void Hardware::resetRing(uint32_t dci)
 {
     Ring &ring = rings[dci];
-    for (uint32_t i = 0; i < ring.trbs * 4; ++i) ring.trb[i] = 0;
+    for (uint32_t i = 0; i < ring.trbs * 4; ++i)
+        ring.trb[i] = 0;
     volatile uint32_t *link = ring.trb + (ring.trbs - 1) * 4;
     link[0] = ring.pa;
     link[3] = trbType(TRB_LINK) | TRB_TOGGLE;
@@ -586,7 +623,8 @@ bool Hardware::initEndpoint(uint32_t dci, uint32_t type, uint32_t maxPacket, uin
 {
     Ring &ring = rings[dci];
     if (dci && !ring.trb) {
-        if (!ring.own.allocate(kDataRingTrbs * 16)) return false;
+        if (!ring.own.allocate(kDataRingTrbs * 16))
+            return false;
         ring.trb = (volatile uint32_t *)ring.own.va;
         ring.pa = ring.own.pa;
         ring.trbs = kDataRingTrbs;
@@ -597,7 +635,8 @@ bool Hardware::initEndpoint(uint32_t dci, uint32_t type, uint32_t maxPacket, uin
     const bool interrupt = type == EP_INTR_IN || type == EP_INTR_OUT;
     uint32_t average = type == EP_CONTROL ? 8 : interrupt ? 1024 : 3072;
     uint32_t esit = interrupt ? maxPacket * (maxBurst + 1) : 0;
-    for (uint32_t i = 0; i < 16; ++i) c[i] = 0;
+    for (uint32_t i = 0; i < 16; ++i)
+        c[i] = 0;
     c[0] = 1 | interval << 16;
     c[1] = 3u << 1 | type << 3 | (maxBurst & 0xff) << 8 | maxPacket << 16;
     c[2] = (rings[dci].pa & ~0xfu) | 1;
@@ -611,7 +650,8 @@ bool Hardware::initEndpoint(uint32_t dci, uint32_t type, uint32_t maxPacket, uin
 bool Hardware::reloadEndpoint(uint32_t dci)
 {
     xw(EP_RELOAD, 1u << dci);
-    if (!waitBits(xudc, EP_RELOAD, 1u << dci, 0, 1000)) return false;
+    if (!waitBits(xudc, EP_RELOAD, 1u << dci, 0, 1000))
+        return false;
     xw(EP_PAUSE, xr(EP_PAUSE) & ~(1u << dci));
     xw(EP_HALT, xr(EP_HALT) & ~(1u << dci));
     return true;
@@ -621,15 +661,18 @@ bool Hardware::reloadEndpoint(uint32_t dci)
 void Hardware::toggleBit(uint32_t reg, uint32_t dci, bool set)
 {
     uint32_t bit = 1u << dci, value = xr(reg);
-    if (!!(value & bit) == set) return;
+    if (!!(value & bit) == set)
+        return;
     xw(reg, set ? value | bit : value & ~bit);
-    if (waitBits(xudc, EP_STCHG, bit, bit, 1000)) xw(EP_STCHG, bit);
+    if (waitBits(xudc, EP_STCHG, bit, bit, 1000))
+        xw(EP_STCHG, bit);
 }
 
 void Hardware::setHalt(uint32_t dci, bool halt)
 {
     toggleBit(EP_HALT, dci, halt);
 }
+
 bool Hardware::halted(uint32_t dci)
 {
     return (xr(EP_HALT) >> dci) & 1;
@@ -711,7 +754,8 @@ uint32_t Hardware::pushData(uint32_t dci, uint64_t bufferPA, uint32_t length, ui
 bool Hardware::trbIndex(uint32_t dci, uint32_t trbPA, uint32_t *index) const
 {
     const Ring &ring = rings[dci];
-    if (!ring.trb || trbPA < ring.pa || trbPA >= ring.pa + (ring.trbs - 1) * 16 || (trbPA & 15)) return false;
+    if (!ring.trb || trbPA < ring.pa || trbPA >= ring.pa + (ring.trbs - 1) * 16 || (trbPA & 15))
+        return false;
     *index = (trbPA - ring.pa) / 16;
     return true;
 }
@@ -734,7 +778,8 @@ void Hardware::setAddress(uint32_t address)
 
 void Hardware::run()
 {
-    if (xr(CTRL) & CTRL_RUN) return;
+    if (xr(CTRL) & CTRL_RUN)
+        return;
     xw(CTRL, xr(CTRL) | CTRL_RUN);
     xw(ST, ST_RC);  // W1C: writing ST back would also clear a pending IP
 }

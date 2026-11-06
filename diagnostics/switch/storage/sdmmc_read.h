@@ -17,6 +17,7 @@ struct switch_sd_io {
     void (*barrier)(void *);
 };
 struct switch_sd_dma;
+
 struct switch_sd_host {
     struct switch_sd_io io;
     void *context;
@@ -41,6 +42,7 @@ struct switch_sd_host {
     struct switch_sd_dma *dma;
     uint32_t dma_required;
 };
+
 struct switch_sd_result {
     uint32_t stage;
     uint32_t status;
@@ -64,6 +66,7 @@ struct switch_sd_result {
     uint32_t scr_low;
     uint32_t cache_evidence;
 };
+
 enum switch_sd_readiness_failure {
     SWITCH_SD_READY_VERSION = 1u << 0,
     SWITCH_SD_READY_ACTIVE = 1u << 1,
@@ -74,6 +77,7 @@ enum switch_sd_readiness_failure {
     SWITCH_SD_READY_RESET = 1u << 6,
     SWITCH_SD_READY_BLOCK_SIZE = 1u << 7
 };
+
 enum switch_sd_error {
     SWITCH_SD_OK = 0,
     SWITCH_SD_ARGUMENT = 1,
@@ -90,6 +94,7 @@ enum switch_sd_error {
     SWITCH_SD_CACHE_UNQUALIFIED = 12,
     SWITCH_SD_CARD_STATE = 13
 };
+
 enum switch_sd_cache_evidence {
     SWITCH_SD_CACHE_UNKNOWN = 0,
     SWITCH_SD_CACHE_NO_CMD48 = 1,
@@ -97,6 +102,7 @@ enum switch_sd_cache_evidence {
     SWITCH_SD_CACHE_UNSUPPORTED = 3,
     SWITCH_SD_CACHE_OBSERVED_OFF = 4
 };
+
 /* Returns a full verified 512-byte sector or leaves output unchanged.
  * A post-command error blocks this host for the rest of the boot. This module
  * never attempts recovery, reset, reinitialization or erase. */
@@ -107,7 +113,7 @@ int switch_sd_read_sector(struct switch_sd_host *, uint64_t lba, uint8_t output[
  * must never alias client-visible memory. Publish/copy only after SWITCH_SD_OK.
  * No allocation, read-ahead, media writes, clock changes or recovery. */
 int switch_sd_read_sectors(struct switch_sd_host *, uint64_t lba, uint32_t count, uint8_t *private_output,
-                         struct switch_sd_result *);
+                           struct switch_sd_result *);
 /* Read-only CMD13, CMD55/ACMD51 and, when advertised, bounded CMD48 queries.
  * Qualify only a known unsupported or observed-disabled optional write cache.
  * Unknown/enabled cache, unsupported extension layouts and write protection
@@ -119,7 +125,7 @@ int switch_sd_qualify_writes(struct switch_sd_host *, struct switch_sd_result *)
  * before any register I/O. On failure media may contain a prefix; the host is
  * blocked with no automatic retry. The input must remain private and stable. */
 int switch_sd_write_sectors(struct switch_sd_host *, uint64_t lba, uint32_t count, const uint8_t *private_input,
-                          struct switch_sd_result *);
+                            struct switch_sd_result *);
 /* With the cache proven off, DAT0 idle + CMD13 READY/TRAN is the durability
  * barrier. An enabled or unqualified cache can never be acknowledged here. */
 int switch_sd_sync(struct switch_sd_host *, struct switch_sd_result *);

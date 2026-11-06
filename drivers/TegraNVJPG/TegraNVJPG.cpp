@@ -89,12 +89,20 @@ enum : uint32_t {  // clock and reset controller, Y bank
     SOURCE_PLLP = 4u << 29,
     NVJPG_DIV_1 = 0,  // 7.1 divider: 408 MHz * 2 / (0 + 2) = 408 MHz
 };
-enum : uint32_t { PWRGATE_TOGGLE = 0x30, REMOVE_CLAMPING = 0x34, PWRGATE_STATUS = 0x38, TOGGLE_START = 1u << 8 };
+
+enum : uint32_t {
+    PWRGATE_TOGGLE = 0x30,
+    REMOVE_CLAMPING = 0x34,
+    PWRGATE_STATUS = 0x38,
+    TOGGLE_START = 1u << 8
+};
+
 enum : uint32_t {                                 // the SMMU's own registers are TegraSMMU.h's
     TRANSLATION_NVJPG = (1u << 30) | (1u << 31),  // nvjpgsrd, nvjpgswr (MC_SMMU_TRANSLATION_ENABLE_3)
     MC_HOTRESET_CTRL_1 = 0x970,
     MC_HOTRESET_NVJPG = 1u << 8,
 };
+
 enum : uint32_t {  // falcon (drm/tegra/falcon.h), relative to the engine
     FALCON_IRQSTAT = 0x1008,
     FALCON_IRQMSET = 0x1010,
@@ -146,11 +154,13 @@ uint32_t gWindowMapped[TEGRA_NVJPG_WINDOWS];  // pages mapped from each window's
 // does several pixels per clock at 408 MHz; the firmware's GP timer, on for every job, ends a picture it cannot finish
 // with an error status), at most kMaxBoundUs: only a hung engine gets there.
 constexpr uint64_t kQueueUs = 2000000, kMaxBoundUs = 30000000;
+
 inline uint32_t jobBoundUs(uint64_t pixels)
 {
     const uint64_t us = kQueueUs + pixels / 16;
     return (uint32_t)(us < kMaxBoundUs ? us : kMaxBoundUs);
 }
+
 IOLock *gJobLock;    // one job at a time: map, run, unmap
 IOLock *gStateLock;  // suspend/resume against jobs
 uint32_t gSyncpt, gNext, gPicture;
@@ -162,10 +172,12 @@ inline uint32_t r32(volatile uint8_t *base, uint32_t o)
 {
     return *(volatile uint32_t *)(base + o);
 }
+
 inline void w32(volatile uint8_t *base, uint32_t o, uint32_t v)
 {
     *(volatile uint32_t *)(base + o) = v;
 }
+
 inline uint32_t le32(const uint8_t *p)
 {
     return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
@@ -174,7 +186,8 @@ inline uint32_t le32(const uint8_t *p)
 bool waitBits(volatile uint8_t *base, uint32_t o, uint32_t mask, uint32_t value, uint32_t us)
 {
     for (uint32_t i = 0; i <= us; ++i) {
-        if ((r32(base, o) & mask) == value) return true;
+        if ((r32(base, o) & mask) == value)
+            return true;
         IODelay(1);
     }
     return false;
@@ -189,7 +202,8 @@ uint64_t nowUs()
 
 template <bool Invalidate> void cacheOp(const void *va, size_t size)
 {
-    if (!size) return;
+    if (!size)
+        return;
     uint64_t ctr;
     __asm__ volatile("mrs %0, ctr_el0" : "=r"(ctr));
     const uintptr_t line = (uintptr_t)4 << ((ctr >> 16) & 15);
@@ -220,7 +234,8 @@ bool contiguous(uint64_t bytes, IOBufferMemoryDescriptor **md, TegraNVJPGBuffer 
     *md = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task, options, bytes, 0xfffff000ULL);
     IOByteCount length = 0;
     uint64_t pa = 0;
-    if (*md && (*md)->prepare() == kIOReturnSuccess) pa = (*md)->getPhysicalSegment(0, &length, kIOMemoryMapperNone);
+    if (*md && (*md)->prepare() == kIOReturnSuccess)
+        pa = (*md)->getPhysicalSegment(0, &length, kIOMemoryMapperNone);
     if (!pa || length < bytes || pa + bytes > (1ULL << 32)) {
         OSSafeReleaseNULL(*md);
         return false;
@@ -236,7 +251,8 @@ bool contiguous(uint64_t bytes, IOBufferMemoryDescriptor **md, TegraNVJPGBuffer 
 // falcon_parse_firmware_image: magic 0x10de (or 0x10fe), version 1, the OS header and data inside the image.
 bool parse(const uint8_t *fw, size_t length, Image *image)
 {
-    if (length < 0x100 || (le32(fw) != 0x10de && le32(fw) != 0x10fe) || le32(fw + 4) != 1) return false;
+    if (length < 0x100 || (le32(fw) != 0x10de && le32(fw) != 0x10fe) || le32(fw + 4) != 1)
+        return false;
     image->size = le32(fw + 8);
     const uint32_t os = le32(fw + 12);
     image->binData = le32(fw + 16);
@@ -257,6 +273,7 @@ inline uint32_t *table(uint32_t index)
 {
     return gDomain.table(index);
 }
+
 inline uint32_t windowTable(uint32_t window)
 {
     return 1 + (window ? kWindowTables[0] : 0);
@@ -266,7 +283,8 @@ inline uint32_t windowTable(uint32_t window)
 void cleanDomain()
 {
     uintptr_t low, high;
-    if (gDomain.takeDirty(&low, &high)) cacheOp<false>(reinterpret_cast<const void *>(low), high - low);
+    if (gDomain.takeDirty(&low, &high))
+        cacheOp<false>(reinterpret_cast<const void *>(low), high - low);
 }
 
 void smmuFlush()
@@ -314,7 +332,8 @@ bool smmuAttach()
 
 void smmuDetach()
 {
-    if (!gMc) return;
+    if (!gMc)
+        return;
     tegra_smmu_detach(kAsid, TEGRA_SMMU_NVJPG_ASID);
 }
 
@@ -354,13 +373,15 @@ bool powerUp(bool *wasOn)
     IODelay(10);
     // tegra210_generic_mbist_war with NVJPG's slcg clock (NVDEC's) running for the pulse; NVDEC's own state is kept.
     const bool nvdecOn = r32(gCar, CLK_OUT_ENB_Y) & Y_NVDEC;
-    if (!nvdecOn) w32(gCar, CLK_ENB_Y_SET, Y_NVDEC);
+    if (!nvdecOn)
+        w32(gCar, CLK_ENB_Y_SET, Y_NVDEC);
     const uint32_t ovre = r32(gCar, LVL2_CLK_GATE_OVRE);
     w32(gCar, LVL2_CLK_GATE_OVRE, ovre | OVRE_NVJPG_MBIST);
     IODelay(1);
     w32(gCar, LVL2_CLK_GATE_OVRE, ovre);
     IODelay(1);
-    if (!nvdecOn) w32(gCar, CLK_ENB_Y_CLR, Y_NVDEC);
+    if (!nvdecOn)
+        w32(gCar, CLK_ENB_Y_CLR, Y_NVDEC);
     if (!(r32(gCar, CLK_OUT_ENB_Y) & Y_NVJPG) || (r32(gCar, RST_DEVICES_Y) & Y_NVJPG)) {
         snprintf(gLine, sizeof(gLine), "J1 FAIL clock or reset stuck (CLK_OUT_ENB_Y %#x RST_DEVICES_Y %#x)",
                  r32(gCar, CLK_OUT_ENB_Y), r32(gCar, RST_DEVICES_Y));
@@ -371,7 +392,8 @@ bool powerUp(bool *wasOn)
 
 bool copyChunk(uint32_t from, uint32_t to, bool code)
 {
-    if (!waitBits(gJpg, FALCON_DMATRFCMD, DMATRFCMD_FULL, 0, 100000)) return false;
+    if (!waitBits(gJpg, FALCON_DMATRFCMD, DMATRFCMD_FULL, 0, 100000))
+        return false;
     w32(gJpg, FALCON_DMATRFMOFFS, to);
     w32(gJpg, FALCON_DMATRFFBOFFS, from);
     w32(gJpg, FALCON_DMATRFCMD, DMATRFCMD_SIZE_256B | (code ? DMATRFCMD_IMEM : 0));
@@ -450,7 +472,8 @@ void timedOut(uint32_t fence, uint64_t us)
     if (gPublished)
         panic("TegraNVJPG: job fence %u not reached in %llu ms (syncpoint %u at %u); %s; %s", fence, us / 1000, gSyncpt,
               tegra_host1x_syncpt_read(gSyncpt), falconState(), host);
-    if (gWedged) return;
+    if (gWedged)
+        return;
     gWedged = true;
     IOLog("TegraNVJPG: job fence %u not reached in %llu us (syncpoint %u at %u); %s; %s\n", fence, us, gSyncpt,
           tegra_host1x_syncpt_read(gSyncpt), falconState(), host);
@@ -564,7 +587,8 @@ void bringUp(void *, wait_result_t)
     tegra_host1x_set_strict();
     // Proven: from here a job past its bound panics (TegraNVJPG.h).
     gPublished = true;
-    if (tegra_nvjpg_publish()) gPublished = false;  // its FAIL line is out; the engine stays up, unused
+    if (tegra_nvjpg_publish())
+        gPublished = false;  // its FAIL line is out; the engine stays up, unused
 }
 }  // namespace
 
@@ -586,7 +610,8 @@ extern "C" uint32_t tegra_nvjpg_clock_mhz(void)
 extern "C" int tegra_nvjpg_buffer(uint64_t size, TegraNVJPGBuffer *out)
 {
     size = (size + 0xfff) & ~0xfffull;
-    if (!gArena.va || gArenaUsed + size > gArena.size) return -12;
+    if (!gArena.va || gArenaUsed + size > gArena.size)
+        return -12;
     out->pa = gArena.pa + gArenaUsed;
     out->va = gArena.va + gArenaUsed;
     out->size = size;
@@ -598,10 +623,12 @@ extern "C" void tegra_nvjpg_cache_clean(const void *va, size_t size)
 {
     cacheOp<false>(va, size);
 }
+
 extern "C" void tegra_nvjpg_cache_flush(const void *va, size_t size)
 {
     cacheOp<true>(va, size);
 }
+
 extern "C" void tegra_nvjpg_cache_flush_pages(const uint64_t *pages, uint32_t count)
 {
     uint64_t ctr;
@@ -609,9 +636,11 @@ extern "C" void tegra_nvjpg_cache_flush_pages(const uint64_t *pages, uint32_t co
     const uintptr_t line = (uintptr_t)4 << ((ctr >> 16) & 15);
     __asm__ volatile("dsb sy" ::: "memory");
     for (uint32_t i = 0; i < count; i++) {
-        if (!pmap_valid_page((ppnum_t)(pages[i] >> 12))) continue;
+        if (!pmap_valid_page((ppnum_t)(pages[i] >> 12)))
+            continue;
         const uintptr_t va = phystokv(pages[i] & ~0xfffULL);
-        for (uintptr_t a = va; a < va + 4096; a += line) __asm__ volatile("dc civac, %0" ::"r"(a) : "memory");
+        for (uintptr_t a = va; a < va + 4096; a += line)
+            __asm__ volatile("dc civac, %0" ::"r"(a) : "memory");
     }
     __asm__ volatile("dsb sy" ::: "memory");
 }
@@ -620,6 +649,7 @@ extern "C" void tegra_nvjpg_lock(void)
 {
     IOLockLock(gJobLock);
 }
+
 extern "C" void tegra_nvjpg_unlock(void)
 {
     IOLockUnlock(gJobLock);
@@ -629,10 +659,13 @@ extern "C" void tegra_nvjpg_unlock(void)
 // the job's memory faults in the SMMU instead of reaching memory.
 extern "C" uint64_t tegra_nvjpg_window_map(uint32_t window, const uint64_t *pages, uint32_t count, bool writable)
 {
-    if (window >= TEGRA_NVJPG_WINDOWS || count > (uint32_t)(kTegraNVJPGWindowBytes[window] >> 12)) return 0;
+    if (window >= TEGRA_NVJPG_WINDOWS || count > (uint32_t)(kTegraNVJPGWindowBytes[window] >> 12))
+        return 0;
     uint32_t *pt = table(windowTable(window));  // the window's tables are consecutive pages
-    for (uint32_t i = 0; i < count; i++) pt[i] = TegraSMMUDomain::entry(pages[i], writable);
-    for (uint32_t i = count; i < gWindowMapped[window]; i++) pt[i] = 0;
+    for (uint32_t i = 0; i < count; i++)
+        pt[i] = TegraSMMUDomain::entry(pages[i], writable);
+    for (uint32_t i = count; i < gWindowMapped[window]; i++)
+        pt[i] = 0;
     cacheOp<false>(pt, (uint64_t)(count > gWindowMapped[window] ? count : gWindowMapped[window]) * 4);
     gWindowMapped[window] = count;
     smmuFlush();
@@ -641,7 +674,8 @@ extern "C" uint64_t tegra_nvjpg_window_map(uint32_t window, const uint64_t *page
 
 extern "C" void tegra_nvjpg_window_clear(uint32_t window)
 {
-    if (window >= TEGRA_NVJPG_WINDOWS || !gWindowMapped[window]) return;
+    if (window >= TEGRA_NVJPG_WINDOWS || !gWindowMapped[window])
+        return;
     uint32_t *pt = table(windowTable(window));
     bzero(pt, (uint64_t)gWindowMapped[window] * 4);
     cacheOp<false>(pt, (uint64_t)gWindowMapped[window] * 4);
@@ -652,7 +686,8 @@ extern "C" void tegra_nvjpg_window_clear(uint32_t window)
 extern "C" void tegra_nvjpg_identity_override(uint64_t iova, uint64_t pa)
 {
     uint32_t *p = gDomain.pte(iova, true);
-    if (!p) return;
+    if (!p)
+        return;
     *p = TegraSMMUDomain::entry(pa, true);
     gDomain.touch(p, sizeof(*p));
     cleanDomain();
@@ -665,12 +700,14 @@ extern "C" void tegra_nvjpg_identity_override(uint64_t iova, uint64_t pa)
 // syncpoint, waited for by interrupt.
 extern "C" int tegra_nvjpg_run(const TegraNVJPGJob *job, nvjpg_dec_status *status, uint64_t *busyUs)
 {
-    if (!gUp || !job->planes || job->planes > 3) return -19;
+    if (!gUp || !job->planes || job->planes > 3)
+        return -19;
     if ((job->bitstream & 0xff) || (job->plane[0] & 0xff) || (job->planes > 1 && (job->plane[1] & 0xff)) ||
         (job->planes > 2 && (job->plane[2] & 0xff)))
         return -22;
     IOLockLock(gStateLock);
-    while (gSuspended) IOLockSleep(gStateLock, &gSuspended, THREAD_UNINT);
+    while (gSuspended)
+        IOLockSleep(gStateLock, &gSuspended, THREAD_UNINT);
     if (gWedged) {
         IOLockUnlock(gStateLock);
         return -19;
@@ -693,8 +730,10 @@ extern "C" int tegra_nvjpg_run(const TegraNVJPGJob *job, nvjpg_dec_status *statu
     method(NVE7D0_SET_BITSTREAM, (uint32_t)(job->bitstream >> 8));
     method(NVE7D0_SET_OUT_STATUS, (uint32_t)(gStatus.pa >> 8));
     method(NVE7D0_SET_CUR_PIC, (uint32_t)(job->plane[0] >> 8));
-    if (job->planes > 1) method(NVE7D0_SET_CUR_PIC_CHROMA_U, (uint32_t)(job->plane[1] >> 8));
-    if (job->planes > 2) method(NVE7D0_SET_CUR_PIC_CHROMA_V, (uint32_t)(job->plane[2] >> 8));
+    if (job->planes > 1)
+        method(NVE7D0_SET_CUR_PIC_CHROMA_U, (uint32_t)(job->plane[1] >> 8));
+    if (job->planes > 2)
+        method(NVE7D0_SET_CUR_PIC_CHROMA_V, (uint32_t)(job->plane[2] >> 8));
     method(NVE7D0_EXECUTE, 1u << 8);  // AWAKEN
     words[n++] = tegra_host1x_op_incr_syncpt(TEGRA_HOST1X_COND_OP_DONE, gSyncpt);
     const uint32_t fence = gNext + 1;
@@ -703,9 +742,11 @@ extern "C" int tegra_nvjpg_run(const TegraNVJPGJob *job, nvjpg_dec_status *statu
     if (!ret) {
         gNext = fence;
         ret = tegra_host1x_syncpt_wait(gSyncpt, fence, jobBoundUs(job->pixels));
-        if (ret == TEGRA_HOST1X_ETIMEDOUT) timedOut(fence, nowUs() - start);
+        if (ret == TEGRA_HOST1X_ETIMEDOUT)
+            timedOut(fence, nowUs() - start);
     }
-    if (busyUs) *busyUs = nowUs() - start;
+    if (busyUs)
+        *busyUs = nowUs() - start;
     cacheOp<true>(gStatus.va, sizeof(nvjpg_dec_status));
     memcpy(status, gStatus.va, sizeof(*status));
     IOLockUnlock(gStateLock);
@@ -745,7 +786,8 @@ void engineResume()
             snprintf(gLine, sizeof(gLine), "%s did not answer (%d, syncpoint %u %u->%u); %s", stage, ret, gSyncpt, from,
                      tegra_host1x_syncpt_read(gSyncpt), falconState());
     }
-    if (gWedged) IOLog("TegraNVJPG: resume FAIL %s; NVJPG refuses work (decodes go to the CPU)\n", gLine);
+    if (gWedged)
+        IOLog("TegraNVJPG: resume FAIL %s; NVJPG refuses work (decodes go to the CPU)\n", gLine);
     gNext = tegra_host1x_syncpt_read(gSyncpt);
     gSuspended = false;
     IOLockWakeup(gStateLock, &gSuspended, false);
@@ -757,7 +799,8 @@ void engineResume()
 extern "C" int tegra_nvjpg_probe(void)
 {
     static volatile int started;
-    if (__atomic_exchange_n(&started, 1, __ATOMIC_SEQ_CST)) return 0;
+    if (__atomic_exchange_n(&started, 1, __ATOMIC_SEQ_CST))
+        return 0;
     thread_t thread;
     if (kernel_thread_start(bringUp, nullptr, &thread) != KERN_SUCCESS) {
         IOLog("TegraNVJPG: could not start the bring-up thread\n");

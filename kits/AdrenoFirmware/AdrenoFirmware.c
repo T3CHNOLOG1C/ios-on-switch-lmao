@@ -10,10 +10,13 @@ AdrenoFirmwareResult AdrenoFirmwarePlanGmu(const uint8_t *firmware, size_t bytes
                                            size_t region_count, AdrenoFirmwareBlock *blocks, size_t capacity,
                                            size_t *count)
 {
-    if (!count) return AdrenoFirmwareInvalid;
+    if (!count)
+        return AdrenoFirmwareInvalid;
     *count = 0;
-    if (!firmware || !regions || !blocks || !region_count || region_count > 64) return AdrenoFirmwareInvalid;
-    if (bytes < 16) return AdrenoFirmwareTruncated;
+    if (!firmware || !regions || !blocks || !region_count || region_count > 64)
+        return AdrenoFirmwareInvalid;
+    if (bytes < 16)
+        return AdrenoFirmwareTruncated;
     for (size_t i = 0; i < region_count; ++i) {
         const AdrenoFirmwareRegion *a = regions + i;
         if (!a->bytes || (a->address & 3) || (a->bytes & 3) || a->bytes > UINT64_C(0x100000000) - a->address ||
@@ -29,11 +32,13 @@ AdrenoFirmwareResult AdrenoFirmwarePlanGmu(const uint8_t *firmware, size_t bytes
     for (unsigned pass = 0; pass < 2; ++pass) {
         size_t offset = 0, n = 0;
         while (offset < bytes) {
-            if (bytes - offset < 16) return AdrenoFirmwareTruncated;
+            if (bytes - offset < 16)
+                return AdrenoFirmwareTruncated;
             uint32_t address = le32(firmware + offset);
             uint32_t length = le32(firmware + offset + 4);
             uint32_t identifier = UINT32_MAX;
-            if (length > bytes - offset - 16) return AdrenoFirmwareTruncated;
+            if (length > bytes - offset - 16)
+                return AdrenoFirmwareTruncated;
             if (length) {
                 if ((address & 3) || (length & 3) || length > UINT64_C(0x100000000) - address)
                     return AdrenoFirmwareInvalid;
@@ -44,9 +49,11 @@ AdrenoFirmwareResult AdrenoFirmwarePlanGmu(const uint8_t *firmware, size_t bytes
                         break;
                     }
                 }
-                if (identifier == UINT32_MAX) return AdrenoFirmwareUnmapped;
+                if (identifier == UINT32_MAX)
+                    return AdrenoFirmwareUnmapped;
             }
-            if (n == capacity) return AdrenoFirmwareNoSpace;
+            if (n == capacity)
+                return AdrenoFirmwareNoSpace;
             if (pass) {
                 blocks[n].address = address;
                 blocks[n].bytes = length;
@@ -58,7 +65,8 @@ AdrenoFirmwareResult AdrenoFirmwarePlanGmu(const uint8_t *firmware, size_t bytes
             n++;
             offset += 16 + (size_t)length;
         }
-        if (pass) *count = n;
+        if (pass)
+            *count = n;
     }
     return AdrenoFirmwareSuccess;
 }

@@ -39,11 +39,17 @@ constexpr unsigned kSwitchTouchSlots = 10, kSwitchTouchWidth = 1280, kSwitchTouc
 // interface itself.
 constexpr unsigned kSwitchTouchReportWidth = SWITCH_PORTRAIT_NATIVE ? kSwitchTouchHeight : kSwitchTouchWidth,
                    kSwitchTouchReportHeight = SWITCH_PORTRAIT_NATIVE ? kSwitchTouchWidth : kSwitchTouchHeight;
-enum : uint8_t { kSwitchTouchTip = 1u << 0, kSwitchTouchValid = 1u << 1 };  // bit 2 (Untouch) stays 0
+
+enum : uint8_t {
+    kSwitchTouchTip = 1u << 0,
+    kSwitchTouchValid = 1u << 1
+};  // bit 2 (Untouch) stays 0
+
 struct __attribute__((packed)) SwitchTouchSlot {
     uint8_t flags, contact;
     uint16_t x, y;
 };
+
 struct __attribute__((packed)) SwitchTouchReport {
     uint8_t id;  // 1
     SwitchTouchSlot slot[kSwitchTouchSlots];
@@ -59,6 +65,7 @@ enum : uint8_t {
     kSwitchButtonHome = 1u << 3,
     kSwitchButtonSnapshot = 1u << 4,
 };
+
 struct __attribute__((packed)) SwitchButtonsReport {
     uint8_t id;  // 1
     uint8_t buttons;
@@ -118,6 +125,7 @@ constexpr uint8_t kSwitchOrientationDescriptor[] = {
     0x27, 0xff, 0xff, 0xff, 0x7f, 0x75, 0x40, 0x95, 0x01, 0x81, 0x02,  // 64 bits, Input (Data, Var, Abs)
     0xc0, 0xc0,
 };
+
 struct __attribute__((packed)) SwitchOrientationReport {
     uint8_t id;              // 1
     uint8_t orientation[2];  // 1u << UIDeviceOrientation in one set, 0 in the other
@@ -143,6 +151,7 @@ IOService *switch_hid_create_temperature(const char *product, uint32_t locationI
                                          void *context);
 // Whether that device's event driver has been found and hooked (then thermalmonitord's reads reach the handler).
 bool switch_hid_temperature_hooked(IOService *device);
+
 // Hooks the IOHIDEventDriver that has opened the device's interface, unless the publish notification has. Thread
 // context, never waits.
 enum SwitchHIDHook : unsigned {
@@ -154,6 +163,7 @@ enum SwitchHIDHook : unsigned {
     kSwitchHIDHookNoMemory,
     kSwitchHIDHookKinds,
 };
+
 SwitchHIDHook switch_hid_temperature_hook(IOService *device);
 // A kIOHIDEventTypeTemperature event (+1) with kIOHIDEventFieldTemperatureLevel = `fixed` (16.16 degrees C) at
 // `timestamp` (mach absolute time); nullptr without memory, or for the rest of the boot (one log line) once the first

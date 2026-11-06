@@ -10,6 +10,7 @@
 static const uint8_t expected_uuid[16] = {0x31};
 static const uint8_t apfs_type[16] = {0xef, 0x57, 0x34, 0x7c, 0,    0,    0xaa, 0x11,
                                       0xaa, 0x11, 0,    0x30, 0x65, 0x43, 0xec, 0xac};
+
 struct fixture {
     struct switch_raw_apfs backend;
     struct switch_raw_apfs_io io;
@@ -22,18 +23,24 @@ struct fixture {
     int (*permit)(void *, uint64_t, uint32_t);
     void *owner;
 };
+
 static void put32(uint8_t *p, uint32_t n)
 {
-    for (unsigned i = 0; i < 4; i++) p[i] = (uint8_t)(n >> (8 * i));
+    for (unsigned i = 0; i < 4; i++)
+        p[i] = (uint8_t)(n >> (8 * i));
 }
+
 static void put64(uint8_t *p, uint64_t n)
 {
-    for (unsigned i = 0; i < 8; i++) p[i] = (uint8_t)(n >> (8 * i));
+    for (unsigned i = 0; i < 8; i++)
+        p[i] = (uint8_t)(n >> (8 * i));
 }
+
 static uint32_t get32(const uint8_t *p)
 {
     return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
 }
+
 /* Independent weighted-sum formulation, rather than production's recurrence. */
 static void seal(struct fixture *f)
 {
@@ -49,22 +56,26 @@ static void seal(struct fixture *f)
     uint64_t x = mod - (a + b) % mod, y = mod - (a + x) % mod;
     put64(f->nxsb, x | (y << 32));
 }
+
 static int ready(void *p)
 {
     struct fixture *f = p;
     return f->offline ? SWITCH_BLOCK_NOT_READY : f->ready_error;
 }
+
 static int begin(void *p, uint32_t n, uint32_t seconds)
 {
     struct fixture *f = p;
     f->begins++;
-    if (f->begin_error) return f->begin_error;
+    if (f->begin_error)
+        return f->begin_error;
     CHECK(!f->active && n && n <= 129 && (seconds == 5 || seconds == 30));
     f->active = 1;
     f->budget = n;
     f->used = 0;
     return 0;
 }
+
 static int end(void *p)
 {
     struct fixture *f = p;
@@ -73,10 +84,12 @@ static int end(void *p)
     f->ends++;
     return f->end_error;
 }
+
 static void offline(void *p)
 {
     ((struct fixture *)p)->offline = 1;
 }
+
 static int read_sectors(void *p, uint64_t lba, uint32_t n, uint8_t *out)
 {
     struct fixture *f = p;
@@ -93,9 +106,11 @@ static int read_sectors(void *p, uint64_t lba, uint32_t n, uint8_t *out)
     if (lba == f->first && n * 512 <= f->block_size)
         memcpy(out, f->nxsb, n * 512);
     else
-        for (uint32_t i = 0; i < n * 512; i++) out[i] = (uint8_t)(lba + i);
+        for (uint32_t i = 0; i < n * 512; i++)
+            out[i] = (uint8_t)(lba + i);
     return 0;
 }
+
 static int qualify(void *p, int (*permit)(void *, uint64_t, uint32_t), void *owner)
 {
     struct fixture *f = p;
@@ -106,6 +121,7 @@ static int qualify(void *p, int (*permit)(void *, uint64_t, uint32_t), void *own
     CHECK(permit(owner, f->first, 1) == 1 && permit(owner, f->first - 1, 2) == 0 && permit(owner, UINT64_MAX, 1) == 0);
     return f->qualify_error;
 }
+
 static void unbind(void *p, void *owner)
 {
     struct fixture *f = p;
@@ -115,6 +131,7 @@ static void unbind(void *p, void *owner)
         f->permit = 0;
     }
 }
+
 static int write_sectors(void *p, uint64_t lba, uint32_t n, const uint8_t *in)
 {
     struct fixture *f = p;
@@ -126,6 +143,7 @@ static int write_sectors(void *p, uint64_t lba, uint32_t n, const uint8_t *in)
     memcpy(f->written, in, n * 512);
     return f->write_error;
 }
+
 static int sync_card(void *p)
 {
     struct fixture *f = p;
@@ -133,6 +151,7 @@ static int sync_card(void *p)
     f->syncs++;
     return f->sync_error;
 }
+
 static void setup(struct fixture *f, uint32_t block_size)
 {
     memset(f, 0, sizeof(*f));
@@ -142,7 +161,7 @@ static void setup(struct fixture *f, uint32_t block_size)
     f->parts[0] = (struct switch_raw_apfs_partition){.first_sector = f->first, .sector_count = f->sectors};
     memcpy(f->parts[0].type_guid, apfs_type, 16);
     f->io = (struct switch_raw_apfs_io){f,       ready,  begin,         end,      offline, read_sectors,
-                                      qualify, unbind, write_sectors, sync_card};
+                                        qualify, unbind, write_sectors, sync_card};
     put64(f->nxsb + 8, 1);
     put64(f->nxsb + 16, 5);
     put32(f->nxsb + 24, 0x80000001);
@@ -158,17 +177,22 @@ static void setup(struct fixture *f, uint32_t block_size)
     put32(f->nxsb + 180, 100);
     seal(f);
 }
+
 static int open_count(struct fixture *f, unsigned n)
 {
-    return switch_raw_apfs_open(&f->backend, &f->io, 100000, f->parts, n, expected_uuid, f->scratch, sizeof(f->scratch));
+    return switch_raw_apfs_open(&f->backend, &f->io, 100000, f->parts, n, expected_uuid, f->scratch,
+                                sizeof(f->scratch));
 }
+
 static void close_backend(struct fixture *f)
 {
     switch_raw_apfs_close(&f->backend);
     CHECK(!f->active && !f->owner);
 }
+
 static unsigned cases;
 unsigned raw_apfs_cases(void);
+
 unsigned raw_apfs_cases(void)
 {
     struct fixture f;
@@ -176,7 +200,8 @@ unsigned raw_apfs_cases(void)
     struct switch_block_info info;
     for (unsigned size = 4096; size <= 65536; size *= 2) {
         setup(&f, size);
-        if (size > 8192) put64(f.nxsb + 40, 256);
+        if (size > 8192)
+            put64(f.nxsb + 40, 256);
         seal(&f);
         CHECK(!switch_raw_apfs_validate_nxsb(f.nxsb, size, f.sectors));
         CHECK(!open_count(&f, 1) && f.qualifies == 1 && f.reads == 2 && !f.offline);
@@ -194,7 +219,8 @@ unsigned raw_apfs_cases(void)
           f.last_count == 128 && !memcmp(f.written, bytes, sizeof(bytes)));
     CHECK(!switch_raw_apfs_read(&f.backend, 65536, bytes, sizeof(bytes)) && f.last_lba == f.first + 128 &&
           f.last_count == 128);
-    for (unsigned i = 0; i < sizeof(bytes); i++) CHECK(bytes[i] == (uint8_t)(f.first + 128 + i));
+    for (unsigned i = 0; i < sizeof(bytes); i++)
+        CHECK(bytes[i] == (uint8_t)(f.first + 128 + i));
     CHECK(!switch_raw_apfs_sync(&f.backend) && f.syncs == 1);
     cases += 3;
     uint64_t total = f.sectors * 512;
@@ -211,12 +237,18 @@ unsigned raw_apfs_cases(void)
     close_backend(&f);
     for (unsigned k = 0; k < 8; k++) {
         setup(&f, 4096);
-        if (k == 0) f.parts[0].first_sector = 0;
-        if (k == 1) f.parts[0].sector_count = 0;
-        if (k == 2) f.parts[0].first_sector = 100000;
-        if (k == 3) f.parts[0].sector_count = UINT64_MAX;
-        if (k == 4) memset(f.parts[0].type_guid, 0, 16);
-        if (k == 5) f.parts[0].sector_count = 7;
+        if (k == 0)
+            f.parts[0].first_sector = 0;
+        if (k == 1)
+            f.parts[0].sector_count = 0;
+        if (k == 2)
+            f.parts[0].first_sector = 100000;
+        if (k == 3)
+            f.parts[0].sector_count = UINT64_MAX;
+        if (k == 4)
+            memset(f.parts[0].type_guid, 0, 16);
+        if (k == 5)
+            f.parts[0].sector_count = 7;
         if (k >= 6) {
             f.parts[1] = f.parts[0];
             if (k == 7) {
@@ -250,7 +282,7 @@ unsigned raw_apfs_cases(void)
     f.first = UINT64_C(0xffff0000);
     f.parts[0].first_sector = f.first;
     CHECK(!switch_raw_apfs_open(&f.backend, &f.io, UINT64_C(0x100000000), f.parts, 1, expected_uuid, f.scratch,
-                              sizeof(f.scratch)));
+                                sizeof(f.scratch)));
     CHECK(!switch_raw_apfs_write(&f.backend, f.sectors * 512 - 512, bytes, 512) && f.last_lba == UINT64_C(0xffffffff));
     close_backend(&f);
     cases++;
@@ -271,38 +303,64 @@ unsigned raw_apfs_cases(void)
     cases += 4;
     for (unsigned k = 0; k < 19; k++) {
         setup(&f, 4096);
-        if (k == 0) f.nxsb[100] ^= 1;
-        if (k == 1) put64(f.nxsb + 8, 2);
-        if (k == 2) put64(f.nxsb + 16, 0);
-        if (k == 3) put32(f.nxsb + 24, 2);
-        if (k == 4) put32(f.nxsb + 24, 0xa0000001);
-        if (k == 5) put32(f.nxsb + 28, 1);
-        if (k == 6) f.nxsb[32] = 0;
-        if (k == 7) put32(f.nxsb + 36, 3072);
-        if (k == 8) put32(f.nxsb + 36, 131072);
-        if (k == 9) put64(f.nxsb + 40, 0);
-        if (k == 10) put64(f.nxsb + 40, UINT64_MAX);
-        if (k == 11) f.nxsb[72] = 0;
-        if (k == 12) put64(f.nxsb + 64, 0x100);
-        if (k == 13) f.nxsb[1280] = 1;
-        if (k == 14) put64(f.nxsb + 112, 4096);
-        if (k == 15) put64(f.nxsb + 120, 2);
-        if (k == 16) put64(f.nxsb + 160, 4096);
-        if (k == 17) put32(f.nxsb + 180, 101);
-        if (k == 18) put32(f.nxsb + 108, 0);
-        if (k) seal(&f);
+        if (k == 0)
+            f.nxsb[100] ^= 1;
+        if (k == 1)
+            put64(f.nxsb + 8, 2);
+        if (k == 2)
+            put64(f.nxsb + 16, 0);
+        if (k == 3)
+            put32(f.nxsb + 24, 2);
+        if (k == 4)
+            put32(f.nxsb + 24, 0xa0000001);
+        if (k == 5)
+            put32(f.nxsb + 28, 1);
+        if (k == 6)
+            f.nxsb[32] = 0;
+        if (k == 7)
+            put32(f.nxsb + 36, 3072);
+        if (k == 8)
+            put32(f.nxsb + 36, 131072);
+        if (k == 9)
+            put64(f.nxsb + 40, 0);
+        if (k == 10)
+            put64(f.nxsb + 40, UINT64_MAX);
+        if (k == 11)
+            f.nxsb[72] = 0;
+        if (k == 12)
+            put64(f.nxsb + 64, 0x100);
+        if (k == 13)
+            f.nxsb[1280] = 1;
+        if (k == 14)
+            put64(f.nxsb + 112, 4096);
+        if (k == 15)
+            put64(f.nxsb + 120, 2);
+        if (k == 16)
+            put64(f.nxsb + 160, 4096);
+        if (k == 17)
+            put32(f.nxsb + 180, 101);
+        if (k == 18)
+            put32(f.nxsb + 108, 0);
+        if (k)
+            seal(&f);
         CHECK(open_count(&f, 1) == SWITCH_BLOCK_CORRUPT && !f.qualifies && !f.writes && f.offline);
         close_backend(&f);
         cases++;
     }
     for (unsigned k = 0; k < 6; k++) {
         setup(&f, 4096);
-        if (k == 0) f.ready_error = SWITCH_BLOCK_NOT_READY;
-        if (k == 1) f.begin_error = SWITCH_BLOCK_TIMEOUT;
-        if (k == 2) f.read_error_at = 1;
-        if (k == 3) f.read_error_at = 2;
-        if (k == 4) f.end_error = SWITCH_BLOCK_TIMEOUT;
-        if (k == 5) f.qualify_error = SWITCH_BLOCK_IO;
+        if (k == 0)
+            f.ready_error = SWITCH_BLOCK_NOT_READY;
+        if (k == 1)
+            f.begin_error = SWITCH_BLOCK_TIMEOUT;
+        if (k == 2)
+            f.read_error_at = 1;
+        if (k == 3)
+            f.read_error_at = 2;
+        if (k == 4)
+            f.end_error = SWITCH_BLOCK_TIMEOUT;
+        if (k == 5)
+            f.qualify_error = SWITCH_BLOCK_IO;
         CHECK(open_count(&f, 1) != 0 && f.offline && !f.writes && !f.owner);
         unsigned reads = f.reads;
         CHECK(switch_raw_apfs_read(&f.backend, 0, bytes, 512) == SWITCH_BLOCK_NOT_READY && f.reads == reads);
@@ -317,8 +375,10 @@ unsigned raw_apfs_cases(void)
             f.read_error_at = f.reads + 1;
             memset(client, 0x5a, sizeof(client));
             result = switch_raw_apfs_read(&f.backend, 0, bytes, 512);
-            if (!result) memcpy(client, bytes, 512);
-            for (unsigned i = 0; i < sizeof(client); i++) CHECK(client[i] == 0x5a);
+            if (!result)
+                memcpy(client, bytes, 512);
+            for (unsigned i = 0; i < sizeof(client); i++)
+                CHECK(client[i] == 0x5a);
         } else if (k == 1) {
             f.write_error = SWITCH_BLOCK_IO;
             result = switch_raw_apfs_write(&f.backend, 0, bytes, 512);

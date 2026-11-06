@@ -32,11 +32,14 @@
 extern "C" int switch_battery_start(void);
 extern "C" int switch_battery_temperature(int *milli_c, unsigned long long *at);
 static unsigned gSensorNotes = 0;
+
 extern "C" void switch_sensors_note(void)
 {
     ++gSensorNotes;
 }  // SwitchSensors (SwitchPower.h)
+
 static std::vector<unsigned> gWakeEvents;
+
 extern "C" void switch_wake_event(unsigned source)
 {
     gWakeEvents.push_back(source);
@@ -44,35 +47,44 @@ extern "C" void switch_wake_event(unsigned source)
 
 // Every check is a GoogleTest failure at its call site; the count lets a failed scenario dump the logs it ran on.
 static unsigned gFailures = 0;
+
 static void checkAt(bool ok, const std::string &what, const char *file, int line)
 {
-    if (ok) return;
+    if (ok)
+        return;
     ++gFailures;
     ADD_FAILURE_AT(file, line) << what;
 }
+
 #define check(ok, what) checkAt((ok), (what), __FILE__, __LINE__)
+
 static std::string hex(unsigned v)
 {
     char text[16];
     std::snprintf(text, sizeof(text), "%02x", v);
     return text;
 }
+
 static bool logHas(const std::string &needle, size_t from = 0)
 {
     for (size_t i = from; i < gLog.size(); ++i)
-        if (gLog[i].find(needle) != std::string::npos) return true;
+        if (gLog[i].find(needle) != std::string::npos)
+            return true;
     return false;
 }
+
 static size_t logCount(const std::string &needle)
 {
     size_t n = 0;
-    for (const auto &line : gLog) n += line.find(needle) != std::string::npos;
+    for (const auto &line : gLog)
+        n += line.find(needle) != std::string::npos;
     return n;
 }
 
 struct Gauge {
     std::map<uint8_t, uint16_t> reg;
     bool line = true, edge = false;  // ALRT (high = released), a falling edge not yet delivered
+
     Gauge()
     {
         reg[0x21] = 0x00ac;    // DevName
@@ -91,19 +103,33 @@ struct Gauge {
         reg[0x18] = 4310 * 2;
         setTemp(3000);
     }
-    void setTemp(int centi) { reg[0x08] = (uint16_t)(int16_t)(centi * 256 / 100); }
-    int centi() const { return (int16_t)reg.at(0x08) * 100 / 256; }
+
+    void setTemp(int centi)
+    {
+        reg[0x08] = (uint16_t)(int16_t)(centi * 256 / 100);
+    }
+
+    int centi() const
+    {
+        return (int16_t)reg.at(0x08) * 100 / 256;
+    }
+
     void update()
     {
         const int t = (int16_t)reg[0x08];  // 1/256 C
         const int tmax = (int8_t)(reg[0x02] >> 8), tmin = (int8_t)(reg[0x02] & 0xff);
         const int soc = reg[0x06] >> 8, smax = reg[0x03] >> 8, smin = reg[0x03] & 0xff;
-        if (t > tmax * 256) reg[0x00] |= 1u << 13;
-        if (t < tmin * 256) reg[0x00] |= 1u << 9;
-        if (soc > smax) reg[0x00] |= 1u << 14;
-        if (soc < smin) reg[0x00] |= 1u << 10;
+        if (t > tmax * 256)
+            reg[0x00] |= 1u << 13;
+        if (t < tmin * 256)
+            reg[0x00] |= 1u << 9;
+        if (soc > smax)
+            reg[0x00] |= 1u << 14;
+        if (soc < smin)
+            reg[0x00] |= 1u << 10;
         const bool low = (reg[0x1d] & (1u << 2)) && (reg[0x00] & 0x7700);
-        if (line && low) edge = true;
+        if (line && low)
+            edge = true;
         line = !low;
     }
 };
@@ -117,8 +143,17 @@ struct Charger {
     bool refuseReg05 = false;
     const Gauge *gauge = nullptr;
     std::vector<std::string> ops;
-    Charger() { reset(); }
-    uint8_t current() const { return defaultMode ? 0x80 : 0; }
+
+    Charger()
+    {
+        reset();
+    }
+
+    uint8_t current() const
+    {
+        return defaultMode ? 0x80 : 0;
+    }
+
     void reset()
     {
         const uint8_t r[11] = {0x30, 0x1b, 0x60, 0x11, 0xb2, 0x9a, 0x03, 0x4b, 0x00, 0x00, 0x2f};
@@ -126,9 +161,15 @@ struct Charger {
         defaultMode = true;
         latched |= 0x80;
         status();
-        if (input) detect();
+        if (input)
+            detect();
     }
-    void detect() { reg[0] = (uint8_t)((reg[0] & ~7) | charge::bq::encodeInputLimit(detectMA)); }
+
+    void detect()
+    {
+        reg[0] = (uint8_t)((reg[0] & ~7) | charge::bq::encodeInputLimit(detectMA));
+    }
+
     void status()
     {
         const unsigned mode = (reg[1] >> 4) & 3;
@@ -140,21 +181,25 @@ struct Charger {
             reg[8] = 0;
         }
     }
+
     void plug(unsigned ma, unsigned stat)
     {
         input = true;
         detectMA = ma;
         vbusStat = stat;
-        if (!(reg[0] & 0x80) || defaultMode) detect();  // [TI] 8.3.1.3: unless in Hi-Z in host mode
+        if (!(reg[0] & 0x80) || defaultMode)
+            detect();  // [TI] 8.3.1.3: unless in Hi-Z in host mode
         status();
         intPending = true;
     }
+
     void unplug()
     {
         input = false;
         status();
         intPending = true;
     }
+
     void tick()
     {
         const unsigned wd = charge::bq::watchdogSeconds(reg[5]);
@@ -164,18 +209,22 @@ struct Charger {
             intPending = true;
         }
     }
+
     int read(uint8_t r, uint8_t *buf, size_t len)
     {
-        if (len > 1 && r + len > 9) return TEGRA_I2C_EIO;  // multi-read only over REG00-REG08
+        if (len > 1 && r + len > 9)
+            return TEGRA_I2C_EIO;  // multi-read only over REG00-REG08
         if (len == 1 && r == 9) {
             buf[0] = latched;
             latched = current();
             return 0;
         }
-        if (r + len > 11) return TEGRA_I2C_EINVAL;
+        if (r + len > 11)
+            return TEGRA_I2C_EINVAL;
         std::memcpy(buf, reg + r, len);
         return 0;
     }
+
     int write(uint8_t r, uint8_t v)
     {
         ++writes;
@@ -192,16 +241,20 @@ struct Charger {
             reset();
             return 0;
         }
-        if (r == 1 && (v & 0x40)) lastKick = gNow;
-        if (r == 5 && refuseReg05) return 0;
+        if (r == 1 && (v & 0x40))
+            lastKick = gNow;
+        if (r == 5 && refuseReg05)
+            return 0;
         if (r == 0 && (v & 7) > (reg[0] & 7)) {
             ++iinlimRaises;
             check(charge::bq::decodeInputLimit(v) <= 2000,
                   "IINLIM raised to " + std::to_string(charge::bq::decodeInputLimit(v)));
         }
         reg[r] = r == 1 ? (uint8_t)(v & 0x3f) : v;
-        if (r == 2) check(charge::bq::decodeChargeCurrent(v) <= 2048, "ICHG " + hex(v));
-        if (r == 4) check(charge::bq::decodeChargeVoltage(v) <= 4208, "VREG " + hex(v));
+        if (r == 2)
+            check(charge::bq::decodeChargeCurrent(v) <= 2048, "ICHG " + hex(v));
+        if (r == 4)
+            check(charge::bq::decodeChargeVoltage(v) <= 4208, "VREG " + hex(v));
         if (r == 1 && ((v >> 4) & 3) == 1 && gauge) {
             const int t = gauge->centi();
             check(t >= 400 && t < 5100, "charge mode at " + std::to_string(t) + " centi-C");
@@ -215,10 +268,22 @@ struct PdChip {
     uint16_t alert = 0, status1 = 0, status2 = 0, config1 = 0xc0e0, vendor = 0;
     std::vector<uint32_t> pdos;
     uint32_t curPdo = 0, curRdo = 0, pendingRdo = 0;
-    enum Reply { Accept, Refuse, Silent, AbortOnce } rdoReply = Accept;
+
+    enum Reply {
+        Accept,
+        Refuse,
+        Silent,
+        AbortOnce
+    } rdoReply = Accept;
+
     bool psRdyReply = true;
     std::vector<std::string> commands;
-    static uint32_t fixed(unsigned mv, unsigned ma) { return (uint32_t)(mv / 50) << 10 | (ma / 10); }
+
+    static uint32_t fixed(unsigned mv, unsigned ma)
+    {
+        return (uint32_t)(mv / 50) << 10 | (ma / 10);
+    }
+
     void sink(const std::vector<uint32_t> &source, unsigned autoIndex, uint16_t bits)
     {
         pdos = source;
@@ -232,6 +297,7 @@ struct PdChip {
         }
         alert |= bits;
     }
+
     void unplug()
     {
         status1 = status2 = 0;
@@ -239,47 +305,75 @@ struct PdChip {
         curPdo = curRdo = 0;
         alert |= 0x8;
     }
+
     int read(uint8_t r, uint8_t *buf, size_t len)
     {
         std::memset(buf, 0, len);
         auto put16 = [&](uint16_t v) {
             buf[0] = (uint8_t)v;
-            if (len > 1) buf[1] = (uint8_t)(v >> 8);
+            if (len > 1)
+                buf[1] = (uint8_t)(v >> 8);
         };
         auto put32 = [&](uint32_t v) {
-            if (len < 5) return;
+            if (len < 5)
+                return;
             buf[0] = 4;
-            for (int i = 0; i < 4; ++i) buf[1 + i] = (uint8_t)(v >> (8 * i));
+            for (int i = 0; i < 4; ++i)
+                buf[1 + i] = (uint8_t)(v >> (8 * i));
         };
         switch (r) {
         case 0x02:
             put16(alert);
             alert = 0;
             break;
-        case 0x03: put16(status1); break;
-        case 0x04: put16(status2); break;
-        case 0x06: put16(config1); break;
-        case 0x1a: put16(vendor); break;
-        case 0x4b: put16(0x603); break;
-        case 0x4c: put16(0xd7c); break;
-        case 0x28: put32(curPdo); break;
-        case 0x2b: put32(curRdo); break;
+        case 0x03:
+            put16(status1);
+            break;
+        case 0x04:
+            put16(status2);
+            break;
+        case 0x06:
+            put16(config1);
+            break;
+        case 0x1a:
+            put16(vendor);
+            break;
+        case 0x4b:
+            put16(0x603);
+            break;
+        case 0x4c:
+            put16(0xd7c);
+            break;
+        case 0x28:
+            put32(curPdo);
+            break;
+        case 0x2b:
+            put32(curRdo);
+            break;
         case 0x08:
             check(len == 29, "READ_PDOS_SRC length " + std::to_string(len));
             buf[0] = (uint8_t)(pdos.size() * 4);
             for (size_t i = 0; i < pdos.size() && 1 + 4 * i + 3 < len; ++i)
-                for (int b = 0; b < 4; ++b) buf[1 + 4 * i + b] = (uint8_t)(pdos[i] >> (8 * b));
+                for (int b = 0; b < 4; ++b)
+                    buf[1 + 4 * i + b] = (uint8_t)(pdos[i] >> (8 * b));
             break;
-        default: check(false, "BM92T36 read of " + hex(r)); return TEGRA_I2C_ENACK;
+        default:
+            check(false, "BM92T36 read of " + hex(r));
+            return TEGRA_I2C_ENACK;
         }
         return 0;
     }
+
     int write(uint8_t r, const uint8_t *data, size_t len)
     {
         const uint16_t v16 = len >= 2 ? (uint16_t)(data[0] | data[1] << 8) : 0;
         switch (r) {
-        case 0x06: config1 = v16; break;
-        case 0x1a: vendor = v16; break;
+        case 0x06:
+            config1 = v16;
+            break;
+        case 0x1a:
+            vendor = v16;
+            break;
         case 0x30:
             check(len == 5 && data[0] == 4, "SET_RDO layout");
             pendingRdo = (uint32_t)data[1] | (uint32_t)data[2] << 8 | (uint32_t)data[3] << 16 | (uint32_t)data[4] << 24;
@@ -293,7 +387,8 @@ struct PdChip {
                                    charge::rdoMaxMilliamps(pendingRdo) <= charge::pdoMilliamps(pdos[pos - 1]) &&
                                    !(pendingRdo & charge::kRdoMismatch);
                 check(valid, "RDO " + hex(pendingRdo) + " valid for the source");
-                if (rdoReply == Silent) break;
+                if (rdoReply == Silent)
+                    break;
                 if (rdoReply == AbortOnce) {  // a MacBook's port: the first request at attach is aborted
                     rdoReply = Accept;
                     status1 = (uint16_t)((status1 & ~0x70) | 2u << 4);
@@ -309,12 +404,15 @@ struct PdChip {
                     alert |= 0x4;
                 }
             } else if (v16 == 0x0505) {
-                if (psRdyReply) alert |= 0x4;
+                if (psRdyReply)
+                    alert |= 0x4;
             } else {
                 check(false, "unexpected BM92T36 command " + hex(v16));
             }
             break;
-        default: check(false, "BM92T36 write of " + hex(r)); return TEGRA_I2C_ENACK;
+        default:
+            check(false, "BM92T36 write of " + hex(r));
+            return TEGRA_I2C_ENACK;
         }
         return 0;
     }
@@ -330,16 +428,20 @@ extern "C" int tegra_i2c_init(unsigned)
 {
     return 0;
 }
+
 extern "C" int tegra_i2c_transfer(unsigned, uint8_t, const void *, size_t, void *, size_t)
 {
     return TEGRA_I2C_EINVAL;
 }
+
 extern "C" int tegra_i2c_read(unsigned bus, uint8_t addr, uint8_t reg, void *buf, size_t len)
 {
     check(bus == 1, "I2C bus " + std::to_string(bus));
     auto *b = static_cast<uint8_t *>(buf);
-    if (addr == 0x6b) return gCharger.read(reg, b, len);
-    if (addr == 0x18) return gPd.read(reg, b, len);
+    if (addr == 0x6b)
+        return gCharger.read(reg, b, len);
+    if (addr == 0x18)
+        return gPd.read(reg, b, len);
     if (addr == 0x36) {
         check(len == 2, "gauge read length");
         const uint16_t v = gGauge.reg.count(reg) ? gGauge.reg[reg] : 0;
@@ -349,6 +451,7 @@ extern "C" int tegra_i2c_read(unsigned bus, uint8_t addr, uint8_t reg, void *buf
     }
     return TEGRA_I2C_ENACK;
 }
+
 extern "C" int tegra_i2c_write(unsigned bus, uint8_t addr, uint8_t reg, const void *buf, size_t len)
 {
     check(bus == 1, "I2C bus " + std::to_string(bus));
@@ -357,38 +460,48 @@ extern "C" int tegra_i2c_write(unsigned bus, uint8_t addr, uint8_t reg, const vo
         check(len == 1, "charger write length");
         return gCharger.write(reg, b[0]);
     }
-    if (addr == 0x18) return gPd.write(reg, b, len);
+    if (addr == 0x18)
+        return gPd.write(reg, b, len);
     if (addr == 0x36) {
         check(len == 2, "gauge write length");
         uint16_t v = (uint16_t)(b[0] | b[1] << 8);
-        if (reg == 0x00) v = (uint16_t)(gGauge.reg[0] & v);  // alert flags clear by writing 0
+        if (reg == 0x00)
+            v = (uint16_t)(gGauge.reg[0] & v);  // alert flags clear by writing 0
         gGauge.reg[reg] = v;
         gGauge.update();
         return 0;
     }
     return TEGRA_I2C_ENACK;
 }
+
 extern "C" IOService *tegra_gpio_interrupt_nub(unsigned gpio, unsigned)
 {
-    if (!gNubs[gpio]) gNubs[gpio] = new IOService;
+    if (!gNubs[gpio])
+        gNubs[gpio] = new IOService;
     return gNubs[gpio];
 }
+
 extern "C" void tegra_gpio_describe(unsigned gpio, char *buffer, size_t size)
 {
     std::snprintf(buffer, size, "GPIO %u", gpio);
 }
+
 static bool pending(unsigned gpio)
 {
     return gpio == TEGRA_GPIO_PK4 ? gPd.alert != 0 : gpio == TEGRA_GPIO_PZ0 ? gCharger.intPending : gGauge.edge;
 }
+
 extern "C" void tegra_gpio_check_delivery(unsigned gpio, const char *who)
 {
-    if (pending(gpio)) panic("%s: GPIO %u interrupt lost", who, gpio);
+    if (pending(gpio))
+        panic("%s: GPIO %u interrupt lost", who, gpio);
 }
+
 extern "C" int tegra_gpio_config(unsigned gpio)  // SwitchPD's report: an output at its last value
 {
     return 1 | 2 | (gOutputs[gpio] ? 4 : 0);
 }
+
 extern "C" int tegra_gpio_output(unsigned gpio, int value)
 {
     gOutputs[gpio] = value;
@@ -398,9 +511,11 @@ extern "C" int tegra_gpio_output(unsigned gpio, int value)
 static IOInterruptEventSource *sourceFor(unsigned gpio)
 {
     for (auto *s : IOInterruptEventSource::all)
-        if (s->provider == gNubs[gpio]) return s;
+        if (s->provider == gNubs[gpio])
+            return s;
     return nullptr;
 }
+
 static void deliver()
 {
     for (int round = 0; round < 200; ++round) {
@@ -426,10 +541,12 @@ static void deliver()
                 s->interruptOccurred();
             }
         }
-        if (!any) return;
+        if (!any)
+            return;
     }
     check(false, "interrupts never settle");
 }
+
 static void advance(uint64_t ms)
 {
     const uint64_t target = gNow + ms * 1000000ull;
@@ -437,32 +554,41 @@ static void advance(uint64_t ms)
         deliver();
         IOTimerEventSource *next = nullptr;
         for (auto *t : IOTimerEventSource::all)
-            if (t->armed && t->deadline <= target && (!next || t->deadline < next->deadline)) next = t;
-        if (!next) break;
-        if (next->deadline > gNow) gNow = next->deadline;
+            if (t->armed && t->deadline <= target && (!next || t->deadline < next->deadline))
+                next = t;
+        if (!next)
+            break;
+        if (next->deadline > gNow)
+            gNow = next->deadline;
         gCharger.tick();
         next->fire();
     }
-    if (target > gNow) gNow = target;
+    if (target > gNow)
+        gNow = target;
     gCharger.tick();
     deliver();
 }
+
 static IOPMPowerSource *battery()
 {
     for (auto *s : IOInterruptEventSource::all)
-        if (auto *ps = dynamic_cast<IOPMPowerSource *>(s->owner)) return ps;
+        if (auto *ps = dynamic_cast<IOPMPowerSource *>(s->owner))
+            return ps;
     return nullptr;
 }
 
 const uint32_t kNintendo5V = PdChip::fixed(5000, 1500), kNintendo15V = PdChip::fixed(15000, 2600);
+
 static void bootWithNintendoCharger(unsigned detectMA = 500)
 {
     gCharger.plug(detectMA, 2);
     gCharger.intPending = false;                  // before boot
     gPd.sink({kNintendo5V, kNintendo15V}, 0, 0);  // the controller's own contract: 5 V
-    if (switch_battery_start()) check(false, "switch_battery_start");
+    if (switch_battery_start())
+        check(false, "switch_battery_start");
     advance(10);
 }
+
 static unsigned iinlim()
 {
     return charge::bq::decodeInputLimit(gCharger.reg[0]);
@@ -569,7 +695,8 @@ static void jeita()
 
 static void hotplug()
 {
-    if (switch_battery_start()) check(false, "switch_battery_start");
+    if (switch_battery_start())
+        check(false, "switch_battery_start");
     advance(10);
     check(logHas("charger set:"), "managed with no cable");
     // Nintendo's charger: the controller's own 5 V contract first.
@@ -665,7 +792,8 @@ static void oursAlready()
     gCharger.intPending = false;
     gPd.sink({kNintendo5V, kNintendo15V}, 1, 0);
     gPd.curRdo = charge::encodeRdo(c);
-    if (switch_battery_start()) check(false, "switch_battery_start");
+    if (switch_battery_start())
+        check(false, "switch_battery_start");
     advance(400);
     check(gPd.commands.empty(), "no request: the contract is ours already");
     check(logHas("SwitchPD: contract 15 V 1.2 A") && iinlim() == 1200, "published at once");
@@ -780,6 +908,7 @@ static IOReturn setProperty(const char *key, bool value)
     dict.setObject(key, value ? kOSBooleanTrue : kOSBooleanFalse);
     return battery()->setProperties(&dict);
 }
+
 static IOReturn setProperty(const char *key, unsigned value)
 {
     OSDictionary dict;
@@ -789,6 +918,7 @@ static IOReturn setProperty(const char *key, unsigned value)
     n->release();
     return r;
 }
+
 static unsigned chgConfig()
 {
     return (gCharger.reg[1] >> 4) & 3;
@@ -883,7 +1013,8 @@ static void temperatureHoldPublished()
 
 static void powerInWake()
 {
-    if (switch_battery_start()) check(false, "switch_battery_start");
+    if (switch_battery_start())
+        check(false, "switch_battery_start");
     advance(10);
     check(gWakeEvents.empty(), "no event at boot");
     gCharger.plug(500, 2);
@@ -933,7 +1064,8 @@ static void roleSwap()
     gCharger.plug(500, 1);
     gCharger.intPending = false;
     gPd.sink({PdChip::fixed(5000, 3000)}, 0, 0);  // a Mac
-    if (switch_battery_start()) check(false, "switch_battery_start");
+    if (switch_battery_start())
+        check(false, "switch_battery_start");
     advance(2400);
     check(iinlim() == 2000 && logHas("SwitchPD: contract 5 V 2 A"), "Mac: 5 V 2 A");
     // The Mac asks for a power-role swap: we come up as the source (no boost here: the partner keeps VBUS for now).
@@ -957,7 +1089,8 @@ static void roleSwap()
 
 static void macPort()
 {
-    if (switch_battery_start()) check(false, "switch_battery_start");
+    if (switch_battery_start())
+        check(false, "switch_battery_start");
     advance(10);
     gPd.rdoReply = PdChip::AbortOnce;
     gCharger.plug(500, 1);
@@ -972,7 +1105,8 @@ static void otgLeftOn()
 {
     gCharger.reg[1] = 0x21;  // an earlier boot rebooted with its boost on
     gCharger.defaultMode = false;
-    if (switch_battery_start()) check(false, "switch_battery_start");
+    if (switch_battery_start())
+        check(false, "switch_battery_start");
     advance(10);
     check(logHas("charger was left with CHG_CONFIG 2 (REG01 0x21), now charge (REG01 0x11)"), "OTG left on: charge");
 }
@@ -1007,6 +1141,7 @@ static void policy()
         std::vector<uint32_t> pdos;
         unsigned position, millivolts, limit;
     };
+
     auto F = PdChip::fixed;
     const Case cases[] = {
         {"Nintendo AC adapter", {F(5000, 1500), F(15000, 2600)}, 2, 15000, 1200},
@@ -1048,7 +1183,8 @@ static void policy()
     for (unsigned mv = 50; mv <= 21000; mv += 50)
         for (unsigned ma = 0; ma <= 5000; ma += 10) {
             const unsigned l = pdInputLimit(mv, ma);
-            if (!l) continue;
+            if (!l)
+                continue;
             ++combos;
             const unsigned cap = mv == 5000 ? 2000 : mv == 9000 ? 2000 : mv == 12000 ? 1500 : 1200;
             check(l <= ma && l <= cap && l >= 100 && kInputSteps[bq::encodeInputLimit(l)] == l,
@@ -1075,7 +1211,8 @@ static void policy()
         const bool charges = t >= 400 && t < 5100;
         check(zoneCharges(raw) == charges, "raw zone at " + std::to_string(t));
         check(zoneChargeCurrent(raw) <= 2048 && zoneChargeVoltage(raw) <= 4208, "zone limits");
-        if (t >= 400 && t < 1700) check(zoneChargeCurrent(raw) == 768, "cool 768 mA");
+        if (t >= 400 && t < 1700)
+            check(zoneChargeCurrent(raw) == 768, "cool 768 mA");
         for (Zone from : {Zone::Cold, Zone::Cool, Zone::Normal, Zone::Hot}) {
             const Zone next = nextZone(from, t);
             check(zoneRank(next) <= zoneRank(raw), "never more than the raw zone at " + std::to_string(t));
@@ -1093,7 +1230,8 @@ static void policy()
         const int whole = t >= 0 ? (t + 50) / 100 : -((-t + 50) / 100);
         const uint16_t around = (uint16_t)((uint8_t)(int8_t)(whole + 1) << 8 | (uint8_t)(int8_t)(whole - 1));
         for (Zone z : {Zone::Cold, Zone::Cool, Zone::Normal, Zone::Hot}) {
-            if (nextZone(z, t) != z) continue;
+            if (nextZone(z, t) != z)
+                continue;
             const uint16_t w = intersectWindows(temperatureWindow(z, t), around);
             const int hi = (int8_t)(w >> 8), lo = (int8_t)(w & 0xff);
             const uint16_t zw = temperatureWindow(z, t);
@@ -1118,8 +1256,10 @@ static void run(void (*scenario)())
             check(false, std::string("panic: ") + p.what());
         }
         if (gFailures) {
-            for (const auto &line : gLog) std::fprintf(stderr, "  %s\n", line.c_str());
-            for (const auto &op : gCharger.ops) std::fprintf(stderr, "  BQ24193 %s\n", op.c_str());
+            for (const auto &line : gLog)
+                std::fprintf(stderr, "  %s\n", line.c_str());
+            for (const auto &op : gCharger.ops)
+                std::fprintf(stderr, "  BQ24193 %s\n", op.c_str());
         }
     });
 }
@@ -1128,78 +1268,97 @@ TEST(SwitchCharging, Policy)
 {
     run(policy);
 }
+
 TEST(SwitchCharging, NintendoBoot)
 {
     run(nintendoBoot);
 }
+
 TEST(SwitchCharging, Jeita)
 {
     run(jeita);
 }
+
 TEST(SwitchCharging, Hotplug)
 {
     run(hotplug);
 }
+
 TEST(SwitchCharging, Refused)
 {
     run(refused);
 }
+
 TEST(SwitchCharging, Silent)
 {
     run(silent);
 }
+
 TEST(SwitchCharging, Rebalance)
 {
     run(rebalance);
 }
+
 TEST(SwitchCharging, OursAlready)
 {
     run(oursAlready);
 }
+
 TEST(SwitchCharging, SettingsLost)
 {
     run(settingsLost);
 }
+
 TEST(SwitchCharging, NotTaken)
 {
     run(notTaken);
 }
+
 TEST(SwitchCharging, OtgLeftOn)
 {
     run(otgLeftOn);
 }
+
 TEST(SwitchCharging, LinuxLeft)
 {
     run(linuxLeft);
 }
+
 TEST(SwitchCharging, BadTemp)
 {
     run(badTemp);
 }
+
 TEST(SwitchCharging, LostWhileHot)
 {
     run(lostWhileHot);
 }
+
 TEST(SwitchCharging, IosRequests)
 {
     run(iosRequests);
 }
+
 TEST(SwitchCharging, TemperatureHold)
 {
     run(temperatureHoldPublished);
 }
+
 TEST(SwitchCharging, PowerInWake)
 {
     run(powerInWake);
 }
+
 TEST(SwitchCharging, SleepWindows)
 {
     run(sleepWindows);
 }
+
 TEST(SwitchCharging, RoleSwap)
 {
     run(roleSwap);
 }
+
 TEST(SwitchCharging, MacPort)
 {
     run(macPort);

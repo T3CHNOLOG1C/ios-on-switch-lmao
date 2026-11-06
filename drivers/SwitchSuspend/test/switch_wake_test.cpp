@@ -79,7 +79,8 @@ Bytes fullReport(uint8_t report = 0x30, uint8_t shared = 0, uint8_t right = 0, u
 Bytes simpleReport(uint8_t buttons1 = 0, uint8_t buttons2 = 0)
 {
     Bytes out = {0xa1, 0x3f, buttons1, buttons2, 0x08};
-    for (int i = 0; i < 4; ++i) out = out + Bytes{0x00, 0x80};
+    for (int i = 0; i < 4; ++i)
+        out = out + Bytes{0x00, 0x80};
     return out;
 }
 
@@ -137,7 +138,8 @@ std::vector<std::string> lines(const std::string &text)
 {
     std::vector<std::string> out;
     std::istringstream in(text);
-    for (std::string line; std::getline(in, line);) out.push_back(line);
+    for (std::string line; std::getline(in, line);)
+        out.push_back(line);
     return out;
 }
 
@@ -313,7 +315,8 @@ TEST_F(Wake, GuardTimeoutAndNames)
 {
     EXPECT_EQ(guard_ms(), 2500u);
     std::vector<std::string> names;
-    for (unsigned i = 0; i < 5; ++i) names.emplace_back(source_name(i));
+    for (unsigned i = 0; i < 5; ++i)
+        names.emplace_back(source_name(i));
     EXPECT_EQ(names,
               (std::vector<std::string>{"power key", "rail Joy-Con Home", "Bluetooth Home", "power in", "unknown"}));
 }
@@ -323,10 +326,12 @@ TEST_F(Wake, GuardTimeoutAndNames)
 TEST_F(Wake, RingKeepsTheLastLinesOldestFirst)
 {
     const unsigned count = ring_lines();
-    for (unsigned i = 0; i < count + 6; ++i) ring_append(("line " + std::to_string(i)).c_str());
+    for (unsigned i = 0; i < count + 6; ++i)
+        ring_append(("line " + std::to_string(i)).c_str());
     const auto [text, length] = render();
     std::vector<std::string> want;
-    for (unsigned i = 6; i < count + 6; ++i) want.push_back("line " + std::to_string(i));
+    for (unsigned i = 6; i < count + 6; ++i)
+        want.push_back("line " + std::to_string(i));
     EXPECT_EQ(lines(text), want);
     EXPECT_EQ(length, text.size());
 }
@@ -442,7 +447,7 @@ TEST_F(Wake, SleepAverageCurrentFromTheCoulombCounter)
     EXPECT_EQ(sleep_average_ma(1000, 998, 500, 3600000), -1);
     EXPECT_EQ(sleep_average_ma(5000, 4880, 500, 6 * 3600000ull), -10);
     EXPECT_EQ(sleep_average_ma(2, 0xfffe, 500, 3600000), -2);  // the 16-bit counter wraps
-    EXPECT_EQ(sleep_average_ma(100, 160, 500, 3600000), 30);    // charging while asleep
+    EXPECT_EQ(sleep_average_ma(100, 160, 500, 3600000), 30);   // charging while asleep
     EXPECT_EQ(sleep_average_ma(100, 90, 500, 0), 0);
 }
 

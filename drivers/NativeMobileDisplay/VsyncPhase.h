@@ -39,11 +39,13 @@ public:
     static constexpr unsigned kBins = 64;                // 0.5 ms response bins, 32 ms
     static constexpr uint64_t kFloorDecayUs = 60000000;  // a miss's floor comes down 1 ms a minute without misses
 
-    explicit VsyncPhase(uint32_t periodUs = 16667) : period(periodUs) {}
+    explicit VsyncPhase(uint32_t periodUs = 16667) : period(periodUs)
+    {}
 
     void setPeriod(uint32_t periodUs)
     {
-        if (periodUs > 4000 && periodUs < 100000) period = periodUs;
+        if (periodUs > 4000 && periodUs < 100000)
+            period = periodUs;
     }
 
     // A vsync notification went out at t with lead `inEffect` (0: at V_BLANK).
@@ -65,7 +67,8 @@ public:
     {
         Outcome out = {};
         const Sent *v = answered(submit);
-        if (!v || ready < v->t || latch < ready) return out;
+        if (!v || ready < v->t || latch < ready)
+            return out;
         out.answered = true;
         out.responseUs = (uint32_t)(ready - v->t < 0xffffffffu ? ready - v->t : 0xffffffffu);
         out.paced = submit - v->t < period / 2;
@@ -82,7 +85,8 @@ public:
                 floorSince += kFloorDecayUs;
                 missFloor = missFloor > 1000 ? missFloor - 1000 : 0;
             }
-            if (latch >= holdUntil) decide();
+            if (latch >= holdUntil)
+                decide();
             clear();
         }
         return out;
@@ -92,11 +96,16 @@ public:
     // lead in effect it counts as a miss.
     void replaced(uint64_t submit, uint64_t ready, uint64_t t)
     {
-        if (!leadUs) return;
+        if (!leadUs)
+            return;
         const Sent *v = answered(submit);
         miss(t, v && ready > v->t ? (uint32_t)(ready - v->t) : leadUs + period / 4);
     }
-    uint32_t floorUs() const { return missFloor; }
+
+    uint32_t floorUs() const
+    {
+        return missFloor;
+    }
 
     // Whether a swap submitted at `submit` came within half a frame of the vsync it answered (Outcome::paced).
     bool paced(uint64_t submit) const
@@ -105,16 +114,32 @@ public:
         return v && submit - v->t < period / 2;
     }
 
-    uint32_t lead() const { return leadUs; }
-    uint32_t marginUs() const { return margin; }
-    uint32_t missCount() const { return misses; }
-    uint32_t lastP99() const { return p99; }
+    uint32_t lead() const
+    {
+        return leadUs;
+    }
+
+    uint32_t marginUs() const
+    {
+        return margin;
+    }
+
+    uint32_t missCount() const
+    {
+        return misses;
+    }
+
+    uint32_t lastP99() const
+    {
+        return p99;
+    }
 
 private:
     struct Sent {
         uint64_t t;
         uint32_t lead;
     };
+
     static constexpr unsigned kSent = 8;
     Sent sent[kSent] = {};
     unsigned sentAt = 0;
@@ -137,33 +162,42 @@ private:
     {
         const Sent *v = nullptr;
         for (const Sent &s : sent)
-            if (s.t && s.t <= submit && (!v || s.t > v->t)) v = &s;
+            if (s.t && s.t <= submit && (!v || s.t > v->t))
+                v = &s;
         return v;
     }
+
     void miss(uint64_t t, uint32_t responseUs)
     {
         ++misses;
         leadUs = 0;
         holdUntil = t + kHoldOffUs;
-        if (margin + kMarginStepUs <= kMaxMarginUs) margin += kMarginStepUs;
+        if (margin + kMarginStepUs <= kMaxMarginUs)
+            margin += kMarginStepUs;
         notePeak(responseUs);
-        if (responseUs > missFloor) missFloor = responseUs;
+        if (responseUs > missFloor)
+            missFloor = responseUs;
         floorSince = t;
         clear();
     }
+
     // The longest response of each of the last kPeaks windows (and of each miss): the lead covers the longest of them
     // too, so a stall the frame could absorb without a phase (an 8 ms one in a 16.7 ms frame) is no dropped frame with
     // one, as long as one like it came within the last kPeaks windows (~32 s at 60 Hz).
     void notePeak(uint32_t us)
     {
-        if (us > windowPeak) windowPeak = us;
+        if (us > windowPeak)
+            windowPeak = us;
     }
+
     uint32_t recentPeak() const
     {
         uint32_t most = windowPeak;
-        for (uint32_t p : peaks) most = p > most ? p : most;
+        for (uint32_t p : peaks)
+            most = p > most ? p : most;
         return most;
     }
+
     void add(uint32_t us)
     {
         notePeak(us);
@@ -173,21 +207,25 @@ private:
         else
             ++bins[us / 500];
     }
+
     void clear()
     {
-        for (uint32_t &b : bins) b = 0;
+        for (uint32_t &b : bins)
+            b = 0;
         count = over = 0;
         peaks[peakAt] = windowPeak;
         peakAt = (peakAt + 1) % kPeaks;
         windowPeak = 0;
     }
+
     void decide()
     {
         const unsigned want = (count * 99 + 99) / 100;
         unsigned seen = 0, bin = 0;
         for (; bin < kBins; ++bin) {
             seen += bins[bin];
-            if (seen >= want) break;
+            if (seen >= want)
+                break;
         }
         p99 = bin < kBins ? (bin + 1) * 500 : 0xffffffffu;
         const uint32_t longest = recentPeak() > missFloor ? recentPeak() : missFloor;
@@ -203,7 +241,8 @@ private:
             // step measured where it runs (the compositor's time can depend on where in the frame it draws). On: a
             // longer response is followed at once.
             leadUs = leadUs ? target : period - kMinSavingUs;
-            if (leadUs < target) leadUs = target;
+            if (leadUs < target)
+                leadUs = target;
         } else {
             // Down half the way to the target (at least kStepUs), so a 20 Hz client (6 s windows) settles in a few.
             const uint32_t half = (leadUs - target) / 2;

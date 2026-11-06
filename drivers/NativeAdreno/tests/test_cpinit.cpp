@@ -12,54 +12,65 @@
             std::exit(1);                                        \
         }                                                        \
     } while (0)
+
 struct Peer {
     uint32_t regs[0x10000]{};
     std::vector<uint32_t> writes;
     unsigned publish = 0, acquire = 0, barriers = 0, fail_write = 0, fail_publish = 0;
 };
+
 static Peer peer;
 static uint32_t ringmem[8192], fencemem[1024];
+
 static int write32(void *c, uint32_t reg, uint32_t v)
 {
     CHECK(c == &peer && reg < 0x10000);
-    if (peer.writes.size() + 1 == peer.fail_write) return 1;
+    if (peer.writes.size() + 1 == peer.fail_write)
+        return 1;
     peer.regs[reg] = v;
     peer.writes.push_back(reg);
     return 0;
 }
+
 static int read32(void *c, uint32_t reg, uint32_t *v)
 {
     CHECK(c == &peer && v);
     *v = peer.regs[reg];
     return 0;
 }
+
 static int barrier(void *c)
 {
     CHECK(c == &peer);
     ++peer.barriers;
     return 0;
 }
+
 static int publish(void *c, const volatile uint32_t *w, size_t bytes)
 {
     CHECK(c == &peer && w && bytes == 32768);
     ++peer.publish;
     return peer.publish == peer.fail_publish;
 }
+
 static int acquire(void *c, volatile uint32_t *w, size_t bytes)
 {
     CHECK(c == &peer && w && bytes == 4096);
     ++peer.acquire;
     return 0;
 }
+
 static NativeAdrenoRingIo io{&peer, write32, read32, barrier};
 static NativeAdrenoRingCache cache{&peer, publish, acquire};
 static NativeAdrenoRingClock clock_{&peer, nullptr, nullptr};
+
 static void reset(void)
 {
     peer = Peer{};
     std::memset(ringmem, 0xee, sizeof(ringmem));
     std::memset(fencemem, 0, sizeof(fencemem));
 }
+
 int main()
 {
     /* Exact SQE base and CP_ME_INIT sequence through the ring. */
@@ -74,7 +85,8 @@ int main()
         CHECK(init.run(&io, &ring, &config, &fence) == kIOReturnSuccess && fence == 1 && init.completed());
         bool paired = false;
         for (size_t i = 0; i + 1 < peer.writes.size(); ++i)
-            if (peer.writes[i] == 0x0830 && peer.writes[i + 1] == 0x0831) paired = true;
+            if (peer.writes[i] == 0x0830 && peer.writes[i + 1] == 0x0831)
+                paired = true;
         CHECK(paired && peer.regs[0x0830] == 0x200000 && peer.regs[0x0831] == 0);
         CHECK((ringmem[0] >> 16 & 0x7fu) == 0x17 && (ringmem[0] & 0x3fffu) == 1);
         CHECK(ringmem[1] == (1u << 27));

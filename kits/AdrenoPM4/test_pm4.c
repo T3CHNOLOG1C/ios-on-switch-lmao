@@ -14,9 +14,11 @@
 static unsigned population(uint32_t word)
 {
     unsigned sum = 0;
-    for (unsigned bit = 0; bit < 32; ++bit) sum += (word >> bit) & 1;
+    for (unsigned bit = 0; bit < 32; ++bit)
+        sum += (word >> bit) & 1;
     return sum;
 }
+
 static void refusal(const uint32_t *words, size_t length, size_t capacity, AdrenoPM4Status expected)
 {
     AdrenoPM4Packet output[8], before[8];
@@ -26,6 +28,7 @@ static void refusal(const uint32_t *words, size_t length, size_t capacity, Adren
     CHECK(AdrenoPM4Plan(words, length, output, capacity, &count) == expected);
     CHECK(!count && !memcmp(output, before, sizeof(output)));
 }
+
 int main(void)
 {
     uint32_t header, words[0x4000] = {0};

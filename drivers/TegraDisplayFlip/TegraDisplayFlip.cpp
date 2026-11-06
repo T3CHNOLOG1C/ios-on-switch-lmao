@@ -36,14 +36,16 @@ OSDefineMetaClassAndStructors(TegraDisplayFlip, OSObject)
 TegraDisplayFlip *TegraDisplayFlip::create()
 {
     TegraDisplayFlip *flip = OSTypeAlloc(TegraDisplayFlip);
-    if (flip && (!flip->init() || !flip->attach())) OSSafeReleaseNULL(flip);
+    if (flip && (!flip->init() || !flip->attach()))
+        OSSafeReleaseNULL(flip);
     return flip;
 }
 
 bool TegraDisplayFlip::attach()
 {
     IODeviceMemory *memory = IODeviceMemory::withRange(kDisplayABase, kDisplayALength);
-    if (memory) registers_ = memory->map(kIOMapAnywhere | kIOMapInhibitCache);
+    if (memory)
+        registers_ = memory->map(kIOMapAnywhere | kIOMapInhibitCache);
     OSSafeReleaseNULL(memory);
     if (!registers_) {
         IOLog("TegraDisplayFlip: cannot map DC A registers\n");
@@ -132,15 +134,18 @@ IOReturn TegraDisplayFlip::waitForVblank(uint32_t timeoutUs, uint64_t *timestamp
     const uint64_t deadline = deadlineAfter(timeoutUs);
     write(kIntStatus, kVblankInt);
     for (;;) {
-        if (read(kIntStatus) & kVblankInt) break;
+        if (read(kIntStatus) & kVblankInt)
+            break;
         const uint64_t now = mach_absolute_time();
-        if (now > deadline) return kIOReturnTimeout;
+        if (now > deadline)
+            return kIOReturnTimeout;
         if (deadline - now > spinWindow)
             IOSleep(1);
         else
             IODelay(20);
     }
-    if (timestamp) *timestamp = mach_absolute_time();
+    if (timestamp)
+        *timestamp = mach_absolute_time();
     return kIOReturnSuccess;
 }
 
@@ -159,7 +164,8 @@ IOBufferMemoryDescriptor *TegraDisplayFlip::allocateScanoutBuffer(uint64_t lengt
                                  IOOptionBits(kIOMemoryMapperNone) | IOOptionBits(kIOMapWriteCombineCache);
     IOBufferMemoryDescriptor *buffer =
         IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task, options, length, 0x00000000fffff000ULL);
-    if (!buffer) return nullptr;
+    if (!buffer)
+        return nullptr;
     IOByteCount segment = 0;
     if (!buffer->getPhysicalSegment(0, &segment, kIOMemoryMapperNone) || segment < length) {
         IOLog("TegraDisplayFlip: scanout buffer of %llu bytes is not physically contiguous\n", length);

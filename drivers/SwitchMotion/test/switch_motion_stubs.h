@@ -17,18 +17,22 @@ constexpr IOReturn kIOReturnSuccess = 0;
 
 // Fake time in nanoseconds; nanoseconds_to_absolutetime is the identity.
 inline uint64_t gNow = 0;
+
 inline uint64_t mach_absolute_time()
 {
     return gNow;
 }
+
 inline void nanoseconds_to_absolutetime(uint64_t ns, uint64_t *abs)
 {
     *abs = ns;
 }
+
 inline void IODelay(unsigned us)
 {
     gNow += us * 1000ull;
 }
+
 inline void IOSleep(unsigned ms)
 {
     gNow += ms * 1000000ull;
@@ -36,14 +40,17 @@ inline void IOSleep(unsigned ms)
 
 // IOLog and os_log lines, in order, each prefixed with its channel.
 inline std::vector<std::string> gLog;
+
 inline void stubLog(const char *channel, const char *format, va_list ap)
 {
     char line[1024];
     vsnprintf(line, sizeof(line), format, ap);
     std::string text = std::string(channel) + line;
-    if (!text.empty() && text.back() == '\n') text.pop_back();
+    if (!text.empty() && text.back() == '\n')
+        text.pop_back();
     gLog.push_back(text);
 }
+
 __attribute__((format(printf, 1, 2))) inline void IOLog(const char *format, ...)
 {
     va_list ap;
@@ -51,6 +58,7 @@ __attribute__((format(printf, 1, 2))) inline void IOLog(const char *format, ...)
     stubLog("IOLog: ", format, ap);
     va_end(ap);
 }
+
 __attribute__((format(printf, 1, 2))) inline void stubOsLog(const char *format, ...)
 {
     va_list ap;
@@ -58,12 +66,14 @@ __attribute__((format(printf, 1, 2))) inline void stubOsLog(const char *format, 
     stubLog("os_log: ", format, ap);
     va_end(ap);
 }
+
 #define OS_LOG_DEFAULT   nullptr
 #define os_log(log, ...) stubOsLog(__VA_ARGS__)
 
 struct Panic : std::runtime_error {
     using std::runtime_error::runtime_error;
 };
+
 [[noreturn]] __attribute__((format(printf, 1, 2))) inline void panic(const char *format, ...)
 {
     char line[1024];
@@ -91,8 +101,15 @@ class OSObject {
 
 public:
     virtual ~OSObject() = default;
-    virtual void free() {}
-    void retain() { ++refs; }
+
+    virtual void free()
+    {}
+
+    void retain()
+    {
+        ++refs;
+    }
+
     void release()
     {
         if (--refs == 0) {
@@ -107,27 +124,47 @@ public:
     IOService *provider = nullptr;
     bool registered = false;
     std::string imu;
-    virtual bool init() { return true; }
-    virtual bool start(IOService *) { return true; }
-    void free() override {}
+
+    virtual bool init()
+    {
+        return true;
+    }
+
+    virtual bool start(IOService *)
+    {
+        return true;
+    }
+
+    void free() override
+    {}
+
     bool attach(IOService *to)
     {
         provider = to;
         retain();
         return true;
     }
+
     void detach(IOService *from)
     {
-        if (provider != from) throw Panic("detach from a provider not attached to");
+        if (provider != from)
+            throw Panic("detach from a provider not attached to");
         provider = nullptr;
         release();
     }
-    void registerService() { registered = true; }
+
+    void registerService()
+    {
+        registered = true;
+    }
+
     bool setProperty(const char *key, const char *value)
     {
-        if (!strcmp(key, "IMU")) imu = value;
+        if (!strcmp(key, "IMU"))
+            imu = value;
         return true;
     }
+
     static IOService *getResourceService()
     {
         static IOService *resources = new IOService;
@@ -139,16 +176,37 @@ class IOEventSource : public OSObject {
 public:
     OSObject *owner = nullptr;
     bool enabled = true;
-    void enable() { enabled = true; }
-    void disable() { enabled = false; }
+
+    void enable()
+    {
+        enabled = true;
+    }
+
+    void disable()
+    {
+        enabled = false;
+    }
 };
 
 class IOWorkLoop : public OSObject {
 public:
     typedef IOReturn (*Action)(OSObject *target, void *arg0, void *arg1, void *arg2, void *arg3);
-    static IOWorkLoop *workLoop() { return new IOWorkLoop; }
-    IOReturn addEventSource(IOEventSource *) { return kIOReturnSuccess; }
-    IOReturn removeEventSource(IOEventSource *) { return kIOReturnSuccess; }
+
+    static IOWorkLoop *workLoop()
+    {
+        return new IOWorkLoop;
+    }
+
+    IOReturn addEventSource(IOEventSource *)
+    {
+        return kIOReturnSuccess;
+    }
+
+    IOReturn removeEventSource(IOEventSource *)
+    {
+        return kIOReturnSuccess;
+    }
+
     IOReturn runAction(Action action, OSObject *target, void *a0 = nullptr, void *a1 = nullptr, void *a2 = nullptr,
                        void *a3 = nullptr)
     {
@@ -162,6 +220,7 @@ public:
     Action action = nullptr;
     IOService *provider = nullptr;
     static inline std::vector<IOInterruptEventSource *> all;
+
     static IOInterruptEventSource *interruptEventSource(OSObject *owner, Action action, IOService *provider = nullptr,
                                                         int = 0)
     {
@@ -172,10 +231,12 @@ public:
         all.push_back(source);
         return source;
     }
+
     // The work loop runs the action at once (a disabled source's interrupt waits; none of these tests needs that).
     void interruptOccurred(void *, IOService *, int)
     {
-        if (enabled) action(owner, this, 1);
+        if (enabled)
+            action(owner, this, 1);
     }
 };
 
@@ -186,6 +247,7 @@ public:
     bool armed = false;
     uint32_t ms = 0;
     static inline IOTimerEventSource *last = nullptr;
+
     static IOTimerEventSource *timerEventSource(OSObject *owner, Action action)
     {
         auto *source = new IOTimerEventSource;
@@ -194,16 +256,23 @@ public:
         last = source;
         return source;
     }
+
     IOReturn setTimeoutMS(uint32_t timeout)
     {
         armed = true;
         ms = timeout;
         return kIOReturnSuccess;
     }
-    void cancelTimeout() { armed = false; }
+
+    void cancelTimeout()
+    {
+        armed = false;
+    }
+
     void fire()
     {
-        if (!armed) throw Panic("timer fired while not armed");
+        if (!armed)
+            throw Panic("timer fired while not armed");
         armed = false;
         action(owner, this);
     }

@@ -14,6 +14,7 @@ struct NVENCClient {
     io_connect_t connection;
     uint32_t selector;
     os_unfair_lock lock;
+
     struct {
         uint32_t handle;
         mach_vm_address_t address;
@@ -28,7 +29,8 @@ static io_service_t service(void)
 bool nvenc_service_present(void)
 {
     const io_service_t s = service();
-    if (s) IOObjectRelease(s);
+    if (s)
+        IOObjectRelease(s);
     return s != 0;
 }
 
@@ -37,9 +39,11 @@ static kern_return_t call(NVENCClient *c, uint32_t selector, uint32_t method, co
 {
     uint8_t buffer[8 + sizeof(TegraNVENCSubmit)];
     const uint32_t header[2] = {TEGRA_NVENC_TUNNEL_MAGIC, method};
-    if (inSize > sizeof(buffer) - 8) return kIOReturnBadArgument;
+    if (inSize > sizeof(buffer) - 8)
+        return kIOReturnBadArgument;
     memcpy(buffer, header, 8);
-    if (inSize) memcpy(buffer + 8, in, inSize);
+    if (inSize)
+        memcpy(buffer + 8, in, inSize);
     size_t size = outSize;
     return IOConnectCallStructMethod(c->connection, selector, buffer, 8 + inSize, out, out ? &size : NULL);
 }
@@ -49,8 +53,10 @@ NVENCClient *nvenc_open(int *error)
     const io_service_t s = service();
     NVENCClient *c = s ? calloc(1, sizeof(*c)) : NULL;
     kern_return_t kr = s ? kIOReturnNoMemory : kIOReturnNotFound;
-    if (c) kr = IOServiceOpen(s, mach_task_self(), TEGRA_NVENC_OPEN_TYPE, &c->connection);
-    if (s) IOObjectRelease(s);
+    if (c)
+        kr = IOServiceOpen(s, mach_task_self(), TEGRA_NVENC_OPEN_TYPE, &c->connection);
+    if (s)
+        IOObjectRelease(s);
     if (kr == KERN_SUCCESS) {
         // Which selectors reach the client is the sandbox's choice, the same in every connection of a process.
         static uint32_t admitted = UINT32_MAX;
@@ -69,12 +75,15 @@ NVENCClient *nvenc_open(int *error)
     TegraNVENCInfo info;
     if (kr == KERN_SUCCESS) {
         kr = call(c, c->selector, TegraNVENCMethodGetInfo, NULL, 0, &info, sizeof(info));
-        if (kr == KERN_SUCCESS && info.abi_version != TEGRA_NVENC_ABI_VERSION) kr = kIOReturnUnsupported;
+        if (kr == KERN_SUCCESS && info.abi_version != TEGRA_NVENC_ABI_VERSION)
+            kr = kIOReturnUnsupported;
     }
     if (kr != KERN_SUCCESS) {
-        if (c && c->connection) IOServiceClose(c->connection);
+        if (c && c->connection)
+            IOServiceClose(c->connection);
         free(c);
-        if (error) *error = kr;
+        if (error)
+            *error = kr;
         return NULL;
     }
     c->lock = OS_UNFAIR_LOCK_INIT;
@@ -95,7 +104,8 @@ bool nvenc_claim_self_test(NVENCClient *c)
 
 void nvenc_close(NVENCClient *c)
 {
-    if (!c) return;
+    if (!c)
+        return;
     IOServiceClose(c->connection);  // the kernel waits for this connection's jobs and frees its buffers
     free(c);
 }
@@ -104,7 +114,8 @@ void nvenc_close(NVENCClient *c)
 // refused.
 static void logOnce(int *flag, const char *what, kern_return_t kr, uint64_t size)
 {
-    if (__atomic_exchange_n(flag, 1, __ATOMIC_RELAXED)) return;
+    if (__atomic_exchange_n(flag, 1, __ATOMIC_RELAXED))
+        return;
     os_log_error(os_log_create("com.brunostjohn.switch.ave", "encoder"), "AVD: %{public}s %#x (%llu bytes)", what, kr,
                  (unsigned long long)size);
 }
@@ -124,7 +135,8 @@ int nvenc_alloc(void *ctx, uint64_t size, uint32_t *handle, void **va)
     mach_vm_size_t mapped = 0;
     os_unfair_lock_lock(&c->lock);
     unsigned slot = 0;
-    while (slot < MAX_MAPPINGS && c->mappings[slot].handle) slot++;
+    while (slot < MAX_MAPPINGS && c->mappings[slot].handle)
+        slot++;
     os_unfair_lock_unlock(&c->lock);
     kr = slot == MAX_MAPPINGS
              ? kIOReturnNoResources
@@ -149,7 +161,8 @@ void nvenc_free(void *ctx, uint32_t handle)
     NVENCClient *c = ctx;
     os_unfair_lock_lock(&c->lock);
     for (unsigned i = 0; i < MAX_MAPPINGS; i++) {
-        if (c->mappings[i].handle != handle) continue;
+        if (c->mappings[i].handle != handle)
+            continue;
         IOConnectUnmapMemory64(c->connection, handle, mach_task_self(), c->mappings[i].address);
         c->mappings[i].handle = 0;
     }
@@ -162,7 +175,8 @@ int nvenc_submit(void *ctx, const TegraNVENCSubmit *submit, uint32_t *fence)
 {
     NVENCClient *c = ctx;
     TegraNVENCFence reply;
-    if (call(c, c->selector, TegraNVENCMethodSubmit, submit, sizeof(*submit), &reply, sizeof(reply))) return -1;
+    if (call(c, c->selector, TegraNVENCMethodSubmit, submit, sizeof(*submit), &reply, sizeof(reply)))
+        return -1;
     *fence = reply.fence;
     return 0;
 }

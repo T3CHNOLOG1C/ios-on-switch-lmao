@@ -21,19 +21,28 @@ typedef enum {
     ArmSmmu4KBusy,
     ArmSmmu4KFault
 } ArmSmmu4KStatus;
+
 typedef struct {
     unsigned input_bits;     /* 32..48, low-address TTBR0 profile. */
     unsigned output_bits;    /* 32,36,40,42,44,48. */
     uint64_t table_physical; /* Caller-owned contiguous pool, aligned 4K. */
     size_t leaf_budget;      /* Explicit upper bound on mapping work. */
 } ArmSmmu4KConfig;
-enum { ArmSmmu4KRead = 1, ArmSmmu4KWrite = 2, ArmSmmu4KExecute = 4, ArmSmmu4KPrivileged = 8 };
+
+enum {
+    ArmSmmu4KRead = 1,
+    ArmSmmu4KWrite = 2,
+    ArmSmmu4KExecute = 4,
+    ArmSmmu4KPrivileged = 8
+};
+
 typedef struct {
     uint64_t iova, physical, bytes;
     unsigned permissions;  /* Read required; optional Write/Execute/Privileged. */
     unsigned writeback;    /* 0=normal NC, 1=normal WB/WA. */
     unsigned shareability; /* 2=outer, 3=inner; explicit, no default. */
 } ArmSmmu4KRange;
+
 typedef struct {
     uint64_t root_physical;
     uint64_t mair; /* NC at index 0, WB/WA at index 1. */

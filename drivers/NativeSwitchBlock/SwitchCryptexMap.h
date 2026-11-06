@@ -13,21 +13,22 @@ struct SwitchExtent {
     uint64_t file, disk,
         length;  // bytes; disk is kSwitchHole for a range the file does not store (it reads as zeros)
 };
+
 constexpr uint64_t kSwitchHole = ~0ull;
 
 // Appends an extent, merged into the last one when it continues it in the image and on the card (or both are holes).
 // False when full.
 inline bool switchAppendExtent(SwitchExtent *map, uint32_t *count, uint32_t capacity, uint64_t file, uint64_t disk,
-                                 uint64_t length)
+                               uint64_t length)
 {
     const SwitchExtent *last = *count ? &map[*count - 1] : nullptr;
     if (last && last->file + last->length == file &&
-        (last->disk == kSwitchHole ? disk == kSwitchHole
-                                     : disk != kSwitchHole && last->disk + last->length == disk)) {
+        (last->disk == kSwitchHole ? disk == kSwitchHole : disk != kSwitchHole && last->disk + last->length == disk)) {
         map[*count - 1].length += length;
         return true;
     }
-    if (*count == capacity) return false;
+    if (*count == capacity)
+        return false;
     map[(*count)++] = {file, disk, length};
     return true;
 }
@@ -37,7 +38,8 @@ inline bool switchExtentsCover(const SwitchExtent *map, uint32_t count, uint64_t
 {
     uint64_t at = 0;
     for (uint32_t i = 0; i < count; ++i) {
-        if (map[i].file != at || !map[i].length) return false;
+        if (map[i].file != at || !map[i].length)
+            return false;
         at += map[i].length;
     }
     return count && at == bytes;
@@ -63,16 +65,21 @@ inline uint32_t switchExtentAt(const SwitchExtent *map, uint32_t count, uint64_t
 struct SwitchPiece {
     uint64_t disk, length;
 };
+
 inline SwitchPiece switchNextPiece(const SwitchExtent *map, uint32_t count, uint32_t *at, uint64_t offset,
-                                       uint64_t remaining, uint64_t maxPiece)
+                                   uint64_t remaining, uint64_t maxPiece)
 {
-    if (*at >= count || offset < map[*at].file || offset - map[*at].file >= map[*at].length) return {0, 0};
+    if (*at >= count || offset < map[*at].file || offset - map[*at].file >= map[*at].length)
+        return {0, 0};
     const SwitchExtent &e = map[*at];
     const uint64_t within = offset - e.file;
     uint64_t length = e.length - within;
-    if (length > remaining) length = remaining;
-    if (length > maxPiece) length = maxPiece;
-    if (within + length == e.length) ++*at;
+    if (length > remaining)
+        length = remaining;
+    if (length > maxPiece)
+        length = maxPiece;
+    if (within + length == e.length)
+        ++*at;
     return {e.disk == kSwitchHole ? kSwitchHole : e.disk + within, length};
 }
 
@@ -83,6 +90,7 @@ struct SwitchRange {
     uint16_t when;  // 1 + first-read second
     uint8_t index;  // 0 System, 1 App
 };
+
 struct SwitchRun {
     uint64_t fileId;
     uint32_t page;
@@ -101,7 +109,7 @@ inline uint64_t switchRunCapacity(uint32_t n, uint64_t pages, uint32_t maxRun, u
 // into runs of at most maxRun pages, each with the earliest second of what it joined. Returns the runs written; *files
 // counts the distinct files.
 inline uint32_t switchMergeRuns(const SwitchRange *ranges, uint32_t n, SwitchRun *runs, uint64_t capacity,
-                                  uint32_t maxRun, uint32_t maxGap, uint32_t *files)
+                                uint32_t maxRun, uint32_t maxGap, uint32_t *files)
 {
     uint32_t count = 0;
     *files = 0;
@@ -109,12 +117,15 @@ inline uint32_t switchMergeRuns(const SwitchRange *ranges, uint32_t n, SwitchRun
         const SwitchRange &r = ranges[i];
         uint32_t end = r.end;
         uint16_t when = r.when;
-        if (!i || r.fileId != ranges[i - 1].fileId || r.index != ranges[i - 1].index) ++*files;
+        if (!i || r.fileId != ranges[i - 1].fileId || r.index != ranges[i - 1].index)
+            ++*files;
         for (++i;
              i < n && ranges[i].fileId == r.fileId && ranges[i].index == r.index && ranges[i].first <= end + maxGap;
              ++i) {
-            if (ranges[i].end > end) end = ranges[i].end;
-            if (ranges[i].when < when) when = ranges[i].when;
+            if (ranges[i].end > end)
+                end = ranges[i].end;
+            if (ranges[i].when < when)
+                when = ranges[i].when;
         }
         for (uint32_t page = r.first; page < end && count < capacity; page += maxRun) {
             const uint32_t pages = end - page < maxRun ? end - page : maxRun;
@@ -127,16 +138,21 @@ inline uint32_t switchMergeRuns(const SwitchRange *ranges, uint32_t n, SwitchRun
 // The list's replay order: first-read second, then cryptex, file and page.
 inline int switchCompareRuns(const SwitchRun &x, const SwitchRun &y)
 {
-    if (x.when != y.when) return x.when < y.when ? -1 : 1;
-    if (x.index != y.index) return x.index < y.index ? -1 : 1;
-    if (x.fileId != y.fileId) return x.fileId < y.fileId ? -1 : 1;
+    if (x.when != y.when)
+        return x.when < y.when ? -1 : 1;
+    if (x.index != y.index)
+        return x.index < y.index ? -1 : 1;
+    if (x.fileId != y.fileId)
+        return x.fileId < y.fileId ? -1 : 1;
     return x.page < y.page ? -1 : x.page > y.page;
 }
 
 inline int switchCompareRanges(const SwitchRange &x, const SwitchRange &y)
 {
-    if (x.index != y.index) return x.index < y.index ? -1 : 1;
-    if (x.fileId != y.fileId) return x.fileId < y.fileId ? -1 : 1;
+    if (x.index != y.index)
+        return x.index < y.index ? -1 : 1;
+    if (x.fileId != y.fileId)
+        return x.fileId < y.fileId ? -1 : 1;
     return x.first < y.first ? -1 : x.first > y.first;
 }
 
@@ -145,10 +161,12 @@ inline int switchCompareRanges(const SwitchRange &x, const SwitchRange &y)
 // boot with no prefetch. So a new format keeps reading every older one and converts it (the older runs are still the
 // boot's reads), and the test keeps a saved SWCHPF02 list loading.
 constexpr uint32_t kSwitchListImages = 2;  // System, App (SWITCH_CRYPTEX_COUNT)
+
 struct SwitchImageKey {
     uint64_t bytes, fileId;
     int64_t mtimeSec, mtimeNsec;
 };
+
 struct SwitchListHeader {
     char magic[8];
     uint32_t version, headerBytes;
@@ -156,6 +174,7 @@ struct SwitchListHeader {
     uint32_t runs, files;
     uint64_t checksum;  // FNV-1a 64 of the runs
 };
+
 static_assert(sizeof(SwitchListHeader) == 96 && sizeof(SwitchRun) == 16, "the list format SWCHPF02");
 constexpr char kSwitchListMagic[8] = {'S', 'W', 'C', 'H', 'P', 'F', '0', '2'};
 constexpr uint32_t kSwitchListVersion = 2;
@@ -163,23 +182,25 @@ constexpr uint32_t kSwitchListVersion = 2;
 inline uint64_t switchFnv(const uint8_t *p, uint64_t n)
 {
     uint64_t h = 0xcbf29ce484222325ull;
-    for (uint64_t i = 0; i < n; ++i) h = (h ^ p[i]) * 0x100000001b3ull;
+    for (uint64_t i = 0; i < n; ++i)
+        h = (h ^ p[i]) * 0x100000001b3ull;
     return h;
 }
 
 // Whether a saved header is a list this build replays for these images (at most maxRuns runs), or why not.
-inline const char *switchListRefusal(const SwitchListHeader &saved, const SwitchImageKey (&images)[2],
-                                       uint32_t maxRuns)
+inline const char *switchListRefusal(const SwitchListHeader &saved, const SwitchImageKey (&images)[2], uint32_t maxRuns)
 {
     for (unsigned i = 0; i < sizeof(kSwitchListMagic); ++i)
-        if (saved.magic[i] != kSwitchListMagic[i]) return "not an SWCHPF02 list";
+        if (saved.magic[i] != kSwitchListMagic[i])
+            return "not an SWCHPF02 list";
     if (saved.version != kSwitchListVersion || saved.headerBytes != sizeof(SwitchListHeader))
         return "an SWCHPF02 list of another version";
     for (unsigned i = 0; i < kSwitchListImages; ++i)
         if (saved.images[i].bytes != images[i].bytes || saved.images[i].fileId != images[i].fileId ||
             saved.images[i].mtimeSec != images[i].mtimeSec || saved.images[i].mtimeNsec != images[i].mtimeNsec)
             return "saved for other cryptex images";
-    if (!saved.runs || saved.runs > maxRuns) return "no runs, or too many";
+    if (!saved.runs || saved.runs > maxRuns)
+        return "no runs, or too many";
     return nullptr;
 }
 #endif

@@ -10,12 +10,14 @@
             std::exit(1);                                        \
         }                                                        \
     } while (0)
+
 IOReturn NativeAdrenoQueryCpu4K(NativeAdrenoCpuState *out)
 {
     CHECK(out);
     *out = {};
     return kIOReturnSuccess;
 }
+
 IOReturn NativeAdrenoMaintainOwnedPages(void *mapping, size_t bytes, NativeAdrenoCacheOperation op)
 {
     CHECK(mapping && bytes && !(((uintptr_t)mapping | bytes) & 4095));
@@ -23,6 +25,7 @@ IOReturn NativeAdrenoMaintainOwnedPages(void *mapping, size_t bytes, NativeAdren
     ++fixture.cache_calls;
     return fixture.cache_calls == fixture.cache_fail_call ? kIOReturnIOError : kIOReturnSuccess;
 }
+
 int main()
 {
     unsigned profiles = 0;
@@ -57,10 +60,13 @@ int main()
         ArmSmmu4KLiveArena arena;
         ArmSmmu4KLiveState state{};
         ArmSmmu4KLiveVisibility visibility;
-        if (failure == 0) fixture.mode = Scattered;
+        if (failure == 0)
+            fixture.mode = Scattered;
         CHECK(memory.allocate((failure == 1 ? 1 : 8) * 4096, 40, false, 8 * 4096) == kIOReturnSuccess);
-        if (failure == 2) fixture.cache_fail_call = 2;
-        if (failure == 3) CHECK(memory.holdForDevice() == kIOReturnSuccess);
+        if (failure == 2)
+            fixture.cache_fail_call = 2;
+        if (failure == 3)
+            CHECK(memory.holdForDevice() == kIOReturnSuccess);
         IOReturn expected = failure == 0   ? kIOReturnUnsupported
                             : failure == 1 ? kIOReturnNoResources
                             : failure == 2 ? kIOReturnIOError
@@ -68,7 +74,8 @@ int main()
         CHECK(NativeAdrenoPrepareSmmuMemory(&memory, 48, 40, 0xffff0000001ff000, 8192, 1, 16, &arena, &state,
                                             &visibility) == expected);
         CHECK(!visibility.publish_table_page && state.poisoned == (failure == 2));
-        if (failure == 3) CHECK(memory.retireAfterQuiescence() == kIOReturnSuccess);
+        if (failure == 3)
+            CHECK(memory.retireAfterQuiescence() == kIOReturnSuccess);
         CHECK(memory.release() == kIOReturnSuccess && fixture.live.empty() && fixture.metadata.empty());
         ++refusals;
     }
@@ -76,19 +83,23 @@ int main()
                 "no hardware context enabled\n",
                 profiles, refusals);
 }
+
 /* Physical-page maintenance (imported BOs): record it; no host page is touched. */
 /* Host double: the page attribute change of user BOs has no host equivalent (no host page is touched). */
 IOReturn NativeAdrenoSetPagesCacheMode(const NativeAdrenoPhysicalSpan *spans, size_t count, bool)
 {
     return spans && count ? kIOReturnSuccess : kIOReturnBadArgument;
 }
+
 IOReturn NativeAdrenoReassertWriteCombined(const NativeAdrenoPhysicalSpan *spans, size_t count, uint32_t *reset)
 {
     return spans && count && reset ? kIOReturnSuccess : kIOReturnBadArgument;
 }
+
 IOReturn NativeAdrenoMaintainPhysicalPages(uint64_t physical, size_t bytes, NativeAdrenoCacheOperation op)
 {
-    if (!physical || !bytes || ((physical | bytes) & 4095) || op > NativeAdrenoInvalidate) std::abort();
+    if (!physical || !bytes || ((physical | bytes) & 4095) || op > NativeAdrenoInvalidate)
+        std::abort();
     ++fixture.physical_calls;
     fixture.physical_bytes += bytes;
     return kIOReturnSuccess;

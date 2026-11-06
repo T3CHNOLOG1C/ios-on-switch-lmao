@@ -35,18 +35,26 @@ NSError *failure(NSString *why)
                                code:MTLLibraryErrorCompileFailure
                            userInfo:@{NSLocalizedDescriptionKey : why}];
 }
+
 void *handleOf(id object)
 {
     return object ? ((void *(*)(id, SEL))objc_msgSend)(object, sel_registerName("handle")) : nullptr;
 }
+
 struct Payload {
     std::vector<unsigned char> bytes;
-    void word(uint64_t value) { append(&value, 8); }
+
+    void word(uint64_t value)
+    {
+        append(&value, 8);
+    }
+
     void append(const void *data, size_t n)
     {
         bytes.insert(bytes.end(), (const unsigned char *)data, (const unsigned char *)data + n);
         bytes.resize((bytes.size() + 7) / 8 * 8);
     }
+
     void text(NSString *value)
     {
         const char *s = value.UTF8String ?: "";
@@ -61,7 +69,8 @@ NSString *request(MTLStitchedLibraryDescriptor *descriptor, Payload &out)
     const QMStitched header = {descriptor.functions.count, descriptor.functionGraphs.count};
     out.append(&header, sizeof header);
     for (id function in descriptor.functions) {
-        if (![function isKindOfClass:functionClass]) return @"a function of another device";
+        if (![function isKindOfClass:functionClass])
+            return @"a function of another device";
         out.word(qemu_metal_function_handle(handleOf(function)));
     }
     for (MTLFunctionStitchingGraph *graph in descriptor.functionGraphs) {
@@ -74,18 +83,22 @@ NSString *request(MTLStitchedLibraryDescriptor *descriptor, Payload &out)
                 nodes.push_back(node);
             }
         };
-        for (MTLFunctionStitchingFunctionNode *node in graph.nodes) add(node);
+        for (MTLFunctionStitchingFunctionNode *node in graph.nodes)
+            add(node);
         const size_t listed = nodes.size();
         add(graph.outputNode);
         for (size_t i = 0; i < nodes.size(); i++) {
             for (id argument in nodes[i].arguments)
-                if ([argument isKindOfClass:[MTLFunctionStitchingFunctionNode class]]) add(argument);
-            for (MTLFunctionStitchingFunctionNode *dependency in nodes[i].controlDependencies) add(dependency);
+                if ([argument isKindOfClass:[MTLFunctionStitchingFunctionNode class]])
+                    add(argument);
+            for (MTLFunctionStitchingFunctionNode *dependency in nodes[i].controlDependencies)
+                add(dependency);
         }
         bool inlined = false;
         for (id attribute in graph.attributes)
             inlined |= [attribute isKindOfClass:[MTLFunctionStitchingAttributeAlwaysInline class]];
-        if (!graph.outputNode) return @"a graph without an output node";
+        if (!graph.outputNode)
+            return @"a graph without an output node";
         const QMStitchGraph header = {strlen(graph.functionName.UTF8String ?: "") + 1, nodes.size(),
                                       index[(__bridge void *)graph.outputNode], inlined};
         out.append(&header, sizeof header);
@@ -114,6 +127,7 @@ NSString *request(MTLStitchedLibraryDescriptor *descriptor, Payload &out)
 // The selectors here are of Metal's new… family: the caller owns what they return (ns_returns_retained), and so does whoever calls the
 // frontend's own new… methods below.
 #define RETAINED __attribute__((ns_returns_retained))
+
 // The frontend's library over a handle of the bridge's.
 RETAINED id libraryOver(void *handle)
 {
@@ -121,28 +135,34 @@ RETAINED id libraryOver(void *handle)
     ((void (*)(id, SEL, void *))objc_msgSend)(library, sel_registerName("setHandle:"), handle);
     return library;
 }
+
 RETAINED id stitched(id self, SEL, MTLStitchedLibraryDescriptor *descriptor, NSError **error)
 {
     (void)self;
     Payload payload;
     if (NSString *why = descriptor ? request(descriptor, payload) : @"no descriptor") {
-        if (error) *error = failure(why);
+        if (error)
+            *error = failure(why);
         return nil;
     }
     void *handle = qemu_metal_stitched_library(payload.bytes.data(), payload.bytes.size());
     if (!handle) {
-        if (error) *error = failure([NSString stringWithFormat:@"stitching: %s", nmb_last_error()]);
+        if (error)
+            *error = failure([NSString stringWithFormat:@"stitching: %s", nmb_last_error()]);
         return nil;
     }
-    if (error) *error = nil;
+    if (error)
+        *error = nil;
     return libraryOver(handle);
 }
+
 RETAINED id compiled(id self, SEL, NSString *source, MTLCompileOptions *options, NSError **error)
 {
     (void)self;
     const char *text = source.UTF8String;
     if (!text) {
-        if (error) *error = failure(@"no source");
+        if (error)
+            *error = failure(@"no source");
         return nil;
     }
     QMSource fields = {0, strlen(text), options ? (uint64_t)options.fastMathEnabled : 1,
@@ -158,54 +178,69 @@ RETAINED id compiled(id self, SEL, NSString *source, MTLCompileOptions *options,
     }
     void *handle = qemu_metal_source_library(text, fields.length, &fields, macros.data(), macros.size());
     if (!handle) {
-        if (error) *error = failure([NSString stringWithFormat:@"source: %s", nmb_last_error()]);
+        if (error)
+            *error = failure([NSString stringWithFormat:@"source: %s", nmb_last_error()]);
         return nil;
     }
-    if (error) *error = nil;
+    if (error)
+        *error = nil;
     return libraryOver(handle);
 }
+
 void compiledLater(id self, SEL, NSString *source, MTLCompileOptions *options,
                    void (^handler)(id<MTLLibrary>, NSError *))
 {
     NSError *error = nil;
     id library = compiled(self, nullptr, source, options, &error);
-    if (handler) handler(library, error);
+    if (handler)
+        handler(library, error);
 }
+
 void stitchedLater(id self, SEL, MTLStitchedLibraryDescriptor *descriptor, void (^handler)(id<MTLLibrary>, NSError *))
 {
     NSError *error = nil;
     id library = stitched(self, nullptr, descriptor, &error);
-    if (handler) handler(library, error);
+    if (handler)
+        handler(library, error);
 }
+
 // A name the library has not is Metal's MTLLibraryErrorFunctionNotFound, with Metal's text: Core Image looks a kernel up in its stdlib
 // first and goes on to the kernel's own library only after that error; the frontend's own error stops it.
 IMP gSpecialized, gDescribed;
+
 NSError *notFound(NSError *error)
 {
     const char *why = nmb_last_error();
-    if (!why || !strstr(why, "was not found in the library")) return error;
+    if (!why || !strstr(why, "was not found in the library"))
+        return error;
     return [NSError errorWithDomain:MTLLibraryErrorDomain
                                code:MTLLibraryErrorFunctionNotFound
                            userInfo:@{
                                NSLocalizedDescriptionKey : @(why)
                            }];
 }
+
 using Specialized = RETAINED id (*)(id, SEL, NSString *, id, NSError **);
 using Described = RETAINED id (*)(id, SEL, id, NSError **);
+
 RETAINED id specialized(id self, SEL selector, NSString *name, id values, NSError **error)
 {
     NSError *local = nil;
     id function = ((Specialized)gSpecialized)(self, selector, name, values, &local);
-    if (error) *error = function ? nil : notFound(local);
+    if (error)
+        *error = function ? nil : notFound(local);
     return function;
 }
+
 RETAINED id described(id self, SEL selector, id descriptor, NSError **error)
 {
     NSError *local = nil;
     id function = ((Described)gDescribed)(self, selector, descriptor, &local);
-    if (error) *error = function ? nil : notFound(local);
+    if (error)
+        *error = function ? nil : notFound(local);
     return function;
 }
+
 NSArray<NSString *> *externNames(id self, SEL)
 {
     std::vector<char> text(1 << 16);
@@ -214,7 +249,8 @@ NSArray<NSString *> *externNames(id self, SEL)
     for (size_t at = 0; count > 0 && (long)names.count < count && at < text.size() && text[at];) {
         NSString *name = [NSString stringWithUTF8String:text.data() + at];
         at += strlen(text.data() + at) + 1;
-        if (name) [names addObject:name];
+        if (name)
+            [names addObject:name];
     }
     return names;
 }
@@ -229,7 +265,8 @@ extern "C" void qemu_metal_add_libraries(Class device)
     class_addMethod(device, @selector(newLibraryWithSource:options:completionHandler:), (IMP)compiledLater,
                     "v40@0:8@16@24@?32");
     Class library = objc_getClass("NBLibrary");
-    if (!library) return;
+    if (!library)
+        return;
     class_addMethod(library, sel_registerName("externFunctionNames"), (IMP)externNames, "@16@0:8");
     if (!gSpecialized)
         gSpecialized = method_setImplementation(

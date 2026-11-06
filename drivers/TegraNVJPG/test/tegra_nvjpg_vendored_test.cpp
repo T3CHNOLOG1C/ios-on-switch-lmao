@@ -67,9 +67,11 @@ TEST(TegraNVJPGVendored, Firmware)
 TEST(TegraNVJPGVendored, NvidiaHeaders)
 {
     const std::string source = SourceText("../nvidia/SOURCE");
+
     struct Header {
         const char *name, *prefix, *suffix;
     };
+
     for (const Header &h : {Header{"nvjpg_drv.h", "b719a992", "4278"}, Header{"cle7d0.h", "144aa394", "8776"}}) {
         const std::string digest = sha256(SourceText(std::string("../nvidia/") + h.name));
         EXPECT_THAT(digest, StartsWith(h.prefix)) << h.name;

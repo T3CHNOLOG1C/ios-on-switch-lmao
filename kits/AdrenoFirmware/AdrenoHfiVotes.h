@@ -17,6 +17,7 @@ extern "C" {
 AdrenoHfiStartupStatus AdrenoHfiArcVotes(const uint32_t *levels, size_t level_count, const uint8_t *primary,
                                          size_t primary_bytes, const uint8_t *secondary, size_t secondary_bytes,
                                          uint32_t *votes, size_t capacity);
+
 typedef struct {
     uint32_t address, unit;
     uint16_t width, buswidth;
@@ -24,6 +25,7 @@ typedef struct {
     uint16_t perfmode;
     uint32_t perfmode_kbps;
 } AdrenoHfiBcm;
+
 /* Decode exactly eight bytes of BCM aux data; address/buswidth/fixed/perfmode
  * are separately supplied source/platform policy and are preserved. */
 AdrenoHfiStartupStatus AdrenoHfiBcmAux(AdrenoHfiBcm *, const uint8_t *, size_t);

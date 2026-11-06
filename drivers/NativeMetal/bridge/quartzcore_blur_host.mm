@@ -13,21 +13,26 @@
 #include "NativeMetalObjects.h"
 
 constexpr unsigned width = 32, height = 24;
+
 struct Vertex {
     float position[4], uv[2], unusedColor[4];
 };
+
 static const Vertex vertices[] = {{{-1, -1, 0, 1}, {0, 1}, {}}, {{1, -1, 0, 1}, {1, 1}, {}},
                                   {{-1, 1, 0, 1}, {0, 0}, {}},  {{-1, 1, 0, 1}, {0, 0}, {}},
                                   {{1, -1, 0, 1}, {1, 1}, {}},  {{1, 1, 0, 1}, {1, 0}, {}}};
+
 struct alignas(16) UniformF {
     float offset[8][2], weight[8], divide;
     unsigned char padding[12];
 };
+
 struct alignas(8) UniformH {
     float offset[8][2];
     _Float16 weight[8], divide;
     unsigned char padding[6];
 };
+
 static_assert(sizeof(UniformF) == 112 && sizeof(UniformH) == 88);
 
 static MTLRenderPipelineDescriptor *blurDescriptor(id<MTLLibrary> library, bool half)
@@ -49,6 +54,7 @@ static MTLRenderPipelineDescriptor *blurDescriptor(id<MTLLibrary> library, bool 
     d.vertexDescriptor = vd;
     return d;
 }
+
 static MTLRenderPipelineDescriptor *namedDescriptor(id<MTLLibrary> library, NSString *vertex, NSString *fragment)
 {
     auto d = [MTLRenderPipelineDescriptor new];
@@ -72,11 +78,13 @@ static MTLRenderPipelineDescriptor *namedDescriptor(id<MTLLibrary> library, NSSt
     }
     return d;
 }
+
 static bool cacheState(const char *phase)
 {
     NmbShaderCacheStats s = {};
     uint64_t work[10] = {};
-    if (!native_bridge_metal_shader_cache_stats(&s) || !native_bridge_metal_work_stats(work)) return false;
+    if (!native_bridge_metal_shader_cache_stats(&s) || !native_bridge_metal_work_stats(work))
+        return false;
     std::printf("cache %s artifact_hit=%llu miss=%llu write=%llu driver_load=%llu hit=%llu miss=%llu save=%llu "
                 "same=%llu vk_makings=%llu\n",
                 phase, (unsigned long long)s.hits, (unsigned long long)s.misses, (unsigned long long)s.writes,
@@ -86,13 +94,15 @@ static bool cacheState(const char *phase)
     return !s.rejected && !s.read_failures && !s.write_failures && !s.driver_truncated && !s.driver_mismatched &&
            !work[4];
 }
+
 static bool inventory(id<MTLDevice> device, id<MTLLibrary> library)
 {
     unsigned vertex = 0, fragment = 0, kernels = 0, ordinary = 0, tile = 0, pairs = 0, bare = 0, attributes = 0,
              attachments = 0;
     for (NSString *name in library.functionNames) {
         id<MTLFunction> f = [library newFunctionWithName:name];
-        if (!f) return false;
+        if (!f)
+            return false;
         NSError *error = nil;
         if (f.functionType == MTLFunctionTypeKernel) {
             ++kernels;
@@ -110,7 +120,8 @@ static bool inventory(id<MTLDevice> device, id<MTLLibrary> library)
         else if (f.functionType == MTLFunctionTypeVertex) {
             ++vertex;
             NSString *other = [name stringByReplacingOccurrencesOfString:@"_vert_" withString:@"_frag_"];
-            if ([other isEqualToString:name] || ![library.functionNames containsObject:other]) continue;
+            if ([other isEqualToString:name] || ![library.functionNames containsObject:other])
+                continue;
             ++pairs;
             auto d = [MTLRenderPipelineDescriptor new];
             d.vertexFunction = f;
@@ -136,6 +147,7 @@ static bool inventory(id<MTLDevice> device, id<MTLLibrary> library)
     return vertex == 41 && fragment == 111 && kernels == 15 && ordinary == 4 && tile == 11 && pairs == 22 &&
            bare == 14 && attributes == 6 && attachments == 2;
 }
+
 static std::vector<_Float16> convolution(const std::vector<_Float16> &input, bool vertical)
 {
     // Independent integer stencil: coefficients sum to 64, clamp at the edge.
@@ -154,6 +166,7 @@ static std::vector<_Float16> convolution(const std::vector<_Float16> &input, boo
             }
     return result;
 }
+
 static bool encode(id<MTLCommandBuffer> command, id<MTLRenderPipelineState> state, id<MTLTexture> source,
                    id<MTLTexture> destination, id<MTLSamplerState> sampler, bool half, bool vertical)
 {
@@ -162,7 +175,8 @@ static bool encode(id<MTLCommandBuffer> command, id<MTLRenderPipelineState> stat
     pass.colorAttachments[0].loadAction = MTLLoadActionDontCare;
     pass.colorAttachments[0].storeAction = MTLStoreActionStore;
     id<MTLRenderCommandEncoder> encoder = [command renderCommandEncoderWithDescriptor:pass];
-    if (!encoder) return false;
+    if (!encoder)
+        return false;
     [encoder setRenderPipelineState:state];
     [encoder setVertexBytes:vertices length:sizeof vertices atIndex:0];
     const float identity[] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1}, texmat[] = {1, 1, 0, 0};
@@ -193,6 +207,7 @@ static bool encode(id<MTLCommandBuffer> command, id<MTLRenderPipelineState> stat
     [encoder endEncoding];
     return true;
 }
+
 static bool runBlur(id<MTLDevice> device, id<MTLRenderPipelineState> state, bool half)
 {
     std::vector<_Float16> data(width * height * 4);
@@ -220,7 +235,8 @@ static bool runBlur(id<MTLDevice> device, id<MTLRenderPipelineState> state, bool
     sd.tAddressMode = MTLSamplerAddressModeClampToEdge;
     id<MTLSamplerState> sampler = [device newSamplerStateWithDescriptor:sd];
     id<MTLCommandQueue> queue = [device newCommandQueue];
-    if (!input || !middle || !output || !sampler || !queue) return false;
+    if (!input || !middle || !output || !sampler || !queue)
+        return false;
     [input replaceRegion:MTLRegionMake2D(0, 0, width, height)
              mipmapLevel:0
                withBytes:data.data()
@@ -281,22 +297,30 @@ int main(int argc, char **argv)
 {
     if (argc != 6 || (strcmp(argv[5], "produce") && strcmp(argv[5], "consume") && strcmp(argv[5], "inventory")))
         return 2;
-    if (setenv("METAL2VULKAN_LOG_PIPELINES", "1", 1)) return 2;
+    if (setenv("METAL2VULKAN_LOG_PIPELINES", "1", 1))
+        return 2;
     const bool produce = !strcmp(argv[5], "produce");
     @autoreleasepool {
         id<MTLDevice> device = native_bridge_metal_open(argv[1], argv[2], 0x6e6d62, nullptr);
-        if (!device) return 2;
+        if (!device)
+            return 2;
         NSError *error = nil;
         id<MTLLibrary> library = [device newLibraryWithFile:@(argv[3]) error:&error];
-        if (!library) return 2;
-        if (library.functionNames.count != 167) return 1;
-        if (!strcmp(argv[5], "inventory")) return inventory(device, library) ? 0 : 1;
+        if (!library)
+            return 2;
+        if (library.functionNames.count != 167)
+            return 1;
+        if (!strcmp(argv[5], "inventory"))
+            return inventory(device, library) ? 0 : 1;
         auto ad = [MTLBinaryArchiveDescriptor new];
         NSURL *url = [NSURL fileURLWithPath:@(argv[4])];
-        if (!produce) ad.url = url;
+        if (!produce)
+            ad.url = url;
         id<MTLBinaryArchive> archive = [device newBinaryArchiveWithDescriptor:ad error:&error];
-        if (!archive) return 1;
-        if (!cacheState("opened")) return 1;
+        if (!archive)
+            return 1;
+        if (!cacheState("opened"))
+            return 1;
         if (produce) {
             auto empty = blurDescriptor(library, false);
             empty.binaryArchives = @[ archive ];
@@ -311,9 +335,11 @@ int main(int argc, char **argv)
         unsigned pairs = 0;
         for (NSString *name in library.functionNames) {
             id<MTLFunction> function = [library newFunctionWithName:name];
-            if (function.functionType != MTLFunctionTypeVertex) continue;
+            if (function.functionType != MTLFunctionTypeVertex)
+                continue;
             NSString *fragment = [name stringByReplacingOccurrencesOfString:@"_vert_" withString:@"_frag_"];
-            if ([fragment isEqualToString:name] || ![library.functionNames containsObject:fragment]) continue;
+            if ([fragment isEqualToString:name] || ![library.functionNames containsObject:fragment])
+                continue;
             auto d = namedDescriptor(library, name, fragment);
             d.binaryArchives = @[ archive ];
             if (produce && ![archive addRenderPipelineFunctionsWithDescriptor:d error:&error]) {
@@ -331,12 +357,14 @@ int main(int argc, char **argv)
             }
             ++pairs;
         }
-        if (pairs != 22) return 1;
+        if (pairs != 22)
+            return 1;
         std::printf("valid descriptor pairs=%u strict archive=pass\n", pairs);
         for (bool half : {false, true}) {
             auto d = blurDescriptor(library, half);
             d.binaryArchives = @[ archive ];
-            if (produce && ![archive addRenderPipelineFunctionsWithDescriptor:d error:&error]) return 1;
+            if (produce && ![archive addRenderPipelineFunctionsWithDescriptor:d error:&error])
+                return 1;
             error = nil;
             id<MTLRenderPipelineState> state =
                 [device newRenderPipelineStateWithDescriptor:d
@@ -357,10 +385,13 @@ int main(int argc, char **argv)
                 !error)
                 return 1;
             d.colorAttachments[0].pixelFormat = format;
-            if (!runBlur(device, state, half)) return 1;
+            if (!runBlur(device, state, half))
+                return 1;
         }
-        if (produce && ![archive serializeToURL:url error:&error]) return 1;
-        if (!cacheState("finished")) return 1;
+        if (produce && ![archive serializeToURL:url error:&error])
+            return 1;
+        if (!cacheState("finished"))
+            return 1;
         uint64_t work[10] = {};
         if (!native_bridge_metal_work_stats(work) || !work[0])
             return 1;  // logging must be active, never a zero-counter shortcut

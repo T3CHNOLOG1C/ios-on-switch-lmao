@@ -21,15 +21,18 @@ static uint8_t names[15][32];
 static struct AdrenoVPCOutput outputs[16];
 static struct AdrenoVPCInput inputs[15];
 static struct AdrenoVPCState state = {ADRENO_A740_CHIP_ID, 62, 0, outputs, 2, inputs, 1};
+
 static void reset(void)
 {
     memset(out, 0x6b, sizeof out);
     memcpy(saved, out, sizeof out);
 }
+
 static int equal(const uint8_t *a, size_t an, const uint8_t *b, size_t bn)
 {
     return an == bn && !memcmp(a, b, an);
 }
+
 static void fixture(unsigned n)
 {
     state = (struct AdrenoVPCState){ADRENO_A740_CHIP_ID, 62, 0, outputs, n + 1, inputs, n};
@@ -40,6 +43,7 @@ static void fixture(unsigned n)
         inputs[i] = (struct AdrenoVPCInput){names[i], strlen((char *)names[i]), 4, 32, 15, i * 4, 0};
     }
 }
+
 static void positive(void)
 {
     reset();
@@ -79,7 +83,8 @@ static void positive(void)
     }
     // Construct the primary helper's inputs canonically by actual inloc.
     unsigned order[15];
-    for (unsigned i = 0; i < state.input_count; i++) order[i] = i;
+    for (unsigned i = 0; i < state.input_count; i++)
+        order[i] = i;
     for (unsigned i = 0; i < state.input_count; i++)
         for (unsigned j = i + 1; j < state.input_count; j++)
             if (inputs[order[j]].input_location < inputs[order[i]].input_location) {
@@ -89,7 +94,8 @@ static void positive(void)
             }
     unsigned pos = 16;
     for (unsigned i = 0; i < state.output_count; i++)
-        if (vs.outputs[i].slot == VARYING_SLOT_POS) pos = i;
+        if (vs.outputs[i].slot == VARYING_SLOT_POS)
+            pos = i;
     assert(pos < 16);
     for (unsigned i = 0; i < state.input_count; i++) {
         const struct AdrenoVPCInput *input = inputs + order[i];
@@ -106,7 +112,8 @@ static void positive(void)
     struct ir3_shader_linkage link = {0};
     ir3_link_shaders(&link, &vs, &fs, true);
     uint32_t disabled[4];
-    for (unsigned i = 0; i < 4; i++) disabled[i] = ~link.varmask[i];
+    for (unsigned i = 0; i < 4; i++)
+        disabled[i] = ~link.varmask[i];
     unsigned position_location = link.max_loc;
     ir3_link_add(&link, VARYING_SLOT_POS, outputs[pos].register_id, 15, link.max_loc);
     assert(link.cnt == state.input_count + 1 && link.max_loc == r.stride && position_location == r.position_location);
@@ -123,9 +130,12 @@ static void positive(void)
         assert(regs[consumed] == (reg) && values[consumed] == (value)); \
         consumed++;                                                     \
     } while (0)
-    for (unsigned i = 0; i < 4; i++) EXPECT(REG_A6XX_VPC_VARYING_LM_TRANSFER_CNTL(i), disabled[i]);
-    for (unsigned i = 0; i < (link.cnt + 1u) / 2; i++) EXPECT(REG_A6XX_SP_VS_OUTPUT_REG(i), packed[i]);
-    for (unsigned i = 0; i < (link.cnt + 3u) / 4; i++) EXPECT(REG_A6XX_SP_VS_VPC_DEST_REG(i), dest[i]);
+    for (unsigned i = 0; i < 4; i++)
+        EXPECT(REG_A6XX_VPC_VARYING_LM_TRANSFER_CNTL(i), disabled[i]);
+    for (unsigned i = 0; i < (link.cnt + 1u) / 2; i++)
+        EXPECT(REG_A6XX_SP_VS_OUTPUT_REG(i), packed[i]);
+    for (unsigned i = 0; i < (link.cnt + 3u) / 4; i++)
+        EXPECT(REG_A6XX_SP_VS_VPC_DEST_REG(i), dest[i]);
     EXPECT(REG_A6XX_VPC_VS_CNTL, A6XX_VPC_VS_CNTL_STRIDE_IN_VPC(link.max_loc) |
                                      A6XX_VPC_VS_CNTL_POSITIONLOC(position_location) | A6XX_VPC_VS_CNTL_PSIZELOC(255));
     uint32_t clip = A6XX_VPC_VS_CLIP_CULL_CNTL_CLIP_DIST_03_LOC(255) | A6XX_VPC_VS_CLIP_CULL_CNTL_CLIP_DIST_47_LOC(255);
@@ -138,8 +148,10 @@ static void positive(void)
     EXPECT(REG_A6XX_VPC_VS_SIV_CNTL, siv);
     EXPECT(REG_A6XX_VPC_VS_SIV_CNTL_V2, siv);
     EXPECT(REG_A6XX_GRAS_SU_VS_SIV_CNTL, 0);
-    for (unsigned i = 0; i < 8; i++) EXPECT(REG_A6XX_VPC_VARYING_INTERP_MODE(i), 0);
-    for (unsigned i = 0; i < 8; i++) EXPECT(REG_A6XX_VPC_VARYING_REPLACE_MODE(i), 0);
+    for (unsigned i = 0; i < 8; i++)
+        EXPECT(REG_A6XX_VPC_VARYING_INTERP_MODE(i), 0);
+    for (unsigned i = 0; i < 8; i++)
+        EXPECT(REG_A6XX_VPC_VARYING_REPLACE_MODE(i), 0);
     assert(consumed == nr);
 #undef EXPECT
 #else
@@ -148,6 +160,7 @@ static void positive(void)
 #endif
     positives++;
 }
+
 static void refusal(uint32_t expected, size_t capacity)
 {
     reset();
@@ -156,6 +169,7 @@ static void refusal(uint32_t expected, size_t capacity)
            !memcmp(out, saved, sizeof out));
     refusals++;
 }
+
 int main(void)
 {
     for (unsigned chip = 0; chip < 2; chip++)

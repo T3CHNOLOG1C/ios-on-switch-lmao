@@ -13,11 +13,13 @@
 #include "../NativeBridgeMetalFrontend.h"
 
 static std::atomic<uint64_t> calls, bytes;
+
 extern "C" void sys_dcache_flush(void *address, size_t length)
 {
     using Flush = void (*)(void *, size_t);
     static Flush real = reinterpret_cast<Flush>(dlsym(RTLD_NEXT, "sys_dcache_flush"));
-    if (!real || real == sys_dcache_flush) std::abort();
+    if (!real || real == sys_dcache_flush)
+        std::abort();
     calls++;
     bytes += length;
     real(address, length);
@@ -44,9 +46,11 @@ static bool run(id<MTLDevice> device, unsigned aliases, unsigned allocations)
                 (id)kIOSurfacePixelFormat : @((uint32_t)0x52474241)
             };
             IOSurfaceRef surface = IOSurfaceCreate((__bridge CFDictionaryRef)properties);
-            if (!surface || IOSurfaceLock(surface, 0, nullptr)) return false;
+            if (!surface || IOSurfaceLock(surface, 0, nullptr))
+                return false;
             memset(IOSurfaceGetBaseAddress(surface), i ? 0xa7 : 0xcc, IOSurfaceGetAllocSize(surface));
-            if (IOSurfaceUnlock(surface, 0, nullptr)) return false;
+            if (IOSurfaceUnlock(surface, 0, nullptr))
+                return false;
             surfaces.push_back(surface);
         }
         for (unsigned i = 0; i < aliases; ++i) {
@@ -57,7 +61,8 @@ static bool run(id<MTLDevice> device, unsigned aliases, unsigned allocations)
             if (i & 1)
                 texture = [[texture newTextureViewWithPixelFormat:MTLPixelFormatRGBA8Unorm]
                     newTextureViewWithPixelFormat:MTLPixelFormatRGBA8Unorm];
-            if (!texture) return false;
+            if (!texture)
+                return false;
             [textures addObject:texture];
         }
         std::vector<unsigned char> upload(frameBytes, 0x5a);
@@ -67,7 +72,8 @@ static bool run(id<MTLDevice> device, unsigned aliases, unsigned allocations)
         id<MTLBuffer> output = [device newBufferWithLength:aliases * frameBytes options:MTLResourceStorageModeShared];
         id<MTLCommandBuffer> command = [[device newCommandQueue] commandBuffer];
         id<MTLBlitCommandEncoder> blit = [command blitCommandEncoder];
-        if (!input || !output || !blit) return false;
+        if (!input || !output || !blit)
+            return false;
         [blit copyFromBuffer:input
                    sourceOffset:0
               sourceBytesPerRow:row
@@ -92,7 +98,8 @@ static bool run(id<MTLDevice> device, unsigned aliases, unsigned allocations)
         [command commit];
         [command waitUntilCompleted];
         uint64_t expectedBytes = 0;
-        for (IOSurfaceRef surface : surfaces) expectedBytes += 2 * IOSurfaceGetAllocSize(surface);
+        for (IOSurfaceRef surface : surfaces)
+            expectedBytes += 2 * IOSurfaceGetAllocSize(surface);
         bool ok = command.status == MTLCommandBufferStatusCompleted;
         for (unsigned i = 0; i < aliases; ++i)
             for (unsigned j = 0; j < frameBytes; ++j)
@@ -109,17 +116,20 @@ static bool run(id<MTLDevice> device, unsigned aliases, unsigned allocations)
                     allocations, (unsigned long long)actualCalls, (unsigned long long)actualBytes, 2 * allocations,
                     (unsigned long long)expectedBytes, ok ? "pass" : "FAIL");
         ok &= actualCalls == 2 * allocations && actualBytes == expectedBytes;
-        for (IOSurfaceRef surface : surfaces) CFRelease(surface);
+        for (IOSurfaceRef surface : surfaces)
+            CFRelease(surface);
         return ok;
     }
 }
 
 int main(int argc, char **argv)
 {
-    if (argc != 3) return 2;
+    if (argc != 3)
+        return 2;
     @autoreleasepool {
         id<MTLDevice> device = native_bridge_metal_open(argv[1], argv[2], 0x6e6d62, nullptr);
-        if (!device) return 2;
+        if (!device)
+            return 2;
         bool ok = run(device, 1, 1);
         ok &= run(device, 128, 1);
         ok &= run(device, 128, 2);

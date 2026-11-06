@@ -44,7 +44,8 @@ static int32_t se(Bits *b)
 static unsigned ceilLog2(uint32_t v)
 {
     unsigned n = 0;
-    while ((1u << n) < v) n++;
+    while ((1u << n) < v)
+        n++;
     return n;
 }
 
@@ -81,7 +82,8 @@ static unsigned diagonal(unsigned n, unsigned i)
         for (int y = (int)d; y >= 0; y--) {
             const unsigned x = d - (unsigned)y;
             if ((unsigned)y < n && x < n) {
-                if (k == i) return (unsigned)y * n + x;
+                if (k == i)
+                    return (unsigned)y * n + x;
                 k++;
             }
         }
@@ -92,7 +94,8 @@ void hevc_default_scaling_list(HEVCScalingList *sl)
 {
     memset(sl, 16, sizeof(*sl));
     for (int size = 1; size < 4; size++)
-        for (int m = 0; m < 6; m++) memcpy(sl->sl[size][m], m < 3 ? kDefaultIntra : kDefaultInter, 64);
+        for (int m = 0; m < 6; m++)
+            memcpy(sl->sl[size][m], m < 3 ? kDefaultIntra : kDefaultInter, 64);
 }
 
 static void scalingListData(Bits *b, HEVCScalingList *sl)
@@ -109,13 +112,15 @@ static void scalingListData(Bits *b, HEVCScalingList *sl)
                 }
                 if (delta) {
                     memcpy(sl->sl[size][m], sl->sl[size][m - delta], coefs);
-                    if (size > 1) sl->dc[size - 2][m] = sl->dc[size - 2][m - delta];
+                    if (size > 1)
+                        sl->dc[size - 2][m] = sl->dc[size - 2][m - delta];
                 } else {
                     if (size)
                         memcpy(sl->sl[size][m], m < 3 ? kDefaultIntra : kDefaultInter, 64);
                     else
                         memset(sl->sl[size][m], 16, 16);
-                    if (size > 1) sl->dc[size - 2][m] = 16;
+                    if (size > 1)
+                        sl->dc[size - 2][m] = 16;
                 }
                 continue;
             }
@@ -147,11 +152,13 @@ static bool stRefPicSet(Bits *b, const HEVCShortTermRPS *sets, unsigned idx, uns
     memset(out, 0, sizeof(*out));
     if (idx && u(b, 1)) {  // inter_ref_pic_set_prediction_flag
         const uint32_t deltaIdx = idx == count ? ue(b) + 1 : 1;
-        if (deltaIdx > idx) return false;
+        if (deltaIdx > idx)
+            return false;
         const HEVCShortTermRPS *ref = &sets[idx - deltaIdx];
         const int sign = (int)u(b, 1);
         const int32_t deltaRps = (1 - 2 * sign) * (int32_t)(ue(b) + 1);
-        if (deltaRps < -32768 || deltaRps > 32768) return false;
+        if (deltaRps < -32768 || deltaRps > 32768)
+            return false;
         const unsigned refNeg = ref->num_negative, refPos = ref->num_positive, refAll = refNeg + refPos;
         uint8_t used[17], useDelta[17];
         for (unsigned j = 0; j <= refAll; j++) {
@@ -168,13 +175,15 @@ static bool stRefPicSet(Bits *b, const HEVCShortTermRPS *sets, unsigned idx, uns
             out->delta[0][i] = (int16_t)deltaRps, out->used[0][i++] = used[refAll];
         for (unsigned j = 0; j < refNeg; j++) {
             const int32_t d = ref->delta[0][j] + deltaRps;
-            if (d < 0 && useDelta[j] && i < 16) out->delta[0][i] = (int16_t)d, out->used[0][i++] = used[j];
+            if (d < 0 && useDelta[j] && i < 16)
+                out->delta[0][i] = (int16_t)d, out->used[0][i++] = used[j];
         }
         out->num_negative = (uint8_t)i;
         i = 0;  // (7-62)
         for (int j = (int)refNeg - 1; j >= 0; j--) {
             const int32_t d = ref->delta[0][j] + deltaRps;
-            if (d > 0 && useDelta[j] && i < 16) out->delta[1][i] = (int16_t)d, out->used[1][i++] = used[j];
+            if (d > 0 && useDelta[j] && i < 16)
+                out->delta[1][i] = (int16_t)d, out->used[1][i++] = used[j];
         }
         if (deltaRps > 0 && useDelta[refAll] && i < 16)
             out->delta[1][i] = (int16_t)deltaRps, out->used[1][i++] = used[refAll];
@@ -187,7 +196,8 @@ static bool stRefPicSet(Bits *b, const HEVCShortTermRPS *sets, unsigned idx, uns
         return out->num_negative + out->num_positive <= 16 && !b->bad;
     }
     const uint32_t neg = ue(b), pos = ue(b);
-    if (neg > 16 || pos > 16 || neg + pos > 16) return false;
+    if (neg > 16 || pos > 16 || neg + pos > 16)
+        return false;
     out->num_negative = (uint8_t)neg, out->num_positive = (uint8_t)pos;
     int32_t poc = 0;
     for (unsigned i = 0; i < neg; i++) {
@@ -218,17 +228,21 @@ static unsigned profileTierLevel(Bits *b, unsigned maxSubLayersMinus1, uint8_t *
     u(b, 2), u(b, 1);  // general_profile_space, general_tier_flag
     unsigned idc = u(b, 5), compatible = 0;
     for (unsigned j = 0; j < 32; j++)
-        if (u(b, 1) && j >= 1 && j <= 3 && !compatible) compatible = j;
+        if (u(b, 1) && j >= 1 && j <= 3 && !compatible)
+            compatible = j;
     u(b, 4), u(b, 32), u(b, 12);  // source flags, 43 constraint/reserved bits, general_inbld_flag
     *level = (uint8_t)u(b, 8);
     uint8_t profilePresent[8] = {0}, levelPresent[8] = {0};
     for (unsigned i = 0; i < maxSubLayersMinus1; i++)
         profilePresent[i] = (uint8_t)u(b, 1), levelPresent[i] = (uint8_t)u(b, 1);
     if (maxSubLayersMinus1)
-        for (unsigned i = maxSubLayersMinus1; i < 8; i++) u(b, 2);
+        for (unsigned i = maxSubLayersMinus1; i < 8; i++)
+            u(b, 2);
     for (unsigned i = 0; i < maxSubLayersMinus1; i++) {
-        if (profilePresent[i]) u(b, 32), u(b, 32), u(b, 24);  // 88 bits
-        if (levelPresent[i]) u(b, 8);
+        if (profilePresent[i])
+            u(b, 32), u(b, 32), u(b, 24);  // 88 bits
+        if (levelPresent[i])
+            u(b, 8);
     }
     return idc >= 1 && idc <= 3 ? idc : compatible;
 }
@@ -237,32 +251,39 @@ int hevc_parse_sps(HEVCParams *params, const uint8_t *nal, size_t size)
 {
     uint8_t rbsp[4096];  // per call: sessions on other threads parse their own sets
     Bits b;
-    if (!begin(&b, rbsp, sizeof(rbsp), nal, size)) return -1;
+    if (!begin(&b, rbsp, sizeof(rbsp), nal, size))
+        return -1;
     u(&b, 4);  // sps_video_parameter_set_id
     const unsigned maxSub = u(&b, 3);
     u(&b, 1);
-    if (maxSub > 6) return -1;
+    if (maxSub > 6)
+        return -1;
     HEVCSPS s;
     memset(&s, 0, sizeof(s));
     s.profile_idc = (uint8_t)profileTierLevel(&b, maxSub, &s.level_idc);
     const uint32_t id = ue(&b);
     s.chroma_format_idc = (uint8_t)ue(&b);
-    if (id > 15 || s.chroma_format_idc != 1) return -1;  // 4:2:0 only (no separate_colour_plane_flag then)
+    if (id > 15 || s.chroma_format_idc != 1)
+        return -1;  // 4:2:0 only (no separate_colour_plane_flag then)
     const uint32_t w = ue(&b), h = ue(&b);
-    if (w < 8 || h < 8 || w > 8192 || h > 8192) return -1;
+    if (w < 8 || h < 8 || w > 8192 || h > 8192)
+        return -1;
     s.width = (uint16_t)w, s.height = (uint16_t)h;
     if (u(&b, 1)) {  // conformance_window_flag, in chroma units (SubWidthC = SubHeightC = 2)
         s.crop_left = (uint16_t)(2 * ue(&b)), s.crop_right = (uint16_t)(2 * ue(&b));
         s.crop_top = (uint16_t)(2 * ue(&b)), s.crop_bottom = (uint16_t)(2 * ue(&b));
-        if (s.crop_left + s.crop_right >= w || s.crop_top + s.crop_bottom >= h) return -1;
+        if (s.crop_left + s.crop_right >= w || s.crop_top + s.crop_bottom >= h)
+            return -1;
     }
     s.bit_depth = (uint8_t)(ue(&b) + 8), s.bit_depth_chroma = (uint8_t)(ue(&b) + 8);
     s.log2_max_poc_lsb = (uint8_t)(ue(&b) + 4);
-    if (s.log2_max_poc_lsb > 16) return -1;
+    if (s.log2_max_poc_lsb > 16)
+        return -1;
     const bool subLayerInfo = u(&b, 1);
     for (unsigned i = subLayerInfo ? 0 : maxSub; i <= maxSub; i++) {
         const uint32_t dpb = ue(&b) + 1, reorder = ue(&b), latency = ue(&b);
-        if (dpb > 16 || reorder >= dpb) return -1;
+        if (dpb > 16 || reorder >= dpb)
+            return -1;
         s.max_dec_pic_buffering = (uint8_t)dpb, s.max_num_reorder = (uint8_t)reorder;
         s.max_latency_increase_plus1 = latency;  // the last (HighestTid) wins
     }
@@ -273,7 +294,8 @@ int hevc_parse_sps(HEVCParams *params, const uint8_t *nal, size_t size)
         return -1;
     s.max_th_depth_inter = (uint8_t)ue(&b), s.max_th_depth_intra = (uint8_t)ue(&b);
     hevc_default_scaling_list(&s.scaling);
-    if ((s.scaling_list_enabled = u(&b, 1)) && u(&b, 1)) scalingListData(&b, &s.scaling);
+    if ((s.scaling_list_enabled = u(&b, 1)) && u(&b, 1))
+        scalingListData(&b, &s.scaling);
     s.amp = u(&b, 1), s.sao = u(&b, 1);
     if ((s.pcm = u(&b, 1))) {
         s.pcm_bit_depth = (uint8_t)(u(&b, 4) + 1), s.pcm_bit_depth_chroma = (uint8_t)(u(&b, 4) + 1);
@@ -281,29 +303,35 @@ int hevc_parse_sps(HEVCParams *params, const uint8_t *nal, size_t size)
         s.pcm_loop_filter_disabled = u(&b, 1);
     }
     const uint32_t sets = ue(&b);
-    if (sets > 64) return -1;
+    if (sets > 64)
+        return -1;
     s.num_short_term_rps = (uint8_t)sets;
     for (unsigned i = 0; i < sets; i++)
-        if (!stRefPicSet(&b, s.st_rps, i, sets, &s.st_rps[i])) return -1;
+        if (!stRefPicSet(&b, s.st_rps, i, sets, &s.st_rps[i]))
+            return -1;
     if ((s.long_term_present = u(&b, 1))) {
         const uint32_t n = ue(&b);
-        if (n > 32) return -1;
+        if (n > 32)
+            return -1;
         s.num_long_term_sps = (uint8_t)n;
         for (unsigned i = 0; i < n; i++)
             s.lt_poc_lsb_sps[i] = (uint16_t)u(&b, s.log2_max_poc_lsb), s.lt_used_sps[i] = (uint8_t)u(&b, 1);
     }
     s.temporal_mvp = u(&b, 1), s.strong_intra_smoothing = u(&b, 1);
     if (u(&b, 1)) {  // vui_parameters_present_flag: up to the colour description, all the decoder needs of it
-        if (u(&b, 1) && u(&b, 8) == 255) u(&b, 16), u(&b, 16);  // aspect_ratio_idc, EXTENDED_SAR
-        if (u(&b, 1)) u(&b, 1);                                 // overscan
-        if (u(&b, 1)) {                                         // video_signal_type_present_flag
+        if (u(&b, 1) && u(&b, 8) == 255)
+            u(&b, 16), u(&b, 16);  // aspect_ratio_idc, EXTENDED_SAR
+        if (u(&b, 1))
+            u(&b, 1);    // overscan
+        if (u(&b, 1)) {  // video_signal_type_present_flag
             u(&b, 3);
             s.full_range = u(&b, 1);
             if ((s.colour_description = u(&b, 1)))
                 s.colour_primaries = (uint8_t)u(&b, 8), s.transfer = (uint8_t)u(&b, 8), s.matrix = (uint8_t)u(&b, 8);
         }
     }
-    if (b.bad) return -1;
+    if (b.bad)
+        return -1;
     // Main (8-bit), Main 10 and Main Still Picture: the profiles NVDEC 2.0 decodes into 8-bit NV12.
     if (s.profile_idc < 1 || s.profile_idc > 3 || s.bit_depth != s.bit_depth_chroma ||
         (s.bit_depth != 8 && s.bit_depth != 10) || (s.bit_depth == 10 && s.profile_idc != 2))
@@ -317,23 +345,28 @@ int hevc_parse_pps(HEVCParams *params, const uint8_t *nal, size_t size)
 {
     uint8_t rbsp[4096];  // per call: sessions on other threads parse their own sets
     Bits b;
-    if (!begin(&b, rbsp, sizeof(rbsp), nal, size)) return -1;
+    if (!begin(&b, rbsp, sizeof(rbsp), nal, size))
+        return -1;
     HEVCPPS p;
     memset(&p, 0, sizeof(p));
     const uint32_t id = ue(&b), sps = ue(&b);
-    if (id > 63 || sps > 15) return -1;
+    if (id > 63 || sps > 15)
+        return -1;
     p.sps_id = (uint8_t)sps;
     p.dependent_slice_segments = u(&b, 1), p.output_flag_present = u(&b, 1);
     p.num_extra_slice_header_bits = (uint8_t)u(&b, 3);
     p.sign_data_hiding = u(&b, 1), p.cabac_init_present = u(&b, 1);
     const uint32_t l0 = ue(&b) + 1, l1 = ue(&b) + 1;
     const int32_t qp = se(&b);
-    if (l0 > 15 || l1 > 15 || qp < -26 - 6 * 8 || qp > 25) return -1;
+    if (l0 > 15 || l1 > 15 || qp < -26 - 6 * 8 || qp > 25)
+        return -1;
     p.num_ref_idx_l0_default = (uint8_t)l0, p.num_ref_idx_l1_default = (uint8_t)l1, p.init_qp_minus26 = (int8_t)qp;
     p.constrained_intra_pred = u(&b, 1), p.transform_skip = u(&b, 1);
-    if ((p.cu_qp_delta = u(&b, 1))) p.diff_cu_qp_delta_depth = (uint8_t)ue(&b);
+    if ((p.cu_qp_delta = u(&b, 1)))
+        p.diff_cu_qp_delta_depth = (uint8_t)ue(&b);
     const int32_t cb = se(&b), cr = se(&b);
-    if (cb < -12 || cb > 12 || cr < -12 || cr > 12 || p.diff_cu_qp_delta_depth > 3) return -1;
+    if (cb < -12 || cb > 12 || cr < -12 || cr > 12 || p.diff_cu_qp_delta_depth > 3)
+        return -1;
     p.cb_qp_offset = (int8_t)cb, p.cr_qp_offset = (int8_t)cr;
     p.slice_chroma_qp_offsets_present = u(&b, 1);
     p.weighted_pred = u(&b, 1), p.weighted_bipred = u(&b, 1), p.transquant_bypass = u(&b, 1);
@@ -341,11 +374,14 @@ int hevc_parse_pps(HEVCParams *params, const uint8_t *nal, size_t size)
     p.num_tile_columns = p.num_tile_rows = 1;
     if (p.tiles) {
         const uint32_t cols = ue(&b) + 1, rows = ue(&b) + 1;
-        if (cols > 20 || rows > 22) return -1;
+        if (cols > 20 || rows > 22)
+            return -1;
         p.num_tile_columns = (uint8_t)cols, p.num_tile_rows = (uint8_t)rows;
         if (!(p.uniform_spacing = u(&b, 1))) {
-            for (unsigned i = 0; i + 1 < cols; i++) p.column_width[i] = (uint16_t)(ue(&b) + 1);
-            for (unsigned i = 0; i + 1 < rows; i++) p.row_height[i] = (uint16_t)(ue(&b) + 1);
+            for (unsigned i = 0; i + 1 < cols; i++)
+                p.column_width[i] = (uint16_t)(ue(&b) + 1);
+            for (unsigned i = 0; i + 1 < rows; i++)
+                p.row_height[i] = (uint16_t)(ue(&b) + 1);
         }
         p.loop_filter_across_tiles = u(&b, 1);
     }
@@ -354,16 +390,20 @@ int hevc_parse_pps(HEVCParams *params, const uint8_t *nal, size_t size)
         p.deblocking_override = u(&b, 1);
         if (!(p.deblocking_disabled = u(&b, 1))) {
             const int32_t beta = se(&b), tc = se(&b);
-            if (beta < -6 || beta > 6 || tc < -6 || tc > 6) return -1;
+            if (beta < -6 || beta > 6 || tc < -6 || tc > 6)
+                return -1;
             p.beta_offset = (int8_t)(beta * 2), p.tc_offset = (int8_t)(tc * 2);
         }
     }
-    if ((p.scaling_list_present = u(&b, 1))) scalingListData(&b, &p.scaling);
+    if ((p.scaling_list_present = u(&b, 1)))
+        scalingListData(&b, &p.scaling);
     p.lists_modification_present = u(&b, 1);
     p.log2_parallel_merge_level = (uint8_t)(ue(&b) + 2);
     p.slice_header_extension_present = u(&b, 1);
-    if (u(&b, 1)) p.range_extension = u(&b, 1);  // pps_extension_present_flag, pps_range_extension_flag
-    if (b.bad || p.log2_parallel_merge_level > 6) return -1;
+    if (u(&b, 1))
+        p.range_extension = u(&b, 1);  // pps_extension_present_flag, pps_range_extension_flag
+    if (b.bad || p.log2_parallel_merge_level > 6)
+        return -1;
     p.valid = true;
     params->pps[id] = p;
     return 0;
@@ -374,38 +414,48 @@ int hevc_parse_slice_header(const HEVCParams *params, const uint8_t *nal, size_t
 {
     uint8_t rbsp[1024];
     Bits b;
-    if (!begin(&b, rbsp, sizeof(rbsp), nal, size)) return -1;
+    if (!begin(&b, rbsp, sizeof(rbsp), nal, size))
+        return -1;
     memset(out, 0, sizeof(*out));
     out->nal_type = (nal[0] >> 1) & 0x3f;
     out->temporal_id = (uint8_t)((nal[1] & 7) - 1);
-    if (out->nal_type > HEVC_NAL_CRA || (nal[1] & 7) == 0) return -1;
+    if (out->nal_type > HEVC_NAL_CRA || (nal[1] & 7) == 0)
+        return -1;
     out->first_slice = u(&b, 1);
-    if (out->nal_type >= HEVC_NAL_BLA_W_LP) out->no_output_of_prior_pics = u(&b, 1);
+    if (out->nal_type >= HEVC_NAL_BLA_W_LP)
+        out->no_output_of_prior_pics = u(&b, 1);
     const uint32_t ppsId = ue(&b);
-    if (ppsId > 63 || !params->pps[ppsId].valid) return -1;
+    if (ppsId > 63 || !params->pps[ppsId].valid)
+        return -1;
     const HEVCPPS *pps = &params->pps[ppsId];
     const HEVCSPS *sps = &params->sps[pps->sps_id];
-    if (!sps->valid) return -1;
+    if (!sps->valid)
+        return -1;
     out->pps_id = (uint8_t)ppsId;
     if (!out->first_slice) {
-        if (pps->dependent_slice_segments) out->dependent = u(&b, 1);
+        if (pps->dependent_slice_segments)
+            out->dependent = u(&b, 1);
         const unsigned ctb = sps->log2_min_cb + sps->log2_diff_max_min_cb;
         const uint32_t ctbs = ((sps->width + (1u << ctb) - 1) >> ctb) * ((sps->height + (1u << ctb) - 1) >> ctb);
         u(&b, ceilLog2(ctbs));  // slice_segment_address
     }
     out->pic_output = true;
-    if (out->dependent) return b.bad ? -1 : 0;  // the rest comes from the independent segment before it
+    if (out->dependent)
+        return b.bad ? -1 : 0;  // the rest comes from the independent segment before it
     u(&b, pps->num_extra_slice_header_bits);
     const uint32_t type = ue(&b);
-    if (type > HEVC_SLICE_I) return -1;
+    if (type > HEVC_SLICE_I)
+        return -1;
     out->slice_type = (uint8_t)type;
     const size_t skipFrom = b.pos;
-    if (pps->output_flag_present) out->pic_output = u(&b, 1);
+    if (pps->output_flag_present)
+        out->pic_output = u(&b, 1);
     if (out->nal_type != HEVC_NAL_IDR_W_RADL && out->nal_type != HEVC_NAL_IDR_N_LP) {
         out->poc_lsb = (uint16_t)u(&b, sps->log2_max_poc_lsb);
         if ((out->st_rps_from_sps = u(&b, 1))) {
             const unsigned idx = sps->num_short_term_rps > 1 ? u(&b, ceilLog2(sps->num_short_term_rps)) : 0;
-            if (idx >= sps->num_short_term_rps) return -1;
+            if (idx >= sps->num_short_term_rps)
+                return -1;
             out->st_rps = sps->st_rps[idx];
         } else {
             const size_t at = b.pos;
@@ -415,12 +465,14 @@ int hevc_parse_slice_header(const HEVCParams *params, const uint8_t *nal, size_t
         }
         if (sps->long_term_present) {
             const uint32_t fromSps = sps->num_long_term_sps ? ue(&b) : 0, own = ue(&b);
-            if (fromSps > sps->num_long_term_sps || fromSps + own > 32) return -1;
+            if (fromSps > sps->num_long_term_sps || fromSps + own > 32)
+                return -1;
             out->num_lt = (uint8_t)(fromSps + own);
             for (unsigned i = 0; i < out->num_lt; i++) {
                 if (i < fromSps) {
                     const unsigned idx = sps->num_long_term_sps > 1 ? u(&b, ceilLog2(sps->num_long_term_sps)) : 0;
-                    if (idx >= sps->num_long_term_sps) return -1;
+                    if (idx >= sps->num_long_term_sps)
+                        return -1;
                     out->lt[i].poc_lsb = sps->lt_poc_lsb_sps[idx];
                     out->lt[i].used = sps->lt_used_sps[idx];
                 } else {

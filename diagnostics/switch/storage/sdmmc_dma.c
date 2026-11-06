@@ -24,19 +24,23 @@ enum {
     DMA_BOUNDARY = 8,
     MAX_POLLS = 1000000
 };
+
 #define DMA_ERRORS UINT32_C(0xffff8000)
 #define BOUNDARY   UINT64_C(524288)
+
 static int bad(struct switch_sd_dma *d, int error)
 {
     d->failed = 1;
     return error;
 }
+
 static int mode(const struct switch_sd_io *io, void *c)
 {
     uint32_t version = io->read16(c, VERSION) & 255;
     return (version == 2 || version == 3) && (io->read32(c, CAPABILITIES) & 0x10400000u) == 0x10400000u &&
            !(io->read8(c, HOST_CONTROL) & 0x18) && (io->read16(c, HOST_CONTROL2) & 0x3000) == 0x3000;
 }
+
 int switch_sd_dma_bind(struct switch_sd_dma *d, const struct switch_sd_io *io, void *c, uint64_t frequency)
 {
     if (!d || !io || !io->read8 || !io->read16 || !io->read32 || !io->write16 || !io->write32 || !io->ticks ||
@@ -57,26 +61,31 @@ int switch_sd_dma_bind(struct switch_sd_dma *d, const struct switch_sd_io *io, v
     io->write16(c, HOST_CONTROL2, (uint16_t)(io->read16(c, HOST_CONTROL2) | 0x3000));
     io->barrier(c);
     (void)io->read16(c, CLOCK);
-    if (!mode(io, c)) return bad(d, SWITCH_SD_UNQUALIFIED);
+    if (!mode(io, c))
+        return bad(d, SWITCH_SD_UNQUALIFIED);
     d->frequency = frequency;
     d->bound = 1;
     return SWITCH_SD_OK;
 }
-int switch_sd_dma_prepare(struct switch_sd_dma *d, const struct switch_sd_io *io, void *c, uint32_t size, uint32_t count,
-                        const uint8_t *input)
+
+int switch_sd_dma_prepare(struct switch_sd_dma *d, const struct switch_sd_io *io, void *c, uint32_t size,
+                          uint32_t count, const uint8_t *input)
 {
     if (!d || !io || !d->bound || d->failed || d->active || !size || size > 512 || (size & 3) || !count ||
         count > 128 || count > SWITCH_SD_DMA_BYTES / size)
         return SWITCH_SD_ARGUMENT;
-    if (!mode(io, c) || d->bus_ready(c)) return bad(d, SWITCH_SD_UNQUALIFIED);
+    if (!mode(io, c) || d->bus_ready(c))
+        return bad(d, SWITCH_SD_UNQUALIFIED);
     d->length = size * count;
     d->blocks = count;
     d->writing = input != 0;
     d->completed = 0;
     d->polls = 0;
     d->boundaries = 0;
-    if (input) memcpy(d->bytes, input, d->length);
-    if (d->cache(c, d->bytes, d->length, 0)) return bad(d, SWITCH_SD_UNQUALIFIED);
+    if (input)
+        memcpy(d->bytes, input, d->length);
+    if (d->cache(c, d->bytes, d->length, 0))
+        return bad(d, SWITCH_SD_UNQUALIFIED);
     d->end = d->physical + d->length;
     d->next_boundary = (d->physical + BOUNDARY) & ~(BOUNDARY - 1);
     d->started = io->ticks(c);
@@ -92,16 +101,21 @@ int switch_sd_dma_prepare(struct switch_sd_dma *d, const struct switch_sd_io *io
     io->barrier(c);
     return SWITCH_SD_OK;
 }
+
 int switch_sd_dma_wait(struct switch_sd_dma *d, const struct switch_sd_io *io, void *c, struct switch_sd_result *r)
 {
-    if (!d || !io || !d->active || d->failed || d->completed || !r) return SWITCH_SD_ARGUMENT;
+    if (!d || !io || !d->active || d->failed || d->completed || !r)
+        return SWITCH_SD_ARGUMENT;
     for (;;) {
         r->status = io->read32(c, STATUS);
-        if (r->status & DMA_ERRORS) return bad(d, SWITCH_SD_CONTROLLER_ERROR);
-        if (++d->polls > MAX_POLLS || io->ticks(c) - d->started >= d->frequency * 5) return bad(d, SWITCH_SD_TIMEOUT);
+        if (r->status & DMA_ERRORS)
+            return bad(d, SWITCH_SD_CONTROLLER_ERROR);
+        if (++d->polls > MAX_POLLS || io->ticks(c) - d->started >= d->frequency * 5)
+            return bad(d, SWITCH_SD_TIMEOUT);
         if (r->status & TRANSFER_DONE) {
             /* Only multiple-block transfers define a useful remaining count. */
-            if (d->blocks > 1 && io->read16(c, BLOCK_COUNT)) return bad(d, SWITCH_SD_BUFFER_STATE);
+            if (d->blocks > 1 && io->read16(c, BLOCK_COUNT))
+                return bad(d, SWITCH_SD_BUFFER_STATE);
             io->write32(c, STATUS, TRANSFER_DONE | (r->status & DMA_BOUNDARY));
             io->barrier(c);
             d->completed = 1;
@@ -121,11 +135,14 @@ int switch_sd_dma_wait(struct switch_sd_dma *d, const struct switch_sd_io *io, v
         }
     }
 }
+
 int switch_sd_dma_complete(struct switch_sd_dma *d, void *c, uint8_t *output)
 {
-    if (!d || !d->active || !d->completed || d->failed || (!d->writing && !output)) return SWITCH_SD_ARGUMENT;
+    if (!d || !d->active || !d->completed || d->failed || (!d->writing && !output))
+        return SWITCH_SD_ARGUMENT;
     if (!d->writing) {
-        if (d->cache(c, d->bytes, d->length, 1)) return bad(d, SWITCH_SD_UNQUALIFIED);
+        if (d->cache(c, d->bytes, d->length, 1))
+            return bad(d, SWITCH_SD_UNQUALIFIED);
         memcpy(output, d->bytes, d->length);
         d->read_bytes += d->length;
     } else
@@ -134,7 +151,9 @@ int switch_sd_dma_complete(struct switch_sd_dma *d, void *c, uint8_t *output)
     d->completed = 0;
     return SWITCH_SD_OK;
 }
+
 void switch_sd_dma_abort(struct switch_sd_dma *d)
 {
-    if (d) d->failed = 1;
+    if (d)
+        d->failed = 1;
 }

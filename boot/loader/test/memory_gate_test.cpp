@@ -36,7 +36,8 @@ Result Check(const Bytes &data, std::optional<uint32_t> capacity = std::nullopt)
     const size_t size = (data.size() + 1 + 3) & ~size_t{3};
     auto buffer = std::make_unique<uint8_t[]>(size);
     std::memset(buffer.get(), 0, size);
-    if (!data.empty()) std::memcpy(buffer.get(), data.data(), data.size());
+    if (!data.empty())
+        std::memcpy(buffer.get(), data.data(), data.size());
     Result r{};
     r.status =
         loader_check_fdt_memory(buffer.get(), capacity ? *capacity : (uint32_t)data.size(), START, END, &r.report);

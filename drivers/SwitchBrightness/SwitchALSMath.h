@@ -35,17 +35,20 @@ constexpr unsigned kGainFactor[kGains] = {1, 2, 64, 128};  // GAIN register 0..3
 struct GainLimits {
     uint32_t cl, fl;
 };
+
 constexpr GainLimits kGainLimits[kGains] = {{2500, 0}, {1600, 7800}, {10, 50000}, {0, 1000}};  // tegra210b01-fric.dts
 
 struct Window {
     uint32_t rc, cv, ci;
 };
+
 constexpr Window kWindow[] = {{231, 9697, 30300}, {993, 3333, 2778}, {1478, 1621, 1053}, {7500, 81, 10}};
 
 // A channel at the ADC's top (65535): the light is beyond this gain's range, and with DATA0 clipped the IR ratio is
 // too high, so the window row and the lux under-read. At 1x there is no lower gain: lux() reports kLuxMax. At any
 // other gain SwitchALS drops the sample while nextGain() steps down (a lamp read ch0 65535 ch1 12940 at 1x).
 constexpr uint32_t kChannelMax = 0xffff;
+
 inline bool saturated(uint32_t visible, uint32_t ir)
 {
     return visible >= kChannelMax || ir >= kChannelMax;
@@ -53,9 +56,12 @@ inline bool saturated(uint32_t visible, uint32_t ir)
 
 inline uint32_t lux(uint32_t visible, uint32_t ir, unsigned gain)
 {
-    if (gain >= kGains) return 0;
-    if (saturated(visible, ir)) return gain == 0 ? kLuxMax : 0;
-    if (!visible) return 0;
+    if (gain >= kGains)
+        return 0;
+    if (saturated(visible, ir))
+        return gain == 0 ? kLuxMax : 0;
+    if (!visible)
+        return 0;
     int64_t weighted = 0;
     for (const Window &w : kWindow) {
         if (1000ull * ir / visible < w.rc) {
@@ -63,7 +69,8 @@ inline uint32_t lux(uint32_t visible, uint32_t ir, unsigned gain)
             break;
         }
     }
-    if (weighted <= 0) return 0;  // cannot happen inside a row's range; bh1730.c would wrap in u64
+    if (weighted <= 0)
+        return 0;  // cannot happen inside a row's range; bh1730.c would wrap in u64
     const uint64_t value =
         (uint64_t)weighted * 100 * kLuxMultiplier / ((uint64_t)kGainFactor[gain] * kIntegrationUS * 1000);
     return value > kLuxMax ? kLuxMax : (uint32_t)value;
@@ -73,7 +80,8 @@ inline uint32_t lux(uint32_t visible, uint32_t ir, unsigned gain)
 inline unsigned nextGain(unsigned gain, uint32_t visible, uint32_t ir)
 {
     const uint32_t highest = visible > ir ? visible : ir;
-    if (gain > 0 && highest > kGainLimits[gain].fl) return gain - 1;
+    if (gain > 0 && highest > kGainLimits[gain].fl)
+        return gain - 1;
     if (gain + 1 < kGains && highest < kGainLimits[gain].cl &&
         (uint64_t)highest * kGainFactor[gain + 1] / kGainFactor[gain] < kGainLimits[gain + 1].fl) {
         return gain + 1;

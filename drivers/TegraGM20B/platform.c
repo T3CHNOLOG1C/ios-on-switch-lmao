@@ -96,6 +96,7 @@ static uint32_t rd(volatile uint32_t *base, uint32_t off)
 {
 	return base[off / 4];
 }
+
 static void wr(volatile uint32_t *base, uint32_t off, uint32_t v)
 {
 	__asm__ volatile("dmb oshst" ::: "memory");
@@ -277,6 +278,7 @@ static const struct {
 	{1228800, 1277303, -11675, -859, 0, 3722, 313},
 	{1267200, 1335531, -12567, -867, 0, 3681, 559},
 };
+
 static const int gpu_b01_trips_c[] = {-25, 20, 30, 50, 70, 90};
 #define GPU_B01_CVB_VMIN_UV 610000 /* .cvb_vmin */
 

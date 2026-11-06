@@ -23,34 +23,42 @@ unsigned gov_step(struct switch_gov *g, uint64_t now, uint32_t busy)
 {
     return switch_gov_step(g, now, busy);
 }
+
 unsigned gov_boost(struct switch_gov *g, unsigned index, uint64_t until, uint64_t now)
 {
     return switch_gov_boost(g, index, until, now);
 }
+
 unsigned gov_limit(struct switch_gov *g, unsigned lo, unsigned hi, uint64_t now)
 {
     return switch_gov_limit(g, lo, hi, now);
 }
+
 unsigned gov_cur(const struct switch_gov *g)
 {
     return g->cur;
 }
+
 unsigned gov_lo(const struct switch_gov *g)
 {
     return g->lo;
 }
+
 unsigned gov_hi(const struct switch_gov *g)
 {
     return g->hi;
 }
+
 uint32_t gov_khz(const struct switch_gov *g, unsigned i)
 {
     return i < SWITCH_GOV_MAX_OPPS ? g->khz[i] : 0;
 }
+
 uint64_t gov_residency(const struct switch_gov *g, unsigned i)
 {
     return i < SWITCH_GOV_MAX_OPPS ? g->residency[i] : 0;
 }
+
 void gov_account(struct switch_gov *g, uint64_t now)
 {
     switch_gov_account(g, now);
@@ -66,7 +74,8 @@ uint32_t gov_counter(const struct switch_gov *g, unsigned which)
 // One step per window: busy[i] for the window ending at times[i]; out[i] = the index after it.
 void gov_run(struct switch_gov *g, const uint64_t *times, const uint32_t *busy, unsigned n, unsigned *out)
 {
-    for (unsigned i = 0; i < n; ++i) out[i] = switch_gov_step(g, times[i], busy[i]);
+    for (unsigned i = 0; i < n; ++i)
+        out[i] = switch_gov_step(g, times[i], busy[i]);
 }
 
 unsigned gov_cpu_table(const uint32_t *khz, const uint32_t *mv, unsigned rows, uint32_t max_khz, uint32_t vmin_mv,

@@ -67,7 +67,8 @@ static inline struct xhci_port_range xhci_find_ports(uint32_t (*read)(void *cont
             return range;
         }
         const uint32_t next = ((head >> 8) & 0xffu) << 2;
-        if (!next) break;
+        if (!next)
+            break;
         offset += next;
     }
     return range;
@@ -138,12 +139,18 @@ static inline uint32_t xusb_oc_map_host(uint32_t v)
 static inline const char *xusb_id_name(uint32_t vbus_id)
 {
     switch ((vbus_id & XUSB_VBUS_ID_ID_MASK) >> 18) {
-    case 0: return "grounded";
-    case 1: return "C";
-    case 2: return "B";
-    case 4: return "A";
-    case 8: return "floating";
-    default: return "?";
+    case 0:
+        return "grounded";
+    case 1:
+        return "C";
+    case 2:
+        return "B";
+    case 4:
+        return "A";
+    case 8:
+        return "floating";
+    default:
+        return "?";
     }
 }
 
@@ -183,8 +190,10 @@ static inline enum xusb_irq_verdict xusb_irq_judge(struct xusb_irq_sample armed,
     const bool delivered = now.count != armed.count;
     const bool waiting = now.pending && now.erdp == armed.erdp && !delivered;
     const enum xusb_irq_verdict act = stage >= 2 ? (now.count ? XUSB_IRQ_PANIC : XUSB_IRQ_OFF) : XUSB_IRQ_CONFIRM;
-    if (now.count) return waiting && now.deliverable ? act : XUSB_IRQ_FINE;
-    if (waiting || (first && !delivered)) return act;
+    if (now.count)
+        return waiting && now.deliverable ? act : XUSB_IRQ_FINE;
+    if (waiting || (first && !delivered))
+        return act;
     return XUSB_IRQ_FINE;
 }
 

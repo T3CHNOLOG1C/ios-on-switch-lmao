@@ -30,7 +30,7 @@ template <typename Request> inline bool switchOverlaps(const Request *a, const R
 // included). `first` is in the queue; nothing is unlinked yet (switchUnlinkChain does that).
 template <typename Request>
 inline uint32_t switchGatherReads(Request *head, Request *first, uint32_t limit, uint32_t maxCount, unsigned scan,
-                                    uint64_t *start, uint32_t *sectors, uint32_t maxGap = 0, uint32_t gapBudget = 0)
+                                  uint64_t *start, uint32_t *sectors, uint32_t maxGap = 0, uint32_t gapBudget = 0)
 {
     first->chained = true;
     uint64_t low = first->lba, high = first->lba + first->sectors, payload = first->sectors;
@@ -40,7 +40,8 @@ inline uint32_t switchGatherReads(Request *head, Request *first, uint32_t limit,
         grew = false;
         unsigned seen = 0;
         for (Request *r = head; r && seen < scan && count < maxCount; r = r->next, ++seen) {
-            if (r->write || r->chained) continue;
+            if (r->write || r->chained)
+                continue;
             const uint64_t from = r->lba, to = r->lba + r->sectors;
             uint64_t newLow = low, newHigh = high, gap = 0;
             bool inside = false;
@@ -55,13 +56,15 @@ inline uint32_t switchGatherReads(Request *head, Request *first, uint32_t limit,
             } else {
                 continue;
             }
-            if (gap > maxGap || newHigh - newLow > limit) continue;
+            if (gap > maxGap || newHigh - newLow > limit)
+                continue;
             bool overlaps = false;
             for (const Request *older = head; older != r && !overlaps; older = older->next)
                 overlaps = !older->chained && switchOverlaps(older, r);
             for (const Request *member = head; inside && member && !overlaps; member = member->next)
                 overlaps = member->chained && switchOverlaps(member, r);
-            if (overlaps || (newHigh - newLow) - (payload + r->sectors) > gapBudget) continue;
+            if (overlaps || (newHigh - newLow) - (payload + r->sectors) > gapBudget)
+                continue;
             r->chained = true;
             ++count;
             payload += r->sectors;
@@ -82,29 +85,36 @@ inline uint32_t switchGatherReads(Request *head, Request *first, uint32_t limit,
 // requests).
 template <typename Request>
 inline bool switchChainFits(const Request *head, uint64_t start, uint32_t sectors, uint32_t count, uint32_t maxGap,
-                              uint32_t gapBudget)
+                            uint32_t gapBudget)
 {
     uint64_t total = 0;
     uint32_t found = 0;
     bool atStart = false, atEnd = false;
     for (const Request *r = head; r; r = r->next) {
-        if (!r->chained) continue;
+        if (!r->chained)
+            continue;
         ++found;
-        if (r->write || !r->sectors || r->lba < start || r->lba + r->sectors > start + sectors) return false;
+        if (r->write || !r->sectors || r->lba < start || r->lba + r->sectors > start + sectors)
+            return false;
         total += r->sectors;
         atStart |= r->lba == start;
         atEnd |= r->lba + r->sectors == start + sectors;
         // Disjoint from every other member, and the gap before it (to the nearest member ending at or before it).
         uint64_t before = start;
         for (const Request *other = head; other; other = other->next) {
-            if (!other->chained || other == r) continue;
-            if (switchOverlaps(r, other)) return false;
+            if (!other->chained || other == r)
+                continue;
+            if (switchOverlaps(r, other))
+                return false;
             const uint64_t end = other->lba + other->sectors;
-            if (end <= r->lba && end > before) before = end;
+            if (end <= r->lba && end > before)
+                before = end;
         }
-        if (r->lba - before > maxGap) return false;
+        if (r->lba - before > maxGap)
+            return false;
     }
-    if (!found) return !count && !sectors;
+    if (!found)
+        return !count && !sectors;
     return found == count && atStart && atEnd && total <= sectors && sectors - total <= gapBudget;
 }
 
@@ -119,16 +129,17 @@ inline bool switchChainTiles(const Request *head, uint64_t start, uint32_t secto
 // so it may go now, ahead of what is queued before it (a write it would see, or an older read of the same blocks, keeps
 // it back: the rule the gather and the r6-lows priority pass apply). The SD worker starts a command-queue group's further
 // tasks with it. nullptr when there is none.
-template <typename Request>
-inline Request *switchNextIndependentRead(Request *head, uint32_t maxSectors, unsigned scan)
+template <typename Request> inline Request *switchNextIndependentRead(Request *head, uint32_t maxSectors, unsigned scan)
 {
     unsigned seen = 0;
     for (Request *r = head; r && seen < scan; r = r->next, ++seen) {
-        if (r->write || r->sectors > maxSectors) continue;
+        if (r->write || r->sectors > maxSectors)
+            continue;
         bool overlaps = false;
         for (const Request *older = head; older != r && !overlaps; older = older->next)
             overlaps = switchOverlaps(older, r);
-        if (!overlaps) return r;
+        if (!overlaps)
+            return r;
     }
     return nullptr;
 }
@@ -136,7 +147,8 @@ inline Request *switchNextIndependentRead(Request *head, uint32_t maxSectors, un
 // Clears every `chained` mark (a chain that failed switchChainTiles stays queued as it was).
 template <typename Request> inline void switchClearChain(Request *head)
 {
-    for (Request *r = head; r; r = r->next) r->chained = false;
+    for (Request *r = head; r; r = r->next)
+        r->chained = false;
 }
 
 // Unlinks the `count` requests marked `chained` from the queue (head and tail kept right, the others in their order),
@@ -155,7 +167,8 @@ template <typename Request> inline Request *switchUnlinkChain(Request *&head, Re
             prev->next = next;
         else
             head = next;
-        if (tail == r) tail = prev;
+        if (tail == r)
+            tail = prev;
         r->chained = false;
         --count;
         if (!chain || last->lba < r->lba) {
@@ -168,7 +181,8 @@ template <typename Request> inline Request *switchUnlinkChain(Request *&head, Re
             last = r;
         } else {
             Request **at = &chain;
-            while ((*at)->lba < r->lba) at = &(*at)->next;
+            while ((*at)->lba < r->lba)
+                at = &(*at)->next;
             r->next = *at;
             *at = r;
         }

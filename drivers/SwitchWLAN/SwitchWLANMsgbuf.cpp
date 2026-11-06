@@ -41,6 +41,7 @@ enum : unsigned {
     RING_COUNT,
     FLOW = RING_COUNT
 };
+
 constexpr uint16_t kRingItems[RING_COUNT] = {64, 512, 64, 1024, 512};
 constexpr uint16_t kRingItemSize[RING_COUNT] = {40, 32, 24, 16, 32};
 
@@ -55,7 +56,15 @@ enum : uint32_t {
     SHARED_RINGUPD_LEN = 64,
     SHARED_RINGUPD_ADDR = 68,
 };
-enum : uint32_t { RINGINFO_MEM = 0, RINGINFO_H2D_W = 4, RINGINFO_H2D_R = 8, RINGINFO_D2H_W = 12, RINGINFO_D2H_R = 16 };
+
+enum : uint32_t {
+    RINGINFO_MEM = 0,
+    RINGINFO_H2D_W = 4,
+    RINGINFO_H2D_R = 8,
+    RINGINFO_D2H_W = 12,
+    RINGINFO_D2H_R = 16
+};
+
 constexpr uint32_t kRingMemSize = 16, kRingMaxItem = 4, kRingLenItems = 6, kRingBaseAddr = 8;
 constexpr uint32_t kSharedHostReadyDb1 = 0x10000000;
 
@@ -81,6 +90,7 @@ enum : uint8_t {
     MSG_RXBUF_POST = 0x11,
     MSG_RX_CMPLT = 0x12,
 };
+
 constexpr uint32_t kIoctlReqPktId = 0xFFFE;
 constexpr uint32_t kControlBuffers = 8, kControlBufferSize = 8192;  // ioctl responses 0..7, events 8..15
 constexpr uint32_t kIoctlMax = 1518;                                // BRCMF_TX_IOCTL_MAX_MSG_SIZE
@@ -164,7 +174,8 @@ bool Msgbuf::allocateArea(char *why, size_t whyLength)
 bool Msgbuf::allocate(uint32_t length, uint32_t align, Buffer &out)
 {
     const uint32_t at = (areaUsed_ + align - 1) & ~(align - 1);
-    if (at + length > layout_.length) return false;
+    if (at + length > layout_.length)
+        return false;
     areaUsed_ = at + length;
     out.va = area_ + at;
     out.pa = areaPA_ + at;
@@ -183,7 +194,8 @@ bool Msgbuf::attach(Chip *chip, EventHandler events, FrameHandler frames, void *
     pcie2_ = pcie2 ? pcie2->base : 0;
 
     // One physically contiguous area below 4 GiB, zeroed and out of the caches before the chip learns of it.
-    if (!memory_ && !allocateArea(why, whyLength)) return false;
+    if (!memory_ && !allocateArea(why, whyLength))
+        return false;
     areaUsed_ = 0;
     bzero(area_, layout_.length);
     dcacheFlush(area_, layout_.length);
@@ -192,7 +204,8 @@ bool Msgbuf::attach(Chip *chip, EventHandler events, FrameHandler frames, void *
     replyReady_ = false;
     awdlRings_ = 0;
     awdlRefused_ = 0;
-    for (auto &f : awdl_) f = {};
+    for (auto &f : awdl_)
+        f = {};
     txWanted_ = false;
     data_.txInFlight = data_.txPeak = data_.rxPosted = 0;  // the rest counts on across chip resets
 
@@ -314,7 +327,8 @@ void Msgbuf::enableInterrupts()
 {
     chip_->write(pcie2_ + kMailboxMask, kMbD2HDoorbells | kMbFn0);
     // brcmf_pcie_hostready: some firmware waits for this doorbell before it serves the rings.
-    if (chip_->sharedFlags() & kSharedHostReadyDb1) chip_->write(pcie2_ + kH2DMailbox1, 1);
+    if (chip_->sharedFlags() & kSharedHostReadyDb1)
+        chip_->write(pcie2_ + kH2DMailbox1, 1);
 }
 
 void Msgbuf::disableInterrupts()
@@ -341,10 +355,13 @@ uint16_t Msgbuf::readIndex(uint32_t tcmAddress)
 unsigned Msgbuf::space(unsigned ring)
 {
     Ring &r = rings_[ring];
-    auto room = [&r] { return static_cast<unsigned>((r.seen + r.items - r.pos - 1u) % r.items); };
+    auto room = [&r] {
+        return static_cast<unsigned>((r.seen + r.items - r.pos - 1u) % r.items);
+    };
     if (room() == 0) {
         const uint16_t read = readIndex(r.rIndex);
-        if (read < r.items) r.seen = read;
+        if (read < r.items)
+            r.seen = read;
     }
     return room();
 }
@@ -353,7 +370,8 @@ unsigned Msgbuf::space(unsigned ring)
 uint8_t *Msgbuf::reserve(unsigned ring)
 {
     Ring &r = rings_[ring];
-    if (!space(ring)) return nullptr;
+    if (!space(ring))
+        return nullptr;
     uint8_t *item = r.va + static_cast<uint32_t>(r.pos) * r.size;
     memset(item, 0, r.size);
     return item;
@@ -371,13 +389,15 @@ void Msgbuf::advance(unsigned ring)
 void Msgbuf::publish(unsigned ring)
 {
     Ring &r = rings_[ring];
-    if (r.pos == r.told) return;
+    if (r.pos == r.told)
+        return;
     const uint32_t from = static_cast<uint32_t>(r.told) * r.size, to = static_cast<uint32_t>(r.pos) * r.size;
     if (r.pos > r.told) {
         dcacheClean(r.va + from, to - from);
     } else {
         dcacheClean(r.va + from, static_cast<uint32_t>(r.items) * r.size - from);
-        if (to) dcacheClean(r.va, to);
+        if (to)
+            dcacheClean(r.va, to);
     }
     chip_->tcm().w16(r.wIndex, r.pos);
     r.told = r.pos;
@@ -397,7 +417,8 @@ bool Msgbuf::postControl(uint32_t id)
 {
     dcacheFlush(control_[id].va, kControlBufferSize);
     uint8_t *p = reserve(CONTROL_SUBMIT);
-    if (!p) return false;
+    if (!p)
+        return false;
     p[0] = id < kControlBuffers ? MSG_IOCTLRESP_BUF_POST : MSG_EVENT_BUF_POST;
     put32(p + 4, id);
     put16(p + 8, static_cast<uint16_t>(kControlBufferSize));
@@ -411,7 +432,8 @@ bool Msgbuf::postControl(uint32_t id)
 bool Msgbuf::postRx(uint32_t id)
 {
     uint8_t *p = reserve(RXPOST_SUBMIT);
-    if (!p) return false;
+    if (!p)
+        return false;
     p[0] = MSG_RXBUF_POST;
     put32(p + 4, id);
     put16(p + 10, static_cast<uint16_t>(kRxBufferSize));
@@ -441,7 +463,8 @@ void Msgbuf::refresh(unsigned ring)
 bool Msgbuf::next(unsigned ring, uint8_t *item)
 {
     Ring &r = rings_[ring];
-    if (r.pos == r.seen) return false;
+    if (r.pos == r.seen)
+        return false;
     uint8_t *p = r.va + static_cast<uint32_t>(r.pos) * r.size;
     dcacheFlush(p, r.size);
     for (uint32_t waited = 0; !p[0]; waited += 10) {
@@ -466,7 +489,8 @@ void Msgbuf::retire(unsigned ring)
     Ring &r = rings_[ring];
     const uint32_t bytes = static_cast<uint32_t>(r.items) * r.size;
     const uint64_t target = r.consumed & ~static_cast<uint64_t>(kCacheLine - 1);
-    if (r.cleared >= target) return;
+    if (r.cleared >= target)
+        return;
     while (r.cleared < target) {
         uint8_t *line = r.va + static_cast<uint32_t>(r.cleared % bytes);
         memset(line, 0, kCacheLine);
@@ -478,7 +502,8 @@ void Msgbuf::retire(unsigned ring)
 
 void Msgbuf::txRelease(uint32_t id, uint16_t status)
 {
-    if (id < 1 || id > txCount_ || !txBusy_[id - 1]) return;  // not one of ours in flight (a stale completion)
+    if (id < 1 || id > txCount_ || !txBusy_[id - 1])
+        return;  // not one of ours in flight (a stale completion)
     txBusy_[id - 1] = 0;
     txStatus_[id - 1] = status;
     txFree_[(txFreeHead_ + txFreeCount_) % txCount_] = static_cast<uint16_t>(id);
@@ -502,7 +527,8 @@ void Msgbuf::drain()
             const uint32_t id = le32(item + 4);
             if (item[0] == MSG_IOCTL_CMPLT && id < kControlBuffers) {
                 size_t length = le16(item + 12);
-                if (length > sizeof(reply_)) length = sizeof(reply_);
+                if (length > sizeof(reply_))
+                    length = sizeof(reply_);
                 dcacheFlush(control_[id].va, length);
                 memcpy(reply_, control_[id].va, length);
                 replyLength_ = length;
@@ -511,7 +537,8 @@ void Msgbuf::drain()
                 postControl(id);
             } else if (item[0] == MSG_WL_EVENT && id >= kControlBuffers && id < 2 * kControlBuffers) {
                 uint32_t length = le16(item + 12);
-                if (dataOffset_ + length > kControlBufferSize) length = kControlBufferSize - dataOffset_;
+                if (dataOffset_ + length > kControlBufferSize)
+                    length = kControlBufferSize - dataOffset_;
                 const uint8_t *frame = control_[id].va + dataOffset_;
                 dcacheFlush(frame, length);
                 if (length >= kEventData && ((frame[12] << 8) | frame[13]) == kEthPLinkCtl && events_) {
@@ -543,7 +570,8 @@ void Msgbuf::drain()
                 flow_ = flowStatus_ ? FLOW_REFUSED : FLOW_OPEN;
             } else if (item[0] == MSG_FLOW_RING_DELETE_CMPLT && le16(item + 10) > kFlowRingId) {
                 const unsigned k = le16(item + 10) - kFlowRingId - 1u;
-                if (k < awdlRings_) awdl_[k].state = FLOW_CLOSED;
+                if (k < awdlRings_)
+                    awdl_[k].state = FLOW_CLOSED;
             }
             // MSG_IOCTLPTR_REQ_ACK and status messages (general and ring status) need no answer.
         }
@@ -553,7 +581,8 @@ void Msgbuf::drain()
         unsigned n = 0;
         while (n < kDrainBudget && next(TX_COMPLETE, item)) {
             ++n;
-            if (item[0] == MSG_TX_STATUS) txRelease(le32(item + 4), le16(item + 8));
+            if (item[0] == MSG_TX_STATUS)
+                txRelease(le32(item + 4), le16(item + 8));
         }
         retire(TX_COMPLETE);
         // brcmf_msgbuf_process_rx_complete: the frame at its own offset, or at the firmware's default one; each
@@ -562,7 +591,8 @@ void Msgbuf::drain()
         while (n < kDrainBudget && next(RX_COMPLETE, item)) {
             ++n;
             const uint32_t id = le32(item + 4);
-            if (item[0] != MSG_RX_CMPLT || id >= rxCount_) continue;
+            if (item[0] != MSG_RX_CMPLT || id >= rxCount_)
+                continue;
             --data_.rxPosted;
             const uint32_t offset = le16(item + 16) ? le16(item + 16) : dataOffset_;
             uint32_t length = le16(item + 14);
@@ -574,8 +604,10 @@ void Msgbuf::drain()
             dcacheFlush(frame, length);
             ++data_.rxFrames;
             data_.rxBytes += length;
-            if (frames_ && length >= kEthHeader) frames_(context_, frame, length, item[1]);  // copied out here
-            if (postRx(id)) ++data_.rxReposted;
+            if (frames_ && length >= kEthHeader)
+                frames_(context_, frame, length, item[1]);  // copied out here
+            if (postRx(id))
+                ++data_.rxReposted;
         }
         retire(RX_COMPLETE);
         publish(RXPOST_SUBMIT);
@@ -591,18 +623,23 @@ uint32_t Msgbuf::service(bool *halted)
     ++data_.drains;
     chip_->write(pcie2_ + kMailboxMask, 0);
     const uint32_t status = chip_->read(pcie2_ + kMailboxInt);
-    if (status == 0xFFFFFFFF) return status;  // the chip is gone; the caller reports it, the mask stays off
-    if (status) chip_->write(pcie2_ + kMailboxInt, status);
+    if (status == 0xFFFFFFFF)
+        return status;  // the chip is gone; the caller reports it, the mask stays off
+    if (status)
+        chip_->write(pcie2_ + kMailboxInt, status);
     if (status & kMbFn0) {
         const Mmio &tcm = chip_->tcm();
         const uint32_t data = tcm.r32(dtohMailbox_);
-        if (data) tcm.w32(dtohMailbox_, 0);
+        if (data)
+            tcm.w32(dtohMailbox_, 0);
         // Deep-sleep requests (D2H_DEV_DS_ENTER_REQ) are not granted (nxk): the ring indices live in the chip's RAM,
         // which a sleeping chip may not serve. Without the acknowledgement the firmware simply stays awake.
-        if (data & kD2HFwHalt) *halted = true;
+        if (data & kD2HFwHalt)
+            *halted = true;
     }
     drain();
-    if (!*halted) chip_->write(pcie2_ + kMailboxMask, kMbD2HDoorbells | kMbFn0);
+    if (!*halted)
+        chip_->write(pcie2_ + kMailboxMask, kMbD2HDoorbells | kMbFn0);
     return status;
 }
 
@@ -610,7 +647,8 @@ bool Msgbuf::ioctlSubmit(uint32_t cmd, uint8_t ifidx, const uint8_t *data, size_
                          size_t whyLength)
 {
     size_t n = length > outLength ? length : outLength;
-    if (n > kIoctlMax) n = kIoctlMax;
+    if (n > kIoctlMax)
+        n = kIoctlMax;
     memset(ioctlBuffer_.va, 0, n);
     memcpy(ioctlBuffer_.va, data, length < n ? length : n);
     dcacheClean(ioctlBuffer_.va, n);
@@ -636,9 +674,11 @@ bool Msgbuf::ioctlSubmit(uint32_t cmd, uint8_t ifidx, const uint8_t *data, size_
 
 bool Msgbuf::flowCreateSubmit(const uint8_t destination[6], const uint8_t source[6])
 {
-    if (flow_ == FLOW_OPEN || flow_ == FLOW_PENDING) return true;
+    if (flow_ == FLOW_OPEN || flow_ == FLOW_PENDING)
+        return true;
     uint8_t *p = reserve(CONTROL_SUBMIT);
-    if (!p) return false;
+    if (!p)
+        return false;
     const Ring &f = rings_[FLOW];
     p[0] = MSG_FLOW_RING_CREATE;
     memcpy(p + 8, destination, 6);
@@ -666,7 +706,8 @@ unsigned Msgbuf::txRoom()
 {
     const unsigned room = flow_ == FLOW_OPEN ? txFreeCount_ : 0;
     if (!room && flow_ == FLOW_OPEN) {
-        if (!txWanted_) ++data_.txFull;
+        if (!txWanted_)
+            ++data_.txFull;
         txWanted_ = true;
     }
     return room;
@@ -693,7 +734,8 @@ void Msgbuf::txFlush()
 
 void Msgbuf::txReadBack(uint32_t id, const uint8_t *written, size_t length)
 {
-    if (id < 1 || id > txCount_ || length > kTxBufferSize) return;
+    if (id < 1 || id > txCount_ || length > kTxBufferSize)
+        return;
     const uint8_t *chip = txVa(id);
     dcacheFlush(chip, length);
     ++data_.txReread;
@@ -709,7 +751,8 @@ void Msgbuf::txReadBack(uint32_t id, const uint8_t *written, size_t length)
 bool Msgbuf::txResume()
 {
     const unsigned enough = kTxResumeFree < txCount_ / 2 ? kTxResumeFree : txCount_ / 2;
-    if (!txWanted_ || flow_ != FLOW_OPEN || txFreeCount_ < enough) return false;
+    if (!txWanted_ || flow_ != FLOW_OPEN || txFreeCount_ < enough)
+        return false;
     txWanted_ = false;
     return true;
 }
@@ -753,7 +796,8 @@ uint32_t Msgbuf::postFrame(unsigned ring, uint8_t ifidx, size_t length)
     advance(ring);
     ++data_.txFrames;
     data_.txBytes += length;
-    if (++data_.txInFlight > data_.txPeak) data_.txPeak = data_.txInFlight;
+    if (++data_.txInFlight > data_.txPeak)
+        data_.txPeak = data_.txInFlight;
     return id;
 }
 
@@ -766,13 +810,15 @@ uint32_t Msgbuf::post(unsigned ring, uint8_t ifidx, const uint8_t *frame, size_t
     }
     memcpy(txVa(txFree_[txFreeHead_]), frame, length);
     const uint32_t id = postFrame(ring, ifidx, length);
-    if (id) publish(ring);
+    if (id)
+        publish(ring);
     return id;
 }
 
 bool Msgbuf::sent(uint32_t id, uint16_t *status) const
 {
-    if (id < 1 || id > txCount_ || txBusy_[id - 1]) return false;
+    if (id < 1 || id > txCount_ || txBusy_[id - 1])
+        return false;
     *status = txStatus_[id - 1];
     return true;
 }
@@ -792,12 +838,14 @@ int Msgbuf::awdlSend(uint8_t ifidx, const uint8_t *frame, size_t length)
         if ((awdl_[k].state == FLOW_OPEN || awdl_[k].state == FLOW_PENDING) && awdl_[k].ifidx == ifidx &&
             !memcmp(awdl_[k].da, da, 6))
             break;
-        if (free == awdlRings_ && (awdl_[k].state == FLOW_CLOSED || awdl_[k].state == FLOW_REFUSED)) free = k;
+        if (free == awdlRings_ && (awdl_[k].state == FLOW_CLOSED || awdl_[k].state == FLOW_REFUSED))
+            free = k;
     }
     if (k < awdlRings_) {
         AwdlFlow &f = awdl_[k];
         f.lastUse = ++awdlUse_;
-        if (f.state == FLOW_OPEN) return post(FLOW + 1 + k, ifidx, frame, length) ? 1 : -1;
+        if (f.state == FLOW_OPEN)
+            return post(FLOW + 1 + k, ifidx, frame, length) ? 1 : -1;
         if (f.pendingLength) {
             ++awdlRefused_;
             return -1;
@@ -845,7 +893,8 @@ void Msgbuf::awdlClose()
     for (unsigned k = 0; k < awdlRings_; ++k) {
         AwdlFlow &f = awdl_[k];
         f.pendingLength = 0;
-        if (f.state != FLOW_OPEN && f.state != FLOW_PENDING) continue;
+        if (f.state != FLOW_OPEN && f.state != FLOW_PENDING)
+            continue;
         uint8_t *p = reserve(CONTROL_SUBMIT);
         if (!p) {
             f.state = FLOW_CLOSED;  // the control ring is full: forget it (the chip is in trouble anyway)

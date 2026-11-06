@@ -12,7 +12,8 @@
 int main(int argc, char **argv)
 {
     @autoreleasepool {
-        if (argc < 3) return 2;
+        if (argc < 3)
+            return 2;
         void *add = dlsym(dlopen("/System/Library/Frameworks/Metal.framework/Metal", RTLD_NOW), "MTLAddDevice");
         if (!add) {
             std::printf("SKIP: this system has no MTLAddDevice\n");
@@ -29,7 +30,8 @@ int main(int argc, char **argv)
         }
         ((void (*)(id))add)(device);
         bool listed = false;
-        for (id<MTLDevice> d in MTLCopyAllDevices()) listed |= (d == device);
+        for (id<MTLDevice> d in MTLCopyAllDevices())
+            listed |= (d == device);
         if (!listed) {
             std::printf("FAIL the registered device is not among the system's devices\n");
             return 1;

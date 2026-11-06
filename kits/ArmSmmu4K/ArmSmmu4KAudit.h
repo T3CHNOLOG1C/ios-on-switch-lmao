@@ -12,6 +12,7 @@ typedef struct {
      * on success. Platform supplies a real coherent CPU mapping and ownership. */
     int (*read_descriptor)(void *, uint64_t physical, uint64_t *);
 } ArmSmmu4KTableIo;
+
 typedef struct {
     const ArmSmmu4KRange *ranges;
     size_t range_count, capacity_pages, read_budget;
@@ -20,20 +21,24 @@ typedef struct {
     unsigned char *visited;
     size_t visited_bytes;
 } ArmSmmu4KAuditRegion;
+
 typedef struct {
     ArmSmmu4KTableIo io;
     const ArmSmmu4KAuditRegion *lower, *upper; /* exactly the enabled regions */
 } ArmSmmu4KAuditConfig;
+
 typedef struct {
     size_t descriptor_reads, table_pages, leaf_pages;
     uint64_t descriptor_physical, descriptor, iova, expected_descriptor;
     unsigned level, complete;
 } ArmSmmu4KTableAuditResult;
+
 typedef struct {
     ArmSmmu4KTableAuditResult lower, upper;
     ArmSmmu4KProgramResult before, after;
     unsigned phase, complete;
 } ArmSmmu4KAuditResult;
+
 /* Walk the physical graph, including every unused slot, with a strict read
  * budget and bounded depth (four levels). Reject blocks, cycles, aliases of
  * table pages, extra/missing mappings, permissions/attributes differing from

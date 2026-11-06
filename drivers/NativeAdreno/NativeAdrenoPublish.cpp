@@ -44,6 +44,7 @@ struct NativeAdrenoMetalDiag {
     uint32_t
         grants; /* opens granted to the render server by this driver in place of the sandbox verdict (the view in GpuPowerProbe.cpp ends before this) */
 } native_adreno_metal_diag;
+
 /* BO CPU views (clientMemoryForType for a BO token): [0] calls, [1] new descriptors, [2] served from the view cache, [3] refused (not a BO / out of
  * resources), [4] last refusal's IOReturn, [5] threads inside now. int-115 showed a backboardd thread in IOConnectMapMemory64 ~650 times a second. */
 extern "C" {
@@ -53,7 +54,11 @@ volatile uint32_t native_adreno_view_diag[6];
 
 /* The open type the Adreno plugin passes to IOServiceOpen ('AG'); it lets the driver tell the plugin from the original IOGPU library
  * (type 1 plus an API value) and from any other client of the accelerator. */
-enum : UInt32 { NativeAdrenoPluginOpenType = 0x4147, NativeAdrenoTunnelMagic = 0x4e544e4c /* 'NTNL' */ };
+enum : UInt32 {
+    NativeAdrenoPluginOpenType = 0x4147,
+    NativeAdrenoTunnelMagic = 0x4e544e4c /* 'NTNL' */
+};
+
 /* The display hand-off (boot-arg sheng-fb-gpu=1, drivers/NativeMobileDisplay) reaches the plugin through this already admitted connection: the
  * original sandbox profiles admit this class but not the presenter's own service. Methods 0x7000 + the presenter's NGP_METHOD numbers (mode,
  * wait for a frame, complete it) are forwarded unchanged, without the GPU lock (a wait sleeps); memory type NativeAdrenoScanoutType is the
@@ -64,14 +69,20 @@ enum : UInt32 {
     NativeAdrenoScanoutType = 0x5343,
     NativeAdrenoHandoffOpenType = 0x4148
 };
+
 /* Open type 0x4148 is a connection that serves only the hand-off: it does not mount a GPU core, so it does not need (or take) a
  * GPU connection slot (the Vulkan driver holds one for as long as the Metal device lives). Same class, so the same sandbox admission. */
 extern "C" IOReturn native_gop_handoff_call(uint32_t op, task_t task, const void *in, size_t inSize, void *out,
                                             size_t outSize);
+
 /* Export (int-147): method NativeAdrenoExportMethod hands one in-order piece of a blob to the board's UFS log (kits/sheng/BootLog.c), which writes
  * the newest complete blob to its export area. The render server sends its pipeline caches this way, so a later image can be built with them.
  * Input: {generation, total, offset, bytes} then the bytes. No GPU state is touched; any connection of the render server may send it. */
-enum : UInt32 { NativeAdrenoExportMethod = 0x7100, NativeAdrenoExportMaxPiece = 3968 };
+enum : UInt32 {
+    NativeAdrenoExportMethod = 0x7100,
+    NativeAdrenoExportMaxPiece = 3968
+};
+
 extern "C" int boot_log_export_put(uint32_t generation, uint32_t total, uint32_t offset, const void *data,
                                    uint32_t size) __attribute__((weak_import));
 extern "C" {
@@ -83,7 +94,11 @@ extern "C" IOMemoryDescriptor *native_gop_handoff_memory(void);
  * type NativeAdrenoMailboxType through IOConnectMapMemory64, which the selector filter does not cover) and a kernel poller that runs
  * whatever the live connection writes into it. Layout (little endian dwords): +0 magic, +4 request seq, +8 response seq, +12 method,
  * +16 status, +20 input bytes, +24 output bytes, input at +0x40 (max 0x700), output at +0x800 (max 0x700). */
-enum : UInt32 { NativeAdrenoMailboxType = 0xC0DE, NativeAdrenoMailboxMagic = 0x4d41494c /* 'MAIL' */ };
+enum : UInt32 {
+    NativeAdrenoMailboxType = 0xC0DE,
+    NativeAdrenoMailboxMagic = 0x4d41494c /* 'MAIL' */
+};
+
 namespace {
 IOBufferMemoryDescriptor *gMailbox = nullptr;
 volatile uint32_t *gMailboxWords = nullptr;
@@ -111,6 +126,7 @@ struct NativeAdrenoOpenRecord {
 };
 struct NativeAdrenoOpenRecord native_adreno_open_log[8];
 volatile uint32_t native_adreno_open_log_count;
+
 /* One row per process name that opened the plugin type (first eight names): opens granted, refused (sandbox, cap or no free slot),
  * closes, the slot of its live connection (0xff none), the highest GPU address its mappings reached (MiB) and its last refusal. */
 struct NativeAdrenoClientRecord {
@@ -118,6 +134,7 @@ struct NativeAdrenoClientRecord {
     uint32_t opens, refused, closes, slot, peak_mib, last_refusal;
 };
 struct NativeAdrenoClientRecord native_adreno_client_log[8];
+
 /* Processes that read MetalPluginName (the Metal discovery), first twelve names, with counts. */
 struct NativeAdrenoAskerRecord {
     char name[20];
@@ -125,10 +142,14 @@ struct NativeAdrenoAskerRecord {
 };
 struct NativeAdrenoAskerRecord native_adreno_metal_askers[12];
 }
+
 /* GPU address windows inside the board's VA range (GpuPowerProbe gDeviceInfo: 0x20000000..0x80000000 of the 2 GiB aperture). Slot 0 is the
  * render server's (it held the whole 1.5 GiB alone before int-155 and used at most a few hundred MiB); slots 1 and 2 are for other Metal
  * processes. A kernel connection (the board's self-test) maps where it likes and is never scoped. */
-enum : unsigned { NativeAdrenoMaxClients = 3 };
+enum : unsigned {
+    NativeAdrenoMaxClients = 3
+};
+
 static const struct {
     uint64_t start, bytes;
 } kClientWindows[NativeAdrenoMaxClients] = {
@@ -141,6 +162,7 @@ void shiftName(char names[3][17])
     memcpy(names[1], names[0], 17);
     proc_selfname(names[0], 17);
 }
+
 struct Published {
     bool published = false;
     NativeAdrenoVm *vm = nullptr;
@@ -163,6 +185,7 @@ OSDeclareDefaultStructors(NativeAdrenoGpuPublished) public
     : IOReturn newUserClient(task_t owningTask, void *securityID, UInt32 type, OSDictionary *properties,
                              IOUserClient **handler) APPLE_KEXT_OVERRIDE;
 };
+
 OSDefineMetaClassAndStructors(NativeAdrenoGpuPublished, IOService)
 
     class AGXDeviceUserClient : public IOUserClient {
@@ -173,6 +196,7 @@ OSDefineMetaClassAndStructors(NativeAdrenoGpuPublished, IOService)
         nullptr; /* own core; deleted in free(), so a call that raced the close sees live_ false, never freed memory */
     unsigned slot_ = NativeAdrenoMaxClients;
     char name_[20]{};
+
     /* One user-view descriptor per BO token, reused by every clientMemoryForType call. IOConnectUnmapMemory64 asks clientMemoryForType for
      * the descriptor again and unmaps only a mapping that belongs to THAT descriptor (kIOMapReference); a fresh descriptor per call made the
      * unmap a silent no-op, the user PTEs outlived BoCpuUnmap, and BoFree handed pages with a live user mapping to the VM:
@@ -181,10 +205,14 @@ OSDefineMetaClassAndStructors(NativeAdrenoGpuPublished, IOService)
         uint32_t token;
         IOMemoryDescriptor *descriptor;
     };
+
     /* One view per live BO token. The cache must hold every BO the client can have (NativeAdrenoClientMaxObjects = 1024): a BO whose view is not
      * cached makes IOConnectUnmapMemory64 (which asks clientMemoryForType again) a no-op, the user mapping outlives BoFree and the freed pages panic
      * pmap_assert_free. A cache of 64 held until the render server's hundreds of mapped BOs (int-087). */
-    enum { MaxViews = 1024 };
+    enum {
+        MaxViews = 1024
+    };
+
     View *views_ =
         nullptr; /* on the heap: 1024 entries would make the client object too big for the kernel allocator's fixed-size classes */
     void dropViews(uint32_t token);
@@ -192,7 +220,11 @@ OSDefineMetaClassAndStructors(NativeAdrenoGpuPublished, IOService)
     IOReturn run(uint32_t method, const void *input, size_t input_size, void *output, size_t output_size);
 
 public:
-    void setHandoffOnly() { handoffOnly_ = true; }
+    void setHandoffOnly()
+    {
+        handoffOnly_ = true;
+    }
+
     bool mount(bool kernel);
     friend IOReturn runCore(AGXDeviceUserClient *, uint32_t, const void *, size_t, void *, size_t);
     friend void nativeAdrenoMailboxPoller(void *, wait_result_t);
@@ -202,6 +234,7 @@ public:
     IOReturn externalMethod(uint32_t selector, IOExternalMethodArguments *arguments, IOExternalMethodDispatch *dispatch,
                             OSObject *target, void *reference) APPLE_KEXT_OVERRIDE;
 };
+
 OSDefineMetaClassAndStructors(AGXDeviceUserClient, IOUserClient)
 
     void nativeAdrenoMailboxPoller(void *, wait_result_t)
@@ -209,9 +242,11 @@ OSDefineMetaClassAndStructors(AGXDeviceUserClient, IOUserClient)
     uint32_t last = 0;
     for (;;) {
         IOSleep(1);
-        if (!gMailboxOwner || !gMailboxWords) continue;
+        if (!gMailboxOwner || !gMailboxWords)
+            continue;
         const uint32_t request = gMailboxWords[1];
-        if (request == last || request == gMailboxWords[2]) continue;
+        if (request == last || request == gMailboxWords[2])
+            continue;
         last = request;
         const uint32_t method = gMailboxWords[3], in_size = gMailboxWords[5], out_size = gMailboxWords[6];
         IOReturn status = kIOReturnBadArgument;
@@ -220,11 +255,14 @@ OSDefineMetaClassAndStructors(AGXDeviceUserClient, IOUserClient)
             memcpy(input, const_cast<uint32_t *>(gMailboxWords) + 0x10, in_size);
             IOLockLock(g.lock);
             AGXDeviceUserClient *owner = gMailboxOwner;
-            if (owner) owner->retain();
+            if (owner)
+                owner->retain();
             IOLockUnlock(g.lock);
             status = owner ? runCore(owner, method, input, in_size, output, out_size) : kIOReturnNotReady;
-            if (owner) owner->release();
-            if (!status) memcpy(const_cast<uint32_t *>(gMailboxWords) + 0x200, output, out_size);
+            if (owner)
+                owner->release();
+            if (!status)
+                memcpy(const_cast<uint32_t *>(gMailboxWords) + 0x200, output, out_size);
         }
         native_adreno_metal_diag.mb_calls = native_adreno_metal_diag.mb_calls + 1;
         gMailboxWords[4] = uint32_t(status);
@@ -243,15 +281,18 @@ static NativeAdrenoClientRecord *clientRecord(const char *name)
             record.slot = 0xff;
             return &record;
         }
-        if (!strncmp(record.name, name, sizeof record.name)) return &record;
+        if (!strncmp(record.name, name, sizeof record.name))
+            return &record;
     }
     return nullptr;
 }
+
 bool AGXDeviceUserClient::mount(bool kernel)
 {
     proc_selfname(name_, sizeof name_);
     NativeAdrenoUserClient *core = new NativeAdrenoUserClient;
-    if (!core) return false;
+    if (!core)
+        return false;
     IOLockLock(g.lock);
     bool ok = false;
     /* The render server takes slot 0 (the large window) when free; every other process, or a second render-server connection, the next free one. */
@@ -259,14 +300,18 @@ bool AGXDeviceUserClient::mount(bool kernel)
     if (kernel)
         slot = g.kernel_client ? NativeAdrenoMaxClients : 0;
     else {
-        if (!strncmp(name_, "backboardd", sizeof name_) && !g.slots[0]) slot = 0;
+        if (!strncmp(name_, "backboardd", sizeof name_) && !g.slots[0])
+            slot = 0;
         for (unsigned i = 1; slot == NativeAdrenoMaxClients && i < NativeAdrenoMaxClients; ++i)
-            if (!g.slots[i]) slot = i;
+            if (!g.slots[i])
+                slot = i;
     }
     if (slot < NativeAdrenoMaxClients &&
         core->open(NativeAdrenoAbiVersion, g.vm, g.submit, g.ring, g.input_bits, g.output_bits) == kIOReturnSuccess) {
-        if (g.timer) core->attachTimer(g.timer);
-        if (g.info) core->attachDeviceInfo(g.info);
+        if (g.timer)
+            core->attachTimer(g.timer);
+        if (g.info)
+            core->attachDeviceInfo(g.info);
         /* Queue ranges: the kernel client keeps range 0 alone (no user slot is live while the board's self-test runs); users get their slot's. */
         const IOReturn scoped = kernel ? kIOReturnSuccess
                                        : core->setScope(slot * NativeAdrenoAbiMaxQueues, kClientWindows[slot].start,
@@ -283,7 +328,8 @@ bool AGXDeviceUserClient::mount(bool kernel)
             else
                 g.slots[slot] = true;
             ++g.opened;
-            if (NativeAdrenoClientRecord *record = clientRecord(name_)) record->slot = slot;
+            if (NativeAdrenoClientRecord *record = clientRecord(name_))
+                record->slot = slot;
         } else
             core->releaseAll(&g.clock, 0);
     }
@@ -307,14 +353,17 @@ bool AGXDeviceUserClient::mount(bool kernel)
                 }
             }
         }
-        if (gMailboxOwner) gMailboxOwner->release();
+        if (gMailboxOwner)
+            gMailboxOwner->release();
         retain();
         gMailboxOwner = this;
     }
     IOLockUnlock(g.lock);
-    if (core) delete core;
+    if (core)
+        delete core;
     return ok;
 }
+
 /* Removes the cached view(s) of token (0 = all) and tears down every user mapping of them, so the BO's pages are never freed while a user
  * PTE still points at them, whether or not the client unmapped. */
 void AGXDeviceUserClient::dropViews(uint32_t token)
@@ -333,13 +382,15 @@ void AGXDeviceUserClient::dropViews(uint32_t token)
                 }
             }
         IOLockUnlock(g.lock);
-        if (!view) return;
+        if (!view)
+            return;
         /* The returned reference is the last one outside the descriptor's own list: dropping it frees the map, which unmaps the user range. */
         while (removeMappingForDescriptor(view))
             native_adreno_metal_diag.forced_unmaps = native_adreno_metal_diag.forced_unmaps + 1;
         view->release();
     }
 }
+
 IOReturn AGXDeviceUserClient::clientClose()
 {
     dropViews(0);
@@ -365,15 +416,19 @@ IOReturn AGXDeviceUserClient::clientClose()
             if (NativeAdrenoClientRecord *record = clientRecord(name_)) {
                 record->closes = record->closes + 1;
                 record->slot = 0xff;
-                if (peak >> 20 > record->peak_mib) record->peak_mib = uint32_t(peak >> 20);
+                if (peak >> 20 > record->peak_mib)
+                    record->peak_mib = uint32_t(peak >> 20);
             }
         }
     }
     IOLockUnlock(g.lock);
-    if (mailbox) mailbox->release();
-    if (!status) terminate();
+    if (mailbox)
+        mailbox->release();
+    if (!status)
+        terminate();
     return status;
 }
+
 void AGXDeviceUserClient::free()
 {
     dropViews(0);
@@ -388,15 +443,20 @@ void AGXDeviceUserClient::free()
     }
     IOUserClient::free();
 }
+
 IOReturn AGXDeviceUserClient::clientMemoryForType(UInt32 type, IOOptionBits *options, IOMemoryDescriptor **memory)
 {
-    if (memory) *memory = nullptr;
-    if (!memory || !options) return kIOReturnBadArgument;
+    if (memory)
+        *memory = nullptr;
+    if (!memory || !options)
+        return kIOReturnBadArgument;
     IOReturn status = kIOReturnNotFound;
     if (type == NativeAdrenoScanoutType) {
-        if (!live_ && !handoffOnly_) return kIOReturnNotReady;
+        if (!live_ && !handoffOnly_)
+            return kIOReturnNotReady;
         IOMemoryDescriptor *scanout = native_gop_handoff_memory();
-        if (!scanout) return kIOReturnNotReady;
+        if (!scanout)
+            return kIOReturnNotReady;
         *memory = scanout; /* already retained for the caller */
         *options =
             kIOMapAnywhere | kIOMapInhibitCache; /* firmware framebuffer: device memory, never cached by the CPU */
@@ -413,13 +473,23 @@ IOReturn AGXDeviceUserClient::clientMemoryForType(UInt32 type, IOOptionBits *opt
         return kIOReturnNotReady;
     }
     native_adreno_view_diag[0] = native_adreno_view_diag[0] + 1;
+
     /* [5]: threads inside this function right now (a thread stuck here, on the gate or in a mapping, shows as a non-zero count that stays). */
     struct Inside {
-        Inside() { __atomic_fetch_add(&native_adreno_view_diag[5], 1, __ATOMIC_RELAXED); }
-        ~Inside() { __atomic_fetch_sub(&native_adreno_view_diag[5], 1, __ATOMIC_RELAXED); }
+        Inside()
+        {
+            __atomic_fetch_add(&native_adreno_view_diag[5], 1, __ATOMIC_RELAXED);
+        }
+
+        ~Inside()
+        {
+            __atomic_fetch_sub(&native_adreno_view_diag[5], 1, __ATOMIC_RELAXED);
+        }
     } inside;
+
     IOLockLock(g.lock);
-    if (!views_) views_ = IONewZero(View, MaxViews);
+    if (!views_)
+        views_ = IONewZero(View, MaxViews);
     if (!views_) {
         IOLockUnlock(g.lock);
         return kIOReturnNoMemory;
@@ -442,7 +512,10 @@ IOReturn AGXDeviceUserClient::clientMemoryForType(UInt32 type, IOOptionBits *opt
         /* A BO's pages can come scattered, one span per page (a 64 MiB BO is 16384 of them): the descriptor takes them all, as many as the GPU's
          * own table accepts. A fixed 64-entry array made every scattered BO above 256 KiB fail to map (VK_ERROR_MEMORY_MAP_FAILED, int-084),
          * only when memory happened to be fragmented. The descriptor copies the ranges. */
-        enum { MaxSpans = 65536 };
+        enum {
+            MaxSpans = 65536
+        };
+
         const size_t count = backing->spanCount();
         if (!count || count > MaxSpans)
             status = kIOReturnNoResources;
@@ -491,11 +564,13 @@ IOReturn AGXDeviceUserClient::clientMemoryForType(UInt32 type, IOOptionBits *opt
     }
     return status;
 }
+
 /* Fence waits as the callers see them (int-147; method 6's own statistics count every poll): [0] waits, [1] us waited in total, [2] pauses
  * taken outside the connection lock, [3] the longest wait in us. */
 extern "C" {
 volatile uint64_t native_adreno_wait_outer[4];
 }
+
 static IOReturn runCore(AGXDeviceUserClient *connection, uint32_t method, const void *input, size_t input_size,
                         void *output, size_t output_size)
 {
@@ -535,13 +610,16 @@ static IOReturn runCore(AGXDeviceUserClient *connection, uint32_t method, const 
                          : kIOReturnNotReady;
             IOLockUnlock(g.lock);
             waited = g.clock.now_us(g.clock.cookie) - began;
-            if (status != kIOReturnTimeout || waited >= timeout_us) break;
+            if (status != kIOReturnTimeout || waited >= timeout_us)
+                break;
             native_adreno_wait_outer[2] = native_adreno_wait_outer[2] + 1;
-            if (!g.clock.idle || g.clock.idle(g.clock.cookie)) break;
+            if (!g.clock.idle || g.clock.idle(g.clock.cookie))
+                break;
         }
         native_adreno_wait_outer[0] = native_adreno_wait_outer[0] + 1;
         native_adreno_wait_outer[1] = native_adreno_wait_outer[1] + waited;
-        if (waited > native_adreno_wait_outer[3]) native_adreno_wait_outer[3] = waited;
+        if (waited > native_adreno_wait_outer[3])
+            native_adreno_wait_outer[3] = waited;
     } else {
         IOLockLock(g.lock);
         status = connection->live_
@@ -559,6 +637,7 @@ static IOReturn runCore(AGXDeviceUserClient *connection, uint32_t method, const 
     native_adreno_metal_diag.last_status = uint32_t(status);
     return status;
 }
+
 IOReturn AGXDeviceUserClient::run(uint32_t method, const void *input, size_t input_size, void *output,
                                   size_t output_size)
 {
@@ -569,10 +648,12 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *input, size_t inp
         struct Piece {
             uint32_t generation, total, offset, bytes;
         };
+
         char caller[20] = {};
         proc_selfname(caller, sizeof caller);
         Piece piece{};
-        if (input && input_size >= sizeof(piece)) memcpy(&piece, input, sizeof(piece));
+        if (input && input_size >= sizeof(piece))
+            memcpy(&piece, input, sizeof(piece));
         const bool valid = !output_size && input && input_size >= sizeof(piece) && piece.bytes &&
                            piece.bytes <= NativeAdrenoExportMaxPiece && input_size == sizeof(piece) + piece.bytes &&
                            !strncmp(caller, "backboardd", sizeof caller);
@@ -607,18 +688,22 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *input, size_t inp
         native_adreno_metal_diag.calls = native_adreno_metal_diag.calls + 1;
         native_adreno_metal_diag.last_selector = method;
         native_adreno_metal_diag.last_status = uint32_t(status);
-        if (!status) memcpy(output, &reply, sizeof(reply));
+        if (!status)
+            memcpy(output, &reply, sizeof(reply));
         return status;
     }
     return runCore(this, method, input, input_size, output, output_size);
 }
+
 IOReturn AGXDeviceUserClient::action(OSObject *target, void *, IOExternalMethodArguments *arguments)
 {
     AGXDeviceUserClient *connection = OSDynamicCast(AGXDeviceUserClient, target);
-    if (!connection || !arguments) return kIOReturnBadArgument;
+    if (!connection || !arguments)
+        return kIOReturnBadArgument;
     return connection->run(arguments->selector, arguments->structureInput, arguments->structureInputSize,
                            arguments->structureOutput, arguments->structureOutputSize);
 }
+
 IOReturn AGXDeviceUserClient::externalMethod(uint32_t selector, IOExternalMethodArguments *arguments,
                                              IOExternalMethodDispatch *, OSObject *target, void *reference)
 {
@@ -641,7 +726,8 @@ IOReturn AGXDeviceUserClient::externalMethod(uint32_t selector, IOExternalMethod
         {&action, 0, 0, 0, sizeof(NativeAdrenoAbiDeviceInfo)},
         {&action, 0, sizeof(NativeAdrenoAbiBoImport), 0, sizeof(NativeAdrenoAbiBoAllocReply)}};
     native_adreno_metal_diag.ext_entries = native_adreno_metal_diag.ext_entries + 1;
-    if (selector < 256) native_adreno_metal_diag.sel_bits[selector >> 5] |= 1u << (selector & 31);
+    if (selector < 256)
+        native_adreno_metal_diag.sel_bits[selector >> 5] |= 1u << (selector & 31);
     /* Tunnel. The sandbox resolves a filter policy for this class at open time and then admits only the selectors its profile lists,
      * so which selector numbers reach this object is decided outside the driver. A tunnel call carries the real ABI method in its
      * first eight bytes and may use ANY admitted selector: {magic, method, payload...} in, the method's exact output out. Method
@@ -673,13 +759,16 @@ IOReturn AGXDeviceUserClient::externalMethod(uint32_t selector, IOExternalMethod
     native_adreno_metal_diag.ext_status = uint32_t(result);
     return result;
 }
+
 /* limit > 0 caps the connections ever granted: a plugin that crashes its host process on every launch (the process respawns and
  * loads it again) must not be able to keep a system process in a crash loop, so after the cap further opens are refused. */
 extern "C" IOReturn native_adreno_new_user_client(IOService *provider, task_t owningTask, void *securityID, UInt32 type,
                                                   OSDictionary *properties, IOUserClient **handler, unsigned limit)
 {
-    if (handler) *handler = nullptr;
-    if (!handler || !g.published) return kIOReturnNotReady;
+    if (handler)
+        *handler = nullptr;
+    if (!handler || !g.published)
+        return kIOReturnNotReady;
     /* Progress markers: open types 0x4147xxxx (xxxx nonzero) are not connections. The plugin sends one before and after each step so
      * that a sandbox that admits neither selectors nor mapping, or a crash, still leaves a trace of how far it got. */
     if ((type >> 16) == NativeAdrenoPluginOpenType && (type & 0xffff)) {
@@ -691,7 +780,8 @@ extern "C" IOReturn native_adreno_new_user_client(IOService *provider, task_t ow
             if (value >= 0xC000) {
                 row = value & 0x3f;
                 length = 0;
-                if (row < 48) memset(native_adreno_metal_rows[row], 0, sizeof(native_adreno_metal_rows[row]));
+                if (row < 48)
+                    memset(native_adreno_metal_rows[row], 0, sizeof(native_adreno_metal_rows[row]));
                 native_adreno_metal_rows_seq = native_adreno_metal_rows_seq + 1;
             } else if (row < 48) {
                 const char pair[2] = {char((value >> 7) & 0x7f), char(value & 0x7f)};
@@ -728,7 +818,8 @@ extern "C" IOReturn native_adreno_new_user_client(IOService *provider, task_t ow
     }
     shiftName(native_adreno_metal_diag.opener);
     AGXDeviceUserClient *connection = new AGXDeviceUserClient;
-    if (!connection) return kIOReturnNoMemory;
+    if (!connection)
+        return kIOReturnNoMemory;
     if (!connection->initWithTask(owningTask, securityID, type, properties)) {
         connection->release();
         native_adreno_metal_diag.bad = native_adreno_metal_diag.bad + 1;
@@ -818,12 +909,14 @@ extern "C" IOReturn native_adreno_new_user_client(IOService *provider, task_t ow
         return refusal;
     }
     IOLockLock(g.lock);
-    if (record) record->opens = record->opens + 1;
+    if (record)
+        record->opens = record->opens + 1;
     IOLockUnlock(g.lock);
     native_adreno_metal_diag.opens = native_adreno_metal_diag.opens + 1;
     *handler = connection;
     return kIOReturnSuccess;
 }
+
 extern "C" void native_adreno_note_property_read(const char *key)
 {
     if (key && !strcmp(key, "MetalPluginName")) {
@@ -847,6 +940,7 @@ extern "C" void native_adreno_note_property_read(const char *key)
     shiftName(native_adreno_metal_diag.reader);
     native_adreno_metal_diag.property_reads = native_adreno_metal_diag.property_reads + 1;
 }
+
 IOReturn NativeAdrenoGpuPublished::newUserClient(task_t owningTask, void *securityID, UInt32 type,
                                                  OSDictionary *properties, IOUserClient **handler)
 {
@@ -860,11 +954,13 @@ extern "C" IOReturn native_adreno_publish(NativeAdrenoVm *vm, NativeAdrenoSubmit
                                           const NativeAdrenoAbiDeviceInfo *info, uint32_t input_bits,
                                           uint32_t output_bits)
 {
-    if (g.published || !vm || !submit || !ring || !clock || !clock->now_us) return kIOReturnBadArgument;
+    if (g.published || !vm || !submit || !ring || !clock || !clock->now_us)
+        return kIOReturnBadArgument;
     g.lock = IOLockAlloc();
     NativeAdrenoGpuPublished *service = new NativeAdrenoGpuPublished;
     if (!g.lock || !service || !service->init() || !service->attach(IOService::getPlatform())) {
-        if (service) service->release();
+        if (service)
+            service->release();
         return kIOReturnNoMemory;
     }
     g.vm = vm;
@@ -881,11 +977,14 @@ extern "C" IOReturn native_adreno_publish(NativeAdrenoVm *vm, NativeAdrenoSubmit
     service->registerService();
     return kIOReturnSuccess;
 }
+
 extern "C" uint32_t native_adreno_publish_stats(uint32_t *closed)
 {
-    if (closed) *closed = g.closed;
+    if (closed)
+        *closed = g.closed;
     return g.opened;
 }
+
 extern "C" IOService *native_adreno_published_service()
 {
     return g.service;

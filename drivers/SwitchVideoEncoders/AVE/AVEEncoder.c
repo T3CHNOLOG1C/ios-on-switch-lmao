@@ -94,66 +94,88 @@ static Encoder *storage(CMBaseObjectRef object)
 static double ticksToMs(uint64_t ticks)
 {
     static mach_timebase_info_data_t base;
-    if (!base.denom) mach_timebase_info(&base);
+    if (!base.denom)
+        mach_timebase_info(&base);
     return (double)ticks * base.numer / base.denom / 1e6;
 }
 
 static void replace(CFTypeRef *slot, CFTypeRef value)
 {
-    if (value) CFRetain(value);
-    if (*slot) CFRelease(*slot);
+    if (value)
+        CFRetain(value);
+    if (*slot)
+        CFRelease(*slot);
     *slot = value;
 }
 
 static bool number(CFTypeRef value, double *out)
 {
-    if (!value || CFGetTypeID(value) != CFNumberGetTypeID()) return false;
+    if (!value || CFGetTypeID(value) != CFNumberGetTypeID())
+        return false;
     return CFNumberGetValue(value, kCFNumberDoubleType, out);
 }
 
 // Colour: session properties, else the first picture's attachments, as H.273 code points.
 static uint8_t primariesCode(CFTypeRef v)
 {
-    if (!v) return 2;
-    if (CFEqual(v, kCVImageBufferColorPrimaries_ITU_R_709_2)) return 1;
-    if (CFEqual(v, kCVImageBufferColorPrimaries_EBU_3213)) return 5;
-    if (CFEqual(v, kCVImageBufferColorPrimaries_SMPTE_C)) return 6;
-    if (CFEqual(v, kCVImageBufferColorPrimaries_ITU_R_2020)) return 9;
-    if (CFEqual(v, kCVImageBufferColorPrimaries_P3_D65)) return 12;
+    if (!v)
+        return 2;
+    if (CFEqual(v, kCVImageBufferColorPrimaries_ITU_R_709_2))
+        return 1;
+    if (CFEqual(v, kCVImageBufferColorPrimaries_EBU_3213))
+        return 5;
+    if (CFEqual(v, kCVImageBufferColorPrimaries_SMPTE_C))
+        return 6;
+    if (CFEqual(v, kCVImageBufferColorPrimaries_ITU_R_2020))
+        return 9;
+    if (CFEqual(v, kCVImageBufferColorPrimaries_P3_D65))
+        return 12;
     return 2;
 }
 
 static uint8_t transferCode(CFTypeRef v)
 {
-    if (!v) return 2;
-    if (CFEqual(v, kCVImageBufferTransferFunction_ITU_R_709_2)) return 1;
-    if (CFEqual(v, kCVImageBufferTransferFunction_SMPTE_ST_2084_PQ)) return 16;
-    if (CFEqual(v, kCVImageBufferTransferFunction_ITU_R_2100_HLG)) return 18;
-    if (CFEqual(v, kCVImageBufferTransferFunction_sRGB)) return 13;
+    if (!v)
+        return 2;
+    if (CFEqual(v, kCVImageBufferTransferFunction_ITU_R_709_2))
+        return 1;
+    if (CFEqual(v, kCVImageBufferTransferFunction_SMPTE_ST_2084_PQ))
+        return 16;
+    if (CFEqual(v, kCVImageBufferTransferFunction_ITU_R_2100_HLG))
+        return 18;
+    if (CFEqual(v, kCVImageBufferTransferFunction_sRGB))
+        return 13;
     return 2;
 }
 
 static uint8_t matrixCode(CFTypeRef v)
 {
-    if (!v) return 2;
-    if (CFEqual(v, kCVImageBufferYCbCrMatrix_ITU_R_709_2)) return 1;
-    if (CFEqual(v, kCVImageBufferYCbCrMatrix_ITU_R_601_4)) return 6;
-    if (CFEqual(v, kCVImageBufferYCbCrMatrix_ITU_R_2020)) return 9;
+    if (!v)
+        return 2;
+    if (CFEqual(v, kCVImageBufferYCbCrMatrix_ITU_R_709_2))
+        return 1;
+    if (CFEqual(v, kCVImageBufferYCbCrMatrix_ITU_R_601_4))
+        return 6;
+    if (CFEqual(v, kCVImageBufferYCbCrMatrix_ITU_R_2020))
+        return 9;
     return 2;
 }
 
 static void releaseBuffers(Encoder *e)
 {
-    for (unsigned i = 0; i < e->bufferCount; i++) nvenc_free(e->client, e->buffers[i]);
+    for (unsigned i = 0; i < e->bufferCount; i++)
+        nvenc_free(e->client, e->buffers[i]);
     e->bufferCount = 0;
 }
 
 static int allocBuffer(Encoder *e, uint64_t size, uint32_t *handle, uint8_t **va)
 {
     void *p = NULL;
-    if (nvenc_alloc(e->client, size, handle, &p)) return -1;
+    if (nvenc_alloc(e->client, size, handle, &p))
+        return -1;
     e->buffers[e->bufferCount++] = *handle;
-    if (va) *va = p;
+    if (va)
+        *va = p;
     return 0;
 }
 
@@ -179,7 +201,8 @@ static OSStatus configure(Encoder *e, CVPixelBufferRef image)
         if (level && level[1] >= '1' && level[1] <= '5' && level[2] == '_' && level[3] >= '0' && level[3] <= '9')
             c->level_idc = (uint8_t)((level[1] - '0') * 10 + (level[3] - '0'));
     }
-    if (e->entropy && CFEqual(e->entropy, kVTH264EntropyMode_CAVLC)) c->cabac = false;
+    if (e->entropy && CFEqual(e->entropy, kVTH264EntropyMode_CAVLC))
+        c->cabac = false;
     c->transform8x8 = c->profile_idc == H264_PROFILE_HIGH;
     const OSType format = CVPixelBufferGetPixelFormatType(image);
     c->full_range = format == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange;
@@ -195,9 +218,12 @@ static OSStatus configure(Encoder *e, CVPixelBufferRef image)
     c->matrix = matrixCode(matrix);
     c->colour_description = c->colour_primaries != 2 || c->transfer != 2 || c->matrix != 2;
     OSStatus status = startStream(e, primaries, transfer, matrix);
-    if (primaries) CFRelease(primaries);
-    if (transfer) CFRelease(transfer);
-    if (matrix) CFRelease(matrix);
+    if (primaries)
+        CFRelease(primaries);
+    if (transfer)
+        CFRelease(transfer);
+    if (matrix)
+        CFRelease(matrix);
     return status;
 }
 
@@ -211,7 +237,8 @@ static OSStatus startStream(Encoder *e, CFTypeRef primaries, CFTypeRef transfer,
     }
     c->input_layout = e->info.input_layout;
     c->chroma_mode = e->info.chroma_mode;
-    if (h264enc_configure(c)) return kVTPropertyNotSupportedErr;
+    if (h264enc_configure(c))
+        return kVTPropertyNotSupportedErr;
     h264enc_layout(c, &e->layout);
     const H264EncLayout *l = &e->layout;
     uint8_t *ignored;
@@ -224,7 +251,8 @@ static OSStatus startStream(Encoder *e, CFTypeRef primaries, CFTypeRef transfer,
         return kVTAllocationFailedErr;
     }
     e->avccCap = l->bitstream_bytes + 4096;
-    if (!(e->avcc = malloc(e->avccCap))) return kVTAllocationFailedErr;
+    if (!(e->avcc = malloc(e->avccCap)))
+        return kVTAllocationFailedErr;
 
     uint8_t avcC[512];
     const size_t avcCSize = h264enc_write_avcc(c, avcC, sizeof(avcC));
@@ -236,16 +264,21 @@ static OSStatus startStream(Encoder *e, CFTypeRef primaries, CFTypeRef transfer,
         kCFAllocatorDefault, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
     CFDictionarySetValue(extensions, kCMFormatDescriptionExtension_SampleDescriptionExtensionAtoms, atoms);
     CFDictionarySetValue(extensions, kCMFormatDescriptionExtension_FormatName, CFSTR("H.264"));
-    if (c->full_range) CFDictionarySetValue(extensions, kCMFormatDescriptionExtension_FullRangeVideo, kCFBooleanTrue);
-    if (primaries) CFDictionarySetValue(extensions, kCMFormatDescriptionExtension_ColorPrimaries, primaries);
-    if (transfer) CFDictionarySetValue(extensions, kCMFormatDescriptionExtension_TransferFunction, transfer);
-    if (matrix) CFDictionarySetValue(extensions, kCMFormatDescriptionExtension_YCbCrMatrix, matrix);
+    if (c->full_range)
+        CFDictionarySetValue(extensions, kCMFormatDescriptionExtension_FullRangeVideo, kCFBooleanTrue);
+    if (primaries)
+        CFDictionarySetValue(extensions, kCMFormatDescriptionExtension_ColorPrimaries, primaries);
+    if (transfer)
+        CFDictionarySetValue(extensions, kCMFormatDescriptionExtension_TransferFunction, transfer);
+    if (matrix)
+        CFDictionarySetValue(extensions, kCMFormatDescriptionExtension_YCbCrMatrix, matrix);
     OSStatus status = VTEncoderSessionCreateVideoFormatDescription(
         e->session, kCMVideoCodecType_H264, (int32_t)c->width, (int32_t)c->height, extensions, &e->format);
     CFRelease(extensions);
     CFRelease(atoms);
     CFRelease(atom);
-    if (status) return status;
+    if (status)
+        return status;
 
     const double fps = e->expectedFrameRate > 0 ? e->expectedFrameRate : 30;
     const bool cbr = e->constantBitRate > 0;
@@ -265,12 +298,15 @@ static OSStatus startStream(Encoder *e, CFTypeRef primaries, CFTypeRef transfer,
 
 static bool wantsKey(Encoder *e, CMTime pts, CFDictionaryRef options)
 {
-    if (!e->haveRef || e->keyPending || !e->allowTemporal || !e->info.p_frames) return true;
+    if (!e->haveRef || e->keyPending || !e->allowTemporal || !e->info.p_frames)
+        return true;
     if (options) {
         CFTypeRef force = CFDictionaryGetValue(options, kVTEncodeFrameOptionKey_ForceKeyFrame);
-        if (force && CFGetTypeID(force) == CFBooleanGetTypeID() && CFBooleanGetValue(force)) return true;
+        if (force && CFGetTypeID(force) == CFBooleanGetTypeID() && CFBooleanGetValue(force))
+            return true;
     }
-    if (e->maxKeyInterval > 0 && e->sinceKey + 1 >= (uint32_t)e->maxKeyInterval) return true;
+    if (e->maxKeyInterval > 0 && e->sinceKey + 1 >= (uint32_t)e->maxKeyInterval)
+        return true;
     if (e->maxKeyDuration > 0 && CMTIME_IS_NUMERIC(pts) && CMTIME_IS_NUMERIC(e->lastKeyTime) &&
         CMTimeGetSeconds(CMTimeSubtract(pts, e->lastKeyTime)) >= e->maxKeyDuration)
         return true;
@@ -282,13 +318,16 @@ static OSStatus emitSample(Encoder *e, VTVideoEncoderFrame frame, size_t size, b
     CMBlockBufferRef block = NULL;
     OSStatus status = CMBlockBufferCreateWithMemoryBlock(kCFAllocatorDefault, NULL, size, kCFAllocatorDefault, NULL, 0,
                                                          size, kCMBlockBufferAssureMemoryNowFlag, &block);
-    if (!status) status = CMBlockBufferReplaceDataBytes(e->avcc, block, 0, size);
+    if (!status)
+        status = CMBlockBufferReplaceDataBytes(e->avcc, block, 0, size);
     CMSampleBufferRef sample = NULL;
     const CMSampleTimingInfo timing = {duration, pts, pts};
     if (!status)
         status = CMSampleBufferCreateReady(kCFAllocatorDefault, block, e->format, 1, 1, &timing, 1, &size, &sample);
-    if (block) CFRelease(block);
-    if (status) return status;
+    if (block)
+        CFRelease(block);
+    if (status)
+        return status;
     CFArrayRef attachments = CMSampleBufferGetSampleAttachmentsArray(sample, true);
     if (attachments && CFArrayGetCount(attachments)) {
         CFMutableDictionaryRef a = (CFMutableDictionaryRef)CFArrayGetValueAtIndex(attachments, 0);
@@ -310,7 +349,8 @@ static OSStatus encodePicture(Encoder *e, VTVideoEncoderFrame frame, CVPixelBuff
         return kVTPixelTransferNotSupportedErr;
     const bool key = wantsKey(e, pts, options);
     const uint64_t began = mach_absolute_time();
-    if (CVPixelBufferLockBaseAddress(image, kCVPixelBufferLock_ReadOnly)) return kVTVideoEncoderMalfunctionErr;
+    if (CVPixelBufferLockBaseAddress(image, kCVPixelBufferLock_ReadOnly))
+        return kVTVideoEncoderMalfunctionErr;
     h264enc_put_input(&e->config, &e->layout, e->inputVA, CVPixelBufferGetBaseAddressOfPlane(image, 0),
                       CVPixelBufferGetBytesPerRowOfPlane(image, 0), CVPixelBufferGetBaseAddressOfPlane(image, 1),
                       CVPixelBufferGetBytesPerRowOfPlane(image, 1));
@@ -330,7 +370,8 @@ static OSStatus encodePicture(Encoder *e, VTVideoEncoderFrame frame, CVPixelBuff
         .picture_index = e->pictureIndex++,
     };
     TegraNVENCSubmit *submit = malloc(sizeof(*submit));
-    if (!submit) return kVTAllocationFailedErr;
+    if (!submit)
+        return kVTAllocationFailedErr;
     h264enc_fill_submit(&e->config, &e->layout, &picture, &e->handles, submit);
     TegraNVENCWait wait = {.timeout_us = 1000000, .invalidate_count = 1};
     wait.invalidate[0] = (TegraNVENCRange){e->handles.aux, 0, sizeof(nvenc_pic_stat_s), 0};
@@ -354,7 +395,8 @@ static OSStatus encodePicture(Encoder *e, VTVideoEncoderFrame frame, CVPixelBuff
     }
     TegraNVENCWait bits = {.fence = wait.fence, .timeout_us = 1000000, .invalidate_count = 1};
     bits.invalidate[0] = (TegraNVENCRange){e->handles.bitstream, 0, produced, 0};
-    if (nvenc_wait(e->client, &bits)) return kVTVideoEncoderMalfunctionErr;
+    if (nvenc_wait(e->client, &bits))
+        return kVTVideoEncoderMalfunctionErr;
     const size_t size = h264enc_annexb_to_avcc(e->bitstreamVA, produced, e->avcc, e->avccCap);
     e->encodeTicks += mach_absolute_time() - copied;
     e->copyTicks += copied - began;
@@ -411,7 +453,8 @@ static OSStatus startSession(VTVideoEncoderRef ref, VTVideoEncoderSession sessio
         const int32_t formats[] = {kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
                                    kCVPixelFormatType_420YpCbCr8BiPlanarFullRange};
         CFNumberRef numbers[2];
-        for (int i = 0; i < 2; i++) numbers[i] = CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt32Type, &formats[i]);
+        for (int i = 0; i < 2; i++)
+            numbers[i] = CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt32Type, &formats[i]);
         CFArrayRef list = CFArrayCreate(kCFAllocatorDefault, (const void **)numbers, 2, &kCFTypeArrayCallBacks);
         CFDictionaryRef surface = CFDictionaryCreate(kCFAllocatorDefault, NULL, NULL, 0, &kCFTypeDictionaryKeyCallBacks,
                                                      &kCFTypeDictionaryValueCallBacks);
@@ -428,7 +471,8 @@ static OSStatus startSession(VTVideoEncoderRef ref, VTVideoEncoderSession sessio
         CFRelease(h);
         CFRelease(surface);
         CFRelease(list);
-        for (int i = 0; i < 2; i++) CFRelease(numbers[i]);
+        for (int i = 0; i < 2; i++)
+            CFRelease(numbers[i]);
     }
     pthread_mutex_unlock(&e->lock);
     return status;
@@ -438,7 +482,8 @@ static OSStatus encodeFrame(VTVideoEncoderRef ref, VTVideoEncoderFrame frame, CV
                             CMTime duration, CFDictionaryRef options, VTEncodeInfoFlags *info)
 {
     Encoder *e = storage(ref);
-    if (info) *info = 0;
+    if (info)
+        *info = 0;
     pthread_mutex_lock(&e->lock);
     OSStatus status = e->failed ? kVTVideoEncoderMalfunctionErr : noErr;
     if (!status && !e->configured && (status = configure(e, image))) {
@@ -446,7 +491,8 @@ static OSStatus encodeFrame(VTVideoEncoderRef ref, VTVideoEncoderFrame frame, CV
         os_log_error(gLog, "AVE: session %dx%d in %{public}s could not start on NVENC (%d)", e->size.width,
                      e->size.height, getprogname(), (int)status);
     }
-    if (!status) status = encodePicture(e, frame, image, pts, duration, options);
+    if (!status)
+        status = encodePicture(e, frame, image, pts, duration, options);
     if (status && e->session)
         VTEncoderSessionEmitEncodedFrame(e->session, frame, status, kVTEncodeInfo_FrameDropped, NULL);
     pthread_mutex_unlock(&e->lock);
@@ -476,7 +522,8 @@ static OSStatus copySupportedPropertyDictionary(VTVideoEncoderRef ref, CFDiction
     (void)ref;
     CFMutableDictionaryRef s = CFDictionaryCreateMutable(kCFAllocatorDefault, 0, &kCFTypeDictionaryKeyCallBacks,
                                                          &kCFTypeDictionaryValueCallBacks);
-    if (!s) return kVTAllocationFailedErr;
+    if (!s)
+        return kVTAllocationFailedErr;
     const CFStringRef numbers[] = {
         kVTCompressionPropertyKey_AverageBitRate,
         kVTCompressionPropertyKey_ConstantBitRate,
@@ -523,7 +570,8 @@ static OSStatus copySupportedPropertyDictionary(VTVideoEncoderRef ref, CFDiction
         kVTCompressionPropertyKey_ContentLightLevelInfo,
         kVTCompressionPropertyKey_HDRMetadataInsertionMode,
     };
-    for (unsigned i = 0; i < sizeof(metadata) / sizeof(metadata[0]); i++) describe(s, metadata[i], NULL, false);
+    for (unsigned i = 0; i < sizeof(metadata) / sizeof(metadata[0]); i++)
+        describe(s, metadata[i], NULL, false);
     describe(s, kVTCompressionPropertyKey_DataRateLimits, kVTPropertyType_Number, false);
     describe(s, kVTCompressionPropertyKey_UsingHardwareAcceleratedVideoEncoder, kVTPropertyType_Boolean, true);
     *out = s;
@@ -564,7 +612,8 @@ static OSStatus setProperty(CMBaseObjectRef ref, CFStringRef key, CFTypeRef valu
             number(CFArrayGetValueAtIndex(value, 0), &bytes) && number(CFArrayGetValueAtIndex(value, 1), &seconds)) {
             e->limitBytes = bytes;
             e->limitSeconds = seconds;
-            if (e->configured) rc_set_limit(&e->rc, bytes, seconds);
+            if (e->configured)
+                rc_set_limit(&e->rc, bytes, seconds);
         }
     } else if (CFEqual(key, kVTCompressionPropertyKey_ProfileLevel)) {
         if (value && CFGetTypeID(value) == CFStringGetTypeID() && CFStringHasPrefix(value, CFSTR("H264_")))
@@ -664,10 +713,12 @@ static void finalize(CMBaseObjectRef ref)
         nvenc_close(e->client);  // the kernel waits for this connection's jobs
     }
     free(e->avcc);
-    if (e->format) CFRelease(e->format);
+    if (e->format)
+        CFRelease(e->format);
     CFTypeRef *strings[] = {(CFTypeRef *)&e->profileLevel, (CFTypeRef *)&e->entropy, (CFTypeRef *)&e->primaries,
                             (CFTypeRef *)&e->transfer, (CFTypeRef *)&e->matrix};
-    for (unsigned i = 0; i < 5; i++) replace(strings[i], NULL);
+    for (unsigned i = 0; i < 5; i++)
+        replace(strings[i], NULL);
     pthread_mutex_destroy(&e->lock);
 }
 
@@ -699,10 +750,12 @@ static const VTPluginEncoderVTable kVTable = {NULL, &kBaseClass, &kEncoderClass}
 
 static OSStatus createInstance(FourCharCode codec, CFAllocatorRef allocator, VTVideoEncoderRef *out)
 {
-    if (codec != kCMVideoCodecType_H264) return kVTCouldNotFindVideoEncoderErr;
+    if (codec != kCMVideoCodecType_H264)
+        return kVTCouldNotFindVideoEncoderErr;
     CMBaseObjectRef object = NULL;
     const OSStatus status = CMDerivedObjectCreate(allocator, &kVTable, VTVideoEncoderGetClassID(), &object);
-    if (status) return status;
+    if (status)
+        return status;
     Encoder *e = storage(object);
     memset(e, 0, sizeof(*e));
     pthread_mutex_init(&e->lock, NULL);
@@ -742,7 +795,8 @@ __attribute__((visibility("default"))) void H264H7EncoderRegister(void);
 void H264H7EncoderRegister(void)
 {
     gLog = os_log_create("com.brunostjohn.switch.ave", "encoder");
-    if (!nvenc_service_present()) return;  // switch-no-nvdec, or NVENC did not prove itself at boot: nothing changes
+    if (!nvenc_service_present())
+        return;  // switch-no-nvdec, or NVENC did not prove itself at boot: nothing changes
     const OSStatus status = registerEncoder();
     if (status) {
         os_log_error(gLog, "AVE: VTRegisterVideoEncoderWithInfo('avc1') failed: %d", (int)status);
@@ -754,5 +808,6 @@ void H264H7EncoderRegister(void)
     const bool claimed = probe && nvenc_claim_self_test(probe);
     nvenc_close(probe);
     // Off the registry's thread: the check's own session looks the registry up once this registration returns.
-    if (claimed) dispatch_async_f(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), NULL, selfTest);
+    if (claimed)
+        dispatch_async_f(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), NULL, selfTest);
 }

@@ -11,10 +11,12 @@ static const uint32_t K[64] = {
     0xa2bfe8a1u, 0xa81a664bu, 0xc24b8b70u, 0xc76c51a3u, 0xd192e819u, 0xd6990624u, 0xf40e3585u, 0x106aa070u,
     0x19a4c116u, 0x1e376c08u, 0x2748774cu, 0x34b0bcb5u, 0x391c0cb3u, 0x4ed8aa4au, 0x5b9cca4fu, 0x682e6ff3u,
     0x748f82eeu, 0x78a5636fu, 0x84c87814u, 0x8cc70208u, 0x90befffau, 0xa4506cebu, 0xbef9a3f7u, 0xc67178f2u};
+
 static inline uint32_t rotr(uint32_t value, unsigned count)
 {
     return (value >> count) | (value << (32 - count));
 }
+
 static void compress(uint32_t state[8], const uint8_t block[64])
 {
     uint32_t w[64];
@@ -53,6 +55,7 @@ static void compress(uint32_t state[8], const uint8_t block[64])
     state[6] += g;
     state[7] += h;
 }
+
 void NativeAdrenoSha256::hash(const uint8_t *bytes, size_t length, uint8_t digest[32])
 {
     uint32_t state[8] = {0x6a09e667u, 0xbb67ae85u, 0x3c6ef372u, 0xa54ff53au,
@@ -65,14 +68,16 @@ void NativeAdrenoSha256::hash(const uint8_t *bytes, size_t length, uint8_t diges
     uint8_t tail[64];
     const size_t rest = length - at;
     memset(tail, 0, sizeof(tail));
-    if (rest) memcpy(tail, bytes + at, rest);
+    if (rest)
+        memcpy(tail, bytes + at, rest);
     tail[rest] = 0x80;
     if (rest >= 56) {
         compress(state, tail);
         memset(tail, 0, sizeof(tail));
     }
     const uint64_t bits = uint64_t(length) * 8;
-    for (unsigned i = 0; i < 8; ++i) tail[63 - i] = uint8_t(bits >> (8 * i));
+    for (unsigned i = 0; i < 8; ++i)
+        tail[63 - i] = uint8_t(bits >> (8 * i));
     compress(state, tail);
     for (unsigned i = 0; i < 8; ++i) {
         digest[i * 4] = uint8_t(state[i] >> 24);

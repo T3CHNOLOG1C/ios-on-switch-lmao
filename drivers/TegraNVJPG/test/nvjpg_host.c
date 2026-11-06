@@ -29,6 +29,7 @@
 #endif
 
 static int failures;
+
 static void fail(const char *fmt, ...)
 {
     va_list ap;
@@ -39,18 +40,23 @@ static void fail(const char *fmt, ...)
     va_end(ap);
     failures++;
 }
-#define CHECK(cond, ...)                \
-    do {                                \
-        if (!(cond)) fail(__VA_ARGS__); \
+
+#define CHECK(cond, ...)       \
+    do {                       \
+        if (!(cond))           \
+            fail(__VA_ARGS__); \
     } while (0)
 
 // The offset of the first marker `m` (its 0xFF), or -1.
 static long find_marker(const uint8_t *d, size_t n, uint8_t m)
 {
     for (size_t i = 2; i + 3 < n;) {
-        if (d[i] != 0xff) return -1;
-        if (d[i + 1] == m) return (long)i;
-        if (d[i + 1] == 0xda) return -1;
+        if (d[i] != 0xff)
+            return -1;
+        if (d[i + 1] == m)
+            return (long)i;
+        if (d[i + 1] == 0xda)
+            return -1;
         i += 2 + tegra_nvjpg_be16(d + i + 2);
     }
     return -1;
@@ -88,11 +94,13 @@ static void edits(const char *name, const uint8_t *orig, size_t n)
         free(d);
         return;
     }
+
     static const struct {
         uint8_t marker;
         const char *why;
     } sofs[] = {{0xc2, "progressive"}, {0xc3, "lossless"}, {0xc5, "hierarchical"}, {0xc9, "arithmetic"},
                 {0xca, "progressive"}, {0xcb, "lossless"}, {0xf7, "JPEG-LS"}};
+
     for (size_t i = 0; i < sizeof(sofs) / sizeof(sofs[0]); i++) {
         memcpy(d, orig, n);
         d[sof + 1] = sofs[i].marker;
@@ -128,7 +136,8 @@ static void edits(const char *name, const uint8_t *orig, size_t n)
     {
         uint8_t *bits = d + dht + 5;
         int last = 15;
-        while (last > 0 && !bits[last]) last--;
+        while (last > 0 && !bits[last])
+            last--;
         const int move = 3 - bits[0];
         if (move > 0 && last > 0 && bits[last] >= move) {
             bits[0] += (uint8_t)move, bits[last] -= (uint8_t)move;
@@ -173,13 +182,16 @@ static void edits(const char *name, const uint8_t *orig, size_t n)
 static void without_dht(const char *name, const uint8_t *orig, size_t n)
 {
     TegraNVJPGImage full, bare;
-    if (parse_copy(orig, n, &full)) return;
+    if (parse_copy(orig, n, &full))
+        return;
     uint8_t *d = malloc(n);
     size_t m = 0;
-    for (size_t i = 0; i < 2; i++) d[m++] = orig[i];
+    for (size_t i = 0; i < 2; i++)
+        d[m++] = orig[i];
     for (size_t at = 2; at < full.scanOffset;) {
         const size_t seg = 2 + tegra_nvjpg_be16(orig + at + 2);
-        if (orig[at + 1] != 0xc4) memcpy(d + m, orig + at, seg), m += seg;
+        if (orig[at + 1] != 0xc4)
+            memcpy(d + m, orig + at, seg), m += seg;
         at += seg;
     }
     memcpy(d + m, orig + full.scanOffset, n - full.scanOffset);
@@ -199,6 +211,7 @@ static void without_dht(const char *name, const uint8_t *orig, size_t n)
 #endif  // HAVE_LIBJPEG
 
 static uint64_t rng = 0x9e3779b97f4a7c15ull;
+
 static uint32_t next_random(void)
 {
     rng ^= rng << 13, rng ^= rng >> 7, rng ^= rng << 17;
@@ -218,7 +231,8 @@ static void fuzz(const uint8_t *orig, size_t n, uint32_t rounds)
         }
         const size_t len = next_random() % 4 ? n : next_random() % n;
         TegraNVJPGImage img;
-        if (parse_copy(d, len, &img)) continue;
+        if (parse_copy(d, len, &img))
+            continue;
         // Whatever it accepts is self-consistent.
         CHECK(img.width && img.height && img.width <= 16384 && img.height <= 16384, "fuzz: size %ux%u", img.width,
               img.height);
@@ -296,7 +310,8 @@ static void targets(void)
                 for (int c = 0; c < 3; c++) {
                     const double clamped = f[c] < 0 ? 0 : f[c] > 255 ? 255 : f[c];
                     const int d = abs((int)rgb[c] - (int)lround(clamped));
-                    if (d > worst) worst = d;
+                    if (d > worst)
+                        worst = d;
                 }
             }
     CHECK(worst <= 1, "JFIF matrix off by %d", worst);
@@ -313,18 +328,26 @@ typedef struct {
     jmp_buf jump;
     char message[JMSG_LENGTH_MAX];
 } Error;
+
 static void error_exit(j_common_ptr c)
 {
     Error *e = (Error *)c->err;
     c->err->format_message(c, e->message);
     longjmp(e->jump, 1);
 }
+
 static void quiet(j_common_ptr c, int level)
 {
     (void)c, (void)level;
 }
 
-enum { CS_YCC, CS_GREY, CS_RGB, CS_CMYK };
+enum {
+    CS_YCC,
+    CS_GREY,
+    CS_RGB,
+    CS_CMYK
+};
+
 typedef struct {
     const char *name;
     uint32_t w, h, cs;
@@ -375,7 +398,8 @@ static uint8_t *encode(const Spec *sp, unsigned long *size)
                        : sp->cs == CS_RGB  ? JCS_RGB
                                            : JCS_YCbCr;
     jpeg_set_defaults(&c);
-    if (sp->cs == CS_RGB) jpeg_set_colorspace(&c, JCS_RGB);
+    if (sp->cs == CS_RGB)
+        jpeg_set_colorspace(&c, JCS_RGB);
     jpeg_set_quality(&c, sp->quality, sp->baseline);
     for (int i = 0; i < c.num_components; i++) {
         const int luma = i == 0 || sp->all;
@@ -387,7 +411,8 @@ static uint8_t *encode(const Spec *sp, unsigned long *size)
     c.optimize_coding = sp->optimize;
     c.arith_code = sp->arith;
     c.dct_method = JDCT_ISLOW;
-    if (sp->progressive) jpeg_simple_progression(&c);
+    if (sp->progressive)
+        jpeg_simple_progression(&c);
     static jpeg_scan_info scans[4];
     if (sp->noninterleaved) {
         for (int i = 0; i < comps; i++) {
@@ -400,7 +425,8 @@ static uint8_t *encode(const Spec *sp, unsigned long *size)
     row = malloc((size_t)sp->w * comps);
     for (uint32_t y = 0; y < sp->h; y++) {
         for (uint32_t x = 0; x < sp->w; x++)
-            for (int k = 0; k < comps; k++) row[x * comps + k] = sample(sp->cs == CS_GREY ? 0 : (uint32_t)k, x, y);
+            for (int k = 0; k < comps; k++)
+                row[x * comps + k] = sample(sp->cs == CS_GREY ? 0 : (uint32_t)k, x, y);
         JSAMPROW rows[1] = {row};
         jpeg_write_scanlines(&c, rows, 1);
     }
@@ -455,7 +481,8 @@ static void compare(const Spec *sp, const uint8_t *d, size_t n)
         for (int tc = 0; tc < 2; tc++) {
             const JHUFF_TBL *h = tc ? c.ac_huff_tbl_ptrs[t] : c.dc_huff_tbl_ptrs[t];
             CHECK(!!h == !!(img.huffMask[tc] >> t & 1), "%s: huff %d/%d presence", sp->name, tc, t);
-            if (!h) continue;
+            if (!h)
+                continue;
             uint32_t count = 0;
             for (int l = 0; l < 16; l++) {
                 CHECK(img.bits[tc][t][l] == h->bits[l + 1], "%s: huff %d/%d bits %d", sp->name, tc, t, l);
@@ -494,7 +521,8 @@ static void compare(const Spec *sp, const uint8_t *d, size_t n)
     for (int tc = 0; tc < 2; tc++)
         for (int t = 0; t < 4; t++) {
             const JHUFF_TBL *h = tc ? c.ac_huff_tbl_ptrs[t] : c.dc_huff_tbl_ptrs[t];
-            if (!h) continue;
+            if (!h)
+                continue;
             for (int l = 0; l < 16; l++)
                 CHECK(s.huffTab[tc][t].codeNum[l] == h->bits[l + 1], "%s: setup huff %d/%d", sp->name, tc, t);
             CHECK(!memcmp(s.huffTab[tc][t].symbol, img.vals[tc][t], 162), "%s: setup symbols", sp->name);
@@ -545,13 +573,17 @@ typedef struct {
     const char *name;
     uint32_t w, h, hs, vs, cs, restart, quality, optimize;
 } VectorSpec;
+
 static const VectorSpec kVectorSpecs[] = {
     {"J3A", 44, 40, 2, 2, CS_YCC, 2, 92, 0},   // 4:2:0, a partial MCU column and row, restart every 2 MCUs
     {"J3B", 40, 24, 2, 1, CS_YCC, 0, 85, 1},   // 4:2:2, optimised (non-standard) Huffman tables
     {"J3C", 24, 16, 1, 1, CS_YCC, 0, 95, 0},   // 4:4:4
     {"J3D", 24, 16, 1, 1, CS_GREY, 1, 90, 0},  // grey, restart every MCU
 };
-enum { kVectorCount = sizeof(kVectorSpecs) / sizeof(kVectorSpecs[0]) };
+
+enum {
+    kVectorCount = sizeof(kVectorSpecs) / sizeof(kVectorSpecs[0])
+};
 
 typedef struct {
     uint32_t w, h, comps, cw, ch;
@@ -590,7 +622,8 @@ static int raw_decode(const uint8_t *d, size_t n, uint32_t scale, Planes *out)
         const uint32_t pw = ci->width_in_blocks * (uint32_t)ci->DCT_h_scaled_size;
         ph[i] = (uint32_t)(ci->v_samp_factor * ci->DCT_v_scaled_size);
         rows[i] = malloc(sizeof(JSAMPROW) * ph[i]);
-        for (uint32_t r = 0; r < ph[i]; r++) rows[i][r] = malloc(pw);
+        for (uint32_t r = 0; r < ph[i]; r++)
+            rows[i][r] = malloc(pw);
         out->plane[i] = calloc(1, (size_t)(i ? out->cw * out->ch : out->w * out->h));
     }
     for (uint32_t row = 0; c.output_scanline < c.output_height; row++) {
@@ -603,7 +636,8 @@ static int raw_decode(const uint8_t *d, size_t n, uint32_t scale, Planes *out)
     }
     jpeg_finish_decompress(&c);
     for (int i = 0; i < c.num_components; i++) {
-        for (uint32_t r = 0; r < ph[i]; r++) free(rows[i][r]);
+        for (uint32_t r = 0; r < ph[i]; r++)
+            free(rows[i][r]);
         free(rows[i]);
     }
     jpeg_destroy_decompress(&c);
@@ -613,14 +647,16 @@ static int raw_decode(const uint8_t *d, size_t n, uint32_t scale, Planes *out)
 static void print_array(FILE *f, const char *name, const uint8_t *d, size_t n)
 {
     fprintf(f, "static const uint8_t %s[%zu] = {", name, n);
-    for (size_t i = 0; i < n; i++) fprintf(f, "%s%u,", i % 24 ? " " : "\n    ", d[i]);
+    for (size_t i = 0; i < n; i++)
+        fprintf(f, "%s%u,", i % 24 ? " " : "\n    ", d[i]);
     fprintf(f, "\n};\n");
 }
 
 static int write_vectors(const char *path)
 {
     FILE *f = fopen(path, "w");
-    if (!f) return 1;
+    if (!f)
+        return 1;
     fprintf(f,
             "// SPDX-License-Identifier: BSD-2-Clause-Patent\n"
             "// Generated by test/nvjpg_host --write (libjpeg-turbo %s): the boot self-test's JPEGs (libjpeg-turbo's "
@@ -634,13 +670,15 @@ static int write_vectors(const char *path)
                          (int)vs->optimize, 0,     0,           0,      1};
         unsigned long n = 0;
         uint8_t *d = encode(&sp, &n);
-        if (!d) return 1;
+        if (!d)
+            return 1;
         char name[64];
         snprintf(name, sizeof(name), "k%sJpeg", vs->name);
         print_array(f, name, d, n);
         for (uint32_t scale = 0; scale < (v == 0 ? 4u : 1u); scale++) {  // J3A also at 1/2, 1/4, 1/8
             Planes p;
-            if (raw_decode(d, n, scale, &p)) return 1;
+            if (raw_decode(d, n, scale, &p))
+                return 1;
             for (uint32_t i = 0; i < p.comps; i++) {
                 if (scale)
                     snprintf(name, sizeof(name), "k%sScale%uPlane%u", vs->name, scale, i);
@@ -673,11 +711,13 @@ static void vectors(void)
         {"J3C", kJ3CJpeg, sizeof(kJ3CJpeg), 24, 16, 3, TEGRA_NVJPG_CHROMA_444},
         {"J3D", kJ3DJpeg, sizeof(kJ3DJpeg), 24, 16, 1, TEGRA_NVJPG_CHROMA_MONO},
     };
+
     for (size_t i = 0; i < sizeof(v) / sizeof(v[0]); i++) {
         TegraNVJPGImage img;
         const char *why = parse_copy(v[i].jpeg, v[i].n, &img);
         CHECK(!why, "%s: %s", v[i].name, why ? why : "");
-        if (why) continue;
+        if (why)
+            continue;
         CHECK(img.width == v[i].w && img.height == v[i].h && img.components == v[i].comps &&
                   img.chroma == v[i].chroma && img.eoi,
               "%s: geometry", v[i].name);
@@ -705,9 +745,11 @@ static void vectors(void)
          {sizeof(kJ3CPlane0), sizeof(kJ3CPlane1), sizeof(kJ3CPlane2)}},
         {kJ3DJpeg, sizeof(kJ3DJpeg), {kJ3DPlane0, NULL, NULL}, {sizeof(kJ3DPlane0), 0, 0}},
     };
+
     for (size_t i = 0; i < sizeof(r) / sizeof(r[0]); i++) {
         Planes p;
-        if (raw_decode(r[i].jpeg, r[i].n, 0, &p)) continue;
+        if (raw_decode(r[i].jpeg, r[i].n, 0, &p))
+            continue;
         for (uint32_t k = 0; k < p.comps; k++) {
             const size_t size = k ? (size_t)p.cw * p.ch : (size_t)p.w * p.h;
             CHECK(size == r[i].size[k] && !memcmp(p.plane[k], r[i].plane[k], size),
@@ -724,7 +766,8 @@ static void vectors(void)
         {sizeof(kJ3AScale3Plane0), sizeof(kJ3AScale3Plane1), sizeof(kJ3AScale3Plane2)}};
     for (uint32_t scale = 1; scale <= 3; scale++) {
         Planes p;
-        if (raw_decode(kJ3AJpeg, sizeof(kJ3AJpeg), scale, &p)) continue;
+        if (raw_decode(kJ3AJpeg, sizeof(kJ3AJpeg), scale, &p))
+            continue;
         // The geometry the self-test assumes: libjpeg's jdiv_round_up of the picture, and chroma at the same size
         // (libjpeg scales the chroma blocks' IDCT less instead of upsampling: a scaled raw decode is 4:4:4).
         CHECK(p.w == (44u + (1u << scale) - 1) >> scale && p.h == (40u + (1u << scale) - 1) >> scale, "J3A 1/%u: %ux%u",
@@ -746,7 +789,8 @@ static void vectors(void)
 int main(int argc, char **argv)
 {
 #ifdef HAVE_LIBJPEG
-    if (argc == 3 && !strcmp(argv[1], "--write")) return write_vectors(argv[2]);
+    if (argc == 3 && !strcmp(argv[1], "--write"))
+        return write_vectors(argv[2]);
 #else
     (void)argv;
     if (argc > 1) {
@@ -761,10 +805,12 @@ int main(int argc, char **argv)
     for (size_t i = 0; i < sizeof(kAccepted) / sizeof(kAccepted[0]); i++) {
         unsigned long n = 0;
         uint8_t *d = encode(&kAccepted[i], &n);
-        if (!d) continue;
+        if (!d)
+            continue;
         compare(&kAccepted[i], d, n);
         edits(kAccepted[i].name, d, n);
-        if (!kAccepted[i].optimize) without_dht(kAccepted[i].name, d, n);
+        if (!kAccepted[i].optimize)
+            without_dht(kAccepted[i].name, d, n);
         fuzz(d, n, 2000);
         free(d);
         files++;
@@ -772,7 +818,8 @@ int main(int argc, char **argv)
     for (size_t i = 0; i < sizeof(kRefused) / sizeof(kRefused[0]); i++) {
         unsigned long n = 0;
         uint8_t *d = encode(&kRefused[i].spec, &n);
-        if (!d) continue;
+        if (!d)
+            continue;
         expect_refusal(kRefused[i].spec.name, d, n, kRefused[i].why);
         free(d);
         files++;

@@ -20,12 +20,14 @@ static NativeAdrenoGmuWindow windows[ShengGmuWindows] = {{reinterpret_cast<volat
                                                          {reinterpret_cast<volatile uint8_t *>(cx), sizeof(cx)}};
 static uint64_t fake_now = 1000;
 static unsigned waits = 0;
+
 static int now_us(void *cookie, uint64_t *value)
 {
     CHECK(cookie == &fake_now && value);
     *value = fake_now;
     return 0;
 }
+
 static int wait_us(void *cookie, unsigned us)
 {
     CHECK(cookie == &fake_now);
@@ -33,6 +35,7 @@ static int wait_us(void *cookie, unsigned us)
     fake_now += us;
     return 0;
 }
+
 int main()
 {
     NativeAdrenoGmuPlatform platform;

@@ -16,13 +16,19 @@
 #include "selftest/HEVCPicture176.h"
 
 namespace {
-enum { kInput = 1, kAux = 2, kSurface = 3 };
+enum {
+    kInput = 1,
+    kAux = 2,
+    kSurface = 3
+};
+
 constexpr uint32_t kSlicesOff = 256, kBitsOff = 512, kMbhistOff = 0x8000, kHistoryOff = 0x9000;
 TegraNVDECBlock gBlocks[4];
 
 bool resolve(void *, uint32_t handle, TegraNVDECBlock *block)
 {
-    if (handle < kInput || handle > kSurface) return false;
+    if (handle < kInput || handle > kSurface)
+        return false;
     *block = gBlocks[handle];
     return true;
 }
@@ -37,7 +43,8 @@ uint32_t blockLinear(uint32_t x, uint32_t y, uint32_t pitch)
 uint32_t crc32(uint32_t crc, uint8_t byte)
 {
     crc ^= byte;
-    for (int i = 0; i < 8; i++) crc = (crc >> 1) ^ (0xedb88320u & (0u - (crc & 1)));
+    for (int i = 0; i < 8; i++)
+        crc = (crc >> 1) ^ (0xedb88320u & (0u - (crc & 1)));
     return crc;
 }
 
@@ -68,7 +75,8 @@ int run(char *line, size_t size)
     memcpy(gBlocks[kInput].va + kBitsOff, kTestBitstream, sizeof(kTestBitstream));
 
     TegraNVDECSubmit *s = IONewZero(TegraNVDECSubmit, 1);
-    if (!s) return -12;
+    if (!s)
+        return -12;
     s->codec = TEGRA_NVDEC_CODEC_H264;
     s->setup_bytes = sizeof(kTestSetup);
     memcpy(s->setup, kTestSetup, sizeof(kTestSetup));
@@ -113,7 +121,8 @@ int run(char *line, size_t size)
     const nvdec_status_s *status = (const nvdec_status_s *)gBlocks[kInput].va;
     uint32_t crc = 0xffffffffu;
     for (uint32_t y = 0; y < height; y++)
-        for (uint32_t x = 0; x < width; x++) crc = crc32(crc, gBlocks[kSurface].va[blockLinear(x, y, pitch)]);
+        for (uint32_t x = 0; x < width; x++)
+            crc = crc32(crc, gBlocks[kSurface].va[blockLinear(x, y, pitch)]);
     crc = ~crc;
     const bool ok = crc == kTestLumaCrc && !status->error_status && !status->mbs_in_error;
     snprintf(line, size,
@@ -123,6 +132,7 @@ int run(char *line, size_t size)
              status->error_status, status->cycle_count, crc, kTestLumaCrc);
     return ok ? 0 : -5;
 }
+
 // N3 VP9: libvpx's 160x144 key frame through the plug-in's own method stream and buffer layout (VP9Picture160.h, made
 // by SwitchVideoDecoders/test/vp9_host --selftest), luma CRC against libvpx's decode. Buffers 1 input (status,
 // probability table, tile data), 2 aux (tile sizes, segmentation maps, counters, motion vectors, filter), 3 surface.
@@ -130,7 +140,8 @@ TegraNVDECBlock gVP9Blocks[4];
 
 bool resolveVP9(void *, uint32_t handle, TegraNVDECBlock *block)
 {
-    if (handle < 1 || handle > 3) return false;
+    if (handle < 1 || handle > 3)
+        return false;
     *block = gVP9Blocks[handle];
     return true;
 }
@@ -151,7 +162,8 @@ int runVP9(char *line, size_t size)
     ((uint16_t *)(aux + kVP9TestTilesOff))[0x37a] = 9;  // the tile size table's tail, as the plug-in sets it
     ((uint16_t *)(aux + kVP9TestTilesOff))[0x37b] = 1;
     TegraNVDECSubmit *s = IONewZero(TegraNVDECSubmit, 1);
-    if (!s) return -12;
+    if (!s)
+        return -12;
     s->codec = TEGRA_NVDEC_CODEC_VP9;
     s->setup_bytes = sizeof(kVP9TestSetup);
     memcpy(s->setup, kVP9TestSetup, sizeof(kVP9TestSetup));
@@ -196,6 +208,7 @@ int runVP9(char *line, size_t size)
              kVP9TestLumaCrc, ok ? "" : "; VP9 stays off, H.264 is unaffected");
     return ok ? 0 : -5;
 }
+
 // N3 HEVC: x265's 176x144 IDR (CTU 16) through the plug-in's own method stream and buffer layout (HEVCPicture176.h,
 // made by SwitchVideoDecoders/test/hevc_host --selftest), luma CRC against FFmpeg's decode. Buffers 1 aux (colocated
 // motion, filter), 2 input (status, tile sizes, scaling lists, bitstream), 3 surface; every picture slot names it.
@@ -203,7 +216,8 @@ TegraNVDECBlock gHEVCBlocks[4];
 
 bool resolveHEVC(void *, uint32_t handle, TegraNVDECBlock *block)
 {
-    if (handle < 1 || handle > 3) return false;
+    if (handle < 1 || handle > 3)
+        return false;
     *block = gHEVCBlocks[handle];
     return true;
 }
@@ -218,7 +232,8 @@ int runHEVC(char *line, size_t size)
     }
     memcpy(gHEVCBlocks[2].va + kHEVCTestInputOff, kHEVCTestInput, sizeof(kHEVCTestInput));
     TegraNVDECSubmit *s = IONewZero(TegraNVDECSubmit, 1);
-    if (!s) return -12;
+    if (!s)
+        return -12;
     s->codec = TEGRA_NVDEC_CODEC_HEVC;
     s->setup_bytes = sizeof(kHEVCTestSetup);
     memcpy(s->setup, kHEVCTestSetup, sizeof(kHEVCTestSetup));
@@ -271,7 +286,8 @@ extern "C" int tegra_nvdec_self_test_hevc(void)
     const int ret = runHEVC(line, sizeof(line));
     IOLog("TegraNVDEC: %s\n", line);
     if (ret != -60)
-        for (int i = 1; i <= 3; i++) tegra_nvdec_arena_free(&gHEVCBlocks[i]);
+        for (int i = 1; i <= 3; i++)
+            tegra_nvdec_arena_free(&gHEVCBlocks[i]);
     return ret;
 }
 
@@ -282,7 +298,8 @@ extern "C" int tegra_nvdec_self_test_vp9(void)
     const int ret = runVP9(line, sizeof(line));
     IOLog("TegraNVDEC: %s\n", line);
     if (ret != -60)
-        for (int i = 1; i <= 3; i++) tegra_nvdec_arena_free(&gVP9Blocks[i]);
+        for (int i = 1; i <= 3; i++)
+            tegra_nvdec_arena_free(&gVP9Blocks[i]);
     return ret;
 }
 
@@ -293,6 +310,7 @@ extern "C" int tegra_nvdec_self_test(void)
     const int ret = run(line, sizeof(line));
     IOLog("TegraNVDEC: %s\n", line);
     if (ret != -60)  // a job still in the engine keeps its buffers
-        for (int i = kInput; i <= kSurface; i++) tegra_nvdec_arena_free(&gBlocks[i]);
+        for (int i = kInput; i <= kSurface; i++)
+            tegra_nvdec_arena_free(&gBlocks[i]);
     return ret;
 }

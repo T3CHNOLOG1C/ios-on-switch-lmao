@@ -30,6 +30,7 @@ struct awdl_writer {
     size_t size, at, tlv;
     int overflow;
 };
+
 void awdl_put16(uint8_t *p, uint16_t v);
 void awdl_put32(uint8_t *p, uint32_t v);
 int awdl_w_begin(struct awdl_writer *w, uint8_t type);
@@ -81,7 +82,13 @@ struct awdl_core {
     uint8_t pushed_role, pushed_parent[6], pushed_root[6];
     uint8_t scratch[AWDL_MAX_FRAME];
 };
-enum { AWDL_N_OFF, AWDL_N_CREATING, AWDL_N_UP };
+
+enum {
+    AWDL_N_OFF,
+    AWDL_N_CREATING,
+    AWDL_N_UP
+};
+
 #define AWDL_CREATE_TIMEOUT_US 2000000u  // the series' BRCMF_AWDL_IF_TIMEOUT
 #define AWDL_AFTX_DELAY_US     500000u
 #define AWDL_SETTLE_DELAY_US   5000000u

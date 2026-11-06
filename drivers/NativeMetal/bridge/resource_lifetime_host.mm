@@ -18,40 +18,48 @@ struct State {
 
 int main(int argc, char **argv)
 {
-    if (argc != 3) return 2;
+    if (argc != 3)
+        return 2;
     @autoreleasepool {
         id<MTLDevice> device = native_bridge_metal_open(argv[1], argv[2], 0x6e6d62, nullptr);
-        if (!device) return 2;
+        if (!device)
+            return 2;
         unsigned failures = 0;
         size_t airBytes = 0;
         const void *air = nmb_fixture_air(&airBytes);
         id<MTLLibrary> library = native_bridge_metal_library_with_air(air, airBytes);
         id<MTLComputePipelineState> pipeline =
             [device newComputePipelineStateWithFunction:[library newFunctionWithName:@"scale_and_offset"] error:nil];
-        if (!pipeline) return 2;
+        if (!pipeline)
+            return 2;
         for (unsigned variant = 0; variant < 7; ++variant) {
             auto state = std::make_shared<State>();
             const size_t page = (size_t)getpagesize();
             void *pages = mmap(nullptr, page, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
-            if (pages == MAP_FAILED) return 2;
+            if (pages == MAP_FAILED)
+                return 2;
             memset(pages, variant == 6 ? 0xcc : 0x5a, page);
             if (variant == 5)
-                for (unsigned i = 0; i < 256; ++i) ((float *)pages)[i] = (float)i;
+                for (unsigned i = 0; i < 256; ++i)
+                    ((float *)pages)[i] = (float)i;
             id<MTLBuffer> output = [device newBufferWithLength:4096 options:MTLResourceStorageModeShared];
             id<MTLSharedEvent> event = [device newSharedEvent];
             id<MTLCommandBuffer> commands = [[device newCommandQueue] commandBuffer];
             __weak id weakBuffer;
-            if (!output || !event || !commands) return 2;
+            if (!output || !event || !commands)
+                return 2;
             @autoreleasepool {
                 // Deliberately keep the mapping owned by the test, so the old
                 // early-deallocator failure cannot make the pending GPU read
                 // unmapped memory. No pixel or GPU completion is synthesized.
-                id<MTLBuffer> buffer =
-                    [device newBufferWithBytesNoCopy:pages
-                                              length:page
-                                             options:MTLResourceStorageModeShared
-                                         deallocator:^(void *, NSUInteger) { state->released.fetch_add(1); }];
-                if (!buffer) return 2;
+                id<MTLBuffer> buffer = [device newBufferWithBytesNoCopy:pages
+                                                                 length:page
+                                                                options:MTLResourceStorageModeShared
+                                                            deallocator:^(void *, NSUInteger) {
+                                                                state->released.fetch_add(1);
+                                                            }];
+                if (!buffer)
+                    return 2;
                 weakBuffer = buffer;
                 [commands encodeWaitForEvent:event value:1];
                 if (variant == 5) {
@@ -73,7 +81,8 @@ int main(int argc, char **argv)
                     id<MTLTexture> root = [buffer newTextureWithDescriptor:d offset:0 bytesPerRow:256];
                     id<MTLTexture> view = [[root newTextureViewWithPixelFormat:MTLPixelFormatRGBA8Unorm]
                         newTextureViewWithPixelFormat:MTLPixelFormatRGBA8Unorm];
-                    if (!view) return 2;
+                    if (!view)
+                        return 2;
                     if (variant == 6) {
                         auto pass = [MTLRenderPassDescriptor renderPassDescriptor];
                         pass.colorAttachments[0].texture = view;
@@ -98,7 +107,8 @@ int main(int argc, char **argv)
                     }
                 } else {
                     id<MTLBlitCommandEncoder> blit = [commands blitCommandEncoder];
-                    if (variant == 2) [blit fillBuffer:buffer range:NSMakeRange(0, 1024) value:0x37];
+                    if (variant == 2)
+                        [blit fillBuffer:buffer range:NSMakeRange(0, 1024) value:0x37];
                     [blit copyFromBuffer:buffer sourceOffset:0 toBuffer:output destinationOffset:0 size:1024];
                     id<MTLBuffer> missing = nil;
                     if (variant == 3)
@@ -107,7 +117,8 @@ int main(int argc, char **argv)
                 }
             }
             const unsigned before = state->released.load();
-            if (before || !weakBuffer) ++failures;
+            if (before || !weakBuffer)
+                ++failures;
             unsigned pending = before;
             if (variant != 4) {
                 [commands commit];
@@ -124,7 +135,8 @@ int main(int argc, char **argv)
                 const bool early =
                     dispatch_semaphore_wait(finished, dispatch_time(DISPATCH_TIME_NOW, 100 * NSEC_PER_MSEC)) == 0;
                 pending = state->released.load();
-                if (variant != 3 && (early || pending || !weakBuffer)) ++failures;
+                if (variant != 3 && (early || pending || !weakBuffer))
+                    ++failures;
                 event.signaledValue = 1;
                 if (!early && dispatch_semaphore_wait(finished, dispatch_time(DISPATCH_TIME_NOW, 3 * NSEC_PER_SEC)))
                     return 1;
@@ -142,13 +154,16 @@ int main(int argc, char **argv)
                             break;
                         }
                     }
-                if (state->released.load() != 1 || weakBuffer) ++failures;  // even while commands remains retained
+                if (state->released.load() != 1 || weakBuffer)
+                    ++failures;  // even while commands remains retained
             }
             commands = nil;
             // The real completion callback can release its own reference just
             // after waitUntilCompleted returns. Bound that scheduling margin.
-            for (unsigned i = 0; i < 300 && state->released.load() == 0; ++i) usleep(1000);
-            if (state->released.load() != 1 || weakBuffer) ++failures;
+            for (unsigned i = 0; i < 300 && state->released.load() == 0; ++i)
+                usleep(1000);
+            if (state->released.load() != 1 || weakBuffer)
+                ++failures;
             std::printf("case %u before=%u pending=%u released=%u\n", variant, before, pending, state->released.load());
             munmap(pages, page);
         }

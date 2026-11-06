@@ -34,6 +34,7 @@
 #include <vector>
 #include "NativeBridgeMetalFrontend.h"
 #include "bridge/NativeMetalObjects.h"
+
 static void missing(const char *cls, const char *sel)
 {
     fprintf(stderr, "MISSING -[%s %s]\n", cls, sel);
@@ -45,8 +46,10 @@ static std::vector<std::string> split(const std::string &s, const std::string &b
     size_t at = 0;
     while (at <= s.size()) {
         size_t e = s.find(by, at);
-        if (e == std::string::npos) e = s.size();
-        if (e > at) out.push_back(s.substr(at, e - at));
+        if (e == std::string::npos)
+            e = s.size();
+        if (e > at)
+            out.push_back(s.substr(at, e - at));
         at = e + by.size();
     }
     return out;
@@ -58,7 +61,8 @@ static MTLFunctionConstantValues *constants(const std::vector<std::string> &item
     MTLFunctionConstantValues *v = [MTLFunctionConstantValues new];
     for (const std::string &item : items) {
         size_t a = item.rfind(':'), b = a == std::string::npos ? a : item.rfind(':', a - 1);
-        if (a == std::string::npos || b == std::string::npos) continue;
+        if (a == std::string::npos || b == std::string::npos)
+            continue;
         std::string name = item.substr(0, b), type = item.substr(b + 1, a - b - 1), hex = item.substr(a + 1);
         uint8_t bytes[64] = {};
         for (size_t i = 0; i + 1 < hex.size() && i / 2 < sizeof bytes; i += 2)
@@ -95,11 +99,14 @@ static std::string unescape(const std::string &token)
 static std::string hostFile(const std::string &id)
 {
     std::string path = unescape(id);
-    if (path.rfind("/System/Cryptexes/OS/", 0) == 0) path = path.substr(20);
+    if (path.rfind("/System/Cryptexes/OS/", 0) == 0)
+        path = path.substr(20);
     if (path.rfind("/var/", 0) == 0)
         path = "/private" + path;  // the store keeps the Data volume's paths as /private/var
-    if (path.empty() || path == kQuartzCore) return gQuartzCore;
-    if (path.rfind("data:", 0) == 0) return gStore + "/data/" + path.substr(5) + ".metallib";
+    if (path.empty() || path == kQuartzCore)
+        return gQuartzCore;
+    if (path.rfind("data:", 0) == 0)
+        return gStore + "/data/" + path.substr(5) + ".metallib";
     return gStore + "/root" + path;
 }
 
@@ -107,18 +114,22 @@ struct Library {
     id<MTLLibrary> library;
     std::set<std::string> names;
 };
+
 static std::map<std::string, Library> gLibraries;  // by host file; nil library: none there, or the frontend refused it
 
 static Library &library(const std::string &file)
 {
     auto found = gLibraries.find(file);
-    if (found != gLibraries.end()) return found->second;
+    if (found != gLibraries.end())
+        return found->second;
     Library &l = gLibraries[file];
     NSError *error = nil;
     if (access(file.c_str(), R_OK) == 0) {
         l.library = [gDevice newLibraryWithURL:[NSURL fileURLWithPath:@(file.c_str())] error:&error];
-        if (!l.library) fprintf(stderr, "library %s: %s\n", file.c_str(), error.localizedDescription.UTF8String);
-        for (NSString *name in l.library.functionNames) l.names.insert(name.UTF8String);
+        if (!l.library)
+            fprintf(stderr, "library %s: %s\n", file.c_str(), error.localizedDescription.UTF8String);
+        for (NSString *name in l.library.functionNames)
+            l.names.insert(name.UTF8String);
     }
     return l;
 }
@@ -130,11 +141,13 @@ struct Stage {
     bool specialized = false;
     std::vector<std::string> constants;
 };
+
 static Stage stage(const std::string &text)
 {
     Stage s;
     std::vector<std::string> tokens = split(text);
-    if (tokens.empty()) return s;
+    if (tokens.empty())
+        return s;
     s.name = tokens[0];
     std::string id;
     for (size_t i = 1; i < tokens.size(); i++)
@@ -150,18 +163,28 @@ static Stage stage(const std::string &text)
 }
 
 // What became of a line, counted per library (the vertex function's, the kernel's) and kind.
-enum Outcome { Made, Refused, NoLibrary, NoFunction };
+enum Outcome {
+    Made,
+    Refused,
+    NoLibrary,
+    NoFunction
+};
+
 struct Counts {
     unsigned made = 0, refused = 0, skipped = 0;
 };
+
 static std::map<std::string, std::map<char, Counts>> gCounts;
 static bool gQuartzCoreRefused = false;
+
 static void count(const std::string &file, char kind, Outcome outcome, const std::string &what, NSError *error,
                   bool derived)
 {
     Counts &c = gCounts[file][kind];
-    if (outcome == Made) c.made++;
-    if (outcome == NoLibrary || outcome == NoFunction) c.skipped++;
+    if (outcome == Made)
+        c.made++;
+    if (outcome == NoLibrary || outcome == NoFunction)
+        c.skipped++;
     if (outcome == Refused) {
         c.refused++;
         gQuartzCoreRefused = gQuartzCoreRefused || (file == gQuartzCore && !derived);
@@ -198,7 +221,8 @@ static id<MTLFunction> function(const Stage &s, Outcome &outcome, NSError **erro
 static Outcome renderState(const std::string &line, std::string &file, std::string &label, NSError **why)
 {
     std::vector<std::string> parts = split(line, " | ");
-    if (parts.size() < 3 || parts[1].rfind("v ", 0) != 0 || parts[2].rfind("f ", 0) != 0) return Refused;
+    if (parts.size() < 3 || parts[1].rfind("v ", 0) != 0 || parts[2].rfind("f ", 0) != 0)
+        return Refused;
     Stage v = stage(parts[1].substr(2)), f = stage(parts[2].substr(2));
     file = v.file;
     MTLRenderPipelineDescriptor *d = [MTLRenderPipelineDescriptor new];
@@ -207,7 +231,8 @@ static Outcome renderState(const std::string &line, std::string &file, std::stri
     for (const std::string &h : split(parts[0])) {
         if (h.rfind("label=", 0) == 0) {
             label = h.substr(6);
-            if (label != "-") d.label = @(label.c_str());
+            if (label != "-")
+                d.label = @(label.c_str());
         } else if (h.rfind("samples=", 0) == 0)
             d.rasterSampleCount = strtoul(h.c_str() + 8, nullptr, 10);
         else if (h.rfind("topo=", 0) == 0)
@@ -240,7 +265,8 @@ static Outcome renderState(const std::string &line, std::string &file, std::stri
             if (sscanf(h.c_str(), "a%u=%u:%u:%u:%u:%u:%u", &i, x, x + 1, x + 2, x + 3, x + 4, x + 5) != 7 || i >= 31 ||
                 x[2] >= 31)
                 continue;
-            if (!vd) vd = [MTLVertexDescriptor vertexDescriptor];
+            if (!vd)
+                vd = [MTLVertexDescriptor vertexDescriptor];
             vd.attributes[i].format = (MTLVertexFormat)x[0];
             vd.attributes[i].offset = x[1];
             vd.attributes[i].bufferIndex = x[2];
@@ -253,7 +279,8 @@ static Outcome renderState(const std::string &line, std::string &file, std::stri
     Outcome outcome = Made;
     NSError *error = nil;
     d.vertexFunction = function(v, outcome, &error);
-    if (f.name != "-" && outcome == Made) d.fragmentFunction = function(f, outcome, &error);
+    if (f.name != "-" && outcome == Made)
+        d.fragmentFunction = function(f, outcome, &error);
     if (outcome != Made) {
         *why = error;
         return outcome;
@@ -275,19 +302,24 @@ static Outcome computeState(const std::string &line, std::string &file, std::str
     std::map<std::string, std::string> fields;
     for (const std::string &h : split(parts.empty() ? std::string() : parts[0])) {
         size_t eq = h.find('=');
-        if (eq != std::string::npos) fields[h.substr(0, eq)] = h.substr(eq + 1);
+        if (eq != std::string::npos)
+            fields[h.substr(0, eq)] = h.substr(eq + 1);
     }
     label = fields.count("label") ? unescape(fields["label"]) : "-";
     std::vector<Stage> linked, hidden;
     Stage kernel;
     for (size_t i = 1; i < parts.size(); i++) {
         const std::string &p = parts[i];
-        if (p.rfind("k ", 0) == 0) kernel = stage(p.substr(2));
-        if (p.rfind("l ", 0) == 0) linked.push_back(stage(p.substr(2)));
-        if (p.rfind("p ", 0) == 0) hidden.push_back(stage(p.substr(2)));
+        if (p.rfind("k ", 0) == 0)
+            kernel = stage(p.substr(2));
+        if (p.rfind("l ", 0) == 0)
+            linked.push_back(stage(p.substr(2)));
+        if (p.rfind("p ", 0) == 0)
+            hidden.push_back(stage(p.substr(2)));
     }
     file = kernel.file;
-    if (kernel.name.empty()) return Refused;
+    if (kernel.name.empty())
+        return Refused;
     Outcome outcome = Made;
     NSError *error = nil;
     id<MTLFunction> k = function(kernel, outcome, &error);
@@ -302,7 +334,8 @@ static Outcome computeState(const std::string &line, std::string &file, std::str
     else {
         MTLComputePipelineDescriptor *d = [MTLComputePipelineDescriptor new];
         d.computeFunction = k;
-        if (label != "-") d.label = @(label.c_str());
+        if (label != "-")
+            d.label = @(label.c_str());
         d.maxTotalThreadsPerThreadgroup = strtoul(fields["max"].c_str(), nullptr, 10);
         d.threadGroupSizeIsMultipleOfThreadExecutionWidth = fields["tgm"] == "1";
         d.supportIndirectCommandBuffers = fields["icb"] == "1";
@@ -316,7 +349,8 @@ static Outcome computeState(const std::string &line, std::string &file, std::str
              std::vector<std::pair<std::vector<Stage> *, NSMutableArray *>>{{&linked, visible}, {&hidden, private_}})
             for (const Stage &s : *stages) {
                 id<MTLFunction> f = function(s, outcome, &error);
-                if (outcome != Made) return outcome;
+                if (outcome != Made)
+                    return outcome;
                 [into addObject:f];
             }
         if (visible.count || private_.count) {
@@ -331,17 +365,20 @@ static Outcome computeState(const std::string &line, std::string &file, std::str
         fprintf(stderr, "compute state %s %s: %s\n", kernel.name.c_str(), label.c_str(),
                 error.localizedDescription.UTF8String);
         *why = error;
-        if (label == "-") label = kernel.name;
+        if (label == "-")
+            label = kernel.name;
         return Refused;
     }
-    if (made) *made = state;
+    if (made)
+        *made = state;
     return Made;
 }
 
 // One dispatch of `state` with nothing bound, committed and waited for: it makes the VkPipeline of each region the shape names
 // (the threadgroup size is a specialization; dispatchThreads adds an edge region per axis with a remainder), which only a dispatch
 // makes, and m2v writes its driver record as the device's first dispatch of that shape would.
-static bool dispatchShape(id<MTLComputePipelineState> state, const unsigned group[3], const unsigned edge[3], bool threads)
+static bool dispatchShape(id<MTLComputePipelineState> state, const unsigned group[3], const unsigned edge[3],
+                          bool threads)
 {
     static id<MTLCommandQueue> queue = [gDevice newCommandQueue];
     id<MTLCommandBuffer> buffer = [queue commandBuffer];
@@ -364,13 +401,13 @@ static Outcome dispatchLine(const std::string &line, std::string &file, std::str
 {
     const size_t bar = line.find(" | ");
     unsigned group[3] = {}, edge[3] = {}, threads = 0;
-    if (bar == std::string::npos ||
-        sscanf(line.c_str(), "D ok=1 tg=%u,%u,%u edge=%u,%u,%u threads=%u", group, group + 1, group + 2, edge, edge + 1,
-               edge + 2, &threads) != 7)
+    if (bar == std::string::npos || sscanf(line.c_str(), "D ok=1 tg=%u,%u,%u edge=%u,%u,%u threads=%u", group,
+                                           group + 1, group + 2, edge, edge + 1, edge + 2, &threads) != 7)
         return Refused;
     id<MTLComputePipelineState> state = nil;
     const Outcome outcome = computeState("C ok=1 " + line.substr(bar + 3), file, label, why, &state);
-    if (outcome != Made) return outcome;
+    if (outcome != Made)
+        return outcome;
     return dispatchShape(state, group, edge, threads) ? Made : Refused;
 }
 
@@ -378,10 +415,12 @@ static Outcome dispatchLine(const std::string &line, std::string &file, std::str
 // threadExecutionWidth by maxTotalThreadsPerThreadgroup / threadExecutionWidth, for states no journal gave a D line of.
 static bool gGuessDispatch;
 static unsigned gGuessed, gGuessRefused;
+
 static void guessDispatch(id<MTLComputePipelineState> state)
 {
     const NSUInteger width = state.threadExecutionWidth, most = state.maxTotalThreadsPerThreadgroup;
-    if (!width || most < width) return;
+    if (!width || most < width)
+        return;
     const unsigned group[3] = {(unsigned)width, (unsigned)(most / width), 1}, edge[3] = {};
     (dispatchShape(state, group, edge, false) ? gGuessed : gGuessRefused)++;
 }
@@ -408,7 +447,8 @@ int main(int argc, char **argv)
             return 1;
         }
         gQuartzCore = argv[first + 2];
-        if (!library(gQuartzCore).library) return 1;
+        if (!library(gQuartzCore).library)
+            return 1;
         char rates[1024];
         native_bridge_metal_rates(rates, sizeof rates);  // the replay's rates start here
         const char *progressPath = getenv("PRECOMPILE_PROGRESS");
@@ -439,11 +479,13 @@ int main(int argc, char **argv)
                 std::string line = l.UTF8String ?: "";
                 const char *kinds = "SRCD";
                 const char *kind = line.size() > 2 && line[1] == ' ' ? strchr(kinds, line[0]) : nullptr;
-                if (!kind || line.find(" ok=1 ") == std::string::npos) continue;
+                if (!kind || line.find(" ok=1 ") == std::string::npos)
+                    continue;
                 // Deduplicated by what the line makes: without its time, thread, costs, label and callers.
                 std::string key;
                 for (const std::string &p : split(line, " | "))
-                    if (p.rfind("qc ", 0) != 0) key += p + " | ";
+                    if (p.rfind("qc ", 0) != 0)
+                        key += p + " | ";
                 key = std::regex_replace(key, std::regex(" (t|tid|main|us|cpu|sys|flt|pin|csw|label)=\\S*"), "");
                 if (seen.insert(key).second) {
                     lines[kind - kinds].push_back(line);
@@ -460,7 +502,8 @@ int main(int argc, char **argv)
         double ms[4] = {};
         std::set<std::string> dispatched;  // the states of D lines, which --guess-dispatch leaves alone
         for (const std::string &line : lines[3])
-            if (size_t bar = line.find(" | "); bar != std::string::npos) dispatched.insert(line.substr(bar + 3));
+            if (size_t bar = line.find(" | "); bar != std::string::npos)
+                dispatched.insert(line.substr(bar + 3));
         for (int kind = 0; kind < 4; kind++) {
             const uint64_t began = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
             for (size_t i = 0; i < lines[kind].size(); i++) {
@@ -475,7 +518,8 @@ int main(int argc, char **argv)
                 if (kind == 0) {
                     size_t n = line.find(" name="), k = line.find(" k=", n == std::string::npos ? 0 : n),
                            bar = line.find(" | ", k == std::string::npos ? 0 : k);
-                    if (n == std::string::npos || k == std::string::npos) continue;
+                    if (n == std::string::npos || k == std::string::npos)
+                        continue;
                     size_t lib = line.rfind(" lib=", n);
                     Stage s =
                         stage(line.substr(n + 6, k - n - 6) +
@@ -493,21 +537,24 @@ int main(int argc, char **argv)
                     outcome = computeState(line, file, label, &error, &state);
                     const size_t bar = line.find(" | ");
                     const std::string named = bar == std::string::npos ? line : line.substr(line.find(' ', 2) + 1);
-                    if (state && gGuessDispatch && !dispatched.count(named)) guessDispatch(state);
+                    if (state && gGuessDispatch && !dispatched.count(named))
+                        guessDispatch(state);
                 }
                 count(file, "SRCD"[kind], outcome, label, error, derived[kind][i]);
                 (outcome == Made ? made : outcome == Refused ? refused : skipped)[kind]++;
             }
             ms[kind] = (clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - began) / 1e6;
         }
-        printf("precompile: %u specializations (%u failed) in %.0f ms, %u states (%u refused) in %.0f ms, %u compute "
-               "states (%u refused) in %.0f ms, %u dispatches (%u refused) in %.0f ms, %u guessed (%u refused); skipped "
-               "(library or function not in the store): %u/%u/%u/%u\n",
-               made[0], refused[0], ms[0], made[1], refused[1], ms[1], made[2], refused[2], ms[2], made[3], refused[3],
-               ms[3], gGuessed, gGuessRefused, skipped[0], skipped[1], skipped[2], skipped[3]);
+        printf(
+            "precompile: %u specializations (%u failed) in %.0f ms, %u states (%u refused) in %.0f ms, %u compute "
+            "states (%u refused) in %.0f ms, %u dispatches (%u refused) in %.0f ms, %u guessed (%u refused); skipped "
+            "(library or function not in the store): %u/%u/%u/%u\n",
+            made[0], refused[0], ms[0], made[1], refused[1], ms[1], made[2], refused[2], ms[2], made[3], refused[3],
+            ms[3], gGuessed, gGuessRefused, skipped[0], skipped[1], skipped[2], skipped[3]);
         for (auto &[file, kinds] : gCounts) {
             std::string name = file == gQuartzCore ? "QuartzCore (default)" : file;
-            if (!gStore.empty() && name.rfind(gStore, 0) == 0) name = name.substr(gStore.size() + 1);
+            if (!gStore.empty() && name.rfind(gStore, 0) == 0)
+                name = name.substr(gStore.size() + 1);
             printf("library %-90s", name.c_str());
             for (char kind : std::string("SRCD"))
                 if (kinds.count(kind))
@@ -515,7 +562,8 @@ int main(int argc, char **argv)
                            kinds[kind].skipped);
             printf("%s\n", library(file).library ? "" : " (not in the store)");
         }
-        if (native_bridge_metal_rates(rates, sizeof rates)) printf("rates: %s\n", rates);
+        if (native_bridge_metal_rates(rates, sizeof rates))
+            printf("rates: %s\n", rates);
         return gQuartzCoreRefused ? 1 : 0;
     }
 }

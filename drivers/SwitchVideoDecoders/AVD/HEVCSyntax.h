@@ -27,7 +27,12 @@ enum {
     HEVC_NAL_EOS = 36,
     HEVC_NAL_EOB = 37,
 };
-enum { HEVC_SLICE_B = 0, HEVC_SLICE_P = 1, HEVC_SLICE_I = 2 };
+
+enum {
+    HEVC_SLICE_B = 0,
+    HEVC_SLICE_P = 1,
+    HEVC_SLICE_I = 2
+};
 
 typedef struct {
     uint8_t num_negative, num_positive;  // NumNegativePics, NumPositivePics (at most 16 together)
@@ -103,11 +108,13 @@ typedef struct {
     bool st_rps_from_sps;
     HEVCShortTermRPS st_rps;  // the picture's: the SPS's set it names, or its own
     uint8_t num_lt;           // num_long_term_sps + num_long_term_pics
+
     struct {
         uint16_t poc_lsb;
         bool used, msb_present;
         uint32_t msb_cycle;  // DeltaPocMsbCycleLt (accumulated)
     } lt[32];
+
     uint16_t skip_bits;    // sw_hdr_skip_length: from the end of slice_type to the end of the reference picture syntax
     uint16_t st_rps_bits;  // the slice's own st_ref_pic_set() (0 when the SPS's is used)
 } HEVCSliceHeader;

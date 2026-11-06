@@ -4,26 +4,33 @@
 #include <vector>
 #include "../PersistOverlay.h"
 using namespace persist;
+
 struct Medium {
     std::vector<uint8_t> durable, cache;  // cache holds writes not yet flushed
     std::vector<std::pair<uint64_t, std::vector<uint8_t>>> pending;
     bool fua = false;  // writes after open go straight to the medium (FUA)
     unsigned writes = 0, syncs = 0, failWriteAt = ~0u, failSyncAt = ~0u, reads = 0;
-    explicit Medium(uint64_t blocks) : durable(blocks * kBlock, 0xA5) {}  // never-written medium holds junk, not zeros
+
+    explicit Medium(uint64_t blocks) : durable(blocks * kBlock, 0xA5)
+    {}  // never-written medium holds junk, not zeros
+
     bool read(uint64_t b, uint32_t n, void *d)
     {
         ++reads;
         for (uint32_t i = 0; i < n; ++i) {
             std::vector<uint8_t> v(durable.begin() + (b + i) * kBlock, durable.begin() + (b + i + 1) * kBlock);
             for (auto &p : pending)
-                if (p.first == b + i) v = p.second;
+                if (p.first == b + i)
+                    v = p.second;
             memcpy((uint8_t *)d + i * kBlock, v.data(), kBlock);
         }
         return true;
     }
+
     bool write(uint64_t b, uint32_t n, const void *s)
     {
-        if (writes++ == failWriteAt) return false;
+        if (writes++ == failWriteAt)
+            return false;
         if (fua) {
             for (uint32_t i = 0; i < n; ++i)
                 memcpy(&durable[(b + i) * kBlock], (const uint8_t *)s + i * kBlock, kBlock);
@@ -34,19 +41,28 @@ struct Medium {
                 {b + i, std::vector<uint8_t>((const uint8_t *)s + i * kBlock, (const uint8_t *)s + (i + 1) * kBlock)});
         return true;
     }
+
     bool sync()
     {
-        if (syncs++ == failSyncAt) return false;
-        for (auto &p : pending) memcpy(&durable[p.first * kBlock], p.second.data(), kBlock);
+        if (syncs++ == failSyncAt)
+            return false;
+        for (auto &p : pending)
+            memcpy(&durable[p.first * kBlock], p.second.data(), kBlock);
         pending.clear();
         return true;
     }
-    void powerLoss() { pending.clear(); }  // unflushed writes vanish
+
+    void powerLoss()
+    {
+        pending.clear();
+    }  // unflushed writes vanish
 };
+
 static std::vector<uint8_t> pageOf(uint8_t v)
 {
     return std::vector<uint8_t>(kBlock, v);
 }
+
 int main()
 {
     const uint64_t pages = 65536 + 7;  // forces two bitmap blocks and a ragged last byte
@@ -59,7 +75,9 @@ int main()
     Medium m(windowBlocks(pages));
     const size_t bytes = bitmapBlocks(pages) * kBlock;
     std::vector<uint8_t> bits(bytes);
-    auto fresh = [&] { return std::vector<uint8_t>(bytes); };
+    auto fresh = [&] {
+        return std::vector<uint8_t>(bytes);
+    };
     // Blank medium: read-only open must not write and reports Blank; read-write initialises it.
     {
         Overlay o;
@@ -75,7 +93,8 @@ int main()
            o.writePage(m, pages - 1, pageOf(0x33).data()));
     assert(!o.writePage(m, pages, pageOf(0).data()));
     std::vector<uint8_t> run(8 * kBlock);
-    for (int i = 0; i < 8; ++i) memset(&run[i * kBlock], 0x70 + i, kBlock);
+    for (int i = 0; i < 8; ++i)
+        memset(&run[i * kBlock], 0x70 + i, kBlock);
     assert(o.writeRun(m, 100, 8, run.data()) && o.present == 11);
     assert(!o.writeRun(m, pages - 2, 3, run.data()));  // runs past the end are refused
     {
@@ -86,17 +105,21 @@ int main()
         unsigned seen = 0;
         bool ok = true;
         std::vector<uint8_t> scratch(4 * kBlock);
+
         struct L {
             unsigned *seen;
             bool *ok;
+
             bool operator()(uint64_t i, const uint8_t *p)
             {
                 ++*seen;
                 uint8_t want = i == 0 ? 0x11 : i == 40000 ? 0x22 : i == 65542 ? 0x33 : 0x70 + (i - 100);
-                if (p[0] != want || p[4095] != want) *ok = false;
+                if (p[0] != want || p[4095] != want)
+                    *ok = false;
                 return true;
             }
         } load{&seen, &ok};
+
         assert(r.forEachPresent(m, load, scratch.data(), 4) && seen == 11 && ok);  // 8-page run read in two chunks of 4
         assert(!r.writePage(m, 1, pageOf(9).data()));                              // read-only really is read-only
     }

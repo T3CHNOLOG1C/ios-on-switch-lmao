@@ -42,7 +42,8 @@ inline std::vector<std::array<uint64_t, 4>> Blocks(const char *name)
     const std::vector<uint64_t> words = Words(name);
     std::vector<std::array<uint64_t, 4>> blocks(words.size() / 4);
     for (size_t i = 0; i < blocks.size(); ++i)
-        for (size_t j = 0; j < 4; ++j) blocks[i][j] = words[4 * i + j];
+        for (size_t j = 0; j < 4; ++j)
+            blocks[i][j] = words[4 * i + j];
     return blocks;
 }
 

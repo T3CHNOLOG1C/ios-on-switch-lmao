@@ -94,6 +94,7 @@ bool knobOn(const char *env, bool otherwise)
 extern "C" int sandbox_check(pid_t pid, const char *operation, int type, ...);
 extern "C" const int SANDBOX_CHECK_NO_REPORT;
 constexpr int kSandboxFilterPath = 1, kSandboxFilterGlobalName = 2;  // SANDBOX_FILTER_PATH, SANDBOX_FILTER_GLOBAL_NAME
+
 bool sandboxAllows(const char *operation, int filter, const char *argument)
 {
     return sandbox_check(getpid(), operation, filter | SANDBOX_CHECK_NO_REPORT, argument) == 0;
@@ -121,10 +122,12 @@ bool sandboxMayCreate(const char *dir)
 bool libraryPath(char *path, size_t size)
 {
     Dl_info info = {};
-    if (!dladdr(reinterpret_cast<const void *>(&libraryPath), &info) || !info.dli_fname) return false;
+    if (!dladdr(reinterpret_cast<const void *>(&libraryPath), &info) || !info.dli_fname)
+        return false;
     snprintf(path, size, "%s", info.dli_fname);
     char *slash = strrchr(path, '/');
-    if (!slash) return false;
+    if (!slash)
+        return false;
     snprintf(slash + 1, size - size_t(slash + 1 - path), "libvulkan_nouveau.dylib");
     return access(path, R_OK) == 0;
 }
@@ -137,7 +140,8 @@ void makeDirectories(const char *path)
     for (char *slash = strchr(partial + 1, '/'); slash; slash = strchr(slash + 1, '/')) {
         *slash = 0;
         struct stat st;
-        if (stat(partial, &st) != 0) mkdir(partial, 0700);
+        if (stat(partial, &st) != 0)
+            mkdir(partial, 0700);
         *slash = '/';
     }
     mkdir(partial, 0700);
@@ -151,7 +155,8 @@ bool writable(const char *dir)
     char probe[1100];
     snprintf(probe, sizeof probe, "%s/.probe.%d", dir, getpid());
     const int fd = open(probe, O_WRONLY | O_CREAT | O_EXCL, 0600);
-    if (fd < 0) return false;
+    if (fd < 0)
+        return false;
     const bool wrote = write(fd, "probe", 5) == 5;
     const int failure = errno;
     close(fd);
@@ -164,6 +169,7 @@ bool writable(const char *dir)
 // ("sandbox": its profile, asked without a report; else the probe's errno). A memory-only process never journals, so the seed never
 // gets its states and every launch compiles them again (r7o: com.apple.MapKit.SnapshotService, 14 states, ~2 s a launch).
 char gCacheRefusals[640];
+
 void noteCacheRefusal(const char *dir, const char *why)
 {
     const size_t at = strlen(gCacheRefusals);
@@ -178,16 +184,19 @@ bool systemContainerCache(char *out, size_t size)
 {
     static auto lookup =
         (char *(*)(const char *, uint64_t *))dlsym(RTLD_DEFAULT, "container_system_path_for_identifier");
-    if (!lookup) return false;
+    if (!lookup)
+        return false;
     // A sandbox that refuses containermanagerd (WebKit's GPU process) would refuse each of libsystem_containermanager's six tries.
-    if (!sandboxAllows("mach-lookup", kSandboxFilterGlobalName, "com.apple.containermanagerd.system")) return false;
+    if (!sandboxAllows("mach-lookup", kSandboxFilterGlobalName, "com.apple.containermanagerd.system"))
+        return false;
     char identifier[256];
     CFStringRef bundle = CFBundleGetIdentifier(CFBundleGetMainBundle());
     if (!bundle || !CFStringGetCString(bundle, identifier, sizeof identifier, kCFStringEncodingUTF8))
         snprintf(identifier, sizeof identifier, "com.apple.%s", getprogname());
     uint64_t error = 0;
     char *container = lookup(identifier, &error);
-    if (!container) return false;
+    if (!container)
+        return false;
     snprintf(out, size, "%s/Library/Caches/m2v", container);
     free(container);
     return true;
@@ -207,34 +216,43 @@ unsigned cacheCandidates(char candidates[][512], unsigned most)
 {
     unsigned count = 0;
     auto add = [&](const char *format, const char *a, const char *b) {
-        if (count >= most) return;
+        if (count >= most)
+            return;
         snprintf(candidates[count], 512, format, a, b);
         for (unsigned i = 0; i < count; ++i)
-            if (!strcmp(candidates[i], candidates[count])) return;
+            if (!strcmp(candidates[i], candidates[count]))
+                return;
         if (sandboxMayCreate(candidates[count]))
             ++count;
         else
             noteCacheRefusal(candidates[count], "sandbox");
     };
     char user[512] = {}, temp[512] = {}, container[512] = {};
-    if (!confstr(_CS_DARWIN_USER_CACHE_DIR, user, sizeof user)) user[0] = 0;
+    if (!confstr(_CS_DARWIN_USER_CACHE_DIR, user, sizeof user))
+        user[0] = 0;
     const bool appContainer = strstr(user, "/Containers/Data/") != nullptr;
-    if (user[0] && appContainer) add("%s%s", user, "m2v");
-    if (!appContainer && systemContainerCache(container, sizeof container)) add("%s%s", container, "");
-    if (user[0] && !appContainer) add("%s%s", user, "m2v");
+    if (user[0] && appContainer)
+        add("%s%s", user, "m2v");
+    if (!appContainer && systemContainerCache(container, sizeof container))
+        add("%s%s", container, "");
+    if (user[0] && !appContainer)
+        add("%s%s", user, "m2v");
     const bool haveTemp = confstr(_CS_DARWIN_USER_TEMP_DIR, temp, sizeof temp) != 0;
     for (const char *dir : {haveTemp ? (const char *)temp : nullptr, (const char *)getenv("TMPDIR")}) {
         // <...>/Containers/Data/<kind>/<UUID>/tmp/... -> <...>/Containers/Data/<kind>/<UUID>/Library/Caches/m2v-<process>
         const char *data = dir ? strstr(dir, "/Containers/Data/") : nullptr;
         const char *tmp = data ? strstr(data, "/tmp/") : nullptr;
-        if (!tmp && data && (tmp = strstr(data, "/tmp")) && tmp[4]) tmp = nullptr;  // only a container's own tmp
-        if (!tmp) continue;
+        if (!tmp && data && (tmp = strstr(data, "/tmp")) && tmp[4])
+            tmp = nullptr;  // only a container's own tmp
+        if (!tmp)
+            continue;
         char root[512];
         snprintf(root, sizeof root, "%.*s/Library/Caches/m2v-", (int)(tmp - dir), dir);
         add("%s%s", root, getprogname());
     }
     add("%s%s", "/private/var/tmp/m2v-", getprogname());
-    if (haveTemp) add("%s%s", temp, "m2v");
+    if (haveTemp)
+        add("%s%s", temp, "m2v");
     if (const char *tmpdir = getenv("TMPDIR"); tmpdir && *tmpdir == '/')
         add(tmpdir[strlen(tmpdir) - 1] == '/' ? "%s%s" : "%s/%s", tmpdir, "m2v");
     return count;
@@ -249,22 +267,28 @@ unsigned cacheCandidates(char candidates[][512], unsigned most)
 // when there is no seed this process can read, or the knob is off.
 bool sharedSeed(char *name, size_t size)
 {
-    if (!knobOn("TEGRA_M2V_SEED", true)) return false;
+    if (!knobOn("TEGRA_M2V_SEED", true))
+        return false;
     Dl_info info = {};
-    if (!dladdr(reinterpret_cast<const void *>(&sharedSeed), &info) || !info.dli_fname) return false;
+    if (!dladdr(reinterpret_cast<const void *>(&sharedSeed), &info) || !info.dli_fname)
+        return false;
     char seed[1024], path[1100];
     strlcpy(seed, info.dli_fname, sizeof seed);
     for (int i = 0; i < 2; ++i)  // <Extensions>/TegraGM20BMetal.bundle/TegraGM20BMetal -> <Extensions>
-        if (char *slash = strrchr(seed, '/')) *slash = 0;
+        if (char *slash = strrchr(seed, '/'))
+            *slash = 0;
     strlcat(seed, "/TegraGM20BMetal.m2v-seed/shared", sizeof seed);
     snprintf(path, sizeof path, "%s/SEED", seed);
     // a process whose sandbox may not read the seed never names it (asked without a report)
-    if (!sandboxAllows("file-read-data", kSandboxFilterPath, path)) return false;
+    if (!sandboxAllows("file-read-data", kSandboxFilterPath, path))
+        return false;
     FILE *file = fopen(path, "r");
-    if (!file) return false;
+    if (!file)
+        return false;
     const bool named = fgets(name, int(size), file) != nullptr;
     fclose(file);
-    if (!named) return false;
+    if (!named)
+        return false;
     name[strcspn(name, "\n")] = 0;
     setenv("METAL2VULKAN_SHADER_CACHE_SEED", seed, 0);  // read by the runtime when the device opens
     return true;
@@ -274,10 +298,12 @@ bool sharedSeed(char *name, size_t size)
 bool rawPack(char *path, size_t size)
 {
     Dl_info info = {};
-    if (!dladdr(reinterpret_cast<const void *>(&rawPack), &info) || !info.dli_fname) return false;
+    if (!dladdr(reinterpret_cast<const void *>(&rawPack), &info) || !info.dli_fname)
+        return false;
     strlcpy(path, info.dli_fname, size);
     for (int i = 0; i < 2; ++i)  // <Extensions>/TegraGM20BMetal.bundle/TegraGM20BMetal -> <Extensions>
-        if (char *slash = strrchr(path, '/')) *slash = 0;
+        if (char *slash = strrchr(path, '/'))
+            *slash = 0;
     strlcat(path, "/TegraGM20BMetal.raw/pack.bin", size);
     return access(path, R_OK) == 0;
 }
@@ -291,6 +317,7 @@ bool gRaw;  // the render server's device is the raw facade
 struct FrameRateRange {  // CAFrameRateRange's layout
     float minimum, maximum, preferred;
 };
+
 using SetRange = void (*)(id, SEL, FrameRateRange);
 using SetFps = void (*)(id, SEL, NSInteger);
 SetRange gSetRange;
@@ -315,8 +342,10 @@ bool firstRequest(uint64_t key)
     static unsigned count;
     std::lock_guard<std::mutex> guard(lock);
     for (unsigned i = 0; i < count; i++)
-        if (seen[i] == key) return false;
-    if (count == 8) return false;
+        if (seen[i] == key)
+            return false;
+    if (count == 8)
+        return false;
     seen[count++] = key;
     return true;
 }
@@ -352,10 +381,13 @@ void observedSetFps(id link, SEL cmd, NSInteger fps)
 void observeDisplayLinkRates()
 {
     static std::atomic<bool> done;  // swapped once per process: a second swap would make the observer its own original
-    if (done.exchange(true)) return;
-    if (!strcmp(getprogname(), "backboardd")) return;  // the render server's own display links stay untouched
+    if (done.exchange(true))
+        return;
+    if (!strcmp(getprogname(), "backboardd"))
+        return;  // the render server's own display links stay untouched
     Class cls = objc_getClass("CADisplayLink");
-    if (!cls) return;  // no QuartzCore in this process
+    if (!cls)
+        return;  // no QuartzCore in this process
     if (Method m = class_getInstanceMethod(cls, sel_registerName("setPreferredFrameRateRange:"))) {
         // The original first: a call may land as soon as the method is swapped.
         gSetRange = (SetRange)method_getImplementation(m);
@@ -372,7 +404,8 @@ void observeDisplayLinkRates()
 // Metal process every 5 s; both rates functions measure their own window, so a late tick only makes a longer one.
 void startRates()
 {
-    if (!knobOn("TEGRA_M2V_TELEMETRY", true)) return;
+    if (!knobOn("TEGRA_M2V_TELEMETRY", true))
+        return;
     observeDisplayLinkRates();
     static dispatch_source_t timer;
     timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_global_queue(QOS_CLASS_UTILITY, 0));
@@ -415,19 +448,20 @@ id openDevice(unsigned port)
     static id device;
     static bool tried;
     @synchronized([TegraGM20BMetalDevice class]) {
-        if (tried) return device;
+        if (tried)
+            return device;
         tried = true;
         const bool renderServer = strcmp(getprogname(), "backboardd") == 0;
         // ScreenshotServicesService: PencilKit in the screenshot thumbnail aborts the process without a device (TegraGM20B.cpp).
         if (!renderServer && strcmp(getprogname(), "iconservicesagent") != 0 &&
-            strcmp(getprogname(), "ScreenshotServicesService") != 0 &&
-            !knobOn("TEGRA_GPU_ALL_CLIENTS", true))
+            strcmp(getprogname(), "ScreenshotServicesService") != 0 && !knobOn("TEGRA_GPU_ALL_CLIENTS", true))
             return nil;
         // The raw GM20B path's own setup (its pack, channel and context, the first pool chunk) starts now, beside the m2v device's
         // open below; raw_metal_device_open takes what it made, so the render server's first frame waits for neither twice.
         if (renderServer && !(getenv("TEGRA_RAW_METAL") && strcmp(getenv("TEGRA_RAW_METAL"), "0") == 0)) {
             char pack[1100] = "";
-            if (rawPack(pack, sizeof pack)) raw_metal_prepare(pack, uint64_t(TEGRA_RAW_STACK));
+            if (rawPack(pack, sizeof pack))
+                raw_metal_prepare(pack, uint64_t(TEGRA_RAW_STACK));
         }
         if (!renderServer)
             setenv("NMB_MEMO_MB", "32", 0);  // read by the bridge
@@ -509,7 +543,8 @@ id openDevice(unsigned port)
                 device = nil;
             }
             bridgeNs += clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - bridgeBegan;
-            if (!device && !strstr(nmb_last_error(), "ShaderCache")) break;
+            if (!device && !strstr(nmb_last_error(), "ShaderCache"))
+                break;
         }
         if (!device && (!cache || strstr(nmb_last_error(), "ShaderCache"))) {
             cache = nullptr;
@@ -570,10 +605,13 @@ id openDevice(unsigned port)
 }  // namespace
 
 @implementation TegraGM20BMetalDevice
+
 - (id)initWithAcceleratorPort:(unsigned)port
 {
     self = [super init];
-    if (!self || !port) return nil;
+    if (!self || !port)
+        return nil;
     return openDevice(port);
 }
+
 @end

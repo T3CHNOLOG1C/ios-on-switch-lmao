@@ -39,6 +39,7 @@ enum switch_sensor_source {
     SWITCH_SRC_TCAL,          // the PMU's calibration channel: none here (digital sensors), reports no correction
     SWITCH_SRC_COUNT
 };
+
 #define SWITCH_SOCTHERM_SENSORS 6u  // SWITCH_SRC_SOC_CPU0 .. SWITCH_SRC_SOC_PLLX
 
 struct switch_sensor {
@@ -104,7 +105,8 @@ static inline uint64_t switch_sensors_read_mask(void)
 {
     uint64_t mask = 0;
     for (unsigned i = 0; i < SWITCH_SENSOR_COUNT; ++i)
-        if (!switch_sensors[i].info_only) mask |= 1ull << i;
+        if (!switch_sensors[i].info_only)
+            mask |= 1ull << i;
     return mask;
 }
 
@@ -145,8 +147,10 @@ static inline int switch_sensor_plausible(int32_t milli_c)
 static inline int32_t switch_soctherm_millic(uint32_t readback)
 {
     int32_t t = (int32_t)((readback & 0xff00u) >> 8) * 1000;
-    if (readback & 0x80u) t += 500;
-    if (readback & 0x1u) t = -t;
+    if (readback & 0x80u)
+        t += 500;
+    if (readback & 0x1u)
+        t = -t;
     return t;
 }
 
@@ -163,10 +167,14 @@ static inline uint16_t switch_max17050_talrt(int32_t milli_c)
 {
     int32_t whole = milli_c >= 0 ? (milli_c + 500) / 1000 : -((-milli_c + 500) / 1000);  // nearest
     int32_t hi = whole + 1, lo = whole - 1;
-    if (hi > 127) hi = 127;
-    if (hi < -127) hi = -127;
-    if (lo < -128) lo = -128;
-    if (lo > 126) lo = 126;
+    if (hi > 127)
+        hi = 127;
+    if (hi < -127)
+        hi = -127;
+    if (lo < -128)
+        lo = -128;
+    if (lo > 126)
+        lo = 126;
     return (uint16_t)((uint16_t)(uint8_t)(int8_t)hi << 8 | (uint8_t)(int8_t)lo);
 }
 
@@ -232,7 +240,8 @@ static inline uint32_t switch_tsensor_calib(const struct switch_tsensor_config *
     const int32_t ft = shared->base_ft * 32 + switch_sign_extend32((fuse >> 13) & 0x1fffu, 12);
     const int32_t delta_sens = ft - cp, delta_temp = shared->actual_temp_ft - shared->actual_temp_cp;
     const int32_t mult = (int32_t)(cfg->pdiv * cfg->tsample_ate), div = (int32_t)(cfg->tsample * cfg->pdiv_ate);
-    if (!delta_sens) return 0;
+    if (!delta_sens)
+        return 0;
     int64_t temp = (int64_t)delta_temp * (1ll << 13) * mult;
     int16_t therma = (int16_t)switch_div64_precise(temp, (int32_t)((int64_t)delta_sens * div));
     temp = (int64_t)ft * shared->actual_temp_cp - (int64_t)cp * shared->actual_temp_ft;
@@ -250,6 +259,7 @@ static inline uint32_t switch_tsensor_config0(const struct switch_tsensor_config
 {
     return cfg->tall << 8;
 }
+
 static inline uint32_t switch_tsensor_config1(const struct switch_tsensor_config *cfg)
 {
     return (cfg->tsample - 1) | cfg->tiddq_en << 15 | cfg->ten_count << 24 | 1u << 31;
@@ -266,11 +276,13 @@ static const char *const switch_cltm_keys[SWITCH_CLTM_CONTRIBUTORS] = {
     "AppleARMPerformanceControllerDVDFactor1-upo",
     "AppleARMPerformanceControllerDVDFactor1-lpm",
 };
+
 static inline uint32_t switch_cltm_ceiling(const uint32_t fraction[SWITCH_CLTM_CONTRIBUTORS])
 {
     uint32_t c = 0x10000u;
     for (unsigned i = 0; i < SWITCH_CLTM_CONTRIBUTORS; ++i)
-        if (fraction[i] < c) c = fraction[i];
+        if (fraction[i] < c)
+            c = fraction[i];
     return c;
 }
 

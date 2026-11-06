@@ -16,12 +16,12 @@ namespace switch_ios::test {
 struct RequireFailed {};
 }  // namespace switch_ios::test
 
-#define REQUIRE(...)                                                                                                   \
-    do {                                                                                                               \
-        if (!(__VA_ARGS__)) {                                                                                          \
-            ADD_FAILURE() << "REQUIRE(" #__VA_ARGS__ ") failed";                                                       \
-            throw ::switch_ios::test::RequireFailed();                                                                   \
-        }                                                                                                              \
+#define REQUIRE(...)                                             \
+    do {                                                         \
+        if (!(__VA_ARGS__)) {                                    \
+            ADD_FAILURE() << "REQUIRE(" #__VA_ARGS__ ") failed"; \
+            throw ::switch_ios::test::RequireFailed();           \
+        }                                                        \
     } while (0)
 
 #endif  // SWITCH_BAZEL_TESTING_REQUIRE_H

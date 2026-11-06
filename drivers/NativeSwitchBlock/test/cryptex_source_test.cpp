@@ -22,6 +22,7 @@ const std::string &cryptex()
     static const std::string source = SourceText("../SwitchCryptex.cpp");
     return source;
 }
+
 std::string body(const char *signature)
 {
     return Body(cryptex(), signature);
@@ -74,7 +75,8 @@ TEST(CryptexSource, SmallReadsGoThroughTheCache)
     EXPECT_THAT(issue, HasSubstr("high.priority = kIOStoragePriorityHigh;"));
     EXPECT_THAT(issue, HasSubstr("piece.length / kSdSector, &high, &pieceCompletion)"));
     EXPECT_THAT(issue, HasSubstr("bzero(bytes + done, piece.length);"));
-    for (const char *copy : {"copypv", "memcpy", "writeBytes"}) EXPECT_THAT(issue, Not(HasSubstr(copy)));
+    for (const char *copy : {"copypv", "memcpy", "writeBytes"})
+        EXPECT_THAT(issue, Not(HasSubstr(copy)));
     // The copy: on the thread call, from held windows, without readBytes/writeBytes' flush.
     const std::string copy = body("bool copyOut(Pending *p)");
     EXPECT_THAT(copy, HasSubstr("switchClientCopy(p->buffer, bytes,"));

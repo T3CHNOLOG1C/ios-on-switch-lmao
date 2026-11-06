@@ -22,6 +22,7 @@ static double nowMs()
 {
     return clock_gettime_nsec_np(CLOCK_UPTIME_RAW) / 1e6;
 }
+
 static void missing(const char *c, const char *s)
 {
     std::fprintf(stderr, "missing %s %s\n", c, s);
@@ -70,7 +71,8 @@ int main(int argc, char **argv)
         id<MTLBuffer> zeros = [device newBufferWithLength:65536 options:MTLResourceStorageModeShared];
         unsigned made = 0, refused = 0, n = 0;
         for (NSString *name in names) {
-            if (limit && n >= limit) break;
+            if (limit && n >= limit)
+                break;
             double f0 = nowMs();
             id<MTLFunction> f = [qc newFunctionWithName:name];
             double f1 = nowMs();
@@ -86,7 +88,8 @@ int main(int argc, char **argv)
                 state ? ++made : ++refused;
             } else if (f.functionType == MTLFunctionTypeVertex) {
                 NSString *fragmentName = [name stringByReplacingOccurrencesOfString:@"_vert_" withString:@"_frag_"];
-                if ([fragmentName isEqualToString:name] || ![names containsObject:fragmentName]) continue;
+                if ([fragmentName isEqualToString:name] || ![names containsObject:fragmentName])
+                    continue;
                 ++n;
                 double g0 = nowMs();
                 id<MTLFunction> fragment = [qc newFunctionWithName:fragmentName];
@@ -128,9 +131,11 @@ int main(int argc, char **argv)
         }
         std::sort(pipeline.begin(), pipeline.end());
         double total = 0;
-        for (double v : pipeline) total += v;
+        for (double v : pipeline)
+            total += v;
         double ftotal = 0;
-        for (double v : function) ftotal += v;
+        for (double v : function)
+            ftotal += v;
         if (!pipeline.empty())
             std::printf("SUMMARY pipelines=%zu made=%u refused=%u total=%.0f ms median=%.1f ms p90=%.1f ms max=%.1f ms "
                         "| functions=%zu total=%.0f ms\n",
@@ -139,11 +144,13 @@ int main(int argc, char **argv)
         if (!drawn.empty()) {
             std::sort(drawn.begin(), drawn.end());
             double dt = 0;
-            for (double v : drawn) dt += v;
+            for (double v : drawn)
+                dt += v;
             static char table[8192];
             native_bridge_metal_telemetry(table, sizeof table);
             for (char *line = std::strtok(table, "\n"); line; line = std::strtok(nullptr, "\n"))
-                if (line[0] == 'V' || line[0] == 'W' || line[0] == 'S') std::printf("TELEMETRY %s\n", line);
+                if (line[0] == 'V' || line[0] == 'W' || line[0] == 'S')
+                    std::printf("TELEMETRY %s\n", line);
             std::printf("DRAWS n=%zu total=%.0f ms median=%.1f ms max=%.1f ms\n", drawn.size(), dt,
                         drawn[drawn.size() / 2], drawn.back());
         }

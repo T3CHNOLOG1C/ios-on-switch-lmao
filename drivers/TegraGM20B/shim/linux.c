@@ -39,24 +39,29 @@ void mutex_init(struct mutex *m)
 	m->lck = NULL;
 	lazy(&m->lck, nvxnu_mutex_alloc, nvxnu_mutex_free);
 }
+
 void mutex_destroy(struct mutex *m)
 {
 	if (m->lck)
 		nvxnu_mutex_free(m->lck);
 	m->lck = NULL;
 }
+
 void mutex_lock(struct mutex *m)
 {
 	nvxnu_mutex_lock(lazy(&m->lck, nvxnu_mutex_alloc, nvxnu_mutex_free));
 }
+
 void mutex_unlock(struct mutex *m)
 {
 	nvxnu_mutex_unlock(m->lck);
 }
+
 int mutex_trylock(struct mutex *m)
 {
 	return nvxnu_mutex_trylock(lazy(&m->lck, nvxnu_mutex_alloc, nvxnu_mutex_free));
 }
+
 bool mutex_is_locked(struct mutex *m)
 {
 	if (!mutex_trylock(m))
@@ -86,10 +91,12 @@ void spin_lock_init(spinlock_t *s)
 	s->lck = NULL;
 	lazy(&s->lck, nvxnu_spin_alloc, nvxnu_spin_free);
 }
+
 void spin_lock(spinlock_t *s)
 {
 	nvxnu_spin_lock(lazy(&s->lck, nvxnu_spin_alloc, nvxnu_spin_free));
 }
+
 void spin_unlock(spinlock_t *s)
 {
 	nvxnu_spin_unlock(s->lck);
@@ -100,39 +107,48 @@ void rwlock_init(rwlock_t *l)
 	l->lck = NULL;
 	lazy(&l->lck, nvxnu_rw_alloc, rw_release);
 }
+
 void read_lock(rwlock_t *l)
 {
 	nvxnu_rw_lock_shared(lazy(&l->lck, nvxnu_rw_alloc, rw_release));
 }
+
 void read_unlock(rwlock_t *l)
 {
 	nvxnu_rw_unlock_shared(l->lck);
 }
+
 void write_lock(rwlock_t *l)
 {
 	nvxnu_rw_lock_exclusive(lazy(&l->lck, nvxnu_rw_alloc, rw_release));
 }
+
 void write_unlock(rwlock_t *l)
 {
 	nvxnu_rw_unlock_exclusive(l->lck);
 }
+
 void init_rwsem(struct rw_semaphore *s)
 {
 	s->lck = NULL;
 	lazy(&s->lck, nvxnu_rw_alloc, rw_release);
 }
+
 void down_read(struct rw_semaphore *s)
 {
 	nvxnu_rw_lock_shared(lazy(&s->lck, nvxnu_rw_alloc, rw_release));
 }
+
 void up_read(struct rw_semaphore *s)
 {
 	nvxnu_rw_unlock_shared(s->lck);
 }
+
 void down_write(struct rw_semaphore *s)
 {
 	nvxnu_rw_lock_exclusive(lazy(&s->lck, nvxnu_rw_alloc, rw_release));
 }
+
 void up_write(struct rw_semaphore *s)
 {
 	nvxnu_rw_unlock_exclusive(s->lck);
@@ -164,6 +180,7 @@ static struct {
 	void *dev;
 	unsigned int irq;
 } irq_slot;
+
 static int irq_polling;
 
 int request_irq(unsigned int irq, irq_handler_t h, unsigned long flags, const char *name, void *dev)
@@ -203,10 +220,12 @@ char *kstrdup(const char *s, gfp_t gfp)
 {
 	return s ? kmemdup(s, strlen(s) + 1, gfp) : NULL;
 }
+
 const char *kstrdup_const(const char *s, gfp_t gfp)
 {
 	return kstrdup(s, gfp);
 }
+
 void kfree_const(const void *p)
 {
 	kfree(p);
@@ -787,15 +806,18 @@ struct page *alloc_page(gfp_t gfp)
 {
 	return alloc_pages(gfp, 0);
 }
+
 void __free_pages(struct page *p, unsigned int order)
 {
 	if (p)
 		pool_free(p - pool_pages, 1UL << order);
 }
+
 void __free_page(struct page *p)
 {
 	__free_pages(p, 0);
 }
+
 void *page_address(const struct page *p)
 {
 	return (char *)nvxnu_pool_base_va() + ((p - pool_pages) << PAGE_SHIFT);
@@ -982,16 +1004,19 @@ int sg_alloc_table(struct sg_table *t, unsigned int nents, gfp_t gfp)
 	(void)gfp;
 	return -ENOMEM;
 }
+
 void sg_free_table(struct sg_table *t)
 {
 	(void)t;
 }
+
 void sg_set_page(struct scatterlist *sg, struct page *page, unsigned int len, unsigned int off)
 {
 	sg->page_link = (unsigned long)page;
 	sg->length = len;
 	sg->offset = off;
 }
+
 int dma_map_sgtable(struct device *d, struct sg_table *t, enum dma_data_direction dir,
 		    unsigned long attrs)
 {
@@ -1001,6 +1026,7 @@ int dma_map_sgtable(struct device *d, struct sg_table *t, enum dma_data_directio
 	(void)attrs;
 	return -ENOMEM;
 }
+
 void dma_unmap_sgtable(struct device *d, struct sg_table *t, enum dma_data_direction dir,
 		       unsigned long attrs)
 {
@@ -1014,10 +1040,12 @@ void __iomem *ioremap(phys_addr_t pa, size_t size)
 {
 	return (void __iomem *)nvxnu_ioremap(pa, size, 0);
 }
+
 void __iomem *ioremap_wc(phys_addr_t pa, size_t size)
 {
 	return (void __iomem *)nvxnu_ioremap(pa, size, 1);
 }
+
 void iounmap(volatile void __iomem *va)
 {
 	(void)va; /* BAR mappings live as long as the kernel */

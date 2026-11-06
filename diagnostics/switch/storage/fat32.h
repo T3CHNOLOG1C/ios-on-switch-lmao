@@ -27,6 +27,7 @@ enum switch_fat_error {
     SWITCH_FAT_LIMIT = 8,
     SWITCH_FAT_MIRROR = 9
 };
+
 /* Exactly one absolute 512-byte LBA. Zero means all 512 bytes are valid;
  * nonzero means failure, and the caller discards this sector's buffer. */
 typedef int (*switch_fat_read512)(void *, uint64_t, uint8_t[512]);
@@ -49,10 +50,12 @@ struct switch_fat_volume {
      * clears it; NULL retains the original single-sector callback path. */
     switch_fat_read_sectors read_sectors;
 };
+
 struct switch_fat_file {
     const struct switch_fat_volume *volume;
     uint32_t generation, first_cluster, size, clusters;
 };
+
 struct switch_fat_indexed_file {
     struct switch_fat_file file;
     const uint32_t *clusters;
@@ -63,13 +66,13 @@ struct switch_fat_indexed_file {
  * from a trusted block-addressed device qualification, not the BPB or MBR.
  * Failure invalidates the volume; successful remount invalidates old files. */
 int switch_fat_mount(struct switch_fat_volume *, switch_fat_read512, void *, uint64_t capacity_sectors,
-                   uint32_t partition_index);
+                     uint32_t partition_index);
 /* For a caller-validated GPT or other partition table. The caller establishes
  * the slice's identity and integrity; this function bounds it against device
  * capacity and bounds every FAT32 read against the BPB within that slice.
  * BPB_HiddSec is informational and is not used for addressing. */
 int switch_fat_mount_slice(struct switch_fat_volume *, switch_fat_read512, void *, uint64_t capacity_sectors,
-                         uint64_t first_sector, uint64_t sector_count);
+                           uint64_t first_sector, uint64_t sector_count);
 /* Accept /A/B.BIN or A/B.BIN; ASCII case is folded. Reject . and .., empty
  * components, long names and paths beyond the stated limits. Validates the
  * complete file chain and requires exactly ceil(size/cluster_bytes) clusters.
@@ -96,13 +99,13 @@ int switch_fat_lookup_size(struct switch_fat_volume *, const char *, uint32_t *s
  * This protects only the named path's ancestors, not unrelated directory trees.
  */
 int switch_fat_path_directories_exclude(struct switch_fat_volume *, const char *, const uint32_t *sorted_clusters,
-                                      uint32_t count);
+                                        uint32_t count);
 /* Exact bounded read; offset==size is allowed only for length=0. On error,
  * output may have been modified: the caller MUST discard the requested range.
  * Each operation is limited to MAX_CHAIN FAT links and MAX_IO sector reads;
  * each directory scanned is additionally capped at MAX_DIR_SECTORS. */
 int switch_fat_read(struct switch_fat_volume *, const struct switch_fat_file *, uint64_t offset, void *output,
-                  uint32_t length);
+                    uint32_t length);
 /* Exact number of uint32_t cluster entries for a file of this size on a mounted
  * volume. No I/O or allocation. Sets *entries=0 on failure. The caller checks
  * its aggregate byte budget before allocating entries*sizeof(uint32_t). */
@@ -114,12 +117,12 @@ int switch_fat_index_count(const struct switch_fat_volume *, uint32_t size, uint
  * immutable, along with the mounted medium, for every indexed-file use. No
  * allocation or fallback to an unindexed scan occurs. */
 int switch_fat_open_indexed(struct switch_fat_volume *, const char *, struct switch_fat_indexed_file *, uint32_t *map,
-                          uint32_t capacity);
+                            uint32_t capacity);
 /* Same bounds, generation and partial-output contract as read. Cluster lookup
  * is direct; successful reads perform data-sector I/O only, without FAT reads.
  * An optional read_sectors callback combines requested whole sectors across
  * physically contiguous indexed clusters, at most MAX_READ_SECTORS per call.
  * Caller serialization and immutable map/medium ownership are required. */
-int switch_fat_read_indexed(struct switch_fat_volume *, const struct switch_fat_indexed_file *, uint64_t offset, void *output,
-                          uint32_t length);
+int switch_fat_read_indexed(struct switch_fat_volume *, const struct switch_fat_indexed_file *, uint64_t offset,
+                            void *output, uint32_t length);
 #endif

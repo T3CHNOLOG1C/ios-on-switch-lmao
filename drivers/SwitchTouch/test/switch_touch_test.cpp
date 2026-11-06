@@ -39,6 +39,7 @@
 // Every check is a GoogleTest expectation; its message says what was expected.
 #define check(ok, what) EXPECT_TRUE(ok) << (what)
 static std::string format(const char *f, ...) __attribute__((format(printf, 1, 2)));
+
 static std::string format(const char *f, ...)
 {
     char text[512];
@@ -59,11 +60,18 @@ struct Device {
 };
 
 using Event = std::array<uint8_t, 8>;
+
 // A contact event at FTM4 raw (x, y) (the landscape frame, 15..1264 x 15..704) with strength z (gain byte 0: z as is).
 static Event contactEvent(unsigned type, unsigned id, unsigned x, unsigned y, unsigned z = 16)
 {
-    return {(uint8_t)(id << 4 | type), (uint8_t)(x >> 4), (uint8_t)(y >> 4), (uint8_t)((x & 0xf) << 4 | (y & 0xf)),
-            (uint8_t)z, (uint8_t)(z >> 8), 0, 0};
+    return {(uint8_t)(id << 4 | type),
+            (uint8_t)(x >> 4),
+            (uint8_t)(y >> 4),
+            (uint8_t)((x & 0xf) << 4 | (y & 0xf)),
+            (uint8_t)z,
+            (uint8_t)(z >> 8),
+            0,
+            0};
 }
 
 struct Ftm4 : Device {
@@ -76,13 +84,20 @@ struct Ftm4 : Device {
     Event current = {};
     std::vector<std::string> ops;  // "R b6 00 23 x2", "W c3 01"
     std::vector<std::string> errors;
-    bool intLow() const { return intEnabled && !fifo.empty(); }
+
+    bool intLow() const
+    {
+        return intEnabled && !fifo.empty();
+    }
+
     std::string hex() const
     {
         std::string text;
-        for (uint8_t b : command) text += format("%s%02x", text.empty() ? "" : " ", b);
+        for (uint8_t b : command)
+            text += format("%s%02x", text.empty() ? "" : " ", b);
         return text;
     }
+
     void begin(bool read) override
     {
         if (!read) {
@@ -105,12 +120,19 @@ struct Ftm4 : Device {
             errors.push_back("read after unknown command " + hex());
         }
     }
-    void write(uint8_t value) override { command.push_back(value); }
+
+    void write(uint8_t value) override
+    {
+        command.push_back(value);
+    }
+
     uint8_t read() override
     {
         const size_t at = readAt++;
-        if (!out.empty() || command[0] == 0xb6) return at < out.size() ? out[at] : 0;
-        if (command[0] == 0x85 && at >= 8) return 0;
+        if (!out.empty() || command[0] == 0xb6)
+            return at < out.size() ? out[at] : 0;
+        if (command[0] == 0x85 && at >= 8)
+            return 0;
         if (at % 8 == 0) {  // the next event leaves the FIFO as its first byte is read
             current = {};
             if (!fifo.empty()) {
@@ -120,6 +142,7 @@ struct Ftm4 : Device {
         }
         return current[at % 8];
     }
+
     void stop() override
     {
         if (reading) {
@@ -145,10 +168,13 @@ struct Ftm4 : Device {
             errors.push_back("unknown command " + hex());
         }
     }
+
     void scan(const std::vector<Event> &events)
     {
-        if (!sensing) return;
-        for (const Event &e : events) fifo.push_back(e);
+        if (!sensing)
+            return;
+        for (const Event &e : events)
+            fifo.push_back(e);
     }
 };
 
@@ -157,18 +183,30 @@ struct Pmic : Device {
     std::vector<uint8_t> command;
     bool reading = false;
     size_t at = 0;
+
     void begin(bool read) override
     {
         reading = read;
-        if (!read) command.clear();
+        if (!read)
+            command.clear();
         at = 0;
     }
-    void write(uint8_t value) override { command.push_back(value); }
-    uint8_t read() override { return regs[(uint8_t)(command[0] + at++)]; }
+
+    void write(uint8_t value) override
+    {
+        command.push_back(value);
+    }
+
+    uint8_t read() override
+    {
+        return regs[(uint8_t)(command[0] + at++)];
+    }
+
     void stop() override
     {
         if (!reading)
-            for (size_t i = 1; i < command.size(); ++i) regs[(uint8_t)(command[0] + i - 1)] = command[i];
+            for (size_t i = 1; i < command.size(); ++i)
+                regs[(uint8_t)(command[0] + i - 1)] = command[i];
     }
 };
 
@@ -186,6 +224,7 @@ enum : uint32_t {
     BUS_CLEAR_STATUS = 0x88,
     CONFIG_LOAD = 0x8c,
 };
+
 enum : uint32_t {
     INT_RX_REQ = 1u << 0,
     INT_TX_REQ = 1u << 1,
@@ -197,6 +236,7 @@ enum : uint32_t {
     HDR_IE = 1u << 17,
     HDR_READ = 1u << 19,
 };
+
 constexpr uint64_t kBitNs = 2500;  // 400 kHz
 
 void dmaRxChanged(unsigned bus);
@@ -221,25 +261,39 @@ struct Controller {
     unsigned packets = 0, actionsSeen = 0;
     std::vector<std::string> trace;  // per submission: "W3+R2 chained" etc.
 
-    unsigned rxTrigger() const { return ((fifoControl >> 2) & 7) + 1; }
-    unsigned txTrigger() const { return ((fifoControl >> 5) & 7) + 1; }
+    unsigned rxTrigger() const
+    {
+        return ((fifoControl >> 2) & 7) + 1;
+    }
+
+    unsigned txTrigger() const
+    {
+        return ((fifoControl >> 5) & 7) + 1;
+    }
+
     uint32_t status() const
     {
         uint32_t s = latched;
-        if (rx.size() >= rxTrigger()) s |= INT_RX_REQ;
-        if (8 - tx.size() >= txTrigger()) s |= INT_TX_REQ;
+        if (rx.size() >= rxTrigger())
+            s |= INT_RX_REQ;
+        if (8 - tx.size() >= txTrigger())
+            s |= INT_TX_REQ;
         return s;
     }
+
     void later(uint64_t bits, std::function<void()> what)
     {
         const uint64_t g = generation;
         gSchedule(gNow + bits * kBitNs, [this, g, what] {
-            if (g == generation) what();
+            if (g == generation)
+                what();
         });
     }
+
     void kick()
     {
-        if (busy || failed || tx.size() < 3) return;
+        if (busy || failed || tx.size() < 3)
+            return;
         for (uint32_t &h : header) {
             h = tx.front();
             tx.pop_front();
@@ -258,8 +312,11 @@ struct Controller {
         const uint8_t addr = (header[2] >> 1) & 0x7f;
         trace.push_back(format("%c%zu%s%s", reading ? 'R' : 'W', len, header[2] & HDR_REPEAT_START ? "+rs" : "",
                                header[2] & HDR_IE ? "+ie" : ""));
-        later(10, [this, addr] { addressed(addr); });
+        later(10, [this, addr] {
+            addressed(addr);
+        });
     }
+
     void addressed(uint8_t addr)
     {
         auto it = devices.find(addr);
@@ -274,6 +331,7 @@ struct Controller {
         device->begin(reading);
         nextByte();
     }
+
     void nextByte()
     {
         stalled = false;
@@ -296,7 +354,8 @@ struct Controller {
             --txLeft;
             later(9, [this, value] {
                 device->write(value);
-                if (++done == len) txLeft = 0;
+                if (++done == len)
+                    txLeft = 0;
                 nextByte();
             });
         } else {
@@ -318,6 +377,7 @@ struct Controller {
             });
         }
     }
+
     // A packet that ends with a STOP reports its completion after the STOP's bit time (by then a DMA channel has taken
     // the last word, so its end of count comes first); one that ends with REPEAT_START reports at once. gEarlyDone
     // reports every completion at once (the I2C action then runs before the DMA's).
@@ -327,7 +387,8 @@ struct Controller {
         busy = false;
         const bool stop = !(header[2] & HDR_REPEAT_START);
         uint32_t bits = header[2] & HDR_IE ? INT_PACKET_DONE : 0;
-        if (tx.empty() && !gNoAllPackets) bits |= INT_ALL_PACKETS;
+        if (tx.empty() && !gNoAllPackets)
+            bits |= INT_ALL_PACKETS;
         if (stop) {
             held = false;
             device->stop();
@@ -335,12 +396,15 @@ struct Controller {
             held = true;
         }
         if (stop && !gEarlyDone) {
-            later(1, [this, bits] { latched |= bits; });
+            later(1, [this, bits] {
+                latched |= bits;
+            });
         } else {
             latched |= bits;
         }
         kick();
     }
+
     // A flush empties the FIFOs and ends a packet in progress; a bus held after a REPEAT_START packet stays held (the
     // one-packet path flushes between its write and its read, as it did on hardware before r17-touch).
     void flush()
@@ -350,14 +414,20 @@ struct Controller {
         ++generation;
         busy = stalled = failed = false;
     }
+
     uint32_t readReg(uint32_t o)
     {
         switch (o) {
-        case INT_STATUS: return status();
-        case INT_MASK: return intMask;
-        case FIFO_CONTROL: return fifoControl;
-        case FIFO_STATUS: return (uint32_t)rx.size() | (uint32_t)(8 - tx.size()) << 4;
-        case CONFIG_LOAD: return 0;
+        case INT_STATUS:
+            return status();
+        case INT_MASK:
+            return intMask;
+        case FIFO_CONTROL:
+            return fifoControl;
+        case FIFO_STATUS:
+            return (uint32_t)rx.size() | (uint32_t)(8 - tx.size()) << 4;
+        case CONFIG_LOAD:
+            return 0;
         case RX_FIFO: {
             if (rx.empty()) {
                 check(false, format("I2C%u: RX FIFO read while empty", bus));
@@ -365,20 +435,28 @@ struct Controller {
             }
             const uint32_t word = rx.front();
             rx.pop_front();
-            if (stalled && reading) nextByte();
+            if (stalled && reading)
+                nextByte();
             return word;
         }
-        default: return regs[o / 4];
+        default:
+            return regs[o / 4];
         }
     }
+
     void writeReg(uint32_t o, uint32_t v)
     {
         switch (o) {
-        case INT_STATUS: latched &= ~v; break;
-        case INT_MASK: intMask = v; break;
+        case INT_STATUS:
+            latched &= ~v;
+            break;
+        case INT_MASK:
+            intMask = v;
+            break;
         case FIFO_CONTROL:
             fifoControl = v & ~3u;
-            if (v & 3) flush();
+            if (v & 3)
+                flush();
             break;
         case TX_FIFO:
             if (tx.size() >= 8) {
@@ -386,18 +464,22 @@ struct Controller {
                 return;
             }
             tx.push_back(v);
-            if (stalled && !reading) nextByte();
+            if (stalled && !reading)
+                nextByte();
             kick();
             break;
         case BUS_CLEAR_CNFG:
             regs[o / 4] = v & ~1u;
-            if (v & 1) later(9, [this] {
+            if (v & 1)
+                later(9, [this] {
                     latched |= INT_BUS_CLEAR_DONE;
                     regs[BUS_CLEAR_STATUS / 4] = 1;
                 });
             break;
-        case CONFIG_LOAD: break;
-        default: regs[o / 4] = v;
+        case CONFIG_LOAD:
+            break;
+        default:
+            regs[o / 4] = v;
         }
     }
 };
@@ -409,21 +491,34 @@ static uint32_t gIntid[6] = {0, 32 + 38, 32 + 84, 32 + 92, 32 + 120, 32 + 53};
 // --- Memory map -----------------------------------------------------------------------------------------------------
 alignas(64) static uint8_t gI2CSpace[0x2000], gCarSpace[0x1000], gPinmuxSpace[0x1000], gApbMiscSpace[0x1000];
 static uint64_t gMmioOps = 0;
+
 extern "C" vm_offset_t ml_io_map(vm_offset_t pa, vm_size_t)
 {
     switch (pa) {
-    case 0x7000C000: return (vm_offset_t)gI2CSpace;
-    case 0x60006000: return (vm_offset_t)gCarSpace;
-    case 0x70003000: return (vm_offset_t)gPinmuxSpace;
-    case 0x70000000: return (vm_offset_t)gApbMiscSpace;
-    default: check(false, format("ml_io_map of unexpected %#lx", (unsigned long)pa)); return 0;
+    case 0x7000C000:
+        return (vm_offset_t)gI2CSpace;
+    case 0x60006000:
+        return (vm_offset_t)gCarSpace;
+    case 0x70003000:
+        return (vm_offset_t)gPinmuxSpace;
+    case 0x70000000:
+        return (vm_offset_t)gApbMiscSpace;
+    default:
+        check(false, format("ml_io_map of unexpected %#lx", (unsigned long)pa));
+        return 0;
     }
 }
-extern "C" boolean_t preemption_enabled(void) { return true; }
+
+extern "C" boolean_t preemption_enabled(void)
+{
+    return true;
+}
+
 static Controller *controllerAt(uintptr_t at, uint32_t *offset)
 {
     const uintptr_t base = (uintptr_t)gI2CSpace;
-    if (at < base || at >= base + sizeof(gI2CSpace)) return nullptr;
+    if (at < base || at >= base + sizeof(gI2CSpace))
+        return nullptr;
     const uint32_t off = (uint32_t)(at - base);
     for (unsigned bus = 1; bus <= 5; ++bus) {
         if (off >= kControllerBase[bus] && off < kControllerBase[bus] + 0x100) {
@@ -433,22 +528,31 @@ static Controller *controllerAt(uintptr_t at, uint32_t *offset)
     }
     return nullptr;
 }
+
 uint32_t r32(volatile uint8_t *base, uint32_t o)
 {
     ++gMmioOps;
     uint32_t offset = 0;
-    if (Controller *c = controllerAt((uintptr_t)base + o, &offset)) return c->readReg(offset);
+    if (Controller *c = controllerAt((uintptr_t)base + o, &offset))
+        return c->readReg(offset);
     return *(volatile uint32_t *)(base + o);
 }
+
 void w32(volatile uint8_t *base, uint32_t o, uint32_t v)
 {
     ++gMmioOps;
     uint32_t offset = 0;
-    if (Controller *c = controllerAt((uintptr_t)base + o, &offset)) return c->writeReg(offset, v);
+    if (Controller *c = controllerAt((uintptr_t)base + o, &offset))
+        return c->writeReg(offset, v);
     *(volatile uint32_t *)(base + o) = v;
 }
+
 static unsigned gDmaSyncs = 0;
-void dmaSync(const uint8_t *, size_t) { ++gDmaSyncs; }
+
+void dmaSync(const uint8_t *, size_t)
+{
+    ++gDmaSyncs;
+}
 
 // --- APB DMA (TegraAPBDMA.h) ------------------------------------------------------------------------------------------
 struct tegra_apbdma_channel {
@@ -458,6 +562,7 @@ struct tegra_apbdma_channel {
     bool enabled = false, endPending = false;
     uint32_t apb = 0, req = 0, pa = 0, size = 0, moved = 0, interrupts = 0, starts = 0;
 };
+
 static tegra_apbdma_channel gDma[TEGRA_APBDMA_CHANNELS];
 static std::map<uint32_t, uint8_t *> gDmaMemory;  // pa -> buffer
 static bool gDmaBroken = false, gDmaLoseInterrupt = false, gDmaOpenFails = false;
@@ -470,6 +575,7 @@ bool tegra_apbdma_alloc(uint32_t size, tegra_apbdma_buffer *out)
     *out = {va, pa, size, nullptr};
     return true;
 }
+
 tegra_apbdma_channel *tegra_apbdma_open(unsigned channel, IOWorkLoop *, tegra_apbdma_handler handler, void *context,
                                         char *why, size_t whySize)
 {
@@ -482,6 +588,7 @@ tegra_apbdma_channel *tegra_apbdma_open(unsigned channel, IOWorkLoop *, tegra_ap
     gDma[channel].context = context;
     return &gDma[channel];
 }
+
 void tegra_apbdma_start_rx_words(tegra_apbdma_channel *ch, uint32_t apb, unsigned req, uint32_t pa, uint32_t words)
 {
     const uint32_t size = words * 4;
@@ -491,38 +598,52 @@ void tegra_apbdma_start_rx_words(tegra_apbdma_channel *ch, uint32_t apb, unsigne
     *ch = {ch->number, ch->handler, ch->context, true, false, apb, req, pa, size, 0, ch->interrupts, ch->starts + 1};
     dmaRxChanged(3);
 }
+
 uint32_t tegra_apbdma_moved(tegra_apbdma_channel *ch, bool *endPending)
 {
-    if (endPending) *endPending = ch->endPending;
+    if (endPending)
+        *endPending = ch->endPending;
     return ch->moved;
 }
+
 void tegra_apbdma_stop(tegra_apbdma_channel *ch)
 {
     ch->enabled = false;
     ch->endPending = false;
 }
-uint32_t tegra_apbdma_interrupts(tegra_apbdma_channel *ch) { return ch->interrupts; }
+
+uint32_t tegra_apbdma_interrupts(tegra_apbdma_channel *ch)
+{
+    return ch->interrupts;
+}
+
 void tegra_apbdma_describe(tegra_apbdma_channel *ch, char *buffer, size_t size)
 {
     snprintf(buffer, size, "APB DMA ch%u (model) moved %u of %u", ch->number, ch->moved, ch->size);
 }
+
 // The channel takes I2C3's RX words at the 1-word trigger, one request (and 200 ns) per word.
 void dmaRxChanged(unsigned bus)
 {
     tegra_apbdma_channel &ch = gDma[TEGRA_APBDMA_CH_I2C3_RX];
     Controller &c = gControllers[3];
-    if (bus != 3 || !ch.enabled || gDmaBroken) return;
-    if (ch.apb != 0x7000C554 || ch.req != TEGRA_APBDMA_REQ_I2C3) return;  // wrong FIFO or request: nothing moves
-    if (c.rx.size() < c.rxTrigger()) return;
+    if (bus != 3 || !ch.enabled || gDmaBroken)
+        return;
+    if (ch.apb != 0x7000C554 || ch.req != TEGRA_APBDMA_REQ_I2C3)
+        return;  // wrong FIFO or request: nothing moves
+    if (c.rx.size() < c.rxTrigger())
+        return;
     gSchedule(gNow + 200, [] {
         tegra_apbdma_channel &chan = gDma[TEGRA_APBDMA_CH_I2C3_RX];
         Controller &i2c = gControllers[3];
-        if (!chan.enabled || i2c.rx.empty()) return;
+        if (!chan.enabled || i2c.rx.empty())
+            return;
         const uint32_t word = i2c.rx.front();
         i2c.rx.pop_front();
         memcpy(gDmaMemory[chan.pa] + chan.moved, &word, 4);
         chan.moved += 4;
-        if (i2c.stalled && i2c.reading) i2c.nextByte();
+        if (i2c.stalled && i2c.reading)
+            i2c.nextByte();
         if (chan.moved == chan.size) {
             chan.enabled = false;
             if (gDmaLoseInterrupt) {
@@ -539,51 +660,87 @@ void dmaRxChanged(unsigned bus)
 
 // --- GIC, GPIO, HID and power stubs -------------------------------------------------------------------------------
 static std::map<uint32_t, IOService *> gInterruptNubs;
+
 IOService *switch_interrupt_nub(uint32_t intid, bool)
 {
     IOService *&nub = gInterruptNubs[intid];
-    if (!nub) nub = new IOService;
+    if (!nub)
+        nub = new IOService;
     return nub;
 }
+
 void switch_interrupt_describe(uint32_t intid, char *buffer, size_t size)
 {
     snprintf(buffer, size, "GIC model INTID %u", intid);
 }
-bool switch_interrupts_ready(void) { return true; }
-uint32_t switch_interrupt_count(uint32_t) { return 0; }
-int switch_check_after_ms(IOTimerEventSource *timer, uint32_t ms) { return timer->setTimeoutMS(ms); }
+
+bool switch_interrupts_ready(void)
+{
+    return true;
+}
+
+uint32_t switch_interrupt_count(uint32_t)
+{
+    return 0;
+}
+
+int switch_check_after_ms(IOTimerEventSource *timer, uint32_t ms)
+{
+    return timer->setTimeoutMS(ms);
+}
 
 static IOService gTouchNub;
 static int gResetLine = -1;
+
 extern "C" IOService *tegra_gpio_interrupt_nub(unsigned gpio, unsigned trigger)
 {
     check(gpio == TEGRA_GPIO_TOUCH_INT && trigger == TEGRA_GPIO_LEVEL_LOW, "touch INT is PX1, level low");
     return &gTouchNub;
 }
-extern "C" void tegra_gpio_describe(unsigned, char *buffer, size_t size) { snprintf(buffer, size, "PX1 (model)"); }
-extern "C" void tegra_gpio_check_delivery(unsigned, const char *) {}
+
+extern "C" void tegra_gpio_describe(unsigned, char *buffer, size_t size)
+{
+    snprintf(buffer, size, "PX1 (model)");
+}
+
+extern "C" void tegra_gpio_check_delivery(unsigned, const char *)
+{}
+
 extern "C" int tegra_gpio_output(unsigned gpio, int value)
 {
-    if (gpio == TEGRA_GPIO_TOUCH_RESET) gResetLine = value;
+    if (gpio == TEGRA_GPIO_TOUCH_RESET)
+        gResetLine = value;
     return 0;
 }
+
 static unsigned gPerfHints = 0;
-extern "C" void switch_perf_hint(unsigned int) { ++gPerfHints; }
+
+extern "C" void switch_perf_hint(unsigned int)
+{
+    ++gPerfHints;
+}
 
 struct Report {
     SwitchTouchReport report;
     uint64_t stamp, postedAt;
     bool timed;
 };
+
 static std::vector<Report> gReports;
 static bool gTimedPosts = true;
 static uint32_t gEdge = 0;
+
 IOService *switch_hid_create(SwitchHIDKind kind)
 {
     check(kind == kSwitchHIDTouch, "only the touch device");
     return new IOService;
 }
-bool switch_hid_supports_timestamps(IOService *) { return gTimedPosts; }
+
+bool switch_hid_supports_timestamps(IOService *)
+{
+    return gTimedPosts;
+}
+
 IOReturn switch_hid_post(IOService *, const void *report, size_t length)
 {
     check(length == sizeof(SwitchTouchReport), "report size");
@@ -593,6 +750,7 @@ IOReturn switch_hid_post(IOService *, const void *report, size_t length)
     gReports.push_back(r);
     return kIOReturnSuccess;
 }
+
 IOReturn switch_hid_post_at(IOService *, const void *report, size_t length, uint64_t timestamp)
 {
     check(gTimedPosts, "post_at only where timestamps are supported");
@@ -605,7 +763,11 @@ IOReturn switch_hid_post_at(IOService *, const void *report, size_t length, uint
     gReports.push_back(r);
     return kIOReturnSuccess;
 }
-void switch_hid_set_edge_contacts(IOService *, uint32_t contacts) { gEdge = contacts; }
+
+void switch_hid_set_edge_contacts(IOService *, uint32_t contacts)
+{
+    gEdge = contacts;
+}
 
 // --- Interrupt delivery ---------------------------------------------------------------------------------------------
 static Ftm4 gFtm4;
@@ -614,18 +776,21 @@ static IOInterruptEventSource *gTouchSource = nullptr;  // a filter source (this
 static IOFilterInterruptEventSource *gTouchFilter = nullptr;
 static bool gTouchPending = false, gTouchInAction = false;
 static std::vector<uint64_t> gFilterTimes;  // when the touch filter ran (INT reached the "CPU")
+
 struct IrqRecord {
     uint64_t filter, start, end;
     size_t opsBefore, opsAfter, reportsBefore, reportsAfter;
     unsigned i2cActionsBefore, i2cActionsAfter;
 };
+
 static std::vector<IrqRecord> gIrqs;
 
 static unsigned i2cActions(unsigned bus)
 {
     unsigned n = 0;
     for (IOInterruptEventSource *s : IOInterruptEventSource::all) {
-        if (s->provider == gInterruptNubs[gIntid[bus]] || (bus == 3 && !s->provider)) n += s->actions;
+        if (s->provider == gInterruptNubs[gIntid[bus]] || (bus == 3 && !s->provider))
+            n += s->actions;
     }
     return n;
 }
@@ -636,21 +801,26 @@ static void deliver()
         Controller &c = gControllers[bus];
         if (!c.source) {
             for (IOInterruptEventSource *s : IOInterruptEventSource::all) {
-                if (gInterruptNubs.count(gIntid[bus]) && s->provider == gInterruptNubs[gIntid[bus]]) c.source = s;
+                if (gInterruptNubs.count(gIntid[bus]) && s->provider == gInterruptNubs[gIntid[bus]])
+                    c.source = s;
             }
         }
-        if (!c.source || c.deliveryPending || !(c.status() & c.intMask)) continue;
+        if (!c.source || c.deliveryPending || !(c.status() & c.intMask))
+            continue;
         c.deliveryPending = true;
         gSchedule(gNow + gWorkLoopNs, [&c] {
             c.deliveryPending = false;
-            if (c.source->enabled && (c.status() & c.intMask)) c.source->run();
+            if (c.source->enabled && (c.status() & c.intMask))
+                c.source->run();
         });
     }
     if (!gTouchSource) {
         for (IOFilterInterruptEventSource *s : IOFilterInterruptEventSource::filters)
-            if (s->provider == &gTouchNub) gTouchSource = gTouchFilter = s;
+            if (s->provider == &gTouchNub)
+                gTouchSource = gTouchFilter = s;
         for (IOInterruptEventSource *s : IOInterruptEventSource::all)
-            if (!gTouchSource && s->provider == &gTouchNub) gTouchSource = s;
+            if (!gTouchSource && s->provider == &gTouchNub)
+                gTouchSource = s;
     }
     if (gTouchSource && gTouchSource->enabled && !gTouchPending && !gTouchInAction && gFtm4.intLow()) {
         gFilterTimes.push_back(gNow);
@@ -677,7 +847,8 @@ static void fireWatchdog()
 {
     IOTimerEventSource *timer = IOTimerEventSource::last;
     check(timer && timer->armed, "touch watchdog armed");
-    if (!timer) return;
+    if (!timer)
+        return;
     timer->armed = false;
     timer->action(timer->owner, timer);
 }
@@ -686,7 +857,8 @@ static void bringUp()
 {
     gControllers[3].devices[0x49] = &gFtm4;
     gControllers[5].devices[0x3c] = &gPmic;
-    for (unsigned bus = 1; bus <= 5; ++bus) gControllers[bus].bus = bus;
+    for (unsigned bus = 1; bus <= 5; ++bus)
+        gControllers[bus].bus = bus;
     gAfterEvent = deliver;
     gFtm4.fifo.push_back({0x10, 0, 0, 0, 0, 0, 0, 0});  // power-on ready
     check(switch_touch_start() == 0, "switch_touch_start");
@@ -699,12 +871,16 @@ static void bringUp()
 
 static bool logged(const std::string &needle)
 {
-    return std::any_of(gLog.begin(), gLog.end(), [&](const std::string &l) { return l.find(needle) != std::string::npos; });
+    return std::any_of(gLog.begin(), gLog.end(), [&](const std::string &l) {
+        return l.find(needle) != std::string::npos;
+    });
 }
+
 static std::string logLine(const std::string &needle)
 {
     for (const std::string &l : gLog)
-        if (l.find(needle) != std::string::npos) return l;
+        if (l.find(needle) != std::string::npos)
+            return l;
     return "";
 }
 
@@ -740,7 +916,9 @@ static unsigned checkIrqTraffic(size_t fromIrq, unsigned want, const char *what)
                          what, i, ops.size(), ops.empty() ? "" : ops[0].c_str()));
         const unsigned actions = r.i2cActionsAfter - r.i2cActionsBefore;
         most = std::max(most, actions);
-        if (want) check(actions == want, format("%s: interrupt %zu: %u I2C3 interrupt actions (want %u)", what, i, actions, want));
+        if (want)
+            check(actions == want,
+                  format("%s: interrupt %zu: %u I2C3 interrupt actions (want %u)", what, i, actions, want));
     }
     return most;
 }
@@ -755,7 +933,8 @@ static void checkStamps(size_t fromReport, const char *what)
     // Every report carries its interrupt's filter time (or a tick after the previous report of that interrupt).
     for (const IrqRecord &r : gIrqs) {
         for (size_t i = r.reportsBefore; i < r.reportsAfter; ++i) {
-            if (i < fromReport) continue;
+            if (i < fromReport)
+                continue;
             const uint64_t want = r.filter + (i - r.reportsBefore);
             check(gReports[i].timed && gReports[i].stamp == want,
                   format("%s: report %zu stamped %" PRIu64 ", its interrupt's filter ran at %" PRIu64, what, i,
@@ -767,7 +946,8 @@ static void checkStamps(size_t fromReport, const char *what)
 static unsigned downContacts(const SwitchTouchReport &r)
 {
     unsigned n = 0;
-    for (const SwitchTouchSlot &s : r.slot) n += (s.flags & kSwitchTouchTip) ? 1 : 0;
+    for (const SwitchTouchSlot &s : r.slot)
+        n += (s.flags & kSwitchTouchTip) ? 1 : 0;
     return n;
 }
 
@@ -783,8 +963,9 @@ static void scenarioDrag()
     const std::vector<std::string> &trace = gControllers[3].trace;
     check(std::find(trace.begin(), trace.end(), "W3+rs") != trace.end(), "chain's write half: 3 bytes, REPEAT_START");
     for (size_t i = 0; i + 1 < trace.size(); ++i) {
-        if (trace[i] == "W3+rs") check(trace[i + 1].rfind("R", 0) == 0 && trace[i + 1].find("+ie") == std::string::npos,
-                                         "chained read follows its write, no per-packet interrupt");
+        if (trace[i] == "W3+rs")
+            check(trace[i + 1].rfind("R", 0) == 0 && trace[i + 1].find("+ie") == std::string::npos,
+                  "chained read follows its write, no per-packet interrupt");
     }
     const size_t irqsBefore = gIrqs.size(), reportsBefore = gReports.size();
     const unsigned hintsBefore = gPerfHints;
@@ -802,8 +983,8 @@ static void scenarioDrag()
         worst = std::max(worst, gIrqs[i].end - gIrqs[i].filter);
         sum += gIrqs[i].end - gIrqs[i].filter;
     }
-    std::printf("model: 1-finger irq->post mean %" PRIu64 " us, max %" PRIu64 " us\n", sum / (gIrqs.size() - irqsBefore) / 1000,
-                worst / 1000);
+    std::printf("model: 1-finger irq->post mean %" PRIu64 " us, max %" PRIu64 " us\n",
+                sum / (gIrqs.size() - irqsBefore) / 1000, worst / 1000);
     check(worst < 900000, "irq->post under 0.9 ms in the model");
     fireWatchdog();
     const std::string line = logLine("SwitchTouch stats:");
@@ -843,9 +1024,12 @@ static void scenarioFiveFingers(bool dmaWorks)
     checkStamps(reportsBefore, "5-finger drag");
     // DMA: the count read's completion, the event read's, the channel's end of count. PIO: the event read's RX
     // requests on top (10 words, more than the RX FIFO, at the 1-word trigger).
-    const unsigned most = checkIrqTraffic(irqsBefore, dmaWorks ? 3 : 0, dmaWorks ? "5-finger drag, DMA" : "5-finger drag, PIO");
-    std::printf("model: 5-finger %s: up to %u I2C3 interrupt actions per touch interrupt\n", dmaWorks ? "DMA" : "PIO", most);
-    if (!dmaWorks) check(most > 3, "PIO takes RX interrupts for a read beyond the RX FIFO");
+    const unsigned most =
+        checkIrqTraffic(irqsBefore, dmaWorks ? 3 : 0, dmaWorks ? "5-finger drag, DMA" : "5-finger drag, PIO");
+    std::printf("model: 5-finger %s: up to %u I2C3 interrupt actions per touch interrupt\n", dmaWorks ? "DMA" : "PIO",
+                most);
+    if (!dmaWorks)
+        check(most > 3, "PIO takes RX interrupts for a read beyond the RX FIFO");
     // Every 40-byte event read went by DMA (or none did).
     const unsigned starts = gDma[TEGRA_APBDMA_CH_I2C3_RX].starts - startsBefore;
     check(starts == (dmaWorks ? 32u : 0u), format("DMA reads %u", starts));
@@ -869,7 +1053,8 @@ static void scenarioSameBatch()
     check(gIrqs.size() - irqsBefore == 1, "one interrupt");
     check(gReports.size() - reportsBefore == 2, "down and up each get a report");
     if (gReports.size() - reportsBefore == 2) {
-        check(downContacts(gReports[reportsBefore].report) == 1 && downContacts(gReports[reportsBefore + 1].report) == 0,
+        check(downContacts(gReports[reportsBefore].report) == 1 &&
+                  downContacts(gReports[reportsBefore + 1].report) == 0,
               "down, then up");
         check(gReports[reportsBefore + 1].stamp == gReports[reportsBefore].stamp + 1, "the second a tick later");
     }
@@ -881,14 +1066,16 @@ static void scenarioDeepFifo()
     const size_t irqsBefore = gIrqs.size();
     gSchedule(gNow + 1000000, [] {
         std::vector<Event> events;
-        for (unsigned i = 0; i < 40; ++i) events.push_back(contactEvent(i == 0 ? 3 : 5, 0, 100 + i, 100));
+        for (unsigned i = 0; i < 40; ++i)
+            events.push_back(contactEvent(i == 0 ? 3 : 5, 0, 100 + i, 100));
         gFtm4.scan(events);
     });
     gRunUntil(gNow + 30000000);
     check(gIrqs.size() - irqsBefore == 2, format("40 events: two interrupts (got %zu)", gIrqs.size() - irqsBefore));
     check(gFtm4.fifo.empty(), "FIFO drained");
     fireWatchdog();
-    check(logLine("SwitchTouch stats:").find("2 interrupts (0 empty), 2 reports, 40 events (max 32)") != std::string::npos,
+    check(logLine("SwitchTouch stats:").find("2 interrupts (0 empty), 2 reports, 40 events (max 32)") !=
+              std::string::npos,
           "stats: 32 then 8");
 }
 
@@ -900,7 +1087,8 @@ static void scenarioUntimed()
     const size_t before = gReports.size();
     drag(1, 5, 8333333);
     check(gReports.size() - before == 7, "7 reports");
-    for (size_t i = before; i < gReports.size(); ++i) check(!gReports[i].timed, "posted untimed");
+    for (size_t i = before; i < gReports.size(); ++i)
+        check(!gReports[i].timed, "posted untimed");
     fireWatchdog();
     check(logLine("SwitchTouch stats:").find("stamps post") != std::string::npos, "stats: stamps post");
 }
@@ -912,7 +1100,8 @@ static void expectPanic(const std::function<void()> &body, const std::string &ne
         check(false, format("%s: no panic", what));
     } catch (const Panic &p) {
         std::printf("panic: %s\n", p.what());
-        check(std::string(p.what()).find(needle) != std::string::npos, format("%s: panic names it (%s)", what, p.what()));
+        check(std::string(p.what()).find(needle) != std::string::npos,
+              format("%s: panic names it (%s)", what, p.what()));
     }
 }
 
@@ -937,7 +1126,8 @@ static void scenarioDmaFirstLost()
     bringUp();
     const std::string off = logLine("SwitchTouch: I2C3 DMA off for this boot:");
     std::printf("%s\n", off.c_str());
-    check(off.find("its first end of count never reached the CPU (-6)") != std::string::npos, "first EOC lost: one line");
+    check(off.find("its first end of count never reached the CPU (-6)") != std::string::npos,
+          "first EOC lost: one line");
     const size_t before = gReports.size();
     drag(5, 3, 8333333);
     check(gReports.size() - before == 5, "five-finger reads by PIO");
@@ -949,7 +1139,11 @@ static void scenarioDmaLostLater()
     bringUp();
     check(logged("chained reads and DMA on"), "DMA on");
     gDmaLoseInterrupt = true;
-    expectPanic([] { drag(5, 3, 8333333); }, "TegraI2C: I2C3 DMA end of count lost: APB DMA ch4", "lost DMA interrupt");
+    expectPanic(
+        [] {
+            drag(5, 3, 8333333);
+        },
+        "TegraI2C: I2C3 DMA end of count lost: APB DMA ch4", "lost DMA interrupt");
 }
 
 // A controller whose ALL_PACKETS_DONE never comes: the chain check times out (nothing left asserted), one line, and the
@@ -968,7 +1162,8 @@ static void scenarioChainBroken()
     const unsigned most = checkIrqTraffic(irqsBefore, 0, "unchained");
     std::printf("model: unchained 2-finger: up to %u I2C3 interrupt actions per touch interrupt\n", most);
     fireWatchdog();
-    check(logLine("SwitchTouch stats:").find("unchained, 0 DMA reads (DMA off)") != std::string::npos, "stats: unchained");
+    check(logLine("SwitchTouch stats:").find("unchained, 0 DMA reads (DMA off)") != std::string::npos,
+          "stats: unchained");
 }
 
 static void scenarioDmaOpenFails()
@@ -999,7 +1194,8 @@ static std::vector<SwitchTouchReport> scans(unsigned id, const std::vector<std::
     }
     gRunUntil(start + (points.size() + 2) * 8333333);
     std::vector<SwitchTouchReport> out;
-    for (size_t i = before; i < gReports.size(); ++i) out.push_back(gReports[i].report);
+    for (size_t i = before; i < gReports.size(); ++i)
+        out.push_back(gReports[i].report);
     return out;
 }
 
@@ -1016,16 +1212,19 @@ static void scenarioFilter()
     // A tap whose pad creeps 2 raw px (inside the 3 px slop): reported at its first point from touch-down to lift.
     {
         std::vector<std::pair<unsigned, unsigned>> p;
-        for (unsigned i = 0; i < 10; ++i) p.push_back({600, 400 + std::min(i, 2u)});
+        for (unsigned i = 0; i < 10; ++i)
+            p.push_back({600, 400 + std::min(i, 2u)});
         const auto r = scans(0, p);
         check(r.size() == 2, format("tap inside the slop: down and up only (%zu reports)", r.size()));
         if (r.size() == 2)
-            check(r[0].slot[0].x == r[1].slot[0].x && r[0].slot[0].y == r[1].slot[0].y, "tap inside the slop: no travel");
+            check(r[0].slot[0].x == r[1].slot[0].x && r[0].slot[0].y == r[1].slot[0].y,
+                  "tap inside the slop: no travel");
     }
     // One that creeps 8 raw px: out of the slop, then exactly where the finger is (no offset carried).
     {
         std::vector<std::pair<unsigned, unsigned>> p;
-        for (unsigned i = 0; i < 10; ++i) p.push_back({600, 400 + 2 * std::min(i, 4u)});
+        for (unsigned i = 0; i < 10; ++i)
+            p.push_back({600, 400 + 2 * std::min(i, 4u)});
         const auto r = scans(1, p);
         const auto want = reported(600, 408);
         check(r.size() > 2, format("creeping tap: its motion is reported (%zu reports)", r.size()));
@@ -1036,7 +1235,8 @@ static void scenarioFilter()
     // A finger held still with 1-2 px of jitter: nothing after touch-down until the lift.
     {
         std::vector<std::pair<unsigned, unsigned>> p;
-        for (unsigned i = 0; i < 20; ++i) p.push_back({700 + (i % 3), 300 + ((i * 7) % 2)});
+        for (unsigned i = 0; i < 20; ++i)
+            p.push_back({700 + (i % 3), 300 + ((i * 7) % 2)});
         const auto r = scans(2, p);
         check(r.size() == 2, format("jittering hold: down and up only (%zu reports)", r.size()));
     }
@@ -1044,7 +1244,8 @@ static void scenarioFilter()
     // the finger is.
     {
         std::vector<std::pair<unsigned, unsigned>> p;
-        for (unsigned i = 0; i < 30; ++i) p.push_back({800, 300 + 3 * i});
+        for (unsigned i = 0; i < 30; ++i)
+            p.push_back({800, 300 + 3 * i});
         const auto r = scans(3, p);
         check(r.size() == 31, format("slow drag: every scan reported (%zu reports)", r.size()));
         int last = r.empty() ? 0 : r[0].slot[3].x, worst = 0;
@@ -1054,8 +1255,8 @@ static void scenarioFilter()
         }
         check(worst <= 4, format("slow drag: largest step %d px", worst));
         const auto want = reported(800, 300 + 3 * 29);
-        check(r.back().slot[3].x == want.first, format("slow drag: ends at the finger (%d, want %d)", r.back().slot[3].x,
-                                                       want.first));
+        check(r.back().slot[3].x == want.first,
+              format("slow drag: ends at the finger (%d, want %d)", r.back().slot[3].x, want.first));
     }
     // A fast start (24 raw px a scan): every scan reported.
     {
@@ -1074,22 +1275,36 @@ static void scenarioPalm()
     bringUp();
     const size_t before = gReports.size();
     // A finger down, then its strength rises to a palm's: lifted once; its later events ignored until it leaves.
-    gSchedule(gNow + 1000000, [] { gFtm4.scan({contactEvent(3, 0, 500, 300), contactEvent(3, 1, 900, 300)}); });
-    gSchedule(gNow + 9000000, [] { gFtm4.scan({contactEvent(5, 0, 520, 300, 600), contactEvent(5, 1, 930, 300)}); });
-    gSchedule(gNow + 17000000, [] { gFtm4.scan({contactEvent(5, 0, 560, 300, 700), contactEvent(5, 1, 960, 300)}); });
-    gSchedule(gNow + 25000000, [] { gFtm4.scan({contactEvent(4, 0, 560, 300), contactEvent(4, 1, 960, 300)}); });
+    gSchedule(gNow + 1000000, [] {
+        gFtm4.scan({contactEvent(3, 0, 500, 300), contactEvent(3, 1, 900, 300)});
+    });
+    gSchedule(gNow + 9000000, [] {
+        gFtm4.scan({contactEvent(5, 0, 520, 300, 600), contactEvent(5, 1, 930, 300)});
+    });
+    gSchedule(gNow + 17000000, [] {
+        gFtm4.scan({contactEvent(5, 0, 560, 300, 700), contactEvent(5, 1, 960, 300)});
+    });
+    gSchedule(gNow + 25000000, [] {
+        gFtm4.scan({contactEvent(4, 0, 560, 300), contactEvent(4, 1, 960, 300)});
+    });
     // A palm from its first event: never reported.
-    gSchedule(gNow + 40000000, [] { gFtm4.scan({contactEvent(3, 2, 300, 300, 800)}); });
-    gSchedule(gNow + 48000000, [] { gFtm4.scan({contactEvent(4, 2, 300, 300)}); });
+    gSchedule(gNow + 40000000, [] {
+        gFtm4.scan({contactEvent(3, 2, 300, 300, 800)});
+    });
+    gSchedule(gNow + 48000000, [] {
+        gFtm4.scan({contactEvent(4, 2, 300, 300)});
+    });
     gRunUntil(gNow + 70000000);
     bool zeroLifted = false, oneStayed = true, twoSeen = false;
     for (size_t i = before; i < gReports.size(); ++i) {
         const SwitchTouchReport &r = gReports[i].report;
-        if (!(r.slot[0].flags & kSwitchTouchTip) && (r.slot[1].flags & kSwitchTouchTip)) zeroLifted = true;
+        if (!(r.slot[0].flags & kSwitchTouchTip) && (r.slot[1].flags & kSwitchTouchTip))
+            zeroLifted = true;
         if (i + 1 < gReports.size() && i > before && !(r.slot[1].flags & kSwitchTouchTip) &&
             (gReports[i + 1].report.slot[1].flags & kSwitchTouchTip))
             oneStayed = false;
-        if (r.slot[2].flags & kSwitchTouchTip) twoSeen = true;
+        if (r.slot[2].flags & kSwitchTouchTip)
+            twoSeen = true;
     }
     check(zeroLifted, "palm: contact 0 lifted while contact 1 stays down");
     check(oneStayed, "palm: contact 1 never lifted and put back");
@@ -1128,19 +1343,27 @@ static void scenarioFourFingers()
 {
     bringUp();
     // Four fingers over three scans (16.7 ms from first to fourth), then a swipe.
-    gSchedule(gNow + 1000000, [] { gFtm4.scan({contactEvent(3, 0, 300, 200), contactEvent(3, 1, 400, 200)}); });
-    gSchedule(gNow + 9333333, [] { gFtm4.scan({contactEvent(3, 2, 500, 200)}); });
-    gSchedule(gNow + 17666666, [] { gFtm4.scan({contactEvent(3, 3, 600, 200)}); });
+    gSchedule(gNow + 1000000, [] {
+        gFtm4.scan({contactEvent(3, 0, 300, 200), contactEvent(3, 1, 400, 200)});
+    });
+    gSchedule(gNow + 9333333, [] {
+        gFtm4.scan({contactEvent(3, 2, 500, 200)});
+    });
+    gSchedule(gNow + 17666666, [] {
+        gFtm4.scan({contactEvent(3, 3, 600, 200)});
+    });
     for (unsigned s = 1; s <= 10; ++s) {
         gSchedule(gNow + 17666666 + s * 8333333, [s] {
             std::vector<Event> e;
-            for (unsigned f = 0; f < 4; ++f) e.push_back(contactEvent(s == 10 ? 4 : 5, f, 300 + 100 * f + 30 * s, 200));
+            for (unsigned f = 0; f < 4; ++f)
+                e.push_back(contactEvent(s == 10 ? 4 : 5, f, 300 + 100 * f + 30 * s, 200));
             gFtm4.scan(e);
         });
     }
     gRunUntil(gNow + 140000000);
     unsigned most = 0;
-    for (const Report &r : gReports) most = std::max(most, downContacts(r.report));
+    for (const Report &r : gReports)
+        most = std::max(most, downContacts(r.report));
     check(most == 4, "four contacts down together");
     fireWatchdog();
     const std::string geometry = logLine("SwitchTouch geometry:");
@@ -1167,12 +1390,14 @@ static uint64_t measureDrag(unsigned fingers, const char *name, const char *acti
         worst = std::max(worst, posted - r.filter);
     }
     check(n == 62, format("%s: 62 interrupts (got %zu)", name, n));
-    if (!n) return 0;
+    if (!n)
+        return 0;
     std::printf("measure %s: %zu interrupts, %.2f transactions and %.2f I2C3 interrupt actions per interrupt, "
                 "INT->last report mean %" PRIu64 " us max %" PRIu64 " us\n",
                 name, n, (double)ops / (double)n, (double)actions / (double)n, sum / n / 1000, worst / 1000);
     EXPECT_EQ(format("%.2f", (double)ops / (double)n), "2.00") << name << ": transactions per interrupt";
-    EXPECT_EQ(format("%.2f", (double)actions / (double)n), actionsPer) << name << ": I2C3 interrupt actions per interrupt";
+    EXPECT_EQ(format("%.2f", (double)actions / (double)n), actionsPer)
+        << name << ": I2C3 interrupt actions per interrupt";
     return sum / n / 1000;
 }
 
@@ -1198,12 +1423,23 @@ static void run(void (*scenario)())
         } catch (const std::exception &e) {
             check(false, format("exception: %s", e.what()));
         }
-        for (const std::string &e : gFtm4.errors) check(false, "FTM4 model: " + e);
+        for (const std::string &e : gFtm4.errors)
+            check(false, "FTM4 model: " + e);
     });
 }
 
-TEST(SwitchTouch, Drag) { run(scenarioDrag); }
-TEST(SwitchTouch, FiveFingersDma) { run([] { scenarioFiveFingers(true); }); }
+TEST(SwitchTouch, Drag)
+{
+    run(scenarioDrag);
+}
+
+TEST(SwitchTouch, FiveFingersDma)
+{
+    run([] {
+        scenarioFiveFingers(true);
+    });
+}
+
 TEST(SwitchTouch, FiveFingersDmaEarlyCompletion)
 {
     run([] {
@@ -1211,17 +1447,75 @@ TEST(SwitchTouch, FiveFingersDmaEarlyCompletion)
         scenarioFiveFingers(true);
     });
 }
-TEST(SwitchTouch, FiveFingersPio) { run([] { scenarioFiveFingers(false); }); }
-TEST(SwitchTouch, SameBatch) { run(scenarioSameBatch); }
-TEST(SwitchTouch, DeepFifo) { run(scenarioDeepFifo); }
-TEST(SwitchTouch, Untimed) { run(scenarioUntimed); }
-TEST(SwitchTouch, Nack) { run(scenarioNack); }
-TEST(SwitchTouch, DmaFirstEndOfCountLost) { run(scenarioDmaFirstLost); }
-TEST(SwitchTouch, DmaEndOfCountLostLater) { run(scenarioDmaLostLater); }
-TEST(SwitchTouch, ChainBroken) { run(scenarioChainBroken); }
-TEST(SwitchTouch, DmaOpenFails) { run(scenarioDmaOpenFails); }
-TEST(SwitchTouch, Measure) { run(scenarioMeasure); }
-TEST(SwitchTouch, Filter) { run(scenarioFilter); }
-TEST(SwitchTouch, Palm) { run(scenarioPalm); }
-TEST(SwitchTouch, Edge) { run(scenarioEdge); }
-TEST(SwitchTouch, FourFingers) { run(scenarioFourFingers); }
+
+TEST(SwitchTouch, FiveFingersPio)
+{
+    run([] {
+        scenarioFiveFingers(false);
+    });
+}
+
+TEST(SwitchTouch, SameBatch)
+{
+    run(scenarioSameBatch);
+}
+
+TEST(SwitchTouch, DeepFifo)
+{
+    run(scenarioDeepFifo);
+}
+
+TEST(SwitchTouch, Untimed)
+{
+    run(scenarioUntimed);
+}
+
+TEST(SwitchTouch, Nack)
+{
+    run(scenarioNack);
+}
+
+TEST(SwitchTouch, DmaFirstEndOfCountLost)
+{
+    run(scenarioDmaFirstLost);
+}
+
+TEST(SwitchTouch, DmaEndOfCountLostLater)
+{
+    run(scenarioDmaLostLater);
+}
+
+TEST(SwitchTouch, ChainBroken)
+{
+    run(scenarioChainBroken);
+}
+
+TEST(SwitchTouch, DmaOpenFails)
+{
+    run(scenarioDmaOpenFails);
+}
+
+TEST(SwitchTouch, Measure)
+{
+    run(scenarioMeasure);
+}
+
+TEST(SwitchTouch, Filter)
+{
+    run(scenarioFilter);
+}
+
+TEST(SwitchTouch, Palm)
+{
+    run(scenarioPalm);
+}
+
+TEST(SwitchTouch, Edge)
+{
+    run(scenarioEdge);
+}
+
+TEST(SwitchTouch, FourFingers)
+{
+    run(scenarioFourFingers);
+}

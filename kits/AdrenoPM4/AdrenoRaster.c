@@ -1,33 +1,41 @@
 /* SPDX-License-Identifier: MIT */
 #include "AdrenoRaster.h"
 #include "AdrenoPM4.h"
+
 static struct AdrenoRasterResult fail(uint32_t s)
 {
     return (struct AdrenoRasterResult){s, 0, 0};
 }
+
 static int wraps(uintptr_t p, size_t n)
 {
     return n > UINTPTR_MAX - p;
 }
+
 static int overlap(uintptr_t a, size_t n, uintptr_t b, size_t m)
 {
     return n && m && a < b + m && b < a + n;
 }
+
 static int finite32(uint32_t v)
 {
     return (v & UINT32_C(0x7f800000)) != UINT32_C(0x7f800000);
 }
+
 static void packet(uint32_t **out, uint32_t address, const uint32_t *values, uint32_t n)
 {
     uint32_t header = 0;
     (void)AdrenoPM4Type4(address, n, &header);
     *(*out)++ = header;
-    for (uint32_t i = 0; i < n; i++) *(*out)++ = values[i];
+    for (uint32_t i = 0; i < n; i++)
+        *(*out)++ = values[i];
 }
+
 static void reg32(uint32_t **out, uint32_t address, uint32_t value)
 {
     packet(out, address, &value, 1);
 }
+
 struct AdrenoRasterResult AdrenoA740Raster(const struct AdrenoRasterState *s, uint32_t *output, size_t capacity)
 {
     if (!s || !output || (uintptr_t)s % _Alignof(struct AdrenoRasterState) || (uintptr_t)output % _Alignof(uint32_t) ||
@@ -41,8 +49,10 @@ struct AdrenoRasterResult AdrenoA740Raster(const struct AdrenoRasterState *s, ui
     uint32_t f = s->flags;
     int clamp = (f & (AdrenoRasterClipNear | AdrenoRasterClipFar)) != (AdrenoRasterClipNear | AdrenoRasterClipFar);
     uint32_t words = clamp ? 24 : 60;
-    if (capacity < words) return fail(AdrenoRasterCapacity);
-    if (overlap((uintptr_t)s, sizeof(*s), (uintptr_t)output, words * 4)) return fail(AdrenoRasterAlias);
+    if (capacity < words)
+        return fail(AdrenoRasterCapacity);
+    if (overlap((uintptr_t)s, sizeof(*s), (uintptr_t)output, words * 4))
+        return fail(AdrenoRasterAlias);
     uint32_t point_min = s->point_size_q4, point_max = s->point_size_q4;
     if (f & AdrenoRasterPointSizePerVertex) {
         point_min = (f & (AdrenoRasterPointQuad | AdrenoRasterPointSmooth | AdrenoRasterMultisample)) ? 0 : 16;

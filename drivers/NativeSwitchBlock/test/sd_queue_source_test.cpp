@@ -23,6 +23,7 @@ const std::string &driver()
     static const std::string source = SourceText("../NativeSwitchBlock.cpp");
     return source;
 }
+
 std::string body(const char *signature)
 {
     return Body(driver(), signature);

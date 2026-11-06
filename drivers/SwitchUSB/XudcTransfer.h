@@ -56,10 +56,12 @@ enum : uint32_t {
     EP_BULK_IN = 6,
     EP_INTR_IN = 7,
 };
+
 constexpr uint32_t trbType(uint32_t type)
 {
     return type << 10;
 }
+
 constexpr uint32_t kRingTrbs = 16;  // EP0's ring (in the control area); the last one is the link TRB
 constexpr uint32_t kDataRingTrbs =
     256;  // a data endpoint's ring, one 4 KiB page of its own (SwitchXUDC "Data endpoints"); the last is the link TRB
@@ -91,7 +93,12 @@ struct Piece {        // one TRB
     bool bounce;
 };
 
-enum : uint8_t { kResidueUnknown, kResiduePerTrb, kResiduePerTd, kResidueBroken };
+enum : uint8_t {
+    kResidueUnknown,
+    kResiduePerTrb,
+    kResiduePerTd,
+    kResidueBroken
+};
 
 struct PlanStats {
     uint32_t bounceBytes, discontinuity, boundary, high, edge;  // bounced bytes; packets bounced by reason
@@ -103,21 +110,26 @@ struct PlanStats {
 inline uint32_t plan(const Run *runs, uint32_t runCount, uint32_t total, uint32_t mps, bool out, bool firstPacket,
                      uint64_t reach, Piece *pieces, uint32_t max, PlanStats *stats)
 {
-    if (!mps) return 0;
+    if (!mps)
+        return 0;
     const uint32_t directMax = kTrbMaxBytes / mps * mps;
     const uint32_t bounceMax = kBouncePageBytes >= mps ? kBouncePageBytes / mps * mps : 0;
-    if (!bounceMax) return 0;
+    if (!bounceMax)
+        return 0;
     uint32_t count = 0, run = 0, runStart = 0;  // the run holding `offset`, and its first offset
     Piece *open = nullptr;                      // the piece the next packet may join
     if (!total) {                               // a zero-length transfer: one empty TRB
-        if (!max) return 0;
+        if (!max)
+            return 0;
         pieces[0] = {0, 0, 0, false};
         return 1;
     }
     for (uint32_t offset = 0; offset < total;) {
         const uint32_t packet = total - offset < mps ? total - offset : mps;
-        while (run < runCount && offset >= runStart + runs[run].length) runStart += runs[run++].length;
-        if (run == runCount) return 0;  // the runs end before the request does
+        while (run < runCount && offset >= runStart + runs[run].length)
+            runStart += runs[run++].length;
+        if (run == runCount)
+            return 0;  // the runs end before the request does
         const uint64_t pa = runs[run].pa + (offset - runStart);
         const bool inRun = offset + packet <= runStart + runs[run].length;
         const bool crosses = (pa >> 16) != ((pa + packet - 1) >> 16);
@@ -146,7 +158,8 @@ inline uint32_t plan(const Run *runs, uint32_t runCount, uint32_t total, uint32_
         if (joins) {
             open->length += packet;
         } else {
-            if (count == max) return 0;
+            if (count == max)
+                return 0;
             open = &pieces[count++];
             *open = {bounce ? 0 : pa, offset, packet, bounce};
         }
@@ -172,9 +185,12 @@ inline OutResult outEventAt(uint8_t known, LengthOf lengthOf, uint32_t count, ui
     for (uint32_t i = 0; i < count; ++i) {
         const uint32_t l = lengthOf(i);
         total += l;
-        if (i < index) before += l;
-        if (i > index) after += l;
-        if (i == index) length = l;
+        if (i < index)
+            before += l;
+        if (i > index)
+            after += l;
+        if (i == index)
+            length = l;
     }
     OutResult r = {true, false, 0, kResidueUnknown};
     if (index >= count) {
@@ -193,10 +209,12 @@ inline OutResult outEventAt(uint8_t known, LengthOf lengthOf, uint32_t count, ui
     }
     const bool perTrb = residue <= length, perTd = residue > after && residue <= length + after;
     uint8_t reading = known;
-    if (known == kResidueUnknown) reading = perTrb && !perTd ? kResiduePerTrb : perTd && !perTrb ? kResiduePerTd : 0;
+    if (known == kResidueUnknown)
+        reading = perTrb && !perTd ? kResiduePerTrb : perTd && !perTrb ? kResiduePerTd : 0;
     if ((reading == kResiduePerTrb && perTrb) || (reading == kResiduePerTd && perTd)) {
         r.actual = reading == kResiduePerTrb ? before + length - residue : total - residue;
-        if (known == kResidueUnknown) r.learned = reading;
+        if (known == kResidueUnknown)
+            r.learned = reading;
         return r;
     }
     r.failed = true;
@@ -207,7 +225,12 @@ inline OutResult outEventAt(uint8_t known, LengthOf lengthOf, uint32_t count, ui
 inline OutResult outEvent(uint8_t known, const uint32_t *lengths, uint32_t count, uint32_t index, uint32_t residue,
                           bool shortPacket)
 {
-    return outEventAt(known, [lengths](uint32_t i) { return lengths[i]; }, count, index, residue, shortPacket);
+    return outEventAt(
+        known,
+        [lengths](uint32_t i) {
+            return lengths[i];
+        },
+        count, index, residue, shortPacket);
 }
 
 // Completion accounting: a data endpoint's requests are TDs on its ring in request order, and the controller works
@@ -271,18 +294,46 @@ public:
         uint32_t bytes;        // the request's length (the serial path: this piece's)
         bool probe;            // OUT residue probe: IOC on the first TRB too
     };
+
     static constexpr uint32_t kNoTrb = ~0u;  // an event TRB outside the ring
     static_assert(Slots >= 4 && Slots <= 0xffff && MaxTds > 0, "ring geometry");
 
     // TRBs a new TD may take: one slot always stays free (as Linux tegra-xudc keeps one), the tail is reserved, and a
     // fenced ring takes nothing.
-    uint32_t room() const { return fenced_ ? 0 : Slots - 1 - used_ - tail_.trbs; }
-    uint32_t onRing() const { return count_; }
-    uint32_t tailTrbs() const { return tail_.trbs; }
-    bool busy() const { return count_ || tail_.trbs; }  // TRBs the controller may still raise an event for
-    bool fenced() const { return fenced_; }
-    const Td &td(uint32_t k) const { return tds_[(head_ + k) % MaxTds]; }
-    static uint32_t at(uint32_t first, uint32_t i) { return (first + i) % Slots; }
+    uint32_t room() const
+    {
+        return fenced_ ? 0 : Slots - 1 - used_ - tail_.trbs;
+    }
+
+    uint32_t onRing() const
+    {
+        return count_;
+    }
+
+    uint32_t tailTrbs() const
+    {
+        return tail_.trbs;
+    }
+
+    bool busy() const
+    {
+        return count_ || tail_.trbs;
+    }  // TRBs the controller may still raise an event for
+
+    bool fenced() const
+    {
+        return fenced_;
+    }
+
+    const Td &td(uint32_t k) const
+    {
+        return tds_[(head_ + k) % MaxTds];
+    }
+
+    static uint32_t at(uint32_t first, uint32_t i)
+    {
+        return (first + i) % Slots;
+    }
 
     // A TD went onto the ring (the caller checked room() and that fewer than MaxTds are on it).
     void push(const Td &t)
@@ -301,7 +352,8 @@ public:
             d.verdict = Verdict::Stale;
             return d;
         }
-        if (index >= Slots) return d;
+        if (index >= Slots)
+            return d;
         if (tail_.trbs && index == at(tail_.first, tail_.trbs - 1u)) {
             d.verdict = Verdict::SecondEvent;
             return d;
@@ -310,9 +362,11 @@ public:
         for (; k < count_; ++k) {
             const Td &t = td(k);
             pos = index >= t.first ? index - t.first : index + Slots - t.first;
-            if (pos < t.trbs) break;
+            if (pos < t.trbs)
+                break;
         }
-        if (k == count_) return d;  // not on the ring (the tail's other TRBs, a free slot)
+        if (k == count_)
+            return d;  // not on the ring (the tail's other TRBs, a free slot)
         d.k = k;
         d.pos = pos;
         if (k) {
@@ -327,7 +381,8 @@ public:
             d.armTail = !last;
             return d;
         }
-        if (!last && !shortPacket && (in || !t.probe || pos != 0)) return d;  // a full TRB nothing asked an event for
+        if (!last && !shortPacket && (in || !t.probe || pos != 0))
+            return d;  // a full TRB nothing asked an event for
         d.verdict = Verdict::Head;
         if (in) {
             d.outcome = Outcome::Done;
@@ -335,10 +390,15 @@ public:
             d.armTail = !last;
             return d;
         }
-        const OutResult o =
-            outEventAt(known, [&](uint32_t i) { return lengthOf(at(t.first, i)); }, t.trbs, pos, residue, shortPacket);
+        const OutResult o = outEventAt(
+            known,
+            [&](uint32_t i) {
+                return lengthOf(at(t.first, i));
+            },
+            t.trbs, pos, residue, shortPacket);
         d.learned = o.learned;
-        if (!o.done) return d;  // the probe's packet: Pending
+        if (!o.done)
+            return d;  // the probe's packet: Pending
         d.outcome = o.failed ? Outcome::Failed : Outcome::Done;
         d.actual = o.failed ? 0 : o.actual;
         d.armTail = !last;
@@ -353,26 +413,34 @@ public:
             tail_ = Td{};
             return;
         }
-        if (d.verdict != Verdict::Head) return;
+        if (d.verdict != Verdict::Head)
+            return;
         tail_ = Td{};
-        if (d.outcome == Outcome::Pending) return;
+        if (d.outcome == Outcome::Pending)
+            return;
         const Td t = td(0);
         head_ = (head_ + 1) % MaxTds;
         --count_;
         used_ -= t.trbs;
-        if (d.armTail) tail_ = t;
+        if (d.armTail)
+            tail_ = t;
     }
 
     // Everything off the ring (the caller has stopped the controller on it). Returns whether the endpoint is fenced:
     // something was on it, so the event ring may hold events for it.
     bool cancel()
     {
-        if (busy()) fenced_ = true;
+        if (busy())
+            fenced_ = true;
         head_ = count_ = used_ = 0;
         tail_ = Td{};
         return fenced_;
     }
-    void liftFence() { fenced_ = false; }
+
+    void liftFence()
+    {
+        fenced_ = false;
+    }
 
 private:
     Td tds_[MaxTds];

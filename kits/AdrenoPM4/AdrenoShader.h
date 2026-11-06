@@ -6,6 +6,7 @@
 extern "C" {
 #endif
 #define ADRENO_SHADER_BIND_WORDS 24u
+
 struct AdrenoShaderState {
     uint64_t chip_id;
     uint32_t stage, binary_bytes, instruction_groups;
@@ -14,12 +15,14 @@ struct AdrenoShaderState {
     uint32_t double_threadsize, input_words, need_full_quad, need_pixel_lod;
     uint32_t private_bytes, constant_data_bytes;
 };
+
 /* A view into a caller-owned native-4K readonly shader mapping. This record
  * describes ownership; it does not verify or activate an SMMU context. */
 struct AdrenoShaderMapping {
     uint64_t context, base, bytes, shader_offset;
     uint32_t page_shift, readonly;
 };
+
 enum AdrenoShaderStatus {
     AdrenoShaderOK,
     AdrenoShaderArgument,
@@ -28,6 +31,7 @@ enum AdrenoShaderStatus {
     AdrenoShaderCapacity,
     AdrenoShaderAlias
 };
+
 struct AdrenoShaderResult {
     uint32_t status, words, registers;
 };

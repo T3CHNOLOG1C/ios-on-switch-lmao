@@ -17,7 +17,8 @@ TEST(SdClientCopySource, RequestBytesMoveOnlyThroughTheHelper)
 {
     const std::string source = SourceText("../NativeSwitchBlock.cpp");
     std::vector<std::string> uses = LinesMatching(source, R"(->\s*(readBytes|writeBytes)\()");
-    for (std::string &line : uses) line = line.substr(line.find_first_not_of(" \t"));
+    for (std::string &line : uses)
+        line = line.substr(line.find_first_not_of(" \t"));
     ASSERT_EQ(uses.size(), 1u) << testing::PrintToString(uses);
     // The one use sits in stage(), behind copyFlush.
     const std::string before = source.substr(0, source.find(uses[0]));

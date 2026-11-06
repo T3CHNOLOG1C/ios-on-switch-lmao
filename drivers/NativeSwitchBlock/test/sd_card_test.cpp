@@ -34,7 +34,8 @@ static void fields()
         put(reg, bits, hi, lo, value);
         REQUIRE(switchSdBits(reg, bits, hi, lo) == value);
         // Nothing outside the field.
-        if (lo) REQUIRE(switchSdBits(reg, bits, lo - 1, 0) == 0 || lo > 32);
+        if (lo)
+            REQUIRE(switchSdBits(reg, bits, lo - 1, 0) == 0 || lo > 32);
     }
     // MSB first: bit 127 of a 16-byte register is byte 0's top bit.
     uint8_t cid[16] = {0x80};
@@ -45,7 +46,8 @@ static void fields()
 static void toRep(const uint8_t reg[16], uint32_t rep[4])
 {
     uint8_t bytes[16] = {};
-    for (unsigned k = 0; k < 15; ++k) bytes[14 - k] = reg[k];
+    for (unsigned k = 0; k < 15; ++k)
+        bytes[14 - k] = reg[k];
     for (unsigned w = 0; w < 4; ++w)
         rep[w] = bytes[4 * w] | uint32_t(bytes[4 * w + 1]) << 8 | uint32_t(bytes[4 * w + 2]) << 16 |
                  uint32_t(bytes[4 * w + 3]) << 24;
@@ -58,7 +60,8 @@ static void identity()
     put(cid, 128, 127, 120, 0x03);
     put(cid, 128, 119, 104, 'S' << 8 | 'D');
     const char *name = "SN01T";
-    for (unsigned i = 0; i < 5; ++i) put(cid, 128, 103 - 8 * i, 96 - 8 * i, uint8_t(name[i]));
+    for (unsigned i = 0; i < 5; ++i)
+        put(cid, 128, 103 - 8 * i, 96 - 8 * i, uint8_t(name[i]));
     put(cid, 128, 63, 56, 0x86);
     put(cid, 128, 55, 24, 0x1234abcd);
     put(cid, 128, 19, 8, (23 << 4) | 6);
@@ -72,8 +75,7 @@ static void identity()
     const SwitchSdCid c = switchSdParseCid(back);
     REQUIRE(c.mid == 3 && !strcmp(c.oid, "SD") && !strcmp(c.pnm, "SN01T") && c.prv == 0x86 && c.psn == 0x1234abcd &&
             c.year == 2023 && c.month == 6);
-    REQUIRE(!strcmp(switchSdMaker(3), "SanDisk") && !strcmp(switchSdMaker(0x1b), "Samsung") &&
-            !switchSdMaker(0x5a));
+    REQUIRE(!strcmp(switchSdMaker(3), "SanDisk") && !strcmp(switchSdMaker(0x1b), "Samsung") && !switchSdMaker(0x5a));
     // Unprintable name bytes print as '?'.
     put(back, 128, 103, 96, 0x07);
     REQUIRE(switchSdParseCid(back).pnm[0] == '?');
@@ -150,9 +152,11 @@ static void put16(uint8_t *p, uint16_t v)
     p[0] = uint8_t(v);
     p[1] = uint8_t(v >> 8);
 }
+
 static void put32(uint8_t *p, uint32_t v)
 {
-    for (unsigned i = 0; i < 4; ++i) p[i] = uint8_t(v >> (8 * i));
+    for (unsigned i = 0; i < 4; ++i)
+        p[i] = uint8_t(v >> (8 * i));
 }
 
 // General Information with a power function (FNO 1) and a performance function (FNO 2), as Table 5-31's example lays
@@ -311,14 +315,17 @@ TEST(SdCard, RegisterFields)
 {
     fields();
 }
+
 TEST(SdCard, Identity)
 {
     identity();
 }
+
 TEST(SdCard, ExtensionRegisters)
 {
     extension();
 }
+
 TEST(SdCard, BlockFraming)
 {
     framing();

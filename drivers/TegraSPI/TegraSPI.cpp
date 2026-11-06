@@ -34,6 +34,7 @@ enum : uint32_t {
     RX_FIFO = 0x188,
     INTR_MASK = 0x18c,
 };
+
 enum : uint32_t {
     CMD1_BIT_LENGTH_MASK = 0x1f,
     CMD1_BIT_LENGTH_8 = 7,
@@ -62,11 +63,17 @@ enum : uint32_t {
     FIFO_RX_FLUSH = 1u << 15,
     INTR_ALL = 0x1fu << 25,  // FIFO errors and RDY; 1 = masked
 };
+
 constexpr uint32_t kRxCountShift = 23, kRxCountMask = 0x7f;
+
 // A block's state (Bus::state): started and waiting for RDY (kActive), RDY seen by the filter (kDone, the bytes
 // still in the RX FIFO for the waiter), or none (kIdle). The filter and a timed-out waiter race for kActive with a
 // compare-and-swap, so exactly one of them ends the block.
-enum : uint32_t { kIdle, kActive, kDone };
+enum : uint32_t {
+    kIdle,
+    kActive,
+    kDone
+};
 
 struct BusInfo {
     uint16_t regs;                     // offset from kSpiPA; 0 = not described
@@ -79,6 +86,7 @@ struct BusInfo {
     uint16_t mosi, miso, sck, cs0;  // PINMUX_AUX offsets
     uint16_t spi;                   // GIC SPI
 };
+
 // SPI4: tegra210.dtsi spi@7000da00 (SPI 93, clock/reset 68 = U bit 4), CLK_SOURCE_SBC4 0x1b4 (clk-tegra-periph.c);
 // the IMU's 8 MHz and mode 3 (tegra210-nx-sensor.dtsi); pads at PINMUX_AUX 0x3078/307c/3080/3084 (fric pinmux).
 constexpr BusInfo kBus[kBuses] = {
@@ -113,16 +121,19 @@ inline uint32_t r32(volatile uint8_t *base, uint32_t o)
 {
     return *(volatile uint32_t *)(base + o);
 }
+
 inline void w32(volatile uint8_t *base, uint32_t o, uint32_t v)
 {
     *(volatile uint32_t *)(base + o) = v;
 }
+
 inline uint64_t nowUs()
 {
     uint64_t ns;
     absolutetime_to_nanoseconds(mach_absolute_time(), &ns);
     return ns / 1000;
 }
+
 inline uint32_t intid(unsigned bus)
 {
     return 32 + kBus[bus - 1].spi;
@@ -144,7 +155,8 @@ void clockEnable(const BusInfo &info)
 void pinmux(const BusInfo &info)
 {
     const uint16_t outputs[] = {info.mosi, info.sck, info.cs0};
-    for (uint16_t pad : outputs) w32(gPinmux, pad, (r32(gPinmux, pad) & ~kPinmuxFieldMask) | kPinmuxOut);
+    for (uint16_t pad : outputs)
+        w32(gPinmux, pad, (r32(gPinmux, pad) & ~kPinmuxFieldMask) | kPinmuxOut);
     w32(gPinmux, info.miso, (r32(gPinmux, info.miso) & ~kPinmuxFieldMask) | kPinmuxIn);
 }
 
@@ -152,12 +164,15 @@ void pinmux(const BusInfo &info)
 bool flushFifos(Bus &b)
 {
     uint32_t status = r32(b.regs, FIFO_STATUS);
-    if ((status & (FIFO_RX_EMPTY | FIFO_TX_EMPTY)) == (FIFO_RX_EMPTY | FIFO_TX_EMPTY)) return true;
+    if ((status & (FIFO_RX_EMPTY | FIFO_TX_EMPTY)) == (FIFO_RX_EMPTY | FIFO_TX_EMPTY))
+        return true;
     w32(b.regs, FIFO_STATUS, status | FIFO_RX_FLUSH | FIFO_TX_FLUSH);
     for (uint64_t end = nowUs() + 2000;;) {
         status = r32(b.regs, FIFO_STATUS);
-        if ((status & (FIFO_RX_EMPTY | FIFO_TX_EMPTY)) == (FIFO_RX_EMPTY | FIFO_TX_EMPTY)) return true;
-        if (nowUs() > end) return false;
+        if ((status & (FIFO_RX_EMPTY | FIFO_TX_EMPTY)) == (FIFO_RX_EMPTY | FIFO_TX_EMPTY))
+            return true;
+        if (nowUs() > end)
+            return false;
     }
 }
 
@@ -179,7 +194,8 @@ int configure(Bus &b, const BusInfo &info)
     w32(b.regs, COMMAND1, cmd);
     w32(b.regs, DMA_CTL, 0);
     w32(b.regs, INTR_MASK, r32(b.regs, INTR_MASK) & ~INTR_ALL);
-    if (!flushFifos(b)) return TEGRA_SPI_ETIMEDOUT;
+    if (!flushFifos(b))
+        return TEGRA_SPI_ETIMEDOUT;
     clearStatus(b);
     return TEGRA_SPI_OK;
 }
@@ -193,7 +209,8 @@ int configure(Bus &b, const BusInfo &info)
 bool filterInterrupt(OSObject *, IOFilterInterruptEventSource *sender)
 {
     for (Bus &b : gBus) {
-        if (b.irq != sender) continue;
+        if (b.irq != sender)
+            continue;
         const uint32_t trans = r32(b.regs, TRANS_STATUS), fifo = r32(b.regs, FIFO_STATUS);
         uint32_t expected = kActive;
         if (trans & TRANS_RDY) {
@@ -202,12 +219,14 @@ bool filterInterrupt(OSObject *, IOFilterInterruptEventSource *sender)
                 thread_wakeup((event_t)&b.state);
         }
         w32(b.regs, TRANS_STATUS, trans);  // write 1 to clear: RDY off, the line low
-        if (fifo & FIFO_ERRORS) w32(b.regs, FIFO_STATUS, FIFO_ERR | (fifo & FIFO_ERRORS));
+        if (fifo & FIFO_ERRORS)
+            w32(b.regs, FIFO_STATUS, FIFO_ERR | (fifo & FIFO_ERRORS));
     }
     return false;  // nothing left for the work loop
 }
 
-void noAction(OSObject *, IOInterruptEventSource *, int) {}
+void noAction(OSObject *, IOInterruptEventSource *, int)
+{}
 
 // Thread context, the block ended by RDY (kDone): its bytes from the RX FIFO, one word per byte clocked
 // (handle_cpu_based_xfer), counted by the FIFO_STATUS the filter saw.
@@ -221,7 +240,8 @@ int take(Bus &b)
             overflow = true;
             continue;
         }
-        if (b.rx) b.rx[b.done] = (uint8_t)word;
+        if (b.rx)
+            b.rx[b.done] = (uint8_t)word;
         ++b.done;
     }
     __atomic_store_n(&b.state, kIdle, __ATOMIC_RELAXED);
@@ -239,14 +259,18 @@ int sleepForAction(unsigned bus, Bus &b, uint64_t us)
         for (;;) {
             const wait_result_t wait = assert_wait_deadline((event_t)&b.state, THREAD_UNINT, deadline);
             if (__atomic_load_n(&b.state, __ATOMIC_ACQUIRE) != kActive) {
-                if (wait == THREAD_WAITING) clear_wait(current_thread(), THREAD_AWAKENED);
+                if (wait == THREAD_WAITING)
+                    clear_wait(current_thread(), THREAD_AWAKENED);
                 return take(b);
             }
-            if (wait != THREAD_WAITING || thread_block(THREAD_CONTINUE_NULL) == THREAD_TIMED_OUT) break;
+            if (wait != THREAD_WAITING || thread_block(THREAD_CONTINUE_NULL) == THREAD_TIMED_OUT)
+                break;
         }
-        if (__atomic_load_n(&b.state, __ATOMIC_ACQUIRE) != kActive) return take(b);
+        if (__atomic_load_n(&b.state, __ATOMIC_ACQUIRE) != kActive)
+            return take(b);
         const uint32_t trans = r32(b.regs, TRANS_STATUS), mask = r32(b.regs, INTR_MASK);
-        if (!(trans & TRANS_RDY) || (mask & INTR_ALL)) break;
+        if (!(trans & TRANS_RDY) || (mask & INTR_ALL))
+            break;
         if (grace) {
             char gic[192];
             switch_interrupt_describe(intid(bus), gic, sizeof(gic));
@@ -272,7 +296,8 @@ int block(unsigned bus, Bus &b, unsigned cs, const uint8_t *tx, uint8_t *rx, siz
         const uint32_t cmd = (b.idle & ~(CMD1_CS_SS_VAL | CMD1_CS_SEL_MASK)) | ((uint32_t)cs << CMD1_CS_SEL_SHIFT) |
                              CMD1_TX_EN | CMD1_RX_EN;
         w32(b.regs, COMMAND1, cmd);
-        for (size_t i = 0; i < len; ++i) w32(b.regs, TX_FIFO, tx ? tx[i] : 0);
+        for (size_t i = 0; i < len; ++i)
+            w32(b.regs, TX_FIFO, tx ? tx[i] : 0);
         w32(b.regs, DMA_BLK, (uint32_t)len - 1);
         b.rx = rx;
         b.len = len;
@@ -304,7 +329,8 @@ IOLock *setupLock()
 {
     if (!gSetupLock) {
         IOLock *lock = IOLockAlloc();
-        if (lock && !OSCompareAndSwapPtr(nullptr, lock, &gSetupLock)) IOLockFree(lock);
+        if (lock && !OSCompareAndSwapPtr(nullptr, lock, &gSetupLock))
+            IOLockFree(lock);
     }
     return gSetupLock;
 }
@@ -317,7 +343,8 @@ int bringUp(unsigned bus, Bus &b)
     clockEnable(info);
     pinmux(info);
     const int result = configure(b, info);
-    if (result != TEGRA_SPI_OK) return result;
+    if (result != TEGRA_SPI_OK)
+        return result;
     w32(b.regs, INTR_MASK, r32(b.regs, INTR_MASK) | INTR_ALL);  // quiet until the event source is in place
     IOService *nub = switch_interrupt_nub(intid(bus), false);
     b.irq = IOFilterInterruptEventSource::filterInterruptEventSource(gLoop, &noAction, &filterInterrupt, nub, 0);
@@ -332,9 +359,11 @@ int bringUp(unsigned bus, Bus &b)
 
 extern "C" int tegra_spi_init(unsigned bus)
 {
-    if (bus < 1 || bus > kBuses || !kBus[bus - 1].regs) return TEGRA_SPI_EINVAL;
+    if (bus < 1 || bus > kBuses || !kBus[bus - 1].regs)
+        return TEGRA_SPI_EINVAL;
     IOLock *setup = setupLock();
-    if (!setup) return TEGRA_SPI_ENOMEM;
+    if (!setup)
+        return TEGRA_SPI_ENOMEM;
     IOLockLock(setup);
     int result = TEGRA_SPI_OK;
     if (!gSpi) {
@@ -342,13 +371,16 @@ extern "C" int tegra_spi_init(unsigned bus)
         gPinmux = (volatile uint8_t *)ml_io_map(kPinmuxPA, kPinmuxSize);
         gSpi = (gCar && gPinmux) ? (volatile uint8_t *)ml_io_map(kSpiPA, kSpiSize) : nullptr;
     }
-    if (!gLoop) gLoop = IOWorkLoop::workLoop();
+    if (!gLoop)
+        gLoop = IOWorkLoop::workLoop();
     Bus &b = gBus[bus - 1];
     if (!gSpi || !gLoop) {
         result = TEGRA_SPI_ENOMEM;
     } else if (!b.irq) {
-        if (!b.lock) b.lock = IOLockAlloc();
-        if (!b.irqLock) b.irqLock = IOLockAlloc();
+        if (!b.lock)
+            b.lock = IOLockAlloc();
+        if (!b.irqLock)
+            b.irqLock = IOLockAlloc();
         if (!b.lock || !b.irqLock) {
             result = TEGRA_SPI_ENOMEM;
         } else {
@@ -359,7 +391,8 @@ extern "C" int tegra_spi_init(unsigned bus)
         }
     }
     IOLockUnlock(setup);
-    if (result != TEGRA_SPI_OK) IOLog("TegraSPI: SPI%u init failed (%d)\n", bus, result);
+    if (result != TEGRA_SPI_OK)
+        IOLog("TegraSPI: SPI%u init failed (%d)\n", bus, result);
     return result;
 }
 
@@ -369,19 +402,23 @@ extern "C" int tegra_spi_transfer(unsigned bus, unsigned cs, const void *tx, voi
         return TEGRA_SPI_EINVAL;
     }
     Bus &b = gBus[bus - 1];
-    if (!b.lock) return TEGRA_SPI_ENOTREADY;
+    if (!b.lock)
+        return TEGRA_SPI_ENOTREADY;
     IOLockLock(b.lock);
     int result = b.ready ? block(bus, b, cs, (const uint8_t *)tx, (uint8_t *)rx, len) : TEGRA_SPI_ENOTREADY;
-    if (result != TEGRA_SPI_OK && result != TEGRA_SPI_ENOTREADY) recover(b, kBus[bus - 1]);
+    if (result != TEGRA_SPI_OK && result != TEGRA_SPI_ENOTREADY)
+        recover(b, kBus[bus - 1]);
     IOLockUnlock(b.lock);
     return result;
 }
 
 extern "C" void tegra_spi_suspend(unsigned bus)
 {
-    if (bus < 1 || bus > kBuses || !kBus[bus - 1].regs) return;
+    if (bus < 1 || bus > kBuses || !kBus[bus - 1].regs)
+        return;
     Bus &b = gBus[bus - 1];
-    if (!b.lock || !b.irq) return;
+    if (!b.lock || !b.irq)
+        return;
     const BusInfo &info = kBus[bus - 1];
     IOLockLock(b.lock);
     if (b.ready) {
@@ -397,9 +434,11 @@ extern "C" void tegra_spi_suspend(unsigned bus)
 
 extern "C" void tegra_spi_resume(unsigned bus)
 {
-    if (bus < 1 || bus > kBuses || !kBus[bus - 1].regs) return;
+    if (bus < 1 || bus > kBuses || !kBus[bus - 1].regs)
+        return;
     Bus &b = gBus[bus - 1];
-    if (!b.lock || !b.irq) return;
+    if (!b.lock || !b.irq)
+        return;
     const BusInfo &info = kBus[bus - 1];
     IOLockLock(b.lock);
     if (!b.ready) {
@@ -408,7 +447,8 @@ extern "C" void tegra_spi_resume(unsigned bus)
         pinmux(info);
         const int result = configure(b, info);
         IOLockUnlock(b.irqLock);
-        if (result != TEGRA_SPI_OK) panic("TegraSPI: SPI%u did not come back after sleep (%d)", bus, result);
+        if (result != TEGRA_SPI_OK)
+            panic("TegraSPI: SPI%u did not come back after sleep (%d)", bus, result);
         b.irq->enable();
         b.ready = true;
     }

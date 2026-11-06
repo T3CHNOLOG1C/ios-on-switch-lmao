@@ -22,10 +22,12 @@ static dispatch_time_t seconds(unsigned n)
 
 int main(int argc, char **argv)
 {
-    if (argc != 3) return 2;
+    if (argc != 3)
+        return 2;
     @autoreleasepool {
         id<MTLDevice> device = native_bridge_metal_open(argv[1], argv[2], 0x6e6d62, nullptr);
-        if (!device) return 2;
+        if (!device)
+            return 2;
         for (unsigned variant = 0; variant < 9; ++variant) {
             @autoreleasepool {
                 id<MTLBuffer> output = [device newBufferWithLength:4096 options:MTLResourceStorageModeShared];
@@ -40,13 +42,15 @@ int main(int argc, char **argv)
                                                                          mipmapped:NO];
                 td.storageMode = MTLStorageModeShared;
                 td.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite | MTLTextureUsagePixelFormatView;
-                if (variant == 0) query = input;  // never used by the pending fill
+                if (variant == 0)
+                    query = input;  // never used by the pending fill
                 if (variant == 2) {
                     id<MTLTexture> texture = [output newTextureWithDescriptor:td offset:0 bytesPerRow:256];
                     query = [texture newTextureViewWithPixelFormat:MTLPixelFormatRGBA8Unorm];
                 }
                 if (variant == 3 || variant == 7) {
-                    if (variant == 7) td.storageMode = MTLStorageModePrivate;
+                    if (variant == 7)
+                        td.storageMode = MTLStorageModePrivate;
                     target = [device newTextureWithDescriptor:td];
                     query = [[target newTextureViewWithPixelFormat:MTLPixelFormatRGBA8Unorm]
                         newTextureViewWithPixelFormat:MTLPixelFormatRGBA8Unorm];
@@ -73,9 +77,14 @@ int main(int argc, char **argv)
                 if (variant == 6) {
                     const size_t page = (size_t)getpagesize();
                     pages = mmap(nullptr, page * 2, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
-                    if (pages == MAP_FAILED) return 2;
-                    auto keep = std::shared_ptr<void>(pages, [page](void *p) { munmap(p, page * 2); });
-                    auto release = ^(void *, NSUInteger) { (void)keep; };
+                    if (pages == MAP_FAILED)
+                        return 2;
+                    auto keep = std::shared_ptr<void>(pages, [page](void *p) {
+                        munmap(p, page * 2);
+                    });
+                    auto release = ^(void *, NSUInteger) {
+                        (void)keep;
+                    };
                     output = [device newBufferWithBytesNoCopy:pages
                                                        length:page * 2
                                                       options:MTLResourceStorageModeShared
@@ -118,7 +127,8 @@ int main(int argc, char **argv)
                     [(id<ResourceWait>)query waitUntilComplete];
                     dispatch_semaphore_signal(returned);
                 });
-                if (dispatch_semaphore_wait(entered, seconds(3))) return 1;
+                if (dispatch_semaphore_wait(entered, seconds(3)))
+                    return 1;
                 const bool early =
                     dispatch_semaphore_wait(returned, dispatch_time(DISPATCH_TIME_NOW, 250 * NSEC_PER_MSEC)) == 0;
                 event.signaledValue = 1;
@@ -150,12 +160,14 @@ int main(int argc, char **argv)
                         [copy endEncoding];
                         [readback commit];
                         [readback waitUntilCompleted];
-                        if (readback.status != MTLCommandBufferStatusCompleted) return 1;
+                        if (readback.status != MTLCommandBufferStatusCompleted)
+                            return 1;
                         memcpy(pixels, input.contents, sizeof pixels);
                     } else
                         [target getBytes:pixels bytesPerRow:64 fromRegion:MTLRegionMake2D(0, 0, 16, 16) mipmapLevel:0];
                     for (unsigned char pixel : pixels)
-                        if (pixel != 0x5a) return 1;
+                        if (pixel != 0x5a)
+                            return 1;
                 } else if (variant == 8) {
                     memset(input.contents, 0, 4096);
                     id<MTLCommandBuffer> readback = [[device newCommandQueue] commandBuffer];
@@ -164,17 +176,21 @@ int main(int argc, char **argv)
                     [copy endEncoding];
                     [readback commit];
                     [readback waitUntilCompleted];
-                    if (readback.status != MTLCommandBufferStatusCompleted) return 1;
+                    if (readback.status != MTLCommandBufferStatusCompleted)
+                        return 1;
                     for (NSUInteger i = 0; i < 4096; ++i)
-                        if (((const unsigned char *)input.contents)[i] != 0x5a) return 1;
+                        if (((const unsigned char *)input.contents)[i] != 0x5a)
+                            return 1;
                 } else
                     for (NSUInteger i = 0; i < output.length; ++i)
-                        if (((const unsigned char *)output.contents)[i] != 0x5a) return 1;
+                        if (((const unsigned char *)output.contents)[i] != 0x5a)
+                            return 1;
                 // The shared deallocator owns no-copy pages until both imports release them.
                 query = nil;
                 output = nil;
                 target = nil;
-                if (surface) CFRelease(surface);
+                if (surface)
+                    CFRelease(surface);
             }
         }
         std::puts("PASS: unrelated resource wait returns while work is gated; storage, views, heap and "

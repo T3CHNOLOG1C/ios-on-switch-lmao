@@ -18,6 +18,7 @@ typedef struct {
     int (*write64)(void *, size_t, uint64_t);
     int (*barrier)(void *);
 } ArmSmmu4KIo;
+
 typedef struct {
     uint64_t context_offset;
     uint32_t id0, id1, id2, phase, writes, poll_reads, fault_status;

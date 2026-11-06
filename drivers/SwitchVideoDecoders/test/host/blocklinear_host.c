@@ -17,9 +17,11 @@ int main(void)
     // out is written at a pitch of width + 5 (an unaligned destination), so it is sized for that.
     uint8_t *bl = malloc((size_t)pitch * rows), *lin = malloc((size_t)pitch * rows),
             *out = malloc((size_t)(pitch + 5) * rows);
-    for (uint32_t i = 0; i < pitch * rows; i++) lin[i] = (uint8_t)(rand() >> 7);
+    for (uint32_t i = 0; i < pitch * rows; i++)
+        lin[i] = (uint8_t)(rand() >> 7);
     for (uint32_t y = 0; y < rows; y++)
-        for (uint32_t x = 0; x < pitch; x++) bl[offset(x, y, pitch)] = lin[y * pitch + x];
+        for (uint32_t x = 0; x < pitch; x++)
+            bl[offset(x, y, pitch)] = lin[y * pitch + x];
     static const uint32_t cases[][4] = {{0, 0, 1920, 1080}, {0, 0, 1920, 1088}, {8, 2, 1900, 1070}, {3, 1, 17, 5},
                                         {16, 15, 33, 2},    {62, 7, 70, 17},    {0, 0, 1, 1}};
     int bad = 0;
@@ -29,7 +31,8 @@ int main(void)
         for (uint32_t y = 0; y < h; y++)
             for (uint32_t x = 0; x < w; x++)
                 if (out[y * (w + 5) + x] != lin[(y0 + y) * pitch + x0 + x]) {
-                    if (!bad++) printf("mismatch case %u at %u,%u\n", c, x, y);
+                    if (!bad++)
+                        printf("mismatch case %u at %u,%u\n", c, x, y);
                 }
     }
     printf("%s\n", bad ? "FAIL" : "OK");
