@@ -6,6 +6,7 @@ _layoutScreen in 21H461's dyld_shared_cache_arm64. U-Boot, the loader and XNU in
 them, so the panel hekate leaves is the panel ProgressUI must draw.
 """
 
+import json
 import math
 import re
 import struct
@@ -18,6 +19,8 @@ from python.runfiles import runfiles
 
 PANEL = (720, 1280)
 APPLE_GLYPH_BOX = (94, 207, 58, 198)
+PROGRESSUI = '/System/Library/PrivateFrameworks/ProgressUI.framework'
+LOGO_SOURCE = 'build/progressui/apple-logo~ipad.png'
 
 
 def read_bmp(data: bytes) -> tuple[int, int, int, bytes]:
@@ -181,6 +184,14 @@ class BootLogo(unittest.TestCase):
         self.assertEqual((size, width, height), (len(self.icon), 192, 192))
         self.assertTrue(all(pixels[i + 3] == 255 for i in range(0, len(pixels), 4)))
         self.assertEqual(pixels[:4], b'\0\0\0\xff')
+
+    def test_progressui_finds_this_logo_at_scale_1_and_2(self) -> None:
+        manifest = json.loads(Path(runfiles.Create().Rlocation('_main/overlay/manifest.json')).read_text())
+        overlay = {entry['path']: entry['source'] for entry in manifest['files']}
+        for scale in (1, 2):
+            first = f'{PROGRESSUI}/apple-logo@{scale}x~ipad.png'
+            self.assertEqual(overlay.get(first), LOGO_SOURCE, f'{first} is the first name tried at scale {scale}')
+        self.assertEqual(overlay.get(f'{PROGRESSUI}/apple-logo~ipad.png'), LOGO_SOURCE)
 
     def test_loader_hands_xnu_graphics_mode(self) -> None:
         self.assertEqual(VIDEO[1], 1, 'Video.v_display 0 is text mode: XNU clears the panel for its console')

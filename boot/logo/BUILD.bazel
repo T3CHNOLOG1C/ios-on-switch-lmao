@@ -43,6 +43,7 @@ py_test(
     srcs = ["logo_test.py"],
     data = [
         ":pictures",
+        "//overlay:manifest.json",
         "//tools/package:adt_edit.py",
     ],
     deps = [
