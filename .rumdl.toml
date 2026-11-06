@@ -14,3 +14,7 @@ code-blocks = false
 tables = false
 headings = false
 reflow = true
+
+[per-file-ignores]
+# GitHub shows the PR template under the pull request title, which is its level 1 heading.
+".github/pull_request_template.md" = ["MD041"]

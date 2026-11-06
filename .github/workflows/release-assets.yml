@@ -1,0 +1,105 @@
+name: Release assets
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: The tag being released, which must equal MODULE.bazel's version. Empty outside a release.
+        type: string
+        default: ""
+      upload:
+        description: Whether the run writes the caches.
+        type: boolean
+        default: false
+    secrets:
+      BUILDBUDDY_API_KEY:
+        required: false
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: xcode-27
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: ./.github/actions/bazel
+        with:
+          cache: release
+          buildbuddy-api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
+          upload: ${{ inputs.upload }}
+      - name: Read the version
+        id: version
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          version="$(bazel mod graph --depth=0 --color=no 2>/dev/null | sed -n 's/^<root> (switch-ios@\(.*\))$/\1/p')"
+          if [ -z "$version" ] || [ "$version" = _ ]; then
+            echo "::error::MODULE.bazel's module() has no version."
+            exit 1
+          fi
+          if [ -n "$TAG" ] && [ "$TAG" != "$version" ]; then
+            echo "::error::Tag $TAG is not MODULE.bazel's version $version."
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - run: bazel build --config=release //:boot //:gpu //release:assets
+      - name: Name the assets for the release
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          dist="$RUNNER_TEMP/dist"
+          mkdir "$dist"
+          files="$(bazel cquery --config=release --output=files //release:assets)"
+          for f in $files; do
+            cp "$f" "$dist/ios-on-switch-lmao-$VERSION-$(basename "$f")"
+          done
+          cd "$dist"
+          shasum -a 256 -- * > SHA256SUMS
+          cat SHA256SUMS
+      - uses: actions/upload-artifact@v7.0.2
+        with:
+          name: release-assets
+          path: ${{ runner.temp }}/dist
+          if-no-files-found: error
+      - if: inputs.upload && !cancelled()
+        uses: ./.github/actions/bazel-save
+        with:
+          cache: release
+  bazelisk-only:
+    needs: build
+    runs-on: xcode-27
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/download-artifact@v8.0.2
+        with:
+          name: release-assets
+          path: ${{ runner.temp }}/assets
+      - name: Remove Xcode and the Command Line Tools
+        run: |
+          mkdir "$RUNNER_TEMP/xcode"
+          for app in /Applications/Xcode*.app; do
+            sudo mv "$app" "$RUNNER_TEMP/xcode/"
+          done
+          sudo rm -rf /Library/Developer/CommandLineTools
+          sudo xcode-select --reset
+          if xcode-select -p; then
+            echo "::error::A developer directory is still selected."
+            exit 1
+          fi
+      - uses: bazel-contrib/setup-bazel@0.19.1
+        with:
+          bazelisk-cache: true
+          repository-cache: |
+            - MODULE.bazel
+            - MODULE.bazel.lock
+            - bazel/lint/tools.bzl
+            - bazel/llvm/llvm.bzl
+            - bazel/python/requirements_lock.txt
+            - bazel/rust/crates.lock.json
+            - gpu/deps.bzl
+            - ipsw/pins.bzl
+            - third_party/mesa/bazel/repos.bzl
+          cache-save: false
+          bazelrc: build --show_progress_rate_limit=30
+      - name: Dry-run the image builder on this build's assets
+        run: bazel run --repo_env=SWITCH_RELEASE_DIR="$RUNNER_TEMP/assets" --//install:prebuilt=release //:image_dry_run -- --size 32G

@@ -1,0 +1,21 @@
+name: Save the Bazel disk cache
+description: Saves the disk cache entries this run read or wrote, for the job's next run.
+inputs:
+  cache:
+    description: The disk cache's name, as given to the bazel action.
+    required: true
+runs:
+  using: composite
+  steps:
+    # Bazel refreshes an entry's mtime whenever it reads it, the action result before its blobs, so no result kept here
+    # loses a blob.
+    - name: Drop the entries this run left untouched
+      shell: bash
+      run: |
+        if [ -d ~/Library/Caches/switch-ios-bazel/disk ]; then
+          find ~/Library/Caches/switch-ios-bazel/disk -type f ! -newer "$RUNNER_TEMP/bazel-disk-cache-start" -delete
+        fi
+    - uses: actions/cache/save@v6.1.0
+      with:
+        path: ~/Library/Caches/switch-ios-bazel/disk
+        key: bazel-disk-${{ inputs.cache }}-${{ github.sha }}

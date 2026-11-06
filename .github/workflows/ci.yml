@@ -1,0 +1,48 @@
+name: CI
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+jobs:
+  lint:
+    runs-on: xcode-27
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: ./.github/actions/bazel
+        with:
+          cache: lint
+          buildbuddy-api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
+          upload: ${{ github.event_name == 'push' }}
+      - run: bazel test //:format_test //:lint_test //:clang_tidy_test
+      - run: bazel run //tools/lint:py_owners
+      - if: github.event_name == 'push' && !cancelled()
+        uses: ./.github/actions/bazel-save
+        with:
+          cache: lint
+  debug:
+    runs-on: xcode-27
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: ./.github/actions/bazel
+        with:
+          cache: debug
+          buildbuddy-api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
+          upload: ${{ github.event_name == 'push' }}
+      - run: bazel test //...
+      - if: github.event_name == 'push' && !cancelled()
+        uses: ./.github/actions/bazel-save
+        with:
+          cache: debug
+  release:
+    uses: ./.github/workflows/release-assets.yml
+    with:
+      upload: ${{ github.event_name == 'push' }}
+    secrets:
+      BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}

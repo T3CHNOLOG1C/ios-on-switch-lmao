@@ -1,0 +1,69 @@
+name: Bazel
+description: The Xcode bazel/host/xcode.bzl pins, Bazelisk, and every cache a Bazel job can read.
+inputs:
+  cache:
+    description: The disk cache's name, one per job.
+    required: true
+  buildbuddy-api-key:
+    description: A BuildBuddy API key. Without one there is no remote cache.
+    default: ""
+  upload:
+    description: Whether this run writes the caches. Pull requests only read them.
+    default: "false"
+runs:
+  using: composite
+  steps:
+    - name: Select the pinned Xcode
+      shell: bash
+      run: |
+        build="$(sed -n 's/^    "build": "\(.*\)",$/\1/p' bazel/host/xcode.bzl)"
+        if [ -z "$build" ]; then
+          echo "::error::bazel/host/xcode.bzl's XCODE_PINS has no build line this step can read."
+          exit 1
+        fi
+        for app in /Applications/Xcode*.app; do
+          if [ "$(/usr/libexec/PlistBuddy -c 'Print :ProductBuildVersion' "$app/Contents/version.plist")" = "$build" ]; then
+            echo "DEVELOPER_DIR=$app/Contents/Developer" >> "$GITHUB_ENV"
+            exit 0
+          fi
+        done
+        echo "::error::This runner image has no Xcode $build (bazel/host/xcode.bzl)."
+        exit 1
+    - uses: bazel-contrib/setup-bazel@0.19.1
+      with:
+        bazelisk-cache: true
+        repository-cache: |
+          - MODULE.bazel
+          - MODULE.bazel.lock
+          - bazel/lint/tools.bzl
+          - bazel/llvm/llvm.bzl
+          - bazel/python/requirements_lock.txt
+          - bazel/rust/crates.lock.json
+          - gpu/deps.bzl
+          - ipsw/pins.bzl
+          - third_party/mesa/bazel/repos.bzl
+        cache-save: ${{ inputs.upload }}
+        bazelrc: build --show_progress_rate_limit=30
+    # setup-bazel keys its disk cache on the BUILD files alone, so a source-only change would never save a new one.
+    - uses: actions/cache/restore@v6.1.0
+      with:
+        path: ~/Library/Caches/switch-ios-bazel/disk
+        key: bazel-disk-${{ inputs.cache }}-${{ github.sha }}
+        restore-keys: bazel-disk-${{ inputs.cache }}-
+    - shell: bash
+      run: touch "$RUNNER_TEMP/bazel-disk-cache-start"
+    - name: Use the BuildBuddy remote cache
+      if: inputs.buildbuddy-api-key != ''
+      shell: bash
+      env:
+        KEY: ${{ inputs.buildbuddy-api-key }}
+        UPLOAD: ${{ inputs.upload }}
+      run: |
+        {
+          echo "build --config=remote"
+          echo "build --remote_cache=grpcs://remote.buildbuddy.io"
+          echo "build --remote_header=x-buildbuddy-api-key=$KEY"
+          if [ "$UPLOAD" != true ]; then
+            echo "build --noremote_upload_local_results"
+          fi
+        } >> ~/.bazelrc

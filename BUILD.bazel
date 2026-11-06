@@ -31,6 +31,7 @@ package(default_visibility = ["//visibility:public"])
 exports_files([
     ".buildifier-tables.json",
     ".github/logo.svg",
+    ".github/pull_request_template.md",
     ".buildifier.json",
     ".clang-format",
     ".clang-tidy",

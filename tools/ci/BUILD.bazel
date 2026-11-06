@@ -1,0 +1,21 @@
+# The pull request description check (.github/workflows/pr-template.yml runs pr_template.py on the runner's Python).
+load("@rules_python//python:py_library.bzl", "py_library")
+load("@rules_python//python:py_test.bzl", "py_test")
+load("//bazel/lint:defs.bzl", "lint_files")
+
+lint_files()
+
+py_library(
+    name = "pr_template",
+    srcs = ["pr_template.py"],
+    imports = ["../.."],
+)
+
+py_test(
+    name = "pr_template_test",
+    size = "small",
+    srcs = ["pr_template_test.py"],
+    args = ["$(rootpath //:.github/pull_request_template.md)"],
+    data = ["//:.github/pull_request_template.md"],
+    deps = [":pr_template"],
+)

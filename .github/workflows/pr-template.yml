@@ -1,0 +1,22 @@
+name: PR template
+on:
+  # The base branch's checker and template, never the pull request's own copies.
+  pull_request_target:
+    types: [opened, edited, reopened, synchronize]
+permissions:
+  contents: read
+jobs:
+  description:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          sparse-checkout: |
+            .github/pull_request_template.md
+            tools/ci/pr_template.py
+          sparse-checkout-cone-mode: false
+      - name: Check the description against the template
+        env:
+          BODY: ${{ github.event.pull_request.body }}
+        run: printf '%s' "$BODY" | python3 -I tools/ci/pr_template.py .github/pull_request_template.md | tee -a "$GITHUB_STEP_SUMMARY"
