@@ -95,3 +95,28 @@ host_test(
         "//drivers/SwitchUSB:XusbHost.h",
     ],
 )
+
+# --- SuperSpeed: SS port 0's lane, the falcon's SuperSpeed messages, SwitchXHCI's write adjustments ---
+# XusbLanes.h (//drivers/SwitchUSB:superspeed) compiled as C11 with -Wconversion -Wsign-conversion, and its decisions:
+# the lane across DisplayPort alt mode's pin assignments and the role, the register writes against the Linux sequences
+# (never a bit of USB2 pad 0 or another lane), LFPS and DFE/CTLE messages, U1/U2 off and the moderation floor.
+host_library(
+    name = "switch_usb_lanes_c",
+    srcs = ["switch_usb_lanes_c.c"],
+    hdrs = ["//drivers/SwitchUSB:XusbLanes.h"],
+    copts = [
+        "-O1",
+        "-Wconversion",
+        "-Wsign-conversion",
+    ],
+)
+
+host_test(
+    name = "switch_usb_lanes_test",
+    srcs = [
+        "switch_usb_lanes_test.cpp",
+        "//drivers/SwitchUSB:XusbLanes.h",
+        "//drivers/SwitchUSB:XusbPorts.h",
+    ],
+    deps = [":switch_usb_lanes_c"],
+)

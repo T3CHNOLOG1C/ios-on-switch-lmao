@@ -4,6 +4,10 @@
 #include "XudcHardware.h"
 #include "XusbPorts.h"
 #include <IOKit/IOLib.h>
+#if SWITCH_USB_SUPERSPEED
+#include "XusbLanes.h"
+#include "XusbSuperSpeed.h"
+#endif
 
 extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
 
@@ -474,6 +478,18 @@ bool Controller::serviceMailbox()
         w(fpci, XUSB_CFG_ARU_MBOX_OWNER, MBOX_OWNER_NONE);
         return true;
     }
+#if SWITCH_USB_SUPERSPEED
+    const xusb_mbox_ss ss = xusb_mbox_ss_decide(cmd, data);
+    if (ss.handled) {
+        if (ss.lfps)
+            switch_usb_ss_lfps(ss.lfps_enable);
+        if (ss.lfps_settle)
+            IOSleep(1);
+        if (!sendMailbox(ss.reply, ss.data))
+            IOLog("SwitchUSB: falcon mailbox reply %u to %u failed\n", ss.reply, cmd);
+        return true;
+    }
+#endif
     uint32_t reply = MBOX_ACK, replyData = data;
     switch (cmd) {
     case MBOX_INC_FALC_CLOCK:

@@ -16,6 +16,10 @@
 #include "SwitchPD.h"
 #include "SwitchUSB.h"
 #include "UsbDmaMapper.h"
+#if SWITCH_USB_SUPERSPEED
+#include "XusbLanes.h"
+#include "XusbSuperSpeed.h"
+#endif
 
 extern "C" __attribute__((used)) const unsigned long long switch_prelink_cut_null = 0;
 
@@ -34,6 +38,14 @@ bool gHostFailed;                      // switch_usb_host_failed (SwitchXHCI's i
 IOPMDriverAssertionID gHostHold;       // held from the host controller's first start for the rest of the boot
 uint32_t gRoleChanges;                 // role changes applied (the report names the one it follows)
 constexpr uint32_t kReportMS = 1000;   // the role line: this long after a change, when the port has settled
+#if SWITCH_USB_SUPERSPEED
+// The dock (a PD source that swapped us to DFP) wants the host role too. The SuperSpeed pair follows DisplayPort's
+// decision (switch_usb_set_alt_lanes, below gLock); the lane itself only from the role thread.
+bool gDockHost;
+enum switch_usb3_lanes gLanes = SWITCH_USB3_LANES_FREE;
+bool gDockHub;
+bool gSsUp, gSsWantedLogged, gDockHubSeen;
+#endif
 
 // avddio_usb (OLED DTB xudc@700d0000 / xusb@70090000) is MAX77620 LDO1 at 1.05 V, shared with PCIe (drivers/SwitchWLAN
 // TegraPCIe rail(): same register, same value); normally on already. hvdd_usb (3.3 V) and avdd_pll_utmip (SD3, 1.8 V)
@@ -60,7 +72,13 @@ bool railOn(char *why, size_t whySize)
 void pdChanged(void *, const SwitchPDState *state)
 {
     IOLockLock(gLock);
+#if SWITCH_USB_SUPERSPEED
+    const bool dockHost = state->role == SWITCH_PD_ROLE_SINK && state->plugged && state->dataHost;
+    const bool wantHost = gHostPackaged && (state->role == SWITCH_PD_ROLE_SOURCE || dockHost);
+    gDockHost = dockHost;
+#else
     const bool wantHost = gHostPackaged && state->role == SWITCH_PD_ROLE_SOURCE;
+#endif
     const bool hostCable =
         state->role == SWITCH_PD_ROLE_SINK && state->plugged && state->vbusPresent && !state->dataHost;
     const bool changed = wantHost != gWantHost || (hostCable && !gHostCable);
@@ -101,6 +119,36 @@ void armReport()
     thread_call_enter1_delayed(gReportCall, (thread_call_param_t)(uintptr_t)++gRoleChanges, deadline);
 }
 
+#if SWITCH_USB_SUPERSPEED
+// Role thread, after the role: SS port 0's lane up for a host whose SuperSpeed pair DisplayPort leaves free, down
+// otherwise (XusbLanes.h). The USB2 side is never touched, so a hub's USB2 half and its devices stay connected.
+void applyLanes()
+{
+    IOLockLock(gLock);
+    const enum switch_usb3_lanes lanes = gLanes;
+    const bool dockHub = gDockHub, dockHost = gDockHost;
+    IOLockUnlock(gLock);
+    const bool host = gHostRole && gHostUp;
+    const bool pll = switch_usb_ss_pll_locked();
+    if (host && lanes == SWITCH_USB3_LANES_FREE && !pll && !gSsWantedLogged) {
+        gSsWantedLogged = true;
+        IOLog("SwitchUSB: SuperSpeed off: UPHY PLL0 not locked (the PCIe controller brings it up); USB 2.0 only\n");
+    }
+    const bool want = xusb_ss_lane_wanted(host, lanes, pll);
+    if (want != gSsUp && switch_usb_ss_lane(want)) {
+        gSsUp = want;
+        IOLog("SwitchUSB: SuperSpeed lane %s (pairs %s, %s role)\n", want ? "up" : "down", xusb_lanes_name(lanes),
+              gHostRole ? "host" : "device");
+    }
+    if (dockHost && dockHub && host && !gDockHubSeen) {
+        gDockHubSeen = true;
+        switchxhci_expect_port_change();
+    }
+    if (!dockHub || !dockHost)
+        gDockHubSeen = false;
+}
+
+#endif
 // Thread call (THREAD_CALL_OPTIONS_ONCE: never two at once; entered again while it runs, it runs again after).
 // Host: the XUDC off the bus first (as a cable pull), the pad to the host (ID grounded; PP cycled when the controller
 // already runs), then the controller the first time, which powers its ports with the pad already the host's
@@ -132,8 +180,15 @@ void applyRole(thread_call_param_t, thread_call_param_t)
             IOLog("SwitchUSB: system sleep held off for this boot: the host controller has no SC7 path\n");
         }
         gHostRole = true;
+#if SWITCH_USB_SUPERSPEED
+        // The dock's hub appears only once its HUB_CONTROL is acknowledged: its port event is due then (applyLanes).
+        IOLog("SwitchUSB: host role (%s)\n", gDockHost ? "the dock: DFP, its VBUS" : "a device on the port, VBUS on");
+        if (!gDockHost)
+            switchxhci_expect_port_change();
+#else
         IOLog("SwitchUSB: host role (a device on the port, VBUS on)\n");
         switchxhci_expect_port_change();
+#endif
         armReport();
     } else if (!wantHost && gHostRole) {
         switchxhci_set_host_role(false);
@@ -144,6 +199,9 @@ void applyRole(thread_call_param_t, thread_call_param_t)
     }
     if (hostCable && !gHostRole)
         switchxudc_host_expected();
+#if SWITCH_USB_SUPERSPEED
+    applyLanes();
+#endif
 }
 
 void usbThread(void *, wait_result_t)
@@ -238,3 +296,19 @@ extern "C" void switch_usb_resume(void)
     if (gRoleCall)
         thread_call_enter(gRoleCall);  // a cable that came or went while asleep
 }
+
+#if SWITCH_USB_SUPERSPEED
+// DisplayPort's sequencer, on the PD work loop: record and let the role thread follow.
+void switch_usb_set_alt_lanes(enum switch_usb3_lanes lanes, bool dock_hub_enabled)
+{
+    if (!gLock || !gRoleCall)
+        return;
+    IOLockLock(gLock);
+    const bool changed = lanes != gLanes || dock_hub_enabled != gDockHub;
+    gLanes = lanes;
+    gDockHub = dock_hub_enabled;
+    IOLockUnlock(gLock);
+    if (changed)
+        thread_call_enter(gRoleCall);
+}
+#endif

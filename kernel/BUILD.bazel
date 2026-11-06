@@ -311,7 +311,10 @@ kernel_archive(
         "//drivers/TegraVIC:TegraVIC",
         "//drivers/TegraNVJPG:TegraNVJPG",
         "//drivers/SwitchUSB:SwitchUSB",
-    ],
+    ] + select({
+        "//drivers/SwitchUSB:superspeed_on": ["//drivers/SwitchUSB:SwitchUSBSuperSpeed"],
+        "//conditions:default": [],
+    }),
 )
 
 # XNU's mockfs (the same source in xnu-10063 and xnu-12377; it compiles against the selected XNU's SDK).

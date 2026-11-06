@@ -164,3 +164,11 @@ kernel_driver(
         "com.apple.iokit.IOUSBMassStorageDriver=IOUSBMassStorageResource",
     ],
 )
+
+# SuperSpeed (//drivers/SwitchUSB:superspeed): SS port 0's UPHY lane (XusbSuperSpeed.cpp, XusbLanes.h), in the kernel only
+# with the setting (kernel/BUILD.bazel libNativeSwitchBlockDevice).
+kernel_driver(
+    name = "SwitchUSBSuperSpeed",
+    srcs = ["XusbSuperSpeed.cpp"],
+    hdr_deps = [],
+)

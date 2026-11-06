@@ -296,6 +296,38 @@ uint32_t *SwitchXHCI::shadowFor(uint64_t address)
     return &shadow[at / 32][(at % 32) / 4];
 }
 
+#if SWITCH_USB_SUPERSPEED
+namespace {
+// XusbLanes.h's adjustments to AppleUSBXHCI's register writes: U1/U2 off on the SuperSpeed ports, an interrupt
+// moderation floor. AppleUSBXHCI writes from its work loop and its interrupt filter: arithmetic only.
+unsigned gSsFirst, gSsCount;
+bool gSsFound;
+
+uint32_t adjustWrite(uint32_t offset, uint32_t value, uint32_t runtime, uint32_t interrupters)
+{
+    if (!gSsFound) {
+        const xhci_port_range ss = xhci_find_ports(
+            [](void *, uint32_t at) {
+                return gHost.xhci(at);
+            },
+            nullptr, (uint32_t)xhost::kXhciBytes, 3);
+        gSsFirst = ss.first;
+        gSsCount = ss.count;
+        gSsFound = true;
+    }
+    switch (xhci_write_kind(offset, gHost.capLength(), runtime, gSsFirst, gSsCount, interrupters)) {
+    case XHCI_WRITE_SS_PORTPMSC:
+        return xhci_portpmsc_ss(value);
+    case XHCI_WRITE_IMOD:
+        return xhci_imod_floor(value);
+    case XHCI_WRITE_OTHER:
+        break;
+    }
+    return value;
+}
+}  // namespace
+
+#endif
 uint32_t SwitchXHCI::regRead32(uint64_t base, uint32_t offset)
 {
     if (!capBase && offset == 4)
@@ -322,6 +354,10 @@ void SwitchXHCI::regWrite32(uint64_t base, uint32_t offset, uint32_t value)
         *s = value;
         return;
     }
+#if SWITCH_USB_SUPERSPEED
+    if (capBase && base + offset >= capBase && base + offset - capBase < xhost::kXhciBytes)
+        value = adjustWrite((uint32_t)(base + offset - capBase), value, runtimeOffset, hardwareInterrupters);
+#endif
     AppleUSBXHCI::regWrite32(base, offset, value);
 }
 

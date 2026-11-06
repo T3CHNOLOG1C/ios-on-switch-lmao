@@ -207,4 +207,8 @@ static inline bool xusb_xhci_deliverable(uint32_t iman, uint32_t usbcmd)
     return (iman & XHCI_IMAN_IE) && (usbcmd & XHCI_USBCMD_INTE);
 }
 
+#if SWITCH_USB_SUPERSPEED
+#include "XusbLanes.h"
+#endif
+
 #endif
