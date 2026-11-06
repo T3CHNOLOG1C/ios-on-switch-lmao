@@ -176,6 +176,7 @@ struct Pipeline {
     uint32_t push[32] = {}, pushMask = 0;  // root table [0x700, 0x780): the words m2v's push ranges write, and which
     bool vsSetCbuf = false, fsSetCbuf = false;  // the program reads set 0 as constant buffer 1
     uint8_t writeBits = 0;                      // colors its draws write: SET_CT_WRITE(i) with a channel on
+    bool constantBlend = false;     // a blend factor of a blended color is the encoder's blend color
     uint32_t colorFormats[8] = {};  // MTLPixelFormat of each color attachment the state was made for (0: none)
     uint8_t readBits = 0;   // colors its draws read as they were: blended into, or written through a partial mask
     uint8_t fetchBits = 0;  // colors it reads by framebuffer fetch
@@ -227,6 +228,7 @@ public:
     }
 
     void setScissor(uint32_t x, uint32_t y, uint32_t w, uint32_t h);
+    void setBlendColor(const float rgba[4]);
     void setViewport(double x, double y, double w, double h, double znear, double zfar);
     void barrier();  // memoryBarrier...: everything before is written and visible to what follows
     // false: this draw cannot be drawn exactly as m2v would (*why says what); the command buffer goes to m2v instead
@@ -266,6 +268,8 @@ private:
                  uint32_t baseInstance, bool indexed, const char **why);
     uint32_t scissor_[2] = {}, viewport_[8] = {};
     bool scissorDirty_ = true, viewportDirty_ = true;
+    uint32_t blendColor_[4] = {};  // Metal's default, (0, 0, 0, 0), until the encoder sets one
+    bool blendColorDirty_ = true;
     uint32_t topology_ = ~0u, restart_ = ~0u, first_ = 0, baseInstance_ = 0;
     uint8_t writtenBits_ = 0;  // colors a draw wrote since the last barrier
     bool memoryless_[8] = {};

@@ -51,6 +51,7 @@ enum : uint32_t {
     RENDER_ENABLE_OVERRIDE = 0x1944,
     PRIMITIVE_TOPOLOGY = 0x1970,
     CLEAR_SURFACE = 0x19d0,
+    BLEND_CONST_RED = 0x131c,
     COLOR_COMPRESSION = 0x19e0,
     CT_WRITE = 0x1a00,
     VERTEX_STREAM_LOCATION = 0x1c04,
@@ -412,11 +413,16 @@ Pipeline *Device::pipeline(uint64_t keyHash)
     // the color formats of its key ("c<i>=<format>:<writeMask>:<blending>:..."), and which colors its draws read as they
     // were (m2v linear_attachment::writes: a written color blended into, or written through a mask that keeps channels)
     for (const char *at = pack_.string(pp.keyString); (at = strstr(at, " c")); at += 2) {
-        unsigned c = 0, f = 0, mask = 0, blend = 0;
-        if (sscanf(at, " c%u=%u:%u:%u", &c, &f, &mask, &blend) == 4 && c < 8) {
+        unsigned c = 0, f = 0, mask = 0, blend = 0, factor[6] = {};
+        const int n = sscanf(at, " c%u=%u:%u:%u:%u:%u:%*u:%u:%u", &c, &f, &mask, &blend, &factor[0], &factor[1],
+                             &factor[2], &factor[3]);
+        if (n >= 4 && c < 8) {
             pl.colorFormats[c] = f;
             if (mask && (blend || mask != 15))
                 pl.readBits |= uint8_t(1u << c);
+            // MTLBlendFactorBlendColor, OneMinusBlendColor, BlendAlpha, OneMinusBlendAlpha
+            for (int k = 0; blend && k + 4 < n; k++)
+                pl.constantBlend |= factor[k] >= 11 && factor[k] <= 14;
         }
     }
     for (uint32_t k = 0; k < pp.entries; k++)
@@ -1809,6 +1815,16 @@ void RenderEncoder::setViewport(double x, double y, double w, double h, double z
     viewportDirty_ = true;
 }
 
+void RenderEncoder::setBlendColor(const float rgba[4])
+{
+    uint32_t v[4];
+    memcpy(v, rgba, sizeof v);
+    if (memcmp(v, blendColor_, sizeof v)) {
+        memcpy(blendColor_, v, sizeof v);
+        blendColorDirty_ = true;
+    }
+}
+
 void RenderEncoder::barrier()
 {
     if (p_.room() < 64)
@@ -2037,6 +2053,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, uint32_t first, ui
         at[0] = tic | tsc << 20;
     }
     if (pl != emitted_) {
+        blendColorDirty_ |= pl->constantBlend;
         p.raw(pl->methods.data(), uint32_t(pl->methods.size()));
         // the state's push words into the root table, as m2v's vkCmdPushConstants ranges reach it through NVK: the words its
         // ranges cover (the rest keep what an earlier state wrote), one LOAD_CONSTANT_BUFFER per run of words that change
@@ -2072,6 +2089,11 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, uint32_t first, ui
     if (scissorDirty_) {
         p.inc(SCISSOR_ENABLE, {1, scissor_[0], scissor_[1]});
         scissorDirty_ = false;
+    }
+    // NVK's SET_BLEND_CONST_RED..ALPHA, the floats' bits, written where a draw blends with them
+    if (pl->constantBlend && blendColorDirty_) {
+        p.incArray(BLEND_CONST_RED, blendColor_, 4);
+        blendColorDirty_ = false;
     }
     // vertex stream 0 from the pipeline's vertex buffer slot
     if (r.vertexSlot != 0xff) {

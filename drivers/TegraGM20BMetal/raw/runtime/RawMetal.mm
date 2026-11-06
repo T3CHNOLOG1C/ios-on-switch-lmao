@@ -137,7 +137,6 @@ enum RMPred : uint8_t {
     PredStateForeign,
     PredStateNotQuartzCore,  // a state whose functions are not QuartzCore's default.metallib (never looked up in the pack)
     PredStateNotInPack,
-    PredStateConstBlend,
     PredCallVisibility,
     PredCallIndexedForm,     // a = instances, b = baseVertex | baseInstance << 32
     PredCallBufForeign,      // a = stage << 8 | index
@@ -194,7 +193,6 @@ static const char *const kPredNames[] = {"-",
                                          "state.foreign",
                                          "state.notqc",
                                          "state.pack",
-                                         "state.cblend",
                                          "call.vis",
                                          "call.idxform",
                                          "call.buf",
@@ -1614,7 +1612,6 @@ static void refuseTexture(RMTexture *t, RMPred p, uint64_t a, uint64_t b, NSStri
 @interface RMPipeline : RMObject {
 @public
     raw::Pipeline *_raw;  // null: not in the pack (every command buffer using it goes to m2v)
-    bool _constantBlend;
     bool _quartzCore;  // its functions are QuartzCore's (looked up in the pack)
 }
 @end
@@ -2112,9 +2109,6 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
     } else if (!p->_raw) {
         [_cb takeReason:WhyState why:@"a state not in the pack (its label: the line it was made with)"];
         hit(_cb, p->_quartzCore ? PredStateNotInPack : PredStateNotQuartzCore);
-    } else if (p->_constantBlend) {
-        [_cb takeReason:WhyState why:@"a state with constant blend factors"];
-        hit(_cb, PredStateConstBlend);
     }
     _pipe = [(id)p isKindOfClass:[RMPipeline class]] ? p : nil;
     setBinding(_cb, OpPipeline, 0, 0, state, 0);
@@ -4330,6 +4324,12 @@ static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **
         case OpPipeline:
             re->setPipeline(((__bridge RMPipeline *)c.obj)->_raw);
             break;
+        case OpBlendColor: {
+            const float rgba[4] = {extraFloat(cb, c.x), extraFloat(cb, c.x + 1), extraFloat(cb, c.x + 2),
+                                   extraFloat(cb, c.x + 3)};
+            re->setBlendColor(rgba);
+            break;
+        }
         case OpBytes:
             re->setBytes(c.stage, c.index, cb->_bytes.data() + c.a, c.b);
             break;
@@ -5119,15 +5119,6 @@ static MTLRenderPipelineDescriptor *twinDescriptor(MTLRenderPipelineDescriptor *
         NSString *key = raw_metal_pipeline_key(d);
         const char *k = key.UTF8String;
         p->_raw = gRM->raw->pipeline(raw::Pack::fnv(k, strlen(k)));
-    }
-    for (unsigned i = 0; i < 8; i++) {
-        MTLRenderPipelineColorAttachmentDescriptor *a = d.colorAttachments[i];
-        if (!a.blendingEnabled)
-            continue;
-        for (MTLBlendFactor f : {a.sourceRGBBlendFactor, a.destinationRGBBlendFactor, a.sourceAlphaBlendFactor,
-                                 a.destinationAlphaBlendFactor})
-            if (f >= MTLBlendFactorBlendColor && f <= MTLBlendFactorOneMinusBlendAlpha)
-                p->_constantBlend = true;
     }
     if (!p->_raw)
         once([NSString stringWithFormat:@"state not in the pack (m2v draws it)%s: %@",
