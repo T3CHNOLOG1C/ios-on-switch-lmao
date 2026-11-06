@@ -950,7 +950,8 @@ switch_nvk_import_surface(uint32_t surface_id, const void *base, uint64_t bytes)
    import_surface.bytes = bytes;
 }
 
-bool
+/* Exported, as switch_nvk_import_surface is: the Metal frontend finds both with dlsym. */
+__attribute__((visibility("default"))) bool
 switch_nvk_surface_gpu_writes(uint32_t surface_id)
 {
    struct nvkmd_darwin_dev *dev = p_atomic_read(&surface_writes_dev);

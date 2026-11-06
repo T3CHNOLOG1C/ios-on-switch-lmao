@@ -377,6 +377,10 @@ TEST(GM20BCoherencySource, AFailedSurfaceWritesFallsBackToMarkingEveryImport)
 		    HasSubstr("ctx->req.pushes[0].flags |= TegraGM20BPushImportsWritten;"));
 	EXPECT_THAT(nvk,
 		    HasSubstr("if (req.surface_id && !p_atomic_read(&surface_writes_failed))"));
+	// The frontend reaches both with dlsym (NativeBridgeMetalFrontend.mm nvkSymbol); Mesa builds hidden by default.
+	for (const char *exported : {"__attribute__((visibility(\"default\"))) void\nswitch_nvk_import_surface(",
+				     "__attribute__((visibility(\"default\"))) bool\nswitch_nvk_surface_gpu_writes("})
+		EXPECT_THAT(nvk, HasSubstr(exported));
 }
 
 // Only a connection's maps skip the CPU's L2 and TLB maintenance; every removal keeps it (TegraGM20BTlb.h).
