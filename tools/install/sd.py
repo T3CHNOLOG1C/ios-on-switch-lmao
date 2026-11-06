@@ -106,8 +106,8 @@ class Installer:
         if target.type == gpt.APFS:
             if not self.ours(found):
                 raise cards.Refused(
-                    f'{target.describe()} is APFS but not an ios-on-switch-lmao container (volumes {found}); rerun with --reinstall-container to '
-                    'replace it'
+                    f'{target.describe()} is APFS but not an ios-on-switch-lmao container (volumes {found}); '
+                    'rerun with --reinstall-container to replace it'
                 )
             if not cards.volumes(self.card):
                 return 'reprobe'  # written, retyped, but macOS has not attached it yet
@@ -156,9 +156,11 @@ class Installer:
         return image, offset, os_bytes
 
     def write(self, image: Path, part_offset: int, os_bytes: int) -> None:
-        """The scratch partition's written regions onto the target partition. [0, os_bytes) is written whole (the
-        OS container, checkpoint areas included, so nothing of an earlier container on the card survives there);
-        beyond it only the extents the scratch file has data in (blocks the grown container wrote).
+        """Write the scratch partition's written regions onto the target partition.
+
+        [0, os_bytes) is written whole (the OS container, checkpoint areas included, so nothing of an earlier container
+        on the card survives there); beyond it only the extents the scratch file has data in (blocks the grown
+        container wrote).
         """
         target_offset = self.card.target.first * gpt.SECTOR
         size = self.card.target.bytes
@@ -321,7 +323,8 @@ class Installer:
             card = cards.resolve(self.args.disk)
             fat, target = cards.check_layout_unprivileged(card, self.spec)
             self.log(
-                f'card: {card.disk} ({card.size} bytes); FAT {fat.identifier}, target {target.identifier} {target.name!r} ({target.size} bytes, {target.content})'
+                f'card: {card.disk} ({card.size} bytes); FAT {fat.identifier}, target {target.identifier} '
+                f'{target.name!r} ({target.size} bytes, {target.content})'
             )
             self.log(
                 "dry run: the layout passes diskutil's checks. Reading the partition table itself (hybrid MBR, "

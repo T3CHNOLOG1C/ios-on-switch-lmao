@@ -13,14 +13,15 @@ Steps (each can be switched off):
   3 overlay        <Data>/Switch/overlay := the package's overlay/; also removes the r3 Wi-Fi bring-up's configd Debug
                    logging profile (STALE_LOGGING_PROFILES) if a card still has it; and stages hekate's "Dump Joy-Con
                    BT" (the FAT's switchroot/joycon_mac.ini, only read) as <Data>/Switch/bluetooth/{host-address,
-                   joycon-pairing.plist}, removed when the FAT has none (joycon_pairing.py; --no-joycon-pairing skips it)
+                   joycon-pairing.plist}, removed when the FAT has none (joycon_pairing.py; --no-joycon-pairing
+                   skips it)
   4 GPU bundle     --stage-gpu: <Data>/ngpu/addons/TegraGM20BMetal.{bundle,m2v-seed} from --//deploy:gpu_bundle, via
                    the plugin's stager (its CDHashes must be in the same build's kernel window: deploy the boot package
                    built with that bundle); --remove-gpu removes it
   4a AWDL           --awdl on|off: creates or removes <Data>/Switch/awdl-enable, the empty file SwitchWLAN's AWDL
                    (AirDrop's Wi-Fi link) is off without (read once per boot, after Data mounts)
-  4b gallery tiles --reset-gallery-snapshots BUNDLE...: removes those poster extensions' gallery tiles from PosterBoard's
-                   data store (poster_snapshots.py), so the next "Add New Wallpaper" renders them again
+  4b gallery tiles --reset-gallery-snapshots BUNDLE...: removes those poster extensions' gallery tiles from
+                   PosterBoard's data store (poster_snapshots.py), so the next "Add New Wallpaper" renders them again
   5 launchd check  --launchd-check LABEL...: read-only, the jobs Data's launchd database disables (exit 1 if a label
                    is not among them; the kernel rewrites that database at every boot)
   6 eject          unmount the iPad volumes, eject the card (--no-eject keeps it)

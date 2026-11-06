@@ -24,7 +24,7 @@ PATHS = (cards.BOOT_ENTRY + '/', cards.INI, cards.ICON, 'bootloader/payloads/ins
 
 
 def prepare(out: str | Path) -> Path:
-    """An empty `out`, or one an earlier run made (its old contents go). Refuses any other directory."""
+    """Return an empty `out`, or one an earlier run made (its old contents go). Refuses any other directory."""
     out = Path(out)
     if out.exists():
         if any(out.iterdir()) and not (out / MARKER).is_file():
@@ -57,7 +57,7 @@ def add_boot_package(out: Path, package: str | Path) -> None:
 
 
 def files(out: Path) -> list[str]:
-    """What of the folder goes onto the card: the paths it may hold, never what is kept beside them for the Mac."""
+    """List what of the folder goes onto the card: the paths it may hold, never what is kept beside them for the Mac."""
     out = Path(out)
     found = (p.relative_to(out).as_posix() for p in out.rglob('*') if p.is_file() and not p.name.startswith('._'))
     return sorted(relative for relative in found if _allowed(relative))
@@ -73,8 +73,9 @@ def needed_bytes(out: Path, fat_root: Path) -> int:
 
 
 def merge(out: Path, fat_root: Path, log: host.Log, keep: Iterable[str] = ()) -> tuple[list[str], list[str]]:
-    """Copy the folder onto a mounted FAT. Unchanged files (same size and sha256) are skipped; `keep` names files
-    already on the card that belong to it.
+    """Copy the folder onto a mounted FAT.
+
+    Unchanged files (same size and sha256) are skipped; `keep` names files already on the card that belong to it.
     """
     out, fat_root = Path(out), Path(fat_root)
     wanted = files(out)

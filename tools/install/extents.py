@@ -65,9 +65,10 @@ def plan(
     block: int,
     limit: int = manifest.MAX_EXTENTS,
 ) -> list[tuple[int, int, int]]:
-    """Extents [(offset, source offset or ZERO, bytes)]: every data range copied, the parts of `required` ranges
-    that hold no data written as zeros. Close copy extents are joined (the gap copied as zeros) until there are at
-    most `limit` extents.
+    """Plan the extents [(offset, source offset or ZERO, bytes)] that rebuild the partition.
+
+    Every data range is copied, the parts of `required` ranges that hold no data are written as zeros. Close copy
+    extents are joined (the gap copied as zeros) until there are at most `limit` extents.
     """
     marks = []
     for start, end in data:

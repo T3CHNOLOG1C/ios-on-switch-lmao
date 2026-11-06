@@ -57,7 +57,7 @@ class Card:
 
 
 def resolve(argument: str) -> Card:
-    """The whole disk named by `argument`, after the host-level guards (no raw access needed)."""
+    """Return the whole disk named by `argument`, after the host-level guards (no raw access needed)."""
     name = argument.removeprefix('/dev/')
     name = name.removeprefix('r')
     if not name.startswith('disk') or not name[4:].isdigit():
@@ -165,8 +165,9 @@ def diskutil_partitions(card: Card) -> list[Part]:
 
 
 def check_layout_unprivileged(card: Card, spec: dict, partition: str | None = None) -> tuple[Part, Part]:
-    """The same guards as check_layout, from diskutil's view (deploy, image sizing, dry runs without root). Returns
-    (fat partition, target partition).
+    """Apply check_layout's guards from diskutil's view (deploy, image sizing, dry runs without root).
+
+    Returns (fat partition, target partition).
     """
     parts = diskutil_partitions(card)
     if (
@@ -184,7 +185,7 @@ def check_layout_unprivileged(card: Card, spec: dict, partition: str | None = No
 
 
 def table_snapshot(card: Card) -> bytes:
-    """The bytes of every partition-table sector (MBR, both headers and arrays) for before/after checks."""
+    """Return the bytes of every partition-table sector (MBR, both headers and arrays) for before/after checks."""
     fd = os.open(card.raw, os.O_RDONLY)
     try:
         t = card.table
@@ -262,9 +263,10 @@ def boot_entry_files(package: str | Path) -> dict[str, Path]:
 def sync_boot_entry(
     fat_root: Path, package: str | Path, log: host.Log, dry_run: bool = False
 ) -> tuple[list[str], list[str]]:
-    """Make switchroot/ios/ and bootloader/ini/ios.ini on the FAT equal the package, apart from the user's own files
-    (USER_FILES), and remove a copy of the entry under the project's former names (one boot entry, replaced in place);
-    nothing else.
+    """Make switchroot/ios/ and bootloader/ini/ios.ini on the FAT equal the package; nothing else.
+
+    The user's own files (USER_FILES) stay, and a copy of the entry under the project's former names goes (one boot
+    entry, replaced in place).
     """
     fat_root = Path(fat_root)
     wanted = boot_entry_files(package)

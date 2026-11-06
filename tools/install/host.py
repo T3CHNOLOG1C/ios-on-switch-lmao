@@ -115,7 +115,7 @@ PARTITION_SCHEMES = ('GUID_partition_scheme', 'FDisk_partition_scheme')
 
 
 def whole_disk_of(entities: list[dict]) -> str | None:
-    """The image's own whole disk among hdiutil's system-entities (not an APFS container disk synthesized from it)."""
+    """Find the image's own whole disk in hdiutil's system-entities (not an APFS container disk synthesized from it)."""
     for entity in entities:
         dev = entity.get('dev-entry', '')
         if (
@@ -142,7 +142,7 @@ def apfs_containers() -> list[dict]:
 
 
 def container_on(store: str) -> dict | None:
-    """The APFS container whose physical store is `store` (e.g. disk4s9), or None."""
+    """Return the APFS container whose physical store is `store` (e.g. disk4s9), or None."""
     for container in apfs_containers():
         if any(s.get('DeviceIdentifier') == store for s in container.get('PhysicalStores', [])):
             return container

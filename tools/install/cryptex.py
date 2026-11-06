@@ -29,7 +29,8 @@ def _attach(image: Path, log: host.Log) -> tuple[str, str]:
 
 
 def rebuild(source: str, translate: Callable[[Path], list[dict]], work_dir: Path, log: host.Log, what: str) -> Path:
-    """`source` cloned into `work_dir` (APFS clones share blocks until written), its delta applied and sealed again.
+    """Clone `source` into `work_dir` (APFS clones share blocks until written), apply its delta and seal it again.
+
     `translate(mount point)` makes the delta from the mounted clone and returns its entries.
     """
     image = Path(work_dir) / Path(source).name

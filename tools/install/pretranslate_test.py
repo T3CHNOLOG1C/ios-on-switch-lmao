@@ -1,5 +1,6 @@
-"""The drivers run in the order the dyld cache needs, with the other roles' cdhashes, and leave the boot package's
-files behind when their deltas go.
+"""The drivers run in the order the dyld cache needs, with the other roles' cdhashes.
+
+They leave the boot package's files behind when their deltas go.
 """
 
 import hashlib

@@ -35,7 +35,7 @@ def fresh(entry: Candidate) -> bool:
 
 
 def select(entries: list[Candidate], ios_name: str, partition: str | None = None) -> Candidate:
-    """The one target among `entries` (Candidates, the FAT and emuMMC already left out), or TargetError."""
+    """Return the one target among `entries` (Candidates, the FAT and emuMMC already left out), or raise TargetError."""
     ios = [e for e in entries if installed(e, ios_name)]
     if len(ios) > 1:
         raise TargetError('more than one APFS or iOS partition: {}'.format(', '.join(e.name for e in ios)))
@@ -64,5 +64,6 @@ def select(entries: list[Candidate], ios_name: str, partition: str | None = None
 def check_size(size: int) -> None:
     if size <= 0 or size % ALIGN_BYTES or size > MAX_BYTES:
         raise TargetError(
-            f'a partition of {size} bytes cannot hold iOS (the kernel takes up to {MAX_BYTES} bytes in {ALIGN_BYTES}-byte units)'
+            f'a partition of {size} bytes cannot hold iOS '
+            f'(the kernel takes up to {MAX_BYTES} bytes in {ALIGN_BYTES}-byte units)'
         )

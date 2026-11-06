@@ -4,10 +4,11 @@
     bazel run //deploy:pull_logs -- <diskN> [--out DIR] [--no-logarchive] [--no-harvest] [--no-csstore] [--no-launchd]
                                             [--no-eject]
 
-Copies into <out> (default <state>/device-logs/boot-<MMDD-HHMM>, <state> being ~/Library/Application Support/switch-ios or
-$SWITCH_HOME: outside every checkout):
+Copies into <out> (default <state>/device-logs/boot-<MMDD-HHMM>, <state> being ~/Library/Application Support/switch-ios
+or $SWITCH_HOME: outside every checkout):
   diagnostics/, uuidtext/               the unified log (Data db/), and <out>/boot.logarchive built from them
-                                        (`/usr/bin/log show --archive <out>/boot.logarchive --style compact --info --debug`)
+                                        (`/usr/bin/log show --archive <out>/boot.logarchive --style compact
+                                        --info --debug`)
   launchd.log                           (--no-launchd skips it)
   mobile-CrashReporter/, *.ips          crash reports, the WebKit ones also at the top level
   mobileactivationd/, migration-state.txt, boot-io-census.bin
@@ -20,8 +21,8 @@ $SWITCH_HOME: outside every checkout):
                                         guarantee and system sleep step) of the last boot and the one before
   wake-<UTC>.kcdata                     a stackshot of every task taken when the wake guarantee lit the panel itself (a
                                         wake source with the panel off and no display-on from the render server),
-                                        decoded as the panic ones into wake-<UTC>.stackshot.ips and wake-<UTC>.threads.txt
-                                        (SpringBoard's and backboardd's threads)
+                                        decoded as the panic ones into wake-<UTC>.stackshot.ips and
+                                        wake-<UTC>.threads.txt (SpringBoard's and backboardd's threads)
   com.apple.LaunchServices-*.csstore + lsdb-webkit.txt   (--no-csstore skips them)
   m2v/ (+ m2v-cache -> backboardd's)    every process's m2v shader cache, whose journals are merged into the
                                         precompile corpus (tree/drivers/TegraGM20BMetal/precompile/corpus.log, a source
@@ -48,8 +49,8 @@ from tools.install import (
 )
 
 DATA_UUID = 'D1B1D053-D0A6-496C-8625-A947A3DA863E'  # SwitchRawMount.h SWITCH_RAW_DATA_UUID (checked against spec)
-# The checkout's precompile directory (harvest.py and the corpus.log it merges into), relative to the workspace: --harvest
-# (//deploy's $(rootpath) of harvest.py, so it follows the file if it moves).
+# The checkout's precompile directory (harvest.py and the corpus.log it merges into), relative to the workspace:
+# --harvest (//deploy's $(rootpath) of harvest.py, so it follows the file if it moves).
 HARVEST = None
 WEBKIT_IDS = (
     'com.apple.WebKit.WebContent',
@@ -80,7 +81,7 @@ def copytree(src: Path, dst: Path, log: host.Log) -> bool:
 
 
 def report_body(text: str) -> dict:
-    """The JSON body of an .ips report (its first line is the header)."""
+    """Return the JSON body of an .ips report (its first line is the header)."""
     return json.loads(text.split('\n', 1)[1])
 
 
@@ -94,7 +95,7 @@ PANIC_NAMES = (
 
 
 def panic_process(panic_text: str) -> str | None:
-    """The process a panic names (lower case), or None."""
+    """Return the process a panic names (lower case), or None."""
     for pattern in PANIC_NAMES:
         match = re.search(pattern, panic_text, re.MULTILINE)
         if match:
@@ -103,8 +104,10 @@ def panic_process(panic_text: str) -> str | None:
 
 
 def thread_summary(report: dict, process: str) -> list[str]:
-    """The threads of every task whose name is `process` (case-insensitive) in a stackshot report: state, wait, frames
-    as image+offset (S: the dyld shared cache, slid base in binaryImages; K/U: the kernel).
+    """Summarize the threads of every task named `process` (case-insensitive) in a stackshot report.
+
+    Each thread's state, wait and frames as image+offset (S: the dyld shared cache, slid base in binaryImages; K/U: the
+    kernel).
     """
     images = report.get('binaryImages', [])
 
@@ -149,8 +152,9 @@ def decode_stackshot(shot: Path, kcdata: str | Path | None, log: host.Log, what:
 
 
 def decode_wakes(out: Path, kcdata: str | Path | None, log: host.Log) -> None:
-    """wake-*.kcdata (the wake guarantee's stackshots) -> .stackshot.ips and .threads.txt for SpringBoard and
-    backboardd, the two that should have turned the panel on.
+    """Decode wake-*.kcdata (the wake guarantee's stackshots) -> .stackshot.ips and .threads.txt.
+
+    The threads are SpringBoard's and backboardd's, the two that should have turned the panel on.
     """
     for shot in sorted(Path(out).glob('wake-*.kcdata')):
         ips = decode_stackshot(shot, kcdata, log, 'wake')
@@ -284,7 +288,7 @@ def pull(
 
 
 def runfile(path: str | None) -> str | None:
-    """A runfiles path (bazel run) or a plain one, absolute; None stays None."""
+    """Return a runfiles path (bazel run) or a plain one, absolute; None stays None."""
     if path and not os.path.isabs(path):
         try:
             from python.runfiles import runfiles

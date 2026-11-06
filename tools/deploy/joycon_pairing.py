@@ -33,8 +33,9 @@ _ADDRESS = re.compile(r'^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}$')
 
 
 def parse(text: str) -> dict | None:
-    """{"host": "98:b6:e9:..", "controllers": [...], "skipped": [reasons]} from joycon_mac.ini text, or None when it
-    has no usable entry.
+    """Parse joycon_mac.ini text: {"host": "98:b6:e9:..", "controllers": [...], "skipped": [reasons]}.
+
+    Returns None when the text has no usable entry.
     """
     sections, current = {}, None
     for raw in text.splitlines():
@@ -75,7 +76,7 @@ def parse(text: str) -> dict | None:
 
 
 def read(fat_root: Path, log: Callable[..., None]) -> dict | None:
-    """The dump on a mounted FAT, parsed; None when there is none. Only reads."""
+    """Return the dump on a mounted FAT, parsed; None when there is none. Only reads."""
     path = Path(fat_root) / INI
     if not path.is_file():
         log(f'joycon pairing: no {INI} on the FAT (hekate: Tools > Dump Joy-Con BT, after pairing in Horizon)')
@@ -95,7 +96,8 @@ def read(fat_root: Path, log: Callable[..., None]) -> dict | None:
 
 
 def stage(data_root: Path, pairing: dict | None, log: Callable[..., None], dry_run: bool = False) -> bool:
-    """<Data>/Switch/bluetooth/{host-address,joycon-pairing.plist} := the dump, or removed when there is none.
+    """Stage the dump as <Data>/Switch/bluetooth/{host-address,joycon-pairing.plist}, or remove them without one.
+
     Returns whether anything changed.
     """
     directory = Path(data_root) / STAGED

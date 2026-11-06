@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
-"""mkarchive.py <device-log dir with diagnostics/ and uuidtext/> <out.logarchive>
-Builds a .logarchive the real /usr/bin/log can read: diagnostics + uuidtext merged, Info.plist from the timesync boots.
+"""Build a .logarchive the real /usr/bin/log can read: diagnostics + uuidtext merged, Info.plist from timesync boots.
+
+    mkarchive.py <device-log dir with diagnostics/ and uuidtext/> <out.logarchive>
+
 (Was out/switch/device-logs/mkarchive.py; `/usr/bin/log show --archive <out> --style compact --info --debug`.)
 """
 

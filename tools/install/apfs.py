@@ -176,7 +176,7 @@ class Container:
     def set_volume_uuids(
         self, mapping: dict[uuid.UUID, uuid.UUID], dry_run: bool = False
     ) -> list[tuple[int, uuid.UUID, uuid.UUID]]:
-        """Mapping {old uuid: new uuid}: rewrites every superblock copy of those volumes. Returns the patched paddrs."""
+        """Rewrite every superblock copy of the volumes in `mapping` {old uuid: new uuid}; return the patched paddrs."""
         patched = []
         new_values = set(mapping.values())
         for paddr, block in sorted(self.volume_blocks().items()):

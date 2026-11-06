@@ -44,7 +44,7 @@ class Roles:
         return self.scratch / ('delta-' + role)
 
     def run(self, role: str, volume: Path) -> list[dict]:
-        """The role's delta for the volume mounted at `volume`; its entries are ready for delta.apply."""
+        """Make the role's delta for the volume mounted at `volume`; return its entries, ready for delta.apply."""
         if role == 'system_cryptex':
             missing = [r for r in ('os', 'app_cryptex') if r in self.roles and not self._pairs(r).is_file()]
             if missing:
@@ -80,7 +80,7 @@ class Roles:
                 shutil.copyfile(path, self.kept / path.name)
 
     def done(self, role: str) -> None:
-        """The role's delta is applied: its replacement files go (the kept files stay for the boot package)."""
+        """Drop the role's delta once applied: its replacement files go (the kept files stay for the boot package)."""
         if self.out(role).exists():
             shutil.rmtree(self.out(role))
 
@@ -88,8 +88,9 @@ class Roles:
         return sorted(self.kept.iterdir()) if self.kept.is_dir() else []
 
     def check_pins(self, pins: dict[str, str]) -> None:
-        """The kept files against the ones the boot package was built with ({name: sha256}): a translation that made
-        other trust modules or another cache list would not run on the kernel.
+        """Check the kept files against the ones the boot package was built with ({name: sha256}).
+
+        A translation that made other trust modules or another cache list would not run on the kernel.
         """
         kept = {p.name: p for p in self.artifacts()}
         wrong = [
@@ -102,9 +103,10 @@ class Roles:
         self.log(f'pretranslate: {len(pins)} files match the pins')
 
     def overlay_system(self, data: Path, system: Path, entries: list[dict], owners: bool) -> dict:
-        """The System volume's translated files onto Data (OVERLAY), each with its System file's owner, mode and
-        flags, then their manifest and the kernel's index made from it; the manifest is also kept for the boot
-        package. Returns the manifest.
+        """Put the System volume's translated files onto Data (OVERLAY), then their manifest and the kernel's index.
+
+        Each file takes its System file's owner, mode and flags; the index is made from the manifest, which is also
+        kept for the boot package. Returns the manifest.
         """
         root = Path(data) / OVERLAY
         files = []

@@ -178,6 +178,7 @@ def _set_uuids(image: Path, partition_bytes: int, spec: dict, log: host.Log) -> 
 
 def compose(image: Path, os_dmg: str, partition_bytes: int, spec: dict, log: host.Log) -> tuple[int, int]:
     """Write the container into `image` (a new raw disk image whose one partition is exactly `partition_bytes`).
+
     Returns (the partition's offset in the image, the OS container's size).
     """
     if image.exists():

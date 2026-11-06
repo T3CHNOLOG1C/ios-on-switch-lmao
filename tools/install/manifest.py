@@ -83,7 +83,7 @@ def _ascii(text: str, size: int, what: str) -> bytes:
 
 
 def check(m: Manifest) -> None:
-    """The decoder's rules, so the Mac never writes a manifest the installer refuses."""
+    """Apply the decoder's rules, so the Mac never writes a manifest the installer refuses."""
     block = m.block_size
     if block < 4096 or block > 65536 or block & (block - 1):
         raise ManifestError(f'block size {block}')

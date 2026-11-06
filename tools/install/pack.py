@@ -24,8 +24,10 @@ def pack(
     log: host.Log,
     punch: bool = True,
 ) -> manifest.Manifest:
-    """Plan the extents of the partition at `offset` in `image`, stream the copy extents into part files (punching
-    the image behind, so the two never both exist whole), and write the manifest. Returns the Manifest.
+    """Pack the partition at `offset` in `image` into part files and a manifest; return the Manifest.
+
+    Plans its extents, streams the copy extents into part files (punching the image behind, so the two never both
+    exist whole), and writes the manifest.
     """
     install_dir = Path(install_dir)
     fd = os.open(image, os.O_RDWR)
@@ -37,7 +39,8 @@ def pack(
         plan = extents.plan(data, areas, partition_bytes, block)
         sizes = manifest.split(plan)
         log(
-            f'pack: {len(plan)} extents, {sum(sizes)} bytes to copy in {len(sizes)} parts, {sum(n for _, s, n in plan if s == manifest.ZERO)} bytes written as zeros'
+            f'pack: {len(plan)} extents, {sum(sizes)} bytes to copy in {len(sizes)} parts, '
+            f'{sum(n for _, s, n in plan if s == manifest.ZERO)} bytes written as zeros'
         )
         parts, hashes = _write_parts(fd, offset, plan, sizes, install_dir, fat_prefix, punch)
     finally:

@@ -64,8 +64,10 @@ def stage_cryptexes(
     log: host.Log,
     expected: dict[str, str] | None = None,
 ) -> None:
-    """`sources`: {"system_cryptex": path, "app_cryptex": path}; `expected`: {member: sha256} for rebuilt images,
-    which the IPSW pins do not describe.
+    """Stage the cryptex images into Preboot, each checked against its sha256.
+
+    `sources`: {"system_cryptex": path, "app_cryptex": path}; `expected`: {member: sha256} for rebuilt images, which
+    the IPSW pins do not describe.
     """
     expected = expected or {}
     for item in spec['cryptexes']:

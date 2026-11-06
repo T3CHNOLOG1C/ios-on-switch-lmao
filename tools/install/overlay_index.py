@@ -1,5 +1,7 @@
-"""Data:/private/var/Switch/pretranslated.index: the System paths of iOS 27's translated System volume files, which the
-kernel shows from Switch/pretranslated/<path> by a lookup redirect it builds from this index once, before launchd.
+"""Data:/private/var/Switch/pretranslated.index: the System paths of iOS 27's translated System volume files.
+
+The kernel shows them from Switch/pretranslated/<path> by a lookup redirect it builds from this index once, before
+launchd.
 
 Little-endian: "SWOV", u32 version (1), u32 count, u32 string bytes; u32 offsets[count] into the string table; the
 string table, count NUL-terminated absolute paths, sorted by bytes and unique, every byte belonging to one path.

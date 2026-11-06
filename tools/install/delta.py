@@ -30,14 +30,16 @@ def load(manifest: Path) -> list[dict]:
 
 
 def entries_under(entries: list[dict], prefix: str) -> list[dict]:
-    """The entries below `prefix` (e.g. /private/var), with paths relative to it: Data holds a copy of that tree."""
+    """Return the entries below `prefix` (e.g. /private/var), paths relative to it: Data holds a copy of that tree."""
     prefix = prefix.rstrip('/') + '/'
     return [dict(e, path='/' + e['path'][len(prefix) :]) for e in entries if e['path'].startswith(prefix)]
 
 
 def apply(root: Path, entries: list[dict], log: host.Log, what: str, consume: bool = False) -> int:
-    """Rewrite each entry's file below `root`. A file already holding sha256_out is left alone (a resumed run).
-    `consume` deletes each replacement once written, so a delta and its volume never both hold the bytes.
+    """Rewrite each entry's file below `root`.
+
+    A file already holding sha256_out is left alone (a resumed run). `consume` deletes each replacement once written,
+    so a delta and its volume never both hold the bytes.
     """
     changed = 0
     for e in entries:

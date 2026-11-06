@@ -31,7 +31,7 @@ FLOOR = 14 << 30
 
 
 def identity(args: argparse.Namespace, spec: dict, pins: dict, size: int) -> dict:
-    """What a composed image depends on besides the boot package (populate reads that afresh)."""
+    """Return what a composed image depends on besides the boot package (populate reads that afresh)."""
     return {
         'partition_bytes': size,
         'build': pins['build'],
@@ -41,8 +41,9 @@ def identity(args: argparse.Namespace, spec: dict, pins: dict, size: int) -> dic
 
 
 def ipsw_volumes(spec: dict, pins: dict) -> dict:
-    """The spec with the selected IPSW's own System and cryptex volumes, where its pins name them (ipsw/pins.bzl
-    "volumes"; the kernel takes the same values from them).
+    """Return the spec with the selected IPSW's own System and cryptex volumes, where its pins name them.
+
+    The pins' "volumes" (ipsw/pins.bzl); the kernel takes the same values from them.
     """
     volumes = pins.get('volumes')
     if not volumes:
@@ -71,8 +72,8 @@ class Stages:
             other = saved.get('identity', {}).get('partition_bytes')
             if refuse_other_size and other != size and dict(saved['identity'], partition_bytes=size) == want:
                 raise host.HostError(
-                    f"{self.image} was composed for a {other >> 20} MiB partition; this card's is {size >> 20} MiB. Give that "
-                    f'card, or delete {self.scratch / STATE} to start again'
+                    f'{self.image} was composed for a {other >> 20} MiB partition; '
+                    f"this card's is {size >> 20} MiB. Give that card, or delete {self.scratch / STATE} to start again"
                 )
             self.log(f'scratch: {self.image} was made from other inputs; starting again')
             return None, None
@@ -101,7 +102,8 @@ class Stages:
         return pretranslate.Roles(given, self.scratch, self.log) if given else None
 
     def cryptexes(self, roles: pretranslate.Roles | None) -> tuple[dict[str, str | Path], dict[str, str]]:
-        """The cryptex images to stage, and their sha256 where they were translated (the pins describe the IPSW's).
+        """Return the cryptex images to stage, and their sha256 where translated (the pins describe the IPSW's).
+
         The App cryptex goes before the SystemOS one, whose dyld cache takes the other volumes' cdhashes.
         """
         sources = {'system_cryptex': self.args.system_cryptex, 'app_cryptex': self.args.app_cryptex}
@@ -123,14 +125,18 @@ class Stages:
             self.log('pretranslate: no pins given; the trust modules are not checked against the boot package')
 
     def check_translate_space(self, roles: pretranslate.Roles | None) -> None:
-        """The SystemOS cryptex's clone takes its translated files, and the rebuilt image is staged into Preboot."""
+        """Check for the space translating iOS 27 needs in the scratch directory.
+
+        The SystemOS cryptex's clone takes its translated files, and the rebuilt image is staged into Preboot.
+        """
         if not roles or 'system_cryptex' not in roles:
             return
         want = 2 * os.path.getsize(self.args.system_cryptex) + (1 << 30)
         free = free_bytes(self.scratch)
         if free < want + FLOOR:
             raise host.HostError(
-                f'translating iOS 27 needs about {want >> 30} GiB free in {self.scratch} besides the {FLOOR >> 30} GiB kept free; {free >> 30} GiB is'
+                f'translating iOS 27 needs about {want >> 30} GiB free in {self.scratch} besides the '
+                f'{FLOOR >> 30} GiB kept free; {free >> 30} GiB is'
             )
 
     def populate(self, size: int, offset: int) -> None:
@@ -177,7 +183,7 @@ class Stages:
 
 
 def boot_record(args: argparse.Namespace) -> dict[str, str | None]:
-    """What the image's Data volume holds of the boot package: a later boot refresh must match it."""
+    """Return what the image's Data volume holds of the boot package: a later boot refresh must match it."""
     package = Path(args.boot_package)
     trust = Path(args.gpu_base) / 'TegraGM20BMetal.trustcache'
     return {

@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
-"""Prepare iOS for a Switch: a folder to merge onto the SD card's root, holding the boot entry, install-ios.bin and the
-install image it writes onto the card's Linux or Android partition.
+"""Prepare iOS for a Switch: a folder to merge onto the SD card's root.
+
+The folder holds the boot entry, install-ios.bin and the install image it writes onto the card's Linux or Android
+partition.
 
     bazel run //:image [-- --disk diskN | --size 64G] [--partition NAME] [--out DIR] [--copy-to-card]
     bazel run //:image_dry_run -- [--disk diskN | --size 64G]
@@ -131,7 +133,8 @@ def find_target(
         card = found[0]
     fat, partition = cards.check_layout_unprivileged(card, spec, args.partition)
     log(
-        f'card: {card.disk} ({card.size} bytes); target {partition.identifier} {partition.name!r}, {partition.size} bytes'
+        f'card: {card.disk} ({card.size} bytes); target {partition.identifier} {partition.name!r}, '
+        f'{partition.size} bytes'
     )
     return card, fat, partition, partition.size
 
@@ -236,7 +239,8 @@ class Builder:
         free = stages.free_bytes(self.args.scratch)
         if free < want + stages.FLOOR:
             raise host.HostError(
-                f'{self.args.scratch} has {free >> 30} GiB free; composing needs about {want >> 30} GiB and leaves {stages.FLOOR >> 30} GiB'
+                f'{self.args.scratch} has {free >> 30} GiB free; composing needs about {want >> 30} GiB and leaves '
+                f'{stages.FLOOR >> 30} GiB'
             )
 
     def finish(self, out: Path, m: manifest.Manifest) -> None:
@@ -252,7 +256,7 @@ class Builder:
     def pack_to_card(
         self, work: stages.Stages, card: cards.Card, fat: cards.Part, size: int, offset: int, out: Path
     ) -> None:
-        """The parts go straight onto the card's FAT: no second local copy of the image."""
+        """Pack the parts straight onto the card's FAT: no second local copy of the image."""
         with cards.mounted(fat.identifier, self.log) as root:
             install = Path(root) / folder.INSTALL
             if install.exists():
@@ -275,8 +279,10 @@ def allocated(path: Path) -> int:
 
 
 def reexec_as_root(args: argparse.Namespace) -> NoReturn:
-    """The same run under sudo. The runfiles variables go along: the inputs are found, and so are the runfiles of the
-    pretranslate drivers it starts (sudo clears the environment).
+    """Run the same command under sudo.
+
+    The runfiles variables go along: the inputs are found, and so are the runfiles of the pretranslate drivers it
+    starts (sudo clears the environment).
     """
     locate = runfiles()
     env = [f'{k}={v}' for k, v in sorted((locate.EnvVars() if locate else {}).items())]

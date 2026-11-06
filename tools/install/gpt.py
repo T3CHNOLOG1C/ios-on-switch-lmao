@@ -46,7 +46,10 @@ class Entry:
         return self.sectors * SECTOR
 
     def describe(self) -> str:
-        return f'#{self.index} {self.name!r} {NAMES.get(self.type, str(self.type))} {str(self.guid).upper()} LBA {self.first}-{self.last} ({self.bytes} bytes)'
+        return (
+            f'#{self.index} {self.name!r} {NAMES.get(self.type, str(self.type))} {str(self.guid).upper()} '
+            f'LBA {self.first}-{self.last} ({self.bytes} bytes)'
+        )
 
 
 @dataclass
@@ -82,7 +85,7 @@ class Table:
         return (self.entry_count * self.entry_size + SECTOR - 1) // SECTOR
 
     def hybrid(self) -> bool:
-        """True when LBA 0 has real partitions besides the protective 0xEE one."""
+        """Return whether LBA 0 has real partitions besides the protective 0xEE one."""
         return any(p.kind not in (0, 0xEE) for p in self.mbr_partitions)
 
 
@@ -155,7 +158,7 @@ def parse_entries(raw: bytes, count: int, size: int) -> list[Entry]:
 
 
 def read(fd: int, disk_bytes: int) -> Table:
-    """The disk's partition table; both GPT copies must be present, valid and identical."""
+    """Return the disk's partition table; both GPT copies must be present, valid and identical."""
     if disk_bytes % SECTOR:
         raise GptError(f'disk size {disk_bytes} is not a multiple of 512')
     sectors = disk_bytes // SECTOR
@@ -223,7 +226,8 @@ def _rewrite_header(raw: bytes, entries_crc: int) -> bytes:
 
 
 def edit(table: Table, index: int, type_guid: uuid.UUID, name: str) -> list[tuple[int, bytes]]:
-    """The sector writes that give entry `index` a new type GUID and name: [(lba, bytes)], primary and backup.
+    """Return the sector writes that give entry `index` a new type GUID and name: [(lba, bytes)], primary and backup.
+
     Only that entry's 16 type bytes and 72 name bytes change, plus the two headers' CRCs.
     """
     entry = table.entries[index]
@@ -253,7 +257,8 @@ def build(
     partitions: list[tuple[uuid.UUID, uuid.UUID, int, int, str]],
     disk_guid: uuid.UUID | None = None,
 ) -> list[tuple[int, bytes]]:
-    """A fresh GPT with a protective MBR for a scratch image: partitions [(type, guid, first, last, name)].
+    """Build a fresh GPT with a protective MBR for a scratch image: partitions [(type, guid, first, last, name)].
+
     Returns [(lba, bytes)] covering LBA 0-33 and the backup's last 33 sectors.
     """
     count, size = 128, 128

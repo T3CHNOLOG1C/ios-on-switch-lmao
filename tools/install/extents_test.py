@@ -22,7 +22,7 @@ def nxsb(desc_base: int, desc_blocks: int, data_base: int, data_blocks: int):
 
 
 def apply(plan: list[tuple[int, int, int]], image_fd: int, target: bytes):
-    """What install-ios.bin does: copy extents from the concatenated sources, zero extents as zeros."""
+    """Do what install-ios.bin does: copy extents from the concatenated sources, zero extents as zeros."""
     out = bytearray(target)
     for at, source, n in plan:
         out[at : at + n] = bytes(n) if source == manifest.ZERO else os.pread(image_fd, n, at)

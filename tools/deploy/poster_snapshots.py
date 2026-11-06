@@ -1,4 +1,4 @@
-"""PosterBoard's gallery snapshots on the Data volume, removed per poster extension so the next gallery regenerates them.
+"""PosterBoard's gallery snapshots on Data, removed per poster extension so the next gallery regenerates them.
 
 PosterBoard renders each gallery tile once (a PBFPosterSnapshotter run of the poster's extension) and keeps the result,
 an ATX image, beside the descriptor in its data store:
@@ -40,7 +40,7 @@ def posterboard_container(data_root: Path) -> Path | None:
 
 
 def gallery_snapshots(data_root: Path, bundles: list[str]) -> list[Path]:
-    """The SNAPSHOT_GALLERY files of `bundles`' descriptors in every data store version, sorted."""
+    """Return the SNAPSHOT_GALLERY files of `bundles`' descriptors in every data store version, sorted."""
     container = posterboard_container(data_root)
     if container is None:
         return []
@@ -53,7 +53,7 @@ def gallery_snapshots(data_root: Path, bundles: list[str]) -> list[Path]:
 
 
 def reset(data_root: Path, bundles: list[str], log: Callable[..., None], dry_run: bool = False) -> int:
-    """Removes `bundles`' gallery snapshots; returns how many (would) go."""
+    """Remove `bundles`' gallery snapshots; return how many (would) go."""
     snapshots = gallery_snapshots(data_root, bundles)
     if posterboard_container(data_root) is None:
         log('gallery snapshots: no PosterBoard container on Data')
