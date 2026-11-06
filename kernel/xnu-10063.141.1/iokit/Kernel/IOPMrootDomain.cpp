@@ -87,6 +87,7 @@ __BEGIN_DECLS
 #include <mach/shared_region.h>
 #include <kern/clock.h>
 __END_DECLS
+#include <kern/switch_sched.h>
 
 #if defined(__i386__) || defined(__x86_64__)
 __BEGIN_DECLS
@@ -8020,6 +8021,7 @@ IOPMrootDomain::dispatchPowerEvent(
 			 * GPU's idle clock decide, whenever this comes (r8a: 74 s of uptime, after the band's bound). */
 			switch_boot_band_lift("System Boot Complete");
 			switch_perf_hint(4); /* SWITCH_PERF_HINT_BOOT_DONE */
+			switch_sched_boot_complete();
 
 			if (PE_get_default("sleep-disabled", &gSleepDisabledFlag, sizeof(gSleepDisabledFlag))) {
 				DLOG("Setting gSleepDisabledFlag to %u from device tree\n", gSleepDisabledFlag);

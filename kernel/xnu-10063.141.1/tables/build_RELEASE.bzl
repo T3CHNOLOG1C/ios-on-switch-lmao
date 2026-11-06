@@ -791,6 +791,7 @@ BUILD_RELEASE = {
         {"kind": "copy", "mode": "-c -S -m 0444", "out": "o/EXPORT_HDRS/osfmk/kern/socd_client.h", "src": "s/osfmk/kern/socd_client.h"},
         {"kind": "copy", "mode": "-c -S -m 0444", "out": "o/EXPORT_HDRS/osfmk/kern/socd_client_kern.h", "src": "s/osfmk/kern/socd_client_kern.h"},
         {"kind": "copy", "mode": "-c -S -m 0444", "out": "o/EXPORT_HDRS/osfmk/kern/startup.h", "src": "s/osfmk/kern/startup.h"},
+        {"kind": "copy", "mode": "-c -S -m 0444", "out": "o/EXPORT_HDRS/osfmk/kern/switch_sched.h", "src": "s/osfmk/kern/switch_sched.h"},
         {"kind": "copy", "mode": "-c -S -m 0444", "out": "o/EXPORT_HDRS/osfmk/kern/sync_sema.h", "src": "s/osfmk/kern/sync_sema.h"},
         {"kind": "copy", "mode": "-c -S -m 0444", "out": "o/EXPORT_HDRS/osfmk/kern/task.h", "src": "s/osfmk/kern/task.h"},
         {"kind": "copy", "mode": "-c -S -m 0444", "out": "o/EXPORT_HDRS/osfmk/kern/task_ident.h", "src": "s/osfmk/kern/task_ident.h"},

@@ -103,6 +103,8 @@
 #include <security/mac_framework.h>
 #endif
 
+#include <kern/switch_sched.h>
+
 struct pshmnode;
 struct psemnode;
 struct pipe;
@@ -967,6 +969,7 @@ bsd_setthreadname(void *uth, uint64_t tid, const char *name)
 	if (tid == current_tid) {
 		kernel_debug_string_simple(TRACE_STRING_THREADNAME, ut->pth_name);
 	}
+	switch_sched_named(get_machthread(ut), ut->pth_name);
 }
 
 void

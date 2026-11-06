@@ -15,6 +15,9 @@
 #                            process, largest first, with their rates and top ids, the rest as others
 #   xnu_render_senders_source_test  ipc_kmsg_send counts a message under its destination port's lock, only for the
 #                            watched space and not for a kernel reply
+#   xnu_sched_stats_test     osfmk/kern/switch_sched_stats.h's latency histogram, percentiles and line entry; that
+#                            thread_invoke feeds it in both dispatch paths under the incoming thread's lock, and that
+#                            a release kernel compiles every hook to nothing
 #   xnu_ui_scale_test        bsd/vm/switch_ui_scale.h's scales (whole-point screens, exact floats, boot-arg values)
 #                            and the cache text they write, against the assembler and the bytes the 1.6-only sites
 #                            shipped; vm_unix.c's CoreUI row bytes, and no UI scale pager at scale 1
@@ -189,6 +192,39 @@ host_test(
     srcs = ["xnu_stall_test.cpp"],
     data = ["//kernel/xnu-10063.141.1/osfmk:kern/block_hint.h"],
     deps = [":stall"],
+)
+
+# --- switch_sched_stats.h ---------------------------------------------------------------------------------------------
+copy_file(
+    name = "switch_sched_stats",
+    src = "//kernel/xnu-10063.141.1/osfmk:kern/switch_sched_stats.h",
+    out = "switch_sched_stats.h",
+)
+
+host_library(
+    name = "sched_stats",
+    srcs = [
+        "switch_sched_stats.h",
+        "xnu_sched_stats_harness.c",
+    ],
+    hdrs = ["xnu_sched_stats_harness.h"],
+    copts = [
+        "-std=c11",
+        "-Wconversion",
+        "-Wsign-conversion",
+    ],
+    includes = ["."],
+)
+
+host_test(
+    name = "xnu_sched_stats_test",
+    srcs = ["xnu_sched_stats_test.cpp"],
+    data = [
+        "//kernel/xnu-10063.141.1/osfmk:kern/sched_prim.c",
+        "//kernel/xnu-10063.141.1/osfmk:kern/switch_sched.h",
+        "//kernel/xnu-10063.141.1/osfmk:kern/switch_sched_stats.c",
+    ],
+    deps = [":sched_stats"],
 )
 
 # --- switch_ui_scale.h ------------------------------------------------------------------------------------------------

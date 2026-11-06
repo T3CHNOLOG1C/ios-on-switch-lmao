@@ -40,6 +40,7 @@
 #include <kern/machine.h>
 #include <kern/queue.h>
 #include <kern/policy_internal.h>
+#include <kern/switch_sched.h>
 
 #include <sys/errno.h>
 
@@ -2160,6 +2161,8 @@ ledger_perform_blocking(ledger_t l)
 
 		/* Mark that somebody is waiting on this entry  */
 		flag_set(&le->le_flags, LF_WAKE_NEEDED);
+		switch_sched_limit_block(current_thread(),
+		    le->_le.le_refill.le_last_refill + le->_le.le_refill.le_refill_period);
 
 		ret = thread_block_reason(THREAD_CONTINUE_NULL, NULL,
 		    AST_LEDGER);

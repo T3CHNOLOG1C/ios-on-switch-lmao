@@ -106,6 +106,7 @@
 #include <kern/timer_queue.h>
 #include <kern/waitq.h>
 #include <kern/policy_internal.h>
+#include <kern/switch_sched.h>
 
 #include <vm/pmap.h>
 #include <vm/vm_kern.h>
@@ -3092,6 +3093,7 @@ thread_invoke(
 			thread->last_processor = processor;
 			thread->c_switch++;
 			ast_context(thread);
+			switch_sched_on_core(thread, ctime);
 
 			thread_unlock(thread);
 
@@ -3238,6 +3240,7 @@ need_stack:
 	thread->last_processor = processor;
 	thread->c_switch++;
 	ast_context(thread);
+	switch_sched_on_core(thread, ctime);
 
 	thread_unlock(thread);
 
@@ -6888,6 +6891,7 @@ sched_timeshare_maintenance_continue(void)
 	};
 
 	sched_tick_ctime = mach_absolute_time();
+	switch_sched_tick(sched_tick_ctime);
 
 	if (__improbable(sched_tick_last_abstime == 0)) {
 		sched_tick_last_abstime = sched_tick_ctime;

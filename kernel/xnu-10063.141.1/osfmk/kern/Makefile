@@ -115,6 +115,7 @@ PRIVATE_EXPORT_FILES = \
 
 XNU_ONLY_EXPORTS = \
 	boot_progress.h \
+	switch_sched.h \
 	arcade.h \
 	btlog.h \
 	cpc.h \
