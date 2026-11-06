@@ -96,7 +96,7 @@ def _metal_plugin_impl(ctx):
     defines = [switch_debug_define(ctx)]
     if ctx.file.stack:
         defines.append("-DTEGRA_RAW_STACK=0x@FILE:%s@ull" % ctx.file.stack.path)
-    inputs = ctx.files.srcs + ctx.files.cc_srcs + ctx.files.hdrs + ctx.files.include_markers + ctx.files.stack
+    headers = ctx.files.hdrs + ctx.files.include_markers + ctx.files.stack
     objects = []
     for language, sources in (("objective-c++", ctx.files.srcs), ("c++", ctx.files.cc_srcs)):
         # Plain C++ sends no Objective-C messages (clang calls the flag unused there, an error under -Werror).
@@ -108,7 +108,7 @@ def _metal_plugin_impl(ctx):
                 "ObjcxxCompile",
                 "Compiling %s" % src.short_path,
                 ["clang++"] + _IOS + cflags + includes + defines + ["-x", language, "-c", src.path, "-o", obj.path],
-                inputs,
+                [src] + headers,
                 [obj],
             )
             objects.append(obj)
