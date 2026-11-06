@@ -82,7 +82,8 @@ TEST(RawYcbcr, EveryFormatOverEveryMeasuredSurfaceWhoseChromaItFits)
                     const uint32_t rows = s.sub == 0 ? 9 : 17;
                     raw::YcbcrFacts f = surface(format, s.code, 33, 17, 256, rows);
                     raw::YcbcrPlan p;
-                    const bool expected = bits == s.bits && sub >= s.sub;
+                    // the format's chroma no finer than the surface's
+                    const bool expected = bits == s.bits && sub <= s.sub;
                     EXPECT_EQ(raw::planYcbcr(f, p) == nullptr, expected) << s.code << " " << format;
                     taken += expected;
                     if (!expected)
@@ -92,7 +93,7 @@ TEST(RawYcbcr, EveryFormatOverEveryMeasuredSurfaceWhoseChromaItFits)
                     EXPECT_EQ(p.chromaWidth, sub == 2 ? 33u : 17u) << format;
                     EXPECT_EQ(p.chromaHeight, sub == 0 ? 9u : 17u) << format;
                 }
-    EXPECT_EQ(taken, 3 * (13 + 12));  // per output: 8-bit 2 x 3 + 2 x 2 + 3 x 1 pairs, 10-bit 2 x 3 + 2 x 2 + 2 x 1
+    EXPECT_EQ(taken, 3 * (15 + 12));  // per output: 8-bit 2 x 1 + 2 x 2 + 3 x 3 pairs, 10-bit 2 x 1 + 2 x 2 + 2 x 3
 }
 
 TEST(RawYcbcr, PlaneOneOfFullHeightChromaReadsItsCodesAsLuma)
