@@ -21,25 +21,14 @@ writes <out>/pack.bin (runtime/raw_pack.h layout), <out>/pack.json, <out>/progra
 report.
 """
 
-import json
 import os
-import re
 import struct
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import layouts
+import packfile
 import probelog
-
-MAGIC = b'GM20BPK1'
-VERSION = 2  # 2: the header's stack key (rawpack.py --stack) after the section table
-
-
-def fnv(b: bytes, h: int = 0xCBF29CE484222325) -> int:
-    for x in b:
-        h = ((h ^ x) * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
-    return h
-
 
 # Registers the runtime owns (sets per pass, per draw, or once at init with its own addresses): never in a blob or the
 # baseline.
@@ -130,25 +119,24 @@ def load_programs(path: str) -> dict[str, dict[str, bytes | list[int]]]:
         at += count
         image = b[at : at + 80 + code]
         at += 80 + code
-        progs[f'{fnv(image):x}'] = {'image': image, 'cbufs': types}
+        progs[f'{packfile.fnv(image):x}'] = {'image': image, 'cbufs': types}
     return progs
 
 
-def main() -> None:
-    out_path, log_path, prog_path, out_dir = sys.argv[1:5]
+def load_sizes(prefix: str) -> dict[tuple[int, int], list[int]]:
     sizes = {}  # (state index, set offset) -> (bound size with 16-byte payloads, with 4096-byte payloads)
-    if len(sys.argv) > 5:
-        for b in (16, 4096):
-            for p in probelog.load(f'{sys.argv[5]}{b}.out', f'{sys.argv[5]}{b}.log'):
-                if p['draws'] != 1 or p['dispatches'] or not p['records'] or 'set0' not in p['records'][0]:
-                    continue
-                w = p['records'][0]['set0'][1]
-                for o in range(0, len(w) - 3, 4):
-                    if f'ptr0.{o * 4}' in p['records'][0]['ptr']:
-                        sizes.setdefault((p['index'], o * 4), [0, 0])[0 if b == 16 else 1] = w[o + 2]
-    os.makedirs(out_dir, exist_ok=True)
-    probes = probelog.load(out_path, log_path)
-    programs = load_programs(prog_path)
+    for b in (16, 4096):
+        for p in probelog.load(f'{prefix}{b}.out', f'{prefix}{b}.log'):
+            if p['draws'] != 1 or p['dispatches'] or not p['records'] or 'set0' not in p['records'][0]:
+                continue
+            w = p['records'][0]['set0'][1]
+            for o in range(0, len(w) - 3, 4):
+                if f'ptr0.{o * 4}' in p['records'][0]['ptr']:
+                    sizes.setdefault((p['index'], o * 4), [0, 0])[0 if b == 16 else 1] = w[o + 2]
+    return sizes
+
+
+def load_init(log_path: str) -> tuple[list[tuple[int, int, int]], dict[int, dict[int, int]]]:
     # init trace and post-init registers
     init, post = [], {0: {}, 1: {}}
     with open(log_path) as log:
@@ -159,43 +147,50 @@ def main() -> None:
             elif line.startswith('S regs '):
                 f = line.split()
                 post[int(f[2])] = {int(a, 16): int(v, 16) for a, v in (x.split('=') for x in f[3:])}
-    # drop the query-pool setup (submit 4 is not traced) and NVK's own MME bookkeeping we relocate
-    report = []
+    return init, post
+
+
+def skip_reason(p: dict) -> str | None:
+    if p['draws'] != 1:
+        return f'{p["draws"]} draws'
+    if p['dispatches']:
+        return f'{p["dispatches"]} dispatches'
+    if not p['records']:
+        return 'no record'
+    r = p['records'][0]
+    if any(v[2] != 'known' for v in r['prog'].values()):
+        return 'unknown program'
+    if sorted(r['prog']) != [1, 5]:
+        return f'stages {sorted(r["prog"])}'
+    return None
+
+
+def split_probes(probes: list[dict]) -> tuple[list[dict], list[tuple[dict, str]]]:
     simple, skipped = [], []
     for p in probes:
-        why = None
-        if p['draws'] != 1:
-            why = f'{p["draws"]} draws'
-        elif p['dispatches']:
-            why = f'{p["dispatches"]} dispatches'
-        elif not p['records']:
-            why = 'no record'
-        else:
-            r = p['records'][0]
-            if any(v[2] != 'known' for v in r['prog'].values()):
-                why = 'unknown program'
-            elif sorted(r['prog']) != [1, 5]:
-                why = f'stages {sorted(r["prog"])}'
+        why = skip_reason(p)
         # (three color attachments: the render server's since r7n's harvest, Core Animation's "A3" states with an
         # R32Float third attachment, taken as any other; test/frame.h FRAME_A3 draws them)
         if why:
             skipped.append((p, why))
         else:
             simple.append(p)
+    return simple, skipped
 
-    # a color target's own registers (per-target blend 0x1e00 + 0x20 j, SET_CT_WRITE 0x1a00 + 4 j) mean nothing for a
-    # state without target j: what the probe saw there is an earlier state's leftover. Not that state's, so neither in
-    # its blob nor in deciding what varies (r8-rawca: two states with a third target made targets 2's blend "vary" for
-    # every other state)
-    def targets(key: str) -> int:
-        return sum(1 for t in key.split() if t[:1] == 'c' and t[1:2].isdigit() and '=' in t)
 
-    def foreign(m: int, n: int) -> bool:
-        return (0x1E00 <= m < 0x1F00 and (m - 0x1E00) // 0x20 >= n) or (0x1A00 <= m < 0x1A20 and (m - 0x1A00) // 4 >= n)
+# a color target's own registers (per-target blend 0x1e00 + 0x20 j, SET_CT_WRITE 0x1a00 + 4 j) mean nothing for a
+# state without target j: what the probe saw there is an earlier state's leftover. Not that state's, so neither in
+# its blob nor in deciding what varies (r8-rawca: two states with a third target made targets 2's blend "vary" for
+# every other state)
+def targets(key: str) -> int:
+    return sum(1 for t in key.split() if t[:1] == 'c' and t[1:2].isdigit() and '=' in t)
 
-    for p in simple:
-        n = targets(p['key'])
-        p['records'][0]['regs'] = {m: v for m, v in p['records'][0]['regs'].items() if not foreign(m, n)}
+
+def foreign(m: int, n: int) -> bool:
+    return (0x1E00 <= m < 0x1F00 and (m - 0x1E00) // 0x20 >= n) or (0x1A00 <= m < 0x1A20 and (m - 0x1A00) // 4 >= n)
+
+
+def split_registers(simple: list[dict], post: dict[int, dict[int, int]]) -> tuple[list[int], dict[int, int]]:
     # registers: varying across states -> per-pipeline blob; equal -> baseline (when it differs from post-init)
     allregs = set(post[0])
     for p in simple:
@@ -203,12 +198,12 @@ def main() -> None:
     vals = {m: {p['records'][0]['regs'].get(m, 0) for p in simple} for m in allregs if not owned(m)}
     varying = sorted(m for m, v in vals.items() if len(v) > 1)
     baseline = {m: next(iter(v)) for m, v in vals.items() if len(v) == 1 and next(iter(v)) != post[0].get(m, 0)}
-    report.append(f'{len(probes)} states probed, {len(simple)} taken, {len(skipped)} skipped')
-    for p, why in skipped:
-        report.append(f'  skipped {p["index"]} ({why}): {p["key"][:150]}')
-    names = ' '.join(f'{m:x}' for m in varying)
-    report.append(f'{len(varying)} per-pipeline registers: {names}')
-    report.append(f'{len(baseline)} baseline registers over post-init')
+    return varying, baseline
+
+
+def lay_out_programs(
+    simple: list[dict], programs: dict[str, dict], report: list[str]
+) -> tuple[bytearray, dict[str, int], list[dict]]:
     # programs used, heap layout
     used = []
     for p in simple:
@@ -238,199 +233,133 @@ def main() -> None:
             }
         )
     report.append(f'{len(prog_recs)} programs, shader heap image {len(heap) // 1024} KiB')
+    return heap, prog_index, prog_recs
+
+
+def buffer_entry(e: tuple, index: int, sizes: dict[tuple[int, int], list[int]]) -> dict:
+    s16, s4k = sizes.get((index, e[0]), (256, 256))
+    # a 16-byte payload bound at 256: a uniform buffer (NVK rounds its range to the cbuf alignment); else storage. The
+    # 4096-byte one's range: the window (0: the whole payload)
+    ssbo = s16 < 256
+    window = 0 if s4k >= 4096 else s4k
+    return {
+        'off': e[0],
+        'kind': 'ubo',
+        'stage': e[2],
+        'slot': e[3],
+        'size': e[4],
+        'ssbo': ssbo,
+        'window': window,
+    }
+
+
+def handle_entry(e: tuple, tsc: dict[int, list[int]], constexpr_tsc: list[list[int]], problems: list[str]) -> dict:
+    tk, sk = e[2], e[3]
+    ent = {'off': e[0], 'kind': 'handle'}
+    if tk is None:
+        ent['tex'] = None
+    elif tk[0] == 'tex':
+        ent['tex'] = ('slot', tk[1])
+    elif tk[0] == 'fetch':
+        ent['tex'] = ('fetch', tk[1])
+    else:
+        problems.append(f'texture {tk}')
+    if sk is None:
+        ent['smp'] = None
+    elif sk[0] == 'smp':
+        ent['smp'] = ('slot', sk[1])
+    elif sk[0] == 'tsc?derived':
+        problems.append('a sampler m2v derives from a bound one (YCbCr conversion)')
+    else:
+        # a sampler the probe did not bind: the function's constexpr sampler (made by m2v as an immutable one)
+        words = tsc[e[4] >> 20]
+        if words not in constexpr_tsc:
+            constexpr_tsc.append(words)
+        ent['smp'] = ('constexpr', constexpr_tsc.index(words))
+    return ent
+
+
+def vertex_streams(r: dict, problems: list[str]) -> list[dict]:
+    vbs = []
+    for j, (_loc, _lim, fmt) in sorted(r['vbinfo'].items()):
+        w = r['vb'][j][1]
+        if (w[0] >> 16) != 0xC0DE or (w[0] >> 8) & 0xFF != 1:
+            problems.append(f'vertex stream {j} not a vertex slot')
+        vbs.append({'stream': j, 'slot': w[0] & 0xFF, 'stride': fmt & 0xFFF})
+    return vbs
+
+
+def pipeline(
+    p: dict,
+    varying: list[int],
+    prog_index: dict[str, int],
+    sizes: dict[tuple[int, int], list[int]],
+    constexpr_tsc: list[list[int]],
+) -> dict:
+    r = p['records'][0]
+    ents, problems = layouts.layout(p)
+    rec = {
+        'index': p['index'],
+        'key': p['key'],
+        'vs': prog_index[r['prog'][1][0]],
+        'fs': prog_index[r['prog'][5][0]],
+    }
+    rec['blob'] = [
+        (m, r['regs'].get(m, 0)) for m in varying if m not in (0x2044, 0x2144) and not foreign(m, targets(p['key']))
+    ]
+    root = r['root'][1]
+    rec['push'] = [(int(o, 16), int(x, 16)) for o, x in (w.split('=') for w in r.get('pushw', []))]
+    rec['set_size'] = root[0x38 // 4 + 2] if 'set0' in r else 0
+    entries = [
+        buffer_entry(e, p['index'], sizes) if e[1] == 'ubo' else handle_entry(e, r['tsc'], constexpr_tsc, problems)
+        for e in ents
+    ]
+    rec['entries'] = entries
+    rec['vbs'] = vertex_streams(r, problems)
+    rec['fetch'] = any(e.get('tex', [None])[0] == 'fetch' for e in entries if e['kind'] == 'handle')
+    rec['clears'] = len(p['clears'])
+    rec['problems'] = problems
+    return rec
+
+
+def main() -> None:
+    out_path, log_path, prog_path, out_dir = sys.argv[1:5]
+    sizes = load_sizes(sys.argv[5]) if len(sys.argv) > 5 else {}
+    os.makedirs(out_dir, exist_ok=True)
+    probes = probelog.load(out_path, log_path)
+    programs = load_programs(prog_path)
+    init, post = load_init(log_path)
+    # drop the query-pool setup (submit 4 is not traced) and NVK's own MME bookkeeping we relocate
+    report = []
+    simple, skipped = split_probes(probes)
+    for p in simple:
+        n = targets(p['key'])
+        p['records'][0]['regs'] = {m: v for m, v in p['records'][0]['regs'].items() if not foreign(m, n)}
+    varying, baseline = split_registers(simple, post)
+    report.append(f'{len(probes)} states probed, {len(simple)} taken, {len(skipped)} skipped')
+    for p, why in skipped:
+        report.append(f'  skipped {p["index"]} ({why}): {p["key"][:150]}')
+    names = ' '.join(f'{m:x}' for m in varying)
+    report.append(f'{len(varying)} per-pipeline registers: {names}')
+    report.append(f'{len(baseline)} baseline registers over post-init')
+    heap, prog_index, prog_recs = lay_out_programs(simple, programs, report)
     # pipelines
     pipes, constexpr_tsc = [], []
     for p in simple:
-        r = p['records'][0]
-        ents, problems = layouts.layout(p)
-        rec = {
-            'index': p['index'],
-            'key': p['key'],
-            'vs': prog_index[r['prog'][1][0]],
-            'fs': prog_index[r['prog'][5][0]],
-        }
-        rec['blob'] = [
-            (m, r['regs'].get(m, 0)) for m in varying if m not in (0x2044, 0x2144) and not foreign(m, targets(p['key']))
-        ]
-        root = r['root'][1]
-        rec['push'] = [(int(o, 16), int(x, 16)) for o, x in (w.split('=') for w in r.get('pushw', []))]
-        rec['set_size'] = root[0x38 // 4 + 2] if 'set0' in r else 0
-        entries = []
-        for e in ents:
-            if e[1] == 'ubo':
-                s16, s4k = sizes.get((p['index'], e[0]), (256, 256))
-                # a 16-byte payload bound at 256: a uniform buffer (NVK rounds its range to the cbuf alignment); else
-                # storage. The 4096-byte one's range: the window (0: the whole payload)
-                ssbo = s16 < 256
-                window = 0 if s4k >= 4096 else s4k
-                entries.append(
-                    {
-                        'off': e[0],
-                        'kind': 'ubo',
-                        'stage': e[2],
-                        'slot': e[3],
-                        'size': e[4],
-                        'ssbo': ssbo,
-                        'window': window,
-                    }
-                )
-            else:
-                tk, sk = e[2], e[3]
-                ent = {'off': e[0], 'kind': 'handle'}
-                if tk is None:
-                    ent['tex'] = None
-                elif tk[0] == 'tex':
-                    ent['tex'] = ('slot', tk[1])
-                elif tk[0] == 'fetch':
-                    ent['tex'] = ('fetch', tk[1])
-                else:
-                    problems.append(f'texture {tk}')
-                if sk is None:
-                    ent['smp'] = None
-                elif sk[0] == 'smp':
-                    ent['smp'] = ('slot', sk[1])
-                elif sk[0] == 'tsc?derived':
-                    problems.append('a sampler m2v derives from a bound one (YCbCr conversion)')
-                else:
-                    # a sampler the probe did not bind: the function's constexpr sampler (made by m2v as an immutable
-                    # one)
-                    words = r['tsc'][e[4] >> 20]
-                    if words not in constexpr_tsc:
-                        constexpr_tsc.append(words)
-                    ent['smp'] = ('constexpr', constexpr_tsc.index(words))
-                entries.append(ent)
-        rec['entries'] = entries
-        vbs = []
-        for j, (_loc, _lim, fmt) in sorted(r['vbinfo'].items()):
-            w = r['vb'][j][1]
-            if (w[0] >> 16) != 0xC0DE or (w[0] >> 8) & 0xFF != 1:
-                problems.append(f'vertex stream {j} not a vertex slot')
-            vbs.append({'stream': j, 'slot': w[0] & 0xFF, 'stride': fmt & 0xFFF})
-        rec['vbs'] = vbs
-        rec['fetch'] = any(e.get('tex', [None])[0] == 'fetch' for e in entries if e['kind'] == 'handle')
-        rec['clears'] = len(p['clears'])
-        rec['problems'] = problems
-        if problems:  # m2v draws it (RawMetal.mm: a state not in the pack goes there)
-            report.append(f'  skipped {p["index"]} ({"; ".join(problems)}): {p["key"][:150]}')
+        rec = pipeline(p, varying, prog_index, sizes, constexpr_tsc)
+        if rec['problems']:  # m2v draws it (RawMetal.mm: a state not in the pack goes there)
+            report.append(f'  skipped {p["index"]} ({"; ".join(rec["problems"])}): {p["key"][:150]}')
             continue
         pipes.append(rec)
     # init template with relocations (submissions 1-3 as NVK recorded them)
-    init_recs = []
-    for sc, m, d in init:
-        init_recs.append((sc, m, d, RELOC_CODE.get(RELOC.get((sc, m)), 0)))
+    init_recs = [(sc, m, d, RELOC_CODE.get(RELOC.get((sc, m)), 0)) for sc, m, d in init]
     report.append(f'init template: {len(init_recs)} methods, {sum(1 for x in init_recs if x[3])} relocated')
-    # --- pack.bin ---
-    strings = bytearray()
-
-    def string(s: str) -> int:
-        off = len(strings)
-        strings.extend(s.encode() + b'\0')
-        return off
-
-    blob = []
-    pipe_bin = bytearray()
-    for rec in pipes:
-        blob_off = len(blob)
-        for m, v in rec['blob']:
-            blob += [m, v]
-        ents = bytearray()
-        for e in rec['entries']:
-            if e['kind'] == 'ubo':
-                ents += struct.pack(
-                    '<HBBBBH',
-                    e['off'],
-                    1,
-                    1 if e['stage'] == 'v' else 2,
-                    e['slot'],
-                    1 if e.get('ssbo') else 0,
-                    e.get('window', 256) // 16,
-                )
-            else:
-                tk = e['tex']
-                sk = e['smp']
-                tkind = 0 if tk is None else (2 if tk[0] == 'slot' else 3)
-                skind = 0 if sk is None else (1 if sk[0] == 'slot' else 2)
-                ents += struct.pack(
-                    '<HBBBBBB', e['off'], tkind, 2, 0 if tk is None else tk[1], skind, 0 if sk is None else sk[1], 0
-                )
-        ents += bytes(8 * (16 - len(rec['entries'])))
-        mask, words = 0, [0] * 32
-        for o, val in rec['push']:
-            mask |= 1 << ((o - 0x700) // 4)
-            words[(o - 0x700) // 4] = val
-        push = struct.pack('<I32I', mask, *words)
-        vb = rec['vbs'][0] if rec['vbs'] else {'slot': 0xFF, 'stride': 0}
-        # the raw path's own states (probe.mm PROBE_YCBCR_LIB) by the name the runtime asks for (raw_gpu.cpp
-        # ycbcrPipeline)
-        own = re.search(r'\| f (ycbcr_\w+)', rec['key'])
-        keyhash = fnv(('raw.ycbcr.' + own.group(1)).encode() if own else rec['key'].encode())
-        flags = 1 if rec['fetch'] else 0
-        pipe_bin += struct.pack(
-            '<QIHHIIBBBBHHI',
-            keyhash,
-            string(rec['key']),
-            rec['vs'],
-            rec['fs'],
-            blob_off,
-            len(rec['blob']) * 2,
-            len(rec['entries']),
-            len(rec['push']),
-            vb['slot'],
-            0,
-            vb['stride'],
-            rec['set_size'],
-            flags,
-        )
-        pipe_bin += ents + push
-    prog_bin = bytearray()
-    for pr in prog_recs:
-        prog_bin += struct.pack('<IIII', pr['heap_offset'], pr['program'], pr['bytes'], len(pr['cbufs']))
-    tsc_bin = b''.join(struct.pack('<8I', *w) for w in constexpr_tsc)
-    base_bin = b''.join(struct.pack('<II', m, v) for m, v in sorted(baseline.items()))
-    init_bin = b''.join(struct.pack('<HHII', sc, m, d, rc) for sc, m, d, rc in init_recs)
-    blob_bin = struct.pack(f'<{len(blob)}I', *blob)
-    sections = [bytes(prog_bin), bytes(pipe_bin), tsc_bin, base_bin, init_bin, blob_bin, bytes(strings), bytes(heap)]
-    header_size = 8 + 4 * 4 + 8 * 2 * len(sections)
-    offs, at = [], (header_size + 255) // 256 * 256
-    body = bytearray()
-    for s in sections:
-        pad = (-(at + len(body))) % 256
-        body += bytes(pad)
-        offs.append((at + len(body), len(s)))
-        body += s
-    corpus = fnv(''.join(sorted(r['key'] for r in pipes)).encode())
-    hdr = MAGIC + struct.pack('<IIII', VERSION, len(prog_recs), len(pipes), len(constexpr_tsc))
-    hdr += struct.pack(f'<{2 * len(sections)}Q', *[x for o in offs for x in o])
-    data = hdr + bytes((header_size + 255) // 256 * 256 - len(hdr)) + body
+    pack = packfile.Pack(pipes, prog_recs, constexpr_tsc, baseline, init_recs, heap)
+    data, blob = packfile.pack_bytes(pack)
     with open(os.path.join(out_dir, 'pack.bin'), 'wb') as pack_bin:
         pack_bin.write(data)
-    js = {
-        'version': VERSION,
-        'corpus_hash': f'{corpus:x}',
-        'programs': prog_recs,
-        'pipelines': pipes,
-        'constexpr_tsc': constexpr_tsc,
-        'baseline': {f'{m:x}': v for m, v in sorted(baseline.items())},
-        'varying': [f'{m:x}' for m in varying],
-        'init_methods': len(init_recs),
-    }
-    with open(os.path.join(out_dir, 'pack.json'), 'w') as pack_json:
-        json.dump(
-            js,
-            pack_json,
-            indent=1,
-            default=lambda o: o.hex() if isinstance(o, (bytes, bytearray)) else str(o),
-        )
-
-    # decoder table: pipeline set-0 layouts by program pair, so nvdec compares only the bytes a layout defines
-    def kinds(e: dict) -> str:
-        return 'u' if e['kind'] == 'ubo' else ('h' if e.get('smp') else 't')  # t: a handle whose sampler is unused
-
-    with open(os.path.join(out_dir, 'layouts.txt'), 'w') as f:
-        for rec in pipes:
-            vs, fs = prog_recs[rec['vs']]['id'], prog_recs[rec['fs']]['id']
-            slots = ' '.join(f'{e["off"]}:{kinds(e)}' for e in rec['entries'])
-            f.write(f'{vs} {fs} {rec["set_size"]:x} {slots}\n')
+    packfile.write_json(os.path.join(out_dir, 'pack.json'), pack, varying)
+    packfile.write_layouts(os.path.join(out_dir, 'layouts.txt'), pack)
     report.append(
         f'pack.bin {len(data) // 1024} KiB: {len(pipes)} pipelines, {len(prog_recs)} programs, '
         f'{len(constexpr_tsc)} constexpr samplers, {len(blob)} blob dwords, {len(baseline)} baseline regs'

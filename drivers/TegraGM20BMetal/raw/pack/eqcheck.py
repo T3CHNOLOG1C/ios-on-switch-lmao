@@ -17,6 +17,7 @@ usage: eqcheck.py <nvk.log> <raw.log> [--show N] [--flat] [--layouts] [--own]
 import collections
 import re
 import sys
+from dataclasses import dataclass, field
 
 
 def frames(path: str) -> list[list[dict]]:
@@ -53,26 +54,26 @@ def rename_all(out: list[list[dict]]) -> list[list[dict]]:
     # persistent resources renamed in order of first appearance in draws (clears of textures no draw uses, such as m2v's
     # initialisation of new textures, would otherwise shift every name)
     names = {}
-
-    def rename(text: str, assign: bool) -> str:
-        def sub(m: re.Match[str]) -> str:
-            if m.group(0) not in names:
-                if not assign:
-                    return 'C' + m.group(0)[1:]
-                names[m.group(0)] = f'N{len(names) + 1}'
-            return names[m.group(0)]
-
-        return re.sub(r'\bR\d+\b', sub, text)
-
     for events in out:
         for e in events:
             if e['head'].startswith('DRAW'):
-                e['lines'] = [rename(line, True) for line in e['lines']]
+                e['lines'] = [rename(line, names, True) for line in e['lines']]
     for events in out:
         for e in events:
             if e['head'].startswith('CLEAR'):
-                e['head'] = rename(e['head'], False)
+                e['head'] = rename(e['head'], names, False)
     return out
+
+
+def rename(text: str, names: dict[str, str], assign: bool) -> str:
+    def sub(m: re.Match[str]) -> str:
+        if m.group(0) not in names:
+            if not assign:
+                return 'C' + m.group(0)[1:]
+            names[m.group(0)] = f'N{len(names) + 1}'
+        return names[m.group(0)]
+
+    return re.sub(r'\bR\d+\b', sub, text)
 
 
 # --layouts: render targets and sampled images compared by what their texels are, not where or how they lie. The raw
@@ -145,6 +146,126 @@ LAYOUTS = '--layouts' in sys.argv
 OWN = LAYOUTS or '--own' in sys.argv
 
 
+def programs(e: dict) -> tuple[str, ...]:
+    return tuple(line.split()[1] for line in e['lines'] if line.startswith('stage'))
+
+
+def drop(frames_of: list[list[dict]], other: list[list[dict]], who: str) -> None:
+    theirs = {programs(e) for events in other for e in events if e['head'].startswith('DRAW')}
+    dropped = 0
+    for events in frames_of:
+        keep = [e for e in events if not e['head'].startswith('DRAW') or programs(e) in theirs]
+        dropped += len(events) - len(keep)
+        events[:] = keep
+    if dropped:
+        print(f'{dropped} draws of programs only the {who} log runs left out (its own work)')
+
+
+@dataclass
+class Tally:
+    show: int
+    mism: collections.Counter = field(default_factory=collections.Counter)
+    examples: collections.defaultdict = field(default_factory=lambda: collections.defaultdict(list))
+    reg_diff: collections.Counter = field(default_factory=collections.Counter)
+    bar_missing: collections.Counter = field(default_factory=collections.Counter)
+    bar_extra: collections.Counter = field(default_factory=collections.Counter)
+    draws: int = 0
+    same: int = 0
+    clears: int = 0
+
+    def wants(self, kind: str) -> bool:
+        return len(self.examples[kind]) < self.show
+
+
+def compare_frame(tally: Tally, fi: int, fa: list[dict], fb: list[dict]) -> None:
+    da = [e for e in fa if e['head'].startswith('DRAW')]
+    db = [e for e in fb if e['head'].startswith('DRAW')]
+    compare_clears(tally, fi, fa, fb)
+    if len(da) != len(db):
+        tally.mism['draw count'] += 1
+        tally.examples['draw count'].append(f'frame {fi}: nvk {len(da)} raw {len(db)}')
+    for di, (ea, eb) in enumerate(zip(da, db, strict=False)):
+        tally.draws += 1
+        tally.same += compare_draw(tally, fi, di, fields(ea), fields(eb))
+
+
+def compare_clears(tally: Tally, fi: int, fa: list[dict], fb: list[dict]) -> None:
+    ca = [fields(e)['clear'] for e in fa if e['head'].startswith('CLEAR')]
+    cb = [fields(e)['clear'] for e in fb if e['head'].startswith('CLEAR')]
+    if fi == 0:
+        extra = [c for c in ca if c not in cb]
+        if extra:
+            textures = '; '.join(e.split(' color')[0] for e in extra)
+            print(f'frame 0: {len(extra)} clears only in nvk (m2v initialises new textures: {textures})')
+            ca = [c for c in ca if c in cb]
+    if ca != cb:
+        tally.mism['clears'] += 1
+        if tally.wants('clears'):
+            tally.examples['clears'].append(f'frame {fi}\n   nvk {ca}\n   raw {cb}')
+    tally.clears += len(ca)
+
+
+def compare_draw(tally: Tally, fi: int, di: int, x: collections.OrderedDict, y: collections.OrderedDict) -> bool:
+    ok = True
+    for k in sorted(set(x) | set(y)):
+        if k in ('regs', 'barriers'):
+            continue
+        if k == 'R':
+            if not compare_registers(tally, f'frame {fi} draw {di}', x.get('R', {}), y.get('R', {})):
+                ok = False
+            continue
+        if x.get(k) != y.get(k):
+            ok = False
+            tally.mism[k] += 1
+            if tally.wants(k):
+                tally.examples[k].append(f'frame {fi} draw {di}\n   nvk {x.get(k)}\n   raw {y.get(k)}')
+    if not compare_barriers(tally, f'frame {fi} draw {di}', x['barriers'], y['barriers']):
+        ok = False
+    return ok
+
+
+def compare_barriers(tally: Tally, where: str, xb: set[str], yb: set[str]) -> bool:
+    missing = xb - yb
+    for m in missing:
+        tally.bar_missing[m] += 1
+    for m in yb - xb:
+        tally.bar_extra[m] += 1
+    if 'TEXINV' not in missing and 'WFI' not in missing:
+        return True
+    tally.mism['barrier (fetch/pass)'] += 1
+    if tally.wants('barrier (fetch/pass)'):
+        tally.examples['barrier (fetch/pass)'].append(f'{where}: nvk {sorted(xb)} raw {sorted(yb)}')
+    return False
+
+
+def compare_registers(tally: Tally, where: str, ra: dict[str, str], rb: dict[str, str]) -> bool:
+    d = sorted(m for m in set(ra) | set(rb) if ra.get(m) != rb.get(m) and m not in POOL_LIMITS)
+    if not d:
+        return True
+    tally.mism['registers'] += 1
+    for m in d:
+        tally.reg_diff[m] += 1
+    if tally.wants('registers'):
+        regs = ' '.join(f'{m} nvk={ra.get(m, "-")} raw={rb.get(m, "-")}' for m in d[:12])
+        tally.examples['registers'].append(f'{where}: {regs}')
+    return False
+
+
+def report(tally: Tally) -> int:
+    print(f'draws compared {tally.draws}, identical {tally.same}; clears compared {tally.clears}')
+    for k, n in tally.mism.most_common():
+        print(f'MISMATCH {k:<28} {n}')
+        for e in tally.examples[k]:
+            print('  ' + e)
+    if tally.reg_diff:
+        print('registers differing (draws):', ' '.join(f'{m}:{n}' for m, n in tally.reg_diff.most_common(40)))
+    if tally.bar_missing:
+        print('barriers nvk had, raw not (draws):', dict(tally.bar_missing))
+    if tally.bar_extra:
+        print('barriers raw had, nvk not (draws):', dict(tally.bar_extra))
+    return 0 if tally.draws and tally.same == tally.draws and not tally.mism else 1
+
+
 def main() -> int:
     show = int(sys.argv[sys.argv.index('--show') + 1]) if '--show' in sys.argv else 3
     a, b = frames(sys.argv[1]), frames(sys.argv[2])
@@ -152,97 +273,14 @@ def main() -> int:
     if OWN:  # (before the names: what is left out names nothing)
         # each driver's own draws: programs no draw of the other log runs (m2v's shadow copies and mip work; the raw
         # path's 4:2:0 conversions through the pack's ycbcr states, where m2v converts with its own)
-        def programs(e: dict) -> tuple[str, ...]:
-            return tuple(line.split()[1] for line in e['lines'] if line.startswith('stage'))
-
-        def drop(frames_of: list[list[dict]], other: list[list[dict]], who: str) -> None:
-            theirs = {programs(e) for events in other for e in events if e['head'].startswith('DRAW')}
-            dropped = 0
-            for events in frames_of:
-                keep = [e for e in events if not e['head'].startswith('DRAW') or programs(e) in theirs]
-                dropped += len(events) - len(keep)
-                events[:] = keep
-            if dropped:
-                print(f'{dropped} draws of programs only the {who} log runs left out (its own work)')
-
         theirs_b = [list(events) for events in b]
         drop(a, theirs_b, 'nvk')
         drop(b, a, 'raw')
     a, b = rename_all(a), rename_all(b)
-    mism = collections.Counter()
-    examples = collections.defaultdict(list)
-    reg_diff = collections.Counter()
-    bar_missing = collections.Counter()
-    bar_extra = collections.Counter()
-    draws = same = clears = 0
+    tally = Tally(show)
     for fi, (fa, fb) in enumerate(zip(a, b, strict=False)):
-        da = [e for e in fa if e['head'].startswith('DRAW')]
-        db = [e for e in fb if e['head'].startswith('DRAW')]
-        ca = [fields(e)['clear'] for e in fa if e['head'].startswith('CLEAR')]
-        cb = [fields(e)['clear'] for e in fb if e['head'].startswith('CLEAR')]
-        if fi == 0:
-            extra = [c for c in ca if c not in cb]
-            if extra:
-                textures = '; '.join(e.split(' color')[0] for e in extra)
-                print(f'frame 0: {len(extra)} clears only in nvk (m2v initialises new textures: {textures})')
-                ca = [c for c in ca if c in cb]
-        if ca != cb:
-            mism['clears'] += 1
-            if len(examples['clears']) < show:
-                examples['clears'].append(f'frame {fi}\n   nvk {ca}\n   raw {cb}')
-        clears += len(ca)
-        if len(da) != len(db):
-            mism['draw count'] += 1
-            examples['draw count'].append(f'frame {fi}: nvk {len(da)} raw {len(db)}')
-        for di, (ea, eb) in enumerate(zip(da, db, strict=False)):
-            draws += 1
-            x, y = fields(ea), fields(eb)
-            ok = True
-            for k in sorted(set(x) | set(y)):
-                if k in ('regs', 'barriers'):
-                    continue
-                if k == 'R':
-                    ra, rb = x.get('R', {}), y.get('R', {})
-                    d = sorted(m for m in set(ra) | set(rb) if ra.get(m) != rb.get(m) and m not in POOL_LIMITS)
-                    if d:
-                        ok = False
-                        mism['registers'] += 1
-                        for m in d:
-                            reg_diff[m] += 1
-                        if len(examples['registers']) < show:
-                            regs = ' '.join(f'{m} nvk={ra.get(m, "-")} raw={rb.get(m, "-")}' for m in d[:12])
-                            examples['registers'].append(f'frame {fi} draw {di}: {regs}')
-                    continue
-                if x.get(k) != y.get(k):
-                    ok = False
-                    mism[k] += 1
-                    if len(examples[k]) < show:
-                        examples[k].append(f'frame {fi} draw {di}\n   nvk {x.get(k)}\n   raw {y.get(k)}')
-            missing = x['barriers'] - y['barriers']
-            for m in missing:
-                bar_missing[m] += 1
-            for m in y['barriers'] - x['barriers']:
-                bar_extra[m] += 1
-            if 'TEXINV' in missing or 'WFI' in missing:
-                ok = False
-                mism['barrier (fetch/pass)'] += 1
-                if len(examples['barrier (fetch/pass)']) < show:
-                    examples['barrier (fetch/pass)'].append(
-                        f'frame {fi} draw {di}: nvk {sorted(x["barriers"])} raw {sorted(y["barriers"])}'
-                    )
-            same += ok
-    print(f'draws compared {draws}, identical {same}; clears compared {clears}')
-    for k, n in mism.most_common():
-        print(f'MISMATCH {k:<28} {n}')
-        for e in examples[k]:
-            print('  ' + e)
-    if reg_diff:
-        print('registers differing (draws):', ' '.join(f'{m}:{n}' for m, n in reg_diff.most_common(40)))
-    if bar_missing:
-        print('barriers nvk had, raw not (draws):', dict(bar_missing))
-    if bar_extra:
-        print('barriers raw had, nvk not (draws):', dict(bar_extra))
-    return 0 if draws and same == draws and not mism else 1
+        compare_frame(tally, fi, fa, fb)
+    return report(tally)
 
 
 if __name__ == '__main__':
