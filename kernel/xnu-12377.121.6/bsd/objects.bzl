@@ -45,6 +45,7 @@ DEVELOPMENT = struct(
         "bsd/vfs/vfs_init.c",
         "bsd/vfs/vfs_io_compression_stats.c",
         "bsd/vfs/vfs_lookup.c",
+        "bsd/vfs/vfs_switch_pretranslated.c",
         "bsd/vfs/vfs_subr.c",
         "bsd/vfs/vfs_syscalls.c",
         "bsd/vfs/vfs_support.c",

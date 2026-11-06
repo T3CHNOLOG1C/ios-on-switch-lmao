@@ -110,6 +110,7 @@
 #include <sys/sysctl.h>
 #include <sys/persona.h>
 #include <sys/reason.h>
+#include "../../kits/SwitchPretranslated/switch_pretranslated_kernel.h"
 #if SYSV_SHM
 #include <sys/shm_internal.h>           /* shmexec() */
 #endif
@@ -9637,6 +9638,9 @@ load_init_program(proc_t p)
 	(void)switch_nvram_data_mounted();
 	/* Owner overlay unions over sealed directories (SwitchRawMount.h), now that Data is mounted. */
 	native_switch_raw_overlay(p, (user_addr_t)scratch_addr);
+#if CONFIG_A64X
+	switch_pretranslated_capture();
+#endif
 #endif
 #if defined(XNU_BOOT_PROGRESS) && XNU_BOOT_PROGRESS
 	extern int sheng_boot_watchdog_policy(void *, uint64_t);

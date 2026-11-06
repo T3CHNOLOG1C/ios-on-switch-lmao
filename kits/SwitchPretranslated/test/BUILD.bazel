@@ -1,0 +1,14 @@
+#   bazel test //kits/SwitchPretranslated/test:all
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//bazel/testing:defs.bzl", "host_test")
+
+lint_files()
+
+host_test(
+    name = "switch_pretranslated_test",
+    srcs = [
+        "index_builder.h",
+        "switch_pretranslated_test.cpp",
+        "//kits/SwitchPretranslated:switch_pretranslated.h",
+    ],
+)

@@ -1,0 +1,12 @@
+# The decisions of iOS 27's pretranslated System files, shared by the 12377 kernel (bsd/vfs/vfs_switch_pretranslated.c
+# includes the header through //kernel/xnu-12377.121.6/config:xnu_objects.bzl's tree_headers) and the host tests in test/.
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//kernel/rules:kernel.bzl", "kernel_headers")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files()
+
+exports_files(["switch_pretranslated.h"])
+
+kernel_headers()

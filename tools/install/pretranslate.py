@@ -7,7 +7,8 @@ loader.
 
 The System volume stays sealed as Apple shipped it. Its translated files go to Data under Switch/pretranslated, at
 their System paths, its own tree because a deploy replaces Switch/overlay whole; the kernel shows them at those paths
-from Switch/pretranslated.index (overlay_index.py), which is made from Switch/pretranslated.json.
+from the tree's own index (overlay_index.py), made from Switch/pretranslated.json and the files' ids once they are
+placed.
 """
 
 import json
@@ -20,7 +21,7 @@ from tools.install import card as cards, delta, host, overlay_index, renamed
 
 OVERLAY = renamed.DATA_FOLDER + '/pretranslated'
 OVERLAY_MANIFEST = OVERLAY + '.json'
-OVERLAY_INDEX = OVERLAY + '.index'
+OVERLAY_INDEX = OVERLAY + '/' + overlay_index.NAME
 COMPRESSED = 0x20
 
 ORDER = ('os', 'app_cryptex', 'system_cryptex')
@@ -33,7 +34,7 @@ class Roles:
         """`roles`: {role: {"driver": path, "tool": path, "trustcaches": [path]}}."""
         unknown = set(roles) - set(ORDER)
         if unknown:
-            raise host.HostError(f'unknown pretranslate roles: {sorted(unknown)}')
+            raise host.HostError('unknown pretranslate roles: {}'.format(sorted(unknown)))
         self.roles, self.scratch, self.log = roles, Path(scratch), log
         self.kept = self.scratch / 'pretranslated'
 
@@ -63,14 +64,14 @@ class Roles:
         self.log.quiet(result.stdout + result.stderr)
         if result.returncode:
             tail = (result.stderr or result.stdout).strip().splitlines()[-1:] or ['?']
-            raise host.HostError(f'translating {role} failed: {tail[0]}')
+            raise host.HostError('translating {} failed: {}'.format(role, tail[0]))
         self._keep(role)
-        entries = delta.load(self.out(role) / f'{role}.manifest.json')
-        self.log(f'{role}: {len(entries)} files to translate')
+        entries = delta.load(self.out(role) / '{}.manifest.json'.format(role))
+        self.log('{}: {} files to translate'.format(role, len(entries)))
         return entries
 
     def _pairs(self, role):
-        return self.kept / f'{role}.cdhash-pairs'
+        return self.kept / '{}.cdhash-pairs'.format(role)
 
     def _keep(self, role):
         self.kept.mkdir(parents=True, exist_ok=True)
@@ -89,8 +90,7 @@ class Roles:
 
     def check_pins(self, pins):
         """The kept files against the ones the boot package was built with ({name: sha256}): a translation that made
-        other trust modules or another cache list would not run on the kernel.
-        """
+        other trust modules or another cache list would not run on the kernel."""
         kept = {p.name: p for p in self.artifacts()}
         wrong = [
             name for name, digest in sorted(pins.items()) if name not in kept or cards.sha256_file(kept[name]) != digest
@@ -99,15 +99,14 @@ class Roles:
             raise host.HostError(
                 'this translation differs from the pinned one the boot package carries: {}'.format(', '.join(wrong))
             )
-        self.log(f'pretranslate: {len(pins)} files match the pins')
+        self.log('pretranslate: {} files match the pins'.format(len(pins)))
 
     def overlay_system(self, data, system, entries, owners):
         """The System volume's translated files onto Data (OVERLAY), each with its System file's owner, mode and
         flags, then their manifest and the kernel's index made from it; the manifest is also kept for the boot
-        package. Returns the manifest.
-        """
+        package. Returns the manifest."""
         root = Path(data) / OVERLAY
-        files = []
+        files, ids = [], []
         for e in entries:
             original = os.lstat(Path(system) / e['path'].lstrip('/'))
             target = root / e['path'].lstrip('/')
@@ -124,10 +123,19 @@ class Roles:
                 os.chown(target, original.st_uid, original.st_gid)
             if original.st_flags & ~COMPRESSED:
                 os.chflags(target, original.st_flags & ~COMPRESSED)
+            cdhash = e.get('cdhash') or []
+            ids.append(
+                (
+                    e['path'],
+                    original.st_ino,
+                    os.lstat(target).st_ino,
+                    bytes.fromhex(cdhash[0]) if cdhash else b'\x00' * 20,
+                )
+            )
             files.append({
                 'path': e['path'],
                 'trust': True,
-                'mode': f'{original.st_mode & 0o7777:04o}',
+                'mode': '{:04o}'.format(original.st_mode & 0o7777),
                 'sha256': e['sha256_out'],
                 'cdhash': e.get('cdhash', []),
             })  # fmt: skip
@@ -135,12 +143,17 @@ class Roles:
         text = json.dumps(manifest, indent=1) + '\n'
         root.mkdir(parents=True, exist_ok=True)
         (Path(data) / OVERLAY_MANIFEST).write_text(text)
-        (Path(data) / OVERLAY_INDEX).write_bytes(overlay_index.encode([f['path'] for f in files]))
         self.kept.mkdir(parents=True, exist_ok=True)
         (self.kept / 'os.overlay.json').write_text(text)
+        directories = [root, *(p for p in root.rglob('*') if p.is_dir())]
         if owners:
-            for directory in [root, *(p for p in root.rglob('*') if p.is_dir())]:
+            for directory in directories:
                 os.chown(directory, 0, 0)
                 directory.chmod(0o755)
-        self.log(f'System: {len(files)} translated files on Data under {OVERLAY}')
+        index = Path(data) / OVERLAY_INDEX
+        index.write_bytes(overlay_index.encode(ids, [os.lstat(d).st_ino for d in directories]))
+        index.chmod(0o644)
+        if owners:
+            os.chown(index, 0, 0)
+        self.log('System: {} translated files on Data under {}'.format(len(files), OVERLAY))
         return manifest

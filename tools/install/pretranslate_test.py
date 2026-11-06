@@ -25,7 +25,7 @@ out = Path(a.out)
 (out / 'files').mkdir(parents=True, exist_ok=True)
 (out / 'files' / 'tool').write_bytes(b'arm64')
 entry = dict(path='/usr/bin/tool', file='files/tool', sha256_in=hashlib.sha256(b'arm64e').hexdigest(),
-             sha256_out=hashlib.sha256(b'arm64').hexdigest(), cdhash=['00'])
+             sha256_out=hashlib.sha256(b'arm64').hexdigest(), cdhash=['00' * 20])
 (out / (a.role + '.manifest.json')).write_text(json.dumps(dict(role=a.role, translator='t', files=[entry])))
 (out / (a.role + '.trustcache')).write_bytes(b'trust ' + a.role.encode())
 (out / (a.role + '.cdhash-pairs')).write_text(a.role + ' old new\\n')
@@ -105,8 +105,11 @@ class RolesTest(unittest.TestCase):
         self.assertFalse(entries[0]['source'].exists())
         self.assertEqual(manifest['files'][0]['mode'], '0750')
         self.assertEqual(json.loads((data / pretranslate.OVERLAY_MANIFEST).read_text()), manifest)
-        index = (data / pretranslate.OVERLAY_INDEX).read_bytes()
-        self.assertEqual(overlay_index.decode(index), ['/usr/libexec/tool'])
+        files, directories = overlay_index.decode((data / pretranslate.OVERLAY_INDEX).read_bytes())
+        ids = ((system / 'usr/libexec/tool').stat().st_ino, placed.stat().st_ino)
+        self.assertEqual(files, [('/usr/libexec/tool', *ids, b'\x00' * 20)])
+        tree = data / pretranslate.OVERLAY
+        self.assertEqual(directories, sorted(p.stat().st_ino for p in (tree, tree / 'usr', tree / 'usr/libexec')))
         self.assertIn('os.overlay.json', [p.name for p in self.roles.artifacts()])
 
     def test_a_translated_file_that_does_not_match_is_refused(self):

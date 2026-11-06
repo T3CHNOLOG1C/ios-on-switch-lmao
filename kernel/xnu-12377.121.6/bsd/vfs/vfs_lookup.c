@@ -99,6 +99,7 @@
 
 #if NAMEDRSRCFORK
 #include <sys/xattr.h>
+#include "../../kits/SwitchPretranslated/switch_pretranslated_kernel.h"
 #endif
 /*
  * Board bring-up diagnostic: the distinct lookups that failed for MobileSafari (S) and lsd (L), errno and path (its last 96 characters
@@ -1835,6 +1836,9 @@ returned_from_lookup_path:
 
 		goto dirloop;
 	}
+#if CONFIG_A64X
+	switch_pretranslated_lookup(ndp);
+#endif
 
 	return 0;
 bad2:
