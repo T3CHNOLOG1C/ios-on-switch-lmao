@@ -52,7 +52,7 @@ typedef struct vm_object *vm_object_t;
 
 struct vm_page {
     vm_object_offset_t offset;
-    bool vmp_busy, vmp_pmapped, zeroed, used;
+    bool vmp_busy, vmp_pmapped, zeroed, used, throttled;
 };
 typedef struct vm_page *vm_page_t;
 
@@ -85,6 +85,7 @@ static int enter_result = KERN_SUCCESS;
 static bool enter_retry; /* vm_fault_enter reports a pmap_enter that would block */
 static unsigned int enter_fail_after = 100;
 static bool lock_held = true;
+static bool queues_locked;
 
 static struct {
     int n;
@@ -128,6 +129,24 @@ static vm_page_t vm_page_alloc(vm_object_t object, vm_object_offset_t off)
     return m;
 }
 
+static void vm_page_lockspin_queues(void)
+{
+    MODEL_CHECK(lock_held && !queues_locked);
+    queues_locked = true;
+}
+
+static void vm_page_unlock_queues(void)
+{
+    MODEL_CHECK(queues_locked);
+    queues_locked = false;
+}
+
+static void vm_fault_enqueue_throttled_locked(vm_page_t m)
+{
+    MODEL_CHECK(queues_locked && m->vmp_busy && m->zeroed && !m->throttled);
+    m->throttled = true;
+}
+
 static void vm_fault_cs_clear(vm_page_t m)
 {
     (void)m;
@@ -154,6 +173,7 @@ static kern_return_t vm_fault_enter(vm_page_t m, pmap_t pmap, vm_map_offset_t va
     MODEL_CHECK(need_retry != NULL && *need_retry == FALSE); /* never a blocking pmap_enter under our locks */
     MODEL_CHECK(*type_of_fault == DBG_ZERO_FILL_FAULT && *object_lock_type == OBJECT_LOCK_EXCLUSIVE);
     MODEL_CHECK(va % PAGE_SIZE == 0);
+    MODEL_CHECK(!queues_locked && m->throttled == !dynamic_paging);
     if (nentered >= enter_fail_after) {
         if (enter_retry) {
             *need_retry = TRUE;
@@ -260,9 +280,17 @@ int main(void)
     CHECK(!entered(base + 0x1000, 0x9000));
     cases++;
 
-    /* not the plain case (shadow, copy object, pager, purgeable, all reusable, kernel object, kernel pmap, executable,
-	 * no dynamic paging): nothing */
-    for (unsigned int k = 0; k < 9; k++) {
+    /* no dynamic paging (no active compressor): the same pages, each on the throttled queue before it is entered */
+    reset(1 << 20, 0, 1 << 20);
+    dynamic_paging = false;
+    CHECK(fault(0x8000, base, rw) == 3);
+    CHECK(entered(base + 0x1000, 0x9000) && entered(base + 0x2000, 0xa000) && entered(base + 0x3000, 0xb000));
+    CHECK(pages[0].throttled && pages[1].throttled && pages[2].throttled && !queues_locked);
+    cases++;
+
+    /* not the plain case (shadow, copy object, pager, purgeable, all reusable, kernel object, kernel pmap,
+     * executable): nothing */
+    for (unsigned int k = 0; k < 8; k++) {
         static struct vm_object other;
         pmap_t pmap = &user_pmap_store;
         vm_prot_t prot = rw;
@@ -292,9 +320,6 @@ int main(void)
             break;
         case 7:
             prot |= VM_PROT_EXECUTE;
-            break;
-        case 8:
-            dynamic_paging = false;
             break;
         }
         resident[nresident++] = 0x8000;
