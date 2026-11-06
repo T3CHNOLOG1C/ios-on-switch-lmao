@@ -78,10 +78,14 @@ def _im4p_payload(data):
 
 
 def trust_module(entries):
-    """A version-2 trust cache module: sorted (cdhash, hashtype 2, flags, category)."""
-    body = b''.join(h + bytes([2, flags, cat, 0]) for h, flags, cat in sorted(entries))
+    """A version-2 trust cache module: sorted (cdhash, hashtype 2, flags, category), each once.
+
+    One binary at several paths is one cdhash, and a duplicate fails the kernel window's strictly sorted check.
+    """
+    unique = sorted(set(entries))
+    body = b''.join(h + bytes([2, flags, cat, 0]) for h, flags, cat in unique)
     uuid = hashlib.sha256(body).digest()[:16]
-    return struct.pack('<I16sI', 2, uuid, len(entries)) + body
+    return struct.pack('<I16sI', 2, uuid, len(unique)) + body
 
 
 def run_tool(tool, *args):
