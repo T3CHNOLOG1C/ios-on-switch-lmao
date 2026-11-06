@@ -22,7 +22,6 @@
 #error Invalid SD model selection
 #endif
 extern unsigned int real_ncpus;
-extern volatile uint64_t switch_user_record[14];
 /* magic,version,stage,error,model,attempts,cpus,ref-error,freq,ref-crc,crc,
  * transport-stage,status,response,words,blocked,mismatches,first-mismatch,
  * present,host-control,power,clock,reset,version,block-size,initial-status,
@@ -32,7 +31,7 @@ uint8_t switch_sd_bytes[512];
 uint8_t switch_sd_reference_bytes[512];
 static struct switch_sd_reference reference;
 static struct switch_sd_card qualified_card;
-volatile uint64_t switch_card_record[16];
+static volatile uint64_t switch_card_record[16];
 static unsigned attempted;
 
 struct board_io {
@@ -118,7 +117,7 @@ static void w32(void *context, uint32_t offset, uint32_t value)
 
 static uint64_t ticks(void *context)
 {
-    uint64_t value;
+    uint64_t value = 0;
     (void)context;
     __asm__ volatile("isb\n\tmrs %0, cntpct_el0" : "=r"(value)::"memory");
     return value;
@@ -130,7 +129,7 @@ static uint64_t ticks(void *context)
  * its only other defined field is the 7-bit ASID. Verify this mapped MC window
  * against the photographed OLED's 4096 MiB EMEM_CFG, then recheck every phase.
  * Never modify the SMMU or another client's mapping. */
-volatile uint64_t switch_dma_record[13];
+static volatile uint64_t switch_dma_record[13];
 
 static int dma_bus_ready(void *context)
 {
@@ -168,10 +167,11 @@ static int dma_cache(void *context, void *address, uint32_t length, int after_re
         return -1;
     uintptr_t end = (uintptr_t)address + ((length + 63u) & ~63u);
     for (uintptr_t at = (uintptr_t)address; at < end; at += 64) {
-        if (after_read)
+        if (after_read) {
             __asm__ volatile("dc ivac, %0" ::"r"(at) : "memory");
-        else
+        } else {
             __asm__ volatile("dc civac, %0" ::"r"(at) : "memory");
+        }
     }
     __asm__ volatile("dsb sy" ::: "memory");
     return 0;
@@ -188,7 +188,8 @@ static int dma_install(struct switch_sd_host *host)
     switch_dma_record[9] = r32(&board, 0x40);
     switch_dma_record[10] = r8(&board, 0x28);
     switch_dma_record[11] = r16(&board, 0x3e);
-    uint64_t midr, ctr;
+    uint64_t midr = 0;
+    uint64_t ctr = 0;
     __asm__ volatile("mrs %0,midr_el1" : "=r"(midr));
     __asm__ volatile("mrs %0,ctr_el0" : "=r"(ctr));
     if ((midr & UINT64_C(0xff0ffff0)) != UINT64_C(0x410fd070) || ((ctr >> 16) & 15) != 4)
@@ -216,9 +217,10 @@ static int dma_install(struct switch_sd_host *host)
     if (!d->physical || (d->physical & (SWITCH_SD_DMA_BYTES - 1)) ||
         d->physical > UINT64_C(0x1000000000) - SWITCH_SD_DMA_BYTES)
         goto failed;
-    for (uint32_t at = 0; at < SWITCH_SD_DMA_BYTES; at += 4096)
+    for (uint32_t at = 0; at < SWITCH_SD_DMA_BYTES; at += 4096) {
         if (ml_vtophys((vm_offset_t)(d->bytes + at)) != d->physical + at)
             goto failed;
+    }
     if (ml_vtophys((vm_offset_t)(d->bytes + SWITCH_SD_DMA_BYTES - 1)) != d->physical + SWITCH_SD_DMA_BYTES - 1)
         goto failed;
     d->write8 = dma_write8;
@@ -572,7 +574,7 @@ void switch_sd_probe(void)
     switch_sd_record[17] = UINT64_MAX;
     switch_sd_record[26] = SWITCH_SD_REFERENCE_PA;
     switch_sd_record[27] = SWITCH_SD_CONTROLLER_PA;
-    const int cpus = (int)ml_get_max_cpu_number() + 1;
+    const int cpus = ml_get_max_cpu_number() + 1;
 #if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
     const int root_boot = 1;
 #else
@@ -586,7 +588,7 @@ void switch_sd_probe(void)
         return;
     }
     const int files = 1;
-    DTEntry chosen;
+    DTEntry chosen = NULL;
     const void *property = NULL;
     unsigned length = 0;
     if (SecureDTLookupEntry(NULL, "/chosen", &chosen) != kSuccess ||
@@ -633,7 +635,7 @@ void switch_sd_probe(void)
     switch_sd_record[9] = reference.crc32;
     switch_sd_record[30] = (uint32_t)reference.sector[510] | (uint32_t)reference.sector[511] << 8;
     switch_sd_record[2] = 2;
-    uint64_t frequency;
+    uint64_t frequency = 0;
 #if SWITCH_SD_MODEL
 #ifndef SWITCH_SD_MODEL_MODE
 #define SWITCH_SD_MODEL_MODE 1
@@ -725,12 +727,13 @@ void switch_sd_probe(void)
         return;
     switch_sd_record[10] = switch_sd_crc32(switch_sd_bytes, 512);
     switch_sd_record[29] = (uint32_t)switch_sd_bytes[510] | (uint32_t)switch_sd_bytes[511] << 8;
-    for (unsigned i = 0; i < 512; ++i)
+    for (unsigned i = 0; i < 512; ++i) {
         if (switch_sd_bytes[i] != reference.sector[i]) {
             if (!switch_sd_record[16])
                 switch_sd_record[17] = i;
             ++switch_sd_record[16];
         }
+    }
     if (switch_sd_record[16] || switch_sd_record[10] != reference.crc32) {
         refuse(123);
         return;
