@@ -144,6 +144,7 @@
 #include "../TegraGPIO/TegraGPIO.h"
 #include "SwitchJoyCon.h"
 #include "SwitchJoyConHID.h"
+#include "SwitchJoyConForward.h"
 #include "SwitchJoyConSession.h"
 
 extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
@@ -524,6 +525,7 @@ OSDefineMetaClassAndStructors(SwitchJoyConPairing, IOService)
         uint8_t rumble[kMaxOutput];
         uint8_t rumbleLength;
         bool rumbleFresh;
+        switch_joycon_forward forward;
         // Work loop: the last packet sent was a rumble report (the next reply does not send another), and when the last
         // rumble report went out.
         bool rumbleSent;
@@ -1117,6 +1119,7 @@ IOReturn SwitchJoyConRail::output(void *context, const uint8_t *report, size_t l
         return kIOReturnBadArgument;
     IOReturn result = kIOReturnSuccess;
     IOLockLock(s.outLock);
+    switch_joycon_forward_output(&s.forward, report, length);
     if (report[0] == kReportRumble) {
         memcpy(s.rumble, report, length);
         s.rumbleLength = (uint8_t)length;
@@ -1500,6 +1503,9 @@ void SwitchJoyConRail::run(Side &s)
 
 IOService *SwitchJoyConRail::createHid(Side &s)
 {
+    IOLockLock(s.outLock);
+    switch_joycon_forward_reset(&s.forward);
+    IOLockUnlock(s.outLock);
     return switch_joycon_hid_create(s.cfg->left, s.mac, &SwitchJoyConRail::output, &SwitchJoyConRail::sessionEnded, &s);
 }
 
@@ -1660,7 +1666,11 @@ void SwitchJoyConRail::runningReport(Side &s, const uint8_t *report, size_t leng
     rumbleAfterReply(s);
     if (!s.hid)
         return;
-    switch_joycon_hid_input(s.hid, report, length);
+    IOLockLock(s.outLock);
+    const bool forward = switch_joycon_forward_report(&s.forward, report, length, nowMS());
+    IOLockUnlock(s.outLock);
+    if (forward)
+        switch_joycon_hid_input(s.hid, report, length);
     // 0x31 is 0x30 (timer, battery, buttons, sticks, vibrator, three IMU samples; yuzu joycon_types.h
     // InputReportNfcIr) followed by the MCU's data. JoyConHIDServicePlugin drops 0x31 (21H461, FUN_0000f928 handles
     // 0x21, 0x30, 0x3F), so the head goes to the device again as 0x30 and the controller keeps working during a scan.

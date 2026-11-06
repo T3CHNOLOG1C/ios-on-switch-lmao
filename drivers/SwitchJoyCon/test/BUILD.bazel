@@ -1,5 +1,6 @@
 # drivers/SwitchJoyCon's HID session rule (SwitchJoyConSession.h, compiled as C by its harness) on the host, and the
-# gamecontrollerd connection storm it ends, reproduced by a model of gamecontrollerd, backboardd and the rail.
+# gamecontrollerd connection storm it ends, reproduced by a model of gamecontrollerd, backboardd and the rail; and which
+# rail reports reach the HID device (SwitchJoyConForward.h).
 #
 #   bazel test //drivers/SwitchJoyCon/test:all
 load("//bazel/lint:defs.bzl", "lint_files")
@@ -25,4 +26,15 @@ host_test(
     name = "switch_joycon_session_test",
     srcs = ["switch_joycon_session_test.cpp"],
     deps = [":session_harness"],
+)
+
+host_library(
+    name = "forward",
+    hdrs = ["//drivers/SwitchJoyCon:SwitchJoyConForward.h"],
+)
+
+host_test(
+    name = "switch_joycon_forward_test",
+    srcs = ["switch_joycon_forward_test.cpp"],
+    deps = [":forward"],
 )
