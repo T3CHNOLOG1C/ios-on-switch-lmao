@@ -1,0 +1,23 @@
+# kits/SwitchCRC on the host (Apple silicon has the same CRC32 instructions), checked against the macOS SDK's zlib.
+#
+#   bazel test //kits/SwitchCRC/test:all
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//bazel/testing:defs.bzl", "host_test")
+
+lint_files()
+
+cc_library(
+    name = "zlib",
+    testonly = True,
+    linkopts = ["-lz"],
+)
+
+host_test(
+    name = "switch_crc_test",
+    srcs = [
+        "switch_crc_test.cpp",
+        "//kits/SwitchCRC:SwitchCRC.h",
+    ],
+    deps = [":zlib"],
+)
