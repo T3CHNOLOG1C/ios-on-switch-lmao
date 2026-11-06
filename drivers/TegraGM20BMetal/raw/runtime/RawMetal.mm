@@ -498,9 +498,9 @@ static id twinPublish(id object, __strong id &slot, id made)
 // thread when nothing was queued: 116-130 IOSurface imports, 25-94 ms, of the 136-442 ms replays at 18:19 and 19:20 on 11-06.
 static void prepareTwin(RMObject *o)
 {
-    static dispatch_queue_t queue = dispatch_queue_create(
-        "com.brunostjohn.switch.TegraGM20BMetal.twins",
-        dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_UTILITY, 0));
+    static dispatch_queue_t queue =
+        dispatch_queue_create("com.brunostjohn.switch.TegraGM20BMetal.twins",
+                              dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_UTILITY, 0));
     dispatch_async(queue, ^{
         [o rmTwin];
     });
@@ -1394,7 +1394,8 @@ static void cpuLevel(RMTexture *t, MTLRegion r, NSUInteger level, uint8_t *bytes
             [all replaceRegion:r mipmapLevel:level slice:0 withBytes:bytes bytesPerRow:row bytesPerImage:0];
         if (!mirror) {
             if (write)
-                once(@"a CPU write to a level of a mipmapped texture m2v holds has no mirror: the raw path's copy of the "
+                once(@"a CPU write to a level of a mipmapped texture m2v holds has no mirror: the raw path's copy of "
+                     @"the "
                      @"level stays generated from level 0");
             else
                 [all getBytes:bytes bytesPerRow:row bytesPerImage:0 fromRegion:r mipmapLevel:level slice:0];
@@ -5128,7 +5129,7 @@ static MTLRenderPipelineDescriptor *twinDescriptor(MTLRenderPipelineDescriptor *
     }
     if (!p->_raw)
         once([NSString stringWithFormat:@"state not in the pack (m2v draws it)%s: %@",
-                                        !p->_quartzCore ? " (not QuartzCore's functions: never looked up)"
+                                        !p->_quartzCore            ? " (not QuartzCore's functions: never looked up)"
                                         : gRM->raw->stats.heapFull ? " (or the shader heap is full)"
                                                                    : "",
                                         d.label ?: @"-"]);

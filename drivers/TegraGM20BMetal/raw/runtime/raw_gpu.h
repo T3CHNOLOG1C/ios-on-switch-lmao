@@ -597,7 +597,7 @@ private:
     // the pack's, each made at its first lookup (rec set); sized once at init and never resized: pipeline() hands out
     // pointers into it
     std::vector<Pipeline> pipelines_;
-    std::vector<uint32_t> placed_;     // each pack program's heap offset, ~0u: not placed
+    std::vector<uint32_t> placed_;  // each pack program's heap offset, ~0u: not placed
     uint64_t heapPlaced_ = 0;
     uint32_t ctWrite_[8] = {};  // SET_CT_WRITE(i) as the baseline leaves it
     bool place(uint32_t prog, uint32_t &program);

@@ -115,7 +115,6 @@ TEST(RawTarget, ChainLevelAddressesTheLayout)
     std::printf("%u texel bytes addressed alike\n", checked);
 }
 
-
 // A Shared mipmapped texture's CPU access to a later level: every texel byte written lands where fx::texelOffset has it (the
 // layout the texture header samples), nothing outside the region is touched, and reading the region back gives the bytes
 TEST(RawTarget, CpuLevelCopyFollowsTheLayout)
