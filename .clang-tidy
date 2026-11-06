@@ -177,7 +177,7 @@ CheckOptions:
   # `1 << 5` with positive literals is a mask, not a sign bug; bitwise on signed variables is still flagged.
   bugprone-signed-bitwise.IgnorePositiveIntegerLiterals: true
   # int8_t is a number (RSSI, dBm): widening it to int is meant to sign-extend. Plain and signed char stay checked.
-  bugprone-signed-char-misuse.CharTypdefsToIgnore: 'int8_t'
+  bugprone-signed-char-misuse.CharTypedefsToIgnore: 'int8_t'
   # bzero/bcopy are the kernel's own; keep the check for gets/strcpy-class functions only.
   bugprone-unsafe-functions.ReportMoreUnsafeFunctions: false
   bugprone-suspicious-string-compare.WarnOnImplicitComparison: false
