@@ -35,7 +35,7 @@ enum {
     TEGRA_VIC_WINDOWS = 2
 };
 
-constexpr uint64_t kTegraVICWindowBase = 0x10000000ull, kTegraVICWindowBytes = 128ull << 20;
+constexpr uint64_t kTegraVICWindowBase = 0x10000000ULL, kTegraVICWindowBytes = 128ULL << 20;
 
 extern "C" {
 // Engine (TegraVIC.cpp).

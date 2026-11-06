@@ -24,6 +24,6 @@ IOReturn tegra_vic_surface_prepare(TegraVICSurface *s, uint64_t extent, uint64_t
 IOReturn tegra_vic_surface_pages(TegraVICSurface *s, uint64_t offset, uint64_t bytes, uint64_t *pages, uint32_t max,
                                  uint32_t *count);
 void tegra_vic_surface_complete(TegraVICSurface *s);
-void tegra_vic_surface_written(TegraVICSurface *s);  // VIC wrote it: the seed moves (r18-planes)
+void tegra_vic_surface_written(const TegraVICSurface *s);  // VIC wrote it: the seed moves (r18-planes)
 }
 #endif
