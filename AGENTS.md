@@ -19,6 +19,18 @@ up to us to conform to them as they're likely more correct than whatever we come
 using a bunch of CPU, it's likely us that built something wrong instead of the widget just being like that. Always
 investigate and fix such things.
 
+## Crashes in Apple code are our bugs
+
+When an Apple component crashes or misbehaves (a null dereference inside Metal Performance Shaders, a widget rendering
+black, a daemon that spins), assume we're breaking a contract it relies on. Something our GPU driver, Metal device,
+IOKit service, IOSurface, device tree or kernel should provide is missing or wrong, and the same gap will break other
+components too. Find that contract, fix it at the source and check what else depends on it. Don't stub out or
+special-case whichever component happened to crash first.
+
+Patching Apple's code directly is only for code that is right for Apple's hardware and wrong for ours because our screen
+or hardware differs, like SpringBoard's layout metrics at our UI scale. Even then, give the component the right input if
+you can instead of patching it.
+
 ## File Length & Random Tips
 
 Don't write stupidly long files. Around 500 lines of code, you should consider splitting them. Keep helpers away from
