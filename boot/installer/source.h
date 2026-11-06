@@ -12,10 +12,8 @@ struct source {
     int open;
 };
 
-// 0 when every part exists at its size; else the 1-based number of the first that does not.
-int source_check(const struct switch_image *image);
 int source_read(void *context, void *buffer, uint32_t bytes);
-// The chunk's SHA-256 by the security engine, against the manifest's.
+// The chunk's SHA-256 by the security engine, against the manifest's (a part's or a boot file's).
 int source_verify(void *context, uint32_t chunk, const void *buffer, uint32_t bytes);
 void source_end(struct source *s);
 

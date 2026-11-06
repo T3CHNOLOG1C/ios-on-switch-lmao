@@ -8,8 +8,9 @@ Steps (each can be switched off):
   1 pull logs      the last boots' logs, logarchive and m2v journals (//deploy:pull_logs; --no-pull-logs skips it,
                    --no-csstore/--no-harvest/--no-launchd-log narrow it)
   2 boot entry     switchroot/ios/* and bootloader/ini/ios.ini on the FAT: only files that differ are
-                   copied, stale files in switchroot/ios/ removed (never the user's bootargs.txt), AppleDouble
-                   files by name; nothing else on the FAT
+                   copied, stale files in switchroot/ios/ removed (never the user's bootargs.txt or the install
+                   images in switchroot/ios/install/), AppleDouble files by name; nothing else on the FAT. Refused
+                   when the card's iOS is another kind than the build's (its System volume is not the IPSW's)
   3 overlay        <Data>/Switch/overlay := the package's overlay/; also removes the r3 Wi-Fi bring-up's configd Debug
                    logging profile (STALE_LOGGING_PROFILES) if a card still has it; and stages hekate's "Dump Joy-Con
                    BT" (the FAT's switchroot/joycon_mac.ini, only read) as <Data>/Switch/bluetooth/{host-address,
@@ -28,6 +29,7 @@ Steps (each can be switched off):
 """
 
 import argparse
+import json
 import os
 import plistlib
 import subprocess
@@ -100,6 +102,17 @@ def launchd_check(data: Path, labels: list[str], log: host.Log) -> bool:
     return not missing
 
 
+def check_kind(card: cards.Card, ipsw: str | None) -> None:
+    """Refuse a card whose iOS is another kind than the build's: the build's kernel would not start it."""
+    pins = json.loads(Path(ipsw).read_text()) if ipsw else {}
+    system = (pins.get('volumes') or {}).get('os_volume_uuid', '').upper()
+    if system and not pull_logs.data_volume(card, system):
+        raise cards.RefusedError(
+            f'{card.disk}: its iOS is not iPadOS {pins["version"]} ({pins["build"]}), which this build is for. '
+            'Build for the kind it runs (--config=ios27 for iPadOS 27), or install this kind with install-ios.bin'
+        )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('disk')
@@ -121,13 +134,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--no-joycon-pairing', action='store_true')
     parser.add_argument('--boot-package', required=True)
     parser.add_argument('--spec', required=True)
+    parser.add_argument('--ipsw', help="the IPSW kind's pins (//install:ipsw_pins): the System volume it installs")
     parser.add_argument('--gpu-bundle')
     parser.add_argument('--stager')
     parser.add_argument('--kcdata')
     parser.add_argument('--log')
     args = parser.parse_args(argv)
     harvest_dir = args.harvest and str(Path(args.harvest).parent)
-    for name in ('boot_package', 'spec', 'gpu_bundle', 'stager', 'kcdata'):
+    for name in ('boot_package', 'spec', 'ipsw', 'gpu_bundle', 'stager', 'kcdata'):
         setattr(args, name, located(getattr(args, name)))
     log = host.Log(
         args.log or Path.home() / 'Library/Logs/switch-ios-install/deploy-{}.log'.format(time.strftime('%Y%m%d-%H%M%S'))
@@ -143,6 +157,7 @@ def main(argv: list[str] | None = None) -> int:
         data = pull_logs.data_volume(card, data_uuid)
         if not data:
             raise cards.RefusedError(f'{card.disk}: no iPad Data volume {data_uuid}')
+        check_kind(card, args.ipsw)
         if args.stage_gpu and not (
             args.gpu_bundle and (Path(args.gpu_bundle) / 'TegraGM20BMetal.trustcache').is_file()
         ):

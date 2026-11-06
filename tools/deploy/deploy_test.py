@@ -1,12 +1,14 @@
 """Boot-entry and overlay sync, and the log pull, on plain directories (no card)."""
 
+import json
 import os
 import plistlib
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
-from tools.deploy import joycon_pairing, poster_snapshots, pull_logs
+from tools.deploy import deploy, joycon_pairing, poster_snapshots, pull_logs
 from tools.install import card as cards, renamed
 
 
@@ -48,6 +50,8 @@ class SyncTest(unittest.TestCase):
             'switchroot/ios/._old.bin',
             'switchroot/ios/boot.scr',
             'switchroot/ios/bootargs.txt',
+            'switchroot/ios/install/21H461/part-00.bin',
+            'switchroot/ios/install/24B119/bl33.bin',
             'payload.bin',
         ):
             (self.fat / relative).parent.mkdir(parents=True, exist_ok=True)
@@ -69,6 +73,8 @@ class SyncTest(unittest.TestCase):
             'bootloader/hekate_ipl.ini',
             'switchroot/ubuntu/boot.scr',
             'switchroot/ios/bootargs.txt',
+            'switchroot/ios/install/21H461/part-00.bin',
+            'switchroot/ios/install/24B119/bl33.bin',
             'payload.bin',
         ):
             self.assertEqual(files[untouched], b'x')
@@ -285,6 +291,33 @@ host=98:B6:E9:12:34:56
 ltk=FFEEDDCCBBAA99887766554433221100
 
 """
+
+
+class KindTest(unittest.TestCase):
+    def setUp(self):
+        self.pins = Path(tempfile.mkdtemp()) / 'pins.json'
+        self.pins.write_text(
+            json.dumps({'build': '24B119', 'version': '27.2', 'volumes': {'os_volume_uuid': 'd05a9d99-d227'}})
+        )
+        self.card = cards.Card('disk9', {}, 1 << 36)
+
+    def test_deploys_onto_the_kind_the_build_is_for(self):
+        with mock.patch.object(pull_logs, 'data_volume', return_value='disk10s1') as found:
+            deploy.check_kind(self.card, str(self.pins))
+        found.assert_called_once_with(self.card, 'D05A9D99-D227')
+
+    def test_refuses_a_card_running_the_other_kind(self):
+        with (
+            mock.patch.object(pull_logs, 'data_volume', return_value=None),
+            self.assertRaisesRegex(cards.RefusedError, r'iPadOS 27\.2 \(24B119\)'),
+        ):
+            deploy.check_kind(self.card, str(self.pins))
+
+    def test_pins_without_volumes_are_not_checked(self):
+        self.pins.write_text(json.dumps({'build': '21H461'}))
+        with mock.patch.object(pull_logs, 'data_volume', return_value=None):
+            deploy.check_kind(self.card, str(self.pins))
+            deploy.check_kind(self.card, None)
 
 
 class JoyConPairingTest(unittest.TestCase):

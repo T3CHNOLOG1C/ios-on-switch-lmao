@@ -4,36 +4,20 @@
 
 #include <algorithm>
 #include <cstring>
-#include <fstream>
-#include <iterator>
 #include <string>
 #include <vector>
 
+#include "boot/installer/test/vectors.h"
+
 extern "C" {
-#include "boot/installer/manifest.h"
 #include "boot/installer/stream.h"
 #include "boot/installer/target.h"
 }
 
 namespace {
 
-std::vector<uint8_t> load(const char *name)
-{
-    std::ifstream in(std::string(SWITCH_TEST_PACKAGE) + "/" + name, std::ios::binary);
-    EXPECT_TRUE(in) << name;
-    return {std::istreambuf_iterator<char>(in), {}};
-}
-
-struct Image {
-    std::vector<uint8_t> raw = load("manifest.bin");
-    std::vector<switch_image_extent> extents = std::vector<switch_image_extent>(16);
-    switch_image image{};
-
-    int decode()
-    {
-        return switch_image_decode(raw.data(), raw.size(), &image, extents.data(), extents.size());
-    }
-};
+using switch_test::Image;
+using switch_test::load;
 
 TEST(Manifest, DecodesWhatTheMacWrote)
 {
@@ -42,11 +26,52 @@ TEST(Manifest, DecodesWhatTheMacWrote)
     EXPECT_EQ(m.image.partition_bytes, 16u << 20);
     EXPECT_EQ(m.image.block_size, 4096u);
     EXPECT_EQ(m.image.part_count, 2u);
-    EXPECT_STREQ(m.image.parts[1].path, "switchroot/ios/install/part-01.bin");
+    EXPECT_STREQ(m.image.parts[1].path, "switchroot/ios/install/21H461/part-01.bin");
     EXPECT_EQ(m.image.extent_count, 3u);
     EXPECT_EQ(m.image.extents[1].source, SWITCH_IMAGE_ZERO);
     EXPECT_EQ(m.image.hash_count, 2u);
     EXPECT_STREQ(m.image.label, "iPadOS 17.7.11 (21H461)");
+    ASSERT_EQ(m.image.boot_count, 2u);
+    EXPECT_STREQ(m.image.boot[0].path, "switchroot/ios/install/21H461/bl31.bin");
+    EXPECT_EQ(m.image.boot[0].bytes, 3000u);
+    EXPECT_EQ(m.image.boot[0].first_hash, 2u);
+    EXPECT_EQ(m.image.boot[1].bytes, (9u << 20) + 5);
+    EXPECT_EQ(m.image.boot[1].first_hash, 3u);
+    EXPECT_EQ(m.image.hash_total, 5u);
+}
+
+TEST(Manifest, KnowsItsOwnFolderWhateverTheCase)
+{
+    Image m;
+    ASSERT_EQ(m.decode(), 0);
+    EXPECT_TRUE(switch_image_in(&m.image, "switchroot/ios/install/21H461"));
+    EXPECT_TRUE(switch_image_in(&m.image, "SWITCHROOT/ios/install/21h461"));
+    EXPECT_FALSE(switch_image_in(&m.image, "switchroot/ios/install"));
+    EXPECT_FALSE(switch_image_in(&m.image, "switchroot/ios/install/24B119"));
+    EXPECT_FALSE(switch_image_in(&m.image, "switchroot/ios/install/21H461/"));
+}
+
+TEST(Manifest, RefusesTheFirstVersion)
+{
+    Image m;
+    m.raw[8] = 1;
+    m.reseal();
+    EXPECT_NE(m.decode(), 0);
+}
+
+TEST(Manifest, RefusesBootFilesOutsideTheImageOrOverTheUsersFiles)
+{
+    for (const char *path : {"switchroot/ios/install/24B119/bl31.bin", "switchroot/ios/install/21H461/bootargs.txt",
+                             "switchroot/ios/install/21H461/manifest.bin", "switchroot/ios/install/21H461/part-00.bin",
+                             "bl31.bin", "switchroot/ios/install/21H461/../bl31.bin"}) {
+        Image m;
+        m.set_path(SWITCH_IMAGE_HEADER_BYTES + 2 * SWITCH_IMAGE_RECORD_BYTES, path);
+        EXPECT_NE(m.decode(), 0) << path;
+    }
+    Image renamed;
+    renamed.set_path(SWITCH_IMAGE_HEADER_BYTES + 2 * SWITCH_IMAGE_RECORD_BYTES,
+                     "switchroot/ios/install/21H461/bootlogo.bmp");
+    EXPECT_EQ(renamed.decode(), 0);
 }
 
 TEST(Manifest, RefusesAnyChangedByte)

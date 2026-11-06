@@ -1,4 +1,4 @@
-"""A composed partition image into install/: part files under FAT32's 4 GiB limit and manifest.bin."""
+"""A composed partition image into its kind's install folder: part files under FAT32's 4 GiB limit and manifest.bin."""
 
 import contextlib
 import hashlib
@@ -22,13 +22,14 @@ def pack(
     install_dir: Path,
     fat_prefix: str,
     label: str,
+    boot: list[manifest.Boot],
     log: host.Log,
     punch: bool = True,
 ) -> manifest.Manifest:
     """Pack the partition at `offset` in `image` into part files and a manifest; return the Manifest.
 
     Plans its extents, streams the copy extents into part files (punching the image behind, so the two never both
-    exist whole), and writes the manifest.
+    exist whole), and writes the manifest, which also records the kind's boot files (`boot`).
     """
     install_dir = Path(install_dir)
     fd = os.open(image, os.O_RDWR)
@@ -46,10 +47,19 @@ def pack(
         parts, hashes = _write_parts(fd, offset, plan, sizes, install_dir, fat_prefix, punch)
     finally:
         os.close(fd)
-    m = manifest.Manifest(partition_bytes, block, container, label, parts, plan, hashes)
+    m = manifest.Manifest(partition_bytes, block, container, label, parts, plan, hashes, boot)
     (install_dir / MANIFEST).write_bytes(manifest.encode(m))
     log(f'pack: {install_dir / MANIFEST} written ({len(parts)} parts)')
     return m
+
+
+def boot_file(fat_path: str, source: Path) -> manifest.Boot:
+    """Return the manifest's record of a boot file the folder holds at `fat_path`, a copy of `source`."""
+    hashes = ChunkHashes()
+    with open(source, 'rb') as f:
+        while data := f.read(CHUNK):
+            hashes.update(data)
+    return manifest.Boot(fat_path, Path(source).stat().st_size, hashes.finish())
 
 
 class ChunkHashes:

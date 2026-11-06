@@ -7,11 +7,15 @@ lint_files()
 host_library(
     name = "installer",
     srcs = [
+        "//boot/installer:bootfiles.c",
+        "//boot/installer:images.c",
         "//boot/installer:manifest.c",
         "//boot/installer:stream.c",
         "//boot/installer:target.c",
     ],
     hdrs = [
+        "//boot/installer:bootfiles.h",
+        "//boot/installer:images.h",
         "//boot/installer:manifest.h",
         "//boot/installer:stream.h",
         "//boot/installer:target.h",
@@ -35,7 +39,20 @@ run_binary(
 
 host_test(
     name = "installer_test",
-    srcs = ["installer_test.cpp"],
+    srcs = [
+        "installer_test.cpp",
+        "vectors.h",
+    ],
+    data = [":vectors"],
+    deps = [":installer"],
+)
+
+host_test(
+    name = "selection_test",
+    srcs = [
+        "selection_test.cpp",
+        "vectors.h",
+    ],
     data = [":vectors"],
     deps = [":installer"],
 )

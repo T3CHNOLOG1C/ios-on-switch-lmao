@@ -1,12 +1,13 @@
 """A run resumes only from a stage made of the same inputs, and a boot refresh only when Data's parts still match."""
 
-import json
+import hashlib
 import tempfile
 import unittest
+import uuid
 from pathlib import Path
 from types import SimpleNamespace
 
-from tools.install import folder, host, stages
+from tools.install import folder, host, manifest, stages
 
 SPEC = {'volumes': {'system': {'uuid': 'S'}, 'data': {'uuid': 'D'}, 'preboot': {'uuid': 'P'}}}
 PINS = {'build': '21H461', 'members': {'os': {'content_sha256': 'abc'}}}
@@ -65,11 +66,14 @@ class StateTest(unittest.TestCase):
 
 
 class RefreshTest(unittest.TestCase):
+    BUILD = '21H461'
+
     def setUp(self):
         self.dir = Path(tempfile.mkdtemp())
         self.package = self.dir / 'package'
         for relative, data in {
             'switchroot/ios/bl33.bin': b'kernel 1',
+            'switchroot/ios/bootlogo.bmp': b'logo',
             'bootloader/ini/ios.ini': b'[iOS]\n',
             'overlay/usr/bin/tool': b'tool',
         }.items():
@@ -83,27 +87,43 @@ class RefreshTest(unittest.TestCase):
         self.args = SimpleNamespace(
             boot_package=str(self.package), gpu_base=str(self.gpu), install_payload=str(self.payload)
         )
-        self.out = folder.prepare(self.dir / 'out')
-        (self.out / folder.INSTALL / 'part-00.bin').write_bytes(b'part')
-        stages.add_boot(self.out, self.args, 'bootloader/payloads/install-ios.bin')
-        record = {'label': 'x', 'partition_bytes': 1, 'boot': stages.boot_record(self.args)}
-        (self.out / folder.MARKER).write_text(json.dumps(record))
+        self.out = folder.prepare(self.dir / 'out', self.BUILD)
+        self.kind = self.out / folder.kind_dir(self.BUILD)
+        (self.kind / 'part-00.bin').write_bytes(bytes(4096))
+        m = manifest.Manifest(1 << 30, 4096, uuid.uuid4(), 'iPadOS 17.7.11 (21H461)')
+        m.parts = [manifest.Part(f'{folder.kind_dir(self.BUILD)}/part-00.bin', 4096)]
+        m.extents = [(0, 0, 4096)]
+        m.hashes = [bytes(32)]
+        m.boot = stages.boot_records(self.args, self.BUILD)
+        (self.kind / folder.MANIFEST).write_bytes(manifest.encode(m))
+        stages.add_boot(self.out, self.args, self.BUILD)
+        folder.record(self.out, self.BUILD, {'label': m.label, 'boot': stages.boot_record(self.args)})
 
-    def test_a_kernel_change_refreshes_the_boot_entry_only(self):
+    def test_a_kernel_change_refreshes_the_kinds_boot_entry_and_manifest_only(self):
         (self.package / 'switchroot/ios/bl33.bin').write_bytes(b'kernel 2')
-        stages.refresh_boot(self.out, self.args, 'bootloader/payloads/install-ios.bin', quiet)
-        self.assertEqual((self.out / 'switchroot/ios/bl33.bin').read_bytes(), b'kernel 2')
-        self.assertEqual((self.out / folder.INSTALL / 'part-00.bin').read_bytes(), b'part')
+        (self.package / 'switchroot/ios/bootlogo.bmp').unlink()
+        stages.refresh_boot(self.out, self.args, self.BUILD, quiet)
+        self.assertEqual((self.kind / 'bl33.bin').read_bytes(), b'kernel 2')
+        self.assertFalse((self.kind / 'bootlogo.bmp').exists())
+        self.assertEqual((self.kind / 'part-00.bin').read_bytes(), bytes(4096))
+        m = manifest.decode((self.kind / folder.MANIFEST).read_bytes())
+        self.assertEqual([(b.path, b.bytes) for b in m.boot], [(f'{folder.kind_dir(self.BUILD)}/bl33.bin', 8)])
+        self.assertEqual(m.boot[0].hashes, [hashlib.sha256(b'kernel 2').digest()])
+        self.assertFalse((self.out / 'switchroot/ios/bl33.bin').exists())
+
+    def test_refuses_a_kind_the_folder_does_not_hold(self):
+        with self.assertRaisesRegex(host.HostError, '24B119'):
+            stages.refresh_boot(self.out, self.args, '24B119', quiet)
 
     def test_refuses_when_the_overlay_changed(self):
         (self.package / 'overlay/usr/bin/tool').write_bytes(b'tool 2')
         with self.assertRaisesRegex(host.HostError, 'overlay'):
-            stages.refresh_boot(self.out, self.args, 'bootloader/payloads/install-ios.bin', quiet)
+            stages.refresh_boot(self.out, self.args, self.BUILD, quiet)
 
     def test_refuses_when_the_gpu_trust_cache_changed(self):
         (self.gpu / 'TegraGM20BMetal.trustcache').write_bytes(b'trust 2')
         with self.assertRaisesRegex(host.HostError, 'gpu_trustcache'):
-            stages.refresh_boot(self.out, self.args, 'bootloader/payloads/install-ios.bin', quiet)
+            stages.refresh_boot(self.out, self.args, self.BUILD, quiet)
 
 
 class IpswVolumesTest(unittest.TestCase):

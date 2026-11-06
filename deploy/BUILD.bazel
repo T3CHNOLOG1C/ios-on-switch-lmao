@@ -30,6 +30,7 @@ py_binary(
     args = [
         "--boot-package=$(rlocationpath :boot_package)",
         "--spec=$(rlocationpath //install:spec)",
+        "--ipsw=$(rlocationpath //install:ipsw_pins)",
         "--gpu-bundle=$(rlocationpath :gpu_bundle)",
         "--stager=$(rlocationpath //drivers/TegraGM20BMetal:stage-tegra-gm20b-metal.py)",
         "--kcdata=$(rlocationpath @xnu_base//:tools/lldbmacros/kcdata.py)",
@@ -39,6 +40,7 @@ py_binary(
     data = [
         ":boot_package",
         ":gpu_bundle",
+        "//install:ipsw_pins",
         "//install:spec",
         "//drivers/TegraGM20BMetal:stage-tegra-gm20b-metal.py",
         "//drivers/TegraGM20BMetal:precompile/harvest.py",

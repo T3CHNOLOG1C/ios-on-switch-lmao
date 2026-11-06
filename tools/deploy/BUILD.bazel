@@ -23,8 +23,18 @@ py_library(
     deps = ["//tools/install:lib"],
 )
 
+py_library(
+    name = "deploy",
+    srcs = ["deploy.py"],
+    imports = ["../.."],
+    deps = [":lib"],
+)
+
 py_test(
     name = "deploy_test",
     srcs = ["deploy_test.py"],
-    deps = [":lib"],
+    deps = [
+        ":deploy",
+        ":lib",
+    ],
 )

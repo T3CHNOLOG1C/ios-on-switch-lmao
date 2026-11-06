@@ -87,7 +87,11 @@ class PackApfsTest(unittest.TestCase):
         os.close(fd)
         out = self.dir / 'install'
         out.mkdir()
-        m = pack.pack(sparse, part.first * 512, part.bytes, out, 'switchroot/ios/install', 'test', Quiet())
+        kernel = self.dir / 'bl33.bin'
+        kernel.write_bytes(b'kernel')
+        folder = 'switchroot/ios/install/21H461'
+        boot = [pack.boot_file(f'{folder}/bl33.bin', kernel)]
+        m = pack.pack(sparse, part.first * 512, part.bytes, out, folder, 'test', boot, Quiet())
         self.assertEqual(manifest.decode((out / pack.MANIFEST).read_bytes()), m)
         source = b''.join((out / Path(p.path).name).read_bytes() for p in m.parts)
         chunk = manifest.HASH_CHUNK

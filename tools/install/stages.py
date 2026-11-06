@@ -231,8 +231,9 @@ class Stages:
             host.run('hdiutil', 'detach', disk, log=self.log, check=False)
         self.save('populate', size, offset)
 
-    def pack(self, size: int, offset: int, install_dir: Path, label: str) -> manifest.Manifest:
-        m = pack.pack(self.image, offset, size, install_dir, folder.INSTALL, label, self.log)
+    def pack(self, size: int, offset: int, install_dir: Path, boot: list[manifest.Boot]) -> manifest.Manifest:
+        prefix = folder.kind_dir(self.pins['build'])
+        m = pack.pack(self.image, offset, size, install_dir, prefix, version_label(self.pins), boot, self.log)
         self.clear()
         return m
 
@@ -247,18 +248,32 @@ def boot_record(args: argparse.Namespace) -> dict[str, str | None]:
     }
 
 
-def add_boot(out: Path, args: argparse.Namespace, payload: str) -> None:
-    folder.add_boot_package(out, args.boot_package)
-    folder.add(out, payload, args.install_payload)
+def version_label(pins: dict) -> str:
+    return 'iPadOS {} ({})'.format(pins['version'], pins['build'])
 
 
-def refresh_boot(out: str | Path, args: argparse.Namespace, payload: str, log: host.Log) -> None:
-    """Only the boot entry and install-ios.bin, into a folder //:image made, when Data's parts still match."""
+def boot_records(args: argparse.Namespace, build: str) -> list[manifest.Boot]:
+    """Return the manifest's records of the kind's boot files, as add_boot() puts them in the kind's folder."""
+    files = folder.boot_files(args.boot_package, build)
+    return [pack.boot_file(relative, source) for relative, source in files.items() if folder.kind_of(relative)]
+
+
+def add_boot(out: Path, args: argparse.Namespace, build: str) -> None:
+    for relative, source in folder.boot_files(args.boot_package, build).items():
+        folder.add(out, relative, source)
+    folder.add(out, folder.PAYLOAD, args.install_payload)
+
+
+def refresh_boot(out: str | Path, args: argparse.Namespace, build: str, log: host.Log) -> None:
+    """Only the kind's boot entry and install-ios.bin, into a folder //:image made, when Data's parts still match.
+
+    The image's manifest records the boot files, so it is written again with theirs.
+    """
     out = Path(out)
-    try:
-        record = json.loads((out / folder.MARKER).read_text())
-    except (OSError, ValueError):
-        raise host.HostError(f'{out} is not a folder //:image finished: run //:image first') from None
+    record = folder.records(out).get(build)
+    path = out / folder.kind_dir(build) / folder.MANIFEST
+    if not record or not path.is_file():
+        raise host.HostError(f'{out} holds no {build} image //:image finished: run //:image first')
     current = boot_record(args)
     changed = [k for k in current if current[k] != record['boot'].get(k)]
     if changed:
@@ -267,13 +282,18 @@ def refresh_boot(out: str | Path, args: argparse.Namespace, payload: str, log: h
                 ', '.join(changed)
             )
         )
-    install = out / folder.INSTALL
-    for path in sorted(out.rglob('*')):
-        if path.is_file() and install not in path.parents and path.name != folder.MARKER:
-            path.unlink()
-    add_boot(out, args, payload)
+    m = manifest.decode(path.read_bytes())
+    image_files = {folder.MANIFEST} | {Path(p.path).name for p in m.parts}
+    for stale in sorted((out / folder.kind_dir(build)).iterdir()):
+        if stale.is_file() and stale.name not in image_files:
+            stale.unlink()
+    for relative in folder.SHARED:
+        (out / relative).unlink(missing_ok=True)
+    add_boot(out, args, build)
+    m.boot = boot_records(args, build)
+    path.write_bytes(manifest.encode(m))
     give_back(out)
-    log(f'folder: boot entry and install-ios.bin refreshed in {out}')
+    log(f'folder: the {build} boot entry, its manifest and install-ios.bin refreshed in {out}')
 
 
 def give_back(path: Path) -> None:

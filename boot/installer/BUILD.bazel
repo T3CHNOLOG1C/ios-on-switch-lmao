@@ -59,7 +59,10 @@ filegroup(
 hekate_payload(
     name = "install-ios",
     srcs = [
+        "bootfiles.c",
         "card.c",
+        "catalog.c",
+        "images.c",
         "main.c",
         "manifest.c",
         "source.c",

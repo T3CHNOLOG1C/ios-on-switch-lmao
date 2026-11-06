@@ -102,19 +102,121 @@ static int extents_ok(const struct switch_image *image)
     return image->extents[0].offset == 0 && source == image->source_bytes && written == image->write_bytes;
 }
 
+static uint32_t chunks(uint64_t bytes)
+{
+    return (uint32_t)((bytes + SWITCH_IMAGE_HASH_CHUNK - 1) / SWITCH_IMAGE_HASH_CHUNK);
+}
+
+// The length of `path`'s folder (up to its last '/'), 0 when it has none.
+static uint32_t folder_length(const char *path)
+{
+    uint32_t n = 0;
+    for (uint32_t i = 0; path[i]; i++) {
+        if (path[i] == '/') {
+            n = i;
+        }
+    }
+    return n;
+}
+
+static int same_folder(const char *a, const char *b)
+{
+    uint32_t n = folder_length(a);
+    return n && n == folder_length(b) && !memcmp(a, b, n);
+}
+
+// A part or boot record: a FAT path in the image's one folder, its size, reserved bytes zero.
+static int record(const uint8_t *p, const char *first_path, char *path, uint64_t *bytes)
+{
+    *bytes = le64(p + SWITCH_IMAGE_PATH_BYTES);
+    return !ascii(p, SWITCH_IMAGE_PATH_BYTES, path) && path_ok(path) && *bytes &&
+           all_zero(p + SWITCH_IMAGE_PATH_BYTES + 8, SWITCH_IMAGE_RECORD_BYTES - SWITCH_IMAGE_PATH_BYTES - 8) &&
+           same_folder(path, first_path ? first_path : path);
+}
+
+static int boot_name_ok(const char *path)
+{
+    const char *name = path + folder_length(path) + 1;
+    return strcmp(name, "manifest.bin") && strcmp(name, "bootargs.txt");
+}
+
+static int unique(const struct switch_image *image, const char *path, uint32_t parts, uint32_t boots)
+{
+    for (uint32_t j = 0; j < parts; j++) {
+        if (!strcmp(path, image->parts[j].path)) {
+            return 0;
+        }
+    }
+    for (uint32_t j = 0; j < boots; j++) {
+        if (!strcmp(path, image->boot[j].path)) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static int records_ok(const uint8_t *raw, struct switch_image *image)
+{
+    uint64_t sum = 0;
+    for (uint32_t i = 0; i < image->part_count; i++) {
+        const uint8_t *p = raw + SWITCH_IMAGE_HEADER_BYTES + i * SWITCH_IMAGE_RECORD_BYTES;
+        struct switch_image_part *part = &image->parts[i];
+        if (!record(p, i ? image->parts[0].path : NULL, part->path, &part->bytes) ||
+            part->bytes > SWITCH_IMAGE_PART_LIMIT ||
+            part->bytes % (i + 1 < image->part_count ? SWITCH_IMAGE_HASH_CHUNK : image->block_size) ||
+            !unique(image, part->path, i, 0)) {
+            return 0;
+        }
+        sum += part->bytes;
+    }
+    uint32_t next_hash = image->hash_count;
+    for (uint32_t i = 0; i < image->boot_count; i++) {
+        const uint8_t *p = raw + SWITCH_IMAGE_HEADER_BYTES + (image->part_count + i) * SWITCH_IMAGE_RECORD_BYTES;
+        struct switch_image_boot *boot = &image->boot[i];
+        if (!record(p, image->parts[0].path, boot->path, &boot->bytes) || boot->bytes > SWITCH_IMAGE_BOOT_LIMIT ||
+            !boot_name_ok(boot->path) || !unique(image, boot->path, image->part_count, i)) {
+            return 0;
+        }
+        boot->first_hash = next_hash;
+        next_hash += chunks(boot->bytes);
+    }
+    return sum == image->source_bytes && next_hash == image->hash_total;
+}
+
+// The boot records' sizes, read before the rest is checked: they decide how many hashes the manifest holds.
+static uint32_t boot_hashes(const uint8_t *raw, uint32_t parts, uint32_t boots)
+{
+    uint32_t total = 0;
+    for (uint32_t i = 0; i < boots; i++) {
+        uint64_t bytes =
+            le64(raw + SWITCH_IMAGE_HEADER_BYTES + (parts + i) * SWITCH_IMAGE_RECORD_BYTES + SWITCH_IMAGE_PATH_BYTES);
+        if (!bytes || bytes > SWITCH_IMAGE_BOOT_LIMIT) {
+            return UINT32_MAX;
+        }
+        total += chunks(bytes);
+    }
+    return total;
+}
+
 int switch_image_decode(const uint8_t *raw, uint32_t size, struct switch_image *image,
                         struct switch_image_extent *extents, uint32_t capacity)
 {
     if (!raw || !image || !extents || size < SWITCH_IMAGE_HEADER_BYTES || memcmp(raw, "SWIMAGE1", 8) ||
-        le32(raw + 8) != 1 || le32(raw + 68) != SWITCH_IMAGE_HASH_CHUNK) {
+        le32(raw + 8) != SWITCH_IMAGE_VERSION || le32(raw + 68) != SWITCH_IMAGE_HASH_CHUNK || le32(raw + 124)) {
         return 1;
     }
-    uint32_t parts = le32(raw + 12), count = le32(raw + 28), block = le32(raw + 24);
-    uint64_t source = le64(raw + 32), hashes = (source + SWITCH_IMAGE_HASH_CHUNK - 1) / SWITCH_IMAGE_HASH_CHUNK;
-    if (!parts || parts > SWITCH_IMAGE_MAX_PARTS || !count || count > SWITCH_IMAGE_MAX_EXTENTS || count > capacity ||
-        !hashes || hashes > SWITCH_IMAGE_MAX_HASHES || block < 4096 || block > 65536 || (block & (block - 1)) ||
-        size != SWITCH_IMAGE_HEADER_BYTES + parts * SWITCH_IMAGE_PART_BYTES + count * SWITCH_IMAGE_EXTENT_BYTES +
-                    (uint32_t)hashes * SWITCH_IMAGE_HASH_BYTES) {
+    uint32_t parts = le32(raw + 12), boots = le32(raw + 120), count = le32(raw + 28), block = le32(raw + 24);
+    uint64_t source = le64(raw + 32);
+    uint32_t records = SWITCH_IMAGE_HEADER_BYTES + (parts + boots) * SWITCH_IMAGE_RECORD_BYTES;
+    if (!parts || parts > SWITCH_IMAGE_MAX_PARTS || !boots || boots > SWITCH_IMAGE_MAX_BOOT || !count ||
+        count > SWITCH_IMAGE_MAX_EXTENTS || count > capacity || !source ||
+        source > SWITCH_IMAGE_MAX_PARTS * SWITCH_IMAGE_PART_LIMIT || block < 4096 || block > 65536 ||
+        (block & (block - 1)) || size < records) {
+        return 1;
+    }
+    uint32_t hashes = chunks(source), boot = boot_hashes(raw, parts, boots);
+    if (boot == UINT32_MAX ||
+        size != records + count * SWITCH_IMAGE_EXTENT_BYTES + (hashes + boot) * SWITCH_IMAGE_HASH_BYTES) {
         return 1;
     }
     uint8_t zeros[4] = {0};
@@ -128,37 +230,19 @@ int switch_image_decode(const uint8_t *raw, uint32_t size, struct switch_image *
     image->partition_bytes = le64(raw + 16);
     image->block_size = block;
     image->part_count = parts;
+    image->boot_count = boots;
     image->extent_count = count;
     image->source_bytes = source;
-    image->hash_count = (uint32_t)hashes;
+    image->hash_count = hashes;
+    image->hash_total = hashes + boot;
     image->write_bytes = le64(raw + 40);
     image->extents = extents;
     memcpy(image->container_uuid, raw + 48, 16);
     if (!image->partition_bytes || image->partition_bytes % block ||
-        ascii(raw + 72, SWITCH_IMAGE_LABEL_BYTES, image->label)) {
+        ascii(raw + 72, SWITCH_IMAGE_LABEL_BYTES, image->label) || !records_ok(raw, image)) {
         return 1;
     }
-    uint64_t sum = 0;
-    for (uint32_t i = 0; i < parts; i++) {
-        const uint8_t *p = raw + SWITCH_IMAGE_HEADER_BYTES + i * SWITCH_IMAGE_PART_BYTES;
-        struct switch_image_part *part = &image->parts[i];
-        part->bytes = le64(p + 200);
-        if (ascii(p, SWITCH_IMAGE_PATH_BYTES, part->path) || !path_ok(part->path) || !part->bytes ||
-            part->bytes > SWITCH_IMAGE_PART_LIMIT || part->bytes % (i + 1 < parts ? SWITCH_IMAGE_HASH_CHUNK : block) ||
-            !all_zero(p + 208, 48)) {
-            return 1;
-        }
-        for (uint32_t j = 0; j < i; j++) {
-            if (!strcmp(part->path, image->parts[j].path)) {
-                return 1;
-            }
-        }
-        sum += part->bytes;
-    }
-    if (sum != image->source_bytes) {
-        return 1;
-    }
-    const uint8_t *e = raw + SWITCH_IMAGE_HEADER_BYTES + parts * SWITCH_IMAGE_PART_BYTES;
+    const uint8_t *e = raw + records;
     for (uint32_t i = 0; i < count; i++, e += SWITCH_IMAGE_EXTENT_BYTES) {
         extents[i].offset = le64(e);
         extents[i].source = le64(e + 8);
@@ -166,6 +250,26 @@ int switch_image_decode(const uint8_t *raw, uint32_t size, struct switch_image *
     }
     image->hashes = e;
     return !extents_ok(image);
+}
+
+static char lower(char c)
+{
+    return c >= 'A' && c <= 'Z' ? (char)(c - 'A' + 'a') : c;
+}
+
+int switch_image_in(const struct switch_image *image, const char *folder)
+{
+    const char *path = image->parts[0].path;
+    uint32_t n = folder_length(path);
+    if (!n || n != strlen(folder)) {
+        return 0;
+    }
+    for (uint32_t i = 0; i < n; i++) {
+        if (lower(path[i]) != lower(folder[i])) {
+            return 0;
+        }
+    }
+    return 1;
 }
 
 // APFS's object checksum: Fletcher-64 over 32-bit words, everything after the 8 checksum bytes.

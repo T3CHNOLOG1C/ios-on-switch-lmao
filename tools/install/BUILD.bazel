@@ -170,6 +170,13 @@ py_test(
 )
 
 py_test(
+    name = "folder_test",
+    size = "small",
+    srcs = ["folder_test.py"],
+    deps = [":lib"],
+)
+
+py_test(
     name = "stages_test",
     size = "small",
     srcs = ["stages_test.py"],

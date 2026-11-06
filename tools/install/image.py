@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Prepare iOS for a Switch: a folder to merge onto the SD card's root.
 
-The folder holds the boot entry, install-ios.bin and the install image it writes onto the card's Linux or Android
-partition.
+The folder holds install-ios.bin and the selected kind's install image, which it writes onto the card's Linux or
+Android partition, with that kind's boot entry, which it makes the one hekate starts. Each kind has its own folder
+(folder.py), so a card holds an image of each kind side by side.
 
     bazel run //:image [-- --disk diskN | --size 64G] [--partition NAME] [--out DIR] [--copy-to-card]
     bazel run //:image_dry_run -- [--disk diskN | --size 64G]
@@ -56,7 +57,6 @@ INPUTS = (
     'install_payload',
     'pretranslated_pins',
 )
-PAYLOAD = 'bootloader/payloads/install-ios.bin'
 MIN_BYTES = 16 << 30
 HEADROOM = 4 << 30
 DATA_SEED_BYTES = 1 << 30
@@ -147,17 +147,13 @@ def needed(args: argparse.Namespace, pins: dict, os_bytes: int) -> int:
     return os_bytes + cryptexes + DATA_SEED_BYTES + seed + HEADROOM
 
 
-def version_label(pins: dict) -> str:
-    return 'iPadOS {} ({})'.format(pins['version'], pins['build'])
-
-
-def plan_lines(args: argparse.Namespace, size: int, card: cards.Card | None, done: str | None) -> list[str]:
+def plan_lines(args: argparse.Namespace, size: int, card: cards.Card | None, done: str | None, build: str) -> list[str]:
     where = args.out
     parts = f"{card.disk}'s FAT" if args.copy_to_card else where
     steps = [
         ('compose', f'compose a {size >> 20} MiB iOS container in {args.scratch}'),
         ('populate', 'populate Data and Preboot (asks for sudo once)'),
-        ('pack', f'pack it into {parts}/{folder.INSTALL}/ and add the boot entry and install-ios.bin'),
+        ('pack', f"pack it and the kind's boot entry into {parts}/{folder.kind_dir(build)}/, add install-ios.bin"),
     ]
     if args.copy_to_card:
         steps.append(('pack', f"merge {where} onto {card.disk}'s FAT and eject it"))
@@ -166,7 +162,7 @@ def plan_lines(args: argparse.Namespace, size: int, card: cards.Card | None, don
     return [('done: ' if stage in skip else '') + line for stage, line in steps if stage in stages.STAGES[:stop]]
 
 
-def check_inputs(args: argparse.Namespace) -> list[str]:
+def check_inputs(args: argparse.Namespace) -> None:
     missing = [
         name
         for name in ('spec', 'ipsw', 'boot_package', 'gpu_base', 'gpu_stager', 'install_payload')
@@ -180,28 +176,28 @@ def check_inputs(args: argparse.Namespace) -> list[str]:
         ]
     if missing:
         raise host.HostError('inputs missing: {}'.format(', '.join(missing)))
-    return [*sorted(cards.boot_entry_files(args.boot_package)), PAYLOAD]
 
 
 class Builder:
     def __init__(self, args: argparse.Namespace, log: host.Log):
         self.args, self.log = args, log
         self.pins = json.loads(Path(args.ipsw).read_text())
+        self.build = self.pins['build']
         self.spec = stages.ipsw_volumes(json.loads(Path(args.spec).read_text()), self.pins)
 
     def warm(self) -> int:
         check_inputs(self.args)
-        self.log(f'image: {version_label(self.pins)}: warming translations')
+        self.log(f'image: {stages.version_label(self.pins)}: warming translations')
         stages.Stages(self.args, self.spec, self.pins, self.log).warm_translations()
         self.log(f'translations kept in {Path(self.args.scratch) / stages.TRANSLATIONS}')
         return 0
 
     def run(self) -> int:
-        sd_files = check_inputs(self.args)
+        check_inputs(self.args)
         if self.args.boot_only:
-            stages.refresh_boot(self.args.out, self.args, PAYLOAD, self.log)
+            stages.refresh_boot(self.args.out, self.args, self.build, self.log)
             return 0
-        self.log(f'image: {version_label(self.pins)}')
+        self.log(f'image: {stages.version_label(self.pins)}')
         card, fat, _partition, size = find_target(self.args, self.spec, self.log)
         if size < MIN_BYTES:
             raise cards.RefusedError(
@@ -211,9 +207,9 @@ class Builder:
             raise cards.RefusedError('--copy-to-card writes to the card: put it in the Mac instead of giving --size')
         work = stages.Stages(self.args, self.spec, self.pins, self.log)
         done, offset = work.state(size, refuse_other_size=self.args.copy_to_card)
-        for line in plan_lines(self.args, size, card, done):
+        for line in plan_lines(self.args, size, card, done, self.build):
             self.log('  plan:', line)
-        for relative in sd_files:
+        for relative in folder.listing(self.args.boot_package, self.build):
             self.log('  card:', relative)
         if self.args.dry_run:
             self.log('dry run: nothing written')
@@ -232,11 +228,11 @@ class Builder:
             done = 'populate'
         if self.args.stop_after == 'populate':
             return 0
-        out = folder.prepare(self.args.out)
+        out = folder.prepare(self.args.out, self.build)
         if self.args.copy_to_card:
             self.pack_to_card(work, card, fat, size, offset, out)
         else:
-            m = work.pack(size, offset, out / folder.INSTALL, version_label(self.pins))
+            m = work.pack(size, offset, out / folder.kind_dir(self.build), stages.boot_records(self.args, self.build))
             self.finish(out, m)
             self.log(f"folder: {out} ({len(folder.files(out))} files); merge it onto the SD card's root")
         return 0
@@ -253,21 +249,26 @@ class Builder:
             )
 
     def finish(self, out: Path, m: manifest.Manifest) -> None:
-        record = {'label': m.label, 'partition_bytes': m.partition_bytes, 'boot': stages.boot_record(self.args)}
-        (Path(out) / folder.MARKER).write_text(json.dumps(record, indent=2) + '\n')
+        entry = {'label': m.label, 'partition_bytes': m.partition_bytes, 'boot': stages.boot_record(self.args)}
+        folder.record(out, self.build, entry)
         kept = Path(self.args.scratch) / 'pretranslated'
         if kept.is_dir():
             shutil.copytree(kept, Path(out) / 'pretranslated', dirs_exist_ok=True)
             shutil.rmtree(kept)
-        stages.add_boot(out, self.args, PAYLOAD)
+        stages.add_boot(out, self.args, self.build)
         stages.give_back(out)
 
     def pack_to_card(
         self, work: stages.Stages, card: cards.Card, fat: cards.Part, size: int, offset: int, out: Path
     ) -> None:
-        """Pack the parts straight onto the card's FAT: no second local copy of the image."""
+        """Pack the parts straight onto the card's FAT: no second local copy of the image.
+
+        The folder keeps a copy of the manifest, which //:image_boot writes again when it refreshes the boot entry.
+        """
         with cards.mounted(fat.identifier, self.log) as root:
-            install = Path(root) / folder.INSTALL
+            for relative in folder.remove_legacy(root):
+                self.log("card: removed the older layout's", relative)
+            install = Path(root) / folder.kind_dir(self.build)
             if install.exists():
                 shutil.rmtree(install)
             install.mkdir(parents=True)
@@ -276,9 +277,10 @@ class Builder:
                 raise host.HostError(
                     f"the card's FAT has {free >> 20} MiB free; the image needs about {allocated(work.image) >> 20} MiB"
                 )
-            m = work.pack(size, offset, install, version_label(self.pins))
+            m = work.pack(size, offset, install, stages.boot_records(self.args, self.build))
+            shutil.copyfile(install / folder.MANIFEST, out / folder.kind_dir(self.build) / folder.MANIFEST)
             self.finish(out, m)
-            folder.merge(out, root, self.log, keep=[p.path for p in m.parts] + [folder.MANIFEST_PATH])
+            folder.merge(out, root, self.log, keep=[p.path for p in m.parts])
         host.run('diskutil', 'eject', card.disk, log=self.log)
         self.log('ejected', card.disk, "- in the Switch, run install-ios.bin from hekate's Payloads")
 

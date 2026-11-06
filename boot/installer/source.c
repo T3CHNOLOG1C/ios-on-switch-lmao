@@ -38,17 +38,6 @@ static void map_clusters(void)
     }
 }
 
-int source_check(const struct switch_image *image)
-{
-    for (uint32_t i = 0; i < image->part_count; i++) {
-        FILINFO info;
-        if (f_stat(image->parts[i].path, &info) != FR_OK || info.fsize != image->parts[i].bytes) {
-            return (int)i + 1;
-        }
-    }
-    return 0;
-}
-
 int source_read(void *context, void *buffer, uint32_t bytes)
 {
     struct source *s = context;
@@ -85,7 +74,7 @@ int source_verify(void *context, uint32_t chunk, const void *buffer, uint32_t by
 {
     struct source *s = context;
     uint8_t hash[SE_SHA_256_SIZE] __attribute__((aligned(4)));
-    if (chunk >= s->image->hash_count || se_sha_hash_256_oneshot(hash, buffer, bytes)) {
+    if (chunk >= s->image->hash_total || se_sha_hash_256_oneshot(hash, buffer, bytes)) {
         return 1;
     }
     return memcmp(hash, s->image->hashes + chunk * SWITCH_IMAGE_HASH_BYTES, SWITCH_IMAGE_HASH_BYTES) != 0;
