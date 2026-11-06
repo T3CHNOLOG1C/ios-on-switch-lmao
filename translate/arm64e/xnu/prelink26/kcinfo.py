@@ -17,7 +17,11 @@ ROOTS = ["com.apple.driver.AppleMobileFileIntegrity", "com.apple.filesystems.apf
          "com.apple.iokit.IOAccessoryManager", "com.apple.iokit.IOGPUFamily", "com.apple.iokit.IOPCIFamily",
          "com.apple.iokit.IOPortFamily", "com.apple.iokit.IOSCSIArchitectureModelFamily",
          "com.apple.iokit.IOSCSIBlockCommandsDevice", "com.apple.iokit.IOUSBDeviceFamily",
-         "com.apple.iokit.IOUSBHostFamily", "com.apple.iokit.IOUSBMassStorageDriver"]
+         "com.apple.iokit.IOUSBHostFamily", "com.apple.iokit.IOUSBMassStorageDriver",
+         "com.apple.driver.usb.IOUSBHostHIDDeviceSafeBoot", "com.apple.iokit.IOHIDEventDriver",
+         "com.apple.iokit.IOHIDEventDriverSafeBoot"]
+# _PrelinkExecutableLoadAddr of a codeless kext in a fileset kernelcache (XNU kOSKextCodelessKextLoadAddr).
+CODELESS_LOAD_ADDR = 0x7FFFFFFFFFFFFFFF
 
 
 def unserialize(blob):
@@ -54,6 +58,8 @@ class KC(Fileset):
         self.base = self.segs[0]["va"]
 
     def closure(self, roots, cuts=()):
+        """roots' dependency closure: the kexts with code, the kernel interfaces and the codeless kexts (personalities
+        only, in the prelink info and in no fileset entry)."""
         sel, ifaces, pend = set(), set(), list(roots)
         while pend:
             i = pend.pop()
@@ -63,7 +69,13 @@ class KC(Fileset):
                 ifaces.add(i); continue
             sel.add(i)
             pend += [d for d in (e.get("OSBundleLibraries") or {}) if (i, d) not in cuts]
-        return sel, ifaces
+        codeless = {i for i in sel if i not in self.entry}
+        for i in codeless:
+            e = self.plist[i]
+            if (e.get("_PrelinkKmodInfo") or e.get("_PrelinkExecutableLoadAddr", CODELESS_LOAD_ADDR) != CODELESS_LOAD_ADDR
+                    or not e.get("IOKitPersonalities")):
+                raise ValueError("a kext in no fileset entry must be codeless with personalities: " + i)
+        return sel - codeless, ifaces, codeless
 
     def fixups_all(self):
         """yield (site_va, raw64) for every chained pointer in the fileset"""
@@ -108,7 +120,7 @@ def decode8(raw):
 
 if __name__ == "__main__":
     kc = KC(sys.argv[1])
-    sel, ifaces = kc.closure(ROOTS)
+    sel, ifaces, codeless = kc.closure(ROOTS)
     print("plist entries", len(kc.plist), "fileset entries", len(kc.entries))
     print("closure", len(sel), "interfaces", sorted(ifaces))
     print(sorted(sel))

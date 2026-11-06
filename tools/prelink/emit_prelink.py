@@ -377,10 +377,13 @@ def prepare(original: Original) -> tuple[Plan, dict[str, object], dict[str, list
 def check_inherited_contract(report: dict[str, object], inherited: dict[str, object]) -> None:
     # Required relocation work still parses original bytes. Reuse only findings
     # wholly determined by the unchanged original modules and fixed slide.
-    for key in ('slide', 'codeless_components', 'kernel_interfaces'):
+    for key in ('slide', 'kernel_interfaces'):
         if report[key] != inherited[key]:
             raise ValueError('Inherited original contract changed: ' + key)
-    if set(report['components']) != set(inherited['components']) | NEW_ORIGINAL_COMPONENTS:
+    new_codeless = NEW_ORIGINAL_COMPONENTS & set(report['codeless_components'])
+    if set(report['codeless_components']) != set(inherited['codeless_components']) | new_codeless:
+        raise ValueError('Inherited original contract changed: codeless_components')
+    if set(report['components']) != set(inherited['components']) | (NEW_ORIGINAL_COMPONENTS - new_codeless):
         raise ValueError('Original component closure differs from V20')
     old_extents = [e for e in report['extents'] if e['module'] not in NEW_ORIGINAL_COMPONENTS]
     if old_extents != inherited['extents']:
@@ -641,7 +644,9 @@ def executable_hashes(
                 )
     if {k: v for k, v in text_hashes.items() if k not in NEW_ORIGINAL_COMPONENTS} != inherited[
         'original_executable_sha256'
-    ] or set(text_hashes) != set(inherited['original_executable_sha256']) | NEW_ORIGINAL_COMPONENTS:
+    ] or set(text_hashes) != set(inherited['original_executable_sha256']) | (
+        NEW_ORIGINAL_COMPONENTS & cache.modules.keys()
+    ):
         raise ValueError('Original executable identity set changed')
     return text_hashes
 

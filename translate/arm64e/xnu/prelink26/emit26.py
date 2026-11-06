@@ -75,7 +75,7 @@ def main():
     kc = KC(kc_path)
     d = kc.d
     roots = [r for r in ROOTS if r in kc.plist]
-    sel, ifaces = kc.closure(roots, set(CUTS))
+    sel, ifaces, codeless = kc.closure(roots, set(CUTS))
     names = {int(a, 16): n for a, n in json.load(open(paths.work("kernel-names.json")))["names"].items()}
     # kexts link against the KPI only: a kext target named outside the 26.5.2 symbol sets (or iOS 17's imports) is
     # a naming error, so it stays unresolved
@@ -333,10 +333,10 @@ def main():
         for k in ("_PrelinkExecutableLoadAddr", "_PrelinkExecutableSourceAddr"):
             e.pop(k, None)
         entries.append(e)
-    for b in sorted(sel):
+    for b in [*sorted(sel), *sorted(codeless)]:
         e = copy.deepcopy(kc.plist[b])
         for k in ("_PrelinkExecutableLoadAddr", "_PrelinkExecutableSourceAddr", "_PrelinkKmodInfo"):
-            if e.get(k): e[k] = ((e[k] & M64) + slide) & M64
+            if e.get(k) and b in sel: e[k] = ((e[k] & M64) + slide) & M64
         for (c, dep) in CUTS:
             if c == b: e.get("OSBundleLibraries", {}).pop(dep, None)
         for p in DEFERRED_PERSONALITIES.get(b, ()):
@@ -371,7 +371,8 @@ def main():
     open(out_path, "wb").write(output)
     report = {"kernelcache_sha256": hashlib.sha256(d).hexdigest(), "native_sha256": hashlib.sha256(native_data).hexdigest(),
               "output_sha256": hashlib.sha256(output).hexdigest(), "output_bytes": len(output), "slide": slide,
-              "components": sorted(sel), "kernel_interfaces": sorted(ifaces), "cuts": [list(k) for k in CUTS],
+              "components": sorted(sel), "codeless_components": sorted(codeless), "kernel_interfaces": sorted(ifaces),
+              "cuts": [list(k) for k in CUTS],
               "segments": [{k: (hex(v) if isinstance(v, int) else v) for k, v in s.items()} for s in new_segments],
               "pointer_kinds": dict(kinds), "pointer_sites": len(pointer_sites), "branch_kinds": dict(br),
               "unresolved_kernel_functions": {hex(a): c for a, c in sorted(unresolved_fn.items())},
