@@ -230,6 +230,15 @@ TEST(XnuUiScale, BatteryFillIsWholePixelsWithEqualGaps)
     }
 }
 
+TEST(XnuUiScale, GridScaleMatchesTheAssembler)
+{
+    // clang -arch arm64: fmov d9, d8; tbnz w0, #0, +0x30; fmov d11, #0.25 / #0.1875
+    EXPECT_EQ(EditBytes(SWITCH_US_GRID_SCALE, Named("1.25"), 12),
+              (std::vector<uint8_t>{0x09, 0x41, 0x60, 0x1e, 0x80, 0x01, 0x00, 0x37, 0x0b, 0x10, 0x6a, 0x1e}));
+    EXPECT_EQ(EditBytes(SWITCH_US_GRID_SCALE, Named("1.6"), 12),
+              (std::vector<uint8_t>{0x09, 0x41, 0x60, 0x1e, 0x80, 0x01, 0x00, 0x37, 0x0b, 0x10, 0x69, 0x1e}));
+}
+
 TEST(XnuUiScale, AWrongLengthOrAFixedEditWritesNothing)
 {
     uint8_t out[20] = {};
@@ -237,6 +246,8 @@ TEST(XnuUiScale, AWrongLengthOrAFixedEditWritesNothing)
     EXPECT_FALSE(switch_ui_scale_edit_bytes(SWITCH_US_MG_SCALE, Named("1.6"), out, 12));
     EXPECT_FALSE(switch_ui_scale_edit_bytes(SWITCH_US_PROGRESS_BAR, Named("1.6"), out, 4));
     EXPECT_FALSE(switch_ui_scale_edit_bytes(SWITCH_US_BATTERY_FILL, Named("1.25"), out, 20));
+    EXPECT_FALSE(switch_ui_scale_edit_bytes(SWITCH_US_GRID_SCALE, Named("1.25"), out, 16));
+    EXPECT_FALSE(switch_ui_scale_edit_bytes(SWITCH_US_GRID_SCALE, Named("1"), out, 12));
     EXPECT_FALSE(switch_ui_scale_edit_bytes(SWITCH_US_FIXED, Named("1.6"), out, 12));
     for (uint8_t byte : out) {
         EXPECT_EQ(byte, 0);

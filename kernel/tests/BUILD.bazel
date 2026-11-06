@@ -19,11 +19,14 @@
 #                            a release kernel compiles every hook to nothing
 #   xnu_ui_scale_test        bsd/vm/switch_ui_scale.h's scales (whole-point screens, exact floats, boot-arg values)
 #                            and the cache text they write, against the assembler and the bytes the 1.6-only sites
-#                            shipped; the status bar battery's fill in whole pixels with equal gaps at 1.25
+#                            shipped; the status bar battery's fill in whole pixels with equal gaps at 1.25; the
+#                            switcher's landscape card scale
 #   xnu_ui_scale_sites_test  bsd/vm/switch_ui_scale_sites.h against 21H461's text mappings: every edit in its site's
 #                            chunk, each site the one site of its slot in its mapping and on no other pager's slot; the
 #                            two battery fills one edit of the same code, the CoverSheetKit row's tbz and the CoreUI
-#                            row bytes decoded; the header the same in both trees, no UI scale pager at scale 1
+#                            row bytes decoded; the switcher's card scale (its branches kept, the landscape scale the
+#                            largest that keeps six cards clear of the status bar and the dock, as Apple lays them out);
+#                            the header the same in both trees, no UI scale pager at scale 1
 #   xnu_page_ratio_test      16 KiB VM pages over the 4 KiB granule: pmap.c's write_pte_fast (both trees) writes a
 #                            VM page as four consecutive 4 KiB frames, repeats empty and compressed entries, refuses an
 #                            unaligned PTE

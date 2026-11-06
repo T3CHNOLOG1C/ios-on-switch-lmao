@@ -2866,8 +2866,8 @@ switch_ui_scale_pager(const struct switch_us_site *site, vm_object_t file_object
  * grid, settings icons and keyboard ranges are in different subcaches (.25, .13, .03), one per mapping, so they only
  * answer slot 0; the .07 mapping holds both widget deadline sites, slot k being site k; a UI scale site answers its own
  * slot (switch_ui_scale_sites.h; .11 holds three: MobileGestalt and the two CoreUI ones; .31 only ProgressUI's;
- * .03's two UIKitCore battery fills are slots 1 and 2, the keyboard's being 0; .13's CoverSheetKit row is slot 1,
- * the settings icons' being 0).
+ * .03's two UIKitCore battery fills are slots 1 and 2, the keyboard's being 0; .13's CoverSheetKit row and .25's
+ * SpringBoard switcher scale are slot 1, the settings icons' and the home grid's being 0).
  */
 memory_object_t switch_shared_cache_text_pager(vm_object_t file_object, uint64_t file_offset, uint64_t size,
     uint64_t unslid_address, struct vnode *vp, unsigned slot, uint64_t *range_offset, uint64_t *range_size);
