@@ -18,6 +18,7 @@ host_test(
     srcs = [
         "switch_dcache_test.cpp",
         "//kits/SwitchDMA:SwitchDcache.h",
+        "//kits/SwitchDMA:SwitchHwPage.h",
     ],
     copts = ["-O1"],
     deps = [":dcache_recorder"],

@@ -3,6 +3,7 @@
 
 #define SWITCH_DCACHE_PHYS_MODEL 1
 #include "kits/SwitchDMA/SwitchDcache.h"
+#include "kits/SwitchDMA/SwitchHwPage.h"
 
 #include <gtest/gtest.h>
 
@@ -56,6 +57,8 @@ void sortByAddress(std::vector<Event> &events)
         return a.address < b.address;
     });
 }
+
+static_assert(SWITCH_HW_PAGE_SIZE == 4096 && SWITCH_HW_PAGE_MASK == 0xfff && (1u << SWITCH_HW_PAGE_SHIFT) == 4096);
 
 TEST(SwitchDcache, EmptyRangesTouchNothing)
 {
