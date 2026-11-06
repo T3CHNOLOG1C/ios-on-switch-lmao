@@ -32,6 +32,9 @@
 #include "AKSCmac.h"
 #include "../TegraSE/TegraSE.h"
 
+// Debug kernels only: nothing reads what the probe finds yet.
+#if DEVELOPMENT || DEBUG
+
 namespace {
 constexpr uint64_t kCarPA = 0x60006000, kAhbArbPA = 0x6000C000, kFusePagePA = 0x7000F000, kMcPA = 0x70019000;
 constexpr uint32_t kCarRstDevicesH = 0x008, kCarClkOutEnbH = 0x014, kCarRstDevicesV = 0x358, kCarClkOutEnbV = 0x360,
@@ -391,3 +394,4 @@ out:
     OSSafeReleaseNULL(ahbMap);
     OSSafeReleaseNULL(carMap);
 }
+#endif
