@@ -15,7 +15,7 @@
 namespace
 {
 constexpr uint64_t KiB = 1024, MiB = 1024 * KiB;
-// the kernel's defaults (TegraGM20BUserClient.cpp kPoolSmallBytes, kPoolFloorBytes, tegra-gpu-pool-reserve-mb, -client-pool-mb)
+// the kernel's defaults (TegraGM20BUserClient.cpp kPoolSmallBytes, kPoolFloorBytes, kPoolReserveBytes, kClientPoolBytes)
 constexpr tgm_pool::Limits kLimits = {1 * MiB, 16 * MiB, 32 * MiB, 64 * MiB};
 
 struct Pool {

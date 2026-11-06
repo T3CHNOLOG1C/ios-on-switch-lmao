@@ -10,7 +10,7 @@ Mount the Data volume read-write first, e.g. `diskutil mount -mountOptions nobro
 
 As vendor/unixnu/scripts/add-gpu-plugin-data.py --publish (UniXNU-sheng), on the live volume instead of a seed image:
   * <Data>/ngpu/addons/TegraGM20BMetal.bundle from <build outdir>/ngpu/addons (//gpu:bundle). The kernel shows
-    /private/var/ngpu/addons over /System/Library/Extensions when booted with sheng-gpu-addon=1;
+    /private/var/ngpu/addons over /System/Library/Extensions;
   * <Data>/ngpu/addons/TegraGM20BMetal.m2v-seed beside it, when the build has one (the shader cache seeds, --seed);
   * CAEnableDeepFramebuffer, CAEnableFramebufferCompression and CAEnableIOSurfaceCompression = false merged into the
     preferences backboardd reads when it starts, before any plugin code runs (its own domain and the global one, for mobile

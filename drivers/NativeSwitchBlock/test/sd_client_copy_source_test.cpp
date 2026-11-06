@@ -1,5 +1,5 @@
 // NativeSwitchBlock.cpp moves request bytes only through SwitchClientCopy.h's helper (sd_client_copy_test.cpp
-// tests it): readBytes/writeBytes, and the cache flush they add, stay only behind boot-arg switch-sd-copy-flush.
+// tests it): readBytes/writeBytes, and the cache flush they add, stay only behind copyFlush (off; an A/B build's switch).
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
@@ -19,7 +19,7 @@ TEST(SdClientCopySource, RequestBytesMoveOnlyThroughTheHelper)
     std::vector<std::string> uses = LinesMatching(source, R"(->\s*(readBytes|writeBytes)\()");
     for (std::string &line : uses) line = line.substr(line.find_first_not_of(" \t"));
     ASSERT_EQ(uses.size(), 1u) << testing::PrintToString(uses);
-    // The one use sits in stage(), behind the boot-arg's copyFlush.
+    // The one use sits in stage(), behind copyFlush.
     const std::string before = source.substr(0, source.find(uses[0]));
     const std::string signature = "bool stage(";
     const size_t stage = before.rfind(signature);

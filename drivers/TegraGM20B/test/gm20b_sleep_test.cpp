@@ -236,11 +236,11 @@ TEST(GM20BSleepGate, ACallerThatNeverLeavesFailsTheBoundedDrain)
 TEST(GM20BSleepPlan, EachStage)
 {
 	EXPECT_EQ(tgm_sleep_plan(0, 0), TGM_SLEEP_NOTHING)
-		<< "tegra-gpu off, or M1 failed before the power-up";
+		<< "switch-no-gpu, or M1 failed before the power-up";
 	EXPECT_EQ(tgm_sleep_plan(3, 0), TGM_SLEEP_NOTHING);
 	EXPECT_EQ(tgm_sleep_plan(0, 1), TGM_SLEEP_POWER)
 		<< "M1 failed after the power-up (chip ID)";
-	EXPECT_EQ(tgm_sleep_plan(1, 1), TGM_SLEEP_POWER) << "tegra-gpu=1, or M2 failed";
+	EXPECT_EQ(tgm_sleep_plan(1, 1), TGM_SLEEP_POWER) << "stage 1 only, or M2 failed";
 	EXPECT_EQ(tgm_sleep_plan(2, 1), TGM_SLEEP_FULL) << "M2's nvif client exists";
 	EXPECT_EQ(tgm_sleep_plan(3, 1), TGM_SLEEP_FULL);
 }

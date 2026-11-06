@@ -37,7 +37,7 @@ kernel_driver(
     ],
 )
 
-# BlueTool stand-in (gated on switch-bt).
+# BlueTool stand-in (off with switch-no-bt).
 ios_binary(
     name = "BlueTool",
     srcs = ["BlueTool/BlueTool.c"],

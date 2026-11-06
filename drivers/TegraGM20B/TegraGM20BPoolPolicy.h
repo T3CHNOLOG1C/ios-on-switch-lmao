@@ -19,9 +19,9 @@ struct Limits {
 		smallBytes;  // a BO up to this size only keeps floorBytes free (what a device needs to exist)
 	uint64_t
 		floorBytes;  // the pool's last bytes: the compositor's next m2v block and nvkm's tables for new clients
-	uint64_t reserveBytes;  // a larger BO also leaves this free (tegra-gpu-pool-reserve-mb)
+	uint64_t reserveBytes;  // a larger BO also leaves this free (kPoolReserveBytes)
 	uint64_t
-		clientBytes;  // and keeps its client within this much pool (tegra-gpu-client-pool-mb): a fairness share
+		clientBytes;  // and keeps its client within this much pool (kClientPoolBytes): a fairness share
 };
 
 // Why a BO of `bytes` stays out of the pool while its client holds `held` and the pool has `avail` free, or nullptr (the

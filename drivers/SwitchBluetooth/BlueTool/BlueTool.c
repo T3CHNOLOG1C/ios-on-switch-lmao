@@ -41,7 +41,7 @@ ios_xpc_connection_create_mach_service(const char *name, dispatch_queue_t queue,
 
 static const char kService[] = "com.apple.BlueTool";
 static const char kFirmware[] = "CYW4356A3_001.004.009.0092.0095.hcd";  // nx-firmware patch, loaded by the kernel
-static const char kPairingAgent[] = "/usr/libexec/joyconpaird";         // shown by the overlay with switch-bt
+static const char kPairingAgent[] = "/usr/libexec/joyconpaird";         // shown by the overlay unless switch-no-bt
 
 extern char **environ;
 

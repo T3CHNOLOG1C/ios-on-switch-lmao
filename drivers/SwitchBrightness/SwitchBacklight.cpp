@@ -53,7 +53,7 @@
 // the display restarts the DC, then TegraPanel wakes the panel and restores the brightness. The touch controller goes
 // down with the screen and comes back up while the panel wakes (SwitchTouch's display power). The rail Joy-Cons keep
 // running, so a seated Joy-Con's Home can wake the console (../SwitchSuspend/SwitchWakeSources.h). On by default;
-// boot-arg switch-sleep=0 leaves the render server's requests to the original user client (the panel stays lit when
+// boot-arg switch-no-sleep leaves the render server's requests to the original user client (the panel stays lit when
 // locked).
 //
 // Waking (../SwitchSuspend/SwitchWake.h): every display off and on is one power-journal line with each step's time, and
@@ -175,12 +175,6 @@ OSDictionary *calibration()
     return dict;
 }
 
-bool bootArg(const char *name)
-{
-    unsigned value = 0;
-    return PE_parse_boot_argn(name, &value, sizeof(value)) && value == 1;
-}
-
 uint64_t msBetween(uint64_t from, uint64_t to)
 {
     uint64_t ns = 0;
@@ -196,13 +190,13 @@ uint64_t msSince(uint64_t start)
 }
 }  // namespace
 
-// Display power is on unless switch-sleep=0 (system sleep needs it too). NativeLegacyDisplay, the display probe and
+// Display power is on unless switch-no-sleep (system sleep needs it too). NativeLegacyDisplay, the display probe and
 // SwitchSuspend ask the same.
 extern "C" bool switch_display_power_enabled(void)
 {
-    unsigned value = 1;
-    PE_parse_boot_argn("switch-sleep", &value, sizeof(value));
-    return value != 0;
+    unsigned off = 0;
+    PE_parse_boot_argn("switch-no-sleep", &off, sizeof(off));
+    return off == 0;
 }
 
 class SwitchBacklight : public IOService {
@@ -241,7 +235,7 @@ class SwitchBacklight : public IOService {
     static void quietFired(OSObject *owner, IOTimerEventSource *sender);
 
 public:
-    bool brightnessCommands = false, sleepEnabled = false;
+    bool sleepEnabled = false;
     bool start(IOService *provider) override;
     void free() override;
     IOReturn setProperties(OSObject *properties) override;
@@ -339,7 +333,7 @@ void SwitchBacklight::powerOn()
     }
     scanoutStopped = false;
     const uint64_t scanout = mach_absolute_time();
-    const int level = brightnessCommands ? (int)toRaw(target ? target : lit) : -1;
+    const int level = (int)toRaw(target ? target : lit);
     const int err = tegra_panel_power_on(level);
     if (err) IOLog("SwitchBacklight: panel on failed (%d): the display is not running\n", err);
     const uint64_t panel = mach_absolute_time();
@@ -378,8 +372,8 @@ void SwitchBacklight::step()
         }
     }
     gDisplayOn = panelOn;  // also when a request to go dark was taken back before it ran
-    // Dark, or brightness not driven: the request is only recorded, and played on wake.
-    if (!panelOn || !brightnessCommands) {
+    // Dark: the request is only recorded, and played on wake.
+    if (!panelOn) {
         current = target;
         publishParameters();
         return;
@@ -525,7 +519,6 @@ void SwitchBacklight::expectWake(unsigned source)
 bool SwitchBacklight::start(IOService *provider)
 {
     if (!IOService::start(provider)) return false;
-    brightnessCommands = bootArg("switch-backlight");
     nanoseconds_to_absolutetime(kSendIntervalNS, &sendInterval);
     sleepEnabled = switch_display_power_enabled();
     nanoseconds_to_absolutetime(SWITCH_WAKE_GUARD_MS * 1000000ull, &guardTimeout);
@@ -587,8 +580,7 @@ bool SwitchBacklight::start(IOService *provider)
     // class, so our XNU grants it by name (IOUserClient.cpp native_sandbox_grant).
     setProperty("NativeSandboxGrantProcess", "backboardd");
     registerService();
-    IOLog("SwitchBacklight: started (panel brightness %s, display power %s)\n", brightnessCommands ? "on" : "off",
-          sleepEnabled ? "on" : "off");
+    IOLog("SwitchBacklight: started (display power %s)\n", sleepEnabled ? "on" : "off");
     return true;
 }
 

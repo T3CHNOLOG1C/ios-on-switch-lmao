@@ -7,8 +7,7 @@
 
 #define STUB __attribute__((weak))
 
-// offline-component-load-probes.patch, bsd_init: called on offline-legacy-register=1 whether or not
-// NativeLegacyDisplay is linked. Without it the argument does nothing.
+// offline-component-load-probes.patch, bsd_init: called whether or not NativeLegacyDisplay is linked.
 void native_legacy_display_probe(void);
 STUB void native_legacy_display_probe(void) {}
 

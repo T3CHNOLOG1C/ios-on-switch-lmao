@@ -4335,7 +4335,7 @@ is_io_service_set_authorization_id(
  * A native driver names, by the property NativeSandboxGrantProcess on its service, the processes (a comma-separated list
  * of executable names, e.g. the render server) to which it grants its own user client in place of the sandbox's verdict:
  * the original profiles name no class of these drivers. Process names are p_comm, so a name longer than 16 characters
- * matches on its first 16. An entry "*" grants every process (TegraGM20B with tegra-gpu-all-clients=1: Metal for all).
+ * matches on its first 16. An entry "*" grants every process (TegraGM20B: Metal for all).
  * Nothing else is affected.
  */
 extern "C" void proc_selfname(char * buf, int size);

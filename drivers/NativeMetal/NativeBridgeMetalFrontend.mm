@@ -145,7 +145,7 @@ static std::atomic<uint64_t> gResourceChecks, gResourceSkipped;
 static Timed gTimeSubmit;
 static std::atomic<uint64_t> gEncodeUs, gApiUs, gJoinablePasses;
 // Mach ticks spent in the encoding calls on this thread since its last commit (one thread encodes a command buffer, Metal's rule; the
-// committing thread hands its sum to the rates). Off with TEGRA_M2V_TELEMETRY=0 (the plugin sets it from tegra-m2v-telemetry).
+// committing thread hands its sum to the rates). Off with TEGRA_M2V_TELEMETRY=0.
 static thread_local uint64_t tApiTicks;
 static bool apiTiming()
 {

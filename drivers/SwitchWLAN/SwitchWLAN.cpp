@@ -4,8 +4,8 @@
 // and WPA2-Personal networks (our own supplicant, SwitchWLANWpa.cpp), the data path to en0 (SwitchWLANNet.cpp),
 // and a watchdog that brings the chip back when it resets itself.
 //
-// Opt-in: nothing here runs unless the boot-arg switch-wlan=1 is set (switch_wlan_publish returns at once
-// otherwise), so a radio that misbehaves cannot stop the device booting. One worker thread owns the chip: bring-up
+// Boot-arg switch-no-wlan turns it off (switch_wlan_publish returns at once), to tell a radio that misbehaves from the
+// rest of the boot. One worker thread owns the chip: bring-up
 // (UPHY calibration, link training and the firmware's start take seconds), then every request from the network
 // side (they only queue work here), joins and their key handshakes, the watchdog and recoveries. The work loop
 // takes the MSI: completions, firmware events and received frames. Milestone lines:
@@ -935,7 +935,7 @@ bool SwitchWLAN::bootChip(const char **stage)
 
 bool SwitchWLAN::bringUp()
 {
-    IOLog("SwitchWLAN: starting (boot-arg switch-wlan=1), bringing up PCIe port 1\n");
+    IOLog("SwitchWLAN: starting, bringing up PCIe port 1\n");
     if (!pcie_.bringUp(ep_, why_, sizeof(why_))) {
         stop("PCIe");
         return false;
@@ -2895,12 +2895,12 @@ static void publishMac(const uint8_t mac[6])
 }
 
 // Called once from the kernel's boot path (SwitchRootDiag.h, after the SD block device): the address in the device
-// tree, then the driver on IOResources if the boot-arg asks for it. Returns 0 when off or started. (The bring-up
-// register report, switch_wlan_probe, is no longer printed at boot.)
+// tree, then the driver on IOResources unless switch-no-wlan. Returns 0 when off or started. (The bring-up register
+// report, switch_wlan_probe, is no longer printed at boot.)
 extern "C" int switch_wlan_publish(void)
 {
-    uint32_t enabled = 0;
-    if (!PE_parse_boot_argn("switch-wlan", &enabled, sizeof(enabled)) || enabled != 1) return 0;
+    uint32_t off = 0;
+    if (PE_parse_boot_argn("switch-no-wlan", &off, sizeof(off)) && off) return 0;
     if (gDriver) return 0;
     uint8_t mac[6];
     if (switch_wlan_mac(mac, nullptr)) {

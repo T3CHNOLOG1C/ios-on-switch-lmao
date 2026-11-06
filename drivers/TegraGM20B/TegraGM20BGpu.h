@@ -66,12 +66,12 @@ int tgm_vm_kmap(struct tgm_vm *vm, struct tgm_mem *mem, uint64_t bytes, uint64_t
 
 /* Channels: GPFIFO on the GR runlist, subchannels 0..4 = 3D, compute, M2MF, 2D, copy. The channel releases
  * its seqno (4 bytes) to fence_gpu_va; fence_cpu is the kernel's write-combined view of the same word. owner (the
- * creating process) names it in nvkm's reports and our panic lines. With tegra-gpu-all-clients=1 a GPU error nvkm pins
- * on a channel that is not critical kills only that channel (tgm_chan_error then non-zero, its fence released) instead of
+ * creating process) names it in nvkm's reports and our panic lines. A GPU error nvkm pins on a channel that is not
+ * critical kills only that channel (tgm_chan_error then non-zero, its fence released) instead of
  * panicking. */
 int tgm_chan_new(struct tgm_vm *vm, volatile uint32_t *fence_cpu, uint64_t fence_gpu_va,
 		 const char *owner, int critical, struct tgm_chan **pchan);
-/* boot-arg tegra-gpu-all-clients=1: GPU for every process (client fault isolation, 64 connections, client pool quota) */
+/* GPU for every process (client fault isolation, 64 connections, client pool quota) */
 int tgm_all_clients(void);
 /* pool bytes not allocated */
 uint64_t tgm_pool_avail(void);
@@ -88,16 +88,16 @@ struct tgm_push {
 	uint32_t dwords;
 	uint32_t no_prefetch;
 };
-/* Append the pushes, then the fence (WFI semaphore release of the next seqno), then kick. With tegra-gpu-l2=1 user
- * mappings are L2-cacheable: the L2's clean lines are invalidated before the kick and its dirty lines written back
- * before the seqno is released (gpu.c l2_on). With tegra-gpu-present-order (on unless =0) the pushes run only after
+/* Append the pushes, then the fence (WFI semaphore release of the next seqno), then kick. User mappings are
+ * L2-cacheable: the L2's clean lines are invalidated before the kick and its dirty lines written back before the seqno
+ * is released (gpu.c l2_on). With present order the pushes run only after
  * the last GPU present queued before this call has finished reading its surface (a GPU-side wait), and after what the
  * acquires tgm_chan_order queued for the channel wait for. -EBUSY when the GPFIFO stays full for 1 s (a panic from the
  * self-test on), -EIO on a dead channel. */
 struct tgm_prof;
 int tgm_chan_exec(struct tgm_chan *chan, const struct tgm_push *push, uint32_t count,
 		  uint32_t *seqno, const struct tgm_prof *prof);
-/* tegra-gpu-stats push profile (gpu.c "push profile"): `prof` (or NULL) names each push of a sampled submission by what it
+/* The stats' push profile (gpu.c "push profile"): `prof` (or NULL) names each push of a sampled submission by what it
  * asks of the GPU (TegraGM20BUserClient.cpp scanPushes); the submission then stamps the GPU's time after each push whose
  * class is not TGM_PC_SKIP, and each window's "gpuprof" line gives every process's GPU time by class. Draws and clears
  * are split by their pass's first color target: its size (full >= 600k pixels, mid >= 100k, small), pitch-linear or
@@ -136,7 +136,7 @@ void tgm_chan_set_group(struct tgm_chan *chan, const void *group);
 #define TGM_ORDER_MAX 16
 int tgm_chan_order(struct tgm_chan *chan, uint32_t flags, uint32_t seqno, uint32_t *queued);
 /* 0 healthy; else the CONTRACT.md error code (1 MMU fault, 2 GR exception, 3 host error, 4 timeout). Only before the
- * self-test passed, or with tegra-gpu-all-clients=1 for a channel that is not critical: otherwise every GPU error panics
+ * self-test passed, or under client fault isolation for a channel that is not critical: otherwise every GPU error panics
  * (nvkm's report in the panic string) and no channel dies quietly. */
 uint32_t tgm_chan_error(struct tgm_chan *chan);
 /* Panic naming `who` and the channel's state (fence, GPFIFO GET/PUT, PGRAPH/engine/PBDMA status, MC error registers):
@@ -162,7 +162,7 @@ void tgm_fence_page_put(volatile uint32_t *va);
  * Mappings in it are volatile, at addresses the caller picks in [TGM_USER_VA_START, TGM_KERNEL_VA). tgm_present_copy
  * queues one copy engine copy, pitch source (stride) to a block-linear destination (dst_pitch bytes across, blocks one
  * GOB wide and 2^block_height_log2 GOBs high, 8-line GOBs), after the work submitted so far by the channels whose address
- * spaces import the source (every user channel's when none does, or with tegra-gpu-present-writer=0), and
+ * spaces import the source (every user channel's when none does), and
  * returns at once: 0, or -EBUSY (one in flight), -EINVAL, -ENODEV. done(arg) runs exactly once for an accepted copy,
  * from the GPU interrupt pass, when its bytes are in DRAM; one not done in 1 s panics. */
 int tgm_present_open(struct tgm_vm **pvm);
@@ -192,11 +192,11 @@ void tgm_coherency_wrote(struct tgm_coh *c);
 uint64_t tgm_coherency_read_lock(uint64_t pa);
 uint64_t tgm_coherency_write_unlock(uint64_t pa);
 
-/* boot-arg tegra-gpu-stats=1: one log line per 5 s of submissions (submits, fence latency, imports, pool, MC errors).
+/* The stats: one log line per 5 s of submissions (submits, fence latency, imports, pool, MC errors).
  * tgm_stats_import(+bytes, first page) for each host import made, (-bytes, first page) for each one released. */
 int tgm_stats_on(void);
 void tgm_stats_import(int64_t bytes, uint64_t pa);
-/* With tegra-gpu-stats, what making and dropping GPU memory costs the CPU ("tegra-gm20b: mem", per 5 s window):
+/* With the stats, what making and dropping GPU memory costs the CPU ("tegra-gm20b: mem", per 5 s window):
  * a BoAlloc of `bytes` (pool: write-combined pool memory; else cached pages, phase_ns = kernel allocation and wiring,
  * cache clean, page list, GPU memory object), a host import (phase_ns = wiring, page list, GPU memory object, cache
  * clean; skipped: always 0, the import always cleans), a VmBind map or unmap of `pages`, a BoFree, a cached BO's view

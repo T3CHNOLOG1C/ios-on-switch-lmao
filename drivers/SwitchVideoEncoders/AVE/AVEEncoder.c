@@ -742,7 +742,7 @@ __attribute__((visibility("default"))) void H264H7EncoderRegister(void);
 void H264H7EncoderRegister(void)
 {
     gLog = os_log_create("com.brunostjohn.switch.ave", "encoder");
-    if (!nvenc_service_present()) return;  // switch-nvdec=0, or NVENC did not prove itself at boot: nothing changes
+    if (!nvenc_service_present()) return;  // switch-no-nvdec, or NVENC did not prove itself at boot: nothing changes
     const OSStatus status = registerEncoder();
     if (status) {
         os_log_error(gLog, "AVE: VTRegisterVideoEncoderWithInfo('avc1') failed: %d", (int)status);

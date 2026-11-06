@@ -34,7 +34,7 @@ static struct tegra_pmc pmc;
 
 /* VDD_GPU when tegra.c enables the rail: DT tegra210b01-nx-pmic.dtsi:45 regulator-init-microvolt and nvgpu
  * clk_gm20b.c:51 BOOT_GPU_UV_C1; covers 76.8 MHz (610 mV) and L4T's 800 mV floor below 20 C. platform.c clamps every
- * request (boot-arg tegra-gpu-uv, nvkm volt) to [610, 800] mV. */
+ * request (nvkm volt) to [610, 800] mV. */
 #define GPU_BOOT_UV 800000
 
 struct clk *devm_clk_get(struct device *dev, const char *id)
@@ -98,9 +98,8 @@ struct regulator *devm_regulator_get(struct device *dev, const char *id)
 
 int regulator_enable(struct regulator *r)
 {
-	long long uv = GPU_BOOT_UV;
+	const long long uv = GPU_BOOT_UV;
 	int ret;
-	nvxnu_bootarg_int("tegra-gpu-uv", &uv);
 	nvxnu_step("tegra-gm20b: M1 step: VDD_GPU: read MAX77812 over I2C5\n");
 	ret = tegra_gm20b_rail_set_uv((int)uv); /* voltage first, as hekate does, then enable */
 	if (!ret)

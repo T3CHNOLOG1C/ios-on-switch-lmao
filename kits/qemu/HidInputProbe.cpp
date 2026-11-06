@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// Default-off original HID observation; a separate explicit gate starts an
-// owned offline input source. No entitlement or original provider is replaced.
+// Original HID observation for the owned offline input source (NativeHidInput), which this port never starts. No
+// entitlement or original provider is replaced.
 #include <IOKit/IOService.h>
 #include <IOKit/IOLib.h>
 #include <libkern/c++/OSMetaClass.h>
@@ -10,9 +10,6 @@
 #include <pexpert/pexpert.h>
 #include <mach/kmod.h>
 extern kmod_info_t g_kernel_kmod_info;
-extern "C" void native_hid_static_init(void) __asm__("__GLOBAL__sub_I_NativeHidInput.cpp");
-extern "C" IOService *native_hid_input_allocate(void);
-extern "C" IOService *native_hid_touch_allocate(void);
 extern "C" {
 extern kern_return_t OSKextLoadKextWithIdentifier(const char *);
 volatile uint32_t native_hid_stage, native_hid_resource_found;
@@ -27,38 +24,9 @@ volatile uint32_t native_hid_input_command;
 char native_hid_input_registry[2048];
 char native_hid_input_props[1024];
 extern volatile uint32_t native_legacy_transfer_calls;
-// Optional unattended Home presses for hardware, which has no external harness writing the mailbox:
-// offline-hid-auto-home=<seconds after the second presented frame>, offline-hid-auto-home-count (default 1)
-// and offline-hid-auto-home-interval (default 20 s). Disabled unless the first argument is set.
-static unsigned autoConfigured, autoFirst, autoCount, autoInterval, autoSent;
-static uint64_t autoNext, autoFrequency;
-static uint64_t counterNow(void)
-{
-    uint64_t v;
-    __asm__ volatile("isb\n\tmrs %0, cntpct_el0" : "=r"(v));
-    return v;
-}
 bool native_hid_input_requested(void)
 {
     if (native_legacy_transfer_calls < 2) return false;
-    if (!autoConfigured) {
-        autoConfigured = 1;
-        autoFirst = 0;
-        autoCount = 1;
-        autoInterval = 20;
-        PE_parse_boot_argn("offline-hid-auto-home", &autoFirst, sizeof(autoFirst));
-        PE_parse_boot_argn("offline-hid-auto-home-count", &autoCount, sizeof(autoCount));
-        PE_parse_boot_argn("offline-hid-auto-home-interval", &autoInterval, sizeof(autoInterval));
-        if (autoCount > 8) autoCount = 8;
-        if (autoInterval < 5) autoInterval = 5;
-        __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(autoFrequency));
-        if (autoFirst && autoFrequency) autoNext = counterNow() + (uint64_t)autoFirst * autoFrequency;
-    }
-    if (autoFirst && autoFrequency && autoSent < autoCount && counterNow() >= autoNext) {
-        ++autoSent;
-        autoNext += (uint64_t)autoInterval * autoFrequency;
-        return true;
-    }
     if (native_hid_input_command != 1) return false;
     native_hid_input_command = 0;
     return true;
@@ -195,74 +163,5 @@ void native_hid_input_observed(unsigned event, int result)
 __attribute__((noinline)) void native_hid_checkpoint(void)
 {
     __asm__ volatile("" ::: "memory");
-}
-void native_hid_input_probe(void)
-{
-    unsigned enabled = 0;
-    if (!PE_parse_boot_argn("offline-hid-input", &enabled, sizeof(enabled)) || enabled != 1) return;
-    if (native_hid_stage) return;
-    native_hid_stage = 1;
-    native_hid_load_status = OSKextLoadKextWithIdentifier("com.apple.iokit.IOHIDFamily");
-    if (!native_hid_load_status)
-        native_hid_matching_load_status = OSKext::loadKextWithIdentifier(
-            "com.apple.iokit.IOHIDEventDriver", true, false, kOSKextExcludeNone, kOSKextExcludeNone, nullptr);
-    native_hid_stage = 2;
-    const char *names[] = {"IOHIDUserDevice", "IOHIDEventDriver", "IOHIDEventService", "IOHIDResourceDeviceUserClient",
-                           "IOHIDDevice"};
-    for (unsigned i = 0; i < 5; ++i) {
-        const OSSymbol *name = OSSymbol::withCString(names[i]);
-        const OSMetaClass *meta = name ? OSMetaClass::getMetaClassWithName(name) : nullptr;
-        if (meta) native_hid_class_sizes[i] = meta->getClassSize();
-        OSSafeReleaseNULL(name);
-    }
-    if (native_hid_load_status == 0) {
-        OSDictionary *match = IOService::serviceMatching("IOHIDResource");
-        IOService *resource = match ? IOService::waitForMatchingService(match, 5000000000ULL) : nullptr;
-        native_hid_resource_found = resource != nullptr;
-        unsigned sendHome = 0;
-        PE_parse_boot_argn("offline-hid-home", &sendHome, sizeof(sendHome));
-        if (resource && sendHome == 1 && native_hid_class_sizes[4] == 208) {
-            void *handle = OSMetaClass::preModLoad(g_kernel_kmod_info.name);
-            if (handle) {
-                native_hid_static_init();
-                native_hid_input_meta_status = OSMetaClass::postModLoad(handle);
-                if (!native_hid_input_meta_status) {
-                    IOService *device = native_hid_input_allocate();
-                    native_hid_input_object = (uintptr_t)device;
-                    bool valid = device && device->metaCast("IOHIDDevice") && device->init();
-                    native_hid_input_observed(0, valid ? 0 : kIOReturnError);
-                    bool attached = valid && device->attach(resource);
-                    native_hid_input_observed(1, attached ? 0 : kIOReturnError);
-                    bool started = attached && device->start(resource);
-                    if (!started) {
-                        native_hid_input_observed(7, kIOReturnError);
-                        if (attached) device->detach(resource);
-                        OSSafeReleaseNULL(device);
-                        native_hid_input_object = 0;
-                    }
-                    unsigned touchHid = 0;
-                    unsigned split = 0;
-                    PE_parse_boot_argn("sheng-touch-split", &split, sizeof(split));
-                    if (started && split == 1 && PE_parse_boot_argn("sheng-touch-hid", &touchHid, sizeof(touchHid)) &&
-                        touchHid == 1) {
-                        // Separate digitizer service (primary usage Digitizer/Touch Screen, Built-In).
-                        IOService *touch = native_hid_touch_allocate();
-                        bool touchStarted = touch && touch->metaCast("IOHIDDevice") && touch->init() &&
-                                            touch->attach(resource) && touch->start(resource);
-                        if (!touchStarted && touch) {
-                            touch->detach(resource);
-                            OSSafeReleaseNULL(touch);
-                        }
-                    }
-                    // The offline devices live for this bounded boot. Its
-                    // service attachment and timer remain genuine live objects.
-                }
-            }
-        }
-        OSSafeReleaseNULL(resource);
-        OSSafeReleaseNULL(match);
-    }
-    native_hid_stage = 3;
-    native_hid_checkpoint();
 }
 }

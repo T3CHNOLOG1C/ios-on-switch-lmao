@@ -132,7 +132,7 @@ TEST(SdAdmaSource, PipelinedWorker)
     EXPECT_FALSE(Search(body("void NativeSwitchBlock::beginBatch("),
                         R"(\b(complete|command|run|transfer|bounceChain|waitSignal)\()"));
     // complete(): STATUS first (a command that finished meanwhile takes no interrupt), then the interrupt; its time limit
-    // starts there; a lost interrupt still panics, and polling only without the interrupt (switch-sd-irq=0).
+    // starts there; a lost interrupt still panics, and polling only without the interrupt (irqMode false).
     const std::string complete = body("int NativeSwitchBlock::complete(");
     EXPECT_THAT(complete, HasSubstr("const uint64_t start = nowNs();"));
     EXPECT_LT(Index(complete, "s = r32(STATUS);"), Index(complete, "waitSignal("));

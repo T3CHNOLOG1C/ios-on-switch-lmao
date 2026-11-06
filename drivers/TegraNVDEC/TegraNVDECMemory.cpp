@@ -2,7 +2,7 @@
 // NVDEC's buffer arena. With the SMMU bypassed the engine addresses physical memory, so every buffer it touches
 // (bitstream, surfaces, colocated motion, history, status) must be physically contiguous and below 4 GiB. A 3 MiB
 // contiguous allocation late in boot fails intermittently once memory is fragmented, so one region is reserved when
-// NVDEC comes up (switch-nvdec >= 2) and handed out in 64 KiB granules, first fit.
+// NVDEC comes up (stage 2 on) and handed out in 64 KiB granules, first fit.
 #include <IOKit/IOLib.h>
 #include <IOKit/IOLocks.h>
 #include <IOKit/IOBufferMemoryDescriptor.h>

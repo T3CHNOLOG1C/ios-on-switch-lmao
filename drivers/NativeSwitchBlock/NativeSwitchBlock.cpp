@@ -5,17 +5,16 @@
 // The card is inherited from U-Boot already initialized, selected and in transfer
 // state, at 3.3 V high speed, 4-bit, 48 MHz (~24 MB/s raw): switchroot U-Boot's
 // tegra_mmc.c caps the bus at f_max 48 MHz with only HS host caps, and IMG_5553 read
-// back hc=0x02 clock=0x0007 (4-bit, CAR clock passed straight through). By default that
-// mode is kept untouched. With boot-arg switch-sd-uhs=1, setup() takes the card back
-// through SD initialization into UHS-I SDR104 (1.8 V, 199.68 MHz, hardware-tuned, ~100 MB/s
-// raw; slower tuned clocks if that has no sampling window) the way hekate's bdk does on this
-// SoC; that path has not run on hardware yet, hence opt-in. Data moves by SDHCI v4 ADMA2
+// back hc=0x02 clock=0x0007 (4-bit, CAR clock passed straight through). Unless boot-arg
+// switch-no-sd-uhs keeps that mode, setup() takes the card back through SD initialization
+// into UHS-I SDR104 (1.8 V, 199.68 MHz, hardware-tuned, ~100 MB/s raw; slower tuned clocks if
+// that has no sampling window) the way hekate's bdk does on this SoC. Data moves by SDHCI v4 ADMA2
 // straight between the card and the requests' own pages (SwitchAdma.h), or by SDMA through
 // one physically contiguous bounce buffer for what ADMA2 cannot take (and for everything if
 // setup()'s ADMA2 check fails), CMD18/CMD25 with Auto CMD12, with
 // queued requests that continue each other on the card merged into one command;
-// completion is signalled by the SDMMC1 interrupt (polled only with boot-arg
-// switch-sd-irq=0; an interrupt that cannot be had or never arrives panics) on a
+// completion is signalled by the SDMMC1 interrupt (an interrupt that cannot be had or
+// never arrives panics) on a
 // dedicated worker thread so callers never block or recurse.
 #include <IOKit/IOBSD.h>
 #include <IOKit/IOBufferMemoryDescriptor.h>
@@ -473,14 +472,15 @@ class NativeSwitchBlock : public IOService {
     uint64_t passed = 0, passedTotal = 0;  // r6-lows: reads taken before older requests (this line, since boot)
     uint64_t submitted = 0, serviced = 0;  // for the root-wait report
     uint64_t lastEnd = 0;                  // card LBA after the previous request (sequential count)
-    uint64_t statsEveryNs = 0, statsLastNs = 0;
-    bool merge = true;
+    static constexpr uint64_t statsEveryNs = 10 * 1000000000ull;
+    uint64_t statsLastNs = 0;
+    static constexpr bool merge = true;
     // r12-sdio: reads merge with continuing reads anywhere in the queue (SwitchQueue.h) until a chain fails its check.
     bool mergeAnywhere = true;
-    // Boot-arg switch-sd-copy-flush=1: requests' bytes through IOMemoryDescriptor::readBytes/writeBytes again, with
-    // the clean+invalidate of every destination line they add on this kernel (SwitchClientCopy.h), for A/B boots.
-    // It keeps ADMA2 off too, so every request takes the bounce buffer as before r10-adma2.
-    bool copyFlush = false;
+    // Requests' bytes through IOMemoryDescriptor::readBytes/writeBytes, with the clean+invalidate of every destination
+    // line they add on this kernel (SwitchClientCopy.h), for A/B builds; it keeps ADMA2 off too, so every request takes
+    // the bounce buffer as before r10-adma2.
+    static constexpr bool copyFlush = false;
     // r10-adma2: the ADMA2 descriptor table (one, rebuilt for every ADMA2 command; 16 KiB contiguous below 4 GiB), whether
     // ADMA2 carries data (setup()'s check passed and no ADMA error since) and writes (no write read back different), the
     // state of the last ADMA error (command()), SDMA's own read limit for the bounce path (kBounceSectors once setup()
@@ -819,9 +819,6 @@ bool NativeSwitchBlock::waitSignal(uint32_t signals, uint64_t timeoutNs)
 
 bool NativeSwitchBlock::startInterrupt()
 {
-    unsigned enabled = 1;
-    PE_parse_boot_argn("switch-sd-irq", &enabled, sizeof(enabled));
-    if (!enabled) return false;
     IOService *nub = switch_interrupt_nub(kInterrupt, false);
     irqLoop = IOWorkLoop::workLoop();
     // Filter only: it never schedules the (absent) work-loop action.
@@ -2234,8 +2231,8 @@ void NativeSwitchBlock::worker(void *context, wait_result_t)
         self->working = false;
         if (self->suspended) IOLockWakeup(self->queueLock, &self->working, false);
         IOLockUnlock(self->queueLock);
-        // Throughput line every switch-sd-stats seconds while I/O is happening (one console line).
-        if (self->statsEveryNs) {
+        // Throughput line every statsEveryNs while I/O is happening (one log line).
+        {
             const uint64_t now = nowNs();
             if (now - self->statsLastNs >= self->statsEveryNs) {
                 self->statsLastNs = now;
@@ -2673,7 +2670,7 @@ bool NativeSwitchBlock::switchTo1V8(uint8_t ldo2)
     uint8_t check = 0;
     if (error || tegra_i2c_read(kPmicBus, kPmicAddress, kPmicLdo2, &check, 1) || (check & kLdoVoltage) != kLdo1V8) {
         panic("SwitchSD: LDO2 1.8 V write failed (i2c %d, LDO2_CFG 0x%02x) with the card waiting in CMD11; "
-              "power off, then boot without switch-sd-uhs=1",
+              "power off, then boot with switch-no-sd-uhs",
               error, check);
     }
     IODelay(1000 + 150);  // regulator ramp (hekate set_voltage) + settle (enable_low_voltage)
@@ -2796,7 +2793,7 @@ void NativeSwitchBlock::retune(bool slower)
     stats.retunes++;
     if (slower ? !clockAndTune(speed + 1) : !tune() && !clockAndTune(speed + 1)) {
         panic("SwitchSD: SDR104 tuning finds no sampling window down to %u kHz (hc2 0x%04x, %llu errors); "
-              "boot without switch-sd-uhs=1",
+              "boot with switch-no-sd-uhs",
               kSpeeds[kSpeedCount - 1].kHz, r16(HOST_CONTROL2), stats.errors);
     }
     IOLog("SwitchSD: SDR104 re-tuned at %u kHz, tap %u\n", busKHz, (r32(VENDOR_CLOCK) >> 16) & 0xff);
@@ -2805,7 +2802,7 @@ void NativeSwitchBlock::retune(bool slower)
 // Returns true when the card was re-initialized (re-verify reads), false when the inherited mode
 // was kept without touching the card. Every precondition is checked before CMD0; after CMD0 the
 // inherited state is gone and no I/O is possible without finishing, so any failure panics naming
-// the step (power off clears the card; without switch-sd-uhs=1 none of this runs).
+// the step (power off clears the card; with switch-no-sd-uhs none of this runs).
 bool NativeSwitchBlock::raiseBusSpeed()
 {
     if (!car || !apb || !pmc) {
@@ -2818,13 +2815,12 @@ bool NativeSwitchBlock::raiseBusSpeed()
     const uint32_t baseKHz = source >> 29 == SOURCE_PLLP ? PLLP_KHZ * 2 / ((source & 0xff) + 2) : 0;
     busKHz = divider ? baseKHz / (2 * divider) : baseKHz;
     busMode = "inherited";
-    // Opt-in (boot-arg): without it nothing below runs (no CMD0, no PLLC4, no PMIC access).
-    unsigned enabled = 0;
-    PE_parse_boot_argn("switch-sd-uhs", &enabled, sizeof(enabled));
+    // With switch-no-sd-uhs nothing below runs (no CMD0, no PLLC4, no PMIC access).
+    unsigned off = 0;
     const char *skip = nullptr;
     uint8_t ldo2 = 0;
-    if (!enabled)
-        skip = "opt-in: boot-arg switch-sd-uhs=1";
+    if (PE_parse_boot_argn("switch-no-sd-uhs", &off, sizeof(off)) && off)
+        skip = "boot-arg switch-no-sd-uhs";
     else if (((rd(apb, APB_GP_HIDREV) >> 4) & 0xf) < 2)
         skip = "not T210B01 (the pad/tap/trim values are B01's)";
     else if (!(r32(CAPABILITIES_HI) & 2))
@@ -2858,7 +2854,7 @@ bool NativeSwitchBlock::reinitialize(uint32_t baseKHz, uint8_t ldo2, bool uhs, b
                   step, error, initStatus, r32(PRESENT), r16(HOST_CONTROL2));
         }
         panic("SwitchSD: SD re-init failed at %s (error %d, STATUS 0x%08x PRESENT 0x%08x hc2 0x%04x); "
-              "power off, then boot without switch-sd-uhs=1",
+              "power off, then boot with switch-no-sd-uhs",
               step, error, initStatus, r32(PRESENT), r16(HOST_CONTROL2));
     };
     rca = 0;
@@ -3107,7 +3103,7 @@ const char *NativeSwitchBlock::checkAdma(const uint8_t *reference, uint32_t *des
                                            uint32_t *highOk, uint32_t *staged)
 {
     *descriptors = *highPages = *highOk = *staged = 0;
-    if (copyFlush) return "boot-arg switch-sd-copy-flush=1";
+    if (copyFlush) return "copyFlush";
     if (!(r32(CAPABILITIES) & (1u << 19))) return "the controller reports no ADMA2";
     if ((r16(HOST_CONTROL2) & CONTROL2_V4_64BIT) != CONTROL2_V4_64BIT)
         return "HOST_CONTROL2 does not keep v4 64-bit addressing";
@@ -3321,7 +3317,7 @@ const char *NativeSwitchBlock::checkCq(uint64_t *queuedNs, uint64_t *serialNs, u
     if (!havePerf) return extWhy ? extWhy : "no performance enhancement function";
     cqControlAddress = switchSdCqControlAddress(extInfo.perf);
     if (!cqControlAddress) return "its control byte crosses a page";
-    if (!irqMode) return "boot-arg switch-sd-irq=0";
+    if (!irqMode) return "no SDMMC1 interrupt";
     regMemory = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(
         kernel_task,
         static_cast<IOOptionBits>(kIODirectionInOut) | static_cast<IOOptionBits>(kIOMemoryPhysicallyContiguous),
@@ -3513,15 +3509,6 @@ bool NativeSwitchBlock::setup()
     w32(STATUS, 0xffffffff);
     barrier();
     irqMode = startInterrupt();
-    unsigned seconds = 10;
-    PE_parse_boot_argn("switch-sd-stats", &seconds, sizeof(seconds));
-    statsEveryNs = seconds * 1000000000ull;
-    unsigned merging = 1;
-    PE_parse_boot_argn("switch-sd-merge", &merging, sizeof(merging));
-    merge = merging != 0;
-    unsigned flushing = 0;
-    PE_parse_boot_argn("switch-sd-copy-flush", &flushing, sizeof(flushing));
-    copyFlush = flushing != 0;
     // What a scatter-gather (ADMA2) path straight into the requests' pages would rest on: CAPABILITIES bit 19 (ADMA2),
     // 28 (64-bit addressing, v3) and 27 (64-bit addressing, v4). The log only, once.
     const uint32_t caps = r32(CAPABILITIES), capsHi = r32(CAPABILITIES_HI);
@@ -3542,7 +3529,7 @@ bool NativeSwitchBlock::setup()
         uint8_t again[kSector];
         int step = transfer(1, 1, false, again);
         if (step || memcmp(header, again, sizeof(header)))
-            panic("SwitchSD: LBA 1 differs after switching to %s (read step %d); boot without switch-sd-uhs=1",
+            panic("SwitchSD: LBA 1 differs after switching to %s (read step %d); boot with switch-no-sd-uhs",
                   busMode, step);
     }
     identify();
@@ -3665,7 +3652,7 @@ bool NativeSwitchBlock::setup()
                       kGapSectors * kSector / 1024, kGapBudget * kSector / 1024, kGapProofs);
             else
                 IOLog("SwitchSD: gap reads off (%s)\n", !checkBuffer ? "no buffer for their proofs"
-                                                          : !merge     ? "boot-arg switch-sd-merge=0"
+                                                          : !merge     ? "merge off"
                                                                        : "no sink page below 4 GiB");
             // r14-sdcq: the command queue, when the card offers one and its test group reads what the legacy path reads.
             uint64_t queuedNs = 0, serialNs = 0, enterNs = 0, leaveNs = 0;

@@ -3,17 +3,13 @@
 //   * the boot report: one console line with the CPU and EMC clocks as the CAR has them and VDD_CPU as the MAX77812
 //     has it (SwitchClocks.h), always;
 //   * the wall clock: the MAX77620 RTC, published as the "IORTC" resource that ArmDTPlatform forwards
-//     PEGetUTCTimeOfDay() / PESetUTCTimeOfDay() to (switch-rtc: 0 off, 1 read only, 2 read and write back; default 1);
-//   * Shut Down and Restart: PE_halt_restart, which IOPlatformExpert::haltRestart() calls from PEHaltRestart()
-//     (switch-poweroff=0 leaves it unset; XNU then spins after "CPU halted" / "MACH Reboot" as before);
-//   * the EMC (DRAM) clock, opt-in: asked of hekate's BPMP firmware over the L4T mailbox (drivers/TegraBPMP).
-//     switch-emc=1 asks for 1600 MHz, switch-emc=<kHz> for another of the firmware's table rates; by default the
-//     BPMP is left alone. Not on by default because the sequence is L4T's but not exactly (a thread-channel ping,
-//     one fixed rate instead of L4T's bandwidth-driven DVFS, a clock-name check of ours) and its doorbell interrupt
-//     path has not run on this hardware yet. Afterwards the clock line is printed again;
+//     PEGetUTCTimeOfDay() / PESetUTCTimeOfDay() to, read only (rtcMode 1; 2 would write it back);
+//   * Shut Down and Restart: PE_halt_restart, which IOPlatformExpert::haltRestart() calls from PEHaltRestart();
+//   * the EMC (DRAM) clock: 1600 MHz, asked of hekate's BPMP firmware over the L4T mailbox (drivers/TegraBPMP); the
+//     loader has usually raised it already (boot/loader/emc.h). Afterwards the clock line is printed again;
 //   * the thermal service (SwitchThermal.cpp, and with it the CPU operating point), started here rather than on
 //     the board thread after the root disk: the fan is under control and the CPU raised before the root mount
-//     (switch-thermal=0 skips it, as on the board thread, whose later call is then a no-op).
+//     (the board thread's later call is then a no-op).
 // switch_pmic_start() is called by XNU's IOKitInitializeTime() on the bsd_init thread, right before
 // clock_initialize_calendar() reads the platform clock, so the calendar starts at the RTC's time instead of 1970.
 // It sleeps on I2C5 transfers (interrupt-driven, TegraI2C), on BPMP answers (interrupt-driven, TegraBPMP) and, the
@@ -52,7 +48,7 @@
 //
 // Panics keep their screen: PE_halt_restart is also handed the panic callouts and, from halt_all_cpus(TRUE) at the
 // end of a panic, kPERestartCPU; with a panic in progress it returns -1 and XNU spins with the panic on the display,
-// as it did with PE_halt_restart unset (SwitchPanicSave.c's switch-panic-reboot decides about a reset there).
+// as it did with PE_halt_restart unset (SwitchPanicSave.c decides about a reset there).
 //
 // The Wi-Fi/Bluetooth module's 32.768 kHz sleep clock (the BCM4356's LPO) comes from the MAX77620, set as L4T sets it
 // when the PMIC is probed (switchroot tegra210b01-nx-pmic.dtsi): GPIO4 in its alternate function 32K_OUT1 (pin_gpio4
@@ -326,7 +322,7 @@ int haltRestart(unsigned int type)
 }  // namespace
 
 // The wall clock between boots. Reads come from the boot-time RTC reading plus elapsed mach time (no I2C on the
-// read path, which XNU also takes on wake paths); settimeofday() writes the RTC back when switch-rtc=2.
+// read path, which XNU also takes on wake paths); settimeofday() writes the RTC back in rtcMode 2.
 class SwitchRTC : public IORTC {
     OSDeclareDefaultStructors(SwitchRTC) IOSimpleLock *clockLock = nullptr;
     IOLock *writeLock = nullptr;
@@ -614,13 +610,9 @@ extern "C" int switch_pmic_start(void)
     started = true;
     reportClocks("at boot");
 
-    // Read-only by default: Horizon keeps its clock in the same RTC, and writing ours would shift it.
-    unsigned rtcMode = 1, powerOff = 1, emcKHz = 0, thermal = 1;
-    PE_parse_boot_argn("switch-rtc", &rtcMode, sizeof(rtcMode));
-    PE_parse_boot_argn("switch-poweroff", &powerOff, sizeof(powerOff));
-    PE_parse_boot_argn("switch-emc", &emcKHz, sizeof(emcKHz));
-    if (emcKHz == 1) emcKHz = 1600000;  // hekate's top stock MTC table, L4T's T210B01 core-DVFS "emc" ceiling
-    PE_parse_boot_argn("switch-thermal", &thermal, sizeof(thermal));
+    // Read-only: Horizon keeps its clock in the same RTC, and writing ours would shift it.
+    constexpr unsigned rtcMode = 1;
+    constexpr unsigned emcKHz = 1600000;  // hekate's top stock MTC table, L4T's T210B01 core-DVFS "emc" ceiling
     uint8_t control = 0;
     const int err = tegra_i2c_init(kBus) ? TEGRA_I2C_ENOTREADY : readByte(kPmic, ONOFFCNFG1, &control);
     if (err) {
@@ -629,19 +621,17 @@ extern "C" int switch_pmic_start(void)
         if (const int clockErr = moduleClockOn()) {
             IOLog("SwitchPMIC: Wi-Fi/Bluetooth 32 kHz clock not set (%d): Bluetooth will not come up\n", clockErr);
         }
-        if (rtcMode) gRTC = publishRTC(rtcMode);
-        if (powerOff) {
-            gPmc = (volatile uint32_t *)ml_io_map(kPmcPA, 0x1000);
-            PE_halt_restart = haltRestart;
-        }
+        gRTC = publishRTC(rtcMode);
+        gPmc = (volatile uint32_t *)ml_io_map(kPmcPA, 0x1000);
+        PE_halt_restart = haltRestart;
     }
 
-    if (emcKHz) {
+    {
         char line[256];
         const int emcErr = tegra_bpmp_emc_boot(emcKHz, line, sizeof(line));
         IOLog("SwitchEMC: %s\n", line);
         if (!emcErr) reportClocks("after EMC");
     }
-    if (thermal && switch_thermal_start()) IOLog("SwitchPMIC: SwitchThermal did not start, the board thread retries\n");
+    if (switch_thermal_start()) IOLog("SwitchPMIC: SwitchThermal did not start, the board thread retries\n");
     return err ? -1 : 0;
 }

@@ -10,8 +10,7 @@
 // (shim/), so voltages, LUT, tuning and calibration are exactly L4T's. platform.c holds the board: the DT node
 // (switchroot OLED DT), CAR clocks/reset, fuses, VDD_CPU = MAX77812 M4 on I2C5.
 //
-// Nothing here runs unless called. The caller (SwitchThermal: its on-demand governor by default, or a fixed 1785 MHz
-// with switch-cpu-mode=dfll) owns the policy: it picks the rate, maps temperature to the L4T thermal indices below and
+// Nothing here runs unless called. The caller (SwitchThermal's on-demand governor) owns the policy: it picks the rate, maps temperature to the L4T thermal indices below and
 // decides when to leave DFLL mode. Every call is thread context only (I2C5 and IOSleep), serialized internally; none may
 // run from an interrupt or with a spinlock held. Interrupts: none needed. L4T keeps the DFLL interrupt (GIC SPI 62,
 // output min/max limits) masked (DFLL_INTR_EN = 0) and drives the loop from two timers, both XNU thread calls here: the
@@ -31,7 +30,7 @@
 //     and hekate enables it "to avoid issues with I2C5 sharing" (hw_init.c:413-414);
 //   * the DFLL's I2C master divides I2C5's module clock (DT clocks "i2c" = TEGRA210_CLK_I2C5), read once at probe,
 //     and L4T only sets that clock at I2C5 probe; it must not change afterwards.
-// TegraI2C sets MULTI_MASTER_MODE on I2C5 unless switch-cpu-mode=pll (tegra_dfll_cpu_enable() refuses without it;
+// TegraI2C sets MULTI_MASTER_MODE on I2C5 unless switch-no-dfll (tegra_dfll_cpu_enable() refuses without it;
 // this driver only reads I2C_CNFG) and repeats a transfer that lost arbitration up to 3 times, so TEGRA_I2C_EARB
 // reaches a caller only when the DFLL kept winning the bus.
 //

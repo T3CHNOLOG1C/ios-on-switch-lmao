@@ -31,8 +31,7 @@
 //     Y = b2 << 4 | b3 & 0xf, already in the landscape frame hekate's GUI uses (stm,max_coords 1280 x 720); scaled
 //     from the panel's active area (stm,max-real-coords 1264 x 704, stm,edge-offset 15) as fts_coordinates_factor.
 // That landscape frame is the one the display shows iOS (NativeScanout.h and the rotate-3 console both put landscape
-// pixel (x, y) at portrait row 1279 - x, column y, upright in handheld use, as hekate's GUI). Boot-arg
-// switch-touch-flip: bit 0 mirrors X, bit 1 mirrors Y, in case the hardware shows otherwise. Portrait-native
+// pixel (x, y) at portrait row 1279 - x, column y, upright in handheld use, as hekate's GUI). Portrait-native
 // (SwitchPortrait.h): iOS's screen is the portrait panel, so contacts are reported at that row and column (position).
 //
 // Failures panic with a one-line reason; there is no polled mode. A 10 s watchdog only checks that a latched INT
@@ -290,7 +289,7 @@ class SwitchTouch : public IOService {
     bool screenOff = false;     // display power off (switch_touch_display_power): stays down until the screen lights
     bool timed = false;         // reports carry the interrupt's time (switch_hid_supports_timestamps)
     bool pathsChecked = false;  // I2C3's chained and DMA paths checked (once a boot, checkPaths)
-    unsigned flip = 0, empty = 0;
+    unsigned empty = 0;
     volatile uint64_t irqStamp = 0;  // the filter's: when INT last reached the CPU (mach time)
     uint64_t reportStamp = 0;        // the interrupt's time, for the reports flush() posts now
     uint64_t lastStamp = 0;          // the last report's time: each report's is later
@@ -332,7 +331,6 @@ OSDefineMetaClassAndStructors(SwitchTouch, IOService)
     bool SwitchTouch::start(IOService *provider)
 {
     if (!IOService::start(provider)) return false;
-    PE_parse_boot_argn("switch-touch-flip", &flip, sizeof(flip));
     hid = switch_hid_create(kSwitchHIDTouch);
     timed = switch_hid_supports_timestamps(hid);
     if (!timed)
@@ -646,10 +644,8 @@ void SwitchTouch::logStats()
 
 void SwitchTouch::position(const uint8_t *event, int &x, int &y) const
 {
-    uint16_t lx = scale((unsigned)event[1] << 4 | event[3] >> 4, kRealMaxX, kSwitchTouchWidth);
-    uint16_t ly = scale((unsigned)event[2] << 4 | (event[3] & 0xf), kRealMaxY, kSwitchTouchHeight);
-    if (flip & 1) lx = (uint16_t)(kSwitchTouchWidth - 1 - lx);
-    if (flip & 2) ly = (uint16_t)(kSwitchTouchHeight - 1 - ly);
+    const uint16_t lx = scale((unsigned)event[1] << 4 | event[3] >> 4, kRealMaxX, kSwitchTouchWidth);
+    const uint16_t ly = scale((unsigned)event[2] << 4 | (event[3] & 0xf), kRealMaxY, kSwitchTouchHeight);
     // Portrait-native (SwitchHID.h): the panel's frame, as the display maps landscape pixel (x, y) to row 1279 - x, column y.
     x = SWITCH_PORTRAIT_NATIVE ? ly : lx;
     y = SWITCH_PORTRAIT_NATIVE ? (int)(kSwitchTouchWidth - 1 - lx) : ly;

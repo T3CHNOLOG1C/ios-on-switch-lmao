@@ -12,15 +12,14 @@
  * (nvxnu_irq_start, shim/xnu_glue.cpp) and every wait sleeps in nvxnu_idle(); each fence also raises a nonstall
  * interrupt (NON_STALL_INTERRUPT after the semaphore release, as nouveau's nvc0_fence_emit32) that a per-channel
  * NON_STALL_INTR event turns into a wake. A fence found complete with no wake panics (nvxnu_wake_due).
- * GPU L2 (boot-arg tegra-gpu-l2=1, off by default): user mappings are L2-cacheable instead of volatile, as nvgpu maps
+ * GPU L2: user mappings are L2-cacheable instead of volatile, as nvgpu maps
  * the buffers its clients ask to be cacheable (gk20a/mm_gk20a.c __update_pte: VOL only for !cacheable); see l2_on().
- * GPU present (boot-arg tegra-gpu-present=1): the display's frames are swizzled into its block-linear scanout by the copy
+ * GPU present: the display's frames are swizzled into its block-linear scanout by the copy
  * engine on a kernel channel that waits for the compositor's work on the GPU (see "GPU present" below).
  * GPU failures panic from the end of the self-test (M3) on, each with one line naming it: an error nvkm's interrupt
  * handler reports (MMU fault, PBDMA, GR, FECS, ...: nvxnu_error), a channel nvkm kills, and work that stops completing
- * with no error at all (fence waits, sync_for_cpu, GPFIFO full, channel teardown: tgm_chan_hung). With
- * tegra-gpu-all-clients=1 an error nvkm pins on one channel of a client other than the compositor kills only that
- * channel (see "client fault isolation").
+ * with no error at all (fence waits, sync_for_cpu, GPFIFO full, channel teardown: tgm_chan_hung). An error nvkm pins
+ * on one channel of a client other than the compositor kills only that channel (see "client fault isolation").
  */
 #include <core/device.h>
 #include <core/tegra.h>
@@ -160,25 +159,17 @@ static int m1(char *line, unsigned int len)
 {
 	struct nvkm_device *device;
 	u32 boot0, start, gpcs, fbps, cfg, coeff, rail = 0;
-	long long v;
 	int ret, uv = 0;
 
 	/* Speedo ID 0 keeps nouveau's gm20b clk on the legacy fixed-frequency GPCPLL path (lock-detect, no fused
 	 * calibration), which nvgpu also runs on B01's C1 PLL when NA mode is off (clk_gm20b.c:1211-1215,1250-1257).
 	 * L4T uses 1 = NAPLL on B01 (speedo-tegra210.c:189), but nouveau's NAPLL path carries T210 B1 constants
 	 * (nouveau gm20b.c:99-103, nvgpu clk_gm20b.c:56-69) where B01 needs C1 (clk_gm20b.c:71-85,
-	 * platform_gk20a_tegra.c:815-817), so it is refused. */
+	 * platform_gk20a_tegra.c:815-817), so it is not used. */
 	/* Bring-up trace: let the console's backlog drain first, so every step line below is on screen before its step. */
 	if (nvxnu_trace_paced())
 		nvxnu_usleep(2000000);
 	nvxnu_step("tegra-gm20b: M1 step: start\n");
-	if (nvxnu_bootarg_int("tegra-gpu-speedo-id", &v) && v) {
-		scnprintf(line, len,
-			  "M1 FAIL tegra-gpu-speedo-id=%lld: nouveau NAPLL has T210 B1 params, B01 "
-			  "needs C1",
-			  v);
-		return -EINVAL;
-	}
 	ret = tegra_gm20b_platform_map();
 	if (ret) {
 		scnprintf(line, len, "M1 FAIL map CAR/PMC/FUSE/MC %d", ret);
@@ -194,12 +185,8 @@ static int m1(char *line, unsigned int len)
 		scnprintf(line, len, "M1 FAIL pool %d", ret);
 		return ret;
 	}
-	{
-		char dbg[32] = "error";
-		nvxnu_bootarg_str("tegra-gpu-debug", dbg, sizeof(dbg));
-		/* power-up (shim/tegra_shim.c), then BOOT_0 and every subdev constructor */
-		ret = nvkm_device_tegra_new(&gm20b_platform_data, &gpu_pdev, "", dbg, &device);
-	}
+	/* power-up (shim/tegra_shim.c), then BOOT_0 and every subdev constructor */
+	ret = nvkm_device_tegra_new(&gm20b_platform_data, &gpu_pdev, "", "error", &device);
 	if (ret) {
 		scnprintf(line, len, "M1 FAIL nvkm_device_tegra_new %d", ret);
 		return ret;
@@ -254,8 +241,7 @@ static int m1(char *line, unsigned int len)
 	return ret;
 }
 
-/* GPCPLL above 76.8 MHz (boot-arg tegra-gpu-mhz):
- * Off unless tegra-gpu-mhz=<MHz> names one of L4T's B01 GPU rates (76.8 MHz x n; 460 or 461 both mean 460.8). Runs
+/* GPCPLL above 76.8 MHz: GPU_MHZ, one of L4T's B01 GPU rates (76.8 MHz x n). Runs
  * between M1 and M2, with the GPU as quiet as at the end of M1's own clk init (PRI ring, timer and GPCPLL up, no
  * falcon running yet), so the relock below happens under the conditions M1 has already proven; ACR, PMU, GR (M2) and
  * the channel test (M3) then run at the new rate, as nvgpu runs them at the rate its PLL holds (217.6 MHz on a
@@ -276,11 +262,10 @@ static int m1(char *line, unsigned int len)
  * (gpu_scaling_cdev trip0, nx-common.dtsi:1365), and nothing here reads the GPU temperature. Voltage goes up (with
  * readback) before the clock; this hook never lowers it.
  * For GPU speedo 1673 the 20% margin admits up to 768 MHz (worst NA 665 mV); HOS also stops retail units at 768 MHz
- * (nx-common.dtsi:521-523). tegra-gpu-pll-margin=<pct> (13..50) lowers it for a test: 13 is T210's fixed/NA ratio at
- * 921.6 MHz for speedo 1700 (+10..13% across 768-921.6), the only measured basis for less, and admits 844.8 MHz
- * (685 mV + 13% = 774 mV) but not 921.6 (710 mV + 13% > 800 mV). */
+ * (nx-common.dtsi:521-523). 13% is T210's fixed/NA ratio at 921.6 MHz for speedo 1700 (+10..13% across 768-921.6), the
+ * only measured basis for less, and would admit 844.8 MHz (685 mV + 13% = 774 mV) but not 921.6 (710 mV + 13% > 800 mV). */
 #define FIXED_PLL_MARGIN_PCT 20
-#define FIXED_PLL_MARGIN_MIN 13
+#define GPU_MHZ 768
 #define BOOT_KHZ 76800 /* gm20b_pstates[0], set by gm20b_clk_init() in M1 */
 
 static int clk_prog_khz(struct nvkm_device *device, u32 khz)
@@ -323,16 +308,11 @@ static int clk_raise(char *line, unsigned int len)
 {
 	struct nvkm_device *device = gpu.device;
 	int speedo = tegra_sku_info.gpu_speedo_value, ceil_uv = tegra_gm20b_rail_max_uv();
-	int uv = 0, na_uv, need_uv, ret, back, i, fits = 1, margin = FIXED_PLL_MARGIN_PCT;
+	int uv = 0, na_uv, need_uv, ret, back, i, fits = 1;
+	const int margin = FIXED_PLL_MARGIN_PCT;
 	u32 khz = 0, best = 0, k;
-	long long mhz, pct;
+	const long long mhz = GPU_MHZ;
 
-	if (!nvxnu_bootarg_int("tegra-gpu-mhz", &mhz))
-		return 0;
-	if (nvxnu_bootarg_int("tegra-gpu-pll-margin", &pct))
-		margin = pct < FIXED_PLL_MARGIN_MIN ? FIXED_PLL_MARGIN_MIN
-			 : pct > 50                 ? 50
-						    : (int)pct;
 	for (i = 0; (k = tegra_gm20b_dvfs_khz(i)); i++) {
 		int v = tegra_gm20b_dvfs_na_uv(k, speedo);
 		if (mhz > 0 && mhz < 10000 && mhz * 1000 > (long long)k - 1000 &&
@@ -343,7 +323,7 @@ static int clk_raise(char *line, unsigned int len)
 			best = k; /* L4T drops every rate above the first one that does not fit */
 	}
 	if (!khz) {
-		nvxnu_log("tegra-gm20b: tegra-gpu-mhz=%lld is not an L4T B01 GPU rate (76.8 MHz x "
+		nvxnu_log("tegra-gm20b: %lld MHz is not an L4T B01 GPU rate (76.8 MHz x "
 			  "1..16, 1267.2): GPU stays at "
 			  "%d kHz\n",
 			  mhz, nvkm_clk_read(device->clk, nv_clk_src_gpc));
@@ -353,14 +333,14 @@ static int clk_raise(char *line, unsigned int len)
 		return 0; /* the boot rate, or a retried stage 2 */
 	na_uv = tegra_gm20b_dvfs_na_uv(khz, speedo);
 	if (na_uv < 0) {
-		nvxnu_log("tegra-gm20b: tegra-gpu-mhz=%lld refused: no B01 table voltage for GPU "
+		nvxnu_log("tegra-gm20b: %lld MHz refused: no B01 table voltage for GPU "
 			  "speedo %d; GPU stays at %d kHz\n",
 			  mhz, speedo, nvkm_clk_read(device->clk, nv_clk_src_gpc));
 		return 0;
 	}
 	need_uv = DIV_ROUND_UP(na_uv * (100 + margin), 100);
 	if (need_uv > ceil_uv) {
-		nvxnu_log("tegra-gm20b: tegra-gpu-mhz=%lld refused: %u kHz needs %d uV in "
+		nvxnu_log("tegra-gm20b: %lld MHz refused: %u kHz needs %d uV in "
 			  "fixed-frequency mode (B01 NA table %d "
 			  "uV + %d%%) for GPU speedo %d, above the %d uV rail ceiling; GPU stays "
 			  "at %d kHz (highest rate that fits: "
@@ -370,7 +350,7 @@ static int clk_raise(char *line, unsigned int len)
 		return 0;
 	}
 	ret = tegra_gm20b_rail_get_uv(&uv);
-	nvxnu_step("tegra-gm20b: CLK step: tegra-gpu-mhz=%lld -> %u kHz, GPU speedo %d: B01 NA "
+	nvxnu_step("tegra-gm20b: CLK step: %lld MHz -> %u kHz, GPU speedo %d: B01 NA "
 		   "table %d uV, +%d%% fixed PLL "
 		   "%d uV, ceiling %d uV (highest rate that fits %u kHz); VDD_GPU %d uV (ret %d)\n",
 		   mhz, khz, speedo, na_uv, margin, need_uv, ceil_uv, best, uv, ret);
@@ -386,7 +366,7 @@ static int clk_raise(char *line, unsigned int len)
 			   uv, ret);
 	}
 	if (ret || uv < ceil_uv) {
-		nvxnu_log("tegra-gm20b: tegra-gpu-mhz=%lld: VDD_GPU %d uV (ret %d), %d uV needed "
+		nvxnu_log("tegra-gm20b: %lld MHz: VDD_GPU %d uV (ret %d), %d uV needed "
 			  "first; GPU stays at %d kHz\n",
 			  mhz, uv, ret, ceil_uv, nvkm_clk_read(device->clk, nv_clk_src_gpc));
 		return 0;
@@ -399,11 +379,11 @@ static int clk_raise(char *line, unsigned int len)
 		   nvkm_clk_read(device->clk, nv_clk_src_gpc), khz);
 	ret = clk_prog_khz(device, khz);
 	if (clk_state(device, "raised", ret, khz)) {
-		/* the one result line (nvxnu_step prints only with tegra-gpu-trace): the rate the PLL now holds, from
+		/* the one result line (nvxnu_step prints only when traced): the rate the PLL now holds, from
 		 * its own registers; the stats line measures it every window (clk_measure) */
 		u32 coeff = nvkm_rd32(device, 0x137004);
 		nvxnu_log("tegra-gm20b: GPU clock %d kHz (GPCPLL M %u N %u PL %u, "
-			  "tegra-gpu-mhz=%lld), "
+			  "%lld MHz), "
 			  "VDD_GPU %d uV\n",
 			  nvkm_clk_read(device->clk, nv_clk_src_gpc), coeff & 0xff,
 			  (coeff >> 8) & 0xff, (coeff >> 16) & 0x3f, mhz, uv);
@@ -413,7 +393,7 @@ static int clk_raise(char *line, unsigned int len)
 	/* not at the target: one way back to the M1 rate, at the same voltage */
 	back = clk_prog_khz(device, BOOT_KHZ);
 	if (clk_state(device, "back to the boot rate", back, BOOT_KHZ)) {
-		nvxnu_log("tegra-gm20b: tegra-gpu-mhz=%lld: GPCPLL did not settle at %u kHz (ret "
+		nvxnu_log("tegra-gm20b: %lld MHz: GPCPLL did not settle at %u kHz (ret "
 			  "%d); back at %u kHz\n",
 			  mhz, khz, ret, BOOT_KHZ);
 		return 0;
@@ -653,10 +633,10 @@ uint64_t tgm_pool_avail(void)
 	return nvxnu_pool_size() - ((u64)nvxnu_pool_used_pages() << PAGE_SHIFT);
 }
 
-/* GPU L2 for user memory (tegra-gpu-l2=1):
+/* GPU L2 for user memory:
  * GM20B's L2 caches system memory unless a PTE is volatile; the GPU does not snoop the CPU and the CPU does not see the
  * L2. Volatile user mappings (the default, as nouveau maps all system memory) keep every texture fetch and ROP access
- * out of the L2. With the boot-arg, user mappings are cacheable and the L2 is kept coherent at submission boundaries,
+ * out of the L2. Here user mappings are cacheable and the L2 is kept coherent at submission boundaries,
  * which are Metal's visibility points:
  *  - CPU -> GPU: before a submission is kicked, the CPU invalidates the L2's clean system-memory lines (FLUSH
  *    L2_SYSTEM_INVALIDATE 0x70004), so what the CPU wrote since (WC pool BOs, cleaned cached BOs, imports, push
@@ -676,15 +656,11 @@ static DEFINE_MUTEX(l2_lock);
 static struct {
 	u64 sum, max;
 	u32 n;
-} l2_time; /* tegra-gpu-stats: the invalidate's CPU time, lock wait included */
+} l2_time; /* stats: the invalidate's CPU time, lock wait included */
 
 static int l2_on(void)
 {
-	static int on = -1;
-	long long v = 0;
-	if (on < 0)
-		on = nvxnu_bootarg_int("tegra-gpu-l2", &v) && v;
-	return on;
+	return 1;
 }
 
 static void l2_invalidate(void)
@@ -714,7 +690,7 @@ static void l2_invalidate(void)
 struct tgm_vm {
 	struct nvif_vmm vmm;
 	struct list_head kmaps;
-	u64 pfence_va; /* the present channel's fence page, read-only (tegra-gpu-present-order), 0: not mapped */
+	u64 pfence_va; /* the present channel's fence page, read-only (present order), 0: not mapped */
 	u64 fences_va; /* every connection's fence page, read-only (tgm_chan_order's acquires), 0: not mapped */
 	struct list_head
 		imports; /* struct tgm_import: first pages of the host imports made in it (live_lock) */
@@ -739,7 +715,7 @@ static int vm_kmap(struct tgm_vm *vm, struct tgm_mem *mem, uint64_t bytes, int r
 static int fences_map(struct tgm_vm *vm);
 
 /* The present channel's fence page (see "GPU present"): one pool page, made with the first address space that needs it
- * and kept for good, so it exists before the present channel does. With tegra-gpu-present-order (on unless =0) every
+ * and kept for good, so it exists before the present channel does. With present order every
  * address space maps it read-only in its kernel range, where user channels wait on it with a semaphore acquire. */
 static struct {
 	void *va;
@@ -750,13 +726,7 @@ static DEFINE_MUTEX(pfence_lock);
 
 static int present_order_on(void)
 {
-	static int on = -1;
-	long long v = 1;
-	if (on < 0) {
-		nvxnu_bootarg_int("tegra-gpu-present-order", &v);
-		on = v != 0;
-	}
-	return on;
+	return 1;
 }
 
 static int pfence_get(struct tgm_vm *vm)
@@ -868,7 +838,7 @@ void tgm_mem_del(struct tgm_mem **pmem)
 }
 
 /* Sysmem is mapped volatile (GPU L2 does not keep its lines): CONTRACT.md §3(b) option one; cacheable with
- * tegra-gpu-l2=1 (l2_on). Compressible kinds are not offered (no comptags); nvkm rejects invalid kinds. */
+ * l2_on(). Compressible kinds are not offered (no comptags); nvkm rejects invalid kinds. */
 static int vm_map(struct tgm_vm *vm, uint64_t va, uint64_t range, struct tgm_mem *mem,
 		  uint64_t offset, uint8_t kind, int read_only, int vol)
 {
@@ -944,7 +914,7 @@ static int vm_kmap(struct tgm_vm *vm, struct tgm_mem *mem, uint64_t bytes, int r
 #define CHAN_PUSH_BYTES 0x10000  /* nouveau_channel_ctor: plength */
 #define CHAN_GPFIFO_BYTES 0x2000 /* ilength: 1024 entries */
 #define CHAN_SEMA_BYTES \
-	0x2000 /* nvif's GET semaphore at +0; tegra-gpu-stats stamps at CHAN_STAMPS, push profile at CHAN_PROF */
+	0x2000 /* nvif's GET semaphore at +0; stats stamps at CHAN_STAMPS, push profile at CHAN_PROF */
 #define CHAN_BYTES (CHAN_PUSH_BYTES + CHAN_GPFIFO_BYTES + CHAN_SEMA_BYTES)
 #define CHAN_STAMPS (CHAN_PUSH_BYTES + CHAN_GPFIFO_BYTES + 0x800)
 #define CHAN_PROF                              \
@@ -989,7 +959,7 @@ struct tgm_chan {
 	u32 chid;
 	int nobj;
 	int kernel; /* a kernel channel, no client waits on it and the present does not wait for it: CHAN_PRESENT, CHAN_SCRUB */
-	int critical; /* a GPU error on it panics even with tegra-gpu-all-clients (compositor, kernel) */
+	int critical; /* a GPU error on it panics even under client fault isolation (compositor, kernel) */
 	int isolating; /* client fault isolation: its error was taken as its own, the kill is under way */
 	struct list_head live; /* live_chans, for tegra_gm20b_sync_for_cpu */
 	u64 id;
@@ -999,11 +969,11 @@ struct tgm_chan {
 	u32 stall_done;  /* tgm_chan_check_progress: completed seqno first seen stalled, and when */
 	u64 stall_ns;
 	u32 gov_done; /* idle clock: last seqno counted retired (gov_fenced) */
-	u32 stat_done; /* tegra-gpu-stats: last seqno whose latency was counted, submit times by seqno */
+	u32 stat_done; /* stats: last seqno whose latency was counted, submit times by seqno */
 	u64 stat_sub_ns[CHAN_NSTAMPS];
 	u64 stat_sub_ptimer[CHAN_NSTAMPS];
 	u64 stat_exec,
-		stat_exec_max; /* tegra-gpu-stats: this window's stamped exec time (PTIMER units), for its owner */
+		stat_exec_max; /* stats: this window's stamped exec time (PTIMER units), for its owner */
 	u32 stat_exec_n;
 	/* push profile: the profiled submission in flight (0: none), its pushes' classes, and this window's GPU time by
 	 * class (PTIMER units) and the pushes counted, for its owner */
@@ -1108,7 +1078,7 @@ extern void tegra_coherency_register(uint64_t (*read_lock)(uint64_t),
 #define TGM_COH_BUCKETS 256
 static struct tgm_coh *coh_hash[TGM_COH_BUCKETS];
 static DEFINE_MUTEX(coh_lock);
-/* tegra-gpu-stats: the IOSurface lock/unlock hooks' work (one 5 s window), on the push line */
+/* stats: the IOSurface lock/unlock hooks' work (one 5 s window), on the push line */
 static struct {
 	u64 inval_n, inval_bytes, clean_n, clean_bytes;
 } coh_stats;
@@ -1304,7 +1274,7 @@ void tgm_chan_check_progress(struct tgm_chan *chan, const char *who, uint32_t se
 	}
 }
 
-/* client fault isolation (tegra-gpu-all-clients=1):
+/* client fault isolation:
  * With every process on the GPU, one app's bad shader or stale address must not take the system down. nvgpu's policy is
  * taken (gk20a_fifo_recover, gk20a_gr_isr: the faulting channel gets an error and only it is torn down): after an
  * interrupt pass in which nvkm reported errors (xnu_glue.cpp gpuInterrupt), errors_contained() takes the channels the
@@ -1322,12 +1292,7 @@ void tgm_chan_check_progress(struct tgm_chan *chan, const char *who, uint32_t se
 
 int tgm_all_clients(void)
 {
-	static int on = -1;
-	long long v = 0;
-	if (on <
-	    0) /* on by default (every process that asks gets a device); tegra-gpu-all-clients=0 turns it off */
-		on = nvxnu_bootarg_int("tegra-gpu-all-clients", &v) ? v != 0 : 1;
-	return on;
+	return 1; /* every process that asks gets a device */
 }
 
 static struct {
@@ -1532,7 +1497,7 @@ static void iso_deadline(void *arg)
 	mutex_unlock(&live_lock);
 }
 
-/* tegra-gpu-stats=1:
+/* stats:
  * GPU-side times come from 16-byte semaphore releases, which write PTIMER. On this Tegra PTIMER is not in nanoseconds:
  * its source is 19.2 MHz while its 32 ns step assumes 31.25 MHz (nvgpu gm20b_tegra_platform.ptimer_src_freq,
  * os/linux/platform_gk20a_tegra.c; PTIMER_REF_FREQ_HZ, include/nvgpu/ptimer.h), so it runs at 0.6144 x real time and nvgpu
@@ -1542,7 +1507,6 @@ static void iso_deadline(void *arg)
  * line prints ("PTIMER xR"). */
 #define STATS_WINDOW_NS (5 * NSEC_PER_SEC)
 static struct {
-	int on;         /* -1 until the boot-arg is read */
 	u64 since;      /* start of the current window, 0 before the first submission */
 	u64 cal_ptimer; /* PTIMER at `since`: its rate over the window */
 	u32 submits, fences, imports, timed;
@@ -1560,14 +1524,11 @@ static struct {
 	u64 copy_sum, copy_max, gap_sum, gap_max; /* PTIMER units */
 	s64 live_bytes;                           /* host imports */
 	s32 live;
-} stats = {.on = -1};
+} stats;
 
 static int stats_on(void)
 {
-	long long v = 0;
-	if (stats.on < 0)
-		stats.on = nvxnu_bootarg_int("tegra-gpu-stats", &v) && v;
-	return stats.on;
+	return 1;
 }
 
 int tgm_stats_on(void)
@@ -1584,7 +1545,7 @@ static void stats_add(u64 *sum, u64 *max, u64 v)
 		;
 }
 
-/* tegra-gpu-stats: the "mem" line's window (tgm_stats_bo_alloc and the rest, in TegraGM20BGpu.h). Times in ns; every
+/* stats: the "mem" line's window (tgm_stats_bo_alloc and the rest, in TegraGM20BGpu.h). Times in ns; every
  * field is summed atomically and taken (zeroed) when the window's line is logged. `recent` holds the last host imports
  * released, by first page, so an import of a surface released less than REIMPORT_NS ago counts as a re-import: what
  * keeping a released import around for a while would have saved. */
@@ -1811,7 +1772,7 @@ static u64 chan_stamps_va(struct tgm_chan *chan, u32 seqno)
  * (present_gap: and the gap before it). */
 static u64 present_gap(u32 seqno, u64 start);
 
-/* push profile (tegra-gpu-stats=1):
+/* push profile (stats):
  * What each push of a submission costs the GPU, sampled: one submission in 16 of each connection (the user client's
  * choice, with each push's class from the method stream it read, struct tgm_prof) stamps the GPU's time after each of its
  * pushes, a 16-byte semaphore release after wait-for-idle (push_stamp, as the submission's own start and end stamps) into
@@ -2194,7 +2155,7 @@ static void stats_tick(void)
 }
 
 /* idle clock: the GPCPLL's output divider, so the GPU downclocks only where that costs no performance.
- * The GPU runs at tegra-gpu-mhz's rate (768 MHz, Horizon's docked maximum) whenever there is any GPU work, and drops
+ * The GPU runs at GPU_MHZ (768 MHz, Horizon's docked maximum) whenever there is any GPU work, and drops
  * to 76.8 MHz (L4T's lowest B01 row, Horizon's own boost-mode GPU clock) only once it has been truly idle:
  *   * down: no submission kicked, nothing in flight and no display swap for IDLE_DROP_NS (500 ms), checked on the
  *     CPU governor's tick (SwitchPerfGovernor.cpp calls tegra_gm20b_idle_tick from XNU's perfcontrol deadline, so
@@ -2475,7 +2436,7 @@ static void idle_start(void)
 	u32 at_idle, at_run;
 
 	if (idle.clk || run <= BOOT_KHZ)
-		return; /* tegra-gpu-mhz did not raise it: it already runs the lowest rate */
+		return; /* clk_raise did not raise it: it already runs the lowest rate */
 	vco = m ? PLL_REF_KHZ * n / m : 0;
 	/* the lowest L4T B01 rate this VCO reaches by its output divider alone (gpcclk = VCO / 2 / PL) */
 	for (i = 0; (k = tegra_gm20b_dvfs_khz(i)); i++)
@@ -2578,7 +2539,7 @@ static void chan_free(struct tgm_chan *chan)
 	kfree(chan);
 }
 
-/* Compositor priority (tegra-gpu-all-clients=1): nvkm's runlist has no priorities ("TODO: prio, interleaving",
+/* Compositor priority: nvkm's runlist has no priorities ("TODO: prio, interleaving",
  * fifo/nv50.c nv50_runl_update) and gives every channel RAMFC's default timeslice, 128 << 3 (fifo/gk104.c
  * gk104_chan_ramfc_write, RAMFC 0xf8 = PFIFO 0x2310: enable 28, scale 15:12, timeout 7:0), as nvgpu's default
  * (gk20a/fifo_gk20a.c gk20a_fifo_default_timeslice_us). nvgpu gives high-priority work 4x its low timeslice
@@ -2588,15 +2549,9 @@ static void chan_free(struct tgm_chan *chan)
 #define RAMFC_TIMESLICE_HIGH 0x10005080
 
 static int
-compositor_timeslice_on(void) /* tegra-gpu-compositor-timeslice=0 keeps nvkm's default for all */
+compositor_timeslice_on(void)
 {
-	static int on = -1;
-	long long v = 1;
-	if (on < 0) {
-		nvxnu_bootarg_int("tegra-gpu-compositor-timeslice", &v);
-		on = v != 0;
-	}
-	return on;
+	return 1;
 }
 
 static void chan_timeslice(u32 chid, u32 value)
@@ -3130,8 +3085,8 @@ static void push_stamp(struct nvif_push *push, u64 va, u32 payload)
 #define CHAN_FENCE_DWORDS 32
 
 /* Fence push: semaphore release of the next 32-bit seqno after wait-for-idle, then a nonstall interrupt (nouveau
- * nvc0_fence_emit32), then kick. With tegra-gpu-l2=1 (and on the present channel) the L2's dirty lines go to DRAM first; with
- * tegra-gpu-stats=1 the end of the submission is stamped. Space for it was reserved by the caller
+ * nvc0_fence_emit32), then kick. The L2's dirty lines go to DRAM first, and the end of the submission is stamped for the
+ * stats. Space for it was reserved by the caller
  * (nvif_chan_gpfifo_wait / PUSH_WAIT): CHAN_FENCE_DWORDS. */
 static u32 chan_fence(struct tgm_chan *chan)
 {
@@ -3171,7 +3126,7 @@ static u32 chan_fence(struct tgm_chan *chan)
 	return next;
 }
 
-/* Present order (tegra-gpu-present-order): held by a user submission from its present wait to its kick, and by the present
+/* Present order: held by a user submission from its present wait to its kick, and by the present
  * from its snapshot of the user channels to its kick, so every user submission is either in a present's snapshot (the
  * copy waits for it) or kicked after that present (it waits for the copy). */
 static DEFINE_MUTEX(order_lock);
@@ -3204,7 +3159,7 @@ static int chan_exec(struct tgm_chan *chan, const struct tgm_push *pushes, uint3
 	for (i = 0; prof && i < count; i++)
 		stamps += prof->cls[i] != TGM_PC_SKIP;
 	/* nouveau_exec_job_run(): room for every user entry plus our fence push and, each kicked as its own entry before
-	 * them, a present wait, the task order's acquires and (tegra-gpu-stats) a start stamp, one more nvif GET semaphore
+	 * them, a present wait, the task order's acquires and (stats) a start stamp, one more nvif GET semaphore
 	 * with each; nvif polls GET for up to ~1 s. A profile's stamps: an entry each, a stamp and a GET semaphore. */
 	ret = nvif_chan_gpfifo_wait(&chan->chan, count + 4 + stamps,
 				    CHAN_FENCE_DWORDS + 24 + 5 * TGM_ORDER_MAX + 16 * stamps);
@@ -3268,23 +3223,23 @@ int tgm_chan_exec(struct tgm_chan *chan, const struct tgm_push *pushes, uint32_t
 }
 
 /* GPU present (TegraDisplayFlip/TegraScanoutCopy.h):
- * The display's swap path (boot-arg switch-gpu-copy=1) hands a frame (an IOSurface, pitch-linear BGRA) to the GPU instead
+ * The display's swap path hands a frame (an IOSurface, pitch-linear BGRA) to the GPU instead
  * of waiting for the GPU and swizzling it with the CPU (TegraGM20BUserClient.cpp tegra_gm20b_scanout_copy). One kernel
  * channel in its own address space, which maps the scanout surfaces, the swapped surfaces and every connection's fence
  * page (tgm_fence_page_get), does per frame:
  *  - a semaphore ACQUIRE_GEQ (acquire switch on: the channel yields while it waits) on the last submitted seqno of every
  *    user channel whose address space imports the surface (its first page, tgm_vm_import_note; every user channel if
- *    none does, or with tegra-gpu-present-writer=0), so the copy runs after the compositor's rendering in GPU order, no
+ *    none does), so the copy runs after the compositor's rendering in GPU order, no
  *    CPU waits for it, and an app's GPU work does not hold up the frame;
  *  - one MAXWELL_DMA_COPY_A LAUNCH_DMA, pitch source (the surface's row bytes) to a BLOCKLINEAR destination: GOBs of
  *    64 bytes x 8 lines (GOB_HEIGHT_FERMI_8), blocks one GOB wide and 16 GOBs high, width 5120 bytes: the layout window A
  *    column-scans (NativeScanout.h native_legacy_block_copy);
- *  - the kernel fence (chan_fence: WFI, with tegra-gpu-l2 the L2 flush, semaphore release, NON_STALL_INTERRUPT).
+ *  - the kernel fence (chan_fence: WFI, the L2 flush, semaphore release, NON_STALL_INTERRUPT).
  * The fence's nonstall interrupt completes it: the caller's callback (native_legacy_gpu_complete, which any context may
  * call) runs from the interrupt pass. A present that has not completed 1 s after it was queued panics, naming what it
  * waits for. Every mapping is volatile: the source was written by work whose fence flushed the L2 (or bypassed it), the
  * destination is read by the display controller only. Methods from open-gpu-doc classes/dma-copy/clb0b5.h.
- * Present order (tegra-gpu-present-order, on unless =0): the display retires a swap as soon as its copy is queued, so the
+ * Present order: the display retires a swap as soon as its copy is queued, so the
  * compositor may draw its next frame into the surface the copy still reads, which tears. Every user submission
  * kicked after a present that has not completed, from an address space that imports its surface (any, if the present
  * found none), starts with a semaphore ACQUIRE_GEQ on the present channel's fence (mapped read-only in each address
@@ -3334,14 +3289,14 @@ static struct {
 		u32 seqno;
 	} wait[TGM_SYNC_MAX];
 	volatile struct tgm_stamp *wait_end
-		[TGM_SYNC_MAX]; /* tegra-gpu-stats: their end stamps (pool memory, kept mapped) */
-	u32 stamped; /* tegra-gpu-stats: seqno of the present in flight, whose copy is stamped */
+		[TGM_SYNC_MAX]; /* stats: their end stamps (pool memory, kept mapped) */
+	u32 stamped; /* stats: seqno of the present in flight, whose copy is stamped */
 	u32 last;    /* seqno of the last present kicked, 0: none (order_lock) */
 	u64 last_src; /* its surface's first page, and whether address spaces importing it were found */
 	int last_matched;
 	int last_idle,
-		last_late; /* tegra-gpu-stats: it found no user work pending; a user submit then waited for it */
-	u32 presents; /* tegra-gpu-stats */
+		last_late; /* stats: it found no user work pending; a user submit then waited for it */
+	u32 presents; /* stats */
 	u64 lat_sum, lat_max;
 } present = {.lock = {NULL}};
 
@@ -3451,7 +3406,7 @@ static void present_order(struct tgm_chan *chan)
 	}
 }
 
-/* tegra-gpu-stats, from stats_fences (interrupt pass) before present_fenced completes the present: PTIMER from the end of
+/* stats, from stats_fences (interrupt pass) before present_fenced completes the present: PTIMER from the end of
  * the last user submission present `seqno` waited for to the copy's start (its start stamp, after the acquires), ~0 when
  * it waited for none or a stamp is missing. The wait list is that present's: the next is queued only after
  * present_fenced. A user channel's stamps are in its ring, pool memory that stays mapped even after the channel is
@@ -3542,18 +3497,11 @@ int tgm_present_unmap(uint64_t va, uint64_t bytes)
 	return present.vm ? tgm_vm_unmap(present.vm, va, bytes) : -ENODEV;
 }
 
-/* tegra-gpu-present-writer (on unless =0): a present waits only for the address spaces that import its surface, and only
- * their later submissions wait for it (present order); =0, or a surface no address space imports by its first page, is
- * the all-channel wait. */
+/* A present waits only for the address spaces that import its surface, and only their later submissions wait for it
+ * (present order); a surface no address space imports by its first page is the all-channel wait. */
 static int present_writer_on(void)
 {
-	static int on = -1;
-	long long v = 1;
-	if (on < 0) {
-		nvxnu_bootarg_int("tegra-gpu-present-writer", &v);
-		on = v != 0;
-	}
-	return on;
+	return 1;
 }
 
 static int present_copy(uint64_t src_va, uint64_t src_pa, uint64_t stride, uint32_t width,
@@ -3722,7 +3670,7 @@ static struct {
 	u64 inflight;  /* bytes queued (atomic) */
 	int boot_done; /* the boot scrub found nothing left to claim */
 	u64 boot_start, boot_bytes;
-	/* tegra-gpu-stats: this window's ranges zeroed, their bytes and queue-to-done time (ns) */
+	/* stats: this window's ranges zeroed, their bytes and queue-to-done time (ns) */
 	u64 n, bytes, ns, max_ns;
 } scrub = {.lock = {NULL}};
 
@@ -3949,7 +3897,7 @@ int tgm_pool_scrub(uint64_t pa, uint64_t bytes)
 	return ret;
 }
 
-/* tegra-gpu-stats: this window's scrubbed ranges for the stats2 line */
+/* stats: this window's scrubbed ranges for the stats2 line */
 static void scrub_stats(char *buf, unsigned int len, u64 window_ms)
 {
 	u64 n = __atomic_exchange_n(&scrub.n, 0, __ATOMIC_RELAXED),
@@ -3973,7 +3921,7 @@ static int m3(char *line, unsigned int len)
 	struct nvif_push *push;
 	int ret, user = 0;
 
-	/* page 0: fence word at +0, page 1: fill target. With tegra-gpu-l2=1 the copy engine fills page 1 through a user
+	/* page 0: fence word at +0, page 1: fill target. The copy engine fills page 1 through a user
 	 * (L2-cacheable) mapping, so the check below also proves the fence's L2 flush. */
 	page = tgm_pool_alloc(2 * PAGE_SIZE, &pa);
 	if (!page)
@@ -4039,116 +3987,6 @@ done:
 	tgm_vm_del(&vm);
 	tgm_pool_free(page, 2 * PAGE_SIZE, pa);
 	return ret;
-}
-
-/* fault test (tegra-gpu-fault-test=1):
- * With tegra-gpu-all-clients=1, after M3: proves client fault isolation on this GPU before apps rely on it. A test
- * channel (not critical) writes through GR's inline-to-memory unit (KEPLER_INLINE_TO_MEMORY_B on subchannel 2; methods
- * from Mesa's cla140.h) to an address its VM does not map: an MMU fault on GR, which nvkm recovers by killing the
- * channel and resetting GR (gf100_gr_reset: FECS/GPCCS booted again through ACR). Then a
- * second channel writes a word to a mapped page the same way and fences it: GR came back. One line with the outcome.
- * A recovery that does not finish panics as for any client (iso_deadline). */
-#define PUSH906F_SUBC_NVA140 2
-#define NVA140_LINE_LENGTH_IN 0x0180
-#define NVA140_LINE_COUNT 0x0184
-#define NVA140_OFFSET_OUT_UPPER 0x0188
-#define NVA140_OFFSET_OUT 0x018c
-#define NVA140_LAUNCH_DMA 0x01b0
-#define NVA140_LAUNCH_DMA_DST_PITCH 0x00000001
-#define NVA140_LOAD_INLINE_DATA 0x01b4
-#define FAULT_TEST_VA 0x200000000ULL /* never bound in the test VM */
-
-static void push_i2m(struct tgm_chan *chan, u64 va, u32 data)
-{
-	struct nvif_push *push = &chan->chan.push;
-
-	PUSH_NVSQ(push, NVA140, NVA140_LINE_LENGTH_IN, 4, NVA140_LINE_COUNT, 1,
-		  NVA140_OFFSET_OUT_UPPER, upper_32_bits(va), NVA140_OFFSET_OUT, lower_32_bits(va));
-	PUSH_NVSQ(push, NVA140, NVA140_LAUNCH_DMA, NVA140_LAUNCH_DMA_DST_PITCH);
-	PUSH_NVSQ(push, NVA140, NVA140_LOAD_INLINE_DATA, data);
-}
-
-/* Sleeps until done(chan) or `ms` passed; returns the ms waited. */
-static u64 fault_test_wait(struct tgm_chan *chan, int (*done)(struct tgm_chan *), u32 ms)
-{
-	u64 start = nvxnu_nanotime(), end = start + (u64)ms * NSEC_PER_MSEC;
-	for (;;) {
-		u32 seq = nvxnu_wake_seq();
-		if (done(chan) || nvxnu_nanotime() >= end)
-			break;
-		nvxnu_idle(seq, end);
-	}
-	return (nvxnu_nanotime() - start) / NSEC_PER_MSEC;
-}
-
-static int chan_dead(struct tgm_chan *chan)
-{
-	return READ_ONCE(chan->error) != 0;
-}
-static int chan_idle(struct tgm_chan *chan)
-{
-	return (s32)(tgm_chan_completed(chan) - chan->submitted) >= 0;
-}
-
-static void fault_test(void)
-{
-	struct tgm_vm *vm = NULL;
-	struct tgm_mem *mem = NULL;
-	struct tgm_chan *bad = NULL, *good = NULL;
-	u64 pa, pas[2], va = 0, killed_ms = 0, ok_ms = 0;
-	u32 *page, word = 0;
-	long long v = 0;
-	int ret;
-
-	if (!nvxnu_bootarg_int("tegra-gpu-fault-test", &v) || !v)
-		return;
-	if (!tgm_all_clients() || !iso.deadline) {
-		nvxnu_log("tegra-gm20b: fault test skipped: needs tegra-gpu-all-clients=1\n");
-		return;
-	}
-	page = tgm_pool_alloc(2 * PAGE_SIZE, &pa);
-	if (!page)
-		return;
-	pas[0] = pa;
-	pas[1] = pa + PAGE_SIZE;
-	ret = tgm_vm_new(&vm);
-	if (!ret)
-		ret = tgm_mem_new(vm, pas, 2, &mem);
-	if (!ret)
-		ret = tgm_vm_kmap(vm, mem, 2 * PAGE_SIZE, &va);
-	if (!ret)
-		ret = tgm_chan_new(vm, (volatile u32 *)page, va, "fault-test", 0, &bad);
-	if (!ret)
-		ret = PUSH_WAIT(&bad->chan.push, 16 + CHAN_FENCE_DWORDS);
-	if (!ret) {
-		push_i2m(bad, FAULT_TEST_VA, 0xdeadbeef);
-		chan_fence(bad);
-		killed_ms = fault_test_wait(bad, chan_dead, 1000);
-		ret = chan_dead(bad) ? 0 : -ETIMEDOUT;
-	}
-	if (!ret)
-		ret = tgm_chan_new(vm, (volatile u32 *)page + 4, va + 16, "fault-test", 0, &good);
-	if (!ret)
-		ret = PUSH_WAIT(&good->chan.push, 16 + CHAN_FENCE_DWORDS);
-	if (!ret) {
-		push_i2m(good, va + PAGE_SIZE, 0xc0ffee43);
-		chan_fence(good);
-		ok_ms = fault_test_wait(good, chan_idle, 2000);
-		word = READ_ONCE(page[PAGE_SIZE / 4]);
-	}
-	nvxnu_log("tegra-gm20b: fault test %s: MMU fault on a client channel %s (%llu ms, error "
-		  "%u); GR afterwards: I2M word "
-		  "%08x (want c0ffee43), fence %u/%u in %llu ms, ret %d\n",
-		  !ret && word == 0xc0ffee43 && good && chan_idle(good) && !good->error ? "ok"
-											: "FAIL",
-		  bad && chan_dead(bad) ? "killed it" : "did NOT kill it", killed_ms,
-		  bad ? bad->error : 0, word, good ? tgm_chan_completed(good) : 0,
-		  good ? good->submitted : 0, ok_ms, ret);
-	tgm_chan_del(&good);
-	tgm_chan_del(&bad);
-	tgm_mem_del(&mem);
-	tgm_vm_del(&vm);
-	tgm_pool_free(page, 2 * PAGE_SIZE, pa);
 }
 
 /* system sleep (TegraGM20BSleep.h):
@@ -4564,7 +4402,7 @@ int tgm_bringup(int stage, char *line, unsigned int len)
 	if (gpu.stage < 2 && stage >= 2) {
 		ret = clk_raise(
 			line,
-			len); /* tegra-gpu-mhz only: GPCPLL above 76.8 MHz before ACR/PMU/GR */
+			len); /* GPCPLL above 76.8 MHz before ACR/PMU/GR */
 		if (!ret)
 			ret = m2(line, len);
 		if (ret)
@@ -4579,7 +4417,6 @@ int tgm_bringup(int stage, char *line, unsigned int len)
 		if (tgm_all_clients())
 			iso.deadline = nvxnu_work_alloc(iso_deadline, NULL);
 		nvxnu_errors_fatal(iso.deadline ? errors_contained : NULL);
-		fault_test();
 		/* Register the host-import coherency backend the kernel's IOSurface lock/unlock hook calls (XNU
 		 * is_io_connect_method, tegra_coherency_register). The GPU does the imports, so it owns the registry. */
 		tegra_coherency_register(tgm_coherency_read_lock, tgm_coherency_write_unlock);

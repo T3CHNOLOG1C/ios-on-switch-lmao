@@ -25,8 +25,8 @@
 // Writing is not offered: the MCU's NTAG write (command 0x08, yuzu WriteAmiiboData) is an amiibo-shaped transfer
 // carrying the tag's magic, write counter and version, not a page write.
 //
-// Started by launchd (com.brunostjohn.switch.joyconnfc.plist) when the kernel publishes SwitchJoyConNFC, which it does only with
-// switch-joycon-nfc=1. It then stays and scans once for 30 s each time a Joy-Con (R) or Pro Controller appears (attach
+// Started by launchd (com.brunostjohn.switch.joyconnfc.plist) when the kernel publishes SwitchJoyConNFC, which it does not
+// do any more (NFC is off, SwitchJoyConRail.cpp). It then stays and scans once for 30 s each time a Joy-Con (R) or Pro Controller appears (attach
 // it to the rail again, or reconnect it, to scan again). "joyconnfc --once" scans the controllers present now.
 // IOKit's HID calls are exported by IOKit.framework on iOS but the iOS SDK has no hid/ headers: the prototypes below are
 // those of macOS IOKit/hid/IOHIDDevice.h.
@@ -44,7 +44,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
-#include <sys/sysctl.h>
 #include <unistd.h>
 #include <xpc/xpc.h>
 
@@ -409,31 +408,11 @@ static CFMutableDictionaryRef matching(int32_t product)
     return dict;
 }
 
-// switch-joycon-nfc in the boot-args, as PE_parse_boot_argn reads it (bare name = 1).
-static bool enabled(void)
-{
-    char args[1024] = "";
-    size_t size = sizeof(args) - 1;
-    if (sysctlbyname("kern.bootargs", args, &size, NULL, 0)) return false;
-    static const char name[] = "switch-joycon-nfc";
-    for (char *word = strtok(args, " "); word; word = strtok(NULL, " ")) {
-        if (strncmp(word, name, sizeof(name) - 1)) continue;
-        const char *value = word + sizeof(name) - 1;
-        if (!*value) return true;
-        if (*value == '=') return strtol(value + 1, NULL, 0) != 0;
-    }
-    return false;
-}
-
 int main(int argc, char **argv)
 {
     logger = os_log_create("com.brunostjohn.switch.joyconnfc", "nfc");
     hidQueue = dispatch_queue_create("com.brunostjohn.switch.joyconnfc.hid", DISPATCH_QUEUE_SERIAL);
     scanQueue = dispatch_queue_create("com.brunostjohn.switch.joyconnfc.scan", DISPATCH_QUEUE_SERIAL);
-    if (!enabled()) {
-        fprintf(stderr, "joyconnfc: switch-joycon-nfc is not set\n");
-        return 0;
-    }
     static const int32_t products[] = {kJoyConR, kProController};
     if (argc > 1 && !strcmp(argv[1], "--once")) {
         dispatch_group_t group = dispatch_group_create();

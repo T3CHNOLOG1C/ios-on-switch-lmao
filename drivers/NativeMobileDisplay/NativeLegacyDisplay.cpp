@@ -78,11 +78,11 @@ extern "C" bool native_legacy_prepare_scanout(void);
 extern "C" void native_legacy_transfer_observed(IOReturn, const void *, uint64_t);
 extern "C" void native_legacy_copy_timing_observed(uint64_t ticks, uint64_t bytes);
 extern "C" void native_legacy_retirement_observed(IOService *);
-// GPU hand-off (boot-arg sheng-fb-gpu=1): the frame is offered to the privileged GPU client instead of being copied; the swap retires when the
+// GPU hand-off: the frame is offered to the privileged GPU client instead of being copied; the swap retires when the
 // client reports the GPU copy done (native_legacy_gpu_complete). A refused offer or a failed copy uses the CPU copy below and is counted.
 extern "C" bool native_legacy_gpu_offer(void *display, IOMemoryDescriptor *, uint64_t stride, uint32_t width,
                                         uint32_t height);
-// The GPU driver's copy engine instead (boot-arg switch-gpu-copy=1, TegraScanoutCopy.h): weak, absent the CPU copies every frame.
+// The GPU driver's copy engine instead (TegraScanoutCopy.h): weak, absent the CPU copies every frame.
 // Weak default that declines every offer (the frame takes the CPU copy); drivers/TegraGM20B's strong definition replaces it at
 // link time. The kernel is linked statically, and ld refuses an undefined weak reference there, so the default must exist.
 extern "C" __attribute__((weak)) int tegra_gm20b_scanout_copy(const struct TegraScanoutCopy *)
@@ -143,16 +143,13 @@ extern "C" void native_legacy_gpu_fallback_observed(int status);
 extern "C" {
 volatile uint64_t native_legacy_early_retires, native_legacy_early_failures;
 }
-// Display refresh tick (boot-arg sheng-vsync=<Hz>, 0 or absent: off). The original family sends the compositor's vsync message (type 5)
+// Display refresh tick, 60 Hz. The original family sends the compositor's vsync message (type 5)
 // through native_legacy_vsync_notify, the unchanged original sender, but only a platform subclass calls it from the panel's vblank and
 // that subclass is not part of this port: without it the render server never saw a vsync. Display controller A's vblank interrupt drives
-// it here (boot-arg switch-vblank, default 1) while at least one client has vsync notifications enabled. An interrupt that cannot be had
-// or stays silent panics; the work-loop timer only stands in with switch-vblank=0. Events: 0 armed, 1 sent, 2 idle (no client), 3 late (timer deadline passed, cadence
+// it here while at least one client has vsync notifications enabled. An interrupt that cannot be had or stays silent panics. Events: 0 armed, 1 sent, 2 idle (no client), 3 late (timer deadline passed, cadence
 // restarted), 4 timer started, 5 refresh properties reported at that rate.
 extern "C" void native_legacy_vsync_notify(void *display, uint64_t timestamp, uint64_t continuousTime,
                                            uint64_t interval);
-// The unchanged original setDisplayRefreshProperties: publishes IOMFBDisplayRefresh from slot 301 (getRefreshAttributes below).
-extern "C" bool native_legacy_set_refresh_properties(void *display);
 extern "C" void native_legacy_vsync_observed(unsigned event, unsigned hz);
 extern "C" uint64_t mach_continuous_time(void);
 // SwitchBrightness (TegraPanel.cpp) plays its DSI commands at DC A frame ends, from the vblank interrupt's filter below (primary interrupt
@@ -164,8 +161,8 @@ extern "C" __attribute__((weak)) uint64_t switch_touch_take_report(uint64_t)
 {
     return 0;
 }
-// SwitchBrightness (SwitchBacklight.cpp; display power is on unless switch-sleep=0) takes the render server's display power requests;
-// this default (no SwitchBrightness, or switch-sleep=0) leaves them to the original user client.
+// SwitchBrightness (SwitchBacklight.cpp; display power is on unless switch-no-sleep) takes the render server's display power requests;
+// this default (no SwitchBrightness, or switch-no-sleep) leaves them to the original user client.
 extern "C" __attribute__((weak)) bool switch_display_power_request(bool)
 {
     return false;
@@ -212,7 +209,7 @@ static constexpr uint32_t kDcDispRefToSync = 0x406, kDcDispSyncWidth = 0x407, kD
                           kDcDispActive = 0x409, kDcDispFrontPorch = 0x40a;
 // DISPLAY_COMMAND bits 6:5: 0 stop, 1 continuous display (hekate di.h DISP_CTRL_MODE_*); an assembly register, latched by GENERAL_ACT_REQ.
 static constexpr uint32_t kDcDisplayCommand = 0x032, kDcModeMask = 3u << 5, kDcModeContinuous = 1u << 5;
-// Window A, for the hardware rotation (boot-arg switch-hw-rotate, NativeScanout.h). Word indices and bits checked against L4T
+// Window A, for the hardware rotation (NativeScanout.h). Word indices and bits checked against L4T
 // drivers/video/tegra/dc/dc_reg.h (switch-l4t-kernel-nvidia linux-dev) and hekate bdk/display/di.h. The window registers sit at words
 // 0x700-0x80d, so the controller is mapped 16 KiB deep (the interrupt registers alone fit in the first page).
 //   0x040 STATE_ACCESS   READ_MUX_ACTIVE bit 0 (reads see the active copy), WRITE_MUX_ACTIVE bit 2 (kept 0: writes go to the
@@ -370,7 +367,7 @@ uint32_t mairAttribute(const void *address)
     ml_set_interrupts_enabled(enabled);
     return (par & 1) ? 0x100 : (uint32_t)(par >> 56);
 }
-// Steady-state timing (NativeLegacyDisplay, boot-arg switch-display-stats=1): one mean/max/count per stage, in timebase ticks.
+// Steady-state timing (NativeLegacyDisplay): one mean/max/count per stage, in timebase ticks.
 struct Span {
     uint64_t sum, max;
     uint32_t count;
@@ -439,13 +436,6 @@ struct FrameHist {
 }
 class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     OSDeclareDefaultStructors(NativeLegacyDisplay) IOMemoryMap *bootMapping = nullptr;
-    static constexpr uint32_t kScanFrames = 32,
-                              kColorFrames = 8;  // the probe's frame records, and those of them with colours
-    uint32_t scanBudget =
-        0;  // kScanFrames with boot-arg switch-frame-scan=1 (off: two byte-wise passes cost ~150-300 ms a frame)
-    void *shadow = nullptr;
-    uint64_t shadowBytes = 0;
-    bool shadowValid = false;
     bool primary = false;
     bool logicalPM = false;
     bool transferred = false;
@@ -530,9 +520,9 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     const OriginalLegacySwapRequest *gpuRequest = nullptr;
     uint64_t gpuLength = 0;
     bool gpuBypass = false;
-    // The swap of the frame the GPU client is copying already retired (boot-arg sheng-early-retire, default 1).
+    // The swap of the frame the GPU client is copying already retired.
     bool gpuRetired = false;
-    // GPU frame copy (boot-arg switch-gpu-copy=1, double-buffered hardware rotation only; TegraScanoutCopy.h): the GPU driver's copy
+    // GPU frame copy (double-buffered hardware rotation only; TegraScanoutCopy.h): the GPU driver's copy
     // engine writes the swapped surface into the buffer window A does not scan, and its completion flips window A to it, as the CPU
     // copy's end does. gpuScanout: the outstanding offer (gpuRequest) is such a copy, not the sheng presenter's. The completion comes
     // through gpuDoneSource from any context; one not in by its deadline panics.
@@ -580,7 +570,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
         0;  // latched flips to wait after a new line before measuring it (it latches with the next flip)
     bool vpulseProgrammed = false, vpulseSeen = false, vpulseThisFrame = false, phaseFailed = false;
     static constexpr unsigned kPhaseProbeFlips = 5;
-    // Hardware rotation (boot-arg switch-hw-rotate, default 1; NativeScanout.h). The CPU stops rotating: each client frame is
+    // Hardware rotation (NativeScanout.h). The CPU stops rotating: each client frame is
     // swizzled, unrotated, into the block-linear extent of the boot framebuffer and window A column-scans it. The first such
     // frame switches window A (four registers, latched at a frame boundary); the frame ends after it confirm the latch, read the
     // active registers back, and watch window A for underflow. Kick and frame ends both run under the family's work-loop gate.
@@ -593,7 +583,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     unsigned underflowRun = 0;       // consecutive frame ends with WIN_A_UF_INT latched, once latched
     bool rotationAnnounced = false;  // the latch line is logged once, not again after every SC7 resume
     static constexpr unsigned kLatchFrames = 4, kUnderflowFrames = 30;
-    // Multiple buffering (boot-arg switch-scanout-double=1, default 0; only with the hardware rotation). Three block-linear
+    // Multiple buffering (only with the hardware rotation). Three block-linear
     // surfaces (two if no third could be had): 0 is the boot framebuffer's (blockMapping), 1 and 2 physically contiguous buffers
     // below 4 GiB. A frame is swizzled into one window A neither scans nor may take (ring.target()), then window A's start
     // address flips to it, latched at the next frame boundary (frame-counter latching, set by startRotation). A frame finished
@@ -735,30 +725,11 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     uint32_t savedDispWinOptions = 0, savedActControl = 0, savedScratchB = 0, savedIntEnable = 0, savedIntMask = 0;
     // Copy time, for the occasional log line (the probe's counters are never printed).
     uint64_t copyFrames = 0, copyTicksSum = 0, copyTicksMax = 0;
-    // Copy-path options, read once at start, each off by default:
-    //   switch-fast-swizzle=1  the block-linear copy reads the source 16 bytes at a time (TegraBlockSwizzle.h) when it is aligned
-    //   switch-surface-maps=1  the kernel mapping of a swapped surface is kept for its next swaps (sourceMapping)
-    //   switch-gpu-wait-ms=N   bound on the wait for the GPU before a Metal-rendered surface is read (default 100)
-    //   switch-scanout-wc=1    the block-linear scanouts' kernel views are write-combined from their descriptor on (mapScanout)
-    //   switch-frame-scan=1    the probe's content scans of the first kScanFrames frames (scanBudget)
-    //   switch-gpu-copy=1      the GPU driver copies each frame (offerGpuCopy); needs switch-scanout-double=1
-    bool fastSwizzle = false, keepMappings = false, scanoutWC = false;  // scanoutWC: switch-scanout-wc=1 (mapScanout)
-    uint64_t gpuWaitNs = 100000000ULL;
-    // Kept mappings: each holds a retained descriptor (so its address cannot come back as another surface's) and is reused while it is
-    // among the four most recently swapped. The first copy through one takes its soft faults, later ones none. At most four surfaces
-    // (about 15 MB at 1280x720) stay alive past their last swap because of this.
-    struct SurfaceMapping {
-        IOMemoryDescriptor *memory;
-        IOMemoryMap *map;
-        uint64_t used;
-    };
-    SurfaceMapping surfaceMappings[4] = {};
-    uint64_t surfaceUses = 0;
-    // Off-gate copy (boot-arg switch-display-async=1, hardware rotation only): the kick hands a surface swap's GPU wait, scans and
+    static constexpr uint64_t kGpuWaitNs = 100000000ULL;
+    // Off-gate copy (hardware rotation only): the kick hands a surface swap's GPU wait, scans and
     // swizzle to copyLoop's thread and returns, so neither the compositor's submitting thread nor the family's gate (and with it the
     // vblank action: vsync notifications, flip latches) waits for them; copyFinished, back under the gate, presents the frame and
-    // retires the swap. switch-display-async=2 also retires it when the copy starts, as the GPU hand-off does (sheng-early-retire):
-    // the compositor renders its next frame, into its other surface, while this one is copied. The next swap still waits for the copy
+    // retires the swap. asyncCopy 2 also retires it when the copy starts, as the GPU hand-off does: the compositor renders its next frame, into its other surface, while this one is copied. The next swap still waits for the copy
     // (transferred). job is written under the gate before the hand-off and by the copy thread until copyFinished takes it back.
     unsigned asyncCopy = 0;
     IOWorkLoop *copyLoop = nullptr;
@@ -766,28 +737,25 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     struct CopyJob {
         const OriginalLegacySwapRequest *request;
         IOMemoryMap *source, *target;
-        bool ownedSource, retired, scan, colors, read;
+        bool ownedSource, retired, read;
         uint64_t stride, allocation;
         uint32_t width, height;
         IOReturn status;
         bool timedOut;
-        uint64_t gpu, cache, scanned, copy, readTicks;
+        uint64_t gpu, cache, copy, readTicks;
         uint32_t attribute;
         int swizzled;  // the copy thread's results
     };
     CopyJob job = {};
     bool copyQueued = false, copyStopping = false,
          presentDeferred = false;  // under the gate; presentDeferred: finished during SC7
-    // Steady-state timing (boot-arg switch-display-stats=1): one line every 5 s from the frame-end action, the only periodic log
+    // Steady-state timing: one line every 5 s from the frame-end action, the only periodic log
     // line. A swap's stages: queue (accepted to taken by a kick, flip wait included), map, GPU wait, cache op, content scans, copy, and
     // accepted to retired; client is the compositor's own time from a retire to its next submission (0 when it submitted before the
     // retire); vsync late is V_BLANK interrupt to notification sent; gpu-copy is a GPU frame copy's offer to its completion; attr is the
     // MAIR byte of the source and scanout views (mairAttribute).
     // All under the work-loop gate except stVblanks.
-    bool stats = false;
-    // Boot-args the swap path reads on every frame, parsed once at start (PE_parse_boot_argn scans the whole command line;
-    // five scans a frame were the display thread's top function in kprof on r7p5).
-    bool bootTransfer = false, bootEarlyRetire = true, bootRetire = false, bootCpuPresent = false, bootValidate = false;
+    static constexpr bool stats = true;
     uint64_t statsStart = 0, lastSubmit = 0, lastRetire = 0, deferredAt = 0;
     Span stQueue = {}, stFlipWait = {}, stMap = {}, stGpu = {}, stCache = {}, stScan = {}, stCopy = {}, stRetire = {},
          stInterval = {}, stClient = {}, stVsyncLate = {};
@@ -796,7 +764,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     uint32_t
         stFast = 0,
         stByte =
-            0;  // block-linear copies by TegraBlockSwizzle.h, and by the byte loop (switch-fast-swizzle off, or declined)
+            0;  // block-linear copies by TegraBlockSwizzle.h, and by the byte loop
     uint32_t stGpuCopies = 0, stGpuDeclined = 0;
     Span stGpuCopy = {};  // GPU frame copies done, offers declined, offer to completion
     // Once per window, just before a copy, the source is read alone (readPass): next to the copy's time it shows whether the copy
@@ -935,7 +903,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     // A present two or more refresh periods after the one before it, right after one that came a single period
     // after its own (a full-rate animation broke cadence; a steady 30 Hz client is not a miss), and while frames keep
     // coming (gaps under kGapUs; longer ones are a screen that went still): the CPU governor goes to its top point for
-    // a while (SwitchPower.h). Independent of switch-display-stats; its own stamps, under the gate.
+    // a while (SwitchPower.h). Independent of the stats; its own stamps, under the gate.
     uint64_t missLast = 0, missFrames = 0;
     void noteMissedFrame(uint64_t stamp)
     {
@@ -1442,9 +1410,6 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     }
     bool startVblank(IOWorkLoop *loop)
     {
-        unsigned enabled = 1;
-        PE_parse_boot_argn("switch-vblank", &enabled, sizeof(enabled));
-        if (!enabled) return false;
         if (!displayClocked()) panic("SwitchDisplay: DC A clock off or in reset, no vblank interrupt");
         IOService *nub = switch_interrupt_nub(kDisplayAInterrupt, false);
         IODeviceMemory *memory = IODeviceMemory::withRange(kDisplayAPA, kDcMapBytes);
@@ -1496,9 +1461,8 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     }
     void startVsync()
     {
-        unsigned hz = 0;
-        PE_parse_boot_argn("sheng-vsync", &hz, sizeof(hz));
-        if (!hz || hz > 240 || !primary || !bootMapping || vsyncTimer) return;
+        constexpr unsigned hz = 60;
+        if (!primary || !bootMapping || vsyncTimer) return;
         IOWorkLoop *loop = getWorkLoop();
         if (!loop) return;
         IOTimerEventSource *timer = IOTimerEventSource::timerEventSource(this, &NativeLegacyDisplay::vsyncFired);
@@ -1541,62 +1505,39 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     // native_legacy_video_mode accepts); an unrotated firmware framebuffer has nothing to turn.
     void startHardwareRotation()
     {
-        unsigned enabled = 1;
-        PE_parse_boot_argn("switch-hw-rotate", &enabled, sizeof(enabled));
-        unsigned twin = 0;
-        PE_parse_boot_argn("switch-scanout-double", &twin, sizeof(twin));
         PE_Video video = {};
-        if (enabled != 1 || !primary || !bootMapping || PE_current_console(&video) || video.v_rotate != 3) {
-            if (twin == 1 && primary)
-                IOLog("SwitchDisplay: switch-scanout-double=1 ignored: it needs the hardware rotation "
-                      "(switch-hw-rotate)\n");
-            return;
-        }
-        unsigned gpu = 0;
-        PE_parse_boot_argn("sheng-fb-gpu", &gpu, sizeof(gpu));
-        if (gpu == 1)
-            panic("SwitchDisplay: switch-hw-rotate=1 with sheng-fb-gpu=1: the GPU presenter writes the pitch "
-                  "layout");
-        if (!vblankSource)
-            panic("SwitchDisplay: switch-hw-rotate=1 needs DC A frame ends to confirm the latch (sheng-vsync or "
-                  "switch-vblank off)");
-        scanoutWC = bootFlag("switch-scanout-wc");
+        if (!primary || !bootMapping || PE_current_console(&video) || video.v_rotate != 3) return;
+        if (!vblankSource) panic("SwitchDisplay: the hardware rotation needs DC A frame ends to confirm the latch");
         blockMapping = mapScanout(bootMapping->getPhysicalAddress());
         if (!blockMapping || !blockMapping->getVirtualAddress() || blockMapping->getLength() < kNativeBlockBytes)
             panic("SwitchDisplay: cannot map the %#llx-byte block-linear scanout at %#llx", kNativeBlockBytes,
                   (uint64_t)bootMapping->getPhysicalAddress());
         hwRotate = true;
-        if (twin == 1) startDoubleBuffer();
+        startDoubleBuffer();
         // The memory type each CPU view of the scanout really got (MAIR byte: 0x44 write-combined, 0x00/0x04 device): the copy's
         // store rate depends on it.
         IOLog("SwitchDisplay: hardware rotation armed: block-linear %ux%u at %#llx%s, window A switches at the "
               "first client frame; "
-              "memory type %#x (pitch view %#x%s)\n",
+              "memory type %#x (pitch view %#x)\n",
               kNativeBlockWidth, kNativeBlockHeight, (uint64_t)bootMapping->getPhysicalAddress(),
               !doubleBuffer       ? ""
               : ring.buffers == 3 ? " and two more buffers (triple-buffered, latest frame wins)"
                                   : " and a second buffer (double-buffered)",
               mairAttribute(reinterpret_cast<const void *>(blockMapping->getVirtualAddress())),
-              mairAttribute(reinterpret_cast<const void *>(bootMapping->getVirtualAddress())),
-              scanoutWC ? ", switch-scanout-wc" : "");
+              mairAttribute(reinterpret_cast<const void *>(bootMapping->getVirtualAddress())));
     }
-    // A kernel view of a block-linear scanout surface (kNativeBlockBytes at physical address pa), write-combined. As before, the cache
-    // mode is asked for at map time on a plain device range. With switch-scanout-wc=1 it is also fixed when the descriptor is made:
-    // for a physical descriptor IOKit takes the memory type from the descriptor's own cache mode (the default, for RAM the kernel does
-    // not manage, is device memory), and the GPU driver found a map-time kIOMapWriteCombineCache alone left its mappings device
-    // memory (TegraGM20BUserClient.cpp kPoolCacheMode). Device memory takes every 16-byte store as its own bus write.
+    // A kernel view of a block-linear scanout surface (kNativeBlockBytes at physical address pa), write-combined from the
+    // descriptor on: for a physical descriptor IOKit takes the memory type from the descriptor's own cache mode (the default, for
+    // RAM the kernel does not manage, is device memory), and the GPU driver found a map-time kIOMapWriteCombineCache alone left its
+    // mappings device memory (TegraGM20BUserClient.cpp kPoolCacheMode). Device memory takes every 16-byte store as its own bus write.
     IOMemoryMap *mapScanout(uint64_t pa, uint64_t bytes = kNativeBlockBytes) const
     {
-        IOMemoryDescriptor *memory = nullptr;
-        if (scanoutWC) {
-            IOAddressRange range = {pa, bytes};
-            memory = IOMemoryDescriptor::withAddressRanges(
-                &range, 1,
-                IOOptionBits(kIODirectionInOut) | IOOptionBits(kIOMemoryTypePhysical64) |
-                    (IOOptionBits(kIOWriteCombineCache) << kIOMemoryBufferCacheShift),
-                TASK_NULL);
-        } else
-            memory = IODeviceMemory::withRange(pa, bytes);
+        IOAddressRange range = {pa, bytes};
+        IOMemoryDescriptor *memory = IOMemoryDescriptor::withAddressRanges(
+            &range, 1,
+            IOOptionBits(kIODirectionInOut) | IOOptionBits(kIOMemoryTypePhysical64) |
+                (IOOptionBits(kIOWriteCombineCache) << kIOMemoryBufferCacheShift),
+            TASK_NULL);
         IOMemoryMap *map = memory ? memory->map(kIOMapAnywhere | kIOMapWriteCombineCache) : nullptr;
         OSSafeReleaseNULL(memory);
         return map;
@@ -1625,7 +1566,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
         }
         if (!mapping) {
             if (required)
-                panic("SwitchDisplay: switch-scanout-double=1: no mapped, physically contiguous %#llx-byte buffer "
+                panic("SwitchDisplay: no mapped, physically contiguous %#llx-byte buffer "
                       "below 4 GiB for surface %u (got %#llx, %#llx contiguous)",
                       kNativeBlockBytes, i, pa, (uint64_t)run);
             IOLog("SwitchDisplay: no physically contiguous %#llx-byte buffer below 4 GiB for surface %u (got %#llx, "
@@ -1645,7 +1586,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
         const unsigned buffers = startScanBuffer(2, false) ? 3 : 2;
         flipTimer = IOTimerEventSource::timerEventSource(this, &NativeLegacyDisplay::flipDeadline);
         if (!flipTimer || getWorkLoop()->addEventSource(flipTimer) != kIOReturnSuccess)
-            panic("SwitchDisplay: switch-scanout-double=1: cannot add the flip deadline timer");
+            panic("SwitchDisplay: cannot add the flip deadline timer");
         doubleBuffer = true;
         ring.reset(buffers);
         // The SMMU probe's page tables (directory + tables), physically contiguous below 4 GiB; none: no probe.
@@ -2464,7 +2405,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     }
 
 public:
-    // Display power (SwitchBrightness; on unless switch-sleep=0), under the work-loop gate. Off, once the panel is asleep: FRAME_END and V_BLANK
+    // Display power (SwitchBrightness; on unless switch-no-sleep), under the work-loop gate. Off, once the panel is asleep: FRAME_END and V_BLANK
     // masked (no display interrupt, so idle cores stay in WFI) and the controller stopped at the end of the frame (hekate
     // _di_dc_video_disable_config, without its power gating, so the restart needs no re-init). DSI stays in video mode. On: continuous
     // display again, then the same interrupts as before; TegraPanel's next command waits for the first frame end and panics without it.
@@ -2515,7 +2456,7 @@ public:
     bool beginSuspend()
     {
         if (!dc || !vblankSource)
-            panic("SwitchDisplay: SC7 needs the DC A interrupt (sheng-vsync, switch-vblank)");
+            panic("SwitchDisplay: SC7 needs the DC A interrupt");
         if (hwSuspended) panic("SwitchDisplay: tegra_display_suspend twice without tegra_display_resume");
         return !scanoutStopped;
     }
@@ -2625,7 +2566,6 @@ public:
         stopGpuCopy();
         stopCopyLoop();
         stopVsync();
-        forgetMappings();
         if (logicalPM) {
             PMstop();
             logicalPM = false;
@@ -2640,13 +2580,6 @@ public:
         stopGpuCopy();
         stopCopyLoop();
         stopVsync();
-        if (IOWorkLoop *loop = getWorkLoop())
-            loop->runAction(
-                [](OSObject *owner, void *, void *, void *, void *) -> IOReturn {
-                    static_cast<NativeLegacyDisplay *>(owner)->forgetMappings();
-                    return kIOReturnSuccess;
-                },
-                this);
         transferred = false;
         for (auto &entry : validated) entry = nullptr;
         gpuRequest = nullptr;
@@ -2674,28 +2607,9 @@ public:
         Setter setter = reinterpret_cast<Setter *>(*reinterpret_cast<void **>(this))[354];
         setter(this, &request, false);
     }
-    static bool bootFlag(const char *name)
-    {
-        unsigned value = 0;
-        return PE_parse_boot_argn(name, &value, sizeof(value)) && value == 1;
-    }
     bool start(IOService *provider) override
     {
-        unsigned early = 1;
-        PE_parse_boot_argn("sheng-early-retire", &early, sizeof(early));
-        bootEarlyRetire = early == 1;
-        bootTransfer = bootFlag("offline-legacy-transfer");
-        bootRetire = bootFlag("offline-legacy-retire");
-        bootCpuPresent = bootFlag("offline-legacy-cpu-present");
-        bootValidate = bootFlag("offline-legacy-validate");
         if (!startDisplay(provider)) return false;
-        stats = bootFlag("switch-display-stats");
-        fastSwizzle = bootFlag("switch-fast-swizzle");
-        keepMappings = bootFlag("switch-surface-maps");
-        unsigned waitMs = 100;
-        if (PE_parse_boot_argn("switch-gpu-wait-ms", &waitMs, sizeof(waitMs)) && waitMs >= 1 && waitMs <= 1000)
-            gpuWaitNs = (uint64_t)waitMs * 1000000ULL;
-        if (bootFlag("switch-frame-scan")) scanBudget = kScanFrames;
         startVsync();
         startHardwareRotation();
         if (IOWorkLoop *loop = hwRotate ? getWorkLoop() : nullptr)
@@ -2720,12 +2634,7 @@ public:
     {
         if (!IOMobileFramebufferLegacy::start(provider)) return false;
         if (primary && bootMapping) announcePoweredByFirmware();
-        unsigned enabled = 0;
-        PE_parse_boot_argn("offline-legacy-pm", &enabled, sizeof(enabled));
-        if (!enabled) return true;
-        unsigned phase = 0;
-        PE_parse_boot_argn("offline-legacy-phase", &phase, sizeof(phase));
-        if (enabled != 1 || phase != 4 || !provider || !bootMapping || !primary) {
+        if (!provider || !bootMapping || !primary) {
             native_legacy_pm_observed(1, kIOReturnNotReady, 0);
             IOMobileFramebufferLegacy::stop(provider);
             return false;
@@ -2774,14 +2683,6 @@ public:
     // GOP mode. Unknown backend calls retain their stop-with-caller guards.
     void registerService(IOOptionBits options = 0) override
     {
-        unsigned enabled = 0;
-        PE_parse_boot_argn("offline-legacy-register", &enabled, sizeof(enabled));
-        if (enabled != 1) native_legacy_backend_guard(84, this, __builtin_return_address(0));
-        // Nothing in the family publishes IOMFBDisplayRefresh (its platform subclass does), and without it the render server keeps its own
-        // 1/60 s heartbeat (int-210: refresh=0). Publish it before any client can find the display, only when sheng-vsync asks for more.
-        unsigned hz = 0;
-        PE_parse_boot_argn("sheng-vsync", &hz, sizeof(hz));
-        if (primary && hz > 60 && hz <= 240) native_legacy_set_refresh_properties(this);
         IOService::registerService(options);
         native_legacy_registration_observed(this);
     }
@@ -2808,7 +2709,7 @@ public:
     }
     void kickOnce()
     {
-        if (!bootTransfer || transferred || !logicalPM || !bootMapping || !primary) return;
+        if (transferred || !logicalPM || !bootMapping || !primary) return;
         // Retiring at the latch, the head may be a swap already on screen or asked for: the next one not yet taken goes.
         const OriginalLegacySwapRequest *request = latchRetire ? firstUntaken() : pendingSwapRequest();
         if (!request || !isValidated(request)) return;
@@ -2850,9 +2751,8 @@ public:
         }
         // r14-pacing: a newer accepted swap queued behind this one makes it stale: shown, it would hold the newer one back a frame
         // (or be replaced at once). Every accepted swap is a whole frame, so it retires unshown, as an early retire does at a
-        // copy's start, and the newest one goes. Only with early retirement (the default): with sheng-early-retire=0 every swap
-        // retires after its own copy.
-        if (bootEarlyRetire && !latchRetire) {
+        // copy's start, and the newest one goes.
+        if (!latchRetire) {
             const OriginalLegacySwapRequest *first = request;
             for (const OriginalLegacySwapRequest *next = queuedAfter(request); next && isValidated(next);
                  next = queuedAfter(request)) {
@@ -2914,7 +2814,6 @@ public:
             __asm__ volatile("dsb sy" ::: "memory");
             noteTaken(request, kickAt);  // before the flip, which carries it to the present
             if (block) presentBlock();
-            shadowValid = false;
             transferred = true;
             native_legacy_frame_observed(1, 0, 0, 0, 0, 0);
             {
@@ -2967,7 +2866,6 @@ public:
         if (!gpuBypass && native_legacy_gpu_offer(this, memory, sourceStride, width, height)) {
             // The GPU writes the scanout memory behind the CPU's back: the differential copy's picture of it is stale from now on.
             native_legacy_swap_stage(1);
-            shadowValid = false;
             gpuRequest = request;
             gpuLength = length;
             transferred = true;
@@ -2976,7 +2874,7 @@ public:
             // frame's memory, the previous frame's copy has finished (transferred held this one back), and the next swap still waits for
             // the copy because transferred stays set until finishGpuSwap.
             noteTaken(request, kickAt);
-            if (bootEarlyRetire && !latchRetire && retireSwap(request, true)) {
+            if (!latchRetire && retireSwap(request, true)) {
                 gpuRetired = true;
                 native_legacy_early_retires = native_legacy_early_retires + 1;
             }
@@ -3027,13 +2925,6 @@ public:
             native_legacy_transfer_observed(kIOReturnBadArgument, request, 0);
             return;
         }
-        if (scanBudget) {
-            const uint64_t scanAt = stats ? mach_absolute_time() : 0;
-            --scanBudget;
-            scanFrame(sourceAddress, source->getLength(), sourceStride, width, height,
-                      kScanFrames - scanBudget <= kColorFrames);
-            if (stats) stScan.add(mach_absolute_time() - scanAt);
-        }
         if (!native_legacy_prepare_scanout()) {
             releaseSource();
             native_legacy_transfer_observed(kIOReturnNotReady, request, 0);
@@ -3047,32 +2938,6 @@ public:
         uint64_t copyStart;
         __asm__ volatile("isb\n\tmrs %0, cntpct_el0" : "=r"(copyStart));
         uint64_t stored = UINT64_MAX;
-        {
-            // Store only what changed since the previous frame (the scanout memory is slow device memory).
-            uint64_t need = (uint64_t)width * height * 4;
-            // Differential copy is opt-in (sheng-fb-diff=1): on hardware it reads the whole source every frame and was not faster
-            // than the plain copy (143-285 ms per swap either way), and the first boots with it were followed by an unresponsive
-            // lock screen that disappeared with the plain copy (int-005). Those times are UniXNU-sheng's, another device; the
-            // Switch's own copy time is the "SwitchDisplay: ... copy" line noteCopy logs.
-            static int diffOff = -1;
-            if (diffOff < 0) {
-                unsigned v = 0;
-                PE_parse_boot_argn("sheng-fb-diff", &v, sizeof v);
-                diffOff = (v != 1);
-            }
-            if (!video.v_rotate && !diffOff && !shadow && need <= (64ull << 20)) {
-                shadow = IOMallocAligned((vm_size_t)need, 16384);
-                if (shadow) {
-                    shadowBytes = need;
-                    shadowValid = false;
-                }
-            }
-            if (!video.v_rotate && !diffOff && shadow && shadowBytes >= need)
-                stored = native_legacy_copy_diff(reinterpret_cast<volatile void *>(bootMapping->getVirtualAddress()),
-                                                 bootMapping->getLength(), video.v_rowBytes, sourceAddress,
-                                                 source->getLength(), sourceStride, width, height, shadow, shadowValid);
-            if (stored != UINT64_MAX) shadowValid = true;
-        }
         if (stored == UINT64_MAX && hwRotate) {
             // One unrotated swizzling pass; the first such frame switches window A under it (latched at a frame boundary;
             // single-buffered, the frame scanned while this copy runs shows the new bytes through the old pitch window once).
@@ -3089,7 +2954,6 @@ public:
             presentBlock();
         }
         if (stored == UINT64_MAX) {
-            shadowValid = false;
             if (!native_legacy_scanout_copy(reinterpret_cast<volatile void *>(bootMapping->getVirtualAddress()),
                                             bootMapping->getLength(), video, sourceAddress, source->getLength(),
                                             sourceStride, width, height)) {
@@ -3131,43 +2995,14 @@ public:
             deferredAt = 0;
         }
     }
-    // The kernel mapping of a surface's memory for its copy. Kept (switch-surface-maps=1), it stays in surfaceMappings and owned is
-    // false; otherwise the caller releases it, as before.
+    // The kernel mapping of a surface's memory for its copy; the caller releases it.
     IOMemoryMap *sourceMapping(IOMemoryDescriptor *memory, bool &owned)
     {
-        owned = !keepMappings;
-        if (owned) return memory->map(kIOMapAnywhere | kIOMapReadOnly);
-        SurfaceMapping *oldest = &surfaceMappings[0];
-        for (auto &entry : surfaceMappings) {
-            if (entry.memory == memory) {
-                entry.used = ++surfaceUses;
-                return entry.map;
-            }
-            if (entry.used < oldest->used) oldest = &entry;
-        }
-        IOMemoryMap *map = memory->map(kIOMapAnywhere | kIOMapReadOnly);
-        if (!map || !map->getVirtualAddress()) {
-            OSSafeReleaseNULL(map);
-            return nullptr;
-        }
-        forgetMapping(*oldest);
-        memory->retain();
-        *oldest = {memory, map, ++surfaceUses};
-        if (stats) ++stNewMaps;
-        return map;
+        owned = true;
+        return memory->map(kIOMapAnywhere | kIOMapReadOnly);
     }
-    void forgetMapping(SurfaceMapping &entry)
-    {
-        OSSafeReleaseNULL(entry.map);
-        OSSafeReleaseNULL(entry.memory);
-        entry = {};
-    }
-    void forgetMappings()
-    {
-        for (auto &entry : surfaceMappings) forgetMapping(entry);
-    }
-    // With CA on Metal (tegra-gpu=4) the GPU renders the surface, and CA may swap it before the GPU is done. The GPU is not IO-coherent:
-    // wait for its submitted work (at most switch-gpu-wait-ms, 100 by default; later, the frame shows torn), then drop the mapping's
+    // With CA on Metal the GPU renders the surface, and CA may swap it before the GPU is done. The GPU is not IO-coherent:
+    // wait for its submitted work (at most kGpuWaitNs; later, the frame shows torn), then drop the mapping's
     // cache lines (the frame copied from the same surface a few swaps ago is still in them) so every read after sees DRAM. No GPU client:
     // returns at once, no cache operation. With the stats the two are timed apart: the wait alone (a zero-length range), then the same
     // clean+invalidate done here (not a second zero-timeout sync: gpu.c panics on any sync timeout, and a submission made in between
@@ -3178,48 +3013,23 @@ public:
         timedOut = false;
         if (!tegra_gm20b_sync_for_cpu) return;
         if (!stats) {
-            tegra_gm20b_sync_for_cpu(address, bytes, gpuWaitNs);
+            tegra_gm20b_sync_for_cpu(address, bytes, kGpuWaitNs);
             return;
         }
         const uint64_t waitAt = mach_absolute_time();
-        timedOut = tegra_gm20b_sync_for_cpu(address, 0, gpuWaitNs) != 0;
+        timedOut = tegra_gm20b_sync_for_cpu(address, 0, kGpuWaitNs) != 0;
         const uint64_t cacheAt = mach_absolute_time();
         cleanInvalidate(address, bytes);
         gpu = cacheAt - waitAt;
         cache = mach_absolute_time() - cacheAt;
     }
-    // The two content scans read every pixel again, byte by byte; they only describe the first frames (the probe keeps kScanFrames,
-    // and the colours of the first kColorFrames only, so the colour pass stops there).
-    static void scanFrame(const void *source, uint64_t bytes, uint64_t stride, uint32_t width, uint32_t height,
-                          bool colors)
-    {
-        uint64_t scan[5];
-        if (native_legacy_frame_scan(source, bytes, stride, width, height, scan))
-            native_legacy_frame_observed(0, scan[0], scan[1], scan[2], scan[3], scan[4]);
-        uint32_t found[4];
-        uint64_t counts[4], other = 0;
-        if (colors && native_legacy_frame_colors(source, bytes, stride, width, height, found, counts, &other))
-            native_legacy_frame_colors_observed(found, counts, other);
-    }
     // The block-linear pass into target: kSwizzleFast, kSwizzleByte or kSwizzleFailed. Both loops write the same bytes;
-    // native_legacy_block_layout (the caller's check) bounds them, and the fast one (switch-fast-swizzle=1) declines a source whose
-    // address or row stride is not 16-byte aligned, or a target not 512-byte aligned (said once).
+    // native_legacy_block_layout (the caller's check) bounds them.
     enum Swizzled { kSwizzleFailed, kSwizzleFast, kSwizzleByte };
     Swizzled swizzle(IOMemoryMap *target, const void *source, uint64_t bytes, uint64_t stride, uint32_t width,
                      uint32_t height) const
     {
         void *out = reinterpret_cast<void *>(target->getVirtualAddress());
-        if (fastSwizzle) {
-            if (tegra_block_swizzle_aligned(out, source, stride, height / 8, width / 16, kNativeBlockRow))
-                return kSwizzleFast;
-            static bool told;
-            if (!__atomic_exchange_n(&told, true, __ATOMIC_RELAXED))
-                IOLog("SwitchDisplay: switch-fast-swizzle declined: source offset %#llx, stride %llu (both need "
-                      "16-byte alignment), "
-                      "target offset %#llx (needs 512); the byte loop copies instead\n",
-                      (unsigned long long)((uintptr_t)source & 0xfff), (unsigned long long)stride,
-                      (unsigned long long)((uintptr_t)out & 0xfff));
-        }
         return native_legacy_block_copy(out, target->getLength(), source, bytes, stride, width, height)
                    ? kSwizzleByte
                    : kSwizzleFailed;
@@ -3247,23 +3057,16 @@ public:
         __asm__ volatile("isb\n\tmrs %0, cntpct_el0" : "=r"(end));
         return end - start;
     }
-    // switch-display-async: after startHardwareRotation, which it needs.
+    // After startHardwareRotation, which it needs.
     void startCopyLoop()
     {
-        unsigned mode = 0;
-        PE_parse_boot_argn("switch-display-async", &mode, sizeof(mode));
-        if (!mode || !primary) return;
-        if ((mode != 1 && mode != 2) || !hwRotate) {
-            IOLog("SwitchDisplay: switch-display-async=%u ignored: it is 1 or 2 and needs the hardware rotation "
-                  "(switch-hw-rotate)\n",
-                  mode);
-            return;
-        }
+        constexpr unsigned mode = 2;
+        if (!primary || !hwRotate) return;
         copyLoop = IOWorkLoop::workLoop();
         copySource =
             copyLoop ? IOInterruptEventSource::interruptEventSource(this, &NativeLegacyDisplay::copyFired) : nullptr;
         if (!copySource || copyLoop->addEventSource(copySource) != kIOReturnSuccess)
-            panic("SwitchDisplay: switch-display-async=%u: cannot start the copy thread", mode);
+            panic("SwitchDisplay: cannot start the copy thread");
         asyncCopy = mode;
     }
     // Stop and free, outside the gate: no copy may run once the scanout and kept mappings go. Removing the source closes the copy
@@ -3273,7 +3076,7 @@ public:
         if (!copyLoop) return;
         IOWorkLoop *loop = getWorkLoop();
         if (!loop)
-            panic("SwitchDisplay: switch-display-async: the display's work loop is gone before its copy thread "
+            panic("SwitchDisplay: the display's work loop is gone before its copy thread "
                   "stopped");
         loop->runAction(
             [](OSObject *owner, void *, void *, void *, void *) -> IOReturn {
@@ -3295,8 +3098,7 @@ public:
             },
             this);
     }
-    // Under the gate, a validated surface swap mapped and bounded: hand it to the copy thread. The probe's scans are decided here, so
-    // scanBudget stays under the gate.
+    // Under the gate, a validated surface swap mapped and bounded: hand it to the copy thread.
     void startCopy(const OriginalLegacySwapRequest *request, IOMemoryMap *source, bool ownedSource, uint64_t stride,
                    uint64_t allocation, uint32_t width, uint32_t height, uint64_t kickAt)
     {
@@ -3310,11 +3112,6 @@ public:
         job.allocation = allocation;
         job.width = width;
         job.height = height;
-        if (scanBudget) {
-            --scanBudget;
-            job.scan = true;
-            job.colors = kScanFrames - scanBudget <= kColorFrames;
-        }
         if (stats && stReadDue) {
             stReadDue = false;
             job.read = true;
@@ -3338,11 +3135,6 @@ public:
             job.status = kIOReturnAborted;
         else {
             syncForCpu(source, job.allocation, job.gpu, job.cache, job.timedOut);
-            if (job.scan) {
-                const uint64_t scanAt = mach_absolute_time();
-                scanFrame(source, job.source->getLength(), job.stride, job.width, job.height, job.colors);
-                job.scanned = mach_absolute_time() - scanAt;
-            }
             if (!native_legacy_prepare_scanout())
                 job.status = kIOReturnNotReady;
             else {
@@ -3379,7 +3171,6 @@ public:
                 stCache.add(job.cache);
                 stGpuTimeouts += job.timedOut;
             }
-            if (job.scan) stScan.add(job.scanned);
             if (job.read) stRead = job.readTicks;
             if (job.status == kIOReturnSuccess) {
                 stCopy.add(job.copy);
@@ -3452,15 +3243,14 @@ public:
         gpuBypass = true;
         kickSwapQueue();
     }
-    // switch-gpu-copy=1: after startHardwareRotation. The copy goes to the buffer window A does not scan, so it needs the second
+    // After startHardwareRotation. The copy goes to the buffer window A does not scan, so it needs the second
     // buffer; the GPU driver may still decline any frame (the CPU copies that one).
     void startGpuCopy()
     {
-        if (!bootFlag("switch-gpu-copy") || !primary) return;
+        if (!primary) return;
         if (!hwRotate || !doubleBuffer || !tegra_gm20b_scanout_copy) {
-            IOLog("SwitchDisplay: switch-gpu-copy=1 ignored: it needs switch-scanout-double=1, the hardware "
-                  "rotation and TegraGM20B's "
-                  "tegra_gm20b_scanout_copy%s\n",
+            IOLog("SwitchDisplay: no GPU copy: it needs the double-buffered scanout, the hardware rotation and "
+                  "TegraGM20B's tegra_gm20b_scanout_copy%s\n",
                   tegra_gm20b_scanout_copy ? "" : " (not linked)");
             return;
         }
@@ -3469,7 +3259,7 @@ public:
         gpuDeadline = IOTimerEventSource::timerEventSource(this, &NativeLegacyDisplay::gpuDeadlineFired);
         if (!loop || !gpuDoneSource || !gpuDeadline || loop->addEventSource(gpuDoneSource) != kIOReturnSuccess ||
             loop->addEventSource(gpuDeadline) != kIOReturnSuccess)
-            panic("SwitchDisplay: switch-gpu-copy=1: cannot add the GPU copy's completion sources");
+            panic("SwitchDisplay: cannot add the GPU copy's completion sources");
         gpuCopy = true;
     }
     // Outside the gate. The GPU would still write a buffer that goes away with the rotation, and call back: no stop with a copy out.
@@ -3488,8 +3278,8 @@ public:
     }
     // Under the gate, in the kick, with a surface free: offer the swap's surface to the GPU for the buffer window A neither scans nor
     // may take (ring.target(), the one drawSurface() names; a flip may be out for another). Declined, the caller copies it on the CPU.
-    // Accepted, the swap retires now unless sheng-early-retire=0 (the compositor renders its next frame, into its other surface,
-    // while the GPU copies), and transferred holds the next swap until the completion has flipped window A.
+    // Accepted, the swap retires now (the compositor renders its next frame, into its other surface, while the GPU copies), and
+    // transferred holds the next swap until the completion has flipped window A.
     bool offerGpuCopy(const OriginalLegacySwapRequest *request, IOMemoryDescriptor *memory, uint64_t stride,
                       uint64_t allocation, uint32_t width, uint32_t height, uint64_t kickAt)
     {
@@ -3522,12 +3312,11 @@ public:
         __atomic_store_n(&gpuScanout, true, __ATOMIC_RELEASE);
         gpuDeadline->setTimeoutMS(kGpuCopyDeadlineMS);
         native_legacy_swap_stage(1);
-        shadowValid = false;
         gpuRequest = request;
         gpuLength = (uint64_t)width * height * 4;
         transferred = true;
         noteTaken(request, kickAt);
-        if (bootEarlyRetire && !latchRetire && retireSwap(request, true)) {
+        if (!latchRetire && retireSwap(request, true)) {
             gpuRetired = true;
             native_legacy_early_retires = native_legacy_early_retires + 1;
         }
@@ -3626,7 +3415,6 @@ public:
     // Hands the pending head to the unchanged family's completion. Leaves transferred alone: the callers decide when the next frame may go.
     bool retireSwap(const OriginalLegacySwapRequest *request, bool force)
     {
-        if (!(bootRetire || bootCpuPresent || force)) return false;
         if (!activateOnlyPendingSwap(request)) return false;
         untake(request);
         const uint64_t submitted = stats ? submittedAt(request) : 0;
@@ -3895,7 +3683,7 @@ public:
         OSObject *surface = nullptr;
         unsigned reason = 1;
         bool accepted = false;
-        if (bootValidate && logicalPM && primary && bootMapping && request) {
+        if (logicalPM && primary && bootMapping && request) {
             OSObject *surfaces[NativePlanes::kLayers] = {};
             memcpy(surfaces, bytes + NativePlanes::kSurfaces, sizeof(surfaces));
             uint32_t width = 0, height = 0;
@@ -4027,13 +3815,13 @@ public:
         const uintptr_t original = (*reinterpret_cast<uintptr_t *const *>(client))[kClientSlots];
         return reinterpret_cast<ExternalMethod>(original)(client, selector, args, dispatch, target, ref);
     }
-    // Unless switch-sleep=0 (SwitchBrightness.h switch_display_power_enabled, the same rule): with it the clients keep their original
-    // vtables, exactly as before display power existed.
+    // Unless switch-no-sleep (SwitchBrightness.h switch_display_power_enabled, the same rule): with it the clients keep their
+    // original vtables, exactly as before display power existed.
     static bool displaySleepEnabled()
     {
-        unsigned enabled = 1;
-        PE_parse_boot_argn("switch-sleep", &enabled, sizeof(enabled));
-        return enabled != 0;
+        unsigned off = 0;
+        PE_parse_boot_argn("switch-no-sleep", &off, sizeof(off));
+        return off == 0;
     }
     static void answerPowerRequests(IOUserClient *client)
     {
@@ -4048,9 +3836,6 @@ public:
     }
     bool startHardware() override
     {
-        unsigned enabled = 0;
-        PE_parse_boot_argn("offline-legacy-gop", &enabled, sizeof(enabled));
-        if (enabled != 1) return false;
         PE_Video video = {};
         IOService *provider = getProvider();
         if (!provider || PE_current_console(&video) || !native_legacy_video_mode(video)) return false;

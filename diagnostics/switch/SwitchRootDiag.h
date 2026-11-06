@@ -127,8 +127,8 @@ static void root_syscall(unsigned code, int error, int pid, uint64_t pc, uint64_
     if (switch_root_record[15] == 1 || error) root_screen();
 }
 /* Board drivers (GPIO, fan/thermal, battery) sleep on I2C transfers and wait for the GIC, so they
- * start on their own thread: the root mount never waits behind them. Each is on by default and can be
- * switched off with switch-<name>=0; a driver whose interrupt is missing panics with its own reason. */
+ * start on their own thread: the root mount never waits behind them. A driver whose interrupt is missing panics with
+ * its own reason. */
 #include <kern/kern_types.h>
 extern kern_return_t kernel_thread_start(thread_continue_t continuation, void *parameter, thread_t *new_thread);
 extern void thread_deallocate(thread_t thread);
@@ -140,28 +140,21 @@ extern int switch_touch_start(void);
 extern int switch_buttons_start(void);
 extern int switch_motion_start(void);
 extern int switch_sensors_start(void); /* thermalmonitord's HID temperature sensors, after SwitchThermal/SwitchBattery */
-extern int switch_als_start(void);       /* on unless switch-als=0; after SwitchTouch, which powers the sensor (LDO6) */
-extern int switch_bluetooth_start(void); /* no-op unless switch-bt=1; runs its bring-up on its own thread */
-extern int switch_joycon_start(void);    /* no-op unless switch-joycon-rail=1 */
-extern int switch_wlan_publish(void);    /* no-op unless switch-wlan=1; runs its bring-up on its own thread */
-extern int tegra_gm20b_probe(void);      /* no-op unless tegra-gpu=<stage>; runs its bring-up on its own thread */
-extern int tegra_host1x_probe(void);     /* no-op unless switch-host1x=1; own thread */
-extern int tegra_nvdec_probe(void);      /* no-op unless switch-nvdec=1; own thread, starts host1x itself */
-extern int tegra_nvenc_probe(void);      /* on with NVDEC (switch-nvdec=0 turns both off); own thread */
+extern int switch_als_start(void);       /* after SwitchTouch, which powers the sensor (LDO6) */
+extern int switch_bluetooth_start(void); /* no-op with switch-no-bt; runs its bring-up on its own thread */
+extern int switch_joycon_start(void);
+extern int switch_wlan_publish(void);    /* no-op with switch-no-wlan; runs its bring-up on its own thread */
+extern int tegra_gm20b_probe(void);      /* no-op with switch-no-gpu; runs its bring-up on its own thread */
+extern int tegra_nvdec_probe(void);      /* no-op with switch-no-nvdec; own thread, starts host1x itself */
+extern int tegra_nvenc_probe(void);      /* on with NVDEC (switch-no-nvdec turns both off); own thread */
 extern int tegra_vic_probe(void);        /* on by default; own thread, waits for NVDEC's bring-up to end */
 extern int tegra_nvjpg_probe(void);      /* on by default; own thread, waits for NVDEC's bring-up to end */
 extern int
-switch_audio_publish(void); /* null sink unless switch-audio=1|3; the Tegra backend sleeps on I2C1, PZ4 and the GIC */
+switch_audio_publish(void); /* null sink with switch-no-audio; the Tegra backend sleeps on I2C1, PZ4 and the GIC */
 extern int switch_suspend_start(void); /* after every board driver it suspends */
 extern int switch_usb_start(void); /* no-op without the ADT's /arm-io/usb-device; runs its bring-up on its own thread */
 extern int switch_watchdog_publish(void); /* the IOWatchdog launchd starts watchdogd for (NativeSwitchWatchdog) */
 extern int tegra_se_start(void);            /* SE2: known answers, kernel PRNG reseed, a timing run later; own thread */
-static int switch_board_enabled(const char *name)
-{
-    unsigned enabled = 1;
-    PE_parse_boot_argn(name, &enabled, sizeof(enabled));
-    return enabled != 0;
-}
 static void switch_board_thread(void *parameter __unused, wait_result_t result __unused)
 {
     /* First: returns at once and publishes the per-unit BD address before anything here can sleep. */
@@ -173,23 +166,18 @@ static void switch_board_thread(void *parameter __unused, wait_result_t result _
     /* After Bluetooth: rail pairing hands Joy-Cons the console's (fuse-derived) BD address. */
     if (switch_joycon_start()) printf("Switch: SwitchJoyCon did not start\n");
     if (switch_usb_start()) printf("Switch: SwitchUSB did not start\n");
-    if (switch_board_enabled("switch-gpio") && tegra_gpio_start()) printf("Switch: TegraGPIO did not start\n");
-    if (switch_board_enabled("switch-thermal") && switch_thermal_start())
-        printf("Switch: SwitchThermal did not start\n");
-    if (switch_board_enabled("switch-battery") && switch_battery_start())
-        printf("Switch: SwitchBattery did not start\n");
+    if (tegra_gpio_start()) printf("Switch: TegraGPIO did not start\n");
+    if (switch_thermal_start()) printf("Switch: SwitchThermal did not start\n");
+    if (switch_battery_start()) printf("Switch: SwitchBattery did not start\n");
     /* Right after its sources: the 38 services should exist before thermalmonitord first looks (it rebuilds a partial
      * list only every 20 s) and before watchdogd's open asks for them (it waits for them, at most 20 s). */
     if (switch_sensors_start()) printf("Switch: SwitchSensors did not start\n");
-    if (switch_board_enabled("switch-touch") && switch_touch_start()) printf("Switch: SwitchTouch did not start\n");
-    if (switch_board_enabled("switch-buttons") && switch_buttons_start())
-        printf("Switch: SwitchButtons did not start\n");
+    if (switch_touch_start()) printf("Switch: SwitchTouch did not start\n");
+    if (switch_buttons_start()) printf("Switch: SwitchButtons did not start\n");
     if (switch_als_start()) printf("Switch: SwitchALS did not start\n");
-    if (switch_board_enabled("switch-motion") && switch_motion_start())
-        printf("Switch: SwitchMotion did not start\n");
+    if (switch_motion_start()) printf("Switch: SwitchMotion did not start\n");
     if (switch_wlan_publish()) printf("Switch: Wi-Fi driver not started\n");
     if (tegra_gm20b_probe()) printf("Switch: TegraGM20B did not start\n");
-    if (tegra_host1x_probe()) printf("Switch: TegraHost1x did not start\n");
     if (tegra_nvdec_probe()) printf("Switch: TegraNVDEC did not start\n");
     if (tegra_nvenc_probe()) printf("Switch: TegraNVENC did not start\n");
     if (tegra_vic_probe()) printf("Switch: TegraVIC did not start\n");
@@ -207,18 +195,12 @@ static void switch_board_start(void)
 }
 void switch_root_boot_prepare(void)
 {
-    int enabled = 0, files = 0, legacy = 0;
-    if (!PE_parse_boot_argn("switch-root-boot", &enabled, sizeof(enabled)) || enabled != 1)
-        panic("native root boot requires explicit switch-root-boot=1");
     root_boot_enabled = 1;
     switch_root_record[0] = UINT64_C(0x53574348524f4f54);
     switch_root_record[1] = 1;
     switch_root_record[8] = switch_root_record[11] = switch_root_record[12] = switch_root_record[13] =
         UINT32_MAX;
     switch_root_record[19] = switch_root_record[20] = UINT64_MAX;
-    (void)files;
-    (void)legacy;
-    if (switch_files_storage_profile() != SWITCH_STORAGE_RAW) panic("Switch: only switch-storage=raw is supported");
     /* The SD block driver owns the controller and finds the APFS partition;
      * IOKit and APFS publish the container and volumes from there. */
     int error = switch_block_publish();

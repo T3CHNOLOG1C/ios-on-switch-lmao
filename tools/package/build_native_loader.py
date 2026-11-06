@@ -175,16 +175,8 @@ def compress_window(
     return table, stream
 
 
-def emc_khz(command_line: str) -> int:
-    """The EMC rate the kernel's SwitchPMIC sets for this command line (switch-emc=1: 1600 MHz, switch-emc=<kHz>), which
-    the loader then sets before its copy (boot/loader/emc.h); 0 when the kernel leaves EMC alone."""
-    values = [v.split('=', 1)[1] for v in command_line.split() if v.startswith('switch-emc=')]
-    if not values or values[-1] in ('0', ''):
-        return 0
-    khz = 1600000 if values[-1] == '1' else int(values[-1], 0)
-    if not 204000 < khz <= 3200000:
-        raise ValueError(f'switch-emc={values[-1]}: not an EMC rate in kHz')
-    return khz
+# The EMC rate the kernel's SwitchPMIC sets (1600 MHz), which the loader sets before its copy (boot/loader/emc.h).
+EMC_KHZ = 1600000
 
 
 def stage_id(staged: bytes) -> int:
@@ -417,27 +409,18 @@ def window_checks(m: dict, payload: bytes, adt: bytes) -> dict:
         _require(hashlib.sha256(content).hexdigest() == expected['sha256'], 'root_boot sidecar contents changed: ' + key)
         (validate_data_seed if key == 'NativeDataSeed' else validate_trustcache)(content)
 
-    # The boot-args the loader gates on, and the line in the window's boot_args.
+    # The built-in line in the window's boot_args.
     words = m['command_line'].split()
-    _require([v for v in words if v.startswith('switch-sd-test=')] == ['switch-sd-test=1'], 'SD probe requires one explicit boot argument')
     command_at = m['boot_args_pa'] - m['phys_base'] + 0x6C
     encoded = m['command_line'].encode('ascii')
     _require(
         len(encoded) < 1024 and payload[command_at : command_at + 1024] == encoded + bytes(1024 - len(encoded)),
-        'SD boot argument manifest does not match the staged boot arguments',
-    )
-    _require(
-        [v for v in words if v.startswith('switch-sd-files=')] == ['switch-sd-files=1'],
-        'SD file boot argument requires the card-enabled loader',
+        'the boot argument manifest does not match the staged boot arguments',
     )
     _require(len(payload) <= 0x5000000, 'kernel staging overlaps the firmware exporter')
     _require(
-        [v for v in words if v.startswith('switch-root-boot=')] == ['switch-root-boot=1'],
-        'root_boot requires its exact explicit boot argument',
-    )
-    _require(
-        not any(v.startswith(('rd=', 'boot-uuid=', 'switch-user-test=', 'switch-block-test=')) for v in words),
-        'root_boot cannot use diagnostic PID1 or alternate root selection',
+        not any(v.startswith(('rd=', 'boot-uuid=')) for v in words),
+        'root_boot cannot use an alternate root selection',
     )
 
     _require(m['virt_base'] == 0xFFFFFFF00427C000, 'prelinked native profile requires its exact reviewed virtual base')
@@ -461,7 +444,7 @@ def window_checks(m: dict, payload: bytes, adt: bytes) -> dict:
         'SEED_ADT_OFFSET': seed_offset,
         'SEED_SOURCE_ADT_OFFSET': seed_source_offset,
         'STAGE_ID': None,
-        'EMC_KHZ': emc_khz(m['command_line']),
+        'EMC_KHZ': EMC_KHZ,
         'ARGS': m['boot_args_pa'],
         'ENTRY': m['entry_pa'],
         'CRC': 0,

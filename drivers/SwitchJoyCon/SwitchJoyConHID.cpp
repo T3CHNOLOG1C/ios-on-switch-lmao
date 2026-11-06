@@ -14,8 +14,8 @@
 //   * AppleGameControllerPersonality.kext Info.plist, "Nintendo JoyCon L/R IOService" and "... Property Merge" (and the
 //     same pair for Pro Controller 0x2009, SNES 0x2017, N64 0x2019): IOHIDEventDummyService on the IOHIDInterface,
 //     HIDServiceSupport merged into the IOHIDDevice. That kext is in the J120 kernelcache but not in the default
-//     prelink set, so prepare() adds the same personalities (IOHIDFamily owns both classes). When the kext is
-//     prelinked and switch-gc-personality=1, its own entries serve instead (switch_joycon_hid_select_personalities).
+//     prelink set, so prepare() adds the same personalities (IOHIDFamily owns both classes); when the kext is
+//     prelinked, its own entries are taken out (switch_joycon_hid_select_personalities).
 //   * HIDServiceSupport makes backboardd's HID event system create a user-space service for the IOHIDDevice
 //     (IOHIDEventServicePlugin.plugin matches HIDServiceSupport=true), and JoyConHIDServicePlugin.plugin (Matching
 //     PrimaryUsagePage 1 / PrimaryUsage 5, which the descriptor below declares) claims it:
@@ -113,7 +113,6 @@ constexpr size_t kStandardInput = 1 + 0x30;  // reports 0x21 and 0x30
 // in its controller database, and then sets HIDServiceSupport/GamepadHIDServiceSupport for
 // GenericGamepadHIDServicePlugin.
 constexpr char kAppleGCBundle[] = "com.apple.driver.AppleGameControllerPersonality";
-bool gApplePersonalities;  // switch-gc-personality=1 and the kext's personalities are in the catalogue
 
 const uint8_t kJoyConDescriptor[] = {
     0x05, 0x01, 0x09, 0x05, 0xa1, 0x01, 0x06, 0x01, 0xff, 0x85, 0x21, 0x09, 0x21, 0x75, 0x08, 0x95, 0x30, 0x81, 0x02,
@@ -490,19 +489,12 @@ void switch_joycon_hid_select_personalities(void)
     static bool done;
     if (done) return;
     done = true;
-    uint32_t wanted = 0;
-    PE_parse_boot_argn("switch-gc-personality", &wanted, sizeof(wanted));
     OSDictionary *byClass = catalogueMatch("IOClass", "AppleGCHIDEventDummyService");
     SInt32 generation = 0;
     OSOrderedSet *found = gIOCatalogue->findDrivers(byClass, &generation);
     const bool present = found && found->getCount();
     OSSafeReleaseNULL(found);
     OSSafeReleaseNULL(byClass);
-    if (wanted) {
-        if (!present) panic("SwitchJoyCon: switch-gc-personality=1 but %s is not prelinked", kAppleGCBundle);
-        gApplePersonalities = true;
-        return;
-    }
     if (!present) return;
     static const char *const keys[] = {kIOPersonalityPublisherKey, kCFBundleIdentifierKey};
     for (const char *key : keys) {
@@ -532,8 +524,7 @@ void switch_joycon_hid_prepare(void)
         if (registered != kOSReturnSuccess)
             panic("SwitchJoyCon: registering SwitchJoyConDevice failed: %#x", registered);
 
-        // With switch-gc-personality=1 the prelinked kext's own Nintendo entries serve instead.
-        if (!gApplePersonalities) addNintendoPersonalities();
+        addNintendoPersonalities();
         addButtonsPersonality();
         ready = true;
     }

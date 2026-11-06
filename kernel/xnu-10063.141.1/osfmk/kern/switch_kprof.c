@@ -1,6 +1,6 @@
 /*
  * Switch kernel sampling profiler: where the CPU goes, kernel_task included, in the unified log every 10 s.
- * Off unless asked: boot-arg switch-diag=3 (bit 1; kprof_init).
+ * Off unless built in: kprof_wanted (kprof_init).
  *
  * Sampling. Each CPU takes one sample about every 4 ms from its own running timer (RUNNING_TIMER_SWITCH_KPROF).
  * Running timers are armed only while a non-idle thread runs, so an idle CPU is never woken for a sample and the cost
@@ -1915,21 +1915,20 @@ kprof_function_starts(void)
 	kprof_nstarts = n;
 }
 
+/*
+ * r16-idle: off unless a measuring build sets this. Running, kprof costs a timer interrupt per 4 ms of CPU work, and
+ * every 10 s a cross-call to every CPU (each runs the clock probe with interrupts masked), the merge and about 14 log
+ * lines, the one periodic wakeup an idle system would take from this file. Off, the hooks (running timer, page-in
+ * waits) see kprof_ready false and return; the user trap line and the footprint breakdown below are per event and stay
+ * on. Not a boot-arg: a release must not be able to turn it on.
+ */
+static bool kprof_wanted = false;
+
 static void
 kprof_init(void)
 {
-	unsigned int diag = 0;
-
-	/*
-	 * r16-idle: on only when asked. Running, kprof costs a timer interrupt per 4 ms of CPU work, and every 10 s a
-	 * cross-call to every CPU (each runs the clock probe with interrupts masked), the merge and about 14 log lines,
-	 * the one periodic wakeup an idle system would take from this file. Asked for by bit 1 of the existing
-	 * switch-diag boot-arg: switch-diag=3 is the native text console (bit 0, SwitchDiag.c) plus kprof. Off, the
-	 * hooks (running timer, page-in waits) see kprof_ready false and return; the user trap line and the footprint
-	 * breakdown below are per event and stay on.
-	 */
-	if (!PE_parse_boot_argn("switch-diag", &diag, sizeof(diag)) || !(diag & 2)) {
-		os_log(OS_LOG_DEFAULT, "SwitchKprof: off (switch-diag=3 turns it on)");
+	if (!kprof_wanted) {
+		os_log(OS_LOG_DEFAULT, "SwitchKprof: off");
 		return;
 	}
 	kprof_ncpus = MIN((unsigned int)ml_get_max_cpu_number() + 1, KPROF_MAX_CPUS);

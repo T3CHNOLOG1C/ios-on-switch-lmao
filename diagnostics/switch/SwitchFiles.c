@@ -25,23 +25,9 @@ static unsigned attempted;
 static struct switch_gpt_workspace gpt_workspace;
 static struct switch_raw_apfs_partition raw_partitions[SWITCH_GPT_MAX_ENTRIES];
 static uint32_t raw_partition_count;
-static int storage_profile = SWITCH_STORAGE_INVALID;
-static int storage_profile_parsed;
-static void parse_storage_profile(void)
-{
-    char mode[32] = {0};
-    storage_profile = SWITCH_STORAGE_FAT;
-    if (PE_parse_boot_arg_str("switch-storage", mode, sizeof(mode))) {
-        if (mode[0] == 'r' && mode[1] == 'a' && mode[2] == 'w' && !mode[3])
-            storage_profile = SWITCH_STORAGE_RAW;
-        else if (!(mode[0] == 'f' && mode[1] == 'a' && mode[2] == 't' && !mode[3]))
-            storage_profile = SWITCH_STORAGE_INVALID;
-    }
-    storage_profile_parsed = 1;
-}
+static const int storage_profile = SWITCH_STORAGE_RAW;
 int switch_files_storage_profile(void)
 {
-    if (!storage_profile_parsed) parse_storage_profile();
     return storage_profile;
 }
 struct reader {
@@ -236,11 +222,11 @@ void switch_files_probe(struct switch_sd_host *host)
 {
     if (attempted) return;
     attempted = 1;
-    int root_boot = 0;
 #if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
-    (void)PE_parse_boot_argn("switch-root-boot", &root_boot, sizeof(root_boot));
+    const int root_boot = 1;
+#else
+    const int root_boot = 0;
 #endif
-    if (!storage_profile_parsed) parse_storage_profile();
     switch_files_record[0] = SWITCH_FILES_MAGIC;
     switch_files_record[1] = 1;
     switch_files_record[2] = 1;

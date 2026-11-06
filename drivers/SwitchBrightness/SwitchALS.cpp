@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// The Switch OLED's ambient light sensor as iPadOS CoreBrightness's ALS. On by default; boot-arg switch-als=0 leaves it
-// off.
+// The Switch OLED's ambient light sensor as iPadOS CoreBrightness's ALS.
 //
 // Hardware: ROHM BH1730FVC on I2C2 (0x7000C400) at 0x29 (its fixed address, datasheet "0101001"), behind the OLED panel.
 //   * The same part, bus and address on every model: Atmosphere i2c_bus_device_map.inc (I2c2 Bh1730 0x29, fast mode,
@@ -425,7 +424,7 @@ void SwitchALS::deadlinePassed(OSObject *owner, IOTimerEventSource *sender)
     panic("SwitchALS: no DC A frame end in %u ms with the panel lit (display interrupt lost)", kClockDeadlineMS);
 }
 
-// Work loop: SwitchTouch never turned LDO6 on (switch-touch=0, or the panel never came up).
+// Work loop: SwitchTouch never turned LDO6 on (it did not start, or the panel never came up).
 void SwitchALS::supplyLate(OSObject *owner, IOTimerEventSource *)
 {
     auto *self = static_cast<SwitchALS *>(owner);
@@ -494,9 +493,7 @@ void SwitchALS::free()
 
 extern "C" int switch_als_start(void)
 {
-    unsigned enabled = 1;
-    PE_parse_boot_argn("switch-als", &enabled, sizeof(enabled));
-    if (!enabled || gALS) return 0;
+    if (gALS) return 0;
     IOService *resources = IOService::getResourceService();
     SwitchALS *candidate = OSTypeAlloc(SwitchALS);
     if (!resources || !candidate || !candidate->init() || !candidate->attach(resources) ||

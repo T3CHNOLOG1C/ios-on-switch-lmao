@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// drivers/TegraGM20B/TegraGM20BPushScan.h on the host: the kernel's tegra-gpu-stats method-stream reader over streams laid out
+// drivers/TegraGM20B/TegraGM20BPushScan.h on the host: the kernel's stats method-stream reader over streams laid out
 // as NVK writes them for GM20B (a Core Animation-like submission: the command buffer prologue, a pass into a pitch-linear
 // 720x1280 target, its draws in a push of their own, barriers, NVK's copy-engine WFI, a method continued across two pushes;
 // a multisampled pass; a push the kernel cannot read), checking every counter and each push's profile class. A push the

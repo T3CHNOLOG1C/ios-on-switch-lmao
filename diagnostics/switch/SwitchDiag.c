@@ -260,20 +260,8 @@ void switch_diag_process_event(int pid, const char *name, const char *event, int
 
 void switch_diag_init(const boot_args *args)
 {
-    int enabled = 0, cpus = 0;
-    /* Bit 0: this native console profile; bit 1 is kprof's (osfmk/kern/switch_kprof.c), so switch-diag=3 is both. */
-    if (!PE_parse_boot_argn("switch-diag", &enabled, sizeof(enabled)) || !(enabled & 1) ||
-        !PE_parse_boot_argn("cpus", &cpus, sizeof(cpus)))
-        return;
-    if (cpus != 1) {
-        int root_boot = 0, sheng_smp = 0, native_smp = 0;
-#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT && !SWITCH_SD_MODEL
-        (void)PE_parse_boot_argn("switch-root-boot", &root_boot, sizeof(root_boot));
-        (void)PE_parse_boot_argn("sheng-smp", &sheng_smp, sizeof(sheng_smp));
-        (void)PE_parse_boot_argn("switch-smp", &native_smp, sizeof(native_smp));
-#endif
-        if (!switch_native_cpu_profile_matches(cpus, root_boot, sheng_smp, native_smp)) return;
-    }
+    const int cpus = (int)ml_get_max_cpu_number() + 1;
+    if (!switch_native_cpu_profile_matches(cpus)) return;
     /* The native verbose profile belongs exclusively to XNU's video console.
      * Keep observations in RAM, but never map or arm the custom HUD renderer. */
     if (args->Video.v_baseAddr == SWITCH_FB_PA && args->Video.v_display == 0 && args->Video.v_rowBytes == 2880 &&
@@ -293,17 +281,6 @@ void switch_diag_init(const boot_args *args)
     switch_diag_record.magic = UINT64_C(0x53574348584e5531); /* SWCHXNU1 */
     switch_diag_record.framebuffer_va = mapped;
     switch_diag_record.ready = 1;
-    int verbose = 0;
-    if (PE_parse_boot_argn("switch-console", &verbose, sizeof(verbose)) && verbose == 1) {
-        console_enabled = 1;
-        console_used = 1;
-        for (unsigned i = 0; i < CONSOLE_ROWS; i++) console_blank(i);
-    }
-    int user_test = 0;
-    if (PE_parse_boot_argn("switch-user-test", &user_test, sizeof(user_test)) && user_test == 1) {
-        switch_user_record[0] = UINT64_C(0x5357434855534552);
-        switch_user_record[1] = 1;
-    }
     switch_diag_clear(framebuffer);
     text(24, "SWITCH NATIVE XNU DIAGNOSTICS", 104, SWITCH_WHITE);
     text(64, "XNU VM INITIALIZED", 104, SWITCH_GREEN);
@@ -360,10 +337,10 @@ __attribute__((no_stack_protector)) void switch_diag_panic(const char *format, v
     if (native_text_console) {
         const int first = !switch_diag_record.panicked;
         switch_diag_record.panicked = 1;
-        /* Once the GUI took the screen, SwitchPanicSave.c draws the panic itself (and saves the record with boot-arg
-         * switch-panic-save): taking XNU's console back has gc_enable kalloc its text buffers with interrupts off, which
-         * zalloc_ext's MACH_ASSERT turns into a nested panic that leaves console output disabled. Before the GUI, XNU's
-         * console is still on and shows the panic. */
+        /* Once the GUI took the screen, SwitchPanicSave.c draws the panic itself (and saves the record): taking XNU's
+         * console back has gc_enable kalloc its text buffers with interrupts off, which zalloc_ext's MACH_ASSERT turns
+         * into a nested panic that leaves console output disabled. Before the GUI, XNU's console is still on and shows
+         * the panic. */
         if (first && !switch_panic_begin(format, args, caller, graphics_owns_display != 0) && graphics_owns_display) {
             graphics_owns_display = 0;
             PE_initialize_console(NULL, kPEAcquireScreen);

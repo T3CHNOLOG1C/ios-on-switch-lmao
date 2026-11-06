@@ -14,7 +14,7 @@ struct NGPPresent {
 struct NGPTransfer {
     uint64_t sequence, bytes;
 };
-// GPU hand-off (boot-arg sheng-fb-gpu=1): the display driver offers a finished frame instead of copying it. A privileged client waits for it
+// GPU hand-off (not attached on this port): the display driver offers a finished frame instead of copying it. A privileged client waits for it
 // (selector 2: the frame's pages are mapped read/write into the caller, at address), lets the GPU copy it into the scanout mapping (client
 // memory type 1, writable) and then completes it (selector 3), which retires the swap. Nothing here copies pixels.
 enum {

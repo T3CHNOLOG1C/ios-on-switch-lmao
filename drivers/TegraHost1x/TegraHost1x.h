@@ -16,7 +16,7 @@ extern "C" {
 
 enum {
     TEGRA_HOST1X_OK = 0,
-    TEGRA_HOST1X_ENODEV = -19,  // not started (no client asked: switch-nvdec=0 and no switch-host1x) or failed
+    TEGRA_HOST1X_ENODEV = -19,  // not started (no client asked: switch-no-nvdec) or failed
     TEGRA_HOST1X_EINVAL = -22,
     TEGRA_HOST1X_ENOMEM = -12,
     TEGRA_HOST1X_ETIMEDOUT = -60,  // the engine did not reach the threshold in time (its interrupt was not lost)
@@ -96,9 +96,6 @@ void tegra_nvdec_resume(void);
 
 // Channel 0 state for a failure line: DMAGET, DMAPUT, CBSTAT (class and offset), CBREAD (last word).
 void tegra_host1x_describe(char *buffer, size_t size);
-
-// Boot hook: inert unless the boot-arg switch-host1x is non-zero (TegraNVDEC, on by default, starts host1x itself).
-int tegra_host1x_probe(void);
 
 #ifdef __cplusplus
 }

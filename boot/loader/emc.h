@@ -3,7 +3,7 @@
 #include <stdint.h>
 
 /* The EMC (DRAM) clock raised before the kernel window is copied, the way the kernel's TegraBPMP.c raises it at
- * SwitchPMIC start (switch-emc=1): hekate leaves DRAM at 204 MHz, so until then the loader's copy, XNU's early VM
+ * SwitchPMIC start: hekate leaves DRAM at 204 MHz, so until then the loader's copy, XNU's early VM
  * (pmap_startup) and IOKit start all run at an eighth of the bandwidth. Same requests (MRQ_EMC_DVFS_TABLE, then
  * MRQ_CLK on BPMP clock 0: GET_ALL_INFO "emc", GET_RATE, ENABLE, ROUND_RATE, SET_RATE, GET_RATE), same VDD_CORE gate
  * (MAX77620 SD0 over I2C5 at least L4T's emcb01_dvb_dvfs_table voltage), over L4T's T210 atomic channel (mail.c

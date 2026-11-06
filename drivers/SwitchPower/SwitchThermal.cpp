@@ -37,7 +37,7 @@
 //     tegra210b01-nx-common.dtsi): skin = max over {SoC, PCB} of (T * a + b * 1000) / 10000 + 500
 //     (m C); the trip level rises when skin reaches a trip and falls below trip - hysteresis; the
 //     fan gets the pwm-fan active_pwm of that level, out of active_pwm_max 256. Console is L4T's
-//     default profile; boot-arg switch-fan-profile=1 selects Handheld (quieter skin, louder fan).
+//     default profile, the one used; Handheld is its quieter-skin, louder-fan one.
 //
 // Fail-safe: start() runs the fan at kSafeDrive with MMIO only, before any I2C. A failed reading
 // (I2C error, wrong ID, open SoC diode, sensor found in shutdown) runs it at full speed until a
@@ -46,11 +46,11 @@
 // (the line cannot be released then; the fan is at full speed meanwhile). An ALERT line that keeps
 // firing without being released (more than kAlertBurst times in a second) panics with the GPIO state.
 //
-// CPU operating point (off unless switch-perf=1). XNU does no DVFS, so the A57 cluster otherwise stays
+// CPU operating point. XNU does no DVFS, so the A57 cluster otherwise stays
 // where hekate left it: 998.4 MHz on PLLX at 800 mV (SwitchClocks.h). Only from this service's own work
 // loop, once it has a good reading and the ALERT armed, the CPU goes on L4T's closed-loop DFLL with an on-demand
 // governor (the default, see "DFLL on demand" below), or climbs a short ladder of L4T rates on PLLX and stays there
-// (switch-cpu-mode=pll; also the fallback whenever the DFLL or its governor fails). Sources: "L4T" =
+// (boot-arg switch-no-dfll; also the fallback whenever the DFLL or its governor fails). Sources: "L4T" =
 // CTCaer/switch-l4t-kernel-4.9 2d0059fd; DT = switchroot tegra210b01-nx-pmic.dtsi / nx-common.dtsi.
 //   * L4T has no PLLX voltage for these rates on T210B01. Its PLL table (tegra210-dvfs.c:571-601,
 //     CPUB01_PLL_CVB_TABLE) is a flat 1120 mV from 1020 MHz, but set_cpu_dvfs_data() adds CVB_PLL_MARGIN
@@ -91,17 +91,17 @@
 //     hekate's note, does HOS (max77812.h M4_CFG). That is done before VDD_CPU moves. The DT's slew is
 //     5 mV/us; the 1 ms settle covers the slowest code (1.25 mV/us) for any step here. An ES2 MAX77812,
 //     which L4T trims first (:229-276), is refused.
-//   * Steps, one log line each with switch-perf-trace=1 (otherwise one line at the end): 1 relock PLLX at
+//   * Steps, one log line each with perfTrace (otherwise one line at the end): 1 relock PLLX at
 //     the boot dividers through PLLP_OUT4 (the mux path with nothing electrical changed), 2 M4 current limit,
-//     3 VDD_CPU 1120 mV at the boot clock, 4.. one rung each. switch-perf-steps=N stops after step N (0:
-//     read and report only), so a hardware test can stop below a failing step. switch-perf-trace=1 logs
-//     before every sub-step and then sleeps kTraceMS, after a kTraceDelayMS start delay, so the lagging
+//     3 VDD_CPU 1120 mV at the boot clock, 4.. one rung each. perfSteps = N stops after step N (0:
+//     read and report only), so a hardware test can stop below a failing step; both are set in source for such a
+//     test, never at boot. perfTrace logs before every sub-step and then sleeps kTraceMS, after a kTraceDelayMS start delay, so the lagging
 //     console has drawn the step in flight when anything stops; it holds the work loop meanwhile (ALERTs
 //     wait). Down: the clock first, then VDD_CPU. Other CPUs and interrupts keep running throughout: the
 //     super-clock mux switches glitch-free (L4T clk-super.c switches it under a spinlock with udelay(2)),
 //     the generic timer is not on CCLK, and TegraI2C serializes I2C5 with the GPU's VDD_GPU traffic (it
 //     writes M1_VOUT and EN_CTRL, never M4).
-//   * DFLL on demand (no switch-cpu-mode, the default): L4T's normal mode, the DFLL in closed loop (drivers/TegraDFLL,
+//   * DFLL on demand (the default): L4T's normal mode, the DFLL in closed loop (drivers/TegraDFLL,
 //     vendored clk-dfll.c), entered at the 1683 MHz CVB row and taken to 1785 MHz (Horizon's boost clock, the most this
 //     port ever runs: TEGRA_DFLL_CPU_MAX_HZ) only as measured at or under it (settleDfllTop: the first request after
 //     the loop closes can run a DFLL step high), then moved by SwitchPerfGovernor.cpp between the DFLL's own OPP rows
@@ -110,7 +110,7 @@
 //     launches ask; the boot holds the top until System Boot Complete. Each pair is L4T's: the DFLL's CVB voltage for
 //     that row, set by the DFLL itself over its I2C master. A rate the DFLL refuses logs one line and falls back to
 //     the PLL ladder below (today's fixed 1670 MHz at 1120 mV on this chip) for the rest of the boot.
-//   * switch-cpu-mode=dfll: the same DFLL, fixed at the measured top (the 1785 MHz row, else 1683), at the per-chip
+//   * governed false on the DFLL: the same DFLL, fixed at the measured top (the 1785 MHz row, else 1683), at the per-chip
 //     CVB voltage (roughly 875-1015 mV for CPU speedos 1850-1450). In both DFLL modes the thermal trips do not drop
 //     the clock; they set the DFLL's L4T voltage cap and floor indices (cap 1060 mV from 64 C, 1010 mV from 84 C,
 //     floor 800 mV below 20 C; 1 C hysteresis, tegra210b01-nx-common.dtsi dfll-cap-trip*/dfll-floor-trip0), and the
@@ -243,7 +243,7 @@ constexpr unsigned kFullDrive = 256;
 constexpr int kCriticalMilliC = 90000;
 constexpr unsigned kLevels = 10;
 
-// CPU operating point (switch-perf=1; see the top of the file).
+// CPU operating point (see the top of the file).
 constexpr unsigned kPerfMilliVolts = 1120;  // L4T's T210B01 CPU max_millivolts
 constexpr uint8_t kPerfVout = (kPerfMilliVolts - 250) / 5;
 constexpr unsigned kPllMarginPct = 20;  // over the per-chip DFLL CVB voltage, for a fixed clock
@@ -251,7 +251,7 @@ constexpr int kPerfTripMilliC = 64000;
 constexpr int kPerfHysteresisMilliC = 1000;               // L4T dfll-cap-trip0 hysteresis = <1000>
 constexpr uint32_t kPerfHoldMS = 5000;                    // shortest time from a drop to the next raise
 constexpr uint32_t kRailSettleMS = 1;                     // 520 mV at the slowest MAX77812 slew, 1.25 mV/us, is 416 us
-constexpr uint32_t kTraceMS = 400, kTraceDelayMS = 2000;  // switch-perf-trace=1 pacing
+constexpr uint32_t kTraceMS = 400, kTraceDelayMS = 2000;  // perfTrace pacing
 constexpr unsigned kStepRelock = 1, kStepCurrentLimit = 2, kStepRail = 3, kStepFirstRung = 4;
 
 // L4T's T210B01 CPU ladder above the boot clock: freq-table row, PLLX N and P code with M = 2 (top of the
@@ -279,7 +279,7 @@ constexpr unsigned kB01ProcessSpeedo = 1650;  // speedo-tegra210.c:52
 constexpr uint8_t kMax77812Version = 0x14, kMax77812M4Cfg = 0x32, kMax77812GlbCfg2 = 0x34;
 constexpr uint8_t kPeakCurrentMask = 0x70, kPeakCurrent7200mA = 7u << 4, kVersionEs2 = 4;
 
-// DFLL mode (switch-cpu-mode=dfll): the 1785 MHz CVB row (an exact multiple of the DFLL's 25.5 MHz step) and L4T's
+// DFLL mode: the 1785 MHz CVB row (an exact multiple of the DFLL's 25.5 MHz step) and L4T's
 // T210B01 thermal boundaries for the DFLL's floor and cap indices (dt-bindings/thermal/tegra210b01-trips.h
 // TEGRA210B01_DFLL_THERMAL_FLOOR_0 / _CAP_0 / _CAP_1; 1 C hysteresis as the DT trips).
 constexpr unsigned long kDfllRateHz = 1785000000UL;
@@ -401,8 +401,8 @@ class SwitchThermal : public IOService {
     uint64_t alertWindowStart = 0;
     bool alertArmed = false, sensorReady = false, announced = false, reportedFailure = false;
     bool reportedCritical = false;
-    // CPU operating point: wanted (switch-perf=1), raised now (VDD_CPU above the boot value), or settled
-    // for this boot (sensor lost, a raise refused or stopped by switch-perf-steps: never raised again). A
+    // CPU operating point: wanted, raised now (VDD_CPU above the boot value), or settled for this boot (sensor
+    // lost, a raise refused or stopped by perfSteps: never raised again). A
     // thermal trip only holds it down until perfHoldUntil.
     bool perfWanted = false, perfRaised = false, perfSettled = false, perfKept = false, perfTrace = false;
     bool perfRelocked = false, perfLimited = false;  // steps 1 and 2 are done once per boot (and SC7)
@@ -412,7 +412,7 @@ class SwitchThermal : public IOService {
     unsigned long dfllTopHz = kDfllRateHz;           // the top this boot measured at or under 1785 MHz
     IOInterruptEventSource *governor = nullptr;      // switchperf's signal: a software interrupt of this work loop
     unsigned dfllFloor = TEGRA_DFLL_FLOOR_COLD, dfllCap = TEGRA_DFLL_CAP_1010MV;  // the driver's boot defaults
-    unsigned perfRaises = 0, perfSteps = ~0u;                                     // switch-perf-steps
+    unsigned perfRaises = 0, perfSteps = ~0u;
     unsigned perfTop = 0, perfRung = 0;  // rungs this chip may use; the rung running now (0: boot clock)
     int cpuSpeedo = 0, cpuSpeedoId = 0, cpuProcess = 0;
     uint64_t perfHoldUntil = 0;         // mach_absolute_time() before which no raise happens
@@ -859,7 +859,7 @@ uint32_t SwitchThermal::rungBase(unsigned rung) const
 }
 
 // Moves the CPU up its ladder (top of the file): steps 1 and 2 once, then VDD_CPU, then one rung after
-// another, up to what this chip's CVB allows and switch-perf-steps asks. Runs again after every temporary
+// another, up to what this chip's CVB allows and perfSteps asks. Runs again after every temporary
 // drop. A refusal or a failed step logs one line and settles it for the boot. Work loop only.
 bool SwitchThermal::raiseCpu(int soc)
 {
@@ -942,9 +942,9 @@ bool SwitchThermal::raiseCpu(int soc)
         return false;
     }
     if (!perfRaised) {
-        // switch-perf-steps stopped it before VDD_CPU: nothing raised, nothing to come back to.
+        // perfSteps stopped it before VDD_CPU: nothing raised, nothing to come back to.
         perfSettled = true;
-        IOLog("SwitchPerf: stopped after step %u of %u as switch-perf-steps asks (CPU speedo %d id %d process %d; "
+        IOLog("SwitchPerf: stopped after step %u of %u as perfSteps asks (CPU speedo %d id %d process %d; "
               "MAX77812 0x%02x v%u M4_CFG 0x%02x -> 0x%02x, ramp up %u uV/us; top %u MHz; %s)\n",
               stop, last, cpuSpeedo, cpuSpeedoId, cpuProcess, cpuRail, pmicVersion & 7, m4CfgBoot, m4Cfg,
               rampUpUvPerUs(glbCfg2), kRungs[perfTop - 1].rowMHz, clockState);
@@ -1481,7 +1481,7 @@ bool SwitchThermal::runCpuFromPllx(uint32_t pllxBase, unsigned step)
     return true;
 }
 
-// switch-perf-trace=1: one line before a sub-step, then kTraceMS for the console to draw it.
+// perfTrace: one line before a sub-step, then kTraceMS for the console to draw it.
 void SwitchThermal::trace(const char *format, ...)
 {
     if (!perfTrace) return;
@@ -1547,30 +1547,12 @@ bool SwitchThermal::start(IOService *provider)
     fanPowerOn();
     setDrive(kSafeDrive);
 
-    unsigned choice = 0;
-    if (PE_parse_boot_argn("switch-fan-profile", &choice, sizeof(choice)) &&
-        choice < sizeof(kProfiles) / sizeof(kProfiles[0])) {
-        profile = &kProfiles[choice];
-    }
-    unsigned perf = 0, traced = 0;
-    PE_parse_boot_argn("switch-perf", &perf, sizeof(perf));
-    PE_parse_boot_argn("switch-perf-steps", &perfSteps, sizeof(perfSteps));
-    PE_parse_boot_argn("switch-perf-trace", &traced, sizeof(traced));
-    perfWanted = perf != 0;
-    perfTrace = perfWanted && traced != 0;
+    perfWanted = true;
     // Traced: the first raise waits until the console has caught up with the boot (a one-shot of the timer).
     if (perfTrace) clock_interval_to_deadline(kTraceDelayMS, kMillisecondScale, &perfHoldUntil);
-    // switch-cpu-mode=pll|dfll; without it the DFLL with the on-demand governor (see the top of the file).
-    char mode[8] = "";
-    dfllMode = governed = true;
-    if (PE_parse_boot_arg_str("switch-cpu-mode", mode, sizeof(mode))) {
-        dfllMode = strcmp(mode, "pll") != 0;
-        governed = false;
-        if (dfllMode && strcmp(mode, "dfll") != 0) {
-            IOLog("SwitchPerf: switch-cpu-mode=%s unknown; DFLL on demand\n", mode);
-            governed = true;
-        }
-    }
+    // The DFLL with the on-demand governor, or with switch-no-dfll the PLL ladder (see the top of the file).
+    unsigned noDfll = 0;
+    dfllMode = governed = !(PE_parse_boot_argn("switch-no-dfll", &noDfll, sizeof(noDfll)) && noDfll);
     loop = IOWorkLoop::workLoop();
     timer = loop ? IOTimerEventSource::timerEventSource(this, &SwitchThermal::timerFired) : nullptr;
     if (!timer || loop->addEventSource(timer) != kIOReturnSuccess) {

@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// Switch OLED Bluetooth (BCM4356A3 on UART-D) for iOS's Bluetooth daemons. Opt-in: boot-arg switch-bt=1.
+// Switch OLED Bluetooth (BCM4356A3 on UART-D) for iOS's Bluetooth daemons. Boot-arg switch-no-bt turns it off.
 //
 // The kernel does what BlueTool does on an iPad (power the core, 3 Mbaud, patch RAM download), because BlueTool
 // only knows Apple's own chips and firmware; see SwitchBluetooth.cpp. Userland then gets the controller as the
 // kernel control "com.apple.uart.bluetooth": a SOCK_STREAM PF_SYSTEM socket carrying raw H4, with TIOCGETA /
 // TIOCSETA as SYSPROTO_CONTROL socket options, the interface BlueTool's "device -D" and bluetoothd's POSIX HCI
-// driver open (BT_HCI_TRANSPORT=H4BC:POSIX:com.apple.uart.bluetooth,3000000, which kern_exec.c gives bluetoothd with
-// switch-bt=1; H4BC also opens /dev/btwake, made here). The rest of the stack, gated by the same boot-arg: the BlueTool stand-in (BlueTool/BlueTool.c) in the
+// driver open (BT_HCI_TRANSPORT=H4BC:POSIX:com.apple.uart.bluetooth,3000000, which kern_exec.c gives bluetoothd; H4BC
+// also opens /dev/btwake, made here). The rest of the stack, off with the same boot-arg: the BlueTool stand-in (BlueTool/BlueTool.c) in the
 // Data overlay answers bluetoothd's boot/init/deepsleep requests, and launchd's disabled list keeps bluetoothd and
 // audiomxd off without it.
 //
@@ -26,7 +26,7 @@
 extern "C" {
 #endif
 
-// Without switch-bt=1: returns 0 and touches nothing. Otherwise starts a kernel thread that publishes the BD address,
+// With switch-no-bt: returns 0 and touches nothing. Otherwise starts a kernel thread that publishes the BD address,
 // claims UART-D and its interrupt (waiting for the GIC), registers the kernel control and brings the controller up,
 // then returns 0 at once (-1 if the thread could not be started). Call it first in the board thread, so the
 // address is in place before bluetoothd can read it. Bring-up failures are logged in one line; a missing or lost UART-D
@@ -34,7 +34,7 @@ extern "C" {
 int switch_bluetooth_start(void);
 
 // kern_exec.c load_init_program through SwitchNVRAM (switch_nvram_data_mounted), once Data is mounted and before
-// launchd: with switch-bt=1, publishes the address deploy staged on Data (/private/var/Switch/bluetooth/host-address)
+// launchd: unless switch-no-bt, publishes the address deploy staged on Data (/private/var/Switch/bluetooth/host-address)
 // as local-mac-address and mac-address-bluetooth0, so bluetoothd reads it at its start. One line if the file is
 // malformed; nothing without one.
 void switch_bluetooth_data_mounted(void);

@@ -2,7 +2,7 @@
 only the steps it reaches:
 
     boot_args.py ............................ boot-args.txt
-    overlay.py plan  (manifest, boot-args) .. overlay-plan.json
+    overlay.py plan  (manifest) ............. overlay-plan.json
     adt_edit.py      (board ADT, plan) ...... ios.adt
     overlay.py trust (plan, Mach-Os) ........ overlay.trustcache
     trust.py         (IPSW, overlay, GPU) ... trustcache.bundle
@@ -21,9 +21,9 @@ only the steps it reaches:
     cp ...................................... ios/ (the directory //deploy:sd, //install:sd and //boot:snapshot take)
 
 So an overlay plist edit reruns the overlay tree and the final copy; a driver edit reruns the kernel's steps from the
-layout on (the shards it changed, four loader objects, the link with the boot script, the bl33 stage and the copy); a
-boot-arg edit reruns from the ADT edit on, but compresses only the window's tail. The Python steps run on the hermetic interpreter and need nothing of Xcode; the loader's compiles do (Xcode's
-clang, the declared host input).
+layout on (the shards it changed, four loader objects, the link, the boot script, the bl33 stage and the copy); a
+built-in boot-arg edit reruns from the layout on, but compresses only the window's tail. The Python steps run on the
+hermetic interpreter and need nothing of Xcode; the loader's compiles do (Xcode's clang, the declared host input).
 """
 
 load("@bazel_skylib//rules:common_settings.bzl", "BuildSettingInfo")
@@ -143,23 +143,21 @@ def _boot_package_impl(ctx):
     args = ctx.actions.args()
     args.add("plan")
     args.add("--manifest", ctx.file.overlay_manifest)
-    args.add("--boot-args", boot_args)
     args.add("--portrait-header", ctx.file.portrait_header)
     args.add_all(sorted(files.keys()), before_each = "--given")
     args.add("--out", plan)
-    _run(ctx, ctx.executable._overlay, [args], [ctx.file.overlay_manifest, boot_args, ctx.file.portrait_header], [plan], "OverlayPlan", "Planning the userland overlay")
+    _run(ctx, ctx.executable._overlay, [args], [ctx.file.overlay_manifest, ctx.file.portrait_header], [plan], "OverlayPlan", "Planning the userland overlay")
 
     adt = out("ios.adt")
     args = ctx.actions.args()
     args.add("--adt", ctx.file.adt)
-    args.add("--boot-args", boot_args)
     args.add("--overlay-plan", plan)
     args.add("--bt-patch", ctx.file.bt_patch)
     args.add("--portrait-header", ctx.file.portrait_header)
     if smp:
         args.add("--smp")
     args.add("--out", adt)
-    _run(ctx, ctx.executable._adt_edit, [args], [ctx.file.adt, boot_args, plan, ctx.file.bt_patch, ctx.file.portrait_header], [adt], "BootAdt", "Giving the ADT its iPad identity")
+    _run(ctx, ctx.executable._adt_edit, [args], [ctx.file.adt, plan, ctx.file.bt_patch, ctx.file.portrait_header], [adt], "BootAdt", "Giving the ADT its iPad identity")
 
     # --- trust caches ---------------------------------------------------------------------------------------------
     overlay_trust = out("overlay.trustcache")

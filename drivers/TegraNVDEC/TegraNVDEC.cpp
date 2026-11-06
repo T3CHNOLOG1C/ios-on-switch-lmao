@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // Tegra210 NVDEC (video decoder 2.0, a falcon behind host1x): bring-up, the job engine and sleep. tegra_nvdec_probe()
-// runs the whole bring-up by default (stage 3; switch-nvdec=0 turns it off, 1 or 2 stop early, stages in
-// TegraNVDEC.h) on its own thread:
+// runs the whole bring-up (stage 3, stages in TegraNVDEC.h; boot-arg switch-no-nvdec turns it off) on its own thread:
 //   N0  host1x up (drivers/TegraHost1x: clock adopted, syncpoint interrupt, channel 0, self-test)
 //   N1  power partition, clock, reset, falcon firmware loaded and started
 //   N2  proof of life through host1x channel 0 in NVDEC's class: an IMMEDIATE syncpoint increment (the engine's host
@@ -421,11 +420,10 @@ void bringUpStages(uint32_t stage)
         tegra_nvdec_arena_release();
     };
     // The arena first, while physical memory is least fragmented.
-    uint32_t mib = 48;
-    PE_parse_boot_argn("switch-nvdec-mib", &mib, sizeof(mib));
+    constexpr uint32_t mib = 48;
     const uint64_t arenaStart = nowUs();
-    if (stage >= 2 && tegra_nvdec_arena_init((uint64_t)(mib < 4 ? 4 : mib > 512 ? 512 : mib) << 20)) {
-        IOLog("TegraNVDEC: N0 FAIL no contiguous %u MiB arena below 4 GiB (switch-nvdec-mib)\n", mib);
+    if (stage >= 2 && tegra_nvdec_arena_init((uint64_t)mib << 20)) {
+        IOLog("TegraNVDEC: N0 FAIL no contiguous %u MiB arena below 4 GiB\n", mib);
         return;
     }
     gArenaUs = nowUs() - arenaStart;
@@ -739,9 +737,9 @@ void engineResume()
 extern "C" int tegra_nvdec_probe(void)
 {
     static volatile int started;
-    uint32_t stage = 3;  // on by default, like the board drivers; switch-nvdec=0 turns it off
-    PE_parse_boot_argn("switch-nvdec", &stage, sizeof(stage));
-    if (!stage) {
+    constexpr uint32_t stage = 3;
+    uint32_t off = 0;
+    if (PE_parse_boot_argn("switch-no-nvdec", &off, sizeof(off)) && off) {
         settle(-1);
         return 0;
     }

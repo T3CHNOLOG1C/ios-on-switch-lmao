@@ -25,7 +25,6 @@
 
 extern "C" {
 vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
-boolean_t PE_parse_boot_argn(const char *arg_string, void *arg_ptr, int max_arg);
 }
 
 namespace {
@@ -276,11 +275,6 @@ int bringUp()
           tegra_host1x_syncpt_read(id), nowUs() - began, gClockMHz, enabled ? ", enabled here" : "");
     return TEGRA_HOST1X_OK;
 }
-
-void probeThread(void *, wait_result_t)
-{
-    tegra_host1x_start();
-}
 }  // namespace
 
 extern "C" int tegra_host1x_start(void)
@@ -502,17 +496,4 @@ extern "C" void tegra_nvdec_resume(void)
     tegra_host1x_resume();
     const uint32_t count = __atomic_load_n(&gSleepClientCount, __ATOMIC_ACQUIRE);
     for (uint32_t i = 0; i < count; i++) gSleepClients[i].resume();
-}
-
-extern "C" int tegra_host1x_probe(void)
-{
-    uint32_t on = 0;
-    if (!PE_parse_boot_argn("switch-host1x", &on, sizeof(on)) || !on) return 0;
-    thread_t thread;
-    if (kernel_thread_start(probeThread, nullptr, &thread) != KERN_SUCCESS) {
-        IOLog("TegraHost1x: could not start the bring-up thread\n");
-        return -1;
-    }
-    thread_deallocate(thread);
-    return 0;
 }

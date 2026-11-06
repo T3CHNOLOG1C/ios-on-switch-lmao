@@ -15,8 +15,6 @@
 // FRAME_END. There is no polled mode: a command issued before the display reports frame ends, or while FRAME_END is
 // masked, or a frame end that does not come within 50 ms, panics with the DC interrupt registers and the GIC state.
 //
-// Boot-arg switch-backlight-syncpt=0: no DSI syncpoint block reset after the packet (L4T's video-mode command path).
-//
 // The functions below are for thread context only, never an interrupt filter or with a spinlock held. Commands are
 // serialized internally. They return 0 on success and -1 if the display is not running (clocks gated, DSI off, not in
 // video mode, or the DC stopped); everything else panics.

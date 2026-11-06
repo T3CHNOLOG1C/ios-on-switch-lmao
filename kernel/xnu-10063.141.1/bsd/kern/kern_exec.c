@@ -957,16 +957,6 @@ set_proc_name(struct image_params *imgp, proc_t p)
 	    (unsigned)imgp->ip_ndp->ni_cnd.cn_namelen);
 	p->p_comm[imgp->ip_ndp->ni_cnd.cn_namelen] = '\0';
 #if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
-	/* switch-proclog=1: one console line per exec and exit while userland has no other log path. */
-	{
-		static int proclog = -1;
-		if (proclog < 0) {
-			int value = 0;
-			(void)PE_parse_boot_argn("switch-proclog", &value, sizeof(value));
-			proclog = value;
-		}
-		if (proclog) printf("+%s[%d]\n", p->p_comm, proc_getpid(p));
-	}
 	native_switch_migration_process(p, 0, 0);
 #endif
 
@@ -5865,14 +5855,14 @@ bad:
  * Switch: environment a chosen daemon gets on top of its own, appended by exec_extract_strings (so a value the
  * caller passes wins: getenv returns the first match).
  *
- * switch-bt=1: bluetoothd's POSIX HCI driver (21H461 bluetoothd FUN_1001d104c / FUN_1000ddaa8) opens the kernel
+ * Unless switch-no-bt: bluetoothd's POSIX HCI driver (21H461 bluetoothd FUN_1001d104c / FUN_1000ddaa8) opens the kernel
  * control named in BT_HCI_TRANSPORT ("<transport>:<driver>:<name>,<baud>") instead of its default
  * "com.apple.uart.sk.bluetooth", a Skywalk channel endpoint nothing here provides. drivers/SwitchBluetooth registers
  * the plain stream "com.apple.uart.bluetooth" (BlueTool's own) with the controller patched, at 3 Mbaud. "H4BC" (J120's
  * transport-encoding 3, BT_WAKE through SwitchBluetooth's /dev/btwake): plain "H4" crashed every stack terminate.
  */
 /*
- * r6-lows: CA_FORCE_TIMER=1 for backboardd (NATIVE_SWITCH_CA_VBL, a build-time switch: the boot-args are full). QuartzCore
+ * r6-lows: CA_FORCE_TIMER=1 for backboardd (NATIVE_SWITCH_CA_VBL, a build-time switch). QuartzCore
  * 21H461 CADeviceUseVBL() (dispatch_once at 0x189582620, read at the start of CA::WindowServer::AccelServer's constructor, before
  * the Metal plug-in loads, hence the exec environment) is true only for MobileGestalt chip ids 0x7000 and 0x8010, or with this
  * variable non-zero. True, IOMFBServer::add_vsync_source takes IOMobileFramebufferGetVSyncRunLoopSource: the render server's frame
@@ -5890,8 +5880,8 @@ bad:
 #endif
 
 /*
- * r6-lows (r6h hangs, 11-01): CA_DISABLE_DETACHED=1 for backboardd whenever NativeLegacyDisplay's validator is the one
- * (offline-legacy-validate=1): it takes one full-screen BGRA IOSurface in layer 0 and nothing else. QuartzCore 21H461 reads the
+ * r6-lows (r6h hangs, 11-01): CA_DISABLE_DETACHED=1 for backboardd whenever NativeLegacyDisplay's validator is the one: it
+ * takes one full-screen BGRA IOSurface in layer 0 and nothing else. QuartzCore 21H461 reads the
  * variable once (init_debug: debug_option_env_vars[21] through CADefaultsGetFloat, which tries getenv first) into
  * ca_debug_options[21], and CA::OGL::detach_contents returns "not detached" (reason 0x10, 0x189566798) before it asks the
  * display's detach_layer. Without it, Photos made CA detach its content into a second display layer: every swap_end failed
@@ -5911,12 +5901,20 @@ native_legacy_detach_ready(void)
 {
 	return false;
 }
+/* A switch-no-<feature> boot-arg: present (a bare word reads as 1) and not =0. */
+static int
+native_switch_disabled(const char *name)
+{
+	uint32_t value = 0;
+	return PE_parse_boot_argn(name, &value, sizeof(value)) && value;
+}
 static const char *const native_switch_bluetoothd_environment[] = {
 	"BT_HCI_TRANSPORT=H4BC:POSIX:com.apple.uart.bluetooth,3000000", NULL
 };
-static const char *const native_switch_backboardd_environment[] = {"CA_DISABLE_DETACHED=1", NULL};
 #if NATIVE_SWITCH_CA_VBL
 static const char *const native_switch_backboardd_vbl_environment[] = {"CA_DISABLE_DETACHED=1", "CA_FORCE_TIMER=1", NULL};
+#else
+static const char *const native_switch_backboardd_environment[] = {"CA_DISABLE_DETACHED=1", NULL};
 #endif
 
 /* The extra environment strings for imgp's executable, NULL-terminated, or NULL for none. */
@@ -5927,58 +5925,26 @@ native_switch_exec_environment(const struct image_params *imgp)
 	static const char bluetoothd[] = "/usr/sbin/bluetoothd";
 	static int bluetooth = -1;
 	if (bluetooth < 0) {
-		uint32_t enabled = 0;
-		bluetooth = PE_parse_boot_argn("switch-bt", &enabled, sizeof(enabled)) && enabled;
+		bluetooth = !native_switch_disabled("switch-no-bt");
 	}
 	if (bluetooth && !strncmp(executable, bluetoothd, sizeof(bluetoothd))) {
 		return native_switch_bluetoothd_environment;
 	}
 	static const char backboardd[] = "/usr/libexec/backboardd";
-	static int single_layer = -1;
-	if (single_layer < 0) {
-		uint32_t validate = 0;
-		single_layer = PE_parse_boot_argn("offline-legacy-validate", &validate, sizeof(validate)) && validate == 1;
-	}
 	if (!strncmp(executable, backboardd, sizeof(backboardd))) {
-		const int single = single_layer && !native_legacy_detach_ready();
+		const int single = !native_legacy_detach_ready();
 #if NATIVE_SWITCH_CA_VBL
-		/* Only with the display's DC A vsync (sheng-vsync, NativeLegacyDisplay startVsync): without it nothing would drive CA. */
-		static int vbl = -1;
-		if (vbl < 0) {
-			uint32_t hz = 0, vblank = 1;
-			(void)PE_parse_boot_argn("switch-vblank", &vblank, sizeof(vblank));
-			vbl = PE_parse_boot_argn("sheng-vsync", &hz, sizeof(hz)) && hz && vblank;
-		}
-		if (vbl && single) {
+		if (single) {
 			return native_switch_backboardd_vbl_environment;
 		}
-		if (vbl) {
-			return native_switch_backboardd_vbl_environment + 1;
-		}
-#endif
+		return native_switch_backboardd_vbl_environment + 1;
+#else
 		if (single) {
 			return native_switch_backboardd_environment;
 		}
+#endif
 	}
 	return NULL;
-}
-
-/*
- * Switch: switch-no-iconagent=1 refuses to run iconservicesagent. With no Metal device in it, Core Image 21H461 falls back
- * to OpenGL ES, which has no driver here, and the agent crash-loops on every SF Symbol while Settings waits on it.
- * It is a user-domain job (user/501), so the system disabled.plist does not cover it; refusing the exec does, for any
- * domain. Clients then get NSXPCConnectionInvalid at once and draw placeholders.
- */
-static bool
-native_switch_exec_refused(const struct image_params *imgp)
-{
-	static const char iconagent[] = "/System/Library/CoreServices/iconservicesagent";
-	static int refuse = -1;
-	if (refuse < 0) {
-		uint32_t enabled = 0;
-		refuse = PE_parse_boot_argn("switch-no-iconagent", &enabled, sizeof(enabled)) && enabled;
-	}
-	return refuse && !strncmp(imgp->ip_strings + strlen(EXECUTABLE_KEY), iconagent, sizeof(iconagent));
 }
 
 /*
@@ -6228,10 +6194,6 @@ exec_extract_strings(struct image_params *imgp)
 		imgp->ip_envc++;
 	}
 
-	if (native_switch_exec_refused(imgp)) {
-		error = EPERM;
-		goto bad;
-	}
 	/* Switch: a chosen daemon's extra environment (native_switch_exec_environment). */
 	const char *const *native_environment = native_switch_exec_environment(imgp);
 	for (; native_environment && *native_environment; native_environment++) {
@@ -7463,7 +7425,7 @@ char native_owner_data_device_path[64];
 /* Boot-time read-only union views of owner-provided GPU addon content over sealed system directories, mounted after the Data mount and
  * before launchd starts: the Adreno Metal plugin bundle over /System/Library/Extensions (the original Metal discovery loads
  * /System/Library/Extensions/<MetalPluginName>.bundle) and an owner launchd job over /System/Library/LaunchDaemons (a process outside
- * every sandbox profile). Only with boot-arg sheng-gpu-addon=1. Never panics: a missing source directory or a refused mount only
+ * every sandbox profile). Never panics: a missing source directory or a refused mount only
  * records its status. The backing directories are owner Data (not an authenticated immutable volume); code in them still has to
  * pass AMFI through the loaded trust cache. */
 extern volatile int native_bindfs_boot_mount;
@@ -7521,10 +7483,6 @@ native_gpu_addon_mount(proc_t p, user_addr_t scratch, user_addr_t offset, const 
 static void
 native_gpu_addon_prepare(proc_t p, user_addr_t scratch)
 {
-	uint32_t enabled = 0;
-	if (!PE_parse_boot_argn("sheng-gpu-addon", &enabled, sizeof(enabled)) || enabled != 1) {
-		return;
-	}
 	static const char extensions_source[] = "/private/var/ngpu/addons", extensions_point[] = "/System/Library/Extensions";
 	static const char daemons_source[] = "/private/var/ngpu/daemons", daemons_point[] = "/System/Library/LaunchDaemons";
 	/* Scratch page layout until launchd's exec: 0x000 its path and arguments, 0x100-0x34f mount requests,
@@ -7552,7 +7510,7 @@ native_owner_data_prepare(proc_t p, user_addr_t scratch)
 	const char *data_uuid = XNU_OWNER_DATA_VOLUME_UUID;
 #if defined(XNU_NATIVE_RAM_BLOCK) && XNU_NATIVE_RAM_BLOCK
 #if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
-	(void)PE_parse_boot_argn("switch-root-boot", &switch_persistent, sizeof(switch_persistent));
+	switch_persistent = 1;
 	switch_raw = switch_files_storage_profile() == SWITCH_STORAGE_RAW;
 	if (switch_raw) data_uuid = SWITCH_RAW_DATA_UUID;
 	if (switch_persistent == 1) {
@@ -8389,7 +8347,7 @@ native_switch_setup_state(proc_t p, user_addr_t scratch, mount_t data_mount)
 	return error;
 }
 
-/* The last boot's panic, kept in RAM across the warm reset (boot-arg switch-panic-save, SwitchPanicSave.c):
+/* The last boot's panic, kept in RAM across the warm reset (SwitchPanicSave.c):
  * /private/var/Switch/panic-<UTC time>.log, root 0644, written as the policy files are, and its panic stackshot (zlib
  * kcdata: every task's threads, kernel and user frames, wait info) as panic-<UTC time>.kcdata next to it; the record is
  * cleared once the text is on Data. A failure is logged and the record kept for the next boot. A copy of both goes to
@@ -8443,13 +8401,10 @@ native_switch_watchdog_policy(proc_t p, user_addr_t scratch)
 	    "<plist version=\"1.0\"><dict>" \
 	    "<key>com.apple.identityservicesd</key><true/>" \
 	    "<key>com.apple.CommCenter</key><true/>"
-	/* Bluetooth needs drivers/SwitchBluetooth, which runs only with boot-arg switch-bt=1 (the BlueTool stand-in in
-	 * the overlay and bluetoothd's transport, native_switch_exec_environment, are gated the same way). Without it
-	 * bluetoothd has no controller and stays disabled. audiomxd's Bluetooth plug-in then retries bluetoothd's
-	 * com.apple.BTAudioHALPlugin.xpc in a tight loop (~520/s, 500k+ log lines a boot) unless the overlay shows the stub
-	 * BTAudioHALPlugin.driver/Info.plist (drivers/SwitchAudio/hal/BTAudioHALPlugin-Info.plist: a loading condition that
-	 * matches no IOService, so the audio server defers the plug-in before loading any code). So audiomxd runs when
-	 * bluetoothd does or when that stub is on Data, and stays disabled otherwise. */
+	/* Bluetooth needs drivers/SwitchBluetooth, which boot-arg switch-no-bt keeps off (the BlueTool stand-in in the
+	 * overlay and bluetoothd's transport, native_switch_exec_environment, follow it). Without it bluetoothd has no
+	 * controller and stays disabled, and so does audiomxd: its Bluetooth plug-in would retry bluetoothd's
+	 * com.apple.BTAudioHALPlugin.xpc in a tight loop (~520/s, 500k+ log lines a boot). */
 #define NATIVE_SWITCH_POLICY_BLUETOOTH "<key>com.apple.bluetoothd</key><true/>"
 	/* watchdogd (the userspace watchdog: it pings backboardd, SpringBoard, logd, configd... every 10 s, and a hang
 	 * ends in a "userspace watchdog timeout" panic with a stackshot) runs once drivers/NativeSwitchWatchdog
@@ -8512,17 +8467,12 @@ native_switch_watchdog_policy(proc_t p, user_addr_t scratch)
 #undef NATIVE_SWITCH_POLICY_AUDIO
 #undef NATIVE_SWITCH_POLICY_TAIL
 #undef NATIVE_SWITCH_POLICY_NO_HARDWARE
-	static const char bluetooth_audio_stub[] =
-	    "/private/var/Switch/overlay/System/Library/Audio/Plug-Ins/HAL/BTAudioHALPlugin.driver/Info.plist";
-	uint32_t bluetooth = 0;
-	const int with_bluetooth = PE_parse_boot_argn("switch-bt", &bluetooth, sizeof(bluetooth)) && bluetooth;
+	const int with_bluetooth = !native_switch_disabled("switch-no-bt");
 	int policy_size = 0;
 	static const char *const paths[] = {
 	    "/private/var/db/com.apple.xpc.launchd/disabled.plist",
 	    "/private/var/db/com.apple.xpc.launchd/disabled.migrated"
 	};
-	uint32_t root_boot = 0;
-	if (!PE_parse_boot_argn("switch-root-boot", &root_boot, sizeof(root_boot)) || root_boot != 1) return 0;
 	if (native_owner_data_status || native_owner_data_stage != 4 || native_owner_data_device == NODEV) return EPERM;
 	vnode_t data_root = NULLVP;
 	int error = vnode_open("/private/var", FREAD | O_DIRECTORY | O_NOFOLLOW_ANY,
@@ -8537,14 +8487,7 @@ native_switch_watchdog_policy(proc_t p, user_addr_t scratch)
 	    strcmp(vfs_statfs(data_mount)->f_fstypename, "apfs")) error = EPERM;
 	if (!error) error = native_switch_watchdog_attributes(data_root, data_mount, 1, 0);
 	if (!error) {
-		vnode_t stub = NULLVP;
-		/* The HAL union with the stub is gated on switch-audio (tree/overlay/manifest.json), so the stub only
-		 * counts when that boot-arg is set: otherwise the real BTAudioHALPlugin would load and spin. */
-		uint32_t audio = 0;
-		const int with_audio_arg = PE_parse_boot_argn("switch-audio", &audio, sizeof(audio)) && audio;
-		const int with_audio = with_bluetooth ||
-		    (with_audio_arg && !vnode_lookup(bluetooth_audio_stub, 0, &stub, vfs_context_current()));
-		if (stub) vnode_put(stub);
+		const int with_audio = with_bluetooth;
 		extern int switch_watchdog_ready(void);
 		const int with_watchdog = switch_watchdog_ready();
 		strlcpy(policy, head, sizeof(policy));
@@ -8552,7 +8495,7 @@ native_switch_watchdog_policy(proc_t p, user_addr_t scratch)
 		if (!with_audio) strlcat(policy, audio_off, sizeof(policy));
 		if (!with_watchdog) strlcat(policy, watchdogd_off, sizeof(policy));
 		policy_size = (int)strlcat(policy, tail, sizeof(policy));
-		if (!with_audio) printf("SwitchRawBoot: audiomxd stays disabled: no %s\n", bluetooth_audio_stub);
+		if (!with_audio) printf("SwitchRawBoot: audiomxd stays disabled: no Bluetooth (switch-no-bt)\n");
 		if (!with_watchdog) printf("SwitchRawBoot: watchdogd stays disabled: NativeSwitchWatchdog not published\n");
 	}
 	if (!error) error = native_switch_watchdog_directory(p, scratch, "/private/var/db", data_mount);
@@ -8772,17 +8715,6 @@ load_init_program(proc_t p)
 #if CONFIG_MEMORYSTATUS
 	(void) memorystatus_init_at_boot_snapshot();
 #endif /* CONFIG_MEMORYSTATUS */
-
-#if (DEBUG || DEVELOPMENT) && defined(XNU_NATIVE_AIR_INIT) && XNU_NATIVE_AIR_INIT
-	int offline_air = 0;
-	if (PE_parse_boot_argn("offline-air-init", &offline_air, sizeof(offline_air)) && offline_air) {
-		if (offline_air != 1) panic("offline AIR init invalid selector");
-		error = load_init_program_at_path(p, (user_addr_t)scratch_addr,
-		    "/private/var/tmp/air-native", init_envp);
-		if (error) panic("offline signed AIR instrument exec failed: %d", error);
-		return;
-	}
-#endif
 
 #if DEBUG || DEVELOPMENT
 	/* Check for boot-arg suffix first */

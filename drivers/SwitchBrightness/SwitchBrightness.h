@@ -2,14 +2,10 @@
 // The built-in display's backlight, display power and ambient light sensor for iPadOS 17 CoreBrightness
 // (SwitchBacklight.cpp, SwitchALS.cpp; the panel itself is TegraPanel.h).
 //
-// Boot-args:
-//   switch-backlight=1  CoreBrightness's brightness reaches the panel (DCS 0x51). Without it the backlight service is
-//                       still published (CoreBrightness finds its display) and records what it is asked for.
-//   switch-sleep        display power, ON unless switch-sleep=0: the render server's power requests (lock, auto-lock,
-//                       wake) turn the panel and the touch controller off and on and stop and restart the display
-//                       controller's scanout. System sleep (drivers/SwitchSuspend) needs it.
-//   switch-als=0        no ambient light sensor. By default the BH1730FVC is CoreBrightness's ALS (HID service
-//                       0xff00/0x0004), clocked by display controller A's frame ends (SwitchALS.cpp).
+// CoreBrightness's brightness reaches the panel (DCS 0x51). Display power: the render server's power requests (lock,
+// auto-lock, wake) turn the panel and the touch controller off and on and stop and restart the display controller's
+// scanout; system sleep (drivers/SwitchSuspend) needs it, and boot-arg switch-no-sleep turns it off. The BH1730FVC is
+// CoreBrightness's ALS (HID service 0xff00/0x0004), clocked by display controller A's frame ends (SwitchALS.cpp).
 #ifndef SWITCH_BRIGHTNESS_H
 #define SWITCH_BRIGHTNESS_H
 #include <stdbool.h>
@@ -23,7 +19,7 @@ extern "C" {
 // or setup failed.
 int switch_backlight_start(void);
 
-// Whether display power is on for this boot (switch-sleep absent or nonzero). Any context.
+// Whether display power is on for this boot (no switch-no-sleep). Any context.
 bool switch_display_power_enabled(void);
 
 // Display power, from the framebuffer when the render server asks for it (IOMobileFramebufferRequestPowerChange: 0 off,
@@ -41,7 +37,7 @@ bool switch_display_is_on(void);
 // true when done. Called from the backlight's work loop only: after the panel is off, and before it is turned on again.
 bool native_legacy_display_set_scanout(bool on);
 
-// Starts the ambient light sensor (unless switch-als=0: then returns 0 and does nothing). Needs TegraI2C, the GIC and
+// Starts the ambient light sensor. Needs TegraI2C, the GIC and
 // IOHIDFamily (switch_hid_create loads it); thread context, may sleep. Publishes the HID service at once and talks to the
 // sensor at its first sample after LDO6 is on (switch_als_supply). A sensor that does not answer, or no LDO6 within
 // 20 s, logs one line and leaves it off; a lost display frame end panics. 0 on success.

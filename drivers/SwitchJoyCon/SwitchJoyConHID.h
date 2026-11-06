@@ -35,15 +35,12 @@ typedef void (*SwitchJoyConSessionEnded)(void *context, int32_t servedPid, int32
 
 enum : uint32_t { kSwitchJoyConLeftPID = 0x2006, kSwitchJoyConRightPID = 0x2007 };
 
-// Applies switch-gc-personality (SwitchJoyCon.h) once, before any game controller can appear (switch_joycon_start
-// calls it first). With the boot-arg: checks that AppleGameControllerPersonality.kext's personalities are in the
-// catalogue (panics if the kext is not prelinked) and makes switch_joycon_hid_prepare() leave its own Nintendo
-// personalities out. Without it: removes the kext's personalities if it is prelinked. Thread context.
+// Once, before any game controller can appear (switch_joycon_start calls it first): removes
+// AppleGameControllerPersonality.kext's personalities if it is prelinked. Thread context.
 void switch_joycon_hid_select_personalities(void);
 
-// Loads IOHIDFamily, registers SwitchJoyConDevice and, unless switch-gc-personality=1 put iPadOS's own set in charge,
-// adds the Nintendo entries of AppleGameControllerPersonality.kext (not in the default prelink set): for every
-// Nintendo controller ProductID, an IOHIDEventDummyService on the IOHIDInterface (so neither IOHIDEventDriver nor the
+// Loads IOHIDFamily, registers SwitchJoyConDevice and adds the Nintendo entries of
+// AppleGameControllerPersonality.kext (not in the default prelink set): for every Nintendo controller ProductID, an IOHIDEventDummyService on the IOHIDInterface (so neither IOHIDEventDriver nor the
 // DriverKit AppleUserHIDEventDriver turns the pad into keyboard/pointer events) and an IOHIDProviderPropertyMerger
 // that sets HIDServiceSupport on the IOHIDDevice (so the HID event system makes a user-space service for the device
 // and loads JoyConHIDServicePlugin on it). They match Bluetooth Joy-Cons (bluetoothd's IOHIDUserDevice) as well.

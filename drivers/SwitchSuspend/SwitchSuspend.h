@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // System sleep (SC7) for iPadOS on the Switch OLED (T210B01). It needs display power (panel, scanout and touch off/on
-// through SwitchBrightness and the NativeLegacyDisplay selector-12 wrap; off only with switch-sleep=0).
+// through SwitchBrightness and the NativeLegacyDisplay selector-12 wrap; off only with switch-no-sleep).
 //
 // How sleep happens (all stock XNU, iokit/Kernel/IOPMrootDomain.cpp, IOCPU.cpp, osfmk/kern/machine.c, arm64/cpu.c):
 //   powerd's idle-sleep policy (no user activity, display off, no PreventUserIdleSystemSleep assertions) makes
@@ -40,7 +40,7 @@
 //     on the bus; the role again from SwitchPD)   7 joycon   8 motion   8 touch
 //     9 display   10 als (after LDO6 and the frame ends)
 // A driver that is turned on but has no SC7 path yet holds the system awake instead (switch_suspend_hold). The display
-// hooks need the DC A interrupt (sheng-vsync / switch-vblank) and SwitchBrightness, as TegraDisplayPower.h says.
+// hooks need the DC A interrupt and SwitchBrightness, as TegraDisplayPower.h says.
 //
 // Wake sources (SwitchWakeSources.h switch_wake_pmc_events): the MAX77620's nIRQ (PMC wake 51, level low) carries the
 // power key (ONOFFIRQ EN0, SwitchButtons) and the RTC alarm (ALARM1, SwitchPMIC); the BM92T36 USB-PD ALERT (14, PK4

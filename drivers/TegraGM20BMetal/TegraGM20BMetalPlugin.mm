@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // TegraGM20B Metal plugin: Metal on the Tegra X1 GPU (GM20B) for iPadOS 17.7.11, reached through the original discovery:
-// IOServiceMatching("IOAcceleratorES") -> AGXAccelerator (drivers/TegraGM20B, published at tegra-gpu=4) -> MetalPluginName
+// IOServiceMatching("IOAcceleratorES") -> AGXAccelerator (drivers/TegraGM20B, published unless switch-no-gpu) -> MetalPluginName
 // TegraGM20BMetal -> /System/Library/Extensions/TegraGM20BMetal.bundle -> MetalPluginClassName TegraGM20BMetalDevice ->
 // -initWithAcceleratorPort:. That returns the native Metal frontend's device (drivers/NativeMetal/NativeBridgeMetalFrontend.mm:
 // the metal2vulkan runtime) over Mesa NVK (libvulkan_nouveau.dylib beside this executable, nvkmd_darwin backend), which opens
@@ -15,32 +15,29 @@
 // screenshot service (ScreenshotServicesService: PencilKit aborts its thumbnail without one) and
 // the icon service (iconservicesagent: CoreUI draws every graphic icon, Settings' rows among them, through Core Image, whose
 // -[CIContext initWithOptions:] in 21H461 has Metal or GLES and no CPU renderer; without Metal it makes a GLES context that does
-// not exist and crashes at once, and launchd's respawns hang Settings), or every process with boot-arg tegra-gpu-all-clients=1
-// (the kernel's grant must then admit them too). Every other process gets nil from here and keeps rendering on the CPU, as does
-// one whose device does not open (the kernel refuses it, the GPU pool is full). Every process but the render server compiles the
+// not exist and crashes at once, and launchd's respawns hang Settings) and, by default, every other process (the kernel's
+// grant admits them too; TEGRA_GPU_ALL_CLIENTS=0 limits it to those named here). A process left out gets nil from here and
+// keeps rendering on the CPU, as does one whose device does not open (the kernel refuses it, the GPU pool is full). Every process but the render server compiles the
 // Metal source and stitched libraries Core Image makes (NMB_SYSTEM_COMPILER, the frontend's in-process MTLCompiler).
 //
-// Knobs: an environment variable, else the boot-arg named beside it (kern.bootargs; a sandbox that refuses that read leaves the
-// default), which is then also set as the variable for the frontend and the runtime:
-//   TEGRA_GPU_ALL_CLIENTS   tegra-gpu-all-clients=0   only the processes named above get a device (default: every process)
-//   TEGRA_M2V_TELEMETRY     tegra-m2v-telemetry=0     no 5 s rates line (default 1)
-//   TEGRA_M2V_CACHE_DIR     (environment only)        the shader cache directory instead of the search below; "memory" for none
-//   NMB_MEMO_MB             tegra-m2v-memo-mb=<MiB>   the runtime's memo of compiled pipelines (default 32 outside backboardd,
-//                                                     the runtime's 256 in it)
-//   M2V_BLOCK_MIB           tegra-m2v-block-mib=<MiB> the largest pooled memory block (default 4 outside backboardd, 16 in it:
-//                                                     each process keeps one in three pools, mapped whole and charged to it;
-//                                                     each block is one BoAlloc on the thread that ran out of room)
-//   NMB_CACHE_MB            tegra-m2v-cache-mb=<MiB>  the shader cache directory's cap (default 256; the runtime's is 25 GiB)
-//   NMB_ANSWER_CACHE        tegra-m2v-answer-cache=0  ask the runtime every device question again (default: keep each answer)
-//   NMB_REFUSE_REBINDS      tegra-m2v-refuse-rebinds=0  encoders log their calls for rebinds again (default: nothing rebinds)
-//   NMB_PADDED_ALIAS        tegra-m2v-padded-alias=1  textures over padded rows rendered in place (default off: untried on NVK)
-//   M2V_YCBCR_MEMO          tegra-m2v-ycbcr-memo=<N>  skip unchanged two-plane YCbCr conversions (N sampled chunks; default off)
-//   M2V_YCBCR_FILTER        tegra-m2v-ycbcr-filter=device  the device's filter for converted YCbCr (default: Metal's, exact)
-//   M2V_ZERO_FRESH          tegra-m2v-zero-fresh=1    zero fresh memory and upload staging on the CPU again (default off)
-//   TEGRA_M2V_SEED          tegra-m2v-seed=0          no shared shader cache seed (default 1)
-//   NMB_SYSTEM_COMPILER     (environment only)        Metal source and stitched libraries compiled in-process (default 1 outside
-//                                                     backboardd, 0 in it)
-//   TEGRA_RAW_METAL         (environment only)        0: the render server keeps the m2v device even with a raw pack staged
+// Knobs, environment variables of the process (none is a boot-arg):
+//   TEGRA_GPU_ALL_CLIENTS=0   only the processes named above get a device (default: every process)
+//   TEGRA_M2V_TELEMETRY=0     no 5 s rates line (default 1)
+//   TEGRA_M2V_CACHE_DIR       the shader cache directory instead of the search below; "memory" for none
+//   NMB_MEMO_MB=<MiB>         the runtime's memo of compiled pipelines (default 32 outside backboardd, the runtime's 256 in it)
+//   M2V_BLOCK_MIB=<MiB>       the largest pooled memory block (default 4 outside backboardd, 16 in it: each process keeps one
+//                             in three pools, mapped whole and charged to it; each block is one BoAlloc on the thread that ran
+//                             out of room)
+//   NMB_CACHE_MB=<MiB>        the shader cache directory's cap (default 256; the runtime's is 25 GiB)
+//   NMB_ANSWER_CACHE=0        ask the runtime every device question again (default: keep each answer)
+//   NMB_REFUSE_REBINDS=0      encoders log their calls for rebinds again (default: nothing rebinds)
+//   NMB_PADDED_ALIAS=1        textures over padded rows rendered in place (default off: untried on NVK)
+//   M2V_YCBCR_MEMO=<N>        skip unchanged two-plane YCbCr conversions (N sampled chunks; default off)
+//   M2V_YCBCR_FILTER=device   the device's filter for converted YCbCr (default: Metal's, exact)
+//   M2V_ZERO_FRESH=1          zero fresh memory and upload staging on the CPU again (default off)
+//   TEGRA_M2V_SEED=0          no shared shader cache seed (default 1)
+//   NMB_SYSTEM_COMPILER       Metal source and stitched libraries compiled in-process (default 1 outside backboardd, 0 in it)
+//   TEGRA_RAW_METAL=0         the render server keeps the m2v device even with a raw pack staged
 //
 // The render server's raw GM20B path (raw/runtime/RawMetal.h): in backboardd, when the build's pipeline pack is staged beside the
 // bundle (<Extensions>/TegraGM20BMetal.raw/pack.bin, build-tegra-gm20b-metal.py makes it, stage-tegra-gm20b-metal.py copies it),
@@ -60,7 +57,6 @@
 #include <objc/runtime.h>
 #include <os/log.h>
 #include <sys/stat.h>
-#include <sys/sysctl.h>
 #include <string.h>
 #include <unistd.h>
 #include "NativeBridgeMetalFrontend.h"
@@ -85,42 +81,9 @@ os_log_t logger()
     return log;
 }
 
-// kern.bootargs, read once.
-const char *bootArgs()
+bool knobOn(const char *env, bool otherwise)
 {
-    static char args[2048];
-    static dispatch_once_t once;
-    dispatch_once(&once, ^{
-        size_t size = sizeof args - 1;
-        if (sysctlbyname("kern.bootargs", args, &size, nullptr, 0) != 0) size = 0;
-        args[std::min(size, sizeof args - 1)] = 0;
-    });
-    return args;
-}
-
-// Environment `env`, else boot-arg `arg` ("arg=value"; a bare "arg" is 1), then also set as `env`. Null when neither is given.
-const char *knob(const char *env, const char *arg)
-{
-    if (const char *value = getenv(env)) return value;
-    const size_t length = strlen(arg);
-    for (const char *at = bootArgs() + strspn(bootArgs(), " \t"); *at; at += strspn(at, " \t")) {
-        const size_t word = strcspn(at, " \t");
-        if (word >= length && !strncmp(at, arg, length) && (word == length || at[length] == '=')) {
-            char value[256];
-            if (word == length)
-                strlcpy(value, "1", sizeof value);
-            else
-                snprintf(value, sizeof value, "%.*s", int(word - length - 1), at + length + 1);
-            setenv(env, value, 0);
-            return getenv(env);
-        }
-        at += word;
-    }
-    return nullptr;
-}
-bool knobOn(const char *env, const char *arg, bool otherwise)
-{
-    const char *value = knob(env, arg);
+    const char *value = getenv(env);
     return value ? strcmp(value, "0") != 0 : otherwise;
 }
 
@@ -286,7 +249,7 @@ unsigned cacheCandidates(char candidates[][512], unsigned most)
 // when there is no seed this process can read, or the knob is off.
 bool sharedSeed(char *name, size_t size)
 {
-    if (!knobOn("TEGRA_M2V_SEED", "tegra-m2v-seed", true)) return false;
+    if (!knobOn("TEGRA_M2V_SEED", true)) return false;
     Dl_info info = {};
     if (!dladdr(reinterpret_cast<const void *>(&sharedSeed), &info) || !info.dli_fname) return false;
     char seed[1024], path[1100];
@@ -409,7 +372,7 @@ void observeDisplayLinkRates()
 // Metal process every 5 s; both rates functions measure their own window, so a late tick only makes a longer one.
 void startRates()
 {
-    if (!knobOn("TEGRA_M2V_TELEMETRY", "tegra-m2v-telemetry", true)) return;
+    if (!knobOn("TEGRA_M2V_TELEMETRY", true)) return;
     observeDisplayLinkRates();
     static dispatch_source_t timer;
     timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_global_queue(QOS_CLASS_UTILITY, 0));
@@ -458,7 +421,7 @@ id openDevice(unsigned port)
         // ScreenshotServicesService: PencilKit in the screenshot thumbnail aborts the process without a device (TegraGM20B.cpp).
         if (!renderServer && strcmp(getprogname(), "iconservicesagent") != 0 &&
             strcmp(getprogname(), "ScreenshotServicesService") != 0 &&
-            !knobOn("TEGRA_GPU_ALL_CLIENTS", "tegra-gpu-all-clients", true))
+            !knobOn("TEGRA_GPU_ALL_CLIENTS", true))
             return nil;
         // The raw GM20B path's own setup (its pack, channel and context, the first pool chunk) starts now, beside the m2v device's
         // open below; raw_metal_device_open takes what it made, so the render server's first frame waits for neither twice.
@@ -466,22 +429,16 @@ id openDevice(unsigned port)
             char pack[1100] = "";
             if (rawPack(pack, sizeof pack)) raw_metal_prepare(pack, uint64_t(TEGRA_RAW_STACK));
         }
-        if (!knob("NMB_MEMO_MB", "tegra-m2v-memo-mb") && !renderServer)
+        if (!renderServer)
             setenv("NMB_MEMO_MB", "32", 0);  // read by the bridge
         // Read by the runtime. In the render server too: its pools double their blocks, and each block is one BoAlloc on the
         // thread whose resource creation found no room (Core Animation's render thread). At the kernel's ~1.5 ms per MiB
         // for cached memory a 64 MiB block stalled it ~100 ms (r5c: 66 MB of BoAllocs, 103 ms, in the 5 s Settings opened);
         // 16 MiB blocks bound that to a quarter and still pool any 720p texture, half a block being the dedicated limit.
-        if (!knob("M2V_BLOCK_MIB", "tegra-m2v-block-mib")) setenv("M2V_BLOCK_MIB", renderServer ? "16" : "4", 0);
+        setenv("M2V_BLOCK_MIB", renderServer ? "16" : "4", 0);
         if (!renderServer)
             setenv("NMB_SYSTEM_COMPILER", "1", 0);  // read by the frontend: Core Image's kernels are compiled here
-        knob("NMB_CACHE_MB", "tegra-m2v-cache-mb");
-        knob("NMB_ANSWER_CACHE", "tegra-m2v-answer-cache");
-        knob("NMB_REFUSE_REBINDS", "tegra-m2v-refuse-rebinds");
-        knob("NMB_PADDED_ALIAS", "tegra-m2v-padded-alias");
-        knob("M2V_YCBCR_MEMO", "tegra-m2v-ycbcr-memo");
-        knob("M2V_YCBCR_FILTER", "tegra-m2v-ycbcr-filter");
-        if (const char *zero = knob("M2V_ZERO_FRESH", "tegra-m2v-zero-fresh"); zero && !strcmp(zero, "0"))
+        if (const char *zero = getenv("M2V_ZERO_FRESH"); zero && !strcmp(zero, "0"))
             unsetenv("M2V_ZERO_FRESH");  // the runtime reads any value as on
         char loader[1024];
         if (!libraryPath(loader, sizeof loader)) {

@@ -205,15 +205,15 @@ inline uint32_t intid(unsigned bus)
     return 32 + kBus[bus - 1].spi;
 }
 
-// I2C5 runs in MULTI_MASTER_MODE unless switch-cpu-mode=pll: the CPU may go on the DFLL (SwitchThermal's governed
-// default, or switch-cpu-mode=dfll), whose integrated I2C master writes VDD_CPU over the same PWR_I2C pads. L4T sets
+// I2C5 runs in MULTI_MASTER_MODE unless switch-no-dfll: the CPU may go on the DFLL (SwitchThermal's governed
+// default), whose integrated I2C master writes VDD_CPU over the same PWR_I2C pads. L4T sets
 // the bit on every T210 controller (i2c-tegra.c tegra_i2c_init, tegra210_i2c_hw.has_multi_master_mode) and answers
 // arbitration loss with a re-init and -EAGAIN (no bus clear, which would cut into the other master's transfer); here
 // the transfer is simply repeated.
 bool multiMasterBus(unsigned bus)
 {
-    char mode[8] = "";
-    return bus == 5 && !(PE_parse_boot_arg_str("switch-cpu-mode", mode, sizeof(mode)) && strcmp(mode, "pll") == 0);
+    unsigned noDfll = 0;
+    return bus == 5 && !(PE_parse_boot_argn("switch-no-dfll", &noDfll, sizeof(noDfll)) && noDfll);
 }
 
 // Register handshakes without an interrupt of their own (FIFO flush, config load): a few microseconds.

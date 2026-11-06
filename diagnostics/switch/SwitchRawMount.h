@@ -197,10 +197,10 @@ static int native_switch_raw_cache_prepare(proc_t p, user_addr_t scratch, user_a
     return 0;
 }
 
-/* Userland overlay (tree/overlay/manifest.json, scripts/package_raw_boot.py): files the owner keeps on Data under
+/* Userland overlay (overlay/manifest.json, tools/package/overlay.py): files the owner keeps on Data under
  * /private/var/Switch/overlay<absolute path>, shown read-only over sealed system directories. ADT /chosen
- * "switch-overlay" lists NUL-terminated "<directory>[:<boot-arg>[|<boot-arg>...]]"; every listed directory with no
- * boot-arg, or with any of its boot-args non-zero (features sharing a directory each name their own), gets the same
+ * "switch-overlay" lists NUL-terminated "<directory>[:<boot-arg>[|<boot-arg>...]]"; every listed directory unless all
+ * of its boot-args are set (each a switch-no-<feature>; features sharing a directory each name their own) gets the same
  * read-only bindfs union as the cryptex directories above, so lookups find the
  * owner's file first and everything else falls through to the sealed entries. Called after the Data mount and
  * before launchd starts. The union reports its files as root:wheel (BINDM_FORCE_ROOT: the owner copies them
@@ -228,16 +228,16 @@ static void native_switch_raw_overlay(proc_t p, user_addr_t scratch)
         at += (unsigned)length + 1;
         char *gate = strchr(directory, ':');
         if (gate) {
-            bool on = false;
+            bool off = true;
             *gate++ = '\0';
-            for (char *name = gate; name && !on;) {
+            for (char *name = gate; name && off;) {
                 char *next = strchr(name, '|');
                 uint32_t value = 0;
                 if (next) *next++ = '\0';
-                on = PE_parse_boot_argn(name, &value, sizeof(value)) && value;
+                off = PE_parse_boot_argn(name, &value, sizeof(value)) && value;
                 name = next;
             }
-            if (!on) continue;
+            if (off) continue;
         }
         snprintf(source, sizeof(source), "/private/var/Switch/overlay%s", directory);
         vnode_t probe = NULLVP;

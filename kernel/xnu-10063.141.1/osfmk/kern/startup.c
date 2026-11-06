@@ -603,12 +603,6 @@ kernel_bootstrap(void)
 			doprnt_hide_pointers = FALSE;
 		}
 	}
-	/* Owner device: honour -no_slto_panic without a debugger-enabled device policy. A thread that waits for an IPI acknowledgement
-	 * (restartable ranges) then keeps waiting instead of panicking the whole machine; the other cores keep running. */
-	if (PE_parse_boot_argn("-no_slto_panic", &namep, sizeof(namep))) {
-		extern boolean_t spinlock_timeout_panic;
-		spinlock_timeout_panic = FALSE;
-	}
 
 	kernel_bootstrap_log("console_init");
 	console_init();

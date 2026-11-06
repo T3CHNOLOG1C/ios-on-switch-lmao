@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// The GPU frame copy for the hardware-rotated, multi-buffered scanout (NativeLegacyDisplay, boot-args switch-gpu-copy=1 and
-// switch-scanout-double=1): the display hands each swapped IOSurface to the GPU driver, whose copy engine writes it, pitch-linear
+// The GPU frame copy for the hardware-rotated, multi-buffered scanout (NativeLegacyDisplay): the display hands each swapped IOSurface to the GPU driver, whose copy engine writes it, pitch-linear
 // to block-linear, into a scanout buffer window A neither scans nor may take (TegraScanoutRing.h); the display flips window A to it
 // once the GPU says it is done, taken at the next frame boundary. C and C++ (drivers/TegraGM20B includes it as well).
 //

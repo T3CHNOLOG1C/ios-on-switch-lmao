@@ -27,7 +27,7 @@ filegroup(
 # This package's headers (kernel_headers): what other drivers' hdr_deps name.
 kernel_headers()
 
-# Joy-Cons (switch-joycon-rail / switch-joycon-bt). SwitchJoyConHID subclasses the original IOHIDDevice (late).
+# Joy-Cons. SwitchJoyConHID subclasses the original IOHIDDevice (late).
 kernel_driver(
     name = "SwitchJoyCon",
     srcs = [
@@ -41,7 +41,7 @@ kernel_driver(
         "drivers/TegraGPIO",
     ],
     late = ["SwitchJoyConHID.cpp"],
-    # Game-controller personalities (switch-gc-personality).
+    # Game-controller personalities.
     prelink = ["com.apple.driver.AppleGameControllerPersonality"],
     src_copts = {"SwitchJoyConHID.cpp": [
         "-I",
@@ -49,7 +49,7 @@ kernel_driver(
     ]},
 )
 
-# joyconpaird / joyconnfc: Joy-Con Bluetooth pairing hand-off and NFC (overlay, switch-joycon-bt / -nfc).
+# joyconpaird / joyconnfc: Joy-Con Bluetooth pairing hand-off and NFC.
 [ios_binary(
     name = tool,
     srcs = ["helper/{}.c".format(tool)],

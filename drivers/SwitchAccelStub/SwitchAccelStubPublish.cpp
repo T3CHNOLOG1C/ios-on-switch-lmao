@@ -20,13 +20,11 @@ void switch_accel_stub_publish(void);
 
 void switch_accel_stub_publish(void)
 {
-    // tegra-gpu=4 publishes the real AGXAccelerator (drivers/TegraGM20B). The stub would end QuartzCore's poll before that
-    // exists and Metal would cache an empty device list for backboardd's lifetime, so it stays out of the way then.
-    unsigned gpuStage = 0;
-    if (PE_parse_boot_argn("tegra-gpu", &gpuStage, sizeof(gpuStage)) && gpuStage >= 4) return;
-    // switch-accel-stub=0: no stub (QuartzCore waits 30 s), for a boot where IOGPUFamily cannot load.
-    unsigned stub = 1;
-    if (PE_parse_boot_argn("switch-accel-stub", &stub, sizeof(stub)) && !stub) return;
+    // Unless switch-no-gpu, drivers/TegraGM20B publishes the real AGXAccelerator. The stub would end QuartzCore's poll
+    // before that exists and Metal would cache an empty device list for backboardd's lifetime, so it stays out of the
+    // way then.
+    unsigned noGpu = 0;
+    if (!(PE_parse_boot_argn("switch-no-gpu", &noGpu, sizeof(noGpu)) && noGpu)) return;
     const kern_return_t loaded = OSKextLoadKextWithIdentifier("com.apple.iokit.IOGPUFamily");
     if (loaded) panic("SwitchAccelStub: IOGPUFamily load failed 0x%x", loaded);
     const OSSymbol *name = OSSymbol::withCString("IOAcceleratorES");

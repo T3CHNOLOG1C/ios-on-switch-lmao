@@ -40,7 +40,7 @@
  *   5. MRQ_CLK on clock 0: GET_ALL_INFO (it must be "emc"), GET_RATE, ENABLE (tegra210_clock_apply_init_table's
  *      clk_prepare_enable(emc)), ROUND_RATE then SET_RATE (clk_bpmp_determine_rate + clk_bpmp_set_rate), GET_RATE.
  *
- * Opt-in (SwitchPMIC.cpp: switch-emc=1 for 1600 MHz, switch-emc=<kHz> for another table rate). 1600 MHz is the
+ * SwitchPMIC.cpp asks for 1600 MHz. 1600 MHz is the
  * highest of hekate's stock MTC tables (mtc_tbl_b01.bin has 204, 1331.2 and 1600 MHz for every DRAM; l4t.c
  * DRAM_T210B01_TBL_MAX_FREQ 1600000) and the last stock row of emcb01_dvb_dvfs_table before "Custom". The Arachne
  * rated-speed table (1866 or 2133 MHz, l4t.c:765-801) shows up in the logged list when the firmware has it.
@@ -229,7 +229,7 @@ int tegra_bpmp_emc_boot(unsigned int khz, char *line, unsigned long size)
 		return err;
 	}
 	if (!khz) {
-		snprintf(line, size, "%lld MHz (BPMP firmware %s; EMC tables %s MHz; switch-emc=0)",
+		snprintf(line, size, "%lld MHz (BPMP firmware %s; EMC tables %s MHz; no rate asked)",
 			 before / 1000000, fw_tag, rates);
 		return 0;
 	}

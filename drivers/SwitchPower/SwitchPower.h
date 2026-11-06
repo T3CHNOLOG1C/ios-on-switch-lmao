@@ -8,8 +8,8 @@ extern "C" {
 
 // Starts the thermal service (SwitchThermal.cpp), its single entry point: drives the fan to a fixed safe duty at once
 // (MMIO only), claims the TMP451 ALERT interrupt (GPIO PX4, level low; panics if it cannot be had), then follows the
-// L4T fan curve on every ALERT, with a re-read every 5 s as a staleness bound. With switch-perf=1 it also raises the
-// CPU up a ladder of L4T rates (switch-perf-steps / -trace for staged tests) while the SoC is below its thermal trip,
+// L4T fan curve on every ALERT, with a re-read every 5 s as a staleness bound. It also raises the CPU (the DFLL on
+// demand, or up a ladder of L4T rates on PLLX with switch-no-dfll or after a DFLL failure) while the SoC is below its thermal trip,
 // dropping to the inherited clocks at the trip and going up again below the hysteresis, at most once per hold-off.
 // switch_pmic_start() calls it before the root mount; the board thread's later call is a no-op then. Thread context
 // after IOKit is up; idempotent.
@@ -17,7 +17,7 @@ extern "C" {
 // the MMIO part succeeded).
 int switch_thermal_start(void);
 
-// With the CPU on the DFLL (the governed default, or switch-cpu-mode=dfll), moves it back to PLLX so that SwitchPMIC's
+// With the CPU on the DFLL, moves it back to PLLX so that SwitchPMIC's
 // shut-down/restart I2C5 traffic has the bus to itself; nothing otherwise. Thread context; waits for the thermal work
 // loop.
 void switch_thermal_cpu_quiesce(void);

@@ -21,8 +21,7 @@ exports_files(glob(
     exclude = ["BUILD.bazel"],
 ))
 
-# Four cores (boot_args.py --smp: cpus=4 sheng-smp=1 switch-smp=1; adt_edit.py --smp: the four-A57 ADT), as the
-# CMake flow was configured (SWITCH_SMP=ON).
+# Four cores: adt_edit.py --smp's four-A57 ADT.
 bool_flag(
     name = "smp",
     build_setting_default = True,

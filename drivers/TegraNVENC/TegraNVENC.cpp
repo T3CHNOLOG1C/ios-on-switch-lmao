@@ -13,7 +13,7 @@
 // publishes, every failure is that one line: the engine is put back in reset with its clock off, the arena is given
 // back and nothing is published, so VideoToolbox has no hardware encoder. From E4 on the
 // engine is proven: a job past its bound panics with one line, and a lost syncpoint interrupt panics in TegraHost1x.
-// switch-nvdec=0 turns NVENC off too (E3 decodes through NVDEC); there is no boot-arg of NVENC's own.
+// switch-no-nvdec turns NVENC off too (E3 decodes through NVDEC); there is no boot-arg of NVENC's own.
 //
 // Jobs (tegra_nvenc_run): host1x channel 0 in NVENC's class (0x21), each method written through the engine's THI
 // METHOD0/METHOD1 pair as NVDEC's, the picture setup from a kernel-only slot, then an OP_DONE increment of NVENC's
@@ -445,7 +445,7 @@ void bringUp(void *, wait_result_t)
     // run it needs; E3 decodes on NVDEC anyway. With NVDEC off or failed, NVENC allocates nothing.
     if (!tegra_nvdec_await(kNvdecWaitMs)) {
         IOLog(
-            "TegraNVENC: E0 FAIL NVDEC is not decoding (its N lines, or switch-nvdec): nothing to check NVENC with\n");
+            "TegraNVENC: E0 FAIL NVDEC is not decoding (its N lines, or switch-no-nvdec): nothing to check NVENC with\n");
         return;
     }
     const uint64_t arenaStart = nowUs();
@@ -684,14 +684,13 @@ void engineResume()
 }
 }  // namespace
 
-// On with NVDEC (switch-nvdec, default 3): E3 decodes NVENC's picture on NVDEC, so with NVDEC off there is nothing to
+// On with NVDEC (off with switch-no-nvdec): E3 decodes NVENC's picture on NVDEC, so with NVDEC off there is nothing to
 // prove NVENC with, and it stays off.
 extern "C" int tegra_nvenc_probe(void)
 {
     static volatile int started;
-    uint32_t nvdec = 3;
-    PE_parse_boot_argn("switch-nvdec", &nvdec, sizeof(nvdec));
-    if (!nvdec) return 0;
+    uint32_t noNvdec = 0;
+    if (PE_parse_boot_argn("switch-no-nvdec", &noNvdec, sizeof(noNvdec)) && noNvdec) return 0;
     if (__atomic_exchange_n(&started, 1, __ATOMIC_SEQ_CST)) return 0;
     thread_t thread;
     if (kernel_thread_start(bringUp, nullptr, &thread) != KERN_SUCCESS) {

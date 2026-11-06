@@ -85,7 +85,7 @@
 // a first reply that does not start with the reply magic, or 4 bytes or more left in the FIFO with the ring not moving
 // turn DMA off for that rail with one log line; it keeps working by interrupt per FIFO trigger.
 //
-// Pairing (switch-bt=1, or its alias switch-joycon-bt=1): the address to pair to is the one SwitchBluetooth programs
+// Pairing (unless switch-no-bt): the address to pair to is the one SwitchBluetooth programs
 // into the controller for bluetoothd: the unit's own (fuses, as switchroot's U-Boot derives it) or, when deploy staged
 // hekate's "Dump Joy-Con BT" (switchroot/joycon_mac.ini), Horizon's, as switchroot's U-Boot takes it from joycon_mac.bin
 // (SwitchBluetooth.cpp). SwitchBluetooth knows it only when bluetoothd first connects, well after the rails handshake
@@ -101,7 +101,8 @@
 // registry entry (Address, LinkKey in HCI order, Name, ClassOfDevice, ProductID) for joyconpaird (helper/), which
 // hands it to bluetoothd: pulled off the rail, the Joy-Con pages this address and reconnects over Bluetooth.
 //
-// NFC (switch-joycon-nfc=1): joyconnfc (helper/) drives the Joy-Con (R)'s NFC/IR MCU through the HID device with the
+// NFC (off: the user dropped it on 11-04, as joyconnfc's 30 s MCU scan ran on every Joy-Con (R) attach; nothing turns it
+// on): joyconnfc (helper/) drives the Joy-Con (R)'s NFC/IR MCU through the HID device with the
 // Bluetooth protocol (output report 0x11 MCU requests, subcommands 0x03/0x21/0x22; jc_toolkit nfc_tag_info, yuzu
 // joycon_protocol/nfc.cpp), and the rail carries those reports like any other: 0x11 is a 49-byte output report and the
 // MCU's 0x31 input report is 362 bytes, a 374-byte rail packet. The receive buffer has room beyond that, so a Joy-Con
@@ -355,11 +356,10 @@ uint64_t nowMS()
     return ns / 1000000;
 }
 
-unsigned bootArg(const char *name)
+bool bluetoothDisabled()
 {
-    unsigned value = 0;
-    PE_parse_boot_argn(name, &value, sizeof(value));
-    return value;
+    unsigned off = 0;
+    return PE_parse_boot_argn("switch-no-bt", &off, sizeof(off)) && off;
 }
 }  // namespace
 
@@ -1860,8 +1860,7 @@ bool SwitchJoyConRail::start(IOService *provider)
         panic("SwitchJoyCon: cannot map CAR/GPIO/APB_MISC/pinmux/UART/PMC or make a work loop");
     }
 
-    pairing = bootArg("switch-bt") || bootArg("switch-joycon-bt");
-    nfc = bootArg("switch-joycon-nfc");
+    pairing = !bluetoothDisabled();
     poll = IOTimerEventSource::timerEventSource(this, &SwitchJoyConRail::pollAction);
     if (!poll || loop->addEventSource(poll) != kIOReturnSuccess) panic("SwitchJoyCon: cannot attach the rail clock");
     sessions = IOInterruptEventSource::interruptEventSource(this, &SwitchJoyConRail::sessionAction);
@@ -1882,13 +1881,6 @@ bool SwitchJoyConRail::start(IOService *provider)
     return true;
 }
 
-// The marker launchd starts joyconnfc on (helper/com.brunostjohn.switch.joyconnfc.plist: IOKit matching on this class), so the
-// helper runs only with switch-joycon-nfc=1 whatever the overlay shows.
-class SwitchJoyConNFC : public IOService {
-    OSDeclareDefaultStructors(SwitchJoyConNFC)
-};
-OSDefineMetaClassAndStructors(SwitchJoyConNFC, IOService)
-
     static SwitchJoyConRail *gRail;  // set once at start, for switch_joycon_suspend/resume
 
 extern "C" int switch_joycon_start(void)
@@ -1898,21 +1890,10 @@ extern "C" int switch_joycon_start(void)
     started = true;
     // First, so whichever game-controller personalities serve are settled before any controller can appear.
     switch_joycon_hid_select_personalities();
-    const bool rail = bootArg("switch-joycon-rail"), bluetooth = bootArg("switch-bt") || bootArg("switch-joycon-bt");
     IOService *resources = IOService::getResourceService();
-    if (bootArg("switch-joycon-nfc")) {
-        auto *marker = OSTypeAlloc(SwitchJoyConNFC);
-        if (!resources || !marker || !marker->init() || !marker->attach(resources)) {
-            panic("SwitchJoyCon: cannot publish SwitchJoyConNFC");
-        }
-        marker->registerService();
-        marker->release();  // the attachment keeps it
-    }
-    if (!rail && !bluetooth) return 0;
     // Before any Joy-Con device exists, so the personalities are in the catalogue when bluetoothd or the rail
     // publishes one.
     switch_joycon_hid_prepare();
-    if (!rail) return 0;
     auto *driver = OSTypeAlloc(SwitchJoyConRail);
     if (!resources || !driver || !driver->init() || !driver->attach(resources) || !driver->start(resources)) {
         panic("SwitchJoyCon: rail driver attach or start failed");

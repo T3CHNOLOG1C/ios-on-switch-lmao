@@ -63,7 +63,7 @@ static inline bool native_legacy_scanout_copy(volatile void *destination, uint64
     return true;
 }
 
-// Hardware rotation (NativeLegacyDisplay, boot-arg switch-hw-rotate): the landscape frame is stored
+// Hardware rotation (NativeLegacyDisplay): the landscape frame is stored
 // unrotated, block-linear, and display controller A's window A turns it with SCAN_COLUMN|H_DIRECTION.
 // This is hekate's _di_winA_block (bdk/display/di.inl) and Horizon's own scanout: column scan is used
 // on block-linear surfaces only (FreeBSD sys/arm/nvidia/drm2/tegra_dc.c refuses 90/270 on pitch ones),

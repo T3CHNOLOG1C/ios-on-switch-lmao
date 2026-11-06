@@ -77,9 +77,9 @@ TEST(DirectScanoutSource, RetireAtTheLatchInQueueOrder)
 
 TEST(DirectScanoutSource, NoEarlyRetireOrCollapseOnceRetiringAtTheLatch)
 {
-    EXPECT_THAT(display(), HasSubstr("bootEarlyRetire && !latchRetire && retireSwap"));
+    EXPECT_THAT(display(), HasSubstr("if (!latchRetire && retireSwap(request, true))"));
     EXPECT_THAT(display(), HasSubstr("asyncCopy == 2 && !latchRetire && retireSwap"));
-    EXPECT_THAT(display(), HasSubstr("if (bootEarlyRetire && !latchRetire) {"));
+    EXPECT_THAT(display(), HasSubstr("if (!latchRetire) {"));
     expectBefore(method(display(), "    void finishTransfer("), "if (latchRetire)", "retireSwap");
 }
 

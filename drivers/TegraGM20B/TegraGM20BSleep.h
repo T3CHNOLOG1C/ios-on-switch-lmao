@@ -3,7 +3,7 @@
 // interrupts on and I2C up: suspend after the display's, resume after host1x's and before the display's (its GPU present
 // needs the GPU). Neither returns before the GPU is fully off or fully back; a GPU that cannot get there panics with one
 // line. Each step is one power-journal line ("tegra-gm20b: sleep ..." / "tegra-gm20b: wake ..."). Both are no-ops when
-// tegra-gpu is off or the GPU was never powered. Submissions and new channels made meanwhile wait for the resume.
+// the GPU is off (switch-no-gpu) or was never powered. Submissions and new channels made meanwhile wait for the resume.
 #pragma once
 
 #ifdef __cplusplus

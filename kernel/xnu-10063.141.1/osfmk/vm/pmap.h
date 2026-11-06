@@ -208,6 +208,7 @@ extern boolean_t pmap_switch_page_reserved(ppnum_t pnum);
 extern boolean_t pmap_switch_ram_enabled(void);
 extern boolean_t pmap_switch_ram_reserved(ppnum_t pnum);
 extern boolean_t pmap_switch_pa_valid(pmap_paddr_t pa);
+extern boolean_t pmap_switch_gpu_pool(pmap_paddr_t *start, pmap_paddr_t *end);
 extern void pmap_switch_bootstrap_check(pmap_paddr_t start, pmap_paddr_t end);
 #endif
 extern boolean_t pmap_next_page(ppnum_t *pnum);

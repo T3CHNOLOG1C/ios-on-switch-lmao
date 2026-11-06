@@ -291,7 +291,7 @@ void describe(char *line, size_t size, const char *name, const Result &r, const 
 }
 }  // namespace
 
-// From native_aks_device_key_start, once per boot (sheng-aks=1 with key wrapping on); changes nothing the device key uses.
+// From native_aks_device_key_start, once per boot; changes nothing the device key uses.
 extern "C" void native_aks_se_probe(void)
 {
     static bool probed;

@@ -480,10 +480,7 @@ static int native_sd_cpu_profile_matches(int cpus, int root_boot)
 {
     if (cpus == 1) return __atomic_load_n(&real_ncpus, __ATOMIC_ACQUIRE) == 1;
 #if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT && !SWITCH_SD_MODEL
-    int sheng_smp = 0, native_smp = 0;
-    (void)PE_parse_boot_argn("sheng-smp", &sheng_smp, sizeof(sheng_smp));
-    (void)PE_parse_boot_argn("switch-smp", &native_smp, sizeof(native_smp));
-    if (!switch_native_cpu_profile_matches(cpus, root_boot, sheng_smp, native_smp)) return 0;
+    if (!root_boot || !switch_native_cpu_profile_matches(cpus)) return 0;
     /* Registration is asynchronous matching, not scheduler-online evidence.
      * Yield so the remaining CPU nubs can register; the driver owns online proof. */
     for (unsigned waited = 0; waited <= 2000; ++waited) {
@@ -499,8 +496,7 @@ static int native_sd_cpu_profile_matches(int cpus, int root_boot)
 }
 void switch_sd_probe(void)
 {
-    int enabled = 0;
-    if (!PE_parse_boot_argn("switch-sd-test", &enabled, sizeof(enabled)) || enabled != 1 || attempted) return;
+    if (attempted) return;
     attempted = 1;
     switch_sd_record[0] = SWITCH_SD_DIAG_MAGIC;
     switch_sd_record[1] = 1;
@@ -511,28 +507,20 @@ void switch_sd_probe(void)
     switch_sd_record[17] = UINT64_MAX;
     switch_sd_record[26] = SWITCH_SD_REFERENCE_PA;
     switch_sd_record[27] = SWITCH_SD_CONTROLLER_PA;
-    int cpus = 0;
-    int root_boot = 0;
+    const int cpus = (int)ml_get_max_cpu_number() + 1;
 #if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
-    (void)PE_parse_boot_argn("switch-root-boot", &root_boot, sizeof(root_boot));
-    if (root_boot != 0 && root_boot != 1) {
-        refuse(127);
-        return;
-    }
+    const int root_boot = 1;
+#else
+    const int root_boot = 0;
 #endif
-    if (!PE_parse_boot_argn("cpus", &cpus, sizeof(cpus)) || !native_sd_cpu_profile_matches(cpus, root_boot) ||
+    if (!native_sd_cpu_profile_matches(cpus, root_boot) ||
         (!root_boot && (switch_user_record[2] != 3 || switch_user_record[3] || switch_user_record[6] != 1 ||
                         switch_user_record[8] != 1 || switch_user_record[9] || switch_user_record[12] != 4096 ||
                         switch_user_record[13] != 4))) {
         refuse(100);
         return;
     }
-    int files = 0;
-    (void)PE_parse_boot_argn("switch-sd-files", &files, sizeof(files));
-    if (files != 0 && files != 1) {
-        refuse(124);
-        return;
-    }
+    const int files = 1;
     DTEntry chosen;
     const void *property = NULL;
     unsigned length = 0;
@@ -579,9 +567,11 @@ void switch_sd_probe(void)
     switch_sd_record[2] = 2;
     uint64_t frequency;
 #if SWITCH_SD_MODEL
-    int mode = 0;
-    if (!PE_parse_boot_argn("switch-sd-model", &mode, sizeof(mode)) || mode < 1 ||
-        (mode > 12 && mode != 100 && mode != 101)) {
+#ifndef SWITCH_SD_MODEL_MODE
+#define SWITCH_SD_MODEL_MODE 1
+#endif
+    const int mode = SWITCH_SD_MODEL_MODE;
+    if (mode < 1 || (mode > 12 && mode != 100 && mode != 101)) {
         refuse(120);
         return;
     }

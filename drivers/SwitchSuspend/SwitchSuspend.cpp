@@ -114,12 +114,6 @@ constexpr uint32_t kPadFirst = 0x8d4, kPadWords = 0x2a8 / 4, kMuxFirst = 0x3000,
 // Platform action priorities (one service, so they only place it among other services' actions).
 constexpr uint32_t kActionPriority = 1000;
 
-unsigned bootArg(const char *name)
-{
-    unsigned value = 0;
-    PE_parse_boot_argn(name, &value, sizeof(value));
-    return value;
-}
 // ArmCpu panics on a halt unless SC7 is on (armcpu_system_sleep_enable), so whenever it is not, a CPU assertion
 // keeps IOPMrootDomain from sleeping (checkSystemSleepAllowed: kPMCPUAssertion), idle and demand sleep alike.
 IOPMDriverAssertionID switch_suspend_hold(IOService *owner, const char *why)
@@ -160,7 +154,6 @@ class SwitchSuspend : public IOService {
     }
     bool rtcClockOn(bool log);
     void wr(uint32_t o, uint32_t v) { *reinterpret_cast<volatile uint32_t *>(pmc + o) = v; }
-    static void missingSuspendPaths(char *list, size_t size);
     const char *checkPmc(char *why, size_t size);
     void sleepDevices();
     void quiesce();
@@ -174,21 +167,6 @@ public:
 };
 
 OSDefineMetaClassAndStructors(SwitchSuspend, IOService)
-
-namespace {
-void appendName(char *list, size_t size, const char *name)
-{
-    const size_t used = strnlen(list, size);
-    if (used + 1 < size) snprintf(list + used, size - used, "%s%s", used ? ", " : "", name);
-}
-}  // namespace
-
-// The turned-on drivers that cannot go through SC7 yet, as a ", "-separated list (empty when there is none).
-void SwitchSuspend::missingSuspendPaths(char *list, size_t size)
-{
-    list[0] = 0;
-    if (bootArg("switch-usb-host") || bootArg("switch-dp")) appendName(list, size, "USB-C host/DP");
-}
 
 // The RTC keeps time through SC7 by itself; only its register interface needs the APB clock, which nothing else here
 // turns off. In reset it reads nothing: the wake line then has no time asleep.
@@ -253,16 +231,12 @@ bool SwitchSuspend::start(IOService *provider)
     car = reinterpret_cast<volatile uint8_t *>(ml_io_map(kCarPA, 0x1000));
     setName("SwitchSuspend");
     rtcUsable = pmc && car && rtcClockOn(true);
-    char why[224] = "", missing[160] = "";
-    missingSuspendPaths(missing, sizeof(missing));
+    char why[224] = "";
     const char *blocker = nullptr;
     if (!pmc || !apb) {
         blocker = "the PMC/APB_MISC could not be mapped";
     } else if (!switch_display_power_enabled()) {
-        blocker = "display power is off (switch-sleep=0)";
-    } else if (missing[0]) {
-        snprintf(why, sizeof(why), "no SC7 path yet: %s", missing);
-        blocker = why;
+        blocker = "display power is off (switch-no-sleep)";
     } else if (!(blocker = checkPmc(why, sizeof(why))) && armcpu_system_sleep_enable(why, sizeof(why))) {
         blocker = why;
     }

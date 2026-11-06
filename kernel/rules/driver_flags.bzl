@@ -14,8 +14,8 @@ BLOCK_FLAGS = [
     "{tree}/kits/VerifiedRoot/include",
 ]
 
-# TegraGM20B: the Tegra X1 GPU (vendored nouveau nvkm under an XNU shim, IOAcceleratorES + AGXDeviceUserClient). Inert
-# unless tegra-gpu=<stage>. Apple clang's kernel defaults add -Wsign-conversion, -Wshorten-64-to-32 and
+# TegraGM20B: the Tegra X1 GPU (vendored nouveau nvkm under an XNU shim, IOAcceleratorES + AGXDeviceUserClient). Apple
+# clang's kernel defaults add -Wsign-conversion, -Wshorten-64-to-32 and
 # -Wimplicit-int-conversion; Linux-style nvkm code and its shim trip them over a thousand times.
 GPU_C_FLAGS = [
     "-mgeneral-regs-only",

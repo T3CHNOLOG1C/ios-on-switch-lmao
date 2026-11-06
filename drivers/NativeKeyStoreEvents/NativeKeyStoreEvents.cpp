@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// AppleKeyStore without a SEP: a notification service (the public IOKit matching class used by MKBEventsRegister) and, only when
-// sheng-aks=1 is set, a user client for the unchanged libaks/MobileKeyBag/securityd of a device with no passcode: one system
+// AppleKeyStore without a SEP: a notification service (the public IOKit matching class used by MKBEventsRegister) and a user
+// client for the unchanged libaks/MobileKeyBag/securityd of a device with no passcode: one system
 // keybag (handle 0), always unlocked, and class keys derived from the console's fuse chip ID (AKSDeviceKey.cpp), so the
 // keychain's wrapped keys survive reboots and stay on this console. Not SEP-grade: the chip ID is not secret.
 //
@@ -38,13 +38,6 @@ extern "C" IOReturn native_aks_bag_uuid(uint32_t keybag, uint8_t uuid[16]);
 extern "C" void native_aks_unsupported(uint32_t selector);
 
 namespace {
-// Key wrapping under the fuse-derived device key (AKSDeviceKey.cpp), on unless switch-aks-wrap=0.
-static bool aksWrapEnabled()
-{
-    unsigned enabled = 1;
-    PE_parse_boot_argn("switch-aks-wrap", &enabled, sizeof(enabled));
-    return enabled != 0;
-}
 constexpr uint32_t kSelLockState = 7, kSelWrapKey = 10, kSelUnwrapKey = 11, kSelGetSystem = 14, kSelDeviceState = 17,
                    kSelGetBagUUID = 23, kSelGetConfiguration = 31, kSelExtendedDeviceState = 35, kSelMementoState = 139;
 constexpr uint64_t kUnlockedSinceBoot = 4;
@@ -239,14 +232,9 @@ OSDeclareDefaultStructors(AppleKeyStoreUserClient) public : IOReturn clientClose
             }
             case kSelWrapKey:
             case kSelUnwrapKey:
-                // switch-aks-wrap=0: no device key and every wrap refused, for a boot that cannot read the fuses.
-                rc = aksWrapEnabled() ? keyOperation(selector, args) : kAksUnsupported;
+                rc = keyOperation(selector, args);
                 break;
             case kSelGetBagUUID: {
-                if (!aksWrapEnabled()) {
-                    rc = kAksUnsupported;
-                    break;
-                }
                 if (args->scalarInputCount != 1 || !args->scalarInput || args->scalarOutputCount != 0) {
                     rc = kAksBadArgument;
                     break;
@@ -303,7 +291,7 @@ public:
         if (!IOService::start(provider)) return false;
         setName("Native keystore state service");
         // Panics without a device key: securityd would otherwise drop every item it wrapped in an earlier boot.
-        if (native_aks_state_enabled() && aksWrapEnabled()) native_aks_device_key_start();
+        if (native_aks_state_enabled()) native_aks_device_key_start();
         // CloudKeychainProxy's open is the one MACF refuses (its sandbox report is the kernel error line on its own thread at each
         // "failed to open connection to AppleKeyStore"); our IOUserClient.cpp grants the one named process in its place.
         if (!setProperty("NativeKeyStoreEvents", true) ||

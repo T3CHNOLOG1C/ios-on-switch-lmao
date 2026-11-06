@@ -114,11 +114,10 @@ static const OSMetaClass *lookup(const char *text)
 
 extern "C" void sheng_pmgr_run(void)
 {
-    unsigned mode = 0;
-    if (!PE_parse_boot_argn("sheng-pmgr", &mode, sizeof(mode)) || !mode) return;
+    constexpr unsigned mode = 2;
     sheng_pmgr_observation[15] = mode;
     sheng_pmgr_observation[1] = static_cast<uint32_t>(kIOReturnError);
-    if (mode > 3 || sheng_pmgr_observation[0]) {
+    if (sheng_pmgr_observation[0]) {
         sheng_pmgr_checkpoint();
         return;
     }
@@ -177,8 +176,7 @@ extern "C" void sheng_pmgr_run(void)
         if (value != 0xffffffff || sheng_pmgr_observation[8] != 0xffffffff || sheng_pmgr_observation[13] ||
             sheng_pmgr_observation[14])
             break;
-        if (mode == 3) provider->disableCPUCore(1);
-        if (mode == 2) {
+        {
             IOService *platform = IOService::getPlatform();
             if (!platform || !provider->attach(platform)) break;
             if (!provider->start(platform)) {

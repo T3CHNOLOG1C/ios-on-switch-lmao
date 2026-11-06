@@ -42,7 +42,7 @@ enum switch_stamp {
     SWITCH_STAMP_UBOOT_GO,       /* SD metadata ready, bootm go next */
     SWITCH_STAMP_LOADER_ENTRY,   /* loader's first instructions */
     SWITCH_STAMP_EMC_START,      /* EMC raise (emc.h): first BPMP request ... */
-    SWITCH_STAMP_EMC_END,        /* ... and done, whatever the result (both 0 when switch-emc is off) */
+    SWITCH_STAMP_EMC_END,        /* ... and done, whatever the result (both 0 without LOAD_EMC_KHZ) */
     SWITCH_STAMP_GATES,          /* FDT, stage, MC and timing-slot checks done */
     SWITCH_STAMP_UNPACK_START,   /* cacheable regime on, first payload byte */
     SWITCH_STAMP_UNPACK_END,     /* window decoded and zero-filled */

@@ -6,15 +6,12 @@
     "and lists each file's directory, with its optional 'boot-arg' gate, in ADT /chosen switch-overlay.",
     "The deploy script copies the staged tree to /private/var/Switch/overlay/ on the Data volume. At boot, after",
     "the Data mount and before launchd, the kernel (SwitchRawMount.h native_switch_raw_overlay) union-binds",
-    "/private/var/Switch/overlay<directory> over <directory> for every listed directory whose gate is on.",
+    "/private/var/Switch/overlay<directory> over <directory> for every listed directory, unless its gate is set.",
     "Fields: path (absolute), source (relative to tree/), trust (signed Mach-O), mode (octal, default 0755 for",
-    "trusted code, 0644 otherwise), boot-arg (all files of one directory share it; 'a|b' shows the directory when",
-    "either boot-arg is non-zero, for directories features share).",
+    "trusted code, 0644 otherwise), boot-arg (the switch-no-<feature> that hides the directory; all files of one",
+    "directory share it; 'a|b' hides it only when both are set, for directories features share).",
     "union (optional): the directory to union instead of the file's own, an existing ancestor of path.",
-    "The audio HAL union (our plug-in + the BTAudioHALPlugin stub) is gated on switch-audio, like audiomxd itself.",
-    "unless-boot-arg (optional): left out of the package when the packaged command line sets that boot-arg. The",
-    "BTAudioHALPlugin stub defers Apple's Bluetooth audio plug-in for good, which only a console without bluetoothd",
-    "(switch-bt off) wants: with switch-bt=1 it is left out and the plug-in connects to bluetoothd (A2DP, HFP).",
+    "The audio HAL union (our plug-in) is hidden by switch-no-audio, like audiomxd itself.",
     "ProgressUI's 1x boot logo (backboardd's Apple logo overlay; 21H461 ships only @2x) is made from the OS volume's own",
     "@2x one by scripts/progressui_logo.py into build/ (Apple's artwork, not in git); missing, it is left out.",
     "portrait (optional): staged only for a portrait-native kernel (drivers/NativeMobileDisplay/SwitchPortrait.h).",
@@ -22,9 +19,9 @@
     "(nine AUs tuned for J120's four MAX98723 drivers). drivers/SwitchAudio/tunings has same-named ones, gated like the",
     "plug-in, that bypass every AU of those chains except the volume (see hal/SwitchAudioPlugIn.c).",
     "The VideoDecoders union (HEVCH8, AVD) has no gate: AVD registers only in processes that may open the TegraNVDEC",
-    "service, which the kernel publishes once NVDEC proves itself at boot (switch-nvdec=0 turns NVDEC off).",
+    "service, which the kernel publishes once NVDEC proves itself at boot.",
     "H264H7.videoencoder (AVE on NVENC) has no gate either: it registers only once the kernel published TegraNVENC (E4,",
-    "after NVENC's picture decoded back on NVDEC at boot; switch-nvdec=0 turns both off).",
+    "after NVENC's picture decoded back on NVDEC at boot).",
     "The J120 iPadOS 17 and Lake wallpapers (WallpaperKit loads a bundle only at the device's logical screen class, which",
     "follows switch-ui-scale, or at 'any'; 21H461 ships @2x only): each bundle directory is its own union, showing an 'any'",
     "Wallpaper.plist (tools/package/wallpaper_1x.py, pinned) over the sealed one, with the sealed .ca and HEIC beneath.",
@@ -35,33 +32,26 @@
       "path": "/usr/sbin/BlueTool",
       "source": "build/switch-bluetooth/BlueTool",
       "trust": true,
-      "boot-arg": "switch-bt"
+      "boot-arg": "switch-no-bt"
     },
     {
       "path": "/System/Library/Audio/Plug-Ins/HAL/SwitchAudio.driver/SwitchAudio",
       "source": "build/switch-audio/SwitchAudio.driver/SwitchAudio",
       "trust": true,
       "union": "/System/Library/Audio/Plug-Ins/HAL",
-      "boot-arg": "switch-audio"
+      "boot-arg": "switch-no-audio"
     },
     {
       "path": "/System/Library/Audio/Plug-Ins/HAL/SwitchAudio.driver/Info.plist",
       "source": "drivers/SwitchAudio/hal/Info.plist",
       "union": "/System/Library/Audio/Plug-Ins/HAL",
-      "boot-arg": "switch-audio"
-    },
-    {
-      "path": "/System/Library/Audio/Plug-Ins/HAL/BTAudioHALPlugin.driver/Info.plist",
-      "source": "drivers/SwitchAudio/hal/BTAudioHALPlugin-Info.plist",
-      "union": "/System/Library/Audio/Plug-Ins/HAL",
-      "boot-arg": "switch-audio",
-      "unless-boot-arg": "switch-bt"
+      "boot-arg": "switch-no-audio"
     },
     {
       "path": "/usr/libexec/joyconpaird",
       "source": "build/switch-joycon/joyconpaird",
       "trust": true,
-      "boot-arg": "switch-bt|switch-joycon-bt"
+      "boot-arg": "switch-no-bt"
     },
     {
       "path": "/System/Library/VideoDecoders/HEVCH8.videodecoder",
@@ -86,32 +76,32 @@
     {
       "path": "/Library/Audio/Tunings/J120/VAD/j120_speaker_general.austrip",
       "source": "drivers/SwitchAudio/tunings/j120_speaker_general.austrip",
-      "boot-arg": "switch-audio"
+      "boot-arg": "switch-no-audio"
     },
     {
       "path": "/Library/Audio/Tunings/J120/VAD/j120_speaker_latenight_general.austrip",
       "source": "drivers/SwitchAudio/tunings/j120_speaker_latenight_general.austrip",
-      "boot-arg": "switch-audio"
+      "boot-arg": "switch-no-audio"
     },
     {
       "path": "/Library/Audio/Tunings/J120/VAD/j120_speaker_latenight_movie.austrip",
       "source": "drivers/SwitchAudio/tunings/j120_speaker_latenight_movie.austrip",
-      "boot-arg": "switch-audio"
+      "boot-arg": "switch-no-audio"
     },
     {
       "path": "/Library/Audio/Tunings/J120/VAD/j120_speaker_measurement.austrip",
       "source": "drivers/SwitchAudio/tunings/j120_speaker_measurement.austrip",
-      "boot-arg": "switch-audio"
+      "boot-arg": "switch-no-audio"
     },
     {
       "path": "/Library/Audio/Tunings/J120/VAD/j120_speaker_movie.austrip",
       "source": "drivers/SwitchAudio/tunings/j120_speaker_movie.austrip",
-      "boot-arg": "switch-audio"
+      "boot-arg": "switch-no-audio"
     },
     {
       "path": "/Library/Audio/Tunings/J120/VAD/j120_speaker_ringtone.austrip",
       "source": "drivers/SwitchAudio/tunings/j120_speaker_ringtone.austrip",
-      "boot-arg": "switch-audio"
+      "boot-arg": "switch-no-audio"
     },
     {
       "path": "/Library/Wallpaper/Collections/iPadOS_17~ipad.wallpaperCollection/Wallpapers/7570.iPadOS_17_Flat-1024w-1366h@2x~ipad.wallpaper/Wallpaper.plist",

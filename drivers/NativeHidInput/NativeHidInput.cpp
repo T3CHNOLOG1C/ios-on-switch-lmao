@@ -338,7 +338,7 @@ public:
             size = sizeof(descriptor);
             memcpy(combined, descriptor, size);
             // Default: one device, keyboard collection first, digitizer second (the arrangement whose event driver
-            // and user client attach on hardware); the separate digitizer device is the opt-in sheng-touch-split.
+            // and user client attach on hardware).
             if (touchEnabled) {
                 memcpy(combined + size, touchDescriptor, sizeof(touchDescriptor));
                 size += sizeof(touchDescriptor);
@@ -354,8 +354,6 @@ public:
         // Request the normal generic HID event personality for this owned
         // keyboard. This is a matching property, not a client entitlement.
         if (!setProperty("HIDDefaultBehavior", true)) return false;
-        unsigned touch = 0;
-        touchEnabled = PE_parse_boot_argn("sheng-touch-hid", &touch, sizeof(touch)) && touch == 1;
         if (touchOnly || touchEnabled) {
             setProperty("Built-In", true);
             setProperty("DisplayIntegrated", true);

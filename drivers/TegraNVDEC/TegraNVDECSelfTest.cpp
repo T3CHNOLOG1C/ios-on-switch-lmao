@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// N3 (switch-nvdec >= 2): NVDEC decodes one embedded H.264 picture through the same path user clients use
+// N3 (stage 2 on): NVDEC decodes one embedded H.264 picture through the same path user clients use
 // (tegra_nvdec_run: checker, relocations, kernel setup slot, syncpoint fence by interrupt). The picture is a 64x64
 // High-profile IDR (CABAC, 8x8 transform); its picture setup, bitstream and slice offsets were produced on the host by
 // the plug-in's own H.264 code (SwitchVideoDecoders/test/h264_host --selftest), and the expected luma CRC is x264's

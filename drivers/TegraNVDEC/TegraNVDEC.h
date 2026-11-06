@@ -2,9 +2,9 @@
 // Inside TegraNVDEC: the engine (TegraNVDEC.cpp), the buffer arena (TegraNVDECMemory.cpp), the user client
 // (TegraNVDECUserClient.cpp) and the boot self-test (TegraNVDECSelfTest.cpp).
 //
-// On by default (stage 3). Boot-arg switch-nvdec=<stage> overrides: 0 off; 1 brings NVDEC up (N0 host1x, N1 power
-// and falcon, N2 syncpoint proof of life); 2 also reserves the arena and decodes an embedded H.264 picture (N3); 3 also
-// publishes the TegraNVDEC service and its user client (N4). switch-nvdec-mib=<MiB> sizes the arena (default 48).
+// On (stage 3) unless boot-arg switch-no-nvdec. Stage 1 brings NVDEC up (N0 host1x, N1 power and falcon, N2 syncpoint
+// proof of life); 2 also reserves the 48 MiB arena and decodes an embedded H.264 picture (N3); 3 also publishes the
+// TegraNVDEC service and its user client (N4).
 #ifndef TEGRA_NVDEC_H
 #define TEGRA_NVDEC_H
 #include <stddef.h>

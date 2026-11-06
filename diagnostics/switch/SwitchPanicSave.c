@@ -11,7 +11,7 @@
 // allocation, no lock, ISO 8x16 glyphs at 1280x720 (XNU's console font and layout). It is drawn at panic entry, again once
 // the other CPUs are halted (a frame copy on another CPU may still have landed over it), and once XNU wrote its panic log.
 //
-// Record (boot-arg switch-panic-save=1): hekate's L4T pstore RAM, 0xb0000000 + 2 MiB (hekate bdk/memory_map.h
+// Record: hekate's L4T pstore RAM, 0xb0000000 + 2 MiB (hekate bdk/memory_map.h
 // PSTORE_ADDR/PSTORE_SZ). The loader's RAM ledger already keeps it from the VM (scripts/build_native_loader.py exclusion
 // 'ramoops', the live FDT's ramoops carve-out); _init checks that every page is reserved and saves nothing otherwise.
 //   +0x000000  1 MiB    XNU's panic buffer for this boot (gPanicBase: embedded_panic_header, panic log, stackshot). Without
@@ -23,25 +23,22 @@
 //                       reuses that buffer. Written next to the text as panic-<UTC>.kcdata (pull_logs decodes it)
 //   +0x180000  512 KiB  the text, in hekate's L4T console layout: 'DBGC', start, size, then size bytes (main.c _show_errors)
 // The text is the panic string, the last 64 KiB of the kernel log (msgbuf) and, once SavePanicInfo returned, XNU's panic
-// log (backtraces, kexts). With switch-panic-hekate=1, PMC_SCRATCH37 is set at panic entry to hekate's L4T panic magic
-// 'TPAN' (off by default: hekate would add SD:/L4T_panic.* files and wait for a button), and TMR5/WDT0 is armed to reset through the PMC (Linux tegra_wdt.c: 1 MHz timer at 250 ms, reset on the 4th WDT
-// expiry) in case the rest of the panic path hangs. After the panic log, switch-panic-reboot seconds after the panic
-// (default 0: never, the panic screen stays up for a photo) the PMC main reset (PMC_CNTRL bit 4, L4T pmc.c tegra_pmc_restart_notify) warm-resets the SoC:
+// log (backtraces, kexts). With hekate_on, PMC_SCRATCH37 would be set at panic entry to hekate's L4T panic magic
+// 'TPAN' (off: hekate would add SD:/L4T_panic.* files and wait for a button). TMR5/WDT0 is armed to reset through the PMC (Linux tegra_wdt.c: 1 MHz timer at 250 ms, reset on the 4th WDT
+// expiry) in case the rest of the panic path hangs. After the panic log, reboot_s seconds after the panic
+// (0: never, the panic screen stays up for a photo) the PMC main reset (PMC_CNTRL bit 4, L4T pmc.c tegra_pmc_restart_notify) warm-resets the SoC:
 // the PMIC keeps DRAM powered, hekate comes back with RAM as it was, saves the text to SD:/L4T_panic.txt (and the 2 MiB to
 // SD:/L4T_panic.bin) and waits for a button. The next iPadOS boot writes /private/var/Switch/panic-<UTC>.log on Data
 // (kern_exec.c, before launchd) and clears the record. A record whose panic log was never appended (reset by the
 // watchdog) gets XNU's log from +0x000000 at the next boot, before XNU clears that buffer.
 // Holding POWER instead (a PMIC power-off) loses DRAM and the record with it.
 // A watchdog panic (the userspace watchdog's "userspace watchdog timeout: ...", or the kernel's "watchdog timeout: no
-// checkins from watchdogd ...") is a hang, not a bug report to photograph: without switch-panic-reboot it warm-resets
+// checkins from watchdogd ...") is a hang, not a bug report to photograph: it warm-resets
 // 60 s after the panic (WATCHDOG_REBOOT_S), so the device restarts and the record (with the hung process's threads in the
 // stackshot) reaches Data, where holding POWER would have lost it.
-// A panic with the panel off (display power: the Switch was locked) has no screen to read or photograph either: without
-// switch-panic-reboot it warm-resets DARK_REBOOT_S after the panic, for the same reason (r7t panicked locked, looked
+// A panic with the panel off (display power: the Switch was locked) has no screen to read or photograph either: it
+// warm-resets DARK_REBOOT_S after the panic, for the same reason (r7t panicked locked, looked
 // like a Switch that would not wake, and was forced off, record and all).
-// Boot-args: switch-panic-save=1 (off by default), switch-panic-reboot=<s> (default 0: hold the panic screen),
-// switch-panic-hekate=1 (TPAN: hekate also copies the text to SD:/L4T_panic.* and waits for a button), switch-panic-test=<s>
-// (a test panic s seconds after the Data mount, on boots without a saved panic).
 #include <stdint.h>
 #include <stddef.h>
 #include <stdarg.h>
@@ -130,10 +127,10 @@ struct switch_panic_stackshot {
 };
 
 static unsigned save_on, hekate_on, reboot_s; /* 0: the panic screen stays up (10-31: the user photographs it) */
-static unsigned reboot_arg;                   /* switch-panic-reboot given: it decides for watchdog panics too */
+static const unsigned reboot_arg = 0;         /* a fixed reboot delay: it would decide for watchdog panics too */
 static volatile uint8_t *region;              /* write-combined */
 static volatile uint32_t *pmc, *tmr, *screen;
-static const char *save_off_reason = "boot-arg switch-panic-save is off";
+static const char *save_off_reason = "not armed";
 static uint32_t last_reset = 0xffffffffu;
 static int pending, pending_damaged;
 static volatile uint32_t begun;
@@ -399,7 +396,7 @@ static void draw_status(void)
                  "/private/var/Switch/panic-*.log.",
                  reboot_s);
     else if (save_on && region)
-        snprintf(line, sizeof(line), "Saved in RAM (switch-panic-reboot=0: no reset). Holding POWER loses it.");
+        snprintf(line, sizeof(line), "Saved in RAM (no reset). Holding POWER loses it.");
     else
         snprintf(line, sizeof(line), "Not saved (%s). Hold POWER to turn off.", save_off_reason);
     clear_rows(ROWS - 1, ROWS);
@@ -448,13 +445,6 @@ void switch_panic_save_init(void)
 {
     if (switch_native_text_console_active())
         screen = (volatile uint32_t *)ml_io_map_wcomb((vm_offset_t)SWITCH_FB_PA, (vm_size_t)SWITCH_FB_BYTES);
-    uint32_t value = 0;
-    if (!PE_parse_boot_argn("switch-panic-save", &value, sizeof(value)) || !value) return;
-    if (PE_parse_boot_argn("switch-panic-hekate", &value, sizeof(value))) hekate_on = value != 0;
-    if (PE_parse_boot_argn("switch-panic-reboot", &value, sizeof(value))) {
-        reboot_s = value > 240 ? 240 : value;
-        reboot_arg = 1;
-    }
     save_on = 1;
     for (uint64_t pa = REGION_PA; pa < REGION_PA + REGION_BYTES; pa += 4096)
         if (!pmap_switch_ram_reserved((ppnum_t)(pa >> 12))) {
@@ -462,7 +452,7 @@ void switch_panic_save_init(void)
             return;
         }
     pmc = (volatile uint32_t *)ml_io_map((vm_offset_t)PMC_PA, 4096);
-    /* Always: a watchdog panic resets even without switch-panic-reboot. */
+    /* Always: a watchdog panic resets even with the panic screen held. */
     tmr = (volatile uint32_t *)ml_io_map((vm_offset_t)TMR_PA, 4096);
     region = (volatile uint8_t *)ml_io_map_wcomb((vm_offset_t)REGION_PA, REGION_BYTES);
     if (!pmc || !region || !tmr) {
@@ -592,23 +582,6 @@ void switch_panic_logged(void)
     pmc_reset();
 }
 
-/* Boot-arg switch-panic-test=<s>: a panic s seconds after the Data mount, on a boot that found no saved panic, so a
- * test boot and the boot that saves its record alternate. */
-static void test_panic(thread_call_param_t seconds, thread_call_param_t unused)
-{
-    panic("SwitchPanicSave: test panic %u s after the Data mount (boot-arg switch-panic-test)",
-          (unsigned)(uintptr_t)seconds);
-}
-static void arm_test_panic(void)
-{
-    uint32_t seconds = 0;
-    if (!PE_parse_boot_argn("switch-panic-test", &seconds, sizeof(seconds)) || !seconds) return;
-    thread_call_t call = thread_call_allocate(test_panic, (thread_call_param_t)(uintptr_t)seconds);
-    uint64_t deadline = 0;
-    clock_interval_to_deadline(seconds, NSEC_PER_SEC, &deadline);
-    if (call) thread_call_enter_delayed(call, deadline);
-}
-
 const char *switch_panic_save_pending(uint32_t *bytes, char *path, size_t path_bytes)
 {
     static const char *const resets[8] = {"power-on", "watchdog", "thermal sensor", "software (PMC)",
@@ -622,7 +595,6 @@ const char *switch_panic_save_pending(uint32_t *bytes, char *path, size_t path_b
                "SwitchPanicSave: armed (%u MiB at %#llx, warm reset %u s after a panic), last reset %s, no saved "
                "panic",
                REGION_BYTES >> 20, (unsigned long long)REGION_PA, reboot_s, last_reset < 8 ? resets[last_reset] : "?");
-        arm_test_panic();
         return NULL;
     }
     char when[32];

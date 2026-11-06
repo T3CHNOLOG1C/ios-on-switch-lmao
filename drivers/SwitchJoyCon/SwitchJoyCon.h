@@ -9,25 +9,14 @@
 extern "C" {
 #endif
 
-// Boot-args, all default 0 (off):
-//   switch-joycon-rail=1    rail Joy-Cons (UART-B right, UART-C left) as Joy-Con HID devices for GameController, with
-//                           attach/detach detection and rail charging (SwitchJoyConRail.cpp); their Home and Capture
-//                           buttons are also the iPad's Home button and screenshot key (SwitchJoyConHID.cpp);
-//   switch-bt=1             (drivers/SwitchBluetooth) also turns on, here: the game-controller HID personalities for
-//                           Bluetooth Joy-Cons and Pro Controllers, and with the rail driver on, pairing on attach: once
-//                           SwitchBluetooth has programmed the controller's address (switch_joycon_bluetooth_address),
-//                           each rail Joy-Con's active pairing slot is read, and the Joy-Con is paired to that address
-//                           over the rail unless the slot already names it; the link key is published for joyconpaird
-//                           to hand to bluetoothd (helper/). switch-joycon-bt=1 is an alias;
-//   switch-gc-personality=1 use iPadOS's own AppleGameControllerPersonality.kext personalities (Xbox, DualShock 4,
-//                           DualSense, Luna, Nintendo, and the generic-gamepad AppleGCHIDEventDummyService) instead of
-//                           this driver's Nintendo-only set. Needs the kext in the prelink set (panics if it is not);
-//                           without the boot-arg its personalities are taken out of the catalogue at start, so a kernel
-//                           that has it prelinked boots as one without it (SwitchJoyConHID.cpp);
-//   switch-joycon-nfc=1     Joy-Con (R) / Pro Controller NFC (joyconnfc is not in the overlay, and launchd would not
-//                           load its plist from there): the rail keeps feeding GameController standard reports while
-//                           the NFC/IR MCU streams 0x31 reports, and the SwitchJoyConNFC marker service is published
-//                           for joyconnfc (helper/).
+// Rail Joy-Cons (UART-B right, UART-C left) are Joy-Con HID devices for GameController, with attach/detach detection
+// and rail charging (SwitchJoyConRail.cpp); their Home and Capture buttons are also the iPad's Home button and
+// screenshot key (SwitchJoyConHID.cpp). The game-controller HID personalities also serve Bluetooth Joy-Cons and Pro
+// Controllers and, unless boot-arg switch-no-bt turns Bluetooth off, the rail pairs on attach: once SwitchBluetooth has
+// programmed the controller's address (switch_joycon_bluetooth_address), each rail Joy-Con's active pairing slot is
+// read, and the Joy-Con is paired to that address over the rail unless the slot already names it; the link key is
+// published for joyconpaird to hand to bluetoothd (helper/). iPadOS's own AppleGameControllerPersonality.kext
+// personalities are taken out of the catalogue at start when the kext is prelinked (SwitchJoyConHID.cpp).
 // Thread context, after bsd_autoconf() with the GIC up (the board thread). Idempotent. Returns 0; failures panic.
 int switch_joycon_start(void);
 

@@ -19,7 +19,7 @@ void native_keyevents_open_refused(void)
 {
     native_keyevents_refused_opens = native_keyevents_refused_opens + 1;
 }
-// sheng-aks=1: the owned AppleKeyStore answers the state queries (no passcode, nothing locked); counters feed the diagnostic
+// The owned AppleKeyStore answers the state queries (no passcode, nothing locked); counters feed the diagnostic
 // page's extension rows (slots 0-1): opens/calls, then selector:count per selector seen ('e' = the last answer was an error).
 extern char boot_progress_ext[8][48];
 volatile uint32_t native_aks_opens, native_aks_calls;
@@ -27,28 +27,16 @@ static volatile uint32_t aks_count[96];
 static volatile int32_t aks_rc[96];
 bool native_aks_state_enabled(void)
 {
-    static int cached = -1;
-    if (cached < 0) {
-        unsigned value = 0;
-        cached = PE_parse_boot_argn("sheng-aks", &value, sizeof(value)) && value == 1;
-    }
-    return cached == 1;
+    return true;
 }
 // The device-state "sls" field, which MKBGetDeviceLockState returns: 0 unlocked, 1 locked, 2 locking, 3 disabled (no
 // passcode). Default 3: this keybag has no passcode, and nothing here could check one (no SEP, no AppleCredentialManager).
 // With 0, MobileKeyBag reports "passcode set, unlocked": SpringBoard's hasPasscodeSet is YES and lockdownd asks for
 // the passcode after Trust (LocalAuthentication, ACMContextCreate -5), takes the failure as a denial and refuses USB
 // pairing.
-// sheng-aks-sls=<n> (0..7) overrides it.
 uint32_t native_aks_lock_state(void)
 {
-    static int cached = -1;
-    if (cached < 0) {
-        unsigned value = 3;
-        if (!PE_parse_boot_argn("sheng-aks-sls", &value, sizeof(value)) || value > 7) value = 3;
-        cached = (int)value;
-    }
-    return (uint32_t)cached;
+    return 3;
 }
 static void aks_publish(void)
 {
@@ -89,14 +77,10 @@ void native_aks_call(uint32_t selector, int32_t result)
 }
 static void native_keyevents_probe(void)
 {
-    unsigned enabled = 0, original = 0;
-    if (!PE_parse_boot_argn("offline-key-events", &enabled, sizeof(enabled)) || enabled != 1 || native_keyevents_stage)
-        return;
+    if (native_keyevents_stage) return;
     native_keyevents_stage = 1;
-    PE_parse_boot_argn("offline-keystore", &original, sizeof(original));
     native_keyevents_status = kIOReturnNotPermitted;
     // No SEP: stand in for AppleKeyStore whether or not Data is ephemeral.
-    if (original) return;
     const OSSymbol *name = OSSymbol::withCString("AppleKeyStore");
     bool absent = name && !OSMetaClass::getMetaClassWithName(name);
     OSSafeReleaseNULL(name);
@@ -123,33 +107,8 @@ static void native_keyevents_probe(void)
     native_keyevents_status = kIOReturnSuccess;
     native_keyevents_stage = 3;
 }
-volatile uint32_t native_keystore_stage;
-volatile int native_keystore_load_status = -1;
-volatile uint64_t native_keystore_service;
-volatile uint32_t native_keystore_class_size;
-__attribute__((noinline)) void native_keystore_checkpoint(void)
-{
-    __asm__ volatile("" ::: "memory");
-}
 void native_keystore_probe(void)
 {
     native_keyevents_probe();
-    unsigned enabled = 0;
-    if (!PE_parse_boot_argn("offline-keystore", &enabled, sizeof(enabled)) || enabled != 1 || native_keystore_stage)
-        return;
-    native_keystore_stage = 1;
-    native_keystore_load_status = OSKext::loadKextWithIdentifier("com.apple.driver.AppleSEPKeyStore", true, false,
-                                                                 kOSKextExcludeNone, kOSKextExcludeNone, nullptr);
-    native_keystore_stage = 2;
-    if (!native_keystore_load_status) {
-        OSDictionary *matching = IOService::serviceMatching("AppleKeyStore");
-        IOService *service = matching ? IOService::waitForMatchingService(matching, 5000000000ULL) : nullptr;
-        native_keystore_service = (uintptr_t)service;
-        if (service) native_keystore_class_size = service->getMetaClass()->getClassSize();
-        OSSafeReleaseNULL(service);
-        OSSafeReleaseNULL(matching);
-    }
-    native_keystore_stage = 3;
-    native_keystore_checkpoint();
 }
 }

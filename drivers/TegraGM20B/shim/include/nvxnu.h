@@ -20,7 +20,8 @@ void nvxnu_log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 void nvxnu_stats(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 /* Bring-up trace: nvxnu_log, then 400 ms so the console draws the line before the next (possibly hanging) step. */
 void nvxnu_step(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
-/* boot-arg tegra-gpu-trace=1: bring-up trace lines wait for the console (nvxnu_step 400 ms, 2 s before M1, 3 s per stage) */
+/* Traced bring-up (a source-level switch, off): trace lines wait for the console (nvxnu_step 400 ms, 2 s before M1, 3 s
+ * per stage) */
 int nvxnu_trace_paced(void);
 int nvxnu_vsnprintf(char *buf, unsigned long size, const char *fmt, __builtin_va_list ap);
 /* nvkm's error reports (dev_err and worse; nvkm_error/nvkm_fatal): logged like nvxnu_log. Those made by nvkm's interrupt
@@ -78,7 +79,7 @@ void nvxnu_iounmap(volatile void *va, nvxnu_u64 size);
 
 /*
  * GPU memory pool: physically contiguous, below 4 GiB, mapped write-combined in the kernel.
- * Either a range the loader withholds from XNU (boot-args tegra-gpu-pool-pa / -mb) or, as a
+ * Either the range XNU withholds from the VM (pmap_switch_gpu_pool) or, as a
  * fallback, an IOBufferMemoryDescriptor. Page granular (4 KiB).
  */
 /* *zeroed: 1 if the pool's pages were zeroed here (the fallback); the reserved range is not, its pages start dirty and
@@ -124,9 +125,6 @@ nvxnu_u32 nvxnu_wake_seq(void);
 void nvxnu_wake(void);
 int nvxnu_idle(nvxnu_u32 seq, nvxnu_u64 deadline_ns);
 void nvxnu_wake_due(nvxnu_u32 seq, const char *what, nvxnu_u32 value);
-
-int nvxnu_bootarg_int(const char *name, long long *value);
-int nvxnu_bootarg_str(const char *name, char *buf, int len);
 
 /* Tegra210 platform pieces (platform.c), used by the clk/regulator/reset/pmc shims */
 int tegra_gm20b_platform_map(void);

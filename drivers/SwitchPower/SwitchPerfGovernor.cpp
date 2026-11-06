@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// On-demand CPU clock for the A57 cluster on the DFLL (SwitchThermal's governed mode, the default with switch-perf=1).
+// On-demand CPU clock for the A57 cluster on the DFLL (SwitchThermal's governed mode, the default).
 //
 // What iOS does on Apple silicon (CLPC, the performance controller behind XNU's sched_perfcontrol_* callouts) and what
 // Horizon does by hand with its boost mode: clocks up when there is work, down when there is none.

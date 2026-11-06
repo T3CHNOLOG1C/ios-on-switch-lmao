@@ -15,7 +15,7 @@
 // line with AFI error reporting (tegra_pcie_isr 1193, AFI_INTR_CODE). WL host wake is PH2 = GPIO 58 (bank 1, SPI 33;
 // tegra210b01-fric-gpio.dtsi:30, pinmux wifi_wake_ap_ph2 0x31bc), a TegraGPIO nub if the radio ever sleeps.
 //
-// Enabled by the boot-arg switch-wlan=1; prints one line.
+// Prints one line.
 #include <IOKit/IOLib.h>
 #include <pexpert/pexpert.h>
 #include "SwitchWLANStation.h"
@@ -98,9 +98,6 @@ extern "C" int switch_wlan_mac(uint8_t wifi[6], uint8_t bt[6])
 
 extern "C" void switch_wlan_probe(void)
 {
-    uint32_t enabled = 0;
-    if (!PE_parse_boot_argn("switch-wlan", &enabled, sizeof enabled) || !enabled) return;
-
     volatile uint32_t *car = map(kCarPA), *pmc = map(kPmcPA), *gpio = map(kGpioPA), *pinmux = map(kPinmuxPA);
     volatile uint32_t *mc = map(kMcPA), *padctl = map(kPadctlPA), *pcie = map(kPciePA);
     if (!car || !pmc || !gpio || !pinmux || !mc || !padctl || !pcie) {

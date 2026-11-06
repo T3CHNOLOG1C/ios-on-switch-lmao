@@ -170,11 +170,7 @@ switch_idle_board(void)
 static void
 switch_idle_cache_init(void)
 {
-	int root_boot = 0;
 	switch_cache_retaining_idle = false;
-	if (!PE_parse_boot_argn("switch-root-boot", &root_boot, sizeof(root_boot)) || root_boot != 1) {
-		return;
-	}
 	uint32_t midr = (uint32_t)__builtin_arm_rsr64("MIDR_EL1");
 	if ((midr & (MIDR_EL1_IMP_MASK | MIDR_EL1_PNUM_MASK)) !=
 	    ((0x41u << MIDR_EL1_IMP_SHIFT) | (0xd07u << MIDR_EL1_PNUM_SHIFT))) {

@@ -30,7 +30,7 @@ namespace
 constexpr uint32_t kMaxChannels = 8;  // fence slots: 16 bytes each in the connection's fence page
 constexpr uint64_t kMaxBoBytes = 256ULL << 20;
 constexpr uint32_t kFenceToken = 0xfe000001u;
-// Connections system-wide: 16, or 64 with tegra-gpu-all-clients=1 (gpu.c TGM_FENCE_PAGES: one fence page each).
+// Connections system-wide: 16, or 64 with every process on the GPU (gpu.c TGM_FENCE_PAGES: one fence page each).
 constexpr uint32_t kMaxConnections = 16, kMaxConnectionsAll = 64;
 // GPU pool pages are outside the VM (arm_vm_init.c pmap_switch_ram_init), so the kernel reports them as device
 // memory, and for a physical descriptor IOKit fixes the user mapping's memory type from that default when the descriptor
@@ -40,7 +40,6 @@ constexpr IOOptionBits kPoolCacheMode = static_cast<IOOptionBits>(kIOWriteCombin
 					<< kIOMemoryBufferCacheShift;
 volatile uint32_t gConnections;
 
-extern "C" boolean_t PE_parse_boot_argn(const char *arg_string, void *arg_ptr, int max_arg);
 extern "C" void proc_selfname(char *buf, int size);
 extern "C" vm_offset_t ml_vtophys(vm_offset_t vaddr);
 extern "C" task_t current_task(void);
@@ -50,20 +49,6 @@ extern "C" task_t current_task(void);
 // it. NVK fills such BOs (64 KiB command, upload and stream memory; small descriptor and query pools); larger ones (the
 // runtime's pooled blocks, mapped whole and touched only where it places CPU-visible resources) keep lazy faults.
 constexpr uint64_t kPrefaultMaxBytes = 256ULL << 10;
-
-// boot-arg tegra-gpu-import-sync=1: clean+invalidate every host import of the connection at each submission, the
-// visibility point Metal gives shared memory at commit, for CPU writes into surfaces the GPU already imported (the
-// Metal frontend imports IOSurfaces as coherent memory and does no cache maintenance of its own). Costs about a
-// millisecond per few MiB imported, per submission; off by default.
-bool importSync()
-{
-	static int on = -1;
-	if (on < 0) {
-		int v = 0;
-		on = PE_parse_boot_argn("tegra-gpu-import-sync", &v, sizeof(v)) && v;
-	}
-	return on;
-}
 
 // Freed pool BOs (see releaseBo): every one's view is released and its pages given back here, on a thread call, never on
 // the freeing thread. A view a task still maps keeps its pages until the last such mapping is gone, so the task can never
@@ -166,38 +151,27 @@ uint64_t nowNs()
 	return ns;
 }
 
-// The GPU pool for clients other than the compositor (tegra-gpu-all-clients, on by default). Every coherent BO comes from
+// The GPU pool for clients other than the compositor. Every coherent BO comes from
 // the pool (NVK's coherent event heap, Metal's Shared storage through m2v), and so do nvkm's own page tables and channels,
 // unpoliced. Tiers, so the compositor is never starved and nobody else is refused while there is room:
 //  - a BO of up to kPoolSmallBytes (what a device needs to exist: NVK's event heap, upload chunks) is refused only when it
 //    would leave less than kPoolFloorBytes free: one more of the compositor's 16 MiB m2v blocks, and with it the room
 //    nvkm's page tables and channels for new clients take;
-//  - a larger one also leaves tegra-gpu-pool-reserve-mb (default 32: one of the compositor's 16 MiB m2v blocks, and the raw
-//    path's ~7 MiB of rings and tables should backboardd restart, with margin) free, and keeps the client within
-//    tegra-gpu-client-pool-mb (default 64) of pool BOs, a fairness share, not a limit on GPU memory (cached BOs have none).
+//  - a larger one also leaves kPoolReserveBytes (one of the compositor's 16 MiB m2v blocks, and the raw path's ~7 MiB of
+//    rings and tables should backboardd restart, with margin) free, and keeps the client within kClientPoolBytes of pool
+//    BOs, a fairness share, not a limit on GPU memory (cached BOs have none).
 // Was: any BO kept the 32 MiB, so at 97 of 128 MiB used every poster extension's first 4 KiB was refused and its device
 // never opened (r7j). A refused BoAlloc is kIOReturnNoMemory, logged once per connection with the rule that refused it.
 constexpr uint64_t kPoolSmallBytes = 1ULL << 20, kPoolFloorBytes = 16ULL << 20;
+constexpr uint64_t kClientPoolBytes = 64ULL << 20, kPoolReserveBytes = 32ULL << 20;
 uint64_t clientPoolBytes()
 {
-	static uint64_t bytes;
-	if (!bytes) {
-		uint32_t mb = 64;
-		PE_parse_boot_argn("tegra-gpu-client-pool-mb", &mb, sizeof(mb));
-		bytes = uint64_t(mb) << 20;
-	}
-	return bytes;
+	return kClientPoolBytes;
 }
 
 uint64_t poolReserveBytes()
 {
-	static uint64_t bytes = UINT64_MAX;
-	if (bytes == UINT64_MAX) {
-		uint32_t mb = 32;
-		PE_parse_boot_argn("tegra-gpu-pool-reserve-mb", &mb, sizeof(mb));
-		bytes = uint64_t(mb) << 20;
-	}
-	return bytes;
+	return kPoolReserveBytes;
 }
 
 bool poolZeroNow();
@@ -589,7 +563,7 @@ void ownerNote(const char *owner, uint64_t bytes, uint64_t ns, bool made)
 	IOLockUnlock(p->lock);
 }
 
-// boot-arg tegra-gpu-stats=1 (also gpu.c's stats lines): the method stream of every kScanEvery-th submission of each
+// With the stats (also gpu.c's stats lines): the method stream of every kScanEvery-th submission of each
 // connection is read back and what it asks of the GPU is counted, one line per process every 5 s ("tegra-gm20b: push
 // <process>", the window's first kPushOwners - 1 processes by name, the rest as "(others)"), per submission: render passes
 // (and of those, the ones with a depth target and the multisampled ones), bound color targets (RTs) and the pitch-linear
@@ -613,12 +587,7 @@ IOLock *gPushLock;
 
 bool pushScanOn()
 {
-	static int on = -1;
-	if (on < 0) {
-		int v = 0;
-		on = PE_parse_boot_argn("tegra-gpu-stats", &v, sizeof(v)) && v;
-	}
-	return on;
+	return tgm_stats_on() != 0;
 }
 
 IOReturn ioreturn(int err)
@@ -752,7 +721,7 @@ class AGXDeviceUserClient : public IOUserClient
 	bool closing_ = false;  // clientClose/free: BOs still mapped are expected (a dying task's)
 	char owner_[17] = {};   // the opening process
 	uint32_t pushSubmits_ =
-		0;  // tegra-gpu-stats: its submissions, every kScanEvery-th read (scanPushes)
+		0;  // the stats: its submissions, every kScanEvery-th read (scanPushes)
 	uint32_t pushScans_ =
 		0;  // the ones read, every kProfileEvery-th also profiled (gpu.c "push profile")
 	bool critical_ =
@@ -1033,7 +1002,7 @@ IOReturn AGXDeviceUserClient::boAlloc(const TegraGM20BAbiBoAlloc *in,
 		scheduleOrphanRelease();  // not here: releasing a view can wait for another connection (releaseOrphans)
 	const uint64_t start = nowNs();
 	uint64_t phase[TGM_PHASES] = {},
-		 mark = start;  // tegra-gpu-stats: kernel allocation and wiring, clean, pages, nvkm
+		 mark = start;  // the stats: kernel allocation and wiring, clean, pages, nvkm
 	auto lap = [&](int i) {
 		const uint64_t now = nowNs();
 		phase[i] += now - mark;
@@ -1225,7 +1194,7 @@ IOReturn AGXDeviceUserClient::boImport(const TegraGM20BAbiBoImport *in,
 		return kIOReturnBadArgument;
 	const uint64_t start = nowNs();
 	uint64_t phase[TGM_PHASES] = {},
-		 mark = start;  // tegra-gpu-stats: wiring, pages, nvkm, clean
+		 mark = start;  // the stats: wiring, pages, nvkm, clean
 	auto lap = [&](int i) {
 		const uint64_t now = nowNs();
 		phase[i] += now - mark;
@@ -1425,7 +1394,7 @@ IOReturn AGXDeviceUserClient::channelDestroy(const TegraGM20BAbiChannel *in)
 	return kIOReturnSuccess;
 }
 
-// tegra-gpu-stats (see pushScanOn): count what this submission's pushes ask of the GPU, through the kernel's view of the
+// The stats (see pushScanOn): count what this submission's pushes ask of the GPU, through the kernel's view of the
 // BOs they lie in (pool BOs write-combined, cached BOs their kernel mapping); every 5 s the window's line.
 void AGXDeviceUserClient::scanPushes(const tgm_push *pushes, uint32_t count, tgm_prof *prof)
 {
@@ -1567,11 +1536,7 @@ IOReturn AGXDeviceUserClient::exec(const TegraGM20BAbiExec *in, uint32_t count,
 			return kIOReturnBadArgument;
 		pushes[i].no_prefetch = (p.flags & TegraGM20BPushNoPrefetch) ? 1u : 0u;
 	}
-	if (count && importSync()) {
-		for (Bo *bo = bos_; bo; bo = bo->next)
-			if (bo->wired)
-				tgm_cpu_clean_pages(bo->pas, bo->npages);
-	} else if (count) {
+	if (count) {
 		// Mark every writable host import this submission may have written GPU-dirty (cheap flag stores, no cache
 		// maintenance): the reader's next IOSurface read lock invalidates it then (tgm_coherency_*, the XNU hook). A read
 		// lock between now and the fence completing would clear the mark early, but a CPU readback waits for completion.
@@ -1873,7 +1838,7 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 		return kIOReturnSuccess;
 	}
 	IOLockLock(lock_);
-	// a channel of this connection was killed for a GPU error (only with tegra-gpu-all-clients): the connection takes no
+	// a channel of this connection was killed for a GPU error (client fault isolation): the connection takes no
 	// new work, memory or binds; status, fence waits, frees and teardown still answer, so the client sees the error and
 	// fails or falls back
 	for (uint32_t i = 0; i < kMaxChannels && !dead_; i++)
@@ -2047,11 +2012,9 @@ extern "C" IOReturn tegra_gm20b_new_user_client(IOService *provider, task_t task
 	return kIOReturnSuccess;
 }
 
-// GPU frame copy for the display (TegraScanoutCopy.h). The display (boot-args switch-gpu-copy=1
-// switch-scanout-double=1) offers each swapped surface; gpu.c's present channel copies it, after the compositor's GPU
-// work, into the block-linear target, and calls native_legacy_gpu_complete from the GPU interrupt pass. Offers come one
-// at a time under the display's gate: nothing here waits for the GPU. tegra-gpu-present=0 declines every offer (the
-// display then copies on the CPU).
+// GPU frame copy for the display (TegraScanoutCopy.h). The display offers each swapped surface; gpu.c's present channel
+// copies it, after the compositor's GPU work, into the block-linear target, and calls native_legacy_gpu_complete from the
+// GPU interrupt pass. Offers come one at a time under the display's gate: nothing here waits for the GPU.
 //   targets   the display's scanout buffers (three: latest-frame-wins flips), physically contiguous, mapped once
 //             each at kPresentTarget + i * 4 MiB, kind 0xfe
 //   surfaces  the last four swapped surfaces, like the display's own surface maps: each keeps a retained and prepared
@@ -2123,9 +2086,7 @@ uint64_t presentTarget(uint64_t pa, uint64_t bytes)
 	// The copy engine only places whole GOBs; the 16-byte sector order inside a GOB comes from the page kind. With kind 0
 	// (pitch) every GOB's inside comes out scrambled (jagged edges, sliced text) while GOBs sit in the right
 	// places. L4T maps display surfaces as 0xfe (generic 16Bx2, uncompressed), which the display reads.
-	// tegra-gpu-present-kind=N overrides it for a hardware test.
-	uint32_t kind = 0xfe;
-	PE_parse_boot_argn("tegra-gpu-present-kind", &kind, sizeof(kind));
+	constexpr uint32_t kind = 0xfe;
 	tgm_vm *vm = nullptr;
 	if (tgm_present_open(&vm) || tgm_mem_new(vm, t.pas, npages, &t.mem) ||
 	    tgm_present_map(kPresentTarget + slot * kPresentTargetSpan, t.mem, bytes,
@@ -2188,22 +2149,12 @@ uint64_t presentSurface(IOMemoryDescriptor *memory, uint64_t bytes, uint64_t *pa
 	return kPresentSurface + slot * kPresentSurfaceSpan;
 }
 
-bool presentAllowed()
-{
-	static int allowed = -1;
-	if (allowed < 0) {
-		int v = 1;
-		PE_parse_boot_argn("tegra-gpu-present", &v, sizeof(v));
-		allowed = v != 0;
-	}
-	return allowed;
-}
 }  // namespace
 
 extern "C" int tegra_gm20b_scanout_copy(const struct TegraScanoutCopy *copy)
 {
 	if (!copy || copy->version != TEGRA_SCANOUT_COPY_VERSION || !copy->display ||
-	    !copy->source || !presentAllowed() || tgm_stage() < 3)
+	    !copy->source || tgm_stage() < 3)
 		return kIOReturnNotReady;
 	IOMemoryDescriptor *memory =
 		OSDynamicCast(IOMemoryDescriptor, static_cast<OSObject *>(copy->source));

@@ -18,8 +18,7 @@
 //      300 us, DSI_VIDEO_MODE_CONTROL = 0 (hekate _display_dsi_wait_vblank(false), L4T tegra_dsi_syncpt_reset)
 // DC_DISP_DISPLAY_DBG_TIMING (L4T dc_reg.h, its tegra_dc_get_v_count) shows whether the raster is still in vertical
 // blanking at step 4; if interrupt latency let it leave, the step waits for the next frame end, at most twice, and then
-// goes ahead (the first command that had to logs one line). switch-backlight-syncpt=0 leaves the syncpoint reset out
-// of step 4, as L4T's video-mode path tegra_dsi_end_host_cmd_v_blank_video does.
+// goes ahead (the first command that had to logs one line).
 // The OLED's 1000 x 1300 pixel frame at 78 MHz has 20 blanking lines of 12.8 us (256 us); hekate's step 4 lasts 614 us,
 // so its reset is released and the video mode restored in the first active lines, here as in hekate. A command takes
 // four frames (67 ms).
@@ -87,7 +86,6 @@ struct Command {
     uint32_t step;
     uint32_t words[2];
     unsigned count;  // 0: no packet, the command is the next frame end
-    bool syncpt;     // step 4 resets the DSI syncpoint block (switch-backlight-syncpt, default 1)
     unsigned deferrals;
     uint32_t timing;  // DC_DISP_DISPLAY_DBG_TIMING at step 4
     uint32_t status;  // DSI_STATUS at step 4
@@ -98,7 +96,7 @@ bool gFrameEndsDriven;  // the display calls the filter (atomic)
 
 IOLock *volatile gLock;  // serializes commands
 volatile uint32_t *gCar, *gDc, *gDsi;
-bool gControlSent, gHaveLevel, gSyncptReset = true;
+bool gControlSent, gHaveLevel;
 unsigned gLevel;
 
 IOLock *makeLock(IOLock *volatile *slot)
@@ -118,9 +116,6 @@ bool displayRunning()
         gDc = (volatile uint32_t *)ml_io_map(kDisplayAPA, kDcMapBytes);
         gDsi = (volatile uint32_t *)ml_io_map(kDsiPA, 0x1000);
         gCar = (volatile uint32_t *)ml_io_map(kCarPA, 0x1000);
-        unsigned syncpt = 1;
-        PE_parse_boot_argn("switch-backlight-syncpt", &syncpt, sizeof(syncpt));
-        gSyncptReset = syncpt != 0;
     }
     if (!gCar || !gDc || !gDsi) return false;
     if (!(gCar[CLK_OUT_ENB_L / 4] & kDisp1) || (gCar[RST_DEVICES_L / 4] & kDisp1) ||
@@ -163,9 +158,7 @@ uint64_t frameDeadline()
 void play(const uint32_t *words, unsigned count, const char *what)
 {
     if (!__atomic_load_n(&gFrameEndsDriven, __ATOMIC_ACQUIRE)) {
-        panic("TegraPanel: %s: the display reports no DC A frame ends (its vblank source is off: "
-              "sheng-vsync/switch-vblank, "
-              "or it does not call tegra_panel_frame_end_filter)",
+        panic("TegraPanel: %s: the display reports no DC A frame ends (it does not call tegra_panel_frame_end_filter)",
               what);
     }
     const uint32_t enable = gDc[DC_CMD_INT_ENABLE], mask = gDc[DC_CMD_INT_MASK];
@@ -175,7 +168,6 @@ void play(const uint32_t *words, unsigned count, const char *what)
     }
     for (unsigned i = 0; i < count; ++i) gCommand.words[i] = words[i];
     gCommand.count = count;
-    gCommand.syncpt = gSyncptReset;
     gCommand.deferrals = 0;
     const uint32_t before = gDsi[DSI_STATUS];
     uint64_t seen = frames(), deadline = frameDeadline();
@@ -366,12 +358,10 @@ extern "C" void tegra_panel_frame_end_filter(void)
             break;
         }
         gCommand.status = gDsi[DSI_STATUS];
-        if (gCommand.syncpt) {
-            gDsi[DSI_INCR_SYNCPT_CNTRL] = kSyncptSoftReset;
-            IODelay(300);
-            gDsi[DSI_INCR_SYNCPT_CNTRL] = 0;
-            IODelay(300);
-        }
+        gDsi[DSI_INCR_SYNCPT_CNTRL] = kSyncptSoftReset;
+        IODelay(300);
+        gDsi[DSI_INCR_SYNCPT_CNTRL] = 0;
+        IODelay(300);
         gDsi[DSI_VIDEO_MODE_CONTROL] = 0;
         next = kDone;
         break;

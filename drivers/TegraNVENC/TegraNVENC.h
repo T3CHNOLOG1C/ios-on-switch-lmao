@@ -4,7 +4,7 @@
 //
 // On by default, like TegraNVDEC; the stages (TegraNVENC.cpp) are E0 host1x and the arena's boot chunk, E1 power and
 // falcon, E2 syncpoint proof of life, E3 an H.264 picture encoded and decoded back through NVDEC, E4 the TegraNVENC
-// service and its user client. switch-nvdec=0 turns NVENC off as well: E3 needs NVDEC, and so does a check of what
+// service and its user client. switch-no-nvdec turns NVENC off as well: E3 needs NVDEC, and so does a check of what
 // NVENC writes. No boot-arg of its own.
 #ifndef TEGRA_NVENC_H
 #define TEGRA_NVENC_H

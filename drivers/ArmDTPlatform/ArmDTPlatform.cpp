@@ -145,19 +145,6 @@ bool ArmDTPlatform::createDeviceNubs(IOService *provider)
     return true;
 }
 
-static void platformStageReset(void)
-{
-    // PSCI SYSTEM_RESET via the same SMC conduit as the entry reset probe.
-    register uint64_t x0 __asm__("x0") = 0x84000009;
-    register uint64_t x1 __asm__("x1") = 0;
-    register uint64_t x2 __asm__("x2") = 0;
-    register uint64_t x3 __asm__("x3") = 0;
-    __asm__ volatile("smc #0" : "+r"(x0) : "r"(x1), "r"(x2), "r"(x3) : "memory");
-    for (;;) {
-        __asm__ volatile("wfe");
-    }
-}
-
 bool ArmDTPlatform::configure(IOService *provider)
 {
     IORegistryEntry *cpus = provider->childFromPath("cpus", gIODTPlane);
@@ -185,20 +172,12 @@ bool ArmDTPlatform::configure(IOService *provider)
         IOLog("ArmDTPlatform: /chosen does not supply a usable CHRP NVRAM proxy\n");
         return false;
     }
-    unsigned platformStage = 0;
-    PE_parse_boot_argn("sheng-platform-stage", &platformStage, sizeof(platformStage));
-    if (platformStage == 1) {
-        platformStageReset();
-    }
 
     // The inherited implementation publishes real IODTNVRAM from /chosen,
     // then attaches the CPU and top-level nubs. No identity or resource is
     // invented here; failure is returned instead of replaced with a stub.
     if (!IODTPlatformExpert::configure(provider)) {
         return false;
-    }
-    if (platformStage == 2) {
-        platformStageReset();
     }
 
     OSIterator *iterator = getChildIterator(gIOServicePlane);
@@ -235,20 +214,6 @@ bool ArmDTPlatform::configure(IOService *provider)
     if (!createDeviceNubs(provider)) {
         return false;
     }
-    if (platformStage == 3) {
-        platformStageReset();
-    }
-    // Explicit hardware A/B diagnostic: reach the end of the real platform
-    // configuration and panic before publishing the service. The payload's
-    // panic-screen probe makes this observable without a serial console.
-    unsigned platformProbe = 0;
-    PE_parse_boot_argn("sheng-platform-panic", &platformProbe, sizeof(platformProbe));
-    if (platformProbe != 0 || platformStage == 4) {
-        platformStageReset();
-    }
     registerService();
-    if (platformStage == 5) {
-        platformStageReset();
-    }
     return true;
 }

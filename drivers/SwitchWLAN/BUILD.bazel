@@ -26,7 +26,7 @@ filegroup(
 # This package's headers (kernel_headers): what other drivers' hdr_deps name.
 kernel_headers()
 
-# SwitchWLAN: BCM4356A3 Wi-Fi on PCIe port 1 (switch-wlan=1); firmware.S .incbins drivers/SwitchWLAN/firmware.
+# SwitchWLAN: BCM4356A3 Wi-Fi on PCIe port 1; firmware.S .incbins drivers/SwitchWLAN/firmware.
 kernel_driver(
     name = "SwitchWLAN",
     srcs = [

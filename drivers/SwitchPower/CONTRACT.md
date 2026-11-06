@@ -168,7 +168,7 @@ is substituted.
   `AppleARMPerformanceControllerDVDFactor1-slowloop`, `-hip`, `-upo`, `-lpm`, each `value < 100 ? value * 65536 /
   100 : 0x10000` (a 16.16 share; `cpuComponentControl` maps max load index to DVD factor: 2->0 ... 37->35 ...
   100->100). It also looks for `AppleCLPC` (absent: `Could not find CLPC service`). Here `ApplePMGR` is
-  ShengPlatformPower (sheng-pmgr=2, a subclass of the original; it grants thermalmonitord its property writes with
+  ShengPlatformPower (a subclass of the original; it grants thermalmonitord its property writes with
   NativeSandboxGrantProcess, since the sandbox profiles name only original classes); its new `setProperties` takes the
   four keys (and publishes them), and the lowest becomes **`switch_perf_cltm_ceiling()`**: the CPU governor's highest point is also
   at or below that share of 1785 MHz (`switch_gov_index_at_fraction`), together with the DFLL's thermal cap, at once

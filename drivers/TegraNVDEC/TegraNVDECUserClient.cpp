@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// N4 (on by default; switch-nvdec=0 off): the TegraNVDEC service and its user client (ABI in TegraNVDECABI.h).
+// N4 (on unless switch-no-nvdec): the TegraNVDEC service and its user client (ABI in TegraNVDECABI.h).
 //
 // The client class is named AppleD5500UserClient, the name of iPad7,1's own decoder client (AppleD5500, the VXD393
 // kext, not loaded here), which some of 21H461's sandbox profiles may admit. The service is not called AppleD5500:

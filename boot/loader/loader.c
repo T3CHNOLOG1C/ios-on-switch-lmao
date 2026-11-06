@@ -232,7 +232,7 @@ void loader_after_transition(void) {
         refuse(0x301);
 #if LOAD_EMC_KHZ
     {
-        /* DRAM from hekate's 204 MHz to the kernel's switch-emc rate (emc.h) first: every check below reads RAM
+        /* DRAM from hekate's 204 MHz to the kernel's EMC rate (emc.h) first: every check below reads RAM
          * uncached, one access at a time, and runs that much faster. It needs none of them (it touches only BPMP
          * registers and the BPMP's own channel area) and never refuses. */
         struct loader_emc_report emc;

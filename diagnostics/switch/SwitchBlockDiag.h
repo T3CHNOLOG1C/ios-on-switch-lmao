@@ -40,10 +40,11 @@ static void block_screen(void)
     sync_pixels();
     (void)ml_set_interrupts_enabled(previous);
 }
+/* The block test runs only from the signed PID 1 fixture (switch_diag_user_syscall), which this port never boots. */
+static const int block_test = 0;
 static void block_start(void)
 {
-    int enabled = 0;
-    if (!PE_parse_boot_argn("switch-block-test", &enabled, sizeof(enabled)) || enabled != 1) return;
+    if (!block_test) return;
     block_enabled = 1;
     block_query.status = SWITCH_BLOCK_NOT_READY;
     switch_block_record[0] = UINT64_C(0x53574348424c4f43);

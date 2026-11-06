@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""The board ADT (//boot:adt) with what iPadOS userland expects of a J120, the boot-args' hardware nodes, the overlay's
-union directories, the loader's zeroed slots and, with --smp, all four A57s.
+"""The board ADT (//boot:adt) with what iPadOS userland expects of a J120, the radios' nodes, the overlay's union
+directories, the loader's zeroed slots and, with --smp, all four A57s.
 
-    adt_edit.py --adt BASE --boot-args F --overlay-plan PLAN --bt-patch HCD --portrait-header H [--smp] --out ADT
+    adt_edit.py --adt BASE --overlay-plan PLAN --bt-patch HCD --portrait-header H [--smp] --out ADT
 """
 import argparse
 import json
 import struct
 from pathlib import Path
 
-from boot_config import boot_arg_on, portrait_native, read_command_line
+from boot_config import portrait_native
 from loader_abi import SEED_SOURCE_BYTES, SEED_SOURCE_PROPERTY, STAMPS_BYTES, STAMPS_PROPERTY
 from native_xnu_layout import parse_adt
 
@@ -96,7 +96,7 @@ def four_cores(tree):
     put(psci, 'method', b'smc\0')
 
 
-def ipad_adt(data, command_line, *, smp=False, overlay_dirs=(), bt_patch=None, portrait=False):
+def ipad_adt(data, *, smp=False, overlay_dirs=(), bt_patch=None, portrait=False):
     """The inherited Switch tree plus what iPadOS userland expects of a J120
     (values of UniXNU-qemu's make-qemu-adt.py, which boots this build to SpringBoard)."""
     tree, end = adt_parse(data)
@@ -139,37 +139,33 @@ def ipad_adt(data, command_line, *, smp=False, overlay_dirs=(), bt_patch=None, p
                        ('product-id', bytes.fromhex('e9fefef6e6f9d12a5ba1a2551866cbbd749f0ec3'))):
         put(product, key, value)
     put(child(product, 'audio'), 'wireless-splitter', u32(1))   # as UniXNU's 21H461 profile
-    # Bluetooth (drivers/SwitchBluetooth, switch-bt=1). ArmDTPlatform publishes every /arm-io child, so this is the
+    # Bluetooth (drivers/SwitchBluetooth). ArmDTPlatform publishes every /arm-io child, so this is the
     # IOService named "bluetooth" bluetoothd looks up (local-mac-address, transport-speed, transport-encoding: J120's 3,
     # H4BC, which also opens /dev/btwake, SwitchBluetooth's; bluetoothd takes its transport from kern_exec.c's
     # BT_HCI_TRANSPORT, the same H4BC, as plain H4 has no prepare-to-terminate step and crashed whenever Bluetooth was
     # turned off). The kernel downloads switch,patchram itself, since BlueTool has no BCM4356A3 firmware, and replaces
     # local-mac-address (and /chosen mac-address-bluetooth0) with the unit's own address from the fuse lot code when it
     # can read it.
-    # Only when the boot-arg is in the command line: without the radio, the node would only change what wifid and
-    # MobileGestalt see on an otherwise unchanged boot (toggling a boot-arg repackages anyway).
-    if boot_arg_on(command_line, 'switch-bt'):
-        bluetooth = child(child(tree, 'arm-io'), 'bluetooth')
-        for key, value in (('device_type', b'bluetooth\0'), ('local-mac-address', bytes([0x02, 0x1d, 0x5a, 0x00, 0x00, 0x02])),
-                           ('transport-speed', u32(3000000)), ('transport-encoding', u32(3))):
-            put(bluetooth, key, value)
-        if bt_patch is not None:
-            put(bluetooth, 'switch,patchram', bt_patch)
-    # Wi-Fi (drivers/SwitchWLAN, switch-wlan=1): /arm-io/wlan as J120 has it. With the boot-arg the kernel replaces
-    # local-mac-address (and /chosen mac-address-wifi0) with the unit's own address from the fuse lot code, the one
-    # the chip is given, before userland starts.
-    if boot_arg_on(command_line, 'switch-wlan'):
-        wlan = child(child(tree, 'arm-io'), 'wlan')
-        for key, value in (('device_type', b'wlan\0'), ('local-mac-address', bytes([0x02, 0x1d, 0x5a, 0x00, 0x00, 0x01]))):
-            put(wlan, key, value)
-        # The platform UUID. IOPlatformExpertDevice::generatePlatformUUID makes IOPlatformUUID from /chosen
-        # unique-chip-id (8 bytes) and chip-id (4 bytes), as iBoot sets them; without them the IOPlatformUUID resource
-        # is never published and gethostuuid() with no timeout waits for ever. configd's IPConfiguration start() makes
-        # one call (its CGA host UUID, as net.inet6.send.opmode is 1), so configd's plugin thread stops there: no other
-        # start(), no prime(), so State:/Network/Interface never lists en0 and wifid makes no Wi-Fi device. chip-id is
-        # J120's A10X (T8011); unique-chip-id stands in for the ECID, a fixed value with the overlay MACs' 02:1d:5a.
-        put(chosen, 'chip-id', u32(0x8011))
-        put(chosen, 'unique-chip-id', struct.pack('<Q', 0x001d5a0000000001))
+    bluetooth = child(child(tree, 'arm-io'), 'bluetooth')
+    for key, value in (('device_type', b'bluetooth\0'), ('local-mac-address', bytes([0x02, 0x1d, 0x5a, 0x00, 0x00, 0x02])),
+                       ('transport-speed', u32(3000000)), ('transport-encoding', u32(3))):
+        put(bluetooth, key, value)
+    if bt_patch is not None:
+        put(bluetooth, 'switch,patchram', bt_patch)
+    # Wi-Fi (drivers/SwitchWLAN): /arm-io/wlan as J120 has it. The kernel replaces local-mac-address (and /chosen
+    # mac-address-wifi0) with the unit's own address from the fuse lot code, the one the chip is given, before userland
+    # starts.
+    wlan = child(child(tree, 'arm-io'), 'wlan')
+    for key, value in (('device_type', b'wlan\0'), ('local-mac-address', bytes([0x02, 0x1d, 0x5a, 0x00, 0x00, 0x01]))):
+        put(wlan, key, value)
+    # The platform UUID. IOPlatformExpertDevice::generatePlatformUUID makes IOPlatformUUID from /chosen
+    # unique-chip-id (8 bytes) and chip-id (4 bytes), as iBoot sets them; without them the IOPlatformUUID resource
+    # is never published and gethostuuid() with no timeout waits for ever. configd's IPConfiguration start() makes
+    # one call (its CGA host UUID, as net.inet6.send.opmode is 1), so configd's plugin thread stops there: no other
+    # start(), no prime(), so State:/Network/Interface never lists en0 and wifid makes no Wi-Fi device. chip-id is
+    # J120's A10X (T8011); unique-chip-id stands in for the ECID, a fixed value with the overlay MACs' 02:1d:5a.
+    put(chosen, 'chip-id', u32(0x8011))
+    put(chosen, 'unique-chip-id', struct.pack('<Q', 0x001d5a0000000001))
     # USB device mode (drivers/SwitchUSB): /arm-io/usb-device with an iPad usb-device node's identity (J120: Apple
     # 0x05ac:0x12ab "iPad"), published by ArmDTPlatform; SwitchXUDC starts on it and IOUSBDeviceFamily reads these.
     # compatible is not usb-device,t8011, so nothing of Apple's matches the node itself.
@@ -196,7 +192,10 @@ def ipad_adt(data, command_line, *, smp=False, overlay_dirs=(), bt_patch=None, p
                        ('button-names', b'hold\0voldown\0volup\0'), ('home-button-type', u32(2))):
         put(buttons, key, value)
     # APFS's no-SEP mode; it also permits the unencrypted Data volume.
-    put(child(tree, 'filesystems'), 'DoNotUseSEP', u32(1))
+    filesystems = child(tree, 'filesystems')
+    put(filesystems, 'DoNotUseSEP', u32(1))
+    # Lock timeouts 40 times XNU's 0.5 s, as UniXNU-qemu boots with (machine.c: ml-timeout-lock-panic-scale's ADT form).
+    put(child(chosen, 'machine-timeouts'), 'lock-panic-scale', u32(40))
     # Pre-kernel boot timing (boot/loader/stamps.h): zeros here, filled by the loader, logged once by XNU.
     put(chosen, STAMPS_PROPERTY, bytes(STAMPS_BYTES))
     # Per-boot seed report (boot/loader/seed.h): zeros here; the loader mixes SE2's DRBG into /chosen/random-seed
@@ -209,12 +208,12 @@ def ipad_adt(data, command_line, *, smp=False, overlay_dirs=(), bt_patch=None, p
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    for name in ('adt', 'boot-args', 'overlay-plan', 'bt-patch', 'portrait-header', 'out'):
+    for name in ('adt', 'overlay-plan', 'bt-patch', 'portrait-header', 'out'):
         parser.add_argument('--' + name, required=True, type=Path)
     parser.add_argument('--smp', action='store_true')
     args = parser.parse_args()
     dirs = [tuple(d) for d in json.loads(args.overlay_plan.read_text())['dirs']]
-    adt = ipad_adt(args.adt.read_bytes(), read_command_line(args.boot_args), smp=args.smp, overlay_dirs=dirs,
+    adt = ipad_adt(args.adt.read_bytes(), smp=args.smp, overlay_dirs=dirs,
                    bt_patch=args.bt_patch.read_bytes(), portrait=portrait_native(args.portrait_header))
     if ('/filesystems', 'DoNotUseSEP') not in parse_adt(adt).properties:
         raise SystemExit('ADT patch failed')

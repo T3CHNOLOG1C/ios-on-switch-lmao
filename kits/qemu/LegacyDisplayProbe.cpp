@@ -24,8 +24,8 @@ extern "C" IOService *native_legacy_display_allocate(void);
 extern "C" void native_gop_presenter_static_init(void) __asm__("__GLOBAL__sub_I_NativeGOPPresenter.cpp");
 extern "C" IOService *native_gop_presenter_create(void);
 static IOService *pendingLegacyDisplay;
-static IOService *activeGOPPresenter, *activeGOPNub;
-// GPU hand-off presenter (sheng-fb-gpu=1, phase 4): lives beside the display driver, which offers it frames instead of copying them.
+static IOService *activeGOPNub;
+// GPU hand-off presenter: never attached, so the display driver copies every frame itself.
 static IOService *gpuHandoffPresenter;
 extern "C" bool native_gop_gpu_offer(IOService *, void *display, IOMemoryDescriptor *, uint64_t stride, uint32_t width,
                                      uint32_t height);
@@ -377,7 +377,7 @@ __attribute__((noinline)) void native_legacy_transfer_observed(IOReturn status, 
         boot_progress_stage(message);
     }
 }
-// Display refresh tick (NativeLegacyDisplay, sheng-vsync): armed, sent, idle, late, started, refresh reported.
+// Display refresh tick (NativeLegacyDisplay): armed, sent, idle, late, started, refresh reported.
 static volatile uint64_t vsyncEvents[6];
 extern "C" void native_legacy_vsync_observed(unsigned event, unsigned hz)
 {
@@ -647,17 +647,13 @@ __attribute__((noinline)) bool native_legacy_gop_mapping_observed(IOService *obj
         }
     }
     native_legacy_gop_mapping_checkpoint();
-    unsigned enabled = 0;
-    PE_parse_boot_argn("offline-legacy-unit-scale", &enabled, sizeof(enabled));
-    if (!enabled) return true;
+    // The published display-scale: logical points = actual scanout pixels / scale. The UI's own scale comes from
+    // FrontBoardServices' override; the scanout copy still moves one actual pixel per pixel.
+    constexpr uint32_t enabled = 1;
     native_legacy_unit_scale_calls = native_legacy_unit_scale_calls + 1;
     native_legacy_unit_scale_status = 1;
-    unsigned phase = 0;
-    PE_parse_boot_argn("offline-legacy-phase", &phase, sizeof(phase));
     PE_Video video = {};
-    // The value is the UI scale: logical points = actual scanout pixels / scale (1..3). It changes
-    // only the published display-scale; the scanout copy still moves one actual pixel per pixel.
-    if (enabled < 1 || enabled > 3 || phase != 4 || unitScaleChosen || PE_current_console(&video) ||
+    if (unitScaleChosen || PE_current_console(&video) ||
         !native_legacy_video_mode(video) || native_legacy_video_width(video) != width ||
         native_legacy_video_height(video) != height || mapping->getPhysicalAddress() != video.v_baseAddr)
         return false;
@@ -737,9 +733,7 @@ void native_legacy_display_probe(void)
                                   display->metaCast("IOMobileFramebuffer") && display->metaCast("IOService"));
     native_legacy_stage = 3;
     native_legacy_init_result = display->init();
-    unsigned phase = 1;
-    PE_parse_boot_argn("offline-legacy-phase", &phase, sizeof(phase));
-    if (native_legacy_init_result && (phase == 2 || phase == 3 || phase == 4)) {
+    if (native_legacy_init_result) {
         // IOSurface matches the real IOBSD resource, published by bsd_autoconf.
         // Retain this actual object until that normal lifecycle boundary.
         pendingLegacyDisplay = display;
@@ -755,12 +749,10 @@ void native_legacy_display_late_probe(void);
 extern void native_keystore_probe(void);
 extern "C" int
 switch_backlight_start(void);  // SwitchBrightness: CoreBrightness's backlight (an AppleARMBacklight by metaclass)
-extern "C" bool switch_display_power_enabled(void);  // SwitchBrightness: display power on (switch-sleep not 0)
-extern void native_hid_input_probe(void);
+extern "C" bool switch_display_power_enabled(void);  // SwitchBrightness: display power on (no switch-no-sleep)
 void native_legacy_display_late_probe(void)
 {
     native_keystore_probe();
-    native_hid_input_probe();
     // Native Switch display: no emulated MMIO, host window or host Metal transport.
     IOService *display = pendingLegacyDisplay;
     if (!display) return;
@@ -795,82 +787,35 @@ void native_legacy_display_late_probe(void)
             nubAttached = nub->attach(parent);
             if (nubAttached) nubStarted = nub->start(parent);
             if (nubStarted) {
-                unsigned phase = 0;
-                PE_parse_boot_argn("offline-legacy-phase", &phase, sizeof(phase));
-                if (phase == 4) {
-                    // This is the actually implemented GOP display subsystem,
-                    // attached to its real IOPlatformDevice memory resource.
-                    // No Apple/vendor compatible or panel timing is supplied.
-                    displayTreeParent = IORegistryEntry::fromPath("/arm-io", gIODTPlane);
-                    const char type[] = "display-subsystem";
-                    OSData *data = OSData::withBytes(type, sizeof(type));
-                    if (displayTreeParent && data && nub->setProperty("device_type", data)) {
-                        nub->setName("gop-display", gIODTPlane);
-                        dtAttached = nub->attachToParent(displayTreeParent, gIODTPlane);
-                    }
-                    OSSafeReleaseNULL(data);
-                    native_legacy_dt_attached = dtAttached;
+                // This is the actually implemented GOP display subsystem,
+                // attached to its real IOPlatformDevice memory resource.
+                // No Apple/vendor compatible or panel timing is supplied.
+                displayTreeParent = IORegistryEntry::fromPath("/arm-io", gIODTPlane);
+                const char type[] = "display-subsystem";
+                OSData *data = OSData::withBytes(type, sizeof(type));
+                if (displayTreeParent && data && nub->setProperty("device_type", data)) {
+                    nub->setName("gop-display", gIODTPlane);
+                    dtAttached = nub->attachToParent(displayTreeParent, gIODTPlane);
                 }
-                if (phase == 3) {
-                    IOService *presenter = native_gop_presenter_create();
-                    bool presenterAttached = false;
-                    if (presenter && presenter->init() && (presenterAttached = presenter->attach(nub)) &&
-                        presenter->start(nub)) {
-                        // Explicit own transport service only. The incomplete
-                        // original framebuffer backend is never published.
-                        activeGOPPresenter = presenter;
-                        activeGOPNub = nub;
-                        nub = nullptr;
-                        nubAttached = false;
-                        nubStarted = false;
-                    } else {
-                        if (presenterAttached) presenter->detach(nub);
-                        OSSafeReleaseNULL(presenter);
-                    }
-                } else {
-                    SInt32 score = 0;
-                    native_legacy_probe_match = (phase != 4 || dtAttached) && display->probe(nub, &score) == display;
-                    if (native_legacy_probe_match) attached = display->attach(nub);
-                    if (attached) {
-                        native_legacy_stage = 5;
-                        started = display->start(nub);
-                        native_legacy_start_result = started;
-                    }
-                    if (started && phase == 4) {
-                        activeLegacyDisplay = display;
-                        activeGOPNub = nub;
-                        native_legacy_stage = 10;
-                        {
-                            unsigned gpu = 0;
-                            PE_parse_boot_argn("sheng-fb-gpu", &gpu, sizeof gpu);
-                            if (gpu == 1) {
-                                IOService *handoff = native_gop_presenter_create();
-                                // Not a child of the display subsystem's node: the original display code enumerates that node's children (int-075/077:
-                                // SpringBoard found no display and crashed with the presenter attached there, registered or not).
-                                IOService *home = IOService::getResourceService();
-                                bool handoffAttached = false;
-                                if (handoff && home) native_gop_presenter_set_source(handoff, nub);
-                                if (handoff && home && handoff->init() && (handoffAttached = handoff->attach(home)) &&
-                                    handoff->start(home))
-                                    gpuHandoffPresenter = handoff;
-                                else {
-                                    if (handoffAttached) handoff->detach(home);
-                                    OSSafeReleaseNULL(handoff);
-                                }
-                            }
-                        }
-                        finishUnitScalePolicy(true);
-                        OSSafeReleaseNULL(displayTreeParent);
-                        // Only with one of its features on (display power is on unless switch-sleep=0).
-                        {
-                            unsigned on = switch_display_power_enabled() ? 1 : 0, arg = 0;
-                            if (PE_parse_boot_argn("switch-backlight", &arg, sizeof(arg)) && arg) on = 1;
-                            if (PE_parse_boot_argn("switch-als", &arg, sizeof(arg)) && arg) on = 1;
-                            if (on && switch_backlight_start()) IOLog("Switch: SwitchBacklight did not start\n");
-                        }
-                        native_legacy_display_checkpoint();
-                        return;
-                    }
+                OSSafeReleaseNULL(data);
+                native_legacy_dt_attached = dtAttached;
+                SInt32 score = 0;
+                native_legacy_probe_match = dtAttached && display->probe(nub, &score) == display;
+                if (native_legacy_probe_match) attached = display->attach(nub);
+                if (attached) {
+                    native_legacy_stage = 5;
+                    started = display->start(nub);
+                    native_legacy_start_result = started;
+                }
+                if (started) {
+                    activeLegacyDisplay = display;
+                    activeGOPNub = nub;
+                    native_legacy_stage = 10;
+                    finishUnitScalePolicy(true);
+                    OSSafeReleaseNULL(displayTreeParent);
+                    if (switch_backlight_start()) IOLog("Switch: SwitchBacklight did not start\n");
+                    native_legacy_display_checkpoint();
+                    return;
                 }
             }
         }

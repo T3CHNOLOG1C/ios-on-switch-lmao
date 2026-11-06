@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
-// TegraGM20B entry point. tegra_gm20b_probe() is inert unless the boot-arg tegra-gpu=<stage> is set:
+// TegraGM20B entry point. tegra_gm20b_probe() brings the GPU up through every stage (kStage), unless boot-arg
+// switch-no-gpu is set (then SwitchAccelStub stands in, and Core Animation renders on the CPU):
 //   1  M1: VDD_GPU on, clocks/reset/clamp/MC flush (nvgpu gm20b_tegra_unrailgate order), BOOT_0, PRIV ring, GPCPLL lock
 //   2  M2: + nvkm device init (ACR HS boot, LS PMU), GR (FECS/GPCCS through ACR, golden context)
 //   3  M3: + GPU self-test (VM, GPFIFO channel, copy-engine fill, semaphore fence)
@@ -23,7 +24,7 @@
 extern "C" {
 boolean_t PE_parse_boot_argn(const char *arg_string, void *arg_ptr, int max_arg);
 kern_return_t OSKextLoadKextWithIdentifier(const char *kextIdentifier);
-int nvxnu_trace_paced(void);  // shim/xnu_glue.cpp: boot-arg tegra-gpu-trace
+int nvxnu_trace_paced(void);  // shim/xnu_glue.cpp
 // The staged accelerator class (TegraGM20BAccelerator.cpp, a late object like SwitchAccelStub.cpp): weak, so this file links
 // and stages 1..3 work without it.
 void tegra_gm20b_accelerator_static_init(void) __asm__("__GLOBAL__sub_I_TegraGM20BAccelerator.cpp")
@@ -119,7 +120,7 @@ IOReturn publish()
 	// newPaintShaderKernelPipelineState] takes a nil device's nil paint_kernel and Metal aborts the process
 	// (setComputeFunction: nil), so every screenshot's thumbnail dies 1-2 s after the flash. Names match on their first 16
 	// characters, so this also admits ClassroomKit's ScreenshotService; the plugin compares the whole name and gives that
-	// one no device. With tegra-gpu-all-clients=1 also every other process: "*" is any name for native_sandbox_grant()
+	// one no device. Every other process too: "*" is any name for native_sandbox_grant()
 	// (IOUserClient.cpp); a kernel without that change matches "*" to no process and still grants the named ones.
 	accelerator->setProperty(
 		"NativeSandboxGrantProcess",
@@ -159,18 +160,22 @@ void bringup(void *arg, wait_result_t)
 	}
 	bringupDone();
 }
+
+bool gpuDisabled()
+{
+	unsigned off = 0;
+	return PE_parse_boot_argn("switch-no-gpu", &off, sizeof(off)) && off;
+}
 }  // namespace
 
-// 1 from boot until the bring-up (VDD_GPU on, GPCPLL raise, ACR/PMU/GR, self-test) has finished or failed, if tegra-gpu
-// asks for one: for a driver whose own rail or clock changes must not overlap it (SwitchThermal's CPU raise on the same
-// MAX77812, which the board thread starts before tegra_gm20b_probe()). 0 without tegra-gpu.
+// 1 from boot until the bring-up (VDD_GPU on, GPCPLL raise, ACR/PMU/GR, self-test) has finished or failed: for a driver
+// whose own rail or clock changes must not overlap it (SwitchThermal's CPU raise on the same MAX77812, which the board
+// thread starts before tegra_gm20b_probe()). 0 with switch-no-gpu.
 extern "C" int tegra_gm20b_bringup_busy(void)
 {
 	static int wanted = -1;
-	if (wanted < 0) {
-		int stage = 0;
-		wanted = PE_parse_boot_argn("tegra-gpu", &stage, sizeof(stage)) && stage > 0;
-	}
+	if (wanted < 0)
+		wanted = !gpuDisabled();
 	return wanted && (!__atomic_load_n(&gBringupDone, __ATOMIC_ACQUIRE) ||
 			  __atomic_load_n(&gSleeping, __ATOMIC_ACQUIRE));
 }
@@ -205,15 +210,13 @@ extern "C" void tegra_gm20b_resume(void)
 
 extern "C" int tegra_gm20b_probe(void)
 {
-	int stage = 0;
-	if (!PE_parse_boot_argn("tegra-gpu", &stage, sizeof(stage)) || stage <= 0)
+	constexpr int kStage = 4;
+	if (gpuDisabled())
 		return 0;
 	if (__atomic_exchange_n(&gStarted, 1, __ATOMIC_SEQ_CST))
 		return 0;
-	if (stage > 4)
-		stage = 4;
 	thread_t thread;
-	if (kernel_thread_start(bringup, reinterpret_cast<void *>(static_cast<intptr_t>(stage)),
+	if (kernel_thread_start(bringup, reinterpret_cast<void *>(static_cast<intptr_t>(kStage)),
 				&thread) != KERN_SUCCESS) {
 		IOLog("tegra-gm20b: could not start the bring-up thread\n");
 		bringupDone();

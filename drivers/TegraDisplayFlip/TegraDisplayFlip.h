@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // Tegra X1 display controller A: flip window A to another physically contiguous buffer and poll for vblank.
 //
-// Not wired in: NativeLegacyDisplay double-buffers window A itself (switch-scanout-double=1), latching flips on the
+// Not wired in: NativeLegacyDisplay double-buffers window A itself, latching flips on the
 // DC A frame-end interrupt rather than polling. Kept for its register notes. Hekate leaves window A scanning the
 // 720x1280 portrait panel surface (B8G8R8A8, pitch-linear, stride 2880) at 0xF5A00000 (hekate bdk/display/di.inl
 // _di_winA_pitch, bdk/memory_map.h IPL_FB_ADDRESS). This class only swaps the start address; every other window

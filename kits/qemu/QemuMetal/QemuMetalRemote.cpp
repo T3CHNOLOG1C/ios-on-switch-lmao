@@ -1543,7 +1543,7 @@ bool nmb_command_buffer_commit(NmbCommandBuffer *commandBuffer)
     }
     gCompletionWake.notify_all();
     // GPU work into shadowed memory (an IOSurface) is back in it before the commit returns. The display driver copies a swapped surface
-    // when the swap is submitted (NativeLegacyDisplay, offline-legacy-cpu-present) and waits for no GPU, so the render server, which
+    // when the swap is submitted (NativeLegacyDisplay) and waits for no GPU, so the render server, which
     // swaps after it commits, must find the frame finished there.
     if (!commandBuffer->writes.empty()) {
         std::unique_lock<std::mutex> lock(commandBuffer->lock);

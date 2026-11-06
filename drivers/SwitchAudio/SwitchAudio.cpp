@@ -4,13 +4,12 @@
 // rings (SwitchAudioAbi.h) and asks it to start and stop each direction. Design after UniXNU-sheng's
 // package/ShengAudioService.cpp, the iPadOS 17.7.11 audio path that is known to play on real hardware.
 //
-// Backends, chosen by boot-arg switch-audio (default 0):
-//   0  null: a 10 ms timer advances the play position on the host clock and clears what it passed; capture is
-//      silence; no Tegra hardware is touched. The timer runs only while a stream does.
-//   1  Tegra I2S playback (speaker and headphone jack); capture stays silence on the hardware's clock.
-//   3  also Tegra capture (headset microphone).
-//   +4 (5, 7) the speaker only, whatever the jack says (to tell a wrong jack reading from a silent speaker path).
-// switch-audio-stats=1 (Tegra) adds one line every 5 s: streams started, frames played, underruns, the loudest sample, the
+// Backends:
+//   Tegra I2S playback (speaker and headphone jack); capture stays silence on the hardware's clock. tegraCapture
+//      (headset microphone) has never run on the device and stays off.
+//   null, with boot-arg switch-no-audio: a 10 ms timer advances the play position on the host clock and clears what it
+//      passed; capture is silence; no Tegra hardware is touched. The timer runs only while a stream does.
+// The Tegra backend logs one line every 5 s while streams run: streams started, frames played, underruns, the loudest sample, the
 // DMA, I2S and jack state and the codec's power and volume registers. The register fields are read at the moment of the
 // line: between streams the I2S is off (en 0) and, 5 s after the last one, the codec's power registers are 0.
 // The Tegra backend is interrupt driven throughout: the ADMA period interrupt moves the positions, the codec's IRQ
@@ -144,8 +143,8 @@ constexpr uint32_t kWatchdogMS = 4 * kPeriodFrames * 1000 / SWITCH_AUDIO_RATE;  
 constexpr uint32_t kGraceMS = 50;        // after a missed deadline, for an interrupt action already queued
 constexpr uint32_t kIdleMS = 5000;       // codec power-down after the last stream stops (ASoC pmdown_time)
 constexpr uint32_t kJackSettleMS = 250;  // jack contact bounce
-constexpr uint32_t kStatsMS = 5000;      // switch-audio-stats line
-constexpr uint64_t kSettlePeriods = 2;   // switch-audio-stats: periods after a start left out of lead and lag
+constexpr uint32_t kStatsMS = 5000;      // the stats line
+constexpr uint64_t kSettlePeriods = 2;   // the stats: periods after a start left out of lead and lag
 constexpr unsigned kChOut = 0, kChIn = 1;
 constexpr uint32_t kAgicAdma = 32 + 24;  // AGIC INTID of ADMA channel 0
 constexpr uint32_t kCascadeIntid = 32 + 102;
@@ -519,7 +518,7 @@ class SwitchAudio : public IOService {
     bool codecOn = false, jackKnown = false, jackIn = false, headset = false, speakerOnly = false;
     bool hardwareLost = false;  // the APE did not come back after sleep: the hardware is never touched again
     Route route = kRouteNone;
-    // switch-audio-stats: counted on the audio work loop, printed (and the peak reset) on the codec work loop.
+    // The stats: counted on the audio work loop, printed (and the peak reset) on the codec work loop.
     IOTimerEventSource *statsTimer = nullptr;
     uint64_t statFrames = 0, statFramesShown = 0, statIoCyclesShown = 0, statIoFramesShown = 0;
     uint32_t statStarts = 0, statStartsShown = 0, statUnderruns = 0;
@@ -864,7 +863,7 @@ class SwitchAudio : public IOService {
                 done, now, r32(ahub, I2S_RX_STATUS), r32(ahub, I2S_CTRL), r32(ahub, I2S_TIMING));
         }
     }
-    // switch-audio-stats: the period that just played, before it is cleared: its loudest sample (in 16-bit units:
+    // The stats: the period that just played, before it is cleared: its loudest sample (in 16-bit units:
     // 32767 is full scale), an underrun when the plug-in had not written up to its end, how far past it the plug-in
     // had written (the write-ahead margin: the safety offset in use, less the IO thread's lateness), and how late this
     // interrupt runs after the period's end on the I2S clock model the plug-in's zero time stamps use
@@ -1269,7 +1268,7 @@ class SwitchAudio : public IOService {
         if (self->control->state) self->codecMute(false);
     }
 
-    // switch-audio-stats=1, every kStatsMS on the codec work loop (it reads the codec over I2C). "starts" counts the
+    // The stats line, every kStatsMS on the codec work loop (it reads the codec over I2C). "starts" counts the
     // streams the hardware started since the last line, "moved" what the playback DMA played (240000 a line while a
     // stream runs), "under" the periods that played before the plug-in had written their end, "peak" the loudest sample
     // since the last line (16-bit units; 0: only silence reached the DMA); "io" the plug-in's playback IO cycles in the
@@ -1358,13 +1357,10 @@ class SwitchAudio : public IOService {
         }
         jackSource->enable();
         jackTimer->setTimeoutMS(kJackSettleMS);
-        uint32_t stats = 0;
-        if (PE_parse_boot_argn("switch-audio-stats", &stats, sizeof(stats)) && stats) {
-            statsTimer = IOTimerEventSource::timerEventSource(this, &SwitchAudio::statsFired);
-            if (!statsTimer || codecLoop->addEventSource(statsTimer) != kIOReturnSuccess)
-                panic("SwitchAudio: stats timer setup failed");
-            statsResume();
-        }
+        statsTimer = IOTimerEventSource::timerEventSource(this, &SwitchAudio::statsFired);
+        if (!statsTimer || codecLoop->addEventSource(statsTimer) != kIOReturnSuccess)
+            panic("SwitchAudio: stats timer setup failed");
+        statsResume();
     }
 
     static IOReturn requestGated(OSObject *owner, void *selector, void *, void *, void *)
@@ -1495,11 +1491,8 @@ public:
     bool start(IOService *provider) override
     {
         if (!IOService::start(provider)) return false;
-        uint32_t mode = 0;
-        PE_parse_boot_argn("switch-audio", &mode, sizeof(mode));
-        tegra = (mode & 1) != 0;
-        tegraCapture = tegra && (mode & 2);
-        speakerOnly = tegra && (mode & 4);
+        uint32_t off = 0;
+        tegra = !(PE_parse_boot_argn("switch-no-audio", &off, sizeof(off)) && off);
         const IOOptionBits options = (IOOptionBits)kIODirectionInOut | (IOOptionBits)kIOMemoryKernelUserShared |
                                      (IOOptionBits)kIOMemoryPhysicallyContiguous;
         const uint32_t sizes[3] = {(uint32_t)PAGE_SIZE, kOutBytes, kInBytes};

@@ -941,7 +941,7 @@ __attribute__((visibility("default"))) void AVDRegister(void);
 void AVDRegister(void)
 {
     gLog = os_log_create("com.brunostjohn.switch.avd", "decoder");
-    if (!nvdec_service_present()) return;  // switch-nvdec=0, or NVDEC did not prove itself at boot: nothing changes
+    if (!nvdec_service_present()) return;  // switch-no-nvdec, or NVDEC did not prove itself at boot: nothing changes
     int error = 0;
     NVDECClient *probe = nvdec_open(&error);
     if (!probe) {

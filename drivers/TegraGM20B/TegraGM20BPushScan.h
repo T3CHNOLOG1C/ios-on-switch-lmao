@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// The tegra-gpu-stats method-stream reader (TegraGM20BUserClient.cpp scanPushes): counts what a submission's pushes ask
+// The stats' method-stream reader (TegraGM20BUserClient.cpp scanPushes): counts what a submission's pushes ask
 // of the GM20B and names each push for the push profile (gpu.c "push profile"). Plain C++ with no kernel dependency, so
 // the host test (test/gm20b_push_scan_test.cpp) runs the same code over NVK's streams.
 // Encoding: NV906F DMA headers (opcode 31:29, count or immediate 28:16, subchannel 15:13, dword method 11:0); NVK's

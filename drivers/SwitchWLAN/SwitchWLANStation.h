@@ -119,16 +119,15 @@ void switch_wlan_net_counters(struct swlan_net_counters *out);
 // The link's transmit PHY rate (b/s) as en0's baud rate, what the stack and its clients read for the link speed.
 void switch_wlan_net_rate(uint64_t bps);
 
-// SwitchWLAN.cpp: the radio driver behind boot-arg switch-wlan=1 (prints the probe line, publishes the fuse MAC in
-// the device tree, then brings the chip up on its own thread). Returns 0 when the boot-arg is off or the driver
-// started. Thread context, IOKit up, before userland.
+// SwitchWLAN.cpp: the radio driver (publishes the fuse MAC in the device tree, then brings the chip up on its own
+// thread). Returns 0 when boot-arg switch-no-wlan is set or the driver started. Thread context, IOKit up, before userland.
 int switch_wlan_publish(void);
 
 // SwitchWLANNet.cpp: en0 and the IO80211 registry entries, once the radio is up with its address.
 void switch_wlan_net_start(const uint8_t mac[6]);
 
 // SwitchWLANProbe.cpp
-void switch_wlan_probe(void);                         // read-only state report, boot-arg switch-wlan=1
+void switch_wlan_probe(void);                         // read-only state report
 int switch_wlan_mac(uint8_t wifi[6], uint8_t bt[6]);  // 0: fuse-derived addresses as switchroot U-Boot makes them
 // System sleep (drivers/SwitchSuspend's sleep and wake actions, one thread): suspend lets the chip go and parks the
 // worker (bounded at 3 s); resume brings PCIe and the chip up whole on the worker, back on the last network.

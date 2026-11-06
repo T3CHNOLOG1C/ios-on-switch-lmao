@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // XNU side of the nvkm shim (see shim/include/nvxnu.h): heap, locks, time, thread calls, GPU interrupts, MMIO, the
-// GPU memory pool, cache maintenance, embedded firmware and boot-args. No Linux names in here.
+// GPU memory pool, cache maintenance and embedded firmware. No Linux names in here.
 #include <os/log.h>
 #include <IOKit/IOLib.h>
 #include <IOKit/IOBufferMemoryDescriptor.h>
@@ -25,7 +25,7 @@ vm_offset_t phystokv(uint64_t pa);  // physical aperture (osfmk/arm64/arm_vm_ini
 vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
 vm_offset_t ml_io_map_wcomb(vm_offset_t phys_addr, vm_size_t size);
 boolean_t ml_set_interrupts_enabled(boolean_t enable);
-boolean_t PE_parse_boot_argn(const char *arg_string, void *arg_ptr, int max_arg);
+boolean_t pmap_switch_gpu_pool(uint64_t *start, uint64_t *end);
 void pmap_set_cache_attributes(ppnum_t pn, unsigned int cacheattr);
 boolean_t pmap_valid_page(ppnum_t pn);
 void IOLogv(const char *format, va_list ap);
@@ -63,8 +63,8 @@ extern "C" void nvxnu_log(const char *fmt, ...)
 	va_end(ap);
 }
 
-// Bring-up step trace (M1/M2/CLK steps): only with boot-arg tegra-gpu-trace=1, which also gives the console time to draw
-// each line before the next step. Without it nothing is printed: the stage results (M1..M4 ok) are TegraGM20B.cpp's own
+// Bring-up step trace (M1/M2/CLK steps): only with kTracePaced, set in source for a bring-up test, which also gives the
+// console time to draw each line before the next step. Without it nothing is printed: the stage results (M1..M4 ok) are TegraGM20B.cpp's own
 // lines, and every GPU failure panics with one line.
 extern "C" void nvxnu_step(const char *fmt, ...)
 {
@@ -77,14 +77,11 @@ extern "C" void nvxnu_step(const char *fmt, ...)
 	IOSleep(400);
 }
 
+constexpr bool kTracePaced = false;
+
 extern "C" int nvxnu_trace_paced(void)
 {
-	static int paced = -1;
-	if (paced < 0) {
-		int v = 0;
-		paced = PE_parse_boot_argn("tegra-gpu-trace", &v, sizeof(v)) && v;
-	}
-	return paced;
+	return kTracePaced;
 }
 
 extern "C" int nvxnu_vsnprintf(char *buf, unsigned long size, const char *fmt, va_list ap)
@@ -560,7 +557,7 @@ extern "C" void nvxnu_dcache_clean_inval_pages(const nvxnu_u64 *pas, nvxnu_u32 c
 }
 
 // The system's page faults so far (every vm_fault) and those that zero-filled a page: XNU's own counters, as vm_stat reads
-// them (tegra-gpu-stats' "mem" line takes the window's deltas). user_* stay 0: they need user-fault timing, which this
+// them (the stats' "mem" line takes the window's deltas). user_* stay 0: they need user-fault timing, which this
 // kernel's XNU does not carry.
 extern "C" void nvxnu_vm_faults(struct nvxnu_faults *f)
 {
@@ -569,8 +566,8 @@ extern "C" void nvxnu_vm_faults(struct nvxnu_faults *f)
 	f->user_n = f->user_ns = f->user_max_ns = 0;
 }
 
-// The GPU memory pool, preferably a physical range the kernel keeps out of the VM at boot (boot-args
-// tegra-gpu-pool-pa=<pa> tegra-gpu-pool-mb=<MiB>; arm_vm_init.c pmap_switch_ram_init), which its physical aperture
+// The GPU memory pool, preferably the physical range the kernel keeps out of the VM at boot (arm_vm_init.c
+// pmap_switch_ram_init, pmap_switch_gpu_pool), which its physical aperture
 // maps write-combined and nothing maps cacheable: phystokv() is the pool's only mapping (a 128 MiB ml_io_map_wcomb runs
 // out of kernel VA).
 // Fallback: a contiguous IOBufferMemoryDescriptor below 4 GiB whose pages are switched to write-combined
@@ -583,26 +580,22 @@ static struct {
 
 extern "C" int nvxnu_pool_init(int *zeroed)
 {
-	long long pa = 0, mib = 256;  // arm_vm_init.c's default too: the two must agree
+	const uint64_t bytes = 256ULL << 20;
 	*zeroed = 0;
 	if (pool.va)
 		return 0;
-	nvxnu_bootarg_int("tegra-gpu-pool-mb", &mib);
-	if (mib < 16 || mib > 1024)
-		mib = 256;
-	const uint64_t bytes = static_cast<uint64_t>(mib) << 20;
-	if (nvxnu_bootarg_int("tegra-gpu-pool-pa", &pa) && pa > 0 && !(pa & 0xfff) &&
-	    static_cast<uint64_t>(pa) + bytes <= (1ULL << 32)) {
+	uint64_t start = 0, end = 0;
+	if (pmap_switch_gpu_pool(&start, &end)) {
 		// Bring-up trace: one console line before each step that touches memory or hardware for the first time, so
 		// the last line names the step that hung.
-		pool.va = reinterpret_cast<void *>(phystokv(static_cast<uint64_t>(pa)));
+		pool.va = reinterpret_cast<void *>(phystokv(start));
 		nvxnu_step(
 			"tegra-gm20b: M1 step: reserved pool %#llx + %llu MiB at physmap va %p\n",
-			pa, mib, pool.va);
+			start, (end - start) >> 20, pool.va);
 		if (!pool.va)
 			return -12;
-		pool.pa = static_cast<uint64_t>(pa);
-		pool.size = bytes;
+		pool.pa = start;
+		pool.size = end - start;
 		// No CPU clear (0.3 s of boot for 256 MiB through the write-combined aperture): every page starts
 		// dirty, an allocation before the GPU runs zeroes the pages it takes, and the copy engine zeroes the rest
 		// once the GPU is up (gpu.c "pool scrub").
@@ -735,18 +728,4 @@ extern "C" int nvxnu_firmware_find(const char *name, const void **data, unsigned
 		}
 	}
 	return -2;
-}
-
-extern "C" int nvxnu_bootarg_int(const char *name, long long *value)
-{
-	long long v = 0;
-	if (!PE_parse_boot_argn(name, &v, sizeof(v)))
-		return 0;
-	*value = v;
-	return 1;
-}
-
-extern "C" int nvxnu_bootarg_str(const char *name, char *buf, int len)
-{
-	return PE_parse_boot_argn(name, buf, len) ? 1 : 0;
 }

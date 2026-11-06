@@ -495,10 +495,6 @@ native_apfs_probe_checkpoint(void)
 static void
 native_apfs_load_probe(void)
 {
-	int enabled = 0;
-	if (!PE_parse_boot_argn("offline-apfs-load", &enabled, sizeof(enabled)) || !enabled) {
-		return;
-	}
 	native_apfs_load_status = OSKextLoadKextWithIdentifier("com.apple.filesystems.apfs");
 	mount_list_lock();
 	for (struct vfstable *entry = vfsconf; entry; entry = entry->vfc_next) {
@@ -512,25 +508,6 @@ native_apfs_load_probe(void)
 	native_apfs_probe_checkpoint();
 }
 
-volatile int native_iogpu_load_status = -1;
-
-__attribute__((noinline)) void
-native_iogpu_probe_checkpoint(void)
-{
-	__asm__ volatile("" ::: "memory");
-}
-
-static void
-native_iogpu_load_probe(void)
-{
-	int enabled = 0;
-	if (!PE_parse_boot_argn("offline-iogpu-load", &enabled, sizeof(enabled)) || !enabled) {
-		return;
-	}
-	native_iogpu_load_status = OSKextLoadKextWithIdentifier("com.apple.iokit.IOGPUFamily");
-	native_iogpu_probe_checkpoint();
-}
-
 volatile int native_mobile_graphics_load_status = -1;
 
 __attribute__((noinline)) void
@@ -542,23 +519,11 @@ native_mobile_graphics_probe_checkpoint(void)
 static void
 native_mobile_graphics_load_probe(void)
 {
-	int enabled = 0;
-	if (!PE_parse_boot_argn("offline-mobile-graphics-load", &enabled, sizeof(enabled)) || !enabled) {
-		return;
-	}
 	native_mobile_graphics_load_status = OSKextLoadKextWithIdentifier("com.apple.iokit.IOMobileGraphicsFamily");
 	native_mobile_graphics_probe_checkpoint();
-	int legacy_register = 0;
-	if (native_mobile_graphics_load_status == 0 &&
-	    PE_parse_boot_argn("offline-legacy-register", &legacy_register, sizeof(legacy_register)) && legacy_register) {
+	if (native_mobile_graphics_load_status == 0) {
 		extern void native_legacy_display_probe(void);
 		native_legacy_display_probe();
-	}
-	int client_probe = 0;
-	if (native_mobile_graphics_load_status == 0 &&
-	    PE_parse_boot_argn("offline-mobile-graphics-client", &client_probe, sizeof(client_probe)) && client_probe) {
-		extern void native_mobile_graphics_client_probe(void);
-		native_mobile_graphics_client_probe();
 	}
 }
 #endif
@@ -794,7 +759,6 @@ bsd_init(void)
 #if 1 /* ios-on-switch-lmao's boot path, in every kernel configuration (was DEVELOPMENT || DEBUG) */
 	native_apfs_load_probe();
 	native_mobile_graphics_load_probe();
-	native_iogpu_load_probe();
 	/* After IOMobileGraphicsFamily: IOGPUFamily then brings no new dependency (AppleARMPlatform, AMFI, IOSurface,
 	 * IOReportFamily are loaded) and has no personalities. QuartzCore polls 30 s for an IOAcceleratorES otherwise. */
 	{
@@ -921,14 +885,6 @@ bsd_init(void)
 	sysctl_mib_init();
 #if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
 	/* The SD disk is published after bsd_autoconf() below, not here. */
-#elif defined(XNU_VERIFIED_ROOT_PROBE) && XNU_VERIFIED_ROOT_PROBE
-	{
-		extern void native_verified_root_probe(void);
-		int enabled = 0;
-		if (PE_parse_boot_argn("offline-owner-root-check", &enabled, sizeof(enabled)) && enabled) {
-			native_verified_root_probe();
-		}
-	}
 #endif
 
 	bsd_init_kprintf("calling bsd_autoconf\n");

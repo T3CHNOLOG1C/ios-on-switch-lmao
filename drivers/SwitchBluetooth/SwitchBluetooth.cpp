@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // Switch OLED Bluetooth: the BCM4356A3's Bluetooth core on UART-D, brought up here and handed to iOS's Bluetooth
-// daemons as the H4 byte stream they open on an iPad. Opt-in with boot-arg switch-bt=1; see SwitchBluetooth.h.
+// daemons as the H4 byte stream they open on an iPad. Boot-arg switch-no-bt turns it off; see SwitchBluetooth.h.
 //
 // Hardware (switchroot tegra210b01-nx-common.dtsi / tegra210b01-fric-{gpio,pinmux}.dtsi, the OLED DTB):
 // serial@70006300 is "nvidia,tegra114-hsuart" with a "brcm,bcm43438-bt" child: max-speed 3000000, RTS/CTS on
@@ -86,7 +86,7 @@
 // TIOCGETA / TIOCSETA as SYSPROTO_CONTROL socket options carry a struct termios whose speed is applied to the UART
 // (flow control stays on). That is what BlueTool's "device -D" opens (FUN_10001e988) and what bluetoothd's POSIX
 // HCI driver opens when named (FUN_1000ddaa8); bluetoothd's unnamed default is the Skywalk variant
-// "com.apple.uart.sk.bluetooth", so kern_exec.c names this one in bluetoothd's BT_HCI_TRANSPORT (switch-bt=1). Its
+// "com.apple.uart.sk.bluetooth", so kern_exec.c names this one in bluetoothd's BT_HCI_TRANSPORT. Its
 // chip-boot requests go to the BlueTool stand-in (BlueTool/BlueTool.c, shown at /usr/sbin/BlueTool from the Data
 // overlay), which reports success: the work is done here. A client that sent anything leaves the chip in an unknown
 // state (an original BlueTool would push its own baud rate and firmware), so the next connect brings the chip up
@@ -3526,12 +3526,17 @@ void publishBtwake()
         IOLog("SwitchBluetooth: /dev/btwake not created (major %d); bluetoothd logs a BT_WAKE error at each wake\n",
               major);
 }
+
+bool bluetoothDisabled()
+{
+    uint32_t off = 0;
+    return PE_parse_boot_argn("switch-no-bt", &off, sizeof(off)) && off;
+}
 }  // namespace
 
 extern "C" int switch_bluetooth_start(void)
 {
-    uint32_t enabled = 0;
-    if (!PE_parse_boot_argn("switch-bt", &enabled, sizeof(enabled)) || !enabled) return 0;
+    if (bluetoothDisabled()) return 0;
     static volatile bool started;
     if (__atomic_exchange_n(&started, true, __ATOMIC_ACQ_REL)) return 0;
     publishAddress();
@@ -3550,8 +3555,7 @@ extern "C" int switch_bluetooth_start(void)
 // never sees another one (see the header, "BD address"); the controller gets it at bluetoothd's first connect.
 extern "C" void switch_bluetooth_data_mounted(void)
 {
-    uint32_t enabled = 0;
-    if (!PE_parse_boot_argn("switch-bt", &enabled, sizeof(enabled)) || !enabled) return;
+    if (bluetoothDisabled()) return;
     uint8_t staged[6];
     if (!readStagedAddress(staged)) {
         __atomic_store_n(&gStagedState, kStagedNone, __ATOMIC_RELEASE);
