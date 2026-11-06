@@ -33,6 +33,7 @@
 #include <libkern/c++/OSMetaClass.h>
 #include <libkern/OSAtomic.h>
 #include <libkern/OSDebug.h>
+#include <switch/shutdown.h>
 #include <IOKit/IOWorkLoop.h>
 #include <IOKit/IOCommandGate.h>
 #include <IOKit/IOTimerEventSource.h>
@@ -952,6 +953,7 @@ halt_log_enter(const char * what, const void * pc, uint64_t time)
 {
 	uint64_t nano, millis;
 
+	switch_shutdown_step(what, pc, time);
 	if (!gHaltLog) {
 		return;
 	}

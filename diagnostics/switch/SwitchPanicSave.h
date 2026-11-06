@@ -20,6 +20,8 @@ void switch_panic_logged(void);
 const char *switch_panic_save_pending(uint32_t *bytes, char *path, size_t path_bytes);
 const void *switch_panic_save_pending_stackshot(uint32_t *bytes);
 void switch_panic_save_done(int error, const char *path);
+// The SoC watchdog (TMR5/WDT0, a warm reset `seconds` from now; 0 off): SwitchPowerTrail.h switch_power_trail_watch.
+void switch_panic_save_watchdog(unsigned seconds);
 #else
 #define switch_panic_save_init()                              ((void)0)
 #define switch_panic_save_xnu_buffer(base, bytes)             0
@@ -29,5 +31,6 @@ void switch_panic_save_done(int error, const char *path);
 #define switch_panic_save_pending(bytes, path, path_bytes)    ((const char *)0)
 #define switch_panic_save_pending_stackshot(bytes)            ((const void *)0)
 #define switch_panic_save_done(error, path)                   ((void)0)
+#define switch_panic_save_watchdog(seconds)                   ((void)0)
 #endif
 #endif

@@ -35,7 +35,7 @@
 // 706/721/739; the OLED DTB i2c@7000c000.. nodes), sleeping in switch_interrupt_nub() until the GIC is up; a caller
 // sleeps until the work loop action reports packet completion, NACK or arbitration loss (FIFO refills and drains
 // happen there too; the bus clear completes by INT_BUS_CLEAR_DONE). There is no polled mode (tegra_i2c_final_transfer,
-// the power-off's last transfers, aside): an interrupt that cannot be attached, or a wait that times out while the
+// the power-off's last transfers, and tegra_i2c_raw_write, debug power marks with interrupts off, aside): an interrupt that cannot be attached, or a wait that times out while the
 // controller asserts an unmasked status bit, panics with the controller and GIC state. I2C5 is no exception:
 // switchroot's L4T kernel drives i2c@7000d000 by interrupt like the other buses (OLED DTB node: interrupts SPI 53,
 // status okay; Linux i2c-tegra.c probe requests every non-DVC bus's IRQ), and nothing else uses that register block
@@ -109,6 +109,14 @@ void tegra_i2c_describe(unsigned bus, char *buffer, size_t size);
 // controller's interrupts: transfers by anyone else wait forever after it. Same arguments and limits as
 // tegra_i2c_transfer().
 int tegra_i2c_final_transfer(unsigned bus, uint8_t addr, const void *tx, size_t txlen, void *rx, size_t rxlen);
+
+// A register write (1..8 bytes: the register, then its values) for code that runs where this driver cannot: interrupts
+// off, boot CPU only, the buses suspended (SC7 entry) or not yet resumed (SC7 exit, the controller's clock and reset
+// back at their reset values). No driver state and no lock: the caller is the only code running. A controller whose
+// clock is off or held in reset is clocked from CLK_M and set up as tegra_i2c_init() would (pads included), and is
+// left that way; then one packet, its INT_STATUS polled to the end within the same budget as a 100 kHz packet. Needs
+// tegra_i2c_init() to have run once this boot (the register mappings). Debug power marks (SwitchPowerTrail.h) only.
+int tegra_i2c_raw_write(unsigned bus, uint8_t addr, const uint8_t *data, size_t len);
 
 // A chained bus's (I2C3) optional paths, for its owner's one-time checks, in this order: the same transfer as
 // tegra_i2c_transfer (a write of 1..8 bytes, then the read) as one chained submission by PIO, or with its read by APB

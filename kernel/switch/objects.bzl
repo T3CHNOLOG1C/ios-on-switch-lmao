@@ -13,6 +13,7 @@ SWITCH_ROOT = "kernel/switch"
 SWITCH_OBJECTS = {
     "bsd": [
         ("bsd/kern/bsd_init.c", "boot/bsd_init.c", []),
+        ("bsd/kern/kern_shutdown.c", "shutdown/shutdown.c", []),
         ("bsd/vfs/vfs_lookup.c", "vfs/pretranslated.c", []),
         # The translator's core is //translate/arm64e's (its host tools and tests build the same files).
         ("bsd/kern/mach_loader.c", "translate/a64x_xnu.c", [], ["12377.121.6"]),

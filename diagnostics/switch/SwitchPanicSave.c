@@ -19,9 +19,10 @@
 //                       one (no /pram node here) SavePanicInfo spins at its first line and no backtrace is ever written.
 //   +0x100000  record   magic, CRC32s (zlib's, also per 4 KiB block), time, phase
 //   +0x101000  header   the panic stackshot kept with the record: magic, length, CRC32 (struct switch_panic_stackshot)
-//   +0x102000  504 KiB  that stackshot: XNU's (zlib-compressed kcdata, every task's threads with kernel and user frames
+//   +0x102000  488 KiB  that stackshot: XNU's (zlib-compressed kcdata, every task's threads with kernel and user frames
 //                       and wait info), copied out of XNU's buffer once its panic log is written, as the next boot's XNU
 //                       reuses that buffer. Written next to the text as panic-<UTC>.kcdata (pull_logs decodes it)
+//   +0x17c000  16 KiB   the power trail (SwitchPowerTrail.h), debug kernels
 //   +0x180000  512 KiB  the text, in hekate's L4T console layout: 'DBGC', start, size, then size bytes (main.c _show_errors)
 // The text is the panic string, the last 64 KiB of the kernel log (msgbuf) and, once SavePanicInfo returned, XNU's panic
 // log (backtraces, kexts). With hekate_on, PMC_SCRATCH37 would be set at panic entry to hekate's L4T panic magic
@@ -39,7 +40,9 @@
 // stackshot) reaches Data, where holding POWER would have lost it.
 // A panic with the panel off (display power: the Switch was locked) has no screen to read or photograph either: it
 // warm-resets DARK_REBOOT_S after the panic, for the same reason (r7t panicked locked, looked
-// like a Switch that would not wake, and was forced off, record and all).
+// like a Switch that would not wake, and was forced off, record and all). A panic once the kernel is shutting down
+// (get_system_inshutdown: reboot(2) has begun) warm-resets SHUTDOWN_REBOOT_S after it: the panel is dark or about to
+// be, the console was meant to go off, and POWER held would lose the record within seconds.
 #include <stdint.h>
 #include <stddef.h>
 #include <stdarg.h>
@@ -57,6 +60,7 @@
 #include "SwitchDiag.h"
 #include "SwitchDiagDisplay.h"
 #include "SwitchPanicSave.h"
+#include "SwitchPowerTrail.h"
 
 /* SwitchBrightness (SwitchBacklight.cpp): false from a display-off request until the panel is lit again; a plain read.
  * This weak default (a kernel without the backlight) has the panel lit. */
@@ -72,6 +76,7 @@ extern void switch_clock_calendar_nowait(clock_sec_t *secs, clock_nsec_t *nanose
 extern uint32_t crc32(uint32_t crc, const void *buf, size_t size);
 extern uint64_t mach_absolute_time(void);
 extern boolean_t switch_ram_reserved(ppnum_t pnum);
+extern int get_system_inshutdown(void);
 extern unsigned char iso_font[256 * 16];
 
 #define REGION_PA         UINT64_C(0xb0000000)
@@ -86,10 +91,13 @@ extern unsigned char iso_font[256 * 16];
 #define RECORD_MAGIC      UINT64_C(0x31434e5048435753) /* "SWCHPNC1" */
 #define SHOT_HEADER       (RECORD_OFFSET + 0x1000u)
 #define SHOT_OFFSET       (RECORD_OFFSET + 0x2000u)
-#define SHOT_MAX          (CONSOLE_OFFSET - SHOT_OFFSET)
+#define TRAIL_BYTES       0x4000u
+#define TRAIL_OFFSET      (CONSOLE_OFFSET - TRAIL_BYTES)
+#define SHOT_MAX          (TRAIL_OFFSET - SHOT_OFFSET)
 #define SHOT_MAGIC        UINT64_C(0x314b534848435753) /* "SWCHHSK1" */
 #define WATCHDOG_REBOOT_S 60u
 #define DARK_REBOOT_S     15u
+#define SHUTDOWN_REBOOT_S 3u
 #define MSGBUF_TAIL       (64u << 10)
 #define PMC_PA            UINT64_C(0x7000e000) /* the page; APBDEV_PMC at +0x400 (hekate t210.h PMC_BASE) */
 #define PMC_CNTRL         (0x400u + 0x000u)
@@ -473,6 +481,23 @@ static void arm_watchdog(unsigned seconds)
     drain();
 }
 
+/* Linux tegra_wdt_stop: the unlock pattern, DISABLE_COUNTER, TMR5 off. */
+static void disarm_watchdog(void)
+{
+    if (!tmr)
+        return;
+    tmr[WDT0_UNLOCK / 4] = 0xc45au;
+    tmr[WDT0_CMD / 4] = 2u;
+    tmr[TMR5_PTV / 4] = 0;
+    drain();
+}
+
+void switch_panic_save_watchdog(unsigned seconds)
+{
+    disarm_watchdog();
+    arm_watchdog(seconds);
+}
+
 static void __attribute__((noreturn)) pmc_reset(void)
 {
     pmc[PMC_SCRATCH0 / 4] = pmc[PMC_SCRATCH0 / 4] & ~PMC_SCRATCH0_MODES; /* no warmboot, RCM or hekate mode request */
@@ -503,6 +528,7 @@ void switch_panic_save_init(void)
         save_off_reason = "mapping failed";
         return;
     }
+    switch_power_trail_init(region + TRAIL_OFFSET, TRAIL_BYTES);
     last_reset = pmc[PMC_RST_STATUS / 4] & 7;
     if (pmc[PMC_SCRATCH37 / 4] == TPAN)
         pmc[PMC_SCRATCH37 / 4] = 0; /* hekate clears it; never leave it for later */
@@ -555,6 +581,8 @@ int switch_panic_begin(const char *format, va_list *args, unsigned long caller, 
                      starts_with(panic_line, "watchdog timeout: no checkins from ");
     if (watchdog_panic && !reboot_arg)
         reboot_s = WATCHDOG_REBOOT_S;
+    if (get_system_inshutdown() && !reboot_arg && !reboot_s)
+        reboot_s = SHUTDOWN_REBOOT_S;
     if (!switch_display_is_on() && !reboot_arg && !reboot_s)
         reboot_s = DARK_REBOOT_S; /* nothing to photograph */
     screen_taken = take_screen && screen;
@@ -643,6 +671,7 @@ void switch_panic_logged(void)
 
 const char *switch_panic_save_pending(uint32_t *bytes, char *path, size_t path_bytes)
 {
+    switch_power_trail_report();
     static const char *const resets[8] = {"power-on", "watchdog", "thermal sensor", "software (PMC)",
                                           "LP0 wake", "AOTAG",    "unknown 6",      "unknown 7"};
     if (!save_on || !region) {

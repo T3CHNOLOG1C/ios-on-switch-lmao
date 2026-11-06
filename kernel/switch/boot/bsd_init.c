@@ -9,6 +9,7 @@
 #include <libkern/OSKextLib.h>
 
 #include "SwitchDiag.h"
+#include "SwitchPowerTrail.h"
 #include <switch/boot.h>
 
 extern kern_return_t OSKextLoadKextWithIdentifier(const char *identifier);
@@ -114,6 +115,7 @@ void switch_boot_mountroot_begin(void)
 void switch_boot_mountroot_done(int err)
 {
     if (!err) {
+        switch_power_trail_mark(SWITCH_MARK_BOOT_ROOT);
     }
     switch_root_event(7, err, 0);
     if (err) {

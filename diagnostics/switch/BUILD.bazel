@@ -33,6 +33,7 @@ kernel_driver(
     srcs = [
         "SwitchDiag.c",
         "SwitchPanicSave.c",
+        "SwitchPowerTrail.c",
         "SwitchFiles.c",
         "SwitchSD.c",
         "storage/block_backend.c",

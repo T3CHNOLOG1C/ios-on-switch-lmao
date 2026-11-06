@@ -67,10 +67,12 @@
 #include <kern/clock.h>
 #include <os/log.h>
 #include <pexpert/pexpert.h>
+#include "../../diagnostics/switch/SwitchPowerTrail.h"
 #include "../SwitchBrightness/TegraPanel.h"
 #include "../TegraBPMP/TegraBPMP.h"
 #include "../TegraI2C/TegraI2C.h"
 #include "SwitchClocks.h"
+#include "SwitchMAX77620.h"
 #include "SwitchPower.h"
 
 extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
@@ -78,8 +80,7 @@ extern "C" boolean_t preemption_enabled(void);
 extern "C" unsigned panic_active(void);
 
 namespace {
-constexpr unsigned kBus = 5;
-constexpr uint8_t kPmic = 0x3c, kRtc = 0x68;
+using namespace max77620;
 
 enum : uint8_t {
     IRQTOP = 0x05,
@@ -99,54 +100,20 @@ enum : uint8_t {
 
 constexpr uint8_t k32kOut0Enable = 1u << 2, kGpio4Alternate = 1u << 4;  // CNFG1_32K OUT0_EN; AME_GPIO GPIO4 32K_OUT1
 
-enum : uint8_t {
-    RTC_CONTROLM = 0x02,
-    RTC_CONTROL = 0x03,
-    RTC_UPDATE0 = 0x04,
-    RTC_SEC = 0x07
-};
-
 // Sleep wake alarm (Linux rtc-max77686.c, hekate max77620-rtc.h): RTCINT 0x00 (clear on read) / RTCINTM 0x01, bit 1 =
 // ALARM1; ALARM1 SEC 0x0E .. DATE 0x14 laid out like the time registers, bit 7 of each = compare this field. The
 // alarm reaches the SoC as the PMIC's nIRQ through IRQTOP bit 3 (RTC), masked in IRQTOPM 0x0D.
 enum : uint8_t {
-    RTC_INT = 0x00,
-    RTC_INT_MASK = 0x01,
-    RTC_ALARM1 = 0x0e,
     IRQTOPM = 0x0d
 };
 
 constexpr uint8_t kRtcAlarm1 = 1u << 1, kRtcIntMaskAll = 0x3f, kAlarmCompare = 1u << 7, kTopRtc = 1u << 3;
 constexpr uint8_t kRtcBcd = 1u << 0, kRtc24Hour = 1u << 1, kRtcHourPm = 1u << 6;
-constexpr uint8_t kRtcWriteUpdate = 1u << 0, kRtcReadUpdate = 1u << 4;
-constexpr uint32_t kRtcUpdateMS = 16;
-
-enum {
-    SEC,
-    MIN,
-    HOUR,
-    WEEKDAY,
-    MONTH,
-    YEAR,
-    DATE,
-    kTimeRegs
-};
-
 constexpr uint32_t kPowerDownUS = 2000000;  // the PMIC cuts power within milliseconds of SFT_RST
 // PMC_CNTRL (APBDEV_PMC_CNTRL, PMC at 0x7000E400) MAIN_RST: the SoC's warm reset (hekate, L4T tegra_pmc_restart).
 constexpr vm_offset_t kPmcPA = 0x7000E000;
 constexpr uint32_t kPmcCntrl = 0x400, kPmcMainReset = 1u << 4;
 volatile uint32_t *gPmc;  // mapped at start: nothing is mapped on the restart path
-
-int readByte(uint8_t addr, uint8_t reg, uint8_t *value)
-{
-    return tegra_i2c_read(kBus, addr, reg, value, 1);
-}
-
-int writeByte(uint8_t addr, uint8_t reg, uint8_t value)
-{
-    return tegra_i2c_write(kBus, addr, reg, &value, 1);
-}
 
 // The Wi-Fi/Bluetooth module's 32 kHz clock on, as L4T has it (top of file); read-modify-write, other bits kept.
 // One line to the log (not the console) when it was off, which is every boot after a PMIC power-off.
@@ -198,12 +165,15 @@ void civilFromDays(int64_t days, int *year, int *month, int *day)
 // Sets `bit` in UPDATE0 (the others, e.g. the auto-clear mode, stay) and waits out the transfer.
 int rtcUpdate(uint8_t bit)
 {
+    rtcQuiet(true);
     uint8_t update = 0;
     int err = readByte(kRtc, RTC_UPDATE0, &update);
     if (!err)
         err = writeByte(kRtc, RTC_UPDATE0, update | bit);
-    if (!err)
+    if (!err) {
+        rtcUpdated();
         IOSleep(kRtcUpdateMS);
+    }
     return err;
 }
 
@@ -253,6 +223,7 @@ int rtcWrite(int64_t secs)
         (uint8_t)(rest % 60), (uint8_t)(rest / 60 % 60), (uint8_t)(rest / 3600), (uint8_t)(1u << ((days + 4) % 7)),
         (uint8_t)month,       (uint8_t)(year - 2000),    (uint8_t)day,
     };
+    rtcQuiet(true);
     uint8_t control = 0;
     int err = readByte(kRtc, RTC_CONTROL, &control);
     if (!err && (control & (kRtcBcd | kRtc24Hour)) != kRtc24Hour) {
@@ -273,6 +244,7 @@ int rtcWrite(int64_t secs)
 // must not change the RTC), all but the weekday compared; or, for secs < 0, every compare off.
 int alarmWrite(int64_t secs)
 {
+    rtcQuiet(true);
     uint8_t control = 0;
     int err = readByte(kRtc, RTC_CONTROL, &control);
     uint8_t t[kTimeRegs] = {};
@@ -353,15 +325,23 @@ int haltRestart(unsigned int type)
     if ((type != kPEHaltCPU && type != kPERestartCPU) || panic_active())
         return -1;
     const bool restart = type == kPERestartCPU;
+    switch_power_trail("PE_halt_restart(%u)", type);
+    switch_power_trail_mark(SWITCH_MARK_HALT_PLATFORM);
     // Storage needs nothing more: reboot_kernel() synced and unmounted every file system and waited out the dirty
     // buffers before halt_all_cpus(), and NativeSwitchBlock completes a write only once the card has it.
     bool dark = false;
     // XNU's path is thread context; both steps below sleep (the panel's commands ride DC frame ends).
     if (preemption_enabled()) {
         switch_thermal_cpu_quiesce();  // the DFLL, if the CPU runs on it, must not share I2C5 with what follows
+        switch_power_trail("CPU quiesced for the halt");
         dark = tegra_panel_power_off() == 0;
+        switch_power_trail("panel %s", dark ? "dark" : "not running");
+        switch_power_trail_mark(SWITCH_MARK_HALT_PANEL);
+        switch_power_trail_mark(SWITCH_MARK_HALT_PMIC);
+        switch_power_trail_mark_flush();  // before the soft reset takes I2C5 for good
     }
     const int err = pmicSoftReset(restart);
+    switch_power_trail("MAX77620 soft reset written: %d", err);
     if (!err)
         IODelay(kPowerDownUS);  // busy: interrupts may be off here
     if (restart) {
@@ -706,6 +686,9 @@ extern "C" int switch_pmic_start(void)
             IOLog("SwitchPMIC: Wi-Fi/Bluetooth 32 kHz clock not set (%d): Bluetooth will not come up\n", clockErr);
         }
         gRTC = publishRTC(rtcMode);
+#if DEVELOPMENT || DEBUG
+        switch_pmic_mark_start();
+#endif
         gPmc = (volatile uint32_t *)ml_io_map(kPmcPA, 0x1000);
         PE_halt_restart = haltRestart;
     }
