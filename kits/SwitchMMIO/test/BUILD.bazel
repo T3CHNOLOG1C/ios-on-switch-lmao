@@ -1,0 +1,33 @@
+# kits/SwitchMMIO on the host: the accessors and the bounded wait against a register model and a ticking clock, and
+# the real load-acquire/store asm on host memory.
+#
+#   bazel test //kits/SwitchMMIO/test:all
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//bazel/testing:defs.bzl", "host_shims", "host_test")
+
+lint_files()
+
+host_shims(
+    name = "kernel",
+    headers = ["kern/clock.h"],
+    stubs = "switch_mmio_stubs.h",
+)
+
+host_test(
+    name = "switch_mmio_model_test",
+    srcs = [
+        "switch_mmio_model_test.cpp",
+        "//kits/SwitchMMIO:SwitchMMIO.h",
+        "//kits/SwitchMMIO:SwitchMMIOKernel.h",
+    ],
+    defines = ["SWITCH_MMIO_HOST_MODEL=1"],
+    deps = [":kernel"],
+)
+
+host_test(
+    name = "switch_mmio_ldar_test",
+    srcs = [
+        "switch_mmio_ldar_test.cpp",
+        "//kits/SwitchMMIO:SwitchMMIO.h",
+    ],
+)
