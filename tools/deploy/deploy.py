@@ -115,7 +115,7 @@ def check_kind(card: cards.Card, ipsw: str | None) -> None:
         )
 
 
-def main(argv: list[str] | None = None) -> int:
+def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('disk')
     parser.add_argument('--yes', action='store_true')
@@ -140,112 +140,121 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--stager')
     parser.add_argument('--kcdata')
     parser.add_argument('--log')
-    args = parser.parse_args(argv)
-    harvest_dir = args.harvest_script and str(Path(args.harvest_script).parent)
+    return parser
+
+
+def _checked(args: argparse.Namespace, log: host.Log) -> tuple[cards.Card, dict, object, object, str]:
+    """Check the card and the build; return the card, the spec, its FAT and APFS partitions and its Data volume."""
+    host.check_tools(log)
+    spec = pull_logs.load_spec(args.spec)
+    card = cards.resolve(args.disk)
+    fat, target = cards.check_layout_unprivileged(card, spec)
+    if target.content != 'Apple_APFS':
+        raise cards.RefusedError(f'{card.disk}: {target.identifier} is not installed yet (run //install:sd first)')
+    data_uuid = spec['volumes']['data']['uuid']
+    data = pull_logs.data_volume(card, data_uuid)
+    if not data:
+        raise cards.RefusedError(f'{card.disk}: no iPad Data volume {data_uuid}')
+    check_kind(card, args.ipsw)
+    gpu = Path(args.gpu_bundle) if args.gpu_bundle else None
+    if not args.remove_gpu and not (gpu and (gpu.is_file() or (gpu / 'TegraGM20BMetal.trustcache').is_file())):
+        raise host.HostError('no GPU bundle (--//deploy:gpu_bundle names //gpu:bundle or a directory like //gpu:base)')
+    return card, spec, fat, target, data
+
+
+def _plan(args: argparse.Namespace, changes: list, removed: list, pairing: dict | None) -> list[str]:
+    """Return the steps a deploy would take, for the log."""
+    steps = ['pull logs'] if args.pull_logs else []
+    steps += ['harvest the m2v journals'] if args.harvest else []
+    steps += [f'boot entry: {len(changes)} to copy, {len(removed)} stale', 'overlay']
+    if not args.no_joycon_pairing:
+        controllers = f'stage {len(pairing["controllers"])} controller(s) for host {pairing["host"]}' if pairing else ''
+        steps.append('Joy-Con pairing: ' + (controllers or 'remove any staged dump'))
+    steps.append('remove the GPU bundle' if args.remove_gpu else 'GPU bundle: stage what changed')
+    steps += [f'AWDL {args.awdl} (<Data>/Switch/awdl-enable)'] if args.awdl else []
+    gallery = args.reset_gallery_snapshots
+    steps += ['reset gallery snapshots of {}'.format(' '.join(gallery))] if gallery else []
+    steps += [f'launchd check {args.launchd_check}'] if args.launchd_check else []
+    return steps + ([] if args.no_eject else ['unmount the iPad volumes and eject'])
+
+
+def _confirmed(args: argparse.Namespace, card: cards.Card) -> None:
+    if args.confirm == card.disk:
+        return
+    if args.confirm or not sys.stdin.isatty():
+        raise cards.RefusedError(f'confirm with --confirm={card.disk} or interactively')
+    if input(f'Deploy to {card.disk}? Type {card.disk}: ').strip() != card.disk:
+        raise cards.RefusedError('not confirmed')
+
+
+def _stage_gpu(args: argparse.Namespace, data_root: Path, log: host.Log) -> None:
+    command = [sys.executable, args.stager, str(data_root)]
+    command += ['--remove'] if args.remove_gpu else ['--build', args.gpu_bundle]
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    log('gpu:', (result.stdout + result.stderr).strip())
+    if result.returncode:
+        raise host.HostError('GPU bundle NOT staged')
+
+
+def _write(args: argparse.Namespace, data_root: Path, fat: object, pairing: dict | None, log: host.Log) -> bool:
+    """Write the deploy to the mounted Data volume (and the FAT); False when the launchd check fails."""
+    renamed.migrate_data(data_root, log)
+    out = Path(args.logs_out or pull_logs.state_dir() / 'device-logs' / time.strftime('boot-%m%d-%H%M'))
+    if args.pull_logs:
+        what = pull_logs.Pull(csstore=not args.no_csstore, launchd=not args.no_launchd_log, kcdata=args.kcdata)
+        pull_logs.pull(data_root, out, log, what)
+    if args.harvest:
+        harvest_dir = args.harvest_script and str(Path(args.harvest_script).parent)
+        pull_logs.harvest(data_root, out, log, harvest_dir, args.corpus)
+    with cards.mounted(fat.identifier, log) as fat_root:
+        cards.sync_boot_entry(fat_root, args.boot_package, log)
+    cards.sync_overlay(data_root, args.boot_package, log)
+    remove_stale_logging_profiles(data_root, log)
+    if not args.no_joycon_pairing:
+        joycon_pairing.stage(data_root, pairing, log)
+    _stage_gpu(args, data_root, log)
+    if args.awdl:
+        set_awdl(data_root, args.awdl == 'on', log)
+    if args.reset_gallery_snapshots:
+        poster_snapshots.reset(data_root, args.reset_gallery_snapshots, log)
+    return launchd_check(data_root, args.launchd_check, log) if args.launchd_check is not None else True
+
+
+def _eject(card: cards.Card, target: object, log: host.Log) -> None:
+    container = host.container_on(target.identifier)
+    if container:
+        host.run('diskutil', 'unmountDisk', container['ContainerReference'], log=log, check=False)
+    host.run('diskutil', 'eject', card.disk, log=log)
+    log('ejected', card.disk)
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _parser().parse_args(argv)
     for name in ('boot_package', 'spec', 'ipsw', 'gpu_bundle', 'stager', 'kcdata'):
         setattr(args, name, located(getattr(args, name)))
     log = host.Log(
         args.log or Path.home() / 'Library/Logs/switch-ios-install/deploy-{}.log'.format(time.strftime('%Y%m%d-%H%M%S'))
     )
     try:
-        host.check_tools(log)
-        spec = pull_logs.load_spec(args.spec)
-        card = cards.resolve(args.disk)
-        fat, target = cards.check_layout_unprivileged(card, spec)
-        if target.content != 'Apple_APFS':
-            raise cards.RefusedError(f'{card.disk}: {target.identifier} is not installed yet (run //install:sd first)')
-        data_uuid = spec['volumes']['data']['uuid']
-        data = pull_logs.data_volume(card, data_uuid)
-        if not data:
-            raise cards.RefusedError(f'{card.disk}: no iPad Data volume {data_uuid}')
-        check_kind(card, args.ipsw)
-        gpu = Path(args.gpu_bundle) if args.gpu_bundle else None
-        if not args.remove_gpu and not (gpu and (gpu.is_file() or (gpu / 'TegraGM20BMetal.trustcache').is_file())):
-            raise host.HostError(
-                'no GPU bundle (--//deploy:gpu_bundle names //gpu:bundle or a directory like //gpu:base)'
-            )
+        card, spec, fat, target, data = _checked(args, log)
         with cards.mounted(fat.identifier, log) as fat_root:
             changes, removed = cards.sync_boot_entry(fat_root, args.boot_package, log, dry_run=True)
             pairing = None if args.no_joycon_pairing else joycon_pairing.read(fat_root, log)
         log(f'card {card.disk}: FAT {fat.identifier}, iPad Data {data}')
-        plan = (
-            (['pull logs'] if args.pull_logs else [])
-            + (['harvest the m2v journals'] if args.harvest else [])
-            + [f'boot entry: {len(changes)} to copy, {len(removed)} stale', 'overlay']
-            + (
-                []
-                if args.no_joycon_pairing
-                else [
-                    'Joy-Con pairing: {}'.format(
-                        'stage {} controller(s) for host {}'.format(len(pairing['controllers']), pairing['host'])
-                        if pairing
-                        else 'remove any staged dump'
-                    )
-                ]
-            )
-            + (['remove the GPU bundle'] if args.remove_gpu else ['GPU bundle: stage what changed'])
-            + ([f'AWDL {args.awdl} (<Data>/Switch/awdl-enable)'] if args.awdl else [])
-            + (
-                ['reset gallery snapshots of {}'.format(' '.join(args.reset_gallery_snapshots))]
-                if args.reset_gallery_snapshots
-                else []
-            )
-            + ([f'launchd check {args.launchd_check}'] if args.launchd_check else [])
-            + ([] if args.no_eject else ['unmount the iPad volumes and eject'])
-        )
-        for step in plan:
+        for step in _plan(args, changes, removed, pairing):
             log('  plan:', step)
         if not args.yes:
             log('dry run: nothing written (add --yes)')
             return 0
-        if args.confirm != card.disk:
-            if args.confirm or not sys.stdin.isatty():
-                raise cards.RefusedError(f'confirm with --confirm={card.disk} or interactively')
-            if input(f'Deploy to {card.disk}? Type {card.disk}: ').strip() != card.disk:
-                raise cards.RefusedError('not confirmed')
-        ok = True
+        _confirmed(args, card)
         preboot = pull_logs.data_volume(card, spec['volumes']['preboot']['uuid'])
         if preboot:
             with cards.mounted(preboot, log) as preboot_root:
                 renamed.migrate_preboot(preboot_root, spec, log)
         with cards.mounted(data, log) as data_root:
-            renamed.migrate_data(data_root, log)
-            out = Path(args.logs_out or pull_logs.state_dir() / 'device-logs' / time.strftime('boot-%m%d-%H%M'))
-            if args.pull_logs:
-                pull_logs.pull(
-                    data_root,
-                    out,
-                    log,
-                    csstore=not args.no_csstore,
-                    launchd=not args.no_launchd_log,
-                    kcdata=args.kcdata,
-                )
-            if args.harvest:
-                pull_logs.harvest(data_root, out, log, harvest_dir, args.corpus)
-            with cards.mounted(fat.identifier, log) as fat_root:
-                cards.sync_boot_entry(fat_root, args.boot_package, log)
-            cards.sync_overlay(data_root, args.boot_package, log)
-            remove_stale_logging_profiles(data_root, log)
-            if not args.no_joycon_pairing:
-                joycon_pairing.stage(data_root, pairing, log)
-            command = [sys.executable, args.stager, str(data_root)]
-            command += ['--remove'] if args.remove_gpu else ['--build', args.gpu_bundle]
-            result = subprocess.run(command, capture_output=True, text=True, check=False)
-            log('gpu:', (result.stdout + result.stderr).strip())
-            if result.returncode:
-                raise host.HostError('GPU bundle NOT staged')
-            if args.awdl:
-                set_awdl(data_root, args.awdl == 'on', log)
-            if args.reset_gallery_snapshots:
-                poster_snapshots.reset(data_root, args.reset_gallery_snapshots, log)
-            if args.launchd_check is not None:
-                ok = launchd_check(data_root, args.launchd_check, log)
+            ok = _write(args, data_root, fat, pairing, log)
         if not args.no_eject:
-            container = host.container_on(target.identifier)
-            if container:
-                host.run('diskutil', 'unmountDisk', container['ContainerReference'], log=log, check=False)
-            host.run('diskutil', 'eject', card.disk, log=log)
-            log('ejected', card.disk)
+            _eject(card, target, log)
         log('deployed')
         return 0 if ok else 1
     except cards.RefusedError as error:

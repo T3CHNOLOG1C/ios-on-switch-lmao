@@ -39,6 +39,7 @@ import shutil
 import subprocess
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 if __package__ in (None, ''):
@@ -253,21 +254,18 @@ def harvest(data: Path, out: Path, log: host.Log, harvest_dir: str | None, corpu
         link.symlink_to(BACKBOARDD_CACHE)
 
 
-def pull(
-    data: str | Path,
-    out: str | Path,
-    log: host.Log,
-    logarchive: bool = True,
-    csstore: bool = True,
-    launchd: bool = True,
-    kcdata: str | Path | None = None,
-) -> Path:
-    data, out = Path(data), Path(out)
-    out.mkdir(parents=True, exist_ok=True)
-    unified = state_dir() / 'device-logs' / 'mirror'
-    for name in ('diagnostics', 'uuidtext'):
-        files, size = mirror(data / 'db' / name, unified / name)
-        log(f'{name}: {files} files ({size >> 20} MiB) new or changed since the last pull')
+@dataclass(frozen=True)
+class Pull:
+    """What a pull copies beyond the unified log and the device's own saved files."""
+
+    logarchive: bool = True
+    csstore: bool = True
+    launchd: bool = True
+    kcdata: str | Path | None = None
+
+
+def _reports(data: Path, out: Path, log: host.Log, launchd: bool) -> None:
+    """Copy launchd's log, the crash reports (the WebKit ones also at the top level) and mobileactivationd's logs."""
     if launchd and (data / 'log/com.apple.xpc.launchd/launchd.log').is_file():
         shutil.copyfile(data / 'log/com.apple.xpc.launchd/launchd.log', out / 'launchd.log')
     crash = data / 'mobile/Library/Logs/CrashReporter'
@@ -275,25 +273,31 @@ def pull(
     for report in sorted(crash.glob('com.apple.WebKit.*.ips')) if crash.is_dir() else []:
         shutil.copyfile(report, out / report.name)
     copytree(data / 'mobile/Library/Logs/mobileactivationd', out / 'mobileactivationd', log)
+
+
+def _saved(data: Path, out: Path, log: host.Log, kcdata: str | Path | None) -> None:
+    """Copy what the kernel saved in the Data volume's own folder: the I/O census, panics, power journals, wakes."""
     own = renamed.data_folder(data)
+    if not own.is_dir():
+        return
     census = own / 'boot-io-census.bin'
     if census.is_file():
         shutil.copyfile(census, out / census.name)
-    panics = sorted(own.glob('panic-*')) if own.is_dir() else []
-    for panic in panics:
-        shutil.copyfile(panic, out / panic.name)
-    if panics:
-        log('saved panics:', ', '.join(panic.name for panic in panics))
-        decode_panics(out, kcdata, log)
-    power = sorted(own.glob('power*.log')) if own.is_dir() else []
-    wakes = sorted(own.glob('wake-*.kcdata')) if own.is_dir() else []
-    for path in power + wakes:
-        shutil.copyfile(path, out / path.name)
-    if power:
-        log('power journal:', ', '.join(path.name for path in power))
-    if wakes:
-        log('wake guarantee stackshots:', ', '.join(path.name for path in wakes))
-        decode_wakes(out, kcdata, log)
+    for pattern, what, decode in (
+        ('panic-*', 'saved panics:', decode_panics),
+        ('power*.log', 'power journal:', None),
+        ('wake-*.kcdata', 'wake guarantee stackshots:', decode_wakes),
+    ):
+        found = sorted(own.glob(pattern))
+        for path in found:
+            shutil.copyfile(path, out / path.name)
+        if found:
+            log(what, ', '.join(path.name for path in found))
+            if decode:
+                decode(out, kcdata, log)
+
+
+def _migration_state(data: Path, out: Path) -> None:
     lines = []
     for name in ('staged_system_apps', 'datamigrator', 'Switch'):
         path = data / name
@@ -301,21 +305,39 @@ def pull(
     apps = data / 'containers/Bundle/Application'
     lines.append(f'installed apps: {sum(1 for _ in apps.iterdir()) if apps.is_dir() else 0}')
     (out / 'migration-state.txt').write_text('\n'.join(lines) + '\n')
-    if csstore:
-        stores = sorted(
-            (data / 'mobile/Containers/Data/InternalDaemon').glob('*/Library/Caches/com.apple.LaunchServices-*.csstore')
-        )
-        if stores:
-            counts = []
-            for store in stores:
-                shutil.copyfile(store, out / store.name)
-            for ident in WEBKIT_IDS:
-                total = sum(store.read_bytes().count(ident.encode()) for store in stores)
-                counts.append(f'{ident} {total}')
-            (out / 'lsdb-webkit.txt').write_text('\n'.join(counts) + '\n')
-        else:
-            log('LaunchServices database NOT copied (not found)')
-    if logarchive and (unified / 'diagnostics/timesync').is_dir():
+
+
+def _csstore(data: Path, out: Path, log: host.Log) -> None:
+    """Copy LaunchServices' databases and count the WebKit identifiers in them."""
+    stores = sorted(
+        (data / 'mobile/Containers/Data/InternalDaemon').glob('*/Library/Caches/com.apple.LaunchServices-*.csstore')
+    )
+    if not stores:
+        log('LaunchServices database NOT copied (not found)')
+        return
+    for store in stores:
+        shutil.copyfile(store, out / store.name)
+    counts = [f'{ident} {sum(s.read_bytes().count(ident.encode()) for s in stores)}' for ident in WEBKIT_IDS]
+    (out / 'lsdb-webkit.txt').write_text('\n'.join(counts) + '\n')
+
+
+EVERYTHING = Pull()
+
+
+def pull(data: str | Path, out: str | Path, log: host.Log, what: Pull = EVERYTHING) -> Path:
+    """Mirror the unified log, copy the reports and saved files into <out>, and link the logarchive."""
+    data, out = Path(data), Path(out)
+    out.mkdir(parents=True, exist_ok=True)
+    unified = state_dir() / 'device-logs' / 'mirror'
+    for name in ('diagnostics', 'uuidtext'):
+        files, size = mirror(data / 'db' / name, unified / name)
+        log(f'{name}: {files} files ({size >> 20} MiB) new or changed since the last pull')
+    _reports(data, out, log, what.launchd)
+    _saved(data, out, log, what.kcdata)
+    _migration_state(data, out)
+    if what.csstore:
+        _csstore(data, out, log)
+    if what.logarchive and (unified / 'diagnostics/timesync').is_dir():
         try:
             boots = mkarchive.build(unified, out / 'boot.logarchive', copy=os.link)
             log('logarchive: {} ({} boots)'.format(out / 'boot.logarchive', len(boots)))
@@ -379,15 +401,8 @@ def main(argv: list[str] | None = None) -> int:
             raise host.HostError('no iPad Data volume {} on {}'.format(spec['volumes']['data']['uuid'], card.disk))
         out = Path(args.out or state_dir() / 'device-logs' / time.strftime('boot-%m%d-%H%M'))
         with cards.mounted(volume, log) as data:
-            pull(
-                data,
-                out,
-                log,
-                logarchive=not args.no_logarchive,
-                csstore=not args.no_csstore,
-                launchd=not args.no_launchd,
-                kcdata=runfile(args.kcdata),
-            )
+            what = Pull(not args.no_logarchive, not args.no_csstore, not args.no_launchd, runfile(args.kcdata))
+            pull(data, out, log, what)
             if args.harvest:
                 harvest(data, out, log, args.harvest_script and str(Path(args.harvest_script).parent), args.corpus)
         if not args.no_eject:

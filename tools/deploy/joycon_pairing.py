@@ -32,11 +32,8 @@ PRODUCTS = {1: ('Joy-Con (L)', 0x2006), 2: ('Joy-Con (R)', 0x2007), 3: ('Pro Con
 _ADDRESS = re.compile(r'^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}$')
 
 
-def parse(text: str) -> dict | None:
-    """Parse joycon_mac.ini text: {"host": "98:b6:e9:..", "controllers": [...], "skipped": [reasons]}.
-
-    Returns None when the text has no usable entry.
-    """
+def _sections(text: str) -> dict[str, dict[str, str]]:
+    """Return the ini text's sections, each its keys (lower case) and values."""
     sections, current = {}, None
     for raw in text.splitlines():
         line = raw.strip()
@@ -45,6 +42,27 @@ def parse(text: str) -> dict | None:
         elif current is not None and '=' in line:
             key, value = line.split('=', 1)
             current[key.strip().lower()] = value.strip()
+    return sections
+
+
+def _unusable(name: str, entry: dict[str, str], kind: int) -> str | None:
+    """Return why a controller entry cannot be staged, or None."""
+    mac, peer, ltk = entry.get('mac', ''), entry.get('host', ''), entry.get('ltk', '')
+    if kind not in PRODUCTS:
+        return '{}: type {} (none, or not paired in Horizon)'.format(name, entry.get('type'))
+    if not _ADDRESS.match(mac) or not _ADDRESS.match(peer) or not re.fullmatch(r'[0-9A-Fa-f]{32}', ltk):
+        return f'{name}: malformed mac/host/ltk'
+    if not any(bytes.fromhex(ltk)) or peer.replace(':', '') == '000000000000':
+        return f'{name}: empty host or key'
+    return None
+
+
+def parse(text: str) -> dict | None:
+    """Parse joycon_mac.ini text: {"host": "98:b6:e9:..", "controllers": [...], "skipped": [reasons]}.
+
+    Returns None when the text has no usable entry.
+    """
+    sections = _sections(text)
     controllers, skipped, host = [], [], None
     for name in sorted(n for n in sections if n.startswith('joycon_')):
         entry = sections[name]
@@ -52,24 +70,25 @@ def parse(text: str) -> dict | None:
             kind = int(entry.get('type', '0'), 0)
         except ValueError:
             kind = 0
-        mac, peer, ltk = entry.get('mac', ''), entry.get('host', ''), entry.get('ltk', '')
-        if kind not in PRODUCTS:
-            skipped.append('{}: type {} (none, or not paired in Horizon)'.format(name, entry.get('type')))
+        reason = _unusable(name, entry, kind)
+        if reason:
+            skipped.append(reason)
             continue
-        if not _ADDRESS.match(mac) or not _ADDRESS.match(peer) or not re.fullmatch(r'[0-9A-Fa-f]{32}', ltk):
-            skipped.append(f'{name}: malformed mac/host/ltk')
-            continue
-        key = bytes.fromhex(ltk)
-        if not any(key) or peer.replace(':', '') == '000000000000':
-            skipped.append(f'{name}: empty host or key')
-            continue
-        host = host or peer.lower()
-        if peer.lower() != host:
+        peer = entry['host'].lower()
+        host = host or peer
+        if peer != host:
             # One controller address only (switchroot takes one as well): this Joy-Con was paired to another console.
-            skipped.append(f'{name}: paired to {peer.lower()}, not {host}')
+            skipped.append(f'{name}: paired to {peer}, not {host}')
             continue
         label, product = PRODUCTS[kind]
-        controllers.append({'Address': mac.lower(), 'Name': label, 'ProductID': product, 'LinkKey': key})
+        controllers.append(
+            {
+                'Address': entry['mac'].lower(),
+                'Name': label,
+                'ProductID': product,
+                'LinkKey': bytes.fromhex(entry['ltk']),
+            }
+        )
     if not controllers:
         return {'host': None, 'controllers': [], 'skipped': skipped} if skipped else None
     return {'host': host, 'controllers': controllers, 'skipped': skipped}
