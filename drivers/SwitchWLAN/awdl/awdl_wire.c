@@ -42,12 +42,13 @@ uint8_t awdl_opclass_20mhz(uint8_t ch)
 struct awdl_chan awdl_chan_of_freq(uint16_t mhz)
 {
     uint8_t ch = 0;
-    if (mhz == 2484)
+    if (mhz == 2484) {
         ch = 14;
-    else if (mhz >= 2412 && mhz <= 2472)
+    } else if (mhz >= 2412 && mhz <= 2472) {
         ch = (uint8_t)((mhz - 2407) / 5);
-    else if (mhz >= 5180 && mhz <= 5885)
+    } else if (mhz >= 5180 && mhz <= 5885) {
         ch = (uint8_t)((mhz - 5000) / 5);
+    }
     const uint8_t opclass = awdl_opclass_20mhz(ch);
     return opclass ? (struct awdl_chan){ch, opclass} : (struct awdl_chan){0, 0};
 }
@@ -65,7 +66,7 @@ uint16_t awdl_chan_freq(struct awdl_chan c)
 // ---- reading -----------------------------------------------------------------------------------------------------
 static uint16_t rd16(const uint8_t *p)
 {
-    return (uint16_t)(p[0] | (p[1] << 8));
+    return (uint16_t)(p[0] | ((unsigned)p[1] << 8));
 }
 
 static uint32_t rd32(const uint8_t *p)
@@ -92,13 +93,14 @@ static int parse_chanseq(const uint8_t *p, size_t n, struct awdl_chanseq *s)
         return -1;
     s->count = (uint8_t)(count > AWDL_SEQ_SLOTS ? AWDL_SEQ_SLOTS : count);
     for (unsigned i = 0; i < s->count; ++i) {
-        const uint8_t *e = p + 6 + i * width;
-        if (s->encoding == AWDL_CHAN_ENC_SIMPLE)
+        const uint8_t *e = p + 6 + (size_t)i * width;
+        if (s->encoding == AWDL_CHAN_ENC_SIMPLE) {
             s->chan[i] = (struct awdl_chan){e[0], awdl_opclass_20mhz(e[0])};
-        else if (s->encoding == AWDL_CHAN_ENC_LEGACY)  // {flags, channel}
+        } else if (s->encoding == AWDL_CHAN_ENC_LEGACY) {  // {flags, channel}
             s->chan[i] = (struct awdl_chan){e[1], awdl_opclass_20mhz(e[1])};
-        else
+        } else {
             s->chan[i] = (struct awdl_chan){e[0], e[1]};
+        }
     }
     return (int)(6 + count * width);
 }
@@ -167,7 +169,6 @@ static void parse_dps(const uint8_t *v, size_t n, struct awdl_data_path_state *d
     if (d->flags & AWDL_DPS_AWDL_ADDRESS) {
         NEED(6);
         memcpy(d->awdl_address, v + at, 6);
-        at += 6;
     }
 #undef NEED
 }
@@ -175,7 +176,8 @@ static void parse_dps(const uint8_t *v, size_t n, struct awdl_data_path_state *d
 // Arpa: flags, then the host name as DNS labels; a 0xc0 compression byte ends it (AWDL compresses ".local").
 static void parse_arpa(const uint8_t *v, size_t n, char *out, size_t size)
 {
-    size_t at = 1, w = 0;
+    size_t at = 1;
+    size_t w = 0;
     out[0] = 0;
     while (at < n && v[at] && v[at] < 0xc0) {
         const size_t l = v[at++];
@@ -301,7 +303,7 @@ void awdl_put16(uint8_t *p, uint16_t v)
 
 void awdl_put32(uint8_t *p, uint32_t v)
 {
-    for (int i = 0; i < 4; ++i)
+    for (unsigned i = 0; i < 4; ++i)
         p[i] = (uint8_t)(v >> (8 * i));
 }
 
@@ -372,7 +374,8 @@ size_t awdl_data_encap(const uint8_t *eth, size_t len, const uint8_t self[6], ui
 {
     if (len < 14)
         return 0;
-    const size_t payload = len - 14, total = 24 + 8 + 8 + payload;
+    const size_t payload = len - 14;
+    const size_t total = 24 + 8 + 8 + payload;
     if (total > size)
         return 0;
     memset(out, 0, 24);
@@ -380,7 +383,7 @@ size_t awdl_data_encap(const uint8_t *eth, size_t len, const uint8_t self[6], ui
     memcpy(out + 4, eth, 6);    // A1: destination
     memcpy(out + 10, self, 6);  // A2: us
     memcpy(out + 16, awdl_bssid, 6);
-    awdl_put16(out + 22, (uint16_t)((seq & 0xfff) << 4));
+    awdl_put16(out + 22, (uint16_t)((seq & 0xfffu) << 4));
     memcpy(out + 24, kLlc, 8);
     out[32] = 0x03;  // AWDL data header: 0x0403, sequence, reserved, ethertype (network order)
     out[33] = 0x04;

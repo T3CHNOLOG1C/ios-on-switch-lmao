@@ -127,7 +127,7 @@ int swlan_awdl_tsf_read(uint64_t *tsf_us);
 #define SWLAN_FWERR_BASE  1000
 #define SWLAN_FWERR(bcme) (-SWLAN_FWERR_BASE + (bcme))
 
-static inline int swlan_is_fwerr(int e)
+static inline bool swlan_is_fwerr(int e)
 {
     return e < -SWLAN_FWERR_BASE && e > -2 * SWLAN_FWERR_BASE;  // BCME codes are -1 .. -60
 }

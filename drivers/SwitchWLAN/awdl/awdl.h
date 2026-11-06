@@ -57,6 +57,11 @@ enum {
     AWDL_TLV_ELECTION_PARAMS_V2 = 24,
 };
 
+static inline uint32_t awdl_tlv_bit(unsigned type)
+{
+    return 1u << type;
+}
+
 // Channel sequence encodings
 enum {
     AWDL_CHAN_ENC_SIMPLE = 0,
@@ -65,15 +70,13 @@ enum {
 };
 
 // Data path state flags (subset this stack writes and reads)
-enum {
-    AWDL_DPS_INFRA_INFO = 0x0001,
-    AWDL_DPS_INFRA_ADDRESS = 0x0002,
-    AWDL_DPS_AWDL_ADDRESS = 0x0004,
-    AWDL_DPS_UMI = 0x0010,
-    AWDL_DPS_COUNTRY_CODE = 0x0100,
-    AWDL_DPS_SOCIAL_CHANNEL_MAP = 0x0200,
-    AWDL_DPS_EXTENSION = 0x8000,
-};
+#define AWDL_DPS_INFRA_INFO         0x0001u
+#define AWDL_DPS_INFRA_ADDRESS      0x0002u
+#define AWDL_DPS_AWDL_ADDRESS       0x0004u
+#define AWDL_DPS_UMI                0x0010u
+#define AWDL_DPS_COUNTRY_CODE       0x0100u
+#define AWDL_DPS_SOCIAL_CHANNEL_MAP 0x0200u
+#define AWDL_DPS_EXTENSION          0x8000u
 
 // One channel: the channel number and the operating class (0x51: 2.4 GHz 20 MHz; 0x73: 5 GHz 20 MHz; 0x80: 5 GHz
 // 80 MHz, where the number is the block's centre, 42 for 36-48, 155 for 149-161).
@@ -153,9 +156,9 @@ struct awdl_af {
     uint8_t ht_ampdu, ht_mcs[2];
 };
 
-// Parse an 802.11 frame (header + body, no FCS). 0: an AWDL action frame, decoded into *out. Negative: not AWDL or
+// Parse an 802.11 frame (header + body, no FCS). 0: an AWDL action frame, decoded into *a. Negative: not AWDL or
 // malformed (each TLV is bounds-checked; unknown TLVs are skipped).
-int awdl_af_parse(const uint8_t *frame, size_t len, struct awdl_af *out);
+int awdl_af_parse(const uint8_t *f, size_t len, struct awdl_af *a);
 
 // ---- the stack -------------------------------------------------------------------------------------------------------
 struct awdl_rx_meta {
@@ -273,7 +276,7 @@ void awdl_core_fw_event(struct awdl_core *c, const struct awdl_fw_event *e, cons
 void awdl_core_fw_result(struct awdl_core *c, const char *name, int status, uint64_t now);
 // Native backend: a frame the firmware delivered on its AWDL interface. AWDL data (802.3 with the AWDL LLC/SNAP
 // header) is decapsulated and handed to host.deliver as Ethernet; it refreshes the peer. Anything else is counted.
-void awdl_core_rx_eth(struct awdl_core *c, const uint8_t *eth, size_t len, uint64_t now);
+void awdl_core_rx_eth(struct awdl_core *c, const uint8_t *frame, size_t len, uint64_t now);
 // The access point's frequency while the station is associated (0 otherwise). The native schedule interleaves it
 // (awdl_schedule); a change while running re-sends the schedule.
 void awdl_core_set_infra(struct awdl_core *c, uint16_t infra_mhz, uint64_t now);
