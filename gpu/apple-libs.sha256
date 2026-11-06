@@ -1,7 +1,6 @@
-# Every Metal library with a function on iPadOS 17.7.11 (21H461)'s OS volume (the IPSW's 044-76040-038.dmg, @ipsw_os), by
-# its path below the volume's root: what @gpu_apple_libs extracts (gpu/deps.bzl) and m2v's library index covers
-# (names.json, //gpu:library_names). The OS cryptex holds no other: its QuartzCore default.metallib is this one, byte for
-# byte, and its SafariSharedUI one has no function. Regenerate (the image attached read-only at /Volumes/X):
+# Every Metal library with a function on iPadOS 17.7.11 (21H461)'s OS volume (the IPSW's 044-76040-038.dmg), by its path
+# below the volume's root. harvest.py --pack leaves these out of the device's data: the seed's crawl (//gpu/seed:crawl)
+# reads them from the IPSW. Regenerate (the image attached read-only at /Volumes/X):
 #   bazel run //drivers/TegraGM20BMetal:libraries -- pins /Volumes/X > $PWD/gpu/apple-libs.sha256
 # (then put this comment back).
 be5e1ce6c3143d64fa670e86f2d2dfd6aea6005901d53869965a51d62889d40e  Applications/ColorPickerUIService.app/default.metallib

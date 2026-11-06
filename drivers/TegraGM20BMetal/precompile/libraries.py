@@ -2,9 +2,8 @@
 """The Metal libraries the shader cache precompile (precompile.mm) loads on the host. The seed build (tools/gpu/seed.py) lays
 them out as the store precompile.mm reads:
 
-  <store>/root/<device path>        a library the device loaded from a file (the journal's lib=<path>): 21H461's OS volume's,
-                                    extracted from the IPSW by @gpu_apple_libs (gpu/deps.bzl, pinned in
-                                    gpu/apple-libs.sha256)
+  <store>/root/<device path>        a library the device loaded from a file (the journal's lib=<path>): the IPSW's volumes',
+                                    crawled by //gpu/seed:crawl (tools/gpu/shaders/crawl.py)
   <store>/data/<sha256>.metallib    a library the device made from bytes (lib=data:<sha256>): any of the above or of the
                                     frontend's own (TwoPlaneStandIn.h) whose bytes they are, or one only the device made (Core
                                     Image's compiled kernels: @gpu_device_data, precompile/harvest.py --pack)
@@ -12,7 +11,8 @@ them out as the store precompile.mm reads:
 
 usage: libraries.py pins <mounted OS volume>                               the `shasum -a 256` listing of every Metal library of
                                                                            the volume with a function (gpu/apple-libs.sha256)
-       libraries.py names <root> <names.json> <device path>...             names.json of the libraries at <root>/<device path>
+       libraries.py names <root> <names.json> [<device path>...]           names.json of the libraries at <root>/<device path>
+                                                                           (none given: every file below <root>)
        libraries.py resolve <names.json> <corpus.log> <out.log>            the corpus with lib=<path> added to the stages of journal
                                                                            lines from before the journal named libraries (no lib=)
                                                                            whose function names are in exactly one library (QuartzCore's
@@ -151,8 +151,8 @@ def main():
     verb, rest = (sys.argv[1], sys.argv[2:]) if len(sys.argv) > 1 else (None, [])
     if verb == 'pins' and len(rest) == 1:
         pins(rest[0])
-    elif verb == 'names' and len(rest) >= 3:
-        index(rest[0], rest[1], rest[2:])
+    elif verb == 'names' and len(rest) >= 2:
+        index(rest[0], rest[1], rest[2:] or [str(p.relative_to(rest[0])) for p in Path(rest[0]).rglob('*') if p.is_file()])
     elif verb == 'resolve' and len(rest) == 3:
         resolve(*rest)
     else:

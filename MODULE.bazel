@@ -248,10 +248,9 @@ use_repo(
 # bazel/rust/Cargo.lock and crates.lock.json).
 include("//bazel/rust:crates.MODULE.bazel")
 
-# The Apple Metal libraries of the IPSW's OS volume, the device's own data and llvm-as (gpu/deps.bzl). m2v is
-# third_party/m2v, its crates.io crates @rust_crates (bazel/rust).
+# The device's own data and llvm-as (gpu/deps.bzl). m2v is third_party/m2v, its crates.io crates @rust_crates (bazel/rust).
 gpu = use_extension("//gpu:deps.bzl", "gpu")
-use_repo(gpu, "gpu_apple_libs", "gpu_device_data", "gpu_llvm_as")
+use_repo(gpu, "gpu_device_data", "gpu_llvm_as")
 
 # --- NVK (gpu/nvk): Mesa vendored in third_party/mesa and built natively; the tools it runs, pinned ------------------
 mesa_tools = use_extension("//third_party/mesa/bazel:repos.bzl", "mesa_tools")

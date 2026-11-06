@@ -20,6 +20,7 @@ py_binary(
 py_library(
     name = "nvk_twin",
     srcs = ["nvk_twin.py"],
+    visibility = ["//tools/gpu/shaders:__pkg__"],
 )
 
 py_binary(

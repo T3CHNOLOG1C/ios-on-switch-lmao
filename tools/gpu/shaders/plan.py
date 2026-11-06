@@ -1,0 +1,137 @@
+"""Split the seed's work into shards: the corpus's lines and, past depth `corpus`, the pipelines derive.py adds.
+
+usage: plan.py --corpus <resolved corpus.log> --root <library root> [--data-dir <dir>]... [--data <sha256>.metallib]...
+               --qc <metallib> --qc-sha256 <pin> --depth <depth> --shards <dir> --count N --store <store.json>
+               --report <plan.json>
+
+Every line goes to the shard its stages hash to, so a program's pipelines are made in one shard, and a corpus edit
+changes only the shards its lines fall in. store.json names every library made from bytes by its sha256
+(the shard steps link data/<sha256>.metallib to it without reading the libraries again).
+"""
+
+import argparse
+import hashlib
+import json
+import sys
+from collections import Counter
+from pathlib import Path
+
+from tools.gpu.shaders import derive
+from tools.gpu.shaders.journal import parse_kernel, parse_render, parse_specialization
+from tools.gpu.shaders.metallib import Function, functions
+
+DEPTHS = ('corpus', 'wide', 'deep')
+DERIVED = '# derived'
+
+
+def libraries(root: Path, data: list[Path]) -> tuple[dict[str, list[Function]], dict[str, str]]:
+    """Map each library's journal spelling to its functions, and each one's sha256 to its file."""
+    index, by_sha = {}, {}
+    for path in sorted(p for p in root.rglob('*') if p.is_file()):
+        content = path.read_bytes()
+        by_sha[hashlib.sha256(content).hexdigest()] = str(path)
+        found = functions(content)
+        if found:
+            index['/' + str(path.relative_to(root))] = found
+    for path in data:
+        content = path.read_bytes()
+        digest = hashlib.sha256(content).hexdigest()
+        by_sha[digest] = str(path)
+        found = functions(content)
+        if found:
+            index['data:' + digest] = found
+    return index, by_sha
+
+
+def lines_for(depth: str, corpus: list[str], index: dict[str, list[Function]]) -> dict[str, list[str]]:
+    """Return the lines of each tier the depth takes."""
+    tiers = {'corpus': [line for line in corpus if line[:2] in ('S ', 'R ', 'C ', 'D ')]}
+    if depth == 'corpus':
+        return tiers
+    renders = [r for r in map(parse_render, corpus) if r]
+    tiers['kernels'] = derive.kernels(index, [line for line in corpus if not line.startswith('D ')])
+    tiers['targets'] = [r.text() for r in derive.targets(renders)]
+    if depth == 'deep':
+        tiers['neighbours'] = [r.text() for r in derive.neighbours(renders)]
+    return tiers
+
+
+def _identity(line: str) -> tuple:
+    if line.startswith('D '):
+        return ('D', line)
+    render = parse_render(line)
+    if render:
+        return ('R', *render.key())
+    kernel = parse_kernel(line)
+    if kernel:
+        return ('C', *kernel)
+    return ('S', parse_specialization(line))
+
+
+def _program(line: str) -> str:
+    render = parse_render(line)
+    if render:
+        return render.vertex.text() + ' | ' + (render.fragment.text() if render.fragment else '-')
+    kernel = parse_kernel(line)
+    if kernel:
+        return kernel[1].text()
+    stage = parse_specialization(line)
+    return stage.text() if stage else line
+
+
+def shard(tiers: dict[str, list[str]], count: int) -> tuple[list[list[str]], Counter]:
+    """Each distinct line once (the first tier that has it), in the shard of its program (its stages)."""
+    shards: list[list[str]] = [[] for _ in range(count)]
+    derived: list[list[str]] = [[] for _ in range(count)]
+    seen, kept = set(), Counter()
+    for tier, lines in tiers.items():
+        for line in lines:
+            identity = _identity(line)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            kept[tier, line[0]] += 1
+            digest = hashlib.sha256(_program(line).encode()).digest()
+            into = shards if tier == 'corpus' else derived
+            into[int.from_bytes(digest[:4], 'little') % count].append(line)
+    return [[*s, DERIVED, *d] for s, d in zip(shards, derived, strict=True)], kept
+
+
+def main() -> None:
+    """Write the shards, store.json and the plan's report."""
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument('--corpus', type=Path, required=True)
+    parser.add_argument('--root', type=Path, required=True)
+    parser.add_argument('--data', type=Path, action='append', default=[])
+    parser.add_argument('--data-dir', type=Path, action='append', default=[])
+    parser.add_argument('--qc', type=Path, required=True)
+    parser.add_argument('--qc-sha256', required=True)
+    parser.add_argument('--depth', choices=DEPTHS, required=True)
+    parser.add_argument('--shards', type=Path, required=True)
+    parser.add_argument('--count', type=int, required=True)
+    parser.add_argument('--store', type=Path, required=True)
+    parser.add_argument('--report', type=Path, required=True)
+    args = parser.parse_args()
+    if hashlib.sha256(args.qc.read_bytes()).hexdigest() != args.qc_sha256:
+        sys.exit(f"{args.qc} is not the IPSW kind's QuartzCore default.metallib ({args.qc_sha256})")
+    data = args.data + sorted(p for d in args.data_dir for p in d.glob('*.metallib'))
+    index, by_sha = libraries(args.root, data)
+    corpus = args.corpus.read_text().splitlines()
+    shards, kept = shard(lines_for(args.depth, corpus, index), args.count)
+    args.shards.mkdir(parents=True, exist_ok=True)
+    for i, lines in enumerate(shards):
+        (args.shards / f'shard-{i:02d}.log').write_text(''.join(line + '\n' for line in lines))
+    args.store.write_text(json.dumps(by_sha, indent=0, sort_keys=True) + '\n')
+    report = {
+        'depth': args.depth,
+        'libraries': len(index),
+        'kernels': sum(1 for fs in index.values() for f in fs if f.type == derive.KERNEL),
+        'lines': {f'{tier}.{kind}': n for (tier, kind), n in sorted(kept.items())},
+        'shards': [len(s) - 1 for s in shards],
+    }
+    args.report.write_text(json.dumps(report, indent=1) + '\n')
+    print('plan:', json.dumps(report['lines']))
+
+
+if __name__ == '__main__':
+    main()

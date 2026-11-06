@@ -86,7 +86,7 @@ py_binary(
     main = "precompile/harvest.py",
 )
 
-# The OS volume's library pins (pins), names.json (names: //gpu:library_names) and the corpus's libraries (resolve: the seed).
+# The OS volume's library pins (pins), names.json (names: //gpu/seed:crawl) and the corpus's libraries (resolve: the seed).
 py_binary(
     name = "libraries",
     srcs = ["precompile/libraries.py"],

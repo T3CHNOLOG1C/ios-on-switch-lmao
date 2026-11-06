@@ -1,0 +1,124 @@
+load("@bazel_skylib//rules:common_settings.bzl", "string_flag")
+load("//bazel/lint:defs.bzl", "lint_files")
+load(":defs.bzl", "metal_seed", "seed_raw_pack", "seed_tools", "seed_tree", "shader_crawl", "tools_archive")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files()
+
+METAL = "//drivers/NativeMetal"
+
+GM20B_METAL = "//drivers/TegraGM20BMetal"
+
+label_flag(
+    name = "tools",
+    build_setting_default = ":default_tools",
+)
+
+label_flag(
+    name = "base",
+    build_setting_default = ":default_base",
+)
+
+alias(
+    name = "default_tools",
+    actual = select({
+        "//install:from_release": "@switch_release//:shader_tools",
+        "//conditions:default": ":local_tools",
+    }),
+)
+
+alias(
+    name = "default_base",
+    actual = select({
+        "//install:from_release": "@switch_release//:inputs",
+        "//conditions:default": "//gpu:base",
+    }),
+)
+
+string_flag(
+    name = "depth",
+    build_setting_default = "deep",
+    values = [
+        "corpus",
+        "wide",
+        "deep",
+    ],
+)
+
+seed_tools(
+    name = "local_tools",
+    hdrs = [METAL + ":frontend_headers"],
+    abi_header = "//drivers/TegraGM20B:TegraGM20BABI.h",
+    frontend = METAL + ":NativeBridgeMetalFrontend.mm",
+    host_bridge = "//gpu:bridge_host",
+    metal_header = METAL + ":NativeBridgeMetalFrontend.h",
+    mock_iokit = GM20B_METAL + ":precompile/mock_iokit.c",
+    nvk = "//gpu/nvk:dylib",
+    nvk_sources = [
+        "//gpu/nvk:dylib_source",
+        "//gpu/nvk:twin_source",
+    ],
+    precompile = GM20B_METAL + ":precompile/precompile.mm",
+    raw_generator = GM20B_METAL + ":raw/pack/rawpack.py",
+    raw_srcs = [
+        GM20B_METAL + ":raw_pack_generator",
+        METAL + ":NativeBridgeMetalFrontend.mm",
+        METAL + ":frontend_headers",
+        "//drivers/TegraGM20B:TegraGM20BABI.h",
+    ],
+    stack = "//gpu:raw_stack",
+    twin = "//gpu/nvk:twin",
+)
+
+tools_archive(
+    name = "tools_archive",
+    tools = ":local_tools",
+)
+
+shader_crawl(
+    name = "crawl",
+    images = [
+        "@ipsw//:os",
+        "@ipsw//:system_cryptex",
+        "@ipsw//:app_cryptex",
+    ],
+    tags = ["manual"],
+)
+
+metal_seed(
+    name = "seed",
+    base = ":base",
+    corpus = GM20B_METAL + ":precompile/corpus.log",
+    crawl = ":crawl",
+    depth = ":depth",
+    device_libraries = "@gpu_device_data//:libraries",
+    embedded = [METAL + ":TwoPlaneStandIn.h"],
+    records = "@gpu_device_data//:records",
+    tags = ["manual"],
+    tools = ":tools",
+)
+
+seed_raw_pack(
+    name = "raw_pack",
+    srcs = [GM20B_METAL + ":raw_pack_generator"],
+    corpus = GM20B_METAL + ":precompile/corpus.log",
+    crawl = ":crawl",
+    generator = GM20B_METAL + ":raw/pack/rawpack.py",
+    tags = ["manual"],
+    tools = ":tools",
+)
+
+seed_tree(
+    name = "tree",
+    raw = ":raw_pack",
+    seed = ":seed",
+    tags = ["manual"],
+)
+
+filegroup(
+    name = "tree_size",
+    srcs = [":tree"],
+    output_group = "size",
+    tags = ["manual"],
+)

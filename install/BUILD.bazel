@@ -126,7 +126,7 @@ alias(
     name = "image_gpu_base",
     actual = select({
         ":from_release": "@switch_release//:gpu_base",
-        "//conditions:default": "//deploy:gpu_bundle",
+        "//conditions:default": "//gpu:base",
     }),
 )
 
@@ -138,7 +138,6 @@ alias(
     }),
 )
 
-# r22-shaders' //gpu/seed:tree and its "size" output group, once they land.
 # iOS 27's pretranslated deltas (r23's //translate/arm64e/pretranslate:os, :system_cryptex, :app_cryptex), once they
 # land.
 label_flag(
@@ -158,17 +157,19 @@ label_flag(
 
 label_flag(
     name = "shader_seed",
-    build_setting_default = ":none",
+    build_setting_default = "//gpu/seed:tree",
+    tags = ["manual"],
 )
 
 label_flag(
     name = "shader_seed_size",
-    build_setting_default = ":none",
+    build_setting_default = "//gpu/seed:tree_size",
+    tags = ["manual"],
 )
 
 label_flag(
     name = "shader_tools",
-    build_setting_default = ":none",
+    build_setting_default = "//gpu/seed:local_tools",
 )
 
 filegroup(
@@ -189,18 +190,19 @@ image_inputs(
         "gpu_stager": "//drivers/TegraGM20BMetal:stage-tegra-gm20b-metal.py",
         "install_payload": ":image_install_payload",
         "ipsw": ":ipsw_pins",
-        "shader_seed": ":shader_seed",
-        "shader_seed_size": ":shader_seed_size",
         "spec": ":spec",
     },
 )
 
-# The IPSW's large members: building these fetches the 5.2 GB OS image and inflates the 3.3 GB system cryptex.
+# The IPSW's large members, and the shader seed made from them: building these fetches the 5.2 GB OS image and
+# inflates the 3.3 GB system cryptex.
 image_inputs(
     name = "image_ipsw",
     inputs = {
         "app_cryptex": "@ipsw//:app_cryptex",
         "os_dmg": "@ipsw//:os",
+        "shader_seed": ":shader_seed",
+        "shader_seed_size": ":shader_seed_size",
         "system_cryptex": ":system_cryptex",
     },
     tags = ["manual"],

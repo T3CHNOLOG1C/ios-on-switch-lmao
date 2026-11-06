@@ -2,20 +2,16 @@
 action with declared inputs, so Bazel reruns only what an edit reaches:
 
   llvm-as (2 fixtures) -> rustc per crate (iOS bridge: bazel/rust) -> clang++ (each object) -> link -> strip/sign/trust cache
-                       -> rustc per crate (host bridge) -> precompile tool -> seed (runs on this Mac)
+
+The shader seed and the raw pack are gpu/seed's.
 """
 
-load("//ipsw:ipsw.bzl", "IpswInfo")
 load("//kernel/rules:layout.bzl", "MOVED_ROOTS", "OLD_TREE", "TREE_ROOT")
 
 _XCODE = {
     "_xcode_env": attr.label(default = "@xcode//:xcode.env", allow_single_file = True),
     "_xcode_identity": attr.label(default = "@xcode//:identity", allow_single_file = True),
 }
-
-def _repo_root(files):
-    """The execroot path of the external repository the files come from."""
-    return files[0].owner.workspace_root
 
 # --- llvm-as ---------------------------------------------------------------------------------------------------------
 
@@ -39,9 +35,6 @@ llvm_as = rule(
         "_llvm_as": attr.label(default = "@gpu_llvm_as//:bin/llvm-as", executable = True, cfg = "exec", allow_single_file = True),
     },
 )
-
-def _all_cores(_os, _inputs):
-    return {"cpu": 8, "memory": 4096}
 
 # --- Xcode clang: objects and the plugin link --------------------------------------------------------------------
 
@@ -69,8 +62,19 @@ _IOS = ["-target", "arm64-apple-ios17.0", "-isysroot", "@IPHONEOS_SDK@"]
 # plugin's CDHash, and with it the trust cache and the kernel window, changed on every build. Classic call sites
 # (selector loaded inline, objc_msgSend through __stubs) take the same instructions per message and link identically
 # (10 of 10), at +10 KB of __text.
-_PLUGIN_CFLAGS = ["-O2", "-g", "-Wall", "-Wextra", "-Werror", "-fstack-protector-strong", "-std=c++17", "-fobjc-arc",
-                  "-Wno-deprecated-declarations", "-fno-objc-msgsend-selector-stubs", "-ffile-prefix-map=@PWD@=/switch-ios"] + [
+_PLUGIN_CFLAGS = [
+    "-O2",
+    "-g",
+    "-Wall",
+    "-Wextra",
+    "-Werror",
+    "-fstack-protector-strong",
+    "-std=c++17",
+    "-fobjc-arc",
+    "-Wno-deprecated-declarations",
+    "-fno-objc-msgsend-selector-stubs",
+    "-ffile-prefix-map=@PWD@=/switch-ios",
+] + [
     # The layout move's old spellings (kernel/rules/layout.bzl): the plugin's strings name its sources as before.
     "-ffile-prefix-map=@PWD@/{r}=/switch-ios/{o}/{r}".format(r = r, o = OLD_TREE)
     for r in MOVED_ROOTS
@@ -148,7 +152,7 @@ metal_plugin = rule(
     },
 )
 
-# --- The raw GM20B path: its stack key and its pipeline pack -------------------------------------------------------
+# --- The raw GM20B path's stack key --------------------------------------------------------------------------------
 
 def _raw_stack_impl(ctx):
     out = ctx.actions.declare_file(ctx.attr.name + ".txt")
@@ -185,79 +189,6 @@ raw_stack = rule(
     },
 )
 
-def _metal_raw_pack_impl(ctx):
-    tree = ctx.file.generator.dirname.partition("drivers/TegraGM20BMetal/")[0].rstrip("/") or "."
-    xcode = [ctx.file._xcode_env, ctx.file._xcode_identity]
-
-    # The generator's host tools: everything but its Python reaches them (the probe, the mock GM20B, ycbcr.metallib).
-    tools = ctx.actions.declare_directory(ctx.attr.name + "_tools")
-    args = ctx.actions.args()
-    args.add("build")
-    args.add("--xcode-env", ctx.file._xcode_env)
-    args.add("--host-bridge", ctx.file.host_bridge)
-    args.add("--generator", ctx.file.generator)
-    args.add("--tree", tree)
-    args.add("--out", tools.path)
-    ctx.actions.run(
-        executable = ctx.executable._tool,
-        arguments = [args],
-        inputs = depset([ctx.file.host_bridge, ctx.file.generator] + xcode + [f for f in ctx.files.srcs if f.extension != "py"]),
-        outputs = [tools],
-        mnemonic = "MetalRawPackTools",
-        progress_message = "Building the raw pack's probe and mock GM20B",
-        execution_requirements = {"no-remote-exec": "1", "requires-darwin": ""},
-    )
-
-    twin = _twin(ctx, ctx.executable._seed_tool)
-    out = ctx.actions.declare_directory(ctx.attr.name)
-    args = ctx.actions.args()
-    args.add("run")
-    args.add("--xcode-env", ctx.file._xcode_env)
-    args.add("--tools", tools.path)
-    args.add("--twin-dylib", twin)
-    args.add("--qc", ctx.file.qc)
-    args.add("--corpus", ctx.file.corpus)
-    args.add("--stack", ctx.file.stack)
-    args.add("--generator", ctx.file.generator)
-    args.add("--tree", tree)
-    args.add("--out", out.path)
-    ctx.actions.run(
-        executable = ctx.executable._tool,
-        arguments = [args],
-        inputs = depset(
-            [tools, twin, ctx.file.qc, ctx.file.corpus, ctx.file.stack, ctx.file.generator] + xcode +
-            [f for f in ctx.files.srcs if f.extension == "py"],
-        ),
-        outputs = [out],
-        mnemonic = "MetalRawPack",
-        progress_message = "Making the raw GM20B path's pipeline pack",
-        # The probe runs on this Mac (Metal + the NVK twin over the mock GM20B): never on a remote executor.
-        execution_requirements = {"no-remote-exec": "1"},
-        resource_set = _all_cores,
-    )
-    return [
-        DefaultInfo(files = depset([out])),
-        # The steps before the probe run (bazel build //gpu:raw_pack --output_groups=steps).
-        OutputGroupInfo(steps = depset([tools, twin])),
-    ]
-
-metal_raw_pack = rule(
-    implementation = _metal_raw_pack_impl,
-    attrs = _XCODE | {
-        "host_bridge": attr.label(mandatory = True, allow_single_file = True),
-        "nvk": attr.label(mandatory = True, allow_single_file = True),
-        "twin": attr.label(mandatory = True, allow_single_file = True),
-        "nvk_sources": attr.label_list(allow_files = True),
-        "qc": attr.label(mandatory = True, allow_single_file = True),
-        "corpus": attr.label(mandatory = True, allow_single_file = True),
-        "stack": attr.label(mandatory = True, allow_single_file = True),
-        "generator": attr.label(mandatory = True, allow_single_file = True, doc = "raw/pack/rawpack.py"),
-        "srcs": attr.label_list(allow_files = True, doc = "the pack generator's sources, the frontend, the ABI headers"),
-        "_tool": attr.label(default = "//tools/gpu:rawpack", executable = True, cfg = "exec"),
-        "_seed_tool": attr.label(default = "//tools/gpu:seed", executable = True, cfg = "exec"),
-    },
-)
-
 # --- The signed bundle and its trust cache -----------------------------------------------------------------------
 
 def _metal_bundle_impl(ctx):
@@ -268,13 +199,14 @@ def _metal_bundle_impl(ctx):
     args.add("--xcode-env", ctx.file._xcode_env)
     args.add("--plugin", ctx.file.plugin)
     args.add("--nvk", ctx.file.nvk)
+    args.add("--stack", ctx.file.stack)
     args.add("--bundle", bundle.path)
     args.add("--trustcache", trustcache)
     args.add("--trust-json", trust_json)
     ctx.actions.run(
         executable = ctx.executable._tool,
         arguments = [args],
-        inputs = [ctx.file.plugin, ctx.file.nvk, ctx.file._xcode_env, ctx.file._xcode_identity],
+        inputs = [ctx.file.plugin, ctx.file.nvk, ctx.file.stack, ctx.file._xcode_env, ctx.file._xcode_identity],
         outputs = [bundle, trustcache, trust_json],
         mnemonic = "MetalBundle",
         progress_message = "Signing TegraGM20BMetal.bundle and writing its trust cache",
@@ -289,188 +221,8 @@ metal_bundle = rule(
     attrs = _XCODE | {
         "plugin": attr.label(mandatory = True, allow_single_file = True),
         "nvk": attr.label(mandatory = True, allow_single_file = True),
+        "stack": attr.label(mandatory = True, allow_single_file = True, doc = "the raw path's stack key, into Info.plist"),
         "_tool": attr.label(default = "//tools/gpu:bundle", executable = True, cfg = "exec"),
-    },
-)
-
-# --- The shader cache seed ---------------------------------------------------------------------------------------
-
-def _m2v_library_names_impl(ctx):
-    out = ctx.actions.declare_file(ctx.attr.name + ".json")
-    root = _repo_root(ctx.files.libraries) + "/root/"
-    args = ctx.actions.args()
-    args.add("names")
-    args.add(root)
-    args.add(out)
-    devices = [f.path[len(root):] for f in ctx.files.libraries if f.path.startswith(root)]
-    if len(devices) != len(ctx.files.libraries):
-        fail("every library must be below " + root)
-    args.add_all(devices)
-    ctx.actions.run(
-        executable = ctx.executable._tool,
-        arguments = [args],
-        inputs = ctx.files.libraries,
-        outputs = [out],
-        mnemonic = "M2vLibraryNames",
-        progress_message = "Indexing the function names of %d Metal libraries" % len(ctx.files.libraries),
-    )
-    return [DefaultInfo(files = depset([out]))]
-
-m2v_library_names = rule(
-    implementation = _m2v_library_names_impl,
-    doc = "names.json (precompile/libraries.py names): every function name of the libraries -> their device paths.",
-    attrs = {
-        "libraries": attr.label(mandatory = True, doc = "@gpu_apple_libs//:libraries (root/<device path>)"),
-        "_tool": attr.label(
-            default = "//drivers/TegraGM20BMetal:libraries",
-            executable = True,
-            cfg = "exec",
-        ),
-    },
-)
-
-def _twin(ctx, tool):
-    """The NVK host twin with the iOS dylib's pipeline cache identity (seed.py twin), as the seed and the raw pack run it."""
-    out = ctx.actions.declare_file(ctx.attr.name + "_twin/libvulkan_nouveau.dylib")
-    args = ctx.actions.args()
-    args.add("twin")
-    args.add("--nvk", ctx.file.nvk)
-    args.add("--twin", ctx.file.twin)
-    args.add("--out", out)
-    ctx.actions.run(
-        executable = tool,
-        arguments = [args],
-        inputs = [ctx.file.nvk, ctx.file.twin] + ctx.files.nvk_sources,
-        outputs = [out],
-        mnemonic = "NvkTwin",
-        progress_message = "Giving the NVK host twin the iOS dylib's identity",
-        execution_requirements = {"no-remote-exec": "1", "requires-darwin": ""},
-    )
-    return out
-
-def _metal_seed_impl(ctx):
-    xcode = [ctx.file._xcode_env, ctx.file._xcode_identity]
-    seed_tool = ctx.executable._tool
-    darwin = {"no-remote-exec": "1", "requires-darwin": ""}
-
-    mock = ctx.actions.declare_file(ctx.attr.name + "_tool/libmock_iokit.dylib")
-    args = ctx.actions.args()
-    args.add("mock")
-    args.add("--xcode-env", ctx.file._xcode_env)
-    args.add("--abi-header", ctx.file.abi_header)
-    args.add("--mock-iokit", ctx.file.mock_iokit)
-    args.add("--out", mock)
-    ctx.actions.run(
-        executable = seed_tool,
-        arguments = [args],
-        inputs = [ctx.file.abi_header, ctx.file.mock_iokit] + xcode,
-        outputs = [mock],
-        mnemonic = "MetalSeedMock",
-        progress_message = "Building the precompile's mock IOKit",
-        execution_requirements = darwin,
-    )
-
-    tool = ctx.actions.declare_file(ctx.attr.name + "_tool/precompile")
-    args = ctx.actions.args()
-    args.add("tool")
-    args.add("--xcode-env", ctx.file._xcode_env)
-    args.add("--metal-header", ctx.file.metal_header)
-    args.add("--precompile", ctx.file.precompile)
-    args.add("--frontend", ctx.file.frontend)
-    args.add("--host-bridge", ctx.file.host_bridge)
-    args.add("--mock", mock)
-    args.add("--out", tool)
-    ctx.actions.run(
-        executable = seed_tool,
-        arguments = [args],
-        inputs = [ctx.file.metal_header, ctx.file.precompile, ctx.file.frontend, ctx.file.host_bridge, mock] +
-                 ctx.files.hdrs + xcode,
-        outputs = [tool],
-        mnemonic = "MetalSeedTool",
-        progress_message = "Building the shader cache precompile tool",
-        execution_requirements = darwin,
-    )
-
-    twin = _twin(ctx, seed_tool)
-
-    # The corpus with the libraries of older journal lines resolved (precompile/libraries.py resolve).
-    corpus = ctx.actions.declare_file(ctx.attr.name + "_corpus/corpus.log")
-    ctx.actions.run(
-        executable = ctx.executable.libraries_tool,
-        arguments = ["resolve", ctx.file.names.path, ctx.file.corpus.path, corpus.path],
-        inputs = [ctx.file.names, ctx.file.corpus],
-        outputs = [corpus],
-        mnemonic = "MetalSeedCorpus",
-        progress_message = "Resolving the shader corpus's libraries",
-    )
-
-    out = ctx.actions.declare_directory(ctx.attr.name)
-    args = ctx.actions.args()
-    args.add("run")
-    args.add("--xcode-env", ctx.file._xcode_env)
-    args.add("--tool", tool)
-    args.add("--mock", mock)
-    args.add("--nvk", twin)
-    args.add("--qc", ctx.file.qc)
-    args.add("--qc-sha256", ctx.attr.ipsw[IpswInfo].derived["quartzcore_metallib_sha256"])
-    args.add("--root", _repo_root(ctx.files.libraries) + "/root")
-    args.add_all(ctx.files.embedded, before_each = "--embedded")
-    args.add_all(ctx.files.device_libraries, before_each = "--data")
-    args.add("--corpus", corpus)
-    if ctx.files.records:
-        args.add("--records", _repo_root(ctx.files.records) + "/records")
-    args.add("--out", out.path)
-    ctx.actions.run(
-        executable = seed_tool,
-        arguments = [args],
-        inputs = depset(
-            [tool, mock, twin, ctx.file.qc, corpus] + xcode + ctx.files.libraries + ctx.files.embedded +
-            ctx.files.device_libraries + ctx.files.records,
-        ),
-        outputs = [out],
-        mnemonic = "MetalSeed",
-        progress_message = "Precompiling the m2v shader cache seed (corpus %s)" % ctx.file.corpus.short_path,
-        # Runs the precompile tool on this Mac (Metal + the NVK twin): never on a remote executor.
-        execution_requirements = {"no-remote-exec": "1"},
-        resource_set = _all_cores,
-    )
-    return [
-        DefaultInfo(files = depset([out])),
-        # The steps before the run (bazel build //gpu:seed --output_groups=steps).
-        OutputGroupInfo(steps = depset([mock, tool, twin, corpus])),
-    ]
-
-metal_seed = rule(
-    implementation = _metal_seed_impl,
-    attrs = _XCODE | {
-        "host_bridge": attr.label(mandatory = True, allow_single_file = True),
-        "mock_iokit": attr.label(mandatory = True, allow_single_file = True),
-        "abi_header": attr.label(mandatory = True, allow_single_file = True),
-        "precompile": attr.label(mandatory = True, allow_single_file = True),
-        "frontend": attr.label(mandatory = True, allow_single_file = True),
-        "metal_header": attr.label(mandatory = True, allow_single_file = True),
-        "hdrs": attr.label_list(allow_files = True),
-        "nvk": attr.label(mandatory = True, allow_single_file = True),
-        "twin": attr.label(mandatory = True, allow_single_file = True),
-        "nvk_sources": attr.label_list(allow_files = True, doc = "the two dylibs' .source files"),
-        "qc": attr.label(mandatory = True, allow_single_file = True, doc = "the IPSW's QuartzCore default.metallib"),
-        "ipsw": attr.label(default = "//ipsw:current", providers = [IpswInfo], doc = "the QuartzCore metallib's pin"),
-        "libraries": attr.label(mandatory = True, doc = "the OS volume's Metal libraries (@gpu_apple_libs//:libraries)"),
-        "names": attr.label(mandatory = True, allow_single_file = [".json"], doc = "their names.json (m2v_library_names)"),
-        "embedded": attr.label_list(
-            allow_files = [".h"],
-            doc = "headers of metallibs the frontend makes libraries of (a C array of the bytes), stored by their sha256",
-        ),
-        "device_libraries": attr.label(allow_files = True, doc = "libraries only the device made (@gpu_device_data)"),
-        "records": attr.label(allow_files = True, doc = "the device's driver records (@gpu_device_data): merged where of the twin's identity"),
-        "corpus": attr.label(mandatory = True, allow_single_file = True),
-        "libraries_tool": attr.label(
-            mandatory = True,
-            executable = True,
-            cfg = "exec",
-            doc = "precompile/libraries.py's py_binary (its resolve step)",
-        ),
-        "_tool": attr.label(default = "//tools/gpu:seed", executable = True, cfg = "exec"),
     },
 )
 
@@ -481,16 +233,14 @@ def _gpu_tree_impl(ctx):
     bundle = [f for f in ctx.files.bundle if f.is_directory][0]
     args = ctx.actions.args()
     args.add("--bundle", bundle.path)
-    args.add("--seed", ctx.file.seed.path)
     args.add("--trustcache", ctx.file.trustcache)
     args.add("--trust-json", ctx.file.trust_json)
-    if ctx.file.raw:
-        args.add("--raw", ctx.file.raw.path)
+    args.add_all(ctx.files.overlay, before_each = "--overlay", expand_directories = False)
     args.add("--out", out.path)
     ctx.actions.run(
         executable = ctx.executable._tool,
         arguments = [args],
-        inputs = [bundle, ctx.file.seed, ctx.file.trustcache, ctx.file.trust_json] + ctx.files.raw,
+        inputs = [bundle, ctx.file.trustcache, ctx.file.trust_json] + ctx.files.overlay,
         outputs = [out],
         mnemonic = "GpuTree",
         progress_message = "Laying out the GPU bundle directory",
@@ -501,10 +251,9 @@ gpu_tree = rule(
     implementation = _gpu_tree_impl,
     attrs = {
         "bundle": attr.label(mandatory = True),
-        "seed": attr.label(mandatory = True, allow_single_file = True),
         "trustcache": attr.label(mandatory = True, allow_single_file = True),
         "trust_json": attr.label(mandatory = True, allow_single_file = True),
-        "raw": attr.label(allow_single_file = True, doc = "the raw path's pack directory (pack.bin)"),
+        "overlay": attr.label_list(doc = "directories laid over the tree's ngpu/addons (//gpu/seed:tree: the seed and the raw pack)"),
         "_tool": attr.label(default = "//tools/gpu:assemble", executable = True, cfg = "exec"),
     },
 )

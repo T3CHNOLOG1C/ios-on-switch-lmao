@@ -16,7 +16,7 @@ usage: rawpack.py --bridge <host libnative_metal_bridge.a> --nvk <host twin dyli
        rawpack.py --build-only --bridge <host libnative_metal_bridge.a> --out <dir>
 writes <out>/pack.bin, pack.json, layouts.txt, report.txt and keeps the probe logs in <out>/work (deleted with --clean).
 --build-only compiles the probe, the mock GPU (libmock_iokit.dylib) and ycbcr.metallib into <dir> and stops; --prebuilt
-<dir> runs those instead of compiling them (//gpu:raw_pack makes them its own action, so a corpus edit only reruns the
+<dir> runs those instead of compiling them (//gpu/seed:local_tools makes them its own action, so a corpus edit only reruns the
 probes).
 --stack: the build's stack key (the plugin is compiled with the same value), stamped into the pack header: the runtime refuses a
 pack of another build.

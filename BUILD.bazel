@@ -2,7 +2,7 @@
 #
 #   bazel build //:boot        the Hekate boot entry (bazel-bin/boot/ios: switchroot/, bootloader/, overlay/)
 #   bazel build //:kernel      the prelinked kernel (XNU + drivers + Apple's kexts)
-#   bazel build //:gpu         the TegraGM20B Metal bundle, its m2v seed and trust cache
+#   bazel build //:gpu         the TegraGM20B Metal bundle and its trust cache (//gpu:bundle adds the IPSW-made seed)
 #   bazel test //...           unit tests, pinned-input checks, format and lint
 #   bazel run //deploy:sd -- <disk>      bazel run //deploy:pull_logs -- <disk>      bazel run //install:sd -- <disk>
 #   bazel run //:image [-- --size 64G]   the SD-card folder: boot entry, install-ios.bin and the iOS install image
@@ -69,12 +69,13 @@ alias(
 
 alias(
     name = "gpu",
-    actual = "//gpu:bundle",
+    actual = "//gpu:base",
 )
 
 alias(
     name = "image",
     actual = "//install:image",
+    tags = ["manual"],
 )
 
 alias(

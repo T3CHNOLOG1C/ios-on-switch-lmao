@@ -1,24 +1,19 @@
 # The TegraGM20B Metal plugin bundle for iOS 17 (arm64): the GPU userland of the Switch's GM20B.
 #
-#   bazel build //gpu:bundle        the directory deploy stages: ngpu/addons/{TegraGM20BMetal.bundle,
-#                                   TegraGM20BMetal.m2v-seed/shared, TegraGM20BMetal.raw/pack.bin},
-#                                   TegraGM20BMetal.trustcache, trust.json
+#   bazel build //gpu:base          IPSW-free: ngpu/addons/TegraGM20BMetal.bundle, TegraGM20BMetal.trustcache, trust.json
+#   bazel build //gpu:bundle        what deploy stages: base + the shader seed and the raw pack (//gpu/seed:tree, which
+#                                   reads the IPSW's Metal libraries)
 #   bazel build //gpu:trustcache    only the trust-cache module the boot package appends (both CDHashes)
 #   bazel build //gpu:plugin --output_groups=debug   the plugin's dSYM
 #
-#   bazel build //gpu:bridge_ios    the Metal bridge (NativeMetal's bridge over m2v) the plugin links, alone
-#
 # Inputs: m2v (third_party/m2v: steelbrain/metal2vulkan 720ef1ce and our patches as commits), the bridge's crates.io
-# crates (@rust_crates, bazel/rust), Rust 1.98.0 and LLVM 23.1.4's llvm-as (pinned downloads), Xcode (the declared host
-# input), NVK and its host twin (//gpu/nvk: Mesa 77452b90 + the series, built here), the Apple Metal libraries the seed
-# and the raw pack read (@gpu_apple_libs: the IPSW kind's OS volume's, QuartzCore's
-# default.metallib among them, extracted from the IPSW) and what only the device makes (@gpu_device_data: its driver
-# records and Core Image's compiled kernels, a pinned tar). See gpu/deps.bzl.
+# crates (@rust_crates, bazel/rust), Rust 1.98.0 and LLVM 23.1.4's llvm-as (pinned downloads), Xcode, NVK and its host
+# twin (//gpu/nvk: Mesa 77452b90 + the series).
 
 load("@rules_rust//rust:defs.bzl", "rust_static_library")
 load("//bazel/lint:defs.bzl", "lint_files")
 load("//bazel/rust:defs.bzl", "cargo_ids", "rust_artifact")
-load(":defs.bzl", "gpu_tree", "llvm_as", "m2v_library_names", "metal_bundle", "metal_plugin", "metal_raw_pack", "metal_seed", "raw_stack")
+load(":defs.bzl", "gpu_tree", "llvm_as", "metal_bundle", "metal_plugin", "raw_stack")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -31,13 +26,6 @@ GM20B_METAL = "//drivers/TegraGM20BMetal"
 GM20B_ABI = "//drivers/TegraGM20B:TegraGM20BABI.h"
 
 NVK = "//gpu/nvk:dylib"
-
-NVK_TWIN = "//gpu/nvk:twin"
-
-NVK_SOURCES = [
-    "//gpu/nvk:dylib_source",
-    "//gpu/nvk:twin_source",
-]
 
 # The runtime's AIR fixtures, which the bridge compiles in (include_bytes!).
 llvm_as(
@@ -111,6 +99,12 @@ rust_artifact(
 # refused on the device). Hashes NVK, m2v's sources, the bridge sources, the frontend and raw/'s sources.
 raw_stack(
     name = "raw_stack",
+    srcs = [
+        METAL + ":bridge/NativeMetalBridge.rs",
+        METAL + ":bridge/NativeMetalObjects.rs",
+        METAL + ":NativeBridgeMetalFrontend.mm",
+        GM20B_METAL + ":raw_stack_sources",
+    ],
     m2v = [
         "//third_party/m2v/crates/metal2vulkan:sources",
         "//third_party/m2v/crates/metal2vulkan-air:sources",
@@ -118,12 +112,6 @@ raw_stack(
     ],
     m2v_root = "//third_party/m2v:Cargo.toml",
     nvk = NVK,
-    srcs = [
-        METAL + ":bridge/NativeMetalBridge.rs",
-        METAL + ":bridge/NativeMetalObjects.rs",
-        METAL + ":NativeBridgeMetalFrontend.mm",
-        GM20B_METAL + ":raw_stack_sources",
-    ],
 )
 
 metal_plugin(
@@ -133,18 +121,18 @@ metal_plugin(
         METAL + ":NativeBridgeMetalFrontend.mm",
         GM20B_METAL + ":raw/runtime/RawMetal.mm",
     ],
-    cc_srcs = [
-        GM20B_METAL + ":raw/runtime/raw_gpu.cpp",
-        GM20B_METAL + ":raw/fx/fx_mip.cpp",
-        GM20B_METAL + ":raw/runtime/raw_kernel.cpp",
-        GM20B_METAL + ":raw/runtime/raw_pack.cpp",
-    ],
     hdrs = [
         METAL + ":frontend_headers",
         GM20B_METAL + ":raw_runtime_headers",
         GM20B_ABI,
     ],
     bridge = ":bridge_ios",
+    cc_srcs = [
+        GM20B_METAL + ":raw/runtime/raw_gpu.cpp",
+        GM20B_METAL + ":raw/fx/fx_mip.cpp",
+        GM20B_METAL + ":raw/runtime/raw_kernel.cpp",
+        GM20B_METAL + ":raw/runtime/raw_pack.cpp",
+    ],
     frameworks = [
         "Foundation",
         "Metal",
@@ -163,6 +151,7 @@ metal_bundle(
     name = "signed",
     nvk = NVK,
     plugin = ":plugin",
+    stack = ":raw_stack",
 )
 
 filegroup(
@@ -183,66 +172,18 @@ filegroup(
     output_group = "bundle",
 )
 
-# names.json of the OS volume's libraries: which library an older journal line's function is from (precompile/libraries.py).
-m2v_library_names(
-    name = "library_names",
-    libraries = "@gpu_apple_libs//:libraries",
-)
-
-metal_seed(
-    name = "seed",
-    abi_header = GM20B_ABI,
-    corpus = GM20B_METAL + ":precompile/corpus.log",
-    device_libraries = "@gpu_device_data//:libraries",
-    # The frontend's own library (the two-plane stand-in's functions), which it makes from these bytes.
-    embedded = [METAL + ":TwoPlaneStandIn.h"],
-    frontend = METAL + ":NativeBridgeMetalFrontend.mm",
-    hdrs = [METAL + ":frontend_headers"],
-    host_bridge = ":bridge_host",
-    libraries = "@gpu_apple_libs//:libraries",
-    libraries_tool = GM20B_METAL + ":libraries",
-    metal_header = METAL + ":NativeBridgeMetalFrontend.h",
-    mock_iokit = GM20B_METAL + ":precompile/mock_iokit.c",
-    names = ":library_names",
-    nvk = NVK,
-    nvk_sources = NVK_SOURCES,
-    precompile = GM20B_METAL + ":precompile/precompile.mm",
-    qc = "@gpu_apple_libs//:quartzcore",
-    records = "@gpu_device_data//:records",
-    twin = NVK_TWIN,
-)
-
-# The raw GM20B path's pipeline pack (raw/pack/rawpack.py): Core Animation's corpus states through this build's frontend,
-# host bridge and NVK twin over a mock GM20B, stamped with the stack key. Staged beside the bundle, the render server
-# draws through the raw path; without it, through m2v.
-metal_raw_pack(
-    name = "raw_pack",
-    corpus = GM20B_METAL + ":precompile/corpus.log",
-    generator = GM20B_METAL + ":raw/pack/rawpack.py",
-    host_bridge = ":bridge_host",
-    nvk = NVK,
-    nvk_sources = NVK_SOURCES,
-    qc = "@gpu_apple_libs//:quartzcore",
-    srcs = [
-        GM20B_METAL + ":raw_pack_generator",
-        METAL + ":NativeBridgeMetalFrontend.mm",
-        METAL + ":frontend_headers",
-        GM20B_ABI,
-    ],
-    stack = ":raw_stack",
-    twin = NVK_TWIN,
+gpu_tree(
+    name = "base",
+    bundle = ":signed_bundle",
+    trust_json = ":trust_json",
+    trustcache = ":trustcache",
 )
 
 gpu_tree(
     name = "bundle",
     bundle = ":signed_bundle",
-    raw = ":raw_pack",
-    seed = ":seed",
+    overlay = ["//gpu/seed:tree"],
+    tags = ["manual"],
     trust_json = ":trust_json",
     trustcache = ":trustcache",
 )
-
-# The pins of the Apple Metal libraries @gpu_apple_libs extracts from the IPSW (gpu/deps.bzl).
-
-
-exports_files(["apple-libs.sha256"])

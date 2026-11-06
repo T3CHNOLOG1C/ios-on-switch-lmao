@@ -10,7 +10,8 @@ which pins one kind's members and keeps the rest. Per kind:
             read from the decrypted images) and the cryptex images' file names as Preboot stages them
   derived   what the build derives from the members, pinned by hand: kernelcache_sha256 (the kernelcache's IM4P payload,
             LZFSE-decompressed, its arm64 slice: //ipsw:kernelcache) and quartzcore_metallib_sha256 (QuartzCore's
-            default.metallib on the OS volume, the shader seed's gate: //gpu:seed)
+            default.metallib, the OS volume's or the SystemOS cryptex's grafted over it: the shader seed's gate,
+            //gpu/seed:seed)
 An Apple Encrypted Archive member (iOS 26 and later) also has aea_key, the key /usr/bin/aea decrypts it with, which
 `pin` unwraps from the archive's auth data. An empty kind is a declared slot: //ipsw:kind accepts it, no repository is
 made for it, and anything that reads an IPSW fails at analysis until it is pinned.
@@ -126,7 +127,8 @@ IPSWS = {
     "24B119": {
         "build": "24B119",
         "derived": {
-            "kernelcache_sha256": "250337d45598da0e5cc578413704981368afe92f84b3450dc956e21da1b21bd4"
+            "kernelcache_sha256": "250337d45598da0e5cc578413704981368afe92f84b3450dc956e21da1b21bd4",
+            "quartzcore_metallib_sha256": "342e3ee16a83e7b04837dcdadf4a786020711e3179afcf0ca50a461e7331218b"
         },
         "device_class": "j181ap",
         "ios": "27",

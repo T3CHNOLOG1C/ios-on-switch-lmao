@@ -21,6 +21,7 @@ label_flag(
 label_flag(
     name = "gpu_bundle",
     build_setting_default = "//gpu:bundle",
+    tags = ["manual"],
 )
 
 py_binary(
@@ -44,6 +45,7 @@ py_binary(
         "@xnu_base//:tools/lldbmacros/kcdata.py",
     ],
     main = "//tools/deploy:deploy.py",
+    tags = ["manual"],
     deps = [
         "//tools/deploy:lib",
         "@rules_python//python/runfiles",
