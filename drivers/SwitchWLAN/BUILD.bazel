@@ -61,6 +61,7 @@ kernel_driver(
         "drivers/SwitchBluetooth",
         "drivers/SwitchSuspend",
         "drivers/TegraI2C",
+        "kits/SwitchCAR",
         "kits/SwitchDMA",
         "kits/SwitchMMIO",
         "kits/SwitchRing",

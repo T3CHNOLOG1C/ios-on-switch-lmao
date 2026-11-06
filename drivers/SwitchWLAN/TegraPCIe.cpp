@@ -27,6 +27,7 @@
 #include <kern/clock.h>
 #include "SwitchWLANPrivate.h"
 #include "../TegraI2C/TegraI2C.h"
+#include "../../kits/SwitchCAR/SwitchPMC.h"
 
 namespace swlan {
 namespace {
@@ -89,7 +90,7 @@ enum : uint32_t {
     PMC_IO_DPD_STATUS = 0x5BC,
 };
 
-constexpr uint32_t kPartPcie = 3, kToggleStart = 1u << 8;
+constexpr uint32_t kPartPcie = 3;                              // TEGRA_POWERGATE_PCIE
 constexpr uint32_t kDpdPexPads = 7u << 4, kDpdOff = 1u << 30;  // PEX_BIAS, PEX_CLK1, PEX_CLK2 (Linux pmc.c)
 
 // MC SMMU (hekate bdk/mem/mc_t210.h): bit 31 of a client's ASID register routes its DMA through the SMMU.
@@ -338,12 +339,7 @@ bool TegraPcie::powerUp(char *why, size_t whyLength)
 
     const uint32_t part = 1u << kPartPcie;
     if (!(pmc_.r32(PMC_PWRGATE_STATUS) & part)) {
-        bool on = pmc_.wait(PMC_PWRGATE_TOGGLE, kToggleStart, 0, 5000);
-        if (on) {
-            pmc_.w32(PMC_PWRGATE_TOGGLE, kPartPcie | kToggleStart);
-            on = pmc_.wait(PMC_PWRGATE_STATUS, part, part, 5000);
-        }
-        if (!on) {
+        if (!switch_pmc_partition_on(kPartPcie)) {
             car_.w32(CLK_ENB_U_CLR, kUAfi | kUPcie);  // a block left half powered hangs its bus
             snprintf(why, whyLength, "PCIe power partition stays gated (PMC status %08x toggle %08x)",
                      pmc_.r32(PMC_PWRGATE_STATUS), pmc_.r32(PMC_PWRGATE_TOGGLE));
