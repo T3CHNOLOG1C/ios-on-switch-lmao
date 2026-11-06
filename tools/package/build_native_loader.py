@@ -65,7 +65,7 @@ from loader_abi import (
     staged_bl33_bytes,
 )
 from native_oled_adt import ROOT_MATCHING
-from native_xnu_layout import build_layout, parse_adt, validate_data_seed, validate_trustcache
+from native_xnu_layout import LayoutRequest, build_layout, parse_adt, validate_data_seed, validate_trustcache
 
 LIMIT = 128 << 20
 
@@ -597,14 +597,16 @@ def layout(args: argparse.Namespace) -> None:
             inputs['kernel'],
             inputs['adt'],
             scratch / 'layout',
-            physical_base=PHYSICAL_BASE,
-            window_size=WINDOW_SIZE,
-            reserved_ranges=[{'name': n, 'start': s, 'size': z} for n, s, z in NATIVE_FULL_RAM_EXCLUSIONS],
-            command_line=command_line,
-            trustcache_path=inputs['trustcache'],
-            data_seed_path=inputs['data_seed'],
-            video=VIDEO,
-            full_ram=True,
+            LayoutRequest(
+                physical_base=PHYSICAL_BASE,
+                window_size=WINDOW_SIZE,
+                reserved_ranges=[{'name': n, 'start': s, 'size': z} for n, s, z in NATIVE_FULL_RAM_EXCLUSIONS],
+                command_line=command_line,
+                trustcache_path=inputs['trustcache'],
+                data_seed_path=inputs['data_seed'],
+                video=VIDEO,
+                full_ram=True,
+            ),
         )
         payload = (scratch / 'layout/kernel-window.bin').read_bytes()
         constants = window_checks(m, payload, inputs['adt'].read_bytes())

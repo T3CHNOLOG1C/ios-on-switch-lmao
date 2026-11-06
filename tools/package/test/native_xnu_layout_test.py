@@ -19,11 +19,11 @@ N = 0x10000000
 def macho(
     *, base: int = V, entry: int | None = None, second: int = 0x5000, first_size: int = 0x3000, protection: int = 5
 ) -> bytes:
-    def segment(name, address, size, fileoff, filesize, prot):
-        return struct.pack('<II16s4Q4I', 0x19, 72, name, address, size, fileoff, filesize, 7, prot, 0, 0)
+    def segment(name: bytes, address: int, size: int, file: tuple[int, int], prot: int) -> bytes:
+        return struct.pack('<II16s4Q4I', 0x19, 72, name, address, size, *file, 7, prot, 0, 0)
 
-    commands = segment(b'__TEXT', base, first_size, 0x200, 0x100, protection)
-    commands += segment(b'__DATA', base + second, 0x2000, 0x400, 0x40, 3)
+    commands = segment(b'__TEXT', base, first_size, (0x200, 0x100), protection)
+    commands += segment(b'__DATA', base + second, 0x2000, (0x400, 0x40), 3)
     thread = bytearray(288)
     struct.pack_into('<4I', thread, 0, 5, 288, 6, 68)
     struct.pack_into('<Q', thread, 272, base + 0x10 if entry is None else entry)
@@ -82,10 +82,10 @@ class NativeLayoutTests(unittest.TestCase):
         self.tree.write_bytes(adt())
         self.output = self.root / 'layout'
 
-    def build(self, **kwargs):
+    def build(self, **kwargs: object):
         args = {'physical_base': P, 'window_size': N, 'reserved_ranges': []}
         args.update(kwargs)
-        return layout.build_layout(self.kernel, self.tree, self.output, **args)
+        return layout.build_layout(self.kernel, self.tree, self.output, layout.LayoutRequest(**args))
 
     def test_exact_abi_absolute_alignment_zero_fill_and_source_preservation(self):
         original = self.kernel.read_bytes(), self.tree.read_bytes()

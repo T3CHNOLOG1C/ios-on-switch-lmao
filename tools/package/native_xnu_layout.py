@@ -23,6 +23,7 @@ import struct
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import NamedTuple
 
 U64_MAX = (1 << 64) - 1
 PAGE = 0x1000
@@ -78,6 +79,50 @@ class Kernel:
     entry: int
 
 
+def _segment(data: bytes, cursor: int, length: int, count: int) -> Segment | None:
+    if length < 72 or count == 64:
+        raise LayoutError('invalid or excessive segment commands')
+    sections = struct.unpack_from('<I', data, cursor + 64)[0]
+    if sections > (length - 72) // 80:
+        raise LayoutError('segment sections exceed command')
+    address, extent, offset, backed = struct.unpack_from('<4Q', data, cursor + 24)
+    protection = struct.unpack_from('<I', data, cursor + 60)[0]
+    if not extent:
+        return None
+    bounded_end(address, extent, 'virtual segment')
+    if extent > MIN_WINDOW or backed > extent or offset > len(data) or backed > len(data) - offset:
+        raise LayoutError('invalid segment memory/file extent')
+    raw_name = data[cursor + 8 : cursor + 24].split(b'\0', 1)[0]
+    return Segment(raw_name.decode('ascii', errors='backslashreplace'), address, extent, offset, backed, protection)
+
+
+def _entry(data: bytes, cursor: int, length: int, entry: int | None) -> int:
+    if entry is not None or length != 288 or struct.unpack_from('<II', data, cursor + 8) != (6, 68):
+        raise LayoutError('expected exactly one ARM64 LC_UNIXTHREAD state')
+    return struct.unpack_from('<Q', data, cursor + 272)[0]
+
+
+def _load_commands(data: bytes, count: int, end: int) -> tuple[list[Segment], int]:
+    cursor, entry = 32, None
+    segments = []
+    for _ in range(count):
+        if end - cursor < 8:
+            raise LayoutError('truncated load command')
+        command, length = struct.unpack_from('<II', data, cursor)
+        if length < 8 or length % 8 or length > end - cursor:
+            raise LayoutError('invalid load-command length')
+        if command == 0x19:
+            segment = _segment(data, cursor, length, len(segments))
+            if segment is not None:
+                segments.append(segment)
+        elif command == 5:
+            entry = _entry(data, cursor, length, entry)
+        cursor += length
+    if cursor != end or entry is None or not segments:
+        raise LayoutError('incomplete load-command table, segments or entry')
+    return segments, entry
+
+
 def parse_kernel(data: bytes) -> Kernel:
     """Mirror DarwinBoot ParseKernel, including its 256 MiB parser bound."""
     if not 32 <= len(data) <= 128 << 20:
@@ -87,39 +132,7 @@ def parse_kernel(data: bytes) -> Kernel:
         raise LayoutError('expected little-endian ARM64 subtype-0 MH_EXECUTE')
     if size > len(data) - 32:
         raise LayoutError('load-command table exceeds kernel file')
-    cursor, end, entry = 32, 32 + size, None
-    segments = []
-    for _ in range(count):
-        if end - cursor < 8:
-            raise LayoutError('truncated load command')
-        command, length = struct.unpack_from('<II', data, cursor)
-        if length < 8 or length % 8 or length > end - cursor:
-            raise LayoutError('invalid load-command length')
-        if command == 0x19:
-            if length < 72 or len(segments) == 64:
-                raise LayoutError('invalid or excessive segment commands')
-            sections = struct.unpack_from('<I', data, cursor + 64)[0]
-            if sections > (length - 72) // 80:
-                raise LayoutError('segment sections exceed command')
-            address, extent, offset, backed = struct.unpack_from('<4Q', data, cursor + 24)
-            protection = struct.unpack_from('<I', data, cursor + 60)[0]
-            if extent:
-                bounded_end(address, extent, 'virtual segment')
-                if extent > MIN_WINDOW or backed > extent or offset > len(data) or backed > len(data) - offset:
-                    raise LayoutError('invalid segment memory/file extent')
-                raw_name = data[cursor + 8 : cursor + 24].split(b'\0', 1)[0]
-                segments.append(
-                    Segment(
-                        raw_name.decode('ascii', errors='backslashreplace'), address, extent, offset, backed, protection
-                    )
-                )
-        elif command == 5:
-            if entry is not None or length != 288 or struct.unpack_from('<II', data, cursor + 8) != (6, 68):
-                raise LayoutError('expected exactly one ARM64 LC_UNIXTHREAD state')
-            entry = struct.unpack_from('<Q', data, cursor + 272)[0]
-        cursor += length
-    if cursor != end or entry is None or not segments:
-        raise LayoutError('incomplete load-command table, segments or entry')
+    segments, entry = _load_commands(data, count, 32 + size)
     ordered = sorted(segments, key=lambda item: item.vmaddr)
     if any(a.vmaddr + a.vmsize > b.vmaddr for a, b in itertools.pairwise(ordered)):
         raise LayoutError('overlapping virtual segments')
@@ -136,36 +149,38 @@ class Adt:
     window_size: int
 
 
-def parse_adt(data: bytes) -> Adt:
-    """Preserve byte offsets, with stricter names than the exporter ADT helper.
+def _node_name(props: dict[str, tuple[int, int, bytes]], depth: int) -> str:
+    if 'name' not in props:
+        raise LayoutError('ADT node has no name')
+    raw_name = props['name'][2]
+    if not raw_name.endswith(b'\0') or b'\0' in raw_name[:-1]:
+        raise LayoutError('unterminated or embedded-NUL ADT node name')
+    try:
+        name = raw_name[:-1].decode('ascii')
+    except UnicodeError as exc:
+        raise LayoutError('non-ASCII ADT node name') from exc
+    if depth and (not name or '/' in name):
+        raise LayoutError('invalid ADT node name')
+    return name
 
-    A local reader is needed for in-place sidecar fixups. It also rejects
-    unterminated names and duplicate sibling nodes instead of silently picking
-    one. All accepted bytes remain unchanged apart from the zero placeholders.
-    """
-    if not 8 <= len(data) <= 16 << 20:
-        raise LayoutError('ADT must be 8 bytes..16 MiB')
-    cursor = 0
-    offsets = {}
 
-    def read(size: int) -> bytes:
-        nonlocal cursor
-        if size > len(data) - cursor:
+class _AdtReader:
+    def __init__(self, data: bytes) -> None:
+        self.data = data
+        self.cursor = 0
+        self.offsets = {}
+
+    def read(self, size: int) -> bytes:
+        if size > len(self.data) - self.cursor:
             raise LayoutError('truncated ADT')
-        value = data[cursor : cursor + size]
-        cursor += size
+        value = self.data[self.cursor : self.cursor + size]
+        self.cursor += size
         return value
 
-    def node(depth: int, parent: str) -> str:
-        nonlocal cursor
-        if depth > 64:
-            raise LayoutError('ADT nesting exceeds 64 levels')
-        count, children = struct.unpack('<II', read(8))
-        if count > (len(data) - cursor) // 36:
-            raise LayoutError('ADT property count exceeds input')
+    def properties(self, count: int) -> dict[str, tuple[int, int, bytes]]:
         props = {}
         for _ in range(count):
-            raw, length = struct.unpack('<32sI', read(36))
+            raw, length = struct.unpack('<32sI', self.read(36))
             if b'\0' not in raw:
                 raise LayoutError('unterminated ADT property name')
             try:
@@ -174,39 +189,35 @@ def parse_adt(data: bytes) -> Adt:
                 raise LayoutError('non-ASCII ADT property name') from exc
             if not key or key in props:
                 raise LayoutError('empty or duplicate ADT property')
-            start = cursor
-            value = read(length)
-            read(-length % 4)
+            start = self.cursor
+            value = self.read(length)
+            self.read(-length % 4)
             props[key] = (start, length, value)
-        if 'name' not in props:
-            raise LayoutError('ADT node has no name')
-        raw_name = props['name'][2]
-        if not raw_name.endswith(b'\0') or b'\0' in raw_name[:-1]:
-            raise LayoutError('unterminated or embedded-NUL ADT node name')
-        try:
-            name = raw_name[:-1].decode('ascii')
-        except UnicodeError as exc:
-            raise LayoutError('non-ASCII ADT node name') from exc
-        if depth and (not name or '/' in name):
-            raise LayoutError('invalid ADT node name')
+        return props
+
+    def node(self, depth: int, parent: str) -> str:
+        if depth > 64:
+            raise LayoutError('ADT nesting exceeds 64 levels')
+        count, children = struct.unpack('<II', self.read(8))
+        if count > (len(self.data) - self.cursor) // 36:
+            raise LayoutError('ADT property count exceeds input')
+        props = self.properties(count)
+        name = _node_name(props, depth)
         path = '/' if depth == 0 else parent.rstrip('/') + '/' + name
         for key, (start, length, _) in props.items():
-            offsets[path, key] = (start, length)
-        if children > (len(data) - cursor) // 8:
+            self.offsets[path, key] = (start, length)
+        if children > (len(self.data) - self.cursor) // 8:
             raise LayoutError('ADT child count exceeds input')
         names = set()
         for _ in range(children):
-            child_name = node(depth + 1, path)
+            child_name = self.node(depth + 1, path)
             if child_name in names:
                 raise LayoutError('duplicate ADT sibling node')
             names.add(child_name)
         return name
 
-    node(0, '')
-    if cursor != len(data):
-        raise LayoutError('trailing bytes after ADT')
-    if ('/chosen', 'name') not in offsets:
-        raise LayoutError('ADT requires /chosen')
+
+def _adt_window(data: bytes, offsets: dict[tuple[str, str], tuple[int, int]]) -> int:
     window = MIN_WINDOW
     for (path, key), (offset, length) in offsets.items():
         if key == 'darwinboot-memory-size':
@@ -219,7 +230,25 @@ def parse_adt(data: bytes) -> Adt:
                 raise LayoutError('sidecars require zero 16-byte /chosen/memory-map placeholders')
             if key == 'PackedRAMDisk':
                 raise LayoutError('PackedRAMDisk is unsupported; supply an uncompressed RAMDisk')
-    return Adt(offsets, window)
+    return window
+
+
+def parse_adt(data: bytes) -> Adt:
+    """Preserve byte offsets, with stricter names than the exporter ADT helper.
+
+    A local reader is needed for in-place sidecar fixups. It also rejects
+    unterminated names and duplicate sibling nodes instead of silently picking
+    one. All accepted bytes remain unchanged apart from the zero placeholders.
+    """
+    if not 8 <= len(data) <= 16 << 20:
+        raise LayoutError('ADT must be 8 bytes..16 MiB')
+    reader = _AdtReader(data)
+    reader.node(0, '')
+    if reader.cursor != len(data):
+        raise LayoutError('trailing bytes after ADT')
+    if ('/chosen', 'name') not in reader.offsets:
+        raise LayoutError('ADT requires /chosen')
+    return Adt(reader.offsets, _adt_window(data, reader.offsets))
 
 
 def validate_trustcache(data: bytes) -> None:
@@ -294,32 +323,54 @@ def source_record(path: Path, data: bytes) -> dict:
     return {'path': str(path.resolve()), 'size_bytes': len(data), 'sha256': hashlib.sha256(data).hexdigest()}
 
 
-def build_layout(
-    kernel_path: Path,
-    adt_path: Path,
-    output_dir: Path,
-    *,
-    physical_base: int,
-    window_size: int,
-    reserved_ranges: list[dict],
-    command_line: str = '',
-    ramdisk_path: Path | None = None,
-    trustcache_path: Path | None = None,
-    data_seed_path: Path | None = None,
-    video: list[int] | None = None,
-    full_ram: bool = False,
-) -> dict:
-    """Validate everything, then create only kernel-window.bin and manifest.json."""
-    kernel_path, adt_path, output_dir = map(Path, (kernel_path, adt_path, output_dir))
-    if output_dir.exists() or output_dir.is_symlink():
-        raise LayoutError('output already exists; choose a new directory')
-    if type(full_ram) is not bool:
-        raise LayoutError('full_ram must be boolean')
-    valid_window(window_size)
-    window_end = bounded_end(physical_base, window_size, 'physical window')
-    mapped_start, mapped_end = physical_base & -BLOCK, align(window_end, BLOCK)
+@dataclass(frozen=True)
+class LayoutRequest:
+    physical_base: int
+    window_size: int
+    reserved_ranges: list[dict]
+    command_line: str = ''
+    ramdisk_path: Path | None = None
+    trustcache_path: Path | None = None
+    data_seed_path: Path | None = None
+    video: list[int] | None = None
+    full_ram: bool = False
+
+
+class _Window(NamedTuple):
+    end: int
+    mapped_start: int
+    mapped_end: int
+
+
+class _Addresses(NamedTuple):
+    args_pa: int
+    tree_pa: int
+    ramdisk_pa: int
+    ramdisk_size: int
+    trustcache_pa: int
+    data_seed_pa: int
+    data_seed_size: int
+    data_seed_span: int
+    used_end: int
+
+
+class _BootMemory(NamedTuple):
+    phys: int
+    virt: int
+    size: int
+    actual: int
+
+
+def _window(request: LayoutRequest) -> _Window:
+    valid_window(request.window_size)
+    window_end = bounded_end(request.physical_base, request.window_size, 'physical window')
+    mapped_start, mapped_end = request.physical_base & -BLOCK, align(window_end, BLOCK)
     if mapped_end > U64_MAX:
         raise LayoutError('block-rounded window overflows uint64')
+    return _Window(window_end, mapped_start, mapped_end)
+
+
+def _reservations(reserved_ranges: list[dict], window: _Window) -> list[dict]:
     if not isinstance(reserved_ranges, list):
         raise LayoutError('reserved_ranges must be an explicit list')
     reservations = []
@@ -332,55 +383,63 @@ def build_layout(
             raise LayoutError('reservation names must be nonempty and unique')
         seen.add(name)
         end = bounded_end(item['start'], item['size'], 'reservation ' + name)
-        if item['start'] < mapped_end and mapped_start < end:
+        if item['start'] < window.mapped_end and window.mapped_start < end:
             raise LayoutError(f'block-rounded window overlaps reservation {name}')
         reservations.append(dict(item, end=end))
-    image = read_input(kernel_path, 128 << 20)
-    tree_bytes = read_input(adt_path, 16 << 20)
-    kernel, adt = parse_kernel(image), parse_adt(tree_bytes)
-    if physical_base % BLOCK != kernel.base % BLOCK:
+    return reservations
+
+
+def _check_bases(request: LayoutRequest, kernel: Kernel, adt: Adt) -> None:
+    if request.physical_base % BLOCK != kernel.base % BLOCK:
         raise LayoutError('physical and virtual bases must be congruent modulo 2 MiB')
-    if kernel.base > U64_MAX - window_size:
+    if kernel.base > U64_MAX - request.window_size:
         raise LayoutError('virtual window overflows uint64')
-    if adt.window_size != ((4 << 30) if full_ram else window_size):
+    if adt.window_size != ((4 << 30) if request.full_ram else request.window_size):
         raise LayoutError('explicit window differs from ADT darwinboot-memory-size (default 256 MiB)')
+
+
+def _command(command_line: str) -> bytes:
     try:
         command = command_line.encode('ascii')
     except (AttributeError, UnicodeError) as exc:
         raise LayoutError('command line must be ASCII text') from exc
     if len(command) >= 1024 or b'\0' in command:
         raise LayoutError('command line must be at most 1023 bytes with no NUL')
+    return command
+
+
+def _video(video: list[int] | None, window: _Window) -> tuple[list[int], dict | None]:
     video = [0] * 6 if video is None else list(video)
     if len(video) != 6:
         raise LayoutError('video must contain six uint64 fields')
     for field in video:
         uint64(field, 'video field')
-    video_range = None
-    if any(video):
-        base, display, row, width, height, depth = video
-        native = video[:1] + video[2:] == [0xF5A00000, 2880, 720, 1280, 0x320] and display in (0, 1)
-        if (
-            not base
-            or base % 4
-            or (not native and (display != 1 or depth != 32))
-            or not width
-            or not height
-            or row < width * 4
-            or row % 4
-        ):
-            raise LayoutError(
-                'video requires 32bpp graphics or the native rotated profile, with valid width/height/stride'
-            )
-        end = bounded_end(base, row * height, 'framebuffer')
-        if base < mapped_end and mapped_start < end:
-            raise LayoutError('block-rounded window overlaps framebuffer')
-        video_range = {'name': 'framebuffer', 'start': base, 'size': row * height, 'end': end}
-    sources = {'kernel': source_record(kernel_path, image), 'adt': source_record(adt_path, tree_bytes)}
+    if not any(video):
+        return video, None
+    base, display, row, width, height, depth = video
+    native = video[:1] + video[2:] == [0xF5A00000, 2880, 720, 1280, 0x320] and display in (0, 1)
+    if (
+        not base
+        or base % 4
+        or (not native and (display != 1 or depth != 32))
+        or not width
+        or not height
+        or row < width * 4
+        or row % 4
+    ):
+        raise LayoutError('video requires 32bpp graphics or the native rotated profile, with valid width/height/stride')
+    end = bounded_end(base, row * height, 'framebuffer')
+    if base < window.mapped_end and window.mapped_start < end:
+        raise LayoutError('block-rounded window overlaps framebuffer')
+    return video, {'name': 'framebuffer', 'start': base, 'size': row * height, 'end': end}
+
+
+def _sidecars(request: LayoutRequest, adt: Adt, sources: dict) -> dict[str, bytes]:
     sidecars = {}
     for key, given, limit in (
-        ('RAMDisk', ramdisk_path, 256 << 20),
-        ('TrustCache', trustcache_path, 16 << 20),
-        ('NativeDataSeed', data_seed_path, 16 << 20),
+        ('RAMDisk', request.ramdisk_path, 256 << 20),
+        ('TrustCache', request.trustcache_path, 16 << 20),
+        ('NativeDataSeed', request.data_seed_path, 16 << 20),
     ):
         placeholder = ('/chosen/memory-map', key) in adt.properties
         if (given is not None) != placeholder:
@@ -396,9 +455,13 @@ def build_layout(
                 validate_data_seed(data)
             sidecars[key] = data
             sources[key] = source_record(path, data)
-    args_pa = align(physical_base + kernel.end - kernel.base, 0x4000)
+    return sidecars
+
+
+def _addresses(request: LayoutRequest, kernel: Kernel, tree_size: int, sidecars: dict[str, bytes]) -> _Addresses:
+    args_pa = align(request.physical_base + kernel.end - kernel.base, 0x4000)
     tree_pa = args_pa + PAGE
-    ramdisk_pa = align(tree_pa + len(tree_bytes), PAGE)
+    ramdisk_pa = align(tree_pa + tree_size, PAGE)
     ramdisk_size = align(len(sidecars.get('RAMDisk', b'')), PAGE)
     trustcache_pa = ramdisk_pa + ramdisk_size
     trustcache_end = trustcache_pa + len(sidecars.get('TrustCache', b''))
@@ -406,17 +469,35 @@ def build_layout(
     data_seed_size = len(sidecars.get('NativeDataSeed', b''))
     data_seed_span = align(data_seed_size, PAGE)
     used_end = align(data_seed_pa + data_seed_span if data_seed_size else trustcache_end, 0x4000)
-    used = used_end - physical_base
-    if used > window_size - BLOCK:
+    if used_end - request.physical_base > request.window_size - BLOCK:
         raise LayoutError('layout exceeds window or leaves less than 2 MiB slack')
+    return _Addresses(
+        args_pa,
+        tree_pa,
+        ramdisk_pa,
+        ramdisk_size,
+        trustcache_pa,
+        data_seed_pa,
+        data_seed_size,
+        data_seed_span,
+        used_end,
+    )
+
+
+def _patched_tree(tree_bytes: bytes, adt: Adt, at: _Addresses, sidecars: dict[str, bytes]) -> bytearray:
     tree = bytearray(tree_bytes)
     for key, address, size in (
-        ('RAMDisk', ramdisk_pa, ramdisk_size),
-        ('TrustCache', trustcache_pa, len(sidecars.get('TrustCache', b''))),
-        ('NativeDataSeed', data_seed_pa, data_seed_size),
+        ('RAMDisk', at.ramdisk_pa, at.ramdisk_size),
+        ('TrustCache', at.trustcache_pa, len(sidecars.get('TrustCache', b''))),
+        ('NativeDataSeed', at.data_seed_pa, at.data_seed_size),
     ):
         if key in sidecars:
             struct.pack_into('<QQ', tree, adt.properties['/chosen/memory-map', key][0], address, size)
+    return tree
+
+
+def _boot_memory(request: LayoutRequest, kernel: Kernel, adt: Adt) -> _BootMemory:
+    full_ram, physical_base, window_size = request.full_ram, request.physical_base, request.window_size
     boot_phys = 0x80000000 if full_ram else physical_base
     boot_virt = kernel.base - physical_base + boot_phys
     boot_size = (4 << 30) if full_ram else window_size
@@ -425,24 +506,25 @@ def build_layout(
         physical_base != 0xB207C000 or adt.properties.get(('/chosen', 'switch-ram-ledger'), (0, 0))[1] != 1584
     ):
         raise LayoutError('full RAM requires the measured native profile and runtime ledger')
-    boot_args = bytearray(BOOT_ARGS_SIZE)
-    struct.pack_into('<HHI4Q6Q', boot_args, 0, 2, 2, 0, boot_virt, boot_phys, boot_size, used_end, *video)
-    struct.pack_into('<QI', boot_args, 0x60, kernel.base + tree_pa - physical_base, len(tree))
-    boot_args[0x6C : 0x6C + len(command)] = command
-    struct.pack_into('<Q', boot_args, 0x478, boot_actual)
-    payload = bytearray(used)
-    segments = []
-    ranges = []
+    return _BootMemory(boot_phys, boot_virt, boot_size, boot_actual)
 
-    def place(name: str, address: int, data: bytes, memory_size: int) -> None:
-        offset = address - physical_base
-        if offset < 0 or len(data) > memory_size or offset + memory_size > used:
+
+class _Payload:
+    def __init__(self, physical_base: int, used: int) -> None:
+        self.physical_base = physical_base
+        self.used = used
+        self.data = bytearray(used)
+        self.ranges = []
+
+    def place(self, name: str, address: int, data: bytes, memory_size: int) -> None:
+        offset = address - self.physical_base
+        if offset < 0 or len(data) > memory_size or offset + memory_size > self.used:
             raise LayoutError('internal layout bounds failure')
-        for other in ranges:
+        for other in self.ranges:
             if address < other['end'] and other['start'] < address + memory_size:
                 raise LayoutError('internal layout overlap')
-        payload[offset : offset + len(data)] = data
-        ranges.append(
+        self.data[offset : offset + len(data)] = data
+        self.ranges.append(
             {
                 'name': name,
                 'start': address,
@@ -453,74 +535,36 @@ def build_layout(
             }
         )
 
-    for index, segment in enumerate(kernel.segments):
-        pa = physical_base + segment.vmaddr - kernel.base
-        place(
-            f'segment:{index}:{segment.name}',
-            pa,
-            image[segment.fileoff : segment.fileoff + segment.filesize],
-            segment.vmsize,
-        )
-        segments.append(
-            dict(
-                asdict(segment),
-                physical_address=pa,
-                image_offset=pa - physical_base,
-                zero_fill_bytes=segment.vmsize - segment.filesize,
+    def place_kernel(self, kernel: Kernel, image: bytes) -> list[dict]:
+        segments = []
+        for index, segment in enumerate(kernel.segments):
+            pa = self.physical_base + segment.vmaddr - kernel.base
+            self.place(
+                f'segment:{index}:{segment.name}',
+                pa,
+                image[segment.fileoff : segment.fileoff + segment.filesize],
+                segment.vmsize,
             )
-        )
-    place('boot_args', args_pa, boot_args, PAGE)
-    place('adt', tree_pa, tree, len(tree))
-    if 'RAMDisk' in sidecars:
-        place('ramdisk', ramdisk_pa, sidecars['RAMDisk'], ramdisk_size)
-    if 'TrustCache' in sidecars:
-        place('trustcache', trustcache_pa, sidecars['TrustCache'], len(sidecars['TrustCache']))
-    if 'NativeDataSeed' in sidecars:
-        place('native_data_seed', data_seed_pa, sidecars['NativeDataSeed'], data_seed_span)
-    manifest = {
-        'schema_version': 1,
-        'profile': 'native-xnu-host-layout',
-        'native_window_ownership_verified': False,
-        'full_ram': full_ram,
-        'window_role': 'contiguous early image/bootstrap safety envelope' if full_ram else 'managed RAM',
-        'boot_phys_base': boot_phys,
-        'boot_virt_base': boot_virt,
-        'boot_memory_size': boot_size,
-        'boot_memory_actual': boot_actual,
-        'proof_boundary': (
-            'Host layout only; addresses and exclusions do not establish native RAM ownership, launchability or a '
-            'kernel boot.'
-        ),
-        'sources': sources,
-        'phys_base': physical_base,
-        'virt_base': kernel.base,
-        'owned_window_size': window_size,
-        'window_end': window_end,
-        'entry_pa': physical_base + kernel.entry - kernel.base,
-        'entry_va': kernel.entry,
-        'boot_args_pa': args_pa,
-        'boot_args_size': BOOT_ARGS_SIZE,
-        'adt_pa': tree_pa,
-        'adt_va': kernel.base + tree_pa - physical_base,
-        'adt_size': len(tree),
-        'adt_patched_sha256': hashlib.sha256(tree).hexdigest(),
-        'used_extent': used,
-        'used_end': used_end,
-        'top_of_kernel_data': used_end,
-        'unused_window_bytes': window_size - used,
-        'block_rounded_extent': {'start': mapped_start, 'end': mapped_end, 'size': mapped_end - mapped_start},
-        'segments': segments,
-        'ranges': ranges,
-        'reserved_ranges': reservations,
-        'video': video,
-        'framebuffer_range': video_range,
-        'command_line': command_line,
-        'image': {
-            'file': 'kernel-window.bin',
-            'size_bytes': len(payload),
-            'sha256': hashlib.sha256(payload).hexdigest(),
-        },
-    }
+            segments.append(
+                dict(
+                    asdict(segment),
+                    physical_address=pa,
+                    image_offset=pa - self.physical_base,
+                    zero_fill_bytes=segment.vmsize - segment.filesize,
+                )
+            )
+        return segments
+
+    def place_sidecars(self, at: _Addresses, sidecars: dict[str, bytes]) -> None:
+        if 'RAMDisk' in sidecars:
+            self.place('ramdisk', at.ramdisk_pa, sidecars['RAMDisk'], at.ramdisk_size)
+        if 'TrustCache' in sidecars:
+            self.place('trustcache', at.trustcache_pa, sidecars['TrustCache'], len(sidecars['TrustCache']))
+        if 'NativeDataSeed' in sidecars:
+            self.place('native_data_seed', at.data_seed_pa, sidecars['NativeDataSeed'], at.data_seed_span)
+
+
+def _publish(output_dir: Path, payload: bytes, manifest: dict) -> None:
     output_dir.parent.mkdir(parents=True, exist_ok=True)
     created = False
     try:
@@ -532,6 +576,89 @@ def build_layout(
         if created:
             shutil.rmtree(output_dir)
         raise LayoutError(f'could not publish layout: {exc}') from exc
+
+
+def build_layout(kernel_path: Path, adt_path: Path, output_dir: Path, request: LayoutRequest) -> dict:
+    """Validate everything, then create only kernel-window.bin and manifest.json."""
+    kernel_path, adt_path, output_dir = map(Path, (kernel_path, adt_path, output_dir))
+    if output_dir.exists() or output_dir.is_symlink():
+        raise LayoutError('output already exists; choose a new directory')
+    if type(request.full_ram) is not bool:
+        raise LayoutError('full_ram must be boolean')
+    physical_base, window_size = request.physical_base, request.window_size
+    window = _window(request)
+    reservations = _reservations(request.reserved_ranges, window)
+    image = read_input(kernel_path, 128 << 20)
+    tree_bytes = read_input(adt_path, 16 << 20)
+    kernel, adt = parse_kernel(image), parse_adt(tree_bytes)
+    _check_bases(request, kernel, adt)
+    command = _command(request.command_line)
+    video, video_range = _video(request.video, window)
+    sources = {'kernel': source_record(kernel_path, image), 'adt': source_record(adt_path, tree_bytes)}
+    sidecars = _sidecars(request, adt, sources)
+    at = _addresses(request, kernel, len(tree_bytes), sidecars)
+    used = at.used_end - physical_base
+    tree = _patched_tree(tree_bytes, adt, at, sidecars)
+    boot = _boot_memory(request, kernel, adt)
+    boot_args = bytearray(BOOT_ARGS_SIZE)
+    struct.pack_into('<HHI4Q6Q', boot_args, 0, 2, 2, 0, boot.virt, boot.phys, boot.size, at.used_end, *video)
+    struct.pack_into('<QI', boot_args, 0x60, kernel.base + at.tree_pa - physical_base, len(tree))
+    boot_args[0x6C : 0x6C + len(command)] = command
+    struct.pack_into('<Q', boot_args, 0x478, boot.actual)
+    payload = _Payload(physical_base, used)
+    segments = payload.place_kernel(kernel, image)
+    payload.place('boot_args', at.args_pa, boot_args, PAGE)
+    payload.place('adt', at.tree_pa, tree, len(tree))
+    payload.place_sidecars(at, sidecars)
+    manifest = {
+        'schema_version': 1,
+        'profile': 'native-xnu-host-layout',
+        'native_window_ownership_verified': False,
+        'full_ram': request.full_ram,
+        'window_role': 'contiguous early image/bootstrap safety envelope' if request.full_ram else 'managed RAM',
+        'boot_phys_base': boot.phys,
+        'boot_virt_base': boot.virt,
+        'boot_memory_size': boot.size,
+        'boot_memory_actual': boot.actual,
+        'proof_boundary': (
+            'Host layout only; addresses and exclusions do not establish native RAM ownership, launchability or a '
+            'kernel boot.'
+        ),
+        'sources': sources,
+        'phys_base': physical_base,
+        'virt_base': kernel.base,
+        'owned_window_size': window_size,
+        'window_end': window.end,
+        'entry_pa': physical_base + kernel.entry - kernel.base,
+        'entry_va': kernel.entry,
+        'boot_args_pa': at.args_pa,
+        'boot_args_size': BOOT_ARGS_SIZE,
+        'adt_pa': at.tree_pa,
+        'adt_va': kernel.base + at.tree_pa - physical_base,
+        'adt_size': len(tree),
+        'adt_patched_sha256': hashlib.sha256(tree).hexdigest(),
+        'used_extent': used,
+        'used_end': at.used_end,
+        'top_of_kernel_data': at.used_end,
+        'unused_window_bytes': window_size - used,
+        'block_rounded_extent': {
+            'start': window.mapped_start,
+            'end': window.mapped_end,
+            'size': window.mapped_end - window.mapped_start,
+        },
+        'segments': segments,
+        'ranges': payload.ranges,
+        'reserved_ranges': reservations,
+        'video': video,
+        'framebuffer_range': video_range,
+        'command_line': request.command_line,
+        'image': {
+            'file': 'kernel-window.bin',
+            'size_bytes': len(payload.data),
+            'sha256': hashlib.sha256(payload.data).hexdigest(),
+        },
+    }
+    _publish(output_dir, payload.data, manifest)
     return manifest
 
 
@@ -567,14 +694,16 @@ def main() -> int:
             args.kernel,
             args.adt,
             args.output,
-            physical_base=args.physical_base,
-            window_size=args.window_size,
-            reserved_ranges=reservations,
-            ramdisk_path=args.ramdisk,
-            trustcache_path=args.trustcache,
-            data_seed_path=args.data_seed,
-            command_line=args.command_line,
-            video=args.video,
+            LayoutRequest(
+                physical_base=args.physical_base,
+                window_size=args.window_size,
+                reserved_ranges=reservations,
+                ramdisk_path=args.ramdisk,
+                trustcache_path=args.trustcache,
+                data_seed_path=args.data_seed,
+                command_line=args.command_line,
+                video=args.video,
+            ),
         )
     except (LayoutError, OSError, ValueError) as exc:
         print(f'native layout refused: {exc}', file=sys.stderr)
