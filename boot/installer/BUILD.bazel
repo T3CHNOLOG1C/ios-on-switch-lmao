@@ -1,3 +1,4 @@
+load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
 load("//bazel/lint:defs.bzl", "lint_files")
 load(":defs.bzl", "hekate_payload")
 
@@ -59,6 +60,7 @@ filegroup(
 hekate_payload(
     name = "install-ios",
     srcs = [
+        "apfs.c",
         "bootfiles.c",
         "card.c",
         "catalog.c",
@@ -73,4 +75,15 @@ hekate_payload(
     out = "install-ios.bin",
     hdrs = glob(["*.h"]),
     wrap = ["sdmmc_storage_write"],
+)
+
+# The installer's container fit on the Mac: //:image measures the image's minimum partition with it and proves the fit
+# on a clone of the real container; the APFS tests run it against containers macOS made.
+cc_binary(
+    name = "apfs_tool",
+    srcs = [
+        "apfs.c",
+        "apfs.h",
+        "apfs_tool.c",
+    ],
 )

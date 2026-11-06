@@ -1,4 +1,5 @@
 load("@bazel_skylib//rules:run_binary.bzl", "run_binary")
+load("@rules_python//python:py_test.bzl", "py_test")
 load("//bazel/lint:defs.bzl", "lint_files")
 load("//bazel/testing:defs.bzl", "host_library", "host_test")
 
@@ -7,6 +8,7 @@ lint_files()
 host_library(
     name = "installer",
     srcs = [
+        "//boot/installer:apfs.c",
         "//boot/installer:bootfiles.c",
         "//boot/installer:images.c",
         "//boot/installer:manifest.c",
@@ -14,6 +16,7 @@ host_library(
         "//boot/installer:target.c",
     ],
     hdrs = [
+        "//boot/installer:apfs.h",
         "//boot/installer:bootfiles.h",
         "//boot/installer:images.h",
         "//boot/installer:manifest.h",
@@ -56,3 +59,26 @@ host_test(
     data = [":vectors"],
     deps = [":installer"],
 )
+
+host_test(
+    name = "apfs_test",
+    srcs = ["apfs_test.cpp"],
+    deps = [":installer"],
+)
+
+# macOS's kernel and fsck_apfs on containers fitted by //boot/installer:apfs_tool: hdiutil and diskutil, outside the
+# sandbox (bazel test --strategy=TestRunner=local //boot/installer/test:apfs_fit_test).
+py_test(
+    name = "apfs_fit_test",
+    srcs = ["apfs_fit_test.py"],
+    data = ["//boot/installer:apfs_tool"],
+    tags = [
+        "local",
+        "manual",
+    ],
+    deps = [
+        "//tools/install:lib",
+        "@rules_python//python/runfiles",
+    ],
+)
+

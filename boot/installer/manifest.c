@@ -3,6 +3,8 @@
 
 #include <string.h>
 
+#include "apfs.h"
+
 static uint32_t le32(const uint8_t *p)
 {
     return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
@@ -272,20 +274,6 @@ int switch_image_in(const struct switch_image *image, const char *folder)
     return 1;
 }
 
-// APFS's object checksum: Fletcher-64 over 32-bit words, everything after the 8 checksum bytes.
-static uint64_t fletcher64(const uint8_t *block, uint32_t bytes)
-{
-    const uint64_t mod = 0xFFFFFFFFu;
-    uint64_t lo = 0, hi = 0;
-    for (uint32_t at = 8; at < bytes; at += 4) {
-        lo = (lo + le32(block + at)) % mod;
-        hi = (hi + lo) % mod;
-    }
-    uint64_t c1 = mod - (lo + hi) % mod;
-    uint64_t c2 = mod - (lo + c1) % mod;
-    return c2 << 32 | c1;
-}
-
 int switch_image_check_superblock(const struct switch_image *image, const uint8_t *block, uint32_t bytes)
 {
     if (!image || !block || bytes < image->block_size || memcmp(block + 32, "NXSB", 4)) {
@@ -295,5 +283,5 @@ int switch_image_check_superblock(const struct switch_image *image, const uint8_
         memcmp(block + 72, image->container_uuid, 16)) {
         return 1;
     }
-    return fletcher64(block, image->block_size) != le64(block);
+    return switch_apfs_checksum(block, image->block_size) != le64(block);
 }
