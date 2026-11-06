@@ -57,7 +57,8 @@ def seed_data(system, data, owners, log, reseed=False):
 
 def stage_cryptexes(preboot, spec, pins, sources, owners, log, expected=None):
     """`sources`: {"system_cryptex": path, "app_cryptex": path}; `expected`: {member: sha256} for rebuilt images,
-    which the IPSW pins do not describe."""
+    which the IPSW pins do not describe.
+    """
     expected = expected or {}
     for item in spec['cryptexes']:
         member = item['member']
@@ -68,20 +69,20 @@ def stage_cryptexes(preboot, spec, pins, sources, owners, log, expected=None):
             raise host.HostError('{}: the kernel opens {}, the image is {}'.format(member, item['path'], source))
         target = preboot / relative
         if target.is_file() and target.stat().st_size == source.stat().st_size and cards.sha256_file(target) == want:
-            log('preboot: {} unchanged'.format(relative))
+            log(f'preboot: {relative} unchanged')
             continue
         target.parent.mkdir(parents=True, exist_ok=True)
         partial = target.with_name('.partial-' + target.name)
         shutil.copyfile(source, partial)
         if cards.sha256_file(partial) != want:
             partial.unlink()
-            raise host.HostError('{}: copy does not match its sha256'.format(relative))
+            raise host.HostError(f'{relative}: copy does not match its sha256')
         os.replace(partial, target)
         target.chmod(0o644)
         if owners:
             os.chown(target.parent, 0, 0)
             os.chown(target, 0, 0)
-        log('preboot: {} staged ({} bytes)'.format(relative, source.stat().st_size))
+        log(f'preboot: {relative} staged ({source.stat().st_size} bytes)')
     host.run('sync')
 
 
@@ -108,4 +109,4 @@ def merge_tree(source, target, owners, log, what):
             count += 1
         if owners:
             os.chown(destination, 0, 0)
-    log('{}: {} files'.format(what, count))
+    log(f'{what}: {count} files')

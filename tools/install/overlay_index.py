@@ -26,7 +26,7 @@ def check_path(path):
         or '\0' in path
         or len(path.encode()) >= MAX_PATH
     ):
-        raise OverlayIndexError('{!r} is not a path the overlay index takes'.format(path))
+        raise OverlayIndexError(f'{path!r} is not a path the overlay index takes')
 
 
 def encode(paths):
@@ -40,9 +40,7 @@ def encode(paths):
         offsets.append(len(strings))
         strings += p + b'\0'
     return (
-        HEADER.pack(MAGIC, VERSION, len(encoded), len(strings))
-        + struct.pack('<{}I'.format(len(offsets)), *offsets)
-        + strings
+        HEADER.pack(MAGIC, VERSION, len(encoded), len(strings)) + struct.pack(f'<{len(offsets)}I', *offsets) + strings
     )
 
 
@@ -51,8 +49,8 @@ def decode(raw):
         raise OverlayIndexError('short overlay index')
     magic, version, count, size = HEADER.unpack_from(raw)
     if magic != MAGIC or version != VERSION or len(raw) != HEADER.size + 4 * count + size:
-        raise OverlayIndexError('not a version {} overlay index'.format(VERSION))
-    offsets = struct.unpack_from('<{}I'.format(count), raw, HEADER.size)
+        raise OverlayIndexError(f'not a version {VERSION} overlay index')
+    offsets = struct.unpack_from(f'<{count}I', raw, HEADER.size)
     strings = raw[HEADER.size + 4 * count :]
     paths, at = [], 0
     for offset in offsets:

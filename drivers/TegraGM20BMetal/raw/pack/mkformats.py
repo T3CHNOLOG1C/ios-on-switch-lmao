@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """mkformats (r8-rawca): NVK's texture header for each format of a PROBE_FORMATS run (probe.mm), as the raw path writes it for a
 pitch-linear 2D texture: prints "<MTLPixelFormat> <8 header words with the address bits cleared>" per format NVK took.
-usage: mkformats.py <probe.out> <probe.log>"""
+usage: mkformats.py <probe.out> <probe.log>
+"""
 
-import re, sys
+import sys
 
 out = [l.split() for l in open(sys.argv[1]) if l.startswith('FORMAT ') and 'refused' not in l]
 subs, cur = [], []

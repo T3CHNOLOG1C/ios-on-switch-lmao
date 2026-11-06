@@ -11,8 +11,7 @@ from unittest import mock
 
 from python.runfiles import runfiles
 
-from tools.install import card as cards
-from tools.install import gpt
+from tools.install import card as cards, gpt
 
 SPEC = {'partition_name': 'iOS'}
 

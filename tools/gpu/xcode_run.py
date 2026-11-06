@@ -4,7 +4,8 @@
 Runs an Xcode tool (`clang`, `clang++`, `strip`, `dsymutil`, `codesign`, ...) from the pinned Xcode named by
 @xcode//:xcode.env, with DEVELOPER_DIR set, `@IPHONEOS_SDK@`/`@MACOSX_SDK@`/`@PWD@`/`@FILE:<path>@` replaced in the arguments, and
 ZERO_AR_DATE=1 (no object/archive timestamps in a link). A bare tool name is looked up in the Xcode toolchain, then
-/usr/bin (codesign lives there)."""
+/usr/bin (codesign lives there).
+"""
 
 import os
 import subprocess

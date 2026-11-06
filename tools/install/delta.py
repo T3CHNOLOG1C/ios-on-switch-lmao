@@ -37,7 +37,8 @@ def entries_under(entries, prefix):
 
 def apply(root, entries, log, what, consume=False):
     """Rewrite each entry's file below `root`. A file already holding sha256_out is left alone (a resumed run).
-    `consume` deletes each replacement once written, so a delta and its volume never both hold the bytes."""
+    `consume` deletes each replacement once written, so a delta and its volume never both hold the bytes.
+    """
     changed = 0
     for e in entries:
         target = Path(root) / e['path'].lstrip('/')
@@ -63,5 +64,5 @@ def apply(root, entries, log, what, consume=False):
         if consume:
             e['source'].unlink()
         changed += 1
-    log('{}: {} of {} files translated'.format(what, changed, len(entries)))
+    log(f'{what}: {changed} of {len(entries)} files translated')
     return changed

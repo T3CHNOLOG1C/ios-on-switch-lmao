@@ -1,6 +1,7 @@
 """im4p.py payload IN OUT [--expect-type T] [--lzfse] [--thin-arm64] [--sha256 H]: an IM4P's payload, optionally LZFSE-
 decoded (macOS's compression_tool, a declared host tool) and reduced to its arm64 slice, as vendor/unixnu's ipsw.py
-kernelcache() made kernelcache.decompressed; checked against a pin when one is given."""
+kernelcache() made kernelcache.decompressed; checked against a pin when one is given.
+"""
 
 import argparse
 import hashlib
@@ -43,7 +44,7 @@ def main():
     fields = im4p_fields(Path(args.source).read_bytes())
     kind = fields[1][1].decode()
     if args.expect_type and kind != args.expect_type:
-        sys.exit('IM4P type {} is not {}'.format(kind, args.expect_type))
+        sys.exit(f'IM4P type {kind} is not {args.expect_type}')
     payload = next(value for tag, value in fields[1:] if tag == 0x04)
     if args.lzfse:
         if payload[:4] not in (b'bvx2', b'bvx1', b'bvxn', b'bvx-'):
@@ -67,9 +68,7 @@ def main():
         else:
             sys.exit('no arm64 slice')
     if args.sha256 and hashlib.sha256(payload).hexdigest() != args.sha256:
-        sys.exit(
-            '{}: sha256 {} is not the pinned {}'.format(args.output, hashlib.sha256(payload).hexdigest(), args.sha256)
-        )
+        sys.exit(f'{args.output}: sha256 {hashlib.sha256(payload).hexdigest()} is not the pinned {args.sha256}')
     Path(args.output).write_bytes(payload)
 
 

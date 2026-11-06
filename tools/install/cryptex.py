@@ -23,13 +23,14 @@ def _attach(image, log):
     if len(volumes) != 1:
         for d in disks:
             host.run('hdiutil', 'detach', d, log=log, check=False)
-        raise host.HostError('{}: expected one APFS volume, got {}'.format(image, entities))
+        raise host.HostError(f'{image}: expected one APFS volume, got {entities}')
     return volumes[0], disks[0]
 
 
 def rebuild(source, translate, work_dir, log, what):
     """`source` cloned into `work_dir` (APFS clones share blocks until written), its delta applied and sealed again.
-    `translate(mount point)` makes the delta from the mounted clone and returns its entries."""
+    `translate(mount point)` makes the delta from the mounted clone and returns its entries.
+    """
     image = Path(work_dir) / Path(source).name
     if image.exists():
         image.unlink()
@@ -42,5 +43,5 @@ def rebuild(source, translate, work_dir, log, what):
             host.run(SEALER, str(root), log=log)
     finally:
         host.run('hdiutil', 'detach', whole, log=log, check=False)
-    log('{}: sealed again as {}'.format(what, image))
+    log(f'{what}: sealed again as {image}')
     return image

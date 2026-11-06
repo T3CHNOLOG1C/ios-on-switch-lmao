@@ -96,11 +96,12 @@ def pack_window(payload: bytes) -> tuple[list[tuple[int, int]], bytes]:
 
 def lz4_frame_blocks(frame: bytes, length: int) -> list[tuple[int, bool, bytes]]:
     """An LZ4 frame (lz4.org frame format) of `length` bytes as its blocks (decoded length, stored, block bytes). Only
-    what the loader decodes: independent blocks without checksums or dictionary."""
+    what the loader decodes: independent blocks without checksums or dictionary.
+    """
     if frame[:4] != LZ4_MAGIC or len(frame) < 7:
         raise ValueError('lz4: not an LZ4 frame')
     flags, descriptor = frame[4], frame[5]
-    if flags >> 6 != 1 or not flags >> 5 & 1 or flags >> 4 & 1 or flags & 1 or not 4 <= descriptor >> 4 & 7:
+    if flags >> 6 != 1 or not flags >> 5 & 1 or flags >> 4 & 1 or flags & 1 or not descriptor >> 4 & 7 >= 4:
         raise ValueError(f'lz4: unsupported frame flags {flags:#x}/{descriptor:#x}')
     block_max = 1 << (8 + 2 * (descriptor >> 4 & 7))
     at, left, blocks = 6 + (8 if flags >> 3 & 1 else 0) + 1, length, []
@@ -131,7 +132,8 @@ def compress_blocks(blocks: list[bytes], lz4: str | None = None) -> list[tuple[b
     """Each block LZ4-compressed on its own (lz4 -12, in parallel) as (stored, block bytes), checked by decoding it.
 
     The extents are independent-block frames, so a block's bytes are the same whether one lz4 compresses the whole
-    extent or this block alone: each is its own compression, with nothing carried over from the block before."""
+    extent or this block alone: each is its own compression, with nothing carried over from the block before.
+    """
     lz4 = lz4 or shutil.which('lz4')
     if not lz4:
         raise ValueError('missing build tool: lz4')
@@ -153,7 +155,8 @@ def compress_blocks(blocks: list[bytes], lz4: str | None = None) -> list[tuple[b
 
 def block_table(blocks: list[tuple[int, int]], compressed: list[tuple[bool, bytes]]) -> tuple[list, bytes]:
     """The loader's block table (window offset, length, offset in the stream, stream bytes | 1 << 63 if stored) and the
-    blocks back to back."""
+    blocks back to back.
+    """
     table, stream = [], bytearray()
     for (at, length), (stored, body) in zip(blocks, compressed, strict=True):
         if (at | length) % PACK_PAGE:
@@ -167,7 +170,8 @@ def compress_window(
     payload: bytes, runs: list[tuple[int, int]], lz4: str | None = None
 ) -> tuple[list[tuple[int, int, int, int]], bytes]:
     """The window's nonzero extents, each LZ4-compressed (lz4 -12, independent blocks of up to 1 MiB): the loader's block
-    table and the blocks back to back, checked by laying the blocks back into an empty window."""
+    table and the blocks back to back, checked by laying the blocks back into an empty window.
+    """
     blocks = lz4_blocks(runs)
     table, stream = block_table(blocks, compress_blocks([payload[at : at + length] for at, length in blocks], lz4))
     expanded = bytearray(len(payload))
@@ -210,7 +214,8 @@ def stage_pages(staged: bytes, stream_bytes: int) -> tuple[bytes, bytes]:
 
 def stage_into_bl33(bl33: bytes, staged: bytes, stream_bytes: int, slots: list | tuple = ()) -> bytes:
     """bl33.bin with the staged kernel window after U-Boot (boot/loader/stage.h) and each (address, capacity, bytes) of
-    slots in U-Boot's padding (loader_abi SCRIPT_SLOT and the others), checked by check_stage."""
+    slots in U-Boot's padding (loader_abi SCRIPT_SLOT and the others), checked by check_stage.
+    """
     if len(staged) % PACK_PAGE or not stream_bytes <= len(staged) < stream_bytes + PACK_PAGE:
         raise ValueError('staged window must be its stream padded to 4 KiB')
     header, trailer = stage_pages(staged, stream_bytes)
@@ -230,7 +235,8 @@ def check_stage(image: bytes, bl33: bytes, staged: bytes, stream_bytes: int, slo
     """The composed bl33.bin as hekate puts it at 0xAA000000: U-Boot untouched and wholly below the first slot,
     including its pre-relocation BSS (U-Boot's arm64 start.S header: _end_ofs at 0x10, _bss_end_ofs at 0x20); each slot
     holding its bytes, apart from the others and the rest zero; header, window and trailer where the boot script and the
-    loader look; everything below hekate's ramoops (0xB0000000)."""
+    loader look; everything below hekate's ramoops (0xB0000000).
+    """
     header_at = STAGE_HEADER - BL33_BASE
     end_ofs, bss_end_ofs = struct.unpack_from('<Q', bl33, 0x10)[0], struct.unpack_from('<Q', bl33, 0x20)[0]
     floor = min([address - BL33_BASE for address, _, _ in slots] + [header_at])
@@ -266,7 +272,8 @@ def _require(condition, message):
 
 def window_checks(m: dict, payload: bytes, adt: bytes) -> dict:
     """The checks the cacheable-copy root-boot loader needs of a layout (`m`, its manifest; `payload`, its image; `adt`,
-    the ADT it was laid out with), and the loader's constants but for the staged window's (None until it is made)."""
+    the ADT it was laid out with), and the loader's constants but for the staged window's (None until it is made).
+    """
     _require(m['schema_version'] == 1 and m['profile'] == 'native-xnu-host-layout', 'unsupported host layout')
     _require(
         m.get('native_window_ownership_verified') is False,
@@ -309,7 +316,7 @@ def window_checks(m: dict, payload: bytes, adt: bytes) -> dict:
         and not m['boot_args_pa'] % 0x4000
         and m['boot_args_size'] == 0x480
         and m['adt_pa'] == m['boot_args_pa'] + 0x1000
-        and 0 < m['adt_size']
+        and m['adt_size'] > 0
         and m['adt_pa'] + m['adt_size'] <= m['used_end']
         and m['boot_args_pa'] + 0x480 <= m['used_end']
         and not m['entry_pa'] % 4

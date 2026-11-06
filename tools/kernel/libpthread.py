@@ -15,8 +15,8 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import common  # noqa: E402
-from kernel_names import archive_names  # noqa: E402
+import common
+from kernel_names import archive_names
 
 
 def check(path):
@@ -48,12 +48,12 @@ def main():
     root = args.path_root.rstrip('/')
     tree = root + '/out/native-a57/root-v1/tree'
     maps = [
-        '-ffile-prefix-map={}={}/.cache/libpthread-work'.format(source, tree),
-        '-ffile-prefix-map={}/{}={}'.format(here, args.bin_dir, root),
-        '-ffile-prefix-map={}={}'.format(here, root),
+        f'-ffile-prefix-map={source}={tree}/.cache/libpthread-work',
+        f'-ffile-prefix-map={here}/{args.bin_dir}={root}',
+        f'-ffile-prefix-map={here}={root}',
         # make's osfmk object directory, where these were compiled when the kernel came from make.
-        '-fdebug-compilation-dir={}/{}/out/native-a57/root-v1/tree/build/xnu/ios-obj/'
-        'DEVELOPMENT_ARM64_BCM2837/osfmk/DEVELOPMENT'.format(root, args.bin_dir),
+        f'-fdebug-compilation-dir={root}/{args.bin_dir}/out/native-a57/root-v1/tree/build/xnu/ios-obj/'
+        'DEVELOPMENT_ARM64_BCM2837/osfmk/DEVELOPMENT',
     ]
 
     def compile_one(path, destination, namespace=None):
@@ -118,7 +118,7 @@ def main():
         collisions = definitions & names
         if collisions:
             namespace = out / 'namespace.h'
-            namespace.write_text(''.join('#define {} pthread519_{}\n'.format(n[1:], n[1:]) for n in sorted(collisions)))
+            namespace.write_text(''.join(f'#define {n[1:]} pthread519_{n[1:]}\n' for n in sorted(collisions)))
             for s, o in zip(sources, objects):
                 compile_one(s, o, namespace)
         definitions = set().union(*(archive_names(o, '-U', env) for o in objects))
@@ -127,7 +127,7 @@ def main():
         if not {'_pthread_kern', '_current_uthread'} <= collisions:
             sys.exit('Missing expected pthread/XNU static symbol isolation')
         if missing:
-            sys.exit('Unavailable real kernel imports: {}'.format(missing))
+            sys.exit(f'Unavailable real kernel imports: {missing}')
         bootstrap = out / 'source_pthread_bootstrap.o'
         bootstrap.write_bytes(Path(args.bootstrap).read_bytes())
         check(bootstrap)

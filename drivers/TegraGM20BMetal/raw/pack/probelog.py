@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 """Read capture/probe.out + probe.log (nvdec NVDEC_PROBE records) into per-probe dicts."""
 
-import re
-
 
 def fnv(b, h=0xCBF29CE484222325):
     for x in b:

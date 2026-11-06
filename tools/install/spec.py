@@ -19,9 +19,9 @@ from pathlib import Path
 
 
 def _define(text, name, path):
-    found = re.search(r'^#define\s+' + name + r'\s+(.+?)\s*(?://.*|/\*.*)?$', text, re.M)
+    found = re.search(r'^#define\s+' + name + r'\s+(.+?)\s*(?://.*|/\*.*)?$', text, re.MULTILINE)
     if not found:
-        raise SystemExit('{}: no #define {}'.format(path, name))
+        raise SystemExit(f'{path}: no #define {name}')
     return found.group(1).strip()
 
 
@@ -29,7 +29,7 @@ def _uuid(value, what):
     try:
         return str(uuid.UUID(value.strip('"'))).upper()
     except ValueError:
-        raise SystemExit('{} is not a UUID: {}'.format(what, value))
+        raise SystemExit(f'{what} is not a UUID: {value}')
 
 
 def parse(raw_mount, cryptex_h, cryptex_cpp, block_cpp):
@@ -43,22 +43,22 @@ def parse(raw_mount, cryptex_h, cryptex_cpp, block_cpp):
     app_cryptex = _uuid(_define(h_text, 'SWITCH_APP_CRYPTEX_UUID', cryptex_h), 'SWITCH_APP_CRYPTEX_UUID')
     paths = re.search(r'paths\[SWITCH_CRYPTEX_COUNT\]\s*=\s*\{([^}]*)\}', cpp_text)
     if not paths:
-        raise SystemExit('{}: no cryptex paths table'.format(cryptex_cpp))
+        raise SystemExit(f'{cryptex_cpp}: no cryptex paths table')
     images = re.findall(r'"(/private/preboot/[^"]+)"', paths.group(1))
     if len(images) != 2:
-        raise SystemExit('{}: expected two cryptex paths, found {}'.format(cryptex_cpp, images))
+        raise SystemExit(f'{cryptex_cpp}: expected two cryptex paths, found {images}')
     root = re.search(r'kRootUUID\[\]\s*=\s*"([0-9A-Fa-f-]{36})"', block_text)
     if not root:
-        raise SystemExit('{}: no kRootUUID'.format(block_cpp))
+        raise SystemExit(f'{block_cpp}: no kRootUUID')
     apfs_type = re.search(r'kApfsType\[16\]\s*=\s*\{([^}]*)\}', block_text)
     if not apfs_type:
-        raise SystemExit('{}: no kApfsType'.format(block_cpp))
+        raise SystemExit(f'{block_cpp}: no kApfsType')
     type_bytes = bytes(int(b, 16) for b in re.findall(r'0x([0-9a-fA-F]{2})', apfs_type.group(1)))
     if len(type_bytes) != 16:
-        raise SystemExit('{}: kApfsType is not 16 bytes'.format(block_cpp))
+        raise SystemExit(f'{block_cpp}: kApfsType is not 16 bytes')
     name = re.search(r'kPartitionName\[\]\s*=\s*"([^"]+)"', block_text)
     if not name:
-        raise SystemExit('{}: no kPartitionName'.format(block_cpp))
+        raise SystemExit(f'{block_cpp}: no kPartitionName')
     return {
         'partition_type': str(uuid.UUID(bytes_le=type_bytes)).upper(),
         'partition_name': name.group(1),

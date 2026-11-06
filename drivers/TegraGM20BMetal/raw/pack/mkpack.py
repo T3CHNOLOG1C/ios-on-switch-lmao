@@ -18,10 +18,15 @@ usage: mkpack.py <probe.out> <probe.log> <programs.bin> <out dir> [<probe16 dir 
 writes <out>/pack.bin (runtime/raw_pack.h layout), <out>/pack.json, <out>/programs.txt (decoder tables), and prints a report.
 """
 
-import hashlib, json, os, re, struct, sys
+import json
+import os
+import re
+import struct
+import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import probelog, layouts
+import layouts
+import probelog
 
 MAGIC = b'GM20BPK1'
 VERSION = 2  # 2: the header's stack key (rawpack.py --stack) after the section table

@@ -33,7 +33,7 @@ class Roles:
         """`roles`: {role: {"driver": path, "tool": path, "trustcaches": [path]}}."""
         unknown = set(roles) - set(ORDER)
         if unknown:
-            raise host.HostError('unknown pretranslate roles: {}'.format(sorted(unknown)))
+            raise host.HostError(f'unknown pretranslate roles: {sorted(unknown)}')
         self.roles, self.scratch, self.log = roles, Path(scratch), log
         self.kept = self.scratch / 'pretranslated'
 
@@ -63,14 +63,14 @@ class Roles:
         self.log.quiet(result.stdout + result.stderr)
         if result.returncode:
             tail = (result.stderr or result.stdout).strip().splitlines()[-1:] or ['?']
-            raise host.HostError('translating {} failed: {}'.format(role, tail[0]))
+            raise host.HostError(f'translating {role} failed: {tail[0]}')
         self._keep(role)
-        entries = delta.load(self.out(role) / '{}.manifest.json'.format(role))
-        self.log('{}: {} files to translate'.format(role, len(entries)))
+        entries = delta.load(self.out(role) / f'{role}.manifest.json')
+        self.log(f'{role}: {len(entries)} files to translate')
         return entries
 
     def _pairs(self, role):
-        return self.kept / '{}.cdhash-pairs'.format(role)
+        return self.kept / f'{role}.cdhash-pairs'
 
     def _keep(self, role):
         self.kept.mkdir(parents=True, exist_ok=True)
@@ -89,7 +89,8 @@ class Roles:
 
     def check_pins(self, pins):
         """The kept files against the ones the boot package was built with ({name: sha256}): a translation that made
-        other trust modules or another cache list would not run on the kernel."""
+        other trust modules or another cache list would not run on the kernel.
+        """
         kept = {p.name: p for p in self.artifacts()}
         wrong = [
             name for name, digest in sorted(pins.items()) if name not in kept or cards.sha256_file(kept[name]) != digest
@@ -98,12 +99,13 @@ class Roles:
             raise host.HostError(
                 'this translation differs from the pinned one the boot package carries: {}'.format(', '.join(wrong))
             )
-        self.log('pretranslate: {} files match the pins'.format(len(pins)))
+        self.log(f'pretranslate: {len(pins)} files match the pins')
 
     def overlay_system(self, data, system, entries, owners):
         """The System volume's translated files onto Data (OVERLAY), each with its System file's owner, mode and
         flags, then their manifest and the kernel's index made from it; the manifest is also kept for the boot
-        package. Returns the manifest."""
+        package. Returns the manifest.
+        """
         root = Path(data) / OVERLAY
         files = []
         for e in entries:
@@ -125,7 +127,7 @@ class Roles:
             files.append({
                 'path': e['path'],
                 'trust': True,
-                'mode': '{:04o}'.format(original.st_mode & 0o7777),
+                'mode': f'{original.st_mode & 0o7777:04o}',
                 'sha256': e['sha256_out'],
                 'cdhash': e.get('cdhash', []),
             })  # fmt: skip
@@ -140,5 +142,5 @@ class Roles:
             for directory in [root, *(p for p in root.rglob('*') if p.is_dir())]:
                 os.chown(directory, 0, 0)
                 directory.chmod(0o755)
-        self.log('System: {} translated files on Data under {}'.format(len(files), OVERLAY))
+        self.log(f'System: {len(files)} translated files on Data under {OVERLAY}')
         return manifest

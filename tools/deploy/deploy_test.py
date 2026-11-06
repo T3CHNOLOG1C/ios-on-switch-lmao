@@ -6,11 +6,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tools.deploy import joycon_pairing
-from tools.deploy import poster_snapshots
-from tools.deploy import pull_logs
-from tools.install import card as cards
-from tools.install import renamed
+from tools.deploy import joycon_pairing, poster_snapshots, pull_logs
+from tools.install import card as cards, renamed
 
 
 class Log:
@@ -83,7 +80,7 @@ class SyncTest(unittest.TestCase):
     def test_a_copy_of_the_entry_under_another_name_is_replaced_in_place(self):
         old = (
             '[Old]\nl4t=1\nboot_prefixes=/switchroot/old-entry/\nid=OLD\nbootwait=0\n'
-            + 'scan_dev_for_extlinux=setexpr.l ios_uboot *0x60005010\nbootcmd_mmc0=true\n'
+            'scan_dev_for_extlinux=setexpr.l ios_uboot *0x60005010\nbootcmd_mmc0=true\n'
         )
         for relative, data in (
             ('bootloader/ini/old-entry.ini', old),

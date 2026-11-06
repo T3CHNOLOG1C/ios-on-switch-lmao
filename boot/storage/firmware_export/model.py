@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Run exact exporter bytes in a Cortex-A57 model with synthetic firmware RAM."""
 
-from pathlib import Path
 import argparse
 import hashlib
 import importlib.util
@@ -12,6 +11,7 @@ import subprocess
 import tempfile
 import time
 import zlib
+from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]

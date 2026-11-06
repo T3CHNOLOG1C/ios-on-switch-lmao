@@ -30,8 +30,15 @@ from pathlib import Path
 
 if __package__ in (None, ''):
     sys.path.insert(0, str(Path(os.path.abspath(__file__)).parents[2]))
-from tools.install import apfs, card as cards, compose as composer, gpt, host, populate  # noqa: E402
-from tools.install import target as targets  # noqa: E402
+from tools.install import (
+    apfs,
+    card as cards,
+    compose as composer,
+    gpt,
+    host,
+    populate,
+    target as targets,
+)
 
 COPY_CHUNK = composer.COPY_CHUNK
 SEEK_HOLE, SEEK_DATA = getattr(os, 'SEEK_HOLE', 3), getattr(os, 'SEEK_DATA', 4)
@@ -39,7 +46,7 @@ SEEK_HOLE, SEEK_DATA = getattr(os, 'SEEK_HOLE', 3), getattr(os, 'SEEK_DATA', 4)
 
 def default_log():
     stamp = time.strftime('%Y%m%d-%H%M%S')
-    return Path.home() / 'Library/Logs/switch-ios-install/install-{}.log'.format(stamp)
+    return Path.home() / f'Library/Logs/switch-ios-install/install-{stamp}.log'
 
 
 def resolve_inputs(args):
@@ -97,8 +104,8 @@ class Installer:
         if target.type == gpt.APFS:
             if not self.ours(found):
                 raise cards.Refused(
-                    '{} is APFS but not an ios-on-switch-lmao container (volumes {}); rerun with --reinstall-container to '
-                    'replace it'.format(target.describe(), found)
+                    f'{target.describe()} is APFS but not an ios-on-switch-lmao container (volumes {found}); rerun with --reinstall-container to '
+                    'replace it'
                 )
             if not cards.volumes(self.card):
                 return 'reprobe'  # written, retyped, but macOS has not attached it yet
@@ -121,8 +128,8 @@ class Installer:
                 'verify',
             ],
             'compose': [
-                'compose the container in {} (about {} GB free needed)'.format(self.scratch_dir(), 7),
-                'write it to {} ({})'.format(self.card.slice(self.card.target), self.card.target.describe()),
+                f'compose the container in {self.scratch_dir()} (about {7} GB free needed)',
+                f'write it to {self.card.slice(self.card.target)} ({self.card.target.describe()})',
                 'retype the GPT entry to APFS, name iOS',
                 'reprobe',
                 'populate',
@@ -149,7 +156,8 @@ class Installer:
     def write(self, image, part_offset, os_bytes):
         """The scratch partition's written regions onto the target partition. [0, os_bytes) is written whole (the
         OS container, checkpoint areas included, so nothing of an earlier container on the card survives there);
-        beyond it only the extents the scratch file has data in (blocks the grown container wrote)."""
+        beyond it only the extents the scratch file has data in (blocks the grown container wrote).
+        """
         target_offset = self.card.target.first * gpt.SECTOR
         size = self.card.target.bytes
         src = os.open(image, os.O_RDWR)
@@ -176,7 +184,7 @@ class Installer:
                     n = min(COPY_CHUNK, min(end, size) - at)
                     chunk = os.pread(src, n, part_offset + at)
                     if len(chunk) != n or os.pwrite(dst, chunk, target_offset + at) != n:
-                        raise host.HostError('copy to {} failed at {}'.format(self.card.raw, at))
+                        raise host.HostError(f'copy to {self.card.raw} failed at {at}')
                     composer.punch(src, part_offset + at, n)  # the scratch shrinks as the card fills
                     at += n
                     written += n
@@ -184,9 +192,7 @@ class Installer:
         finally:
             os.close(src)
             os.close(dst)
-        self.log(
-            'write: {} bytes in {} extents onto {}'.format(written, len(extents), self.card.slice(self.card.target))
-        )
+        self.log(f'write: {written} bytes in {len(extents)} extents onto {self.card.slice(self.card.target)}')
 
     def retype(self, kind=gpt.APFS, name='iOS'):
         fat = self.card.slice(self.card.fat)
@@ -207,9 +213,7 @@ class Installer:
         if before[: gpt.SECTOR] != after[: gpt.SECTOR]:
             raise host.HostError('the MBR changed (it must not)')
         self.log(
-            'retype: {} -> {} {!r} ({} sectors rewritten)'.format(
-                self.card.target.describe(), gpt.NAMES[kind], name, len(writes)
-            )
+            f'retype: {self.card.target.describe()} -> {gpt.NAMES[kind]} {name!r} ({len(writes)} sectors rewritten)'
         )
 
     def reprobe(self, expect_container=True):
@@ -243,7 +247,7 @@ class Installer:
         vols = cards.volumes(self.card)
         missing = [k for k, u in self.want.items() if u not in vols]
         if missing:
-            raise host.HostError('volumes {} not attached (have {})'.format(missing, sorted(vols)))
+            raise host.HostError(f'volumes {missing} not attached (have {sorted(vols)})')
         dev = {k: vols[u]['DeviceIdentifier'] for k, u in self.want.items()}
         owners = os.geteuid() == 0
         if not owners and not self.args.unprivileged_test:
@@ -285,7 +289,7 @@ class Installer:
         changed = [i for i in range(len(after)) if after[i] != snapshot[i] and i not in allowed]
         if changed:
             raise host.HostError(
-                'verify: partition-table bytes changed outside the target entry: offsets {}'.format(changed[:16])
+                f'verify: partition-table bytes changed outside the target entry: offsets {changed[:16]}'
             )
         self.log(
             'verify: partition table: {} (MBR untouched)'.format(
@@ -294,15 +298,15 @@ class Installer:
         )
         apfs_entries = [e for e in self.card.table.used if e.type == gpt.APFS]
         if len(apfs_entries) != 1 or apfs_entries[0].index != self.card.target.index:
-            raise host.HostError('verify: APFS entries {}'.format([e.describe() for e in apfs_entries]))
+            raise host.HostError(f'verify: APFS entries {[e.describe() for e in apfs_entries]}')
         vols = cards.volumes(self.card)
         for key, want in self.want.items():
             if want not in vols:
-                raise host.HostError('verify: volume {} {} missing'.format(key, want))
+                raise host.HostError(f'verify: volume {key} {want} missing')
         composer.fsck(self.card.slice(self.card.target), 'card', self.log)
         self.log(
             'verify: one APFS partition ({} bytes), volumes {}'.format(
-                self.card.target.bytes, ', '.join('{} {}'.format(k, v) for k, v in self.want.items())
+                self.card.target.bytes, ', '.join(f'{k} {v}' for k, v in self.want.items())
             )
         )
 
@@ -315,9 +319,7 @@ class Installer:
             card = cards.resolve(self.args.disk)
             fat, target = cards.check_layout_unprivileged(card, self.spec)
             self.log(
-                'card: {} ({} bytes); FAT {}, target {} {!r} ({} bytes, {})'.format(
-                    card.disk, card.size, fat.identifier, target.identifier, target.name, target.size, target.content
-                )
+                f'card: {card.disk} ({card.size} bytes); FAT {fat.identifier}, target {target.identifier} {target.name!r} ({target.size} bytes, {target.content})'
             )
             self.log(
                 "dry run: the layout passes diskutil's checks. Reading the partition table itself (hybrid MBR, "
@@ -355,9 +357,7 @@ class Installer:
         if state == 'compose':
             if host.container_on(self.card.slice(self.card.target)):
                 raise host.HostError(
-                    'macOS has a container attached on {}: refusing to write under it'.format(
-                        self.card.slice(self.card.target)
-                    )
+                    f'macOS has a container attached on {self.card.slice(self.card.target)}: refusing to write under it'
                 )
             image, offset, os_bytes = self.compose()
             try:
@@ -386,11 +386,11 @@ class Installer:
 def confirm(args, card_disk):
     if args.confirm:
         if args.confirm != card_disk:
-            raise cards.Refused('--confirm={} does not name the target {}'.format(args.confirm, card_disk))
+            raise cards.Refused(f'--confirm={args.confirm} does not name the target {card_disk}')
         return
     if not sys.stdin.isatty():
-        raise cards.Refused('type-to-confirm needs a terminal (or pass --confirm={})'.format(card_disk))
-    answer = input("This rewrites {}'s userdata partition. Type {} to continue: ".format(card_disk, card_disk))
+        raise cards.Refused(f'type-to-confirm needs a terminal (or pass --confirm={card_disk})')
+    answer = input(f"This rewrites {card_disk}'s userdata partition. Type {card_disk} to continue: ")
     if answer.strip() != card_disk:
         raise cards.Refused('not confirmed')
     args.confirm = card_disk
@@ -405,8 +405,8 @@ def reexec_as_root(args, argv):
         flag = '--' + name.replace('_', '-')
         passthrough = [a for a in passthrough if not a.startswith(flag + '=')]
         if value:
-            passthrough.append('{}={}'.format(flag, value))
-    command += passthrough + ['--confirm={}'.format(args.confirm)]
+            passthrough.append(f'{flag}={value}')
+    command += passthrough + [f'--confirm={args.confirm}']
     print('running under sudo:', ' '.join(command), flush=True)
     os.execvp('sudo', command)
 

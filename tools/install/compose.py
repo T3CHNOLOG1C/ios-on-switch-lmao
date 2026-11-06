@@ -37,7 +37,7 @@ def attach_raw(image, log, mount=False):
     out = host.plist('hdiutil', *args, '-imagekey', 'diskimage-class=CRawDiskImage', str(image), log=log)
     disk = host.whole_disk_of(out['system-entities'])
     if not disk:
-        raise host.HostError('hdiutil attach gave no disk for {}'.format(image))
+        raise host.HostError(f'hdiutil attach gave no disk for {image}')
     return disk
 
 
@@ -46,8 +46,8 @@ def fsck(store, what, log):
     log.quiet(result.stdout + result.stderr)
     tail = (result.stdout + result.stderr).strip().splitlines()[-1:] or ['?']
     if result.returncode or 'appears to be OK' not in tail[0]:
-        raise host.HostError('fsck_apfs -n {} ({}): {}'.format(store, what, tail[0]))
-    log('fsck_apfs {} ({}): {}'.format(store, what, tail[0]))
+        raise host.HostError(f'fsck_apfs -n {store} ({what}): {tail[0]}')
+    log(f'fsck_apfs {store} ({what}): {tail[0]}')
 
 
 def _attach_os(os_dmg, log):
@@ -63,7 +63,7 @@ def _attach_os(os_dmg, log):
         for d in (e.get('dev-entry', '') for e in out['system-entities']):
             if d.startswith('/dev/disk') and 's' not in d[len('/dev/disk') :]:
                 subprocess.run([host.TOOLS['hdiutil'], 'detach', d], capture_output=True)
-        raise host.HostError('{}: expected one APFS partition, got {}'.format(os_dmg, out))
+        raise host.HostError(f'{os_dmg}: expected one APFS partition, got {out}')
     return apfs_part[0][: apfs_part[0].rindex('s')], apfs_part[0]
 
 
@@ -102,7 +102,7 @@ def _copy_os(os_dmg, image, partition_sectors, spec, log):
             while copied < os_bytes:
                 chunk = os.pread(sfd, min(COPY_CHUNK, os_bytes - copied), copied)
                 if not chunk:
-                    raise host.HostError('short read of the OS image at {}'.format(copied))
+                    raise host.HostError(f'short read of the OS image at {copied}')
                 if chunk.strip(b'\0'):
                     os.pwrite(ifd, chunk, START_SECTOR * gpt.SECTOR + copied)
                 copied += len(chunk)
@@ -110,7 +110,7 @@ def _copy_os(os_dmg, image, partition_sectors, spec, log):
         finally:
             os.close(sfd)
             os.close(ifd)
-        log('compose: OS container copied ({} bytes)'.format(os_bytes))
+        log(f'compose: OS container copied ({os_bytes} bytes)')
         return os_bytes
     finally:
         host.run('hdiutil', 'detach', whole, log=log)
@@ -120,7 +120,7 @@ def _grow(image, partition_bytes, spec, log):
     disk = attach_raw(image, log)
     try:
         store = disk + 's1'
-        host.run('diskutil', 'apfs', 'resizeContainer', store, '{}B'.format(partition_bytes), log=log)
+        host.run('diskutil', 'apfs', 'resizeContainer', store, f'{partition_bytes}B', log=log)
         container = host.container_on(store)
         if not container:
             raise host.HostError('the scratch container did not attach')
@@ -137,7 +137,7 @@ def _grow(image, partition_bytes, spec, log):
                 '-nomount',
                 log=log,
             )
-        log('compose: grown to {} bytes, Data and Preboot added'.format(partition_bytes))
+        log(f'compose: grown to {partition_bytes} bytes, Data and Preboot added')
     finally:
         host.run('hdiutil', 'detach', disk, log=log)
 
@@ -148,7 +148,7 @@ def _set_uuids(image, partition_bytes, spec, log):
         part = gpt.read(fd, os.fstat(fd).st_size).used[0]
         if part.bytes != partition_bytes:
             raise host.HostError(
-                'resizeContainer left the scratch partition at {} bytes, not {}'.format(part.bytes, partition_bytes)
+                f'resizeContainer left the scratch partition at {part.bytes} bytes, not {partition_bytes}'
             )
         container = apfs.Container(fd, part.first * gpt.SECTOR)
         found = container.volumes()
@@ -157,21 +157,19 @@ def _set_uuids(image, partition_bytes, spec, log):
             want = spec['volumes'][key]
             match = [u for u, role, name in found if role == want['role'] and name == want['name']]
             if len(match) != 1:
-                raise host.HostError('scratch container: no single {} volume ({})'.format(key, found))
+                raise host.HostError(f'scratch container: no single {key} volume ({found})')
             mapping[match[0]] = uuid.UUID(want['uuid'])
         patched = container.set_volume_uuids(mapping)
         log(
             'compose: volume UUIDs set offline in {} superblock copies: {}'.format(
-                len(patched), ', '.join('{}->{}'.format(o, n) for _, o, n in patched)
+                len(patched), ', '.join(f'{o}->{n}' for _, o, n in patched)
             )
         )
         if not ours(spec, container.volumes()):
-            raise host.HostError('UUID rewrite did not take: {}'.format(container.volumes()))
+            raise host.HostError(f'UUID rewrite did not take: {container.volumes()}')
         nx_blocks = int.from_bytes(container.superblocks()[0][40:48], 'little')
         if nx_blocks * container.block_size != partition_bytes:
-            raise host.HostError(
-                'container is {} bytes, partition {}'.format(nx_blocks * container.block_size, partition_bytes)
-            )
+            raise host.HostError(f'container is {nx_blocks * container.block_size} bytes, partition {partition_bytes}')
         return part.first * gpt.SECTOR
     finally:
         os.close(fd)
@@ -179,7 +177,8 @@ def _set_uuids(image, partition_bytes, spec, log):
 
 def compose(image, os_dmg, partition_bytes, spec, log):
     """Write the container into `image` (a new raw disk image whose one partition is exactly `partition_bytes`).
-    Returns (the partition's offset in the image, the OS container's size)."""
+    Returns (the partition's offset in the image, the OS container's size).
+    """
     if image.exists():
         image.unlink()
     os_bytes = _copy_os(os_dmg, image, partition_bytes // gpt.SECTOR, spec, log)

@@ -96,7 +96,7 @@ class ExtentsTest(unittest.TestCase):
             BLOCK,
             extents.container(os.pread(self.fd, BLOCK, 0))[2],
             'test',
-            [manifest.Part('p{}'.format(i), n) for i, n in enumerate(sizes)],
+            [manifest.Part(f'p{i}', n) for i, n in enumerate(sizes)],
             plan,
             [bytes(32)] * -(-sum(sizes) // manifest.HASH_CHUNK),
         )

@@ -107,9 +107,7 @@ class PackApfsTest(unittest.TestCase):
                 g.write(bytes(n) if start == manifest.ZERO else source[start : start + n])
         disk = compose.attach_raw(rebuilt, Quiet())
         try:
-            result = subprocess.run(
-                ['/sbin/fsck_apfs', '-n', '/dev/r{}s1'.format(disk)], capture_output=True, text=True
-            )
+            result = subprocess.run(['/sbin/fsck_apfs', '-n', f'/dev/r{disk}s1'], capture_output=True, text=True)
         finally:
             run('/usr/bin/hdiutil', 'detach', disk)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)

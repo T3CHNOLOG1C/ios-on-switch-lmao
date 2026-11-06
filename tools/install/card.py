@@ -52,34 +52,33 @@ class Card:
         return '/dev/r' + self.disk
 
     def slice(self, entry):
-        return '{}s{}'.format(self.disk, entry.index + 1)
+        return f'{self.disk}s{entry.index + 1}'
 
 
 def resolve(argument):
     """The whole disk named by `argument`, after the host-level guards (no raw access needed)."""
-    name = argument[len('/dev/') :] if argument.startswith('/dev/') else argument
-    if name.startswith('r'):
-        name = name[1:]
+    name = argument.removeprefix('/dev/')
+    name = name.removeprefix('r')
     if not name.startswith('disk') or not name[4:].isdigit():
-        raise Refused('{!r} is not a whole disk (expected diskN)'.format(argument))
+        raise Refused(f'{argument!r} is not a whole disk (expected diskN)')
     info = host.disk_info(name)
     if not info:
-        raise Refused('no disk {}'.format(name))
+        raise Refused(f'no disk {name}')
     if info.get('ParentWholeDisk') != name or not info.get('WholeDisk'):
-        raise Refused('{} is not a whole disk'.format(name))
+        raise Refused(f'{name} is not a whole disk')
     if info.get('APFSPhysicalStores') or info.get('Content') == 'EF57347C-0000-11AA-AA11-00306543ECAC':
-        raise Refused("{} is an APFS container (synthesized), not the card: name the card's own disk".format(name))
+        raise Refused(f"{name} is an APFS container (synthesized), not the card: name the card's own disk")
     if info.get('DeviceBlockSize', 512) != 512:
         raise Refused('{} has {}-byte blocks; an SD card has 512'.format(name, info.get('DeviceBlockSize')))
     if name in host.boot_disks():
-        raise Refused('{} holds the running system'.format(name))
+        raise Refused(f'{name} holds the running system')
     image = host.images().get(name, '')
     if info.get('Internal') and not info.get('RemovableMedia') and not image:
-        raise Refused('{} is an internal, non-removable disk'.format(name))
+        raise Refused(f'{name} is an internal, non-removable disk')
     if info.get('BusProtocol') == 'Disk Image' and not image:
-        raise Refused('{} is a disk image hdiutil does not list'.format(name))
+        raise Refused(f'{name} is a disk image hdiutil does not list')
     if not info.get('WritableMedia', True):
-        raise Refused('{} is read-only media (SD lock switch?)'.format(name))
+        raise Refused(f'{name} is read-only media (SD lock switch?)')
     return Card(name, info, int(info['TotalSize']), image)
 
 
@@ -87,11 +86,11 @@ def read_table(card):
     try:
         fd = os.open(card.raw, os.O_RDONLY)
     except PermissionError:
-        raise host.HostError("reading {}'s partition table needs root (sudo)".format(card.raw))
+        raise host.HostError(f"reading {card.raw}'s partition table needs root (sudo)")
     try:
         card.table = gpt.read(fd, card.size)
     except gpt.GptError as error:
-        raise Refused('{}: {}'.format(card.disk, error))
+        raise Refused(f'{card.disk}: {error}')
     finally:
         os.close(fd)
     return card.table
@@ -101,7 +100,7 @@ def _select(card, entries, spec, partition):
     try:
         return targets.select(entries, spec.get('partition_name', 'iOS'), partition)
     except targets.TargetError as error:
-        raise Refused('{}: {}'.format(card.disk, error)) from None
+        raise Refused(f'{card.disk}: {error}') from None
 
 
 def check_layout(card, spec, partition=None):
@@ -110,13 +109,9 @@ def check_layout(card, spec, partition=None):
     entries = table.used
     first = table.entries[0]
     if first.type != gpt.BASIC_DATA or first.name != 'hos_data':
-        raise Refused(
-            "{}: entry #0 is {}, not the Switch's hos_data FAT32 partition".format(card.disk, first.describe())
-        )
+        raise Refused(f"{card.disk}: entry #0 is {first.describe()}, not the Switch's hos_data FAT32 partition")
     if not any(p.kind in (0x0B, 0x0C) and p.first == first.first for p in table.mbr_partitions):
-        raise Refused(
-            '{}: the MBR does not list hos_data as FAT32 (no hybrid MBR: not a Switch card?)'.format(card.disk)
-        )
+        raise Refused(f'{card.disk}: the MBR does not list hos_data as FAT32 (no hybrid MBR: not a Switch card?)')
     fat_info = host.disk_info(card.slice(first)) or {}
     if fat_info.get('FilesystemType') not in ('msdos', None) and fat_info.get('FilesystemType'):
         raise Refused('{}: hos_data is {}, not FAT'.format(card.disk, fat_info.get('FilesystemType')))
@@ -126,12 +121,12 @@ def check_layout(card, spec, partition=None):
     )
     target = next(e for e in eligible if e.index == chosen.index)
     if target.type not in (gpt.LINUX_DATA, gpt.APFS):
-        raise Refused('{}: {} is neither Linux data nor APFS'.format(card.disk, target.describe()))
+        raise Refused(f'{card.disk}: {target.describe()} is neither Linux data nor APFS')
     for p in table.mbr_partitions:
         if p.kind in (0, 0xEE) or not (target.first <= p.first + p.sectors - 1 and p.first <= target.last):
             continue
         if not (p.kind == LINUX_MBR and p.first == target.first and p.sectors == target.sectors):
-            raise Refused('{}: the hybrid MBR lists a partition overlapping the target'.format(card.disk))
+            raise Refused(f'{card.disk}: the hybrid MBR lists a partition overlapping the target')
     card.target, card.fat = target, first
     return target
 
@@ -170,7 +165,8 @@ def diskutil_partitions(card):
 
 def check_layout_unprivileged(card, spec, partition=None):
     """The same guards as check_layout, from diskutil's view (deploy, image sizing, dry runs without root). Returns
-    (fat partition, target partition)."""
+    (fat partition, target partition).
+    """
     parts = diskutil_partitions(card)
     if (
         not parts
@@ -178,7 +174,7 @@ def check_layout_unprivileged(card, spec, partition=None):
         or parts[0].content != 'Microsoft Basic Data'
         or parts[0].filesystem not in ('msdos', '')
     ):
-        raise Refused("{}: the first partition is not the Switch's hos_data FAT32".format(card.disk))
+        raise Refused(f"{card.disk}: the first partition is not the Switch's hos_data FAT32")
     eligible = [p for p in parts[1:] if p.content.upper() != str(gpt.EMUMMC).upper()]
     chosen = _select(
         card, [targets.Candidate(p.index, p.name, p.content == 'Apple_APFS', p.size) for p in eligible], spec, partition
@@ -217,7 +213,7 @@ def mounted(identifier, log, read_only=False, owners=False):
     if current:
         info = host.disk_info(identifier) or {}
         if not read_only and not info.get('WritableVolume'):
-            raise host.HostError('{} is mounted read-only at {}'.format(identifier, current))
+            raise host.HostError(f'{identifier} is mounted read-only at {current}')
         yield Path(current)
         return
     with tempfile.TemporaryDirectory(prefix='switch-') as directory:
@@ -249,13 +245,13 @@ def boot_entry_files(package):
     files = {}
     entry = package / BOOT_ENTRY
     if not entry.is_dir() or not (package / INI).is_file():
-        raise host.HostError('{} is not a boot package (no {}/ or {})'.format(package, BOOT_ENTRY, INI))
+        raise host.HostError(f'{package} is not a boot package (no {BOOT_ENTRY}/ or {INI})')
     for path in sorted(entry.iterdir()):
         if path.is_dir():
-            raise host.HostError('unexpected directory {} in the boot package'.format(path))
+            raise host.HostError(f'unexpected directory {path} in the boot package')
         if path.name in USER_FILES:
-            raise host.HostError("{} is the user's file; no boot package ships it".format(path))
-        files['{}/{}'.format(BOOT_ENTRY, path.name)] = path
+            raise host.HostError(f"{path} is the user's file; no boot package ships it")
+        files[f'{BOOT_ENTRY}/{path.name}'] = path
     files[INI] = package / INI
     if (package / ICON).is_file():
         files[ICON] = package / ICON
@@ -265,7 +261,8 @@ def boot_entry_files(package):
 def sync_boot_entry(fat_root, package, log, dry_run=False):
     """Make switchroot/ios/ and bootloader/ini/ios.ini on the FAT equal the package, apart from the user's own files
     (USER_FILES), and remove a copy of the entry under the project's former names (one boot entry, replaced in place);
-    nothing else."""
+    nothing else.
+    """
     fat_root = Path(fat_root)
     wanted = boot_entry_files(package)
     changed, removed = [], []
@@ -286,7 +283,7 @@ def sync_boot_entry(fat_root, package, log, dry_run=False):
     entry = fat_root / BOOT_ENTRY
     if entry.is_dir():
         for path in sorted(entry.iterdir()):
-            relative = '{}/{}'.format(BOOT_ENTRY, path.name)
+            relative = f'{BOOT_ENTRY}/{path.name}'
             if (
                 relative not in wanted
                 and path.is_file()
@@ -329,9 +326,7 @@ def tree_digest(root):
         if path.is_dir():
             digest.update(b'd ' + relative.encode() + b'\n')
         else:
-            digest.update(
-                'f {} {:o} {}\n'.format(relative, path.stat().st_mode & 0o777 | 0o200, sha256_file(path)).encode()
-            )
+            digest.update(f'f {relative} {path.stat().st_mode & 0o777 | 0o200:o} {sha256_file(path)}\n'.encode())
     return digest.hexdigest()
 
 

@@ -33,7 +33,8 @@ _ADDRESS = re.compile(r'^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}$')
 
 def parse(text):
     """{"host": "98:b6:e9:..", "controllers": [...], "skipped": [reasons]} from joycon_mac.ini text, or None when it
-    has no usable entry."""
+    has no usable entry.
+    """
     sections, current = {}, None
     for raw in text.splitlines():
         line = raw.strip()
@@ -54,16 +55,16 @@ def parse(text):
             skipped.append('{}: type {} (none, or not paired in Horizon)'.format(name, entry.get('type')))
             continue
         if not _ADDRESS.match(mac) or not _ADDRESS.match(peer) or not re.fullmatch(r'[0-9A-Fa-f]{32}', ltk):
-            skipped.append('{}: malformed mac/host/ltk'.format(name))
+            skipped.append(f'{name}: malformed mac/host/ltk')
             continue
         key = bytes.fromhex(ltk)
         if not any(key) or peer.replace(':', '') == '000000000000':
-            skipped.append('{}: empty host or key'.format(name))
+            skipped.append(f'{name}: empty host or key')
             continue
         host = host or peer.lower()
         if peer.lower() != host:
             # One controller address only (switchroot takes one as well): this Joy-Con was paired to another console.
-            skipped.append('{}: paired to {}, not {}'.format(name, peer.lower(), host))
+            skipped.append(f'{name}: paired to {peer.lower()}, not {host}')
             continue
         label, product = PRODUCTS[kind]
         controllers.append({'Address': mac.lower(), 'Name': label, 'ProductID': product, 'LinkKey': key})
@@ -76,11 +77,11 @@ def read(fat_root, log):
     """The dump on a mounted FAT, parsed; None when there is none. Only reads."""
     path = Path(fat_root) / INI
     if not path.is_file():
-        log('joycon pairing: no {} on the FAT (hekate: Tools > Dump Joy-Con BT, after pairing in Horizon)'.format(INI))
+        log(f'joycon pairing: no {INI} on the FAT (hekate: Tools > Dump Joy-Con BT, after pairing in Horizon)')
         return None
     pairing = parse(path.read_text(errors='replace'))
     if pairing is None:
-        log('joycon pairing: {} has no Joy-Con sections'.format(INI))
+        log(f'joycon pairing: {INI} has no Joy-Con sections')
     for reason in (pairing or {}).get('skipped', []):
         log('joycon pairing: skipped', reason)
     if pairing and pairing['controllers']:
@@ -94,7 +95,8 @@ def read(fat_root, log):
 
 def stage(data_root, pairing, log, dry_run=False):
     """<Data>/Switch/bluetooth/{host-address,joycon-pairing.plist} := the dump, or removed when there is none.
-    Returns whether anything changed."""
+    Returns whether anything changed.
+    """
     directory = Path(data_root) / STAGED
     address, plist = directory / 'host-address', directory / 'joycon-pairing.plist'
     if not pairing:

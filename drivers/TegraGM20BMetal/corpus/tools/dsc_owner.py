@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Which dyld-cache image has a segment covering each given address. usage: dsc_owner.py <dsc dir> <hexaddr>..."""
 
-import mmap, struct, sys
+import mmap
+import struct
+import sys
 from pathlib import Path
 
 d = Path(sys.argv[1])

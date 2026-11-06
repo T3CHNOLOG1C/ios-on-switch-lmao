@@ -51,10 +51,10 @@ class Remote:
             self.size = int(response.headers['Content-Length'])
 
     def range(self, start, end):
-        request = urllib.request.Request(self.url, headers={'Range': 'bytes={}-{}'.format(start, end - 1)})
+        request = urllib.request.Request(self.url, headers={'Range': f'bytes={start}-{end - 1}'})
         response = urllib.request.urlopen(request)
         if response.status != 206:
-            raise SystemExit('{}: no range support (HTTP {})'.format(self.url, response.status))
+            raise SystemExit(f'{self.url}: no range support (HTTP {response.status})')
         return response
 
     def read(self, start, end):
@@ -124,7 +124,7 @@ def aea_key(remote, offset):
     """The `aea decrypt -key-value` key of the AEA member stored at offset."""
     profile, length = aea.prologue(remote.read(offset, offset + aea.PROLOGUE))
     if profile != aea.SYMMETRIC_PROFILE:
-        raise SystemExit('AEA profile {} at {}: only the symmetric profile is supported'.format(profile, offset))
+        raise SystemExit(f'AEA profile {profile} at {offset}: only the symmetric profile is supported')
     return aea.key_value(aea.auth_fields(remote.read(offset + aea.PROLOGUE, offset + aea.PROLOGUE + length)))
 
 
@@ -148,7 +148,7 @@ def stream_aea(remote, member, offset, key):
         content.update(chunk)
     writer.join()
     if decrypt.wait():
-        raise SystemExit('aea decrypt failed (exit {})'.format(decrypt.returncode))
+        raise SystemExit(f'aea decrypt failed (exit {decrypt.returncode})')
     if crc[0] != member['crc32']:
         raise SystemExit('CRC mismatch')
     return stored.hexdigest(), content.hexdigest()
@@ -189,7 +189,7 @@ def main():
     for role, component in sorted(COMPONENTS.items()):
         entry = identity['Manifest'].get(component)
         if not entry or 'Path' not in entry.get('Info', {}):
-            print('# {} ({}): not in this build identity'.format(role, component), file=sys.stderr)
+            print(f'# {role} ({component}): not in this build identity', file=sys.stderr)
             continue
         name = entry['Info']['Path']
         member = members[name]
@@ -200,7 +200,7 @@ def main():
         key = None
         if name.endswith('.aea'):
             if member['method'] != 0:
-                raise SystemExit('{}: a deflated AEA member'.format(name))
+                raise SystemExit(f'{name}: a deflated AEA member')
             key = aea_key(remote, offset)
             sha256, content_sha256 = stream_aea(remote, member, offset, key)
         else:
@@ -236,7 +236,7 @@ def main():
     with open(pins_path, 'w') as f:
         f.write(head + 'IPSWS = ' + table + '\n')
     print(
-        '{}: {} pinned ({} members); fill in its derived pins by hand'.format(pins_path, args.kind, len(pins)),
+        f'{pins_path}: {args.kind} pinned ({len(pins)} members); fill in its derived pins by hand',
         file=sys.stderr,
     )
 

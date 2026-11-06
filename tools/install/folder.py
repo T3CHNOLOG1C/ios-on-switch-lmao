@@ -27,7 +27,7 @@ def prepare(out):
     out = Path(out)
     if out.exists():
         if any(out.iterdir()) and not (out / MARKER).is_file():
-            raise host.HostError('{} is not empty and was not made by //:image: give --out a new folder'.format(out))
+            raise host.HostError(f'{out} is not empty and was not made by //:image: give --out a new folder')
         shutil.rmtree(out)
     (out / INSTALL).mkdir(parents=True)
     (out / MARKER).write_text('{}\n')
@@ -40,7 +40,7 @@ def _allowed(relative):
 
 def add(out, relative, source):
     if not _allowed(relative):
-        raise host.HostError('{} is not a path the folder may hold'.format(relative))
+        raise host.HostError(f'{relative} is not a path the folder may hold')
     target = Path(out) / relative
     target.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(source, target)
@@ -73,7 +73,8 @@ def needed_bytes(out, fat_root):
 
 def merge(out, fat_root, log, keep=()):
     """Copy the folder onto a mounted FAT. Unchanged files (same size and sha256) are skipped; `keep` names files
-    already on the card that belong to it."""
+    already on the card that belong to it.
+    """
     out, fat_root = Path(out), Path(fat_root)
     wanted = files(out)
     kept = set(wanted) | set(keep)
@@ -97,15 +98,11 @@ def merge(out, fat_root, log, keep=()):
         if not folder.is_dir():
             continue
         for path in sorted(folder.iterdir()):
-            relative = '{}/{}'.format(directory, path.name)
+            relative = f'{directory}/{path.name}'
             if path.is_file() and relative not in kept and path.name not in USER_FILES:
                 path.unlink()
                 removed.append(relative)
     removed += renamed.remove_older_boot_entries(fat_root, cards.INI, cards.BOOT_ENTRY, False)
     host.run('sync')
-    log(
-        'card: {} files written, {} unchanged, {} stale removed'.format(
-            len(changed), len(wanted) - len(changed), len(removed)
-        )
-    )
+    log(f'card: {len(changed)} files written, {len(wanted) - len(changed)} unchanged, {len(removed)} stale removed')
     return changed, removed

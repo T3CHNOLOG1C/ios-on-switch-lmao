@@ -76,7 +76,8 @@ def pins(volume):
 
 def index(root, out, devices):
     """names.json: every function name of the libraries at <root>/<device path> -> the device paths of those that have it, each
-    list in the order of the paths' components."""
+    list in the order of the paths' components.
+    """
     table = defaultdict(list)
     for device in sorted(('/' + d.lstrip('/') for d in devices), key=lambda d: Path(d).parts):
         found = names((Path(root) / device.lstrip('/')).read_bytes())
@@ -103,7 +104,8 @@ def resolve(index_json, corpus, out):
 
     def candidates(name):
         """The libraries a function from before the journal named libraries may be from: QuartzCore's (None, the default)
-        when it has the name, else every library holding it."""
+        when it has the name, else every library holding it.
+        """
         return [None] if name in qc else table.get(name, [])
 
     for line in Path(corpus).read_text().splitlines():

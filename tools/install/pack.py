@@ -11,34 +11,31 @@ MANIFEST = 'manifest.bin'
 
 
 def part_name(index):
-    return 'part-{:02d}.bin'.format(index)
+    return f'part-{index:02d}.bin'
 
 
 def pack(image, offset, partition_bytes, install_dir, fat_prefix, label, log, punch=True):
     """Plan the extents of the partition at `offset` in `image`, stream the copy extents into part files (punching
-    the image behind, so the two never both exist whole), and write the manifest. Returns the Manifest."""
+    the image behind, so the two never both exist whole), and write the manifest. Returns the Manifest.
+    """
     install_dir = Path(install_dir)
     fd = os.open(image, os.O_RDWR)
     try:
         block, count, container, areas = extents.container(os.pread(fd, 4096, offset))
         if block * count != partition_bytes:
-            raise extents.ExtentError(
-                'the container is {} bytes, the partition {}'.format(block * count, partition_bytes)
-            )
+            raise extents.ExtentError(f'the container is {block * count} bytes, the partition {partition_bytes}')
         data = extents.data_ranges(fd, offset, partition_bytes, block)
         plan = extents.plan(data, areas, partition_bytes, block)
         sizes = manifest.split(plan)
         log(
-            'pack: {} extents, {} bytes to copy in {} parts, {} bytes written as zeros'.format(
-                len(plan), sum(sizes), len(sizes), sum(n for _, s, n in plan if s == manifest.ZERO)
-            )
+            f'pack: {len(plan)} extents, {sum(sizes)} bytes to copy in {len(sizes)} parts, {sum(n for _, s, n in plan if s == manifest.ZERO)} bytes written as zeros'
         )
         parts, hashes = _write_parts(fd, offset, plan, sizes, install_dir, fat_prefix, punch)
     finally:
         os.close(fd)
     m = manifest.Manifest(partition_bytes, block, container, label, parts, plan, hashes)
     (install_dir / MANIFEST).write_bytes(manifest.encode(m))
-    log('pack: {} written ({} parts)'.format(install_dir / MANIFEST, len(parts)))
+    log(f'pack: {install_dir / MANIFEST} written ({len(parts)} parts)')
     return m
 
 
@@ -72,7 +69,7 @@ def _write_parts(fd, offset, plan, sizes, install_dir, fat_prefix, punch):
     def close():
         if out is not None:
             out.close()
-            parts.append(manifest.Part('{}/{}'.format(fat_prefix, part_name(index)), sizes[index]))
+            parts.append(manifest.Part(f'{fat_prefix}/{part_name(index)}', sizes[index]))
 
     try:
         for at, source, n in plan:
@@ -87,7 +84,7 @@ def _write_parts(fd, offset, plan, sizes, install_dir, fat_prefix, punch):
                 take = min(CHUNK, n - done, left)
                 chunk = os.pread(fd, take, offset + at + done)
                 if len(chunk) != take:
-                    raise extents.ExtentError('short read of the image at {:#x}'.format(at + done))
+                    raise extents.ExtentError(f'short read of the image at {at + done:#x}')
                 out.write(chunk)
                 hashes.update(chunk)
                 if punch:

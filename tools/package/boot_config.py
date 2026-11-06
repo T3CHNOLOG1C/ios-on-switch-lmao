@@ -6,7 +6,7 @@ from pathlib import Path
 
 def portrait_native(header) -> bool:
     """True when the kernel is built portrait-native: SwitchPortrait.h's default for SWITCH_PORTRAIT_NATIVE."""
-    found = re.search(r'^#define SWITCH_PORTRAIT_NATIVE ([01])\b', Path(header).read_text(), re.M)
+    found = re.search(r'^#define SWITCH_PORTRAIT_NATIVE ([01])\b', Path(header).read_text(), re.MULTILINE)
     if not found:
         raise SystemExit(f'{header}: no SWITCH_PORTRAIT_NATIVE default')
     return found.group(1) == '1'

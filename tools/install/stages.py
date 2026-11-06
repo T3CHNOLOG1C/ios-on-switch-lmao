@@ -30,7 +30,8 @@ def identity(args, spec, pins, size):
 
 def ipsw_volumes(spec, pins):
     """The spec with the selected IPSW's own System and cryptex volumes, where its pins name them (ipsw/pins.bzl
-    "volumes"; the kernel takes the same values from them)."""
+    "volumes"; the kernel takes the same values from them).
+    """
     volumes = pins.get('volumes')
     if not volumes:
         return spec
@@ -58,12 +59,10 @@ class Stages:
             other = saved.get('identity', {}).get('partition_bytes')
             if refuse_other_size and other != size and dict(saved['identity'], partition_bytes=size) == want:
                 raise host.HostError(
-                    "{} was composed for a {} MiB partition; this card's is {} MiB. Give that "
-                    'card, or delete {} to start again'.format(
-                        self.image, other >> 20, size >> 20, self.scratch / STATE
-                    )
+                    f"{self.image} was composed for a {other >> 20} MiB partition; this card's is {size >> 20} MiB. Give that "
+                    f'card, or delete {self.scratch / STATE} to start again'
                 )
-            self.log('scratch: {} was made from other inputs; starting again'.format(self.image))
+            self.log(f'scratch: {self.image} was made from other inputs; starting again')
             return None, None
         return saved['stage'], saved['offset']
 
@@ -85,13 +84,14 @@ class Stages:
         return offset
 
     def roles(self):
-        """iOS 27's pretranslate drivers by role (pretranslate.py), or None for an IPSW that needs none."""
+        """IOS 27's pretranslate drivers by role (pretranslate.py), or None for an IPSW that needs none."""
         given = getattr(self.args, 'pretranslate', None)
         return pretranslate.Roles(given, self.scratch, self.log) if given else None
 
     def cryptexes(self, roles):
         """The cryptex images to stage, and their sha256 where they were translated (the pins describe the IPSW's).
-        The App cryptex goes before the SystemOS one, whose dyld cache takes the other volumes' cdhashes."""
+        The App cryptex goes before the SystemOS one, whose dyld cache takes the other volumes' cdhashes.
+        """
         sources = {'system_cryptex': self.args.system_cryptex, 'app_cryptex': self.args.app_cryptex}
         expected = {}
         for member in ('app_cryptex', 'system_cryptex'):
@@ -118,9 +118,7 @@ class Stages:
         free = free_bytes(self.scratch)
         if free < want + FLOOR:
             raise host.HostError(
-                'translating iOS 27 needs about {} GiB free in {} besides the {} GiB kept free; {} GiB is'.format(
-                    want >> 30, self.scratch, FLOOR >> 30, free >> 30
-                )
+                f'translating iOS 27 needs about {want >> 30} GiB free in {self.scratch} besides the {FLOOR >> 30} GiB kept free; {free >> 30} GiB is'
             )
 
     def populate(self, size, offset):
@@ -132,7 +130,7 @@ class Stages:
             vols = {v['APFSVolumeUUID'].upper(): v['DeviceIdentifier'] for v in (container or {}).get('Volumes', [])}
             dev = {k: vols.get(v['uuid']) for k, v in self.spec['volumes'].items()}
             if not all(dev.values()):
-                raise host.HostError("the composed container's volumes did not attach: {}".format(dev))
+                raise host.HostError(f"the composed container's volumes did not attach: {dev}")
             with (
                 cards.mounted(dev['system'], self.log, read_only=True) as system,
                 cards.mounted(dev['data'], self.log, owners=True) as data,
@@ -187,7 +185,7 @@ def refresh_boot(out, args, payload, log):
     try:
         record = json.loads((out / folder.MARKER).read_text())
     except (OSError, ValueError):
-        raise host.HostError('{} is not a folder //:image finished: run //:image first'.format(out)) from None
+        raise host.HostError(f'{out} is not a folder //:image finished: run //:image first') from None
     current = boot_record(args)
     changed = [k for k in current if current[k] != record['boot'].get(k)]
     if changed:
@@ -202,7 +200,7 @@ def refresh_boot(out, args, payload, log):
             path.unlink()
     add_boot(out, args, payload)
     give_back(out)
-    log('folder: boot entry and install-ios.bin refreshed in {}'.format(out))
+    log(f'folder: boot entry and install-ios.bin refreshed in {out}')
 
 
 def give_back(path):

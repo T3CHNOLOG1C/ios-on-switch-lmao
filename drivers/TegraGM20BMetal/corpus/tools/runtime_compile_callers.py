@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Which dyld-cache images reference the Metal selectors that compile or link shaders at run time (their __objc_selrefs,
-resolved through the cache). usage: runtime_compile_callers.py <annot.py dir> <dyld cache dir> <extracted images root> <image list>"""
+resolved through the cache). usage: runtime_compile_callers.py <annot.py dir> <dyld cache dir> <extracted images root> <image list>
+"""
 
-import struct, sys
+import struct
+import sys
 from pathlib import Path
 
 sys.path.insert(0, sys.argv[1])

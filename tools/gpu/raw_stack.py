@@ -7,7 +7,8 @@ known before the plugin is compiled, which is compiled in (-DTEGRA_RAW_STACK) an
 refuses a pack of another build. The NVK dylib (its context init, NAK's programs and register values), m2v (every source
 file of the crates the bridge links, by its path below the m2v tree, in path order; with the bridge sources: the binding
 rules), the frontend (the journal's state keys) and the raw runtime and pack generator (every .h/.c/.cpp/.mm/.py/.inc
-below raw/, in path order), the last three each by its file name and bytes. Writes the first 16 hex digits."""
+below raw/, in path order), the last three each by its file name and bytes. Writes the first 16 hex digits.
+"""
 
 import argparse
 import hashlib

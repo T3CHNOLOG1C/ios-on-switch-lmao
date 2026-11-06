@@ -6,9 +6,14 @@ usage: run_corpus.py <corpus.tsv> <out dir> [--jobs N] [--only substr] [--timeou
 corpus.tsv: tag<TAB>path per line (tools/make_corpus.py).
 Environment: RUNNER (corpus/runner's m2v-corpus: bazel build of its BUILD.bazel's :m2v-corpus), NVK (a host build of libvulkan_nouveau.dylib: scratchpad/gpu/userland/build-host,
 or build-host-rel for the iOS build's release NAK), MOCK (hostsim's libmock_iokit.dylib), RUNNER_ARGS (--draw: also draw each
-render pipeline three times in one pass)."""
+render pipeline three times in one pass).
+"""
 
-import os, subprocess, sys, shutil, concurrent.futures as cf
+import concurrent.futures as cf
+import os
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent

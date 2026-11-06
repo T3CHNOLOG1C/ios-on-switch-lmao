@@ -42,10 +42,10 @@ def select(entries, ios_name, partition=None):
     if partition is not None:
         named = [e for e in entries if e.name == partition and (installed(e, ios_name) or fresh(e))]
         if len(named) != 1:
-            raise TargetError('no single Linux, Android or iOS partition named {!r}'.format(partition))
+            raise TargetError(f'no single Linux, Android or iOS partition named {partition!r}')
         target = named[0]
         if ios and ios[0] is not target:
-            raise TargetError('the card already has iOS on {!r}'.format(ios[0].name))
+            raise TargetError(f'the card already has iOS on {ios[0].name!r}')
     elif ios:
         target = ios[0]
     else:
@@ -64,7 +64,5 @@ def select(entries, ios_name, partition=None):
 def check_size(size):
     if size <= 0 or size % ALIGN_BYTES or size > MAX_BYTES:
         raise TargetError(
-            'a partition of {} bytes cannot hold iOS (the kernel takes up to {} bytes in {}-byte units)'.format(
-                size, MAX_BYTES, ALIGN_BYTES
-            )
+            f'a partition of {size} bytes cannot hold iOS (the kernel takes up to {MAX_BYTES} bytes in {ALIGN_BYTES}-byte units)'
         )

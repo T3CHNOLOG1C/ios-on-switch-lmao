@@ -34,7 +34,8 @@ OVERLAY_ROOT = '/private/var/Switch/overlay'
 
 def plan(manifest: dict, portrait: bool, given=None) -> dict:
     """The manifest's files for this kernel: {"files": [{path, source, trust, mode, directory}], "dirs": [[d, gate]]}.
-    `given`: the sources the build gives; a manifest entry it lacks is an error, not a silent omission."""
+    `given`: the sources the build gives; a manifest entry it lacks is an error, not a silent omission.
+    """
     if given is not None:
         missing = sorted({entry['source'] for entry in manifest['files']} - set(given))
         if missing:
@@ -75,7 +76,8 @@ def plan(manifest: dict, portrait: bool, given=None) -> dict:
 
 def cdhash(image: bytes) -> bytes:
     """The CDHash of a thin Mach-O's embedded signature: the first 20 bytes of the SHA-256 of its SHA-256
-    CodeDirectory (what codesign -dvvv prints as CDHash and what a trust cache entry holds)."""
+    CodeDirectory (what codesign -dvvv prints as CDHash and what a trust cache entry holds).
+    """
     magic, _, _, _, ncmds = struct.unpack_from('<IiiII', image)
     if magic != 0xFEEDFACF:
         raise SystemExit('overlay: not a thin 64-bit Mach-O')
@@ -101,7 +103,8 @@ def cdhash(image: bytes) -> bytes:
 
 def trust_module(hashes) -> bytes:
     """A version-2 trust cache module of sorted (CDHash, SHA-256, flags 0, launch-constraint category 0) entries.
-    Category 0 because overlay code lives on Data: the system categories' volume constraints would refuse it."""
+    Category 0 because overlay code lives on Data: the system categories' volume constraints would refuse it.
+    """
     entries = b''.join(digest + bytes([2, 0, 0, 0]) for digest in sorted(set(hashes)))
     return struct.pack('<I16sI', 2, hashlib.sha256(entries).digest()[:16], len(entries) // 24) + entries
 

@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """The corpus: every metallib on the 21H461 OS and SystemOS cryptex volumes, plus the ones embedded in dyld-cache images
 (dsc_metallibs.py), deduplicated by content. usage: make_corpus.py <metal2 dir>  -> corpus.tsv (tag, path), corpus_all.tsv
-(tag, path, sha256, size, duplicate-of)."""
+(tag, path, sha256, size, duplicate-of).
+"""
 
-import hashlib, re, sys
+import hashlib
+import re
+import sys
 from pathlib import Path
 
 base = Path(sys.argv[1])

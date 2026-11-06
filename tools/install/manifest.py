@@ -78,7 +78,7 @@ class Manifest:
 def _ascii(text, size, what):
     raw = text.encode('ascii')
     if len(raw) >= size or b'\0' in raw:
-        raise ManifestError('{} {!r} does not fit in {} bytes'.format(what, text, size - 1))
+        raise ManifestError(f'{what} {text!r} does not fit in {size - 1} bytes')
     return raw.ljust(size, b'\0')
 
 
@@ -86,30 +86,30 @@ def check(m):
     """The decoder's rules, so the Mac never writes a manifest the installer refuses."""
     block = m.block_size
     if block < 4096 or block > 65536 or block & (block - 1):
-        raise ManifestError('block size {}'.format(block))
-    if not 0 < m.partition_bytes or m.partition_bytes % block:
-        raise ManifestError('partition bytes {}'.format(m.partition_bytes))
+        raise ManifestError(f'block size {block}')
+    if not m.partition_bytes > 0 or m.partition_bytes % block:
+        raise ManifestError(f'partition bytes {m.partition_bytes}')
     if not 0 < len(m.parts) <= MAX_PARTS or not 0 < len(m.extents) <= MAX_EXTENTS:
-        raise ManifestError('{} parts, {} extents'.format(len(m.parts), len(m.extents)))
+        raise ManifestError(f'{len(m.parts)} parts, {len(m.extents)} extents')
     for i, p in enumerate(m.parts):
         whole = HASH_CHUNK if i + 1 < len(m.parts) else block
         if not 0 < p.bytes <= PART_LIMIT or p.bytes % whole:
-            raise ManifestError('part {} ({} bytes)'.format(p.path, p.bytes))
+            raise ManifestError(f'part {p.path} ({p.bytes} bytes)')
     if len(m.hashes) != -(-m.source_bytes // HASH_CHUNK) or any(len(h) != HASH_BYTES for h in m.hashes):
-        raise ManifestError('{} chunk hashes for {} source bytes'.format(len(m.hashes), m.source_bytes))
+        raise ManifestError(f'{len(m.hashes)} chunk hashes for {m.source_bytes} source bytes')
     image_end = source_end = 0
     for i, (at, source, n) in enumerate(m.extents):
         if not n or (at | n) % block or at < image_end or at + n > m.partition_bytes:
-            raise ManifestError('extent {}: {:#x}+{:#x}'.format(i, at, n))
+            raise ManifestError(f'extent {i}: {at:#x}+{n:#x}')
         if source != ZERO:
             if source != source_end:
-                raise ManifestError('extent {}: source {:#x}, expected {:#x}'.format(i, source, source_end))
+                raise ManifestError(f'extent {i}: source {source:#x}, expected {source_end:#x}')
             source_end += n
         elif i == 0:
             raise ManifestError('the first extent must copy the container superblock')
         image_end = at + n
     if m.extents[0][0] != 0 or source_end != m.source_bytes:
-        raise ManifestError('copy extents cover {} source bytes of {}'.format(source_end, m.source_bytes))
+        raise ManifestError(f'copy extents cover {source_end} source bytes of {m.source_bytes}')
 
 
 def encode(m):
@@ -155,10 +155,10 @@ def decode(raw):
         label,
     ) = HEADER.unpack_from(raw)
     if magic != MAGIC or version != VERSION or chunk != HASH_CHUNK:
-        raise ManifestError('not a version {} {} manifest'.format(VERSION, MAGIC.decode()))
+        raise ManifestError(f'not a version {VERSION} {MAGIC.decode()} manifest')
     hashes = -(-source_bytes // HASH_CHUNK)
     if len(raw) != HEADER.size + parts * PART.size + extents * EXTENT.size + hashes * HASH_BYTES:
-        raise ManifestError('manifest is {} bytes'.format(len(raw)))
+        raise ManifestError(f'manifest is {len(raw)} bytes')
     zeroed = bytearray(raw)
     zeroed[CRC_OFFSET : CRC_OFFSET + 4] = bytes(4)
     if zlib.crc32(bytes(zeroed)) != crc:

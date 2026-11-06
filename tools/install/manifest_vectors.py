@@ -48,7 +48,7 @@ def main():
     hashes = [
         hashlib.sha256(data[i : i + manifest.HASH_CHUNK]).digest() for i in range(0, len(data), manifest.HASH_CHUNK)
     ]
-    parts = [manifest.Part('switchroot/ios/install/part-{:02d}.bin'.format(i), n) for i, n in enumerate(PARTS)]
+    parts = [manifest.Part(f'switchroot/ios/install/part-{i:02d}.bin', n) for i, n in enumerate(PARTS)]
     m = manifest.Manifest(PARTITION, BLOCK, CONTAINER, 'iPadOS 17.7.11 (21H461)', parts, EXTENTS, hashes)
     Path(out_manifest).write_bytes(manifest.encode(m))
     Path(out_source).write_bytes(data)

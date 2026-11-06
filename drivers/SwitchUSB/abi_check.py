@@ -21,13 +21,13 @@ Then writes --output, the build's record that the checks passed.
 """
 
 import argparse
-from pathlib import Path
 import struct
 import sys
+from pathlib import Path
 
 TREE = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(TREE / 'tools/prelink'))  # the prelinker's Mach-O reader
-from native_prelink import macho, backed_offset, exports  # noqa: E402
+from native_prelink import backed_offset, exports, macho  # noqa: E402
 
 SLIDE = -0x1000000
 # --- xudc: SwitchXUDC against IOUSBDeviceController ------------------------------------------------------------

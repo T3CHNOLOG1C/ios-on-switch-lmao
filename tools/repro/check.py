@@ -7,7 +7,8 @@ no disk or remote cache) and compare every output file bit for bit.
     bazel run //tools/repro:check -- --keep            # keep the two output bases (under $TMPDIR) afterwards
 
 Each build compiles everything (XNU, every driver, both Rust bridges): expect 10+ minutes and ~2 GB per output base
-while it runs. Prints the "INFO: Elapsed / processes" lines of both builds and the comparison."""
+while it runs. Prints the "INFO: Elapsed / processes" lines of both builds and the comparison.
+"""
 
 import argparse
 import hashlib
@@ -61,7 +62,7 @@ def main():
     results = []
     try:
         for n in (1, 2):
-            base = str(scratch / 'base{}'.format(n))
+            base = str(scratch / f'base{n}')
             build = subprocess.run(
                 [
                     bazel,
@@ -77,13 +78,13 @@ def main():
             )
             for line in build.stderr.splitlines():
                 if line.startswith('INFO: Elapsed') or ' processes' in line:
-                    print('build {}: {}'.format(n, line))
+                    print(f'build {n}: {line}')
             if build.returncode:
                 sys.exit(build.stderr[-4000:])
             results.append(outputs(bazel, base, workspace, args.targets))
         a, b = results
         differ = sorted(k for k in set(a) | set(b) if a.get(k) != b.get(k))
-        print('{} output files, {} differ'.format(len(a), len(differ)))
+        print(f'{len(a)} output files, {len(differ)} differ')
         for k in differ[:50]:
             print('  differs:', k)
         sys.exit(1 if differ else 0)
@@ -91,7 +92,7 @@ def main():
         if not args.keep:
             for n in (1, 2):
                 subprocess.run(
-                    [bazel, '--output_base=' + str(scratch / 'base{}'.format(n)), 'clean', '--expunge'],
+                    [bazel, '--output_base=' + str(scratch / f'base{n}'), 'clean', '--expunge'],
                     cwd=workspace,
                     capture_output=True,
                 )

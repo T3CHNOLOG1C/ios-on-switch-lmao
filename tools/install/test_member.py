@@ -3,7 +3,8 @@
 
 Writes a deterministic <size> MiB file and a copy of the pins whose <role> member has that file's size and sha256,
 so the installer runs the same code path (copy, sha256 check against the pin) without the real 3.3 GB image.
-Used by //install:test_system_cryptex and //install:test_ipsw_pins (--//install:system_cryptex=...)."""
+Used by //install:test_system_cryptex and //install:test_ipsw_pins (--//install:system_cryptex=...).
+"""
 
 import hashlib
 import json

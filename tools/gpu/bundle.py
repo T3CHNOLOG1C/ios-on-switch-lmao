@@ -57,9 +57,11 @@ def sign(xcode, path, identifier):
     xcode.run('codesign', '--force', '--sign', '-', '--pagesize', '4096', '--identifier', identifier, path)
     xcode.run('codesign', '--verify', '--strict', path)
     detail = xcode.run('codesign', '--display', '--verbose=4', path)
-    if not re.search(r'^Page size=4096$', detail, re.M) or not re.search(r'^Hash type=sha256', detail, re.M):
+    if not re.search(r'^Page size=4096$', detail, re.MULTILINE) or not re.search(
+        r'^Hash type=sha256', detail, re.MULTILINE
+    ):
         sys.exit('%s: expected a SHA-256 signature with 4 KiB pages' % path)
-    return re.search(r'^CDHash=([0-9a-f]{40})$', detail, re.M)[1]
+    return re.search(r'^CDHash=([0-9a-f]{40})$', detail, re.MULTILINE)[1]
 
 
 def trust_module(cdhashes):

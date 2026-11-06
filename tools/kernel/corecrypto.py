@@ -18,8 +18,8 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import common  # noqa: E402
-from kernel_names import archive_names  # noqa: E402
+import common
+from kernel_names import archive_names
 
 
 def main():
@@ -58,7 +58,7 @@ def main():
             if entry.get('sourceTree') == 'SOURCE_ROOT' or key not in parents:
                 return source / path
             if entry.get('sourceTree') != '<group>':
-                raise ValueError('Unsupported source tree: {}'.format(entry))
+                raise ValueError(f'Unsupported source tree: {entry}')
             return resolve(parents[key]) / path
 
         target = next(
@@ -115,8 +115,8 @@ def main():
         ):
             command.extend(['-I', str(folder)])
         command += [
-            '-ffile-prefix-map={}={}/refer/corecrypto-2023'.format(source, tree),
-            '-ffile-prefix-map={}={}/build/corecrypto-2023'.format(out, tree),
+            f'-ffile-prefix-map={source}={tree}/refer/corecrypto-2023',
+            f'-ffile-prefix-map={out}={tree}/build/corecrypto-2023',
             '-ffile-prefix-map={}={}'.format(here, args.path_root.rstrip('/')),
         ]
 
@@ -141,7 +141,7 @@ def main():
                 results = list(pool.map(compile_one, sources))
             failed = [(d, r.stdout[-2500:]) for d, r in results if r.returncode]
             if failed:
-                sys.exit('{} corecrypto sources failed:\n{}'.format(len(failed), failed[0][1]))
+                sys.exit(f'{len(failed)} corecrypto sources failed:\n{failed[0][1]}')
             for destination, _ in results:
                 data = destination.read_bytes()
                 if struct.unpack_from('<4I', data) != (0xFEEDFACF, 0x100000C, 0, 1):
@@ -157,7 +157,7 @@ def main():
         if any(not name[1:].isidentifier() for name in collisions):
             sys.exit('A colliding symbol cannot be namespaced with a C identifier')
         header = out / 'namespace.h'
-        header.write_text(''.join('#define {} cc14_{}\n'.format(n[1:], n[1:]) for n in collisions))
+        header.write_text(''.join(f'#define {n[1:]} cc14_{n[1:]}\n' for n in collisions))
         namespaced = build('-namespaced', ['-include', str(header)])
         Path(args.out).write_bytes(namespaced.read_bytes())
         Path(args.namespace_header).write_text(header.read_text())

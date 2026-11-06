@@ -79,16 +79,17 @@ def old_spelling(path, bin_dir=None):
 
 def compat_prefix_maps(path_root, bin_dir):
     """Prefix maps from moved paths (absolute, below this execution root) to their old spellings, after the generic
-    ones (debug maps: the last match wins; macro maps: the most specific). Empty while nothing has moved."""
+    ones (debug maps: the last match wins; macro maps: the most specific). Empty while nothing has moved.
+    """
     here, root = execroot(), path_root.rstrip('/')
     maps = []
     if TREE_ROOT != OLD_TREE:
-        maps += ['-ffile-prefix-map={}/{}={}/{}/{}'.format(here, r, root, OLD_TREE, r) for r in MOVED_ROOTS]
+        maps += [f'-ffile-prefix-map={here}/{r}={root}/{OLD_TREE}/{r}' for r in MOVED_ROOTS]
     if KERNEL_PACKAGE != OLD_TREE:
-        new = '{}/{}/{}/build'.format(here, bin_dir, KERNEL_PACKAGE)
+        new = f'{here}/{bin_dir}/{KERNEL_PACKAGE}/build'
         maps += [
-            '-fmacro-prefix-map={}={}/{}/build'.format(new, root, OLD_TREE),
-            '-fdebug-prefix-map={}={}/{}/{}/build'.format(new, root, bin_dir, OLD_TREE),
+            f'-fmacro-prefix-map={new}={root}/{OLD_TREE}/build',
+            f'-fdebug-prefix-map={new}={root}/{bin_dir}/{OLD_TREE}/build',
         ]
     return maps
 
@@ -100,11 +101,12 @@ XNU_REPOSITORY = 'external/+http_archive+xnu'
 def prefix_maps(path_root, bin_dir, xnu_dir):
     """-ffile-prefix-map flags that make every path a compile can embed independent of the sandbox: the patched XNU
     source shows as <root>/out/native-a57/root-v1/tree/.cache/xnu-work (where the CMake flow kept its checkout),
-    build outputs as <root>/<package path> (bazel-bin/out/... -> out/...), sources as <root>/<path>."""
+    build outputs as <root>/<package path> (bazel-bin/out/... -> out/...), sources as <root>/<path>.
+    """
     here = execroot()
     tree = path_root.rstrip('/') + '/out/native-a57/root-v1/tree/.cache/xnu-work'
     maps = [
-        '-ffile-prefix-map={}/{}={}'.format(here, xnu_dir, tree),
+        f'-ffile-prefix-map={here}/{xnu_dir}={tree}',
         '-ffile-prefix-map={}/{}={}'.format(here, bin_dir, path_root.rstrip('/')),
         '-ffile-prefix-map={}={}'.format(here, path_root.rstrip('/')),
     ] + compat_prefix_maps(path_root, bin_dir)
@@ -113,7 +115,7 @@ def prefix_maps(path_root, bin_dir, xnu_dir):
         # (debug maps go by the last match: after the execution root's).
         maps += [
             '-fdebug-prefix-map={}/{}={}/{}'.format(here, xnu_dir, path_root.rstrip('/'), XNU_REPOSITORY),
-            '-fdebug-prefix-map={}={}'.format(xnu_dir, XNU_REPOSITORY),
+            f'-fdebug-prefix-map={xnu_dir}={XNU_REPOSITORY}',
         ]
     return maps
 
@@ -127,7 +129,8 @@ def resolve_links(root):
     """Replace every symbolic link below root by a copy of what it names (Kernel.framework's Headers ->
     Versions/Current/Headers and Versions/Current -> A, as XNU's installhdrs makes them). Tree artifacts stay
     self-contained: a cache that hands out a tree's links but not their targets (Bazel's build without the bytes) would
-    otherwise leave them dangling, and Bazel then re-runs the action on every build."""
+    otherwise leave them dangling, and Bazel then re-runs the action on every build.
+    """
     root = Path(root)
     while True:
         links = sorted((p for p in root.rglob('*') if p.is_symlink()), key=lambda p: len(p.parts))
@@ -136,7 +139,7 @@ def resolve_links(root):
         link = links[0]
         target = link.resolve()
         if not str(target).startswith(str(root.resolve()) + '/'):
-            sys.exit('{} links outside the tree: {}'.format(link, target))
+            sys.exit(f'{link} links outside the tree: {target}')
         link.unlink()
         if target.is_dir():
             shutil.copytree(target, link, symlinks=True)

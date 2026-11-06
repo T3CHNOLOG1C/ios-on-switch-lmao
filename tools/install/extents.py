@@ -61,13 +61,14 @@ def container(nxsb):
 def plan(data, required, size, block, limit=manifest.MAX_EXTENTS):
     """Extents [(offset, source offset or ZERO, bytes)]: every data range copied, the parts of `required` ranges
     that hold no data written as zeros. Close copy extents are joined (the gap copied as zeros) until there are at
-    most `limit` extents."""
+    most `limit` extents.
+    """
     marks = []
     for start, end in data:
         marks.append((start, end, True))
     for start, end in required:
         if end > size:
-            raise ExtentError('range {:#x}-{:#x} is beyond the partition'.format(start, end))
+            raise ExtentError(f'range {start:#x}-{end:#x} is beyond the partition')
         at = start
         for d_start, d_end in data:
             if d_end <= at or d_start >= end:

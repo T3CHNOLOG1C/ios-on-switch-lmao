@@ -43,7 +43,7 @@ def is_macho(path):
 
 
 def apple_trust_entries(paths):
-    """cdhash (hex) -> (flags, category) from Apple's trust cache IM4Ps (version-2 modules)."""
+    """Cdhash (hex) -> (flags, category) from Apple's trust cache IM4Ps (version-2 modules)."""
     out = {}
     for p in paths:
         data = Path(p).read_bytes()

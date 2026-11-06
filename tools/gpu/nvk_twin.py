@@ -26,7 +26,8 @@ def lc_uuid(path, value=None):
 def make_twin(nvk, twin, out, env):
     """Copy the host twin to `out`, ad hoc signed. The two dylibs' .source files must be equal (the same Mesa tree and
     -Dnvk-build-id); without a build id NVK hashes its own LC_UUID into the pipeline cache UUID, so the twin takes the
-    iOS dylib's."""
+    iOS dylib's.
+    """
     sources = [Path(str(p) + '.source') for p in (nvk, twin)]
     if not all(p.is_file() for p in sources) or sources[0].read_text() != sources[1].read_text():
         sys.exit("%s and %s missing or different: the twin is not of the iOS dylib's sources" % tuple(sources))

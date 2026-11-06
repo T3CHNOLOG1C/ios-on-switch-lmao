@@ -1,12 +1,12 @@
 """Host-only Darwin layout checks with independently encoded binary fixtures."""
 
-from pathlib import Path
 import hashlib
 import json
 import shutil
 import struct
 import tempfile
 import unittest
+from pathlib import Path
 
 import native_xnu_layout as layout  # //tools/package:packaging
 

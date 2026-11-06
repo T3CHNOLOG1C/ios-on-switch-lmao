@@ -109,7 +109,8 @@ def normal(line):
 @contextmanager
 def opened(dirs, log):
     """Each of `dirs` (outermost first) that this user may not enter made u+rx while the block runs, then given its mode back.
-    The only write the volume sees."""
+    The only write the volume sees.
+    """
     restore = []
     try:
         for d in dirs:
@@ -136,7 +137,8 @@ def readable(d):
 
 def caches(volume, opens, open_all, log):
     """(where, m2v directory, the directories to open on the way) of every m2v cache on the volume, and the closed containers
-    skipped."""
+    skipped.
+    """
     found, skipped = [], []
 
     def look(where, m2v, through=()):
@@ -231,7 +233,8 @@ def record_ok(data):
 
 def records(caches, store):
     """Every driver record of each cache directory in `caches` whose envelope checks out, into `store` (by name; one already
-    there is kept: a name is what the making reads, so two records of one name hold the same driver's data)."""
+    there is kept: a name is what the making reads, so two records of one name hold the same driver's data).
+    """
     seen = copied = bad = 0
     for cache in caches:
         content = Path(cache) / 'v1' / CONTENT

@@ -11,7 +11,9 @@ emitted before each draw that reads memory written earlier (WFI + TEXINV before 
 usage: eqcheck.py <nvk.log> <raw.log> [--show N] [--flat] [--layouts] [--own]
 """
 
-import re, sys, collections
+import collections
+import re
+import sys
 
 
 def frames(path):

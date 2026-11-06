@@ -9,7 +9,8 @@
 The snapshot also keeps the build's kernel.macho, which names the unslid kernel addresses in panics and in the
 "SwitchKprof" lines: `xcrun atos -o "$LKG/kernel.macho" -arch arm64 <addr>...`.
 
-Refuses to overwrite an existing snapshot."""
+Refuses to overwrite an existing snapshot.
+"""
 
 import argparse
 import hashlib
@@ -47,7 +48,7 @@ def main():
         sys.exit('snapshot name must be a plain directory name')
     target = state_dir() / 'lkg' / args.name
     if target.exists():
-        sys.exit('{} exists: pick another name'.format(target))
+        sys.exit(f'{target} exists: pick another name')
     boot = located(args.boot)
     target.parent.mkdir(parents=True, exist_ok=True)
     shutil.copytree(boot, target, symlinks=False)
@@ -61,7 +62,7 @@ def main():
         path.chmod(0o755 if path.is_dir() or os.access(path, os.X_OK) else 0o644)
     print(target)
     for path in sorted((target / 'switchroot/ios').iterdir()):
-        print('  {} sha256 {}'.format(path.name, hashlib.sha256(path.read_bytes()).hexdigest()))
+        print(f'  {path.name} sha256 {hashlib.sha256(path.read_bytes()).hexdigest()}')
 
 
 if __name__ == '__main__':

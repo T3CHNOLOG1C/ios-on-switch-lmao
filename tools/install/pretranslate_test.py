@@ -1,5 +1,6 @@
 """The drivers run in the order the dyld cache needs, with the other roles' cdhashes, and leave the boot package's
-files behind when their deltas go."""
+files behind when their deltas go.
+"""
 
 import hashlib
 import json
@@ -50,7 +51,7 @@ class RolesTest(unittest.TestCase):
         self.driver.write_text(FAKE_DRIVER.format(python=sys.executable))
         self.driver.chmod(self.driver.stat().st_mode | stat.S_IXUSR)
         spec = {'driver': str(self.driver), 'tool': '/bin/echo', 'trustcaches': ['/apple.im4p']}
-        self.roles = pretranslate.Roles({r: spec for r in pretranslate.ORDER}, self.dir / 'scratch', Quiet())
+        self.roles = pretranslate.Roles(dict.fromkeys(pretranslate.ORDER, spec), self.dir / 'scratch', Quiet())
 
     def calls(self):
         return [json.loads(line) for line in Path(str(self.driver) + '.calls').read_text().splitlines()]

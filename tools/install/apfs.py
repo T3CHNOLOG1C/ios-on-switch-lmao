@@ -33,7 +33,7 @@ class ApfsError(Exception):
 
 def fletcher64(block):
     """APFS object checksum of `block` (the first 8 bytes, the stored checksum, are excluded)."""
-    words = struct.unpack_from('<{}I'.format((len(block) - 8) // 4), block, 8)
+    words = struct.unpack_from(f'<{(len(block) - 8) // 4}I', block, 8)
     sum1 = sum2 = 0
     for w in words:
         sum1 = (sum1 + w) % 0xFFFFFFFF
@@ -65,7 +65,7 @@ class Container:
         self.fd, self.base = fd, base
         block0 = os.pread(fd, 4096, base)
         if block0[32:36] != NX_MAGIC:
-            raise ApfsError('no APFS container superblock at offset {}'.format(base))
+            raise ApfsError(f'no APFS container superblock at offset {base}')
         self.block_size = struct.unpack_from('<I', block0, 36)[0]
         if self.block_size != 4096:
             block0 = os.pread(fd, self.block_size, base)
@@ -74,12 +74,12 @@ class Container:
     def read(self, paddr):
         data = os.pread(self.fd, self.block_size, self.base + paddr * self.block_size)
         if len(data) != self.block_size:
-            raise ApfsError('short read of block {}'.format(paddr))
+            raise ApfsError(f'short read of block {paddr}')
         return data
 
     def write(self, paddr, data):
         if len(data) != self.block_size or os.pwrite(self.fd, data, self.base + paddr * self.block_size) != len(data):
-            raise ApfsError('write of block {} failed'.format(paddr))
+            raise ApfsError(f'write of block {paddr} failed')
 
     def superblocks(self):
         """Every valid container superblock in the checkpoint descriptor area, newest first, plus block 0."""
@@ -105,13 +105,13 @@ class Container:
     @staticmethod
     def fs_oids(nxsb):
         max_fs = struct.unpack_from('<I', nxsb, 180)[0]
-        return [oid for oid in struct.unpack_from('<{}Q'.format(min(max_fs, 100)), nxsb, 184) if oid]
+        return [oid for oid in struct.unpack_from(f'<{min(max_fs, 100)}Q', nxsb, 184) if oid]
 
     def omap_entries(self, omap_paddr):
         """{(oid, xid): paddr} of the object map at physical address omap_paddr."""
         omap = self.read(omap_paddr)
         if object_header(omap)[2] != OBJECT_TYPE_OMAP or not checksum_ok(omap):
-            raise ApfsError('bad object map at block {}'.format(omap_paddr))
+            raise ApfsError(f'bad object map at block {omap_paddr}')
         tree = struct.unpack_from('<Q', omap, 48)[0]
         entries = {}
         self._walk(tree, entries, depth=0)
@@ -122,11 +122,11 @@ class Container:
             raise ApfsError('object map tree too deep')
         node = self.read(paddr)
         if not checksum_ok(node) or object_header(node)[2] not in (OBJECT_TYPE_BTREE, OBJECT_TYPE_BTREE_NODE):
-            raise ApfsError('bad object map node at block {}'.format(paddr))
+            raise ApfsError(f'bad object map node at block {paddr}')
         flags, level, nkeys = struct.unpack_from('<HHI', node, 32)
         table_off, table_len = struct.unpack_from('<HH', node, 40)
         if not flags & BTNODE_FIXED_KV_SIZE:
-            raise ApfsError('object map node {} is not fixed-size'.format(paddr))
+            raise ApfsError(f'object map node {paddr} is not fixed-size')
         toc = 56 + table_off
         keys = toc + table_len
         value_end = self.block_size - (40 if flags & BTNODE_ROOT else 0)
@@ -174,7 +174,7 @@ class Container:
         return out
 
     def set_volume_uuids(self, mapping, dry_run=False):
-        """mapping {old uuid: new uuid}: rewrites every superblock copy of those volumes. Returns the patched paddrs."""
+        """Mapping {old uuid: new uuid}: rewrites every superblock copy of those volumes. Returns the patched paddrs."""
         patched = []
         new_values = set(mapping.values())
         for paddr, block in sorted(self.volume_blocks().items()):
@@ -184,7 +184,7 @@ class Container:
             if current not in mapping:
                 continue
             if not checksum_ok(block):
-                raise ApfsError('volume superblock at block {} has a bad checksum'.format(paddr))
+                raise ApfsError(f'volume superblock at block {paddr} has a bad checksum')
             out = bytearray(block)
             out[VOL_UUID_OFFSET : VOL_UUID_OFFSET + 16] = mapping[current].bytes
             out = with_checksum(bytes(out))

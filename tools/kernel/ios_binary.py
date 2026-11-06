@@ -16,7 +16,7 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import common  # noqa: E402
+import common
 
 
 def main():
@@ -65,7 +65,7 @@ def main():
         subprocess.run(sign + [args.out], check=True, env=env)
     data = Path(args.out).read_bytes()
     if here.encode() in data:
-        sys.exit('{} names the execution root'.format(args.out))
+        sys.exit(f'{args.out} names the execution root')
 
 
 if __name__ == '__main__':

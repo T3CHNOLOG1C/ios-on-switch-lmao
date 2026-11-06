@@ -12,7 +12,7 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import common  # noqa: E402
+import common
 
 
 def main():
@@ -56,7 +56,7 @@ def main():
         places = [(t + '/libdispatch-work', cache + '/libdispatch-work') for t in sorted(temps)]
         places += [(t + '/xnu-work', cache + '/xnu-work') for t in sorted(temps)]
         places.append((os.path.realpath(out), cache + '/fakeroot'))
-        maps = ' '.join('-ffile-prefix-map={}={}'.format(path, spelling) for path, spelling in places)
+        maps = ' '.join(f'-ffile-prefix-map={path}={spelling}' for path, spelling in places)
         common.run(
             [
                 'xcodebuild',

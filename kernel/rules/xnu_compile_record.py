@@ -38,7 +38,7 @@ class Places:
         self.pairs = sorted(pairs, key=lambda p: -len(p[0]))
 
     def spell(self, token, gen):
-        """token with every absolute root as its placeholder; gen (the compile's directory) as {gen}."""
+        """Token with every absolute root as its placeholder; gen (the compile's directory) as {gen}."""
         for root, name in [(gen, '{gen}'), *self.pairs]:
             token = token.replace(root + '/', name + '/').replace(root, name) if root else token
         return token
@@ -109,7 +109,7 @@ def drop_missing_sdk_includes(tokens):
 
 
 def segments(log):
-    """object name -> setsegname argument strings, in order (the loops make runs after a component's compiles)."""
+    """Object name -> setsegname argument strings, in order (the loops make runs after a component's compiles)."""
     out = collections.defaultdict(list)
     files = {}
     for line in Path(log).read_text(errors='replace').splitlines():

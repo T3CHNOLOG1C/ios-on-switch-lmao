@@ -3,13 +3,13 @@
 
 import argparse
 import base64
-from bisect import bisect_right
-from collections import Counter
 import hashlib
 import json
-from pathlib import Path
 import struct
 import xml.etree.ElementTree as ET
+from bisect import bisect_right
+from collections import Counter
+from pathlib import Path
 
 
 def macho(data, at=0):
@@ -167,7 +167,8 @@ def plan_original(original_data, roots, slide, *, inherited_original_sha256=None
     """plan()'s part that reads only the original kernelcache: the closure, the extents and every pointer site, with
     the component pointers bound. The kernel and cut pointers' targets (new_target None here) and the checks against
     the native kernel are bind_native's, from `pending`: {'kernel': [(binding index, target, original export names)],
-    'cut': [(binding index, component, dependency, stub)]}."""
+    'cut': [(binding index, component, dependency, stub)]}.
+    """
     if (
         not isinstance(inherited_original_sha256, str)
         or len(inherited_original_sha256) != 64
@@ -259,7 +260,7 @@ def plan_original(original_data, roots, slide, *, inherited_original_sha256=None
     base = next(s['va'] for s in parent if s['name'] == '__PRELINK_TEXT')
     bindings = []
     unbound = {'kernel': [], 'cut': []}
-    cut_sites = {edge: 0 for edge in cuts}
+    cut_sites = dict.fromkeys(cuts, 0)
     for offset in offsets:
         site = base + offset
         source = owner(site)
@@ -332,7 +333,8 @@ def plan_original(original_data, roots, slide, *, inherited_original_sha256=None
 def native_bindings(native_data, native, kernel_targets, cut_stubs, extents):
     """The native kernel's half of plan(): each kernel target's native address (kernel_targets: [(target, original
     export names)]), each cut's stub address (cut_stubs: [(component, dependency, stub)]), and the checks that the
-    rebased extents ([(va, size)]) miss the native segments. The exports, for the caller's own markers."""
+    rebased extents ([(va, size)]) miss the native segments. The exports, for the caller's own markers.
+    """
     native_symbols = {}
     exported = exports(native_data, native)
     for address, names in exported.items():
@@ -358,7 +360,8 @@ def native_bindings(native_data, native, kernel_targets, cut_stubs, extents):
 
 def bind_native(report, unbound, native_data):
     """plan()'s native half on plan_original's report: the kernel and cut pointers' new targets, the native checks,
-    native_sha256. The exports of the native kernel."""
+    native_sha256. The exports of the native kernel.
+    """
     native = macho(native_data)
     if native['kind'] != 2:
         raise ValueError('Expected MH_EXECUTE kernel images')

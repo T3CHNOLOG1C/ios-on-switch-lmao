@@ -14,14 +14,14 @@ it is never installed as the md0 root device by this tool.
 from __future__ import annotations
 
 import argparse
-from dataclasses import asdict, dataclass
 import hashlib
 import json
-from pathlib import Path
 import shutil
 import stat
 import struct
 import sys
+from dataclasses import asdict, dataclass
+from pathlib import Path
 
 U64_MAX = (1 << 64) - 1
 PAGE = 0x1000
@@ -239,7 +239,7 @@ def validate_trustcache(data: bytes) -> None:
         previous = None
         for at in range(start + 24, end, 24):
             digest = data[at : at + 20]
-            if not 1 <= data[at + 20] <= 4 or previous is not None and previous >= digest:
+            if not 1 <= data[at + 20] <= 4 or (previous is not None and previous >= digest):
                 raise LayoutError('invalid hash type or unsorted trustcache')
             previous = digest
 

@@ -57,7 +57,7 @@ DATA_SEED_BYTES = 1 << 30
 def parse_size(text):
     found = re.fullmatch(r'\s*(\d+)\s*([GMgm]?)(?:i?B)?\s*', text)
     if not found:
-        raise argparse.ArgumentTypeError('{!r}: give bytes, or a number with G (GiB) or M (MiB)'.format(text))
+        raise argparse.ArgumentTypeError(f'{text!r}: give bytes, or a number with G (GiB) or M (MiB)')
     return int(found.group(1)) << {'': 0, 'm': 20, 'g': 30}[found.group(2).lower()]
 
 
@@ -128,9 +128,7 @@ def find_target(args, spec, log):
         card = found[0]
     fat, partition = cards.check_layout_unprivileged(card, spec, args.partition)
     log(
-        'card: {} ({} bytes); target {} {!r}, {} bytes'.format(
-            card.disk, card.size, partition.identifier, partition.name, partition.size
-        )
+        f'card: {card.disk} ({card.size} bytes); target {partition.identifier} {partition.name!r}, {partition.size} bytes'
     )
     return card, fat, partition, partition.size
 
@@ -149,14 +147,14 @@ def version_label(pins):
 
 def plan_lines(args, size, card, done):
     where = args.out
-    parts = "{}'s FAT".format(card.disk) if args.copy_to_card else where
+    parts = f"{card.disk}'s FAT" if args.copy_to_card else where
     steps = [
-        ('compose', 'compose a {} MiB iOS container in {}'.format(size >> 20, args.scratch)),
+        ('compose', f'compose a {size >> 20} MiB iOS container in {args.scratch}'),
         ('populate', 'populate Data and Preboot (asks for sudo once)'),
-        ('pack', 'pack it into {}/{}/ and add the boot entry and install-ios.bin'.format(parts, folder.INSTALL)),
+        ('pack', f'pack it into {parts}/{folder.INSTALL}/ and add the boot entry and install-ios.bin'),
     ]
     if args.copy_to_card:
-        steps.append(('pack', "merge {} onto {}'s FAT and eject it".format(where, card.disk)))
+        steps.append(('pack', f"merge {where} onto {card.disk}'s FAT and eject it"))
     skip = stages.STAGES[: stages.STAGES.index(done) + 1] if done else ()
     stop = stages.STAGES.index(args.stop_after) + 1 if args.stop_after else len(stages.STAGES)
     return [('done: ' if stage in skip else '') + line for stage, line in steps if stage in stages.STAGES[:stop]]
@@ -190,12 +188,10 @@ class Builder:
         if self.args.boot_only:
             stages.refresh_boot(self.args.out, self.args, PAYLOAD, self.log)
             return 0
-        self.log('image: {}'.format(version_label(self.pins)))
+        self.log(f'image: {version_label(self.pins)}')
         card, fat, partition, size = find_target(self.args, self.spec, self.log)
         if size < MIN_BYTES:
-            raise cards.Refused(
-                '{} bytes is too small for iOS: make the partition at least {} GiB'.format(size, MIN_BYTES >> 30)
-            )
+            raise cards.Refused(f'{size} bytes is too small for iOS: make the partition at least {MIN_BYTES >> 30} GiB')
         if self.args.copy_to_card and not card:
             raise cards.Refused('--copy-to-card writes to the card: put it in the Mac instead of giving --size')
         work = stages.Stages(self.args, self.spec, self.pins, self.log)
@@ -211,7 +207,7 @@ class Builder:
             self.check_space(size)
             offset = work.compose(size)
             done = 'compose'
-            self.log('compose: done; the image is {} MiB on disk'.format(allocated(work.image) >> 20))
+            self.log(f'compose: done; the image is {allocated(work.image) >> 20} MiB on disk')
         if self.args.stop_after == 'compose':
             return 0
         if done == 'compose':
@@ -227,19 +223,17 @@ class Builder:
         else:
             m = work.pack(size, offset, out / folder.INSTALL, version_label(self.pins))
             self.finish(out, m)
-            self.log("folder: {} ({} files); merge it onto the SD card's root".format(out, len(folder.files(out))))
+            self.log(f"folder: {out} ({len(folder.files(out))} files); merge it onto the SD card's root")
         return 0
 
     def check_space(self, size):
         want = needed(self.args, self.pins, compose.os_container_bytes(self.args.os_dmg, self.log))
         if size < want:
-            raise cards.Refused('the partition is {} bytes; this iOS needs at least {}'.format(size, want))
+            raise cards.Refused(f'the partition is {size} bytes; this iOS needs at least {want}')
         free = stages.free_bytes(self.args.scratch)
         if free < want + stages.FLOOR:
             raise host.HostError(
-                '{} has {} GiB free; composing needs about {} GiB and leaves {} GiB'.format(
-                    self.args.scratch, free >> 30, want >> 30, stages.FLOOR >> 30
-                )
+                f'{self.args.scratch} has {free >> 30} GiB free; composing needs about {want >> 30} GiB and leaves {stages.FLOOR >> 30} GiB'
             )
 
     def finish(self, out, m):
@@ -262,9 +256,7 @@ class Builder:
             free = shutil.disk_usage(root).free
             if free < allocated(work.image):
                 raise host.HostError(
-                    "the card's FAT has {} MiB free; the image needs about {} MiB".format(
-                        free >> 20, allocated(work.image) >> 20
-                    )
+                    f"the card's FAT has {free >> 20} MiB free; the image needs about {allocated(work.image) >> 20} MiB"
                 )
             m = work.pack(size, offset, install, version_label(self.pins))
             self.finish(out, m)
@@ -279,20 +271,21 @@ def allocated(path):
 
 def reexec_as_root(args):
     """The same run under sudo. The runfiles variables go along: the inputs are found, and so are the runfiles of the
-    pretranslate drivers it starts (sudo clears the environment)."""
+    pretranslate drivers it starts (sudo clears the environment).
+    """
     locate = runfiles()
-    env = ['{}={}'.format(k, v) for k, v in sorted((locate.EnvVars() if locate else {}).items())]
+    env = [f'{k}={v}' for k, v in sorted((locate.EnvVars() if locate else {}).items())]
     command = ['sudo', '--', '/usr/bin/env', *env, sys.executable, os.path.abspath(__file__)]
     for key, value in sorted(vars(args).items()):
         if key == 'pretranslate':
             continue
         flag = '--' + key.replace('_', '-')
         if key == 'inputs':
-            command += ['{}={}'.format(flag, v) for v in value or []]
+            command += [f'{flag}={v}' for v in value or []]
         elif value is True:
             command.append(flag)
         elif value not in (None, False):
-            command.append('{}={}'.format(flag, value))
+            command.append(f'{flag}={value}')
     print('composing needs root for file owners; running under sudo', flush=True)
     os.execvp('sudo', command)
 

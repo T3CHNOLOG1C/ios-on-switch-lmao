@@ -85,7 +85,7 @@ def disk_info(identifier):
 
 
 def partitions(disk):
-    """diskutil's view of the whole disk's partitions: [{DeviceIdentifier, Size, Content, VolumeName, ...}]."""
+    """Diskutil's view of the whole disk's partitions: [{DeviceIdentifier, Size, Content, VolumeName, ...}]."""
     listing = plist('diskutil', 'list', '-plist', disk)
     for item in listing.get('AllDisksAndPartitions', []):
         if item.get('DeviceIdentifier') == disk:
@@ -156,7 +156,7 @@ def mount_point(identifier):
 
 def require_root_or(reason):
     if os.geteuid() != 0:
-        raise HostError('{} needs root: rerun with sudo'.format(reason))
+        raise HostError(f'{reason} needs root: rerun with sudo')
 
 
 def python():

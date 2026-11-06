@@ -2,9 +2,11 @@
 """Parse nvk_shader objects from m2v driver records (M2VPPLC = NVK VkPipelineCache data). The object data is
 nvk_shader_serialize's output (Mesa src/nouveau/vulkan/nvk_shader.c, MIT): nak_shader_info (864 B), nvk_cbuf_map (132 B),
 sample_shading_enable (1), min_sample_shading (f32), shader version byte, then blob_write_uint32 (4-aligned) code_size,
-data_size, code, data, asm string, nir string."""
+data_size, code, data, asm string, nir string.
+"""
 
-import hashlib, struct, sys
+import struct
+import sys
 
 NAK_INFO = 864
 CBUF_TYPES = {0: 'invalid', 1: 'root', 2: 'shader_data', 3: 'desc_set', 4: 'dynamic_ubo', 5: 'ubo_desc'}
@@ -29,7 +31,7 @@ def records(b):
 
 
 def shader(d):
-    """dict for an nvk_shader object, or None for other objects."""
+    """Dict for an nvk_shader object, or None for other objects."""
     if len(d) < NAK_INFO + 150 or d[4] != 53:  # sm 53 (GM20B)
         return None
     stage, sm, gprs = struct.unpack_from('<IBB', d, 0)

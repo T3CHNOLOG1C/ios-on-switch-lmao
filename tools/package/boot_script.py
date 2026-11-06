@@ -17,7 +17,8 @@ from uimage import legacy_image
 
 def boot_script(text: str, constants: dict, dtb_bytes: int) -> str:
     """The template with every @NAME@ filled: the staged window's header and trailer words (boot/loader/stage.h), the
-    slots and the bootargs.txt page."""
+    slots and the bootargs.txt page.
+    """
     staged = constants['PACKED_BYTES']
     trailer = STAGE_SOURCE + staged
     values = {

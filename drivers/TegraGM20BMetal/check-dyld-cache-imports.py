@@ -10,7 +10,11 @@ tries, following LC_REEXPORT_DYLIB. Flat-namespace and weak-def-coalesce imports
 a missing weak import is listed but not fatal. Exit status 1 if anything non-weak is missing.
 """
 
-import mmap, re, struct, subprocess, sys
+import mmap
+import re
+import struct
+import subprocess
+import sys
 from pathlib import Path
 
 

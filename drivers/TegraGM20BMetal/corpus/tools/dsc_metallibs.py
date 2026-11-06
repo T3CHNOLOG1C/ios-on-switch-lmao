@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 """Find metallibs (MTLB containers) embedded in a dyld shared cache's subcaches; write each to <out>/<image>@<addr>.metallib.
-usage: dsc_metallibs.py <dir with dyld_shared_cache_arm64*> <out dir>"""
+usage: dsc_metallibs.py <dir with dyld_shared_cache_arm64*> <out dir>
+"""
 
-import mmap, struct, sys, re
+import mmap
+import re
+import struct
+import sys
 from pathlib import Path
 
 d, out = Path(sys.argv[1]), Path(sys.argv[2])

@@ -55,7 +55,7 @@ ENV_DROPS = (
 
 
 def bl33_patch(bl33: bytes) -> bytes:
-    """switchroot's U-Boot with its default environment as ENV_EDITS / ENV_DROPS say; every other byte unchanged."""
+    """Switchroot's U-Boot with its default environment as ENV_EDITS / ENV_DROPS say; every other byte unchanged."""
     if bl33.count(ENV_START) != 1:
         raise SystemExit('bl33.bin: U-Boot default environment not found exactly once')
     start = bl33.index(ENV_START) + 1

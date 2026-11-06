@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
 """Exercise the exact RAM reader with synthetic firmware objects; no devices."""
 
-from pathlib import Path
 import ctypes
 import hashlib
-import json
 import struct
 import subprocess
 import tempfile
 import unittest
 import zlib
+from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]

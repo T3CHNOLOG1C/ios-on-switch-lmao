@@ -3,7 +3,8 @@
 
 For the installer's and deploy's tests only: switchroot/ios/{bl31,bl33}.bin, bootloader/ini/ios.ini (the real
 entry's text, //boot:ios_ini), overlay/<two files>. --generation changes bl33.bin's and the overlay's contents, to test
-that a rerun rewrites exactly the files that differ."""
+that a rerun rewrites exactly the files that differ.
+"""
 
 import sys
 from pathlib import Path
@@ -37,7 +38,7 @@ def main():
     for name in FILES:
         path = out / 'switchroot/ios' / name
         path.parent.mkdir(parents=True, exist_ok=True)
-        body = 'fake {} for the installer test'.format(name).encode()
+        body = f'fake {name} for the installer test'.encode()
         if name == 'bl33.bin':
             body += b' generation %d' % generation
         path.write_bytes(body * 64)

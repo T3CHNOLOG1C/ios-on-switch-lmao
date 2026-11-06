@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """Summarize a corpus run: per framework (library tag) the entry points tried and passed, and every failure by category.
-usage: categorize.py <run dir> [--rows]  -> prints a table; writes <run dir>/summary.tsv and categories.tsv"""
+usage: categorize.py <run dir> [--rows]  -> prints a table; writes <run dir>/summary.tsv and categories.tsv
+"""
 
-import re, sys, collections
+import collections
+import re
+import sys
 from pathlib import Path
 
 run = Path(sys.argv[1])

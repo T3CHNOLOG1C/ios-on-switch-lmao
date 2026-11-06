@@ -100,7 +100,8 @@ def four_cores(tree):
 
 def ipad_adt(data, *, smp=False, overlay_dirs=(), bt_patch=None, portrait=False):
     """The inherited Switch tree plus what iPadOS userland expects of a J120
-    (values of UniXNU-qemu's make-qemu-adt.py, which boots this build to SpringBoard)."""
+    (values of UniXNU-qemu's make-qemu-adt.py, which boots this build to SpringBoard).
+    """
     tree, end = adt_parse(data)
     if end != len(data):
         raise SystemExit('trailing bytes after the ADT')

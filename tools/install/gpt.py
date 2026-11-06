@@ -46,15 +46,7 @@ class Entry:
         return self.sectors * SECTOR
 
     def describe(self):
-        return '#{} {!r} {} {} LBA {}-{} ({} bytes)'.format(
-            self.index,
-            self.name,
-            NAMES.get(self.type, str(self.type)),
-            str(self.guid).upper(),
-            self.first,
-            self.last,
-            self.bytes,
-        )
+        return f'#{self.index} {self.name!r} {NAMES.get(self.type, str(self.type))} {str(self.guid).upper()} LBA {self.first}-{self.last} ({self.bytes} bytes)'
 
 
 @dataclass
@@ -97,7 +89,7 @@ class Table:
 def _pread(fd, lba, sectors):
     data = os.pread(fd, sectors * SECTOR, lba * SECTOR)
     if len(data) != sectors * SECTOR:
-        raise GptError('short read at LBA {}'.format(lba))
+        raise GptError(f'short read at LBA {lba}')
     return data
 
 
@@ -119,17 +111,17 @@ def _parse_header(raw, lba):
         entries_crc,
     ) = _HEADER.unpack_from(raw)
     if signature != b'EFI PART':
-        raise GptError('no GPT header at LBA {}'.format(lba))
+        raise GptError(f'no GPT header at LBA {lba}')
     if size < 92 or size > SECTOR:
-        raise GptError('bad GPT header size {} at LBA {}'.format(size, lba))
+        raise GptError(f'bad GPT header size {size} at LBA {lba}')
     check = bytearray(raw[:size])
     check[16:20] = b'\0\0\0\0'
     if zlib.crc32(check) != crc:
-        raise GptError('GPT header CRC mismatch at LBA {}'.format(lba))
+        raise GptError(f'GPT header CRC mismatch at LBA {lba}')
     if current != lba:
-        raise GptError('GPT header at LBA {} says it is at {}'.format(lba, current))
+        raise GptError(f'GPT header at LBA {lba} says it is at {current}')
     if entry_size < 128 or entry_size % 8 or count * entry_size > 64 * 1024 or not count:
-        raise GptError('bad GPT entry geometry at LBA {}'.format(lba))
+        raise GptError(f'bad GPT entry geometry at LBA {lba}')
     return dict(
         size=size,
         backup=backup,
@@ -165,7 +157,7 @@ def parse_entries(raw, count, size):
 def read(fd, disk_bytes):
     """The disk's partition table; both GPT copies must be present, valid and identical."""
     if disk_bytes % SECTOR:
-        raise GptError('disk size {} is not a multiple of 512'.format(disk_bytes))
+        raise GptError(f'disk size {disk_bytes} is not a multiple of 512')
     sectors = disk_bytes // SECTOR
     mbr = _pread(fd, 0, 1)
     if mbr[510:512] != b'\x55\xaa':
@@ -210,14 +202,14 @@ def read(fd, disk_bytes):
     )
     for e in table.used:
         if not primary['first_usable'] <= e.first <= e.last <= primary['last_usable']:
-            raise GptError('entry {} lies outside the usable LBAs'.format(e.describe()))
+            raise GptError(f'entry {e.describe()} lies outside the usable LBAs')
     return table
 
 
 def _encode_name(name):
     encoded = name.encode('utf-16-le')
     if len(encoded) > 72:
-        raise GptError('partition name {!r} is longer than 36 UTF-16 units'.format(name))
+        raise GptError(f'partition name {name!r} is longer than 36 UTF-16 units')
     return encoded.ljust(72, b'\0')
 
 
@@ -232,10 +224,11 @@ def _rewrite_header(raw, entries_crc):
 
 def edit(table, index, type_guid, name):
     """The sector writes that give entry `index` a new type GUID and name: [(lba, bytes)], primary and backup.
-    Only that entry's 16 type bytes and 72 name bytes change, plus the two headers' CRCs."""
+    Only that entry's 16 type bytes and 72 name bytes change, plus the two headers' CRCs.
+    """
     entry = table.entries[index]
     if entry.type == UNUSED:
-        raise GptError('entry {} is unused'.format(index))
+        raise GptError(f'entry {index} is unused')
     raw = bytearray(table.raw_entries)
     at = index * table.entry_size
     raw[at : at + 16] = type_guid.bytes_le
@@ -257,7 +250,8 @@ def edit(table, index, type_guid, name):
 
 def build(disk_sectors, partitions, disk_guid=None):
     """A fresh GPT with a protective MBR for a scratch image: partitions [(type, guid, first, last, name)].
-    Returns [(lba, bytes)] covering LBA 0-33 and the backup's last 33 sectors."""
+    Returns [(lba, bytes)] covering LBA 0-33 and the backup's last 33 sectors.
+    """
     count, size = 128, 128
     raw = bytearray(count * size)
     for i, (kind, guid, first, last, name) in enumerate(partitions):
@@ -307,7 +301,7 @@ def build(disk_sectors, partitions, disk_guid=None):
 def apply(fd, writes):
     for lba, data in writes:
         if len(data) != SECTOR or lba == 0:
-            raise GptError('refusing a write to LBA {} ({} bytes)'.format(lba, len(data)))
+            raise GptError(f'refusing a write to LBA {lba} ({len(data)} bytes)')
         if os.pwrite(fd, data, lba * SECTOR) != SECTOR:
-            raise GptError('short write at LBA {}'.format(lba))
+            raise GptError(f'short write at LBA {lba}')
     os.fsync(fd)

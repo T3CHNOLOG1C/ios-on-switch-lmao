@@ -24,14 +24,14 @@ import base64
 import copy
 import hashlib
 import json
-from pathlib import Path
 import struct
 import sys
-from bisect import bisect_left
 import xml.etree.ElementTree as ET
+from bisect import bisect_left
+from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from native_prelink import backed_offset, exports, macho, native_bindings, plan_original, unserialize_xml
+from native_prelink import backed_offset, macho, native_bindings, plan_original, unserialize_xml
 
 # Standard SHA-256 round constants, stored as 64 little-endian words. Some
 # assemblers embed these data in executable sections; do not decode as code.
@@ -179,7 +179,8 @@ PLAN_MAGIC = b'SWCHPLK1'
 class Plan:
     """What apply needs from the original kernelcache: the coalesced segments back to back (every byte that does not
     depend on the native kernel written), where the native kernel's pointers go, and the prelink info XML around its
-    KCID."""
+    KCID.
+    """
 
     def __init__(self, **fields):
         self.__dict__.update(fields)
@@ -230,7 +231,8 @@ class Plan:
 
 def prepare(original_data, roots, slide, early_security_init=None, *, inherited_original_report):
     """emit()'s part that reads only the original kernelcache: (the plan, the report without its native fields, the
-    report's unbound pointers)."""
+    report's unbound pointers).
+    """
     inherited = inherited_original_report
     report, unbound = plan_original(
         original_data, roots, slide, cuts=CUT_DEPENDENCIES, inherited_original_sha256=inherited['original_sha256']
@@ -507,7 +509,8 @@ def prepare(original_data, roots, slide, early_security_init=None, *, inherited_
 
 def apply(plan, native_data, report=None, unbound=None):
     """emit()'s part that reads the native kernel: the candidate from a plan (and, given prepare's report and unbound
-    pointers, the report)."""
+    pointers, the report).
+    """
     native = macho(native_data)
     if native['kind'] != 2:
         raise ValueError('Expected MH_EXECUTE kernel images')

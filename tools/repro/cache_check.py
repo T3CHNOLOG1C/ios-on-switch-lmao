@@ -72,7 +72,7 @@ def main():
             for s in spawns(log)
             if s.get('runner') not in ('disk cache hit', 'remote cache hit') and not s.get('remoteCacheHit')
         ]
-        print('{} spawns executed in the second worktree'.format(len(executed)))
+        print(f'{len(executed)} spawns executed in the second worktree')
         for s in executed[:40]:
             outputs = [o.get('path') for o in s.get('actualOutputs', []) or s.get('listedOutputs', [])]
             print('  {} {}'.format(s.get('mnemonic'), outputs[0] if outputs else ''))

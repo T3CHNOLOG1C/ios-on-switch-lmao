@@ -13,7 +13,8 @@ Scenarios (each prints Bazel's Elapsed/processes lines):
   code reverted    the function removed: every action of the original build is a disk-cache hit
   fresh base       a brand-new output base (a fresh clone or `bazel clean --expunge`): everything from the disk cache
   cold (--cold)    a brand-new output base with no disk cache: everything runs
-The edited source is always restored."""
+The edited source is always restored.
+"""
 
 import argparse
 import os

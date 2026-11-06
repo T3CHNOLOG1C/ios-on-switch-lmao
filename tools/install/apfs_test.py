@@ -20,7 +20,8 @@ def obj(oid, xid, kind, body, subtype=0):
 
 def container(path, volumes, checkpoints=2):
     """A minimal container: NXSB at 0 and in a 4-block descriptor area at 1, an omap (block 10, root+leaf tree
-    block 11), volume superblocks at 20+."""
+    block 11), volume superblocks at 20+.
+    """
     blocks = {}
     fs_oids = [1026 + i for i in range(len(volumes))]
     leaf = bytearray(BS)

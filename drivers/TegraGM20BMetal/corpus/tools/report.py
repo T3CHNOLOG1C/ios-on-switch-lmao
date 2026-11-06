@@ -2,9 +2,12 @@
 """Compare two corpus runs (before, after) per framework: entry points (kernels, vertex and fragment functions) that compile and
 make their pipeline on the host NVK, where an entry point passes if any constant variant ("z" all zero, "1" all one) did.
 Failures are put in three buckets: real gaps, harness limits, and features the A10 (iPad7,1, Apple3 family) does not have.
-usage: report.py <before run dir> <after run dir> [--ms]   -> TSV on stdout"""
+usage: report.py <before run dir> <after run dir> [--ms]   -> TSV on stdout
+"""
 
-import collections, re, statistics, sys
+import collections
+import re
+import sys
 from pathlib import Path
 
 A10_NA = [

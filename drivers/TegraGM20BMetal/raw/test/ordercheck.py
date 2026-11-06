@@ -2,7 +2,8 @@
 """ordercheck (r8-rawca): reads the mock GPU's log (mock_iokit.c MOCK_GPU_LOG) of an orderframe run: the raw channel is the last
 one made (the facade opens after m2v), the rest are NVK's. Every submission must start after every submission of the other
 driver kicked before it ended (the commit order, kept on the GPU), and the raw submit thread must have made no WaitFence call.
-usage: ordercheck.py <log> <begin_us>"""
+usage: ordercheck.py <log> <begin_us>
+"""
 
 import sys
 

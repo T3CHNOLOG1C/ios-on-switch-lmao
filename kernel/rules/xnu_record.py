@@ -510,7 +510,7 @@ def main():
     workspace = Path(os.environ.get('BUILD_WORKSPACE_DIRECTORY', '.'))
     xnu = (workspace / args.xnu).resolve() if not os.path.isabs(args.xnu) else Path(args.xnu)
     out = (workspace / args.out) if not os.path.isabs(args.out) else Path(args.out)
-    scratch = Path(args.keep if args.keep else tempfile.mkdtemp(prefix='xnu-record.')).resolve()
+    scratch = Path(args.keep or tempfile.mkdtemp(prefix='xnu-record.')).resolve()
     reuse = args.reuse and (scratch / 'src').exists()
     if not reuse:
         shutil.rmtree(scratch, ignore_errors=True)

@@ -40,10 +40,12 @@ from pathlib import Path
 
 if __package__ in (None, ''):
     sys.path.insert(0, str(Path(os.path.abspath(__file__)).parents[2]))
-from tools.deploy import mkarchive  # noqa: E402
-from tools.install import card as cards  # noqa: E402
-from tools.install import host  # noqa: E402
-from tools.install import renamed  # noqa: E402
+from tools.deploy import mkarchive
+from tools.install import (
+    card as cards,
+    host,
+    renamed,
+)
 
 DATA_UUID = 'D1B1D053-D0A6-496C-8625-A947A3DA863E'  # SwitchRawMount.h SWITCH_RAW_DATA_UUID (checked against spec)
 # The checkout's precompile directory (harvest.py and the corpus.log it merges into), relative to the workspace: --harvest
@@ -94,7 +96,7 @@ PANIC_NAMES = (
 def panic_process(panic_text):
     """The process a panic names (lower case), or None."""
     for pattern in PANIC_NAMES:
-        match = re.search(pattern, panic_text, re.M)
+        match = re.search(pattern, panic_text, re.MULTILINE)
         if match:
             return match.group(1).lower()
     return None
@@ -102,13 +104,14 @@ def panic_process(panic_text):
 
 def thread_summary(report, process):
     """The threads of every task whose name is `process` (case-insensitive) in a stackshot report: state, wait, frames
-    as image+offset (S: the dyld shared cache, slid base in binaryImages; K/U: the kernel)."""
+    as image+offset (S: the dyld shared cache, slid base in binaryImages; K/U: the kernel).
+    """
     images = report.get('binaryImages', [])
 
     def frame(entry):
         index, offset = entry
         uuid, base, kind = images[index] if 0 <= index < len(images) else ('?', 0, '?')
-        return '{}:{}+0x{:x}'.format(kind, uuid[:8], offset)
+        return f'{kind}:{uuid[:8]}+0x{offset:x}'
 
     lines = []
     for pid, task in sorted(report.get('processByPid', {}).items(), key=lambda item: int(item[0])):
@@ -147,7 +150,8 @@ def decode_stackshot(shot, kcdata, log, what):
 
 def decode_wakes(out, kcdata, log):
     """wake-*.kcdata (the wake guarantee's stackshots) -> .stackshot.ips and .threads.txt for SpringBoard and
-    backboardd, the two that should have turned the panel on."""
+    backboardd, the two that should have turned the panel on.
+    """
     for shot in sorted(Path(out).glob('wake-*.kcdata')):
         ips = decode_stackshot(shot, kcdata, log, 'wake')
         if not ips:
@@ -226,7 +230,7 @@ def pull(data, out, log, logarchive=True, harvest=True, csstore=True, launchd=Tr
         path = data / name
         lines.append('{}: {}'.format(name, sorted(p.name for p in path.iterdir()) if path.is_dir() else 'missing'))
     apps = data / 'containers/Bundle/Application'
-    lines.append('installed apps: {}'.format(sum(1 for _ in apps.iterdir()) if apps.is_dir() else 0))
+    lines.append(f'installed apps: {sum(1 for _ in apps.iterdir()) if apps.is_dir() else 0}')
     (out / 'migration-state.txt').write_text('\n'.join(lines) + '\n')
     if csstore:
         stores = sorted(
@@ -238,7 +242,7 @@ def pull(data, out, log, logarchive=True, harvest=True, csstore=True, launchd=Tr
                 shutil.copyfile(store, out / store.name)
             for ident in WEBKIT_IDS:
                 total = sum(store.read_bytes().count(ident.encode()) for store in stores)
-                counts.append('{} {}'.format(ident, total))
+                counts.append(f'{ident} {total}')
             (out / 'lsdb-webkit.txt').write_text('\n'.join(counts) + '\n')
         else:
             log('LaunchServices database NOT copied (not found)')

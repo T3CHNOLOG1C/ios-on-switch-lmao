@@ -36,13 +36,16 @@ from pathlib import Path
 
 if __package__ in (None, ''):
     sys.path.insert(0, str(Path(os.path.abspath(__file__)).parents[2]))
-from tools.deploy import joycon_pairing  # noqa: E402
-from tools.deploy import poster_snapshots  # noqa: E402
-from tools.deploy import pull_logs  # noqa: E402
-from tools.install import card as cards  # noqa: E402
-from tools.install import host  # noqa: E402
-from tools.install import renamed  # noqa: E402
-
+from tools.deploy import (
+    joycon_pairing,
+    poster_snapshots,
+    pull_logs,
+)
+from tools.install import (
+    card as cards,
+    host,
+    renamed,
+)
 
 # Logging profiles put on Data by hand during bring-up, which nothing else removes: com.apple.SystemConfiguration at
 # Debug, persisted, writes ~8 Debug lines/s to the persisted log (configd SCDynamicStore/IPMonitor, wifid
@@ -87,12 +90,12 @@ def launchd_check(data, labels, log):
     path = Path(data) / 'db/com.apple.xpc.launchd/disabled.plist'
     entries = plistlib.loads(path.read_bytes()) if path.exists() else {}
     disabled = sorted(k for k, v in entries.items() if v is True or (isinstance(v, dict) and v.get('Disabled') is True))
-    log('launchd: {} disables {}'.format(path, disabled))
+    log(f'launchd: {path} disables {disabled}')
     if (path.parent / 'disabled.501.plist').exists():
         log('launchd: disabled.501.plist is never read by launchd (no per-user database on iOS)')
     missing = [label for label in labels if label not in disabled]
     if missing:
-        log('launchd: NOT disabled: {} (add them to native_switch_watchdog_policy in kern_exec.c)'.format(missing))
+        log(f'launchd: NOT disabled: {missing} (add them to native_switch_watchdog_policy in kern_exec.c)')
     return not missing
 
 
@@ -134,13 +137,11 @@ def main(argv=None):
         card = cards.resolve(args.disk)
         fat, target = cards.check_layout_unprivileged(card, spec)
         if target.content != 'Apple_APFS':
-            raise cards.Refused(
-                '{}: {} is not installed yet (run //install:sd first)'.format(card.disk, target.identifier)
-            )
+            raise cards.Refused(f'{card.disk}: {target.identifier} is not installed yet (run //install:sd first)')
         data_uuid = spec['volumes']['data']['uuid']
         data = pull_logs.data_volume(card, data_uuid)
         if not data:
-            raise cards.Refused('{}: no iPad Data volume {}'.format(card.disk, data_uuid))
+            raise cards.Refused(f'{card.disk}: no iPad Data volume {data_uuid}')
         if args.stage_gpu and not (
             args.gpu_bundle and (Path(args.gpu_bundle) / 'TegraGM20BMetal.trustcache').is_file()
         ):
@@ -148,10 +149,10 @@ def main(argv=None):
         with cards.mounted(fat.identifier, log) as fat_root:
             changes, removed = cards.sync_boot_entry(fat_root, args.boot_package, log, dry_run=True)
             pairing = None if args.no_joycon_pairing else joycon_pairing.read(fat_root, log)
-        log('card {}: FAT {}, iPad Data {}'.format(card.disk, fat.identifier, data))
+        log(f'card {card.disk}: FAT {fat.identifier}, iPad Data {data}')
         plan = (
             (['pull logs'] if not args.no_pull_logs else [])
-            + ['boot entry: {} to copy, {} stale'.format(len(changes), len(removed)), 'overlay']
+            + [f'boot entry: {len(changes)} to copy, {len(removed)} stale', 'overlay']
             + (
                 []
                 if args.no_joycon_pairing
@@ -165,13 +166,13 @@ def main(argv=None):
             )
             + (['stage the GPU bundle'] if args.stage_gpu else [])
             + (['remove the GPU bundle'] if args.remove_gpu else [])
-            + (['AWDL {} (<Data>/Switch/awdl-enable)'.format(args.awdl)] if args.awdl else [])
+            + ([f'AWDL {args.awdl} (<Data>/Switch/awdl-enable)'] if args.awdl else [])
             + (
                 ['reset gallery snapshots of {}'.format(' '.join(args.reset_gallery_snapshots))]
                 if args.reset_gallery_snapshots
                 else []
             )
-            + (['launchd check {}'.format(args.launchd_check)] if args.launchd_check else [])
+            + ([f'launchd check {args.launchd_check}'] if args.launchd_check else [])
             + ([] if args.no_eject else ['unmount the iPad volumes and eject'])
         )
         for step in plan:
@@ -181,8 +182,8 @@ def main(argv=None):
             return 0
         if args.confirm != card.disk:
             if args.confirm or not sys.stdin.isatty():
-                raise cards.Refused('confirm with --confirm={} or interactively'.format(card.disk))
-            if input('Deploy to {}? Type {}: '.format(card.disk, card.disk)).strip() != card.disk:
+                raise cards.Refused(f'confirm with --confirm={card.disk} or interactively')
+            if input(f'Deploy to {card.disk}? Type {card.disk}: ').strip() != card.disk:
                 raise cards.Refused('not confirmed')
         ok = True
         preboot = pull_logs.data_volume(card, spec['volumes']['preboot']['uuid'])

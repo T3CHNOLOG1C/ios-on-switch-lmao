@@ -19,18 +19,16 @@ import argparse
 import base64
 import hashlib
 import json
-import os
 import plistlib
 import subprocess
 import sys
 import tempfile
-import uuid
 import zlib
 from pathlib import Path
 
 if __package__ in (None, ''):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from tools.install import gpt, host  # noqa: E402
+from tools.install import gpt, host
 
 DEFAULT_LAYOUT = Path(__file__).resolve().parents[2] / 'install/testdata/switch-card-1tb.json'
 OTHER_FILES = {
@@ -89,7 +87,7 @@ def create(image, layout_path, variant):
         _recrc(sectors, disk_sectors)
     image = Path(image)
     if image.exists():
-        raise SystemExit('{} exists'.format(image))
+        raise SystemExit(f'{image} exists')
     with open(image, 'wb') as f:
         f.truncate(size)
         for lba, data in sectors.items():
@@ -117,7 +115,7 @@ def create(image, layout_path, variant):
                     subprocess.run(['/usr/sbin/diskutil', 'unmount', fat], check=True, capture_output=True)
     finally:
         detach(image)
-    print('{}: {} bytes, variant {}'.format(image, size, variant))
+    print(f'{image}: {size} bytes, variant {variant}')
 
 
 def _info():
@@ -157,7 +155,7 @@ def attach(image):
     )
     disk = host.whole_disk_of(out['system-entities'])
     if not disk:
-        raise SystemExit('hdiutil attach gave no whole disk for {}'.format(image))
+        raise SystemExit(f'hdiutil attach gave no whole disk for {image}')
     return '/dev/' + disk
 
 

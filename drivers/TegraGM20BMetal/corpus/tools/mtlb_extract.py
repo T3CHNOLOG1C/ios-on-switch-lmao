@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """Extract functions' bitcode from a metallib (AIR64 slice of a universal one too) and disassemble with llvm-dis.
-usage: mtlb_extract.py <metallib> <out dir> [name ...]   (no names: list functions)"""
+usage: mtlb_extract.py <metallib> <out dir> [name ...]   (no names: list functions)
+"""
 
-import struct, sys, subprocess
+import struct
+import subprocess
+import sys
 from pathlib import Path
 
 d = Path(sys.argv[1]).read_bytes()

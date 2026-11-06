@@ -1,5 +1,6 @@
 """What the native loader (boot/loader) and the packaging agree on: addresses, the RAM ledger's exclusions, the ADT
-properties the loader fills, and the staged kernel window's framing (boot/loader/stage.h)."""
+properties the loader fills, and the staged kernel window's framing (boot/loader/stage.h).
+"""
 
 # The prelinked AMFI closure starts at VA ...0427c000; its 2 MiB offset is kept at PA b207c000.
 PHYSICAL_BASE = 0xB207C000
@@ -79,5 +80,6 @@ BOOT_ARGS_BYTES = 0x1000
 
 def staged_bl33_bytes(staged_bytes: int) -> int:
     """bl33.bin's size with a staged window of staged_bytes: U-Boot's MiB, the header page, the window, the trailer page
-    (build_native_loader.py stage_into_bl33)."""
+    (build_native_loader.py stage_into_bl33).
+    """
     return STAGE_SOURCE - BL33_BASE + staged_bytes + PACK_PAGE

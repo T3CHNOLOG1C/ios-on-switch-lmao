@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Build the pinned-BL33 RAM metadata exporter locally; no install/device I/O."""
 
-from pathlib import Path
 import argparse
 import hashlib
 import json
@@ -10,6 +9,7 @@ import shutil
 import struct
 import subprocess
 import zlib
+from pathlib import Path
 
 SOURCE = Path(__file__).resolve().parent
 ROOT = SOURCE.parents[2]
