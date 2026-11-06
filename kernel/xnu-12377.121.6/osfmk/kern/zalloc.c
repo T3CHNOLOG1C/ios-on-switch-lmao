@@ -3026,13 +3026,20 @@ kasan_quarantine_resolve(vm_address_t addr, zone_t *zonep)
  * on 20% of the allocations.
  */
 #if ZALLOC_ENABLE_ZERO_CHECK
-#if defined(__x86_64__)
+#if defined(__x86_64__) || defined(__arm64__)
 /*
  * Peform zero validation on every 5th allocation
+ *
+ * Switch (r15-offload): on arm64 too. The Tegra X1's A57s spend 4.6 s of a 9.5-minute
+ * boot (kprof r7v 12:33: memcmp_zero_ptr_aligned under zalloc_item/zalloc_ext, 1159
+ * samples of 4 ms, the costliest kernel function after the interrupt-masked chains) in
+ * the check every allocation makes; Apple's own cores hide it. Freed elements are still
+ * cleared on free, so Z_ZERO holds; a write after free is now caught on 1 allocation in
+ * zzc_rate (the existing boot-arg) instead of every one, as on Intel Macs.
  */
 static TUNABLE(uint32_t, zzc_rate, "zzc_rate", 5);
 static uint32_t PERCPU_DATA(zzc_decrementer);
-#endif /* defined(__x86_64__) */
+#endif /* defined(__x86_64__) || defined(__arm64__) */
 
 /*
  * Determine if zero validation for allocation should be skipped
@@ -3040,7 +3047,7 @@ static uint32_t PERCPU_DATA(zzc_decrementer);
 static bool
 zalloc_skip_zero_check(void)
 {
-#if defined(__x86_64__)
+#if defined(__x86_64__) || defined(__arm64__)
 	uint32_t *counterp, cnt;
 
 	counterp = PERCPU_GET(zzc_decrementer);
@@ -3050,7 +3057,7 @@ zalloc_skip_zero_check(void)
 		return true;
 	}
 	*counterp = zzc_rate - 1;
-#endif /* !defined(__x86_64__) */
+#endif /* defined(__x86_64__) || defined(__arm64__) */
 	return false;
 }
 

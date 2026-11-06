@@ -523,6 +523,132 @@ kernel_startup_initialize_only(startup_subsystem_id_t sysid)
 }
 #endif /* __BUILDING_XNU_LIB_UNITTEST__ */
 
+#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
+/*
+ * Switch: the pre-kernel timing record the loader leaves in /chosen/switch-boot-stamps (the main repository's
+ * native/loader/stamps.h, whose word order this copies), logged once as milliseconds of the counter that the log's own
+ * times use. 0 is when hekate's BL31 enabled the counter; "-" marks a step without a sample (an older U-Boot,
+ * boot.scr or hekate entry, or the EMC raise off). "counter 0" is how long after SoC reset (the microsecond timer's 0)
+ * that was: hekate's own time. Three lines: the unified log cuts a kernel line at about 256 characters.
+ *
+ * Called from PE_init_iokit (pexpert/arm/pe_init.c), after firehose is configured: anything logged before that sits
+ * in the 4 KB firehose_boot_chunk, which r7o's log never received (its archive starts at "Firehose configured").
+ * The record also stays in the device tree for the whole boot: /chosen switch-boot-stamps in the IORegistry.
+ */
+static int
+switch_stamp_list(char *line, size_t size, int at, const uint64_t *w, uint64_t frequency, unsigned first,
+    unsigned last, const char *const *names)
+{
+	for (unsigned i = first; i <= last && at > 0 && (size_t)at < size; ++i) {
+		if (w[i]) {
+			at += snprintf(line + at, size - (size_t)at, " %s %llu.%llu%s", names[i - first], w[i] * 1000 / frequency,
+			    w[i] * 10000 / frequency % 10, i < last ? "," : "");
+		} else {
+			at += snprintf(line + at, size - (size_t)at, " %s -%s", names[i - first], i < last ? "," : "");
+		}
+	}
+	return at;
+}
+
+/*
+ * Switch: where this boot's /chosen/random-seed came from (the main repository's native/loader/seed.h, whose status
+ * values this copies). The loader mixes 64 bytes of the Tegra Security Engine's DRBG (SE2) into the seed the package
+ * pins, just before XNU starts; bootseed_init (prng_random.c) has hashed and zeroed it by the time this runs. One line.
+ */
+static void
+switch_log_seed_source(void)
+{
+	static const char *const reasons[] = {
+		"SE clock off or in reset", "SE secure-only or disabled", "SE busy", "SE ignored the configuration",
+		"no operation done in 2 ms", "SE error", "output never drained", "implausible output",
+		"entropy clock would not start",
+	};
+	DTEntry chosen;
+	const void *value;
+	unsigned int bytes;
+	uint32_t w[2];
+
+	if (SecureDTLookupEntry(NULL, "/chosen", &chosen) != kSuccess ||
+	    SecureDTGetProperty(chosen, "switch-seed-source", &value, &bytes) != kSuccess || bytes != sizeof(w)) {
+		return;
+	}
+	memcpy(w, value, sizeof(w));
+	const uint32_t status = w[1] & 0xff, detail = w[1] >> 16;
+	const char *entropy = (w[1] & 0x100) ? ", entropy clock turned on" : "";
+	if (w[0] != 0x44454553) {
+		printf("SwitchRandomSeed: pinned package seed (this loader does not mix one)\n");
+	} else if (status == 1) {
+		printf("SwitchRandomSeed: SE2 DRBG mixed in%s (fold %04x)\n", entropy, detail);
+	} else if (status >= 0x10 && status < 0x10 + sizeof(reasons) / sizeof(reasons[0])) {
+		printf("SwitchRandomSeed: pinned package seed: %s (%#x)%s\n", reasons[status - 0x10], detail, entropy);
+	} else {
+		printf("SwitchRandomSeed: pinned package seed: status %#x\n", w[1]);
+	}
+}
+
+void switch_log_boot_stamps(void);
+void
+switch_log_boot_stamps(void)
+{
+	enum {
+		MAGIC, WORDS, FREQUENCY, TIMERUS, TIMERUS_AT,
+		UBOOT_FIRST, UBOOT_LAST = UBOOT_FIRST + 9,
+		LOADER_FIRST, LOADER_LAST = LOADER_FIRST + 7,
+		EMC_RESULT, EMC_RATES, EMC_CORE, COUNT
+	};
+	static const char *const uboot[] = {
+		"main", "sd", "ready", "boot.scr", "loader.bin", "dtb", "kernel-window", "exporter", "bootm prep", "bootm go",
+	};
+	static const char *const loader[] = {
+		"entry", "emc", "emc done", "gates", "unpack", "unpacked", "copied", "xnu",
+	};
+	static const char *const emc_results[] = {
+		"raised", "no BPMP firmware", "bad channel area", "channel busy", "no answer", "bad ping", "rate not in table",
+		"clock 0 not emc", "VDD_CORE unreadable", "VDD_CORE too low", "refused",
+	};
+	DTEntry chosen;
+	const void *value;
+	unsigned int bytes;
+	uint64_t w[COUNT];
+	char line[240];
+	int at;
+	int64_t zero_us;
+	uint32_t emc;
+
+	switch_log_seed_source();
+	if (SecureDTLookupEntry(NULL, "/chosen", &chosen) != kSuccess ||
+	    SecureDTGetProperty(chosen, "switch-boot-stamps", &value, &bytes) != kSuccess || bytes != sizeof(w)) {
+		return;
+	}
+	memcpy(w, value, sizeof(w));
+	if (w[MAGIC] != 0x33504d4154534f49ULL || w[WORDS] != COUNT || !w[FREQUENCY]) {
+		return;
+	}
+	at = snprintf(line, sizeof(line), "SwitchPreKernel ms, u-boot:");
+	switch_stamp_list(line, sizeof(line), at, w, w[FREQUENCY], UBOOT_FIRST, UBOOT_LAST, uboot);
+	printf("%s\n", line);
+
+	at = snprintf(line, sizeof(line), "SwitchPreKernel ms, loader:");
+	at = switch_stamp_list(line, sizeof(line), at, w, w[FREQUENCY], LOADER_FIRST, LOADER_LAST, loader);
+	/* The microsecond timer is 32 bits: SoC reset is only known modulo ~71.6 minutes. */
+	zero_us = (int64_t)(uint32_t)w[TIMERUS] - (int64_t)(w[TIMERUS_AT] * 1000000 / w[FREQUENCY]);
+	if (at > 0 && (size_t)at < sizeof(line)) {
+		snprintf(line + at, sizeof(line) - (size_t)at, "; counter 0 = %lld ms after SoC reset", zero_us / 1000);
+	}
+	printf("%s\n", line);
+
+	emc = (uint32_t)w[EMC_RESULT];
+	if (!w[LOADER_FIRST + 1]) {
+		printf("SwitchPreKernel EMC: raise off\n");
+	} else {
+		printf("SwitchPreKernel EMC: %s (BPMP %d): %u -> %u MHz, VDD_CORE %u mV, channel area %#x\n",
+		    emc < sizeof(emc_results) / sizeof(emc_results[0]) ? emc_results[emc] : "?",
+		    (int)(int32_t)(w[EMC_RESULT] >> 32), (uint32_t)w[EMC_RATES] / 1000, (uint32_t)(w[EMC_RATES] >> 32) / 1000,
+		    (uint32_t)w[EMC_CORE], (uint32_t)(w[EMC_CORE] >> 32));
+	}
+}
+#endif /* XNU_SWITCH_VERIFIED_ROOT */
+
 void
 kernel_bootstrap(void)
 {

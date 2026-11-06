@@ -199,6 +199,33 @@ struct vnode;
 extern void vnode_setswapmount(struct vnode *);
 extern int64_t vnode_getswappin_avail(struct vnode *);
 
+extern uint32_t vnode_pager_decmpfs_chunk(
+	struct vnode *);
+extern boolean_t vnode_pager_virtualdev(
+	struct vnode *);
+/* osfmk/kern/switch_kprof.c: a wait (or count) for the current process, kprof waits line. kind: 0 page-in, 1 read
+ * I/O wait, 2 decmpfs page-in (count and bytes only), 3 page-in from a disk image's volume (the cryptexes). */
+extern void switch_kprof_wait(unsigned int kind, uint64_t elapsed, uint64_t bytes);
+/*
+ * osfmk/kern/switch_kprof.c (r17-faults): a completed vm_fault for the current process, kprof faults lines. cls is
+ * how vm_fault_internal resolved it, flags SWITCH_FAULT_WIRE/KERNEL/PURGEABLE, began the mach time it was entered,
+ * vaddr the fault address, around the pages the zero-fill fault-around entered with it (vm_fault.c).
+ */
+#define SWITCH_FAULT_ZF        0u     /* zero fill: DBG_ZERO_FILL_FAULT, DBG_NZF_PAGE_FAULT */
+#define SWITCH_FAULT_COW       1u     /* copy on write: DBG_COW_FAULT */
+#define SWITCH_FAULT_SOFT      2u     /* the page was resident: DBG_CACHE_HIT_FAULT */
+#define SWITCH_FAULT_DEVICE    3u     /* ... a device pager's (private) page: IOKit physical memory */
+#define SWITCH_FAULT_FILE      4u     /* paged in from its pager: DBG_PAGEIN/PAGEIND/PAGEINV_FAULT */
+#define SWITCH_FAULT_CMP       5u     /* decompressed: DBG_COMPRESSOR_FAULT, DBG_COMPRESSOR_SWAPIN_FAULT */
+#define SWITCH_FAULT_FAILED    6u     /* kr != KERN_SUCCESS, guard pages */
+#define SWITCH_FAULT_CLASSES   7u
+#define SWITCH_FAULT_WIRE      0x01u  /* change_wiring: vm_map_wire, IOKit prepare */
+#define SWITCH_FAULT_KERNEL    0x02u  /* in a kernel map */
+#define SWITCH_FAULT_PURGEABLE 0x04u  /* a zero fill in a purgeable object */
+extern void switch_kprof_fault(unsigned int cls, unsigned int flags, uint64_t began, uint64_t vaddr,
+    unsigned int around);
+/* osfmk/arm64/sleh.c (r17-faults): a fault arm_fast_fault resolved (pmap ref/mod emulation, never reaches vm_fault) */
+extern void switch_kprof_fast_fault(bool access_flag);
 #if CHECK_CS_VALIDATION_BITMAP
 /* used by the vnode_pager_cs_validation_bitmap routine*/
 #define CS_BITMAP_SET   1
@@ -218,6 +245,8 @@ extern kern_return_t vnode_pager_get_object_devvp(
 	uintptr_t *);
 #endif
 
+extern uint32_t vnode_pager_get_decmpfs_chunk(
+	memory_object_t);
 /*
  * Functions defined in ubc_subr.c used by the vm code
  */

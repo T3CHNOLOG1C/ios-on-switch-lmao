@@ -5182,6 +5182,8 @@ memorystatus_on_ledger_footprint_exceeded(boolean_t warning, boolean_t memlimit_
 	}
 }
 
+extern void switch_footprint_breakdown(task_t task, char *buf, size_t size);
+
 void
 memorystatus_log_exception(const int max_footprint_mb, boolean_t memlimit_is_active, boolean_t memlimit_is_fatal)
 {
@@ -5197,6 +5199,11 @@ memorystatus_log_exception(const int max_footprint_mb, boolean_t memlimit_is_act
 	    ((p && *p->p_name) ? p->p_name : "unknown"), (p ? proc_getpid(p) : -1), (memlimit_is_active ? "Active" : "Inactive"),
 	    (memlimit_is_fatal  ? "Hard" : "Soft"), max_footprint_mb,
 	    (memlimit_is_fatal  ? "fatal" : "non-fatal"));
+	/* Switch: what the footprint is made of (switch_kprof.c), once per process per limit like the line above. */
+	char breakdown[320];
+	switch_footprint_breakdown(current_task(), breakdown, sizeof(breakdown));
+	memorystatus_log("EXC_RESOURCE -> %s[%d] footprint KiB: %s\n", ((p && *p->p_name) ? p->p_name : "unknown"),
+	    (p ? proc_getpid(p) : -1), breakdown);
 }
 
 void

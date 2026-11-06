@@ -3820,6 +3820,7 @@ thread_dispatch(
 			 * CPU is not running.
 			 */
 			kperf_running_setup(processor, processor->last_dispatch);
+			switch_kprof_running_setup(processor, processor->last_dispatch);
 		}
 		running_timers_activate(processor);
 		processor->first_timeslice = TRUE;
@@ -6824,6 +6825,10 @@ sched_timeshare_maintenance_continue(void)
 	KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED, MACH_SCHED_MAINTENANCE) | DBG_FUNC_END,
 	    sched_pri_shifts[TH_BUCKET_SHARE_FG], sched_pri_shifts[TH_BUCKET_SHARE_BG],
 	    sched_pri_shifts[TH_BUCKET_SHARE_UT], sched_pri_shifts[TH_BUCKET_SHARE_DF], 0);
+
+	/* Switch: UI main thread stall reports (switch_stall.c) sample on this tick. */
+	extern void switch_stall_tick(uint64_t now);
+	switch_stall_tick(sched_tick_ctime);
 
 	assert_wait((event_t)sched_timeshare_maintenance_continue, THREAD_UNINT);
 	thread_block((thread_continue_t)sched_timeshare_maintenance_continue);

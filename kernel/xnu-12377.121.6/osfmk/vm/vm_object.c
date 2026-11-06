@@ -6930,6 +6930,73 @@ unsigned int preheat_max_bytes = MAX_UPL_TRANSFER_BYTES;
 #endif /* !XNU_TARGET_OS_OSX */
 unsigned int preheat_min_bytes = (1024 * 32);
 
+/*
+ * Switch (r14-launch): a page-in of a file decmpfs keeps in 64 KiB chunks (vnode_pager_decmpfs_chunk) grows to the
+ * chunks it touches, through the absent pages around it only (never bridging a resident or busy page), within the
+ * file, the faulting map entry's range and the pager's (and a throttled thread's) limit, and not when free memory is
+ * below the free target (where preheat backs off too). The decompressor decodes whole chunks whatever the page-in asks
+ * for, so this costs no extra decoding or reading: the pages that were decoded and dropped are kept, and the next
+ * faults in the same chunk find them resident. Counted for the kprof decmpfs line.
+ */
+uint64_t switch_decmpfs_aligned, switch_decmpfs_aligned_pages;
+#ifndef SWITCH_DECMPFS_CHUNK_ALIGN
+#define SWITCH_DECMPFS_CHUNK_ALIGN 1  /* 0: page-ins as XNU sizes them (an A/B build); the counters stay */
+#endif
+
+static void
+switch_cluster_chunk_align(vm_object_t object, vm_object_offset_t *start, vm_size_t *length, vm_size_t limit,
+    vm_object_fault_info_t fault_info)
+{
+	const uint32_t          chunk = vnode_pager_get_decmpfs_chunk(object->pager);
+	vm_object_offset_t      object_size, lo, hi, s, e;
+	uint32_t                throttle_limit = (uint32_t)MIN(limit, UINT32_MAX);
+
+	if (!SWITCH_DECMPFS_CHUNK_ALIGN || chunk == 0 || chunk < PAGE_SIZE ||
+	    vm_page_free_count + vm_page_cleaned_count < vm_page_free_target) {
+		return;
+	}
+	if (vnode_pager_get_object_size(object->pager, &object_size) != KERN_SUCCESS) {
+		return;
+	}
+	/* a throttled thread's page-in stays within its throttle size, as preheat does */
+	if (vnode_pager_get_throttle_io_limit(object->pager, &throttle_limit) == KERN_SUCCESS && throttle_limit < limit) {
+		limit = throttle_limit;
+	}
+	object_size = round_page_64(object_size);
+	s = *start;
+	e = *start + *length;
+	lo = s & ~(vm_object_offset_t)(chunk - 1);
+	hi = (e + chunk - 1) & ~(vm_object_offset_t)(chunk - 1);
+	if (hi > object_size) {
+		hi = object_size;
+	}
+	/* within the faulting map entry's range of the object, as preheat's look-behind and look-ahead */
+	if (fault_info != NULL) {
+		if (lo < round_page_64(fault_info->lo_offset)) {
+			lo = round_page_64(fault_info->lo_offset);
+		}
+		if (hi > round_page_64(fault_info->hi_offset)) {
+			hi = round_page_64(fault_info->hi_offset);
+		}
+	}
+	if (hi <= lo || s < lo || e > hi || hi - lo > limit) {
+		return;
+	}
+	while (s > lo && vm_page_lookup(object, s - PAGE_SIZE_64) == VM_PAGE_NULL) {
+		s -= PAGE_SIZE_64;
+	}
+	while (e < hi && vm_page_lookup(object, e) == VM_PAGE_NULL) {
+		e += PAGE_SIZE_64;
+	}
+	if (s == *start && e == *start + *length) {
+		return;
+	}
+	os_atomic_inc(&switch_decmpfs_aligned, relaxed);
+	os_atomic_add(&switch_decmpfs_aligned_pages, (uint64_t)((e - s - *length) >> PAGE_SHIFT), relaxed);
+	*start = s;
+	*length = (vm_size_t)(e - s);
+}
+
 
 __private_extern__ void
 vm_object_cluster_size(vm_object_t object, vm_object_offset_t *start,
@@ -6953,6 +7020,7 @@ vm_object_cluster_size(vm_object_t object, vm_object_offset_t *start,
 	int                     sequential_behavior = VM_BEHAVIOR_SEQUENTIAL;
 	vm_size_t               max_ph_size;
 	vm_size_t               min_ph_size;
+	const vm_size_t         switch_limit = *length;   /* the pager's own limit, before preheat clamps it */
 
 	assert( !(*length & PAGE_MASK));
 	assert( !(*start & PAGE_MASK_64));
@@ -7278,6 +7346,9 @@ vm_object_cluster_size(vm_object_t object, vm_object_offset_t *start,
 out:
 	if (*length > max_length) {
 		*length = max_length;
+	}
+	if (object->pager != MEMORY_OBJECT_NULL && !object->internal) {
+		switch_cluster_chunk_align(object, start, length, switch_limit, fault_info);
 	}
 
 	vm_object_unlock(object);

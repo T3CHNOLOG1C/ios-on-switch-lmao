@@ -133,6 +133,8 @@ struct image_params {
 	uint64_t ip_dyld_fsobjid;
 	uint64_t ip_inherited_jop_pid;
 	unsigned int    ip_flags2;              /* extended image flags */
+	int             ip_switch_band;       /* SwitchBootBand class, set while the path still exists
+	                                         * (exec_activate_image; switch_boot_band.c) */
 };
 
 /*

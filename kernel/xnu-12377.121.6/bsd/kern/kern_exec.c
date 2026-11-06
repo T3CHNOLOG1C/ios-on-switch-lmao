@@ -411,6 +411,12 @@ static errno_t exec_handle_port_actions(struct image_params *imgp,
     struct exec_port_actions *port_actions);
 static errno_t exec_handle_exception_port_actions(const struct image_params *imgp,
     const struct exec_port_actions *port_actions);
+extern int switch_boot_band_classify(const char *path);
+extern void switch_boot_band_spawned(task_t task, int band_class);
+extern void switch_stall_exec(thread_t thread);
+/* drivers/SwitchPower/SwitchPerfGovernor.cpp (SwitchPower.h SWITCH_PERF_HINT_LAUNCH = 3): the CPU at its top clock
+ * for a while, and the GPU back at its full clock if it was idling low (TegraGM20B's idle clock); any context */
+extern void switch_perf_hint(unsigned int hint);
 static errno_t exec_handle_spawnattr_policy(proc_t p, thread_t thread, int psa_apptype, uint64_t psa_qos_clamp,
     task_role_t psa_darwin_role, struct exec_port_actions *port_actions);
 static void exec_port_actions_destroy(struct exec_port_actions *port_actions);
@@ -3145,6 +3151,26 @@ encapsulated_binary:
 			    KAUTH_FILEOP_EXEC,
 			    (uintptr_t)ndp->ni_vp, 0);
 		}
+
+		/*
+		 * SwitchBootBand: classify the image here, while its path exists. The strings area is freed
+		 * below on success too (bad: is the fall-through), so posix_spawn() and execve(), which apply the
+		 * band after this returns, find ip_strings NULL (r7p8: "0 processes held").
+		 */
+		imgp->ip_switch_band = switch_boot_band_classify(imgp->ip_strings + strlen(EXECUTABLE_KEY));
+
+		/*
+		 * Switch: an app is starting (its executable sits in a .app bundle: /Applications, the containers'
+		 * Bundle/Application, the cryptexes' apps): the CPU (and an idle GPU) go to their top clocks now, as Horizon's
+		 * boost mode does for a title's loading, instead of a window or two later when the load shows (dyld, the
+		 * first frame). Daemons and app extensions (.appex) do not.
+		 */
+		{
+			const char *path = imgp->ip_strings + strlen(EXECUTABLE_KEY);
+			if (strnstr(path, ".app/", strlen(path)) != NULL) {
+				switch_perf_hint(3);
+			}
+		}
 	}
 bad:
 	proc_transend(p, 0);
@@ -5502,6 +5528,13 @@ bad:
 		    psa->psa_darwin_role, &port_actions);
 	}
 
+	/* Switch: background daemons and widget extensions spawned during boot yield the CPU (switch_boot_band.c;
+	 * the class was taken in exec_activate_image, which has freed the path by now). */
+	if (error == 0 && imgp->ip_new_thread != THREAD_NULL) {
+		switch_boot_band_spawned(get_threadtask(imgp->ip_new_thread), imgp->ip_switch_band);
+		switch_stall_exec(imgp->ip_new_thread);
+	}
+
 	/* Transfer the turnstile watchport boost to new task if in exec */
 	if (error == 0 && !spawn_no_exec) {
 		task_transfer_turnstile_watchports(old_task, new_task, imgp->ip_new_thread);
@@ -6225,6 +6258,12 @@ __mac_execve(proc_t p, struct __mac_execve_args *uap, int32_t *retval __unused)
 	}
 #endif /* defined(HAS_APPLE_PAC) */
 
+	/* Switch: the boot band for execve() too (xpcproxy may exec the daemon in place; switch_boot_band.c). */
+	if (!error && imgp->ip_new_thread != THREAD_NULL) {
+		switch_boot_band_spawned(new_task, imgp->ip_switch_band);
+		switch_stall_exec(imgp->ip_new_thread);
+	}
+
 	/* flag exec has occurred, notify only if it has not failed due to FP Key error */
 	if (exec_done && ((p->p_lflag & P_LTERM_DECRYPTFAIL) == 0)) {
 		proc_knote(p, NOTE_EXEC);
@@ -6757,8 +6796,8 @@ bad:
  * switch-bt=1: bluetoothd's POSIX HCI driver (21H461 bluetoothd FUN_1001d104c / FUN_1000ddaa8) opens the kernel
  * control named in BT_HCI_TRANSPORT ("<transport>:<driver>:<name>,<baud>") instead of its default
  * "com.apple.uart.sk.bluetooth", a Skywalk channel endpoint nothing here provides. drivers/SwitchBluetooth registers
- * the plain stream "com.apple.uart.bluetooth" (the one BlueTool itself opens) with the controller already patched
- * and at 3 Mbaud; "H4" is plain H4 framing with RTS/CTS, as the ADT's transport-encoding 1 says.
+ * the plain stream "com.apple.uart.bluetooth" (BlueTool's own) with the controller patched, at 3 Mbaud. "H4BC" (J120's
+ * transport-encoding 3, BT_WAKE through SwitchBluetooth's /dev/btwake): plain "H4" crashed every stack terminate.
  */
 /*
  * r6-lows: CA_FORCE_TIMER=1 for backboardd (NATIVE_SWITCH_CA_VBL, a build-time switch: the boot-args are full). QuartzCore
@@ -6769,11 +6808,13 @@ bad:
  * CADisplayTimer at the nominal refresh whose phase timer_callback aligns from IOMFBDisplay::timing_reference, display+0x6530,
  * shared timing memory the legacy family never provides: a free-running 60 Hz timer at a random phase to DC A's flip latch
  * (every boot's display stats: "vsync 0 sent", flip-wait mean 4-12 ms). With VBL, IOMFBDisplay::can_update_ also waits for the
- * previous swap (IOMobileFramebufferSwapWait), which NativeLegacyDisplay retires when its GPU copy is offered. Off by default
- * until one boot compares the display stats' present quantiles with and without it.
+ * previous swap (IOMobileFramebufferSwapWait), which NativeLegacyDisplay retires when its GPU copy is offered.
+ * r8-landscape (11-04): on. Every build so far ran on that free timer: "vsync 0 sent" in every stats line, presents a random
+ * 1-4 DC A frames apart (r7l: 20/s idle from the animated Astronomy poster, "frames 2:6 3:91 4+:3"). NativeLegacyDisplay finds
+ * the registration at the next frame end (watchVsync) and panics if V_BLANK stops while it is armed.
  */
 #ifndef NATIVE_SWITCH_CA_VBL
-#define NATIVE_SWITCH_CA_VBL 0
+#define NATIVE_SWITCH_CA_VBL 1
 #endif
 
 /*
@@ -6785,9 +6826,21 @@ bad:
  * (e00002c2, "frame rejected (reason 2)", 60 a second) and the screen froze for 28 s and 100 s, and the second time
  * IOMFBDisplay::detach_layer's copy_surface needed an IOSurfaceAccelerator, which this platform does not have:
  * "Failed to create IOSurfaceAccelerator" abort, backboardd and SpringBoard restarted.
+ * r18-planes (11-05): the variable stays only while native_legacy_detach_ready() (NativeLegacyDisplay.cpp) says no, asked at
+ * each backboardd exec. It says yes once the display's plane probe proved window B scans through the SMMU (at the display's
+ * start, before backboardd) and TegraVIC proved the IOSurfaceAccelerator quarter turns every rotated detached layer is
+ * copied through. Core Animation never falls back from a refused swap (finish_update sends it again every frame, the freezes
+ * above): the display now accepts every swap built within the limits it publishes (IOMFBScalingLimits, IOMFBMaxSrcPixels,
+ * IOMFBNumLayers 2, DisplayPipePlaneBaseAlignment) and shows the detached layer on window B under the UI.
  */
+/* Weak default for a kernel without the display: never. */
+__attribute__((weak)) bool
+native_legacy_detach_ready(void)
+{
+	return false;
+}
 static const char *const native_switch_bluetoothd_environment[] = {
-	"BT_HCI_TRANSPORT=H4:POSIX:com.apple.uart.bluetooth,3000000", NULL
+	"BT_HCI_TRANSPORT=H4BC:POSIX:com.apple.uart.bluetooth,3000000", NULL
 };
 static const char *const native_switch_backboardd_environment[] = {"CA_DISABLE_DETACHED=1", NULL};
 #if NATIVE_SWITCH_CA_VBL
@@ -6815,6 +6868,7 @@ native_switch_exec_environment(const struct image_params *imgp)
 		single_layer = PE_parse_boot_argn("offline-legacy-validate", &validate, sizeof(validate)) && validate == 1;
 	}
 	if (!strncmp(executable, backboardd, sizeof(backboardd))) {
+		const int single = single_layer && !native_legacy_detach_ready();
 #if NATIVE_SWITCH_CA_VBL
 		/* Only with the display's DC A vsync (sheng-vsync, NativeLegacyDisplay startVsync): without it nothing would drive CA. */
 		static int vbl = -1;
@@ -6823,14 +6877,14 @@ native_switch_exec_environment(const struct image_params *imgp)
 			(void)PE_parse_boot_argn("switch-vblank", &vblank, sizeof(vblank));
 			vbl = PE_parse_boot_argn("sheng-vsync", &hz, sizeof(hz)) && hz && vblank;
 		}
-		if (vbl && single_layer) {
+		if (vbl && single) {
 			return native_switch_backboardd_vbl_environment;
 		}
 		if (vbl) {
 			return native_switch_backboardd_vbl_environment + 1;
 		}
 #endif
-		if (single_layer) {
+		if (single) {
 			return native_switch_backboardd_environment;
 		}
 	}
@@ -7233,7 +7287,7 @@ exec_add_entropy_key(struct image_params *imgp,
 /*
  * Build up the contents of the apple[] string vector
  */
-#if (DEVELOPMENT || DEBUG)
+#if 1 /* kern_sysctl.c's dyld_flags exists in every configuration; the owner cache startup sets its bit 3 */
 extern uint64_t dyld_flags;
 #endif
 
@@ -8137,9 +8191,9 @@ create_unix_stack(vm_map_t map, load_result_t* load_result,
  *		initproc might be different.
  */
 #if defined(XNU_OWNER_CACHE_MOUNT) && XNU_OWNER_CACHE_MOUNT
-#if !DEVELOPMENT && !DEBUG
-#error The offline owner cache mount is a development instrument
-#endif
+/* The owner cache mount is part of ios-on-switch-lmao's boot path in every kernel configuration (it was refused
+ * outside DEVELOPMENT and DEBUG while it was an offline experiment); XNU_OWNER_CACHE_MOUNT selects it.
+ */
 extern int native_verified_block_volume_device(const char *, dev_t *, char *, size_t);
 #if defined(XNU_OWNER_BOOT_MANIFEST) && XNU_OWNER_BOOT_MANIFEST
 extern int native_owner_publish_boot_manifest(dev_t, const char *, dev_t, const char *);
@@ -8573,6 +8627,49 @@ native_switch_watchdog_attributes(vnode_t vp, mount_t data_mount, int directory,
 	return 0;
 }
 
+/*
+ * What launchd's exec changed on Data this boot (files replaced or removed, directories made). On r7p5/r7p6 the policy
+ * step (eight synchronous file replacements, five directory syncs and a volume sync on the SD card) put about 2.1 s
+ * between the Data mount and launchd's exec, on the boot's critical path, though the files were the same every boot.
+ * Now a file that already holds the bytes, owner and mode it would get is left alone, and a directory or volume sync
+ * only runs once something has changed: every sync that persists a change still runs where it did, in the same order;
+ * the skipped ones had nothing to persist.
+ */
+static unsigned int native_switch_policy_written, native_switch_policy_unchanged;
+
+/* Whether path already is a regular file on data_mount with exactly these bytes, owner, group and mode. */
+static bool
+native_switch_file_unchanged(const char *path, const char *bytes, int length, mount_t data_mount, uid_t owner,
+    gid_t group, mode_t mode)
+{
+	vfs_context_t context = vfs_context_current();
+	vnode_t vp = NULLVP;
+	struct vnode_attr attributes;
+	bool same = false;
+
+	if (length <= 0 || length > 64 * 1024 || vnode_open(path, FREAD | O_NOFOLLOW_ANY, 0, 0, &vp, context)) return false;
+	VATTR_INIT(&attributes);
+	VATTR_WANTED(&attributes, va_uid);
+	VATTR_WANTED(&attributes, va_gid);
+	VATTR_WANTED(&attributes, va_mode);
+	VATTR_WANTED(&attributes, va_data_size);
+	if (vnode_mount(vp) == data_mount && vnode_isreg(vp) && !VNOP_GETATTR(vp, &attributes, context) &&
+	    VATTR_IS_SUPPORTED(&attributes, va_uid) && VATTR_IS_SUPPORTED(&attributes, va_gid) &&
+	    VATTR_IS_SUPPORTED(&attributes, va_mode) && VATTR_IS_SUPPORTED(&attributes, va_data_size) &&
+	    attributes.va_uid == owner && attributes.va_gid == group && (attributes.va_mode & 07777) == mode &&
+	    attributes.va_data_size == (uint64_t)length) {
+		char *existing = kalloc_data((vm_size_t)length, Z_WAITOK);
+		int residual = length;
+		if (existing && !vn_rdwr(UIO_READ, vp, existing, length, 0, UIO_SYSSPACE, 0, vfs_context_ucred(context),
+		    &residual, vfs_context_proc(context)) && residual == 0) {
+			same = memcmp(existing, bytes, (size_t)length) == 0;
+		}
+		kfree_data(existing, (vm_size_t)length);
+	}
+	(void)vnode_close(vp, FREAD, context);
+	return same;
+}
+
 static int
 native_switch_watchdog_directory(proc_t p, user_addr_t scratch, const char *path, mount_t data_mount)
 {
@@ -8600,7 +8697,9 @@ native_switch_watchdog_directory(proc_t p, user_addr_t scratch, const char *path
 		error = vnode_setattr(vp, &attributes, vfs_context_current());
 	}
 	if (!error) error = native_switch_watchdog_attributes(vp, data_mount, 1, 0);
-	if (!error) error = VNOP_FSYNC(vp, MNT_WAIT, vfs_context_current());
+	if (created) native_switch_policy_written++;
+	/* Persists a new directory, or names changed in it; nothing to persist while nothing changed. */
+	if (!error && native_switch_policy_written) error = VNOP_FSYNC(vp, MNT_WAIT, vfs_context_current());
 	int close_error = vnode_close(vp, FREAD, vfs_context_current());
 	return error ? error : close_error;
 }
@@ -8619,7 +8718,11 @@ native_switch_watchdog_file(proc_t p, user_addr_t scratch, const char *path, con
 		error = vnode_open(path, FREAD | O_NOFOLLOW_ANY, 0, 0, &vp, context);
 		if (!error) return vnode_close(vp, FREAD, context);
 		if (error != ENOENT) return error;
+	} else if (native_switch_file_unchanged(path, bytes, length, data_mount, owner, group, mode)) {
+		native_switch_policy_unchanged++;
+		return 0;
 	}
+	native_switch_policy_written++;
 	int size = snprintf(temporary, sizeof(temporary), "%s.Switch-%s", path, bootsessionuuid_string);
 	if (size < 0 || (size_t)size >= sizeof(temporary)) return ENAMETOOLONG;
 	error = vnode_open(temporary, FREAD | FWRITE | O_CREAT | O_TRUNC | O_NOFOLLOW_ANY, mode, 0, &vp, context);
@@ -8654,6 +8757,15 @@ native_switch_watchdog_file(proc_t p, user_addr_t scratch, const char *path, con
 	return error;
 }
 
+/* unlink(2) for the policy step: a removal is a change the step's syncs have to persist. */
+static int
+native_switch_unlink(proc_t p, struct unlink_args *request, int32_t *result)
+{
+	int error = unlink(p, request, result);
+	if (!error) native_switch_policy_written++;
+	return error;
+}
+
 static int
 native_switch_mkdir(proc_t p, user_addr_t scratch, const char *path, uid_t owner, mode_t mode)
 {
@@ -8667,6 +8779,7 @@ native_switch_mkdir(proc_t p, user_addr_t scratch, const char *path, uid_t owner
 	struct mkdir_args request = {.path = scratch + 0x900, .mode = 0755};
 	int32_t result = 0;
 	if ((error = copyout(path, request.path, strlen(path) + 1)) || (error = mkdir(p, &request, &result))) return error;
+	native_switch_policy_written++;
 	if ((error = vnode_lookup(path, 0, &vp, vfs_context_current()))) return error;
 	struct vnode_attr attributes;
 	VATTR_INIT(&attributes);
@@ -8787,7 +8900,7 @@ native_switch_system_app_migration(proc_t p, user_addr_t scratch, mount_t data_m
 		vnode_put(vp);
 		struct unlink_args request = {.path = scratch + 0x900};
 		int32_t result = 0;
-		if (!(error = copyout(sentinel, request.path, sizeof(sentinel)))) error = unlink(p, &request, &result);
+		if (!(error = copyout(sentinel, request.path, sizeof(sentinel)))) error = native_switch_unlink(p, &request, &result);
 		printf("SwitchRawBoot: last boot's data migration did not finish; not run again (%d)\n", error);
 		return;
 	}
@@ -8805,16 +8918,15 @@ native_switch_system_app_migration(proc_t p, user_addr_t scratch, mount_t data_m
 
 /* Portrait-native (drivers/NativeMobileDisplay/SwitchPortrait.h): iOS is given the Switch's 720x1280 panel as it is and
  * runs landscape with the panel's top on the user's right, which is interface orientation 4 (landscape left, home button
- * on the left) and device orientation 4. With no accelerometer, the orientation comes from two places:
- *  - ADT /chosen display-boot-rotation 270 (scripts/package_raw_boot.py, which also decides the mode): MobileGestalt
- *    DisplayBootRotation, from which SpringBoard starts in orientation 4 (-[SpringBoard _bootOrientation]: 270 -> 4,
- *    90 -> 3) and ProgressUI turns the boot Apple logo.
- *  - SpringBoard's rotation lock, restored at every startup (-[SBOrientationLockManager restoreStateFromPrefs] locks to
- *    SBLastRotationLockedOrientation[iPad] when it is non-zero, and sends backboardd BKSHIDServicesLockOrientation, so
- *    backboardd's device orientation is 4 and CoreMotion's "unknown" is ignored). It is derived from the ADT value, so
- *    the packager's one number turns everything (270 -> 4; its mirror, 90 -> 3). The SpringBoard plist is rewritten
- *    every boot, so a lock turned off in Control Center comes back at the next boot.
- * The orientation to lock to, from this boot's ADT; 0: not portrait-native. */
+ * on the left) and device orientation 4. ADT /chosen display-boot-rotation 270 (scripts/package_raw_boot.py, which also
+ * decides the mode) is MobileGestalt's DisplayBootRotation, from which SpringBoard starts in orientation 4
+ * (-[SpringBoard _bootOrientation]: 270 -> 4, 90 -> 3) and ProgressUI turns the boot Apple logo. From there the device
+ * orientation comes from the console's IMU (drivers/SwitchMotion, the AOP's {0x20, 0x8a} orientation service) and the
+ * interface rotates as on an iPad (r17, the user's choice). Until r17 there was no orientation service, and the managed
+ * SpringBoard preferences locked rotation to this orientation every boot (SBLastRotationLockedOrientation[iPad]); the
+ * rotation lock is SpringBoard's own again (Control Center's, kept in its user plist), and the lock those boots left
+ * there is released once (native_switch_rotation_lock_release).
+ * The boot orientation, from this boot's ADT; 0: not portrait-native. */
 static unsigned int
 native_switch_portrait(void)
 {
@@ -8829,21 +8941,76 @@ native_switch_portrait(void)
 	return rotation == 270 ? 4 : rotation == 90 ? 3 : 0;
 }
 
-/* The SpringBoard prefs body with the rotation lock added before its closing "</dict></plist>\n", in buffer; any other
- * domain, or not portrait-native, as it is. */
-static const char *
-native_switch_portrait_prefs(const char *name, const char *body, char *buffer, size_t size)
+/* The rotation lock earlier builds made (native_switch_portrait), released once: SpringBoard's own
+ * SBLastRotationLockedOrientation[iPad] in its user plist still hold it (SpringBoard saves the lock it restored), and
+ * it restores every lock it finds at startup. Each key is renamed in place to SWLastRotationLockedOrientation[iPad] (the
+ * same length, so a binary plist's offsets and uniqued values stay as they are): in a binary plist an ASCII string of
+ * 15 bytes or more is 0x5F, the integer object 0x10 <length>, then its bytes; in an XML one, <key>name</key>. Then the
+ * marker, so the user's own lock from Control Center is never touched again. Before cfprefsd runs (launchd's exec).
+ * Failures are logged only; without the marker the next boot tries again. */
+static void
+native_switch_rotation_lock_release(proc_t p, user_addr_t scratch, mount_t data_mount)
 {
-	static const char end[] = "</dict></plist>\n";
-	const size_t length = strlen(body), tail = sizeof(end) - 1;
-	const unsigned int orientation = native_switch_portrait();
-	if (strcmp(name, "com.apple.springboard") || !orientation || length < tail || strcmp(body + length - tail, end)) {
-		return body;
+	static const char plist[] = "/private/var/mobile/Library/Preferences/com.apple.springboard.plist",
+	    marker[] = "/private/var/Switch/rotation-lock-released";
+	static const char *const keys[] = {"SBLastRotationLockedOrientationiPad", "SBLastRotationLockedOrientation"};
+	vfs_context_t context = vfs_context_current();
+	vnode_t vp = NULLVP;
+	if (!vnode_lookup(marker, 0, &vp, context)) {
+		vnode_put(vp);
+		return;
 	}
-	const int made = snprintf(buffer, size, "%.*s<key>SBLastRotationLockedOrientationiPad</key><integer>%u</integer>"
-	    "<key>SBLastRotationLockedOrientation</key><integer>%u</integer>%s", (int)(length - tail), body, orientation,
-	    orientation, end);
-	return made > 0 && (size_t)made < size ? buffer : body;
+	unsigned int renamed = 0;
+	int length = 0, error = vnode_open(plist, FREAD | O_NOFOLLOW_ANY, 0, 0, &vp, context);
+	char *bytes = NULL;
+	if (!error) {
+		struct vnode_attr attributes;
+		VATTR_INIT(&attributes);
+		VATTR_WANTED(&attributes, va_data_size);
+		if (vnode_mount(vp) != data_mount || !vnode_isreg(vp) || VNOP_GETATTR(vp, &attributes, context) ||
+		    !VATTR_IS_SUPPORTED(&attributes, va_data_size) || attributes.va_data_size > 1024 * 1024) {
+			error = EINVAL;
+		} else {
+			length = (int)attributes.va_data_size;
+			bytes = length ? kalloc_data((vm_size_t)length, Z_WAITOK) : NULL;
+			int residual = length;
+			if (length && !bytes) {
+				error = ENOMEM;
+			} else if (length) {
+				error = vn_rdwr(UIO_READ, vp, bytes, length, 0, UIO_SYSSPACE, 0, vfs_context_ucred(context),
+				    &residual, p);
+			}
+			if (!error && residual) error = EIO;
+		}
+		(void)vnode_close(vp, FREAD, context);
+	}
+	for (unsigned int k = 0; !error && bytes && k < sizeof(keys) / sizeof(keys[0]); ++k) {
+		const size_t size = strlen(keys[k]);
+		char binary[48], xml[64];
+		binary[0] = 0x5f, binary[1] = 0x10, binary[2] = (char)size;
+		memcpy(binary + 3, keys[k], size);
+		const int xml_size = snprintf(xml, sizeof(xml), "<key>%s</key>", keys[k]);
+		for (int at = 0; at < length; ++at) {
+			char *name = NULL;
+			if ((size_t)(length - at) >= size + 3 && !memcmp(bytes + at, binary, size + 3)) {
+				name = bytes + at + 3;
+			} else if (at <= length - xml_size && !memcmp(bytes + at, xml, (size_t)xml_size)) {
+				name = bytes + at + 5;
+			}
+			if (!name) continue;
+			memcpy(name, "SWLast", 6);  /* SBLast... -> SWLast...: the same length */
+			renamed++;
+		}
+	}
+	if (!error && renamed) {
+		error = native_switch_watchdog_file(p, scratch, plist, bytes, length, data_mount, 501, 501, 0600);
+	}
+	if (bytes) kfree_data(bytes, (vm_size_t)length);
+	if (error == ENOENT) error = 0;  /* no SpringBoard plist yet: nothing was ever locked */
+	if (!error) error = native_switch_mkdir(p, scratch, "/private/var/Switch", 0, 0755);
+	if (!error) error = native_switch_watchdog_file(p, scratch, marker, "", 0, data_mount, 0, 0, 0644);
+	printf("SwitchRawBoot: rotation lock of earlier builds released once: %u key%s renamed (%d)\n", renamed,
+	    renamed == 1 ? "" : "s", error);
 }
 
 /* MobileGestalt caches its answers (DisplayBootRotation among them) keyed by the OS build alone, so an answer from the
@@ -8868,11 +9035,11 @@ native_switch_portrait_cache(proc_t p, user_addr_t scratch, mount_t data_mount)
 	struct unlink_args request = {.path = scratch + 0x900};
 	int32_t result = 0;
 	int error = copyout(cache, request.path, sizeof(cache));
-	if (!error) error = unlink(p, &request, &result);
+	if (!error) error = native_switch_unlink(p, &request, &result);
 	if (error == ENOENT) error = 0;
 	for (unsigned int i = 0; i < 2 && !error; ++i) {
 		if (marked[i] && orientation != 3 + i) {
-			if (!(error = copyout(marker[i], request.path, strlen(marker[i]) + 1))) error = unlink(p, &request, &result);
+			if (!(error = copyout(marker[i], request.path, strlen(marker[i]) + 1))) error = native_switch_unlink(p, &request, &result);
 		} else if (!marked[i] && orientation == 3 + i) {
 			error = native_switch_mkdir(p, scratch, "/private/var/Switch", 0, 0755);
 			if (!error) error = native_switch_watchdog_file(p, scratch, marker[i], "", 0, data_mount, 0, 0, 0644);
@@ -8880,6 +9047,97 @@ native_switch_portrait_cache(proc_t p, user_addr_t scratch, mount_t data_mount)
 	}
 	printf("SwitchRawBoot: screen %s (orientation %u): MobileGestalt cache dropped (%d)\n",
 	    orientation ? "portrait-native" : "landscape", orientation, error);
+}
+
+/* The display gamut (scripts/package_raw_boot.py DISPLAY_GAMUT): MobileGestalt's ArtworkDisplayGamut is ADT
+ * /product artwork-display-gamut, and its HasExtendedColorDisplay is that answer being "P3". QuartzCore
+ * (CADeviceUseCIF10, so the display's supportsExtendedColors, CADisplayMode, FBSDisplayConfiguration and UIScreen
+ * gamut), UIKit (_supportsDeepColor) and WebCore (screenSupportsExtendedColor: RGB10A8 tiles) follow it. Both
+ * answers live in the same build-keyed cache as DisplayBootRotation, so, as for the screen mode, a change drops the
+ * cache once: the marker is present while the ADT says sRGB. Failures are logged only; the next boot tries again. */
+static void
+native_switch_gamut_cache(proc_t p, user_addr_t scratch, mount_t data_mount)
+{
+	static const char cache[] = "/private/var/containers/Shared/SystemGroup/systemgroup.com.apple.mobilegestaltcache/"
+	    "Library/Caches/com.apple.MobileGestalt.plist", marker[] = "/private/var/Switch/display-gamut-sRGB",
+	    srgb_name[] = "sRGB";
+	DTEntry product;
+	void const *value = NULL;
+	unsigned int size = 0;
+	const int srgb = SecureDTLookupEntry(0, "/product", &product) == kSuccess &&
+	    SecureDTGetProperty(product, "artwork-display-gamut", &value, &size) == kSuccess && size == sizeof(srgb_name) &&
+	    !memcmp(value, srgb_name, sizeof(srgb_name));
+	vnode_t vp = NULLVP;
+	const int marked = !vnode_lookup(marker, 0, &vp, vfs_context_current());
+	if (vp) vnode_put(vp);
+	if (marked == srgb) return;
+	struct unlink_args request = {.path = scratch + 0x900};
+	int32_t result = 0;
+	int error = copyout(cache, request.path, sizeof(cache));
+	if (!error) error = native_switch_unlink(p, &request, &result);
+	if (error == ENOENT) error = 0;
+	if (!error && marked) {
+		if (!(error = copyout(marker, request.path, sizeof(marker)))) error = native_switch_unlink(p, &request, &result);
+	} else if (!error) {
+		error = native_switch_mkdir(p, scratch, "/private/var/Switch", 0, 0755);
+		if (!error) error = native_switch_watchdog_file(p, scratch, marker, "", 0, data_mount, 0, 0, 0644);
+	}
+	printf("SwitchRawBoot: display gamut %s: MobileGestalt cache dropped (%d)\n", srgb ? "sRGB" : "not sRGB", error);
+}
+
+/* The ambient light sensor (drivers/SwitchBrightness/SwitchALS.cpp): MobileGestalt's ambient-light-sensor is an
+ * IOServiceGetMatchingService on {PrimaryUsagePage 0xff00, PrimaryUsage 4}, which the sensor's HID service answers, and
+ * Settings' Auto-Brightness switch and CoreBrightness's DisplayBrightnessAuto both gate on it. The answer is precacheable
+ * (libMobileGestalt question flags), so it lives in the same build-keyed cache, and a cache made without the service says
+ * false for good. As for the gamut, a change drops the cache once: the marker is present while the service was
+ * registered at launchd's exec (the board thread registers it within a second of the kernel's start, before the root
+ * mount completes; a boot where it was late drops the cache again on the next). */
+extern bool switch_als_published(void);
+static void
+native_switch_als_cache(proc_t p, user_addr_t scratch, mount_t data_mount)
+{
+	static const char cache[] = "/private/var/containers/Shared/SystemGroup/systemgroup.com.apple.mobilegestaltcache/"
+	    "Library/Caches/com.apple.MobileGestalt.plist", marker[] = "/private/var/Switch/ambient-light-sensor";
+	const int als = switch_als_published();
+	vnode_t vp = NULLVP;
+	const int marked = !vnode_lookup(marker, 0, &vp, vfs_context_current());
+	if (vp) vnode_put(vp);
+	if (marked == als) return;
+	struct unlink_args request = {.path = scratch + 0x900};
+	int32_t result = 0;
+	int error = copyout(cache, request.path, sizeof(cache));
+	if (!error) error = native_switch_unlink(p, &request, &result);
+	if (error == ENOENT) error = 0;
+	if (!error && marked) {
+		if (!(error = copyout(marker, request.path, sizeof(marker)))) error = native_switch_unlink(p, &request, &result);
+	} else if (!error) {
+		error = native_switch_mkdir(p, scratch, "/private/var/Switch", 0, 0755);
+		if (!error) error = native_switch_watchdog_file(p, scratch, marker, "", 0, data_mount, 0, 0, 0644);
+	}
+	printf("SwitchRawBoot: ambient light sensor %s: MobileGestalt cache dropped (%d)\n", als ? "on" : "off", error);
+}
+
+/* The UI scale (vm_unix.c, SwitchUIScale): MobileGestalt's main-screen-scale comes from its static screen info, which
+ * lives in the same build-keyed cache as DisplayBootRotation, so a cache made at another scale keeps answering it. The
+ * cache is dropped once per scale: the marker names the scale whose cache MobileGestalt has made since. */
+static void
+native_switch_ui_scale_cache(proc_t p, user_addr_t scratch, mount_t data_mount)
+{
+	static const char cache[] = "/private/var/containers/Shared/SystemGroup/systemgroup.com.apple.mobilegestaltcache/"
+	    "Library/Caches/com.apple.MobileGestalt.plist", marker[] = "/private/var/Switch/ui-scale-8-5";
+	vnode_t vp = NULLVP;
+	if (!vnode_lookup(marker, 0, &vp, vfs_context_current())) {
+		vnode_put(vp);
+		return;
+	}
+	struct unlink_args request = {.path = scratch + 0x900};
+	int32_t result = 0;
+	int error = copyout(cache, request.path, sizeof(cache));
+	if (!error) error = native_switch_unlink(p, &request, &result);
+	if (error == ENOENT) error = 0;
+	if (!error) error = native_switch_mkdir(p, scratch, "/private/var/Switch", 0, 0755);
+	if (!error) error = native_switch_watchdog_file(p, scratch, marker, "", 0, data_mount, 0, 0, 0644);
+	printf("SwitchRawBoot: UI scale 8/5: MobileGestalt cache dropped (%d)\n", error);
 }
 
 /* Portrait-native: Core Animation must composite the landscape interface into the portrait framebuffer itself. backboardd
@@ -8909,7 +9167,7 @@ native_switch_portrait_display(proc_t p, user_addr_t scratch, mount_t data_mount
 		vnode_put(vp);
 		struct unlink_args request = {.path = scratch + 0x900};
 		int32_t result = 0;
-		if (!(error = copyout(path, request.path, sizeof(path)))) error = unlink(p, &request, &result);
+		if (!(error = copyout(path, request.path, sizeof(path)))) error = native_switch_unlink(p, &request, &result);
 	} else {
 		error = native_switch_mkdir(p, scratch, directory, 0, 0755);
 		if (!error) error = native_switch_mkdir(p, scratch, user, 0, 0755);
@@ -8919,36 +9177,51 @@ native_switch_portrait_display(proc_t p, user_addr_t scratch, mount_t data_mount
 }
 
 /* The state a restored iPad has after Setup and data migration, plus no
- * SpringBoard watchdogs or idle sleep (no buttons or idle timer here yet).
- * Keys follow UniXNU's skip-setup seed and ios-sweet's root tweaks. */
+ * SpringBoard watchdogs. Keys follow UniXNU's skip-setup seed and ios-sweet's root tweaks.
+ *
+ * Each domain is written one of three ways: replacing the user's plist every boot (kSetupUser: domains whose every key is
+ * ours), seeding it only when it is missing (kSetupOnce), or as a managed preference (kSetupManaged: /private/var/Managed
+ * Preferences/mobile/<domain>.plist, root 0644, rewritten every boot), which CFPreferences reads over the user's plist key
+ * by key and so leaves the user's other keys alone. com.apple.springboard is managed: its user plist also keeps what
+ * backboardd and SpringBoard save there, above all the display brightness (SBBacklightLevel2, BKSSpringBoardDefaults
+ * brightness), which backboardd restores at start (BKDisplayBrightnessUpdateTransactionManager
+ * synchronizeALSPreferencesAndSystemDisplayBrightness). Rewriting that plist every boot reset the brightness to the
+ * default 0.5 at each boot (every boot logged since 10-30). Should the managed file not be written, the user's plist is
+ * replaced as before (one line). */
+enum native_switch_setup_kind { kSetupUser, kSetupOnce, kSetupManaged };
+
 static int
 native_switch_setup_state(proc_t p, user_addr_t scratch, mount_t data_mount)
 {
 #define SWITCH_PLIST(body) "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" \
 	"<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n" \
 	"<plist version=\"1.0\"><dict>" body "</dict></plist>\n"
-	static const struct { const char *name, *body; bool once; } prefs[] = {
+	static const struct { const char *name, *body; enum native_switch_setup_kind kind; } prefs[] = {
 		{"com.apple.purplebuddy", SWITCH_PLIST("<key>SetupDone</key><true/><key>SetupFinishedAllSteps</key><true/>"
-		    "<key>SetupVersion</key><integer>11</integer><key>daemonizeNeedsToRun</key><false/>"), false},
+		    "<key>SetupVersion</key><integer>11</integer><key>daemonizeNeedsToRun</key><false/>"), kSetupUser},
 		{"com.apple.purplebuddy.notbackedup", SWITCH_PLIST("<key>ShouldRunDiagnosticsMiniBuddy</key><false/>"
 		    "<key>ShouldRunHSA2MiniBuddy</key><false/><key>ShouldRunKeychainSyncMiniBuddy</key><false/>"
 		    "<key>ShouldRunMesaMiniBuddy</key><false/><key>ShouldRunPaymentMiniBuddy</key><false/>"
-		    "<key>ShouldRunStandardMiniBuddy</key><false/><key>SilentICDPUpgrade</key><false/>"), false},
+		    "<key>ShouldRunStandardMiniBuddy</key><false/><key>SilentICDPUpgrade</key><false/>"), kSetupUser},
 		{"com.apple.managedconfiguration.notbackedup",
-		    SWITCH_PLIST("<key>LockdownActivationIndicatesCloudConfigurationAvailable</key><false/>"), false},
+		    SWITCH_PLIST("<key>LockdownActivationIndicatesCloudConfigurationAvailable</key><false/>"), kSetupUser},
 		{"com.apple.springboard", SWITCH_PLIST("<key>BKNoWatchdogs</key><true/>"
 		    "<key>FBLaunchWatchdogExceptions</key><dict><key>com.apple.purplebuddy</key><real>100</real></dict>"
 		    "<key>MCForceShowCloudConfigurationUI</key><false/><key>SBDisableAutoDim</key><true/>"
-		    "<key>SBDontDimOrLockOnAC</key><true/><key>SBDisableIdleSleep</key><true/>"
-		    /* The 7" panel shows 1280x720 points at scale 1 (UIScreen.scale is an integer all the way down,
-		     * so no fractional zoom): large icons and the text size below keep things legible and crisp. */
-		    "<key>SBHomeLargeIcons</key><true/>"), false},
-		{"com.apple.UIKit", SWITCH_PLIST("<key>UIPreferredContentSizeCategoryName</key>"
-		    "<string>UICTContentSizeCategoryXXL</string>"), false},
+		    "<key>SBDontDimOrLockOnAC</key><true/>"
+		    /* Explicitly false: earlier boots wrote true into the user plist, which this managed key overrides.
+		     * True makes SpringBoard hold FrontBoard's PreventIdleSleep ("SBPowerDefaults") forever. */
+		    "<key>SBDisableIdleSleep</key><false/>"
+		    /* Fixed volume buttons. SpringBoard swaps volume up and down by interface orientation
+		     * (SBVolumeButtonEventMapper) for an iPad's top-edge or right-edge buttons. It puts them on the
+		     * top edge here: no iPad without a home button is as small as 450x800 points, so the screen
+		     * type falls back to the iPad mini 6. In orientation 4 that swap turns Vol- into Vol+. With it
+		     * off, Vol+ (PX6) raises the volume in every interface orientation the Switch rotates to. */
+		    "<key>SBDisableNaturalVolumeButtonArrangement</key><true/>"), kSetupManaged},
 		/* Seeded once: DataMigrator keeps its results and its hang-reboot count in this domain. */
 		{"com.apple.migration", SWITCH_PLIST("<key>LastSystemVersion</key><string>21H461</string>"
 		    "<key>DMUserDataDisposition</key><dict><key>SyntheticDidUpgrade</key><false/>"
-		    "<key>buildVersion</key><string>21H461</string></dict>"), true},
+		    "<key>buildVersion</key><string>21H461</string></dict>"), kSetupOnce},
 	};
 #undef SWITCH_PLIST
 	/* Directories a restore creates on Data (UniXNU prepare-offline-data.py): usermanagerd keeps its
@@ -8973,19 +9246,32 @@ native_switch_setup_state(proc_t p, user_addr_t scratch, mount_t data_mount)
 		error = native_switch_mkdir(p, scratch, directories[i].path, directories[i].owner, directories[i].mode);
 	char path[160] = "/private/var/containers";
 	for (unsigned i = 0; i < sizeof(prefs) / sizeof(prefs[0]) && !error; ++i) {
+		const char *body = prefs[i].body;
+		if (prefs[i].kind == kSetupManaged) {
+			snprintf(path, sizeof(path), "/private/var/Managed Preferences/mobile/%s.plist", prefs[i].name);
+			int managed = native_switch_mkdir(p, scratch, "/private/var/Managed Preferences", 0, 0755);
+			if (!managed) managed = native_switch_mkdir(p, scratch, "/private/var/Managed Preferences/mobile", 0, 0755);
+			if (!managed) {
+				managed = native_switch_watchdog_file(p, scratch, path, body, (int)strlen(body), data_mount, 0, 0, 0644);
+			}
+			if (!managed) continue;
+			printf("SwitchRawBoot: %s failed: %d; replacing the user's plist instead\n", path, managed);
+		}
 		snprintf(path, sizeof(path), "/private/var/mobile/Library/Preferences/%s.plist", prefs[i].name);
 		vnode_t existing = NULLVP;
-		if (prefs[i].once && !vnode_lookup(path, 0, &existing, vfs_context_current())) {
+		if (prefs[i].kind == kSetupOnce && !vnode_lookup(path, 0, &existing, vfs_context_current())) {
 			vnode_put(existing);
 			continue;
 		}
-		static char portrait[1024];  /* once, in launchd's exec */
-		const char *body = native_switch_portrait_prefs(prefs[i].name, prefs[i].body, portrait, sizeof(portrait));
 		error = native_switch_watchdog_file(p, scratch, path, body, (int)strlen(body), data_mount, 501, 501, 0600);
 	}
 	if (error) printf("SwitchRawBoot: first-boot state failed at %s: %d\n", path, error);
 	else {
 		native_switch_portrait_cache(p, scratch, data_mount);
+		native_switch_rotation_lock_release(p, scratch, data_mount);
+		native_switch_gamut_cache(p, scratch, data_mount);
+		native_switch_als_cache(p, scratch, data_mount);
+		native_switch_ui_scale_cache(p, scratch, data_mount);
 		native_switch_portrait_display(p, scratch, data_mount);
 		native_switch_system_app_migration(p, scratch, data_mount);
 	}
@@ -8993,31 +9279,58 @@ native_switch_setup_state(proc_t p, user_addr_t scratch, mount_t data_mount)
 }
 
 /* The last boot's panic, kept in RAM across the warm reset (boot-arg switch-panic-save, SwitchPanicSave.c):
- * /private/var/Switch/panic-<UTC time>.log, root 0644, written as the policy files are; the record is cleared once it is
- * on Data. A failure is logged and the record kept for the next boot. */
+ * /private/var/Switch/panic-<UTC time>.log, root 0644, written as the policy files are, and its panic stackshot (zlib
+ * kcdata: every task's threads, kernel and user frames, wait info) as panic-<UTC time>.kcdata next to it; the record is
+ * cleared once the text is on Data. A failure is logged and the record kept for the next boot. A copy of both goes to
+ * mobile's CrashReporter directory as Switch-panic-<UTC time>.*, where `idevicecrashreport` fetches them over USB;
+ * a failure there is only logged. */
 static void
 native_switch_panic_save(proc_t p, user_addr_t scratch, mount_t data_mount)
 {
-	char path[96];
-	uint32_t length = 0;
+	static const char crash_reporter[] = "/private/var/mobile/Library/Logs/CrashReporter";
+	char path[96], other[160];
+	uint32_t length = 0, shot_length = 0;
 	const char *text = switch_panic_save_pending(&length, path, sizeof(path));
 	if (!text) return;
+	const char *shot = (const char *)switch_panic_save_pending_stackshot(&shot_length);
+	const char *name = strrchr(path, '/') + 1;          /* panic-<UTC>[-damaged].log */
+	const size_t stem = strlen(name) - strlen(".log");
 	int error = native_switch_mkdir(p, scratch, "/private/var/Switch", 0, 0755);
 	if (!error) error = native_switch_watchdog_file(p, scratch, path, text, (int)length, data_mount, 0, 0, 0644);
+	if (!error && shot) {
+		snprintf(other, sizeof(other), "/private/var/Switch/%.*s.kcdata", (int)stem, name);
+		int shot_error = native_switch_watchdog_file(p, scratch, other, shot, (int)shot_length, data_mount, 0, 0, 0644);
+		if (shot_error) printf("SwitchPanicSave: writing %s failed: %d\n", other, shot_error);
+	}
+	vnode_t reports = NULLVP;
+	if (!error && !vnode_lookup(crash_reporter, 0, &reports, vfs_context_current())) {
+		vnode_put(reports);
+		snprintf(other, sizeof(other), "%s/Switch-%s", crash_reporter, name);
+		int copy_error = native_switch_watchdog_file(p, scratch, other, text, (int)length, data_mount, 501, 501, 0644);
+		if (!copy_error && shot) {
+			snprintf(other, sizeof(other), "%s/Switch-%.*s.kcdata", crash_reporter, (int)stem, name);
+			copy_error = native_switch_watchdog_file(p, scratch, other, shot, (int)shot_length, data_mount, 501, 501,
+			    0644);
+		}
+		if (copy_error) printf("SwitchPanicSave: copy to %s failed: %d\n", crash_reporter, copy_error);
+	}
 	switch_panic_save_done(error, path);
 }
 
 static int
 native_switch_watchdog_policy(proc_t p, user_addr_t scratch)
 {
-	/* Jobs with no hardware or accounts here; the first four deadlock each other
-	 * (UniXNU-sheng BootWatchdogPolicy.c "lite" set). */
+	const uint64_t policy_started = mach_absolute_time();
+	/* Jobs with no hardware or accounts here (UniXNU-sheng BootWatchdogPolicy.c "lite" set, which disabled locationd
+	 * with them: there the three deadlocked each other). locationd runs since r17: third-party apps' CoreMotion
+	 * (CMMotionManager accelerometer, gyroscope and device motion) is served by it over XPC from the console IMU's
+	 * HID services (drivers/SwitchMotion), and r8a's bluetoothd already asked for it ("failed lookup:
+	 * com.apple.locationd.registration"). With CommCenter and identityservicesd off, its lookups of them fail at
+	 * once (a disabled job is refused at import), as bluetoothd's do. */
 #define NATIVE_SWITCH_POLICY_HEAD "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" \
 	    "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n" \
 	    "<plist version=\"1.0\"><dict>" \
-	    "<key>com.apple.watchdogd</key><true/>" \
 	    "<key>com.apple.identityservicesd</key><true/>" \
-	    "<key>com.apple.locationd</key><true/>" \
 	    "<key>com.apple.CommCenter</key><true/>"
 	/* Bluetooth needs drivers/SwitchBluetooth, which runs only with boot-arg switch-bt=1 (the BlueTool stand-in in
 	 * the overlay and bluetoothd's transport, native_switch_exec_environment, are gated the same way). Without it
@@ -9027,6 +9340,13 @@ native_switch_watchdog_policy(proc_t p, user_addr_t scratch)
 	 * matches no IOService, so the audio server defers the plug-in before loading any code). So audiomxd runs when
 	 * bluetoothd does or when that stub is on Data, and stays disabled otherwise. */
 #define NATIVE_SWITCH_POLICY_BLUETOOTH "<key>com.apple.bluetoothd</key><true/>"
+	/* watchdogd (the userspace watchdog: it pings backboardd, SpringBoard, logd, configd... every 10 s, and a hang
+	 * ends in a "userspace watchdog timeout" panic with a stackshot) runs once drivers/NativeSwitchWatchdog
+	 * published both its IOWatchdog and the primary PMU it requires (switch_watchdog_ready); otherwise it stays
+	 * disabled for the boot, with one line. On its first hardware boot (r7p4) it os_crash()ed: its sandbox refused
+	 * the IOWatchdog open ("Protobox: watchdogd(50) deny(1) iokit-open-service NativeSwitchWatchdog"), and its
+	 * _PanicOnCrash relaunch panicked. A crash of watchdogd now takes no panic (kern_exit.c). */
+#define NATIVE_SWITCH_POLICY_WATCHDOGD "<key>com.apple.watchdogd</key><true/>"
 #define NATIVE_SWITCH_POLICY_AUDIO "<key>com.apple.audiomxd</key><true/>"
 #define NATIVE_SWITCH_POLICY_TAIL "<key>com.apple.photoanalysisd</key><true/>" \
 	    "<key>com.apple.mediaanalysisd</key><true/>" \
@@ -9072,10 +9392,12 @@ native_switch_watchdog_policy(proc_t p, user_addr_t scratch)
 	    "<key>com.apple.tailspind</key><true/>" \
 	    "<key>com.apple.accessoryupdaterd</key><true/>"
 	static const char head[] = NATIVE_SWITCH_POLICY_HEAD, bluetooth_off[] = NATIVE_SWITCH_POLICY_BLUETOOTH,
-	    audio_off[] = NATIVE_SWITCH_POLICY_AUDIO, tail[] = NATIVE_SWITCH_POLICY_TAIL;
-	static char policy[sizeof(head) + sizeof(bluetooth_off) + sizeof(audio_off) + sizeof(tail)];
+	    audio_off[] = NATIVE_SWITCH_POLICY_AUDIO, watchdogd_off[] = NATIVE_SWITCH_POLICY_WATCHDOGD,
+	    tail[] = NATIVE_SWITCH_POLICY_TAIL;
+	static char policy[sizeof(head) + sizeof(bluetooth_off) + sizeof(audio_off) + sizeof(watchdogd_off) + sizeof(tail)];
 #undef NATIVE_SWITCH_POLICY_HEAD
 #undef NATIVE_SWITCH_POLICY_BLUETOOTH
+#undef NATIVE_SWITCH_POLICY_WATCHDOGD
 #undef NATIVE_SWITCH_POLICY_AUDIO
 #undef NATIVE_SWITCH_POLICY_TAIL
 #undef NATIVE_SWITCH_POLICY_NO_HARDWARE
@@ -9112,11 +9434,15 @@ native_switch_watchdog_policy(proc_t p, user_addr_t scratch)
 		const int with_audio = with_bluetooth ||
 		    (with_audio_arg && !vnode_lookup(bluetooth_audio_stub, 0, &stub, vfs_context_current()));
 		if (stub) vnode_put(stub);
+		extern int switch_watchdog_ready(void);
+		const int with_watchdog = switch_watchdog_ready();
 		strlcpy(policy, head, sizeof(policy));
 		if (!with_bluetooth) strlcat(policy, bluetooth_off, sizeof(policy));
 		if (!with_audio) strlcat(policy, audio_off, sizeof(policy));
+		if (!with_watchdog) strlcat(policy, watchdogd_off, sizeof(policy));
 		policy_size = (int)strlcat(policy, tail, sizeof(policy));
 		if (!with_audio) printf("SwitchRawBoot: audiomxd stays disabled: no %s\n", bluetooth_audio_stub);
+		if (!with_watchdog) printf("SwitchRawBoot: watchdogd stays disabled: NativeSwitchWatchdog not published\n");
 	}
 	if (!error) error = native_switch_watchdog_directory(p, scratch, "/private/var/db", data_mount);
 	if (!error) error = native_switch_watchdog_directory(p, scratch,
@@ -9132,10 +9458,13 @@ native_switch_watchdog_policy(proc_t p, user_addr_t scratch)
 	if (!error) error = native_switch_watchdog_directory(p, scratch, "/private/var/db", data_mount);
 	if (!error) error = native_switch_setup_state(p, scratch, data_mount);
 	if (!error) native_switch_panic_save(p, scratch, data_mount);
-	if (!error) error = VNOP_FSYNC(data_root, MNT_WAIT, vfs_context_current());
+	if (!error && native_switch_policy_written) error = VNOP_FSYNC(data_root, MNT_WAIT, vfs_context_current());
 	int close_error = vnode_close(data_root, FREAD, vfs_context_current());
 	if (!error) error = close_error;
-	if (!error) printf("Switch: persistent Data launchd preferences ready\n");
+	uint64_t policy_ns = 0;
+	absolutetime_to_nanoseconds(mach_absolute_time() - policy_started, &policy_ns);
+	if (!error) printf("Switch: persistent Data launchd preferences ready (%u written, %u unchanged, %llu ms)\n",
+	    native_switch_policy_written, native_switch_policy_unchanged, policy_ns / NSEC_PER_MSEC);
 	return error;
 }
 #endif
@@ -9318,6 +9647,12 @@ load_init_program(proc_t p)
     defined(XNU_NATIVE_RAM_BLOCK) && XNU_NATIVE_RAM_BLOCK
 	int watchdog_error = native_switch_watchdog_policy(p, (user_addr_t)scratch_addr);
 	if (watchdog_error) printf("SwitchRawBoot: watchdogd launchd policy not written: %d (continuing)\n", watchdog_error);
+	/* The NVRAM saved on Data (drivers/SwitchNVRAM, /private/var/Switch/nvram.bin): restored now, so that userland
+	 * sees it from its first read, and saved there from now on. */
+	extern uint32_t switch_nvram_data_mounted(void);
+	int nvram_error = native_switch_mkdir(p, (user_addr_t)scratch_addr, "/private/var/Switch", 0, 0755);
+	if (nvram_error) printf("SwitchRawBoot: /private/var/Switch not made: %d (NVRAM not saved)\n", nvram_error);
+	(void)switch_nvram_data_mounted();
 	/* Owner overlay unions over sealed directories (SwitchRawMount.h), now that Data is mounted. */
 	native_switch_raw_overlay(p, (user_addr_t)scratch_addr);
 #endif

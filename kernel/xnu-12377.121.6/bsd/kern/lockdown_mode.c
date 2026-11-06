@@ -83,6 +83,19 @@ STARTUP(EARLY_BOOT, STARTUP_RANK_LAST, lockdown_mode_init_async);
 STARTUP(EARLY_BOOT, STARTUP_RANK_LAST, lockdown_mode_init);
 #endif
 
+/*
+ * Switch: the NVRAM saved on the Data volume was restored (drivers/SwitchNVRAM, on a kernel thread, before launchd)
+ * after lockdown_mode_init read the empty bank the boot hands over; read the state again.
+ */
+void
+lockdown_mode_nvram_restored(void)
+{
+	(void)PEReadNVRAMBooleanProperty(kLockdownModeNVRAMVariableKey, &lockdown_mode_state);
+	if (lockdown_mode_state) {
+		printf("lockdown_mode: lockdown mode in restored nvram is on\n");
+	}
+}
+
 int
 get_lockdown_mode_state(void)
 {

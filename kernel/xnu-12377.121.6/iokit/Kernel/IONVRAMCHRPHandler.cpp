@@ -122,6 +122,9 @@ public:
 	virtual uint32_t getCommonUsed(void) const APPLE_KEXT_OVERRIDE;
 	virtual bool     getSystemPartitionActive(void) const APPLE_KEXT_OVERRIDE;
 	virtual IOReturn getVarDict(OSSharedPtr<OSDictionary> &varDictCopy) APPLE_KEXT_OVERRIDE;
+
+	static IOReturn switchRestore(IODTNVRAM *nvram, const uint8_t *image, IOByteCount length,
+	    const char * const *skip, uint32_t *added, uint32_t *refused);
 };
 
 static const char *
@@ -930,6 +933,90 @@ IONVRAMCHRPHandler::sync(void)
 exit:
 	NVRAMUNLOCK(_controllerLock);
 	return ret;
+}
+
+/*
+ * Switch (drivers/SwitchNVRAM): a bank its controller saved on storage that is only readable once the root file
+ * systems are mounted, long after initImageFormat took the /chosen proxy (no iBoot hands it over). The image is parsed
+ * exactly as the proxy is, by a handler of its own that never gets a controller; each of its variables is added unless
+ * it was set since boot (newer; the empty boot-args unserializeVariables creates does not count) or is named in skip.
+ * An image the proxy path would panic on (bad adler) is refused instead. The generation carries on from the saved one.
+ */
+IOReturn
+IONVRAMCHRPHandler::switchRestore(IODTNVRAM *nvram, const uint8_t *image, IOByteCount length,
+    const char * const *skip, uint32_t *added, uint32_t *refused)
+{
+	OSSharedPtr<OSDictionary>         restored;
+	OSSharedPtr<OSCollectionIterator> iter;
+	IONVRAMCHRPHandler                *live, *parsed;
+	const OSSymbol                    *key;
+	NVRAMVersion                      version;
+	uint32_t                          generation = 0, liveVersion;
+
+	*added = *refused = 0;
+	if ((nvram == nullptr) || (nvram->_format == nullptr) || (image == nullptr)) {
+		return kIOReturnNotReady;
+	}
+	liveVersion = nvram->_format->getVersion();
+	if ((liveVersion != kNVRAMVersion1) && (liveVersion != kNVRAMVersion2)) {
+		return kIOReturnUnsupported;
+	}
+	live = static_cast<IONVRAMCHRPHandler *>(nvram->_format);
+	version = validateNVRAMVersion(image, length, &generation);
+	if ((length != live->_bankSize) || (version == kNVRAMVersionUnknown) ||
+	    (nvram_get_adler(const_cast<uint8_t *>(image), version) != adler32_with_version(image, length, version))) {
+		return kIOReturnBadArgument;
+	}
+
+	parsed = IONVRAMCHRPHandler::init(nvram, image, length, restored);
+	if (parsed == nullptr) {
+		return kIOReturnNoMemory;
+	}
+	parsed->unserializeVariables();
+	if (parsed->_nvramImage) {
+		IODeleteData(parsed->_nvramImage, uint8_t, parsed->_bankSize);
+	}
+	delete parsed;
+
+	iter = OSCollectionIterator::withCollection(restored.get());
+	if (iter == nullptr) {
+		return kIOReturnNoMemory;
+	}
+	IORWLockWrite(nvram->_variableLock);
+	while ((key = OSDynamicCast(OSSymbol, iter->getNextObject()))) {
+		const char *name;
+		uuid_t     guid;
+		OSString   *current;
+		bool       skipped = false;
+
+		parseVariableName(key, &guid, &name);
+		for (unsigned int i = 0; (skip != nullptr) && (skip[i] != nullptr); i++) {
+			skipped = skipped || (strcmp(name, skip[i]) == 0);
+		}
+		current = OSDynamicCast(OSString, live->_varDict->getObject(key));
+		if (skipped || ((live->_varDict->getObject(key) != nullptr) &&
+		    !((strcmp(name, kIONVRAMBootArgsKey) == 0) && (current != nullptr) && (current->getLength() == 0)))) {
+			continue;
+		}
+		if (live->setVariableInternal(guid, name, restored->getObject(key)) == kIOReturnSuccess) {
+			(*added)++;
+		} else {
+			(*refused)++;
+		}
+	}
+	if (generation > live->_generation) {
+		live->_generation = generation;
+	}
+	IORWLockUnlock(nvram->_variableLock);
+
+	return kIOReturnSuccess;
+}
+
+extern "C" IOReturn
+switch_nvram_restore(IODTNVRAM *nvram, const uint8_t *image, size_t length, const char * const *skip,
+    uint32_t *added, uint32_t *refused)
+{
+	return IONVRAMCHRPHandler::switchRestore(nvram, image, length, skip, added, refused);
 }
 
 uint32_t

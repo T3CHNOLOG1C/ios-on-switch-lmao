@@ -5890,7 +5890,7 @@ cs_native4k_prepare(vnode_t vp, struct cs_blob *blob)
 	int error = EBADEXEC, ioflags;
 	kern_return_t kr;
 
-#if DEVELOPMENT || DEBUG
+#if 1 /* ios-on-switch-lmao: in every kernel configuration (was DEVELOPMENT || DEBUG) */
 	code_signing_config_t cs_config = 0;
 	code_signing_configuration(NULL, &cs_config);
 	if (cs_config & CS_CONFIG_INTEGRITY_SKIP) return 0;

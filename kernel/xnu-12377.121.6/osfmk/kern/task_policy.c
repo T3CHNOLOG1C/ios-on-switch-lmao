@@ -1430,6 +1430,27 @@ coalition_policy_update_task(task_t task, coalition_pend_token_t coal_pend_token
 }
 
 /*
+ * SwitchBootBand (switch_boot_band.c): the CPU half of DARWIN_BG for a whole task, through the suppression policy's
+ * lowpri-cpu bit. Its threads are capped at MAXPRI_THROTTLE (the clutch's background bucket, which still gets its share),
+ * with no disk, network or timer throttling; an importance boost lifts it, and turnstile pushes from a waiter still raise
+ * the thread that owns what the waiter needs.
+ */
+void switch_task_set_lowpri_cpu(task_t task, bool on);
+void
+switch_task_set_lowpri_cpu(task_t task, bool on)
+{
+	struct task_pend_token pend_token = {};
+
+	task_lock(task);
+	if (task->requested_policy.trp_sup_lowpri_cpu != (on ? 1 : 0)) {
+		task->requested_policy.trp_sup_lowpri_cpu = on ? 1 : 0;
+		task_policy_update_locked(task, &pend_token);
+	}
+	task_unlock(task);
+	task_policy_update_complete_unlocked(task, &pend_token);
+}
+
+/*
  * Called with task unlocked to do things that can't be done while holding the task lock
  */
 void

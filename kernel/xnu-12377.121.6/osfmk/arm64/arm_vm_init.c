@@ -429,10 +429,11 @@ pmap_switch_ram_init(boot_args *args)
             switch_bootstrap_limit = start & ~PAGE_MASK;
     }
     /* drivers/TegraGM20B's GPU pool (nvxnu_pool_init): with boot-arg tegra-gpu-pool-pa=<pa> (tegra-gpu-pool-mb, default
-     * 128) that RAM joins the ledger here, so the VM never hands it out and the GPU driver maps it write-combined. A
-     * physically contiguous 128 MiB below 4 GiB cannot be allocated once the VM is running (10-30: "M1 FAIL pool -12").
+     * 256: every process's coherent GPU memory and nvkm's own come from it; 128 starved poster extensions on 11-04 with a
+     * dozen Metal processes, of 3.9 GB) that RAM joins the ledger here, so the VM never hands it out and the GPU driver
+     * maps it write-combined. A physically contiguous 128 MiB below 4 GiB cannot be allocated once the VM is running (10-30: "M1 FAIL pool -12").
      * It must lie in the low bank's free RAM, above the bootstrap blocks and below the framebuffer. */
-    uint64_t gpu_pa = 0, gpu_mb = 128;
+    uint64_t gpu_pa = 0, gpu_mb = 256;
     if (PE_parse_boot_argn("tegra-gpu-pool-pa", &gpu_pa, sizeof(gpu_pa)) && gpu_pa) {
         PE_parse_boot_argn("tegra-gpu-pool-mb", &gpu_mb, sizeof(gpu_mb));
         const uint64_t gpu_end = gpu_pa + (gpu_mb << 20);

@@ -1388,9 +1388,9 @@ static void shared_region_map_and_slide_cleanup(
 	struct vm_shared_region  *shared_region);
 
 #if defined(XNU_OWNER_CACHE_CARRIER) && XNU_OWNER_CACHE_CARRIER && !CONFIG_CSR
-#if !DEVELOPMENT && !DEBUG
-#error The independent owner cache carrier is a development instrument
-#endif
+/* The owner cache carrier (XNU_OWNER_CACHE_CARRIER) builds in every kernel configuration (it was refused
+ * outside DEVELOPMENT and DEBUG while it was an offline experiment).
+ */
 extern int native_verified_block_root_authorized(dev_t);
 extern int native_verified_block_volume_device(const char *, dev_t *, char *, size_t);
 unsigned long native_owner_cache_carrier_accepts = 0;
@@ -1533,15 +1533,9 @@ switch_home_grid_page(const void *src, void *dst, unsigned long long src_offset,
 	return 0;
 }
 
-/*
- * Called by vm_shared_region_map_file_setup() for each executable cache mapping it has just entered in a shared
- * region. Returns an apple_protect pager for the range to replace (range_offset/range_size within the mapping),
- * or MEMORY_OBJECT_NULL to keep the mapping stock.
- */
-memory_object_t switch_shared_cache_text_pager(vm_object_t file_object, uint64_t object_base, uint64_t file_offset, uint64_t size,
-    uint64_t unslid_address, struct vnode *vp, uint64_t *range_offset, uint64_t *range_size);
-memory_object_t
-switch_shared_cache_text_pager(vm_object_t file_object, uint64_t object_base, uint64_t file_offset, uint64_t size,
+/* The home grid's pager for the mapping that holds the table, or MEMORY_OBJECT_NULL. */
+static memory_object_t
+switch_home_grid_pager(vm_object_t file_object, uint64_t object_base, uint64_t file_offset, uint64_t size,
     uint64_t unslid_address, struct vnode *vp, uint64_t *range_offset, uint64_t *range_size)
 {
 	if (unslid_address > SWITCH_HG_PAGES_VMADDR ||
@@ -1572,7 +1566,6 @@ switch_shared_cache_text_pager(vm_object_t file_object, uint64_t object_base, ui
 		.crypt_refcnt = 0,
 	};
 	/* page_decrypt() gets crypto_backing_offset - crypto_start + offset in the pager: the chunk's file offset */
-	/* file_object is the cache file's object (object_base 0) or the a64x translator's, whose offset 0 is file offset object_base */
 	memory_object_t mo = apple_protect_pager_setup(file_object, SWITCH_HG_PAGES_FILEOFF - object_base,
 	    SWITCH_HG_PAGES_FILEOFF + SWITCH_HG_CHUNKS_OFFSET, &crypt_info,
 	    SWITCH_HG_CHUNKS_OFFSET, SWITCH_HG_CHUNKS_OFFSET + SWITCH_HG_CHUNKS_SIZE, TRUE);
@@ -1582,6 +1575,538 @@ switch_shared_cache_text_pager(vm_object_t file_object, uint64_t object_base, ui
 	}
 	*range_offset = SWITCH_HG_PAGES_VMADDR - unslid_address;
 	*range_size = SWITCH_HG_PAGES_SIZE;
+	return mo;
+}
+
+/*
+ * SwitchSettingsIcons: Settings' icon cache at a screen scale below 2.
+ *
+ * +[PKIconImageCache settingsIconCacheWithScale:] (Preferences, cache text in dyld_shared_cache_arm64.13 of 21H461)
+ * takes iconCache@3x.artwork for scale >= 3, iconCache@2x.artwork for scale >= 2, and no file for anything less.
+ * With no file its loader renders the graphic and app icons and then drops them (-setIconCache: is reached only
+ * after the artwork is read), so every specifier with an "iconCache" key gets no icon and Preferences logs
+ * "Icon for key ... is missing from the cache": Wi-Fi and some 35 more Settings root rows (Mail, Safari, Photos,
+ * App Store, Music...), and Privacy and Restrictions rows. 21H461 ships only the @2x artwork; this screen is
+ * scale 1.6 (SwitchUIScale, below). Here the method works at scale 2 whatever the screen: fmov d8, d0 (the scale
+ * argument, the first instruction after the prologue) becomes fmov d8, #2.0, so the cache is the @2x artwork plus
+ * IconServices' icons at 2x: 29-point icons from 58-pixel bitmaps, drawn downsampled (never upscaled). Same pager and
+ * checks as the home grid, on one 4 KB chunk: the instruction and the two after it must read as shipped.
+ */
+static const uint8_t switch_si_uuid[16] = {           /* dyld_shared_cache_arm64.13 of 21H461 */
+	0xc0, 0x45, 0x2d, 0x94, 0xa5, 0xf8, 0x3b, 0xe1, 0xbd, 0xfc, 0xe1, 0x5e, 0x71, 0x4a, 0x84, 0xf5,
+};
+#define SWITCH_SI_PAGES_VMADDR    0x1a72c4000ULL      /* unslid; one 16 KB page (.13's text: 0x1a67c8000, file 0) */
+#define SWITCH_SI_PAGES_FILEOFF   0xafc000ULL
+#define SWITCH_SI_PAGES_SIZE      0x4000ULL
+#define SWITCH_SI_CHUNK_OFFSET    0x2000ULL           /* the 4 KB chunk at 0x1a72c6000 */
+#define SWITCH_SI_INSN_FILEOFF    0xafec84ULL         /* 0x1a72c6c84, settingsIconCacheWithScale: + 0x10 */
+
+static int switch_si_cookie;                          /* crypt_ops: identifies this pager's crypt_info */
+static uint32_t switch_si_logged;
+
+static int
+switch_settings_icons_page(const void *src, void *dst, unsigned long long src_offset, __unused void *ops)
+{
+	/* fmov d8, d0; fmov d0, #3.0; fcmp d8, d0 */
+	static const uint8_t stock[12] = { 0x08, 0x40, 0x60, 0x1e, 0x00, 0x10, 0x61, 0x1e, 0x00, 0x21, 0x60, 0x1e };
+	static const uint8_t scale2[4] = { 0x08, 0x10, 0x60, 0x1e };    /* fmov d8, #2.0 */
+	uint8_t *out = dst;
+
+	bcopy(src, dst, SWITCH_HG_CHUNK);
+	if (SWITCH_SI_INSN_FILEOFF < src_offset || SWITCH_SI_INSN_FILEOFF + sizeof(stock) > src_offset + SWITCH_HG_CHUNK) {
+		return 0;
+	}
+	uint64_t at = SWITCH_SI_INSN_FILEOFF - src_offset;
+	if (memcmp(out + at, stock, sizeof(stock)) != 0) {
+		if (!os_atomic_xchg(&switch_si_logged, 1, relaxed)) {
+			printf("SwitchSettingsIcons: cache bytes at 0x%llx are not the shipped ones, page left stock\n",
+			    SWITCH_SI_INSN_FILEOFF);
+		}
+		return 0;
+	}
+	memcpy(out + at, scale2, sizeof(scale2));
+	if (!os_atomic_xchg(&switch_si_logged, 1, relaxed)) {
+		printf("SwitchSettingsIcons: icon cache at scale 2\n");
+	}
+	return 0;
+}
+
+/* The settings icons' pager for the mapping that holds the method, or MEMORY_OBJECT_NULL. */
+static memory_object_t
+switch_settings_icons_pager(vm_object_t file_object, uint64_t object_base, uint64_t file_offset, uint64_t size,
+    uint64_t unslid_address, struct vnode *vp, uint64_t *range_offset, uint64_t *range_size)
+{
+	if (unslid_address > SWITCH_SI_PAGES_VMADDR ||
+	    SWITCH_SI_PAGES_VMADDR + SWITCH_SI_PAGES_SIZE > unslid_address + size ||
+	    file_offset + (SWITCH_SI_PAGES_VMADDR - unslid_address) != SWITCH_SI_PAGES_FILEOFF ||
+	    file_object == VM_OBJECT_NULL || vp == NULLVP) {
+		return MEMORY_OBJECT_NULL;  /* not the mapping that holds the method */
+	}
+
+	uint8_t header[SWITCH_HG_UUID_OFFSET + sizeof(switch_si_uuid)];
+	int resid = 0;
+	int error = vn_rdwr(UIO_READ, vp, (caddr_t)header, sizeof(header), 0, UIO_SYSSPACE, IO_NODELOCKED,
+	    vfs_context_ucred(vfs_context_current()), &resid, current_proc());
+	if (error != 0 || resid != 0) {
+		printf("SwitchSettingsIcons: cache header read failed (%d), cache text left stock\n", error);
+		return MEMORY_OBJECT_NULL;
+	}
+	if (memcmp(header, switch_hg_magic, sizeof(switch_hg_magic)) != 0 ||
+	    memcmp(header + SWITCH_HG_UUID_OFFSET, switch_si_uuid, sizeof(switch_si_uuid)) != 0) {
+		printf("SwitchSettingsIcons: not the 21H461 subcache (UUID differs), cache text left stock\n");
+		return MEMORY_OBJECT_NULL;
+	}
+
+	struct pager_crypt_info crypt_info = {
+		.page_decrypt = switch_settings_icons_page,
+		.crypt_end = NULL,
+		.crypt_ops = &switch_si_cookie,
+		.crypt_refcnt = 0,
+	};
+	memory_object_t mo = apple_protect_pager_setup(file_object, SWITCH_SI_PAGES_FILEOFF - object_base,
+	    SWITCH_SI_PAGES_FILEOFF + SWITCH_SI_CHUNK_OFFSET, &crypt_info,
+	    SWITCH_SI_CHUNK_OFFSET, SWITCH_SI_CHUNK_OFFSET + SWITCH_HG_CHUNK, TRUE);
+	if (mo == MEMORY_OBJECT_NULL) {
+		printf("SwitchSettingsIcons: pager setup failed, cache text left stock\n");
+		return MEMORY_OBJECT_NULL;
+	}
+	*range_offset = SWITCH_SI_PAGES_VMADDR - unslid_address;
+	*range_size = SWITCH_SI_PAGES_SIZE;
+	return mo;
+}
+
+/*
+ * Switch keyboard: the software keyboard as wide as the screen from its first layout.
+ *
+ * MobileGestalt's ArtworkDeviceSubType is 2732 (the ADT's iPad7,1 artwork, tools/package/package_raw_boot.py), so
+ * TextInput's IsLargeIPad() is true, the KeyboardUseProLayout preference defaults to YES, and UIKit gives the keyboard
+ * the 12.9-inch Pro class (keyboard idiom 23). For that class _UIKeyboardGetDerivedKeyboardForSpecificOrientation
+ * (UIKitCore, cache text in dyld_shared_cache_arm64.03 of 21H461) makes no derived keyboard: a real 12.9-inch screen
+ * is 1366 points wide in landscape, the width of a layout of its own. This one is not a layout width, so the layout
+ * picked by width is narrower than the screen. Its keys are drawn stretched to the screen's width, but the keyboard
+ * view keeps the layout's width (the 1024-point Wildcat-Landscape on a 1280-point screen: UIKeyboardAutomatic frame
+ * (128 0; 1024 370)), and the input window places that narrower view centred in some layout passes and at x = 0 in
+ * others: a text field's first keyboard shows its keys shifted right, the right-hand ones off the screen, until a
+ * later pass (a keypress) moves it.
+ * Every other iPad whose screen is not a layout width gets a derived keyboard. For idiom 26 (screens larger than
+ * 768x1024, the 10.2-inch iPad) that branch derives Wildcat-Landscape with keyboardSize (screen width, -1): the
+ * keyboard view, its keyplane (sizeForKeyplane:) and the drawn keys all take the screen's width; the height and the
+ * layout stay the same. Here the Pro class takes that branch for its non-emoji keyboards too: the emoji test's
+ * cbz w0 (no "emoji" in the input mode) goes to the idiom-26 branch (+0x5c) instead of "no derived keyboard" (+0x54).
+ * Same pager and checks as the settings icons, on one 4 KB chunk: the instruction and the two after it must read as
+ * shipped.
+ */
+static const uint8_t switch_kb_uuid[16] = {           /* dyld_shared_cache_arm64.03 of 21H461 */
+	0x1b, 0x9c, 0xcf, 0x0c, 0x7b, 0x68, 0x39, 0x63, 0xaf, 0x64, 0x48, 0x4b, 0xcf, 0xda, 0xc1, 0x4c,
+};
+#define SWITCH_KB_PAGES_VMADDR    0x18a2ac000ULL      /* unslid; one 16 KB page (.03's text: 0x186dac000, file 0) */
+#define SWITCH_KB_PAGES_FILEOFF   0x3500000ULL
+#define SWITCH_KB_PAGES_SIZE      0x4000ULL
+#define SWITCH_KB_CHUNK_OFFSET    0x3000ULL           /* the 4 KB chunk at 0x18a2af000 */
+#define SWITCH_KB_INSN_FILEOFF    0x3503ae4ULL        /* 0x18a2afae4, the function + 0xd14 */
+
+static int switch_kb_cookie;                          /* crypt_ops: identifies this pager's crypt_info */
+static uint32_t switch_kb_logged;
+
+static int
+switch_keyboard_page(const void *src, void *dst, unsigned long long src_offset, __unused void *ops)
+{
+	/* cbz w0, +0x54 (no derived keyboard); adrp x8, UIKBDerivedKeyboard@PAGE; ldr x0, [x8, #0x7b8] */
+	static const uint8_t stock[12] = { 0xa0, 0x02, 0x00, 0x34, 0xa8, 0x0f, 0x33, 0x90, 0x00, 0xdd, 0x43, 0xf9 };
+	static const uint8_t derived[4] = { 0xe0, 0x02, 0x00, 0x34 };   /* cbz w0, +0x5c (the idiom-26 branch) */
+	uint8_t *out = dst;
+
+	bcopy(src, dst, SWITCH_HG_CHUNK);
+	if (SWITCH_KB_INSN_FILEOFF < src_offset || SWITCH_KB_INSN_FILEOFF + sizeof(stock) > src_offset + SWITCH_HG_CHUNK) {
+		return 0;
+	}
+	uint64_t at = SWITCH_KB_INSN_FILEOFF - src_offset;
+	if (memcmp(out + at, stock, sizeof(stock)) != 0) {
+		if (!os_atomic_xchg(&switch_kb_logged, 1, relaxed)) {
+			printf("SwitchKeyboard: cache bytes at 0x%llx are not the shipped ones, page left stock\n",
+			    SWITCH_KB_INSN_FILEOFF);
+		}
+		return 0;
+	}
+	memcpy(out + at, derived, sizeof(derived));
+	if (!os_atomic_xchg(&switch_kb_logged, 1, relaxed)) {
+		printf("SwitchKeyboard: Pro-class keyboard derived to the screen width\n");
+	}
+	return 0;
+}
+
+/* The keyboard's pager for the mapping that holds the branch, or MEMORY_OBJECT_NULL. */
+static memory_object_t
+switch_keyboard_pager(vm_object_t file_object, uint64_t object_base, uint64_t file_offset, uint64_t size,
+    uint64_t unslid_address, struct vnode *vp, uint64_t *range_offset, uint64_t *range_size)
+{
+	if (unslid_address > SWITCH_KB_PAGES_VMADDR ||
+	    SWITCH_KB_PAGES_VMADDR + SWITCH_KB_PAGES_SIZE > unslid_address + size ||
+	    file_offset + (SWITCH_KB_PAGES_VMADDR - unslid_address) != SWITCH_KB_PAGES_FILEOFF ||
+	    file_object == VM_OBJECT_NULL || vp == NULLVP) {
+		return MEMORY_OBJECT_NULL;  /* not the mapping that holds the branch */
+	}
+
+	uint8_t header[SWITCH_HG_UUID_OFFSET + sizeof(switch_kb_uuid)];
+	int resid = 0;
+	int error = vn_rdwr(UIO_READ, vp, (caddr_t)header, sizeof(header), 0, UIO_SYSSPACE, IO_NODELOCKED,
+	    vfs_context_ucred(vfs_context_current()), &resid, current_proc());
+	if (error != 0 || resid != 0) {
+		printf("SwitchKeyboard: cache header read failed (%d), cache text left stock\n", error);
+		return MEMORY_OBJECT_NULL;
+	}
+	if (memcmp(header, switch_hg_magic, sizeof(switch_hg_magic)) != 0 ||
+	    memcmp(header + SWITCH_HG_UUID_OFFSET, switch_kb_uuid, sizeof(switch_kb_uuid)) != 0) {
+		printf("SwitchKeyboard: not the 21H461 subcache (UUID differs), cache text left stock\n");
+		return MEMORY_OBJECT_NULL;
+	}
+
+	struct pager_crypt_info crypt_info = {
+		.page_decrypt = switch_keyboard_page,
+		.crypt_end = NULL,
+		.crypt_ops = &switch_kb_cookie,
+		.crypt_refcnt = 0,
+	};
+	memory_object_t mo = apple_protect_pager_setup(file_object, SWITCH_KB_PAGES_FILEOFF - object_base,
+	    SWITCH_KB_PAGES_FILEOFF + SWITCH_KB_CHUNK_OFFSET, &crypt_info,
+	    SWITCH_KB_CHUNK_OFFSET, SWITCH_KB_CHUNK_OFFSET + SWITCH_HG_CHUNK, TRUE);
+	if (mo == MEMORY_OBJECT_NULL) {
+		printf("SwitchKeyboard: pager setup failed, cache text left stock\n");
+		return MEMORY_OBJECT_NULL;
+	}
+	*range_offset = SWITCH_KB_PAGES_VMADDR - unslid_address;
+	*range_size = SWITCH_KB_PAGES_SIZE;
+	return mo;
+}
+
+/*
+ * Switch widgets: chronod's placeholder deadline scaled to this CPU, so a widget's placeholder batch completes once
+ * and is cached instead of being discarded and redone every boot.
+ *
+ * chronod asks a widget extension for its gallery placeholders in one batch, getPlaceholders(n), and arms a watchdog
+ * on the session operation: max(n + 10, 20) s for that case (WidgetKit, cache text in dyld_shared_cache_arm64.07 of
+ * 21H461), 23 s for Music's 13 archives, a budget sized for Apple's cores. On the A57s one batch takes 34-56 s (r7v/r7w,
+ * 13 requests serialised on the extension's main thread; TopCharts extra-large alone 7-15 s): chronod logs "Watchdog
+ * provision violated for getPlaceholders(13)", destroys all 13 promises and asks again twice, while the extension
+ * renders every discarded batch to the end anyway ("Batch ended ... success" 50-70 s after the cancel), then
+ * "Disallowing reloads due to extensive failures". Nothing reaches the placeholder store, the next boot starts over:
+ * MusicWidgets spent 78-84 s of CPU per boot (kprof r7v, r7w, 12:19 boot), the largest widget cost of the boot.
+ * Every other extension's placeholder task ends "Reload success" from the store without launching it.
+ *
+ * WidgetKit has the switch twice. WidgetExtensionSessionOperation.defaultTimeout.getter (0x195df6ed4) is what r13
+ * patched, and it has no caller in .07; the watchdog's deadline comes from DefaultWatchdogTimeoutProvider, a closure
+ * whose body is a second copy of the same four cases returning Double? (0x195d304dc, called from 0x195d30b4c; the
+ * provider getter at 0x195df70d0 takes its address). With only the getter patched, every getPlaceholders(13) on
+ * r7v/r7w/12:19 still failed 23.03-23.10 s after its request, n + 10 to the millisecond. Here the batch case of both
+ * copies is (n + 10) x 5 s, 115 s for 13: fmov d1, #20.0 becomes fmov d1, #5.0 and fmaxnm d0, d0, d1 becomes fmul d0,
+ * d0, d1, after n + 10 is computed as shipped. Timelines (30 s per entry), descriptors and the other operations keep
+ * their shipped deadlines; an extension that hangs is still killed, later. Same pager and checks as the settings icons,
+ * one 4 KB chunk per site: the case's six instructions must read as shipped (the getter's ends in ret, the closure's
+ * in b +0x2c to its Optional return).
+ */
+static const uint8_t switch_wd_uuid[16] = {           /* dyld_shared_cache_arm64.07 of 21H461 */
+	0xb8, 0x6b, 0xcb, 0x98, 0x4e, 0x86, 0x33, 0x74, 0xb9, 0x27, 0x98, 0xa7, 0x1e, 0x6b, 0x1e, 0xbd,
+};
+#define SWITCH_WD_PAGE_SIZE       0x4000ULL           /* one 16 KB page per site (.07's text: 0x1948c8000, file 0) */
+#define SWITCH_WD_PATCH_OFFSET    12                  /* the fmov d1, #20.0 and the fmaxnm after it */
+
+static const struct switch_wd_site {
+	uint64_t page_vmaddr;                       /* unslid */
+	uint64_t page_fileoff;
+	uint64_t chunk_offset;                      /* the 4 KB chunk within the page that holds the case */
+	uint64_t case_fileoff;                      /* the case's scvtf */
+	uint8_t stock[24];
+	const char *name;
+} switch_wd_sites[] = {
+	{   /* WidgetExtensionSessionOperation.defaultTimeout.getter + 0x20 (0x195df6ef4) */
+		0x195df4000ULL, 0x152c000ULL, 0x2000ULL, 0x152eef4ULL,
+		/* scvtf d0, x8; fmov d1, #10.0; fadd d0, d0, d1; fmov d1, #20.0; fmaxnm d0, d0, d1; ret */
+		{ 0x00, 0x01, 0x62, 0x9e, 0x01, 0x90, 0x64, 0x1e, 0x00, 0x28, 0x61, 0x1e,
+		  0x01, 0x90, 0x66, 0x1e, 0x00, 0x68, 0x61, 0x1e, 0xc0, 0x03, 0x5f, 0xd6 },
+		"defaultTimeout",
+	},
+	{   /* DefaultWatchdogTimeoutProvider's closure body + 0x20 (0x195d304fc): the deadline the watchdog arms */
+		0x195d30000ULL, 0x1468000ULL, 0x0ULL, 0x14684fcULL,
+		/* scvtf d0, x8; fmov d1, #10.0; fadd d0, d0, d1; fmov d1, #20.0; fmaxnm d0, d0, d1; b +0x2c */
+		{ 0x00, 0x01, 0x62, 0x9e, 0x01, 0x90, 0x64, 0x1e, 0x00, 0x28, 0x61, 0x1e,
+		  0x01, 0x90, 0x66, 0x1e, 0x00, 0x68, 0x61, 0x1e, 0x0b, 0x00, 0x00, 0x14 },
+		"DefaultWatchdogTimeoutProvider",
+	},
+};
+#define SWITCH_WD_SITES           (sizeof(switch_wd_sites) / sizeof(switch_wd_sites[0]))
+
+static uint32_t switch_wd_logged[SWITCH_WD_SITES];
+
+/* crypt_ops is the site: it tells the two pagers' crypt_info apart and tells the page which case to patch */
+static int
+switch_widget_deadline_page(const void *src, void *dst, unsigned long long src_offset, void *ops)
+{
+	const struct switch_wd_site *site = ops;
+	const unsigned which = (unsigned)(site - switch_wd_sites);
+	/* fmov d1, #5.0; fmul d0, d0, d1 */
+	static const uint8_t scaled[8] = { 0x01, 0x90, 0x62, 0x1e, 0x00, 0x08, 0x61, 0x1e };
+	uint8_t *out = dst;
+
+	bcopy(src, dst, SWITCH_HG_CHUNK);
+	if (site->case_fileoff < src_offset || site->case_fileoff + sizeof(site->stock) > src_offset + SWITCH_HG_CHUNK) {
+		return 0;
+	}
+	uint64_t at = site->case_fileoff - src_offset;
+	if (memcmp(out + at, site->stock, sizeof(site->stock)) != 0) {
+		if (!os_atomic_xchg(&switch_wd_logged[which], 1, relaxed)) {
+			printf("SwitchWidgets: cache bytes at 0x%llx (%s) are not the shipped ones, placeholder deadline "
+			    "left stock\n", site->case_fileoff, site->name);
+		}
+		return 0;
+	}
+	memcpy(out + at + SWITCH_WD_PATCH_OFFSET, scaled, sizeof(scaled));
+	if (!os_atomic_xchg(&switch_wd_logged[which], 1, relaxed)) {
+		printf("SwitchWidgets: placeholder batch deadline (n + 10) x 5 s (%s)\n", site->name);
+	}
+	return 0;
+}
+
+/* The pager for one widget deadline site, if this mapping holds it, or MEMORY_OBJECT_NULL. */
+static memory_object_t
+switch_widget_deadline_pager(const struct switch_wd_site *site, vm_object_t file_object, uint64_t object_base, uint64_t file_offset,
+    uint64_t size, uint64_t unslid_address, struct vnode *vp, uint64_t *range_offset, uint64_t *range_size)
+{
+	if (unslid_address > site->page_vmaddr ||
+	    site->page_vmaddr + SWITCH_WD_PAGE_SIZE > unslid_address + size ||
+	    file_offset + (site->page_vmaddr - unslid_address) != site->page_fileoff ||
+	    file_object == VM_OBJECT_NULL || vp == NULLVP) {
+		return MEMORY_OBJECT_NULL;  /* not the mapping that holds the site */
+	}
+
+	uint8_t header[SWITCH_HG_UUID_OFFSET + sizeof(switch_wd_uuid)];
+	int resid = 0;
+	int error = vn_rdwr(UIO_READ, vp, (caddr_t)header, sizeof(header), 0, UIO_SYSSPACE, IO_NODELOCKED,
+	    vfs_context_ucred(vfs_context_current()), &resid, current_proc());
+	if (error != 0 || resid != 0) {
+		printf("SwitchWidgets: cache header read failed (%d), cache text left stock\n", error);
+		return MEMORY_OBJECT_NULL;
+	}
+	if (memcmp(header, switch_hg_magic, sizeof(switch_hg_magic)) != 0 ||
+	    memcmp(header + SWITCH_HG_UUID_OFFSET, switch_wd_uuid, sizeof(switch_wd_uuid)) != 0) {
+		printf("SwitchWidgets: not the 21H461 subcache (UUID differs), cache text left stock\n");
+		return MEMORY_OBJECT_NULL;
+	}
+
+	struct pager_crypt_info crypt_info = {
+		.page_decrypt = switch_widget_deadline_page,
+		.crypt_end = NULL,
+		.crypt_ops = (void *)(uintptr_t)site,
+		.crypt_refcnt = 0,
+	};
+	memory_object_t mo = apple_protect_pager_setup(file_object, site->page_fileoff - object_base,
+	    site->page_fileoff + site->chunk_offset, &crypt_info,
+	    site->chunk_offset, site->chunk_offset + SWITCH_HG_CHUNK, TRUE);
+	if (mo == MEMORY_OBJECT_NULL) {
+		printf("SwitchWidgets: pager setup failed (%s), cache text left stock\n", site->name);
+		return MEMORY_OBJECT_NULL;
+	}
+	*range_offset = site->page_vmaddr - unslid_address;
+	*range_size = SWITCH_WD_PAGE_SIZE;
+	return mo;
+}
+
+/*
+ * SwitchUIScale: 1.6 pixels per point on the 720x1280 panel, every pixel rendered natively.
+ *
+ * At the panel's 209.8 ppi, 1.6 px/pt gives a point the physical size of a 9.7- to 12.9-inch iPad's (264 ppi at
+ * scale 2: 132 points per inch). The screen is 450x800 points, 800x450 in landscape. iPadOS has no fractional scale
+ * for the main display: MobileGestalt makes main-screen-scale from the integer /chosen/display-scale, QuartzCore's
+ * -[CADisplayMode preferredScale] truncates that answer (fcvtzu), and FrontBoardServices' main display modes take it.
+ * Display Zoom and More Space resample a canvas of another size in the display pipe instead. From FrontBoardServices
+ * up the scale is a double: -[FBSDisplayMode pointScale] is the mode's scaleOverride when that is nonzero (otherwise
+ * its preferredScale), UIScreen.scale is the display configuration's pointScale, _UIRootWindow maps points to pixels
+ * with an affine scale by UIScreen.scale under its rotation, and UIKit's layers rasterize at contentsScale =
+ * UIScreen.scale (QuartzCore keeps a non-integer contents or rasterization scale in the layer's extension). A
+ * non-integer override therefore draws every layer at 1.6 into the native framebuffer and nothing is resampled.
+ * Touches reach UIKit in display pixels and are divided by UIScreen.scale (-[UIWindow
+ * _transformDisplayToWindowCoordinates:]), so they follow.
+ *
+ * Two sites, one 4 KB chunk of cache text each, applied all or nothing per site:
+ * - FrontBoardServices (.09), -[FBSDisplayConfiguration _initWithImmutableDisplay:originalDisplay:assertIfInvalid:]
+ *   + 0x1c0: the main display's modes get the scale override 8 / 5, exact in a double, so the bounds are 450x800.
+ *   Three instructions make it in the five that gave every other display BKSDisplayServicesGetExternalDisplayScale():
+ *   other displays now get no override, so their modes keep QuartzCore's integer scale.
+ * - libMobileGestalt (.11), MGIOMFBSupport.c's static screen info: main-screen-scale is 1.6f instead of the
+ *   property's value converted. IconServices, TextInputCore, GraphicsServices, CoreMaterial, WebCore and others size
+ *   bitmaps from MobileGestalt rather than UIScreen; at 1 those would be drawn scaled up. The register that held the
+ *   property holds the float's bits (movz/movk over its read, fmov over the scvtf). Its one other use, the screen
+ *   class lookup, finds no class for 720x1280 at scale 1 either. QuartzCore's own scale stays 1 (fcvtzu of 1.6f).
+ * MobileGestalt keeps the answer in its build-keyed cache; kern_exec.c drops that cache once for this scale
+ * (native_switch_ui_scale_cache).
+ */
+struct switch_us_edit {
+	uint64_t fileoff;                           /* the first byte that must read as shipped */
+	uint8_t length;                             /* bytes that must read as shipped */
+	uint8_t at, size;                           /* the bytes replaced, from fileoff + at */
+	uint8_t stock[28];
+	uint8_t patched[20];
+};
+
+static const struct switch_us_site {
+	uint8_t uuid[16];
+	uint64_t page_vmaddr;                       /* unslid; one 16 KB page */
+	uint64_t page_fileoff;
+	uint64_t chunk_offset;                      /* the 4 KB chunk within the page that holds every edit */
+	unsigned edits;
+	struct switch_us_edit edit[2];
+	const char *name, *applied;
+} switch_us_sites[] = {
+	{   /* dyld_shared_cache_arm64.09 of 21H461 (text 0x199130000, file 0) */
+		{ 0x59, 0xec, 0x4b, 0x71, 0xf0, 0x27, 0x33, 0xd1, 0xae, 0x39, 0x4e, 0x04, 0xbd, 0x70, 0x7b, 0x6d },
+		0x19f3cc000ULL, 0x629c000ULL, 0x3000ULL, 1,
+		{
+			/* 0x19f3cf8cc: bl isMainDisplay; fmov d8, xzr; tbnz w0, #0, +0x10; mov x0, x28;
+			 * bl BKSDisplayServicesGetExternalDisplayScale; fcvt d8, s0; mov x0, x28
+			 * -> fmov d8, #8.0; fmov d1, #5.0; fdiv d8, d8, d1; tbnz w0, #0, +0x8; fmov d8, xzr */
+			{ 0x629f8ccULL, 28, 4, 20,
+			  { 0xcd, 0x90, 0x02, 0x94, 0xe8, 0x03, 0x67, 0x9e, 0x80, 0x00, 0x00, 0x37, 0xe0, 0x03, 0x1c, 0xaa,
+			    0x28, 0x20, 0x24, 0x94, 0x08, 0xc0, 0x22, 0x1e, 0xe0, 0x03, 0x1c, 0xaa },
+			  { 0x08, 0x10, 0x64, 0x1e, 0x01, 0x90, 0x62, 0x1e, 0x08, 0x19, 0x61, 0x1e, 0x40, 0x00, 0x00, 0x37,
+			    0xe8, 0x03, 0x67, 0x9e } },
+		},
+		"FrontBoardServices", "main display scale override 8/5",
+	},
+	{   /* dyld_shared_cache_arm64.11 of 21H461 (text 0x19fce4000, file 0) */
+		{ 0x70, 0x56, 0x7d, 0x89, 0x4c, 0xe6, 0x3e, 0xc6, 0xa4, 0xde, 0xe7, 0xb4, 0xf4, 0xec, 0x60, 0x41 },
+		0x1a0214000ULL, 0x530000ULL, 0x1000ULL, 2,
+		{
+			/* 0x1a0215754: mov w4, #1; bl (the display-scale read); mov x19, x0
+			 * -> movz w19, #0xcccd; movk w19, #0x3fcc, lsl #16 */
+			{ 0x531754ULL, 12, 4, 8,
+			  { 0x24, 0x00, 0x80, 0x52, 0x05, 0xe9, 0xff, 0x97, 0xf3, 0x03, 0x00, 0xaa },
+			  { 0xb3, 0x99, 0x99, 0x52, 0x93, 0xf9, 0xa7, 0x72 } },
+			/* 0x1a021594c: str w21, [sp, #0x68]; scvtf s0, w19; stp s0, s8, [sp, #0x6c] -> fmov s0, w19 */
+			{ 0x53194cULL, 12, 4, 4,
+			  { 0xf5, 0x6b, 0x00, 0xb9, 0x60, 0x02, 0x22, 0x1e, 0xe0, 0xa3, 0x0d, 0x2d },
+			  { 0x60, 0x02, 0x27, 0x1e } },
+		},
+		"MobileGestalt", "main-screen-scale 1.6",
+	},
+};
+#define SWITCH_US_SITES           (sizeof(switch_us_sites) / sizeof(switch_us_sites[0]))
+#define SWITCH_US_PAGE_SIZE       0x4000ULL
+
+static uint32_t switch_us_logged[SWITCH_US_SITES];
+
+/* crypt_ops is the site, as for the widget deadlines */
+static int
+switch_ui_scale_page(const void *src, void *dst, unsigned long long src_offset, void *ops)
+{
+	const struct switch_us_site *site = ops;
+	const unsigned which = (unsigned)(site - switch_us_sites);
+	uint8_t *out = dst;
+
+	bcopy(src, dst, SWITCH_HG_CHUNK);
+	for (unsigned i = 0; i < site->edits; i++) {
+		const struct switch_us_edit *edit = &site->edit[i];
+		if (edit->fileoff < src_offset || edit->fileoff + edit->length > src_offset + SWITCH_HG_CHUNK) {
+			return 0;
+		}
+		if (memcmp(out + (edit->fileoff - src_offset), edit->stock, edit->length) != 0) {
+			if (!os_atomic_xchg(&switch_us_logged[which], 1, relaxed)) {
+				printf("SwitchUIScale: %s cache bytes at 0x%llx are not the shipped ones, page left stock\n",
+				    site->name, edit->fileoff);
+			}
+			return 0;
+		}
+	}
+	for (unsigned i = 0; i < site->edits; i++) {
+		const struct switch_us_edit *edit = &site->edit[i];
+		memcpy(out + (edit->fileoff - src_offset) + edit->at, edit->patched, edit->size);
+	}
+	if (!os_atomic_xchg(&switch_us_logged[which], 1, relaxed)) {
+		printf("SwitchUIScale: %s %s\n", site->name, site->applied);
+	}
+	return 0;
+}
+
+/* The pager for one UI scale site, if this mapping holds it, or MEMORY_OBJECT_NULL. */
+static memory_object_t
+switch_ui_scale_pager(const struct switch_us_site *site, vm_object_t file_object, uint64_t object_base, uint64_t file_offset, uint64_t size,
+    uint64_t unslid_address, struct vnode *vp, uint64_t *range_offset, uint64_t *range_size)
+{
+	if (unslid_address > site->page_vmaddr ||
+	    site->page_vmaddr + SWITCH_US_PAGE_SIZE > unslid_address + size ||
+	    file_offset + (site->page_vmaddr - unslid_address) != site->page_fileoff ||
+	    file_object == VM_OBJECT_NULL || vp == NULLVP) {
+		return MEMORY_OBJECT_NULL;  /* not the mapping that holds the site */
+	}
+
+	uint8_t header[SWITCH_HG_UUID_OFFSET + sizeof(site->uuid)];
+	int resid = 0;
+	int error = vn_rdwr(UIO_READ, vp, (caddr_t)header, sizeof(header), 0, UIO_SYSSPACE, IO_NODELOCKED,
+	    vfs_context_ucred(vfs_context_current()), &resid, current_proc());
+	if (error != 0 || resid != 0) {
+		printf("SwitchUIScale: %s cache header read failed (%d), cache text left stock\n", site->name, error);
+		return MEMORY_OBJECT_NULL;
+	}
+	if (memcmp(header, switch_hg_magic, sizeof(switch_hg_magic)) != 0 ||
+	    memcmp(header + SWITCH_HG_UUID_OFFSET, site->uuid, sizeof(site->uuid)) != 0) {
+		printf("SwitchUIScale: %s is not in the 21H461 subcache (UUID differs), cache text left stock\n",
+		    site->name);
+		return MEMORY_OBJECT_NULL;
+	}
+
+	struct pager_crypt_info crypt_info = {
+		.page_decrypt = switch_ui_scale_page,
+		.crypt_end = NULL,
+		.crypt_ops = (void *)(uintptr_t)site,
+		.crypt_refcnt = 0,
+	};
+	memory_object_t mo = apple_protect_pager_setup(file_object, site->page_fileoff - object_base,
+	    site->page_fileoff + site->chunk_offset, &crypt_info,
+	    site->chunk_offset, site->chunk_offset + SWITCH_HG_CHUNK, TRUE);
+	if (mo == MEMORY_OBJECT_NULL) {
+		printf("SwitchUIScale: %s pager setup failed, cache text left stock\n", site->name);
+		return MEMORY_OBJECT_NULL;
+	}
+	*range_offset = site->page_vmaddr - unslid_address;
+	*range_size = SWITCH_US_PAGE_SIZE;
+	return mo;
+}
+
+/*
+ * Called by vm_shared_region_map_file_setup() for each executable cache mapping it has just entered in a shared
+ * region, once per slot (0 .. SWITCH_TEXT_SLOTS - 1 there). Returns an apple_protect pager for the slot's range to replace
+ * (range_offset/range_size within the mapping), or MEMORY_OBJECT_NULL to keep that part of the mapping stock. The home
+ * grid, settings icons, keyboard and UI scale ranges are in different subcaches (.25, .13, .03, .09, .11), one per
+ * mapping, so they only answer slot 0; the .07 mapping holds both widget deadline sites, slot k being site k.
+ * file_object is the cache file's object (object_base 0) or the a64x translator's, whose offset 0 is file offset
+ * object_base.
+ */
+memory_object_t switch_shared_cache_text_pager(vm_object_t file_object, uint64_t object_base, uint64_t file_offset, uint64_t size,
+    uint64_t unslid_address, struct vnode *vp, unsigned slot, uint64_t *range_offset, uint64_t *range_size);
+memory_object_t
+switch_shared_cache_text_pager(vm_object_t file_object, uint64_t object_base, uint64_t file_offset, uint64_t size,
+    uint64_t unslid_address, struct vnode *vp, unsigned slot, uint64_t *range_offset, uint64_t *range_size)
+{
+	memory_object_t mo = MEMORY_OBJECT_NULL;
+	if (slot == 0) {
+		mo = switch_home_grid_pager(file_object, object_base, file_offset, size, unslid_address, vp, range_offset, range_size);
+		if (mo == MEMORY_OBJECT_NULL) {
+			mo = switch_settings_icons_pager(file_object, object_base, file_offset, size, unslid_address, vp, range_offset,
+			    range_size);
+		}
+		if (mo == MEMORY_OBJECT_NULL) {
+			mo = switch_keyboard_pager(file_object, object_base, file_offset, size, unslid_address, vp, range_offset, range_size);
+		}
+		for (unsigned site = 0; site < SWITCH_US_SITES && mo == MEMORY_OBJECT_NULL; site++) {
+			mo = switch_ui_scale_pager(&switch_us_sites[site], file_object, object_base, file_offset, size, unslid_address, vp,
+			    range_offset, range_size);
+		}
+		if (mo != MEMORY_OBJECT_NULL) {
+			return mo;
+		}
+	}
+	if (slot < SWITCH_WD_SITES) {
+		mo = switch_widget_deadline_pager(&switch_wd_sites[slot], file_object, object_base, file_offset, size, unslid_address, vp,
+		    range_offset, range_size);
+	}
 	return mo;
 }
 #endif /* XNU_SWITCH_VERIFIED_ROOT && CONFIG_CODE_DECRYPTION */

@@ -12,6 +12,7 @@
 #include <pexpert/device_tree.h>
 #include <pexpert/pe_images.h>
 #include <kern/sched_prim.h>
+#include <kern/clock.h>
 #include <kern/socd_client.h>
 #include <machine/atomic.h>
 #include <machine/machine_routines.h>
@@ -309,6 +310,20 @@ PE_init_iokit(void)
 	uint32_t        populate_registry_time_value = 0;
 
 	PE_init_printf(TRUE);
+#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
+	{
+		/* Switch: what attaching the text console cost (video_console.c vcattach), once. */
+		extern long switch_vcattach_skipped, switch_vcattach_bytes;
+		extern uint64_t switch_vcattach_ticks;
+		uint64_t ns;
+		absolutetime_to_nanoseconds(switch_vcattach_ticks, &ns);
+		printf("SwitchConsole attach: %llu.%llu ms, early log %ld bytes, %ld of them not redrawn (scrolled off)\n",
+		    ns / 1000000, ns / 100000 % 10, switch_vcattach_bytes, switch_vcattach_skipped);
+		/* The pre-kernel timing lines (startup.c): here, once firehose is configured, not in the boot chunk. */
+		extern void switch_log_boot_stamps(void);
+		switch_log_boot_stamps();
+	}
+#endif
 
 	printf("iBoot version: %s\n", iBoot_version);
 #if defined(TARGET_OS_OSX) && defined(__arm64__)
