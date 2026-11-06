@@ -104,14 +104,14 @@ static inline uint32_t switch_isqrt_u64(uint64_t value)
 // Each argument evaluated once, in its own type (so no mixed signed/unsigned comparison is hidden by a cast).
 #define SWITCH_MIN(a, b)                                               \
     __extension__({                                                    \
-        __typeof__(a) switch_min_a_ = (a);                             \
-        __typeof__(b) switch_min_b_ = (b);                             \
+        const __typeof__(a) switch_min_a_ = (a);                       \
+        const __typeof__(b) switch_min_b_ = (b);                       \
         switch_min_a_ < switch_min_b_ ? switch_min_a_ : switch_min_b_; \
     })
 #define SWITCH_MAX(a, b)                                               \
     __extension__({                                                    \
-        __typeof__(a) switch_max_a_ = (a);                             \
-        __typeof__(b) switch_max_b_ = (b);                             \
+        const __typeof__(a) switch_max_a_ = (a);                       \
+        const __typeof__(b) switch_max_b_ = (b);                       \
         switch_max_a_ > switch_max_b_ ? switch_max_a_ : switch_max_b_; \
     })
 
