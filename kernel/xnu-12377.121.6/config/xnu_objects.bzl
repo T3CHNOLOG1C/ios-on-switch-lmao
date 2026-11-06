@@ -279,6 +279,9 @@ def _xnu_objects_impl(ctx):
             maps
         )
         key = "\n".join(flags)
+        if entry.startswith("switch:"):
+            # A compile of its own per kernel/switch directory: no object of ours shares a name with an Apple one.
+            key = entry.rpartition("/")[0] + "\n" + key
         if key not in groups:
             groups[key] = struct(name = "{}_{}".format(ctx.label.name, len(order)), flags = flags, srcs = [])
             order.append(key)
