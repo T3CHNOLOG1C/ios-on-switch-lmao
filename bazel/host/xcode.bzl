@@ -6,21 +6,22 @@ and writes @xcode//:identity, a file every action that runs an Xcode tool takes 
 therefore changes those actions' keys (and nothing else's), and an unpinned Xcode is refused before anything runs.
 
 Bump: install the new Xcode, `xcode-select -s` it (or export DEVELOPER_DIR), run `bazel run @xcode//:print_pins`
-and paste its output over XCODE_PINS. The kernel's code generation depends on Apple clang's version, so expect
-every kernel object to rebuild.
+and paste its output over XCODE_PINS, then re-record what XNU's make does with it (`bazel run
+//kernel/xnu-<version>:update_tables` for each XNU, `bazel run //bazel/toolchains/kernel:update_recipes`). The
+kernel's code generation depends on Apple clang's version, so expect every kernel object to rebuild.
 """
 
-# Xcode-beta 27.0 (27A5194q): the Xcode the CMake flow built the hardware-tested kernels with.
+# CI selects the Xcode with this build: GitHub's xcode-27 runner image must keep it (/Applications/Xcode_27.2.app).
 XCODE_PINS = {
-    "version": "27.0",
-    "build": "27A5194q",
-    "clang": "Apple clang version 21.0.0 (clang-2100.3.20.102)",
-    "ld": "1328.2",
+    "version": "27.2",
+    "build": "27B52",
+    "clang": "Apple clang version 21.0.0 (clang-2100.4.1.1)",
+    "ld": "27106.1",
     "sha256": {
-        "Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk/SDKSettings.json": "cdeed07cd3d7a671a6b887347ccbad5ce221b38a3ecbcf90d23a52448ed6f311",
-        "Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/SDKSettings.json": "855868bc51c250cee55cccff0a6e5f6e7ef17856e921b44837dfec8c003f0693",
-        "Toolchains/XcodeDefault.xctoolchain/usr/bin/clang": "178ff35952fbf7651eaab02f8c07929f952b99f9eb54d0b8363080a98ce49029",
-        "Toolchains/XcodeDefault.xctoolchain/usr/bin/ld": "eb49fa9579cc2a712451e1e6ab85837de02e90d455c8f5bd5efab4fba755a0b7",
+        "Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk/SDKSettings.json": "8c5d2efa53dbdb9b602c45e77c5eac5b21165317408fe37ddf14c7aa9c8b9031",
+        "Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/SDKSettings.json": "82165b15ee21419d4cffaba8895797391b908ac9499ba70f561f3e1bd16758d6",
+        "Toolchains/XcodeDefault.xctoolchain/usr/bin/clang": "fc5e3cbba6ad54059295cad716aacb05ace8235f5f7a6031f1d8c15d24bd6d66",
+        "Toolchains/XcodeDefault.xctoolchain/usr/bin/ld": "7f7041b1bb30e5e6a815a55edf374065d5c82e1ab93f84d5b6ed5656ded24bcf",
     },
 }
 
@@ -81,7 +82,7 @@ def _xcode_host_impl(rctx):
         # buildifier: disable=print
         print("WARNING: building with an UNPINNED Xcode ({}); outputs will not match the pinned build.".format(app))
 
-    # The SDK paths as `xcrun --show-sdk-path` names them (iPhoneOS27.0.sdk): the spelling the CMake flow passed to
+    # The SDK paths as `xcrun --show-sdk-path` names them (iPhoneOS27.2.sdk): the spelling the CMake flow passed to
     # -isysroot, which ends up in debug info.
     xcrun_env = {"DEVELOPER_DIR": developer}
     iphoneos = _run(rctx, ["/usr/bin/xcrun", "--sdk", "iphoneos", "--show-sdk-path"], xcrun_env)

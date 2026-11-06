@@ -37,7 +37,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import xnu_ops
 
-DEVELOPER_DIR = os.environ.get('DEVELOPER_DIR', '/Applications/Xcode-beta.app/Contents/Developer')
+DEVELOPER_DIR = os.environ.get('DEVELOPER_DIR', '/Applications/Xcode.app/Contents/Developer')
 TOOLCHAIN = DEVELOPER_DIR + '/Toolchains/XcodeDefault.xctoolchain/usr/bin'
 SCRIPTS = [
     'SETUP/config/doconf',

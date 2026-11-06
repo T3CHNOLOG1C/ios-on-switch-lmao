@@ -33,7 +33,7 @@ load("@xcode//:defs.bzl", "DEVELOPER_DIR", "IPHONEOS_SDK", "MACOSX_SDK", "XCODE_
 # target (what Xcode's clang picks with no -target, as meson's native builds ran it).
 PLATFORMS = {
     "ios": struct(triple = "arm64-apple-ios17.0", sdk = IPHONEOS_SDK),
-    "macos": struct(triple = "arm64-apple-macosx27.0", sdk = MACOSX_SDK),
+    "macos": struct(triple = "arm64-apple-macosx27.2", sdk = MACOSX_SDK),
 }
 
 _C = [ACTION_NAMES.c_compile]
