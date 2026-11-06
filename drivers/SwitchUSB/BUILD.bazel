@@ -92,6 +92,7 @@ kernel_driver(
         "original-bindings.S",
         "SwitchPD.cpp",
         "XusbHost.cpp",
+        "XusbSleepwalk.cpp",
         "UsbDmaMapper.cpp",
         "SwitchXHCI.cpp",
         "SwitchXHCIEvents.cpp",

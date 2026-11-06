@@ -57,6 +57,8 @@ int switch_usb_start(void);
 // powered with its firmware again before IOKit raises AppleUSBXHCI (switchxhci_sleep). No-ops without USB.
 void switch_usb_suspend(void);
 void switch_usb_resume(void);
+// After switch_usb_suspend: a USB device on the host port can wake this sleep (PMC wake event 39, its key press).
+bool switch_usb_remote_wake(void);
 
 // Prelink cut stub (emit_prelink.py CUT_DEPENDENCIES): 8 zero bytes; a cut dependency's metaclass GOT entry points here.
 extern const unsigned long long switch_prelink_cut_null;
@@ -85,6 +87,7 @@ void switchxhci_expect_port_change(void);  // a device appeared in host role: ar
 void switchxhci_cable(bool connected);
 // switch_usb_suspend/resume's host half: the Tegra side down for SC7, and powered with its firmware again after it.
 void switchxhci_sleep(bool entering);
+bool switchxhci_remote_wake_armed();  // a device on the port can wake this SC7 (PMC wake event 39)
 // SwitchUSB.cpp: host mode off for this boot (a never-booted interrupt line did not deliver; the caller logged it).
 // Thread context.
 void switch_usb_host_failed(void);

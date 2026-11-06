@@ -26,6 +26,7 @@
 #include <os/log.h>
 #include <pexpert/pexpert.h>
 #include "../SwitchBattery/SwitchBattery.h"
+#include "../SwitchUSB/SwitchUSB.h"
 #include "../TegraBPMP/TegraBPMP.h"
 #include "../TegraGPIO/TegraGPIO.h"
 #include "../TegraSMMU/TegraSMMU.h"
@@ -356,8 +357,9 @@ void SwitchSuspend::sleepDevices()
     // plug/unplug) and the gauge's ALRT (the battery's charge zone). Statuses cleared first, as
     // tegra210_pmc_irq_set_wake does.
     switch_power_trail_mark(SWITCH_STEP_SLEEP_PMC_WAKE);
-    wakeArmed = switch_wake_pmc_armed(tegra_gpio_read(TEGRA_GPIO_PD_ALERT) == 1,
-                                      tegra_gpio_read(TEGRA_GPIO_GAUGE_ALERT) == 1, btWake, false);
+    wakeArmed =
+        switch_wake_pmc_armed(tegra_gpio_read(TEGRA_GPIO_PD_ALERT) == 1, tegra_gpio_read(TEGRA_GPIO_GAUGE_ALERT) == 1,
+                              btWake, false, switch_usb_remote_wake());
 #if DEVELOPMENT || DEBUG
     if (armBackstop())
         wakeArmed |= UINT64_C(1) << kBackstopEvent;
@@ -517,6 +519,11 @@ void SwitchSuspend::wakeDevices()
     IOPMrootDomain *root = getPMRootDomain();
     if (root)
         root->claimSystemWakeEvent(this, kIOPMWakeEventSource, reason, nullptr);
+    // A key press on a USB keyboard (or a click) woke the console through the PMC's sleepwalk; the press itself went
+    // with the host controller's state in SC7, so the console's Home clicks for it, as a key press with the panel off
+    // does on an iPad (the lock screen).
+    if (!strcmp(reason, "usb"))
+        switch_buttons_bt_click(SWITCH_BT_HOME);
     if (!strcmp(reason, "bt")) {
         // The page that woke the console is a controller reconnecting: keep the system up while it does, and let its
         // first report light the panel (SwitchWake).

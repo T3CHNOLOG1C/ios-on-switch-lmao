@@ -67,6 +67,12 @@ public:
         isPowered = false;
     }
 
+    // XusbSleepwalk.cpp: before SC7, with a device on `port` (USB2 pad 0's), the PMC's sleepwalk keeps its bus and
+    // raises PMC wake event 39 when it signals resume; false (nothing armed) without a device. After SC7, before
+    // powerOn: the pad back from the PMC.
+    bool armRemoteWake(unsigned port);
+    void disarmRemoteWake();
+
     // USB2 port 0 (the USB-C port's D+/D-), XusbPorts.h: OTG capability, then the ID override (xusb-tegra210.c):
     // host grounds ID (the VBUS override off first, 1.5 ms, as Linux) and clears what a boot stage's charger detection
     // left on the pad (D+/D- pull overrides, sources, sinks) and port 0's over-current pin (one line if anything was
@@ -142,6 +148,12 @@ private:
     static bool waitBits(volatile uint8_t *b, uint32_t o, uint32_t mask, uint32_t value, uint32_t us);
     uint32_t pmc(uint32_t o) const;
     void pmcWrite(uint32_t o, uint32_t v);
+
+    void pmcRmw(uint32_t o, uint32_t clear, uint32_t set)
+    {
+        pmcWrite(o, (pmc(o) & ~clear) | set);
+    }
+
     bool powerUp(uint32_t partition, uint32_t clockSet, uint32_t resetSet, uint32_t bit);
     uint32_t csbRead(uint32_t offset);
     void csbWrite(uint32_t offset, uint32_t value);

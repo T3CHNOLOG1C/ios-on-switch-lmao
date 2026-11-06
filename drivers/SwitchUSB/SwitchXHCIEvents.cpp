@@ -29,6 +29,7 @@ namespace {
 constexpr uint32_t kCheckMS = 2000, kConfirmMS = 50;
 constexpr uint32_t kUnclaimedLimit = 1000;  // mailbox interrupts in a row with no SMI to take: a line we cannot clear
 constexpr uint64_t kPortWaitNS = 2000ULL * 1000 * 1000;  // AppleUSBXHCI's ports registering after its start
+bool gRemoteWake;  // the PMC's sleepwalk holds pad 0 for this SC7 (switchxhci_sleep's thread only)
 }  // namespace
 
 // SC7 (switchxhci_sleep): entering, nothing may read the block until it is back, so the mailbox line goes off and the
@@ -218,7 +219,8 @@ void switchxhci_expect_port_change(void)
 }
 
 // SwitchUSB.cpp's suspend and resume, thread context. IOKit has taken AppleUSBXHCI to Sleep or Off before the platform
-// sleep actions run, and raises it only after the wake actions, so the Tegra side is down for exactly that window. SC7
+// sleep actions run, and raises it only after the wake actions, so the Tegra side is down for exactly that window. A
+// device AppleUSBXHCI left suspended on the port gets the PMC's sleepwalk, so a key press wakes the console. SC7
 // takes VDD_CORE: the partitions, the falcon and its firmware go, and AppleUSBXHCI finds a controller that lost its
 // state (as an xHC that lost power in S3) and initializes it again. Back from SC7 the Tegra bring-up runs whole, as at
 // the first start; a block that does not come back would leave AppleUSBXHCI reading unclocked registers, so it panics
@@ -232,8 +234,13 @@ void switchxhci_sleep(bool entering)
         return static_cast<SwitchXHCI *>(owner)->systemSleep(down != nullptr);
     };
     if (entering) {
+        gRemoteWake = gHost.armRemoteWake(gHost.otgPort());
         controller->tegraLoopForCheck()->runAction(gated, controller, controller);
         return;
+    }
+    if (gRemoteWake) {
+        gHost.disarmRemoteWake();
+        gRemoteWake = false;
     }
     char why[160] = "";
     if (!gHost.powerOn(why, sizeof(why)) ||
@@ -264,4 +271,9 @@ void switchxhci_cable(bool connected)
     if (result != kIOReturnSuccess)
         IOLog("SwitchUSB: root port %u refused UsbForcePower %u: %#x\n", number, connected ? 1u : 0u, result);
     port->release();
+}
+
+bool switchxhci_remote_wake_armed()
+{
+    return gRemoteWake;
 }

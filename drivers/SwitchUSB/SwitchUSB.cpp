@@ -294,6 +294,11 @@ extern "C" void switch_usb_suspend(void)
     switch_pd_sleep(true);
 }
 
+extern "C" bool switch_usb_remote_wake()
+{
+    return __atomic_load_n(&gHostUp, __ATOMIC_ACQUIRE) && switchxhci_remote_wake_armed();
+}
+
 // The host block comes back here, before IOKit raises AppleUSBXHCI; the pad's host role, which the XUDC's own power-up
 // does not keep, from the role thread.
 extern "C" void switch_usb_resume(void)
