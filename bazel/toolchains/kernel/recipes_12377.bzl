@@ -478,7 +478,7 @@ RECIPES = {
             "-clang-vendor-feature=+thisNoNullAttr",
             "-Xclang",
             "-clang-vendor-feature=+disableAtImportPrivateFrameworkInImplementationError",
-            "-mlinker-version=1166.2",
+            "-mlinker-version=27033.1",
         ],
     ),
     "iokit_cxx_generic": struct(
@@ -952,7 +952,7 @@ RECIPES = {
             "-clang-vendor-feature=+thisNoNullAttr",
             "-Xclang",
             "-clang-vendor-feature=+disableAtImportPrivateFrameworkInImplementationError",
-            "-mlinker-version=1166.2",
+            "-mlinker-version=27033.1",
         ],
     ),
     "osfmk_c": struct(
@@ -1403,7 +1403,7 @@ RECIPES = {
             "-clang-vendor-feature=+thisNoNullAttr",
             "-Xclang",
             "-clang-vendor-feature=+disableAtImportPrivateFrameworkInImplementationError",
-            "-mlinker-version=1166.2",
+            "-mlinker-version=27033.1",
         ],
     ),
     "bsd_c": struct(
@@ -1885,7 +1885,7 @@ RECIPES = {
             "-clang-vendor-feature=+disableAtImportPrivateFrameworkInImplementationError",
             "-Xclang",
             "-Wno-error=allocator-wrappers",
-            "-mlinker-version=1166.2",
+            "-mlinker-version=27033.1",
         ],
     ),
     "mockfs_c": struct(
@@ -2367,7 +2367,7 @@ RECIPES = {
             "-clang-vendor-feature=+disableAtImportPrivateFrameworkInImplementationError",
             "-Xclang",
             "-Wno-error=allocator-wrappers",
-            "-mlinker-version=1166.2",
+            "-mlinker-version=27033.1",
         ],
     ),
     "freestanding_c": struct(
@@ -2784,7 +2784,7 @@ RECIPES = {
             "-clang-vendor-feature=+thisNoNullAttr",
             "-Xclang",
             "-clang-vendor-feature=+disableAtImportPrivateFrameworkInImplementationError",
-            "-mlinker-version=1166.2",
+            "-mlinker-version=27033.1",
         ],
     ),
 }

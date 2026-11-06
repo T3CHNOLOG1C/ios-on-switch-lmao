@@ -29,6 +29,10 @@ runs:
         done
         echo "::error::This runner image has no Xcode $build (bazel/host/xcode.bzl)."
         exit 1
+    # Since Xcode 26 the Metal compiler is a component of its own, which the runner image may not have.
+    - name: Install the Metal toolchain
+      shell: bash
+      run: xcrun -sdk iphoneos metal -v >/dev/null 2>&1 || xcodebuild -downloadComponent MetalToolchain
     - uses: bazel-contrib/setup-bazel@0.19.1
       with:
         bazelisk-cache: true

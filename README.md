@@ -1,7 +1,6 @@
 <!-- rumdl-disable MD033 MD041 -->
 <a id="readme-top"></a>
 
-
 <div align="center">
   <a href="https://github.com/brunostjohn/ios-on-switch-lmao">
     <img src=".github/logo.svg" alt="ios-on-switch-lmao logo" width="96" height="96">
@@ -42,7 +41,8 @@
 > **Read this before you do anything.**
 >
 > - There is no warranty. If you break your console, that's your fault.
-> - This port runs on the Nintendo Switch OLED and nothing else, and there are no plans to support any other Switch model.
+> - This port runs on the Nintendo Switch OLED and nothing else, and there are no plans to support any other Switch
+>   model.
 > - There is no support with running this, for installing it, or for anything else. Issues are disabled.
 > - Don't send me Twitter DMs or emails asking for help.
 > - PRs are accepted, but straight slop won't be merged. im not reading allat.
@@ -50,11 +50,11 @@
 
 <br />
 
-
 <img src="docs/assets/switch-ios.jpg" alt="A Switch OLED showing the iPadOS Home Screen" width="720">
 
-
-iPadOS running directly on the Switch. The kernel is Apple's XNU, built from the source published by Apple, with drivers for the Switch's hardware. Everything else is generated from the iPadOS IPSW downloaded during the installation process. You boot it the same way people boot Android/Linux from Hekate.
+iPadOS running directly on the Switch. The kernel is Apple's XNU, built from the source published by Apple, with drivers
+for the Switch's hardware. Everything else is generated from the iPadOS IPSW downloaded during the installation process.
+You boot it the same way people boot Android/Linux from Hekate.
 
 The docs list [what works and what doesn't](https://ios-on-switch-lmao.brunostjohn.com/what-works) and explain
 [how it works](https://ios-on-switch-lmao.brunostjohn.com/how-it-works).
@@ -63,15 +63,21 @@ The docs list [what works and what doesn't](https://ios-on-switch-lmao.brunostjo
 
 ## Getting started
 
-You need a Switch OLED that already boots hekate, a microSD card, and a Mac with [Bazelisk](https://github.com/bazelbuild/bazelisk) installed. The [installation guide](https://ios-on-switch-lmao.brunostjohn.com/installation) will explain how to sort out everything else.
+You need a Switch OLED that already boots hekate, a microSD card, and a Mac with
+[Bazelisk](https://github.com/bazelbuild/bazelisk) installed. The
+[installation guide](https://ios-on-switch-lmao.brunostjohn.com/installation) will explain how to sort out everything
+else.
 
-Support questions are answered in the docs. Please do **NOT** DM me on twitter or e-mail me about help with installing/using this.
+Support questions are answered in the docs. Please do **NOT** DM me on twitter or e-mail me about help with
+installing/using this.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 ## Contributing
 
-Pull requests are the only contributions accepted. Fill in every section of the PR template, because I likely won't look at your PR otherwise. [Contributing](https://ios-on-switch-lmao.brunostjohn.com/contributing) covers building and testing.
+Pull requests are the only contributions accepted. Fill in every section of the PR template, because I likely won't look
+at your PR otherwise. [Contributing](https://ios-on-switch-lmao.brunostjohn.com/contributing) covers building and
+testing.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -85,7 +91,8 @@ Thank you for your ongoing support. [Click here to become my sponsor.](https://g
 
 ## License
 
-The project's own code is licensed under GPL-2.0-only (see [LICENSE](LICENSE)). Upstream code keeps its own licence, as [NOTICE](NOTICE) explains.
+The project's own code is licensed under GPL-2.0-only (see [LICENSE](LICENSE)). Upstream code keeps its own licence, as
+[NOTICE](NOTICE) explains.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -131,4 +138,5 @@ Thanks to these projects and the people behind them:
 
 ---
 
-Apple, iOS, iPadOS and the Apple logo are trademarks of Apple Inc. Nintendo Switch is a trademark of Nintendo. This project claims no ownership of them and intends no infringement.
+Apple, iOS, iPadOS and the Apple logo are trademarks of Apple Inc. Nintendo Switch is a trademark of Nintendo. This
+project claims no ownership of them and intends no infringement.
