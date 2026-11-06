@@ -7,6 +7,9 @@
 
 #define STUB __attribute__((weak))
 
+// Every hook below keeps its caller's exact signature and external linkage: the kernel link resolves those callers here.
+// NOLINTBEGIN(misc-use-internal-linkage, readability-non-const-parameter)
+
 // offline-component-load-probes.patch, bsd_init: called whether or not NativeLegacyDisplay is linked.
 void native_legacy_display_probe(void);
 
@@ -116,3 +119,5 @@ STUB int boot_progress_pulse_anchor(uintptr_t address, uint64_t bytes, unsigned 
     (void)row;
     return 0;
 }
+
+// NOLINTEND(misc-use-internal-linkage, readability-non-const-parameter)
