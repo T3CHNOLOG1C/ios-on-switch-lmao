@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import common
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser()
     for name in ('xcode-env', 'libdispatch', 'xnu', 'sdkroot', 'out', 'log', 'path-root'):
         parser.add_argument('--' + name, required=True)

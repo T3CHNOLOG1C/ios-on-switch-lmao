@@ -10,10 +10,11 @@ import struct
 import xml.etree.ElementTree as ET
 from bisect import bisect_right
 from collections import Counter
+from collections.abc import Iterable, Sequence
 from pathlib import Path
 
 
-def macho(data, at=0):
+def macho(data: bytes | bytearray, at: int = 0) -> dict[str, object]:
     if at < 0 or at + 32 > len(data):
         raise ValueError('Mach-O header outside image')
     magic, cpu, subtype, kind, count, size = struct.unpack_from('<6I', data, at)
@@ -72,7 +73,7 @@ def macho(data, at=0):
     return {'kind': kind, 'segments': segments, 'commands': commands}
 
 
-def backed_offset(segments, address, length, data_length):
+def backed_offset(segments: Iterable[dict[str, object]], address: int, length: int, data_length: int) -> int:
     matches = [
         s['fileoff'] + address - s['va']
         for s in segments
@@ -83,7 +84,7 @@ def backed_offset(segments, address, length, data_length):
     return matches[0]
 
 
-def exports(data, image):
+def exports(data: bytes, image: dict[str, object]) -> dict[int, list[str]]:
     result = {}
     tables = [(offset, length) for command, offset, length in image['commands'] if command == 2]
     if len(tables) != 1 or tables[0][1] != 24:
@@ -104,10 +105,10 @@ def exports(data, image):
     return result
 
 
-def unserialize_xml(blob):
+def unserialize_xml(blob: bytes) -> object:
     refs = {}
 
-    def read(element):
+    def read(element: ET.Element) -> object:
         if 'IDREF' in element.attrib:
             return refs[element.attrib['IDREF']]
         tag = element.tag
@@ -143,7 +144,9 @@ def unserialize_xml(blob):
     return read(ET.fromstring(blob.split(b'\0', 1)[0]))
 
 
-def unique_kernel_binding(address, original_exports, native_by_name):
+def unique_kernel_binding(
+    address: int, original_exports: dict[int, list[str]], native_by_name: dict[str, set[int]]
+) -> int:
     names = original_exports.get(address, [])
     choices = {new for name in names for new in native_by_name.get(name, set())}
     if len(choices) != 1:
@@ -151,7 +154,15 @@ def unique_kernel_binding(address, original_exports, native_by_name):
     return next(iter(choices))
 
 
-def plan(native_data, original_data, roots, slide, *, inherited_original_sha256=None, cuts=None):
+def plan(
+    native_data: bytes,
+    original_data: bytes,
+    roots: Iterable[str],
+    slide: int,
+    *,
+    inherited_original_sha256: str | None = None,
+    cuts: dict[tuple[str, str], tuple[int, str | None]] | None = None,
+) -> dict[str, object]:
     # cuts: {(component, declared dependency): (exact pointer count, native stub symbol or None)}. A cut dependency is
     # left out of the closure; each of its pointer sites in the component (exactly that many, or the plan fails) is
     # rebound to the native stub, an 8-byte zero constant, so the GOT load the component does reads NULL.
@@ -164,7 +175,14 @@ def plan(native_data, original_data, roots, slide, *, inherited_original_sha256=
     return report
 
 
-def plan_original(original_data, roots, slide, *, inherited_original_sha256=None, cuts=None):
+def plan_original(
+    original_data: bytes,
+    roots: Iterable[str],
+    slide: int,
+    *,
+    inherited_original_sha256: str | None = None,
+    cuts: dict[tuple[str, str], tuple[int, str | None]] | None = None,
+) -> tuple[dict[str, object], dict[str, list[tuple]]]:
     """Run plan()'s part that reads only the original kernelcache.
 
     The closure, the extents and every pointer site, with the component pointers bound. The kernel and cut pointers'
@@ -249,7 +267,7 @@ def plan_original(original_data, roots, slide, *, inherited_original_sha256=None
             raise ValueError(f'Overlapping component extents: {left[2]} and {right[2]}')
     starts = [item[0] for item in owned]
 
-    def owner(address):
+    def owner(address: int) -> tuple[int, int, str, dict[str, object]] | None:
         index = bisect_right(starts, address) - 1
         return owned[index] if index >= 0 and address < owned[index][1] else None
 
@@ -334,7 +352,13 @@ def plan_original(original_data, roots, slide, *, inherited_original_sha256=None
     }, unbound
 
 
-def native_bindings(native_data, native, kernel_targets, cut_stubs, extents):
+def native_bindings(
+    native_data: bytes,
+    native: dict[str, object],
+    kernel_targets: Iterable[tuple[int, list[str]]],
+    cut_stubs: Iterable[tuple[str, str, str | None]],
+    extents: Iterable[Sequence[int]],
+) -> tuple[list[int], list[int], dict[int, list[str]]]:
     """Run the native kernel's half of plan().
 
     Each kernel target's native address (kernel_targets: [(target, original export names)]), each cut's stub address
@@ -364,7 +388,7 @@ def native_bindings(native_data, native, kernel_targets, cut_stubs, extents):
     return addresses, stubs, exported
 
 
-def bind_native(report, unbound, native_data):
+def bind_native(report: dict[str, object], unbound: dict[str, list[tuple]], native_data: bytes) -> dict[int, list[str]]:
     """Run plan()'s native half on plan_original's report.
 
     The kernel and cut pointers' new targets, the native checks, native_sha256. Returns the exports of the native
@@ -389,7 +413,7 @@ def bind_native(report, unbound, native_data):
     return exported
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--kernel', required=True, type=Path)
     parser.add_argument('--prelinked', required=True, type=Path)

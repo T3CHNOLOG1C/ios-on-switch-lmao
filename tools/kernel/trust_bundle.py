@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from im4p import im4p_fields
 
 
-def payload(path, kind):
+def payload(path: str, kind: str) -> bytes:
     fields = im4p_fields(Path(path).read_bytes())
     if fields[1][1].decode() != kind:
         sys.exit(f'{path} is a {fields[1][1].decode()} IM4P, not {kind}')

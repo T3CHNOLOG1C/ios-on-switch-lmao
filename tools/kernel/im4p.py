@@ -13,7 +13,7 @@ import tempfile
 from pathlib import Path
 
 
-def der(data, at):
+def der(data: bytes, at: int) -> tuple[int, int, int]:
     tag, length, at = data[at], data[at + 1], at + 2
     if length & 0x80:
         count = length & 0x7F
@@ -21,7 +21,7 @@ def der(data, at):
     return tag, at, length
 
 
-def im4p_fields(data):
+def im4p_fields(data: bytes) -> list[tuple[int, bytes]]:
     _, at, length = der(data, 0)
     end, fields = at + length, []
     while at < end:
@@ -33,7 +33,7 @@ def im4p_fields(data):
     return fields
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument('source')
     parser.add_argument('output')

@@ -21,13 +21,13 @@ import common
 from kernel_names import archive_names
 
 
-def check(path):
+def check(path: Path) -> None:
     data = path.read_bytes()
     if struct.unpack_from('<4I', data) != (0xFEEDFACF, 0x100000C, 0, 1):
         sys.exit('Unexpected pthread object architecture: ' + path.name)
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser()
     for name in (
         'xcode-env',
@@ -60,7 +60,7 @@ def main():
         ),
     ]
 
-    def compile_one(path, destination, namespace=None):
+    def compile_one(path: Path, destination: Path, namespace: Path | None = None) -> None:
         command = [
             'xcrun',
             '--sdk',

@@ -24,7 +24,7 @@ import common
 from kernel_names import archive_names
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser()
     for name in ('xcode-env', 'source', 'sdkroot', 'kernel-names', 'out', 'namespace-header', 'path-root'):
         parser.add_argument('--' + name, required=True)
@@ -54,7 +54,7 @@ def main():
         objects = project['objects']
         parents = {child: key for key, value in objects.items() for child in value.get('children', [])}
 
-        def resolve(key):
+        def resolve(key: str) -> Path:
             entry = objects[key]
             path = entry.get('path', '')
             if entry.get('sourceTree') == 'SOURCE_ROOT' or key not in parents:
@@ -122,11 +122,11 @@ def main():
             '-ffile-prefix-map={}={}'.format(here, args.path_root.rstrip('/')),
         ]
 
-        def build(variant, extra):
+        def build(variant: str, extra: list[str]) -> Path:
             object_dir = out / ('objects' + variant)
             object_dir.mkdir()
 
-            def compile_one(path):
+            def compile_one(path: Path) -> tuple[Path, subprocess.CompletedProcess[str]]:
                 relative = str(path.relative_to(source))
                 name = hashlib.sha256(relative.encode()).hexdigest()[:12] + '-' + path.stem
                 destination = object_dir / (name + '.o')

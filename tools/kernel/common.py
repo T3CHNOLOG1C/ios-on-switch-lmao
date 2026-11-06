@@ -4,7 +4,9 @@ import os
 import shutil
 import subprocess
 import sys
+from collections.abc import Iterable
 from pathlib import Path
+from typing import TextIO
 
 # Written into recipes, link commands and records in place of the action's own execution root, which differs
 # between sandboxes; every tool that reads them puts its own execution root back.
@@ -17,7 +19,7 @@ BUILD_LOCALE = 'en_IE.UTF-8'
 SYSTEM_PATH = '/usr/bin:/bin:/usr/sbin:/sbin'
 
 
-def xcode_env(path):
+def xcode_env(path: str | Path) -> dict[str, str]:
     """@xcode//:xcode.env as a dict (DEVELOPER_DIR, XCODE_TOOLCHAIN, IPHONEOS_SDK, MACOSX_SDK)."""
     values = {}
     for line in Path(path).read_text().splitlines():
@@ -27,7 +29,7 @@ def xcode_env(path):
     return values
 
 
-def environment(xcode, extra_path=(), **extra):
+def environment(xcode: dict[str, str], extra_path: Iterable[str] = (), **extra: object) -> dict[str, str]:
     """Return a clean environment: fixed PATH, Xcode by DEVELOPER_DIR, deterministic archives, no locale drift."""
     env = {
         'PATH': ':'.join([*extra_path, SYSTEM_PATH]),
@@ -43,7 +45,9 @@ def environment(xcode, extra_path=(), **extra):
     return env
 
 
-def run(command, env, cwd=None, log=None):
+def run(
+    command: Iterable[str | Path], env: dict[str, str], cwd: str | Path | None = None, log: TextIO | None = None
+) -> None:
     command = [str(c) for c in command]
     result = subprocess.run(
         command, env=env, cwd=cwd, stdout=log or None, stderr=subprocess.STDOUT if log else None, check=False
@@ -57,7 +61,7 @@ def run(command, env, cwd=None, log=None):
         sys.exit('command failed ({}): {}\n{}'.format(result.returncode, ' '.join(command)[:2000], tail))
 
 
-def execroot():
+def execroot() -> str:
     return os.getcwd()
 
 
@@ -69,7 +73,7 @@ KERNEL_PACKAGE = 'kernel'
 MOVED_ROOTS = ('drivers', 'kits', 'diagnostics', 'overlay')
 
 
-def old_spelling(path, bin_dir=None):
+def old_spelling(path: str, bin_dir: str | None = None) -> str:
     """Return the pre-move spelling of an execroot-relative path (unchanged if it was not moved)."""
     for root in MOVED_ROOTS:
         if path == root or path.startswith(root + '/'):
@@ -79,7 +83,7 @@ def old_spelling(path, bin_dir=None):
     return path
 
 
-def compat_prefix_maps(path_root, bin_dir):
+def compat_prefix_maps(path_root: str, bin_dir: str) -> list[str]:
     """Return prefix maps from moved paths (absolute, below this execution root) to their old spellings.
 
     They come after the generic ones (debug maps: the last match wins; macro maps: the most specific). Empty while
@@ -102,7 +106,7 @@ def compat_prefix_maps(path_root, bin_dir):
 XNU_REPOSITORY = 'external/+http_archive+xnu'
 
 
-def prefix_maps(path_root, bin_dir, xnu_dir):
+def prefix_maps(path_root: str, bin_dir: str, xnu_dir: str) -> list[str]:
     """Return -ffile-prefix-map flags that make every path a compile can embed independent of the sandbox.
 
     The patched XNU source shows as <root>/out/native-a57/root-v1/tree/.cache/xnu-work (where the CMake flow kept its
@@ -126,12 +130,12 @@ def prefix_maps(path_root, bin_dir, xnu_dir):
     return maps
 
 
-def copy_tree(source, target):
+def copy_tree(source: str | Path, target: str | Path) -> None:
     """Copy a tree's contents (files Bazel stages as symlinks become files; links inside it become copies)."""
     shutil.copytree(source, target, symlinks=False, dirs_exist_ok=True)
 
 
-def resolve_links(root):
+def resolve_links(root: str | Path) -> None:
     """Replace every symbolic link below root by a copy of what it names.
 
     Kernel.framework's Headers -> Versions/Current/Headers and Versions/Current -> A, as XNU's installhdrs makes them.

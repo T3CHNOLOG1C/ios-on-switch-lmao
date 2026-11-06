@@ -30,6 +30,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from collections.abc import Iterable
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -150,12 +151,14 @@ sys.exit(r.returncode)
 """
 
 
-def wrapper(path, tool, real, watch=False):
+def wrapper(path: Path, tool: str, real: str | Path, *, watch: bool = False) -> None:
     path.write_text(WRAPPER % (tool, str(real), watch, SCRIPT_ENV))
     path.chmod(0o755)
 
 
-def run_make(src, work, target, variables, jobs, env, version: str, darwin: str):
+def run_make(
+    src: Path, work: Path, target: str, variables: list[str], jobs: int, env: dict[str, str], version: str, darwin: str
+) -> int:
     command = [
         'make',
         '-C',
@@ -177,11 +180,11 @@ def run_make(src, work, target, variables, jobs, env, version: str, darwin: str)
 
 
 class Roots:
-    def __init__(self, pairs):
+    def __init__(self, pairs: Iterable[tuple[str, str]]):
         # Longest first: {d} lies inside the work directory, {o} too.
         self.pairs = sorted(pairs, key=lambda p: -len(p[0]))
 
-    def place(self, path, cwd=None):
+    def place(self, path: str, cwd: str | None = None) -> tuple[str, str] | None:
         """(root, relpath) for a path, or None for one outside every root (/dev/null, /usr/bin/...)."""
         p = path if path.startswith('/') or cwd is None else os.path.join(cwd, path)
         p = os.path.normpath(p)
@@ -192,20 +195,20 @@ class Roots:
                 return name, p[len(root) + 1 :]
         return None
 
-    def spell(self, path, cwd=None):
+    def spell(self, path: str, cwd: str | None = None) -> str:
         found = self.place(path, cwd)
         if not found:
             return path
         return f'{{{found[0]}}}/{found[1]}' if found[1] else f'{{{found[0]}}}'
 
-    def text(self, value):
+    def text(self, value: str) -> str:
         """Every root path inside a string (an argument like -I/abs/dir) as its placeholder."""
         for root, name in self.pairs:
             value = value.replace(root, f'{{{name}}}')
         return value.replace('}//', '}/')
 
 
-def rel(spelled):
+def rel(spelled: str) -> str:
     """'{o}/a/b' -> 'o/a/b' (the table's path key)."""
     m = re.match(r'^\{(\w)\}/(.*)$', spelled)
     if not m:
@@ -223,7 +226,7 @@ SYSCALL_MODES = {
 }
 
 
-def script_outputs(r):
+def script_outputs(r: dict[str, object]) -> list[str]:
     """Return the files a script writes (absolute).
 
     They come from its arguments; doconf's from what appeared in its -d directory.
@@ -238,7 +241,7 @@ def script_outputs(r):
     return [os.path.join(cwd, argv[-1])]  # make_posix_availability.sh OUT, make_symbol_aliasing.sh SDK OUT
 
 
-def script_inputs(r, cwd, roots, outs):
+def script_inputs(r: dict[str, object], cwd: str, roots: Roots, outs: list[str]) -> list[str]:
     """Return the files a script reads.
 
     Those its arguments and environment name, doconf's MASTER files and conf/ directory, newvers.pl's
@@ -261,7 +264,7 @@ def script_inputs(r, cwd, roots, outs):
     return sorted(ins - set(outs))
 
 
-def outputs_of(argv, flags, cwd, roots):
+def outputs_of(argv: list[str], flags: tuple[str, ...], cwd: str, roots: Roots) -> list[str]:
     outs = []
     for i, a in enumerate(argv[:-1]):
         if a in flags and argv[i + 1] != '/dev/null':
@@ -269,7 +272,7 @@ def outputs_of(argv, flags, cwd, roots):
     return outs
 
 
-def include_dirs(argv, cwd, roots):
+def include_dirs(argv: list[str], cwd: str, roots: Roots) -> list[str]:
     dirs = []
     for i, a in enumerate(argv):
         d = None
@@ -284,7 +287,9 @@ def include_dirs(argv, cwd, roots):
     return sorted(set(dirs))
 
 
-def record_pass(work, roots, final_files, log_path, make_log):
+def record_pass(
+    work: Path, roots: Roots, final_files: dict[str, set[str]], log_path: Path, make_log: Path
+) -> tuple[list[dict[str, object]], dict[str, dict[str, object]], list[str]]:
     """Return the table entries of one pass from its wrapper log."""
     records = [json.loads(line) for line in log_path.read_text().splitlines()]
     steps, problems = [], []
@@ -294,7 +299,7 @@ def record_pass(work, roots, final_files, log_path, make_log):
             unifdef_by_shell.setdefault(r['ppid'], []).append(r)
     produced = {}
 
-    def claim(path, step):
+    def claim(path: str, step: dict[str, object]) -> None:
         if step.get('duplicate'):
             return
         if path in produced and produced[path] is not step and produced[path] == step:
@@ -447,7 +452,9 @@ def record_pass(work, roots, final_files, log_path, make_log):
     return steps, produced, problems
 
 
-def check_coverage(produced, coverage, final_files):
+def check_coverage(
+    produced: dict[str, dict[str, object]], coverage: set[str], final_files: dict[str, set[str]]
+) -> list[str]:
     problems = ['no step writes ' + p for p in sorted(coverage - set(produced))]
     problems.extend(
         f'a step writes {p} but make left no such file'
@@ -457,7 +464,7 @@ def check_coverage(produced, coverage, final_files):
     return problems
 
 
-def listing(root):
+def listing(root: Path) -> tuple[set[str], set[str]]:
     files, links = set(), set()
     if not root.exists():
         return files, links
@@ -470,7 +477,7 @@ def listing(root):
     return files, links
 
 
-def write_table(path, name, version, data):
+def write_table(path: Path, name: str, version: str, data: list[dict[str, object]]) -> None:
     """Write a table as a .bzl file: NAME = {"flags": [unifdef flag lists], "steps": [one dict per step]}.
 
     It is sorted, so a re-recorded table diffs line by line. A step's "flags" is an index into "flags" (a few flag sets
@@ -498,7 +505,7 @@ def write_table(path, name, version, data):
     path.write_text(text)
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     for name in ('xnu', 'version', 'out', 'availability', 'libplatform', 'libdispatch'):
         parser.add_argument('--' + name, required=True)

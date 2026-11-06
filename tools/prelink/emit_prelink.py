@@ -30,6 +30,7 @@ import sys
 import xml.etree.ElementTree as ET
 from bisect import bisect_left
 from pathlib import Path
+from typing import Self
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from native_prelink import backed_offset, macho, native_bindings, plan_original, unserialize_xml
@@ -68,11 +69,11 @@ COALESCED = {
 }
 
 
-def align(value):
+def align(value: int) -> int:
     return (value + 4095) & ~4095
 
 
-def to_xml(value):
+def to_xml(value: object) -> ET.Element:
     if isinstance(value, dict):
         node = ET.Element('dict')
         for key, child in value.items():
@@ -99,8 +100,8 @@ def to_xml(value):
     return node
 
 
-def pc_relative_target(word, pc):
-    def signed(value, bits):
+def pc_relative_target(word: int, pc: int) -> tuple[int, bool] | None:
+    def signed(value: int, bits: int) -> int:
         return value - (1 << bits) if value & (1 << (bits - 1)) else value
 
     if word & 0x9F000000 in (0x10000000, 0x90000000):
@@ -116,7 +117,9 @@ def pc_relative_target(word, pc):
     return None
 
 
-def instruction_inventory(original_data, parent, modules):
+def instruction_inventory(
+    original_data: bytes, parent: list[dict[str, object]], modules: dict[str, dict[str, object]]
+) -> dict[str, object]:
     extents = [s for module in modules.values() for s in module['segments'] if s['size'] and s['name'] != '__LINKEDIT']
     literal_ranges, instruction_count = [], 0
     for identifier, module in modules.items():
@@ -185,10 +188,10 @@ class Plan:
     native kernel's pointers go, and the prelink info XML around its KCID.
     """
 
-    def __init__(self, **fields):
+    def __init__(self, **fields: object):
         self.__dict__.update(fields)
 
-    def save(self, path):
+    def save(self, path: Path) -> None:
         """One file: magic, u64 header length, the header (JSON), then the blobs at the header's offsets."""
         blobs, layout = [], {}
         for name in ('blob', 'kernel_sites', 'kernel_groups', 'xml_head', 'xml_tail'):
@@ -213,7 +216,7 @@ class Plan:
         path.write_bytes(PLAN_MAGIC + struct.pack('<Q', len(header)) + header + b''.join(blobs))
 
     @classmethod
-    def load(cls, path):
+    def load(cls, path: Path) -> Self:
         data = path.read_bytes()
         if data[:8] != PLAN_MAGIC:
             raise ValueError('Not a prelink plan')
@@ -232,7 +235,14 @@ class Plan:
         return cls(**header, **fields)
 
 
-def prepare(original_data, roots, slide, early_security_init=None, *, inherited_original_report):
+def prepare(
+    original_data: bytes,
+    roots: list[str],
+    slide: int,
+    early_security_init: dict[str, int] | None = None,
+    *,
+    inherited_original_report: dict[str, object],
+) -> tuple[Plan, dict[str, object], dict[str, list[tuple]]]:
     """Run emit()'s part that reads only the original kernelcache.
 
     Returns (the plan, the report without its native fields, the report's unbound pointers).
@@ -303,7 +313,9 @@ def prepare(original_data, roots, slide, early_security_init=None, *, inherited_
     new_segments = []
     writes = []  # (offset, length) of every original-only write after the copies, in order
 
-    def append_segment(name, va, blob, size, protection):
+    def append_segment(
+        name: str, va: int, blob: bytes | bytearray, size: int, protection: int
+    ) -> tuple[dict[str, object], int]:
         if va % 4096 or size % 4096 or len(blob) > size:
             raise ValueError('Coalesced segment must have native 4K alignment')
         if any(s['size'] and va < s['va'] + s['size'] and s['va'] < va + size for s in new_segments):
@@ -341,10 +353,10 @@ def prepare(original_data, roots, slide, early_security_init=None, *, inherited_
                 blob[begin : begin + length] = original_data[at : at + length]
         segments.append(append_segment(coalesced_name, source['va'] + slide, blob, source['size'], source['initprot']))
 
-    def new_offset(address, length):
+    def new_offset(address: int, length: int) -> int:
         return backed_offset(new_segments, address, length, len(output))
 
-    def write(fmt, at, *values):
+    def write(fmt: str, at: int, *values: int) -> None:
         struct.pack_into(fmt, output, at, *values)
         writes.append((at, struct.calcsize(fmt)))
 
@@ -425,7 +437,7 @@ def prepare(original_data, roots, slide, early_security_init=None, *, inherited_
     if any(b - a < 8 for a, b in itertools.pairwise(native_sites)):
         raise ValueError('Native kernel pointer sites overlap')
 
-    def hits_native(at, length):
+    def hits_native(at: int, length: int) -> bool:
         i = bisect_left(native_sites, at - 7)
         return i < len(native_sites) and native_sites[i] < at + length
 
@@ -511,7 +523,12 @@ def prepare(original_data, roots, slide, early_security_init=None, *, inherited_
     return result, report, unbound
 
 
-def apply(plan, native_data, report=None, unbound=None):
+def apply(
+    plan: Plan,
+    native_data: bytes,
+    report: dict[str, object] | None = None,
+    unbound: dict[str, list[tuple]] | None = None,
+) -> bytes:
     """Run emit()'s part that reads the native kernel: the candidate from a plan.
 
     Given prepare's report and unbound pointers, it completes the report too.
@@ -538,7 +555,7 @@ def apply(plan, native_data, report=None, unbound=None):
     output = bytearray(native_data)
     new_segments = []
 
-    def append_segment(name, va, blob, size, protection):
+    def append_segment(name: str, va: int, blob: bytes | memoryview, size: int, protection: int) -> dict[str, object]:
         if va % 4096 or size % 4096 or len(blob) > size:
             raise ValueError('Coalesced segment must have native 4K alignment')
         if any(
@@ -637,7 +654,15 @@ def apply(plan, native_data, report=None, unbound=None):
     return bytes(output)
 
 
-def emit(native_data, original_data, roots, slide, early_security_init=None, *, inherited_original_report):
+def emit(
+    native_data: bytes,
+    original_data: bytes,
+    roots: list[str],
+    slide: int,
+    early_security_init: dict[str, int] | None = None,
+    *,
+    inherited_original_report: dict[str, object],
+) -> tuple[bytes, dict[str, object]]:
     """Return the candidate and its report, in one process."""
     plan, report, unbound = prepare(
         original_data, roots, slide, early_security_init, inherited_original_report=inherited_original_report
@@ -645,7 +670,7 @@ def emit(native_data, original_data, roots, slide, early_security_init=None, *, 
     return apply(plan, native_data, report, unbound), report
 
 
-def original_arguments(parser):
+def original_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument('--prelinked', required=True, type=Path)
     parser.add_argument('--root', required=True, action='append')
     parser.add_argument('--new-root', action='append', default=[])
@@ -668,7 +693,9 @@ def original_arguments(parser):
     )
 
 
-def original_inputs(parser, args):
+def original_inputs(
+    parser: argparse.ArgumentParser, args: argparse.Namespace
+) -> tuple[bytes, dict[str, object], dict[str, int], dict[str, object]]:
     """Return the checked original inputs: (kernelcache bytes, inherited report, early initializers, previous)."""
     NEW_ORIGINAL_COMPONENTS.update(args.new_root)
     for cut in args.cut:
@@ -698,7 +725,7 @@ def original_inputs(parser, args):
     return prelinked, inherited, initializers, previous
 
 
-def main():
+def main() -> None:
     mode = sys.argv[1] if len(sys.argv) > 1 and sys.argv[1] in ('plan', 'apply', 'report') else None
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     if mode == 'apply':

@@ -18,41 +18,47 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from collections.abc import Iterable
 from pathlib import Path
 
 HERE = os.getcwd()
 
 
 class Spec:
-    def __init__(self, data) -> None:
+    def __init__(self, data: dict[str, object]) -> None:
         self.data = data
         self.roots = data['roots']
 
-    def path(self, key):
+    def path(self, key: str) -> str:
         """'o/a/b' -> the exec path of that file."""
         root, _, rest = key.partition('/')
         base = self.roots[root]
         return os.path.join(base, rest) if rest and rest != '.' else base
 
-    def abs(self, key):
+    def abs(self, key: str) -> str:
         p = self.path(key)
         return p if os.path.isabs(p) else os.path.join(HERE, p)
 
-    def text(self, value):
+    def text(self, value: str) -> str:
         """'{o}/x' placeholders in an argument -> absolute paths."""
 
-        def repl(m):
+        def repl(m: re.Match[str]) -> str:
             base = self.roots[m.group(1)]
             return base if os.path.isabs(base) else os.path.join(HERE, base)
 
         return re.sub(r'\{(\w)\}', repl, value)
 
 
-def fail(message) -> None:
+def fail(message: str) -> None:
     sys.exit('xnu_ops: ' + message)
 
 
-def run(command, cwd=None, env=None, stdout=None):
+def run(
+    command: Iterable[str | Path],
+    cwd: str | None = None,
+    env: dict[str, str] | None = None,
+    stdout: int | None = None,
+) -> subprocess.CompletedProcess[bytes]:
     return subprocess.run(
         [str(c) for c in command],
         cwd=cwd,
@@ -63,7 +69,7 @@ def run(command, cwd=None, env=None, stdout=None):
     )
 
 
-def environment(spec, step):
+def environment(spec: Spec, step: dict[str, object]) -> dict[str, str]:
     env = {
         'PATH': '/usr/bin:/bin:/usr/sbin:/sbin',
         'DEVELOPER_DIR': spec.roots['x'],
@@ -78,20 +84,20 @@ def environment(spec, step):
     return env
 
 
-def writable(path) -> None:
+def writable(path: str | Path) -> None:
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     if os.path.lexists(path):
         os.chmod(path, 0o644)
         os.unlink(path)
 
 
-def do_copy(spec, step) -> None:
+def do_copy(spec: Spec, step: dict[str, object]) -> None:
     out = spec.path(step['out'])
     writable(out)
     shutil.copyfile(spec.path(step['src']), out)
 
 
-def unifdef(spec, step):
+def unifdef(spec: Spec, step: dict[str, object]) -> bytes:
     tool = spec.roots['x'] + '/Toolchains/XcodeDefault.xctoolchain/usr/bin/unifdef'
     flags = [spec.text(f) for f in step['flags']]
     result = run([tool, *flags, spec.path(step['src'])])
@@ -100,7 +106,7 @@ def unifdef(spec, step):
     return result.stdout
 
 
-def do_unifdef(spec, step) -> None:
+def do_unifdef(spec: Spec, step: dict[str, object]) -> None:
     data = unifdef(spec, step)
     with tempfile.NamedTemporaryFile(delete=False) as tmp:
         tmp.write(data)
@@ -118,13 +124,13 @@ def do_unifdef(spec, step) -> None:
     Path(out).write_bytes(data)
 
 
-def do_unifdef_to(spec, step) -> None:
+def do_unifdef_to(spec: Spec, step: dict[str, object]) -> None:
     out = spec.path(step['out'])
     writable(out)
     Path(out).write_bytes(unifdef(spec, step))
 
 
-def parse_deps(text):
+def parse_deps(text: str) -> list[str]:
     """Return the files a make-style dependency file lists (its first target's prerequisites)."""
     text = text.replace('\\\n', ' ')
     _, _, prereqs = text.partition(':')
@@ -136,7 +142,7 @@ def parse_deps(text):
     return out
 
 
-def write_unused(spec, used) -> None:
+def write_unused(spec: Spec, used: Iterable[str]) -> None:
     """Bazel's unused_inputs_list: the declared inputs (exec paths) a step did not read."""
     target = spec.data.get('unused')
     if not target:
@@ -146,7 +152,7 @@ def write_unused(spec, used) -> None:
     Path(target).write_text(''.join(p + '\n' for p in unused))
 
 
-def do_mig(spec, step, used) -> bool:
+def do_mig(spec: Spec, step: dict[str, object], used: set[str]) -> bool:
     cwd = spec.path(step['cwd'])
     os.makedirs(cwd, exist_ok=True)
     for o in step['outs']:
@@ -173,7 +179,7 @@ def do_mig(spec, step, used) -> bool:
     return True
 
 
-def do_iig(spec, step, used) -> bool:
+def do_iig(spec: Spec, step: dict[str, object], used: set[str]) -> bool:
     cwd = spec.path(step['cwd'])
     os.makedirs(cwd, exist_ok=True)
     for o in step['outs']:
@@ -200,14 +206,14 @@ def do_iig(spec, step, used) -> bool:
     return True
 
 
-def wrap_iig_impl(spec, step) -> None:
+def wrap_iig_impl(spec: Spec, step: dict[str, object]) -> None:
     """iokit/Tests/TestServices' rule: the implementation iig wrote to <out>.tmp, inside #if DEBUG || DEVELOPMENT."""
     out = spec.path(step['wrapped'])
     body = Path(out + '.tmp').read_text()
     Path(out).write_text('#if DEBUG || DEVELOPMENT\n' + body + '#endif\n')
 
 
-def do_script(spec, step) -> None:
+def do_script(spec: Spec, step: dict[str, object]) -> None:
     cwd = spec.path(step['cwd'])
     os.makedirs(cwd, exist_ok=True)
     for o in step['outs']:
@@ -244,7 +250,7 @@ def do_script(spec, step) -> None:
             path.write_bytes(data.replace(HERE.encode() + b'/', b'').replace(HERE.encode(), b'.'))
 
 
-def do_write(spec, step) -> None:
+def do_write(spec: Spec, step: dict[str, object]) -> None:
     out = spec.path(step['out'])
     writable(out)
     Path(out).write_text(step['content'])
@@ -272,7 +278,14 @@ AVAILABILITY_MODULEMAPS = {
 }
 
 
-def install_base(availability, libplatform, libdispatch, out, env, python3=None) -> None:
+def install_base(
+    availability: Path,
+    libplatform: Path,
+    libdispatch: Path,
+    out: str | Path,
+    env: dict[str, str],
+    python3: str | None = None,
+) -> None:
     """Install the SDK root's other parts into out.
 
     availability.pl and AvailabilityVersions' headers (its CMake install, INSTALL_KERNEL_HEADERS=1), libplatform's
@@ -284,7 +297,9 @@ def install_base(availability, libplatform, libdispatch, out, env, python3=None)
     libexec = out / 'usr/local/libexec'
     libexec.mkdir(parents=True, exist_ok=True)
 
-    def check(command, cwd=None, stdout=None):
+    def check(
+        command: list[str | Path], cwd: Path | None = None, stdout: int | None = None
+    ) -> subprocess.CompletedProcess[bytes]:
         r = subprocess.run(
             [str(c) for c in command], cwd=cwd, env=env, stdout=stdout, stderr=subprocess.PIPE, check=False
         )
@@ -386,7 +401,7 @@ def install_base(availability, libplatform, libdispatch, out, env, python3=None)
     (out / '.xnu-10063.141.1-headers').write_text('')
 
 
-def do_base(spec, step) -> None:
+def do_base(spec: Spec, step: dict[str, object]) -> None:
     """Run the base step in a scratch root, then move only its declared outputs into place.
 
     installhdrs owns the rest of the SDK root's files.
@@ -411,7 +426,7 @@ def do_base(spec, step) -> None:
             shutil.copyfile(root / rel, out)
 
 
-def do_ignorelist(spec, step) -> None:
+def do_ignorelist(spec: Spec, step: dict[str, object]) -> None:
     """Write a sanitizer ignore list as san/Makefile's sed does: its parts, src:./ entries rooted at the XNU tree."""
     text = ''.join(Path(spec.path(s)).read_text() for s in step['srcs'])
     out = spec.path(step['out'])

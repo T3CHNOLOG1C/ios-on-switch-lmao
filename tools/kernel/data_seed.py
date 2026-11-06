@@ -14,7 +14,7 @@ PAGE = 4096
 RESIDENT_LIMIT = 128 << 20
 
 
-def seed_metadata(path, volume_uuid):
+def seed_metadata(path: str | Path, volume_uuid: str) -> dict[str, str | int]:
     data = Path(path).read_bytes()
     if not 32 <= len(data) <= 32 << 20 or data[:8] != b'DBRDISK1':
         raise ValueError('Expected bounded DBRDISK1 input')
@@ -33,7 +33,7 @@ def seed_metadata(path, volume_uuid):
     digest = hashlib.sha256()
     zeros = bytes(1 << 20)
 
-    def zero_run(length):
+    def zero_run(length: int) -> None:
         while length:
             n = min(length, len(zeros))
             digest.update(memoryview(zeros)[:n])
@@ -69,8 +69,8 @@ def seed_metadata(path, volume_uuid):
     }
 
 
-def seed_header(metadata):
-    def array(value):
+def seed_header(metadata: dict[str, str | int]) -> str:
+    def array(value: str) -> str:
         return ','.join('0x' + value[i : i + 2] for i in range(0, len(value), 2))
 
     return '\n'.join(
