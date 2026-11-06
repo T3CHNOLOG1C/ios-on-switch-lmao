@@ -56,6 +56,19 @@ Everything is on by default. The few args below exist only to turn something off
 | `switch-no-sd-uhs` | The SD card's 200 MHz UHS-I mode (it stays in U-Boot's 48 MHz mode) |
 | `switch-no-dfll` | The CPU's on-demand clock (a fixed 1670 MHz instead) |
 
+One more sets a value. `switch-ui-scale=` is how many pixels make a point on the 720x1280 panel. It takes effect on
+the next boot, with no rebuild.
+
+| Value | Screen in points |
+|---|---|
+| `1.6` (the default) | 450x800, an iPad's physical point size |
+| `1.25` | 576x1024 |
+| `1` | 720x1280, with the large Home Screen icons and the extra-large text back |
+
+Only those three spellings count. Anything else gives 1, the plain path with none of the scaling, and the kernel
+log says `SwitchUIScale: switch-ui-scale=1.60 is not 1, 1.25 or 1.6: scale 1` (with your value), so a typo is easy
+to spot.
+
 Both builds' own line is `-apfs_shared_datavolume`: Apple's AppleKeyStore reads it, and its other source, the ADT's
 `/filesystems e-apfs`, would also switch apfs.kext into a mode that hasn't run here yet.
 
