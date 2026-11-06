@@ -249,9 +249,10 @@ def _xnu_objects_impl(ctx):
         if f.path.startswith(gen_path + "/"):
             by_path["gen:" + f.path[len(gen_path) + 1:]] = f
     for f in ctx.files.switch_srcs:
-        if not f.short_path.startswith(SWITCH_ROOT + "/"):
-            fail("{}: {} is not in {}".format(ctx.label, f.short_path, SWITCH_ROOT))
-        by_path["switch:" + f.short_path[len(SWITCH_ROOT) + 1:]] = f
+        if f.short_path.startswith(SWITCH_ROOT + "/"):
+            by_path["switch:" + f.short_path[len(SWITCH_ROOT) + 1:]] = f
+        else:
+            by_path["switch://" + f.short_path] = f
 
     # One compile per set of identical flags (most of a component shares its recipe's).
     groups, order = {}, []
@@ -313,7 +314,7 @@ def _xnu_objects_impl(ctx):
         obj = compiled[src]
 
         # kernel/switch's objects keep their directory: switch/<subsystem>/<name>.o, never an Apple object's name.
-        stem = "switch/" + entry[len("switch:"):] if entry.startswith("switch:") else src.basename
+        stem = "switch/" + entry[len("switch:"):].lstrip("/") if entry.startswith("switch:") else src.basename
         base = stem.rpartition(".")[0] + (".cpo" if src.extension == "cpp" else ".o")
         for i, spec in enumerate(ctx.attr.segments.get(entry, [])):
             renamed = ctx.actions.declare_file("{}_seg/{}.{}".format(ctx.label.name, base, i))

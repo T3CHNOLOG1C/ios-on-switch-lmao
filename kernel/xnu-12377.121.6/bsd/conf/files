@@ -489,9 +489,6 @@ bsd/kern/sysv_msg.c			standard
 bsd/kern/mach_fat.c			standard
 bsd/kern/mach_loader.c			standard
 bsd/kern/a64x_xnu.c			optional config_a64x
-bsd/kern/a64x/a64x_classify.c		optional config_a64x
-bsd/kern/a64x/a64x_rewrite.c		optional config_a64x
-bsd/kern/a64x/a64x_image.c		optional config_a64x
 bsd/kern/posix_sem.c			standard
 bsd/kern/posix_shm.c			standard
 # XXXdbg - I need this in the journaling and block cache code

@@ -8,11 +8,16 @@ XNU_12377_121_6), so code that differs between versions is `#if XNU_<version>` h
 
 SWITCH_ROOT = "kernel/switch"
 
-# component: [(the Apple object it links after, the source below kernel/switch, its own copts)]
+# component: [(the Apple object it links after, the source below kernel/switch (or //<path> for one elsewhere in the
+# repository), its own copts[, the XNU versions that build it, when not all])]
 SWITCH_OBJECTS = {
     "bsd": [
         ("bsd/kern/bsd_init.c", "boot/bsd_init.c", []),
         ("bsd/vfs/vfs_lookup.c", "vfs/pretranslated.c", []),
+        # The translator's core is //translate/arm64e's (its host tools and tests build the same files).
+        ("bsd/kern/a64x_xnu.c", "//translate/arm64e/a64x/a64x_classify.c", [], ["12377.121.6"]),
+        ("bsd/kern/a64x_xnu.c", "//translate/arm64e/a64x/a64x_rewrite.c", [], ["12377.121.6"]),
+        ("bsd/kern/a64x_xnu.c", "//translate/arm64e/a64x/a64x_image.c", [], ["12377.121.6"]),
     ],
     "iokit": [
         ("iokit/Kernel/IOUserClient.cpp", "iokit/iosurface.cpp", []),
@@ -22,6 +27,15 @@ SWITCH_OBJECTS = {
         ("osfmk/kern/timer_call.c", "sched/stats.c", []),
     ],
 }
+
+def _entries(component):
+    """The component's entries for the XNU of the package calling (kernel/xnu-<version>/<component>)."""
+    xnu = native.package_name().split("/")[1][len("xnu-"):]
+    out = []
+    for entry in SWITCH_OBJECTS.get(component, []):
+        if len(entry) == 3 or xnu in entry[3]:
+            out.append(entry[:3])
+    return out
 
 def switch_objects(component, objects):
     """A component's objects (its table, in link order) with its kernel/switch sources as "switch:" entries.
@@ -34,7 +48,7 @@ def switch_objects(component, objects):
         The objects, each kernel/switch source right after the Apple object its entry names.
     """
     out = list(objects)
-    for after, src, _ in SWITCH_OBJECTS.get(component, []):
+    for after, src, _ in _entries(component):
         if after not in out:
             fail("kernel/switch/objects.bzl: {} links after {}, which {} does not build".format(src, after, component))
         at = out.index(after) + 1
@@ -47,6 +61,6 @@ def switch_objects(component, objects):
 def switch_copts(component, copts):
     """A component's per-object copts with its kernel/switch sources' own."""
     out = dict(copts)
-    for _, src, flags in SWITCH_OBJECTS.get(component, []):
+    for _, src, flags in _entries(component):
         out["switch:" + src] = flags
     return out

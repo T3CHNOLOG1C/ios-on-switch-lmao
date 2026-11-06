@@ -23,7 +23,11 @@ filegroup(
         ],
         allow_empty = True,
         exclude = ["include/**"],
-    ),
+    ) + [
+        "//translate/arm64e:a64x/a64x_classify.c",
+        "//translate/arm64e:a64x/a64x_image.c",
+        "//translate/arm64e:a64x/a64x_rewrite.c",
+    ],
 )
 
 filegroup(
@@ -31,5 +35,8 @@ filegroup(
     srcs = glob(["**/*.h"]) + [
         "//boot:loader/ram.h",
         "//kits/SwitchPretranslated:switch_pretranslated.h",
+        "//translate/arm64e:a64x/a64x.h",
+        "//translate/arm64e:a64x/a64x_fp16.h",
+        "//translate/arm64e:a64x/a64x_vlive.h",
     ],
 )

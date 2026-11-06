@@ -45,7 +45,7 @@
 #include <arm64/proc_reg.h>
 #include <mach/arm/thread_status.h>
 
-#include "a64x/a64x.h"
+#include "../../../../translate/arm64e/a64x/a64x.h"
 
 #if CONFIG_A64X
 
