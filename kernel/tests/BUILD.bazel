@@ -6,7 +6,7 @@
 #                            loops, exhaustively to 80 bytes at every alignment and over random inputs, guard pages
 #                            after both buffers
 #   xnu_memcmp_source_test   subrs.c uses it on arm64 only, through the two bodies the harness copies
-#   xnu_stall_test           osfmk/kern/switch_stall.h's decisions: which samples of a UI main thread are a stall,
+#   xnu_stall_test           kernel/switch/diag/stall.h's decisions: which samples of a UI main thread are a stall,
 #                            one report and one end per episode, wait names by block_hint.h value, user addresses
 #   xnu_render_senders_test  osfmk/ipc/switch_render_senders.h's table and line: the render server's senders by
 #                            process, largest first, with their rates and top ids, the rest as others
@@ -152,7 +152,7 @@ host_test(
 
 copy_file(
     name = "switch_stall",
-    src = "//kernel/xnu-10063.141.1/osfmk:kern/switch_stall.h",
+    src = "//kernel/switch:diag/stall.h",
     out = "switch_stall.h",
 )
 

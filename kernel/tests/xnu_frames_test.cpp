@@ -140,9 +140,8 @@ TEST(FramesSource, BothTreesFeedItUnderThePortLock)
         const std::string s = source(path);
         EXPECT_THAT(s, HasSubstr("#include <switch/frames.h>"));
         EXPECT_THAT(
-            s,
-            HasSubstr("\tlck_spin_unlock(&switch_render_senders_lock);\n\tswitch_frames_render_message(task, id, "
-                      "task->itk_space == switch_render_server_space);\n"));
+            s, HasSubstr("\tlck_spin_unlock(&switch_render_senders_lock);\n\tswitch_frames_render_message(task, id, "
+                         "task->itk_space == switch_render_server_space);\n"));
         const size_t send = s.find("\nipc_kmsg_send(\n");
         ASSERT_NE(send, std::string::npos);
         const std::string body = s.substr(send, s.find("\n}\n", send) - send);

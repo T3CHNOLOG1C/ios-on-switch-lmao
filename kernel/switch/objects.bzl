@@ -29,6 +29,9 @@ SWITCH_OBJECTS = {
         ("osfmk/ipc/ipc_kmsg.c", "diag/frames.c", []),
         ("osfmk/arm64/arm_vm_init.c", "ram/ram.c", []),
         ("osfmk/kern/timer_call.c", "sched/stats.c", []),
+        ("osfmk/kern/sched_prim.c", "diag/stall.c", []),
+        ("osfmk/kern/sched_prim.c", "diag/stall_snapshot.c", []),
+        ("osfmk/kern/sched_prim.c", "diag/stall_frame.c", []),
     ],
 }
 
