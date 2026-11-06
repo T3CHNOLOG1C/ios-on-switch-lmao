@@ -82,6 +82,8 @@
 #include <sys/uio_internal.h>
 #include <sys/vnode_internal.h>
 #include <sys/kdebug.h>
+#include <sys/ioccom.h>
+#include "../../kits/SwitchPretranslated/switch_pretranslated_kernel.h"
 
 
 #include <miscfs/devfs/devfsdefs.h>
@@ -1009,6 +1011,12 @@ mac_vnode_check_clone(vfs_context_t ctx, struct vnode *dvp,
 	kauth_cred_t cred;
 	int error;
 
+#if CONFIG_A64X
+	if ((error = switch_pretranslated_check(SWITCH_PT_CLONE, dvp, vp, NULL, NULL, 0))) {
+		return error;
+	}
+#endif
+
 #if SECURITY_MAC_CHECK_ENFORCE
 	/* 21167099 - only check if we allow write */
 	if (!mac_vnode_enforce) {
@@ -1032,6 +1040,12 @@ mac_vnode_check_create(vfs_context_t ctx, struct vnode *dvp,
 	kauth_cred_t cred;
 	int error;
 
+#if CONFIG_A64X
+	if ((error = switch_pretranslated_check(SWITCH_PT_CREATE, dvp, NULL, NULL, NULL, 0))) {
+		return error;
+	}
+#endif
+
 #if SECURITY_MAC_CHECK_ENFORCE
 	/* 21167099 - only check if we allow write */
 	if (!mac_vnode_enforce) {
@@ -1054,6 +1068,12 @@ mac_vnode_check_unlink(vfs_context_t ctx, struct vnode *dvp, struct vnode *vp,
 {
 	kauth_cred_t cred;
 	int error;
+
+#if CONFIG_A64X
+	if ((error = switch_pretranslated_check(SWITCH_PT_UNLINK, dvp, vp, NULL, NULL, 0))) {
+		return error;
+	}
+#endif
 
 #if SECURITY_MAC_CHECK_ENFORCE
 	/* 21167099 - only check if we allow write */
@@ -1103,6 +1123,12 @@ mac_vnode_check_deleteextattr(vfs_context_t ctx, struct vnode *vp,
 	kauth_cred_t cred;
 	int error;
 
+#if CONFIG_A64X
+	if ((error = switch_pretranslated_check(SWITCH_PT_DELETEEXTATTR, vp, NULL, NULL, NULL, 0))) {
+		return error;
+	}
+#endif
+
 #if SECURITY_MAC_CHECK_ENFORCE
 	/* 21167099 - only check if we allow write */
 	if (!mac_vnode_enforce) {
@@ -1124,6 +1150,12 @@ mac_vnode_check_exchangedata(vfs_context_t ctx,
 {
 	kauth_cred_t cred;
 	int error;
+
+#if CONFIG_A64X
+	if ((error = switch_pretranslated_check(SWITCH_PT_EXCHANGEDATA, v1, v2, NULL, NULL, 0))) {
+		return error;
+	}
+#endif
 
 #if SECURITY_MAC_CHECK_ENFORCE
 	/* 21167099 - only check if we allow write */
@@ -1497,6 +1529,15 @@ mac_vnode_check_ioctl(vfs_context_t ctx, struct vnode *vp, u_long cmd)
 	kauth_cred_t cred;
 	int error;
 
+#if CONFIG_A64X
+	{
+		uint32_t intent = ((cmd & IOC_IN) || !(cmd & IOC_OUT)) ? SWITCH_PT_WRITES : 0;
+		if ((error = switch_pretranslated_check(SWITCH_PT_FSCTL, vp, NULL, NULL, NULL, intent))) {
+			return error;
+		}
+	}
+#endif
+
 #if SECURITY_MAC_CHECK_ENFORCE
 	/* 21167099 - only check if we allow write */
 	if (!mac_vnode_enforce) {
@@ -1544,6 +1585,12 @@ mac_vnode_check_link(vfs_context_t ctx, struct vnode *dvp,
 {
 	kauth_cred_t cred;
 	int error;
+
+#if CONFIG_A64X
+	if ((error = switch_pretranslated_check(SWITCH_PT_LINK, dvp, vp, NULL, NULL, 0))) {
+		return error;
+	}
+#endif
 
 #if SECURITY_MAC_CHECK_ENFORCE
 	/* 21167099 - only check if we allow write */
@@ -1663,6 +1710,12 @@ mac_vnode_check_open(vfs_context_t ctx, struct vnode *vp, int acc_mode)
 	kauth_cred_t cred;
 	int error;
 
+#if CONFIG_A64X
+	if ((error = switch_pretranslated_check(SWITCH_PT_OPEN, vp, NULL, NULL, NULL, (acc_mode & (FWRITE | O_TRUNC | O_APPEND)) ? SWITCH_PT_WRITES : 0))) {
+		return error;
+	}
+#endif
+
 #if SECURITY_MAC_CHECK_ENFORCE
 	/* 21167099 - only check if we allow write */
 	if (!mac_vnode_enforce) {
@@ -1780,6 +1833,12 @@ mac_vnode_check_rename(vfs_context_t ctx, struct vnode *fdvp,
 	kauth_cred_t cred;
 	int error;
 
+#if CONFIG_A64X
+	if ((error = switch_pretranslated_check(SWITCH_PT_RENAME, fdvp, fvp, tdvp, tvp, 0))) {
+		return error;
+	}
+#endif
+
 #if SECURITY_MAC_CHECK_ENFORCE
 	/* 21167099 - only check if we allow write */
 	if (!mac_vnode_enforce) {
@@ -1886,6 +1945,12 @@ mac_vnode_check_setacl(vfs_context_t ctx, struct vnode *vp,
 	kauth_cred_t cred;
 	int error;
 
+#if CONFIG_A64X
+	if ((error = switch_pretranslated_check(SWITCH_PT_SETATTR, vp, NULL, NULL, NULL, 0))) {
+		return error;
+	}
+#endif
+
 #if SECURITY_MAC_CHECK_ENFORCE
 	/* 21167099 - only check if we allow write */
 	if (!mac_vnode_enforce) {
@@ -1908,6 +1973,12 @@ mac_vnode_check_setattrlist(vfs_context_t ctx, struct vnode *vp,
 {
 	kauth_cred_t cred;
 	int error;
+
+#if CONFIG_A64X
+	if ((error = switch_pretranslated_check(SWITCH_PT_SETATTR, vp, NULL, NULL, NULL, 0))) {
+		return error;
+	}
+#endif
 
 #if SECURITY_MAC_CHECK_ENFORCE
 	/* 21167099 - only check if we allow write */
@@ -1932,6 +2003,12 @@ mac_vnode_check_setextattr(vfs_context_t ctx, struct vnode *vp,
 	kauth_cred_t cred;
 	int error;
 
+#if CONFIG_A64X
+	if ((error = switch_pretranslated_check(SWITCH_PT_SETEXTATTR, vp, NULL, NULL, NULL, 0))) {
+		return error;
+	}
+#endif
+
 #if SECURITY_MAC_CHECK_ENFORCE
 	/* 21167099 - only check if we allow write */
 	if (!mac_vnode_enforce) {
@@ -1955,6 +2032,12 @@ mac_vnode_check_setflags(vfs_context_t ctx, struct vnode *vp, u_long flags)
 	kauth_cred_t cred;
 	int error;
 
+#if CONFIG_A64X
+	if ((error = switch_pretranslated_check(SWITCH_PT_SETATTR, vp, NULL, NULL, NULL, 0))) {
+		return error;
+	}
+#endif
+
 #if SECURITY_MAC_CHECK_ENFORCE
 	/* 21167099 - only check if we allow write */
 	if (!mac_vnode_enforce) {
@@ -1976,6 +2059,12 @@ mac_vnode_check_setmode(vfs_context_t ctx, struct vnode *vp, mode_t mode)
 {
 	kauth_cred_t cred;
 	int error;
+
+#if CONFIG_A64X
+	if ((error = switch_pretranslated_check(SWITCH_PT_SETATTR, vp, NULL, NULL, NULL, 0))) {
+		return error;
+	}
+#endif
 
 #if SECURITY_MAC_CHECK_ENFORCE
 	/* 21167099 - only check if we allow write */
@@ -2000,6 +2089,12 @@ mac_vnode_check_setowner(vfs_context_t ctx, struct vnode *vp, uid_t uid,
 	kauth_cred_t cred;
 	int error;
 
+#if CONFIG_A64X
+	if ((error = switch_pretranslated_check(SWITCH_PT_SETATTR, vp, NULL, NULL, NULL, 0))) {
+		return error;
+	}
+#endif
+
 #if SECURITY_MAC_CHECK_ENFORCE
 	/* 21167099 - only check if we allow write */
 	if (!mac_vnode_enforce) {
@@ -2022,6 +2117,12 @@ mac_vnode_check_setutimes(vfs_context_t ctx, struct vnode *vp,
 {
 	kauth_cred_t cred;
 	int error;
+
+#if CONFIG_A64X
+	if ((error = switch_pretranslated_check(SWITCH_PT_SETATTR, vp, NULL, NULL, NULL, 0))) {
+		return error;
+	}
+#endif
 
 #if SECURITY_MAC_CHECK_ENFORCE
 	/* 21167099 - only check if we allow write */
@@ -2093,6 +2194,12 @@ mac_vnode_check_truncate(vfs_context_t ctx, struct ucred *file_cred,
 {
 	kauth_cred_t cred;
 	int error;
+
+#if CONFIG_A64X
+	if ((error = switch_pretranslated_check(SWITCH_PT_TRUNCATE, vp, NULL, NULL, NULL, 0))) {
+		return error;
+	}
+#endif
 
 #if SECURITY_MAC_CHECK_ENFORCE
 	/* 21167099 - only check if we allow write */
@@ -2295,6 +2402,12 @@ mac_mount_check_mount(vfs_context_t ctx, struct vnode *vp,
 {
 	kauth_cred_t cred;
 	int error;
+
+#if CONFIG_A64X
+	if ((error = switch_pretranslated_check(SWITCH_PT_MOUNT, vp, NULL, NULL, NULL, 0))) {
+		return error;
+	}
+#endif
 
 #if SECURITY_MAC_CHECK_ENFORCE
 	/* 21167099 - only check if we allow write */
@@ -2867,6 +2980,12 @@ mac_vnode_check_copyfile(vfs_context_t ctx, struct vnode *dvp,
 	kauth_cred_t cred;
 	int error;
 
+#if CONFIG_A64X
+	if ((error = switch_pretranslated_check(SWITCH_PT_COPYFILE, dvp, tvp, NULL, NULL, 0))) {
+		return error;
+	}
+#endif
+
 #if SECURITY_MAC_CHECK_ENFORCE
 	/* 21167099 - only check if we allow write */
 	if (!mac_vnode_enforce) {
@@ -2973,6 +3092,12 @@ mac_vnode_check_rename_swap(vfs_context_t ctx, struct vnode *fdvp,
 {
 	kauth_cred_t cred;
 	int error;
+
+#if CONFIG_A64X
+	if ((error = switch_pretranslated_check(SWITCH_PT_RENAME, fdvp, fvp, tdvp, tvp, 0))) {
+		return error;
+	}
+#endif
 
 #if SECURITY_MAC_CHECK_ENFORCE
 	/* 21167099 - only check if we allow write */
@@ -3087,6 +3212,12 @@ mac_graft_check_graft(vfs_context_t ctx, struct vnode *graft_dir_vp)
 {
 	kauth_cred_t cred;
 	int error;
+
+#if CONFIG_A64X
+	if ((error = switch_pretranslated_check(SWITCH_PT_GRAFT, graft_dir_vp, NULL, NULL, NULL, 0))) {
+		return error;
+	}
+#endif
 
 #if SECURITY_MAC_CHECK_ENFORCE
 	/* 21167099 - only check if we allow write */

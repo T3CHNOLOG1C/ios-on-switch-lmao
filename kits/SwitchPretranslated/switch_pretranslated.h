@@ -1,8 +1,8 @@
 /* SPDX-License-Identifier: BSD-2-Clause-Patent */
 /*
  * The decisions behind iOS 27's pretranslated System files (bsd/vfs/vfs_switch_pretranslated.c): the tree's index
- * (tools/install/overlay_index.py writes it) and the tables the kernel builds from it. No kernel state here, so the
- * host tests run the same code.
+ * (tools/install/overlay_index.py writes it), the tables the kernel builds from it and the changes to the tree it
+ * refuses. No kernel state here, so the host tests run the same code.
  */
 #pragma once
 
@@ -345,4 +345,60 @@ static inline int64_t switch_pt_system_file(const struct switch_pt_tables *table
         return -1;
     }
     return i;
+}
+
+enum switch_pt_op {
+    SWITCH_PT_OPEN,
+    SWITCH_PT_TRUNCATE,
+    SWITCH_PT_SETATTR,
+    SWITCH_PT_SETEXTATTR,
+    SWITCH_PT_DELETEEXTATTR,
+    SWITCH_PT_UNLINK,
+    SWITCH_PT_RENAME,
+    SWITCH_PT_LINK,
+    SWITCH_PT_CREATE,
+    SWITCH_PT_EXCHANGEDATA,
+    SWITCH_PT_CLONE,
+    SWITCH_PT_COPYFILE,
+    SWITCH_PT_FSCTL,
+    SWITCH_PT_MMAP,
+    SWITCH_PT_MOUNT,
+    SWITCH_PT_GRAFT,
+    SWITCH_PT_OPS,
+};
+
+/* in_tree: bit n set when the hook's n-th vnode, in the order each case below names them, is in the tree. */
+#define SWITCH_PT_VNODE(n)  (1u << (n))
+#define SWITCH_PT_ANY_VNODE 0xfu
+/* OPEN: for writing, truncating or appending. MMAP: a shared mapping that can write. */
+#define SWITCH_PT_WRITES 1u
+
+/* Nothing in the tree changes on the device, root included: these are the vnodes whose being in it refuses each op. */
+static inline bool switch_pt_denied(enum switch_pt_op op, uint32_t in_tree, uint32_t intent)
+{
+    switch (op) {
+    case SWITCH_PT_OPEN:  /* vp */
+    case SWITCH_PT_MMAP:  /* vp */
+    case SWITCH_PT_FSCTL: /* vp: an fsctl or ioctl that writes or changes metadata; a read-only query does not */
+        return (in_tree & SWITCH_PT_VNODE(0)) && (intent & SWITCH_PT_WRITES);
+    case SWITCH_PT_TRUNCATE:      /* vp */
+    case SWITCH_PT_SETATTR:       /* vp: mode, owner, flags, times, ACL, attribute lists */
+    case SWITCH_PT_SETEXTATTR:    /* vp */
+    case SWITCH_PT_DELETEEXTATTR: /* vp */
+    case SWITCH_PT_CREATE:        /* dvp: files, directories, symlinks, nodes */
+    case SWITCH_PT_MOUNT:         /* the covered directory */
+    case SWITCH_PT_GRAFT:         /* the graft directory */
+        return in_tree & SWITCH_PT_VNODE(0);
+    case SWITCH_PT_UNLINK:       /* dvp, vp */
+    case SWITCH_PT_LINK:         /* destination dvp, the file linked (its source) */
+    case SWITCH_PT_EXCHANGEDATA: /* v1, v2 */
+    case SWITCH_PT_CLONE:        /* destination dvp, source vp: a copy either way carries the tree's trusted bytes */
+    case SWITCH_PT_COPYFILE:     /* destination dvp, source vp: a copy either way carries the tree's trusted bytes */
+        return in_tree & (SWITCH_PT_VNODE(0) | SWITCH_PT_VNODE(1));
+    case SWITCH_PT_RENAME: /* fdvp, fvp, tdvp, tvp: out of, into, over or of the tree, its root included */
+        return in_tree & SWITCH_PT_ANY_VNODE;
+    case SWITCH_PT_OPS:
+        break;
+    }
+    return true;
 }

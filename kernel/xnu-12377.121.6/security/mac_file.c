@@ -44,6 +44,8 @@
 #include <sys/vnode_internal.h>
 #include <sys/file.h>
 #include <sys/file_internal.h>
+#include <sys/mman.h>
+#include "../../kits/SwitchPretranslated/switch_pretranslated_kernel.h"
 
 #include <security/mac_internal.h>
 
@@ -177,6 +179,16 @@ mac_file_check_mmap(struct ucred *cred, struct fileglob *fg, int prot,
 	int error;
 	int maxp;
 
+#if CONFIG_A64X
+	if (FILEGLOB_DTYPE(fg) == DTYPE_VNODE && (flags & MAP_SHARED) &&
+	    ((prot & PROT_WRITE) || (*maxprot & VM_PROT_WRITE))) {
+		error = switch_pretranslated_check(SWITCH_PT_MMAP, (vnode_t)fg_get_data(fg), NULL, NULL, NULL,
+		    SWITCH_PT_WRITES);
+		if (error) {
+			return error;
+		}
+	}
+#endif
 	maxp = *maxprot;
 	MAC_CHECK(file_check_mmap, cred, fg, NULL, prot, flags, offset, &maxp);
 	if ((maxp | *maxprot) != *maxprot) {

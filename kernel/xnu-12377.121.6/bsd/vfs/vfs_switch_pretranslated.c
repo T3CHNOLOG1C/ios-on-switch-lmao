@@ -8,6 +8,11 @@
  * replacing /private/var/Switch later changes nothing. The copy is found by its file id, never by a path, and only if
  * it is a regular file whose parent is one of the tree's directories. Anything wrong with the tree turns the redirect
  * off with one log line: the original files then run translated at load time, as without it.
+ *
+ * Nothing on the device changes the tree, root included: the MAC check wrappers (security/mac_vfs.c, mac_file.c) ask
+ * switch_pretranslated_refuse() before any policy, and it refuses with EPERM (one rate-limited log line) whatever
+ * switch_pt_denied() says touches a vnode of the tree, the tree's root and its index among them. Only a vnode on the
+ * Data mount costs a file id lookup; the hot paths of every other volume compare one pointer.
  */
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -290,4 +295,71 @@ switch_pretranslated_redirect(struct nameidata *ndp)
 	vnode_put(vp);
 	ndp->ni_vp = copy;
 	ndp->ni_flag |= NAMEI_SWITCH_PRETRANSLATED;
+}
+
+static const char *
+switch_pt_op_name(enum switch_pt_op op)
+{
+	static const char *const names[SWITCH_PT_OPS] = {
+		[SWITCH_PT_OPEN] = "write open",
+		[SWITCH_PT_TRUNCATE] = "truncate",
+		[SWITCH_PT_SETATTR] = "attribute change",
+		[SWITCH_PT_SETEXTATTR] = "xattr write",
+		[SWITCH_PT_DELETEEXTATTR] = "xattr removal",
+		[SWITCH_PT_UNLINK] = "unlink",
+		[SWITCH_PT_RENAME] = "rename",
+		[SWITCH_PT_LINK] = "link",
+		[SWITCH_PT_CREATE] = "create",
+		[SWITCH_PT_EXCHANGEDATA] = "exchangedata",
+		[SWITCH_PT_CLONE] = "clone",
+		[SWITCH_PT_COPYFILE] = "copyfile",
+		[SWITCH_PT_FSCTL] = "fsctl or ioctl",
+		[SWITCH_PT_MMAP] = "shared writable mapping",
+		[SWITCH_PT_MOUNT] = "mount",
+		[SWITCH_PT_GRAFT] = "graft",
+	};
+	return op < SWITCH_PT_OPS ? names[op] : "change";
+}
+
+/* Membership is decided from the vnode's own identity, not by walking paths. A vnode off the Data mount is never in
+ * the tree (one pointer, no I/O): every other volume's hot path stops here, so ordinary files are untouched. For a
+ * vnode on the Data mount the file id comes from its in-core node (no device read for a resident vnode); if even that
+ * cannot be read the write is refused, since the id can only be missing for a vnode we failed to identify. */
+static bool
+switch_pt_in_tree(vnode_t vp)
+{
+	if (vp == NULLVP || vp->v_mount != switch_pt.data) {
+		return false;
+	}
+	struct vnode_attr va;
+	VATTR_INIT(&va);
+	VATTR_WANTED(&va, va_fileid);
+	if (vnode_getattr(vp, &va, vfs_context_kernel()) || !VATTR_IS_SUPPORTED(&va, va_fileid)) {
+		return true;
+	}
+	return switch_pt_map_get(&switch_pt.tables.data, va.va_fileid, NULL);
+}
+
+int
+switch_pretranslated_refuse(enum switch_pt_op op, vnode_t v0, vnode_t v1, vnode_t v2, vnode_t v3, uint32_t intent)
+{
+	if (!os_atomic_load(&switch_pretranslated_on, acquire) || !switch_pt_denied(op, SWITCH_PT_ANY_VNODE, intent)) {
+		return 0;
+	}
+	const vnode_t vnodes[4] = {v0, v1, v2, v3};
+	uint32_t in_tree = 0;
+	for (uint32_t i = 0; i < 4 && !switch_pt_denied(op, in_tree, intent); ++i) {
+		if (switch_pt_denied(op, SWITCH_PT_VNODE(i), intent) && switch_pt_in_tree(vnodes[i])) {
+			in_tree |= SWITCH_PT_VNODE(i);
+		}
+	}
+	if (!switch_pt_denied(op, in_tree, intent)) {
+		return 0;
+	}
+	if (switch_pt_log_allowed()) {
+		proc_t p = current_proc();
+		printf("SwitchPretranslated: refused %s in /private/var/" SWITCH_PT_TREE " by %s[%d]\n", switch_pt_op_name(op),
+		    p ? proc_best_name(p) : "kernel", p ? proc_getpid(p) : 0);
+	}
+	return EPERM;
 }

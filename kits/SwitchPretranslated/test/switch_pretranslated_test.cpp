@@ -238,3 +238,79 @@ TEST(Tables, DataIdsTellFilesFromDirectories)
 }
 
 }  // namespace
+
+namespace {
+
+constexpr uint32_t kV0 = SWITCH_PT_VNODE(0), kV1 = SWITCH_PT_VNODE(1), kV2 = SWITCH_PT_VNODE(2),
+                   kV3 = SWITCH_PT_VNODE(3);
+
+TEST(Deny, NothingOutsideTheTreeIsRefused)
+{
+    for (int op = 0; op < SWITCH_PT_OPS; ++op) {
+        for (uint32_t intent : {0u, SWITCH_PT_WRITES}) {
+            EXPECT_FALSE(switch_pt_denied(static_cast<enum switch_pt_op>(op), 0, intent)) << op;
+        }
+    }
+}
+
+TEST(Deny, OpensAndMappingsOnlyWhenTheyWrite)
+{
+    for (enum switch_pt_op op : {SWITCH_PT_OPEN, SWITCH_PT_MMAP}) {
+        EXPECT_FALSE(switch_pt_denied(op, kV0, 0));
+        EXPECT_TRUE(switch_pt_denied(op, kV0, SWITCH_PT_WRITES));
+        EXPECT_FALSE(switch_pt_denied(op, kV1 | kV2 | kV3, SWITCH_PT_WRITES));
+    }
+}
+
+TEST(Deny, EveryChangeOfATreeFileOrDirectory)
+{
+    for (enum switch_pt_op op : {SWITCH_PT_TRUNCATE, SWITCH_PT_SETATTR, SWITCH_PT_SETEXTATTR, SWITCH_PT_DELETEEXTATTR,
+                                 SWITCH_PT_CREATE, SWITCH_PT_MOUNT, SWITCH_PT_GRAFT}) {
+        EXPECT_TRUE(switch_pt_denied(op, kV0, 0)) << op;
+        EXPECT_FALSE(switch_pt_denied(op, kV1 | kV2 | kV3, 0)) << op;
+    }
+}
+
+TEST(Deny, UnlinkOfTheTreeOrInsideIt)
+{
+    EXPECT_TRUE(switch_pt_denied(SWITCH_PT_UNLINK, kV0, 0));
+    EXPECT_TRUE(switch_pt_denied(SWITCH_PT_UNLINK, kV1, 0));
+    EXPECT_TRUE(switch_pt_denied(SWITCH_PT_UNLINK, kV0 | kV1, 0));
+}
+
+TEST(Deny, RenameFromIntoOverOrOfTheTree)
+{
+    for (uint32_t bit : {kV0, kV1, kV2, kV3})
+        EXPECT_TRUE(switch_pt_denied(SWITCH_PT_RENAME, bit, 0)) << bit;
+}
+
+TEST(Deny, LinksAndExchangesEitherWay)
+{
+    for (enum switch_pt_op op : {SWITCH_PT_LINK, SWITCH_PT_EXCHANGEDATA}) {
+        EXPECT_TRUE(switch_pt_denied(op, kV0, 0));
+        EXPECT_TRUE(switch_pt_denied(op, kV1, 0));
+    }
+}
+
+TEST(Deny, ClonesAndCopiesEitherWay)
+{
+    for (enum switch_pt_op op : {SWITCH_PT_CLONE, SWITCH_PT_COPYFILE}) {
+        EXPECT_TRUE(switch_pt_denied(op, kV0, 0));
+        EXPECT_TRUE(switch_pt_denied(op, kV1, 0));
+        EXPECT_FALSE(switch_pt_denied(op, kV2, 0));
+    }
+}
+
+TEST(Deny, FsctlAndIoctlOnlyWhenTheyWrite)
+{
+    EXPECT_FALSE(switch_pt_denied(SWITCH_PT_FSCTL, kV0, 0));
+    EXPECT_TRUE(switch_pt_denied(SWITCH_PT_FSCTL, kV0, SWITCH_PT_WRITES));
+    EXPECT_FALSE(switch_pt_denied(SWITCH_PT_FSCTL, kV1, SWITCH_PT_WRITES));
+}
+
+TEST(Deny, AnUnknownOpIsRefused)
+{
+    EXPECT_TRUE(switch_pt_denied(SWITCH_PT_OPS, 0, 0));
+}
+
+}  // namespace
