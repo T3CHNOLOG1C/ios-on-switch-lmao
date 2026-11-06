@@ -43,18 +43,18 @@ switch_abi_header = rule(
     },
 )
 
-def switch_abi_class(cls, header = True, header_name = None):
-    """:<cls>, the class's header for the selected kind; a kind without kinds/<kind>/<cls>.json fails at analysis."""
-    tables = native.glob(["kinds/*/{}.json".format(cls)], allow_empty = True)
+def switch_abi_class(name, header = True, header_name = None):
+    """:<name>, the class's header for the selected kind; a kind without kinds/<kind>/<name>.json fails at analysis."""
+    tables = native.glob(["kinds/*/{}.json".format(name)], allow_empty = True)
     switch_abi_header(
-        name = cls,
-        cls = cls,
+        name = name,
+        cls = name,
         header = header,
         header_name = header_name,
-        interface = "interface/{}.json".format(cls),
+        interface = "interface/{}.json".format(name),
         table = select(
             {"//ipsw:" + t.split("/")[1]: t for t in tables},
-            no_match_error = "kits/SwitchABI has no {} table for this IPSW kind (kinds/<kind>/{}.json)".format(cls, cls),
+            no_match_error = "kits/SwitchABI has no {} table for this IPSW kind (kinds/<kind>/{}.json)".format(name, name),
         ),
         visibility = ["//visibility:public"],
     )

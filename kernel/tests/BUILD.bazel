@@ -280,7 +280,7 @@ host_test(
         name = "page_policy_{}_{}".format(tree, name),
         srcs = ["//kernel/xnu-{}/{}".format(version, source)],
         outs = ["page_policy_{}_{}.h".format(tree, name)],
-        cmd = "awk -v name=xnu{}_{} -v max={} -f $(location xnu_guard_blocks.awk) $(location //kernel/xnu-{}/{}) > $@".format(
+        cmd = "awk -v name=xnu{}_{} -v max={} -f $(execpath xnu_guard_blocks.awk) $(execpath //kernel/xnu-{}/{}) > $@".format(
             tree,
             name,
             blocks,

@@ -130,43 +130,43 @@ py_test(
 )
 
 switch_abi_class(
-    "AppleARMBacklight",
+    name = "AppleARMBacklight",
     header = False,
 )
 
-switch_abi_class("ApplePMGR")
+switch_abi_class(name = "ApplePMGR")
 
-switch_abi_class("ApplePMGRNub")
+switch_abi_class(name = "ApplePMGRNub")
 
-switch_abi_class("AppleUSBXHCI")
+switch_abi_class(name = "AppleUSBXHCI")
 
-switch_abi_class("IOAESAccelerator")
-
-switch_abi_class(
-    "IOAcceleratorES",
-    header = False,
-)
+switch_abi_class(name = "IOAESAccelerator")
 
 switch_abi_class(
-    "IOBlockStorageDevice",
+    name = "IOAcceleratorES",
     header = False,
 )
 
 switch_abi_class(
-    "IOHIDDevice",
+    name = "IOBlockStorageDevice",
+    header = False,
+)
+
+switch_abi_class(
+    name = "IOHIDDevice",
     header_name = "OriginalHidDeviceABI.h",
 )
 
 switch_abi_class(
-    "IOSurface",
+    name = "IOSurface",
     header = False,
 )
 
 switch_abi_class(
-    "IOMobileFramebufferLegacy",
+    name = "IOMobileFramebufferLegacy",
     header_name = "OriginalLegacyFramebufferABI.h",
 )
 
-switch_abi_class("IOUSBDeviceController")
+switch_abi_class(name = "IOUSBDeviceController")
 
-switch_abi_class("IOWatchdog")
+switch_abi_class(name = "IOWatchdog")
