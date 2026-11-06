@@ -70,7 +70,8 @@ class TablesTest(unittest.TestCase):
                 self.assertTrue(set(table['layout'].values()) <= set(interface['methods']))
                 self.assertEqual(set(table['fields']), set(interface.get('fields', {})))
                 self.assertLessEqual(table['first_slot'], table['slots'])
-                gen.header(interface, table, path.name)
+                if interface.get('header', True):
+                    gen.header(interface, table, path.name)
 
     def test_every_declared_virtual_has_a_slot(self):
         for path, interface, table in tables():

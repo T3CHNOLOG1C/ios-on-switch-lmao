@@ -10,6 +10,9 @@ ABI_PACKAGE = "//kits/SwitchABI"
 ABI_INCLUDE = "$(BINDIR)/kits/SwitchABI/include"
 
 def _header_impl(ctx):
+    info = SwitchAbiInfo(interface = ctx.file.interface, table = ctx.file.table)
+    if not ctx.attr.header:
+        return [DefaultInfo(), CcInfo(), info]
     out = ctx.actions.declare_file("include/Original{}.h".format(ctx.attr.cls))
     ctx.actions.run(
         executable = ctx.executable._gen,
@@ -22,7 +25,7 @@ def _header_impl(ctx):
     return [
         DefaultInfo(files = depset([out])),
         CcInfo(compilation_context = cc_common.create_compilation_context(headers = depset([out]))),
-        SwitchAbiInfo(interface = ctx.file.interface, table = ctx.file.table),
+        info,
     ]
 
 SwitchAbiInfo = provider(doc = "An original class's ABI tables for the selected kind.", fields = ["interface", "table"])
@@ -32,18 +35,20 @@ switch_abi_header = rule(
     doc = "Original<cls>.h for the selected IPSW kind, as a header-only CcInfo (drivers add ABI_INCLUDE to their -I).",
     attrs = {
         "cls": attr.string(mandatory = True),
+        "header": attr.bool(default = True, doc = "False: drivers declare the class from another header (its bindings only)"),
         "interface": attr.label(mandatory = True, allow_single_file = [".json"]),
         "table": attr.label(mandatory = True, allow_single_file = [".json"]),
         "_gen": attr.label(default = ABI_PACKAGE + ":gen", executable = True, cfg = "exec"),
     },
 )
 
-def switch_abi_class(cls):
+def switch_abi_class(cls, header = True):
     """:<cls>, the class's header for the selected kind; a kind without kinds/<kind>/<cls>.json fails at analysis."""
     tables = native.glob(["kinds/*/{}.json".format(cls)], allow_empty = True)
     switch_abi_header(
         name = cls,
         cls = cls,
+        header = header,
         interface = "interface/{}.json".format(cls),
         table = select(
             {"//ipsw:" + t.split("/")[1]: t for t in tables},

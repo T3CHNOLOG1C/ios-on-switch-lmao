@@ -98,4 +98,9 @@ py_test(
     deps = [":gen_lib"],
 )
 
+switch_abi_class(
+    "IOBlockStorageDevice",
+    header = False,
+)
+
 switch_abi_class("IOWatchdog")

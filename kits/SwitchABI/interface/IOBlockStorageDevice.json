@@ -1,0 +1,134 @@
+{
+  "class": "IOBlockStorageDevice",
+  "doc": "IOStorageFamily's IOBlockStorageDevice: drivers compile against IOStorageFamily's own header (storage-abi); only its bindings come from here.",
+  "superclass": "IOService",
+  "kext": "com.apple.iokit.IOStorageFamily",
+  "header": false,
+  "methods": {
+    "init": {
+      "decl": "init(OSDictionary*) override",
+      "mangled": "__ZN20IOBlockStorageDevice4initEP12OSDictionary",
+      "pac": "_ZN15IORegistryEntry4initEP12OSDictionary"
+    },
+    "getProperty": {
+      "decl": "getProperty(OSSymbol const*) const override",
+      "mangled": "__ZNK20IOBlockStorageDevice11getPropertyEPK8OSSymbol",
+      "pac": "_ZNK15IORegistryEntry11getPropertyEPK8OSSymbol"
+    },
+    "setProperties": {
+      "decl": "setProperties(OSObject*) override",
+      "mangled": "__ZN20IOBlockStorageDevice13setPropertiesEP8OSObject",
+      "pac": "_ZN15IORegistryEntry13setPropertiesEP8OSObject"
+    },
+    "doEjectMedia": {
+      "decl": "virtual doEjectMedia() = 0",
+      "mangled": "__ZN20IOBlockStorageDevice12doEjectMediaEv",
+      "pac": "_ZN20IOBlockStorageDevice12doEjectMediaEv"
+    },
+    "doFormatMedia": {
+      "decl": "virtual doFormatMedia(unsigned long long) = 0",
+      "mangled": "__ZN20IOBlockStorageDevice13doFormatMediaEy",
+      "pac": "_ZN20IOBlockStorageDevice13doFormatMediaEy"
+    },
+    "doGetFormatCapacities": {
+      "decl": "virtual doGetFormatCapacities(unsigned long long*, unsigned int) const = 0",
+      "mangled": "__ZNK20IOBlockStorageDevice21doGetFormatCapacitiesEPyj",
+      "pac": "_ZNK20IOBlockStorageDevice21doGetFormatCapacitiesEPyj"
+    },
+    "doSynchronizeCache": {
+      "decl": "virtual doSynchronizeCache()",
+      "mangled": "__ZN20IOBlockStorageDevice18doSynchronizeCacheEv",
+      "pac": "_ZN20IOBlockStorageDevice18doSynchronizeCacheEv"
+    },
+    "getVendorString": {
+      "decl": "virtual getVendorString() = 0",
+      "mangled": "__ZN20IOBlockStorageDevice15getVendorStringEv",
+      "pac": "_ZN20IOBlockStorageDevice15getVendorStringEv"
+    },
+    "getProductString": {
+      "decl": "virtual getProductString() = 0",
+      "mangled": "__ZN20IOBlockStorageDevice16getProductStringEv",
+      "pac": "_ZN20IOBlockStorageDevice16getProductStringEv"
+    },
+    "getRevisionString": {
+      "decl": "virtual getRevisionString() = 0",
+      "mangled": "__ZN20IOBlockStorageDevice17getRevisionStringEv",
+      "pac": "_ZN20IOBlockStorageDevice17getRevisionStringEv"
+    },
+    "getAdditionalDeviceInfoString": {
+      "decl": "virtual getAdditionalDeviceInfoString() = 0",
+      "mangled": "__ZN20IOBlockStorageDevice29getAdditionalDeviceInfoStringEv",
+      "pac": "_ZN20IOBlockStorageDevice29getAdditionalDeviceInfoStringEv"
+    },
+    "reportBlockSize": {
+      "decl": "virtual reportBlockSize(unsigned long long*) = 0",
+      "mangled": "__ZN20IOBlockStorageDevice15reportBlockSizeEPy",
+      "pac": "_ZN20IOBlockStorageDevice15reportBlockSizeEPy"
+    },
+    "reportEjectability": {
+      "decl": "virtual reportEjectability(bool*) = 0",
+      "mangled": "__ZN20IOBlockStorageDevice18reportEjectabilityEPb",
+      "pac": "_ZN20IOBlockStorageDevice18reportEjectabilityEPb"
+    },
+    "reportMaxValidBlock": {
+      "decl": "virtual reportMaxValidBlock(unsigned long long*) = 0",
+      "mangled": "__ZN20IOBlockStorageDevice19reportMaxValidBlockEPy",
+      "pac": "_ZN20IOBlockStorageDevice19reportMaxValidBlockEPy"
+    },
+    "reportMediaState": {
+      "decl": "virtual reportMediaState(bool*, bool*) = 0",
+      "mangled": "__ZN20IOBlockStorageDevice16reportMediaStateEPbS0_",
+      "pac": "_ZN20IOBlockStorageDevice16reportMediaStateEPbS0_"
+    },
+    "reportRemovability": {
+      "decl": "virtual reportRemovability(bool*) = 0",
+      "mangled": "__ZN20IOBlockStorageDevice18reportRemovabilityEPb",
+      "pac": "_ZN20IOBlockStorageDevice18reportRemovabilityEPb"
+    },
+    "reportWriteProtection": {
+      "decl": "virtual reportWriteProtection(bool*) = 0",
+      "mangled": "__ZN20IOBlockStorageDevice21reportWriteProtectionEPb",
+      "pac": "_ZN20IOBlockStorageDevice21reportWriteProtectionEPb"
+    },
+    "getWriteCacheState": {
+      "decl": "virtual getWriteCacheState(bool*)",
+      "mangled": "__ZN20IOBlockStorageDevice18getWriteCacheStateEPb",
+      "pac": "_ZN20IOBlockStorageDevice18getWriteCacheStateEPb"
+    },
+    "setWriteCacheState": {
+      "decl": "virtual setWriteCacheState(bool)",
+      "mangled": "__ZN20IOBlockStorageDevice18setWriteCacheStateEb",
+      "pac": "_ZN20IOBlockStorageDevice18setWriteCacheStateEb"
+    },
+    "doAsyncReadWrite": {
+      "decl": "virtual doAsyncReadWrite(IOMemoryDescriptor*, unsigned long long, unsigned long long, IOStorageAttributes*, IOStorageCompletion*) = 0",
+      "mangled": "__ZN20IOBlockStorageDevice16doAsyncReadWriteEP18IOMemoryDescriptoryyP19IOStorageAttributesP19IOStorageCompletion",
+      "pac": "_ZN20IOBlockStorageDevice16doAsyncReadWriteEP18IOMemoryDescriptoryyP19IOStorageAttributesP19IOStorageCompletion"
+    },
+    "requestIdle": {
+      "decl": "virtual requestIdle()",
+      "mangled": "__ZN20IOBlockStorageDevice11requestIdleEv",
+      "pac": "_ZN20IOBlockStorageDevice11requestIdleEv"
+    },
+    "doUnmap": {
+      "decl": "virtual doUnmap(IOBlockStorageDeviceExtent*, unsigned int, unsigned int)",
+      "mangled": "__ZN20IOBlockStorageDevice7doUnmapEP26IOBlockStorageDeviceExtentjj",
+      "pac": "_ZN20IOBlockStorageDevice7doUnmapEP26IOBlockStorageDeviceExtentjj"
+    },
+    "doSetPriority": {
+      "decl": "virtual doSetPriority(IOBlockStorageDeviceExtent*, unsigned int, unsigned char)",
+      "mangled": "__ZN20IOBlockStorageDevice13doSetPriorityEP26IOBlockStorageDeviceExtentjh",
+      "pac": "_ZN20IOBlockStorageDevice13doSetPriorityEP26IOBlockStorageDeviceExtentjh"
+    },
+    "doSynchronize": {
+      "decl": "virtual doSynchronize(unsigned long long, unsigned long long, unsigned int)",
+      "mangled": "__ZN20IOBlockStorageDevice13doSynchronizeEyyj",
+      "pac": "_ZN20IOBlockStorageDevice13doSynchronizeEyyj"
+    },
+    "doGetProvisionStatus": {
+      "decl": "virtual doGetProvisionStatus(unsigned long long, unsigned long long, unsigned int*, IOBlockStorageProvisionDeviceExtent*, unsigned long long)",
+      "mangled": "__ZN20IOBlockStorageDevice20doGetProvisionStatusEyyPjP35IOBlockStorageProvisionDeviceExtenty",
+      "pac": "_ZN20IOBlockStorageDevice20doGetProvisionStatusEyyPjP35IOBlockStorageProvisionDeviceExtenty"
+    }
+  }
+}

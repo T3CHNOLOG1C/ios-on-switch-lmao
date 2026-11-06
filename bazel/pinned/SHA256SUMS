@@ -1,5 +1,3 @@
-6dd02909ce18a6ce72a553e4fbea253cef3f42348ada53291004e65f2ea7b41c  kernel/native-switch-root/original-bindings.S
-6dd02909ce18a6ce72a553e4fbea253cef3f42348ada53291004e65f2ea7b41c  kernel/native-ram-block/original-bindings.S
 c5df00ee16fb4e2f87b2247808f6949829676ef8bd1008b98f86228a88bf8144  kernel/sheng-platform-power/original-bindings.S
 c521d842bb411e1e5bdbf115d9b2edaf5a0e7642dbc2e7b8d66dd758efa963a0  kernel/sheng-platform-power/OriginalPMGRABI.h
 dd5f8c4fedd2125841c3bca54d1893023ef7a6e9ae84a31f50757043647c1057  kernel/sheng-platform-power/GuardedPMGRSlots.inc
