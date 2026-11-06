@@ -377,8 +377,10 @@ uint8_t crc8(const uint8_t *data, size_t length)
     uint8_t crc = 0;
     for (size_t i = 0; i < length; ++i) {
         crc ^= data[i];
-        for (unsigned bit = 0; bit < 8; ++bit)
-            crc = (crc & 0x80) ? (uint8_t)((crc << 1) ^ 0x8d) : (uint8_t)(crc << 1);
+        for (unsigned bit = 0; bit < 8; ++bit) {
+            const unsigned shifted = static_cast<unsigned>(crc) << 1;
+            crc = static_cast<uint8_t>((crc & 0x80) ? shifted ^ 0x8du : shifted);
+        }
     }
     return crc;
 }
@@ -386,18 +388,18 @@ uint8_t crc8(const uint8_t *data, size_t length)
 // One host packet; returns its length. `out` has room for kHeader + length.
 size_t buildPacket(uint8_t *out, uint8_t cmd, uint8_t subcmd, const uint8_t *payload, uint16_t length)
 {
-    const uint16_t rest = (uint16_t)(7 + length);
+    const uint16_t rest = static_cast<uint16_t>(7 + length);
     const uint8_t header[kHeader] = {0x19,
                                      0x01,
                                      0x03,
-                                     (uint8_t)rest,
-                                     (uint8_t)(rest >> 8),
+                                     static_cast<uint8_t>(rest),
+                                     static_cast<uint8_t>(rest >> 8),
                                      cmd,
                                      subcmd,
-                                     (uint8_t)length,
-                                     (uint8_t)(length >> 8),
+                                     static_cast<uint8_t>(length),
+                                     static_cast<uint8_t>(length >> 8),
                                      0,
-                                     length ? crc8(payload, length) : (uint8_t)0,
+                                     length ? crc8(payload, length) : static_cast<uint8_t>(0),
                                      0};
     memcpy(out, header, kHeader);
     out[11] = crc8(out + 5, 6);
@@ -408,7 +410,8 @@ size_t buildPacket(uint8_t *out, uint8_t cmd, uint8_t subcmd, const uint8_t *pay
 
 uint64_t nowMS()
 {
-    uint64_t abs, ns;
+    uint64_t abs = 0;
+    uint64_t ns = 0;
     clock_get_uptime(&abs);
     absolutetime_to_nanoseconds(abs, &ns);
     return ns / 1000000;
@@ -417,18 +420,27 @@ uint64_t nowMS()
 bool bluetoothDisabled()
 {
     unsigned off = 0;
-    return PE_parse_boot_argn("switch-no-bt", &off, sizeof(off)) && off;
+    return (PE_parse_boot_argn("switch-no-bt", &off, sizeof(off)) != 0) && (off != 0u);
+}
+
+unsigned flag(uint32_t value, uint32_t mask)
+{
+    return (value & mask) ? 1 : 0;
 }
 }  // namespace
 
 // One pairing result for joyconpaird (helper/joyconpaird.c); see SwitchJoyConRail::publishPairing.
+// NOLINTNEXTLINE(misc-use-internal-linkage): OSDefineMetaClassAndStructors needs the class's external linkage (its kalloc type view)
 class SwitchJoyConPairing : public IOService {
+    // NOLINTNEXTLINE(misc-explicit-constructor): IOKit's structors macro declares the metaclass constructor
     OSDeclareDefaultStructors(SwitchJoyConPairing)
 };
 
 OSDefineMetaClassAndStructors(SwitchJoyConPairing, IOService)
 
+    // NOLINTNEXTLINE(misc-use-internal-linkage): OSDefineMetaClassAndStructors needs the class's external linkage (its kalloc type view)
     class SwitchJoyConRail : public IOService {
+    // NOLINTNEXTLINE(misc-explicit-constructor): IOKit's structors macro declares the metaclass constructor
     OSDeclareDefaultStructors(SwitchJoyConRail)
 
         enum Phase : uint8_t {
@@ -546,42 +558,42 @@ OSDefineMetaClassAndStructors(SwitchJoyConPairing, IOService)
 
     static uint32_t rd(Side &s, uint32_t reg)
     {
-        return *(volatile uint32_t *)(s.uart + reg);
+        return *reinterpret_cast<volatile uint32_t *>(s.uart + reg);
     }
 
     static void wr(Side &s, uint32_t reg, uint32_t value)
     {
-        *(volatile uint32_t *)(s.uart + reg) = value;
+        *reinterpret_cast<volatile uint32_t *>(s.uart + reg) = value;
     }
 
     void carWrite(uint32_t reg, uint32_t value)
     {
-        *(volatile uint32_t *)(car + reg) = value;
+        *reinterpret_cast<volatile uint32_t *>(car + reg) = value;
     }
 
     uint32_t carRead(uint32_t reg)
     {
-        return *(volatile uint32_t *)(car + reg);
+        return *reinterpret_cast<volatile uint32_t *>(car + reg);
     }
 
     void pinWrite(uint32_t reg, uint32_t value)
     {
-        *(volatile uint32_t *)(pinmux + reg) = value;
+        *reinterpret_cast<volatile uint32_t *>(pinmux + reg) = value;
     }
 
     uint32_t pinRead(uint32_t reg)
     {
-        return *(volatile uint32_t *)(pinmux + reg);
+        return *reinterpret_cast<volatile uint32_t *>(pinmux + reg);
     }
 
     void pmcWrite(uint32_t reg, uint32_t value)
     {
-        *(volatile uint32_t *)(pmc + reg) = value;
+        *reinterpret_cast<volatile uint32_t *>(pmc + reg) = value;
     }
 
     uint32_t pmcRead(uint32_t reg)
     {
-        return *(volatile uint32_t *)(pmc + reg);
+        return *reinterpret_cast<volatile uint32_t *>(pmc + reg);
     }
 
     void gpioMask(unsigned pin, uint32_t reg, bool on);
@@ -596,52 +608,52 @@ OSDefineMetaClassAndStructors(SwitchJoyConPairing, IOService)
     static IOReturn output(void *context, const uint8_t *report, size_t length);
     static void sessionEnded(void *context, int32_t servedPid, int32_t openerPid);
     Side *sideFor(const OSObject *source);
-    bool filter(Side &s);
-    void fillTx(Side &s);
-    bool drainRx(Side &s);
+    static bool filter(Side &s);
+    static void fillTx(Side &s);
+    static bool drainRx(Side &s);
     static void frameByte(Side &s, uint8_t byte);
-    bool takeDma(Side &s);
-    void startDmaLocked(Side &s);
-    void stopDmaLocked(Side &s);
-    void dmaFailedLocked(Side &s, const char *why);
+    static bool takeDma(Side &s);
+    static void startDmaLocked(Side &s);
+    static void stopDmaLocked(Side &s);
+    static void dmaFailedLocked(Side &s, const char *why);
 
     // Work loop.
     void setUp(Side &s, const SideConfig *cfg);
     void preparePads(const char *when);
     void initHardware(Side &s);
-    void quiesce(Side &s);
+    static void quiesce(Side &s);
     void wake(Side &s);
     void configureUart(Side &s, bool fast);
-    void send(Side &s, const uint8_t *bytes, size_t length);
-    bool txIdle(Side &s);
-    void sendCommand(Side &s, uint8_t subcmd, const uint8_t *payload = nullptr, uint16_t length = 0);
-    void sendReport(Side &s, const uint8_t *report, size_t length);
-    void sendOutput(Side &s, uint8_t *report, size_t length);
-    void sendSubcommand(Side &s, uint8_t id, const uint8_t *data, size_t length);
+    static void send(Side &s, const uint8_t *bytes, size_t length);
+    static bool txIdle(Side &s);
+    static void sendCommand(Side &s, uint8_t subcmd, const uint8_t *payload = nullptr, uint16_t length = 0);
+    static void sendReport(Side &s, const uint8_t *report, size_t length);
+    static void sendOutput(Side &s, uint8_t *report, size_t length);
+    static void sendSubcommand(Side &s, uint8_t id, const uint8_t *data, size_t length);
     void enterDetect(Side &s);
     void attachJoyCon(Side &s);
     void startAttempt(Side &s);
     void failAttempt(Side &s, const char *why);
-    void sendStep(Side &s);
+    static void sendStep(Side &s);
     void startPairing(Side &s);
     void sendPairStep(Side &s);
     void finishPairing(Side &s, bool paired, const char *how);
     void run(Side &s);
-    IOService *createHid(Side &s);
-    void dropHid(Side &s);
+    static IOService *createHid(Side &s);
+    static void dropHid(Side &s);
     void republish(Side &s);
     void armPoll();
     void tick(Side &s);
-    void rumbleAfterReply(Side &s);
+    static void rumbleAfterReply(Side &s);
     void detach(Side &s);
-    void pause(Side &s);
+    static void pause(Side &s);
     void received(Side &s, const uint8_t *packet, size_t length);
     void handshakeReply(Side &s, uint8_t cmd, uint8_t echo, const uint8_t *payload, size_t length);
     void pairingReply(Side &s, const uint8_t *report, size_t length);
-    void runningReport(Side &s, const uint8_t *report, size_t length);
-    void setCharging(Side &s, bool on);
+    void runningReport(Side &s, const uint8_t *report, size_t length) const;
+    static void setCharging(Side &s, bool on);
     void publishPairing(Side &s, const char *source);
-    void checkDelivery(Side &s, const char *why);
+    static void checkDelivery(Side &s, const char *why);
     void describe(Side &s, char *buffer, size_t size);
 
 public:
@@ -658,15 +670,15 @@ OSDefineMetaClassAndStructors(SwitchJoyConRail, IOService)
 {
     const uint32_t bit = 1u << (pin & 7);
     const uint32_t at = (pin >> 5) * 0x100 + ((pin >> 3) & 3) * 4 + reg;
-    *(volatile uint32_t *)(gpio + at) = (bit << 8) | (on ? bit : 0);
-    (void)*(volatile uint32_t *)(gpio + at);
+    *reinterpret_cast<volatile uint32_t *>(gpio + at) = (bit << 8) | (on ? bit : 0);
+    (void)*reinterpret_cast<volatile uint32_t *>(gpio + at);
 }
 
 // One pin's bit of CNF, OE, OUT or IN (IN follows the pad whenever its input receiver is on, GPIO or UART mode).
 unsigned SwitchJoyConRail::gpioBit(unsigned pin, uint32_t reg)
 {
     const uint32_t at = (pin >> 5) * 0x100 + ((pin >> 3) & 3) * 4 + reg;
-    return (*(volatile uint32_t *)(gpio + at) >> (pin & 7)) & 1;
+    return (*reinterpret_cast<volatile uint32_t *>(gpio + at) >> (pin & 7)) & 1;
 }
 
 SwitchJoyConRail::Side *SwitchJoyConRail::sideFor(const OSObject *source)
@@ -686,7 +698,7 @@ bool SwitchJoyConRail::uartFilter(OSObject *owner, IOFilterInterruptEventSource 
 {
     auto *self = static_cast<SwitchJoyConRail *>(owner);
     Side *s = self->sideFor(sender);
-    if (s && self->filter(*s))
+    if (s && SwitchJoyConRail::filter(*s))
         sender->signalInterrupt();
     return false;
 }
@@ -706,10 +718,13 @@ bool SwitchJoyConRail::uartFilter(OSObject *owner, IOFilterInterruptEventSource 
 // ring and the FIFO's leftovers are taken (takeDma) and the RX sources come back.
 bool SwitchJoyConRail::filter(Side &s)
 {
-    bool got = false, idle = false, dmaRx = false;
+    bool got = false;
+    bool idle = false;
+    bool dmaRx = false;
     IOSimpleLockLock(s.lock);
     s.interrupts = s.interrupts + 1;
-    const uint32_t errorsBefore = s.lineErrors, overflowsBefore = s.overflows;
+    const uint32_t errorsBefore = s.lineErrors;
+    const uint32_t overflowsBefore = s.overflows;
     unsigned rounds = 0;
     for (;; ++rounds) {
         const uint32_t iir = rd(s, IIR_FCR);
@@ -773,7 +788,7 @@ void SwitchJoyConRail::frameByte(Side &s, uint8_t byte)
     if (s.frameLength == 3)
         s.frameSizeLow = byte;
     if (s.frameLength == 4)
-        s.frameTotal = 5 + (s.frameSizeLow | (uint32_t)byte << 8);
+        s.frameTotal = 5 + (s.frameSizeLow | static_cast<uint32_t>(byte) << 8);
     if (++s.frameLength < 5)
         return;
     if (s.frameTotal < kMinPacket || s.frameTotal > kMaxRx) {
@@ -816,7 +831,7 @@ bool SwitchJoyConRail::drainRx(Side &s)
         }
         if (!(lsr & LSR_DR))
             break;
-        const uint8_t byte = (uint8_t)rd(s, RBR_THR);
+        const uint8_t byte = static_cast<uint8_t>(rd(s, RBR_THR));
         const uint32_t next = (s.head + 1) % sizeof(s.ring);
         if (next == s.tail) {
             s.overflows = s.overflows + 1;
@@ -849,10 +864,10 @@ bool SwitchJoyConRail::takeDma(Side &s)
     if (count) {
         const uint32_t from = s.dmaTaken;
         for (uint32_t done = 0; done < count;) {
-            const uint32_t start = (from + done) % size,
-                           run = count - done < size - start ? count - done : size - start;
-            for (uintptr_t line = (uintptr_t)(s.dmaRing.va + start) & ~(uintptr_t)63,
-                           end = (uintptr_t)(s.dmaRing.va + start + run);
+            const uint32_t start = (from + done) % size;
+            const uint32_t run = count - done < size - start ? count - done : size - start;
+            for (uintptr_t line = reinterpret_cast<uintptr_t>(s.dmaRing.va + start) & ~static_cast<uintptr_t>(63),
+                           end = reinterpret_cast<uintptr_t>(s.dmaRing.va + start + run);
                  line < end; line += 64)
                 __asm__ volatile("dc civac, %0" ::"r"(line) : "memory");
             done += run;
@@ -911,11 +926,12 @@ void SwitchJoyConRail::startDmaLocked(Side &s)
     s.dmaBytes = 0;
     s.dmaChecked = false;
     s.dmaLapsAtStart = tegra_apbdma_interrupts(s.dma);
-    for (uintptr_t line = (uintptr_t)s.dmaRing.va, end = line + s.dmaRing.size; line < end; line += 64)
+    for (uintptr_t line = reinterpret_cast<uintptr_t>(s.dmaRing.va), end = line + s.dmaRing.size; line < end;
+         line += 64)
         __asm__ volatile("dc civac, %0" ::"r"(line) : "memory");
     __asm__ volatile("dsb sy" ::: "memory");
     const unsigned request = s.cfg->uart == 'B' ? TEGRA_APBDMA_REQ_UARTB : TEGRA_APBDMA_REQ_UARTC;
-    tegra_apbdma_start_ring(s.dma, (uint32_t)(kUartPA + s.cfg->uartOffset + RBR_THR), request, s.dmaRing.pa,
+    tegra_apbdma_start_ring(s.dma, static_cast<uint32_t>(kUartPA + s.cfg->uartOffset + RBR_THR), request, s.dmaRing.pa,
                             s.dmaRing.size);
     wr(s, IIR_FCR, FCR_FIFO | FCR_DMA | FCR_RX_TRIG_4 | FCR_TX_TRIG_16);
     s.ier = (s.ier & IER_THRI) | IER_RX_DMA;
@@ -978,9 +994,9 @@ void SwitchJoyConRail::uartAction(OSObject *owner, IOInterruptEventSource *sende
         const uint32_t head = s->head;
         if (s->tail == head) {
             // The ring is empty: the filter's framing (frameByte) becomes this parser's, which is the reference.
-            s->frameLength = (uint32_t)s->packetLength;
+            s->frameLength = static_cast<uint32_t>(s->packetLength);
             s->frameSizeLow = s->packetLength > 3 ? s->packet[3] : 0;
-            s->frameTotal = s->packetLength > 4 ? 5 + (s->packet[3] | (uint32_t)s->packet[4] << 8) : 0;
+            s->frameTotal = s->packetLength > 4 ? 5 + (s->packet[3] | static_cast<uint32_t>(s->packet[4]) << 8) : 0;
             s->packetDone = false;
         }
         IOSimpleLockUnlockEnableInterrupt(s->lock, state);
@@ -1012,7 +1028,7 @@ void SwitchJoyConRail::uartAction(OSObject *owner, IOInterruptEventSource *sende
             s->packet[s->packetLength++] = byte;
             if (s->packetLength < 5)
                 continue;
-            const size_t total = 5 + (s->packet[3] | (size_t)s->packet[4] << 8);
+            const size_t total = 5 + (s->packet[3] | static_cast<size_t>(s->packet[4]) << 8);
             if (total < kMinPacket || total > sizeof(s->packet)) {
                 if (total > sizeof(s->packet) && !s->oversizeLogged) {
                     s->oversizeLogged = true;
@@ -1059,7 +1075,7 @@ void SwitchJoyConRail::send(Side &s, const uint8_t *bytes, size_t length)
     const bool busy = s.txPosition < s.txLength;
     if (!busy) {
         memcpy(s.tx, bytes, length);
-        s.txLength = (uint32_t)length;
+        s.txLength = static_cast<uint32_t>(length);
         s.txPosition = 0;
         fillTx(s);
         // THR-empty armed even when the packet fit: its interrupt (fillTx disarms it) is the proof, counted in
@@ -1091,21 +1107,21 @@ void SwitchJoyConRail::sendCommand(Side &s, uint8_t subcmd, const uint8_t *paylo
 void SwitchJoyConRail::sendReport(Side &s, const uint8_t *report, size_t length)
 {
     uint8_t packet[kHeader + kMaxOutput];
-    send(s, packet, buildPacket(packet, kCmdExtRet, 0, report, (uint16_t)length));
+    send(s, packet, buildPacket(packet, kCmdExtRet, 0, report, static_cast<uint16_t>(length)));
 }
 
 // An output report from the HID device (0x01 subcommand, 0x10 rumble, 0x11/0x12 MCU) with the rail's packet counter in
 // byte 1 (see the header).
 void SwitchJoyConRail::sendOutput(Side &s, uint8_t *report, size_t length)
 {
-    report[1] = (uint8_t)(s.counter++ & 0xf);
+    report[1] = static_cast<uint8_t>(s.counter++ & 0xf);
     sendReport(s, report, length);
 }
 
 // A subcommand of the driver's own (pairing), framed as the Bluetooth output report 0x01 (J:785-815).
 void SwitchJoyConRail::sendSubcommand(Side &s, uint8_t id, const uint8_t *data, size_t length)
 {
-    uint8_t report[11 + 8] = {kReportSubcommand, (uint8_t)(s.counter++ & 0xf)};
+    uint8_t report[11 + 8] = {kReportSubcommand, static_cast<uint8_t>(s.counter++ & 0xf)};
     memcpy(report + 2, kRumbleNeutral, sizeof(kRumbleNeutral));
     report[10] = id;
     memcpy(report + 11, data, length);
@@ -1123,14 +1139,14 @@ IOReturn SwitchJoyConRail::output(void *context, const uint8_t *report, size_t l
     switch_joycon_forward_output(&s.forward, report, length);
     if (report[0] == kReportRumble) {
         memcpy(s.rumble, report, length);
-        s.rumbleLength = (uint8_t)length;
+        s.rumbleLength = static_cast<uint8_t>(length);
         s.rumbleFresh = true;
-    } else if ((uint8_t)(s.queueTail - s.queueHead) == 8) {
+    } else if (static_cast<uint8_t>(s.queueTail - s.queueHead) == 8) {
         result = kIOReturnNoSpace;
     } else {
         const unsigned at = s.queueTail++ & 7;
         memcpy(s.queue[at], report, length);
-        s.queueLength[at] = (uint8_t)length;
+        s.queueLength[at] = static_cast<uint8_t>(length);
         // Input report mode 0x3F would silence the rail (see the header): ask for 0x30.
         if (report[0] == kReportSubcommand && length > 11 && report[10] == kSubReportMode &&
             report[11] == kModeSimpleHid) {
@@ -1278,6 +1294,8 @@ void SwitchJoyConRail::sendStep(Side &s)
         sendCommand(s, kInitHidRate, rate, sizeof(rate));
         timeout = kFastCommandMS;
         break;
+    default:
+        break;
     }
     s.timer->setTimeoutMS(timeout);
 }
@@ -1304,10 +1322,11 @@ void SwitchJoyConRail::handshakeReply(Side &s, uint8_t cmd, uint8_t echo, const 
     }
     s.timer->cancelTimeout();
     s.pairPending = pairing;
-    if (pairing && hostKnown)
+    if (pairing && hostKnown) {
         startPairing(s);
-    else
+    } else {
         run(s);
+    }
 }
 
 void SwitchJoyConRail::failAttempt(Side &s, const char *why)
@@ -1343,8 +1362,8 @@ void SwitchJoyConRail::sendPairStep(Side &s)
     switch (s.step) {
     case kReadSlot: {
         const uint32_t address = kSlotBase + s.slot * kSlotStride;
-        const uint8_t read[5] = {(uint8_t)address, (uint8_t)(address >> 8), (uint8_t)(address >> 16),
-                                 (uint8_t)(address >> 24), kSlotRead};
+        const uint8_t read[5] = {static_cast<uint8_t>(address), static_cast<uint8_t>(address >> 8),
+                                 static_cast<uint8_t>(address >> 16), static_cast<uint8_t>(address >> 24), kSlotRead};
         sendSubcommand(s, kSubSpiRead, read, sizeof(read));
         break;
     }
@@ -1365,6 +1384,8 @@ void SwitchJoyConRail::sendPairStep(Side &s)
         sendSubcommand(s, kSubPairing, &request, 1);
         break;
     }
+    default:
+        break;
     }
     s.timer->setTimeoutMS(kSubcommandMS);
 }
@@ -1377,13 +1398,16 @@ void SwitchJoyConRail::pairingReply(Side &s, const uint8_t *report, size_t lengt
         return;
     const uint8_t id = report[14];
     const uint8_t *data = report + 15;
-    const bool ack = report[13] & 0x80;
+    const bool ack = (report[13] & 0x80) != 0;
     if (s.step == kReadSlot && id == kSubSpiRead) {
         // data: address (4), size, then the slot: magic, size, checksum (2), host BD_ADDR, LTK.
         const uint8_t *slot = data + 5;
-        if (!ack || length < 15 + 5 + kSlotRead)
-            return finishPairing(s, false, "pairing slot read refused");
-        const uint32_t address = data[0] | data[1] << 8 | (uint32_t)data[2] << 16 | (uint32_t)data[3] << 24;
+        if (!ack || length < 15 + 5 + kSlotRead) {
+            finishPairing(s, false, "pairing slot read refused");
+            return;
+        }
+        const uint32_t address = data[0] | static_cast<uint32_t>(data[1]) << 8 | static_cast<uint32_t>(data[2]) << 16 |
+                                 static_cast<uint32_t>(data[3]) << 24;
         if (address != kSlotBase + s.slot * kSlotStride)
             return;  // a late reply to an earlier read
         // Checksum as hekate _jc_validate_pairing_info: byte sum of the slot from offset 4 (the unread tail is zero except
@@ -1391,35 +1415,44 @@ void SwitchJoyConRail::pairingReply(Side &s, const uint8_t *report, size_t lengt
         uint8_t sum = 0;
         for (unsigned i = 4; i < kSlotRead; ++i)
             sum += slot[i];
-        const bool valid = ((uint8_t)(sum + 0x68) ^ 0x55) == slot[2] || ((uint8_t)(sum + 0x08) ^ 0x55) == slot[2];
-        if (valid && slot[0] != kSlotMagic && ++s.slot < kSlots)
-            return sendPairStep(s);  // an earlier pairing
+        const bool valid = (static_cast<uint8_t>(sum + 0x68) ^ 0x55) == slot[2] ||
+                           (static_cast<uint8_t>(sum + 0x08) ^ 0x55) == slot[2];
+        if (valid && slot[0] != kSlotMagic && ++s.slot < kSlots) {
+            sendPairStep(s);
+            return;  // an earlier pairing
+        }
         if (valid && slot[0] == kSlotMagic && slot[1] == kSlotSize && !memcmp(slot + 4, host, 6)) {
             // Stored most significant byte first; HCI and bluetoothd take the key least significant byte first (hekate
             // 761-762 reverses it for joycon_mac.ini, which BlueZ uses as is).
             for (unsigned i = 0; i < 16; ++i)
                 s.key[i] = slot[10 + 15 - i];
-            return finishPairing(s, true, "flash");
+            finishPairing(s, true, "flash");
+            return;
         }
         // The slot in use names another host (Horizon's address on a console that kept its own), or there is none.
         s.step = kSendHost;
-        return sendPairStep(s);
+        sendPairStep(s);
+        return;
     }
     // Steps 1 and 2 echo their request type in the first data byte (deku); for step 3 the ACK is enough.
     if (id != kSubPairing || !ack || (s.step != kSave && data[0] != (s.step == kSendHost ? 0x01 : 0x02)))
         return;
     if (s.step == kSendHost) {
         s.step = kGetKey;
-        return sendPairStep(s);
+        sendPairStep(s);
+        return;
     }
     if (s.step == kGetKey) {
         // XOR 0xAA, same byte order as the slot it is saved to (deku): reversed for HCI as above.
-        if (length < 15 + 1 + 16)
-            return finishPairing(s, false, "short pairing key reply");
+        if (length < 15 + 1 + 16) {
+            finishPairing(s, false, "short pairing key reply");
+            return;
+        }
         for (unsigned i = 0; i < 16; ++i)
             s.key[i] = data[1 + 15 - i] ^ 0xaa;
         s.step = kSave;
-        return sendPairStep(s);
+        sendPairStep(s);
+        return;
     }
     finishPairing(s, true, "rail");
 }
@@ -1453,19 +1486,22 @@ void SwitchJoyConRail::publishPairing(Side &s, const char *source)
     snprintf(address, sizeof(address), "%02x:%02x:%02x:%02x:%02x:%02x", s.mac[0], s.mac[1], s.mac[2], s.mac[3],
              s.mac[4], s.mac[5]);
     auto *record = OSTypeAlloc(SwitchJoyConPairing);
-    OSData *mac = OSData::withBytes(s.mac, 6), *key = OSData::withBytes(s.key, 16),
-           *hostAddress = OSData::withBytes(host, 6);
-    const bool ok = record && mac && key && hostAddress && record->init();
+    OSData *mac = OSData::withBytes(s.mac, 6);
+    OSData *key = OSData::withBytes(s.key, 16);
+    OSData *hostAddress = OSData::withBytes(host, 6);
+    const bool ok =
+        (record != nullptr) && (mac != nullptr) && (key != nullptr) && (hostAddress != nullptr) && record->init();
     if (ok) {
         record->setProperty("Address", mac);
         record->setProperty("AddressString", address);
         record->setProperty("LinkKey", key);
         record->setProperty("HostAddress", hostAddress);
         record->setProperty("Name", s.cfg->left ? "Joy-Con (L)" : "Joy-Con (R)");
-        record->setProperty("ClassOfDevice", (unsigned long long)kJoyConClass, 32);
-        record->setProperty("VendorID", 0x057eull, 32);
+        record->setProperty("ClassOfDevice", static_cast<unsigned long long>(kJoyConClass), 32);
+        record->setProperty("VendorID", 0x057eULL, 32);
         record->setProperty("ProductID",
-                            (unsigned long long)(s.cfg->left ? kSwitchJoyConLeftPID : kSwitchJoyConRightPID), 32);
+                            static_cast<unsigned long long>(s.cfg->left ? kSwitchJoyConLeftPID : kSwitchJoyConRightPID),
+                            32);
         record->setProperty("Source", source);
     }
     OSSafeReleaseNULL(mac);
@@ -1534,7 +1570,8 @@ void SwitchJoyConRail::republish(Side &s)
 {
     IOLockLock(s.outLock);
     const bool wanted = s.republish;
-    const int32_t served = s.servedPid, opener = s.openerPid;
+    const int32_t served = s.servedPid;
+    const int32_t opener = s.openerPid;
     s.republish = false;
     IOLockUnlock(s.outLock);
     if (!wanted || republishOff || s.phase != kRunning || !s.hid)
@@ -1543,7 +1580,7 @@ void SwitchJoyConRail::republish(Side &s)
         republishOff = true;
         IOLog("SwitchJoyCon: Joy-Con (%c): backboardd[%d] ended a second HID session within %u ms; not publishing "
               "Joy-Con HID devices again this boot\n",
-              s.cfg->letter, served, (unsigned)kSwitchJoyConRepublishGapMS);
+              s.cfg->letter, served, static_cast<unsigned>(kSwitchJoyConRepublishGapMS));
         return;
     }
     dropHid(s);
@@ -1571,7 +1608,7 @@ void SwitchJoyConRail::republish(Side &s)
 void SwitchJoyConRail::armPoll()
 {
     polling = false;
-    for (Side &s : sides)
+    for (const Side &s : sides)
         polling |= s.phase == kRunning;
     if (polling)
         poll->setTimeoutMS(kIntervalMS);
@@ -1594,13 +1631,13 @@ void SwitchJoyConRail::tick(Side &s)
     if (nowMS() - s.lastReply > kSilenceMS) {
         checkDelivery(s, "no reply for 500 ms");
         // Pulled off the rail, or the HID phase does not work (0 reports): either way it is handshaken again if seated.
+        const char *rxDma = s.dma && !s.dmaOff ? "idle" : "off";
+        if (s.dmaOn)
+            rxDma = "on";
         IOLog("SwitchJoyCon: Joy-Con (%c) on the rail stopped answering after %u input reports (line errors %u, ring "
               "overflows %u; RX DMA %s: %u replies, %u bytes by PIO, %u ring moves during it)\n",
-              s.cfg->letter, s.reports, s.lineErrors - s.errorsAtRun, s.overflows - s.overflowsAtRun,
-              s.dmaOn              ? "on"
-              : s.dma && !s.dmaOff ? "idle"
-                                   : "off",
-              s.dmaTakes, s.dmaPio, s.dmaRaces);
+              s.cfg->letter, s.reports, s.lineErrors - s.errorsAtRun, s.overflows - s.overflowsAtRun, rxDma, s.dmaTakes,
+              s.dmaPio, s.dmaRaces);
         detach(s);
         return;
     }
@@ -1636,7 +1673,8 @@ void SwitchJoyConRail::rumbleAfterReply(Side &s)
     IOLockLock(s.outLock);
     if (s.rumbleLength >= 10) {
         const uint8_t *half = s.rumble + (s.cfg->left ? 2 : 6);
-        const uint32_t word = half[0] | half[1] << 8 | (uint32_t)half[2] << 16 | (uint32_t)half[3] << 24;
+        const uint32_t word = half[0] | static_cast<uint32_t>(half[1]) << 8 | static_cast<uint32_t>(half[2]) << 16 |
+                              static_cast<uint32_t>(half[3]) << 24;
         const bool moving = (word & 0xff80fe00u) != 0x40000000u;
         if (s.rumbleFresh || (moving && now - s.rumbleAt >= kRumbleKeepAliveMS)) {
             length = s.rumbleLength;
@@ -1652,16 +1690,17 @@ void SwitchJoyConRail::rumbleAfterReply(Side &s)
     sendOutput(s, report, length);
 }
 
-void SwitchJoyConRail::runningReport(Side &s, const uint8_t *report, size_t length)
+void SwitchJoyConRail::runningReport(Side &s, const uint8_t *report, size_t length) const
 {
     // Battery in the high nibble of byte 2 (0 empty .. 8 full, bit 4 charging; J:1143-1170): stop charging when full,
     // start again below "high", as L4T does to spare the Joy-Con's simple charger.
     if ((report[0] == kReportReply || report[0] == kReportFull || report[0] == kReportNfcIr) && length > 2) {
         const uint8_t level = report[2] >> 5;
-        if (level == 4)
+        if (level == 4) {
             setCharging(s, false);
-        else if (level < 3)
+        } else if (level < 3) {
             setCharging(s, true);
+        }
     }
     ++s.reports;
     rumbleAfterReply(s);
@@ -1739,17 +1778,17 @@ void SwitchJoyConRail::timerAction(OSObject *owner, IOTimerEventSource *sender)
         self->startAttempt(*s);
         break;
     case kHandshake:
-        if (s->step == kDisconnect && s->sends < kDisconnectSends)
-            self->sendStep(*s);
-        else
+        if (s->step == kDisconnect && s->sends < kDisconnectSends) {
+            SwitchJoyConRail::sendStep(*s);
+        } else {
             self->failAttempt(*s, "handshake step timed out");
+        }
         break;
     case kPairing:
-        self->checkDelivery(*s, "pairing step timed out");
+        SwitchJoyConRail::checkDelivery(*s, "pairing step timed out");
         self->finishPairing(*s, false, "no reply");
         break;
-    case kRunning:
-        break;  // the shared poll drives it
+    case kRunning:  // the shared poll drives it
     case kSuspended:
         break;
     }
@@ -1761,11 +1800,12 @@ void SwitchJoyConRail::timerAction(OSObject *owner, IOTimerEventSource *sender)
 void SwitchJoyConRail::checkDelivery(Side &s, const char *why)
 {
     for (unsigned look = 0; look < 2; ++look) {
-        const uint32_t seen = s.interrupts, lsr = rd(s, LSR);
+        const uint32_t seen = s.interrupts;
+        const uint32_t lsr = rd(s, LSR);
         // DMA mode: bytes the channel put in the ring that no EORD/RX-timeout interrupt took.
         const bool ring = s.dmaOn && tegra_apbdma_moved(s.dma, nullptr) % s.dmaRing.size != s.dmaTaken;
-        const bool rx = ((lsr & LSR_DR) && (s.ier & (IER_RDI | IER_RTOIE))) || ring;
-        const bool tx = (lsr & LSR_THRE) && (s.ier & IER_THRI);
+        const bool rx = (((lsr & LSR_DR) != 0u) && ((s.ier & (IER_RDI | IER_RTOIE)) != 0u)) || ring;
+        const bool tx = ((lsr & LSR_THRE) != 0u) && ((s.ier & IER_THRI) != 0u);
         if (!rx && !tx)
             return;
         if (look == 0) {
@@ -1797,20 +1837,23 @@ void SwitchJoyConRail::checkDelivery(Side &s, const char *why)
 void SwitchJoyConRail::describe(Side &s, char *buffer, size_t size)
 {
     const SideConfig *cfg = s.cfg;
-    auto hex = [](char (&text)[sizeof(Side::stepHeard) * 3 + 8], const uint8_t *bytes, uint32_t count, unsigned room) {
+    const auto hex = [](char (&text)[sizeof(Side::stepHeard) * 3 + 8], const uint8_t *bytes, uint32_t count,
+                        unsigned room) {
         strlcpy(text, "none", sizeof(text));
         const unsigned shown = count < room ? count : room;
         size_t at = 0;
         for (unsigned i = 0; i < shown; ++i) {
-            at += (size_t)snprintf(text + at, sizeof(text) - at, "%s%02x", i ? " " : "", bytes[i]);
+            at += static_cast<size_t>(snprintf(text + at, sizeof(text) - at, "%s%02x", i ? " " : "", bytes[i]));
         }
         if (count > shown)
             strlcat(text, " ...", sizeof(text));
     };
-    char heard[sizeof(s.stepHeard) * 3 + 8], stepHeard[sizeof(s.stepHeard) * 3 + 8];
+    char heard[sizeof(s.stepHeard) * 3 + 8];
+    char stepHeard[sizeof(s.stepHeard) * 3 + 8];
     hex(heard, s.heard, s.heardCount, sizeof(s.heard));
     hex(stepHeard, s.stepHeard, s.stepHeardCount, sizeof(s.stepHeard));
-    unsigned in[4], cnf[4];
+    unsigned in[4];
+    unsigned cnf[4];
     uint32_t mux[4];
     const uint32_t muxReg[4] = {cfg->muxTx, cfg->muxRx, cfg->muxRts, cfg->muxCts};
     for (unsigned i = 0; i < 4; ++i) {
@@ -1818,7 +1861,7 @@ void SwitchJoyConRail::describe(Side &s, char *buffer, size_t size)
         cnf[i] = gpioBit(cfg->txPin + i, GPIO_CNF);
         mux[i] = pinRead(muxReg[i]);
     }
-    auto driven = [this](unsigned pin) {
+    const auto driven = [this](unsigned pin) {
         return gpioBit(pin, GPIO_CNF) & gpioBit(pin, GPIO_OE) & gpioBit(pin, GPIO_OUT);
     };
     snprintf(
@@ -1829,12 +1872,12 @@ void SwitchJoyConRail::describe(Side &s, char *buffer, size_t size)
         s.furthest, s.heardCount, heard, s.interrupts - s.interruptsAtAttach, s.lineErrors - s.errorsAtAttach,
         s.fastSent, s.fastHeardCount, s.fastErrors - s.fastErrorsAtAttach, s.lateCount, s.stepHeardCount, stepHeard,
         cfg->uart, rd(s, LSR), rd(s, IER), rd(s, MCR), rd(s, MSR), rd(s, LCR), rd(s, IRDA_CSR),
-        carRead(cfg->clockSource), !!(carRead(cfg->enbState) & cfg->clockBit),
-        !!(carRead(cfg->rstState) & cfg->clockBit), in[0], in[1], in[2], in[3], cnf[0], cnf[1], cnf[2], cnf[3], mux[0],
+        carRead(cfg->clockSource), flag(carRead(cfg->enbState), cfg->clockBit),
+        flag(carRead(cfg->rstState), cfg->clockBit), in[0], in[1], in[2], in[3], cnf[0], cnf[1], cnf[2], cnf[3], mux[0],
         mux[1], mux[2], mux[3], gpioBit(cfg->detectPin, GPIO_IN), driven(cfg->chargePin), driven(kPin5V),
-        !!(pmcRead(PMC_IO_DPD_STATUS) & kPadUartDpd), !!(pmcRead(PMC_NO_IOPOWER) & kPadUartPower),
-        !!(pmcRead(PMC_PWR_DET_VAL) & kPadUartPower),
-        *(volatile uint32_t *)(apbMisc + PP_PINMUX_GLOBAL) & kClampTristatedInputs);
+        flag(pmcRead(PMC_IO_DPD_STATUS), kPadUartDpd), flag(pmcRead(PMC_NO_IOPOWER), kPadUartPower),
+        flag(pmcRead(PMC_PWR_DET_VAL), kPadUartPower),
+        *reinterpret_cast<volatile uint32_t *>(apbMisc + PP_PINMUX_GLOBAL) & kClampTristatedInputs);
 }
 
 // The pads both rails share (see the header): UART pads powered and out of deep power-down (a bounded handshake, as
@@ -1857,7 +1900,7 @@ void SwitchJoyConRail::preparePads(const char *when)
         (void)pmcRead(PMC_NO_IOPOWER);
         strlcat(fixed, " IO power on,", sizeof(fixed));
     }
-    volatile uint32_t *global = (volatile uint32_t *)(apbMisc + PP_PINMUX_GLOBAL);
+    volatile uint32_t *global = reinterpret_cast<volatile uint32_t *>(apbMisc + PP_PINMUX_GLOBAL);
     if (*global & kClampTristatedInputs) {
         *global = *global & ~kClampTristatedInputs;
         (void)*global;
@@ -1979,7 +2022,7 @@ void SwitchJoyConRail::suspend()
             if (self->suspended)
                 return kIOReturnSuccess;
             for (Side &s : self->sides)
-                self->quiesce(s);
+                SwitchJoyConRail::quiesce(s);
             self->poll->cancelTimeout();
             self->polling = false;
             self->suspended = true;
@@ -2016,10 +2059,11 @@ void SwitchJoyConRail::displayPower(bool on)
             if (self->suspended)
                 return kIOReturnSuccess;  // SC7 already stopped everything; resume() looks at displayOff
             for (Side &s : self->sides) {
-                if (on)
+                if (on) {
                     self->enterDetect(s);
-                else
-                    self->pause(s);
+                } else {
+                    SwitchJoyConRail::pause(s);
+                }
             }
             if (!on) {
                 self->poll->cancelTimeout();
@@ -2049,6 +2093,7 @@ void SwitchJoyConRail::bluetoothAddress(const uint8_t address[6])
             }
             return kIOReturnSuccess;
         },
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): runAction's arguments are void *; the action reads it
         this, const_cast<uint8_t *>(address));
 }
 
@@ -2079,13 +2124,14 @@ bool SwitchJoyConRail::start(IOService *provider)
     preparePads("start");
     for (unsigned i = 0; i < 2; ++i)
         setUp(sides[i], &kSides[i]);
-    for (Side &s : sides)
+    for (Side &s : sides) {
         loop->runAction(
             [](OSObject *owner, void *side, void *, void *, void *) -> IOReturn {
                 static_cast<SwitchJoyConRail *>(owner)->enterDetect(*static_cast<Side *>(side));
                 return kIOReturnSuccess;
             },
             this, &s);
+    }
     IOLog("SwitchJoyCon: rail driver started%s\n", pairing ? " (Bluetooth pairing on attach)" : "");
     return true;
 }
