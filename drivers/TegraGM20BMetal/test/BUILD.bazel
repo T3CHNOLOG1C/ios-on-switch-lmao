@@ -2,6 +2,8 @@
 #   raw_target_test   raw/runtime/raw_target.h: the raw path's color target words, pitch as before and a mip chain's level as
 #                     NVK's block-linear target, addressing every texel where raw/fx's layout (the texture header's and
 #                     the 2D engine's view of the chain) has it
+#   raw_follow_test   raw/runtime/raw_follow.h: the raw path's threads take a fixed-priority committer's policy, never a
+#                     lower one, and keep their own for a timeshare committer
 #
 #   bazel test //drivers/TegraGM20BMetal/test:all
 load("//bazel/lint:defs.bzl", "lint_files")
@@ -17,6 +19,15 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/fx/fx_mip.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_push.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_target.h",
+    ],
+    cxx_std = "c++17",
+)
+
+host_test(
+    name = "raw_follow_test",
+    srcs = [
+        "raw_follow_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_follow.h",
     ],
     cxx_std = "c++17",
 )

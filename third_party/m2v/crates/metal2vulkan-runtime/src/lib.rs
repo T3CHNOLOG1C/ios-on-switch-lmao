@@ -93,6 +93,7 @@ mod executed_commands;
 mod fence;
 mod fetch_reach;
 mod fill_value;
+mod follow;
 mod fragment_imageblock;
 mod framebuffer_fetch;
 mod fresh_unwritten;

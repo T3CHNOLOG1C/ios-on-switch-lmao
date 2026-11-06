@@ -744,6 +744,7 @@ where
     let on_start = ON_START.with(|on_start| on_start.borrow().clone());
     spawn(builder, move || {
         run_at_user_interactive();
+        crate::follow::join();
         #[cfg(test)]
         if let Some(on_start) = on_start {
             on_start();

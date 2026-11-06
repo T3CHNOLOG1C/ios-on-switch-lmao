@@ -1517,6 +1517,7 @@ impl CommandBuffer {
     /// [`commit`](Self::commit) for `call`, or, with `failure`,
     /// [`commit_failed`](Self::commit_failed).
     fn commit_as(&self, call: &'static str, failure: Option<CommitFailure>) -> Result<(), Error> {
+        crate::follow::committing();
         // A switch its scheduler settled since finishes first, on this thread; then the waiting
         // fetched render targets take their storage form at this commit where it allows
         // (`storage_form.rs`): two atomic reads where none is under way and none waits.

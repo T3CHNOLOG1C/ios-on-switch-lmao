@@ -4,6 +4,7 @@
 // copies NVK's nouveau_copy_rect and nvk_cmd_copy_memory_ce (all MIT), restricted to what Core Animation uses. r7-raw wrote the
 // first version (render encoder, pack replay) and checked it against NVK's stream; r8-rawca added the lifetimes, the pool, the
 // imports, the copies and the abortable command buffer.
+#include "raw_follow.h"
 #include "raw_gpu.h"
 #include "raw_target.h"
 
@@ -557,6 +558,7 @@ void Device::warm()
         grower_ = std::thread([this] {
             pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
             pthread_setname_np("com.brunostjohn.switch.raw.pool");
+            followers().join();
             growLoop();
         });
 }

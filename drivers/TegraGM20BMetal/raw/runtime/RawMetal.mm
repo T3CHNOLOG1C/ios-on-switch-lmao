@@ -35,6 +35,7 @@
 #include <thread>
 #include <vector>
 #include "SwitchFrameTimeline.h"
+#include "raw_follow.h"
 #include "raw_gpu.h"
 
 // The m2v frontend's in-place texture over a buffer (NativeBridgeMetalFrontend.mm): weak, so the host benchmark links without it.
@@ -5591,6 +5592,7 @@ static bool submitSegments(RMCommandBuffer *cb)
 // the shared events it waits for covered), else handed to the submit thread in order.
 static void commitBuffer(RMCommandBuffer *cb)
 {
+    raw::followers().committing();
     planSegments(cb);
     RawState &r = *gRM;
     if (waitsForEvent(cb)) {
@@ -6092,15 +6094,17 @@ id<MTLDevice> raw_metal_device_open(const char *packPath, uint64_t stack, id<MTL
         dispatch_resume(stall);
     }
 #endif
-    // both threads at the render thread's class: what they hold up is the frame
+    // what both threads hold up is the frame: they follow its committing threads (raw_follow.h)
     std::thread([] {
         pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
         pthread_setname_np("com.brunostjohn.switch.raw.submit");
+        raw::followers().join();
         submitLoop();
     }).detach();
     std::thread([] {
         pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
         pthread_setname_np("com.brunostjohn.switch.raw.completion");
+        raw::followers().join();
         completionLoop();
     }).detach();
     return (id<MTLDevice>)r->device;
