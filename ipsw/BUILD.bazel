@@ -19,6 +19,15 @@ ipsw_kernelcache(
     out = "kernelcache.decompressed",
 )
 
+# iOS 17's kernelcache under every kind: the iPadOS 27 prelink names Apple kernel addresses by the GOT names kexts
+# imported in it.
+ipsw_kernelcache(
+    name = "kernelcache_21H461",
+    src = ":21H461_kernelcache",
+    out = "21H461/kernelcache.decompressed",
+    kind = "21H461",
+)
+
 # The static trust cache bundle for the root and the OS cryptex (vendor/unixnu's original-static-system.bundle).
 ipsw_static_trust(
     name = "static_system_trust",
