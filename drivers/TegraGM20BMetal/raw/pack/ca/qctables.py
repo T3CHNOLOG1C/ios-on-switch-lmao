@@ -8,9 +8,12 @@ decoders and NameDecoder tables decode the name's segments; static tables (textu
 reads them. Addresses are per build (most of the tables have no symbol): a new IPSW needs its own entry here.
 
 usage: qctables.py <QuartzCore Mach-O, extracted from the dyld shared cache with its slide applied> <build> <out.json>
+                   <QuartzCore.framework/default.metallib>
        (ipsw dyld extract <dyld_shared_cache_arm64> QuartzCore --slide -o <dir>)
+The metallib's SHA-256 goes into the tables: the pack generator uses them only with that library (rawpack.py).
 """
 
+import hashlib
 import json
 import struct
 import sys
@@ -101,10 +104,12 @@ def name_table(img: Image, va: int, n: int) -> list[dict]:
 
 
 def main() -> None:
-    path, build, out = sys.argv[1:4]
+    path, build, out, metallib = sys.argv[1:5]
     a = ADDRESSES[build]
     img = Image(path)
-    t = {'build': build, 'decoders': {k: img.nsdict(v) for k, v in a['decoders'].items()}}
+    with open(metallib, 'rb') as f:
+        digest = hashlib.sha256(f.read()).hexdigest()
+    t = {'build': build, 'metallib_sha256': digest, 'decoders': {k: img.nsdict(v) for k, v in a['decoders'].items()}}
     t['name_tables'] = {k: name_table(img, va, n) for k, (va, n) in a['name_tables'].items()}
     va, n, w = a['texture_function_info']
     t['texture_function_info'] = [img.read(va + w * i, w).hex() for i in range(n)]

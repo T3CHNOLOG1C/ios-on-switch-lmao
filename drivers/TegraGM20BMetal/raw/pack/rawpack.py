@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
-"""rawpack: the raw GM20B path's pipeline pack (runtime/raw_pack.h), made on this Mac from the precompile corpus.
+"""rawpack: the raw GM20B path's pipeline pack (runtime/raw_pack.h), made on this Mac.
 
-The corpus goes through this build's own frontend + m2v (the host bridge) and NVK (the host twin with the device's
-pipeline cache identity), over a mock GM20B whose every submission is executed by nvdec (pack/nvdec.cpp, Mesa's Fermi
-MME simulator in pack/mesa). Core Animation's render pipeline states only (PROBE_LABEL): the render server's.
+Core Animation's render pipeline states (PROBE_LABEL: the render server's) go through this build's own frontend + m2v
+(the host bridge) and NVK (the host twin with the device's pipeline cache identity), over a mock GM20B whose every
+submission is executed by nvdec (pack/nvdec.cpp, Mesa's Fermi MME simulator in pack/mesa). The states are made from
+their names (ca/caset.py, ca/caspec.py: QuartzCore's own decoding of a name into a state, with this IPSW's tables,
+ca/qc-<build>.json): the corpus's names, QuartzCore's offline compilation manifest and their closure over the blend CA
+puts in the pipeline (CA_TIERS). With no tables of this QuartzCore (another IPSW's), the corpus's states as they are.
 
   1. probe (pack/probe.mm) makes every state and draws it once with tagged inputs, three times: payloads of 256, 16 and
      4096 bytes (a uniform buffer's range is NVK's 256-byte rounding of the payload; the 4096-byte run gives the
@@ -25,6 +28,8 @@ refuses a pack of another build.
 """
 
 import contextlib
+import hashlib
+import json
 import os
 import shutil
 import struct
@@ -67,6 +72,36 @@ def option(name: str, required: bool = True) -> str | None:
 
 
 BUILT = ('probe', 'libmock_iokit.dylib', 'ycbcr.metallib')
+# The Core Animation states the pack holds (ca/caset.py's tiers). The fetch tier (the fragment blends a compositing
+# filter asks for, over every fixed-function fragment state) is left out: its ~11300 fragment programs would make the
+# shader heap, uploaded whole at open, some 50 MB.
+CA_TIERS = ('corpus', 'manifest', 'blend')
+
+
+def ca_corpus(qc: Path, corpus: Path, work: Path) -> Path:
+    """Give the corpus with its Core Animation lines made from their names, when ca/ has this QuartzCore's tables."""
+    digest = hashlib.sha256(qc.read_bytes()).hexdigest()
+    for path in sorted((HERE / 'ca').glob('qc-*.json')):
+        with open(path) as f:
+            if json.load(f).get('metallib_sha256') == digest:
+                break
+    else:
+        print(f"rawpack: no QuartzCore tables for default.metallib {digest[:16]}: the corpus's states as they are")
+        return corpus
+    sys.path.insert(0, str(HERE / 'ca'))
+    import caset  # noqa: PLC0415 (ca/ is only on the path here)
+    import caspec  # noqa: PLC0415
+
+    tables = caspec.Tables(str(path))
+    out = work / 'corpus.ca.log'
+    with open(corpus) as src, open(out, 'w') as dst:
+        dst.writelines(line for line in src if not caspec.corpus_fields(line)[0])
+        for tier, names in caset.labels(tables, caset.corpus_names(str(corpus)), CA_TIERS).items():
+            dst.writelines(
+                f'R ok=1 label=com.apple.coreanimation.{n} {caspec.state_fields(tables, n)} |\n' for n in names
+            )
+            print(f'rawpack: Core Animation states, {tier}: {len(names)}')
+    return out
 
 
 def build(work: Path, bridge: Path) -> None:
@@ -162,6 +197,7 @@ def main() -> None:
     work = out / 'work'
     shutil.rmtree(work, ignore_errors=True)
     work.mkdir(parents=True)
+    corpus = ca_corpus(qc, corpus, work)
     prebuilt = option('--prebuilt', False)
     if prebuilt:
         for name in BUILT:
