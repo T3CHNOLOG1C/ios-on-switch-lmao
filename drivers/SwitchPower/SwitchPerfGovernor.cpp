@@ -395,6 +395,14 @@ unsigned switchperf::take(char *line, size_t len)
     }
     if (!logDue || !line || !len)
         return index;
+#if !(DEVELOPMENT || DEBUG)
+    // Release: the tick is still due (the caller's ceiling check), the line is not made.
+    if (len > 1) {
+        line[0] = '-';
+        line[1] = 0;
+    }
+    return index;
+#endif
 
     uint64_t spanUs = 0;
     absolutetime_to_nanoseconds(span, &spanUs);

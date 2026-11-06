@@ -1318,19 +1318,25 @@ void SwitchThermal::governorFired(OSObject *owner, IOInterruptEventSource *, int
     if (line[0]) {
         // The 10 s line also carries the clock as measured, and checks it against the ceiling.
         const bool moved = onDfll && self->dfllOverCeiling(&measured);
+#if DEVELOPMENT || DEBUG
         const size_t n = strlen(line);
         if (onDfll && n + 32 < sizeof(line))
             snprintf(line + n, sizeof(line) - n, "; probe %u MHz", measured / 1000);
         os_log(OS_LOG_DEFAULT, "%s", line);  // log only, never the boot console
+#endif
         // Then rows held down whose wait is over go back on trial as the ceiling (not a row this check just held: its
         // wait is a line at least): the governor gets there from below at its next window, and that move to the
         // ceiling is measured below (restored, or held down again).
         if (onDfll) {
             const uint32_t back = switchperf::retryHeld();
+#if DEVELOPMENT || DEBUG
             for (unsigned i = 0; back >> i; ++i)
                 if (back >> i & 1u)
                     os_log(OS_LOG_DEFAULT, "SwitchPerf: %u MHz back on trial as the ceiling",
                            switchperf::khzAt(i) / 1000);
+#else
+            (void)back;
+#endif
         }
         if (moved)
             return;  // the check set the DFLL itself
