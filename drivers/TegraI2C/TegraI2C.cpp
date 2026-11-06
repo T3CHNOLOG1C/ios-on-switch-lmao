@@ -928,8 +928,7 @@ extern "C" int tegra_i2c_raw_write(unsigned bus, uint8_t addr, const uint8_t *da
         w32(gPinmux, info.scl, kPinmuxI2C);
         w32(gPinmux, info.sda, kPinmuxI2C);
         w32(regs, CNFG,
-            CNFG_NEW_MASTER_FSM | CNFG_PACKET_MODE | CNFG_DEBOUNCE_4T |
-                (multiMasterBus(bus) ? CNFG_MULTI_MASTER : 0));
+            CNFG_NEW_MASTER_FSM | CNFG_PACKET_MODE | CNFG_DEBOUNCE_4T | (multiMasterBus(bus) ? CNFG_MULTI_MASTER : 0));
         w32(regs, CLK_DIVISOR, (5u << 16) | 1u);
         w32(regs, CONFIG_LOAD, MSTR_CONFIG_LOAD);
         if (!settled(CONFIG_LOAD, MSTR_CONFIG_LOAD))

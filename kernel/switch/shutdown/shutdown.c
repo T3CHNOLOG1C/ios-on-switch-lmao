@@ -49,6 +49,7 @@ static unsigned switch_shutdown_mark(const char *what)
         {"PowerOff", SWITCH_MARK_HALT_DRIVERS},
         {"Restart", SWITCH_MARK_HALT_DRIVERS},
     };
+
     if (!strcmp(what, "proc_shutdown"))
         return procs_done++ ? SWITCH_MARK_HALT_PROCS_ALL : SWITCH_MARK_HALT_PROCS;
     if (!strcmp(what, "vfs_unmountall"))
@@ -92,10 +93,8 @@ void switch_shutdown_step(const char *what, const void *pc, uint64_t elapsed)
 }
 #else
 void switch_shutdown_begin(int howto __unused)
-{
-}
+{}
 
 void switch_shutdown_step(const char *what __unused, const void *pc __unused, uint64_t elapsed __unused)
-{
-}
+{}
 #endif

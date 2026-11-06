@@ -69,16 +69,16 @@ int rawWrite(uint8_t reg, uint8_t value)
 
 // The code and the count, then UDR. A boot's first mark writes every field, compare bits clear: whatever alarm ALARM2
 // held is off from then on.
-int writeMark(Write write, uint32_t code)
+int writeMark(Write put, uint32_t code)
 {
     const uint8_t count = (uint8_t)((gCount + 1u) & 0x7fu);
-    int err = write(RTC_ALARM2 + SEC, (uint8_t)code);
+    int err = put(RTC_ALARM2 + SEC, (uint8_t)code);
     if (!err)
-        err = write(RTC_ALARM2 + MIN, count);
+        err = put(RTC_ALARM2 + MIN, count);
     for (unsigned field = HOUR; !err && gWritten == kNoMark && field < kTimeRegs; ++field)
-        err = write((uint8_t)(RTC_ALARM2 + field), field == YEAR ? kMagic : 0);
+        err = put((uint8_t)(RTC_ALARM2 + field), field == YEAR ? kMagic : 0);
     if (!err)
-        err = write(RTC_UPDATE0, gUpdate0 | kRtcWriteUpdate);
+        err = put(RTC_UPDATE0, gUpdate0 | kRtcWriteUpdate);
     rtcUpdated();
     if (!err) {
         gCount = count;
@@ -145,7 +145,8 @@ extern "C" void switch_pmic_mark_start(void)
     const int last = lastMark(&count);
     switch_power_trail_durable(last, count);
     gLock = IOLockAlloc();
-    gCall = gLock ? thread_call_allocate_with_options(writerCall, nullptr, THREAD_CALL_PRIORITY_KERNEL_HIGH, 0) : nullptr;
+    gCall =
+        gLock ? thread_call_allocate_with_options(writerCall, nullptr, THREAD_CALL_PRIORITY_KERNEL_HIGH, 0) : nullptr;
     if (!gCall) {
         IOLog("SwitchPowerTrail: no durable marks this boot (no lock or thread call)\n");
         return;

@@ -24,31 +24,31 @@ extern "C" {
 // Durable mark codes, 0x00..0x7f: the high nibble is the phase, a phase's 0x?f its normal end.
 enum {
     SWITCH_MARK_NONE = 0x00,
-    SWITCH_MARK_BOOT_PMIC = 0x11,          // the first mark a boot can write: I2C5 and the PMIC answer
-    SWITCH_MARK_BOOT_ROOT = 0x12,          // the root file system mounted
-    SWITCH_MARK_BOOT_LAUNCHD = 0x13,       // launchd about to start
-    SWITCH_MARK_BOOT_DONE = 0x1f,          // IOPMrootDomain's System Boot Complete
-    SWITCH_MARK_SLEEP = 0x20,              // system sleep, thread context steps (SwitchSuspend)
-    SWITCH_MARK_SC7 = 0x30,                // SC7 entry, interrupts off
-    SWITCH_MARK_RESUME = 0x40,             // SC7 exit, interrupts off
-    SWITCH_MARK_WAKE = 0x50,               // wake, thread context steps; 0x5f wake complete
-    SWITCH_MARK_HALT_BEGAN = 0x60,         // reboot(2): shut down or restart
-    SWITCH_MARK_HALT_NOTIFIED = 0x61,      // IOPMRootDomainWillShutdown: paging off, NVRAM written
-    SWITCH_MARK_HALT_PROCS = 0x62,         // proc_shutdown, every process but driver extensions
-    SWITCH_MARK_HALT_AUDIT = 0x63,         // audit_shutdown
-    SWITCH_MARK_HALT_TRACE = 0x64,         // shutdown.trace written
-    SWITCH_MARK_HALT_UNMOUNTED = 0x65,     // vfs_unmountall, the first
-    SWITCH_MARK_HALT_PROCS_ALL = 0x66,     // proc_shutdown, the rest
-    SWITCH_MARK_HALT_UNMOUNTED_ALL = 0x67, // vfs_unmountall, the second
-    SWITCH_MARK_HALT_BUFFERS = 0x68,       // the buffer cache clean
-    SWITCH_MARK_HALT_INTERFACES = 0x69,    // if_down_all
-    SWITCH_MARK_HALT_DRIVER_SLOW = 0x6a,   // a driver's systemWillShutdown still running after 3 s
-    SWITCH_MARK_HALT_QUIESCED = 0x6b,      // the power tree quiesced
-    SWITCH_MARK_HALT_DRIVERS = 0x6c,       // every driver told (IOPMrootDomain "PowerOff" / "Restart")
-    SWITCH_MARK_HALT_PLATFORM = 0x6d,      // PE_halt_restart
-    SWITCH_MARK_HALT_PANEL = 0x6e,         // the CPU off the DFLL, the panel dark
-    SWITCH_MARK_HALT_PMIC = 0x6f,          // the MAX77620 soft reset next: what a power-off that took leaves
-    SWITCH_MARK_HALT_OTHER = 0x7f,         // any other IOKit halt step
+    SWITCH_MARK_BOOT_PMIC = 0x11,           // the first mark a boot can write: I2C5 and the PMIC answer
+    SWITCH_MARK_BOOT_ROOT = 0x12,           // the root file system mounted
+    SWITCH_MARK_BOOT_LAUNCHD = 0x13,        // launchd about to start
+    SWITCH_MARK_BOOT_DONE = 0x1f,           // IOPMrootDomain's System Boot Complete
+    SWITCH_MARK_SLEEP = 0x20,               // system sleep, thread context steps (SwitchSuspend)
+    SWITCH_MARK_SC7 = 0x30,                 // SC7 entry, interrupts off
+    SWITCH_MARK_RESUME = 0x40,              // SC7 exit, interrupts off
+    SWITCH_MARK_WAKE = 0x50,                // wake, thread context steps; 0x5f wake complete
+    SWITCH_MARK_HALT_BEGAN = 0x60,          // reboot(2): shut down or restart
+    SWITCH_MARK_HALT_NOTIFIED = 0x61,       // IOPMRootDomainWillShutdown: paging off, NVRAM written
+    SWITCH_MARK_HALT_PROCS = 0x62,          // proc_shutdown, every process but driver extensions
+    SWITCH_MARK_HALT_AUDIT = 0x63,          // audit_shutdown
+    SWITCH_MARK_HALT_TRACE = 0x64,          // shutdown.trace written
+    SWITCH_MARK_HALT_UNMOUNTED = 0x65,      // vfs_unmountall, the first
+    SWITCH_MARK_HALT_PROCS_ALL = 0x66,      // proc_shutdown, the rest
+    SWITCH_MARK_HALT_UNMOUNTED_ALL = 0x67,  // vfs_unmountall, the second
+    SWITCH_MARK_HALT_BUFFERS = 0x68,        // the buffer cache clean
+    SWITCH_MARK_HALT_INTERFACES = 0x69,     // if_down_all
+    SWITCH_MARK_HALT_DRIVER_SLOW = 0x6a,    // a driver's systemWillShutdown still running after 3 s
+    SWITCH_MARK_HALT_QUIESCED = 0x6b,       // the power tree quiesced
+    SWITCH_MARK_HALT_DRIVERS = 0x6c,        // every driver told (IOPMrootDomain "PowerOff" / "Restart")
+    SWITCH_MARK_HALT_PLATFORM = 0x6d,       // PE_halt_restart
+    SWITCH_MARK_HALT_PANEL = 0x6e,          // the CPU off the DFLL, the panel dark
+    SWITCH_MARK_HALT_PMIC = 0x6f,           // the MAX77620 soft reset next: what a power-off that took leaves
+    SWITCH_MARK_HALT_OTHER = 0x7f,          // any other IOKit halt step
 };
 
 #if DEVELOPMENT || DEBUG

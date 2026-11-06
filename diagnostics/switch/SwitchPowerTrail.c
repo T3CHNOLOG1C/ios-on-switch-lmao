@@ -162,8 +162,7 @@ __attribute__((weak)) void switch_pmic_mark(uint8_t code)
 }
 
 __attribute__((weak)) void switch_pmic_mark_flush(void)
-{
-}
+{}
 
 __attribute__((weak)) void switch_pmic_mark_now(uint8_t code)
 {
@@ -173,11 +172,21 @@ __attribute__((weak)) void switch_pmic_mark_now(uint8_t code)
 static const char *mark_name(unsigned code)
 {
     static const char *const halt[] = {
-        "reboot(2) began",       "IOPMRootDomainWillShutdown done", "proc_shutdown done",
-        "audit_shutdown done",   "shutdown.trace written",          "first vfs_unmountall done",
-        "second proc_shutdown done", "second vfs_unmountall done",  "buffer cache clean",
-        "if_down_all done",      "a driver's systemWillShutdown is slow", "power tree quiesced",
-        "every driver told",     "PE_halt_restart",                 "panel dark",
+        "reboot(2) began",
+        "IOPMRootDomainWillShutdown done",
+        "proc_shutdown done",
+        "audit_shutdown done",
+        "shutdown.trace written",
+        "first vfs_unmountall done",
+        "second proc_shutdown done",
+        "second vfs_unmountall done",
+        "buffer cache clean",
+        "if_down_all done",
+        "a driver's systemWillShutdown is slow",
+        "power tree quiesced",
+        "every driver told",
+        "PE_halt_restart",
+        "panel dark",
         "MAX77620 soft reset next",
     };
     switch (code) {
