@@ -284,9 +284,11 @@ def with_a64x_cache_pretranslated(data: bytes, cache: bytes) -> bytes:
 
 
 def with_switch_pretranslated_trust(data: bytes, module: bytes) -> bytes:
-    """Return the ADT with iOS 27's /chosen/switch-pretranslated-trust: the UUID of the trust module of the System
-    volume's translated executables (the os role's), which the kernel's lookup redirect requires loaded and checks each
-    such executable's CDHash against (bsd/vfs/vfs_switch_pretranslated.c).
+    """Return the ADT with iOS 27's /chosen/switch-pretranslated-trust.
+
+    That is the UUID of the trust module of the System volume's translated executables (the os role's), which the
+    kernel's lookup redirect requires loaded and checks each such executable's CDHash against
+    (bsd/vfs/vfs_switch_pretranslated.c).
     """
     if len(module) < 24 or struct.unpack_from('<I', module)[0] != 2:
         raise SystemExit(f'switch-pretranslated-trust: {len(module)} bytes, not a version 2 trust module')

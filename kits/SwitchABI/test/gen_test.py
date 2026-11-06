@@ -1,6 +1,5 @@
 """The committed ABI tables agree with their interfaces, and gen.py lays out headers and bindings from them."""
 
-import json
 import struct
 import tempfile
 import unittest
@@ -16,8 +15,8 @@ def tables():
         yield path, gen.load(ROOT / 'interface' / path.name), gen.load(path)
 
 
-def macho_object(undefined):
-    """A minimal MH_OBJECT whose symbol table holds only these undefined external symbols."""
+def macho_object(undefined: list[str]) -> bytes:
+    """Build a minimal MH_OBJECT whose symbol table holds only these undefined external symbols."""
     strings = b'\0' + b''.join(s.encode() + b'\0' for s in undefined)
     symoff = 32 + 24
     stroff = symoff + 16 * len(undefined)
@@ -81,9 +80,9 @@ class TablesTest(unittest.TestCase):
 
     def test_one_slide_per_kind(self):
         slides = {}
-        for path, _, table in tables():
+        for _path, _, table in tables():
             slides.setdefault(table['kind'], set()).add(table['slide'])
-        self.assertEqual({k: len(v) for k, v in slides.items()}, {k: 1 for k in slides})
+        self.assertEqual({k: len(v) for k, v in slides.items()}, dict.fromkeys(slides, 1))
 
     def test_every_virtual_the_class_adds_has_a_slot(self):
         for path, interface, table in tables():
@@ -199,7 +198,7 @@ class MetaclassOnlyTest(unittest.TestCase):
 
 
 class BindingsTest(unittest.TestCase):
-    def bind(self, undefined):
+    def bind(self, undefined: list[str]) -> str:
         with tempfile.TemporaryDirectory() as tmp:
             obj = Path(tmp) / 'a.o'
             obj.write_bytes(macho_object(undefined))

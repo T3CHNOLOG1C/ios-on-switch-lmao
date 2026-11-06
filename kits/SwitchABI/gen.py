@@ -21,6 +21,8 @@ import struct
 import sys
 from pathlib import Path
 
+JsonObject = dict[str, object]
+
 M64 = (1 << 64) - 1
 ACCESS = """#ifndef SWITCH_ABI_ACCESS
 #define SWITCH_ABI_ACCESS
@@ -38,30 +40,30 @@ template <typename T> static inline void switch_abi_store(void *object, unsigned
 """
 
 
-def load(path):
+def load(path: str | Path) -> JsonObject:
     return json.loads(Path(path).read_text())
 
 
-def number(value):
+def number(value: str | int) -> int:
     return int(value, 0) if isinstance(value, str) else value
 
 
-def mangled_class(name):
-    return '{}{}'.format(len(name), name)
+def mangled_class(name: str) -> str:
+    return f'{len(name)}{name}'
 
 
-def doc(entry, indent):
-    """An entry's "doc" as comment lines, wrapped at 120 columns."""
+def doc(entry: JsonObject, indent: str) -> list[str]:
+    """Return an entry's "doc" as comment lines, wrapped at 120 columns."""
     words, lines, line = entry.get('doc', '').split(), [], indent + '//'
     for word in words:
         if len(line) + 1 + len(word) > 120:
             lines.append(line)
             line = indent + '//'
         line += ' ' + word
-    return lines + [line] if words else lines
+    return [*lines, line] if words else lines
 
 
-def declaration(decl, indent):
+def declaration(decl: str, indent: str) -> list[str]:
     """decl; wrapped after its commas at 120 columns."""
     text = indent + decl + ';'
     if len(text) <= 120 or '(' not in decl:
@@ -75,17 +77,17 @@ def declaration(decl, indent):
             lines.append(line.rstrip())
             line = pad
         line += piece
-    return lines + [line]
+    return [*lines, line]
 
 
-def slot_declarations(interface, table):
-    """The class body's virtuals: the interface's overrides of inherited slots, then every slot the class adds."""
+def slot_declarations(interface: JsonObject, table: JsonObject) -> list[str]:
+    """List the class body's virtuals: the interface's overrides of inherited slots, then every slot the class adds."""
     methods = interface['methods']
     first, count = table['first_slot'], table['slots']
     named = {int(slot): key for slot, key in table['layout'].items()}
     unknown = sorted(set(named.values()) - set(methods))
     if unknown:
-        raise SystemExit('{}: slots name methods the interface lacks: {}'.format(table['class'], unknown))
+        raise SystemExit(f'{table["class"]}: slots name methods the interface lacks: {unknown}')
     lines = []
     for slot, key in sorted(named.items()):
         if slot < first:
@@ -95,13 +97,13 @@ def slot_declarations(interface, table):
         if slot in named:
             lines += doc(methods[named[slot]], '    ') + declaration(methods[named[slot]]['decl'], '    ')
         elif slot in guarded:
-            lines.append('    virtual void opaque{}() = 0;'.format(slot))
+            lines.append(f'    virtual void opaque{slot}() = 0;')
         else:
-            lines.append('    SWITCH_ABI_OPAQUE({});'.format(slot))
+            lines.append(f'    SWITCH_ABI_OPAQUE({slot});')
     return lines
 
 
-def guarded_slots(interface, table):
+def guarded_slots(interface: JsonObject, table: JsonObject) -> list[int]:
     """Return a guard class's added slots the table neither names nor inherits: pure, and trapped by the subclass."""
     if not interface.get('guard'):
         return []
@@ -116,38 +118,36 @@ def guarded_slots(interface, table):
     return [s for s in range(first, count) if s not in named and s not in inherit]
 
 
-def guards(interface, table):
+def guards(interface: JsonObject, table: JsonObject) -> list[str]:
     """Return SWITCH_ABI_GUARDS(trap): the subclass's override of every guarded slot, calling trap(<slot>)."""
     slots = guarded_slots(interface, table)
     if not slots:
         return []
-    body = ['    void opaque{0}() override {{ trap({0}); }}'.format(s) for s in slots]
+    body = [f'    void opaque{s}() override {{ trap({s}); }}' for s in slots]
     return ['#define SWITCH_ABI_GUARDS(trap) \\'] + [line + ' \\' for line in body[:-1]] + body[-1:]
 
 
-def accessors(interface, table, public):
+def accessors(interface: JsonObject, table: JsonObject, *, public: bool) -> list[str]:
     lines = []
     for key, field in interface.get('fields', {}).items():
         if bool(field.get('public')) != public:
             continue
         offset = table['fields'].get(key)
         if offset is None:
-            raise SystemExit('{}: no offset for field {}'.format(table['class'], key))
+            raise SystemExit(f'{table["class"]}: no offset for field {key}')
         kind, access = field['type'], field['access'].split()
         stored = 'uint8_t' if kind == 'bool' else kind
         setter = 'set' + key[0].upper() + key[1:]
         name = kind + ('' if kind.endswith('*') else ' ')
         lines += doc(field, '    ')
         if 'get' in access:
-            value = 'switch_abi_load<{}>(this, {:#x})'.format(stored, number(offset))
+            value = f'switch_abi_load<{stored}>(this, {number(offset):#x})'
             if kind == 'bool':
                 value += ' != 0'
-            lines.append('    {}{}() const {{ return {}; }}'.format(name, key, value))
+            lines.append(f'    {name}{key}() const {{ return {value}; }}')
         if 'set' in access:
             lines.append(
-                '    void {}({} value) {{ switch_abi_store<{}>(this, {:#x}, value); }}'.format(
-                    setter, kind, stored, number(offset)
-                )
+                f'    void {setter}({kind} value) {{ switch_abi_store<{stored}>(this, {number(offset):#x}, value); }}'
             )
     return lines
 
@@ -163,12 +163,12 @@ def constant_declarations(interface: dict, table: dict) -> list[str]:
     return lines
 
 
-def header(interface, table, table_name):
+def header(interface: JsonObject, table: JsonObject, table_name: str) -> str:
     cls, sup = interface['class'], interface['superclass']
     size = number(table['size'])
     structors = 'OSDeclareAbstractStructors' if interface['structors'] == 'abstract' else 'OSDeclareDefaultStructors'
-    out = ['// Generated by kits/SwitchABI/gen.py from {}: do not edit.'.format(table_name)] + doc(interface, '')
-    out += ['#pragma once'] + ['#include <{}>'.format(h) for h in interface['includes']]
+    out = [f'// Generated by kits/SwitchABI/gen.py from {table_name}: do not edit.', *doc(interface, '')]
+    out += ['#pragma once'] + [f'#include <{h}>' for h in interface['includes']]
     if interface.get('declarations'):
         out += [''] + interface['declarations']
     out += ['', ACCESS.rstrip('\n'), '', '#define SWITCH_ABI_KIND "{}"'.format(table['kind']), '']
@@ -176,11 +176,11 @@ def header(interface, table, table_name):
         '#define SWITCH_ABI_OPAQUE(n) '
         'virtual __attribute__((deprecated("inherited original slot: never call"))) void opaque##n()'
     )
-    out += ['', 'class {} : public {} {{'.format(cls, sup), '    {}({})'.format(structors, cls)]
-    out.append('    unsigned char switchAbiStorage_[{:#x} - sizeof({})];'.format(size, sup))
+    out += ['', f'class {cls} : public {sup} {{', f'    {structors}({cls})']
+    out.append(f'    unsigned char switchAbiStorage_[{size:#x} - sizeof({sup})];')
     fields = accessors(interface, table, public=False)
     if fields:
-        out += ['', 'protected:'] + fields
+        out += ['', 'protected:', *fields]
     out += [
         '',
         'public:',
@@ -188,7 +188,7 @@ def header(interface, table, table_name):
         *constant_declarations(interface, table),
         *slot_declarations(interface, table),
     ]
-    out += ['    {};'.format(decl) for decl in interface.get('members', [])]
+    out += [f'    {decl};' for decl in interface.get('members', [])]
     out += ['};', '#undef SWITCH_ABI_OPAQUE']
     out.append('static_assert(sizeof({}) == {:#x}, "{} as {} lays it out");'.format(cls, size, cls, table['kind']))
     trap = guards(interface, table)
@@ -203,40 +203,40 @@ def header(interface, table, table_name):
     return '\n'.join(out) + '\n'
 
 
-def symbol_map(interface, table):
+def symbol_map(interface: JsonObject, table: JsonObject) -> dict[str, tuple[int | None, str]]:
     """Mangled symbol -> (address or None for unported, what it is)."""
     cls = mangled_class(interface['class'])
     addresses = table['addresses']
     out = {}
 
-    def put(symbol, key):
+    def put(symbol: str, key: str) -> None:
         if key in addresses:
             value = addresses[key]
             out[symbol] = (None if value == 'unported' else number(value), key)
 
-    put('__ZN{}10gMetaClassE'.format(cls), 'gMetaClass')
-    put('__ZNK{}12getMetaClassEv'.format(cls), 'getMetaClass')
-    put('__ZTV{}'.format(cls), 'vtable')
+    put(f'__ZN{cls}10gMetaClassE', 'gMetaClass')
+    put(f'__ZNK{cls}12getMetaClassEv', 'getMetaClass')
+    put(f'__ZTV{cls}', 'vtable')
     for structor, suffix in (('C2', 'C2EPK11OSMetaClass'), ('D2', 'D2Ev'), ('D1', 'D1Ev'), ('D0', 'D0Ev')):
-        put('__ZN{}{}'.format(cls, suffix), structor)
+        put(f'__ZN{cls}{suffix}', structor)
     for key, method in interface['methods'].items():
         if 'mangled' in method:
             put(method['mangled'], key)
     for key in addresses:
         opaque = re.fullmatch(r'opaque(\d+)', key)
         if opaque:
-            put('__ZN{}{}Ev'.format(cls, mangled_class(key)), key)
+            put(f'__ZN{cls}{mangled_class(key)}Ev', key)
     for name, function in interface.get('functions', {}).items():
         for symbol in function.get('symbols', [name]):
             put('_' + symbol, name)
     return out
 
 
-def undefined_symbols(path):
+def undefined_symbols(path: str | Path) -> set[str]:
     data = Path(path).read_bytes()
     magic, _, _, _, ncmds = struct.unpack_from('<IiiII', data)
     if magic != 0xFEEDFACF:
-        raise SystemExit('{}: not a 64-bit Mach-O object'.format(path))
+        raise SystemExit(f'{path}: not a 64-bit Mach-O object')
     at, names = 32, set()
     for _ in range(ncmds):
         cmd, size = struct.unpack_from('<II', data, at)
@@ -250,7 +250,7 @@ def undefined_symbols(path):
     return names
 
 
-def bindings(pairs, objects):
+def bindings(pairs: list[tuple[JsonObject, JsonObject, str]], objects: list[str]) -> str:
     imports = set().union(*(undefined_symbols(o) for o in objects))
     lines, traps, sources = [], [], []
     for interface, table, table_name in pairs:
@@ -268,26 +268,26 @@ def bindings(pairs, objects):
             if address is None:
                 traps.append(symbol)
             else:
-                lines.append('.globl {0}\n.set {0}, {1:#x}  // {2}'.format(symbol, (address + slide) & M64, key))
+                lines.append(f'.globl {symbol}\n.set {symbol}, {(address + slide) & M64:#x}  // {key}')
         imports -= set(ours)
-    out = ['// Generated by kits/SwitchABI/gen.py from {}: do not edit.'.format(', '.join(sources))] + lines
+    out = [f'// Generated by kits/SwitchABI/gen.py from {", ".join(sources)}: do not edit.', *lines]
     for i, symbol in enumerate(traps):
         out += [
             '.text',
             '.p2align 2',
-            '.globl {}'.format(symbol),
-            '{}:'.format(symbol),
-            '    adrp x0, Lswitch_abi_trap{}@PAGE'.format(i),
-            '    add x0, x0, Lswitch_abi_trap{}@PAGEOFF'.format(i),
+            f'.globl {symbol}',
+            f'{symbol}:',
+            f'    adrp x0, Lswitch_abi_trap{i}@PAGE',
+            f'    add x0, x0, Lswitch_abi_trap{i}@PAGEOFF',
             '    b _switch_abi_unported',
             '.section __TEXT,__cstring,cstring_literals',
-            'Lswitch_abi_trap{}:'.format(i),
-            '    .asciz "{}"'.format(symbol),
+            f'Lswitch_abi_trap{i}:',
+            f'    .asciz "{symbol}"',
         ]
     return '\n'.join(out) + '\n'
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest='command', required=True)
     h = sub.add_parser('header')
@@ -306,7 +306,7 @@ def main():
         args.out.write_text(bindings(pairs, args.object))
 
 
-def table_label(path):
+def table_label(path: str) -> str:
     parts = Path(path).parts
     return '/'.join(parts[parts.index('kinds') :]) if 'kinds' in parts else path
 

@@ -1,7 +1,9 @@
-"""linkedit.py on two tiny kernels: renamed symbols and a new UUID pass, a changed code byte or a lost symbol does not."""
+"""linkedit.py on tiny kernels: renamed symbols and a new UUID pass, a changed code byte or a lost symbol does not."""
 
+import dataclasses
 import struct
 import unittest
+from collections.abc import Collection
 
 from tools.repro import linkedit
 
@@ -9,32 +11,49 @@ UUID_OLD = bytes(range(16))
 UUID_NEW = bytes(range(16, 32))
 
 
-def kernel(names, uuid=UUID_OLD, code=b'\x1f\x20\x03\xd5' * 4, values=(0x1000, 0x1004), info=None, absolute=()):
+def segment(name: bytes, off: int, size: int) -> bytes:
+    return struct.pack('<II16s4Q4I', 0x19, 72, name, 0, size, off, size, 7, 7, 0, 0)
+
+
+@dataclasses.dataclass
+class Kernel:
     """A Mach-O with __TEXT (header and code), __DATA (info, e.g. a UUID string) and __LINKEDIT (symbols, strings)."""
-    text_size, data_off = 0x200, 0x200
-    data = (info or b'').ljust(0x40, b'\0')
-    strings = b'\0' + b''.join(n.encode() + b'\0' for n in names)
-    symoff = data_off + len(data)
-    stroff = symoff + 16 * len(names)
-    linkedit = b''
-    at = 1
-    for name, value in zip(names, values, strict=True):
-        kind, sect = (0x03, 0) if name in absolute else (0x0F, 1)
-        linkedit += struct.pack('<IBBHQ', at, kind, sect, 0, value)
-        at += len(name) + 1
-    linkedit += strings
-    segment = lambda name, off, size: struct.pack('<II16s4Q4I', 0x19, 72, name, 0, size, off, size, 7, 7, 0, 0)
-    commands = (
-        segment(b'__TEXT', 0, text_size)
-        + segment(b'__DATA', data_off, len(data))
-        + segment(b'__LINKEDIT', symoff, len(linkedit))
-        + struct.pack('<6I', 0x2, 24, symoff, len(names), stroff, len(strings))
-        + struct.pack('<II', 0x1B, 24)
-        + uuid
-    )
-    header = struct.pack('<IiiIIIII', 0xFEEDFACF, 0x0100000C, 0, 2, 5, len(commands), 0, 0)
-    text = (header + commands).ljust(0x180, b'\0') + code
-    return text.ljust(text_size, b'\0') + data + linkedit
+
+    names: list[str]
+    uuid: bytes = UUID_OLD
+    code: bytes = b'\x1f\x20\x03\xd5' * 4
+    values: tuple[int, ...] = (0x1000, 0x1004)
+    info: bytes = b''
+    absolute: Collection[str] = ()
+
+    def __bytes__(self) -> bytes:
+        text_size, data_off = 0x200, 0x200
+        data = self.info.ljust(0x40, b'\0')
+        strings = b'\0' + b''.join(n.encode() + b'\0' for n in self.names)
+        symoff = data_off + len(data)
+        stroff = symoff + 16 * len(self.names)
+        linkedit = b''
+        at = 1
+        for name, value in zip(self.names, self.values, strict=True):
+            kind, sect = (0x03, 0) if name in self.absolute else (0x0F, 1)
+            linkedit += struct.pack('<IBBHQ', at, kind, sect, 0, value)
+            at += len(name) + 1
+        linkedit += strings
+        commands = (
+            segment(b'__TEXT', 0, text_size)
+            + segment(b'__DATA', data_off, len(data))
+            + segment(b'__LINKEDIT', symoff, len(linkedit))
+            + struct.pack('<6I', 0x2, 24, symoff, len(self.names), stroff, len(strings))
+            + struct.pack('<II', 0x1B, 24)
+            + self.uuid
+        )
+        header = struct.pack('<IiiIIIII', 0xFEEDFACF, 0x0100000C, 0, 2, 5, len(commands), 0, 0)
+        text = (header + commands).ljust(0x180, b'\0') + self.code
+        return text.ljust(text_size, b'\0') + data + linkedit
+
+
+def kernel(names: list[str], **fields: object) -> bytes:
+    return bytes(Kernel(names, **fields))
 
 
 class LinkeditTest(unittest.TestCase):

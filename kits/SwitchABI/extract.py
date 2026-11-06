@@ -1,4 +1,4 @@
-"""kinds/<kind>/<Class>.json from a fileset (arm64e) kernelcache: what can be read is read, the rest is the table's hints.
+"""kinds/<kind>/<Class>.json from a fileset (arm64e) kernelcache: what can be read, the rest from the table's hints.
 
     extract.py --kernelcache KC --ipsw IPSW [--kind K] [--class C]... [--check]
     bazel run [--config=ios27] //kits/SwitchABI:extract     (rewrites the selected kind's tables)
@@ -32,16 +32,20 @@ from collections.abc import Callable
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-import kernelcache  # noqa: E402
+import kernelcache
+
+sys.path.insert(0, str(Path(__file__).parents[2] / 'tools/prelink'))
+from native_prelink import backed_offset, macho
 
 HERE = Path(__file__).parent
+JsonObject = dict[str, object]
 
 
 # Slots OSDeclare*Structors fills for every class: the D1 and D0 destructors and getMetaClass.
 STRUCTOR_SLOTS = {0, 1, 7}
 
 
-def pure_virtual(fs):
+def pure_virtual(fs: kernelcache.Fileset) -> int:
     """___cxa_pure_virtual: the kernel function most slots a class adds (beyond its superclass's) point at."""
     by_meta = {info['meta']: name for name, info in fs.inheritance.items()}
     targets = collections.Counter()
@@ -53,14 +57,16 @@ def pure_virtual(fs):
     return targets.most_common(1)[0][0]
 
 
-def pac_root(method):
+def pac_root(method: JsonObject) -> str:
     return method.get('pac') or method['mangled'][1:]
 
 
-def layout(fs, interface, table, pure):
+def layout(
+    fs: kernelcache.Fileset, interface: JsonObject, table: JsonObject, pure: int
+) -> tuple[int, list[kernelcache.Slot], dict[int, str], dict[str, str], list[str]]:
     cls = interface['class']
     first = len(fs.classes[interface['superclass']]['methods'])
-    parent = dict((i, t) for i, t, _ in fs.slots(interface['superclass']))
+    parent = {i: t for i, t, _ in fs.slots(interface['superclass'])}
     slots = fs.slots(cls)
     by_pac = collections.defaultdict(list)
     for i, _, pac in slots:
@@ -72,10 +78,10 @@ def layout(fs, interface, table, pure):
         hit = [i for i in by_pac.get(kernelcache.discriminator(pac_root(method)), []) if i not in hints]
         if len(hit) == 1:
             named[hit[0]] = key
-            found[key] = 'slot {} by PAC of {}'.format(hit[0], pac_root(method))
+            found[key] = f'slot {hit[0]} by PAC of {pac_root(method)}'
     for slot, key in hints.items():
         named[slot] = key
-        found[key] = 'slot {} by hint'.format(slot)
+        found[key] = f'slot {slot} by hint'
     errors = []
     for i, target, _ in slots:
         own = parent.get(i) != target
@@ -90,33 +96,38 @@ def layout(fs, interface, table, pure):
             del named[i]
             found.pop(key)
         if i >= first and target == pure and key is None and not guard:
-            errors.append('slot {} is a pure virtual the interface does not declare'.format(i))
+            errors.append(f'slot {i} is a pure virtual the interface does not declare')
         if key is not None and i < len(slots) and (target == pure) != interface['methods'][key]['decl'].endswith('= 0'):
             errors.append('{} (slot {}) is {}pure in the kernelcache'.format(key, i, '' if target == pure else 'not '))
     errors += uninheritable(table, slots, first, named, pure)
     missing = sorted(set(interface['methods']) - set(named.values()))
     errors += [
-        '{}: no slot (no PAC match and no hint)'.format(k)
+        f'{k}: no slot (no PAC match and no hint)'
         for k in missing
         if interface['methods'][k]['decl'].endswith('= 0') or 'override' not in interface['methods'][k]['decl']
     ]
     return first, slots, named, found, errors
 
 
-def uninheritable(table, slots, first, named, pure):
+def uninheritable(
+    table: JsonObject, slots: list[kernelcache.Slot], first: int, named: dict[int, str], pure: int
+) -> list[str]:
     """Refuse each hints.inherit slot that is not an added, unnamed slot with code of its own."""
     targets = {i: t for i, t, _ in slots}
     inherit = sorted(int(k) for k in table.get('hints', {}).get('inherit', {}))
     return [
-        'slot {} cannot be inherited: not an added slot with code of its own'.format(i)
+        f'slot {i} cannot be inherited: not an added slot with code of its own'
         for i in inherit
         if i < first or i in named or targets.get(i, pure) == pure
     ]
 
 
-def structors(fs, cls):
-    """C2 (the first of the constructors that store the vtable after calling the superclass's) and the D2 right after
-    them (a bare branch to the superclass's D2)."""
+def structors(fs: kernelcache.Fileset, cls: str) -> dict[str, int]:
+    """Find C2 and the D2 right after it.
+
+    C2 is the first of the constructors that store the vtable after calling the superclass's; D2 is a bare branch to
+    the superclass's D2.
+    """
     info = fs.inheritance[cls]
     lo, hi = fs.text(info['bundle'])
     words = fs.words(lo, hi)
@@ -134,14 +145,14 @@ def structors(fs, cls):
     return out
 
 
-def locate(fs, bundle, hint):
-    """The function referencing a string (hint "string": its first characters), then hint "up" callers up."""
+def locate(fs: kernelcache.Fileset, bundle: str, hint: JsonObject) -> int:
+    """Return the function referencing a string (hint "string": its first characters), then hint "up" callers up."""
     lo, hi = fs.text(bundle)
     words = fs.words(lo, hi)
     strings = set(fs.strings(hint['string']))
     hits = sorted({fs.function(pc)[0] for pc, a in kernelcache.references(words) if a in strings})
     if len(hits) != 1:
-        raise SystemExit('{!r}: {} functions reference it'.format(hint['string'], len(hits)))
+        raise SystemExit(f'{hint["string"]!r}: {len(hits)} functions reference it')
     function = hits[0]
     for _ in range(hint.get('up', 0)):
         callers = sorted(
@@ -152,7 +163,7 @@ def locate(fs, bundle, hint):
             }
         )
         if len(callers) != 1:
-            raise SystemExit('{:#x}: {} callers'.format(function, len(callers)))
+            raise SystemExit(f'{function:#x}: {len(callers)} callers')
         function = callers[0]
     return function
 
@@ -205,14 +216,14 @@ def fileset_functions(fs: kernelcache.Fileset, bundle: str, table: dict) -> tupl
     return functions(fileset_body(fs), lambda hint: locate(fs, bundle, hint), table)
 
 
-def fields(fs, table):
+def fields(fs: kernelcache.Fileset, table: JsonObject) -> tuple[dict, dict]:
     out, found = {}, {}
     for key, hint in sorted(table.get('hints', {}).get('fields', {}).items()):
         at, word = int(hint['at'], 16), int(hint['word'], 16)
         if fs.word(at) != word:
-            raise SystemExit('field {}: the word at {:#x} is {:08x}, not {:08x}'.format(key, at, fs.word(at), word))
+            raise SystemExit(f'field {key}: the word at {at:#x} is {fs.word(at):08x}, not {word:08x}')
         out[key] = hint['offset']
-        found[key] = 'offset shown by {:08x} at {:#x}'.format(word, at)
+        found[key] = f'offset shown by {word:08x} at {at:#x}'
     return out, found
 
 
@@ -228,7 +239,7 @@ def constants(fs: kernelcache.Fileset, table: dict) -> tuple[dict, dict]:
     return out, found
 
 
-def extract(fs, interface, table, kind, pure):
+def extract(fs: kernelcache.Fileset, interface: JsonObject, table: JsonObject, kind: str, pure: int) -> str:
     cls = interface['class']
     info = fs.inheritance[cls]
     if interface.get('functions_only'):
@@ -270,7 +281,7 @@ def extract(fs, interface, table, kind, pure):
         )
     first, slots, named, found, errors = layout(fs, interface, table, pure)
     if errors:
-        raise SystemExit('{} ({}):\n  {}'.format(cls, kind, '\n  '.join(errors)))
+        raise SystemExit(f'{cls} ({kind}):\n  ' + '\n  '.join(errors))
     targets = {i: t for i, t, _ in slots}
     addresses = {'gMetaClass': info['meta'], 'vtable': info['vtable'] - 16}
     found.update(gMetaClass='metaclass initialiser', vtable='metaclass initialiser')
@@ -280,7 +291,7 @@ def extract(fs, interface, table, kind, pure):
     inherit = {int(k) for k in table.get('hints', {}).get('inherit', {})}
     for i, target, _ in slots:
         if i >= first and i not in named and (not interface.get('guard') or i in inherit):
-            addresses['opaque{}'.format(i)] = target
+            addresses[f'opaque{i}'] = target
     for key, address in structors(fs, cls).items():
         addresses[key] = address
         found[key] = 'stores the vtable' if key == 'C2' else 'branch after the constructors'
@@ -306,21 +317,18 @@ def extract(fs, interface, table, kind, pure):
         out['constants'] = values
     out.update(
         addresses={k: hex(v) for k, v in sorted(addresses.items(), key=lambda kv: (kv[1], kv[0]))}
-        | {k: 'unported' for k in unported},
+        | dict.fromkeys(unported, 'unported'),
         found=dict(sorted(found.items())),
         hints=table.get('hints', {}),
     )
     return dump(out)
 
 
-def dump(table):
+def dump(table: JsonObject) -> str:
     return json.dumps(table, indent=2) + '\n'
 
 
 def check_plain(path: Path, interface: dict, table: dict) -> None:
-    sys.path.insert(0, str(HERE.parents[1] / 'tools/prelink'))
-    from native_prelink import backed_offset, macho
-
     data = path.read_bytes()
     segments = macho(data)['segments']
 
@@ -370,7 +378,7 @@ def plain_string_hint(hint: dict) -> int:
 
 
 def getter_target(read: Callable[[int, int], int], getter: int) -> int | None:
-    """The address getMetaClass forms with ADRP then ADD (after an unoptimised kext's stack spill, if any)."""
+    """Return the address getMetaClass forms with ADRP then ADD (after an unoptimised kext's stack spill, if any)."""
     words = [read(getter + 4 * i, 4) for i in range(6)]
     for i, adrp in enumerate(words[:-1]):
         if (adrp & 0x9F000000) == 0x90000000:
@@ -380,22 +388,22 @@ def getter_target(read: Callable[[int, int], int], getter: int) -> int | None:
     return None
 
 
-def is_fileset(path):
+def is_fileset(path: Path) -> bool:
     with open(path, 'rb') as f:
         return int.from_bytes(f.read(16)[12:16], 'little') == 12
 
 
-def kind_of(kernelcache, pins):
+def kind_of(kernelcache: Path, pins: Path) -> str:
     scope = {}
     exec(compile(Path(pins).read_text(), str(pins), 'exec'), {'True': True, 'False': False}, scope)
     digest = hashlib.sha256(Path(kernelcache).read_bytes()).hexdigest()
     kinds = [k for k, v in scope['IPSWS'].items() if v.get('derived', {}).get('kernelcache_sha256') == digest]
     if len(kinds) != 1:
-        raise SystemExit('{}: no pinned IPSW kind has this kernelcache'.format(kernelcache))
+        raise SystemExit(f'{kernelcache}: no pinned IPSW kind has this kernelcache')
     return kinds[0]
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--kind')
     parser.add_argument('--pins', type=Path, default=HERE.parents[1] / 'ipsw/pins.bzl')
@@ -410,7 +418,7 @@ def main():
     args = parser.parse_args()
     kind = kind_of(args.kernelcache, args.pins)
     if args.kind and args.kind != kind:
-        raise SystemExit('the kernelcache is {}, not {}: build with that kind (--config)'.format(kind, args.kind))
+        raise SystemExit(f'the kernelcache is {kind}, not {args.kind}: build with that kind (--config)')
     args.kind = kind
     directory = args.tables / args.kind
     classes = args.classes or sorted(p.stem for p in directory.glob('*.json'))
@@ -435,7 +443,7 @@ def main():
         else:
             path.write_text(text)
     if stale:
-        raise SystemExit('kinds/{}: differs from the kernelcache: {}'.format(args.kind, ', '.join(stale)))
+        raise SystemExit(f'kinds/{args.kind}: differs from the kernelcache: {", ".join(stale)}')
 
 
 if __name__ == '__main__':
