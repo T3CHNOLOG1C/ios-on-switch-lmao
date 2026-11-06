@@ -1,0 +1,111 @@
+// SPDX-License-Identifier: BSD-2-Clause-Patent
+// SwitchXHCI's IOKit plumbing; see SwitchXHCIServices.h.
+#include "SwitchXHCIServices.h"
+#include <IOKit/IOCatalogue.h>
+#include <IOKit/IODeviceMemory.h>
+#include <IOKit/IOService.h>
+#include <libkern/c++/OSArray.h>
+#include <libkern/c++/OSData.h>
+#include <libkern/c++/OSDictionary.h>
+#include <libkern/c++/OSNumber.h>
+#include <libkern/c++/OSSymbol.h>
+#include "../ArmGIC/SwitchInterrupts.h"
+
+namespace xhost {
+namespace {
+constexpr const char *kForcePower = "UsbForcePower";
+constexpr const char *kPortNumber = "port";
+constexpr const char *kPortClass = "AppleUSBHostPort";
+}  // namespace
+
+const OSMetaClass *lookupClass(const char *name)
+{
+    const OSSymbol *symbol = OSSymbol::withCString(name);
+    const OSMetaClass *meta = symbol ? OSMetaClass::getMetaClassWithName(symbol) : nullptr;
+    OSSafeReleaseNULL(symbol);
+    return meta;
+}
+
+bool addResourcePersonality(const char *ioClass, const char *category, const char *bundle)
+{
+    OSDictionary *personality = OSDictionary::withCapacity(5);
+    bool ok = personality != nullptr;
+    const char *const pairs[][2] = {{"IOClass", ioClass},
+                                    {"IOMatchCategory", category},
+                                    {"IOProviderClass", "IOResources"},
+                                    {"IOResourceMatch", "IOKit"},
+                                    {"CFBundleIdentifier", bundle}};
+    for (const auto &pair : pairs) {
+        const OSSymbol *value = ok ? OSSymbol::withCString(pair[1]) : nullptr;
+        ok = value && personality->setObject(pair[0], value);
+        OSSafeReleaseNULL(value);
+    }
+    OSArray *array = ok ? OSArray::withObjects((const OSObject **)&personality, 1) : nullptr;
+    ok = array && gIOCatalogue->addDrivers(array, true);
+    OSSafeReleaseNULL(array);
+    OSSafeReleaseNULL(personality);
+    return ok;
+}
+
+IOService *makeNub(uint64_t registers, uint64_t bytes, uint32_t intid)
+{
+    IOService *gic = switch_interrupt_nub(intid, false);
+    OSObject *controllers = gic ? gic->copyProperty(gIOInterruptControllersKey) : nullptr;
+    OSObject *specifiers = gic ? gic->copyProperty(gIOInterruptSpecifiersKey) : nullptr;
+    OSDictionary *dict = OSDictionary::withCapacity(4);
+    IODeviceMemory *window = IODeviceMemory::withRange(registers, bytes);
+    OSArray *memory = window ? OSArray::withObjects((const OSObject **)&window, 1) : nullptr;
+    IOService *nub = OSTypeAlloc(IOService);
+    bool ok = controllers && specifiers && dict && memory && nub;
+    if (ok) {
+        dict->setObject(gIOInterruptControllersKey, controllers);
+        dict->setObject(gIOInterruptSpecifiersKey, specifiers);
+        ok = nub->init(dict) && nub->attach(IOService::getResourceService());
+    }
+    if (ok) {
+        nub->setDeviceMemory(memory);
+        nub->setName("usb-xhci");
+    }
+    OSSafeReleaseNULL(controllers);
+    OSSafeReleaseNULL(specifiers);
+    OSSafeReleaseNULL(dict);
+    OSSafeReleaseNULL(window);
+    OSSafeReleaseNULL(memory);
+    if (!ok)
+        OSSafeReleaseNULL(nub);
+    return nub;
+}
+
+IOService *waitForRootPort(IOService *controller, unsigned number, uint64_t timeoutNS)
+{
+    const uint32_t port = number;
+    const OSSymbol *key = OSSymbol::withCString(kPortNumber);
+    const OSData *value = OSData::withBytes(&port, sizeof(port));
+    const OSDictionary *parent = IOService::registryEntryIDMatching(controller->getRegistryEntryID());
+    OSDictionary *matching = IOService::serviceMatching(kPortClass);
+    IOService *found = nullptr;
+    if (key != nullptr && value != nullptr && parent != nullptr && matching != nullptr &&
+        IOService::propertyMatching(key, value, matching) != nullptr &&
+        matching->setObject(kIOParentMatchKey, parent)) {
+        found = IOService::waitForMatchingService(matching, timeoutNS);
+    }
+    OSSafeReleaseNULL(matching);
+    OSSafeReleaseNULL(parent);
+    OSSafeReleaseNULL(value);
+    OSSafeReleaseNULL(key);
+    return found;
+}
+
+IOReturn forcePortPower(IOService *port, bool on)
+{
+    const OSNumber *value = OSNumber::withNumber(on ? 1U : 0U, 32);
+    OSDictionary *request = value != nullptr ? OSDictionary::withCapacity(1) : nullptr;
+    if (request == nullptr || !request->setObject(kForcePower, value))
+        panic("SwitchUSB: no memory for the root port's UsbForcePower");
+    const IOReturn result = port->setProperties(request);
+    OSSafeReleaseNULL(request);
+    OSSafeReleaseNULL(value);
+    return result;
+}
+
+}  // namespace xhost

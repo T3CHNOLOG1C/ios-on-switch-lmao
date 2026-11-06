@@ -94,6 +94,8 @@ kernel_driver(
         "XusbHost.cpp",
         "UsbDmaMapper.cpp",
         "SwitchXHCI.cpp",
+        "SwitchXHCIEvents.cpp",
+        "SwitchXHCIServices.cpp",
         "xhci-original-bindings.S",
         "firmware.S",
     ],

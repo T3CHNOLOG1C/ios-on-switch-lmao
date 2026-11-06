@@ -60,6 +60,13 @@ public:
         return isPowered;
     }  // powerOn succeeded: the xHCI registers can be read
 
+    // SC7 takes VDD_CORE, and with it the partitions, the falcon and its firmware: no register access until powerOn and
+    // loadFirmware have run again (loadFirmware finds ILOAD_BASE back at reset and reloads).
+    void lostPower()
+    {
+        isPowered = false;
+    }
+
     // USB2 port 0 (the USB-C port's D+/D-), XusbPorts.h: OTG capability, then the ID override (xusb-tegra210.c):
     // host grounds ID (the VBUS override off first, 1.5 ms, as Linux) and clears what a boot stage's charger detection
     // left on the pad (D+/D- pull overrides, sources, sinks) and port 0's over-current pin (one line if anything was

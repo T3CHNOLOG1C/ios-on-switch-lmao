@@ -4,7 +4,6 @@
 #include <IOKit/IOLib.h>
 #include <IOKit/IOLocks.h>
 #include <IOKit/IOService.h>
-#include <IOKit/pwr_mgt/RootDomain.h>
 #include <kern/clock.h>
 #include <kern/thread.h>
 #include <kern/thread_call.h>
@@ -33,9 +32,9 @@ bool gHostPackaged;
 IOLock *gLock;
 thread_call_t gRoleCall, gReportCall;
 bool gWantHost, gHostCable;            // from the last PD state
+bool gPadLost;                         // SC7 took PADCTL's host role with it: the role thread puts it back
 bool gHostUp, gHostBroken, gHostRole;  // what has been done
 bool gHostFailed;                      // switch_usb_host_failed (SwitchXHCI's interrupt check), any thread
-IOPMDriverAssertionID gHostHold;       // held from the host controller's first start for the rest of the boot
 uint32_t gRoleChanges;                 // role changes applied (the report names the one it follows)
 constexpr uint32_t kReportMS = 1000;   // the role line: this long after a change, when the port has settled
 #if SWITCH_USB_SUPERSPEED
@@ -151,20 +150,27 @@ void applyLanes()
 #endif
 // Thread call (THREAD_CALL_OPTIONS_ONCE: never two at once; entered again while it runs, it runs again after).
 // Host: the XUDC off the bus first (as a cable pull), the pad to the host (ID grounded; PP cycled when the controller
-// already runs), then the controller the first time, which powers its ports with the pad already the host's
-// (xhci-tegra.c: ID override, then PORTSC.PP). Device: the reverse.
+// already runs), then the controller the first time, then the cable to the connector's root port (switchxhci_cable),
+// which powers it for the device already on the port. Device: the reverse, the port held off before the pad goes.
 void applyRole(thread_call_param_t, thread_call_param_t)
 {
     IOLockLock(gLock);
-    const bool wantHost = gWantHost, hostCable = gHostCable;
+    const bool wantHost = gWantHost;
+    const bool hostCable = gHostCable;
+    const bool padLost = gPadLost;
+    gPadLost = false;
     IOLockUnlock(gLock);
     if (__atomic_load_n(&gHostFailed, __ATOMIC_ACQUIRE))
         gHostBroken = true;
+    if (padLost && gHostRole && wantHost) {
+        switchxhci_set_host_role(true);
+        switchxhci_cable(true);
+    }
     if (wantHost && !gHostRole && !gHostBroken) {
         char why[160] = "";
         switchxudc_set_host_owns_port(true);
         switchxhci_set_host_role(true);
-        if (!gHostUp && !(gHostUp = switchxhci_start(why, sizeof(why)))) {
+        if (!gHostUp && !switchxhci_start(why, sizeof(why))) {
             IOLog("SwitchUSB: host mode off: %s\n", why);
             gHostBroken = true;
             switchxhci_set_host_role(false);
@@ -172,14 +178,9 @@ void applyRole(thread_call_param_t, thread_call_param_t)
             (void)switch_pd_allow_source(false);  // SwitchPD takes VBUS off and keeps the port sink-only
             return;
         }
-        if (!gHostHold) {
-            if (IOPMrootDomain *root = IOService::getPMRootDomain())
-                gHostHold = root->createPMAssertion(kIOPMDriverAssertionCPUBit, kIOPMDriverAssertionLevelOn,
-                                                    gDevicePort ? gDevicePort : IOService::getResourceService(),
-                                                    "SwitchUSB host controller");
-            IOLog("SwitchUSB: system sleep held off for this boot: the host controller has no SC7 path\n");
-        }
+        __atomic_store_n(&gHostUp, true, __ATOMIC_RELEASE);
         gHostRole = true;
+        switchxhci_cable(true);
 #if SWITCH_USB_SUPERSPEED
         // The dock's hub appears only once its HUB_CONTROL is acknowledged: its port event is due then (applyLanes).
         IOLog("SwitchUSB: host role (%s)\n", gDockHost ? "the dock: DFP, its VBUS" : "a device on the port, VBUS on");
@@ -191,6 +192,7 @@ void applyRole(thread_call_param_t, thread_call_param_t)
 #endif
         armReport();
     } else if (!wantHost && gHostRole) {
+        switchxhci_cable(false);
         switchxhci_set_host_role(false);
         switchxudc_set_host_owns_port(false);
         gHostRole = false;
@@ -287,12 +289,22 @@ extern "C" void switch_usb_suspend(void)
 {
     if (gDevicePort)
         switchxudc_sleep(true);
+    if (__atomic_load_n(&gHostUp, __ATOMIC_ACQUIRE))
+        switchxhci_sleep(true);
 }
 
+// The host block comes back here, before IOKit raises AppleUSBXHCI; the pad's host role, which the XUDC's own power-up
+// does not keep, from the role thread.
 extern "C" void switch_usb_resume(void)
 {
     if (gDevicePort)
         switchxudc_sleep(false);
+    if (__atomic_load_n(&gHostUp, __ATOMIC_ACQUIRE)) {
+        switchxhci_sleep(false);
+        IOLockLock(gLock);
+        gPadLost = true;
+        IOLockUnlock(gLock);
+    }
     if (gRoleCall)
         thread_call_enter(gRoleCall);  // a cable that came or went while asleep
 }
