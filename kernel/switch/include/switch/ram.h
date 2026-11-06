@@ -23,8 +23,44 @@ unsigned int pmap_switch_dense_page_count(void);
 boolean_t pmap_switch_begin_dense_pages(void);
 boolean_t pmap_switch_page_reserved(ppnum_t pnum);
 
-/* Set once the ledger is committed (the dense span exists), and once vm_pages owns the span. */
-extern bool switch_ram_committed, switch_dense_pages;
+/* Set once the ledger is committed (the dense span exists), and once vm_pages owns the span. Hidden: pa_valid reads
+ * switch_ram_committed on every pmap enter, remove and protect, so the load must be direct, not through the GOT. */
+extern bool switch_ram_committed __attribute__((visibility("hidden")));
+extern bool switch_dense_pages;
+
+/* The geometry pmap_switch_ram_init requires of every committed ledger, and what it carves out of bank 0. */
+#define SWITCH_RAM_BANK0_START    0x80000000ULL
+#define SWITCH_RAM_BANK0_END      0xffd00000ULL
+#define SWITCH_RAM_BANK1_START    0x100000000ULL
+#define SWITCH_RAM_BANK1_END      0x180000000ULL
+#define SWITCH_RAM_HOLE_START     0xa0000000ULL
+#define SWITCH_RAM_HOLE_END       0xa0020000ULL
+#define SWITCH_RAM_FB_START       0xf5a00000ULL
+#define SWITCH_RAM_FB_END         0xf5e00000ULL
+#define SWITCH_RAM_GPU_POOL_START 0xe4000000ULL
+#define SWITCH_RAM_GPU_POOL_END   (SWITCH_RAM_GPU_POOL_START + (256ULL << 20))
+
+static inline bool switch_ram_in(pmap_paddr_t pa, uint64_t start, uint64_t end)
+{
+    return pa - start < end - start;
+}
+
+bool switch_ram_pa_valid_high(pmap_paddr_t pa);
+
+/*
+ * pa_valid, for a pa inside [vm_first_phys, vm_last_phys) (the banks' span): not a carveout or the GPU pool. Inline
+ * down to the window from the GPU pool to bank 1, where pages are rare enough for a call.
+ */
+static inline bool switch_ram_pa_valid(pmap_paddr_t pa)
+{
+    if (!switch_ram_committed || pa >= SWITCH_RAM_BANK1_START) {
+        return true;
+    }
+    if (__probable(pa < SWITCH_RAM_GPU_POOL_START)) {
+        return !switch_ram_in(pa, SWITCH_RAM_HOLE_START, SWITCH_RAM_HOLE_END);
+    }
+    return switch_ram_pa_valid_high(pa);
+}
 
 /* arm_vm_init */
 void pmap_switch_ram_init(struct boot_args *args);

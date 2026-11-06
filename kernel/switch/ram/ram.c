@@ -50,22 +50,16 @@ boolean_t pmap_switch_gpu_pool(pmap_paddr_t *start, pmap_paddr_t *end)
     return switch_gpu_start < switch_gpu_end;
 }
 
+bool switch_ram_pa_valid_high(pmap_paddr_t pa)
+{
+    return pa >= SWITCH_RAM_GPU_POOL_END && !switch_ram_in(pa, SWITCH_RAM_FB_START, SWITCH_RAM_FB_END) &&
+           pa < SWITCH_RAM_BANK0_END;
+}
+
 boolean_t pmap_switch_pa_valid(pmap_paddr_t pa)
 {
-    if (!switch_ledger.committed) {
-        return TRUE;
-    }
-    if (pa >= 0xa0000000ULL && pa < 0xa0020000ULL) {
-        return FALSE;
-    }
-    if (pa >= 0xf5a00000ULL && pa < 0xf5e00000ULL) {
-        return FALSE;
-    }
-    if (pa >= switch_gpu_start && pa < switch_gpu_end) {
-        return FALSE;
-    }
-    return (pa >= switch_ledger.banks[0].start && pa < switch_ledger.banks[0].end) ||
-           (pa >= switch_ledger.banks[1].start && pa < switch_ledger.banks[1].end);
+    return !switch_ram_committed ||
+           (switch_ram_in(pa, SWITCH_RAM_BANK0_START, SWITCH_RAM_BANK1_END) && switch_ram_pa_valid(pa));
 }
 
 boolean_t pmap_switch_ram_reserved(ppnum_t pnum)
@@ -104,7 +98,7 @@ void pmap_switch_bootstrap_check(pmap_paddr_t start, pmap_paddr_t end)
  */
 static void switch_ram_reserve_gpu_pool(void)
 {
-    const uint64_t gpu_pa = 0xe4000000ULL, gpu_end = gpu_pa + (256ULL << 20);
+    const uint64_t gpu_pa = SWITCH_RAM_GPU_POOL_START, gpu_end = SWITCH_RAM_GPU_POOL_END;
     if (switch_ledger.count == SWITCH_RAM_RANGES) {
         panic("the GPU pool %#llx-%#llx does not fit: the RAM ledger is full", gpu_pa, gpu_end);
     }
@@ -141,8 +135,8 @@ void pmap_switch_ram_init(struct boot_args *args)
     memcpy(&switch_ledger, wire, sizeof(switch_ledger));
     if (switch_ledger.magic != SWITCH_RAM_MAGIC || switch_ledger.version != 1 || switch_ledger.committed != 1 ||
         !switch_ledger.count || switch_ledger.count > SWITCH_RAM_RANGES ||
-        switch_ledger.banks[0].start != 0x80000000ULL || switch_ledger.banks[0].end != 0xffd00000ULL ||
-        switch_ledger.banks[1].start != 0x100000000ULL || switch_ledger.banks[1].end != 0x180000000ULL ||
+        switch_ledger.banks[0].start != SWITCH_RAM_BANK0_START || switch_ledger.banks[0].end != SWITCH_RAM_BANK0_END ||
+        switch_ledger.banks[1].start != SWITCH_RAM_BANK1_START || switch_ledger.banks[1].end != SWITCH_RAM_BANK1_END ||
         args->physBase != 0x80000000ULL || args->memSize != 0x100000000ULL || args->virtBase != 0xffffffefd2200000ULL) {
         panic("native RAM ledger/bank geometry");
     }
@@ -220,10 +214,10 @@ unsigned int switch_ram_physmap_pieces(pmap_paddr_t start, pmap_paddr_t end,
                                        struct switch_ram_piece pieces[SWITCH_RAM_PHYSMAP_PIECES])
 {
     static const struct switch_ram_range regions[] = {
-        {0x80000000ULL, 0xa0000000ULL},
-        {0xa0020000ULL, 0xf5a00000ULL},
-        {0xf5e00000ULL, 0xffd00000ULL},
-        {0x100000000ULL, 0x180000000ULL},
+        {SWITCH_RAM_BANK0_START, SWITCH_RAM_HOLE_START},
+        {SWITCH_RAM_HOLE_END, SWITCH_RAM_FB_START},
+        {SWITCH_RAM_FB_END, SWITCH_RAM_BANK0_END},
+        {SWITCH_RAM_BANK1_START, SWITCH_RAM_BANK1_END},
     };
     unsigned int count = 0;
     for (unsigned i = 0; i < 4; i++) {
