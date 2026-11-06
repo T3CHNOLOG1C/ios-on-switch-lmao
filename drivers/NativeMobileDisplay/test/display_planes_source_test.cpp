@@ -145,7 +145,7 @@ TEST(DisplayPlanesSource, BackboarddDetachesOnlyWhenTheDisplaySaysSo)
     const std::string xnu = XnuKernExec();
     // The weak default: never.
     EXPECT_THAT(xnu, HasSubstr("\nnative_legacy_detach_ready(void)\n{\n\treturn false;\n}"));
-    EXPECT_THAT(xnu, HasSubstr("\t\tconst int single = single_layer && !native_legacy_detach_ready();"));
+    EXPECT_THAT(xnu, HasSubstr("\t\tconst int single = !native_legacy_detach_ready();"));
     const std::string exec =
         Between(xnu, "\nnative_switch_exec_environment(const struct image_params *imgp)", "\n}\n");
     ASSERT_FALSE(exec.empty());
