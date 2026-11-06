@@ -183,14 +183,14 @@ OSDictionary *calibration()
     return dict;
 }
 
-uint64_t msBetween(uint64_t from, uint64_t to)
+[[maybe_unused]] uint64_t msBetween(uint64_t from, uint64_t to)
 {
     uint64_t ns = 0;
     absolutetime_to_nanoseconds(to - from, &ns);
     return ns / 1000000;
 }
 
-uint64_t msSince(uint64_t start)
+[[maybe_unused]] uint64_t msSince(uint64_t start)
 {
     uint64_t ns = 0;
     absolutetime_to_nanoseconds(mach_absolute_time() - start, &ns);
@@ -471,9 +471,9 @@ void SwitchBacklight::guardFired(OSObject *owner, IOTimerEventSource *sender)
     }
     if (verdict == 0)
         return;
-    switch_power_journal("SwitchBacklight: %s with the panel off and no display-on request from the render server in "
-                         "%u ms: the kernel lights the panel (SpringBoard or backboardd not answering?)",
-                         switch_wake_source_name(source), SWITCH_WAKE_GUARD_MS);
+    switch_power_event("SwitchBacklight: %s with the panel off and no display-on request from the render server in "
+                       "%u ms: the kernel lights the panel (SpringBoard or backboardd not answering?)",
+                       switch_wake_source_name(source), SWITCH_WAKE_GUARD_MS);
     switch_wake_stackshot(switch_wake_source_name(source));
     self->step();
 }

@@ -7,8 +7,10 @@
 // keeps) and a RAM ring of the last 64. The ring is written to /private/var/Switch/power.log on Data (root 0644, the
 // whole file, fsynced) after every display off, every wake guarantee and before system sleep, so the last steps before
 // a forced power-off survive it: logd keeps minutes of the unified log in RAM (r7t's persisted log ended two minutes
-// before the device died). The first write of a boot first copies the last boot's file to power.prev.log.
+// before the device died). The first write of a boot first copies the last boot's file to power.prev.log. Debug kernels
+// only: a release kernel logs what each sleep and wake came to and its errors (switch_power_event), nothing else.
 #pragma once
+#include <os/log.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -18,6 +20,7 @@
 extern "C" {
 #endif
 
+#if DEVELOPMENT || DEBUG
 // One journal line (printf format, no newline): "<uptime ms> <text>" to os_log and the ring. Thread context or a
 // work-loop action; not from a primary interrupt filter.
 void switch_power_journal(const char *format, ...) __attribute__((format(printf, 1, 2)));
@@ -25,6 +28,17 @@ void switch_power_journal(const char *format, ...) __attribute__((format(printf,
 // Writes the ring to power.log: on a kernel thread call (wait false: returns at once), or now (wait true: thread
 // context, may block on the SD for tens of milliseconds; system sleep, before the SD suspends). Failures log one line.
 void switch_power_journal_flush(bool wait);
+
+// A journal line a release kernel keeps too, as one os_log line (an error, or what a sleep or wake came to).
+#define switch_power_event switch_power_journal
+#else
+// Release kernels keep no journal and write no file. A journal line compiles to nothing: its arguments are type-checked
+// in sizeof, never evaluated, and the declaration below is never called. The events go to os_log.
+int switch_power_journal_unused(const char *format, ...) __attribute__((format(printf, 1, 2)));
+#define switch_power_journal(...)        ((void)sizeof(switch_power_journal_unused(__VA_ARGS__)))
+#define switch_power_journal_flush(wait) ((void)sizeof(wait))
+#define switch_power_event(format, ...)  os_log(OS_LOG_DEFAULT, "SwitchPower: " format, ##__VA_ARGS__)
+#endif
 
 // A wake source fired (SwitchWakeSources.h). With the panel lit it does nothing. With the panel off: one journal line
 // and the wake guarantee arms (SwitchBacklight); the source's own button press does the waking (Consumer Menu: the rail
@@ -54,8 +68,13 @@ void switch_wake_bt_slept(void);
 
 // The wake guarantee fired (SwitchBacklight, which lights the panel): a stackshot of every task (kernel and user frames,
 // wait info) is written to /private/var/Switch/wake-<UTC>.kcdata and, for `idevicecrashreport`, to mobile's
-// CrashReporter as Switch-wake-<UTC>.kcdata. On a kernel thread call; returns at once. At most one per 60 s.
+// CrashReporter as Switch-wake-<UTC>.kcdata. On a kernel thread call; returns at once. At most one per 60 s. Debug
+// kernels only.
+#if DEVELOPMENT || DEBUG
 void switch_wake_stackshot(const char *why);
+#else
+#define switch_wake_stackshot(why) ((void)0)
+#endif
 
 // SwitchButtons (SwitchButtons.cpp): one press and release of the console's Home button (Consumer Menu) for
 // SWITCH_BT_HOME, of its screenshot key (Consumer Snapshot) for SWITCH_BT_CAPTURE. Any context, never blocks; nothing

@@ -258,7 +258,9 @@ bool SwitchSuspend::start(IOService *provider)
     apb = reinterpret_cast<volatile uint8_t *>(ml_io_map(kApbMiscPA, 0x4000));
     car = reinterpret_cast<volatile uint8_t *>(ml_io_map(kCarPA, 0x1000));
     setName("SwitchSuspend");
-    rtcUsable = pmc && car && rtcClockOn(true);
+#if DEVELOPMENT || DEBUG
+    rtcUsable = pmc && car && rtcClockOn(true);  // the wake line's time asleep
+#endif
     char why[224] = "";
     const char *blocker = nullptr;
     if (!pmc || !apb) {
@@ -341,7 +343,9 @@ void SwitchSuspend::sleepDevices()
     timed("sleep", 7, "sd", switch_block_suspend);
     timed("sleep", 8, "rtc", switch_rtc_suspend);
     timed("sleep", 8, "battery", switch_battery_suspend);  // the gauge's alert: charge-zone edges only
+#if DEVELOPMENT || DEBUG
     gaugeBeforeErr = switch_battery_gauge_sample(&gaugeBefore);
+#endif
     if (!gaugeBeforeErr) {
         switch_power_journal("SwitchSuspend: sleep 8 gauge: AvgCurrent %d mA, Current %d mA, QH %u", gaugeBefore.avg_ma,
                              gaugeBefore.now_ma, gaugeBefore.qh);
@@ -376,6 +380,11 @@ void SwitchSuspend::sleepDevices()
         const int err = tegra_bpmp_sc7_suspend(line, sizeof(line));
         switch_power_journal("SwitchSuspend: sleep 9 bpmp: %llu us: %s%s", nsSince(at) / 1000, line,
                              err ? " (SC7 may not be entered)" : "");
+#if !(DEVELOPMENT || DEBUG)
+        if (err)
+            switch_power_event("SwitchSuspend: sleep %u: BPMP SC7 entry refused: %s (SC7 may not be entered)",
+                               sleeps + 1, line);
+#endif
     }
     const uint64_t us = nsSince(start) / 1000;
     switch_power_journal("SwitchSuspend: sleep 10: i2c (last; devices took %llu.%03llu ms)", us / 1000, us % 1000);
@@ -426,7 +435,11 @@ void SwitchSuspend::wakeDevices()
     const uint64_t asleepMS = suspendedAt ? nsSince(suspendedAt) / 1000000 : 0;
     timed("wake", 0, "i2c", tegra_i2c_resume);
     switch_battery_gauge gaugeAfter = {};
+#if DEVELOPMENT || DEBUG
     const int gaugeAfterErr = switch_battery_gauge_sample(&gaugeAfter);
+#else
+    const int gaugeAfterErr = -1;
+#endif
     const uint64_t sc7MS = rtcUsable ? switch_sleep_elapsed_ms(rtcBeforeMS, rtcAfterMS) : 0;
     switch_power_journal("SwitchSuspend: wake %u: asleep %llu.%03llu s (Tegra RTC, quiesce to activate); entry to wake "
                          "%llu ms by the timebase; quiesce %llu us, activate %llu us (interrupts off)",
@@ -493,8 +506,8 @@ void SwitchSuspend::wakeDevices()
             thread_call_enter_delayed(wakeHoldEnd, deadline);
     }
     const uint64_t us = nsSince(start) / 1000;
-    switch_power_journal("SwitchSuspend: wake %u: %s (PMC WAKE_STATUS %#x WAKE2_STATUS %#x), devices %llu.%03llu ms",
-                         sleeps, reason, wakeStatus, wake2Status, us / 1000, us % 1000);
+    switch_power_event("SwitchSuspend: wake %u: %s (PMC WAKE_STATUS %#x WAKE2_STATUS %#x), devices %llu.%03llu ms",
+                       sleeps, reason, wakeStatus, wake2Status, us / 1000, us % 1000);
     if (!strcmp(reason, "unknown")) {
         IOLog("SwitchSuspend: wake %u without an armed PMC wake event (PMC WAKE_STATUS %#x WAKE2_STATUS %#x, armed "
               "%#llx)\n",

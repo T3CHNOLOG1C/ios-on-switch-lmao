@@ -27,24 +27,35 @@ extern "C" kern_return_t stack_snapshot_from_kernel(int pid, void *buf, uint32_t
                                                     unsigned *bytes_traced);
 
 namespace {
+#if DEVELOPMENT || DEBUG
 const char kJournal[] = "/private/var/Switch/power.log";
 const char kPrevious[] = "/private/var/Switch/power.prev.log";
 const char kCrashReporter[] = "/private/var/mobile/Library/Logs/CrashReporter";
-constexpr uint64_t kSourceGapNS = 500000000ull, kShotGapNS = 60000000000ull;
+#endif
+constexpr uint64_t kSourceGapNS = 500000000ull;
+#if DEVELOPMENT || DEBUG
+constexpr uint64_t kShotGapNS = 60000000000ull;
 constexpr uint32_t kShotBytes = 4u << 20, kShotMaxBytes = 8u << 20;  // XNU caps one at max_tracebuf_size (8 MiB here)
 // osfmk/kern/debug.h: KCDATA_FORMAT, SAVE_LOADINFO (dyld images: user frames symbolicate), SAVE_KEXT_LOADINFO,
 // THREAD_WAITINFO, NO_IO_STATS, INCLUDE_DRIVER_THREADS_IN_KERNEL (IOKit work loops); every task (pid -1).
 constexpr uint64_t kShotFlags = 0x10000ull | 0x02ull | 0x08ull | 0x1000000ull | 0x800000ull | 0x100000000ull;
+#endif
 
-IOLock *volatile gLock, *volatile gWriteLock;
+IOLock *volatile gLock;
+uint64_t gLastSource[SWITCH_WAKE_SOURCES];  // gLock
+#if DEVELOPMENT || DEBUG
+IOLock *volatile gWriteLock;
 thread_call_t volatile gFlushCall, gShotCall;
 switch_power_ring gRing;                                     // gLock
-uint64_t gLastSource[SWITCH_WAKE_SOURCES], gLastShot;        // gLock
+uint64_t gLastShot;                                          // gLock
 char gShotWhy[96];                                           // gLock
 bool gCopiedPrevious, gWriteFailed;                          // gWriteLock
 char gRender[SWITCH_POWER_LINES * SWITCH_POWER_LINE + 256];  // gWriteLock
-switch_bt_buttons gButtons;   // SwitchBluetooth's receive path only (its ACL packets and link events)
-bool gButtonsLogged;          // the same: the first controller report of the boot was logged
+#endif
+switch_bt_buttons gButtons;  // SwitchBluetooth's receive path only (its ACL packets and link events)
+#if DEVELOPMENT || DEBUG
+bool gButtonsLogged;  // the same: the first controller report of the boot was logged
+#endif
 volatile bool gButtonsStale;  // a client came or went: every connection's buttons go (switch_wake_bt_reset)
 uint64_t gReconnectUntil;     // switch_bt_reconnect_open's window after a Bluetooth wake (ns; atomic, 0 closed)
 
@@ -62,6 +73,7 @@ IOLock *once(IOLock *volatile *slot)
     return expected;
 }
 
+#if DEVELOPMENT || DEBUG
 thread_call_t onceCall(thread_call_t volatile *slot, thread_call_func_t func)
 {
     thread_call_t call = __atomic_load_n(slot, __ATOMIC_ACQUIRE);
@@ -76,6 +88,7 @@ thread_call_t onceCall(thread_call_t volatile *slot, thread_call_func_t func)
     thread_call_free(fresh);
     return expected;
 }
+#endif
 
 uint64_t nanoseconds(uint64_t abs)
 {
@@ -84,6 +97,7 @@ uint64_t nanoseconds(uint64_t abs)
     return ns;
 }
 
+#if DEVELOPMENT || DEBUG
 // "YYYY-MM-DD-HHMMSS" (UTC), as the panic records are named (days to civil date: H. Hinnant's algorithm).
 void utcStamp(char *out, size_t size)
 {
@@ -222,8 +236,10 @@ void shotCall(thread_call_param_t, thread_call_param_t)
                          stamp, bytes, error, copyError);
     switch_power_journal_flush(false);
 }
+#endif
 }  // namespace
 
+#if DEVELOPMENT || DEBUG
 extern "C" void switch_power_journal(const char *format, ...)
 {
     char text[SWITCH_POWER_LINE - 16], line[SWITCH_POWER_LINE];
@@ -251,6 +267,7 @@ extern "C" void switch_power_journal_flush(bool wait)
     if (thread_call_t call = onceCall(&gFlushCall, flushCall))
         thread_call_enter(call);
 }
+#endif
 
 extern "C" void switch_wake_event(unsigned source)
 {
@@ -284,6 +301,7 @@ extern "C" void switch_wake_bt_acl(const uint8_t *acl, size_t length)
     const bool dark = !switch_display_is_on();
     const switch_bt_buttons_step step =
         switch_bt_buttons_report(&gButtons, handle, (uint8_t)held, nanoseconds(mach_absolute_time()), dark);
+#if DEVELOPMENT || DEBUG
     const bool first = !gButtonsLogged;
     gButtonsLogged = true;
     if (first) {
@@ -292,6 +310,7 @@ extern "C" void switch_wake_bt_acl(const uint8_t *acl, size_t length)
                "Home/Capture %#x; their clicks go to the console buttons",
                handle, report, held);
     }
+#endif
     // A connection's first report with the panel off (a controller that reconnected to wake the console): what it held.
     if (step.fresh && dark)
         switch_power_journal("Bluetooth controller %#x connected with the panel off: report %#04x, Home/Capture %#x",
@@ -342,6 +361,7 @@ extern "C" void switch_wake_bt_reset(void)
     __atomic_store_n(&gButtonsStale, true, __ATOMIC_RELEASE);
 }
 
+#if DEVELOPMENT || DEBUG
 extern "C" void switch_wake_stackshot(const char *why)
 {
     IOLock *lock = once(&gLock);
@@ -359,3 +379,4 @@ extern "C" void switch_wake_stackshot(const char *why)
     if (fresh)
         thread_call_enter(call);
 }
+#endif
