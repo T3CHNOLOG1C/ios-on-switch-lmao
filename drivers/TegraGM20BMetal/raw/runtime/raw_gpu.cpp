@@ -228,8 +228,8 @@ bool Device::init(std::string &err)
     const uint64_t heapBytes = std::min<uint64_t>(pack_.bytes(PackHeap), kHeapCap);
     if (!k_.alloc(heapBytes + 0x1000, true, heap_) || !k_.alloc(kTicCount * 32, true, tic_) ||
         !k_.alloc(kTscCount * 32, true, tsc_) || !k_.alloc(0x1000, true, root_) || !k_.alloc(0x10000, true, zero_) ||
-        !k_.alloc(0x1000, true, tickets_) ||
-        !k_.alloc(kPushRing, true, push_.bo) || !k_.alloc(kUploadRing, true, upload_.bo)) {
+        !k_.alloc(0x1000, true, tickets_) || !k_.alloc(kPushRing, true, push_.bo) ||
+        !k_.alloc(kUploadRing, true, upload_.bo)) {
         err = k_.error();
         return false;
     }
