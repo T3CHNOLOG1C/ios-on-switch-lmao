@@ -17,15 +17,15 @@ use metal2vulkan::bind::SamplerDescriptor;
 use metal2vulkan::library::{FunctionConstantValue, FunctionConstantValues};
 use metal2vulkan::metal::{DataType, PixelFormat, PrimitiveTopologyClass, TextureType, VertexFormat};
 use metal2vulkan::pipeline::{
-    ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource, VertexAttributeDescriptor, VertexBufferLayoutDescriptor,
-    VertexDescriptor,
+    ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource, VertexAttributeDescriptor,
+    VertexBufferLayoutDescriptor, VertexDescriptor,
 };
 use metal2vulkan_air::abi::{AbiInt, EntryPoint, OutputRole, ParamRole};
 use metal2vulkan_air::budget::{Budget, Meter};
 use metal2vulkan_air::container::{self, FunctionStage};
 use metal2vulkan_runtime::{
-    Buffer, CommandQueue, Device, DeviceOptions, Function, Library, MessageSink, MetalLevel, PipelineOptions, ResourceOptions,
-    SamplerState, Size, Texture, TextureDescriptor,
+    Buffer, CommandQueue, Device, DeviceOptions, Function, Library, MessageSink, MetalLevel, PipelineOptions,
+    ResourceOptions, SamplerState, Size, Texture, TextureDescriptor,
 };
 use std::collections::{BTreeMap, HashSet};
 use std::io::Write;
@@ -40,7 +40,10 @@ fn take_messages() -> Vec<String> {
 }
 
 fn one_line(s: &str, max: usize) -> String {
-    let s: String = s.chars().map(|c| if c == '\t' || c == '\n' || c == '\r' { ' ' } else { c }).collect();
+    let s: String = s
+        .chars()
+        .map(|c| if c == '\t' || c == '\n' || c == '\r' { ' ' } else { c })
+        .collect();
     s.chars().take(max).collect()
 }
 
@@ -54,14 +57,38 @@ fn n(i: &AbiInt) -> u32 {
 /// `MTLDataType` byte sizes of the scalar and vector types function constants take.
 fn constant_bytes(ty: DataType) -> usize {
     match ty.as_raw() {
-        53 => 1, 54 => 2, 55 => 3, 56 => 4,
-        45 | 49 => 1, 46 | 50 => 2, 47 | 51 => 3, 48 | 52 => 4,
-        37 | 41 => 2, 38 | 42 => 4, 39 | 43 => 6, 40 | 44 => 8,
-        29 | 33 => 4, 30 | 34 => 8, 31 | 35 => 12, 32 | 36 => 16,
-        81 | 85 => 8, 82 | 86 => 16, 83 | 87 => 24, 84 | 88 => 32,
-        16 => 2, 17 => 4, 18 => 6, 19 => 8,
-        3 => 4, 4 => 8, 5 => 12, 6 => 16,
-        121 => 2, 122 => 4, 123 => 6, 124 => 8,
+        53 => 1,
+        54 => 2,
+        55 => 3,
+        56 => 4,
+        45 | 49 => 1,
+        46 | 50 => 2,
+        47 | 51 => 3,
+        48 | 52 => 4,
+        37 | 41 => 2,
+        38 | 42 => 4,
+        39 | 43 => 6,
+        40 | 44 => 8,
+        29 | 33 => 4,
+        30 | 34 => 8,
+        31 | 35 => 12,
+        32 | 36 => 16,
+        81 | 85 => 8,
+        82 | 86 => 16,
+        83 | 87 => 24,
+        84 | 88 => 32,
+        16 => 2,
+        17 => 4,
+        18 => 6,
+        19 => 8,
+        3 => 4,
+        4 => 8,
+        5 => 12,
+        6 => 16,
+        121 => 2,
+        122 => 4,
+        123 => 6,
+        124 => 8,
         _ => 0,
     }
 }
@@ -104,14 +131,38 @@ fn vertex_format(name: &str) -> Option<(u32, u32)> {
     // (MTLVertexFormat, bytes)
     let (base, c) = element(name);
     Some(match (base.as_str(), c) {
-        ("float", 1) => (28, 4), ("float", 2) => (29, 8), ("float", 3) => (30, 12), ("float", 4) => (31, 16),
-        ("half", 1) => (53, 2), ("half", 2) => (25, 4), ("half", 3) => (26, 6), ("half", 4) => (27, 8),
-        ("int", 1) => (32, 4), ("int", 2) => (33, 8), ("int", 3) => (34, 12), ("int", 4) => (35, 16),
-        ("uint", 1) => (36, 4), ("uint", 2) => (37, 8), ("uint", 3) => (38, 12), ("uint", 4) => (39, 16),
-        ("short", 1) => (50, 2), ("short", 2) => (16, 4), ("short", 3) => (17, 6), ("short", 4) => (18, 8),
-        ("ushort", 1) => (49, 2), ("ushort", 2) => (13, 4), ("ushort", 3) => (14, 6), ("ushort", 4) => (15, 8),
-        ("char", 1) => (46, 1), ("char", 2) => (4, 2), ("char", 3) => (5, 3), ("char", 4) => (6, 4),
-        ("uchar", 1) => (45, 1), ("uchar", 2) => (1, 2), ("uchar", 3) => (2, 3), ("uchar", 4) => (3, 4),
+        ("float", 1) => (28, 4),
+        ("float", 2) => (29, 8),
+        ("float", 3) => (30, 12),
+        ("float", 4) => (31, 16),
+        ("half", 1) => (53, 2),
+        ("half", 2) => (25, 4),
+        ("half", 3) => (26, 6),
+        ("half", 4) => (27, 8),
+        ("int", 1) => (32, 4),
+        ("int", 2) => (33, 8),
+        ("int", 3) => (34, 12),
+        ("int", 4) => (35, 16),
+        ("uint", 1) => (36, 4),
+        ("uint", 2) => (37, 8),
+        ("uint", 3) => (38, 12),
+        ("uint", 4) => (39, 16),
+        ("short", 1) => (50, 2),
+        ("short", 2) => (16, 4),
+        ("short", 3) => (17, 6),
+        ("short", 4) => (18, 8),
+        ("ushort", 1) => (49, 2),
+        ("ushort", 2) => (13, 4),
+        ("ushort", 3) => (14, 6),
+        ("ushort", 4) => (15, 8),
+        ("char", 1) => (46, 1),
+        ("char", 2) => (4, 2),
+        ("char", 3) => (5, 3),
+        ("char", 4) => (6, 4),
+        ("uchar", 1) => (45, 1),
+        ("uchar", 2) => (1, 2),
+        ("uchar", 3) => (2, 3),
+        ("uchar", 4) => (3, 4),
         _ => return None,
     })
 }
@@ -120,15 +171,27 @@ fn vertex_format(name: &str) -> Option<(u32, u32)> {
 fn color_format(name: &str) -> u32 {
     let (base, c) = element(name);
     match (base.as_str(), c) {
-        ("float" | "half", 1) => 25,                  // R16Float
-        ("float" | "half", 2) => 65,                  // RG16Float
-        ("float" | "half", _) => 80,                  // BGRA8Unorm
-        ("int", 1) => 54, ("int", 2) => 104, ("int", _) => 124,
-        ("uint", 1) => 53, ("uint", 2) => 103, ("uint", _) => 123,
-        ("short", 1) => 24, ("short", 2) => 64, ("short", _) => 114,
-        ("ushort", 1) => 23, ("ushort", 2) => 63, ("ushort", _) => 113,
-        ("char", 1) => 14, ("char", 2) => 34, ("char", _) => 74,
-        ("uchar", 1) => 13, ("uchar", 2) => 33, ("uchar", _) => 73,
+        ("float" | "half", 1) => 25, // R16Float
+        ("float" | "half", 2) => 65, // RG16Float
+        ("float" | "half", _) => 80, // BGRA8Unorm
+        ("int", 1) => 54,
+        ("int", 2) => 104,
+        ("int", _) => 124,
+        ("uint", 1) => 53,
+        ("uint", 2) => 103,
+        ("uint", _) => 123,
+        ("short", 1) => 24,
+        ("short", 2) => 64,
+        ("short", _) => 114,
+        ("ushort", 1) => 23,
+        ("ushort", 2) => 63,
+        ("ushort", _) => 113,
+        ("char", 1) => 14,
+        ("char", 2) => 34,
+        ("char", _) => 74,
+        ("uchar", 1) => 13,
+        ("uchar", 2) => 33,
+        ("uchar", _) => 73,
         _ => 80,
     }
 }
@@ -152,7 +215,12 @@ fn entries_of(lib: &container::Library<'_>) -> Vec<Info> {
                     Ok(d) => (d.abi.entries.into_iter().find(|e| e.name.to_string() == f.name), None),
                     Err(e) => (None, Some(format!("{e:?}"))),
                 };
-                Info { name: f.name.to_string(), stage: f.stage, entry, decode_error }
+                Info {
+                    name: f.name.to_string(),
+                    stage: f.stage,
+                    entry,
+                    decode_error,
+                }
             })
             .collect(),
         container::Library::Module(_) => Vec::new(),
@@ -163,7 +231,10 @@ fn user_inputs(e: &EntryPoint) -> Vec<(Vec<u8>, String)> {
     e.params
         .iter()
         .filter_map(|p| match &p.role {
-            ParamRole::FragmentInput(v) => Some((v.key.0.to_vec(), p.ty.name.as_ref().map(|n| n.to_string()).unwrap_or_default())),
+            ParamRole::FragmentInput(v) => Some((
+                v.key.0.to_vec(),
+                p.ty.name.as_ref().map(|n| n.to_string()).unwrap_or_default(),
+            )),
             _ => None,
         })
         .collect()
@@ -173,7 +244,10 @@ fn user_outputs(e: &EntryPoint) -> Vec<(Vec<u8>, String)> {
     e.outputs
         .iter()
         .filter_map(|o| match &o.role {
-            OutputRole::VertexOutput(k) => Some((k.0.to_vec(), o.ty.name.as_ref().map(|n| n.to_string()).unwrap_or_default())),
+            OutputRole::VertexOutput(k) => Some((
+                k.0.to_vec(),
+                o.ty.name.as_ref().map(|n| n.to_string()).unwrap_or_default(),
+            )),
             _ => None,
         })
         .collect()
@@ -192,9 +266,25 @@ fn cover(v: &EntryPoint, f: &EntryPoint) -> Option<usize> {
 }
 
 fn swapped(name: &str) -> Vec<String> {
-    let pairs = [("_frag_", "_vert_"), ("frag", "vert"), ("Frag", "Vert"), ("FRAG", "VERT"), ("fragment", "vertex"),
-                 ("Fragment", "Vertex"), ("_fs", "_vs"), ("FS", "VS"), ("_ps", "_vs"), ("PS", "VS"), ("_f_", "_v_"), ("_f", "_v")];
-    pairs.iter().filter(|(a, _)| name.contains(a)).map(|(a, b)| name.replacen(a, b, 1)).collect()
+    let pairs = [
+        ("_frag_", "_vert_"),
+        ("frag", "vert"),
+        ("Frag", "Vert"),
+        ("FRAG", "VERT"),
+        ("fragment", "vertex"),
+        ("Fragment", "Vertex"),
+        ("_fs", "_vs"),
+        ("FS", "VS"),
+        ("_ps", "_vs"),
+        ("PS", "VS"),
+        ("_f_", "_v_"),
+        ("_f", "_v"),
+    ];
+    pairs
+        .iter()
+        .filter(|(a, _)| name.contains(a))
+        .map(|(a, b)| name.replacen(a, b, 1))
+        .collect()
 }
 
 fn common_prefix(a: &str, b: &str) -> usize {
@@ -242,15 +332,27 @@ impl Harness {
         let (kind, rest) = name.split_once('<').unwrap_or((name, "float>"));
         let elem = rest.split([',', '>']).next().unwrap_or("float").trim();
         let ty = match kind.trim() {
-            "texture1d" => 0, "texture1d_array" => 1, "texture2d" | "depth2d" => 2, "texture2d_array" | "depth2d_array" => 3,
-            "texture2d_ms" | "depth2d_ms" => 4, "texturecube" | "depthcube" => 5, "texturecube_array" | "depthcube_array" => 6,
-            "texture3d" => 7, "texture2d_ms_array" | "depth2d_ms_array" => 8, "texture_buffer" => 9, _ => 2,
+            "texture1d" => 0,
+            "texture1d_array" => 1,
+            "texture2d" | "depth2d" => 2,
+            "texture2d_array" | "depth2d_array" => 3,
+            "texture2d_ms" | "depth2d_ms" => 4,
+            "texturecube" | "depthcube" => 5,
+            "texturecube_array" | "depthcube_array" => 6,
+            "texture3d" => 7,
+            "texture2d_ms_array" | "depth2d_ms_array" => 8,
+            "texture_buffer" => 9,
+            _ => 2,
         };
         let format = if kind.starts_with("depth") {
             252
         } else {
             match elem {
-                "int" => 54, "uint" => 53, "short" => 114, "ushort" => 113, _ => 115,
+                "int" => 54,
+                "uint" => 53,
+                "short" => 114,
+                "ushort" => 113,
+                _ => 115,
             }
         };
         self.texture(ty, format, matches!(ty, 4 | 8))
@@ -258,10 +360,15 @@ impl Harness {
 }
 
 /// Bind a stand-in for every argument of kernel `e` and dispatch it once: the runtime makes the region's VkPipeline (NAK).
-fn dispatch(h: &Harness, state: &metal2vulkan_runtime::ComputePipelineState, e: Option<&EntryPoint>) -> Result<(), String> {
+fn dispatch(
+    h: &Harness,
+    state: &metal2vulkan_runtime::ComputePipelineState,
+    e: Option<&EntryPoint>,
+) -> Result<(), String> {
     let cb = h.queue.command_buffer().map_err(|e| format!("command buffer: {e:?}"))?;
     let mut enc = cb.compute_command_encoder().map_err(|e| format!("encoder: {e:?}"))?;
-    enc.set_compute_pipeline_state(state).map_err(|e| format!("set state: {e:?}"))?;
+    enc.set_compute_pipeline_state(state)
+        .map_err(|e| format!("set state: {e:?}"))?;
     if let Some(e) = e {
         for p in &e.params {
             match &p.role {
@@ -291,9 +398,21 @@ fn dispatch(h: &Harness, state: &metal2vulkan_runtime::ComputePipelineState, e: 
             }
         }
     }
-    let width = u64::from(state.thread_execution_width().max(1)).min(u64::from(state.max_total_threads_per_threadgroup().max(1)));
-    enc.dispatch_threadgroups(Size { width: 1, height: 1, depth: 1 }, Size { width, height: 1, depth: 1 })
-        .map_err(|e| format!("dispatch: {e:?}"))?;
+    let width = u64::from(state.thread_execution_width().max(1))
+        .min(u64::from(state.max_total_threads_per_threadgroup().max(1)));
+    enc.dispatch_threadgroups(
+        Size {
+            width: 1,
+            height: 1,
+            depth: 1,
+        },
+        Size {
+            width,
+            height: 1,
+            depth: 1,
+        },
+    )
+    .map_err(|e| format!("dispatch: {e:?}"))?;
     enc.end_encoding().map_err(|e| format!("end: {e:?}"))?;
     cb.commit().map_err(|e| format!("commit: {e:?}"))?;
     cb.wait_until_completed().map_err(|e| format!("wait: {e:?}"))?;
@@ -304,18 +423,26 @@ fn dispatch(h: &Harness, state: &metal2vulkan_runtime::ComputePipelineState, e: 
 }
 
 fn specialize(lib: &Library, name: &str, variant: &str) -> Result<(Function, usize), String> {
-    let f = lib.new_function_with_name(name).map_err(|e| format!("function: {e:?}"))?;
-    let consts = f.function_constants_dictionary().map_err(|e| format!("constants: {e:?}"))?;
+    let f = lib
+        .new_function_with_name(name)
+        .map_err(|e| format!("function: {e:?}"))?;
+    let consts = f
+        .function_constants_dictionary()
+        .map_err(|e| format!("constants: {e:?}"))?;
     if consts.is_empty() {
         return Ok((f, 0));
     }
     let mut values = FunctionConstantValues::defaults();
     for (cname, c) in &consts {
         if let Some(bytes) = constant_value(c.data_type(), variant) {
-            values.by_name.insert(cname.clone(), FunctionConstantValue::new(c.data_type(), bytes));
+            values
+                .by_name
+                .insert(cname.clone(), FunctionConstantValue::new(c.data_type(), bytes));
         }
     }
-    lib.new_function_with_name_constant_values(name, &values).map(|f| (f, consts.len())).map_err(|e| format!("specialize: {e:?}"))
+    lib.new_function_with_name_constant_values(name, &values)
+        .map(|f| (f, consts.len()))
+        .map_err(|e| format!("specialize: {e:?}"))
 }
 
 /// The symbol a compile asks to be linked (`NeedsInput(LinkedFunction { symbol })`), if that is the refusal.
@@ -329,7 +456,12 @@ fn wanted_link(error: &str) -> Option<String> {
 /// receives through `MTLLinkedFunctions`).
 fn link(lib: &Library, linked: &mut metal2vulkan::pipeline::LinkedFunctions, symbol: &str) -> bool {
     match lib.new_function_with_name(symbol) {
-        Ok(f) if !linked.functions.iter().any(|l| l.function == f.linked_function().function) => {
+        Ok(f)
+            if !linked
+                .functions
+                .iter()
+                .any(|l| l.function == f.linked_function().function) =>
+        {
             linked.functions.push(f.linked_function());
             true
         }
@@ -342,21 +474,33 @@ fn vertex_descriptor(v: &EntryPoint) -> Option<VertexDescriptor> {
     let mut offset = 0u32;
     for p in &v.params {
         if let ParamRole::VertexInput { location } = &p.role {
-            let name = p.ty.name.as_ref().map(|n| n.to_string()).unwrap_or_else(|| "float4".into());
+            let name =
+                p.ty.name
+                    .as_ref()
+                    .map(|n| n.to_string())
+                    .unwrap_or_else(|| "float4".into());
             let (format, bytes) = vertex_format(&name).unwrap_or((31, 16));
             let format = VertexFormat::try_from(format).ok()?;
-            d.attributes.insert(n(&location.index), VertexAttributeDescriptor::new(format, offset, 30));
+            d.attributes
+                .insert(n(&location.index), VertexAttributeDescriptor::new(format, offset, 30));
             offset += bytes.next_multiple_of(4);
         }
     }
     if d.attributes.is_empty() {
         return None;
     }
-    d.layouts.insert(30, VertexBufferLayoutDescriptor::new(Some(offset.max(4))));
+    d.layouts
+        .insert(30, VertexBufferLayoutDescriptor::new(Some(offset.max(4))));
     Some(d)
 }
 
-fn render(h: &Harness, lib: &Library, v: &Function, ve: Option<&EntryPoint>, f: Option<(&Function, Option<&EntryPoint>)>) -> Result<String, String> {
+fn render(
+    h: &Harness,
+    lib: &Library,
+    v: &Function,
+    ve: Option<&EntryPoint>,
+    f: Option<(&Function, Option<&EntryPoint>)>,
+) -> Result<String, String> {
     let mut vlinked = metal2vulkan::pipeline::LinkedFunctions::default();
     let mut flinked = metal2vulkan::pipeline::LinkedFunctions::default();
     loop {
@@ -377,14 +521,23 @@ fn render(h: &Harness, lib: &Library, v: &Function, ve: Option<&EntryPoint>, f: 
 }
 
 /// Bind stand-ins for the arguments of `e` on one stage of `enc`.
-fn bind_stage(h: &Harness, enc: &mut metal2vulkan_runtime::RenderCommandEncoder, e: Option<&EntryPoint>, fragment: bool) {
+fn bind_stage(
+    h: &Harness,
+    enc: &mut metal2vulkan_runtime::RenderCommandEncoder,
+    e: Option<&EntryPoint>,
+    fragment: bool,
+) {
     let Some(e) = e else { return };
     for p in &e.params {
         match &p.role {
             ParamRole::Buffer(b) | ParamRole::ArgumentBuffer(b) => {
                 for i in 0..n(&b.location.count).max(1) {
                     let index = n(&b.location.index) + i;
-                    let _ = if fragment { enc.set_fragment_buffer(Some(&h.buffer), 0, index) } else { enc.set_vertex_buffer(Some(&h.buffer), 0, index) };
+                    let _ = if fragment {
+                        enc.set_fragment_buffer(Some(&h.buffer), 0, index)
+                    } else {
+                        enc.set_vertex_buffer(Some(&h.buffer), 0, index)
+                    };
                 }
             }
             ParamRole::Texture(t) => {
@@ -392,14 +545,22 @@ fn bind_stage(h: &Harness, enc: &mut metal2vulkan_runtime::RenderCommandEncoder,
                 if let Some(tex) = h.texture_for(&name) {
                     for i in 0..n(&t.location.count).max(1) {
                         let index = n(&t.location.index) + i;
-                        let _ = if fragment { enc.set_fragment_texture(Some(&tex), index) } else { enc.set_vertex_texture(Some(&tex), index) };
+                        let _ = if fragment {
+                            enc.set_fragment_texture(Some(&tex), index)
+                        } else {
+                            enc.set_vertex_texture(Some(&tex), index)
+                        };
                     }
                 }
             }
             ParamRole::Sampler { location } => {
                 for i in 0..n(&location.count).max(1) {
                     let index = n(&location.index) + i;
-                    let _ = if fragment { enc.set_fragment_sampler_state(Some(&h.sampler), index) } else { enc.set_vertex_sampler_state(Some(&h.sampler), index) };
+                    let _ = if fragment {
+                        enc.set_fragment_sampler_state(Some(&h.sampler), index)
+                    } else {
+                        enc.set_vertex_sampler_state(Some(&h.sampler), index)
+                    };
                 }
             }
             _ => {}
@@ -409,12 +570,19 @@ fn bind_stage(h: &Harness, enc: &mut metal2vulkan_runtime::RenderCommandEncoder,
 
 /// One pass over stand-in attachments of the pipeline's formats: three draws of the state, so a pipeline that fetches its
 /// color draws after earlier draws of its pass (the unordered fetch's barrier).
-fn draw(h: &Harness, state: &metal2vulkan_runtime::RenderPipelineState, d: &RenderPipelineDescriptor, ve: Option<&EntryPoint>,
-        fe: Option<&EntryPoint>) -> Result<(), String> {
+fn draw(
+    h: &Harness,
+    state: &metal2vulkan_runtime::RenderPipelineState,
+    d: &RenderPipelineDescriptor,
+    ve: Option<&EntryPoint>,
+    fe: Option<&EntryPoint>,
+) -> Result<(), String> {
     let mut pass = metal2vulkan_runtime::RenderPassDescriptor::new();
     let target = |format: PixelFormat| -> Result<Texture, String> {
         let td = TextureDescriptor::texture_2d(format, 64, 64, false);
-        h.device.new_texture(&td).map_err(|e| format!("target {format:?}: {e:?}"))
+        h.device
+            .new_texture(&td)
+            .map_err(|e| format!("target {format:?}: {e:?}"))
     };
     for (i, c) in d.color_attachments.iter().enumerate() {
         if let Some(c) = c {
@@ -435,8 +603,11 @@ fn draw(h: &Harness, state: &metal2vulkan_runtime::RenderPipelineState, d: &Rend
         pass.default_raster_sample_count = 1;
     }
     let cb = h.queue.command_buffer().map_err(|e| format!("command buffer: {e:?}"))?;
-    let mut enc = cb.render_command_encoder(&pass).map_err(|e| format!("encoder: {e:?}"))?;
-    enc.set_render_pipeline_state(state).map_err(|e| format!("set state: {e:?}"))?;
+    let mut enc = cb
+        .render_command_encoder(&pass)
+        .map_err(|e| format!("encoder: {e:?}"))?;
+    enc.set_render_pipeline_state(state)
+        .map_err(|e| format!("set state: {e:?}"))?;
     let _ = enc.set_vertex_buffer(Some(&h.buffer), 0, 30);
     bind_stage(h, &mut enc, ve, false);
     bind_stage(h, &mut enc, fe, true);
@@ -445,7 +616,8 @@ fn draw(h: &Harness, state: &metal2vulkan_runtime::RenderPipelineState, d: &Rend
         _ => metal2vulkan::metal::PrimitiveType::Triangle,
     };
     for _ in 0..3 {
-        enc.draw_primitives(primitive, 0, 3, 1, 0).map_err(|e| format!("{e:?}"))?;
+        enc.draw_primitives(primitive, 0, 3, 1, 0)
+            .map_err(|e| format!("{e:?}"))?;
     }
     enc.end_encoding().map_err(|e| format!("end: {e:?}"))?;
     cb.commit().map_err(|e| format!("commit: {e:?}"))?;
@@ -456,22 +628,46 @@ fn draw(h: &Harness, state: &metal2vulkan_runtime::RenderPipelineState, d: &Rend
     Ok(())
 }
 
-fn render_once(h: &Harness, v: &Function, ve: Option<&EntryPoint>, f: Option<(&Function, Option<&EntryPoint>)>,
-               vlinked: &metal2vulkan::pipeline::LinkedFunctions, flinked: &metal2vulkan::pipeline::LinkedFunctions)
-               -> Result<(metal2vulkan_runtime::RenderPipelineState, RenderPipelineDescriptor, String), String> {
-    let mut d = RenderPipelineDescriptor::new(StageSource::Function(v.function_descriptor().with_linked(vlinked.clone())));
+fn render_once(
+    h: &Harness,
+    v: &Function,
+    ve: Option<&EntryPoint>,
+    f: Option<(&Function, Option<&EntryPoint>)>,
+    vlinked: &metal2vulkan::pipeline::LinkedFunctions,
+    flinked: &metal2vulkan::pipeline::LinkedFunctions,
+) -> Result<
+    (
+        metal2vulkan_runtime::RenderPipelineState,
+        RenderPipelineDescriptor,
+        String,
+    ),
+    String,
+> {
+    let mut d = RenderPipelineDescriptor::new(StageSource::Function(
+        v.function_descriptor().with_linked(vlinked.clone()),
+    ));
     if let Some(ve) = ve {
         d.vertex_descriptor = vertex_descriptor(ve);
     }
     match f {
         Some((f, fe)) => {
-            d.fragment = Some(StageSource::Function(f.function_descriptor().with_linked(flinked.clone())));
+            d.fragment = Some(StageSource::Function(
+                f.function_descriptor().with_linked(flinked.clone()),
+            ));
             if let Some(fe) = fe {
                 let mut colors: BTreeMap<u32, String> = BTreeMap::new();
                 for o in &fe.outputs {
                     match &o.role {
-                        OutputRole::RenderTarget { attachment, index: 0, .. } => {
-                            colors.insert(n(attachment), o.ty.name.as_ref().map(|n| n.to_string()).unwrap_or_else(|| "float4".into()));
+                        OutputRole::RenderTarget {
+                            attachment, index: 0, ..
+                        } => {
+                            colors.insert(
+                                n(attachment),
+                                o.ty.name
+                                    .as_ref()
+                                    .map(|n| n.to_string())
+                                    .unwrap_or_else(|| "float4".into()),
+                            );
                         }
                         OutputRole::Depth(_) => d.depth_format = PixelFormat::try_from(260).ok(),
                         OutputRole::Stencil => {
@@ -483,11 +679,19 @@ fn render_once(h: &Harness, v: &Function, ve: Option<&EntryPoint>, f: Option<(&F
                 }
                 for p in &fe.params {
                     if let ParamRole::ColorInput { index, .. } = &p.role {
-                        colors.entry(n(index)).or_insert_with(|| p.ty.name.as_ref().map(|n| n.to_string()).unwrap_or_else(|| "float4".into()));
+                        colors.entry(n(index)).or_insert_with(|| {
+                            p.ty.name
+                                .as_ref()
+                                .map(|n| n.to_string())
+                                .unwrap_or_else(|| "float4".into())
+                        });
                     }
                 }
                 for (i, ty) in colors {
-                    if let (Some(slot), Ok(format)) = (d.color_attachments.get_mut(i as usize), PixelFormat::try_from(color_format(&ty))) {
+                    if let (Some(slot), Ok(format)) = (
+                        d.color_attachments.get_mut(i as usize),
+                        PixelFormat::try_from(color_format(&ty)),
+                    ) {
                         *slot = Some(ColorAttachmentDescriptor::new(format));
                     }
                 }
@@ -501,7 +705,10 @@ fn render_once(h: &Harness, v: &Function, ve: Option<&EntryPoint>, f: Option<(&F
         // A vertex function writing [[point_size]] draws points: Metal refuses it under the triangle class.
         Err(e) if format!("{e:?}").contains("PointSizeTopology") => {
             d.input_primitive_topology = PrimitiveTopologyClass::Point;
-            let state = h.device.new_render_pipeline_state(&d, &PipelineOptions::default()).map_err(|e| format!("{e:?}"))?;
+            let state = h
+                .device
+                .new_render_pipeline_state(&d, &PipelineOptions::default())
+                .map_err(|e| format!("{e:?}"))?;
             Ok((state, d, "points".to_string()))
         }
         Err(e) => Err(format!("{e:?}")),
@@ -510,7 +717,11 @@ fn render_once(h: &Harness, v: &Function, ve: Option<&EntryPoint>, f: Option<(&F
 
 /// The AIR64 slice of an iOS universal metallib (0xcafebabe), as the bridge's `air_slice` takes it; other input as it is.
 fn air_slice(bytes: &[u8]) -> Option<&[u8]> {
-    let word = |at: usize| bytes.get(at..at + 4).map(|w| u32::from_be_bytes([w[0], w[1], w[2], w[3]]));
+    let word = |at: usize| {
+        bytes
+            .get(at..at + 4)
+            .map(|w| u32::from_be_bytes([w[0], w[1], w[2], w[3]]))
+    };
     if word(0)? != 0xcafe_babe {
         return Some(bytes);
     }
@@ -543,7 +754,8 @@ fn main() {
         if std::env::var_os("M2V_PRINT_MESSAGES").is_some() {
             eprintln!("MSG {}: {}", m.id_name, m.text);
         }
-        if m.id_name == "metal2vulkan-pipeline-creation" || m.severity >= metal2vulkan_runtime::MessageSeverity::Warning {
+        if m.id_name == "metal2vulkan-pipeline-creation" || m.severity >= metal2vulkan_runtime::MessageSeverity::Warning
+        {
             MESSAGES.lock().unwrap().push(format!("{}: {}", m.id_name, m.text));
         }
     }));
@@ -551,7 +763,9 @@ fn main() {
     let h = Harness {
         queue: device.new_command_queue().expect("queue"),
         buffer: device.new_buffer(1 << 16, ResourceOptions::default()).expect("buffer"),
-        sampler: device.new_sampler_state(&SamplerDescriptor::default()).expect("sampler"),
+        sampler: device
+            .new_sampler_state(&SamplerDescriptor::default())
+            .expect("sampler"),
         textures: Mutex::new(BTreeMap::new()),
         draw: a.iter().any(|x| x == "--draw"),
         device,
@@ -566,7 +780,11 @@ fn main() {
     let out = std::io::stdout();
     let row = |name: &str, stage: &str, variant: &str, result: &str, phase: &str, detail: &str, ms: u128| {
         let mut o = out.lock();
-        let _ = writeln!(o, "{tag}\t{name}\t{stage}\t{variant}\t{result}\t{phase}\t{}\t{ms}", one_line(detail, 1200));
+        let _ = writeln!(
+            o,
+            "{tag}\t{name}\t{stage}\t{variant}\t{result}\t{phase}\t{}\t{ms}",
+            one_line(detail, 1200)
+        );
         let _ = o.flush();
     };
     let parsed = match container::parse(data) {
@@ -586,7 +804,12 @@ fn main() {
             return;
         }
     };
-    let vertices: Vec<usize> = infos.iter().enumerate().filter(|(_, i)| i.stage == FunctionStage::Vertex).map(|(k, _)| k).collect();
+    let vertices: Vec<usize> = infos
+        .iter()
+        .enumerate()
+        .filter(|(_, i)| i.stage == FunctionStage::Vertex)
+        .map(|(k, _)| k)
+        .collect();
     let mut paired: HashSet<usize> = HashSet::new();
     // Fragments first (they pair vertex functions), then kernels, then the vertex functions no fragment took, then the rest.
     let order: Vec<usize> = {
@@ -610,41 +833,68 @@ fn main() {
         }
         eprintln!("BEGIN {pos} {}", info.name);
         let stage = format!("{:?}", info.stage);
-        let entry_point = matches!(info.stage, FunctionStage::Kernel | FunctionStage::Vertex | FunctionStage::Fragment);
+        let entry_point = matches!(
+            info.stage,
+            FunctionStage::Kernel | FunctionStage::Vertex | FunctionStage::Fragment
+        );
         if let Some(err) = &info.decode_error {
-            row(&info.name, &stage, "-", if entry_point { "ERR" } else { "SKIP" }, "decode", err, 0);
+            row(
+                &info.name,
+                &stage,
+                "-",
+                if entry_point { "ERR" } else { "SKIP" },
+                "decode",
+                err,
+                0,
+            );
             continue;
         }
-        let has_constants = lib.new_function_with_name(&info.name).ok().and_then(|f| f.function_constants_dictionary().ok()).is_some_and(|c| !c.is_empty());
+        let has_constants = lib
+            .new_function_with_name(&info.name)
+            .ok()
+            .and_then(|f| f.function_constants_dictionary().ok())
+            .is_some_and(|c| !c.is_empty());
         let variants: &[&str] = if has_constants { &["z", "1"] } else { &["z"] };
         for &variant in variants {
             let began = Instant::now();
             let _ = take_messages();
             let result: Result<String, (String, String)> = match info.stage {
-                FunctionStage::Kernel => specialize(&lib, &info.name, variant).map_err(|e| ("function".into(), e)).and_then(|(f, _)| {
-                    let mut linked = metal2vulkan::pipeline::LinkedFunctions::default();
-                    let made = loop {
-                        let d = metal2vulkan::pipeline::ComputePipelineDescriptor::new(StageSource::Function(f.function_descriptor().with_linked(linked.clone())));
-                        match h.device.new_compute_pipeline_state(&d, &PipelineOptions::default()) {
-                            Err(e) if wanted_link(&format!("{e:?}")).is_some_and(|sym| link(&lib, &mut linked, &sym)) => continue,
-                            other => break other,
-                        }
-                    };
-                    let state = match made {
-                        Ok(s) => s,
-                        Err(e) if format!("{e:?}").contains("TileAttachments") => {
-                            let mut d = metal2vulkan::pipeline::TileRenderPipelineDescriptor::new(StageSource::Function(f.function_descriptor()));
-                            d.color_attachment_formats[0] = PixelFormat::try_from(115).ok();
-                            d.threadgroup_size_matches_tile_size = true;
-                            h.device.new_tile_render_pipeline_state(&d, &PipelineOptions::default())
-                                .map_err(|e| ("create".to_string(), format!("tile: {e:?}")))?;
-                            return Ok("tile pipeline (not dispatched)".to_string());
-                        }
-                        Err(e) => return Err(("create".to_string(), format!("{e:?}"))),
-                    };
-                    dispatch(&h, &state, info.entry.as_ref()).map_err(|e| ("dispatch".to_string(), e))?;
-                    Ok(String::new())
-                }),
+                FunctionStage::Kernel => specialize(&lib, &info.name, variant)
+                    .map_err(|e| ("function".into(), e))
+                    .and_then(|(f, _)| {
+                        let mut linked = metal2vulkan::pipeline::LinkedFunctions::default();
+                        let made = loop {
+                            let d = metal2vulkan::pipeline::ComputePipelineDescriptor::new(StageSource::Function(
+                                f.function_descriptor().with_linked(linked.clone()),
+                            ));
+                            match h.device.new_compute_pipeline_state(&d, &PipelineOptions::default()) {
+                                Err(e)
+                                    if wanted_link(&format!("{e:?}"))
+                                        .is_some_and(|sym| link(&lib, &mut linked, &sym)) =>
+                                {
+                                    continue;
+                                }
+                                other => break other,
+                            }
+                        };
+                        let state = match made {
+                            Ok(s) => s,
+                            Err(e) if format!("{e:?}").contains("TileAttachments") => {
+                                let mut d = metal2vulkan::pipeline::TileRenderPipelineDescriptor::new(
+                                    StageSource::Function(f.function_descriptor()),
+                                );
+                                d.color_attachment_formats[0] = PixelFormat::try_from(115).ok();
+                                d.threadgroup_size_matches_tile_size = true;
+                                h.device
+                                    .new_tile_render_pipeline_state(&d, &PipelineOptions::default())
+                                    .map_err(|e| ("create".to_string(), format!("tile: {e:?}")))?;
+                                return Ok("tile pipeline (not dispatched)".to_string());
+                            }
+                            Err(e) => return Err(("create".to_string(), format!("{e:?}"))),
+                        };
+                        dispatch(&h, &state, info.entry.as_ref()).map_err(|e| ("dispatch".to_string(), e))?;
+                        Ok(String::new())
+                    }),
                 FunctionStage::Fragment => (|| {
                     let (f, _) = specialize(&lib, &info.name, variant).map_err(|e| ("function".to_string(), e))?;
                     let fe = info.entry.as_ref();
@@ -658,14 +908,31 @@ fn main() {
                     if let Some(fe) = fe {
                         let mut covering: Vec<(usize, usize, usize)> = vertices
                             .iter()
-                            .filter_map(|&v| infos[v].entry.as_ref().and_then(|ve| cover(ve, fe)).map(|extra| (extra, usize::MAX - common_prefix(&infos[v].name, &info.name), v)))
+                            .filter_map(|&v| {
+                                infos[v]
+                                    .entry
+                                    .as_ref()
+                                    .and_then(|ve| cover(ve, fe))
+                                    .map(|extra| (extra, usize::MAX - common_prefix(&infos[v].name, &info.name), v))
+                            })
                             .collect();
                         covering.sort();
-                        let extra: Vec<usize> = covering.into_iter().map(|(_, _, v)| v).filter(|v| !cands.contains(v)).take(3).collect();
+                        let extra: Vec<usize> = covering
+                            .into_iter()
+                            .map(|(_, _, v)| v)
+                            .filter(|v| !cands.contains(v))
+                            .take(3)
+                            .collect();
                         cands.extend(extra);
                     }
                     if cands.is_empty() {
-                        return Err(("pair".to_string(), format!("no vertex function of the library covers its {} inputs", fe.map_or(0, |e| user_inputs(e).len()))));
+                        return Err((
+                            "pair".to_string(),
+                            format!(
+                                "no vertex function of the library covers its {} inputs",
+                                fe.map_or(0, |e| user_inputs(e).len())
+                            ),
+                        ));
                     }
                     let mut last = (String::new(), String::new());
                     for v in cands.into_iter().take(4) {
@@ -690,20 +957,35 @@ fn main() {
                     if paired.contains(&k) && variant == "z" && !has_constants {
                         Ok("paired".to_string())
                     } else {
-                        specialize(&lib, &info.name, variant).map_err(|e| ("function".into(), e)).and_then(|(vf, _)| {
-                            render(&h, &lib, &vf, info.entry.as_ref(), None).map(|_| "no fragment".to_string()).map_err(|e| ("create".to_string(), e))
-                        })
+                        specialize(&lib, &info.name, variant)
+                            .map_err(|e| ("function".into(), e))
+                            .and_then(|(vf, _)| {
+                                render(&h, &lib, &vf, info.entry.as_ref(), None)
+                                    .map(|_| "no fragment".to_string())
+                                    .map_err(|e| ("create".to_string(), e))
+                            })
                     }
                 }
                 other => Err(("skip".to_string(), format!("not an entry point ({other:?})"))),
             };
             let ms = began.elapsed().as_millis();
             let msgs = take_messages();
-            let failed: Vec<&String> = msgs.iter().filter(|m| m.contains(" failed in ") || m.contains("VK_ERROR")).collect();
+            let failed: Vec<&String> = msgs
+                .iter()
+                .filter(|m| m.contains(" failed in ") || m.contains("VK_ERROR"))
+                .collect();
             match result {
                 Ok(note) if failed.is_empty() => {
                     let made = msgs.iter().filter(|m| m.contains(" made in ")).count();
-                    row(&info.name, &stage, variant, "OK", "", &format!("{note} vkpipelines={made}"), ms)
+                    row(
+                        &info.name,
+                        &stage,
+                        variant,
+                        "OK",
+                        "",
+                        &format!("{note} vkpipelines={made}"),
+                        ms,
+                    )
                 }
                 Ok(_) => row(&info.name, &stage, variant, "ERR", "vkpipeline", failed[0], ms),
                 Err((phase, why)) if phase == "skip" => row(&info.name, &stage, variant, "SKIP", &phase, &why, ms),

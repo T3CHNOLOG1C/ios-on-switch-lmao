@@ -14,10 +14,10 @@ pub mod objects;
 use metal2vulkan::metal::{PixelFormat, PrimitiveType, TextureUsage};
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
 use metal2vulkan_runtime::{
-    BlitOption, ClearColor, CommandBuffer, CommandBufferStatus, Device, DeviceOptions, HostMemory, LoadAction, MetalLevel,
-    Origin, PipelineOptions, RenderPassDescriptor, ResourceOptions, Size, StoreAction, TextureDescriptor,
+    BlitOption, ClearColor, CommandBuffer, CommandBufferStatus, Device, DeviceOptions, HostMemory, LoadAction,
+    MetalLevel, Origin, PipelineOptions, RenderPassDescriptor, ResourceOptions, Size, StoreAction, TextureDescriptor,
 };
-use std::ffi::{c_char, c_void, CStr};
+use std::ffi::{CStr, c_char, c_void};
 use std::path::PathBuf;
 use std::ptr::NonNull;
 use std::time::Duration;
@@ -75,7 +75,9 @@ const WAIT: Duration = Duration::from_secs(10);
 
 fn finish(command_buffer: &CommandBuffer) -> Result<(), String> {
     command_buffer.commit().map_err(|e| format!("commit: {e:?}"))?;
-    command_buffer.wait_until_completed_for(WAIT).map_err(|_| "no completion in 10 s".to_string())?;
+    command_buffer
+        .wait_until_completed_for(WAIT)
+        .map_err(|_| "no completion in 10 s".to_string())?;
     match command_buffer.status() {
         CommandBufferStatus::Completed => Ok(()),
         status => Err(format!("{status:?} {:?}", command_buffer.error())),
@@ -93,44 +95,84 @@ fn open(loader: &CStr, cache: &CStr) -> Result<Device, String> {
 
 fn compute(device: &Device, library: &metal2vulkan_runtime::Library) -> Result<u32, String> {
     const COUNT: usize = 1000;
-    let function = library.new_function_with_name("scale_and_offset").map_err(|e| format!("{e:?}"))?;
+    let function = library
+        .new_function_with_name("scale_and_offset")
+        .map_err(|e| format!("{e:?}"))?;
     let state = device
         .new_compute_pipeline_state_with_function(&function, &PipelineOptions::default())
         .map_err(|e| format!("pipeline: {e:?}"))?;
     let input: Vec<u8> = (0..COUNT).flat_map(|i| (i as f32).to_le_bytes()).collect();
-    let input = device.new_buffer_with_bytes(&input, ResourceOptions::shared()).map_err(|e| format!("{e:?}"))?;
-    let output = device.new_buffer((COUNT * 4) as u64, ResourceOptions::shared()).map_err(|e| format!("{e:?}"))?;
-    let scale = device.new_buffer_with_bytes(&2.0f32.to_le_bytes(), ResourceOptions::shared()).map_err(|e| format!("{e:?}"))?;
+    let input = device
+        .new_buffer_with_bytes(&input, ResourceOptions::shared())
+        .map_err(|e| format!("{e:?}"))?;
+    let output = device
+        .new_buffer((COUNT * 4) as u64, ResourceOptions::shared())
+        .map_err(|e| format!("{e:?}"))?;
+    let scale = device
+        .new_buffer_with_bytes(&2.0f32.to_le_bytes(), ResourceOptions::shared())
+        .map_err(|e| format!("{e:?}"))?;
     let queue = device.new_command_queue().map_err(|e| format!("{e:?}"))?;
     let command_buffer = queue.command_buffer().map_err(|e| format!("{e:?}"))?;
     let mut encoder = command_buffer.compute_command_encoder().map_err(|e| format!("{e:?}"))?;
-    encoder.set_compute_pipeline_state(&state).map_err(|e| format!("{e:?}"))?;
+    encoder
+        .set_compute_pipeline_state(&state)
+        .map_err(|e| format!("{e:?}"))?;
     encoder.set_buffer(Some(&input), 0, 0).map_err(|e| format!("{e:?}"))?;
     encoder.set_buffer(Some(&output), 0, 1).map_err(|e| format!("{e:?}"))?;
     encoder.set_buffer(Some(&scale), 0, 2).map_err(|e| format!("{e:?}"))?;
-    encoder.dispatch_threads(Size::new(COUNT as u64, 1, 1), Size::new(64, 1, 1)).map_err(|e| format!("{e:?}"))?;
+    encoder
+        .dispatch_threads(Size::new(COUNT as u64, 1, 1), Size::new(64, 1, 1))
+        .map_err(|e| format!("{e:?}"))?;
     encoder.end_encoding().map_err(|e| format!("{e:?}"))?;
     finish(&command_buffer)?;
     let contents = output.contents().ok_or("no contents")?;
     // SAFETY: the buffer holds COUNT floats and no command buffer writes it now.
     let values = unsafe { std::slice::from_raw_parts(contents.as_ptr() as *const f32, COUNT) };
-    Ok(values.iter().enumerate().filter(|(i, v)| **v != 3.0 * *i as f32).count() as u32)
+    Ok(values
+        .iter()
+        .enumerate()
+        .filter(|(i, v)| **v != 3.0 * *i as f32)
+        .count() as u32)
 }
 
 /// Draws the fixture's top-left-quarter quad into `target` (cleared blue) and returns the encoded command buffer's result.
-fn draw_quad(device: &Device, library: &metal2vulkan_runtime::Library, target: &metal2vulkan_runtime::Texture,
-             readback: Option<(&metal2vulkan_runtime::Buffer, u64, u64)>) -> Result<(), String> {
-    let vertex = library.new_function_with_name("colored_vertex").map_err(|e| format!("{e:?}"))?;
-    let fragment = library.new_function_with_name("colored_fragment").map_err(|e| format!("{e:?}"))?;
+fn draw_quad(
+    device: &Device,
+    library: &metal2vulkan_runtime::Library,
+    target: &metal2vulkan_runtime::Texture,
+    readback: Option<(&metal2vulkan_runtime::Buffer, u64, u64)>,
+) -> Result<(), String> {
+    let vertex = library
+        .new_function_with_name("colored_vertex")
+        .map_err(|e| format!("{e:?}"))?;
+    let fragment = library
+        .new_function_with_name("colored_fragment")
+        .map_err(|e| format!("{e:?}"))?;
     let mut descriptor = RenderPipelineDescriptor::new(StageSource::Function(vertex.function_descriptor()));
     descriptor.fragment = Some(StageSource::Function(fragment.function_descriptor()));
     descriptor.color_attachments[0] = Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA8Unorm));
-    let state = device.new_render_pipeline_state(&descriptor, &PipelineOptions::default()).map_err(|e| format!("pipeline: {e:?}"))?;
-    let positions: [[f32; 2]; 6] = [[-1.0, 1.0], [0.0, 1.0], [-1.0, 0.0], [0.0, 1.0], [0.0, 0.0], [-1.0, 0.0]];
+    let state = device
+        .new_render_pipeline_state(&descriptor, &PipelineOptions::default())
+        .map_err(|e| format!("pipeline: {e:?}"))?;
+    let positions: [[f32; 2]; 6] = [
+        [-1.0, 1.0],
+        [0.0, 1.0],
+        [-1.0, 0.0],
+        [0.0, 1.0],
+        [0.0, 0.0],
+        [-1.0, 0.0],
+    ];
     let positions: Vec<u8> = positions.iter().flatten().flat_map(|v| v.to_le_bytes()).collect();
-    let colors: Vec<u8> = (0..6).flat_map(|_| [1.0f32, 0.2, 0.0, 1.0]).flat_map(|v| v.to_le_bytes()).collect();
-    let positions = device.new_buffer_with_bytes(&positions, ResourceOptions::shared()).map_err(|e| format!("{e:?}"))?;
-    let colors = device.new_buffer_with_bytes(&colors, ResourceOptions::shared()).map_err(|e| format!("{e:?}"))?;
+    let colors: Vec<u8> = (0..6)
+        .flat_map(|_| [1.0f32, 0.2, 0.0, 1.0])
+        .flat_map(|v| v.to_le_bytes())
+        .collect();
+    let positions = device
+        .new_buffer_with_bytes(&positions, ResourceOptions::shared())
+        .map_err(|e| format!("{e:?}"))?;
+    let colors = device
+        .new_buffer_with_bytes(&colors, ResourceOptions::shared())
+        .map_err(|e| format!("{e:?}"))?;
     let mut pass = RenderPassDescriptor::new();
     let color = &mut pass.color_attachments[0];
     color.texture = Some(target.clone());
@@ -139,16 +181,37 @@ fn draw_quad(device: &Device, library: &metal2vulkan_runtime::Library, target: &
     color.clear_color = ClearColor::new(0.0, 0.0, 1.0, 1.0);
     let queue = device.new_command_queue().map_err(|e| format!("{e:?}"))?;
     let command_buffer = queue.command_buffer().map_err(|e| format!("{e:?}"))?;
-    let mut encoder = command_buffer.render_command_encoder(&pass).map_err(|e| format!("{e:?}"))?;
-    encoder.set_render_pipeline_state(&state).map_err(|e| format!("{e:?}"))?;
-    encoder.set_vertex_buffer(Some(&positions), 0, 0).map_err(|e| format!("{e:?}"))?;
-    encoder.set_vertex_buffer(Some(&colors), 0, 1).map_err(|e| format!("{e:?}"))?;
-    encoder.draw_primitives(PrimitiveType::Triangle, 0, 6, 1, 0).map_err(|e| format!("{e:?}"))?;
+    let mut encoder = command_buffer
+        .render_command_encoder(&pass)
+        .map_err(|e| format!("{e:?}"))?;
+    encoder
+        .set_render_pipeline_state(&state)
+        .map_err(|e| format!("{e:?}"))?;
+    encoder
+        .set_vertex_buffer(Some(&positions), 0, 0)
+        .map_err(|e| format!("{e:?}"))?;
+    encoder
+        .set_vertex_buffer(Some(&colors), 0, 1)
+        .map_err(|e| format!("{e:?}"))?;
+    encoder
+        .draw_primitives(PrimitiveType::Triangle, 0, 6, 1, 0)
+        .map_err(|e| format!("{e:?}"))?;
     encoder.end_encoding().map_err(|e| format!("{e:?}"))?;
     if let Some((buffer, row, side)) = readback {
         let mut blit = command_buffer.blit_command_encoder().map_err(|e| format!("{e:?}"))?;
-        blit.copy_from_texture_to_buffer(target, 0, 0, Origin::new(0, 0, 0), Size::new(side, side, 1), buffer, 0, row,
-                                         row * side, BlitOption::None).map_err(|e| format!("{e:?}"))?;
+        blit.copy_from_texture_to_buffer(
+            target,
+            0,
+            0,
+            Origin::new(0, 0, 0),
+            Size::new(side, side, 1),
+            buffer,
+            0,
+            row,
+            row * side,
+            BlitOption::None,
+        )
+        .map_err(|e| format!("{e:?}"))?;
         blit.end_encoding().map_err(|e| format!("{e:?}"))?;
     }
     finish(&command_buffer)
@@ -176,7 +239,9 @@ fn render(device: &Device, library: &metal2vulkan_runtime::Library) -> Result<u3
     texture.usage = TextureUsage::RENDER_TARGET;
     texture.resource_options = ResourceOptions::private();
     let target = device.new_texture(&texture).map_err(|e| format!("{e:?}"))?;
-    let readback = device.new_buffer(SIDE * 4 * SIDE, ResourceOptions::shared()).map_err(|e| format!("{e:?}"))?;
+    let readback = device
+        .new_buffer(SIDE * 4 * SIDE, ResourceOptions::shared())
+        .map_err(|e| format!("{e:?}"))?;
     draw_quad(device, library, &target, Some((&readback, SIDE * 4, SIDE)))?;
     let contents = readback.contents().ok_or("no contents")?;
     // SAFETY: SIDE rows of SIDE * 4 bytes, no longer written.
@@ -192,7 +257,14 @@ fn import(device: &Device, library: &metal2vulkan_runtime::Library) -> Result<u3
     let bytes = (ROW * SIDE) as usize;
     // SAFETY: an anonymous private mapping of whole pages, unmapped below after every GPU use completed.
     let pages = unsafe {
-        libc::mmap(std::ptr::null_mut(), bytes, libc::PROT_READ | libc::PROT_WRITE, libc::MAP_PRIVATE | libc::MAP_ANON, -1, 0)
+        libc::mmap(
+            std::ptr::null_mut(),
+            bytes,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_PRIVATE | libc::MAP_ANON,
+            -1,
+            0,
+        )
     };
     if pages == libc::MAP_FAILED {
         return Err("mmap".into());
@@ -203,12 +275,15 @@ fn import(device: &Device, library: &metal2vulkan_runtime::Library) -> Result<u3
         // SAFETY: the mapping is writable, page aligned and outlives the buffer (dropped before the unmap).
         let memory = unsafe { HostMemory::new(NonNull::new(pages as *mut u8).ok_or("null")?) };
         // SAFETY: as above, for `bytes` bytes.
-        let buffer = unsafe { device.new_buffer_with_bytes_no_copy(memory, bytes as u64, ResourceOptions::shared(), None) }
-            .map_err(|e| format!("no-copy buffer: {e:?}"))?;
+        let buffer =
+            unsafe { device.new_buffer_with_bytes_no_copy(memory, bytes as u64, ResourceOptions::shared(), None) }
+                .map_err(|e| format!("no-copy buffer: {e:?}"))?;
         let mut texture = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, SIDE, SIDE, false);
         texture.usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
         texture.resource_options = ResourceOptions::shared();
-        let target = buffer.new_texture(&texture, 0, ROW).map_err(|e| format!("texture over pages: {e:?}"))?;
+        let target = buffer
+            .new_texture(&texture, 0, ROW)
+            .map_err(|e| format!("texture over pages: {e:?}"))?;
         // SAFETY: the range is this mapping.
         unsafe { sys_dcache_flush(pages, bytes) };
         draw_quad(device, library, &target, None)?;
@@ -230,7 +305,11 @@ fn import(device: &Device, library: &metal2vulkan_runtime::Library) -> Result<u3
 /// frameworks ship them), as Metal itself picks it; a thin metallib is returned as it is.
 pub fn air_slice(bytes: &[u8]) -> Option<&[u8]> {
     const AIR64: u32 = 0x0100_0017;
-    let word = |at: usize| bytes.get(at..at + 4).map(|w| u32::from_be_bytes([w[0], w[1], w[2], w[3]]));
+    let word = |at: usize| {
+        bytes
+            .get(at..at + 4)
+            .map(|w| u32::from_be_bytes([w[0], w[1], w[2], w[3]]))
+    };
     if word(0)? != 0xcafe_babe {
         return Some(bytes);
     }
@@ -249,14 +328,18 @@ pub fn air_slice(bytes: &[u8]) -> Option<&[u8]> {
 /// alike into render pipelines over a BGRA8 attachment. Counts only; refusals (function constants, tile functions) are expected.
 fn quartzcore(run: &mut Run, device: &Device, bytes: &[u8]) -> Result<(), String> {
     let bytes = air_slice(bytes).ok_or("QC library: no AIR64 slice")?;
-    let library = device.new_library_with_data(bytes).map_err(|e| format!("QC library: {e:?}"))?;
+    let library = device
+        .new_library_with_data(bytes)
+        .map_err(|e| format!("QC library: {e:?}"))?;
     let names = library.function_names();
     let list = std::env::var_os("NMB_LIST").is_some();
     run.out.qc_functions = names.len() as u32;
     let mut vertices = Vec::new();
     let mut fragments = Vec::new();
     for name in &names {
-        let Ok(function) = library.new_function_with_name(name) else { continue };
+        let Ok(function) = library.new_function_with_name(name) else {
+            continue;
+        };
         if list {
             eprintln!("fn {name} {:?}", function.function_type());
         }
@@ -343,8 +426,14 @@ fn selftest(run: &mut Run, loader: &CStr, cache: &CStr, qc: &[u8]) -> u32 {
 /// # Safety
 /// `loader` and `cache` are C strings; `qc` points at `qc_len` bytes (or is null with 0); `out` is writable.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nmb_selftest(loader: *const c_char, cache: *const c_char, qc: *const u8, qc_len: usize, mark: Mark,
-                                      out: *mut NmbSelftest) -> u32 {
+pub unsafe extern "C" fn nmb_selftest(
+    loader: *const c_char,
+    cache: *const c_char,
+    qc: *const u8,
+    qc_len: usize,
+    mark: Mark,
+    out: *mut NmbSelftest,
+) -> u32 {
     if loader.is_null() || cache.is_null() || out.is_null() {
         return 0x65ff;
     }
@@ -352,7 +441,11 @@ pub unsafe extern "C" fn nmb_selftest(loader: *const c_char, cache: *const c_cha
     let out = unsafe { &mut *out };
     // SAFETY: as above.
     let (loader, cache) = unsafe { (CStr::from_ptr(loader), CStr::from_ptr(cache)) };
-    let qc: &[u8] = if qc.is_null() || qc_len == 0 { &[] } else { unsafe { std::slice::from_raw_parts(qc, qc_len) } };
+    let qc: &[u8] = if qc.is_null() || qc_len == 0 {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(qc, qc_len) }
+    };
     // SAFETY: plain integers and bytes.
     *out = unsafe { std::mem::zeroed() };
     let mut run = Run { out, mark };

@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // Offline consumer of a pinned translator's public API; never opens a GPU.
+use metal2vulkan::Budget;
 use metal2vulkan::device::{Device, DeviceDescription, DevicePolicy, SamplingPolicy};
 use metal2vulkan::library::{FunctionStage, Library};
 use metal2vulkan::metal::PixelFormat;
 use metal2vulkan::pipeline::{
-    ColorAttachmentDescriptor, ComputePipelineDescriptor, FunctionDescriptor,
-    RenderPipelineDescriptor, StageModule, StageSource, VertexDescriptor,
+    ColorAttachmentDescriptor, ComputePipelineDescriptor, FunctionDescriptor, RenderPipelineDescriptor, StageModule,
+    StageSource, VertexDescriptor,
 };
-use metal2vulkan::Budget;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::{collections::BTreeMap, env, fs, process};
 
 fn stage(module: &StageModule) -> Value {
@@ -37,13 +37,10 @@ fn run(args: &[String]) -> Result<Value, Box<dyn std::error::Error>> {
         let path = args.get(1).ok_or("missing descriptor path")?;
         match args[0].as_str() {
             "--vertex-descriptor" if vertex_descriptor.is_none() => {
-                vertex_descriptor = Some(serde_json::from_slice::<VertexDescriptor>(&fs::read(
-                    path,
-                )?)?);
+                vertex_descriptor = Some(serde_json::from_slice::<VertexDescriptor>(&fs::read(path)?)?);
             }
             "--color-attachments" if color_attachments.is_none() => {
-                let colors =
-                    serde_json::from_slice::<BTreeMap<usize, PixelFormat>>(&fs::read(path)?)?;
+                let colors = serde_json::from_slice::<BTreeMap<usize, PixelFormat>>(&fs::read(path)?)?;
                 if colors.is_empty() || colors.keys().any(|index| *index >= 8) {
                     return Err("color attachments require indices in 0..8".into());
                 }
@@ -54,9 +51,7 @@ fn run(args: &[String]) -> Result<Value, Box<dyn std::error::Error>> {
         args = &args[2..];
     }
     if args.len() != 3 && args.len() != 5 {
-        return Err(
-            "expected --list INPUT, or PROFILE INPUT FUNCTION [FRAGMENT_INPUT FUNCTION]".into(),
-        );
+        return Err("expected --list INPUT, or PROFILE INPUT FUNCTION [FRAGMENT_INPUT FUNCTION]".into());
     }
     let description = DeviceDescription::from_khronos_json(&fs::read_to_string(&args[0])?, None)?;
     let mut policy = DevicePolicy::default().exact_answers();
@@ -71,9 +66,7 @@ fn run(args: &[String]) -> Result<Value, Box<dyn std::error::Error>> {
             if vertex_descriptor.is_some() || color_attachments.is_some() {
                 return Err("compute pipeline does not take render descriptors".into());
             }
-            let descriptor = ComputePipelineDescriptor::new(StageSource::Function(
-                FunctionDescriptor::new(function),
-            ));
+            let descriptor = ComputePipelineDescriptor::new(StageSource::Function(FunctionDescriptor::new(function)));
             let p = device.compile_compute_pipeline(&descriptor, &budget)?;
             (
                 vec![stage(&p.stage)],
@@ -84,9 +77,8 @@ fn run(args: &[String]) -> Result<Value, Box<dyn std::error::Error>> {
             )
         }
         FunctionStage::Vertex => {
-            let mut descriptor = RenderPipelineDescriptor::new(StageSource::Function(
-                FunctionDescriptor::new(function),
-            ));
+            let mut descriptor =
+                RenderPipelineDescriptor::new(StageSource::Function(FunctionDescriptor::new(function)));
             descriptor.vertex_descriptor = vertex_descriptor;
             if args.len() == 5 {
                 let fragment_library = Library::parse(&fs::read(&args[3])?)?;
@@ -94,14 +86,12 @@ fn run(args: &[String]) -> Result<Value, Box<dyn std::error::Error>> {
                 if fragment.info().stage != FunctionStage::Fragment {
                     return Err("fragment input is not a fragment function".into());
                 }
-                descriptor.fragment =
-                    Some(StageSource::Function(FunctionDescriptor::new(fragment)));
+                descriptor.fragment = Some(StageSource::Function(FunctionDescriptor::new(fragment)));
                 let colors = color_attachments
                     .as_ref()
                     .ok_or("fragment translation requires explicit color attachments")?;
                 for (&index, &format) in colors {
-                    descriptor.color_attachments[index] =
-                        Some(ColorAttachmentDescriptor::new(format));
+                    descriptor.color_attachments[index] = Some(ColorAttachmentDescriptor::new(format));
                 }
             } else if color_attachments.is_some() {
                 return Err("color attachments require a fragment function in this probe".into());
@@ -115,11 +105,7 @@ fn run(args: &[String]) -> Result<Value, Box<dyn std::error::Error>> {
                 format!("{:?}", p.requirements),
             )
         }
-        _ => {
-            return Err(
-                "stage needs a matching pipeline descriptor; standalone fragment refused".into(),
-            )
-        }
+        _ => return Err("stage needs a matching pipeline descriptor; standalone fragment refused".into()),
     };
     Ok(json!({
         "stages": stages, "layout": layout, "interface": interface,
