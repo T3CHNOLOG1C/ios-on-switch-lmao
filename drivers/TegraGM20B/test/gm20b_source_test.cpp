@@ -377,6 +377,11 @@ TEST(GM20BCoherencySource, AFailedSurfaceWritesFallsBackToMarkingEveryImport)
 		    HasSubstr("ctx->req.pushes[0].flags |= TegraGM20BPushImportsWritten;"));
 	EXPECT_THAT(nvk,
 		    HasSubstr("if (req.surface_id && !p_atomic_read(&surface_writes_failed))"));
+	// The frontend reaches both with dlsym (NativeBridgeMetalFrontend.mm nvkSymbol); Mesa builds hidden by default.
+	for (const char *exported :
+	     {"__attribute__((visibility(\"default\"))) void\nswitch_nvk_import_surface(",
+	      "__attribute__((visibility(\"default\"))) bool\nswitch_nvk_surface_gpu_writes("})
+		EXPECT_THAT(nvk, HasSubstr(exported));
 }
 
 // Only a connection's maps skip the CPU's L2 and TLB maintenance; every removal keeps it (TegraGM20BTlb.h).
@@ -422,4 +427,22 @@ TEST(GM20BSleepSource, SleepAndWakeOrder)
 		    HasSubstr("clk_raise(line, sizeof(line))"));
 	EXPECT_THAT(flat(definition(gpu(), "static void wake_device(void)")),
 		    HasSubstr("m2_device_init(device, &at)"));
+}
+
+// NVK binds a plane with a PTE kind over a VA rounded to the bind alignment (16 KiB: the page size), so a D32_SFLOAT_S8_UINT
+// image's stencil copy temp starts on it, like its planes, and its bind ends inside the image's memory (TegraGM20B refuses a
+// bind past its BO: RenderBox's memoryless depth/stencil targets came back nil and the widget drew black).
+TEST(NvkImageSource, StencilCopyTempStartsOnTheBindAlignment)
+{
+	const std::string image =
+		flat(SourceText("../../../third_party/mesa/src/nouveau/vulkan/nvk_image.c"));
+	const std::string temp =
+		image.substr(image.find("&image->stencil_copy_temp.nil, &stencil_nil_info);"));
+	EXPECT_THAT(temp.substr(0, temp.find("uint64_t plane_offset_B = 0;")),
+		    HasSubstr("if (image->stencil_copy_temp.nil.pte_kind) "
+			      "image->stencil_copy_temp.plane_align_B = "
+			      "MAX2(image->stencil_copy_temp.plane_align_B, "
+			      "pdev->nvkmd->bind_align_B);"));
+	EXPECT_THAT(flat(definition(image, "nvk_image_plane_alloc_va(struct nvk_device *dev,")),
+		    HasSubstr("const uint64_t va_align_B = plane->plane_align_B;"));
 }

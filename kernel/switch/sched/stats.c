@@ -17,6 +17,7 @@
 #include <switch/xnu.h>
 
 #include "stats.h"
+#include "SwitchPowerTrail.h"
 
 #include <kern/clock.h>
 #include <kern/locks.h>
@@ -307,7 +308,9 @@ void switch_sched_boot_complete(void)
     uint64_t ns;
 
     absolutetime_to_nanoseconds(mach_absolute_time(), &ns);
-    (void)os_atomic_cmpxchg(&boot_complete_ns, 0, ns, relaxed);
+    if (os_atomic_cmpxchg(&boot_complete_ns, 0, ns, relaxed)) {
+        switch_power_trail_mark(SWITCH_MARK_BOOT_DONE);
+    }
 }
 
 /* sched_timeshare_maintenance_continue, on the scheduler's maintenance thread. */

@@ -92,8 +92,8 @@ TEST(SwitchTouchFilter, JitterInsideTheHysteresis)
     EXPECT_TRUE(trial.reported.empty());
 }
 
-// A deliberate drag at steady strength once the contact has settled: every step after the hysteresis is taken is
-// reported, nothing jumps, and the point trails the finger by no more than the hysteresis.
+// A deliberate drag at steady strength once the contact has settled: every step after the still radius (two steps of
+// 3 px) and the hysteresis is reported, nothing jumps, and the point trails the finger by no more than the hysteresis.
 TEST(SwitchTouchFilter, SteadyDragFollowsTheFinger)
 {
     std::vector<Sample> s;
@@ -102,7 +102,7 @@ TEST(SwitchTouchFilter, SteadyDragFollowsTheFinger)
     for (int i = 1; i <= 40; ++i)
         s.push_back({100 + 3 * i, 600, 60});
     const Trial trial = feed(s);
-    ASSERT_GE(trial.reported.size(), 39u);
+    ASSERT_GE(trial.reported.size(), 38u);
     int last = 100;
     for (const auto &p : trial.reported) {
         EXPECT_LE(std::abs(p.first - last), 4) << "step to " << p.first;

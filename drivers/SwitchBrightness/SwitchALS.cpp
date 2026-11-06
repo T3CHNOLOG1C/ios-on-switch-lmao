@@ -22,7 +22,11 @@
 //     input buffer off (tegra210b01-fric-pinmux.dtsi; Atmosphere pinmux_initial_pad_config_aula.inc AlsProxInt 0x4),
 //     and Horizon has no GPIO for the sensor at all. L4T, Android, hekate and Horizon all read it on demand.
 //   * The clock: the sensor converts continuously on its own ADC clock (102.6 ms, 38 cycles, + 2 ms), and every
-//     kFramesPerSample-th frame end of display controller A takes the result. FRAME_END stays unmasked while the panel
+//     kFramesPerSample-th frame end of display controller A takes the result. It is set up as soon as it may sample (the
+//     DC restarted for a wake, LDO6 on), so the first result is one sample period later, while the panel still wakes:
+//     CoreBrightness waits only 250 ms after display-on for a first sample and otherwise takes 450 lux
+//     (AABC::FirstALSSampleTimeout; a wake on 11-06 lit at 141 nits in a 3 lux room). Samples it takes for stale (stamped
+//     before its display-on) or gets with the display off cost nothing. FRAME_END stays unmasked while the panel
 //     scans out (NativeLegacyDisplay feeds TegraPanel's DSI commands with it), so these interrupts arrive anyway;
 //     tegra_panel_frame_end_filter() hands each to switch_als_frame_end() (primary interrupt context: a count and, every
 //     seventh, a signal to this work loop, where the I2C read runs). When the scanout stops (display power off, SC7)
@@ -94,7 +98,6 @@ enum : uint8_t {
 constexpr uint8_t kCommand = 0x80, kSoftwareReset = 0xe4;
 constexpr uint8_t kPowerOn = 1u << 0, kAdcEnable = 1u << 1;
 
-constexpr unsigned kFramesPerSample = 7;  // 116.7 ms at 60 Hz, one conversion (104.6 ms) and some
 constexpr unsigned kClockDeadlineMS = 2000;
 constexpr unsigned kSupplyDeadlineMS = 20000;  // from start to SwitchTouch's first LDO6 (it powers up in ~60 ms)
 constexpr unsigned kErrorLimit = 20;           // samples in a row the sensor did not answer (about 2.3 s)
@@ -203,9 +206,10 @@ class SwitchALS : public IOService {
     bool broken = false;    // a sensor or HID path that is not as expected: logged once, sampling off for this boot
     uint64_t supplyAt = 0;  // when LDO6 last came on (switch_als_supply)
     uint64_t ticksSeen = 0;
-    // Frame-end filter state: `running` gates it; `frames` is the filter's own; `ticks` counts its signals.
+    // Frame-end filter state: `running` gates it; `frames` and `due` (frame ends to the next signal) are the filter's
+    // own once running; `ticks` counts its signals.
     bool running = false;
-    unsigned frames = 0;
+    unsigned frames = 0, due = kFramesPerSample;
     uint64_t ticks = 0;
     unsigned samples = 0, luxMin = ~0u, luxMax = 0;
     unsigned loggedLux = 0, loggedGain = ~0u;  // the last line's (noteStats); ~0u: none yet
@@ -257,15 +261,18 @@ static volatile bool gSupply;  // LDO6 as SwitchTouch last reported it, for a re
 // Primary interrupt context (TegraPanel's frame-end filter), every DC A FRAME_END.
 void SwitchALS::frameEnd()
 {
-    if (!__atomic_load_n(&running, __ATOMIC_ACQUIRE) || ++frames < kFramesPerSample)
+    if (!__atomic_load_n(&running, __ATOMIC_ACQUIRE) || ++frames < due)
         return;
     frames = 0;
+    due = kFramesPerSample;
     __atomic_fetch_add(&ticks, 1, __ATOMIC_RELAXED);
     clock->interruptOccurred(nullptr, nullptr, 0);
 }
 
-// Work loop. The sensor samples while the panel is lit, the console awake and LDO6 on; otherwise it is powered down
-// (it keeps its registers while LDO6 stays on) and the frame ends are ignored.
+// Work loop. The sensor samples while the panel is lit (or waking), the console awake and LDO6 on; otherwise it is
+// powered down (it keeps its registers while LDO6 stays on) and the frame ends are ignored. Starting sets it up at
+// once; the first tick is a frame later than the rest, because starting falls anywhere in a frame and the sensor's
+// registers still hold the last conversion from before it powered down.
 void SwitchALS::update()
 {
     const bool want = lit && !suspended && supply && !broken;
@@ -273,10 +280,16 @@ void SwitchALS::update()
         return;
     if (want) {
         frames = 0;
+        due = kFramesToFirstSample;
         errors = 0;
-        configured = false;  // at the first sample: the sensor may have lost power
+        configured = false;  // the sensor may have lost power
         ticksSeen = __atomic_load_n(&ticks, __ATOMIC_RELAXED);
         __atomic_store_n(&running, true, __ATOMIC_RELEASE);
+        const int err = configure();
+        if (err)
+            failed(err);  // the first tick tries again
+        else
+            configured = true;
         return;
     }
     __atomic_store_n(&running, false, __ATOMIC_RELEASE);
@@ -298,8 +311,9 @@ void SwitchALS::giveUp()
 // First contact, once LDO6 has been on for at least 12 ms (switch_als_supply): I2C2 up (TegraI2C: pinmux, drive,
 // clock, controller, bus clear; idempotent), the part identified and reset (the datasheet's special command, one byte;
 // all registers to default, powered down), then gain, integration time and continuous conversion (bh1730_power_on and
-// bh1730_init_config, hekate als_power_on). Later contacts (after LDO6 or SC7) only set it up again. The conversion in
-// flight is the old configuration's, so the next sample is skipped. Nothing touches the hardware before this.
+// bh1730_init_config, hekate als_power_on). Later contacts (after LDO6 or SC7) only set it up again. The sensor is
+// powered down until the last write (reset, LDO6 off, or update()'s power-down), so its first conversion is already
+// this configuration's. Nothing touches the hardware before this.
 int SwitchALS::configure()
 {
     int err;
@@ -327,7 +341,7 @@ int SwitchALS::configure()
         err = writeRegister(RegTiming, (uint8_t)(256 - kCycles));
     if (!err)
         err = writeRegister(RegControl, kPowerOn | kAdcEnable);
-    skip = 1;
+    skip = 0;
     return err;
 }
 
@@ -417,8 +431,7 @@ void SwitchALS::failed(int err)
     IOLog("SwitchALS: probe: %s\n", line);
 }
 
-// Work loop, every kFramesPerSample frame ends while running. The first one after start, wake or LDO6 configures the
-// sensor.
+// Work loop, every kFramesPerSample frame ends while running. A sensor update() could not set up is set up here.
 void SwitchALS::sample()
 {
     ticksSeen = __atomic_load_n(&ticks, __ATOMIC_RELAXED);

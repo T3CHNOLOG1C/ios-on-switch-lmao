@@ -91,6 +91,8 @@ host_test(
         "//drivers/SwitchUSB:SwitchPD.cpp",
         "//drivers/SwitchUSB:SwitchUSB.cpp",
         "//drivers/SwitchUSB:SwitchXHCI.cpp",
+        "//drivers/SwitchUSB:SwitchXHCIEvents.cpp",
+        "//drivers/SwitchUSB:SwitchXHCIServices.cpp",
         "//drivers/SwitchUSB:XusbHost.cpp",
         "//drivers/SwitchUSB:XusbHost.h",
     ],

@@ -34,7 +34,11 @@ rust_library(
     crate_name = "metal2vulkan_runtime",
     crate_root = "src/lib.rs",
     edition = "2021",
-    rustc_flags = cargo_ids("2feda064543aa7a8", "e61ed2ee65c85afb") + ["--cap-lints=allow"],
+    # switch_debug: the debug profile's seed look-up latencies (shader_cache/store.rs).
+    rustc_flags = cargo_ids("2feda064543aa7a8", "e61ed2ee65c85afb") + ["--cap-lints=allow"] + select({
+        "//bazel:debug": ["--cfg=switch_debug"],
+        "//conditions:default": [],
+    }),
     version = "0.2.0",
     deps = [
         ":build_script",

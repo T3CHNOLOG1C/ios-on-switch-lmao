@@ -4,8 +4,10 @@
 #                     the 2D engine's view of the chain) has it
 #   raw_follow_test   raw/runtime/raw_follow.h: the raw path's threads take a fixed-priority committer's policy, never a
 #                     lower one, and keep their own for a timeshare committer
+#   stage_test        stage-tegra-gm20b-metal.py on a directory standing in for the Data volume
 #
 #   bazel test //drivers/TegraGM20BMetal/test:all
+load("@rules_python//python:py_test.bzl", "py_test")
 load("//bazel/lint:defs.bzl", "lint_files")
 load("//bazel/testing:defs.bzl", "host_test")
 
@@ -30,4 +32,10 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/runtime/raw_follow.h",
     ],
     cxx_std = "c++17",
+)
+
+py_test(
+    name = "stage_test",
+    srcs = ["stage_test.py"],
+    data = ["//drivers/TegraGM20BMetal:stage-tegra-gm20b-metal.py"],
 )

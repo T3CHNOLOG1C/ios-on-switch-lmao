@@ -9,7 +9,7 @@ CUTS = {("com.apple.iokit.IOUSBHostFamily", "com.apple.driver.AppleSMC"),
         ("com.apple.iokit.IOAccessoryManager", "com.apple.iokit.IOSerialFamily")}
 kc = KC(sys.argv[1])
 roots = [r for r in ROOTS if r in kc.plist]
-sel, ifaces = kc.closure(roots, CUTS)
+sel, ifaces, codeless = kc.closure(roots, CUTS)
 print("closure with main's cuts:", len(sel))
 print(sorted(sel))
 ext = []
@@ -38,5 +38,5 @@ print("fixups total", nfix, dict(fmts))
 for k, v in sorted(cnt.items()): print("  ", k, v)
 print("distinct kernel targets", len(kt))
 for k, v in other.most_common(30): print("  unselected:", k, v)
-json.dump({"selected": sorted(sel), "interfaces": sorted(ifaces), "kernel_targets": sorted(kt)},
-          open(paths.work("closure.json"), "w"), indent=0)
+json.dump({"selected": sorted(sel), "interfaces": sorted(ifaces), "codeless": sorted(codeless),
+           "kernel_targets": sorted(kt)}, open(paths.work("closure.json"), "w"), indent=0)

@@ -31,6 +31,11 @@ enum : uint32_t {
     VERTEX_ARRAY_START = 0x0d74,
     COLOR_CLEAR_VALUE = 0x0d80,
     INVALIDATE_SHADER_CACHES_NO_WFI = 0x0da4,
+    PIXEL_SHADER_BARRIER = 0x0de0,
+    // Not in NVIDIA's published class headers: the texture data cache invalidate that NVN (deko3d's ORDER_FRAGMENTS
+    // barrier) and NVIDIA's Linux driver put after PIXEL_SHADER_BARRIER, which orders it after the earlier pixels. The
+    // _NO_WFI form acts as the front end reads it, while those pixels may still be shading or in the ROP.
+    INVALIDATE_TEXTURE_DATA_CACHE_PIXEL_ORDERED = 0x0f74,
     SCISSOR_ENABLE = 0x0e00,
     SURFACE_CLIP_H = 0x0ff4,
     CLEAR_SURFACE_CONTROL = 0x10f8,
@@ -47,6 +52,7 @@ enum : uint32_t {
     PRIMITIVE_TOPOLOGY = 0x1970,
     CLEAR_SURFACE = 0x19d0,
     COLOR_COMPRESSION = 0x19e0,
+    CT_WRITE = 0x1a00,
     VERTEX_STREAM_LOCATION = 0x1c04,
     VERTEX_STREAM_LIMIT = 0x1f00,
     CB_SELECTOR_A = 0x2380,
@@ -69,6 +75,9 @@ constexpr uint32_t kRootBytes = 0x800, kSetBytes = 0x100, kUboChunk = 0x100;
 constexpr uint32_t kTicCount = 8192, kTscCount = 1024;
 constexpr uint64_t kPushRing = 2 << 20, kUploadRing = 4 << 20;
 constexpr uint64_t kChunk = 16 << 20, kDedicated = 8 << 20;
+// The shader heap: the programs of the states a process uses, placed at first use (Device::place); the pack holds tens of MB
+// of programs, of which the render server uses a few hundred
+constexpr uint64_t kHeapCap = 8 << 20;
 constexpr uint32_t kPteKindPitch = 0;
 constexpr uint32_t kMaxSegments = TegraGM20BMaxPushes;
 // NVK's copies of pitch memory (nouveau_copy_rect: LAUNCH_DMA PIPELINED, FLUSH_ENABLE, SRC/DST_MEMORY_LAYOUT PITCH, MULTI_LINE_ENABLE)
@@ -213,22 +222,13 @@ bool Device::open(const char *packPath, uint64_t stack, std::string &err)
 
 bool Device::init(std::string &err)
 {
-    const uint64_t heapBytes = pack_.bytes(PackHeap);
+    const uint64_t heapBytes = std::min<uint64_t>(pack_.bytes(PackHeap), kHeapCap);
     if (!k_.alloc(heapBytes + 0x1000, true, heap_) || !k_.alloc(kTicCount * 32, true, tic_) ||
         !k_.alloc(kTscCount * 32, true, tsc_) || !k_.alloc(0x1000, true, root_) || !k_.alloc(0x10000, true, zero_) ||
         !k_.alloc(kPushRing, true, push_.bo) || !k_.alloc(kUploadRing, true, upload_.bo)) {
         err = k_.error();
         return false;
     }
-    // the pack's programs (its heap image) into the heap by the copy engine, from an import of the pack's mapped pages, at the
-    // head of the context's own submission (r18: no CPU copy of the shader binaries; one the kernel does not import goes on
-    // the CPU as before)
-    const uint8_t *heapImage = pack_.section<uint8_t>(PackHeap);
-    Bo heapSource;
-    const bool heapByCopy =
-        heapBytes && k_.import(const_cast<uint8_t *>(heapImage), heapBytes, heapSource, kPteKindPitch);
-    if (!heapByCopy)
-        memcpy(heap_.cpu, heapImage, heapBytes);
     memset(tic_.cpu, 0, tic_.bytes);
     memset(tsc_.cpu, 0, tsc_.bytes);
     memset(root_.cpu, 0, root_.bytes);
@@ -263,24 +263,8 @@ bool Device::init(std::string &err)
     // the context: NVK's own init methods with our addresses, then every register Core Animation's states leave the same
     uint64_t va;
     const uint32_t initCount = uint32_t(pack_.bytes(PackInit) / sizeof(PackInitMethod));
-    const uint32_t heapLaunches = uint32_t((heapBytes + (1u << 17) - 1) >> 17);
-    uint32_t *start =
-        reinterpret_cast<uint32_t *>(alloc(push_, (initCount * 2 + 4096 + heapLaunches * 10) * 4, 256, va));
-    Push p{start, start + initCount * 2 + 4096 + heapLaunches * 10};
-    if (heapByCopy) {  // 128 KiB a launch (nvk_cmd_copy_memory_ce), done before anything here or after reads the programs
-        for (uint64_t done = 0; done < heapBytes;) {
-            const uint32_t n = uint32_t(std::min<uint64_t>(heapBytes - done, 1u << 17));
-            const uint64_t from = heapSource.va + done, to = heap_.va + done;
-            p.inc(CE_OFFSET_IN_UPPER, {uint32_t(from >> 32), uint32_t(from), uint32_t(to >> 32), uint32_t(to)},
-                  SUBC_COPY);
-            p.inc(CE_LINE_LENGTH_IN, {n, 1}, SUBC_COPY);
-            p.m(CE_LAUNCH_DMA, kLaunchPitch, SUBC_COPY);
-            stats.ceOps++;
-            stats.ceBytes += n;
-            done += n;
-        }
-        p.m(WAIT_FOR_IDLE, 0);
-    }
+    uint32_t *start = reinterpret_cast<uint32_t *>(alloc(push_, (initCount * 2 + 4096) * 4, 256, va));
+    Push p{start, start + initCount * 2 + 4096};
     const PackInitMethod *im = pack_.section<PackInitMethod>(PackInit);
     for (uint32_t i = 0; i < initCount; i++) {
         uint32_t d = im[i].data;
@@ -342,69 +326,16 @@ bool Device::init(std::string &err)
     }
     lastSeqno_ = seq;
     retire(push_, seq);
-    const bool waited = k_.wait(channel_, seq);
-    if (heapByCopy)
-        k_.free(heapSource);  // (the copy is done: the context's submission completed)
-    if (!waited) {
+    if (!k_.wait(channel_, seq)) {
         err = k_.error();
         return false;
     }
-    // the copy checked where a chunking or offset fault would show: the first and last 64 bytes of each 128 KiB launch (2 KiB
-    // of uncached reads for a 2 MB heap, once); a mismatch puts the heap there by the CPU after all, before any program runs
-    // (a new path's check: off with a line, not a panic; RawMetal.mm logs heapUpload())
-    if (heapByCopy) {
-        heapUpload_ = HeapByCopy;
-        for (uint64_t at = 0; at < heapBytes && heapUpload_ == HeapByCopy; at += 1u << 17) {
-            const uint64_t end = std::min<uint64_t>(heapBytes, at + (1u << 17));
-            for (const uint64_t from : {at, end - std::min<uint64_t>(64, end - at)}) {
-                const uint64_t n = std::min<uint64_t>(64, end - from);
-                if (memcmp(heap_.cpu + from, heapImage + from, n)) {
-                    heapUpload_ = HeapCopyMismatch;
-                    break;
-                }
-            }
-        }
-        if (heapUpload_ == HeapCopyMismatch)
-            memcpy(heap_.cpu, heapImage, heapBytes);
-    }
-    // pipelines: the pack's register blobs as push words, program offsets relocated into our heap (the heap image is the pack's)
-    const PackPipeline *pp = pack_.section<PackPipeline>(PackPipelines);
-    const PackProgram *progs = pack_.section<PackProgram>(PackPrograms);
-    const uint32_t *blob = pack_.section<uint32_t>(PackBlob);
+    // SET_CT_WRITE(i), as the baseline leaves it where a state's registers do not set it
+    for (uint64_t i = 0; i < pack_.bytes(PackBaseline) / 8; i++)
+        if (base[2 * i] >= CT_WRITE && base[2 * i] < CT_WRITE + 32)
+            ctWrite_[(base[2 * i] - CT_WRITE) / 4] = base[2 * i + 1];
     pipelines_.resize(pack_.header()->pipelines);
-    for (uint32_t i = 0; i < pack_.header()->pipelines; i++) {
-        Pipeline &pl = pipelines_[i];
-        pl.rec = &pp[i];
-        std::vector<uint32_t> words(64 + pp[i].blobDwords * 2);
-        Push w{words.data(), words.data() + words.size()};
-        for (uint32_t k = 0; k < pp[i].blobDwords; k += 2) {
-            const uint32_t m = blob[pp[i].blob + k], v = blob[pp[i].blob + k + 1];
-            if (m >= 0x1a00 && m < 0x1a20 && (v & 0xffff))
-                pl.writesColor = true;  // SET_CT_WRITE(i): any target (m2v 0106)
-            w.m(m, v);
-        }
-        w.m(0x2044, progs[pp[i].vs].program);  // SET_PIPELINE_PROGRAM(VERTEX)
-        w.m(0x2144, progs[pp[i].fs].program);  // SET_PIPELINE_PROGRAM(PIXEL)
-        pl.methods.assign(words.data(), w.at);
-        memcpy(pl.push, pp[i].pushWords, sizeof pl.push);
-        pl.pushMask = pp[i].pushMask;
-        pl.vsSetCbuf = progs[pp[i].vs].cbufs >= 2;
-        pl.fsSetCbuf = progs[pp[i].fs].cbufs >= 2;
-        // the color formats of its key ("c<i>=<format>:<writeMask>:<blending>:..."), and which colors its draws read as they
-        // were (m2v linear_attachment::writes: a written color blended into, or written through a mask that keeps channels)
-        for (const char *at = pack_.string(pp[i].keyString); (at = strstr(at, " c")); at += 2) {
-            unsigned c = 0, f = 0, mask = 0, blend = 0;
-            if (sscanf(at, " c%u=%u:%u:%u", &c, &f, &mask, &blend) == 4 && c < 8) {
-                pl.colorFormats[c] = f;
-                if (mask && (blend || mask != 15))
-                    pl.readBits |= uint8_t(1u << c);
-            }
-        }
-        for (uint32_t k = 0; k < pp[i].entries; k++)
-            if (pp[i].entry[k].kind == EntryFetch && pp[i].entry[k].slot < 8)
-                pl.fetchBits |= uint8_t(1u << pp[i].entry[k].slot);
-        byKey_[pp[i].keyHash] = i;
-    }
+    placed_.assign(pack_.header()->programs, ~0u);
     // the 2D engine's state and its mip-chain self-test (raw/fx); chains on, their first chunk now too (wired here, at the
     // render server's start, not under the first mipmapped texture's frame)
     selfTest();
@@ -420,10 +351,79 @@ bool Device::init(std::string &err)
     return true;
 }
 
+// lock_ held: program `prog`'s slot in the heap, copied out of the pack the first time a state uses it, and its
+// SET_PIPELINE_PROGRAM value. A slot is a few KiB copied once per process from the pack's pages, so the CPU copies it (the copy
+// engine would want the pack's pages imported, wired, for the whole process); the next submission's prologue invalidates the
+// shader caches before any draw reads it. False: the heap is full (that state stays m2v's).
+bool Device::place(uint32_t prog, uint32_t &program)
+{
+    const PackProgram &p = pack_.section<PackProgram>(PackPrograms)[prog];
+    if (placed_[prog] == ~0u) {
+        if (heapPlaced_ + p.bytes > heap_.bytes - 0x1000)
+            return false;
+        memcpy(heap_.cpu + heapPlaced_, pack_.section<uint8_t>(PackHeap) + p.heapOffset, p.bytes);
+        placed_[prog] = uint32_t(heapPlaced_);
+        heapPlaced_ += p.bytes;
+        stats.programsPlaced++;
+    }
+    program = placed_[prog] + (p.program - p.heapOffset);
+    return true;
+}
+
+// A state of the pack, made the first time it is looked up (most of the pack's states never are in a process): its registers
+// as push words with its programs placed in the heap
 Pipeline *Device::pipeline(uint64_t keyHash)
 {
-    auto it = byKey_.find(keyHash);
-    return it == byKey_.end() ? nullptr : &pipelines_[it->second];
+    const PackPipeline *rec = pack_.find(keyHash);
+    if (!rec)
+        return nullptr;
+    std::lock_guard<std::mutex> l(lock_);
+    Pipeline &pl = pipelines_[rec - pack_.section<PackPipeline>(PackPipelines)];
+    if (pl.rec)
+        return &pl;
+    const PackPipeline &pp = *rec;
+    const PackProgram *progs = pack_.section<PackProgram>(PackPrograms);
+    const uint32_t *blob = pack_.section<uint32_t>(PackBlob);
+    uint32_t vs = 0, fs = 0;
+    if (!place(pp.vs, vs) || !place(pp.fs, fs)) {
+        stats.heapFull++;
+        return nullptr;
+    }
+    std::vector<uint32_t> words(64 + pp.blobDwords * 2);
+    Push w{words.data(), words.data() + words.size()};
+    uint32_t writes[8];
+    memcpy(writes, ctWrite_, sizeof writes);
+    for (uint32_t k = 0; k < pp.blobDwords; k += 2) {
+        const uint32_t m = blob[pp.blob + k], v = blob[pp.blob + k + 1];
+        if (m >= CT_WRITE && m < CT_WRITE + 32)
+            writes[(m - CT_WRITE) / 4] = v;
+        w.m(m, v);
+    }
+    for (uint32_t c = 0; c < 8; c++)
+        if (writes[c] & 0x1111)  // R_ENABLE, G_ENABLE, B_ENABLE, A_ENABLE
+            pl.writeBits |= uint8_t(1u << c);
+    w.m(0x2044, vs);  // SET_PIPELINE_PROGRAM(VERTEX)
+    w.m(0x2144, fs);  // SET_PIPELINE_PROGRAM(PIXEL)
+    pl.methods.assign(words.data(), w.at);
+    memcpy(pl.push, pp.pushWords, sizeof pl.push);
+    pl.pushMask = pp.pushMask;
+    pl.vsSetCbuf = progs[pp.vs].cbufs >= 2;
+    pl.fsSetCbuf = progs[pp.fs].cbufs >= 2;
+    // the color formats of its key ("c<i>=<format>:<writeMask>:<blending>:..."), and which colors its draws read as they
+    // were (m2v linear_attachment::writes: a written color blended into, or written through a mask that keeps channels)
+    for (const char *at = pack_.string(pp.keyString); (at = strstr(at, " c")); at += 2) {
+        unsigned c = 0, f = 0, mask = 0, blend = 0;
+        if (sscanf(at, " c%u=%u:%u:%u", &c, &f, &mask, &blend) == 4 && c < 8) {
+            pl.colorFormats[c] = f;
+            if (mask && (blend || mask != 15))
+                pl.readBits |= uint8_t(1u << c);
+        }
+    }
+    for (uint32_t k = 0; k < pp.entries; k++)
+        if (pp.entry[k].kind == EntryFetch && pp.entry[k].slot < 8)
+            pl.fetchBits |= uint8_t(1u << pp.entry[k].slot);
+    pl.rec = rec;
+    return &pl;
 }
 
 // ---- device: memory ----
@@ -1815,10 +1815,12 @@ void RenderEncoder::barrier()
         reserve();
     p_.m(WAIT_FOR_IDLE, 0);
     p_.m(INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI, 0);
-    colorWritten_ = false;
+    writtenBits_ = 0;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     writtenCount_ = 0;
     writtenFull_ = false;
+    anyWritten_ = false;
+    ropWritten_ = storageWritten_ = 0;
 #endif
 }
 
@@ -2103,8 +2105,14 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, uint32_t first, ui
             p.m(BIND_GROUP_CB + 0x20 * 4, 1 | 1 << 4);
         p.inc(CB_SELECTOR_A, {kRootBytes, uint32_t(d.root_.va >> 32), uint32_t(d.root_.va)});
     }
-    // framebuffer fetch reads the color attachment through the texture unit: m2v's barrier (0106: only after a draw wrote color)
-    if ((r.flags & PipelineFetches) && colorWritten_) {
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    countRules(*pl);
+#endif
+    // framebuffer fetch reads a color attachment through the texture unit: a barrier where a draw since the last one wrote a
+    // color this draw fetches (m2v's barrier, 0106, follows any color write: the ROP writes only the colors SET_CT_WRITE opens).
+    // The barrier holds this draw's pixel shading until the earlier pixels have left the ROP; vertex work and rasterization
+    // go on (NVK's for a color-output to fragment-read dependency, as NVIDIA's drivers order one)
+    if (pl->fetchBits & writtenBits_) {
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
         dev_->stats.fetchBarriers++;
         if (!whole_ && !writtenOverlaps(drawRect_))
@@ -2112,9 +2120,9 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, uint32_t first, ui
         writtenCount_ = 0;
         writtenFull_ = false;
 #endif
-        p.m(WAIT_FOR_IDLE, 0);
-        p.m(INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI, 0);
-        colorWritten_ = false;
+        p.m(PIXEL_SHADER_BARRIER, 0);
+        p.m(INVALIDATE_TEXTURE_DATA_CACHE_PIXEL_ORDERED, 0);
+        writtenBits_ = 0;
     }
     if (first != first_ || baseInstance != baseInstance_) {
         // nvk_mme_build_set_draw_params: root draw.vs.{base_vertex, base_instance} and the base registers
@@ -2125,11 +2133,11 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, uint32_t first, ui
         first_ = first;
         baseInstance_ = baseInstance;
     }
-    colorWritten_ |= pl->writesColor;
+    writtenBits_ |= pl->writeBits;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    if (pl->writesColor && whole_)
+    if (pl->writeBits && whole_)
         writtenFull_ = true;
-    else if (pl->writesColor && drawRect_[2] > drawRect_[0] && drawRect_[3] > drawRect_[1]) {
+    else if (pl->writeBits && drawRect_[2] > drawRect_[0] && drawRect_[3] > drawRect_[1]) {
         if (writtenCount_ < written_.size())
             written_[writtenCount_++] = drawRect_;
         else
@@ -2140,6 +2148,22 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, uint32_t first, ui
 }
 
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+void RenderEncoder::countRules(const Pipeline &pl)
+{
+    if (pl.fetchBits && anyWritten_) {
+        dev_->stats.fetchBarriersAnyColor++;
+        anyWritten_ = false;
+    }
+    anyWritten_ |= pl.writeBits != 0;
+    const uint8_t stored = pl.fetchBits & pl.writeBits, ropWrites = pl.writeBits & ~pl.fetchBits;
+    if ((pl.fetchBits & ropWritten_) || (ropWrites & storageWritten_)) {
+        dev_->stats.fetchBarriersInterlocked++;
+        ropWritten_ = storageWritten_ = 0;
+    }
+    ropWritten_ |= ropWrites;
+    storageWritten_ |= stored;
+}
+
 bool RenderEncoder::writtenOverlaps(const std::array<uint32_t, 4> &r) const
 {
     if (writtenFull_)

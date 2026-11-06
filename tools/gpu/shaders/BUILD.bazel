@@ -7,14 +7,21 @@ package(default_visibility = ["//gpu:__subpackages__"])
 
 lint_files()
 
+# The crawl takes metallib.py alone: its action is keyed on the IPSW's images and the crawler, nothing the corpus tools
+# change.
+py_library(
+    name = "metallib",
+    srcs = ["metallib.py"],
+)
+
 py_library(
     name = "lib",
     srcs = [
         "derive.py",
         "journal.py",
-        "metallib.py",
         "plan.py",
     ],
+    deps = [":metallib"],
 )
 
 py_binary(
@@ -31,7 +38,7 @@ py_binary(
 py_binary(
     name = "crawl",
     srcs = ["crawl.py"],
-    deps = [":lib"],
+    deps = [":metallib"],
 )
 
 py_binary(
@@ -47,4 +54,15 @@ py_binary(
 ) for name in (
     "derive_test",
     "metallib_test",
+    "plan_test",
 )]
+
+py_test(
+    name = "merge_test",
+    srcs = [
+        "merge.py",
+        "merge_test.py",
+        "precompile.py",
+    ],
+    deps = ["//tools/gpu:nvk_twin"],
+)

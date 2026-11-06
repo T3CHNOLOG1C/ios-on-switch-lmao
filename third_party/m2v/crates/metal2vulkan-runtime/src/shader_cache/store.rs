@@ -20,12 +20,14 @@
 //!   by their access time, which a hit refreshes, down to [`LOW_WATER`] of the cap. At device
 //!   creation the scan also removes other builds' directories that nothing used for
 //!   [`UNUSED_BUILD`].
-//! - A seed directory ([`SEED_VARIABLE`]), laid out as this one, may sit beneath it, read only:
-//!   an entry or record the directory does not have is looked up under the same name there. A
+//! - A seed ([`SEED_VARIABLE`]), packed or laid out as this directory (`seed.rs`), may sit
+//!   beneath it, read only: an entry or record the directory does not have is looked up under the
+//!   same name there. A
 //!   seed is never written, scanned, trimmed or touched (it may be on a read-only volume and
 //!   shared by every process); a seed file the decoder refuses is a miss, left in place, and the
 //!   compile that follows writes the directory's own entry, which is found first from then on.
 
+use super::seed::{Read as SeedRead, Seed, Space};
 use super::EntryKind;
 use crate::{DebugMessage, MessageKind, MessageSeverity, MessageSink};
 use metal2vulkan::cache::Hash256;
@@ -34,6 +36,7 @@ use std::fs;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 /// The layout version of the directory's contents.
@@ -61,9 +64,9 @@ pub(crate) fn content() -> Hash256 {
     Sha256::digest(CONTENT_TAG).into()
 }
 
-/// The environment variable naming a seed directory: an absolute path to a directory laid out as
-/// a cache directory (`<seed>/v1/...`, the module docs), which every device of the process reads
-/// beneath its own, never writing it. Unset, relative, or without `v1/`: no seed.
+/// The environment variable naming a seed directory: an absolute path to a packed seed or a
+/// directory laid out as a cache directory (`seed.rs`), which every device of the process reads
+/// beneath its own, never writing it. Unset, relative, or neither: no seed.
 pub(crate) const SEED_VARIABLE: &str = "METAL2VULKAN_SHADER_CACHE_SEED";
 
 /// The environment variable that, set (any value), leaves the directory alone: nothing is made,
@@ -80,7 +83,7 @@ pub(crate) struct Directory {
     root: PathBuf,
     build: Hash256,
     capacity: u64,
-    seed: Option<PathBuf>,
+    seed: Option<Arc<Seed>>,
     /// Whether the directory is used ([`SEED_ONLY_VARIABLE`] unset): false, it is never touched.
     own: bool,
 }
@@ -120,16 +123,20 @@ impl Directory {
             written.and(removed).map_err(failed(&directory.root))
         })();
         match made {
-            Err(_) if std::env::var_os("METAL2VULKAN_SHADER_CACHE_OPTIONAL").is_some() => Ok(directory),
+            Err(_) if std::env::var_os("METAL2VULKAN_SHADER_CACHE_OPTIONAL").is_some() => {
+                Ok(directory)
+            }
             Err(failed) => Err(failed),
             Ok(()) => Ok(directory),
         }
     }
 
-    /// This directory with `seed` beneath it (a directory laid out as a cache directory, read
-    /// only), when that holds a `v1` directory; else with none.
+    /// This directory with `seed` beneath it (read only), when that is a seed of this build; else
+    /// with none.
     pub(crate) fn with_seed(self, seed: Option<PathBuf>) -> Directory {
-        let seed = seed.filter(|seed| seed.join(LAYOUT).is_dir());
+        let seed = seed
+            .and_then(|seed| Seed::open(seed, &self.build))
+            .map(Arc::new);
         Directory { seed, ..self }
     }
 
@@ -140,7 +147,7 @@ impl Directory {
 
     /// The seed beneath the directory, if any.
     pub(crate) fn seed(&self) -> Option<&Path> {
-        self.seed.as_deref()
+        self.seed.as_deref().map(Seed::root)
     }
 
     /// The build this directory serves.
@@ -168,22 +175,18 @@ impl Directory {
         entry_path_in(&self.root, &content(), name)
     }
 
-    /// The path the seed holds the entry named `name` at, if there is a seed.
-    pub(crate) fn seed_entry_path(&self, name: &str) -> Option<PathBuf> {
-        let seed = self.seed.as_deref()?;
-        Some(entry_path_in(seed, &self.build, name))
-    }
-
-    /// The path the seed holds the record named `name` at, if there is a seed.
-    pub(crate) fn seed_record_path(&self, name: &str) -> Option<PathBuf> {
-        let seed = self.seed.as_deref()?;
-        Some(entry_path_in(seed, &content(), name))
+    /// The seed's entry named `name` of `space`, of at most `limit` bytes (no seed: absent).
+    fn read_seed(&self, space: Space, name: &str, limit: u64) -> SeedRead {
+        match self.seed.as_deref() {
+            Some(seed) => seed.read(&self.build, space, name, limit),
+            None => SeedRead::Absent,
+        }
     }
 }
 
 /// `<root>/v1/<directory, hex>/<first byte of name>/<name>`: where a directory laid out as the
 /// module docs say holds the file named `name` of the build (or content) directory `directory`.
-fn entry_path_in(root: &Path, directory: &Hash256, name: &str) -> PathBuf {
+pub(super) fn entry_path_in(root: &Path, directory: &Hash256, name: &str) -> PathBuf {
     root.join(LAYOUT)
         .join(hex(directory))
         .join(&name[..2])
@@ -284,6 +287,10 @@ pub(crate) struct Counters {
     pub(crate) driver_data_mismatched: AtomicU64,
     pub(crate) driver_data_unchanged: AtomicU64,
     pub(crate) seed_reads: AtomicU64,
+    /// Seed look-ups that found nothing, and seed hits by how long the look-up took (hit n: under
+    /// 2^n ns). Counted in debug builds only (`switch_debug`).
+    pub(crate) seed_misses: AtomicU64,
+    pub(crate) seed_hit_ns: [AtomicU64; 32],
 }
 
 impl Counters {
@@ -403,8 +410,7 @@ impl Store {
         decode: impl FnOnce(&[u8]) -> Result<T, E>,
     ) -> Lookup<T> {
         let path = self.directory.entry_path(name);
-        let seed = || self.directory.seed_entry_path(name);
-        match self.read_either(&path, seed) {
+        match self.read_either(&path, Space::Build, name) {
             FoundIn::Absent => Lookup::Absent,
             FoundIn::Failed => {
                 count(&self.counters.read_failures);
@@ -437,8 +443,7 @@ impl Store {
         decode: impl FnOnce(Vec<u8>) -> Option<T>,
     ) -> Lookup<T> {
         let path = self.directory.record_path(name);
-        let seed = || self.directory.seed_record_path(name);
-        match self.read_either(&path, seed) {
+        match self.read_either(&path, Space::Content, name) {
             FoundIn::Absent => Lookup::Absent,
             FoundIn::Failed => {
                 count(&self.counters.read_failures);
@@ -474,9 +479,9 @@ impl Store {
         Lookup::Rejected
     }
 
-    /// The file at `path` in the directory, else, where the directory has none, the seed's at
-    /// the path `seed` gives (no seed: none).
-    fn read_either(&self, path: &Path, seed: impl FnOnce() -> Option<PathBuf>) -> FoundIn {
+    /// The file at `path` in the directory, else, where the directory has none, the seed's entry
+    /// named `name` of `space` (no seed: none).
+    fn read_either(&self, path: &Path, space: Space, name: &str) -> FoundIn {
         let own = if self.directory.own {
             self.read(path)
         } else {
@@ -485,14 +490,34 @@ impl Store {
         match own {
             Found::Bytes(bytes, file) => FoundIn::Directory(bytes, file),
             Found::Failed => FoundIn::Failed,
-            Found::Absent => match seed() {
-                None => FoundIn::Absent,
-                Some(seed) => match self.read_seed(&seed) {
-                    Found::Bytes(bytes, _) => FoundIn::Seed(bytes),
-                    Found::Failed => FoundIn::Failed,
-                    Found::Absent => FoundIn::Absent,
-                },
-            },
+            Found::Absent => {
+                #[cfg(switch_debug)]
+                let began = std::time::Instant::now();
+                let read = self.directory.read_seed(space, name, self.entry_limit());
+                #[cfg(switch_debug)]
+                self.time_seed(&read, began);
+                match read {
+                    SeedRead::Bytes(bytes) => FoundIn::Seed(bytes),
+                    SeedRead::Failed => FoundIn::Failed,
+                    SeedRead::Absent => FoundIn::Absent,
+                }
+            }
+        }
+    }
+
+    /// Count a seed look-up: a miss, or a hit in its latency bucket.
+    #[cfg(switch_debug)]
+    fn time_seed(&self, read: &SeedRead, began: std::time::Instant) {
+        match read {
+            SeedRead::Absent if self.directory.seed().is_some() => {
+                count(&self.counters.seed_misses)
+            }
+            SeedRead::Bytes(_) => {
+                let nanos = u64::try_from(began.elapsed().as_nanos()).unwrap_or(u64::MAX);
+                let bucket = (u64::BITS - nanos.leading_zeros()).min(31) as usize;
+                count(&self.counters.seed_hit_ns[bucket]);
+            }
+            _ => {}
         }
     }
 
@@ -506,17 +531,6 @@ impl Store {
 
     /// Read the file at `path`. A file larger than any entry is removed and found absent.
     fn read(&self, path: &Path) -> Found {
-        self.read_file(path, true)
-    }
-
-    /// Read the seed's file at `path`, which is left as it is whatever it holds.
-    fn read_seed(&self, path: &Path) -> Found {
-        self.read_file(path, false)
-    }
-
-    /// Read the file at `path`. One larger than any entry is found absent, and removed when
-    /// `owned` (the directory's own, not the seed's).
-    fn read_file(&self, path: &Path, owned: bool) -> Found {
         let file = match fs::File::open(path) {
             Ok(file) => file,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Found::Absent,
@@ -527,18 +541,14 @@ impl Store {
         };
         let limit = self.entry_limit();
         if length > limit {
-            if owned {
-                remove(path);
-            }
+            remove(path);
             return Found::Absent;
         }
         let mut bytes = Vec::with_capacity(usize::try_from(length).unwrap_or(0));
         match (&file).take(limit + 1).read_to_end(&mut bytes) {
             Ok(_) if bytes.len() as u64 <= limit => Found::Bytes(bytes, file),
             Ok(_) => {
-                if owned {
-                    remove(path);
-                }
+                remove(path);
                 Found::Absent
             }
             Err(_) => Found::Failed,

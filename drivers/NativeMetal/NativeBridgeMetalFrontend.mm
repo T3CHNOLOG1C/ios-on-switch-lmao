@@ -6338,6 +6338,37 @@ static BOOL flagArgAnswer(id, SEL cmd, NSUInteger arg)
     return askAnswer(cmd, arg) != 0;
 }
 
+// Each object class conforms to its Metal protocol, as the target's own drivers' classes do through their _MTL base classes:
+// the OS checks conformance before trusting an object (MPSCore's -[MPSCommandBufferImageCache initWithCommandBuffer:] refuses a
+// command buffer that does not conform to MTLCommandBuffer, and MPSAutoCache then reads its nil cache).
+static void adoptMetalProtocols()
+{
+    const std::pair<Class, Protocol *> classes[] = {
+        {[NBBuffer class], @protocol(MTLBuffer)},
+        {[NBTexture class], @protocol(MTLTexture)},
+        {[NBLibrary class], @protocol(MTLLibrary)},
+        {[NBFunction class], @protocol(MTLFunction)},
+        {[NBArgumentEncoder class], @protocol(MTLArgumentEncoder)},
+        {[NBComputePipeline class], @protocol(MTLComputePipelineState)},
+        {[NBRenderPipeline class], @protocol(MTLRenderPipelineState)},
+        {[NBSampler class], @protocol(MTLSamplerState)},
+        {[NBDepthStencil class], @protocol(MTLDepthStencilState)},
+        {[NBEvent class], @protocol(MTLEvent)},
+        {[NBSharedEvent class], @protocol(MTLSharedEvent)},
+        {[NBFence class], @protocol(MTLFence)},
+        {[NBHeap class], @protocol(MTLHeap)},
+        {[NBQueue class], @protocol(MTLCommandQueue)},
+        {[NBCommandBuffer class], @protocol(MTLCommandBuffer)},
+        {[NBEncoder class], @protocol(MTLCommandEncoder)},
+        {[NBComputeEncoder class], @protocol(MTLComputeCommandEncoder)},
+        {[NBRenderEncoder class], @protocol(MTLRenderCommandEncoder)},
+        {[NBBlitEncoder class], @protocol(MTLBlitCommandEncoder)},
+        {[NBBinaryArchive class], @protocol(MTLBinaryArchive)},
+    };
+    for (const auto &[cls, protocol] : classes)
+        class_addProtocol(cls, protocol);
+}
+
 static void installAnswers(Class cls)
 {
     uint32_t kind = 0;
@@ -6446,6 +6477,7 @@ extern "C" id native_bridge_metal_open(const char *loader, const char *cache, ui
                         method_getTypeEncoding(methods[i]));
     free(methods);
     installAnswers(cls);
+    adoptMetalProtocols();
     class_addProtocol(cls, @protocol(MTLDevice));
     // The original registration (_MTLAddDevice) asserts that a plugin's device conforms to Metal's private device protocol as well; the target's own
     // drivers get it from their IOGPU base class. Conformance only answers conformsToProtocol:, the methods are still looked up one by one.
@@ -6764,6 +6796,18 @@ extern "C" size_t native_bridge_metal_rates(char *out, size_t size)
     }
     if (at + 1 < size)
         at += nbasync::appendRates(out + at, size - at);  // apso= ... (AsyncPipelines.h)
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    // seed=: look-ups the shader cache seed missed since the last line, and a seed hit's p50/p99 look-up so far (ns, the
+    // power of two above it; counted in debug builds only).
+    if (at + 1 < size) {
+        const int more =
+            snprintf(out + at, size - at, " seed=m%llu/%llu/%lluns",
+                     (unsigned long long)(now.cache.seed_misses - was.cache.seed_misses),
+                     (unsigned long long)now.cache.seed_hit_p50_ns, (unsigned long long)now.cache.seed_hit_p99_ns);
+        if (more > 0)
+            at = std::min<size_t>(at + (size_t)more, size - 1);
+    }
+#endif
     // spare=: dedicated memory requests a kept block served instead of a new BoAlloc (m2v 0113, memory.rs).
     if (at + 1 < size) {
         // held=: waitUntilScheduled calls that returned behind a shared event not reached (heldBehindEvent). rr= and gb=:

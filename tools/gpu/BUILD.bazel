@@ -47,3 +47,8 @@ py_binary(
     name = "assemble",
     srcs = ["assemble.py"],
 )
+
+py_binary(
+    name = "stage_manifest",
+    srcs = ["stage_manifest.py"],
+)

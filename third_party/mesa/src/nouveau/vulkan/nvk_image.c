@@ -1197,8 +1197,15 @@ nvk_image_init(struct nvk_device *dev,
          return vk_errorf(dev, VK_ERROR_UNKNOWN,
                           "Invalid image creation parameters");
 
+      /* Like a plane with a PTE kind: nvk_image_plane_alloc_va rounds its VA, and so its bind, to bind_align_B, so it
+       * must start there too or the bind runs past the image's memory (with 16 KiB pages, a D32_SFLOAT_S8_UINT
+       * image's temp started 8 KiB short and its bind ended 8 KiB past a BO of the image's size).
+       */
       image->stencil_copy_temp.plane_align_B =
          image->stencil_copy_temp.nil.align_B;
+      if (image->stencil_copy_temp.nil.pte_kind)
+         image->stencil_copy_temp.plane_align_B =
+            MAX2(image->stencil_copy_temp.plane_align_B, pdev->nvkmd->bind_align_B);
    }
 
    uint64_t plane_offset_B = 0;

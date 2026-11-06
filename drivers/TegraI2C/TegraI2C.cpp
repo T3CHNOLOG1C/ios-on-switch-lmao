@@ -905,6 +905,66 @@ extern "C" int tegra_i2c_final_transfer(unsigned bus, uint8_t addr, const void *
     return result;
 }
 
+#ifndef TEGRA_I2C_HOST_MODEL
+// tegra_i2c_raw_write (TegraI2C.h): no Bus state, no lock; the controller re-clocked and set up only if its clock or
+// reset says it lost that (SC7), then one packet polled to its end.
+extern "C" int tegra_i2c_raw_write(unsigned bus, uint8_t addr, const uint8_t *data, size_t len)
+{
+    if (bus < 1 || bus > kBuses || addr > 0x7f || !data || !len || len > 8)
+        return TEGRA_I2C_EINVAL;
+    if (!gI2C)
+        return TEGRA_I2C_ENOTREADY;
+    const BusInfo &info = kBus[bus - 1];
+    volatile uint8_t *regs = gI2C + info.regs;
+    const auto settled = [regs](uint32_t reg, uint32_t bits) {
+        for (const uint64_t end = nowUs() + 2000; r32(regs, reg) & bits;) {
+            if (nowUs() > end)
+                return !(r32(regs, reg) & bits);
+        }
+        return true;
+    };
+    if (!clockRunning(info)) {
+        clockEnable(info);
+        w32(gPinmux, info.scl, kPinmuxI2C);
+        w32(gPinmux, info.sda, kPinmuxI2C);
+        w32(regs, CNFG,
+            CNFG_NEW_MASTER_FSM | CNFG_PACKET_MODE | CNFG_DEBOUNCE_4T | (multiMasterBus(bus) ? CNFG_MULTI_MASTER : 0));
+        w32(regs, CLK_DIVISOR, (5u << 16) | 1u);
+        w32(regs, CONFIG_LOAD, MSTR_CONFIG_LOAD);
+        if (!settled(CONFIG_LOAD, MSTR_CONFIG_LOAD))
+            return TEGRA_I2C_ETIMEDOUT;
+    }
+    w32(regs, INT_MASK, 0);
+    w32(regs, INT_STATUS, r32(regs, INT_STATUS));
+    w32(regs, FIFO_CONTROL, FIFO_FLUSH);
+    if (!settled(FIFO_CONTROL, FIFO_FLUSH))
+        return TEGRA_I2C_ETIMEDOUT;
+    w32(regs, TX_FIFO, PKT0_I2C);
+    w32(regs, TX_FIFO, (uint32_t)len - 1);
+    w32(regs, TX_FIFO, HDR_IE | (uint32_t)addr << 1);
+    for (size_t i = 0; i < len; i += 4) {
+        uint32_t word = 0;
+        for (size_t j = 0; j < 4 && i + j < len; ++j)
+            word |= (uint32_t)data[i + j] << (8 * j);
+        w32(regs, TX_FIFO, word);
+    }
+    int result = TEGRA_I2C_ETIMEDOUT;
+    for (const uint64_t end = nowUs() + 5000 + (uint64_t)(len + 2) * 18 * 1000000 / 100000; nowUs() <= end;) {
+        const uint32_t status = r32(regs, INT_STATUS);
+        if (status & (INT_NO_ACK | INT_ARB_LOST)) {
+            result = (status & INT_NO_ACK) ? TEGRA_I2C_ENACK : TEGRA_I2C_EARB;
+            break;
+        }
+        if (status & INT_PACKET_DONE) {
+            result = TEGRA_I2C_OK;
+            break;
+        }
+    }
+    w32(regs, INT_STATUS, r32(regs, INT_STATUS));
+    return result;
+}
+#endif
+
 // Thread context; waits for a transfer in flight. Registers are read only while the controller is clocked.
 extern "C" void tegra_i2c_describe(unsigned bus, char *buffer, size_t size)
 {

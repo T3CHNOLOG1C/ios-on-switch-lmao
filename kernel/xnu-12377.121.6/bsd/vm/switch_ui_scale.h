@@ -20,15 +20,32 @@ struct switch_ui_scale {
 	uint32_t    float_bits; /* num / den as MobileGestalt's float */
 	/* ProgressUI's 239 x 4 point bar, as two floats whose single-precision products with float_bits are whole */
 	uint32_t    progress_bar_bits[2];
+	/*
+	 * The app switcher's two-row card scale in landscape, grid_num / grid_den of the screen (an fmov
+	 * immediate), for 16:9, where iPadOS's 0.3 leaves the cards no room between the status bar and the dock
+	 * (switch_ui_scale_sites.h)
+	 */
+	uint8_t     grid_num, grid_den;
+	/*
+	 * SystemStatusUI's expanded battery (icon size 15: Control Center's status bar) as doubles' bits, its body
+	 * height and its line width and interspace; 0 where the row stays stock (switch_ui_scale_sites.h)
+	 */
+	uint64_t    expanded_battery_bits[2];
 };
 
 static const struct switch_ui_scale switch_ui_scales[] = {
 	/* 720x1280 points: the stock screen, every UI scale site left stock */
-	{"1", 1, 1, 0x3f800000, {0x436f0000, 0x40800000}},
-	/* 576x1024; 239.2 x 4: a 299 x 5 pixel bar */
-	{"1.25", 5, 4, 0x3fa00000, {0x436f3333, 0x40800000}},
-	/* 450x800: a 9.7- to 12.9-inch iPad's point at 209.8 ppi; 238.75 x 3.75: a 382 x 6 pixel bar */
-	{"1.6", 8, 5, 0x3fcccccd, {0x436ec000, 0x40700000}},
+	{"1", 1, 1, 0x3f800000, {0x436f0000, 0x40800000}, 0, 0, {0, 0}},
+	/*
+	 * 576x1024; 239.2 x 4: a 299 x 5 pixel bar; switcher cards 256 x 144 (320 x 180 pixels); expanded battery
+	 * 14.4 points tall (18 pixels) with a 1.6 point line (2 pixels; 0x3fe999999999999a, 0.8, for 1)
+	 */
+	{"1.25", 5, 4, 0x3fa00000, {0x436f3333, 0x40800000}, 1, 4, {0x402ccccccccccccdULL, 0x3ff999999999999aULL}},
+	/*
+	 * 450x800: a 9.7- to 12.9-inch iPad's point at 209.8 ppi; 238.75 x 3.75: a 382 x 6 pixel bar; switcher cards
+	 * 150 x 84.375 (240 x 135 pixels)
+	 */
+	{"1.6", 8, 5, 0x3fcccccd, {0x436ec000, 0x40700000}, 3, 16, {0, 0}},
 };
 #define SWITCH_UI_SCALES        (sizeof(switch_ui_scales) / sizeof(switch_ui_scales[0]))
 #define SWITCH_UI_SCALE_UNIT    0u
@@ -116,6 +133,13 @@ switch_a64_put(uint8_t *out, uint32_t insn)
 	out[3] = (uint8_t)(insn >> 24);
 }
 
+static inline void
+switch_put64(uint8_t *out, uint64_t value)
+{
+	switch_a64_put(out, (uint32_t)value);
+	switch_a64_put(out + 4, (uint32_t)(value >> 32));
+}
+
 /* How a site's edit gets its bytes: fixed in the site, or made for the boot's scale. */
 enum switch_ui_scale_edit_kind {
 	SWITCH_US_FIXED = 0,
@@ -127,6 +151,14 @@ enum switch_ui_scale_edit_kind {
 	 * fmadd d11, d13, d3, d11; fmadd d8, d13, d3, d8. None where 2 * num / den is no fmov immediate.
 	 */
 	SWITCH_US_BATTERY_FILL,
+	/*
+	 * 12 bytes: fmov d9, d8; tbnz w0, #0, +0x30; fmov d11, #(grid_num / grid_den). None where the scale has no
+	 * grid scale or it is no fmov immediate.
+	 */
+	SWITCH_US_GRID_SCALE,
+	/* 8 bytes each: expanded_battery_bits[0] and [1], little-endian; none where the scale has none */
+	SWITCH_US_EXPANDED_BATTERY_HEIGHT,
+	SWITCH_US_EXPANDED_BATTERY_LINE,
 };
 
 /* Writes the edit's bytes for the scale; false when the kind's length is not size or the kind has none at the scale. */
@@ -171,6 +203,26 @@ switch_ui_scale_edit_bytes(enum switch_ui_scale_edit_kind kind, const struct swi
 		switch_a64_put(out + 16, 0x1e721003u); /* fmov d3, #-4.0 */
 		switch_a64_put(out + 20, 0x1f432dabu); /* fmadd d11, d13, d3, d11 */
 		switch_a64_put(out + 24, 0x1f4321a8u); /* fmadd d8, d13, d3, d8 */
+		return true;
+	}
+	case SWITCH_US_GRID_SCALE: {
+		uint32_t landscape_scale = 0;
+		if (size != 12 || scale->grid_den == 0 ||
+		    !switch_a64_fmov_d(11, scale->grid_num, scale->grid_den, &landscape_scale)) {
+			return false;
+		}
+		switch_a64_put(out, 0x1e604109u);     /* fmov d9, d8 */
+		switch_a64_put(out + 4, 0x37000180u); /* tbnz w0, #0, +0x30 */
+		switch_a64_put(out + 8, landscape_scale);
+		return true;
+	}
+	case SWITCH_US_EXPANDED_BATTERY_HEIGHT:
+	case SWITCH_US_EXPANDED_BATTERY_LINE: {
+		const uint64_t bits = scale->expanded_battery_bits[kind - SWITCH_US_EXPANDED_BATTERY_HEIGHT];
+		if (size != 8 || bits == 0) {
+			return false;
+		}
+		switch_put64(out, bits);
 		return true;
 	}
 	case SWITCH_US_FIXED:

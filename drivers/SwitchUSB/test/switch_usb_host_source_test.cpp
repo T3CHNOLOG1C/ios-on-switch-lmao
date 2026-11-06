@@ -37,7 +37,9 @@ TEST(SwitchUsbHostSource, DriverConstants)
     // DT <0 0x27 4>, <0 0x28 4>: SPI 39, 40
     EXPECT_THAT(SourceText("../XusbHost.h"), HasSubstr("kHostIntid = 32 + 39, kMailboxIntid = 32 + 40"));
     const std::string xhci = SourceText("../SwitchXHCI.cpp");
-    EXPECT_THAT(xhci, HasSubstr("switch_interrupt_nub(xhost::kHostIntid, false)"));  // level, as IRQ_TYPE_LEVEL_HIGH
+    EXPECT_THAT(xhci, HasSubstr("xhost::makeNub(xhost::kXhciPA, xhost::kXhciBytes, xhost::kHostIntid)"));
+    // level, as IRQ_TYPE_LEVEL_HIGH
+    EXPECT_THAT(SourceText("../SwitchXHCIServices.cpp"), HasSubstr("switch_interrupt_nub(intid, false)"));
     EXPECT_THAT(xhci, HasSubstr("switch_interrupt_nub(xhost::kMailboxIntid, false)"));
 }
 
@@ -72,7 +74,7 @@ TEST(SwitchUsbHostSource, GicLevelSpiWithLic)
 
 TEST(SwitchUsbHostSource, NoPanicBeforeProof)
 {
-    const std::string check = Body(SourceText("../SwitchXHCI.cpp"), "void SwitchXHCI::checkFired(");
+    const std::string check = Body(SourceText("../SwitchXHCIEvents.cpp"), "void SwitchXHCI::checkFired(");
     EXPECT_EQ(Count(check, "panic("), 1u);
     EXPECT_LT(at(check, "if (verdict == XUSB_IRQ_PANIC)"), at(check, "panic("));
     EXPECT_THAT(check, HasSubstr("switch_usb_host_failed()"));
@@ -98,6 +100,30 @@ TEST(SwitchUsbHostSource, HostRoleUsesThePortHelpers)
     for (const char *name : {"xhci_find_ports(", "xhci_portsc_power(", "xusb_vbus_id_host(", "xusb_chrg_ctl1_host("})
         EXPECT_THAT(source, HasSubstr(name));
     const std::string apply = Body(SourceText("../SwitchUSB.cpp"), "void applyRole(");
-    // The pad goes to the host before the controller first starts (it powers its ports itself then).
+    // The pad goes to the host before the controller first starts.
     EXPECT_LT(at(apply, "switchxhci_set_host_role(true)"), at(apply, "switchxhci_start("));
+}
+
+// AppleUSBXHCI powers a root port only for a cable (an iPad's port controller reports it): the host role reports it
+// once the controller has started, and the device role takes it back before the pad leaves the host.
+TEST(SwitchUsbHostSource, TheCableFollowsTheRole)
+{
+    const std::string apply = Body(SourceText("../SwitchUSB.cpp"), "void applyRole(");
+    const size_t start = at(apply, "switchxhci_start(");
+    EXPECT_NE(apply.find("switchxhci_cable(true)", start), std::string::npos);
+    const size_t device = at(apply, "} else if (!wantHost && gHostRole) {");
+    EXPECT_LT(apply.find("switchxhci_cable(false)", device), apply.find("switchxhci_set_host_role(false)", device));
+    EXPECT_THAT(SourceText("../SwitchXHCIServices.cpp"), HasSubstr("\"UsbForcePower\""));
+}
+
+// No sleep hold: the Tegra side goes down with SC7 and comes back before IOKit raises AppleUSBXHCI.
+TEST(SwitchUsbHostSource, HostFollowsSc7)
+{
+    const std::string usb = SourceText("../SwitchUSB.cpp");
+    EXPECT_THAT(usb, Not(HasSubstr("createPMAssertion")));
+    EXPECT_THAT(Body(usb, "void switch_usb_suspend("), HasSubstr("switchxhci_sleep(true)"));
+    EXPECT_THAT(Body(usb, "void switch_usb_resume("), HasSubstr("switchxhci_sleep(false)"));
+    const std::string sleep = Body(SourceText("../SwitchXHCIEvents.cpp"), "void switchxhci_sleep(");
+    EXPECT_LT(at(sleep, "gHost.powerOn("), at(sleep, "gHost.loadFirmware("));
+    EXPECT_LT(at(sleep, "gHost.loadFirmware("), at(sleep, "xhost::MBOX_MSG_ENABLED"));
 }

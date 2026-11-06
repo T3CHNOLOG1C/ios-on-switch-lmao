@@ -50,10 +50,10 @@ load("@rules_rust//rust:toolchain.bzl", "rust_stdlib_filegroup", "rust_toolchain
 
 exports_files(["bin/rustc", "bin/cargo", "bin/rustfmt", "bin/rustdoc"])
 
-# rustfmt and the compiler libraries it loads (@rpath ../lib).
+# rustfmt (the wrapper, the real one and its empty config) and the compiler libraries it loads (@rpath ../lib).
 filegroup(
     name = "rustfmt",
-    srcs = ["bin/rustfmt"] + glob(["lib/*.dylib"]),
+    srcs = ["bin/rustfmt", "bin/rustfmt-real", "rustfmt.toml"] + glob(["lib/*.dylib"]),
 )
 
 filegroup(
@@ -106,6 +106,15 @@ filegroup(
 ) for triple, os in (("aarch64-apple-darwin", "@platforms//os:osx"), ("aarch64-apple-ios", "@platforms//os:ios"))]
 """
 
+# rustfmt takes the first rustfmt.toml above its working directory. In a sandbox that is wherever the output base lives:
+# one below this checkout found its rustfmt.toml (max_width 120), so the generated Rust NAK compiles, the panic line
+# numbers in NVK, and with them NVK's LC_UUID and pipeline cache UUID (every seed record's identity) depended on where
+# the output base was. Every Mesa generator now formats with the defaults, as an output base outside the tree did.
+_RUSTFMT_WRAPPER = """#!/bin/sh
+here=$(dirname "$0")
+exec "$here/rustfmt-real" --config-path "$here/../rustfmt.toml" "$@"
+"""
+
 def _rust_sysroot_impl(rctx):
     for archive, component, sha256 in RUST_COMPONENTS:
         rctx.download_and_extract(
@@ -113,6 +122,9 @@ def _rust_sysroot_impl(rctx):
             sha256 = sha256,
             stripPrefix = archive + "/" + component,
         )
+    rctx.rename("bin/rustfmt", "bin/rustfmt-real")
+    rctx.file("bin/rustfmt", _RUSTFMT_WRAPPER, executable = True)
+    rctx.file("rustfmt.toml", "")
     rctx.file("BUILD.bazel", _ALL_FILES + _RUST_TOOLCHAINS)
 
     # Pinned downloads only: the repository contents cache shares this across output bases and worktrees.

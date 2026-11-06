@@ -38,9 +38,9 @@
 //   last PP cycle; PADCTL PORT_CAP, VBUS_ID (ID, VBUS override), pad power, charger detect, OC maps | BM92T36 phase,
 //   STATUS1 (switch1/2, VSAFE), STATUS2, CONFIG1, VENDOR (OCP), rails and their GPIOs (PX3, PK5), PSEL/OTG (PJ5,
 //   PL0) | BQ24193 REG01/05/08/09 (CHG_CONFIG, watchdog, VBUS_STAT, faults) and the battery current
-// The host role first hands the pad over (XUDC off the bus, ID grounded, charger-detect leftovers cleared), then
-// powers the port: the controller's first start powers its ports itself; later host roles cycle the OTG port's
-// PORTSC.PP as xhci-tegra.c does for T210, so the firmware sees the port powered with the pad in the host role.
+// The host role first hands the pad over (XUDC off the bus, ID grounded, charger-detect leftovers cleared; later host
+// roles also cycle the OTG port's PORTSC.PP as xhci-tegra.c does for T210), then reports the cable to the connector's
+// root port as an iPad's port controller does: AppleUSBXHCI powers a root port only for a cable (switchxhci_cable).
 #pragma once
 #include <stddef.h>
 
@@ -53,8 +53,8 @@ extern "C" {
 int switch_usb_start(void);
 
 // System sleep (drivers/SwitchSuspend's sleep and wake actions, one thread). Device mode goes off the bus before SC7
-// and is powered on whole after it, back on the bus if it was; a host controller started this boot holds the system
-// awake instead (SC7 would take its firmware and Apple's xHCI state with it). No-ops without USB.
+// and is powered on whole after it, back on the bus if it was; a host controller's Tegra side goes down with SC7 and is
+// powered with its firmware again before IOKit raises AppleUSBXHCI (switchxhci_sleep). No-ops without USB.
 void switch_usb_suspend(void);
 void switch_usb_resume(void);
 
@@ -80,6 +80,11 @@ bool switchxhci_start(char *why, size_t whySize);
 // cycles the OTG port's PORTSC.PP. Thread context.
 void switchxhci_set_host_role(bool host);
 void switchxhci_expect_port_change(void);  // a device appeared in host role: arm the lost-interrupt check
+// The USB-C cable in or out in the host role: the connector's root port powered for a device, or held off. Thread
+// context.
+void switchxhci_cable(bool connected);
+// switch_usb_suspend/resume's host half: the Tegra side down for SC7, and powered with its firmware again after it.
+void switchxhci_sleep(bool entering);
 // SwitchUSB.cpp: host mode off for this boot (a never-booted interrupt line did not deliver; the caller logged it).
 // Thread context.
 void switch_usb_host_failed(void);

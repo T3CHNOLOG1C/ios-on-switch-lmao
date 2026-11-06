@@ -8,7 +8,7 @@ compared with the i-th of the other.
 A draw is the same GPU work when every field matches: the live 3D registers (R line), the render targets (by
 first-appearance name), the vertex data, each stage's program and register count, and the bytes each program's constant
 buffers hold (pointers replaced by what they point to, handles by their texture/sampler headers). Barriers are compared
-as sets: the raw path must cover what NVK emitted before each draw that reads memory written earlier (WFI + TEXINV
+as sets: the raw path must cover what NVK emitted before each draw that reads memory written earlier (PSB + TEXINV
 before a framebuffer fetch).
 
 usage: eqcheck.py <nvk.log> <raw.log> [--show N] [--flat] [--layouts] [--own]
@@ -230,7 +230,7 @@ def compare_barriers(tally: Tally, where: str, xb: set[str], yb: set[str]) -> bo
         tally.bar_missing[m] += 1
     for m in yb - xb:
         tally.bar_extra[m] += 1
-    if 'TEXINV' not in missing and 'WFI' not in missing:
+    if 'TEXINV' not in missing and 'WFI' not in missing and 'PSB' not in missing:
         return True
     tally.mism['barrier (fetch/pass)'] += 1
     if tally.wants('barrier (fetch/pass)'):

@@ -25,8 +25,9 @@ extern "C" {
 // work-loop action; not from a primary interrupt filter.
 void switch_power_journal(const char *format, ...) __attribute__((format(printf, 1, 2)));
 
-// Writes the ring to power.log: on a kernel thread call (wait false: returns at once), or now (wait true: thread
-// context, may block on the SD for tens of milliseconds; system sleep, before the SD suspends). Failures log one line.
+// Writes the ring to power.log: on a kernel thread call (wait false: returns at once), or now and committed to the card
+// (wait true: thread context, may block on the SD for tens of milliseconds; system sleep, before the SD suspends).
+// Failures log one line.
 void switch_power_journal_flush(bool wait);
 
 // A journal line a release kernel keeps too, as one os_log line (an error, or what a sleep or wake came to).

@@ -1583,7 +1583,8 @@ void AGXDeviceUserClient::scanPushes(const tgm_push *pushes, uint32_t count, tgm
 					w.shaderInval, w.shaderInvalNoWfi, w.texInval,
 					w.setRef,      w.l2Inval,          w.hostWfi,
 					w.ceCopies,    w.ceBytes >> 10,    w.ceWfi,
-					w.blits,       w.dispatches,       w.acquires};
+					w.blits,       w.dispatches,       w.acquires,
+					w.psBarriers,  w.interlocks};
 		constexpr size_t kFields = sizeof(per) / sizeof(per[0]);
 		char v[kFields][24];
 		for (size_t k = 0; k < kFields; k++)
@@ -1596,11 +1597,11 @@ void AGXDeviceUserClient::scanPushes(const tgm_push *pushes, uint32_t count, tgm
 			 "shinv+WFI, %s "
 			 "shinv, %s texinv, %s setref, %s L2 inv, %s host WFI; %s CE (%s KiB), %s "
 			 "CE WFI, %s 2D, "
-			 "%s disp, %s acq; %llu bad",
+			 "%s disp, %s acq; %s PS barrier, %s interlock; %llu bad",
 			 window[i].name, w.scanned, w.submits, v[0],
 			 w.bytes ? w.readBytes * 100 / w.bytes : 0, v[1], v[2], v[3], v[4], v[5],
 			 v[6], v[7], v[8], v[9], v[10], v[11], v[12], v[13], v[14], v[15], v[16],
-			 v[17], v[18], v[19], v[20], w.unparsed);
+			 v[17], v[18], v[19], v[20], v[21], v[22], w.unparsed);
 		os_log(OS_LOG_DEFAULT, "tegra-gm20b: push %s", line); /* log only */
 	}
 }

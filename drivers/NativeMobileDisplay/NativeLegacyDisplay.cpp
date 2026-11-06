@@ -29,6 +29,7 @@
 #include "../TegraSMMU/TegraSMMUDomain.h"
 #include "DisplaySmmuProbe.h"
 #include "NativePlanes.h"
+#include "SwitchInteraction.h"
 #include "../TegraVIC/TegraVICConfig.h"
 #include "TegraDisplayPower.h"
 #include "VsyncPhase.h"
@@ -53,6 +54,12 @@ extern "C" int tegra_gm20b_sync_for_cpu(const void *, uint64_t, uint64_t) __attr
 extern "C" void switch_render_server_watch(task_t);
 extern "C" void proc_selfname(char *, int);
 extern "C" size_t switch_render_senders_line(char *, size_t, uint64_t, unsigned);
+// XNU (kernel/switch/diag/frames.c): the current run of touches, the clients' commit cadence and touch delivery, and
+// each present for the touch-to-scan latency line
+extern "C" void switch_frames_touch_activity(uint64_t *, uint64_t *);
+extern "C" size_t switch_frames_line(bool, char *, size_t);
+extern "C" void switch_frames_present(uint64_t, uint64_t, uint64_t);
+extern "C" size_t switch_frames_latency_line(char *, size_t);
 extern "C" uint64_t native_legacy_surface_width(OSObject *), native_legacy_surface_height(OSObject *);
 extern "C" uint64_t native_legacy_surface_stride(OSObject *), native_legacy_surface_allocation(OSObject *);
 extern "C" uint32_t native_legacy_surface_format(OSObject *), native_legacy_surface_planes(OSObject *);
@@ -519,6 +526,7 @@ struct FrameHist {
 // base, the instance would pass the 16 KiB a kalloc_type class may have (KALLOC_SAFE_ALLOC_SIZE).
 struct FrameHists {
     FrameHist presentGap, latency, touchScan;
+    SwitchInteraction interaction;
 };
 }
 
@@ -995,6 +1003,8 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
         kLongCauses
     };
 
+    static_assert(SwitchInteraction::kCauses == kLongCauses, "the interaction line names the causes in this order");
+
     Span stPhaseLead = {};  // r17-touch: the measured V_PULSE2-to-frame-end lead, per frame it carried the vsync
     uint32_t phaseReplacedSeen = 0;  // stReplaced at the last present (replaced flips are phase misses)
     Span stPQueue = {}, stPWait = {}, stPCopy = {}, stPLatch = {};
@@ -1047,6 +1057,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
         ++stPresents;
         ++stLatch[latchedAt <= 1 ? 0 : 1];
         if (mark.submit && stamp > mark.submit) {
+            switch_frames_present(vsyncOf(mark), mark.submit, stamp);
             if (const uint64_t touch = switch_touch_take_report(mark.submit)) {
                 stTouchSwap.add(mark.submit - touch);
                 if (frameHists)
@@ -1061,8 +1072,12 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
                 stPLatch.add(stamp - mark.ready);
             }
         }
+        uint64_t intervalUs = 0;
+        uint32_t periods = 0;
+        unsigned cause = kLongCauses;
         if (lastPresent && stamp > lastPresent) {
             const uint64_t us = Span::ticksToUs(stamp - lastPresent);
+            intervalUs = us;
             if (us >= kGapUs)
                 ++stGaps[us < 1000000 ? 0 : 1];
             else {
@@ -1070,14 +1085,70 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
                     hists->presentGap.add(us);
                 const uint64_t period = vsyncInterval ? Span::ticksToUs(vsyncInterval) : 16667;
                 const uint64_t frames = (us + period / 2) / period;
+                periods = (uint32_t)frames;
                 ++stVb[frames <= 1 ? 0 : frames >= 4 ? 3 : frames - 1];
                 if (frames >= 2) {
-                    const unsigned cause = noteLong((uint32_t)frames, mark);
+                    cause = noteLong((uint32_t)frames, mark);
                     if (SWITCH_FRAME_TIMELINE)
                         noteSlowFrame(stamp, us, (uint32_t)frames, cause, mark);
                 }
             }
         }
+        if (frameHists)
+            noteInteraction(stamp, intervalUs, periods, cause);
+    }
+
+    // Debug kernels: a present inside a touch interaction window (SwitchInteraction.h), after closing an ended one.
+    void noteInteraction(uint64_t stamp, uint64_t intervalUs, uint32_t periods, unsigned cause)
+    {
+        uint64_t began = 0, lastDown = 0;
+        switch_frames_touch_activity(&began, &lastDown);
+        const uint64_t now = Span::ticksToUs(stamp), beganUs = Span::ticksToUs(began),
+                       lastDownUs = Span::ticksToUs(lastDown);
+        SwitchInteraction &window = hists->interaction;
+        const bool active = SwitchInteraction::active(now, beganUs, lastDownUs);
+        if (window.isOpen() && !active)
+            closeInteraction(lastDownUs);
+        if (active)
+            window.present(now, intervalUs, periods, cause, beganUs);
+    }
+
+    // At a frame end: a window whose run of touches ended kTailUs ago closes even when nothing presents any more.
+    void checkInteraction()
+    {
+        if (!frameHists || !hists->interaction.isOpen())
+            return;
+        uint64_t began = 0, lastDown = 0;
+        switch_frames_touch_activity(&began, &lastDown);
+        const uint64_t lastDownUs = Span::ticksToUs(lastDown);
+        if (!SwitchInteraction::active(Span::ticksToUs(mach_absolute_time()), Span::ticksToUs(began), lastDownUs))
+            closeInteraction(lastDownUs);
+    }
+
+    void closeInteraction(uint64_t lastDownUs)
+    {
+        char line[900];
+        size_t at = hists->interaction.close(lastDownUs, line, sizeof(line));
+        if (at + 2 < sizeof(line)) {
+            line[at++] = ';';
+            line[at++] = ' ';
+            line[at] = 0;
+            if (!switch_frames_line(true, line + at, sizeof(line) - at))
+                line[at - 2] = 0;
+        }
+        os_log(OS_LOG_DEFAULT, "SwitchFrames interaction: %s", line);
+        if (switch_frames_latency_line(line, sizeof(line)))
+            os_log(OS_LOG_DEFAULT, "SwitchFrames latency: %s", line);
+    }
+
+    // The vsync a present's swap was drawn for (mach time), or 0 if its timeline has none.
+    static uint64_t vsyncOf(const FrameMark &mark)
+    {
+        if (mark.tl.vsyncUs == kNotSeen || mark.tl.vsyncUs > 0)
+            return 0;
+        uint64_t back = 0;
+        nanoseconds_to_absolutetime((uint64_t)-(int64_t)mark.tl.vsyncUs * 1000, &back);
+        return back < mark.submit ? mark.submit - back : 0;
     }
 
     // A present frames DC A periods after the previous one (lastPresent, not yet moved on): its cause, see above.
@@ -1330,8 +1401,10 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
             probeFrameEnd();
         if (status & kFrameEndInt)
             planeFrameEnd();
-        if ((status & kFrameEndInt) && stats)
+        if ((status & kFrameEndInt) && stats) {
+            checkInteraction();
             noteStatsWindow();
+        }
     }
 
     // At a frame end, under the gate: after 5 s, the one stats line for the window, then a new window. The line is formatted here and
@@ -1491,6 +1564,8 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
         if (switch_render_senders_line(line, sizeof(line), us / 1000, 6) && logged)
             os_log(OS_LOG_DEFAULT, "SwitchDisplay clients: %llu ms to the render server: %s",
                    (unsigned long long)(us / 1000), line);
+        if (switch_frames_line(false, line, sizeof(line)) && logged)
+            os_log(OS_LOG_DEFAULT, "SwitchDisplay commits: %llu ms: %s", (unsigned long long)(us / 1000), line);
         stTouchSwap = Span{};
         if (frameHists)
             hists->touchScan = FrameHist{};

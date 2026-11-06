@@ -70,6 +70,7 @@
 #include <IOKit/IOMessage.h>
 
 #include <sys/kdebug.h>
+#include <switch/shutdown.h>
 
 uint32_t system_inshutdown = 0;
 uint32_t final_shutdown_stage = 0;
@@ -198,6 +199,7 @@ reboot_kernel(int howto, char *message)
 		}
 		return EBUSY;
 	}
+	switch_shutdown_begin(howto);
 
 	lck_mtx_lock(&vm_swap_data_lock);
 

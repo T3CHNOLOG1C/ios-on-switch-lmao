@@ -45,6 +45,8 @@ enum : uint32_t {
     DRAW_VERTEX_ARRAY = 0x0d78,
     COLOR_CLEAR_VALUE = 0x0d80,
     INVALIDATE_SHADER_CACHES_NO_WFI = 0x0da4,
+    PIXEL_SHADER_BARRIER = 0x0de0,
+    INVALIDATE_TEXTURE_DATA_CACHE_PIXEL_ORDERED = 0x0f74,
     ZT_A = 0x0fe0,
     ZT_B = 0x0fe4,
     CLEAR_SURFACE_CONTROL = 0x10f8,
@@ -361,8 +363,12 @@ void Decoder::method(uint32_t subc, uint32_t mthd, uint32_t data, bool fromMme)
     case WAIT_FOR_IDLE:
         barrier("WFI");
         break;
+    case PIXEL_SHADER_BARRIER:
+        barrier("PSB");
+        break;
     case INVALIDATE_TEXTURE_DATA_CACHE:
     case INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI:
+    case INVALIDATE_TEXTURE_DATA_CACHE_PIXEL_ORDERED:
         barrier("TEXINV");
         break;
     case INVALIDATE_TEXTURE_HEADER_CACHE_NO_WFI:

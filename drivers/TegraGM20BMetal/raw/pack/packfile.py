@@ -95,7 +95,9 @@ def pipeline_sections(pipes: list[dict]) -> tuple[bytearray, list[int], bytearra
         blob_off = len(blob)
         for m, v in rec['blob']:
             blob += [m, v]
-        pipe_bin += pipeline_bytes(rec, string(rec['key']), blob_off)
+        # the key's attachment and vertex fields (what the runtime reads of it: raw_gpu.cpp Device::pipeline), not the
+        # functions' constants (some 1.5 KB a fixed-function state; pack.json has the whole key)
+        pipe_bin += pipeline_bytes(rec, string(rec['key'].split(' | ')[0].rstrip()), blob_off)
     return pipe_bin, blob, strings
 
 

@@ -166,6 +166,7 @@ static inline const char *xusb_id_name(uint32_t vbus_id)
 //   - deliverable: IMAN.IE and USBCMD.INTE are on (a proven line is only judged lost when the controller asks for it).
 // Stage 1 runs kCheckMS after arming; anything short of fine is looked at once more 50 ms later (stage 2) before it acts.
 #define XHCI_USBCMD_INTE (1u << 2)
+#define XHCI_USBCMD_EU3S (1u << 11)
 #define XHCI_USBSTS_EINT (1u << 3)
 #define XHCI_IMAN_IP     (1u << 0)
 #define XHCI_IMAN_IE     (1u << 1)

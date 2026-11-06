@@ -73,6 +73,31 @@
  *   at or under 1024 points gets its row 17 (the same metrics): the date box from y = 60 (landscape) or 85 ends
  *   above the 140 point time's 123 point box from y = 97 or 122, a real iPad's lock screen. At 1 the screen is 1280
  *   points tall (row 25) and the site stays stock.
+ * - SpringBoard (.25), -[SBMixedGridSwitcherModifier _fullScreenCardScale], the iPad app switcher's card scale. The
+ *   switcher has two rows on every iPad (-[SBFluidSwitcherViewController numberOfRowsInGridSwitcher] is 2; only App
+ *   Exposé's grid keeps up to two cards in one row), its cards are gridSwitcherPageScale (0.3) of the screen on every
+ *   iPad, and the two rows with their 45 point headers (icon 29 + 16) and 63 point gap are centred between the top
+ *   and the dock (floatingDockHeight). Every iPad is 4:3 to 3:2, 32 to 50 points above and below the rows in
+ *   landscape; at 16:9 the rows fill the height above the dock (1 point to spare at 1.25), the top row's titles under
+ *   the status bar. In landscape the two-row scale becomes grid_num / grid_den, the largest fmov immediate that keeps
+ *   the titles clear of the 24 point status bar: 0.25 at 1.25 (30 points above and below), 0.1875 at 1.6 (if its
+ *   dock is as tall). Portrait, where 0.3 fits, and App Exposé's single row (0.42) stay as shipped. After
+ *   containerViewBounds the width and height come from the returned rect (d2, d3); the landscape scale crosses that
+ *   call in d11 (saved by the prologue, otherwise unused); disableFullScreenCardScaleRounding still returns the scale
+ *   unrounded. BSFloatIsZero(width) becomes fminnm against the width: a zero width makes 0 / 0, a quiet NaN, which
+ *   fminnm drops for the other operand, 0 as before. Three columns of 256 points fit in 1024; the grid stays trailing
+ *   aligned, as iPadOS lays out a switcher narrower than the screen.
+ * - SystemStatusUI (.25), the icon size 15 row of the battery tables STUIStatusBarStaticBatteryView and
+ *   STUIStatusBarBatteryView share: the expanded status bar's battery, the one Control Center shows
+ *   (-[STUIStatusBarVisualProvider_Pad styleAttributesForStyle:] gives 15 to mode 1 and 14 to the others).
+ *   _UIStaticBatteryView strokes the body into a bitmap of the view's size at the display scale and draws the
+ *   fill, inset by twice the line, in a bitmap of its own. At 1.25 the 28 x 14 point body with its 1.25 point line
+ *   is 35 x 17.5 pixels with a 1.5625 pixel line: its bottom and every inner edge fall between pixels, and the
+ *   11.5 pixel fill comes from a 12 pixel bitmap. The body becomes 14.4 points tall and the line
+ *   expanded_battery_bits' (switch_ui_scale.h): a 35 x 18 pixel body, a 2 pixel line and gap and a 27 x 10 pixel
+ *   fill, whose inset the UIKitCore fill site then leaves as it is. The width, corner radii and pin stay (the static
+ *   view's pin comes from -[STUIStatusBarStaticBatteryView _pinSizeForIconSize:]'s constants, not this table,
+ *   and its edges are curves); the bolt scales with the height. At 1.6 the row stays stock, as the fill sites do.
  * MobileGestalt keeps its answer in its build-keyed cache; kern_exec.c drops that cache when the scale changes
  * (native_switch_ui_scale_cache).
  */
@@ -81,8 +106,8 @@ struct switch_us_edit {
 	uint8_t length;                             /* bytes that must read as shipped */
 	uint8_t at, size;                           /* the bytes replaced, from fileoff + at */
 	enum switch_ui_scale_edit_kind kind;
-	uint8_t stock[28];
-	uint8_t patched[20];                        /* SWITCH_US_FIXED's */
+	uint8_t stock[32];
+	uint8_t patched[32];                        /* SWITCH_US_FIXED's */
 };
 
 struct switch_us_site {
@@ -207,6 +232,41 @@ static const struct switch_us_site switch_us_sites[] = {
 			  { 0x1f, 0x20, 0x03, 0xd5 } },
 		},
 		"CoverSheetKit", "lock screen layout row",
+	},
+	{   /* dyld_shared_cache_arm64.25 of 21H461 (text 0x1ce094000, file 0) */
+		{ 0xf1, 0x6d, 0xce, 0xf8, 0xc4, 0x46, 0x38, 0x05, 0x91, 0x63, 0xc0, 0x13, 0x8e, 0x4d, 0xca, 0xd1 },
+		0x1cfb98000ULL, 0x1b04000ULL, 0x2000ULL, 1, 2,
+		{
+			/* 0x1cfb9a0ac: mov x0, x20; bl disableFullScreenCardScaleRounding; tbz w0, #0, +0xc;
+			 * fmov d9, d8; b +0x2c; mov x0, x20; bl containerViewBounds
+			 * -> ...; fmov d9, d8; tbnz w0, #0, +0x30; fmov d11, #(landscape scale); ... */
+			{ 0x1b060acULL, 28, 8, 12, SWITCH_US_GRID_SCALE,
+			  { 0xe0, 0x03, 0x14, 0xaa, 0x4c, 0x1d, 0x27, 0x94, 0x60, 0x00, 0x00, 0x36, 0x09, 0x41, 0x60, 0x1e,
+			    0x0b, 0x00, 0x00, 0x14, 0xe0, 0x03, 0x14, 0xaa, 0x8f, 0xfc, 0x26, 0x94 }, { 0 } },
+			/* 0x1cfb9a0c8: bl CGRectGetWidth; fmov d10, d0; bl BSFloatIsZero; fmov d9, xzr;
+			 * tbnz w0, #0, +0x10; fmul d0, d8, d10; frinta d0, d0; fdiv d9, d0, d10
+			 * -> fmov d0, #0.34375; fcmp d8, d0; fccmp d2, d3, #4, mi; fcsel d8, d11, d8, gt;
+			 *    fmul d0, d8, d2; frinta d0, d0; fdiv d9, d0, d2; fminnm d9, d9, d2 */
+			{ 0x1b060c8ULL, 32, 0, 32, SWITCH_US_FIXED,
+			  { 0x6f, 0xb4, 0x3f, 0x95, 0x0a, 0x40, 0x60, 0x1e, 0xf1, 0xb1, 0x3f, 0x95, 0xe9, 0x03, 0x67, 0x9e,
+			    0x80, 0x00, 0x00, 0x37, 0x00, 0x09, 0x6a, 0x1e, 0x00, 0x40, 0x66, 0x1e, 0x09, 0x18, 0x6a, 0x1e },
+			  { 0x00, 0xd0, 0x6a, 0x1e, 0x00, 0x21, 0x60, 0x1e, 0x44, 0x44, 0x63, 0x1e, 0x68, 0xcd, 0x68, 0x1e,
+			    0x00, 0x09, 0x62, 0x1e, 0x00, 0x40, 0x66, 0x1e, 0x09, 0x18, 0x62, 0x1e, 0x29, 0x79, 0x62, 0x1e } },
+		},
+		"SpringBoard", "app switcher landscape card scale",
+	},
+	{   /* .25 */
+		{ 0xf1, 0x6d, 0xce, 0xf8, 0xc4, 0x46, 0x38, 0x05, 0x91, 0x63, 0xc0, 0x13, 0x8e, 0x4d, 0xca, 0xd1 },
+		0x1cf3e8000ULL, 0x1354000ULL, 0x3000ULL, 2, 2,
+		{
+			/* 0x1cf3eb8b8: the line width and interspace table (0x1cf3eb848) at icon size 15: 1.25 */
+			{ 0x13578b8ULL, 8, 0, 8, SWITCH_US_EXPANDED_BATTERY_LINE,
+			  { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xf4, 0x3f }, { 0 } },
+			/* 0x1cf3ebad8: the body height table (0x1cf3eba68) at icon size 15: 14.0 */
+			{ 0x1357ad8ULL, 8, 0, 8, SWITCH_US_EXPANDED_BATTERY_HEIGHT,
+			  { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x2c, 0x40 }, { 0 } },
+		},
+		"SystemStatusUI", "expanded battery row",
 	},
 };
 #define SWITCH_US_SITES           (sizeof(switch_us_sites) / sizeof(switch_us_sites[0]))

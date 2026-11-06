@@ -135,6 +135,29 @@ TEST(SwitchALSSource, Bh1730Commands)
         << "special command alone";
 }
 
+// The order the first-sample timing (als_math_test FirstSampleAfterDisplayOnInTime) rests on: a wake starts the sensor
+// before the panel's wake, starting sets it up at once, and a set-up from powered down skips nothing.
+TEST(SwitchALSSource, WakeSamplesFromTheDcRestart)
+{
+    const std::string backlight = SourceText("../SwitchBacklight.cpp");
+    const std::string on = Body(backlight, "void SwitchBacklight::powerOn()");
+    const size_t scanout = on.find("native_legacy_display_set_scanout(true)"),
+                 als = on.find("switch_als_set_active(true);"), panel = on.find("tegra_panel_power_on(level)");
+    ASSERT_NE(scanout, std::string::npos);
+    ASSERT_NE(als, std::string::npos);
+    ASSERT_NE(panel, std::string::npos);
+    EXPECT_LT(scanout, als) << "frame ends run before the sensor's clock starts";
+    EXPECT_LT(als, panel) << "the sensor samples through the panel's wake";
+    EXPECT_EQ(Count(on, "switch_als_set_active"), 1u);
+
+    const std::string sensor = SourceText("../SwitchALS.cpp");
+    EXPECT_THAT(Body(sensor, "void SwitchALS::update()"), HasSubstr("const int err = configure();"));
+    const std::string configure = Body(sensor, "int SwitchALS::configure()");
+    EXPECT_THAT(configure, HasSubstr("skip = 0;"));
+    EXPECT_LT(configure.find("RegTiming"), configure.find("RegControl, kPowerOn | kAdcEnable"))
+        << "the conversion starts with this configuration";
+}
+
 TEST(SwitchALSSource, WhatCoreBrightnessReads)
 {
     const std::string hid = SourceText("../../SwitchTouch/SwitchHIDDevice.cpp");

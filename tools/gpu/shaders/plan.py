@@ -1,12 +1,13 @@
-"""Split the seed's work into shards: the corpus's lines and, past depth `corpus`, the pipelines derive.py adds.
+"""Split the seed's work into buckets: the corpus's lines and, past depth `corpus`, the pipelines derive.py adds.
 
 usage: plan.py --corpus <resolved corpus.log> --root <library root> [--data-dir <dir>]... [--data <sha256>.metallib]...
-               --qc <metallib> --qc-sha256 <pin> --depth <depth> --shards <dir> --count N --store <store.json>
+               --qc <metallib> --qc-sha256 <pin> --depth <depth> --buckets <dir> --count N --store <store.json>
                --report <plan.json>
 
-Every line goes to the shard its stages hash to, so a program's pipelines are made in one shard, and a corpus edit
-changes only the shards its lines fall in. store.json names every library made from bytes by its sha256
-(the shard steps link data/<sha256>.metallib to it without reading the libraries again).
+Every line goes to the bucket its program (its stages) hashes to, so a program's pipelines are made in one bucket and
+a corpus edit rewrites only the buckets of the programs it adds lines to: the others' bucket-NNN.log keep their bytes,
+and Bazel keeps their results. store.json names every library made from bytes by its sha256 (the bucket steps link
+data/<sha256>.metallib to it without reading the libraries again).
 """
 
 import argparse
@@ -79,9 +80,9 @@ def _program(line: str) -> str:
     return stage.text() if stage else line
 
 
-def shard(tiers: dict[str, list[str]], count: int) -> tuple[list[list[str]], Counter]:
-    """Each distinct line once (the first tier that has it), in the shard of its program (its stages)."""
-    shards: list[list[str]] = [[] for _ in range(count)]
+def bucket(tiers: dict[str, list[str]], count: int) -> tuple[list[list[str]], Counter]:
+    """Each distinct line once (the first tier that has it), in the bucket of its program (its stages)."""
+    buckets: list[list[str]] = [[] for _ in range(count)]
     derived: list[list[str]] = [[] for _ in range(count)]
     seen, kept = set(), Counter()
     for tier, lines in tiers.items():
@@ -92,13 +93,13 @@ def shard(tiers: dict[str, list[str]], count: int) -> tuple[list[list[str]], Cou
             seen.add(identity)
             kept[tier, line[0]] += 1
             digest = hashlib.sha256(_program(line).encode()).digest()
-            into = shards if tier == 'corpus' else derived
+            into = buckets if tier == 'corpus' else derived
             into[int.from_bytes(digest[:4], 'little') % count].append(line)
-    return [[*s, DERIVED, *d] for s, d in zip(shards, derived, strict=True)], kept
+    return [[*s, DERIVED, *d] for s, d in zip(buckets, derived, strict=True)], kept
 
 
 def main() -> None:
-    """Write the shards, store.json and the plan's report."""
+    """Write the buckets, store.json and the plan's report."""
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--corpus', type=Path, required=True)
     parser.add_argument('--root', type=Path, required=True)
@@ -107,7 +108,7 @@ def main() -> None:
     parser.add_argument('--qc', type=Path, required=True)
     parser.add_argument('--qc-sha256', required=True)
     parser.add_argument('--depth', choices=DEPTHS, required=True)
-    parser.add_argument('--shards', type=Path, required=True)
+    parser.add_argument('--buckets', type=Path, required=True)
     parser.add_argument('--count', type=int, required=True)
     parser.add_argument('--store', type=Path, required=True)
     parser.add_argument('--report', type=Path, required=True)
@@ -117,17 +118,17 @@ def main() -> None:
     data = args.data + sorted(p for d in args.data_dir for p in d.glob('*.metallib'))
     index, by_sha = libraries(args.root, data)
     corpus = args.corpus.read_text().splitlines()
-    shards, kept = shard(lines_for(args.depth, corpus, index), args.count)
-    args.shards.mkdir(parents=True, exist_ok=True)
-    for i, lines in enumerate(shards):
-        (args.shards / f'shard-{i:02d}.log').write_text(''.join(line + '\n' for line in lines))
+    buckets, kept = bucket(lines_for(args.depth, corpus, index), args.count)
+    args.buckets.mkdir(parents=True, exist_ok=True)
+    for i, lines in enumerate(buckets):
+        (args.buckets / f'bucket-{i:03d}.log').write_text(''.join(line + '\n' for line in lines))
     args.store.write_text(json.dumps(by_sha, indent=0, sort_keys=True) + '\n')
     report = {
         'depth': args.depth,
         'libraries': len(index),
         'kernels': sum(1 for fs in index.values() for f in fs if f.type == derive.KERNEL),
         'lines': {f'{tier}.{kind}': n for (tier, kind), n in sorted(kept.items())},
-        'shards': [len(s) - 1 for s in shards],
+        'buckets': [len(b) - 1 for b in buckets],
     }
     args.report.write_text(json.dumps(report, indent=1) + '\n')
     print('plan:', json.dumps(report['lines']))

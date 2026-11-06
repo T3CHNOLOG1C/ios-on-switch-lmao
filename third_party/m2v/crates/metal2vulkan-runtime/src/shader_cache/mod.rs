@@ -41,6 +41,7 @@
 
 mod creation;
 pub(crate) mod driver;
+mod seed;
 pub(super) mod store;
 mod worker;
 
@@ -193,6 +194,13 @@ pub struct ShaderCacheStatistics {
     /// (`METAL2VULKAN_SHADER_CACHE_SEED`) and accepted; each is also counted where the same read
     /// from the directory is ([`hits`](Self::hits), [`driver_loads`](Self::driver_loads)).
     pub seed_reads: u64,
+    /// Look-ups the seed had nothing for (debug builds only).
+    pub seed_misses: u64,
+    /// The median seed hit's look-up, in nanoseconds, as the power of two above it (debug builds
+    /// only).
+    pub seed_hit_p50_ns: u64,
+    /// The 99th percentile seed hit's look-up, as [`seed_hit_p50_ns`](Self::seed_hit_p50_ns) is.
+    pub seed_hit_p99_ns: u64,
 }
 
 /// What an entry holds, in its name.
@@ -646,8 +654,25 @@ impl ShaderCache {
             driver_data_mismatched: read(&counters.driver_data_mismatched),
             driver_data_unchanged: read(&counters.driver_data_unchanged),
             seed_reads: read(&counters.seed_reads),
+            seed_misses: read(&counters.seed_misses),
+            seed_hit_p50_ns: percentile(&counters.seed_hit_ns, 50),
+            seed_hit_p99_ns: percentile(&counters.seed_hit_ns, 99),
         }
     }
+}
+
+/// The upper bound (a power of two, in ns) of the bucket holding the `percent`th percentile.
+fn percentile(buckets: &[std::sync::atomic::AtomicU64; 32], percent: u64) -> u64 {
+    let counts: Vec<u64> = buckets.iter().map(|b| b.load(Ordering::Relaxed)).collect();
+    let total: u64 = counts.iter().sum();
+    let mut seen = 0;
+    for (bucket, n) in counts.iter().enumerate() {
+        seen += n;
+        if total > 0 && seen * 100 >= total * percent {
+            return 1 << bucket;
+        }
+    }
+    0
 }
 
 impl Device {

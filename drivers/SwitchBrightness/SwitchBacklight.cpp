@@ -50,11 +50,11 @@
 // its own powered word; the hardware is the platform's. Here the framebuffer hands the request to
 // switch_display_power_request(), and this work loop plays it: off = TegraPanel's L4T suspend sequence while the DC still
 // scans out, then the display stops the DC (no fetches, no frame-end or vblank interrupts, so the cores sit in WFI); on =
-// the display restarts the DC, then TegraPanel wakes the panel and restores the brightness. The touch controller goes
-// down with the screen and comes back up while the panel wakes (SwitchTouch's display power). The rail Joy-Cons keep
-// running, so a seated Joy-Con's Home can wake the console (../SwitchSuspend/SwitchWakeSources.h). On by default;
-// boot-arg switch-no-sleep leaves the render server's requests to the original user client (the panel stays lit when
-// locked).
+// the display restarts the DC, the ambient light sensor samples from then on, and TegraPanel wakes the panel and
+// restores the brightness. The touch controller goes down with the screen and comes back up while the panel wakes
+// (SwitchTouch's display power). The rail Joy-Cons keep running, so a seated Joy-Con's Home can wake the console
+// (../SwitchSuspend/SwitchWakeSources.h). On by default; boot-arg switch-no-sleep leaves the render server's requests to
+// the original user client (the panel stays lit when locked).
 //
 // Waking (../SwitchSuspend/SwitchWake.h): every display off and on is one power-journal line with each step's time, and
 // the journal goes to Data after every display off. A wake source with the panel off (power key, a Joy-Con's Home)
@@ -355,6 +355,9 @@ void SwitchBacklight::powerOn()
         panic("SwitchBacklight: the display did not restart DC A's scanout for wake");
     }
     scanoutStopped = false;
+    // The ALS samples through the panel's half-second wake, so CoreBrightness's first sample comes within its 250 ms
+    // display-on timeout; without one it takes 450 lux (AABC::FirstALSSampleTimeout, 141 nits on 11-06).
+    switch_als_set_active(true);
     const uint64_t scanout = mach_absolute_time();
     const int level = (int)toRaw(target ? target : lit);
     const int err = tegra_panel_power_on(level);
@@ -366,12 +369,11 @@ void SwitchBacklight::powerOn()
     if (target == 0 && level >= 0)
         target = current = lit;
     gDisplayOn = true;
-    switch_als_set_active(true);  // last: frame ends run again, and LDO6 came back with the touch panel meanwhile
     switch_motion_display_power(true);
-    switch_power_journal("SwitchBacklight: display on in %llu ms (touch %llu, scanout %llu, panel %llu %s, als %llu; "
+    switch_power_journal("SwitchBacklight: display on in %llu ms (touch %llu, scanout and als %llu, panel %llu %s; "
                          "level %d)",
                          msSince(start), msBetween(start, touch), msBetween(touch, scanout), msBetween(scanout, panel),
-                         err ? "not running" : "awake", msSince(panel), level);
+                         err ? "not running" : "awake", level);
 }
 
 // Work loop: the latest requests, display power first, then one step of the current ramp. Re-arms itself until the

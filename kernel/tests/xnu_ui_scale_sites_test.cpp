@@ -2,6 +2,7 @@
 // maps them by (switch_us_site_for_slot, what switch_shared_cache_text_pager() asks once per slot of a mapping).
 #include <gtest/gtest.h>
 
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <string>
@@ -215,6 +216,172 @@ TEST(XnuUiScaleSites, CoverSheetKitRowIsTheIPadWithoutAHomeButton)
     EXPECT_EQ(edit.at, 4u);
     EXPECT_EQ(edit.size, 4u);
     EXPECT_EQ(Word(edit.patched), 0xd503201fu);  // nop
+}
+
+namespace {
+// A branch's target from its address: b's imm26 or tbz/tbnz's imm14, in words.
+uint64_t BranchTarget(uint64_t address, uint32_t insn)
+{
+    if ((insn & 0xfc000000u) == 0x14000000u) {
+        const int64_t imm26 = static_cast<int64_t>(insn & 0x3ffffffu);
+        return address + static_cast<uint64_t>((imm26 >= 0x2000000 ? imm26 - 0x4000000 : imm26) * 4);
+    }
+    const int64_t imm14 = static_cast<int64_t>((insn >> 5) & 0x3fff);
+    return address + static_cast<uint64_t>((imm14 >= 0x2000 ? imm14 - 0x4000 : imm14) * 4);
+}
+
+// -[SBMixedGridSwitcherModifier _fullScreenCardScale] after the site: the settings' row scale (0.3 for two rows,
+// App Exposé's 0.42 for one), the landscape scale for two rows across a wider-than-tall container, the card width
+// rounded to whole points, 0 for a zero-width container.
+double PatchedCardScale(double row_scale, double width, double height, double landscape_scale)
+{
+    const double scale = row_scale < 0.34375 && width > height ? landscape_scale : row_scale;
+    const double rounded = std::round(scale * width) / width;  // frinta: ties away from zero, as std::round
+    return std::isnan(rounded) ? width : rounded;              // fminnm(rounded, width), width >= 1 > rounded
+}
+
+double RoundForScale(double value, double scale)
+{
+    return std::round(value * scale) / scale;
+}
+
+// Six apps in the switcher, per -[SBMixedGridSwitcherModifier _unpaddedCoplanarFrameForIndex:...]: three columns of
+// two rows laid out from the trailing edge, the rows and one 45 point header (icon 29 + 16) centred above the dock.
+// Spacing (SBAppSwitcherSettings, a reference height of at most 1080): 44 between columns and 63 between rows in
+// landscape, 42.5 and 68 in portrait, each rounded to pixels. The dock's 120 points (platter 96, 24 below it) are
+// IMG_0042's at 1.25.
+struct SixAppGrid {
+    double card_width, card_height, top_margin, leading_margin;
+    bool scrolls;
+};
+
+SixAppGrid SixApps(double width, double height, double pixels_per_point, double card_scale)
+{
+    constexpr double kHeader = 45, kDock = 120;
+    const bool landscape = width > height;
+    const double column_gap = RoundForScale(landscape ? 44 : 42.5, pixels_per_point);
+    const double row_gap = RoundForScale(landscape ? 63 : 68, pixels_per_point);
+    SixAppGrid grid{};
+    grid.card_width = width * card_scale;
+    grid.card_height = height * card_scale;
+    grid.top_margin = (height - kDock - (2 * grid.card_height + row_gap + kHeader)) / 2;
+    const double content = 3 * (grid.card_width + column_gap) - column_gap + 2 * column_gap;
+    grid.scrolls = content > width;
+    grid.leading_margin = width - column_gap - 3 * grid.card_width - 2 * column_gap;
+    return grid;
+}
+}  // namespace
+
+TEST(XnuUiScaleSites, SwitcherCardScaleKeepsTheShippedPathsAndBranch)
+{
+    const switch_us_site *site = Named("SpringBoard app switcher landscape card scale");
+    ASSERT_NE(site, nullptr);
+    ASSERT_EQ(site->edits, 2u);
+    const switch_us_edit &branches = site->edit[0], &arithmetic = site->edit[1];
+    const auto address = [&](const switch_us_edit &edit, unsigned at) {
+        return site->page_vmaddr + (edit.fileoff - site->page_fileoff) + at;
+    };
+    // shipped: mov x0, x20; bl disable...; tbz -> mov x0, x20; fmov d9, d8; b -> after the rounding; mov; bl bounds
+    ASSERT_EQ(branches.length, 28u);
+    EXPECT_EQ(Word(branches.stock + 4) >> 26, 0x25u);
+    EXPECT_EQ(Word(branches.stock + 24) >> 26, 0x25u);
+    EXPECT_EQ(BranchTarget(address(branches, 8), Word(branches.stock + 8)), address(branches, 20));
+    const uint64_t after_rounding = BranchTarget(address(branches, 16), Word(branches.stock + 16));
+    EXPECT_EQ(after_rounding, address(arithmetic, arithmetic.length));
+    // patched: the rounding-disabled path still leaves with the scale as set, to the same place
+    uint8_t out[12] = {};
+    ASSERT_EQ(branches.at, 8u);
+    ASSERT_TRUE(switch_ui_scale_edit_bytes(branches.kind, switch_ui_scale_named("1.25"), out, branches.size));
+    EXPECT_EQ(Word(out), 0x1e604109u);  // fmov d9, d8
+    EXPECT_EQ(BranchTarget(address(branches, 12), Word(out + 4)), after_rounding);
+    // clang -arch arm64: fmov d0, #0.34375; fcmp d8, d0; fccmp d2, d3, #4, mi; fcsel d8, d11, d8, gt;
+    // fmul d0, d8, d2; frinta d0, d0; fdiv d9, d0, d2; fminnm d9, d9, d2
+    const std::vector<uint32_t> patched = {0x1e6ad000u, 0x1e602100u, 0x1e634444u, 0x1e68cd68u,
+                                           0x1e620900u, 0x1e664000u, 0x1e621809u, 0x1e627929u};
+    ASSERT_EQ(arithmetic.size, 4 * patched.size());
+    for (size_t i = 0; i < patched.size(); i++) {
+        EXPECT_EQ(Word(arithmetic.patched + 4 * i), patched[i]) << i;
+    }
+}
+
+TEST(XnuUiScaleSites, SwitcherCardsFitBetweenTheStatusBarAndTheDock)
+{
+    constexpr double kStatusBar = 24;
+    for (const char *name : {"1.25", "1.6"}) {
+        SCOPED_TRACE(name);
+        const switch_ui_scale *scale = switch_ui_scale_named(name);
+        ASSERT_NE(scale, nullptr);
+        const double pixels = static_cast<double>(scale->num) / scale->den;
+        const double width = 1280 / pixels, height = 720 / pixels;
+        const double landscape_scale = static_cast<double>(scale->grid_num) / scale->grid_den;
+
+        const SixAppGrid landscape =
+            SixApps(width, height, pixels, PatchedCardScale(0.3, width, height, landscape_scale));
+        EXPECT_GE(landscape.top_margin, kStatusBar);
+        EXPECT_FALSE(landscape.scrolls);
+        EXPECT_GE(landscape.leading_margin, 0);
+        EXPECT_EQ(landscape.card_width * pixels, std::round(landscape.card_width * pixels));
+        EXPECT_EQ(landscape.card_height * pixels, std::round(landscape.card_height * pixels));
+        // the largest such scale: the next fmov immediate puts the titles under the status bar
+        const double next = landscape_scale + (landscape_scale < 0.25 ? 1.0 / 128 : 1.0 / 64);
+        EXPECT_LT(SixApps(width, height, pixels, PatchedCardScale(0.3, width, height, next)).top_margin, kStatusBar);
+        // shipped 0.3 leaves no room
+        EXPECT_LT(SixApps(width, height, pixels, PatchedCardScale(0.3, width, height, 0.3)).top_margin, kStatusBar);
+
+        // portrait and App Exposé's single row keep their scales; a zero-width container still gives 0
+        EXPECT_NEAR(PatchedCardScale(0.3, height, width, landscape_scale), 0.3, 0.5 / height);
+        EXPECT_GE(SixApps(height, width, pixels, PatchedCardScale(0.3, height, width, landscape_scale)).top_margin,
+                  kStatusBar);
+        EXPECT_NEAR(PatchedCardScale(0.42, width, height, landscape_scale), 0.42, 0.5 / width);
+        EXPECT_EQ(PatchedCardScale(0.3, 0, 0, landscape_scale), 0);
+    }
+    // 1.25: 256 x 144 point cards, 29.9 points above and below the rows
+    const SixAppGrid grid = SixApps(1024, 576, 1.25, PatchedCardScale(0.3, 1024, 576, 0.25));
+    EXPECT_EQ(grid.card_width, 256);
+    EXPECT_EQ(grid.card_height, 144);
+    EXPECT_NEAR(grid.top_margin, 29.9, 0.01);
+    EXPECT_EQ(grid.leading_margin, 124);
+}
+
+TEST(XnuUiScaleSites, NoTwoSitesOfAMappingShareAPage)
+{
+    for (const switch_us_site &a : switch_us_sites) {
+        for (const switch_us_site &b : switch_us_sites) {
+            if (&a != &b && MappingOf(a) == MappingOf(b)) {
+                EXPECT_NE(a.page_vmaddr, b.page_vmaddr) << NameOf(a) << " and " << NameOf(b);
+            }
+        }
+    }
+}
+
+TEST(XnuUiScaleSites, SystemStatusUiRowIsIconSize15OfTheBatteryTables)
+{
+    // +[STUIStatusBarStaticBatteryView _lineWidthAndInterspaceForIconSize:] and _batterySizeForIconSize:'s height:
+    // 17 doubles from 0x1cf3eb848 and 0x1cf3eba68, indexed by icon size - 1, 1.25 and 14 at 15
+    const switch_us_site *site = Named("SystemStatusUI expanded battery row");
+    ASSERT_NE(site, nullptr);
+    ASSERT_EQ(site->edits, 2u);
+
+    struct Entry {
+        switch_ui_scale_edit_kind kind;
+        uint64_t table;
+        double stock;
+    };
+
+    const Entry entries[] = {{SWITCH_US_EXPANDED_BATTERY_LINE, 0x1cf3eb848, 1.25},
+                             {SWITCH_US_EXPANDED_BATTERY_HEIGHT, 0x1cf3eba68, 14.0}};
+    for (unsigned i = 0; i < 2; i++) {
+        SCOPED_TRACE(i);
+        const switch_us_edit &edit = site->edit[i];
+        EXPECT_EQ(edit.kind, entries[i].kind);
+        EXPECT_EQ(site->page_vmaddr + (edit.fileoff - site->page_fileoff), entries[i].table + (15 - 1) * 8);
+        ASSERT_EQ(edit.length, 8u);
+        EXPECT_EQ(edit.at, 0u);
+        EXPECT_EQ(edit.size, 8u);
+        double stock = 0;
+        std::memcpy(&stock, edit.stock, sizeof(stock));
+        EXPECT_EQ(stock, entries[i].stock);
+    }
 }
 
 TEST(XnuUiScaleSites, CoreUiRowBytes)

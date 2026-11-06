@@ -13,7 +13,34 @@ KERNEL = (
 USER = 'backboardd: SwitchFrameUser: backboardd cb 42 commit 191100000 replay 191100100 191200000 fence 0'
 
 
+INTERACTION = (
+    '2026-11-06 19:20:47.123 Df kernel.development[0:b9] SwitchFrames interaction: 1310 ms (touch 610 ms), 55 '
+    'presents: 1:50 2:1 3:1 4+:1, 7 periods lost, worst 300.0 ms, still 1; long idle 0 ca 1 gpu 1 queue 0 latch 0 '
+    'rate 1; SpringBoard[27] 60 commits <1:0 1:55 2:3 3:1 4+:0; delivery 110/112 reports p50/p99/max 256/2048/2900 us '
+    'to SpringBoard[27]'
+)
+
+LATENCY = (
+    '2026-11-06 19:20:47.124 Df kernel.development[0:b9] SwitchFrames latency: began 3 (dropped 0): total '
+    '41.0/52.0/52.0 = deliver 1.0/1.5/1.5 + app 4.0/9.0/9.0 + wait 9.5/15.0/15.0 + compose 4.0/5.0/5.0 + show '
+    '14.5/16.0/16.0 ms p50/p95/max'
+)
+
+
 class FramesTest(unittest.TestCase):
+    def test_interaction_rows(self):
+        rows = frames.interactions([KERNEL, INTERACTION])
+        self.assertEqual(len(rows), 2)
+        self.assertIn('19:20:47.123  1310 ms (touch   610):   55 presents, 1:50 2:1 3:1 4+:1', rows[0])
+        self.assertIn('(94% one frame apart)', rows[0])
+        self.assertIn('worst 300.0 ms, still 1; long idle 0 ca 1 gpu 1 queue 0 latch 0 rate 1', rows[0])
+        self.assertTrue(rows[1].strip().startswith('SpringBoard[27] 60 commits'))
+
+    def test_latency_follows_its_interaction(self):
+        rows = frames.interactions([INTERACTION, LATENCY])
+        self.assertEqual(len(rows), 3)
+        self.assertEqual(rows[2], '    latency: ' + LATENCY.split('SwitchFrames latency: ')[1])
+
     def test_stages_and_join(self):
         got = frames.collect([KERNEL, USER])
         self.assertEqual(len(got), 1)

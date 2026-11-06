@@ -94,6 +94,8 @@ kernel_driver(
         "XusbHost.cpp",
         "UsbDmaMapper.cpp",
         "SwitchXHCI.cpp",
+        "SwitchXHCIEvents.cpp",
+        "SwitchXHCIServices.cpp",
         "xhci-original-bindings.S",
         "firmware.S",
     ],
@@ -134,6 +136,13 @@ kernel_driver(
         "com.apple.iokit.IOSCSIArchitectureModelFamily",
         "com.apple.iokit.IOSCSIBlockCommandsDevice",
         "com.apple.iokit.IOPCIFamily",
+        # Codeless kexts, personalities only, in every iPad's boot catalogue: IOUSBHostHIDDevice on every HID interface
+        # (IOUSBHostHIDDevice's own personality takes boot keyboards only) and IOHIDFamily's IOHIDEventDriver for
+        # keyboards, pointers, consumer and system control. Without them a HID device enumerates and sends nothing.
+        # The iOS 27 prelink's list is translate/arm64e/xnu/prelink26/kcinfo.py ROOTS.
+        "com.apple.driver.usb.IOUSBHostHIDDeviceSafeBoot",
+        "com.apple.iokit.IOHIDEventDriver",
+        "com.apple.iokit.IOHIDEventDriverSafeBoot",
     ],
     # Declared dependencies left out of the prelink (COMPONENT=DEPENDENCY=pointer sites; a nonzero cut rebinds each
     # site to _switch_prelink_cut_null in SwitchUSB.cpp, so OSDynamicCast yields NULL):

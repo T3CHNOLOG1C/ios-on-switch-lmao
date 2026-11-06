@@ -2,6 +2,7 @@
 # built by //gpu:bundle (gpu/BUILD.bazel); the device-side tools here are what //deploy:* runs.
 load("@rules_python//python:py_binary.bzl", "py_binary")
 load("@rules_python//python:py_library.bzl", "py_library")
+load("@rules_python//python:py_test.bzl", "py_test")
 load("//bazel/lint:defs.bzl", "lint_files")
 
 package(default_visibility = ["//visibility:public"])
@@ -49,7 +50,26 @@ filegroup(
 # The pack generator (raw/pack/rawpack.py and the modules it imports); //tools/gpu:rawpack runs it.
 py_library(
     name = "raw_pack",
-    srcs = glob(["raw/pack/*.py"]),
+    srcs = glob(
+        [
+            "raw/pack/*.py",
+            "raw/pack/ca/*.py",
+        ],
+        exclude = ["raw/pack/ca/*_test.py"],
+    ),
+    data = ["raw/pack/ca/qc-21H461.json"],
+)
+
+# raw/pack/ca/caspec.py makes every Core Animation state of the corpus from its name alone (QuartzCore's own decoding).
+py_test(
+    name = "caspec_test",
+    srcs = ["raw/pack/ca/caspec_test.py"],
+    data = [
+        "precompile/corpus.log",
+        "raw/pack/ca/qc-21H461.json",
+    ],
+    main = "raw/pack/ca/caspec_test.py",
+    deps = [":raw_pack"],
 )
 
 # Developer tools, `bazel run //drivers/TegraGM20BMetal:<name> -- ...`: the shader corpus

@@ -755,6 +755,11 @@ arm_init_cpu(
 	{
 		extern void switch_secondary_vectors_leave(void);
 		switch_secondary_vectors_leave();
+		/* drivers/ArmCpu: only a wake from system sleep starts the boot CPU here. */
+		extern void (*switch_cpu_wake_handler)(void);
+		if (cpu_data_ptr == &BootCpuData && switch_cpu_wake_handler) {
+			switch_cpu_wake_handler();
+		}
 	}
 #endif
 

@@ -9172,6 +9172,25 @@ native_switch_portrait_display(proc_t p, user_addr_t scratch, mount_t data_mount
 enum native_switch_setup_kind { kSetupUser, kSetupOnce, kSetupManaged };
 enum native_switch_setup_scale { kSetupAnyScale, kSetupUnitScale, kSetupFractionalScale };
 
+/*
+ * Removes a once-only seed for the other kind of scale while the user's plist is still byte for byte what we wrote:
+ * cfprefsd saves a changed domain as a binary plist, so a Text Size the user chose is never this XML. Scale 1's XXL
+ * text left on the Data volume makes every Dynamic Type label at a fractional scale two sizes larger than an iPad's
+ * (Control Center's Focus title wraps, its bauble group grows with it).
+ */
+static void
+native_switch_unseed(proc_t p, user_addr_t scratch, const char *name, const char *body, mount_t data_mount)
+{
+	char path[160];
+	snprintf(path, sizeof(path), "/private/var/mobile/Library/Preferences/%s.plist", name);
+	if (!native_switch_file_unchanged(path, body, (int)strlen(body), data_mount, 501, 501, 0600)) return;
+	struct unlink_args request = {.path = scratch + 0x900};
+	int32_t result = 0;
+	int error = copyout(path, request.path, strlen(path) + 1);
+	if (!error) error = native_switch_unlink(p, &request, &result);
+	printf("SwitchRawBoot: %s: the other scale's seed removed (%d)\n", name, error);
+}
+
 static int
 native_switch_setup_state(proc_t p, user_addr_t scratch, mount_t data_mount)
 {
@@ -9244,7 +9263,12 @@ native_switch_setup_state(proc_t p, user_addr_t scratch, mount_t data_mount)
 	char path[160] = "/private/var/containers";
 	const bool unit_scale = switch_ui_scale_is_unit(switch_ui_scale());
 	for (unsigned i = 0; i < sizeof(prefs) / sizeof(prefs[0]) && !error; ++i) {
-		if (prefs[i].scale == (unit_scale ? kSetupFractionalScale : kSetupUnitScale)) continue;
+		if (prefs[i].scale == (unit_scale ? kSetupFractionalScale : kSetupUnitScale)) {
+			if (prefs[i].kind == kSetupOnce) {
+				native_switch_unseed(p, scratch, prefs[i].name, prefs[i].body, data_mount);
+			}
+			continue;
+		}
 		const char *body = prefs[i].body;
 		if (prefs[i].kind == kSetupManaged) {
 			snprintf(path, sizeof(path), "/private/var/Managed Preferences/mobile/%s.plist", prefs[i].name);
@@ -9324,13 +9348,14 @@ native_switch_watchdog_policy(proc_t p, user_addr_t scratch)
 	 * with them: there the three deadlocked each other). locationd runs since r17: third-party apps' CoreMotion
 	 * (CMMotionManager accelerometer, gyroscope and device motion) is served by it over XPC from the console IMU's
 	 * HID services (drivers/SwitchMotion), and r8a's bluetoothd already asked for it ("failed lookup:
-	 * com.apple.locationd.registration"). With CommCenter and identityservicesd off, its lookups of them fail at
-	 * once (a disabled job is refused at import), as bluetoothd's do. */
+	 * com.apple.locationd.registration"). With identityservicesd off, its lookups of it fail at once (a disabled job is
+	 * refused at import), as bluetoothd's do. CommCenter runs: a device tree without a baseband node loads
+	 * com.apple.CommCenter-noncellular.plist, as on a Wi-Fi iPad, and SpringBoard's SBTelephonyManager expects it
+	 * (without it, it retried com.apple.commcenter.xpc on its main thread once a second). */
 #define NATIVE_SWITCH_POLICY_HEAD "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" \
 	    "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n" \
 	    "<plist version=\"1.0\"><dict>" \
-	    "<key>com.apple.identityservicesd</key><true/>" \
-	    "<key>com.apple.CommCenter</key><true/>"
+	    "<key>com.apple.identityservicesd</key><true/>"
 	/* Bluetooth needs drivers/SwitchBluetooth, which boot-arg switch-no-bt keeps off (the BlueTool stand-in in the
 	 * overlay and bluetoothd's transport, native_switch_exec_environment, follow it). Without it bluetoothd has no
 	 * controller and stays disabled, and so does audiomxd: its Bluetooth plug-in would retry bluetoothd's

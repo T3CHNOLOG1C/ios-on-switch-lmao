@@ -13,6 +13,7 @@ SWITCH_ROOT = "kernel/switch"
 SWITCH_OBJECTS = {
     "bsd": [
         ("bsd/kern/bsd_init.c", "boot/bsd_init.c", []),
+        ("bsd/kern/kern_shutdown.c", "shutdown/shutdown.c", []),
         ("bsd/vfs/vfs_lookup.c", "vfs/pretranslated.c", []),
         # The translator's core is //translate/arm64e's (its host tools and tests build the same files).
         ("bsd/kern/mach_loader.c", "translate/a64x_xnu.c", [], ["12377.121.6"]),
@@ -25,6 +26,7 @@ SWITCH_OBJECTS = {
     ],
     "osfmk": [
         ("osfmk/arm/model_dep.c", "diag/threads.c", []),
+        ("osfmk/ipc/ipc_kmsg.c", "diag/frames.c", []),
         ("osfmk/arm64/arm_vm_init.c", "ram/ram.c", []),
         ("osfmk/kern/timer_call.c", "sched/stats.c", []),
     ],
@@ -66,3 +68,18 @@ def switch_copts(component, copts):
     for _, src, flags in _entries(component):
         out["switch:" + src] = flags
     return out
+
+def with_kprof(component, copts):
+    """A component's `copts` with SWITCH_KPROF for switch_kprof.c (--//kernel:kprof), the one object that reads it.
+
+    Args:
+        component: osfmk, bsd, ...
+        copts: the component's per-object copts.
+
+    Returns:
+        The copts, osfmk's with the define on that object.
+    """
+    if component != "osfmk":
+        return copts
+    kprof = "osfmk/kern/switch_kprof.c"
+    return copts | {kprof: copts.get(kprof, []) + ["-DSWITCH_KPROF=1"]}

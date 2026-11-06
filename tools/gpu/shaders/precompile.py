@@ -1,19 +1,24 @@
-"""Make one shard of the seed: its lines through the prebuilt precompile tool, into an empty cache directory.
+r"""Make one bucket of the seed: its lines through the prebuilt precompile tool, into an empty cache directory.
 
-usage: precompile.py --tools <dir> --root <library root> --store <store.json> [--embedded <header>]... --qc <metallib>
-                     --lines <shard.log> [--seed <seed dir>] [--guess-dispatch] --out <dir>
+usage: precompile.py --precompile <tool> --mock <libmock_iokit.dylib> --nvk <twin libvulkan_nouveau.dylib>
+                     --root <library root> --store <store.json> [--embedded <header>]... --qc <metallib>
+                     --lines <bucket.log> [--seed <meta dir> --seed-pack <pack>...] [--guess-dispatch]
+                     --out <pack> --index <file> --report <file>
 
-<tools> is the host tools' directory (//gpu/seed:tools: precompile, libmock_iokit.dylib beside it, the NVK twin). The
-shard's lines after its `# derived` line are guesses: a refusal of one is counted, and a crash in one costs that line
-only. The tool is run again past the line it died in (its PRECOMPILE_PROGRESS file says which), on the same cache
-directory, so what it made before the crash is read back, not made again. Writes <out>/v1 and <out>/report.json.
---seed: the lines are made over that seed, as the device reads it; report.json's `rates` says how many were found there.
+The bucket's lines after its `# derived` line are guesses: a refusal of one is counted, and a crash in one costs that
+line only. The tool is run again past the line it died in (its PRECOMPILE_PROGRESS file says which), on the same cache
+directory, so what it made before the crash is read back, not made again. Writes the pack (every file the cache
+directory made, one after the other), the index (`<path below the cache directory>\t<sha256>\t<size>\t<offset in the
+pack>` per file) and the report (what was refused and crashed, the driver records' identity).
+--seed: the lines are made over the packed seed (merge.py join's directory and the buckets' packs in order), as the
+device reads it; the report's `rates` says how many were found there.
 --guess-dispatch: every compute state no D line names is dispatched at the 2D shape Apple's documentation computes.
 """
 
 import argparse
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -22,10 +27,10 @@ import time
 from pathlib import Path
 
 DERIVED = '# derived'
-TOOLS = ('precompile', 'libmock_iokit.dylib', 'libvulkan_nouveau.dylib')
 KINDS = 'SRCD'
 CRASHES = 64
 TIMEOUT = 3600
+CONTENT = '529a20fd270ababa3e5ec2fe4d1674d93739ba5bcd61861674b4fb6db349af9f'
 
 
 def store_view(store: Path, root: Path, by_sha: dict[str, str], embedded: list[Path]) -> None:
@@ -38,6 +43,25 @@ def store_view(store: Path, root: Path, by_sha: dict[str, str], embedded: list[P
         text = header.read_text()
         library = bytes(int(b, 16) for b in re.findall(r'0x([0-9a-fA-F]{2})', text[text.index('{') : text.rindex('}')]))
         (store / 'data' / (hashlib.sha256(library).hexdigest() + '.metallib')).write_bytes(library)
+
+
+def place(source: Path, target: Path) -> None:
+    """Put a tool where the run expects it: a hard link to the input, a copy where the file system refuses one."""
+    try:
+        os.link(os.path.realpath(source), target)
+    except OSError:
+        shutil.copyfile(source, target)
+        target.chmod(0o755)
+
+
+def seed_view(meta: Path, packs: list[Path], view: Path) -> None:
+    """Lay out the packed seed as the device holds it: the join's files, and packs/<NNN> the buckets' packs."""
+    (view / 'packs').mkdir(parents=True)
+    for path in meta.rglob('*'):
+        if path.is_file():
+            (view / path.relative_to(meta)).symlink_to(path.absolute())
+    for number, pack in enumerate(packs):
+        (view / 'packs' / f'{number:03d}').symlink_to(pack.absolute())
 
 
 def by_kind(lines: list[str]) -> dict[str, list[str]]:
@@ -86,13 +110,18 @@ def make(work: Path, args: argparse.Namespace, corpus: dict, derived: dict) -> d
     """Run the tool until every line is made or skipped; return what happened."""
     env = {
         'PATH': '/usr/bin:/bin',
+        # work/precompile is a hard link, and macOS may name the executable by its other link (the tool's output
+        # directory, without the mock beside it) when dyld resolves @rpath; the leaf-name search here does not depend
+        # on which name the kernel picks.
+        'DYLD_LIBRARY_PATH': str(work),
         'HOME': str(work / 'home'),
         'TMPDIR': str(work / 'tmp'),
         'MESA_SHADER_CACHE_DISABLE': 'true',
         'PRECOMPILE_PROGRESS': str(work / 'progress'),
     }
     if args.seed:
-        env['METAL2VULKAN_SHADER_CACHE_SEED'] = str(args.seed.absolute())
+        seed_view(args.seed, args.seed_pack, work / 'seed')
+        env['METAL2VULKAN_SHADER_CACHE_SEED'] = str(work / 'seed')
     (work / 'home').mkdir()
     (work / 'tmp').mkdir()
     crashed, summaries, refusals = [], [], []
@@ -129,39 +158,55 @@ def make(work: Path, args: argparse.Namespace, corpus: dict, derived: dict) -> d
     return {'crashed': crashed, 'refused': refusals, 'runs': summaries, 'rates': rates(summaries)}
 
 
+def pack(cache: Path, out: Path) -> tuple[list[str], str | None]:
+    """Write every file of the cache directory into the pack `out`; return its index lines and the records' identity."""
+    lines, identity, offset = [], None, 0
+    layout = cache / 'v1'
+    files = (
+        sorted(p for p in layout.rglob('*') if p.is_file() and not p.name.startswith('.')) if layout.is_dir() else []
+    )
+    with out.open('wb') as f:
+        for path in files:
+            data = path.read_bytes()
+            relative = path.relative_to(cache)
+            lines.append(f'{relative}\t{hashlib.sha256(data).hexdigest()}\t{len(data)}\t{offset}\n')
+            if identity is None and relative.parts[1] == CONTENT:
+                identity = data[8:36].hex()
+            f.write(data)
+            offset += len(data)
+    return lines, identity
+
+
 def main() -> None:
-    """Make the shard into <out>/v1."""
+    """Make the bucket into its pack."""
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    for name in ('tools', 'root', 'store', 'qc', 'lines', 'out'):
+    for name in ('precompile', 'mock', 'nvk', 'root', 'store', 'qc', 'lines', 'out', 'index', 'report'):
         parser.add_argument('--' + name, type=Path, required=True)
     parser.add_argument('--embedded', type=Path, action='append', default=[])
     parser.add_argument('--seed', type=Path)
+    parser.add_argument('--seed-pack', type=Path, action='append', default=[])
     parser.add_argument('--guess-dispatch', action='store_true')
     args = parser.parse_args()
     text = args.lines.read_text().split(DERIVED + '\n')
     corpus, derived = by_kind(text[0].splitlines()), by_kind(text[1].splitlines() if len(text) > 1 else [])
-    work = Path.cwd() / (f'_shard_{args.lines.stem}')
+    work = Path.cwd() / f'_bucket_{args.lines.stem}'
     shutil.rmtree(work, ignore_errors=True)
     work.mkdir(parents=True)
-    for name in TOOLS:
-        shutil.copyfile(args.tools / name, work / name)
-        (work / name).chmod(0o755)
+    tools = {'precompile': args.precompile, 'libmock_iokit.dylib': args.mock, 'libvulkan_nouveau.dylib': args.nvk}
+    for name, source in tools.items():
+        place(source, work / name)
     store_view(work / 'store', args.root, json.loads(args.store.read_text()), args.embedded)
     began = time.monotonic()
     report = make(work, args, corpus, derived) if any(corpus.values()) or any(derived.values()) else {'runs': []}
     report['seconds'] = round(time.monotonic() - began, 1)
     report['lines'] = sum(map(len, corpus.values())) + sum(map(len, derived.values()))
-    shutil.rmtree(args.out, ignore_errors=True)
-    args.out.mkdir(parents=True)
-    if (work / 'cache' / 'v1').is_dir():
-        shutil.copytree(
-            work / 'cache' / 'v1', args.out / 'v1', copy_function=shutil.copyfile, ignore=shutil.ignore_patterns('.*')
-        )
-    (args.out / 'report.json').write_text(json.dumps(report, indent=1) + '\n')
+    lines, report['identity'] = pack(work / 'cache', args.out)
+    args.index.write_text(''.join(lines))
+    args.report.write_text(json.dumps(report, indent=1) + '\n')
     shutil.rmtree(work)
     crashed, refused = len(report.get('crashed', [])), len(report.get('refused', []))
-    lines, seconds = report['lines'], report['seconds']
-    print(f'shard {args.lines.stem}: {lines} lines in {seconds} s, {refused} refused, {crashed} crashed')
+    made = f'{report["lines"]} lines in {report["seconds"]} s'
+    print(f'bucket {args.lines.stem}: {made}, {refused} refused, {crashed} crashed')
 
 
 if __name__ == '__main__':

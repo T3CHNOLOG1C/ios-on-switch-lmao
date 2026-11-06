@@ -1,0 +1,73 @@
+# What the seed's actions are keyed on (inputs_test.bzl), over stand-ins: no IPSW, no tools built.
+#
+#   bazel test //gpu/seed/test:all
+load("@bazel_skylib//rules:write_file.bzl", "write_file")
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//gpu/seed:defs.bzl", "metal_seed", "shader_crawl")
+load(":inputs_test.bzl", "seed_inputs_tests")
+
+lint_files()
+
+[write_file(
+    name = path.replace("/", "_"),
+    out = path,
+    content = [],
+    tags = ["manual"],
+) for path in [
+    "images/os.dmg",
+    "images/system.dmg",
+    "images/app.dmg",
+    "base/TegraGM20BMetal.bundle/Info.plist",
+    "tools/precompile",
+    "tools/libmock_iokit.dylib",
+    "tools/libvulkan_nouveau.dylib",
+    "tools/MANIFEST.json",
+    "tools/raw/probe",
+    "corpus/corpus.log",
+]]
+
+filegroup(
+    name = "base",
+    srcs = [":base/TegraGM20BMetal.bundle/Info.plist"],
+    tags = ["manual"],
+)
+
+filegroup(
+    name = "tools",
+    srcs = [
+        ":tools/MANIFEST.json",
+        ":tools/libmock_iokit.dylib",
+        ":tools/libvulkan_nouveau.dylib",
+        ":tools/precompile",
+        ":tools/raw/probe",
+    ],
+    tags = ["manual"],
+)
+
+shader_crawl(
+    name = "crawl",
+    images = [
+        ":images/os.dmg",
+        ":images/system.dmg",
+        ":images/app.dmg",
+    ],
+    tags = ["manual"],
+)
+
+metal_seed(
+    name = "seed",
+    base = ":base",
+    buckets = 4,
+    corpus = ":corpus/corpus.log",
+    crawl = ":crawl",
+    depth = "//gpu/seed:depth",
+    tags = ["manual"],
+    tools = ":tools",
+)
+
+seed_inputs_tests(
+    name = "inputs_test",
+    crawl = ":crawl",
+    crawler = "//tools/gpu/shaders:crawl",
+    seed = ":seed",
+)

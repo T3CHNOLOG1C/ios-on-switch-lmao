@@ -59,6 +59,14 @@ bool mipChainLayout(uint32_t width, uint32_t height, uint32_t levels, uint32_t b
 // `fermi`: the FermiColor arrangement instead, the self-test's second guess at the CPU's view of kind 0xFE memory)
 uint64_t texelOffset(const MipChain &c, uint32_t l, uint32_t xB, uint32_t y, bool fermi = false);
 
+// The CPU's copy of `w` x `h` texels at (x, y) of level `l` between the chain's memory (`chainCpu`, the view the self-test chose:
+// `fermi`) and rows `rowBytes` apart: a Shared mipmapped texture's replaceRegion/getBytes of a level below the first. Moves each
+// GOB line's 16-byte run at once; the caller cleans or invalidates the lines.
+void writeLevel(const MipChain &c, uint8_t *chainCpu, uint32_t l, uint32_t x, uint32_t y, uint32_t w, uint32_t h,
+                const uint8_t *src, size_t rowBytes, bool fermi = false);
+void readLevel(const MipChain &c, const uint8_t *chainCpu, uint32_t l, uint32_t x, uint32_t y, uint32_t w, uint32_t h,
+               uint8_t *dst, size_t rowBytes, bool fermi = false);
+
 // Byte offset inside one GOB (64 B x 8 rows) of byte xB % 64 of row y % 8, TegraColor (nil/copy.rs CopyGOBTegra)
 inline uint32_t gobOffset(uint32_t xB, uint32_t y)
 {

@@ -1,5 +1,6 @@
 // ipc_kmsg.c's use of switch_render_senders.h: ipc_kmsg_send counts a message to the watched space under the
-// destination port's lock (ip_in_space asserts it), before the message is queued, never for the kernel's own reply.
+// destination port's lock (ip_in_space asserts it), before the message is queued, never for the kernel's own reply; the
+// render server's own messages to other tasks go to the frame diagnostics (<switch/frames.h>) under the same lock.
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
@@ -30,7 +31,12 @@ TEST(RenderSendersSource, CountedUnderThePortLockBeforeQueueing)
     EXPECT_LT(body.find("ip_mq_lock(port);"), note);
     EXPECT_LT(note, body.find("ipc_mqueue_send_locked(&port->ip_messages, kmsg,"));
     EXPECT_THAT(body,
-                HasSubstr("!kernel_reply &&\n\t\t    ip_in_space(port, (ipc_space_t)switch_render_server_space)"));
+                HasSubstr("!kernel_reply) {\n\t\t\tif (ip_in_space(port, (ipc_space_t)switch_render_server_space))"));
+    const size_t sent = body.find("switch_frames_render_server_sent(port);");
+    ASSERT_NE(sent, std::string::npos);
+    EXPECT_LT(body.find("ip_mq_lock(port);"), sent);
+    EXPECT_LT(sent, body.find("ipc_mqueue_send_locked(&port->ip_messages, kmsg,"));
+    EXPECT_THAT(body, HasSubstr("} else if (current_task()->itk_space == switch_render_server_space) {"));
     // the lock nests inside the port's spin lock: a spin lock too
     EXPECT_THAT(s, HasSubstr("static LCK_SPIN_DECLARE(switch_render_senders_lock"));
 }

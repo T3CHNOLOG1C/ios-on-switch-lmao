@@ -2026,7 +2026,8 @@ switch_ui_scale_pager(const struct switch_us_site *site, vm_object_t file_object
  * answer slot 0; the .07 mapping holds both widget deadline sites, slot k being site k; a UI scale site answers its own
  * slot (switch_ui_scale_sites.h; .11 holds three: MobileGestalt and the two CoreUI ones; .31 only ProgressUI's;
  * .03's two UIKitCore battery fills are slots 1 and 2, the keyboard's being 0; .13's CoverSheetKit row is slot 1,
- * the settings icons' being 0).
+ * the settings icons' being 0; .25's SpringBoard switcher scale and SystemStatusUI battery row are slots 1 and 2,
+ * the home grid's being 0).
  * file_object is the cache file's object (object_base 0) or the a64x translator's, whose offset 0 is file offset
  * object_base.
  */

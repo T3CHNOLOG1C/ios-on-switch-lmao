@@ -14,11 +14,13 @@ For every corpus render pipeline state the raw path can take (one draw, no m2v-i
 Plus what every state shares: the context init NVK records at queue creation (with the addresses to relocate marked) and
 the registers every state's draws leave the same (the baseline).
 
-usage: mkpack.py <probe.out> <probe.log> <programs.bin> <out dir> [<probe16 dir prefix>]
-  the optional prefix names the PROBE_BYTES=16 and 4096 runs (<prefix>16.out/.log, <prefix>4096.out/.log): each buffer
-  entry's descriptor type (a uniform buffer's range NVK rounds up to 256 bytes) and the function's window on the slot
-writes <out>/pack.bin (runtime/raw_pack.h layout), <out>/pack.json, <out>/programs.txt (decoder tables), and prints a
-report.
+usage: mkpack.py <merged programs.bin out> <out dir> <bucket dir>...
+  each bucket dir (rawpack.py's) holds its own probe runs: probe256.out/.log, and the PROBE_BYTES=16 and 4096 runs
+  (probe16.*, probe4096.*: each buffer entry's descriptor type, a uniform buffer's range NVK rounds up to 256 bytes, and
+  the function's window on the slot) and programs.bin; a state's index is (its bucket, its line in the bucket's corpus).
+  The context init and post-init registers are the first bucket's (every probe process opens the device alike).
+writes the merged programs.bin, <out>/pack.bin (runtime/raw_pack.h layout), <out>/pack.json, <out>/programs.txt
+(decoder tables), and prints a report.
 """
 
 import os
@@ -123,16 +125,26 @@ def load_programs(path: str) -> dict[str, dict[str, bytes | list[int]]]:
     return progs
 
 
-def load_sizes(prefix: str) -> dict[tuple[int, int], list[int]]:
-    sizes = {}  # (state index, set offset) -> (bound size with 16-byte payloads, with 4096-byte payloads)
+def load_buckets(dirs: list[str], size: int) -> list[dict]:
+    """Give every bucket's probes of the run with `size`-byte payloads, each with its bucket's number."""
+    probes = []
+    for b, d in enumerate(dirs):
+        for p in probelog.load(os.path.join(d, f'probe{size}.out'), os.path.join(d, f'probe{size}.log')):
+            p['bucket'] = b
+            probes.append(p)
+    return probes
+
+
+def load_sizes(dirs: list[str]) -> dict[tuple, list[int]]:
+    sizes = {}  # (bucket, state index, set offset) -> (bound size with 16-byte payloads, with 4096-byte payloads)
     for b in (16, 4096):
-        for p in probelog.load(f'{prefix}{b}.out', f'{prefix}{b}.log'):
+        for p in load_buckets(dirs, b):
             if p['draws'] != 1 or p['dispatches'] or not p['records'] or 'set0' not in p['records'][0]:
                 continue
             w = p['records'][0]['set0'][1]
             for o in range(0, len(w) - 3, 4):
                 if f'ptr0.{o * 4}' in p['records'][0]['ptr']:
-                    sizes.setdefault((p['index'], o * 4), [0, 0])[0 if b == 16 else 1] = w[o + 2]
+                    sizes.setdefault((p['bucket'], p['index'], o * 4), [0, 0])[0 if b == 16 else 1] = w[o + 2]
     return sizes
 
 
@@ -236,8 +248,8 @@ def lay_out_programs(
     return heap, prog_index, prog_recs
 
 
-def buffer_entry(e: tuple, index: int, sizes: dict[tuple[int, int], list[int]]) -> dict:
-    s16, s4k = sizes.get((index, e[0]), (256, 256))
+def buffer_entry(e: tuple, index: tuple[int, int], sizes: dict[tuple, list[int]]) -> dict:
+    s16, s4k = sizes.get((*index, e[0]), (256, 256))
     # a 16-byte payload bound at 256: a uniform buffer (NVK rounds its range to the cbuf alignment); else storage. The
     # 4096-byte one's range: the window (0: the whole payload)
     ssbo = s16 < 256
@@ -311,7 +323,9 @@ def pipeline(
     rec['push'] = [(int(o, 16), int(x, 16)) for o, x in (w.split('=') for w in r.get('pushw', []))]
     rec['set_size'] = root[0x38 // 4 + 2] if 'set0' in r else 0
     entries = [
-        buffer_entry(e, p['index'], sizes) if e[1] == 'ubo' else handle_entry(e, r['tsc'], constexpr_tsc, problems)
+        buffer_entry(e, (p['bucket'], p['index']), sizes)
+        if e[1] == 'ubo'
+        else handle_entry(e, r['tsc'], constexpr_tsc, problems)
         for e in ents
     ]
     rec['entries'] = entries
@@ -323,12 +337,17 @@ def pipeline(
 
 
 def main() -> None:
-    out_path, log_path, prog_path, out_dir = sys.argv[1:5]
-    sizes = load_sizes(sys.argv[5]) if len(sys.argv) > 5 else {}
+    prog_path, out_dir, dirs = sys.argv[1], sys.argv[2], sys.argv[3:]
+    with open(prog_path, 'wb') as merged:
+        for d in dirs:
+            with open(os.path.join(d, 'programs.bin'), 'rb') as part:
+                merged.write(part.read())
+    sizes = load_sizes(dirs)
     os.makedirs(out_dir, exist_ok=True)
-    probes = probelog.load(out_path, log_path)
+    seen: set[str] = set()
+    probes = [p for p in load_buckets(dirs, 256) if not (p['key'] in seen or seen.add(p['key']))]
     programs = load_programs(prog_path)
-    init, post = load_init(log_path)
+    init, post = load_init(os.path.join(dirs[0], 'probe256.log'))
     # drop the query-pool setup (submit 4 is not traced) and NVK's own MME bookkeeping we relocate
     report = []
     simple, skipped = split_probes(probes)

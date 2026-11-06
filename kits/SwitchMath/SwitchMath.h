@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // Integer helpers every driver writes by hand: power-of-two alignment, rounding division, single-evaluation
-// min/max/clamp, saturation and bit masks. All inline, 64-bit (no truncating casts), usable from C and C++, kernel
+// min/max/clamp, saturation, square root and bit masks. All inline, 64-bit (no truncating casts), usable from C and C++, kernel
 // and userland.
 #ifndef SWITCH_MATH_H
 #define SWITCH_MATH_H
@@ -77,6 +77,24 @@ static inline int16_t switch_sat_i16(int64_t value)
 static inline int32_t switch_sat_i32(int64_t value)
 {
     return (int32_t)switch_clamp_i64(value, INT32_MIN, INT32_MAX);
+}
+
+// The largest r with r * r <= value, one result bit per round (no floating point: kernel code).
+static inline uint32_t switch_isqrt_u64(uint64_t value)
+{
+    uint64_t root = 0, bit = 1ull << 62;
+    while (bit > value)
+        bit >>= 2;
+    while (bit) {
+        if (value >= root + bit) {
+            value -= root + bit;
+            root = (root >> 1) + bit;
+        } else {
+            root >>= 1;
+        }
+        bit >>= 2;
+    }
+    return (uint32_t)root;
 }
 
 #ifdef __cplusplus

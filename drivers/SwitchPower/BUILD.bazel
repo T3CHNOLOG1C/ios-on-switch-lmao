@@ -52,8 +52,12 @@ kernel_driver(
 # Boot clock line, MAX77620 RTC (IORTC) and power-off/restart; called from IOKitInitializeTime() (xnu patch).
 kernel_driver(
     name = "SwitchPMIC",
-    srcs = ["SwitchPMIC.cpp"],
+    srcs = [
+        "SwitchPMIC.cpp",
+        "SwitchPowerMark.cpp",
+    ],
     hdr_deps = [
+        "diagnostics/switch",
         "drivers/SwitchBrightness",
         "drivers/TegraBPMP",
         "drivers/TegraI2C",

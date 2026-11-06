@@ -916,11 +916,117 @@ nvk_cmd_image_layout_transition(struct nvk_cmd_buffer *cmd,
    }
 }
 
+/* PIXEL_SHADER_BARRIER holds later pixel shading until the earlier pixels
+ * have drained through the ROP, without draining the rest of the pipe.
+ * Method 0x0f74, which NVIDIA does not publish, invalidates the texture data
+ * cache at that point; INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI acts as the front
+ * end reads it, while the earlier pixels may still be in flight.  NVIDIA's
+ * drivers order a dependency from color attachment writes to fragment-stage
+ * reads so (NVN, as deko3d's ORDER_FRAGMENTS barrier on Tegra X1, and the
+ * Linux driver from Maxwell on).  The barrier holds nothing before the pixel
+ * shader, so depth and stencil, shader storage, constant and host accesses
+ * stay with WAIT_FOR_IDLE.
+ */
+#define NVK_PIXEL_SRC_STAGES (VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | \
+                              VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT)
+#define NVK_PIXEL_DST_STAGES (VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | \
+                              VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT | \
+                              VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT)
+#define NVK_PIXEL_DST_TEX_READS (VK_ACCESS_2_INPUT_ATTACHMENT_READ_BIT | \
+                                 VK_ACCESS_2_SHADER_SAMPLED_READ_BIT)
+#define NVK_PIXEL_DST_ACCESS (NVK_PIXEL_DST_TEX_READS | \
+                              VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT | \
+                              VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT)
+#define NVB197_INVALIDATE_TEXTURE_DATA_CACHE_PIXEL_ORDERED 0x0f74
+
+static bool
+nvk_pixel_barrier_add(VkPipelineStageFlags2 src_stages,
+                      VkAccessFlags2 src_access,
+                      VkPipelineStageFlags2 dst_stages,
+                      VkAccessFlags2 dst_access,
+                      bool *tex_reads)
+{
+   src_stages = vk_expand_src_stage_flags2(src_stages);
+   dst_stages = vk_expand_dst_stage_flags2(dst_stages);
+   if ((src_stages & ~NVK_PIXEL_SRC_STAGES) ||
+       (dst_stages & ~NVK_PIXEL_DST_STAGES))
+      return false;
+
+   if (vk_filter_src_access_flags2(src_stages, src_access) &
+       ~VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT)
+      return false;
+
+   dst_access = vk_filter_dst_access_flags2(dst_stages, dst_access);
+   if (dst_access & ~NVK_PIXEL_DST_ACCESS)
+      return false;
+
+   *tex_reads |= (dst_access & NVK_PIXEL_DST_TEX_READS) != 0;
+   return true;
+}
+
+static bool
+nvk_dep_is_pixel_ordered(const VkDependencyInfo *dep, bool *tex_reads)
+{
+   *tex_reads = false;
+   if ((dep->dependencyFlags & VK_DEPENDENCY_ASYMMETRIC_EVENT_BIT_KHR) ||
+       vk_find_struct_const(dep->pNext, MEMORY_RANGE_BARRIERS_INFO_KHR))
+      return false;
+
+   if (dep->memoryBarrierCount + dep->bufferMemoryBarrierCount +
+       dep->imageMemoryBarrierCount == 0)
+      return false;
+
+   for (uint32_t i = 0; i < dep->memoryBarrierCount; i++) {
+      const VkMemoryBarrier2 *bar = &dep->pMemoryBarriers[i];
+      if (!nvk_pixel_barrier_add(bar->srcStageMask, bar->srcAccessMask,
+                                 bar->dstStageMask, bar->dstAccessMask,
+                                 tex_reads))
+         return false;
+   }
+
+   for (uint32_t i = 0; i < dep->bufferMemoryBarrierCount; i++) {
+      const VkBufferMemoryBarrier2 *bar = &dep->pBufferMemoryBarriers[i];
+      if (bar->srcQueueFamilyIndex != bar->dstQueueFamilyIndex ||
+          !nvk_pixel_barrier_add(bar->srcStageMask, bar->srcAccessMask,
+                                 bar->dstStageMask, bar->dstAccessMask,
+                                 tex_reads))
+         return false;
+   }
+
+   for (uint32_t i = 0; i < dep->imageMemoryBarrierCount; i++) {
+      const VkImageMemoryBarrier2 *bar = &dep->pImageMemoryBarriers[i];
+      if (bar->srcQueueFamilyIndex != bar->dstQueueFamilyIndex ||
+          bar->oldLayout == VK_IMAGE_LAYOUT_UNDEFINED ||
+          !nvk_pixel_barrier_add(bar->srcStageMask, bar->srcAccessMask,
+                                 bar->dstStageMask, bar->dstAccessMask,
+                                 tex_reads))
+         return false;
+   }
+
+   return true;
+}
+
 VKAPI_ATTR void VKAPI_CALL
 nvk_CmdPipelineBarrier2(VkCommandBuffer commandBuffer,
                         const VkDependencyInfo *pDependencyInfo)
 {
    VK_FROM_HANDLE(nvk_cmd_buffer, cmd, commandBuffer);
+   const struct nvk_physical_device *pdev =
+      nvk_device_physical(nvk_cmd_buffer_device(cmd));
+
+   bool tex_reads;
+   if (pdev->info.cls_eng3d >= MAXWELL_A &&
+       nvk_cmd_buffer_last_subchannel(cmd) == SUBC_NV9097 &&
+       nvk_dep_is_pixel_ordered(pDependencyInfo, &tex_reads)) {
+      struct nv_push *p = nvk_cmd_buffer_push(cmd, 4);
+      __push_immd(p, SUBC_NV9097, NVB097_PIXEL_SHADER_BARRIER,
+                  NVB097_PIXEL_SHADER_BARRIER_SYSMEMBAR_ENABLE_FALSE);
+      if (tex_reads)
+         __push_immd(p, SUBC_NV9097,
+                     NVB197_INVALIDATE_TEXTURE_DATA_CACHE_PIXEL_ORDERED, 0);
+      nvk_cmd_image_layout_transition(cmd, pDependencyInfo);
+      return;
+   }
 
    nvk_cmd_flush_wait_dep(cmd, pDependencyInfo, true);
    nvk_cmd_image_layout_transition(cmd, pDependencyInfo);

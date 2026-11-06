@@ -18,6 +18,9 @@ struct PushCounts {
 		sampleDraws;  // draws shaded once per sample (or per sample pair): NVK's min sample shading above 1 pass
 	uint64_t wfi, shaderInval, shaderInvalNoWfi, texInval, setRef, l2Inval, hostWfi;
 	uint64_t ceCopies, ceBytes, ceWfi, blits, dispatches, acquires;
+	uint64_t
+		psBarriers;  // PIXEL_SHADER_BARRIER: later pixel shading waits for earlier pixels, not the whole pipe
+	uint64_t interlocks;  // SET_PIXEL_SHADER_INTERLOCK_CONTROL with conflict detection on
 };
 
 struct PushParse {
@@ -60,8 +63,12 @@ inline void pushMethod(PushCounts &c, PushParse &p, uint32_t subc, uint32_t mthd
 	case 0:  // MAXWELL_B
 		if (mthd == 0x0110)
 			c.wfi++;  // WAIT_FOR_IDLE
-		else if (mthd == 0x1288 || mthd == 0x1338)
-			c.texInval++;  // INVALIDATE_TEXTURE_DATA_CACHE(_NO_WFI)
+		else if (mthd == 0x1288 || mthd == 0x1338 || mthd == 0x0f74)
+			c.texInval++;  // INVALIDATE_TEXTURE_DATA_CACHE(_NO_WFI), 0x0f74 the one PIXEL_SHADER_BARRIER orders
+		else if (mthd == 0x0de0)
+			c.psBarriers++;  // PIXEL_SHADER_BARRIER
+		else if (mthd == 0x1224 && (data & 3))
+			c.interlocks++;  // SET_PIXEL_SHADER_INTERLOCK_CONTROL: TILE_COALESCER_MODE not NO_CONFLICT_DETECT
 		else if (mthd == 0x021c)
 			c.shaderInval++;  // INVALIDATE_SHADER_CACHES (waits for idle)
 		else if (mthd == 0x0da4)
@@ -189,10 +196,10 @@ inline uint8_t pushClass(const PushCounts &before, const PushCounts &after, cons
 		return TGM_PC_2D;
 	const uint64_t syncBefore = before.wfi + before.shaderInval + before.shaderInvalNoWfi +
 				    before.texInval + before.setRef + before.l2Inval +
-				    before.hostWfi + before.ceWfi,
+				    before.hostWfi + before.ceWfi + before.psBarriers,
 		       syncAfter = after.wfi + after.shaderInval + after.shaderInvalNoWfi +
 				   after.texInval + after.setRef + after.l2Inval + after.hostWfi +
-				   after.ceWfi;
+				   after.ceWfi + after.psBarriers;
 	return syncAfter > syncBefore ? TGM_PC_SYNC : TGM_PC_STATE;
 }
 
