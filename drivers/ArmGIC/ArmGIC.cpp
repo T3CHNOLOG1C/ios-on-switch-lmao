@@ -60,9 +60,28 @@ constexpr uint8_t kSpiPriority = 0xa0;  // below ArmCpu's timer PPI and IPI SGI 
 // from GICC_IAR; a tie goes to the lowest INTID.
 constexpr uint8_t kFramePriority = 0x90;   // a late one is a late frame: above all other SPIs
 constexpr uint8_t kSerialPriority = 0xc0;  // high-rate UARTs behind hardware flow control: below all other SPIs
-// The SPIs a frame waits on: display controller A (frame end, vblank; NativeLegacyDisplay, TegraPanel) and the
-// GM20B stall/nonstall lines (fences and the copy-engine present; TegraGM20B).
-constexpr uint32_t kDisplayAIntid = 32 + 73, kGpuStallIntid = 32 + 157, kGpuNonstallIntid = 32 + 158;
+// The SPIs a frame waits on: display controller A (frame end, vblank; NativeLegacyDisplay, TegraPanel), the GM20B
+// stall/nonstall lines (fences and the copy-engine present; TegraGM20B) and host1x's syncpoint line, which ends every
+// VIC job (Core Animation's IOSurfaceAccelerator copies, NVDEC -> VIC video frames; TegraHost1x).
+constexpr uint32_t kDisplayAIntid = 32 + 73, kGpuStallIntid = 32 + 157, kGpuNonstallIntid = 32 + 158,
+                   kHost1xSyncptIntid = 32 + 65;
+
+// SPIs with a secondary core of their own, so CPU0 keeps its timers, I2C, GPIO and UARTs (touch, buttons, Joy-Cons,
+// Bluetooth) to itself: storage and Wi-Fi on CPU1, USB on CPU2; the frame lines take the last core (frameTarget).
+// Each driver's filter only meets its own threads, which run on any core anyway. Every sleep action runs with the
+// secondaries up and every wake action with all cores back (SwitchSuspend.h), so these lines keep their core across
+// SC7 as the frame lines do.
+struct SteeredSpi {
+    uint32_t intid, cpu;
+};
+
+constexpr SteeredSpi kSteered[] = {
+    {32 + 14, 1},  // SDMMC1, the SD card (NativeSwitchBlock)
+    {131, 1},      // the PCIe controller's MSI, Wi-Fi (SwitchWLAN)
+    {32 + 44, 2},  // XUDC (SwitchXUDC)
+    {32 + 39, 2},  // XUSB host (SwitchXHCI)
+    {32 + 40, 2},  // XUSB mailbox (SwitchXHCI)
+};
 
 // Tegra210 legacy interrupt controller: one bank of 32 SPIs per 0x100, six banks (mainline tegra210.dtsi
 // interrupt-controller@60004000, Linux irq-tegra.c register names).
@@ -85,10 +104,10 @@ class ArmGIC : public IOInterruptController {
         IOMemoryMap *distMap = nullptr,
                     *licMap = nullptr;
     uintptr_t dist = 0, lic = 0;
-    uint32_t intids = 0;      // INTIDs the distributor implements: 32 * (GICD_TYPER.ITLinesNumber + 1), < 1020
-    uint8_t cpu0Target = 0;   // CPU interface mask of logical CPU 0
-    bool steerFrame = false;  // frame SPIs go to the last running core
-    uint32_t steerPending[kMaxIntid / 32 + 1] = {};  // frame SPIs made before any secondary core took SPIs
+    uint32_t intids = 0;     // INTIDs the distributor implements: 32 * (GICD_TYPER.ITLinesNumber + 1), < 1020
+    uint8_t cpu0Target = 0;  // CPU interface mask of logical CPU 0
+    bool steering = false;   // frame and kSteered SPIs go to their secondary core
+    uint32_t steerPending[kMaxIntid / 32 + 1] = {};  // steered SPIs made before their core took SPIs
     uint32_t edge[kMaxIntid / 32 + 1] = {};          // trigger of each INTID, fixed when its nub is made
     uint32_t *fired = nullptr;                       // handled interrupts per INTID, for panic messages
     IOService **nubs = nullptr;
@@ -147,7 +166,8 @@ class ArmGIC : public IOInterruptController {
 
     static bool isFrame(uint32_t intid)
     {
-        return intid == kDisplayAIntid || intid == kGpuStallIntid || intid == kGpuNonstallIntid;
+        return intid == kDisplayAIntid || intid == kGpuStallIntid || intid == kGpuNonstallIntid ||
+               intid == kHost1xSyncptIntid;
     }
 
     // GICv2 breaks a priority tie by lowest INTID, so with one priority for every SPI the GPU fence lines (189/190)
@@ -180,14 +200,39 @@ class ArmGIC : public IOInterruptController {
         return 0;
     }
 
-    // Every SPI goes to CPU0 except the frame lines, which get a core of their own: there they never wait behind
-    // CPU0's storage, Wi-Fi, Bluetooth, Joy-Con, touch and USB handlers or behind code running on CPU0 with interrupts
-    // masked. A frame SPI made before a secondary is up starts on CPU0 and moves at its next enable (steerPending).
+    static uint32_t steeredCpu(uint32_t intid)
+    {
+        for (const SteeredSpi &spi : kSteered) {
+            if (spi.intid == intid)
+                return spi.cpu;
+        }
+        return 0;
+    }
+
+    // The CPU interface of logical CPU `cpu` once ArmCpu has enabled it, else 0.
+    static uint8_t cpuTarget(uint32_t cpu)
+    {
+        const uint32_t target = __atomic_load_n(&armcpu_gic_targets[cpu], __ATOMIC_ACQUIRE);
+        return target && target <= 0xff && !(target & (target - 1)) ? static_cast<uint8_t>(target) : 0;
+    }
+
+    uint8_t steerTarget(uint32_t intid) const
+    {
+        if (isFrame(intid))
+            return frameTarget();
+        const uint32_t cpu = steeredCpu(intid);
+        return cpu ? cpuTarget(cpu) : 0;
+    }
+
+    // The frame lines and kSteered get a core of their own: there the frame lines never wait behind CPU0's storage,
+    // Wi-Fi, Bluetooth, Joy-Con, touch and USB handlers or behind code running on CPU0 with interrupts masked. A
+    // steered SPI made before its core is up starts on CPU0 and moves when that core comes up (cpuOnline) or at its
+    // next enable (steerPending).
     uint8_t targetFor(uint32_t intid)
     {
-        if (!steerFrame || !isFrame(intid))
+        if (!steering || (!isFrame(intid) && !steeredCpu(intid)))
             return cpu0Target;
-        if (const uint8_t target = frameTarget())
+        if (const uint8_t target = steerTarget(intid))
             return target;
         __atomic_fetch_or(&steerPending[intid / 32], 1U << (intid % 32), __ATOMIC_RELAXED);
         return cpu0Target;
@@ -204,6 +249,7 @@ public:
     static ArmGIC *shared();
     void suspend();
     void resume();
+    void cpuOnline(uint32_t cpu);
     IOService *nubFor(uint32_t intid, bool edgeTriggered);
     void describe(uint32_t intid, char *buffer, size_t size) const;
 
@@ -302,10 +348,10 @@ const char *ArmGIC::setup()
     if (intids > kMaxIntid)
         intids = kMaxIntid;
     cpu0Target = static_cast<uint8_t>(armcpu_gic_targets[0]);
-    // Frame lines stay on their core across system sleep: the display suspends in the first sleep action, before
-    // IOCPUSleepKernel stops any core, and resumes in a wake action, after every core is back; a line that pends
+    // Steered lines stay on their core across system sleep: their drivers suspend in sleep actions, before
+    // IOCPUSleepKernel stops any core, and resume in wake actions, after every core is back; a line that pends
     // while its core is off waits in the distributor.
-    steerFrame = true;
+    steering = true;
     vectors = IONewZero(IOInterruptVector, intids);
     nubs = IONewZero(IOService *, intids);
     fired = IONewZero(uint32_t, intids);
@@ -479,10 +525,10 @@ void ArmGIC::disableVectorHard(IOInterruptVectorNumber vectorNumber, IOInterrupt
 void ArmGIC::enableVector(IOInterruptVectorNumber vectorNumber, IOInterruptVector *)
 {
     const uint32_t intid = static_cast<uint32_t>(vectorNumber);
-    // A frame SPI made before any secondary took interrupts: move it now, while it is still masked.
+    // A steered SPI made before its core took interrupts: move it now, while it is still masked.
     const uint32_t bit = 1U << (intid % 32);
     if (__improbable(__atomic_load_n(&steerPending[intid / 32], __ATOMIC_RELAXED) & bit)) {
-        if (const uint8_t target = frameTarget()) {
+        if (const uint8_t target = steerTarget(intid)) {
             write8(GICD_ITARGETSR + intid, target);
             __atomic_fetch_and(&steerPending[intid / 32], ~bit, __ATOMIC_RELAXED);
         }
@@ -556,6 +602,30 @@ void ArmGIC::resume()
     for (uint32_t i = kFirstSpi / 32; i < intids / 32; ++i)
         write32(GICD_ISENABLER + i * 4, savedEnable[i]);
     OSSynchronizeIO();
+}
+
+// ArmCpu, when logical CPU `cpu` first takes interrupts: the kSteered lines made before it was up move to it.
+void ArmGIC::cpuOnline(uint32_t cpu)
+{
+    const uint8_t target = cpuTarget(cpu);
+    if (!target)
+        return;
+    for (const SteeredSpi &spi : kSteered) {
+        const uint32_t bit = 1U << (spi.intid % 32);
+        if (spi.cpu != cpu || spi.intid >= intids ||
+            !(__atomic_load_n(&steerPending[spi.intid / 32], __ATOMIC_RELAXED) & bit))
+            continue;
+        write8(GICD_ITARGETSR + spi.intid, target);
+        __atomic_fetch_and(&steerPending[spi.intid / 32], ~bit, __ATOMIC_RELAXED);
+    }
+    OSSynchronizeIO();
+}
+
+extern "C" void arm_gic_cpu_online(uint32_t cpu)
+{
+    ArmGIC *gic = __atomic_load_n(&gGic, __ATOMIC_ACQUIRE);
+    if (gic)
+        gic->cpuOnline(cpu);
 }
 
 extern "C" void arm_gic_suspend(void)

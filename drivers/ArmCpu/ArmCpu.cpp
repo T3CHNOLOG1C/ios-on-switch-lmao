@@ -68,11 +68,15 @@ volatile uint32_t armcpu_smp_self_ipi_ack[8], armcpu_smp_cross_out[8], armcpu_sm
 
 // A CPU's GICv2 interface mask, once its interface is up. ArmGIC hands out SPI nubs only after CPU0's, and a
 // driver that asks earlier sleeps on this event (switch_interrupt_nub).
+extern "C" void arm_gic_cpu_online(uint32_t cpu);
+
 static void publishGicTarget(uint32_t logicalId, uint32_t target)
 {
     __atomic_store_n(&armcpu_gic_targets[logicalId], target, __ATOMIC_RELEASE);
     if (logicalId == 0) {
         thread_wakeup((event_t)&armcpu_gic_targets[0]);
+    } else {
+        arm_gic_cpu_online(logicalId);
     }
 }
 
