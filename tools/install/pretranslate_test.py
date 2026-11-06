@@ -1,6 +1,5 @@
-"""The drivers run in the order the dyld cache needs, with the other roles' cdhashes.
-
-They leave the boot package's files behind when their deltas go.
+"""The drivers run in the order the dyld cache needs, with the other roles' cdhashes, and leave the boot package's
+files behind when their deltas go.
 """
 
 import hashlib
@@ -38,10 +37,10 @@ with open(sys.argv[0] + '.calls', 'a') as calls:
 
 
 class Quiet:
-    def __call__(self, *parts: object) -> None:
+    def __call__(self, *parts):
         pass
 
-    def quiet(self, *parts: object):
+    def quiet(self, *parts):
         pass
 
 

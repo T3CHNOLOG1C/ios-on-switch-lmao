@@ -29,7 +29,7 @@ KEPT = ('{role}.trustcache', '{role}.cdhash-pairs', 'a64x-cache-pretranslated.bi
 
 
 class Roles:
-    def __init__(self, roles: dict[str, dict], scratch: Path, log: host.Log):
+    def __init__(self, roles, scratch, log):
         """`roles`: {role: {"driver": path, "tool": path, "trustcaches": [path]}}."""
         unknown = set(roles) - set(ORDER)
         if unknown:
@@ -37,14 +37,14 @@ class Roles:
         self.roles, self.scratch, self.log = roles, Path(scratch), log
         self.kept = self.scratch / 'pretranslated'
 
-    def __contains__(self, role: str) -> bool:
+    def __contains__(self, role):
         return role in self.roles
 
-    def out(self, role: str) -> Path:
+    def out(self, role):
         return self.scratch / ('delta-' + role)
 
-    def run(self, role: str, volume: Path) -> list[dict]:
-        """Make the role's delta for the volume mounted at `volume`; return its entries, ready for delta.apply."""
+    def run(self, role, volume):
+        """The role's delta for the volume mounted at `volume`; its entries are ready for delta.apply."""
         if role == 'system_cryptex':
             missing = [r for r in ('os', 'app_cryptex') if r in self.roles and not self._pairs(r).is_file()]
             if missing:
@@ -59,7 +59,7 @@ class Roles:
                 if other in self.roles:
                     command += ['--cdhash-pairs', str(self._pairs(other))]
         self.log.quiet('$', ' '.join(command))
-        result = subprocess.run(command, capture_output=True, text=True, check=False)
+        result = subprocess.run(command, capture_output=True, text=True)
         self.log.quiet(result.stdout + result.stderr)
         if result.returncode:
             tail = (result.stderr or result.stdout).strip().splitlines()[-1:] or ['?']
@@ -69,28 +69,27 @@ class Roles:
         self.log(f'{role}: {len(entries)} files to translate')
         return entries
 
-    def _pairs(self, role: str) -> Path:
+    def _pairs(self, role):
         return self.kept / f'{role}.cdhash-pairs'
 
-    def _keep(self, role: str) -> None:
+    def _keep(self, role):
         self.kept.mkdir(parents=True, exist_ok=True)
         for name in KEPT:
             path = self.out(role) / name.format(role=role)
             if path.is_file():
                 shutil.copyfile(path, self.kept / path.name)
 
-    def done(self, role: str) -> None:
-        """Drop the role's delta once applied: its replacement files go (the kept files stay for the boot package)."""
+    def done(self, role):
+        """The role's delta is applied: its replacement files go (the kept files stay for the boot package)."""
         if self.out(role).exists():
             shutil.rmtree(self.out(role))
 
-    def artifacts(self) -> list[Path]:
+    def artifacts(self):
         return sorted(self.kept.iterdir()) if self.kept.is_dir() else []
 
-    def check_pins(self, pins: dict[str, str]) -> None:
-        """Check the kept files against the ones the boot package was built with ({name: sha256}).
-
-        A translation that made other trust modules or another cache list would not run on the kernel.
+    def check_pins(self, pins):
+        """The kept files against the ones the boot package was built with ({name: sha256}): a translation that made
+        other trust modules or another cache list would not run on the kernel.
         """
         kept = {p.name: p for p in self.artifacts()}
         wrong = [
@@ -102,11 +101,10 @@ class Roles:
             )
         self.log(f'pretranslate: {len(pins)} files match the pins')
 
-    def overlay_system(self, data: Path, system: Path, entries: list[dict], owners: bool) -> dict:
-        """Put the System volume's translated files onto Data (OVERLAY), then their manifest and the kernel's index.
-
-        Each file takes its System file's owner, mode and flags; the index is made from the manifest, which is also
-        kept for the boot package. Returns the manifest.
+    def overlay_system(self, data, system, entries, owners):
+        """The System volume's translated files onto Data (OVERLAY), each with its System file's owner, mode and
+        flags, then their manifest and the kernel's index made from it; the manifest is also kept for the boot
+        package. Returns the manifest.
         """
         root = Path(data) / OVERLAY
         files = []
