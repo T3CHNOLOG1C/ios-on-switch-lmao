@@ -156,7 +156,14 @@ def _tidy_units(target, ctx):
             ctx.fragments.cpp.copts + copts + lang_flags,
         ))
         report = ctx.actions.declare_file("{}.clang_tidy/{}.report".format(target.label.name, src.short_path))
-        reachable = [c for c in configs if not c.dirname or src.path.startswith(c.dirname + "/")]
+
+        # The root .clang-tidy included: without it in the sandbox, clang-tidy walks up out of the sandbox and reads
+        # whatever .clang-tidy lies above the output base, or none.
+        reachable = [
+            c
+            for c in configs
+            if "/" not in c.short_path or src.short_path.startswith(c.short_path.rpartition("/")[0] + "/")
+        ]
         args = ctx.actions.args()
         args.add(report)
         args.add(src.short_path)
