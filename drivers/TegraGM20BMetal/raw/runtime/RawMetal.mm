@@ -5795,11 +5795,13 @@ size_t raw_metal_rates(char *out, size_t size)
 #if SWITCH_FRAME_TIMELINE
     {
         const size_t used = strlen(diag);
-        snprintf(diag + used, sizeof diag - used, " rsplit=%.0f/%.0f/%.0fus/m rmax=%lluus fb=%llu/%llu",
+        snprintf(diag + used, sizeof diag - used, " rsplit=%.0f/%.0f/%.0fus/m rmax=%lluus fb=%llu/%llu/%llu/%llu",
                  (s.replaySlotUs.exchange(0) / double(m2vs)), (s.replayTwinUs.exchange(0) / double(m2vs)),
                  (s.replayCommitUs.exchange(0) / double(m2vs)), (unsigned long long)s.replayMaxUs.exchange(0),
                  (unsigned long long)k.fetchBarriers.exchange(0),
-                 (unsigned long long)k.fetchBarriersDisjoint.exchange(0));
+                 (unsigned long long)k.fetchBarriersDisjoint.exchange(0),
+                 (unsigned long long)k.fetchBarriersAnyColor.exchange(0),
+                 (unsigned long long)k.fetchBarriersInterlocked.exchange(0));
     }
 #endif
     gRates.abortUs = s.abortUs.load();

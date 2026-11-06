@@ -47,6 +47,7 @@ enum : uint32_t {
     PRIMITIVE_TOPOLOGY = 0x1970,
     CLEAR_SURFACE = 0x19d0,
     COLOR_COMPRESSION = 0x19e0,
+    CT_WRITE = 0x1a00,
     VERTEX_STREAM_LOCATION = 0x1c04,
     VERTEX_STREAM_LIMIT = 0x1f00,
     CB_SELECTOR_A = 0x2380,
@@ -371,18 +372,28 @@ bool Device::init(std::string &err)
     const PackPipeline *pp = pack_.section<PackPipeline>(PackPipelines);
     const PackProgram *progs = pack_.section<PackProgram>(PackPrograms);
     const uint32_t *blob = pack_.section<uint32_t>(PackBlob);
+    // SET_CT_WRITE(i), as the baseline leaves it where a state's registers do not set it
+    uint32_t ctWrite[8] = {};
+    for (uint64_t i = 0; i < pack_.bytes(PackBaseline) / 8; i++)
+        if (base[2 * i] >= CT_WRITE && base[2 * i] < CT_WRITE + 32)
+            ctWrite[(base[2 * i] - CT_WRITE) / 4] = base[2 * i + 1];
     pipelines_.resize(pack_.header()->pipelines);
     for (uint32_t i = 0; i < pack_.header()->pipelines; i++) {
         Pipeline &pl = pipelines_[i];
         pl.rec = &pp[i];
         std::vector<uint32_t> words(64 + pp[i].blobDwords * 2);
         Push w{words.data(), words.data() + words.size()};
+        uint32_t writes[8];
+        memcpy(writes, ctWrite, sizeof writes);
         for (uint32_t k = 0; k < pp[i].blobDwords; k += 2) {
             const uint32_t m = blob[pp[i].blob + k], v = blob[pp[i].blob + k + 1];
-            if (m >= 0x1a00 && m < 0x1a20 && (v & 0xffff))
-                pl.writesColor = true;  // SET_CT_WRITE(i): any target (m2v 0106)
+            if (m >= CT_WRITE && m < CT_WRITE + 32)
+                writes[(m - CT_WRITE) / 4] = v;
             w.m(m, v);
         }
+        for (uint32_t c = 0; c < 8; c++)
+            if (writes[c] & 0x1111)  // R_ENABLE, G_ENABLE, B_ENABLE, A_ENABLE
+                pl.writeBits |= uint8_t(1u << c);
         w.m(0x2044, progs[pp[i].vs].program);  // SET_PIPELINE_PROGRAM(VERTEX)
         w.m(0x2144, progs[pp[i].fs].program);  // SET_PIPELINE_PROGRAM(PIXEL)
         pl.methods.assign(words.data(), w.at);
@@ -1815,10 +1826,12 @@ void RenderEncoder::barrier()
         reserve();
     p_.m(WAIT_FOR_IDLE, 0);
     p_.m(INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI, 0);
-    colorWritten_ = false;
+    writtenBits_ = 0;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     writtenCount_ = 0;
     writtenFull_ = false;
+    anyWritten_ = false;
+    ropWritten_ = storageWritten_ = 0;
 #endif
 }
 
@@ -2103,8 +2116,12 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, uint32_t first, ui
             p.m(BIND_GROUP_CB + 0x20 * 4, 1 | 1 << 4);
         p.inc(CB_SELECTOR_A, {kRootBytes, uint32_t(d.root_.va >> 32), uint32_t(d.root_.va)});
     }
-    // framebuffer fetch reads the color attachment through the texture unit: m2v's barrier (0106: only after a draw wrote color)
-    if ((r.flags & PipelineFetches) && colorWritten_) {
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    countRules(*pl);
+#endif
+    // framebuffer fetch reads a color attachment through the texture unit: a barrier where a draw since the last one wrote a
+    // color this draw fetches (m2v's barrier, 0106, follows any color write: the ROP writes only the colors SET_CT_WRITE opens)
+    if (pl->fetchBits & writtenBits_) {
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
         dev_->stats.fetchBarriers++;
         if (!whole_ && !writtenOverlaps(drawRect_))
@@ -2114,7 +2131,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, uint32_t first, ui
 #endif
         p.m(WAIT_FOR_IDLE, 0);
         p.m(INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI, 0);
-        colorWritten_ = false;
+        writtenBits_ = 0;
     }
     if (first != first_ || baseInstance != baseInstance_) {
         // nvk_mme_build_set_draw_params: root draw.vs.{base_vertex, base_instance} and the base registers
@@ -2125,11 +2142,11 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, uint32_t first, ui
         first_ = first;
         baseInstance_ = baseInstance;
     }
-    colorWritten_ |= pl->writesColor;
+    writtenBits_ |= pl->writeBits;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    if (pl->writesColor && whole_)
+    if (pl->writeBits && whole_)
         writtenFull_ = true;
-    else if (pl->writesColor && drawRect_[2] > drawRect_[0] && drawRect_[3] > drawRect_[1]) {
+    else if (pl->writeBits && drawRect_[2] > drawRect_[0] && drawRect_[3] > drawRect_[1]) {
         if (writtenCount_ < written_.size())
             written_[writtenCount_++] = drawRect_;
         else
@@ -2140,6 +2157,22 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, uint32_t first, ui
 }
 
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+void RenderEncoder::countRules(const Pipeline &pl)
+{
+    if (pl.fetchBits && anyWritten_) {
+        dev_->stats.fetchBarriersAnyColor++;
+        anyWritten_ = false;
+    }
+    anyWritten_ |= pl.writeBits != 0;
+    const uint8_t stored = pl.fetchBits & pl.writeBits, ropWrites = pl.writeBits & ~pl.fetchBits;
+    if ((pl.fetchBits & ropWritten_) || (ropWrites & storageWritten_)) {
+        dev_->stats.fetchBarriersInterlocked++;
+        ropWritten_ = storageWritten_ = 0;
+    }
+    ropWritten_ |= ropWrites;
+    storageWritten_ |= stored;
+}
+
 bool RenderEncoder::writtenOverlaps(const std::array<uint32_t, 4> &r) const
 {
     if (writtenFull_)

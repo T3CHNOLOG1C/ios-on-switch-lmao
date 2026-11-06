@@ -175,7 +175,7 @@ struct Pipeline {
     std::vector<uint32_t> methods;         // the state's registers as ready push words (program offsets relocated)
     uint32_t push[32] = {}, pushMask = 0;  // root table [0x700, 0x780): the words m2v's push ranges write, and which
     bool vsSetCbuf = false, fsSetCbuf = false;  // the program reads set 0 as constant buffer 1
-    bool writesColor = false;
+    uint8_t writeBits = 0;          // colors its draws write: SET_CT_WRITE(i) with a channel on
     uint32_t colorFormats[8] = {};  // MTLPixelFormat of each color attachment the state was made for (0: none)
     uint8_t readBits = 0;   // colors its draws read as they were: blended into, or written through a partial mask
     uint8_t fetchBits = 0;  // colors it reads by framebuffer fetch
@@ -267,7 +267,8 @@ private:
     uint32_t scissor_[2] = {}, viewport_[8] = {};
     bool scissorDirty_ = true, viewportDirty_ = true;
     uint32_t topology_ = ~0u, restart_ = ~0u, first_ = 0, baseInstance_ = 0;
-    bool colorWritten_ = false, memoryless_[8] = {};
+    uint8_t writtenBits_ = 0;  // colors a draw wrote since the last barrier
+    bool memoryless_[8] = {};
     const Texture *shadowOf_[8] =
         {};  // a shadow target's texture, where pass_ holds its pool image (CommandBuffer::render)
     // what m2v's DontCare loads answer (metal2vulkan clear_reach.rs: dont_care_loads, DrawnArea): whether the pass has a draw
@@ -284,6 +285,13 @@ private:
     uint32_t writtenCount_ = 0;
     bool writtenFull_ = false;
     bool writtenOverlaps(const std::array<uint32_t, 4> &r) const;
+    // the same draws under two other rules, counted only: one barrier per fetching draw after any color write (the rule
+    // before writtenBits_), and the interlocked storage form (a fetched color read and written by the fragment shader inside
+    // the pixel interlock, the rest through the ROP): it orders storage accesses among themselves, so it barriers only where
+    // a storage read or write follows a ROP write of the color, or a ROP write follows a storage write
+    bool anyWritten_ = false;
+    uint8_t ropWritten_ = 0, storageWritten_ = 0;
+    void countRules(const Pipeline &pl);
 #endif
 
     struct Clear {
@@ -543,8 +551,10 @@ public:
         // passes into a chain level, and levels copied between a chain and its mirrors (out: for m2v; in: what m2v rendered)
         std::atomic<uint64_t> levelPasses{0}, mirrorsOut{0}, mirrorsIn{0};
         // framebuffer-fetch barriers encoded, and of those the ones whose draw's pixels no color write since the last barrier
-        // reached (debug builds: what skipping a barrier by region would save)
-        std::atomic<uint64_t> fetchBarriers{0}, fetchBarriersDisjoint{0};
+        // reached (debug builds: what skipping a barrier by region would save); the barriers one per fetching draw after any
+        // color write would have encoded, and those the interlocked storage form would (RenderEncoder::countRules)
+        std::atomic<uint64_t> fetchBarriers{0}, fetchBarriersDisjoint{0}, fetchBarriersAnyColor{0},
+            fetchBarriersInterlocked{0};
     } stats;
 
     // The self-test's result (open), per sampling candidate (fx::sampling(i)): bytes off by more than 1 in the CPU's Tegra and
