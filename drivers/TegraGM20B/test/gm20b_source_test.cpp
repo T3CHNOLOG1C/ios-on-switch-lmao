@@ -312,6 +312,18 @@ TEST(GM20BRoomSource, RoomIsWaitedForByInterrupt)
 		     "nvif_chan_gpfifo_post(&chan->chan);", "NON_STALL_INTERRUPT, 0);");
 }
 
+// The L2 invalidate that makes the CPU's writes visible is ordered on the GPU, in the submission's own stream, ahead of
+// a first push that is not prefetched; the CPU does not wait for it.
+TEST(GM20BL2Source, InvalidateOnTheGpu)
+{
+	EXPECT_EQ(Count(gpu(), "FLUSH_L2_SYSTEM_INVALIDATE"), 0u);
+	const std::string exec = flat(Between(gpu(), "static int chan_exec(", "\n}\n"));
+	expectBefore(
+		exec,
+		"NVB06F_MEM_OP_D_OPERATION_L2_SYSMEM_INVALIDATE); PUSH_KICK(&chan->chan.push);",
+		"pushes[i].no_prefetch || (l2_on() && !i));");
+}
+
 TEST(GM20BSleepSource, SleepAndWakeOrder)
 {
 	const std::string body = flat(definition(gpu(), "void tgm_sleep(void)"));

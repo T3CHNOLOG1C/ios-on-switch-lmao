@@ -93,7 +93,7 @@ struct tgm_push {
 	uint32_t no_prefetch;
 };
 /* Append the pushes, then the fence (WFI semaphore release of the next seqno), then kick. User mappings are
- * L2-cacheable: the L2's clean lines are invalidated before the kick and its dirty lines written back before the seqno
+ * L2-cacheable: the L2's clean lines are invalidated on the GPU before the pushes are fetched and its dirty lines written back before the seqno
  * is released (gpu.c l2_on). With present order the pushes run only after
  * the last GPU present queued before this call has finished reading its surface (a GPU-side wait), and after what the
  * acquires tgm_chan_order queued for the channel wait for. -EBUSY when the GPFIFO stays full for 1 s (a panic from the

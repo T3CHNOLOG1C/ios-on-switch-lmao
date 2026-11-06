@@ -32,7 +32,6 @@ struct SwitchFrameGpu {
     uint32_t submits;                  // the compositor's
     uint32_t others;                   // every other process's
     uint64_t execNs;                   // CPU time in the compositor's submissions (kernel side)
-    uint64_t l2Ns;                     // of it, waiting for the GPU L2's invalidate
 };
 
 #ifdef __cplusplus

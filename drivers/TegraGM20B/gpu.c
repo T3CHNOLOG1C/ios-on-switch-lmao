@@ -659,10 +659,12 @@ uint64_t tgm_pool_avail(void)
  * L2. Volatile user mappings (the default, as nouveau maps all system memory) keep every texture fetch and ROP access
  * out of the L2. Here user mappings are cacheable and the L2 is kept coherent at submission boundaries,
  * which are Metal's visibility points:
- *  - CPU -> GPU: before a submission is kicked, the CPU invalidates the L2's clean system-memory lines (FLUSH
- *    L2_SYSTEM_INVALIDATE 0x70004), so what the CPU wrote since (WC pool BOs, cleaned cached BOs, imports, push
- *    buffers, which the host may prefetch) is read from DRAM. Dirty lines are not touched by it (nvgpu
- *    gk20a_mm_l2_invalidate_locked) and there are none from finished work, see next.
+ *  - CPU -> GPU: each submission starts with a host MEM_OP_D L2_SYSMEM_INVALIDATE in its own entry (NVK's host-write
+ *    barrier on Maxwell B, nvk_cmd_buffer.c HOST_WFI_INVALIDATE_SYSMEM; the channel is idle there, after the previous
+ *    submission's fence WFI), so what the CPU wrote since (WC pool BOs, cleaned cached BOs, imports, push buffers) is read
+ *    from DRAM. The host finishes a MEM_OP before it processes the next method, and the submission's first push is
+ *    fetched only after that (GP_ENTRY1 SYNC_WAIT, nvif's no_prefetch). The invalidate is ordered on the GPU: the
+ *    submitting thread does not wait for it.
  *  - GPU -> CPU: the kernel's fence push writes the L2's dirty lines back (host WFI, FB_FLUSH, MEM_OP_D L2_FLUSH_DIRTY,
  *    FB_FLUSH; clb06f.h: gm20x moved MEM_OP_A/B to C/D) before it releases the seqno, so anyone who sees a fence complete
  *    (WaitFence, the client's mapped fence page, sync_for_cpu) finds the data in DRAM.
@@ -670,44 +672,9 @@ uint64_t tgm_pool_avail(void)
  *    page the kernel gives back is written back later; nvgpu flushes on unmap for the same reason
  *    (common/mm/gmmu.c gk20a_gmmu_cache_maint_unmap). nvkm invalidates the L2 after its own page-table writes
  *    (instmem/gk20a.c release). Kernel mappings (rings, fence pages) stay volatile. */
-#define FLUSH_L2_SYSTEM_INVALIDATE \
-	0x070004         /* nvgpu hw_flush_gm20b.h: bit 0 pending, bit 1 outstanding */
-#define L2_OP_NS 1000000 /* nvgpu allows 200 x 5 us for the invalidate */
-static DEFINE_MUTEX(l2_lock);
-
-static struct {
-	u64 sum, max;
-	u32 n;
-} l2_time; /* stats: the invalidate's CPU time, lock wait included */
-
 static int l2_on(void)
 {
 	return 1;
-}
-
-static u64 l2_invalidate(void)
-{
-	struct nvkm_device *device = gpu.device;
-	u64 start = nvxnu_nanotime(), end, took;
-	u32 v;
-
-	mutex_lock(&l2_lock);
-	nvkm_wr32(device, FLUSH_L2_SYSTEM_INVALIDATE, 0x00000001);
-	end = nvxnu_nanotime() + L2_OP_NS;
-	while ((v = nvkm_rd32(device, FLUSH_L2_SYSTEM_INVALIDATE)) & 0x00000003) {
-		if (nvxnu_nanotime() >= end)
-			nvxnu_panic("tegra-gm20b: L2 system invalidate still busy after 1 ms "
-				    "(FLUSH_L2_SYSTEM_INVALIDATE %08x)",
-				    v);
-		nvxnu_udelay(1);
-	}
-	took = nvxnu_nanotime() - start;
-	l2_time.sum += took;
-	l2_time.n++;
-	if (took > l2_time.max)
-		l2_time.max = took;
-	mutex_unlock(&l2_lock);
-	return took;
 }
 
 struct tgm_vm {
@@ -2157,8 +2124,7 @@ static void stats_tick(void)
 	    sum, max, qs, qm, es, em, ps, pm;
 	u32 submits, fences, imports, timed, presents, ordered, idle, late, writer, allocs, mc_int,
 		mc_err, mc_adr, copies, gaps;
-	u64 abytes, ans, pt, cal, rate, cs, cm, gs, gm, l2s, l2m, busy;
-	u32 l2n;
+	u64 abytes, ans, pt, cal, rate, cs, cm, gs, gm, busy;
 	char line[896], clk[120], scrubbed[120];
 
 	__atomic_fetch_add(&stats.submits, 1, __ATOMIC_RELAXED);
@@ -2203,12 +2169,6 @@ static void stats_tick(void)
 	gaps = __atomic_exchange_n(&stats.gaps, 0, __ATOMIC_RELAXED);
 	gs = __atomic_exchange_n(&stats.gap_sum, 0, __ATOMIC_RELAXED);
 	gm = __atomic_exchange_n(&stats.gap_max, 0, __ATOMIC_RELAXED);
-	mutex_lock(&l2_lock);
-	l2s = l2_time.sum;
-	l2m = l2_time.max;
-	l2n = l2_time.n;
-	l2_time.sum = l2_time.max = l2_time.n = 0;
-	mutex_unlock(&l2_lock);
 	tegra_gm20b_mc_errors(&mc_int, &mc_err, &mc_adr);
 	/* the GPU's share of the window spent on stamped user submissions and copies */
 	busy = PT_NS(es + cs) * 100 / (now - since);
@@ -2221,14 +2181,13 @@ static void stats_tick(void)
 		  "queue "
 		  "mean %llu us max %llu us, exec mean %llu us max %llu us (%u stamped), busy "
 		  "%llu%% (PTIMER x%llu.%03llu), "
-		  "L2 %s (invalidate mean %llu us max %llu us), %u presents (%u writer-only), "
+		  "L2 %s, %u presents (%u writer-only), "
 		  "offer to done mean %llu us max "
 		  "%llu us, %s",
 		  ms, submits, submits * 1000ULL / (ms ? ms : 1), fences ? sum / fences / 1000 : 0,
 		  max / 1000, fences, timed ? PT_NS(qs) / timed / 1000 : 0, PT_NS(qm) / 1000,
 		  timed ? PT_NS(es) / timed / 1000 : 0, PT_NS(em) / 1000, timed, busy, rate >> 16,
-		  ((rate & 0xffff) * 1000) >> 16, l2_on() ? "cached" : "volatile",
-		  l2n ? l2s / l2n / 1000 : 0, l2m / 1000, presents, writer,
+		  ((rate & 0xffff) * 1000) >> 16, l2_on() ? "cached" : "volatile", presents, writer,
 		  presents ? ps / presents / 1000 : 0, pm / 1000, clk);
 	nvxnu_stats("tegra-gm20b: stats %s", line);
 	/* the pool by holder, so no share of it goes unnamed */
@@ -3218,6 +3177,7 @@ void tgm_cpu_clean_pages(const uint64_t *pas, uint32_t npages)
 #define NVB06F_FB_FLUSH 0x0024
 #define NVB06F_MEM_OP_C 0x0030
 #define NVB06F_MEM_OP_D 0x0034
+#define NVB06F_MEM_OP_D_OPERATION_L2_SYSMEM_INVALIDATE (0x0eu << 27)
 #define NVB06F_MEM_OP_D_OPERATION_L2_FLUSH_DIRTY (0x10u << 27)
 #define NVB06F_WFI 0x0078
 
@@ -3342,11 +3302,11 @@ static u32 chan_fence(struct tgm_chan *chan)
 /* The frame timeline (SwitchFrameTimeline.h): the compositor's submissions since the display last took them, and every
  * other process's count. Submitters on several connections at once: each field on its own atomics. */
 static struct {
-	u64 first, last, exec_ns, l2_ns;
+	u64 first, last, exec_ns;
 	u32 submits, others;
 } frame_gpu;
 
-static void frame_submitted(struct tgm_chan *chan, u32 seqno, u64 start, u64 l2)
+static void frame_submitted(struct tgm_chan *chan, u32 seqno, u64 start)
 {
 	u64 now = nvxnu_nanotime(), none = 0;
 
@@ -3360,7 +3320,6 @@ static void frame_submitted(struct tgm_chan *chan, u32 seqno, u64 start, u64 l2)
 	__atomic_store_n(&frame_gpu.last, start, __ATOMIC_RELAXED);
 	__atomic_fetch_add(&frame_gpu.submits, 1, __ATOMIC_RELAXED);
 	__atomic_fetch_add(&frame_gpu.exec_ns, now - start, __ATOMIC_RELAXED);
-	__atomic_fetch_add(&frame_gpu.l2_ns, l2, __ATOMIC_RELAXED);
 }
 
 void tegra_gm20b_frame_take(struct SwitchFrameGpu *out)
@@ -3370,7 +3329,6 @@ void tegra_gm20b_frame_take(struct SwitchFrameGpu *out)
 	out->submits = __atomic_exchange_n(&frame_gpu.submits, 0, __ATOMIC_RELAXED);
 	out->others = __atomic_exchange_n(&frame_gpu.others, 0, __ATOMIC_RELAXED);
 	out->execNs = __atomic_exchange_n(&frame_gpu.exec_ns, 0, __ATOMIC_RELAXED);
-	out->l2Ns = __atomic_exchange_n(&frame_gpu.l2_ns, 0, __ATOMIC_RELAXED);
 }
 
 /* Present order: held by a user submission from its present wait to its kick, and by the present
@@ -3383,7 +3341,7 @@ static int chan_exec(struct tgm_chan *chan, const struct tgm_push *pushes, uint3
 		     uint32_t *seqno, const struct tgm_prof *prof)
 {
 	int ordered = present_order_on() && !chan->kernel && chan->vm->pfence_va;
-	u64 start = SWITCH_FRAME_TIMELINE ? nvxnu_nanotime() : 0, l2 = 0;
+	u64 start = SWITCH_FRAME_TIMELINE ? nvxnu_nanotime() : 0;
 	u32 i, stamps = 0;
 	int ret;
 
@@ -3409,15 +3367,13 @@ static int chan_exec(struct tgm_chan *chan, const struct tgm_push *pushes, uint3
 	/* nouveau_exec_job_run(): room for every user entry plus our fence push and, each kicked as its own entry before
 	 * them, a present wait, the task order's acquires and (stats) a start stamp, one more nvif GET semaphore
 	 * with each. A profile's stamps: an entry each, a stamp and a GET semaphore. */
-	ret = chan_wait_room(chan, count + 4 + stamps,
-			     CHAN_FENCE_DWORDS + 24 + 5 * TGM_ORDER_MAX + 16 * stamps);
+	ret = chan_wait_room(chan, count + 5 + stamps,
+			     CHAN_FENCE_DWORDS + 32 + 5 * TGM_ORDER_MAX + 16 * stamps);
 	if (ret == -ETIMEDOUT && gpu.stage >= 3)
 		tgm_chan_hung(chan, "exec: GPFIFO still full after 1 s", chan->submitted,
 			      NSEC_PER_SEC);
 	if (ret)
 		return ret == -ETIMEDOUT ? -EBUSY : ret;
-	if (l2_on())
-		l2 = l2_invalidate(); /* before the host can fetch anything of this submission */
 	if (ordered) {
 		mutex_lock(&order_lock);
 		present_order(chan); /* first, so the start stamp below times the work itself */
@@ -3440,9 +3396,14 @@ static int chan_exec(struct tgm_chan *chan, const struct tgm_push *pushes, uint3
 		WRITE_ONCE(chan->prof_seqno,
 			   chan->submitted + 1); /* before the fence that completes it */
 	}
+	if (l2_on()) {
+		PUSH_NVSQ(&chan->chan.push, NV906F, NVB06F_MEM_OP_C, 0, NVB06F_MEM_OP_D,
+			  NVB06F_MEM_OP_D_OPERATION_L2_SYSMEM_INVALIDATE);
+		PUSH_KICK(&chan->chan.push);
+	}
 	for (i = 0; i < count; i++) {
 		nvif_chan_gpfifo_push(&chan->chan, pushes[i].va, pushes[i].dwords << 2,
-				      pushes[i].no_prefetch);
+				      pushes[i].no_prefetch || (l2_on() && !i));
 		if (prof && prof->cls[i] != TGM_PC_SKIP) {
 			push_stamp(&chan->chan.push,
 				   chan->ring_va + CHAN_PROF + i * sizeof(struct tgm_stamp),
@@ -3455,7 +3416,7 @@ static int chan_exec(struct tgm_chan *chan, const struct tgm_push *pushes, uint3
 	if (ordered)
 		mutex_unlock(&order_lock);
 	if (SWITCH_FRAME_TIMELINE && !chan->kernel)
-		frame_submitted(chan, *seqno, start, l2);
+		frame_submitted(chan, *seqno, start);
 	if (stats_on())
 		stats_tick();
 	return 0;

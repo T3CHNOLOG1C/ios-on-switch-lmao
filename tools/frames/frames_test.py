@@ -6,7 +6,7 @@ from tools.frames import frames
 
 KERNEL = (
     'kernel: SwitchFrame: latch 192000000 after 3 frames (50000 us), cause gpu; origin vsync 191040000; '
-    'first submit 4000, last submit 6000 (3, exec 300 us, L2 120 us), swap 6500, offer 6600, gpu done 31000, '
+    'first submit 4000, last submit 6000 (3, exec 300 us), swap 6500, offer 6600, gpu done 31000, '
     'flip 31200, latch 50000 us; other submits 2; swap thread base 47 sched 47 mode 3 qos 6; '
     'cpu 1785 MHz at vsync 1785 at swap'
 )

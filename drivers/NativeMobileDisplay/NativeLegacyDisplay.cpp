@@ -1080,7 +1080,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
         snprintf(
             line, sizeof(line),
             "latch %llu after %u frames (%llu us), cause %s; origin %s %llu; first submit %lld, last "
-            "submit %lld (%u, exec %llu us, L2 %llu us), swap %lld, offer %lld, gpu done %lld, flip %lld, latch "
+            "submit %lld (%u, exec %llu us), swap %lld, offer %lld, gpu done %lld, flip %lld, latch "
             "%lld us; other submits %u; swap thread base %d sched %d mode %d qos %d; cpu %u MHz at vsync %u at swap",
             stamp, frames, us, cause < kLongCauses ? kCause[cause] : "?",
             tl.vsync      ? "vsync"
@@ -1089,9 +1089,9 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
             tl.vsync      ? tl.vsync
             : mark.submit ? mark.submit
                           : stamp,
-            atNs(tl.gpu.firstSubmit), atNs(tl.gpu.lastSubmit), tl.gpu.submits, tl.gpu.execNs / 1000, tl.gpu.l2Ns / 1000,
-            at(mark.submit), at(mark.kick), at(tl.done), at(mark.ready), at(stamp), tl.gpu.others, tl.basePri,
-            tl.schedPri, tl.mode, tl.qos, tl.khzVsync / 1000, tl.khzSwap / 1000);
+            atNs(tl.gpu.firstSubmit), atNs(tl.gpu.lastSubmit), tl.gpu.submits, tl.gpu.execNs / 1000, at(mark.submit),
+            at(mark.kick), at(tl.done), at(mark.ready), at(stamp), tl.gpu.others, tl.basePri, tl.schedPri, tl.mode,
+            tl.qos, tl.khzVsync / 1000, tl.khzSwap / 1000);
         os_log(OS_LOG_DEFAULT, "SwitchFrame: %s", line);  // one string: os_log drops a record whose scalars outgrow it
     }
 

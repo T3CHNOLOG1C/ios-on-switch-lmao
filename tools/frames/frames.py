@@ -17,7 +17,7 @@ TICK_NS = 1e9 / 19.2e6  # the Tegra X1 generic timer: mach absolute time's unit 
 FRAME = re.compile(
     r'SwitchFrame: latch (?P<latch>\d+) after (?P<frames>\d+) frames \((?P<us>\d+) us\), cause (?P<cause>\w+|\?); '
     r'origin (?P<origin_kind>\w+) (?P<origin>\d+); first submit (?P<first>-?\d+), last submit (?P<last>-?\d+) '
-    r'\((?P<submits>\d+), exec (?P<exec>\d+) us, L2 (?P<l2>\d+) us\), swap (?P<swap>-?\d+), offer (?P<offer>-?\d+), '
+    r'\((?P<submits>\d+), exec (?P<exec>\d+) us\), swap (?P<swap>-?\d+), offer (?P<offer>-?\d+), '
     r'gpu done (?P<done>-?\d+), flip (?P<flip>-?\d+), latch (?P<at_latch>-?\d+) us; other submits (?P<others>\d+); '
     r'swap thread base (?P<base>-?\d+) sched (?P<sched>-?\d+) mode (?P<mode>-?\d+) qos (?P<qos>-?\d+); '
     r'cpu (?P<khz_vsync>\d+) MHz at vsync (?P<khz_swap>\d+) at swap'
@@ -52,7 +52,6 @@ class Frame:
     points: dict
     submits: int
     exec_us: int
-    l2_us: int
     others: int
     thread: tuple
     khz: tuple
@@ -83,7 +82,6 @@ def parse_frame(m):
         points=points,
         submits=int(g['submits']),
         exec_us=int(g['exec']),
-        l2_us=int(g['l2']),
         others=int(g['others']),
         thread=(int(g['base']), int(g['sched']), int(g['mode']), int(g['qos'])),
         khz=(int(g['khz_vsync']), int(g['khz_swap'])),
@@ -159,7 +157,7 @@ def describe(frame):
         mark = '  <-' if worst and name == worst[0] else ''
         out.append(f'  {name:22} {us / 1000:7.2f} ms  {meaning}{mark}')
     out.append(
-        f'  compositor submits {frame.submits} (kernel exec {frame.exec_us} us, L2 invalidate {frame.l2_us} us), '
+        f'  compositor submits {frame.submits} (kernel exec {frame.exec_us} us), '
         f"other processes' submits {frame.others}"
     )
     base, sched, mode, qos = frame.thread
