@@ -37,7 +37,7 @@ class Reader(ctypes.Structure):
 
 class TestExport(unittest.TestCase):
     @classmethod
-    def setUpClass(cls):
+    def setUpClass(cls) -> None:
         cls.temp = tempfile.TemporaryDirectory(prefix='switch-fw-export-')
         path = Path(cls.temp.name) / 'export.dylib'
         subprocess.run(
@@ -61,7 +61,7 @@ class TestExport(unittest.TestCase):
         cls.lib.switch_fw_capture.restype = ctypes.c_int
 
     @classmethod
-    def tearDownClass(cls):
+    def tearDownClass(cls) -> None:
         cls.temp.cleanup()
 
     def setUp(self):
@@ -115,16 +115,16 @@ class TestExport(unittest.TestCase):
         self.callback = COPY(self.copy)
         self.reader = Reader(None, self.callback)
 
-    def p16(self, p, v):
+    def p16(self, p: int, v: int):
         struct.pack_into('<H', self.mem, p - GD, v)
 
-    def p32(self, p, v):
+    def p32(self, p: int, v: int):
         struct.pack_into('<I', self.mem, p - GD, v)
 
-    def p64(self, p, v):
+    def p64(self, p: int, v: int):
         struct.pack_into('<Q', self.mem, p - GD, v)
 
-    def capacity(self, sectors):
+    def capacity(self, sectors: int):
         csize = (sectors >> 10) - 1
         self.p32(MMC + 0x44, (9 << 16) | (csize >> 16))
         self.p32(MMC + 0x48, (csize & 0xFFFF) << 16)
@@ -134,13 +134,13 @@ class TestExport(unittest.TestCase):
         self.p64(DESC + 0x18, 512)
         self.p32(DESC + 0x20, 9)
 
-    def list(self, head, nodes):
+    def list(self, head: int, nodes: list[int]):
         allnodes = [head, *nodes]
         for i, p in enumerate(allnodes):
             self.p64(p, allnodes[(i + 1) % len(allnodes)])
             self.p64(p + 8, allnodes[i - 1])
 
-    def copy(self, ctx, p, out, n):
+    def copy(self, _ctx: int | None, p: int, out: object, n: int):
         self.accesses.append((p, n))
         if p == GD:
             self.gd_reads += 1
@@ -153,7 +153,7 @@ class TestExport(unittest.TestCase):
         ctypes.memmove(out, bytes(self.mem[p - GD : p - GD + n]), n)
         return 0
 
-    def run_capture(self, expected=0, gd=GD):
+    def run_capture(self, expected: int = 0, gd: int = GD):
         out = (ctypes.c_uint8 * 256)(*([0xA5] * 256))
         result = self.lib.switch_fw_capture(ctypes.byref(self.reader), gd, out)
         self.assertEqual(result, expected)

@@ -25,7 +25,7 @@ def xxh32(data: bytes, seed: int = 0) -> int:
     p1, p2, p3, p4, p5 = 0x9E3779B1, 0x85EBCA77, 0xC2B2AE3D, 0x27D4EB2F, 0x165667B1
     mask = 0xFFFFFFFF
 
-    def rotl(x, r):
+    def rotl(x: int, r: int) -> int:
         return ((x << r) | (x >> (32 - r))) & mask
 
     if len(data) >= 16:

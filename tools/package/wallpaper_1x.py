@@ -41,7 +41,7 @@ FROM_CLASS, TO_CLASS = '1024w-1366h@2x~ipad', 'any'
 PRODUCT = 'iPad7,1'
 
 
-def one_x(data, name):
+def one_x(data: bytes, name: str) -> bytes:
     """The plist `data` with logicalScreenClass FROM_CLASS -> TO_CLASS; refuses anything but a J120 bundle's."""
     plist = plistlib.loads(data)
     if plist.get('logicalScreenClass') != FROM_CLASS:
@@ -52,7 +52,7 @@ def one_x(data, name):
     return plistlib.dumps(plist, fmt=plistlib.FMT_BINARY)
 
 
-def main():
+def main() -> None:
     if len(sys.argv) != 3:
         raise SystemExit(__doc__)
     dmg, out = Path(sys.argv[1]), Path(sys.argv[2])

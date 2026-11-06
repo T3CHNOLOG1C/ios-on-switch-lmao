@@ -20,12 +20,12 @@ import sys
 from pathlib import Path
 
 
-def state_dir():
+def state_dir() -> Path:
     """Where the tools keep what is not the repository's: ~/Library/Application Support/switch-ios, or $SWITCH_HOME."""
     return Path(os.environ.get('SWITCH_HOME') or Path.home() / 'Library/Application Support/switch-ios')
 
 
-def located(path):
+def located(path: str) -> Path:
     if path and not os.path.isabs(path):
         try:
             from python.runfiles import runfiles
@@ -36,7 +36,7 @@ def located(path):
     return Path(path).resolve()
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--boot', required=True)
     parser.add_argument('--gpu')

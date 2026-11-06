@@ -70,7 +70,7 @@ def bl33_patch(bl33: bytes) -> bytes:
     return bl33[:start] + block.ljust(end + 1 - start, b'\0') + bl33[end + 1 :]
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     step = parser.add_subparsers(dest='step', required=True)
     p = step.add_parser('patch')

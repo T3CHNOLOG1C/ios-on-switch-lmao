@@ -17,6 +17,7 @@ The OS dmg alone is several GB, so expect a few minutes.
 import argparse
 import ast
 import hashlib
+import http.client
 import json
 import os
 import plistlib
@@ -44,25 +45,25 @@ COMPONENTS = {
 
 
 class Remote:
-    def __init__(self, url):
+    def __init__(self, url: str) -> None:
         self.url = url
         request = urllib.request.Request(url, method='HEAD')
         with urllib.request.urlopen(request) as response:
             self.size = int(response.headers['Content-Length'])
 
-    def range(self, start, end):
+    def range(self, start: int, end: int) -> http.client.HTTPResponse:
         request = urllib.request.Request(self.url, headers={'Range': f'bytes={start}-{end - 1}'})
         response = urllib.request.urlopen(request)
         if response.status != 206:
             raise SystemExit(f'{self.url}: no range support (HTTP {response.status})')
         return response
 
-    def read(self, start, end):
+    def read(self, start: int, end: int) -> bytes:
         with self.range(start, end) as response:
             return response.read()
 
 
-def central_directory(remote):
+def central_directory(remote: Remote) -> dict[str, dict[str, int]]:
     tail_start = max(0, remote.size - 65536 - 22)
     tail = remote.read(tail_start, remote.size)
     eocd = tail.rfind(b'PK\x05\x06')
@@ -92,7 +93,7 @@ def central_directory(remote):
     return members
 
 
-def data_offset(remote, member):
+def data_offset(remote: Remote, member: dict[str, int]) -> int:
     local = remote.read(member['header'], member['header'] + 30)
     if local[:4] != b'PK\x03\x04':
         raise SystemExit('bad local header')
@@ -100,7 +101,7 @@ def data_offset(remote, member):
     return member['header'] + 30 + name_len + extra_len
 
 
-def stream(remote, member, offset):
+def stream(remote: Remote, member: dict[str, int], offset: int) -> tuple[str, str]:
     """sha256 of the stored bytes and of the content; checks the zip's CRC and size."""
     stored, content = hashlib.sha256(), hashlib.sha256()
     inflate = zlib.decompressobj(-15) if member['method'] == 8 else None
@@ -120,7 +121,7 @@ def stream(remote, member, offset):
     return stored.hexdigest(), content.hexdigest()
 
 
-def aea_key(remote, offset):
+def aea_key(remote: Remote, offset: int) -> str:
     """The `aea decrypt -key-value` key of the AEA member stored at offset."""
     profile, length = aea.prologue(remote.read(offset, offset + aea.PROLOGUE))
     if profile != aea.SYMMETRIC_PROFILE:
@@ -128,14 +129,14 @@ def aea_key(remote, offset):
     return aea.key_value(aea.auth_fields(remote.read(offset + aea.PROLOGUE, offset + aea.PROLOGUE + length)))
 
 
-def stream_aea(remote, member, offset, key):
+def stream_aea(remote: Remote, member: dict[str, int], offset: int, key: str) -> tuple[str, str]:
     """sha256 of the stored archive and of what /usr/bin/aea decrypts it to; checks the zip's CRC."""
     stored, content, crc = hashlib.sha256(), hashlib.sha256(), [0]
     decrypt = subprocess.Popen(
         ['/usr/bin/aea', 'decrypt', '-key-value', key], stdin=subprocess.PIPE, stdout=subprocess.PIPE
     )
 
-    def feed():
+    def feed() -> None:
         with remote.range(offset, offset + member['csize']) as response, decrypt.stdin:
             while chunk := response.read(CHUNK):
                 stored.update(chunk)
@@ -154,7 +155,7 @@ def stream_aea(remote, member, offset, key):
     return stored.hexdigest(), content.hexdigest()
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--kind', required=True, help='the IPSW kind: its build (ProductBuildVersion)')
     parser.add_argument('--replace', help='a declared slot (e.g. next) this kind takes the place of')

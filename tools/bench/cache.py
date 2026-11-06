@@ -22,13 +22,14 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from collections.abc import Sequence
 from pathlib import Path
 
 TARGETS = ['//:boot', '//:gpu']
 DRIVER = 'drivers/SwitchButtons/SwitchButtons.cpp'
 
 
-def build(workspace, label, startup=(), flags=()):
+def build(workspace: Path, label: str, startup: Sequence[str] = (), flags: Sequence[str] = ()) -> None:
     bazel = os.environ.get('BAZEL', 'bazel')
     result = subprocess.run([bazel, *startup, 'build', *flags, *TARGETS], cwd=workspace, capture_output=True, text=True)
     lines = [l for l in result.stderr.splitlines() if l.startswith('INFO: Elapsed') or ' processes' in l]
@@ -37,7 +38,7 @@ def build(workspace, label, startup=(), flags=()):
         sys.exit(result.stderr[-3000:])
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--cold', action='store_true')
     args = parser.parse_args()

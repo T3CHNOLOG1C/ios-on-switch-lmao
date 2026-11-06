@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 import struct
 import zlib
+from collections.abc import Iterable, Sequence
 
 MANAGED_BASE = 0xB2004000
 MANAGED_USER_BASE = 0xB207C000
@@ -29,7 +30,7 @@ ROOT_MATCHING = (
 ).encode('ascii') + b'\0'
 
 
-def _node(name: str, properties=(), children=()) -> bytes:
+def _node(name: str, properties: Iterable[tuple[str, bytes]] = (), children: Sequence[bytes] = ()) -> bytes:
     """Apple DT: LE counts, 32-byte property names, and 4-byte value padding."""
     properties = [('name', name.encode('ascii') + b'\0'), *properties]
     result = struct.pack('<II', len(properties), len(children))

@@ -20,13 +20,14 @@ import os
 import struct
 import subprocess
 import sys
+from collections.abc import Iterable
 from pathlib import Path
 
 CACHE_DIR = 'System/Library/Caches/com.apple.dyld'
 MACHO_MAGIC = (b'\xcf\xfa\xed\xfe', b'\xca\xfe\xba\xbe', b'\xca\xfe\xba\xbf')  # thin 64, fat BE, fat64 BE
 
 
-def sha256(path):
+def sha256(path: Path) -> str:
     h = hashlib.sha256()
     with open(path, 'rb') as f:
         for chunk in iter(lambda: f.read(1 << 20), b''):
@@ -34,7 +35,7 @@ def sha256(path):
     return h.hexdigest()
 
 
-def is_macho(path):
+def is_macho(path: Path) -> bool:
     try:
         with open(path, 'rb') as f:
             return f.read(4) in MACHO_MAGIC
@@ -42,7 +43,7 @@ def is_macho(path):
         return False
 
 
-def apple_trust_entries(paths):
+def apple_trust_entries(paths: Iterable[str]) -> dict[str, tuple[int, int]]:
     """Cdhash (hex) -> (flags, category) from Apple's trust cache IM4Ps (version-2 modules)."""
     out = {}
     for p in paths:
@@ -57,8 +58,8 @@ def apple_trust_entries(paths):
     return out
 
 
-def _im4p_payload(data):
-    def tlv(at):
+def _im4p_payload(data: bytes) -> bytes:
+    def tlv(at: int) -> tuple[int, int, int]:
         tag, length = data[at], data[at + 1]
         at += 2
         if length & 0x80:
@@ -77,7 +78,7 @@ def _im4p_payload(data):
     return next(v for t, v in fields[1:] if t == 0x04)
 
 
-def trust_module(entries):
+def trust_module(entries: list[tuple[bytes, int, int]]) -> bytes:
     """A version-2 trust cache module: sorted (cdhash, hashtype 2, flags, category), each once.
 
     One binary at several paths is one cdhash, and a duplicate fails the kernel window's strictly sorted check.
@@ -88,11 +89,11 @@ def trust_module(entries):
     return struct.pack('<I16sI', 2, uuid, len(unique)) + body
 
 
-def run_tool(tool, *args):
+def run_tool(tool: str, *args: str) -> str:
     return subprocess.run([tool, *args], capture_output=True, text=True, check=True).stdout
 
 
-def pretranslate_file(tool, src, out_path, report_path):
+def pretranslate_file(tool: str, src: Path, out_path: Path, report_path: Path) -> dict:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     run_tool(tool, 'pretranslate', '-r', str(report_path), str(src), str(out_path))
     return json.loads(report_path.read_text())
@@ -113,7 +114,7 @@ def _memoized(tool, src, dst, memo, in_sha, version):
     return r
 
 
-def main():
+def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--role', required=True, choices=('os', 'system_cryptex', 'app_cryptex'))
     ap.add_argument('--tool', required=True, help='the arm64e CLI')
@@ -197,7 +198,7 @@ def main():
     print(f'{args.role}: {len(manifest["files"])} files translated, {len(trust)} trust entries')
 
 
-def _translate_cache(args, cache, out, pairs, trust, apple, manifest):
+def _translate_cache(args, cache, out, pairs, trust, apple, manifest) -> None:
     main_cache = cache / 'dyld_shared_cache_arm64e'
     plan = out / f'{args.role}.a64xplan'
     run_tool(args.tool, 'plan', '-o', str(plan), str(main_cache))
@@ -232,7 +233,7 @@ def _translate_cache(args, cache, out, pairs, trust, apple, manifest):
     (out / 'a64x-cache-pretranslated.bin').write_bytes(b''.join(cdhashes))
 
 
-def _subcache_suffixes(main_cache):
+def _subcache_suffixes(main_cache: Path) -> list[str]:
     data = main_cache.read_bytes()
     off, count = struct.unpack_from('<II', data, 0x188)
     return [data[off + 56 * i + 24 : off + 56 * i + 56].split(b'\0')[0].decode() for i in range(count)]
@@ -247,7 +248,7 @@ def _cache_cdhash_in(tool, src):
     return hashlib.sha256(data[cd : cd + length]).digest()[:20].hex()
 
 
-def _tool_version(tool):
+def _tool_version(tool: str) -> str:
     return hashlib.sha256(Path(tool).read_bytes()).hexdigest()[:16]
 
 

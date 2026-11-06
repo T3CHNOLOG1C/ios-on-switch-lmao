@@ -16,7 +16,7 @@ from pathlib import Path
 def im4p_payload(data: bytes) -> bytes:
     """The payload of an IM4P (SEQUENCE { "IM4P", type, description, OCTET STRING payload, ... })."""
 
-    def header(at):
+    def header(at: int) -> tuple[int, int, int]:
         tag, length, at = data[at], data[at + 1], at + 2
         if length & 0x80:
             count = length & 0x7F
@@ -47,7 +47,7 @@ def trust_cache_bundle(bundle: bytes, *modules: bytes) -> bytes:
     return struct.pack(f'<I{len(merged)}I', len(merged), *offsets) + b''.join(merged)
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     for name in ('static', 'app', 'out'):
         parser.add_argument('--' + name, required=True, type=Path)

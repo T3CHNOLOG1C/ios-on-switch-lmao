@@ -9,6 +9,7 @@ directories, the loader's zeroed slots and, with --smp, all four A57s.
 import argparse
 import json
 import struct
+from collections.abc import Sequence
 from pathlib import Path
 
 from boot_config import portrait_native
@@ -35,7 +36,7 @@ USB_HOST = True
 DISPLAY_GAMUT = 'sRGB'
 
 
-def adt_parse(data, pos=0):
+def adt_parse(data: bytes, pos: int = 0) -> tuple[list, int]:
     count, children = struct.unpack_from('<II', data, pos)
     pos += 8
     props, nodes = [], []
@@ -51,7 +52,7 @@ def adt_parse(data, pos=0):
     return [props, nodes], pos
 
 
-def adt_serialize(node):
+def adt_serialize(node: list) -> bytes:
     props, children = node
     out = struct.pack('<II', len(props), len(children))
     for name, word, value in props:
@@ -59,7 +60,7 @@ def adt_serialize(node):
     return out + b''.join(adt_serialize(c) for c in children)
 
 
-def put(node, name, value):
+def put(node: list, name: str, value: bytes) -> None:
     for prop in node[0]:
         if prop[0] == name:
             prop[1:] = [(prop[1] & 0x80000000) | len(value), value]
@@ -67,7 +68,7 @@ def put(node, name, value):
     node[0].append([name, len(value), value])
 
 
-def child(node, name):
+def child(node: list, name: str) -> list:
     for c in node[1]:
         if any(p[0] == 'name' and p[2].split(b'\0')[0] == name.encode() for p in c[0]):
             return c
@@ -76,11 +77,11 @@ def child(node, name):
     return c
 
 
-def u32(value):
+def u32(value: int) -> bytes:
     return struct.pack('<I', value)
 
 
-def four_cores(tree):
+def four_cores(tree: list) -> None:
     """All four A57s (MPIDR 0-3, one cluster, shared L2) started by PSCI CPU_ON over SMC."""
     cpus = child(tree, 'cpus')
     for core in range(4):
@@ -98,7 +99,14 @@ def four_cores(tree):
     put(psci, 'method', b'smc\0')
 
 
-def ipad_adt(data, *, smp=False, overlay_dirs=(), bt_patch=None, portrait=False):
+def ipad_adt(
+    data: bytes,
+    *,
+    smp: bool = False,
+    overlay_dirs: Sequence[tuple[str, str]] = (),
+    bt_patch: bytes | None = None,
+    portrait: bool = False,
+) -> bytes:
     """The inherited Switch tree plus what iPadOS userland expects of a J120
     (values of UniXNU-qemu's make-qemu-adt.py, which boots this build to SpringBoard).
     """
@@ -248,7 +256,7 @@ def with_a64x_cache_pretranslated(data: bytes, cache: bytes) -> bytes:
     return adt_serialize(tree)
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     for name in ('adt', 'overlay-plan', 'bt-patch', 'portrait-header', 'out'):
         parser.add_argument('--' + name, required=True, type=Path)

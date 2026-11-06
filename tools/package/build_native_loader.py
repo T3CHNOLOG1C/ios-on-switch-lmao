@@ -138,7 +138,7 @@ def compress_blocks(blocks: list[bytes], lz4: str | None = None) -> list[tuple[b
     if not lz4:
         raise ValueError('missing build tool: lz4')
 
-    def compress(data):
+    def compress(data: bytes) -> tuple[bool, bytes]:
         frame = subprocess.run(
             [lz4, '-12', '-B6', '--no-frame-crc', '-c', '-q'], input=data, capture_output=True, check=True
         ).stdout
@@ -265,7 +265,7 @@ def check_stage(image: bytes, bl33: bytes, staged: bytes, stream_bytes: int, slo
         raise ValueError('bl33: staged window reaches ramoops at 0xB0000000')
 
 
-def _require(condition, message):
+def _require(condition: object, message: str) -> None:
     if not condition:
         raise ValueError(message)
 
@@ -353,7 +353,7 @@ def window_checks(m: dict, payload: bytes, adt: bytes) -> dict:
     )
     start = m['adt_pa'] - m['phys_base']
 
-    def in_window(offset, size):
+    def in_window(offset: int, size: int) -> bytes:
         return payload[start + offset : start + offset + size]
 
     sd_reference_offset, size = properties.get(('/chosen', 'switch-sd-reference'), (-1, 0))
@@ -548,7 +548,7 @@ def block_name(at: int) -> str:
     return f'{at:08x}'
 
 
-def layout(args):
+def layout(args: argparse.Namespace) -> None:
     """The layout, its checks, the extents and their blocks, each block in its shard's directory (shard_of)."""
     command_line = args.boot_args.read_text().rstrip('\n')
     with tempfile.TemporaryDirectory() as scratch:
@@ -587,7 +587,7 @@ def layout(args):
     )
 
 
-def join(args):
+def join(args: argparse.Namespace) -> None:
     plan = json.loads(args.plan.read_text())
     compressed = []
     for at, length in plan['blocks']:
@@ -608,7 +608,7 @@ def join(args):
     print(f'kernel window {len(staged)} bytes in {len(table)} blocks, entry {plan["entry_pa"]:#x}')
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     steps = parser.add_subparsers(dest='step', required=True)
     for step, names in (

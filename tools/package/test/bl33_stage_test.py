@@ -46,7 +46,7 @@ def window_and_stage():
     return bytes(window), blocks, stream, staged
 
 
-def itests(script):
+def itests(script: str):
     """Every `itest.l *ADDR == VALUE` in the script."""
     return [
         (int(a, 16), int(v, 0)) for a, v in re.findall(r'itest\.l \*(0x[0-9a-fA-F]+) == (0x[0-9a-fA-F]+|\d+)', script)
@@ -55,7 +55,7 @@ def itests(script):
 
 class Bl33StageTests(unittest.TestCase):
     @classmethod
-    def setUpClass(cls):
+    def setUpClass(cls) -> None:
         cls.window, cls.blocks, cls.stream, cls.staged = window_and_stage()
         cls.original = BL33.read_bytes()
         cls.constants = {
@@ -76,7 +76,7 @@ class Bl33StageTests(unittest.TestCase):
         ]
         cls.bl33 = stage_into_bl33(bl33_patch(cls.original), cls.staged, len(cls.stream), cls.slots)
 
-    def word(self, image, address):
+    def word(self, image: bytes, address: int):
         return struct.unpack_from('<I', image, address - BL33_BASE)[0]
 
     def test_boot_script_memory_checks_hold_on_the_composed_file(self):

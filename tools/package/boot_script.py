@@ -49,7 +49,7 @@ def script_image(script: str) -> bytes:
     return legacy_image(struct.pack('>II', len(data), 0) + data, os_type=17, kind=6, name='Boot')
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     for name in ('template', 'constants', 'dtb', 'text', 'image'):
         parser.add_argument('--' + name, required=True, type=Path)

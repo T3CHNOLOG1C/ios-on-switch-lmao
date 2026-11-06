@@ -167,12 +167,12 @@ VTABLES = [
 ]
 
 
-def require(ok, why):
+def require(ok: bool, why: str) -> None:
     if not ok:
         sys.exit(f'abi_check (TegraVIC): {why}')
 
 
-def undefined(blob):
+def undefined(blob: bytes) -> set[str]:
     image = macho(blob)
     table = next(at for cmd, at, _ in image['commands'] if cmd == 2)
     sym, count, strings, _ = struct.unpack_from('<4I', blob, table + 8)
@@ -184,7 +184,7 @@ def undefined(blob):
     return out
 
 
-def main():
+def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument('--class', dest='kind', required=True)
     p.add_argument('--kernelcache', type=Path, required=True)

@@ -25,6 +25,7 @@ import posixpath
 import shutil
 import struct
 import sys
+from collections.abc import Iterable
 from pathlib import Path
 
 from boot_config import portrait_native
@@ -32,7 +33,7 @@ from boot_config import portrait_native
 OVERLAY_ROOT = '/private/var/Switch/overlay'
 
 
-def plan(manifest: dict, portrait: bool, given=None) -> dict:
+def plan(manifest: dict, portrait: bool, given: Iterable[str] | None = None) -> dict:
     """The manifest's files for this kernel: {"files": [{path, source, trust, mode, directory}], "dirs": [[d, gate]]}.
     `given`: the sources the build gives; a manifest entry it lacks is an error, not a silent omission.
     """
@@ -101,7 +102,7 @@ def cdhash(image: bytes) -> bytes:
     raise SystemExit('overlay: no SHA-256 CodeDirectory (sign it with codesign -s -)')
 
 
-def trust_module(hashes) -> bytes:
+def trust_module(hashes: Iterable[bytes]) -> bytes:
     """A version-2 trust cache module of sorted (CDHash, SHA-256, flags 0, launch-constraint category 0) entries.
     Category 0 because overlay code lives on Data: the system categories' volume constraints would refuse it.
     """
@@ -109,7 +110,7 @@ def trust_module(hashes) -> bytes:
     return struct.pack('<I16sI', 2, hashlib.sha256(entries).digest()[:16], len(entries) // 24) + entries
 
 
-def _files(specs):
+def _files(specs: Iterable[str]) -> dict[str, Path]:
     files = {}
     for spec in specs:
         source, _, path = spec.partition('=')
@@ -117,13 +118,13 @@ def _files(specs):
     return files
 
 
-def _need(files, entry):
+def _need(files: dict[str, Path], entry: dict) -> Path:
     if entry['source'] not in files:
         sys.exit(f'overlay: {entry["path"]}: //boot:package gives no {entry["source"]}')
     return files[entry['source']]
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     step = parser.add_subparsers(dest='step', required=True)
     p = step.add_parser('plan')

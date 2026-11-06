@@ -21,10 +21,11 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from collections.abc import Iterator
 from pathlib import Path
 
 
-def spawns(log):
+def spawns(log: Path) -> Iterator[dict]:
     """The spawns of a --execution_log_json_file (a stream of JSON objects)."""
     text = Path(log).read_text()
     decoder, at = json.JSONDecoder(), 0
@@ -37,7 +38,7 @@ def spawns(log):
         yield entry
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('targets', nargs='*', default=['//:boot', '//:gpu'])
     parser.add_argument('--keep', action='store_true')

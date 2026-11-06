@@ -20,7 +20,7 @@ import tempfile
 from pathlib import Path
 
 
-def outputs(bazel, base, workspace, targets):
+def outputs(bazel: str, base: str, workspace: str, targets: list[str]) -> dict[str, str]:
     files = {}
     query = subprocess.run(
         [
@@ -51,7 +51,7 @@ def outputs(bazel, base, workspace, targets):
     return files
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('targets', nargs='*', default=['//:kernel', '//:boot', '//:gpu'])
     parser.add_argument('--keep', action='store_true')

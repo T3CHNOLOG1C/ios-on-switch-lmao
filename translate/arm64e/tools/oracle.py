@@ -36,7 +36,7 @@ FEATURES = {
 }
 
 
-def arm64e_cli():
+def arm64e_cli() -> str:
     if 'ARM64E' in os.environ:
         return os.environ['ARM64E']
     here = os.path.dirname(os.path.abspath(__file__))
@@ -46,7 +46,7 @@ def arm64e_cli():
     return 'arm64e'
 
 
-def invalid(words, args):
+def invalid(words: list[int], args: list[str]) -> set[int]:
     """Indices of the words LLVM cannot decode with these options."""
     bad = set()
     for base in range(0, len(words), CHUNK):
@@ -62,14 +62,14 @@ def invalid(words, args):
     return bad
 
 
-def classes(words):
+def classes(words: list[int]) -> list[str]:
     out = subprocess.run(
         [arm64e_cli(), 'class'], input=''.join('%08x\n' % w for w in words).encode(), capture_output=True, check=True
     )
     return out.stdout.decode().split()
 
 
-def features(samples):
+def features(samples: int) -> None:
     random.seed(11)
     for feat, (names, tops) in FEATURES.items():
         words = [(t << 24) | random.getrandbits(24) for t in tops for _ in range(samples)]
@@ -87,7 +87,7 @@ def features(samples):
         )
 
 
-def a57(path):
+def a57(path: str) -> None:
     words = [int(line.split()[0], 16) for line in open(path) if line.strip()]
     bad = sorted(invalid(words, ['-mcpu=cortex-a57']))
     tally = collections.Counter()
@@ -99,7 +99,7 @@ def a57(path):
         print('  %-16s %d' % (name, n))
 
 
-def main():
+def main() -> None:
     if len(sys.argv) >= 2 and sys.argv[1] == 'features':
         features(int(sys.argv[2]) if len(sys.argv) > 2 else 100000)
     elif len(sys.argv) == 3 and sys.argv[1] == 'a57':

@@ -23,6 +23,7 @@ Then writes --output, the build's record that the checks passed.
 import argparse
 import struct
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 TREE = Path(__file__).resolve().parents[2]
@@ -200,7 +201,7 @@ CODE = [
 ]
 
 
-def symbols_of(blob):
+def symbols_of(blob: bytes) -> tuple[dict, list[tuple[str, int, int]]]:
     image = macho(blob)
     table = next(at for cmd, at, _ in image['commands'] if cmd == 2)
     sym, count, strings, _ = struct.unpack_from('<4I', blob, table + 8)
@@ -211,7 +212,7 @@ def symbols_of(blob):
     return image, out
 
 
-def compiled_vtable(blob, image, symbols, name):
+def compiled_vtable(blob: bytes, image: dict, symbols: list[tuple[str, int, int]], name: str) -> list[str]:
     """Symbols named by the relocations of a vtable in an unlinked object."""
     vtable = next(value for sym, value, kind in symbols if sym == name and kind & 0x0E)
     relocations = {}
@@ -229,12 +230,12 @@ def compiled_vtable(blob, image, symbols, name):
     return entries
 
 
-def require(ok, why):
+def require(ok: bool, why: str) -> None:
     if not ok:
         raise SystemExit('abi_check: ' + why)
 
 
-def text_of(data):
+def text_of(data: bytes) -> tuple[bytes, dict]:
     parsed = macho(data)
     section = next(s for g in parsed['segments'] for s in g['sections'] if s['name'] == '__text')
     return data[section['fileoff'] : section['fileoff'] + section['size']], parsed
@@ -276,7 +277,9 @@ XHCI_PINNED = {  # first instruction words of bound code (little-endian hex)
 }
 
 
-def original_vtable(read, u64, vtable, slots, metaclass):
+def original_vtable(
+    read: Callable[[int, int], bytes], u64: Callable[[int], int], vtable: int, slots: int, metaclass: int
+) -> list[int]:
     require(read(vtable, 16) == bytes(16), 'original vtable header')
     original = [u64(vtable + 16 + 8 * i) for i in range(slots)]
     require(all(v >> 48 == 0xFFFF for v in original), f'original vtable has {slots} code slots')
@@ -364,7 +367,7 @@ def check_xhci(kc, parent, read, u64, blob, image, symbols):
     return 'AppleUSBXHCI/IOUSBHostFamily', allowed, imports, owners
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--class', dest='kind', required=True, choices=('xudc', 'xhci'))
     for option in ('--kernelcache', '--object', '--late', '--bindings', '--output'):
@@ -374,11 +377,11 @@ def main():
     kc = args.kernelcache.read_bytes()
     parent = macho(kc)
 
-    def read(va, n):
+    def read(va: int, n: int) -> bytes:
         at = backed_offset(parent['segments'], va, n, len(kc))
         return kc[at : at + n]
 
-    def u64(va):
+    def u64(va: int) -> int:
         return struct.unpack('<Q', read(va, 8))[0]
 
     blob = args.object.read_bytes()

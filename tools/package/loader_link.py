@@ -74,7 +74,7 @@ def too_big(what: str, readelf: Path, objects: list[Path]) -> SystemExit:
     )
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     for name in ('ld-lld', 'objcopy', 'readelf', 'linker-script', 'constants', 'out'):
         parser.add_argument('--' + name, required=True, type=Path)

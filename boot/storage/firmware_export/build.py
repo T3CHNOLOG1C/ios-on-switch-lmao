@@ -17,7 +17,7 @@ PIN = 'b492a4017580ca11c9cd49075a899a65f62069d3750615217fc10308954c9faa'
 LOAD = 0xA7000000
 
 
-def tool(name):
+def tool(name: str) -> str:
     found = shutil.which(name)
     if found:
         return found
@@ -27,7 +27,7 @@ def tool(name):
     raise ValueError('missing build tool ' + name)
 
 
-def main():
+def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--output', type=Path, required=True)
     args = ap.parse_args()

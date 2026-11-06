@@ -6,6 +6,7 @@ import shutil
 import struct
 import tempfile
 import unittest
+from collections.abc import Iterable, Sequence
 from pathlib import Path
 
 import native_xnu_layout as layout  # //tools/package:packaging
@@ -15,7 +16,9 @@ P = 0xA0001000
 N = 0x10000000
 
 
-def macho(*, base=V, entry=None, second=0x5000, first_size=0x3000, protection=5):
+def macho(
+    *, base: int = V, entry: int | None = None, second: int = 0x5000, first_size: int = 0x3000, protection: int = 5
+) -> bytes:
     def segment(name, address, size, fileoff, filesize, prot):
         return struct.pack('<II16s4Q4I', 0x19, 72, name, address, size, fileoff, filesize, 7, prot, 0, 0)
 
@@ -33,7 +36,7 @@ def macho(*, base=V, entry=None, second=0x5000, first_size=0x3000, protection=5)
     return bytes(result)
 
 
-def node(name, properties=(), children=()):
+def node(name: str, properties: Iterable[tuple[str, bytes]] = (), children: Sequence[bytes] = ()) -> bytes:
     properties = [('name', name.encode() + b'\0'), *properties]
     result = struct.pack('<II', len(properties), len(children))
     for key, value in properties:
@@ -41,7 +44,14 @@ def node(name, properties=(), children=()):
     return result + b''.join(children)
 
 
-def adt(*, window=N, ramdisk=False, trustcache=False, data_seed=False, extra=()):
+def adt(
+    *,
+    window: int | None = N,
+    ramdisk: bool = False,
+    trustcache: bool = False,
+    data_seed: bool = False,
+    extra: Iterable[bytes] = (),
+) -> bytes:
     placeholders = [
         (name, bytes(16))
         for name, present in (('RAMDisk', ramdisk), ('TrustCache', trustcache), ('NativeDataSeed', data_seed))
@@ -51,11 +61,11 @@ def adt(*, window=N, ramdisk=False, trustcache=False, data_seed=False, extra=())
     return node('device-tree', children=[node('chosen', chosen, [node('memory-map', placeholders)]), *extra])
 
 
-def trustcache(hashes=(b'a' * 20,)):
+def trustcache(hashes: Iterable[bytes] = (b'a' * 20,)) -> bytes:
     return struct.pack('<III16sI', 1, 8, 2, b'u' * 16, len(hashes)) + b''.join(h + b'\x02\0\0\0' for h in hashes)
 
 
-def patched(data, offset, form, value):
+def patched(data: bytes, offset: int, form: str, value: int) -> bytes:
     result = bytearray(data)
     struct.pack_into(form, result, offset, value)
     return bytes(result)

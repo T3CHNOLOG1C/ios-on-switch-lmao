@@ -17,7 +17,7 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
 
 
-def tool(name):
+def tool(name: str) -> str:
     p = shutil.which(name)
     if p:
         return p
@@ -28,7 +28,7 @@ def tool(name):
 
 
 class QMP:
-    def __init__(self, process):
+    def __init__(self, process: subprocess.Popen) -> None:
         self.input = process.stdin
         self.output = process.stdout
         self.seq = 0
@@ -36,7 +36,7 @@ class QMP:
         assert 'QMP' in greeting
         self.command('qmp_capabilities')
 
-    def command(self, name, arguments=None):
+    def command(self, name: str, arguments: dict | None = None) -> object:
         self.seq += 1
         obj = {'execute': name, 'id': self.seq}
         if arguments is not None:
@@ -50,11 +50,11 @@ class QMP:
                     raise RuntimeError(obj['error'])
                 return obj['return']
 
-    def hmp(self, command):
+    def hmp(self, command: str) -> str:
         return self.command('human-monitor-command', {'command-line': command})
 
 
-def main():
+def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--build', type=Path, required=True)
     ap.add_argument('--output', type=Path, required=True)
