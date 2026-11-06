@@ -493,6 +493,19 @@ static id twinPublish(id object, __strong id &slot, id made)
 - (void)rmCommit:(RMCommandBuffer *)cb;
 @end
 
+// A resource the raw path keeps gets its m2v twin at once, on a utility-class queue: a command buffer that goes to m2v later
+// finds every twin made. Made on demand, the first replay after a quiet spell made them on the submitting thread, the render
+// thread when nothing was queued: 116-130 IOSurface imports, 25-94 ms, of the 136-442 ms replays at 18:19 and 19:20 on 11-06.
+static void prepareTwin(RMObject *o)
+{
+    static dispatch_queue_t queue = dispatch_queue_create(
+        "com.brunostjohn.switch.TegraGM20BMetal.twins",
+        dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_UTILITY, 0));
+    dispatch_async(queue, ^{
+        [o rmTwin];
+    });
+}
+
 @implementation RMObject
 
 - (id)rmTwin
@@ -1296,6 +1309,8 @@ static void cpuLevel(RMTexture *t, MTLRegion r, NSUInteger level, uint8_t *bytes
                       [NSString stringWithFormat:@"parent kind %u pred %s", unsigned(_kind), kPredNames[_pred]]);
     if (!v->_rawOk && ![v rmTwin])
         return nil;
+    if (v->_rawOk)
+        prepareTwin(v);
     return (id<MTLTexture>)v;
 }
 
@@ -1515,6 +1530,8 @@ static void refuseTexture(RMTexture *t, RMPred p, uint64_t a, uint64_t b, NSStri
     }
     if (!t->_rawOk && ![t rmTwin])
         return nil;
+    if (t->_rawOk)
+        prepareTwin(t);
     return (id<MTLTexture>)t;
 }
 
@@ -4682,6 +4699,7 @@ static void commitBuffer(RMCommandBuffer *cb);
         t->_twin = [gRM->fallback newBufferWithLength:n options:o];
         return t->_twin ? (id<MTLBuffer>)t : nil;
     }
+    prepareTwin(b);
     return (id<MTLBuffer>)b;
 }
 
@@ -4711,6 +4729,7 @@ static void commitBuffer(RMCommandBuffer *cb);
         return t->_twin ? (id<MTLBuffer>)t : nil;
     }
     b->_deallocator = [deallocator copy];
+    prepareTwin(b);
     return (id<MTLBuffer>)b;
 }
 
@@ -4740,6 +4759,7 @@ static void commitBuffer(RMCommandBuffer *cb);
             if (!said.exchange(true))
                 os_log(rawLog(), "raw: mip chain on (%u levels of %ux%u, %llu bytes)", unsigned(d.mipmapLevelCount),
                        unsigned(d.width), unsigned(d.height), (unsigned long long)t->_raw.chain->layout.bytes);
+            prepareTwin(t);
             return (id<MTLTexture>)t;
         }
     }
@@ -4767,6 +4787,7 @@ static void commitBuffer(RMCommandBuffer *cb);
             refuseTexture(w, PredTexPoolAlloc, d.width, d.height, @"twin-only (pool)", nil);
         return (id<MTLTexture>)w;
     }
+    prepareTwin(t);
     return (id<MTLTexture>)t;
 }
 
@@ -4976,7 +4997,8 @@ static const char *ycbcr420Why(MTLTextureDescriptor *d, IOSurfaceRef s, NSUInteg
             refuseTexture(t, PredTexSurfImport, 1, 0, @"surface", extra);
         if (![t rmTwin])
             return nil;
-    }
+    } else
+        prepareTwin(t);
     return (id<MTLTexture>)t;
 }
 
@@ -5018,6 +5040,7 @@ static const char *ycbcr420Why(MTLTextureDescriptor *d, IOSurfaceRef s, NSUInteg
         o->_twin = r->_twin;
         return (id<MTLSamplerState>)o;
     }
+    prepareTwin(r);
     return (id<MTLSamplerState>)r;
 }
 
