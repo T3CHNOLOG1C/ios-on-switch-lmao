@@ -31,7 +31,7 @@ constexpr uint8_t kPD = 0x18;
 constexpr unsigned kVconnGpio = TEGRA_GPIO(K, 5), kSourceRailGpio = TEGRA_GPIO(X, 3);
 // The BQ24193's PSEL and OTG inputs (L4T tegra210b01-fric-gpio.dtsi "Charger IC (BQ24193) Charge Select 1/2", held
 // low; Atmosphere's OtgFet1/2ForSdev): the boost runs only with OTG high (datasheet 8.3.1.5). Read for the report.
-constexpr unsigned kChargeSelect1Gpio = TEGRA_GPIO(J, 5), kChargeSelect2Gpio = TEGRA_GPIO(L, 0);
+[[maybe_unused]] constexpr unsigned kChargeSelect1Gpio = TEGRA_GPIO(J, 5), kChargeSelect2Gpio = TEGRA_GPIO(L, 0);
 constexpr unsigned kMaxListeners = 4;
 constexpr unsigned kAlertBurst = 50;  // ALERTs in one second that mean the line is stuck low
 constexpr uint32_t kRailRampMS = 10;  // v_vdd5v3 regulator-enable-ramp-delay (10000 us)
@@ -147,7 +147,7 @@ void formatPdos(char *out, size_t size, const uint32_t *pdos, unsigned count, un
 }
 
 // A pin for the report: "sfio" (special function), "in 0/1", "out 0/1".
-const char *pinText(unsigned gpio)
+[[maybe_unused]] const char *pinText(unsigned gpio)
 {
     const int config = tegra_gpio_config(gpio);
     if (config < 0)
@@ -547,6 +547,7 @@ void SwitchPD::setAllowSource(bool allow)
     }
 }
 
+#if DEVELOPMENT || DEBUG
 // Work loop. The status registers are not clear-on-read (ALERT_STATUS, which is, stays alertFired's).
 void SwitchPD::describe(char *buffer, size_t size)
 {
@@ -568,6 +569,7 @@ void SwitchPD::describe(char *buffer, size_t size)
         (vendor & VENDOR_CONFIG_OCP_DISABLE) ? "off" : "on", err ? " (I2C error)" : "", railsOn ? "on" : "off",
         pinText(kSourceRailGpio), pinText(kVconnGpio), pinText(kChargeSelect1Gpio), pinText(kChargeSelect2Gpio));
 }
+#endif
 
 // --- USB-PD request (SwitchPD.h) ---------------------------------------------------------------------------------
 // From handle(), after decide(): only a sink session with a source partner negotiates; anything else ends it.
@@ -856,6 +858,7 @@ extern "C" int switch_pd_allow_source(bool allow)
     return 0;
 }
 
+#if DEVELOPMENT || DEBUG
 extern "C" int switch_pd_describe(char *buffer, size_t size)
 {
     if (!buffer || !size)
@@ -873,3 +876,13 @@ extern "C" int switch_pd_describe(char *buffer, size_t size)
         pd, buffer, reinterpret_cast<void *>(size));
     return 0;
 }
+#else
+// The register dump is for development only: release builds report nothing.
+extern "C" int switch_pd_describe(char *buffer, size_t size)
+{
+    if (buffer != nullptr && size != 0) {
+        buffer[0] = 0;
+    }
+    return 0;
+}
+#endif
