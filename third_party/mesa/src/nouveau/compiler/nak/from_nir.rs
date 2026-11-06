@@ -74,12 +74,28 @@ fn init_info_from_nir(
             }),
             MESA_SHADER_FRAGMENT => {
                 let info_fs = unsafe { &nir.info.__bindgen_anon_1.fs };
+                let has_interlock = info_fs.pixel_interlock_ordered()
+                    || info_fs.sample_interlock_ordered()
+                    || info_fs.pixel_interlock_unordered()
+                    || info_fs.sample_interlock_unordered();
+                let interlock_mode = match (
+                    has_interlock,
+                    info_fs.sample_interlock_ordered()
+                        || info_fs.sample_interlock_unordered(),
+                ) {
+                    (true, false) => FragmentInterlockMode::Pixel,
+                    (true, true) => FragmentInterlockMode::Sample,
+                    (false, _) => FragmentInterlockMode::Disabled,
+                };
                 ShaderStageInfo::Fragment(FragmentShaderInfo {
                     uses_kill: false,
                     reads_interlock_ticket: false,
                     post_depth_coverage: info_fs.post_depth_coverage(),
                     early_fragment_tests: info_fs.early_fragment_tests(),
                     uses_sample_shading: info_fs.uses_sample_shading(),
+                    interlock_mode,
+                    interlock_unordered: info_fs.pixel_interlock_unordered()
+                        || info_fs.sample_interlock_unordered(),
                 })
             }
             MESA_SHADER_GEOMETRY => {
