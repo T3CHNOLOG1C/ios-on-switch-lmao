@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import itertools
 import json
 import os
 import shutil
@@ -238,8 +239,8 @@ def check_stage(image: bytes, bl33: bytes, staged: bytes, stream_bytes: int, slo
         raise ValueError('bl33: U-Boot changed')
     padding[: len(bl33)] = bytes(len(bl33))
     spans = sorted((address - BL33_BASE, capacity, content) for address, capacity, content in slots)
-    for (at, capacity, content), following in zip(spans, [*spans[1:], (header_at, 0, b'')], strict=True):
-        if at + capacity > following[0] or padding[at : at + len(content)] != content:
+    for (at, capacity, content), (following, _, _) in itertools.pairwise([*spans, (header_at, 0, b'')]):
+        if at + capacity > following or padding[at : at + len(content)] != content:
             raise ValueError(f'bl33: the slot at {BL33_BASE + at:#x} overlaps the next or does not hold its bytes')
         padding[at : at + len(content)] = bytes(len(content))
     if any(padding):
