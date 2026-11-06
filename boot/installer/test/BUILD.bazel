@@ -81,4 +81,3 @@ py_test(
         "@rules_python//python/runfiles",
     ],
 )
-

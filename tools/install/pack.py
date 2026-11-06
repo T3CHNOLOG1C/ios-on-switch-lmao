@@ -6,7 +6,6 @@ alone rewrites the first BODY_OFFSET bytes of NAME.SII.001 and nothing else.
 """
 
 import concurrent.futures
-import contextlib
 import hashlib
 import os
 from collections.abc import Iterator
@@ -47,56 +46,63 @@ def _pieces(plan: list[tuple[int, int, int]]) -> Iterator[list[tuple[int, int]]]
         yield pending
 
 
-def _read(fd: int, offset: int, ranges: list[tuple[int, int]]) -> tuple[bytes, bytes]:
-    data = b''.join(os.pread(fd, n, offset + at) for at, n in ranges)
-    if len(data) != sum(n for _, n in ranges):
-        raise extents.ExtentError(f'short read of the image at {ranges[0][0]:#x}')
-    return data, hashlib.sha256(data).digest()
-
-
 class Writer:
-    """The stream's bytes into its parts, in order, from BODY_OFFSET on."""
+    """The stream's parts, created at their sizes; bytes land at their stream offset from any thread."""
 
     def __init__(self, directory: Path, name: str, sizes: list[int]) -> None:
-        self.paths, self.sizes = part_paths(directory, name, len(sizes)), sizes
-        self.index, self.at, self.file = 0, manifest.BODY_OFFSET, None
-        self.files = contextlib.ExitStack()
+        self.starts, self.fds, self.at = [], [], manifest.BODY_OFFSET
+        start = 0
+        for path, size in zip(part_paths(directory, name, len(sizes)), sizes, strict=True):
+            fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
+            os.ftruncate(fd, size)
+            self.starts.append(start)
+            self.fds.append(fd)
+            start += size
+
+    def pwrite(self, at: int, data: bytes) -> None:
+        while data:
+            i = max(j for j, start in enumerate(self.starts) if start <= at)
+            end = self.starts[i + 1] if i + 1 < len(self.starts) else at + len(data)
+            n = min(len(data), end - at)
+            os.pwrite(self.fds[i], data[:n], at - self.starts[i])
+            at, data = at + n, data[n:]
 
     def write(self, data: bytes) -> None:
-        view = memoryview(data)
-        while view:
-            if self.at == self.sizes[self.index]:
-                self.file.close()
-                self.file, self.index, self.at = None, self.index + 1, 0
-            if self.file is None:
-                path = self.paths[self.index]
-                self.file = self.files.enter_context(path.open('r+b' if path.exists() else 'wb'))
-                self.file.seek(self.at)
-            take = min(len(view), self.sizes[self.index] - self.at)
-            self.file.write(view[:take])
-            self.at += take
-            view = view[take:]
+        self.pwrite(self.at, data)
+        self.at += len(data)
 
     def close(self) -> None:
-        self.files.close()
+        for fd in self.fds:
+            os.close(fd)
+        self.fds = []
+
+
+def _chunk(fd: int, offset: int, ranges: list[tuple[int, int]], writer: Writer, at: int) -> bytes:
+    """Read one body chunk from the image, write it to its place in the stream, return its SHA-256."""
+    data = b''.join(os.pread(fd, n, offset + start) for start, n in ranges)
+    if len(data) != sum(n for _, n in ranges):
+        raise extents.ExtentError(f'short read of the image at {ranges[0][0]:#x}')
+    writer.pwrite(at, data)
+    return hashlib.sha256(data).digest()
 
 
 def body(fd: int, offset: int, plan: list[tuple[int, int, int]], writer: Writer, punch: bool) -> list[bytes]:
+    """Read, write and hash every body chunk on every core; punch the image behind, in order."""
     hashes = []
     with concurrent.futures.ThreadPoolExecutor(WORKERS) as pool:
         queued = []
-        for ranges in _pieces(plan):
-            queued.append((ranges, pool.submit(_read, fd, offset, ranges)))
+        for j, ranges in enumerate(_pieces(plan)):
+            at = manifest.BODY_OFFSET + j * manifest.HASH_CHUNK
+            queued.append((ranges, pool.submit(_chunk, fd, offset, ranges, writer, at)))
             while len(queued) > IN_FLIGHT or (queued and queued[0][1].done()):
-                hashes.append(_drain(fd, offset, queued.pop(0), writer, punch))
-        hashes += [_drain(fd, offset, item, writer, punch) for item in queued]
+                hashes.append(_settle(fd, offset, queued.pop(0), punch))
+        hashes += [_settle(fd, offset, item, punch) for item in queued]
     return hashes
 
 
-def _drain(fd: int, offset: int, item: tuple, writer: Writer, punch: bool) -> bytes:
+def _settle(fd: int, offset: int, item: tuple, punch: bool) -> bytes:
     ranges, future = item
-    data, digest = future.result()
-    writer.write(data)
+    digest = future.result()
     if punch:
         for at, n in ranges:
             compose.punch(fd, offset + at, n)

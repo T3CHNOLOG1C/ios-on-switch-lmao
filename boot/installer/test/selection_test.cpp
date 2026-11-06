@@ -102,9 +102,9 @@ int verify(void *context, uint32_t chunk, const void *buffer, uint32_t bytes)
     const auto *fat = static_cast<const Fat *>(context);
     uint8_t digest[CC_SHA256_DIGEST_LENGTH];
     CC_SHA256(buffer, bytes, digest);
-    return static_cast<int>(chunk >= fat->image->hash_total ||
-                            std::memcmp(digest, fat->image->hashes + (size_t(chunk) * SWITCH_IMAGE_HASH_BYTES),
-                                        sizeof(digest)) != 0);
+    return static_cast<int>(
+        chunk >= fat->image->hash_total ||
+        std::memcmp(digest, fat->image->hashes + (size_t(chunk) * SWITCH_IMAGE_HASH_BYTES), sizeof(digest)) != 0);
 }
 
 switch_boot_io io(Fat &fat)

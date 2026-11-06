@@ -23,9 +23,10 @@
 // Every part but the last is a whole number of hash chunks, so no chunk spans two files.
 #define SWITCH_IMAGE_PART_LIMIT ((UINT64_C(4) << 30) - SWITCH_IMAGE_HASH_CHUNK)
 #define SWITCH_IMAGE_ZERO       UINT64_MAX
-#define SWITCH_IMAGE_MAX_HASHES                                                              \
-    ((uint32_t)(SWITCH_IMAGE_MAX_PARTS * SWITCH_IMAGE_PART_LIMIT / SWITCH_IMAGE_HASH_CHUNK + \
-                (SWITCH_IMAGE_BODY_OFFSET - SWITCH_IMAGE_BOOT_OFFSET) / SWITCH_IMAGE_HASH_CHUNK + SWITCH_IMAGE_MAX_BOOT))
+#define SWITCH_IMAGE_MAX_HASHES                                                                   \
+    ((uint32_t)(SWITCH_IMAGE_MAX_PARTS * SWITCH_IMAGE_PART_LIMIT / SWITCH_IMAGE_HASH_CHUNK +      \
+                (SWITCH_IMAGE_BODY_OFFSET - SWITCH_IMAGE_BOOT_OFFSET) / SWITCH_IMAGE_HASH_CHUNK + \
+                SWITCH_IMAGE_MAX_BOOT))
 
 struct switch_image_part {
     char path[SWITCH_IMAGE_PATH_BYTES];

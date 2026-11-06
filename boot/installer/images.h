@@ -28,8 +28,8 @@ typedef int (*switch_file_size)(void *context, const char *path, uint64_t *bytes
 
 // What the image whose first part is at `path` is fit for: `image` is its decoded manifest, NULL when it did not
 // decode. `*missing` is the first part that is not there at its size.
-enum switch_image_state switch_image_examine(const struct switch_image *image, const char *path,
-                                             switch_file_size size, void *context, const char **missing);
+enum switch_image_state switch_image_examine(const struct switch_image *image, const char *path, switch_file_size size,
+                                             void *context, const char **missing);
 
 enum switch_menu {
     SWITCH_MENU_MOVED,

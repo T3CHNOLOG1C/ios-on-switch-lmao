@@ -166,6 +166,10 @@ def _ipsw_unpinned_impl(ctx):
 
 _ipsw_unpinned = rule(implementation = _ipsw_unpinned_impl, attrs = {"kind": attr.string()})
 
+# inflate.py: inflating on one core, hashing and writing on another.
+def _inflate_resources(_os, _inputs):
+    return {"cpu": 2, "memory": 512}
+
 def _ipsw_inflate_impl(ctx):
     out = ctx.actions.declare_file(ctx.label.name + "/" + ctx.attr.filename)
     ctx.actions.run(
@@ -177,6 +181,7 @@ def _ipsw_inflate_impl(ctx):
         progress_message = "Inflating the IPSW's " + ctx.attr.filename,
         # A multi-GB output (the system cryptex) would evict everything else from the 10 GB disk cache.
         execution_requirements = {"no-cache": ""} if ctx.attr.large else {},
+        resource_set = _inflate_resources,
     )
     return [DefaultInfo(files = depset([out]))]
 

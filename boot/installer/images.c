@@ -9,8 +9,8 @@ static int has_size(switch_file_size size, void *context, const char *path, uint
     return !size(context, path, &bytes) && bytes == want;
 }
 
-enum switch_image_state switch_image_examine(const struct switch_image *image, const char *path,
-                                             switch_file_size size, void *context, const char **missing)
+enum switch_image_state switch_image_examine(const struct switch_image *image, const char *path, switch_file_size size,
+                                             void *context, const char **missing)
 {
     *missing = NULL;
     if (!image) {

@@ -107,8 +107,8 @@ static int extents_ok(const struct switch_image *image)
     uint64_t written = 0;
     for (uint32_t i = 0; i < image->extent_count; i++) {
         const struct switch_image_extent *e = &image->extents[i];
-        if (!e->bytes || e->offset % block || e->bytes % block || e->offset < end ||
-            e->offset > image->minimum_bytes || e->bytes > image->minimum_bytes - e->offset) {
+        if (!e->bytes || e->offset % block || e->bytes % block || e->offset < end || e->offset > image->minimum_bytes ||
+            e->bytes > image->minimum_bytes - e->offset) {
             return 0;
         }
         if (e->source == SWITCH_IMAGE_ZERO) {
