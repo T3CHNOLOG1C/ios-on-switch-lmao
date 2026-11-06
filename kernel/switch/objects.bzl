@@ -23,6 +23,7 @@ SWITCH_OBJECTS = {
         ("iokit/Kernel/IOUserClient.cpp", "iokit/iosurface.cpp", []),
     ],
     "osfmk": [
+        ("osfmk/arm/model_dep.c", "diag/threads.c", []),
         ("osfmk/arm64/arm_vm_init.c", "ram/ram.c", []),
         ("osfmk/kern/timer_call.c", "sched/stats.c", []),
     ],
