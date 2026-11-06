@@ -23,7 +23,7 @@ load("@rules_cc//cc/common:cc_common.bzl", "cc_common")
 load("@xcode//:defs.bzl", "DEVELOPER_DIR", "XCODE_TOOLCHAIN")
 load("//bazel/platforms:transitions.bzl", "kernel_transition", "outer_transition")
 load("//kernel/rules:layout.bzl", "MOVED_ROOTS", "OLD_TREE", "PATH_ROOT", "tree_path")
-load("//kernel/switch:objects.bzl", "SWITCH_ROOT", "switch_copts", "switch_objects")
+load("//kernel/switch:objects.bzl", "SWITCH_ROOT", "switch_copts", "switch_objects", "with_kprof")
 load(":recipes_development.bzl", "DEVELOPMENT_RECIPES")
 load(":recipes_release.bzl", "RELEASE_RECIPES")
 
@@ -407,7 +407,11 @@ def xnu_objects(name, component, table, release, srcs = None, **kwargs):
             "//conditions:default": ["@platforms//:incompatible"],
         }),
         objects = by_profile(switch_objects(ours, table.objects), switch_objects(ours, release.objects)),
-        copts = by_profile(switch_copts(ours, table.copts), switch_copts(ours, release.copts)),
+        copts = select({
+            "//kernel:kprof_debug": with_kprof(component, switch_copts(ours, table.copts)),
+            "//bazel:release": switch_copts(ours, release.copts),
+            "//conditions:default": switch_copts(ours, table.copts),
+        }),
         includes = by_profile(table.includes, release.includes),
         segments = by_profile(table.segments, release.segments),
         srcs = srcs if srcs != None else native.glob(["**/*.c", "**/*.cpp", "**/*.s"], allow_empty = True),

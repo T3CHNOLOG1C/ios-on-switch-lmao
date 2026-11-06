@@ -23,7 +23,7 @@ load("@rules_cc//cc/common:cc_common.bzl", "cc_common")
 load("@xcode//:defs.bzl", "DEVELOPER_DIR", "XCODE_TOOLCHAIN")
 load("//bazel/platforms:transitions.bzl", "kernel_transition", "outer_transition")
 load("//kernel/rules:layout.bzl", "MOVED_ROOTS", "OLD_TREE", "PATH_ROOT", "tree_path")
-load("//kernel/switch:objects.bzl", "SWITCH_ROOT", "switch_copts", "switch_objects")
+load("//kernel/switch:objects.bzl", "SWITCH_ROOT", "switch_copts", "switch_objects", "with_kprof")
 load(":recipes_development.bzl", "DEVELOPMENT_RECIPES")
 load(":selected.bzl", "selected_only")
 load(":switch_objects.bzl", "SWITCH_COPTS")
@@ -398,12 +398,16 @@ def xnu_objects(name, component, table, srcs = None, **kwargs):
 
     # kernel/switch's objects join each component's own objects, not pthread_bootstrap's one.
     ours = component if name == "objects" else None
+    own_copts = {k: SWITCH_COPTS.get(k, []) + table.copts.get(k, []) for k in table.objects}
     xnu_objects_rule(
         name = name,
         component = component,
         config = "DEVELOPMENT",
         objects = switch_objects(ours, table.objects),
-        copts = switch_copts(ours, {k: SWITCH_COPTS.get(k, []) + table.copts.get(k, []) for k in table.objects}),
+        copts = select({
+            "//kernel:kprof_debug": with_kprof(component, switch_copts(ours, own_copts)),
+            "//conditions:default": switch_copts(ours, own_copts),
+        }),
         includes = table.includes,
         segments = table.segments,
         target_compatible_with = selected_only(),

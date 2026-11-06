@@ -68,3 +68,18 @@ def switch_copts(component, copts):
     for _, src, flags in _entries(component):
         out["switch:" + src] = flags
     return out
+
+def with_kprof(component, copts):
+    """A component's `copts` with SWITCH_KPROF for switch_kprof.c (--//kernel:kprof), the one object that reads it.
+
+    Args:
+        component: osfmk, bsd, ...
+        copts: the component's per-object copts.
+
+    Returns:
+        The copts, osfmk's with the define on that object.
+    """
+    if component != "osfmk":
+        return copts
+    kprof = "osfmk/kern/switch_kprof.c"
+    return copts | {kprof: copts.get(kprof, []) + ["-DSWITCH_KPROF=1"]}

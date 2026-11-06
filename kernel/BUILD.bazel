@@ -1,3 +1,4 @@
+load("@bazel_skylib//lib:selects.bzl", "selects")
 load("@bazel_skylib//rules:common_settings.bzl", "bool_flag", "string_flag")
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load("//bazel/lint:defs.bzl", "lint_files")
@@ -41,6 +42,20 @@ bool_flag(
     name = "kprof",
     build_setting_default = False,
     scope = "target",
+)
+
+# Only switch_kprof.c reads SWITCH_KPROF, so only its object changes with the flag (both XNUs' osfmk tables).
+selects.config_setting_group(
+    name = "kprof_debug",
+    match_all = [
+        ":kprof_on",
+        "//bazel:debug",
+    ],
+)
+
+config_setting(
+    name = "kprof_on",
+    flag_values = {":kprof": "true"},
 )
 
 config_setting(
