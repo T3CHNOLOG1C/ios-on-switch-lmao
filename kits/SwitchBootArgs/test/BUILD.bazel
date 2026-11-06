@@ -1,0 +1,22 @@
+# kits/SwitchBootArgs on the host.
+#
+#   bazel test //kits/SwitchBootArgs/test:all
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//bazel/testing:defs.bzl", "host_shims", "host_test")
+
+lint_files()
+
+host_shims(
+    name = "kernel",
+    headers = ["pexpert/pexpert.h"],
+    stubs = "switch_boot_args_stubs.h",
+)
+
+host_test(
+    name = "switch_boot_args_test",
+    srcs = [
+        "switch_boot_args_test.cpp",
+        "//kits/SwitchBootArgs:SwitchBootArgs.h",
+    ],
+    deps = [":kernel"],
+)
