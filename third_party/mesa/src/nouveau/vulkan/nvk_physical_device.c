@@ -269,6 +269,7 @@ nvk_get_device_extensions(const struct nvk_instance *instance,
       .EXT_extended_dynamic_state2 = true,
       .EXT_extended_dynamic_state3 = true,
       .EXT_external_memory_dma_buf = true,
+      .EXT_fragment_shader_interlock = info->cls_eng3d >= MAXWELL_B,
       .EXT_global_priority = true,
       .EXT_global_priority_query = true,
       .EXT_graphics_pipeline_library = true,
@@ -719,6 +720,11 @@ nvk_get_device_features(const struct nv_device_info *info,
       .extendedDynamicState3CoverageReductionMode = false,
       .extendedDynamicState3RepresentativeFragmentTestEnable = false,
       .extendedDynamicState3ShadingRateImageEnable = false,
+
+      /* VK_EXT_fragment_shader_interlock */
+      .fragmentShaderSampleInterlock = info->cls_eng3d >= MAXWELL_B,
+      .fragmentShaderPixelInterlock = info->cls_eng3d >= MAXWELL_B,
+      .fragmentShaderShadingRateInterlock = false,
 
       /* VK_EXT_graphics_pipeline_library */
       .graphicsPipelineLibrary = true,
