@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: BSD-2-Clause-Patent */
 /*
- * The decisions behind iOS 27's pretranslated System files (bsd/vfs/vfs_switch_pretranslated.c): the tree's index
+ * The decisions behind iOS 27's pretranslated System files (kernel/switch/vfs/pretranslated.c): the tree's index
  * (tools/install/overlay_index.py writes it), the tables the kernel builds from it, the changes to the tree it
  * refuses and the executables that keep the System volume's launch status. No kernel state here, so the host tests
  * run the same code.

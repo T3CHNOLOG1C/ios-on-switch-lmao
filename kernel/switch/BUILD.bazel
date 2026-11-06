@@ -28,5 +28,8 @@ filegroup(
 
 filegroup(
     name = "headers",
-    srcs = glob(["**/*.h"]) + ["//boot:loader/ram.h"],
+    srcs = glob(["**/*.h"]) + [
+        "//boot:loader/ram.h",
+        "//kits/SwitchPretranslated:switch_pretranslated.h",
+    ],
 )

@@ -126,7 +126,6 @@ bsd/vfs/vfs_fslog.c			standard
 bsd/vfs/vfs_init.c			standard
 bsd/vfs/vfs_io_compression_stats.c	optional config_io_compression_stats
 bsd/vfs/vfs_lookup.c			standard
-bsd/vfs/vfs_switch_pretranslated.c	optional config_a64x
 bsd/vfs/vfs_quota.c			optional quota
 bsd/vfs/vfs_subr.c			standard
 bsd/vfs/vfs_syscalls.c			standard

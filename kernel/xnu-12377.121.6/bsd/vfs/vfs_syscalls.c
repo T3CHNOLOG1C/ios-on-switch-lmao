@@ -13515,7 +13515,7 @@ handle_auth(vnode_t vp, u_long cmd, caddr_t data, u_long options, vfs_context_t 
  */
 /* ARGSUSED */
 #include <sys/ioccom.h>
-#include "../../kits/SwitchPretranslated/switch_pretranslated_kernel.h"
+#include <switch/pretranslated.h>
 
 static int
 fsctl_internal(proc_t p, vnode_t *arg_vp, u_long cmd, user_addr_t udata, u_long options, vfs_context_t ctx)
@@ -13534,15 +13534,7 @@ fsctl_internal(proc_t p, vnode_t *arg_vp, u_long cmd, user_addr_t udata, u_long 
 
 	cmd = fsctl_bogus_command_compat(cmd);
 
-#if CONFIG_A64X
-	{
-		uint32_t intent = ((cmd & IOC_IN) || !(cmd & IOC_OUT)) ? SWITCH_PT_WRITES : 0;
-		int switch_error = switch_pretranslated_check(SWITCH_PT_FSCTL, vp, NULL, NULL, NULL, intent);
-		if (switch_error) {
-			return switch_error;
-		}
-	}
-#endif
+	if ((error = switch_pretranslated_fsctl(vp, cmd))) return error;
 
 	size = IOCPARM_LEN(cmd);
 	if (size > IOCPARM_MAX) {

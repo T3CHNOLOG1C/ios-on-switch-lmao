@@ -422,7 +422,6 @@ def xnu_objects(name, component, table, srcs = None, **kwargs):
             "//drivers/NativeSwitchBlock:headers",
             "//kits/VerifiedRoot:headers",
             "//kernel/switch:headers",
-            "//kits/SwitchPretranslated:headers",
         ],
         # XNU is Apple's code: no clang-tidy or other linting of its compiles.
         tags = [

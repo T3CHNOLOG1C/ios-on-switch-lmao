@@ -12,6 +12,7 @@ SWITCH_ROOT = "kernel/switch"
 SWITCH_OBJECTS = {
     "bsd": [
         ("bsd/kern/bsd_init.c", "boot/bsd_init.c", []),
+        ("bsd/vfs/vfs_lookup.c", "vfs/pretranslated.c", []),
     ],
     "iokit": [
         ("iokit/Kernel/IOUserClient.cpp", "iokit/iosurface.cpp", []),

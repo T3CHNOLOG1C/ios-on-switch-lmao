@@ -110,7 +110,7 @@
 #include <sys/sysctl.h>
 #include <sys/persona.h>
 #include <sys/reason.h>
-#include "../../kits/SwitchPretranslated/switch_pretranslated_kernel.h"
+#include <switch/pretranslated.h>
 #if SYSV_SHM
 #include <sys/shm_internal.h>           /* shmexec() */
 #endif
@@ -6923,24 +6923,6 @@ native_switch_cryptex_image(const struct image_params *imgp)
 		if (native_owner_cryptex_mount[i] && mp == native_owner_cryptex_mount[i]) return true;
 	return false;
 }
-/*
- * Switch: the System volume's executables translated offline are on Data (kits/SwitchPretranslated), so the
- * same self constraint cannot match them either. One keeps the launch status of the System file it stands in for only
- * as the lookup redirect produced it and only if switch_pretranslated_trusted() holds (listed, root:wheel, writable by
- * nobody else, CDHash in the trust module pinned for the tree). Nothing else on Data gains anything.
- */
-static bool
-native_switch_pretranslated_image(const struct image_params *imgp)
-{
-#if CONFIG_A64X
-	return imgp->ip_vp && imgp->ip_ndp &&
-	       switch_pretranslated_trusted(imgp->ip_vp, (int64_t)imgp->ip_arch_offset,
-	       (imgp->ip_ndp->ni_flag & NAMEI_SWITCH_PRETRANSLATED) != 0);
-#else
-	(void)imgp;
-	return false;
-#endif
-}
 __attribute__((noinline))
 static int
 exec_extract_strings(struct image_params *imgp)
@@ -9656,9 +9638,7 @@ load_init_program(proc_t p)
 	(void)switch_nvram_data_mounted();
 	/* Owner overlay unions over sealed directories (SwitchRawMount.h), now that Data is mounted. */
 	native_switch_raw_overlay(p, (user_addr_t)scratch_addr);
-#if CONFIG_A64X
 	switch_pretranslated_capture();
-#endif
 #endif
 #if defined(XNU_BOOT_PROGRESS) && XNU_BOOT_PROGRESS
 	extern int sheng_boot_watchdog_policy(void *, uint64_t);
@@ -10202,10 +10182,10 @@ process_signature(proc_t p, struct image_params *imgp)
 
 	/* call the launch constraints hook (Switch: not for the Data overlay's executables, native_switch_overlay_image,
 	 * nor for the two grafted-equivalent Apple cryptex mounts, native_switch_cryptex_image, nor for the System files
-	 * translated offline, native_switch_pretranslated_image; trust cache still enforced) */
+	 * translated offline, switch_pretranslated_image; trust cache still enforced) */
 	os_reason_t launch_constraint_reason;
 	error = (native_switch_overlay_image(imgp) || native_switch_cryptex_image(imgp) ||
-	    native_switch_pretranslated_image(imgp)) ? 0 : mac_proc_check_launch_constraints(p, imgp, &launch_constraint_reason);
+	    switch_pretranslated_image(imgp)) ? 0 : mac_proc_check_launch_constraints(p, imgp, &launch_constraint_reason);
 	if (error != 0) {
 		signature_failure_reason = launch_constraint_reason;
 		goto done;
