@@ -2,6 +2,7 @@
 # and SDK, replayed from tables recorded from XNU's make (the tables come from xnu_record.py, the actions run xnu_ops.py).
 
 load("@bazel_skylib//rules:common_settings.bzl", "string_flag")
+load("@rules_python//python:py_binary.bzl", "py_binary")
 load("//bazel/lint:defs.bzl", "lint_files")
 
 package(default_visibility = ["//visibility:public"])
@@ -13,6 +14,13 @@ exports_files([
     "xnu_ops.py",
     "xnu_record.py",
 ])
+
+# The objects.bzl and recipes_<config>.bzl tables from a VERBOSE=YES make build of an XNU tree (usage: its docstring;
+# absolute paths, since bazel run starts it in its runfiles).
+py_binary(
+    name = "xnu_compile_record",
+    srcs = ["xnu_compile_record.py"],
+)
 
 # Where build paths appear to be in the outputs (__FILE__ strings, debug info). The default is machine independent;
 # --config=cmake-equivalence sets it to the checkout, which reproduces the CMake flow's strings exactly.

@@ -3,8 +3,8 @@
     bazel run //tools/lint:py_owners
 
 Not a test: it asks `bazel query` which targets own each file, and a test cannot run Bazel. Vendored code
-(third_party/, XNU at kernel/xnu-<version>/) is not ours to own: only its scripts the build runs have targets (Mesa's
-generators), the rest never run.
+(third_party/, XNU at kernel/xnu-<version>/, the agent skills in .agents/, which .bazelignore keeps from Bazel) is not
+ours to own: only its scripts the build runs have targets (Mesa's generators), the rest never run.
 """
 
 import os
@@ -12,7 +12,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-VENDORED = ('third_party/', 'kernel/xnu-')
+VENDORED = ('third_party/', 'kernel/xnu-', '.agents/')
 
 OWNED = (
     'kind("source file", labels(srcs, kind("py_(binary|test|library)", //...)) + '

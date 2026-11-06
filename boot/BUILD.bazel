@@ -203,7 +203,10 @@ py_binary(
 
 py_binary(
     name = "firmware_export_model",
-    srcs = ["storage/firmware_export/model.py"],
+    srcs = [
+        "storage/firmware_export/model.py",
+        "storage/firmware_export/test_export.py",
+    ],
     main = "storage/firmware_export/model.py",
 )
 
