@@ -1,8 +1,14 @@
 {
   "recommendations": [
     "llvm-vs-code-extensions.vscode-clangd",
+    "xaver.clang-format",
     "bazelbuild.vscode-bazel",
     "charliermarsh.ruff",
+    "dprint.dprint",
+    "tamasfe.even-better-toml",
+    "rvben.rumdl",
+    "mkhl.shfmt",
+    "rust-lang.rust-analyzer",
     "mintlify.mintlify-snippets"
   ],
   "unwantedRecommendations": [

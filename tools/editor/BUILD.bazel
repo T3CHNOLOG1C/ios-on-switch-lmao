@@ -1,0 +1,38 @@
+# The editor's format on save runs the tools //:format runs (.vscode/settings.json; the folder-open task runs this).
+#
+#   bazel run //tools/editor:link    links them, and wrappers carrying //:format's arguments, into .cache/editor-bin/
+load("@rules_python//python:py_binary.bzl", "py_binary")
+load("//bazel/lint:checks.bzl", "SHFMT_STYLE")
+load("//bazel/lint:defs.bzl", "lint_files")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files()
+
+py_binary(
+    name = "link",
+    srcs = ["link.py"],
+    args = [
+        "--clang-format=$(rlocationpath @llvm//:bin/clang-format)",
+        "--ruff=$(rlocationpath @ruff//:ruff)",
+        "--buildifier=$(rlocationpath @buildifier//file)",
+        "--shfmt=$(rlocationpath @shfmt//file)",
+        "--rustfmt=$(rlocationpath @rules_rust//rust/toolchain:current_rustfmt_toolchain)",
+        "--rumdl=$(rlocationpath @rumdl//:rumdl)",
+        "--dprint=$(rlocationpath @dprint//:dprint)",
+        "--dprint-plugin=$(rlocationpath @dprint_plugin_json//file)",
+        "--dprint-plugin=$(rlocationpath @dprint_plugin_toml//file)",
+    ] + ["--shfmt-flag=" + flag for flag in SHFMT_STYLE],
+    data = [
+        "@buildifier//file",
+        "@dprint",
+        "@dprint_plugin_json//file",
+        "@dprint_plugin_toml//file",
+        "@llvm//:bin/clang-format",
+        "@rules_rust//rust/toolchain:current_rustfmt_toolchain",
+        "@ruff",
+        "@rumdl",
+        "@shfmt//file",
+    ],
+    deps = ["@rules_python//python/runfiles"],
+)

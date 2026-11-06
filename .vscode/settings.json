@@ -13,8 +13,14 @@
   "bazel.enableCodeLens": false,
   "bazel.languageSupport.enable": true,
   "bazel.buildifier.enable": true,
+  "bazel.buildifier.executable": ".cache/editor-bin/buildifier",
+  "bazel.buildifier.configJsonPath": ".cache/editor-bin/buildifier.json",
   "bazel.commandLine.queriesShareServer": false,
   "bazel.commandLine.queryOutputBase": "~/Library/Caches/bazel/editor-query-ob",
+  "[starlark]": {
+    "editor.defaultFormatter": "bazelbuild.vscode-bazel",
+    "editor.formatOnSave": true
+  },
 
   // C/C++: clangd only. The Microsoft extension's IntelliSense stays off, so the code is parsed once.
   "C_Cpp.intelliSenseEngine": "disabled",
@@ -30,6 +36,12 @@
     "--log=error"
   ],
   "clangd.onConfigChanged": "restart",
+  "clang-format.executable": "${workspaceRoot}/.cache/editor-bin/clang-format",
+  "clang-format.fallbackStyle": "none",
+  "[c][cpp][objective-c][objective-cpp]": {
+    "editor.defaultFormatter": "xaver.clang-format",
+    "editor.formatOnSave": true
+  },
   "task.allowAutomaticTasks": "on",
 
   // Python: Pylance analyses open files only, and never the vendored, generated or scratch trees.
@@ -44,8 +56,47 @@
     "kernel/xnu-*",
     "**/__pycache__"
   ],
+  "ruff.path": ["${workspaceFolder}/.cache/editor-bin/ruff"],
+  "ruff.exclude": [
+    ".agents",
+    "kernel/xnu-*/libkern",
+    "kernel/xnu-*/san",
+    "kernel/xnu-*/tests",
+    "kernel/xnu-*/tools",
+    "third_party/m2v",
+    "third_party/mesa/bin",
+    "third_party/mesa/include",
+    "third_party/mesa/src",
+    "third_party/mesa/subprojects",
+    "translate/arm64e/xnu",
+    "vendor"
+  ],
   "[python]": {
-    "editor.defaultFormatter": "charliermarsh.ruff"
+    "editor.defaultFormatter": "charliermarsh.ruff",
+    "editor.formatOnSave": true
+  },
+
+  "dprint.path": "./.cache/editor-bin/dprint",
+  "[json][jsonc][toml]": {
+    "editor.defaultFormatter": "dprint.dprint",
+    "editor.formatOnSave": true
+  },
+  "rumdl.server.path": ".cache/editor-bin/rumdl",
+  "[markdown]": {
+    "editor.defaultFormatter": "rvben.rumdl",
+    "editor.formatOnSave": true
+  },
+  "shfmt.executablePath": "${workspaceFolder}/.cache/editor-bin/shfmt",
+  "[shellscript]": {
+    "editor.defaultFormatter": "mkhl.shfmt",
+    "editor.formatOnSave": true,
+    "editor.insertSpaces": true,
+    "editor.tabSize": 4
+  },
+  "rust-analyzer.rustfmt.overrideCommand": ["${workspaceFolder}/.cache/editor-bin/rustfmt"],
+  "[rust]": {
+    "editor.defaultFormatter": "rust-lang.rust-analyzer",
+    "editor.formatOnSave": true
   },
 
   // Git: only the repository itself, never the agent worktrees or vendored clones below it.

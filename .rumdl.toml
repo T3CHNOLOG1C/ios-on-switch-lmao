@@ -5,6 +5,7 @@ line-length = 120
 # MD057 (relative links resolve) is off: each file is checked on its own in a sandbox that holds only that file, so
 # every relative link would look broken.
 disable = ["MD057"]
+exclude = [".agents", "kernel/xnu-*", "third_party", "translate/arm64e/xnu", "vendor"]
 
 [MD013]
 # Prose wraps at 120 like the code; code blocks and tables keep their lines (a wrapped command or row is wrong).

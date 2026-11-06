@@ -1,8 +1,8 @@
 """The lint and format tools (//bazel/lint), each an official release binary for macOS arm64 pinned by version and sha256.
 
 clang-format and clang-tidy come from @llvm (LLVM 23.1.4, bazel/llvm), rustfmt from the Rust 1.98.0 toolchain
-(rules_rust) and uv from rules_python's uv extension (MODULE.bazel). The versions match the Homebrew copies the editor
-uses (ruff 0.17.3, buildifier 10.2.0), so the editor and `bazel test` agree.
+(rules_rust) and uv from rules_python's uv extension (MODULE.bazel). The editor formats with these same binaries
+(//tools/editor:link), so format on save and `bazel test` agree.
 """
 
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive", "http_file")

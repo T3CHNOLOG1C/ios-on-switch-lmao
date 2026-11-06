@@ -2,5 +2,14 @@
   "lineWidth": 120,
   "indentWidth": 2,
   "json": {},
-  "toml": {}
+  "toml": {},
+  "excludes": [
+    ".agents",
+    "bazel/pinned/*/**",
+    "kernel/xnu-*",
+    "skills-lock.json",
+    "third_party",
+    "translate/arm64e/xnu",
+    "vendor"
+  ]
 }

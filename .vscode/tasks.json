@@ -2,9 +2,9 @@
   "version": "2.0.0",
   "tasks": [
     {
-      "label": "compile_commands.json",
+      "label": "Editor formatters and compile_commands.json",
       "type": "shell",
-      "command": "bazel run //tools/lint:compdb",
+      "command": "bazel run //tools/editor:link && bazel run //tools/lint:compdb",
       "runOptions": { "runOn": "folderOpen" },
       "presentation": { "reveal": "silent", "panel": "dedicated", "close": true },
       "problemMatcher": []
