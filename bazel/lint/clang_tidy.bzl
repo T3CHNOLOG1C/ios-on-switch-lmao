@@ -99,8 +99,8 @@ def _flags(cc_toolchain, feature_configuration, compilation_context, action, use
     )
 
 def _make_variables(ctx):
-    """The make variables the target's toolchains define ($(KERNEL_XNU), ...), which its copts use."""
-    variables = {}
+    """The make variables a target's copts use: Bazel's own ($(BINDIR), ...) and its toolchains' ($(KERNEL_XNU), ...)."""
+    variables = dict(ctx.var)
     for toolchain in getattr(ctx.rule.attr, "toolchains", []):
         if platform_common.TemplateVariableInfo in toolchain:
             variables.update(toolchain[platform_common.TemplateVariableInfo].variables)
