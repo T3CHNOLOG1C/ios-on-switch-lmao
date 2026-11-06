@@ -17,6 +17,7 @@
 #include "nv_push_cl90b5.h"
 #include "nv_push_cla0c0.h"
 #include "cla1c0.h"
+#include "clb197.h"
 #include "nv_push_clc3c0.h"
 #include "nv_push_clc397.h"
 
@@ -536,13 +537,31 @@ nvk_queue_create(struct nvk_device *dev,
                                    &queue->draw_cb0);
       if (result != VK_SUCCESS)
          goto fail_exec_ctx;
+
+      if (pdev->info.cls_eng3d >= MAXWELL_B &&
+          (queue->engines & NVKMD_ENGINE_3D) &&
+          nvk_device_fragment_interlock(dev)) {
+         uint32_t interlock_buffer_size =
+            pdev->info.gpc_count * 0x100 * sizeof(uint32_t);
+         result = nvkmd_dev_alloc_mem(dev->nvkmd, &dev->vk.base,
+                                      interlock_buffer_size, 0, NVKMD_MEM_LOCAL,
+                                      &queue->fsi_memory);
+         if (result != VK_SUCCESS)
+            goto fail_draw_cb0;
+
+         result = nvk_upload_queue_fill(dev, &dev->upload,
+                                        queue->fsi_memory->va->addr, 0,
+                                        queue->fsi_memory->size_B);
+         if (result != VK_SUCCESS)
+            goto fail_fsi;
+      }
    }
 
    if (queue_family->queue_flags & VK_QUEUE_SPARSE_BINDING_BIT) {
       result = nvkmd_dev_create_ctx(dev->nvkmd, &dev->vk.base,
                                     NVKMD_ENGINE_BIND, &queue->bind_ctx);
       if (result != VK_SUCCESS)
-         goto fail_draw_cb0;
+         goto fail_fsi;
    }
 
    result = nvk_mem_stream_init(dev, &queue->push_stream);
@@ -563,6 +582,9 @@ fail_push_stream:
 fail_bind_ctx:
    if (queue->bind_ctx != NULL)
       nvkmd_ctx_destroy(queue->bind_ctx);
+fail_fsi:
+   if (queue->fsi_memory != NULL)
+      nvkmd_mem_unref(queue->fsi_memory);
 fail_draw_cb0:
    if (queue->draw_cb0 != NULL)
       nvkmd_mem_unref(queue->draw_cb0);
@@ -584,6 +606,10 @@ nvk_queue_destroy(struct nvk_device *dev, struct nvk_queue *queue)
 {
    nvk_mem_stream_sync(dev, &queue->push_stream, queue->exec_ctx);
    nvk_mem_stream_finish(dev, &queue->push_stream);
+   if (queue->fsi_memory != NULL) {
+      nvk_upload_queue_sync(dev, &dev->upload);
+      nvkmd_mem_unref(queue->fsi_memory);
+   }
    if (queue->draw_cb0 != NULL) {
       nvk_upload_queue_sync(dev, &dev->upload);
       nvkmd_mem_unref(queue->draw_cb0);
