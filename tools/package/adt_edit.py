@@ -100,21 +100,7 @@ def four_cores(tree: list) -> None:
     put(psci, 'method', b'smc\0')
 
 
-def ipad_adt(
-    data: bytes,
-    *,
-    smp: bool = False,
-    overlay_dirs: Sequence[tuple[str, str]] = (),
-    bt_patch: bytes | None = None,
-    portrait: bool = False,
-) -> bytes:
-    """Return the inherited Switch tree plus what iPadOS userland expects of a J120.
-
-    The values are those of UniXNU-qemu's make-qemu-adt.py, which boots this build to SpringBoard.
-    """
-    tree, end = adt_parse(data)
-    if end != len(data):
-        raise SystemExit('trailing bytes after the ADT')
+def _identity(tree: list) -> None:
     put(tree, 'model', b'iPad7,1\0')  # hw.model; idle code matches "compatible"
     put(tree, 'target-type', b'J120\0')
     # The audio server keys its routing database on the board name; the Switch entries stay
@@ -122,6 +108,9 @@ def ipad_adt(
     compatible = next(p[2] for p in tree[0] if p[0] == 'compatible')
     if not compatible.startswith(b'J120AP\0'):
         put(tree, 'compatible', b'J120AP\0' + compatible)
+
+
+def _chosen(tree: list, portrait: bool) -> list:
     chosen = child(tree, 'chosen')
     put(chosen, 'ephemeral-storage', u32(0))  # Data is a persistent APFS volume
     # Portrait-native kernel (SwitchPortrait.h): iOS is given the 720x1280 panel and runs landscape with the panel's
@@ -138,13 +127,10 @@ def ipad_adt(
         put(chosen, key, u32(0))
     for key in ('certificate-security-mode', 'effective-security-mode-sep'):
         put(chosen, key, u32(1))
-    # IOPMrootDomain reads this at boot complete (gSleepDisabledFlag) and refuses every sleep while it is 1. Whether
-    # the console may sleep is SwitchSuspend's call at runtime (a CPU power assertion while it cannot).
-    put(child(tree, 'defaults'), 'sleep-disabled', u32(0))
-    # Both kernels read vm_compressor_mode from here. Without it xnu-10063's CONFIG_FREEZE default (8) leaves the
-    # compressor present but inactive: anonymous memory is never compressed and jetsam kills instead. 2 is
-    # VM_PAGER_COMPRESSOR_NO_SWAP: the active in-core compressor, no swap files (4 would swap to the SD card).
-    put(child(tree, 'defaults'), 'kern.vm_compressor', u32(2))
+    return chosen
+
+
+def _product(tree: list) -> None:
     product = child(tree, 'product')
     for key, value in (
         ('product-name', b'iPad Pro (12.9-inch) (2nd generation)\0'),
@@ -160,6 +146,9 @@ def ipad_adt(
     ):
         put(product, key, value)
     put(child(product, 'audio'), 'wireless-splitter', u32(1))  # as UniXNU's 21H461 profile
+
+
+def _radios(tree: list, bt_patch: bytes | None) -> None:
     # Bluetooth (drivers/SwitchBluetooth). ArmDTPlatform publishes every /arm-io child, so this is the
     # IOService named "bluetooth" bluetoothd looks up (local-mac-address, transport-speed, transport-encoding: J120's 3,
     # H4BC, which also opens /dev/btwake, SwitchBluetooth's; bluetoothd takes its transport from kern_exec.c's
@@ -183,14 +172,9 @@ def ipad_adt(
     wlan = child(child(tree, 'arm-io'), 'wlan')
     for key, value in (('device_type', b'wlan\0'), ('local-mac-address', bytes([0x02, 0x1D, 0x5A, 0x00, 0x00, 0x01]))):
         put(wlan, key, value)
-    # The platform UUID. IOPlatformExpertDevice::generatePlatformUUID makes IOPlatformUUID from /chosen
-    # unique-chip-id (8 bytes) and chip-id (4 bytes), as iBoot sets them; without them the IOPlatformUUID resource
-    # is never published and gethostuuid() with no timeout waits for ever. configd's IPConfiguration start() makes
-    # one call (its CGA host UUID, as net.inet6.send.opmode is 1), so configd's plugin thread stops there: no other
-    # start(), no prime(), so State:/Network/Interface never lists en0 and wifid makes no Wi-Fi device. chip-id is
-    # J120's A10X (T8011); unique-chip-id stands in for the ECID, a fixed value with the overlay MACs' 02:1d:5a.
-    put(chosen, 'chip-id', u32(0x8011))
-    put(chosen, 'unique-chip-id', struct.pack('<Q', 0x001D5A0000000001))
+
+
+def _usb(tree: list) -> None:
     # USB device mode (drivers/SwitchUSB): /arm-io/usb-device with an iPad usb-device node's identity (J120: Apple
     # 0x05ac:0x12ab "iPad"), published by ArmDTPlatform; SwitchXUDC starts on it and IOUSBDeviceFamily reads these.
     # compatible is not usb-device,t8011, so nothing of Apple's matches the node itself.
@@ -215,6 +199,9 @@ def ipad_adt(
         xhci = child(child(tree, 'arm-io'), 'usb-xhci')
         for key, value in (('compatible', b'usb-xhci,tegra210\0'), ('device_type', b'usb-xhci\0')):
             put(xhci, key, value)
+
+
+def _boot_slots(tree: list, chosen: list, overlay_dirs: Sequence[tuple[str, str]]) -> None:
     # Directories the kernel shows the Data overlay over: NUL-terminated "<directory>[:<boot-arg>]".
     if overlay_dirs:
         put(
@@ -240,6 +227,44 @@ def ipad_adt(
     # Per-boot seed report (boot/loader/seed.h): zeros here; the loader mixes SE2's DRBG into /chosen/random-seed
     # and says how it went, XNU logs it once.
     put(chosen, SEED_SOURCE_PROPERTY, bytes(SEED_SOURCE_BYTES))
+
+
+def ipad_adt(
+    data: bytes,
+    *,
+    smp: bool = False,
+    overlay_dirs: Sequence[tuple[str, str]] = (),
+    bt_patch: bytes | None = None,
+    portrait: bool = False,
+) -> bytes:
+    """Return the inherited Switch tree plus what iPadOS userland expects of a J120.
+
+    The values are those of UniXNU-qemu's make-qemu-adt.py, which boots this build to SpringBoard.
+    """
+    tree, end = adt_parse(data)
+    if end != len(data):
+        raise SystemExit('trailing bytes after the ADT')
+    _identity(tree)
+    chosen = _chosen(tree, portrait)
+    # IOPMrootDomain reads this at boot complete (gSleepDisabledFlag) and refuses every sleep while it is 1. Whether
+    # the console may sleep is SwitchSuspend's call at runtime (a CPU power assertion while it cannot).
+    put(child(tree, 'defaults'), 'sleep-disabled', u32(0))
+    # Both kernels read vm_compressor_mode from here. Without it xnu-10063's CONFIG_FREEZE default (8) leaves the
+    # compressor present but inactive: anonymous memory is never compressed and jetsam kills instead. 2 is
+    # VM_PAGER_COMPRESSOR_NO_SWAP: the active in-core compressor, no swap files (4 would swap to the SD card).
+    put(child(tree, 'defaults'), 'kern.vm_compressor', u32(2))
+    _product(tree)
+    _radios(tree, bt_patch)
+    # The platform UUID. IOPlatformExpertDevice::generatePlatformUUID makes IOPlatformUUID from /chosen
+    # unique-chip-id (8 bytes) and chip-id (4 bytes), as iBoot sets them; without them the IOPlatformUUID resource
+    # is never published and gethostuuid() with no timeout waits for ever. configd's IPConfiguration start() makes
+    # one call (its CGA host UUID, as net.inet6.send.opmode is 1), so configd's plugin thread stops there: no other
+    # start(), no prime(), so State:/Network/Interface never lists en0 and wifid makes no Wi-Fi device. chip-id is
+    # J120's A10X (T8011); unique-chip-id stands in for the ECID, a fixed value with the overlay MACs' 02:1d:5a.
+    put(chosen, 'chip-id', u32(0x8011))
+    put(chosen, 'unique-chip-id', struct.pack('<Q', 0x001D5A0000000001))
+    _usb(tree)
+    _boot_slots(tree, chosen, overlay_dirs)
     if smp:
         four_cores(tree)
     return adt_serialize(tree)
