@@ -2179,16 +2179,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, uint32_t first, ui
         writtenCount_ = 0;
         writtenFull_ = false;
 #endif
-#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-        if (dev_->wfiFetchBarrier) {
-            p.m(WAIT_FOR_IDLE, 0);
-            p.m(INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI, 0);
-        } else
-#endif
-        {
-            p.m(PIXEL_SHADER_BARRIER, 0);
-            p.m(INVALIDATE_TEXTURE_DATA_CACHE_PIXEL_ORDERED, 0);
-        }
+        fetchBarrier(p);
         writtenBits_ = storageWrittenBits_ = 0;
     }
     if (first != first_ || baseInstance != baseInstance_) {
@@ -2213,6 +2204,29 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, uint32_t first, ui
     }
 #endif
     return true;
+}
+
+void RenderEncoder::fetchBarrier(Push &p)
+{
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    switch (dev_->fetchBarrier) {
+    case Device::FetchBarrier::WaitForIdle:
+        p.m(WAIT_FOR_IDLE, 0);
+        p.m(INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI, 0);
+        return;
+    case Device::FetchBarrier::PixelShaderOnly:
+        p.m(PIXEL_SHADER_BARRIER, 0);
+        return;
+    case Device::FetchBarrier::PixelShaderNoWfiInvalidate:
+        p.m(PIXEL_SHADER_BARRIER, 0);
+        p.m(INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI, 0);
+        return;
+    case Device::FetchBarrier::PixelShader:
+        break;
+    }
+#endif
+    p.m(PIXEL_SHADER_BARRIER, 0);
+    p.m(INVALIDATE_TEXTURE_DATA_CACHE_PIXEL_ORDERED, 0);
 }
 
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG

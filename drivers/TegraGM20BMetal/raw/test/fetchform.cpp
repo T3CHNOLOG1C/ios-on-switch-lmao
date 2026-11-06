@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: MIT
-// Debug builds' GPU context-switch stress and framebuffer-fetch readback, run by hand: the BlueTool stand-in starts it once
-// when the Mac posts com.brunostjohn.switch.debug.ctxsw-stress. Never at boot, never in release.
+// Debug builds' GPU context-switch stress and framebuffer-fetch readback, run by hand: the BlueTool stand-in starts it
+// once when the Mac posts com.brunostjohn.switch.debug.ctxsw-stress. Never at boot, never in release.
 //
-// Two raw devices are two GR contexts the host time-slices between. One draws the pack's fetching states that have both of
-// metal2vulkan's forms, three ways: barrier form with WAIT_FOR_IDLE barriers, barrier form with PIXEL_SHADER_BARRIER
-// barriers, storage form (the pixel interlock's ticket order, no barrier between its draws). The other keeps GR busy with
-// large draws, so context switches land between and inside the first one's barriers and ticket waits. Each way's images
-// are then compared with the WAIT_FOR_IDLE way's: equal images with the interlock and no barriers between its draws mean
-// the ticket order held across draws. One os_log line per way; a way that hangs GR logs nothing, the kernel's hang line
-// names it (ENG0's context switch, the hung submission's interlocked states).
+// Two raw devices are two GR contexts the host time-slices between. One draws the pack's fetching states that have both
+// of metal2vulkan's forms, five ways (kWays): the barrier form with WAIT_FOR_IDLE barriers, with PIXEL_SHADER_BARRIER
+// barriers and with each half of those, and the storage form (the pixel interlock's ticket order, no barrier between
+// its draws). The other keeps GR busy with large draws, so context switches land between and inside the first one's
+// barriers and ticket waits. Each way's images are then compared with the WAIT_FOR_IDLE way's: equal images with the
+// interlock and no barriers between its draws mean the ticket order held across draws. One os_log line per way; a way
+// that hangs GR logs nothing, the kernel's hang line names it (ENG0's context switch, the hung submission's interlocked
+// states).
 #include <os/log.h>
 #include <algorithm>
 #include <atomic>
@@ -24,7 +25,7 @@ constexpr const char *kPack = "/System/Library/Extensions/TegraGM20BMetal.raw/pa
 constexpr uint32_t kWidth = 1280, kHeight = 720, kBgra8 = 80;
 constexpr uint32_t kStates = 4, kQuads = 32, kHeavyQuads = 256;
 constexpr auto kStress = std::chrono::seconds(8);
-constexpr uint32_t kClear = 0xff4c331a;  // BGRA8 of the clear color below
+constexpr uint32_t kClear = 0xff996633;  // BGRA8 of the clear color below (exact in 8 bits)
 
 os_log_t logger()
 {
@@ -32,16 +33,21 @@ os_log_t logger()
     return l;
 }
 
+using Barrier = raw::Device::FetchBarrier;
+
 struct Way {
     const char *name;
     raw::PackForm form;
-    bool wfi;
+    Barrier barrier;
 };
 
+// The first is the reference; the third and fourth split the PS barrier's two methods, so a hang names the one it needs
 const Way kWays[] = {
-    {"WFI barrier", raw::PackForm::Barrier, true},
-    {"PS barrier", raw::PackForm::Barrier, false},
-    {"interlock", raw::PackForm::Default, false},
+    {"WFI barrier", raw::PackForm::Barrier, Barrier::WaitForIdle},
+    {"PS barrier + 0x0f74", raw::PackForm::Barrier, Barrier::PixelShader},
+    {"PS barrier alone", raw::PackForm::Barrier, Barrier::PixelShaderOnly},
+    {"PS barrier + NO_WFI invalidate", raw::PackForm::Barrier, Barrier::PixelShaderNoWfiInvalidate},
+    {"interlock", raw::PackForm::Default, Barrier::PixelShader},
 };
 
 bool twoBgra(const raw::Pipeline &p)
@@ -102,15 +108,15 @@ bool makeSurfaces(raw::Device &d, uint32_t targets, Surfaces &s)
     return true;
 }
 
-// The pack's states' inputs: positions in clip space (a float4 at offset 0, through every vertex buffer's identity matrices),
-// a quad per draw shifted along the diagonal so each overlaps the ones before it, and per-draw fragment uniforms and vertex
-// colors, so what a fetch reads depends on which draws came before
+// The pack's states' inputs: positions in clip space (a float4 at offset 0, through every vertex buffer's identity
+// matrices), a quad per draw shifted along the diagonal so each overlaps the ones before it, and per-draw fragment
+// uniforms and vertex colors, so what a fetch reads depends on which draws came before
 void bind(raw::RenderEncoder *e, const raw::Pipeline &p, uint32_t draw, const Surfaces &s)
 {
     const raw::PackPipeline &r = *p.rec;
     if (r.vertexSlot != 0xff && r.vertexStride >= 16) {
         std::vector<uint8_t> v(4 * r.vertexStride);
-        const float x0 = -0.9f + 0.02f * draw, y0 = -0.8f + 0.015f * draw;
+        const float x0 = -0.9f + 0.02f * (draw % kQuads), y0 = -0.8f + 0.015f * (draw % kQuads);
         for (uint32_t k = 0; k < 4; k++) {
             float *f = reinterpret_cast<float *>(v.data() + k * r.vertexStride);
             f[0] = x0 + (k & 1 ? 1.2f : 0.f);
@@ -151,7 +157,7 @@ bool submit(raw::Device &d, const std::vector<raw::Pipeline *> &pipelines, Surfa
         pd.count = 2;
         pd.color[0].texture = &s.targets[i % s.targets.size()];
         pd.color[0].load = raw::ColorAttachment::Clear;
-        const float clear[4] = {0.3f, 0.2f, 0.1f, 1.f};
+        const float clear[4] = {0.6f, 0.4f, 0.2f, 1.f};
         memcpy(pd.color[0].clear, clear, sizeof clear);
         pd.color[1].texture = &s.memoryless;
         pd.color[1].load = raw::ColorAttachment::Clear;
@@ -185,7 +191,8 @@ struct Result {
     std::vector<std::vector<uint32_t>> images;
 };
 
-// `kStress` of fetching submissions on `a` (at most two in flight) beside heavy ones on `b`, then each state's image alone
+// `kStress` of fetching submissions on `a` (at most two in flight) beside heavy ones on `b`, then each state's image
+// alone
 Result run(raw::Device &a, raw::Device &b, const std::vector<raw::Pipeline *> &pipelines, raw::Pipeline *heavy,
            Surfaces &sa, Surfaces &sb)
 {
@@ -238,6 +245,8 @@ void report(const Way &way, const Result &r, const Result &reference, const std:
                 drawn += px != kClear;
         snprintf(images, sizeof images, "reference images: %llu of %zu px drawn", (unsigned long long)drawn,
                  r.images.size() * kWidth * kHeight);
+    } else if (r.images.size() != reference.images.size()) {
+        snprintf(images, sizeof images, "no WFI barrier images to compare with");
     } else {
         snprintf(images, sizeof images, "images equal to the WFI barrier way's");
         for (size_t i = 0; i < r.images.size() && i < reference.images.size(); i++) {
@@ -280,9 +289,7 @@ int main()
         std::vector<raw::Pipeline *> pipelines;
         for (uint64_t key : keys)
             pipelines.push_back(a.pipeline(key, way.form));
-#if SWITCH_DEBUG
-        a.wfiFetchBarrier = way.wfi;
-#endif
+        a.fetchBarrier = way.barrier;
         Result r = run(a, b, pipelines, heavy, sa, sb);
         report(way, r, &way == kWays ? r : reference, keys);
         if (&way == kWays)
