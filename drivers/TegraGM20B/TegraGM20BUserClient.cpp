@@ -697,6 +697,7 @@ class AGXDeviceUserClient : public IOUserClient
 		bool system;  // a coherent BO from ordinary pages (tgm_pool::FromSystem): bmd's pages under a physical view
 		tgm_mem *mem;
 		tgm_coh *coh;  // imports: the surface's coherency registry entry (gpu.c), held
+		Bo *cohNext;   // cohBos_
 		uint32_t snapshot[kMaxChannels];  // submitted seqnos when freed (zombies only)
 	};
 
@@ -725,6 +726,8 @@ class AGXDeviceUserClient : public IOUserClient
 	IOMemoryDescriptor *fence_view_ = nullptr;
 	tgm_chan *chans_[kMaxChannels] = {};
 	Bo *bos_ = nullptr, *zombies_ = nullptr;
+	Bo *cohBos_ =
+		nullptr;  // the writable imports of bos_ with a coherency entry: what each Exec marks GPU-dirty
 	Mapping *maps_ = nullptr;  // under lock_
 	Binding *binds_ = nullptr;
 	uint32_t nbinds_ = 0, cap_binds_ = 0;
@@ -821,6 +824,7 @@ IOReturn AGXDeviceUserClient::clientClose()
 			&chans_[i]);  // bounded wait, then nvkm preempts and removes it from the runlist
 	while (nbinds_)
 		unbindOverlaps(binds_[0].va, binds_[0].range, nullptr);
+	cohBos_ = nullptr;
 	while (bos_) {
 		Bo *bo = bos_;
 		bos_ = bo->next;
@@ -841,6 +845,7 @@ void AGXDeviceUserClient::free()
 		closing_ = true;
 		for (uint32_t i = 0; i < kMaxChannels; i++)
 			tgm_chan_del(&chans_[i]);
+		cohBos_ = nullptr;
 		while (bos_) {
 			Bo *bo = bos_;
 			bos_ = bo->next;
@@ -1270,6 +1275,10 @@ IOReturn AGXDeviceUserClient::boImport(const TegraGM20BAbiBoImport *in,
 	bo->handle = next_handle_++;
 	bo->next = bos_;
 	bos_ = bo;
+	if (bo->coh && !bo->readOnly) {
+		bo->cohNext = cohBos_;
+		cohBos_ = bo;
+	}
 	out->handle = bo->handle;
 	out->map_token = 0;
 	out->reserved = 0;
@@ -1286,6 +1295,12 @@ IOReturn AGXDeviceUserClient::boFree(const TegraGM20BAbiBoFree *in)
 		return kIOReturnBadArgument;
 	Bo *bo = *p;
 	*p = bo->next;
+	for (Bo **c = &cohBos_; *c; c = &(*c)->cohNext) {
+		if (*c == bo) {
+			*c = bo->cohNext;
+			break;
+		}
+	}
 	for (uint32_t i = 0; i < nbinds_;) {
 		if (binds_[i].bo == bo)
 			unbindOverlaps(binds_[i].va, binds_[i].range, bo);
@@ -1558,9 +1573,8 @@ IOReturn AGXDeviceUserClient::exec(const TegraGM20BAbiExec *in, uint32_t count,
 		// Mark every writable host import this submission may have written GPU-dirty (cheap flag stores, no cache
 		// maintenance): the reader's next IOSurface read lock invalidates it then (tgm_coherency_*, the XNU hook). A read
 		// lock between now and the fence completing would clear the mark early, but a CPU readback waits for completion.
-		for (Bo *bo = bos_; bo; bo = bo->next)
-			if (bo->coh && !bo->readOnly)
-				tgm_coherency_wrote(bo->coh);
+		for (Bo *bo = cohBos_; bo; bo = bo->cohNext)
+			tgm_coherency_wrote(bo->coh);
 	}
 	tgm_prof prof;
 	bool profiled = false;
