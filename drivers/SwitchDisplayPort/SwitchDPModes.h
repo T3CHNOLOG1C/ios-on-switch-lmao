@@ -4,8 +4,8 @@
 // host tests.
 //
 // Output is capped at 1920x1080 and 60 Hz whatever the sink offers: the Tegra X1 composites the UI for the panel and
-// the TV together, and more pixels than 1080p60 cost frame rate everywhere. 1080p60 first, then modes of 50 Hz and up by
-// size, then the rest; a mode must also fit the trained link.
+// the TV together, and more pixels than 1080p60 cost frame rate everywhere. 1080p60 first, then modes of 50 Hz and up
+// by size, then the rest; a mode must also fit the trained link.
 #ifndef SWITCH_DP_MODES_H
 #define SWITCH_DP_MODES_H
 

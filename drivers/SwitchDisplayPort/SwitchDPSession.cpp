@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// A hot-plugged sink, from its DPCD capabilities to a trained link scanning out (SwitchDisplayPortService.h): every step
-// is the completion of the AUX transaction or the training wait before it. Order: Linux drivers/gpu/drm/tegra/sor.c
+// A hot-plugged sink, from its DPCD capabilities to a trained link scanning out (SwitchDisplayPortService.h): every
+// step is the completion of the AUX transaction or the training wait before it. Order: Linux drivers/gpu/drm/tegra/sor.c
 // tegra_sor_dp_enable and dp.c drm_dp_link_probe/_choose/_train; the display controller is running before SOR1 starts
 // (the CRTC is enabled before the encoder in DRM's commit).
 #include <IOKit/IOLib.h>

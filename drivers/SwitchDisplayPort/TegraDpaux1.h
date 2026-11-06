@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 // DPAUX1, the AUX channel and hot-plug input of SOR1 (0x54040000, SPI 11 level-high), for SwitchDisplayPort's work
 // loop: one AUX transaction at a time, finished by AUX_DONE; HPD plug, unplug and IRQ_HPD as interrupts. The BM92T36
-// drives the HPD line (PCC1, pinmuxed to DPAUX1's HPD input by the boot chain) from the dock's Attention messages.
+// drives the HPD line (PCC1, DPAUX1's HPD input) from the dock's Attention messages.
 #ifndef TEGRA_DPAUX1_H
 #define TEGRA_DPAUX1_H
 
@@ -32,7 +32,7 @@ public:
     uint32_t auxstat() const;
 
 private:
-    volatile uint8_t *base = nullptr;
+    volatile uint8_t *base = nullptr, *pinmux = nullptr;
     uint32_t read(uint32_t word) const;
     void write(uint32_t word, uint32_t value);
     bool startPllDp(char *why, size_t size);

@@ -66,17 +66,20 @@ From static analysis of 21H461. None of this is implemented yet.
   which iPad7,1 is inferred not to have.
 
 The next step is a second `IOMobileFramebufferLegacy` instance (or an external mode of `NativeLegacyDisplay`) on an
-`/arm-io` node with `device_type = "ext-display-subsystem"`:
+`/arm-io` node with `device_type = "ext-display-subsystem"`, written against the method names r25-xnu27's
+`kits/SwitchABI` tables give Apple's slots (they differ between 21H461 and 24B119):
 
-- `"external"` = true before `registerService`, and `isMainDisplay` false;
-- slot 183 accepts 0, 1 and 2; slot 185 picks the mode and has the session train for it; slot 186 returns the plug
-  state;
+- `"external"` = true before `registerService`, and `isMainDisplay()` false;
+- `set_display_device(uint32_t)` accepts 0, 1 and 2; `set_digital_out_mode(colorID, timingID)` picks the mode and has
+  the session train for it; `get_digital_out_state(uint32_t *)` returns the plug state; plug and unplug are announced
+  with the non-virtual `send_hotplug_message`;
 - swaps go to `TegraDisplayB::scanout` through an SMMU domain of the DCB swgroup (MC 0x244, TRANSLATION_ENABLE_0 bits 2,
-  4, 6 and 17) with an ASID of its own.
+  4, 6 and 17) with an ASID of its own, ordered after the GPU's rendering as the panel's direct scanout is.
 
-Slots 183, 185 and 186 are still `opaque` in the pinned `OriginalLegacyFramebufferABI.h`, and naming them changes the
-bindings r25-xnu27 mirrors for 24B119. Until this lands, a plugged TV gets the best mode and a black screen, which is
-enough to prove the link.
+Until this lands, a plugged TV gets the best mode and a black screen, which is enough to prove the link.
+
+`SwitchDPHardware.h` stands in for r26-common's `kits/SwitchMMIO` and `kits/SwitchCAR` with their signatures; once those
+are on main it goes, and the drivers include the kits (hdr_deps `kits/SwitchMMIO`, `kits/SwitchCAR`).
 
 ## DisplayPort audio (plan, not built)
 

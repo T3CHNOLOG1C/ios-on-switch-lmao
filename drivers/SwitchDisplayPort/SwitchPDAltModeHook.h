@@ -11,15 +11,11 @@
 class IOService;
 class IOWorkLoop;
 
-// SwitchPD's start, before its first look at the port: the engine's timer joins `loop`.
-void switch_pd_alt_attach(IOService *owner, IOWorkLoop *loop);
-
-// After SwitchPD has handled an ALERT (or looked at the port): `sink_session` is its sink phase with a source partner,
-// `at_rest` that its request is not using COMMAND (settling, published or given up), `dock_power` that the source's
-// PDOs are the Nintendo dock's signature.
-void switch_pd_alt_alert(uint16_t alert, uint16_t status1, bool sink_session, bool at_rest, bool dock_power);
-
-// SwitchPD's answer to "is your request at rest now", for the engine's timer.
-extern "C" bool switch_pd_alt_at_rest(void);
+// After SwitchPD has handled an ALERT (or looked at the port), on its work loop: `at_rest(pd)` says whether its USB-PD
+// request leaves COMMAND free (settling, published or given up), now or whenever the engine's timer asks;
+// `sink_session` is its sink phase with a source partner; `dock_power` that the contract it made is with a source
+// carrying the Nintendo dock's PDO signature. The first call adds the engine's timer to `loop`.
+void switch_pd_alt_alert(IOService *pd, IOWorkLoop *loop, bool (*at_rest)(const void *pd), uint16_t alert,
+                         uint16_t status1, bool sink_session, bool dock_power);
 
 #endif

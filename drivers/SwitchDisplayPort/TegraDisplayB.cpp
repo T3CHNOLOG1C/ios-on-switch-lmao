@@ -126,10 +126,9 @@ bool TegraDisplayB::powerUp(char *why, size_t size)
     }
     // tegra210_generic_mbist_war for DISB: the partition's RAMs initialise only with their second-level clock gate
     // overridden for a moment after the partition comes up.
-    const uint32_t gates = switch_car_read(kLvl2ClockGateOverrideA);
-    switch_car_write(kLvl2ClockGateOverrideA, gates | kOverrideDisb);
+    switch_car_rmw(kLvl2ClockGateOverrideA, 0, kOverrideDisb);
     IODelay(1);
-    switch_car_write(kLvl2ClockGateOverrideA, gates);
+    switch_car_rmw(kLvl2ClockGateOverrideA, kOverrideDisb, 0);
     IODelay(1);
     volatile uint8_t *mc = switch_mmio_map(kMcPA, 0x1000);
     switch_mmio_rmw32(mc, kMcHotResetControl, kMcHotResetDcb, 0);

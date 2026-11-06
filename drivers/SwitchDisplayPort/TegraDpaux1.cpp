@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0-only
 // DPAUX1; see TegraDpaux1.h. Linux drivers/gpu/drm/tegra/dpaux.c (Copyright (C) 2013 NVIDIA Corporation):
 // tegra_dpaux_resume (clock, PLL_DP at 270 MHz, 1 ms, reset), tegra_dpaux_pad_config (T210: CMH 2, DRVZ 4, DRVI 0x30),
-// tegra_dpaux_probe's interrupt enables (HPD timing left at its reset values, as there), tegra_dpaux_transfer. PLL_DP: drivers/clk/tegra/clk-tegra210.c
-// pll_dp_params and tegra210_plldp_set_defaults (38.4 MHz * (28 + 1/2 + SDM 0xf400) / 4 = 270 MHz, spread on).
+// tegra_dpaux_probe's interrupt enables (HPD timing left at its reset values, as there), tegra_dpaux_transfer.
+// PLL_DP: drivers/clk/tegra/clk-tegra210.c pll_dp_params and tegra210_plldp_set_defaults
+// (38.4 MHz * (28 + 1/2 + SDM 0xf400) / 4 = 270 MHz, spread on).
 #include "TegraDpaux1.h"
 
 #include <IOKit/IOLib.h>
@@ -10,7 +11,10 @@
 #include "SwitchDPHardware.h"
 
 namespace {
-constexpr uint64_t kDpaux1PA = 0x54040000;
+constexpr uint64_t kDpaux1PA = 0x54040000, kPinmuxPA = 0x70003000;
+// PINMUX_AUX_HDMI_INT_DP_HPD (PCC1) as the OLED DTB's pinmux has it: function 0 (DP, into DPAUX1), no pull, output
+// tri-stated, input on, not high-voltage. Nothing in the boot chain applies that table.
+constexpr uint32_t kPinmuxHpd = 0x19c, kPinmuxClear = 0xfu | (1u << 10), kPinmuxSet = (1u << 4) | (1u << 6);
 constexpr unsigned kClockDpaux1 = 207, kClockSorSafe = 222;
 
 enum : uint32_t {
@@ -61,6 +65,7 @@ bool TegraDpaux1::powerUp(char *why, size_t size)
 {
     if (base == nullptr) {
         base = switch_mmio_map(kDpaux1PA, 0x1000);
+        pinmux = switch_mmio_map(kPinmuxPA, 0x1000);
     }
     if (!startPllDp(why, size)) {
         return false;
@@ -72,6 +77,7 @@ bool TegraDpaux1::powerUp(char *why, size_t size)
     IOSleep(1);
     switch_car_reset_deassert(kClockDpaux1);
     IOSleep(1);
+    switch_mmio_rmw32(pinmux, kPinmuxHpd, kPinmuxClear, kPinmuxSet);
     write(SWITCH_DPAUX_HYBRID_PADCTL, kPadAux);
     write(SWITCH_DPAUX_HYBRID_SPARE, read(SWITCH_DPAUX_HYBRID_SPARE) & ~1u);
     write(SWITCH_DPAUX_INTR_AUX, kAllInterrupts);

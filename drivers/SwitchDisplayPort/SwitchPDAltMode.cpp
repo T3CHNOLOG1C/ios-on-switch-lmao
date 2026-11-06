@@ -35,6 +35,8 @@ constexpr bool kWantDisplayPort = false;
 #endif
 
 IOTimerEventSource *gTimer;
+const void *gPD;
+bool (*gAtRest)(const void *);
 struct switch_pd_alt gAlt;
 uint16_t gStatus1;
 enum switch_pd_alt_lanes gToldLanes = SWITCH_PD_ALT_LANES_FREE;
@@ -93,21 +95,23 @@ void perform(struct switch_pd_alt_out out)
 
 void timerFired(OSObject *, IOTimerEventSource *)
 {
-    perform(switch_pd_alt_timer(&gAlt, switch_pd_alt_at_rest()));
+    perform(switch_pd_alt_timer(&gAlt, gAtRest(gPD)));
 }
 }  // namespace
 
-void switch_pd_alt_attach(IOService *owner, IOWorkLoop *loop)
+void switch_pd_alt_alert(IOService *pd, IOWorkLoop *loop, bool (*at_rest_of)(const void *), uint16_t alert,
+                         uint16_t status1, bool sink_session, bool dock_power)
 {
-    switch_pd_alt_init(&gAlt, kWantDisplayPort);
-    gTimer = IOTimerEventSource::timerEventSource(owner, &timerFired);
-    if (gTimer == nullptr || loop->addEventSource(gTimer) != kIOReturnSuccess) {
-        panic("SwitchPD: cannot add the alternate-mode timer to the PD work loop");
+    if (gTimer == nullptr) {
+        switch_pd_alt_init(&gAlt, kWantDisplayPort);
+        gTimer = IOTimerEventSource::timerEventSource(pd, &timerFired);
+        if (gTimer == nullptr || loop->addEventSource(gTimer) != kIOReturnSuccess) {
+            panic("SwitchPD: cannot add the alternate-mode timer to the PD work loop");
+        }
+        gPD = pd;
+        gAtRest = at_rest_of;
     }
-}
-
-void switch_pd_alt_alert(uint16_t alert, uint16_t status1, bool sink_session, bool at_rest, bool dock_power)
-{
+    const bool at_rest = at_rest_of(pd);
     gStatus1 = status1;
     uint16_t dp_status = 0;
     if (gAlt.step == SWITCH_PD_ALT_IDLE && sink_session && at_rest) {
