@@ -1627,6 +1627,12 @@ static void refuseTexture(RMTexture *t, RMPred p, uint64_t a, uint64_t b, NSStri
 @interface RMTwinObject : RMObject  // depth-stencil and compute states, and any m2v object the facade only carries
 @end
 @implementation RMTwinObject
+
+- (BOOL)conformsToProtocol:(Protocol *)protocol
+{
+    return [super conformsToProtocol:protocol] || [_twin conformsToProtocol:protocol];
+}
+
 @end
 
 @implementation RMHeap
@@ -6230,6 +6236,24 @@ id<MTLDevice> raw_metal_device_open(const char *packPath, uint64_t stack, id<MTL
         free(methods);
     }
     objc_registerClassPair(cls);
+    // Each facade class conforms to its Metal protocol, as the m2v objects it stands in for do (the frontend's adoptMetalProtocols).
+    const std::pair<Class, Protocol *> classes[] = {
+        {[RMBuffer class], @protocol(MTLBuffer)},
+        {[RMTexture class], @protocol(MTLTexture)},
+        {[RMLibrary class], @protocol(MTLLibrary)},
+        {[RMFunction class], @protocol(MTLFunction)},
+        {[RMHeap class], @protocol(MTLHeap)},
+        {[RMSampler class], @protocol(MTLSamplerState)},
+        {[RMPipeline class], @protocol(MTLRenderPipelineState)},
+        {[RMQueue class], @protocol(MTLCommandQueue)},
+        {[RMCommandBuffer class], @protocol(MTLCommandBuffer)},
+        {[RMEncoder class], @protocol(MTLCommandEncoder)},
+        {[RMRenderEncoder class], @protocol(MTLRenderCommandEncoder)},
+        {[RMBlitEncoder class], @protocol(MTLBlitCommandEncoder)},
+        {[RMComputeEncoder class], @protocol(MTLComputeCommandEncoder)},
+    };
+    for (const auto &[c, protocol] : classes)
+        class_addProtocol(c, protocol);
     RawState *r = new RawState;
     r->raw = dev;
     r->fallback = fallback;
