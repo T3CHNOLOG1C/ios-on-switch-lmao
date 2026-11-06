@@ -1,0 +1,28 @@
+{
+  "class": "IOSurface",
+  "kind": "21H461",
+  "size": "0x0",
+  "first_slot": 0,
+  "slots": 0,
+  "slide": "-0x1000000",
+  "layout": {},
+  "fields": {},
+  "addresses": {
+    "protection": "0xfffffff005b9d2fc",
+    "memory": "0xfffffff005b9ead0",
+    "format": "0xfffffff005b9ebac",
+    "width": "0xfffffff005b9ebbc",
+    "height": "0xfffffff005b9ebc4",
+    "bytes_per_row": "0xfffffff005b9ebd4",
+    "plane_count": "0xfffffff005b9ebf4",
+    "alloc_size": "0xfffffff005b9ebfc",
+    "plane_offset": "0xfffffff005b9ed10",
+    "plane_width": "0xfffffff005b9eeb8",
+    "plane_height": "0xfffffff005b9ef84",
+    "plane_bytes_per_row": "0xfffffff005b9f1fc",
+    "prepare": "0xfffffff005b9fda0",
+    "complete": "0xfffffff005b9ff64",
+    "device_unlock": "0xfffffff005ba0fc8",
+    "lookup": "0xfffffff005baa72c"
+  }
+}

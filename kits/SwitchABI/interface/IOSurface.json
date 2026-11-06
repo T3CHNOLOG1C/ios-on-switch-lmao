@@ -1,0 +1,118 @@
+{
+  "class": "IOSurface",
+  "doc": "IOSurface's accessors and IOSurfaceRoot's lookup, which the drivers call by address under their own C names (TegraVIC, NativeMobileDisplay's planes and legacy display).",
+  "superclass": "OSObject",
+  "kext": "com.apple.iokit.IOSurface",
+  "header": false,
+  "functions_only": true,
+  "methods": {},
+  "functions": {
+    "lookup": {
+      "doc": "IOSurfaceRoot::lookupSurface(id, task): find_surface, then a try-retain",
+      "symbols": [
+        "tegra_vic_ios_lookup"
+      ]
+    },
+    "memory": {
+      "doc": "the surface's memory descriptor",
+      "symbols": [
+        "tegra_vic_ios_memory",
+        "native_legacy_surface_descriptor"
+      ]
+    },
+    "format": {
+      "doc": "pixel format",
+      "symbols": [
+        "tegra_vic_ios_format",
+        "native_legacy_surface_format"
+      ]
+    },
+    "width": {
+      "doc": "width",
+      "symbols": [
+        "tegra_vic_ios_width",
+        "native_legacy_surface_width"
+      ]
+    },
+    "height": {
+      "doc": "height",
+      "symbols": [
+        "tegra_vic_ios_height",
+        "native_legacy_surface_height"
+      ]
+    },
+    "bytes_per_row": {
+      "doc": "bytes per row",
+      "symbols": [
+        "tegra_vic_ios_bytes_per_row",
+        "native_legacy_surface_stride"
+      ]
+    },
+    "plane_count": {
+      "doc": "plane count",
+      "symbols": [
+        "tegra_vic_ios_plane_count",
+        "native_legacy_surface_planes"
+      ]
+    },
+    "alloc_size": {
+      "doc": "allocation size",
+      "symbols": [
+        "tegra_vic_ios_alloc_size",
+        "native_legacy_surface_allocation"
+      ]
+    },
+    "protection": {
+      "doc": "protection options",
+      "symbols": [
+        "tegra_vic_ios_protection"
+      ]
+    },
+    "plane_width": {
+      "doc": "getPlaneWidth(plane)",
+      "symbols": [
+        "tegra_vic_ios_plane_width",
+        "native_planes_surface_plane_width"
+      ]
+    },
+    "plane_height": {
+      "doc": "getPlaneHeight(plane)",
+      "symbols": [
+        "tegra_vic_ios_plane_height",
+        "native_planes_surface_plane_height"
+      ]
+    },
+    "plane_offset": {
+      "doc": "getPlaneOffset(plane)",
+      "symbols": [
+        "tegra_vic_ios_plane_offset",
+        "native_planes_surface_plane_offset"
+      ]
+    },
+    "plane_bytes_per_row": {
+      "doc": "getPlaneBytesPerRow(plane)",
+      "symbols": [
+        "tegra_vic_ios_plane_bytes_per_row",
+        "native_planes_surface_plane_bytes_per_row"
+      ]
+    },
+    "prepare": {
+      "doc": "IOSurface::prepare(): wires the surface and prepares its descriptor",
+      "symbols": [
+        "tegra_vic_ios_prepare"
+      ]
+    },
+    "complete": {
+      "doc": "IOSurface::complete()",
+      "symbols": [
+        "tegra_vic_ios_complete"
+      ]
+    },
+    "device_unlock": {
+      "doc": "the device write end (surface, options): seed +1 under the surface lock",
+      "symbols": [
+        "tegra_vic_ios_device_unlock"
+      ]
+    }
+  }
+}

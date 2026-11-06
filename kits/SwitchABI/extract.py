@@ -153,20 +153,49 @@ def fields(fs, table):
 def extract(fs, interface, table, kind, pure):
     cls = interface['class']
     info = fs.inheritance[cls]
+    if interface.get('functions_only'):
+        addresses, found = {}, {}
+        for key, hint in sorted(table.get('hints', {}).get('functions', {}).items()):
+            if hint == 'unported':
+                addresses[key], found[key] = 'unported', 'not located in this kind yet'
+                continue
+            at = int(hint['at'], 16)
+            body = [w for _, w in fs.words(*fs.function(at)) if w != 0xD503245F]
+            want = [int(w, 16) for w in hint['body'].split()]
+            if fs.function(at)[0] != at or body[: len(want)] != want:
+                raise SystemExit('{}: {:#x} is not the function the hint describes'.format(key, at))
+            addresses[key], found[key] = hex(at), hint['why']
+        return dump(
+            {
+                'class': cls,
+                'kind': kind,
+                'size': hex(info['size']),
+                'first_slot': 0,
+                'slots': len(fs.slots(cls)),
+                'slide': table['slide'],
+                'layout': {},
+                'fields': {},
+                'addresses': addresses,
+                'found': found,
+                'hints': table.get('hints', {}),
+            }
+        )
     if interface.get('metaclass_only'):
-        return dump({
-            'class': cls,
-            'kind': kind,
-            'size': hex(info['size']),
-            'first_slot': len(fs.classes[interface['superclass']]['methods']),
-            'slots': len(fs.slots(cls)),
-            'slide': table['slide'],
-            'layout': {},
-            'fields': {},
-            'addresses': {'gMetaClass': hex(info['meta'])},
-            'found': {'gMetaClass': 'metaclass initialiser'},
-            'hints': table.get('hints', {}),
-        })
+        return dump(
+            {
+                'class': cls,
+                'kind': kind,
+                'size': hex(info['size']),
+                'first_slot': len(fs.classes[interface['superclass']]['methods']),
+                'slots': len(fs.slots(cls)),
+                'slide': table['slide'],
+                'layout': {},
+                'fields': {},
+                'addresses': {'gMetaClass': hex(info['meta'])},
+                'found': {'gMetaClass': 'metaclass initialiser'},
+                'hints': table.get('hints', {}),
+            }
+        )
     first, slots, named, found, errors = layout(fs, interface, table, pure)
     if errors:
         raise SystemExit('{} ({}):\n  {}'.format(cls, kind, '\n  '.join(errors)))

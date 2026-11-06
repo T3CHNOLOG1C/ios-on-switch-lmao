@@ -17,7 +17,7 @@ the table lacks, and an entry marked `"unported"` becomes a function that panics
 
 ## Tables
 
-```
+```text
 bazel run //kits/SwitchABI:extract                  # iOS 17 (21H461): checks the tables against the vtables
 bazel run --config=ios27 //kits/SwitchABI:extract   # 24B119: rewrites kinds/24B119/*.json from the kernelcache
 bazel run [--config=ios27] //kits/SwitchABI:verify  # compares instead of writing

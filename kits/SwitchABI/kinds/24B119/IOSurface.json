@@ -1,0 +1,110 @@
+{
+  "class": "IOSurface",
+  "kind": "24B119",
+  "size": "0x3e0",
+  "first_slot": 0,
+  "slots": 16,
+  "slide": "-0x3fec000",
+  "layout": {},
+  "fields": {},
+  "addresses": {
+    "alloc_size": "0xfffffff009aeb438",
+    "bytes_per_row": "0xfffffff009aee61c",
+    "complete": "unported",
+    "device_unlock": "unported",
+    "format": "0xfffffff009aee5a8",
+    "height": "0xfffffff009aee604",
+    "lookup": "unported",
+    "memory": "0xfffffff009aee4e8",
+    "plane_bytes_per_row": "0xfffffff009aeec40",
+    "plane_count": "0xfffffff009aee64c",
+    "plane_height": "0xfffffff009aee9dc",
+    "plane_offset": "0xfffffff009aee778",
+    "plane_width": "0xfffffff009aee910",
+    "prepare": "unported",
+    "protection": "unported",
+    "width": "0xfffffff009aee5f8"
+  },
+  "found": {
+    "alloc_size": "ldr x0, [x0, #0x90] as in 21H461",
+    "bytes_per_row": "ldr x0, [x0, #0x68]: the field the plane-bytes-per-row accessor falls back to",
+    "complete": "not located in this kind yet",
+    "device_unlock": "not located in this kind yet",
+    "format": "ldr w0, [x0, #0x80] as in 21H461",
+    "height": "ldr x0, [x0, #0x60]: the field the plane-height accessor falls back to",
+    "lookup": "not located in this kind yet",
+    "memory": "ldr x0, [x0, #0x30] as in 21H461, at the head of the accessor run",
+    "plane_bytes_per_row": "plane accessor reading entry +0x20, falling back to +0x68",
+    "plane_count": "ldr w0, [x0, #0x98]: the count every plane accessor bounds-checks",
+    "plane_height": "plane accessor reading entry +0x08, falling back to +0x60",
+    "plane_offset": "plane accessor reading entry +0x18",
+    "plane_width": "plane accessor reading entry +0x00 (stride 0x38), falling back to +0x58",
+    "prepare": "not located in this kind yet",
+    "protection": "not located in this kind yet",
+    "width": "ldr x0, [x0, #0x58]: the field the plane-width accessor falls back to"
+  },
+  "hints": {
+    "functions": {
+      "lookup": "unported",
+      "memory": {
+        "at": "0xfffffff009aee4e8",
+        "body": "f9401800 d65f03c0",
+        "why": "ldr x0, [x0, #0x30] as in 21H461, at the head of the accessor run"
+      },
+      "format": {
+        "at": "0xfffffff009aee5a8",
+        "body": "b9408000 d65f03c0",
+        "why": "ldr w0, [x0, #0x80] as in 21H461"
+      },
+      "width": {
+        "at": "0xfffffff009aee5f8",
+        "body": "f9402c00 d65f03c0",
+        "why": "ldr x0, [x0, #0x58]: the field the plane-width accessor falls back to"
+      },
+      "height": {
+        "at": "0xfffffff009aee604",
+        "body": "f9403000 d65f03c0",
+        "why": "ldr x0, [x0, #0x60]: the field the plane-height accessor falls back to"
+      },
+      "bytes_per_row": {
+        "at": "0xfffffff009aee61c",
+        "body": "f9403400 d65f03c0",
+        "why": "ldr x0, [x0, #0x68]: the field the plane-bytes-per-row accessor falls back to"
+      },
+      "plane_count": {
+        "at": "0xfffffff009aee64c",
+        "body": "b9409800 d65f03c0",
+        "why": "ldr w0, [x0, #0x98]: the count every plane accessor bounds-checks"
+      },
+      "alloc_size": {
+        "at": "0xfffffff009aeb438",
+        "body": "f9404800 d65f03c0",
+        "why": "ldr x0, [x0, #0x90] as in 21H461"
+      },
+      "protection": "unported",
+      "plane_width": {
+        "at": "0xfffffff009aee910",
+        "body": "d503237f a9bf7bfd 910003fd",
+        "why": "plane accessor reading entry +0x00 (stride 0x38), falling back to +0x58"
+      },
+      "plane_height": {
+        "at": "0xfffffff009aee9dc",
+        "body": "d503237f a9bf7bfd 910003fd",
+        "why": "plane accessor reading entry +0x08, falling back to +0x60"
+      },
+      "plane_offset": {
+        "at": "0xfffffff009aee778",
+        "body": "d503237f a9bf7bfd 910003fd",
+        "why": "plane accessor reading entry +0x18"
+      },
+      "plane_bytes_per_row": {
+        "at": "0xfffffff009aeec40",
+        "body": "d503237f a9bf7bfd 910003fd",
+        "why": "plane accessor reading entry +0x20, falling back to +0x68"
+      },
+      "prepare": "unported",
+      "complete": "unported",
+      "device_unlock": "unported"
+    }
+  }
+}

@@ -169,8 +169,9 @@ def symbol_map(interface, table):
         opaque = re.fullmatch(r'opaque(\d+)', key)
         if opaque:
             put('__ZN{}{}Ev'.format(cls, mangled_class(key)), key)
-    for name in interface.get('functions', {}):
-        put('_' + name, name)
+    for name, function in interface.get('functions', {}).items():
+        for symbol in function.get('symbols', [name]):
+            put('_' + symbol, name)
     return out
 
 

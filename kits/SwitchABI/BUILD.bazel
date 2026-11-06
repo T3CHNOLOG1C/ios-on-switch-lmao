@@ -118,4 +118,9 @@ switch_abi_class(
     header_name = "OriginalHidDeviceABI.h",
 )
 
+switch_abi_class(
+    "IOSurface",
+    header = False,
+)
+
 switch_abi_class("IOWatchdog")
