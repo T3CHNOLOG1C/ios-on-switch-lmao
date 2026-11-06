@@ -1,4 +1,3 @@
-#include <kern/boot_progress.h>
 /*
  * Copyright (c) 2000-2020 Apple, Inc. All rights reserved.
  *
@@ -252,7 +251,6 @@ get_cons_ops_index(void)
 static inline void
 _cnputc(char c, bool poll)
 {
-	if (boot_progress_active()) { boot_progress_putc(c); return; }
 	bool in_debugger = (kernel_debugger_entry_count > 0);
 	const uint32_t idx = get_cons_ops_index();
 

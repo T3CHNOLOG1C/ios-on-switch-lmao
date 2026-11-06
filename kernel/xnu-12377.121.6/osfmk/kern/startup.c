@@ -1,5 +1,4 @@
 #include "SwitchDiag.h"
-#include <kern/boot_progress.h>
 /*
  * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  *
@@ -224,7 +223,6 @@ TUNABLE(int, serverperfmode, "serverperfmode", 0);
 static inline void
 kernel_bootstrap_log(const char *message)
 {
-	boot_progress_stage(message);
 	switch_diag_stage(message);
 	if ((startup_debug & STARTUP_DEBUG_VERBOSE) &&
 	    startup_phase >= STARTUP_SUB_KPRINTF) {
@@ -236,7 +234,6 @@ kernel_bootstrap_log(const char *message)
 static inline void
 kernel_bootstrap_thread_log(const char *message)
 {
-	boot_progress_stage(message);
 	switch_diag_stage(message);
 	if ((startup_debug & STARTUP_DEBUG_VERBOSE) &&
 	    startup_phase >= STARTUP_SUB_KPRINTF) {
@@ -882,7 +879,6 @@ kernel_bootstrap_thread(void)
 	 */
 	kernel_bootstrap_thread_log("clock_service_create");
 	clock_service_create();
-	boot_progress_start();
 
 	/*
 	 *	Create the device service.

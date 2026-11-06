@@ -1,4 +1,3 @@
-#include <kern/boot_progress.h>
 /*
  * Copyright (c) 2012-2023 Apple Inc. All rights reserved.
  *
@@ -1529,7 +1528,6 @@ handle_user_breakpoint(arm_saved_state_t *state, uint64_t esr __unused)
 	mach_exception_data_type_t codes[2]  = {EXC_ARM_BREAKPOINT};
 	mach_msg_type_number_t     numcodes  = 2;
 
-	boot_progress_user_breakpoint(state, esr);
 	if (PSR64_IS_USER(get_saved_state_cpsr(state))) {
 		switch_kprof_user_trap(state, esr);
 	}
@@ -2103,7 +2101,6 @@ handle_user_abort(arm_saved_state_t *state, uint64_t esr, vm_offset_t fault_addr
 	}
 #endif /* __has_feature(ptrauth_calls) */
 
-	boot_progress_user_abort(state, esr, fault_addr);
 	const self_restrict_mode_t self_restrict_mode = user_fault_in_self_restrict_mode(thread);
 	if ((self_restrict_mode != SELF_RESTRICT_NONE) &&
 	    task_is_jit_exception_fatal(get_threadtask(thread))) {
@@ -3176,7 +3173,6 @@ sleh_irq(arm_saved_state_t *state)
 
 
 	sleh_interrupt_handler_prologue(state, DBG_INTR_TYPE_OTHER);
-	boot_progress_irq(get_saved_state_pc(state), get_saved_state_cpsr(state), get_saved_state_sp(state));
 
 #if USE_APPLEARMSMP
 	PE_handle_ext_interrupt();

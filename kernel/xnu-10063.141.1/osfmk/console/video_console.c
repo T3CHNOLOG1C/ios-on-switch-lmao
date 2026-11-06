@@ -1,4 +1,3 @@
-#include <kern/boot_progress.h>
 /*
  * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  *
@@ -1338,7 +1337,6 @@ vc_tape_pace(bool poll)
 void
 vcputc_options(char c, bool poll)
 {
-	if (boot_progress_active()) { boot_progress_putc(c); return; }
 	if (gc_initialized && gc_enabled) {
 		vc_tape_pace(poll);
 		VCPUTC_LOCK_LOCK();
@@ -3221,8 +3219,6 @@ initialize_screen(PE_Video * boot_vinfo, unsigned int op)
 			vinfo = new_vinfo;
 		}
 
-		boot_progress_bind(vinfo.v_baseaddr, vinfo.v_width, vinfo.v_height,
-		    vinfo.v_rowbytes, vinfo.v_depth);
 
 		// If we changed the virtual address, remove the old mapping
 		if (newVideoVirt != 0) {
@@ -3378,8 +3374,6 @@ initialize_screen(PE_Video * boot_vinfo, unsigned int op)
 	}
 
 	/* Console initialization/acquisition may clear the existing mapping. */
-	boot_progress_bind(vinfo.v_baseaddr, vinfo.v_width, vinfo.v_height,
-	    vinfo.v_rowbytes, vinfo.v_depth);
 }
 
 void vcattach(void); /* XXX gcc 4 warning cleanup */

@@ -1,5 +1,4 @@
 #include "SwitchDiag.h"
-#include <kern/boot_progress.h>
 #include <switch/boot.h>
 /*
  * Copyright (c) 2000-2021 Apple Inc. All rights reserved.
@@ -487,7 +486,6 @@ bsd_rooted_ramdisk(void)
 void
 bsd_init(void)
 {
-	boot_progress_stage("bsd_init enter");
 	switch_diag_stage("bsd_init entered");
 	struct uthread *ut;
 	vnode_t init_rootvnode = NULLVP;
@@ -508,7 +506,7 @@ bsd_init(void)
 #if DEBUG_BSDINIT
 #define bsd_init_kprintf(x, ...) kprintf("bsd_init: " x, ## __VA_ARGS__)
 #else
-#define bsd_init_kprintf(x, ...) boot_progress_stage("bsd_init: " x)
+#define bsd_init_kprintf(x, ...)
 #endif
 
 	throttle_init();

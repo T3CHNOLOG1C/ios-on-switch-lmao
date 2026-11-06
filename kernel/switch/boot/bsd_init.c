@@ -6,7 +6,6 @@
 #include <sys/mount_internal.h>
 #include <sys/systm.h>
 #include <sys/vnode_internal.h>
-#include <kern/boot_progress.h>
 #include <libkern/OSKextLib.h>
 
 #include "SwitchDiag.h"
@@ -71,9 +70,7 @@ static void native_mobile_graphics_load_probe(void)
 void switch_boot_bufferinit_done(void)
 {
     extern void sheng_pmgr_run(void);
-    boot_progress_stage("original PMGR nub start");
     sheng_pmgr_run();
-    boot_progress_stage("original PMGR nub returned");
 }
 
 void switch_boot_vfs_ready(void)
@@ -111,14 +108,12 @@ void switch_boot_autoconf_done(void)
 
 void switch_boot_mountroot_begin(void)
 {
-    boot_progress_stage("vfs_mountroot enter");
     switch_root_event(6, 0, 0);
 }
 
 void switch_boot_mountroot_done(int err)
 {
     if (!err) {
-        boot_progress_stage("vfs_mountroot mounted; authentication pending");
     }
     switch_root_event(7, err, 0);
     if (err) {
@@ -163,5 +158,4 @@ void switch_boot_root_accepted(int autherr, int owner_authorized)
 {
     native_owner_root_accepted = owner_authorized;
     native_owner_root_accepted_checkpoint(autherr, owner_authorized);
-    boot_progress_stage("root authentication decision recorded");
 }

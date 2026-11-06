@@ -1,5 +1,4 @@
 #include "SwitchDiag.h"
-#include <kern/boot_progress.h>
 /*
  * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  */
@@ -61,7 +60,6 @@ static void
 PE_init_kprintf(void)
 {
 	if (switch_native_text_console_active()) { PE_kputc = console_write_unbuffered; return; }
-	if (boot_progress_active()) { PE_kputc = boot_progress_putc; return; }
 	if (serial_init()) {
 		PE_kputc = serial_putc_crlf;
 	} else {
