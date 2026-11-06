@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""Find metallibs (MTLB containers) embedded in a dyld shared cache's subcaches; write each to <out>/<image>@<addr>.metallib.
+"""Find metallibs (MTLB containers) embedded in a dyld shared cache's subcaches.
+
+Writes each to <out>/<image>@<addr>.metallib.
 usage: dsc_metallibs.py <dir with dyld_shared_cache_arm64*> <out dir>
 """
 
@@ -14,7 +16,7 @@ out.mkdir(parents=True, exist_ok=True)
 main = d / 'dyld_shared_cache_arm64'
 
 
-def maps(path):
+def maps(path: Path) -> tuple[mmap.mmap, list[tuple[int, int, int]]]:
     f = path.open('rb')
     h = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
     moff, mcount = struct.unpack_from('<2I', h, 0x10)

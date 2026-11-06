@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""The corpus: every metallib on the 21H461 OS and SystemOS cryptex volumes, plus the ones embedded in dyld-cache images
-(dsc_metallibs.py), deduplicated by content. usage: make_corpus.py <metal2 dir>  -> corpus.tsv (tag, path), corpus_all.tsv
-(tag, path, sha256, size, duplicate-of).
+"""The corpus: every metallib on the 21H461 OS and SystemOS cryptex volumes, deduplicated by content.
+
+With the ones embedded in dyld-cache images (dsc_metallibs.py).
+usage: make_corpus.py <metal2 dir>  -> corpus.tsv (tag, path), corpus_all.tsv (tag, path, sha256, size, duplicate-of).
 """
 
 import hashlib
@@ -14,7 +15,7 @@ files = sorted(p for root in (base / 'mnt/os', base / 'mnt/cryptex') for p in ro
 files += sorted((base / 'corpus/dsc').glob('*.metallib'))
 
 
-def tag(p):
+def tag(p: Path) -> str:
     s = str(p)
     if '/corpus/dsc/' in s:
         return 'dsc:' + p.name.split('@')[0] + '/' + p.stem.split('@')[1]

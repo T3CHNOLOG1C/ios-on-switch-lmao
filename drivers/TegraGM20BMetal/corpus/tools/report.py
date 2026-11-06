@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
-"""Compare two corpus runs (before, after) per framework: entry points (kernels, vertex and fragment functions) that compile and
-make their pipeline on the host NVK, where an entry point passes if any constant variant ("z" all zero, "1" all one) did.
-Failures are put in three buckets: real gaps, harness limits, and features the A10 (iPad7,1, Apple3 family) does not have.
+"""Compare two corpus runs (before, after) per framework.
+
+Counted are the entry points (kernels, vertex and fragment functions) that compile and make their pipeline on the host
+NVK, where an entry point passes if any constant variant ("z" all zero, "1" all one) did. Failures are put in three
+buckets: real gaps, harness limits, and features the A10 (iPad7,1, Apple3 family) does not have.
 usage: report.py <before run dir> <after run dir> [--ms]   -> TSV on stdout
 """
 
@@ -33,7 +35,7 @@ HARNESS = [
 ]
 
 
-def load(run):
+def load(run: str) -> list[list[str]]:
     rows = []
     for f in sorted(Path(run).glob('*.tsv')):
         if f.name in ('summary.tsv', 'categories.tsv'):
@@ -45,12 +47,12 @@ def load(run):
     return rows
 
 
-def framework(tag):
+def framework(tag: str) -> str:
     t = tag.split('/')[0]
     return 'dsc:' + tag.split('/')[1].split('@')[0] if t == 'dsc' else t
 
 
-def bucket(tag, name, phase, detail):
+def bucket(tag: str, name: str, phase: str, detail: str) -> str:
     s = '%s %s %s %s' % (tag + '/' + name, phase, detail, '')
     if phase == 'container':
         return 'not AIR'
@@ -61,7 +63,9 @@ def bucket(tag, name, phase, detail):
     return 'gap'
 
 
-def summarize(rows):
+def summarize(
+    rows: list[list[str]],
+) -> tuple[collections.OrderedDict[tuple[str, str], dict], collections.OrderedDict[str, collections.Counter[str]]]:
     entries = collections.OrderedDict()  # (tag, name) -> [results]
     for tag, name, stage, variant, result, phase, detail, ms in rows:
         if result == 'SKIP' or name == '-':

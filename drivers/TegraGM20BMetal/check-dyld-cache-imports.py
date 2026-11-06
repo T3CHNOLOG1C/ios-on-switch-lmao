@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
-"""Check that every import of the plugin's binaries exists in the target's dyld shared cache (iPadOS 17.7.11 21H461), so the
-bundle and NVK load there although they are linked against a newer iOS SDK.
+"""Check that every import of the plugin's binaries exists in the target's dyld shared cache (iPadOS 17.7.11 21H461).
+
+The bundle and NVK then load there although they are linked against a newer iOS SDK.
 
 usage: check-dyld-cache-imports.py <dyld cache dir> <Mach-O>...
-  <dyld cache dir>  System/Library/Caches/com.apple.dyld of the OS cryptex (vendor/unixnu-qemu/.cache/firmware/target-volumes/
-                    044-76034-038.dmg, attached read-only)
-Imports come from `dyld_info -imports`, libraries from `otool -L`; each library's exports are read from the cache's export
-tries, following LC_REEXPORT_DYLIB. Flat-namespace and weak-def-coalesce imports are skipped (resolved elsewhere or weak);
-a missing weak import is listed but not fatal. Exit status 1 if anything non-weak is missing.
+  <dyld cache dir>  System/Library/Caches/com.apple.dyld of the OS cryptex
+                    (vendor/unixnu-qemu/.cache/firmware/target-volumes/044-76034-038.dmg, attached read-only)
+Imports come from `dyld_info -imports`, libraries from `otool -L`; each library's exports are read from the cache's
+export tries, following LC_REEXPORT_DYLIB. Flat-namespace and weak-def-coalesce imports are skipped (resolved elsewhere
+or weak); a missing weak import is listed but not fatal. Exit status 1 if anything non-weak is missing.
 """
 
 import mmap
@@ -19,7 +20,7 @@ from pathlib import Path
 
 
 class Cache:
-    def __init__(self, directory):
+    def __init__(self, directory: str):
         files = sorted(
             p
             for p in Path(directory).glob('dyld_shared_cache_arm64*')
@@ -49,13 +50,13 @@ class Cache:
             self.images[path] = addr
         self.cache = {}
 
-    def read(self, va, n):
+    def read(self, va: int, n: int) -> bytes:
         for lo, hi, off, data in self.maps:
             if lo <= va < hi:
                 return data[off + va - lo : off + va - lo + n]
         raise KeyError(hex(va))
 
-    def macho(self, path):
+    def macho(self, path: str) -> list[tuple[int, bytes]]:
         va = self.images[path]
         magic, _, _, _, ncmds, sizeofcmds = struct.unpack('<6I', self.read(va, 24))
         assert magic == 0xFEEDFACF
@@ -67,7 +68,7 @@ class Cache:
             at += size
         return cmds
 
-    def exports(self, path, seen=None):
+    def exports(self, path: str, seen: set[str] | None = None) -> set[str]:
         if path in self.cache:
             return self.cache[path]
         seen = seen or set()
@@ -94,7 +95,7 @@ class Cache:
         if trie and trie[1]:
             data = self.read(linkedit[0] + trie[0] - linkedit[1], trie[1])
 
-            def uleb(at):
+            def uleb(at: int) -> tuple[int, int]:
                 v = s = 0
                 while True:
                     b = data[at]
@@ -128,7 +129,7 @@ class Cache:
         return names
 
 
-def main():
+def main() -> None:
     cache = Cache(sys.argv[1])
     bad = 0
     for binary in sys.argv[2:]:

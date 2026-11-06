@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Summarize a corpus run: per framework (library tag) the entry points tried and passed, and every failure by category.
+
 usage: categorize.py <run dir> [--rows]  -> prints a table; writes <run dir>/summary.tsv and categories.tsv
 """
 
@@ -45,7 +46,7 @@ RULES = [  # (category, regex on phase+detail)
 ]
 
 
-def category(phase, detail):
+def category(phase: str, detail: str) -> str:
     s = phase + ' ' + detail
     for name, rx in RULES:
         if re.search(rx, s):

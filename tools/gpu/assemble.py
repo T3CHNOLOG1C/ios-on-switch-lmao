@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""assemble.py --bundle D --trustcache F --trust-json F [--overlay D]... --out D
+"""Assemble the GPU build's directory, which deploy's GPU staging (stage-tegra-gm20b-metal.py --build) reads.
 
-The GPU build's directory, which deploy's GPU staging (stage-tegra-gm20b-metal.py --build) reads:
+usage: assemble.py --bundle D --trustcache F --trust-json F [--overlay D]... --out D
+
   ngpu/addons/TegraGM20BMetal.bundle/            the signed bundle
   ngpu/addons/TegraGM20BMetal.m2v-seed/shared/   the shader cache seed, from an overlay (//gpu/seed:tree)
   ngpu/addons/TegraGM20BMetal.raw/pack.bin       the raw GM20B path's pipeline pack, from an overlay
@@ -13,7 +14,7 @@ import shutil
 from pathlib import Path
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser()
     for name in ('bundle', 'trustcache', 'trust-json', 'out'):
         parser.add_argument('--' + name, required=True)

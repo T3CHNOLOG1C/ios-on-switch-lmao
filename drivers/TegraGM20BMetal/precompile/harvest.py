@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
-"""Merge device journals (the frontend's pipelines.log: S lines, one per function specialization, R lines, one per render pipeline
-state, C lines, one per compute pipeline state, and D lines, one per dispatch shape a compute state took) into the precompile
-corpus: each made once, by any process, in the order first seen, without the times, threads, costs and callers. The corpus keeps
-what it had; new journals only add. Each function names its library (lib=: the file's path, or data:<SHA-256> of a library made
-from bytes); a line from before the journal named libraries has none, and precompile/libraries.py guesses it by the function's
-name.
+"""Merge device journals (the frontend's pipelines.log) into the precompile corpus.
 
-usage: harvest.py <corpus.log> <pipelines.log>...    e.g. harvest.py corpus.log <state>/device-logs/*/m2v-cache/pipelines.log
+A journal has S lines, one per function specialization, R lines, one per render pipeline state, C lines, one per compute
+pipeline state, and D lines, one per dispatch shape a compute state took. The corpus has each made once, by any
+process, in the order first seen, without the times, threads, costs and callers. The corpus keeps what it had; new
+journals only add. Each function names its library (lib=: the file's path, or data:<SHA-256> of a library made from
+bytes); a line from before the journal named libraries has none, and precompile/libraries.py guesses it by the
+function's name.
+
+usage: harvest.py <corpus.log> <pipelines.log>...
+           e.g. harvest.py corpus.log <state>/device-logs/*/m2v-cache/pipelines.log
        harvest.py <corpus.log> --volume <mounted Data volume> [--save <dir>] [--open <container UUID>]... [--open-all]
 
 --volume  every process's m2v cache on the iPad's Data volume (the plugin's cacheCandidates: a container's
@@ -16,26 +19,27 @@ usage: harvest.py <corpus.log> <pipelines.log>...    e.g. harvest.py corpus.log 
           SpringBoard's and Preferences', SYSTEM_CACHES) or every one with --open-all, each closed directory on the
           way is made u+rx for the read and given its mode back at once (and checked); other closed containers are
           skipped and counted.
---save    also copy each m2v cache found, whole (v1/, msl/, libs/, the journals, makings.log), to <dir>/<where it was>, e.g. the boot's
-          log folder. makings.log (m2v 0118, the plugin turns it on in every cache): one line per driver record the process wrote
-          (a compile), its name and the making's description; a precompile run with METAL2VULKAN_MAKING_LOG=<file> writes the
-          host's, so a seeded making the device made again shows where the two descriptions part.
+--save    also copy each m2v cache found, whole (v1/, msl/, libs/, the journals, makings.log), to <dir>/<where it was>,
+          e.g. the boot's log folder. makings.log (m2v 0118, the plugin turns it on in every cache): one line per driver
+          record the process wrote (a compile), its name and the making's description; a precompile run with
+          METAL2VULKAN_MAKING_LOG=<file> writes the host's, so a seeded making the device made again shows where the two
+          descriptions part.
 --device  the device data staging directory (default <state>/gpu-device-data/staging; <state> is ~/Library/Application
-          Support/switch-ios or $SWITCH_HOME): with --volume, and for every
-          saved cache below --records-from, each driver record (the content directory's v1/<content>/<xx>/<name>, m2v's
-          VkPipelineCache data of one pipeline making, named by what the making reads and the NVK identity) whose envelope
-          checks out is copied to <device>/records/<xx>/<name>, and every cache's libs/<SHA-256>.metallib (a library a process
-          made from bytes) to <device>/data/. The device's own makings: those of draws' variants that no creation predicts,
-          and each one the precompile makes otherwise than the device (r8-webgpu: 1268 of the 1293 records of the 23:17
-          boot's caches were not in the seed). The seed takes those of its NVK's identity.
+          Support/switch-ios or $SWITCH_HOME): with --volume, and for every saved cache below --records-from, each
+          driver record (the content directory's v1/<content>/<xx>/<name>, m2v's VkPipelineCache data of one pipeline
+          making, named by what the making reads and the NVK identity) whose envelope checks out is copied to
+          <device>/records/<xx>/<name>, and every cache's libs/<SHA-256>.metallib (a library a process made from bytes)
+          to <device>/data/. The device's own makings: those of draws' variants that no creation predicts, and each one
+          the precompile makes otherwise than the device (r8-webgpu: 1268 of the 1293 records of the 23:17 boot's caches
+          were not in the seed). The seed takes those of its NVK's identity.
           harvest.py --records-from <dir>... [--device <dir>]: only the records of every m2v cache below each <dir> (the
           --save copies, e.g. <state>/device-logs/*/m2v), no corpus.
---pack    harvest.py --pack [--device <dir>]: the staging directory as the build's @gpu_device_data: a tar (sorted, no times or
-          owners) of its records and of the libraries made from bytes that the corpus names and the build cannot make itself
-          (not one of gpu/apple-libs.sha256's, not the frontend's TwoPlaneStandIn.h: Core Image's kernels compiled on the
-          device), written to <state>/gpu-device-data/m2v-device-<sha256[:16]>.tar; prints the DEVICE_DATA pin for
-          gpu/deps.bzl. The first build after the pin copies the tar into the repository cache; no build reads the
-          staging directory.
+--pack    harvest.py --pack [--device <dir>]: the staging directory as the build's @gpu_device_data: a tar (sorted, no
+          times or owners) of its records and of the libraries made from bytes that the corpus names and the build
+          cannot make itself (not one of gpu/apple-libs.sha256's, not the frontend's TwoPlaneStandIn.h: Core Image's
+          kernels compiled on the device), written to <state>/gpu-device-data/m2v-device-<sha256[:16]>.tar; prints the
+          DEVICE_DATA pin for gpu/deps.bzl. The first build after the pin copies the tar into the repository cache; no
+          build reads the staging directory.
 """
 
 import hashlib
@@ -46,6 +50,7 @@ import shutil
 import stat
 import sys
 import tarfile
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -58,23 +63,24 @@ PROJECT = Path(os.environ.get('BUILD_WORKSPACE_DIRECTORY') or Path(__file__).res
 DEVICE = (
     Path(os.environ.get('SWITCH_HOME') or Path.home() / 'Library/Application Support/switch-ios') / 'gpu-device-data'
 )
-# /private/var/containers/Data/System/<UUID>/Library/Caches/m2v of the system containers whose processes kept an m2v cache there
-# (the plugin's "device ... ready in" lines, r5d and r6h): their Library and Library/Caches are mode 000.
+# /private/var/containers/Data/System/<UUID>/Library/Caches/m2v of the system containers whose processes kept an m2v
+# cache there (the plugin's "device ... ready in" lines, r5d and r6h): their Library and Library/Caches are mode 000.
 SYSTEM_CACHES = {
     '6C7A65AF-CB18-421C-A07A-D724B05A7AB6': 'backboardd',
     '532E562F-2888-4C55-9BF8-E6F0B246BBDA': 'SpringBoard',
     '5BDBB9F1-C07A-4290-9D80-EA49A6BA2D68': 'Preferences',
     'AA90E4B6-B0E4-4776-8E70-A4444E65642F': 'Spotlight',
 }
-JOURNALS = ('pipelines.log.old', 'pipelines.log')
+JOURNALS = ('pipelines.log.old', 'pipelines.log')  # oldest first: the frontend renames the journal past 2 MiB
 CONTENT = (
     '529a20fd270ababa3e5ec2fe4d1674d93739ba5bcd61861674b4fb6db349af9f'  # m2v's content directory (seed.py's CONTENT)
 )
-RECORD_MAGIC = b'M2VPPLC\0'  # m2v shader_cache/driver.rs: magic, identity (28 bytes), data length (u64), data, SHA-256     # oldest first: the frontend renames the journal past 2 MiB
+# m2v shader_cache/driver.rs: magic, identity (28 bytes), data length (u64), data, SHA-256
+RECORD_MAGIC = b'M2VPPLC\0'
 
 
-def normal(line):
-    """The corpus form of a journal line (None for refusals and other lines) and the text it is deduplicated by."""
+def normal(line: str) -> tuple[str | None, str | None]:
+    """Return a journal line's corpus form and the text it is deduplicated by (None for refusals and other lines)."""
     if ' ok=1 ' not in line:
         return None, None
     if line.startswith('S '):
@@ -107,9 +113,10 @@ def normal(line):
 
 
 @contextmanager
-def opened(dirs, log):
-    """Each of `dirs` (outermost first) that this user may not enter made u+rx while the block runs, then given its mode back.
-    The only write the volume sees.
+def opened(dirs: tuple[Path, ...], log: Callable[[str], None]) -> Iterator[None]:
+    """Make each of `dirs` (outermost first) that this user may not enter u+rx while the block runs.
+
+    Each is given its mode back after it. The only write the volume sees.
     """
     restore = []
     try:
@@ -131,20 +138,23 @@ def opened(dirs, log):
                 log('MODE NOT RESTORED: %s is %o, was %o' % (d, now, mode))
 
 
-def readable(d):
+def readable(d: Path) -> bool:
     return os.access(d, os.R_OK | os.X_OK)
 
 
-def caches(volume, opens, open_all, log):
-    """(where, m2v directory, the directories to open on the way) of every m2v cache on the volume, and the closed containers
-    skipped.
+def caches(
+    volume: Path, opens: set[str], open_all: bool, log: Callable[[str], None]
+) -> tuple[list[tuple[str, Path, tuple[Path, ...]]], list[str]]:
+    """Find every m2v cache on the volume, and the closed containers skipped.
+
+    Each cache as (where, m2v directory, the directories to open on the way).
     """
     found, skipped = [], []
 
-    def look(where, m2v, through=()):
+    def look(where: str, m2v: Path, through: tuple[Path, ...] = ()) -> None:
         found.append((where, m2v, through))
 
-    def containers(base):
+    def containers(base: Path) -> list[Path]:
         try:
             return sorted(p for p in base.iterdir() if p.is_dir())
         except OSError:
@@ -167,8 +177,8 @@ def caches(volume, opens, open_all, log):
                     look('%s/%s/%s' % (kind, c.name, sub), c / sub, tuple(way))
                 elif sub.startswith('Library'):
                     skipped.append(c.name)
-            # the plugin's Library/Caches/m2v-<process> of a data container whose tmp is the process's temp directory (66b8ec2:
-            # WebKit's GPU process in Safari's container, a poster extension in its own)
+            # the plugin's Library/Caches/m2v-<process> of a data container whose tmp is the process's temp directory
+            # (66b8ec2: WebKit's GPU process in Safari's container, a poster extension in its own)
             if readable(c / 'Library') and readable(c / 'Library/Caches'):
                 for m2v in sorted((c / 'Library/Caches').glob('m2v-*')):
                     if m2v.is_dir() and readable(m2v):
@@ -188,7 +198,7 @@ def caches(volume, opens, open_all, log):
     return found, skipped
 
 
-def merge(corpus, sources):
+def merge(corpus: Path, sources: list[tuple[str, str]]) -> list[str]:
     lines, seen = [], set()
     kept = [(corpus, corpus.read_text(errors='replace'))] if corpus.is_file() else []
     for name, text in kept + sources:
@@ -214,8 +224,8 @@ def merge(corpus, sources):
     return lines
 
 
-def collect(m2v, store):
-    """A cache's libraries made from bytes, into <store>/data/."""
+def collect(m2v: Path, store: Path) -> None:
+    """Copy a cache's libraries made from bytes into <store>/data/."""
     for path in sorted((m2v / 'libs').glob('*.metallib')) if (m2v / 'libs').is_dir() else []:
         target = store / 'data' / path.name
         if not target.is_file():
@@ -223,17 +233,22 @@ def collect(m2v, store):
             shutil.copyfile(path, target)
 
 
-def record_ok(data):
-    """Whether `data` is a whole driver record: magic, identity, a length that ends where the checksum begins, the checksum."""
+def record_ok(data: bytes) -> bool:
+    """Return whether `data` is a whole driver record.
+
+    Magic, identity, a length that ends where the checksum begins, the checksum.
+    """
     if len(data) < 8 + 28 + 8 + 32 or data[:8] != RECORD_MAGIC:
         return False
     length = int.from_bytes(data[36:44], 'little')
     return 44 + length + 32 == len(data) and hashlib.sha256(data[:-32]).digest() == data[-32:]
 
 
-def records(caches, store):
-    """Every driver record of each cache directory in `caches` whose envelope checks out, into `store` (by name; one already
-    there is kept: a name is what the making reads, so two records of one name hold the same driver's data).
+def records(caches: Sequence[str | Path], store: Path) -> None:
+    """Copy every driver record of each cache directory in `caches` whose envelope checks out into `store`.
+
+    By name; one already there is kept: a name is what the making reads, so two records of one name hold the same
+    driver's data.
     """
     seen = copied = bad = 0
     for cache in caches:
@@ -258,8 +273,11 @@ def records(caches, store):
     )
 
 
-def embedded_libraries():
-    """The sha256 of each metallib the build makes itself: the OS volume's (gpu/apple-libs.sha256) and the frontend's."""
+def embedded_libraries() -> set[str]:
+    """Return the sha256 of each metallib the build makes itself.
+
+    The OS volume's (gpu/apple-libs.sha256) and the frontend's.
+    """
     made = {
         line.split()[0]
         for line in (PROJECT / 'gpu/apple-libs.sha256').read_text().splitlines()
@@ -274,8 +292,8 @@ def embedded_libraries():
     return made
 
 
-def pack(store, corpus):
-    """The tar of @gpu_device_data (DEVICE_DATA in gpu/deps.bzl) from the staging directory `store`."""
+def pack(store: Path, corpus: Path) -> None:
+    """Write the tar of @gpu_device_data (DEVICE_DATA in gpu/deps.bzl) from the staging directory `store`."""
     named = set(re.findall(r'lib=data:([0-9a-f]{64})', corpus.read_text()))
     own = embedded_libraries()
     members = sorted(p for p in (store / 'records').glob('*/*') if p.is_file() and record_ok(p.read_bytes()))
@@ -309,7 +327,7 @@ def pack(store, corpus):
     print('gpu/deps.bzl:\nDEVICE_DATA = {\n    "file": "%s",\n    "sha256": "%s",\n}' % (out.name, digest))
 
 
-def option(args, name, many=False):
+def option(args: list[str], name: str, many: bool = False) -> list[str] | str | None:
     values = []
     while name in args:
         i = args.index(name)
@@ -320,7 +338,7 @@ def option(args, name, many=False):
     return values if many else (values[-1] if values else None)
 
 
-def main():
+def main() -> None:
     args = sys.argv[1:]
     volume = option(args, '--volume')
     save = option(args, '--save')

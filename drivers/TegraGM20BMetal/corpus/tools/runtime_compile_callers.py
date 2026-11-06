@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
-"""Which dyld-cache images reference the Metal selectors that compile or link shaders at run time (their __objc_selrefs,
-resolved through the cache). usage: runtime_compile_callers.py <annot.py dir> <dyld cache dir> <extracted images root> <image list>
+"""Which dyld-cache images reference the Metal selectors that compile or link shaders at run time.
+
+By their __objc_selrefs, resolved through the cache.
+usage: runtime_compile_callers.py <annot.py dir> <dyld cache dir> <extracted images root> <image list>
 """
 
 import struct
@@ -30,7 +32,7 @@ cache = annot.Cache()
 root = Path(sys.argv[3])
 
 
-def selrefs(path):
+def selrefs(path: Path) -> list[tuple[int, int]]:
     d = path.read_bytes()[:0x10000]
     if len(d) < 32 or struct.unpack_from('<I', d, 0)[0] != 0xFEEDFACF:
         return []

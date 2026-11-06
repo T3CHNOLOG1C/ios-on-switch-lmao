@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
-"""Assemble and sign TegraGM20BMetal.bundle, and write its trust-cache module (the bundle half of the old
-build-tegra-gm20b-metal.py).
+"""Assemble and sign TegraGM20BMetal.bundle, and write its trust-cache module.
+
+The bundle half of the old build-tegra-gm20b-metal.py:
 
     bundle.py --xcode-env F --plugin <linked plugin> --nvk <libvulkan_nouveau.dylib> --stack <raw_stack.txt>
               --bundle <out dir> --trustcache <out> --trust-json <out>
 
-Info.plist's SwitchShaderStack is the stack key the plugin is built with, which the shader seed checks its tools against.
-The plugin and NVK are stripped (-x) and must be plain arm64 Mach-Os. NVK is signed first, then the bundle (so the
-bundle's seal covers the final dylib), both ad hoc with 4 KiB pages (this kernel's page size) and SHA-256: no team,
+Info.plist's SwitchShaderStack is the stack key the plugin is built with, which the shader seed checks its tools
+against. The plugin and NVK are stripped (-x) and must be plain arm64 Mach-Os. NVK is signed first, then the bundle (so
+the bundle's seal covers the final dylib), both ad hoc with 4 KiB pages (this kernel's page size) and SHA-256: no team,
 no entitlements, no signing time, so the CDHashes are a function of the bytes. The trust cache is one version-2
 module (vendor/unixnu/scripts/make-owner-trust-bundle.py): u32 version, uuid5 of the CDHashes, u32 count, then per
 entry the 20-byte CDHash, hash type 2 (SHA-256), flags 0, constraint category 0, reserved 0, in ascending order.
@@ -29,7 +30,7 @@ NAME = 'TegraGM20BMetal'
 
 
 class Xcode:
-    def __init__(self, env_file):
+    def __init__(self, env_file: str):
         values = dict(line.split('=', 1) for line in Path(env_file).read_text().splitlines() if '=' in line)
         self.toolchain = values['XCODE_TOOLCHAIN']
         self.env = {
@@ -38,7 +39,7 @@ class Xcode:
             'TMPDIR': os.environ.get('TMPDIR', '/tmp'),
         }
 
-    def run(self, *command):
+    def run(self, *command: str | Path) -> str:
         tool = command[0]
         path = Path(self.toolchain, tool) if Path(self.toolchain, tool).is_file() else Path('/usr/bin', tool)
         result = subprocess.run([str(path), *map(str, command[1:])], env=self.env, capture_output=True, text=True)
@@ -47,13 +48,13 @@ class Xcode:
         return result.stdout + result.stderr
 
 
-def arm64(path):
+def arm64(path: Path) -> None:
     magic, cputype, subtype = struct.unpack_from('<3I', Path(path).read_bytes())
     if (magic, cputype, subtype & 0xFFFFFF) != (0xFEEDFACF, 0x100000C, 0):
         sys.exit('%s: expected a plain arm64 (subtype 0) Mach-O' % path)
 
 
-def sign(xcode, path, identifier):
+def sign(xcode: Xcode, path: Path, identifier: str) -> str:
     xcode.run('codesign', '--force', '--sign', '-', '--pagesize', '4096', '--identifier', identifier, path)
     xcode.run('codesign', '--verify', '--strict', path)
     detail = xcode.run('codesign', '--display', '--verbose=4', path)
@@ -64,7 +65,7 @@ def sign(xcode, path, identifier):
     return re.search(r'^CDHash=([0-9a-f]{40})$', detail, re.MULTILINE)[1]
 
 
-def trust_module(cdhashes):
+def trust_module(cdhashes: list[str]) -> bytes:
     hashes = sorted(bytes.fromhex(h) for h in cdhashes)
     identifier = uuid.uuid5(
         uuid.NAMESPACE_URL, 'com.brunostjohn.switch.tegra-gm20b-metal:' + ''.join(h.hex() for h in hashes)
@@ -72,7 +73,7 @@ def trust_module(cdhashes):
     return struct.pack('<I16sI', 2, identifier.bytes, len(hashes)) + b''.join(h + bytes([2, 0, 0, 0]) for h in hashes)
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser()
     for name in ('xcode-env', 'plugin', 'nvk', 'stack', 'bundle', 'trustcache', 'trust-json'):
         parser.add_argument('--' + name, required=True)

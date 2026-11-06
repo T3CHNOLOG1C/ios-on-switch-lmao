@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""xcode_run.py <xcode.env> [--cwd-map] [--env NAME=VALUE ...] -- <tool> [args...]
+"""Run an Xcode tool from the pinned Xcode.
+
+usage: xcode_run.py <xcode.env> [--cwd-map] [--env NAME=VALUE ...] -- <tool> [args...]
 
 Runs an Xcode tool (`clang`, `clang++`, `strip`, `dsymutil`, `codesign`, ...) from the pinned Xcode named by
-@xcode//:xcode.env, with DEVELOPER_DIR set, `@IPHONEOS_SDK@`/`@MACOSX_SDK@`/`@PWD@`/`@FILE:<path>@` replaced in the arguments, and
-ZERO_AR_DATE=1 (no object/archive timestamps in a link). A bare tool name is looked up in the Xcode toolchain, then
-/usr/bin (codesign lives there).
+@xcode//:xcode.env, with DEVELOPER_DIR set, `@IPHONEOS_SDK@`/`@MACOSX_SDK@`/`@PWD@`/`@FILE:<path>@` replaced in the
+arguments, and ZERO_AR_DATE=1 (no object/archive timestamps in a link). A bare tool name is looked up in the Xcode
+toolchain, then /usr/bin (codesign lives there).
 """
 
 import os
@@ -13,7 +15,7 @@ import sys
 from pathlib import Path
 
 
-def main():
+def main() -> None:
     argv = sys.argv[1:]
     split = argv.index('--')
     options, command = argv[:split], argv[split + 1 :]

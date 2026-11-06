@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-"""Run every metallib of the corpus through m2v-corpus (host NVK over the mock GM20B), one process per library, resuming after a
-crash or a hang at the next function. Writes <out>/<tag>.tsv (rows) and <out>/<tag>.log (stderr tail per crash).
+"""Run every metallib of the corpus through m2v-corpus (host NVK over the mock GM20B), one process per library.
+
+A crash or a hang resumes at the next function. Writes <out>/<tag>.tsv (rows) and <out>/<tag>.log (stderr tail per
+crash).
 
 usage: run_corpus.py <corpus.tsv> <out dir> [--jobs N] [--only substr] [--timeout s]
 corpus.tsv: tag<TAB>path per line (tools/make_corpus.py).
-Environment: RUNNER (corpus/runner's m2v-corpus: bazel build of its BUILD.bazel's :m2v-corpus), NVK (a host build of libvulkan_nouveau.dylib: scratchpad/gpu/userland/build-host,
-or build-host-rel for the iOS build's release NAK), MOCK (hostsim's libmock_iokit.dylib), RUNNER_ARGS (--draw: also draw each
-render pipeline three times in one pass).
+Environment: RUNNER (corpus/runner's m2v-corpus: bazel build of its BUILD.bazel's :m2v-corpus), NVK (a host build of
+libvulkan_nouveau.dylib: scratchpad/gpu/userland/build-host, or build-host-rel for the iOS build's release NAK), MOCK
+(hostsim's libmock_iokit.dylib), RUNNER_ARGS (--draw: also draw each render pipeline three times in one pass).
 """
 
 import concurrent.futures as cf
@@ -24,11 +26,11 @@ NVK = Path(os.environ.get('NVK', S / 'gpu/userland/build-host/src/nouveau/vulkan
 MOCK = Path(os.environ.get('MOCK', S / 'gpu/hostsim/libmock_iokit.dylib'))
 
 
-def opt(name, default):
+def opt(name: str, default: str | None) -> str | None:
     return sys.argv[sys.argv.index(name) + 1] if name in sys.argv else default
 
 
-def run_one(tag, path, out, timeout):
+def run_one(tag: str, path: str, out: Path, timeout: int) -> tuple[str, int]:
     safe = tag.replace('/', '_')
     rows, log = out / (safe + '.tsv'), out / (safe + '.log')
     cache = out / 'cache' / safe
@@ -87,7 +89,7 @@ def run_one(tag, path, out, timeout):
     return tag, crashes
 
 
-def main():
+def main() -> None:
     corpus, out = Path(sys.argv[1]), Path(sys.argv[2])
     out.mkdir(parents=True, exist_ok=True)
     jobs, only, timeout = int(opt('--jobs', '6')), opt('--only', None), int(opt('--timeout', '900'))

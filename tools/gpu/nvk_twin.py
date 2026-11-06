@@ -7,8 +7,8 @@ import sys
 from pathlib import Path
 
 
-def lc_uuid(path, value=None):
-    """The LC_UUID of the thin 64-bit Mach-O at `path`, after setting it to `value` (16 bytes) when given."""
+def lc_uuid(path: str | Path, value: bytes | None = None) -> bytes:
+    """Return the LC_UUID of the thin 64-bit Mach-O at `path`, after setting it to `value` (16 bytes) when given."""
     data = bytearray(Path(path).read_bytes())
     magic, _, _, _, ncmds = struct.unpack_from('<5I', data)
     at = 32
@@ -23,10 +23,11 @@ def lc_uuid(path, value=None):
     sys.exit('%s: no LC_UUID' % path)
 
 
-def make_twin(nvk, twin, out, env):
-    """Copy the host twin to `out`, ad hoc signed. The two dylibs' .source files must be equal (the same Mesa tree and
-    -Dnvk-build-id); without a build id NVK hashes its own LC_UUID into the pipeline cache UUID, so the twin takes the
-    iOS dylib's.
+def make_twin(nvk: str, twin: str, out: str, env: dict[str, str]) -> None:
+    """Copy the host twin to `out`, ad hoc signed.
+
+    The two dylibs' .source files must be equal (the same Mesa tree and -Dnvk-build-id); without a build id NVK hashes
+    its own LC_UUID into the pipeline cache UUID, so the twin takes the iOS dylib's.
     """
     sources = [Path(str(p) + '.source') for p in (nvk, twin)]
     if not all(p.is_file() for p in sources) or sources[0].read_text() != sources[1].read_text():

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""The raw GM20B path's pipeline pack (drivers/TegraGM20BMetal/raw/pack/rawpack.py) as the old build made it beside the
-seed, in two actions (gpu/seed/defs.bzl: seed_tools builds, seed_raw_pack runs):
+"""Make the raw GM20B path's pipeline pack (drivers/TegraGM20BMetal/raw/pack/rawpack.py) beside the seed.
+
+As the old build made it, in two actions (gpu/seed/defs.bzl: seed_tools builds, seed_raw_pack runs):
 
     rawpack.py build --xcode-env F --host-bridge <darwin bridge .a> --generator <raw/pack/rawpack.py> --tree <tree>
                      --out <dir>
@@ -24,7 +25,7 @@ import sys
 from pathlib import Path
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     steps = parser.add_subparsers(dest='step', required=True)
     for step, names in (

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The shader seed's host tools (//gpu/seed:local_tools, gpu/seed/defs.bzl seed_tools), one action per step:
+"""Make the shader seed's host tools (//gpu/seed:local_tools, gpu/seed/defs.bzl seed_tools), one action per step.
 
     seed.py mock --xcode-env F --abi-header TegraGM20BABI.h --mock-iokit mock_iokit.c --out libmock_iokit.dylib
     seed.py tool --xcode-env F --metal-header NativeBridgeMetalFrontend.h --precompile precompile.mm
@@ -33,7 +33,7 @@ from tools.gpu.nvk_twin import lc_uuid, make_twin
 ARCHES = {0x0100000C: 'arm64', 0x01000007: 'x86_64'}
 
 
-def _xcode_env(path, work):
+def _xcode_env(path: str, work: Path) -> dict[str, str]:
     xcode = dict(line.split('=', 1) for line in Path(path).read_text().splitlines() if '=' in line)
     (work / 'home').mkdir(parents=True, exist_ok=True)
     return {
@@ -45,14 +45,14 @@ def _xcode_env(path, work):
     }
 
 
-def _run(command, env):
+def _run(command: list[str | Path], env: dict[str, str]) -> str:
     result = subprocess.run([str(c) for c in command], env=env, capture_output=True, text=True)
     if result.returncode:
         sys.exit('FAILED: %s\n%s%s' % (' '.join(map(str, command))[:600], result.stdout[-4000:], result.stderr[-6000:]))
     return result.stdout + result.stderr
 
 
-def mock(args, root, work):
+def mock(args: argparse.Namespace, root: Path, work: Path) -> None:
     env = _xcode_env(args.xcode_env, work)
     _run(
         [
@@ -78,8 +78,11 @@ def mock(args, root, work):
     )
 
 
-def tool(args, root, work):
-    """The precompile tool, linked against the mock IOKit beside it (the tools directory puts the two side by side)."""
+def tool(args: argparse.Namespace, root: Path, work: Path) -> None:
+    """Build the precompile tool, linked against the mock IOKit beside it.
+
+    The tools directory puts the two side by side.
+    """
     env = _xcode_env(args.xcode_env, work)
     _run(
         [
@@ -118,7 +121,7 @@ def tool(args, root, work):
     )
 
 
-def twin(args, root, work):
+def twin(args: argparse.Namespace, root: Path, work: Path) -> None:
     # The twin with the device's pipeline cache identity (tools/gpu/nvk_twin.py).
     (work / 'home').mkdir()
     make_twin(
@@ -129,7 +132,7 @@ def twin(args, root, work):
     )
 
 
-def layout(args, root, work):
+def layout(args: argparse.Namespace, root: Path, work: Path) -> None:
     out = Path(args.out)
     shutil.rmtree(out, ignore_errors=True)
     (out / 'raw').mkdir(parents=True)
@@ -157,7 +160,7 @@ def layout(args, root, work):
     (out / 'MANIFEST.json').write_text(json.dumps(manifest, indent=1, sort_keys=True) + '\n')
 
 
-def archive(args, root, work):
+def archive(args: argparse.Namespace, root: Path, work: Path) -> None:
     tools = Path(args.tools)
     data = io.BytesIO()
     with tarfile.open(fileobj=data, mode='w', format=tarfile.USTAR_FORMAT) as tar:
@@ -179,7 +182,7 @@ STEPS = {
 }
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     steps = parser.add_subparsers(dest='step', required=True)
     for step, (_, names) in STEPS.items():

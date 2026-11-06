@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
-"""raw_stack.py --nvk <iOS NVK dylib> --drivers <tree/drivers> --m2v-root <third_party/m2v> --m2v <file>...
-               --raw <drivers/TegraGM20BMetal/raw> --out <file>
+"""Write the raw GM20B path's stack key (the old build script's raw_stack()).
 
-The raw GM20B path's stack key (the old build script's raw_stack()): a hash of what the raw pack's contents depend on,
-known before the plugin is compiled, which is compiled in (-DTEGRA_RAW_STACK) and stamped into the pack, so the device
-refuses a pack of another build. The NVK dylib (its context init, NAK's programs and register values), m2v (every source
-file of the crates the bridge links, by its path below the m2v tree, in path order; with the bridge sources: the binding
-rules), the frontend (the journal's state keys) and the raw runtime and pack generator (every .h/.c/.cpp/.mm/.py/.inc
-below raw/, in path order), the last three each by its file name and bytes. Writes the first 16 hex digits.
+usage: raw_stack.py --nvk <iOS NVK dylib> --drivers <tree/drivers> --m2v-root <third_party/m2v> --m2v <file>...
+                    --raw <drivers/TegraGM20BMetal/raw> --out <file>
+
+The stack key is a hash of what the raw pack's contents depend on, known before the plugin is compiled, which is
+compiled in (-DTEGRA_RAW_STACK) and stamped into the pack, so the device refuses a pack of another build. The NVK dylib
+(its context init, NAK's programs and register values), m2v (every source file of the crates the bridge links, by its
+path below the m2v tree, in path order; with the bridge sources: the binding rules), the frontend (the journal's state
+keys) and the raw runtime and pack generator (every .h/.c/.cpp/.mm/.py/.inc below raw/, in path order), the last three
+each by its file name and bytes. Writes the first 16 hex digits.
 """
 
 import argparse
@@ -17,7 +19,7 @@ from pathlib import Path
 SUFFIXES = ('.h', '.c', '.cpp', '.mm', '.py', '.inc')
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser()
     for name in ('nvk', 'drivers', 'm2v-root', 'raw', 'out'):
         parser.add_argument('--' + name, required=True)

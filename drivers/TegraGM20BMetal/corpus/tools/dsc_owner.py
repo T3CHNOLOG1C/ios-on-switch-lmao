@@ -18,7 +18,7 @@ for p in sorted(d.glob('dyld_shared_cache_arm64*')):
     subs.append((h, [struct.unpack_from('<3Q', h, moff + 32 * i) for i in range(mcount)]))
 
 
-def read(addr, n):
+def read(addr: int, n: int) -> bytes | None:
     for h, ms in subs:
         for a, sz, fo in ms:
             if a <= addr < a + sz:
