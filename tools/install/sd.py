@@ -26,7 +26,9 @@ import json
 import os
 import sys
 import time
+import uuid
 from pathlib import Path
+from typing import NoReturn
 
 if __package__ in (None, ''):
     sys.path.insert(0, str(Path(os.path.abspath(__file__)).parents[2]))
@@ -44,12 +46,12 @@ COPY_CHUNK = composer.COPY_CHUNK
 SEEK_HOLE, SEEK_DATA = getattr(os, 'SEEK_HOLE', 3), getattr(os, 'SEEK_DATA', 4)
 
 
-def default_log():
+def default_log() -> Path:
     stamp = time.strftime('%Y%m%d-%H%M%S')
     return Path.home() / f'Library/Logs/switch-ios-install/install-{stamp}.log'
 
 
-def resolve_inputs(args):
+def resolve_inputs(args: argparse.Namespace) -> None:
     """Runfiles paths (from `bazel run`) to absolute paths, so a sudo re-exec needs no Bazel environment."""
     try:
         from python.runfiles import runfiles
@@ -69,20 +71,20 @@ def resolve_inputs(args):
 
 
 class Installer:
-    def __init__(self, args, log):
+    def __init__(self, args: argparse.Namespace, log: host.Log):
         self.args, self.log = args, log
         self.spec = json.loads(Path(args.spec).read_text())
         self.pins = json.loads(Path(args.ipsw).read_text())
         self.want = {k: v['uuid'] for k, v in self.spec['volumes'].items()}
         self.card = None
 
-    def inspect(self):
+    def inspect(self) -> str:
         self.card = cards.resolve(self.args.disk)
         cards.read_table(self.card)
         cards.check_layout(self.card, self.spec, self.args.partition)
         return self.state()
 
-    def container_volumes(self):
+    def container_volumes(self) -> list[tuple[uuid.UUID, int, str]] | None:
         """[(uuid, role, name)] read from the target partition itself (works whether or not macOS attached it)."""
         fd = os.open(self.card.raw, os.O_RDONLY)
         try:
@@ -92,10 +94,10 @@ class Installer:
         finally:
             os.close(fd)
 
-    def ours(self, found):
+    def ours(self, found: list[tuple[uuid.UUID, int, str]] | None) -> bool:
         return composer.ours(self.spec, found)
 
-    def state(self):
+    def state(self) -> str:
         target, found = self.card.target, self.container_volumes()
         if self.args.reinstall_container:
             # Never write under a container macOS has attached: make it Linux-typed again first (macOS detaches it on
@@ -114,7 +116,7 @@ class Installer:
             return 'retype'  # written by an interrupted run, still Linux-typed
         return 'compose'
 
-    def plan(self, state):
+    def plan(self, state: str) -> list[str]:
         steps = {
             'detach': [
                 'retype the GPT entry back to Linux data so macOS lets go of the old container',
@@ -142,10 +144,10 @@ class Installer:
         }[state]
         return steps
 
-    def scratch_dir(self):
+    def scratch_dir(self) -> Path:
         return Path(self.args.scratch or (Path.home() / 'Library/Caches/switch-ios-install'))
 
-    def compose(self):
+    def compose(self) -> tuple[Path, int, int]:
         scratch = self.scratch_dir()
         scratch.mkdir(parents=True, exist_ok=True)
         image = scratch / 'compose.img'
@@ -153,7 +155,7 @@ class Installer:
         offset, os_bytes = composer.compose(image, self.args.os_dmg, self.card.target.bytes, self.spec, self.log)
         return image, offset, os_bytes
 
-    def write(self, image, part_offset, os_bytes):
+    def write(self, image: Path, part_offset: int, os_bytes: int) -> None:
         """The scratch partition's written regions onto the target partition. [0, os_bytes) is written whole (the
         OS container, checkpoint areas included, so nothing of an earlier container on the card survives there);
         beyond it only the extents the scratch file has data in (blocks the grown container wrote).
@@ -194,7 +196,7 @@ class Installer:
             os.close(dst)
         self.log(f'write: {written} bytes in {len(extents)} extents onto {self.card.slice(self.card.target)}')
 
-    def retype(self, kind=gpt.APFS, name='iOS'):
+    def retype(self, kind: uuid.UUID = gpt.APFS, name: str = 'iOS') -> None:
         fat = self.card.slice(self.card.fat)
         if host.mount_point(fat):
             host.run('diskutil', 'unmount', fat, log=self.log)
@@ -216,7 +218,7 @@ class Installer:
             f'retype: {self.card.target.describe()} -> {gpt.NAMES[kind]} {name!r} ({len(writes)} sectors rewritten)'
         )
 
-    def reprobe(self, expect_container=True):
+    def reprobe(self, expect_container: bool = True) -> bool:
         if self.card.image:
             image = self.card.image
             host.run('hdiutil', 'detach', self.card.disk, log=self.log)
@@ -243,7 +245,7 @@ class Installer:
         )
         return False
 
-    def populate(self):
+    def populate(self) -> None:
         vols = cards.volumes(self.card)
         missing = [k for k, u in self.want.items() if u not in vols]
         if missing:
@@ -265,7 +267,7 @@ class Installer:
             if self.args.boot_package:
                 cards.sync_overlay(data, self.args.boot_package, self.log)
 
-    def boot_entry(self):
+    def boot_entry(self) -> None:
         if not self.args.boot_package:
             self.log('boot entry: no boot package given; skipped')
             return
@@ -273,7 +275,7 @@ class Installer:
         with cards.mounted(fat, self.log) as root:
             cards.sync_boot_entry(root, self.args.boot_package, self.log)
 
-    def verify(self, snapshot, retyped):
+    def verify(self, snapshot: bytes, retyped: bool) -> None:
         self.inspect()
         after = cards.table_snapshot(self.card)
         if len(after) != len(snapshot):
@@ -310,7 +312,7 @@ class Installer:
             )
         )
 
-    def run(self):
+    def run(self) -> int:
         try:
             state = self.inspect()
         except host.HostError as error:
@@ -383,7 +385,7 @@ class Installer:
         return 0
 
 
-def confirm(args, card_disk):
+def confirm(args: argparse.Namespace, card_disk: str) -> None:
     if args.confirm:
         if args.confirm != card_disk:
             raise cards.Refused(f'--confirm={args.confirm} does not name the target {card_disk}')
@@ -396,7 +398,7 @@ def confirm(args, card_disk):
     args.confirm = card_disk
 
 
-def reexec_as_root(args, argv):
+def reexec_as_root(args: argparse.Namespace, argv: list[str]) -> NoReturn:
     """After confirmation: the same command under sudo, with absolute input paths and the confirmation."""
     command = ['sudo', '--', sys.executable, os.path.abspath(__file__)]
     passthrough = [a for a in argv if not a.startswith('--confirm')]
@@ -411,7 +413,7 @@ def reexec_as_root(args, argv):
     os.execvp('sudo', command)
 
 
-def main(argv=None):
+def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('disk', help="the card's whole disk, e.g. disk4 (see `diskutil list external`)")

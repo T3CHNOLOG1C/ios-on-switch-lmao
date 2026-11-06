@@ -21,7 +21,7 @@ class ExtentError(Exception):
     pass
 
 
-def data_ranges(fd, offset, size, block):
+def data_ranges(fd: int, offset: int, size: int, block: int) -> list[tuple[int, int]]:
     """[(start, end)] relative to `offset`: the file's data within [offset, offset + size), widened to blocks."""
     out = []
     position = 0
@@ -43,7 +43,7 @@ def data_ranges(fd, offset, size, block):
     return out
 
 
-def container(nxsb):
+def container(nxsb: bytes) -> tuple[int, int, uuid.UUID, list[tuple[int, int]]]:
     """(block size, block count, container UUID, [(start, end)] of the checkpoint areas) from block 0."""
     if nxsb[32:36] != NX_MAGIC:
         raise ExtentError('partition offset 0 is not an APFS container superblock')
@@ -58,7 +58,13 @@ def container(nxsb):
     return block, count, uuid.UUID(bytes=nxsb[72:88]), sorted(areas)
 
 
-def plan(data, required, size, block, limit=manifest.MAX_EXTENTS):
+def plan(
+    data: list[tuple[int, int]],
+    required: list[tuple[int, int]],
+    size: int,
+    block: int,
+    limit: int = manifest.MAX_EXTENTS,
+) -> list[tuple[int, int, int]]:
     """Extents [(offset, source offset or ZERO, bytes)]: every data range copied, the parts of `required` ranges
     that hold no data written as zeros. Close copy extents are joined (the gap copied as zeros) until there are at
     most `limit` extents.
@@ -99,7 +105,7 @@ def plan(data, required, size, block, limit=manifest.MAX_EXTENTS):
     return extents
 
 
-def _join(merged, gap):
+def _join(merged: list[tuple[int, int, bool]], gap: int) -> list[tuple[int, int, bool]]:
     out = []
     for start, end, copy in merged:
         if out and copy and out[-1][2] and start - out[-1][1] <= gap:

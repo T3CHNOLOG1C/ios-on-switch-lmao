@@ -17,7 +17,7 @@ class OverlayIndexError(ValueError):
     pass
 
 
-def check_path(path):
+def check_path(path: str) -> None:
     if (
         not path.startswith('/')
         or path.endswith('/')
@@ -29,7 +29,7 @@ def check_path(path):
         raise OverlayIndexError(f'{path!r} is not a path the overlay index takes')
 
 
-def encode(paths):
+def encode(paths: list[str]) -> bytes:
     encoded = sorted({p.encode() for p in paths})
     if len(encoded) != len(paths):
         raise OverlayIndexError('the overlay index lists a path twice')
@@ -44,7 +44,7 @@ def encode(paths):
     )
 
 
-def decode(raw):
+def decode(raw: bytes) -> list[str]:
     if len(raw) < HEADER.size:
         raise OverlayIndexError('short overlay index')
     magic, version, count, size = HEADER.unpack_from(raw)

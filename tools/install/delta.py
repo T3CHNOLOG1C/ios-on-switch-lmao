@@ -19,7 +19,7 @@ class DeltaError(host.HostError):
     pass
 
 
-def load(manifest):
+def load(manifest: Path) -> list[dict]:
     manifest = Path(manifest)
     entries = json.loads(manifest.read_text())['files']
     for e in entries:
@@ -29,13 +29,13 @@ def load(manifest):
     return entries
 
 
-def entries_under(entries, prefix):
+def entries_under(entries: list[dict], prefix: str) -> list[dict]:
     """The entries below `prefix` (e.g. /private/var), with paths relative to it: Data holds a copy of that tree."""
     prefix = prefix.rstrip('/') + '/'
     return [dict(e, path='/' + e['path'][len(prefix) :]) for e in entries if e['path'].startswith(prefix)]
 
 
-def apply(root, entries, log, what, consume=False):
+def apply(root: Path, entries: list[dict], log: host.Log, what: str, consume: bool = False) -> int:
     """Rewrite each entry's file below `root`. A file already holding sha256_out is left alone (a resumed run).
     `consume` deletes each replacement once written, so a delta and its volume never both hold the bytes.
     """

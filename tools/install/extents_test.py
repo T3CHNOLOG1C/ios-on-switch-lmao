@@ -12,7 +12,7 @@ BLOCK = 4096
 SIZE = 64 << 20
 
 
-def nxsb(desc_base, desc_blocks, data_base, data_blocks):
+def nxsb(desc_base: int, desc_blocks: int, data_base: int, data_blocks: int):
     block = bytearray(BLOCK)
     block[32:36] = b'NXSB'
     struct.pack_into('<IQ', block, 36, BLOCK, SIZE // BLOCK)
@@ -21,7 +21,7 @@ def nxsb(desc_base, desc_blocks, data_base, data_blocks):
     return bytes(block)
 
 
-def apply(plan, image_fd, target):
+def apply(plan: list[tuple[int, int, int]], image_fd: int, target: bytes):
     """What install-ios.bin does: copy extents from the concatenated sources, zero extents as zeros."""
     out = bytearray(target)
     for at, source, n in plan:
@@ -37,7 +37,7 @@ class ExtentsTest(unittest.TestCase):
         self.addCleanup(os.close, self.fd)
         os.ftruncate(self.fd, SIZE)
 
-    def write(self, at, data):
+    def write(self, at: int, data: bytes):
         os.pwrite(self.fd, data, at)
 
     def test_container_reads_checkpoint_areas(self):

@@ -12,7 +12,7 @@ import uuid
 from pathlib import Path
 
 
-def build(src, out):
+def build(src: str | Path, out: str | Path) -> list[tuple[uuid.UUID, int]]:
     src, out = Path(src), Path(out)
     if out.exists():
         shutil.rmtree(out)

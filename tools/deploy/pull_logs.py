@@ -62,16 +62,16 @@ WEBKIT_IDS = (
 BACKBOARDD_CACHE = 'm2v/System_6C7A65AF-CB18-421C-A07A-D724B05A7AB6_Library_Caches_m2v'
 
 
-def state_dir():
+def state_dir() -> Path:
     """Where the tools keep what is not the repository's: ~/Library/Application Support/switch-ios, or $SWITCH_HOME."""
     return Path(os.environ.get('SWITCH_HOME') or Path.home() / 'Library/Application Support/switch-ios')
 
 
-def workspace():
+def workspace() -> Path:
     return Path(os.environ.get('BUILD_WORKSPACE_DIRECTORY') or Path(os.path.abspath(__file__)).parents[2])
 
 
-def copytree(src, dst, log):
+def copytree(src: Path, dst: Path, log: host.Log) -> bool:
     if src.is_dir():
         shutil.copytree(src, dst, copy_function=shutil.copyfile, dirs_exist_ok=True)
         log.quiet('copied', src, '->', dst)
@@ -79,7 +79,7 @@ def copytree(src, dst, log):
     return False
 
 
-def report_body(text):
+def report_body(text: str) -> dict:
     """The JSON body of an .ips report (its first line is the header)."""
     return json.loads(text.split('\n', 1)[1])
 
@@ -93,7 +93,7 @@ PANIC_NAMES = (
 )
 
 
-def panic_process(panic_text):
+def panic_process(panic_text: str) -> str | None:
     """The process a panic names (lower case), or None."""
     for pattern in PANIC_NAMES:
         match = re.search(pattern, panic_text, re.MULTILINE)
@@ -102,13 +102,13 @@ def panic_process(panic_text):
     return None
 
 
-def thread_summary(report, process):
+def thread_summary(report: dict, process: str) -> list[str]:
     """The threads of every task whose name is `process` (case-insensitive) in a stackshot report: state, wait, frames
     as image+offset (S: the dyld shared cache, slid base in binaryImages; K/U: the kernel).
     """
     images = report.get('binaryImages', [])
 
-    def frame(entry):
+    def frame(entry: list[int]) -> str:
         index, offset = entry
         uuid, base, kind = images[index] if 0 <= index < len(images) else ('?', 0, '?')
         return f'{kind}:{uuid[:8]}+0x{offset:x}'
@@ -131,7 +131,7 @@ def thread_summary(report, process):
     return lines
 
 
-def decode_stackshot(shot, kcdata, log, what):
+def decode_stackshot(shot: Path, kcdata: str | Path | None, log: host.Log, what: str) -> Path | None:
     """<shot>.kcdata -> <stem>.stackshot.ips (kcdata.py -s); the .ips path, or None (logged)."""
     stem = shot.with_suffix('')
     if not kcdata or not Path(kcdata).is_file():
@@ -148,7 +148,7 @@ def decode_stackshot(shot, kcdata, log, what):
     return ips
 
 
-def decode_wakes(out, kcdata, log):
+def decode_wakes(out: Path, kcdata: str | Path | None, log: host.Log) -> None:
     """wake-*.kcdata (the wake guarantee's stackshots) -> .stackshot.ips and .threads.txt for SpringBoard and
     backboardd, the two that should have turned the panel on.
     """
@@ -170,7 +170,7 @@ def decode_wakes(out, kcdata, log):
             log('wake stackshot threads ->', summary)
 
 
-def decode_panics(out, kcdata, log):
+def decode_panics(out: Path, kcdata: str | Path | None, log: host.Log) -> None:
     """panic-*.kcdata -> .stackshot.ips (kcdata.py -s) and .threads.txt for the process its panic string names."""
     for shot in sorted(Path(out).glob('panic-*.kcdata')):
         stem = shot.with_suffix('')
@@ -194,7 +194,17 @@ def decode_panics(out, kcdata, log):
             log('hung process', process, '->', summary)
 
 
-def pull(data, out, log, logarchive=True, harvest=True, csstore=True, launchd=True, corpus=None, kcdata=None):
+def pull(
+    data: str | Path,
+    out: str | Path,
+    log: host.Log,
+    logarchive: bool = True,
+    harvest: bool = True,
+    csstore: bool = True,
+    launchd: bool = True,
+    corpus: str | None = None,
+    kcdata: str | Path | None = None,
+) -> Path:
     data, out = Path(data), Path(out)
     out.mkdir(parents=True, exist_ok=True)
     copytree(data / 'db/diagnostics', out / 'diagnostics', log)
@@ -273,7 +283,7 @@ def pull(data, out, log, logarchive=True, harvest=True, csstore=True, launchd=Tr
     return out
 
 
-def runfile(path):
+def runfile(path: str | None) -> str | None:
     """A runfiles path (bazel run) or a plain one, absolute; None stays None."""
     if path and not os.path.isabs(path):
         try:
@@ -285,7 +295,7 @@ def runfile(path):
     return os.path.abspath(path) if path else None
 
 
-def load_spec(path):
+def load_spec(path: str | None) -> dict:
     """//install:spec from a runfiles path (bazel run) or a plain path."""
     import json
 
@@ -301,7 +311,7 @@ def load_spec(path):
     return json.loads(Path(path).read_text())
 
 
-def data_volume(card, spec_data_uuid=DATA_UUID):
+def data_volume(card: cards.Card, spec_data_uuid: str = DATA_UUID) -> str | None:
     for container in host.apfs_containers():
         for volume in container.get('Volumes', []):
             if volume.get('APFSVolumeUUID', '').upper() == spec_data_uuid:
@@ -311,7 +321,7 @@ def data_volume(card, spec_data_uuid=DATA_UUID):
     return None
 
 
-def main(argv=None):
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('disk')
     parser.add_argument('--out')

@@ -33,7 +33,7 @@ Switch/portrait-native-*, Switch/panic-*.log.
 """
 
 
-def sha256(path):
+def sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with open(path, 'rb') as f:
         while chunk := f.read(1 << 20):
@@ -41,7 +41,7 @@ def sha256(path):
     return digest.hexdigest()
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     for name in ('spec', 'ipsw', 'boot-package', 'out'):
         parser.add_argument('--' + name, required=True)

@@ -5,7 +5,9 @@ import json
 import os
 import tempfile
 import unittest
+import uuid
 import zlib
+from collections.abc import Callable
 from pathlib import Path
 from unittest import mock
 
@@ -16,7 +18,7 @@ from tools.install import card as cards, gpt
 SPEC = {'partition_name': 'iOS'}
 
 
-def table(mutate=None):
+def table(mutate: Callable[[bytearray, bytearray], None] | None = None):
     layout = json.loads(Path(runfiles.Create().Rlocation('_main/install/testdata/switch-card-1tb.json')).read_text())
     sectors = {r['lba']: bytearray(base64.b64decode(r['base64'])) for r in layout['sectors']}
     disk_sectors = layout['disk_bytes'] // 512
@@ -46,30 +48,30 @@ def table(mutate=None):
     return card
 
 
-def retype(index, kind):
-    def mutate(entries, mbr):
+def retype(index: int, kind: uuid.UUID):
+    def mutate(entries: bytearray, mbr: bytearray) -> None:
         entries[index * 128 : index * 128 + 16] = kind.bytes_le
 
     return mutate
 
 
-def both(*mutations):
-    def mutate(entries, mbr):
+def both(*mutations: Callable[[bytearray, bytearray], None]):
+    def mutate(entries: bytearray, mbr: bytearray) -> None:
         for m in mutations:
             m(entries, mbr)
 
     return mutate
 
 
-def rename(index, name):
-    def mutate(entries, mbr):
+def rename(index: int, name: str):
+    def mutate(entries: bytearray, mbr: bytearray) -> None:
         entries[index * 128 + 56 : index * 128 + 128] = name.encode('utf-16-le').ljust(72, b'\0')
 
     return mutate
 
 
-def shrink(index, sectors):
-    def mutate(entries, mbr):
+def shrink(index: int, sectors: int):
+    def mutate(entries: bytearray, mbr: bytearray) -> None:
         last = int.from_bytes(entries[index * 128 + 40 : index * 128 + 48], 'little') - sectors
         entries[index * 128 + 40 : index * 128 + 48] = last.to_bytes(8, 'little')
 
@@ -120,14 +122,14 @@ class CardTest(unittest.TestCase):
             cards.check_layout(card, SPEC, partition='l4t')
 
     def test_refuses_without_hos_data(self):
-        def no_fat(entries, mbr):
+        def no_fat(entries: bytearray, mbr: bytearray) -> None:
             entries[0:16] = gpt.LINUX_DATA.bytes_le
 
         with self.assertRaisesRegex(cards.Refused, 'hos_data'):
             cards.check_layout(table(no_fat), SPEC)
 
     def test_refuses_without_hybrid_mbr(self):
-        def protective(entries, mbr):
+        def protective(entries: bytearray, mbr: bytearray) -> None:
             pass
 
         card = table(protective)
@@ -136,7 +138,7 @@ class CardTest(unittest.TestCase):
             cards.check_layout(card, SPEC)
 
     def test_refuses_emummc_or_unknown_target(self):
-        def unknown(entries, mbr):
+        def unknown(entries: bytearray, mbr: bytearray) -> None:
             entries[8 * 128 + 16 : 8 * 128 + 32] = bytes(15) + b'\1'
 
         with self.assertRaisesRegex(cards.Refused, 'expected one Linux'):

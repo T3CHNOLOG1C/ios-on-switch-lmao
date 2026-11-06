@@ -63,26 +63,26 @@ class Manifest:
     hashes: list = field(default_factory=list)
 
     @property
-    def source_bytes(self):
+    def source_bytes(self) -> int:
         return sum(p.bytes for p in self.parts)
 
     @property
-    def write_bytes(self):
+    def write_bytes(self) -> int:
         return sum(n for _, _, n in self.extents)
 
     @property
-    def copy_bytes(self):
+    def copy_bytes(self) -> int:
         return sum(n for _, s, n in self.extents if s != ZERO)
 
 
-def _ascii(text, size, what):
+def _ascii(text: str, size: int, what: str) -> bytes:
     raw = text.encode('ascii')
     if len(raw) >= size or b'\0' in raw:
         raise ManifestError(f'{what} {text!r} does not fit in {size - 1} bytes')
     return raw.ljust(size, b'\0')
 
 
-def check(m):
+def check(m: Manifest) -> None:
     """The decoder's rules, so the Mac never writes a manifest the installer refuses."""
     block = m.block_size
     if block < 4096 or block > 65536 or block & (block - 1):
@@ -112,7 +112,7 @@ def check(m):
         raise ManifestError(f'copy extents cover {source_end} source bytes of {m.source_bytes}')
 
 
-def encode(m):
+def encode(m: Manifest) -> bytes:
     check(m)
     body = b''.join(PART.pack(_ascii(p.path, 200, 'path'), p.bytes, bytes(48)) for p in m.parts)
     body += b''.join(EXTENT.pack(*e) for e in m.extents)
@@ -137,7 +137,7 @@ def encode(m):
     return bytes(header) + body
 
 
-def decode(raw):
+def decode(raw: bytes) -> Manifest:
     if len(raw) < HEADER.size:
         raise ManifestError('short manifest')
     (
@@ -178,7 +178,7 @@ def decode(raw):
     return m
 
 
-def split(extents, limit=PART_LIMIT):
+def split(extents: list[tuple[int, int, int]], limit: int = PART_LIMIT) -> list[int]:
     """Part sizes for the copy extents' bytes: as few files as FAT32 allows."""
     total = sum(n for _, s, n in extents if s != ZERO)
     sizes = [limit] * (total // limit)

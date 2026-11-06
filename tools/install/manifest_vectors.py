@@ -26,7 +26,7 @@ EXTENTS = [(0, 0, 4 * MIB), (5 * MIB, manifest.ZERO, 64 << 10), (8 * MIB, 4 * MI
 PARTS = [8 * MIB, 12 * 1024]
 
 
-def superblock():
+def superblock() -> bytes:
     block = bytearray(BLOCK)
     block[32:36] = b'NXSB'
     struct.pack_into('<IQ', block, 36, BLOCK, PARTITION // BLOCK)
@@ -34,7 +34,7 @@ def superblock():
     return apfs.with_checksum(bytes(block))
 
 
-def source():
+def source() -> bytes:
     data = bytearray(sum(PARTS))
     for at in range(0, len(data), 4):
         struct.pack_into('<I', data, at, at * 2654435761 & 0xFFFFFFFF)
@@ -42,7 +42,7 @@ def source():
     return bytes(data)
 
 
-def main():
+def main() -> None:
     out_manifest, out_source, out_expected = sys.argv[1:4]
     data = source()
     hashes = [

@@ -29,7 +29,7 @@ KEPT = ('{role}.trustcache', '{role}.cdhash-pairs', 'a64x-cache-pretranslated.bi
 
 
 class Roles:
-    def __init__(self, roles, scratch, log):
+    def __init__(self, roles: dict[str, dict], scratch: Path, log: host.Log):
         """`roles`: {role: {"driver": path, "tool": path, "trustcaches": [path]}}."""
         unknown = set(roles) - set(ORDER)
         if unknown:
@@ -37,13 +37,13 @@ class Roles:
         self.roles, self.scratch, self.log = roles, Path(scratch), log
         self.kept = self.scratch / 'pretranslated'
 
-    def __contains__(self, role):
+    def __contains__(self, role: str) -> bool:
         return role in self.roles
 
-    def out(self, role):
+    def out(self, role: str) -> Path:
         return self.scratch / ('delta-' + role)
 
-    def run(self, role, volume):
+    def run(self, role: str, volume: Path) -> list[dict]:
         """The role's delta for the volume mounted at `volume`; its entries are ready for delta.apply."""
         if role == 'system_cryptex':
             missing = [r for r in ('os', 'app_cryptex') if r in self.roles and not self._pairs(r).is_file()]
@@ -69,25 +69,25 @@ class Roles:
         self.log(f'{role}: {len(entries)} files to translate')
         return entries
 
-    def _pairs(self, role):
+    def _pairs(self, role: str) -> Path:
         return self.kept / f'{role}.cdhash-pairs'
 
-    def _keep(self, role):
+    def _keep(self, role: str) -> None:
         self.kept.mkdir(parents=True, exist_ok=True)
         for name in KEPT:
             path = self.out(role) / name.format(role=role)
             if path.is_file():
                 shutil.copyfile(path, self.kept / path.name)
 
-    def done(self, role):
+    def done(self, role: str) -> None:
         """The role's delta is applied: its replacement files go (the kept files stay for the boot package)."""
         if self.out(role).exists():
             shutil.rmtree(self.out(role))
 
-    def artifacts(self):
+    def artifacts(self) -> list[Path]:
         return sorted(self.kept.iterdir()) if self.kept.is_dir() else []
 
-    def check_pins(self, pins):
+    def check_pins(self, pins: dict[str, str]) -> None:
         """The kept files against the ones the boot package was built with ({name: sha256}): a translation that made
         other trust modules or another cache list would not run on the kernel.
         """
@@ -101,7 +101,7 @@ class Roles:
             )
         self.log(f'pretranslate: {len(pins)} files match the pins')
 
-    def overlay_system(self, data, system, entries, owners):
+    def overlay_system(self, data: Path, system: Path, entries: list[dict], owners: bool) -> dict:
         """The System volume's translated files onto Data (OVERLAY), each with its System file's owner, mode and
         flags, then their manifest and the kernel's index made from it; the manifest is also kept for the boot
         package. Returns the manifest.

@@ -31,7 +31,7 @@ class ApfsError(Exception):
     pass
 
 
-def fletcher64(block):
+def fletcher64(block: bytes) -> int:
     """APFS object checksum of `block` (the first 8 bytes, the stored checksum, are excluded)."""
     words = struct.unpack_from(f'<{(len(block) - 8) // 4}I', block, 8)
     sum1 = sum2 = 0
@@ -43,17 +43,17 @@ def fletcher64(block):
     return (c2 << 32) | c1
 
 
-def checksum_ok(block):
+def checksum_ok(block: bytes) -> bool:
     return struct.unpack_from('<Q', block, 0)[0] == fletcher64(block)
 
 
-def with_checksum(block):
+def with_checksum(block: bytes) -> bytes:
     out = bytearray(block)
     struct.pack_into('<Q', out, 0, fletcher64(bytes(out)))
     return bytes(out)
 
 
-def object_header(block):
+def object_header(block: bytes) -> tuple[int, int, int, int]:
     oid, xid, kind, subtype = struct.unpack_from('<QQII', block, 8)
     return oid, xid, kind & 0xFFFF, subtype
 
@@ -61,7 +61,7 @@ def object_header(block):
 class Container:
     """An APFS container on a file or device (fd), starting at byte `base` (the partition's start)."""
 
-    def __init__(self, fd, base=0):
+    def __init__(self, fd: int, base: int = 0):
         self.fd, self.base = fd, base
         block0 = os.pread(fd, 4096, base)
         if block0[32:36] != NX_MAGIC:
@@ -71,17 +71,17 @@ class Container:
             block0 = os.pread(fd, self.block_size, base)
         self.block0 = block0
 
-    def read(self, paddr):
+    def read(self, paddr: int) -> bytes:
         data = os.pread(self.fd, self.block_size, self.base + paddr * self.block_size)
         if len(data) != self.block_size:
             raise ApfsError(f'short read of block {paddr}')
         return data
 
-    def write(self, paddr, data):
+    def write(self, paddr: int, data: bytes) -> None:
         if len(data) != self.block_size or os.pwrite(self.fd, data, self.base + paddr * self.block_size) != len(data):
             raise ApfsError(f'write of block {paddr} failed')
 
-    def superblocks(self):
+    def superblocks(self) -> list[bytes]:
         """Every valid container superblock in the checkpoint descriptor area, newest first, plus block 0."""
         desc_blocks, _ = struct.unpack_from('<II', self.block0, 104)
         desc_base = struct.unpack_from('<Q', self.block0, 112)[0]
@@ -99,15 +99,15 @@ class Container:
         return [found[xid] for xid in sorted(found, reverse=True)]
 
     @staticmethod
-    def uuid_of(nxsb):
+    def uuid_of(nxsb: bytes) -> uuid.UUID:
         return uuid.UUID(bytes=nxsb[72:88])
 
     @staticmethod
-    def fs_oids(nxsb):
+    def fs_oids(nxsb: bytes) -> list[int]:
         max_fs = struct.unpack_from('<I', nxsb, 180)[0]
         return [oid for oid in struct.unpack_from(f'<{min(max_fs, 100)}Q', nxsb, 184) if oid]
 
-    def omap_entries(self, omap_paddr):
+    def omap_entries(self, omap_paddr: int) -> dict[tuple[int, int], int]:
         """{(oid, xid): paddr} of the object map at physical address omap_paddr."""
         omap = self.read(omap_paddr)
         if object_header(omap)[2] != OBJECT_TYPE_OMAP or not checksum_ok(omap):
@@ -117,7 +117,7 @@ class Container:
         self._walk(tree, entries, depth=0)
         return entries
 
-    def _walk(self, paddr, entries, depth):
+    def _walk(self, paddr: int, entries: dict[tuple[int, int], int], depth: int) -> None:
         if depth > 16:
             raise ApfsError('object map tree too deep')
         node = self.read(paddr)
@@ -140,7 +140,7 @@ class Container:
                 child = struct.unpack_from('<Q', node, value_end - v)[0]
                 self._walk(child, entries, depth + 1)
 
-    def volume_blocks(self):
+    def volume_blocks(self) -> dict[int, bytes]:
         """{paddr: block} of every volume superblock any checkpoint's object map points at."""
         blocks = {}
         for nxsb in self.superblocks():
@@ -154,7 +154,7 @@ class Container:
                             blocks[paddr] = block
         return blocks
 
-    def volumes(self):
+    def volumes(self) -> list[tuple[uuid.UUID, int, str]]:
         """[(uuid, role, name)] of the newest checkpoint's volumes."""
         newest = self.superblocks()[0]
         entries = self.omap_entries(struct.unpack_from('<Q', newest, 160)[0])
@@ -173,7 +173,9 @@ class Container:
             )
         return out
 
-    def set_volume_uuids(self, mapping, dry_run=False):
+    def set_volume_uuids(
+        self, mapping: dict[uuid.UUID, uuid.UUID], dry_run: bool = False
+    ) -> list[tuple[int, uuid.UUID, uuid.UUID]]:
         """Mapping {old uuid: new uuid}: rewrites every superblock copy of those volumes. Returns the patched paddrs."""
         patched = []
         new_values = set(mapping.values())

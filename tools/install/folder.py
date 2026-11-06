@@ -11,6 +11,7 @@ card is read or written.
 
 import os
 import shutil
+from collections.abc import Iterable
 from pathlib import Path
 
 from tools.install import card as cards, host, renamed
@@ -22,7 +23,7 @@ USER_FILES = {'bootargs.txt'}
 PATHS = (cards.BOOT_ENTRY + '/', cards.INI, cards.ICON, 'bootloader/payloads/install-ios.bin')
 
 
-def prepare(out):
+def prepare(out: str | Path) -> Path:
     """An empty `out`, or one an earlier run made (its old contents go). Refuses any other directory."""
     out = Path(out)
     if out.exists():
@@ -34,11 +35,11 @@ def prepare(out):
     return out
 
 
-def _allowed(relative):
+def _allowed(relative: str) -> bool:
     return any(relative == p or (p.endswith('/') and relative.startswith(p)) for p in PATHS)
 
 
-def add(out, relative, source):
+def add(out: Path, relative: str, source: str | Path) -> None:
     if not _allowed(relative):
         raise host.HostError(f'{relative} is not a path the folder may hold')
     target = Path(out) / relative
@@ -47,7 +48,7 @@ def add(out, relative, source):
     target.chmod(0o644)
 
 
-def add_boot_package(out, package):
+def add_boot_package(out: Path, package: str | Path) -> None:
     package = Path(package)
     for top in ('switchroot', 'bootloader'):
         for path in sorted((package / top).rglob('*')):
@@ -55,14 +56,14 @@ def add_boot_package(out, package):
                 add(out, path.relative_to(package).as_posix(), path)
 
 
-def files(out):
+def files(out: Path) -> list[str]:
     """What of the folder goes onto the card: the paths it may hold, never what is kept beside them for the Mac."""
     out = Path(out)
     found = (p.relative_to(out).as_posix() for p in out.rglob('*') if p.is_file() and not p.name.startswith('._'))
     return sorted(relative for relative in found if _allowed(relative))
 
 
-def needed_bytes(out, fat_root):
+def needed_bytes(out: Path, fat_root: Path) -> int:
     total = 0
     for relative in files(out):
         target = Path(fat_root) / relative
@@ -71,7 +72,7 @@ def needed_bytes(out, fat_root):
     return total
 
 
-def merge(out, fat_root, log, keep=()):
+def merge(out: Path, fat_root: Path, log: host.Log, keep: Iterable[str] = ()) -> tuple[list[str], list[str]]:
     """Copy the folder onto a mounted FAT. Unchanged files (same size and sha256) are skipped; `keep` names files
     already on the card that belong to it.
     """

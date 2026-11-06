@@ -57,7 +57,7 @@ STALE_LOGGING_PROFILES = ('preferences/Logging/Subsystems/com.apple.SystemConfig
 AWDL_FLAG = 'Switch/awdl-enable'
 
 
-def remove_stale_logging_profiles(data_root, log):
+def remove_stale_logging_profiles(data_root: Path, log: host.Log) -> None:
     for name in STALE_LOGGING_PROFILES:
         path = Path(data_root) / name
         if path.is_file():
@@ -65,7 +65,7 @@ def remove_stale_logging_profiles(data_root, log):
             log('removed stale logging profile', name)
 
 
-def set_awdl(data_root, on, log):
+def set_awdl(data_root: Path, on: bool, log: host.Log) -> None:
     flag = Path(data_root) / AWDL_FLAG
     if on:
         flag.parent.mkdir(exist_ok=True)
@@ -75,7 +75,7 @@ def set_awdl(data_root, on, log):
     log('awdl: {} ({})'.format('on' if flag.exists() else 'off', AWDL_FLAG))
 
 
-def located(path):
+def located(path: str | None) -> str | None:
     if path and not os.path.isabs(path):
         try:
             from python.runfiles import runfiles
@@ -86,7 +86,7 @@ def located(path):
     return os.path.abspath(path) if path else None
 
 
-def launchd_check(data, labels, log):
+def launchd_check(data: Path, labels: list[str], log: host.Log) -> bool:
     path = Path(data) / 'db/com.apple.xpc.launchd/disabled.plist'
     entries = plistlib.loads(path.read_bytes()) if path.exists() else {}
     disabled = sorted(k for k, v in entries.items() if v is True or (isinstance(v, dict) and v.get('Disabled') is True))
@@ -99,7 +99,7 @@ def launchd_check(data, labels, log):
     return not missing
 
 
-def main(argv=None):
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('disk')
     parser.add_argument('--yes', action='store_true')

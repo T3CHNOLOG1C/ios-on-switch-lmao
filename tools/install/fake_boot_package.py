@@ -17,7 +17,7 @@ INI = (
 )
 
 
-def gpu_bundle(out):
+def gpu_bundle(out: Path) -> None:
     """//gpu:bundle's layout with dummy files (deploy --stage-gpu tests)."""
     bundle = out / 'ngpu/addons/TegraGM20BMetal.bundle'
     bundle.mkdir(parents=True)
@@ -29,7 +29,7 @@ def gpu_bundle(out):
     (out / 'TegraGM20BMetal.trustcache').write_bytes(bytes(24))
 
 
-def main():
+def main() -> None:
     out = Path(sys.argv[1])
     if '--gpu' in sys.argv:
         gpu_bundle(out)

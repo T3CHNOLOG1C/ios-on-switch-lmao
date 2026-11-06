@@ -38,14 +38,14 @@ class Entry:
     name: str
 
     @property
-    def sectors(self):
+    def sectors(self) -> int:
         return self.last - self.first + 1
 
     @property
-    def bytes(self):
+    def bytes(self) -> int:
         return self.sectors * SECTOR
 
-    def describe(self):
+    def describe(self) -> str:
         return f'#{self.index} {self.name!r} {NAMES.get(self.type, str(self.type))} {str(self.guid).upper()} LBA {self.first}-{self.last} ({self.bytes} bytes)'
 
 
@@ -74,26 +74,26 @@ class Table:
     disk_guid: uuid.UUID = None
 
     @property
-    def used(self):
+    def used(self) -> list[Entry]:
         return [e for e in self.entries if e.type != UNUSED]
 
     @property
-    def entry_sectors(self):
+    def entry_sectors(self) -> int:
         return (self.entry_count * self.entry_size + SECTOR - 1) // SECTOR
 
-    def hybrid(self):
+    def hybrid(self) -> bool:
         """True when LBA 0 has real partitions besides the protective 0xEE one."""
         return any(p.kind not in (0, 0xEE) for p in self.mbr_partitions)
 
 
-def _pread(fd, lba, sectors):
+def _pread(fd: int, lba: int, sectors: int) -> bytes:
     data = os.pread(fd, sectors * SECTOR, lba * SECTOR)
     if len(data) != sectors * SECTOR:
         raise GptError(f'short read at LBA {lba}')
     return data
 
 
-def _parse_header(raw, lba):
+def _parse_header(raw: bytes, lba: int) -> dict[str, int | uuid.UUID]:
     (
         signature,
         revision,
@@ -135,7 +135,7 @@ def _parse_header(raw, lba):
     )
 
 
-def parse_entries(raw, count, size):
+def parse_entries(raw: bytes, count: int, size: int) -> list[Entry]:
     entries = []
     for i in range(count):
         e = raw[i * size : (i + 1) * size]
@@ -154,7 +154,7 @@ def parse_entries(raw, count, size):
     return entries
 
 
-def read(fd, disk_bytes):
+def read(fd: int, disk_bytes: int) -> Table:
     """The disk's partition table; both GPT copies must be present, valid and identical."""
     if disk_bytes % SECTOR:
         raise GptError(f'disk size {disk_bytes} is not a multiple of 512')
@@ -206,14 +206,14 @@ def read(fd, disk_bytes):
     return table
 
 
-def _encode_name(name):
+def _encode_name(name: str) -> bytes:
     encoded = name.encode('utf-16-le')
     if len(encoded) > 72:
         raise GptError(f'partition name {name!r} is longer than 36 UTF-16 units')
     return encoded.ljust(72, b'\0')
 
 
-def _rewrite_header(raw, entries_crc):
+def _rewrite_header(raw: bytes, entries_crc: int) -> bytes:
     size = struct.unpack_from('<I', raw, 12)[0]
     out = bytearray(raw)
     struct.pack_into('<I', out, 88, entries_crc)
@@ -222,7 +222,7 @@ def _rewrite_header(raw, entries_crc):
     return bytes(out)
 
 
-def edit(table, index, type_guid, name):
+def edit(table: Table, index: int, type_guid: uuid.UUID, name: str) -> list[tuple[int, bytes]]:
     """The sector writes that give entry `index` a new type GUID and name: [(lba, bytes)], primary and backup.
     Only that entry's 16 type bytes and 72 name bytes change, plus the two headers' CRCs.
     """
@@ -248,7 +248,11 @@ def edit(table, index, type_guid, name):
     return writes
 
 
-def build(disk_sectors, partitions, disk_guid=None):
+def build(
+    disk_sectors: int,
+    partitions: list[tuple[uuid.UUID, uuid.UUID, int, int, str]],
+    disk_guid: uuid.UUID | None = None,
+) -> list[tuple[int, bytes]]:
     """A fresh GPT with a protective MBR for a scratch image: partitions [(type, guid, first, last, name)].
     Returns [(lba, bytes)] covering LBA 0-33 and the backup's last 33 sectors.
     """
@@ -264,7 +268,7 @@ def build(disk_sectors, partitions, disk_guid=None):
     crc = zlib.crc32(raw)
     disk_guid = disk_guid or uuid.uuid4()
 
-    def header(current, backup, entries_lba):
+    def header(current: int, backup: int, entries_lba: int) -> bytes:
         out = bytearray(SECTOR)
         _HEADER.pack_into(
             out,
@@ -298,7 +302,7 @@ def build(disk_sectors, partitions, disk_guid=None):
     return writes
 
 
-def apply(fd, writes):
+def apply(fd: int, writes: list[tuple[int, bytes]]) -> None:
     for lba, data in writes:
         if len(data) != SECTOR or lba == 0:
             raise GptError(f'refusing a write to LBA {lba} ({len(data)} bytes)')

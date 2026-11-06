@@ -19,6 +19,7 @@ import hashlib
 import os
 import shutil
 import tempfile
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -48,14 +49,14 @@ class Card:
     fat: gpt.Entry = None
 
     @property
-    def raw(self):
+    def raw(self) -> str:
         return '/dev/r' + self.disk
 
-    def slice(self, entry):
+    def slice(self, entry: gpt.Entry) -> str:
         return f'{self.disk}s{entry.index + 1}'
 
 
-def resolve(argument):
+def resolve(argument: str) -> Card:
     """The whole disk named by `argument`, after the host-level guards (no raw access needed)."""
     name = argument.removeprefix('/dev/')
     name = name.removeprefix('r')
@@ -82,7 +83,7 @@ def resolve(argument):
     return Card(name, info, int(info['TotalSize']), image)
 
 
-def read_table(card):
+def read_table(card: Card) -> gpt.Table:
     try:
         fd = os.open(card.raw, os.O_RDONLY)
     except PermissionError:
@@ -96,14 +97,14 @@ def read_table(card):
     return card.table
 
 
-def _select(card, entries, spec, partition):
+def _select(card: Card, entries: list[targets.Candidate], spec: dict, partition: str | None) -> targets.Candidate:
     try:
         return targets.select(entries, spec.get('partition_name', 'iOS'), partition)
     except targets.TargetError as error:
         raise Refused(f'{card.disk}: {error}') from None
 
 
-def check_layout(card, spec, partition=None):
+def check_layout(card: Card, spec: dict, partition: str | None = None) -> gpt.Entry:
     """Find hos_data and the target, or refuse."""
     table = card.table
     entries = table.used
@@ -144,7 +145,7 @@ class Part:
     filesystem: str
 
 
-def diskutil_partitions(card):
+def diskutil_partitions(card: Card) -> list[Part]:
     out = []
     for item in host.partitions(card.disk):
         ident = item['DeviceIdentifier']
@@ -163,7 +164,7 @@ def diskutil_partitions(card):
     return out
 
 
-def check_layout_unprivileged(card, spec, partition=None):
+def check_layout_unprivileged(card: Card, spec: dict, partition: str | None = None) -> tuple[Part, Part]:
     """The same guards as check_layout, from diskutil's view (deploy, image sizing, dry runs without root). Returns
     (fat partition, target partition).
     """
@@ -182,7 +183,7 @@ def check_layout_unprivileged(card, spec, partition=None):
     return parts[0], next(p for p in eligible if p.index == chosen.index)
 
 
-def table_snapshot(card):
+def table_snapshot(card: Card) -> bytes:
     """The bytes of every partition-table sector (MBR, both headers and arrays) for before/after checks."""
     fd = os.open(card.raw, os.O_RDONLY)
     try:
@@ -198,7 +199,7 @@ def table_snapshot(card):
     return b''.join(parts)
 
 
-def volumes(card):
+def volumes(card: Card) -> dict[str, dict]:
     """{uuid: {DeviceIdentifier, Roles, Name, ...}} of the APFS container on the target, {} when none is attached."""
     container = host.container_on(card.slice(card.target))
     if not container:
@@ -207,7 +208,7 @@ def volumes(card):
 
 
 @contextlib.contextmanager
-def mounted(identifier, log, read_only=False, owners=False):
+def mounted(identifier: str, log: host.Log, read_only: bool = False, owners: bool = False) -> Iterator[Path]:
     """Mount a volume at a private mount point (nobrowse), or reuse where it already is; unmount what we mounted."""
     current = host.mount_point(identifier)
     if current:
@@ -231,7 +232,7 @@ def mounted(identifier, log, read_only=False, owners=False):
             host.run('diskutil', 'unmount', identifier, log=log, check=False)
 
 
-def sha256_file(path):
+def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with open(path, 'rb') as f:
         while chunk := f.read(HASH_CHUNK):
@@ -239,7 +240,7 @@ def sha256_file(path):
     return digest.hexdigest()
 
 
-def boot_entry_files(package):
+def boot_entry_files(package: str | Path) -> dict[str, Path]:
     """{relative path on the FAT: source} of the boot package: switchroot/ios/*, the hekate ini and its icon."""
     package = Path(package)
     files = {}
@@ -258,7 +259,9 @@ def boot_entry_files(package):
     return files
 
 
-def sync_boot_entry(fat_root, package, log, dry_run=False):
+def sync_boot_entry(
+    fat_root: Path, package: str | Path, log: host.Log, dry_run: bool = False
+) -> tuple[list[str], list[str]]:
     """Make switchroot/ios/ and bootloader/ini/ios.ini on the FAT equal the package, apart from the user's own files
     (USER_FILES), and remove a copy of the entry under the project's former names (one boot entry, replaced in place);
     nothing else.
@@ -314,7 +317,7 @@ def sync_boot_entry(fat_root, package, log, dry_run=False):
     return changed, removed
 
 
-def tree_digest(root):
+def tree_digest(root: Path) -> str | None:
     root = Path(root)
     digest = hashlib.sha256()
     if not root.is_dir():
@@ -330,7 +333,7 @@ def tree_digest(root):
     return digest.hexdigest()
 
 
-def sync_overlay(data_root, package, log, dry_run=False):
+def sync_overlay(data_root: Path, package: str | Path, log: host.Log, dry_run: bool = False) -> bool:
     """<Data>/Switch/overlay := the package's overlay/ (whole tree, like the old deploy script)."""
     source, target = Path(package) / 'overlay', Path(data_root) / renamed.DATA_FOLDER / 'overlay'
     if not source.is_dir():

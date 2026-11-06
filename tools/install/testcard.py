@@ -41,7 +41,7 @@ OTHER_FILES = {
 }
 
 
-def _sectors(layout):
+def _sectors(layout: dict) -> dict[int, bytearray]:
     out = {}
     for record in layout['sectors']:
         data = base64.b64decode(record['base64'])
@@ -51,7 +51,7 @@ def _sectors(layout):
     return out
 
 
-def _recrc(sectors, disk_sectors):
+def _recrc(sectors: dict[int, bytearray], disk_sectors: int) -> None:
     """Recompute both GPT headers' CRCs after an entry edit (variants only)."""
     entries_lba = [lba for lba in sectors if lba not in (0, 1, disk_sectors - 1)]
     primary_entries = bytes(sectors[min(entries_lba)])
@@ -65,7 +65,7 @@ def _recrc(sectors, disk_sectors):
         header[16:20] = zlib.crc32(bytes(header[:92])).to_bytes(4, 'little')
 
 
-def create(image, layout_path, variant):
+def create(image: str, layout_path: str, variant: str) -> None:
     layout = json.loads(Path(layout_path).read_text())
     size = layout['disk_bytes']
     sectors = _sectors(layout)
@@ -118,13 +118,13 @@ def create(image, layout_path, variant):
     print(f'{image}: {size} bytes, variant {variant}')
 
 
-def _info():
+def _info() -> dict:
     return plistlib.loads(
         subprocess.run(['/usr/bin/hdiutil', 'info', '-plist'], check=True, capture_output=True).stdout
     )
 
 
-def device_of(image):
+def device_of(image: str | Path) -> str | None:
     image = str(Path(image).resolve())
     for item in _info().get('images', []):
         if str(Path(item.get('image-path', '')).resolve()) == image:
@@ -134,7 +134,7 @@ def device_of(image):
     return None
 
 
-def attach(image):
+def attach(image: str | Path) -> str:
     current = device_of(image)
     if current:
         return current
@@ -159,13 +159,13 @@ def attach(image):
     return '/dev/' + disk
 
 
-def detach(image):
+def detach(image: str | Path) -> None:
     device = device_of(image)
     if device:
         subprocess.run(['/usr/bin/hdiutil', 'detach', device], check=True, capture_output=True)
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest='command', required=True)
     c = sub.add_parser('create')

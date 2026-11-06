@@ -17,14 +17,14 @@ MIB = 1 << 20
 
 
 class Quiet:
-    def __call__(self, *parts):
+    def __call__(self, *parts: object) -> None:
         pass
 
-    def quiet(self, *parts):
+    def quiet(self, *parts: object):
         pass
 
 
-def run(*command):
+def run(*command: str):
     return subprocess.run(command, check=True, capture_output=True, text=True).stdout
 
 

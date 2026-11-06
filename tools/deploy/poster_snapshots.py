@@ -14,6 +14,7 @@ stay.
 """
 
 import plistlib
+from collections.abc import Callable
 from pathlib import Path
 
 POSTERBOARD = 'com.apple.PosterBoard'
@@ -23,7 +24,7 @@ STORE = 'Library/Application Support/PRBPosterExtensionDataStore'
 DESCRIPTOR_KINDS = ('descriptors', 'staticdescriptors')
 
 
-def posterboard_container(data_root):
+def posterboard_container(data_root: Path) -> Path | None:
     """PosterBoard's data container on a mounted Data volume, or None."""
     applications = Path(data_root) / APPLICATIONS
     if not applications.is_dir():
@@ -38,7 +39,7 @@ def posterboard_container(data_root):
     return None
 
 
-def gallery_snapshots(data_root, bundles):
+def gallery_snapshots(data_root: Path, bundles: list[str]) -> list[Path]:
     """The SNAPSHOT_GALLERY files of `bundles`' descriptors in every data store version, sorted."""
     container = posterboard_container(data_root)
     if container is None:
@@ -51,7 +52,7 @@ def gallery_snapshots(data_root, bundles):
     return sorted(found)
 
 
-def reset(data_root, bundles, log, dry_run=False):
+def reset(data_root: Path, bundles: list[str], log: Callable[..., None], dry_run: bool = False) -> int:
     """Removes `bundles`' gallery snapshots; returns how many (would) go."""
     snapshots = gallery_snapshots(data_root, bundles)
     if posterboard_container(data_root) is None:

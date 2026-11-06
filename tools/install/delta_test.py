@@ -10,11 +10,11 @@ from pathlib import Path
 from tools.install import delta
 
 
-def sha(data):
+def sha(data: bytes):
     return hashlib.sha256(data).hexdigest()
 
 
-def quiet(*parts):
+def quiet(*parts: object):
     pass
 
 

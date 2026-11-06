@@ -18,6 +18,7 @@ import shutil
 import sys
 import time
 from pathlib import Path
+from typing import NoReturn
 
 if __package__ in (None, ''):
     sys.path.insert(0, str(Path(os.path.abspath(__file__)).parents[2]))
@@ -54,7 +55,7 @@ HEADROOM = 4 << 30
 DATA_SEED_BYTES = 1 << 30
 
 
-def parse_size(text):
+def parse_size(text: str) -> int:
     found = re.fullmatch(r'\s*(\d+)\s*([GMgm]?)(?:i?B)?\s*', text)
     if not found:
         raise argparse.ArgumentTypeError(f'{text!r}: give bytes, or a number with G (GiB) or M (MiB)')
@@ -70,10 +71,10 @@ def runfiles():
         return None
 
 
-def resolve_inputs(args):
+def resolve_inputs(args: argparse.Namespace) -> None:
     locate = runfiles()
 
-    def where(value):
+    def where(value: str) -> str:
         return os.path.abspath(locate.Rlocation(value) or value if locate and not os.path.isabs(value) else value)
 
     args.pretranslate = {}
@@ -97,7 +98,7 @@ def resolve_inputs(args):
         args.gpu_base = os.path.dirname(args.gpu_base)
 
 
-def switch_cards():
+def switch_cards() -> list[cards.Card]:
     found = []
     for item in host.plist('diskutil', 'list', '-plist', 'physical').get('WholeDisks', []):
         try:
@@ -110,7 +111,9 @@ def switch_cards():
     return found
 
 
-def find_target(args, spec, log):
+def find_target(
+    args: argparse.Namespace, spec: dict, log: host.Log
+) -> tuple[cards.Card | None, cards.Part | None, cards.Part | None, int]:
     """(card or None, FAT partition or None, target partition or None, partition bytes)."""
     if args.size:
         targets.check_size(args.size)
@@ -133,7 +136,7 @@ def find_target(args, spec, log):
     return card, fat, partition, partition.size
 
 
-def needed(args, pins, os_bytes):
+def needed(args: argparse.Namespace, pins: dict, os_bytes: int) -> int:
     seed = 0
     if args.shader_seed_size:
         seed = json.loads(Path(args.shader_seed_size).read_text())['blocks4k']
@@ -141,11 +144,11 @@ def needed(args, pins, os_bytes):
     return os_bytes + cryptexes + DATA_SEED_BYTES + seed + HEADROOM
 
 
-def version_label(pins):
+def version_label(pins: dict) -> str:
     return 'iPadOS {} ({})'.format(pins['version'], pins['build'])
 
 
-def plan_lines(args, size, card, done):
+def plan_lines(args: argparse.Namespace, size: int, card: cards.Card | None, done: str | None) -> list[str]:
     where = args.out
     parts = f"{card.disk}'s FAT" if args.copy_to_card else where
     steps = [
@@ -160,7 +163,7 @@ def plan_lines(args, size, card, done):
     return [('done: ' if stage in skip else '') + line for stage, line in steps if stage in stages.STAGES[:stop]]
 
 
-def check_inputs(args):
+def check_inputs(args: argparse.Namespace) -> list[str]:
     missing = [
         name
         for name in ('spec', 'ipsw', 'boot_package', 'gpu_base', 'gpu_stager', 'install_payload')
@@ -178,12 +181,12 @@ def check_inputs(args):
 
 
 class Builder:
-    def __init__(self, args, log):
+    def __init__(self, args: argparse.Namespace, log: host.Log):
         self.args, self.log = args, log
         self.pins = json.loads(Path(args.ipsw).read_text())
         self.spec = stages.ipsw_volumes(json.loads(Path(args.spec).read_text()), self.pins)
 
-    def run(self):
+    def run(self) -> int:
         sd_files = check_inputs(self.args)
         if self.args.boot_only:
             stages.refresh_boot(self.args.out, self.args, PAYLOAD, self.log)
@@ -226,7 +229,7 @@ class Builder:
             self.log(f"folder: {out} ({len(folder.files(out))} files); merge it onto the SD card's root")
         return 0
 
-    def check_space(self, size):
+    def check_space(self, size: int) -> None:
         want = needed(self.args, self.pins, compose.os_container_bytes(self.args.os_dmg, self.log))
         if size < want:
             raise cards.Refused(f'the partition is {size} bytes; this iOS needs at least {want}')
@@ -236,7 +239,7 @@ class Builder:
                 f'{self.args.scratch} has {free >> 30} GiB free; composing needs about {want >> 30} GiB and leaves {stages.FLOOR >> 30} GiB'
             )
 
-    def finish(self, out, m):
+    def finish(self, out: Path, m: manifest.Manifest) -> None:
         record = {'label': m.label, 'partition_bytes': m.partition_bytes, 'boot': stages.boot_record(self.args)}
         (Path(out) / folder.MARKER).write_text(json.dumps(record, indent=2) + '\n')
         kept = Path(self.args.scratch) / 'pretranslated'
@@ -246,7 +249,9 @@ class Builder:
         stages.add_boot(out, self.args, PAYLOAD)
         stages.give_back(out)
 
-    def pack_to_card(self, work, card, fat, size, offset, out):
+    def pack_to_card(
+        self, work: stages.Stages, card: cards.Card, fat: cards.Part, size: int, offset: int, out: Path
+    ) -> None:
         """The parts go straight onto the card's FAT: no second local copy of the image."""
         with cards.mounted(fat.identifier, self.log) as root:
             install = Path(root) / folder.INSTALL
@@ -265,11 +270,11 @@ class Builder:
         self.log('ejected', card.disk, "- in the Switch, run install-ios.bin from hekate's Payloads")
 
 
-def allocated(path):
+def allocated(path: Path) -> int:
     return os.stat(path).st_blocks * 512 if os.path.exists(path) else 0
 
 
-def reexec_as_root(args):
+def reexec_as_root(args: argparse.Namespace) -> NoReturn:
     """The same run under sudo. The runfiles variables go along: the inputs are found, and so are the runfiles of the
     pretranslate drivers it starts (sudo clears the environment).
     """
@@ -290,7 +295,7 @@ def reexec_as_root(args):
     os.execvp('sudo', command)
 
 
-def main(argv=None):
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     where = parser.add_mutually_exclusive_group()
     where.add_argument('--disk', help="the Switch SD card's whole disk (default: the one Switch card in this Mac)")
@@ -334,10 +339,10 @@ def main(argv=None):
 
 
 class PrintLog:
-    def __call__(self, *parts):
+    def __call__(self, *parts: object) -> None:
         print(*parts, flush=True)
 
-    def quiet(self, *parts):
+    def quiet(self, *parts: object) -> None:
         pass
 
 

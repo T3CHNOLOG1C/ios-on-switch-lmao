@@ -4,17 +4,26 @@ import hashlib
 import os
 from pathlib import Path
 
-from tools.install import compose, extents, manifest
+from tools.install import compose, extents, host, manifest
 
 CHUNK = 8 << 20
 MANIFEST = 'manifest.bin'
 
 
-def part_name(index):
+def part_name(index: int) -> str:
     return f'part-{index:02d}.bin'
 
 
-def pack(image, offset, partition_bytes, install_dir, fat_prefix, label, log, punch=True):
+def pack(
+    image: Path,
+    offset: int,
+    partition_bytes: int,
+    install_dir: Path,
+    fat_prefix: str,
+    label: str,
+    log: host.Log,
+    punch: bool = True,
+) -> manifest.Manifest:
     """Plan the extents of the partition at `offset` in `image`, stream the copy extents into part files (punching
     the image behind, so the two never both exist whole), and write the manifest. Returns the Manifest.
     """
@@ -42,10 +51,10 @@ def pack(image, offset, partition_bytes, install_dir, fat_prefix, label, log, pu
 class ChunkHashes:
     """SHA-256 of each HASH_CHUNK of a byte stream fed in any pieces."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.hashes, self.current, self.filled = [], hashlib.sha256(), 0
 
-    def update(self, data):
+    def update(self, data: bytes) -> None:
         view = memoryview(data)
         while view:
             take = min(len(view), manifest.HASH_CHUNK - self.filled)
@@ -56,17 +65,25 @@ class ChunkHashes:
                 self.hashes.append(self.current.digest())
                 self.current, self.filled = hashlib.sha256(), 0
 
-    def finish(self):
+    def finish(self) -> list[bytes]:
         if self.filled:
             self.hashes.append(self.current.digest())
         return self.hashes
 
 
-def _write_parts(fd, offset, plan, sizes, install_dir, fat_prefix, punch):
+def _write_parts(
+    fd: int,
+    offset: int,
+    plan: list[tuple[int, int, int]],
+    sizes: list[int],
+    install_dir: Path,
+    fat_prefix: str,
+    punch: bool,
+) -> tuple[list[manifest.Part], list[bytes]]:
     parts, index, out, left = [], -1, None, 0
     hashes = ChunkHashes()
 
-    def close():
+    def close() -> None:
         if out is not None:
             out.close()
             parts.append(manifest.Part(f'{fat_prefix}/{part_name(index)}', sizes[index]))

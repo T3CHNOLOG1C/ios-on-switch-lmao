@@ -11,16 +11,16 @@ from tools.install import card as cards, renamed
 
 
 class Log:
-    def __init__(self):
+    def __init__(self) -> None:
         self.lines = []
 
-    def __call__(self, *parts):
+    def __call__(self, *parts: object) -> None:
         self.lines.append(' '.join(map(str, parts)))
 
     quiet = __call__
 
 
-def package(root, generation=0):
+def package(root: Path, generation: int = 0):
     root = Path(root)
     for name in ('bl31.bin', 'bl33.bin'):
         path = root / 'switchroot/ios' / name

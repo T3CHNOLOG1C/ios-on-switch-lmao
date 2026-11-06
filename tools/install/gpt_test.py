@@ -14,7 +14,7 @@ from tools.install import gpt
 LAYOUT = '_main/install/testdata/switch-card-1tb.json'
 
 
-def card_image(directory):
+def card_image(directory: str):
     layout = json.loads(Path(runfiles.Create().Rlocation(LAYOUT)).read_text())
     path = Path(directory) / 'card.img'
     with open(path, 'wb') as f:

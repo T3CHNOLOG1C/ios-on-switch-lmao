@@ -8,6 +8,7 @@ apfs.py rewrites them offline). fsck_apfs checks the result.
 import os
 import subprocess
 import uuid
+from pathlib import Path
 
 from tools.install import apfs, gpt, host
 
@@ -16,7 +17,7 @@ F_PUNCHHOLE = 99  # <sys/fcntl.h>: deallocate a range of a file (APFS)
 START_SECTOR = 2048
 
 
-def punch(fd, offset, length):
+def punch(fd: int, offset: int, length: int) -> None:
     """Give a copied range of a scratch image back to the disk, so the scratch and its copy never both exist whole."""
     import fcntl
     import struct
@@ -27,12 +28,12 @@ def punch(fd, offset, length):
         pass
 
 
-def ours(spec, found):
+def ours(spec: dict, found: list[tuple[uuid.UUID, int, str]] | None) -> bool:
     have = {(str(u).upper(), role) for u, role, _ in (found or [])}
     return all((v['uuid'], v['role']) in have for v in spec['volumes'].values())
 
 
-def attach_raw(image, log, mount=False):
+def attach_raw(image: Path, log: host.Log, mount: bool = False) -> str:
     args = ['attach', '-plist'] + ([] if mount else ['-nomount'])
     out = host.plist('hdiutil', *args, '-imagekey', 'diskimage-class=CRawDiskImage', str(image), log=log)
     disk = host.whole_disk_of(out['system-entities'])
@@ -41,7 +42,7 @@ def attach_raw(image, log, mount=False):
     return disk
 
 
-def fsck(store, what, log):
+def fsck(store: str, what: str, log: host.Log) -> None:
     result = subprocess.run([host.TOOLS['fsck_apfs'], '-n', '/dev/r' + store], capture_output=True, text=True)
     log.quiet(result.stdout + result.stderr)
     tail = (result.stdout + result.stderr).strip().splitlines()[-1:] or ['?']
@@ -50,7 +51,7 @@ def fsck(store, what, log):
     log(f'fsck_apfs {store} ({what}): {tail[0]}')
 
 
-def _attach_os(os_dmg, log):
+def _attach_os(os_dmg: str, log: host.Log) -> tuple[str, str]:
     out = host.plist(
         'hdiutil', 'attach', '-plist', '-readonly', '-nomount', '-noverify', '-noautofsck', os_dmg, log=log
     )
@@ -67,7 +68,7 @@ def _attach_os(os_dmg, log):
     return apfs_part[0][: apfs_part[0].rindex('s')], apfs_part[0]
 
 
-def os_container_bytes(os_dmg, log):
+def os_container_bytes(os_dmg: str, log: host.Log) -> int:
     whole, source = _attach_os(os_dmg, log)
     try:
         return int(host.disk_info(source)['TotalSize'])
@@ -75,7 +76,7 @@ def os_container_bytes(os_dmg, log):
         host.run('hdiutil', 'detach', whole, log=log)
 
 
-def _copy_os(os_dmg, image, partition_sectors, spec, log):
+def _copy_os(os_dmg: str, image: Path, partition_sectors: int, spec: dict, log: host.Log) -> int:
     disk_sectors = START_SECTOR + partition_sectors + 2048
     whole, source = _attach_os(os_dmg, log)
     try:
@@ -116,7 +117,7 @@ def _copy_os(os_dmg, image, partition_sectors, spec, log):
         host.run('hdiutil', 'detach', whole, log=log)
 
 
-def _grow(image, partition_bytes, spec, log):
+def _grow(image: Path, partition_bytes: int, spec: dict, log: host.Log) -> None:
     disk = attach_raw(image, log)
     try:
         store = disk + 's1'
@@ -142,7 +143,7 @@ def _grow(image, partition_bytes, spec, log):
         host.run('hdiutil', 'detach', disk, log=log)
 
 
-def _set_uuids(image, partition_bytes, spec, log):
+def _set_uuids(image: Path, partition_bytes: int, spec: dict, log: host.Log) -> int:
     fd = os.open(image, os.O_RDWR)
     try:
         part = gpt.read(fd, os.fstat(fd).st_size).used[0]
@@ -175,7 +176,7 @@ def _set_uuids(image, partition_bytes, spec, log):
         os.close(fd)
 
 
-def compose(image, os_dmg, partition_bytes, spec, log):
+def compose(image: Path, os_dmg: str, partition_bytes: int, spec: dict, log: host.Log) -> tuple[int, int]:
     """Write the container into `image` (a new raw disk image whose one partition is exactly `partition_bytes`).
     Returns (the partition's offset in the image, the OS container's size).
     """

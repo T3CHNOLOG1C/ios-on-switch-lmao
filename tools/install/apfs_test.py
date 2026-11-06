@@ -11,14 +11,14 @@ from tools.install import apfs
 BS = 4096
 
 
-def obj(oid, xid, kind, body, subtype=0):
+def obj(oid: int, xid: int, kind: int, body: bytes, subtype: int = 0):
     block = bytearray(BS)
     struct.pack_into('<QQII', block, 8, oid, xid, kind, subtype)
     block[32 : 32 + len(body)] = body
     return apfs.with_checksum(bytes(block))
 
 
-def container(path, volumes, checkpoints=2):
+def container(path: str, volumes: list[tuple[uuid.UUID, int]], checkpoints: int = 2):
     """A minimal container: NXSB at 0 and in a 4-block descriptor area at 1, an omap (block 10, root+leaf tree
     block 11), volume superblocks at 20+.
     """

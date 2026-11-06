@@ -18,21 +18,21 @@ import uuid
 from pathlib import Path
 
 
-def _define(text, name, path):
+def _define(text: str, name: str, path: str) -> str:
     found = re.search(r'^#define\s+' + name + r'\s+(.+?)\s*(?://.*|/\*.*)?$', text, re.MULTILINE)
     if not found:
         raise SystemExit(f'{path}: no #define {name}')
     return found.group(1).strip()
 
 
-def _uuid(value, what):
+def _uuid(value: str, what: str) -> str:
     try:
         return str(uuid.UUID(value.strip('"'))).upper()
     except ValueError:
         raise SystemExit(f'{what} is not a UUID: {value}')
 
 
-def parse(raw_mount, cryptex_h, cryptex_cpp, block_cpp):
+def parse(raw_mount: str, cryptex_h: str, cryptex_cpp: str, block_cpp: str) -> dict:
     raw_text, h_text = Path(raw_mount).read_text(), Path(cryptex_h).read_text()
     cpp_text, block_text = Path(cryptex_cpp).read_text(), Path(block_cpp).read_text()
     data = _uuid(_define(raw_text, 'SWITCH_RAW_DATA_UUID', raw_mount), 'SWITCH_RAW_DATA_UUID')
@@ -83,7 +83,7 @@ def parse(raw_mount, cryptex_h, cryptex_cpp, block_cpp):
     }
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     for name in ('raw-mount', 'cryptex-h', 'cryptex-cpp', 'block-cpp', 'out'):
         parser.add_argument('--' + name, required=True)

@@ -12,7 +12,7 @@ SPEC = {'volumes': {'system': {'uuid': 'S'}, 'data': {'uuid': 'D'}, 'preboot': {
 PINS = {'build': '21H461', 'members': {'os': {'content_sha256': 'abc'}}}
 
 
-def quiet(*parts):
+def quiet(*parts: object):
     pass
 
 

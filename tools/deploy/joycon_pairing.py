@@ -23,6 +23,7 @@ No dump on the FAT removes both, and the console goes back to its own address. N
 
 import plistlib
 import re
+from collections.abc import Callable
 from pathlib import Path
 
 INI = 'switchroot/joycon_mac.ini'
@@ -31,7 +32,7 @@ PRODUCTS = {1: ('Joy-Con (L)', 0x2006), 2: ('Joy-Con (R)', 0x2007), 3: ('Pro Con
 _ADDRESS = re.compile(r'^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}$')
 
 
-def parse(text):
+def parse(text: str) -> dict | None:
     """{"host": "98:b6:e9:..", "controllers": [...], "skipped": [reasons]} from joycon_mac.ini text, or None when it
     has no usable entry.
     """
@@ -73,7 +74,7 @@ def parse(text):
     return {'host': host, 'controllers': controllers, 'skipped': skipped}
 
 
-def read(fat_root, log):
+def read(fat_root: Path, log: Callable[..., None]) -> dict | None:
     """The dump on a mounted FAT, parsed; None when there is none. Only reads."""
     path = Path(fat_root) / INI
     if not path.is_file():
@@ -93,7 +94,7 @@ def read(fat_root, log):
     return pairing if pairing and pairing['controllers'] else None
 
 
-def stage(data_root, pairing, log, dry_run=False):
+def stage(data_root: Path, pairing: dict | None, log: Callable[..., None], dry_run: bool = False) -> bool:
     """<Data>/Switch/bluetooth/{host-address,joycon-pairing.plist} := the dump, or removed when there is none.
     Returns whether anything changed.
     """

@@ -37,10 +37,10 @@ with open(sys.argv[0] + '.calls', 'a') as calls:
 
 
 class Quiet:
-    def __call__(self, *parts):
+    def __call__(self, *parts: object) -> None:
         pass
 
-    def quiet(self, *parts):
+    def quiet(self, *parts: object):
         pass
 
 

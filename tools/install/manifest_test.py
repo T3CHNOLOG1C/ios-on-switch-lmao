@@ -10,7 +10,7 @@ from tools.install import manifest
 CONTAINER = uuid.UUID('50F8A67F-AFC1-4A1B-BCBB-82162674C67F')
 
 
-def sample(**overrides):
+def sample(**overrides: object):
     m = manifest.Manifest(64 << 30, 4096, CONTAINER, 'ios-on-switch-lmao 1.0.0 21H461')
     m.parts = [manifest.Part('switchroot/ios/install/part-00.bin', 3 << 20)]
     m.extents = [(0, 0, 1 << 20), (8 << 20, manifest.ZERO, 64 << 10), (1 << 30, 1 << 20, 2 << 20)]

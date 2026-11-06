@@ -4,12 +4,24 @@ The scratch directory's state.json records the last stage finished and what it w
 partition size differ starts again from compose.
 """
 
+import argparse
 import json
 import os
 import shutil
 from pathlib import Path
 
-from tools.install import card as cards, compose, cryptex, delta, folder, host, pack, populate, pretranslate
+from tools.install import (
+    card as cards,
+    compose,
+    cryptex,
+    delta,
+    folder,
+    host,
+    manifest,
+    pack,
+    populate,
+    pretranslate,
+)
 
 STATE = 'state.json'
 IMAGE = 'image.img'
@@ -18,7 +30,7 @@ STAGING = '/private/preboot/Switch-Staging/'
 FLOOR = 14 << 30
 
 
-def identity(args, spec, pins, size):
+def identity(args: argparse.Namespace, spec: dict, pins: dict, size: int) -> dict:
     """What a composed image depends on besides the boot package (populate reads that afresh)."""
     return {
         'partition_bytes': size,
@@ -28,7 +40,7 @@ def identity(args, spec, pins, size):
     }
 
 
-def ipsw_volumes(spec, pins):
+def ipsw_volumes(spec: dict, pins: dict) -> dict:
     """The spec with the selected IPSW's own System and cryptex volumes, where its pins name them (ipsw/pins.bzl
     "volumes"; the kernel takes the same values from them).
     """
@@ -44,12 +56,12 @@ def ipsw_volumes(spec, pins):
 
 
 class Stages:
-    def __init__(self, args, spec, pins, log):
+    def __init__(self, args: argparse.Namespace, spec: dict, pins: dict, log: host.Log):
         self.args, self.spec, self.pins, self.log = args, spec, pins, log
         self.scratch = Path(args.scratch)
         self.image = self.scratch / IMAGE
 
-    def state(self, size, refuse_other_size=False):
+    def state(self, size: int, refuse_other_size: bool = False) -> tuple[str | None, int | None]:
         path = self.scratch / STATE
         if not path.is_file() or not self.image.is_file():
             return None, None
@@ -66,29 +78,29 @@ class Stages:
             return None, None
         return saved['stage'], saved['offset']
 
-    def save(self, stage, size, offset):
+    def save(self, stage: str, size: int, offset: int) -> None:
         record = {'stage': stage, 'offset': offset, 'identity': identity(self.args, self.spec, self.pins, size)}
         (self.scratch / STATE).write_text(json.dumps(record, indent=2) + '\n')
         give_back(self.scratch)
 
-    def clear(self):
+    def clear(self) -> None:
         for name in (IMAGE, STATE):
             if (self.scratch / name).exists():
                 (self.scratch / name).unlink()
 
-    def compose(self, size):
+    def compose(self, size: int) -> int:
         self.scratch.mkdir(parents=True, exist_ok=True)
         self.clear()
         offset, _ = compose.compose(self.image, self.args.os_dmg, size, self.spec, self.log)
         self.save('compose', size, offset)
         return offset
 
-    def roles(self):
+    def roles(self) -> pretranslate.Roles | None:
         """IOS 27's pretranslate drivers by role (pretranslate.py), or None for an IPSW that needs none."""
         given = getattr(self.args, 'pretranslate', None)
         return pretranslate.Roles(given, self.scratch, self.log) if given else None
 
-    def cryptexes(self, roles):
+    def cryptexes(self, roles: pretranslate.Roles | None) -> tuple[dict[str, str | Path], dict[str, str]]:
         """The cryptex images to stage, and their sha256 where they were translated (the pins describe the IPSW's).
         The App cryptex goes before the SystemOS one, whose dyld cache takes the other volumes' cdhashes.
         """
@@ -103,14 +115,14 @@ class Stages:
                 expected[member] = cards.sha256_file(sources[member])
         return sources, expected
 
-    def check_pins(self, roles):
+    def check_pins(self, roles: pretranslate.Roles) -> None:
         pins = getattr(self.args, 'pretranslated_pins', None)
         if pins:
             roles.check_pins(json.loads(Path(pins).read_text()))
         else:
             self.log('pretranslate: no pins given; the trust modules are not checked against the boot package')
 
-    def check_translate_space(self, roles):
+    def check_translate_space(self, roles: pretranslate.Roles | None) -> None:
         """The SystemOS cryptex's clone takes its translated files, and the rebuilt image is staged into Preboot."""
         if not roles or 'system_cryptex' not in roles:
             return
@@ -121,7 +133,7 @@ class Stages:
                 f'translating iOS 27 needs about {want >> 30} GiB free in {self.scratch} besides the {FLOOR >> 30} GiB kept free; {free >> 30} GiB is'
             )
 
-    def populate(self, size, offset):
+    def populate(self, size: int, offset: int) -> None:
         roles = self.roles()
         self.check_translate_space(roles)
         disk = compose.attach_raw(self.image, self.log)
@@ -158,13 +170,13 @@ class Stages:
             host.run('hdiutil', 'detach', disk, log=self.log, check=False)
         self.save('populate', size, offset)
 
-    def pack(self, size, offset, install_dir, label):
+    def pack(self, size: int, offset: int, install_dir: Path, label: str) -> manifest.Manifest:
         m = pack.pack(self.image, offset, size, install_dir, folder.INSTALL, label, self.log)
         self.clear()
         return m
 
 
-def boot_record(args):
+def boot_record(args: argparse.Namespace) -> dict[str, str | None]:
     """What the image's Data volume holds of the boot package: a later boot refresh must match it."""
     package = Path(args.boot_package)
     trust = Path(args.gpu_base) / 'TegraGM20BMetal.trustcache'
@@ -174,12 +186,12 @@ def boot_record(args):
     }
 
 
-def add_boot(out, args, payload):
+def add_boot(out: Path, args: argparse.Namespace, payload: str) -> None:
     folder.add_boot_package(out, args.boot_package)
     folder.add(out, payload, args.install_payload)
 
 
-def refresh_boot(out, args, payload, log):
+def refresh_boot(out: str | Path, args: argparse.Namespace, payload: str, log: host.Log) -> None:
     """Only the boot entry and install-ios.bin, into a folder //:image made, when Data's parts still match."""
     out = Path(out)
     try:
@@ -203,7 +215,7 @@ def refresh_boot(out, args, payload, log):
     log(f'folder: boot entry and install-ios.bin refreshed in {out}')
 
 
-def give_back(path):
+def give_back(path: Path) -> None:
     """Files made under sudo go back to the user who ran //:image."""
     uid, gid = os.environ.get('SUDO_UID'), os.environ.get('SUDO_GID')
     if os.geteuid() != 0 or not uid:
@@ -212,7 +224,7 @@ def give_back(path):
         os.chown(p, int(uid), int(gid))
 
 
-def free_bytes(path):
+def free_bytes(path: str | Path) -> int:
     path = Path(path)
     while not path.exists():
         path = path.parent

@@ -5,6 +5,7 @@ of a cryptex against its seal, so after the delta the volume is sealed again wit
 """
 
 import re
+from collections.abc import Callable
 from pathlib import Path
 
 from tools.install import card as cards, delta, host
@@ -13,7 +14,7 @@ SEALER = '/System/Library/Filesystems/apfs.fs/Contents/Resources/apfs_prepare_cr
 APFS_VOLUME = '41504653-0000-11AA-AA11-00306543ECAC'
 
 
-def _attach(image, log):
+def _attach(image: Path, log: host.Log) -> tuple[str, str]:
     out = host.plist(
         'hdiutil', 'attach', '-plist', '-readwrite', '-nomount', '-noverify', '-noautofsck', str(image), log=log
     )
@@ -27,7 +28,7 @@ def _attach(image, log):
     return volumes[0], disks[0]
 
 
-def rebuild(source, translate, work_dir, log, what):
+def rebuild(source: str, translate: Callable[[Path], list[dict]], work_dir: Path, log: host.Log, what: str) -> Path:
     """`source` cloned into `work_dir` (APFS clones share blocks until written), its delta applied and sealed again.
     `translate(mount point)` makes the delta from the mounted clone and returns its entries.
     """

@@ -26,15 +26,15 @@ class Candidate:
     bytes: int = 0
 
 
-def installed(entry, ios_name):
+def installed(entry: Candidate, ios_name: str) -> bool:
     return entry.apfs or entry.name in (ios_name, SETUP_NAME)
 
 
-def fresh(entry):
+def fresh(entry: Candidate) -> bool:
     return entry.name in FRESH_NAMES
 
 
-def select(entries, ios_name, partition=None):
+def select(entries: list[Candidate], ios_name: str, partition: str | None = None) -> Candidate:
     """The one target among `entries` (Candidates, the FAT and emuMMC already left out), or TargetError."""
     ios = [e for e in entries if installed(e, ios_name)]
     if len(ios) > 1:
@@ -61,7 +61,7 @@ def select(entries, ios_name, partition=None):
     return target
 
 
-def check_size(size):
+def check_size(size: int) -> None:
     if size <= 0 or size % ALIGN_BYTES or size > MAX_BYTES:
         raise TargetError(
             f'a partition of {size} bytes cannot hold iOS (the kernel takes up to {MAX_BYTES} bytes in {ALIGN_BYTES}-byte units)'

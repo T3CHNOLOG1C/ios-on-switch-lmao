@@ -16,7 +16,7 @@ from tools.install import card as cards, host
 SKIP = ('.fseventsd', '.Spotlight-V100', '.Trashes')
 
 
-def seed_data(system, data, owners, log, reseed=False):
+def seed_data(system: Path, data: Path, owners: bool, log: host.Log, reseed: bool = False) -> None:
     if (data / 'mobile').is_dir() and not reseed:
         log('data: already seeded (mobile/ exists); kept (--reseed-data replaces it)')
         return
@@ -55,7 +55,15 @@ def seed_data(system, data, owners, log, reseed=False):
     )
 
 
-def stage_cryptexes(preboot, spec, pins, sources, owners, log, expected=None):
+def stage_cryptexes(
+    preboot: Path,
+    spec: dict,
+    pins: dict,
+    sources: dict[str, str | Path],
+    owners: bool,
+    log: host.Log,
+    expected: dict[str, str] | None = None,
+) -> None:
     """`sources`: {"system_cryptex": path, "app_cryptex": path}; `expected`: {member: sha256} for rebuilt images,
     which the IPSW pins do not describe.
     """
@@ -86,7 +94,7 @@ def stage_cryptexes(preboot, spec, pins, sources, owners, log, expected=None):
     host.run('sync')
 
 
-def stage_gpu(data, stager, gpu_base, log):
+def stage_gpu(data: Path, stager: str, gpu_base: str, log: host.Log) -> None:
     result = subprocess.run(
         [sys.executable, stager, str(data), '--build', str(gpu_base)], capture_output=True, text=True
     )
@@ -95,7 +103,7 @@ def stage_gpu(data, stager, gpu_base, log):
         raise host.HostError('the Metal bundle was not staged')
 
 
-def merge_tree(source, target, owners, log, what):
+def merge_tree(source: str | Path, target: Path, owners: bool, log: host.Log, what: str) -> None:
     """Copy `source` onto `target` (directories merged, files replaced): directories 0755, files 0644, root's."""
     count = 0
     for path in sorted(Path(source).rglob('*')):
