@@ -463,19 +463,6 @@ public:
     uint32_t wcChunksHeld();
     uint64_t wcChunkBytesHeld();
 
-    // How the pack's programs reached the heap at open: HeapByCpu (the kernel did not import the pack's pages), HeapByCopy (the
-    // copy engine, and the bytes sampled after it match the pack), HeapCopyMismatch (they did not: copied on the CPU after all)
-    enum HeapUpload : uint8_t {
-        HeapByCpu,
-        HeapByCopy,
-        HeapCopyMismatch
-    };
-
-    HeapUpload heapUpload() const
-    {
-        return heapUpload_;
-    }
-
     uint64_t heapBytes() const
     {
         return heap_.bytes;
@@ -550,6 +537,8 @@ public:
         std::atomic<uint64_t> ceOps{0}, ceBytes{0};
         // passes into a chain level, and levels copied between a chain and its mirrors (out: for m2v; in: what m2v rendered)
         std::atomic<uint64_t> levelPasses{0}, mirrorsOut{0}, mirrorsIn{0};
+        // pack programs placed in the shader heap, and states not made because it was full
+        std::atomic<uint64_t> programsPlaced{0}, heapFull{0};
         // framebuffer-fetch barriers encoded, and of those the ones whose draw's pixels no color write since the last barrier
         // reached (debug builds: what skipping a barrier by region would save); the barriers one per fetching draw after any
         // color write would have encoded, and those the interlocked storage form would (RenderEncoder::countRules)
@@ -605,8 +594,11 @@ private:
     const volatile uint32_t *fence_ = nullptr;
     std::vector<uint32_t> freeTic_, freeTsc_;
     uint32_t nextTic_ = 1, nextTsc_ = 1, neutralTsc_ = 0;
-    std::vector<Pipeline> pipelines_;
-    std::unordered_map<uint64_t, uint32_t> byKey_;
+    std::vector<Pipeline> pipelines_;  // the pack's, each made at its first lookup (rec set)
+    std::vector<uint32_t> placed_;     // each pack program's heap offset, ~0u: not placed
+    uint64_t heapPlaced_ = 0;
+    uint32_t ctWrite_[8] = {};  // SET_CT_WRITE(i) as the baseline leaves it
+    bool place(uint32_t prog, uint32_t &program);
     std::vector<uint32_t> constexprTsc_;
     CommandBuffer cb_;
     uint32_t rootPush_[32] = {};  // what the GPU's root table holds at [0x700, 0x780) after everything submitted
@@ -618,7 +610,6 @@ private:
     // write-combined buffers' memory: GPU-pool BOs (BoAlloc coherent: the CPU maps them write-combined), sub-allocated by page
     std::vector<Chunk> wcChunks_;
     bool wcOn_ = true;
-    HeapUpload heapUpload_ = HeapByCpu;
     bool wcAlloc(uint64_t bytes, Span &s);
     void wcFree(Span &s);
     bool chainsOn_ = false;

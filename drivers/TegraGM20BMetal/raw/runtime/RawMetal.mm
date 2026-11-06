@@ -6278,19 +6278,8 @@ id<MTLDevice> raw_metal_device_open(const char *packPath, uint64_t stack, id<MTL
                "raw: write-combined buffers %{public}s (a GPU-pool page: %{public}s, m2v's twin over it %{public}s)",
                dev->wcOn() ? "on" : "off", probe.wc || twin ? "made" : "not made", twin ? "made" : "not made");
     }
-    {  // the pack's programs into the heap (r18): one line either way; a copy whose sampled bytes differ is an error line
-        const raw::Device::HeapUpload h = dev->heapUpload();
-        if (h == raw::Device::HeapCopyMismatch)
-            os_log_error(rawLog(),
-                         "raw: shader heap by copy engine off (%llu KB: its bytes differ after the copy; copied on the "
-                         "CPU)",
-                         (unsigned long long)(dev->heapBytes() >> 10));
-        else
-            os_log(rawLog(), "raw: shader heap by copy engine %{public}s (%llu KB%{public}s)",
-                   h == raw::Device::HeapByCopy ? "on" : "off", (unsigned long long)(dev->heapBytes() >> 10),
-                   h == raw::Device::HeapByCopy ? ", its bytes checked"
-                                                : ": the pack's pages not imported, copied on the CPU");
-    }
+    os_log(rawLog(), "raw: shader heap %llu KB, each program placed at its state's first use",
+           (unsigned long long)(dev->heapBytes() >> 10));
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     {  // the stall line's timer (rawStallTick): its own, so nothing the render server's other threads hold delays it
         static dispatch_source_t stall;
