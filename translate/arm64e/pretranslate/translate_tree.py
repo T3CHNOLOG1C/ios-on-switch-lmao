@@ -22,6 +22,7 @@ import subprocess
 import sys
 from collections.abc import Iterable
 from pathlib import Path
+from typing import NamedTuple
 
 CACHE_DIR = 'System/Library/Caches/com.apple.dyld'
 MACHO_MAGIC = (b'\xcf\xfa\xed\xfe', b'\xca\xfe\xba\xbe', b'\xca\xfe\xba\xbf')  # thin 64, fat BE, fat64 BE
@@ -99,19 +100,45 @@ def pretranslate_file(tool: str, src: Path, out_path: Path, report_path: Path) -
     return json.loads(report_path.read_text())
 
 
-def _memoized(tool, src, dst, memo, in_sha, version):
+class Translator(NamedTuple):
+    tool: str
+    version: str
+
+
+def _memoized(translator: Translator, src: Path, dst: Path, memo: Path, in_sha: str) -> dict:
     """Translate src, or reuse an earlier run whose report records the same input and translator (resume)."""
     if memo.exists():
         prev = json.loads(memo.read_text())
-        if prev.get('_in') == in_sha and prev.get('_tool') == version:
+        if prev.get('_in') == in_sha and prev.get('_tool') == translator.version:
             translated = any(s['status'] == 'translated' for s in prev['slices'])
             if translated == dst.exists():
                 return prev
-    r = pretranslate_file(tool, src, dst, memo)
+    r = pretranslate_file(translator.tool, src, dst, memo)
     r['_in'] = in_sha
-    r['_tool'] = version
+    r['_tool'] = translator.version
     memo.write_text(json.dumps(r))
     return r
+
+
+def _external_pairs(paths: Iterable[str]) -> list[tuple[str, str]]:
+    pairs = []
+    for p in paths:
+        for line in Path(p).read_text().splitlines():
+            old, new = line.split()
+            pairs.append((old, new))
+    return pairs
+
+
+def _machos(volume: Path, cache: Path) -> list[Path]:
+    machos = []
+    for root, _, names in os.walk(volume):
+        if os.path.abspath(root).startswith(os.path.abspath(cache)):
+            continue
+        for name in names:
+            p = Path(root) / name
+            if not p.is_symlink() and is_macho(p):
+                machos.append(p)
+    return machos
 
 
 def main() -> None:
@@ -133,37 +160,24 @@ def main() -> None:
     out.mkdir(parents=True, exist_ok=True)
     work = out / '.work'
     work.mkdir(exist_ok=True)
-    version = _tool_version(args.tool)
+    translator = Translator(args.tool, _tool_version(args.tool))
     apple = apple_trust_entries(args.apple_trustcache)
 
-    manifest = {'role': args.role, 'translator': version, 'files': []}
+    manifest = {'role': args.role, 'translator': translator.version, 'files': []}
     trust = []  # (cdhash_bytes, flags, category)
     # (old_hex, new_hex): prebuilt loaders in the cache validate on-disk binaries of every volume, so the cache apply
     # takes this role's pairs and those of the roles run before it (os and app_cryptex, for system_cryptex).
     pairs = []
-    external_pairs = []
-    for p in args.cdhash_pairs:
-        for line in Path(p).read_text().splitlines():
-            old, new = line.split()
-            external_pairs.append((old, new))
+    external_pairs = _external_pairs(args.cdhash_pairs)
     no_category = 0
 
     cache = args.volume / CACHE_DIR
-    machos = []
-    for root, _, names in os.walk(args.volume):
-        if os.path.abspath(root).startswith(os.path.abspath(cache)):
-            continue
-        for name in names:
-            p = Path(root) / name
-            if not p.is_symlink() and is_macho(p):
-                machos.append(p)
-
-    for src in sorted(machos):
+    for src in sorted(_machos(args.volume, cache)):
         rel = src.relative_to(args.volume)
         dst = out / 'files' / rel
         in_sha = sha256(src)
         memo = work / (str(rel).replace('/', '_') + '.json')
-        r = _memoized(args.tool, src, dst, memo, in_sha, version)
+        r = _memoized(translator, src, dst, memo, in_sha)
         translated = [s for s in r['slices'] if s['status'] == 'translated']
         if not translated:
             dst.unlink(missing_ok=True)
@@ -186,7 +200,7 @@ def main() -> None:
 
     (out / f'{args.role}.cdhash-pairs').write_text(''.join(f'{a} {b}\n' for a, b in pairs))
     if args.role == 'system_cryptex' and cache.is_dir():
-        _translate_cache(args, cache, out, pairs + external_pairs, trust, apple, manifest)
+        _translate_cache(args, pairs + external_pairs, trust, apple, manifest)
 
     (out / f'{args.role}.manifest.json').write_text(json.dumps(manifest, indent=1))
     (out / f'{args.role}.trustcache').write_bytes(trust_module(trust))
@@ -198,7 +212,14 @@ def main() -> None:
     print(f'{args.role}: {len(manifest["files"])} files translated, {len(trust)} trust entries')
 
 
-def _translate_cache(args, cache, out, pairs, trust, apple, manifest) -> None:
+def _translate_cache(
+    args: argparse.Namespace,
+    pairs: list[tuple[str, str]],
+    trust: list[tuple[bytes, int, int]],
+    apple: dict[str, tuple[int, int]],
+    manifest: dict,
+) -> None:
+    cache, out = args.volume / CACHE_DIR, args.out
     main_cache = cache / 'dyld_shared_cache_arm64e'
     plan = out / f'{args.role}.a64xplan'
     run_tool(args.tool, 'plan', '-o', str(plan), str(main_cache))
