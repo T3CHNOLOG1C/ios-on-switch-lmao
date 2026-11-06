@@ -117,13 +117,6 @@ py_binary(
     ],
 )
 
-# Remakes bazel/pinned/overlay/apple-logo~ipad.png (ProgressUI's 1x boot logo) from the OS volume image:
-#   bazel run //tools/package:progressui_logo -- <OS volume .dmg> <output .png>
-py_binary(
-    name = "progressui_logo",
-    srcs = ["progressui_logo.py"],
-)
-
 # Remakes bazel/pinned/overlay/wallpaper-1x/*.plist (the J120 iPadOS 17 and Lake wallpapers at the 'any' screen class)
 # from the OS volume image:
 #   bazel run //tools/package:wallpaper_1x -- <OS volume .dmg> <output directory>
@@ -146,7 +139,10 @@ py_test(
 )
 
 # //boot:snapshot copies a build to ~/Library/Application Support/switch-ios/lkg/<name> (its py_binary lives in boot/).
-exports_files(["snapshot.py"])
+exports_files([
+    "adt_edit.py",
+    "snapshot.py",
+])
 
 # The packaging's modules, for the host tests (//tests), which import them.
 filegroup(

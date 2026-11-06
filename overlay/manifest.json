@@ -12,8 +12,8 @@
     "directory share it; 'a|b' hides it only when both are set, for directories features share).",
     "union (optional): the directory to union instead of the file's own, an existing ancestor of path.",
     "The audio HAL union (our plug-in) is hidden by switch-no-audio, like audiomxd itself.",
-    "ProgressUI's 1x boot logo (backboardd's Apple logo overlay; 21H461 ships only @2x) is made from the OS volume's own",
-    "@2x one by scripts/progressui_logo.py into build/ (Apple's artwork, not in git); missing, it is left out.",
+    "ProgressUI's 1x boot logo (backboardd's Apple logo overlay; 21H461 ships only @2x) is boot/logo's, the same pixels",
+    "hekate's bootlogo.bmp puts on the panel.",
     "portrait (optional): staged only for a portrait-native kernel (drivers/NativeMobileDisplay/SwitchPortrait.h).",
     "J120's speaker strips give the presets and bypass flags of VirtualAudio's built-in DSP chain for the speaker port",
     "(nine AUs tuned for J120's four MAX98723 drivers). drivers/SwitchAudio/tunings has same-named ones, gated like the",
@@ -70,8 +70,7 @@
     },
     {
       "path": "/System/Library/PrivateFrameworks/ProgressUI.framework/apple-logo~ipad.png",
-      "source": "build/progressui/apple-logo~ipad.png",
-      "portrait": true
+      "source": "build/progressui/apple-logo~ipad.png"
     },
     {
       "path": "/Library/Audio/Tunings/J120/VAD/j120_speaker_general.austrip",

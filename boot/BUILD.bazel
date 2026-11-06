@@ -135,7 +135,7 @@ boot_package(
         "//drivers/SwitchVideoEncoders:AVE": "build/switch-video/H264H7.videoencoder",
     },
     overlay_data = {
-        "//bazel/pinned:overlay/apple-logo~ipad.png": "build/progressui/apple-logo~ipad.png",
+        "//boot/logo:apple-logo~ipad.png": "build/progressui/apple-logo~ipad.png",
         "//bazel/pinned:overlay/wallpaper-1x/7570.iPadOS_17_Flat.plist": "build/wallpaper-1x/7570.iPadOS_17_Flat.plist",
         "//bazel/pinned:overlay/wallpaper-1x/7560.Lake_Flat.plist": "build/wallpaper-1x/7560.Lake_Flat.plist",
     },
