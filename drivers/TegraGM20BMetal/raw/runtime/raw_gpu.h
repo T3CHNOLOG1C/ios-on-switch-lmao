@@ -175,7 +175,7 @@ struct Pipeline {
     std::vector<uint32_t> methods;         // the state's registers as ready push words (program offsets relocated)
     uint32_t push[32] = {}, pushMask = 0;  // root table [0x700, 0x780): the words m2v's push ranges write, and which
     bool vsSetCbuf = false, fsSetCbuf = false;  // the program reads set 0 as constant buffer 1
-    uint8_t writeBits = 0;          // colors its draws write: SET_CT_WRITE(i) with a channel on
+    uint8_t writeBits = 0;                      // colors its draws write: SET_CT_WRITE(i) with a channel on
     uint32_t colorFormats[8] = {};  // MTLPixelFormat of each color attachment the state was made for (0: none)
     uint8_t readBits = 0;   // colors its draws read as they were: blended into, or written through a partial mask
     uint8_t fetchBits = 0;  // colors it reads by framebuffer fetch

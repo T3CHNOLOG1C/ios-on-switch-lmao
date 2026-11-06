@@ -18,7 +18,8 @@ struct PushCounts {
 		sampleDraws;  // draws shaded once per sample (or per sample pair): NVK's min sample shading above 1 pass
 	uint64_t wfi, shaderInval, shaderInvalNoWfi, texInval, setRef, l2Inval, hostWfi;
 	uint64_t ceCopies, ceBytes, ceWfi, blits, dispatches, acquires;
-	uint64_t psBarriers;  // PIXEL_SHADER_BARRIER: later pixel shading waits for earlier pixels, not the whole pipe
+	uint64_t
+		psBarriers;  // PIXEL_SHADER_BARRIER: later pixel shading waits for earlier pixels, not the whole pipe
 	uint64_t interlocks;  // SET_PIXEL_SHADER_INTERLOCK_CONTROL with conflict detection on
 };
 
