@@ -43,6 +43,18 @@ def _run(rctx, args, env = {}):
         fail("{} failed ({}): {}".format(" ".join(args), result.return_code, result.stderr))
     return result.stdout.strip()
 
+# A universal Mach-O is hashed by its arm64 slice, the code that runs here: the App Store's Xcode ships the toolchain
+# thinned to arm64, while Apple's .xip, which GitHub's runner images install, ships it universal around the same slice.
+def _arm64_digest(rctx, path):
+    archs = rctx.execute(["/usr/bin/lipo", "-archs", path], quiet = True)
+    if archs.return_code == 0 and len(archs.stdout.strip().split(" ")) > 1:
+        slice = str(rctx.path("arm64-slice"))
+        _run(rctx, ["/usr/bin/lipo", path, "-thin", "arm64", "-output", slice])
+        digest = _run(rctx, ["/usr/bin/shasum", "-a", "256", slice]).split(" ")[0]
+        rctx.delete(slice)
+        return digest
+    return _run(rctx, ["/usr/bin/shasum", "-a", "256", path]).split(" ")[0]
+
 def _xcode_host_impl(rctx):
     developer = rctx.getenv("DEVELOPER_DIR") or _run(rctx, ["/usr/bin/xcode-select", "-p"])
     if not developer.endswith("/Contents/Developer"):
@@ -63,7 +75,7 @@ def _xcode_host_impl(rctx):
     for relative in sorted(XCODE_PINS["sha256"]):
         path = developer + "/" + relative
         rctx.watch(path)
-        digests[relative] = _run(rctx, ["/usr/bin/shasum", "-a", "256", path]).split(" ")[0]
+        digests[relative] = _arm64_digest(rctx, path)
 
     found = {"version": version, "build": build, "clang": clang, "ld": ld, "sha256": digests}
     mismatches = [k for k in found if found[k] != XCODE_PINS[k]]
