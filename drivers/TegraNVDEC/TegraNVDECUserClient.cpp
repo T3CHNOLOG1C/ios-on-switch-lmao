@@ -43,7 +43,9 @@ IOReturn ioreturn(int err)
         return kIOReturnError;
     }
 }
+}  // namespace
 
+// NOLINTNEXTLINE(misc-use-internal-linkage): OSDefineMetaClassAndStructors needs the class's external linkage
 class AppleD5500UserClient : public IOUserClient {
     // NOLINTNEXTLINE(misc-explicit-constructor): IOKit's structors macro declares the metaclass constructor
     OSDeclareDefaultStructors(AppleD5500UserClient)
@@ -81,7 +83,6 @@ public:
     IOReturn externalMethod(uint32_t selector, IOExternalMethodArguments *arguments, IOExternalMethodDispatch *dispatch,
                             OSObject *target, void *reference) APPLE_KEXT_OVERRIDE;
 };
-}  // namespace
 
 OSDefineMetaClassAndStructors(AppleD5500UserClient, IOUserClient)
 
@@ -388,7 +389,7 @@ IOReturn AppleD5500UserClient::externalMethod(uint32_t selector, IOExternalMetho
     return ret;
 }
 
-namespace {
+// NOLINTNEXTLINE(misc-use-internal-linkage): OSDefineMetaClassAndStructors needs the class's external linkage
 class TegraNVDEC : public IOService {
     // NOLINTNEXTLINE(misc-explicit-constructor): IOKit's structors macro declares the metaclass constructor
 OSDeclareDefaultStructors(TegraNVDEC)
@@ -396,7 +397,6 @@ OSDeclareDefaultStructors(TegraNVDEC)
     public : IOReturn newUserClient(task_t task, void *securityID, UInt32 type, OSDictionary *properties,
                                     IOUserClient **handler) APPLE_KEXT_OVERRIDE;
 };
-}  // namespace
 
 OSDefineMetaClassAndStructors(TegraNVDEC, IOService)
 

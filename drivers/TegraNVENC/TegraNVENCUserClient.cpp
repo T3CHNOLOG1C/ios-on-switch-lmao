@@ -44,7 +44,9 @@ IOReturn ioreturn(int err)
         return kIOReturnError;
     }
 }
+}  // namespace
 
+// NOLINTNEXTLINE(misc-use-internal-linkage): OSDefineMetaClassAndStructors needs the class's external linkage
 class AppleAVE2UserClient : public IOUserClient {
     // NOLINTNEXTLINE(misc-explicit-constructor): IOKit's structors macro declares the metaclass constructor
     OSDeclareDefaultStructors(AppleAVE2UserClient)
@@ -82,7 +84,6 @@ public:
     IOReturn externalMethod(uint32_t selector, IOExternalMethodArguments *arguments, IOExternalMethodDispatch *dispatch,
                             OSObject *target, void *reference) APPLE_KEXT_OVERRIDE;
 };
-}  // namespace
 
 OSDefineMetaClassAndStructors(AppleAVE2UserClient, IOUserClient)
 
@@ -314,7 +315,7 @@ IOReturn AppleAVE2UserClient::externalMethod(uint32_t selector, IOExternalMethod
     return ret;
 }
 
-namespace {
+// NOLINTNEXTLINE(misc-use-internal-linkage): OSDefineMetaClassAndStructors needs the class's external linkage
 class TegraNVENC : public IOService {
     // NOLINTNEXTLINE(misc-explicit-constructor): IOKit's structors macro declares the metaclass constructor
 OSDeclareDefaultStructors(TegraNVENC)
@@ -322,7 +323,6 @@ OSDeclareDefaultStructors(TegraNVENC)
     public : IOReturn newUserClient(task_t task, void *securityID, UInt32 type, OSDictionary *properties,
                                     IOUserClient **handler) APPLE_KEXT_OVERRIDE;
 };
-}  // namespace
 
 OSDefineMetaClassAndStructors(TegraNVENC, IOService)
 
