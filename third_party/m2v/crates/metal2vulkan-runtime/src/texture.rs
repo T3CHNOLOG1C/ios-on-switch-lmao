@@ -88,7 +88,7 @@ use super::linear_plan::{
     aliases, check_linear_limits, holding, linear_lack, tile_store_fits, BufferLayout, Holds,
     LinearImage, LinearLack,
 };
-use super::memory::{MemoryClass, Placement};
+use super::memory::{MemoryClass, MemorylessKey, Placement};
 use super::metal_texture::{self, MetalOver};
 use super::mipmap::MipmapChecks;
 use super::nan_clear;
@@ -3215,15 +3215,21 @@ impl Device {
             }
             None => class,
         };
-        let placement =
-            match crate::memory::allocate_image(&shared.memory, raw_device, &requirements, class) {
-                Ok(placement) => placement,
-                Err(error) => {
-                    // SAFETY: the image is unused.
-                    unsafe { release::object(raw_device, raw) };
-                    return Err(error);
-                }
-            };
+        let placed = match class {
+            MemoryClass::Memoryless => {
+                let key = MemorylessKey::of(&info, &requirements);
+                crate::memory::allocate_memoryless(&shared.memory, raw_device, &requirements, key)
+            }
+            _ => crate::memory::allocate_image(&shared.memory, raw_device, &requirements, class),
+        };
+        let placement = match placed {
+            Ok(placement) => placement,
+            Err(error) => {
+                // SAFETY: the image is unused.
+                unsafe { release::object(raw_device, raw) };
+                return Err(error);
+            }
+        };
         // SAFETY: the placement meets the image's requirements and is not bound elsewhere.
         if let Err(error) =
             unsafe { raw_device.bind_image_memory(raw, placement.memory, placement.offset) }
@@ -4598,6 +4604,16 @@ impl Texture {
                 .type_flags(placement.type_index())
                 .is_some_and(|flags| flags.contains(vk::MemoryPropertyFlags::LAZILY_ALLOCATED))
         })
+    }
+
+    /// The memoryless backing the texture's image shares with the device's other memoryless
+    /// images of its shape (`memory::allocate_memoryless`), as its memory and offset; `None` for
+    /// an image in memory of its own.
+    pub(super) fn shared_backing(&self) -> Option<(vk::DeviceMemory, u64)> {
+        let (_, placement) = self.image().ok()?.owner.releases();
+        placement
+            .filter(|placement| placement.backing.is_some())
+            .map(|placement| (placement.memory, placement.offset))
     }
 
     /// The texture's `VkImage`; refused as [`image`](Self::image) is.

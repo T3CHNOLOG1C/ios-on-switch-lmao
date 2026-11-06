@@ -1374,7 +1374,8 @@ impl CommandBuffer {
         rate_mapped_pass::check_descriptor(CALL, device, descriptor)?;
         let taken = render_pass::surface_stencil_loads(descriptor);
         let descriptor = &*taken;
-        let layout = render_pass::layout(CALL, self, descriptor)?;
+        let mut layout = render_pass::layout(CALL, self, descriptor)?;
+        attachment_stand_in::apart_shared_backings(self, &mut layout)?;
         // A length of 1 or more is the layout's layers, a `u32`.
         let render_target_array_length = match descriptor.render_target_array_length {
             0 => 0,
