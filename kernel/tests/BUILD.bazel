@@ -15,6 +15,9 @@
 #                            process, largest first, with their rates and top ids, the rest as others
 #   xnu_render_senders_source_test  ipc_kmsg_send counts a message under its destination port's lock, only for the
 #                            watched space and not for a kernel reply
+#   xnu_ui_scale_test        bsd/vm/switch_ui_scale.h's scales (whole-point screens, exact floats, boot-arg values)
+#                            and the cache text they write, against the assembler and the bytes the 1.6-only sites
+#                            shipped; vm_unix.c's CoreUI row bytes, and no UI scale pager at scale 1
 #
 #   bazel test //kernel/tests:all
 load("@bazel_skylib//rules:copy_file.bzl", "copy_file")
@@ -186,4 +189,21 @@ host_test(
     srcs = ["xnu_stall_test.cpp"],
     data = ["//kernel/xnu-10063.141.1/osfmk:kern/block_hint.h"],
     deps = [":stall"],
+)
+
+# --- switch_ui_scale.h ------------------------------------------------------------------------------------------------
+copy_file(
+    name = "switch_ui_scale",
+    src = "//kernel/xnu-10063.141.1/bsd:vm/switch_ui_scale.h",
+    out = "switch_ui_scale.h",
+)
+
+host_test(
+    name = "xnu_ui_scale_test",
+    srcs = [
+        "switch_ui_scale.h",
+        "xnu_ui_scale_test.cpp",
+    ],
+    data = ["//kernel/xnu-10063.141.1/bsd:vm/vm_unix.c"],
+    includes = ["."],
 )

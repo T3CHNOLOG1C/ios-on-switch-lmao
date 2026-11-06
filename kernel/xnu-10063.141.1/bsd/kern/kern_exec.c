@@ -170,6 +170,7 @@
 #include <vm/vm_pageout.h>
 #include <vm/pmap.h>
 #include <vm/vm_reclaim_internal.h>
+#include <vm/switch_ui_scale.h>
 
 #include <kdp/kdp_dyld.h>
 
@@ -8189,27 +8190,51 @@ native_switch_als_cache(proc_t p, user_addr_t scratch, mount_t data_mount)
 	printf("SwitchRawBoot: ambient light sensor %s: MobileGestalt cache dropped (%d)\n", als ? "on" : "off", error);
 }
 
+extern const struct switch_ui_scale *switch_ui_scale(void);
+
 /* The UI scale (vm_unix.c, SwitchUIScale): MobileGestalt's main-screen-scale comes from its static screen info, which
- * lives in the same build-keyed cache as DisplayBootRotation, so a cache made at another scale keeps answering it. The
- * cache is dropped once per scale: the marker names the scale whose cache MobileGestalt has made since. */
+ * lives in the same build-keyed cache as DisplayBootRotation, so a cache made at another scale keeps answering it.
+ * /private/var/Switch/ui-scale-<num>-<den> names the fractional scale MobileGestalt has made its cache at since the
+ * cache was last dropped; no marker is scale 1, the stock answer, so a Data volume that never left 1 keeps its cache. */
 static void
 native_switch_ui_scale_cache(proc_t p, user_addr_t scratch, mount_t data_mount)
 {
 	static const char cache[] = "/private/var/containers/Shared/SystemGroup/systemgroup.com.apple.mobilegestaltcache/"
-	    "Library/Caches/com.apple.MobileGestalt.plist", marker[] = "/private/var/Switch/ui-scale-8-5";
-	vnode_t vp = NULLVP;
-	if (!vnode_lookup(marker, 0, &vp, vfs_context_current())) {
+	    "Library/Caches/com.apple.MobileGestalt.plist";
+	const struct switch_ui_scale *scale = switch_ui_scale();
+	char markers[SWITCH_UI_SCALES][48] = {{0}};
+	bool current = false, other = false;
+	for (unsigned i = 0; i < SWITCH_UI_SCALES; i++) {
+		const struct switch_ui_scale *each = &switch_ui_scales[i];
+		if (switch_ui_scale_is_unit(each)) continue;
+		snprintf(markers[i], sizeof(markers[i]), "/private/var/Switch/ui-scale-%u-%u", each->num, each->den);
+		vnode_t vp = NULLVP;
+		if (vnode_lookup(markers[i], 0, &vp, vfs_context_current())) {
+			markers[i][0] = '\0';
+			continue;
+		}
 		vnode_put(vp);
-		return;
+		if (each == scale) current = true;
+		else other = true;
 	}
+	if (switch_ui_scale_is_unit(scale) ? !other : current) return;
 	struct unlink_args request = {.path = scratch + 0x900};
 	int32_t result = 0;
 	int error = copyout(cache, request.path, sizeof(cache));
 	if (!error) error = native_switch_unlink(p, &request, &result);
 	if (error == ENOENT) error = 0;
-	if (!error) error = native_switch_mkdir(p, scratch, "/private/var/Switch", 0, 0755);
-	if (!error) error = native_switch_watchdog_file(p, scratch, marker, "", 0, data_mount, 0, 0, 0644);
-	printf("SwitchRawBoot: UI scale 8/5: MobileGestalt cache dropped (%d)\n", error);
+	for (unsigned i = 0; i < SWITCH_UI_SCALES && !error; i++) {
+		if (markers[i][0] == '\0' || &switch_ui_scales[i] == scale) continue;
+		error = copyout(markers[i], request.path, strlen(markers[i]) + 1);
+		if (!error) error = native_switch_unlink(p, &request, &result);
+	}
+	if (!error && !switch_ui_scale_is_unit(scale)) {
+		char marker[48];
+		snprintf(marker, sizeof(marker), "/private/var/Switch/ui-scale-%u-%u", scale->num, scale->den);
+		error = native_switch_mkdir(p, scratch, "/private/var/Switch", 0, 0755);
+		if (!error) error = native_switch_watchdog_file(p, scratch, marker, "", 0, data_mount, 0, 0, 0644);
+	}
+	printf("SwitchRawBoot: UI scale %s: MobileGestalt cache dropped (%d)\n", scale->name, error);
 }
 
 /* Portrait-native: Core Animation must composite the landscape interface into the portrait framebuffer itself. backboardd
@@ -8261,6 +8286,7 @@ native_switch_portrait_display(proc_t p, user_addr_t scratch, mount_t data_mount
  * default 0.5 at each boot (every boot logged since 10-30). Should the managed file not be written, the user's plist is
  * replaced as before (one line). */
 enum native_switch_setup_kind { kSetupUser, kSetupOnce, kSetupManaged };
+enum native_switch_setup_scale { kSetupAnyScale, kSetupUnitScale, kSetupFractionalScale };
 
 static int
 native_switch_setup_state(proc_t p, user_addr_t scratch, mount_t data_mount)
@@ -8268,7 +8294,23 @@ native_switch_setup_state(proc_t p, user_addr_t scratch, mount_t data_mount)
 #define SWITCH_PLIST(body) "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" \
 	"<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n" \
 	"<plist version=\"1.0\"><dict>" body "</dict></plist>\n"
-	static const struct { const char *name, *body; enum native_switch_setup_kind kind; } prefs[] = {
+/* SBDisableIdleSleep is explicitly false: earlier boots wrote true into the user plist, which this managed key
+ * overrides. True makes SpringBoard hold FrontBoard's PreventIdleSleep ("SBPowerDefaults") forever.
+ * Fixed volume buttons (SBDisableNaturalVolumeButtonArrangement). SpringBoard swaps volume up and down by interface
+ * orientation (SBVolumeButtonEventMapper) for an iPad's top-edge or right-edge buttons. It puts them on the top edge
+ * here: no iPad without a home button has a screen as small as this one's, so the screen type falls back to the iPad
+ * mini 6. In orientation 4 that swap turns Vol- into Vol+. With it off, Vol+ (PX6) raises the volume in every
+ * interface orientation the Switch rotates to. */
+#define SWITCH_SPRINGBOARD "<key>BKNoWatchdogs</key><true/>" \
+	"<key>FBLaunchWatchdogExceptions</key><dict><key>com.apple.purplebuddy</key><real>100</real></dict>" \
+	"<key>MCForceShowCloudConfigurationUI</key><false/><key>SBDisableAutoDim</key><true/>" \
+	"<key>SBDontDimOrLockOnAC</key><true/><key>SBDisableIdleSleep</key><false/>" \
+	"<key>SBDisableNaturalVolumeButtonArrangement</key><true/>"
+	static const struct {
+		const char *name, *body;
+		enum native_switch_setup_kind kind;
+		enum native_switch_setup_scale scale;
+	} prefs[] = {
 		{"com.apple.purplebuddy", SWITCH_PLIST("<key>SetupDone</key><true/><key>SetupFinishedAllSteps</key><true/>"
 		    "<key>SetupVersion</key><integer>11</integer><key>daemonizeNeedsToRun</key><false/>"), kSetupUser},
 		{"com.apple.purplebuddy.notbackedup", SWITCH_PLIST("<key>ShouldRunDiagnosticsMiniBuddy</key><false/>"
@@ -8277,24 +8319,19 @@ native_switch_setup_state(proc_t p, user_addr_t scratch, mount_t data_mount)
 		    "<key>ShouldRunStandardMiniBuddy</key><false/><key>SilentICDPUpgrade</key><false/>"), kSetupUser},
 		{"com.apple.managedconfiguration.notbackedup",
 		    SWITCH_PLIST("<key>LockdownActivationIndicatesCloudConfigurationAvailable</key><false/>"), kSetupUser},
-		{"com.apple.springboard", SWITCH_PLIST("<key>BKNoWatchdogs</key><true/>"
-		    "<key>FBLaunchWatchdogExceptions</key><dict><key>com.apple.purplebuddy</key><real>100</real></dict>"
-		    "<key>MCForceShowCloudConfigurationUI</key><false/><key>SBDisableAutoDim</key><true/>"
-		    "<key>SBDontDimOrLockOnAC</key><true/>"
-		    /* Explicitly false: earlier boots wrote true into the user plist, which this managed key overrides.
-		     * True makes SpringBoard hold FrontBoard's PreventIdleSleep ("SBPowerDefaults") forever. */
-		    "<key>SBDisableIdleSleep</key><false/>"
-		    /* Fixed volume buttons. SpringBoard swaps volume up and down by interface orientation
-		     * (SBVolumeButtonEventMapper) for an iPad's top-edge or right-edge buttons. It puts them on the
-		     * top edge here: no iPad without a home button is as small as 450x800 points, so the screen
-		     * type falls back to the iPad mini 6. In orientation 4 that swap turns Vol- into Vol+. With it
-		     * off, Vol+ (PX6) raises the volume in every interface orientation the Switch rotates to. */
-		    "<key>SBDisableNaturalVolumeButtonArrangement</key><true/>"), kSetupManaged},
+		/* 720x1280 points at scale 1 are too small to read on a 7" panel: large icons and the text size below keep
+		 * them legible. A fractional scale's points are an iPad's, and Settings' own choices apply. */
+		{"com.apple.springboard", SWITCH_PLIST(SWITCH_SPRINGBOARD "<key>SBHomeLargeIcons</key><true/>"), kSetupManaged,
+		    kSetupUnitScale},
+		{"com.apple.springboard", SWITCH_PLIST(SWITCH_SPRINGBOARD), kSetupManaged, kSetupFractionalScale},
+		{"com.apple.UIKit", SWITCH_PLIST("<key>UIPreferredContentSizeCategoryName</key>"
+		    "<string>UICTContentSizeCategoryXXL</string>"), kSetupOnce, kSetupUnitScale}, /* the user's Text Size then sticks */
 		/* Seeded once: DataMigrator keeps its results and its hang-reboot count in this domain. */
 		{"com.apple.migration", SWITCH_PLIST("<key>LastSystemVersion</key><string>21H461</string>"
 		    "<key>DMUserDataDisposition</key><dict><key>SyntheticDidUpgrade</key><false/>"
 		    "<key>buildVersion</key><string>21H461</string></dict>"), kSetupOnce},
 	};
+#undef SWITCH_SPRINGBOARD
 #undef SWITCH_PLIST
 	/* Directories a restore creates on Data (UniXNU prepare-offline-data.py): usermanagerd keeps its
 	 * session and persona keybags in keybags/ and aborts at every start without it. */
@@ -8317,7 +8354,9 @@ native_switch_setup_state(proc_t p, user_addr_t scratch, mount_t data_mount)
 	for (unsigned i = 0; i < sizeof(directories) / sizeof(directories[0]) && !error; ++i)
 		error = native_switch_mkdir(p, scratch, directories[i].path, directories[i].owner, directories[i].mode);
 	char path[160] = "/private/var/containers";
+	const bool unit_scale = switch_ui_scale_is_unit(switch_ui_scale());
 	for (unsigned i = 0; i < sizeof(prefs) / sizeof(prefs[0]) && !error; ++i) {
+		if (prefs[i].scale == (unit_scale ? kSetupFractionalScale : kSetupUnitScale)) continue;
 		const char *body = prefs[i].body;
 		if (prefs[i].kind == kSetupManaged) {
 			snprintf(path, sizeof(path), "/private/var/Managed Preferences/mobile/%s.plist", prefs[i].name);
