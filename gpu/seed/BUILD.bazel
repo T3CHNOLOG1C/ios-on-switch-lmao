@@ -1,6 +1,7 @@
 load("@bazel_skylib//rules:common_settings.bzl", "string_flag")
 load("//bazel/lint:defs.bzl", "lint_files")
-load(":defs.bzl", "metal_seed", "seed_raw_pack", "seed_tools", "seed_tree", "shader_crawl", "tools_archive")
+load(":defs.bzl", "metal_seed", "seed_raw_pack", "seed_tree", "shader_crawl")
+load(":tools.bzl", "seed_tools", "tools_archive")
 
 package(default_visibility = ["//visibility:public"])
 

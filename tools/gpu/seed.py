@@ -7,7 +7,7 @@
                  --mock libmock_iokit.dylib --out precompile
     seed.py twin --nvk <iOS dylib> --twin <host dylib> --out libvulkan_nouveau.dylib
     seed.py layout --precompile F --mock F --twin-dylib F --raw <raw pack tools dir> --stack <stack file>
-                   --nvk-source <the iOS dylib's .source> --out <dir>
+                   --nvk-source <the iOS dylib's .source> --out <dir> --manifest <a copy of its MANIFEST.json>
     seed.py archive --tools <dir> --out <tar>
 
 layout: the tools directory the seed runs (precompile, libmock_iokit.dylib beside it, the twin, raw/ with the raw pack's
@@ -157,7 +157,9 @@ def layout(args: argparse.Namespace, _root: Path, _work: Path) -> None:
         'nvk_uuid': lc_uuid(out / 'libvulkan_nouveau.dylib').hex(),
         'mesa_tree': mesa,
     }
-    (out / 'MANIFEST.json').write_text(json.dumps(manifest, indent=1, sort_keys=True) + '\n')
+    text = json.dumps(manifest, indent=1, sort_keys=True) + '\n'
+    (out / 'MANIFEST.json').write_text(text)
+    Path(args.manifest).write_text(text)
 
 
 def archive(args: argparse.Namespace, _root: Path, _work: Path) -> None:
@@ -177,7 +179,7 @@ STEPS = {
     'mock': (mock, ('xcode-env', 'abi-header', 'mock-iokit', 'out')),
     'tool': (tool, ('xcode-env', 'metal-header', 'precompile', 'frontend', 'host-bridge', 'mock', 'out')),
     'twin': (twin, ('nvk', 'twin', 'out')),
-    'layout': (layout, ('precompile', 'mock', 'twin-dylib', 'raw', 'stack', 'nvk-source', 'out')),
+    'layout': (layout, ('precompile', 'mock', 'twin-dylib', 'raw', 'stack', 'nvk-source', 'out', 'manifest')),
     'archive': (archive, ('tools', 'out')),
 }
 
