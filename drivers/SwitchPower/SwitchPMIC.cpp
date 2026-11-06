@@ -659,6 +659,25 @@ extern "C" int switch_rtc_resume(void)
     return gRTC ? gRTC->resume() : 0;
 }
 
+#if DEVELOPMENT || DEBUG
+// SwitchSuspend's journal before SC7: the PMIC's sleep and wake setup as the SoC leaves it, against what L4T's
+// max77620_i2c_suspend sets (ONOFFCNFG1 SLPEN bit 2 for the DT's FPS sleep; ONOFFCNFG2 WK_EN0 bit 0 cleared).
+extern "C" void switch_pmic_sleep_report(char *line, size_t size)
+{
+    static const uint8_t regs[] = {ONOFFCNFG1, ONOFFCNFG2, IRQTOPM, 0x0e, 0x12, 0x43, 0x44, 0x45, 0x4f};
+    uint8_t v[sizeof(regs)] = {}, rtcMask = 0;
+    int err = 0;
+    for (size_t i = 0; i < sizeof(regs) && !err; ++i)
+        err = readByte(kPmic, regs[i], &v[i]);
+    if (!err)
+        err = readByte(kRtc, RTC_INT_MASK, &rtcMask);
+    snprintf(line, size,
+             "ONOFFCNFG1 %#04x ONOFFCNFG2 %#04x IRQTOPM %#04x INTENLBT %#04x ONOFFIRQM %#04x FPS_CFG %#04x %#04x %#04x "
+             "FPS_SD0 %#04x RTCINTM %#04x (I2C5 %d)",
+             v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], rtcMask, err);
+}
+#endif
+
 extern "C" void switch_rtc_interrupt(void)
 {
     uint8_t pending = 0;

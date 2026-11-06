@@ -12,6 +12,8 @@
 #include "../ArmGIC/ArmGIC.h"
 #include "../../kits/SwitchDMA/SwitchDcache.h"
 #include "../../kits/SwitchDMA/SwitchHwPage.h"
+#include "../../diagnostics/switch/SwitchPowerTrail.h"
+#include "../SwitchSuspend/SwitchSleepSteps.h"
 
 // Exact private entry from Darwin 23 arm/rtclock.h. Its full data header is
 // not exported to IOKit; the IRQ path calls the real kernel implementation.
@@ -33,9 +35,11 @@ extern "C" kern_return_t IOCPURunPlatformQuiesceActions(void);
 extern "C" kern_return_t IOCPURunPlatformActiveActions(void);
 // Owned here, read by the kernel (osfmk/arm64/cpu.c): arm64_prepare_for_sleep calls switch_cpu_sleep_handler when
 // set, and cpu_machine_idle_init sets the flag at boot, so a kernel without the hook (whose arm64_prepare_for_sleep
-// only parks in WFI) is recognised and sleep stays off.
+// only parks in WFI) is recognised and sleep stays off. arm_init_cpu (osfmk/arm/arm_init.c) calls
+// switch_cpu_wake_handler on the boot CPU back from SC7, before anything else in the kernel runs there.
 extern "C" {
 void (*switch_cpu_sleep_handler)(boolean_t) = nullptr;
+void (*switch_cpu_wake_handler)(void) = nullptr;
 bool switch_cpu_sleep_hook_present = false;
 }
 
@@ -195,6 +199,9 @@ static volatile uint32_t gBootRegistered = 0;
 // System sleep is on (armcpu_system_sleep_enable): haltCPU/quiesceCPU/initCPU(false) take the PSCI sleep path.
 static bool gSystemSleep = false;
 static uint64_t gSleepEntryPA = 0, gSleepRecordPA = 0;
+// The SoC watchdog across the steps no kernel watchdog sees (debug kernels): SC7 entry after the boot CPU's halt, and
+// SC7 exit until IOPMrootDomain's own watchdog runs again. Either takes milliseconds.
+static constexpr unsigned kSleepWatchSeconds = 10;
 
 // Shared peripheral interrupts (INTID 32..1019) belong to the ArmGIC controller (drivers/ArmGIC), which drivers reach
 // through IOInterruptEventSource. An SPI no driver owns is counted and disabled instead of being acknowledged forever.
@@ -1275,6 +1282,7 @@ void ArmCpu::quiesceCPU(void)
         panic("ArmCpu: CPU%u quiesce for system sleep, but SwitchSuspend did not enable SC7", logicalId);
     }
     if (!secondary) {
+        switch_sleep_trail(SWITCH_STEP_QUIESCE);
         const kern_return_t result = IOCPURunPlatformQuiesceActions();
         if (result != KERN_SUCCESS) {
             panic("ArmCpu: platform quiesce actions failed (%d)", result);
@@ -1299,6 +1307,14 @@ void ArmCpu::haltCPU(void)
     if (!gSystemSleep) {
         panic("ArmCpu: CPU%u halt requested, but SwitchSuspend did not enable SC7", logicalId);
     }
+    if (secondary) {
+        switch_sleep_trail(SWITCH_STEP_HALT_CPU1 + logicalId - 1);
+    } else {
+        // IOCPUSleepKernel has just stopped IOPMrootDomain's sleep watchdog: from here to the wake, a hang that does not
+        // end in SC7 warm-resets instead. SC7 powers the timer down with the rest of the core.
+        switch_sleep_trail(SWITCH_STEP_HALT_BOOT_CPU);
+        switch_power_trail_watch(kSleepWatchSeconds, "SC7 entry");
+    }
     const kern_return_t result = processor_exit(machProcessor);
     if (result != KERN_SUCCESS) {
         panic("ArmCpu: processor_exit for CPU%u failed (%d)", logicalId, result);
@@ -1312,6 +1328,8 @@ void ArmCpu::haltCPU(void)
 // (osfmk/kern/machine.c processor_offline: "PE_cpu_machine_init() ... sends a self-IPI").
 void ArmCpu::resumeCPU(void)
 {
+    if (!secondary)
+        switch_sleep_trail(SWITCH_STEP_RESUME_CPU);
     if (!gSystemSleep || !gicV2) {
         panic("ArmCpu: CPU%u resumed, but system sleep is not enabled", logicalId);
     }
@@ -1322,6 +1340,7 @@ void ArmCpu::resumeCPU(void)
     }
     configureBankedV2();
     if (!secondary) {
+        switch_sleep_trail(SWITCH_STEP_RESUME_ACTIVE);
         const kern_return_t result = IOCPURunPlatformActiveActions();
         if (result != KERN_SUCCESS) {
             panic("ArmCpu: platform active actions failed (%d)", result);
@@ -1352,6 +1371,7 @@ static void psciSleep(boolean_t)
         const int64_t rc = psciCall(false, 0x84000002, 0, 0, 0);
         panic("ArmCpu: PSCI CPU_OFF on CPU%u returned %lld", cpu, rc);
     }
+    switch_sleep_trail(SWITCH_STEP_PSCI_PEERS_OFF);
     for (uint64_t peer = 1; gNativeSmp && peer < SWITCH_SMP_CORE_COUNT; ++peer) {
         const uint64_t started = counter();
         int64_t state;
@@ -1371,9 +1391,28 @@ static void psciSleep(boolean_t)
     record->cntvoff = 0;
     record->reset_pa = ml_static_vtop(reinterpret_cast<vm_offset_t>(LowResetVectorBase));
     cleanToMemory(record, sizeof(*record));
+#if DEVELOPMENT || DEBUG
+    // ATF's SYSTEM_SUSPEND returns at once, without suspending, while an interrupt is pending here (psci_suspend.c).
+    uint64_t pending;
+    __asm__ volatile("mrs %0, isr_el1" : "=r"(pending));
+    switch_power_trail("isr_el1 %#llx", pending);
+#endif
+    switch_power_trail_mark_now(SWITCH_STEP_SYSTEM_SUSPEND);
     const int64_t rc = psciCall(false, 0xc400000e, gSleepEntryPA, gSleepRecordPA, 0);
     panic("ArmCpu: PSCI SYSTEM_SUSPEND returned %lld", rc);
 }
+
+#if DEVELOPMENT || DEBUG
+// The boot CPU back from SC7, the first C the kernel runs there (arm_init_cpu): interrupts off, the timebase not yet
+// rebased.
+static void sc7Exit(void)
+{
+    // The mark first: I2C5's raw write re-clocks its controller, while the timer block's state after the warm boot is
+    // unknown, and a stall in the watchdog's write must not leave the mark at SYSTEM_SUSPEND.
+    switch_power_trail_mark_now(SWITCH_STEP_RESUME);
+    switch_power_trail_watch(kSleepWatchSeconds, "SC7 exit");
+}
+#endif
 
 // SwitchSuspend's start: system sleep is possible when native GICv2 SMP (or the boot CPU alone) runs on switchroot
 // ATF's PSCI with CPU_OFF, AFFINITY_INFO and SYSTEM_SUSPEND, and the kernel has the sleep hook. Returns 0 and turns
@@ -1422,6 +1461,9 @@ extern "C" int armcpu_system_sleep_enable(char *why, size_t size)
     }
     gSystemSleep = true;
     switch_cpu_sleep_handler = psciSleep;
+#if DEVELOPMENT || DEBUG
+    switch_cpu_wake_handler = sc7Exit;
+#endif
     return 0;
 }
 

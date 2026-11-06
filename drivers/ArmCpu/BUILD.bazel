@@ -31,7 +31,9 @@ kernel_headers()
 kernel_driver(
     name = "ArmCpu",
     hdr_deps = [
+        "diagnostics/switch",
         "drivers/ArmGIC",
+        "drivers/SwitchSuspend",
         "kits/SwitchDMA",
     ],
 )

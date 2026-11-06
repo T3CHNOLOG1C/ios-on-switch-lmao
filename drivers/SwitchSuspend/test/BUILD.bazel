@@ -2,6 +2,7 @@
 #   switch_wake_test          SwitchWakeSources.h through switch_wake_harness.c (C11, -Wconversion -Wsign-conversion):
 #                             Bluetooth controllers' Home and Capture in their HID reports and the clicks they make,
 #                             the wake guarantee, the power journal's ring, the PMC wake events armed for SC7
+#   switch_sleep_steps_test   SwitchSleepSteps.h: each sleep and wake step's power-trail code and name
 #   switch_wake_source_test   what the wake path relies on elsewhere: the console buttons' HID descriptor (Menu and
 #                             Snapshot bits), SwitchBluetooth's every-packet peek, SwitchWake's and SwitchButtons' clicks
 #
@@ -29,6 +30,14 @@ host_test(
     name = "switch_wake_test",
     srcs = ["switch_wake_test.cpp"],
     deps = [":switch_wake_harness"],
+)
+
+host_test(
+    name = "switch_sleep_steps_test",
+    srcs = [
+        "switch_sleep_steps_test.cpp",
+        "//drivers/SwitchSuspend:SwitchSleepSteps.h",
+    ],
 )
 
 # SwitchHID.h's one kernel header, for the button bits' static_asserts.

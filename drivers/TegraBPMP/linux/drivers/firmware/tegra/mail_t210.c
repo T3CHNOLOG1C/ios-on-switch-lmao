@@ -200,6 +200,12 @@ static int bpmp_connect(const struct channel_cfg *cfg,
 	return 0;
 }
 
+/* SWITCH: the semaphore's whole status word, for the sleep path (TegraBPMP.h tegra_bpmp_semaphore). */
+u32 tegra_bpmp_semaphore(void)
+{
+	return arb_sema ? __raw_readl(arb_sema + STA_OFFSET) : 0;
+}
+
 const struct mail_ops t210_mail_ops = {
 	.init_irq = bpmp_init_irq,
 	.connect = bpmp_connect,

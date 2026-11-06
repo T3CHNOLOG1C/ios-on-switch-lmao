@@ -16,10 +16,18 @@ extern "C" {
 int tegra_bpmp_emc_boot(unsigned int khz, char *line, unsigned long size);
 
 // System sleep (drivers/SwitchSuspend), thread context with interrupts on, nothing else using the mailbox: suspend
-// brings the mailbox up if it is not, lowers EMC to 204 MHz and tells the firmware the next power-down is SC7; resume
-// asks for the EMC rate suspend found. Each fills `line` and returns 0 or a negative errno.
+// brings the mailbox up if it is not, lowers EMC to 204 MHz, tells the firmware the next power-down is SC7 and returns
+// -EBUSY unless every mailbox channel is then free (tegra_bpmp_semaphore); resume asks for the EMC rate suspend found.
+// Each fills `line` and returns 0 or a negative errno.
 int tegra_bpmp_sc7_suspend(char *line, unsigned long size);
 int tegra_bpmp_sc7_resume(char *line, unsigned long size);
+
+// The mailbox's arbitration semaphore status, two bits a channel; 0 before the mailbox is up. ATF's SYSTEM_SUSPEND
+// (switch-l4t-atf plat_psci_handlers.c, drivers/bpmp/bpmp.c tegra_bpmp_init) takes the BPMP firmware for running only
+// while this reads SIGN_OF_LIFE, every channel free; otherwise it powers the BPMP off and runs an SC7 entry firmware,
+// which this boot chain does not have (hekate passes one on T210 only), and never reaches SC7. Any context.
+#define TEGRA_BPMP_SIGN_OF_LIFE 0xAAAAAAAAu
+unsigned int tegra_bpmp_semaphore(void);
 
 #ifdef __cplusplus
 }

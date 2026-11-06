@@ -4,7 +4,7 @@
 // its step runs, so the step a hang stopped in is the last one written:
 //   * switch_power_trail_mark while TegraI2C is up (thread context): the durable mark, which a forced power-off keeps;
 //   * switch_power_trail_mark_now for the SC7 entry and the first steps out of it, which run with interrupts off on
-//     the boot CPU alone (SWITCH_STEP_SYSTEM_SUSPEND, SWITCH_STEP_RESUME_CPU);
+//     the boot CPU alone (SWITCH_STEP_SYSTEM_SUSPEND, SWITCH_STEP_RESUME);
 //   * a trail line only between those, where TegraI2C is down and other cores may run.
 // Plain C, for the trail's decoder and the host tests.
 #pragma once
@@ -14,8 +14,8 @@
 extern "C" {
 #endif
 
-enum switch_sleep_step {
-    // Sleep action (SwitchSuspend::sleepDevices): thread context, every core up.
+// Sleep action (SwitchSuspend::sleepDevices): thread context, every core up.
+enum {
     SWITCH_STEP_SLEEP = 0x20,
     SWITCH_STEP_SLEEP_ALS,
     SWITCH_STEP_SLEEP_DISPLAY,
@@ -31,15 +31,17 @@ enum switch_sleep_step {
     SWITCH_STEP_SLEEP_THERMAL,
     SWITCH_STEP_SLEEP_SE,
     SWITCH_STEP_SLEEP_NVRAM,
-    SWITCH_STEP_SLEEP_JOURNAL,
-
-    // SC7 entry: the sleep action's last steps (the SD down), then IOCPUSleepKernel (ArmCpu): the secondaries, the
-    // boot CPU with interrupts off.
-    SWITCH_STEP_SLEEP_SD = 0x30,
     SWITCH_STEP_SLEEP_RTC,
-    SWITCH_STEP_SLEEP_BATTERY,
+};
+
+// SC7 entry: the sleep action's last steps (the wake events and the BPMP set up, the journal written, the SD down),
+// then IOCPUSleepKernel (ArmCpu): the secondaries, the boot CPU with interrupts off.
+enum {
+    SWITCH_STEP_SLEEP_BATTERY = 0x30,
     SWITCH_STEP_SLEEP_PMC_WAKE,
     SWITCH_STEP_SLEEP_BPMP,
+    SWITCH_STEP_SLEEP_JOURNAL,
+    SWITCH_STEP_SLEEP_SD,
     SWITCH_STEP_SLEEP_I2C,
     SWITCH_STEP_HALT_CPU1,
     SWITCH_STEP_HALT_CPU2,
@@ -48,9 +50,11 @@ enum switch_sleep_step {
     SWITCH_STEP_QUIESCE,
     SWITCH_STEP_PSCI_PEERS_OFF,
     SWITCH_STEP_SYSTEM_SUSPEND,
+};
 
-    // SC7 exit: the boot CPU with interrupts off (XNU's arm_init_cpu, the first C to run; ArmCpu), then the wake
-    // action's first steps (SwitchSuspend::wakeDevices, every core up again).
+// SC7 exit: the boot CPU with interrupts off (XNU's arm_init_cpu, the first C to run; ArmCpu), then the wake action's
+// first steps (SwitchSuspend::wakeDevices, every core up again).
+enum {
     SWITCH_STEP_RESUME = 0x40,
     SWITCH_STEP_RESUME_CPU,
     SWITCH_STEP_RESUME_ACTIVE,
@@ -61,8 +65,10 @@ enum switch_sleep_step {
     SWITCH_STEP_WAKE_SMMU,
     SWITCH_STEP_WAKE_SE,
     SWITCH_STEP_WAKE_SD,
+};
 
-    // The rest of the wake action.
+// The rest of the wake action.
+enum {
     SWITCH_STEP_WAKE_BATTERY = 0x50,
     SWITCH_STEP_WAKE_THERMAL,
     SWITCH_STEP_WAKE_SENSORS,
@@ -77,6 +83,9 @@ enum switch_sleep_step {
     SWITCH_STEP_WAKE_TOUCH,
     SWITCH_STEP_WAKE_DISPLAY,
     SWITCH_STEP_WAKE_ALS,
+};
+
+enum {
     SWITCH_STEP_AWAKE = 0x5f,
 };
 
@@ -102,12 +111,12 @@ static inline const char *switch_sleep_step_name(unsigned step)
         "sleep thermal",
         "sleep se",
         "sleep nvram",
-        "sleep journal",
-        "sleep sd",
         "sleep rtc",
         "sleep battery",
         "sleep pmc wake",
         "sleep bpmp",
+        "sleep journal",
+        "sleep sd",
         "sleep i2c",
         "halt cpu1",
         "halt cpu2",

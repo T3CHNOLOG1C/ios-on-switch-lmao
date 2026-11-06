@@ -22,15 +22,15 @@
 //     wake set up, UART-D stopped)
 //     3 wifi (chip let go, worker parked)   4 host1x (NVDEC, NVENC, VIC, NVJPG quiesced, then host1x)   4 audio
 //     5 thermal (CPU off the DFLL to PLLX at the boot clocks, fan off)   5 se (both engines idle for BL31's save)
-//     6 PESyncNVRAM (SD still up), journal to Data
-//     7 sd (drained, off)   8 rtc (MAX77620 ALARM1 for powerd's next wake)   8 battery (charge-zone alert), gauge read
-//     9 PMC wake events armed   9 bpmp (EMC to 204 MHz, MRQ_ENABLE_SUSPEND SC7)   10 i2c (last: holds every bus)
+//     6 PESyncNVRAM   7 rtc (MAX77620 ALARM1 for powerd's next wake)   7 battery (charge-zone alert), gauge read
+//     8 PMC wake events armed   8 bpmp (EMC to 204 MHz, MRQ_ENABLE_SUSPEND SC7, every mailbox channel free)
+//     9 journal to Data   9 sd (drained, off)   10 i2c (last: holds every bus)
 //   quiesce action, boot CPU, interrupts off, secondaries already off:
-//     tegra_gpio_suspend, pinmux saved (here), arm_gic_suspend, Tegra RTC read (here)
+//     tegra_gpio_suspend, pinmux saved (here), arm_gic_suspend, TIMERUS_USEC_CFG and the Tegra RTC read (here)
 //   (PSCI SYSTEM_SUSPEND; the SoC is in SC7)
 //   active action, boot CPU, interrupts off, before the secondaries start:
-//     Tegra RTC read, pinmux restored (here), tegra_gpio_resume, pads out of deep power-down (here), arm_gic_resume,
-//     PMC wake status read (here)
+//     Tegra RTC read, TIMERUS_USEC_CFG and pinmux restored (here), tegra_gpio_resume, pads out of deep power-down
+//     (here), arm_gic_resume, PMC wake status read (here)
 //   wake action, thread context, every core running:
 //     0 i2c, gauge read   0 bpmp (the EMC rate back)   1 rtc (wall clock re-read before clock_wakeup_calendar)
 //     2 smmu (every attached swgroup)   2 se   3 sd   4 battery   5 thermal (DFLL re-initialized; SwitchThermal

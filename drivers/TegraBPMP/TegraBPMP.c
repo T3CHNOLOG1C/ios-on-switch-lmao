@@ -297,6 +297,7 @@ int tegra_bpmp_sc7_suspend(char *line, unsigned long size)
 {
 	u32 enable[2] = {TEGRA_PM_SC7, 0};
 	s64 now = 0, rounded = 0, after = 0;
+	unsigned int channels;
 	int err;
 
 	emc_resume_hz = 0;
@@ -319,8 +320,16 @@ int tegra_bpmp_sc7_suspend(char *line, unsigned long size)
 	err = tegra_bpmp_send_receive(MRQ_ENABLE_SUSPEND, enable, sizeof(enable), NULL, 0);
 	if (!err)
 		err = tegra_bpmp_suspend();
-	snprintf(line, size, "EMC %lld -> %lld MHz, MRQ_ENABLE_SUSPEND SC7 %s (%d)", now / 1000000,
-		 (emc_resume_hz ? after : now) / 1000000, err ? "failed" : "sent", err);
+	channels = tegra_bpmp_semaphore();
+	snprintf(line, size,
+		 "EMC %lld -> %lld MHz, MRQ_ENABLE_SUSPEND SC7 %s (%d), mailbox channels %#x%s",
+		 now / 1000000, (emc_resume_hz ? after : now) / 1000000, err ? "failed" : "sent",
+		 err, channels,
+		 channels == TEGRA_BPMP_SIGN_OF_LIFE
+			 ? ""
+			 : " (not all free: ATF will not see the firmware)");
+	if (!err && channels != TEGRA_BPMP_SIGN_OF_LIFE)
+		err = -EBUSY;
 	return err;
 }
 

@@ -117,8 +117,9 @@ void utcStamp(char *out, size_t size)
 }
 
 // The whole file: created, or overwritten and cut to `length` (vnode_open does not truncate), owned by uid/gid when
-// uid >= 0, fsynced. 0 or an errno.
-int writeFile(const char *path, const void *bytes, size_t length, int mode, int uid)
+// uid >= 0, fsynced. durable: F_FULLFSYNC as well, which commits APFS's transaction (an fsync may leave the new
+// extents in an uncommitted one, which a power cut, or the SD going down for system sleep, then loses). 0 or an errno.
+int writeFile(const char *path, const void *bytes, size_t length, int mode, int uid, bool durable = false)
 {
     vfs_context_t ctx = vfs_context_kernel();
     vnode_t vp = NULLVP;
@@ -142,6 +143,8 @@ int writeFile(const char *path, const void *bytes, size_t length, int mode, int 
     }
     if (!error)
         error = VNOP_FSYNC(vp, MNT_WAIT, ctx);
+    if (!error && durable)
+        error = VNOP_IOCTL(vp, F_FULLFSYNC, nullptr, 0, ctx);
     const int closeError = vnode_close(vp, FWRITE, ctx);
     return error ? error : closeError;
 }
@@ -161,7 +164,7 @@ void copyPrevious()
         (void)writeFile(kPrevious, gRender, sizeof(gRender) - (size_t)resid, 0644, -1);
 }
 
-void writeJournal()
+void writeJournal(bool durable)
 {
     IOLock *lock = once(&gLock), *writeLock = once(&gWriteLock);
     if (!lock || !writeLock)
@@ -181,7 +184,7 @@ void writeJournal()
     const size_t length =
         (size_t)used + switch_power_ring_render(&gRing, gRender + used, sizeof(gRender) - (size_t)used);
     IOLockUnlock(lock);
-    const int error = writeFile(kJournal, gRender, length, 0644, -1);
+    const int error = writeFile(kJournal, gRender, length, 0644, -1, durable);
     if (error && !gWriteFailed)
         IOLog("SwitchPower: %s not written (%d)\n", kJournal, error);
     gWriteFailed = error != 0;
@@ -190,7 +193,7 @@ void writeJournal()
 
 void flushCall(thread_call_param_t, thread_call_param_t)
 {
-    writeJournal();
+    writeJournal(false);
 }
 
 void shotCall(thread_call_param_t, thread_call_param_t)
@@ -261,7 +264,7 @@ extern "C" void switch_power_journal(const char *format, ...)
 extern "C" void switch_power_journal_flush(bool wait)
 {
     if (wait) {
-        writeJournal();
+        writeJournal(true);
         return;
     }
     if (thread_call_t call = onceCall(&gFlushCall, flushCall))
