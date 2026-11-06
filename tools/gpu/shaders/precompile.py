@@ -110,6 +110,10 @@ def make(work: Path, args: argparse.Namespace, corpus: dict, derived: dict) -> d
     """Run the tool until every line is made or skipped; return what happened."""
     env = {
         'PATH': '/usr/bin:/bin',
+        # work/precompile is a hard link, and macOS may name the executable by its other link (the tool's output
+        # directory, without the mock beside it) when dyld resolves @rpath; the leaf-name search here does not depend
+        # on which name the kernel picks.
+        'DYLD_LIBRARY_PATH': str(work),
         'HOME': str(work / 'home'),
         'TMPDIR': str(work / 'tmp'),
         'MESA_SHADER_CACHE_DISABLE': 'true',
