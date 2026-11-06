@@ -73,6 +73,12 @@ class TablesTest(unittest.TestCase):
                 if interface.get('header', True):
                     gen.header(interface, table, path.name)
 
+    def test_one_slide_per_kind(self):
+        slides = {}
+        for path, _, table in tables():
+            slides.setdefault(table['kind'], set()).add(table['slide'])
+        self.assertEqual({k: len(v) for k, v in slides.items()}, {k: 1 for k in slides})
+
     def test_every_virtual_the_class_adds_has_a_slot(self):
         for path, interface, table in tables():
             with self.subTest(table=str(path.relative_to(ROOT))):

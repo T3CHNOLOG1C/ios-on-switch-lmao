@@ -23,6 +23,7 @@ def _kernel_prelink_fileset_impl(ctx):
     args.add("--arm64e", ctx.executable._arm64e)
     args.add("--ipsw", ctx.executable._ipsw)
     args.add("--symbolsets", ctx.file.symbolsets)
+    args.add("--slide", ctx.attr.slide)
     args.add("--out", out)
     args.add("--report", report)
     args.add("--names", names)
@@ -48,6 +49,7 @@ kernel_prelink_fileset = rule(
         "kernelcache_17": attr.label(default = "//ipsw:kernelcache_21H461", allow_single_file = True),
         "symbolsets": attr.label(mandatory = True, allow_single_file = [".plist"], doc = "the kernel's symbolsets.plist"),
         "out": attr.string(mandatory = True, doc = "the prelinked kernel's path in the package, ending in .macho"),
+        "slide": attr.string(mandatory = True, doc = "the kexts' slide the bindings assume (kits/SwitchABI's tables)"),
         "_arm64e": attr.label(default = "//translate/arm64e", executable = True, cfg = "exec"),
         "_ipsw": attr.label(default = "@ipsw_cli//:ipsw", executable = True, allow_single_file = True, cfg = "exec"),
         "_prelink": attr.label(default = "//translate/arm64e:prelink", executable = True, cfg = "exec"),

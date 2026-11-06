@@ -476,6 +476,7 @@ kernel_prelink_fileset(
     name = "kernel_12377",
     out = "build/xnu-12377/kernel.macho",
     kernel = ":kernel_unprelinked_12377",
+    slide = "-0x3fec000",
     symbolsets = "//kernel/xnu-12377.121.6/config:symbolsets_plist",
 )
 
