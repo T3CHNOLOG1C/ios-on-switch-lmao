@@ -73,7 +73,7 @@ alias(
 
 alias(
     name = "kernel",
-    actual = "//kernel:kernel",
+    actual = "//kernel:prelinked",
 )
 
 alias(

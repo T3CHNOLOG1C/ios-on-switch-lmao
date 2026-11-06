@@ -486,13 +486,24 @@ xnu_kernel_12377(
     ],
 )
 
-# iPadOS 27's kexts (the 24B119 kernelcache's) prelinked into the 12377 kernel.
+# iPadOS 27's kexts (the 24B119 kernelcache's) prelinked into the 12377 kernel. The slide puts the image's lowest
+# segment (the kexts' __PRELINK_TEXT) at 0x7c000 modulo 2 MiB, as the boot window's physical base 0xB207C000 is: the
+# loader maps the kernel window in 2 MiB blocks. The SwitchABI tables bind at this slide.
 kernel_prelink_fileset(
     name = "kernel_12377",
     out = "build/xnu-12377/kernel.macho",
     kernel = ":kernel_unprelinked_12377",
-    slide = "-0x3fec000",
+    slide = "-0x4088000",
     symbolsets = "//kernel/xnu-12377.121.6/config:symbolsets_plist",
+)
+
+# The prelinked kernel of the selected IPSW kind's XNU: what the boot package carries.
+alias(
+    name = "prelinked",
+    actual = select({
+        ":xnu_12377_121_6": ":kernel_12377",
+        "//conditions:default": ":kernel",
+    }),
 )
 
 # --- Prelink: Apple's original kexts (the V20 roots, plus every driver's prelink list) --------------------------------

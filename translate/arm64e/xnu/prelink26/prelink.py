@@ -50,6 +50,7 @@ def main():
         PRELINK_OURS=str(args.kernel.resolve()),
         PRELINK_KERNELCACHE_17=str(args.kernelcache_17.resolve()),
         PRELINK_ARM64E=str(args.arm64e.resolve()),
+        PRELINK_SLIDE=hex(args.slide),
         PYTHONPATH=os.pathsep.join([str(HERE)] + sys.path),
         NAMES_SEED_ALL='1',
     )

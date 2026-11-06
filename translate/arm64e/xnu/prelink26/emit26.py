@@ -117,8 +117,11 @@ def main():
     lowest = min(lo for lo, hi in rng.values())
     highest = max(hi for lo, hi in rng.values())
     kbase = min(s["va"] for s in native["segments"] if s["size"])
-    slide = (kbase - 0x100000 - highest) & ~(PAGE - 1)
-    slide = slide - (1 << 64) if slide >= 1 << 63 else slide
+    limit = (kbase - 0x100000 - highest) & ~(PAGE - 1)
+    limit = limit - (1 << 64) if limit >= 1 << 63 else limit
+    slide = limit if paths.SLIDE is None else paths.SLIDE
+    if slide > limit or slide % PAGE:
+        raise SystemExit("slide %#x: the kexts must sit page-aligned at or below %#x" % (slide & M64, limit & M64))
     for lo, hi in our_text:
         for a, b in ((text_lo + slide, lo), (stub_va + stub_reserve + slide, hi)):
             if abs(a - b) >= 1 << 27:

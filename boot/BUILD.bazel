@@ -85,7 +85,7 @@ boot_package(
     exporter = "//bazel/pinned:firmware/exporter.uimg",
     icon = "//boot/logo:icon_ios.bmp",
     ini = ":ios_ini",
-    kernel = "//kernel:kernel",
+    kernel = "//kernel:prelinked",
     linker_script = ":loader/link.ld",
     loader_hdrs = [
         ":loader/boot_args.h",

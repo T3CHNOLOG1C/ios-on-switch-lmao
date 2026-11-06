@@ -4,7 +4,7 @@
   "size": "0x90",
   "first_slot": 168,
   "slots": 190,
-  "slide": "-0x3fec000",
+  "slide": "-0x4088000",
   "layout": {
     "21": "init",
     "33": "getProperty",

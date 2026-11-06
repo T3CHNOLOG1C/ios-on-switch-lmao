@@ -23,7 +23,7 @@ def _kernel_prelink_fileset_impl(ctx):
     args.add("--arm64e", ctx.executable._arm64e)
     args.add("--ipsw", ctx.executable._ipsw)
     args.add("--symbolsets", ctx.file.symbolsets)
-    args.add("--slide", ctx.attr.slide)
+    args.add("--slide=" + ctx.attr.slide)
     args.add("--out", out)
     args.add("--report", report)
     args.add("--names", names)
@@ -38,11 +38,11 @@ def _kernel_prelink_fileset_impl(ctx):
         progress_message = "Prelinking the fileset kernelcache's kexts into %{label}",
         execution_requirements = XCODE_EXECUTION,
     )
-    return [DefaultInfo(files = depset([out, report, names]))]
+    return [DefaultInfo(files = depset([out])), OutputGroupInfo(report = depset([report, names]))]
 
 kernel_prelink_fileset = rule(
     implementation = _kernel_prelink_fileset_impl,
-    doc = "Our kernel with a fileset kernelcache's kexts prelinked (out), its report (.json) and the kernel names (.names.json).",
+    doc = "Our kernel with a fileset kernelcache's kexts prelinked (out); its report (.json) and kernel names (.names.json) in the report output group.",
     attrs = {
         "kernel": attr.label(mandatory = True, providers = [KernelObjectsInfo], doc = "the unprelinked kernel"),
         "kernelcache": attr.label(default = "//ipsw:kernelcache", allow_single_file = True),

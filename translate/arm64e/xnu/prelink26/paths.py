@@ -8,6 +8,7 @@ KERNELCACHE = os.environ.get("PRELINK_KERNELCACHE", "")
 OURS = os.environ.get("PRELINK_OURS", "")
 KERNELCACHE_17 = os.environ.get("PRELINK_KERNELCACHE_17", "")
 ARM64E = os.environ.get("PRELINK_ARM64E", "")
+SLIDE = int(os.environ["PRELINK_SLIDE"], 0) if os.environ.get("PRELINK_SLIDE") else None
 
 
 def work(name):
