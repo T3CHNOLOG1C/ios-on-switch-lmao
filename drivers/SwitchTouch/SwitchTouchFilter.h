@@ -11,11 +11,11 @@
 //
 // Two of MultitouchHID's mechanisms, in millimetres and seconds so they hold at any UI scale:
 //  * Instability: while the contact is settling (all of a change at touch-down fading to none at kSettleUs, and a fifth
-//    of it to none at kSettleTailUs: MTParserPath::computeDebounceTimeInstability's 0.02 s, 0.06 s and 0.2) or its
-//    strength is changing fast (a press or a lift: MTParserPath::computeZSignalInstability), position changes are not
-//    motion. Here they are kept in an offset instead of reported, and the offset is paid back only while the finger
-//    visibly moves (at most half of each step), so a tap reports no travel and a drag that starts during a press loses
-//    nothing and never jumps.
+//    of it to none at kSettleTailUs: MTParserPath::computeDebounceTimeInstability, with the times and fraction of one
+//    of its parser types) or its strength is changing fast (a press, a lift: MTParserPath::computeZSignalInstability;
+//    kStableRate and kUnstableRate are ours), position changes are not motion. Here they are kept in an offset instead
+//    of reported, and the offset is paid back only while the finger visibly moves (at most half of each step), so a
+//    tap reports no travel and a drag that starts during a press loses nothing and never jumps.
 //  * Hysteresis: the reported point is a drag centre that follows the finger only once it is kHysteresis away on an
 //    axis (MTParserPath::updateHysteresisDragCenter_mm), so a held finger's jitter is no velocity.
 #pragma once

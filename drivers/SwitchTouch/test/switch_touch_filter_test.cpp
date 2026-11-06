@@ -142,3 +142,43 @@ TEST(SwitchTouchFilter, PressureChangeMidDragIsRepaid)
     EXPECT_GE(trial.y, 220 - 3);
     EXPECT_LE(trial.y, 220);
 }
+
+// A slow drag whose strength wobbles by 10 % a sample (a finger rolling as it slides): some of each step is held back
+// and repaid, never a stall or a lurch.
+TEST(SwitchTouchFilter, StrengthNoiseDuringADragStaysSmooth)
+{
+    std::vector<Sample> s;
+    for (int i = 0; i < 12; ++i)
+        s.push_back({200, 300, 60});
+    static const uint32_t wobble[] = {60, 66, 60, 54};
+    for (int i = 1; i <= 60; ++i)
+        s.push_back({200, 300 + 3 * i, wobble[i % 4]});
+    const Trial trial = feed(s);
+    ASSERT_GE(trial.reported.size(), 55u);
+    int last = 300;
+    for (size_t i = 1; i < trial.reported.size(); ++i) {
+        const int step = trial.reported[i].second - trial.reported[i - 1].second;
+        EXPECT_GE(step, 1) << "sample " << i;
+        EXPECT_LE(step, 5) << "sample " << i;
+        last = trial.reported[i].second;
+    }
+    EXPECT_GE(last, 480 - 4);
+}
+
+// A flick that starts as the finger lands, 40 px a sample: nothing backwards, no step over 1.5 of the finger's, and by
+// its lift the point is within one step of the finger.
+TEST(SwitchTouchFilter, FlickFromTouchDown)
+{
+    std::vector<Sample> s = {{100, 600, 15}, {100, 560, 35}, {100, 520, 55}};
+    for (int i = 1; i <= 8; ++i)
+        s.push_back({100, 520 - 40 * i, 60});
+    const Trial trial = feed(s);
+    ASSERT_FALSE(trial.reported.empty());
+    int last = 600;
+    for (const auto &p : trial.reported) {
+        EXPECT_LE(p.second, last) << "never backwards";
+        EXPECT_LE(last - p.second, 60) << "at most 1.5 steps";
+        last = p.second;
+    }
+    EXPECT_LE(trial.y - 200, 40) << "lifted within a step of the finger at 200: " << trial.y;
+}
