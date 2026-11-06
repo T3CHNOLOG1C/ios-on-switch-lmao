@@ -356,6 +356,32 @@ pub extern "C" fn nmb_device_counts(device: *const NmbDevice, out: *mut u64) -> 
     })
 }
 
+/// The runtime's device memory into the caller's three words: the bytes it holds now (its live blocks and spares), the
+/// bytes it allocated so far, and the memoryless backings live (`memory.rs`).
+#[unsafe(no_mangle)]
+pub extern "C" fn nmb_device_memory(device: *const NmbDevice, out: *mut u64) -> bool {
+    guard(false, || {
+        if out.is_null() {
+            return Err("null memory".into());
+        }
+        let c = get(device)?.0.work_counts();
+        // SAFETY: the header's three words.
+        let out = unsafe { std::slice::from_raw_parts_mut(out, 3) };
+        out.copy_from_slice(&[
+            c.device_memory_live,
+            c.device_memory_allocated,
+            c.memoryless_backings_live,
+        ]);
+        Ok(true)
+    })
+}
+
+/// Free the device memory no resource holds (`Device::release_idle_memory`): the bytes freed.
+#[unsafe(no_mangle)]
+pub extern "C" fn nmb_device_release_idle_memory(device: *const NmbDevice) -> u64 {
+    guard(0, || Ok(get(device)?.0.release_idle_memory()))
+}
+
 /// The runtime's host texel copies by route, into the caller's seven words (ios-on-switch-lmao m2v 0116): `replaceRegion` into the texture's
 /// bytes on the CPU, on the host into its image, staged for the next submission, by a submission waited for; then `getBytes` from
 /// the texture's bytes, on the host from its image, by a submission waited for.

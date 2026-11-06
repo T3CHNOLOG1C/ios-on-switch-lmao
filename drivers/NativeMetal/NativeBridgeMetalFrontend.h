@@ -30,6 +30,10 @@ size_t native_bridge_metal_commit_origin(char *out, size_t size);
 struct NmbShaderCacheStats;
 bool native_bridge_metal_shader_cache_stats(struct NmbShaderCacheStats *out);
 bool native_bridge_metal_work_stats(uint64_t out[10]);
+// Give back the GPU memory no resource holds now, as on a memory warning (GpuMemoryRelease.h).
+void native_bridge_metal_release_idle_memory(void);
+// The device's GPU memory held now, allocated so far, and its memoryless backings (nmb_device_memory).
+bool native_bridge_metal_memory(uint64_t out[3]);
 // The same fixed CPU, memory and pipeline workload on the tablet and the host, so their times compare directly (int-145): compute, first-touch
 // page faults, memset bandwidth, CommonCrypto SHA-256, then the first `pairs` vertex/fragment pairs of the given QuartzCore metallib made into
 // BGRA8 render states and drawn once each (pipeline_timing_host's draw=1 order). The results become the telemetry's Y rows; also returned.

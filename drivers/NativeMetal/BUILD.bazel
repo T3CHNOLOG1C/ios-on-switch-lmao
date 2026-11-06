@@ -16,6 +16,7 @@ filegroup(
     name = "frontend_headers",
     srcs = [
         "AsyncPipelines.h",
+        "GpuMemoryRelease.h",
         "NativeBridgeMetalFrontend.h",
         "SwitchFrameTimeline.h",
         "TwoPlaneStandIn.h",

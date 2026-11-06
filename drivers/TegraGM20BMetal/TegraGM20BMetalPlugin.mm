@@ -26,8 +26,11 @@
 //   TEGRA_M2V_CACHE_DIR       the shader cache directory instead of the search below; "memory" for none
 //   NMB_MEMO_MB=<MiB>         the runtime's memo of compiled pipelines (default 32 outside backboardd, the runtime's 256 in it)
 //   M2V_BLOCK_MIB=<MiB>       the largest pooled memory block (default 4 outside backboardd, 16 in it: each process keeps one
-//                             in three pools, mapped whole and charged to it; each block is one BoAlloc on the thread that ran
-//                             out of room)
+//                             in three pools, the first a quarter of it, at least 1 MiB, mapped whole and charged to it; each
+//                             block is one BoAlloc on the thread that ran out of room, and goes back to the kernel once empty
+//                             and the GPU idle, or on a memory warning: GpuMemoryRelease.h)
+//   NMB_IDLE_RELEASE_MS=<ms>  idle GPU memory goes back to the kernel once the GPU idled this long (default 1000 outside
+//                             backboardd, 0 in it: on memory warnings alone)
 //   NMB_CACHE_MB=<MiB>        the shader cache directory's cap (default 256; the runtime's is 25 GiB)
 //   NMB_ANSWER_CACHE=0        ask the runtime every device question again (default: keep each answer)
 //   NMB_REFUSE_REBINDS=0      encoders log their calls for rebinds again (default: nothing rebinds)
@@ -472,6 +475,8 @@ id openDevice(unsigned port)
         // for cached memory a 64 MiB block stalled it ~100 ms (r5c: 66 MB of BoAllocs, 103 ms, in the 5 s Settings opened);
         // 16 MiB blocks bound that to a quarter and still pool any 720p texture, half a block being the dedicated limit.
         setenv("M2V_BLOCK_MIB", renderServer ? "16" : "4", 0);
+        if (renderServer)
+            setenv("NMB_IDLE_RELEASE_MS", "0", 0);  // read by the frontend (GpuMemoryRelease.h)
         if (!renderServer)
             setenv("NMB_SYSTEM_COMPILER", "1", 0);  // read by the frontend: Core Image's kernels are compiled here
         if (const char *zero = getenv("M2V_ZERO_FRESH"); zero && !strcmp(zero, "0"))

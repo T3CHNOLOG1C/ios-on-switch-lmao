@@ -34,11 +34,14 @@
 #include "bridge/NativeMetalObjects.h"
 #include "NativeBridgeMetalFrontend.h"
 #include "AsyncPipelines.h"
+#include "GpuMemoryRelease.h"
 #include "SwitchFrameTimeline.h"
 // The two-plane render targets' load and store functions (TwoPlaneStandIn.metal).
 #include "TwoPlaneStandIn.h"
 
 static NmbDevice *gDevice;
+// Never destroyed: its dispatch sources' handlers may still run while the process exits.
+static GpuMemoryRelease &gMemoryRelease = *new GpuMemoryRelease;
 static id gDeviceObject;
 static uint64_t gRegistryID;
 static NSString *gName;
@@ -3801,6 +3804,8 @@ static void scheduled(void *context);
     [_resourceOwners removeAllObjects];
     @synchronized(gInFlight) {
         [gInFlight removeObject:self];
+        if (!gInFlight.count)
+            gMemoryRelease.drained();
     }
     NSArray *completedHandlers;
     @synchronized(self) {
@@ -6437,6 +6442,7 @@ extern "C" id native_bridge_metal_open(const char *loader, const char *cache, ui
         NBLOG(@"native-metal: device refused: %s", nmb_last_error());
         return nil;
     }
+    gMemoryRelease.start(gDevice);
     if (cache) {
         gCompileCache = std::string(cache) + "/msl";
     }
@@ -6525,6 +6531,16 @@ extern "C" bool native_bridge_metal_shader_cache_stats(NmbShaderCacheStats *out)
 extern "C" bool native_bridge_metal_work_stats(uint64_t out[10])
 {
     return gDevice && nmb_device_work_stats(gDevice, out);
+}
+
+extern "C" void native_bridge_metal_release_idle_memory(void)
+{
+    gMemoryRelease.release();
+}
+
+extern "C" bool native_bridge_metal_memory(uint64_t out[3])
+{
+    return gDevice && nmb_device_memory(gDevice, out);
 }
 
 extern "C" size_t native_bridge_metal_status(char *out, size_t size)
@@ -6693,7 +6709,7 @@ extern "C" size_t native_bridge_metal_rates(char *out, size_t size)
         uint64_t at, cpu, sys, faults, commits, encode, submitN, submitUs, waitN, waitUs, gpuN, gpuUs, draws, passes,
             apiUs, joinable, psoN, psoUs, texN, texUs, asked, kept, planar, rb, rbBytes, rbUs, impN, impUs, impHits,
             stxN, stxUs, fwdN, fwdUs;
-        uint64_t work[10], counts[10], waits[4], routes[7];
+        uint64_t work[10], counts[10], waits[4], routes[7], memory[3];
         NmbShaderCacheStats cache;
     };
 
@@ -6740,6 +6756,7 @@ extern "C" size_t native_bridge_metal_rates(char *out, size_t size)
         nmb_device_work_stats(gDevice, now.work);
         nmb_device_shader_cache_stats(gDevice, &now.cache);
         nmb_device_counts(gDevice, now.counts);
+        nmb_device_memory(gDevice, now.memory);
         nmb_device_texel_copy_routes(gDevice, now.routes);
         nmb_device_wait_counts(gDevice, now.waits);
     }
@@ -6784,7 +6801,7 @@ extern "C" size_t native_bridge_metal_rates(char *out, size_t size)
         (unsigned long long)(now.cache.driver_hits - was.cache.driver_hits),
         (unsigned long long)(now.cache.driver_misses - was.cache.driver_misses),
         (unsigned long long)(now.asked - was.asked), (unsigned long long)(now.kept - was.kept),
-        (unsigned long long)(now.planar - was.planar), (unsigned long long)(now.counts[0] >> 20),
+        (unsigned long long)(now.planar - was.planar), (unsigned long long)(now.memory[0] >> 20),
         (unsigned long long)now.counts[1], (unsigned long long)now.counts[2], (unsigned long long)now.counts[3],
         (unsigned long long)(now.counts[4] - was.counts[4]), (unsigned long long)(now.counts[5] - was.counts[5]),
         (unsigned long long)(now.counts[6] - was.counts[6]), (unsigned long long)(now.counts[7] - was.counts[7]),
