@@ -41,11 +41,71 @@ sh_binary(
 )
 """
 
+_NO_XCODE_BUILD = """\
+load(":missing.bzl", "missing")
+
+package(default_visibility = ["//visibility:public"])
+
+missing(name = "identity")
+
+missing(name = "xcode.env")
+
+missing(name = "print_pins")
+"""
+
+_NO_XCODE_RULE = """\
+def _impl(ctx):
+    out = ctx.actions.declare_file(ctx.label.name + ".missing")
+    ctx.actions.run_shell(
+        outputs = [out],
+        command = "printf '%s\\\\n' \\"$1\\" >&2; exit 1",
+        arguments = [{message}],
+        mnemonic = "NoXcode",
+    )
+    return [DefaultInfo(files = depset([out]), executable = out)]
+
+missing = rule(implementation = _impl, executable = True)
+"""
+
+# Without an Xcode the build can still load and analyse: the registered toolchains and the kernel's rules load
+# @xcode//:defs.bzl, so even `bazel run //:image_dry_run --//install:prebuilt=release`, which runs no Xcode tool,
+# fetches this repository. Only an action that takes @xcode//:identity or :xcode.env fails, and says why.
+_NO_XCODE = "/var/empty/no-xcode/Contents/Developer"
+
+def _no_xcode(rctx, reason):
+    message = "No Xcode: {}. This runs Xcode's tools: install Xcode {} ({}) and `sudo xcode-select -s` it.".format(
+        reason,
+        XCODE_PINS["version"],
+        XCODE_PINS["build"],
+    )
+    toolchain = _NO_XCODE + "/Toolchains/XcodeDefault.xctoolchain/usr/bin"
+    rctx.file("missing.bzl", _NO_XCODE_RULE.format(message = repr(message)))
+    rctx.file("defs.bzl", "\n".join([
+        "DEVELOPER_DIR = {}".format(repr(_NO_XCODE)),
+        "XCODE_TOOLCHAIN = {}".format(repr(toolchain)),
+        "IPHONEOS_SDK = {}".format(repr(_NO_XCODE + "/SDKs/iPhoneOS.sdk")),
+        "MACOSX_SDK = {}".format(repr(_NO_XCODE + "/SDKs/MacOSX.sdk")),
+        "XCODE_BUILD = ''",
+    ]) + "\n")
+    rctx.file("BUILD.bazel", _NO_XCODE_BUILD)
+
 def _run(rctx, args, env = {}):
     result = rctx.execute(args, environment = env, quiet = True)
     if result.return_code:
         fail("{} failed ({}): {}".format(" ".join(args), result.return_code, result.stderr))
     return result.stdout.strip()
+
+def _developer_dir(rctx):
+    """The selected developer directory, or None and why there is none."""
+    developer = rctx.getenv("DEVELOPER_DIR")
+    if not developer:
+        result = rctx.execute(["/usr/bin/xcode-select", "-p"], quiet = True)
+        if result.return_code:
+            return None, "`xcode-select -p` failed: " + (result.stderr.strip() or "exit {}".format(result.return_code))
+        developer = result.stdout.strip()
+    if not developer.endswith("/Contents/Developer"):
+        return None, "{} is not an Xcode (Command Line Tools have no iOS SDK)".format(developer)
+    return developer, None
 
 def _macho_uuid(rctx, toolchain, path):
     for line in _run(rctx, [toolchain + "/dwarfdump", "--uuid", "--arch", "arm64", path]).splitlines():
@@ -54,12 +114,16 @@ def _macho_uuid(rctx, toolchain, path):
     fail("{} has no arm64 UUID".format(path))
 
 def _xcode_host_impl(rctx):
-    developer = rctx.getenv("DEVELOPER_DIR") or _run(rctx, ["/usr/bin/xcode-select", "-p"])
-    if not developer.endswith("/Contents/Developer"):
-        fail("DEVELOPER_DIR={} is not an Xcode (Command Line Tools have no iOS SDK)".format(developer))
+    developer, reason = _developer_dir(rctx)
+    if not developer:
+        _no_xcode(rctx, reason)
+        return
     app = developer[:-len("/Contents/Developer")]
     plist = app + "/Contents/version.plist"
     rctx.watch(plist)
+    if not rctx.path(plist).exists:
+        _no_xcode(rctx, "{} has no {}".format(developer, plist))
+        return
     version = _run(rctx, ["/usr/libexec/PlistBuddy", "-c", "Print :CFBundleShortVersionString", plist])
     build = _run(rctx, ["/usr/libexec/PlistBuddy", "-c", "Print :ProductBuildVersion", plist])
     toolchain = developer + "/Toolchains/XcodeDefault.xctoolchain/usr/bin"
