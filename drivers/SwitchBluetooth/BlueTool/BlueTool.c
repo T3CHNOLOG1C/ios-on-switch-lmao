@@ -26,16 +26,16 @@
 // the spawn); it touches nothing but its XPC listener and that one spawn. Children are not waited for (SIGCHLD
 // ignored): joyconpaird runs for the boot and keeps a single instance itself.
 #include <dispatch/dispatch.h>
+#include <errno.h>
+#include <notify.h>
 #include <os/log.h>
 #include <signal.h>
 #include <spawn.h>
 #include <stdint.h>
 #include <string.h>
+#include <sys/sysctl.h>
 #include <unistd.h>
 #include <xpc/xpc.h>
-#if SWITCH_DEBUG
-#include <notify.h>
-#endif
 
 // Public on macOS, private (but exported by libxpc and used by every iOS daemon) on iOS.
 extern xpc_connection_t
@@ -84,6 +84,23 @@ static void watchStress(void)
             os_log_error(OS_LOG_DEFAULT, "BlueTool: %{public}s not started: %d", kStress, error);
     });
 }
+
+// Debug builds: the SoC watchdog bench (kernel/switch/shutdown/shutdown.c), once per Darwin notification the Mac posts
+// (`idevicenotificationproxy -u <udid> post com.brunostjohn.switch.debug.watchdog-bench`): the watchdog armed for 20 s
+// and never petted. Nothing else arms it.
+static void watchWatchdogBench(void)
+{
+    int token;
+    notify_register_dispatch(
+        "com.brunostjohn.switch.debug.watchdog-bench", &token, dispatch_get_main_queue(), ^(int t) {
+            (void)t;
+            int seconds = 20;
+            const int error =
+                sysctlbyname("debug.switch_watchdog_bench", NULL, NULL, &seconds, sizeof(seconds)) ? errno : 0;
+            os_log(OS_LOG_DEFAULT, "BlueTool: watchdog-bench posted: SoC watchdog %d s, %{public}s", seconds,
+                   error ? strerror(error) : "armed");
+        });
+}
 #endif
 
 static void answer(xpc_connection_t peer, xpc_object_t message)
@@ -123,6 +140,7 @@ int main(void)
     xpc_connection_resume(listener);
 #if SWITCH_DEBUG
     watchStress();
+    watchWatchdogBench();
 #endif
     dispatch_main();
 }

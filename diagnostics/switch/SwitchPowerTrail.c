@@ -166,14 +166,13 @@ __attribute__((weak)) void switch_pmic_mark_now(uint8_t code)
     (void)code;
 }
 
-static const char *mark_name(unsigned code)
+static const char *halt_name(unsigned code)
 {
     static const char *const halt[] = {
         "reboot(2) began",
-        "IOPMRootDomainWillShutdown done",
+        "IOPMRootDomainWillShutdown and paging off done",
         "proc_shutdown done",
-        "audit_shutdown done",
-        "shutdown.trace written",
+        "another halt step done",
         "first vfs_unmountall done",
         "second proc_shutdown done",
         "second vfs_unmountall done",
@@ -183,27 +182,37 @@ static const char *mark_name(unsigned code)
         "power tree quiesced",
         "every driver told",
         "PE_halt_restart",
-        "panel dark",
-        "MAX77620 soft reset next",
+        "CPU off the DFLL",
+        "panel dark, MAX77620 soft reset next",
+        "soft reset written, still running 2 s later",
     };
+    return halt[code & 0xfu];
+}
+
+static const char *mark_name(unsigned code)
+{
     switch (code) {
     case SWITCH_MARK_NONE:
         return "running";
+    case SWITCH_MARK_PANIC_RESET:
+        return "a panic's warm reset";
     case SWITCH_MARK_BOOT_PMIC:
         return "boot: PMIC up";
     case SWITCH_MARK_BOOT_ROOT:
         return "boot: root mounted";
     case SWITCH_MARK_BOOT_LAUNCHD:
         return "boot: launchd next";
+    case SWITCH_MARK_WATCHDOG_BENCH:
+        return "watchdog bench: armed, never petted";
     case SWITCH_MARK_BOOT_DONE:
         return "boot complete";
-    case SWITCH_MARK_HALT_OTHER:
-        return "halt: another IOKit step";
     default:
         break;
     }
-    if (code >= SWITCH_MARK_HALT_BEGAN && code <= SWITCH_MARK_HALT_PMIC)
-        return halt[code - SWITCH_MARK_HALT_BEGAN];
+    if ((code & 0x70u) == SWITCH_MARK_HALT_BEGAN)
+        return halt_name(code);
+    if ((code & 0x70u) == SWITCH_MARK_HALT_DEADLINE)
+        return "the shutdown deadline passed";
     if (switch_sleep_step_name(code))
         return switch_sleep_step_name(code);
     switch (code & 0x70u) {
@@ -248,8 +257,10 @@ static void log_durable(const char *when)
         os_log(OS_LOG_DEFAULT, "SwitchPowerTrail: durable mark: none (the MAX77620 RTC holds no mark of ours)%s", when);
         return;
     }
-    os_log(OS_LOG_DEFAULT, "SwitchPowerTrail: durable mark: %#04x %s (mark %u of the last boot)%s", durable_code,
-           mark_name((unsigned)durable_code), durable_count, when);
+    const unsigned code = (unsigned)durable_code;
+    os_log(OS_LOG_DEFAULT, "SwitchPowerTrail: durable mark: %#04x %s%s%s (mark %u of the last boot)%s", code,
+           mark_name(code), (code & 0x70u) == SWITCH_MARK_HALT_DEADLINE ? ", after: " : "",
+           (code & 0x70u) == SWITCH_MARK_HALT_DEADLINE ? halt_name(code) : "", durable_count, when);
 }
 
 /* Logged at once and again before launchd: the unified log may not keep what the kernel logs this early. */

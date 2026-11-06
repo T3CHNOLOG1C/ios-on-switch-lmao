@@ -326,24 +326,27 @@ int haltRestart(unsigned int type)
         return -1;
     const bool restart = type == kPERestartCPU;
     switch_power_trail("PE_halt_restart(%u)", type);
-    switch_power_trail_mark(SWITCH_MARK_HALT_PLATFORM);
     // Storage needs nothing more: reboot_kernel() synced and unmounted every file system and waited out the dirty
     // buffers before halt_all_cpus(), and NativeSwitchBlock completes a write only once the card has it.
     bool dark = false;
-    // XNU's path is thread context; both steps below sleep (the panel's commands ride DC frame ends).
+    // XNU's path is thread context; the steps below sleep (the panel's commands ride DC frame ends). Each durable mark
+    // is in the RTC before its step, the last one before the soft reset takes I2C5 for good.
     if (preemption_enabled()) {
+        switch_power_trail_mark(SWITCH_MARK_HALT_PLATFORM);
+        switch_power_trail_mark_flush();
         switch_thermal_cpu_quiesce();  // the DFLL, if the CPU runs on it, must not share I2C5 with what follows
-        switch_power_trail("CPU quiesced for the halt");
+        switch_power_trail_mark(SWITCH_MARK_HALT_CPU);
+        switch_power_trail_mark_flush();
         dark = tegra_panel_power_off() == 0;
         switch_power_trail("panel %s", dark ? "dark" : "not running");
-        switch_power_trail_mark(SWITCH_MARK_HALT_PANEL);
         switch_power_trail_mark(SWITCH_MARK_HALT_PMIC);
-        switch_power_trail_mark_flush();  // before the soft reset takes I2C5 for good
+        switch_power_trail_mark_flush();
     }
     const int err = pmicSoftReset(restart);
     switch_power_trail("MAX77620 soft reset written: %d", err);
     if (!err)
         IODelay(kPowerDownUS);  // busy: interrupts may be off here
+    switch_power_trail_mark_now(SWITCH_MARK_HALT_NOT_OFF);
     if (restart) {
         psciSystemReset();
         if (gPmc)
