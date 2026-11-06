@@ -129,6 +129,12 @@ py_library(
 )
 
 py_test(
+    name = "compose_test",
+    srcs = ["compose_test.py"],
+    deps = [":lib"],
+)
+
+py_test(
     name = "card_test",
     srcs = ["card_test.py"],
     data = ["//install:testdata/switch-card-1tb.json"],

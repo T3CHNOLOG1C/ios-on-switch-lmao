@@ -51,21 +51,30 @@ def fsck(store: str, what: str, log: host.Log) -> None:
     log(f'fsck_apfs {store} ({what}): {tail[0]}')
 
 
+APFS_CONTENT = '41504653-0000-11AA-AA11-00306543ECAC'  # 'APFS': how hdiutil hints a bare container
+
+
 def _attach_os(os_dmg: str, log: host.Log) -> tuple[str, str]:
     out = host.plist(
         'hdiutil', 'attach', '-plist', '-readonly', '-nomount', '-noverify', '-noautofsck', os_dmg, log=log
     )
+    # The APFS physical store, never a volume: a GPT image's Apple_APFS partition (21H461), or the image itself when
+    # it is a bare container (24B119's OS dmg), which hdiutil hints as APFS content, as it does the volumes.
+    hints = {str(gpt.APFS).upper(), APFS_CONTENT}
     apfs_part = [
         e['dev-entry']
         for e in out['system-entities']
-        if str(gpt.APFS).upper() in (e.get('content-hint', '').upper(), e.get('unmapped-content-hint', '').upper())
+        if 'volume-kind' not in e
+        and hints & {e.get('content-hint', '').upper(), e.get('unmapped-content-hint', '').upper()}
     ]
     if len(apfs_part) != 1:
         for d in (e.get('dev-entry', '') for e in out['system-entities']):
             if d.startswith('/dev/disk') and 's' not in d[len('/dev/disk') :]:
                 subprocess.run([host.TOOLS['hdiutil'], 'detach', d], capture_output=True, check=False)
         raise host.HostError(f'{os_dmg}: expected one APFS partition, got {out}')
-    return apfs_part[0][: apfs_part[0].rindex('s')], apfs_part[0]
+    store = apfs_part[0]
+    slice_at = store.rfind('s', len('/dev/disk'))
+    return (store[:slice_at] if slice_at > 0 else store), store
 
 
 def os_container_bytes(os_dmg: str, log: host.Log) -> int:
