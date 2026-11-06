@@ -70,6 +70,11 @@ extern "C" __attribute__((weak)) void switch_als_supply(bool)
 // For NativeLegacyDisplay's touch->swap / touch->scan (below, after the driver).
 static void switch_touch_note_report(uint64_t stamp);
 
+#if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)
+// XNU (kernel/switch/diag/frames.c): each report, for the display's touch interaction windows and delivery latency.
+extern "C" void switch_frames_touch(uint64_t stamp, bool down);
+#endif
+
 namespace {
 constexpr unsigned kBus = 3, kPmicBus = 5;
 constexpr uint8_t kTouch = 0x49, kPmic = 0x3c;
@@ -927,8 +932,15 @@ void SwitchTouch::flush()
         switch_hid_post(hid, &report, sizeof(report));
     postTicks += mach_absolute_time() - began;
     ++stats.reports;
-    if (reportStamp && switch_display_is_on())
+    if (reportStamp && switch_display_is_on()) {
         switch_touch_note_report(stamp);  // an interrupt's, on a lit screen
+#if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)
+        bool down = false;
+        for (const Contact &contact : contacts)
+            down |= contact.down;
+        switch_frames_touch(stamp, down);
+#endif
+    }
     changed = 0;
     dirty = false;
 }

@@ -12,6 +12,8 @@
 #                            process, largest first, with their rates and top ids, the rest as others
 #   xnu_render_senders_source_test  ipc_kmsg_send counts a message under its destination port's lock, only for the
 #                            watched space and not for a kernel reply
+#   xnu_frames_test          kernel/switch/diag/frames.h: a client's commits as bursts of messages and the gaps between
+#                            them in refresh periods, touch deliveries, the line; both trees' ipc_kmsg_send feed it
 #   xnu_sched_stats_test     kernel/switch/sched/stats.h's latency histogram, percentiles and line entry; that
 #                            thread_invoke feeds it in both dispatch paths under the incoming thread's lock, and that
 #                            a release kernel compiles every hook to nothing
@@ -201,6 +203,37 @@ host_test(
         "//kernel/switch:sched/stats.c",
     ],
     deps = [":sched_stats"],
+)
+
+# --- kernel/switch/diag/frames.h ----------------------------------------------------------------------------------------
+copy_file(
+    name = "switch_frames",
+    src = "//kernel/switch:diag/frames.h",
+    out = "diag/frames.h",
+)
+
+copy_file(
+    name = "switch_frames_stats",
+    src = "//kernel/switch:sched/stats.h",
+    out = "sched/stats.h",
+)
+
+host_test(
+    name = "xnu_frames_test",
+    srcs = [
+        "diag/frames.h",
+        "sched/stats.h",
+        "xnu_frames_test.cpp",
+    ],
+    data = [
+        "//kernel/xnu-10063.141.1/osfmk:ipc/ipc_kmsg.c",
+        "//kernel/xnu-12377.121.6/osfmk:ipc/ipc_kmsg.c",
+    ],
+    defines = [
+        'IPC_KMSG_10063=\\"$(rootpath //kernel/xnu-10063.141.1/osfmk:ipc/ipc_kmsg.c)\\"',
+        'IPC_KMSG_12377=\\"$(rootpath //kernel/xnu-12377.121.6/osfmk:ipc/ipc_kmsg.c)\\"',
+    ],
+    includes = ["."],
 )
 
 # --- switch_ui_scale.h, switch_ui_scale_sites.h -----------------------------------------------------------------------

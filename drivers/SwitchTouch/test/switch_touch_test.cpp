@@ -720,6 +720,14 @@ extern "C" void switch_perf_hint(unsigned int)
     ++gPerfHints;
 }
 
+// XNU's frame diagnostics (debug kernels): each report's stamp and whether a contact was down.
+static std::vector<std::pair<uint64_t, bool>> gFramesTouches;
+
+extern "C" void switch_frames_touch(uint64_t stamp, bool down)
+{
+    gFramesTouches.emplace_back(stamp, down);
+}
+
 struct Report {
     SwitchTouchReport report;
     uint64_t stamp, postedAt;
@@ -977,6 +985,9 @@ static void scenarioDrag()
     checkStamps(reportsBefore, "1-finger drag");
     check(downContacts(gReports[reportsBefore].report) == 1 && downContacts(gReports.back().report) == 0,
           "first report down, last up");
+    check(gFramesTouches.size() >= 62 && gFramesTouches[gFramesTouches.size() - 62].second &&
+              !gFramesTouches.back().second && gFramesTouches.back().first == gReports.back().stamp,
+          "each report reaches the frame diagnostics with its stamp, down until the lift");
     // irq -> post in the model: the work loop's latency, two chained transactions at 400 kHz, the wake-ups.
     uint64_t worst = 0, sum = 0;
     for (size_t i = irqsBefore; i < gIrqs.size(); ++i) {

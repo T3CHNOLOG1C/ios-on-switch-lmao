@@ -138,6 +138,7 @@
 #include <libkern/ptrauth_utils.h>
 #endif
 #include <ipc/switch_render_senders.h>
+#include <switch/frames.h>
 
 
 /*
@@ -5241,6 +5242,7 @@ switch_render_sender_note(mach_msg_id_t id)
 	lck_spin_lock(&switch_render_senders_lock);
 	switch_render_senders_note(&switch_render_senders, task_pid(task), id, name);
 	lck_spin_unlock(&switch_render_senders_lock);
+	switch_frames_render_message(task);
 }
 #else
 void
@@ -5421,9 +5423,12 @@ retry:
 		ipc_special_reply_port_msg_sent(port);
 
 #if DEVELOPMENT || DEBUG
-		if (__improbable(switch_render_server_space != NULL) && !kernel_reply &&
-		    ip_in_space(port, (ipc_space_t)switch_render_server_space)) {
-			switch_render_sender_note(hdr->msgh_id);
+		if (__improbable(switch_render_server_space != NULL) && !kernel_reply) {
+			if (ip_in_space(port, (ipc_space_t)switch_render_server_space)) {
+				switch_render_sender_note(hdr->msgh_id);
+			} else if (current_task()->itk_space == switch_render_server_space) {
+				switch_frames_render_server_sent(port);
+			}
 		}
 #endif
 
