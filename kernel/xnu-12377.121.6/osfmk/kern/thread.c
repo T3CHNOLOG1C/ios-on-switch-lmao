@@ -174,6 +174,7 @@
 #endif
 
 #include <pthread/workqueue_trace.h>
+#include <switch/sched.h>
 
 #if CONFIG_EXCLAVES
 #include <mach/exclaves.h>
@@ -2964,6 +2965,10 @@ thread_set_cpulimit(int action, uint8_t percentage, uint64_t interval_ns)
 	 */
 	if ((thread->options & TH_OPT_FORCED_LEDGER) != 0) {
 		return KERN_FAILURE;
+	}
+
+	if (action == THREAD_CPULIMIT_BLOCK && switch_sched_cpulimit_lift(&percentage, interval_ns)) {
+		action = THREAD_CPULIMIT_DISABLE;
 	}
 
 	if (action == THREAD_CPULIMIT_DISABLE) {

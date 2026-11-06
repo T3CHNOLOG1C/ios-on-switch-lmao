@@ -26,6 +26,8 @@
 #                            and the shared region in the 16k kernel, and 4 KiB everywhere in the 4k one
 #   switch_pmap_test         <switch/pmap.h>: arm_clear_fast_fault skips the TLB invalidate only for a PTE whose one
 #                            change is setting the Access flag
+#   switch_cpulimit_test     <switch/cpulimit.h>: a blocking per-thread CPU limit's share scaled to this CPU, lifted at
+#                            a whole core, and its hook in both trees' thread_set_cpulimit
 #
 #   bazel test //kernel/tests:all
 load("@bazel_skylib//rules:copy_file.bzl", "copy_file")
@@ -321,6 +323,29 @@ host_test(
     srcs = [
         "switch/pmap.h",
         "switch_pmap_test.cpp",
+    ],
+    includes = ["."],
+)
+
+copy_file(
+    name = "switch_cpulimit",
+    src = "//kernel/switch:include/switch/cpulimit.h",
+    out = "switch/cpulimit.h",
+)
+
+host_test(
+    name = "switch_cpulimit_test",
+    srcs = [
+        "switch/cpulimit.h",
+        "switch_cpulimit_test.cpp",
+    ],
+    data = [
+        "//kernel/xnu-10063.141.1/osfmk:kern/thread.c",
+        "//kernel/xnu-12377.121.6/osfmk:kern/thread.c",
+    ],
+    defines = [
+        'THREAD_10063=\\"$(rootpath //kernel/xnu-10063.141.1/osfmk:kern/thread.c)\\"',
+        'THREAD_12377=\\"$(rootpath //kernel/xnu-12377.121.6/osfmk:kern/thread.c)\\"',
     ],
     includes = ["."],
 )

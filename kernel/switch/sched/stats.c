@@ -3,7 +3,8 @@
  * Switch scheduling stats (debug kernels): every 10 s, two os_log lines with how the threads a frame depends on were
  * scheduled in that window: per thread its class as of its last run (base/sched priority, mode, QoS, clutch bucket) and
  * its runnable-to-running latency (p50/p99/max), with the fail-safe and CPU-limit counts; then the kernel threads that
- * used the most CPU, the uptime of System Boot Complete, and the render server's GPU threads.
+ * used the most CPU, the uptime of System Boot Complete, and the render server's GPU threads; and, when processes
+ * asked for new ones, the blocking per-thread CPU limits they asked for (<switch/cpulimit.h> scales or lifts them).
  *
  * The threads are found by the events that make them what they are: RunningBoard giving an app the focal UI role
  * (SpringBoard's main thread, the frontmost app's), backboardd naming its Core Animation and Metal threads (and so its
@@ -39,6 +40,7 @@
 #define KERNEL_SEEN 192
 #define LINE        900u /* under the 1 KiB os_log record */
 #define LABEL       24
+#define ASKED       16
 
 enum slot_id {
     SB_MAIN,
@@ -235,6 +237,62 @@ void switch_sched_limit_block(thread_t thread, uint64_t until)
     os_atomic_add(&slots[i].limit_us, until > now ? abs_to_us(until - now) : 0, relaxed);
 }
 
+/* thread_set_cpulimit: each process's distinct blocking-limit requests (Apple's percentage and refill), with a count,
+ * for the report. Keyed by process name, so a relaunch adds to its predecessor's row. */
+static struct {
+    char process[16];
+    uint8_t percentage;
+    bool lifted;
+    uint32_t interval_ms, count;
+} asked[ASKED];
+
+static uint32_t asked_requests, asked_reported;
+static SIMPLE_LOCK_DECLARE(asked_lock, 0);
+
+void switch_sched_limit_asked(uint8_t percentage, uint64_t interval_ns, bool lifted)
+{
+    char process[16];
+    uint32_t interval_ms = (uint32_t)(interval_ns / NSEC_PER_MSEC);
+
+    switch_task_name(current_task(), process, sizeof(process));
+    simple_lock(&asked_lock, LCK_GRP_NULL);
+    for (unsigned int i = 0; i < ASKED; i++) {
+        if (asked[i].count == 0) {
+            strlcpy(asked[i].process, process, sizeof(asked[i].process));
+            asked[i].percentage = percentage;
+            asked[i].interval_ms = interval_ms;
+            asked[i].lifted = lifted;
+        } else if (asked[i].percentage != percentage || asked[i].interval_ms != interval_ms ||
+                   strcmp(asked[i].process, process) != 0) {
+            continue;
+        }
+        asked[i].count++;
+        break;
+    }
+    asked_requests++;
+    simple_unlock(&asked_lock);
+}
+
+/* The requests so far, when there were new ones since the last report. */
+static void report_asked(char *line)
+{
+    size_t at = (size_t)snprintf(line, LINE, "SwitchSched CPU limits asked (process percent/refill ms x requests):");
+    bool fresh;
+
+    simple_lock(&asked_lock, LCK_GRP_NULL);
+    fresh = asked_requests != asked_reported;
+    asked_reported = asked_requests;
+    for (unsigned int i = 0; fresh && i < ASKED && asked[i].count != 0 && at < LINE - 1; i++) {
+        int n = snprintf(line + at, LINE - at, " %s %u%%/%u%s x%u;", asked[i].process, asked[i].percentage,
+                         asked[i].interval_ms, asked[i].lifted ? " lifted" : "", asked[i].count);
+        at = n < 0 ? at : MIN(at + (size_t)n, LINE - 1);
+    }
+    simple_unlock(&asked_lock);
+    if (fresh) {
+        os_log(OS_LOG_DEFAULT, "%s", line);
+    }
+}
+
 /* IOPMrootDomain: backboardd set System Boot Complete, about 3 s after SpringBoard dismissed the boot logo. */
 void switch_sched_boot_complete(void)
 {
@@ -404,6 +462,7 @@ void switch_sched_report(__unused thread_call_param_t p0, __unused thread_call_p
     at = (size_t)snprintf(line, LINE, "SwitchSched 2/2 (the render server's GPU threads)");
     append_slots(line, MIN(at, LINE - 1), FIRST_GPU, SLOTS);
     os_log(OS_LOG_DEFAULT, "%s", line);
+    report_asked(line);
 }
 
 #endif /* DEVELOPMENT || DEBUG */
