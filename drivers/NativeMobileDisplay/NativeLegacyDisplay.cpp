@@ -515,6 +515,12 @@ struct FrameHist {
         return maxUs;
     }
 };
+
+// The display's frame-time histograms, kept out of the object: with iPadOS 27's framebuffer family (0x1de0 bytes) as its
+// base, the instance would pass the 16 KiB a kalloc_type class may have (KALLOC_SAFE_ALLOC_SIZE).
+struct FrameHists {
+    FrameHist presentGap, latency, touchScan;
+};
 }
 
 class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
@@ -932,16 +938,19 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     uint32_t stVblanks = 0;  // V_BLANKs the filter took while vsync was armed (atomic: primary interrupt context)
     // Frame pacing (r6-lows). A present is a flip DC A latched, timed at the frame end (or V_BLANK) whose interrupt showed it, as the
     // filter stamped it: the moment the new frame starts to scan. Under the gate unless said otherwise:
-    //   stPresentGap  present-to-present intervals under kGapUs (longer ones are idle screens or stalls: stGaps, not in the quantiles)
+    //   presentGap    present-to-present intervals under kGapUs (longer ones are idle screens or stalls: stGaps, not in the quantiles)
     //   stVb          the same intervals in whole frames (1, 2, 3, 4 or more DC A periods)
-    //   stLatency     the compositor's swap submission (validateSwap) to that present
+    //   latency       the compositor's swap submission (validateSwap) to that present
     //   taken         the times of the swap a kick took (noteTaken), until flip() files them under its surface (marks)
     //   stLatch       flips latched at the first frame end after the request, and later
     // From the filter (primary interrupt context, one CPU): feStamp, the last FRAME_END; the DC A frame period (fePeriod*, relaxed
     // atomics, reset by the stats line); stFeFolded, frame ends that came before the action took the previous one (the gate was
     // busy for a whole frame). stFeLate is filter to action, the work loop's delay at each frame end.
     static constexpr uint64_t kGapUs = 250000;
-    FrameHist stPresentGap = {}, stLatency = {};
+    // The histograms (and their quantiles in the stats line) are debug kernels' only, as the frame timeline is: a release
+    // kernel never makes them.
+    static constexpr bool frameHists = SWITCH_FRAME_TIMELINE;
+    FrameHists *hists = nullptr;  // presentGap, latency, touchScan; from start() on, debug kernels
     uint32_t stVb[4] = {}, stGaps[2] = {}, stPresents = 0, stLatch[2] = {};
     uint64_t lastPresent = 0;
     Span stFeLate = {};
@@ -995,7 +1004,6 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     // touch input is when a frame that can answer it reaches the panel. A lower bound on touch-to-photon (the frame may
     // answer an older report if the app's pipeline is deeper); the slow-motion test measures the whole of it.
     Span stTouchSwap = {};
-    FrameHist stTouchScan = {};
     uint32_t stReplaced = 0, stCollapsed = 0, stLong[kLongCauses] = {}, stLongFrames[kLongCauses] = {};
     uint32_t stVsyncFolded = 0, stVsyncLateN = 0, stVsyncIdle = 0;  // stVsyncFolded: atomic (the filter)
     uint32_t stFallbacks = 0;  // recoverFlip: DC A did not take a replaced flip as modelled (once a boot at most)
@@ -1034,9 +1042,11 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
         if (mark.submit && stamp > mark.submit) {
             if (const uint64_t touch = switch_touch_take_report(mark.submit)) {
                 stTouchSwap.add(mark.submit - touch);
-                stTouchScan.add(Span::ticksToUs(stamp - touch));
+                if (frameHists)
+                    hists->touchScan.add(Span::ticksToUs(stamp - touch));
             }
-            stLatency.add(Span::ticksToUs(stamp - mark.submit));
+            if (frameHists)
+                hists->latency.add(Span::ticksToUs(stamp - mark.submit));
             if (mark.kick >= mark.submit && mark.ready >= mark.kick && stamp >= mark.ready) {
                 stPQueue.add(mark.kick - mark.submit);
                 stPWait.add(mark.waited);
@@ -1049,7 +1059,8 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
             if (us >= kGapUs)
                 ++stGaps[us < 1000000 ? 0 : 1];
             else {
-                stPresentGap.add(us);
+                if (frameHists)
+                    hists->presentGap.add(us);
                 const uint64_t period = vsyncInterval ? Span::ticksToUs(vsyncInterval) : 16667;
                 const uint64_t frames = (us + period / 2) / period;
                 ++stVb[frames <= 1 ? 0 : frames >= 4 ? 3 : frames - 1];
@@ -1385,11 +1396,15 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
                 (unsigned long long)(h.quantileUs(999) / 1000), (unsigned long long)(top / 1000),
                 (unsigned long long)(top % 1000 / 100));
         };
-        add("; present %u (%u timed):", stPresents, stPresentGap.count);
-        quantiles("interval", stPresentGap);
+        add("; present %u", stPresents);
+        if (frameHists) {
+            add(" (%u timed):", hists->presentGap.count);
+            quantiles("interval", hists->presentGap);
+        }
         add(", frames 1:%u 2:%u 3:%u 4+:%u, >1.5x %u >2x %u, gaps %u/%u;", stVb[0], stVb[1], stVb[2], stVb[3],
             stVb[1] + stVb[2] + stVb[3], stVb[2] + stVb[3], stGaps[0], stGaps[1]);
-        quantiles("swap-to-scan", stLatency);
+        if (frameHists)
+            quantiles("swap-to-scan", hists->latency);
         {
             const uint64_t sum = __atomic_exchange_n(&fePeriodSum, 0ull, __ATOMIC_RELAXED);
             const uint32_t n = __atomic_exchange_n(&fePeriodN, 0u, __ATOMIC_RELAXED);
@@ -1445,7 +1460,8 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
         if (stTouchSwap.count) {
             add("; touch->swap %llu/%llu us mean/max,", (unsigned long long)stTouchSwap.meanUs(),
                 (unsigned long long)stTouchSwap.maxUs());
-            quantiles("touch->scan", stTouchScan);
+            if (frameHists)
+                quantiles("touch->scan", hists->touchScan);
             add(" (%u)", stTouchSwap.count);
         }
         // r17-touch: the vsync phase: the lead in effect (0: at V_BLANK), the line, the lead V_PULSE2 gave, the last window's
@@ -1466,14 +1482,16 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
             os_log(OS_LOG_DEFAULT, "SwitchDisplay clients: %llu ms to the render server: %s",
                    (unsigned long long)(us / 1000), line);
         stTouchSwap = Span{};
-        stTouchScan = FrameHist{};
+        if (frameHists)
+            hists->touchScan = FrameHist{};
         stPQueue = stPWait = stPCopy = stPLatch = Span{};
         stReplaced = stCollapsed = stVsyncLateN = stVsyncIdle = stFallbacks = 0;
         for (auto &n : stLong)
             n = 0;
         for (auto &n : stLongFrames)
             n = 0;
-        stPresentGap = stLatency = FrameHist{};
+        if (frameHists)
+            hists->presentGap = hists->latency = FrameHist{};
         stFeLate = Span{};
         for (auto &n : stVb)
             n = 0;
@@ -3021,6 +3039,8 @@ public:
         }
         primary = false;
         OSSafeReleaseNULL(bootMapping);
+        if (hists)
+            IOFreeType(hists, FrameHists);
         IOMobileFramebufferLegacy::free();
     }
 
@@ -3063,6 +3083,8 @@ public:
 
     bool start(IOService *provider) override
     {
+        if (frameHists && !(hists = IOMallocType(FrameHists)))
+            return false;
         if (!startDisplay(provider))
             return false;
         if (logoCheck) {
