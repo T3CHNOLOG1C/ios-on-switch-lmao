@@ -26,6 +26,8 @@
 #                            unaligned PTE
 #   xnu_page_size_test       the native-4K guards (both trees) choose 16 KiB for the kernel, the commpage, process maps
 #                            and the shared region in the 16k kernel, and 4 KiB everywhere in the 4k one
+#   switch_pmap_test         <switch/pmap.h>: arm_clear_fast_fault skips the TLB invalidate only for a PTE whose one
+#                            change is setting the Access flag
 #
 #   bazel test //kernel/tests:all
 load("@bazel_skylib//rules:copy_file.bzl", "copy_file")
@@ -342,4 +344,19 @@ host_test(
         ":page_size_16k",
         ":page_size_4k",
     ],
+)
+
+copy_file(
+    name = "switch_pmap",
+    src = "//kernel/switch:include/switch/pmap.h",
+    out = "switch/pmap.h",
+)
+
+host_test(
+    name = "switch_pmap_test",
+    srcs = [
+        "switch/pmap.h",
+        "switch_pmap_test.cpp",
+    ],
+    includes = ["."],
 )

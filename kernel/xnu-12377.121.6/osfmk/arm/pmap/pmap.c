@@ -85,6 +85,7 @@
 #include <arm64/proc_reg.h>
 #include <pexpert/arm64/boot.h>
 #include <switch/ram.h>
+#include <switch/pmap.h>
 #if __has_include(<arm64/ppl/sart.h>)
 #if XNU_MONITOR_ANS2_SART
 #include <arm64/ppl/sart.h>
@@ -8513,7 +8514,7 @@ arm_clear_fast_fault(
 
 		assert(spte != ARM_PTE_EMPTY);
 		if (spte != tmplate) {
-			if ((spte & (~ARM_PTE_WRITEABLE)) != (tmplate & (~ARM_PTE_WRITEABLE))) {
+			if (switch_pte_needs_tlbi(spte, tmplate)) {
 #ifdef ARM_PTE_FF_MARKER
 				assert(!(spte & ARM_PTE_FF_MARKER));
 				tmplate |= ARM_PTE_FF_MARKER;
@@ -8538,6 +8539,7 @@ cff_skip_pve_pass1:
 	}
 
 	if (!tlb_flush_needed) {
+		FLUSH_PTE();
 		goto cff_finish;
 	}
 
