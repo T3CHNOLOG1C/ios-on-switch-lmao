@@ -1,0 +1,22 @@
+# kits/SwitchTime on the host, over a 19.2 MHz model clock.
+#
+#   bazel test //kits/SwitchTime/test:all
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//bazel/testing:defs.bzl", "host_shims", "host_test")
+
+lint_files()
+
+host_shims(
+    name = "kernel",
+    headers = ["kern/clock.h"],
+    stubs = "switch_time_stubs.h",
+)
+
+host_test(
+    name = "switch_time_test",
+    srcs = [
+        "switch_time_test.cpp",
+        "//kits/SwitchTime:SwitchTime.h",
+    ],
+    deps = [":kernel"],
+)
