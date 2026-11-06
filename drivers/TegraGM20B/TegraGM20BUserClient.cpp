@@ -20,6 +20,7 @@
 #include "TegraGM20BGpu.h"
 #include "TegraGM20BPoolPolicy.h"
 #include "TegraGM20BPushScan.h"
+#include "TegraGM20BSharedWiring.h"
 using tgm_scan::PushCounts;
 using tgm_scan::PushParse;
 using tgm_scan::scanPush;
@@ -697,7 +698,9 @@ class AGXDeviceUserClient : public IOUserClient
 		bool system;  // a coherent BO from ordinary pages (tgm_pool::FromSystem): bmd's pages under a physical view
 		tgm_mem *mem;
 		tgm_coh *coh;  // imports: the surface's coherency registry entry (gpu.c), held
-		Bo *cohNext;   // cohBos_
+		SharedWiring *
+			wiring;  // a surface import's pages, mem and wiring, shared with the task's other imports
+		Bo *cohNext;                      // cohBos_
 		uint32_t snapshot[kMaxChannels];  // submitted seqnos when freed (zombies only)
 	};
 
@@ -761,6 +764,8 @@ class AGXDeviceUserClient : public IOUserClient
 	IOReturn getInfo(TegraGM20BAbiInfo *out);
 	IOReturn boAlloc(const TegraGM20BAbiBoAlloc *in, TegraGM20BAbiBoAllocReply *out);
 	IOReturn boImport(const TegraGM20BAbiBoImport *in, TegraGM20BAbiBoAllocReply *out);
+	void adoptWiring(Bo *bo, SharedWiring *w);
+	void publishWiring(Bo *bo, const TegraGM20BAbiBoImport *in);
 	IOReturn boFree(const TegraGM20BAbiBoFree *in);
 	IOReturn vmBind(const TegraGM20BAbiVmBind *in, uint32_t count);
 	IOReturn channelCreate(const TegraGM20BAbiChannelCreate *in,
@@ -888,6 +893,8 @@ AGXDeviceUserClient::Bo *AGXDeviceUserClient::findToken(uint32_t token)
 
 void AGXDeviceUserClient::releaseBo(Bo *bo)
 {
+	if (bo->wiring)
+		bo->mem = nullptr;
 	tgm_mem_del(&bo->mem);
 	if (bo->pool_va && bo->handle) {
 		pool_bytes_ -= bo->bytes;
@@ -949,8 +956,13 @@ void AGXDeviceUserClient::releaseBo(Bo *bo)
 			tgm_vm_import_note(vm_, bo->pas[0], 0);
 		}
 		tgm_coherency_put(bo->coh);
-		bo->wired->complete();
-		bo->wired->release();
+		if (bo->wiring) {
+			sharedWiringPut(bo->wiring);
+			bo->pas = nullptr;
+		} else {
+			bo->wired->complete();
+			bo->wired->release();
+		}
 	}
 	if (bo->pas)
 		IODelete(bo->pas, uint64_t, bo->backing_pages);
@@ -1230,10 +1242,13 @@ IOReturn AGXDeviceUserClient::boImport(const TegraGM20BAbiBoImport *in,
 	bo->bytes = in->bytes;
 	bo->npages = static_cast<uint32_t>(in->bytes >> 12);
 	bo->backing_pages = bo->npages;
-	bo->pas = IONew(uint64_t, bo->npages);
+	if (SharedWiring *w = sharedWiringFind(task_, in->address, in->bytes, in->surface_id))
+		adoptWiring(bo, w);
+	else
+		bo->pas = IONew(uint64_t, bo->npages);
 	IOReturn ret = bo->pas ? kIOReturnSuccess : kIOReturnNoMemory,
 		 wire[2] = {kIOReturnNoMemory, kIOReturnNoMemory};
-	if (!ret) {
+	if (!ret && !bo->wiring) {
 		// Wired for the GPU to write where the task's mapping allows that, else for it to read only (Core Animation
 		// hands over image bytes it maps read-only); a read-only BO is mapped read-only in the GPU, so a GPU write to
 		// it is an MMU fault (a panic naming it), never a store into memory the task cannot write.
@@ -1251,8 +1266,11 @@ IOReturn AGXDeviceUserClient::boImport(const TegraGM20BAbiBoImport *in,
 				: kIOReturnBadArgument;
 		lap(1);
 	}
-	if (!ret)
+	if (!ret && !bo->wiring) {
 		ret = ioreturn(tgm_mem_new(vm_, bo->pas, bo->npages, &bo->mem));
+		if (!ret && in->surface_id)
+			publishWiring(bo, in);
+	}
 	lap(2);
 	if (ret) {
 		IOLog("tegra-gm20b: BoImport %llu bytes at %#llx refused: %#x (wiring for GPU "
@@ -1290,6 +1308,27 @@ IOReturn AGXDeviceUserClient::boImport(const TegraGM20BAbiBoImport *in,
 	out->map_token = 0;
 	out->reserved = 0;
 	return kIOReturnSuccess;
+}
+
+void AGXDeviceUserClient::adoptWiring(Bo *bo, SharedWiring *w)
+{
+	bo->wiring = w;
+	bo->wired = w->wired;
+	bo->pas = w->pas;
+	bo->mem = w->mem;
+	bo->readOnly = w->readOnly;
+}
+
+// The import's own wiring becomes the task's for this range; when another import published one meanwhile, the import
+// takes that one and its own goes.
+void AGXDeviceUserClient::publishWiring(Bo *bo, const TegraGM20BAbiBoImport *in)
+{
+	SharedWiring *made = IONew(SharedWiring, 1);
+	if (!made)
+		return;
+	*made = {nullptr,   task_,   in->address, in->bytes, in->surface_id, 0,
+		 bo->wired, bo->pas, bo->npages,  bo->mem,   bo->readOnly};
+	adoptWiring(bo, sharedWiringPublish(made));
 }
 
 IOReturn AGXDeviceUserClient::boFree(const TegraGM20BAbiBoFree *in)
