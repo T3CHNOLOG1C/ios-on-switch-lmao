@@ -218,6 +218,17 @@ def _impl(ctx):
         ))],
     ))
 
+    # cc_library defines, which no_legacy_features would drop: a driver package's build settings reach the compiles of
+    # every driver that names its headers (drivers/SwitchUSB:hdrs). Nothing else on the kernel side has defines.
+    features.append(feature(
+        name = "preprocessor_defines",
+        enabled = True,
+        flag_sets = [flag_set(actions = _COMPILE, flag_groups = [flag_group(
+            flags = ["-D%{preprocessor_defines}"],
+            iterate_over = "preprocessor_defines",
+        )])],
+    ))
+
     # PLAIN_ASM: bindings, firmware .incbin units.
     features.append(feature(
         name = "kernel_plain_asm",

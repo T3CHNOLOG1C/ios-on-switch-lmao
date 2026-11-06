@@ -27,12 +27,15 @@ TEST(SwitchXudcSource, DriverUsesTheHeader)
              "ep.tds->decide(index, e.code(), e.residue(), ep.in, residue,",
              "ep.tds->push({(uint16_t)first, (uint16_t)n, r.length, probe && n > 1});",
              "using Tds = TdRing<kDataRingTrbs - 1, kQueueDepth>;",
-             "kIOMemoryIncoherentIOStore",
-             "kIOMemoryIncoherentIOFlush",
+             "requestSync(r, r.md, 0, r.length, out);",
+             "requestSync(r, r.md, 0, actual, true);",
              "TRB_CHAIN",
              "kIOMemoryPhysicallyContiguous",
          })
         EXPECT_THAT(source, HasSubstr(needle));
+    const std::string memory = SourceText("../XudcRequestMemory.h");
+    EXPECT_THAT(memory, HasSubstr("md->performOperation(invalidate ? kIOMemoryIncoherentIOFlush : "
+                                  "kIOMemoryIncoherentIOStore, offset, length);"));
 }
 
 TEST(SwitchXudcSource, FreedPoolPagesKickEveryWaitingEndpoint)

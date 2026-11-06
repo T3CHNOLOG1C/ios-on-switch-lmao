@@ -191,3 +191,5 @@ private:
 };
 
 }  // namespace xudc
+
+#include "XudcRequestMemory.h"

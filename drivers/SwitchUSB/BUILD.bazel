@@ -1,7 +1,9 @@
 # drivers/SwitchUSB: moved from out/native-a57/root-v1/tree/drivers/SwitchUSB by the layout move.
+load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load("@rules_python//python:py_binary.bzl", "py_binary")
 load("//bazel/lint:defs.bzl", "lint_files")
-load("//kernel/rules:kernel.bzl", "kernel_driver", "kernel_headers")
+load("//kernel/rules:kernel.bzl", "kernel_driver")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -24,8 +26,58 @@ filegroup(
     ),
 )
 
-# This package's headers (kernel_headers): what other drivers' hdr_deps name.
-kernel_headers()
+# Device mode's data requests without prepare() (XudcRequestMemory.h, SwitchDMADirect.h): their runs from the page
+# tables when their memory is zone memory (mbufs). Same TRBs, same cache lines; off until a device boot has compared the
+# stats line's CPU share.
+bool_flag(
+    name = "xudc_direct",
+    build_setting_default = False,
+)
+
+config_setting(
+    name = "xudc_direct_on",
+    flag_values = {":xudc_direct": "True"},
+)
+
+# SuperSpeed on the USB-C port, the dock's hub and LAN, and the host's DMA through the SMMU. Off until USB2 host mode
+# works on the device.
+bool_flag(
+    name = "superspeed",
+    build_setting_default = False,
+)
+
+config_setting(
+    name = "superspeed_on",
+    flag_values = {":superspeed": "True"},
+)
+
+# This package's headers, as kernel_headers() makes them, with the settings' defines, which every driver whose hdr_deps
+# name drivers/SwitchUSB compiles with (the kernel toolchain's preprocessor_defines feature).
+filegroup(
+    name = "headers",
+    srcs = glob(
+        [
+            "**/*.h",
+            "**/*.hpp",
+            "**/*.inc",
+        ],
+        allow_empty = True,
+    ),
+)
+
+cc_library(
+    name = "hdrs",
+    hdrs = [":headers"],
+    defines = select({
+        ":xudc_direct_on": ["SWITCH_XUDC_DIRECT=1"],
+        "//conditions:default": [],
+    }) + select({
+        ":superspeed_on": ["SWITCH_USB_SUPERSPEED=1"],
+        "//conditions:default": [],
+    }),
+    tags = ["kernel"],
+    target_compatible_with = ["//bazel/platforms:kernel"],
+)
 
 # The ABI checker of subclasses of original classes (SwitchUSB's abi_checks): reads Mach-O through the prelinker.
 py_binary(

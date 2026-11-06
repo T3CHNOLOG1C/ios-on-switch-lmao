@@ -33,6 +33,18 @@ host_test(
     copts = ["-O1"],
 )
 
+# SwitchDMADirect.h (//drivers/SwitchUSB:xudc_direct) against SwitchXUDC.cpp admit()'s prepare() path: identical runs
+# and TRBs, cache lines and copied bytes over random kernel-virtual layouts; what it refuses goes through prepare().
+host_test(
+    name = "switch_dma_direct_test",
+    srcs = [
+        "switch_dma_direct_test.cpp",
+        "//drivers/SwitchUSB:SwitchDMADirect.h",
+        "//drivers/SwitchUSB:XudcTransfer.h",
+    ],
+    copts = ["-O1"],
+)
+
 # What xudc_transfer_test cannot see in the driver itself.
 host_test(
     name = "switch_xudc_source_test",
@@ -40,6 +52,7 @@ host_test(
     data = [
         "//drivers/SwitchUSB:SwitchXUDC.cpp",
         "//drivers/SwitchUSB:XudcHardware.cpp",
+        "//drivers/SwitchUSB:XudcRequestMemory.h",
     ],
 )
 

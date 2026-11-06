@@ -132,7 +132,7 @@ class SwitchXUDC : public IOUSBDeviceController {
 
         // A data endpoint's request (section "Data endpoints"): its memory, prepared from admission to completion; the
         // serial path's progress.
-        struct Request {
+        struct Request : RequestDirect {
         _IOUSBDeviceIORequestTag *tag;
         IOMemoryDescriptor *md;
         uint32_t length, done;
@@ -821,8 +821,8 @@ IOReturn SwitchXUDC::ioGated(_IOUSBDeviceIORequestTag *request)
         return kIOReturnNoResources;
     const uint64_t entered = mach_absolute_time();
     Request &r = ep.queue[(ep.head + ep.count++) % kQueueDepth];
-    r = {request, get<IOMemoryDescriptor *>(request, kReqBuffer), (uint32_t)get<uint64_t>(request, kReqLength), 0,
-         false};
+    r = {{}, request, get<IOMemoryDescriptor *>(request, kReqBuffer), (uint32_t)get<uint64_t>(request, kReqLength),
+         0,  false};
     kick(dci);
     st.ticks += mach_absolute_time() - entered;
     return kIOReturnSuccess;
@@ -861,13 +861,13 @@ SwitchXUDC::Admit SwitchXUDC::admit(uint32_t dci, Request &r)
     const bool out = !ep.in;
     if (!r.md)
         return r.length ? Admit::Failed : Admit::Serial;
-    if (!r.prepared) {
+    if (!r.prepared && !requestDirect(r, scratchRuns, kMaxRuns)) {
         if (r.md->prepare() != kIOReturnSuccess)
             return Admit::Failed;
         r.prepared = true;
     }
     Run *const runs = scratchRuns;
-    uint32_t runCount = 0, offset = 0;
+    uint32_t runCount = directRunCount(r), offset = directOffset(r);
     while (offset < r.length && runCount < kMaxRuns) {
         IOByteCount segment = 0;
         const addr64_t pa = r.md->getPhysicalSegment(offset, &segment, kIOMemoryMapperNone);
@@ -910,11 +910,11 @@ SwitchXUDC::Admit SwitchXUDC::admit(uint32_t dci, Request &r)
         uint8_t *va = pool.va + page * kBouncePageBytes;
         piece.pa = pool.pa + page * kBouncePageBytes;
         if (!out)
-            r.md->readBytes(piece.offset, va, piece.length);
+            requestRead(r, r.md, piece.offset, va, piece.length);
         cacheFlush(va, piece.length ? piece.length : 1);
     }
     if (r.length)
-        r.md->performOperation(out ? kIOMemoryIncoherentIOFlush : kIOMemoryIncoherentIOStore, 0, r.length);
+        requestSync(r, r.md, 0, r.length, out);
     const uint32_t base = trbType(TRB_NORMAL) | (out ? TRB_ISP : 0);
     uint32_t first = 0;
     for (uint32_t i = 0; i < n; ++i) {
@@ -942,7 +942,7 @@ SwitchXUDC::Admit SwitchXUDC::admit(uint32_t dci, Request &r)
 void SwitchXUDC::releaseTrbs(uint32_t dci, const Tds::Td &td, Request &r, bool copyBack, uint32_t actual)
 {
     if (copyBack && actual)
-        r.md->performOperation(kIOMemoryIncoherentIOFlush, 0, actual);
+        requestSync(r, r.md, 0, actual, true);
     uint32_t index = td.first, offset = 0;
     for (uint32_t i = 0; i < td.trbs; ++i, index = hw.nextIndex(dci, index)) {
         const uint64_t pa = hw.trbBuffer(dci, index);
@@ -952,7 +952,7 @@ void SwitchXUDC::releaseTrbs(uint32_t dci, const Tds::Td &td, Request &r, bool c
             if (copyBack && offset < actual) {
                 const uint32_t got = actual - offset < length ? actual - offset : length;
                 cacheFlush(va, got);
-                r.md->writeBytes(offset, va, got);
+                requestWrite(r, r.md, offset, va, got);
             }
             poolGive(pa);
         }
