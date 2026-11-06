@@ -1,0 +1,73 @@
+load("//bazel/lint:defs.bzl", "lint_files")
+load(":defs.bzl", "hekate_payload")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files()
+
+exports_files(glob([
+    "*.c",
+    "*.h",
+]))
+
+filegroup(
+    name = "bdk_sources",
+    srcs = [
+        "@hekate//:bdk/display/di.c",
+        "@hekate//:bdk/display/vic.c",
+        "@hekate//:bdk/exception_handlers.S",
+        "@hekate//:bdk/libs/fatfs/ff.c",
+        "@hekate//:bdk/libs/fatfs/ffsystem.c",
+        "@hekate//:bdk/libs/fatfs/ffunicode.c",
+        "@hekate//:bdk/mem/heap.c",
+        "@hekate//:bdk/mem/mc.c",
+        "@hekate//:bdk/mem/minerva.c",
+        "@hekate//:bdk/mem/sdram.c",
+        "@hekate//:bdk/mem/smmu.c",
+        "@hekate//:bdk/power/bq24193.c",
+        "@hekate//:bdk/power/max17050.c",
+        "@hekate//:bdk/power/max7762x.c",
+        "@hekate//:bdk/power/regulator_5v.c",
+        "@hekate//:bdk/rtc/max77620-rtc.c",
+        "@hekate//:bdk/sec/se.c",
+        "@hekate//:bdk/sec/tsec.c",
+        "@hekate//:bdk/soc/bpmp.c",
+        "@hekate//:bdk/soc/ccplex.c",
+        "@hekate//:bdk/soc/clock.c",
+        "@hekate//:bdk/soc/fuse.c",
+        "@hekate//:bdk/soc/gpio.c",
+        "@hekate//:bdk/soc/hw_init.c",
+        "@hekate//:bdk/soc/i2c.c",
+        "@hekate//:bdk/soc/irq.c",
+        "@hekate//:bdk/soc/kfuse.c",
+        "@hekate//:bdk/soc/pinmux.c",
+        "@hekate//:bdk/soc/pmc.c",
+        "@hekate//:bdk/soc/timer.c",
+        "@hekate//:bdk/soc/uart.c",
+        "@hekate//:bdk/storage/emmc.c",
+        "@hekate//:bdk/storage/sd.c",
+        "@hekate//:bdk/storage/sdmmc.c",
+        "@hekate//:bdk/storage/sdmmc_driver.c",
+        "@hekate//:bdk/utils/btn.c",
+        "@hekate//:bdk/utils/sprintf.c",
+        "@hekate//:bdk/utils/util.c",
+        "@hekate//:bootloader/libs/fatfs/diskio.c",
+        "@hekate//:bootloader/start.S",
+    ],
+)
+
+hekate_payload(
+    name = "install-ios",
+    srcs = [
+        "card.c",
+        "main.c",
+        "manifest.c",
+        "source.c",
+        "stream.c",
+        "target.c",
+        "ui.c",
+    ],
+    out = "install-ios.bin",
+    hdrs = glob(["*.h"]),
+    wrap = ["sdmmc_storage_write"],
+)
