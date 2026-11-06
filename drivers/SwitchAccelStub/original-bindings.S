@@ -5,3 +5,6 @@
 .set __ZN15IOAcceleratorESC2EPK11OSMetaClass, 0xfffffff004bd3b20
 .globl __ZN15IOAcceleratorESD2Ev
 .set __ZN15IOAcceleratorESD2Ev, 0xfffffff004bd3b64
+#if XNU_12377_121_6
+#error "21H461 kernelcache addresses: there are no iPadOS 27.2 (24B119) bindings for this driver yet"
+#endif

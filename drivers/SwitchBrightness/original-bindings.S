@@ -8,3 +8,6 @@
 // OSMetaClass::getMetaClassWithName("AppleARMBacklight") returns this same address.
 .globl __ZN17AppleARMBacklight10gMetaClassE
 .set __ZN17AppleARMBacklight10gMetaClassE, 0xfffffff006ade638
+#if XNU_12377_121_6
+#error "21H461 kernelcache addresses: there are no iPadOS 27.2 (24B119) bindings for this driver yet"
+#endif

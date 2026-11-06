@@ -18,3 +18,6 @@
 .set _switch_original_watchdog_start, 0xfffffff00563e498
 .globl _switch_original_watchdog_check
 .set _switch_original_watchdog_check, 0xfffffff00563ebd4
+#if XNU_12377_121_6
+#error "21H461 kernelcache addresses: there are no iPadOS 27.2 (24B119) bindings for this driver yet"
+#endif
