@@ -1,17 +1,7 @@
 <!-- rumdl-disable MD033 MD041 -->
 <a id="readme-top"></a>
 
-> [!CAUTION]
-> **Read this before you do anything.**
->
-> - There is no warranty. If you break your console, that's your fault.
-> - It runs on the Nintendo Switch OLED and nothing else, and there are no plans for any other model.
-> - There is no support, for installing it or for anything else. Issues are disabled.
-> - Don't send me Twitter DMs or emails about it.
-> - PRs are accepted, but slop won't be merged. im not reading allat.
-> - There's no promise when, or whether, a PR gets merged. i have a life too.
 
-<br />
 <div align="center">
   <a href="https://github.com/brunostjohn/ios-on-switch-lmao">
     <img src=".github/logo.svg" alt="ios-on-switch-lmao logo" width="96" height="96">
@@ -20,12 +10,12 @@
   <h3 align="center">ios-on-switch-lmao</h3>
 
   <p align="center">
-    iPadOS, booting natively on a Nintendo Switch OLED.
+    iPadOS natively on a Nintendo Switch OLED.
     <br />
     <a href="https://ios-on-switch-lmao.brunostjohn.com"><strong>Read the docs »</strong></a>
     <br />
     <br />
-    <a href="https://ios-on-switch-lmao.brunostjohn.com/installation">Install it</a>
+    <a href="https://ios-on-switch-lmao.brunostjohn.com/installation">Installation</a>
     &middot;
     <a href="https://ios-on-switch-lmao.brunostjohn.com/what-works">What works</a>
     &middot;
@@ -48,14 +38,23 @@
 
 ## About the project
 
-<!-- TODO(photo): a photo of the Switch running iOS, e.g.
-<img src=".github/photo.jpg" alt="A Switch OLED showing the iPadOS Home Screen" width="720">
--->
+> [!CAUTION]
+> **Read this before you do anything.**
+>
+> - There is no warranty. If you break your console, that's your fault.
+> - It runs on the Nintendo Switch OLED and nothing else, and there are no plans for any other model.
+> - There is no support, for installing it or for anything else. Issues are disabled.
+> - Don't send me Twitter DMs or emails about it.
+> - PRs are accepted, but slop won't be merged. im not reading allat.
+> - There's no promise when, or whether, a PR gets merged. i have a life too.
 
-iPadOS runs directly on the Switch's hardware. The kernel is Apple's XNU, built from the source Apple publishes, with
-drivers for the Switch's chips. Everything above it is Apple's own iPadOS, which your Mac downloads from Apple when it
-builds the install image. You start it from hekate, the way people boot Android or Linux on a Switch, and it lives on
-its own partition of the SD card.
+<br />
+
+
+<img src="docs/assets/switch-ios.jpg" alt="A Switch OLED showing the iPadOS Home Screen" width="720">
+
+
+iPadOS running directly on the Switch. The kernel is Apple's XNU, built from the source published by Apple, with drivers for the Switch's hardware. Everything else is generated from the iPadOS IPSW downloaded during the installation process. You boot it the same way people boot Android/Linux from Hekate.
 
 The docs list [what works and what doesn't](https://ios-on-switch-lmao.brunostjohn.com/what-works) and explain
 [how it works](https://ios-on-switch-lmao.brunostjohn.com/how-it-works).
@@ -64,19 +63,15 @@ The docs list [what works and what doesn't](https://ios-on-switch-lmao.brunostjo
 
 ## Getting started
 
-You need a Switch OLED that already boots hekate, a microSD card, and a Mac with
-[Bazelisk](https://github.com/bazelbuild/bazelisk) installed. The
-[installation guide](https://ios-on-switch-lmao.brunostjohn.com/installation) has the rest.
+You need a Switch OLED that already boots hekate, a microSD card, and a Mac with [Bazelisk](https://github.com/bazelbuild/bazelisk) installed. The [installation guide](https://ios-on-switch-lmao.brunostjohn.com/installation) will explain how to sort out everything else.
 
-Support questions go to the docs. Nobody answers them anywhere else.
+Support questions are answered in the docs. Please do **NOT** DM me on twitter or e-mail me about help with installing/using this.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 ## Contributing
 
-Pull requests are the only contributions accepted. Fill in every section of the PR template, because a check fails PRs
-that don't. [Contributing](https://ios-on-switch-lmao.brunostjohn.com/contributing) covers building and testing, and
-[AGENTS.md](AGENTS.md) has the rules the code follows, which apply to people as much as to agents.
+Pull requests are the only contributions accepted. Fill in every section of the PR template, because I likely won't look at your PR otherwise. [Contributing](https://ios-on-switch-lmao.brunostjohn.com/contributing) covers building and testing.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -90,14 +85,13 @@ Thank you for your ongoing support. [Click here to become my sponsor.](https://g
 
 ## License
 
-The project's own code is licensed under GPL-2.0-only (see [LICENSE](LICENSE)). Upstream code keeps its own licence,
-as [NOTICE](NOTICE) explains.
+The project's own code is licensed under GPL-2.0-only (see [LICENSE](LICENSE)). Upstream code keeps its own licence, as [NOTICE](NOTICE) explains.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 ## Contact
 
-Bruno St John: [@brunostjohn](https://x.com/brunostjohn) on Twitter. Please don't DM me about this project.
+Bruno St John: [@brunostjohn](https://x.com/brunostjohn) on Twitter. Please don't DM me for help with running this.
 
 Project link: [github.com/brunostjohn/ios-on-switch-lmao](https://github.com/brunostjohn/ios-on-switch-lmao)
 
@@ -137,5 +131,4 @@ Thanks to these projects and the people behind them:
 
 ---
 
-Apple, iOS, iPadOS and the Apple logo are trademarks of Apple Inc. Nintendo Switch is a trademark of Nintendo. This
-project claims no ownership of them and intends no infringement.
+Apple, iOS, iPadOS and the Apple logo are trademarks of Apple Inc. Nintendo Switch is a trademark of Nintendo. This project claims no ownership of them and intends no infringement.
