@@ -1,0 +1,51 @@
+# kits/SwitchDMA on the host: the cache operations against a model of which lines each one owes, and the buffer
+# allocator against a stand-in IOBufferMemoryDescriptor (its DC instructions recorded, not run).
+#
+#   bazel test //kits/SwitchDMA/test:all
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//bazel/testing:defs.bzl", "host_library", "host_shims", "host_test")
+
+lint_files()
+
+host_library(
+    name = "dcache_recorder",
+    srcs = ["dcache_recorder.cpp"],
+    hdrs = ["dcache_recorder.h"],
+)
+
+host_test(
+    name = "switch_dcache_test",
+    srcs = [
+        "switch_dcache_test.cpp",
+        "//kits/SwitchDMA:SwitchDcache.h",
+    ],
+    copts = ["-O1"],
+    deps = [":dcache_recorder"],
+)
+
+host_shims(
+    name = "kernel",
+    headers = ["IOKit/IOBufferMemoryDescriptor.h"],
+    stubs = "switch_dma_stubs.h",
+    deps = [":dcache_recorder"],
+)
+
+host_library(
+    name = "buffer",
+    srcs = [
+        "//kits/SwitchDMA:SwitchDMABuffer.cpp",
+        "//kits/SwitchDMA:SwitchDcache.h",
+    ],
+    hdrs = ["//kits/SwitchDMA:SwitchDMABuffer.h"],
+    force_includes = ["dcache_recorder.h"],
+    deps = [":kernel"],
+)
+
+host_test(
+    name = "switch_dma_buffer_test",
+    srcs = ["switch_dma_buffer_test.cpp"],
+    deps = [
+        ":buffer",
+        ":kernel",
+    ],
+)
