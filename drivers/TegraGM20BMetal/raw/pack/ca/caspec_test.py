@@ -2,6 +2,7 @@
 """caspec.py makes every Core Animation state of the corpus, the device's own journals, from its name alone."""
 
 import os
+import re
 import sys
 import unittest
 
@@ -21,6 +22,10 @@ class CorpusStates(unittest.TestCase):
                 name, want = caspec.corpus_fields(line)
                 if name:
                     self.assertEqual(caspec.state_fields(tables, name), want, name)
+                    # the functions' part as the probe keys it, blanks and all (raw_metal_pipeline_key's spacing)
+                    got = caspec.state_line(tables, name)
+                    journal = re.sub(r' lib=\S+', '', line.rstrip('\n'))
+                    self.assertEqual(got[got.index(' | v ') :], journal[journal.index(' | v ') :], name)
                     checked += 1
         self.assertGreater(checked, 600)
 

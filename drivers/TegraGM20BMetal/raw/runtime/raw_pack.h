@@ -69,7 +69,7 @@ enum PackPipelineFlags : uint32_t {
 
 struct PackPipeline {
     uint64_t keyHash;           // FNV-1a 64 of the state key (the frontend journal's R-line fields but the label)
-    uint32_t keyString;         // offset in the strings section
+    uint32_t keyString;         // offset in the strings section: the key's fields before " | v" (attachments, vertex layout)
     uint16_t vs, fs;            // program indices
     uint32_t blob, blobDwords;  // (method, value) pairs in the blob section, dwords = 2 x pairs
     uint8_t entries, pushes, vertexSlot, pad;

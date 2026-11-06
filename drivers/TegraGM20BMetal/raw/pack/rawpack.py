@@ -5,8 +5,9 @@ Core Animation's render pipeline states (PROBE_LABEL: the render server's) go th
 (the host bridge) and NVK (the host twin with the device's pipeline cache identity), over a mock GM20B whose every
 submission is executed by nvdec (pack/nvdec.cpp, Mesa's Fermi MME simulator in pack/mesa). The states are made from
 their names (ca/caset.py, ca/caspec.py: QuartzCore's own decoding of a name into a state, with this IPSW's tables,
-ca/qc-<build>.json): the corpus's names, QuartzCore's offline compilation manifest and their closure over the blend CA
-puts in the pipeline (CA_TIERS). With no tables of this QuartzCore (another IPSW's), the corpus's states as they are.
+ca/qc-<build>.json): the corpus's names, QuartzCore's offline compilation manifest, their closure over the blend CA
+puts in the pipeline and over the blend it leaves in the fragment (CA_TIERS). With no tables of this QuartzCore (another
+IPSW's), the corpus's states as they are.
 
   1. probe (pack/probe.mm) makes every state and draws it once with tagged inputs, three times: payloads of 256, 16 and
      4096 bytes (a uniform buffer's range is NVK's 256-byte rounding of the payload; the 4096-byte run gives the
@@ -27,6 +28,7 @@ reruns the probes).
 refuses a pack of another build.
 """
 
+import concurrent.futures
 import contextlib
 import hashlib
 import json
@@ -72,10 +74,9 @@ def option(name: str, required: bool = True) -> str | None:
 
 
 BUILT = ('probe', 'libmock_iokit.dylib', 'ycbcr.metallib')
-# The Core Animation states the pack holds (ca/caset.py's tiers). The fetch tier (the fragment blends a compositing
-# filter asks for, over every fixed-function fragment state) is left out: its ~11300 fragment programs would make the
-# shader heap, uploaded whole at open, some 50 MB.
-CA_TIERS = ('corpus', 'manifest', 'blend')
+# The Core Animation states the pack holds (ca/caset.py's tiers): every one. The runtime makes a state and places its
+# programs in the shader heap at its first lookup (raw_gpu.cpp Device::pipeline), so the pack's size is file size only.
+CA_TIERS = ('corpus', 'manifest', 'blend', 'fetch')
 
 
 def ca_corpus(qc: Path, corpus: Path, work: Path) -> Path:
@@ -97,9 +98,7 @@ def ca_corpus(qc: Path, corpus: Path, work: Path) -> Path:
     with open(corpus) as src, open(out, 'w') as dst:
         dst.writelines(line for line in src if not caspec.corpus_fields(line)[0])
         for tier, names in caset.labels(tables, caset.corpus_names(str(corpus)), CA_TIERS).items():
-            dst.writelines(
-                f'R ok=1 label=com.apple.coreanimation.{n} {caspec.state_fields(tables, n)} |\n' for n in names
-            )
+            dst.writelines(caspec.state_line(tables, n) + '\n' for n in names)
             print(f'rawpack: Core Animation states, {tier}: {len(names)}')
     return out
 
@@ -181,6 +180,83 @@ def build(work: Path, bridge: Path) -> None:
     run(['xcrun', '-sdk', 'iphoneos', 'metallib', work / 'ycbcr.air', '-o', work / 'ycbcr.metallib'])
 
 
+# The states are probed in buckets, each its own probe processes over a share of the states (fnv64 of the state's line,
+# so a state stays in its bucket whatever else changes), all at once: a bucket's outputs are a function of its states
+# and the tools alone (what a cache of probe runs can key by). Bucket 0 also draws the raw path's own states
+# (PROBE_YCBCR_LIB).
+BUCKETS = 16
+
+
+def split_buckets(corpus: Path, work: Path, count: int) -> list[Path]:
+    """Write each bucket's corpus (its Core Animation lines, in corpus order) into work/bucket<i>/corpus.log.
+
+    Each bucket starts with the first downsample_4_frag state: the probe's warm-up draws it so its dummy sampler takes
+    NVK's sampler index 0 (layouts.py reads a handle naming index 0 as no sampler). A bucket that also holds it probes
+    it twice; mkpack.py keeps one.
+    """
+    lines: list[list[str]] = [[] for _ in range(count)]
+    warm = ''
+    with open(corpus) as f:
+        for line in f:
+            if line.startswith('R ') and ' label=com.apple.coreanimation.' in line:
+                lines[fnv(line.split(' ', 3)[3].encode()) % count].append(line)
+                warm = warm or (line if 'f downsample_4_frag' in line else '')
+    dirs = []
+    for i, part in enumerate(lines):
+        d = work / f'bucket{i}'
+        (d / 'cache').mkdir(parents=True)
+        (d / 'corpus.log').write_text(warm + ''.join(part))
+        dirs.append(d)
+    return dirs
+
+
+def fnv(b: bytes) -> int:
+    h = 0xCBF29CE484222325
+    for x in b:
+        h = ((h ^ x) * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
+    return h
+
+
+def probe_bucket(work: Path, d: Path, nvk: Path, qc: Path, env: dict[str, str]) -> str:
+    """Probe one bucket's states.
+
+    A run that only fills its m2v cache with NVK's driver records (NAK's programs), then the three decoded runs, which
+    name each bound program by those records (RAWCAP_PROGRAMS) and hit the same cache.
+    """
+    if d.name == 'bucket0':
+        env = dict(env, PROBE_YCBCR_LIB=str(work / 'ycbcr.metallib'))
+    said = []
+
+    def probe(name: str, extra: dict[str, str]) -> None:
+        with open(d / f'{name}.out', 'w') as out:
+            r = subprocess.run(
+                [str(work / 'probe'), str(nvk), str(d / 'cache'), str(qc), str(d / 'corpus.log')],
+                env=dict(env, **extra),
+                stdout=out,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+        if r.returncode:
+            sys.exit(f'rawpack: {d.name} probe {name} failed:\n{r.stderr[-4000:]}')
+        tail = [line for line in r.stderr.splitlines() if line.startswith('probe:')]
+        said.append(f'{name}: {tail[-1] if tail else "?"}')
+
+    probe('warm', {})
+    run([sys.executable, HERE / 'mkprograms.py', d / 'programs.bin', d / 'cache'])
+    for size in (256, 16, 4096):
+        probe(
+            f'probe{size}',
+            {
+                'PROBE_BYTES': str(size),
+                'RAWCAP_LOG': str(d / f'probe{size}.log'),
+                'RAWCAP_PROGRAMS': str(d / 'programs.bin'),
+            },
+        )
+    shutil.rmtree(d / 'cache')
+    return f'rawpack: {d.name}: ' + '; '.join(said)
+
+
 def main() -> None:
     if '--build-only' in sys.argv[1:]:
         out = Path(option('--out')).resolve()
@@ -223,49 +299,11 @@ def main() -> None:
         NMB_ASYNC_PSO_API='0',
         NMB_CACHE_MB='65536',
     )
-    env.update(PROBE_YCBCR_LIB=str(work / 'ycbcr.metallib'))
-    # first a run that only fills the m2v cache with NVK's driver records (NAK's programs), then the three decoded runs,
-    # which name each bound program by those records (RAWCAP_PROGRAMS) and hit the same cache
-    cache = work / 'cache'
-    cache.mkdir()
-
-    def probe(name: str, extra: dict[str, str]) -> None:
-        with open(work / f'{name}.out', 'w') as out:
-            r = subprocess.run(
-                [str(work / 'probe'), str(nvk), str(cache), str(qc), str(corpus)],
-                env=dict(env, **extra),
-                stdout=out,
-                stderr=subprocess.PIPE,
-                text=True,
-                check=False,
-            )
-        if r.returncode:
-            sys.exit(f'rawpack: probe {name} failed:\n{r.stderr[-4000:]}')
-        tail = [line for line in r.stderr.splitlines() if line.startswith('probe:')]
-        print(f'rawpack: {name}: {tail[-1] if tail else "?"}')
-
-    probe('warm', {})
-    print(run([sys.executable, HERE / 'mkprograms.py', work / 'programs.bin', cache]).strip())
-    for size in (256, 16, 4096):
-        probe(
-            f'probe{size}',
-            {
-                'PROBE_BYTES': str(size),
-                'RAWCAP_LOG': str(work / f'probe{size}.log'),
-                'RAWCAP_PROGRAMS': str(work / 'programs.bin'),
-            },
-        )
-    report = run(
-        [
-            sys.executable,
-            HERE / 'mkpack.py',
-            work / 'probe256.out',
-            work / 'probe256.log',
-            work / 'programs.bin',
-            out,
-            work / 'probe',
-        ]
-    )
+    buckets = split_buckets(corpus, work, BUCKETS)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count() or 1) as pool:
+        for line in pool.map(lambda b: probe_bucket(work, b, nvk, qc, env), buckets):
+            print(line)
+    report = run([sys.executable, HERE / 'mkpack.py', work / 'programs.bin', out, *buckets])
     if stack:
         pack = bytearray((out / 'pack.bin').read_bytes())
         struct.pack_into('<Q', pack, 8 + 16 + 8 * 2 * 8, stack)  # PackHeader.stack (after the section table)

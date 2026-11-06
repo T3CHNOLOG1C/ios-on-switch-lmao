@@ -136,7 +136,7 @@ def main() -> None:
     tiers = tuple(sys.argv[3:]) or TIERS
     for tier, names in labels(tables, corpus_names(sys.argv[2]), tiers).items():
         for name in names:
-            print(f'R ok=1 label=com.apple.coreanimation.{name} {caspec.state_fields(tables, name)} |')
+            print(caspec.state_line(tables, name))
         print(f'caset: {tier}: {len(names)} states', file=sys.stderr)
 
 

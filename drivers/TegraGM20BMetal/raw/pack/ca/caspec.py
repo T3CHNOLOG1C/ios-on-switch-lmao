@@ -343,8 +343,12 @@ def vertex_attributes(tables: Tables, s: Spec) -> list[tuple[int, int, int, int]
     return sorted((a & 7, a >> 3 & 0x1F, a >> 8 & 0x3F, stride) for a in info[1 : 1 + count])
 
 
-def state_fields(tables: Tables, name: str) -> str:
-    """Give the journal's R-line fields (after `label=...`) of the state `name`: the pack's key, spaces normalised."""
+def state_line(tables: Tables, name: str) -> str:
+    """Give the journal's R line of the state `name`, spaced as the frontend journals it (the probe keys by that text).
+
+    Each function's part is its name, a blank, its constants: two blanks before the next '|' for one without constants,
+    as RawMetal.mm raw_metal_pipeline_key makes the key the pack is looked up by.
+    """
     s = decode(tables, name)
     atts, vertex = color_attachments(tables, s)
     parts = ['samples=1', 'topo=0', 'ds=0/0']
@@ -353,9 +357,15 @@ def state_fields(tables: Tables, name: str) -> str:
         parts += [f'a{i}={fmt}:{off}:1:{stride}:1:1' for i, fmt, off, stride in vertex_attributes(tables, s)]
 
     def text(fn: tuple[str, list[Const]]) -> str:
-        return ' '.join([fn[0]] + [f'{k}:{t}:{v}' for k, t, v in sorted(fn[1])])
+        return fn[0] + ' ' + ' '.join(f'{k}:{t}:{v}' for k, t, v in sorted(fn[1]))
 
-    return ' '.join(parts) + ' | v ' + text(vertex_function(tables, s)) + ' | f ' + text(fragment_function(tables, s))
+    v, f = text(vertex_function(tables, s)), text(fragment_function(tables, s))
+    return f'R ok=1 label=com.apple.coreanimation.{name} ' + ' '.join(parts) + f' | v {v} | f {f} | '
+
+
+def state_fields(tables: Tables, name: str) -> str:
+    """Give the R line's fields (after `label=...`) of the state `name`, spaces normalised: corpus_fields' form."""
+    return corpus_fields(state_line(tables, name))[1]
 
 
 def corpus_fields(line: str) -> tuple[str | None, str | None]:
