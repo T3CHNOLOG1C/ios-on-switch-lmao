@@ -45,8 +45,9 @@ def _pinned_firmware() -> bytes:
 
 
 def _signatures(raw: bytes) -> list[tuple[str, str]]:
-    words = re.findall(r'\{0x([0-9a-f]{8})u,\s*0x([0-9a-f]{8})u\}', (SOURCE / 'signatures.h').read_text())
-    if len(words) < 100:
+    text = (SOURCE / 'signatures.h').read_text()
+    words = re.findall(r'\{0x([0-9a-f]{8})u,\s*0x([0-9a-f]{8})u\}', text)
+    if len(words) < 100 or len(words) != len(re.findall(r'\{0x[0-9a-f]{8}u', text)):
         raise ValueError('missing instruction signatures')
     for off, word in words:
         if struct.unpack_from('<I', raw, int(off, 16))[0] != int(word, 16):

@@ -208,6 +208,7 @@ class TestExport(unittest.TestCase):
 
     def test_every_instruction_fingerprint(self):
         words = re.findall(r'\{0x([0-9a-f]{8})u,\s*0x([0-9a-f]{8})u\}', (HERE / 'signatures.h').read_text())
+        self.assertEqual(len(words), 277)
         for off, word in words:
             with self.subTest(offset=off):
                 p = BASE + int(off, 16)
