@@ -120,11 +120,37 @@ TEST(XnuUiScale, MobileGestaltScale)
               (std::vector<uint8_t>{0x13, 0x00, 0x80, 0x52, 0x13, 0xf4, 0xa7, 0x72}));
 }
 
+TEST(XnuUiScale, ProgressBarIsWholePixels)
+{
+    for (size_t i = 0; i < SWITCH_UI_SCALES; i++) {
+        const switch_ui_scale &s = switch_ui_scales[i];
+        if (switch_ui_scale_is_unit(&s)) {
+            continue;
+        }
+        SCOPED_TRACE(s.name);
+        float scale = 0;
+        std::memcpy(&scale, &s.float_bits, sizeof(scale));
+        for (size_t side = 0; side < 2; side++) {
+            float points = 0;
+            std::memcpy(&points, &s.progress_bar_bits[side], sizeof(points));
+            const volatile float pixels = points * scale;
+            EXPECT_EQ(pixels, std::floor(pixels)) << side;
+            EXPECT_LT(std::fabs(points - (side ? 4.0f : 239.0f)), 0.5f) << side;
+        }
+    }
+    // little-endian floats over ProgressUI's 239.0f, 4.0f
+    EXPECT_EQ(EditBytes(SWITCH_US_PROGRESS_BAR, Named("1.6"), 8),
+              (std::vector<uint8_t>{0x00, 0xc0, 0x6e, 0x43, 0x00, 0x00, 0x70, 0x40}));
+    EXPECT_EQ(EditBytes(SWITCH_US_PROGRESS_BAR, Named("1.25"), 8),
+              (std::vector<uint8_t>{0x33, 0x33, 0x6f, 0x43, 0x00, 0x00, 0x80, 0x40}));
+}
+
 TEST(XnuUiScale, AWrongLengthOrAFixedEditWritesNothing)
 {
     uint8_t out[20] = {};
     EXPECT_FALSE(switch_ui_scale_edit_bytes(SWITCH_US_FBS_OVERRIDE, Named("1.6"), out, 16));
     EXPECT_FALSE(switch_ui_scale_edit_bytes(SWITCH_US_MG_SCALE, Named("1.6"), out, 12));
+    EXPECT_FALSE(switch_ui_scale_edit_bytes(SWITCH_US_PROGRESS_BAR, Named("1.6"), out, 4));
     EXPECT_FALSE(switch_ui_scale_edit_bytes(SWITCH_US_FIXED, Named("1.6"), out, 12));
     for (uint8_t byte : out) {
         EXPECT_EQ(byte, 0);

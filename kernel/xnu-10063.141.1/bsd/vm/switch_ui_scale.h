@@ -18,12 +18,17 @@ struct switch_ui_scale {
 	const char *name;    /* the boot-arg's value */
 	uint8_t     num, den;
 	uint32_t    float_bits; /* num / den as MobileGestalt's float */
+	/* ProgressUI's 239 x 4 point bar, as two floats whose single-precision products with float_bits are whole */
+	uint32_t    progress_bar_bits[2];
 };
 
 static const struct switch_ui_scale switch_ui_scales[] = {
-	{"1", 1, 1, 0x3f800000},    /* 720x1280 points: the stock screen, every UI scale site left stock */
-	{"1.25", 5, 4, 0x3fa00000}, /* 576x1024 */
-	{"1.6", 8, 5, 0x3fcccccd},  /* 450x800: a 9.7- to 12.9-inch iPad's point at 209.8 ppi */
+	/* 720x1280 points: the stock screen, every UI scale site left stock */
+	{"1", 1, 1, 0x3f800000, {0x436f0000, 0x40800000}},
+	/* 576x1024; 239.2 x 4: a 299 x 5 pixel bar */
+	{"1.25", 5, 4, 0x3fa00000, {0x436f3333, 0x40800000}},
+	/* 450x800: a 9.7- to 12.9-inch iPad's point at 209.8 ppi; 238.75 x 3.75: a 382 x 6 pixel bar */
+	{"1.6", 8, 5, 0x3fcccccd, {0x436ec000, 0x40700000}},
 };
 #define SWITCH_UI_SCALES        (sizeof(switch_ui_scales) / sizeof(switch_ui_scales[0]))
 #define SWITCH_UI_SCALE_UNIT    0u
@@ -105,6 +110,7 @@ enum switch_ui_scale_edit_kind {
 	SWITCH_US_FIXED = 0,
 	SWITCH_US_FBS_OVERRIDE, /* 20 bytes: fmov d8, #num; fmov d1, #den; fdiv d8, d8, d1; tbnz w0, #0, +8; fmov d8, xzr */
 	SWITCH_US_MG_SCALE,     /* 8 bytes: movz w19, #float_bits[15:0]; movk w19, #float_bits[31:16], lsl #16 */
+	SWITCH_US_PROGRESS_BAR, /* 8 bytes: progress_bar_bits, little-endian */
 };
 
 /* Writes the edit's bytes for the scale; false when the kind's length is not size. */
@@ -129,6 +135,13 @@ switch_ui_scale_edit_bytes(enum switch_ui_scale_edit_kind kind, const struct swi
 		}
 		switch_a64_put(out, switch_a64_movz_w(19, (uint16_t)scale->float_bits));
 		switch_a64_put(out + 4, switch_a64_movk_w_lsl16(19, (uint16_t)(scale->float_bits >> 16)));
+		return true;
+	case SWITCH_US_PROGRESS_BAR:
+		if (size != 8) {
+			return false;
+		}
+		switch_a64_put(out, scale->progress_bar_bits[0]);
+		switch_a64_put(out + 4, scale->progress_bar_bits[1]);
 		return true;
 	case SWITCH_US_FIXED:
 		break;

@@ -2790,6 +2790,10 @@ const struct switch_ui_scale *switch_ui_scale(void);
  *   again: EXC_GUARD DEALLOC_GAP, SpringBoard killed laying out Control Center. Row bytes become width * bytes per
  *   pixel (mul x3, x0, x24), the same value wherever the stock code worked. Every other CoreUI bitmap takes its row
  *   bytes from an integer width or lets CUICGBitmapContextCreate choose them.
+ * - ProgressUI (.31), -[PUIProgressWindow _layoutScreen]'s progress bar (DataMigrator's, under the boot logo on the
+ *   first boot): 239 x 4 points times main-screen-scale in single precision, a fractional frame Core Animation
+ *   resamples (382.4 x 6.4 at 1.6). Its two floats become the scale's progress_bar_bits, whose products are whole
+ *   (382 x 6 at 1.6, 299 x 5 at 1.25), at the same place. Nothing else reads them.
  * MobileGestalt keeps its answer in its build-keyed cache; kern_exec.c drops that cache when the scale changes
  * (native_switch_ui_scale_cache).
  */
@@ -2863,6 +2867,16 @@ static const struct switch_us_site {
 			  { 0x03, 0x7c, 0x18, 0x9b, 0x1f, 0x20, 0x03, 0xd5, 0x1f, 0x20, 0x03, 0xd5 } },
 		},
 		"CoreUI", "SVG vector image row bytes",
+	},
+	{   /* dyld_shared_cache_arm64.31 of 21H461 (text 0x1e221c000, file 0) */
+		{ 0x64, 0xa2, 0xf3, 0x51, 0xbe, 0x93, 0x39, 0xa6, 0x93, 0x72, 0xe8, 0x56, 0xb6, 0x64, 0x9c, 0xfc },
+		0x1e41f0000ULL, 0x1fd4000ULL, 0x1000ULL, 0, 1,
+		{
+			/* 0x1e41f1838: 239.0f, 4.0f */
+			{ 0x1fd5838ULL, 8, 0, 8, SWITCH_US_PROGRESS_BAR,
+			  { 0x00, 0x00, 0x6f, 0x43, 0x00, 0x00, 0x80, 0x40 }, { 0 } },
+		},
+		"ProgressUI", "progress bar",
 	},
 };
 #define SWITCH_US_SITES           (sizeof(switch_us_sites) / sizeof(switch_us_sites[0]))
@@ -2963,7 +2977,7 @@ switch_ui_scale_pager(const struct switch_us_site *site, vm_object_t file_object
  * (range_offset/range_size within the mapping), or MEMORY_OBJECT_NULL to keep that part of the mapping stock. The home
  * grid, settings icons and keyboard ranges are in different subcaches (.25, .13, .03), one per mapping, so they only
  * answer slot 0; the .07 mapping holds both widget deadline sites, slot k being site k; a UI scale site answers its own
- * slot (.11 holds three: MobileGestalt and the two CoreUI ones).
+ * slot (.11 holds three: MobileGestalt and the two CoreUI ones; .31 only ProgressUI's).
  */
 memory_object_t switch_shared_cache_text_pager(vm_object_t file_object, uint64_t file_offset, uint64_t size,
     uint64_t unslid_address, struct vnode *vp, unsigned slot, uint64_t *range_offset, uint64_t *range_size);
