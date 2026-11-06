@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""mksamplers (r8-rawca): NVK's sampler header for each sampler of a PROBE_SAMPLERS run (probe.mm): one line per sampler,
-"<i> <minFilter> <magFilter> <mipFilter> <s> <t> <r> <maxAnisotropy> <lod> <8 header words>".
+"""mksamplers (r8-rawca): NVK's sampler header for each sampler of a PROBE_SAMPLERS run (probe.mm).
+
+One line per sampler, "<i> <minFilter> <magFilter> <mipFilter> <s> <t> <r> <maxAnisotropy> <lod> <8 header words>".
 usage: mksamplers.py <probe.out> <probe.log>
 """
 

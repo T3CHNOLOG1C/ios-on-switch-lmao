@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
-"""programs.bin for nvdec from NVK driver records under m2v cache dirs: per nvk_shader, 'NVPG', code_size, cbuf count, the cbuf
-types, the 80-byte shader header (the hdr NVK uploads before the code on pre-Turing), then the code.
+"""programs.bin for nvdec from NVK driver records under m2v cache dirs.
+
+Per nvk_shader: 'NVPG', code_size, cbuf count, the cbuf types, the 80-byte shader header (the hdr NVK uploads before the
+code on pre-Turing), then the code.
 usage: mkprograms.py <out programs.bin> <cache dir>...
 """
 
@@ -14,7 +16,7 @@ import nvkshader
 TYPES = {'invalid': 0, 'root': 1, 'shader_data': 2, 'desc_set': 3, 'dynamic_ubo': 4, 'ubo_desc': 5}
 
 
-def main():
+def main() -> None:
     out, seen = bytearray(), set()
     for d in sys.argv[2:]:
         for root, _, files in os.walk(d):

@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
-"""mkformats (r8-rawca): NVK's texture header for each format of a PROBE_FORMATS run (probe.mm), as the raw path writes it for a
-pitch-linear 2D texture: prints "<MTLPixelFormat> <8 header words with the address bits cleared>" per format NVK took.
+"""mkformats (r8-rawca): NVK's texture header for each format of a PROBE_FORMATS run (probe.mm).
+
+As the raw path writes it for a pitch-linear 2D texture: prints "<MTLPixelFormat> <8 header words with the address bits
+cleared>" per format NVK took.
 usage: mkformats.py <probe.out> <probe.log>
 """
 

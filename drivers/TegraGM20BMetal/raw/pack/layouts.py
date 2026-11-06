@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Per probe: set 0's layout as m2v + NVK wrote it, read off the tagged probe (capture/probe.mm, NVDEC_SCRUB records)."""
+"""Per probe: set 0's layout as m2v + NVK wrote it, read off the tagged probe.
+
+The probe is capture/probe.mm, read by its NVDEC_SCRUB records.
+"""
 
 import os
 import sys
@@ -10,7 +13,7 @@ import probelog
 STAGES = {1: 'v', 2: 'f'}
 
 
-def tic_kind(tic, rts):
+def tic_kind(tic: tuple[str, list[int]], rts: dict[str, int]) -> tuple[str, int | str]:
     name, w = tic
     width, height = (w[4] & 0xFFFF) + 1, (w[5] & 0xFFFF) + 1
     if 16 <= width < 32 and height == width - 8:
@@ -27,12 +30,13 @@ DUMMY_TSC = [
 ]  # MTLSamplerDescriptor's defaults through m2v + NVK (nearest, clamp, not mipmapped)
 
 
-def tsc_kind(t):
-    # probe.mm tags fragment sampler slot s with max LOD 1 + s/2 under a nearest mip filter, linear filters when s&1 and a
-    # repeating U when s&2. m2v hands Vulkan the level a nearest mip filter reads at the bound (metal/sampler.rs nearest_level:
-    # past one half reads the next level), so the header holds level 1 + s//2 (4.8 fixed point: 256 per level) and an odd slot
-    # shares its even neighbour's level: the filter tells them apart. (r10: reading the level alone named an odd slot's sampler
-    # its even neighbour's, whose filter then differed, and 9 two-image Core Animation states were skipped as "derived".)
+def tsc_kind(t: list[int]) -> tuple[str, int | str]:
+    # probe.mm tags fragment sampler slot s with max LOD 1 + s/2 under a nearest mip filter, linear filters when s&1 and
+    # a repeating U when s&2. m2v hands Vulkan the level a nearest mip filter reads at the bound (metal/sampler.rs
+    # nearest_level: past one half reads the next level), so the header holds level 1 + s//2 (4.8 fixed point: 256 per
+    # level) and an odd slot shares its even neighbour's level: the filter tells them apart. (r10: reading the level
+    # alone named an odd slot's sampler its even neighbour's, whose filter then differed, and 9 two-image Core Animation
+    # states were skipped as "derived".)
     lod = (t[2] >> 12) & 0xFFF
     if lod % 256 or not 256 <= lod <= 256 * 8:
         return ('tsc?', ' '.join('%x' % w for w in t))
@@ -45,7 +49,7 @@ def tsc_kind(t):
     return ('smp', slot)
 
 
-def layout(p):
+def layout(p: dict) -> tuple[list[tuple], list[str]]:
     r = p['records'][0]
     if 'set0' not in r:
         return [], []

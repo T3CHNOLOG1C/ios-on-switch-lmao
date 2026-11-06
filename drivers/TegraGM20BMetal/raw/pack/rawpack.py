@@ -1,25 +1,27 @@
 #!/usr/bin/env python3
-"""rawpack: the raw GM20B path's pipeline pack (runtime/raw_pack.h), made on this Mac from the precompile corpus through this
-build's own frontend + m2v (the host bridge) and NVK (the host twin with the device's pipeline cache identity), over a mock GM20B
-whose every submission is executed by nvdec (pack/nvdec.cpp, Mesa's Fermi MME simulator in pack/mesa). Core Animation's render
-pipeline states only (PROBE_LABEL): the render server's.
+"""rawpack: the raw GM20B path's pipeline pack (runtime/raw_pack.h), made on this Mac from the precompile corpus.
 
-  1. probe (pack/probe.mm) makes every state and draws it once with tagged inputs, three times: payloads of 256, 16 and 4096
-     bytes (a uniform buffer's range is NVK's 256-byte rounding of the payload; the 4096-byte run gives the function's window);
+The corpus goes through this build's own frontend + m2v (the host bridge) and NVK (the host twin with the device's
+pipeline cache identity), over a mock GM20B whose every submission is executed by nvdec (pack/nvdec.cpp, Mesa's Fermi
+MME simulator in pack/mesa). Core Animation's render pipeline states only (PROBE_LABEL): the render server's.
+
+  1. probe (pack/probe.mm) makes every state and draws it once with tagged inputs, three times: payloads of 256, 16 and
+     4096 bytes (a uniform buffer's range is NVK's 256-byte rounding of the payload; the 4096-byte run gives the
+     function's window);
   2. mkprograms.py reads NAK's programs out of the NVK driver records the run left in its m2v cache directory;
-  3. mkpack.py reads the probe logs and writes pack.bin: per state its programs, registers, push words and descriptor layout,
-     plus NVK's context init with the addresses to relocate. States m2v draws with more than one draw or with dispatches (the
-     extended-range formats' shadow images and merges) are left out: the raw path hands them to m2v.
+  3. mkpack.py reads the probe logs and writes pack.bin: per state its programs, registers, push words and descriptor
+     layout, plus NVK's context init with the addresses to relocate. States m2v draws with more than one draw or with
+     dispatches (the extended-range formats' shadow images and merges) are left out: the raw path hands them to m2v.
 
-usage: rawpack.py --bridge <host libnative_metal_bridge.a> --nvk <host twin dylib> --qc <default.metallib> --corpus <corpus.log>
-                  --out <dir> [--stack <hex key>] [--prebuilt <dir>]
+usage: rawpack.py --bridge <host libnative_metal_bridge.a> --nvk <host twin dylib> --qc <default.metallib>
+                  --corpus <corpus.log> --out <dir> [--stack <hex key>] [--prebuilt <dir>]
        rawpack.py --build-only --bridge <host libnative_metal_bridge.a> --out <dir>
 writes <out>/pack.bin, pack.json, layouts.txt, report.txt and keeps the probe logs in <out>/work (deleted with --clean).
 --build-only compiles the probe, the mock GPU (libmock_iokit.dylib) and ycbcr.metallib into <dir> and stops; --prebuilt
-<dir> runs those instead of compiling them (//gpu/seed:local_tools makes them its own action, so a corpus edit only reruns the
-probes).
---stack: the build's stack key (the plugin is compiled with the same value), stamped into the pack header: the runtime refuses a
-pack of another build.
+<dir> runs those instead of compiling them (//gpu/seed:local_tools makes them its own action, so a corpus edit only
+reruns the probes).
+--stack: the build's stack key (the plugin is compiled with the same value), stamped into the pack header: the runtime
+refuses a pack of another build.
 """
 
 import os
@@ -37,7 +39,7 @@ METAL = TREE / 'drivers/NativeMetal'
 ABI = TREE / 'drivers/TegraGM20B'
 
 
-def run(cmd, env=None, out=None):
+def run(cmd: list[str | Path], env: dict[str, str] | None = None, out: Path | None = None) -> str:
     r = subprocess.run(
         [str(c) for c in cmd],
         capture_output=out is None,
@@ -54,7 +56,7 @@ def run(cmd, env=None, out=None):
     return (r.stdout or '') + (r.stderr or '')
 
 
-def option(name, required=True):
+def option(name: str, required: bool = True) -> str | None:
     if name in sys.argv[1:-1]:
         return sys.argv[sys.argv.index(name) + 1]
     if required:
@@ -65,13 +67,15 @@ def option(name, required=True):
 BUILT = ('probe', 'libmock_iokit.dylib', 'ycbcr.metallib')
 
 
-def build(work, bridge):
-    """The mock GPU with nvdec on every submission, the probe through the frontend + host bridge (beside it: rpath
+def build(work: Path, bridge: Path) -> None:
+    """Build the mock GPU, the probe and the raw path's own states into `work`.
+
+    The mock GPU with nvdec on every submission, the probe through the frontend + host bridge (beside it: rpath
     @executable_path) and the raw path's own states: the 4:2:0 YCbCr conversions (ycbcr.metal), an iOS library like
     QuartzCore's, drawn after Core Animation's (probe.mm PROBE_YCBCR_LIB).
     """
-    # Source paths (Mesa's asserts' __FILE__) as /switch-ios/..., whichever checkout or sandbox this runs in: the probe and
-    # the mock are an action's outputs, and the run's cache key is their bytes.
+    # Source paths (Mesa's asserts' __FILE__) as /switch-ios/..., whichever checkout or sandbox this runs in: the probe
+    # and the mock are an action's outputs, and the run's cache key is their bytes.
     maps = ['-ffile-prefix-map=%s=/switch-ios/tree' % RAW.parents[2], '-ffile-prefix-map=%s=/switch-ios' % Path.cwd()]
     cflags = ['-O2', '-Wall', *maps, '-I', ABI]
     objs = []
@@ -140,7 +144,7 @@ def build(work, bridge):
     run(['xcrun', '-sdk', 'iphoneos', 'metallib', work / 'ycbcr.air', '-o', work / 'ycbcr.metallib'])
 
 
-def main():
+def main() -> None:
     if '--build-only' in sys.argv[1:]:
         out = Path(option('--out')).resolve()
         out.mkdir(parents=True, exist_ok=True)
@@ -179,12 +183,12 @@ def main():
         NMB_ASYNC_PSO_API='0',
     )
     env.update(PROBE_YCBCR_LIB=str(work / 'ycbcr.metallib'))
-    # first a run that only fills the m2v cache with NVK's driver records (NAK's programs), then the three decoded runs, which
-    # name each bound program by those records (RAWCAP_PROGRAMS) and hit the same cache
+    # first a run that only fills the m2v cache with NVK's driver records (NAK's programs), then the three decoded runs,
+    # which name each bound program by those records (RAWCAP_PROGRAMS) and hit the same cache
     cache = work / 'cache'
     cache.mkdir()
 
-    def probe(name, extra):
+    def probe(name: str, extra: dict[str, str]) -> None:
         r = subprocess.run(
             [str(work / 'probe'), str(nvk), str(cache), str(qc), str(corpus)],
             env=dict(env, **extra),

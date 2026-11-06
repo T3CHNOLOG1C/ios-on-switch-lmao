@@ -2,13 +2,13 @@
 """Read capture/probe.out + probe.log (nvdec NVDEC_PROBE records) into per-probe dicts."""
 
 
-def fnv(b, h=0xCBF29CE484222325):
+def fnv(b: bytes, h: int = 0xCBF29CE484222325) -> int:
     for x in b:
         h = ((h ^ x) * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
     return h
 
 
-def load(out_path, log_path, init_submits=4):
+def load(out_path: str, log_path: str, init_submits: int = 4) -> list[dict]:
     probes = []
     if any(l.startswith('WARMUP') for l in open(out_path)):
         init_submits += 1

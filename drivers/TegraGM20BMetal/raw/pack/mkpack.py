@@ -1,21 +1,24 @@
 #!/usr/bin/env python3
-"""mkpack (r7-raw): the GM20B pipeline pack for the raw Metal path, read off the probe run (capture/probe.mm through the live
-frontend + m2v + NVK twin with nvdec in NVDEC_PROBE + NVDEC_SCRUB + NVDEC_TRACE=3 mode).
+"""mkpack (r7-raw): the GM20B pipeline pack for the raw Metal path, read off the probe run.
+
+The probe run: capture/probe.mm through the live frontend + m2v + NVK twin with nvdec in NVDEC_PROBE + NVDEC_SCRUB +
+NVDEC_TRACE=3 mode.
 
 For every corpus render pipeline state the raw path can take (one draw, no m2v-internal passes or dispatches):
-  * its two programs: the 80-byte shader header + Maxwell code NAK made (from the NVK driver records), laid out in one shader
-    heap image the way NVK uploads them pre-Turing (header at +0x30, code at +0x80 of a 0x100-aligned slot);
+  * its two programs: the 80-byte shader header + Maxwell code NAK made (from the NVK driver records), laid out in one
+    shader heap image the way NVK uploads them pre-Turing (header at +0x30, code at +0x80 of a 0x100-aligned slot);
   * the 3D registers it sets (the registers that differ between states), as (method, value) pairs;
-  * its root-table push words and its set-0 layout: which byte of the 256-byte descriptor set holds which Metal buffer slot's
-    uniform descriptor, texture/sampler handle or framebuffer-fetch handle;
+  * its root-table push words and its set-0 layout: which byte of the 256-byte descriptor set holds which Metal buffer
+    slot's uniform descriptor, texture/sampler handle or framebuffer-fetch handle;
   * which Metal vertex buffer slot feeds vertex stream 0.
-Plus what every state shares: the context init NVK records at queue creation (with the addresses to relocate marked) and the
-registers every state's draws leave the same (the baseline).
+Plus what every state shares: the context init NVK records at queue creation (with the addresses to relocate marked) and
+the registers every state's draws leave the same (the baseline).
 
 usage: mkpack.py <probe.out> <probe.log> <programs.bin> <out dir> [<probe16 dir prefix>]
-  the optional prefix names the PROBE_BYTES=16 and 4096 runs (<prefix>16.out/.log, <prefix>4096.out/.log): each buffer entry's
-  descriptor type (a uniform buffer's range NVK rounds up to 256 bytes) and the function's window on the slot
-writes <out>/pack.bin (runtime/raw_pack.h layout), <out>/pack.json, <out>/programs.txt (decoder tables), and prints a report.
+  the optional prefix names the PROBE_BYTES=16 and 4096 runs (<prefix>16.out/.log, <prefix>4096.out/.log): each buffer
+  entry's descriptor type (a uniform buffer's range NVK rounds up to 256 bytes) and the function's window on the slot
+writes <out>/pack.bin (runtime/raw_pack.h layout), <out>/pack.json, <out>/programs.txt (decoder tables), and prints a
+report.
 """
 
 import json
@@ -32,13 +35,14 @@ MAGIC = b'GM20BPK1'
 VERSION = 2  # 2: the header's stack key (rawpack.py --stack) after the section table
 
 
-def fnv(b, h=0xCBF29CE484222325):
+def fnv(b: bytes, h: int = 0xCBF29CE484222325) -> int:
     for x in b:
         h = ((h ^ x) * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
     return h
 
 
-# Registers the runtime owns (sets per pass, per draw, or once at init with its own addresses): never in a blob or the baseline.
+# Registers the runtime owns (sets per pass, per draw, or once at init with its own addresses): never in a blob or the
+# baseline.
 OWNED = [
     (0x0000, 0x0200),
     (0x0800, 0x0A00),
@@ -67,7 +71,7 @@ OWNED = [
 ]
 
 
-def owned(m):
+def owned(m: int) -> bool:
     if 0x1C00 <= m < 0x1D00 and (m & 0xF) in (4, 8):  # vertex stream locations
         return True
     return any(a <= m < b for a, b in OWNED)
@@ -114,7 +118,7 @@ RELOC_CODE = {
 }
 
 
-def load_programs(path):
+def load_programs(path: str) -> dict[str, dict[str, bytes | list[int]]]:
     b = open(path, 'rb').read()
     progs, at = {}, 0
     while at + 12 <= len(b):
@@ -129,7 +133,7 @@ def load_programs(path):
     return progs
 
 
-def main():
+def main() -> None:
     out_path, log_path, prog_path, out_dir = sys.argv[1:5]
     sizes = {}  # (state index, set offset) -> (bound size with 16-byte payloads, with 4096-byte payloads)
     if len(sys.argv) > 5:
@@ -170,20 +174,21 @@ def main():
                 why = 'unknown program'
             elif sorted(r['prog']) != [1, 5]:
                 why = 'stages %s' % sorted(r['prog'])
-        # (three color attachments: the render server's since r7n's harvest, Core Animation's "A3" states with an R32Float third
-        # attachment, taken as any other; test/frame.h FRAME_A3 draws them)
+        # (three color attachments: the render server's since r7n's harvest, Core Animation's "A3" states with an
+        # R32Float third attachment, taken as any other; test/frame.h FRAME_A3 draws them)
         if why:
             skipped.append((p, why))
         else:
             simple.append(p)
 
-    # a color target's own registers (per-target blend 0x1e00 + 0x20 j, SET_CT_WRITE 0x1a00 + 4 j) mean nothing for a state
-    # without target j: what the probe saw there is an earlier state's leftover. Not that state's, so neither in its blob nor in
-    # deciding what varies (r8-rawca: two states with a third target made targets 2's blend "vary" for every other state)
-    def targets(key):
+    # a color target's own registers (per-target blend 0x1e00 + 0x20 j, SET_CT_WRITE 0x1a00 + 4 j) mean nothing for a
+    # state without target j: what the probe saw there is an earlier state's leftover. Not that state's, so neither in
+    # its blob nor in deciding what varies (r8-rawca: two states with a third target made targets 2's blend "vary" for
+    # every other state)
+    def targets(key: str) -> int:
         return sum(1 for t in key.split() if t[:1] == 'c' and t[1:2].isdigit() and '=' in t)
 
-    def foreign(m, n):
+    def foreign(m: int, n: int) -> bool:
         return (0x1E00 <= m < 0x1F00 and (m - 0x1E00) // 0x20 >= n) or (0x1A00 <= m < 0x1A20 and (m - 0x1A00) // 4 >= n)
 
     for p in simple:
@@ -251,8 +256,8 @@ def main():
         for e in ents:
             if e[1] == 'ubo':
                 s16, s4k = sizes.get((p['index'], e[0]), (256, 256))
-                # a 16-byte payload bound at 256: a uniform buffer (NVK rounds its range to the cbuf alignment); else storage.
-                # The 4096-byte one's range: the window (0: the whole payload)
+                # a 16-byte payload bound at 256: a uniform buffer (NVK rounds its range to the cbuf alignment); else
+                # storage. The 4096-byte one's range: the window (0: the whole payload)
                 ssbo = s16 < 256
                 window = 0 if s4k >= 4096 else s4k
                 entries.append(
@@ -284,7 +289,8 @@ def main():
                 elif sk[0] == 'tsc?derived':
                     problems.append('a sampler m2v derives from a bound one (YCbCr conversion)')
                 else:
-                    # a sampler the probe did not bind: the function's constexpr sampler (made by m2v as an immutable one)
+                    # a sampler the probe did not bind: the function's constexpr sampler (made by m2v as an immutable
+                    # one)
                     words = r['tsc'][e[4] >> 20]
                     if words not in constexpr_tsc:
                         constexpr_tsc.append(words)
@@ -313,7 +319,7 @@ def main():
     # --- pack.bin ---
     strings = bytearray()
 
-    def string(s):
+    def string(s: str) -> int:
         off = len(strings)
         strings.extend(s.encode() + b'\0')
         return off
@@ -351,7 +357,8 @@ def main():
             words[(o - 0x700) // 4] = val
         push = struct.pack('<I32I', mask, *words)
         vb = rec['vbs'][0] if rec['vbs'] else {'slot': 0xFF, 'stride': 0}
-        # the raw path's own states (probe.mm PROBE_YCBCR_LIB) by the name the runtime asks for (raw_gpu.cpp ycbcrPipeline)
+        # the raw path's own states (probe.mm PROBE_YCBCR_LIB) by the name the runtime asks for (raw_gpu.cpp
+        # ycbcrPipeline)
         own = re.search(r'\| f (ycbcr_\w+)', rec['key'])
         keyhash = fnv(('raw.ycbcr.' + own.group(1)).encode() if own else rec['key'].encode())
         flags = 1 if rec['fetch'] else 0

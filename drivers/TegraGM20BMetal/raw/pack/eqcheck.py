@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
-"""eqcheck (r7-raw): compare two nvdec logs (capture/cap.cpp RAWCAP_LOG, NVDEC_REGS=1) of the same frames, one from the shipped
-m2v + NVK path and one from the raw path, draw by draw. Submissions without draws or clears (context init, NVK's own setup) are
-skipped; then the i-th frame of one log is compared with the i-th of the other.
+"""eqcheck (r7-raw): compare two nvdec logs of the same frames, draw by draw.
 
-A draw is the same GPU work when every field matches: the live 3D registers (R line), the render targets (by first-appearance name),
-the vertex data, each stage's program and register count, and the bytes each program's constant buffers hold (pointers replaced by
-what they point to, handles by their texture/sampler headers). Barriers are compared as sets: the raw path must cover what NVK
-emitted before each draw that reads memory written earlier (WFI + TEXINV before a framebuffer fetch).
+The logs (capture/cap.cpp RAWCAP_LOG, NVDEC_REGS=1) are one from the shipped m2v + NVK path and one from the raw path.
+Submissions without draws or clears (context init, NVK's own setup) are skipped; then the i-th frame of one log is
+compared with the i-th of the other.
+
+A draw is the same GPU work when every field matches: the live 3D registers (R line), the render targets (by
+first-appearance name), the vertex data, each stage's program and register count, and the bytes each program's constant
+buffers hold (pointers replaced by what they point to, handles by their texture/sampler headers). Barriers are compared
+as sets: the raw path must cover what NVK emitted before each draw that reads memory written earlier (WFI + TEXINV
+before a framebuffer fetch).
 
 usage: eqcheck.py <nvk.log> <raw.log> [--show N] [--flat] [--layouts] [--own]
 """
@@ -16,7 +19,7 @@ import re
 import sys
 
 
-def frames(path):
+def frames(path: str) -> list[list[dict]]:
     subs, cur = [], []
     for l in open(path):
         l = l.rstrip('\n')
@@ -38,20 +41,20 @@ def frames(path):
                 ev['lines'].append(l.strip())
         if any(e['head'].startswith('DRAW') for e in events):
             out.append(events)
-    # --flat: every submission's events as one stream (a command buffer the raw path submits in segments is several submissions,
-    # each of its driver, where m2v makes one)
+    # --flat: every submission's events as one stream (a command buffer the raw path submits in segments is several
+    # submissions, each of its driver, where m2v makes one)
     if FLAT and out:
         out = [[e for events in out for e in events]]
     return out
 
 
-def rename_all(out):
+def rename_all(out: list[list[dict]]) -> list[list[dict]]:
     # persistent resources renamed in order of first appearance in draws (clears of textures no draw uses, such as m2v's
     # initialisation of new textures, would otherwise shift every name)
     names = {}
 
-    def rename(text, assign):
-        def sub(m):
+    def rename(text: str, assign: bool) -> str:
+        def sub(m: re.Match[str]) -> str:
             if m.group(0) not in names:
                 if not assign:
                     return 'C' + m.group(0)[1:]
@@ -71,18 +74,19 @@ def rename_all(out):
     return out
 
 
-# --layouts: render targets and sampled images compared by what their texels are, not where or how they lie. The raw path renders
-# a target NVK renders through a tiled shadow (rows not 128 apart) through a pitch pool image, and samples a surface m2v samples
-# through a shadow image (rows not 32 apart) through a pitch pool image: the texels are the same, their headers' addresses,
-# pitches and layouts are not. So: a texture header is its format word, width and height; a target its format; a target's
-# address, pitch, memory layout and array registers are dropped; and the hash of a constant buffer that holds handles is not
-# compared (its handles are, normalized; buffer contents keep their own hashes).
-def layout_tic(m):
+# --layouts: render targets and sampled images compared by what their texels are, not where or how they lie. The raw
+# path renders a target NVK renders through a tiled shadow (rows not 128 apart) through a pitch pool image, and samples
+# a surface m2v samples through a shadow image (rows not 32 apart) through a pitch pool image: the texels are the same,
+# their headers' addresses, pitches and layouts are not. So: a texture header is its format word, width and height; a
+# target its format; a target's address, pitch, memory layout and array registers are dropped; and the hash of a
+# constant buffer that holds handles is not compared (its handles are, normalized; buffer contents keep their own
+# hashes).
+def layout_tic(m: re.Match[str]) -> str:
     w = [int(x, 16) for x in m.group(2).split()]
     return 'tic[%08x %04x %04x]' % (w[0], w[4] & 0xFFFF, w[5] & 0xFFFF)
 
 
-def normalize_layouts(text):
+def normalize_layouts(text: str) -> str:
     text = re.sub(r'tic\[(\S+) ([0-9a-f]{8}(?: [0-9a-f]{8}){7})\]', layout_tic, text)
     if 'handle{' in text:
         text = re.sub(r'(?<=[={])[0-9a-f]{1,16}:', '*:', text)
@@ -92,7 +96,7 @@ def normalize_layouts(text):
 LAYOUT_REGS = {'%x' % (0x800 + 0x40 * j + k) for j in range(8) for k in (0x8, 0x14, 0x18, 0x1C)}
 
 
-def fields(ev):
+def fields(ev: dict) -> collections.OrderedDict:
     f = collections.OrderedDict()
     if LAYOUTS:
         ev = {
@@ -128,28 +132,28 @@ def fields(ev):
     return f
 
 
-# TIC_POOL_C / TSC_POOL_C: the header pools' last index. The raw path sizes its pools for the render server's live textures (8192
-# texture headers, 1024 samplers; NVK's init: 1024 and 4096): a limit, not draw state. Not compared.
+# TIC_POOL_C / TSC_POOL_C: the header pools' last index. The raw path sizes its pools for the render server's live
+# textures (8192 texture headers, 1024 samplers; NVK's init: 1024 and 4096): a limit, not draw state. Not compared.
 POOL_LIMITS = {'1564', '157c'}
 
 FLAT = '--flat' in sys.argv
 LAYOUTS = '--layouts' in sys.argv
-# --own: m2v's own draws left out (as --layouts does) with every header and layout still compared: a frame whose m2v work draws
-# passes of its own the raw path does without (m2v's copies into an image of every level, its mip generation)
+# --own: m2v's own draws left out (as --layouts does) with every header and layout still compared: a frame whose m2v
+# work draws passes of its own the raw path does without (m2v's copies into an image of every level, its mip generation)
 OWN = LAYOUTS or '--own' in sys.argv
 
 
-def main():
+def main() -> int:
     show = int(sys.argv[sys.argv.index('--show') + 1]) if '--show' in sys.argv else 3
     a, b = frames(sys.argv[1]), frames(sys.argv[2])
     print('frames: nvk %d raw %d' % (len(a), len(b)))
     if OWN:  # (before the names: what is left out names nothing)
-        # each driver's own draws: programs no draw of the other log runs (m2v's shadow copies and mip work; the raw path's
-        # 4:2:0 conversions through the pack's ycbcr states, where m2v converts with its own)
-        def programs(e):
+        # each driver's own draws: programs no draw of the other log runs (m2v's shadow copies and mip work; the raw
+        # path's 4:2:0 conversions through the pack's ycbcr states, where m2v converts with its own)
+        def programs(e: dict) -> tuple[str, ...]:
             return tuple(l.split()[1] for l in e['lines'] if l.startswith('stage'))
 
-        def drop(frames_of, other, who):
+        def drop(frames_of: list[list[dict]], other: list[list[dict]], who: str) -> None:
             theirs = {programs(e) for events in other for e in events if e['head'].startswith('DRAW')}
             dropped = 0
             for events in frames_of:
