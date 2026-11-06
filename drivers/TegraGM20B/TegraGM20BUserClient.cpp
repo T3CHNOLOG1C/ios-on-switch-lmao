@@ -746,7 +746,7 @@ class AGXDeviceUserClient : public IOUserClient
 	uint32_t pushScans_ =
 		0;  // the ones read, every kProfileEvery-th also profiled (gpu.c "push profile")
 	bool critical_ =
-		true;  // its GPU errors panic; no pool quota (all but the compositor with all-clients)
+		true;  // the compositor's GPU priority; no pool quota (all but the compositor with all-clients)
 	bool dead_ = false;  // a channel was killed for a GPU error: no new work, BOs or binds
 	bool importsWritten_ =
 		false;  // TegraGM20BPushImportsWritten: every submission marks every writable import
@@ -1712,8 +1712,8 @@ IOReturn AGXDeviceUserClient::waitFence(const TegraGM20BAbiWaitFence *in)
 	if (!in->channel || in->channel > kMaxChannels)
 		return kIOReturnBadArgument;
 	const uint64_t limit_ns = in->timeout_ns == UINT64_MAX ? 10000000000ULL : in->timeout_ns;
-	const uint64_t start = nowNs();
-	const uint64_t deadline = limit_ns > UINT64_MAX - start ? UINT64_MAX : start + limit_ns;
+	uint64_t start = nowNs();
+	uint64_t deadline = limit_ns > UINT64_MAX - start ? UINT64_MAX : start + limit_ns;
 	uint32_t waiter = 0, seq = 0;
 	bool woken = false;
 	for (bool slept = false;; slept = true) {
@@ -1733,9 +1733,13 @@ IOReturn AGXDeviceUserClient::waitFence(const TegraGM20BAbiWaitFence *in)
 		else if (static_cast<int32_t>(tgm_chan_completed(chan) - in->seqno) >= 0)
 			ret = kIOReturnSuccess;
 		else if (in->timeout_ns == UINT64_MAX && now - start >= limit_ns) {
+			// CONTRACT: UINT64_MAX means 10 s; then what the GPU is stuck on is killed (this channel's error
+			// ends the wait) and the wait goes on
 			hangHolder_ = current_thread();
-			tgm_chan_hung(chan, "fence wait", in->seqno,
-				      now - start);  // CONTRACT: UINT64_MAX means 10 s
+			tgm_chan_stalled(chan, "fence wait", in->seqno, now - start);
+			hangHolder_ = nullptr;
+			start = now;
+			deadline = now + limit_ns;
 		} else if (!limit_ns || now - start >= limit_ns) {
 			hangHolder_ = current_thread();
 			if (limit_ns)

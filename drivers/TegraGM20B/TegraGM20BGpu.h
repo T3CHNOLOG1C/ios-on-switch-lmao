@@ -74,8 +74,9 @@ int tgm_vm_kmap(struct tgm_vm *vm, struct tgm_mem *mem, uint64_t bytes, uint64_t
 
 /* Channels: GPFIFO on the GR runlist, subchannels 0..4 = 3D, compute, M2MF, 2D, copy. The channel releases
  * its seqno (4 bytes) to fence_gpu_va; fence_cpu is the kernel's write-combined view of the same word. owner (the
- * creating process) names it in nvkm's reports and our panic lines. A GPU error nvkm pins on a channel that is not
- * critical kills only that channel (tgm_chan_error then non-zero, its fence released) instead of
+ * creating process) names it in nvkm's reports and our panic lines. critical: the compositor's (with a vm_owner) or the
+ * kernel's; the compositor's get its GPU priority (TegraGM20BSched.h). A GPU error nvkm pins on a client's channel, or a
+ * hang the GPU is stuck on, kills only that channel (tgm_chan_error then non-zero, its fence released) instead of
  * panicking. */
 int tgm_chan_new(struct tgm_vm *vm, const void *vm_owner, volatile uint32_t *fence_cpu,
 		 uint64_t fence_gpu_va, const char *owner, int critical, struct tgm_chan **pchan);
@@ -148,15 +149,19 @@ void tgm_chan_set_group(struct tgm_chan *chan, const void *group);
 #define TGM_ORDER_MAX 16
 int tgm_chan_order(struct tgm_chan *chan, uint32_t flags, uint32_t seqno, uint32_t *queued);
 /* 0 healthy; else the CONTRACT.md error code (1 MMU fault, 2 GR exception, 3 host error, 4 timeout). Only before the
- * self-test passed, or under client fault isolation for a channel that is not critical: otherwise every GPU error panics
- * (nvkm's report in the panic string) and no channel dies quietly. */
+ * self-test passed, or under client fault isolation for a client's channel: an error on a kernel channel panics
+ * (nvkm's report in the panic string). */
 uint32_t tgm_chan_error(struct tgm_chan *chan);
 /* Panic naming `who` and the channel's state (fence, GPFIFO GET/PUT, PGRAPH/engine/PBDMA status, MC error registers):
  * work submitted on it did not complete and nvkm reported no error. */
 void tgm_chan_hung(struct tgm_chan *chan, const char *who, uint32_t seqno, uint64_t waited_ns)
 	__attribute__((noreturn));
-/* After a wait for `seqno` timed out: panics (tgm_chan_hung) once the channel has completed nothing for 2 s while work
- * is pending; a single submission that runs that long is taken for a hang. */
+/* A wait for `seqno` on chan ran out after waited_ns: kills the client channel the GPU is stuck on (chan's error then
+ * says so if it was chan) and returns; returns as well when nothing is stuck (slow work); panics (tgm_chan_hung) when
+ * the GPU is stuck on a kernel channel or nothing at all progresses. The caller waits again. */
+void tgm_chan_stalled(struct tgm_chan *chan, const char *who, uint32_t seqno, uint64_t waited_ns);
+/* After a wait for `seqno` timed out: tgm_chan_stalled once the channel has completed nothing for 2 s while work is
+ * pending; a single submission that runs that long is taken for a hang. */
 void tgm_chan_check_progress(struct tgm_chan *chan, const char *who, uint32_t seqno);
 /* A hang's line (TegraGM20BUserClient.cpp): the SET_PIXEL_SHADER_INTERLOCK_CONTROL methods with conflict detection on
  * in the `n` pushes at va[i] (dwords[i] long) of `client`'s connection (tgm_chan_new's vm_owner). Returns the pushes it
@@ -167,8 +172,8 @@ int tgm_client_interlocks(const void *client, const uint64_t *va, const uint32_t
 /* For a CPU reader of GPU-written memory outside the GPU client (NativeLegacyDisplay's copy of a swapped IOSurface,
  * which calls it weakly): wait for every GPU submission made so far (all channels), then clean+invalidate
  * [va, va + bytes) of the reader's mapping. Returns at once, touching no cache, when no user channel exists.
- * 0; a channel that has not completed its work after timeout_ns panics (tgm_chan_hung, from the self-test on;
- * -ETIMEDOUT before). Thread context. */
+ * 0; -ETIMEDOUT when a channel has not completed its work after timeout_ns (tgm_chan_stalled first, from the
+ * self-test on: a stuck channel is killed and waited for). Thread context. */
 int tegra_gm20b_sync_for_cpu(const void *va, uint64_t bytes, uint64_t timeout_ns);
 
 /* Fence pages: one per connection, from one pool range the GPU present maps whole (gpu.c). Zeroed; 0 or -ENOMEM. */

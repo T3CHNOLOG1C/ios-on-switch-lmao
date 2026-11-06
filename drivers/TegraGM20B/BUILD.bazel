@@ -46,6 +46,8 @@ kernel_driver(
         "shim/nvif_nvkm.c",
         "platform.c",
         "gpu.c",
+        "recover.c",
+        "sched.c",
         "shim/xnu_glue.cpp",
         "TegraGM20B.cpp",
         "TegraGM20BUserClient.cpp",
