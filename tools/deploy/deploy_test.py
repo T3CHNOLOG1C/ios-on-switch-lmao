@@ -24,10 +24,10 @@ class Log:
 
 def package(root, generation=0):
     root = Path(root)
-    for name in ("loader.uboot.bin", "kernel-window.bin", "boot.scr"):
+    for name in ("bl31.bin", "bl33.bin"):
         path = root / "switchroot/ios" / name
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(name.encode() * (10 + (generation if name == "kernel-window.bin" else 0)))
+        path.write_bytes(name.encode() * (10 + (generation if name == "bl33.bin" else 0)))
     (root / "bootloader/ini").mkdir(parents=True, exist_ok=True)
     (root / "bootloader/ini/ios.ini").write_text("[iOS]\nl4t=1\n")
     overlay = root / "overlay/usr/sbin/BlueTool"
@@ -44,7 +44,8 @@ class SyncTest(unittest.TestCase):
         package(self.root / "pkg1", generation=1)
         self.fat = self.root / "fat"
         for relative in ("bootloader/hekate_ipl.ini", "switchroot/ubuntu/boot.scr", "switchroot/ios/old.bin",
-                         "switchroot/ios/._old.bin", "payload.bin"):
+                         "switchroot/ios/._old.bin", "switchroot/ios/boot.scr", "switchroot/ios/bootargs.txt",
+                         "payload.bin"):
             (self.fat / relative).parent.mkdir(parents=True, exist_ok=True)
             (self.fat / relative).write_bytes(b"x")
 
@@ -57,15 +58,16 @@ class SyncTest(unittest.TestCase):
     def test_boot_entry_only_touches_our_files_and_is_idempotent(self):
         log = Log()
         changed, removed = cards.sync_boot_entry(self.fat, self.root / "pkg0", log)
-        self.assertEqual(len(changed), 4)
-        self.assertEqual(removed, ["switchroot/ios/old.bin"])
+        self.assertEqual(len(changed), 3)
+        self.assertEqual(removed, ["switchroot/ios/boot.scr", "switchroot/ios/old.bin"])
         files = self.snapshot()
-        for untouched in ("bootloader/hekate_ipl.ini", "switchroot/ubuntu/boot.scr", "payload.bin"):
+        for untouched in ("bootloader/hekate_ipl.ini", "switchroot/ubuntu/boot.scr", "switchroot/ios/bootargs.txt",
+                          "payload.bin"):
             self.assertEqual(files[untouched], b"x")
         self.assertNotIn("switchroot/ios/._old.bin", files)
         self.assertEqual(cards.sync_boot_entry(self.fat, self.root / "pkg0", log), ([], []))
         changed, _ = cards.sync_boot_entry(self.fat, self.root / "pkg1", log)
-        self.assertEqual(changed, ["switchroot/ios/kernel-window.bin"])
+        self.assertEqual(changed, ["switchroot/ios/bl33.bin"])
 
     def test_a_copy_of_the_entry_under_another_name_is_replaced_in_place(self):
         old = "[Old]\nl4t=1\nboot_prefixes=/switchroot/old-entry/\nid=OLD\nbootwait=0\n" + \

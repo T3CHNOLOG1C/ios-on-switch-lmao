@@ -9,9 +9,8 @@ WINDOW_SIZE = 768 << 20
 NATIVE_EXCLUSIONS = [
     ('original-fdt', 0x80000000, 0x20000),
     ('working-fdt', 0x8D000000, 0x40000),
-    ('boot-script', 0x8FE00000, 0x20000),
+    ('boot-args', 0x8FE00000, 0x20000),
     ('adapter-stack-vectors', 0xA0000000, 0x20000),
-    ('wrapped-adapter', 0xA0100000, 0x20040),
     ('staged-kernel-capacity', 0xA2000000, 0x6000000),
     # hekate loads all of bl33.bin here: U-Boot in the first MiB, then the staged kernel window (boot/loader/stage.h).
     ('bl33-and-kernel-window', 0xAA000000, 0x6000000),
@@ -64,7 +63,19 @@ STAGE_END = 0xB0000000
 STAGE_WORDS = {'magic': 0x48435753, 'head': 0x4E49574B, 'tail': 0x444E454B, 'version': 1}
 
 
+# What else rides in bl33.bin's first MiB, past U-Boot's image and pre-relocation BSS: (address, capacity). The boot
+# script is sourced and the loader and exporter booted where they are; the DTB is copied out to 0x8D000000.
+SCRIPT_SLOT = (0xAA070000, 0x10000)
+LOADER_SLOT = (0xAA080000, 0x30000)
+EXPORTER_SLOT = (0xAA0B0000, 0x10000)
+DTB_SLOT = (0xAA0C0000, 0x40000)
+
+# switchroot/ios/bootargs.txt's page (boot/loader/boot_args.h).
+BOOT_ARGS_PAGE = 0x8FE00000
+BOOT_ARGS_BYTES = 0x1000
+
+
 def staged_bl33_bytes(staged_bytes: int) -> int:
     """bl33.bin's size with a staged window of staged_bytes: U-Boot's MiB, the header page, the window, the trailer page
-    (build_native_loader.py stage_into_bl33). boot.cmd reads exactly this much (boot_script.py BL33_BYTES)."""
+    (build_native_loader.py stage_into_bl33)."""
     return STAGE_SOURCE - BL33_BASE + staged_bytes + PACK_PAGE

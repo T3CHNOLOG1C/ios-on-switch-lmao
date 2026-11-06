@@ -16,7 +16,7 @@
 // line reports the jack, and an interrupt that does not arrive, a DMA that stalls or runs fast, or hardware that does
 // not answer, panics with one line.
 //
-// The OLED's audio path. Sources: the shipped DTB (switchroot/ios/oled-sku3.dtb = CTCaer
+// The OLED's audio path. Sources: the shipped DTB (oled-sku3.dtb in bl33.bin = CTCaer
 // switch-l4t-platform-t210-nx tegra210b01-fric.dts over tegra210b01-nx-common.dtsi:864-950), switchroot Android
 // android_device_nintendo_nx media/nvaudio_conf.xml (the mixer paths), CTCaer switch-l4t-kernel-nvidia
 // sound/soc/codecs/rt5640.c and sound/soc/tegra-alt (tegra_machine_driver_mobile.c, tegra_asoc_utils_alt.c,

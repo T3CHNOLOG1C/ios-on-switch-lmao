@@ -8,7 +8,8 @@ Steps (each can be switched off):
   1 pull logs      the last boots' logs, logarchive and m2v journals (//deploy:pull_logs; --no-pull-logs skips it,
                    --no-csstore/--no-harvest/--no-launchd-log narrow it)
   2 boot entry     switchroot/ios/* and bootloader/ini/ios.ini on the FAT: only files that differ are
-                   copied, stale files in switchroot/ios/ removed, AppleDouble files by name; nothing else on the FAT
+                   copied, stale files in switchroot/ios/ removed (never the user's bootargs.txt), AppleDouble
+                   files by name; nothing else on the FAT
   3 overlay        <Data>/Switch/overlay := the package's overlay/; also removes the r3 Wi-Fi bring-up's configd Debug
                    logging profile (STALE_LOGGING_PROFILES) if a card still has it; and stages hekate's "Dump Joy-Con
                    BT" (the FAT's switchroot/joycon_mac.ini, only read) as <Data>/Switch/bluetooth/{host-address,

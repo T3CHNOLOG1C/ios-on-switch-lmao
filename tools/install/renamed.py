@@ -1,6 +1,6 @@
 """What a card set up under the project's former names still holds, found by what it is rather than by those names.
 
-  * FAT: a hekate ini in bootloader/ini carrying this boot entry's own line (boot/defs.bzl _HEKATE_ENTRY), or whose
+  * FAT: a hekate ini in bootloader/ini carrying this boot entry's own line (boot/BUILD.bazel ios_ini), or whose
     boot_prefixes folder holds our loader (an entry older than that line), is a copy of the entry; it goes, with the
     files of that switchroot folder.
   * Data: the one top-level folder besides Switch holding deploy's overlay/ is Switch under its former name; and the

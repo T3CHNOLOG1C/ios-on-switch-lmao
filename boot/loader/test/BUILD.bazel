@@ -218,3 +218,16 @@ host_test(
         ":memory_reference",
     ],
 )
+
+host_library(
+    name = "boot_args",
+    srcs = ["//boot:loader/boot_args.c"],
+    hdrs = ["//boot:loader/boot_args.h"],
+    copts = ["-O2"],
+)
+
+host_test(
+    name = "boot_args_test",
+    srcs = ["boot_args_test.cpp"],
+    deps = [":boot_args"],
+)

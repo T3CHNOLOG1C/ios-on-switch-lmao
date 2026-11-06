@@ -14,9 +14,10 @@ only the steps it reaches:
                                                a boot-arg, ADT or trust cache edit the tail's)
     build_native_loader.py join ............. layout.h, runs.h, kernel-window.bin, constants.json
     clang -c, one per loader source ......... loader objects (the window's constants only for those including them)
-    loader_link.py ........................... loader.uboot.bin, boot.cmd, boot.scr (boot_script.py: the loader's
-                                               size and bl33.bin's, which the window's constants give)
-    bl33.py patch (once) / stage ............. bl33.bin
+    loader_link.py ........................... loader.uboot.bin
+    boot_script.py ........................... the boot script (u-boot-script.txt with the window's constants)
+    bl33.py patch (once) / stage ............. bl33.bin: U-Boot, the script, loader, exporter and DTB in their slots,
+                                               the window
     overlay.py tree  (plan, overlay files) .. overlay/
     cp ...................................... ios/ (the directory //deploy:sd, //install:sd and //boot:snapshot take)
 
@@ -51,17 +52,8 @@ LOADER_COPTS = [
     "-DPROBE_QUIET=1",
 ]
 
-# The hekate entry. Every key also reaches U-Boot's environment (hekate's L4T launcher passes the section on; U-Boot
-# imports it before its distro scan of boot_prefixes).
-# bootwait=0: hekate always shows its boot logo before an L4T entry and, launched from Nyx, waits [config] bootwait
-# seconds on it (3 by default; the entry's own key wins, main.c _auto_launch). Holding VOL- still opens hekate's menu.
-# scan_dev_for_extlinux: the distro scan's extlinux.conf probe (this entry has none) becomes the first boot timing
-# sample, taken once U-Boot, the SD card and hekate's env are up (boot/loader/stamps.h).
-# bootcmd_mmc0=true: should boot.scr not take over, U-Boot's distro loop goes on to mmc0, the eMMC (initialize, read
-# its partition table, scan it); never. bl33.py's patch also drops mmc0 from boot_targets for failures before hekate's
-# env is imported (an SD card U-Boot cannot read).
-_HEKATE_ENTRY = ("[iOS]\nl4t=1\nboot_prefixes=/switchroot/{name}/\nid=iOS\nbootwait=0\n" +
-                 "scan_dev_for_extlinux=setexpr.l ios_uboot *0x60005010\nbootcmd_mmc0=true\n")
+# -v in bootargs.txt gives the text console in debug (the loader sets Video.v_display to text); release never does.
+_VERBOSE_CONSOLE = {"debug": "-DSWITCH_VERBOSE_CONSOLE=1", "release": "-DSWITCH_VERBOSE_CONSOLE=0"}
 
 # The shell that runs an Xcode tool: DEVELOPER_DIR from @xcode//:xcode.env (its first argument), then the tool.
 _XCODE_SHELL = 'DEVELOPER_DIR="$(/usr/bin/sed -n "s/^DEVELOPER_DIR=//p" "$1")"; export DEVELOPER_DIR; shift; exec "$@"'
@@ -118,7 +110,8 @@ def _boot_package_impl(ctx):
         return ctx.actions.declare_file(name + "_work/" + path)
 
     smp = ctx.attr._smp[BuildSettingInfo].value
-    release = ctx.attr._profile[BuildSettingInfo].value == "release"
+    profile = ctx.attr._profile[BuildSettingInfo].value
+    release = profile == "release"
 
     # --- boot-args, overlay plan, ADT ------------------------------------------------------------------------------
     boot_args = out("boot-args.txt")
@@ -236,7 +229,8 @@ def _boot_package_impl(ctx):
         _xcode(
             ctx,
             "/usr/bin/clang",
-            LOADER_COPTS + (["-I", layout_h.dirname] if reads_window else []) + includes + ["-c", src.path, "-o", obj.path],
+            LOADER_COPTS + [_VERBOSE_CONSOLE[profile]] + (["-I", layout_h.dirname] if reads_window else []) + includes +
+            ["-c", src.path, "-o", obj.path],
             [src] + ctx.files.loader_hdrs + ([layout_h, runs_h] if reads_window else []),
             [obj],
             "LoaderCompile",
@@ -247,7 +241,7 @@ def _boot_package_impl(ctx):
         if src not in ctx.files.loader_srcs:
             fail("loader_window_srcs {} is not in loader_srcs".format(src.short_path))
 
-    loader, cmd, scr = out("loader.uboot.bin"), out("boot.cmd"), out("boot.scr")
+    loader = out("loader.uboot.bin")
     args = ctx.actions.args()
     args.add("--ld-lld", ctx.file._ld_lld)
     args.add("--objcopy", ctx.file._objcopy)
@@ -255,22 +249,27 @@ def _boot_package_impl(ctx):
     args.add("--linker-script", ctx.file.linker_script)
     args.add("--constants", constants)
     args.add("--out", loader)
-    # boot.cmd and boot.scr need only the loader's size and the window's constants (bl33.bin's size follows from them).
-    args.add("--boot-template", ctx.file.template)
-    args.add("--boot-cmd", cmd)
-    args.add("--boot-scr", scr)
     args.add_all(objects)
     ctx.actions.run(
         executable = ctx.executable._loader_link,
         arguments = [args],
-        inputs = objects + [ctx.file.linker_script, constants, ctx.file.template],
+        inputs = objects + [ctx.file.linker_script, constants],
         tools = [ctx.file._ld_lld, ctx.file._objcopy, ctx.file._readelf],
-        outputs = [loader, cmd, scr],
+        outputs = [loader],
         mnemonic = "LoaderLink",
         progress_message = "Linking the native loader",
     )
 
     # --- U-Boot and its script ------------------------------------------------------------------------------------
+    script_text, script = out("boot-script.txt"), out("boot-script.img")
+    args = ctx.actions.args()
+    args.add("--template", ctx.file.script_template)
+    args.add("--constants", constants)
+    args.add("--dtb", ctx.file.dtb)
+    args.add("--text", script_text)
+    args.add("--image", script)
+    _run(ctx, ctx.executable._boot_script, [args], [ctx.file.script_template, constants, ctx.file.dtb], [script_text, script], "BootScript", "Writing U-Boot's boot script")
+
     u_boot = out("u-boot.bin")
     _run(ctx, ctx.executable._bl33, ["patch", ctx.file.bl33.path, u_boot.path], [ctx.file.bl33], [u_boot], "BootUBoot", "Patching U-Boot's default environment")
     bl33 = out("bl33.bin")
@@ -279,12 +278,12 @@ def _boot_package_impl(ctx):
     args.add("--u-boot", u_boot)
     args.add("--window", window)
     args.add("--constants", constants)
+    args.add("--script", script)
+    args.add("--loader", loader)
+    args.add("--exporter", ctx.file.exporter)
+    args.add("--dtb", ctx.file.dtb)
     args.add("--out", bl33)
-    _run(ctx, ctx.executable._bl33, [args], [u_boot, window, constants], [bl33], "BootBl33", "Staging the kernel window in bl33.bin")
-
-    entry = ctx.attr.entry
-    ini = out("%s.ini" % entry)
-    ctx.actions.write(ini, _HEKATE_ENTRY.format(name = entry))
+    _run(ctx, ctx.executable._bl33, [args], [u_boot, window, constants, script, loader, ctx.file.exporter, ctx.file.dtb], [bl33], "BootBl33", "Staging the boot files and the kernel window in bl33.bin")
 
     # --- the overlay and the directory -----------------------------------------------------------------------------
     overlay = ctx.actions.declare_directory(name + "_work/overlay")
@@ -298,26 +297,21 @@ def _boot_package_impl(ctx):
     switchroot = {
         "bl31.bin": ctx.file.bl31,
         "bl33.bin": bl33,
-        "boot.cmd": cmd,
-        "boot.scr": scr,
-        "exporter.uimg": ctx.file.exporter,
-        "loader.uboot.bin": loader,
-        "oled-sku3.dtb": ctx.file.dtb,
     }
     package = ctx.actions.declare_directory(ctx.attr.out)
     commands = [
         'set -e; out="$1"',
-        '/bin/mkdir -p "$out/switchroot/%s" "$out/bootloader/ini"' % entry,
+        '/bin/mkdir -p "$out/switchroot/ios" "$out/bootloader/ini"',
         '/bin/cp -R -L "%s" "$out/overlay"' % overlay.path,
-        '/bin/cp -L "%s" "$out/bootloader/ini/%s.ini"' % (ini.path, entry),
+        '/bin/cp -L "%s" "$out/bootloader/ini/ios.ini"' % ctx.file.ini.path,
     ] + [
-        '/bin/cp -L "%s" "$out/switchroot/%s/%s"' % (f.path, entry, n)
+        '/bin/cp -L "%s" "$out/switchroot/ios/%s"' % (f.path, n)
         for n, f in sorted(switchroot.items())
     ]
     ctx.actions.run_shell(
         command = "\n".join(commands),
         arguments = [package.path],
-        inputs = [overlay, ini] + switchroot.values(),
+        inputs = [overlay, ctx.file.ini] + switchroot.values(),
         outputs = [package],
         mnemonic = "BootPackage",
         progress_message = "Assembling the iOS boot entry",
@@ -326,6 +320,7 @@ def _boot_package_impl(ctx):
         DefaultInfo(files = depset([package])),
         OutputGroupInfo(
             adt = depset([adt]),
+            boot_script = depset([script_text]),
             kernel_window = depset([window, layout_h, runs_h, constants, window_plan]),
             loader = depset([loader]),
             overlay = depset([plan, overlay_trust, overlay]),
@@ -338,17 +333,17 @@ def _tool(label):
 
 boot_package = rule(
     implementation = _boot_package_impl,
-    doc = "The Hekate boot entry (switchroot/<entry>/*, bootloader/ini/<entry>.ini, overlay/<absolute path>) from the " +
+    doc = "The Hekate boot entry (switchroot/ios/*, bootloader/ini/ios.ini, overlay/<absolute path>) from the " +
           "prelinked kernel, the IPSW's trust caches, the GPU trust cache, the overlay and the native loader's sources.",
     attrs = {
         "out": attr.string(default = "ios"),
-        "entry": attr.string(default = "ios", doc = "the entry's folder (switchroot/<entry>/) and ini name"),
+        "ini": attr.label(mandatory = True, allow_single_file = True, doc = "bootloader/ini/ios.ini"),
         "kernel": attr.label(mandatory = True, allow_single_file = True),
         "adt": attr.label(mandatory = True, allow_single_file = True, doc = "the board ADT (//boot:adt)"),
         "static_trust": attr.label(mandatory = True, allow_single_file = True),
         "app_trust": attr.label(mandatory = True, allow_single_file = True),
         "data_seed": attr.label(mandatory = True, allow_single_file = True),
-        "template": attr.label(mandatory = True, allow_single_file = True),
+        "script_template": attr.label(mandatory = True, allow_single_file = True),
         "bl31": attr.label(mandatory = True, allow_single_file = True),
         "bl33": attr.label(mandatory = True, allow_single_file = True),
         "dtb": attr.label(mandatory = True, allow_single_file = True),
@@ -375,6 +370,7 @@ boot_package = rule(
         "_trust": _tool("//tools/package:trust"),
         "_window": _tool("//tools/package:window"),
         "_loader_link": _tool("//tools/package:loader_link"),
+        "_boot_script": _tool("//tools/package:boot_script"),
         "_bl33": _tool("//tools/package:bl33"),
         # The kernel window's compressor (lz4 -12, one action per shard), built from pinned source; LLVM 23.1.4's
         # linker and binutils.

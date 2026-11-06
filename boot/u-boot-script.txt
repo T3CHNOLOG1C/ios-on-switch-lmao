@@ -1,0 +1,219 @@
+# The U-Boot half of the handoff, sourced from its slot in bl33.bin (tools/package/boot_script.py fills in the
+# values). hekate loaded all of bl33.bin: the loader, the exporter and the DTB are read where they sit, and the only
+# file read is the optional bootargs.txt. Every refusal holds on screen; bootm go never returns.
+# The screen stays dark until the loader draws: U-Boot's output goes to the serial console unless a step refuses.
+# Boot timing (boot/loader/stamps.h): setexpr.l samples the microsecond timer after each step, and just before bootm go
+# the samples go to the loader's slot at 0xA001EF00.
+setexpr.l ios_script *0x60005010
+if setenv stdout vidconsole; then
+    setenv stdout serial
+    setenv stderr serial
+else
+    echoe "CONSOLE FAILED"
+    while true; do
+        sleep 1
+    done
+fi
+base 0
+setenv handoff_status READY
+if test "${t210b01}" != "1" -o "${sku}" != "3"; then
+    setenv handoff_status WRONG_BOARD
+fi
+
+# The U-Boot build the exporter and the two cache helpers below were written for.
+if test "${handoff_status}" = "READY"; then
+    if itest.l *0xAA001920 == 0xd508711f && itest.l *0xAA001924 == 0xd5033fdf && itest.l *0xAA001928 == 0xd65f03c0 && itest.l *0xAA001A64 == 0xd5033f9f && itest.l *0xAA001A68 == 0xd5033fdf && itest.l *0xAA001A6C == 0xd65f03c0; then
+        true
+    else
+        setenv handoff_status FIRMWARE_MISMATCH
+    fi
+fi
+
+# Inspect only the control FDT; never dereference the framebuffer address it names (the loader and XNU use the fixed,
+# separately checked range).
+if test "${handoff_status}" = "READY"; then
+    setenv handoff_fb_addr
+    setenv handoff_fb_size_bytes
+    setenv handoff_fb_width
+    setenv handoff_fb_height
+    setenv handoff_fb_format
+    setenv handoff_fb_rot
+    if test -n "${fdtcontroladdr}" && fdt addr ${fdtcontroladdr}; then
+        # This fork's fdt get value reads 00384000 as a string and get addr overflows its buffer: check the size
+        # property's width only.
+        if fdt get value handoff_fb_addr /framebuffer address && fdt get size handoff_fb_size_bytes /framebuffer size && fdt get value handoff_fb_width /framebuffer width && fdt get value handoff_fb_height /framebuffer height && fdt get value handoff_fb_format /framebuffer format && fdt get value handoff_fb_rot /framebuffer rot; then
+            if itest.l ${handoff_fb_addr} == 0xF5A00000 && itest.l ${handoff_fb_size_bytes} == 4 && itest.l ${handoff_fb_width} == 0x2D0 && itest.l ${handoff_fb_height} == 0x500 && test "${handoff_fb_format}" = "a8b8g8r8" && itest.l ${handoff_fb_rot} == 3; then
+                true
+            else
+                setenv handoff_status FRAMEBUFFER_MISMATCH
+            fi
+        else
+            setenv handoff_status FRAMEBUFFER_PROPERTY_FAILED
+        fi
+    else
+        setenv handoff_status CONTROL_FDT_FAILED
+    fi
+fi
+
+# bootargs.txt, if the card has one, into a zeroed page the loader reads (boot/loader/boot_args.h). This U-Boot's
+# FatFS glue sets filesize to the length asked of load, not the file's: fatsize gives the length to ask for.
+if test "${handoff_status}" = "READY"; then
+    if mw.b @ARGS_PA@ 0 @ARGS_BYTES@; then
+        if fatsize mmc ${devnum}:${distro_bootpart} /switchroot/ios/bootargs.txt; then
+            if itest.l ${filesize} -ge @ARGS_BYTES@; then
+                setenv handoff_status BOOTARGS_TXT_TOO_LARGE
+            else
+                if itest.l ${filesize} -gt 0; then
+                    if load mmc ${devnum}:${distro_bootpart} @ARGS_PA@ /switchroot/ios/bootargs.txt ${filesize}; then
+                        echoe "BOOTARGS READY"
+                    else
+                        setenv handoff_status BOOTARGS_TXT_READ_FAILED
+                    fi
+                fi
+            fi
+        fi
+        setexpr.l ios_args *0x60005010
+    else
+        setenv handoff_status BOOTARGS_CLEAR_FAILED
+    fi
+fi
+
+if test "${handoff_status}" = "READY"; then
+    if cp.b @DTB@ 0x8D000000 @DTB_BYTES@; then
+        echoe "DTB READY"
+        setexpr.l ios_dtb *0x60005010
+    else
+        setenv handoff_status DTB_COPY_FAILED
+    fi
+fi
+
+# The kernel window after U-Boot (boot/loader/stage.h): its header and trailer pages carry its sizes and its id (the
+# staged bytes' SHA-256, also built into the loader), so this build's window is in RAM, whole. No CRC pass: SD reads
+# have their own card CRC.
+if test "${handoff_status}" = "READY"; then
+    if itest.l *0xAA100000 == 0x48435753 && itest.l *0xAA100004 == 0x4e49574b && itest.l *0xAA100008 == 1 && itest.l *0xAA10000C == 0x1000 && itest.l *0xAA100010 == @STAGE_STREAM@ && itest.l *0xAA100014 == @STAGE_BYTES@ && itest.l *0xAA100018 == @STAGE_ID_LOW@ && itest.l *0xAA10001C == @STAGE_ID_HIGH@; then
+        if itest.l *@TRAILER_0@ == 0x48435753 && itest.l *@TRAILER_1@ == 0x444e454b && itest.l *@TRAILER_2@ == @STAGE_STREAM@ && itest.l *@TRAILER_3@ == @STAGE_BYTES@ && itest.l *@TRAILER_4@ == @STAGE_ID_LOW@ && itest.l *@TRAILER_5@ == @STAGE_ID_HIGH@; then
+            echoe "KERNEL STAGED"
+            setexpr.l ios_window *0x60005010
+        else
+            setenv handoff_status KERNEL_TRAILER_FAILED
+        fi
+    else
+        setenv handoff_status KERNEL_HEADER_FAILED
+    fi
+fi
+
+# This fork's fdt addr may succeed even when fdt_open_into fails, so check the big-endian totalsize as a little-endian
+# word. 256 KiB reserved for the FDT, opened to 192 KiB; bootm prep adds 12 KiB.
+if test "${handoff_status}" = "READY"; then
+    if fdt addr 0x8D000000 0x30000; then
+        if itest.l *0x8D000000 == 0xedfe0dd0 && itest.l *0x8D000004 == 0x00000300; then
+            if fdt rsvmem add 0xF5A00000 0x400000; then
+                echoe "FDT READY"
+            else
+                setenv handoff_status FRAMEBUFFER_RESERVE_FAILED
+            fi
+        else
+            setenv handoff_status DTB_PADDING_FAILED
+        fi
+    else
+        setenv handoff_status DTB_HEADER_FAILED
+    fi
+fi
+
+# The exporter runs at 0xA7000000, inside the excluded kernel-staging allocation. bootm loads it; the two U-Boot
+# helpers then make its code visible to instruction fetch (each returns 1). The main bootm start below resets U-Boot's
+# image state.
+if test "${handoff_status}" = "READY"; then
+    if setenv verify no && setenv autostart no && bootm start @EXPORTER@; then
+        if bootm loados; then
+            go 0xAA001920
+            go 0xAA001A64
+            echoe "SD EXPORTER READY"
+            setexpr.l ios_exporter *0x60005010
+        else
+            setenv handoff_status EXPORTER_LOAD_FAILED
+        fi
+    else
+        setenv handoff_status EXPORTER_HEADER_FAILED
+    fi
+fi
+
+# For this boot only (no saveenv). An all-ones fdt_high is arm64 U-Boot's in-place FDT contract.
+if test "${handoff_status}" = "READY"; then
+    if setenv fdt_high ffffffffffffffff && setenv bootm_low 0x80000000 && setenv bootm_size 0x7FD00000 && setenv bootm_mapsize 0x7FD00000 && setenv bootargs switch_native_xnu=1 && setenv verify no; then
+        if bootm start @LOADER@ - 0x8D000000; then
+            if bootm loados; then
+                echoe "LOADER LOADED"
+            else
+                setenv handoff_status IMAGE_LOAD_FAILED
+            fi
+        else
+            setenv handoff_status BOOT_HEADER_FAILED
+        fi
+    else
+        setenv handoff_status BOOT_ENVIRONMENT_FAILED
+    fi
+fi
+if test "${handoff_status}" = "READY"; then
+    echoe "PREPARE FDT"
+    # In-place FDT padding, the real banks, PSCI and GPU-node fixups, then the shrink and reservations. It can hang
+    # visibly on a firmware preparation error.
+    if bootm prep; then
+        setexpr.l ios_prep *0x60005010
+        # The SD reference (boot/storage/sd_reference.h): sector 0 and the card U-Boot initialized, after bootm prep.
+        # The exporter reads cached firmware RAM only: no card commands, DMA, initialization or writes.
+        if test "${devnum}" = "1"; then
+            if mw.b 0xA001F000 0 0x1000; then
+                if read mmc 1 0xA001F200 0 1; then
+                    echoe "READ SD METADATA"
+                    if go 0xA7000000; then
+                        if itest.l *0xA001F400 == 0x4d435349 && itest.l *0xA001F404 == 1 && itest.l *0xA001F408 == 0x100; then
+                            if crc32 0xA001F200 0x200 0xA001F028 && mw.l 0xA001F004 2 1 && mw.l 0xA001F008 0x500 1 && mw.l 0xA001F00C 0x200 1 && mw.l 0xA001F010 0x200 1 && mw.l 0xA001F014 0x700B0000 1 && mw.l 0xA001F018 0 1 && mw.l 0xA001F01C 1 1 && mw.l 0xA001F020 1 1 && mw.l 0xA001F024 0 1 && mw.l 0xA001F02C 0 1 && mw.l 0xA001F000 0x52445349 1; then
+                                echoe "SD METADATA READY"
+                            else
+                                setenv handoff_status SD_REFERENCE_METADATA_FAILED
+                            fi
+                        else
+                            setenv handoff_status SD_CARD_RECORD_FAILED
+                        fi
+                    else
+                        setenv handoff_status SD_CARD_EXPORT_FAILED
+                    fi
+                else
+                    setenv handoff_status SD_REFERENCE_READ_FAILED
+                fi
+            else
+                setenv handoff_status SD_REFERENCE_CLEAR_FAILED
+            fi
+        else
+            setenv handoff_status SD_REFERENCE_WRONG_DEVICE
+        fi
+        if test "${handoff_status}" = "READY"; then
+            setexpr.l ios_go *0x60005010
+            mw.l 0xA001EF00 0 0x40
+            if env exists ios_uboot; then mw.l 0xA001EF04 ${ios_uboot} 1; fi
+            if env exists ios_script; then mw.l 0xA001EF08 ${ios_script} 1; fi
+            if env exists ios_args; then mw.l 0xA001EF0C ${ios_args} 1; fi
+            if env exists ios_dtb; then mw.l 0xA001EF10 ${ios_dtb} 1; fi
+            if env exists ios_window; then mw.l 0xA001EF14 ${ios_window} 1; fi
+            if env exists ios_exporter; then mw.l 0xA001EF18 ${ios_exporter} 1; fi
+            if env exists ios_prep; then mw.l 0xA001EF1C ${ios_prep} 1; fi
+            mw.l 0xA001EF20 ${ios_go} 1
+            if env exists ios_u_main; then mw.l 0xA001EF24 ${ios_u_main} 1; fi
+            if env exists ios_u_sd; then mw.l 0xA001EF28 ${ios_u_sd} 1; fi
+            mw.l 0xA001EF00 0x544f4255 1
+            echoe "HANDOFF"
+            bootm go
+            setenv handoff_status UNEXPECTED_BOOTM_RETURN
+        fi
+    else
+        setenv handoff_status BOOT_PREP_FAILED
+    fi
+fi
+setenv stdout vidconsole
+setenv stderr vidconsole
+echoe "REFUSED: ${handoff_status}"
+while true; do
+    sleep 1
+done

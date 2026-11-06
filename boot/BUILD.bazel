@@ -6,6 +6,7 @@
 # Boot-args (COMMAND_LINE) live in tools/package/boot_args.py; the ADT edits, USB_HOST and DISPLAY_GAMUT in
 # tools/package/adt_edit.py; the steps and what each reads in boot/defs.bzl.
 load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
+load("@bazel_skylib//rules:write_file.bzl", "write_file")
 load("@rules_python//python:py_binary.bzl", "py_binary")
 load("@rules_python//python:py_test.bzl", "py_test")
 load("//bazel/lint:defs.bzl", "lint_files")
@@ -51,6 +52,26 @@ tool_output(
     message = "Generating the native OLED ADT",
 )
 
+# hekate passes every key to U-Boot's environment too. bootwait=0: no wait on hekate's logo when launched from Nyx.
+# scan_dev_for_extlinux: the first boot timing sample (boot/loader/stamps.h). bootcmd_mmc0=true: never scan the eMMC.
+write_file(
+    name = "ios_ini",
+    out = "ios.ini",
+    content = [
+        "[iOS]",
+        "l4t=1",
+        "boot_prefixes=/switchroot/ios/",
+        "id=iOS",
+        "icon=bootloader/res/icon_ios.bmp",
+        "logopath=switchroot/ios/bootlogo.bmp",
+        "bootwait=0",
+        "scan_dev_for_extlinux=setexpr.l ios_uboot *0x60005010",
+        "bootcmd_mmc0=true",
+        "",
+    ],
+    newline = "unix",
+)
+
 boot_package(
     name = "package",
     adt = ":adt",
@@ -61,9 +82,11 @@ boot_package(
     data_seed = "//bazel/pinned:data-seed/data-v10.dbr",
     dtb = "//bazel/pinned:firmware/oled-sku3.dtb",
     exporter = "//bazel/pinned:firmware/exporter.uimg",
+    ini = ":ios_ini",
     kernel = "//kernel:kernel",
     linker_script = ":loader/link.ld",
     loader_hdrs = [
+        ":loader/boot_args.h",
         ":handoff/display.h",
         ":handoff/entry.S",
         ":handoff/record.h",
@@ -91,6 +114,7 @@ boot_package(
         ":loader/copy.S",
         ":loader/emc.c",
         ":loader/seed.c",
+        ":loader/boot_args.c",
         ":storage/sd_reference.c",
     ],
     # The sources that include the window's layout.h or runs.h: only these recompile when the kernel changes.
@@ -118,8 +142,8 @@ boot_package(
     overlay_files = ["//overlay:overlay_sources"],
     overlay_manifest = "//overlay:manifest.json",
     portrait_header = "//drivers/NativeMobileDisplay:SwitchPortrait.h",
+    script_template = ":u-boot-script.txt",
     static_trust = "//ipsw:static_system_trust",
-    template = ":raw-v24-boot.cmd",
 )
 
 # The staged kernel window decodes (lz4 -d, block by block from the table the loader compiles in) to exactly the image
@@ -166,7 +190,7 @@ py_binary(
     deps = ["@rules_python//python/runfiles"],
 )
 
-# The RAM metadata exporter (switchroot/ios/exporter.uimg, pinned in bazel/pinned/firmware): its builder and its
+# The RAM metadata exporter (exporter.uimg, pinned in bazel/pinned/firmware and staged in bl33.bin): its builder and its
 # Cortex-A57 model run, against the pinned bl33.bin (its host test: //boot/storage/firmware_export/test).
 #   bazel run //boot:firmware_export -- --output <dir under out/>
 py_binary(

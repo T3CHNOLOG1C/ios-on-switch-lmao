@@ -205,32 +205,49 @@ def stage_pages(staged: bytes, stream_bytes: int) -> tuple[bytes, bytes]:
     return header.ljust(PACK_PAGE, b'\0'), trailer.ljust(PACK_PAGE, b'\0')
 
 
-def stage_into_bl33(bl33: bytes, staged: bytes, stream_bytes: int) -> bytes:
-    """bl33.bin with the staged kernel window after U-Boot (boot/loader/stage.h), checked by check_stage."""
+def stage_into_bl33(bl33: bytes, staged: bytes, stream_bytes: int, slots: list | tuple = ()) -> bytes:
+    """bl33.bin with the staged kernel window after U-Boot (boot/loader/stage.h) and each (address, capacity, bytes) of
+    slots in U-Boot's padding (loader_abi SCRIPT_SLOT and the others), checked by check_stage."""
     if len(staged) % PACK_PAGE or not stream_bytes <= len(staged) < stream_bytes + PACK_PAGE:
         raise ValueError('staged window must be its stream padded to 4 KiB')
     header, trailer = stage_pages(staged, stream_bytes)
-    image = bl33.ljust(STAGE_HEADER - BL33_BASE, b'\0') + header + staged + trailer
-    check_stage(image, bl33, staged, stream_bytes)
+    first = bytearray(bl33.ljust(STAGE_HEADER - BL33_BASE, b'\0'))
+    for address, capacity, content in slots:
+        if not content or len(content) > capacity:
+            raise ValueError(f'bl33: {len(content)} bytes for the {capacity:#x}-byte slot at {address:#x}')
+        first[address - BL33_BASE : address - BL33_BASE + len(content)] = content
+    image = bytes(first) + header + staged + trailer
+    check_stage(image, bl33, staged, stream_bytes, slots)
     if len(image) != staged_bl33_bytes(len(staged)):
-        raise ValueError('bl33: not the size boot.cmd reads (loader_abi.staged_bl33_bytes)')
+        raise ValueError('bl33: not the size loader_abi.staged_bl33_bytes gives')
     return image
 
 
-def check_stage(image: bytes, bl33: bytes, staged: bytes, stream_bytes: int) -> None:
-    """The composed bl33.bin as hekate puts it at 0xAA000000: U-Boot untouched and wholly below the header, including
-    its pre-relocation BSS (U-Boot's arm64 start.S header: _end_ofs at 0x10, _bss_end_ofs at 0x20); header, window
-    and trailer where boot.cmd and the loader look; everything below hekate's ramoops (0xB0000000)."""
-    slot = STAGE_HEADER - BL33_BASE
+def check_stage(image: bytes, bl33: bytes, staged: bytes, stream_bytes: int, slots: list | tuple = ()) -> None:
+    """The composed bl33.bin as hekate puts it at 0xAA000000: U-Boot untouched and wholly below the first slot,
+    including its pre-relocation BSS (U-Boot's arm64 start.S header: _end_ofs at 0x10, _bss_end_ofs at 0x20); each slot
+    holding its bytes, apart from the others and the rest zero; header, window and trailer where the boot script and the
+    loader look; everything below hekate's ramoops (0xB0000000)."""
+    header_at = STAGE_HEADER - BL33_BASE
     end_ofs, bss_end_ofs = struct.unpack_from('<Q', bl33, 0x10)[0], struct.unpack_from('<Q', bl33, 0x20)[0]
-    if image[: len(bl33)] != bl33 or any(image[len(bl33) : slot]):
-        raise ValueError('bl33: U-Boot changed or the padding is not zero')
-    if not 0 < end_ofs <= len(bl33) <= slot or not 0 < bss_end_ofs <= slot:
-        raise ValueError(f'bl33: U-Boot (_end {end_ofs:#x}, BSS end {bss_end_ofs:#x}) reaches the staged window')
+    floor = min([address - BL33_BASE for address, _, _ in slots] + [header_at])
+    if not 0 < end_ofs <= len(bl33) <= floor or not 0 < bss_end_ofs <= floor:
+        raise ValueError(f'bl33: U-Boot (_end {end_ofs:#x}, BSS end {bss_end_ofs:#x}) reaches a slot or the window')
+    padding = bytearray(image[:header_at])
+    if padding[: len(bl33)] != bl33:
+        raise ValueError('bl33: U-Boot changed')
+    padding[: len(bl33)] = bytes(len(bl33))
+    spans = sorted((address - BL33_BASE, capacity, content) for address, capacity, content in slots)
+    for (at, capacity, content), following in zip(spans, [*spans[1:], (header_at, 0, b'')], strict=True):
+        if at + capacity > following[0] or padding[at : at + len(content)] != content:
+            raise ValueError(f'bl33: the slot at {BL33_BASE + at:#x} overlaps the next or does not hold its bytes')
+        padding[at : at + len(content)] = bytes(len(content))
+    if any(padding):
+        raise ValueError('bl33: the padding outside the slots is not zero')
     header, trailer = stage_pages(staged, stream_bytes)
     source = STAGE_SOURCE - BL33_BASE
     if (
-        image[slot:source] != header
+        image[header_at:source] != header
         or image[source : source + len(staged)] != staged
         or image[source + len(staged) :] != trailer
     ):

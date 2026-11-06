@@ -499,7 +499,7 @@ switch_log_boot_stamps(void)
 		EMC_RESULT, EMC_RATES, EMC_CORE, COUNT
 	};
 	static const char *const uboot[] = {
-		"main", "sd", "ready", "boot.scr", "loader.bin", "dtb", "kernel-window", "exporter", "bootm prep", "bootm go",
+		"main", "sd", "ready", "script", "bootargs.txt", "dtb", "window", "exporter", "bootm prep", "bootm go",
 	};
 	static const char *const loader[] = {
 		"entry", "emc", "emc done", "gates", "unpack", "unpacked", "copied", "xnu",

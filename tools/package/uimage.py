@@ -1,4 +1,4 @@
-"""U-Boot legacy images (the 64-byte uImage header): the loader (loader.uboot.bin) and the boot script (boot.scr)."""
+"""U-Boot legacy images (the 64-byte uImage header): the loader (loader.uboot.bin) and the boot script."""
 
 import struct
 import zlib

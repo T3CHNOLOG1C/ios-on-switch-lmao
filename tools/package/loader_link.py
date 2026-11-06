@@ -2,11 +2,7 @@
 """The native loader linked (its objects are compiled by Bazel, one action per source: boot/defs.bzl) and wrapped for
 U-Boot's bootm.
 
-    loader_link.py --ld-lld P --objcopy P --readelf P --linker-script LD --constants C --out LOADER.UBOOT \
-        [--boot-template T --boot-cmd OUT --boot-scr OUT] OBJ...
-
-With --boot-template, also boot.cmd and boot.scr for this loader (boot_script.py write_for_loader): the script needs
-only the loader's size and the window's constants, so it is written here rather than in a step of its own.
+    loader_link.py --ld-lld P --objcopy P --readelf P --linker-script LD --constants C --out LOADER.UBOOT OBJ...
 
 Checks the ELF (an AArch64 executable entered at 0xA0000000, every load segment inside the loader's 128 KiB, no
 relocations), that the loader's code, data and stacks end below the fixed SD reference page and, when the ADT has the
@@ -22,7 +18,6 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from boot_script import write_for_loader
 from loader_abi import SD_REFERENCE, STAMPS_SLOT
 from uimage import LOAD, legacy_image
 
@@ -81,8 +76,6 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     for name in ('ld-lld', 'objcopy', 'readelf', 'linker-script', 'constants', 'out'):
         parser.add_argument('--' + name, required=True, type=Path)
-    for name in ('boot-template', 'boot-cmd', 'boot-scr'):
-        parser.add_argument('--' + name, type=Path)
     parser.add_argument('objects', nargs='+', type=Path)
     args = parser.parse_args()
     constants = json.loads(args.constants.read_text())
@@ -108,8 +101,6 @@ def main():
             raise SystemExit('unresolved loader relocations')
         image = legacy_image(flat.read_bytes(), os_type=5, kind=2, name='Loader', load=LOAD, entry=LOAD)
         args.out.write_bytes(image)
-    if args.boot_template:
-        write_for_loader(args.boot_template, len(image), constants, args.boot_cmd, args.boot_scr)
 
 
 if __name__ == '__main__':

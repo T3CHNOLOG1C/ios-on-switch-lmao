@@ -27,6 +27,8 @@ LINUX_MBR = 0x83
 BOOT_ENTRY = "switchroot/ios"
 INI = "bootloader/ini/ios.ini"
 ICON = "bootloader/res/icon_ios.bmp"
+# The user's own files in the entry's folder, which no package ships: the loader reads bootargs.txt at boot.
+USER_FILES = ("bootargs.txt",)
 HASH_CHUNK = 8 << 20
 
 
@@ -231,6 +233,8 @@ def boot_entry_files(package):
     for path in sorted(entry.iterdir()):
         if path.is_dir():
             raise host.HostError("unexpected directory {} in the boot package".format(path))
+        if path.name in USER_FILES:
+            raise host.HostError("{} is the user's file; no boot package ships it".format(path))
         files["{}/{}".format(BOOT_ENTRY, path.name)] = path
     files[INI] = package / INI
     if (package / ICON).is_file():
@@ -239,8 +243,9 @@ def boot_entry_files(package):
 
 
 def sync_boot_entry(fat_root, package, log, dry_run=False):
-    """Make switchroot/ios/ and bootloader/ini/ios.ini on the FAT equal the package and remove a copy of the entry under
-    the project's former names (one boot entry, replaced in place); nothing else."""
+    """Make switchroot/ios/ and bootloader/ini/ios.ini on the FAT equal the package, apart from the user's own files
+    (USER_FILES), and remove a copy of the entry under the project's former names (one boot entry, replaced in place);
+    nothing else."""
     fat_root = Path(fat_root)
     wanted = boot_entry_files(package)
     changed, removed = [], []
@@ -259,7 +264,8 @@ def sync_boot_entry(fat_root, package, log, dry_run=False):
     if entry.is_dir():
         for path in sorted(entry.iterdir()):
             relative = "{}/{}".format(BOOT_ENTRY, path.name)
-            if relative not in wanted and path.is_file() and not path.name.startswith("._"):
+            if relative not in wanted and path.is_file() and not path.name.startswith("._") and \
+                    path.name not in USER_FILES:
                 removed.append(relative)
                 if not dry_run:
                     path.unlink()

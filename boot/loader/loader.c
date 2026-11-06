@@ -9,6 +9,7 @@
 #include "stage.h"
 #include "emc.h"
 #include "seed.h"
+#include "boot_args.h"
 
 #ifndef LOAD_FAST_COPY
 #define LOAD_FAST_COPY 0
@@ -21,6 +22,9 @@
 #endif
 #ifndef LOAD_SEED_ADT_OFFSET
 #define LOAD_SEED_ADT_OFFSET 0
+#endif
+#ifndef SWITCH_VERBOSE_CONSOLE
+#error "SWITCH_VERBOSE_CONSOLE: 1 when -v in bootargs.txt selects the text console (debug), 0 when it never does"
 #endif
 
 extern volatile uint64_t probe_record[R_RECORD_WORDS];
@@ -81,7 +85,7 @@ static void stamps_uboot(void) {
     const uint64_t frequency = boot_stamps[SWITCH_STAMP_FREQUENCY], at = boot_stamps[SWITCH_STAMP_TIMERUS_AT];
     const uint32_t now = (uint32_t)boot_stamps[SWITCH_STAMP_TIMERUS];
     static const uint8_t record[SWITCH_BOOT_STAMPS_UBOOT_COUNT] = {
-        SWITCH_STAMP_UBOOT_DISTRO, SWITCH_STAMP_UBOOT_SCRIPT, SWITCH_STAMP_UBOOT_LOADER, SWITCH_STAMP_UBOOT_DTB,
+        SWITCH_STAMP_UBOOT_DISTRO, SWITCH_STAMP_UBOOT_SCRIPT, SWITCH_STAMP_UBOOT_ARGS, SWITCH_STAMP_UBOOT_DTB,
         SWITCH_STAMP_UBOOT_WINDOW, SWITCH_STAMP_UBOOT_EXPORTER, SWITCH_STAMP_UBOOT_PREP, SWITCH_STAMP_UBOOT_GO,
         SWITCH_STAMP_UBOOT_MAIN, SWITCH_STAMP_UBOOT_SD,
     };
@@ -279,6 +283,8 @@ void loader_after_transition(void) {
     ranges[count] = (struct loader_memory_range){UINT64_C(0xa0000000), (uint64_t)(uintptr_t)__image_end};
     refusals[count++] = 0x6c0;
 #endif
+    ranges[count] = (struct loader_memory_range){SWITCH_BOOT_ARGS_PA, SWITCH_BOOT_ARGS_PA + SWITCH_BOOT_ARGS_BYTES};
+    refusals[count++] = 0x740;
 #if LOAD_STAMPS_ADT_OFFSET
     /* U-Boot's timing slot sits below the SD reference page, outside the loader image; read only if the live FDT
      * keeps nothing there. */
@@ -379,6 +385,18 @@ void loader_after_transition(void) {
         a[0x478 / 8] != LOAD_BOOT_ACTUAL ||
         *(const volatile uint32_t *)(uintptr_t)(LOAD_ARGS + 0x68) != LOAD_ADT_BYTES)
         refuse(0x304);
+    {
+        int verbose = 0;
+        const int result = switch_boot_args_append(
+            (volatile char *)(uintptr_t)(LOAD_ARGS + SWITCH_BOOT_ARGS_COMMAND_LINE),
+            (const volatile char *)(uintptr_t)SWITCH_BOOT_ARGS_PA, SWITCH_BOOT_ARGS_BYTES, &verbose);
+        if (result) refuse(0x760 + (uint64_t)result);
+#if SWITCH_VERBOSE_CONSOLE
+        if (verbose) *(volatile uint64_t *)(uintptr_t)(LOAD_ARGS + SWITCH_BOOT_ARGS_VIDEO_DISPLAY) = 0;
+#else
+        (void)verbose;
+#endif
+    }
 #if LOAD_FULL_RAM
     /* bootm has quiesced devices before cleanup. Refuse an active SD data
      * engine before retiring the old U-Boot heap/noncached pool. */

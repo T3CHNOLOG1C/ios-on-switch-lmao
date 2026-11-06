@@ -94,17 +94,6 @@ py_binary(
     name = "loader_link",
     srcs = ["loader_link.py"],
     deps = [
-        ":boot_script_lib",
-        ":loader_abi",
-        ":uimage",
-    ],
-)
-
-py_library(
-    name = "boot_script_lib",
-    srcs = ["boot_script.py"],
-    imports = ["."],
-    deps = [
         ":loader_abi",
         ":uimage",
     ],
