@@ -58,6 +58,8 @@ host_test(
     srcs = ["gm20b_source_test.cpp"],
     # c++20 (not the harnesses' c++17): bazel/testing's headers use string_view and nested namespaces.
     data = [
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_kernel.cpp",
+        "//third_party/mesa/src/nouveau/vulkan:nvkmd/darwin/nvkmd_darwin.c",
         "//drivers/TegraGM20B:TegraGM20BUserClient.cpp",
         "//drivers/TegraGM20B:gpu.c",
         "//drivers/TegraGM20B:shim/linux.c",

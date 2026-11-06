@@ -329,6 +329,31 @@ TEST(GM20BL2Source, InvalidateOnTheGpu)
 		     "pushes[i].no_prefetch || ((l2_on() || tlb) && !i));");
 }
 
+// A SurfaceWrites a client could not deliver never leaves a GPU write unmarked: the client stops saying its imports are
+// only sampled and flags every submission TegraGM20BPushImportsWritten, which makes the connection mark every writable
+// import at every Exec.
+TEST(GM20BCoherencySource, AFailedSurfaceWritesFallsBackToMarkingEveryImport)
+{
+	const std::string exec = flat(definition(client(), "IOReturn AGXDeviceUserClient::exec("));
+	expectBefore(exec, "importsWritten_ = true;",
+		     "tgm_coherency_wrote(bo->coh, importsWritten_);");
+	const std::string raw = SourceText("../../TegraGM20BMetal/raw/runtime/raw_kernel.cpp");
+	const std::string declare = flat(definition(raw, "bool Kernel::surfaceGpuWrites("));
+	EXPECT_THAT(declare, HasSubstr("importsWritten_.store(true"));
+	EXPECT_THAT(flat(definition(raw, "bool Kernel::exec(")),
+		    HasSubstr("e.pushes[0].flags |= TegraGM20BPushImportsWritten;"));
+	EXPECT_THAT(flat(definition(raw, "bool Kernel::importPages(")),
+		    HasSubstr("!importsWritten_.load("));
+	const std::string nvk = SourceText(
+		"../../../third_party/mesa/src/nouveau/vulkan/nvkmd/darwin/nvkmd_darwin.c");
+	EXPECT_THAT(flat(definition(nvk, "switch_nvk_surface_gpu_writes(uint32_t surface_id)")),
+		    HasSubstr("p_atomic_set(&surface_writes_failed, true);"));
+	EXPECT_THAT(flat(definition(nvk, "nvkmd_darwin_exec_ctx_flush(struct nvkmd_ctx *_ctx,")),
+		    HasSubstr("ctx->req.pushes[0].flags |= TegraGM20BPushImportsWritten;"));
+	EXPECT_THAT(nvk,
+		    HasSubstr("if (req.surface_id && !p_atomic_read(&surface_writes_failed))"));
+}
+
 // Only a connection's maps skip the CPU's L2 and TLB maintenance; every removal keeps it (TegraGM20BTlb.h).
 TEST(GM20BTlbSource, MapsOrderedOnTheGpuRemovalsSynchronous)
 {

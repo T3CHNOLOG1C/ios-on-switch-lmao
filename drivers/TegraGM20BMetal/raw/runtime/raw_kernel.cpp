@@ -180,7 +180,8 @@ bool Kernel::importPages(void *addr, uint64_t bytes, Bo &bo, uint32_t surfaceId)
     const uint64_t page = info_.page_size;
     const uintptr_t base = uintptr_t(addr) & ~uintptr_t(page - 1);
     const uint64_t span = ((uintptr_t(addr) + bytes + page - 1) & ~uintptr_t(page - 1)) - base;
-    TegraGM20BAbiBoImport in = {base, span, surfaceId, surfaceId ? uint32_t(TegraGM20BImportGpuReads) : 0};
+    const bool gpuReads = surfaceId && !importsWritten_.load(std::memory_order_relaxed);
+    TegraGM20BAbiBoImport in = {base, span, surfaceId, gpuReads ? uint32_t(TegraGM20BImportGpuReads) : 0};
     TegraGM20BAbiBoAllocReply r = {};
     bo = {};
     if (call(TegraGM20BMethodBoImport, &in, sizeof in, &r, sizeof r) != KERN_SUCCESS)
@@ -193,7 +194,10 @@ bool Kernel::importPages(void *addr, uint64_t bytes, Bo &bo, uint32_t surfaceId)
 bool Kernel::surfaceGpuWrites(uint32_t surfaceId)
 {
     const TegraGM20BAbiSurfaceWrites in = {surfaceId, 0};
-    return call(TegraGM20BMethodSurfaceWrites, &in, sizeof in, nullptr, 0) == KERN_SUCCESS;
+    if (call(TegraGM20BMethodSurfaceWrites, &in, sizeof in, nullptr, 0) == KERN_SUCCESS)
+        return true;
+    importsWritten_.store(true, std::memory_order_relaxed);
+    return false;
 }
 
 bool Kernel::bindImport(void *addr, Bo &bo, uint32_t kind)
@@ -293,6 +297,8 @@ bool Kernel::exec(uint32_t channel, const TegraGM20BAbiPush *pushes, uint32_t co
     e.channel = channel;
     e.count = count;
     memcpy(e.pushes, pushes, count * sizeof pushes[0]);
+    if (count && importsWritten_.load(std::memory_order_relaxed))
+        e.pushes[0].flags |= TegraGM20BPushImportsWritten;
     const size_t in = offsetof(TegraGM20BAbiExec, pushes) + count * sizeof pushes[0];
     TegraGM20BAbiExecReply r = {};
     for (;;) {

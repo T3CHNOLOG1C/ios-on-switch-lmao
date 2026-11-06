@@ -5,6 +5,7 @@
 // made it), through a first-fit free list (VA is given back when a BO is freed).
 // Not thread safe: raw::Device calls it under its own lock.
 #pragma once
+#include <atomic>
 #include <cstdint>
 #include <map>
 #include <string>
@@ -78,6 +79,9 @@ private:
     void freeVa(uint64_t va, uint64_t bytes);
     uint32_t conn_ = 0;
     bool tunnel_ = false;
+    // A SurfaceWrites failed: imports stop saying the GPU only samples them, and every Exec carries
+    // TegraGM20BPushImportsWritten.
+    std::atomic<bool> importsWritten_{false};
     uint32_t selector_ = 0;
     TegraGM20BAbiInfo info_ = {};
     std::map<uint64_t, uint64_t> vaFree_;  // start -> bytes, coalesced

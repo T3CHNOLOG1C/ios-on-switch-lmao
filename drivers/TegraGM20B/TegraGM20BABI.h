@@ -188,6 +188,9 @@ struct TegraGM20BAbiChannel {
  * GPU work, the reply is the last seqno already submitted (and errors of the channel are still reported). */
 enum {
 	TegraGM20BPushNoPrefetch = 1u << 0, /* GPFIFO entry NO_PREFETCH bit */
+	/* From this submission on, every writable import of the connection counts as GPU-written, TegraGM20BImportGpuReads
+	 * or not: the client could not deliver a SurfaceWrites. Carried by a real push, so it takes effect with the work. */
+	TegraGM20BPushImportsWritten = 1u << 1,
 };
 
 struct TegraGM20BAbiPush {

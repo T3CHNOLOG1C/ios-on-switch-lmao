@@ -747,6 +747,8 @@ class AGXDeviceUserClient : public IOUserClient
 	bool critical_ =
 		true;  // its GPU errors panic; no pool quota (all but the compositor with all-clients)
 	bool dead_ = false;  // a channel was killed for a GPU error: no new work, BOs or binds
+	bool importsWritten_ =
+		false;  // TegraGM20BPushImportsWritten: every submission marks every writable import
 	bool quotaLogged_ = false;
 	bool systemLogged_ =
 		false;  // a coherent BoAlloc served from system memory (tgm_pool::FromSystem), logged once
@@ -1617,9 +1619,12 @@ IOReturn AGXDeviceUserClient::exec(const TegraGM20BAbiExec *in, uint32_t count,
 	for (uint32_t i = 0; i < count; i++) {
 		const TegraGM20BAbiPush &p = in->pushes[i];
 		if ((p.va & 3) || !p.dwords || p.dwords >= (1u << 21) ||
-		    (p.flags & ~uint32_t(TegraGM20BPushNoPrefetch)) || p.va < TGM_USER_VA_START ||
-		    p.va + uint64_t(p.dwords) * 4 > TGM_KERNEL_VA)
+		    (p.flags &
+		     ~uint32_t(TegraGM20BPushNoPrefetch | TegraGM20BPushImportsWritten)) ||
+		    p.va < TGM_USER_VA_START || p.va + uint64_t(p.dwords) * 4 > TGM_KERNEL_VA)
 			return kIOReturnBadArgument;
+		if (p.flags & TegraGM20BPushImportsWritten)
+			importsWritten_ = true;
 		pushes[i].no_prefetch = (p.flags & TegraGM20BPushNoPrefetch) ? 1u : 0u;
 	}
 	if (count) {
@@ -1627,7 +1632,7 @@ IOReturn AGXDeviceUserClient::exec(const TegraGM20BAbiExec *in, uint32_t count,
 		// maintenance): the reader's next IOSurface read lock invalidates it then (tgm_coherency_*, the XNU hook). A read
 		// lock between now and the fence completing would clear the mark early, but a CPU readback waits for completion.
 		for (Bo *bo = cohBos_; bo; bo = bo->cohNext)
-			tgm_coherency_wrote(bo->coh);
+			tgm_coherency_wrote(bo->coh, importsWritten_);
 	}
 	tgm_prof prof;
 	bool profiled = false;

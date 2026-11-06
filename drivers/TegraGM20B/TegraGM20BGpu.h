@@ -208,7 +208,8 @@ struct tgm_coh *tgm_coherency_add(uint64_t pa, uint32_t surface_id, const uint64
 void tgm_coherency_gpu_writes(uint32_t surface_id);
 void tgm_coherency_cleaned(struct tgm_coh *c);
 void tgm_coherency_put(struct tgm_coh *c);
-void tgm_coherency_wrote(struct tgm_coh *c);
+/* always: mark it even if the GPU only samples it (TegraGM20BPushImportsWritten). */
+void tgm_coherency_wrote(struct tgm_coh *c, int always);
 void tgm_coherency_take_stats(uint64_t out[4]);
 /* XNU's iokit_user_client_trap, after an IOSurfaceRootUserClient trap ran: index 2 lock, 3 unlock (IOConnectTrap3 p1 the
  * surface ID, p2 the lock options). */

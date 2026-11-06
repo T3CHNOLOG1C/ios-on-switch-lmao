@@ -713,6 +713,9 @@ nvkmd_darwin_create_pdev(struct vk_object_base *log_obj,
 
 /* The device SurfaceWrites goes through: the process's first. The kernel's record is per surface, not per connection. */
 static struct nvkmd_darwin_dev *surface_writes_dev;
+/* A SurfaceWrites could not be delivered: imports no longer say the GPU only samples them, and every submission tells
+ * the kernel to count its connection's imports as written (TegraGM20BPushImportsWritten). */
+static bool surface_writes_failed;
 
 static void
 nvkmd_darwin_dev_destroy(struct nvkmd_dev *_dev)
@@ -953,8 +956,11 @@ switch_nvk_surface_gpu_writes(uint32_t surface_id)
    struct nvkmd_darwin_dev *dev = p_atomic_read(&surface_writes_dev);
    struct TegraGM20BAbiSurfaceWrites req = { .surface_id = surface_id };
 
-   return dev && darwin_call(&dev->conn, TegraGM20BMethodSurfaceWrites, &req, sizeof(req),
-                             NULL, 0) == KERN_SUCCESS;
+   if (dev && darwin_call(&dev->conn, TegraGM20BMethodSurfaceWrites, &req, sizeof(req), NULL, 0) ==
+                 KERN_SUCCESS)
+      return true;
+   p_atomic_set(&surface_writes_failed, true);
+   return false;
 }
 
 static uint32_t
@@ -980,7 +986,7 @@ nvkmd_darwin_import_host_mem(struct nvkmd_dev *_dev,
       .bytes = size_B,
       .surface_id = import_surface_id(host_ptr, size_B),
    };
-   if (req.surface_id)
+   if (req.surface_id && !p_atomic_read(&surface_writes_failed))
       req.flags = TegraGM20BImportGpuReads;
    struct TegraGM20BAbiBoAllocReply reply = { 0 };
    kern_return_t kr = darwin_call(&dev->conn, TegraGM20BMethodBoImport,
@@ -1455,6 +1461,8 @@ nvkmd_darwin_exec_ctx_flush(struct nvkmd_ctx *_ctx,
 
    if (ctx->req.count == 0)
       return VK_SUCCESS;
+   if (p_atomic_read(&surface_writes_failed))
+      ctx->req.pushes[0].flags |= TegraGM20BPushImportsWritten;
 
    const size_t in_size = offsetof(struct TegraGM20BAbiExec, pushes) +
                           ctx->req.count * sizeof(ctx->req.pushes[0]);

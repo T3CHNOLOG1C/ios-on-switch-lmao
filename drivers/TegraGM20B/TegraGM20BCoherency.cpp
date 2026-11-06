@@ -265,9 +265,9 @@ extern "C" void tgm_coherency_put(struct tgm_coh *c)
 	IOLockUnlock(gRegistryLock);
 }
 
-extern "C" void tgm_coherency_wrote(struct tgm_coh *c)
+extern "C" void tgm_coherency_wrote(struct tgm_coh *c, int always)
 {
-	if (c && __atomic_load_n(&c->gpuWrites, __ATOMIC_RELAXED))
+	if (c && (always || __atomic_load_n(&c->gpuWrites, __ATOMIC_RELAXED)))
 		__atomic_store_n(&c->gpuDirty, 1, __ATOMIC_RELEASE);
 }
 

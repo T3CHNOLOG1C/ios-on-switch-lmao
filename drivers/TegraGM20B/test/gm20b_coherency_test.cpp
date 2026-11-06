@@ -65,7 +65,7 @@ TEST_F(Coherency, LockInvalidatesOnlyAfterGpuWrites)
 	ASSERT_NE(c, nullptr);
 	tegra_gm20b_iosurface_trap(kLock, 7, 0);
 	EXPECT_TRUE(cleanCalls().empty());
-	tgm_coherency_wrote(c);
+	tgm_coherency_wrote(c, 0);
 	tegra_gm20b_iosurface_trap(kLock, 7, kReadOnly);
 	ASSERT_EQ(cleanCalls().size(), 1u);
 	EXPECT_EQ(cleanCalls()[0], p);
@@ -78,12 +78,25 @@ TEST_F(Coherency, ASurfaceTheGpuOnlySamplesIsNeverInvalidatedOnLock)
 {
 	const auto p = pages(0x8a000000, 4);
 	tgm_coh *c = sampled(p[0], 61, p.data(), 4);
-	tgm_coherency_wrote(c);
+	tgm_coherency_wrote(c, 0);
 	tegra_gm20b_iosurface_trap(kLock, 61, 0);
 	EXPECT_TRUE(cleanCalls().empty());
 	tgm_coherency_gpu_writes(61);
-	tgm_coherency_wrote(c);
+	tgm_coherency_wrote(c, 0);
 	tegra_gm20b_iosurface_trap(kLock, 61, 0);
+	ASSERT_EQ(cleanCalls().size(), 1u);
+	EXPECT_EQ(cleanCalls()[0], p);
+	tgm_coherency_put(c);
+}
+
+// A SurfaceWrites the client could not deliver: its submissions carry TegraGM20BPushImportsWritten from then on, which
+// marks even the imports that said the GPU only samples them.
+TEST_F(Coherency, AnUndeclaredWriteStillInvalidatesOnLockOnceTheClientFallsBack)
+{
+	const auto p = pages(0x8d000000, 3);
+	tgm_coh *c = sampled(p[0], 63, p.data(), 3);
+	tgm_coherency_wrote(c, 1);
+	tegra_gm20b_iosurface_trap(kLock, 63, kReadOnly);
 	ASSERT_EQ(cleanCalls().size(), 1u);
 	EXPECT_EQ(cleanCalls()[0], p);
 	tgm_coherency_put(c);
@@ -95,7 +108,7 @@ TEST_F(Coherency, ARenderedToImportMakesTheSurfaceGpuWrittenForEveryImporter)
 	tgm_coh *reader = sampled(p[0], 62, p.data(), 2);
 	tgm_coh *renderer = add(p[0], 62, p.data(), 2, 1);
 	ASSERT_EQ(reader, renderer);
-	tgm_coherency_wrote(reader);
+	tgm_coherency_wrote(reader, 0);
 	tegra_gm20b_iosurface_trap(kLock, 62, kReadOnly);
 	EXPECT_EQ(cleanCalls().size(), 1u);
 	tgm_coherency_put(renderer);
@@ -109,7 +122,7 @@ TEST_F(Coherency, TrapsReachEveryEntryOfASurface)
 	for (uint64_t i = 0; i < 6; i++) {
 		lists.push_back(pages(0x8c000000 + (i << 24), 2));
 		entries.push_back(add(lists.back()[0], 71, lists.back().data(), 2, 1));
-		tgm_coherency_wrote(entries.back());
+		tgm_coherency_wrote(entries.back(), 0);
 	}
 	tegra_gm20b_iosurface_trap(kUnlock, 71, 0);
 	EXPECT_EQ(cleanCalls().size(), 6u);
@@ -136,8 +149,8 @@ TEST_F(Coherency, OtherSurfacesAndUntaggedImportsAreLeftAlone)
 	const auto p = pages(0x82000000, 2), q = pages(0x83000000, 2);
 	tgm_coh *tagged = add(p[0], 11, p.data(), 2, 1);
 	tgm_coh *untagged = add(q[0], 0, q.data(), 2, 1);
-	tgm_coherency_wrote(tagged);
-	tgm_coherency_wrote(untagged);
+	tgm_coherency_wrote(tagged, 0);
+	tgm_coherency_wrote(untagged, 0);
 	tegra_gm20b_iosurface_trap(kUnlock, 12, 0);
 	tegra_gm20b_iosurface_trap(kLock, 12, 0);
 	tegra_gm20b_iosurface_trap(kLock, 0, 0);
@@ -220,7 +233,7 @@ TEST_F(Coherency, TrapsRaceReleaseWithoutUseAfterFree)
 	for (int i = 0; i < 2000; i++) {
 		const auto p = pages(0x86000000 + (uint64_t(i % 8) << 24), 8);
 		tgm_coh *c = add(p[0], 41, p.data(), 8, 1);
-		tgm_coherency_wrote(c);
+		tgm_coherency_wrote(c, 0);
 		tgm_coherency_put(c);
 	}
 	stop.store(true);
