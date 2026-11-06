@@ -11,6 +11,7 @@
 #include "../test/VDECClip.h"
 #include "../test/VP9Clip.h"
 #include "../test/HEVCClip.h"
+#include "../../../kits/SwitchCRC/SwitchCRC.h"
 
 extern const CFStringRef kVTVideoDecoderSpecification_AllowVP9Decode, kVTVideoDecoderSpecification_DecoderID;
 
@@ -20,17 +21,6 @@ typedef struct {
     int count, match, errors, outOfOrder, last, first;
     uint32_t firstCrc;
 } Result;
-
-static uint32_t crc32Update(uint32_t crc, const uint8_t *p, size_t n)  // zlib's CRC-32 (reflected 0xedb88320)
-{
-    crc = ~crc;
-    while (n--) {
-        crc ^= *p++;
-        for (int i = 0; i < 8; i++)
-            crc = (crc >> 1) ^ (0xedb88320u & (0u - (crc & 1)));
-    }
-    return ~crc;
-}
 
 // Frames carry their display position as the presentation time and each output is checked against that frame's CRC.
 // Apple's own H.264 decoders put frames out in decode order even with temporal processing (macOS 27, both hardware
@@ -50,7 +40,7 @@ static void output(void *refcon, void *frameRefcon, OSStatus status, VTDecodeInf
     const size_t pitch = CVPixelBufferGetBytesPerRowOfPlane(image, 0);
     uint32_t crc = 0;
     for (int row = 0; row < r->height; row++)
-        crc = crc32Update(crc, y + (size_t)row * pitch, (size_t)r->width);
+        crc = switch_crc32(crc, y + (size_t)row * pitch, (size_t)r->width);
     CVPixelBufferUnlockBaseAddress(image, kCVPixelBufferLock_ReadOnly);
     const int index = (int)pts.value;
     if (index >= 0 && index < r->frames && crc == r->crcs[index]) {

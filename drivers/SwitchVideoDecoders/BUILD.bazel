@@ -79,7 +79,10 @@ ios_binary(
             "AVD/*.h",
         ],
         allow_empty = True,
-    ) + ["//drivers/TegraNVDEC:headers"] + [
+    ) + [
+        "//drivers/TegraNVDEC:headers",
+        "//kits/SwitchCRC:headers",
+    ] + [
         "test/VDECClip.h",
         "test/VP9Clip.h",
         "test/HEVCClip.h",
@@ -119,6 +122,7 @@ ios_binary(
     ],
     out = "build/switch-video/vdectest",
     hdrs = [
+        "//kits/SwitchCRC:headers",
         "AVD/ClipCheck.h",
         "test/HEVCClip.h",
         "test/VDECClip.h",

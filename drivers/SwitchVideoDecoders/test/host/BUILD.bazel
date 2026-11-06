@@ -111,6 +111,7 @@ host_library(
         "//drivers/SwitchVideoDecoders:test/HEVCClip.h",
         "//drivers/SwitchVideoDecoders:test/VDECClip.h",
         "//drivers/SwitchVideoDecoders:test/VP9Clip.h",
+        "//kits/SwitchCRC:SwitchCRC.h",
     ],
     hdrs = ["//drivers/SwitchVideoDecoders:AVD/ClipCheck.h"],
     copts = ["-O1"],
