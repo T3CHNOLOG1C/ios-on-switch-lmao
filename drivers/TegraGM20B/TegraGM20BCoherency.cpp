@@ -31,6 +31,7 @@ struct tgm_coh {
 	uint64_t *pas;  // the largest page list imported for it
 	uint32_t npages;
 	int writable;         // some import lets the GPU write it
+	int cleaned;          // atomic: an import of it finished its own clean
 	int gpuDirty;         // atomic: the GPU may have written it since the last CPU lock
 	uint32_t tiledBinds;  // atomic: live whole-surface binds with TEGRA_SCANOUT_TILED_KIND
 };
@@ -205,13 +206,19 @@ extern "C" int tgm_coherency_init(void)
 }
 
 extern "C" struct tgm_coh *tgm_coherency_add(uint64_t pa, uint32_t surface_id, const uint64_t *pas,
-					     uint32_t npages, int writable)
+					     uint32_t npages, int writable, int *covered)
 {
+	*covered = 0;
 	if (!npages || !gRegistryLock)
 		return nullptr;
 	tgm_coh *fresh = entryNew(pa, pas, npages);
 	IOLockLock(gRegistryLock);
 	tgm_coh **p = pageSlot(pa), *c = *p;
+	// A live import of the same surface that finished its own clean: every CPU write since came through an
+	// IOSurfaceUnlock that cleaned these pages, so they are clean already.
+	if (c && surface_id && c->surfaceId == surface_id && c->npages >= npages &&
+	    __atomic_load_n(&c->cleaned, __ATOMIC_ACQUIRE))
+		*covered = 1;
 	if (!c && fresh) {
 		c = *p = fresh;
 		fresh = nullptr;
@@ -230,6 +237,11 @@ extern "C" struct tgm_coh *tgm_coherency_add(uint64_t pa, uint32_t surface_id, c
 	IOLockUnlock(gRegistryLock);
 	if (fresh)
 		entryFree(fresh);
+	if (*covered) {
+		IOLockLock(c->lock);
+		*covered = !memcmp(c->pas, pas, size_t(npages) * sizeof(uint64_t));
+		IOLockUnlock(c->lock);
+	}
 	if (c && npages > c->npages) {
 		IOLockLock(c->lock);
 		if (npages > c->npages)
@@ -237,6 +249,12 @@ extern "C" struct tgm_coh *tgm_coherency_add(uint64_t pa, uint32_t surface_id, c
 		IOLockUnlock(c->lock);
 	}
 	return c;
+}
+
+extern "C" void tgm_coherency_cleaned(struct tgm_coh *c)
+{
+	if (c)
+		__atomic_store_n(&c->cleaned, 1, __ATOMIC_RELEASE);
 }
 
 extern "C" void tgm_coherency_put(struct tgm_coh *c)

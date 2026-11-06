@@ -34,6 +34,14 @@ std::vector<uint64_t> pages(uint64_t first, uint32_t n)
 	return v;
 }
 
+tgm_coh *add(uint64_t pa, uint32_t surfaceId, const uint64_t *pas, uint32_t npages, int writable,
+	     int *covered = nullptr)
+{
+	int ignored = 0;
+	return tgm_coherency_add(pa, surfaceId, pas, npages, writable,
+				 covered ? covered : &ignored);
+}
+
 class Coherency : public ::testing::Test
 {
 protected:
@@ -47,7 +55,7 @@ protected:
 TEST_F(Coherency, LockInvalidatesOnlyAfterGpuWrites)
 {
 	const auto p = pages(0x80000000, 4);
-	tgm_coh *c = tgm_coherency_add(p[0], 7, p.data(), 4, 1);
+	tgm_coh *c = add(p[0], 7, p.data(), 4, 1);
 	ASSERT_NE(c, nullptr);
 	tegra_gm20b_iosurface_trap(kLock, 7, 0);
 	EXPECT_TRUE(cleanCalls().empty());
@@ -63,7 +71,7 @@ TEST_F(Coherency, LockInvalidatesOnlyAfterGpuWrites)
 TEST_F(Coherency, UnlockCleansUnlessReadOnly)
 {
 	const auto p = pages(0x81000000, 3);
-	tgm_coh *c = tgm_coherency_add(p[0], 9, p.data(), 3, 0);
+	tgm_coh *c = add(p[0], 9, p.data(), 3, 0);
 	tegra_gm20b_iosurface_trap(kUnlock, 9, kReadOnly);
 	EXPECT_TRUE(cleanCalls().empty());
 	tegra_gm20b_iosurface_trap(kUnlock, 9, 0);
@@ -75,8 +83,8 @@ TEST_F(Coherency, UnlockCleansUnlessReadOnly)
 TEST_F(Coherency, OtherSurfacesAndUntaggedImportsAreLeftAlone)
 {
 	const auto p = pages(0x82000000, 2), q = pages(0x83000000, 2);
-	tgm_coh *tagged = tgm_coherency_add(p[0], 11, p.data(), 2, 1);
-	tgm_coh *untagged = tgm_coherency_add(q[0], 0, q.data(), 2, 1);
+	tgm_coh *tagged = add(p[0], 11, p.data(), 2, 1);
+	tgm_coh *untagged = add(q[0], 0, q.data(), 2, 1);
 	tgm_coherency_wrote(tagged);
 	tgm_coherency_wrote(untagged);
 	tegra_gm20b_iosurface_trap(kUnlock, 12, 0);
@@ -91,8 +99,8 @@ TEST_F(Coherency, OtherSurfacesAndUntaggedImportsAreLeftAlone)
 TEST_F(Coherency, OneEntryPerSurfaceUntilTheLastImportGoes)
 {
 	const auto small = pages(0x84000000, 2), large = pages(0x84000000, 5);
-	tgm_coh *a = tgm_coherency_add(small[0], 0, small.data(), 2, 0);
-	tgm_coh *b = tgm_coherency_add(large[0], 21, large.data(), 5, 1);
+	tgm_coh *a = add(small[0], 0, small.data(), 2, 0);
+	tgm_coh *b = add(large[0], 21, large.data(), 5, 1);
 	EXPECT_EQ(a, b);
 	tegra_gm20b_iosurface_trap(kUnlock, 21, 0);
 	ASSERT_EQ(cleanCalls().size(), 1u);
@@ -105,10 +113,39 @@ TEST_F(Coherency, OneEntryPerSurfaceUntilTheLastImportGoes)
 	EXPECT_EQ(cleanCalls().size(), 2u);
 }
 
+TEST_F(Coherency, OnlyALiveImportOfTheSameSurfaceCoversAnother)
+{
+	const auto p = pages(0x87000000, 4), more = pages(0x87000000, 6),
+		   other = pages(0x88000000, 4);
+	int covered = -1;
+	tgm_coh *first = add(p[0], 51, p.data(), 4, 1, &covered);
+	EXPECT_EQ(covered, 0);
+	tgm_coh *early = add(p[0], 51, p.data(), 4, 0, &covered);
+	EXPECT_EQ(covered, 0);
+	tgm_coherency_cleaned(first);
+	tgm_coh *twin = add(p[0], 51, p.data(), 4, 0, &covered);
+	EXPECT_EQ(covered, 1);
+	tgm_coh *untagged = add(p[0], 0, p.data(), 4, 0, &covered);
+	EXPECT_EQ(covered, 0);
+	tgm_coh *larger = add(more[0], 51, more.data(), 6, 0, &covered);
+	EXPECT_EQ(covered, 0);
+	tgm_coh *elsewhere = add(other[0], 51, other.data(), 4, 0, &covered);
+	EXPECT_EQ(covered, 0);
+	auto moved = p;
+	moved[2] = 0x89000000;
+	tgm_coh *recycled = add(moved[0], 51, moved.data(), 4, 0, &covered);
+	EXPECT_EQ(covered, 0);
+	for (tgm_coh *c : {first, early, twin, untagged, larger, elsewhere, recycled})
+		tgm_coherency_put(c);
+	tgm_coh *again = add(p[0], 51, p.data(), 4, 1, &covered);
+	EXPECT_EQ(covered, 0);
+	tgm_coherency_put(again);
+}
+
 TEST_F(Coherency, TiledWhileAnyTiledBindLives)
 {
 	const auto p = pages(0x85000000, 2);
-	tgm_coh *c = tgm_coherency_add(p[0], 31, p.data(), 2, 1);
+	tgm_coh *c = add(p[0], 31, p.data(), 2, 1);
 	EXPECT_FALSE(tegra_gm20b_surface_tiled(p[0]));
 	tgm_coherency_tiled_bind(c, 1);
 	tgm_coherency_tiled_bind(c, 1);
@@ -131,7 +168,7 @@ TEST_F(Coherency, TrapsRaceReleaseWithoutUseAfterFree)
 	});
 	for (int i = 0; i < 2000; i++) {
 		const auto p = pages(0x86000000 + (uint64_t(i % 8) << 24), 8);
-		tgm_coh *c = tgm_coherency_add(p[0], 41, p.data(), 8, 1);
+		tgm_coh *c = add(p[0], 41, p.data(), 8, 1);
 		tgm_coherency_wrote(c);
 		tgm_coherency_put(c);
 	}

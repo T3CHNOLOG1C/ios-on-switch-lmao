@@ -195,13 +195,15 @@ void tgm_cpu_clean_pages(const uint64_t *pas, uint32_t npages);
 /* Host-import coherency registry (TegraGM20BCoherency.cpp), kept coherent at every process's IOSurfaceLock/Unlock of
  * an imported surface (tegra_gm20b_iosurface_trap). add at import, with the first page, the IOSurface ID (0: not an
  * IOSurface) and the import's page list; it returns the entry the import holds (NULL without memory: no lazy
- * coherency), and the importer still cleans its pages itself. put at release; wrote from Exec, for a writable import a
- * submission may have written. take_stats returns and zeroes the traps' lock invalidations and unlock cleans (count,
- * bytes each). */
+ * coherency). The importer cleans its pages itself, then says so (cleaned), unless *covered: a live import of the
+ * same surface that finished its clean, kept clean since by the traps, already spans them. put at release; wrote from
+ * Exec, for a writable import a submission may have written. take_stats returns and zeroes the traps' lock
+ * invalidations and unlock cleans (count, bytes each). */
 struct tgm_coh;
 int tgm_coherency_init(void);
 struct tgm_coh *tgm_coherency_add(uint64_t pa, uint32_t surface_id, const uint64_t *pas,
-				  uint32_t npages, int writable);
+				  uint32_t npages, int writable, int *covered);
+void tgm_coherency_cleaned(struct tgm_coh *c);
 void tgm_coherency_put(struct tgm_coh *c);
 void tgm_coherency_wrote(struct tgm_coh *c);
 void tgm_coherency_take_stats(uint64_t out[4]);

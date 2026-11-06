@@ -1263,13 +1263,18 @@ IOReturn AGXDeviceUserClient::boImport(const TegraGM20BAbiBoImport *in,
 	}
 	// Registered for the coherency every process's IOSurfaceLock/Unlock of the surface drives (TegraGM20BCoherency.cpp):
 	// writable (the GPU may write it) unless the task maps the pages read-only.
-	bo->coh = tgm_coherency_add(bo->pas[0], in->surface_id, bo->pas, bo->npages, !bo->readOnly);
+	int covered = 0;
+	bo->coh = tgm_coherency_add(bo->pas[0], in->surface_id, bo->pas, bo->npages, !bo->readOnly,
+				    &covered);
 	// The GPU does not snoop the CPU caches: what the task wrote must be in DRAM before the GPU reads it, and no dirty
 	// line (fresh pages are zeroed through the cache) may be written back later over what the GPU wrote.
-	tgm_cpu_clean_pages(bo->pas, bo->npages);
+	if (!covered) {
+		tgm_cpu_clean_pages(bo->pas, bo->npages);
+		tgm_coherency_cleaned(bo->coh);
+	}
 	lap(3);
 	tgm_stats_import(static_cast<int64_t>(bo->bytes), bo->pas[0]);
-	tgm_stats_bo_import(bo->bytes, bo->readOnly, 0, mark - start, phase);
+	tgm_stats_bo_import(bo->bytes, bo->readOnly, covered, mark - start, phase);
 	tgm_vm_import_note(
 		vm_, bo->pas[0],
 		1);  // this connection may draw into what it imports (the GPU present asks)
