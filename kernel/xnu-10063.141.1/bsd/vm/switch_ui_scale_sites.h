@@ -87,6 +87,17 @@
  *   unrounded. BSFloatIsZero(width) becomes fminnm against the width: a zero width makes 0 / 0, a quiet NaN, which
  *   fminnm drops for the other operand, 0 as before. Three columns of 256 points fit in 1024; the grid stays trailing
  *   aligned, as iPadOS lays out a switcher narrower than the screen.
+ * - SystemStatusUI (.25), the icon size 15 row of the battery tables STUIStatusBarStaticBatteryView and
+ *   STUIStatusBarBatteryView share: the expanded status bar's battery, the one Control Center shows
+ *   (-[STUIStatusBarVisualProvider_Pad styleAttributesForStyle:] gives 15 to mode 1 and 14 to the others).
+ *   _UIStaticBatteryView strokes the body into a bitmap of the view's size at the display scale and draws the
+ *   fill, inset by twice the line, in a bitmap of its own. At 1.25 the 28 x 14 point body with its 1.25 point line
+ *   is 35 x 17.5 pixels with a 1.5625 pixel line: its bottom and every inner edge fall between pixels, and the
+ *   11.5 pixel fill comes from a 12 pixel bitmap. The body becomes 14.4 points tall and the line
+ *   expanded_battery_bits' (switch_ui_scale.h): a 35 x 18 pixel body, a 2 pixel line and gap and a 27 x 10 pixel
+ *   fill, whose inset the UIKitCore fill site then leaves as it is. The width, corner radii and pin stay (the static
+ *   view's pin comes from -[STUIStatusBarStaticBatteryView _pinSizeForIconSize:]'s constants, not this table,
+ *   and its edges are curves); the bolt scales with the height. At 1.6 the row stays stock, as the fill sites do.
  * MobileGestalt keeps its answer in its build-keyed cache; kern_exec.c drops that cache when the scale changes
  * (native_switch_ui_scale_cache).
  */
@@ -243,6 +254,19 @@ static const struct switch_us_site switch_us_sites[] = {
 			    0x00, 0x09, 0x62, 0x1e, 0x00, 0x40, 0x66, 0x1e, 0x09, 0x18, 0x62, 0x1e, 0x29, 0x79, 0x62, 0x1e } },
 		},
 		"SpringBoard", "app switcher landscape card scale",
+	},
+	{   /* .25 */
+		{ 0xf1, 0x6d, 0xce, 0xf8, 0xc4, 0x46, 0x38, 0x05, 0x91, 0x63, 0xc0, 0x13, 0x8e, 0x4d, 0xca, 0xd1 },
+		0x1cf3e8000ULL, 0x1354000ULL, 0x3000ULL, 2, 2,
+		{
+			/* 0x1cf3eb8b8: the line width and interspace table (0x1cf3eb848) at icon size 15: 1.25 */
+			{ 0x13578b8ULL, 8, 0, 8, SWITCH_US_EXPANDED_BATTERY_LINE,
+			  { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xf4, 0x3f }, { 0 } },
+			/* 0x1cf3ebad8: the body height table (0x1cf3eba68) at icon size 15: 14.0 */
+			{ 0x1357ad8ULL, 8, 0, 8, SWITCH_US_EXPANDED_BATTERY_HEIGHT,
+			  { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x2c, 0x40 }, { 0 } },
+		},
+		"SystemStatusUI", "expanded battery row",
 	},
 };
 #define SWITCH_US_SITES           (sizeof(switch_us_sites) / sizeof(switch_us_sites[0]))

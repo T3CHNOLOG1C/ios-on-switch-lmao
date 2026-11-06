@@ -343,6 +343,47 @@ TEST(XnuUiScaleSites, SwitcherCardsFitBetweenTheStatusBarAndTheDock)
     EXPECT_EQ(grid.leading_margin, 124);
 }
 
+TEST(XnuUiScaleSites, NoTwoSitesOfAMappingShareAPage)
+{
+    for (const switch_us_site &a : switch_us_sites) {
+        for (const switch_us_site &b : switch_us_sites) {
+            if (&a != &b && MappingOf(a) == MappingOf(b)) {
+                EXPECT_NE(a.page_vmaddr, b.page_vmaddr) << NameOf(a) << " and " << NameOf(b);
+            }
+        }
+    }
+}
+
+TEST(XnuUiScaleSites, SystemStatusUiRowIsIconSize15OfTheBatteryTables)
+{
+    // +[STUIStatusBarStaticBatteryView _lineWidthAndInterspaceForIconSize:] and _batterySizeForIconSize:'s height:
+    // 17 doubles from 0x1cf3eb848 and 0x1cf3eba68, indexed by icon size - 1, 1.25 and 14 at 15
+    const switch_us_site *site = Named("SystemStatusUI expanded battery row");
+    ASSERT_NE(site, nullptr);
+    ASSERT_EQ(site->edits, 2u);
+
+    struct Entry {
+        switch_ui_scale_edit_kind kind;
+        uint64_t table;
+        double stock;
+    };
+
+    const Entry entries[] = {{SWITCH_US_EXPANDED_BATTERY_LINE, 0x1cf3eb848, 1.25},
+                             {SWITCH_US_EXPANDED_BATTERY_HEIGHT, 0x1cf3eba68, 14.0}};
+    for (unsigned i = 0; i < 2; i++) {
+        SCOPED_TRACE(i);
+        const switch_us_edit &edit = site->edit[i];
+        EXPECT_EQ(edit.kind, entries[i].kind);
+        EXPECT_EQ(site->page_vmaddr + (edit.fileoff - site->page_fileoff), entries[i].table + (15 - 1) * 8);
+        ASSERT_EQ(edit.length, 8u);
+        EXPECT_EQ(edit.at, 0u);
+        EXPECT_EQ(edit.size, 8u);
+        double stock = 0;
+        std::memcpy(&stock, edit.stock, sizeof(stock));
+        EXPECT_EQ(stock, entries[i].stock);
+    }
+}
+
 TEST(XnuUiScaleSites, CoreUiRowBytes)
 {
     // both CoreUI sites: ... ucvtf d0, x24; fmul d0, dW, d0; fcvtzu x3, d0 -> mul x3, x0, x24; nop; nop

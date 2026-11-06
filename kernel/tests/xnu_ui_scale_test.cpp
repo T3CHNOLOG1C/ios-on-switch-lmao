@@ -230,6 +230,70 @@ TEST(XnuUiScale, BatteryFillIsWholePixelsWithEqualGaps)
     }
 }
 
+namespace {
+double DoubleOf(uint64_t bits)
+{
+    double value = 0;
+    std::memcpy(&value, &bits, sizeof(value));
+    return value;
+}
+
+std::vector<uint8_t> LittleEndian(uint64_t value)
+{
+    std::vector<uint8_t> bytes;
+    for (unsigned i = 0; i < 8; i++) {
+        bytes.push_back(static_cast<uint8_t>(value >> (8 * i)));
+    }
+    return bytes;
+}
+
+bool IsWhole(double pixels)
+{
+    return pixels == std::floor(pixels);
+}
+}  // namespace
+
+TEST(XnuUiScale, ExpandedBatteryRowIsLittleEndianDoublesOnlyWhereTheScaleHasOne)
+{
+    const switch_ui_scale &s = *Named("1.25");
+    EXPECT_EQ(EditBytes(SWITCH_US_EXPANDED_BATTERY_HEIGHT, &s, 8), LittleEndian(s.expanded_battery_bits[0]));
+    EXPECT_EQ(EditBytes(SWITCH_US_EXPANDED_BATTERY_LINE, &s, 8), LittleEndian(s.expanded_battery_bits[1]));
+    EXPECT_EQ(DoubleOf(s.expanded_battery_bits[0]), 14.4);
+    for (const char *name : {"1", "1.6"}) {
+        uint8_t out[8] = {};
+        EXPECT_FALSE(switch_ui_scale_edit_bytes(SWITCH_US_EXPANDED_BATTERY_HEIGHT, Named(name), out, 8)) << name;
+        EXPECT_FALSE(switch_ui_scale_edit_bytes(SWITCH_US_EXPANDED_BATTERY_LINE, Named(name), out, 8)) << name;
+    }
+}
+
+// _UIStaticBatteryView at icon size 15 with the row (28 point wide body, 1.75 x 5.5 point pin), in UIKit's double
+// arithmetic: the body bitmap is ceil(size * scale) pixels (UIGraphicsImageRenderer), the stroke's outer edge on the
+// body's, the pin after the line's gap, the fill as the UIKitCore fill site insets it.
+TEST(XnuUiScale, ExpandedBatteryIsWholePixelsNearApplesRow)
+{
+    const switch_ui_scale &s = *Named("1.25");
+    const double pixels = static_cast<double>(s.num) / s.den;
+    const double width = 28, height = DoubleOf(s.expanded_battery_bits[0]);
+    const double line = DoubleOf(s.expanded_battery_bits[1]);
+    EXPECT_FALSE(IsWhole(14 * pixels) && IsWhole(1.25 * pixels));  // Apple's row, 17.5 pixels with 1.5625 lines
+
+    const volatile double body_height = height * pixels;  // rounded as UIKit's product is, not fused
+    EXPECT_EQ(width * pixels, 35);
+    EXPECT_EQ(body_height, 18);
+    EXPECT_EQ(std::ceil(body_height), body_height);
+    EXPECT_LE(std::fabs(body_height - 14 * pixels), 0.5);
+    const double line_pixels = line * pixels;
+    EXPECT_TRUE(line_pixels == 1 || line_pixels == 2) << line_pixels;
+    EXPECT_TRUE(IsWhole((line + width) * pixels));
+
+    const PixelRect fill = BatteryFill(s, width, height, line);
+    EXPECT_EQ(fill.x, 2 * line_pixels);
+    EXPECT_EQ(fill.y, 2 * line_pixels);
+    EXPECT_EQ(fill.width, 35 - 4 * line_pixels);
+    EXPECT_EQ(fill.height, 18 - 4 * line_pixels);
+    EXPECT_EQ(std::ceil(fill.height), fill.height);
+}
+
 TEST(XnuUiScale, GridScaleMatchesTheAssembler)
 {
     // clang -arch arm64: fmov d9, d8; tbnz w0, #0, +0x30; fmov d11, #0.25 / #0.1875
@@ -248,6 +312,8 @@ TEST(XnuUiScale, AWrongLengthOrAFixedEditWritesNothing)
     EXPECT_FALSE(switch_ui_scale_edit_bytes(SWITCH_US_BATTERY_FILL, Named("1.25"), out, 20));
     EXPECT_FALSE(switch_ui_scale_edit_bytes(SWITCH_US_GRID_SCALE, Named("1.25"), out, 16));
     EXPECT_FALSE(switch_ui_scale_edit_bytes(SWITCH_US_GRID_SCALE, Named("1"), out, 12));
+    EXPECT_FALSE(switch_ui_scale_edit_bytes(SWITCH_US_EXPANDED_BATTERY_HEIGHT, Named("1.25"), out, 4));
+    EXPECT_FALSE(switch_ui_scale_edit_bytes(SWITCH_US_EXPANDED_BATTERY_LINE, Named("1.25"), out, 16));
     EXPECT_FALSE(switch_ui_scale_edit_bytes(SWITCH_US_FIXED, Named("1.6"), out, 12));
     for (uint8_t byte : out) {
         EXPECT_EQ(byte, 0);
