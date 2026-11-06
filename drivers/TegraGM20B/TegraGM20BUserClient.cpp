@@ -1603,7 +1603,9 @@ IOReturn AGXDeviceUserClient::waitFence(const TegraGM20BAbiWaitFence *in)
 	const uint64_t start = nowNs();
 	const uint64_t deadline = limit_ns > UINT64_MAX - start ? UINT64_MAX : start + limit_ns;
 	uint32_t waiter = 0, seq = 0;
+	bool woken = false;
 	for (bool slept = false;; slept = true) {
+		const uint32_t sleptOn = waiter;
 		IOReturn ret = kIOReturnNotReady;
 		IOLockLock(lock_);
 		tgm_chan *chan = chans_[in->channel - 1];
@@ -1627,9 +1629,12 @@ IOReturn AGXDeviceUserClient::waitFence(const TegraGM20BAbiWaitFence *in)
 			ret = kIOReturnTimeout;
 		}
 		IOLockUnlock(lock_);
+		if (slept)
+			tgm_stats_wait(sleptOn, woken, ret == kIOReturnSuccess);
 		if (ret != kIOReturnNotReady)
 			return ret;
-		if (!tgm_waiter_idle(waiter, seq, deadline)) {
+		woken = tgm_waiter_idle(waiter, seq, deadline);
+		if (!woken) {
 			IOLockLock(lock_);
 			chan = chans_[in->channel - 1];
 			const bool unwoken =

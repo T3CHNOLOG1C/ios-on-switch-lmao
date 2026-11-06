@@ -293,6 +293,7 @@ constexpr uint64_t kCheckNs = 1000000000;  // a quiet wait looks at PMC this oft
 constexpr uint64_t kGraceNs = 50000000;    // for a wake already under way
 constexpr uint32_t kStorm = 1000;          // consecutive interrupts nvkm did not handle
 volatile uint32_t gWakeSeq, gIrqRuns;
+uint64_t gIrqPasses[2];  // by line: stall, nonstall
 volatile int gIrqActive, gGpuOff;
 uint32_t gUnhandled;
 volatile uint32_t *gPmc;
@@ -331,12 +332,13 @@ bool pmcPending()
 // Work loop action for either GPU line (level; the GIC masks it while this runs). nvkm_intr unarms the GPU's
 // top-level interrupt enables, runs the subdev handlers and rearms, so the line is quiet on return. A line nvkm
 // keeps finding nothing on is stuck: panic rather than spin. Errors nvkm reported in the pass panic (nvxnu_error).
-void gpuInterrupt(OSObject *, IOInterruptEventSource *, int)
+void gpuInterrupt(OSObject *, IOInterruptEventSource *source, int)
 {
 	// a line taken before nvxnu_irq_suspend() whose pass runs after it: the GPU is off now
 	if (__atomic_load_n(&gGpuOff, __ATOMIC_ACQUIRE))
 		return;
 	__atomic_fetch_add(&gIrqRuns, 1, __ATOMIC_RELAXED);
+	__atomic_fetch_add(&gIrqPasses[source == gIrqSources[1]], 1, __ATOMIC_RELAXED);
 	gIrqErrorsLen = 0;
 	gIrqErrors[0] = 0;
 	__atomic_store_n(&gIrqThread, current_thread(), __ATOMIC_RELAXED);
@@ -414,6 +416,12 @@ extern "C" void nvxnu_word_wake_due(const volatile nvxnu_u32 *word, nvxnu_u32 se
 	    sleepUntil(word, seq, nvxnu_nanotime() + kGraceNs))
 		return;
 	gpuPanic("lost", what, value);
+}
+
+extern "C" void nvxnu_irq_passes(nvxnu_u64 *stall, nvxnu_u64 *nonstall)
+{
+	*stall = __atomic_load_n(&gIrqPasses[0], __ATOMIC_RELAXED);
+	*nonstall = __atomic_load_n(&gIrqPasses[1], __ATOMIC_RELAXED);
 }
 
 extern "C" nvxnu_u32 nvxnu_wake_seq(void)

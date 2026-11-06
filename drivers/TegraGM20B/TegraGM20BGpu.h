@@ -242,6 +242,9 @@ unsigned long tgm_owner_stats(char *out, unsigned long size);
 void tgm_stats_bo_import(uint64_t bytes, int read_only, int skipped, uint64_t ns,
 			 const uint64_t phase_ns[TGM_PHASES]);
 void tgm_stats_bind(int map, uint64_t pages, uint64_t ns);
+/* A fence wait that slept on `waiter`, then woke (woken 1) or reached its deadline (0), and found its fence done or
+ * not: the "waits" line's wakes, waits woken for another channel's fence, and wake-to-waiter latency. */
+void tgm_stats_wait(uint32_t waiter, int woken, int done);
 void tgm_stats_bo_free(uint64_t ns);
 void tgm_stats_prefault(uint64_t bytes);
 

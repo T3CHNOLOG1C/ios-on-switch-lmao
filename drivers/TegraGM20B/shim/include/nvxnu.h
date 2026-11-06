@@ -123,6 +123,8 @@ void nvxnu_irq_start(void);
  * nvxnu_idle() no longer looks at PMC); nvxnu_irq_resume() once it is back, before nvkm arms its interrupts. */
 void nvxnu_irq_suspend(void);
 void nvxnu_irq_resume(void);
+/* The interrupt passes run so far, by line. */
+void nvxnu_irq_passes(nvxnu_u64 *stall, nvxnu_u64 *nonstall);
 nvxnu_u32 nvxnu_wake_seq(void);
 void nvxnu_wake(void);
 int nvxnu_idle(nvxnu_u32 seq, nvxnu_u64 deadline_ns);

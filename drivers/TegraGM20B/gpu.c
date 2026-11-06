@@ -103,6 +103,14 @@ int tgm_stage(void)
  * waiter may still sleep on its channel's word while the channel is destroyed. */
 #define TGM_WAITERS 128
 static volatile u32 waiter_words[TGM_WAITERS];
+/* stats: when each word was last woken (ns), and this window's wakes and fence waits (the "waits" line) */
+static u64 waiter_woken_ns[TGM_WAITERS];
+
+static struct {
+	u32 wakes, slept, woken, other, deadline;
+	u64 lat_sum, lat_max;
+	u64 stall, nonstall; /* the interrupt passes at the window's start */
+} wstat;
 
 uint32_t tgm_waiter_seq(uint32_t waiter)
 {
@@ -1244,9 +1252,17 @@ uint32_t tgm_chan_waiter(struct tgm_chan *chan)
 	return (uint32_t)(chan->id % TGM_WAITERS);
 }
 
+static int stats_on(void);
+
 static void chan_wake_all_waiters(struct tgm_chan *chan)
 {
-	nvxnu_word_wake(&waiter_words[tgm_chan_waiter(chan)]);
+	u32 waiter = tgm_chan_waiter(chan);
+
+	if (stats_on()) {
+		__atomic_store_n(&waiter_woken_ns[waiter], nvxnu_nanotime(), __ATOMIC_RELAXED);
+		__atomic_fetch_add(&wstat.wakes, 1, __ATOMIC_RELAXED);
+	}
+	nvxnu_word_wake(&waiter_words[waiter]);
 }
 
 /* One line of what the GPU is doing about a channel: owner, hardware channel id, error, completed/submitted fence and
@@ -1703,6 +1719,56 @@ void tgm_stats_bo_free(uint64_t ns)
 		return;
 	__atomic_fetch_add(&mstat.free_n, 1, __ATOMIC_RELAXED);
 	stats_add(&mstat.free_ns, &mstat.free_max, ns);
+}
+
+void tgm_stats_wait(uint32_t waiter, int woken, int done)
+{
+	u64 lat;
+
+	if (!stats_on())
+		return;
+	__atomic_fetch_add(&wstat.slept, 1, __ATOMIC_RELAXED);
+	if (!woken) {
+		__atomic_fetch_add(&wstat.deadline, 1, __ATOMIC_RELAXED);
+		return;
+	}
+	__atomic_fetch_add(&wstat.woken, 1, __ATOMIC_RELAXED);
+	if (!done) {
+		__atomic_fetch_add(&wstat.other, 1, __ATOMIC_RELAXED);
+		return;
+	}
+	lat = nvxnu_nanotime() -
+	      __atomic_load_n(&waiter_woken_ns[waiter % TGM_WAITERS], __ATOMIC_RELAXED);
+	__atomic_fetch_add(&wstat.lat_sum, lat, __ATOMIC_RELAXED);
+	if (lat > __atomic_load_n(&wstat.lat_max, __ATOMIC_RELAXED))
+		__atomic_store_n(&wstat.lat_max, lat, __ATOMIC_RELAXED);
+}
+
+/* The "waits" line: GPU interrupt passes by line, channel wakes, and how the fence waits that slept woke. */
+static void stats_waits(u64 ms)
+{
+	u64 stall, nonstall, ds, dn, sum, max;
+	u32 wakes, slept, woken, other, deadline, per = ms ? (u32)ms : 1;
+
+	nvxnu_irq_passes(&stall, &nonstall);
+	ds = stall - wstat.stall;
+	dn = nonstall - wstat.nonstall;
+	wstat.stall = stall;
+	wstat.nonstall = nonstall;
+	wakes = __atomic_exchange_n(&wstat.wakes, 0, __ATOMIC_RELAXED);
+	slept = __atomic_exchange_n(&wstat.slept, 0, __ATOMIC_RELAXED);
+	woken = __atomic_exchange_n(&wstat.woken, 0, __ATOMIC_RELAXED);
+	other = __atomic_exchange_n(&wstat.other, 0, __ATOMIC_RELAXED);
+	deadline = __atomic_exchange_n(&wstat.deadline, 0, __ATOMIC_RELAXED);
+	sum = __atomic_exchange_n(&wstat.lat_sum, 0, __ATOMIC_RELAXED);
+	max = __atomic_exchange_n(&wstat.lat_max, 0, __ATOMIC_RELAXED);
+	nvxnu_stats("tegra-gm20b: waits %llu ms: interrupt passes %llu/s stall, %llu/s nonstall; "
+		    "channel wakes "
+		    "%llu/s; fence waits slept %llu/s: %u woken (%u for another channel's fence, "
+		    "wake to waiter mean %llu us max %llu us), %u at their deadline",
+		    ms, ds * 1000 / per, dn * 1000 / per, (u64)wakes * 1000 / per,
+		    (u64)slept * 1000 / per, woken, other,
+		    woken > other ? sum / (woken - other) / 1000 : 0, max / 1000, deadline);
 }
 
 void tgm_stats_prefault(uint64_t bytes)
@@ -2171,6 +2237,7 @@ static void stats_tick(void)
 	nvxnu_stats("tegra-gm20b: stats2 %s", line);
 	stats_exec_owners(line, sizeof(line), rate);
 	stats_mem(ms);
+	stats_waits(ms);
 	/* The lazy IOSurface-coherency hooks' work this window (the XNU lock/unlock hook; tgm_coherency_*): GPU-written imports
 	 * invalidated for a CPU read lock, and CPU-written imports cleaned for the GPU at a write unlock. Zero on the render
 	 * path, so these count only surfaces the CPU actually locks. */

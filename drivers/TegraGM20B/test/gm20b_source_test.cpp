@@ -250,10 +250,10 @@ TEST(GM20BSleepSource, GpuTouchingPathsGoThroughTheGate)
 					   "void *repv, u32 repc)")),
 		    HasSubstr("if (tgm_gate_is_shut(&sc7_gate)) nvxnu_wake();"));
 	// a pass for an interrupt taken before the GPU's power went reads nothing
-	EXPECT_THAT(
-		flat(definition(SourceText("../shim/xnu_glue.cpp"),
-				"void gpuInterrupt(OSObject *, IOInterruptEventSource *, int)")),
-		HasSubstr("if (__atomic_load_n(&gGpuOff, __ATOMIC_ACQUIRE)) return;"));
+	EXPECT_THAT(flat(definition(
+			    SourceText("../shim/xnu_glue.cpp"),
+			    "void gpuInterrupt(OSObject *, IOInterruptEventSource *source, int)")),
+		    HasSubstr("if (__atomic_load_n(&gGpuOff, __ATOMIC_ACQUIRE)) return;"));
 }
 
 // Fence waits sleep on their channel's word: a fence interrupt wakes only the waiters of channels whose fence moved,
@@ -272,10 +272,10 @@ TEST(GM20BFenceWakeSource, WaitersWakeByChannel)
 		    HasSubstr("chan_wake_all_waiters(chan);"));
 	expectBefore(flat(definition(gpu(), "void tgm_chan_del(struct tgm_chan **pchan)")),
 		     "*pchan = NULL;", "nvxnu_word_wake(&waiter_words[waiter]);");
-	EXPECT_THAT(
-		flat(definition(SourceText("../shim/xnu_glue.cpp"),
-				"void gpuInterrupt(OSObject *, IOInterruptEventSource *, int)")),
-		HasSubstr("nvxnu_wake();"));
+	EXPECT_THAT(flat(definition(
+			    SourceText("../shim/xnu_glue.cpp"),
+			    "void gpuInterrupt(OSObject *, IOInterruptEventSource *source, int)")),
+		    HasSubstr("nvxnu_wake();"));
 	const std::string wait =
 		flat(Between(client(), "IOReturn AGXDeviceUserClient::waitFence(", "\n}\n"));
 	expectBefore(wait, "seq = tgm_waiter_seq(waiter);", "tgm_chan_completed(chan) - in->seqno");
