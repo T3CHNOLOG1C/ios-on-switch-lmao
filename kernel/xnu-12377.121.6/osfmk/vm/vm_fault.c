@@ -4532,10 +4532,11 @@ switch_zero_fill_around(
 		if (vm_page_free_count <= vm_page_free_target) {
 			break;
 		}
-		m = vm_page_alloc(object, off);
+		m = vm_page_grab_options(vm_page_grab_options_for_object(object));
 		if (m == VM_PAGE_NULL) {
 			break;
 		}
+		vm_page_insert(m, object, off);
 		vm_fault_cs_clear(m);
 		m->vmp_pmapped = TRUE;
 		vm_page_zero_fill(m);
@@ -4545,7 +4546,7 @@ switch_zero_fill_around(
 		kr = vm_fault_enter(m, pmap, va, PAGE_SIZE, 0, prot, caller_prot, FALSE, FALSE, VM_KERN_MEMORY_NONE,
 		    fault_info, &need_retry, &type_of_fault, &lock_type);
 		if (m->vmp_busy) {
-			PAGE_WAKEUP_DONE(m);
+			vm_page_wakeup_done(object, m);
 		}
 		if (kr != KERN_SUCCESS || need_retry) {
 			break;
@@ -4646,11 +4647,6 @@ vm_map_lookup_object_and_lock_entry(
 	 * as a mask against the mapping's actual protections, not as an
 	 * absolute value.
 	 */
-	/* Switch (r17-faults): for the kprof faults lines (switch_kprof_fault, at done) */
-	const uint64_t          switch_began = mach_absolute_time();
-	bool                    switch_device = false;    /* the page entered was a device pager's */
-	bool                    switch_purgeable = false; /* a zero fill in a purgeable object */
-	unsigned int            switch_around = 0;        /* pages the zero-fill fault-around entered */
 	mask_protections = (fault_type & VM_PROT_IS_MASK) ? TRUE : FALSE;
 	force_copy = (fault_type & VM_PROT_COPY) ? TRUE : FALSE;
 	fault_type &= VM_PROT_ALL;
@@ -4916,6 +4912,11 @@ vm_fault_internal(
 	vm_object_fault_info_t fault_info,
 	vm_map_lock_ctx_t      vml_ctx_for_vaddr)
 {
+	/* Switch (r17-faults): for the kprof faults lines (switch_kprof_fault, at done) */
+	const uint64_t          switch_began = mach_absolute_time();
+	bool                    switch_device = false;    /* the page entered was a device pager's */
+	bool                    switch_purgeable = false; /* a zero fill in a purgeable object */
+	unsigned int            switch_around = 0;        /* pages the zero-fill fault-around entered */
 	boolean_t               wired;          /* Should mapping be wired down? */
 	vm_object_t             object;         /* Top-level object */
 	vm_object_offset_t      offset;         /* Top-level offset */
@@ -5754,7 +5755,7 @@ FastPmapEnter:
 				assertf(VM_PAGE_OBJECT(m) == m_object, "m=%p m_object=%p object=%p", m, m_object, object);
 				assert(VM_PAGE_OBJECT(m) != VM_OBJECT_NULL);
 				need_retry = false;
-				switch_device = m->vmp_private;
+				switch_device = vm_page_is_private(m);
 				if (caller_pmap) {
 					kr = vm_fault_enter(m,
 					    caller_pmap,
@@ -6516,7 +6517,7 @@ zero_fill_cleanup:
 
 				/* Switch (r17-faults): the rest of this page's 16 KiB group, under the same locks */
 				if (kr == KERN_SUCCESS && need_retry == FALSE && type_of_fault == DBG_ZERO_FILL_FAULT &&
-				    !change_wiring && !wired && !rtfault && caller_pmap == PMAP_NULL && physpage_p == NULL &&
+				    !fault_info->fi_change_wiring && !wired && !rtfault && caller_pmap == PMAP_NULL && physpage_p == NULL &&
 				    top_object == VM_OBJECT_NULL && map == original_map && real_map == map &&
 				    fault_page_size == PAGE_SIZE && !map->no_zero_fill) {
 					switch_around = switch_zero_fill_around(object, vm_object_trunc_page(offset), pmap, vaddr,
@@ -7072,7 +7073,7 @@ handle_copy_delay:
 		assertf(VM_PAGE_OBJECT(m) == m_object, "m=%p m_object=%p", m, m_object);
 		assert(VM_PAGE_OBJECT(m) != VM_OBJECT_NULL);
 		need_retry = false;
-		switch_device = m->vmp_private;
+		switch_device = vm_page_is_private(m);
 		if (caller_pmap) {
 			kr = vm_fault_enter(m,
 			    caller_pmap,
@@ -7402,7 +7403,7 @@ done:
 			}
 		}
 		switch_kprof_fault(switch_class,
-		    (change_wiring ? SWITCH_FAULT_WIRE : 0) | (original_map->pmap == kernel_pmap ? SWITCH_FAULT_KERNEL : 0) |
+		    (fault_info->fi_change_wiring ? SWITCH_FAULT_WIRE : 0) | (original_map->pmap == kernel_pmap ? SWITCH_FAULT_KERNEL : 0) |
 		    (switch_purgeable && switch_class == SWITCH_FAULT_ZF ? SWITCH_FAULT_PURGEABLE : 0),
 		    switch_began, (uint64_t)vaddr, switch_around);
 	}

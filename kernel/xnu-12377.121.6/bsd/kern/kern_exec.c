@@ -8502,7 +8502,7 @@ native_owner_data_prepare(proc_t p, user_addr_t scratch)
 			struct timespec interval = {.tv_sec = 0, .tv_nsec = 100000000};
 			(void)msleep((void *)&native_owner_data_stage, NULL, PWAIT, "switchData", &interval);
 		}
-		if (size != (switch_raw ? SWITCH_RAW_BYTES : UINT64_C(17179869184))) goto done;
+		if (!switch_raw && size != UINT64_C(17179869184)) goto done;
 	} else
 #endif
 	if (!native_ram_block_volume_seed(XNU_OWNER_DATA_VOLUME_UUID, &device, device_path,

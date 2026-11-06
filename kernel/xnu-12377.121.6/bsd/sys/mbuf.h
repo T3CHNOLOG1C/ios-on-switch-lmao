@@ -1745,9 +1745,9 @@ static inline void
 m_add_hdr_crumb_interface_output(mbuf_t m, int index, bool chain)
 {
 	if (chain) {
-		m_add_hdr_crumb_chain(m, index, CRUMB_INTERFACE_FLAG);
+		m_add_hdr_crumb_chain((struct mbuf *)m, index, CRUMB_INTERFACE_FLAG);
 	} else {
-		m_add_hdr_crumb(m, index, CRUMB_INTERFACE_FLAG);
+		m_add_hdr_crumb((struct mbuf *)m, index, CRUMB_INTERFACE_FLAG);
 	}
 }
 
@@ -1755,9 +1755,9 @@ static inline void
 m_add_hdr_crumb_interface_input(mbuf_t m, int index, bool chain)
 {
 	if (chain) {
-		m_add_hdr_crumb_chain(m, index | CRUMB_INPUT_FLAG, CRUMB_INTERFACE_FLAG);
+		m_add_hdr_crumb_chain((struct mbuf *)m, index | CRUMB_INPUT_FLAG, CRUMB_INTERFACE_FLAG);
 	} else {
-		m_add_hdr_crumb(m, index | CRUMB_INPUT_FLAG, CRUMB_INTERFACE_FLAG);
+		m_add_hdr_crumb((struct mbuf *)m, index | CRUMB_INPUT_FLAG, CRUMB_INTERFACE_FLAG);
 	}
 }
 __private_extern__ void mbuf_drain(boolean_t);

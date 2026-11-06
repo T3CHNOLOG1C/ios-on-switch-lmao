@@ -5116,7 +5116,7 @@ static void *volatile switch_render_server_space;
 static struct switch_render_senders switch_render_senders;
 static LCK_GRP_DECLARE(switch_render_senders_grp, "switch_render_senders");
 static LCK_SPIN_DECLARE(switch_render_senders_lock, &switch_render_senders_grp);
-extern char *proc_best_name(struct proc *proc);
+extern const char *proc_best_name(struct proc *proc);
 
 void
 switch_render_server_watch(task_t task)

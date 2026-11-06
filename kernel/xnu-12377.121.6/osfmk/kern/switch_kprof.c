@@ -78,6 +78,7 @@
 #include <os/log.h>
 #include <pexpert/pexpert.h>
 #include <vm/vm_shared_region.h>
+#include <vm/vm_shared_region_xnu.h>
 #include <vm/vm_page.h>
 #include <vm/vm_protos.h>
 #include <kern/host_statistics.h>
@@ -501,7 +502,7 @@ kprof_sample(struct kprof_cpu *kc)
 	b->samples++;
 	ts = kprof_task_slot(b->task, 7, task_pid(task));
 	if (ts != NULL && ts->name[0] == '\0') {
-		task_best_name(task, ts->name, sizeof(ts->name));
+		strlcpy(ts->name, task_best_name(task), sizeof(ts->name));
 	}
 	if (PSR64_IS_USER(get_saved_state_cpsr(state))) {
 		const uint64_t     key = kprof_user_key(task, get_saved_state_pc(state));
@@ -633,7 +634,7 @@ switch_kprof_wait(unsigned int kind, uint64_t elapsed, uint64_t bytes)
 	if (cpu < kprof_ncpus && (ts = kprof_task_slot(kprof_cpus[cpu].buf[kprof_cpus[cpu].active]->task, 7,
 	    task_pid(task))) != NULL) {
 		if (ts->name[0] == '\0') {
-			task_best_name(task, ts->name, sizeof(ts->name));
+			strlcpy(ts->name, task_best_name(task), sizeof(ts->name));
 		}
 		switch (kind) {
 		case 0:
@@ -726,7 +727,7 @@ switch_kprof_fault(unsigned int cls, unsigned int flags, uint64_t began, uint64_
 	ts = kprof_task_slot(b->task, 7, task_pid(task));
 	if (ts != NULL) {
 		if (ts->name[0] == '\0') {
-			task_best_name(task, ts->name, sizeof(ts->name));
+			strlcpy(ts->name, task_best_name(task), sizeof(ts->name));
 		}
 		ts->faults[cls]++;
 		ts->fault_abs += took;
@@ -773,7 +774,7 @@ switch_kprof_fast_fault(bool access_flag)
 		}
 		if ((ts = kprof_task_slot(b->task, 7, task_pid(task))) != NULL) {
 			if (ts->name[0] == '\0') {
-				task_best_name(task, ts->name, sizeof(ts->name));
+				strlcpy(ts->name, task_best_name(task), sizeof(ts->name));
 			}
 			if (access_flag) {
 				ts->fast_af++;
@@ -797,7 +798,7 @@ switch_kprof_user_trap(arm_saved_state_t *state, uint32_t esr)
 	uint64_t            pc, lr;
 	unsigned int        slot;
 
-	task_best_name(task, name, sizeof(name));
+	strlcpy(name, task_best_name(task), sizeof(name));
 	for (unsigned int i = 0; i < MIN(os_atomic_load(&used, acquire), KPROF_TRAP_NAMES); i++) {
 		if (strncmp(names[i], name, sizeof(name)) == 0) {
 			return;
@@ -849,7 +850,7 @@ switch_footprint_breakdown(task_t task, char *buf, size_t size)
 		ledger_amount_t balance = 0;
 		int             n;
 
-		if (parts[i].entry < 0 || ledger_get_balance(task->ledger, parts[i].entry, &balance) != KERN_SUCCESS) {
+		if (parts[i].entry < 0 || ledger_get_balance(task->ledger, parts[i].entry, LEO_SETTLE, &balance) != KERN_SUCCESS) {
 			continue;
 		}
 		n = snprintf(buf + len, size - len, "%s%s %lld", len ? ", " : "", parts[i].name, (long long)(balance >> 10));
@@ -1248,7 +1249,7 @@ kprof_refresh_names(void)
 		for (unsigned int probe = 0; probe < KPROF_PROBES && kprof_tasks[i].used; probe++, i = (i + 1) & 255) {
 			if (kprof_tasks[i].pid == pid) {
 				t = &kprof_tasks[i];
-				task_best_name(task, t->name, sizeof(t->name));
+				strlcpy(t->name, task_best_name(task), sizeof(t->name));
 				break;
 			}
 		}

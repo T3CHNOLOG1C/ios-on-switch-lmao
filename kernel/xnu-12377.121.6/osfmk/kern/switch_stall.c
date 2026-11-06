@@ -38,8 +38,10 @@
 #include <os/log.h>
 #include <ptrauth.h>
 #include <vm/vm_kern.h>
+#include <vm/vm_kern_xnu.h>
 #include <vm/vm_map.h>
 #include <vm/vm_shared_region.h>
+#include <vm/vm_shared_region_xnu.h>
 
 void switch_stall_exec(thread_t thread);
 void switch_stall_tick(uint64_t now);
@@ -111,7 +113,7 @@ switch_stall_exec(thread_t thread)
 	task_t      stale = TASK_NULL;
 	task_t      task = get_threadtask(thread);
 
-	task_best_name(task, name, sizeof(name));
+	strlcpy(name, task_best_name(task), sizeof(name));
 	for (unsigned int i = 0; i < sizeof(stall_slots) / sizeof(stall_slots[0]); i++) {
 		struct stall_slot *slot = &stall_slots[i];
 
@@ -245,7 +247,7 @@ stall_special_reply(ipc_port_t port, struct stall_snapshot *ss)
 		ss->locked = true;
 		return;
 	}
-	if (ip_active(port) && port->ip_specialreply) {
+	if (ip_active(port) && ip_is_special_reply_port(port)) {
 		ss->special_reply = true;
 		if (ipc_special_reply_get_pid_locked(port) != 0) {
 			ss->owner.pid = ipc_special_reply_get_pid_locked(port);

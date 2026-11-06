@@ -968,21 +968,27 @@ IONVRAMCHRPHandler::switchRestore(IODTNVRAM *nvram, const uint8_t *image, IOByte
 		return kIOReturnBadArgument;
 	}
 
-	parsed = IONVRAMCHRPHandler::init(nvram, image, length, restored);
+	parsed = IONVRAMCHRPHandler::init(nvram, image, length);
 	if (parsed == nullptr) {
 		return kIOReturnNoMemory;
 	}
 	parsed->unserializeVariables();
+	parsed->getVarDict(restored);
 	if (parsed->_nvramImage) {
 		IODeleteData(parsed->_nvramImage, uint8_t, parsed->_bankSize);
 	}
+	IORWLockFree(parsed->_variableLock);
+	IOLockFree(parsed->_controllerLock);
 	delete parsed;
+	if (restored == nullptr) {
+		return kIOReturnNoMemory;
+	}
 
 	iter = OSCollectionIterator::withCollection(restored.get());
 	if (iter == nullptr) {
 		return kIOReturnNoMemory;
 	}
-	IORWLockWrite(nvram->_variableLock);
+	NVRAMWRITELOCK(live->_variableLock);
 	while ((key = OSDynamicCast(OSSymbol, iter->getNextObject()))) {
 		const char *name;
 		uuid_t     guid;
@@ -1007,7 +1013,7 @@ IONVRAMCHRPHandler::switchRestore(IODTNVRAM *nvram, const uint8_t *image, IOByte
 	if (generation > live->_generation) {
 		live->_generation = generation;
 	}
-	IORWLockUnlock(nvram->_variableLock);
+	NVRAMRWUNLOCK(live->_variableLock);
 
 	return kIOReturnSuccess;
 }
