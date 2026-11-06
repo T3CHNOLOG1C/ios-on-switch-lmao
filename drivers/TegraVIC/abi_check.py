@@ -105,10 +105,10 @@ FUNCTIONS = [
         'IOSurface::prepare(): wire count +0x20c, descriptor prepare',
     ),
     ('_tegra_vic_ios_complete', 0xFFFFFFF005B9FF64, 'ff8301d1f44f04a9fd7b05a9fd430191', 'IOSurface::complete()'),
-    # r18-planes: the end of a device's write (re/seed in r18-planes' scratch): under the surface's IOLock (+0x50), unless
-    # options bit 0 (read), the seed (the u32 at +0xc of the surface's IOSurfaceRoot entry, IOSurface+0x178) and the
-    # write count at +0x10 go up and the cache flags at +0x3b0 get 0x1c; returns 0. What Apple's media engines call on a
-    # destination when a job is done (AppleM2ScalerCSCDriver's frame-done teardown with 0, its source with 1).
+    # r18-planes: the end of a device's write (re/seed in r18-planes' scratch): under the surface's IOLock (+0x50),
+    # unless options bit 0 (read), the seed (the u32 at +0xc of the surface's IOSurfaceRoot entry, IOSurface+0x178) and
+    # the write count at +0x10 go up and the cache flags at +0x3b0 get 0x1c; returns 0. What Apple's media engines call
+    # on a destination when a job is done (AppleM2ScalerCSCDriver's frame-done teardown with 0, its source with 1).
     (
         '_tegra_vic_ios_device_unlock',
         0xFFFFFFF005BA0FC8,
@@ -116,8 +116,8 @@ FUNCTIONS = [
         'device write end (surface, options): seed +1 under the surface lock',
     ),
 ]
-# Fields a function must read or write (offset in the function, instruction): each plane accessor's `add x8, x8, #field`;
-# the device write-end's seed increment.
+# Fields a function must read or write (offset in the function, instruction): each plane accessor's
+# `add x8, x8, #field`; the device write-end's seed increment.
 FIELDS = {
     '_tegra_vic_ios_plane_height': [(0x80, '08210091')],  # add x8, x8, #0x8
     '_tegra_vic_ios_plane_offset': [(0x80, '08610091')],  # add x8, x8, #0x18

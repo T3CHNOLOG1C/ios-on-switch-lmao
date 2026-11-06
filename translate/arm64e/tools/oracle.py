@@ -47,7 +47,7 @@ def arm64e_cli() -> str:
 
 
 def invalid(words: list[int], args: list[str]) -> set[int]:
-    """Indices of the words LLVM cannot decode with these options."""
+    """Return the indices of the words LLVM cannot decode with these options."""
     bad = set()
     for base in range(0, len(words), CHUNK):
         chunk = words[base : base + CHUNK]

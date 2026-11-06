@@ -122,7 +122,7 @@ def stream(remote: Remote, member: dict[str, int], offset: int) -> tuple[str, st
 
 
 def aea_key(remote: Remote, offset: int) -> str:
-    """The `aea decrypt -key-value` key of the AEA member stored at offset."""
+    """Return the `aea decrypt -key-value` key of the AEA member stored at offset."""
     profile, length = aea.prologue(remote.read(offset, offset + aea.PROLOGUE))
     if profile != aea.SYMMETRIC_PROFILE:
         raise SystemExit(f'AEA profile {profile} at {offset}: only the symmetric profile is supported')

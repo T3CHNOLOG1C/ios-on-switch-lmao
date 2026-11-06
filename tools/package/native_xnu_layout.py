@@ -486,7 +486,10 @@ def build_layout(
         'boot_virt_base': boot_virt,
         'boot_memory_size': boot_size,
         'boot_memory_actual': boot_actual,
-        'proof_boundary': 'Host layout only; addresses and exclusions do not establish native RAM ownership, launchability or a kernel boot.',
+        'proof_boundary': (
+            'Host layout only; addresses and exclusions do not establish native RAM ownership, launchability or a '
+            'kernel boot.'
+        ),
         'sources': sources,
         'phys_base': physical_base,
         'virt_base': kernel.base,

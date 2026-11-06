@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""The board ADT (//boot:adt) with what iPadOS userland expects of a J120, the radios' nodes, the overlay's union
-directories, the loader's zeroed slots and, with --smp, all four A57s.
+"""The board ADT (//boot:adt) with what iPadOS userland expects of a J120.
+
+Also the radios' nodes, the overlay's union directories, the loader's zeroed slots and, with --smp, all four A57s.
 
     adt_edit.py --adt BASE --overlay-plan PLAN --bt-patch HCD --portrait-header H [--smp]
                 [--a64x-cache-pretranslated LIST] --out ADT
@@ -23,15 +24,15 @@ from native_xnu_layout import parse_adt
 # 'standardMuxOnly' (AppleUSBMux alone, no userland function driver). J120's own stdMuxPTPEthValIDA needs a dozen
 # function drivers this port lacks. None leaves /arm-io/usb-device out, and the driver then does nothing.
 USB_DEVICE_CONFIGURATION = 'unknownHardware'
-# USB 2.0 host mode on the same port (drivers/SwitchUSB SwitchXHCI): a keyboard, mouse or flash drive through a USB-C OTG
-# adapter or an unpowered hub. True writes /arm-io/usb-xhci, the driver's switch; the role then follows the BM92T36.
+# USB 2.0 host mode on the same port (drivers/SwitchUSB SwitchXHCI): a keyboard, mouse or flash drive through a USB-C
+# OTG adapter or an unpowered hub. True writes /arm-io/usb-xhci, the driver's switch; the role then follows the BM92T36.
 USB_HOST = True
 # The panel's colour gamut as iOS learns it: /product artwork-display-gamut, MobileGestalt's ArtworkDisplayGamut, whose
 # HasExtendedColorDisplay is "== P3". 'sRGB' (what sRGB iPads carry) turns off deep colour everywhere: QuartzCore's
 # CADeviceUseCIF10 (so the display reports no extended colours, and CADisplayMode, FBSDisplayConfiguration and UIScreen
-# say sRGB), UIKit's _supportsDeepColor, and WebCore's screenSupportsExtendedColor, so WebKit tiles are BGRA8 rather than
-# two-plane b3a8 and Core Animation stops making w30r surfaces, formats the GM20B only reaches through copies. 'P3' is
-# J120's own. Asset catalog images that this IPSW ships only in P3 (some onboarding and tips art) are not found under
+# say sRGB), UIKit's _supportsDeepColor, and WebCore's screenSupportsExtendedColor, so WebKit tiles are BGRA8 rather
+# than two-plane b3a8 and Core Animation stops making w30r surfaces, formats the GM20B only reaches through copies. 'P3'
+# is J120's own. Asset catalog images that this IPSW ships only in P3 (some onboarding and tips art) are not found under
 # sRGB. The kernel drops MobileGestalt's cache when this changes (kern_exec.c native_switch_gamut_cache).
 DISPLAY_GAMUT = 'sRGB'
 
@@ -107,8 +108,9 @@ def ipad_adt(
     bt_patch: bytes | None = None,
     portrait: bool = False,
 ) -> bytes:
-    """The inherited Switch tree plus what iPadOS userland expects of a J120
-    (values of UniXNU-qemu's make-qemu-adt.py, which boots this build to SpringBoard).
+    """Return the inherited Switch tree plus what iPadOS userland expects of a J120.
+
+    The values are those of UniXNU-qemu's make-qemu-adt.py, which boots this build to SpringBoard.
     """
     tree, end = adt_parse(data)
     if end != len(data):

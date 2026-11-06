@@ -1,8 +1,9 @@
-"""bl33.bin as this entry ships it (boot/loader/stage.h), proven on the host: the composed file as hekate puts it at
-0xAA000000 holds the boot script, loader, exporter and DTB where the patched environment and the script look,
-satisfies every memory check of the script, and U-Boot's bytes are untouched apart from its default environment. That
-the loader's own decoder (copy.c) reads the exact window back from the addresses it was built for is
-//boot/loader/test:bl33_window_test.
+"""bl33.bin as this entry ships it (boot/loader/stage.h), proven on the host.
+
+The composed file as hekate puts it at 0xAA000000 holds the boot script, loader, exporter and DTB where the patched
+environment and the script look, satisfies every memory check of the script, and U-Boot's bytes are untouched apart
+from its default environment. That the loader's own decoder (copy.c) reads the exact window back from the addresses it
+was built for is //boot/loader/test:bl33_window_test.
 """
 
 import random

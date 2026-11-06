@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
-"""U-Boot's half of the handoff: boot/u-boot-script.txt with this build's window and slot values, as text and as the
-legacy script image bl33.py stages in bl33.bin (loader_abi.SCRIPT_SLOT), where the patched U-Boot sources it.
+"""U-Boot's half of the handoff: boot/u-boot-script.txt with this build's window and slot values.
+
+As text and as the legacy script image bl33.py stages in bl33.bin (loader_abi.SCRIPT_SLOT), where the patched U-Boot
+sources it.
 
     boot_script.py --template T --constants C --dtb DTB --text OUT --image OUT
 """
@@ -16,8 +18,10 @@ from uimage import legacy_image
 
 
 def boot_script(text: str, constants: dict, dtb_bytes: int) -> str:
-    """The template with every @NAME@ filled: the staged window's header and trailer words (boot/loader/stage.h), the
-    slots and the bootargs.txt page.
+    """Fill every @NAME@ of the template.
+
+    The values: the staged window's header and trailer words (boot/loader/stage.h), the slots and the bootargs.txt
+    page.
     """
     staged = constants['PACKED_BYTES']
     trailer = STAGE_SOURCE + staged
@@ -44,7 +48,7 @@ def boot_script(text: str, constants: dict, dtb_bytes: int) -> str:
 
 
 def script_image(script: str) -> bytes:
-    """The script as U-Boot's source command takes it: a legacy script image of one part."""
+    """Wrap the script as U-Boot's source command takes it: a legacy script image of one part."""
     data = script.encode('ascii')
     return legacy_image(struct.pack('>II', len(data), 0) + data, os_type=17, kind=6, name='Boot')
 

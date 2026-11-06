@@ -19,7 +19,7 @@ RELEASE_LINE = APPLE_KEYSTORE
 
 
 def command_line(smp: bool, release: bool = False) -> str:
-    """The built-in line for this profile; four cores or one is the ADT's (adt_edit.py --smp), not the line's."""
+    """Return the built-in line for this profile; four cores or one is the ADT's (adt_edit.py --smp), not the line's."""
     del smp
     return RELEASE_LINE if release else DEBUG_LINE
 

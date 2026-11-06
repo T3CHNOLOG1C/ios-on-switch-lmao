@@ -1,8 +1,9 @@
-"""The staged kernel window of this build decodes to the layout image: every block of runs.h (the table the loader
-compiles in) taken from kernel-window.bin, LZ4 blocks through lz4 -d (each wrapped in a one-block LZ4 frame), stored
-blocks as they are, laid at their offsets in an empty window, gives exactly the bytes the layout made (plan.json's
-image: its size and SHA-256). So the compression (its level, its block size, its shards) changes the staged bytes,
-never the kernel the loader copies into place.
+"""The staged kernel window of this build decodes to the layout image.
+
+Every block of runs.h (the table the loader compiles in) taken from kernel-window.bin, LZ4 blocks through lz4 -d (each
+wrapped in a one-block LZ4 frame), stored blocks as they are, laid at their offsets in an empty window, gives exactly
+the bytes the layout made (plan.json's image: its size and SHA-256). So the compression (its level, its block size, its
+shards) changes the staged bytes, never the kernel the loader copies into place.
 
 usage: window_decode_test.py LZ4 KERNEL-WINDOW-FILES...   (//boot:package's kernel_window output group)
 """
@@ -45,7 +46,7 @@ def xxh32(data: bytes, seed: int = 0) -> int:
 
 
 def one_block_frame(block: bytes) -> bytes:
-    """An LZ4 frame holding one compressed block: version 1, independent blocks, no checksums, 4 MiB maximum."""
+    """Wrap one compressed block in an LZ4 frame: version 1, independent blocks, no checksums, 4 MiB maximum."""
     descriptor = bytes([0x60, 0x70])
     header = LZ4_MAGIC + descriptor + bytes([(xxh32(descriptor) >> 8) & 0xFF])
     return header + struct.pack('<I', len(block)) + block + struct.pack('<I', 0)

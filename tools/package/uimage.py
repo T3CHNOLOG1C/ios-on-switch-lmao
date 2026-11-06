@@ -8,7 +8,7 @@ LOAD = 0xA0000000
 
 
 def legacy_image(data: bytes, *, os_type: int, kind: int, name: str, load: int = 0, entry: int = 0) -> bytes:
-    """`data` behind a legacy header (architecture 22, AArch64; uncompressed), checked by decoding it again."""
+    """Put `data` behind a legacy header (architecture 22, AArch64; uncompressed), checked by decoding it again."""
     title = name.encode('ascii')
     if len(title) > 32:
         raise ValueError('legacy image name is too long')

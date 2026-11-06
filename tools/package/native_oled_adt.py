@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""The Apple DeviceTree of the native OLED board (generate_adt): //boot:adt's full-RAM root-boot profile, which the
-package then gives its iPad identity (adt_edit.py).
+"""The Apple DeviceTree of the native OLED board (generate_adt).
+
+//boot:adt's full-RAM root-boot profile, which the package then gives its iPad identity (adt_edit.py).
 
 This is a fixed board description, not a conversion of the QEMU tree. It does
 not establish memory ownership, interrupt delivery, or a successful XNU boot.
@@ -41,7 +42,7 @@ def _node(name: str, properties: Iterable[tuple[str, bytes]] = (), children: Seq
 
 
 def _empty_nvram_proxy() -> list[tuple[str, bytes]]:
-    """An empty, volatile CHRP v1 bank for the actual IODTNVRAM consumer.
+    """Return an empty, volatile CHRP v1 bank for the actual IODTNVRAM consumer.
 
     ArmDTPlatform requires this bootstrap service. The 8 KiB bank and 2 KiB
     common partition are software allocations, not claimed OLED hardware.

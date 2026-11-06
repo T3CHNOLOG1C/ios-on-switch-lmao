@@ -30,7 +30,7 @@ FLAT = {
 
 
 def pinned():
-    """The pinned plists: runfiles under Bazel, the checkout otherwise."""
+    """Find the pinned plists: runfiles under Bazel, the checkout otherwise."""
     for base in (os.environ.get('TEST_SRCDIR', ''), str(Path(__file__).resolve().parents[2])):
         for root in (Path(base) / '_main', Path(base)):
             found = sorted((root / 'bazel/pinned/overlay/wallpaper-1x').glob('*.plist'))

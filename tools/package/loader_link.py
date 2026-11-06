@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""The native loader linked (its objects are compiled by Bazel, one action per source: boot/defs.bzl) and wrapped for
-U-Boot's bootm.
+"""The native loader linked and wrapped for U-Boot's bootm.
+
+Its objects are compiled by Bazel, one action per source (boot/defs.bzl).
 
     loader_link.py --ld-lld P --objcopy P --readelf P --linker-script LD --constants C --out LOADER.UBOOT OBJ...
 
@@ -56,7 +57,7 @@ def validate_elf(data: bytes) -> dict:
 
 
 def block_table(readelf: Path, objects: list[Path]) -> str:
-    """The kernel window's block table (copy.c's loader_blocks, runs.h) in the objects, as words for a failure."""
+    """Describe the kernel window's block table (copy.c's loader_blocks, runs.h) in the objects, for a failure."""
     for obj in objects:
         symbols = subprocess.run([readelf, '-sW', obj], capture_output=True, text=True).stdout
         for line in symbols.splitlines():
@@ -69,8 +70,8 @@ def block_table(readelf: Path, objects: list[Path]) -> str:
 
 def too_big(what: str, readelf: Path, objects: list[Path]) -> SystemExit:
     return SystemExit(
-        f'{what}; {block_table(readelf, objects)}. The loader must end below 0x{STAMPS_SLOT:x} (stamps.h): fewer, larger '
-        'LZ4 blocks (loader_abi.LZ4_BLOCK) or a smaller loader'
+        f'{what}; {block_table(readelf, objects)}. The loader must end below 0x{STAMPS_SLOT:x} (stamps.h): '
+        'fewer, larger LZ4 blocks (loader_abi.LZ4_BLOCK) or a smaller loader'
     )
 
 

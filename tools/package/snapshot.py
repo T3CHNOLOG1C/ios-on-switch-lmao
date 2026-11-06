@@ -1,6 +1,7 @@
-"""snapshot.py --boot DIR --gpu DIR NAME: copy the built boot entry and Metal bundle to <state>/lkg/<NAME>, where
-<state> is ~/Library/Application Support/switch-ios ($SWITCH_HOME overrides it), outside every checkout
-(switchroot/, bootloader/, overlay/ and gpu/), for rollback and for deploying exactly that build later:
+"""snapshot.py --boot DIR --gpu DIR NAME: copy the built boot entry and Metal bundle to <state>/lkg/<NAME>.
+
+<state> is ~/Library/Application Support/switch-ios ($SWITCH_HOME overrides it), outside every checkout (switchroot/,
+bootloader/, overlay/ and gpu/). The snapshot is for rollback and for deploying exactly that build later:
 
     bazel run //boot:snapshot -- 1900-r9-something
     LKG="$HOME/Library/Application Support/switch-ios/lkg/1900-r9-something"

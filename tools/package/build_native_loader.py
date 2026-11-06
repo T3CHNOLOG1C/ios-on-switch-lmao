@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""The kernel window the native loader copies into place, and the loader's generated headers: steps of //boot:package
-(boot/defs.bzl), each its own action.
+"""The kernel window the native loader copies into place, and the loader's generated headers.
+
+Steps of //boot:package (boot/defs.bzl), each its own action:
 
     build_native_loader.py layout --kernel K --adt ADT --trustcache BUNDLE --data-seed SEED --boot-args F \
         --plan OUT --blocks DIR
@@ -70,7 +71,10 @@ LIMIT = 128 << 20
 
 
 def pack_window(payload: bytes) -> tuple[list[tuple[int, int]], bytes]:
-    """The payload's nonzero extents as (offset, bytes) and their bytes back to back; checked by expanding them again."""
+    """Return the payload's nonzero extents as (offset, bytes) and their bytes back to back.
+
+    Checked by expanding them again.
+    """
     zero, runs, offset = bytes(PACK_PAGE), [], 0
     while offset < len(payload):
         if payload[offset : offset + PACK_PAGE] == zero[: len(payload) - offset]:
@@ -95,8 +99,10 @@ def pack_window(payload: bytes) -> tuple[list[tuple[int, int]], bytes]:
 
 
 def lz4_frame_blocks(frame: bytes, length: int) -> list[tuple[int, bool, bytes]]:
-    """An LZ4 frame (lz4.org frame format) of `length` bytes as its blocks (decoded length, stored, block bytes). Only
-    what the loader decodes: independent blocks without checksums or dictionary.
+    """Split an LZ4 frame (lz4.org frame format) of `length` bytes into its blocks.
+
+    Each block as (decoded length, stored, block bytes). Only what the loader decodes: independent blocks without
+    checksums or dictionary.
     """
     if frame[:4] != LZ4_MAGIC or len(frame) < 7:
         raise ValueError('lz4: not an LZ4 frame')
@@ -122,7 +128,10 @@ def lz4_frame_blocks(frame: bytes, length: int) -> list[tuple[int, bool, bytes]]
 
 
 def lz4_blocks(runs: list[tuple[int, int]]) -> list[tuple[int, int]]:
-    """The extents' LZ4 blocks as (window offset, length): each extent cut into 1 MiB blocks from its start (lz4 -B6)."""
+    """Return the extents' LZ4 blocks as (window offset, length).
+
+    Each extent is cut into 1 MiB blocks from its start (lz4 -B6).
+    """
     return [
         (at, min(LZ4_BLOCK, start + size - at)) for start, size in runs for at in range(start, start + size, LZ4_BLOCK)
     ]
@@ -154,8 +163,9 @@ def compress_blocks(blocks: list[bytes], lz4: str | None = None) -> list[tuple[b
 
 
 def block_table(blocks: list[tuple[int, int]], compressed: list[tuple[bool, bytes]]) -> tuple[list, bytes]:
-    """The loader's block table (window offset, length, offset in the stream, stream bytes | 1 << 63 if stored) and the
-    blocks back to back.
+    """Return the loader's block table and the blocks back to back.
+
+    Each row of the table: window offset, length, offset in the stream, stream bytes | 1 << 63 if stored.
     """
     table, stream = [], bytearray()
     for (at, length), (stored, body) in zip(blocks, compressed, strict=True):
@@ -169,8 +179,10 @@ def block_table(blocks: list[tuple[int, int]], compressed: list[tuple[bool, byte
 def compress_window(
     payload: bytes, runs: list[tuple[int, int]], lz4: str | None = None
 ) -> tuple[list[tuple[int, int, int, int]], bytes]:
-    """The window's nonzero extents, each LZ4-compressed (lz4 -12, independent blocks of up to 1 MiB): the loader's block
-    table and the blocks back to back, checked by laying the blocks back into an empty window.
+    """Compress each of the window's nonzero extents with LZ4 (lz4 -12, independent blocks of up to 1 MiB).
+
+    Returns the loader's block table and the blocks back to back, checked by laying the blocks back into an empty
+    window.
     """
     blocks = lz4_blocks(runs)
     table, stream = block_table(blocks, compress_blocks([payload[at : at + length] for at, length in blocks], lz4))
@@ -187,12 +199,12 @@ EMC_KHZ = 1600000
 
 
 def stage_id(staged: bytes) -> int:
-    """The staged window's id (boot/loader/stage.h): its SHA-256's first 8 bytes, little-endian."""
+    """Return the staged window's id (boot/loader/stage.h): its SHA-256's first 8 bytes, little-endian."""
     return int.from_bytes(hashlib.sha256(staged).digest()[:8], 'little')
 
 
 def stage_pages(staged: bytes, stream_bytes: int) -> tuple[bytes, bytes]:
-    """The header and trailer pages around the staged window (boot/loader/stage.h)."""
+    """Return the header and trailer pages around the staged window (boot/loader/stage.h)."""
     ident = stage_id(staged)
     words = STAGE_WORDS
     header = struct.pack(
@@ -213,8 +225,10 @@ def stage_pages(staged: bytes, stream_bytes: int) -> tuple[bytes, bytes]:
 
 
 def stage_into_bl33(bl33: bytes, staged: bytes, stream_bytes: int, slots: list | tuple = ()) -> bytes:
-    """bl33.bin with the staged kernel window after U-Boot (boot/loader/stage.h) and each (address, capacity, bytes) of
-    slots in U-Boot's padding (loader_abi SCRIPT_SLOT and the others), checked by check_stage.
+    """Return bl33.bin with the staged kernel window after U-Boot (boot/loader/stage.h).
+
+    Each (address, capacity, bytes) of slots goes in U-Boot's padding (loader_abi SCRIPT_SLOT and the others); the
+    result is checked by check_stage.
     """
     if len(staged) % PACK_PAGE or not stream_bytes <= len(staged) < stream_bytes + PACK_PAGE:
         raise ValueError('staged window must be its stream padded to 4 KiB')
@@ -232,10 +246,12 @@ def stage_into_bl33(bl33: bytes, staged: bytes, stream_bytes: int, slots: list |
 
 
 def check_stage(image: bytes, bl33: bytes, staged: bytes, stream_bytes: int, slots: list | tuple = ()) -> None:
-    """The composed bl33.bin as hekate puts it at 0xAA000000: U-Boot untouched and wholly below the first slot,
-    including its pre-relocation BSS (U-Boot's arm64 start.S header: _end_ofs at 0x10, _bss_end_ofs at 0x20); each slot
-    holding its bytes, apart from the others and the rest zero; header, window and trailer where the boot script and the
-    loader look; everything below hekate's ramoops (0xB0000000).
+    """Check the composed bl33.bin as hekate puts it at 0xAA000000.
+
+    U-Boot untouched and wholly below the first slot, including its pre-relocation BSS (U-Boot's arm64 start.S header:
+    _end_ofs at 0x10, _bss_end_ofs at 0x20); each slot holding its bytes, apart from the others and the rest zero;
+    header, window and trailer where the boot script and the loader look; everything below hekate's ramoops
+    (0xB0000000).
     """
     header_at = STAGE_HEADER - BL33_BASE
     end_ofs, bss_end_ofs = struct.unpack_from('<Q', bl33, 0x10)[0], struct.unpack_from('<Q', bl33, 0x20)[0]
@@ -271,8 +287,10 @@ def _require(condition: object, message: str) -> None:
 
 
 def window_checks(m: dict, payload: bytes, adt: bytes) -> dict:
-    """The checks the cacheable-copy root-boot loader needs of a layout (`m`, its manifest; `payload`, its image; `adt`,
-    the ADT it was laid out with), and the loader's constants but for the staged window's (None until it is made).
+    """Check what the cacheable-copy root-boot loader needs of a layout and return the loader's constants.
+
+    `m` is the layout's manifest, `payload` its image and `adt` the ADT it was laid out with. The staged window's
+    constants are None until it is made.
     """
     _require(m['schema_version'] == 1 and m['profile'] == 'native-xnu-host-layout', 'unsupported host layout')
     _require(
@@ -509,7 +527,10 @@ def window_checks(m: dict, payload: bytes, adt: bytes) -> dict:
 
 
 def staged_window(constants: dict, table: list, stream: bytes) -> tuple[dict, bytes]:
-    """The window as staged in bl33.bin (the stream padded to 4 KiB) and the constants with its sizes and stage id."""
+    """Stage the window for bl33.bin: the stream padded to 4 KiB.
+
+    Returns the constants with its sizes and stage id, and the staged window.
+    """
     # Staged in bl33.bin (stage_into_bl33); the loader maps it in 4 KiB pages.
     staged = stream + bytes(-len(stream) % PACK_PAGE)
     _require(
@@ -538,7 +559,7 @@ def runs_header(blocks: list) -> str:
 
 
 def shard_of(at: int) -> str:
-    """A block's shard: the MiB of the window it starts in (its directory below layout's --blocks)."""
+    """Return a block's shard: the MiB of the window it starts in (its directory below layout's --blocks)."""
     if not 0 <= at < WINDOW_SHARDS * WINDOW_SHARD_BYTES:
         raise ValueError(f'block at {at:#x} beyond the {WINDOW_SHARDS} window shards')
     return f'{at // WINDOW_SHARD_BYTES:02d}'
@@ -549,7 +570,7 @@ def block_name(at: int) -> str:
 
 
 def layout(args: argparse.Namespace) -> None:
-    """The layout, its checks, the extents and their blocks, each block in its shard's directory (shard_of)."""
+    """Lay out and check the window, then write its blocks, each in its shard's directory (shard_of)."""
     command_line = args.boot_args.read_text().rstrip('\n')
     with tempfile.TemporaryDirectory() as scratch:
         scratch = Path(scratch)

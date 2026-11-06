@@ -14,7 +14,7 @@ from pathlib import Path
 
 
 def im4p_payload(data: bytes) -> bytes:
-    """The payload of an IM4P (SEQUENCE { "IM4P", type, description, OCTET STRING payload, ... })."""
+    """Return the payload of an IM4P (SEQUENCE { "IM4P", type, description, OCTET STRING payload, ... })."""
 
     def header(at: int) -> tuple[int, int, int]:
         tag, length, at = data[at], data[at + 1], at + 2

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""The userland overlay: files shown over sealed system directories (SwitchRawMount.h native_switch_raw_overlay),
-kept on Data under /private/var/Switch/overlay (the deploy copies the boot package's overlay/ there).
+"""The userland overlay: files shown over sealed system directories (SwitchRawMount.h native_switch_raw_overlay).
+
+They are kept on Data under /private/var/Switch/overlay (the deploy copies the boot package's overlay/ there).
 
 Three steps of //boot:package, so that each overlay edit reruns only what reads it:
 
@@ -34,16 +35,17 @@ OVERLAY_ROOT = '/private/var/Switch/overlay'
 
 
 def plan(manifest: dict, portrait: bool, given: Iterable[str] | None = None) -> dict:
-    """The manifest's files for this kernel: {"files": [{path, source, trust, mode, directory}], "dirs": [[d, gate]]}.
-    `given`: the sources the build gives; a manifest entry it lacks is an error, not a silent omission.
+    """Return the manifest's files for this kernel.
+
+    The plan: {"files": [{path, source, trust, mode, directory}], "dirs": [[d, gate]]}. `given`: the sources the build
+    gives; a manifest entry it lacks is an error, not a silent omission.
     """
     if given is not None:
         missing = sorted({entry['source'] for entry in manifest['files']} - set(given))
         if missing:
             raise SystemExit(
-                'overlay/manifest.json lists {} but //boot:package does not give them: add them to boot/BUILD.bazel'.format(
-                    ', '.join(missing)
-                )
+                f'overlay/manifest.json lists {", ".join(missing)} but //boot:package does not give them: '
+                'add them to boot/BUILD.bazel'
             )
     files, gates = [], {}
     for entry in manifest['files']:
@@ -76,8 +78,10 @@ def plan(manifest: dict, portrait: bool, given: Iterable[str] | None = None) -> 
 
 
 def cdhash(image: bytes) -> bytes:
-    """The CDHash of a thin Mach-O's embedded signature: the first 20 bytes of the SHA-256 of its SHA-256
-    CodeDirectory (what codesign -dvvv prints as CDHash and what a trust cache entry holds).
+    """Return the CDHash of a thin Mach-O's embedded signature.
+
+    The first 20 bytes of the SHA-256 of its SHA-256 CodeDirectory (what codesign -dvvv prints as CDHash and what a
+    trust cache entry holds).
     """
     magic, _, _, _, ncmds = struct.unpack_from('<IiiII', image)
     if magic != 0xFEEDFACF:
@@ -103,7 +107,8 @@ def cdhash(image: bytes) -> bytes:
 
 
 def trust_module(hashes: Iterable[bytes]) -> bytes:
-    """A version-2 trust cache module of sorted (CDHash, SHA-256, flags 0, launch-constraint category 0) entries.
+    """Make a version-2 trust cache module of sorted (CDHash, SHA-256, flags 0, launch-constraint category 0) entries.
+
     Category 0 because overlay code lives on Data: the system categories' volume constraints would refuse it.
     """
     entries = b''.join(digest + bytes([2, 0, 0, 0]) for digest in sorted(set(hashes)))

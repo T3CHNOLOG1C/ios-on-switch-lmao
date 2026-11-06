@@ -79,7 +79,7 @@ def _im4p_payload(data: bytes) -> bytes:
 
 
 def trust_module(entries: list[tuple[bytes, int, int]]) -> bytes:
-    """A version-2 trust cache module: sorted (cdhash, hashtype 2, flags, category), each once.
+    """Make a version-2 trust cache module: sorted (cdhash, hashtype 2, flags, category), each once.
 
     One binary at several paths is one cdhash, and a duplicate fails the kernel window's strictly sorted check.
     """

@@ -218,7 +218,11 @@ def main() -> None:
         'exporter_sha256': hashlib.sha256(binary).hexdigest(),
         'build_manifest_sha256': hashlib.sha256((build / 'manifest.json').read_bytes()).hexdigest(),
         'cases': reports,
-        'boundary': 'Exact AArch64 exporter executes against synthetic cached firmware RAM in generic QEMU Cortex-A57. Does not execute the real U-Boot image or exercise a physical card/controller, DMA, cache coherency, or Tegra hardware.',
+        'boundary': (
+            'Exact AArch64 exporter executes against synthetic cached firmware RAM in generic QEMU Cortex-A57. '
+            'Does not execute the real U-Boot image or exercise a physical card/controller, DMA, cache coherency, '
+            'or Tegra hardware.'
+        ),
     }
     (out / 'report.json').write_text(json.dumps(result, indent=2) + '\n')
     print(json.dumps(result, indent=2))

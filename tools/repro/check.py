@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Reproducibility check: build the targets twice from scratch (two fresh output bases, --config=reproducible-check:
-no disk or remote cache) and compare every output file bit for bit.
+"""Reproducibility check: build the targets twice from scratch and compare every output file bit for bit.
+
+The builds use two fresh output bases and --config=reproducible-check (no disk or remote cache).
 
     bazel run //tools/repro:check                      # //:kernel //:boot //:gpu
     bazel run //tools/repro:check -- //:kernel         # just these

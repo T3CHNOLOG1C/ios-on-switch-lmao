@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""switchroot's U-Boot (bl33.bin) as this boot entry ships it: its default environment edited, the boot script, the
-loader, the exporter and the DTB in their slots past U-Boot (loader_abi.SCRIPT_SLOT and the others), then the staged
-kernel window (boot/loader/stage.h).
+"""switchroot's U-Boot (bl33.bin) as this boot entry ships it.
+
+Its default environment edited, the boot script, the loader, the exporter and the DTB in their slots past U-Boot
+(loader_abi.SCRIPT_SLOT and the others), then the staged kernel window (boot/loader/stage.h).
 
     bl33.py patch BL33 OUT                                   the environment edit (once: it never reads the kernel)
     bl33.py stage --u-boot PATCHED --window W --constants C --script S --loader L --exporter E --dtb D --out OUT
@@ -26,15 +27,19 @@ from loader_abi import DTB_SLOT, EXPORTER_SLOT, LOADER_SLOT, SCRIPT_SLOT, STAGE_
 ENV_START = b'\0bootcmd=run distro_bootcmd\0'
 ENV_EDITS = {
     b'bootcmd=run distro_bootcmd': b'bootcmd=setexpr.l ios_u_main *0x60005010; run distro_bootcmd',
-    b'mmc_boot=if mmc dev ${devnum}; then setenv devtype mmc; run scan_dev_for_boot_part; fi': b'mmc_boot=if mmc dev ${devnum}; then setexpr.l ios_u_sd *0x60005010; setenv devtype mmc; '
-    b'run scan_dev_for_boot_part; fi',
+    b'mmc_boot=if mmc dev ${devnum}; then setenv devtype mmc; run scan_dev_for_boot_part; fi': (
+        b'mmc_boot=if mmc dev ${devnum}; then setexpr.l ios_u_sd *0x60005010; setenv devtype mmc; '
+        b'run scan_dev_for_boot_part; fi'
+    ),
     b'boot_targets=mmc1 mmc0 ': b'boot_targets=mmc1',
     # `part list -bootable` took about 1 s from the SD card up to hekate's env imported (U-Boot re-reads and re-checks
     # the GPT for every one of its 64 partition indexes). hekate's FAT is always partition 1: scan it directly (no part
     # list, no fstype probe: test -e and load mount it themselves).
-    b'scan_dev_for_boot_part=part list ${devtype} ${devnum} -bootable devplist; env exists devplist || setenv devplist 1; '
-    b'for distro_bootpart in ${devplist}; do if fstype ${devtype} ${devnum}:${distro_bootpart} bootfstype; then '
-    b'run scan_dev_for_boot; fi; done': b'scan_dev_for_boot_part=setenv distro_bootpart 1; run scan_dev_for_boot',
+    (
+        b'scan_dev_for_boot_part=part list ${devtype} ${devnum} -bootable devplist; env exists devplist || '
+        b'setenv devplist 1; for distro_bootpart in ${devplist}; do if fstype ${devtype} ${devnum}:${distro_bootpart} '
+        b'bootfstype; then run scan_dev_for_boot; fi; done'
+    ): b'scan_dev_for_boot_part=setenv distro_bootpart 1; run scan_dev_for_boot',
 }
 ENV_EDITS[
     b'scan_dev_for_scripts=for script in ${boot_scripts}; do if test -e ${devtype} ${devnum}:${distro_bootpart} '

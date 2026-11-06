@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Cache check: action keys do not depend on where the checkout or the output base is. A second worktree of this
-commit, built in a fresh output base against the shared caches, must execute nothing: every action is a disk-cache hit
-of this checkout's build.
+"""Cache check: action keys do not depend on where the checkout or the output base is.
+
+A second worktree of this commit, built in a fresh output base against the shared caches, must execute nothing: every
+action is a disk-cache hit of this checkout's build.
 
     bazel run //tools/repro:cache_check                    # //:boot //:gpu
     bazel run //tools/repro:cache_check -- //:kernel       # just these
@@ -26,7 +27,7 @@ from pathlib import Path
 
 
 def spawns(log: Path) -> Iterator[dict]:
-    """The spawns of a --execution_log_json_file (a stream of JSON objects)."""
+    """Yield the spawns of a --execution_log_json_file (a stream of JSON objects)."""
     text = Path(log).read_text()
     decoder, at = json.JSONDecoder(), 0
     while True:
