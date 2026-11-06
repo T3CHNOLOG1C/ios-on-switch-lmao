@@ -1,5 +1,6 @@
 load("@bazel_skylib//rules:common_settings.bzl", "string_flag")
 load("//bazel/lint:defs.bzl", "lint_files")
+load(":profile_test.bzl", "profile_tests")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -29,4 +30,10 @@ config_setting(
 config_setting(
     name = "release",
     flag_values = {":profile": "release"},
+)
+
+profile_tests(
+    name = "profile_test",
+    objcxx_source = "//drivers/TegraGM20BMetal:TegraGM20BMetalPlugin.mm",
+    source = "//drivers/SwitchBluetooth:BlueTool/BlueTool.c",
 )

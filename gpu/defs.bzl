@@ -6,6 +6,7 @@ action with declared inputs, so Bazel reruns only what an edit reaches:
 The shader seed and the raw pack are gpu/seed's.
 """
 
+load("//bazel:profile.bzl", "PROFILE_ATTR", "switch_debug_define")
 load("//kernel/rules:layout.bzl", "MOVED_ROOTS", "OLD_TREE", "TREE_ROOT")
 
 _XCODE = {
@@ -92,7 +93,9 @@ def _metal_plugin_impl(ctx):
     includes = []
     for marker in ctx.files.include_markers:
         includes += ["-I", marker.dirname]
-    defines = ["-DTEGRA_RAW_STACK=0x@FILE:%s@ull" % ctx.file.stack.path] if ctx.file.stack else []
+    defines = [switch_debug_define(ctx)]
+    if ctx.file.stack:
+        defines.append("-DTEGRA_RAW_STACK=0x@FILE:%s@ull" % ctx.file.stack.path)
     inputs = ctx.files.srcs + ctx.files.cc_srcs + ctx.files.hdrs + ctx.files.include_markers + ctx.files.stack
     objects = []
     for language, sources in (("objective-c++", ctx.files.srcs), ("c++", ctx.files.cc_srcs)):
@@ -140,7 +143,7 @@ def _metal_plugin_impl(ctx):
 
 metal_plugin = rule(
     implementation = _metal_plugin_impl,
-    attrs = _XCODE | {
+    attrs = _XCODE | PROFILE_ATTR | {
         "srcs": attr.label_list(mandatory = True, allow_files = [".mm"], doc = "Objective-C++ units, in link order"),
         "cc_srcs": attr.label_list(allow_files = [".cpp"], doc = "C++ units, linked after srcs"),
         "hdrs": attr.label_list(allow_files = True),

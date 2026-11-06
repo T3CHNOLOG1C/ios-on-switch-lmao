@@ -1,6 +1,7 @@
 """The userland overlay's iOS binaries (ios_binary). The boot entry itself is //boot:package (boot/defs.bzl)."""
 
 load("@bazel_skylib//rules:common_settings.bzl", "BuildSettingInfo")
+load("//bazel:profile.bzl", "switch_debug_define")
 load(":common.bzl", "KERNEL_TOOL_ATTRS", "PY_TOOLCHAIN", "run_tool", "setting")
 
 def _ios_binary_impl(ctx):
@@ -26,7 +27,7 @@ def _ios_binary_impl(ctx):
     if ctx.attr._profile[BuildSettingInfo].value == "release":
         # Stripped before the signature (the release profile), so the CDHash the trust cache holds is the shipped one.
         args.append("--strip")
-    args.append("--")
+    args += ["--", switch_debug_define(ctx)]
     for flag in ctx.attr.copts:
         args.append(flag.replace("{tree}", ctx.label.package))
     args += [f.path for f in ctx.files.srcs]
