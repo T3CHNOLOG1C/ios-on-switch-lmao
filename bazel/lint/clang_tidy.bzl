@@ -58,8 +58,9 @@ EXTRA_ARGS = [
 ]
 
 # The report is empty when the unit passes and holds clang-tidy's findings when it does not; the action itself always
-# succeeds, so the test lists every finding at once. sed makes the paths relative to the workspace, not the sandbox:
-# bash 3.2's ${out//pattern/} is quadratic, minutes per MB of findings.
+# succeeds, so the test lists every finding at once. The report is a function of the inputs: paths relative to the
+# workspace (sed, not bash 3.2's quadratic ${out//pattern/}), each finding (its line and the notes and source lines
+# under it, joined by awk) once and sorted, then the exit status.
 _RUN = """\
 report="$1"; unit="$2"; shift 2
 log="$(mktemp)"
@@ -67,7 +68,10 @@ if "$@" > "$log" 2>&1; then
     : > "$report"
 else
     rc=$?
-    sed "s|$PWD/||g" "$log" > "$report"
+    sed "s|$PWD/||g" "$log" |
+        awk '/^[^ ]+:[0-9]+:[0-9]+: (warning|error): / { if (f != "") print f; f = $0; next } { f = f "\\036" $0 }
+             END { if (f != "") print f }' |
+        LC_ALL=C sort -u | tr '\\036' '\\n' > "$report"
     [ -s "$report" ] || echo "(no output)" > "$report"
     echo "exit $rc: clang-tidy $unit" >> "$report"
 fi
@@ -123,6 +127,7 @@ def _tidy_units(target, ctx):
             ctx.fragments.cpp.copts + copts + lang_flags,
         )
         report = ctx.actions.declare_file("{}.clang_tidy/{}.report".format(target.label.name, src.short_path))
+        reachable = [c for c in configs if not c.dirname or src.path.startswith(c.dirname + "/")]
         args = ctx.actions.args()
         args.add(report)
         args.add(src.short_path)
@@ -139,7 +144,7 @@ def _tidy_units(target, ctx):
             command = _RUN,
             arguments = [args],
             inputs = depset(
-                [src] + configs + ctx.files._resource_dir,
+                [src] + reachable + ctx.files._resource_dir,
                 transitive = [compilation_context.headers, cc_toolchain.all_files],
             ),
             tools = [ctx.executable._clang_tidy],

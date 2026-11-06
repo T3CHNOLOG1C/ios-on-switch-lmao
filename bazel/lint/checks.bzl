@@ -114,11 +114,12 @@ def _check_rustfmt(t, f, ctx_files):
     return argv, [t.rustfmt, t.rustfmt_config] + ctx_files.rust + t.rustfmt_files.to_list()
 
 def _check_rumdl(t, f, _):
-    argv = [t.rumdl.path, "check", "--no-cache", "--color", "never", "--config", t.rumdl_config.path, f.path]
+    # --quiet: no summary line, which holds the run's duration.
+    argv = [t.rumdl.path, "check", "--no-cache", "--quiet", "--color", "never", "--config", t.rumdl_config.path, f.path]
     return argv, [t.rumdl, t.rumdl_config]
 
 def _check_rumdl_format(t, f, _):
-    argv = [t.rumdl.path, "fmt", "--check", "--color", "never", "--config", t.rumdl_config.path, f.path]
+    argv = [t.rumdl.path, "fmt", "--check", "--quiet", "--color", "never", "--config", t.rumdl_config.path, f.path]
     return argv, [t.rumdl, t.rumdl_config]
 
 # actionlint checks the local actions and reusable workflows a workflow uses only inside a Git work tree, so the check
