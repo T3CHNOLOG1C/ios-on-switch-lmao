@@ -32,7 +32,7 @@ static const struct switch_ui_scale switch_ui_scales[] = {
 };
 #define SWITCH_UI_SCALES        (sizeof(switch_ui_scales) / sizeof(switch_ui_scales[0]))
 #define SWITCH_UI_SCALE_UNIT    0u
-#define SWITCH_UI_SCALE_DEFAULT 2u /* 1.6 */
+#define SWITCH_UI_SCALE_DEFAULT 1u /* 1.25 */
 
 static inline bool
 switch_ui_scale_is_unit(const struct switch_ui_scale *scale)

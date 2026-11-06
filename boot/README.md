@@ -62,8 +62,8 @@ the next boot, with no rebuild.
 
 | Value | Screen in points |
 |---|---|
-| `1.6` (the default) | 450x800, an iPad's physical point size |
-| `1.25` | 576x1024 |
+| `1.6` | 450x800, an iPad's physical point size |
+| `1.25` (the default) | 576x1024 |
 | `1` | 720x1280, with the large Home Screen icons and the extra-large text back |
 
 Only those three spellings count. Anything else gives 1, the plain path with none of the scaling, and the kernel
