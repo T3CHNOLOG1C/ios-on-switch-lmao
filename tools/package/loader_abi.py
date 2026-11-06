@@ -74,6 +74,10 @@ SCRIPT_SLOT = (0xAA070000, 0x10000)
 LOADER_SLOT = (0xAA080000, 0x30000)
 EXPORTER_SLOT = (0xAA0B0000, 0x10000)
 DTB_SLOT = (0xAA0C0000, 0x40000)
+# Where bootm loados copies the exporter and the boot script runs it (exporter.uimg's load and entry,
+# boot/storage/firmware_export/link.ld), and its 64 KiB cap, its stack included. It sits in 'staged-kernel-capacity',
+# which nothing else uses: the kernel window is staged in bl33.bin.
+EXPORTER_RUN = (0xA7000000, 0x10000)
 
 # switchroot/ios/bootargs.txt's page (boot/loader/boot_args.h).
 BOOT_ARGS_PAGE = 0x8FE00000

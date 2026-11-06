@@ -40,6 +40,7 @@ from pathlib import Path
 
 from loader_abi import (
     BL33_BASE,
+    EXPORTER_RUN,
     LZ4_BLOCK,
     LZ4_MAGIC,
     NATIVE_FULL_RAM_EXCLUSIONS,
@@ -377,7 +378,6 @@ def _check_command_line(m: dict, payload: bytes) -> None:
         len(encoded) < 1024 and payload[command_at : command_at + 1024] == encoded + bytes(1024 - len(encoded)),
         'the boot argument manifest does not match the staged boot arguments',
     )
-    _require(len(payload) <= 0x5000000, 'kernel staging overlaps the firmware exporter')
     _require(
         not any(v.startswith(('rd=', 'boot-uuid=')) for v in words),
         'root_boot cannot use an alternate root selection',
@@ -399,6 +399,18 @@ def boot_virt_base(virt_base: int, phys_base: int, boot_phys: int) -> int:
     return virt_base - phys_base + boot_phys
 
 
+def _check_exporter(phys_base: int, window_bytes: int) -> None:
+    run, size = EXPORTER_RUN
+    _, start, capacity = next(r for r in NATIVE_FULL_RAM_EXCLUSIONS if r[0] == 'staged-kernel-capacity')
+    _require(
+        start <= run
+        and run + size <= start + capacity
+        and (run + size <= BL33_BASE or run >= STAGE_END)
+        and (run + size <= phys_base or phys_base + window_bytes <= run),
+        'the firmware exporter overlaps the kernel window or leaves its reserved range',
+    )
+
+
 def _check_native_profile(m: dict, payload: bytes, kind: str) -> None:
     _require(kind in NATIVE_PROFILES, f'no reviewed native profile for IPSW kind {kind}')
     _require(
@@ -415,7 +427,10 @@ def _check_native_profile(m: dict, payload: bytes, kind: str) -> None:
         actual == expected and len(m['reserved_ranges']) == len(expected),
         'native experiment requires the exact reviewed exclusion ledger',
     )
-    _require(len(payload) <= 0x6000000 and m['video'] == VIDEO, 'native staging or display contract mismatch')
+    _require(
+        len(payload) <= 0x6000000 and m['video'] == VIDEO,
+        f'native staging or display contract mismatch (window {len(payload):#x} bytes)',
+    )
     _require(not len(payload) % 0x1000, 'native cacheable copy requires a page-aligned payload')
 
 
@@ -522,6 +537,7 @@ def window_checks(m: dict, payload: bytes, adt: bytes, kind: str) -> dict:
     )
     _check_sidecars(m, payload, properties, start, sidecars)
     _check_command_line(m, payload)
+    _check_exporter(m['phys_base'], len(payload))
     _check_native_profile(m, payload, kind)
 
     return {

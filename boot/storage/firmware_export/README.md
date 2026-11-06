@@ -70,8 +70,10 @@ zero comparison remain required before any filesystem read.
 `entry.S` runs at `0xa7000000`, preserves x18 and the AAPCS callee-saved registers,
 switches to its own 16KiB stack, and returns to the caller's original SP/LR. The
 complete current image is under 64KiB, enforced by linker and build checks.
-It occupies part of the already excluded staged-kernel allocation; the package
-must separately enforce that the kernel payload ends before `0xa7000000`.
+It sits in the RAM ledger's `staged-kernel-capacity` exclusion, which nothing
+else uses now that the kernel window rides in `bl33.bin`. The package checks
+that its 64KiB stay inside that exclusion and clear of the kernel window, both
+where hekate stages it and where the loader decodes it (`loader_abi.EXPORTER_RUN`).
 
 The boot script must publish the exporter's executable bytes with the reviewed
 firmware cache sequence before `go`, and run it before `bootm go` removes the

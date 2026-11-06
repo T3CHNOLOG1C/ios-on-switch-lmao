@@ -10,10 +10,11 @@ Its default environment edited, the boot script, the loader, the exporter and th
 
 import argparse
 import json
+import struct
 from pathlib import Path
 
 from build_native_loader import stage_into_bl33
-from loader_abi import DTB_SLOT, EXPORTER_SLOT, LOADER_SLOT, SCRIPT_SLOT, STAGE_SOURCE
+from loader_abi import DTB_SLOT, EXPORTER_RUN, EXPORTER_SLOT, LOADER_SLOT, SCRIPT_SLOT, STAGE_SOURCE
 
 # U-Boot's built-in default environment in switchroot's bl33.bin (env/common.c default_environment, imported whole at
 # start: a run of "name=value\0" ended by an empty string), rewritten in place to the same size so nothing else in the
@@ -91,6 +92,9 @@ def main() -> None:
     window, constants = args.window.read_bytes(), json.loads(args.constants.read_text())
     if constants['SOURCE'] != STAGE_SOURCE or constants['PACKED_BYTES'] != len(window):
         raise SystemExit('loader was not built for the bl33-staged window')
+    data_bytes, load, entry = struct.unpack_from('>3I', args.exporter.read_bytes(), 12)
+    if load != EXPORTER_RUN[0] or entry != EXPORTER_RUN[0] or data_bytes > EXPORTER_RUN[1]:
+        raise SystemExit('exporter.uimg does not load and run where loader_abi.EXPORTER_RUN says')
     slots = [
         (*slot, path.read_bytes())
         for slot, path in (

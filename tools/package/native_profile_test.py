@@ -1,8 +1,9 @@
-"""The full-RAM boot base follows from each kind's reviewed virtual base by the rule the kernel window maps with."""
+"""Each kind's full-RAM boot base, from its reviewed virtual base, and the exporter beside the kernel window."""
 
 import unittest
 
-from build_native_loader import FULL_RAM_BANK, NATIVE_PROFILES, PHYSICAL_BASE, boot_virt_base
+from build_native_loader import FULL_RAM_BANK, NATIVE_PROFILES, PHYSICAL_BASE, _check_exporter, boot_virt_base
+from loader_abi import EXPORTER_RUN
 
 BLOCK = 0x200000
 
@@ -22,6 +23,15 @@ class NativeProfileTest(unittest.TestCase):
         for kind, profile in NATIVE_PROFILES.items():
             with self.subTest(kind=kind):
                 self.assertEqual(profile['virt_base'] % BLOCK, PHYSICAL_BASE % BLOCK)
+
+
+class ExporterTest(unittest.TestCase):
+    def test_the_largest_window_the_loader_copies_clears_the_exporter(self):
+        _check_exporter(PHYSICAL_BASE, 0x6000000)
+
+    def test_a_window_over_the_exporter_is_refused(self):
+        with self.assertRaises(ValueError):
+            _check_exporter(EXPORTER_RUN[0] - 0x1000, 0x2000)
 
 
 if __name__ == '__main__':

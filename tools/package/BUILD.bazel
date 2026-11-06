@@ -128,7 +128,10 @@ py_binary(
 py_test(
     name = "native_profile_test",
     srcs = ["native_profile_test.py"],
-    deps = [":kernel_window"],
+    deps = [
+        ":kernel_window",
+        ":loader_abi",
+    ],
 )
 
 py_test(
