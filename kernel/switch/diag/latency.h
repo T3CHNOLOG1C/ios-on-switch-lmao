@@ -4,9 +4,10 @@
  * data and text like frames.h, so kernel/tests runs it on the host; the including file declares snprintf.
  *
  * One sample is in flight at a time. It starts when backboardd delivers the oldest touch report not yet delivered
- * (frames.h's delivery) and follows that report through the receiving process's next Core Animation commit, the first
- * vsync after the commit (the render server draws once per vsync), and the swap drawn for that vsync to its scan-out.
- * A drag gives about one sample a frame, the age of the oldest input that frame shows.
+ * (frames.h's delivery) and follows that report through the next Core Animation commit of the app it went to
+ * (SpringBoard takes every touch first, for its system gestures, then the app under the finger), the first vsync after
+ * the commit (the render server draws once per vsync), and the swap drawn for that vsync to its scan-out. A drag gives
+ * about one sample a frame, the age of the oldest input that frame shows.
  *   deliver  report -> backboardd's message to the app       app      delivery -> the app's commit
  *   wait     commit -> the render server's next vsync        compose  vsync -> the swap's submission
  *   show     submission -> scan-out start (GPU tail and the wait for the frame boundary)
@@ -72,7 +73,7 @@ struct switch_latency {
     uint8_t changes; /* SWITCH_LATENCY_*_BIT of the reports since the last delivery */
     uint8_t stage;
     uint8_t kind;
-    int32_t pid[2]; /* the processes the sample was delivered to; -1: none */
+    int32_t pid[2]; /* the first process the sample was delivered to, and the next one (-1: none) */
     uint64_t report_us, delivered_us, committed_us;
     uint32_t dropped[SWITCH_LATENCY_KINDS];
     struct switch_latency_hist hist[SWITCH_LATENCY_KINDS][SWITCH_LATENCY_STAGES];
@@ -153,9 +154,6 @@ static inline void switch_latency_delivered(struct switch_latency *l, uint64_t r
 
     l->changes = 0;
     switch_latency_drop_stale(l, now_us);
-    if (l->stage == SWITCH_LATENCY_DELIVERED && pid != l->pid[0] && l->pid[1] < 0) {
-        l->pid[1] = pid;
-    }
     if (l->stage != SWITCH_LATENCY_IDLE || report_us == 0 || report_us > now_us) {
         return;
     }
@@ -169,12 +167,21 @@ static inline void switch_latency_delivered(struct switch_latency *l, uint64_t r
     l->delivered_us = now_us;
 }
 
-/* A message with id `id` from pid to the render server: a commit answers a delivered sample. */
+/* backboardd sent the same reports on to pid. */
+static inline void switch_latency_also_delivered(struct switch_latency *l, int32_t pid)
+{
+    if (l->stage == SWITCH_LATENCY_DELIVERED && pid != l->pid[0] && l->pid[1] < 0) {
+        l->pid[1] = pid;
+    }
+}
+
+/* A message with id `id` from pid to the render server: the app's commit (SpringBoard's when it was the only
+ * receiver) answers a delivered sample. */
 static inline void switch_latency_message(struct switch_latency *l, int32_t pid, int32_t id, uint64_t now_us)
 {
     switch_latency_drop_stale(l, now_us);
     if (id == SWITCH_LATENCY_COMMIT_ID && l->stage == SWITCH_LATENCY_DELIVERED &&
-        (pid == l->pid[0] || pid == l->pid[1]) && now_us >= l->delivered_us) {
+        pid == (l->pid[1] >= 0 ? l->pid[1] : l->pid[0]) && now_us >= l->delivered_us) {
         l->stage = SWITCH_LATENCY_COMMITTED;
         l->committed_us = now_us;
     }

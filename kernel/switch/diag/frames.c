@@ -34,9 +34,14 @@ static struct {
     struct switch_frames_delivery delivery[WINDOWS];
 } acc;
 
+/* backboardd sends a report to SpringBoard, then to the app under the finger, back to back: the sends of its event
+ * threads until this long after a delivery go to the same report's other receivers. */
+#define CO_RECEIVERS_US 2000
+
 static struct switch_latency latency;
 static uint64_t touch_began, touch_last_down;
 static uint32_t report_pending;
+static uint64_t co_receivers_until; /* mach */
 
 static uint64_t abs_to_us(uint64_t abs)
 {
@@ -69,7 +74,12 @@ void switch_frames_render_server_sent(ipc_port_t port)
     ipc_space_t space;
     task_t receiver;
 
-    if (os_atomic_load(&report_pending, relaxed) == 0 || current_thread()->base_pri < SWITCH_FRAMES_EVENT_PRI) {
+    if (current_thread()->base_pri < SWITCH_FRAMES_EVENT_PRI) {
+        return;
+    }
+    const bool report = os_atomic_load(&report_pending, relaxed) != 0;
+    const uint64_t abs = mach_absolute_time();
+    if (!report && abs > os_atomic_load(&co_receivers_until, relaxed)) {
         return;
     }
     space = ip_get_receiver(port);
@@ -77,9 +87,18 @@ void switch_frames_render_server_sent(ipc_port_t port)
     if (receiver == TASK_NULL || receiver == kernel_task) {
         return;
     }
+    if (!report) {
+        lck_spin_lock(&frames_lock);
+        switch_latency_also_delivered(&latency, task_pid(receiver));
+        lck_spin_unlock(&frames_lock);
+        return;
+    }
     switch_task_name(receiver, name, sizeof(name));
-    const uint64_t now = abs_to_us(mach_absolute_time());
+    const uint64_t now = abs_to_us(abs);
+    uint64_t window;
+    nanoseconds_to_absolutetime((uint64_t)CO_RECEIVERS_US * NSEC_PER_USEC, &window);
     lck_spin_lock(&frames_lock);
+    os_atomic_store(&co_receivers_until, abs + window, relaxed);
     switch_latency_delivered(&latency, acc.delivery[STATS_WINDOW].pending_us, task_pid(receiver), now);
     for (int w = 0; w < WINDOWS; w++) {
         switch_frames_note_delivery(&acc.delivery[w], task_pid(receiver), name, now);

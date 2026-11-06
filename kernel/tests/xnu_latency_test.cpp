@@ -54,13 +54,15 @@ TEST(Latency, KindsFollowTheReportsSinceTheLastDelivery)
     EXPECT_EQ(l.hist[SWITCH_LATENCY_MOVED][SWITCH_LATENCY_TOTAL].n, 2u);
 }
 
-TEST(Latency, OnlyTheReceiversCommitAndAVsyncAfterItAnswer)
+TEST(Latency, OnlyTheAppsCommitAndAVsyncAfterItAnswer)
 {
     switch_latency l = {};
     switch_latency_report(&l, 0);
     switch_latency_delivered(&l, 1000, 27, 2000);
-    switch_latency_delivered(&l, 0, 300, 2100);                      // the same reports to a second process
+    switch_latency_also_delivered(&l, 300);                          // the app under the finger, after SpringBoard
+    switch_latency_also_delivered(&l, 400);                          // a third receiver: not the app
     switch_latency_message(&l, 99, SWITCH_LATENCY_COMMIT_ID, 3000);  // another client's commit
+    switch_latency_message(&l, 27, SWITCH_LATENCY_COMMIT_ID, 3200);  // SpringBoard's, not the app's
     switch_latency_message(&l, 300, 70010, 3500);                    // not a commit
     EXPECT_EQ(l.stage, SWITCH_LATENCY_DELIVERED);
     switch_latency_message(&l, 300, SWITCH_LATENCY_COMMIT_ID, 4000);
@@ -73,6 +75,16 @@ TEST(Latency, OnlyTheReceiversCommitAndAVsyncAfterItAnswer)
     EXPECT_EQ(total.n, 1u);
     EXPECT_EQ(total.max_us, 36000u);
     EXPECT_EQ(l.hist[SWITCH_LATENCY_MOVED][SWITCH_LATENCY_WAIT].max_us, 16500u);
+}
+
+TEST(Latency, ASoleReceiversCommitAnswers)
+{
+    switch_latency l = {};
+    switch_latency_report(&l, 0);
+    switch_latency_delivered(&l, 1000, 27, 2000);
+    switch_latency_also_delivered(&l, 27);  // the same process again: still the sole receiver
+    switch_latency_message(&l, 27, SWITCH_LATENCY_COMMIT_ID, 3000);
+    EXPECT_EQ(l.stage, SWITCH_LATENCY_COMMITTED);
 }
 
 TEST(Latency, OneSampleInFlightAndStaleOnesDropped)
