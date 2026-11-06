@@ -25,8 +25,6 @@
 #include "include/bpxnu.h"
 
 extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
-extern "C" boolean_t ml_get_interrupts_enabled(void);
-extern "C" int cpu_number(void);
 
 namespace
 {
@@ -71,8 +69,10 @@ inline void licWrite(uint32_t offset, uint32_t value)
 }
 }  // namespace
 
+// NOLINTNEXTLINE(misc-use-internal-linkage): OSDefineMetaClassAndStructors needs the class's external linkage
 class TegraBPMPDoorbells : public IOService
 {
+	// NOLINTNEXTLINE(misc-explicit-constructor): IOKit's structors macro declares the metaclass constructor
 	OSDeclareDefaultStructors(TegraBPMPDoorbells) IOWorkLoop *loop = nullptr;
 	IOFilterInterruptEventSource *sources[kDoorbells] = {};
 	static bool filter(OSObject *owner, IOFilterInterruptEventSource *sender);
@@ -97,7 +97,7 @@ OSDefineMetaClassAndStructors(TegraBPMPDoorbells, IOService)
 // Primary interrupt context: acknowledge the forced interrupt so the level drops, then hand over to the work loop.
 bool TegraBPMPDoorbells::filter(OSObject *owner, IOFilterInterruptEventSource *sender)
 {
-	auto *self = static_cast<TegraBPMPDoorbells *>(owner);
+	const auto *self = static_cast<TegraBPMPDoorbells *>(owner);
 	const int i = self->indexOf(sender);
 	if (i < 0)
 		return false;
@@ -108,7 +108,7 @@ bool TegraBPMPDoorbells::filter(OSObject *owner, IOFilterInterruptEventSource *s
 
 void TegraBPMPDoorbells::action(OSObject *owner, IOInterruptEventSource *sender, int count)
 {
-	auto *self = static_cast<TegraBPMPDoorbells *>(owner);
+	const auto *self = static_cast<TegraBPMPDoorbells *>(owner);
 	const int i = self->indexOf(sender);
 	if (i >= 0 && gDoorbells[i].handler)
 		gDoorbells[i].handler(gDoorbells[i].data);
@@ -132,8 +132,8 @@ bool TegraBPMPDoorbells::claim()
 	}
 	// A doorbell the BPMP forced before this point is not cleared: it fires as soon as its source is enabled and
 	// mail.c then answers whatever inbound mail it signalled, as Linux does after request_irq().
-	for (unsigned i = 0; i < kDoorbells; ++i)
-		sources[i]->enable();
+	for (IOFilterInterruptEventSource *source : sources)
+		source->enable();
 	return true;
 }
 
@@ -179,11 +179,12 @@ void bpxnu_doorbells_start(void)
 
 void bpxnu_doorbell_lost(int ch, int mrq)
 {
-	const uint32_t fir = licRead(ICTLR_CPU_IEP_FIR), ier = licRead(ICTLR_CPU_IER);
+	const uint32_t fir = licRead(ICTLR_CPU_IEP_FIR);
+	const uint32_t ier = licRead(ICTLR_CPU_IER);
 	uint32_t spi = kInboundSpi[0];
-	for (unsigned i = 0; i < kDoorbells; ++i) {
-		if (fir & (1u << kInboundSpi[i])) {
-			spi = kInboundSpi[i];
+	for (const uint32_t inbound : kInboundSpi) {
+		if (fir & (1u << inbound)) {
+			spi = inbound;
 			break;
 		}
 	}
@@ -197,6 +198,7 @@ void bpxnu_doorbell_lost(int ch, int mrq)
 void bpxnu_log(const char *fmt, ...)
 {
 	char line[256];
+	// NOLINTNEXTLINE(cppcoreguidelines-init-variables): va_start initializes it
 	va_list ap;
 	va_start(ap, fmt);
 	vsnprintf(line, sizeof(line), fmt, ap);
@@ -218,10 +220,10 @@ void *bpxnu_zalloc(unsigned long size)
 	return p + 2;
 }
 
-void bpxnu_free(void *q)
+void bpxnu_free(void *p)
 {
-	unsigned long *p = static_cast<unsigned long *>(q) - 2;
-	IOFree(p, p[0] + 16);
+	unsigned long *block = static_cast<unsigned long *>(p) - 2;
+	IOFree(block, block[0] + 16);
 }
 
 void *bpxnu_spin_alloc(void)
@@ -258,7 +260,7 @@ void bpxnu_spin_unlock_irqrestore(void *lock, unsigned long flags)
 
 int bpxnu_interrupts_disabled(void)
 {
-	return !ml_get_interrupts_enabled();
+	return static_cast<int>(static_cast<int>(ml_get_interrupts_enabled()) == 0);
 }
 
 int bpxnu_cpu_number(void)
@@ -282,7 +284,7 @@ void bpxnu_assert_wait(const void *event, unsigned long long deadline_ns)
 
 int bpxnu_block(void)
 {
-	return thread_block(THREAD_CONTINUE_NULL) == THREAD_TIMED_OUT;
+	return static_cast<int>(thread_block(THREAD_CONTINUE_NULL) == THREAD_TIMED_OUT);
 }
 
 void bpxnu_wakeup(const void *event)

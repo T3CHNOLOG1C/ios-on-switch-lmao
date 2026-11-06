@@ -70,7 +70,7 @@ void init_completion(struct completion *c)
 
 void complete(struct completion *c)
 {
-	unsigned long flags;
+	unsigned long flags = 0;
 	spin_lock_irqsave(&c->lock, flags);
 	c->done++;
 	bpxnu_wakeup(c);
@@ -83,7 +83,7 @@ unsigned long wait_for_completion_timeout(struct completion *c, unsigned long ti
 	const unsigned long long deadline =
 		bpxnu_nanotime() + (unsigned long long)timeout * 1000000ULL;
 	for (;;) {
-		unsigned long flags;
+		unsigned long flags = 0;
 		spin_lock_irqsave(&c->lock, flags);
 		if (c->done) {
 			unsigned long long now = bpxnu_nanotime();
@@ -115,7 +115,7 @@ int down_timeout(struct semaphore *s, long timeout)
 	const unsigned long long deadline =
 		bpxnu_nanotime() + (unsigned long long)timeout * 1000000ULL;
 	for (;;) {
-		unsigned long flags;
+		unsigned long flags = 0;
 		spin_lock_irqsave(&s->lock, flags);
 		if (s->count > 0) {
 			s->count--;
@@ -134,7 +134,7 @@ int down_timeout(struct semaphore *s, long timeout)
 
 void up(struct semaphore *s)
 {
-	unsigned long flags;
+	unsigned long flags = 0;
 	spin_lock_irqsave(&s->lock, flags);
 	s->count++;
 	bpxnu_wakeup(s);
@@ -150,7 +150,7 @@ void memcpy_toio(volatile void *dst, const void *src, size_t n)
 		n--;
 	}
 	for (; n >= 4; n -= 4, d += 4, s += 4) {
-		u32 w;
+		u32 w = 0;
 		memcpy(&w, s, 4);
 		*(volatile u32 *)d = w;
 	}
