@@ -73,6 +73,8 @@ static void watchStress(void)
     int token;
     notify_register_dispatch("com.brunostjohn.switch.debug.ctxsw-stress", &token, dispatch_get_main_queue(), ^(int t) {
         (void)t;
+        os_log(OS_LOG_DEFAULT, "BlueTool: ctxsw-stress posted, %{public}s %{public}s", kStress,
+               access(kStress, X_OK) ? "missing" : "starting");
         if (access(kStress, X_OK))
             return;
         char *argv[] = {(char *)kStress, NULL};

@@ -55,24 +55,24 @@ bool twoBgra(const raw::Pipeline &p)
     return p.colorFormats[0] == kBgra8 && p.colorFormats[1] == kBgra8 && !p.colorFormats[2];
 }
 
-// Fetching states with a barrier-form record, those fetching color 0 (the one read back) first
+// Fetching states with a barrier-form record that fetch color 0, the one read back. Each lookup places the state's
+// programs in the device's shader heap, so only the states kept are looked up.
 std::vector<uint64_t> fetchStates(raw::Device &d)
 {
-    std::vector<uint64_t> first, rest;
+    std::vector<uint64_t> keys;
     const raw::PackPipeline *pp = d.pack().section<raw::PackPipeline>(raw::PackPipelines);
-    for (uint32_t i = 0; i < d.pack().header()->pipelines; i++) {
-        if (!(pp[i].flags & raw::PipelineBarrierForm))
+    for (uint32_t i = 0; i < d.pack().header()->pipelines && keys.size() < kStates; i++) {
+        bool fetchesColor0 = false;
+        for (uint32_t k = 0; k < pp[i].entries; k++)
+            fetchesColor0 |= pp[i].entry[k].kind == raw::EntryFetch && pp[i].entry[k].slot == 0;
+        if (!(pp[i].flags & raw::PipelineBarrierForm) || !fetchesColor0)
             continue;
         raw::Pipeline *storage = d.pipeline(pp[i].keyHash);
         raw::Pipeline *barrier = d.pipeline(pp[i].keyHash, raw::PackForm::Barrier);
-        if (!storage || !barrier || !twoBgra(*storage) || !storage->storageBits)
-            continue;
-        ((storage->storageBits & 1) ? first : rest).push_back(pp[i].keyHash);
+        if (storage && barrier && twoBgra(*storage) && (storage->storageBits & 1))
+            keys.push_back(pp[i].keyHash);
     }
-    first.insert(first.end(), rest.begin(), rest.end());
-    if (first.size() > kStates)
-        first.resize(kStates);
-    return first;
+    return keys;
 }
 
 raw::Pipeline *heavyState(raw::Device &d)
@@ -237,7 +237,11 @@ void report(const Way &way, const Result &r, const Result &reference, const std:
 {
     char images[160] = "";
     if (!r.ok) {
-        snprintf(images, sizeof images, "a submission or wait failed (the channel's GPU error is in the kernel log)");
+        os_log_error(logger(),
+                     "fetchform: %{public}s: a submission or wait failed after %llu submits (the channel's GPU error "
+                     "is in the kernel log)",
+                     way.name, (unsigned long long)r.submits);
+        return;
     } else if (&r == &reference) {
         uint64_t drawn = 0;
         for (const auto &image : r.images)
