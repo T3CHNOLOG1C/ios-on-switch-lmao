@@ -246,17 +246,18 @@ static struct {
     uint32_t interval_ms, count;
 } asked[ASKED];
 
-static uint32_t asked_requests, asked_reported;
+static uint32_t asked_requests, asked_reported, asked_dropped;
 static SIMPLE_LOCK_DECLARE(asked_lock, 0);
 
 void switch_sched_limit_asked(uint8_t percentage, uint64_t interval_ns, bool lifted)
 {
     char process[16];
     uint32_t interval_ms = (uint32_t)(interval_ns / NSEC_PER_MSEC);
+    unsigned int i;
 
     switch_task_name(current_task(), process, sizeof(process));
     simple_lock(&asked_lock, LCK_GRP_NULL);
-    for (unsigned int i = 0; i < ASKED; i++) {
+    for (i = 0; i < ASKED; i++) {
         if (asked[i].count == 0) {
             strlcpy(asked[i].process, process, sizeof(asked[i].process));
             asked[i].percentage = percentage;
@@ -268,6 +269,9 @@ void switch_sched_limit_asked(uint8_t percentage, uint64_t interval_ns, bool lif
         }
         asked[i].count++;
         break;
+    }
+    if (i == ASKED) {
+        asked_dropped++;
     }
     asked_requests++;
     simple_unlock(&asked_lock);
@@ -285,6 +289,10 @@ static void report_asked(char *line)
     for (unsigned int i = 0; fresh && i < ASKED && asked[i].count != 0 && at < LINE - 1; i++) {
         int n = snprintf(line + at, LINE - at, " %s %u%%/%u%s x%u;", asked[i].process, asked[i].percentage,
                          asked[i].interval_ms, asked[i].lifted ? " lifted" : "", asked[i].count);
+        at = n < 0 ? at : MIN(at + (size_t)n, LINE - 1);
+    }
+    if (fresh && asked_dropped != 0 && at < LINE - 1) {
+        int n = snprintf(line + at, LINE - at, " %u more in no row", asked_dropped);
         at = n < 0 ? at : MIN(at + (size_t)n, LINE - 1);
     }
     simple_unlock(&asked_lock);
