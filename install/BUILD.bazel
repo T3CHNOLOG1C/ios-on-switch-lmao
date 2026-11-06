@@ -139,10 +139,10 @@ alias(
 )
 
 # iOS 27: {file name: sha256} of the pretranslate run the boot package carries (trust modules, the cache list); the
-# composer refuses a run that differs.
+# composer refuses a run that differs. The selected kind's pins (ipsw/pins.bzl derived), none for a kind without.
 label_flag(
     name = "pretranslated_pins",
-    build_setting_default = ":none",
+    build_setting_default = "//ipsw:pretranslated_pins",
 )
 
 label_flag(

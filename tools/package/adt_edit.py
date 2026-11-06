@@ -2,7 +2,8 @@
 """The board ADT (//boot:adt) with what iPadOS userland expects of a J120, the radios' nodes, the overlay's union
 directories, the loader's zeroed slots and, with --smp, all four A57s.
 
-    adt_edit.py --adt BASE --overlay-plan PLAN --bt-patch HCD --portrait-header H [--smp] --out ADT
+    adt_edit.py --adt BASE --overlay-plan PLAN --bt-patch HCD --portrait-header H [--smp]
+                [--a64x-cache-pretranslated LIST] --out ADT
 """
 
 import argparse
@@ -233,11 +234,25 @@ def ipad_adt(data, *, smp=False, overlay_dirs=(), bt_patch=None, portrait=False)
     return adt_serialize(tree)
 
 
+def with_a64x_cache_pretranslated(data: bytes, cache: bytes) -> bytes:
+    """Return the ADT with iOS 27's /chosen/a64x-cache-pretranslated.
+
+    The cdhashes (20 bytes each) of the dyld cache files translated offline, which the kernel maps as they are instead
+    of translating them at load (bsd/kern/a64x_xnu.c).
+    """
+    if not cache or len(cache) % 20:
+        raise SystemExit(f'a64x-cache-pretranslated: {len(cache)} bytes, not a list of cdhashes')
+    tree, _ = adt_parse(data)
+    put(child(tree, 'chosen'), 'a64x-cache-pretranslated', cache)
+    return adt_serialize(tree)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     for name in ('adt', 'overlay-plan', 'bt-patch', 'portrait-header', 'out'):
         parser.add_argument('--' + name, required=True, type=Path)
     parser.add_argument('--smp', action='store_true')
+    parser.add_argument('--a64x-cache-pretranslated', type=Path)
     args = parser.parse_args()
     dirs = [tuple(d) for d in json.loads(args.overlay_plan.read_text())['dirs']]
     adt = ipad_adt(
@@ -247,6 +262,8 @@ def main():
         bt_patch=args.bt_patch.read_bytes(),
         portrait=portrait_native(args.portrait_header),
     )
+    if args.a64x_cache_pretranslated:
+        adt = with_a64x_cache_pretranslated(adt, args.a64x_cache_pretranslated.read_bytes())
     if ('/filesystems', 'DoNotUseSEP') not in parse_adt(adt).properties:
         raise SystemExit('ADT patch failed')
     args.out.write_bytes(adt)

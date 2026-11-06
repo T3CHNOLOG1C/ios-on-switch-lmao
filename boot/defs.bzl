@@ -3,9 +3,9 @@ only the steps it reaches:
 
     boot_args.py ............................ boot-args.txt
     overlay.py plan  (manifest) ............. overlay-plan.json
-    adt_edit.py      (board ADT, plan) ...... ios.adt
+    adt_edit.py      (board ADT, plan, iOS 27 cache list) ... ios.adt
     overlay.py trust (plan, Mach-Os) ........ overlay.trustcache
-    trust.py         (IPSW, overlay, GPU) ... trustcache.bundle
+    trust.py         (IPSW, overlay, GPU, iOS 27 pretranslated) ... trustcache.bundle
     build_native_loader.py layout (kernel, ADT, bundle, seed, boot-args)
                                          ...... plan.json, the window's 1 MiB LZ4 blocks in 96 shards (by the MiB
                                                 each starts in)
@@ -28,6 +28,7 @@ hermetic interpreter and need nothing of Xcode; the loader's compiles do (Xcode'
 """
 
 load("@bazel_skylib//rules:common_settings.bzl", "BuildSettingInfo")
+load("//ipsw:defs.bzl", "PretranslatedPinsInfo")
 
 # Xcode's tools: macOS only, never on a remote executor (Xcode cannot be shipped there); the results may be cached
 # remotely (the key includes @xcode//:identity).
@@ -149,8 +150,13 @@ def _boot_package_impl(ctx):
     args.add("--portrait-header", ctx.file.portrait_header)
     if smp:
         args.add("--smp")
+    pretranslated = ctx.attr.pretranslated[PretranslatedPinsInfo]
+    adt_inputs = [ctx.file.adt, plan, ctx.file.bt_patch, ctx.file.portrait_header]
+    if pretranslated.cache_list:
+        args.add("--a64x-cache-pretranslated", pretranslated.cache_list)
+        adt_inputs.append(pretranslated.cache_list)
     args.add("--out", adt)
-    _run(ctx, ctx.executable._adt_edit, [args], [ctx.file.adt, plan, ctx.file.bt_patch, ctx.file.portrait_header], [adt], "BootAdt", "Giving the ADT its iPad identity")
+    _run(ctx, ctx.executable._adt_edit, [args], adt_inputs, [adt], "BootAdt", "Giving the ADT its iPad identity")
 
     # --- trust caches ---------------------------------------------------------------------------------------------
     overlay_trust = out("overlay.trustcache")
@@ -168,9 +174,9 @@ def _boot_package_impl(ctx):
     args = ctx.actions.args()
     args.add("--static", ctx.file.static_trust)
     args.add("--app", ctx.file.app_trust)
-    args.add_all([overlay_trust] + gpu, before_each = "--module")
+    args.add_all([overlay_trust] + gpu + pretranslated.trust, before_each = "--module")
     args.add("--out", bundle)
-    _run(ctx, ctx.executable._trust, [args], [ctx.file.static_trust, ctx.file.app_trust, overlay_trust] + gpu, [bundle], "BootTrust", "Bundling the static trust caches")
+    _run(ctx, ctx.executable._trust, [args], [ctx.file.static_trust, ctx.file.app_trust, overlay_trust] + gpu + pretranslated.trust, [bundle], "BootTrust", "Bundling the static trust caches")
 
     # --- the kernel window and the loader --------------------------------------------------------------------------
     # The prelinked kernel as linked: Xcode's strip and llvm-objcopy both refuse its layout ("string table not at the
@@ -365,6 +371,11 @@ boot_package = rule(
         "loader_hdrs": attr.label_list(allow_files = True),
         "loader_include_markers": attr.label_list(allow_files = True, doc = "one file per -I directory, in order"),
         "linker_script": attr.label(mandatory = True, allow_single_file = True),
+        "pretranslated": attr.label(
+            default = "//ipsw:pretranslated",
+            providers = [PretranslatedPinsInfo],
+            doc = "iOS 27's pinned pretranslate run: its trust modules join the bundle, its cache list the ADT",
+        ),
         "_gpu_trustcache": attr.label(default = "//boot:gpu_trustcache"),
         "_profile": attr.label(default = "//bazel:profile"),
         "_smp": attr.label(default = "//boot:smp"),
