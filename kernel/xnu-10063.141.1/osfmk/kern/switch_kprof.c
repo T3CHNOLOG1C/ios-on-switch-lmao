@@ -214,6 +214,8 @@ struct kprof_faults {
 	uint32_t n[KPROF_F_CLASSES];
 	uint64_t abs[KPROF_F_CLASSES];      /* mach time in vm_fault */
 	uint64_t max_abs[KPROF_F_CLASSES];
+	uint64_t max_tid[KPROF_F_CLASSES];  /* the thread that took the longest, and its process */
+	int32_t  max_pid[KPROF_F_CLASSES];
 	uint32_t wired, kernel, dsc, copyio, purgeable, fast_af, fast_mod, around_faults, around_pages;
 };
 
@@ -758,6 +760,8 @@ switch_kprof_fault(unsigned int cls, unsigned int flags, uint64_t began, uint64_
 	b->faults.abs[cls] += took;
 	if (took > b->faults.max_abs[cls]) {
 		b->faults.max_abs[cls] = took;
+		b->faults.max_tid[cls] = thread_tid(thread);
+		b->faults.max_pid[cls] = task_pid(task);
 	}
 	b->faults.wired += (flags & SWITCH_FAULT_WIRE) != 0;
 	b->faults.kernel += (flags & SWITCH_FAULT_KERNEL) != 0;
@@ -1384,7 +1388,11 @@ kprof_faults_merge(struct kprof_faults *dst, const struct kprof_faults *src)
 	for (unsigned int k = 0; k < KPROF_F_CLASSES; k++) {
 		dst->n[k] += src->n[k];
 		dst->abs[k] += src->abs[k];
-		dst->max_abs[k] = MAX(dst->max_abs[k], src->max_abs[k]);
+		if (src->max_abs[k] > dst->max_abs[k]) {
+			dst->max_abs[k] = src->max_abs[k];
+			dst->max_tid[k] = src->max_tid[k];
+			dst->max_pid[k] = src->max_pid[k];
+		}
 	}
 	dst->wired += src->wired;
 	dst->kernel += src->kernel;
@@ -1468,6 +1476,21 @@ kprof_faults_lines(uint64_t window)
 	    d[0], (long long)d[0] - (long long)total, d[1], (long long)d[1] - (long long)zf_seen, d[2], d[3], d[4], d[5],
 	    d[6], d[7], d[8], vm_page_free_count);
 	kprof_flush();
+
+	lines = 0;
+	for (unsigned int k = 0; k < KPROF_F_CLASSES; k++) {
+		char owner[24];
+
+		if (kprof_abs_ms(f->max_abs[k]) < 10) {
+			continue;
+		}
+		kprof_put("%s %s %llu ms %s[%d] thread 0x%llx", lines++ ? "," : "SwitchKprof longest faults (10 ms or more):",
+		    names[k], kprof_abs_ms(f->max_abs[k]),
+		    kprof_task_name((uint64_t)(uint32_t)f->max_pid[k], owner, sizeof(owner)), f->max_pid[k], f->max_tid[k]);
+	}
+	if (lines) {
+		kprof_flush();
+	}
 
 	for (unsigned int i = 0; i < KPROF_TASKS; i++) {
 		const struct kprof_task *t = &kprof_tasks[i];
