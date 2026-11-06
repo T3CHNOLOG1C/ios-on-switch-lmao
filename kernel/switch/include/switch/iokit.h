@@ -8,43 +8,27 @@
 #include <stdint.h>
 
 #ifdef __cplusplus
-extern "C" {
-#endif
-/* TegraGM20B's IOSurface coherency backend (kernel/switch/iokit/iosurface.cpp), registered once at its start. */
-void tegra_coherency_register(uint64_t (*read_lock)(uint64_t), uint64_t (*write_unlock)(uint64_t));
-#ifdef __cplusplus
-}
-
-#include <IOKit/IOReturn.h>
+#include <mach/kern_return.h>
 
 class IOUserClient;
-struct IOExternalMethodArguments;
 
 /*
- * The IOSurfaceRootUserClient external-method selectors for lock and unlock (21H461; confirmed against the userland
- * IOSurfaceClientLock/Unlock, which pass selector 2 and 3), and the read-only lock option (IOSurfaceTypes.h).
+ * IOSurfaceLock and IOSurfaceUnlock are IOKit traps on IOSurfaceRootUserClient, not external methods: userland's
+ * IOSurfaceClientLock/Unlock call IOConnectTrap3(connection, 2 or 3, surface ID, lock options, &seed).
  */
 enum {
-    kTegraIOSurfaceLock = 2,
-    kTegraIOSurfaceUnlock = 3,
-    kTegraIOSurfaceLockReadOnly = 0x1
+    kSwitchIOSurfaceTrapLock = 2,
+    kSwitchIOSurfaceTrapUnlock = 3,
 };
 
-struct switch_iosurface_coherency {
-    uint64_t (*read_lock)(uint64_t pa);
-    uint64_t (*write_unlock)(uint64_t pa);
-};
-extern struct switch_iosurface_coherency g_tegra_coh;
+void switch_iokit_iosurface_trap(IOUserClient *client, uint32_t index, void *p1, void *p2);
 
-void switch_iokit_iosurface_coherency(IOUserClient *client, uint32_t selector, IOExternalMethodArguments *args);
-
-/* is_io_connect_method, after the client's method ran: an IOSurface lock or unlock gets the cache op it needs. */
-static inline void switch_iokit_external_method_done(IOUserClient *client, uint32_t selector,
-                                                     IOExternalMethodArguments *args, IOReturn ret)
+/* iokit_user_client_trap, after the client's trap ran: an IOSurface lock or unlock gets the cache op it needs. */
+static inline void switch_iokit_trap_done(IOUserClient *client, uint32_t index, void *p1, void *p2,
+                                          kern_return_t result)
 {
-    if (kIOReturnSuccess == ret && g_tegra_coh.read_lock &&
-        (selector == kTegraIOSurfaceLock || selector == kTegraIOSurfaceUnlock)) {
-        switch_iokit_iosurface_coherency(client, selector, args);
+    if (result == KERN_SUCCESS && (index == kSwitchIOSurfaceTrapLock || index == kSwitchIOSurfaceTrapUnlock)) {
+        switch_iokit_iosurface_trap(client, index, p1, p2);
     }
 }
 #endif

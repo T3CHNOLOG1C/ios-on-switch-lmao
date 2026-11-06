@@ -5121,7 +5121,6 @@ is_io_connect_method
 	if (kIOReturnSuccess == ret) {
 		ret = client->callExternalMethod( selector, &args );
 	}
-	switch_iokit_external_method_done(client, selector, &args, ret);
 
 	*scalar_outputCnt = args.scalarOutputCount;
 	*inband_outputCnt = args.structureOutputSize;
@@ -6437,6 +6436,7 @@ iokit_user_client_trap(struct iokit_user_client_trap_args *args)
 					result = (target->*func)(args->p1, args->p2, args->p3, args->p4, args->p5, args->p6);
 				}
 			}
+			switch_iokit_trap_done(userClient, args->index, args->p1, args->p2, result);
 
 			iokit_remove_connect_reference(userClient);
 		} else {
