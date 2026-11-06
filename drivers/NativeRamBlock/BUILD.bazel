@@ -42,7 +42,7 @@ kernel_driver(
         "-I",
         "{build}/native-ram-block",
     ],
-    hdr_deps = [],
+    hdr_deps = ["kits/SwitchCRC"],
     include_osfmk = False,
     recipe = ":iokit_cxx_generic",
 )

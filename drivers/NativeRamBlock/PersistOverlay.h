@@ -18,21 +18,11 @@
 //      bool sync();   (blocks are relative to the window; sync is only used while the header is made)
 #include <stdint.h>
 #include <string.h>
+#include "../../kits/SwitchCRC/SwitchCRC.h"
 
 namespace persist {
 constexpr uint32_t kBlock = 4096;
 constexpr uint32_t kHeaderBytes = 64;
-
-inline uint32_t crc32(const uint8_t *data, size_t bytes)
-{
-    uint32_t crc = 0xffffffffU;
-    for (size_t i = 0; i < bytes; ++i) {
-        crc ^= data[i];
-        for (unsigned bit = 0; bit < 8; ++bit)
-            crc = (crc >> 1) ^ (0xedb88320U & (0U - (crc & 1)));
-    }
-    return ~crc;
-}
 
 inline void put32(uint8_t *p, uint32_t v)
 {
@@ -87,7 +77,7 @@ inline void encodeHeader(uint8_t block[kBlock], uint64_t pages, const uint8_t se
     memcpy(block + 24, seed, 32);
     put32(block + 56, uint32_t(generation));
     // The CRC covers the first 60 bytes (the generation included); bytes 60..63 hold it.
-    put32(block + 60, crc32(block, 60));
+    put32(block + 60, switch_crc32(0, block, 60));
 }
 
 // 0 valid and for this seed; 1 blank or foreign (no magic); 2 damaged (CRC, version, size); 3 valid but for another seed/size.
@@ -95,7 +85,7 @@ inline int checkHeader(const uint8_t block[kBlock], uint64_t pages, const uint8_
 {
     if (memcmp(block, "SHNGDATA", 8))
         return 1;
-    if (get32(block + 8) != 1 || get32(block + 12) != kHeaderBytes || get32(block + 60) != crc32(block, 60))
+    if (get32(block + 8) != 1 || get32(block + 12) != kHeaderBytes || get32(block + 60) != switch_crc32(0, block, 60))
         return 2;
     if (generation)
         *generation = get32(block + 56);
