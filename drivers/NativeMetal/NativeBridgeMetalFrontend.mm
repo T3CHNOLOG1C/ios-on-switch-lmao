@@ -1857,9 +1857,10 @@ static bool asyncRenderPipelineWanted(MTLRenderPipelineDescriptor *d, MTLPipelin
     return !d.fragmentFunction || [(id)d.fragmentFunction isKindOfClass:[NBFunction class]];
 }
 
-// A state of `d` made on a worker by the synchronous path (the call returns at once; AsyncPipelines.h).
+// A state of `d` made on a worker by the synchronous path (the call returns at once; AsyncPipelines.h), or at its first
+// set when `lazy`.
 static id<MTLRenderPipelineState> asyncRenderPipeline(id device, MTLRenderPipelineDescriptor *d,
-                                                      MTLPipelineOption options)
+                                                      MTLPipelineOption options, bool lazy = false)
 {
     MTLRenderPipelineDescriptor *copy = [d copy];
     auto making = std::make_shared<nbasync::Making>();
@@ -1879,8 +1880,24 @@ static id<MTLRenderPipelineState> asyncRenderPipeline(id device, MTLRenderPipeli
     };
     NBRenderPipeline *state = [NBRenderPipeline new];
     state.making = making;
-    nbasync::start(making);
+    if (lazy)
+        nbasync::startLazy(making);
+    else
+        nbasync::start(making);
     return (id<MTLRenderPipelineState>)state;
+}
+
+// TegraGM20BMetal: the m2v twin of a state its raw path draws, made at its first set (AsyncPipelines.h startLazy); made
+// here when this process makes its states on the asking thread.
+extern "C" id native_bridge_metal_render_pipeline_lazy(id device, id descriptor, NSUInteger options)
+{
+    MTLRenderPipelineDescriptor *d = descriptor;
+    if (!asyncRenderPipelineWanted(d, (MTLPipelineOption)options))
+        return [(id<MTLDevice>)device newRenderPipelineStateWithDescriptor:d
+                                                                   options:(MTLPipelineOption)options
+                                                                reflection:nil
+                                                                     error:nil];
+    return asyncRenderPipeline(device, d, (MTLPipelineOption)options, true);
 }
 
 // `call` on a global queue of the caller's class (the completion-handler API, which calls back there; not the workers, whose

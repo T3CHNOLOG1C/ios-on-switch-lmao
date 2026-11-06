@@ -41,6 +41,8 @@
 // The m2v frontend's in-place texture over a buffer (NativeBridgeMetalFrontend.mm): weak, so the host benchmark links without it.
 extern "C" id native_bridge_metal_texture_in_place(id buffer, id descriptor, NSUInteger offset, NSUInteger bytesPerRow)
     __attribute__((weak_import));
+extern "C" id native_bridge_metal_render_pipeline_lazy(id device, id descriptor, NSUInteger options)
+    __attribute__((weak_import));
 
 #if SWITCH_FRAME_TIMELINE
 static std::atomic<uint64_t> gSurfaceTextures{0},
@@ -5136,15 +5138,24 @@ static MTLRenderPipelineDescriptor *twinDescriptor(MTLRenderPipelineDescriptor *
     return p;
 }
 
+// m2v's state over the twins, for a command buffer that has to go to m2v (made asynchronously in the render server:
+// AsyncPipelines.h). A state the pack draws gets one made at its first set there, by a fallback: made eagerly on the
+// user-initiated workers (above backboardd's main thread), they cost ~9 ms of CPU each, 25-170 ms of a worker, while no
+// command buffer fell back (11-06 21:03: 61 twins, 1074 raw command buffers, none to m2v).
+static id<MTLRenderPipelineState> pipelineTwin(MTLRenderPipelineDescriptor *d, MTLPipelineOption o, bool packed,
+                                               NSError **error)
+{
+    if (packed && native_bridge_metal_render_pipeline_lazy)
+        return native_bridge_metal_render_pipeline_lazy(gRM->fallback, twinDescriptor(d), o);
+    return [gRM->fallback newRenderPipelineStateWithDescriptor:twinDescriptor(d) options:o reflection:nil error:error];
+}
+
 - (id<MTLRenderPipelineState>)newRenderPipelineStateWithDescriptor:(MTLRenderPipelineDescriptor *)d
                                                              error:(NSError **)error
 {
-    // m2v's state over the twins is made as today (asynchronously in the render server: AsyncPipelines.h), so a command buffer
-    // that has to go to m2v finds it made
-    id<MTLRenderPipelineState> twin = [gRM->fallback newRenderPipelineStateWithDescriptor:twinDescriptor(d)
-                                                                                    error:error];
-    RMPipeline *p = [self pipelineFor:d twin:twin];
-    if (!twin && !p->_raw)
+    RMPipeline *p = [self pipelineFor:d twin:nil];
+    p->_twin = pipelineTwin(d, MTLPipelineOptionNone, p->_raw, error);
+    if (!p->_twin && !p->_raw)
         return nil;
     if (error && p->_raw)
         *error = nil;
@@ -5156,14 +5167,17 @@ static MTLRenderPipelineDescriptor *twinDescriptor(MTLRenderPipelineDescriptor *
                                                         reflection:(MTLAutoreleasedRenderPipelineReflection *)reflection
                                                              error:(NSError **)error
 {
-    id<MTLRenderPipelineState> twin = [gRM->fallback newRenderPipelineStateWithDescriptor:twinDescriptor(d)
-                                                                                  options:o
-                                                                               reflection:reflection
-                                                                                    error:error];
-    RMPipeline *p = [self pipelineFor:d twin:twin];
-    if (!twin && !p->_raw)
-        return nil;
-    return (id<MTLRenderPipelineState>)p;
+    if (reflection) {
+        id<MTLRenderPipelineState> twin = [gRM->fallback newRenderPipelineStateWithDescriptor:twinDescriptor(d)
+                                                                                      options:o
+                                                                                   reflection:reflection
+                                                                                        error:error];
+        RMPipeline *p = [self pipelineFor:d twin:twin];
+        return !twin && !p->_raw ? nil : (id<MTLRenderPipelineState>)p;
+    }
+    RMPipeline *p = [self pipelineFor:d twin:nil];
+    p->_twin = pipelineTwin(d, o, p->_raw, error);
+    return !p->_twin && !p->_raw ? nil : (id<MTLRenderPipelineState>)p;
 }
 
 - (void)newRenderPipelineStateWithDescriptor:(MTLRenderPipelineDescriptor *)d
