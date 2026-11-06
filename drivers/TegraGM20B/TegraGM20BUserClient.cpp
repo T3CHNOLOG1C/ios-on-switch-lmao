@@ -814,7 +814,8 @@ OSDefineMetaClassAndStructors(AGXDeviceUserClient, IOUserClient)
 	    tgm_mem_new(vm_, &fence_pa_, 1, &fence_mem_) ||
 	    tgm_vm_kmap(vm_, fence_mem_, 4096, &fence_gpu_))
 		return false;
-	IOAddressRange range = {fence_pa_, 4096};
+	// the whole fence slot (gpu.c TGM_FENCE_SLOT): one VM page
+	IOAddressRange range = {fence_pa_, static_cast<IOByteCount>(PAGE_SIZE)};
 	fence_view_ = IOMemoryDescriptor::withAddressRanges(
 		&range, 1,
 		static_cast<IOOptionBits>(kIODirectionIn) |

@@ -701,21 +701,27 @@ extern "C" int nvxnu_pool_init(int *zeroed)
 	IOByteCount len = 0;
 	const addr64_t first = md->getPhysicalSegment(0, &len, kIOMemoryMapperNone);
 	void *va = md->getBytesNoCopy();
-	if (!first || (first & 0xfff) || !va || len < bytes || first + bytes > (1ULL << 32)) {
+	if (!first || (first & PAGE_MASK) || !va || len < bytes || first + bytes > (1ULL << 32)) {
 		md->complete();
 		md->release();
 		return -12;
 	}
 	memset(va, 0, bytes);
 	dcache_op(va, bytes, true);
-	for (uint64_t off = 0; off < bytes; off += 4096)
-		pmap_set_cache_attributes(static_cast<ppnum_t>((first + off) >> 12), VM_WIMG_WCOMB);
+	for (uint64_t off = 0; off < bytes; off += PAGE_SIZE)
+		pmap_set_cache_attributes(static_cast<ppnum_t>(atop_64(first + off)),
+					  VM_WIMG_WCOMB);
 	pool.descriptor = md;
 	pool.pa = first;
 	pool.size = bytes;
 	pool.va = va;
 	*zeroed = 1;
 	return 0;
+}
+
+extern "C" nvxnu_u32 nvxnu_vm_page_size(void)
+{
+	return PAGE_SIZE;
 }
 
 extern "C" nvxnu_u64 nvxnu_pool_base_pa(void)
@@ -754,10 +760,25 @@ extern "C" void *nvxnu_vmap(const nvxnu_u64 *pas, nvxnu_u32 count)
 	IOAddressRange *ranges = IONew(IOAddressRange, count);
 	if (!ranges)
 		return nullptr;
-	for (nvxnu_u32 i = 0; i < count; i++)
-		ranges[i] = {pas[i], 4096};
+	nvxnu_u32 runs = 0;
+	bool whole = true;
+	for (nvxnu_u32 i = 0; i < count; i++) {
+		if (runs && ranges[runs - 1].address + ranges[runs - 1].length == pas[i]) {
+			ranges[runs - 1].length += 4096;
+			continue;
+		}
+		// a kernel mapping is whole VM pages, so only the first run may start inside one and only the last end there
+		if (runs &&
+		    (((ranges[runs - 1].address + ranges[runs - 1].length) | pas[i]) & PAGE_MASK))
+			whole = false;
+		ranges[runs++] = {pas[i], 4096};
+	}
+	if (!whole) {
+		IODelete(ranges, IOAddressRange, count);
+		return nullptr;
+	}
 	IOMemoryDescriptor *md = IOMemoryDescriptor::withAddressRanges(
-		ranges, count,
+		ranges, runs,
 		static_cast<IOOptionBits>(kIODirectionInOut) |
 			static_cast<IOOptionBits>(kIOMemoryTypePhysical64),
 		TASK_NULL);

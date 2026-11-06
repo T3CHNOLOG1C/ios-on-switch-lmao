@@ -626,16 +626,25 @@ uint64_t tgm_timestamp_ns(void)
 	return t;
 }
 
+/* Pool BOs are mapped into processes, and a process maps whole VM pages (four pool pages): each BO starts on one and is
+ * padded to one, so its mapping never reaches another BO. */
+static uint64_t pool_bo_bytes(uint64_t bytes)
+{
+	const uint64_t vm_page = nvxnu_vm_page_size();
+	return (bytes + vm_page - 1) & ~(vm_page - 1);
+}
+
 void *tgm_pool_alloc(uint64_t bytes, uint64_t *pa)
 {
 	unsigned long long h = 0;
-	void *va = nvxnu_pool_alloc_clean(bytes, &h);
+	void *va = nvxnu_pool_alloc_clean(pool_bo_bytes(bytes), nvxnu_vm_page_size(), &h);
 	*pa = va ? h : 0;
 	return va;
 }
 
 void tgm_pool_free_zeroed(void *va, uint64_t bytes, uint64_t pa)
 {
+	bytes = pool_bo_bytes(bytes); /* the padding too: the owner's mapping covered it */
 	memset(va, 0, bytes);
 	/* the write-combining buffers drained before the pages are handed out again */
 	__asm__ volatile("dsb sy" ::: "memory");
@@ -647,7 +656,7 @@ static void scrub_kick(void);
 /* Back dirty: the scrubber zeroes it on the GPU (see "pool scrub") unless an allocation takes it first and zeroes it. */
 void tgm_pool_free(void *va, uint64_t bytes, uint64_t pa)
 {
-	dma_free_attrs(&gpu_pdev.dev, bytes, va, pa, 0);
+	dma_free_attrs(&gpu_pdev.dev, pool_bo_bytes(bytes), va, pa, 0);
 	scrub_kick();
 }
 
@@ -2767,6 +2776,11 @@ void tgm_chan_del(struct tgm_chan **pchan)
  * address space maps all of them once and waits on any user channel with a semaphore acquire. Pages are handed out
  * round-robin and zeroed, so a page freed with an acquire still pending on it is not reused at once. */
 #define TGM_FENCE_PAGES 64 /* one per connection (TegraGM20BUserClient.cpp kMaxConnections) */
+/* A fence page is a whole VM page at most 16 KiB (XNU's PAGE_MAX_SIZE): its client maps it read-only, and a mapping is
+ * whole VM pages, so a smaller slot would show the client its neighbours'. The GPU maps the range in 4 KiB pages. */
+#define TGM_FENCE_SLOT (16 * 1024)
+#define TGM_FENCE_BYTES (TGM_FENCE_PAGES * TGM_FENCE_SLOT)
+#define TGM_FENCE_GPU_PAGES (TGM_FENCE_BYTES / PAGE_SIZE)
 
 static struct {
 	void *va;
@@ -2775,23 +2789,39 @@ static struct {
 	u32 next;
 } fences;
 
+static u64 fences_pas
+	[TGM_FENCE_GPU_PAGES]; /* the range's GPU pages, for the address spaces that map all of it */
+
+/* live_lock held: the fence range, made once and kept */
+static int fences_alloc(void)
+{
+	u32 i;
+
+	if (fences.va)
+		return 0;
+	fences.va = tgm_pool_alloc(TGM_FENCE_BYTES, &fences.pa);
+	if (!fences.va)
+		return -ENOMEM;
+	for (i = 0; i < TGM_FENCE_GPU_PAGES; i++)
+		fences_pas[i] = fences.pa + i * PAGE_SIZE;
+	return 0;
+}
+
 int tgm_fence_page_get(volatile uint32_t **va, uint64_t *pa)
 {
 	u32 i, n;
 	int ret = -ENOMEM;
 
 	mutex_lock(&live_lock);
-	if (!fences.va)
-		fences.va = tgm_pool_alloc(TGM_FENCE_PAGES * PAGE_SIZE, &fences.pa);
-	for (n = 0; fences.va && n < TGM_FENCE_PAGES; n++) {
+	for (n = 0; !fences_alloc() && n < TGM_FENCE_PAGES; n++) {
 		i = (fences.next + n) % TGM_FENCE_PAGES;
 		if (fences.used & BIT_ULL(i))
 			continue;
 		fences.used |= BIT_ULL(i);
 		fences.next = i + 1;
-		memset((u8 *)fences.va + i * PAGE_SIZE, 0, PAGE_SIZE);
-		*va = (volatile uint32_t *)((u8 *)fences.va + i * PAGE_SIZE);
-		*pa = fences.pa + i * PAGE_SIZE;
+		memset((u8 *)fences.va + i * TGM_FENCE_SLOT, 0, PAGE_SIZE);
+		*va = (volatile uint32_t *)((u8 *)fences.va + i * TGM_FENCE_SLOT);
+		*pa = fences.pa + i * TGM_FENCE_SLOT;
 		ret = 0;
 		break;
 	}
@@ -2805,7 +2835,7 @@ void tgm_fence_page_put(volatile uint32_t *va)
 	if (!va)
 		return;
 	mutex_lock(&live_lock);
-	fences.used &= ~BIT_ULL(off / PAGE_SIZE);
+	fences.used &= ~BIT_ULL(off / TGM_FENCE_SLOT);
 	mutex_unlock(&live_lock);
 }
 
@@ -2822,30 +2852,23 @@ void tgm_fence_page_put(volatile uint32_t *va)
  * hang like any other (tgm_chan_check_progress), and its line names the acquire (tgm_chan_hung). */
 static DEFINE_MUTEX(fences_mem_lock);
 static struct tgm_mem *fences_mem; /* the whole pool as GPU memory, made once and kept */
-static u64 fences_pas[TGM_FENCE_PAGES];
 
 static int fences_map(struct tgm_vm *vm)
 {
-	u32 i;
 	int ret = 0;
 
 	mutex_lock(&fences_mem_lock);
 	if (!fences_mem) {
 		/* the pool exists from the first connection on; make sure it does now */
 		mutex_lock(&live_lock);
-		if (!fences.va)
-			fences.va = tgm_pool_alloc(TGM_FENCE_PAGES * PAGE_SIZE, &fences.pa);
+		ret = fences_alloc();
 		mutex_unlock(&live_lock);
-		if (!fences.va)
-			ret = -ENOMEM;
-		for (i = 0; !ret && i < TGM_FENCE_PAGES; i++)
-			fences_pas[i] = fences.pa + i * PAGE_SIZE;
 		if (!ret)
-			ret = tgm_mem_new(vm, fences_pas, TGM_FENCE_PAGES, &fences_mem);
+			ret = tgm_mem_new(vm, fences_pas, TGM_FENCE_GPU_PAGES, &fences_mem);
 	}
 	mutex_unlock(&fences_mem_lock);
 	if (!ret)
-		ret = vm_kmap(vm, fences_mem, TGM_FENCE_PAGES * PAGE_SIZE, 1, &vm->fences_va);
+		ret = vm_kmap(vm, fences_mem, TGM_FENCE_BYTES, 1, &vm->fences_va);
 	return ret;
 }
 
@@ -2862,7 +2885,7 @@ static int order_add(struct tgm_chan *waiter, struct tgm_chan *source, u32 seqno
 	uintptr_t off = (uintptr_t)source->fence_cpu - (uintptr_t)fences.va;
 	u32 i;
 
-	if (!waiter->vm->fences_va || !fences.va || off >= TGM_FENCE_PAGES * PAGE_SIZE)
+	if (!waiter->vm->fences_va || !fences.va || off >= TGM_FENCE_BYTES)
 		return -ENODEV;
 	for (i = 0; i < waiter->norder; i++) {
 		if (waiter->order[i].id != source->id)
@@ -3549,10 +3572,8 @@ static void present_stats(u32 *presents, u64 *sum, u64 *max)
 
 int tgm_present_open(struct tgm_vm **pvm)
 {
-	u64 pas[TGM_FENCE_PAGES];
 	volatile u32 *probe;
 	u64 probe_pa;
-	u32 i;
 	int ret = 0;
 
 	if (gpu.stage < 3)
@@ -3565,8 +3586,6 @@ int tgm_present_open(struct tgm_vm **pvm)
 	if (ret)
 		goto out;
 	tgm_fence_page_put(probe);
-	for (i = 0; i < TGM_FENCE_PAGES; i++)
-		pas[i] = fences.pa + i * PAGE_SIZE;
 	present.deadline_work = nvxnu_work_alloc(present_deadline, NULL);
 	ret = present.deadline_work ? tgm_vm_new(&present.vm) : -ENOMEM;
 	if (!ret)
@@ -3579,9 +3598,9 @@ int tgm_present_open(struct tgm_vm **pvm)
 		ret = tgm_vm_kmap(present.vm, present.fence_mem, PAGE_SIZE, &present.fence_gpu);
 	}
 	if (!ret)
-		ret = tgm_mem_new(present.vm, pas, TGM_FENCE_PAGES, &present.fences_mem);
+		ret = tgm_mem_new(present.vm, fences_pas, TGM_FENCE_GPU_PAGES, &present.fences_mem);
 	if (!ret)
-		ret = tgm_vm_kmap(present.vm, present.fences_mem, TGM_FENCE_PAGES * PAGE_SIZE,
+		ret = tgm_vm_kmap(present.vm, present.fences_mem, TGM_FENCE_BYTES,
 				  &present.fences_gpu);
 	if (!ret)
 		ret = tgm_chan_new(present.vm, NULL, present.fence, present.fence_gpu, "present", 1,
@@ -3663,8 +3682,8 @@ static int present_copy(uint64_t src_va, uint64_t src_pa, uint64_t stride, int s
 	list_for_each_entry(user, &live_chans, live)
 	{
 		uintptr_t off = (uintptr_t)user->fence_cpu - (uintptr_t)fences.va;
-		if (user->kernel || READ_ONCE(user->error) || off >= TGM_FENCE_PAGES * PAGE_SIZE ||
-		    n == room || (matched && !vm_imports(user->vm, src_pa)) ||
+		if (user->kernel || READ_ONCE(user->error) || off >= TGM_FENCE_BYTES || n == room ||
+		    (matched && !vm_imports(user->vm, src_pa)) ||
 		    (s32)(tgm_chan_completed(user) - user->submitted) >= 0)
 			continue;
 		present.wait[n].id = user->id;

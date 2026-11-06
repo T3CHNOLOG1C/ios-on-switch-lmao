@@ -865,10 +865,10 @@ void dma_free_attrs(struct device *dev, size_t size, void *va, dma_addr_t handle
 
 /* The GPU driver's BOs in the pool (tgm_pool_alloc): first fit, then only the pages a free left dirty are zeroed, so a
  * range nvxnu_pool_free_zeroed gave back costs nothing to hand out again. Zeroed memory either way. */
-void *nvxnu_pool_alloc_clean(unsigned long size, unsigned long long *pa)
+void *nvxnu_pool_alloc_clean(unsigned long size, unsigned long align, unsigned long long *pa)
 {
 	unsigned long n = PAGE_ALIGN(size) >> PAGE_SHIFT;
-	long i = pool_map ? pool_alloc(n, 1) : -ENOMEM;
+	long i = pool_map ? pool_alloc(n, align > PAGE_SIZE ? align >> PAGE_SHIFT : 1) : -ENOMEM;
 	if (i < 0)
 		return NULL;
 	pool_zero_dirty(i, n, 0);

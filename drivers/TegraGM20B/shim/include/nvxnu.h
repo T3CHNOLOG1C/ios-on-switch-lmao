@@ -85,10 +85,13 @@ void nvxnu_iounmap(volatile void *va, nvxnu_u64 size);
 /* *zeroed: 1 if the pool's pages were zeroed here (the fallback); the reserved range is not, its pages start dirty and
  * the GPU's copy engine zeroes them once it runs (gpu.c "pool scrub") */
 int nvxnu_pool_init(int *zeroed);
+/* XNU's VM page: what a CPU mapping covers, 16 KiB over the A57's 4 KiB granule. Pool and GPU pages stay 4 KiB. */
+nvxnu_u32 nvxnu_vm_page_size(void);
 nvxnu_u64 nvxnu_pool_base_pa(void);
 nvxnu_u64 nvxnu_pool_size(void);
 void *nvxnu_pool_base_va(void);
-/* map arbitrary pool pages (by pa) into one virtually contiguous kernel range, write-combined */
+/* map pool pages (by pa) into one virtually contiguous kernel range, write-combined; NULL unless every break between
+ * runs of consecutive pages falls on a VM page */
 void *nvxnu_vmap(const nvxnu_u64 *pas, nvxnu_u32 count);
 void nvxnu_vunmap(void *va);
 void nvxnu_dcache_clean(const void *va, nvxnu_u64 size);

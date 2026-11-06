@@ -158,7 +158,8 @@ TEST(GM20BPoolScrubSource, EveryAllocationZeroesWhatAFreeLeftDirty)
 	     {"struct page *alloc_pages(gfp_t gfp, unsigned int order)",
 	      "void *dma_alloc_attrs(struct device *dev, size_t size, dma_addr_t *handle, gfp_t "
 	      "gfp,",
-	      "void *nvxnu_pool_alloc_clean(unsigned long size, unsigned long long *pa)"})
+	      "void *nvxnu_pool_alloc_clean(unsigned long size, unsigned long align, unsigned long "
+	      "long *pa)"})
 		EXPECT_THAT(definition(shim, signature), HasSubstr("pool_zero_dirty("))
 			<< signature;
 	const std::string zero = definition(
@@ -175,6 +176,30 @@ TEST(GM20BPoolScrubSource, EveryAllocationZeroesWhatAFreeLeftDirty)
 		claim,
 		HasSubstr(
 			"bitmap_set(pool_map, first, n)"));  // claimed ranges are allocated: nobody takes them
+}
+
+// A process maps whole VM pages (16 KiB, four pool pages): every pool BO and fence slot it can map is whole VM pages,
+// so its mapping never reaches another BO's, another connection's fence or nvkm's own memory.
+TEST(GM20BPoolIsolationSource, CpuMappedPoolMemoryIsWholeVmPages)
+{
+	EXPECT_THAT(
+		definition(gpu(), "void *tgm_pool_alloc(uint64_t bytes, uint64_t *pa)"),
+		HasSubstr(
+			"nvxnu_pool_alloc_clean(pool_bo_bytes(bytes), nvxnu_vm_page_size(), &h)"));
+	EXPECT_THAT(definition(gpu(), "void tgm_pool_free(void *va, uint64_t bytes, uint64_t pa)"),
+		    HasSubstr("pool_bo_bytes(bytes)"));
+	EXPECT_THAT(definition(gpu(),
+			       "void tgm_pool_free_zeroed(void *va, uint64_t bytes, uint64_t pa)"),
+		    HasSubstr("bytes = pool_bo_bytes(bytes)"));
+	EXPECT_THAT(definition(SourceText("../shim/linux.c"),
+			       "void *nvxnu_pool_alloc_clean(unsigned long size, unsigned long "
+			       "align, unsigned long long *pa)"),
+		    HasSubstr("align >> PAGE_SHIFT"));
+	EXPECT_THAT(
+		definition(gpu(), "int tgm_fence_page_get(volatile uint32_t **va, uint64_t *pa)"),
+		HasSubstr("i * TGM_FENCE_SLOT"));
+	EXPECT_THAT(client(), HasSubstr("IOAddressRange range = {fence_pa_, "
+					"static_cast<IOByteCount>(PAGE_SIZE)};"));
 }
 
 TEST(GM20BPoolScrubSource, ScrubberFreesOnlyFromItsFence)
