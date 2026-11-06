@@ -177,6 +177,9 @@ struct Pipeline {
     uint32_t push[32] = {}, pushMask = 0;  // root table [0x700, 0x780): the words m2v's push ranges write, and which
     bool vsSetCbuf = false, fsSetCbuf = false;  // the program reads set 0 as constant buffer 1
     uint8_t writeBits = 0;                      // colors its draws write: SET_CT_WRITE(i) with a channel on
+    // colors its fragment shader reads, and may write, as storage images inside the pixel interlock (metal2vulkan's storage
+    // form of a fetch: the state turns the interlock on with SET_PIXEL_SHADER_INTERLOCK_CONTROL); the ROP writes none of them
+    uint8_t storageBits = 0;
     bool constantBlend = false;     // a blend factor of a blended color is the encoder's blend color
     uint32_t colorFormats[8] = {};  // MTLPixelFormat of each color attachment the state was made for (0: none)
     uint8_t readBits = 0;   // colors its draws read as they were: blended into, or written through a partial mask
@@ -272,7 +275,8 @@ private:
     uint32_t blendColor_[4] = {};  // Metal's default, (0, 0, 0, 0), until the encoder sets one
     bool blendColorDirty_ = true;
     uint32_t topology_ = ~0u, restart_ = ~0u, first_ = 0, baseInstance_ = 0;
-    uint8_t writtenBits_ = 0;  // colors a draw wrote since the last barrier
+    uint8_t writtenBits_ = 0;         // colors the ROP wrote since the last barrier
+    uint8_t storageWrittenBits_ = 0;  // colors a fragment shader may have written as storage since the last barrier
     bool memoryless_[8] = {};
     const Texture *shadowOf_[8] =
         {};  // a shadow target's texture, where pass_ holds its pool image (CommandBuffer::render)
@@ -596,7 +600,7 @@ private:
     std::mutex lock_;
     Kernel k_;
     Pack pack_;
-    Bo heap_, tic_, tsc_, root_, zero_;
+    Bo heap_, tic_, tsc_, root_, zero_, tickets_;
     Ring push_, upload_;
     uint32_t channel_ = 0, lastSeqno_ = 0;
     const volatile uint32_t *fence_ = nullptr;

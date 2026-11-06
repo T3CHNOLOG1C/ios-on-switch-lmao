@@ -32,6 +32,7 @@ enum : uint32_t {
     COLOR_CLEAR_VALUE = 0x0d80,
     INVALIDATE_SHADER_CACHES_NO_WFI = 0x0da4,
     PIXEL_SHADER_BARRIER = 0x0de0,
+    PIXEL_SHADER_INTERLOCK_CONTROL = 0x1224,
     // Not in NVIDIA's published class headers: the texture data cache invalidate that NVN (deko3d's ORDER_FRAGMENTS
     // barrier) and NVIDIA's Linux driver put after PIXEL_SHADER_BARRIER, which orders it after the earlier pixels. The
     // _NO_WFI form acts as the front end reads it, while those pixels may still be shading or in the ROP.
@@ -73,6 +74,7 @@ enum : uint32_t {
 };
 
 constexpr uint32_t kRootBytes = 0x800, kSetBytes = 0x100, kUboChunk = 0x100;
+constexpr uint32_t kRootInterlockTickets = 0x260;  // offsetof(nvk_root_descriptor_table, interlock_ticket_buffer)
 constexpr uint32_t kTicCount = 8192, kTscCount = 1024;
 constexpr uint64_t kPushRing = 2 << 20, kUploadRing = 4 << 20;
 constexpr uint64_t kChunk = 16 << 20, kDedicated = 8 << 20;
@@ -226,6 +228,7 @@ bool Device::init(std::string &err)
     const uint64_t heapBytes = std::min<uint64_t>(pack_.bytes(PackHeap), kHeapCap);
     if (!k_.alloc(heapBytes + 0x1000, true, heap_) || !k_.alloc(kTicCount * 32, true, tic_) ||
         !k_.alloc(kTscCount * 32, true, tsc_) || !k_.alloc(0x1000, true, root_) || !k_.alloc(0x10000, true, zero_) ||
+        !k_.alloc(0x1000, true, tickets_) ||
         !k_.alloc(kPushRing, true, push_.bo) || !k_.alloc(kUploadRing, true, upload_.bo)) {
         err = k_.error();
         return false;
@@ -234,6 +237,7 @@ bool Device::init(std::string &err)
     memset(tsc_.cpu, 0, tsc_.bytes);
     memset(root_.cpu, 0, root_.bytes);
     memset(zero_.cpu, 0, zero_.bytes);
+    memset(tickets_.cpu, 0, tickets_.bytes);
     if (!k_.channel(TegraGM20BEngine3D | TegraGM20BEngineCompute | TegraGM20BEngineCopy | TegraGM20BEngine2D |
                         TegraGM20BEngineM2MF,
                     channel_, fence_)) {
@@ -319,6 +323,13 @@ bool Device::init(std::string &err)
     p.inc(CB_SELECTOR_A, {kRootBytes, uint32_t(root_.va >> 32), uint32_t(root_.va)});
     p.m(LOAD_CB_OFFSET, 0x1c);
     p.nonInc(LOAD_CB, (const uint32_t[]){0x88}, 1);
+    // the pixel interlock's ticket buffer (nvk_root_descriptor_table.interlock_ticket_buffer; NAK's lowering waits on and
+    // releases its words, 256 per GPC): zero, as this channel's ticket dispenser starts. NVK's init above may name the probe's.
+    {
+        const uint32_t a[2] = {uint32_t(tickets_.va), uint32_t(tickets_.va >> 32)};
+        p.m(LOAD_CB_OFFSET, kRootInterlockTickets);
+        p.nonInc(LOAD_CB, a, 2);
+    }
     TegraGM20BAbiPush seg = {va, uint32_t(p.at - start), 0};
     uint32_t seq = 0;
     if (!k_.exec(channel_, &seg, 1, 0, seq)) {
@@ -403,6 +414,11 @@ Pipeline *Device::pipeline(uint64_t keyHash)
     for (uint32_t c = 0; c < 8; c++)
         if (writes[c] & 0x1111)  // R_ENABLE, G_ENABLE, B_ENABLE, A_ENABLE
             pl.writeBits |= uint8_t(1u << c);
+    // TILE_COALESCER_MODE: conflicts by sample or pixel
+    bool interlocked = false;
+    for (uint32_t k = 0; k < pp.blobDwords; k += 2)
+        if (blob[pp.blob + k] == PIXEL_SHADER_INTERLOCK_CONTROL)
+            interlocked = blob[pp.blob + k + 1] & 3;
     w.m(0x2044, vs);  // SET_PIPELINE_PROGRAM(VERTEX)
     w.m(0x2144, fs);  // SET_PIPELINE_PROGRAM(PIXEL)
     pl.methods.assign(words.data(), w.at);
@@ -428,6 +444,8 @@ Pipeline *Device::pipeline(uint64_t keyHash)
     for (uint32_t k = 0; k < pp.entries; k++)
         if (pp.entry[k].kind == EntryFetch && pp.entry[k].slot < 8)
             pl.fetchBits |= uint8_t(1u << pp.entry[k].slot);
+    if (interlocked)
+        pl.storageBits = pl.fetchBits;
     pl.rec = rec;
     return &pl;
 }
@@ -1836,7 +1854,7 @@ void RenderEncoder::barrier()
         reserve();
     p_.m(WAIT_FOR_IDLE, 0);
     p_.m(INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI, 0);
-    writtenBits_ = 0;
+    writtenBits_ = storageWrittenBits_ = 0;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     writtenCount_ = 0;
     writtenFull_ = false;
@@ -2038,6 +2056,14 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, uint32_t first, ui
                 cb_->refusal = {RefNoTic, e.slot, t->format, t->width};
                 return false;
             }
+            // metal2vulkan's storage view of an 8-bit sRGB color is its texel size's unsigned-integer format, not the
+            // texture's header
+            const FormatInfo *f = t && (pl->storageBits >> e.slot & 1) ? formatInfo(t->format) : nullptr;
+            if (f && f->srgb) {
+                *why = "an sRGB color read and written in the pixel interlock";
+                cb_->refusal = {RefNoTic, e.slot, t->format, t->width};
+                return false;
+            }
             tic = t ? t->tic : 0;
         }
         const uint8_t map = e.kind == EntryTexture && textures_[e.slot] ? textures_[e.slot]->addressMap : 0;
@@ -2139,7 +2165,13 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, uint32_t first, ui
     // color this draw fetches (m2v's barrier, 0106, follows any color write: the ROP writes only the colors SET_CT_WRITE opens).
     // The barrier holds this draw's pixel shading until the earlier pixels have left the ROP; vertex work and rasterization
     // go on (NVK's for a color-output to fragment-read dependency, as NVIDIA's drivers order one)
-    if (pl->fetchBits & writtenBits_) {
+    // A storage access in the interlock is ordered after the earlier ones by the ticket, not after the ROP's writes; the
+    // ROP's accesses are ordered after neither: a barrier where a texture fetch meets a write of either kind, a storage
+    // access meets a ROP write, or a ROP access (a write, or the read a blend or a partial write mask makes) meets a
+    // storage write.
+    const uint8_t texFetched = pl->fetchBits & ~pl->storageBits, ropAccessed = pl->writeBits | pl->readBits;
+    if ((texFetched & (writtenBits_ | storageWrittenBits_)) | (pl->storageBits & writtenBits_) |
+        (ropAccessed & storageWrittenBits_)) {
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
         dev_->stats.fetchBarriers++;
         if (!whole_ && !writtenOverlaps(drawRect_))
@@ -2149,7 +2181,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, uint32_t first, ui
 #endif
         p.m(PIXEL_SHADER_BARRIER, 0);
         p.m(INVALIDATE_TEXTURE_DATA_CACHE_PIXEL_ORDERED, 0);
-        writtenBits_ = 0;
+        writtenBits_ = storageWrittenBits_ = 0;
     }
     if (first != first_ || baseInstance != baseInstance_) {
         // nvk_mme_build_set_draw_params: root draw.vs.{base_vertex, base_instance} and the base registers
@@ -2161,6 +2193,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, uint32_t first, ui
         baseInstance_ = baseInstance;
     }
     writtenBits_ |= pl->writeBits;
+    storageWrittenBits_ |= pl->storageBits;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     if (pl->writeBits && whole_)
         writtenFull_ = true;
