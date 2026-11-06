@@ -1065,6 +1065,109 @@ import_surface_id(const void *host_ptr, uint64_t size_B)
    return import_surface.id;
 }
 
+static __thread struct {
+   uintptr_t cpu;
+   uint64_t bytes, handle, va;
+   uint32_t kind;
+   void (*hold)(void *lease);
+   void (*drop)(void *lease);
+   void *lease;
+} import_foreign;
+
+__attribute__((visibility("default"))) void
+switch_nvk_import_foreign(const void *cpu, uint64_t bytes, uint64_t handle,
+                          uint64_t va, uint32_t kind, void (*hold)(void *),
+                          void (*drop)(void *), void *lease)
+{
+   import_foreign.cpu = (uintptr_t)cpu;
+   import_foreign.bytes = bytes;
+   import_foreign.handle = handle;
+   import_foreign.va = va;
+   import_foreign.kind = kind;
+   import_foreign.hold = hold;
+   import_foreign.drop = drop;
+   import_foreign.lease = lease;
+}
+
+static bool
+import_is_foreign(const void *host_ptr, uint64_t size_B)
+{
+   const uintptr_t start = (uintptr_t)host_ptr;
+   return import_foreign.cpu && start >= import_foreign.cpu &&
+          start + size_B <= import_foreign.cpu + import_foreign.bytes;
+}
+
+static void
+nvkmd_darwin_foreign_va_free(struct nvkmd_va *va)
+{
+   FREE(va);
+}
+
+static VkResult
+nvkmd_darwin_foreign_va_bind_mem(struct nvkmd_va *va,
+                                 struct vk_object_base *log_obj,
+                                 uint64_t va_offset_B, struct nvkmd_mem *mem,
+                                 uint64_t mem_offset_B, uint64_t range_B)
+{
+   return vk_error(log_obj, VK_ERROR_FEATURE_NOT_PRESENT);
+}
+
+static VkResult
+nvkmd_darwin_foreign_va_unbind(struct nvkmd_va *va,
+                               struct vk_object_base *log_obj,
+                               uint64_t va_offset_B, uint64_t range_B)
+{
+   return vk_error(log_obj, VK_ERROR_FEATURE_NOT_PRESENT);
+}
+
+/* The VA of foreign memory: its owner's binding, never bound or unbound here. */
+static const struct nvkmd_va_ops nvkmd_darwin_foreign_va_ops = {
+   .free = nvkmd_darwin_foreign_va_free,
+   .bind_mem = nvkmd_darwin_foreign_va_bind_mem,
+   .unbind = nvkmd_darwin_foreign_va_unbind,
+};
+
+/* The host import the foreign hint covers: memory the other driver of the
+ * shared connection keeps bound, made with no kernel call. The hint is taken.
+ */
+static VkResult
+darwin_import_foreign(struct nvkmd_darwin_dev *dev,
+                      struct vk_object_base *log_obj,
+                      void *host_ptr, uint64_t size_B,
+                      struct nvkmd_mem **mem_out)
+{
+   struct nvkmd_darwin_mem *mem = CALLOC_STRUCT(nvkmd_darwin_mem);
+   struct nvkmd_va *va = CALLOC_STRUCT(nvkmd_va);
+   if (mem == NULL || va == NULL) {
+      FREE(mem);
+      FREE(va);
+      return vk_error(log_obj, VK_ERROR_OUT_OF_HOST_MEMORY);
+   }
+
+   const uint64_t offset_B = (uintptr_t)host_ptr - import_foreign.cpu;
+   mem->handle = import_foreign.handle;
+   mem->bo_offset_B = offset_B;
+   mem->host_ptr = host_ptr;
+   mem->drop = import_foreign.drop;
+   mem->lease = import_foreign.lease;
+   nvkmd_mem_init(&dev->base, &mem->base, &nvkmd_darwin_mem_ops,
+                  NVKMD_MEM_LOCAL | NVKMD_MEM_CAN_MAP | NVKMD_MEM_SHARED,
+                  size_B, dev->base.pdev->bind_align_B);
+   *va = (struct nvkmd_va) {
+      .ops = &nvkmd_darwin_foreign_va_ops,
+      .dev = &dev->base,
+      .pte_kind = import_foreign.kind,
+      .addr = import_foreign.va + offset_B,
+      .size_B = size_B,
+   };
+   mem->base.va = va;
+
+   import_foreign.hold(import_foreign.lease);
+   import_foreign.cpu = 0;
+   *mem_out = &mem->base;
+   return VK_SUCCESS;
+}
+
 static VkResult
 nvkmd_darwin_import_host_mem(struct nvkmd_dev *_dev,
                              struct vk_object_base *log_obj,
@@ -1072,6 +1175,9 @@ nvkmd_darwin_import_host_mem(struct nvkmd_dev *_dev,
                              struct nvkmd_mem **mem_out)
 {
    struct nvkmd_darwin_dev *dev = nvkmd_darwin_dev(_dev);
+
+   if (dev->shared_conn && import_is_foreign(host_ptr, size_B))
+      return darwin_import_foreign(dev, log_obj, host_ptr, size_B, mem_out);
 
    struct TegraGM20BAbiBoImport req = {
       .address = (uintptr_t)host_ptr,
@@ -1114,8 +1220,12 @@ nvkmd_darwin_mem_free(struct nvkmd_mem *_mem)
    struct nvkmd_darwin_dev *dev = nvkmd_darwin_dev(_mem->dev);
 
    nvkmd_va_free(mem->base.va);
-   /* The kernel keeps the pages until in-flight work is done (CONTRACT.md §4). */
-   darwin_bo_free(dev, mem->handle);
+   if (mem->drop != NULL) {
+      mem->drop(mem->lease);
+   } else {
+      /* The kernel keeps the pages until in-flight work is done (CONTRACT.md §4). */
+      darwin_bo_free(dev, mem->handle);
+   }
    FREE(mem);
 }
 
@@ -1352,7 +1462,7 @@ nvkmd_darwin_va_bind_mem(struct nvkmd_va *va, struct vk_object_base *log_obj,
       .op = TegraGM20BBindMap,
       .kind = va->pte_kind,
       .handle = nvkmd_darwin_mem(_mem)->handle,
-      .bo_offset = mem_offset_B,
+      .bo_offset = nvkmd_darwin_mem(_mem)->bo_offset_B + mem_offset_B,
       .va = va->addr + va_offset_B,
       .range = range_B,
    };
@@ -1736,7 +1846,8 @@ nvkmd_darwin_bind_ctx_bind(struct nvkmd_ctx *_ctx,
       if (binds[i].op == NVKMD_BIND_OP_BIND) {
          op.op = TegraGM20BBindMap;
          op.handle = nvkmd_darwin_mem(binds[i].mem)->handle;
-         op.bo_offset = binds[i].mem_offset_B;
+         op.bo_offset = nvkmd_darwin_mem(binds[i].mem)->bo_offset_B +
+                        binds[i].mem_offset_B;
       } else {
          op.op = (binds[i].va->flags & NVKMD_VA_SPARSE) ?
                  TegraGM20BBindMapSparse : TegraGM20BBindUnmap;
