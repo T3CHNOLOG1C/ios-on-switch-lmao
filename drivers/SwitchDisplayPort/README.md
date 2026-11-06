@@ -78,9 +78,6 @@ The next step is a second `IOMobileFramebufferLegacy` instance (or an external m
 
 Until this lands, a plugged TV gets the best mode and a black screen, which is enough to prove the link.
 
-`SwitchDPHardware.h` stands in for r26-common's `kits/SwitchMMIO` and `kits/SwitchCAR` with their signatures; once those
-are on main it goes, and the drivers include the kits (hdr_deps `kits/SwitchMMIO`, `kits/SwitchCAR`).
-
 ## DisplayPort audio (plan, not built)
 
 SOR1 carries audio from the HDA controller (`hda@70030000`) as DP secondary data packets.

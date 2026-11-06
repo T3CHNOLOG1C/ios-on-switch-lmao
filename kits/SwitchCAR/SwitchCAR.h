@@ -29,6 +29,8 @@ bool switch_car_reset_asserted(unsigned id);
 uint32_t switch_car_read(uint32_t offset);
 void switch_car_write(uint32_t offset, uint32_t value);
 void switch_car_rmw(uint32_t offset, uint32_t clear, uint32_t set);
+// A CAR handshake with no interrupt (a PLL's lock bit): switch_mmio_wait32 on the CAR.
+bool switch_car_wait(uint32_t offset, uint32_t mask, uint32_t value, uint32_t timeout_us);
 
 #ifdef __cplusplus
 }

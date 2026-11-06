@@ -73,6 +73,13 @@ TEST_F(SwitchCAR, IdsReachTheirBanks)
     EXPECT_THROW(switch_car_clock_enable(SWITCH_CAR_MAX_ID), SwitchCarPanic);
 }
 
+TEST_F(SwitchCAR, WaitsOnCarRegisters)
+{
+    gModel.registers[kCar + 0x0e0] = 1u << 27;  // PLLX_BASE locked
+    EXPECT_TRUE(switch_car_wait(0x0e0, 1u << 27, 1u << 27, 10));
+    EXPECT_FALSE(switch_car_wait(0x0e4, 1u << 27, 1u << 27, 10));
+}
+
 TEST_F(SwitchCAR, PowerUpFollowsLinuxOrder)
 {
     ASSERT_TRUE(switch_pmc_power_up(2, 178, 178));

@@ -8,7 +8,9 @@
 
 #include <IOKit/IOLib.h>
 
-#include "SwitchDPHardware.h"
+#include "../../kits/SwitchCAR/SwitchCAR.h"
+#include "../../kits/SwitchCAR/SwitchPMC.h"
+#include "../../kits/SwitchMMIO/SwitchMMIOKernel.h"
 
 namespace {
 constexpr uint64_t kDpaux1PA = 0x54040000, kPinmuxPA = 0x70003000;
@@ -54,7 +56,7 @@ bool TegraDpaux1::startPllDp(char *why, size_t size)
     switch_car_write(PLLDP_BASE, kPllDp270);  // IDDQ (bit 18) clear
     IODelay(5);
     switch_car_write(PLLDP_BASE, kPllDp270 | kPllEnable);
-    if (!switch_mmio_wait32(switchcar::car(), PLLDP_BASE, kPllLock, kPllLock, 300)) {
+    if (!switch_car_wait(PLLDP_BASE, kPllLock, kPllLock, 300)) {
         snprintf(why, size, "PLL_DP did not lock (base %#x)", switch_car_read(PLLDP_BASE));
         return false;
     }
@@ -70,7 +72,9 @@ bool TegraDpaux1::powerUp(char *why, size_t size)
     if (!startPllDp(why, size)) {
         return false;
     }
-    if (!switch_car_clock_enable(kClockSorSafe) || !switch_car_clock_enable(kClockDpaux1)) {
+    switch_car_clock_enable(kClockSorSafe);
+    switch_car_clock_enable(kClockDpaux1);
+    if (!switch_car_clock_enabled(kClockSorSafe) || !switch_car_clock_enabled(kClockDpaux1)) {
         snprintf(why, size, "DPAUX1 or SOR_SAFE clock did not enable");
         return false;
     }

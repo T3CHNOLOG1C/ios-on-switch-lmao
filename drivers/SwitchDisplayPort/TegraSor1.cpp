@@ -12,7 +12,9 @@
 #include <IOKit/IOLib.h>
 
 #include "../TegraI2C/TegraI2C.h"
-#include "SwitchDPHardware.h"
+#include "../../kits/SwitchCAR/SwitchCAR.h"
+#include "../../kits/SwitchCAR/SwitchPMC.h"
+#include "../../kits/SwitchMMIO/SwitchMMIOKernel.h"
 
 namespace {
 constexpr uint64_t kSor1PA = 0x54580000;
@@ -149,7 +151,7 @@ bool TegraSor1::pixelClock(uint32_t pixel_khz, char *why, size_t size)
     switch_car_write(PLLD2_MISC1, 0x10000000 | kSdmEnable);
     IODelay(5);
     switch_car_write(PLLD2_BASE, dividers | kPllEnable);
-    if (!switch_mmio_wait32(switchcar::car(), PLLD2_BASE, kPllLock, kPllLock, 300)) {
+    if (!switch_car_wait(PLLD2_BASE, kPllLock, kPllLock, 300)) {
         snprintf(why, size, "PLL_D2 did not lock (base %#x)", switch_car_read(PLLD2_BASE));
         return false;
     }
@@ -178,7 +180,7 @@ bool TegraSor1::powerUp(char *why, size_t size)
         return false;
     }
     switch_car_rmw(CLK_SOURCE_SOR1, kOutMask, 0);
-    (void)switch_car_clock_enable(kClockSor1);
+    switch_car_clock_enable(kClockSor1);
     IOSleep(1);
     switch_car_reset_deassert(kClockSor1);
     return true;
@@ -238,7 +240,7 @@ bool TegraSor1::startLink(const struct switch_dp_link &link, bool enhanced, char
     write(XBAR_CTRL, crossbar);
     switch_car_clock_disable(kClockSor1);
     switch_car_rmw(CLK_SOURCE_SOR1, kOutMask, kOutPad);
-    (void)switch_car_clock_enable(kClockSor1);
+    switch_car_clock_enable(kClockSor1);
     rmw(STATE1, kProtocolMask, kProtocolDpA);
     rmw(DP_LINKCTL0, 0, kLinkEnable);
     terminationCalibrate();
@@ -351,7 +353,7 @@ void TegraSor1::powerDown()
     update();
     switch_car_clock_disable(kClockSor1);
     switch_car_rmw(CLK_SOURCE_SOR1, kOutMask, 0);
-    (void)switch_car_clock_enable(kClockSor1);
+    switch_car_clock_enable(kClockSor1);
     rmw(PWR, kNormalPowerUp, kTrigger);
     (void)waitClear(PWR, kTrigger, kHandshakeUs);
     rmw(PLL2, 0, kPll2PortPd);

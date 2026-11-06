@@ -10,7 +10,9 @@
 
 #include <IOKit/IOLib.h>
 
-#include "SwitchDPHardware.h"
+#include "../../kits/SwitchCAR/SwitchCAR.h"
+#include "../../kits/SwitchCAR/SwitchPMC.h"
+#include "../../kits/SwitchMMIO/SwitchMMIOKernel.h"
 
 namespace {
 constexpr uint64_t kDisplayBPA = 0x54240000, kMcPA = 0x70019000;

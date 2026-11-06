@@ -160,6 +160,11 @@ void switch_car_rmw(uint32_t offset, uint32_t clear, uint32_t set)
     IOLockUnlock(lock());
 }
 
+bool switch_car_wait(uint32_t offset, uint32_t mask, uint32_t value, uint32_t timeout_us)
+{
+    return switch_mmio_wait32(car(), offset, mask, value, timeout_us);
+}
+
 bool switch_pmc_partition_is_on(unsigned partition)
 {
     return ((switch_mmio_read32(pmc(), PWRGATE_STATUS) >> partition) & 1) != 0;

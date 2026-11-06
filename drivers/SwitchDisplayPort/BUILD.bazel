@@ -85,5 +85,7 @@ kernel_driver(
     hdr_deps = [
         "drivers/ArmGIC",
         "drivers/TegraI2C",
+        "kits/SwitchCAR",
+        "kits/SwitchMMIO",
     ],
 )
