@@ -6923,6 +6923,24 @@ native_switch_cryptex_image(const struct image_params *imgp)
 		if (native_owner_cryptex_mount[i] && mp == native_owner_cryptex_mount[i]) return true;
 	return false;
 }
+/*
+ * Switch: the System volume's executables translated offline are on Data (kits/SwitchPretranslated), so the
+ * same self constraint cannot match them either. One keeps the launch status of the System file it stands in for only
+ * as the lookup redirect produced it and only if switch_pretranslated_trusted() holds (listed, root:wheel, writable by
+ * nobody else, CDHash in the trust module pinned for the tree). Nothing else on Data gains anything.
+ */
+static bool
+native_switch_pretranslated_image(const struct image_params *imgp)
+{
+#if CONFIG_A64X
+	return imgp->ip_vp && imgp->ip_ndp &&
+	       switch_pretranslated_trusted(imgp->ip_vp, (int64_t)imgp->ip_arch_offset,
+	       (imgp->ip_ndp->ni_flag & NAMEI_SWITCH_PRETRANSLATED) != 0);
+#else
+	(void)imgp;
+	return false;
+#endif
+}
 __attribute__((noinline))
 static int
 exec_extract_strings(struct image_params *imgp)
@@ -10183,10 +10201,11 @@ process_signature(proc_t p, struct image_params *imgp)
 	}
 
 	/* call the launch constraints hook (Switch: not for the Data overlay's executables, native_switch_overlay_image,
-	 * nor for the two grafted-equivalent Apple cryptex mounts, native_switch_cryptex_image; trust cache still enforced) */
+	 * nor for the two grafted-equivalent Apple cryptex mounts, native_switch_cryptex_image, nor for the System files
+	 * translated offline, native_switch_pretranslated_image; trust cache still enforced) */
 	os_reason_t launch_constraint_reason;
-	error = (native_switch_overlay_image(imgp) || native_switch_cryptex_image(imgp)) ?
-	    0 : mac_proc_check_launch_constraints(p, imgp, &launch_constraint_reason);
+	error = (native_switch_overlay_image(imgp) || native_switch_cryptex_image(imgp) ||
+	    native_switch_pretranslated_image(imgp)) ? 0 : mac_proc_check_launch_constraints(p, imgp, &launch_constraint_reason);
 	if (error != 0) {
 		signature_failure_reason = launch_constraint_reason;
 		goto done;

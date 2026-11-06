@@ -314,3 +314,66 @@ TEST(Deny, AnUnknownOpIsRefused)
 }
 
 }  // namespace
+
+namespace {
+
+struct switch_pt_trust_facts trusted()
+{
+    struct switch_pt_trust_facts facts = {};
+    facts.redirected = true;
+    facts.listed = true;
+    facts.regular = true;
+    facts.mode = 0755;
+    facts.cdhash_pinned = true;
+    facts.cdhash_matches = true;
+    return facts;
+}
+
+TEST(Trust, ARedirectedListedRootFileWithAPinnedCdhash)
+{
+    const struct switch_pt_trust_facts facts = trusted();
+    EXPECT_TRUE(switch_pt_trusted(&facts));
+    struct switch_pt_trust_facts setuid = trusted();
+    setuid.mode = 04755;
+    EXPECT_TRUE(switch_pt_trusted(&setuid));
+}
+
+TEST(Trust, EachMissingFactRefuses)
+{
+    const std::vector<void (*)(struct switch_pt_trust_facts &)> breaks = {
+        [](struct switch_pt_trust_facts &f) {
+            f.redirected = false;
+        },
+        [](struct switch_pt_trust_facts &f) {
+            f.listed = false;
+        },
+        [](struct switch_pt_trust_facts &f) {
+            f.regular = false;
+        },
+        [](struct switch_pt_trust_facts &f) {
+            f.uid = 501;
+        },
+        [](struct switch_pt_trust_facts &f) {
+            f.gid = 20;
+        },
+        [](struct switch_pt_trust_facts &f) {
+            f.mode = 0775;
+        },
+        [](struct switch_pt_trust_facts &f) {
+            f.mode = 0757;
+        },
+        [](struct switch_pt_trust_facts &f) {
+            f.cdhash_pinned = false;
+        },
+        [](struct switch_pt_trust_facts &f) {
+            f.cdhash_matches = false;
+        },
+    };
+    for (size_t i = 0; i < breaks.size(); ++i) {
+        struct switch_pt_trust_facts facts = trusted();
+        breaks[i](facts);
+        EXPECT_FALSE(switch_pt_trusted(&facts)) << i;
+    }
+}
+
+}  // namespace

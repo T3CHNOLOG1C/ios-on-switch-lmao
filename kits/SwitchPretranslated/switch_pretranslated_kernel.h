@@ -20,6 +20,7 @@ extern bool switch_pretranslated_on;
 
 void switch_pretranslated_capture(void);
 void switch_pretranslated_redirect(struct nameidata *ndp);
+bool switch_pretranslated_trusted(struct vnode *vp, int64_t arch_offset, bool redirected);
 int switch_pretranslated_refuse(enum switch_pt_op op, struct vnode *v0, struct vnode *v1, struct vnode *v2,
                                 struct vnode *v3, uint32_t intent);
 

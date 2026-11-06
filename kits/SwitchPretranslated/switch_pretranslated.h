@@ -1,8 +1,9 @@
 /* SPDX-License-Identifier: BSD-2-Clause-Patent */
 /*
  * The decisions behind iOS 27's pretranslated System files (bsd/vfs/vfs_switch_pretranslated.c): the tree's index
- * (tools/install/overlay_index.py writes it), the tables the kernel builds from it and the changes to the tree it
- * refuses. No kernel state here, so the host tests run the same code.
+ * (tools/install/overlay_index.py writes it), the tables the kernel builds from it, the changes to the tree it
+ * refuses and the executables that keep the System volume's launch status. No kernel state here, so the host tests
+ * run the same code.
  */
 #pragma once
 
@@ -401,4 +402,24 @@ static inline bool switch_pt_denied(enum switch_pt_op op, uint32_t in_tree, uint
         break;
     }
     return true;
+}
+
+struct switch_pt_trust_facts {
+    bool redirected;
+    bool listed;
+    bool regular;
+    uint32_t uid;
+    uint32_t gid;
+    uint32_t mode;
+    bool cdhash_pinned;
+    bool cdhash_matches;
+};
+
+/* A pretranslated executable keeps the System volume's launch status only as the redirect produced it: listed, a
+ * root:wheel regular file nobody else can write, its CDHash both in the trust module pinned for this tree and equal
+ * to the one its own index entry carries, so no trusted binary stands in at another listed path. */
+static inline bool switch_pt_trusted(const struct switch_pt_trust_facts *facts)
+{
+    return facts->redirected && facts->listed && facts->regular && facts->uid == 0 && facts->gid == 0 &&
+           (facts->mode & 022u) == 0 && facts->cdhash_pinned && facts->cdhash_matches;
 }
