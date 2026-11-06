@@ -425,7 +425,7 @@ kernel_startup_initialize_upto(startup_subsystem_id_t upto)
 	startup_phase = upto;
 }
 
-#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
+#if (defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT) && (DEVELOPMENT || DEBUG)
 /*
  * Switch: the pre-kernel timing record the loader leaves in /chosen/switch-boot-stamps (the main repository's
  * native/loader/stamps.h, whose word order this copies), logged once as milliseconds of the counter that the log's own
@@ -549,7 +549,7 @@ switch_log_boot_stamps(void)
 		    (uint32_t)w[EMC_CORE], (uint32_t)(w[EMC_CORE] >> 32));
 	}
 }
-#endif /* XNU_SWITCH_VERIFIED_ROOT */
+#endif /* XNU_SWITCH_VERIFIED_ROOT && (DEVELOPMENT || DEBUG) */
 
 void
 kernel_bootstrap(void)

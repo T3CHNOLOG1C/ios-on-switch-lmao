@@ -41,6 +41,7 @@
 #include <sys/proc.h>
 #include <kern/policy_internal.h>
 
+#if DEVELOPMENT || DEBUG
 /* Board bring-up diagnostic: the last work-interval CREATE2 results, read by the boot-progress banner. */
 char native_wi_log[4][100];
 volatile unsigned native_wi_count;
@@ -53,6 +54,9 @@ native_wi_note(const char *what, int error, int kret, uint32_t flags)
 	snprintf(native_wi_log[slot], sizeof(native_wi_log[slot]), "WI#%u p%d %s %s err=%d kret=%d flags=%x app=%d",
 	    native_wi_count, proc_selfpid(), name, what, error, kret, flags, (int)task_is_app(current_task()));
 }
+#else
+#define native_wi_note(what, error, kret, flags) ((void)0)
+#endif
 
 /*
  * ios-on-switch-lmao: libsystem_kernel's private instance operations (work_interval_instance_start, _update, _finish pass

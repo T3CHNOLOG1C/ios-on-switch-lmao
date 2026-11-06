@@ -3384,7 +3384,7 @@ initialize_screen(PE_Video * boot_vinfo, unsigned int op)
 
 void vcattach(void); /* XXX gcc 4 warning cleanup */
 
-#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
+#if (defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT) && (DEVELOPMENT || DEBUG)
 /* vcattach's replay of the early log, for the one line PE_init_iokit logs (pe_init.c). */
 long switch_vcattach_skipped, switch_vcattach_bytes;
 uint64_t switch_vcattach_ticks;
@@ -3419,7 +3419,7 @@ vcattach(void)
 
 	if (gc_graphics_boot == FALSE) {
 		long index, start = 0;
-#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
+#if (defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT) && (DEVELOPMENT || DEBUG)
 		const uint64_t attach_start = mach_absolute_time();
 #endif
 
@@ -3444,8 +3444,10 @@ vcattach(void)
 				}
 			}
 		}
+#if DEVELOPMENT || DEBUG
 		switch_vcattach_skipped = start;
 		switch_vcattach_bytes = msgbufp->msg_bufx;
+#endif
 #endif
 
 		for (index = start; index < msgbufp->msg_bufx; index++) {
@@ -3459,7 +3461,7 @@ vcattach(void)
 				vcputc( '\r' );
 			}
 		}
-#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
+#if (defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT) && (DEVELOPMENT || DEBUG)
 		switch_vcattach_ticks = mach_absolute_time() - attach_start;
 #endif
 	}

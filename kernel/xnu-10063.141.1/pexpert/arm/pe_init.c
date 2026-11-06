@@ -283,7 +283,7 @@ PE_init_iokit(void)
 	uint32_t        populate_registry_time_value = 0;
 
 	PE_init_printf(TRUE);
-#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
+#if (defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT) && (DEVELOPMENT || DEBUG)
 	{
 		/* Switch: what attaching the text console cost (video_console.c vcattach), once. */
 		extern long switch_vcattach_skipped, switch_vcattach_bytes;

@@ -5203,10 +5203,11 @@ ipc_kmsg_copyin_from_kernel(
 }
 
 /*
- * Switch: messages to the render server by sender and id (switch_render_senders.h). The display names the render
- * server's task; its space pointer is only ever compared, so a stale one (the server exited) costs nothing but a
- * miscount until the next server opens the display.
+ * Switch: messages to the render server by sender and id (switch_render_senders.h), counted by debug kernels only (the
+ * display's clients line). The display names the render server's task; its space pointer is only ever compared, so a
+ * stale one (the server exited) costs nothing but a miscount until the next server opens the display.
  */
+#if DEVELOPMENT || DEBUG
 static void *volatile switch_render_server_space;
 static struct switch_render_senders switch_render_senders;
 static LCK_GRP_DECLARE(switch_render_senders_grp, "switch_render_senders");
@@ -5241,6 +5242,18 @@ switch_render_sender_note(mach_msg_id_t id)
 	switch_render_senders_note(&switch_render_senders, task_pid(task), id, name);
 	lck_spin_unlock(&switch_render_senders_lock);
 }
+#else
+void
+switch_render_server_watch(__unused task_t task)
+{
+}
+
+size_t
+switch_render_senders_line(__unused char *out, __unused size_t size, __unused uint64_t window_ms, __unused unsigned top)
+{
+	return 0;
+}
+#endif
 
 /*
  *	Routine:	ipc_kmsg_send
@@ -5407,10 +5420,12 @@ retry:
 		 */
 		ipc_special_reply_port_msg_sent(port);
 
+#if DEVELOPMENT || DEBUG
 		if (__improbable(switch_render_server_space != NULL) && !kernel_reply &&
 		    ip_in_space(port, (ipc_space_t)switch_render_server_space)) {
 			switch_render_sender_note(hdr->msgh_id);
 		}
+#endif
 
 		error = ipc_mqueue_send_locked(&port->ip_messages, kmsg,
 		    options, send_timeout);
