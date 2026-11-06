@@ -25,6 +25,8 @@ from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import NamedTuple
 
+from tools.trustcache.trustcache import trust_module
+
 CACHE_DIR = 'System/Library/Caches/com.apple.dyld'
 MACHO_MAGIC = (b'\xcf\xfa\xed\xfe', b'\xca\xfe\xba\xbe', b'\xca\xfe\xba\xbf')  # thin 64, fat BE, fat64 BE
 
@@ -85,17 +87,6 @@ def _im4p_payload(data: bytes) -> bytes:
         fields.append((tag, data[start : start + length]))
         at = start + length
     return next(v for t, v in fields[1:] if t == 0x04)
-
-
-def trust_module(entries: list[tuple[bytes, int, int]]) -> bytes:
-    """Make a version-2 trust cache module: sorted (cdhash, hashtype 2, flags, category), each once.
-
-    One binary at several paths is one cdhash, and a duplicate fails the kernel window's strictly sorted check.
-    """
-    unique = sorted(set(entries))
-    body = b''.join(h + bytes([2, flags, cat, 0]) for h, flags, cat in unique)
-    uuid = hashlib.sha256(body).digest()[:16]
-    return struct.pack('<I16sI', 2, uuid, len(unique)) + body
 
 
 def run_tool(tool: str, *args: str) -> str:

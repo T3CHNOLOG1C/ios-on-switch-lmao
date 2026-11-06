@@ -26,6 +26,8 @@ import sys
 import uuid
 from pathlib import Path
 
+from tools.trustcache import trustcache
+
 NAME = 'TegraGM20BMetal'
 
 
@@ -68,11 +70,11 @@ def sign(xcode: Xcode, path: Path, identifier: str) -> str:
 
 
 def trust_module(cdhashes: list[str]) -> bytes:
-    hashes = sorted(bytes.fromhex(h) for h in cdhashes)
+    hashes = sorted({bytes.fromhex(h) for h in cdhashes})
     identifier = uuid.uuid5(
         uuid.NAMESPACE_URL, 'com.brunostjohn.switch.tegra-gm20b-metal:' + ''.join(h.hex() for h in hashes)
     )
-    return struct.pack('<I16sI', 2, identifier.bytes, len(hashes)) + b''.join(h + bytes([2, 0, 0, 0]) for h in hashes)
+    return trustcache.trust_module(hashes, uuid=identifier.bytes)
 
 
 def main() -> None:

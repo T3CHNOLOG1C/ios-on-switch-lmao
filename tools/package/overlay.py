@@ -31,6 +31,8 @@ from pathlib import Path
 
 from boot_config import portrait_native
 
+from tools.trustcache.trustcache import trust_module
+
 OVERLAY_ROOT = '/private/var/Switch/overlay'
 
 
@@ -106,15 +108,6 @@ def cdhash(image: bytes) -> bytes:
     raise SystemExit('overlay: no SHA-256 CodeDirectory (sign it with codesign -s -)')
 
 
-def trust_module(hashes: Iterable[bytes]) -> bytes:
-    """Make a version-2 trust cache module of sorted (CDHash, SHA-256, flags 0, launch-constraint category 0) entries.
-
-    Category 0 because overlay code lives on Data: the system categories' volume constraints would refuse it.
-    """
-    entries = b''.join(digest + bytes([2, 0, 0, 0]) for digest in sorted(set(hashes)))
-    return struct.pack('<I16sI', 2, hashlib.sha256(entries).digest()[:16], len(entries) // 24) + entries
-
-
 def _files(specs: Iterable[str]) -> dict[str, Path]:
     files = {}
     for spec in specs:
@@ -154,6 +147,8 @@ def main() -> None:
     entries = json.loads(args.plan.read_text())['files']
     if args.step == 'trust':
         hashes = [cdhash(_need(files, e).read_bytes()) for e in entries if e['trust']]
+        # Flags and launch-constraint category 0: overlay code lives on Data, where the system categories' volume
+        # constraints would refuse it.
         args.out.write_bytes(trust_module(hashes) if hashes else b'')
         print(f'overlay: {len(entries)} files ({len(hashes)} trusted) -> Data {OVERLAY_ROOT}')
         return

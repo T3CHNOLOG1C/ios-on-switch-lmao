@@ -65,7 +65,10 @@ py_binary(
 py_binary(
     name = "overlay",
     srcs = ["overlay.py"],
-    deps = [":boot_config"],
+    deps = [
+        ":boot_config",
+        "//tools/trustcache",
+    ],
 )
 
 py_binary(

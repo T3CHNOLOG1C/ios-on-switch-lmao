@@ -15,6 +15,7 @@ py_binary(
 py_binary(
     name = "bundle",
     srcs = ["bundle.py"],
+    deps = ["//tools/trustcache"],
 )
 
 py_library(
