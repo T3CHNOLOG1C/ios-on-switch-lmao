@@ -14,14 +14,16 @@
 #include <string.h>
 #include "TegraAPBDMA.h"
 #include "../ArmGIC/SwitchInterrupts.h"
+#include "../../kits/SwitchCAR/SwitchCAR.h"
+#include "../../kits/SwitchDMA/SwitchDMABuffer.h"
+#include "../../kits/SwitchMMIO/SwitchMMIOKernel.h"
 
 extern "C" {
 extern task_t kernel_task;
-vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
 }
 
 namespace {
-constexpr vm_offset_t kDmaPA = 0x60020000, kDmaSize = 0x2000, kCarPA = 0x60006000;
+constexpr uint64_t kDmaPA = 0x60020000, kDmaSize = 0x2000;
 constexpr uint32_t kChannelBase = 0x1000, kChannelStride = 0x40;
 
 // Controller (tegra20-apb-dma.c TEGRA_APBDMA_*).
@@ -66,23 +68,14 @@ enum : uint32_t {
     COUNT_MASK = 0xfffc,
 };
 
-// CAR (hekate bdk/soc/clock.h; Linux clk-tegra210.c TEGRA210_CLK_APBDMA = 34: the H registers, bit 2).
-enum : uint32_t {
-    RST_DEVICES_H = 0x008,
-    CLK_OUT_ENB_H = 0x014,
-    RST_DEV_H_SET = 0x308,
-    RST_DEV_H_CLR = 0x30c,
-    CLK_ENB_H_SET = 0x328,
-};
-
-constexpr uint32_t kApbDmaBit = 1u << 2;
+constexpr unsigned kClock = 34;  // TEGRA210_CLK_APBDMA: CAR bank H bit 2, also its reset
 
 inline uint32_t intidOf(unsigned channel)
 {
     return 32 + (channel < 16 ? 104 + channel : 128 + channel - 16);
 }
 
-volatile uint8_t *gDma, *gCar;
+volatile uint8_t *gDma;
 IOLock *gLock;  // bring-up and open
 bool gTried, gUp;
 char gWhy[96];
@@ -104,32 +97,22 @@ bool gOpen[TEGRA_APBDMA_CHANNELS];
 
 inline uint32_t rd(const tegra_apbdma_channel *ch, uint32_t reg)
 {
-    return *reinterpret_cast<volatile uint32_t *>(ch->regs + reg);
+    return switch_mmio_read32(ch->regs, reg);
 }
 
 inline void wr(tegra_apbdma_channel *ch, uint32_t reg, uint32_t value)
 {
-    *reinterpret_cast<volatile uint32_t *>(ch->regs + reg) = value;
+    switch_mmio_write32(ch->regs, reg, value);
 }
 
 inline uint32_t grd(uint32_t reg)
 {
-    return *reinterpret_cast<volatile uint32_t *>(gDma + reg);
+    return switch_mmio_read32(gDma, reg);
 }
 
 inline void gwr(uint32_t reg, uint32_t value)
 {
-    *reinterpret_cast<volatile uint32_t *>(gDma + reg) = value;
-}
-
-inline uint32_t crd(uint32_t reg)
-{
-    return *reinterpret_cast<volatile uint32_t *>(gCar + reg);
-}
-
-inline void cwr(uint32_t reg, uint32_t value)
-{
-    *reinterpret_cast<volatile uint32_t *>(gCar + reg) = value;
+    switch_mmio_write32(gDma, reg, value);
 }
 
 // tegra_dma_probe: clock on, reset pulse, enable, no control bits, every channel's interrupt unmasked. Also after SC7,
@@ -137,21 +120,21 @@ inline void cwr(uint32_t reg, uint32_t value)
 // out of reset, a channel enabled) is left alone.
 bool bringUp()
 {
-    const bool clocked = (crd(CLK_OUT_ENB_H) & kApbDmaBit) && !(crd(RST_DEVICES_H) & kApbDmaBit);
+    const bool clocked = switch_car_clock_enabled(kClock) && !switch_car_reset_asserted(kClock);
     if (clocked) {
         for (unsigned c = 0; c < 32; ++c) {
-            if (*reinterpret_cast<volatile uint32_t *>(gDma + kChannelBase + c * kChannelStride + CSR) & CSR_ENB) {
+            if (grd(kChannelBase + c * kChannelStride + CSR) & CSR_ENB) {
                 snprintf(gWhy, sizeof(gWhy), "channel %u already enabled by someone else", c);
                 return false;
             }
         }
     }
-    cwr(CLK_ENB_H_SET, kApbDmaBit);
-    cwr(RST_DEV_H_SET, kApbDmaBit);
-    (void)crd(RST_DEVICES_H);
+    switch_car_clock_enable(kClock);
+    switch_car_reset_assert(kClock);
+    (void)switch_car_reset_asserted(kClock);
     IODelay(2);
-    cwr(RST_DEV_H_CLR, kApbDmaBit);
-    (void)crd(RST_DEVICES_H);
+    switch_car_reset_deassert(kClock);
+    (void)switch_car_reset_asserted(kClock);
     gwr(GENERAL, kGeneralEnable);
     gwr(CONTROL, 0);
     gwr(IRQ_MASK_SET, 0xffffffffu);
@@ -166,14 +149,14 @@ bool bringUp()
 // Before a transfer starts: the controller back up if SC7 reset it since (its enable reads 0 then).
 void ensureUp()
 {
-    if ((crd(CLK_OUT_ENB_H) & kApbDmaBit) && !(crd(RST_DEVICES_H) & kApbDmaBit) && (grd(GENERAL) & kGeneralEnable))
+    if (switch_car_clock_enabled(kClock) && !switch_car_reset_asserted(kClock) && (grd(GENERAL) & kGeneralEnable))
         return;
-    cwr(CLK_ENB_H_SET, kApbDmaBit);
-    cwr(RST_DEV_H_SET, kApbDmaBit);
-    (void)crd(RST_DEVICES_H);
+    switch_car_clock_enable(kClock);
+    switch_car_reset_assert(kClock);
+    (void)switch_car_reset_asserted(kClock);
     IODelay(2);
-    cwr(RST_DEV_H_CLR, kApbDmaBit);
-    (void)crd(RST_DEVICES_H);
+    switch_car_reset_deassert(kClock);
+    (void)switch_car_reset_asserted(kClock);
     gwr(GENERAL, kGeneralEnable);
     gwr(CONTROL, 0);
     gwr(IRQ_MASK_SET, 0xffffffffu);
@@ -214,24 +197,13 @@ void action(OSObject *, IOInterruptEventSource *, int)
 
 bool tegra_apbdma_alloc(uint32_t size, tegra_apbdma_buffer *out)
 {
-    const IOOptionBits options = (IOOptionBits)kIODirectionInOut | (IOOptionBits)kIOMemoryPhysicallyContiguous;
-    auto *memory = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task, options, size, 0x00000000fffff000ULL);
-    if (!memory)
+    switch_dma_buffer buffer;
+    if (!switch_dma_alloc(&buffer, size))
         return false;
-    IOByteCount length = 0;
-    const addr64_t pa = memory->getPhysicalSegment(0, &length, kIOMemoryMapperNone);
-    if (!pa || length < size || pa + size > 0x100000000ULL) {
-        memory->release();
-        return false;
-    }
-    out->va = static_cast<uint8_t *>(memory->getBytesNoCopy());
-    out->pa = (uint32_t)pa;
+    out->va = buffer.va;
+    out->pa = (uint32_t)buffer.pa;
     out->size = size;
-    out->memory = memory;
-    bzero(out->va, size);
-    for (uintptr_t at = (uintptr_t)out->va, end = at + size; at < end; at += 64)
-        __asm__ volatile("dc civac, %0" ::"r"(at) : "memory");
-    __asm__ volatile("dsb sy" ::: "memory");
+    out->memory = buffer.memory;
     return true;
 }
 
@@ -258,9 +230,8 @@ tegra_apbdma_channel *tegra_apbdma_open(unsigned channel, IOWorkLoop *loop, tegr
     IOLockLock(gLock);
     if (!gTried) {
         gTried = true;
-        gDma = reinterpret_cast<volatile uint8_t *>(ml_io_map(kDmaPA, kDmaSize));
-        gCar = reinterpret_cast<volatile uint8_t *>(ml_io_map(kCarPA, 0x1000));
-        if (!gDma || !gCar)
+        gDma = switch_mmio_map(kDmaPA, kDmaSize);
+        if (!gDma)
             snprintf(gWhy, sizeof(gWhy), "cannot map the controller or CAR");
         else
             gUp = bringUp();

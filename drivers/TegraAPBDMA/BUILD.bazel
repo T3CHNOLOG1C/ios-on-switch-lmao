@@ -32,5 +32,8 @@ kernel_driver(
     name = "TegraAPBDMA",
     hdr_deps = [
         "drivers/ArmGIC",
+        "kits/SwitchCAR",
+        "kits/SwitchDMA",
+        "kits/SwitchMMIO",
     ],
 )
