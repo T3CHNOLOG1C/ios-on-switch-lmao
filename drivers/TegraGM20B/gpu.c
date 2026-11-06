@@ -2714,6 +2714,8 @@ static void chan_timeslice(u32 chid, u32 value)
 	}
 }
 
+static int chan_push_wait(struct tgm_chan *chan, u32 push_nr);
+
 static int chan_new(struct tgm_vm *vm, volatile uint32_t *fence_cpu, uint64_t fence_gpu_va,
 		    const char *owner, int critical, struct tgm_chan **pchan)
 {
@@ -2844,7 +2846,7 @@ static int chan_new(struct tgm_vm *vm, volatile uint32_t *fence_cpu, uint64_t fe
 
 	/* bind subchannels 0..4 (NV906F SET_OBJECT = method 0, data = class) */
 	push = &chan->chan.push;
-	ret = PUSH_WAIT(push, 10);
+	ret = chan_push_wait(chan, 10);
 	if (ret) {
 		mutex_lock(&gpu.lock);
 		goto fail;
@@ -3233,10 +3235,70 @@ static void push_stamp(struct nvif_push *push, u64 va, u32 payload)
 /* Push dwords chan_fence() may write, at most */
 #define CHAN_FENCE_DWORDS 32
 
-/* Fence push: semaphore release of the next 32-bit seqno after wait-for-idle, then a nonstall interrupt (nouveau
- * nvc0_fence_emit32), then kick. The L2's dirty lines go to DRAM first, and the end of the submission is stamped for the
- * stats. Space for it was reserved by the caller
- * (nvif_chan_gpfifo_wait / PUSH_WAIT): CHAN_FENCE_DWORDS. */
+/* Whether nvif_chan_gpfifo_wait(gpfifo_nr, push_nr) would find its room now, counted as nvif counts it (the GET reports
+ * on the semaphore page, its post size, a wrap of the push buffer that kicks one more entry). */
+static int chan_room(struct tgm_chan *chan, u32 gpfifo_nr, u32 push_nr)
+{
+	struct nvif_chan *c = &chan->chan;
+	struct nvif_push *push = &c->push;
+	u32 post = c->func->gpfifo.post ? c->func->gpfifo.post_size : 0;
+	s32 free;
+
+	if (gpfifo_nr)
+		push_nr += post;
+	if (push_nr)
+		gpfifo_nr++;
+	if (push->cur + push_nr > push->end) {
+		u32 nr = push_nr + post, cur = push->cur - (u32 *)push->mem.object.map.ptr;
+		u32 get = c->func->push.read_get(c);
+
+		if (get <= cur ? push->hw.max - cur < nr && (!get || get - 1 < nr)
+			       : get - cur - 1 < nr)
+			return 0;
+		gpfifo_nr++;
+	}
+	if ((u32)c->gpfifo.free >= gpfifo_nr)
+		return 1;
+	free = (s32)c->func->gpfifo.read_get(c) - (s32)c->gpfifo.cur - 1;
+	if (free < 0)
+		free += c->gpfifo.max + 1;
+	return (u32)free >= gpfifo_nr;
+}
+
+/* Room for gpfifo_nr entries and push_nr dwords, waited for by interrupt: every submission's GET report comes before its
+ * fence's nonstall interrupt (chan_fence), whose pass ends in nvxnu_wake(), so nvif's own wait then finds the room at
+ * once and never spins. -ETIMEDOUT after 1 s. */
+static int chan_wait_room(struct tgm_chan *chan, u32 gpfifo_nr, u32 push_nr)
+{
+	u64 end = nvxnu_nanotime() + NSEC_PER_SEC;
+	int ret = 0;
+
+	for (;;) {
+		u32 seq = nvxnu_wake_seq();
+
+		if (chan_room(chan, gpfifo_nr, push_nr))
+			break;
+		if (!nvxnu_idle(seq, end) && !chan_room(chan, gpfifo_nr, push_nr)) {
+			ret = -ETIMEDOUT;
+			break;
+		}
+	}
+	return ret ? ret : nvif_chan_gpfifo_wait(&chan->chan, gpfifo_nr, push_nr);
+}
+
+/* nvif's PUSH_WAIT for push_nr dwords, waited for as chan_wait_room does. */
+static int chan_push_wait(struct tgm_chan *chan, u32 push_nr)
+{
+	struct nvif_push *push = &chan->chan.push;
+
+	return push->cur + push_nr > push->end ? chan_wait_room(chan, 1, push_nr) : 0;
+}
+
+/* Fence push: semaphore release of the next 32-bit seqno after wait-for-idle, then nvif's GET report, then a nonstall
+ * interrupt (nouveau nvc0_fence_emit32), then kick. The L2's dirty lines go to DRAM first, and the end of the submission
+ * is stamped for the stats. The GET report comes before the interrupt so that a wait for room (chan_room) finds the room
+ * this submission frees once its interrupt has woken it; nvif's own report at the kick lands after the interrupt. Space
+ * was reserved by the caller (chan_wait_room / chan_push_wait): CHAN_FENCE_DWORDS. */
 static u32 chan_fence(struct tgm_chan *chan)
 {
 	struct nvif_push *push = &chan->chan.push;
@@ -3260,8 +3322,9 @@ static u32 chan_fence(struct tgm_chan *chan)
 		  SEMAPHOREB, lower_32_bits(chan->fence_gpu), SEMAPHOREC, next, SEMAPHORED,
 		  NVDEF(NV906F, SEMAPHORED, OPERATION, RELEASE) |
 			  NVDEF(NV906F, SEMAPHORED, RELEASE_WFI, EN) |
-			  NVDEF(NV906F, SEMAPHORED, RELEASE_SIZE, 4BYTE),
-		  NON_STALL_INTERRUPT, 0);
+			  NVDEF(NV906F, SEMAPHORED, RELEASE_SIZE, 4BYTE));
+	nvif_chan_gpfifo_post(&chan->chan);
+	PUSH_MTHD(push, NV906F, NON_STALL_INTERRUPT, 0);
 	__asm__ volatile(
 		"dsb sy" ::
 			: "memory"); /* client WC writes and our push reach DRAM before GP_PUT */
@@ -3345,9 +3408,9 @@ static int chan_exec(struct tgm_chan *chan, const struct tgm_push *pushes, uint3
 		stamps += prof->cls[i] != TGM_PC_SKIP;
 	/* nouveau_exec_job_run(): room for every user entry plus our fence push and, each kicked as its own entry before
 	 * them, a present wait, the task order's acquires and (stats) a start stamp, one more nvif GET semaphore
-	 * with each; nvif polls GET for up to ~1 s. A profile's stamps: an entry each, a stamp and a GET semaphore. */
-	ret = nvif_chan_gpfifo_wait(&chan->chan, count + 4 + stamps,
-				    CHAN_FENCE_DWORDS + 24 + 5 * TGM_ORDER_MAX + 16 * stamps);
+	 * with each. A profile's stamps: an entry each, a stamp and a GET semaphore. */
+	ret = chan_wait_room(chan, count + 4 + stamps,
+			     CHAN_FENCE_DWORDS + 24 + 5 * TGM_ORDER_MAX + 16 * stamps);
 	if (ret == -ETIMEDOUT && gpu.stage >= 3)
 		tgm_chan_hung(chan, "exec: GPFIFO still full after 1 s", chan->submitted,
 			      NSEC_PER_SEC);
@@ -3725,8 +3788,8 @@ static int present_copy(uint64_t src_va, uint64_t src_pa, uint64_t stride, int s
 	list_for_each_entry(user, &live_chans, live) room += room < TGM_SYNC_MAX && !user->kernel;
 	mutex_unlock(&live_lock);
 	push = &chan->chan.push;
-	ret = PUSH_WAIT(
-		push, room * 5 + 47 +
+	ret = chan_push_wait(
+		chan, room * 5 + 47 +
 			      CHAN_FENCE_DWORDS); /* acquires, a start stamp, the copy, the fence */
 	if (ret == -ETIMEDOUT)
 		tgm_chan_hung(chan, "present: push buffer still full after 1 s", chan->submitted,
@@ -3884,7 +3947,7 @@ static int scrub_submit(u64 pa, u64 bytes)
 	u64 va = scrub.pool_va + (pa - nvxnu_pool_base_pa()), lines = bytes / SCRUB_LINE,
 	    rest = bytes % SCRUB_LINE;
 	u32 slot, seqno;
-	int ret = nvif_chan_gpfifo_wait(&chan->chan, 4, 32 + CHAN_FENCE_DWORDS);
+	int ret = chan_wait_room(chan, 4, 32 + CHAN_FENCE_DWORDS);
 
 	if (ret)
 		return ret;
@@ -4148,7 +4211,7 @@ static int m3(char *line, unsigned int len)
 
 	/* MAXWELL_DMA_COPY_A on subchannel 4: remap const A (0xc0ffee42) over 1024 dwords of page 1 */
 	push = &chan->chan.push;
-	ret = PUSH_WAIT(push, 12 + CHAN_FENCE_DWORDS);
+	ret = chan_push_wait(chan, 12 + CHAN_FENCE_DWORDS);
 	if (ret)
 		goto done;
 	PUSH_MTHD(push, NVA0B5, SET_REMAP_CONST_A, 0xc0ffee42);
@@ -4495,7 +4558,7 @@ static void wake_fence(void)
 		return;
 	}
 	mutex_lock(lock);
-	ret = PUSH_WAIT(&chan->chan.push, CHAN_FENCE_DWORDS);
+	ret = chan_push_wait(chan, CHAN_FENCE_DWORDS);
 	if (ret)
 		nvxnu_panic("tegra-gm20b: wake: %s channel push buffer unavailable: %d",
 			    chan->owner, ret);

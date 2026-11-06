@@ -296,6 +296,22 @@ TEST(GM20BFenceWakeSource, WaitersWakeByChannel)
 	EXPECT_THAT(wait, Not(HasSubstr("tgm_idle(")));
 }
 
+// No spin for GPFIFO or push room: every wait for room sleeps until a fence's interrupt, and the fence reports GET to nvif
+// before that interrupt, so the room the GPU freed is there when the waiter looks.
+TEST(GM20BRoomSource, RoomIsWaitedForByInterrupt)
+{
+	EXPECT_EQ(Count(gpu(), "PUSH_WAIT("), 0u);
+	EXPECT_EQ(Count(gpu(), "nvif_chan_gpfifo_wait("),
+		  2u);  // the room check's comment and chan_wait_room
+	const std::string wait = flat(definition(
+		gpu(),
+		"static int chan_wait_room(struct tgm_chan *chan, u32 gpfifo_nr, u32 push_nr)"));
+	expectBefore(wait, "if (!nvxnu_idle(seq, end)",
+		     "nvif_chan_gpfifo_wait(&chan->chan, gpfifo_nr, push_nr)");
+	expectBefore(flat(definition(gpu(), "static u32 chan_fence(struct tgm_chan *chan)")),
+		     "nvif_chan_gpfifo_post(&chan->chan);", "NON_STALL_INTERRUPT, 0);");
+}
+
 TEST(GM20BSleepSource, SleepAndWakeOrder)
 {
 	const std::string body = flat(definition(gpu(), "void tgm_sleep(void)"));
