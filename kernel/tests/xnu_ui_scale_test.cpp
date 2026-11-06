@@ -4,6 +4,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <string>
 #include <utility>
@@ -261,4 +262,43 @@ TEST(XnuUiScaleSource, CoreUiRowBytesAndStockAtScaleOne)
     const size_t no_bytes = pager.find("!switch_ui_scale_edit_bytes(site->edit[i].kind, switch_ui_scale()");
     ASSERT_NE(no_bytes, std::string::npos);
     EXPECT_LT(no_bytes, pager.find("apple_protect_pager_setup("));
+}
+
+namespace {
+// A site's byte initializer as vm_unix.c writes it: "{ 0x71, 0xda, ... }", each instruction little-endian.
+std::string Initializer(const std::vector<uint32_t> &insns)
+{
+    std::string text = "{";
+    for (uint32_t insn : insns) {
+        uint8_t bytes[4];
+        switch_a64_put(bytes, insn);
+        for (uint8_t byte : bytes) {
+            char hex[8];
+            std::snprintf(hex, sizeof(hex), " 0x%02x,", byte);
+            text += hex;
+        }
+    }
+    text.back() = ' ';
+    return text + "}";
+}
+}  // namespace
+
+TEST(XnuUiScaleSource, CoverSheetKitRowIsTheIPadWithoutAHomeButtonInBothTrees)
+{
+    // +[CSDeviceDetermination categoryFromScreenSize] at 0x1ac8c26a0: bl BSSizeEqualToSize; tbz w0, #0, -0x294;
+    // mov w0, #24. The tbz goes to 0x1ac8c2410, mov w0, #28 (no known device); the patch is a nop.
+    const uint32_t bl = 0x942eda71u, tbz = 0x3607eb60u, mov = 0x52800300u, nop = 0xd503201fu;
+    EXPECT_EQ(bl >> 26, 0x25u);
+    EXPECT_EQ(tbz & 0xfff8001fu, 0x36000000u);
+    const int32_t imm14 = static_cast<int32_t>((tbz >> 5) & 0x3fff);
+    EXPECT_EQ((imm14 >= 0x2000 ? imm14 - 0x4000 : imm14) * 4, -0x294);
+    EXPECT_EQ(0x1ac8c26a4ull - 0x294, 0x1ac8c2410ull);
+    EXPECT_EQ(mov, switch_a64_movz_w(0, 24));
+
+    const std::string edit = Initializer({bl, tbz, mov}) + ",\n\t\t\t  " + Initializer({nop}) + " }";
+    for (const char *tree : {"../xnu-10063.141.1/bsd/vm/vm_unix.c", "../xnu-12377.121.6/bsd/vm/vm_unix.c"}) {
+        SCOPED_TRACE(tree);
+        const std::string vm_unix = switch_ios::test::SourceText(tree);
+        EXPECT_EQ(switch_ios::test::Count(vm_unix, "{ 0x60fa6a0ULL, 12, 4, 4, SWITCH_US_FIXED,\n\t\t\t  " + edit), 1u);
+    }
 }

@@ -18,7 +18,8 @@
 #   xnu_ui_scale_test        bsd/vm/switch_ui_scale.h's scales (whole-point screens, exact floats, boot-arg values)
 #                            and the cache text they write, against the assembler and the bytes the 1.6-only sites
 #                            shipped; the status bar battery's fill in whole pixels with equal gaps at 1.25; vm_unix.c's
-#                            CoreUI row bytes, and no UI scale pager at scale 1 or for a site with no bytes at the scale
+#                            CoreUI row bytes, and no UI scale pager at scale 1 or for a site with no bytes at the scale;
+#                            the CoverSheetKit lock screen row's edit (the size check's tbz) the same in both trees
 #   xnu_page_ratio_test      16 KiB VM pages over the 4 KiB granule: pmap.c's write_pte_fast (both trees) writes a
 #                            VM page as four consecutive 4 KiB frames, repeats empty and compressed entries, refuses an
 #                            unaligned PTE
@@ -213,7 +214,10 @@ host_test(
         "switch_ui_scale.h",
         "xnu_ui_scale_test.cpp",
     ],
-    data = ["//kernel/xnu-10063.141.1/bsd:vm/vm_unix.c"],
+    data = [
+        "//kernel/xnu-10063.141.1/bsd:vm/vm_unix.c",
+        "//kernel/xnu-12377.121.6/bsd:vm/vm_unix.c",
+    ],
     includes = ["."],
 )
 

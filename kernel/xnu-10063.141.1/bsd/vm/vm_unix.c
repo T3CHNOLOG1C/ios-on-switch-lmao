@@ -2811,6 +2811,16 @@ const struct switch_ui_scale *switch_ui_scale(void);
  *   0x18ae7fa90, which runs on the same !_showsPercentage path, in place of CGRectGetWidth(fill): that is the
  *   width's absolute value, fabs. At 1.6 the body is 38.4 x 19.2 pixels, no inset gives it equal whole-pixel gaps,
  *   and 3.2 is no fmov immediate: the site stays stock.
+ * - CoverSheetKit (.13), +[CSDeviceDetermination categoryFromScreenSize], the device row of every lock screen time,
+ *   date and widget metric in CSProminentLayoutController (SpringBoard, PosterBoard and PosterKit all lay out through
+ *   it). An iPad without a home button (the ADT's home-button-type 2) gets its row from the reference bounds' height,
+ *   and at or under 1024 points only from the exact size 768x1024 (row 24); 576x1024 and 450x800 fell through to row
+ *   28, a device it does not know, which is neither pad nor phone and takes every table's default: an 84 point time
+ *   in a 100 point box from y = 84 under a date box from y = 79 to 115, the date's baseline in the time's cap height.
+ *   The tbz that leaves on the size check becomes a nop, so these screens get row 24 as an iPad with a home button
+ *   at or under 1024 points gets its row 17 (the same metrics): the date box from y = 60 (landscape) or 85 ends
+ *   above the 140 point time's 123 point box from y = 97 or 122, a real iPad's lock screen. At 1 the screen is 1280
+ *   points tall (row 25) and the site stays stock.
  * MobileGestalt keeps its answer in its build-keyed cache; kern_exec.c drops that cache when the scale changes
  * (native_switch_ui_scale_cache).
  */
@@ -2913,6 +2923,17 @@ static const struct switch_us_site {
 			    0x1f, 0x20, 0x03, 0xd5 } },
 		},
 		"UIKitCore", "status bar battery fill",
+	},
+	{   /* dyld_shared_cache_arm64.13 of 21H461 (text 0x1a67c8000, file 0) */
+		{ 0xc0, 0x45, 0x2d, 0x94, 0xa5, 0xf8, 0x3b, 0xe1, 0xbd, 0xfc, 0xe1, 0x5e, 0x71, 0x4a, 0x84, 0xf5 },
+		0x1ac8c0000ULL, 0x60f8000ULL, 0x2000ULL, 1, 1,
+		{
+			/* 0x1ac8c26a0: bl BSSizeEqualToSize; tbz w0, #0, -0x294 (row 28); mov w0, #24 -> nop */
+			{ 0x60fa6a0ULL, 12, 4, 4, SWITCH_US_FIXED,
+			  { 0x71, 0xda, 0x2e, 0x94, 0x60, 0xeb, 0x07, 0x36, 0x00, 0x03, 0x80, 0x52 },
+			  { 0x1f, 0x20, 0x03, 0xd5 } },
+		},
+		"CoverSheetKit", "lock screen layout row",
 	},
 };
 #define SWITCH_US_SITES           (sizeof(switch_us_sites) / sizeof(switch_us_sites[0]))
@@ -3021,7 +3042,7 @@ switch_ui_scale_pager(const struct switch_us_site *site, vm_object_t file_object
  * grid, settings icons and keyboard ranges are in different subcaches (.25, .13, .03), one per mapping, so they only
  * answer slot 0; the .07 mapping holds both widget deadline sites, slot k being site k; a UI scale site answers its own
  * slot (.11 holds three: MobileGestalt and the two CoreUI ones; .31 only ProgressUI's; .03's UIKitCore battery fill
- * is slot 1, the keyboard's being 0).
+ * is slot 1, the keyboard's being 0; .13's CoverSheetKit row is slot 1, the settings icons' being 0).
  */
 memory_object_t switch_shared_cache_text_pager(vm_object_t file_object, uint64_t file_offset, uint64_t size,
     uint64_t unslid_address, struct vnode *vp, unsigned slot, uint64_t *range_offset, uint64_t *range_size);
