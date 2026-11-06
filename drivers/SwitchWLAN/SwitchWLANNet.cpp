@@ -438,7 +438,13 @@ void on_link_lost(int reason)
 // Work loop only: frames received in this interrupt, not yet handed to the stack.
 mbuf_t gRxHead, gRxTail;
 uint32_t gRxCount, gRxBytes;
-// Fed by on_rx and tx_fill, both under SwitchWLAN's gate (the work loop's); read under it too.
+// Fed by on_rx and tx_fill, both under SwitchWLAN's gate (the work loop's); read under it too. Debug kernels only
+// (the stats' probe line).
+#if DEVELOPMENT || DEBUG
+constexpr bool kTrace = true;
+#else
+constexpr bool kTrace = false;
+#endif
 swlan_trace gTrace;
 
 uint64_t trace_now()
@@ -452,9 +458,11 @@ void on_rx(const uint8_t *eth, size_t length)
 {
     if (!gIf || length < 14)
         return;
-    const swlan_frame_facts facts = swlan_frame_classify(eth, length);
-    if (facts.kind != SWLAN_FRAME_OTHER)
-        swlan_trace_note_received(&gTrace, facts, !(eth[0] & 1), trace_now());
+    if (kTrace) {
+        const swlan_frame_facts facts = swlan_frame_classify(eth, length);
+        if (facts.kind != SWLAN_FRAME_OTHER)
+            swlan_trace_note_received(&gTrace, facts, !(eth[0] & 1), trace_now());
+    }
 
     // Two bytes ahead of the Ethernet header put the IP header on a 4-byte boundary. The packet may come back as a
     // chain: each buffer gets only what fits in it (sheng i469: setting the whole length on the first one let the stack
@@ -561,9 +569,11 @@ size_t tx_fill(void *context, uint8_t *buffer, size_t room)
             ++c->dropped;
             continue;
         }
-        const swlan_frame_facts facts = swlan_frame_classify(buffer, length);
-        if (facts.kind != SWLAN_FRAME_OTHER)
-            swlan_trace_note_sent(&gTrace, facts, trace_now());
+        if (kTrace) {
+            const swlan_frame_facts facts = swlan_frame_classify(buffer, length);
+            if (facts.kind != SWLAN_FRAME_OTHER)
+                swlan_trace_note_sent(&gTrace, facts, trace_now());
+        }
         if (c->sentTail)
             mbuf_setnextpkt(c->sentTail, m);
         else

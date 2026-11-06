@@ -57,11 +57,19 @@ namespace {
 // Tegra210 PCIe "msi" interrupt: GIC SPI 99, level high (Linux tegra210.dtsi pcie@1003000; the OLED DTB).
 constexpr uint32_t kMsiIntid = 131;
 constexpr uint32_t kIoctlTimeoutMs = 2000, kScanTimeoutMs = 15000, kJoinTimeoutMs = 20000, kRecheckMs = 50;
+#if DEVELOPMENT || DEBUG
+constexpr bool kTxReadBack = true;  // a DNS query's transmit buffer read back once a second (logProbe)
+#else
+constexpr bool kTxReadBack = false;
+#endif
 constexpr uint32_t kWatchdogMs = 1000, kRssiRefreshMs = 10000, kTxWaitMs = 1000, kFlowWaitMs = 1000, kStatsMs = 5000;
 // r16-idle: the worker's tick and the chip watchdog with it, once the chip is up and no scan runs: what MSIs tell
 // (firmware halt, the bus gone) wakes the worker at once, so this only bounds how late a silent self-reset is seen.
 // A window with only an idle trickle in it is logged once a minute (kStatsQuietMs, logStats).
-constexpr uint32_t kIdleTickMs = 5000, kStatsQuietMs = 60000, kStatsTrickleFrames = 100;
+constexpr uint32_t kIdleTickMs = 5000;
+#if DEVELOPMENT || DEBUG
+constexpr uint32_t kStatsQuietMs = 60000, kStatsTrickleFrames = 100;
+#endif
 constexpr uint32_t kRetryFirstMs = 2000, kRetryMaxMs = 60000;
 
 // Firmware commands (brcmfmac fwil_types.h / nxk wl.rs).
@@ -320,6 +328,9 @@ private:
     void snapshot(Counts &c);
     void logStats();
     void logProbe(const Counts &now, const Counts &was, uint32_t windowMs);
+    // Release kernels: the link rates logStats keeps current in debug ones, without the line.
+    void refreshRates();
+    uint32_t ratesFrames_ = 0;
     // The firmware's "counters" block now and at the last stats line (worker only; too large for its stack).
     uint8_t fwCounters_[1536] = {}, fwCountersNow_[1536] = {};
     size_t fwCountersLength_ = 0;
@@ -911,7 +922,9 @@ bool SwitchWLAN::radioInit()
           mac_[3], mac_[4], mac_[5], abbrev, static_cast<int>(swlan::le32(country + 4)), code);
     if (capAwdl_)
         awdlProbe();  // once a boot, while the radio is up and before the station uses it
+#if DEVELOPMENT || DEBUG
     monitorProbe();
+#endif
     locked([&] {
         status_.state = powerOn_ ? SWLAN_STA_IDLE : SWLAN_STA_OFF;
         status_.power = powerOn_;
@@ -1898,7 +1911,11 @@ void SwitchWLAN::run()
         }
         if (state == SWLAN_STA_UP && swlan::nowNs() >= nextStatsNs_) {
             nextStatsNs_ = swlan::nowNs() + kStatsMs * 1000000ULL;
+#if DEVELOPMENT || DEBUG
             logStats();
+#else
+            refreshRates();
+#endif
         }
         if (state == SWLAN_STA_UP && swlan::nowNs() >= nextRssiNs_) {
             nextRssiNs_ = swlan::nowNs() + kRssiRefreshMs * 1000000ULL;
@@ -1938,6 +1955,7 @@ void SwitchWLAN::snapshot(Counts &c)
     switch_wlan_net_counters(&c.net);
 }
 
+#if DEVELOPMENT || DEBUG
 void SwitchWLAN::logStats()
 {
     Counts now;
@@ -2160,6 +2178,24 @@ void SwitchWLAN::logProbe(const Counts &now, const Counts &was, uint32_t windowM
     fwCountersLength_ = got;
 }
 
+#else
+void SwitchWLAN::refreshRates()
+{
+    const uint32_t frames = mb_.framesReceived() + mb_.framesSent();
+    if (frames == ratesFrames_)
+        return;
+    ratesFrames_ = frames;
+    swlan_sta sta;
+    if (!readSta(sta))
+        return;
+    locked([&] {
+        status_.tx_rate_kbps = sta.tx_rate_kbps;
+        status_.rx_rate_kbps = sta.rx_rate_kbps;
+    });
+    switch_wlan_net_rate(static_cast<uint64_t>(sta.tx_rate_kbps) * 1000);
+}
+#endif
+
 // The access point's counters (sta_info by its address). A firmware that refuses or answers in a layout not known
 // here (SwitchWLANCoex.h) gets one line and is not asked again this boot.
 bool SwitchWLAN::readSta(swlan_sta &out)
@@ -2284,6 +2320,7 @@ void SwitchWLAN::logLink()
     os_log(OS_LOG_DEFAULT, "%s", text);
 }
 
+#if DEVELOPMENT || DEBUG
 // The firmware's MPDUs per A-MPDU since the last stats line, each way, from its "dump ampdu" text (wlc_ampdu_dump's
 // txampdu/txmpdu/rxampdu/rxmpdu counters). A firmware without the dump, or without those counters in it, gets one
 // line with what it answered and is not asked again.
@@ -2324,6 +2361,7 @@ void SwitchWLAN::ampduWindow(char *out, size_t size)
     }
     IOFreeData(text, kRoom + 1);
 }
+#endif
 
 // ---- Coexistence ----------------------------------------------------------------------------------------------
 //
@@ -2718,7 +2756,8 @@ unsigned SwitchWLAN::transmitFrames(swlan_tx_fill_fn fill, void *context, unsign
             const size_t length = buffer ? fill(context, buffer, swlan::kTxBufferSize) : 0;
             if (!length)
                 break;
-            const bool readBack = !readBackId && now >= nextReadBackNs_ && length <= sizeof(txWritten_) * 8 &&
+            const bool readBack = kTxReadBack && !readBackId && now >= nextReadBackNs_ &&
+                                  length <= sizeof(txWritten_) * 8 &&
                                   swlan_frame_classify(buffer, length).kind == SWLAN_FRAME_DNS_QUERY;
             if (readBack) {
                 readBackLength = length < sizeof(txWritten_) ? length : sizeof(txWritten_);
@@ -2869,6 +2908,7 @@ int SwitchWLAN::awdlOpen(const swlan_awdl_caps **caps)
     return 0;
 }
 
+#if DEVELOPMENT || DEBUG
 // Once a boot (a probe the firmware does not survive is not retried by the recovery): every AWDL variable either
 // firmware generation sets, read with GET on the station's interface. UNSUPPORTED means the name is not in the
 // firmware's table; any other answer means its handler exists. The interface_create query is brcmf_feat_awdl_check's
@@ -2893,6 +2933,7 @@ void SwitchWLAN::monitorProbe()
                static_cast<unsigned>(ok && got >= 4 ? swlan::le32(reply) : 0));
     }
 }
+#endif
 
 void SwitchWLAN::awdlProbe()
 {
@@ -2900,7 +2941,9 @@ void SwitchWLAN::awdlProbe()
     if (tried)
         return;
     tried = true;
+#if DEVELOPMENT || DEBUG
     os_log(OS_LOG_DEFAULT, "SwitchWLAN: AWDL probe: %u variables, GET only", static_cast<unsigned>(BCM_PROBE_COUNT));
+#endif
     for (unsigned i = 0; i < BCM_PROBE_COUNT; ++i) {
         uint8_t request[64], reply[256] = {};
         const size_t n = bcm_probe_request(i, request, sizeof(request));
@@ -2909,11 +2952,13 @@ void SwitchWLAN::awdlProbe()
         const bool ok = n && ioctlOn(0, WLC_GET_VAR, request, n, sizeof(reply), reply, &got, &fw);
         const int status = ok ? 0 : fw ? fw : BCM_PROBE_NO_ANSWER;
         bcm_probe_record(&gAwdlProbe, i, status, ok ? reply : nullptr, ok ? got : 0);
+#if DEVELOPMENT || DEBUG
         char hex[3 * 16 + 1] = {};
         for (size_t k = 0; ok && k < got && k < 16; ++k)
             snprintf(hex + 3 * k, 4, " %02x", reply[k]);
         os_log(OS_LOG_DEFAULT, "SwitchWLAN: AWDL probe: %s: %d %s, %u bytes%s", bcm_probe_names[i], status,
                bcme_name(status), static_cast<unsigned>(ok ? got : 0), hex);
+#endif
     }
     __atomic_store_n(&gAwdlProbe.done, 1, __ATOMIC_RELEASE);  // awdlQuery reads it from another thread
     const enum bcm_awdl_api api = bcm_awdl_api_of(&gAwdlProbe);
