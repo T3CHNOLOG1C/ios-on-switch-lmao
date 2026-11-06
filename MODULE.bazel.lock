@@ -224,6 +224,21 @@
   },
   "selectedYankedVersions": {},
   "moduleExtensions": {
+    "//install:release.bzl%release": {
+      "general": {
+        "bzlTransitiveDigest": "3nF4GYoqGb/wtj/+VqICYmdeGRD/0nXVL5OCnE74VsY=",
+        "usagesDigest": "kz4Bx3yrUSQachzleMrWfwpEYNS1LXH8mdZTjqB7yg4=",
+        "recordedInputs": [],
+        "generatedRepoSpecs": {
+          "switch_release": {
+            "repoRuleId": "@@//install:release.bzl%switch_release",
+            "attributes": {
+              "version": "0.1.0"
+            }
+          }
+        }
+      }
+    },
     "@@pybind11_bazel+//:internal_configure.bzl%internal_configure_extension": {
       "general": {
         "bzlTransitiveDigest": "huszNdgB/J9vMDiUhQ/wG+suJtjCjfT834lbO5XrqR0=",
@@ -304,7 +319,7 @@
     "@@rules_python+//python/uv:uv.bzl%uv": {
       "general": {
         "bzlTransitiveDigest": "RH0xYDM+3D/BJrY901xKB9oHbAVDI7DBo6UhvEjliCw=",
-        "usagesDigest": "k6gEmFD0dXRrWu89+xp+m/3f7cZy3xpcEEI//N8tAyM=",
+        "usagesDigest": "HVf6HRV3ZMprG6/Z6qUZ54XET2mF7Y+g+aoyD8bhlJk=",
         "recordedInputs": [
           "REPO_MAPPING:rules_python+,bazel_tools bazel_tools",
           "REPO_MAPPING:rules_python+,platforms platforms"

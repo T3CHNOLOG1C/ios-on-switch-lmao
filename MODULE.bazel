@@ -5,7 +5,10 @@ declared host input: Xcode and its SDKs (Apple's licence forbids redistributing 
 against the pins in bazel/host/xcode.bzl.
 """
 
-module(name = "switch-ios")
+module(
+    name = "switch-ios",
+    version = "0.1.0",
+)
 
 bazel_dep(name = "platforms", version = "1.1.0")
 bazel_dep(name = "bazel_skylib", version = "1.9.2")
@@ -213,6 +216,10 @@ http_archive(
 # build names them @ipsw//:<role>, the selected kind's. --------------------------------------------------------------
 ipsw = use_extension("//ipsw:ipsw.bzl", "ipsw")
 use_repo(ipsw, "ipsw")
+
+# //:image's prebuilt parts from the GitHub release of this module's version (install/release.bzl).
+release = use_extension("//install:release.bzl", "release")
+use_repo(release, "switch_release")
 
 # --- GPU (owned by gpu/) -----------------------------------------------------------------------------------------
 # Rust 1.98.0 (the bridge's `cargo +1.98.0`), with the iOS standard library: the Metal bridge is built by this

@@ -5,6 +5,7 @@
 #   bazel build //:gpu         the TegraGM20B Metal bundle, its m2v seed and trust cache
 #   bazel test //...           unit tests, pinned-input checks, format and lint
 #   bazel run //deploy:sd -- <disk>      bazel run //deploy:pull_logs -- <disk>      bazel run //install:sd -- <disk>
+#   bazel run //:image [-- --size 64G]   the SD-card folder: boot entry, install-ios.bin and the iOS install image
 #
 # Format and lint (//bazel/lint; every tool pinned in bazel/lint/tools.bzl, @llvm or the Rust toolchain):
 #
@@ -69,6 +70,21 @@ alias(
 alias(
     name = "gpu",
     actual = "//gpu:bundle",
+)
+
+alias(
+    name = "image",
+    actual = "//install:image",
+)
+
+alias(
+    name = "image_dry_run",
+    actual = "//install:image_dry_run",
+)
+
+alias(
+    name = "image_boot",
+    actual = "//install:image_boot",
 )
 
 format_runner(

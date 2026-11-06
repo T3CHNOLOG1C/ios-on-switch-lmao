@@ -15,13 +15,17 @@ py_library(
         "apfs.py",
         "card.py",
         "compose.py",
+        "cryptex.py",
+        "delta.py",
         "extents.py",
+        "folder.py",
         "gpt.py",
         "host.py",
         "manifest.py",
         "pack.py",
         "populate.py",
         "renamed.py",
+        "stages.py",
         "target.py",
     ],
     imports = ["../.."],
@@ -31,6 +35,15 @@ py_binary(
     name = "manifest_vectors",
     srcs = ["manifest_vectors.py"],
     deps = [":lib"],
+)
+
+py_binary(
+    name = "image",
+    srcs = ["image.py"],
+    deps = [
+        ":lib",
+        "@rules_python//python/runfiles",
+    ],
 )
 
 py_binary(
@@ -145,5 +158,19 @@ py_test(
         "local",
         "manual",
     ],
+    deps = [":lib"],
+)
+
+py_test(
+    name = "stages_test",
+    size = "small",
+    srcs = ["stages_test.py"],
+    deps = [":lib"],
+)
+
+py_test(
+    name = "delta_test",
+    size = "small",
+    srcs = ["delta_test.py"],
     deps = [":lib"],
 )

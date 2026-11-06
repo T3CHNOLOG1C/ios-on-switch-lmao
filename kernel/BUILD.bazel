@@ -3,8 +3,9 @@ load("//bazel/lint:defs.bzl", "lint_files")
 # The kernel: which XNU it is built from, and (from the layout move on) the kernelcache's archives, link and prelink.
 
 load("//kernel/rules:firehose.bzl", "kernel_firehose")
+load("//kernel:prelink.bzl", "kernel_prelink_switch")
 load("//kernel/rules:inputs.bzl", "tool_output")
-load("//kernel/rules:kernel.bzl", "kernel_archive", "kernel_driver", "kernel_prelink", "stage_files")
+load("//kernel/rules:kernel.bzl", "kernel_archive", "kernel_driver", "stage_files")
 load("//kernel/rules:sdk.bzl", "outer_headers")
 load("//kernel/rules:version.bzl", "xnu_versions")
 load("//kernel/rules:xnu.bzl", "xnu_tree")
@@ -407,24 +408,9 @@ tool_output(
     tool = "unxz.py",
 )
 
-kernel_prelink(
+kernel_prelink_switch(
     name = "kernel",
-    base_roots = [
-        "com.apple.driver.AppleMobileFileIntegrity",
-        "com.apple.filesystems.apfs",
-        "com.apple.security.sandbox",
-        "com.apple.AppleFSCompression.AppleFSCompressionTypeZlib",
-        "com.apple.iokit.IOMobileGraphicsFamily",
-        "com.apple.iokit.IOSurface",
-        "com.apple.iokit.IOHIDFamily",
-        "com.apple.driver.DiskImages",
-        "com.apple.driver.DiskImages.FileBackingStore",
-        "com.apple.driver.DiskImages.KernelBacked",
-        "com.apple.driver.DiskImages.ReadWriteDiskImage",
-    ],
-    early_security_init = ["com.apple.driver.AppleMobileFileIntegrity=0xfffffff005ab4ae0"],
     inherit_report = ":dma_prelink_report",
     kernel = ":kernel_unprelinked",
     previous = "//bazel/pinned:prelink/dma-prelink.json",
-    slide = "-0x1000000",
 )

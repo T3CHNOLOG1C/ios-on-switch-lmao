@@ -1,6 +1,8 @@
 """Rules behind //install: the kernel-derived install spec, the IPSW pins as JSON, the install artifacts."""
 
 load("//ipsw:defs.bzl", _ipsw_pins = "ipsw_pins")
+load("//kernel:prelink.bzl", "PRELINK")
+load("//kernel/rules:kernel.bzl", "KernelObjectsInfo")
 
 # The selected IPSW kind's member pins as JSON (//ipsw:defs.bzl).
 ipsw_pins = _ipsw_pins
@@ -111,4 +113,84 @@ fake_boot_package = rule(
         "_tool": attr.label(default = "//tools/install:fake_boot_package", executable = True, cfg = "exec"),
     },
     doc = "A boot package with dummy contents and the real layout, for tests (--//deploy:boot_package=...).",
+)
+
+def _prelink_options_impl(ctx):
+    kernel = ctx.attr.kernel[KernelObjectsInfo]
+    macho = ctx.actions.declare_file(ctx.label.name + "/kernel.macho")
+    options = ctx.actions.declare_file(ctx.label.name + "/prelink.json")
+    ctx.actions.symlink(output = macho, target_file = kernel.objects[0])
+    ctx.actions.write(options, json.encode_indent({
+        "cuts": kernel.cuts,
+        "defers": kernel.deferred,
+        "new_roots": sorted({r: True for r in kernel.prelink}.keys()),
+    } | PRELINK) + "\n")
+    return [DefaultInfo(files = depset([macho, options]))]
+
+prelink_options = rule(
+    implementation = _prelink_options_impl,
+    attrs = {"kernel": attr.label(mandatory = True, providers = [KernelObjectsInfo])},
+    doc = "The linked kernel before the prelink, and what the prelink takes besides it (prelink.json).",
+)
+
+def _release_tree_impl(ctx):
+    out = ctx.actions.declare_directory(ctx.label.name)
+    commands, inputs = [], []
+    for target, destination in ctx.attr.files.items():
+        for f in target.files.to_list():
+            inputs.append(f)
+            where = destination if len(target.files.to_list()) == 1 else destination + "/" + f.basename
+            commands.append('/bin/mkdir -p "$1/{parent}" && /bin/cp -RL "{src}" "$1/{dest}"'.format(
+                parent = where.rpartition("/")[0],
+                src = f.path,
+                dest = where,
+            ))
+    ctx.actions.run_shell(
+        command = "set -e\n" + "\n".join(commands),
+        arguments = [out.path],
+        inputs = inputs,
+        outputs = [out],
+        mnemonic = "ReleaseTree",
+        progress_message = "Laying out %{label}",
+    )
+    return [DefaultInfo(files = depset([out]))]
+
+release_tree = rule(
+    implementation = _release_tree_impl,
+    attrs = {"files": attr.label_keyed_string_dict(allow_files = True, doc = "each target's file(s) -> its path")},
+    doc = "A directory with each target at the path //:image reads it from (one release asset).",
+)
+
+def _rlocation(ctx, f):
+    return f.short_path[3:] if f.short_path.startswith("../") else ctx.workspace_name + "/" + f.short_path
+
+def _image_inputs_impl(ctx):
+    out = ctx.actions.declare_file(ctx.label.name + ".json")
+    paths, files = {}, []
+    for name, target in ctx.attr.inputs.items():
+        found = target[DefaultInfo].files.to_list()
+        if len(found) > 1:
+            fail("{} ({}) must be one file or directory, not {}".format(name, target.label, len(found)))
+        if found:
+            paths[name] = _rlocation(ctx, found[0])
+            files.append(found[0])
+    for role, target in ctx.attr.deltas.items():
+        found = target[DefaultInfo].files.to_list()
+        manifests = [f for f in found if f.basename.endswith(".manifest.json")]
+        if len(manifests) > 1:
+            fail("delta {} ({}) has {} manifests".format(role, target.label, len(manifests)))
+        if manifests:
+            paths["delta_" + role] = _rlocation(ctx, manifests[0])
+            files.extend(found)
+    ctx.actions.write(out, json.encode_indent(paths) + "\n")
+    return [DefaultInfo(files = depset([out]), runfiles = ctx.runfiles(files = [out] + files))]
+
+image_inputs = rule(
+    implementation = _image_inputs_impl,
+    attrs = {
+        "inputs": attr.string_keyed_label_dict(allow_files = True),
+        "deltas": attr.string_keyed_label_dict(doc = "pretranslated deltas by role: their manifest and files"),
+    },
+    doc = "{input name: runfiles path} as JSON for tools/install/image.py, with the inputs in runfiles; an empty " +
+          "input (a label_flag left at :none) is left out.",
 )

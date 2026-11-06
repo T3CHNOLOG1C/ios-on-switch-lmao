@@ -1,15 +1,17 @@
-# Installing iPadOS onto the Switch SD card. Read tools/install/sd.py's docstring for what is written and the guards.
+# Installing iPadOS onto the Switch SD card (README.md "Install").
 #
-#   bazel build //install:artifacts             what the install writes, described (no device)
-#   bazel run //install:sd -- disk4             dry run against the card at disk4
-#   bazel run //install:sd -- disk4 --yes       install (type-to-confirm, then sudo)
+#   bazel run //:image [-- --disk diskN | --size 64G]   the SD-card folder and install image (tools/install/image.py)
+#   bazel run //:image_dry_run -- --size 64G            the same checks and plan, without the IPSW's large members
+#   bazel build //install:artifacts                     what the install writes, described (no device)
+#   bazel run //install:sd -- disk4 [--yes]             write a card in the Mac directly (tools/install/sd.py)
 #
 # The boot package comes from --//deploy:boot_package (default //:boot); the IPSW members from @ipsw (fetched by
 # range request into the repository cache; on APFS the copies Bazel makes from the cache are clones, so a member's
 # bytes are stored once).
+load("@bazel_skylib//rules:common_settings.bzl", "string_flag")
 load("@rules_python//python:py_binary.bzl", "py_binary")
 load("//bazel/lint:defs.bzl", "lint_files")
-load(":defs.bzl", "fake_boot_package", "install_artifacts", "install_spec", "ipsw_pins", "test_member")
+load(":defs.bzl", "fake_boot_package", "image_inputs", "install_artifacts", "install_spec", "ipsw_pins", "prelink_options", "release_tree", "test_member")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -102,4 +104,187 @@ filegroup(
     name = "test_ipsw_pins",
     srcs = [":test_system_cryptex"],
     output_group = "pins",
+)
+
+# Where //:image takes this project's own prebuilt parts from: this checkout's build (local, which needs Xcode), or
+# the GitHub release of MODULE.bazel's version (release, @switch_release: install/release.bzl).
+string_flag(
+    name = "prebuilt",
+    build_setting_default = "local",
+    values = [
+        "local",
+        "release",
+    ],
+)
+
+config_setting(
+    name = "from_release",
+    flag_values = {":prebuilt": "release"},
+)
+
+alias(
+    name = "image_gpu_base",
+    actual = select({
+        ":from_release": "@switch_release//:gpu_base",
+        "//conditions:default": "//deploy:gpu_bundle",
+    }),
+)
+
+alias(
+    name = "image_install_payload",
+    actual = select({
+        ":from_release": "@switch_release//:install_payload",
+        "//conditions:default": "//boot/installer:install-ios.bin",
+    }),
+)
+
+# r22-shaders' //gpu/seed:tree and its "size" output group, once they land.
+# iOS 27's pretranslated deltas (r23's //translate/arm64e/pretranslate:os, :system_cryptex, :app_cryptex), once they
+# land.
+label_flag(
+    name = "delta_os",
+    build_setting_default = ":none",
+)
+
+label_flag(
+    name = "delta_system_cryptex",
+    build_setting_default = ":none",
+)
+
+label_flag(
+    name = "delta_app_cryptex",
+    build_setting_default = ":none",
+)
+
+label_flag(
+    name = "shader_seed",
+    build_setting_default = ":none",
+)
+
+label_flag(
+    name = "shader_seed_size",
+    build_setting_default = ":none",
+)
+
+label_flag(
+    name = "shader_tools",
+    build_setting_default = ":none",
+)
+
+filegroup(
+    name = "none",
+    srcs = [],
+)
+
+image_inputs(
+    name = "image_inputs",
+    deltas = {
+        "app_cryptex": ":delta_app_cryptex",
+        "os": ":delta_os",
+        "system_cryptex": ":delta_system_cryptex",
+    },
+    inputs = {
+        "boot_package": "//deploy:boot_package",
+        "gpu_base": ":image_gpu_base",
+        "gpu_stager": "//drivers/TegraGM20BMetal:stage-tegra-gm20b-metal.py",
+        "install_payload": ":image_install_payload",
+        "ipsw": ":ipsw_pins",
+        "shader_seed": ":shader_seed",
+        "shader_seed_size": ":shader_seed_size",
+        "spec": ":spec",
+    },
+)
+
+# The IPSW's large members: building these fetches the 5.2 GB OS image and inflates the 3.3 GB system cryptex.
+image_inputs(
+    name = "image_ipsw",
+    inputs = {
+        "app_cryptex": "@ipsw//:app_cryptex",
+        "os_dmg": "@ipsw//:os",
+        "system_cryptex": ":system_cryptex",
+    },
+    tags = ["manual"],
+)
+
+py_binary(
+    name = "image",
+    srcs = ["//tools/install:image.py"],
+    args = [
+        "--inputs=$(rlocationpath :image_inputs)",
+        "--inputs=$(rlocationpath :image_ipsw)",
+    ],
+    data = [
+        ":image_inputs",
+        ":image_ipsw",
+    ],
+    main = "//tools/install:image.py",
+    tags = ["manual"],
+    deps = [
+        "//tools/install:lib",
+        "@rules_python//python/runfiles",
+    ],
+)
+
+py_binary(
+    name = "image_dry_run",
+    srcs = ["//tools/install:image.py"],
+    args = [
+        "--inputs=$(rlocationpath :image_inputs)",
+        "--dry-run",
+    ],
+    data = [":image_inputs"],
+    main = "//tools/install:image.py",
+    deps = [
+        "//tools/install:lib",
+        "@rules_python//python/runfiles",
+    ],
+)
+
+py_binary(
+    name = "image_boot",
+    srcs = ["//tools/install:image.py"],
+    args = [
+        "--inputs=$(rlocationpath :image_inputs)",
+        "--boot-only",
+    ],
+    data = [":image_inputs"],
+    main = "//tools/install:image.py",
+    deps = [
+        "//tools/install:lib",
+        "@rules_python//python/runfiles",
+    ],
+)
+
+# The release's image-builder inputs (ios-on-switch-lmao-<version>-image-inputs.tar, r22-ci): this project's built
+# parts the Mac composes with the IPSW, none of them made from it.
+prelink_options(
+    name = "kernel_inputs",
+    kernel = "//kernel:kernel_unprelinked",
+    tags = ["manual"],
+)
+
+release_tree(
+    name = "release_inputs",
+    files = {
+        ":kernel_inputs": "kernel",
+        "//gpu:base": "gpu",
+        "//drivers/SwitchBluetooth:BlueTool": "overlay/build/switch-bluetooth/BlueTool",
+        "//drivers/SwitchAudio:SwitchAudioHAL": "overlay/build/switch-audio/SwitchAudio.driver/SwitchAudio",
+        "//drivers/SwitchJoyCon:joyconpaird": "overlay/build/switch-joycon/joyconpaird",
+        "//drivers/SwitchVideoDecoders:HEVCH8": "overlay/build/switch-video/HEVCH8.videodecoder",
+        "//drivers/SwitchVideoDecoders:AVD": "overlay/build/switch-video/AVD.videodecoder",
+        "//drivers/SwitchVideoEncoders:AVE": "overlay/build/switch-video/H264H7.videoencoder",
+    },
+    tags = ["manual"],
+)
+
+# The release's host tools (ios-on-switch-lmao-<version>-host-tools-darwin-arm64.tar): lz4 for the kernel window and
+# the shader compiler (shader/).
+release_tree(
+    name = "host_tools",
+    files = {
+        ":shader_tools": "shader",
+        "//tools:lz4": "lz4",
+    },
+    tags = ["manual"],
 )
