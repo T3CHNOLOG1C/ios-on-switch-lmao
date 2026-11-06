@@ -25,6 +25,7 @@ import struct
 import sys
 from collections.abc import Callable
 from pathlib import Path
+from typing import NamedTuple
 
 TREE = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(TREE / 'tools/prelink'))  # the prelinker's Mach-O reader
@@ -230,6 +231,19 @@ def compiled_vtable(blob: bytes, image: dict, symbols: list[tuple[str, int, int]
     return entries
 
 
+class KernelCache(NamedTuple):
+    data: bytes
+    parent: dict
+    read: Callable[[int, int], bytes]
+    u64: Callable[[int], int]
+
+
+class Unlinked(NamedTuple):
+    blob: bytes
+    image: dict
+    symbols: list[tuple[str, int, int]]
+
+
 def require(ok: bool, why: str) -> None:
     if not ok:
         raise SystemExit('abi_check: ' + why)
@@ -301,7 +315,9 @@ def original_vtable(
     return original
 
 
-def check_xudc(kc, parent, read, u64, blob, image, symbols):
+def check_xudc(cache: KernelCache, ours: Unlinked) -> tuple[str, dict[str, int], set[str], list[dict]]:
+    kc, parent, read, u64 = cache
+    blob, image, symbols = ours
     original_names = exports(kc, parent)
     original = original_vtable(read, u64, VTABLE, SLOTS, METACLASS)
     for name, slot, address, head in CODE:
@@ -329,7 +345,9 @@ def check_xudc(kc, parent, read, u64, blob, image, symbols):
     return 'IOUSBDeviceFamily', allowed, imports, owners
 
 
-def check_xhci(kc, parent, read, u64, blob, image, symbols):
+def check_xhci(cache: KernelCache, ours: Unlinked) -> tuple[str, dict[str, int], set[str], list[dict]]:
+    kc, parent, read, u64 = cache
+    blob, image, symbols = ours
     names = exports(kc, parent)
     original = original_vtable(read, u64, XHCI_VTABLE, XHCI_SLOTS, XHCI_METACLASS)
     movz = struct.unpack('<I', read(XHCI_METACLASS_SIZE, 4))[0]
@@ -386,7 +404,7 @@ def main() -> None:
     blob = args.object.read_bytes()
     image, symbols = symbols_of(blob)
     check = check_xudc if args.kind == 'xudc' else check_xhci
-    family, allowed, imports, owners = check(kc, parent, read, u64, blob, image, symbols)
+    family, allowed, imports, owners = check(KernelCache(kc, parent, read, u64), Unlinked(blob, image, symbols))
     unknown = imports - set(allowed)
     require(not unknown, 'unaudited original imports: ' + ', '.join(sorted(unknown)))
     require(not any(name.endswith(('D0Ev', 'D1Ev')) for name in imports), 'abstract base D0/D1 must not be called')
