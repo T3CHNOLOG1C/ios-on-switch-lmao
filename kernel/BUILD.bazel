@@ -1,38 +1,22 @@
-load("@bazel_skylib//rules:common_settings.bzl", "string_flag")
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("//bazel/lint:defs.bzl", "lint_files")
+# The kernel: which XNU it is built from, and (from the layout move on) the kernelcache's archives, link and prelink.
+
+load("//kernel/rules:firehose.bzl", "kernel_firehose")
 load("//kernel/rules:inputs.bzl", "tool_output")
 load("//kernel/rules:kernel.bzl", "kernel_archive", "kernel_driver", "kernel_prelink", "stage_files")
 load("//kernel/rules:sdk.bzl", "outer_headers")
-load("//kernel/rules:firehose.bzl", "kernel_firehose")
+load("//kernel/rules:version.bzl", "xnu_versions")
 load("//kernel/rules:xnu.bzl", "xnu_tree")
 load("//kernel/xnu-10063.141.1/config:xnu_kernel.bzl", "xnu_kernel")
-load("//bazel/lint:defs.bzl", "lint_files")
-# The kernel: which XNU it is built from, and (from the layout move on) the kernelcache's archives, link and prelink.
 
 package(default_visibility = ["//visibility:public"])
 
 lint_files()
 
-# The XNU the kernel is built from: kernel/xnu-<version>/. Code that differs per version uses #if XNU_<version> (the
-# kernel toolchain defines it from this setting); drivers depend on :sdk, never on one XNU's labels.
-string_flag(
-    name = "xnu_version",
-    build_setting_default = "10063.141.1",
-    values = [
-        "10063.141.1",
-        "12377.121.6",
-    ],
-)
-
-config_setting(
-    name = "xnu_10063_141_1",
-    flag_values = {":xnu_version": "10063.141.1"},
-)
-
-config_setting(
-    name = "xnu_12377_121_6",
-    flag_values = {":xnu_version": "12377.121.6"},
-)
+# The XNU the kernel is built from: kernel/xnu-<version>/, the selected IPSW kind's (kernel/rules/version.bzl). Code
+# that differs per version uses #if XNU_<version>; drivers depend on :sdk, never on one XNU's labels.
+xnu_versions(name = "xnu_version")
 
 # The selected XNU's SDK for the kernel's compiles (headers and the paths the kernel toolchain names).
 alias(

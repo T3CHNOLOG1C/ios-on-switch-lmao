@@ -86,6 +86,11 @@ build:release --nokeep_going
 build:release --verbose_failures
 # dev: the old name of the default preset.
 build:dev --config=debug
+
+# The iOS the build is for, with its IPSW kind (ipsw/pins.bzl) and XNU: ios17 is the default (iPadOS 17.7.11 on
+# xnu-10063, iPad7,1), ios27 is iPadOS 27.2 on xnu-12377 for iPad12,1.
+common:ios17 --//ipsw:kind=21H461
+common:ios27 --//ipsw:kind=24B119
 # agent: what an agent worktree adds on the shared machine (16 cores, many agents at once): fewer parallel actions.
 build:agent --jobs=4
 build:agent --local_resources=cpu=4

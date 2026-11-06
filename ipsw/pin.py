@@ -3,8 +3,8 @@
 
     bazel run //ipsw:pin -- --kind=<build> <ipsw url> <product e.g. iPad7,1> <device class e.g. j120ap>
 
-Rewrites the kind's entry of pins.bzl's IPSWS (a declared slot such as "next" is replaced by --kind; the build is
-checked against the IPSW's own) and keeps every other kind and the kind's "derived" pins, which are kept by hand.
+Rewrites the kind's entry of pins.bzl's IPSWS (a declared slot is replaced by --kind; the build is checked against the
+IPSW's own) and keeps every other kind and the kind's hand-kept "derived", "ios" and "xnu".
 
 Reads the zip's central directory and BuildManifest.plist over HTTP range requests, selects the Erase build
 identity for the device class, then streams each member the build needs once to compute two sha256s:
@@ -219,7 +219,9 @@ def main():
     }
     if args.replace:
         kinds.pop(args.replace)
-    entry["derived"] = kinds.get(args.kind, {}).get("derived", {})
+    previous = kinds.get(args.kind, {})
+    for kept in ("derived", "ios", "xnu"):
+        entry[kept] = previous.get(kept, {} if kept == "derived" else "")
     kinds[args.kind] = entry
     table = json.dumps(kinds, indent=4, sort_keys=True).replace(": true", ": True").replace(": false", ": False")
     with open(pins_path, "w") as f:

@@ -15,6 +15,7 @@ the kind --//ipsw:kind selects (a select() over //ipsw:<kind>). //ipsw:current g
 selected kind's identity and derived pins (IpswInfo). Nothing outside pins.bzl names a build or a member file.
 """
 
+load("@bazel_skylib//lib:selects.bzl", "selects")
 load("@bazel_skylib//rules:common_settings.bzl", "BuildSettingInfo", "string_flag")
 load(":pins.bzl", "DEFAULT_KIND", "IPSWS")
 
@@ -65,6 +66,7 @@ def _ipsw_hub_impl(rctx):
         lines.append("    }),")
         lines.append(")")
         lines.append("")
+
     # The deflated members' stored bytes, by kind, for //ipsw's inflate actions.
     for name, actual in sorted(rctx.attr.stored.items()):
         lines.append('alias(name = "{}", actual = "{}")'.format(name, actual))
@@ -215,9 +217,34 @@ ipsw_aea_decrypt = rule(
     },
 )
 
+def kinds_where(field, value):
+    """The kinds whose pins.bzl entry has field == value.
+
+    Args:
+        field: a key of a kind's entry ("ios", "xnu").
+        value: the value it must have.
+
+    Returns:
+        The kinds, sorted.
+    """
+    return sorted([kind for kind, ipsw in IPSWS.items() if ipsw.get(field) == value])
+
+def config_setting_any(name, settings, visibility):
+    """A config_setting matching any of settings.
+
+    Args:
+        name: the setting's name.
+        settings: one or more labels of config_settings.
+        visibility: its visibility.
+    """
+    if len(settings) == 1:
+        native.alias(name = name, actual = settings[0], visibility = visibility)
+    else:
+        selects.config_setting_group(name = name, match_any = settings, visibility = visibility)
+
 def ipsw_kinds():
-    """In //ipsw: the kind flag, a config_setting per kind, the deflated members inflated (<kind>_<role>), the
-    unpinned stand-ins (<kind>_unpinned) and :current (IpswInfo)."""
+    """In //ipsw: the kind flag, a config_setting per kind and per iOS major (ios<major>), the deflated members
+    inflated (<kind>_<role>), the unpinned stand-ins (<kind>_unpinned) and :current (IpswInfo)."""
     string_flag(
         name = "kind",
         build_setting_default = DEFAULT_KIND,
@@ -260,4 +287,10 @@ def ipsw_kinds():
                 tags = ["manual"] if large else [],
                 visibility = ["//visibility:public"],
             )
+    for major in sorted({ipsw["ios"]: True for ipsw in IPSWS.values() if ipsw.get("ios")}):
+        config_setting_any(
+            name = "ios" + major,
+            settings = [":" + kind for kind in kinds_where("ios", major)],
+            visibility = ["//visibility:public"],
+        )
     ipsw_info(name = "current", visibility = ["//visibility:public"])

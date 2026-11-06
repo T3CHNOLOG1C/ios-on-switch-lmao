@@ -4,6 +4,8 @@ Written by `bazel run //ipsw:pin -- --kind=<build> <ipsw url> <product> <device 
 which pins one kind's members and keeps the rest. Per kind:
   members   each member the build or the SD install reads: where it is stored in the IPSW (offset, stored_size), the
             sha256 of its stored bytes (what Bazel fetches by range request) and of its content
+  ios, xnu  pinned by hand: the iOS major (//ipsw:ios<major>, --config=ios<major>) and the XNU the kernel is built
+            from for it (kernel/xnu-<xnu>, //kernel:xnu_<xnu>)
   derived   what the build derives from the members, pinned by hand: kernelcache_sha256 (the kernelcache's IM4P payload,
             LZFSE-decompressed, its arm64 slice: //ipsw:kernelcache) and quartzcore_metallib_sha256 (QuartzCore's
             default.metallib on the OS volume, the shader seed's gate: //gpu:seed)
@@ -23,6 +25,7 @@ IPSWS = {
             "quartzcore_metallib_sha256": "606f913adf520420f9b4bb666efb782a68c830f082f1e559e17b20d0d13adbc9"
         },
         "device_class": "j120ap",
+        "ios": "17",
         "members": {
             "app_cryptex": {
                 "component": "Cryptex1,AppOS",
@@ -108,7 +111,8 @@ IPSWS = {
         "product": "iPad7,1",
         "size": 6835124840,
         "url": "https://updates.cdn-apple.com/2025SpringFCS/fullrestores/122-77166/DCA6CFE8-90E9-4B92-880D-3DE171798E40/iPad_Pro_HFR_17.7.11_21H461_Restore.ipsw",
-        "version": "17.7.11"
+        "version": "17.7.11",
+        "xnu": "10063.141.1"
     },
     "24B119": {
         "build": "24B119",
@@ -116,6 +120,7 @@ IPSWS = {
             "kernelcache_sha256": "250337d45598da0e5cc578413704981368afe92f84b3450dc956e21da1b21bd4"
         },
         "device_class": "j181ap",
+        "ios": "27",
         "members": {
             "app_cryptex": {
                 "component": "Cryptex1,AppOS",
@@ -203,6 +208,7 @@ IPSWS = {
         "product": "iPad12,1",
         "size": 10681591172,
         "url": "https://updates.cdn-apple.com/2026FallFCS/4ed6b0d9-7721-4690-b843-664305638776/iPad_10.2_2021_27.2_24B119_Restore.ipsw",
-        "version": "27.2"
+        "version": "27.2",
+        "xnu": "12377.121.6"
     }
 }
