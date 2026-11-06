@@ -64,6 +64,7 @@ kernel_driver(
         "{tree}/kits/VerifiedRoot/include",
     ],
     hdr_deps = [
+        "drivers/SwitchSuspend",
         "kits/VerifiedRoot",
     ],
 )

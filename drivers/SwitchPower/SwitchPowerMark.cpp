@@ -20,9 +20,13 @@ uint64_t gQuietAt;  // mach_absolute_time() from which the RTC takes register wr
 
 void max77620::rtcQuiet(bool canSleep)
 {
+    uint64_t interval = 0;
+    nanoseconds_to_absolutetime(uint64_t{kRtcUpdateMS} * 1000000, &interval);
     for (;;) {
         const uint64_t now = mach_absolute_time(), quiet = __atomic_load_n(&gQuietAt, __ATOMIC_ACQUIRE);
-        if (now >= quiet)
+        // Further off than one update: the counter restarted (the first C after SC7, before cpu_timebase_init
+        // rebases mach time), and the last update is long done.
+        if (now >= quiet || quiet - now > interval)
             return;
         if (!canSleep)
             continue;
@@ -56,6 +60,11 @@ thread_call_t gCall;
 
 using Write = int (*)(uint8_t reg, uint8_t value);
 
+constexpr uint8_t alarm2(unsigned field)
+{
+    return static_cast<uint8_t>(RTC_ALARM2 + field);
+}
+
 int threadWrite(uint8_t reg, uint8_t value)
 {
     return writeByte(kRtc, reg, value);
@@ -72,11 +81,11 @@ int rawWrite(uint8_t reg, uint8_t value)
 int writeMark(Write put, uint32_t code)
 {
     const uint8_t count = (uint8_t)((gCount + 1u) & 0x7fu);
-    int err = put(RTC_ALARM2 + SEC, (uint8_t)code);
+    int err = put(alarm2(SEC), (uint8_t)code);
     if (!err)
-        err = put(RTC_ALARM2 + MIN, count);
+        err = put(alarm2(MIN), count);
     for (unsigned field = HOUR; !err && gWritten == kNoMark && field < kTimeRegs; ++field)
-        err = put((uint8_t)(RTC_ALARM2 + field), field == YEAR ? kMagic : 0);
+        err = put(alarm2(field), field == YEAR ? kMagic : 0);
     if (!err)
         err = put(RTC_UPDATE0, gUpdate0 | kRtcWriteUpdate);
     rtcUpdated();

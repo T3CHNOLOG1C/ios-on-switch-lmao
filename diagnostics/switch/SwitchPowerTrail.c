@@ -8,6 +8,7 @@
 #include <kern/clock.h>
 #include <machine/machine_routines.h>
 #include <os/log.h>
+#include "../../drivers/SwitchSuspend/SwitchSleepSteps.h"
 #include "SwitchPanicSave.h"
 #include "SwitchPowerTrail.h"
 
@@ -207,6 +208,8 @@ static const char *mark_name(unsigned code)
     }
     if (code >= SWITCH_MARK_HALT_BEGAN && code <= SWITCH_MARK_HALT_PMIC)
         return halt[code - SWITCH_MARK_HALT_BEGAN];
+    if (switch_sleep_step_name(code))
+        return switch_sleep_step_name(code);
     switch (code & 0x70u) {
     case SWITCH_MARK_SLEEP:
         return "sleep step";
