@@ -143,7 +143,7 @@ TEST(GM20BPoolScrubSource, NoCpuClearOfTheReservedPool)
 	const std::string init = definition(SourceText("../shim/xnu_glue.cpp"),
 					    "extern \"C\" int nvxnu_pool_init(int *zeroed)");
 	EXPECT_THAT(
-		Between(init, "pmap_switch_gpu_pool(&start, &end)", "IOBufferMemoryDescriptor *md"),
+		Between(init, "switch_ram_gpu_pool(&start, &end)", "IOBufferMemoryDescriptor *md"),
 		Not(HasSubstr("memset")));
 	EXPECT_THAT(init, HasSubstr("*zeroed = 0;"));
 	EXPECT_THAT(init, HasSubstr("*zeroed = 1;"));  // the fallback still zeroes its own pages

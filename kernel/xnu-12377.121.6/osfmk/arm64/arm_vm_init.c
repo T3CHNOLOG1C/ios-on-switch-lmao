@@ -479,7 +479,7 @@ alloc_ptpage(boolean_t map_static)
 
 		return vaddr;
 	} else {
-		pmap_switch_bootstrap_check(avail_start, avail_start + ARM_PGBYTES);
+		switch_ram_bootstrap_check(avail_start, avail_start + ARM_PGBYTES);
 		vaddr = phystokv(avail_start);
 		avail_start += ARM_PGBYTES;
 
@@ -1685,7 +1685,7 @@ arm_vm_prot_finalize(boot_args * args __unused)
 	 * should be immediately followed by XNU's TEXT segment
 	 */
 
-	if (!pmap_switch_ram_enabled()) ml_static_mfree(phystokv(gPhysBase), segLOWEST - gVirtBase);
+	if (!switch_ram_enabled()) ml_static_mfree(phystokv(gPhysBase), segLOWEST - gVirtBase);
 
 	/*
 	 * KTRR support means we will be mucking with these pages and trying to
@@ -1841,7 +1841,7 @@ arm_vm_init(uint64_t memory_size, boot_args * args)
 	 */
 	gVirtBase = args->virtBase;
 	gPhysBase = args->physBase;
-	pmap_switch_ram_init(args);
+	switch_ram_init(args);
 #if KASAN
 	real_phys_size = args->memSize + (shadow_ptop - shadow_pbase);
 #else

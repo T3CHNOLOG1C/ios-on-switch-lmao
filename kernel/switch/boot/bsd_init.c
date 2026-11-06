@@ -14,54 +14,54 @@
 extern kern_return_t OSKextLoadKextWithIdentifier(const char *identifier);
 extern int native_verified_block_os_root_authorized(dev_t, dev_t);
 
-volatile int native_apfs_load_status = -1;
-volatile uint32_t native_apfs_registered = 0;
-volatile uintptr_t native_apfs_vfsops = 0;
-volatile int native_mobile_graphics_load_status = -1;
+volatile int switch_boot_apfs_status = -1;
+volatile uint32_t switch_boot_apfs_registered = 0;
+volatile uintptr_t switch_boot_apfs_vfsops = 0;
+volatile int switch_boot_mobile_graphics_status = -1;
 
-volatile int native_owner_root_trust_enabled = 1;
-volatile int native_owner_root_accepted = 0;
-volatile int native_owner_root_apple_autherr = -1;
-volatile int native_owner_root_decision = -1;
-volatile int native_owner_root_readonly = -1;
-volatile dev_t native_owner_root_mount_device = NODEV;
-volatile dev_t native_owner_root_selected_device = NODEV;
+volatile int switch_boot_root_trust_enabled = 1;
+volatile int switch_boot_root_accepted_value = 0;
+volatile int switch_boot_root_apple_autherr = -1;
+volatile int switch_boot_root_decision = -1;
+volatile int switch_boot_root_readonly = -1;
+volatile dev_t switch_boot_root_mount_device = NODEV;
+volatile dev_t switch_boot_root_selected_device = NODEV;
 
-void native_apfs_probe_checkpoint(void);
-void native_mobile_graphics_probe_checkpoint(void);
-void native_owner_root_accepted_checkpoint(int, int);
-void native_owner_root_checkpoint(int, int, dev_t);
+void switch_boot_apfs_checkpoint(void);
+void switch_boot_mobile_graphics_checkpoint(void);
+void switch_boot_root_accepted_checkpoint(int, int);
+void switch_boot_root_checkpoint(int, int, dev_t);
 
-__attribute__((noinline)) void native_apfs_probe_checkpoint(void)
+__attribute__((noinline)) void switch_boot_apfs_checkpoint(void)
 {
     __asm__ volatile("" ::: "memory");
 }
 
-static void native_apfs_load_probe(void)
+static void switch_boot_load_apfs(void)
 {
-    native_apfs_load_status = OSKextLoadKextWithIdentifier("com.apple.filesystems.apfs");
+    switch_boot_apfs_status = OSKextLoadKextWithIdentifier("com.apple.filesystems.apfs");
     mount_list_lock();
     for (struct vfstable *entry = vfsconf; entry; entry = entry->vfc_next) {
         if (!strncmp(entry->vfc_name, "apfs", MFSNAMELEN)) {
-            native_apfs_registered = 1;
-            native_apfs_vfsops = (uintptr_t)entry->vfc_vfsops;
+            switch_boot_apfs_registered = 1;
+            switch_boot_apfs_vfsops = (uintptr_t)entry->vfc_vfsops;
             break;
         }
     }
     mount_list_unlock();
-    native_apfs_probe_checkpoint();
+    switch_boot_apfs_checkpoint();
 }
 
-__attribute__((noinline)) void native_mobile_graphics_probe_checkpoint(void)
+__attribute__((noinline)) void switch_boot_mobile_graphics_checkpoint(void)
 {
     __asm__ volatile("" ::: "memory");
 }
 
-static void native_mobile_graphics_load_probe(void)
+static void switch_boot_load_mobile_graphics(void)
 {
-    native_mobile_graphics_load_status = OSKextLoadKextWithIdentifier("com.apple.iokit.IOMobileGraphicsFamily");
-    native_mobile_graphics_probe_checkpoint();
-    if (native_mobile_graphics_load_status == 0) {
+    switch_boot_mobile_graphics_status = OSKextLoadKextWithIdentifier("com.apple.iokit.IOMobileGraphicsFamily");
+    switch_boot_mobile_graphics_checkpoint();
+    if (switch_boot_mobile_graphics_status == 0) {
         extern void native_legacy_display_probe(void);
         native_legacy_display_probe();
     }
@@ -75,8 +75,8 @@ void switch_boot_bufferinit_done(void)
 
 void switch_boot_vfs_ready(void)
 {
-    native_apfs_load_probe();
-    native_mobile_graphics_load_probe();
+    switch_boot_load_apfs();
+    switch_boot_load_mobile_graphics();
     /*
      * After IOMobileGraphicsFamily: IOGPUFamily then brings no new dependency (AppleARMPlatform, AMFI, IOSurface,
      * IOReportFamily are loaded) and has no personalities. QuartzCore polls 30 s for an IOAcceleratorES otherwise.
@@ -121,12 +121,12 @@ void switch_boot_mountroot_done(int err)
     }
 }
 
-__attribute__((noinline)) void native_owner_root_accepted_checkpoint(int apple, int owner)
+__attribute__((noinline)) void switch_boot_root_accepted_checkpoint(int apple, int owner)
 {
     __asm__ volatile("" : : "r"(apple), "r"(owner) : "memory");
 }
 
-__attribute__((noinline)) void native_owner_root_checkpoint(int apple, int owner, dev_t device)
+__attribute__((noinline)) void switch_boot_root_checkpoint(int apple, int owner, dev_t device)
 {
     __asm__ volatile("" : : "r"(apple), "r"(owner), "r"(device) : "memory");
 }
@@ -144,18 +144,18 @@ int switch_boot_root_authorized(int autherr)
     if (device_vnode) {
         vnode_put(device_vnode);
     }
-    native_owner_root_mount_device = device;
-    native_owner_root_selected_device = rootdev;
-    native_owner_root_apple_autherr = autherr;
-    native_owner_root_decision = owner;
-    native_owner_root_readonly = readonly;
-    native_owner_root_checkpoint(autherr, owner, device);
+    switch_boot_root_mount_device = device;
+    switch_boot_root_selected_device = rootdev;
+    switch_boot_root_apple_autherr = autherr;
+    switch_boot_root_decision = owner;
+    switch_boot_root_readonly = readonly;
+    switch_boot_root_checkpoint(autherr, owner, device);
     switch_root_event(8, autherr, ((uint64_t)(uint32_t)device << 32) | (unsigned)owner);
     return owner;
 }
 
 void switch_boot_root_accepted(int autherr, int owner_authorized)
 {
-    native_owner_root_accepted = owner_authorized;
-    native_owner_root_accepted_checkpoint(autherr, owner_authorized);
+    switch_boot_root_accepted_value = owner_authorized;
+    switch_boot_root_accepted_checkpoint(autherr, owner_authorized);
 }

@@ -71,7 +71,7 @@ extern int snprintf(char *, size_t, const char *, ...);
 extern void switch_clock_calendar_nowait(clock_sec_t *secs, clock_nsec_t *nanosecs);
 extern uint32_t crc32(uint32_t crc, const void *buf, size_t size);
 extern uint64_t mach_absolute_time(void);
-extern boolean_t pmap_switch_ram_reserved(ppnum_t pnum);
+extern boolean_t switch_ram_reserved(ppnum_t pnum);
 extern unsigned char iso_font[256 * 16];
 
 #define REGION_PA         UINT64_C(0xb0000000)
@@ -490,7 +490,7 @@ void switch_panic_save_init(void)
         screen = (volatile uint32_t *)ml_io_map_wcomb((vm_offset_t)SWITCH_FB_PA, (vm_size_t)SWITCH_FB_BYTES);
     save_on = 1;
     for (uint64_t pa = REGION_PA; pa < REGION_PA + REGION_BYTES; pa += PAGE_SIZE)
-        if (!pmap_switch_ram_reserved((ppnum_t)atop_64(pa))) {
+        if (!switch_ram_reserved((ppnum_t)atop_64(pa))) {
             save_off_reason = "0xb0000000 is not reserved RAM";
             return;
         }

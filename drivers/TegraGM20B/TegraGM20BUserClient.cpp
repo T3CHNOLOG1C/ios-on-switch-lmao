@@ -33,7 +33,7 @@ constexpr uint64_t kMaxBoBytes = 256ULL << 20;
 constexpr uint32_t kFenceToken = 0xfe000001u;
 // Connections system-wide: 16, or 64 with every process on the GPU (gpu.c TGM_FENCE_PAGES: one fence page each).
 constexpr uint32_t kMaxConnections = 16, kMaxConnectionsAll = 64;
-// GPU pool pages are outside the VM (arm_vm_init.c pmap_switch_ram_init), so the kernel reports them as device
+// GPU pool pages are outside the VM (arm_vm_init.c switch_ram_init), so the kernel reports them as device
 // memory, and for a physical descriptor IOKit fixes the user mapping's memory type from that default when the descriptor
 // is made: kIOMapWriteCombineCache at map time does not change it. Without this the client gets Device-nGnRE and its
 // first unaligned memmove into a BO is an alignment fault (backboardd SIGBUS in Texture::replace_region).

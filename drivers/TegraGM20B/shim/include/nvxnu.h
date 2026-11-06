@@ -79,7 +79,7 @@ void nvxnu_iounmap(volatile void *va, nvxnu_u64 size);
 
 /*
  * GPU memory pool: physically contiguous, below 4 GiB, mapped write-combined in the kernel.
- * Either the range XNU withholds from the VM (pmap_switch_gpu_pool) or, as a
+ * Either the range XNU withholds from the VM (switch_ram_gpu_pool) or, as a
  * fallback, an IOBufferMemoryDescriptor. Page granular (4 KiB).
  */
 /* *zeroed: 1 if the pool's pages were zeroed here (the fallback); the reserved range is not, its pages start dirty and

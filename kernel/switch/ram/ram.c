@@ -38,12 +38,12 @@ bool switch_ram_committed, switch_dense_pages;
 static pmap_paddr_t switch_stolen_end;
 static unsigned int switch_reserved_pages;
 
-boolean_t pmap_switch_ram_enabled(void)
+boolean_t switch_ram_enabled(void)
 {
     return switch_ledger.committed == 1;
 }
 
-boolean_t pmap_switch_gpu_pool(pmap_paddr_t *start, pmap_paddr_t *end)
+boolean_t switch_ram_gpu_pool(pmap_paddr_t *start, pmap_paddr_t *end)
 {
     *start = switch_gpu_start;
     *end = switch_gpu_end;
@@ -56,19 +56,13 @@ bool switch_ram_pa_valid_high(pmap_paddr_t pa)
            pa < SWITCH_RAM_BANK0_END;
 }
 
-boolean_t pmap_switch_pa_valid(pmap_paddr_t pa)
-{
-    return !switch_ram_committed ||
-           (switch_ram_in(pa, SWITCH_RAM_BANK0_START, SWITCH_RAM_BANK1_END) && switch_ram_pa_valid(pa));
-}
-
-boolean_t pmap_switch_ram_reserved(ppnum_t pnum)
+boolean_t switch_ram_reserved(ppnum_t pnum)
 {
     pmap_paddr_t pa = (pmap_paddr_t)pnum << PAGE_SHIFT;
     if (!switch_ledger.committed) {
         return FALSE;
     }
-    if (!pmap_switch_pa_valid(pa)) {
+    if (!switch_ram_in(pa, SWITCH_RAM_BANK0_START, SWITCH_RAM_BANK1_END) || !switch_ram_pa_valid(pa)) {
         return TRUE;
     }
     if (pa < first_avail_phys && pa + PAGE_SIZE > switch_kernel_start) {
@@ -82,7 +76,7 @@ boolean_t pmap_switch_ram_reserved(ppnum_t pnum)
     return FALSE;
 }
 
-void pmap_switch_bootstrap_check(pmap_paddr_t start, pmap_paddr_t end)
+void switch_ram_bootstrap_check(pmap_paddr_t start, pmap_paddr_t end)
 {
     if (switch_ledger.committed && (start < switch_bootstrap_start || end < start || end > switch_bootstrap_limit)) {
         panic("native bootstrap allocation outside contiguous free RAM");
@@ -90,7 +84,7 @@ void pmap_switch_bootstrap_check(pmap_paddr_t start, pmap_paddr_t end)
 }
 
 /*
- * drivers/TegraGM20B's GPU pool (nvxnu_pool_init, through pmap_switch_gpu_pool): 256 MiB, every process's coherent GPU
+ * drivers/TegraGM20B's GPU pool (nvxnu_pool_init, through switch_ram_gpu_pool): 256 MiB, every process's coherent GPU
  * memory and nvkm's own (128 starved poster extensions on 11-04 with a dozen Metal processes, of 3.9 GB). It joins the
  * ledger here, so the VM never hands it out and the GPU driver maps it write-combined. A physically contiguous 128 MiB
  * below 4 GiB cannot be allocated once the VM is running (10-30: "M1 FAIL pool -12"). It lies in the low bank's free
@@ -117,7 +111,7 @@ static void switch_ram_reserve_gpu_pool(void)
     switch_gpu_end = gpu_end;
 }
 
-void pmap_switch_ram_init(struct boot_args *args)
+void switch_ram_init(struct boot_args *args)
 {
     DTEntry entry;
     const void *wire;
@@ -187,7 +181,7 @@ void switch_ram_account(uint64_t present)
     }
     uint64_t eligible = 0, free_bytes = 0;
     for (pmap_paddr_t pa = gPhysBase; pa < gPhysBase + present; pa += PAGE_SIZE) {
-        if (pmap_switch_pa_valid(pa)) {
+        if (switch_ram_pa_valid(pa)) {
             const bool reserved = switch_ram_ledger_reserved(pa);
             if (!reserved) {
                 eligible += PAGE_SIZE;
@@ -243,7 +237,7 @@ unsigned int switch_ram_physmap_pieces(pmap_paddr_t start, pmap_paddr_t end,
 boolean_t switch_ram_virtual_region(unsigned int region_select, vm_map_offset_t *startp, vm_map_size_t *size,
                                     boolean_t *ret)
 {
-    if (!pmap_switch_ram_enabled()) {
+    if (!switch_ram_enabled()) {
         return FALSE;
     }
     /* Full native RAM starts below low globals. Reserve the union of the low ranges once, then retain the separate
@@ -261,20 +255,20 @@ boolean_t switch_ram_virtual_region(unsigned int region_select, vm_map_offset_t 
     return FALSE;
 }
 
-unsigned int pmap_switch_dense_page_count(void)
+unsigned int switch_ram_dense_page_count(void)
 {
-    return pmap_switch_ram_enabled() ? (unsigned int)(0x100000000ULL >> PAGE_SHIFT) : 0;
+    return switch_ram_enabled() ? (unsigned int)(0x100000000ULL >> PAGE_SHIFT) : 0;
 }
 
-boolean_t pmap_switch_page_reserved(ppnum_t pnum)
+boolean_t switch_ram_page_reserved(ppnum_t pnum)
 {
     pmap_paddr_t pa = (pmap_paddr_t)pnum << PAGE_SHIFT;
-    return pmap_switch_ram_reserved(pnum) || pa < switch_stolen_end;
+    return switch_ram_reserved(pnum) || pa < switch_stolen_end;
 }
 
-boolean_t pmap_switch_begin_dense_pages(void)
+boolean_t switch_ram_begin_dense_pages(void)
 {
-    if (!pmap_switch_dense_page_count()) {
+    if (!switch_ram_dense_page_count()) {
         return FALSE;
     }
     (void)pmap_free_pages();
@@ -286,13 +280,13 @@ boolean_t pmap_switch_begin_dense_pages(void)
 
 void switch_ram_count_pages(unsigned int *avail_page_count, pmap_paddr_t end)
 {
-    if (!pmap_switch_dense_page_count()) {
+    if (!switch_ram_dense_page_count()) {
         return;
     }
     first_avail = gPhysBase;
     *avail_page_count = 0;
     for (pmap_paddr_t pa = gPhysBase; pa < end; pa += PAGE_SIZE) {
-        if (!pmap_switch_page_reserved((ppnum_t)atop(pa))) {
+        if (!switch_ram_page_reserved((ppnum_t)atop(pa))) {
             ++*avail_page_count;
         }
     }
@@ -300,21 +294,21 @@ void switch_ram_count_pages(unsigned int *avail_page_count, pmap_paddr_t end)
 
 void switch_ram_skip_reserved_slow(void)
 {
-    while (first_avail < avail_end && pmap_switch_page_reserved((ppnum_t)atop(first_avail))) {
+    while (first_avail < avail_end && switch_ram_page_reserved((ppnum_t)atop(first_avail))) {
         first_avail += PAGE_SIZE;
     }
 }
 
 void switch_ram_dense_begin(void)
 {
-    if (pmap_switch_dense_page_count() && !pmap_switch_begin_dense_pages()) {
+    if (switch_ram_dense_page_count() && !switch_ram_begin_dense_pages()) {
         panic("native dense memory setup failed");
     }
 }
 
 boolean_t switch_ram_hole_init_slow(struct vm_page *page, ppnum_t phys_page)
 {
-    if (!pmap_switch_page_reserved(phys_page)) {
+    if (!switch_ram_page_reserved(phys_page)) {
         return FALSE;
     }
 #if XNU_10063_141_1
@@ -332,11 +326,11 @@ boolean_t switch_ram_hole_init_slow(struct vm_page *page, ppnum_t phys_page)
 
 unsigned int switch_ram_dense_done(unsigned int count)
 {
-    if (pmap_switch_dense_page_count()) {
+    if (switch_ram_dense_page_count()) {
 #if XNU_10063_141_1
-        assert(count == pmap_switch_dense_page_count() && vm_delayed_count == 0);
+        assert(count == switch_ram_dense_page_count() && vm_delayed_count == 0);
 #else
-        assert(count == pmap_switch_dense_page_count());
+        assert(count == switch_ram_dense_page_count());
 #endif
         assert(pmap_free_pages() == 0);
     }

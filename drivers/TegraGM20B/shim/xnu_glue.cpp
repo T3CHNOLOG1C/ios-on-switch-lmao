@@ -27,7 +27,7 @@ vm_offset_t phystokv(uint64_t pa);  // physical aperture (osfmk/arm64/arm_vm_ini
 vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
 vm_offset_t ml_io_map_wcomb(vm_offset_t phys_addr, vm_size_t size);
 boolean_t ml_set_interrupts_enabled(boolean_t enable);
-boolean_t pmap_switch_gpu_pool(uint64_t *start, uint64_t *end);
+boolean_t switch_ram_gpu_pool(uint64_t *start, uint64_t *end);
 void pmap_set_cache_attributes(ppnum_t pn, unsigned int cacheattr);
 boolean_t pmap_valid_page(ppnum_t pn);
 void IOLogv(const char *format, va_list ap);
@@ -652,7 +652,7 @@ extern "C" void nvxnu_vm_faults(struct nvxnu_faults *f)
 }
 
 // The GPU memory pool, preferably the physical range the kernel keeps out of the VM at boot (arm_vm_init.c
-// pmap_switch_ram_init, pmap_switch_gpu_pool), which its physical aperture
+// switch_ram_init, switch_ram_gpu_pool), which its physical aperture
 // maps write-combined and nothing maps cacheable: phystokv() is the pool's only mapping (a 128 MiB ml_io_map_wcomb runs
 // out of kernel VA).
 // Fallback: a contiguous IOBufferMemoryDescriptor below 4 GiB whose pages are switched to write-combined
@@ -670,7 +670,7 @@ extern "C" int nvxnu_pool_init(int *zeroed)
 	if (pool.va)
 		return 0;
 	uint64_t start = 0, end = 0;
-	if (pmap_switch_gpu_pool(&start, &end)) {
+	if (switch_ram_gpu_pool(&start, &end)) {
 		// Bring-up trace: one console line before each step that touches memory or hardware for the first time, so
 		// the last line names the step that hung.
 		pool.va = reinterpret_cast<void *>(phystokv(start));

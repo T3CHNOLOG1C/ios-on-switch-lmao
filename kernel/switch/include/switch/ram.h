@@ -14,21 +14,20 @@
 struct boot_args;
 struct vm_page;
 
-boolean_t pmap_switch_ram_enabled(void);
-boolean_t pmap_switch_gpu_pool(pmap_paddr_t *start, pmap_paddr_t *end);
-boolean_t pmap_switch_pa_valid(pmap_paddr_t pa);
-boolean_t pmap_switch_ram_reserved(ppnum_t pnum);
-void pmap_switch_bootstrap_check(pmap_paddr_t start, pmap_paddr_t end);
-unsigned int pmap_switch_dense_page_count(void);
-boolean_t pmap_switch_begin_dense_pages(void);
-boolean_t pmap_switch_page_reserved(ppnum_t pnum);
+boolean_t switch_ram_enabled(void);
+boolean_t switch_ram_gpu_pool(pmap_paddr_t *start, pmap_paddr_t *end);
+boolean_t switch_ram_reserved(ppnum_t pnum);
+void switch_ram_bootstrap_check(pmap_paddr_t start, pmap_paddr_t end);
+unsigned int switch_ram_dense_page_count(void);
+boolean_t switch_ram_begin_dense_pages(void);
+boolean_t switch_ram_page_reserved(ppnum_t pnum);
 
 /* Set once the ledger is committed (the dense span exists), and once vm_pages owns the span. Hidden: pa_valid reads
  * switch_ram_committed on every pmap enter, remove and protect, so the load must be direct, not through the GOT. */
 extern bool switch_ram_committed __attribute__((visibility("hidden")));
 extern bool switch_dense_pages;
 
-/* The geometry pmap_switch_ram_init requires of every committed ledger, and what it carves out of bank 0. */
+/* The geometry switch_ram_init requires of every committed ledger, and what it carves out of bank 0. */
 #define SWITCH_RAM_BANK0_START    0x80000000ULL
 #define SWITCH_RAM_BANK0_END      0xffd00000ULL
 #define SWITCH_RAM_BANK1_START    0x100000000ULL
@@ -63,7 +62,7 @@ static inline bool switch_ram_pa_valid(pmap_paddr_t pa)
 }
 
 /* arm_vm_init */
-void pmap_switch_ram_init(struct boot_args *args);
+void switch_ram_init(struct boot_args *args);
 void switch_ram_check_memory_size(uint64_t requested, uint64_t present);
 void switch_ram_account(uint64_t present);
 void switch_ram_bootstrap_done(void);
@@ -85,7 +84,7 @@ static inline void switch_ram_skip_reserved(void)
 /* pmap_next_page: whether the page it hands out is one of avail_page_count's (a hole is not). */
 static inline bool switch_ram_page_counted(ppnum_t pnum)
 {
-    return !__improbable(switch_dense_pages) || !pmap_switch_page_reserved(pnum);
+    return !__improbable(switch_dense_pages) || !switch_ram_page_reserved(pnum);
 }
 
 /* vm_resident.c pmap_startup */
@@ -96,7 +95,7 @@ unsigned int switch_ram_dense_done(unsigned int count);
 /* vm_pages covers the whole span, holes included: PPNs come from array indices. */
 static inline unsigned int switch_ram_vm_pages(unsigned int npages)
 {
-    return __improbable(switch_ram_committed) ? pmap_switch_dense_page_count() : npages;
+    return __improbable(switch_ram_committed) ? switch_ram_dense_page_count() : npages;
 }
 
 /* The span is initialized in one pass: no delayed pages, which would compact its holes. */
@@ -129,7 +128,7 @@ unsigned int switch_ram_physmap_pieces(pmap_paddr_t start, pmap_paddr_t end,
 
 #define SWITCH_RAM_PHYSMAP_SLIDE(slide, table, va, len, ap, granule)                                                  \
     do {                                                                                                              \
-        if (!pmap_switch_ram_enabled()) {                                                                             \
+        if (!switch_ram_enabled()) {                                                                                  \
             slide(table, va, len, ap, granule);                                                                       \
             break;                                                                                                    \
         }                                                                                                             \

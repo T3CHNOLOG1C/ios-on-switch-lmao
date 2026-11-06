@@ -2365,7 +2365,7 @@ pmap_bootstrap(
 	asid_bitmap = (bitmap_t*)phystokv(avail_start);
 	avail_start = round_page(avail_start + asid_table_size);
 
-	pmap_switch_bootstrap_check(pmap_struct_start, avail_start);
+	switch_ram_bootstrap_check(pmap_struct_start, avail_start);
 	memset((char *)phystokv(pmap_struct_start), 0, avail_start - pmap_struct_start);
 
 	vm_first_phys = gPhysBase;
