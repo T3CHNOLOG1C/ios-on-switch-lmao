@@ -1330,12 +1330,15 @@ static void refuseLayout(IOSurfaceRef surface, const char *use, uint32_t layout)
     NBLOG(@"native-metal: refused for its surface's layout: %@", why);
 }
 
-// The shape a surface's own texels ask, sampled
-static surface_layout::Shape surfaceShape(IOSurfaceRef surface, size_t plane)
+// The shape a surface's own texels (its first plane's) ask, sampled
+static surface_layout::Shape surfaceShape(IOSurfaceRef surface)
 {
-    return {uint32_t(IOSurfaceGetWidthOfPlane(surface, plane)), uint32_t(IOSurfaceGetHeightOfPlane(surface, plane)),
-            uint32_t(IOSurfaceGetBytesPerElementOfPlane(surface, plane)),
-            uint32_t(IOSurfaceGetBytesPerRowOfPlane(surface, plane)), 0};
+    if (!IOSurfaceGetPlaneCount(surface))
+        return {uint32_t(IOSurfaceGetWidth(surface)), uint32_t(IOSurfaceGetHeight(surface)),
+                uint32_t(IOSurfaceGetBytesPerElement(surface)), uint32_t(IOSurfaceGetBytesPerRow(surface)), 0};
+    return {uint32_t(IOSurfaceGetWidthOfPlane(surface, 0)), uint32_t(IOSurfaceGetHeightOfPlane(surface, 0)),
+            uint32_t(IOSurfaceGetBytesPerElementOfPlane(surface, 0)),
+            uint32_t(IOSurfaceGetBytesPerRowOfPlane(surface, 0)), 0};
 }
 
 // A texture over plane `plane` of a planar surface, made by the runtime over the surface's whole allocation with the surface's facts
@@ -1360,7 +1363,7 @@ static NBTexture *planarSurfaceTexture(MTLTextureDescriptor *d, IOSurfaceRef sur
     if (!base || (base & (page - 1)) || at < base || (planes > 1 && chroma < base) || !allocation ||
         allocation > SIZE_MAX - (page - 1))
         return nil;
-    NBBuffer *buffer = surfaceBuffer(surface, (void *)base, (allocation + page - 1) & ~(page - 1), surfaceShape(surface, 0));
+    NBBuffer *buffer = surfaceBuffer(surface, (void *)base, (allocation + page - 1) & ~(page - 1), surfaceShape(surface));
     NmbTextureDescriptor descriptor;
     if (!buffer || !textureDescriptor(d, &descriptor))
         return nil;
@@ -5946,7 +5949,7 @@ static void fillLimits(id)
     const size_t page = vm_page_size, allocation = IOSurfaceGetAllocSize(surface);
     if (!base || ((uintptr_t)base & (page - 1)) || !allocation || allocation > SIZE_MAX - (page - 1))
         return nil;
-    NBBuffer *buffer = surfaceBuffer(surface, base, (allocation + page - 1) & ~(page - 1), surfaceShape(surface, 0));
+    NBBuffer *buffer = surfaceBuffer(surface, base, (allocation + page - 1) & ~(page - 1), surfaceShape(surface));
     if (buffer && buffer.layout.layout != surface_layout::kPitch) {
         refuseLayout(surface, "a buffer", buffer.layout.layout);
         return nil;
@@ -6267,7 +6270,7 @@ static void fillLimits(id)
         return nil;
     const size_t bytes = (allocation + page - 1) & ~(page - 1), row = IOSurfaceGetBytesPerRow(surface);
     // A single 2D image of the surface asks the layout with its shape and use; another texture the surface's own, sampled
-    surface_layout::Shape shape = surfaceShape(surface, 0);
+    surface_layout::Shape shape = surfaceShape(surface);
     const bool image = d.textureType == MTLTextureType2D && d.mipmapLevelCount == 1 && d.sampleCount == 1 &&
                        d.arrayLength == 1 &&
                        surface_layout::shapeOf(gDevice, d.pixelFormat, d.width, d.height, row, usageWrites(d.usage), shape);
