@@ -513,7 +513,31 @@ int main(int argc, char **argv)
                         getenv("FRAME_VISIBILITY") ? [dev newBufferWithLength:4096 options:MTLResourceStorageModeShared]
                                                    : nil;
                     rp.visibilityResultBuffer = visibility;
+                    // FRAME_SPI: GL-on-Metal's encoder SPI at Metal's defaults on every pass, and (facade) the first attachment's
+                    // store action left Unknown and set by the encoder; the frontend has neither, so its passes go without
+                    static const bool spi = getenv("FRAME_SPI") != nullptr;
+#ifdef RAW_FACADE
+                    const MTLStoreAction store = rp.colorAttachments[0].storeAction;
+                    if (spi)
+                        rp.colorAttachments[0].storeAction = MTLStoreActionUnknown;
+#endif
                     id<MTLRenderCommandEncoder> e = [cb renderCommandEncoderWithDescriptor:rp];
+                    if (spi) {
+                        id spiEncoder = e;
+                        if ([spiEncoder respondsToSelector:@selector(setAlphaTestReferenceValue:)]) {
+                            ((void (*)(id, SEL, float))objc_msgSend)(spiEncoder, @selector(setAlphaTestReferenceValue:),
+                                                                     0.5f);
+                            ((void (*)(id, SEL, BOOL))objc_msgSend)(spiEncoder, @selector(setViewportTransformEnabled:),
+                                                                    YES);
+                            ((void (*)(id, SEL, NSUInteger))objc_msgSend)(spiEncoder,
+                                                                          @selector(setProvokingVertexMode:), 0);
+                            ((void (*)(id, SEL, BOOL))objc_msgSend)(spiEncoder, @selector(setPrimitiveRestartEnabled:),
+                                                                    YES);
+                        }
+#ifdef RAW_FACADE
+                        [e setColorStoreAction:store atIndex:0];
+#endif
+                    }
                     bool bound[3][31] = {};
                     for (const frame::Draw &d : pass.draws) {
                         [e setRenderPipelineState:d.blur ? blur[d.state] : uber[d.state]];

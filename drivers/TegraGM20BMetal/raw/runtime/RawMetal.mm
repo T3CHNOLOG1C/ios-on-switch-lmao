@@ -2071,6 +2071,7 @@ static inline void hit(RMCommandBuffer *cb, RMPred p, uint64_t a = 0, uint64_t b
     uint32_t _count;       // its attachment count (the last attachment's index + 1)
     uint32_t _zeta;        // its depth/stencil attachment's format as the raw path holds it (0: none)
     raw::DepthStencilDesc _ds;
+    MTLRenderPassDescriptor *_pass;  // the command buffer's copy, which the raw encode and m2v's replay read
 }
 @end
 @interface RMBlitEncoder : RMEncoder
@@ -2103,6 +2104,64 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
 {
     [self texture:2 object:t index:ti];
     [self sampler:2 object:s index:si];
+}
+
+// A store action the pass left Unknown, decided by the encoder: the pass's descriptor takes it before either driver encodes it
+- (void)setColorStoreAction:(MTLStoreAction)action atIndex:(NSUInteger)index
+{
+    if (index < 8)
+        _pass.colorAttachments[index].storeAction = action;
+}
+
+- (void)setDepthStoreAction:(MTLStoreAction)action
+{
+    _pass.depthAttachment.storeAction = action;
+    if (_zeta && action != MTLStoreActionDontCare) {
+        [_cb takeReason:WhyPass why:@"a depth/stencil attachment the raw path does not take"];
+        hit(_cb, PredPassDepthStencil, _zeta, action);
+    }
+}
+
+- (void)setStencilStoreAction:(MTLStoreAction)action
+{
+    _pass.stencilAttachment.storeAction = action;
+    if (_zeta && action != MTLStoreActionDontCare) {
+        [_cb takeReason:WhyPass why:@"a depth/stencil attachment the raw path does not take"];
+        hit(_cb, PredPassDepthStencil, _zeta, action);
+    }
+}
+
+// Apple's encoder SPI as metal2vulkan answers it (metal2vulkan-runtime apple_only.rs, render/restart.rs, from Metal's measured
+// answers): at Metal's default each changes nothing a draw does; any other value goes to m2v as the call it is
+static void forwardCall(RMEncoder *e, SEL selector, const void *argument)
+{
+    NSInvocation *inv = [NSInvocation invocationWithMethodSignature:[e methodSignatureForSelector:selector]];
+    inv.selector = selector;
+    [inv setArgument:const_cast<void *>(argument) atIndex:2];
+    [e forwardInvocation:inv];
+}
+
+- (void)setAlphaTestReferenceValue:(float)value
+{
+    (void)value;
+}
+
+- (void)setPrimitiveRestartEnabled:(BOOL)enabled
+{
+    if (!enabled)
+        forwardCall(self, _cmd, &enabled);
+}
+
+- (void)setViewportTransformEnabled:(BOOL)enabled
+{
+    if (!enabled)
+        forwardCall(self, _cmd, &enabled);
+}
+
+- (void)setProvokingVertexMode:(NSUInteger)mode
+{
+    if (mode)
+        forwardCall(self, _cmd, &mode);
 }
 
 // Core Animation sets the mode Disabled when its encoder state changes (update_encoder_state): nothing to do; any other mode
@@ -3108,6 +3167,7 @@ static bool rawDepthStencil(MTLRenderPassDescriptor *pass)
     [self begin:e];
     MTLRenderPassDescriptor *pass = [d copy];
     [self retain:pass];
+    e->_pass = pass;
     for (unsigned c = 0; c < 8; c++) {
         id<MTLTexture> t = pass.colorAttachments[c].texture;
         if (!t)
