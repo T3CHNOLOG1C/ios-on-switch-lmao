@@ -56,8 +56,8 @@ struct GPUSceneTest: HWTest {
             reasons.append("raw and m2v drew different pixels (\(key))")
         }
         if saved > 0 { metrics.set("pngs", saved) }
-        if reasons.isEmpty { return .pass(metrics, proof: primary.proof, detail: notes.joined(separator: "; ")) }
-        return .fail(reasons.joined(separator: "; "), metrics, proof: primary.proof)
+        if reasons.isEmpty { return .pass(metrics, proof: primary.proof, detail: LogLine.fitted(notes)) }
+        return .fail(LogLine.fitted(reasons), metrics, proof: primary.proof)
     }
 
     /// The first failed comparisons' PNGs; how many were written.

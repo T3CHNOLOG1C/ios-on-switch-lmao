@@ -21,13 +21,13 @@ struct FirstTiledSurfaceScene: GPUScene {
     func run(_ gpu: GPU) async throws -> SceneResult {
         var result = SceneResult()
         let start = RawFacade.counters(of: gpu.device)
-        result.metrics.set("first", ["raw", "m2v", "split"].allSatisfy { (start[$0] ?? 0) == 0 })
+        if !start.isEmpty { result.metrics.set("first", ["raw", "m2v", "split"].allSatisfy { (start[$0] ?? 0) == 0 }) }
         var pipeline: MTLRenderPipelineState?
         do {
             let library = try gpu.device.makeLibrary(URL: CAState.library)
             pipeline = try CAState.pipeline(CACorpus.state("PBGRAXm_A2Xhf")!, library: library, device: gpu.device)
         } catch {
-            result.notes.append("clear only: no Core Animation fill state here (\(error))")
+            result.notes.append("clear only: no Core Animation fill state here (\(GPU.describe(error)))")
         }
         var hashes: Set<UInt64> = []
         for round in 0..<3 {
@@ -75,7 +75,7 @@ struct FirstTiledSurfaceScene: GPUScene {
             }
         }
         let end = RawFacade.counters(of: gpu.device)
-        result.metrics.set("reopens", (end["reopens"] ?? 0) - (start["reopens"] ?? 0))
+        if !end.isEmpty { result.metrics.set("reopens", (end["reopens"] ?? 0) - (start["reopens"] ?? 0)) }
         result.metrics.set("cb_errors", gpu.commandBufferErrors.count)
         if let hash = hashes.first { result.metrics.set("hash_fill", String(hash, radix: 16)) }
         result.expect(hashes.count <= 1, "the fill drew \(hashes.count) different pictures in three rounds")

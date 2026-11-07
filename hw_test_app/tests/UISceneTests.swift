@@ -29,7 +29,7 @@ enum UISceneTests {
             check.judge(&metrics, &reasons, prefix)
             if reasons.count > before { check.save(to: context.documents, id: id, stem: prefix) }
         }
-        return reasons.isEmpty ? .pass(metrics) : .fail(reasons.joined(separator: "; "), metrics)
+        return reasons.isEmpty ? .pass(metrics) : .fail(LogLine.fitted(reasons), metrics)
     }
 }
 
@@ -134,7 +134,7 @@ struct UIBlurTest: HWTest {
             try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             try? inside.png()?.write(to: directory.appendingPathComponent("composited.png"))
         }
-        return reasons.isEmpty ? .pass(metrics) : .fail(reasons.joined(separator: "; "), metrics)
+        return reasons.isEmpty ? .pass(metrics) : .fail(LogLine.fitted(reasons), metrics)
     }
 }
 

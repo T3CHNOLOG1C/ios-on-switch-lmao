@@ -74,6 +74,10 @@ struct MSAAResolveScene: GPUScene {
     let name = "4x MSAA resolve against sample coverage"
 
     static let size = 64
+    /// Vulkan's and Direct3D's standard 4x positions (Apple's GPUs answer the same), for a device that answers none.
+    static let standard: [SIMD2<Double>] = [
+        SIMD2(0.375, 0.125), SIMD2(0.875, 0.375), SIMD2(0.125, 0.625), SIMD2(0.625, 0.875),
+    ]
     static let triangle: [SIMD2<Double>] = [SIMD2(1101, 947), SIMD2(15130, 2611), SIMD2(5274, 15078)].map { $0 / 256 }
 
     func run(_ gpu: GPU) async throws -> SceneResult {
@@ -82,10 +86,14 @@ struct MSAAResolveScene: GPUScene {
             result.expect(false, "4x MSAA unsupported")
             return result
         }
-        let positions = gpu.device.getDefaultSamplePositions(sampleCount: 4).map {
+        let answered = gpu.device.getDefaultSamplePositions(sampleCount: 4).map {
             SIMD2<Double>(Double($0.x), Double($0.y))
         }
-        let coverage = Self.coverage(positions)
+        let usable =
+            Set(answered.map { "\($0)" }).count == 4
+            && answered.allSatisfy { $0.x >= 0 && $0.x < 1 && $0.y >= 0 && $0.y < 1 }
+        result.metrics.set("positions", usable ? "device" : "standard")
+        let coverage = Self.coverage(usable ? answered : Self.standard)
         let size = Self.size
         for format in [TexelFormat.rgba8Unorm, .rgba16Float] {
             for resolveLevel in [0, 1] {

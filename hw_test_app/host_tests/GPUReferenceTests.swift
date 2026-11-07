@@ -117,6 +117,13 @@ final class GPUReferenceTests: XCTestCase {
         XCTAssertEqual(metrics["m2v_why"], .text("state.notpack/2,compute/1"))
     }
 
+    func testFittedReasonsKeepTheFirstAndCountTheRest() {
+        XCTAssertEqual(LogLine.fitted(["a", "bb", "ccc"], budget: 10), "a; bb; ccc")
+        XCTAssertEqual(
+            LogLine.fitted([String(repeating: "x", count: 12), "y", "z"], budget: 10), "xxxxxxxxxxxx; +2 more")
+        XCTAssertEqual(LogLine.fitted([]), "")
+    }
+
     func testPipelineLinesParseAsTheCorpusWritesThem() throws {
         let line = try XCTUnwrap(
             PipelineLine(

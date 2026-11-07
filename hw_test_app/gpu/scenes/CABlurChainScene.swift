@@ -28,7 +28,7 @@ struct CABlurChainScene: GPUScene {
         do {
             library = try gpu.device.makeLibrary(URL: CAState.library)
         } catch {
-            result.notes.append("no QuartzCore library here (\(error))")
+            result.notes.append("no QuartzCore library here (\(GPU.describe(error)))")
             return result
         }
         let size = Self.size
@@ -50,7 +50,7 @@ struct CABlurChainScene: GPUScene {
             do {
                 pipeline = try CAState.pipeline(line, library: library, device: gpu.device)
             } catch {
-                result.notes.append("\(short): no state (\(error))")
+                result.notes.append("\(short): no state (\(GPU.describe(error)))")
                 continue
             }
             var times: [Double] = []

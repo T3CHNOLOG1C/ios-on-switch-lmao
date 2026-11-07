@@ -33,7 +33,7 @@ struct BlendGrid {
             do {
                 pipelines.append(try pipeline(gpu, blend))
             } catch {
-                result.notes.append("\(blend.state.name): no pipeline (\(error))")
+                result.notes.append("\(blend.state.name): no pipeline (\(GPU.describe(error)))")
                 pipelines.append(nil)
             }
         }

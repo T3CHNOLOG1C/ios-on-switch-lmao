@@ -26,6 +26,17 @@ public enum LogLine {
         return collapsed.isEmpty ? "-" : collapsed
     }
 
+    /// Reasons joined for why=, which comes last in a message os_log cuts near 1 KiB: the first whole, the rest
+    /// while they fit in `budget` characters, then how many were left out.
+    public static func fitted(_ parts: [String], budget: Int = 500) -> String {
+        var text = parts.first ?? ""
+        for (index, part) in parts.enumerated().dropFirst() {
+            guard text.count + part.count + 2 <= budget else { return text + "; +\(parts.count - index) more" }
+            text += "; " + part
+        }
+        return text
+    }
+
     public static func format(_ record: TestRecord) -> String {
         format(id: record.id, outcome: record.outcome, milliseconds: record.milliseconds)
     }
