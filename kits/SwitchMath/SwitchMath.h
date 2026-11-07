@@ -82,7 +82,8 @@ static inline int32_t switch_sat_i32(int64_t value)
 // The largest r with r * r <= value, one result bit per round (no floating point: kernel code).
 static inline uint32_t switch_isqrt_u64(uint64_t value)
 {
-    uint64_t root = 0, bit = 1ull << 62;
+    uint64_t root = 0;
+    uint64_t bit = 1ULL << 62;
     while (bit > value)
         bit >>= 2;
     while (bit) {
