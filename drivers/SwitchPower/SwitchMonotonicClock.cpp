@@ -48,7 +48,7 @@ LatchedTime latch()
     const uint32_t seconds = *reinterpret_cast<volatile uint32_t *>(gRtc + RTC_SHADOW_SECONDS);
     const uint64_t now = mach_absolute_time();
     IOSimpleLockUnlockEnableInterrupt(gLatch, state);
-    return {((uint64_t)seconds * 1000 + millis) * 1000 + gBaseUsec, now};
+    return {(static_cast<uint64_t>(seconds) * 1000 + millis) * 1000 + gBaseUsec, now};
 }
 
 bool calendarOffsetUsec(const LatchedTime &t, int64_t *offset)
@@ -56,13 +56,13 @@ bool calendarOffsetUsec(const LatchedTime &t, int64_t *offset)
     uint64_t utc = 0;
     if (switch_rtc_utc_usec(&utc) != kIOReturnSuccess)
         return false;
-    *offset = (int64_t)(utc - t.monotonicUsec);
+    *offset = static_cast<int64_t>(utc - t.monotonicUsec);
     return true;
 }
 
 int monotonicSeconds SYSCTL_HANDLER_ARGS
 {
-    const uint32_t seconds = (uint32_t)(latch().monotonicUsec / kUsecPerSec);
+    const uint32_t seconds = static_cast<uint32_t>(latch().monotonicUsec / kUsecPerSec);
     return SYSCTL_OUT(req, &seconds, sizeof(seconds));
 }
 
@@ -147,5 +147,5 @@ extern "C" bool switch_monotonic_clock_read(uint64_t *usec, uint64_t *mach_time)
 
 extern "C" bool switch_monotonic_clock_offset(int64_t *usec)
 {
-    return gRtc && calendarOffsetUsec(latch(), usec);
+    return (gRtc != nullptr) && calendarOffsetUsec(latch(), usec);
 }

@@ -64,8 +64,8 @@ enum : uint32_t {
 };
 
 constexpr uint32_t kSocThermBit = 1u << 14, kTsensorBit = 1u << 4;
-constexpr uint32_t kSocThermSource = (2u << 29) | ((408000 / 51000 - 1) * 2);  // PLLP / 8 = 51 MHz
-constexpr uint32_t kTsensorSource = (2u << 30) | ((19200 / 400 - 1) * 2);      // CLK_M / 48 = 400 kHz
+constexpr uint32_t kSocThermSource = (2u << 29) | ((408000 / 51000 - 1) * 2u);  // PLLP / 8 = 51 MHz
+constexpr uint32_t kTsensorSource = (2u << 30) | ((19200 / 400 - 1) * 2u);      // CLK_M / 48 = 400 kHz
 constexpr uint32_t kFuseClock = 1u << 7, kFuseVisible = 1u << 28;  // as SwitchThermal, TegraDFLL, TegraGM20B
 constexpr uint32_t FUSE_CACHE = 0x100;
 
@@ -87,14 +87,14 @@ constexpr uint32_t kHotspotCpu = 10, kHotspotGpu = 5;                          /
 constexpr uint32_t kHookQuietMS = 10000;  // for all 38 devices together
 static_assert(kHookQuietMS < 41000, "IOService::waitQuiet reports (and may panic on) busy services from 41 s on");
 
-inline uint32_t rd(volatile uint8_t *base, uint32_t offset)
+inline uint32_t rd(const volatile uint8_t *base, uint32_t offset)
 {
-    return *(volatile uint32_t *)(base + offset);
+    return *reinterpret_cast<const volatile uint32_t *>(base + offset);
 }
 
 inline void wr(volatile uint8_t *base, uint32_t offset, uint32_t value)
 {
-    *(volatile uint32_t *)(base + offset) = value;
+    *reinterpret_cast<volatile uint32_t *>(base + offset) = value;
 }
 
 volatile uint8_t *gSocTherm;                     // mapped and brought up: the tsensors can be read
@@ -118,7 +118,8 @@ IOLock *sensorsLock()
     IOLock *lock = __atomic_load_n(&gLock, __ATOMIC_ACQUIRE);
     if (lock)
         return lock;
-    IOLock *fresh = IOLockAlloc(), *none = nullptr;
+    IOLock *fresh = IOLockAlloc();
+    IOLock *none = nullptr;
     if (!fresh)
         return nullptr;
     if (__atomic_compare_exchange_n(&gLock, &none, fresh, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
@@ -132,11 +133,11 @@ IOLock *sensorsLock()
 bool socThermStart()
 {
     if (!gCar)
-        gCar = (volatile uint8_t *)ml_io_map(kCarPA, 0x1000);
+        gCar = reinterpret_cast<volatile uint8_t *>(ml_io_map(kCarPA, 0x1000));
     if (!gFuse)
-        gFuse = (volatile uint8_t *)ml_io_map(kFusePA, 0x400);
+        gFuse = reinterpret_cast<volatile uint8_t *>(ml_io_map(kFusePA, 0x400));
     if (!gSocThermRegs)
-        gSocThermRegs = (volatile uint8_t *)ml_io_map(kSocThermPA, 0x1000);
+        gSocThermRegs = reinterpret_cast<volatile uint8_t *>(ml_io_map(kSocThermPA, 0x1000));
     volatile uint8_t *car = gCar, *fuse = gFuse, *regs = gSocThermRegs;
     if (!car || !fuse || !regs) {
         IOLog("SwitchSensors: SOC_THERM off: mapping failed\n");
@@ -202,7 +203,9 @@ bool socThermStart()
 // One reading of a source: m C and its time. False when it cannot answer now.
 bool read(switch_sensor_source source, int32_t *milliC, uint64_t *at)
 {
-    int soc = 0, pcb = 0, value = 0;
+    int soc = 0;
+    int pcb = 0;
+    int value = 0;
     unsigned long long when = 0;
     switch (source) {
     case SWITCH_SRC_SOC_CPU0:
@@ -242,7 +245,7 @@ bool read(switch_sensor_source source, int32_t *milliC, uint64_t *at)
     default:
         return false;
     }
-    return switch_sensor_plausible(*milliC);
+    return switch_sensor_plausible(*milliC) != 0;
 }
 
 // After the sensors were found ready: one line when a source stops answering, one when it is back.
@@ -255,16 +258,18 @@ void noteSource(switch_sensor_source source, bool ok)
                                : __atomic_fetch_or(&gSourceDown, bit, __ATOMIC_RELAXED);
     if (ok && (before & bit))
         IOLog("SwitchSensors: %s answers again\n", kSourceNames[source]);
-    if (!ok && !(before & bit))
+    if (!ok && !(before & bit)) {
         IOLog("SwitchSensors: %s stopped answering: thermalmonitord reports its sensors missing\n",
               kSourceNames[source]);
+    }
 }
 
 // SwitchHIDDevice's copyEvent handler, on thermalmonitord's call (any thread; maybe inside the HID services' shared
 // command gate): a register read or two atomic loads, then the event. Only a sensor's first event wakes the verdict.
+// NOLINTNEXTLINE(misc-const-correctness): SwitchHIDCopyEventHandler's signature
 OSObject *answer(void *context)
 {
-    const uintptr_t index = (uintptr_t)context;
+    const uintptr_t index = reinterpret_cast<uintptr_t>(context);
     const auto &sensor = switch_sensors[index];
     int32_t milliC = 0;
     uint64_t at = 0;
@@ -272,7 +277,7 @@ OSObject *answer(void *context)
     noteSource(sensor.source, ok);
     OSObject *event = ok ? switch_hid_temperature_event(at, switch_sensor_fixed(milliC)) : nullptr;
     if (event) {
-        const uint64_t bit = 1ull << index;
+        const uint64_t bit = 1ULL << index;
         if (!(__atomic_fetch_or(&gServed, bit, __ATOMIC_ACQ_REL) & bit))
             switch_sensors_note();
     }
@@ -284,7 +289,9 @@ void hookPass(thread_call_param_t, thread_call_param_t)
 {
     uint64_t deadline = 0;
     clock_interval_to_deadline(kHookQuietMS, kMillisecondScale, &deadline);
-    unsigned kinds[kSwitchHIDHookKinds] = {}, unquiet = 0, missing = 0;
+    unsigned kinds[kSwitchHIDHookKinds] = {};
+    unsigned unquiet = 0;
+    unsigned missing = 0;
     for (IOService *const &slot : gDevices) {
         IOService *device = __atomic_load_n(&slot, __ATOMIC_ACQUIRE);
         if (!device) {
@@ -301,15 +308,16 @@ void hookPass(thread_call_param_t, thread_call_param_t)
     }
     const unsigned hooked = kinds[kSwitchHIDHooked] + kinds[kSwitchHIDHookedAtPublish];
     char line[320];
-    size_t n = (size_t)snprintf(
+    const size_t n = static_cast<size_t>(snprintf(
         line, sizeof(line), "%u of %u HID sensors hooked (%u by the publish notification, %u once matching was quiet)",
-        hooked, SWITCH_SENSOR_COUNT, kinds[kSwitchHIDHookedAtPublish], kinds[kSwitchHIDHooked]);
-    if (hooked != SWITCH_SENSOR_COUNT && n < sizeof(line))
+        hooked, SWITCH_SENSOR_COUNT, kinds[kSwitchHIDHookedAtPublish], kinds[kSwitchHIDHooked]));
+    if (hooked != SWITCH_SENSOR_COUNT && n < sizeof(line)) {
         snprintf(line + n, sizeof(line) - n,
                  "; not hooked: %u not published, %u with no event driver (%u not quiet after %u s), %u wrong slots, "
                  "%u other vtable, %u no memory",
                  missing, kinds[kSwitchHIDHookNoDriver], unquiet, kHookQuietMS / 1000, kinds[kSwitchHIDHookWrongSlots],
                  kinds[kSwitchHIDHookOtherVtable], kinds[kSwitchHIDHookNoMemory]);
+    }
     IOLog("SwitchSensors: %s\n", line);
     switch_sensors_note();
 }
@@ -320,9 +328,9 @@ bool ready(char *why, size_t len)
     size_t n = 0;
     if (why && len)
         why[0] = 0;
-    auto add = [&](const char *what) {
+    const auto add = [&](const char *what) {
         if (why && n < len)
-            n += (size_t)snprintf(why + n, len - n, "%s%s", n ? ", " : "", what);
+            n += static_cast<size_t>(snprintf(why + n, len - n, "%s%s", n ? ", " : "", what));
     };
     unsigned hooked = 0;
     for (IOService *const &slot : gDevices) {
@@ -341,16 +349,17 @@ bool ready(char *why, size_t len)
     if (served != kReadMask) {
         char what[80];
         snprintf(what, sizeof(what), "thermalmonitord has read %u of the %u sensors it reads",
-                 (unsigned)__builtin_popcountll(served), (unsigned)__builtin_popcountll(kReadMask));
+                 static_cast<unsigned>(__builtin_popcountll(served)),
+                 static_cast<unsigned>(__builtin_popcountll(kReadMask)));
         add(what);
     }
     for (unsigned s = 0; s < SWITCH_SRC_COUNT; ++s) {
         int32_t milliC = 0;
         uint64_t at = 0;
-        if (!read((switch_sensor_source)s, &milliC, &at))
+        if (!read(static_cast<switch_sensor_source>(s), &milliC, &at))
             add(kSourceNames[s]);
     }
-    OSObject *probe = switch_hid_temperature_event(mach_absolute_time(), 0);
+    const OSObject *probe = switch_hid_temperature_event(mach_absolute_time(), 0);
     if (!probe)
         add("temperature events");
     OSSafeReleaseNULL(probe);
@@ -401,14 +410,14 @@ extern "C" int switch_sensors_wait_ready(unsigned int wait_ms, char *why, unsign
         static const char *const kLabel[] = {"CPU", "", "", "", ", GPU", ", PLLX", ", SoC diode", ", PCB", ", battery"};
         for (unsigned s = 0; s <= SWITCH_SRC_BATTERY && n < sizeof(line); ++s) {
             const int32_t a = v[s] < 0 ? -v[s] : v[s];
-            n += (size_t)snprintf(line + n, sizeof(line) - n, "%s %s%d.%d", kLabel[s], v[s] < 0 ? "-" : "",
-                                  (int)(a / 1000), (int)(a % 1000 / 100));
+            n += (size_t)snprintf(line + n, sizeof(line) - n, "%s %s%d.%d", kLabel[s], v[s] < 0 ? "-" : "", a / 1000,
+                                  a % 1000 / 100);
         }
         IOLog("SwitchSensors: thermalmonitord's %u sensors answer (it has read all %u it reads): %s C\n",
               SWITCH_SENSOR_COUNT, (unsigned)__builtin_popcountll(kReadMask), line);
     }
     __atomic_store_n(&gVerdictLogged, true, __ATOMIC_RELEASE);
-    return ok;
+    return static_cast<int>(ok);
 }
 
 extern "C" int switch_sensors_start(void)
@@ -424,6 +433,7 @@ extern "C" int switch_sensors_start(void)
     unsigned published = 0;
     for (unsigned i = 0; i < SWITCH_SENSOR_COUNT; ++i) {
         const switch_sensor &sensor = switch_sensors[i];
+        // NOLINTNEXTLINE(misc-const-correctness): __atomic_store_n publishes it in gDevices, which are not const
         IOService *device = switch_hid_create_temperature(sensor.matchName, switch_sensor_fourcc(sensor.fourcc),
                                                           &answer, (void *)(uintptr_t)i);
         __atomic_store_n(&gDevices[i], device, __ATOMIC_RELEASE);  // ready() reads them from the waiter's thread
@@ -439,10 +449,11 @@ extern "C" int switch_sensors_start(void)
     // The event drivers match asynchronously; hookPass waits for them off the board thread.
     gHookCall =
         thread_call_allocate_with_options(&hookPass, nullptr, THREAD_CALL_PRIORITY_KERNEL, THREAD_CALL_OPTIONS_ONCE);
-    if (gHookCall)
+    if (gHookCall) {
         (void)thread_call_enter(gHookCall);
-    else
+    } else {
         IOLog("SwitchSensors: no thread call for the hook pass: the publish notification and the verdict hook\n");
+    }
     return 0;
 }
 
