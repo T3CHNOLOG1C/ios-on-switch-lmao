@@ -236,12 +236,13 @@ bool gStateLoad;                               // SHA compress from a loaded sta
 // counted here: below them the CPU is measured faster.
 void tally(volatile uint64_t &counter, uint64_t bytes)
 {
-    if (&counter == &gUnsleepable)
+    if (&counter == &gUnsleepable) {
         switch_refusal("TegraSE", "cannot sleep", "%llu bytes done on the CPU: the caller cannot wait for an engine",
                        bytes);
-    else
+    } else {
         switch_refusal("TegraSE", "unreachable buffer", "%llu bytes done on the CPU: a buffer the engines cannot map",
                        bytes);
+    }
 #if DEVELOPMENT || DEBUG
     __atomic_fetch_add(&counter, bytes, __ATOMIC_RELAXED);
 #endif
