@@ -2077,6 +2077,14 @@ bool RenderEncoder::draw(uint32_t primitive, uint32_t first, uint32_t count, uin
     const Runs &runs = selfRuns(*pl, primitive, first, count, instances);
     if (!runs.empty()) {
         for (const auto &[begin, end] : runs) {
+#ifdef SWITCH_RAW_HARNESS_MARKS
+            // the host frame harness's builds only: nvdec names this mark SPLIT, and eqcheck folds the run into the one before
+            if (begin) {
+                if (p_.room() < 1024)
+                    reserve();
+                p_.m(NO_OPERATION, 0x5b1175);
+            }
+#endif
             if (!prepare(pl, primitive, first + begin, first + begin, end - begin, baseInstance, false, why))
                 return false;
             p_.m(BEGIN, 0);
@@ -2180,6 +2188,13 @@ bool RenderEncoder::drawIndexed(uint32_t primitive, uint32_t count, uint32_t ind
         const uint32_t begin = runs.empty() ? 0 : runs[r].first, end = runs.empty() ? count : runs[r].second;
         drawIndices_ = at + uint64_t(begin) * indexSize;
         drawIndexCount_ = end - begin;
+#ifdef SWITCH_RAW_HARNESS_MARKS
+        if (r) {
+            if (p_.room() < 1024)
+                reserve();
+            p_.m(NO_OPERATION, 0x5b1175);
+        }
+#endif
         const bool prepared = prepare(pl, primitive, 0, 0, most + 1, 0, true, why);
         drawIndices_ = nullptr;
         if (!prepared)
@@ -2451,7 +2466,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, uint32_t first, ui
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
             dev_->stats.fetchBarriersElided++;
 #endif
-#ifdef SWITCH_RAW_ELISION_MARKER
+#ifdef SWITCH_RAW_HARNESS_MARKS
             // the host frame harness's builds only (test/build.sh): nvdec names this mark ELIDED, and eqcheck takes a
             // barrier NVK has and raw left out only where it is
             p.m(NO_OPERATION, 0x0e11de);

@@ -370,8 +370,11 @@ void Decoder::method(uint32_t subc, uint32_t mthd, uint32_t data, bool fromMme)
         barrier("PSB");
         break;
     case NO_OPERATION:
-        if (data == 0x0e11de)  // raw_gpu.cpp's mark of a fetch barrier left out (SWITCH_RAW_ELISION_MARKER builds)
+        // raw_gpu.cpp's marks (SWITCH_RAW_HARNESS_MARKS builds): a fetch barrier left out, a draw's run after its first
+        if (data == 0x0e11de)
             barrier("ELIDED");
+        else if (data == 0x5b1175)
+            barrier("SPLIT");
         break;
     case INVALIDATE_TEXTURE_DATA_CACHE:
     case INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI:
