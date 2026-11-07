@@ -89,6 +89,40 @@ def mark_split(blob, at, vm, kc, fo, name):
     struct.pack_into("<II", blob, at + 16, ncmds + 1, sizeofcmds + 16)
 
 
+def write_fips_macs(kexts, kc, blobs, blob_at):
+    """Give every kext with corecrypto's FIPS integrity check the MAC of its text as it now runs; the rule and the
+    MAC are the pretranslation's too (translate/arm64e/macho/fips.h). Returns {kext: new MAC (hex)}."""
+    macs = {}
+    with tempfile.TemporaryDirectory() as t:
+        headers = []
+        for b in kexts:
+            n, at = blob_at(kc.entry[b][0])
+            sizeofcmds = struct.unpack_from("<I", blobs[n], at + 20)[0]
+            path = os.path.join(t, "%d.h" % len(headers))
+            open(path, "wb").write(blobs[n][at:at + 32 + sizeofcmds])
+            headers.append((b, path))
+        found = subprocess.run([paths.ARM64E, "fips", *[p for _, p in headers]], check=True, capture_output=True,
+                               text=True).stdout.split()
+        lines = iter(found)
+        for b, _ in headers:
+            first = next(lines)
+            if first == "-":
+                continue
+            text_va, size, mac_va = int(first, 16), int(next(lines), 16), int(next(lines), 16)
+            n, at = blob_at(text_va)
+            m, mac_at = blob_at(mac_va)
+            original, translated = os.path.join(t, "original"), os.path.join(t, "translated")
+            open(original, "wb").write(kc.d[kc.va2off(text_va):kc.va2off(text_va) + size])
+            open(translated, "wb").write(blobs[n][at:at + size])
+            was = bytes(blobs[m][mac_at:mac_at + 32]).hex()
+            mac = subprocess.run([paths.ARM64E, "fips-mac", original, translated, was], check=True,
+                                 capture_output=True, text=True).stdout.strip()
+            blobs[m][mac_at:mac_at + 32] = bytes.fromhex(mac)
+            if mac != was:
+                macs[b] = mac
+    return macs
+
+
 def main():
     our_path, kc_path, out_path = sys.argv[1:4]
     native_data = open(our_path, "rb").read()
@@ -301,6 +335,8 @@ def main():
     text.extend(bytes(stub_va - text_lo - len(text)))
     text.extend(stub_area)
     text.extend(bytes(-len(text) % PAGE))
+    # 4b. FIPS integrity MACs over the final text, while the headers still hold the kernelcache's addresses
+    fips_macs = write_fips_macs(sorted(sel), kc, blobs, blob_at)
     # 5. kext headers: slid segment/section addresses, arm64 subtype ALL, no LINKEDIT mapping
     for b in sorted(sel):
         vm, fo = kc.entry[b]
@@ -416,6 +452,7 @@ def main():
               "cuts": [list(k) for k in CUTS],
               "segments": [{k: (hex(v) if isinstance(v, int) else v) for k, v in s.items()} for s in new_segments],
               "pointer_kinds": dict(kinds), "pointer_sites": len(pointer_sites), "branch_kinds": dict(br),
+              "fips_macs": fips_macs,
               "unresolved_kernel_functions": {hex(a): c for a, c in sorted(unresolved_fn.items())},
               "unresolved_kernel_data": {hex(a): c for a, c in sorted(unresolved_data.items())},
               "unresolved_by_component": {b: {k: [hex(a) for a in sorted(v)] for k, v in u.items()}
