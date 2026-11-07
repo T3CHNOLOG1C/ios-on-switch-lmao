@@ -13,6 +13,7 @@
 load("@rules_rust//rust:defs.bzl", "rust_static_library")
 load("//bazel/lint:defs.bzl", "lint_files")
 load("//bazel/rust:defs.bzl", "cargo_ids", "rust_artifact")
+load("//translate/arm64e:target.bzl", "a64x_target_linkopts")
 load(":defs.bzl", "gpu_stage", "gpu_tree", "llvm_as", "metal_bundle", "metal_plugin", "raw_stack")
 
 package(default_visibility = ["//visibility:public"])
@@ -161,6 +162,7 @@ metal_plugin(
         GM20B_ABI,
         "//kits/SwitchRefusal:SwitchRefusal.h",
     ],
+    linkopts = a64x_target_linkopts(),
     stack = ":raw_stack",
 )
 
