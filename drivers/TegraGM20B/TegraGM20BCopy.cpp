@@ -55,15 +55,15 @@ bool openSpace()
 {
 	Copier &c = gCopy;
 	uint64_t pas[kJobs];
-	c.pushCpu = static_cast<uint32_t *>(tgm_pool_alloc(kPage * kJobs, &c.pushPa));
-	c.fenceCpu = tgm_pool_alloc(kPage, &c.fencePa);
+	c.pushCpu = static_cast<uint32_t *>(tgm_pool_alloc(kPage * kJobs, 0, &c.pushPa));
+	c.fenceCpu = tgm_pool_alloc(kPage, 0, &c.fencePa);
 	if (!c.pushCpu || !c.fenceCpu || tgm_vm_new(&c.vm))
 		return false;
 	tgm_vm_claim(c.vm, &gCopy);
 	for (uint32_t i = 0; i < kJobs; i++)
 		pas[i] = c.pushPa + i * kPage;
 	return !tgm_mem_new(c.vm, pas, kJobs, &c.push) &&
-	       !tgm_vm_map_ordered(c.vm, kPushVa, kPage * kJobs, c.push, 0, 0, 1) &&
+	       !tgm_vm_map_ordered(c.vm, kPushVa, kPage * kJobs, c.push, 0, 0, 1, nullptr) &&
 	       !tgm_mem_new(c.vm, &c.fencePa, 1, &c.fence) &&
 	       !tgm_vm_kmap(c.vm, c.fence, kPage, &c.fenceGpu);
 }
@@ -119,7 +119,7 @@ int map(Plane &p, IOMemoryDescriptor *memory, uint64_t offset, uint64_t bytes, u
 		return ret;
 	p.va = window + (offset - first);
 	p.bytes = bytes;
-	return tgm_vm_map_ordered(gCopy.vm, window, uint64_t(p.npages) * kPage, p.mem, 0, kind, 0);
+	return tgm_vm_map_ordered(gCopy.vm, window, uint64_t(p.npages) * kPage, p.mem, 0, kind, 0, nullptr);
 }
 
 void reapWork(thread_call_param_t, thread_call_param_t)
