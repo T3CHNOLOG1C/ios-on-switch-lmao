@@ -3,7 +3,7 @@
 - the crawl's names read the crawled tree and the tool alone;
 - a bucket's compile reads its bucket's lines, the libraries and the three tools that make code: not the corpus, the
   GPU bundle, the tools' manifest or the raw pack's tools, so a corpus edit reaches only the buckets it rewrites and a
-  plugin edit reaches none;
+  plugin edit reaches none; it reports the NVK twin unused, keyed on the twin's compiler identity instead;
 - the join reads the buckets' indexes and reports, never their packs or the tools;
 - the bundle check is a validation action, so the GPU bundle is no input of anything that makes the seed;
 - the raw pack's probes read their bucket's states, the probe tools, the twin and QuartzCore's library, and only the
@@ -41,6 +41,11 @@ def _seed_impl(ctx):
         asserts.true(env, lines[0].endswith("bucket-00{}.log".format(i)), lines[0])
         for forbidden in ("corpus.log", "/base/", "MANIFEST.json", "/raw/"):
             asserts.equals(env, [], [p for p in names if forbidden in p], "a bucket's inputs naming " + forbidden)
+        asserts.true(env, [p for p in names if p.endswith("libvulkan_nouveau.dylib.source")] != [], "the identity")
+        unused = [f.short_path for f in bucket.outputs.to_list() if f.extension == "unused"]
+        asserts.equals(env, 1, len(unused), "the unused inputs list")
+        argv = bucket.argv
+        asserts.equals(env, argv[argv.index("--nvk") + 1], argv[argv.index("--unused") + 1], "the twin is unused")
     (join,) = _actions(env, "MetalSeedJoin")
     asserts.equals(env, [], [p for p in _names(join) if p.endswith(".pack")], "the join reads no pack")
     asserts.equals(env, [], [p for p in _names(join) if "/base/" in p or "/tools/" in p], "the join reads no tools")

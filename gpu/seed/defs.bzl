@@ -125,11 +125,22 @@ def _bucket(ctx, number, tools, crawl, store, lines, inputs):
         args.add("--guess-dispatch")
     args.add("--index", index)
     args.add("--report", report)
+
+    # What NAK and NVK make of a bucket's programs is a function of NVK's compiler identity, which the twin's .source
+    # names (gpu/nvk: the hash NVK puts in its pipeline cache UUID): the action is keyed on that, and the twin, whose
+    # bytes every NVK edit changes, is an input it reports unused, so an edit outside the compiler reruns no bucket.
+    unused = None
+    if tools.nvk_identity:
+        unused = ctx.actions.declare_file(_named(ctx, "_buckets/{}.unused".format(_three(number))))
+        args.add("--unused-list", unused)
+        args.add("--unused", tools.twin)
+        outputs.append(unused)
     ctx.actions.run(
         executable = ctx.executable._precompile,
         arguments = [args],
         inputs = inputs,
         outputs = outputs,
+        unused_inputs_list = unused,
         mnemonic = "MetalSeedBucket",
         progress_message = "Precompiling shader seed bucket {} of {}".format(number + 1, ctx.attr.buckets),
         execution_requirements = _DARWIN,
@@ -155,7 +166,7 @@ def _metal_seed_impl(ctx):
 
     # A bucket's compile reads its lines, the libraries and the three tools that make code (the precompile tool with
     # the frontend and m2v in it, its mock IOKit, the NVK twin): never the plugin, the corpus or the rest of the tools.
-    tool_files = [store, tools.precompile, tools.mock, tools.twin]
+    tool_files = [store, tools.precompile, tools.mock, tools.twin] + ([tools.nvk_identity] if tools.nvk_identity else [])
     compile_inputs = depset(tool_files + ctx.files.device_libraries + ctx.files.embedded, transitive = [crawl.files])
     packs, indexes, reports = [], [], []
     for i, bucket_lines in enumerate(lines):

@@ -47,5 +47,11 @@ The work is split into shards by program, one action per shard, so it runs in pa
 the shards it touches. A derived pipeline that crashes the tool is skipped and counted. One from the corpus fails the
 build, because it would crash the device too.
 
+NVK names its pipeline cache by a hash of its compiler's sources and flags
+(`third_party/mesa/bazel/compiler_identity.py`) rather than by the dylib, and each shard is keyed on that hash. An NVK
+edit outside the compiler (images, memory, command buffers) reruns no shard and keeps the device's own shader caches.
+Bazel's action cache does this through the shard's unused inputs list, so it holds within one output base; a fresh
+output base still misses the disk cache.
+
 The raw pack is probed in buckets too, one action each. Only the last step, which stamps the stack key into the pack,
 reads the key that every `raw/` edit changes, so such an edit restamps the pack instead of probing again.
