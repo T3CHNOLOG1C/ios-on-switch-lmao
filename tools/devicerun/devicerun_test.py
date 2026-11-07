@@ -115,6 +115,14 @@ class Reports(unittest.TestCase):
         self.assertIn('JetsamEvent x1', crash['crash.jetsam'].observed)
         self.assertEqual(devicerun.crash_rows(None)[0].verdict, NO_DATA)
 
+    def test_boot_label_selects_checks_and_steps(self):
+        names = {c.name for group in devicerun.selected('A').values() for c in group}
+        self.assertIn('gpu.rf16-rounding', names)
+        self.assertNotIn('gpu.tiled-cache-on', names)
+        self.assertIn('gpu.tiled-cache-on', {c.name for group in devicerun.selected(None).values() for c in group})
+        self.assertIn('rf16-rounding', devicerun.checklist('A'))
+        self.assertNotIn('rf16-rounding', devicerun.checklist('B'))
+
     def test_whole_run_exit_code(self):
         with contextlib.redirect_stdout(io.StringIO()) as out:
             self.assertEqual(devicerun.main([str(NDJSON), '--ndjson']), 1)

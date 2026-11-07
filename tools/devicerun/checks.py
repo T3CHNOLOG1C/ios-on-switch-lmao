@@ -4,6 +4,7 @@
 'timeline' checks are INFO: open issues whose count is the baseline for their fix, and manual steps to read in order.
 """
 
+from tools.devicerun.morning import MORNING
 from tools.devicerun.rules import REPORT, TIMELINE, Check
 
 LAUNCHD = 'launchd'
@@ -43,7 +44,7 @@ GROUPS: dict[str, list[Check]] = {
             show=('job',),
             note='per label; pass --start/--end around 10 idle minutes',
         ),
-        Check('launchd.throttled', 'r32-cpuhog', 'throttled by', 'rate >= 0', process=LAUNCHD, show=('job',)),
+        Check('launchd.throttled', 'r32-cpuhog', 'throttled by', REPORT, process=LAUNCHD, show=('job',)),
     ],
     'mobilegestalt': [
         Check(
@@ -99,7 +100,7 @@ GROUPS: dict[str, list[Check]] = {
         Check('metal.fig-histogram', 'r32-gpucaps', 'FigMetalHistogram', process='mediaserverd', level='error'),
         Check('metal.fig-colorcube', 'r32-gpucaps', 'FigColorCube', process='mediaserverd', level='error'),
         Check('metal.affine-gpu', 'r32-gpucaps', 'affineGPUMetalV2', process='mediaserverd', level='error'),
-        Check('metal.gles-context', 'r32-gpucaps', 'glContext != NULL', process='mediaserverd'),
+        Check('metal.gles-context', 'r32-gpucaps', 'glContext != ', process='mediaserverd'),
         Check(
             'metal.no-copy-refused',
             'r32-gpufixed',
@@ -221,17 +222,6 @@ GROUPS: dict[str, list[Check]] = {
             process=KERNEL,
             regex='fault',
             source='drivers/TegraGM20B/gpu.c (nvkm fault reports)',
-        ),
-        Check(
-            'gpu.rf16-rounding',
-            'r31-rawrt',
-            'RF16',
-            REPORT,
-            regex=r'(?P<a>\b[0-9a-f]{4}) (?P<b>[0-9a-f]{4}) '
-            r'(?P<c>[0-9a-f]{4}) (?P<d>[0-9a-f]{4})',
-            show=('a', 'b', 'c', 'd'),
-            source='not found on deploy-next5',
-            note='placeholder: RNE reads 3800 3800 37ff 3800',
         ),
     ],
     'display': [
@@ -433,9 +423,11 @@ GROUPS: dict[str, list[Check]] = {
         Check(
             'sleep.colour-after-wake',
             'r32-color',
-            ('SwitchDisplay: colour ', 'SwitchSuspend: '),
+            ('SwitchDisplay: colour ', 'SwitchSuspend: ', 'SwitchPower: '),
             TIMELINE,
             process=KERNEL,
+            regex='colour|wake|sleep|SC7',
+            source='drivers/SwitchSuspend/SwitchWake.cpp, drivers/NativeMobileDisplay/TegraDisplayColor.cpp',
             note='colour lines re-appear after each wake when the CMU was on',
         ),
         Check(
@@ -525,6 +517,7 @@ GROUPS: dict[str, list[Check]] = {
         ),
         Check('io.securityd-sos', 'r32-cpuhog', 'Source was stale because shmem was null', REPORT, process='securityd'),
     ],
+    'gpu-morning': MORNING,
 }
 
 # The tools/frames lines, pulled with the checks' own query.

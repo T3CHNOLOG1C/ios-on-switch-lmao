@@ -37,6 +37,7 @@ class Check:
     predicate; `regex` (searched) narrows further and its named groups are the fields `rule`, `where` and `show` use.
     `needs` names a check that must have matched for this one to mean anything (a failure line of a feature that is
     not running is NO-DATA, not PASS). `against` names a check whose `key` values this one's are looked up in.
+    `boot` limits the check to one of the morning's boot labels (A, B tiled cache, K kprof).
     """
 
     name: str
@@ -54,6 +55,7 @@ class Check:
     key: str = ''
     source: str = ''
     note: str = ''
+    boot: str = ''
 
     def literals(self) -> tuple[str, ...]:
         return (self.contains,) if isinstance(self.contains, str) else self.contains
@@ -177,7 +179,7 @@ def grouped(check: Check, matches: list[dict], minutes: float) -> str:
     counts = Counter(tuple(str(f.get(k, '?'))[:40] for k in check.show) for f in matches)
     parts = []
     for key, n in counts.most_common(TOP_GROUPS):
-        rate = f' ({n / minutes:.1f}/min)' if check.rule.startswith('rate') and minutes else ''
+        rate = f' ({n / minutes:.1f}/min)' if minutes else ''
         parts.append(f'{"/".join(key)} x{n}{rate}')
     more = len(counts) - TOP_GROUPS
     return '; '.join(parts) + (f'; +{more} more' if more > 0 else '')

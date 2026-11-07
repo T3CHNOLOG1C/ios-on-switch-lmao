@@ -13,6 +13,7 @@ import sys
 from collections.abc import Iterable, Iterator
 
 from tools.devicerun.checks import FRAME_PREFIX, GROUPS
+from tools.devicerun.morning import CHECKLIST
 from tools.devicerun.reports import crash_rows, frame_rows
 from tools.devicerun.rules import FAIL, Check, Event, Result, evaluate, match
 
@@ -112,11 +113,24 @@ def write_tsv(path: str, groups: list[tuple[str, list[Result]]]) -> None:
                 )
 
 
-def evaluate_all(records: Iterable[dict], crashes: str | None) -> list[tuple[str, list[Result]]]:
-    checks = [c for group in GROUPS.values() for c in group]
+def selected(label: str | None) -> dict[str, list[Check]]:
+    """Return the groups' checks that apply to this boot label (every check when there is none)."""
+    return {name: [c for c in group if not label or c.boot in {'', label}] for name, group in GROUPS.items()}
+
+
+def checklist(label: str | None) -> str:
+    steps = CHECKLIST[''] + (CHECKLIST.get(label, []) if label else [])
+    return '\n'.join([f'Boot {label or "(no label)"}: manual steps before pulling the logs', *steps, ''])
+
+
+def evaluate_all(
+    records: Iterable[dict], crashes: str | None, label: str | None = None
+) -> list[tuple[str, list[Result]]]:
+    groups_in = selected(label)
+    checks = [c for group in groups_in.values() for c in group]
     results, frame_lines = run_checks(records, checks)
     by_check = {r.check.name: r for r in results}
-    groups = [(name, [by_check[c.name] for c in group]) for name, group in GROUPS.items()]
+    groups = [(name, [by_check[c.name] for c in group]) for name, group in groups_in.items()]
     groups.append(('frames', frame_rows(frame_lines)))
     groups.append(('crashes', crash_rows(crashes)))
     return groups
@@ -130,10 +144,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--tsv', help='also write the table, with every check source, as TSV here')
     parser.add_argument('--start', help="log show's --start, e.g. '2026-11-07 09:00:00'")
     parser.add_argument('--end', help="log show's --end")
+    parser.add_argument('--boot-label', choices=['A', 'B', 'K'], help='the morning boot: A, B tiled cache, K kprof')
     parser.add_argument('--ndjson', action='store_true', help='the input is `log show --style ndjson` output')
     parser.add_argument('--predicate', action='store_true', help='print the log show predicate and exit')
     args = parser.parse_args(argv)
-    checks = [c for group in GROUPS.values() for c in group]
+    checks = [c for group in selected(args.boot_label).values() for c in group]
     if args.predicate:
         print(predicate(checks))
         return 0
@@ -141,7 +156,8 @@ def main(argv: list[str] | None = None) -> int:
         records = read_ndjson(args.archive)
     else:
         records = log_show(args.archive, predicate(checks), args.start, args.end)
-    groups = evaluate_all(records, args.crashes)
+    print(checklist(args.boot_label))
+    groups = evaluate_all(records, args.crashes, args.boot_label)
     print(table(groups))
     if args.tsv:
         write_tsv(args.tsv, groups)
