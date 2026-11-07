@@ -23,6 +23,7 @@
 #import <objc/message.h>
 #import <objc/runtime.h>
 #include <mach/mach_time.h>
+#include <notify.h>
 #include <os/log.h>
 #include <pthread.h>
 #include <chrono>
@@ -5902,12 +5903,13 @@ size_t raw_metal_rates(char *out, size_t size)
 #if SWITCH_FRAME_TIMELINE
     {
         const size_t used = strlen(diag);
-        snprintf(diag + used, sizeof diag - used, " rsplit=%.0f/%.0f/%.0fus/m rmax=%lluus fb=%llu/%llu/%llu/%llu",
+        snprintf(diag + used, sizeof diag - used, " rsplit=%.0f/%.0f/%.0fus/m rmax=%lluus fb=%llu/%llu/%llu/%llu(%s)",
                  (s.replaySlotUs.exchange(0) / double(m2vs)), (s.replayTwinUs.exchange(0) / double(m2vs)),
                  (s.replayCommitUs.exchange(0) / double(m2vs)), (unsigned long long)s.replayMaxUs.exchange(0),
                  (unsigned long long)k.fetchBarriers.exchange(0), (unsigned long long)k.fetchBarriersElided.exchange(0),
                  (unsigned long long)k.fetchBarriersAnyColor.exchange(0),
-                 (unsigned long long)k.fetchBarriersInterlocked.exchange(0));
+                 (unsigned long long)k.fetchBarriersInterlocked.exchange(0),
+                 raw::Device::fetchBarrierName(gRM->raw->fetchBarrier.load(std::memory_order_relaxed)));
     }
 #endif
     gRates.abortUs = s.abortUs.load();
@@ -6026,6 +6028,28 @@ static void rawStallTick()
                  "holders %d device %d, seqno submitted %u completed %u, commits %llu completed %llu",
                  waiting, segNext, segs, reason, inflight, m2vPending, m2vUnscheduled, int(holders), int(device),
                  submitted, completed, (unsigned long long)commits, (unsigned long long)done);
+}
+#endif
+
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+// The fetch barrier's way, switched from the Mac within one boot (`idevicenotificationproxy -u <udid> post
+// com.brunostjohn.switch.debug.fetch-barrier-<ps|psonly|none>`), to measure what the barrier costs: the shipped barrier and
+// texture invalidate (ps) against the barrier alone (psonly) and nothing (none). Measurement only: psonly and none let a
+// fetching draw read colors still being written
+static void watchFetchBarrierWay(raw::Device *dev)
+{
+    using Way = raw::Device::FetchBarrier;
+    for (const Way way : {Way::PixelShader, Way::PixelShaderOnly, Way::None}) {
+        char name[96];
+        snprintf(name, sizeof name, "com.brunostjohn.switch.debug.fetch-barrier-%s",
+                 raw::Device::fetchBarrierName(way));
+        int token;
+        notify_register_dispatch(name, &token, dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^(int) {
+            dev->fetchBarrier.store(way, std::memory_order_relaxed);
+            os_log(rawLog(), "raw: fetch barrier way %{public}s (debug notification)",
+                   raw::Device::fetchBarrierName(way));
+        });
+    }
 }
 #endif
 
@@ -6228,6 +6252,7 @@ id<MTLDevice> raw_metal_device_open(const char *packPath, uint64_t stack, id<MTL
         });
         dispatch_resume(stall);
     }
+    watchFetchBarrierWay(dev);
 #endif
     // what both threads hold up is the frame: they follow its committing threads (raw_follow.h)
     std::thread([] {

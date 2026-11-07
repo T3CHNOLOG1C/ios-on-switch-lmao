@@ -613,17 +613,21 @@ public:
     } stats;
 
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    // The fetch barrier's methods, set only by the context-switch stress (test/fetchform.cpp): PIXEL_SHADER_BARRIER and
-    // 0x0f74 (the shipped form), WAIT_FOR_IDLE and INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI (the form before it, the stress's
-    // reference), and PIXEL_SHADER_BARRIER alone or with the NO_WFI invalidate, which tell a hang's method apart
+    // The fetch barrier's methods, set by the context-switch stress (test/fetchform.cpp) and the ceiling measurement
+    // (RawMetal.mm's debug notifications): PIXEL_SHADER_BARRIER and 0x0f74 (the shipped form), WAIT_FOR_IDLE and
+    // INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI (the form before it, the stress's reference), PIXEL_SHADER_BARRIER alone or with
+    // the NO_WFI invalidate, which tell a hang's method apart, and none at all. PixelShaderOnly and None let a fetching
+    // draw read colors its predecessors have not finished writing: measurements of what the barrier costs, never shipped
     enum class FetchBarrier : uint8_t {
         PixelShader,
         WaitForIdle,
         PixelShaderOnly,
-        PixelShaderNoWfiInvalidate
+        PixelShaderNoWfiInvalidate,
+        None
     };
 
-    FetchBarrier fetchBarrier = FetchBarrier::PixelShader;
+    std::atomic<FetchBarrier> fetchBarrier{FetchBarrier::PixelShader};
+    static const char *fetchBarrierName(FetchBarrier b);
 #endif
 
     // The self-test's result (open), per sampling candidate (fx::sampling(i)): bytes off by more than 1 in the CPU's Tegra and

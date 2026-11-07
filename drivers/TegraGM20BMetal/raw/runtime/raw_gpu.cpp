@@ -2314,10 +2314,31 @@ DrawGeometry RenderEncoder::geometry(const Pipeline &pl, uint32_t primitive, uin
     return g;
 }
 
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+const char *Device::fetchBarrierName(FetchBarrier b)
+{
+    switch (b) {
+    case FetchBarrier::PixelShader:
+        return "ps";
+    case FetchBarrier::WaitForIdle:
+        return "wfi";
+    case FetchBarrier::PixelShaderOnly:
+        return "psonly";
+    case FetchBarrier::PixelShaderNoWfiInvalidate:
+        return "psnowfi";
+    case FetchBarrier::None:
+        return "none";
+    }
+    return "?";
+}
+#endif
+
 void RenderEncoder::fetchBarrier(Push &p)
 {
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    switch (dev_->fetchBarrier) {
+    switch (dev_->fetchBarrier.load(std::memory_order_relaxed)) {
+    case Device::FetchBarrier::None:
+        return;
     case Device::FetchBarrier::WaitForIdle:
         p.m(WAIT_FOR_IDLE, 0);
         p.m(INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI, 0);
