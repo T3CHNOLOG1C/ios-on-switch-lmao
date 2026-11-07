@@ -55,6 +55,7 @@ struct switch_foreign_memory {
     void (*drop)(void *lease);
     void *lease;
 };
+
 // A buffer over `length` bytes at `bytes`, inside `memory`: NVK makes its memory over memory's binding with no kernel call, and
 // holds memory's lease from then until it frees it. The caller's own hold stays the caller's. Nil if the runtime refuses.
 id native_bridge_metal_buffer_over_foreign(const struct switch_foreign_memory *memory, void *bytes, NSUInteger length,

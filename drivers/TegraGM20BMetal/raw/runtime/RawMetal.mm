@@ -962,10 +962,10 @@ static void cpuLevel(RMTexture *t, MTLRegion r, NSUInteger level, uint8_t *bytes
             const size_t page = size_t(getpagesize());
             raw::Alias a;
             id<MTLBuffer> pages =
-                gRM->raw->alias(_raw, a) ? rawAliasBuffer(a, _raw.span.cpu,
-                                                          (NSUInteger(_raw.span.bytes) + page - 1) & ~(page - 1),
-                                                          MTLResourceStorageModeShared)
-                                         : nil;
+                gRM->raw->alias(_raw, a)
+                    ? rawAliasBuffer(a, _raw.span.cpu, (NSUInteger(_raw.span.bytes) + page - 1) & ~(page - 1),
+                                     MTLResourceStorageModeShared)
+                    : nil;
             MTLTextureDescriptor *d = _descriptor;
             if (_raw.chain) {  // level 0 (the chain's levels are the m2v texture of every level's: rmMipTwin)
                 d = [_descriptor copy];

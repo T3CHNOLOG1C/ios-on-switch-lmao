@@ -758,8 +758,8 @@ static void declareGpuWrites(IOSurfaceRef surface)
 static NmbBuffer *bufferOverForeign(const struct switch_foreign_memory *memory, void *bytes, uint64_t length,
                                     uint64_t options)
 {
-    using Foreign = void (*)(const void *, uint64_t, uint64_t, uint64_t, uint32_t, void (*)(void *), void (*)(void *),
-                             void *);
+    using Foreign =
+        void (*)(const void *, uint64_t, uint64_t, uint64_t, uint32_t, void (*)(void *), void (*)(void *), void *);
     static const Foreign foreign = reinterpret_cast<Foreign>(nvkSymbol("switch_nvk_import_foreign"));
     if (!foreign || !gDevice)
         return nullptr;
