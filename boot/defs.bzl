@@ -189,6 +189,7 @@ def _boot_package_impl(ctx):
     args.add("plan")
     args.add("--manifest", ctx.file.overlay_manifest)
     args.add("--portrait-header", ctx.file.portrait_header)
+    args.add("--kind", ctx.attr._kind[BuildSettingInfo].value)
     args.add_all(sorted(files.keys()), before_each = "--given")
     if release:
         args.add("--release")

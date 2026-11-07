@@ -5,7 +5,7 @@ They are kept on Data under /private/var/Switch/overlay (the deploy copies the b
 
 Three steps of //boot:package, so that each overlay edit reruns only what reads it:
 
-    overlay.py plan --manifest M --portrait-header H [--given SOURCE]... [--release] --out PLAN
+    overlay.py plan --manifest M --portrait-header H --kind KIND [--given SOURCE]... [--release] --out PLAN
         overlay/manifest.json, filtered and checked: the files to stage and the directories the kernel unions
         (each with the switch-no-<feature> boot-arg that hides it), which the ADT carries. Reads no overlay file.
     overlay.py trust --plan PLAN [--file SOURCE=PATH]... --out MODULE
@@ -16,7 +16,8 @@ Three steps of //boot:package, so that each overlay edit reruns only what reads 
 manifest.json: {"files": [{"path": absolute, "source": relative to the tree, "trust": bool, "mode": "0755",
 "boot-arg": name, "union": absolute}]}. The union directory is the file's own unless "union" names an existing
 ancestor (XNU unions are deep, so a new bundle directory can appear inside a sealed one). "portrait": true stages the
-file only for a portrait-native kernel, "debug": true only in a debug boot package (not with --release).
+file only for a portrait-native kernel, "debug": true only in a debug boot package (not with --release), "kind" only for
+that IPSW kind (a union over a directory the System volume lacks fails at boot).
 """
 
 import argparse
@@ -36,13 +37,15 @@ from tools.trustcache.trustcache import trust_module
 OVERLAY_ROOT = '/private/var/Switch/overlay'
 
 
-def plan(manifest: dict, portrait: bool, given: Iterable[str] | None = None, release: bool = False) -> dict:
-    """Return the manifest's files for this kernel.
+def plan(manifest: dict, portrait: bool, kind: str, given: Iterable[str] | None = None, release: bool = False) -> dict:
+    """Return the manifest's files for this kernel and IPSW kind.
 
     The plan: {"files": [{path, source, trust, mode, directory}], "dirs": [[d, gate]]}. `given`: the sources the build
     gives; a manifest entry it lacks is an error, not a silent omission. `release`: debug entries are left out.
     """
-    entries = [entry for entry in manifest['files'] if not (release and entry.get('debug'))]
+    entries = [
+        entry for entry in manifest['files'] if not (release and entry.get('debug')) and entry.get('kind', kind) == kind
+    ]
     if given is not None:
         missing = sorted({entry['source'] for entry in entries} - set(given))
         if missing:
@@ -129,6 +132,7 @@ def main() -> None:
     p = step.add_parser('plan')
     for name in ('manifest', 'portrait-header', 'out'):
         p.add_argument('--' + name, required=True, type=Path)
+    p.add_argument('--kind', required=True)
     p.add_argument('--given', action='append', default=[])
     p.add_argument('--release', action='store_true')
     for name in ('trust', 'tree'):
@@ -141,6 +145,7 @@ def main() -> None:
         result = plan(
             json.loads(args.manifest.read_text()),
             portrait_native(args.portrait_header),
+            args.kind,
             args.given,
             args.release,
         )

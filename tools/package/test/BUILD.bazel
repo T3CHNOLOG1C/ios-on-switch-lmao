@@ -52,3 +52,20 @@ py_test(
         "@rules_python//python/runfiles",
     ],
 )
+
+# overlay.py's plan of overlay/manifest.json for each IPSW kind: a "kind" entry (the wallpapers' Wallpaper.plist, whose
+# bundle directories only that kind's System volume has) is staged and unioned for that kind alone.
+py_test(
+    name = "overlay_plan_test",
+    size = "small",
+    srcs = ["overlay_plan_test.py"],
+    data = [
+        "//overlay:manifest.json",
+        "//tools/package:overlay.py",
+    ],
+    deps = [
+        "//tools/package:boot_config",
+        "//tools/trustcache",
+        "@rules_python//python/runfiles",
+    ],
+)

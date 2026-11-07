@@ -174,9 +174,13 @@ boot_package(
     }),
     overlay_data = {
         "//boot/logo:apple-logo~ipad.png": "build/progressui/apple-logo~ipad.png",
-        "//bazel/pinned:overlay/wallpaper-1x/7570.iPadOS_17_Flat.plist": "build/wallpaper-1x/7570.iPadOS_17_Flat.plist",
-        "//bazel/pinned:overlay/wallpaper-1x/7560.Lake_Flat.plist": "build/wallpaper-1x/7560.Lake_Flat.plist",
-    },
+    } | select({
+        "//ipsw:21H461": {
+            "//bazel/pinned:overlay/wallpaper-1x/21H461/7570.iPadOS_17_Flat.plist": "build/wallpaper-1x/21H461/7570.iPadOS_17_Flat.plist",
+            "//bazel/pinned:overlay/wallpaper-1x/21H461/7560.Lake_Flat.plist": "build/wallpaper-1x/21H461/7560.Lake_Flat.plist",
+        },
+        "//ipsw:24B119": {},
+    }),
     overlay_files = ["//overlay:overlay_sources"],
     overlay_manifest = "//overlay:manifest.json",
     portrait_header = "//drivers/NativeMobileDisplay:SwitchPortrait.h",
