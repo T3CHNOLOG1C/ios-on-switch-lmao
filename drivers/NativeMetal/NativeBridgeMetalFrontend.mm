@@ -525,7 +525,7 @@ static void waitForResource(id resource);
 @property (nonatomic) MTLResourceOptions options;
 @property (nonatomic, copy) void (^deallocator)(void *, NSUInteger);
 @property (nonatomic) void *wrapped;
-@property (nonatomic) IOSurfaceRef surfaceOwner;  // keeps a shared import's CPU mapping alive
+@property (nonatomic) IOSurfaceRef surfaceOwner;      // keeps a shared import's CPU mapping alive
 @property (nonatomic) surface_layout::Import layout;  // a surface import's layout (SurfaceLayout.h)
 @property (nonatomic)
     uint32_t gpuDirty;  // the GPU wrote this host import since its lines were last invalidated (invalidateForCpu)
@@ -831,9 +831,9 @@ static NmbBuffer *importSurface(IOSurfaceRef surface, void *base, size_t bytes, 
         } else {  // pitch, or a surface the raw path took as rows without asking: never decided block-linear from here
             layout.asked = ask;
             layout.asked.flags &= ~surface_layout::kWrites;
-            layout.layout = nvk.layout ? nvk.layout(memory.handle, ask.width, ask.height, ask.bpp, ask.rowBytes,
-                                                    layout.asked.flags)
-                                       : surface_layout::kPitch;
+            layout.layout =
+                nvk.layout ? nvk.layout(memory.handle, ask.width, ask.height, ask.bpp, ask.rowBytes, layout.asked.flags)
+                           : surface_layout::kPitch;
         }
         NmbBuffer *handle = bufferOverForeign(&memory, base, bytes, MTLResourceStorageModeShared);
         memory.drop(memory.lease);
@@ -1363,7 +1363,8 @@ static NBTexture *planarSurfaceTexture(MTLTextureDescriptor *d, IOSurfaceRef sur
     if (!base || (base & (page - 1)) || at < base || (planes > 1 && chroma < base) || !allocation ||
         allocation > SIZE_MAX - (page - 1))
         return nil;
-    NBBuffer *buffer = surfaceBuffer(surface, (void *)base, (allocation + page - 1) & ~(page - 1), surfaceShape(surface));
+    NBBuffer *buffer =
+        surfaceBuffer(surface, (void *)base, (allocation + page - 1) & ~(page - 1), surfaceShape(surface));
     NmbTextureDescriptor descriptor;
     if (!buffer || !textureDescriptor(d, &descriptor))
         return nil;
@@ -6271,9 +6272,9 @@ static void fillLimits(id)
     const size_t bytes = (allocation + page - 1) & ~(page - 1), row = IOSurfaceGetBytesPerRow(surface);
     // A single 2D image of the surface asks the layout with its shape and use; another texture the surface's own, sampled
     surface_layout::Shape shape = surfaceShape(surface);
-    const bool image = d.textureType == MTLTextureType2D && d.mipmapLevelCount == 1 && d.sampleCount == 1 &&
-                       d.arrayLength == 1 &&
-                       surface_layout::shapeOf(gDevice, d.pixelFormat, d.width, d.height, row, usageWrites(d.usage), shape);
+    const bool image =
+        d.textureType == MTLTextureType2D && d.mipmapLevelCount == 1 && d.sampleCount == 1 && d.arrayLength == 1 &&
+        surface_layout::shapeOf(gDevice, d.pixelFormat, d.width, d.height, row, usageWrites(d.usage), shape);
     NBBuffer *buffer = surfaceBuffer(surface, base, bytes, shape);
     if (!buffer)
         return nil;

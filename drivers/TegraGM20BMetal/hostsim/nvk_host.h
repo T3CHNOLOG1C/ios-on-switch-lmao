@@ -94,8 +94,8 @@ struct Vk {
         VkPhysicalDeviceBufferDeviceAddressFeatures bda = {
             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES};
         bda.bufferDeviceAddress = VK_TRUE;
-        VkPhysicalDeviceHostImageCopyFeaturesEXT hic = {
-            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_HOST_IMAGE_COPY_FEATURES_EXT, &bda};
+        VkPhysicalDeviceHostImageCopyFeaturesEXT hic = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_HOST_IMAGE_COPY_FEATURES_EXT,
+                                                        &bda};
         hic.hostImageCopy = VK_TRUE;
         const float priority = 1.0f;
         VkDeviceQueueCreateInfo q = {VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};
@@ -133,7 +133,8 @@ struct Vk {
     VkDeviceMemory hostMemory(void *cpu, uint64_t bytes) const
     {
         VkMemoryHostPointerPropertiesEXT props = {VK_STRUCTURE_TYPE_MEMORY_HOST_POINTER_PROPERTIES_EXT};
-        vkGetMemoryHostPointerPropertiesEXT(device, VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT, cpu, &props);
+        vkGetMemoryHostPointerPropertiesEXT(device, VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT, cpu,
+                                            &props);
         VkImportMemoryHostPointerInfoEXT import = {VK_STRUCTURE_TYPE_IMPORT_MEMORY_HOST_POINTER_INFO_EXT};
         import.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT;
         import.pHostPointer = cpu;

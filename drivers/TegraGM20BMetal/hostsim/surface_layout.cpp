@@ -30,8 +30,7 @@ struct Nvk {
           importShape(vk.symbol<decltype(importShape)>("switch_nvk_import_surface_shape")),
           importLayout(vk.symbol<decltype(importLayout)>("switch_nvk_import_surface_layout")),
           layout(vk.symbol<decltype(layout)>("switch_nvk_surface_layout"))
-    {
-    }
+    {}
 };
 
 struct Surface {
@@ -111,7 +110,8 @@ void writerFirst(const Vk &a, const Vk &b)
     VkMemoryRequirements req = {};
     VkImage image = a.image(memory, 0, VK_IMAGE_TILING_OPTIMAL, VK_FORMAT_R8G8B8A8_UNORM, s.width, s.height, 1, req);
     const Calls viewed = Calls::now();
-    snprintf(line, sizeof line, "writer first: the optimal image (%llu bytes, the layout's %llu) took the import's VA: no VmBind (%lu)",
+    snprintf(line, sizeof line,
+             "writer first: the optimal image (%llu bytes, the layout's %llu) took the import's VA: no VmBind (%lu)",
              (unsigned long long)req.size, (unsigned long long)l.bytes, viewed.binds - before.binds);
     expect(image && req.size == l.bytes && viewed == before, line);
     std::vector<uint8_t> got;
@@ -125,8 +125,7 @@ void writerFirst(const Vk &a, const Vk &b)
     snprintf(line, sizeof line, "another process: its import is answered tiled (%u)", layoutB);
     expect(memoryB && layoutB == TegraGM20BLayoutTiled, line);
     const Calls beforeB = Calls::now();
-    VkImage imageB =
-        b.image(memoryB, 0, VK_IMAGE_TILING_OPTIMAL, VK_FORMAT_R8G8B8A8_UNORM, s.width, s.height, 1, req);
+    VkImage imageB = b.image(memoryB, 0, VK_IMAGE_TILING_OPTIMAL, VK_FORMAT_R8G8B8A8_UNORM, s.width, s.height, 1, req);
     expect(imageB && Calls::now() == beforeB, "another process: its optimal image took its import's VA: no VmBind");
     expect(imageB && b.read(imageB, 0, s.width, s.height, s.bpp, got) && got == t,
            "another process: its image reads the same texels");
@@ -170,8 +169,9 @@ void sweep(const Vk &vk)
                    {4, VK_FORMAT_R8G8B8A8_UNORM},
                    {8, VK_FORMAT_R16G16B16A16_UNORM},
                    {16, VK_FORMAT_R32G32B32A32_UINT}};
-    const uint32_t extents[][2] = {{1, 1},     {3, 2},     {17, 9},   {64, 8},     {100, 60},  {128, 128},
-                                   {333, 97},  {1280, 720}, {720, 1280}, {4096, 16}, {16, 4096}, {2048, 1536}};
+
+    const uint32_t extents[][2] = {{1, 1},    {3, 2},      {17, 9},     {64, 8},    {100, 60},  {128, 128},
+                                   {333, 97}, {1280, 720}, {720, 1280}, {4096, 16}, {16, 4096}, {2048, 1536}};
     unsigned cases = 0, bad = 0;
     for (const auto &f : formats)
         for (const auto &e : extents) {
@@ -184,8 +184,8 @@ void sweep(const Vk &vk)
             uint8_t *cpu = reinterpret_cast<uint8_t *>(at);
             VkDeviceMemory memory = vk.hostMemory(cpu, bytes);
             VkMemoryRequirements req = {};
-            VkImage image = memory ? vk.image(memory, 0, VK_IMAGE_TILING_OPTIMAL, f.format, e[0], e[1], 1, req)
-                                   : VK_NULL_HANDLE;
+            VkImage image =
+                memory ? vk.image(memory, 0, VK_IMAGE_TILING_OPTIMAL, f.format, e[0], e[1], 1, req) : VK_NULL_HANDLE;
             const std::vector<uint8_t> t = texels(e[0], e[1], f.bpp, cases);
             const bool same = image && req.size == l.bytes && vk.write(image, 0, e[0], e[1], t) &&
                               !memcmp(cpu, tiledBytes(l, t).data(), l.bytes);

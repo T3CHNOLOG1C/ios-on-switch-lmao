@@ -32,7 +32,8 @@ extern "C" unsigned long mock_iokit_kind_maps(unsigned kind);
 namespace {
 int failures, holds, drops;
 
-void missing(const char *, const char *) {}
+void missing(const char *, const char *)
+{}
 
 void expect(bool ok, const char *what)
 {
@@ -95,20 +96,21 @@ void chain()
     expect(k.importPages(cpu, bytes, bo) && k.bindImport(cpu, bo, raw::fx::kBlockLinearKind),
            "chain: the chunk is bound under the block-linear kind");
     const Calls before = Calls::now();
-    const switch_foreign_memory memory = {cpu, bo.bytes, bo.handle, bo.vaBase, raw::fx::kBlockLinearKind, hold, drop,
-                                          nullptr};
+    const switch_foreign_memory memory = {cpu,  bo.bytes, bo.handle, bo.vaBase, raw::fx::kBlockLinearKind,
+                                          hold, drop,     nullptr};
     id<MTLBuffer> buffer = native_bridge_metal_buffer_over_foreign(&memory, cpu, bytes, MTLResourceStorageModeShared);
-    id<MTLTexture> t = buffer ? native_bridge_metal_texture_tiled_in_place(
-                                    buffer, descriptor(w, h, levels, MTLTextureUsageShaderRead), 0)
-                              : nil;
+    id<MTLTexture> t =
+        buffer
+            ? native_bridge_metal_texture_tiled_in_place(buffer, descriptor(w, h, levels, MTLTextureUsageShaderRead), 0)
+            : nil;
     const Calls after = Calls::now();
     char line[200];
     snprintf(line, sizeof line,
              "chain: a %u-level texture over it, with no BoImport (%lu), BoAlloc (%lu) or VmBind (%lu)",
              unsigned(t.mipmapLevelCount), after.imports - before.imports, after.allocs - before.allocs,
              after.binds - before.binds);
-    expect(t && t.mipmapLevelCount == levels && after.imports == before.imports &&
-               after.allocs == before.allocs && after.binds == before.binds,
+    expect(t && t.mipmapLevelCount == levels && after.imports == before.imports && after.allocs == before.allocs &&
+               after.binds == before.binds,
            line);
     t = nil;
     buffer = nil;
@@ -139,10 +141,10 @@ void writerFirst(id<MTLDevice> m2v)
     const std::vector<uint8_t> rows = texels(w * h * 4, 3);
     IOSurfaceRef s = surface(w, h, rows);
     const Calls before = Calls::now();
-    id<MTLTexture> t = [m2v newTextureWithDescriptor:descriptor(w, h, 1, MTLTextureUsageRenderTarget |
-                                                                           MTLTextureUsageShaderRead)
-                                           iosurface:s
-                                               plane:0];
+    id<MTLTexture> t =
+        [m2v newTextureWithDescriptor:descriptor(w, h, 1, MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead)
+                            iosurface:s
+                                plane:0];
     const Calls after = Calls::now();
     tgm_layout l;
     tgm_layout_tiled(w, h, 4, &l);

@@ -52,7 +52,7 @@ static atomic_uint nbo = 1;
 static uint32_t submitted[16];
 static uint32_t *fence; /* the fence page, one uint32 per channel at slot*16 */
 static atomic_ulong calls[16];
-static atomic_ulong import_maps; /* VmBind map ops onto imported pages */
+static atomic_ulong import_maps;    /* VmBind map ops onto imported pages */
 static atomic_ulong kind_maps[256]; /* VmBind map ops by PTE kind */
 
 /* Surfaces' layouts (method 16), by surface ID */
@@ -65,6 +65,7 @@ static struct surface_layout {
     int tiled;
     struct tgm_layout layout;
 } surfaces[kSurfaces];
+
 static pthread_mutex_t surfaces_lock = PTHREAD_MUTEX_INITIALIZER;
 
 /* Order and the asynchronous GPU (gpu_lock) */
