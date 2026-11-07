@@ -6047,7 +6047,7 @@ size_t raw_metal_rates(char *out, size_t size)
     // replay= and rclean= per m2v submission: whole command buffers and split ones' m2v segments
     const uint64_t aborts = s.aborted.load() - gRates.aborted, segs = s.splitM2v.load() - gRates.splitM2v,
                    m2vs = f + segs ? f + segs : 1;
-    char diag[512];
+    char diag[768];
     snprintf(diag, sizeof diag,
              " sp=%llu/%llu abortenc=%.0fus/a replay=%.0fus/m rclean=%.0fKB/m rt128=%llu(pitch %u va&255 %u) lvl=%llu "
              "mir=%llu/%llu why=%s",
@@ -6063,14 +6063,18 @@ size_t raw_metal_rates(char *out, size_t size)
     {
         const size_t used = strlen(diag);
         snprintf(diag + used, sizeof diag - used,
-                 " rsplit=%.0f/%.0f/%.0fus/m rmax=%lluus fb=%llu/%llu/%llu/%llu(%s) clr=%llu/%llu",
+                 " rsplit=%.0f/%.0f/%.0fus/m rmax=%lluus fb=%llu/%llu/%llu/%llu(%s) clr=%llu/%llu"
+                 " so=%llu/%llu/%llu/%lluus",
                  (s.replaySlotUs.exchange(0) / double(m2vs)), (s.replayTwinUs.exchange(0) / double(m2vs)),
                  (s.replayCommitUs.exchange(0) / double(m2vs)), (unsigned long long)s.replayMaxUs.exchange(0),
                  (unsigned long long)k.fetchBarriers.exchange(0), (unsigned long long)k.fetchBarriersElided.exchange(0),
                  (unsigned long long)k.fetchBarriersAnyColor.exchange(0),
                  (unsigned long long)k.fetchBarriersInterlocked.exchange(0),
                  raw::Device::fetchBarrierName(gRM->raw->fetchBarrier.load(std::memory_order_relaxed)),
-                 (unsigned long long)k.clears.exchange(0), (unsigned long long)k.clearsElided.exchange(0));
+                 (unsigned long long)k.clears.exchange(0), (unsigned long long)k.clearsElided.exchange(0),
+                 (unsigned long long)k.selfOverlapSplit.exchange(0), (unsigned long long)k.selfOverlapRuns.exchange(0),
+                 (unsigned long long)k.selfOverlapUnbounded.exchange(0),
+                 (unsigned long long)(k.selfOverlapNs.exchange(0) / 1000));
     }
 #endif
     gRates.abortUs = s.abortUs.load();

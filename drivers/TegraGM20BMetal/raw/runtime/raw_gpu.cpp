@@ -2073,6 +2073,18 @@ bool RenderEncoder::draw(uint32_t primitive, uint32_t first, uint32_t count, uin
     readBits_ |= pl->fetchBits;
     if (!count || !instances)
         return true;
+    const Runs &runs = selfRuns(*pl, primitive, first, count, instances);
+    if (!runs.empty()) {
+        for (const auto &[begin, end] : runs) {
+            if (!prepare(pl, primitive, first + begin, first + begin, end - begin, baseInstance, false, why))
+                return false;
+            p_.m(BEGIN, 0);
+            p_.inc(VERTEX_ARRAY_START, {first + begin, end - begin});
+            p_.m(END, 0);
+        }
+        cb_->draws++;
+        return true;
+    }
     if (!prepare(pl, primitive, first, first, count, baseInstance, false, why))
         return false;
     for (uint32_t i = 0; i < instances; i++) {
@@ -2082,6 +2094,36 @@ bool RenderEncoder::draw(uint32_t primitive, uint32_t first, uint32_t count, uin
     }
     cb_->draws++;
     return true;
+}
+
+// The runs a draw that fetches a color it writes is drawn as, where its own triangles may cover a pixel twice
+// (raw_overlap.h); empty: it is drawn whole. The indexed draw being prepared sets drawIndices_ first
+const RenderEncoder::Runs &RenderEncoder::selfRuns(const Pipeline &pl, uint32_t primitive, uint32_t first,
+                                                   uint32_t count, uint32_t instances)
+{
+    static thread_local Runs runs;
+    static thread_local TriangleRuns triangles;
+    runs.clear();
+    if (!(pl.fetchBits & pl.writeBits) || (primitive != 3 && primitive != 4) || count <= 3)
+        return runs;
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    const auto start = std::chrono::steady_clock::now();
+#endif
+    const bool told = instances == 1 &&
+                      triangles.split(geometry(pl, primitive, first, count, {0, 0, ~0u, ~0u}), primitive == 4, runs);
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    dev_->stats.selfOverlapNs += uint64_t(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count());
+    if (!told)
+        dev_->stats.selfOverlapUnbounded++;
+    else if (!runs.empty()) {
+        dev_->stats.selfOverlapSplit++;
+        dev_->stats.selfOverlapRuns += runs.size();
+    }
+#else
+    (void)told;
+#endif
+    return runs;
 }
 
 // The largest index of `count` indices of type T at `at` (any alignment), restarts (all ones) left out; 0 for none.
@@ -2131,23 +2173,30 @@ bool RenderEncoder::drawIndexed(uint32_t primitive, uint32_t count, uint32_t ind
     drawIndices_ = at;
     drawIndexSize_ = indexSize;
     drawIndexCount_ = count;
-    const bool prepared = prepare(pl, primitive, 0, 0, most + 1, 0, true, why);
-    drawIndices_ = nullptr;
-    if (!prepared)
-        return false;
-    const uint64_t va = ib->va + offset, end = va + uint64_t(count) * indexSize - 1;
-    if (va != ibVa_ || end != ibEnd_ || indexSize != ibSize_) {
-        p_.inc(INDEX_BUFFER_A, {uint32_t(va >> 32), uint32_t(va), uint32_t(end >> 32), uint32_t(end)});
-        p_.m(DA_PRIMITIVE_RESTART_INDEX, indexSize == 2 ? 0xffffu : 0xffffffffu);
-        cb_->restart_ = indexSize == 2 ? 0xffffu : 0xffffffffu;
-        p_.m(INDEX_BUFFER_E, indexSize == 2 ? 1 : 2);  // INDEX_SIZE TWO_BYTES / FOUR_BYTES
-        ibVa_ = va;
-        ibEnd_ = end;
-        ibSize_ = indexSize;
+    const Runs &runs = selfRuns(*pl, primitive, 0, count, 1);
+    const uint32_t parts = runs.empty() ? 1 : uint32_t(runs.size());
+    for (uint32_t r = 0; r < parts; r++) {
+        const uint32_t begin = runs.empty() ? 0 : runs[r].first, end = runs.empty() ? count : runs[r].second;
+        drawIndices_ = at + uint64_t(begin) * indexSize;
+        drawIndexCount_ = end - begin;
+        const bool prepared = prepare(pl, primitive, 0, 0, most + 1, 0, true, why);
+        drawIndices_ = nullptr;
+        if (!prepared)
+            return false;
+        const uint64_t va = ib->va + offset, last = va + uint64_t(count) * indexSize - 1;
+        if (va != ibVa_ || last != ibEnd_ || indexSize != ibSize_) {
+            p_.inc(INDEX_BUFFER_A, {uint32_t(va >> 32), uint32_t(va), uint32_t(last >> 32), uint32_t(last)});
+            p_.m(DA_PRIMITIVE_RESTART_INDEX, indexSize == 2 ? 0xffffu : 0xffffffffu);
+            cb_->restart_ = indexSize == 2 ? 0xffffu : 0xffffffffu;
+            p_.m(INDEX_BUFFER_E, indexSize == 2 ? 1 : 2);  // INDEX_SIZE TWO_BYTES / FOUR_BYTES
+            ibVa_ = va;
+            ibEnd_ = last;
+            ibSize_ = indexSize;
+        }
+        p_.m(BEGIN, 0);
+        p_.inc(INDEX_BUFFER_F, {begin, end - begin});  // SET_INDEX_BUFFER_F (first index), DRAW_INDEX_BUFFER (count)
+        p_.m(END, 0);
     }
-    p_.m(BEGIN, 0);
-    p_.inc(INDEX_BUFFER_F, {0, count});  // SET_INDEX_BUFFER_F (first index), DRAW_INDEX_BUFFER (count)
-    p_.m(END, 0);
     cb_->draws++;
     return true;
 }

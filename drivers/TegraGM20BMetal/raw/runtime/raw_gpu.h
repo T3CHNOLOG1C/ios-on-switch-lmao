@@ -34,6 +34,7 @@
 #include "raw_kernel.h"
 #include "raw_pack.h"
 #include "raw_push.h"
+#include "raw_overlap.h"
 #include "raw_region.h"
 #include "raw_zeta.h"
 #include "raw_ycbcr.h"
@@ -354,6 +355,8 @@ private:
     WrittenRegion written_;
     // colors the pass's first draw overwrites whole and opaquely: their clears inside the render area are not needed
     uint8_t covered_ = 0;
+    using Runs = std::vector<std::pair<uint32_t, uint32_t>>;
+    const Runs &selfRuns(const Pipeline &pl, uint32_t primitive, uint32_t first, uint32_t count, uint32_t instances);
     const uint8_t *drawIndices_ = nullptr;
     uint32_t drawIndexSize_ = 0, drawIndexCount_ = 0;
     DrawGeometry geometry(const Pipeline &pl, uint32_t primitive, uint32_t first, uint32_t count,
@@ -638,6 +641,10 @@ public:
             fetchBarriersInterlocked{0};
         // Clear loads of colors, and those left out because the pass's first draw covers them (RenderEncoder::clears)
         std::atomic<uint64_t> clears{0}, clearsElided{0};
+        // draws that fetch a color they write (debug builds): split into runs where their own triangles may cover a pixel
+        // twice, and the runs; those of more than one triangle it could not tell apart (drawn whole, unordered within);
+        // the CPU time telling them (raw_overlap.h)
+        std::atomic<uint64_t> selfOverlapSplit{0}, selfOverlapRuns{0}, selfOverlapUnbounded{0}, selfOverlapNs{0};
         // channels made again after the kernel killed one
         std::atomic<uint64_t> reopens{0};
     } stats;
