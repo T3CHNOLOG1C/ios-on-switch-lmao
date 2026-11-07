@@ -10,6 +10,7 @@ The 26.5.2 kernelcache is fully stripped. Sources, strongest first:
      names that the same kext imported in iOS 17 in that interval, or the 26.5.2 KPI names (symbol sets) there,
      when the count matches exactly. Iterated over every kext until nothing changes.
   3. ipsw/symbolicator string signatures (Darwin 25.5): seeds for C functions, and a hold-out check of 1-2.
+  4. pinned_names.py: functions identified by hand for one kernelcache, before the GOT pass; any disagreement fails.
 Output: prelink26/kernel-names.json {address: name}, with per-source counts and conflicts.
 """
 import bisect, collections, itertools, json, os, struct, sys
@@ -20,6 +21,7 @@ from kcinfo import KC, decode8
 from fileset import Fileset
 import kc17
 import paths
+import pinned_names
 
 KCPATH = paths.KERNELCACHE
 OURS = paths.OURS
@@ -196,6 +198,10 @@ def main():
     seed_all = bool(os.environ.get("NAMES_SEED_ALL"))
     for j, a in enumerate(seeds):
         if j % 2 == 0 or seed_all: assign(a, holdout[a], "symbolicator")
+    for a, n in pinned_names.names_for(KCPATH).items():
+        assign(a, n, "pinned")
+        if n not in oname or oname.get(names[a]) != oname[n]:
+            raise SystemExit("pinned name %s for %#x: not in our kernel, or named %s by %s" % (n, a, names[a], source[a]))
     # 2. GOT order
     d17, kn17, names17, kexts17, gots17 = kc17.load()
     universe = set(l.strip() for l in open(paths.work("symbolsets26.txt")))
