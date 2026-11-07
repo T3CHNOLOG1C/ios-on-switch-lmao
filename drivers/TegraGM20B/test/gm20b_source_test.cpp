@@ -98,10 +98,7 @@ TEST(GM20BPoolPolicySource, BoAllocNeverRefusesACoherentBoForPoolRoom)
 			    "if (!ret && bo->pool_va)"),
 		    Not(HasSubstr("kIOReturnNoMemory")));
 	EXPECT_THAT(client(), Not(HasSubstr("GPU pool BoAlloc of %llu KiB refused")));
-	// A system BO: never a spare's pages, its own size, a write-combined physical view over its pages.
-	EXPECT_THAT(alloc,
-		    HasSubstr("!ret && !system && !(in->flags & TegraGM20BBoContiguous) &&"));
-	EXPECT_THAT(alloc, HasSubstr("(in->flags & TegraGM20BBoContiguous) || system"));
+	// A system BO: a write-combined physical view over its pages.
 	EXPECT_THAT(
 		Between(alloc, "if (!ret && bo->bmd && system) {", "} else if (!ret && bo->bmd) {"),
 		HasSubstr("kIOMemoryTypePhysical64) | kPoolCacheMode"));
@@ -117,7 +114,7 @@ TEST(GM20BPoolPolicySource, SystemBosGoAsPoolViewsDo)
 	EXPECT_THAT(
 		release,
 		HasSubstr(
-			"!bo->system && !(bo->flags & TegraGM20BBoContiguous) &&"));  // never a spare
+			"!bo->system && !(bo->flags & TegraGM20BBoContiguous) &&"));  // its spare goes by its orphan
 	expectBefore(flat(definition(client(), "void releaseOrphans()")),
 		     "orphan->view->release();", "orphan->backing->release();");
 	// Never read through the cacheable alias: the stats and a hang's line both read pushes through pushView.
@@ -127,6 +124,49 @@ TEST(GM20BPoolPolicySource, SystemBosGoAsPoolViewsDo)
 		    HasSubstr("pushView(va, bytes, hit)"));
 	EXPECT_THAT(flat(definition(client(), "int AGXDeviceUserClient::hungInterlocks(")),
 		    HasSubstr("pushView(va[i], uint64_t(dwords[i]) * 4, hit)"));
+}
+
+// A system BO takes a ready spare as a cached BO does, and its pages go back to the spares once its view is released.
+// Every source leaves the pages in one state: zero in DRAM, no line in the cacheable kernel alias (cleanZeros: KMA_ZERO's
+// zeros cleaned and invalidated, or a recycled spare zeroed through the alias and then cleaned and invalidated).
+TEST(GM20BPoolPolicySource, SystemBosTakeAndReturnSpares)
+{
+	const std::string alloc =
+		flat(definition(client(), "IOReturn AGXDeviceUserClient::boAlloc("));
+	EXPECT_THAT(alloc, HasSubstr("} else if (!ret && !(in->flags & TegraGM20BBoContiguous) && "
+				     "(spare = spareTake(in->bytes))) {"));
+	EXPECT_THAT(alloc, Not(HasSubstr("|| system ? kClasses")));
+	EXPECT_THAT(
+		alloc,
+		HasSubstr("(in->flags & TegraGM20BBoContiguous) ? kClasses : classUp(in->bytes);"));
+	EXPECT_THAT(alloc, HasSubstr("cleanZeros(va, backing, false);"));
+	EXPECT_THAT(flat(definition(client(), "Spare *spareMake(uint64_t bytes)")),
+		    HasSubstr("cleanZeros(bmd->getBytesNoCopy(), bytes, false);"));
+	const std::string work = flat(definition(
+		client(), "void spareWork(thread_call_param_t param, thread_call_param_t)"));
+	expectBefore(work, "cleanZeros(s->bmd->getBytesNoCopy(), s->bytes, true);",
+		     "p->ready[c] = s;");
+	const std::string zeros =
+		flat(definition(client(), "void cleanZeros(void *va, uint64_t bytes, bool zero)"));
+	expectBefore(zeros, "bzero(va, bytes);", "dc civac");
+	// A spare is only ever a BO's pages once no task maps them, nothing imports them (the view's release waits for
+	// every import's UPL) and the freeing connection's channels finished (reap).
+	const std::string orphans = flat(definition(client(), "void releaseOrphans()"));
+	expectBefore(orphans, "if (orphan->view->getRetainCount() > 1) {",
+		     "orphan->view->release();");
+	expectBefore(orphans, "orphan->view->release();",
+		     "spareKeep(orphan->backing, orphan->backingPas, orphan->backingBytes)");
+	EXPECT_THAT(orphans, HasSubstr("orphan->zero &&"));
+	EXPECT_THAT(flat(definition(client(), "bool spareKeep(IOBufferMemoryDescriptor *bmd, "
+					      "uint64_t *pas, uint64_t bytes)")),
+		    HasSubstr("bmd->getRetainCount() == 1"));
+	const std::string release =
+		flat(definition(client(), "void AGXDeviceUserClient::releaseBo(Bo *bo)"));
+	expectBefore(release, "tgm_mem_del(&bo->mem);", "bo->system ? bo->pas : nullptr");
+	EXPECT_THAT(release, HasSubstr("bo->system ? uint64_t(bo->backing_pages) << 12 : 0"));
+	const std::string free =
+		flat(definition(client(), "IOReturn AGXDeviceUserClient::boFree("));
+	expectBefore(free, "unbindOverlaps(binds_[i].va, binds_[i].range, bo);", "reap(false);");
 }
 
 TEST(GM20BPoolPolicySource, StatsNameThePoolHolders)

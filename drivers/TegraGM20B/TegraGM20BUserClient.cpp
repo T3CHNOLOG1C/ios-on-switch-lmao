@@ -63,8 +63,11 @@ struct PoolOrphan {
 	void *va;
 	uint64_t pa, bytes;
 	bool zero;  // a BO a client had: its pages are zeroed before they go back (poolZeroLater)
-	// a coherent BO from ordinary pages (tgm_pool::FromSystem): its pages, released after the view instead of va's
+	// a coherent BO from ordinary pages (tgm_pool::FromSystem): its pages, released after the view instead of va's, to
+	// the spares when a client had it (spareKeep), with their page list
 	IOBufferMemoryDescriptor *backing;
+	uint64_t *backingPas;
+	uint64_t backingBytes;
 };
 
 PoolOrphan *gPoolOrphans;
@@ -82,6 +85,7 @@ void pushOrphan(PoolOrphan *orphan)
 }
 
 bool poolZeroLater(void *va, uint64_t pa, uint64_t bytes);
+bool spareKeep(IOBufferMemoryDescriptor *bmd, uint64_t *pas, uint64_t bytes);
 
 // A view only we hold is mapped nowhere (an IOMemoryMap holds its descriptor), and nothing can map it any more. But
 // releasing it destroys its device pager's VM object, which first waits (uninterruptibly, vm_object_destroy ->
@@ -114,8 +118,13 @@ void releaseOrphans()
 			__atomic_sub_fetch(&gOrphans, 1, __ATOMIC_RELAXED);
 		}
 		if (orphan->backing) {
-			orphan->backing->complete();
-			orphan->backing->release();
+			// The view was its pages' only user mapping and import, so they go to the spares as a freed cached BO's do
+			if (!(orphan->zero && spareKeep(orphan->backing, orphan->backingPas,
+							orphan->backingBytes))) {
+				orphan->backing->complete();
+				orphan->backing->release();
+				IODelete(orphan->backingPas, uint64_t, orphan->backingBytes >> 12);
+			}
 		} else if (!(orphan->zero &&
 			     poolZeroLater(orphan->va, orphan->pa, orphan->bytes))) {
 			tgm_pool_free(orphan->va, orphan->bytes, orphan->pa);
@@ -934,13 +943,17 @@ void AGXDeviceUserClient::releaseBo(Bo *bo)
 			   bo->pool_pa,
 			   bo->bytes,
 			   bo->handle != 0,
-			   bo->system ? bo->bmd : nullptr};
+			   bo->system ? bo->bmd : nullptr,
+			   bo->system ? bo->pas : nullptr,
+			   bo->system ? uint64_t(bo->backing_pages) << 12 : 0};
 		if (bo->pool_va) {
 			__atomic_add_fetch(&gOrphanBytes, bo->bytes, __ATOMIC_RELAXED);
 			__atomic_add_fetch(&gOrphans, 1, __ATOMIC_RELAXED);
 		}
-		if (bo->system)
-			bo->bmd = nullptr;  // the orphan's now
+		if (bo->system) {  // the orphan's now
+			bo->bmd = nullptr;
+			bo->pas = nullptr;
+		}
 		pushOrphan(orphan);
 		scheduleOrphanRelease();
 	} else {
@@ -1068,8 +1081,9 @@ IOReturn AGXDeviceUserClient::boAlloc(const TegraGM20BAbiBoAlloc *in,
 	Spare *spare = nullptr;
 	const char *refused = nullptr;
 	// A coherent BO the pool does not serve (its tiers keep it out, or the pool has no room) is not refused: ordinary pages,
-	// made below as a cached BO's are (never a spare's: those are another BO's cacheable pages), mapped write-combined
-	// (tgm_pool::FromSystem). A refusal would abort clients such as VectorKit (on Maps' first 4 MiB buffer).
+	// a spare's or made below as a cached BO's are, mapped write-combined (tgm_pool::FromSystem). A refusal would abort
+	// clients such as VectorKit (on Maps' first 4 MiB buffer). A spare is in the state the made path's cleanZeros leaves:
+	// zero in DRAM and no line in its cacheable kernel alias, which nothing writes through while the BO lives.
 	bool system = false;
 	if (!ret && (in->flags & TegraGM20BBoCoherent)) {
 		refused = poolRefusal(in->bytes, pool_bytes_, critical_);
@@ -1101,7 +1115,7 @@ IOReturn AGXDeviceUserClient::boAlloc(const TegraGM20BAbiBoAlloc *in,
 				static_cast<IOOptionBits>(kIOMemoryTypePhysical64) | kPoolCacheMode,
 			TASK_NULL);
 		ret = bo->view ? kIOReturnSuccess : kIOReturnNoMemory;
-	} else if (!ret && !system && !(in->flags & TegraGM20BBoContiguous) &&
+	} else if (!ret && !(in->flags & TegraGM20BBoContiguous) &&
 		   (spare = spareTake(in->bytes))) {
 		// a spare: zeroed and cleaned already, its page list made; the BO is its first pages
 		IODelete(bo->pas, uint64_t, bo->npages);
@@ -1116,9 +1130,7 @@ IOReturn AGXDeviceUserClient::boAlloc(const TegraGM20BAbiBoAlloc *in,
 		// Made here only when no spare was ready (the class is kept warm from now on), at its class's size so that it
 		// serves the class again once freed; the BO is its first pages.
 		const uint32_t c =
-			(in->flags & TegraGM20BBoContiguous) || system
-				? kClasses
-				: classUp(in->bytes);  // (a system BO is never a spare: its own size)
+			(in->flags & TegraGM20BBoContiguous) ? kClasses : classUp(in->bytes);
 		const uint64_t backing = c < kClasses ? classBytes(c) : in->bytes;
 		if (backing != in->bytes) {
 			IODelete(bo->pas, uint64_t, bo->npages);
@@ -1163,8 +1175,9 @@ IOReturn AGXDeviceUserClient::boAlloc(const TegraGM20BAbiBoAlloc *in,
 	if (!ret && bo->bmd && system) {
 		// a coherent BO from ordinary pages: its task's view is a physical descriptor over them, write-combined as a pool
 		// BO's (kPoolCacheMode: IOKit takes a physical descriptor's user cache mode from the descriptor), one range a run
-		// of contiguous pages. The pages' cacheable kernel mapping holds no line of them (cleanZeros dropped the zeros'),
-		// and nothing here writes through it again. Released as a pool view is (releaseBo: orphan, then its backing).
+		// of contiguous pages. The pages' cacheable kernel mapping holds no line of them (cleanZeros dropped the zeros',
+		// here or when the spare was made or recycled), and nothing writes through it while the BO lives. Released as a
+		// pool view is (releaseBo: orphan, then its backing to the spares).
 		uint32_t runs = 0;
 		for (uint32_t i = 0; i < bo->npages; i++)
 			runs += !i || bo->pas[i] != bo->pas[i - 1] + 4096;

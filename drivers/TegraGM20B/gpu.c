@@ -28,6 +28,7 @@
 #include <engine/fifo.h>
 #include <engine/fifo/runl.h> /* nvkm_runl_chan_get_chid, nvkm_runl_rc_cgrp: client fault isolation */
 #include <engine/fifo/cgrp.h> /* nvkm_cgrp.rc: a channel nvkm itself put into recovery */
+#include <engine/fifo/runq.h> /* nvkm_runq.id: the engine list's PBDMAs */
 #include <core/gpuobj.h>      /* nvkm_wo32 on a channel's RAMFC: compositor timeslice */
 #include <engine/gr.h>
 #include <subdev/acr.h>
@@ -4413,6 +4414,37 @@ static void scrub_stats(char *buf, unsigned int len, u64 window_ms)
 		  nvxnu_pool_dirty_free_pages() << (PAGE_SHIFT - 10));
 }
 
+/* PTOP's engine list as nvkm parsed it (gk104_top_parse) and the PBDMAs serving each runlist: a copy engine on GR's
+ * runlist (the GRCE) waits for the 3D engine at every switch of a channel to it; one on a runlist of its own overlaps. */
+static void log_engines(void)
+{
+	struct nvkm_device *device = gpu.device;
+	struct nvkm_top_device *tdev;
+	struct nvkm_runl *runl;
+	char line[256];
+	unsigned int at = 0;
+	int i;
+
+	if (!device->top || !device->fifo)
+		return;
+	list_for_each_entry(tdev, &device->top->device, head)
+	{
+		at += scnprintf(line + at, sizeof(line) - at,
+				"%s%s%d engine %d runlist %d fault %d reset %d intr %d",
+				at ? "; " : "",
+				tdev->type < NVKM_SUBDEV_NR ? nvkm_subdev_type[tdev->type] : "?",
+				tdev->inst, tdev->engine, tdev->runlist, tdev->fault, tdev->reset,
+				tdev->intr);
+	}
+	nvkm_runl_foreach(runl, device->fifo)
+	{
+		at += scnprintf(line + at, sizeof(line) - at, "; runlist %d pbdma", runl->id);
+		for (i = 0; i < runl->runq_nr; i++)
+			at += scnprintf(line + at, sizeof(line) - at, " %d", runl->runq[i]->id);
+	}
+	nvxnu_log("tegra-gm20b: engines: %s\n", line);
+}
+
 static int m3(char *line, unsigned int len)
 {
 	struct tgm_vm *vm = NULL;
@@ -4935,6 +4967,8 @@ int tgm_bringup(int stage, char *line, unsigned int len)
 		if (ret)
 			return ret;
 		gpu.stage = 3;
+		if (stats_on())
+			log_engines();
 		if (tgm_all_clients())
 			iso.deadline = nvxnu_work_alloc(iso_deadline, NULL);
 		nvxnu_errors_fatal(iso.deadline ? errors_contained : NULL);
