@@ -205,6 +205,14 @@ boot_package(
         "//conditions:default": ":smp",
     }),
     static_trust = "//ipsw:static_system_trust",
+    xcode_env = select({
+        "//install:from_release": None,
+        "//conditions:default": "@xcode//:xcode.env",
+    }),
+    xcode_identity = select({
+        "//install:from_release": None,
+        "//conditions:default": "@xcode//:identity",
+    }),
 )
 
 # The loader and the window constants it was compiled for (constants.json: layout.h's and runs.h's), which the release
