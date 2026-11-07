@@ -151,8 +151,6 @@ def _product(tree: list) -> None:
         ('app-macho-architecture', b'arm64\0'),
         ('framebuffer-identifier', b'0\0'),
         ('display-mirroring', u32(1)),
-        ('ui-background-quality', u32(100)),
-        ('ui-weather-quality', u32(100)),
     ):
         put(product, key, value)
     put(child(product, 'audio'), 'wireless-splitter', u32(1))  # as UniXNU's 21H461 profile
