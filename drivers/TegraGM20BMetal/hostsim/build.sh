@@ -8,6 +8,8 @@
 # memory_frontend.mm: what a client's GPU memory costs it as iOS charges it (iokit_mapped), memoryless textures sharing a
 # backing, and the idle blocks going back: <outdir>/memory_frontend <nvk> <cache> [<width>x<height> ...] (default: the widgets of
 # WidgetRenderer's 23:44 memory warning).
+# exec_surfaces.mm: each submission names the host imports it uses (ExecSurfaces), written or read: <outdir>/exec_surfaces <nvk>
+# <cache>.
 # alias_frame.mm: m2v's views of the raw path's memory are that memory, and an IOSurface is imported once, over raw/pack's mock
 # GPU instead (its copy engine runs through the mock VM): <outdir>/gpu/alias_frame <cache> <nvk>.
 # nvk_alias.cpp: a raw texture's span and a raw mip chain are NVK images in place, at the raw path's VA and in its layout:
@@ -34,6 +36,10 @@ xcrun clang++ -O1 -g -std=c++17 -fobjc-arc -Wno-deprecated-declarations -I "$TRE
     -x objective-c++ "$HERE/memory_frontend.mm" "$TREE/drivers/NativeMetal/NativeBridgeMetalFrontend.mm" -x none "$1" \
     -L "$2" -lmock_iokit -Wl,-rpath,"$2" -lobjc -framework Foundation -framework Metal -framework IOSurface -framework IOKit \
     -o "$2/memory_frontend"
+xcrun clang++ -O1 -g -std=c++17 -fobjc-arc -Wno-deprecated-declarations -I "$TREE/drivers/NativeMetal" -I "$TREE/drivers/TegraGM20B" \
+    -I "$HERE" -x objective-c++ "$HERE/exec_surfaces.mm" "$TREE/drivers/NativeMetal/NativeBridgeMetalFrontend.mm" -x none "$1" \
+    -L "$2" -lmock_iokit -Wl,-rpath,"$2" -lobjc -framework Foundation -framework Metal -framework IOSurface -framework IOKit \
+    -o "$2/exec_surfaces"
 RAW=$HERE/../raw
 GPU=$2/gpu
 mkdir -p "$GPU"

@@ -21,7 +21,20 @@ struct mock_memory {
     uint64_t bind_refusals;          // VmBind ops the kernel's checks refuse
 };
 
+// The last ExecSurfaces record (method 17) and how many came
+struct mock_exec_surfaces {
+    uint64_t lists;
+    uint32_t count, flags;
+    struct {
+        uint64_t handle;
+        uint32_t access;
+    } uses[64];
+};
+
 void mock_iokit_memory(struct mock_memory *out);
+void mock_iokit_exec_surfaces(struct mock_exec_surfaces *out);
+// The live BoImport of the pages at `address`, 0 if none
+uint64_t mock_iokit_import_handle(const void *address);
 void mock_iokit_report(void);
 
 #ifdef __cplusplus

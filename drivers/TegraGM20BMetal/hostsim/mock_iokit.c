@@ -4,6 +4,7 @@
 // refuses (TegraGM20BUserClient.cpp's run() and vmBind()), so a bind past the end of a BO fails here as on the device.
 #include <IOKit/IOKitLib.h>
 #include <fcntl.h>
+#include <pthread.h>
 #include <stdatomic.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -46,6 +47,8 @@ static struct mock_memory memory;
 static uint32_t submitted[16];
 static uint32_t *fence; /* the fence page, one uint32 per channel at slot*16 */
 static atomic_ulong calls[16];
+static struct mock_exec_surfaces exec_surfaces;
+static pthread_mutex_t exec_surfaces_lock = PTHREAD_MUTEX_INITIALIZER;
 
 static io_service_t mock_get(mach_port_t main, CFDictionaryRef matching)
 {
@@ -149,7 +152,7 @@ static kern_return_t mock_call(mach_port_t c, uint32_t sel, const void *in, size
     switch (sel) {
     case TegraGM20BMethodGetInfo: {
         struct TegraGM20BAbiInfo i = {.abi_version = TegraGM20BAbiVersion,
-                                      .flags = TegraGM20BInfoHostImport,
+                                      .flags = TegraGM20BInfoHostImport | TegraGM20BInfoExecSurfaces,
                                       .chipset = 0x12b,
                                       .gpc_count = 1,
                                       .tpc_count = 2,
@@ -238,6 +241,23 @@ static kern_return_t mock_call(mach_port_t c, uint32_t sel, const void *in, size
         memcpy(out, &r, sizeof(r));
         return KERN_SUCCESS;
     }
+    case TegraGM20BMethodExecSurfaces: {
+        const struct TegraGM20BAbiExecSurfaces *e = in;
+        const size_t head = offsetof(struct TegraGM20BAbiExecSurfaces, uses);
+        if (insz < head || e->count > TegraGM20BMaxExecSurfaces ||
+            insz < head + e->count * sizeof(struct TegraGM20BAbiSurfaceUse))
+            return kIOReturnBadArgument;
+        pthread_mutex_lock(&exec_surfaces_lock);
+        exec_surfaces.lists++;
+        exec_surfaces.count = e->count;
+        exec_surfaces.flags = e->flags;
+        for (uint32_t i = 0; i < e->count; i++) {
+            exec_surfaces.uses[i].handle = e->uses[i].handle;
+            exec_surfaces.uses[i].access = e->uses[i].access;
+        }
+        pthread_mutex_unlock(&exec_surfaces_lock);
+        return KERN_SUCCESS;
+    }
     case TegraGM20BMethodWaitFence:
         return KERN_SUCCESS;
     case TegraGM20BMethodGetTimestamp: {
@@ -296,6 +316,21 @@ static kern_return_t mock_unmap(io_connect_t c, uint32_t type, task_port_t t, ma
 void mock_iokit_memory(struct mock_memory *out)
 {
     *out = memory;
+}
+
+void mock_iokit_exec_surfaces(struct mock_exec_surfaces *out)
+{
+    pthread_mutex_lock(&exec_surfaces_lock);
+    *out = exec_surfaces;
+    pthread_mutex_unlock(&exec_surfaces_lock);
+}
+
+uint64_t mock_iokit_import_handle(const void *address)
+{
+    for (unsigned h = atomic_load(&nbo); h-- > 1;)
+        if (bos[h].import == address && bos[h].bytes)
+            return h;
+    return 0;
 }
 
 void mock_iokit_report(void)
