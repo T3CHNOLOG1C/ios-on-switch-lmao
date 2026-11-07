@@ -90,6 +90,7 @@
 #include "SwitchBacklightMath.h"
 #include "SwitchBrightness.h"
 #include "../SwitchSuspend/SwitchWake.h"
+#include "../TegraGM20B/TegraGM20BSleep.h"
 
 // The original AppleARMBacklight::gMetaClass (original-bindings.S), declared with a concrete type so that its address is
 // a constant initializer. Nothing here constructs or calls it.
@@ -340,6 +341,7 @@ void SwitchBacklight::powerOff()
         IOLog("SwitchBacklight: panel off failed (%d): the display is not running\n", err);
     const uint64_t panel = mach_absolute_time();
     scanoutStopped = native_legacy_display_set_scanout(false);
+    tegra_gm20b_display_power(false);
     panelOn = false;
     sentRaw = ~0u;
     switch_power_journal(
@@ -353,6 +355,7 @@ void SwitchBacklight::powerOff()
 void SwitchBacklight::powerOn()
 {
     const uint64_t start = mach_absolute_time();
+    tegra_gm20b_display_power(true);   // the GPU's rail comes up on its own thread call while the panel wakes
     switch_touch_display_power(true);  // the controller comes up on its own work loop while the panel wakes
     const uint64_t touch = mach_absolute_time();
     if (scanoutStopped && !native_legacy_display_set_scanout(true)) {
@@ -556,8 +559,10 @@ void SwitchBacklight::expectWake(unsigned source)
     IOLockLock(requestLock);
     const bool armed = switch_wake_guard_arm(&guard, source, mach_absolute_time(), guardTimeout, gDisplayOn || wantOn);
     IOLockUnlock(requestLock);
-    if (armed)
+    if (armed) {
         guardTimer->setTimeoutMS(SWITCH_WAKE_GUARD_MS);
+        tegra_gm20b_display_expected();
+    }
 }
 
 bool SwitchBacklight::start(IOService *provider)

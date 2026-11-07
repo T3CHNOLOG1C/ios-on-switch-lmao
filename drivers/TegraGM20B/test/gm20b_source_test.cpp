@@ -537,6 +537,47 @@ TEST(GM20BTlbSource, MapsOrderedOnTheGpuRemovalsSynchronous)
 		    HasSubstr("mmu_invalidate_all();"));
 }
 
+// Rail-gating (TegraGM20BRail.h): every other gpu.lock taker goes through gpu_lock(), which wakes a rail-gated GPU in
+// the caller under the lock it took; the rail-up opens the gate before it clears `railed`, so a closer that has seen the
+// GPU up never has its close undone (gm20b_rail_test's model).
+TEST(GM20BRailSource, GpuLockWakesARailGatedGpu)
+{
+	EXPECT_EQ(Count(gpu(), "mutex_lock(&gpu.lock);"), 6u)
+		<< "gpu_lock, tgm_timestamp_ns, tgm_sleep, tgm_rail_down, tgm_rail_up, "
+		   "tgm_rail_sc7_hold";
+	EXPECT_THAT(
+		flat(definition(gpu(), "static noinline void gpu_lock(void)")),
+		HasSubstr(
+			"if (unlikely(gpu.railed)) rail_up_locked(__builtin_return_address(0));"));
+	expectBefore(flat(definition(gpu(), "static void rail_up_locked(const void *site)")),
+		     "gate_open();", "__atomic_store_n(&gpu.railed, 0, __ATOMIC_SEQ_CST);");
+	// rail_up_locked takes these under the caller's gpu.lock: no gpu_lock() caller may hold one
+	const std::string &text = gpu();
+	for (size_t at = text.find("\tgpu_lock();"); at != std::string::npos;
+	     at = text.find("\tgpu_lock();", at + 1)) {
+		const size_t body = text.rfind("\n{\n", at);
+		const std::string before = text.substr(body, at - body);
+		for (const char *lock : {"(&live_lock)", "(idle.clk)", "(&gate_lock)"})
+			EXPECT_EQ(Count(before, std::string("mutex_lock") + lock),
+				  Count(before, std::string("mutex_unlock") + lock))
+				<< lock << " held at the gpu_lock() at offset " << at;
+	}
+	// GPU time never backwards (gm20b_rail_test's model): the floor read before every power-down, PTIMER reseeded to it
+	// after nvkm_timer_init, every time handed out clamped to it
+	expectBefore(
+		flat(definition(gpu(), "static void sleep_nvkm(void)")),
+		"stamp_last = tgm_stamp_monotonic(stamp_last, nvkm_timer_read(device->timer));",
+		"nvkm_device_fini(device, NVKM_SUSPEND)");
+	expectBefore(flat(definition(gpu(), "static void wake_m1(void)")),
+		     "ret = nvkm_subdev_init(&device->timer->subdev);", "stamp_reseed(device);");
+	EXPECT_THAT(flat(definition(gpu(), "uint64_t tgm_timestamp_ns(void)")),
+		    HasSubstr("stamp_last = t = tgm_stamp_monotonic(stamp_last, t);"));
+	const std::string down = flat(definition(gpu(), "int tgm_rail_down(void)"));
+	expectBefore(down, "sleep_gate();", "mutex_lock(&gpu.lock);");
+	expectBefore(down, "__atomic_store_n(&gpu.railed, 1, __ATOMIC_SEQ_CST);",
+		     "nvxnu_wakeup(&sc7_gate.shut);");
+}
+
 TEST(GM20BSleepSource, SleepAndWakeOrder)
 {
 	const std::string body = flat(definition(gpu(), "void tgm_sleep(void)"));

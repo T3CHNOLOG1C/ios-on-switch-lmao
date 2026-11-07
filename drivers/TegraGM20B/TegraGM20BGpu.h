@@ -33,6 +33,21 @@ int tgm_bringup(int stage, char *line, unsigned int len);
  * reached; each step is one tgm_journal() line, and a step that cannot be done panics with one line. */
 void tgm_sleep(void);
 void tgm_wake(void);
+/* Rail-gating (TegraGM20BRail.h), thread context. down: the GPU off with gpu.lock released, 0 or -EBUSY (no M3); up:
+ * back if it is down (a gpu.lock or gate caller wakes it the same way, under the lock it owns); railed: whether it is
+ * down. sc7_hold/release: system sleep with the GPU down holds gpu.lock across it on SwitchSuspend's thread (1), or
+ * takes tgm_sleep's path (0). idle: gpu.c's idle clock reached (its work item); idle_now: at the idle clock, or none. */
+int tgm_rail_down(void);
+void tgm_rail_up(void);
+int tgm_railed(void);
+int tgm_rail_sc7_hold(void);
+void tgm_rail_sc7_release(void);
+void tgm_rail_idle(void);
+int tgm_idle_now(void);
+/* TegraGM20B.cpp, around every rail-up, under gpu.lock (never block): one starts (SwitchThermal holds its CPU raise), one
+ * is done (`demand`: work woke the GPU, not the display). */
+void tgm_rail_moving(void);
+void tgm_rail_moved(int demand);
 /* One power-journal line (TegraGM20B.cpp: drivers/SwitchSuspend switch_power_journal). Thread context. */
 void tgm_journal(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 int tgm_stage(void);

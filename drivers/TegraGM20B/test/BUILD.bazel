@@ -27,6 +27,9 @@
 #   gm20b_source_test        how the user client and gpu.c use both, the pool's zeroing (nvkm shim, scrubber), the
 #                            fence-only present, and which paths go through the sleep gate in what order (none of which a
 #                            host model runs); NVK's stencil copy temp on the bind alignment
+#   gm20b_rail_test          TegraGM20BRail.h: the rail goes down with the display off and the GPU idle, once a demand's
+#                            hold has run out, up on its thread call only for the display, never while system sleep holds it;
+#                            gpu.c's lock protocol on threads; GPU time never backwards across rail cycles
 #   gm20b_clkgate_test       TegraGM20BClkgate.h against nvgpu's gm20b_gating_reglist.c (nvidia/, verbatim): the SLCG and
 #                            BLCG writes are nvgpu's prod lists in its load order; ELCG's gate control; where gpu.c
 #                            applies them
@@ -91,6 +94,16 @@ host_test(
         'GPU_C=\\"$(rootpath //drivers/TegraGM20B:gpu.c)\\"',
         'REGLIST=\\"$(rootpath //drivers/TegraGM20B:nvidia/gm20b_gating_reglist.c)\\"',
     ],
+)
+
+host_test(
+    name = "gm20b_rail_test",
+    srcs = [
+        "gm20b_rail_test.cpp",
+        "//drivers/TegraGM20B:TegraGM20BRail.h",
+        "//drivers/TegraGM20B:TegraGM20BSleepGate.h",
+    ],
+    cxx_std = "c++17",
 )
 
 host_test(
