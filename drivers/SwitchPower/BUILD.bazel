@@ -55,11 +55,14 @@ kernel_driver(
     srcs = [
         "SwitchPMIC.cpp",
         "SwitchPowerMark.cpp",
+        "SwitchMonotonicClock.cpp",
     ],
     hdr_deps = [
         "diagnostics/switch",
         "drivers/SwitchBrightness",
         "drivers/TegraBPMP",
         "drivers/TegraI2C",
+        "kits/SwitchCAR",
+        "kits/SwitchMMIO",
     ],
 )

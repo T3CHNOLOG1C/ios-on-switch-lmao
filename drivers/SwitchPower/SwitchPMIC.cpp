@@ -73,6 +73,7 @@
 #include "../TegraI2C/TegraI2C.h"
 #include "SwitchClocks.h"
 #include "SwitchMAX77620.h"
+#include "SwitchMonotonicClock.h"
 #include "SwitchPower.h"
 
 extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
@@ -381,6 +382,8 @@ public:
     void getUTCTimeOfDay(clock_sec_t *secs, clock_nsec_t *nsecs) override;
     void setUTCTimeOfDay(clock_sec_t secs, clock_nsec_t nsecs) override;
     void setAlarmEnable(IOOptionBits message) override;
+    IOReturn getMonotonicClockAndTimestamp(uint64_t *usecs, uint64_t *machTime) override;
+    IOReturn getMonotonicClockOffset(int64_t *usecs) override;
     // System sleep (SwitchSuspend): powerd's next scheduled wake as ALARM1 before SC7; after it, the wall clock is read
     // from the RTC again (mach time stood still while the SoC was off) and the alarm is turned off.
     void registerWakeSettings();
@@ -466,6 +469,16 @@ long SwitchRTC::getGMTTimeOfDay()
 void SwitchRTC::setGMTTimeOfDay(long secs)
 {
     setUTCTimeOfDay((clock_sec_t)secs, 0);
+}
+
+IOReturn SwitchRTC::getMonotonicClockAndTimestamp(uint64_t *usecs, uint64_t *machTime)
+{
+    return switch_monotonic_clock_read(usecs, machTime) ? kIOReturnSuccess : kIOReturnUnsupported;
+}
+
+IOReturn SwitchRTC::getMonotonicClockOffset(int64_t *usecs)
+{
+    return switch_monotonic_clock_offset(usecs) ? kIOReturnSuccess : kIOReturnUnsupported;
 }
 
 // No IORTC alarm messages: scheduled wakes come through the root domain's PM settings (registerWakeSettings), and
@@ -657,6 +670,17 @@ extern "C" void switch_rtc_suspend(void)
         gRTC->suspend();
 }
 
+extern "C" IOReturn switch_rtc_utc_usec(uint64_t *usec)
+{
+    if (!gRTC)
+        return kIOReturnNotReady;
+    clock_sec_t secs = 0;
+    clock_nsec_t nsecs = 0;
+    gRTC->getUTCTimeOfDay(&secs, &nsecs);
+    *usec = (uint64_t)secs * USEC_PER_SEC + nsecs / NSEC_PER_USEC;
+    return kIOReturnSuccess;
+}
+
 extern "C" int switch_rtc_resume(void)
 {
     return gRTC ? gRTC->resume() : 0;
@@ -695,6 +719,7 @@ extern "C" int switch_pmic_start(void)
         return 0;
     started = true;
     reportClocks("at boot");
+    (void)switch_monotonic_clock_start();
 
     // Read-only: Horizon keeps its clock in the same RTC, and writing ours would shift it.
     constexpr unsigned rtcMode = 1;
