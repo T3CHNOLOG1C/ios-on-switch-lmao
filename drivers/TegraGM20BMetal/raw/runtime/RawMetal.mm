@@ -4572,6 +4572,17 @@ static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **
 
 // The textures and buffers a command buffer wrote (render targets, copy destinations, and for m2v anything a compute encoder
 // bound): their CPU lines are invalidated before the CPU next reads them.
+// A recorded object can be m2v's own (a facade command buffer's copy that went to m2v keeps it): only the raw path's carry
+// the flag
+static void markDirty(void *o)
+{
+    id object = (__bridge id)o;
+    if ([object isKindOfClass:[RMBuffer class]])
+        ((RMBuffer *)object)->_gpuDirty = true;
+    else if ([object isKindOfClass:[RMTexture class]])
+        ((RMTexture *)object)->_gpuDirty = true;
+}
+
 static void markWritten(RMCommandBuffer *cb)
 {
     bool compute = false;
@@ -4597,22 +4608,16 @@ static void markWritten(RMCommandBuffer *cb)
         case OpCopyTexture:
         case OpCopyBufferToTexture:
         case OpMipmaps:
-            if (RMTexture *t = (__bridge RMTexture *)(c.op == OpMipmaps ? c.obj : c.obj2))
-                t->_gpuDirty = true;
+            markDirty(c.op == OpMipmaps ? c.obj : c.obj2);
             break;
         case OpCopyBuffer:
         case OpCopyTextureToBuffer:
-            ((__bridge RMBuffer *)c.obj2)->_gpuDirty = true;
+            markDirty(c.obj2);
             break;
         case OpBuffer:
         case OpTexture:
-            if (compute && c.obj) {
-                id o = (__bridge id)c.obj;
-                if ([o isKindOfClass:[RMBuffer class]])
-                    ((RMBuffer *)o)->_gpuDirty = true;
-                if ([o isKindOfClass:[RMTexture class]])
-                    ((RMTexture *)o)->_gpuDirty = true;
-            }
+            if (compute)
+                markDirty(c.obj);
             break;
         case OpInvocation: {  // compute and other recorded calls: every buffer and texture they name
             NSInvocation *inv = (__bridge NSInvocation *)c.obj;
@@ -4621,10 +4626,7 @@ static void markWritten(RMCommandBuffer *cb)
                     continue;
                 __unsafe_unretained id arg = nil;
                 [inv getArgument:&arg atIndex:i];
-                if ([arg isKindOfClass:[RMBuffer class]])
-                    ((RMBuffer *)arg)->_gpuDirty = true;
-                if ([arg isKindOfClass:[RMTexture class]])
-                    ((RMTexture *)arg)->_gpuDirty = true;
+                markDirty((__bridge void *)arg);
             }
             break;
         }
