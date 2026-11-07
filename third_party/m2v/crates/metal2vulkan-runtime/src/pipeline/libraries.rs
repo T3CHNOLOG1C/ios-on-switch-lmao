@@ -502,8 +502,8 @@ mod tests {
         let _mine = waited_turn(&budget, ticket());
         let linked = linked();
         let claim = linked.0[Part::FragmentShader as usize].claim().unwrap();
+        let (asked, has_asked) = mpsc::channel();
         std::thread::scope(|scope| {
-            let (asked, has_asked) = mpsc::channel();
             let creation = exit_guard::spawn_scoped(scope, Builder::new(), || {
                 let _theirs = waited_turn(&budget, ticket());
                 linked.made_with(

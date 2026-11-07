@@ -107,8 +107,10 @@ impl Class {
 #[cfg(test)]
 mod tests {
     use super::alongside;
+    use crate::exit_guard;
     use crate::pipeline::budget::{holds_turn, ticket, waited_turn, Budget, Urgency};
     use std::sync::{mpsc, Arc};
+    use std::thread::Builder;
     use std::time::Duration;
 
     const WAIT: Duration = Duration::from_secs(10);
@@ -143,19 +145,22 @@ mod tests {
     #[test]
     fn a_panic_in_the_other_part_unwinds_the_asking_thread_after_its_own() {
         let budget = Arc::new(Budget::new(4, 3));
-        let _mine = waited_turn(&budget, ticket());
-        let spare = budget.spare(Urgency::Program).unwrap();
         let (ran, has_run) = mpsc::channel();
-        let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            alongside(
-                spare,
-                || panic!("the other part panics"),
-                || ran.send(()).unwrap(),
-            )
-        }));
-        assert!(unwound.is_err());
+        let unwound = std::thread::scope(|scope| {
+            let asker = exit_guard::spawn_scoped(scope, Builder::new(), || {
+                let _mine = waited_turn(&budget, ticket());
+                let spare = budget.spare(Urgency::Program).unwrap();
+                alongside(
+                    spare,
+                    || panic!("the other part panics"),
+                    || ran.send(()).unwrap(),
+                )
+            })
+            .unwrap();
+            asker.join().is_err()
+        });
+        assert!(unwound);
         has_run.try_recv().unwrap();
-        assert!(holds_turn());
-        assert_eq!(budget.census().0, 1);
+        assert_eq!(budget.census().0, 0);
     }
 }
