@@ -25,12 +25,12 @@ static uint32_t switch_refusal_overflows;
 static uint64_t switch_refusal_tag(uint64_t key)
 {
 #ifdef KERNEL
-    key ^= (uint64_t)(uint32_t)proc_selfpid() * 0x9e3779b97f4a7c15ull;
+    key ^= (uint64_t)(uint32_t)proc_selfpid() * 0x9e3779b97f4a7c15ULL;
 #endif
     key ^= key >> 30;
-    key *= 0xbf58476d1ce4e5b9ull;
+    key *= 0xbf58476d1ce4e5b9ULL;
     key ^= key >> 27;
-    key *= 0x94d049bb133111ebull;
+    key *= 0x94d049bb133111ebULL;
     key ^= key >> 31;
     return key != 0 ? key : 1;
 }
@@ -90,7 +90,7 @@ void switch_refusal(const char *domain, const char *reason_key, const char *form
     if (!switch_refusal_first(switch_refusal_key(domain, reason_key))) {
         return;
     }
-    va_list args;
+    va_list args;  // NOLINT(cppcoreguidelines-init-variables): va_start initializes it
     va_start(args, format);
     switch_refusal_logv(domain, reason_key, format, args);
     va_end(args);
@@ -101,7 +101,7 @@ void switch_refusal_k(uint64_t key, const char *domain, const char *reason_key, 
     if (!switch_refusal_first(key)) {
         return;
     }
-    va_list args;
+    va_list args;  // NOLINT(cppcoreguidelines-init-variables): va_start initializes it
     va_start(args, format);
     switch_refusal_logv(domain, reason_key, format, args);
     va_end(args);
