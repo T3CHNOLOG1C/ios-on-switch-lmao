@@ -30,6 +30,9 @@
 #include <stdint.h>
 #include <string.h>
 #include "TegraGM20BGpu.h"
+#if TGM_STATS
+#include <os/log.h>
+#endif
 #include "../TegraDisplayFlip/TegraScanoutCopy.h"
 
 #define TGM_COH_WRITERS \
@@ -52,6 +55,7 @@ struct tgm_coh {
 	uint64_t writers
 		[TGM_COH_WRITERS];  // atomic: marking submissions, channel uid << 32 | seqno (0: free slot)
 	int writersLost;  // atomic: one found no slot: a lock waits for every channel's submitted work
+	uint32_t traced;  // atomic: CPU lock and unlock lines logged for it (debug kernels)
 };
 
 namespace
@@ -151,18 +155,53 @@ uint32_t findById(uint32_t surfaceId, uint32_t skip, tgm_coh **out)
 }
 
 // A lock invalidates the entries the GPU may have written since the last lock; an unlock that wrote cleans them all.
-void surfaceTrapped(uint32_t surfaceId, bool unlock)
+#if TGM_STATS
+extern "C" void proc_selfname(char *buf, int size);
+extern "C" int proc_selfpid(void);
+
+constexpr uint32_t kTraced = 6, kTracedFullScreen = 64;
+constexpr uint32_t kFullScreenPages =
+	900;  // 3.5 MiB of 4 KiB pages: a 720x1280 BGRA surface (the framebuffers' 3840 KiB)
+
+// The first CPU locks and writing unlocks of a GPU-imported surface after its entry was made, with the process and what
+// the trap did: who writes a surface the GPU samples, and whether through IOSurfaceLock/Unlock at all (a writer that is
+// not, a hardware engine or a CPU writer without locks, never shows here). Full-screen surfaces get more, so a periodic
+// reader of the framebuffers shows its cadence.
+void trace(tgm_coh *c, uint32_t surfaceId, bool unlock, bool readOnly, bool maintained)
+{
+	const uint32_t most = c->npages >= kFullScreenPages ? kTracedFullScreen : kTraced;
+	if (__atomic_fetch_add(&c->traced, 1u, __ATOMIC_RELAXED) >= most)
+		return;
+	char name[32];
+	proc_selfname(name, sizeof(name));
+	os_log(OS_LOG_DEFAULT, "tegra-gm20b: IOSurface %u (%u KiB) CPU %s by %s[%d]%s", surfaceId,
+	       c->npages * 4,
+	       unlock     ? "unlock after a write"
+	       : readOnly ? "lock read-only"
+			  : "lock for writing",
+	       name, proc_selfpid(),
+	       maintained ? (unlock ? ", cleaned" : ", invalidated (GPU-written)") : "");
+}
+#endif
+
+void surfaceTrapped(uint32_t surfaceId, bool unlock, bool readOnly)
 {
 	tgm_coh *found[kBatch];
 	uint32_t n = kBatch;
 	for (uint32_t skip = 0; n == kBatch && (n = findById(surfaceId, skip, found)); skip += n) {
 		uint64_t bytes = 0, done = 0;
 		for (uint32_t i = 0; i < n; i++) {
-			if (unlock ||
-			    __atomic_exchange_n(&found[i]->gpuDirty, 0, __ATOMIC_ACQ_REL)) {
+			const bool maintained = unlock || __atomic_exchange_n(&found[i]->gpuDirty,
+									      0, __ATOMIC_ACQ_REL);
+			if (maintained) {
 				bytes += maintain(found[i]);
 				done++;
 			}
+#if TGM_STATS
+			trace(found[i], surfaceId, unlock, readOnly, maintained);
+#else
+			(void)readOnly;
+#endif
 		}
 		IOLockLock(gRegistryLock);
 		count(unlock, done, bytes);
@@ -423,7 +462,7 @@ extern "C" void tegra_gm20b_iosurface_trap(uint32_t index, uint32_t surface_id, 
 	if (!surface_id || !__atomic_load_n(&gWithId, __ATOMIC_RELAXED))
 		return;
 	if (index == kTrapLock)
-		surfaceTrapped(surface_id, false);
+		surfaceTrapped(surface_id, false, options & kLockReadOnly);
 	else if (index == kTrapUnlock && !(options & kLockReadOnly))
-		surfaceTrapped(surface_id, true);
+		surfaceTrapped(surface_id, true, false);
 }

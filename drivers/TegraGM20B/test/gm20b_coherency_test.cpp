@@ -2,6 +2,7 @@
 // TegraGM20BCoherency.cpp on the host: which IOSurface lock/unlock traps clean or invalidate an import, with how many
 // pages, across imports of the same surface and their release.
 #include <atomic>
+#include <cstdio>
 #include <map>
 #include <set>
 #include <thread>
@@ -17,6 +18,17 @@ std::vector<std::vector<uint64_t>> &cleanCalls()
 }
 
 static std::mutex gCleanLock;
+
+// The kernel's process name and ID, for the debug traces of CPU locks and unlocks.
+extern "C" void proc_selfname(char *buf, int size)
+{
+	snprintf(buf, size_t(size), "coherency_test");
+}
+
+extern "C" int proc_selfpid(void)
+{
+	return 1;
+}
 
 extern "C" void tgm_cpu_clean_pages(const uint64_t *pas, uint32_t npages)
 {

@@ -919,6 +919,23 @@ static std::vector<RMTexture *> gCpuLevelsPending;
 static std::atomic<bool> gCpuLevelsAny{false};
 
 static void noteCpuLevels(RMTexture *t, uint32_t bits);
+
+#if SWITCH_FRAME_TIMELINE
+// A YCbCr or planar surface's image, made from the surface's planes by GPU work at the seed it had then: when its texture
+// is made and at each conversion, with the seed before (none: never converted). The kernel's IOSurface lines name the
+// CPU locks and writing unlocks of the same surface ID around it; a seed that moves with no unlock there is a writer the
+// locks never see (a hardware engine, or a CPU write without a lock).
+static void traceSurfaceImage(RMTexture *t, const char *what, uint32_t seed)
+{
+    if (!t->_surface)
+        return;
+    const OSType f = IOSurfaceGetPixelFormat(t->_surface);
+    os_log(rawLog(), "raw: IOSurface %u %ux%u '%c%c%c%c' image %s at seed %u (before: %s%u)",
+           IOSurfaceGetID(t->_surface), unsigned(IOSurfaceGetWidth(t->_surface)),
+           unsigned(IOSurfaceGetHeight(t->_surface)), char(f >> 24), char(f >> 16), char(f >> 8), char(f), what, seed,
+           t->_imageCurrent ? "" : "none ", t->_imageCurrent ? t->_imageSeed : 0u);
+}
+#endif
 static void cpuLevel(RMTexture *t, MTLRegion r, NSUInteger level, uint8_t *bytes, NSUInteger row, bool write);
 
 @implementation RMTexture
@@ -4096,6 +4113,9 @@ static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **
                 if (!t->_surface || !t->_imageCurrent || t->_imageSeed != seed) {
                     stale.push_back(t);
                     converted.push_back({t, seed});
+#if SWITCH_FRAME_TIMELINE
+                    traceSurfaceImage(t, "converted", seed);
+#endif
                 }
             }
             planar.swap(stale);
@@ -4915,6 +4935,10 @@ static const char *ycbcrPlan(MTLTextureDescriptor *d, IOSurfaceRef s, NSUInteger
         if (![t rmTwin])
             return nil;
     }
+#if SWITCH_FRAME_TIMELINE
+    if (t->_raw.planar || t->_raw.ycbcr)
+        traceSurfaceImage(t, "imported", IOSurfaceGetSeed(s));
+#endif
     return (id<MTLTexture>)t;
 }
 
