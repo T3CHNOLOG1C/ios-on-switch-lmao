@@ -838,14 +838,22 @@ static bool shape(uint32_t width, uint32_t height, uint32_t format, Texture &t)
     return true;
 }
 
-bool Device::createTexture(uint32_t width, uint32_t height, uint32_t format, Texture &t, bool wc)
+bool Device::createTexture(uint32_t width, uint32_t height, uint32_t format, Texture &t, bool wc, bool tiled)
 {
     if (!shape(width, height, format, t))
         return false;
     t.pitch = (width * t.bpp + 255) & ~255u;
     std::lock_guard<std::mutex> l(lock_);
     const uint64_t bytes = uint64_t(t.pitch) * height;
-    if (wc && wcAlloc(bytes, t.span)) {
+    tgm_layout bl;
+    // (a colour format: the chunks are bound under colour kind 0xFE, which a depth/stencil format's zeta is not)
+    if (tiled && !wc && t.renderable && tgm_layout_tiled(width, height, t.bpp, &bl) &&
+        blAlloc(bl.bytes, bl.align, t.span)) {
+        t.pitch = bl.row_bytes;
+        t.blockLinear = true;
+        t.blockHeight = bl.y_log2;
+        t.layerBytes = bl.bytes;
+    } else if (wc && wcAlloc(bytes, t.span)) {
         t.wc = true;
         stats.wcBytes += t.span.bytes;
     } else {
@@ -857,10 +865,8 @@ bool Device::createTexture(uint32_t width, uint32_t height, uint32_t format, Tex
     t.va = t.span.va;
     t.cpu = t.span.cpu;
     if (!(t.tic = allocTic())) {
-        if (t.wc)
-            wcFree(t.span);
-        else
-            poolFree(t.span);
+        Lease *none = nullptr;
+        freeSpan(t.span, memoryOf(t), none);
         return false;
     }
     writeTic(t);
@@ -1247,7 +1253,7 @@ void Device::destroyTexture(Texture &t)
     }
     if (t.import)
         release(t.import);
-    freeSpan(t.span, t.wc ? Memory::Wc : Memory::Pool, t.lease);
+    freeSpan(t.span, memoryOf(t), t.lease);
     t = {};
 }
 
@@ -3167,6 +3173,13 @@ void BlitEncoder::copyFromLevel(const Texture &t, uint32_t level, uint32_t sx, u
     const Texture::Chain *c = t.chain;
     if (!c)
         return;
+    if (dst.blockLinear) {  // the copy engine, block-linear to block-linear (the 2D engine's destination here is pitch)
+        Texture from;
+        if (chainLevelTarget(t, level, from))
+            copyTexels(from, sx, sy, dst, dx, dy, w, h);
+        dev_->stats.chainCopies++;
+        return;
+    }
     room(uint32_t(fx::copyWords()));
     const fx::Pitch d{dst.va, dst.pitch, dst.width, dst.height};
     fx::emitCopyFromLevel(p_, c->layout, c->va, level, d, c->fmt2d, sx, sy, dx, dy, w, h);

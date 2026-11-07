@@ -49,11 +49,12 @@ constexpr uint32_t kPteKindPitch = 0;
 
 struct Lease;  // raw_alias.cpp
 
-// Where memory comes from: the pool, the write-combined GPU pool, an import
+// Where memory comes from: the pool, the write-combined GPU pool, an import, the block-linear chunks (kind 0xFE)
 enum class Memory : uint8_t {
     Pool,
     Wc,
-    Import
+    Import,
+    Bl
 };
 
 // Memory of the raw path an m2v view uses in place (RawMetal.mm's twins), as NVK takes it (switch_nvk_import_foreign): the BO
@@ -532,7 +533,10 @@ public:
     // Resources (thread safe). All textures are 2D, one level, one sample, pitch-linear.
     // pool memory, rows 256-byte aligned; `wc`: write-combined GPU-pool memory (a texture the CPU writes with replaceRegion:
     // no clean after), else (or full) pool memory
-    bool createTexture(uint32_t width, uint32_t height, uint32_t format, Texture &t, bool wc = false);
+    // `tiled`: block-linear (TegraGM20BLayout.h) where its shape tiles and its format is a colour target's, for a texture the
+    // CPU never touches
+    bool createTexture(uint32_t width, uint32_t height, uint32_t format, Texture &t, bool wc = false,
+                       bool tiled = false);
 
     // Before the GPU first renders or stores into the IOSurface (Kernel::surfaceGpuWrites).
     bool surfaceGpuWrites(uint64_t id)
@@ -864,6 +868,12 @@ private:
     void dropLocked(Lease *lease);
     // lock_ held: the span goes back to where it came from now, or at its lease's last drop
     void freeSpan(Span &span, Memory from, Lease *&lease);
+
+    static Memory memoryOf(const Texture &t)
+    {
+        return t.blockLinear ? Memory::Bl : t.wc ? Memory::Wc : Memory::Pool;
+    }
+
     // A memoryless color attachment j's memory (tag kMemorylessTag + j: two of a pass never share one), a shadow target's pool
     // image for attachment j (tag 1 + j), or a memoryless zeta's (tag 0): one per size, format, tag and layout, kept while passes
     // use it. `blockLinear`: a colour backing of a pass with a block-linear colour target or a depth/stencil attachment; a zeta's

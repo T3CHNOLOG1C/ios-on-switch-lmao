@@ -45,8 +45,11 @@
 #include "raw_gpu.h"
 #include "TegraGM20BLayout.h"
 
-// The m2v frontend's in-place texture over a buffer (NativeBridgeMetalFrontend.mm): weak, so the host benchmark links without it.
+// The m2v frontend's in-place textures over a buffer, of rows or the device's optimal layout (NativeBridgeMetalFrontend.mm):
+// weak, so the host benchmark links without them.
 extern "C" id native_bridge_metal_texture_in_place(id buffer, id descriptor, NSUInteger offset, NSUInteger bytesPerRow)
+    __attribute__((weak_import));
+extern "C" id native_bridge_metal_texture_tiled_in_place(id buffer, id descriptor, NSUInteger offset)
     __attribute__((weak_import));
 extern "C" id native_bridge_metal_render_pipeline_lazy(id device, id descriptor, NSUInteger options)
     __attribute__((weak_import));
@@ -522,6 +525,7 @@ static id twinPublish(id object, __strong id &slot, id made)
 
 @interface RMDevice : NSObject  // the methods the device class gets (raw_metal_device_open); no state of its own
 - (void)rmCommit:(RMCommandBuffer *)cb;
+- (id<MTLTexture>)rmNewTexture:(MTLTextureDescriptor *)d tiled:(bool)tiled;
 @end
 
 @implementation RMObject
@@ -1027,7 +1031,9 @@ static void cpuTiled(RMTexture *t, MTLRegion r, uint8_t *bytes, NSUInteger row, 
                 if (d.storageMode == MTLStorageModeMemoryless)
                     d.storageMode = MTLStorageModePrivate;  // (memory here)
             }
-            if (pages && native_bridge_metal_texture_in_place)
+            if (pages && _raw.blockLinear && native_bridge_metal_texture_tiled_in_place)
+                made = native_bridge_metal_texture_tiled_in_place(pages, d, 0);
+            else if (pages && !_raw.blockLinear && native_bridge_metal_texture_in_place)
                 made = native_bridge_metal_texture_in_place(pages, d, 0, _raw.pitch);
             break;
         }
@@ -1083,7 +1089,7 @@ static void cpuTiled(RMTexture *t, MTLRegion r, uint8_t *bytes, NSUInteger row, 
                                                                              mipmapped:NO];
     d.storageMode = MTLStorageModePrivate;
     d.usage = MTLTextureUsageShaderRead | MTLTextureUsageRenderTarget;
-    id made = [(id<MTLDevice>)_device newTextureWithDescriptor:d];
+    id made = [(RMDevice *)_device rmNewTexture:d tiled:false];  // (rows: the 2D engine's copies of a level are pitch)
     RMTexture *m = [made isKindOfClass:[RMTexture class]] ? (RMTexture *)made : nil;
     if (!m || !m->_rawOk || m->_raw.memoryless || ((m->_raw.va | m->_raw.pitch) & 127) || ![m rmTwin]) {
         once([NSString
@@ -2624,13 +2630,13 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
 {
     RMTexture *a = (RMTexture *)s, *b = (RMTexture *)d;
     const bool both = [(id)a isKindOfClass:[RMTexture class]] && [(id)b isKindOfClass:[RMTexture class]];
-    // a mipmapped texture's level below the first (its chain's, raw::BlitEncoder::copyFromLevel: the 2D engine, 1:1, into a
-    // texture of the same format whose address and rows it takes as a pitch surface)
+    // a mipmapped texture's level below the first (its chain's, raw::BlitEncoder::copyFromLevel, 1:1 into a texture of the
+    // same format: the 2D engine into rows, the copy engine into a block-linear one)
     const raw::Texture::Chain *ch = both && a->_rawOk ? a->_raw.chain : nullptr;
-    const bool level = ch && sl && sl < ch->layout.levels && b->_rawOk && !b->_raw.memoryless && !b->_raw.blockLinear &&
-                       !((b->_raw.va | b->_raw.pitch) & 127) && b->_raw.format == a->_raw.format && !b->_raw.planar &&
-                       !b->_raw.ycbcr && !ss && !ds && !dl && size.depth == 1 &&
-                       so.x + size.width <= ch->layout.level[sl].width &&
+    const bool level = ch && sl && sl < ch->layout.levels && b->_rawOk && !b->_raw.memoryless &&
+                       (b->_raw.blockLinear || !((b->_raw.va | b->_raw.pitch) & 127)) &&
+                       b->_raw.format == a->_raw.format && !b->_raw.planar && !b->_raw.ycbcr && !ss && !ds && !dl &&
+                       size.depth == 1 && so.x + size.width <= ch->layout.level[sl].width &&
                        so.y + size.height <= ch->layout.level[sl].height && dorg.x + size.width <= b->_raw.width &&
                        dorg.y + size.height <= b->_raw.height;
     const bool ok = level || (both && a->_rawOk && b->_rawOk && !ss && !sl && !ds && !dl && size.depth == 1 &&
@@ -4954,7 +4960,14 @@ static void commitBuffer(RMCommandBuffer *cb);
     return (id<MTLTexture>)t;
 }
 
+// A private texture the CPU never touches is block-linear (TegraGM20BLayout.h), as NVK lays out an optimal image and m2v's
+// view of it is (texture_tiled_in_place).
 - (id<MTLTexture>)newTextureWithDescriptor:(MTLTextureDescriptor *)d
+{
+    return [self rmNewTexture:d tiled:d.storageMode == MTLStorageModePrivate];
+}
+
+- (id<MTLTexture>)rmNewTexture:(MTLTextureDescriptor *)d tiled:(bool)tiled
 {
     if (gRM->raw->chainsOn() && chainShape(d)) {  // mipmapped: level 0 a pool texture, the levels a chain (raw/fx)
         RMTexture *t = [RMTexture new];
@@ -4987,7 +5000,7 @@ static void commitBuffer(RMCommandBuffer *cb);
         t->_kind = RMTexturePool;
         // a shared texture (the CPU writes it: replaceRegion) in write-combined memory: its rows need no clean after
         t->_rawOk = gRM->raw->createTexture(uint32_t(d.width), uint32_t(d.height), uint32_t(d.pixelFormat), t->_raw,
-                                            d.storageMode == MTLStorageModeShared);
+                                            d.storageMode == MTLStorageModeShared, tiled);
     }
     if (!t->_rawOk) {
         RMTexture *w = (RMTexture *)[self wrapTwin:[gRM->fallback newTextureWithDescriptor:d] descriptor:d];

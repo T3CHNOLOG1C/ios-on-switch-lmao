@@ -3,7 +3,8 @@
 // views of the raw path's memory are made over the raw path's own BOs, and every IOSurface is imported once, by whichever driver
 // needs it first. Over raw/pack's mock GPU, whose copy engine runs the raw path's copies through the mock VM (RAWCAP_LOG,
 // NVDEC_WRITETHROUGH); m2v's own blits are compute dispatches the mock does not run (nvk_alias.cpp checks NVK's addressing):
-//  - raw buffers and textures (pool and write-combined) and a raw surface texture, used by command buffers that replay on m2v;
+//  - raw buffers and textures (pool, block-linear when private, and write-combined) and a raw surface texture, used by command
+//    buffers that replay on m2v;
 //  - a surface m2v imports first (newBufferWithIOSurface), which a raw texture over it reads through the same import;
 //  - a surface the raw path imports first, which m2v's view and replay use.
 // Every view is made with no BoImport and no VmBind of imported pages, and each surface is imported once.
@@ -177,7 +178,10 @@ void rawTextures(id<MTLDevice> dev)
     for (MTLStorageMode mode : {MTLStorageModePrivate, MTLStorageModeShared}) {
         id<MTLTexture> t = texture(dev, 96, 40, mode);
         expect(raw_metal_texture_kept(t), "the raw path keeps the texture");
-        replayOnM2v(dev, t, mode == MTLStorageModePrivate ? "pool texture" : "write-combined texture");
+        // a private one is block-linear (no rows the CPU could take), its m2v view NVK's optimal image in place
+        expect((raw_metal_texture_image(t, nullptr) == nullptr) == (mode == MTLStorageModePrivate),
+               mode == MTLStorageModePrivate ? "pool texture: block-linear" : "write-combined texture: rows");
+        replayOnM2v(dev, t, mode == MTLStorageModePrivate ? "block-linear pool texture" : "write-combined texture");
     }
 }
 
