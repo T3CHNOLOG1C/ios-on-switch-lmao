@@ -17,6 +17,7 @@
 #include <string.h>
 #include "TegraVIC.h"
 #include "TegraVICSurface.h"
+#include "../../kits/SwitchDMA/SwitchDMAPages.h"
 
 extern "C" {
 OSObject *tegra_vic_ios_lookup(IOService *root, uint32_t id, task_t task);
@@ -120,18 +121,10 @@ extern "C" IOReturn tegra_vic_surface_prepare(TegraVICSurface *s, uint64_t exten
         return kIOReturnNoMemory;
     }
     s->prepared = true;
-    uint32_t n = 0;
-    for (uint64_t offset = 0; offset < bytes;) {
-        IOByteCount length = 0;
-        const addr64_t pa = s->memory->getPhysicalSegment(offset, &length, kIOMemoryMapperNone);
-        if (!pa || !length || (pa & 0xfff) || ((offset == 0) && (pa & 0xfff))) {
-            tegra_vic_surface_complete(s);
-            return kIOReturnNotAligned;
-        }
-        for (uint64_t at = 0; at < length && offset < bytes; at += 4096, offset += 4096)
-            pages[n++] = pa + at;
+    if (!switch_dma_page_list(s->memory, bytes, pages, max, count)) {
+        tegra_vic_surface_complete(s);
+        return kIOReturnNotAligned;
     }
-    *count = n;
     return kIOReturnSuccess;
 }
 

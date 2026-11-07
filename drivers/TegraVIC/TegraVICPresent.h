@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // NVDEC's pictures into VideoToolbox's buffers on VIC (TegraVICUserClient.cpp), for TegraNVDEC's Present method.
 //
-// NVDEC writes NV12 in Tegra block linear (16Bx2 sectors, GOB height 2) into its contiguous arena; VideoToolbox's
-// clients want pitch-linear '420v'/'420f' IOSurfaces. VIC copies one into the other (the 4:2:0 pass-through V4 proves,
+// NVDEC writes NV12 in Tegra block linear (16Bx2 sectors, GOB height 2) into its own buffers; VideoToolbox's clients
+// want pitch-linear '420v'/'420f' IOSurfaces. VIC copies one into the other (the 4:2:0 pass-through V4 proves,
 // read as block linear: TegraVICTraits.blockLinearIn), so the CPU neither de-swizzles nor touches either buffer, and
 // the IOSurface is in DRAM, with no CPU line of it left dirty or stale, when the call returns: a GPU that does not
 // snoop the CPU's caches reads what VIC wrote.
@@ -16,7 +16,9 @@
 #include <stdint.h>
 
 typedef struct {
-    uint64_t pa, bytes;        // the picture's memory: physically contiguous, page aligned (NVDEC's arena)
+    const uint64_t *pages;  // the picture's memory, 4 KiB pages in order (an NVDEC buffer's page list)
+    uint32_t pageCount;
+    uint64_t bytes;
     uint32_t pitch, rows;      // bytes per row (whole 64-byte GOBs), luma rows (whole 32-row blocks pairs)
     uint32_t chromaOffset;     // the CbCr plane, 256-byte aligned, rows / 2 rows of pitch bytes
     uint32_t blockHeightLog2;  // GOBs a block: NVDEC's GOB_2 is 1

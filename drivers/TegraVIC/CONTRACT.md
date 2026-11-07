@@ -207,11 +207,11 @@ are generated in its encoding (`tegra_vic_matrix_*`) and checked on the host aga
 
 ## 10. NVDEC's pictures (not IOSurfaceAccelerator)
 
-TegraNVDEC's Present method (ABI v6) hands each decoded picture to `tegra_vic_present` (`TegraVICPresent.h`): NVDEC's
+TegraNVDEC's Present method (ABI v7) hands each decoded picture to `tegra_vic_present` (`TegraVICPresent.h`): NVDEC's
 NV12 in Tegra block linear (16Bx2 sectors, GOB height 2, the layout `SwitchVideoDecoders/AVD/BlockLinear.h` reads) in
-its contiguous arena, copied 1:1 by the 4:2:0 pass-through into the decoder's pool IOSurface (pitch linear, '420v' or
-'420f', rows and planes on 256 bytes), looked up in the calling task. The source's pages go into the source window
-read-only; it needs no cache maintenance (NVDEC wrote DRAM, no CPU writes the arena); the destination is cleaned and
+one of its buffers, with that buffer's page list, copied 1:1 by the 4:2:0 pass-through into the decoder's pool
+IOSurface (pitch linear, '420v' or '420f', rows and planes on 256 bytes), looked up in the calling task. The picture's
+pages go into the source window read-only; it needs no cache maintenance (NVDEC wrote DRAM, no CPU writes its buffers); the destination is cleaned and
 invalidated before and invalidated after, as for every job, so a GPU that does not snoop the CPU's caches reads what
 VIC wrote. Synchronous on the decoder's thread under the engine lock, with page lists of its own (32 MiB a side).
 Block-linear input is a V4 trait (`blockLinearIn`: a 128x64 picture written in block linear by the CPU must copy

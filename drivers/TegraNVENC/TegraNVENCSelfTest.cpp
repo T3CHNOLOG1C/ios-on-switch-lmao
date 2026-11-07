@@ -56,7 +56,8 @@ static_assert(sizeof(kE3EncSetup0) == kE3EncSetupBytes && kE3EncSetupBytes <= TE
 namespace {
 constexpr uint32_t kEncHandles = 6, kDecHandles = 4, kMaxMse = 65, kNvdecWaitMs = 20000;
 constexpr uint32_t kSlicesOff = 0x100, kBitsOff = 0x200;  // the NVDEC input buffer, as H264NVDEC lays it out
-TegraNVENCBlock gEnc[kEncHandles], gDec[kDecHandles];
+TegraNVENCBlock gEnc[kEncHandles];
+TegraNVDECBlock gDec[kDecHandles];  // in NVDEC's own address space
 
 const char *const kLayoutName[TEGRA_NVENC_LAYOUTS] = {"pitch",        "BL2 (log2 1)", "BL2 (2 GOBs)",
                                                       "BL4 (log2 2)", "BL1",          "tiled 16x16"};
@@ -73,8 +74,7 @@ bool resolveDec(void *, uint32_t handle, TegraNVDECBlock *block)
 {
     if (handle < kE3DecFirstHandle || handle >= kE3DecFirstHandle + kDecHandles)
         return false;
-    const TegraNVENCBlock &b = gDec[handle - kE3DecFirstHandle];
-    *block = TegraNVDECBlock{b.pa, b.size, b.va, b.first, b.count};
+    *block = gDec[handle - kE3DecFirstHandle];
     return true;
 }
 
@@ -271,7 +271,7 @@ void encodeAndDecode(uint32_t f, uint32_t layout, uint32_t chroma, Mode mode, Ou
     }
     const uint32_t (*clean)[3] = f ? kE3DecClean1 : kE3DecClean0;
     const uint32_t input = clean[0][0];
-    TegraNVENCBlock &in = gDec[input - kE3DecFirstHandle];
+    TegraNVDECBlock &in = gDec[input - kE3DecFirstHandle];
     static const uint8_t kEndOfStream[16] = {0, 0, 1, 0x0b, 0, 0, 0, 0, 0, 0, 1, 0x0b, 0, 0, 0, 0};
     bzero(in.va, kSlicesOff);
     ((uint32_t *)(in.va + kSlicesOff))[0] = 0;
@@ -289,7 +289,7 @@ void encodeAndDecode(uint32_t f, uint32_t layout, uint32_t chroma, Mode mode, Ou
     if (o->ret || (o->ret = tegra_nvdec_wait(fence)))
         return;
 
-    const TegraNVENCBlock &out = gDec[surface - kE3DecFirstHandle];
+    const TegraNVDECBlock &out = gDec[surface - kE3DecFirstHandle];
     tegra_nvdec_cache_flush(in.va, sizeof(nvdec_status_s));
     tegra_nvdec_cache_flush(out.va, kE3DecSizes[surface - kE3DecFirstHandle]);
     o->decodeErrors = ((const nvdec_status_s *)in.va)->mbs_in_error;
@@ -361,7 +361,7 @@ int run(TegraNVENCProven *proven, char *line, size_t size)
             return -12;
         }
     for (uint32_t h = 0; h < kDecHandles; h++)
-        if (tegra_nvenc_arena_alloc(kE3DecSizes[h], &gDec[h])) {
+        if (tegra_nvdec_buffer_alloc(kE3DecSizes[h], &gDec[h])) {
             snprintf(line, size, "E3 FAIL no arena memory");
             return -12;
         }
@@ -459,7 +459,7 @@ extern "C" int tegra_nvenc_self_test(TegraNVENCProven *proven)
         for (uint32_t h = 1; h < kEncHandles; h++)
             tegra_nvenc_arena_free(&gEnc[h]);
         for (uint32_t h = 0; h < kDecHandles; h++)
-            tegra_nvenc_arena_free(&gDec[h]);
+            tegra_nvdec_buffer_free(&gDec[h]);
     }
     return ret;
 }

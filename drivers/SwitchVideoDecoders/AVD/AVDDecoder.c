@@ -18,7 +18,7 @@
 // Selection: VTRegisterVideoDecoder leaves IsHardwareAccelerated true and rating 0; _vtSortRegistryItemsByRating ranks
 // hardware first, so this decoder is tried before H264SW, and a factory that fails moves VideoToolbox to the next one.
 // StartSession is not retried with another decoder, so a stream NVDEC cannot take (interlaced, 4:2:2 or 4:4:4, high
-// bit depth, slice groups, beyond 4096x4096) or one the arena has no room for runs on Apple's software decoder inside
+// bit depth, slice groups, beyond 4096x4096) or one NVDEC has no memory for runs on Apple's software decoder inside
 // this instance: VTSelectAndCreateVideoDecoderInstance with hardware disabled picks it, every class call is forwarded,
 // and UsingHardwareAcceleratedVideoDecoder answers false. VP9 has no software decoder in 21H461's VideoToolbox to fall
 // back on (and needs kVTVideoDecoderSpecification_AllowVP9Decode, which VideoToolbox gives Fig servers and entitled
@@ -400,7 +400,7 @@ static OSStatus startVP9(Decoder *d, VTVideoDecoderSession session, CMVideoForma
         return kVTVideoDecoderUnsupportedDataFormatErr;
     }
     if (vp9_decoder_configure(d->vp9, (uint32_t)size.width, (uint32_t)size.height)) {
-        os_log_error(gLog, "AVD: VP9 session %dx%d in %{public}s: no room in the NVDEC arena (see the AVD alloc line)",
+        os_log_error(gLog, "AVD: VP9 session %dx%d in %{public}s: no NVDEC memory for it (see the AVD alloc line)",
                      size.width, size.height, getprogname());
         return kVTVideoDecoderMalfunctionErr;
     }
@@ -419,7 +419,7 @@ static OSStatus startVP9(Decoder *d, VTVideoDecoderSession session, CMVideoForma
 
 // HEVC ('hvcC', ISO/IEC 14496-15 8.3.3.1): 21 bytes of profile and stream facts (lengthSizeMinusOne in the low bits
 // of byte 21), then arrays of VPS/SPS/PPS/SEI units. A stream NVDEC does not take (another profile or chroma format,
-// Main 10 while it is not proven, beyond 4096x4096 or below 144x144, no arena room) runs on Apple's software decoder
+// Main 10 while it is not proven, beyond 4096x4096 or below 144x144, no NVDEC memory) runs on Apple's software decoder
 // inside this instance, as H.264 does.
 static int loadHvcC(Decoder *d, CFDataRef hvcC)
 {
@@ -458,10 +458,10 @@ static OSStatus startHEVC(Decoder *d, VTVideoDecoderSession session, CMVideoForm
                       : sps->bit_depth == 10 && !tenBit         ? "Main 10, whose NVDEC check did not pass this boot"
                       : sps->bit_depth == 10 && sps->colour_description && (sps->transfer == 16 || sps->transfer == 18)
                           ? "HDR (PQ or HLG): NVDEC writes 8 bits, too few for those transfer curves"
-                      : hevc_decoder_configure(d->hevc) ? "no room in the NVDEC arena (see the AVD alloc line)"
+                      : hevc_decoder_configure(d->hevc) ? "no NVDEC memory for its buffers (see the AVD alloc line)"
                                                         : NULL;
     if (why) {
-        hevc_decoder_destroy(d->hevc);  // NVDEC's buffers go back to the arena before the software decoder starts
+        hevc_decoder_destroy(d->hevc);  // NVDEC's buffers go back before the software decoder starts
         nvdec_close(d->client);
         d->hevc = NULL;
         d->client = NULL;
@@ -503,14 +503,14 @@ static OSStatus startSession(VTVideoDecoderRef ref, VTVideoDecoderSession sessio
     const H264SPS *sps = configured ? NULL : h264_decoder_sps(d->h264);
     OSStatus status;
     if (!sps) {
-        // NVDEC's buffers go back to the arena for other sessions before the software decoder takes over.
+        // NVDEC's buffers go back for other sessions before the software decoder takes over.
         h264_decoder_destroy(d->h264);
         nvdec_close(d->client);
         d->h264 = NULL;
         d->client = NULL;
         status =
             startSoftware(d, session, format,
-                          configured == -3 ? "no room in the NVDEC arena (see the AVD alloc/map line)"
+                          configured == -3 ? "no NVDEC memory for its buffers (see the AVD alloc/map line)"
                                            : "not decodable on NVDEC (progressive 4:2:0 8-bit up to 4096x4096 is)");
         pthread_mutex_unlock(&d->lock);
         return status;

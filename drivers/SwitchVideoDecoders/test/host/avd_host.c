@@ -4,7 +4,7 @@
 // through VideoToolbox, which checks the plug-in's class layout and session calls against a real VideoToolbox.
 //   engine: the fake client hands out buffers and checks every submit with the kernel's checker; its engine writes
 //           nothing, so pictures come out black: the test wants all 30 out of a session that says hardware.
-//   full:   the fake arena refuses every buffer, so the instance runs Apple's software decoder: the test wants 30/30
+//   full:   the fake client refuses every buffer, so the instance runs Apple's software decoder: the test wants 30/30
 //           frames matching x264 from a session that says software.
 //   vp9:    VP9Clip.h as 'vp09' (kVTVideoDecoderSpecification_AllowVP9Decode) on AVD's private check registration
 //           (registerCheckDecoder: not flagged hardware, named com.brunostjohn.switch.avd.check.vp09, as the device's boot check
@@ -16,7 +16,7 @@
 //   gate:   the private registration outside an open check (gCheckOpen false): no instance, so no session by its name.
 //   hevc:   HEVCClip.h's Main clips A and V and Main 10 clip T as 'hvc1' on the private check registration (named
 //           com.brunostjohn.switch.avd.check.hvc1) and the fake engine: every picture through HEVCNVDEC and the kernel's checker,
-//           all out of a hardware session; then with the arena full, Apple's software HEVC decoder in the instance,
+//           all out of a hardware session; then with every buffer refused, Apple's software HEVC decoder in it,
 //           matching FFmpeg.
 // Prints "PASS avd ..." when all hold (avd_host_test).
 #include "../../AVD/AVDDecoder.c"
@@ -233,7 +233,7 @@ int main(void)
     CFRelease(vp9Spec);
     // HEVC on the private check registration: clips A and V, then the Main 10 clip T, through HEVCNVDEC and the kernel
     // checker (the fake engine writes nothing, so no frame matches: all must come out, from a hardware session); then
-    // with the arena full, Apple's software HEVC decoder inside the instance, which must match FFmpeg.
+    // with every buffer refused, Apple's software HEVC decoder inside the instance, which must match FFmpeg.
     char hevc[512], hevc10[512], hevcFull[512];
     const int hevcSubmits = gSubmits;
     const void *hevcKeys[] = {kVTVideoDecoderSpecification_DecoderID}, *hevcValues[] = {kCheckHEVCDecoderID};

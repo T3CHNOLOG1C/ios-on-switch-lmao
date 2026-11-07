@@ -68,7 +68,7 @@ constexpr uint64_t kMcPA = 0x70019000;
 constexpr uint32_t kPartition = 6;  // TEGRA_POWERGATE_MPE
 constexpr unsigned kClock = 219;    // TEGRA210_CLK_NVENC: CAR bank Y bit 27, also its reset
 constexpr uint64_t kBootChunk = 2ull << 20;
-constexpr uint32_t kNvdecWaitMs = 20000;  // NVDEC's whole bring-up (arena, N1..N4) takes well under a second
+constexpr uint32_t kNvdecWaitMs = 20000;  // NVDEC's whole bring-up (N1..N4) takes well under a second
 
 enum : uint32_t {  // clock and reset controller
     CLK_OUT_ENB_Y = 0x298,

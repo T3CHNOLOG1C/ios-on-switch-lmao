@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// TegraNVDEC user client ABI, v6 (kernel: TegraNVDECUserClient.cpp; client: SwitchVideoDecoders/AVD).
+// TegraNVDEC user client ABI, v7 (kernel: TegraNVDECUserClient.cpp; client: SwitchVideoDecoders/AVD).
 //
 // The service is "TegraNVDEC" (IOServiceMatching), published by default once NVDEC has proven itself (N4). Its user
 // client's class is named AppleD5500UserClient, iPad7,1's own decoder client (VXD393), which some of 21H461's sandbox
@@ -10,9 +10,9 @@
 // record...}, output the method's record. Method TEGRA_NVDEC_TUNNEL_PROBE only proves a selector is admitted.
 //
 // Model (Linux tegra-drm channel submit / L4T nvhost submit, reduced to what a decoder needs):
-//   * No SMMU: NVDEC reads and writes physical memory. Buffers come from one contiguous arena below 4 GiB reserved at
-//     boot; user space maps them (IOConnectMapMemory64 with type = handle, cacheable) and never sees an address. Every
-//     address method is a relocation (handle + offset) the kernel resolves and bounds-checks.
+//   * NVDEC sits behind the MC SMMU in an address space of its own. A buffer is any RAM pages, mapped into that space
+//     when allocated; user space maps it too (IOConnectMapMemory64 with type = handle, cacheable) and never sees an
+//     address. Every address method is a relocation (handle + offset) the kernel resolves and bounds-checks.
 //   * The kernel builds the host1x stream itself: only whitelisted NVDEC methods, written through the engine's THI
 //     METHOD0/METHOD1 pair, followed by an OP_DONE syncpoint increment. The picture setup travels inline and is copied
 //     into kernel-only memory after its sizes are checked against the buffers it makes NVDEC write.
@@ -29,7 +29,7 @@
 #define TEGRA_NVDEC_ABI_H
 #include <stdint.h>
 
-#define TEGRA_NVDEC_ABI_VERSION  6
+#define TEGRA_NVDEC_ABI_VERSION  7
 #define TEGRA_NVDEC_OPEN_TYPE    0x4e44       // 'ND'
 #define TEGRA_NVDEC_TUNNEL_MAGIC 0x4e44544eu  // 'NDTN'
 #define TEGRA_NVDEC_TUNNEL_PROBE 0xffffffffu
@@ -76,8 +76,8 @@ typedef struct {
     uint32_t abi_version, nvdec_version;  // nvdec_version 0x20: NVDEC 2.0 (T210)
     uint32_t codecs;                      // bit n: TEGRA_NVDEC_CODEC_* n is accepted by Submit
     uint32_t max_width, max_height;
-    uint32_t features;  // TEGRA_NVDEC_FEATURE_*
-    uint64_t arena_bytes, arena_free;
+    uint32_t features;                   // TEGRA_NVDEC_FEATURE_*
+    uint64_t memory_limit, memory_free;  // what every session's buffers together may wire, and what is left
 } TegraNVDECInfo;
 
 typedef struct {

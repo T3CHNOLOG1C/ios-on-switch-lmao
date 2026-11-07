@@ -311,8 +311,8 @@ void engineThread(void *, wait_result_t)
 
 // --- NVDEC's pictures (TegraVICPresent.h) -------------------------------------------------------------------------
 constexpr uint32_t kPresentPages = 8192;  // 32 MiB a side: a 4096x4096 NV12 picture and its IOSurface
-uint64_t *gPresentPages[TEGRA_VIC_WINDOWS];
-TegraVICJob gPresentJob;  // under the engine lock
+uint64_t *gPresentPages;                  // the destination surface's (the picture brings its own list)
+TegraVICJob gPresentJob;                  // under the engine lock
 
 struct {
     uint64_t windowStart, pictures, refused, failed, engineUs, cpuUs, bytes;
@@ -362,8 +362,8 @@ const char *presentPlan(const TegraVICPicture *p, const TegraVICSurfaceDesc *d, 
         return "destination is not 4:2:0";
     if (tegra_vic_surface_extent(d) > (uint64_t)kPresentPages << 12)
         return "surface over 32 MiB";
-    if ((p->pa & 0xfff) || !p->bytes || p->bytes > (uint64_t)kPresentPages << 12)
-        return "picture memory not page aligned or over 32 MiB";
+    if (!p->pages || !p->bytes || p->bytes > (uint64_t)p->pageCount << 12 || p->bytes > (uint64_t)kPresentPages << 12)
+        return "picture memory outside its page list or over 32 MiB";
     // Odd sizes are refused rather than rounded: the column or row VIC could not write would show what the buffer held.
     if ((p->cropX | p->cropY) & 1)
         return "picture window on odd coordinates";
@@ -402,8 +402,7 @@ const char *presentPlan(const TegraVICPicture *p, const TegraVICSurfaceDesc *d, 
 extern "C" bool tegra_vic_present_ready(void)
 {
     const TegraVICTraits *t = tegra_vic_traits();
-    return gPresentPages[TEGRA_VIC_WINDOW_SRC] && gPresentPages[TEGRA_VIC_WINDOW_DST] && tegra_vic_ready() && t &&
-           t->blockLinearIn;
+    return __atomic_load_n(&gPresentPages, __ATOMIC_ACQUIRE) && tegra_vic_ready() && t && t->blockLinearIn;
 }
 
 extern "C" int tegra_vic_present(const TegraVICPicture *p, task_t task, const char **why)
@@ -443,8 +442,8 @@ extern "C" int tegra_vic_present(const TegraVICPicture *p, task_t task, const ch
     // The engine lock from here: the page lists are shared by every decoder thread that presents.
     tegra_vic_lock();
     uint32_t dstPages = 0;
-    if (tegra_vic_surface_prepare(&surface, tegra_vic_surface_extent(&surface.desc),
-                                  gPresentPages[TEGRA_VIC_WINDOW_DST], kPresentPages, &dstPages) != kIOReturnSuccess) {
+    if (tegra_vic_surface_prepare(&surface, tegra_vic_surface_extent(&surface.desc), gPresentPages, kPresentPages,
+                                  &dstPages) != kIOReturnSuccess) {
         tegra_vic_unlock();
         tegra_vic_surface_release(&surface);
         *why = "the surface could not be wired";
@@ -452,18 +451,14 @@ extern "C" int tegra_vic_present(const TegraVICPicture *p, task_t task, const ch
         return -12;
     }
     const uint32_t srcPages = (uint32_t)((p->bytes + 0xfff) >> 12);
-    for (uint32_t i = 0; i < srcPages; i++)
-        gPresentPages[TEGRA_VIC_WINDOW_SRC][i] = p->pa + ((uint64_t)i << 12);
-    const uint64_t dstBase =
-        tegra_vic_window_map(TEGRA_VIC_WINDOW_DST, gPresentPages[TEGRA_VIC_WINDOW_DST], dstPages, true);
-    const uint64_t srcBase =
-        tegra_vic_window_map(TEGRA_VIC_WINDOW_SRC, gPresentPages[TEGRA_VIC_WINDOW_SRC], srcPages, false);
+    const uint64_t dstBase = tegra_vic_window_map(TEGRA_VIC_WINDOW_DST, gPresentPages, dstPages, true);
+    const uint64_t srcBase = tegra_vic_window_map(TEGRA_VIC_WINDOW_SRC, p->pages, srcPages, false);
     *why = presentPlan(p, &surface.desc, srcBase, dstBase, &src, &dst, &op);
-    // NVDEC wrote the picture to DRAM and no CPU writes it (the arena's blocks are zeroed and cleaned when they are
+    // NVDEC wrote the picture to DRAM and no CPU writes it (NVDEC's buffers are zeroed and cleaned when they are
     // handed out, and the decoder only reads them): the source needs no cache maintenance. The destination does: a
     // fresh IOSurface's pages were zeroed through the CPU's caches, and a dirty line written back later would land on
     // VIC's output (a green stripe); the second flush drops lines a CPU reader may have pulled in meanwhile.
-    tegra_vic_cache_pages(SWITCH_DCACHE_CLEAN_INVALIDATE, gPresentPages[TEGRA_VIC_WINDOW_DST], dstPages);
+    tegra_vic_cache_pages(SWITCH_DCACHE_CLEAN_INVALIDATE, gPresentPages, dstPages);
     switch_dcache_sync();
     if (!*why)
         *why = tegra_vic_build(&src, &dst, &op, tegra_vic_traits(), tegra_vic_config_address(),
@@ -472,7 +467,7 @@ extern "C" int tegra_vic_present(const TegraVICPicture *p, task_t task, const ch
     int err = *why ? -95 : tegra_vic_run(&gPresentJob, &busy);
     if (!*why && err)
         *why = "the job did not finish";
-    tegra_vic_cache_pages(SWITCH_DCACHE_CLEAN_INVALIDATE, gPresentPages[TEGRA_VIC_WINDOW_DST], dstPages);
+    tegra_vic_cache_pages(SWITCH_DCACHE_CLEAN_INVALIDATE, gPresentPages, dstPages);
     switch_dcache_sync();
     tegra_vic_window_clear(TEGRA_VIC_WINDOW_DST);
     tegra_vic_window_clear(TEGRA_VIC_WINDOW_SRC);
@@ -887,16 +882,8 @@ extern "C" int tegra_vic_publish(void)
     // NVDEC's pictures (TegraVICPresent.h), only with block-linear input proven; their page lists last, as the ready
     // bit: without them every present is refused and the decoders copy on the CPU.
     if (tegra_vic_traits()->blockLinearIn) {
-        uint64_t *src = IONew(uint64_t, kPresentPages), *dst = IONew(uint64_t, kPresentPages);
-        if (src && dst) {
-            gPresentPages[TEGRA_VIC_WINDOW_DST] = dst;
-            __atomic_store_n(&gPresentPages[TEGRA_VIC_WINDOW_SRC], src, __ATOMIC_RELEASE);
-        } else {
-            if (src)
-                IODelete(src, uint64_t, kPresentPages);
-            if (dst)
-                IODelete(dst, uint64_t, kPresentPages);
-        }
+        if (uint64_t *dst = IONew(uint64_t, kPresentPages))
+            __atomic_store_n(&gPresentPages, dst, __ATOMIC_RELEASE);
     }
     IOLog("TegraVIC: V5 ok AppleM2ScalerCSCDriver published (Apple's classes, VIC's slots: newUserClient %d; "
           "IOSurfaceAcceleratorClient; BGRA, RGBA, 420v, 420f; transforms %#x; up to %ux%u, %ux up, %ux down); "
