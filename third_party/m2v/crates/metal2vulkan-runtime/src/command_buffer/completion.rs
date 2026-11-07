@@ -271,7 +271,8 @@ fn run(watch: &Watch) {
                 return;
             };
             for (queue, batch) in &finished {
-                if let Some(code) = submission_failure::failure(device.shared(), *queue, batch.value)
+                if let Some(code) =
+                    submission_failure::failure(device.shared(), *queue, batch.value)
                 {
                     batch.buffer.relayed.fail(code, None);
                 }

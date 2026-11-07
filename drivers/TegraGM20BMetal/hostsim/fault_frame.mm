@@ -113,8 +113,7 @@ void runningCommandBufferIsAVictim(id<MTLDevice> dev, id<MTLCommandQueue> queue)
     id<MTLCommandBuffer> faulting = copy(queue, b, a);
     expect(failedWith(faulting, MTLCommandBufferErrorTimeout),
            "the command buffer a hang's kill takes fails with MTLCommandBufferErrorTimeout");
-    expect(failedWith(running, MTLCommandBufferErrorTimeout),
-           "one still running when the kill came fails with it");
+    expect(failedWith(running, MTLCommandBufferErrorTimeout), "one still running when the kill came fails with it");
     expect(completes(copy(queue, a, b)), "the queue runs on after it");
 }
 }  // namespace

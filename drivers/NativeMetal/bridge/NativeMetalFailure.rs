@@ -47,4 +47,3 @@ pub(crate) fn tell_nvk_submission_failure(device: &Device, loader: &CStr) {
     // SAFETY: the reference RTLD_NOLOAD took.
     unsafe { libc::dlclose(nvk) };
 }
-

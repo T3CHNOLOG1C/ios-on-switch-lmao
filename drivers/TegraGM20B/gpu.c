@@ -2807,8 +2807,7 @@ static void stats_tick(void)
 		"%08x at %08x; gpu.lock held by channel setup mean %llu us max %llu us (%u), "
 		"teardown mean %llu us max %llu us (%u)",
 		copies ? PT_NS(cs) / copies / 1000 : 0, PT_NS(cm) / 1000, copies,
-		gaps ? PT_NS(gs) / gaps / 1000 : 0, PT_NS(gm) / 1000, gaps,
-		idle, imports,
+		gaps ? PT_NS(gs) / gaps / 1000 : 0, PT_NS(gm) / 1000, gaps, idle, imports,
 		imports * 1000ULL / (ms ? ms : 1),
 		/* live_bytes is signed: an arithmetic shift keeps its sign. */
 		/* NOLINTNEXTLINE(bugprone-signed-bitwise) */
@@ -4595,8 +4594,8 @@ static struct {
 	} wait[TGM_SYNC_MAX];
 	volatile struct tgm_stamp
 		*wait_end[TGM_SYNC_MAX]; /* stats: their end stamps (pool memory, kept mapped) */
-	u32 stamped; /* stats: seqno of the present in flight, whose copy is stamped */
-	u32 presents;      /* stats */
+	u32 stamped;  /* stats: seqno of the present in flight, whose copy is stamped */
+	u32 presents; /* stats */
 	u64 lat_sum, lat_max;
 	u64 recovered; /* when the present in flight last found a recovery under way, or work still progressing */
 } present = {.lock = {NULL}};

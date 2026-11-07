@@ -2262,7 +2262,9 @@ pub extern "C" fn nmb_command_buffer_error(
 /// Metal's MTLCommandBufferError code of a failed command buffer, 0 before it failed.
 #[unsafe(no_mangle)]
 pub extern "C" fn nmb_command_buffer_error_code(command_buffer: *const NmbCommandBuffer) -> u64 {
-    guard(0, || Ok(get(command_buffer)?.0.error().map_or(0, |error| error.metal_code())))
+    guard(0, || {
+        Ok(get(command_buffer)?.0.error().map_or(0, |error| error.metal_code()))
+    })
 }
 
 #[unsafe(no_mangle)]

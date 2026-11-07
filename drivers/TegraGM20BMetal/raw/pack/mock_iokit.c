@@ -60,9 +60,9 @@ struct bo {
 static struct bo bos[kMaxBo];
 static atomic_uint nbo = 1;
 static uint32_t submitted[16];
-static uint32_t *fence; /* the fence page, a TegraGM20BAbiFence per channel at slot*16 */
+static uint32_t *fence;   /* the fence page, a TegraGM20BAbiFence per channel at slot*16 */
 static uint32_t dead[16]; /* method 11's error of a killed channel */
-static uint8_t live[16];  /* a channel slot in use: the lowest free one is made next, its seqnos continuing, as the kext's */
+static uint8_t live[16];  /* slots in use: the lowest free one is made next, its seqnos continuing (the kext's) */
 static uint32_t kill_next;
 static atomic_ulong calls[16];
 static atomic_ulong import_maps;    /* VmBind map ops onto imported pages */
