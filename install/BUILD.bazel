@@ -325,12 +325,18 @@ py_binary(
     ],
 )
 
-# `bazel run //:image_to_card -- diskN [--yes]`: out/sd's images onto the card (tools/install/to_card.py).
+# `bazel run //:image_to_card -- diskN [--yes]`: out/sd's images onto the card (tools/install/to_card.py); with
+# --direct, one image straight onto its iOS partition (tools/install/direct.py, which fits it with apfs_tool).
 py_binary(
     name = "image_to_card",
     srcs = ["//tools/install:to_card.py"],
+    data = [":image_apfs_tool"],
+    env = {"SWITCH_APFS_TOOL": "$(rlocationpath :image_apfs_tool)"},
     main = "//tools/install:to_card.py",
-    deps = ["//tools/install:lib"],
+    deps = [
+        "//tools/install:lib",
+        "@rules_python//python/runfiles",
+    ],
 )
 
 # The release's image-builder inputs (ios-on-switch-lmao-<version>-image-inputs.tar, r22-ci): this project's built

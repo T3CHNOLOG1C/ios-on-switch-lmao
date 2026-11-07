@@ -203,6 +203,24 @@ def table_snapshot(card: Card) -> bytes:
     return b''.join(parts)
 
 
+def changed_outside(card: Card, before: bytes, after: bytes, index: int | None) -> list[int]:
+    """Return the offsets at which two table_snapshot()s differ, other than where retyping entry `index` writes.
+
+    Retyping writes that entry in both arrays and the two headers; with `index` None every byte counts.
+    """
+    if len(after) != len(before):
+        raise host.HostError('the partition table changed shape')
+    table, span = card.table, card.table.entry_sectors * gpt.SECTOR
+    allowed = set()
+    if index is not None:
+        entry = index * table.entry_size
+        allowed |= set(range(gpt.SECTOR, 2 * gpt.SECTOR))
+        for base in (2 * gpt.SECTOR, 2 * gpt.SECTOR + span):
+            allowed |= set(range(base + entry, base + entry + table.entry_size))
+        allowed |= set(range(len(after) - gpt.SECTOR, len(after)))
+    return [i for i in range(len(after)) if after[i] != before[i] and i not in allowed]
+
+
 def volumes(card: Card) -> dict[str, dict]:
     """{uuid: {DeviceIdentifier, Roles, Name, ...}} of the APFS container on the target, {} when none is attached."""
     container = host.container_on(card.slice(card.target))

@@ -281,17 +281,7 @@ class Installer:
     def verify(self, snapshot: bytes, retyped: bool) -> None:
         self.inspect()
         after = cards.table_snapshot(self.card)
-        if len(after) != len(snapshot):
-            raise host.HostError('verify: the partition table changed shape')
-        table, span = self.card.table, self.card.table.entry_sectors * gpt.SECTOR
-        allowed = set()
-        if retyped:  # the primary header, the target entry in both arrays, the backup header
-            entry = self.card.target.index * table.entry_size
-            allowed |= set(range(gpt.SECTOR, 2 * gpt.SECTOR))
-            for base in (2 * gpt.SECTOR, 2 * gpt.SECTOR + span):
-                allowed |= set(range(base + entry, base + entry + table.entry_size))
-            allowed |= set(range(len(after) - gpt.SECTOR, len(after)))
-        changed = [i for i in range(len(after)) if after[i] != snapshot[i] and i not in allowed]
+        changed = cards.changed_outside(self.card, snapshot, after, self.card.target.index if retyped else None)
         if changed:
             raise host.HostError(
                 f'verify: partition-table bytes changed outside the target entry: offsets {changed[:16]}'

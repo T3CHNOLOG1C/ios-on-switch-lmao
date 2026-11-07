@@ -145,6 +145,25 @@ class CardTest(unittest.TestCase):
         with self.assertRaisesRegex(cards.RefusedError, 'expected one Linux'):
             cards.check_layout(table(both(rename(1, 'linux'), retype(8, gpt.EMUMMC))), SPEC)
 
+    def test_a_retype_may_change_only_its_entry_and_the_headers(self):
+        card = table()
+        span = card.table.entry_sectors * gpt.SECTOR
+        before = bytes((3 + 2 * card.table.entry_sectors) * gpt.SECTOR)
+
+        def changed(*offsets: int, index: int | None = 8) -> list[int]:
+            after = bytearray(before)
+            for at in offsets:
+                after[at] = 1
+            return cards.changed_outside(card, before, bytes(after), index)
+
+        entry = 2 * gpt.SECTOR + 8 * 128
+        allowed = (gpt.SECTOR, entry, entry + 127, entry + span + 56, len(before) - 1)
+        self.assertEqual(changed(*allowed), [])
+        self.assertEqual(changed(*allowed, index=None), list(allowed))
+        self.assertEqual(changed(446, entry - 1, entry + 128 + span), [446, entry - 1, entry + 128 + span])
+        with self.assertRaisesRegex(cards.host.HostError, 'shape'):
+            cards.changed_outside(card, before, before[:-1], 8)
+
     def test_resolve_refuses_partitions_and_paths(self):
         for argument in ('disk4s9', '/Volumes/SWITCH SD', '/dev/disk4s1', 'rdisk4s2'):
             with self.assertRaises(cards.RefusedError):

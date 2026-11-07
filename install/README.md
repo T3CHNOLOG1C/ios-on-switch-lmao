@@ -14,6 +14,7 @@ bazel run //:image --config=ios27               # IOS27.SII.* beside it
 bazel run //:image_dry_run                      # the plan, without the large IPSW downloads
 bazel run //:image_to_card -- disk4             # what copying would write and remove
 bazel run //:image_to_card -- disk4 --yes       # copy, then eject
+bazel run //:image_to_card -- disk4 --direct --yes  # one image straight onto the iOS partition, no Switch step
 bazel run //:image_boot                         # new boot files into an image, after a kernel-only change
 ```
 
@@ -38,10 +39,16 @@ runs under sudo belong to root, so it prints the `sudo rm -rf` that removes them
 rewrites the head of `.001` and nothing else. Without `--yes` it shows the plan, a new `install-ios.bin` included, and
 writes nothing.
 
+`--direct` does the installer's work on the Mac instead (`tools/install/direct.py`): it writes one image onto the
+iOS partition at the card's raw speed, without copying it onto the FAT first, fits it with the installer's own
+`apfs_tool`, and runs `fsck_apfs`. It asks for your password because writing a raw disk needs root. The card stays in
+the reader the whole time: macOS lets go of the old iOS container when the partition is retyped, and attaches the new
+one at the end. Add `--image IOS27` when `out/sd` holds both images.
+
 Every install writes a new container with a new Data volume, so nothing from an earlier install survives. The first
 boot takes a few minutes longer while iOS finishes setting itself up behind its own progress bar under the Apple logo.
 
-The card's `switchroot/ios/bl31.bin` and `bl33.bin` are what hekate starts. Only `install-ios.bin` and
+The card's `switchroot/ios/bl31.bin` and `bl33.bin` are what hekate starts. Only `install-ios.bin`, `--direct` and
 `bazel run //deploy:sd` write them, and deploy refuses a card whose iOS is the other version. Copying an image never
 changes what boots.
 

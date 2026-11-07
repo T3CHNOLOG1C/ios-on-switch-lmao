@@ -20,6 +20,8 @@ py_library(
         "compose.py",
         "cryptex.py",
         "delta.py",
+        "direct.py",
+        "direct_stream.py",
         "disks.py",
         "extents.py",
         "fill.py",
@@ -241,6 +243,35 @@ py_test(
     size = "small",
     srcs = ["to_card_test.py"],
     deps = [":lib"],
+)
+
+py_test(
+    name = "direct_test",
+    size = "small",
+    srcs = ["direct_test.py"],
+    deps = [":lib"],
+)
+
+# The direct install onto a disk image built like the card: hdiutil, diskutil, fsck_apfs and apfs_tool, so macOS,
+# outside the sandbox.
+py_test(
+    name = "direct_card_test",
+    srcs = [
+        "direct_card_test.py",
+        "testcard.py",
+    ],
+    data = [
+        "//boot/installer:apfs_tool",
+        "//install:testdata/switch-card-1tb.json",
+    ],
+    tags = [
+        "local",
+        "manual",
+    ],
+    deps = [
+        ":lib",
+        "@rules_python//python/runfiles",
+    ],
 )
 
 py_test(

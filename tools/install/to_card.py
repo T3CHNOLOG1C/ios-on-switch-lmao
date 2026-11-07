@@ -4,6 +4,7 @@
     bazel run //:image_to_card -- diskN                  dry run: what would be written and removed
     bazel run //:image_to_card -- diskN --yes            do it, then eject the card
     bazel run //:image_to_card -- diskN --image IOS27    only that image (default: every image in the folder)
+    bazel run //:image_to_card -- diskN --direct [--yes] the image straight onto the iOS partition (direct.py)
 
 Only parts the card does not already hold are written, by the manifests' chunk hashes: after a kernel-only change that
 is the head of NAME.SII.001. The boot files hekate starts (switchroot/ios/bl31.bin, ...) are never written here;
@@ -19,7 +20,7 @@ from pathlib import Path
 
 if __package__ in (None, ''):
     sys.path.insert(0, str(Path(os.path.abspath(__file__)).parents[2]))
-from tools.install import card as cards, folder, host, progress
+from tools.install import card as cards, direct, folder, host, progress
 
 
 def fat_of(card: cards.Card) -> cards.Part:
@@ -99,4 +100,6 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == '__main__':
+    if '--direct' in sys.argv[1:]:
+        sys.exit(direct.main([a for a in sys.argv[1:] if a != '--direct']))
     sys.exit(main())
