@@ -586,8 +586,8 @@ pub(crate) fn waited_turn(budget: &Arc<Budget>, ticket: u64) -> Turn {
 #[cfg(test)]
 mod tests {
     use super::{
-        helper_turn, program_turn, ticket, turns_for, waited_turn, Budget, Urgency, APPLE_TURNS,
-        MOST_TURNS,
+        helper_turn, holds_turn, program_turn, ticket, turns_for, waited_turn, Budget, Urgency,
+        APPLE_TURNS, MOST_TURNS,
     };
     use crate::pipeline::pool::Pool;
     use std::sync::{mpsc, Arc, Mutex};
@@ -652,6 +652,53 @@ mod tests {
             order.lock().unwrap().push(name);
         })
         .unwrap()
+    }
+
+    /// A spare turn is taken at once where one is free that it may take, an ahead one for a
+    /// making nothing waits for; never past the turns. Handed to no thread, it leaves the turn
+    /// its taker holds as it was when given back.
+    #[test]
+    fn a_spare_turn_is_one_free_now() {
+        let budget = Arc::new(Budget::new(3, 1));
+        let _held = waited_turn(&budget, ticket());
+        let ahead = budget.spare(Urgency::Ahead).unwrap();
+        assert!(budget.spare(Urgency::Ahead).is_none(), "no ahead turn left");
+        let waited = budget.spare(Urgency::Program).unwrap();
+        assert_eq!(budget.census(), (3, 0));
+        assert!(budget.spare(Urgency::HostStep).is_none(), "no turn left");
+        drop(waited);
+        assert!(holds_turn());
+        // A pool's piece nothing waits for, with no ahead turn free, holds back no one.
+        let order = Arc::new(Mutex::new(Vec::new()));
+        let pool = Pool::within(Arc::clone(&budget));
+        pool.run(noting(&order, "ahead"));
+        until(|| budget.census() == (2, 1));
+        let beside = budget.spare(Urgency::Program).unwrap();
+        drop(ahead);
+        until(|| order.lock().unwrap().len() == 1);
+        drop(beside);
+        until(|| budget.census() == (1, 0));
+    }
+
+    /// A spare turn handed to a thread is that thread's: its makings take no second turn.
+    #[test]
+    fn a_spare_turn_held_on_its_thread_is_that_thread_s_turn() {
+        let budget = Arc::new(Budget::new(2, 1));
+        let _held = waited_turn(&budget, ticket());
+        let spare = budget.spare(Urgency::Program).unwrap();
+        let other = crate::exit_guard::spawn(std::thread::Builder::new(), move || {
+            assert!(!holds_turn());
+            let mut spare = spare;
+            spare.hold_here();
+            assert!(holds_turn());
+            assert!(program_turn().is_none());
+            drop(spare);
+            holds_turn()
+        })
+        .unwrap();
+        assert!(!other.join().unwrap());
+        assert!(holds_turn());
+        assert_eq!(budget.census(), (1, 0));
     }
 
     /// A free turn goes to the making something waits for before one nothing waits for, though
