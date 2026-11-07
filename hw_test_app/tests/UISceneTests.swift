@@ -184,18 +184,20 @@ struct UIRenderBoxTest: HWTest {
     func run(_ context: TestContext) async throws -> Outcome {
         let device = MTLCreateSystemDefaultDevice()
         let before = device.map(RawFacade.counters) ?? [:]
-        let check = await UISceneTests.staged(context) { stage, screen -> [UIView] in
+        let check = await UISceneTests.staged(context) {
+            stage, screen -> [UIHostingController<RenderBoxPicture>] in
             [true, false].enumerated().map { index, grouped in
-                let host = UIHostingController(rootView: RenderBoxPicture(grouped: grouped)).view!
-                host.frame = Snapshots.aligned(
+                let host = UIHostingController(rootView: RenderBoxPicture(grouped: grouped))
+                host.view.frame = Snapshots.aligned(
                     CGRect(
                         x: 10 + CGFloat(index) * (screen.width / 2), y: 10, width: screen.width / 2 - 20,
                         height: screen.height - 20))
-                stage.addSubview(host)
+                stage.addSubview(host.view)
                 return host
             }
-        } _: { views in
-            CompositeCheck(
+        } _: { hosts in
+            let views = hosts.map(\.view!)
+            return CompositeCheck(
                 label: "drawingGroup", composited: Snapshots.composited(views[0]), cpu: Snapshots.composited(views[1]))
         }
         var metrics = Metrics()
