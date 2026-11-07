@@ -144,6 +144,27 @@ kernel_driver(
         "com.apple.driver.usb.IOUSBHostHIDDeviceSafeBoot",
         "com.apple.iokit.IOHIDEventDriver",
         "com.apple.iokit.IOHIDEventDriverSafeBoot",
+        # The iPad's own HID drivers: Apple keyboards (the Smart and Magic Keyboard top-case family), the Magic Trackpad
+        # (multitouch, actuator, and AppleUSBTopCaseDriver's bMaxPower override), Apple Pencil, AppleUSBHostiOSDevice
+        # (configures Apple accessories and asks them to charge) and AppleUSBHostMergeProperties (the overrides these
+        # kexts' and AppleUSBHub's personalities name), with their libraries. Every personality needs an Apple vendor
+        # ID or Manufacturer "Apple"; our HID devices are Nintendo's. AppleHIDTransport(SPI) stays out: it needs
+        # AppleSMC, whose IOACPIFamily and com.apple.driver.watchdog this kernelcache does not ship.
+        "com.apple.driver.AppleHIDKeyboard",
+        "com.apple.driver.AppleHIDKeyboardEmbedded",
+        "com.apple.driver.AppleTopCaseDriverV2",
+        "com.apple.driver.AppleTopCaseHIDEventDriver",
+        "com.apple.driver.AppleTopCaseActuatorHIDDriver",
+        "com.apple.driver.AppleUSBTopCaseDriver",
+        "com.apple.driver.AppleMultitouchDriver",
+        "com.apple.driver.AppleMultitouchSPI",
+        "com.apple.driver.AppleActuatorDriver",
+        "com.apple.driver.ApplePencilDriver",
+        "com.apple.driver.AppleInputDeviceSupport",
+        "com.apple.driver.AppleFirmwareUpdateKext",
+        "com.apple.driver.IOSlaveProcessor",
+        "com.apple.driver.usb.AppleUSBHostiOSDevice",
+        "com.apple.driver.AppleUSBHostMergeProperties",
     ],
     # Declared dependencies left out of the prelink (COMPONENT=DEPENDENCY=pointer sites; a nonzero cut rebinds each
     # site to _switch_prelink_cut_null in SwitchUSB.cpp, so OSDynamicCast yields NULL):

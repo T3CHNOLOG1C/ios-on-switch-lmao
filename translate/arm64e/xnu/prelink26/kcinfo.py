@@ -19,7 +19,14 @@ ROOTS = ["com.apple.driver.AppleMobileFileIntegrity", "com.apple.filesystems.apf
          "com.apple.iokit.IOSCSIBlockCommandsDevice", "com.apple.iokit.IOUSBDeviceFamily",
          "com.apple.iokit.IOUSBHostFamily", "com.apple.iokit.IOUSBMassStorageDriver",
          "com.apple.driver.usb.IOUSBHostHIDDeviceSafeBoot", "com.apple.iokit.IOHIDEventDriver",
-         "com.apple.iokit.IOHIDEventDriverSafeBoot"]
+         "com.apple.iokit.IOHIDEventDriverSafeBoot", "com.apple.driver.AppleHIDKeyboard",
+         "com.apple.driver.AppleHIDKeyboardEmbedded", "com.apple.driver.AppleTopCaseDriverV2",
+         "com.apple.driver.AppleTopCaseHIDEventDriver", "com.apple.driver.AppleUSBTopCaseDriver",
+         "com.apple.driver.AppleMultitouchDriver", "com.apple.driver.AppleMultitouchSPI",
+         "com.apple.driver.AppleActuatorDriver", "com.apple.driver.ApplePencilDriver",
+         "com.apple.driver.AppleInputDeviceSupport", "com.apple.driver.IOSlaveProcessor",
+         "com.apple.driver.usb.AppleUSBHostiOSDevice", "com.apple.driver.AppleUSBHostMergeProperties",
+         "com.apple.iokit.IOGameControllerFamily"]
 # _PrelinkExecutableLoadAddr of a codeless kext in a fileset kernelcache (XNU kOSKextCodelessKextLoadAddr).
 CODELESS_LOAD_ADDR = 0x7FFFFFFFFFFFFFFF
 
