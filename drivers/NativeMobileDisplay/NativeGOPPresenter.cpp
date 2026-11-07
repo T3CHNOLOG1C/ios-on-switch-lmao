@@ -22,10 +22,6 @@ bool native_gop_gpu_offer(IOService *, void *display, IOMemoryDescriptor *, uint
 void native_gop_presenter_set_source(IOService *presenter, IOService *nub);
 // Provided by the display driver: finishes (status 0) or fails the swap that was offered.
 void native_legacy_gpu_complete(void *display, int status);
-// TegraGM20BLayout.h (the GPU driver; weak until it is linked): a block-linear surface's bytes as a CPU lock sees them, in
-// a scratch the copy engine fills. Thread context: it sleeps on the copy's fence.
-__attribute__((weak)) void *tegra_gm20b_surface_rows(uint64_t pa, void **memory, uint64_t *offset);
-__attribute__((weak)) void tegra_gm20b_surface_rows_done(void *rows);
 }
 class NativeGOPClient;
 class NativeGOPPresenter;
@@ -197,23 +193,10 @@ IOReturn NativeGOPPresenter::transfer(task_t task, const NGPPresent &q, NGPTrans
         return kIOReturnNoMemory;
     IOReturn status = input->prepare(kIODirectionIn);
     if (status == kIOReturnSuccess) {
-        // A range inside a block-linear surface holds its texels tiled: the rows come from the GPU driver's scratch, taken
-        // before the gate since that call sleeps. Past the surface's end the range is read as it is.
-        void *rows = nullptr, *rowsMemory = nullptr;
-        uint64_t rowsOffset = 0, fromRows = 0;
-        if (&tegra_gm20b_surface_rows) {
-            const addr64_t pa = input->getPhysicalSegment(0, nullptr, kIOMemoryMapperNone);
-            rows = pa ? tegra_gm20b_surface_rows(pa, &rowsMemory, &rowsOffset) : nullptr;
-        }
-        IOMemoryDescriptor *rowsSource = static_cast<IOMemoryDescriptor *>(rowsMemory);
-        if (rows && rowsSource->getLength() > rowsOffset)
-            fromRows = rowsSource->getLength() - rowsOffset < q.bytes ? rowsSource->getLength() - rowsOffset : q.bytes;
-        uint8_t *frame = reinterpret_cast<uint8_t *>(mapping->getVirtualAddress());
         IOLockLock(gate);
         if (!online)
             status = kIOReturnNotReady;
-        else if ((fromRows && rowsSource->readBytes(rowsOffset, frame, fromRows) != fromRows) ||
-                 input->readBytes(fromRows, frame + fromRows, q.bytes - fromRows) != q.bytes - fromRows)
+        else if (input->readBytes(0, reinterpret_cast<void *>(mapping->getVirtualAddress()), q.bytes) != q.bytes)
             status = kIOReturnUnderrun;
         else {
             __asm__ volatile("dsb oshst" ::: "memory");
@@ -223,8 +206,6 @@ IOReturn NativeGOPPresenter::transfer(task_t task, const NGPPresent &q, NGPTrans
             native_gop_bytes = native_gop_bytes + q.bytes;
         }
         IOLockUnlock(gate);
-        if (rows)
-            tegra_gm20b_surface_rows_done(rows);
         IOReturn completion = input->complete(kIODirectionIn);
         if (status == kIOReturnSuccess)
             status = completion;
