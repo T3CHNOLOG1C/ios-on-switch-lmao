@@ -234,7 +234,6 @@ def _capabilities(tree: list) -> None:
     product = child(tree, 'product')
     for key, value in (
         ('bluetooth-le', u32(1)),
-        ('display-mirroring', u32(1)),
         ('ui-pip', b''),
         ('hearingaid-audio-equalization', u32(1)),
         ('hearingaid-low-energy-audio', u32(1)),
