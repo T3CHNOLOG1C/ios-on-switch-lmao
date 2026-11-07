@@ -49,11 +49,15 @@ def push_bytes(push: list[tuple[int, int]]) -> bytes:
     return struct.pack('<I32I', mask, *words)
 
 
-def pipeline_bytes(rec: dict, key_offset: int, blob_off: int) -> bytes:
-    vb = rec['vbs'][0] if rec['vbs'] else {'slot': 0xFF, 'stride': 0}
+def key_hash(rec: dict) -> int:
     # the raw path's own states (probe.mm PROBE_YCBCR_LIB) by the name the runtime asks for (raw_gpu.cpp ycbcrPipeline)
     own = re.search(r'\| f (ycbcr_\w+)', rec['key'])
-    keyhash = fnv(('raw.ycbcr.' + own.group(1)).encode() if own else rec['key'].encode())
+    return fnv(('raw.ycbcr.' + own.group(1)).encode() if own else rec['key'].encode())
+
+
+def pipeline_bytes(rec: dict, key_offset: int, blob_off: int) -> bytes:
+    vb = rec['vbs'][0] if rec['vbs'] else {'slot': 0xFF, 'stride': 0}
+    keyhash = key_hash(rec)
     flags = (1 if rec['fetch'] else 0) | (2 if rec.get('form') == 'barrier' else 0)  # PackPipelineFlags
     head = struct.pack(
         '<QIHHIIBBBBHHI',

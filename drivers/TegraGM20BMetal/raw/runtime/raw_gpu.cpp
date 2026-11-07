@@ -379,7 +379,6 @@ bool Device::init(std::string &err)
     for (uint64_t i = 0; i < pack_.bytes(PackBaseline) / 8; i++)
         if (base[2 * i] >= CT_WRITE && base[2 * i] < CT_WRITE + 32)
             ctWrite_[(base[2 * i] - CT_WRITE) / 4] = base[2 * i + 1];
-    pipelines_.resize(pack_.header()->pipelines);
     placed_.assign(pack_.header()->programs, ~0u);
     // the 2D engine's state and its mip-chain self-test (raw/fx); chains on, their first chunk now too (wired here, at the
     // render server's start, not under the first mipmapped texture's frame)

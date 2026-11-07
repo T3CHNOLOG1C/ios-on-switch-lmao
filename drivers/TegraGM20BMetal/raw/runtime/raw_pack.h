@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // The raw GM20B path's pipeline pack (pack/mkpack.py writes it, pack/rawpack.py runs the whole generation at bundle build time;
-// this is its layout). Little endian, packed, sections 256-byte aligned. Read-only after load: mmapped and pointed into.
+// this is its layout). Little endian, packed, sections 256-byte aligned. Read-only after load: mmapped shared and pointed into,
+// so every process reads the same page-cache pages. Its pipelines are in keyHash order (Pack::find searches them in place).
 #pragma once
 #include <cstdint>
 #include <string>
@@ -159,7 +160,8 @@ private:
     const uint8_t *base_ = nullptr;
     size_t size_ = 0;
     const PackHeader *hdr_ = nullptr;
-    std::vector<std::pair<uint64_t, uint32_t>> index_;  // sorted (keyHash, pipeline)
+    // the pipelines in keyHash order, for a pack whose section is not in that order itself (mkpack.py's are); empty: it is
+    std::vector<uint32_t> index_;
 };
 
 }  // namespace raw

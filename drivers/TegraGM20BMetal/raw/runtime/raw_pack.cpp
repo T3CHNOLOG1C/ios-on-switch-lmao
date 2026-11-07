@@ -35,7 +35,7 @@ bool Pack::load(const char *path, uint64_t stack, std::string &err)
     }
     struct stat st;
     fstat(fd, &st);
-    void *m = mmap(nullptr, st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    void *m = mmap(nullptr, st.st_size, PROT_READ, MAP_SHARED, fd, 0);
     ::close(fd);
     if (m == MAP_FAILED) {
         err = "mmap failed";
@@ -58,19 +58,39 @@ bool Pack::load(const char *path, uint64_t stack, std::string &err)
             return false;
         }
     const PackPipeline *p = section<PackPipeline>(PackPipelines);
-    for (uint32_t i = 0; i < hdr_->pipelines; i++)
-        index_.push_back({p[i].keyHash, i});
-    std::sort(index_.begin(), index_.end());
+    const auto byKey = [p](uint32_t a, uint32_t b) {
+        return p[a].keyHash < p[b].keyHash;
+    };
+    for (uint32_t i = 1; i < hdr_->pipelines && index_.empty(); i++)
+        if (p[i].keyHash < p[i - 1].keyHash) {
+            index_.resize(hdr_->pipelines);
+            for (uint32_t k = 0; k < hdr_->pipelines; k++)
+                index_[k] = k;
+            std::stable_sort(index_.begin(), index_.end(), byKey);
+        }
     return true;
 }
 
 const PackPipeline *Pack::find(uint64_t keyHash, PackForm form) const
 {
     const PackPipeline *p = section<PackPipeline>(PackPipelines);
-    for (auto it = std::lower_bound(index_.begin(), index_.end(), std::make_pair(keyHash, 0u));
-         it != index_.end() && it->first == keyHash; ++it)
-        if (form == PackForm::Default || (p[it->second].flags & PipelineBarrierForm))
-            return p + it->second;
+    const uint32_t n = hdr_->pipelines;
+    const auto keyAt = [&](uint32_t i) {
+        return p[index_.empty() ? i : index_[i]].keyHash;
+    };
+    uint32_t lo = 0, hi = n;
+    while (lo < hi) {
+        const uint32_t mid = lo + (hi - lo) / 2;
+        if (keyAt(mid) < keyHash)
+            lo = mid + 1;
+        else
+            hi = mid;
+    }
+    for (; lo < n && keyAt(lo) == keyHash; lo++) {
+        const PackPipeline *at = p + (index_.empty() ? lo : index_[lo]);
+        if (form == PackForm::Default || (at->flags & PipelineBarrierForm))
+            return at;
+    }
     return nullptr;
 }
 

@@ -584,6 +584,18 @@ unsigned long mock_iokit_calls(unsigned method)
     return method < 16 ? calls[method] : 0;
 }
 
+/* The live BOs' bytes: allocations (BoAlloc) and imports of memory that is not an IOSurface's */
+void mock_iokit_held(uint64_t *allocated, uint64_t *imported)
+{
+    *allocated = *imported = 0;
+    for (unsigned h = 1; h < kMaxBo; h++) {
+        if (bos[h].fd >= 0 && bos[h].bytes && !bos[h].import)
+            *allocated += bos[h].bytes;
+        else if (bos[h].import && !bos[h].surface)
+            *imported += bos[h].bytes;
+    }
+}
+
 unsigned long mock_iokit_import_maps(void)
 {
     return import_maps;
