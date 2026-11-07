@@ -129,15 +129,16 @@ id<MTLTexture> texture(id<MTLDevice> dev, unsigned w, unsigned h, MTLStorageMode
     return [dev newTextureWithDescriptor:d];
 }
 
-// The raw path's texture `t` replayed on m2v: a copy into an m2v buffer, which the raw path cannot name
-void replayOnM2v(id<MTLDevice> dev, id<MTLDevice> m2v, id<MTLTexture> t, const char *what)
+// The raw path's texture `t` replayed on m2v: a copy into a buffer behind a fill, which sends the command buffer to m2v
+void replayOnM2v(id<MTLDevice> dev, id<MTLTexture> t, const char *what)
 {
-    id<MTLBuffer> out = [m2v newBufferWithLength:t.width * t.height * 4 options:MTLResourceStorageModeShared];
+    id<MTLBuffer> out = [dev newBufferWithLength:t.width * t.height * 4 options:MTLResourceStorageModeShared];
     rate(raw_metal_rates, " m2v=");
     rate(native_bridge_metal_rates, " stx=");
     const Calls before = Calls::now();
     id<MTLCommandBuffer> cb = [[dev newCommandQueue] commandBuffer];
     id<MTLBlitCommandEncoder> b = [cb blitCommandEncoder];
+    [b fillBuffer:out range:NSMakeRange(0, out.length) value:0];
     [b copyFromTexture:t
                      sourceSlice:0
                      sourceLevel:0
@@ -171,12 +172,12 @@ void rawBuffers(id<MTLDevice> dev)
     }
 }
 
-void rawTextures(id<MTLDevice> dev, id<MTLDevice> m2v)
+void rawTextures(id<MTLDevice> dev)
 {
     for (MTLStorageMode mode : {MTLStorageModePrivate, MTLStorageModeShared}) {
         id<MTLTexture> t = texture(dev, 96, 40, mode);
         expect(raw_metal_texture_kept(t), "the raw path keeps the texture");
-        replayOnM2v(dev, m2v, t, mode == MTLStorageModePrivate ? "pool texture" : "write-combined texture");
+        replayOnM2v(dev, t, mode == MTLStorageModePrivate ? "pool texture" : "write-combined texture");
     }
 }
 
@@ -232,7 +233,7 @@ void surfaceRawFirst(id<MTLDevice> dev, id<MTLDevice> m2v)
     const Calls first = Calls::now();
     id<MTLTexture> raw = [dev newTextureWithDescriptor:d iosurface:s plane:0];
     expect(raw_metal_texture_kept(raw), "raw-first surface: the raw path keeps its texture over it");
-    replayOnM2v(dev, m2v, raw, "raw-first surface, replayed");
+    replayOnM2v(dev, raw, "raw-first surface, replayed");
     const Calls before = Calls::now();
     id<MTLBuffer> view = [(id<AliasSurfaceBuffer>)m2v newBufferWithIOSurface:s];
     expect(view != nil, "raw-first surface: m2v's buffer over it");
@@ -265,7 +266,7 @@ int main(int argc, char **argv)
             return 1;
         }
         rawBuffers(dev);
-        rawTextures(dev, m2v);
+        rawTextures(dev);
         surfaceM2vFirst(dev, m2v);
         surfaceRawFirst(dev, m2v);
     }
