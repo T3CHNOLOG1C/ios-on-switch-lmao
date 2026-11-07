@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// The raw GM20B path as Core Animation's render server's Metal device (backboardd only; TegraGM20BMetalPlugin.mm decides).
+// The raw GM20B path as a process's Metal device (TegraGM20BMetalPlugin.mm decides: every process whose sandbox may read the pack).
 //
 // Every Metal object it hands out answers on the raw path (raw_gpu.h: direct MAXWELL_B methods, one Exec per command buffer) and
 // has an m2v twin over the same memory, made when first needed (the m2v device it wraps: NativeBridgeMetalFrontend.mm). A command
