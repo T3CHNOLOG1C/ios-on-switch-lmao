@@ -139,6 +139,17 @@ py_binary(
     main = "raw/test/ordercheck.py",
 )
 
+# The raw path's capture and shader-data checks against the pack (they read it with the pack generator's modules).
+[py_binary(
+    name = check,
+    srcs = ["raw/test/%s.py" % check],
+    main = "raw/test/%s.py" % check,
+    deps = [":raw_pack"],
+) for check in [
+    "capturecheck",
+    "datacheck",
+]]
+
 py_binary(
     name = "check_dyld_cache_imports",
     srcs = ["check-dyld-cache-imports.py"],
