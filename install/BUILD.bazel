@@ -113,6 +113,8 @@ filegroup(
 string_flag(
     name = "prebuilt",
     build_setting_default = "local",
+    # Tools too: under release, nothing resolves a C/C++ toolchain (bazel/toolchains/none).
+    scope = "universal",
     values = [
         "local",
         "release",
