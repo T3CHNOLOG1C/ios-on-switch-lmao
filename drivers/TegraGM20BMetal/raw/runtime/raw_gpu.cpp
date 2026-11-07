@@ -4,6 +4,7 @@
 // copies NVK's nouveau_copy_rect and nvk_cmd_copy_memory_ce (all MIT), restricted to what Core Animation uses. r7-raw wrote the
 // first version (render encoder, pack replay) and checked it against NVK's stream; r8-rawca added the lifetimes, the pool, the
 // imports, the copies and the abortable command buffer.
+#include "raw_clear.h"
 #include "raw_follow.h"
 #include "raw_gpu.h"
 #include "raw_target.h"
@@ -115,32 +116,32 @@ uint32_t fbits(float f)
     return u;
 }
 
-// Texture header word 0 per MTLPixelFormat as NVK writes it (pack/mkformats.py over the twin, 11-04), and the render target
-// format NVK writes where the pack renders to it (BGRA8 0xcf; R32Float 0xe5, Core Animation's third attachment in two states).
+// Texture header word 0 per MTLPixelFormat as NVK writes it (pack/mkformats.py over the twin, 11-04), and the color target format
+// NVK writes for a target of it (raw/test/targetcheck.py over the probe's PROBE_TARGETS run; 0 where m2v's NVK renders none).
 const FormatInfo kFormats[] = {
-    {1, 0, 0x2002491d, 1, false},        // A8Unorm
-    {10, 0, 0x7012491d, 1, false},       // R8Unorm
+    {1, 0xf7, 0x2002491d, 1, false},     // A8Unorm
+    {10, 0xf3, 0x7012491d, 1, false},    // R8Unorm
     {11, 0, 0x7012491d, 1, true},        // R8Unorm_sRGB
-    {20, 0, 0x7012491b, 2, false},       // R16Unorm
-    {25, 0, 0x7017ff9b, 2, false},       // R16Float
-    {30, 0, 0x70d24918, 2, false},       // RG8Unorm
-    {40, 0, 0x74e24915, 2, false},       // B5G6R5Unorm
+    {20, 0xee, 0x7012491b, 2, false},    // R16Unorm
+    {25, 0xf2, 0x7017ff9b, 2, false},    // R16Float
+    {30, 0xea, 0x70d24918, 2, false},    // RG8Unorm
+    {40, 0xe8, 0x74e24915, 2, false},    // B5G6R5Unorm
     {41, 0, 0x272a4913, 2, false},       // A1BGR5Unorm
     {42, 0, 0x272a4912, 2, false},       // ABGR4Unorm
-    {43, 0, 0x54e24914, 2, false},       // BGR5A1Unorm
+    {43, 0xe9, 0x54e24914, 2, false},    // BGR5A1Unorm
     {55, 0xe5, 0x7017ff8f, 4, false},    // R32Float
-    {60, 0, 0x70d2490c, 4, false},       // RG16Unorm
-    {65, 0, 0x70d7ff8c, 4, false},       // RG16Float
+    {60, 0xda, 0x70d2490c, 4, false},    // RG16Unorm
+    {65, 0xde, 0x70d7ff8c, 4, false},    // RG16Float
     {70, 0xd5, 0x58d24908, 4, false},    // RGBA8Unorm (rendered: a 4:2:0 code texture's image)
-    {71, 0, 0x58d24908, 4, true},        // RGBA8Unorm_sRGB
+    {71, 0xd6, 0x58d24908, 4, true},     // RGBA8Unorm_sRGB
     {80, 0xcf, 0x54e24908, 4, false},    // BGRA8Unorm
-    {81, 0, 0x54e24908, 4, true},        // BGRA8Unorm_sRGB
+    {81, 0xd0, 0x54e24908, 4, true},     // BGRA8Unorm_sRGB
     {90, 0xd1, 0x58d24909, 4, false},    // RGB10A2Unorm (rendered: a 10-bit code texture's image)
-    {92, 0, 0x78d7ffa1, 4, false},       // RG11B10Float
+    {92, 0xe0, 0x78d7ffa1, 4, false},    // RG11B10Float
     {93, 0, 0x78d7ffa0, 4, false},       // RGB9E5Float
-    {94, 0, 0x54e24909, 4, false},       // BGR10A2Unorm
-    {105, 0, 0x70d7ff84, 8, false},      // RG32Float
-    {110, 0, 0x58d24903, 8, false},      // RGBA16Unorm
+    {94, 0xdf, 0x54e24909, 4, false},    // BGR10A2Unorm
+    {105, 0xcb, 0x70d7ff84, 8, false},   // RG32Float
+    {110, 0xc6, 0x58d24903, 8, false},   // RGBA16Unorm
     {115, 0xca, 0x58d7ff83, 8, false},   // RGBA16Float (rendered: a 4:2:0 texture's converted image)
     {125, 0xc0, 0x58d7ff81, 16, false},  // RGBA32Float (rendered: an sRGB 4:2:0 texture's image)
 };
@@ -560,7 +561,9 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
         const int n = sscanf(at, " c%u=%u:%u:%u:%u:%u:%*u:%u:%u", &c, &f, &mask, &blend, &factor[0], &factor[1],
                              &factor[2], &factor[3]);
         if (n >= 4 && c < 8) {
-            pl.colorFormats[c] = f;
+            constexpr unsigned kRGB8_444_2P = 542,
+                               kRGBA16Float = 115;  // rendered through its stand-in (Texture::standIn)
+            pl.colorFormats[c] = f == kRGB8_444_2P ? kRGBA16Float : f;
             if (mask && (blend || mask != 15))
                 pl.readBits |= uint8_t(1u << c);
             // MTLBlendFactorBlendColor, OneMinusBlendColor, BlendAlpha, OneMinusBlendAlpha
@@ -1078,6 +1081,38 @@ bool Device::createPlanarTexture(uint64_t surfaceId, void *base, uint64_t allocB
     return true;
 }
 
+Pipeline *Device::standInPipeline(bool store)
+{
+    static const char load[] = "raw.standin.two_plane_load", stored[] = "raw.standin.two_plane_store";
+    return store ? pipeline(Pack::fnv(stored, sizeof stored - 1)) : pipeline(Pack::fnv(load, sizeof load - 1));
+}
+
+bool Device::createPlanarTarget(uint64_t surfaceId, void *base, uint64_t allocBytes, const void *surface, Texture &t)
+{
+    constexpr uint32_t kR8Unorm = 10, kRG8Unorm = 30, kRGBA16Float = 115;
+    if (!t.planar || !t.import || !standInPipeline(false) || !standInPipeline(true))
+        return false;
+    const uint64_t at = t.import->bo.va;
+    Texture *luma = new Texture, *chroma = new Texture, *standIn = new Texture;
+    const bool made = createSurfaceTexture(surfaceId, base, allocBytes, surface, t.planes.luma - at, t.width, t.height,
+                                           t.planes.lumaPitch, kR8Unorm, *luma) &&
+                      createSurfaceTexture(surfaceId, base, allocBytes, surface, t.planes.chroma - at, t.width,
+                                           t.height, t.planes.chromaPitch, kRG8Unorm, *chroma) &&
+                      createTexture(t.width, t.height, kRGBA16Float, *standIn, false, true) && standIn->renderable &&
+                      (luma->renderable || luma->shadowTarget) && (chroma->renderable || chroma->shadowTarget);
+    if (!made) {
+        for (Texture *x : {luma, chroma, standIn}) {
+            destroyTexture(*x);
+            delete x;
+        }
+        return false;
+    }
+    t.luma = luma;
+    t.chroma = chroma;
+    t.standIn = standIn;
+    return true;
+}
+
 bool Device::createBufferTexture(const Buffer &b, uint64_t offset, uint32_t width, uint32_t height, uint32_t pitch,
                                  uint32_t format, Texture &t)
 {
@@ -1314,12 +1349,12 @@ void Device::selfTest()
 
 void Device::destroyTexture(Texture &t)
 {
-    for (Texture *plane : {t.luma, t.chroma})
+    for (Texture *plane : {t.luma, t.chroma, t.standIn})
         if (plane) {
             destroyTexture(*plane);
             delete plane;
         }
-    t.luma = t.chroma = nullptr;
+    t.luma = t.chroma = t.standIn = nullptr;
     if (t.sampled) {  // its header is the pool image's
         destroyTexture(*t.sampled);
         delete t.sampled;
@@ -2812,40 +2847,6 @@ void RenderEncoder::countRules(const Pipeline &pl)
 
 #endif
 
-// The clear value m2v hands Vulkan for a Metal clear color of an attachment of `format` (metal2vulkan-runtime clear_value.rs
-// `color`): what NVK's clear writes, as Metal's conversion stores it. Normalized channels through float, clamped, k / 255 of the
-// nearest integer k (ties to even); half channels the value of the half nearest (ties to even); float channels themselves (a
-// NaN quieted); the channels a format has none of 0.
-static void clearValue(uint32_t format, const float in[4], uint32_t out[4])
-{
-    auto unorm8 = [](float x) {
-        const double v = std::isnan(x) ? 0.0 : std::clamp(double(x), 0.0, 1.0);
-        return fbits(float(std::nearbyint(v * 255.0) / 255.0));
-    };
-    auto exact = [](float x) {
-        return std::isnan(x) ? (fbits(x) | 0x7fc00000u) : fbits(x);
-    };
-    auto half = [&](float x) {
-        return std::isnan(x) ? exact(x) : fbits(float(_Float16(x)));
-    };
-    for (int i = 0; i < 4; i++)
-        switch (format) {
-        case 70:
-        case 80:
-            out[i] = unorm8(in[i]);
-            break;
-        case 55:
-            out[i] = i ? 0u : exact(in[i]);
-            break;
-        case 115:
-            out[i] = half(in[i]);
-            break;
-        default:
-            out[i] = exact(in[i]);
-            break;  // RGBA32Float
-        }
-}
-
 namespace {
 // One side of a copy-engine copy: pitch (va the first texel's, rows `pitch` apart) or a block-linear image (va its first byte,
 // `pitch` its row stride, the copy from texel (x, y) of its width x height)
@@ -3075,7 +3076,7 @@ void RenderEncoder::end()
         p.m(CT_SELECT, map | 1);
         p.inc(SURFACE_CLIP_H, {c.x1 << 16, c.y1 << 16});
         p.m(ZT_SELECT, 0);
-        uint32_t v[4];
+        uint32_t v[4] = {};
         clearValue(pass_.color[c.target].texture->format, c.value, v);
         p.inc(COLOR_CLEAR_VALUE, {v[0], v[1], v[2], v[3]});
         p.inc(CLEAR_RECT_H, {c.x1 << 16 | c.x0, c.y1 << 16 | c.y0});
@@ -3112,7 +3113,7 @@ void RenderEncoder::end()
     for (const Clear &c : cl) {
         if (c.own)
             continue;
-        uint32_t v[4];
+        uint32_t v[4] = {};
         clearValue(pass_.color[c.target].texture->format, c.value, v);
         const bool area = !c.x0 && !c.y0 && c.x1 == areaW_ && c.y1 == areaH_;
         p.inc(COLOR_CLEAR_VALUE, {v[0], v[1], v[2], v[3]});

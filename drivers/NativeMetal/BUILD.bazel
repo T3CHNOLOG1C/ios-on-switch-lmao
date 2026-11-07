@@ -18,6 +18,7 @@ filegroup(
         "AsyncPipelines.h",
         "GpuMemoryRelease.h",
         "ImageFilterLink.h",
+        "LimitsTable.h",
         "NativeBridgeMetalFrontend.h",
         "QueuePriority.h",
         "SurfaceLayout.h",

@@ -37,6 +37,7 @@
 #include "raw_push.h"
 #include "raw_overlap.h"
 #include "raw_region.h"
+#include "raw_sampler.h"
 #include "raw_zeta.h"
 #include "raw_ycbcr.h"
 #include "../fx/fx_mip.h"
@@ -135,6 +136,10 @@ struct Texture {
     } planes;
 
     bool planar = false;
+    // A planar texture rendered into: its passes render into standIn (RGBA16Float, block-linear), which a draw loads from the
+    // planes before a pass that loads it and stores into them after one that stores it, through luma (R8Unorm over plane 0)
+    // and chroma (RG8Unorm over plane 1): the frontend's two-plane stand-in (TwoPlaneStandIn.metal), as m2v renders it
+    Texture *standIn = nullptr;
     // A two-plane YCbCr surface's texture (raw_ycbcr.h): the image sampled is span (RGBA16Float, RGBA32Float, RGBA8Unorm,
     // RGB10A2Unorm), which a pass of the pack's conversion state draws from the planes' textures, luma (R8Unorm, R16Unorm) and
     // chroma (RG8Unorm, RG16Unorm; none over plane 1), before the work that samples it (pack/ycbcr.metal; shape: its fragment
@@ -199,13 +204,6 @@ struct Buffer {
     Import *import = nullptr;  // a caller's no-copy pages, else
     Span span;                 // pool memory
     Lease *lease = nullptr;    // as Texture::lease
-};
-
-struct SamplerDesc {                                      // the MTLSamplerDescriptor fields the TSC takes
-    uint8_t minFilter = 0, magFilter = 0, mipFilter = 0;  // MTLSamplerMinMagFilter / MTLSamplerMipFilter
-    uint8_t sAddress = 0, tAddress = 0, rAddress = 0;     // MTLSamplerAddressMode (clampToBorderColor: not taken)
-    uint8_t maxAnisotropy = 1;
-    float lodMin = 0, lodMax = 3.402823466e+38f;
 };
 
 // Level `level` (1 .. levels - 1) of mipmapped texture `t`'s chain as a render target (raw_target.h: NVK's block-linear
@@ -613,6 +611,11 @@ public:
     bool createPlanarTexture(uint64_t surfaceId, void *base, uint64_t allocBytes, const void *surface, uint64_t luma,
                              uint32_t lumaPitch, uint64_t chroma, uint32_t chromaPitch, uint32_t width, uint32_t height,
                              Texture &t);
+    // A planar texture's stand-in and its planes' render targets (Texture::standIn); false where the pack lacks the stand-in
+    // states or a plane cannot be rendered
+    bool createPlanarTarget(uint64_t surfaceId, void *base, uint64_t allocBytes, const void *surface, Texture &t);
+    // The pack's stand-in states: the planes' codes into the stand-in, or (`store`) the stand-in into the planes
+    Pipeline *standInPipeline(bool store);
     bool createBufferTexture(const Buffer &b, uint64_t offset, uint32_t width, uint32_t height, uint32_t pitch,
                              uint32_t format,
                              Texture &t);  // over a buffer's memory (t holds no reference: the caller keeps the buffer)

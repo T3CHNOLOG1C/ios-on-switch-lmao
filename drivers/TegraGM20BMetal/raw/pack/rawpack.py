@@ -92,6 +92,7 @@ BUILT = ('probe', 'libmock_iokit.dylib', 'ycbcr.metallib')
 # crawl's root
 FRAMEWORK = re.compile(r' lib=/System/Library/(?:Private)?Frameworks/\w+\.framework/default\.metallib ')
 QC_PATH = 'System/Library/Frameworks/QuartzCore.framework/default.metallib'
+LIBRARY = re.compile(r' lib=(\S+)')
 
 
 def library_root(qc: Path) -> str:
@@ -248,7 +249,16 @@ def fnv(b: bytes) -> int:
 
 
 def state_key(line: str) -> str:
-    """Give an R line's state key as probe.mm prints it: every descriptor field but the label, then its functions."""
+    """Give an R line's state key as probe.mm prints it: every descriptor field but the label, then its functions.
+
+    No lib= field is in it; a line whose first library is another framework's default.metallib than QuartzCore's ends
+    with " | l <framework>" (probe.mm libraryPath, frameworkName).
+    """
+    libs = LIBRARY.findall(line)
+    framework = ''
+    if libs and libs[0].endswith('.framework/default.metallib') and '/QuartzCore.framework/' not in libs[0]:
+        framework = libs[0].rsplit('.framework/', 1)[0].rsplit('/', 1)[-1]
+    line = LIBRARY.sub('', line)
     bar1, bar2 = line.find(' | v '), line.find(' | f ')
     if bar1 < 0 or bar2 < 0:
         return ''
@@ -258,7 +268,8 @@ def state_key(line: str) -> str:
         for h in line[:bar1].split()
         if h.startswith(('samples=', 'topo=', 'ds=')) or (len(h) > 1 and h[0] in 'ca' and h[1].isdigit())
     ]
-    return (' '.join(fields) + ' ' + line[bar1 : bar3 if bar3 >= 0 else len(line)]).strip()
+    key = (' '.join(fields) + ' ' + line[bar1 : bar3 if bar3 >= 0 else len(line)]).strip()
+    return f'{key} | l {framework}' if framework else key
 
 
 def barrier_set(d: Path) -> Path | None:

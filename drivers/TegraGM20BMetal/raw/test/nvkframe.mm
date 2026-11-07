@@ -345,6 +345,36 @@ int main(int argc, char **argv)
                 d.mipmapLevelCount = 1 + unsigned(std::log2(double(std::max(td.w, td.h))));
                 d.storageMode = MTLStorageModePrivate;
                 tex[t] = [dev newTextureWithDescriptor:d];
+            } else if (td.iosurface && td.format == 542) {
+                // a widget snapshot: luma rows one byte a texel, chroma rows two, each rounded up to 64 bytes (FRAME_PITCH:
+                // 16, so neither is a pitch target's 128)
+                const NSUInteger round = frame::pitchShapes("fb") ? 16 : 64, row0 = (td.w + round - 1) / round * round,
+                                 row1 = (2 * td.w + round - 1) / round * round, off1 = (row0 * td.h + 4095) & ~4095ul;
+                NSDictionary *p0 = @{
+                    (id)kIOSurfacePlaneWidth : @(td.w),
+                    (id)kIOSurfacePlaneHeight : @(td.h),
+                    (id)kIOSurfacePlaneBytesPerElement : @1,
+                    (id)kIOSurfacePlaneBytesPerRow : @(row0),
+                    (id)kIOSurfacePlaneOffset : @0,
+                    (id)kIOSurfacePlaneSize : @(row0 * td.h)
+                };
+                NSDictionary *p1 = @{
+                    (id)kIOSurfacePlaneWidth : @(td.w),
+                    (id)kIOSurfacePlaneHeight : @(td.h),
+                    (id)kIOSurfacePlaneBytesPerElement : @2,
+                    (id)kIOSurfacePlaneBytesPerRow : @(row1),
+                    (id)kIOSurfacePlaneOffset : @(off1),
+                    (id)kIOSurfacePlaneSize : @(row1 * td.h)
+                };
+                surfaces[t] = IOSurfaceCreate((__bridge CFDictionaryRef) @{
+                    (id)kIOSurfaceWidth : @(td.w),
+                    (id)kIOSurfaceHeight : @(td.h),
+                    (id)kIOSurfacePixelFormat : @((uint32_t)'_RB4'),
+                    (id)kIOSurfaceAllocSize : @((off1 + row1 * td.h + 16383) & ~16383ul),
+                    (id)kIOSurfacePlaneInfo : @[ p0, p1 ]
+                });
+                d.storageMode = MTLStorageModeShared;
+                tex[t] = [dev newTextureWithDescriptor:d iosurface:surfaces[t] plane:0];
             } else if (td.iosurface) {
                 NSDictionary *p = @{
                     (id)kIOSurfaceWidth : @(td.w),
@@ -536,10 +566,42 @@ int main(int argc, char **argv)
                         rp.depthAttachment.clearDepth = pass.clearDepth;
                         rp.stencilAttachment.clearStencil = pass.clearStencil;
                     }
+                    // FRAME_VISIBILITY: every pass carries a visibility result buffer (GL-on-Metal's passes) and every draw sets the
+                    // Disabled mode, so nothing counts into it
+                    static id<MTLBuffer> visibility =
+                        getenv("FRAME_VISIBILITY") ? [dev newBufferWithLength:4096 options:MTLResourceStorageModeShared]
+                                                   : nil;
+                    rp.visibilityResultBuffer = visibility;
+                    // FRAME_SPI: GL-on-Metal's encoder SPI at Metal's defaults on every pass, and (facade) the first attachment's
+                    // store action left Unknown and set by the encoder; the frontend has neither, so its passes go without
+                    static const bool spi = getenv("FRAME_SPI") != nullptr;
+#ifdef RAW_FACADE
+                    const MTLStoreAction store = rp.colorAttachments[0].storeAction;
+                    if (spi)
+                        rp.colorAttachments[0].storeAction = MTLStoreActionUnknown;
+#endif
                     id<MTLRenderCommandEncoder> e = [cb renderCommandEncoderWithDescriptor:rp];
+                    if (spi) {
+                        id spiEncoder = e;
+                        if ([spiEncoder respondsToSelector:@selector(setAlphaTestReferenceValue:)]) {
+                            ((void (*)(id, SEL, float))objc_msgSend)(spiEncoder, @selector(setAlphaTestReferenceValue:),
+                                                                     0.5f);
+                            ((void (*)(id, SEL, BOOL))objc_msgSend)(spiEncoder, @selector(setViewportTransformEnabled:),
+                                                                    YES);
+                            ((void (*)(id, SEL, NSUInteger))objc_msgSend)(spiEncoder,
+                                                                          @selector(setProvokingVertexMode:), 0);
+                            ((void (*)(id, SEL, BOOL))objc_msgSend)(spiEncoder, @selector(setPrimitiveRestartEnabled:),
+                                                                    YES);
+                        }
+#ifdef RAW_FACADE
+                        [e setColorStoreAction:store atIndex:0];
+#endif
+                    }
                     bool bound[3][31] = {};
                     for (const frame::Draw &d : pass.draws) {
                         [e setRenderPipelineState:d.blur ? blur[d.state] : uber[d.state]];
+                        if (visibility)
+                            [e setVisibilityResultMode:MTLVisibilityResultModeDisabled offset:0];
                         for (const frame::Bytes &b : d.bytes) {
                             frame::fill(bytes, b, f, drawIndex);
                             if (shape.ring) {
@@ -576,6 +638,16 @@ int main(int argc, char **argv)
                                 [e setFragmentSamplerState:smp[d.samplers[s]] atIndex:s];
                         if (getenv("FRAME_SAMPLER_SLOT"))
                             [e setFragmentSamplerState:smp[0] atIndex:atoi(getenv("FRAME_SAMPLER_SLOT"))];
+                        // FRAME_SPI: the first bound sampler again with a bind's LOD clamps (GL-on-Metal's)
+                        if (spi)
+                            for (int s = 0; s < 16; s++)
+                                if (d.samplers[s] >= 0) {
+                                    [e setFragmentSamplerState:smp[d.samplers[s]]
+                                                   lodMinClamp:0.5f
+                                                   lodMaxClamp:3.25f
+                                                       atIndex:s];
+                                    break;
+                                }
                         [e setScissorRect:(MTLScissorRect){d.scissor[0], d.scissor[1], d.scissor[2], d.scissor[3]}];
                         if (d.ds >= 0) {
                             [e setDepthStencilState:dss[d.ds]];
