@@ -144,6 +144,7 @@ filegroup(
         "//kits/SwitchFalcon:all_files",
         "//kits/SwitchMMIO:all_files",
         "//kits/SwitchMath:all_files",
+        "//kits/SwitchRefusal:all_files",
         "//kits/SwitchRing:all_files",
         "//kits/SwitchTime:all_files",
         "//kits/VerifiedRoot:all_files",
@@ -351,6 +352,7 @@ kernel_archive(
         "//kits/SwitchCAR:SwitchCAR",
         "//kits/SwitchDMA:SwitchDMA",
         "//kits/SwitchFalcon:SwitchFalcon",
+        "//kits/SwitchRefusal:SwitchRefusal",
     ] + select({
         "//drivers/SwitchUSB:superspeed_on": ["//drivers/SwitchUSB:SwitchUSBSuperSpeed"],
         "//conditions:default": [],
