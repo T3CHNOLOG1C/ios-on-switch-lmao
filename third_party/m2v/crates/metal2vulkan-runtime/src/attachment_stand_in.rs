@@ -446,7 +446,7 @@ pub(super) fn stand_in_as(
     // The exact color resolve reads a multisampled color attachment as an input attachment
     // (`color_resolve.rs`).
     let resolved = multisampled && color_resolve::exact(device, format, target.samples).is_some();
-    if color && (framebuffer_fetch::through_inputs(profile) || resolved) {
+    if color && (framebuffer_fetch::targets_take_inputs(profile) || resolved) {
         usage |= ImageUsageFlags::INPUT_ATTACHMENT;
     }
     // A color stand-in may be cleared before the pass (`render.rs`), and a scratch is copied. A

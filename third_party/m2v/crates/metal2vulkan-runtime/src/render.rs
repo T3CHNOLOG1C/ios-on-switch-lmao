@@ -3054,6 +3054,7 @@ impl RenderCommandEncoder {
                 None,
                 &[],
                 &[],
+                false,
             )?;
             self.install(next, stood, None);
         }
@@ -3286,7 +3287,8 @@ impl RenderCommandEncoder {
                     })
             })
             .collect();
-        let taken: BTreeSet<usize> = match layout.fetch_inputs {
+        let reads_inputs = instances.iter().any(|instance| instance.shape.fetch_inputs);
+        let taken: BTreeSet<usize> = match layout.fetch_inputs || reads_inputs {
             true => (0..layout.colors.len()).collect(),
             false => viewed.clone(),
         };
@@ -3769,7 +3771,12 @@ impl RenderCommandEncoder {
             let pass = render_target::final_pass(&device, own, &instance.shape, at)?;
             // Its framebuffer holds the views its draws render colors through.
             let viewed = reformatted(own, &instance.reformats);
-            let framebuffer = render_target::framebuffer(&device, &pass, &viewed, instance.views)?;
+            let framebuffer = render_target::framebuffer(
+                &device,
+                &pass,
+                (&viewed, &instance.shape),
+                instance.views,
+            )?;
             objects.push((pass, framebuffer));
         }
         // The layout of the instances that resolve: the scratch image as the depth/stencil
@@ -3784,8 +3791,12 @@ impl RenderCommandEncoder {
                 last: true,
             };
             let pass = render_target::final_pass(&device, resolving_layout, &resolving, at)?;
-            let framebuffer =
-                render_target::framebuffer(&device, &pass, resolving_layout, ViewSetup::default())?;
+            let framebuffer = render_target::framebuffer(
+                &device,
+                &pass,
+                (resolving_layout, &resolving),
+                ViewSetup::default(),
+            )?;
             Some((pass, framebuffer))
         } else {
             None
@@ -4483,6 +4494,7 @@ impl RenderCommandEncoder {
     /// (`reroute::keeps_whole`).
     fn interlocked_colors(&self, pipeline: &DrawingState) -> BTreeSet<u32> {
         if self.layout.fetch_inputs
+            || !pipeline.base().graphics.input_attachments.is_empty()
             || !reroute::keeps_whole(self.core.device())
             || self.replaying
             || self.layout.samples != 1
@@ -4560,7 +4572,9 @@ impl RenderCommandEncoder {
     /// `ordered` after the current instance's draws (`render/tile_memory.rs`) records into a new
     /// one. Refused (`NotImplemented(Render)`) where a fetched texture's scratch cannot be
     /// copied, and (`Unsupported`) where the device cannot run the sample planes' copies.
-    /// `by`: the state of the draw that fetches them, which a scratch's notice names.
+    /// `by`: the state of the draw that fetches them, which a scratch's notice names. `inputs`: the
+    /// draw fetches through input attachments beside the interlock
+    /// (`framebuffer_fetch::inputs_beside_interlock`), in an instance whose subpass reads them.
     fn next_instance(
         &self,
         (fetched, by): (&[u32], Option<&DrawingState>),
@@ -4570,6 +4584,7 @@ impl RenderCommandEncoder {
         hidden: Option<Target>,
         locations: &[Option<u32>],
         reformats: &[Reformat],
+        inputs: bool,
     ) -> Result<(Next, Option<PassLayout>), Error> {
         let device = self.core.device();
         let maker = self.core.command_buffer();
@@ -4577,14 +4592,15 @@ impl RenderCommandEncoder {
         // reads input attachments; in the interlock, whose draws' subpass leaves the attachment
         // out, `STORAGE`, or in a multisampled pass on a device that reads sample planes the
         // planes' copies' (sampled, viewed in its copy format).
-        let (needs, storage) = if self.layout.fetch_inputs {
+        let through_inputs = self.layout.fetch_inputs || inputs;
+        let (needs, storage) = if through_inputs {
             (INPUT_ATTACHMENT, &[][..])
         } else {
             (STORAGE, fetched)
         };
         let profile = device.compile_device().profile();
-        let planes = !self.layout.fetch_inputs
-            && framebuffer_fetch::through_planes(profile, self.layout.samples);
+        let planes =
+            !through_inputs && framebuffer_fetch::through_planes(profile, self.layout.samples);
         // What the draw's fetched attachments render into: a memoryless one's backing, the
         // scratch of a texture whose image lacks the usage, or themselves.
         let mut standing = Vec::new();
@@ -4711,8 +4727,11 @@ impl RenderCommandEncoder {
             standing.push(Standing::Hidden(target));
         }
         let images = standing.iter().any(|s| !matches!(s, Standing::Planes(..)));
+        // A draw that fetches through input attachments beside the interlock records in an
+        // instance whose subpass reads them; any other draw that fetches nothing may too.
         if !images
             && self.current.shape.storage == storage
+            && (!inputs || self.current.shape.fetch_inputs)
             && self.current.shape.locations == locations
             && Reformat::same(&self.current.reformats, reformats)
             && self.current.shadow == shadow
@@ -4797,8 +4816,11 @@ impl RenderCommandEncoder {
         }
         let stood = (!standing.is_empty()).then(|| stood(&self.layout, standing));
         let layout = stood.as_ref().unwrap_or(&self.layout);
-        let mut shape = PassShape::of(layout)?
-            .with_storage(storage.to_vec())
+        let mut shape = PassShape::of(layout)?.with_storage(storage.to_vec());
+        if inputs {
+            shape = shape.with_inputs(render_target::without_inputs(layout)?);
+        }
+        let mut shape = shape
             .with_view_mask(views.view_mask)
             .with_locations(locations.to_vec());
         for reformat in reformats {
@@ -5012,6 +5034,7 @@ impl RenderCommandEncoder {
             None,
             &[],
             &[],
+            false,
         )?;
         let continuation = match &next {
             Next::New { split: true, .. } => {
@@ -6267,7 +6290,15 @@ impl RenderCommandEncoder {
                 Some(state.failing_draw(graphics.early_fragment_tests, stencil, writes)?)
             }
         };
-        let mut fetched: Vec<u32> = if self.layout.fetch_inputs {
+        // A pipeline the compile layer left on input attachments beside the interlock draws in an
+        // instance whose subpass reads them (`framebuffer_fetch::inputs_beside_interlock`); an
+        // execution's commands draw in its run's instance, which reads none (not built).
+        let inputs_form = !self.layout.fetch_inputs && !graphics.input_attachments.is_empty();
+        if inputs_form && self.replaying {
+            return Err(Error::NotImplemented(RuntimeGap::Render));
+        }
+        let through_inputs = self.layout.fetch_inputs || inputs_form;
+        let mut fetched: Vec<u32> = if through_inputs {
             graphics
                 .input_attachments
                 .iter()
@@ -6278,7 +6309,7 @@ impl RenderCommandEncoder {
         };
         fetched.sort_unstable();
         fetched.dedup();
-        if self.layout.fetch_inputs {
+        if through_inputs {
             self.inputs_read.extend(fetched.iter().copied());
         }
         for &color in &fetched {
@@ -6289,7 +6320,7 @@ impl RenderCommandEncoder {
         }
         // A draw that reads and writes some of the instance's interlocked colors and writes none
         // of the others records in it, as one that reads them all would.
-        if !self.layout.fetch_inputs && self.fits_storage(&fetched, graphics.color_outputs) {
+        if !through_inputs && self.fits_storage(&fetched, graphics.color_outputs) {
             fetched.clone_from(&self.current.shape.storage);
         }
         let shadow_use = graphics.shadow_stencil;
@@ -6324,6 +6355,7 @@ impl RenderCommandEncoder {
                 hidden,
                 &routing.locations,
                 &reformats,
+                inputs_form,
             )?,
         };
         // An execution's commands draw into its instance, of no fetched attachments, shader-side
@@ -6367,7 +6399,7 @@ impl RenderCommandEncoder {
         };
         let layout = stood.as_ref().unwrap_or(&self.layout);
         let render_area = layout.extent;
-        let inputs = input_attachments(layout, graphics)?;
+        let inputs = input_attachments(layout, graphics, through_inputs)?;
         let storage_uses = storage_uses(layout, &storage)?;
         // The pass's shader-side stencil's shadow, made at its first such draw (Or its first draw
         // that runs the stencil test itself).
@@ -7093,7 +7125,7 @@ impl RenderCommandEncoder {
         // layout keeps the stand-in from the draw on, so the draw records again into it, as a later
         // draw would.
         let again = !self.replaying
-            && !self.layout.fetch_inputs
+            && !through_inputs
             && self.layout.samples == 1
             && self.rate_map.is_none()
             && !self.visibility.active()
@@ -8390,6 +8422,7 @@ fn stood(layout: &PassLayout, standing: Vec<Standing>) -> PassLayout {
 fn input_attachments(
     layout: &PassLayout,
     graphics: &GraphicsState,
+    through_inputs: bool,
 ) -> Result<Vec<Use<ResourceKey>>, Error> {
     let mut uses = Vec::with_capacity(graphics.input_attachments.len());
     for input in &graphics.input_attachments {
@@ -8397,7 +8430,7 @@ fn input_attachments(
             .colors
             .get(input.color_index as usize)
             .and_then(Option::as_ref)
-            .filter(|_| layout.fetch_inputs)
+            .filter(|_| through_inputs)
             .filter(|_| input.input_attachment_index == input.color_index)
             .ok_or_else(|| internal("an input attachment the pass does not read"))?;
         let target = &color.target;
