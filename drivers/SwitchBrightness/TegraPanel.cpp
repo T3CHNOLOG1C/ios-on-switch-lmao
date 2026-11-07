@@ -31,7 +31,9 @@
 #include <kern/clock.h>
 #include <kern/sched_prim.h>
 #include <kern/thread.h>
-#include <kern/timer_call.h>
+extern "C" {
+#include <kern/timer_call.h>  // no C linkage of its own
+}
 #include <pexpert/pexpert.h>
 #include "../ArmGIC/SwitchInterrupts.h"
 #include "SwitchBrightness.h"
@@ -39,6 +41,16 @@
 #include "TegraPanelSteps.h"
 
 extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
+
+// The DC A interrupt's owner (NativeLegacyDisplay) keeps FRAME_END unmasked while any holder has it; any context. These
+// defaults stand for a display that never masks it.
+extern "C" __attribute__((weak)) void native_legacy_frame_end_hold(void)
+{}
+
+extern "C" __attribute__((weak)) void native_legacy_frame_end_release(void)
+{}
+
+extern "C" bool native_legacy_frame_end_held(void);
 
 namespace {
 using namespace tegra_panel;
@@ -201,10 +213,10 @@ void play(const uint32_t *words, unsigned count, const char *what)
         panic("TegraPanel: %s: the display reports no DC A frame ends (it does not call tegra_panel_frame_end_filter)",
               what);
     }
-    const uint32_t enable = gDc[DC_CMD_INT_ENABLE], mask = gDc[DC_CMD_INT_MASK];
-    if (!(enable & mask & kFrameEndInt)) {
-        panic("TegraPanel: %s: DC A FRAME_END is not enabled and unmasked (INT_ENABLE %#x MASK %#x)", what, enable,
-              mask);
+    native_legacy_frame_end_hold();
+    if (!native_legacy_frame_end_held()) {
+        panic("TegraPanel: %s: DC A FRAME_END is not enabled and unmasked (INT_ENABLE %#x MASK %#x)", what,
+              gDc[DC_CMD_INT_ENABLE], gDc[DC_CMD_INT_MASK]);
     }
     for (unsigned i = 0; i < count; ++i)
         gCommand.words[i] = words[i];
@@ -231,6 +243,7 @@ void play(const uint32_t *words, unsigned count, const char *what)
         }
     }
     __atomic_store_n(&gCommand.step, kIdle, __ATOMIC_RELAXED);
+    native_legacy_frame_end_release();
     if (!count)
         return;
     static bool lateReset, lineBuffer;
@@ -388,12 +401,16 @@ extern "C" int tegra_panel_brightness(void)
     return __atomic_load_n(&gHaveLevel, __ATOMIC_RELAXED) ? (int)__atomic_load_n(&gLevel, __ATOMIC_RELAXED) : -1;
 }
 
+extern "C" __attribute__((weak)) bool native_legacy_frame_end_held(void)
+{
+    return (gDc[DC_CMD_INT_ENABLE] & gDc[DC_CMD_INT_MASK] & kFrameEndInt) != 0;
+}
+
 // Primary interrupt context, at every DC A FRAME_END; one step of the command out, if any (see the top of this file).
 extern "C" void tegra_panel_frame_end_filter(void)
 {
     if (!__atomic_load_n(&gFrameEndsDriven, __ATOMIC_RELAXED))
         __atomic_store_n(&gFrameEndsDriven, true, __ATOMIC_RELEASE);
-    switch_als_frame_end();
     const Step now = step();
     if (now == kIdle || now == kDone || movesAtTimer(now))
         return;

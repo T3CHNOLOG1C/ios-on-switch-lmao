@@ -52,9 +52,9 @@ TEST(PanelSteps, PacketTakesFourFrameEndsThenTheTimedReset)
     EXPECT_EQ(w.frameEnds, 4u);
     EXPECT_EQ(w.timerUS, kBlankCheckUS + 2 * kResetSettleUS);
     const std::vector<std::string> expected = {
-        "frame->" + std::to_string(kEnabled),       "frame->" + std::to_string(kWritten),
-        "frame->" + std::to_string(kSettled),       "frame->" + std::to_string(kBlankCheck),
-        "timer->" + std::to_string(kResetHeld),     "timer->" + std::to_string(kResetReleased),
+        "frame->" + std::to_string(kEnabled),   "frame->" + std::to_string(kWritten),
+        "frame->" + std::to_string(kSettled),   "frame->" + std::to_string(kBlankCheck),
+        "timer->" + std::to_string(kResetHeld), "timer->" + std::to_string(kResetReleased),
         "timer->" + std::to_string(kDone),
     };
     EXPECT_EQ(w.events, expected);

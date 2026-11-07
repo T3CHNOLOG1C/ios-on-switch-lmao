@@ -19,9 +19,9 @@ enum Step : uint32_t {
     kDone
 };
 
-constexpr uint32_t kBlankCheckUS = 14;     // L4T tegra_dsi_wait_frame_end: v_ref_to_sync lines
-constexpr uint32_t kResetSettleUS = 300;   // hekate _display_dsi_wait_vblank(false), each side of the release
-constexpr unsigned kResetDeferrals = 2;    // frame ends kBlankCheck may wait for vertical blanking
+constexpr uint32_t kBlankCheckUS = 14;    // L4T tegra_dsi_wait_frame_end: v_ref_to_sync lines
+constexpr uint32_t kResetSettleUS = 300;  // hekate _display_dsi_wait_vblank(false), each side of the release
+constexpr unsigned kResetDeferrals = 2;   // frame ends kBlankCheck may wait for vertical blanking
 
 struct Move {
     Step next;

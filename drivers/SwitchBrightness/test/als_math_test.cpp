@@ -146,6 +146,9 @@ TEST(SwitchALSMath, FirstSampleAfterDisplayOnInTime)
     }
     // Seven frame ends for the first tick too would read the pre-sleep registers at an early phase.
     EXPECT_LT(1 + (kFramesPerSample - 1) * kFrameUS, kSetUpUS + kConversionUS);
+    EXPECT_GE(kFirstSampleUS, kSetUpUS + kConversionUS)
+        << "the timer's first tick reads a conversion the set-up started";
+    EXPECT_LT(kSampleUS, kFirstSampleTimeoutUS) << "a display-on between ticks still sees one in time";
     // 11-06 (the old order): the sensor was set up at the panel's wake end, 69 ms after CoreBrightness's display-on, and
     // its first result came a set-up tick, a skipped tick and a sample tick later: 424 ms, past the timeout.
     EXPECT_GT(69000 + 3 * kSampleUS, kFirstSampleTimeoutUS);

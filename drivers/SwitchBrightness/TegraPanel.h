@@ -12,8 +12,9 @@
 //
 // Frame ends come only from the display controller's interrupt (DC A, GIC SPI 73 = INTID 105), which the display driver
 // owns (NativeLegacyDisplay's vblank source); its interrupt filter calls tegra_panel_frame_end_filter() for every
-// FRAME_END. There is no polled mode: a command issued before the display reports frame ends, or while FRAME_END is
-// masked, or a frame end that does not come within 50 ms, panics with the DC interrupt registers and the GIC state.
+// FRAME_END; each command holds FRAME_END unmasked (native_legacy_frame_end_hold) until it is done. There is no polled
+// mode: a command issued before the display reports frame ends, or whose hold leaves FRAME_END masked, or a frame end
+// that does not come within 50 ms, panics with the DC interrupt registers and the GIC state.
 //
 // The functions below are for thread context only, never an interrupt filter or with a spinlock held. Commands are
 // serialized internally. They return 0 on success and -1 if the display is not running (clocks gated, DSI off, not in
@@ -53,8 +54,7 @@ int tegra_panel_brightness(void);
 
 // For the owner of the DC A interrupt: call from its primary interrupt filter at every FRAME_END (DC_CMD_INT_STATUS
 // bit 1, which that owner enables, unmasks and clears), after clearing it. Returns at once unless a command is out, and
-// never waits: the last step's settle delays run on a timer callout. It also clocks the ambient light sensor
-// (switch_als_frame_end).
+// never waits: the last step's settle delays run on a timer callout.
 void tegra_panel_frame_end_filter(void);
 
 #ifdef __cplusplus
