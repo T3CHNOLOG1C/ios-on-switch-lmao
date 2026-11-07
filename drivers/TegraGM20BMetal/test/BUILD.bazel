@@ -7,6 +7,9 @@
 #   nvk_wait_any_test nvkmd_darwin's WAIT_ANY (nvkmd_darwin_wait_any.h) over a model of the kext's WaitFence: it returns
 #                     once one sync of the set resolves (a host signal, a fence's interrupt), sleeps until then, keeps
 #                     its deadline, and calls a passed fence whose wake never came a lost interrupt
+#   nvk_kill_test     nvkmd_darwin's view of a channel the kernel killed (nvkmd_darwin_kill.h): the fence word's kill record
+#                     names the seqnos that never ran, a kept record answers for its old channel alone, a timeline keeps
+#                     its failed values
 #   nvk_surfaces_test nvkmd_darwin's ExecSurfaces record (nvkmd_darwin_surfaces.h): each BO once with its accesses merged,
 #                     past its room the all-imports flag, its length
 #   raw_events_source_test  how a command buffer with a plain or shared Metal event stays raw (frontend, bridge, m2v,
@@ -16,6 +19,12 @@
 #   stage_test        stage-tegra-gm20b-metal.py on a directory standing in for the Data volume
 #   raw_ycbcr_test    raw/runtime/raw_ycbcr.cpp: the two-plane YCbCr textures the raw path converts (m2v's rules) and the
 #                     conversion's shape; its texels against Metal's reads are raw/test/ycbcroracle.mm's (this Mac's GPU)
+#   raw_xr_test       raw/runtime/raw_xr.h: the extended-range formats the raw path keeps and the codes Metal's Clear
+#                     stores in them (an M4 Max's); against Metal's own reads and clears it is raw/test/xroracle.mm's
+#   raw_clear_test    raw/runtime/raw_clear.h: the clear values the raw path hands NVK, m2v's for every format it renders
+#                     (raw/test/targetcheck.py: its target formats against NVK's)
+#   raw_sampler_test  raw/runtime/raw_sampler.h: the Metal samplers the raw path takes, as m2v samples them on NVK
+#                     (raw/test/samplercheck: their headers against NVK's)
 #   raw_cache_test    raw/runtime/raw_cache.h: the records the runtime makes for states the pack lacks, kept on disk and
 #                     made once per process (raw/test/cachecheck: the same checks on a bucket's real records), and
 #                     raw_metallib.h: the functions' AIR hashes that key them
@@ -76,6 +85,20 @@ host_test(
 )
 
 host_test(
+    name = "nvk_kill_test",
+    srcs = [
+        "nvk_kill_test.cpp",
+        "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//third_party/mesa/src/nouveau/vulkan:nvkmd/darwin/nvkmd_darwin_kill.h",
+    ],
+    copts = [
+        "-I",
+        "drivers/TegraGM20B",
+    ],
+    cxx_std = "c++17",
+)
+
+host_test(
     name = "nvk_surfaces_test",
     srcs = [
         "nvk_surfaces_test.cpp",
@@ -122,6 +145,33 @@ host_test(
         "raw_ycbcr_test.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_ycbcr.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_ycbcr.h",
+    ],
+    cxx_std = "c++17",
+)
+
+host_test(
+    name = "raw_xr_test",
+    srcs = [
+        "raw_xr_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_xr.h",
+    ],
+    cxx_std = "c++17",
+)
+
+host_test(
+    name = "raw_clear_test",
+    srcs = [
+        "raw_clear_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_clear.h",
+    ],
+    cxx_std = "c++17",
+)
+
+host_test(
+    name = "raw_sampler_test",
+    srcs = [
+        "raw_sampler_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_sampler.h",
     ],
     cxx_std = "c++17",
 )

@@ -1,6 +1,10 @@
 import HWTestCore
+import HWTestGPU
 
 enum Registry {
+    /// The GPU scenes come first: the first of them reproduces the process's first command buffer.
+    static let gpuScenes: [any HWTest] = Scenes.all.map { GPUSceneTest(scene: $0) }
+
     static let metal: [any HWTest] = [
         MetalDeviceTest(), MetalComputeTest(), MetalColorPassTest(), MetalDepthStencilTest(), MetalMSAATest(),
         MetalPixelFormatTest(), MetalHalfRoundingTest(), MetalCompressedTest(), MetalBlitTest(), MetalTextureViewTest(),
@@ -16,7 +20,9 @@ enum Registry {
         HeadsetTest(), MicrophoneTest(),
     ]
 
-    static let display: [any HWTest] = [DisplayModeTest(), DisplayPacingTest(), BrightnessTest(), ColourPipelineTest()]
+    static let display: [any HWTest] = [
+        DisplayModeTest(), DisplayPacingTest(), BrightnessTest(), ColourPipelineTest(), WakeTest(),
+    ]
 
     static let sensorsAndInput: [any HWTest] = [
         AccelerometerTest(), GyroscopeTest(), DeviceMotionTest(), AmbientLightTest(), GameControllerTest(),
@@ -33,6 +39,9 @@ enum Registry {
         IdentityTest(), PowerStateTest(),
     ]
 
+    static let compositor: [any HWTest] = UISceneTests.all + PacingTests.all
+
     static let all: [any HWTest] =
-        metal + video + images + audio + display + sensorsAndInput + connectivityAndStorage + cpuAndSystem
+        gpuScenes + metal + video + images + audio + display + compositor + sensorsAndInput + connectivityAndStorage
+        + cpuAndSystem
 }

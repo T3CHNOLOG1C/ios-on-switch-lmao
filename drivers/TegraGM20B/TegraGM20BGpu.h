@@ -133,11 +133,10 @@ struct tgm_push {
 	uint32_t no_prefetch;
 };
 /* Append the pushes, then the fence (WFI semaphore release of the next seqno), then kick. User mappings are
- * L2-cacheable: the L2's clean lines are invalidated on the GPU before the pushes are fetched and its dirty lines written back before the seqno
- * is released (gpu.c l2_on). With present order the pushes run only after
- * the last GPU present queued before this call has finished reading its surface (a GPU-side wait), and after what the
- * acquires tgm_chan_order queued for the channel wait for. -EBUSY when the GPFIFO stays full for 1 s (a panic from the
- * self-test on), -EIO on a dead channel. */
+ * L2-cacheable: the L2's clean lines are invalidated on the GPU before the pushes are fetched and its dirty lines
+ * written back before the seqno is released (gpu.c l2_on). The pushes run after what the acquires tgm_chan_order
+ * queued for the channel wait for. -EBUSY when the GPFIFO stays full for 1 s (a panic from the self-test on), -EIO on a
+ * dead channel. */
 struct tgm_prof;
 int tgm_chan_exec(struct tgm_chan *chan, const struct tgm_push *push, uint32_t count,
 		  uint32_t *seqno, const struct tgm_prof *prof);
@@ -216,6 +215,8 @@ int tegra_gm20b_sync_for_cpu(const void *va, uint64_t bytes, uint64_t timeout_ns
 /* Fence pages: one per connection, from one pool range the GPU present maps whole (gpu.c). Zeroed; 0 or -ENOMEM. */
 int tgm_fence_page_get(volatile uint32_t **va, uint64_t *pa);
 void tgm_fence_page_put(const volatile uint32_t *va);
+/* A channel's fence word is a TegraGM20BAbiFence: its kill record zeroed, for a channel about to be made on it. */
+void tgm_fence_kill_clear(volatile uint32_t *fence);
 
 /* GPU present (gpu.c "GPU present"): a kernel channel and address space, made at the first call (from the self-test on).
  * Mappings in it are volatile, at addresses the caller picks in [TGM_USER_VA_START, TGM_KERNEL_VA). tgm_present_copy

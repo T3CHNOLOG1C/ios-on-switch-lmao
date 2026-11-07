@@ -811,7 +811,6 @@ static int l2_on(void)
 struct tgm_vm {
 	struct nvif_vmm vmm;
 	struct list_head kmaps;
-	u64 pfence_va; /* the present channel's fence page, read-only (present order), 0: not mapped */
 	u64 fences_va; /* every connection's fence page, read-only (tgm_chan_order's acquires), 0: not mapped */
 	struct list_head
 		imports; /* struct tgm_import: first pages of the host imports made in it (live_lock) */
@@ -841,9 +840,8 @@ static int vm_kmap(struct tgm_vm *vm, struct tgm_mem *mem, uint64_t bytes, int r
 		   uint64_t *va);
 static int fences_map(struct tgm_vm *vm);
 
-/* The present channel's fence page (see "GPU present"): one pool page, made with the first address space that needs it
- * and kept for good, so it exists before the present channel does. With present order every
- * address space maps it read-only in its kernel range, where user channels wait on it with a semaphore acquire. */
+/* The present channel's fence page (see "GPU present"): one pool page, made with the present's address space and kept
+ * for good. */
 static struct {
 	void *va;
 	u64 pa;
@@ -851,11 +849,6 @@ static struct {
 } pfence;
 
 static DEFINE_MUTEX(pfence_lock);
-
-static int present_order_on(void)
-{
-	return 1;
-}
 
 static int pfence_get(struct tgm_vm *vm)
 {
@@ -894,15 +887,6 @@ int tgm_vm_new(struct tgm_vm **pvm)
 	if (ret) {
 		kfree(vm);
 		return ret;
-	}
-	if (present_order_on()) {
-		ret = pfence_get(vm);
-		if (!ret)
-			ret = vm_kmap(vm, pfence.mem, PAGE_SIZE, 1, &vm->pfence_va);
-		if (ret) {
-			tgm_vm_del(&vm);
-			return ret;
-		}
 	}
 	/* for the task order's acquires (tgm_chan_order); without the view, Order refuses and the client orders itself */
 	if (fences_map(vm))
@@ -1462,6 +1446,27 @@ static u32 fault_code(const char *report)
 	return 3;
 }
 
+static void fence_kill_record(volatile u32 *fence_cpu, u32 submitted, u32 error)
+{
+	volatile struct TegraGM20BAbiFence *fence = (volatile struct TegraGM20BAbiFence *)fence_cpu;
+
+	WRITE_ONCE(fence->killed_first, READ_ONCE(fence->completed) + 1);
+	WRITE_ONCE(fence->killed_last, submitted);
+	__asm__ volatile("dsb sy" ::: "memory");
+	WRITE_ONCE(fence->error, error);
+	__asm__ volatile("dsb sy" ::: "memory");
+}
+
+void tgm_fence_kill_clear(volatile uint32_t *fence_cpu)
+{
+	volatile struct TegraGM20BAbiFence *fence = (volatile struct TegraGM20BAbiFence *)fence_cpu;
+
+	WRITE_ONCE(fence->error, 0);
+	WRITE_ONCE(fence->killed_first, 0);
+	WRITE_ONCE(fence->killed_last, 0);
+	__asm__ volatile("dsb sy" ::: "memory");
+}
+
 /* nvkm killed the channel (nvkm_chan_error, from its recovery work). Before M3, M3 reads chan->error. From M3 on: an
  * isolated client channel is dead (see above); any other panics, with the report that started it if the interrupt pass
  * did not panic first. */
@@ -1483,8 +1488,10 @@ static int chan_killed(struct nvif_event *event, void *repv, u32 repc)
 			chan->error = 3;
 		return NVIF_EVENT_DROP;
 	}
-	/* the runlist dropped it, so nothing writes its fence any more: release what it will never complete */
+	/* the runlist dropped it, so nothing writes its fence any more: release what it will never complete, after the
+	 * record of what that was (TegraGM20BAbiFence), so a client that sees the fence pass sees the record too */
 	WRITE_ONCE(chan->error, fault_code(report));
+	fence_kill_record(chan->fence_cpu, chan->submitted, chan->error);
 	WRITE_ONCE(*chan->fence_cpu, chan->submitted);
 	__asm__ volatile("dsb sy" ::: "memory");
 	nvxnu_log("tegra-gm20b: GPU error in %s (channel %u): channel killed, GPU running: %s\n",
@@ -1811,9 +1818,7 @@ static struct {
 	u64 since;      /* start of the current window, 0 before the first submission */
 	u64 cal_ptimer; /* PTIMER at `since`: its rate over the window */
 	u32 submits, fences, imports, timed;
-	u32 ordered, idle,
-		late; /* present order: submits held behind a copy; offers that found no user work pending; of
-				   * those, the ones a user submit followed while the copy was still pending */
+	u32 idle;   /* presents that found no user work pending */
 	u32 writer; /* presents that waited for their surface's importers only */
 	u32 allocs; /* BoAllocs */
 	u64 alloc_bytes, alloc_ns;
@@ -2664,9 +2669,7 @@ static void stats_tick(void)
 	u32 imports = 0;
 	u32 timed = 0;
 	u32 presents = 0;
-	u32 ordered = 0;
 	u32 idle = 0;
-	u32 late = 0;
 	u32 writer = 0;
 	u32 allocs = 0;
 	u32 mc_int = 0;
@@ -2727,9 +2730,7 @@ static void stats_tick(void)
 	max = __atomic_exchange_n(&stats.lat_max, 0, __ATOMIC_RELAXED);
 	timed = __atomic_exchange_n(&stats.timed, 0, __ATOMIC_RELAXED);
 	present_stats(&presents, &ps, &pm);
-	ordered = __atomic_exchange_n(&stats.ordered, 0, __ATOMIC_RELAXED);
 	idle = __atomic_exchange_n(&stats.idle, 0, __ATOMIC_RELAXED);
-	late = __atomic_exchange_n(&stats.late, 0, __ATOMIC_RELAXED);
 	writer = __atomic_exchange_n(&stats.writer, 0, __ATOMIC_RELAXED);
 	allocs = __atomic_exchange_n(&stats.allocs, 0, __ATOMIC_RELAXED);
 	abytes = __atomic_exchange_n(&stats.alloc_bytes, 0, __ATOMIC_RELAXED);
@@ -2796,7 +2797,7 @@ static void stats_tick(void)
 		line, sizeof(line),
 		"copy mean %llu us max %llu us (%u), after user work mean %llu us max %llu us "
 		"(%u); "
-		"order %s: %u submits behind a copy, %u offers idle (%u then a submit); %u imports "
+		"%u offers idle; %u imports "
 		"(%llu/s), %lld KiB live in "
 		"%d, %u BoAllocs (%llu KiB, %llu us), pool %lu/%llu MiB (compositor %llu, clients "
 		"%llu, orphans %llu in "
@@ -2806,8 +2807,7 @@ static void stats_tick(void)
 		"%08x at %08x; gpu.lock held by channel setup mean %llu us max %llu us (%u), "
 		"teardown mean %llu us max %llu us (%u)",
 		copies ? PT_NS(cs) / copies / 1000 : 0, PT_NS(cm) / 1000, copies,
-		gaps ? PT_NS(gs) / gaps / 1000 : 0, PT_NS(gm) / 1000, gaps,
-		present_order_on() ? "on" : "off", ordered, idle, late, imports,
+		gaps ? PT_NS(gs) / gaps / 1000 : 0, PT_NS(gm) / 1000, gaps, idle, imports,
 		imports * 1000ULL / (ms ? ms : 1),
 		/* live_bytes is signed: an arithmetic shift keeps its sign. */
 		/* NOLINTNEXTLINE(bugprone-signed-bitwise) */
@@ -4402,13 +4402,10 @@ void tegra_gm20b_frame_take(struct SwitchFrameGpu *out)
 /* Present order: held by a user submission from its present wait to its kick, and by the present
  * from its snapshot of the user channels to its kick, so every user submission is either in a present's snapshot (the
  * copy waits for it) or kicked after that present (it waits for the copy). */
-static DEFINE_MUTEX(order_lock);
-static int present_order(struct tgm_chan *chan);
 
 static int chan_exec(struct tgm_chan *chan, const struct tgm_push *pushes, uint32_t count,
 		     uint32_t *seqno, const struct tgm_prof *prof)
 {
-	int ordered = present_order_on() && !chan->kernel && chan->vm->pfence_va;
 	u64 start = SWITCH_FRAME_TIMELINE ? nvxnu_nanotime() : 0;
 	u32 i = 0;
 	u32 stamps = 0;
@@ -4454,14 +4451,10 @@ static int chan_exec(struct tgm_chan *chan, const struct tgm_push *pushes, uint3
 	}
 	if (ret)
 		return READ_ONCE(chan->error) ? -EIO : ret == -ETIMEDOUT ? -EBUSY : ret;
-	if (ordered) {
-		mutex_lock(&order_lock);
-		/* first, so the start stamp below times the work itself */
-		waits = present_order(chan);
-	}
 	if (READ_ONCE(chan->norder)) {
-		/* the task's other channels' work it follows (tgm_chan_order) */
-		waits |= (u32)order_waits(chan);
+		/* the task's other channels' work it follows (tgm_chan_order), first, so the start stamp below times the work
+		 * itself */
+		waits = (u32)order_waits(chan);
 	}
 	/* a high channel's start stamp, in every kernel: the end of the preemption latency of an app it was queued behind */
 	if (stats_on() || chan->high) {
@@ -4513,8 +4506,6 @@ static int chan_exec(struct tgm_chan *chan, const struct tgm_push *pushes, uint3
 	tgm_hang_log_submit(&chan->hang, chan->submitted + 1, first, chan->chan.gpfifo.cur);
 
 	*seqno = chan_fence(chan);
-	if (ordered)
-		mutex_unlock(&order_lock);
 	if (SWITCH_FRAME_TIMELINE && !chan->kernel)
 		frame_submitted(chan, *seqno, start);
 	if (stats_on())
@@ -4550,12 +4541,9 @@ int tgm_chan_exec(struct tgm_chan *chan, const struct tgm_push *pushes, uint32_t
  * call) runs from the interrupt pass. A present that has not completed 1 s after it was queued panics, naming what it
  * waits for. Every mapping is volatile: the source was written by work whose fence flushed the L2 (or bypassed it), the
  * destination is read by the display controller only. Methods from open-gpu-doc classes/dma-copy/clb0b5.h.
- * Present order: the display retires a swap as soon as its copy is queued, so the
- * compositor may draw its next frame into the surface the copy still reads, which tears. Every user submission
- * kicked after a present that has not completed, from an address space that imports its surface (any, if the present
- * found none), starts with a semaphore ACQUIRE_GEQ on the present channel's fence (mapped read-only in each address
- * space, pfence), with the acquire switch on, so it waits in GPU order and the host runs other channels meanwhile. No
- * cycle: a present waits only for submissions kicked before it (order_lock). */
+ * No user submission waits for a present: the compositor never writes a surface a copy still reads. Core Animation
+ * recycles a framebuffer only when a later swap completes, and the display offers the next swap only once the copy
+ * before it completed (NativeLegacyDisplay offerGpuCopy). */
 #define NVB0B5_LAUNCH_DMA 0x0300
 #define NVB0B5_LAUNCH_DMA_NON_PIPELINED (2u << 0)
 #define NVB0B5_LAUNCH_DMA_FLUSH_ENABLE (1u << 2)
@@ -4608,13 +4596,8 @@ static struct {
 	} wait[TGM_SYNC_MAX];
 	volatile struct tgm_stamp
 		*wait_end[TGM_SYNC_MAX]; /* stats: their end stamps (pool memory, kept mapped) */
-	u32 stamped; /* stats: seqno of the present in flight, whose copy is stamped */
-	u32 last;    /* seqno of the last present kicked, 0: none (order_lock) */
-	u64 last_src; /* its surface's first page, and whether address spaces importing it were found */
-	int last_matched;
-	int last_idle,
-		last_late; /* stats: it found no user work pending; a user submit then waited for it */
-	u32 presents;      /* stats */
+	u32 stamped;  /* stats: seqno of the present in flight, whose copy is stamped */
+	u32 presents; /* stats */
 	u64 lat_sum, lat_max;
 	u64 recovered; /* when the present in flight last found a recovery under way, or work still progressing */
 } present = {.lock = {NULL}};
@@ -4707,45 +4690,6 @@ static void present_deadline(void *arg)
 		    "%s%s%u: present %s",
 		    (nvxnu_nanotime() - present.queued) / 1000000, what, waited ? " to reach " : "",
 		    waited ? seqno : 0, state);
-}
-
-/* From tgm_chan_exec, order_lock held, before a user submission's own entries: if the last present kicked has not
- * completed, the submission waits for it on the GPU. One completed already (the CPU sees its fence) needs no wait. 1 if
- * the wait was pushed. */
-static int present_order(struct tgm_chan *chan)
-{
-	struct tgm_chan *pchan = READ_ONCE(present.chan);
-	struct nvif_push *push = &chan->chan.push;
-	u32 last = present.last;
-	u64 va = chan->vm->pfence_va;
-	int writer = 1;
-
-	if (!last || !pchan || (s32)(tgm_chan_completed(pchan) - last) >= 0)
-		return 0;
-	if (present.last_matched) { /* only an address space that imports the surface can draw into it */
-		mutex_lock(&live_lock);
-		writer = vm_imports(chan->vm, present.last_src);
-		mutex_unlock(&live_lock);
-	}
-	if (!writer)
-		return 0;
-	/* nouveau's NVDEF/NVVAL/PUSH_* macros compute in int and repeat their branches. */
-	/* NOLINTBEGIN(bugprone-signed-bitwise,bugprone-branch-clone) */
-	PUSH_MTHD(push, NV906F, SEMAPHOREA,
-		  NVVAL(NV906F, SEMAPHOREA, OFFSET_UPPER, upper_32_bits(va)), SEMAPHOREB,
-		  lower_32_bits(va), SEMAPHOREC, last, SEMAPHORED,
-		  NVDEF(NV906F, SEMAPHORED, OPERATION, ACQ_GEQ) |
-			  NVDEF(NV906F, SEMAPHORED, ACQUIRE_SWITCH, ENABLED));
-	/* NOLINTEND(bugprone-signed-bitwise,bugprone-branch-clone) */
-	PUSH_KICK(push);
-	if (stats_on()) {
-		__atomic_fetch_add(&stats.ordered, 1, __ATOMIC_RELAXED);
-		if (present.last_idle && !present.last_late) {
-			present.last_late = 1;
-			__atomic_fetch_add(&stats.late, 1, __ATOMIC_RELAXED);
-		}
-	}
-	return 1;
 }
 
 /* stats, from stats_fences (interrupt pass) before present_fenced completes the present: PTIMER from the end of
@@ -4843,8 +4787,8 @@ int tgm_present_unmap(uint64_t va, uint64_t bytes)
 	return present.vm ? tgm_vm_unmap(present.vm, va, bytes) : -ENODEV;
 }
 
-/* A present waits only for the address spaces that import its surface, and only their later submissions wait for it
- * (present order); a surface no address space imports by its first page is the all-channel wait. */
+/* A present waits only for the address spaces that import its surface; a surface no address space imports by its first
+ * page is the all-channel wait. */
 static int present_writer_on(void)
 {
 	return 1;
@@ -4891,10 +4835,7 @@ static int present_copy(uint64_t src_va, uint64_t src_pa, uint64_t stride, int s
 		mutex_unlock(&present.lock);
 		return ret;
 	}
-	/* what the surface's writers (or, with none found, every user channel) have submitted so far and not completed yet;
-	 * with present order, no user submission is kicked from here to this present's kick */
-	if (present_order_on())
-		mutex_lock(&order_lock);
+	/* what the surface's writers (or, with none found, every user channel) have submitted so far and not completed yet */
 	mutex_lock(&live_lock);
 	list_for_each_entry(user, &live_chans, live)
 	{
@@ -4966,16 +4907,9 @@ static int present_copy(uint64_t src_va, uint64_t src_pa, uint64_t stride, int s
 	nvxnu_work_schedule_after(
 		present.deadline_work,
 		TGM_PRESENT_NS); /* before the kick, so the completion cancels it */
-	present.last = chan_fence(chan);
-	present.last_src = src_pa;
-	present.last_matched = matched;
+	chan_fence(chan);
 	if (matched && stats_on())
 		__atomic_fetch_add(&stats.writer, 1, __ATOMIC_RELAXED);
-	if (present_order_on()) {
-		present.last_idle = !n;
-		present.last_late = 0;
-		mutex_unlock(&order_lock);
-	}
 	if (!n && stats_on())
 		__atomic_fetch_add(&stats.idle, 1, __ATOMIC_RELAXED);
 	mutex_unlock(&present.lock);

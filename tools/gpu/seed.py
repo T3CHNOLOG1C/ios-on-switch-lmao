@@ -11,7 +11,7 @@
     seed.py archive --tools <dir> --out <tar>
 
 layout: the tools directory the seed runs (precompile, libmock_iokit.dylib beside it, the twin with its .source, raw/
-with the raw pack's probe, mock and ycbcr.metallib) and MANIFEST.json: the raw path's stack key (the plugin is built
+with the raw pack's probe, mock and own.metallib) and MANIFEST.json: the raw path's stack key (the plugin is built
 with it), the twin's LC_UUID (the iOS dylib's), NVK's compiler identity (which NVK hashes into its pipeline cache UUID),
 the Mesa tree and the architecture. The seed refuses tools whose manifest is not the GPU bundle's. Only mock, tool and
 the raw pack's build need Xcode; running the tools needs nothing but macOS.

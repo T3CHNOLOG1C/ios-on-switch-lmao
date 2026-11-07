@@ -174,6 +174,11 @@ uint32_t nmb_function_constant_count(const NmbFunction *);
 size_t nmb_function_constant(const NmbFunction *, uint32_t at, char *out, size_t size, uint64_t info[3]);
 /* Metal's MTLFunctionType (1 vertex, 2 fragment, 3 kernel, ...). */
 uint64_t nmb_function_type(const NmbFunction *);
+// vertexAttributes (stage_input false) or stageInputAttributes: their count, -1 where Metal answers nil; attribute `at`'s name
+// into out and its attributeIndex, MTLDataType, isActive, isPatchData and isPatchControlPointData into info[5]
+int64_t nmb_function_attribute_count(const NmbFunction *, bool stage_input);
+size_t nmb_function_attribute(const NmbFunction *, bool stage_input, uint32_t at, char *out, size_t size,
+                              uint64_t info[5]);
 
 NmbComputePipeline *nmb_compute_pipeline_new(NmbDevice *, NmbFunction *);
 void nmb_compute_pipeline_release(NmbComputePipeline *);
@@ -287,6 +292,8 @@ int nmb_command_buffer_wait_completed_for(NmbCommandBuffer *, uint64_t timeout_m
 /* Metal's MTLCommandBufferStatus (0 not enqueued .. 4 completed, 5 error). */
 uint64_t nmb_command_buffer_status(const NmbCommandBuffer *);
 size_t nmb_command_buffer_error(const NmbCommandBuffer *, char *out, size_t size);
+/* Metal's MTLCommandBufferError code of a failed command buffer, 0 before it failed. */
+uint64_t nmb_command_buffer_error_code(const NmbCommandBuffer *);
 double nmb_command_buffer_gpu_time(const NmbCommandBuffer *, bool end);
 
 /* Events: an MTLEvent (shared false) or an MTLSharedEvent within this process. */

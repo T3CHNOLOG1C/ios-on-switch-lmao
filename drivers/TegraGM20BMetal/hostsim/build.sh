@@ -19,6 +19,8 @@
 # is TegraGM20BLayout.h's over a sweep: <outdir>/gpu/surface_layout <nvk>.
 # layout_frame.mm: the frontend's optimal views (a raw mip chain, a writer-first surface) and refusals: <outdir>/gpu/layout_frame
 # <cache> <nvk>.
+# fault_frame.mm: a GPU fault fails the command buffers it takes and the queue and device run on (the mock's channel kill):
+# <outdir>/gpu/fault_frame <cache> <nvk>.
 # usage: build.sh <host libnative_metal_bridge.a> <outdir>
 #   the bridge: bazel build //gpu:bridge_darwin (bazel-bin/gpu/bridge_darwin/libnative_metal_bridge.a)
 #   then: <outdir>/m2v_gm20b <host libvulkan_nouveau.dylib> <cache dir> [<QuartzCore default.metallib> <pairs>]
@@ -74,5 +76,9 @@ xcrun clang++ -O1 -g -std=c++17 -fobjc-arc -Wno-deprecated-declarations -I "$TRE
     -x c++ "$RAW/runtime/raw_kernel.cpp" "$RAW/fx/fx_mip.cpp" -x none "$1" -L "$GPU" -lmock_iokit -Wl,-rpath,"$GPU" -lobjc \
     -framework Foundation -framework Metal -framework IOSurface -framework IOKit -framework CoreFoundation \
     -o "$GPU/layout_frame"
+xcrun clang++ -O1 -g -std=c++17 -fobjc-arc -Wno-deprecated-declarations -I "$TREE/drivers/NativeMetal" -I "$TREE/drivers/TegraGM20B" \
+    -x objective-c++ "$HERE/fault_frame.mm" "$TREE/drivers/NativeMetal/NativeBridgeMetalFrontend.mm" -x none "$1" -L "$GPU" \
+    -lmock_iokit -Wl,-rpath,"$GPU" -lobjc -framework Foundation -framework Metal -framework IOSurface -framework IOKit \
+    -framework CoreFoundation -o "$GPU/fault_frame"
 echo "built $2/m2v_gm20b $2/qc_frontend $2/present_frontend $2/memory_frontend $GPU/alias_frame $GPU/nvk_alias" \
-    "$GPU/surface_layout $GPU/layout_frame"
+    "$GPU/surface_layout $GPU/layout_frame $GPU/fault_frame"

@@ -1,6 +1,7 @@
 import CoreVideo
 import Foundation
 import HWTestCore
+import HWTestGPU
 import HWTestVideo
 import IOSurface
 import Metal

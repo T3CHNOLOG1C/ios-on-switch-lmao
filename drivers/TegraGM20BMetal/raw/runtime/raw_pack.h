@@ -69,10 +69,23 @@ struct PackEntry {
     uint8_t kind;         // PackEntryKind
     uint8_t stage;        // UBO: 1 vertex, 2 fragment; handles: 2
     uint8_t slot;         // UBO: Metal buffer index; texture: fragment texture index; fetch: color attachment
-    uint8_t samplerKind;  // handles: PackSamplerKind. Buffers: 0 uniform (NVK rounds the range up to 256), 1 storage
+    uint8_t samplerKind;  // handles: PackSamplerKind. Buffers: bufferStorage, bufferResidualWord
     uint8_t sampler;      // handles: fragment sampler index, or constexpr sampler number. Buffers: the function's
     uint8_t pad;          //   window on the slot in 16-byte units (sampler | pad << 8), 0 = the whole buffer
 };
+
+// A buffer entry: storage, else uniform (NVK rounds its range up to the 256-byte cbuf alignment)
+inline bool bufferStorage(const PackEntry &e)
+{
+    return e.samplerKind & 1;
+}
+
+// A uniform buffer entry's root push word (0x700 + 4 x word) that holds m2v's SlotBindOffset residual for its slot, -1 where the
+// record names none (its states then take only offsets that are multiples of 256)
+inline int bufferResidualWord(const PackEntry &e)
+{
+    return int(e.samplerKind >> 2) - 1;
+}
 
 enum PackPipelineFlags : uint32_t {
     PipelineFetches = 1,

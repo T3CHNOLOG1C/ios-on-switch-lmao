@@ -360,7 +360,43 @@ def lay_out_programs(
     return heap, prog_index, prog_recs
 
 
-def buffer_entry(e: tuple, index: tuple[int, int], sizes: dict[tuple, list[int]]) -> dict:
+def bind_offset(stage: str, slot: int) -> int:
+    """Give the offset the probe's bind-offset run binds a slot's payload at (probe.mm PROBE_BIND_OFFSET)."""
+    return 4 * (1 + slot + (31 if stage == 'f' else 0))
+
+
+def push_words(p: dict) -> dict[int, int]:
+    return {int(o, 16): int(x, 16) for o, x in (w.split('=') for w in p['records'][0].get('pushw', []))}
+
+
+def attach_residuals(dirs: list[str], probes: list[dict]) -> None:
+    """Give each probe ('residuals') the root push words the bind-offset run changed, by their value's low byte.
+
+    A uniform slot's SlotBindOffset residual is its bind offset less the multiple of NVK's 256-byte alignment at or
+    below where its window starts: in that run, the slot's own offset modulo 256 (a window starting past 256 - offset
+    makes it negative), 0 in the 256-byte run's. A bucket without the run gives none (such states take only aligned
+    offsets).
+    """
+    residuals = {}
+    for b, d in enumerate(dirs):
+        out, log = os.path.join(d, 'probeoff.out'), os.path.join(d, 'probeoff.log')
+        if not os.path.exists(out):
+            continue
+        plain = {
+            p['index']: push_words(p)
+            for p in probelog.load(os.path.join(d, 'probe256.out'), os.path.join(d, 'probe256.log'))
+            if p['records']
+        }
+        for p in probelog.load(out, log):
+            if p['draws'] != 1 or p['dispatches'] or not p['records'] or p['index'] not in plain:
+                continue
+            was = plain[p['index']]
+            residuals[(b, p['index'])] = {v & 0xFF: o for o, v in push_words(p).items() if v and not was.get(o)}
+    for p in probes:
+        p['residuals'] = residuals.get((p['bucket'], p['index']), {})
+
+
+def buffer_entry(e: tuple, index: tuple[int, int], sizes: dict[tuple, list[int]], words: dict[int, int]) -> dict:
     s16, s4k = sizes.get((*index, e[0]), (256, 256))
     # a 16-byte payload bound at 256: a uniform buffer (NVK rounds its range to the cbuf alignment); else storage. The
     # 4096-byte one's range: the window (0: the whole payload)
@@ -374,6 +410,7 @@ def buffer_entry(e: tuple, index: tuple[int, int], sizes: dict[tuple, list[int]]
         'size': e[4],
         'ssbo': ssbo,
         'window': window,
+        'residual': None if ssbo else words.get(bind_offset(e[2], e[3])),
     }
 
 
@@ -438,7 +475,7 @@ def pipeline(
     rec['push'] = [(int(o, 16), int(x, 16)) for o, x in (w.split('=') for w in r.get('pushw', []))]
     rec['set_size'] = root[0x38 // 4 + 2] if 'set0' in r else 0
     entries = [
-        buffer_entry(e, (p['bucket'], p['index']), sizes)
+        buffer_entry(e, (p['bucket'], p['index']), sizes, p.get('residuals', {}))
         if e[1] == 'ubo'
         else handle_entry(e, r['tsc'], constexpr_tsc, problems)
         for e in ents
@@ -464,6 +501,7 @@ def main() -> None:
     probes = [
         p for p in load_buckets(dirs, 256) if (p['form'], p['key']) not in seen and not seen.add((p['form'], p['key']))
     ]
+    attach_residuals(dirs, probes)
     programs = load_programs(prog_path)
     init, post = load_init(os.path.join(dirs[0], 'probe256.log'))
     # drop the query-pool setup (submit 4 is not traced) and NVK's own MME bookkeeping we relocate

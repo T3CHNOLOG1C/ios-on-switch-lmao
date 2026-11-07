@@ -17,6 +17,7 @@ filegroup(
     srcs = [
         "AsyncPipelines.h",
         "GpuMemoryRelease.h",
+        "LimitsTable.h",
         "NativeBridgeMetalFrontend.h",
         "QueuePriority.h",
         "SurfaceLayout.h",
@@ -31,6 +32,7 @@ filegroup(
     name = "bridge_rust",
     srcs = [
         "bridge/NativeMetalBridge.rs",
+        "bridge/NativeMetalFailure.rs",
         "bridge/NativeMetalObjects.rs",
         "bridge/NativeMetalTarget.rs",
     ],

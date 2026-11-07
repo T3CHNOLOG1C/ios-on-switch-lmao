@@ -37,7 +37,9 @@
 #include "raw_push.h"
 #include "raw_overlap.h"
 #include "raw_region.h"
+#include "raw_sampler.h"
 #include "raw_zeta.h"
+#include "raw_xr.h"
 #include "raw_ycbcr.h"
 #include "../fx/fx_mip.h"
 
@@ -135,6 +137,11 @@ struct Texture {
     } planes;
 
     bool planar = false;
+    // A planar texture rendered into: its passes render into planarStandIn (RGBA16Float, block-linear), which a draw loads from
+    // the planes before a pass that loads it and stores into them after one that stores it, through luma (R8Unorm over plane 0)
+    // and chroma (RG8Unorm over plane 1): the frontend's two-plane stand-in (TwoPlaneStandIn.metal), as m2v renders it. Never
+    // sampled: Metal reads the texture's codes (span)
+    Texture *planarStandIn = nullptr;
     // A two-plane YCbCr surface's texture (raw_ycbcr.h): the image sampled is span (RGBA16Float, RGBA32Float, RGBA8Unorm,
     // RGB10A2Unorm), which a pass of the pack's conversion state draws from the planes' textures, luma (R8Unorm, R16Unorm) and
     // chroma (RG8Unorm, RG16Unorm; none over plane 1), before the work that samples it (pack/ycbcr.metal; shape: its fragment
@@ -157,6 +164,13 @@ struct Texture {
     // through `sampled`, a pool image of its texels the copy engine refreshes from it (CommandBuffer::refresh) before work that
     // samples it, as m2v samples such a surface through a shadow image it copies in. tic is sampled's.
     Texture *sampled = nullptr;
+
+    // An extended-range texture's (raw_xr.h): the image a draw samples, its codes' values as RGBA16Float, which a pass of the
+    // pack's conversion state draws from the codes (tic) before the work that samples it. Null: not sampled.
+    Texture *standIn = nullptr;
+    // Metal keeps it losslessly compressed (m2v nan_clear.rs keeps_nan_sign): an extended-range Clear in a pass that records
+    // no draw call stores Metal's straight route's codes
+    bool compressed = false;
 
     // A mipmapped texture's levels (r12, raw/fx): level 0 is this texture (pitch, pool memory: rendered, copied and cleared as any
     // other), and `chain` the block-linear image of every level that its texture header (tic) points at, which the 2D engine
@@ -201,16 +215,11 @@ struct Buffer {
     Lease *lease = nullptr;    // as Texture::lease
 };
 
-struct SamplerDesc {                                      // the MTLSamplerDescriptor fields the TSC takes
-    uint8_t minFilter = 0, magFilter = 0, mipFilter = 0;  // MTLSamplerMinMagFilter / MTLSamplerMipFilter
-    uint8_t sAddress = 0, tAddress = 0, rAddress = 0;     // MTLSamplerAddressMode (clampToBorderColor: not taken)
-    uint8_t maxAnisotropy = 1;
-    float lodMin = 0, lodMax = 3.402823466e+38f;
-};
-
 // Level `level` (1 .. levels - 1) of mipmapped texture `t`'s chain as a render target (raw_target.h: NVK's block-linear
 // target of that level), for a pass to render into: `out` names the chain's memory, it owns nothing. False: not a level of it.
 bool chainLevelTarget(const Texture &t, uint32_t level, Texture &out);
+// The same level as the copy engine's block-linear side, for a format the 3D engine does not render too
+bool chainLevelImage(const Texture &t, uint32_t level, Texture &out);
 // The sampler header NVK writes for the Vulkan sampler m2v makes of `d` (Mesa nvk_sampler_get_header; checked against the twin for
 // Core Animation's combinations: pack/mksamplers.py, test/samplercheck.cpp)
 void samplerHeader(const SamplerDesc &d, uint32_t w[8]);
@@ -355,6 +364,7 @@ private:
     std::vector<std::pair<uint32_t *, uint32_t *>> bodies_;  // the pass body's push segments, in order
     void reserve();
     Pipeline *pipeline_ = nullptr, *emitted_ = nullptr;
+    bool residualsPushed_ = false;  // the last draw's push words held SlotBindOffset residuals (RenderEncoder::prepare)
     Bound bufs_[3][31];
     const Texture *textures_[16] = {};
     const Sampler *samplers_[16] = {};
@@ -586,6 +596,10 @@ public:
                             const YcbcrPlan &plan, uint32_t width, uint32_t height, Texture &t);
     // The pack's conversion state of a YCbCr texture's output (Texture::ycbcr), null if the pack has none
     Pipeline *ycbcrPipeline(uint8_t output);
+    // An extended-range texture's stand-in (Texture::standIn), made if the pack has its conversion state
+    bool createStandIn(Texture &t);
+    // The pack's conversion state of an extended-range texture's stand-in, null if the pack has none
+    Pipeline *xrPipeline(XrForm form);
     // s's header under address map `map` (Texture::addressMap), made now if it is not yet
     bool samplerVariant(Sampler &s, uint8_t map);
     // A two-plane 4:4:4 surface's texture of RGB8_444_2P (542): its planes at `luma`/`chroma` (offsets in the allocation,
@@ -593,6 +607,12 @@ public:
     bool createPlanarTexture(uint64_t surfaceId, void *base, uint64_t allocBytes, const void *surface, uint64_t luma,
                              uint32_t lumaPitch, uint64_t chroma, uint32_t chromaPitch, uint32_t width, uint32_t height,
                              Texture &t);
+    // A planar texture's stand-in and its planes' render targets (Texture::planarStandIn); false where the pack lacks the
+    // stand-in
+    // states or a plane cannot be rendered
+    bool createPlanarTarget(uint64_t surfaceId, void *base, uint64_t allocBytes, const void *surface, Texture &t);
+    // The pack's stand-in states: the planes' codes into the stand-in, or (`store`) the stand-in into the planes
+    Pipeline *standInPipeline(bool store);
     bool createBufferTexture(const Buffer &b, uint64_t offset, uint32_t width, uint32_t height, uint32_t pitch,
                              uint32_t format,
                              Texture &t);  // over a buffer's memory (t holds no reference: the caller keeps the buffer)
@@ -697,14 +717,18 @@ public:
 
     bool lost(uint32_t seqno) const
     {
+        if (k_.killRecords())
+            return killed(seqno);
         return lostAny_.load(std::memory_order_acquire) &&
                int32_t(lostThrough_.load(std::memory_order_relaxed) - seqno) >= 0;
     }
 
-    // Kernel::lostError and lostFaultVa: why the kernel killed the channel last found dead
+    // Why the kernel killed the channel of the last seqno lost() named (its kill record's error), else Kernel::lostError and
+    // lostFaultVa: the channel last found dead
     uint32_t lostError() const
     {
-        return k_.lostError();
+        const uint32_t recorded = killedError_.load(std::memory_order_relaxed);
+        return recorded ? recorded : k_.lostError();
     }
 
     uint64_t lostFaultVa() const
@@ -939,9 +963,23 @@ private:
     void emitContext(Push &p);
     bool reopen();
     void noteLost();
-    // the last seqno of a channel that died: it and every one before it failed (or completed before; not told apart)
+    // the last seqno of a channel that died: it and every one before it failed (or completed before; not told apart),
+    // where the kernel writes no kill records
     std::atomic<uint32_t> lostThrough_{0};
     std::atomic<bool> lostAny_{false};
+
+    // The seqnos a kill took (TegraGM20BAbiFence): the live channel's record, then the ones the channels it replaced left,
+    // kept until reopen made the record's slot over (a slot's seqnos continue, so a kept record names its channel's alone).
+    struct Killed {
+        uint32_t first, last, error;
+    };
+
+    bool liveKill(Killed &k) const;
+    bool killed(uint32_t seqno) const;
+    mutable std::mutex killedLock_;
+    std::array<Killed, 4> killedKept_{};
+    uint32_t killedNext_ = 0;
+    mutable std::atomic<uint32_t> killedError_{0};
     uint8_t *alloc(Ring &r, uint32_t bytes, uint32_t align, uint64_t &va);
     void retire(Ring &r, uint32_t seqno);
     uint32_t allocTic();

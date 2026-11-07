@@ -35,6 +35,7 @@
 #include "NativeBridgeMetalFrontend.h"
 #include "AsyncPipelines.h"
 #include "GpuMemoryRelease.h"
+#include "LimitsTable.h"
 #include "QueuePriority.h"
 #include "SurfaceLayout.h"
 #include "SwitchFrameTimeline.h"
@@ -1560,6 +1561,42 @@ static std::string stageText(NBFunction *f)
 @end
 @implementation NBFunctionConstant
 @end
+// A function's stage-input attribute (MTLVertexAttribute's and MTLAttribute's readable properties), for vertexAttributes and
+// stageInputAttributes.
+@interface NBAttribute : NSObject
+@property (nonatomic, copy) NSString *name;
+@property (nonatomic) NSUInteger attributeIndex;
+@property (nonatomic) MTLDataType attributeType;
+@property (nonatomic, getter=isActive) BOOL active;
+@property (nonatomic, getter=isPatchData) BOOL patchData;
+@property (nonatomic, getter=isPatchControlPointData) BOOL patchControlPointData;
+@end
+@implementation NBAttribute
+@end
+
+static NSArray *functionAttributes(const NmbFunction *f, bool stageInput)
+{
+    const int64_t count = nmb_function_attribute_count(f, stageInput);
+    if (count < 0)
+        return nil;
+    NSMutableArray *out = [NSMutableArray arrayWithCapacity:NSUInteger(count)];
+    for (uint32_t i = 0; i < uint32_t(count); i++) {
+        char name[256];
+        uint64_t info[5] = {};
+        if (!nmb_function_attribute(f, stageInput, i, name, sizeof name, info))
+            continue;
+        NBAttribute *a = [NBAttribute new];
+        a.name = [NSString stringWithUTF8String:name];
+        a.attributeIndex = info[0];
+        a.attributeType = (MTLDataType)info[1];
+        a.active = info[2] != 0;
+        a.patchData = info[3] != 0;
+        a.patchControlPointData = info[4] != 0;
+        [out addObject:a];
+    }
+    return out;
+}
+
 @implementation NBFunction
 
 - (void)dealloc
@@ -1589,6 +1626,16 @@ static std::string stageText(NBFunction *f)
 - (MTLFunctionOptions)options
 {
     return MTLFunctionOptionNone;
+}
+
+- (NSArray<MTLVertexAttribute *> *)vertexAttributes
+{
+    return (NSArray<MTLVertexAttribute *> *)functionAttributes(_handle, false);
+}
+
+- (NSArray<MTLAttribute *> *)stageInputAttributes
+{
+    return (NSArray<MTLAttribute *> *)functionAttributes(_handle, true);
 }
 
 // The layout of the argument buffer the function takes at the index, as its AIR lays it out (the runtime's decode). No reflection
@@ -2112,6 +2159,8 @@ static void asyncCall(void (^call)(void))
 
 @interface NBSampler : NBObject
 @property (nonatomic) NmbSampler *handle;
+@property (nonatomic, copy) MTLSamplerDescriptor *descriptor;
+@property (nonatomic, strong) NSMutableDictionary<NSValue *, id<MTLSamplerState>> *clamped;
 @end
 @implementation NBSampler
 
@@ -2884,7 +2933,11 @@ static void waitForResource(id resource)
 
 @end
 
-@interface NBRenderEncoder : NBEncoder
+@interface NBRenderEncoder : NBEncoder {
+    MTLCullMode _cull;
+    MTLWinding _winding;
+    MTLTriangleFillMode _fill;
+}
 @property (nonatomic) bool skipsPending;  // the display's pass: a state still being made skips its draws
 @property (nonatomic) bool skipDraws;     // the state set last is being made (or failed): its draws are skipped
 @property (nonatomic, strong) NSArray<NBTwoPlaneStandIn *> *storeBacks;  // stored into their planes at endEncoding
@@ -2989,6 +3042,55 @@ static void waitForResource(id resource)
     [self sampler:s index:i stage:2];
 }
 
+// A bind's LOD clamps replace the state's (Metal's rule, metal2vulkan's for compute): the state of its descriptor with those clamps,
+// made once per state and clamps
+static id<MTLSamplerState> clampedSampler(id<MTLSamplerState> s, float lodMin, float lodMax)
+{
+    if (![(id)s isKindOfClass:[NBSampler class]])
+        return s;
+    NBSampler *base = (NBSampler *)s;
+    const float clamps[2] = {lodMin, lodMax};
+    NSValue *key = [NSValue valueWithBytes:clamps objCType:@encode(float[2])];
+    @synchronized(base) {
+        if (!base.clamped)
+            base.clamped = [NSMutableDictionary dictionary];
+        if (id<MTLSamplerState> made = base.clamped[key])
+            return made;
+        MTLSamplerDescriptor *d = [base.descriptor copy];
+        d.lodMinClamp = lodMin;
+        d.lodMaxClamp = lodMax;
+        id<MTLSamplerState> made = [(id<MTLDevice>)gDeviceObject newSamplerStateWithDescriptor:d];
+        if (made)
+            base.clamped[key] = made;
+        return made;
+    }
+}
+
+- (void)setVertexSamplerState:(id<MTLSamplerState>)s
+                  lodMinClamp:(float)lodMin
+                  lodMaxClamp:(float)lodMax
+                      atIndex:(NSUInteger)i
+{
+    [self sampler:clampedSampler(s, lodMin, lodMax) index:i stage:1];
+}
+
+- (void)setFragmentSamplerState:(id<MTLSamplerState>)s
+                    lodMinClamp:(float)lodMin
+                    lodMaxClamp:(float)lodMax
+                        atIndex:(NSUInteger)i
+{
+    [self sampler:clampedSampler(s, lodMin, lodMax) index:i stage:2];
+}
+
+- (void)setFragmentSamplerStates:(const id<MTLSamplerState> __unsafe_unretained[])s
+                    lodMinClamps:(const float[])lodMin
+                    lodMaxClamps:(const float[])lodMax
+                       withRange:(NSRange)r
+{
+    for (NSUInteger k = 0; k < r.length; k++)
+        [self sampler:clampedSampler(s[k], lodMin[k], lodMax[k]) index:r.location + k stage:2];
+}
+
 - (void)setDepthStencilState:(id<MTLDepthStencilState>)state
 {
     NBApiTime timed;
@@ -3014,32 +3116,28 @@ static void waitForResource(id resource)
     [self check:nmb_render_set_scissor(self.handle, values) what:"setScissorRect"];
 }
 
-// The runtime takes cull mode, winding and fill mode together; this encoder keeps Metal's defaults until each is set.
+// The runtime takes cull mode, winding and fill mode together; this encoder keeps Metal's defaults (zero) until each is set.
 - (void)raster
 {
     NBApiTime timed;
-    NSNumber *cull = objc_getAssociatedObject(self, "cull"), *winding = objc_getAssociatedObject(self, "winding"),
-             *fill = objc_getAssociatedObject(self, "fill");
-    [self check:nmb_render_set_raster(self.handle, cull.unsignedLongLongValue, winding.unsignedLongLongValue,
-                                      fill.unsignedLongLongValue)
-           what:"raster state"];
+    [self check:nmb_render_set_raster(self.handle, _cull, _winding, _fill) what:"raster state"];
 }
 
 - (void)setCullMode:(MTLCullMode)m
 {
-    objc_setAssociatedObject(self, "cull", @(m), OBJC_ASSOCIATION_RETAIN);
+    _cull = m;
     [self raster];
 }
 
 - (void)setFrontFacingWinding:(MTLWinding)w
 {
-    objc_setAssociatedObject(self, "winding", @(w), OBJC_ASSOCIATION_RETAIN);
+    _winding = w;
     [self raster];
 }
 
 - (void)setTriangleFillMode:(MTLTriangleFillMode)f
 {
-    objc_setAssociatedObject(self, "fill", @(f), OBJC_ASSOCIATION_RETAIN);
+    _fill = f;
     [self raster];
 }
 
@@ -3640,7 +3738,10 @@ static void scheduled(void *context);
         return nil;
     char text[512] = {};
     nmb_command_buffer_error(_handle, text, sizeof text);
-    return nbError([NSString stringWithUTF8String:text]);
+    const uint64_t code = nmb_command_buffer_error_code(_handle);
+    return [NSError errorWithDomain:MTLCommandBufferErrorDomain
+                               code:code ? (NSInteger)code : MTLCommandBufferErrorInternal
+                           userInfo:@{NSLocalizedDescriptionKey : [NSString stringWithUTF8String:text]}];
 }
 
 // Debug groups and cache hints name work for tools and the driver's caches; they change nothing the GPU computes here.
@@ -5509,119 +5610,28 @@ static bool systemCompiler()
 @protocol NBOriginalStitching
 - (NSString *)newDagStringWithGraphs:(NSArray<MTLFunctionStitchingGraph *> *)graphs;
 @end
-// The base class's limits table (-[_MTLDevice limits], the words after isa in 21H461). Metal's accessors read their field from it
-// (-[_MTLDevice maxTextureWidth2D] is limits+0x84), and frameworks read it directly, past this device's methods: PhotosUICore's texture
-// converter takes its largest image from 0x84/0x88 (-[PXGMetalTextureConverter createTextureFromCGImage:transform:alpha:options:],
-// PXGCreateMetalTextureFromBytesInCGImage); with them 0 every image is "too large", is redrawn to fit 0x0 and PXGCreateContext asserts.
-// CoreRE reads minBufferNoCopyAlignmentBytes at 0x7c. The offsets are those accessors' loads (the
-// 61 integer fields; maxLineWidth and maxPointSize are floats, not filled).
 @protocol NBOriginalLimits
 - (void *)limits;
 @end
 #if TARGET_OS_IPHONE
-static const struct {
-    const char *selector;
-    uint16_t offset;
-} kLimitFields[] = {{"maxFramebufferStorageBits", 0x0},
-                    {"linearTextureArrayAlignmentBytes", 0x4},
-                    {"linearTextureArrayAlignmentSlice", 0x8},
-                    {"maxTileBuffers", 0xc},
-                    {"maxTileTextures", 0x10},
-                    {"maxTileSamplers", 0x14},
-                    {"maxTileInlineDataSize", 0x18},
-                    {"minTilePixels", 0x1c},
-                    {"maxColorAttachments", 0x20},
-                    {"maxVertexAttributes", 0x24},
-                    {"maxVertexBuffers", 0x28},
-                    {"maxVertexTextures", 0x2c},
-                    {"maxVertexSamplers", 0x30},
-                    {"maxVertexInlineDataSize", 0x34},
-                    {"maxInterpolants", 0x38},
-                    {"maxFragmentBuffers", 0x3c},
-                    {"maxFragmentTextures", 0x40},
-                    {"maxFragmentSamplers", 0x44},
-                    {"maxFragmentInlineDataSize", 0x48},
-                    {"maxComputeBuffers", 0x4c},
-                    {"maxComputeTextures", 0x50},
-                    {"maxComputeSamplers", 0x54},
-                    {"maxComputeInlineDataSize", 0x58},
-                    {"maxComputeLocalMemorySizes", 0x5c},
-                    {"maxTotalComputeThreadsPerThreadgroup", 0x60},
-                    {"maxComputeThreadgroupMemory", 0x64},
-                    {"maxVisibilityQueryOffset", 0x70},
-                    {"minConstantBufferAlignmentBytes", 0x78},
-                    {"minBufferNoCopyAlignmentBytes", 0x7c},
-                    {"maxTextureWidth1D", 0x80},
-                    {"maxTextureWidth2D", 0x84},
-                    {"maxTextureHeight2D", 0x88},
-                    {"maxTextureWidth3D", 0x8c},
-                    {"maxTextureHeight3D", 0x90},
-                    {"maxTextureDepth3D", 0x94},
-                    {"maxTextureDimensionCube", 0x98},
-                    {"maxTextureLayers", 0x9c},
-                    {"linearTextureAlignmentBytes", 0xa0},
-                    {"iosurfaceTextureAlignmentBytes", 0xa4},
-                    {"iosurfaceReadOnlyTextureAlignmentBytes", 0xa8},
-                    {"deviceLinearTextureAlignmentBytes", 0xac},
-                    {"deviceLinearReadOnlyTextureAlignmentBytes", 0xb0},
-                    {"maxFunctionConstantIndices", 0xb4},
-                    {"maxComputeThreadgroupMemoryAlignmentBytes", 0xb8},
-                    {"maxInterpolatedComponents", 0xbc},
-                    {"maxTessellationFactor", 0xc0},
-                    {"maxIndirectBuffers", 0xc4},
-                    {"maxIndirectTextures", 0xc8},
-                    {"maxIndirectSamplers", 0xcc},
-                    {"maxIndirectSamplersPerDevice", 0xd0},
-                    {"maxFenceInstances", 0xd4},
-                    {"maxViewportCount", 0xd8},
-                    {"maxCustomSamplePositions", 0xdc},
-                    {"maxVertexAmplificationFactor", 0xe0},
-                    {"maxVertexAmplificationCount", 0xe4},
-                    {"maxTextureBufferWidth", 0xe8},
-                    {"maxComputeAttributes", 0xec},
-                    {"maxIOCommandsInFlight", 0xf0},
-                    {"maxPredicatedNestingDepth", 0xf4},
-                    {"maxAccelerationStructureLevels", 0xf8},
-                    {"maxConstantBufferArguments", 0xfc}};
-
-// Each field whose selector this device answers itself (installAnswers, NBDeviceMethods) gets that answer, so the table says what the
-// methods say; one the device has no answer for stays the base class's 0. Every write is read back through the base class's own accessor,
-// and a field it does not read back is restored and the fill stops there (a different layout), the field named.
+// The base class's limits table (LimitsTable.h) gets each answer of this device's own methods (installAnswers, NBDeviceMethods), so
+// the table says what the methods say; a field the device has no answer for stays the base class's 0.
 static void fillLimits(id device)
 {
-    Class cls = object_getClass(device), base = class_getSuperclass(cls);
-    if (![base instancesRespondToSelector:@selector(limits)])
+    if (![class_getSuperclass(object_getClass(device)) instancesRespondToSelector:@selector(limits)])
         return;
     uint8_t *table = (uint8_t *)[(id<NBOriginalLimits>)device limits];
     if (!table)
         return;
-    for (const auto &field : kLimitFields) {
-        SEL sel = sel_registerName(field.selector);
-        Method own = class_getInstanceMethod(cls, sel), original = class_getInstanceMethod(base, sel);
-        if (!own || !original || method_getImplementation(own) == method_getImplementation(original))
-            continue;
-        char type[8] = {};
-        method_getReturnType(own, type, sizeof type);
-        if (strcmp(type, "Q") && strcmp(type, "L") && strcmp(type, "I"))
-            continue;
-        const uint64_t value = ((NSUInteger (*)(id, SEL))method_getImplementation(own))(device, sel);
-        if (value > UINT32_MAX) {
-            NBREFUSE("limits.overflow", uintptr_t(field.selector), @"limits: %s %llu does not fit the table",
-                     field.selector, (unsigned long long)value);
-            continue;
-        }
-        uint32_t was;
-        memcpy(&was, table + field.offset, 4);
-        const uint32_t word = (uint32_t)value;
-        memcpy(table + field.offset, &word, 4);
-        if (((NSUInteger (*)(id, SEL))method_getImplementation(original))(device, sel) != value) {
-            memcpy(table + field.offset, &was, 4);
+    fillLimitsFromMethods(device, table, [](const LimitField &field, LimitFill how) {
+        if (how == LimitFill::Overflow)
+            NBREFUSE("limits.overflow", uintptr_t(field.selector), @"limits: %s does not fit the table",
+                     field.selector);
+        else if (how == LimitFill::NotRead)
             NBREFUSE("limits.layout", field.offset,
-                     @"limits: the base class does not read %s at 0x%x; the fields from there stay 0", field.selector,
+                     @"limits: the base class does not read %s at 0x%x; it stays its own", field.selector,
                      field.offset);
-            return;
-        }
-    }
+    });
     uint32_t width = 0, height = 0;
     memcpy(&width, table + 0x84, 4);
     memcpy(&height, table + 0x88, 4);
@@ -6591,6 +6601,7 @@ static void fillLimits(id)
     }
     NBSampler *sampler = [NBSampler new];
     sampler.handle = handle;
+    sampler.descriptor = d;
     return (id<MTLSamplerState>)sampler;
 }
 

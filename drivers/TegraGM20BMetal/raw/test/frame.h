@@ -59,6 +59,19 @@ inline bool a3()
     return getenv("FRAME_A3") != nullptr;
 }
 
+// FRAME_542: the framebuffers are widget snapshots, RGB8_444_2P (542) textures over two-plane 4:4:4 '_RB4' surfaces, which
+// the main pass's states (those with c0=542 in the corpus) render through the frontend's stand-in; FRAME_PITCH's rows apply too.
+// FRAME_542=load: the main pass loads the snapshot instead of clearing it
+inline bool snapshot()
+{
+    return getenv("FRAME_542") != nullptr;
+}
+
+inline bool snapshotLoads()
+{
+    return snapshot() && !strcmp(getenv("FRAME_542"), "load");
+}
+
 // FRAME_DS: the main pass draws Depth32Float_Stencil8 states (ds=260/260) beside a memoryless attachment of that format, cleared,
 // under the depth/stencil states of dsSpec and changing stencil references; its first color is memoryless too (the raw path
 // renders no pitch color beside a depth/stencil attachment)
@@ -67,12 +80,19 @@ inline bool depthStencil()
     return getenv("FRAME_DS") != nullptr;
 }
 
+// FRAME_XR: the blur passes draw Core Animation's extended-range blur states (RGB10A8_2P_XR10, format 550, both attachments) into
+// targets of that format, each sampling the one before; every fourth main draw samples the last of them
+inline bool extendedRange()
+{
+    return getenv("FRAME_XR") != nullptr;
+}
+
 struct State {
     std::string line, key;
     bool uber, blur, extra = false;
 };
 
-// The corpus states the frame uses: BGRA8 (format 80) two-attachment states only (the pack has no extended-range state).
+// The corpus states the frame uses: BGRA8 (format 80) two-attachment states (FRAME_XR: the blurs' 550 ones).
 inline std::vector<State> states(const char *corpusPath)
 {
     std::vector<State> out;
@@ -93,9 +113,15 @@ inline std::vector<State> states(const char *corpusPath)
             l.erase(at, l.find(' ', at + 1) - at);  // not in the key
         // FRAME_A3: the three-attachment states instead (a third R32Float attachment, c2=55: Core Animation's "A3" states,
         // r7n's harvest), drawn in a main pass with that third attachment
-        if (l.find(" c0=80:") == std::string::npos || l.find(" c1=80:") == std::string::npos ||
-            (a3() ? l.find(" c2=55:") == std::string::npos || l.find(" c3=") != std::string::npos
-                  : l.find(" c2=") != std::string::npos))
+        const bool blurLine = l.find("v downsample_blur_vert_lph") != std::string::npos,
+                   xrBlur = extendedRange() && blurLine;
+        const char *c0 = xrBlur                    ? " c0=550:"
+                         : snapshot() && !blurLine ? " c0=542:"
+                                                   : " c0=80:",
+                   *c1 = xrBlur ? " c1=550:" : " c1=80:";
+        if (l.find(c0) == std::string::npos || l.find(c1) == std::string::npos ||
+            (a3() && !xrBlur ? l.find(" c2=55:") == std::string::npos || l.find(" c3=") != std::string::npos
+                             : l.find(" c2=") != std::string::npos))
             continue;
         State s{l, key(l), l.find("v fixed_vert_lph_spc") != std::string::npos,
                 l.find("v downsample_blur_vert_lph") != std::string::npos};
@@ -161,7 +187,8 @@ enum Tex : int {
 struct TexDesc {
     int w, h;
     bool iosurface, memoryless, renderTarget;
-    uint32_t format = 80;  // MTLPixelFormat: BGRA8Unorm, or R32Float (55) for the A3 states' third attachment
+    uint32_t format =
+        80;  // MTLPixelFormat: BGRA8Unorm, R32Float (55) for the A3 states' third attachment, 550 FRAME_XR's blurs
 };
 
 // FRAME_PITCH: the surfaces' rows as clients' and the render server's can lie since r12a (its needed alignment back at 16): the
@@ -178,14 +205,14 @@ inline TexDesc texture(int t)
     switch (t) {
     case FB0:
     case FB1:
-        return {pitchShapes("fb") ? 1272 : 1280, 720, true, false, true};
+        return {pitchShapes("fb") ? 1272 : 1280, 720, true, false, true, snapshot() ? 542u : 80u};
     case MEMORYLESS:
         return {1280, 720, false, true, true};
     case BLUR0:
     case BLUR1:
-        return {320, 180, false, false, true};
+        return {320, 180, false, false, true, extendedRange() ? 550u : 80u};
     case BLUR_MEMORYLESS:
-        return {320, 180, false, true, true};
+        return {320, 180, false, true, true, extendedRange() ? 550u : 80u};
     case IMAGE0:
         return {1280, 720, true, false, false};
     case A3TARGET:
@@ -283,7 +310,9 @@ struct Pass {
 struct Shape {
     unsigned blurPasses = 8, draws = 100,
              mainStates = getenv("FRAME_STATES") ? unsigned(atoi(getenv("FRAME_STATES"))) : 12;
-    uint32_t uniformBytes = 256, vertexBytes = 192;
+    // FRAME_UNIFORM_BYTES: the uniform payloads' length (with FRAME_RING_ALIGN=4, 52 binds them at offsets 4, 8 and 12 past 16)
+    uint32_t uniformBytes = getenv("FRAME_UNIFORM_BYTES") ? uint32_t(atoi(getenv("FRAME_UNIFORM_BYTES"))) : 256,
+             vertexBytes = 192;
     // FRAME_RING: every payload goes into one shared buffer at 256-aligned offsets, bound with set*Buffer:offset: at a pass's first
     // draw and set*BufferOffset: after (Core Animation's per-frame ring, cabench mode 16), instead of set*Bytes
     bool ring = getenv("FRAME_RING") != nullptr;
@@ -307,7 +336,9 @@ inline std::vector<Pass> passes(unsigned frameIndex, const Shape &s, size_t blur
 {
     std::vector<Pass> out;
     for (unsigned p = 0; p < s.blurPasses && blurCount; p++) {
-        Pass bp{{p & 1 ? BLUR1 : BLUR0, BLUR_MEMORYLESS, -1}, {0, 0, 0}, {0, 0, 0, 0}, {}};
+        // FRAME_BLUR_LOAD: the blur targets' load action (0 DontCare, 1 Load, 2 Clear to a color past [0, 1] in two channels)
+        const int blurLoad = getenv("FRAME_BLUR_LOAD") ? atoi(getenv("FRAME_BLUR_LOAD")) : 0;
+        Pass bp{{p & 1 ? BLUR1 : BLUR0, BLUR_MEMORYLESS, -1}, {blurLoad, 0, 0}, {0.25f, -0.5f, 1.125f, 0.75f}, {}};
         Draw d{int(p % blurCount), true, {0, 0, 320, 180}, {}, {}, {}};
         for (int &t : d.textures)
             t = -1;
@@ -323,7 +354,10 @@ inline std::vector<Pass> passes(unsigned frameIndex, const Shape &s, size_t blur
         bp.draws.push_back(d);
         out.push_back(bp);
     }
-    Pass mp{{frameIndex & 1 ? FB1 : FB0, MEMORYLESS, a3() ? A3TARGET : -1}, {2, 0, 2}, {0, 0, 0, 1}, {}};
+    Pass mp{{frameIndex & 1 ? FB1 : FB0, MEMORYLESS, a3() ? A3TARGET : -1},
+            {snapshotLoads() ? 1 : 2, 0, 2},
+            {0, 0, 0, 1},
+            {}};
     if (depthStencil()) {
         mp.color[0] = DS_COLOR;
         mp.depth = ZETA;
@@ -362,7 +396,7 @@ inline std::vector<Pass> passes(unsigned frameIndex, const Shape &s, size_t blur
                 d.baseInstance = 3;
         }
         d.textures[3] = IMAGE1 + int(i % 3);
-        d.textures[4] = IMAGE2;
+        d.textures[4] = extendedRange() && i % 4 == 0 && s.blurPasses ? (s.blurPasses & 1 ? BLUR0 : BLUR1) : IMAGE2;
         d.textures[9] = IMAGE3;
         d.samplers[1] = 1;
         if (rasterState()) {
