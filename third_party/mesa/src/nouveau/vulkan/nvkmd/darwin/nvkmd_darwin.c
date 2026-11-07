@@ -1853,6 +1853,12 @@ nvkmd_darwin_hint_surfaces(const void *queue)
    darwin_hint_begin(&submit_hint, queue);
 }
 
+const void *
+nvkmd_darwin_mem_host_ptr(const struct nvkmd_mem *mem)
+{
+   return container_of(mem, const struct nvkmd_darwin_mem, base)->host_ptr;
+}
+
 void
 nvkmd_darwin_hint_surface(struct nvkmd_mem *_mem, uint8_t access)
 {

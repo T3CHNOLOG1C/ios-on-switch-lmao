@@ -420,6 +420,9 @@ void *nvkmd_darwin_submit_data(const void *queue);
 void nvkmd_darwin_submit_data_free(void *data);
 void nvkmd_darwin_submit_surfaces(struct nvkmd_ctx *ctx, const void *data);
 void nvkmd_darwin_submit_surfaces_end(struct nvkmd_ctx *ctx);
+
+/* The caller's pages a host import is of, NULL for any other memory. */
+const void *nvkmd_darwin_mem_host_ptr(const struct nvkmd_mem *mem);
 #endif
 
 static inline void

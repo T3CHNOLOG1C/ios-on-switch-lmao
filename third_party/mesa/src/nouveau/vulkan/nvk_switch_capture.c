@@ -77,9 +77,18 @@ switch_nvk_capture_map(uint64_t command_buffer, uint64_t addr, uint64_t bytes)
    uint64_t offset = 0;
    struct nvkmd_mem *mem = nvkmd_dev_lookup_mem_by_va(dev->nvkmd, addr, &offset);
    if (mem != NULL) {
+      /* vkMapMemory maps into client_map, not map: the metal2vulkan
+       * runtime's buffers and upload arenas are mapped there; a host import
+       * is the caller's pages, mapped by nobody here.
+       */
+      const char *base = mem->map != NULL ? mem->map : mem->client_map;
+#ifdef NVK_HAS_DARWIN
+      if (base == NULL)
+         base = nvkmd_darwin_mem_host_ptr(mem);
+#endif
       const void *cpu = NULL;
-      if (mem->map != NULL && bytes <= mem->va->size_B - offset)
-         cpu = (const char *)mem->map + offset;
+      if (base != NULL && bytes <= mem->va->size_B - offset)
+         cpu = base + offset;
       nvkmd_mem_unref(mem);
       if (cpu != NULL)
          return cpu;
