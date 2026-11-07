@@ -15,10 +15,12 @@ py_library(
     name = "lib",
     srcs = [
         "apfs.py",
+        "apfs_tree.py",
         "card.py",
         "compose.py",
         "cryptex.py",
         "delta.py",
+        "disks.py",
         "extents.py",
         "folder.py",
         "gpt.py",
@@ -26,6 +28,7 @@ py_library(
         "keys.py",
         "manifest.py",
         "overlay_index.py",
+        "owners.py",
         "pack.py",
         "populate.py",
         "pretranslate.py",
@@ -167,6 +170,24 @@ py_test(
 py_test(
     name = "pack_apfs_test",
     srcs = ["pack_apfs_test.py"],
+    tags = [
+        "local",
+        "manual",
+    ],
+    deps = [":lib"],
+)
+
+py_test(
+    name = "owners_test",
+    size = "small",
+    srcs = ["owners_test.py"],
+    deps = [":lib"],
+)
+
+# Owners given offline on real APFS images, sealed after: hdiutil and diskutil, macOS, outside the sandbox.
+py_test(
+    name = "owners_apfs_test",
+    srcs = ["owners_apfs_test.py"],
     tags = [
         "local",
         "manual",
