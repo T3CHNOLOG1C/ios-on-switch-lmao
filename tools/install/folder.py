@@ -170,19 +170,30 @@ def merge(out: Path, fat_root: Path, names: list[str], log: host.Log) -> tuple[l
                 (fat_root / relative).parent.mkdir(parents=True, exist_ok=True)
                 _copy_range(out / relative, fat_root / relative, start, end)
                 written.append(relative if end != manifest.BODY_OFFSET or start else relative + ' (head)')
-    if (fat_root / LEGACY).is_dir() and not any((fat_root / LEGACY).iterdir()):
-        (fat_root / LEGACY).rmdir()
-    for relative in SHARED:
-        source, target = out / relative, fat_root / relative
-        if source.is_file() and not (target.is_file() and cards.sha256_file(target) == cards.sha256_file(source)):
+        for relative in shared_plan(out, fat_root):
+            progress.note(relative)
+            source, target = out / relative, fat_root / relative
             target.parent.mkdir(parents=True, exist_ok=True)
             _copy_range(source, target, 0, source.stat().st_size)
             written.append(relative)
+    if (fat_root / LEGACY).is_dir() and not any((fat_root / LEGACY).iterdir()):
+        (fat_root / LEGACY).rmdir()
     removed += renamed.remove_older_boot_entries(fat_root, cards.INI, cards.BOOT_ENTRY, False)
     host.run('sync')
     log(f'card: {len(written)} written, {len(removed)} removed: {", ".join(written + removed) or "nothing"}')
     return written, removed
 
 
+def shared_plan(out: Path, fat_root: Path) -> list[str]:
+    """Return the shared files (install-ios.bin, the ini, the icon) the FAT lacks or holds other bytes of."""
+    differ = []
+    for relative in SHARED:
+        source, target = Path(out) / relative, Path(fat_root) / relative
+        if source.is_file() and not (target.is_file() and cards.sha256_file(target) == cards.sha256_file(source)):
+            differ.append(relative)
+    return differ
+
+
 def copy_bytes(out: Path, fat_root: Path, names: list[str]) -> int:
-    return sum(end - start for name in names for _, start, end in copy_plan(out, fat_root, name)[0])
+    images = sum(end - start for name in names for _, start, end in copy_plan(out, fat_root, name)[0])
+    return images + sum((Path(out) / r).stat().st_size for r in shared_plan(out, fat_root))

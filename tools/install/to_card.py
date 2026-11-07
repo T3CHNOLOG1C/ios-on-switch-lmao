@@ -2,7 +2,7 @@
 """Put //:image's folder (out/sd) on a Switch SD card in the Mac: its images, install-ios.bin, the hekate ini and icon.
 
     bazel run //:image_to_card -- diskN                  dry run: what would be written and removed
-    bazel run //:image_to_card -- diskN --yes            do it (type diskN to confirm), then eject the card
+    bazel run //:image_to_card -- diskN --yes            do it, then eject the card
     bazel run //:image_to_card -- diskN --image IOS27    only that image (default: every image in the folder)
 
 Only parts the card does not already hold are written, by the manifests' chunk hashes: after a kernel-only change that
@@ -35,7 +35,7 @@ def stale_bytes(root: Path, relatives: list[str]) -> int:
 
 
 def plan(out: Path, root: Path, names: list[str], log: host.Log) -> int:
-    """Log what copying `names` would do; return the bytes the FAT needs free for it."""
+    """Log what copying `names` and the shared files would do; return the bytes the FAT needs free for it."""
     need = 0
     for name in names:
         copies, stale = folder.copy_plan(out, root, name)
@@ -46,14 +46,16 @@ def plan(out: Path, root: Path, names: list[str], log: host.Log) -> int:
         need += sum(end - start for _, start, end in copies) - stale_bytes(root, stale)
         if not copies and not stale:
             log(f'  {name}.SII: already on the card')
+    for relative in folder.shared_plan(out, root):
+        log(f'  copy: {relative}')
+        need += (out / relative).stat().st_size - stale_bytes(root, [relative])
     return need
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('disk', help="the card's whole disk, e.g. disk4 (see `diskutil list external`)")
-    parser.add_argument('--yes', action='store_true')
-    parser.add_argument('--confirm', help='the disk identifier, instead of typing it')
+    parser.add_argument('--yes', action='store_true', help='write the plan (without it: a dry run)')
     parser.add_argument('--image', action='append', help='an image by name (IOS17, IOS27); default: all of them')
     parser.add_argument('--out', help="//:image's folder (default: out/sd in the source tree)")
     parser.add_argument('--no-eject', action='store_true')
@@ -82,11 +84,6 @@ def main(argv: list[str] | None = None) -> int:
             if not args.yes:
                 log('dry run: nothing written (add --yes)')
                 return 0
-            if args.confirm != card.disk:
-                if args.confirm or not sys.stdin.isatty():
-                    raise cards.RefusedError(f'confirm with --confirm={card.disk} or interactively')
-                if input(f'Copy {", ".join(names)} to {card.disk}? Type {card.disk}: ').strip() != card.disk:
-                    raise cards.RefusedError('not confirmed')
             folder.merge(out, Path(root), names, log)
         if not args.no_eject:
             with progress.step(f'card: ejecting {card.disk}', unit=None):
