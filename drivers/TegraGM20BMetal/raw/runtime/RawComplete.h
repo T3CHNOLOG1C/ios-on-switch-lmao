@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
-// The raw device's completion of the states its pack lacks (RawMetal.mm): each asked once per process and per build, off the
-// asker's thread. A state is first looked up in the record cache under the process's shader cache directory, else probed in
+// The raw device's completion of the states its pack lacks (RawMetal.mm), of any library's functions: each asked once per
+// process and per build, off the asker's thread. A state is first looked up in the record cache under the process's shader cache directory, else probed in
 // process on the m2v device (RawProbe.h), its record kept, and handed to the raw device; until then, and for a state it refuses,
 // m2v draws it.
 #pragma once
@@ -28,11 +28,12 @@ public:
 
     struct Ask {
         id<MTLRenderPipelineState> twin;
-        MTLRenderPipelineDescriptor *descriptor;  // the twin's
+        MTLRenderPipelineDescriptor *descriptor;  // the twin's: its functions are m2v's, whose metallibs name their AIR
         std::string key;                          // the pack key
-        std::string vertexLibrary, vertexName, fragmentLibrary,
-            fragmentName;          // the functions: their metallib's path, name
-        bool caTransform = false;  // Pipeline::caTransform
+        bool caTransform = false;                 // Pipeline::caTransform
+        // its functions are not a framework's default library's: no pack names the key, so the record is kept under the
+        // key and both functions' AIR (two apps' alike-named functions are not one state)
+        bool own = false;
     };
 
     // The state's pipeline handed to `ready` once made (on the compile queue; at once if it was before), or null once the raw
@@ -50,10 +51,9 @@ private:
     uint64_t stack_;
     dispatch_queue_t queue_;
     std::mutex lock_;
-    std::map<uint64_t, Ask> asked_;                               // by CacheKey::name, what make() probes
-    std::map<std::string, std::map<std::string, AirHash>> airs_;  // by metallib path (the queue's)
+    std::map<uint64_t, Ask> asked_;  // by CacheKey::name, what make() probes
 
-    bool keyOf(const Ask &a, CacheKey &k);
+    bool keyOf(Ask &a, CacheKey &k);
     Compiler::Outcome make(const CacheKey &k, RuntimeRecord &record, std::string &why);
 };
 

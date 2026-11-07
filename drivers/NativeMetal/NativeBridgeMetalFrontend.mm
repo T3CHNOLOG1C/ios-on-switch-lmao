@@ -2087,6 +2087,18 @@ static id<MTLRenderPipelineState> asyncRenderPipeline(id device, MTLRenderPipeli
     return (id<MTLRenderPipelineState>)state;
 }
 
+extern "C" id native_bridge_metal_function_metallib(id function, const void **bytes, size_t *length)
+{
+    if (![function isKindOfClass:[NBFunction class]])
+        return nil;
+    NBLibrary *library = ((NBFunction *)function).library;
+    if (!library.bytes || !library.length)
+        return nil;
+    *bytes = library.bytes;
+    *length = library.length;
+    return library;
+}
+
 // TegraGM20BMetal: the m2v twin of a state its raw path draws, made at its first set (AsyncPipelines.h startLazy); made
 // here when this process makes its states on the asking thread.
 extern "C" id native_bridge_metal_render_pipeline_lazy(id device, id descriptor, NSUInteger options)

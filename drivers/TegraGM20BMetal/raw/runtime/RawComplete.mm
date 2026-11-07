@@ -3,6 +3,7 @@
 #import "RawComplete.h"
 
 #include <cstring>
+#include "NativeBridgeMetalFrontend.h"
 #include "RawProbe.h"
 #include "raw_gpu.h"
 
@@ -35,39 +36,54 @@ Completion::~Completion()
     compiler_.reset();
 }
 
-// The state's key: the build, both functions' AIR (their metallib's HASH tags) and the pack key. False: a function the raw path
-// cannot name the AIR of (not from a metallib file)
-bool Completion::keyOf(const Ask &a, CacheKey &k)
+// The state's key: the build, both functions' AIR (their entries' HASH tags in the metallibs m2v made them from) and the pack
+// key, which a state of no framework's library gets both AIR hashes appended to. False: a function the raw path cannot name the
+// AIR of (made from no metallib's bytes, or not one of them)
+bool Completion::keyOf(Ask &a, CacheKey &k)
 {
-    auto air = [&](const std::string &library, const std::string &name, uint8_t (&out)[32]) {
-        if (library.empty())
+    auto air = [](id<MTLFunction> function, uint8_t (&out)[32]) {
+        const void *bytes = nullptr;
+        size_t length = 0;
+        std::map<std::string, AirHash> hashes;
+        id library = native_bridge_metal_function_metallib(function, &bytes, &length);
+        if (!library || !metallibAirHashes(static_cast<const uint8_t *>(bytes), length, hashes))
             return false;
-        auto it = airs_.find(library);
-        if (it == airs_.end())
-            metallibAirHashes(library, (it = airs_.emplace(library, std::map<std::string, AirHash>()).first)->second);
-        const auto f = it->second.find(name);
-        if (f == it->second.end())
+        const auto f = hashes.find(function.name.UTF8String ?: "");
+        if (f == hashes.end())
             return false;
         memcpy(out, f->second.data(), sizeof out);
         return true;
     };
+    if (!air(a.descriptor.vertexFunction, k.vertexAir) || !air(a.descriptor.fragmentFunction, k.fragmentAir))
+        return false;
+    if (a.own) {
+        char tail[48];
+        uint64_t v, f;
+        memcpy(&v, k.vertexAir, sizeof v);
+        memcpy(&f, k.fragmentAir, sizeof f);
+        snprintf(tail, sizeof tail, " | air %016llx %016llx", (unsigned long long)v, (unsigned long long)f);
+        a.key += tail;
+    }
     k.stack = stack_;
     k.key = a.key;
-    return air(a.vertexLibrary, a.vertexName, k.vertexAir) && air(a.fragmentLibrary, a.fragmentName, k.fragmentAir);
+    return true;
 }
 
-void Completion::ask(Ask a, std::function<void(Pipeline *)> ready)
+void Completion::ask(Ask asked, std::function<void(Pipeline *)> ready)
 {
     dispatch_async(queue_, ^{
+        Ask a = asked;
         CacheKey k;
-        if (!keyOf(a, k))
+        if (!keyOf(a, k)) {
+            ready(nullptr);
             return;
+        }
         {
             std::lock_guard<std::mutex> l(lock_);
             asked_[k.name()] = a;
         }
         const bool caTransform = a.caTransform;
-        auto done = [this, k, a, ready, caTransform](const RuntimeRecord *record, const std::string &) {
+        auto done = [this, k, asked, ready, caTransform](const RuntimeRecord *record, const std::string &) {
             std::string why;
             if (record) {
                 ready(device_.addRecord(*record, caTransform, why));
@@ -77,7 +93,7 @@ void Completion::ask(Ask a, std::function<void(Pipeline *)> ready)
             uint64_t us = 0;
             if (compiler_->retryAfter(k, us))
                 dispatch_after(dispatch_time(DISPATCH_TIME_NOW, int64_t(us) * 1000), queue_, ^{
-                    ask(a, ready);
+                    ask(asked, ready);
                 });
             else
                 ready(nullptr);

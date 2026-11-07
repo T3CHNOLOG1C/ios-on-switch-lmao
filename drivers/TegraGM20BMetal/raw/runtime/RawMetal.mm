@@ -148,7 +148,7 @@ enum RMPred : uint8_t {
     PredPassOther,         // visibility buffer, layered target, rasterization rate map
     // states and calls
     PredStateForeign,
-    PredStateNotPackable,  // a state whose functions are not of one framework's default.metallib (never looked up in the pack)
+    PredStateNotPackable,  // a state whose functions are not this device's (neither in the pack nor made by the runtime)
     PredStateNotInPack,
     PredStateBeingMade,  // a state the pack lacks whose record the runtime is making (its first uses: RawComplete.h)
     PredCallVisibility,
@@ -577,14 +577,12 @@ static id twinPublish(id object, __strong id &slot, id made)
 @interface RMLibrary : RMObject {
 @public
     std::string _framework;  // "QuartzCore", "RenderBox"...; empty: not a framework's default library (never looked up)
-    std::string _path;       // its metallib file's (empty: made from bytes or source)
 }
 @end
 @interface RMFunction : RMObject {
 @public
     std::string _constants;
     std::string _framework;
-    std::string _library;  // RMLibrary::_path
 }
 @property (nonatomic, copy) NSString *name;
 @end
@@ -645,7 +643,6 @@ static std::string constantsText(MTLFunctionConstantValues *values)
     f->_twin = twin;
     f->_constants = constantsText(values);
     f->_framework = _framework;
-    f->_library = _path;
     f.name = name;
     return f;
 }
@@ -695,7 +692,6 @@ static RMLibrary *wrapLibrary(id device, id<MTLLibrary> twin, NSString *path)
     RMLibrary *l = [RMLibrary new];
     l->_device = device;
     l->_twin = twin;
-    l->_path = path ? path.UTF8String : "";
     if ([path hasSuffix:@".framework/default.metallib"])
         l->_framework =
             path.stringByDeletingLastPathComponent.lastPathComponent.stringByDeletingPathExtension.UTF8String;
@@ -1704,10 +1700,11 @@ static void refuseTexture(RMTexture *t, RMPred p, uint64_t a, uint64_t b, NSStri
     // null: not in the pack (every command buffer using it goes to m2v), or not yet made by the runtime (completeLater: set once,
     // released, from its queue)
     raw::Pipeline *_raw;
-    bool _packable;  // its functions are one framework's default library's (looked up in the pack)
+    bool _packable;     // its functions are one framework's default library's (looked up in the pack)
+    bool _completable;  // both its functions are this device's (the runtime makes its record if the pack has none)
     bool _caTransform;
     bool _asked;       // its record asked of the runtime (completeLater)
-    std::string _key;  // its pack key (packable states')
+    std::string _key;  // its pack key (completable states')
 }
 @end
 @implementation RMPipeline
@@ -2210,7 +2207,7 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
         hit(_cb, PredStateForeign);
     } else if (!p->_raw) {
         [_cb takeReason:WhyState why:@"a state not in the pack (its label: the line it was made with)"];
-        hit(_cb, !p->_packable ? PredStateNotPackable : p->_asked ? PredStateBeingMade : PredStateNotInPack);
+        hit(_cb, !p->_completable ? PredStateNotPackable : p->_asked ? PredStateBeingMade : PredStateNotInPack);
     }
     _pipe = [(id)p isKindOfClass:[RMPipeline class]] ? p : nil;
     setBinding(_cb, OpPipeline, 0, 0, state, 0);
@@ -5379,8 +5376,10 @@ static MTLRenderPipelineDescriptor *twinDescriptor(MTLRenderPipelineDescriptor *
     RMFunction *vf = [(id)d.vertexFunction isKindOfClass:[RMFunction class]] ? (RMFunction *)d.vertexFunction : nil;
     RMFunction *ff = [(id)d.fragmentFunction isKindOfClass:[RMFunction class]] ? (RMFunction *)d.fragmentFunction : nil;
     p->_packable = vf && ff && !vf->_framework.empty() && vf->_framework == ff->_framework;
-    if (p->_packable) {
+    p->_completable = vf && ff;
+    if (p->_completable)
         p->_key = raw_metal_pipeline_key(d).UTF8String;
+    if (p->_packable) {
         p->_caTransform =
             vf->_framework == "QuartzCore" && [vf.name hasPrefix:@"fixed_vert_"] && [vf.name hasSuffix:@"_spc"];
         p->_raw =
@@ -5390,7 +5389,8 @@ static MTLRenderPipelineDescriptor *twinDescriptor(MTLRenderPipelineDescriptor *
         const char *label = d.label.UTF8String ?: "-";
         SWITCH_REFUSE_DETAIL("raw", "state.unpacked", raw::Pack::fnv(label, strlen(label)),
                              "state not in the pack (m2v draws it until the runtime makes its record)%s: %s",
-                             !p->_packable              ? " (not one framework library's functions: never looked up)"
+                             !p->_completable           ? " (a function not this device's: never made)"
+                             : !p->_packable            ? " (not a framework library's: never in the pack)"
                              : gRM->raw->stats.heapFull ? " (or the shader heap is full)"
                                                         : "",
                              label);
@@ -5398,22 +5398,18 @@ static MTLRenderPipelineDescriptor *twinDescriptor(MTLRenderPipelineDescriptor *
     return p;
 }
 
-// A state of a framework's library the pack lacks, once its twin exists: the runtime makes its record off this thread
+// A state the pack lacks, of any library's functions, once its twin exists: the runtime makes its record off this thread
 // (RawComplete.h) and the raw path draws it from then on; m2v until then
 static void completeLater(RMPipeline *p, MTLRenderPipelineDescriptor *d)
 {
-    if (p->_raw || !p->_packable || !p->_twin || !gRM->completion)
+    if (p->_raw || !p->_completable || !p->_twin || !gRM->completion)
         return;
-    RMFunction *vf = (RMFunction *)d.vertexFunction, *ff = (RMFunction *)d.fragmentFunction;
     raw::Completion::Ask a;
     a.twin = p->_twin;
     a.descriptor = twinDescriptor(d);
     a.key = p->_key;
-    a.vertexLibrary = vf->_library;
-    a.vertexName = vf.name.UTF8String;
-    a.fragmentLibrary = ff->_library;
-    a.fragmentName = ff.name.UTF8String;
     a.caTransform = p->_caTransform;
+    a.own = !p->_packable;
     p->_asked = true;
     __weak RMPipeline *weak = p;
     gRM->completion->ask(std::move(a), [weak](raw::Pipeline *pl) {

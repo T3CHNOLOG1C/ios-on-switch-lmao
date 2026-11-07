@@ -191,7 +191,17 @@ int main(int argc, char **argv)
         }
 #endif
         NSError *error = nil;
-        id<MTLLibrary> qc = [dev newLibraryWithURL:[NSURL fileURLWithPath:@(argv[3])] error:&error];
+        // FRAME_LIBRARY_BYTES=1: the library made from its bytes, as an app's own (no framework's: no state looked up in the
+        // pack, every one the runtime's to make)
+        id<MTLLibrary> qc = nil;
+        if (getenv("FRAME_LIBRARY_BYTES")) {
+            NSData *bytes = [NSData dataWithContentsOfFile:@(argv[3])];
+            qc = [dev newLibraryWithData:dispatch_data_create(bytes.bytes, bytes.length, nil,
+                                                              DISPATCH_DATA_DESTRUCTOR_DEFAULT)
+                                   error:&error];
+        } else {
+            qc = [dev newLibraryWithURL:[NSURL fileURLWithPath:@(argv[3])] error:&error];
+        }
         std::vector<frame::State> all = frame::states(argv[4]);
         std::vector<id<MTLRenderPipelineState>> uber, blur, extra;
         for (auto &s : all) {

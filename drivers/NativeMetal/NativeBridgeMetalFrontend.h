@@ -74,6 +74,9 @@ bool native_bridge_metal_capture_program(id commandBuffer, uint32_t program, NBC
 // A render pipeline state of this device made at its first set (AsyncPipelines.h startLazy): the raw path's m2v twin of a
 // state it draws itself.
 id native_bridge_metal_render_pipeline_lazy(id device, id descriptor, NSUInteger options);
+// The metallib a function of this device was made from: its library, which keeps `bytes` while it lives; nil when the
+// function has none (the raw path names a function's AIR by its entry there).
+id native_bridge_metal_function_metallib(id function, const void **bytes, size_t *length);
 
 // Memory another driver of this process keeps bound in the GPU VM it shares with NVK (the raw GM20B path's: raw_gpu.h Alias): the
 // BO's first byte for the CPU, its size, handle and GPU address, the PTE kind of that binding, and the lease a view holds.
