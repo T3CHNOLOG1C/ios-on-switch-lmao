@@ -15,6 +15,13 @@
 
 class IOMemoryDescriptor;
 
+// The periodic job and present lines: debug kernels only, so a release kernel has none of their code or strings.
+#if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)
+#define TEGRA_VIC_STATS 1
+#else
+#define TEGRA_VIC_STATS 0
+#endif
+
 // A physically contiguous kernel buffer below 4 GiB, mapped 1:1 in VIC's address space (IOVA = PA).
 struct TegraVICBuffer {
     uint64_t pa, size;

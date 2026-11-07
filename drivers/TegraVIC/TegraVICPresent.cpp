@@ -10,6 +10,7 @@
 #include "TegraVICPresent.h"
 #include "TegraVICSurface.h"
 #include "../../kits/SwitchDMA/SwitchHwPage.h"
+#include "../../kits/SwitchRefusal/SwitchRefusal.h"
 #include "../../kits/SwitchTime/SwitchTime.h"
 
 namespace {
@@ -17,19 +18,10 @@ constexpr uint32_t kPresentPages = 8192;  // 32 MiB a side: a 4096x4096 NV12 pic
 uint64_t *gPresentPages;                  // the destination rows' pages; the picture brings its own list
 TegraVICJob gPresentJob;                  // under the engine lock
 
+#if TEGRA_VIC_STATS
 struct {
     uint64_t windowStart, pictures, refused, failed, engineUs, cpuUs, bytes;
 } gPresentStats;  // under the engine lock, but the refusals (atomic)
-
-uint32_t gPresentRefusedLogged;
-
-void presentRefused(uint32_t bit, const char *why)
-{
-    __atomic_add_fetch(&gPresentStats.refused, 1, __ATOMIC_RELAXED);
-    if (__atomic_fetch_or(&gPresentRefusedLogged, 1u << bit, __ATOMIC_RELAXED) & (1u << bit))
-        return;
-    IOLog("TegraVIC: present refused (first of its kind this boot): %s; the decoder copies on the CPU\n", why);
-}
 
 // One line per 5 s window with pictures (engine lock held).
 void presentStatsLine()
@@ -50,6 +42,16 @@ void presentStatsLine()
     os_log(OS_LOG_DEFAULT, "%s", line);
     bzero(&gPresentStats, sizeof(gPresentStats));
     gPresentStats.windowStart = now;
+}
+#endif
+
+// `why` is a literal: the refusal's key as well as its text.
+void presentRefused(const char *why)
+{
+#if TEGRA_VIC_STATS
+    __atomic_add_fetch(&gPresentStats.refused, 1, __ATOMIC_RELAXED);
+#endif
+    switch_refusal("TegraVIC", why, "decoded picture not placed by VIC, the decoder copies it on the CPU");
 }
 
 // Where the picture lands: its size clipped to the destination, and the rows it covers in each plane.
@@ -192,14 +194,14 @@ extern "C" int tegra_vic_present(const TegraVICPicture *p, task_t task, const ch
     *why = nullptr;
     if (!tegra_vic_present_ready()) {
         *why = "VIC is not published, or block-linear input is not proven (see the V4 line)";
-        presentRefused(0, *why);
+        presentRefused(*why);
         return -19;
     }
-    const uint64_t t0 = switch_now_us();
+    [[maybe_unused]] const uint64_t t0 = switch_now_us();
     TegraVICSurface surface;
     if (tegra_vic_surface_lookup(p->surfaceID, task, &surface)) {
         *why = "surface ID not found for this task";
-        presentRefused(1, *why);
+        presentRefused(*why);
         return -22;
     }
     // Checked before the engine lock, at the windows' own addresses, so a refusal costs no engine time.
@@ -220,7 +222,7 @@ extern "C" int tegra_vic_present(const TegraVICPicture *p, task_t task, const ch
         IODelete(check, TegraVICJob, 1);
     if (*why) {
         tegra_vic_surface_release(&surface);
-        presentRefused(2, *why);
+        presentRefused(*why);
         return -95;
     }
     // The engine lock from here: the page list is shared by every decoder thread that presents.
@@ -229,7 +231,7 @@ extern "C" int tegra_vic_present(const TegraVICPicture *p, task_t task, const ch
         tegra_vic_unlock();
         tegra_vic_surface_release(&surface);
         *why = "the surface could not be wired";
-        presentRefused(3, *why);
+        presentRefused(*why);
         return -12;
     }
     const uint32_t srcPages = (uint32_t)((p->bytes + 0xfff) >> 12), dstPages = pl.pages[0] + pl.pages[1];
@@ -250,6 +252,7 @@ extern "C" int tegra_vic_present(const TegraVICPicture *p, task_t task, const ch
     cacheRectangle(SWITCH_DCACHE_CLEAN_INVALIDATE, pl);
     tegra_vic_window_clear(TEGRA_VIC_WINDOW_DST);
     tegra_vic_window_clear(TEGRA_VIC_WINDOW_SRC);
+#if TEGRA_VIC_STATS
     gPresentStats.pictures++;
     if (err)
         gPresentStats.failed++;
@@ -257,6 +260,7 @@ extern "C" int tegra_vic_present(const TegraVICPicture *p, task_t task, const ch
     gPresentStats.cpuUs += (switch_now_us() - t0) - busy;
     gPresentStats.bytes += ((uint64_t)srcPages + dstPages) << 12;
     presentStatsLine();
+#endif
     tegra_vic_unlock();
     tegra_vic_surface_complete(&surface);
     tegra_vic_surface_release(&surface);

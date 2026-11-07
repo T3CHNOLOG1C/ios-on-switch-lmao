@@ -184,8 +184,8 @@ are generated in its encoding (`tegra_vic_matrix_*`) and checked on the host aga
   -> 420f pass-through is checked too, as a trait (`yccIn`): not proven, such jobs are refused (callers fall back);
   not a gate.
 - **Shared events** are refused. If Core Animation sends them on the clone path, each frame's transform fails with
-  kIOReturnUnsupported (no crash; CA force-completes the events). The device log says so once ("transform refused
-  ... shared events"). Supporting them needs the IOSurface kext's IOSurfaceSharedEvent lookup/listener/signal
+  kIOReturnUnsupported (no crash; CA force-completes the events). The device log says so once per process (kits/SwitchRefusal,
+  category TegraVIC: "shared events: IOSurfaceAccelerator transform refused (not on VIC), the caller falls back"). Supporting them needs the IOSurface kext's IOSurfaceSharedEvent lookup/listener/signal
   (0x5b974d8, 0x5b97400, 0x5b97718, 0x5b96c88 [V], semantics [I]).
 - Colour standard by size, not by the surfaces' YCbCrMatrix attachment.
 - 4:2:2, 4:4:4, L565, l10r, RGhA, 10-bit: refused (VideoToolbox falls back per call).

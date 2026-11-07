@@ -47,6 +47,7 @@
 #include <os/log.h>
 #include <string.h>
 #include "TegraVIC.h"
+#include "../../kits/SwitchRefusal/SwitchRefusal.h"
 #include "../../kits/SwitchTime/SwitchTime.h"
 #include "TegraVICPresent.h"
 #include "TegraVICSurface.h"
@@ -149,19 +150,26 @@ Job *gHead, *gTail;
 uint32_t gQueued;
 uint64_t *gPages[TEGRA_VIC_WINDOWS];
 
-// Stats for the unified log (one line per 5 s window with work).
+#if TEGRA_VIC_STATS
+// Stats for the unified log (one line per 5 s window with work). `pitch`: refusals for a row pitch VIC cannot address,
+// which CoreVideo's buffers sized by the display pipe's stride requirement never have.
 struct {
-    uint64_t windowStart, jobs, ops, refused, failed, engineUs, mapUs, bytes;
+    uint64_t windowStart, jobs, ops, refused, pitch, failed, engineUs, mapUs, bytes;
 } gStats;
+#endif
 
-uint32_t gRefusedLogged;  // bit per kind of refusal logged once
-
-void refusedOnce(uint32_t bit, const char *why)
+// `why` is a literal: the refusal's key as well as its text.
+void refused(IOReturn ret, const char *why)
 {
+#if TEGRA_VIC_STATS
     __atomic_add_fetch(&gStats.refused, 1, __ATOMIC_RELAXED);
-    if (__atomic_fetch_or(&gRefusedLogged, 1u << bit, __ATOMIC_RELAXED) & (1u << bit))
-        return;
-    IOLog("TegraVIC: transform refused (first of its kind this boot): %s\n", why);
+    if (!strncmp(why, "row pitch", 9))
+        __atomic_add_fetch(&gStats.pitch, 1, __ATOMIC_RELAXED);
+#endif
+    switch_refusal("TegraVIC", why, "IOSurfaceAccelerator transform refused (%s), the caller falls back",
+                   ret == kIOReturnUnsupported   ? "not on VIC"
+                   : ret == kIOReturnBadArgument ? "bad request"
+                                                 : "surface lookup");
 }
 
 struct Job {
@@ -183,7 +191,7 @@ struct Job {
 IOReturn runJob(Job *job)
 {
     static TegraVICJob vj;
-    const uint64_t t0 = switch_now_us();
+    [[maybe_unused]] const uint64_t t0 = switch_now_us();
     uint32_t pages[TEGRA_VIC_WINDOWS] = {};
     TegraVICImage dst, src;
     const char *why = nullptr;
@@ -213,8 +221,8 @@ IOReturn runJob(Job *job)
         tegra_vic_cache_pages(SWITCH_DCACHE_CLEAN_INVALIDATE, gPages[TEGRA_VIC_WINDOW_DST], pages[1]);
         switch_dcache_sync();
     }
-    const uint64_t t1 = switch_now_us();
-    uint64_t busy = 0;
+    [[maybe_unused]] const uint64_t t1 = switch_now_us();
+    [[maybe_unused]] uint64_t busy = 0;
     for (uint32_t i = 0; !ret && i < job->plan.count; i++) {
         const TegraVICOp *op = &job->plan.op[i];
         why = tegra_vic_build(op->fill ? nullptr : &src, &dst, op, tegra_vic_traits(), tegra_vic_config_address(),
@@ -226,7 +234,9 @@ IOReturn runJob(Job *job)
         uint64_t us = 0;
         ret = ioreturn(tegra_vic_run(&vj, &us));
         busy += us;
+#if TEGRA_VIC_STATS
         __atomic_add_fetch(&gStats.ops, 1, __ATOMIC_RELAXED);
+#endif
     }
     // The CPU may have pulled destination lines in while VIC wrote: readers must see DRAM.
     tegra_vic_cache_pages(SWITCH_DCACHE_CLEAN_INVALIDATE, gPages[TEGRA_VIC_WINDOW_DST], pages[1]);
@@ -236,14 +246,17 @@ IOReturn runJob(Job *job)
     tegra_vic_unlock();
     tegra_vic_surface_complete(&job->dst);
     tegra_vic_surface_complete(&job->src);
+#if TEGRA_VIC_STATS
     gStats.engineUs += busy;
     gStats.mapUs += (t1 - t0) + (switch_now_us() - t1 - busy);
     gStats.bytes += ((uint64_t)pages[0] + pages[1]) << 12;
+#endif
     if (why)
         IOLog("TegraVIC: a checked job was refused on the engine thread: %s\n", why);
     return ret;
 }
 
+#if TEGRA_VIC_STATS
 void statsLine()
 {
     const uint64_t now = switch_now_us();
@@ -253,15 +266,16 @@ void statsLine()
         return;
     char line[200];
     snprintf(line, sizeof(line),
-             "TegraVIC: %llus jobs=%llu ops=%llu refused=%llu failed=%llu engine=%lluus/job cpu=%lluus/job "
-             "mapped=%lluKB/job",
-             (now - gStats.windowStart) / 1000000, gStats.jobs, gStats.ops, gStats.refused, gStats.failed,
+             "TegraVIC: %llus jobs=%llu ops=%llu refused=%llu pitch=%llu failed=%llu engine=%lluus/job "
+             "cpu=%lluus/job mapped=%lluKB/job",
+             (now - gStats.windowStart) / 1000000, gStats.jobs, gStats.ops, gStats.refused, gStats.pitch, gStats.failed,
              gStats.jobs ? gStats.engineUs / gStats.jobs : 0, gStats.jobs ? gStats.mapUs / gStats.jobs : 0,
              gStats.jobs ? (gStats.bytes >> 10) / gStats.jobs : 0);
     os_log(OS_LOG_DEFAULT, "%s", line);
     bzero(&gStats, sizeof(gStats));
     gStats.windowStart = now;
 }
+#endif
 
 void engineThread(void *, wait_result_t)
 {
@@ -278,10 +292,12 @@ void engineThread(void *, wait_result_t)
         IOLockUnlock(gQueueLock);
 
         const IOReturn status = runJob(job);
+#if TEGRA_VIC_STATS
         gStats.jobs++;
         if (status)
             gStats.failed++;
         statsLine();
+#endif
         // The destination's seed moves before the caller hears back (r18-planes): VIC wrote it, or may have in part.
         tegra_vic_surface_written(&job->dst);
         tegra_vic_surface_release(&job->src);
@@ -370,7 +386,7 @@ IOReturn transform(Conn *conn, const void *in, uint32_t size)
             ret = kIOReturnUnsupported;  // a shape VIC (or this unit, per its self-test) does not do
     }
     if (ret) {
-        refusedOnce(ret == kIOReturnUnsupported ? 0 : ret == kIOReturnBadArgument ? 1 : 2, why ? why : "lookup");
+        refused(ret, why ? why : "surface lookup");
         tegra_vic_surface_release(&job->src);
         tegra_vic_surface_release(&job->dst);
         IODelete(job, Job, 1);
