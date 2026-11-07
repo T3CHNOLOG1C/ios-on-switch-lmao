@@ -1,6 +1,6 @@
 # drivers/SwitchUSB on the host: the XUDC's device-mode transfer planner and OUT residue protocol (XudcTransfer.h,
 # xudc_transfer_test), its completion accounting against a model controller (XudcTransfer.h TdRing,
-# xudc_completion_test), host mode's power and data roles and register arithmetic (SwitchPDPolicy.h, XusbPorts.h,
+# xudc_completion_test), isochronous endpoints (XudcIsoch.h, xudc_isoch_test), host mode's power and data roles and register arithmetic (SwitchPDPolicy.h, XusbPorts.h,
 # switch_usb_host_test), and SuperSpeed's lane and root port (XusbLanes.h, switch_usb_lanes_test).
 #
 #   bazel test //drivers/SwitchUSB/test:all
@@ -29,6 +29,19 @@ host_test(
     name = "xudc_completion_test",
     srcs = [
         "xudc_completion_test.cpp",
+        "//drivers/SwitchUSB:XudcTransfer.h",
+    ],
+    copts = ["-O1"],
+)
+
+# XudcIsoch.h: the family's frame list layout, service intervals and stamps, one TRB per frame (direct or one bounce
+# page), and the isochronous ring's accounting against a model controller: last-frame and short-frame events, missed
+# frames, later events settling earlier requests, starved rings, cancels, a long stream around the ring.
+host_test(
+    name = "xudc_isoch_test",
+    srcs = [
+        "xudc_isoch_test.cpp",
+        "//drivers/SwitchUSB:XudcIsoch.h",
         "//drivers/SwitchUSB:XudcTransfer.h",
     ],
     copts = ["-O1"],
