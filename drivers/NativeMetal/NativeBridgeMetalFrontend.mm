@@ -3640,7 +3640,10 @@ static void scheduled(void *context);
         return nil;
     char text[512] = {};
     nmb_command_buffer_error(_handle, text, sizeof text);
-    return nbError([NSString stringWithUTF8String:text]);
+    const uint64_t code = nmb_command_buffer_error_code(_handle);
+    return [NSError errorWithDomain:MTLCommandBufferErrorDomain
+                               code:code ? (NSInteger)code : MTLCommandBufferErrorInternal
+                           userInfo:@{NSLocalizedDescriptionKey : [NSString stringWithUTF8String:text]}];
 }
 
 // Debug groups and cache hints name work for tools and the driver's caches; they change nothing the GPU computes here.

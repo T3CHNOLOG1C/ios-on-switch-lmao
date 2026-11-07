@@ -49,6 +49,7 @@ rust_static_library(
     name = "bridge",
     srcs = [
         METAL + ":bridge/NativeMetalBridge.rs",
+        METAL + ":bridge/NativeMetalFailure.rs",
         METAL + ":bridge/NativeMetalObjects.rs",
         METAL + ":bridge/NativeMetalTarget.rs",
     ],
@@ -107,6 +108,7 @@ raw_stack(
     name = "raw_stack",
     srcs = [
         METAL + ":bridge/NativeMetalBridge.rs",
+        METAL + ":bridge/NativeMetalFailure.rs",
         METAL + ":bridge/NativeMetalObjects.rs",
         METAL + ":bridge/NativeMetalTarget.rs",
         METAL + ":NativeBridgeMetalFrontend.mm",

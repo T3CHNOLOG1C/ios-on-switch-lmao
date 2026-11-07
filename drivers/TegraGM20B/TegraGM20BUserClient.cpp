@@ -1585,6 +1585,7 @@ IOReturn AGXDeviceUserClient::channelCreate(const TegraGM20BAbiChannelCreate *in
 		return kIOReturnNoResources;
 	// not reset: a slot's seqno only moves forward (tgm_chan_new continues it)
 	volatile uint32_t *fence = fence_va_ + static_cast<size_t>(slot) * 4;
+	tgm_fence_kill_clear(fence);
 	const IOReturn ret = ioreturn(
 		tgm_chan_new(vm_, this, fence, fence_gpu_ + static_cast<uint64_t>(slot) * 16,
 			     owner_, static_cast<int>(critical_), &chans_[slot]));
@@ -2033,7 +2034,7 @@ IOReturn AGXDeviceUserClient::getInfo(TegraGM20BAbiInfo *out)
 	out->flags = static_cast<uint32_t>(TegraGM20BInfoHostImport) | TegraGM20BInfoKernelMap |
 		     TegraGM20BInfoOrder | TegraGM20BInfoSurfaceWrites |
 		     TegraGM20BInfoSurfaceLayout | TegraGM20BInfoExecSurfaces |
-		     TegraGM20BInfoPriority;
+		     TegraGM20BInfoPriority | TegraGM20BInfoKillRecord;
 	if (info.comptag_lines)
 		out->flags |= TegraGM20BInfoCompression;
 	out->chipset = info.chipset;

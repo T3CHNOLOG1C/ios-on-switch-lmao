@@ -244,6 +244,7 @@ pub unsafe extern "C" fn nmb_device_open(loader: *const c_char, cache: *const c_
         options.messages = Some(MessageSink::new(observe_message));
         let device = Device::system_default_with(&options).map_err(e("device"))?;
         tell_nvk_submission_memory(&device, loader);
+        crate::failure::tell_nvk_submission_failure(&device, loader);
         Ok(boxed(NmbDevice(
             device,
             std::sync::OnceLock::new(),
@@ -2251,11 +2252,17 @@ pub extern "C" fn nmb_command_buffer_error(
     size: usize,
 ) -> usize {
     guard(0, || {
-        Ok(get(command_buffer)?
-            .0
-            .error_description()
-            .map_or(0, |text| copy_out(&text, out, size)))
+        let command_buffer = &get(command_buffer)?.0;
+        let text = (command_buffer.error_description().filter(|text| !text.is_empty()))
+            .or_else(|| command_buffer.error().map(|error| format!("{error:?}")));
+        Ok(text.map_or(0, |text| copy_out(&text, out, size)))
     })
+}
+
+/// Metal's MTLCommandBufferError code of a failed command buffer, 0 before it failed.
+#[unsafe(no_mangle)]
+pub extern "C" fn nmb_command_buffer_error_code(command_buffer: *const NmbCommandBuffer) -> u64 {
+    guard(0, || Ok(get(command_buffer)?.0.error().map_or(0, |error| error.metal_code())))
 }
 
 #[unsafe(no_mangle)]
