@@ -559,7 +559,8 @@ struct tegra_apbdma_channel {
     unsigned number = 0;
     tegra_apbdma_handler handler = nullptr;
     void *context = nullptr;
-    bool enabled = false, endPending = false;
+    // The channel's run state, as its registers hold it: the driver stops a const channel through its MMIO.
+    mutable bool enabled = false, endPending = false;
     uint32_t apb = 0, req = 0, pa = 0, size = 0, moved = 0, interrupts = 0, starts = 0;
 };
 
@@ -599,25 +600,25 @@ void tegra_apbdma_start_rx_words(tegra_apbdma_channel *ch, uint32_t apb, unsigne
     dmaRxChanged(3);
 }
 
-uint32_t tegra_apbdma_moved(tegra_apbdma_channel *ch, bool *endPending)
+uint32_t tegra_apbdma_moved(const tegra_apbdma_channel *ch, bool *endPending)
 {
     if (endPending)
         *endPending = ch->endPending;
     return ch->moved;
 }
 
-void tegra_apbdma_stop(tegra_apbdma_channel *ch)
+void tegra_apbdma_stop(const tegra_apbdma_channel *ch)
 {
     ch->enabled = false;
     ch->endPending = false;
 }
 
-uint32_t tegra_apbdma_interrupts(tegra_apbdma_channel *ch)
+uint32_t tegra_apbdma_interrupts(const tegra_apbdma_channel *ch)
 {
     return ch->interrupts;
 }
 
-void tegra_apbdma_describe(tegra_apbdma_channel *ch, char *buffer, size_t size)
+void tegra_apbdma_describe(const tegra_apbdma_channel *ch, char *buffer, size_t size)
 {
     snprintf(buffer, size, "APB DMA ch%u (model) moved %u of %u", ch->number, ch->moved, ch->size);
 }

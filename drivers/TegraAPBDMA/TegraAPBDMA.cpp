@@ -324,8 +324,7 @@ void tegra_apbdma_start_rx_words(tegra_apbdma_channel *ch, uint32_t apb, unsigne
     wr(ch, CSR, csr | CSR_ENB);
 }
 
-// NOLINTNEXTLINE(misc-const-correctness): SwitchTouch's host model (switch_touch_test.cpp) defines this signature
-uint32_t tegra_apbdma_moved(tegra_apbdma_channel *ch, bool *endPending)
+uint32_t tegra_apbdma_moved(const tegra_apbdma_channel *ch, bool *endPending)
 {
     const uint32_t count = rd(ch, WORD_TRANSFER) & COUNT_MASK;
     const uint32_t status = rd(ch, STATUS);
@@ -335,8 +334,7 @@ uint32_t tegra_apbdma_moved(tegra_apbdma_channel *ch, bool *endPending)
     return left >= ch->size ? 0 : ch->size - left;
 }
 
-// NOLINTNEXTLINE(misc-const-correctness): stopping changes the channel, through its registers
-void tegra_apbdma_stop(tegra_apbdma_channel *ch)
+void tegra_apbdma_stop(const tegra_apbdma_channel *ch)
 {
     stopLocked(ch);
 }
@@ -346,14 +344,12 @@ bool tegra_apbdma_running(const tegra_apbdma_channel *ch)
     return (rd(ch, CSR) & CSR_ENB) != 0u;
 }
 
-// NOLINTNEXTLINE(misc-const-correctness): SwitchTouch's host model (switch_touch_test.cpp) defines this signature
-uint32_t tegra_apbdma_interrupts(tegra_apbdma_channel *ch)
+uint32_t tegra_apbdma_interrupts(const tegra_apbdma_channel *ch)
 {
     return ch->interrupts;
 }
 
-// NOLINTNEXTLINE(misc-const-correctness): SwitchTouch's host model (switch_touch_test.cpp) defines this signature
-void tegra_apbdma_describe(tegra_apbdma_channel *ch, char *buffer, size_t size)
+void tegra_apbdma_describe(const tegra_apbdma_channel *ch, char *buffer, size_t size)
 {
     char gic[160];
     switch_interrupt_describe(intidOf(ch->number), gic, sizeof(gic));
