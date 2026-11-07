@@ -25,4 +25,3 @@ int switch_usb_dma_reserve(void);
 // Creates (once) and starts the mapper attached to IOResources, on the reserved pool; nullptr on failure (logged).
 // `reach` is the first physical address the controller cannot address (HCCPARAMS1.AC64: 64-bit or 32-bit DMA).
 IOMapper *switch_usb_dma_mapper(uint64_t reach);
-

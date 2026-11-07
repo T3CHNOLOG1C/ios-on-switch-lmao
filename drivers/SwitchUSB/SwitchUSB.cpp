@@ -43,7 +43,7 @@ constexpr uint32_t kReportMS = 1000;   // the role line: this long after a chang
 bool gDockHost;
 enum switch_usb3_lanes gLanes = SWITCH_USB3_LANES_FREE;
 bool gDockHub;
-bool gSsInit;            // the lane's pad controller and lock (switch_usb_ss_init)
+bool gSsInit;              // the lane's pad controller and lock (switch_usb_ss_init)
 bool gSsUp, gDockHubSeen;  // role thread: the lane as last reported
 
 // avddio_usb (OLED DTB xudc@700d0000 / xusb@70090000) is MAX77620 LDO1 at 1.05 V, shared with PCIe (drivers/SwitchWLAN

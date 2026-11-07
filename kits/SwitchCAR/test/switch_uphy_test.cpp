@@ -61,6 +61,7 @@ TEST(SwitchUphy, NoCalibrationUnderALiveLane)
         std::atomic<bool> pllBusy{false};
         std::atomic<int> violations{0};
     } lane;
+
     switch_uphy_listen(
         [](void *context, bool ready) {
             auto *l = static_cast<Lane *>(context);

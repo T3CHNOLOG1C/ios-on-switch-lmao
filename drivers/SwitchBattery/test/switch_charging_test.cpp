@@ -11,7 +11,8 @@
 //   MAX17050: words, ALRT low while CONFIG.Aen and a STATUS alert flag (TALRT_Th/SALRT_Th windows) is set.
 //   BM92T36: ALERT low while ALERT_STATUS (clear on read) is not 0; STATUS1/2, CONFIG1, READ_PDOS_SRC, CURRENT_PDO/RDO,
 //            SET_RDO + SEND_RDO (accepted when the RDO is valid for the PDO, or refused, or never answered as the
-//            scenario says) and PS_RDY.
+//            scenario says) and PS_RDY; for the alternate-mode engine DP_STATUS, a data role swap (accepted: DFP and
+//            CMD_DONE) and VDMs a partner never answers.
 #include <IOKit/IOService.h>
 #include <IOKit/IOTimerEventSource.h>
 #include <IOKit/IOInterruptEventSource.h>
@@ -26,6 +27,7 @@
 #include "../SwitchChargePolicy.h"
 #include "../../SwitchSuspend/SwitchWakeSources.h"
 #include "../../SwitchUSB/SwitchPD.h"
+#include "../../SwitchUSB/XusbLanes.h"
 #include "../../TegraGPIO/TegraGPIO.h"
 #include "../../TegraI2C/TegraI2C.h"
 
@@ -44,6 +46,13 @@ extern "C" void switch_wake_event(unsigned source)
 {
     gWakeEvents.push_back(source);
 }  // SwitchWake.h
+
+static unsigned gAltLanesCalls = 0;
+
+void switch_usb_set_alt_lanes(enum switch_usb3_lanes, bool)
+{
+    ++gAltLanesCalls;
+}  // SwitchUSB.cpp (XusbLanes.h)
 
 // Every check is a GoogleTest failure at its call site; the count lets a failed scenario dump the logs it ran on.
 static unsigned gFailures = 0;
@@ -278,6 +287,7 @@ struct PdChip {
 
     bool psRdyReply = true;
     std::vector<std::string> commands;
+    unsigned vdmsSent = 0;
 
     static uint32_t fixed(unsigned mv, unsigned ma)
     {
@@ -350,6 +360,9 @@ struct PdChip {
         case 0x2b:
             put32(curRdo);
             break;
+        case 0x18:  // DP_STATUS: no DisplayPort configured
+            put16(0);
+            break;
         case 0x08:
             check(len == 29, "READ_PDOS_SRC length " + std::to_string(len));
             buf[0] = (uint8_t)(pdos.size() * 4);
@@ -373,6 +386,9 @@ struct PdChip {
             break;
         case 0x1a:
             vendor = v16;
+            break;
+        case 0x60:  // OUTGOING_VDM: count, then the message
+            check(len >= 5 && data[0] == len - 1, "OUTGOING_VDM layout");
             break;
         case 0x30:
             check(len == 5 && data[0] == 4, "SET_RDO layout");
@@ -406,6 +422,11 @@ struct PdChip {
             } else if (v16 == 0x0505) {
                 if (psRdyReply)
                     alert |= 0x4;
+            } else if (v16 == 0x1818) {  // DR_SWAP, accepted: we are DFP
+                status1 = (uint16_t)((status1 & ~(0x70 | 3u << 8)) | 2u << 8);
+                alert |= 0x4;
+            } else if (v16 == 0x1111) {  // SEND_VDM: a partner that never answers
+                ++vdmsSent;
             } else {
                 check(false, "unexpected BM92T36 command " + hex(v16));
             }
@@ -1087,6 +1108,36 @@ static void roleSwap()
     check(logHas("SwitchPD: contract 15 V 1.2 A (dock: 5 V 0.5 A, *15 V 2.6 A)") && iinlim() == 1200, "dock");
 }
 
+// The dock's alternate-mode session runs on the contract we made: the data role swap (only for the dock's power
+// signature, never the Mac's or Nintendo's charger), then its VDMs, which this dock never answers. The engine gives up
+// after 1.5 s; the contract, the input limit and charging are untouched throughout and an hour later, and nothing but
+// the swap and VDMs went to COMMAND after SEND_RDO and PS_RDY.
+static void dockAltMode()
+{
+    bootWithNintendoCharger();
+    advance(2300);
+    check(gPd.commands == (std::vector<std::string>{"0707", "0505"}) && gPd.vdmsSent == 0,
+          "Nintendo's charger: no data role swap, no VDM");
+    gCharger.unplug();
+    gPd.unplug();
+    advance(500);
+    gCharger.plug(500, 2);
+    gPd.commands.clear();
+    gPd.sink({PdChip::fixed(5000, 500), PdChip::fixed(15000, 2600)}, 0, 0x8 | 0x1000 | 0x4000);
+    advance(3000);
+    check(gPd.commands.size() >= 3 && gPd.commands[0] == "0707" && gPd.commands[1] == "0505" &&
+              gPd.commands[2] == "1818",
+          "SEND_RDO, PS_RDY, then the data role swap");
+    check(((gPd.status1 >> 8) & 3) == 2 && gPd.vdmsSent == 1, "DFP after the swap, Discover Identity sent");
+    check(logHas("SwitchPD: contract 15 V 1.2 A (dock: 5 V 0.5 A, *15 V 2.6 A)") && iinlim() == 1200,
+          "dock contract published");
+    check(logHas("the partner did not answer within 1.5 s"), "the engine gave up on the silent dock");
+    check(gAltLanesCalls == 0, "no DisplayPort: the SuperSpeed pair stayed free");
+    advance(3600 * 1000);
+    check(iinlim() == 1200 && ((gCharger.reg[1] >> 4) & 3) == 1, "still charging at 1200 mA an hour later");
+    check(gPd.vdmsSent == 1, "no retries after the engine gave up");
+}
+
 static void macPort()
 {
     if (switch_battery_start())
@@ -1362,4 +1413,9 @@ TEST(SwitchCharging, RoleSwap)
 TEST(SwitchCharging, MacPort)
 {
     run(macPort);
+}
+
+TEST(SwitchCharging, DockAltMode)
+{
+    run(dockAltMode);
 }

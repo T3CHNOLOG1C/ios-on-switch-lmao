@@ -126,5 +126,7 @@ void switch_usb_ss_describe(char *buffer, size_t size)
     snprintf(buffer, size, "SS lane %s (USB3_PAD_MUX %#x SS_PORT_MAP %#x ELPG_1 %#x%s, UPHY PLL %s)",
              switch_usb_ss_up() ? "up" : "down", r(XUSB_PADCTL_USB3_PAD_MUX), r(XUSB_PADCTL_SS_PORT_MAP), elpg,
              xusb_ss_clamped(elpg) ? " clamped" : "",
-             !ready ? "not calibrated by PCIe yet" : pllLocked() ? "calibrated, locked" : "calibrated, not locked");
+             !ready        ? "not calibrated by PCIe yet"
+             : pllLocked() ? "calibrated, locked"
+                           : "calibrated, not locked");
 }

@@ -39,9 +39,9 @@
 // The link state and speed of a PORTSC in words, for the role line (xHCI 1.2 5.4.8, 7.2.2.1.1 default speed IDs).
 static inline const char *xhci_portsc_link_name(uint32_t portsc)
 {
-    static const char *const names[16] = {"U0",     "U1",       "U2",         "U3",     "Disabled", "RxDetect",
+    static const char *const names[16] = {"U0",       "U1",      "U2",       "U3",       "Disabled",   "RxDetect",
                                           "Inactive", "Polling", "Recovery", "HotReset", "Compliance", "Test",
-                                          "PLS12",  "PLS13",    "PLS14",      "Resume"};
+                                          "PLS12",    "PLS13",   "PLS14",    "Resume"};
     return names[XHCI_PORTSC_PLS(portsc)];
 }
 
