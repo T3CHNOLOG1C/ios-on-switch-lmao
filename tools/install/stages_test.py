@@ -55,6 +55,21 @@ class StateTest(unittest.TestCase):
         self.assertNotIn('compose', self.work.state())
 
 
+class StaleCryptexTest(unittest.TestCase):
+    def test_a_previous_runs_rebuilt_cryptexes_are_stale_and_their_sources_are_not(self):
+        scratch, ipsw = Path(tempfile.mkdtemp()), Path(tempfile.mkdtemp())
+        for name in ('system.dmg', 'app.dmg'):
+            (ipsw / name).write_bytes(b'apple')
+        (scratch / 'system.dmg').write_bytes(b'rebuilt')
+        args = SimpleNamespace(
+            scratch=str(scratch), system_cryptex=str(ipsw / 'system.dmg'), app_cryptex=str(ipsw / 'app.dmg')
+        )
+        self.assertEqual(stages.Stages(args, SPEC, PINS, quiet).stale_cryptexes(), [scratch / 'system.dmg'])
+        args.app_cryptex = str(scratch / 'system.dmg')
+        args.system_cryptex = str(scratch / 'system.dmg')
+        self.assertEqual(stages.Stages(args, SPEC, PINS, quiet).stale_cryptexes(), [])
+
+
 class MinimumTest(unittest.TestCase):
     def test_room_to_run_and_ios_floor(self):
         layout = {'container_bytes': 1 << 40, 'minimum_bytes': 9 << 30}
