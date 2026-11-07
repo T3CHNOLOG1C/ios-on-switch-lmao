@@ -49,7 +49,7 @@ bool failedWith(id<MTLCommandBuffer> cb, MTLCommandBufferError code)
 {
     [cb waitUntilCompleted];
     return cb.status == MTLCommandBufferStatusError && [cb.error.domain isEqualToString:MTLCommandBufferErrorDomain] &&
-           cb.error.code == code;
+           cb.error.code == (NSInteger)code;
 }
 
 bool completes(id<MTLCommandBuffer> cb)
