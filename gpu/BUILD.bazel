@@ -148,7 +148,6 @@ metal_plugin(
         GM20B_METAL + ":raw/runtime/raw_ycbcr.cpp",
         GM20B_METAL + ":raw/runtime/raw_zeta.cpp",
     ],
-    c_srcs = ["//kits/SwitchRefusal:SwitchRefusal.c"],
     frameworks = [
         "Foundation",
         "Metal",

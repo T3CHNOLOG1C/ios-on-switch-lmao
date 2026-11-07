@@ -44,6 +44,7 @@
 #include "raw_follow.h"
 #include "raw_gpu.h"
 #include "TegraGM20BLayout.h"
+#include "../../../../kits/SwitchRefusal/SwitchRefusal.h"
 
 // The m2v frontend's in-place textures over a buffer, of rows or the device's optimal layout (NativeBridgeMetalFrontend.mm):
 // weak, so the host benchmark links without them.
@@ -169,7 +170,6 @@ enum RMPred : uint8_t {
     PredEncPlanarClamp,
     PredEncPlanarRT,
     PredEncPassRender,
-    PredEncBufToTexRow,  // a = sourceBytesPerRow
     PredEncKernel,
     PredEncIndexedRange,  // a = offset, b = index size
     PredEncBaseInstance,
@@ -224,7 +224,6 @@ static constexpr const char *kPredNames[] = {"-",
                                              "enc.planarclamp",
                                              "enc.planarrt",
                                              "enc.pass",
-                                             "enc.b2trow",
                                              "enc.kernel",
                                              "enc.idxrange",
                                              "enc.baseinst",
@@ -253,6 +252,8 @@ static inline bool predLogged(RMPred p)
 }
 
 // The predicate's first hit in the process: one line with its values (`detail`: the resource's, when it was made)
+// Each predicate's first command buffer this process sends to m2v, through kits/SwitchRefusal (domain raw-metal, the
+// predicate's name as the reason)
 static void logPred(RMPred p, uint64_t a, uint64_t b, NSString *detail)
 {
     const uint64_t bit = 1ull << p;
@@ -2611,6 +2612,73 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
 
 @end
 
+// Where plain Metal reads or writes each buffer row of a copy between a buffer and a texture: rows `bytesPerRow` apart from
+// `offset`. A layout off Metal's rules (an offset or bytesPerRow off the texel, or rows that overlap) is placed as Apple's
+// GPUs place it (m2v blit_plan.rs placed_rows, measured): each row rounded down to the texel's component (at most 4 bytes),
+// except that a copy into a texture of more than one row whose bytesPerRow rounded down to the texel is a multiple of 16,
+// from an offset that is, takes Metal's aligned path: its rows at that rounded pitch from offset 0. False: a layout
+// Metal's behaviour is not known for, refused as m2v refuses it (rows that overlap out of a texture; on the aligned path,
+// a pitch below a row or a nonzero offset).
+struct BufferRows {
+    uint64_t first, pitch;  // row y at first + y * pitch where `uniform`
+    bool uniform;
+    uint32_t word;
+};
+
+static bool bufferRows(uint64_t offset, uint64_t bytesPerRow, uint32_t rows, uint32_t rowBytes, uint32_t bpp,
+                       bool intoTexture, BufferRows &out)
+{
+    const uint32_t word = std::min<uint32_t>(bpp, 4);
+    if (offset % bpp == 0 && bytesPerRow % bpp == 0 && (rows < 2 || bytesPerRow >= rowBytes)) {  // Metal's rules
+        out = {offset, bytesPerRow, true, word};
+        return true;
+    }
+    if (rows > 1 && bytesPerRow < rowBytes && !intoTexture)
+        return false;
+    const uint64_t pitch = bytesPerRow - bytesPerRow % bpp;
+    if (intoTexture && rows > 1 && pitch % 16 == 0 && offset % 16 == 0) {
+        if (offset || pitch < rowBytes)
+            return false;
+        out = {0, pitch, true, word};
+        return true;
+    }
+    out = {offset - offset % word, bytesPerRow, offset % word == 0 && bytesPerRow % word == 0, word};
+    return true;
+}
+
+// Row y of `r` (offset and bytesPerRow as given to bufferRows)
+static uint64_t bufferRow(const BufferRows &r, uint64_t offset, uint64_t bytesPerRow, uint32_t y)
+{
+    if (r.uniform)
+        return r.first + y * r.pitch;
+    const uint64_t at = offset + uint64_t(y) * bytesPerRow;
+    return at - at % r.word;
+}
+
+// The copy engine's copies of those rows: one copy of every row where they lie a pitch apart, else one per row
+static void copyRows(raw::BlitEncoder *be, uint64_t bufferVa, const BufferRows &r, uint64_t offset,
+                     uint64_t bytesPerRow, const raw::Texture &t, uint32_t x, uint32_t y, uint32_t w, uint32_t h,
+                     bool intoTexture)
+{
+    if (r.uniform) {
+        be->copyBufferTexels(bufferVa + r.first, uint32_t(r.pitch), t, x, y, w, h, intoTexture);
+        return;
+    }
+    for (uint32_t k = 0; k < h; k++)
+        be->copyBufferTexels(bufferVa + bufferRow(r, offset, bytesPerRow, k), w * t.bpp, t, x, y + k, w, 1,
+                             intoTexture);
+}
+
+// Blit options choose a depth/stencil aspect or a PVRTC row layout; a colour texture the raw path holds has neither, so they
+// change nothing about its copy (m2v's replay of the copy never carried them)
+static bool blitOptionsMoot(id<MTLTexture> t, MTLBlitOption options)
+{
+    if (!options)
+        return true;
+    RMTexture *x = [(id)t isKindOfClass:[RMTexture class]] ? (RMTexture *)t : nil;
+    return x && x->_rawOk && !x->_raw.zeta && !x->_raw.converted();
+}
+
 @implementation RMBlitEncoder
 
 + (Class)twinClass
@@ -2734,20 +2802,19 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
     RMTexture *b = (RMTexture *)d;
     if ([(id)b isKindOfClass:[RMTexture class]] && b->_raw.chain)
         _cb->_chains = true;
-    const bool ok = [(id)a isKindOfClass:[RMBuffer class]] && [(id)b isKindOfClass:[RMTexture class]] && b->_rawOk &&
-                    !ds && !dl && size.depth == 1 && !b->_raw.memoryless &&
-                    so + row * (size.height - 1) + size.width * b->_raw.bpp <= a->_raw.length &&
-                    dorg.x + size.width <= b->_raw.width && dorg.y + size.height <= b->_raw.height;
+    BufferRows rows;
+    const bool ok =
+        [(id)a isKindOfClass:[RMBuffer class]] && [(id)b isKindOfClass:[RMTexture class]] && b->_rawOk && !ds && !dl &&
+        size.depth == 1 && !b->_raw.memoryless && b->_raw.bpp &&
+        bufferRows(so, row, uint32_t(size.height), uint32_t(size.width * b->_raw.bpp), b->_raw.bpp, true, rows) &&
+        bufferRow(rows, so, row, uint32_t(size.height - 1)) + size.width * b->_raw.bpp <= a->_raw.length &&
+        dorg.x + size.width <= b->_raw.width && dorg.y + size.height <= b->_raw.height;
     if (!ok) {
         [_cb takeReason:WhyTexture why:@"a buffer-to-texture copy the raw path does not do"];
         hit(_cb, PredBlitBufToTex, row, uint64_t(ds) | uint64_t(dl) << 8 | uint64_t(size.depth) << 16);
     } else if (b->_raw.converted()) {
         [_cb takeReason:WhyTexture why:@"a copy to or from a planar texture"];
         hit(_cb, PredEncPlanarCopy, 0, 1);
-    } else if (row % b->_raw.bpp &&
-               size.height > 1) {  // rows of whole texels (Metal's rule; the copy engine takes any)
-        [_cb takeReason:WhyTexture why:@"a buffer-to-texture copy whose rows are not whole texels"];
-        hit(_cb, PredEncBufToTexRow, row, b->_raw.bpp);
     }
     [_cb retain:s];
     [_cb retain:d];
@@ -2774,7 +2841,7 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
       destinationOrigin:(MTLOrigin)dorg
                 options:(MTLBlitOption)options
 {
-    if (options) {
+    if (!blitOptionsMoot(d, options)) {
         [_cb takeReason:WhyCall why:@"a copy with blit options"];
         hit(_cb, PredCallBlitOptions, options);
     }
@@ -2803,10 +2870,13 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
     RMBuffer *b = (RMBuffer *)d;
     if ([(id)a isKindOfClass:[RMTexture class]] && a->_raw.chain)
         _cb->_chains = true;
-    const bool ok = [(id)a isKindOfClass:[RMTexture class]] && [(id)b isKindOfClass:[RMBuffer class]] && a->_rawOk &&
-                    !ss && !sl && size.depth == 1 && !a->_raw.memoryless &&
-                    dof + row * (size.height - 1) + size.width * a->_raw.bpp <= b->_raw.length &&
-                    so.x + size.width <= a->_raw.width && so.y + size.height <= a->_raw.height;
+    BufferRows rows;
+    const bool ok =
+        [(id)a isKindOfClass:[RMTexture class]] && [(id)b isKindOfClass:[RMBuffer class]] && a->_rawOk && !ss && !sl &&
+        size.depth == 1 && !a->_raw.memoryless && a->_raw.bpp &&
+        bufferRows(dof, row, uint32_t(size.height), uint32_t(size.width * a->_raw.bpp), a->_raw.bpp, false, rows) &&
+        bufferRow(rows, dof, row, uint32_t(size.height - 1)) + size.width * a->_raw.bpp <= b->_raw.length &&
+        so.x + size.width <= a->_raw.width && so.y + size.height <= a->_raw.height;
     if (!ok) {
         [_cb takeReason:WhyTexture why:@"a texture-to-buffer copy the raw path does not do"];
         hit(_cb, PredBlitTexToBuf, row, uint64_t(ss) | uint64_t(sl) << 8 | uint64_t(size.depth) << 16);
@@ -2837,7 +2907,7 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
     destinationBytesPerImage:(NSUInteger)image
                      options:(MTLBlitOption)options
 {
-    if (options) {
+    if (!blitOptionsMoot(s, options)) {
         [_cb takeReason:WhyCall why:@"a copy with blit options"];
         hit(_cb, PredCallBlitOptions, options);
     }
@@ -4614,15 +4684,19 @@ static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **
             const uint64_t x = c.x, o = extra(cb, x + 8), so = extra(cb, x), row = extra(cb, x + 1);
             const uint64_t w = extra(cb, x + 3), h = extra(cb, x + 4);
             if (!fresh.empty())
-                fresh.erase(t);  // (rows of whole texels, any pitch: the copy engine's; decided at record)
+                fresh.erase(t);
             if (t->_raw.chain) {
                 touch(t).l0Fresh = false;
                 t->_mipL0 = false;
             }
+            BufferRows rows;
+            bufferRows(so, row, uint32_t(h), uint32_t(w * t->_raw.bpp), t->_raw.bpp, true,
+                       rows);  // (decided at record)
+            const uint64_t first = bufferRow(rows, so, row, 0);
             if (!s->_raw.wc)
-                rc->clean(s->_raw.cpu + so, row * (h - 1) + w * t->_raw.bpp);
-            be->copyBufferTexels(s->_raw.va + so, uint32_t(row), t->_raw, uint32_t(o), uint32_t(o >> 32), uint32_t(w),
-                                 uint32_t(h), true);
+                rc->clean(s->_raw.cpu + first, bufferRow(rows, so, row, uint32_t(h - 1)) - first + w * t->_raw.bpp);
+            copyRows(be, s->_raw.va, rows, so, row, t->_raw, uint32_t(o), uint32_t(o >> 32), uint32_t(w), uint32_t(h),
+                     true);
             break;
         }
         case OpCopyTextureToBuffer: {
@@ -4632,10 +4706,15 @@ static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **
             useBuffer(rc, t, true);
             const uint64_t x = c.x, o = extra(cb, x + 2), w = extra(cb, x + 4), h = extra(cb, x + 5),
                            dof = extra(cb, x + 7), row = extra(cb, x + 8);
+            BufferRows rows;
+            bufferRows(dof, row, uint32_t(h), uint32_t(w * s->_raw.bpp), s->_raw.bpp, false,
+                       rows);  // (decided at record)
+            const uint64_t first = bufferRow(rows, dof, row, 0);
             if (!t->_raw.wc)
-                rc->clean(t->_raw.cpu + dof, row * (h - 1) + w * s->_raw.bpp, true);
-            be->copyBufferTexels(t->_raw.va + dof, uint32_t(row), s->_raw, uint32_t(o), uint32_t(o >> 32), uint32_t(w),
-                                 uint32_t(h), false);
+                rc->clean(t->_raw.cpu + first, bufferRow(rows, dof, row, uint32_t(h - 1)) - first + w * s->_raw.bpp,
+                          true);
+            copyRows(be, t->_raw.va, rows, dof, row, s->_raw, uint32_t(o), uint32_t(o >> 32), uint32_t(w), uint32_t(h),
+                     false);
             break;
         }
         default:  // states, fences, events, resources the raw path needs nothing for
