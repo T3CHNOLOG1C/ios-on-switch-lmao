@@ -28,7 +28,8 @@ CUTS = {("com.apple.iokit.IOUSBHostFamily", "com.apple.driver.AppleSMC"): "_swit
         ("com.apple.iokit.IOAccessoryManager", "com.apple.driver.AppleOnboardSerial"): "_switch_prelink_cut_null",
         ("com.apple.iokit.IOAccessoryManager", "com.apple.iokit.IOSerialFamily"): None}
 DEFERRED_PERSONALITIES = {"com.apple.iokit.IOUSBHostFamily": ("AppleUSBHostResources", "AppleUSBHostResourcesTypeC"),
-                          "com.apple.iokit.IOUSBMassStorageDriver": ("IOUSBMassStorageResource",)}
+                          "com.apple.iokit.IOUSBMassStorageDriver": ("IOUSBMassStorageResource",),
+                          "com.apple.driver.usb.AppleUSBHostPacketFilter": ("AppleUSBHostPacketFilter",)}
 COALESCED = {"__PRELINK_TEXT": "__TEXT", "__PLK_DATA_CONST": "__DATA_CONST", "__PLK_TEXT_EXEC": "__TEXT_EXEC",
              "__PRELINK_DATA": "__DATA"}
 M64 = (1 << 64) - 1
@@ -74,8 +75,10 @@ def main():
         raise SystemExit("our kernel lacks the sparse prelink index ABI v1")
     kc = KC(kc_path)
     d = kc.d
-    roots = [r for r in ROOTS if r in kc.plist]
-    sel, ifaces, codeless = kc.closure(roots, set(CUTS))
+    missing = [r for r in ROOTS if r not in kc.plist]
+    if missing:
+        raise SystemExit("roots this kernelcache does not ship: %s" % ", ".join(missing))
+    sel, ifaces, codeless = kc.closure(ROOTS, set(CUTS))
     names = {int(a, 16): n for a, n in json.load(open(paths.work("kernel-names.json")))["names"].items()}
     # kexts link against the KPI only: a kext target named outside the 26.5.2 symbol sets (or iOS 17's imports) is
     # a naming error, so it stays unresolved
@@ -184,6 +187,7 @@ def main():
     # 3. pointers
     pointer_sites = []
     unresolved_fn, unresolved_data = collections.Counter(), collections.Counter()
+    unresolved_by_component = collections.defaultdict(lambda: {"functions": set(), "data": set()})
     tramp = {}                                  # apple function address -> trampoline va (unslid frame)
     tramp_words = []
     tramp_base = stub_va + len(stubs)
@@ -218,8 +222,10 @@ def main():
                 new = nsym[n]; kinds["kernel"] += 1
             elif any(lo <= tgt < hi for lo, hi in kernel_text):
                 new = trampoline(tgt) + slide; unresolved_fn[tgt] += 1; kinds["kernel unresolved function"] += 1
+                unresolved_by_component[o[2]]["functions"].add(tgt)
             else:
                 new = cut_null; unresolved_data[tgt] += 1; kinds["kernel unresolved data"] += 1
+                unresolved_by_component[o[2]]["data"].add(tgt)
         elif t and (o[2], t[2]) in CUTS:
             new = cut_null; kinds["cut"] += 1
         else:
@@ -253,6 +259,7 @@ def main():
                         dest = nsym[n]; br["kernel"] += 1
                     else:
                         dest = trampoline(tgt) + slide; unresolved_fn[tgt] += 1; br["kernel unresolved"] += 1
+                        unresolved_by_component[b]["functions"].add(tgt)
                     off = dest - (pc + slide)
                     if not -(1 << 27) <= off < (1 << 27): raise SystemExit("branch out of range at %x" % pc)
                     struct.pack_into("<I", text, o0 + 4 * i, (w & 0xFC000000) | ((off >> 2) & 0x3FFFFFF))
@@ -377,6 +384,8 @@ def main():
               "pointer_kinds": dict(kinds), "pointer_sites": len(pointer_sites), "branch_kinds": dict(br),
               "unresolved_kernel_functions": {hex(a): c for a, c in sorted(unresolved_fn.items())},
               "unresolved_kernel_data": {hex(a): c for a, c in sorted(unresolved_data.items())},
+              "unresolved_by_component": {b: {k: [hex(a) for a in sorted(v)] for k, v in u.items()}
+                                          for b, u in sorted(unresolved_by_component.items())},
               "translation": xlate, "stub_area": {"va": hex(stub_va + slide), "a64x_words": len(stubs) // 4,
                                                    "trampoline_words": len(tramp_words)},
               "kmod_info": kmods, "sparse_index": {"va": hex(index_va), "headers": len(headers)},

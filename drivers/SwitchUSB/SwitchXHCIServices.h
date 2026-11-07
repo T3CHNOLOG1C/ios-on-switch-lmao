@@ -13,8 +13,9 @@ namespace xhost {
 
 const OSMetaClass *lookupClass(const char *name);
 
-// An IOResources personality ("IOResourceMatch" IOKit), as in the kext's Info.plist, into the catalogue (matched now).
-bool addResourcePersonality(const char *ioClass, const char *category, const char *bundle);
+// An IOResources personality, as in the kext's Info.plist, into the catalogue (matched now).
+bool addResourcePersonality(const char *ioClass, const char *category, const char *bundle,
+                            const char *resource = "IOKit");
 
 // Provider nub: register window index 0 and `intid` as interrupt index 0 (the GIC nub's own interrupt properties, so
 // IOService resolves it through ArmGIC). Retained; nullptr on failure.

@@ -9423,29 +9423,13 @@ native_switch_watchdog_policy(proc_t p, user_addr_t scratch)
 	    "<key>com.apple.fairplayd.A2</key><true/>" \
 	    "<key>com.apple.adid</key><true/>" \
 	    "<key>com.apple.lskdd</key><true/>" \
-	    NATIVE_SWITCH_POLICY_NO_HARDWARE \
 	    "</dict></plist>\n"
-	/* No such hardware on the Switch (approved 11-04): NFC, secure element, Tap to Pay, ID wallet, Face ID, UWB,
-	 * multitouch calibration, hotspot, cellular helper, smart charging, Apple display FDR; and tailspind (always-on
-	 * kdebug tracing) and accessoryupdaterd. This file is the only override database 21H461 launchd reads: no
-	 * disabled.<uid>.plist exists. launchd reads it once, between its finish-demo-restore and sysstatuscheck boot tasks.
-	 * The user/501 domain shares the system domain's dictionary, so one bare-label key covers both domains. A job disabled
-	 * here is refused at import (error 119), so nothing spawns it, whether speculative, xpc event or mach lookup.
-	 * Not here: ptpd and atc (USB), and WebBookmarks.webbookmarksd (Safari needs it; the cryptex launch-constraint
-	 * fix ended its respawn loop). */
-#define NATIVE_SWITCH_POLICY_NO_HARDWARE "<key>com.apple.nfcd</key><true/>" \
-	    "<key>com.apple.seld</key><true/>" \
-	    "<key>com.apple.seserviced</key><true/>" \
-	    "<key>com.apple.softposreaderd</key><true/>" \
-	    "<key>com.apple.coreidvd</key><true/>" \
-	    "<key>com.apple.nearbyd</key><true/>" \
-	    "<key>com.apple.mtmergeprops</key><true/>" \
-	    "<key>com.apple.MobileInternetSharing</key><true/>" \
-	    "<key>com.apple.CommCenterMobileHelper</key><true/>" \
-	    "<key>com.apple.PowerUIAgent</key><true/>" \
-	    "<key>com.apple.iomfb_fdr_loader</key><true/>" \
-	    "<key>com.apple.tailspind</key><true/>" \
-	    "<key>com.apple.accessoryupdaterd</key><true/>"
+	/* This file is the only override database 21H461 launchd reads: no disabled.<uid>.plist exists. launchd reads it
+	 * once, between its finish-demo-restore and sysstatuscheck boot tasks. The user/501 domain shares the system
+	 * domain's dictionary, so one bare-label key covers both domains. A job disabled here is refused at import (error
+	 * 119), so nothing spawns it, whether speculative, xpc event or mach lookup. Jobs for hardware the Switch lacks
+	 * (NFC, secure element, Face ID, UWB, hotspot...) run as on J120, which loads them too: their plists carry no
+	 * hardware gate, and each idles there without its hardware. */
 	static const char head[] = NATIVE_SWITCH_POLICY_HEAD, bluetooth_off[] = NATIVE_SWITCH_POLICY_BLUETOOTH,
 	    audio_off[] = NATIVE_SWITCH_POLICY_AUDIO, watchdogd_off[] = NATIVE_SWITCH_POLICY_WATCHDOGD,
 	    tail[] = NATIVE_SWITCH_POLICY_TAIL;
@@ -9455,7 +9439,6 @@ native_switch_watchdog_policy(proc_t p, user_addr_t scratch)
 #undef NATIVE_SWITCH_POLICY_WATCHDOGD
 #undef NATIVE_SWITCH_POLICY_AUDIO
 #undef NATIVE_SWITCH_POLICY_TAIL
-#undef NATIVE_SWITCH_POLICY_NO_HARDWARE
 	const int with_bluetooth = !native_switch_disabled("switch-no-bt");
 	int policy_size = 0;
 	static const char *const paths[] = {

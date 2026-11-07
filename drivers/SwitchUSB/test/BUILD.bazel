@@ -4,6 +4,7 @@
 # switch_usb_host_test), and SuperSpeed's lane and root port (XusbLanes.h, switch_usb_lanes_test).
 #
 #   bazel test //drivers/SwitchUSB/test:all
+load("@rules_python//python:py_test.bzl", "py_test")
 load("//bazel/lint:defs.bzl", "lint_files")
 load("//bazel/testing:defs.bzl", "host_library", "host_test")
 
@@ -146,4 +147,12 @@ host_test(
         "//drivers/SwitchUSB:UsbIova.h",
     ],
     copts = ["-O1"],
+)
+
+# The selected kind's prelink report: every host-side USB class kext prelinked, and on iOS 27 no new unnamed import.
+py_test(
+    name = "usb_prelink_test",
+    srcs = ["usb_prelink_test.py"],
+    data = ["//kernel:prelink_report"],
+    deps = ["@rules_python//python/runfiles"],
 )

@@ -41,6 +41,7 @@ kernel_driver(
         "drivers/ArmGIC",
         "drivers/TegraGPIO",
         "drivers/TegraI2C",
+        "kits/SwitchRefusal",
     ],
     stems = {"NativeSwitchBlock.cpp": "NativeSwitchBlockDevice"},
 )

@@ -27,14 +27,14 @@ const OSMetaClass *lookupClass(const char *name)
     return meta;
 }
 
-bool addResourcePersonality(const char *ioClass, const char *category, const char *bundle)
+bool addResourcePersonality(const char *ioClass, const char *category, const char *bundle, const char *resource)
 {
     OSDictionary *personality = OSDictionary::withCapacity(5);
     bool ok = personality != nullptr;
     const char *const pairs[][2] = {{"IOClass", ioClass},
                                     {"IOMatchCategory", category},
                                     {"IOProviderClass", "IOResources"},
-                                    {"IOResourceMatch", "IOKit"},
+                                    {"IOResourceMatch", resource},
                                     {"CFBundleIdentifier", bundle}};
     for (const auto &pair : pairs) {
         const OSSymbol *value = ok ? OSSymbol::withCString(pair[1]) : nullptr;

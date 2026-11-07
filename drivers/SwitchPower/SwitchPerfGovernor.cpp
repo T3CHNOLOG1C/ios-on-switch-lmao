@@ -48,6 +48,7 @@
 #include <machine/machine_routines.h>
 #include <os/log.h>
 #include "SwitchGovernor.h"
+#include "SwitchEMC.h"
 #include "SwitchPerfGovernor.h"
 #include "SwitchPower.h"
 #include "../NativeSwitchBlock/SwitchCryptex.h"  // switch_boot_io_complete
@@ -581,6 +582,7 @@ static void bootDone()
 extern "C" void switch_perf_hint(unsigned int hint)
 {
     tegra_gm20b_perf_hint(hint);  // the GPU back at its full clock if it idles low
+    switch_emc_hint(hint);
     if (hint == SWITCH_PERF_HINT_BOOT_DONE) {
         switch_boot_io_complete();
         bootDone();

@@ -60,6 +60,9 @@ class Capabilities(unittest.TestCase):
         self.assertEqual(product['itunes-min-ver'], struct.pack('<I', 0xC0500))
         self.assertEqual(product['wifi-chipset'], b'4355\0')
         self.assertEqual(product['product-name'], b'iPad Pro (12.9-inch) (2nd generation)\0')
+        buttons = {p[0]: p[2] for p in find(tree, 'buttons')[0]}
+        self.assertIn('function-button_volup', buttons)
+        self.assertNotIn('function-button_halleffect', buttons)
         maps = {p[0]: p[2] for p in find(tree, 'product', 'maps')[0]}
         self.assertEqual(maps['3d-maps'], struct.pack('<I', 0))
 

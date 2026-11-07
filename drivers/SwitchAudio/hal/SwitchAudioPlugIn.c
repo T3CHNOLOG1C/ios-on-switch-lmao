@@ -9,16 +9,20 @@
 //    "tap stream required" when VirtualAudio's expanseEnabled feature is on, as it is, and without one the speaker
 //    device throws ("TapStream is enabled by policy but not found") and plays nothing. Real hardware carries what
 //    the speaker plays there, for echo cancellation; this one is silence.
-//  - "SwitchAudioMic" (Thunderbolt): the mono input, the headset microphone on the jack (the Switch has no built-in
-//    one). An unknown UID with the Thunderbolt transport is a driver device with a generic input port (ptbi);
-//    built-in devices with unknown UIDs would need Apple port descriptions, and a "Codec"-UID device is Apple's own
-//    codec (headphones, data-source microphones), not published here.
+//  - "Codec" (built in): the headphone jack, a stereo output and the headset microphone's mono input. VirtualAudio
+//    makes it Device_Codec_Aspen: its 'jack' (kAudioDevicePropertyJackIsConnected) in the output scope makes the
+//    Wired Headphones port (phpw) and in the input scope the Wired Microphone (pmwi), each available while its value
+//    is 1. Both scopes must answer from the first query (VirtualAudio looks once per process); they change with the
+//    kernel's jack state (control page, then PropertiesChanged on this device). With no input data sources it has no
+//    built-in microphone, which is the Switch's case. The headphone volume is the codec's DAC volume (the level
+//    control on output element 1, which VirtualAudio reads as the port's hardware volume range); the kernel routes the
+//    RT5639 to the jack whenever a plug is in, so this device's output and the speaker's share one ring.
 //  - "Hawking" (built in): one silent mono input, the Hawking port (phki) of the J120's routing tables, which
 //    otherwise put the null input in its place.
-// Speaker and microphone run on the service's one timeline (one clock domain, so their aggregate needs no drift
+// Speaker and Codec run on the service's one timeline (one clock domain, so their aggregate needs no drift
 // correction); Hawking keeps its own on the host clock and never starts the hardware.
-// Objects: the plug-in (1); Speaker (2) with its output (3), tap (4) and output volume (5); the microphone device (6)
-// and its input (7); Hawking (8) and its input (9).
+// Objects: the plug-in (1); Speaker (2) with its output (3), tap (4) and output volume (5); Codec (6) with its input
+// (7), output (10) and headphone volume (11); Hawking (8) and its input (9).
 // VirtualAudio runs a port's DSP chain after the mix. For pspk on J120 the chain is compiled into VirtualAudio: nine AUs
 // (two AUNBandEQs, a compressor, AUVariableEQV2 'vrq2', a 400 Hz crossover, rotation shading to four channels, a
 // four-channel EQ, AUControlFreak, speaker protection V3), tuned for J120's four MAX98723 drivers.
@@ -52,6 +56,8 @@
 #include <CoreAudio/AudioServerPlugIn.h>
 #include <CoreFoundation/CoreFoundation.h>
 #include <IOKit/IOKitLib.h>
+#include <IOKit/IOMessage.h>
+#include <dispatch/dispatch.h>
 #include <dlfcn.h>
 #include <mach/mach.h>
 #include <mach/mach_time.h>
@@ -71,15 +77,22 @@ enum {
     kSpeakerOut = 3,
     kSpeakerTap = 4,
     kVolume = 5,
-    kMic = 6,
-    kMicIn = 7,
+    kCodec = 6,
+    kCodecIn = 7,
     kHawking = 8,
     kHawkingIn = 9,
+    kCodecOut = 10,
+    kCodecVolume = 11,
+};
+
+// AudioHardware.h's kAudioDevicePropertyJackIsConnected (that header needs others the build does not stage).
+enum {
+    kJackIsConnected = 'jack'
 };
 
 #define kSpeakerUID "Speaker"  // VirtualAudio's names for a J120's devices (DeviceFactory_Aspen)
 #define kHawkingUID "Hawking"
-#define kMicUID     "SwitchAudioMic"
+#define kCodecUID   "Codec"
 #define kModelUID   "SwitchAudioModel"
 static const UInt32 kClockDomain = SWITCH_AUDIO_MAGIC;  // speaker and microphone: the service's one clock
 static const Float64 kRate = SWITCH_AUDIO_RATE;  // Hawking's, and the service's until the audio server picks another
@@ -91,8 +104,11 @@ static atomic_uint gRefs = 1;
 static io_connect_t gConnect;
 static SwitchAudioControl *gControl;
 static switch_audio_sample_t *gOut, *gIn;
-static UInt32 gSpeakerUsers, gMicUsers, gHawkingUsers;  // IO clients per device (gLock)
-static Float32 gVolume = 1.0f;
+static UInt32 gSpeakerUsers, gCodecUsers, gHawkingUsers;  // IO clients per device (gLock)
+static Float32 gVolume = 1.0f, gCodecVolume = 1.0f;
+static uint32_t gJack;  // SwitchAudioJack*, as last told to the audio server
+static IONotificationPortRef gJackPort;
+static io_object_t gJackNotification;
 static Float64 gRate = SWITCH_AUDIO_RATE;  // the service's clock: speaker and microphone (gLock)
 static Float64 gTicksPerFrame;             // the service's clock (its control page), nominal until it is mapped
 static Float64 gHostTicksPerFrame;         // the host clock's nominal rate: Hawking's
@@ -130,6 +146,10 @@ static void setHostClock(void)
         os_log_error(OS_LOG_DEFAULT, "SwitchAudio: host clock constant not set");
 }
 
+static void jackChanged(void *refcon, io_service_t service, uint32_t type, void *argument);
+static Float32 levelToDb(Float32 min, Float32 scalar);
+static void sendHeadphoneLevel(void);
+
 static int connectService(void)
 {
     if (gControl)
@@ -138,6 +158,16 @@ static int connectService(void)
     if (!service)
         return -1;
     kern_return_t kr = IOServiceOpen(service, mach_task_self(), 0, &gConnect);
+    // The jack's changes come as interest messages, registered before its state is first read so none is missed.
+    if (kr == KERN_SUCCESS && !gJackPort) {
+        gJackPort = IONotificationPortCreate(kIOMainPortDefault);
+        if (gJackPort) {
+            IONotificationPortSetDispatchQueue(gJackPort, dispatch_queue_create("SwitchAudio.jack", NULL));
+            if (IOServiceAddInterestNotification(gJackPort, service, kIOGeneralInterest, jackChanged, NULL,
+                                                 &gJackNotification) != KERN_SUCCESS)
+                os_log_error(OS_LOG_DEFAULT, "SwitchAudio: no jack notifications: headphones stay as first read");
+        }
+    }
     IOObjectRelease(service);
     if (kr != KERN_SUCCESS)
         return -1;
@@ -153,7 +183,9 @@ static int connectService(void)
     gIn = in;
     gControl = control;
     gTicksPerFrame = (Float64)gControl->ticks_per_frame_q32 / 4294967296.0;
+    __atomic_store_n(&gJack, gControl->jack, __ATOMIC_RELAXED);
     setHostClock();
+    sendHeadphoneLevel();
     return 0;
 }
 
@@ -163,6 +195,59 @@ static int connectServiceLocked(void)
     const int r = connectService();
     pthread_mutex_unlock(&gLock);
     return r;
+}
+
+static uint32_t jackState(void)
+{
+    return connectServiceLocked() ? 0 : __atomic_load_n(&gJack, __ATOMIC_RELAXED);
+}
+
+// The jack's state changed (the kernel service's interest message): the Codec device's 'jack' in each scope that moved.
+static void jackChanged(void *refcon, io_service_t service, uint32_t type, void *argument)
+{
+    (void)refcon;
+    (void)service;
+    (void)argument;
+    if (type != kIOMessageServicePropertyChange || !gControl)
+        return;
+    const uint32_t now = gControl->jack, was = __atomic_exchange_n(&gJack, now, __ATOMIC_RELAXED);
+    AudioObjectPropertyAddress changed[2];
+    UInt32 n = 0;
+    if ((now ^ was) & SwitchAudioJackHeadphones) {
+        changed[n++] = (AudioObjectPropertyAddress){kJackIsConnected, kAudioObjectPropertyScopeOutput,
+                                                    kAudioObjectPropertyElementMain};
+    }
+    if ((now ^ was) & SwitchAudioJackMicrophone) {
+        changed[n++] = (AudioObjectPropertyAddress){kJackIsConnected, kAudioObjectPropertyScopeInput,
+                                                    kAudioObjectPropertyElementMain};
+    }
+    if (!n)
+        return;
+    os_log(OS_LOG_DEFAULT, "SwitchAudio: jack: headphones %{public}s, microphone %{public}s",
+           now & SwitchAudioJackHeadphones ? "in" : "out", now & SwitchAudioJackMicrophone ? "in" : "out");
+    gHost->PropertiesChanged(gHost, kCodec, n, changed);
+}
+
+// gConnect is open (connectService): the headphone level to the codec, as attenuation in millidecibels.
+static void sendHeadphoneLevel(void)
+{
+    const uint64_t attenuation =
+        gCodecVolume <= 0.0f
+            ? UINT32_MAX
+            : (uint64_t)(-levelToDb(-(Float32)SWITCH_AUDIO_HEADPHONE_RANGE_MDB / 1000.0f, gCodecVolume) * 1000.0f +
+                         0.5f);
+    if (IOConnectCallScalarMethod(gConnect, SwitchAudioSetHeadphoneLevel, &attenuation, 1, NULL, NULL) != KERN_SUCCESS)
+        os_log_error(OS_LOG_DEFAULT, "SwitchAudio: headphone level not set");
+}
+
+static void applyHeadphoneLevel(void)
+{
+    pthread_mutex_lock(&gLock);
+    if (gControl)
+        sendHeadphoneLevel();
+    else
+        connectService();  // which sends it
+    pthread_mutex_unlock(&gLock);
 }
 
 static kern_return_t call(uint32_t selector)
@@ -213,18 +298,34 @@ static AudioStreamBasicDescription format(UInt32 channels, Float64 rate)
     } while (0)
 #define REPLY_STR(text) REPLY(CFStringRef, CFSTR(text))
 
-// The output volume spans kMinDb..0 dB on a squared curve over the scalar; scalar 0 mutes (sheng's tuned curve).
-static const Float32 kMinDb = -36.0f;
+// A volume control spans its minimum..0 dB on a squared curve over the scalar; scalar 0 mutes (sheng's tuned curve).
+// The speaker's is applied here, in the ring mix; the headphones' is the codec's DAC volume.
+static const Float32 kMinDb = -36.0f, kCodecMinDb = -(Float32)SWITCH_AUDIO_HEADPHONE_RANGE_MDB / 1000.0f;
+
+static Float32 minDbOf(AudioObjectID control)
+{
+    return control == kCodecVolume ? kCodecMinDb : kMinDb;
+}
+
+static Float32 *levelOf(AudioObjectID control)
+{
+    return control == kCodecVolume ? &gCodecVolume : &gVolume;
+}
+
+static Float32 levelToDb(Float32 min, Float32 scalar)
+{
+    const Float32 r = 1.0f - (scalar < 0 ? 0 : scalar > 1 ? 1 : scalar);
+    return min * r * r;
+}
+
+static Float32 levelToScalar(Float32 min, Float32 db)
+{
+    return db <= min ? 0.0f : db >= 0 ? 1.0f : 1.0f - sqrtf(db / min);
+}
 
 static Float32 toDb(Float32 scalar)
 {
-    const Float32 r = 1.0f - (scalar < 0 ? 0 : scalar > 1 ? 1 : scalar);
-    return kMinDb * r * r;
-}
-
-static Float32 toScalar(Float32 db)
-{
-    return db <= kMinDb ? 0.0f : db >= 0 ? 1.0f : 1.0f - sqrtf(db / kMinDb);
+    return levelToDb(kMinDb, scalar);
 }
 
 static Float32 gain(void)
@@ -234,37 +335,42 @@ static Float32 gain(void)
 
 static Boolean isDevice(AudioObjectID o)
 {
-    return o == kSpeaker || o == kMic || o == kHawking;
+    return o == kSpeaker || o == kCodec || o == kHawking;
 }
 
 static Boolean isStream(AudioObjectID o)
 {
-    return o == kSpeakerOut || o == kSpeakerTap || o == kMicIn || o == kHawkingIn;
+    return o == kSpeakerOut || o == kSpeakerTap || o == kCodecIn || o == kCodecOut || o == kHawkingIn;
+}
+
+static Boolean isVolume(AudioObjectID o)
+{
+    return o == kVolume || o == kCodecVolume;
 }
 
 static AudioObjectID deviceOf(AudioObjectID o)  // the device a stream or control belongs to
 {
-    return o == kMicIn ? kMic : o == kHawkingIn ? kHawking : kSpeaker;
+    return o == kCodecIn || o == kCodecOut || o == kCodecVolume ? kCodec : o == kHawkingIn ? kHawking : kSpeaker;
 }
 
 static AudioObjectID outputOf(AudioObjectID device)
 {
-    return device == kSpeaker ? kSpeakerOut : 0;
+    return device == kSpeaker ? kSpeakerOut : device == kCodec ? kCodecOut : 0;
 }
 
 static AudioObjectID inputOf(AudioObjectID device)
 {
-    return device == kSpeaker ? kSpeakerTap : device == kMic ? kMicIn : kHawkingIn;
+    return device == kSpeaker ? kSpeakerTap : device == kCodec ? kCodecIn : kHawkingIn;
 }
 
 static UInt32 channelsOf(AudioObjectID stream)
 {
-    return stream == kSpeakerOut || stream == kSpeakerTap ? 2 : 1;
+    return stream == kSpeakerOut || stream == kSpeakerTap || stream == kCodecOut ? 2 : 1;
 }
 
 static UInt32 usersOf(AudioObjectID device)
 {
-    return device == kSpeaker ? gSpeakerUsers : device == kMic ? gMicUsers : gHawkingUsers;
+    return device == kSpeaker ? gSpeakerUsers : device == kCodec ? gCodecUsers : gHawkingUsers;
 }
 
 static Float64 rateOf(AudioObjectID device)
@@ -380,7 +486,7 @@ static OSStatus PerformDeviceConfigurationChange(AudioServerPlugInDriverRef d, A
     if (kr != KERN_SUCCESS)
         return kAudioHardwareIllegalOperationError;
     os_log(OS_LOG_DEFAULT, "SwitchAudio: clock now %.0f Hz", gRate);
-    gHost->RequestDeviceConfigurationChange(gHost, o == kSpeaker ? kMic : kSpeaker, a, NULL);
+    gHost->RequestDeviceConfigurationChange(gHost, o == kSpeaker ? kCodec : kSpeaker, a, NULL);
     return 0;
 }
 
@@ -420,7 +526,7 @@ static OSStatus IsPropertySettable(AudioServerPlugInDriverRef d, AudioObjectID o
 {
     const AudioObjectPropertySelector s = a->mSelector;
     *out =
-        (o == kVolume && (s == kAudioLevelControlPropertyScalarValue || s == kAudioLevelControlPropertyDecibelValue)) ||
+        (isVolume(o) && (s == kAudioLevelControlPropertyScalarValue || s == kAudioLevelControlPropertyDecibelValue)) ||
         (isStream(o) && (s == kAudioStreamPropertyVirtualFormat || s == kAudioStreamPropertyPhysicalFormat ||
                          s == kAudioStreamPropertyIsActive)) ||
         (isDevice(o) && s == kAudioDevicePropertyNominalSampleRate);
@@ -435,19 +541,23 @@ static OSStatus SetPropertyData(AudioServerPlugInDriverRef d, AudioObjectID o, p
     (void)pid;
     (void)qs;
     (void)q;
-    if (o == kVolume && size >= sizeof(Float32)) {
+    if (isVolume(o) && size >= sizeof(Float32)) {
+        const Float32 min = minDbOf(o);
         Float32 v = *(const Float32 *)data;
         if (a->mSelector == kAudioLevelControlPropertyDecibelValue)
-            v = toScalar(v);
+            v = levelToScalar(min, v);
         else if (a->mSelector != kAudioLevelControlPropertyScalarValue)
             return kAudioHardwareUnknownPropertyError;
-        gVolume = v < 0 ? 0 : v > 1 ? 1 : v;
-        os_log(OS_LOG_DEFAULT, "SwitchAudio: output volume control %.3f (%.1f dB)", (double)gVolume,
-               (double)toDb(gVolume));
+        Float32 *level = levelOf(o);
+        *level = v < 0 ? 0 : v > 1 ? 1 : v;
+        if (o == kCodecVolume)
+            applyHeadphoneLevel();
+        os_log(OS_LOG_DEFAULT, "SwitchAudio: %{public}s volume control %.3f (%.1f dB)",
+               o == kCodecVolume ? "headphone" : "output", (double)*level, (double)levelToDb(min, *level));
         const AudioObjectPropertyAddress changed[2] = {
             {kAudioLevelControlPropertyScalarValue, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain},
             {kAudioLevelControlPropertyDecibelValue, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain}};
-        gHost->PropertiesChanged(gHost, kVolume, 2, changed);
+        gHost->PropertiesChanged(gHost, o, 2, changed);
         return 0;
     }
     if (isStream(o) &&
@@ -477,7 +587,7 @@ static OSStatus GetPropertyData(AudioServerPlugInDriverRef d, AudioObjectID o, p
     // The speaker's tap stream answers 'taps' with 1 (top of file).
     if (o == kSpeakerTap && s == 'taps')
         REPLY(UInt32, 1);
-    if (o <= kHawkingIn &&
+    if (o <= kCodecVolume &&
         (s == kAudioObjectPropertyCustomPropertyInfoList ||
          ((s == kAudioPlugInPropertyBoxList || s == kAudioPlugInPropertyClockDeviceList) && o == kPlugIn) ||
          (s == 'taps' && isStream(o)))) {
@@ -496,7 +606,7 @@ static OSStatus GetPropertyData(AudioServerPlugInDriverRef d, AudioObjectID o, p
             REPLY_STR("Switch");
         case kAudioObjectPropertyOwnedObjects:
         case kAudioPlugInPropertyDeviceList: {
-            static const AudioObjectID devices[] = {kSpeaker, kMic, kHawking};
+            static const AudioObjectID devices[] = {kSpeaker, kCodec, kHawking};
             UInt32 n = 3;
             if (inDataSize / sizeof(AudioObjectID) < n)
                 n = inDataSize / (UInt32)sizeof(AudioObjectID);
@@ -509,8 +619,8 @@ static OSStatus GetPropertyData(AudioServerPlugInDriverRef d, AudioObjectID o, p
             AudioObjectID device = kAudioObjectUnknown;
             if (uid && CFStringCompare(uid, CFSTR(kSpeakerUID), 0) == kCFCompareEqualTo)
                 device = kSpeaker;
-            if (uid && CFStringCompare(uid, CFSTR(kMicUID), 0) == kCFCompareEqualTo)
-                device = kMic;
+            if (uid && CFStringCompare(uid, CFSTR(kCodecUID), 0) == kCFCompareEqualTo)
+                device = kCodec;
             if (uid && CFStringCompare(uid, CFSTR(kHawkingUID), 0) == kCFCompareEqualTo)
                 device = kHawking;
             REPLY(AudioObjectID, device);
@@ -535,16 +645,16 @@ static OSStatus GetPropertyData(AudioServerPlugInDriverRef d, AudioObjectID o, p
         case kAudioObjectPropertyModelName:
             if (o == kSpeaker)
                 REPLY_STR("Speaker");
-            if (o == kMic)
-                REPLY_STR("Microphone");
+            if (o == kCodec)
+                REPLY_STR("Headphones");
             REPLY_STR("Hawking");
         case kAudioObjectPropertyManufacturer:
             REPLY_STR("Switch");
         case kAudioDevicePropertyDeviceUID:
             if (o == kSpeaker)
                 REPLY_STR(kSpeakerUID);
-            if (o == kMic)
-                REPLY_STR(kMicUID);
+            if (o == kCodec)
+                REPLY_STR(kCodecUID);
             REPLY_STR(kHawkingUID);
         case kAudioDevicePropertyModelUID:
             REPLY_STR(kModelUID);
@@ -563,7 +673,11 @@ static OSStatus GetPropertyData(AudioServerPlugInDriverRef d, AudioObjectID o, p
         case kAudioDevicePropertyConfigurationApplication:
             REPLY_STR("com.apple.Preferences");
         case kAudioDevicePropertyTransportType:
-            REPLY(UInt32, o == kMic ? kAudioDeviceTransportTypeThunderbolt : kAudioDeviceTransportTypeBuiltIn);
+            REPLY(UInt32, kAudioDeviceTransportTypeBuiltIn);
+        case kJackIsConnected:
+            if (o != kCodec || (a->mScope != kAudioObjectPropertyScopeOutput && !scopeIn))
+                return kAudioHardwareUnknownPropertyError;
+            REPLY(UInt32, (jackState() & (scopeIn ? SwitchAudioJackMicrophone : SwitchAudioJackHeadphones)) != 0);
         case kAudioDevicePropertyRelatedDevices:
             REPLY(AudioObjectID, o);
         case kAudioDevicePropertyClockDomain:
@@ -639,6 +753,8 @@ static OSStatus GetPropertyData(AudioServerPlugInDriverRef d, AudioObjectID o, p
                 list[n++] = input;
             if (controls && o == kSpeaker && !scopeIn)
                 list[n++] = kVolume;
+            if (controls && o == kCodec && !scopeIn)
+                list[n++] = kCodecVolume;
             if (inDataSize / sizeof(AudioObjectID) < n)
                 n = inDataSize / (UInt32)sizeof(AudioObjectID);
             memcpy(outData, list, n * sizeof(AudioObjectID));
@@ -663,8 +779,10 @@ static OSStatus GetPropertyData(AudioServerPlugInDriverRef d, AudioObjectID o, p
                 REPLY_STR("Speaker");
             if (o == kSpeakerTap)
                 REPLY_STR("Speaker Tap");
-            if (o == kMicIn)
-                REPLY_STR("Microphone");
+            if (o == kCodecIn)
+                REPLY_STR("Headset Microphone");
+            if (o == kCodecOut)
+                REPLY_STR("Headphones");
             REPLY_STR("Hawking Input");
         case kAudioObjectPropertyOwnedObjects:
             *outDataSize = 0;
@@ -672,10 +790,12 @@ static OSStatus GetPropertyData(AudioServerPlugInDriverRef d, AudioObjectID o, p
         case kAudioStreamPropertyIsActive:
             REPLY(UInt32, 1);
         case kAudioStreamPropertyDirection:
-            REPLY(UInt32, o != kSpeakerOut);
+            REPLY(UInt32, o != kSpeakerOut && o != kCodecOut);
         case kAudioStreamPropertyTerminalType:
             REPLY(UInt32, o == kSpeakerOut   ? kAudioStreamTerminalTypeSpeaker
                           : o == kSpeakerTap ? kAudioStreamTerminalTypeUnknown
+                          : o == kCodecOut   ? kAudioStreamTerminalTypeHeadphones
+                          : o == kCodecIn    ? kAudioStreamTerminalTypeHeadsetMicrophone
                                              : kAudioStreamTerminalTypeMicrophone);
         case kAudioStreamPropertyStartingChannel:
             REPLY(UInt32, 1);
@@ -701,37 +821,39 @@ static OSStatus GetPropertyData(AudioServerPlugInDriverRef d, AudioObjectID o, p
             return kAudioHardwareUnknownPropertyError;
         }
     }
-    if (o == kVolume) {
+    if (isVolume(o)) {
+        const Float32 min = minDbOf(o), level = *levelOf(o);
         switch (s) {
         case kAudioObjectPropertyBaseClass:
             REPLY(AudioClassID, kAudioLevelControlClassID);
         case kAudioObjectPropertyClass:
             REPLY(AudioClassID, kAudioVolumeControlClassID);
         case kAudioObjectPropertyOwner:
-            REPLY(AudioObjectID, kSpeaker);
+            REPLY(AudioObjectID, deviceOf(o));
         case kAudioObjectPropertyOwnedObjects:
             *outDataSize = 0;
             return 0;
         case kAudioControlPropertyScope:
             REPLY(AudioObjectPropertyScope, kAudioObjectPropertyScopeOutput);
         case kAudioControlPropertyElement:
-            REPLY(AudioObjectPropertyElement, kAudioObjectPropertyElementMain);
+            // VirtualAudio's codec ports by output element: 1 is the headphones.
+            REPLY(AudioObjectPropertyElement, o == kCodecVolume ? 1 : kAudioObjectPropertyElementMain);
         case kAudioLevelControlPropertyScalarValue:
-            REPLY(Float32, gVolume);
+            REPLY(Float32, level);
         case kAudioLevelControlPropertyDecibelValue:
-            REPLY(Float32, toDb(gVolume));
+            REPLY(Float32, levelToDb(min, level));
         case kAudioLevelControlPropertyDecibelRange:
-            REPLY(AudioValueRange, ((AudioValueRange){kMinDb, 0.0}));
+            REPLY(AudioValueRange, ((AudioValueRange){min, 0.0}));
         case kAudioLevelControlPropertyConvertScalarToDecibels:
             if (inDataSize < sizeof(Float32))
                 return kAudioHardwareBadPropertySizeError;
-            *(Float32 *)outData = toDb(*(Float32 *)outData);
+            *(Float32 *)outData = levelToDb(min, *(Float32 *)outData);
             *outDataSize = sizeof(Float32);
             return 0;
         case kAudioLevelControlPropertyConvertDecibelsToScalar:
             if (inDataSize < sizeof(Float32))
                 return kAudioHardwareBadPropertySizeError;
-            *(Float32 *)outData = toScalar(*(Float32 *)outData);
+            *(Float32 *)outData = levelToScalar(min, *(Float32 *)outData);
             *outDataSize = sizeof(Float32);
             return 0;
         default:
@@ -766,11 +888,14 @@ static OSStatus StartIO(AudioServerPlugInDriverRef d, AudioObjectID o, UInt32 cl
         pthread_mutex_unlock(&gLock);
         return 0;
     }
-    UInt32 *users = o == kSpeaker ? &gSpeakerUsers : &gMicUsers;
-    const char *const what = o == kSpeaker ? "speaker" : "microphone";
+    UInt32 *users = o == kSpeaker ? &gSpeakerUsers : &gCodecUsers;
+    const char *const what = o == kSpeaker ? "speaker" : "headphone";
     if (*users == 0) {
-        const Boolean first = !gSpeakerUsers && !gMicUsers;
-        if (connectService() || call(o == kSpeaker ? SwitchAudioStartOutput : SwitchAudioStartInput) != KERN_SUCCESS) {
+        const Boolean first = !gSpeakerUsers && !gCodecUsers;
+        // The service's output runs while either device does; the codec device also reads the microphone.
+        const Boolean output = first, input = o == kCodec;
+        if (connectService() || (output && call(SwitchAudioStartOutput) != KERN_SUCCESS) ||
+            (input && call(SwitchAudioStartInput) != KERN_SUCCESS)) {
             r = kAudioHardwareNotRunningError;
             os_log_error(OS_LOG_DEFAULT, "SwitchAudio: %{public}s IO not started: the kernel service refused", what);
         } else {
@@ -800,10 +925,13 @@ static OSStatus StopIO(AudioServerPlugInDriverRef d, AudioObjectID o, UInt32 cli
         if (gHawkingUsers)
             --gHawkingUsers;
     } else {
-        UInt32 *users = o == kSpeaker ? &gSpeakerUsers : &gMicUsers;
+        UInt32 *users = o == kSpeaker ? &gSpeakerUsers : &gCodecUsers;
         if (*users && --*users == 0) {
-            call(o == kSpeaker ? SwitchAudioStopOutput : SwitchAudioStopInput);
-            os_log(OS_LOG_DEFAULT, "SwitchAudio: %{public}s IO stopped", o == kSpeaker ? "speaker" : "microphone");
+            if (o == kCodec)
+                call(SwitchAudioStopInput);
+            if (!gSpeakerUsers && !gCodecUsers)
+                call(SwitchAudioStopOutput);
+            os_log(OS_LOG_DEFAULT, "SwitchAudio: %{public}s IO stopped", o == kSpeaker ? "speaker" : "headphone");
         }
     }
     pthread_mutex_unlock(&gLock);
@@ -842,8 +970,8 @@ static OSStatus WillDoIOOperation(AudioServerPlugInDriverRef d, AudioObjectID o,
 {
     (void)d;
     (void)client;
-    *will =
-        (op == kAudioServerPlugInIOOperationWriteMix && o == kSpeaker) || op == kAudioServerPlugInIOOperationReadInput;
+    *will = (op == kAudioServerPlugInIOOperationWriteMix && (o == kSpeaker || o == kCodec)) ||
+            op == kAudioServerPlugInIOOperationReadInput;
     *inPlace = true;
     return 0;
 }
@@ -874,7 +1002,7 @@ static OSStatus DoIOOperation(AudioServerPlugInDriverRef d, AudioObjectID o, Aud
     }
     if (!gControl)
         return 0;
-    if (op == kAudioServerPlugInIOOperationWriteMix && stream == kSpeakerOut) {
+    if (op == kAudioServerPlugInIOOperationWriteMix && (stream == kSpeakerOut || stream == kCodecOut)) {
         // The audio server can run more than one IO context on the device, each with its own mix: add to what the ring
         // holds (the service clears every period it consumes) so one context's silence does not erase another's sound.
         // (On 21H461 one context plays the speaker, VirtualAudio's aggregate: the add meets silence.) Float32 becomes
@@ -882,7 +1010,8 @@ static OSStatus DoIOOperation(AudioServerPlugInDriverRef d, AudioObjectID o, Aud
         const uint64_t first = (uint64_t)info->mOutputTime.mSampleTime;
         const uint32_t total = frames < SWITCH_AUDIO_RING_FRAMES ? frames : SWITCH_AUDIO_RING_FRAMES;
         const uint32_t at = (uint32_t)(first % SWITCH_AUDIO_RING_FRAMES);
-        const uint32_t run = switch_audio_ring_mix(gOut, SWITCH_AUDIO_RING_FRAMES, 2, first, main, frames, gain());
+        const uint32_t run = switch_audio_ring_mix(gOut, SWITCH_AUDIO_RING_FRAMES, 2, first, main, frames,
+                                                   stream == kSpeakerOut ? gain() : 1.0f);
         if (gControl->backend == SwitchAudioBackendTegraI2S && total) {
             cleanToMemory(gOut + 2 * at, run * 2 * sizeof(switch_audio_sample_t));
             if (run < total)
@@ -896,12 +1025,12 @@ static OSStatus DoIOOperation(AudioServerPlugInDriverRef d, AudioObjectID o, Aud
         gControl->io_cycles = gControl->io_cycles + 1;
         gControl->io_frames = gControl->io_frames + frames;
 #endif
-    } else if (op == kAudioServerPlugInIOOperationReadInput && stream == kMicIn) {
+    } else if (op == kAudioServerPlugInIOOperationReadInput && stream == kCodecIn) {
         Float32 *dst = main;
         uint64_t t = (uint64_t)info->mInputTime.mSampleTime;
         const uint64_t captured = gControl->in_frames;
         for (UInt32 i = 0; i < frames; ++i, ++t)
-            dst[i] = t < captured ? switch_audio_s32_to_float(gIn[t % SWITCH_AUDIO_RING_FRAMES]) : 0.0f;
+            dst[i] = t < captured ? switch_audio_s32_to_float(gIn[t % SWITCH_AUDIO_IN_RING_FRAMES]) : 0.0f;
     }
     return 0;
 }

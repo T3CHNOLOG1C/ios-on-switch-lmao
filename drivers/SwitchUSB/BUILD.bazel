@@ -101,6 +101,7 @@ kernel_driver(
         "drivers/TegraI2C",
         "drivers/TegraSMMU",
         "kits/SwitchCAR",
+        "kits/SwitchRefusal",
     ],
     late = [
         "SwitchXUDC.cpp",
@@ -125,6 +126,9 @@ kernel_driver(
         "com.apple.driver.usb.AppleUSBXHCI",
         "com.apple.iokit.IOAccessoryManager",
         "com.apple.iokit.IOPortFamily",
+        # The host stack's packet capture (usbdump, PacketLogger); it matches AppleUSBHostResources, so it loads with
+        # the host.
+        "com.apple.driver.usb.AppleUSBHostPacketFilter",
         # ... and the class drivers: hubs, composite devices, USB audio, HID (keyboard, mouse) and mass storage with its
         # SCSI layers and IOPCIFamily (one pointer).
         "com.apple.driver.usb.AppleUSBHub",
@@ -135,6 +139,22 @@ kernel_driver(
         "com.apple.iokit.IOSCSIArchitectureModelFamily",
         "com.apple.iokit.IOSCSIBlockCommandsDevice",
         "com.apple.iokit.IOPCIFamily",
+        # Mass storage as J120 has it: Apple's SD card readers, the bridges that need their own interface nub, the
+        # codeless USB and SCSI quirk tables, and the file systems Files mounts an external drive with (lifs is the
+        # kernel side of userfsd's FAT and exFAT; HFS+ is a kext only up to iOS 17).
+        "com.apple.driver.AppleUSBCardReader",
+        "com.apple.driver.AppleUSBMassStorageInterfaceNub",
+        "com.apple.driver.USBStorageDeviceSpecifics",
+        "com.apple.driver.SCSIDeviceSpecifics",
+        "com.apple.filesystems.lifs",
+        "com.apple.filesystems.hfs.kext",
+        # USB serial: CDC-ACM modems and boards (/dev/cu.usbmodem*) and their families. On iOS 17 usb.networking needs
+        # no IONetworkingFamily.
+        "com.apple.driver.usb.cdc",
+        "com.apple.driver.usb.cdc.acm",
+        "com.apple.driver.usb.serial",
+        "com.apple.driver.usb.networking",
+        "com.apple.iokit.IOSerialFamily",
         # Codeless kexts, personalities only, in every iPad's boot catalogue: IOUSBHostHIDDevice on every HID interface
         # (IOUSBHostHIDDevice's own personality takes boot keyboards only) and IOHIDFamily's IOHIDEventDriver for
         # keyboards, pointers, consumer and system control. Without them a HID device enumerates and sends nothing.
@@ -171,12 +191,11 @@ kernel_driver(
     # - AppleUSBHostPlatformProperties: codeless, no personalities (the planner cannot carry it); no pointers;
     # - AppleOnboardSerial would pull IOSkywalkFamily and IONetworkingFamily, whose classes SwitchWLAN defines natively;
     #   its one site is OSDynamicCast(AppleOnboardSerial, provider) in the serial-accessory port's start
-    #   (fn 0xfffffff005cc3f0c), whose NULL path is a logged failure return; IOSerialFamily: no pointers.
+    #   (fn 0xfffffff005cc3f0c), whose NULL path is a logged failure return.
     prelink_cuts = [
         "com.apple.iokit.IOUSBHostFamily=com.apple.driver.AppleSMC=1",
         "com.apple.iokit.IOUSBHostFamily=com.apple.driver.usb.AppleUSBHostPlatformProperties=0",
         "com.apple.iokit.IOAccessoryManager=com.apple.driver.AppleOnboardSerial=1",
-        "com.apple.iokit.IOAccessoryManager=com.apple.iokit.IOSerialFamily=0",
     ],
     # Personalities kept out of the boot catalogue so the USB host stack does not load at every boot (they match
     # IOResources); SwitchXHCI adds AppleUSBHostResources and IOUSBMassStorageResource back when the host comes up.

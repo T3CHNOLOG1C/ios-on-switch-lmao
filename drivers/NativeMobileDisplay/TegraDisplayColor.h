@@ -36,6 +36,9 @@ public:
     IOReturn setAccessibilityScale(uint32_t scale);
     void frameInfoNotify(void *client, bool enable);
 
+    // Under the gate: a blank swap's black, from the next frame on, and its end at the first flip latched after it.
+    void setBlank(bool blank);
+
     // DC A's frame end: the filter (primary interrupt context) writes changed tables, the action (work-loop gate) moves
     // the enable bit. A change holds the frame end (native_legacy_frame_end_hold) until both are done.
     void frameEndFilter();
@@ -60,7 +63,8 @@ private:
     uint32_t generation = 0;
     uint32_t frameInfoClients = 0;
     bool pendingDirty = false, activeValid = false, hwEnabled = false;
-    bool holding = false;  // a frame-end hold out until the change has reached DC A
+    bool holding = false;    // a frame-end hold out until the change has reached DC A
+    bool announced = false;  // the last enable was logged (a blank alone is not)
     switch_color::Inputs inputs;
     uint32_t gammaTable[switch_color::kGammaWords];
     switch_color::Tables pending, active;

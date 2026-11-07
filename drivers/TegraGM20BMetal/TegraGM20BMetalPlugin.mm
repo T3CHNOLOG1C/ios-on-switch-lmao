@@ -56,6 +56,7 @@
 #include <initializer_list>
 #include <mutex>
 #include <dlfcn.h>
+#include <notify.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <objc/runtime.h>
@@ -404,6 +405,152 @@ void observeDisplayLinkRates()
     }
 }
 
+// r31-rawds: what makes WidgetRenderer redraw (a steady 20 commits/s on the Home Screen, each a Core Animation transaction
+// displaying a RenderBox layer: CA::Layer::layout_and_display_if_needed in the commit stack, with no display link rate asked
+// for). In WidgetRenderer_* processes, each distinct caller (image+offset) of -[CALayer setNeedsDisplay] with the layer's class,
+// and each display link made with the target's class and selector, once, up to 8 lines in all.
+using SetNeedsDisplay = void (*)(id, SEL);
+using MakeDisplayLink = id (*)(id, SEL, id, SEL);
+SetNeedsDisplay gSetNeedsDisplay;
+MakeDisplayLink gMakeDisplayLink;
+
+bool firstRedrawCause(uint64_t key)
+{
+    static std::mutex lock;
+    static uint64_t seen[8];
+    static unsigned count;
+    std::lock_guard<std::mutex> guard(lock);
+    for (unsigned i = 0; i < count; i++)
+        if (seen[i] == key)
+            return false;
+    if (count == 8)
+        return false;
+    seen[count++] = key;
+    return true;
+}
+
+void observedSetNeedsDisplay(id layer, SEL cmd)
+{
+    const void *pc = __builtin_return_address(0);
+    Class cls = object_getClass(layer);
+    if (firstRedrawCause((uint64_t)(uintptr_t)pc ^ ((uint64_t)(uintptr_t)cls << 1))) {
+        char who[128];
+        callerName(pc, who, sizeof who);
+        os_log(logger(), "TegraGM20BMetal: %{public}s setNeedsDisplay of a %{public}s from %{public}s", getprogname(),
+               class_getName(cls), who);
+    }
+    gSetNeedsDisplay(layer, cmd);
+}
+
+id observedMakeDisplayLink(id cls, SEL cmd, id target, SEL selector)
+{
+    const void *pc = __builtin_return_address(0);
+    if (firstRedrawCause((uint64_t)(uintptr_t)selector ^ ((uint64_t)(uintptr_t)object_getClass(target) << 1) ^ 1)) {
+        char who[128];
+        callerName(pc, who, sizeof who);
+        os_log(logger(), "TegraGM20BMetal: %{public}s display link to -[%{public}s %{public}s] from %{public}s",
+               getprogname(), class_getName(object_getClass(target)), sel_getName(selector), who);
+    }
+    return gMakeDisplayLink(cls, cmd, target, selector);
+}
+
+void observeRedrawCauses()
+{
+    static std::atomic<bool> done;
+    if (strncmp(getprogname(), "WidgetRenderer", 14) || done.exchange(true))
+        return;
+    if (Method m = class_getInstanceMethod(objc_getClass("CALayer"), sel_registerName("setNeedsDisplay"))) {
+        gSetNeedsDisplay = (SetNeedsDisplay)method_getImplementation(m);
+        method_setImplementation(m, (IMP)observedSetNeedsDisplay);
+    }
+    if (Method m =
+            class_getClassMethod(objc_getClass("CADisplayLink"), sel_registerName("displayLinkWithTarget:selector:"))) {
+        gMakeDisplayLink = (MakeDisplayLink)method_getImplementation(m);
+        method_setImplementation(m, (IMP)observedMakeDisplayLink);
+    }
+}
+
+// r31-rawds: how this GPU rounds a float fragment into an RGBA16Float target (the frontend's RGB8_444_2P stand-in, whose store
+// takes Metal's round-to-nearest-even half of each channel). On com.brunostjohn.switch.debug.rf16-rounding a WidgetRenderer_*
+// process draws four floats into a 4x1 RGBA16Float target through its device and logs the halves it holds ("rf16" category):
+// just above, on and just below the midpoint of 0x37ff and 0x3800, and on the midpoint of 0x3800 and 0x3801. Nearest even:
+// 3800 3800 37ff 3800; toward zero: 37ff 37ff 37ff 3800; ties away: 3800 3800 37ff 3801.
+void checkRf16Rounding()
+{
+    static os_log_t log = os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "rf16");
+    id<MTLDevice> device = MTLCreateSystemDefaultDevice();
+    NSString *source = @"#include <metal_stdlib>\nusing namespace metal;\n"
+                       @"struct V { float4 p [[position]]; };\n"
+                       @"vertex V cover(uint i [[vertex_id]]) { float2 c = float2((i << 1) & 2, i & 2); V v;"
+                       @" v.p = float4(c * 2 - 1, 0, 1); return v; }\n"
+                       @"fragment float4 values(V in [[stage_in]], constant float4 *k [[buffer(0)]]) {"
+                       @" return k[uint(in.p.x)]; }\n";
+    NSError *error = nil;
+    id<MTLLibrary> library = [device newLibraryWithSource:source options:nil error:&error];
+    MTLRenderPipelineDescriptor *d = [MTLRenderPipelineDescriptor new];
+    d.vertexFunction = [library newFunctionWithName:@"cover"];
+    d.fragmentFunction = [library newFunctionWithName:@"values"];
+    d.colorAttachments[0].pixelFormat = MTLPixelFormatRGBA16Float;
+    id<MTLRenderPipelineState> state = library ? [device newRenderPipelineStateWithDescriptor:d error:&error] : nil;
+    MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA16Float
+                                                                                  width:4
+                                                                                 height:1
+                                                                              mipmapped:NO];
+    td.usage = MTLTextureUsageRenderTarget;
+    td.storageMode = MTLStorageModePrivate;
+    id<MTLTexture> target = [device newTextureWithDescriptor:td];
+    id<MTLBuffer> out = [device newBufferWithLength:32 options:MTLResourceStorageModeShared];
+    if (!state || !target || !out) {
+        os_log_error(log, "TegraGM20BMetal: %{public}s rf16 rounding: no state or target (%{public}@)", getprogname(),
+                     error.localizedDescription);
+        return;
+    }
+    const uint32_t bits[4] = {0x3efff001u, 0x3efff000u, 0x3effefffu, 0x3f001000u};
+    float values[16] = {};
+    for (int i = 0; i < 4; i++)
+        for (int c = 0; c < 4; c++)
+            memcpy(&values[4 * i + c], &bits[i], 4);
+    id<MTLCommandQueue> queue = [device newCommandQueue];
+    id<MTLCommandBuffer> cb = [queue commandBuffer];
+    MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
+    pass.colorAttachments[0].texture = target;
+    pass.colorAttachments[0].loadAction = MTLLoadActionClear;
+    pass.colorAttachments[0].storeAction = MTLStoreActionStore;
+    id<MTLRenderCommandEncoder> render = [cb renderCommandEncoderWithDescriptor:pass];
+    [render setRenderPipelineState:state];
+    [render setFragmentBytes:values length:sizeof values atIndex:0];
+    [render drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+    [render endEncoding];
+    id<MTLBlitCommandEncoder> blit = [cb blitCommandEncoder];
+    [blit copyFromTexture:target
+                     sourceSlice:0
+                     sourceLevel:0
+                    sourceOrigin:MTLOriginMake(0, 0, 0)
+                      sourceSize:MTLSizeMake(4, 1, 1)
+                        toBuffer:out
+               destinationOffset:0
+          destinationBytesPerRow:32
+        destinationBytesPerImage:32];
+    [blit endEncoding];
+    [cb commit];
+    [cb waitUntilCompleted];
+    const uint16_t *h = static_cast<const uint16_t *>(out.contents);
+    os_log(log, "TegraGM20BMetal: %{public}s rf16 rounding: %04x %04x %04x %04x (nearest even 3800 3800 37ff 3800)",
+           getprogname(), h[0], h[4], h[8], h[12]);
+}
+
+void observeRf16Request()
+{
+    static std::atomic<bool> done;
+    if (strncmp(getprogname(), "WidgetRenderer", 14) || done.exchange(true))
+        return;
+    int token;
+    notify_register_dispatch("com.brunostjohn.switch.debug.rf16-rounding", &token,
+                             dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^(int) {
+                                 checkRf16Rounding();
+                             });
+}
+
 // The frontend's rates line, every 5 s while the device works (it says nothing when idle). r16-idle: with a whole
 // interval of leeway, so the timer rides a wakeup the process or the kernel takes anyway instead of waking every
 // Metal process every 5 s; both rates functions measure their own window, so a late tick only makes a longer one.
@@ -412,6 +559,8 @@ void startRates()
     if (!knobOn("TEGRA_M2V_TELEMETRY", true))
         return;
     observeDisplayLinkRates();
+    observeRedrawCauses();
+    observeRf16Request();
     static dispatch_source_t timer;
     timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_global_queue(QOS_CLASS_UTILITY, 0));
     dispatch_source_set_timer(timer, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC), 5 * NSEC_PER_SEC,

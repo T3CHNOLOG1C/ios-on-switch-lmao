@@ -88,10 +88,12 @@ IOReturn ioreturn(int err)
     }
 }
 
+#if TEGRA_NVJPG_STATS
 // Stats for the unified log: one line per 5 s window with work (boot console stays quiet).
 struct {
     uint64_t windowStart, decodes, refused, failed, engineUs, cpuUs, pixels, bytes;
 } gStats;
+#endif
 
 IOLock *gStatsLock;
 bool gFirstLogged;
@@ -99,12 +101,15 @@ bool gFirstLogged;
 // `why` is a literal: it is the refusal's key as well as its text.
 void refused(const char *why)
 {
+#if TEGRA_NVJPG_STATS
     IOLockLock(gStatsLock);
     gStats.refused++;
     IOLockUnlock(gStatsLock);
+#endif
     switch_refusal("TegraNVJPG", why, "decode refused, the caller decodes on the CPU: %s", why);
 }
 
+#if TEGRA_NVJPG_STATS
 void statsLine()
 {
     IOLockLock(gStatsLock);
@@ -127,6 +132,7 @@ void statsLine()
     IOLockUnlock(gStatsLock);
     os_log(OS_LOG_DEFAULT, "%s", line);
 }
+#endif
 
 struct Job {
     Job *next;
@@ -259,6 +265,7 @@ void engineThread(void *, wait_result_t)
         IOLockUnlock(gQueueLock);
         job->status = runJob(job);
         IOLockLock(gStatsLock);
+#if TEGRA_NVJPG_STATS
         gStats.decodes++;
         if (job->status)
             gStats.failed++;
@@ -266,6 +273,7 @@ void engineThread(void *, wait_result_t)
         gStats.cpuUs += job->cpuUs;
         gStats.pixels += (uint64_t)job->plan.extent.width * job->plan.extent.height;
         gStats.bytes += job->engine.setup.bitstream_size;
+#endif
         const bool first = !job->status && !gFirstLogged;
         gFirstLogged = gFirstLogged || first;
         IOLockUnlock(gStatsLock);
@@ -275,7 +283,9 @@ void engineThread(void *, wait_result_t)
                   (unsigned)job->engine.setup.frame_width, (unsigned)job->engine.setup.frame_height,
                   job->plan.extent.width, job->plan.extent.height, job->plan.target.format,
                   1u << job->plan.target.scale, job->engineUs, job->cycles, job->cpuUs);
+#if TEGRA_NVJPG_STATS
         statsLine();
+#endif
         finish(job);
     }
 }
@@ -530,7 +540,9 @@ IOReturn AppleJPEGDriverUserClient::decode(const void *in, uint32_t inSize, void
     if (ret) {
         if (why)
             refused(why);
+#if TEGRA_NVJPG_STATS
         statsLine();
+#endif
         if (job)
             dropJob(job);
         IOFreeData(req, sizeof(*req));

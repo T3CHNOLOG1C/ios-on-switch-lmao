@@ -439,6 +439,7 @@ extern "C" int switch_sensors_start(void)
             ++published;
     }
     switch_sensors_note();  // a waiting watchdogd re-checks now that the services exist
+    (void)switch_virtual_temps_start();
     if (published != SWITCH_SENSOR_COUNT)
         IOLog("SwitchSensors: %u of %u thermalmonitord sensors published\n", published, SWITCH_SENSOR_COUNT);
     if (!published)

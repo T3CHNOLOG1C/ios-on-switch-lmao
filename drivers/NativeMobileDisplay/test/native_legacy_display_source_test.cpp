@@ -260,6 +260,16 @@ TEST(FrameEndSource, MaskedWhileNothingWaits)
     EXPECT_THAT(method(source, "    void maskIdleFrameEnd()"), HasSubstr("if (!__atomic_load_n(&gFrameEndHolds"));
 }
 
+// A blank swap blacks the head through the colour unit only while no flip is out, and the first flip latched after it
+// ends the black: an older flip's latch must never show a frame the blank swap replaced.
+TEST(BlankSource, ColourBlankEndsAtTheNextLatch)
+{
+    EXPECT_THAT(display(), HasSubstr("rotated && rotationLatched && doubleBuffer && ring.pending == kNoBuffer &&"));
+    EXPECT_THAT(
+        method(display(), "    void flipLatched()"),
+        HasSubstr("{\n        if (blanked) {\n            blanked = false;\n            color->setBlank(false);"));
+}
+
 // iOS 17's layout of the original framebuffer is the one this driver always ran on: its table must keep these values, or
 // an iOS 17 kernel would read the swap queue and the swap requests somewhere else.
 TEST(LegacyFramebufferTable, Ios17ValuesStayPut)

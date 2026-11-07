@@ -193,11 +193,17 @@ bool switchxhci_start(char *why, size_t whySize)
         return false;
     // The host stack's IOResources personalities, kept out of the boot-time catalogue (emit_prelink.py
     // DEFERRED_PERSONALITIES): AppleUSBHostResources (AppleUSBHostController::start waits for it) and
-    // IOUSBMassStorageResource, as their kexts' Info.plist has them.
-    if (!xhost::addResourcePersonality("AppleUSBHostResources", "AppleUSBHostResources",
-                                       "com.apple.iokit.IOUSBHostFamily") ||
-        !xhost::addResourcePersonality("IOUSBMassStorageResource", "IOUSBMassStorageResource",
-                                       "com.apple.iokit.IOUSBMassStorageDriver")) {
+    // IOUSBMassStorageResource, as their kexts' Info.plist has them. iOS 27's packet capture matches IOResources too
+    // (iOS 17's matches AppleUSBHostResources, so it follows that one).
+    bool resources = xhost::addResourcePersonality("AppleUSBHostResources", "AppleUSBHostResources",
+                                                   "com.apple.iokit.IOUSBHostFamily") &&
+                     xhost::addResourcePersonality("IOUSBMassStorageResource", "IOUSBMassStorageResource",
+                                                   "com.apple.iokit.IOUSBMassStorageDriver");
+#if XNU_12377_121_6
+    resources = resources && xhost::addResourcePersonality("AppleUSBHostPacketFilter", "AppleUSBHostPacketFilter",
+                                                           "com.apple.driver.usb.AppleUSBHostPacketFilter", "IOBSD");
+#endif
+    if (!resources) {
         snprintf(why, whySize, "IOCatalogue refused the USB host resource personalities");
         return false;
     }

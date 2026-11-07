@@ -269,3 +269,20 @@ TEST(Gamma, IdentityTableIsIdentityAndATableApplies)
     EXPECT_EQ(scan(tables, {128, 128, 128}).r, 100u);
     EXPECT_EQ(scan(tables, {127, 127, 127}).r, 127u);
 }
+
+TEST(Blank, BlackWhateverTheWindowsAndTheFilters)
+{
+    for (uint32_t mode : {kRemapNormal, kRemapInverted, kRemapGrayscaleInverted}) {
+        Inputs in = defaults();
+        in.remapMode = mode;
+        in.blank = true;
+        Tables tables;
+        build(in, tables);
+        EXPECT_TRUE(tables.enabled);
+        EXPECT_TRUE(tables.reasons & kReasonBlank);
+        for (uint32_t v = 0; v < 256; v += 15) {
+            const Rgb out = scan(tables, {v, 255 - v, v / 2});
+            EXPECT_TRUE(out.r == 0 && out.g == 0 && out.b == 0) << "mode " << mode << " value " << v;
+        }
+    }
+}

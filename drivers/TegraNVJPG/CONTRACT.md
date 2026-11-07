@@ -248,8 +248,8 @@ also in the boot console).
 2. **The service**: no `JPEGH1`-registered hardware JPEG encoder (VideoToolbox lists only software 'jpeg' encoders),
    and `ioreg`-style property dumps (if available) show AppleJPEGNumCores 1 on the TegraNVJPG entry.
 3. **Use**: `TegraNVJPG: first hardware decode done: WxH to wxh (format F, 1/n) in E us engine (C cycles), P us CPU`
-   once, at the first decode; then every 5 s with work an os_log line `TegraNVJPG: 5s decodes=N refused=R failed=X
-   engine=..us/decode cpu=..us/decode pixels=..K/decode scan=..KB/decode`.
+   once, at the first decode; then (debug kernels) every 5 s with work an os_log line `TegraNVJPG: 5s decodes=N
+   refused=R failed=X engine=..us/decode cpu=..us/decode pixels=..K/decode scan=..KB/decode`.
    Each kind of refusal is one error line per process (kits/SwitchRefusal, subsystem com.brunostjohn.switch.refusal,
    category TegraNVJPG): `<process>[<pid>] <why>: decode refused, the caller decodes on the CPU: <why>`.
    From the caller's side, CMPhoto logs `JPEGDecompressSurface : Picture decode failed: %08x` for a refused or failed

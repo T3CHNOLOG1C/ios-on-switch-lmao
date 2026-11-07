@@ -13,10 +13,10 @@
 #include "SwitchMonotonicClock.h"
 #include <IOKit/IOLib.h>
 #include <kern/clock.h>
-#include <sys/sysctl.h>
 #include "../../kits/SwitchCAR/SwitchCAR.h"
 #include "../../kits/SwitchCAR/SwitchPMC.h"
 #include "../../kits/SwitchMMIO/SwitchMMIOKernel.h"
+#include "../../kits/SwitchSysctl/SwitchSysctl.h"
 
 namespace {
 enum : uint32_t {
@@ -90,19 +90,6 @@ int monotonicOffset SYSCTL_HANDLER_ARGS
 }
 
 struct sysctl_oid gOids[4];
-
-void describe(struct sysctl_oid *oid, const char *name, int type, sysctl_handler_t handler, const char *format,
-              const char *description)
-{
-    oid->oid_parent = &sysctl__kern_children;
-    oid->oid_number = OID_AUTO;
-    oid->oid_kind = type | CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED | CTLFLAG_OID2;
-    oid->oid_name = name;
-    oid->oid_handler = handler;
-    oid->oid_fmt = format;
-    oid->oid_descr = description;
-    oid->oid_version = SYSCTL_OID_VERSION;
-}
 }  // namespace
 
 extern "C" bool switch_monotonic_clock_start(void)
@@ -130,10 +117,15 @@ extern "C" bool switch_monotonic_clock_start(void)
     if (first.monotonicUsec < machNsec / 1000)
         gBaseUsec = machNsec / 1000 - first.monotonicUsec + kUsecPerSec;
 
-    describe(&gOids[0], "monotonicclock", CTLTYPE_INT, monotonicSeconds, "IU", "elapsed time");
-    describe(&gOids[1], "monotonicclock_usecs", CTLTYPE_QUAD, monotonicUsecs, "Q", "elapsed time");
-    describe(&gOids[2], "monotonicclock_rate_usecs", CTLTYPE_QUAD, monotonicRate, "Q", "elapsed time rate");
-    describe(&gOids[3], "monotoniclock_offset_usecs", CTLTYPE_QUAD, monotonicOffset, "Q", "calendar time offset");
+    constexpr unsigned kRead = CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED;
+    switch_sysctl_oid(&gOids[0], &sysctl__kern_children, "monotonicclock", static_cast<int>(CTLTYPE_INT | kRead),
+                      monotonicSeconds, "IU", "elapsed time");
+    switch_sysctl_oid(&gOids[1], &sysctl__kern_children, "monotonicclock_usecs", static_cast<int>(CTLTYPE_QUAD | kRead),
+                      monotonicUsecs, "Q", "elapsed time");
+    switch_sysctl_oid(&gOids[2], &sysctl__kern_children, "monotonicclock_rate_usecs",
+                      static_cast<int>(CTLTYPE_QUAD | kRead), monotonicRate, "Q", "elapsed time rate");
+    switch_sysctl_oid(&gOids[3], &sysctl__kern_children, "monotoniclock_offset_usecs",
+                      static_cast<int>(CTLTYPE_QUAD | kRead), monotonicOffset, "Q", "calendar time offset");
     for (struct sysctl_oid &oid : gOids)
         sysctl_register_oid(&oid);
 #if DEVELOPMENT || DEBUG

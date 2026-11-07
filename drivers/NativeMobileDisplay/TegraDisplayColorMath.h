@@ -48,6 +48,7 @@ struct Inputs {
     uint32_t accessibilityScale = kUnity16;  // SetParameter 3, 16.16: Reduce White Point
     uint32_t remapMode = kRemapNormal;
     uint32_t contrast = kUnity16;  // SetContrast, 16.16; 0 is neutral
+    bool blank = false;            // a blank swap: the head shows black whatever the windows scan
     uint8_t gamma[256];            // the gamma table at each 8-bit output
 };
 
@@ -58,6 +59,7 @@ enum : uint32_t {
     kReasonRemap = 1u << 2,
     kReasonContrast = 1u << 3,
     kReasonGamma = 1u << 4,
+    kReasonBlank = 1u << 5,
 };
 
 struct Tables {
@@ -225,6 +227,12 @@ inline void build(const Inputs &in, Tables &out)
                   (scale < uint64_t(kOne) ? kReasonScale : 0) | (inverted || grayscale ? kReasonRemap : 0) |
                   (contrast ? kReasonContrast : 0) | (gammaTable ? kReasonGamma : 0);
     out.enabled = !identityCsc || inverted || contrast || gammaTable;
+    if (in.blank) {
+        for (unsigned k = 0; k < kLut2Entries; ++k)
+            out.lut2[k] = 0;
+        out.reasons |= kReasonBlank;
+        out.enabled = true;
+    }
 }
 
 // LUT2's bucket for a 12-bit linear value: one per value below 512, one per eight above.

@@ -72,6 +72,7 @@
 #include "../TegraBPMP/TegraBPMP.h"
 #include "../TegraI2C/TegraI2C.h"
 #include "SwitchClocks.h"
+#include "SwitchEMC.h"
 #include "SwitchMAX77620.h"
 #include "SwitchMonotonicClock.h"
 #include "SwitchPower.h"
@@ -744,8 +745,10 @@ extern "C" int switch_pmic_start(void)
         char line[256];
         const int emcErr = tegra_bpmp_emc_boot(emcKHz, line, sizeof(line));
         IOLog("SwitchEMC: %s\n", line);
-        if (!emcErr)
+        if (!emcErr) {
             reportClocks("after EMC");
+            switch_emc_start();
+        }
     }
     if (switch_thermal_start())
         IOLog("SwitchPMIC: SwitchThermal did not start, the board thread retries\n");

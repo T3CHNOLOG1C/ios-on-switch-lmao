@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // Tegra210 VIC (Video Image Compositor 4.0, a falcon behind host1x): bring-up, its SMMU domain, the job engine and
 // sleep. tegra_vic_probe() runs the whole bring-up by default on its own thread:
-//   V0  NVDEC's bring-up has ended (its 48 MiB arena goes first), host1x is up, and VIC's kernel buffers are allocated:
-//       the firmware image, an arena for the configuration slot, the filter structure and the self-test surfaces, and
-//       the SMMU page directory with its page tables
+//   V0  host1x is up, and VIC's kernel buffers are allocated: the firmware image, an arena for the configuration slot,
+//       the filter structure and the self-test surfaces, and the SMMU page directory with its page tables
 //   V1  VIC's SMMU domain (ASID 127 for the "vic" swgroup: the kernel buffers 1:1, two empty surface windows), power
 //       partition 23, clock (PLLP, 408 MHz), reset, the VIC MBIST workaround, falcon firmware loaded and started
 //   V2  proof of life through host1x channel 0 in VIC's class: an IMMEDIATE syncpoint increment (the engine's host
@@ -60,7 +59,6 @@
 #include "../../kits/SwitchTime/SwitchTime.h"
 
 extern "C" {
-int tegra_nvdec_await(uint32_t timeoutMs);
 extern const uint8_t tegra_vic_fw_start[] __asm__("_tegra_vic_fw_start");
 extern const uint8_t tegra_vic_fw_end[] __asm__("_tegra_vic_fw_end");
 }
@@ -73,7 +71,6 @@ constexpr uint64_t kMcPA = 0x70019000;
 constexpr uint32_t kPartition = 23;  // TEGRA_POWERGATE_VIC
 constexpr unsigned kClock = 178;     // TEGRA210_CLK_VIC03: CAR bank X bit 18, also its reset
 constexpr uint64_t kArenaBytes = 1ull << 20;
-constexpr uint32_t kNvdecWaitMs = 20000;
 constexpr uint32_t kAsid = TEGRA_SMMU_ASID_VIC;
 
 enum : uint32_t {  // clock and reset controller
@@ -394,8 +391,6 @@ void giveBack()
 
 void bringUp(void *, wait_result_t)
 {
-    // NVDEC first, whatever it decides: its 48 MiB arena is reserved while memory is least fragmented.
-    (void)tegra_nvdec_await(kNvdecWaitMs);
     if (tegra_host1x_start()) {
         IOLog("TegraVIC: V0 FAIL host1x is not up (see the TegraHost1x line)\n");
         return;

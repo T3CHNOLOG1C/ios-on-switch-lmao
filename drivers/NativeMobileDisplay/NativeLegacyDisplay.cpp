@@ -560,6 +560,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     // The colour unit's state (tables, matrices, the pending change) is kept out of the object: inside, it took the instance
     // past the 16 KiB a kalloc_type class may have (KALLOC_SAFE_ALLOC_SIZE). Made in start, freed in free.
     TegraDisplayColor *color = nullptr;
+    bool blanked = false;  // a blank swap's black is the colour unit's until the next flip latches
 
     // Every request the validator accepted and the family has not retired yet. A client may submit swap N+1 while swap N is still on the GPU
     // (int-131: swap 3 was validated during swap 2's GPU copy and one remembered pointer lost swap 2, which then never retired and left
@@ -2761,6 +2762,10 @@ private:
     // surface may go.
     void flipLatched()
     {
+        if (blanked) {
+            blanked = false;
+            color->setBlank(false);
+        }
         if (const int held = ring.flipHeld(); held != kNoBuffer)
             writeFlip(held);
         // r16-idle: nothing is out any more, so the deadline has nothing to check; left armed it woke the CPU 100 ms after
@@ -3503,18 +3508,30 @@ public:
                 return;
             // Once window A is rotated it reads the whole block-linear extent, which reaches past the pitch frame (block row 5). While
             // it scans the console tape, a blank frame leaves it as a first client frame does: block-linear, through startRotation.
+            // Rotated and double-buffered with no flip out, the colour unit blacks the head from the next frame (no frame is
+            // filled), until the first flip latched after it (flipLatched); with a flip out that flip would end the black
+            // too early, and single-buffered frames never flip.
             const bool block = rotated || tapeAttached;
-            if (block ? !native_legacy_block_fill(reinterpret_cast<volatile void *>(drawSurface()->getVirtualAddress()),
-                                                  drawSurface()->getLength(), 0xff000000U)
-                      : !native_legacy_fill_pixels(reinterpret_cast<volatile void *>(bootMapping->getVirtualAddress()),
-                                                   bootMapping->getLength(), blank.v_rowBytes, (uint32_t)blank.v_width,
-                                                   (uint32_t)blank.v_height, 0xff000000U)) {
+            const bool colourBlank = rotated && rotationLatched && doubleBuffer && ring.pending == kNoBuffer &&
+                                     ring.held == kNoBuffer && ring.drawing == kNoBuffer &&
+                                     ring.superseded == kNoBuffer;
+            if (colourBlank) {
+                blanked = true;
+                color->setBlank(true);
+                blankLength = 0;
+            } else if (block ? !native_legacy_block_fill(
+                                   reinterpret_cast<volatile void *>(drawSurface()->getVirtualAddress()),
+                                   drawSurface()->getLength(), 0xff000000U)
+                             : !native_legacy_fill_pixels(
+                                   reinterpret_cast<volatile void *>(bootMapping->getVirtualAddress()),
+                                   bootMapping->getLength(), blank.v_rowBytes, (uint32_t)blank.v_width,
+                                   (uint32_t)blank.v_height, 0xff000000U)) {
                 native_legacy_transfer_observed(kIOReturnBadArgument, request, 0);
                 return;
             }
             __asm__ volatile("dsb sy" ::: "memory");
             noteTaken(request, kickAt);  // before the flip, which carries it to the present
-            if (block)
+            if (block && !colourBlank)
                 presentBlock();
             transferred = true;
             native_legacy_frame_observed(1, 0, 0, 0, 0, 0);

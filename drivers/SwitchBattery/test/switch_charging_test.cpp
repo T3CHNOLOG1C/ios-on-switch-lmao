@@ -19,6 +19,7 @@
 #include <IOKit/pwr_mgt/IOPMPowerSource.h>
 #include <algorithm>
 #include <cinttypes>
+#include <cstring>
 #include <functional>
 #include <typeinfo>
 #include <gtest/gtest.h>
@@ -41,6 +42,14 @@ extern "C" void switch_sensors_note(void)
 }  // SwitchSensors (SwitchPower.h)
 
 static std::vector<unsigned> gWakeEvents;
+
+// AppleKeyStore's per-console digest (AKSDeviceKey.cpp): a fixed one, so the serial is checked against a known value.
+extern "C" bool native_aks_device_digest(const char *label, uint8_t out[32])
+{
+    for (unsigned i = 0; i < 32; ++i)
+        out[i] = static_cast<uint8_t>(i * 37 + strlen(label));
+    return true;
+}
 
 extern "C" void switch_wake_event(unsigned source)
 {
@@ -650,6 +659,14 @@ static void nintendoBoot()
               ps->adapter.numbers["AdapterVoltage"] == 15000 && ps->adapter.numbers["Current"] == 1200 &&
               ps->adapter.numbers["Watts"] == 18,
           "adapter details 15 V 1.2 A 18 W");
+    {
+        // 17 characters of Apple's serial alphabet from the digest's first 17 bytes, digit or letter but I and O.
+        static const char kAlphabet[] = "0123456789ABCDEFGHJKLMNPQRSTUVWXYZ";
+        std::string expected;
+        for (unsigned i = 0; i < 17; ++i)
+            expected += kAlphabet[static_cast<uint8_t>(i * 37 + strlen("Switch battery serial")) % 34];
+        check(ps && ps->strings[kIOPMPSSerialKey] == expected, "battery serial " + (ps ? ps->strings["Serial"] : ""));
+    }
     check(gGauge.reg[0x02] == (31u << 8 | 29u),
           "temperature window [29, 31] (1 C around, within [17, 51]): " + hex(gGauge.reg[0x02]));
     int milliC = 0;
