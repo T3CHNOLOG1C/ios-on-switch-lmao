@@ -5,7 +5,6 @@
 #include <stdarg.h>
 
 #ifdef KERNEL
-#include <kern/sched_prim.h>
 #include <libkern/libkern.h>
 #include <sys/proc.h>
 #else
@@ -66,13 +65,9 @@ void switch_refusal_log(const char *domain, const char *reason_key, const char *
     char process[32];
     proc_selfname(process, sizeof(process));
     const int pid = proc_selfpid();
-    if (preemption_enabled()) {
-        os_log_error(os_log_create(SWITCH_REFUSAL_SUBSYSTEM, domain), "%{public}s[%d] %{public}s: %{public}s", process,
-                     pid, reason_key, text);
-    } else {
-        os_log_error(OS_LOG_DEFAULT, "%{public}s: %{public}s[%d] %{public}s: %{public}s", domain, process, pid,
-                     reason_key, text);
-    }
+    // os_log_create can block, and a refusal may be logged with preemption off, so the kernel logs to the default log.
+    os_log_error(OS_LOG_DEFAULT, "%{public}s: %{public}s[%d] %{public}s: %{public}s", domain, process, pid, reason_key,
+                 text);
 }
 #else
 void switch_refusal_log(const char *domain, const char *reason_key, const char *text)
