@@ -26,9 +26,17 @@ fails unless macOS attaches it and `fsck_apfs` passes it.
 Each stage is kept with a key of what it was made from (`tools/install/keys.py`): compose, populate, pack, and the
 head of `.001` (the manifest and boot files). An unchanged rerun computes the keys and stops. New boot files rewrite
 only the head, and a changed overlay repopulates a clone of the kept container, `composed.img` in
-`~/Library/Caches/switch-ios/image` (`image-<build>` for other builds). Populating sets the owners of iOS's files, which
-needs root, so a run that populates asks for your password once. `//:image_to_card` writes only what the card lacks,
-judged by the manifests' chunk hashes, so a kernel-only change rewrites the head of `.001` and nothing else.
+`~/Library/Caches/switch-ios/image` (`image-<build>` for other builds). Nothing runs as root: populate writes iOS's
+files as you and sets their owners in the detached image. For iOS 27, translating each volume and rebuilding the two
+cryptexes are Bazel actions, so a rerun after a later failure translates nothing. Their outputs stay in the output
+base, out of the shared disk cache, because the System cryptex's alone take several GB; `bazel clean` makes them again.
+Each stage measures what it will write from its inputs and refuses to start unless that much is free with 2 GiB to
+spare. A run first detaches whatever an earlier run left attached and deletes its partial files. Files left by older
+runs under sudo belong to root, so it prints the `sudo rm -rf` that removes them.
+
+`//:image_to_card` writes only what the card lacks, judged by the manifests' chunk hashes, so a kernel-only change
+rewrites the head of `.001` and nothing else. Without `--yes` it shows the plan, a new `install-ios.bin` included, and
+writes nothing.
 
 Every install writes a new container with a new Data volume, so nothing from an earlier install survives. The first
 boot takes a few minutes longer while iOS finishes setting itself up behind its own progress bar under the Apple logo.
