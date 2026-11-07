@@ -16,6 +16,8 @@
 #                                       published limits accepted (200000 swaps), the refusals, window B's registers
 #                                       against drm/tegra's formulas, the CSC table, the layer roles, PlaneLatch
 #                                       against a model of DC A with the ARM copy
+#   tegra_display_color_test            TegraDisplayColorMath.h against a model of DC A's CMU: the sRGB tables, bit-exact
+#                                       passthrough, and what each IOMobileFramebuffer colour input programs
 #   display_planes_source_test          the driver and XNU follow those rules (validateSwap, the kick, one
 #                                       STATE_CONTROL pair, retire at the latch, the panic hook, the published limits,
 #                                       backboardd's CA_DISABLE_DETACHED gate), and the plane accessors are TegraVIC's
@@ -65,6 +67,15 @@ host_test(
     srcs = [
         "request_state_test.cpp",
         "//drivers/NativeMobileDisplay:NativeLegacyRequest.h",
+    ],
+)
+
+host_test(
+    name = "tegra_display_color_test",
+    srcs = [
+        "tegra_display_color_test.cpp",
+        "//drivers/NativeMobileDisplay:TegraDisplayColorMath.h",
+        "//drivers/NativeMobileDisplay:TegraDisplayColorTables.h",
     ],
 )
 

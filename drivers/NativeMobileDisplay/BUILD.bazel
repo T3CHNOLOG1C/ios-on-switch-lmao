@@ -33,6 +33,7 @@ kernel_driver(
     name = "NativeLegacyDisplay",
     srcs = [
         "NativeLegacyDisplay.cpp",
+        "TegraDisplayColor.cpp",
         # The display across SC7 (tegra_display_suspend/resume): hekate's cold display init/power-down.
         "TegraDisplayPower.cpp",
         "original-bindings.S",
