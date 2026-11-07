@@ -373,8 +373,9 @@ int tegra_bpmp_sc7_resume(char *line, unsigned long size)
 int tegra_bpmp_emc_rates(unsigned int *khz, unsigned int max)
 {
 	struct mrq_emc_dvfs_table_response table;
-	unsigned int i, n = 0;
-	int err;
+	unsigned int i = 0;
+	unsigned int n = 0;
+	int err = 0;
 
 	if (mailbox_state)
 		return mailbox_state < 0 ? mailbox_state : -ENODEV;
@@ -392,7 +393,7 @@ int tegra_bpmp_emc_rates(unsigned int *khz, unsigned int max)
 int tegra_bpmp_emc_get(unsigned int *khz)
 {
 	s64 now = 0;
-	int err;
+	int err = 0;
 
 	if (mailbox_state)
 		return mailbox_state < 0 ? mailbox_state : -ENODEV;
@@ -405,7 +406,7 @@ int tegra_bpmp_emc_get(unsigned int *khz)
 int tegra_bpmp_emc_set(unsigned int khz, unsigned int *now_khz)
 {
 	s64 after = 0;
-	int err;
+	int err = 0;
 
 	if (mailbox_state)
 		return mailbox_state < 0 ? mailbox_state : -ENODEV;
