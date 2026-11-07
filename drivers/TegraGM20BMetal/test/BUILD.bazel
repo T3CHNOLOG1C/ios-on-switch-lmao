@@ -12,6 +12,8 @@
 #   raw_bounds_test   raw/runtime/raw_bounds.h: a Core Animation draw's pixel box and rectangle from its vertices (against
 #                     a GPU's coverage it is raw/test/boundsoracle.mm's, this Mac's GPU), and raw_region.h: the fetch
 #                     barrier's region test over such draws, and which covers a render area (a clear it makes redundant)
+#   raw_overlap_test  raw/runtime/raw_overlap.h: a fetching draw's triangles in runs that share no pixel (against a GPU's
+#                     coverage it is raw/test/overlaporacle.mm's, this Mac's GPU)
 #
 #   bazel test //drivers/TegraGM20BMetal/test:all
 load("@rules_python//python:py_test.bzl", "py_test")
@@ -84,6 +86,17 @@ host_test(
     srcs = [
         "raw_bounds_test.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_bounds.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_region.h",
+    ],
+    cxx_std = "c++17",
+)
+
+host_test(
+    name = "raw_overlap_test",
+    srcs = [
+        "raw_overlap_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_bounds.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_overlap.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_region.h",
     ],
     cxx_std = "c++17",

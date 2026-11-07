@@ -9,16 +9,19 @@
 // and the power-off clears ONOFFCNFG2 WK_ALARM2 besides); ALARM1 is the wake alarm (SwitchPMIC.cpp). Horizon programs
 // ALARM2 for its own alarms, so a Horizon boot in between leaves no mark of ours; hekate's max77620_rtc_stop_alarm clears
 // only the compare bits and keeps the mark.
-// Debug kernels write marks; every kernel keeps the RTC's update rule (SwitchMAX77620.h).
+// Debug kernels write marks; every kernel keeps the RTC's update rule (SwitchMAX77620.h) and the software thermal
+// shutdown's record (SwitchThermalRecord.h), which the marks give way to once written.
 #include <IOKit/IOLib.h>
 #include <IOKit/IOLocks.h>
 #include <kern/clock.h>
 #include <kern/thread_call.h>
 #include "../../diagnostics/switch/SwitchPowerTrail.h"
 #include "SwitchMAX77620.h"
+#include "SwitchThermalRecord.h"
 
 namespace {
 uint64_t gQuietAt;  // mach_absolute_time() from which the RTC takes register writes and updates again (atomic)
+bool gThermalHeld;  // a thermal shutdown's record is in ALARM2: no mark replaces it (atomic)
 }  // namespace
 
 void max77620::rtcQuiet(bool canSleep)
@@ -104,6 +107,10 @@ uint8_t fieldValue(unsigned field, uint32_t code, uint8_t count)
 // held is off from then on.
 int writeMark(Write put, uint32_t code)
 {
+    if (__atomic_load_n(&gThermalHeld, __ATOMIC_ACQUIRE)) {
+        gWritten = code;  // taken as written, so commitLocked's loop ends
+        return 0;
+    }
     const auto count = static_cast<uint8_t>((gCount + 1u) % 60u);
     const unsigned fields = gWritten == kNoMark ? kTimeRegs : HOUR + 1u;
     int err = 0;
@@ -218,7 +225,7 @@ extern "C" void switch_pmic_mark_now(uint8_t code)
 // ALARM2_DATE alone (1 + the flags), then UDR: the code and the count stay as the last mark left them.
 extern "C" void switch_pmic_flag_now(uint8_t flag)
 {
-    if (!gCall)
+    if (!gCall || __atomic_load_n(&gThermalHeld, __ATOMIC_ACQUIRE))
         return;
     gFlags = static_cast<uint8_t>((unsigned{gFlags} | flag) & 0x3u);
     rtcQuiet(false);
@@ -227,3 +234,66 @@ extern "C" void switch_pmic_flag_now(uint8_t flag)
     rtcUpdated();
 }
 #endif
+
+namespace {
+int updateBits(uint8_t *bits)
+{
+    uint8_t update = 0;
+    const int err = max77620::readByte(max77620::kRtc, max77620::RTC_UPDATE0, &update);
+    *bits = static_cast<uint8_t>(update & ~(unsigned{max77620::kRtcWriteUpdate} | max77620::kRtcReadUpdate));
+    return err;
+}
+
+int writeAlarm2(const uint8_t *fields, unsigned count, uint8_t update)
+{
+    int err = 0;
+    for (unsigned field = 0; !err && field < count; ++field)
+        err = max77620::writeByte(max77620::kRtc, static_cast<uint8_t>(max77620::RTC_ALARM2 + field), fields[field]);
+    if (!err)
+        err = max77620::writeByte(max77620::kRtc, max77620::RTC_UPDATE0, update | max77620::kRtcWriteUpdate);
+    max77620::rtcUpdated();
+    max77620::rtcQuiet(true);
+    return err;
+}
+}  // namespace
+
+extern "C" int switch_pmic_thermal_record(enum switch_thermal_sensor sensor, int millic)
+{
+    uint8_t fields[SWITCH_THERMAL_RECORD_FIELDS], update = 0;
+    switch_thermal_record_encode(sensor, millic, fields);
+    __atomic_store_n(&gThermalHeld, true, __ATOMIC_RELEASE);
+#if DEVELOPMENT || DEBUG
+    // A mark being written now finishes first; none is written after.
+    if (gLock)
+        IOLockLock(gLock);
+#endif
+    max77620::rtcQuiet(true);
+    int err = updateBits(&update);
+    if (!err)
+        err = writeAlarm2(fields, SWITCH_THERMAL_RECORD_FIELDS, update);
+#if DEVELOPMENT || DEBUG
+    if (gLock)
+        IOLockUnlock(gLock);
+#endif
+    return err;
+}
+
+extern "C" enum switch_thermal_sensor switch_pmic_thermal_take(int *millic)
+{
+    uint8_t fields[SWITCH_THERMAL_RECORD_FIELDS] = {}, update = 0;
+    max77620::rtcQuiet(true);
+    int err = updateBits(&update);
+    if (!err) {
+        err = max77620::writeByte(max77620::kRtc, max77620::RTC_UPDATE0, update | max77620::kRtcReadUpdate);
+        max77620::rtcUpdated();
+        max77620::rtcQuiet(true);
+    }
+    if (!err)
+        err = tegra_i2c_read(max77620::kBus, max77620::kRtc, max77620::RTC_ALARM2, fields, sizeof(fields));
+    const enum switch_thermal_sensor sensor = err ? SWITCH_THERMAL_NONE : switch_thermal_record_decode(fields, millic);
+    if (sensor != SWITCH_THERMAL_NONE) {
+        const uint8_t noMagic[max77620::YEAR + 1] = {fields[0], fields[1], fields[2], fields[3], fields[4], 0};
+        (void)writeAlarm2(noMagic, max77620::YEAR + 1, update);
+    }
+    return sensor;
+}

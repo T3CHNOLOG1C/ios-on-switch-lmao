@@ -27,6 +27,7 @@ writes the merged programs.bin, <out>/pack.bin (runtime/raw_pack.h layout), <out
 
 import collections
 import os
+import re
 import struct
 import sys
 
@@ -35,52 +36,24 @@ import layouts
 import packfile
 import probelog
 
+
+def owned_ranges() -> tuple[list[tuple[int, int]], tuple[int, int]]:
+    """Give the methods the raw path owns (runtime/raw_owned.h kOwnedMethods) and the vertex streams' range."""
+    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'runtime', 'raw_owned.h')) as header:
+        text = header.read()
+    pair = r'\{(0x[0-9A-Fa-f]+), (0x[0-9A-Fa-f]+)\}'
+    table = text[text.index('kOwnedMethods[]') : text.index('};', text.index('kOwnedMethods[]'))]
+    streams = re.search(r'kVertexStreams = ' + pair, text)
+    return [(int(a, 16), int(b, 16)) for a, b in re.findall(pair, table)], (int(streams[1], 16), int(streams[2], 16))
+
+
 # Registers the runtime owns (sets per pass, per draw, or once at init with its own addresses): never in a blob or the
 # baseline.
-OWNED = [
-    (0x0000, 0x0200),
-    (0x0800, 0x0A00),
-    (0x0A00, 0x0A18),
-    (0x0C00, 0x0C08),
-    (0x0D6C, 0x0D90),
-    (0x0E00, 0x0E0C),
-    (0x0FE0, 0x0FFC),
-    (0x1970, 0x1974),
-    (0x1644, 0x1648),
-    (0x1118, 0x111C),
-    (0x1434, 0x143C),
-    (0x10F8, 0x10FC),
-    (0x121C, 0x1220),
-    (0x1538, 0x153C),
-    (0x19E0, 0x1A00),
-    (0x1F00, 0x1F80),
-    (0x1608, 0x1610),
-    (0x1614, 0x161C),
-    (0x1574, 0x1580),
-    (0x155C, 0x1568),
-    (0x0F84, 0x0F8C),
-    (0x1B00, 0x1B10),
-    (0x2380, 0x2600),
-    (0x3400, 0x4000),
-    # the depth/stencil target and its clears (the pass's), and the depth/stencil state (the encoder's: raw_zeta.h)
-    (0x0D90, 0x0D94),
-    (0x0DA0, 0x0DA4),
-    (0x0F54, 0x0F60),
-    (0x111C, 0x1120),
-    (0x1208, 0x120C),
-    (0x1228, 0x1234),
-    (0x12CC, 0x12D0),
-    (0x12E8, 0x12EC),
-    (0x130C, 0x1310),
-    (0x1380, 0x13A0),
-    (0x1598, 0x15A8),
-    (0x179C, 0x17A0),
-    (0x19CC, 0x19D0),
-]
+OWNED, VERTEX_STREAMS = owned_ranges()
 
 
 def owned(m: int) -> bool:
-    if 0x1C00 <= m < 0x1D00 and (m & 0xF) in (4, 8):  # vertex stream locations
+    if VERTEX_STREAMS[0] <= m < VERTEX_STREAMS[1] and (m & 0xF) in (4, 8):  # vertex stream locations
         return True
     return any(a <= m < b for a, b in OWNED)
 
@@ -127,18 +100,24 @@ RELOC_CODE = {
 
 
 def load_programs(path: str) -> dict[str, dict[str, bytes | list[int]]]:
+    """Give mkprograms.py's programs by the id nvdec names a bound one with: the FNV-1a of its header, code and data."""
     with open(path, 'rb') as programs:
         b = programs.read()
     progs, at = {}, 0
-    while at + 12 <= len(b):
+    while at + 16 <= len(b):
         assert b[at : at + 4] == b'NVPG'
-        code, count = struct.unpack_from('<II', b, at + 4)
-        at += 12
+        code, count, data = struct.unpack_from('<III', b, at + 4)
+        at += 16
         types = list(b[at : at + count])
         at += count
         image = b[at : at + 80 + code]
         at += 80 + code
-        progs[f'{packfile.fnv(image):x}'] = {'image': image, 'cbufs': types}
+        progs[f'{packfile.fnv(b[at - 80 - code : at + data]):x}'] = {
+            'image': image,
+            'cbufs': types,
+            'data': b[at : at + data],
+        }
+        at += data
     return progs
 
 
@@ -185,19 +164,35 @@ def default_forms(simple: list[dict]) -> tuple[list[dict], list[tuple[dict, str]
     return kept, aside
 
 
-# The constant buffers a raw draw binds (raw_gpu.cpp): the root table (NVK's cbuf type 1) at 0 and set 0 (type 3) at 1
-RAW_CBUFS = ([1], [1, 3])
+# NVK's cbuf types (nvk_shader.h nvk_cbuf_type) a raw draw binds: the root table at slot 0, then NAK's shader data and
+# set 0 at the slots the program names (raw_gpu.cpp)
+CBUF_ROOT, CBUF_SHADER_DATA, CBUF_SET = 1, 2, 3
+
+
+def raw_bindable(program: dict) -> bool:
+    cbufs = program['cbufs']
+    rest = cbufs[1:]
+    return (
+        bool(cbufs)
+        and cbufs[0] == CBUF_ROOT
+        and set(rest) <= {CBUF_SHADER_DATA, CBUF_SET}
+        and len(set(rest)) == len(rest)
+        and (CBUF_SHADER_DATA in rest) == bool(program['data'])
+    )
 
 
 def raw_bound(simple: list[dict], programs: dict[str, dict]) -> tuple[list[dict], list[tuple[dict, str]]]:
-    """Set aside the states whose programs read constant buffers a raw draw does not bind (NAK's shader data)."""
+    """Set aside the states whose programs read constant buffers a raw draw does not bind."""
     kept, aside = [], []
     for p in simple:
-        cbufs = [programs[p['records'][0]['prog'][st][0]]['cbufs'] for st in (1, 5)]
-        other = [c for c in cbufs if c not in RAW_CBUFS]
-        if other:
+        unbound = [
+            programs[pid]['cbufs']
+            for pid in (p['records'][0]['prog'][st][0] for st in (1, 5))
+            if not raw_bindable(programs[pid])
+        ]
+        if unbound:
             aside.append(
-                (p, f'a program reads constant buffers {other[0]}, the raw path binds the root table and set 0')
+                (p, f'a program reads constant buffers {unbound[0]}, the raw path binds root, shader data and set 0')
             )
         else:
             kept.append(p)
@@ -212,7 +207,7 @@ EXPECTED_SKIPS = (
     'storage form',
     'warm-up state',
     'a sampler m2v derives from a bound one',
-    'the raw path binds the root table and set 0',
+    'the raw path binds root, shader data and set 0',
     'the raw path has no 3D textures',
 )
 
@@ -335,6 +330,10 @@ def lay_out_programs(
         slot = bytearray(0x80 - 0x50) + pr['image'][:80]  # header at +0x30
         slot += pr['image'][80:]  # code at +0x80
         slot += bytes((-len(slot)) % 0x100)
+        data_offset = (
+            len(slot) if pr['data'] else 0
+        )  # NAK's shader data where NVK uploads it: 256-aligned after the code
+        slot += pr['data']
         heap += slot
         prog_index[pid] = len(prog_recs)
         prog_recs.append(
@@ -345,9 +344,12 @@ def lay_out_programs(
                 'bytes': len(slot),
                 'code': len(pr['image']) - 80,
                 'cbufs': pr['cbufs'],
+                'data_offset': data_offset,
+                'data_bytes': len(pr['data']),
             }
         )
-    report.append(f'{len(prog_recs)} programs, shader heap image {len(heap) // 1024} KiB')
+    data = sum(1 for pr in prog_recs if pr['data_bytes'])
+    report.append(f'{len(prog_recs)} programs ({data} with shader data), shader heap image {len(heap) // 1024} KiB')
     return heap, prog_index, prog_recs
 
 

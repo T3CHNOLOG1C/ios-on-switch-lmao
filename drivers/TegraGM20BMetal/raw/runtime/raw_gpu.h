@@ -34,6 +34,7 @@
 #include "raw_kernel.h"
 #include "raw_pack.h"
 #include "raw_push.h"
+#include "raw_overlap.h"
 #include "raw_region.h"
 #include "raw_zeta.h"
 #include "raw_ycbcr.h"
@@ -213,8 +214,8 @@ struct Pipeline {
     const PackPipeline *rec = nullptr;
     std::vector<uint32_t> methods;         // the state's registers as ready push words (program offsets relocated)
     uint32_t push[32] = {}, pushMask = 0;  // root table [0x700, 0x780): the words m2v's push ranges write, and which
-    bool vsSetCbuf = false, fsSetCbuf = false;  // the program reads set 0 as constant buffer 1
-    uint8_t writeBits = 0;                      // colors its draws write: SET_CT_WRITE(i) with a channel on
+    uint8_t setSlot[2] = {};  // the constant buffer slot the vertex and the pixel program read set 0 at (0: none)
+    uint8_t writeBits = 0;    // colors its draws write: SET_CT_WRITE(i) with a channel on
     // colors its fragment shader reads, and may write, as storage images inside the pixel interlock (metal2vulkan's storage
     // form of a fetch: the state turns the interlock on with SET_PIXEL_SHADER_INTERLOCK_CONTROL); the ROP writes none of them
     uint8_t storageBits = 0;
@@ -291,6 +292,23 @@ public:
     void setBlendColor(const float rgba[4]);
     void setDepthStencil(const DepthStencilDesc *d);  // null: Metal's default state
     void setStencilReference(uint32_t front, uint32_t back);
+
+    // MTLCullMode, MTLWinding and MTLTriangleFillMode, written as NVK's rasterizer registers at the next draw
+    void setCullMode(uint8_t mode)
+    {
+        raster_.cull = mode;
+    }
+
+    void setWinding(uint8_t winding)
+    {
+        raster_.winding = winding;
+    }
+
+    void setFillMode(uint8_t mode)
+    {
+        raster_.fill = mode;
+    }
+
     void setViewport(double x, double y, double w, double h, double znear, double zfar);
     void barrier();  // memoryBarrier...: everything before is written and visible to what follows
     // false: this draw cannot be drawn exactly as m2v would (*why says what); the command buffer goes to m2v instead
@@ -334,6 +352,15 @@ private:
     DepthStencilDesc ds_;
     uint32_t stencilRef_[2] = {};
     bool dsDirty_ = true;
+
+    // the encoder's culling, winding and fill, and what the registers hold: the context's (Metal's defaults: no culling,
+    // clockwise, fill) at a pass's start, put back at its end
+    struct Raster {
+        uint8_t cull = 0, winding = 0, fill = 0;
+    };
+
+    Raster raster_, rasterHeld_;
+    void writeRaster(Push &p, const Raster &want);
     uint32_t blendColor_[4] = {};  // Metal's default, (0, 0, 0, 0), until the encoder sets one
     bool blendColorDirty_ = true;
     uint32_t topology_ = ~0u, restart_ = ~0u, first_ = 0, baseInstance_ = 0;
@@ -354,6 +381,8 @@ private:
     WrittenRegion written_;
     // colors the pass's first draw overwrites whole and opaquely: their clears inside the render area are not needed
     uint8_t covered_ = 0;
+    using Runs = std::vector<std::pair<uint32_t, uint32_t>>;
+    const Runs &selfRuns(const Pipeline &pl, uint32_t primitive, uint32_t first, uint32_t count, uint32_t instances);
     const uint8_t *drawIndices_ = nullptr;
     uint32_t drawIndexSize_ = 0, drawIndexCount_ = 0;
     DrawGeometry geometry(const Pipeline &pl, uint32_t primitive, uint32_t first, uint32_t count,
@@ -638,6 +667,10 @@ public:
             fetchBarriersInterlocked{0};
         // Clear loads of colors, and those left out because the pass's first draw covers them (RenderEncoder::clears)
         std::atomic<uint64_t> clears{0}, clearsElided{0};
+        // draws that fetch a color they write (debug builds): split into runs where their own triangles may cover a pixel
+        // twice, and the runs; those of more than one triangle it could not tell apart (drawn whole, unordered within);
+        // the CPU time telling them (raw_overlap.h)
+        std::atomic<uint64_t> selfOverlapSplit{0}, selfOverlapRuns{0}, selfOverlapUnbounded{0}, selfOverlapNs{0};
         // channels made again after the kernel killed one
         std::atomic<uint64_t> reopens{0};
     } stats;
@@ -714,7 +747,7 @@ private:
     std::vector<uint32_t> placed_;  // each pack program's heap offset, ~0u: not placed
     uint64_t heapPlaced_ = 0;
     uint32_t ctWrite_[8] = {};  // SET_CT_WRITE(i) as the baseline leaves it
-    bool place(uint32_t prog, uint32_t &program);
+    bool place(uint32_t prog, uint32_t &program, uint64_t &data);
     std::vector<uint32_t> constexprTsc_;
     CommandBuffer cb_;
     uint32_t rootPush_[32] = {};  // what the GPU's root table holds at [0x700, 0x780) after everything submitted

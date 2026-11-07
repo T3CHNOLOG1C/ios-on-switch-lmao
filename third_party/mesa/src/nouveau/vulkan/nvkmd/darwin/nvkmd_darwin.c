@@ -780,7 +780,8 @@ nvkmd_darwin_create_pdev(struct vk_object_base *log_obj,
  * Device
  */
 
-/* The device SurfaceWrites goes through: the process's first. The kernel's record is per surface, not per connection. */
+/* The device SurfaceWrites and Priority go through: the process's first. The kernel's record of the one is per surface,
+ * of the other per connection, which is the process's (switch_nvk_connection). */
 static struct nvkmd_darwin_dev *surface_writes_dev;
 /* A SurfaceWrites could not be delivered: imports no longer say the GPU only samples them, and every submission tells
  * the kernel to count its connection's imports as written (TegraGM20BPushImportsWritten). */
@@ -1053,6 +1054,20 @@ switch_nvk_surface_gpu_writes(uint32_t surface_id)
       return true;
    p_atomic_set(&surface_writes_failed, true);
    return false;
+}
+
+/* Exported: the Metal frontend's queues' GPU priority (method 18), for the process's connection. */
+__attribute__((visibility("default"))) bool
+switch_nvk_gpu_priority(uint32_t priority, uint32_t background_priority)
+{
+   struct nvkmd_darwin_dev *dev = p_atomic_read(&surface_writes_dev);
+   struct TegraGM20BAbiPriority req = {
+      .priority = priority,
+      .background_priority = background_priority,
+   };
+
+   return dev && darwin_call(&dev->conn, TegraGM20BMethodPriority, &req, sizeof(req), NULL, 0) ==
+                    KERN_SUCCESS;
 }
 
 static uint32_t

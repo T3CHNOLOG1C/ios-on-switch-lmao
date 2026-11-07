@@ -3,7 +3,7 @@ r"""Make one bucket of the seed: its lines through the prebuilt precompile tool,
 usage: precompile.py --precompile <tool> --mock <libmock_iokit.dylib> --nvk <twin libvulkan_nouveau.dylib>
                      --root <library root> --store <store.json> [--embedded <header>]... --qc <metallib>
                      --lines <bucket.log> [--seed <meta dir> --seed-pack <pack>...] [--guess-dispatch]
-                     --out <pack> --index <file> --report <file>
+                     [--unused-list <file> --unused <input>...] --out <pack> --index <file> --report <file>
 
 The bucket's lines after its `# derived` line are guesses: a refusal of one is counted, and a crash in one costs that
 line only. The tool is run again past the line it died in (its PRECOMPILE_PROGRESS file says which), on the same cache
@@ -13,6 +13,8 @@ pack>` per file) and the report (what was refused and crashed, the driver record
 --seed: the lines are made over the packed seed (merge.py join's directory and the buckets' packs in order), as the
 device reads it; the report's `rates` says how many were found there.
 --guess-dispatch: every compute state no D line names is dispatched at the 2D shape Apple's documentation computes.
+--unused-list: written with the --unused inputs, the action's unused inputs list (gpu/seed/defs.bzl: the NVK twin, which
+the action is keyed on by its compiler identity instead).
 """
 
 import argparse
@@ -195,6 +197,8 @@ def main() -> None:
     parser.add_argument('--seed', type=Path)
     parser.add_argument('--seed-pack', type=Path, action='append', default=[])
     parser.add_argument('--guess-dispatch', action='store_true')
+    parser.add_argument('--unused-list', type=Path)
+    parser.add_argument('--unused', action='append', default=[])
     args = parser.parse_args()
     text = args.lines.read_text().split(DERIVED + '\n')
     corpus, derived = by_kind(text[0].splitlines()), by_kind(text[1].splitlines() if len(text) > 1 else [])
@@ -212,6 +216,8 @@ def main() -> None:
     lines, report['identity'] = pack(work / 'cache', args.out)
     args.index.write_text(''.join(lines))
     args.report.write_text(json.dumps(report, indent=1) + '\n')
+    if args.unused_list:
+        args.unused_list.write_text(''.join(path + '\n' for path in args.unused))
     shutil.rmtree(work)
     crashed, refused = len(report.get('crashed', [])), len(report.get('refused', []))
     made = f'{report["lines"]} lines in {report["seconds"]} s'

@@ -5,6 +5,7 @@
 #
 # Boot-args (COMMAND_LINE) live in tools/package/boot_args.py; the ADT edits, USB_HOST and DISPLAY_GAMUT in
 # tools/package/adt_edit.py; the steps and what each reads in boot/defs.bzl.
+load("@bazel_skylib//lib:selects.bzl", "selects")
 load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
 load("@bazel_skylib//rules:write_file.bzl", "write_file")
 load("@rules_python//python:py_binary.bzl", "py_binary")
@@ -12,6 +13,7 @@ load("@rules_python//python:py_test.bzl", "py_test")
 load("//bazel/lint:defs.bzl", "lint_files")
 load("//kernel/rules:inputs.bzl", "tool_output")
 load(":defs.bzl", "boot_package")
+load(":overlay.bzl", "OVERLAY_BINARIES")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -32,7 +34,24 @@ bool_flag(
 # --//boot:gpu_trustcache=//boot:no_gpu packages without it (what the CMake flow did when out/gpu was absent).
 label_flag(
     name = "gpu_trustcache",
-    build_setting_default = "//gpu:trustcache",
+    build_setting_default = ":default_gpu_trustcache",
+)
+
+alias(
+    name = "default_gpu_trustcache",
+    actual = select({
+        "//install:from_release": "@switch_release//:gpu_trustcache",
+        "//conditions:default": "//gpu:trustcache",
+    }),
+)
+
+# fetchform is a debug build's, so never in a package composed from the release (release builds).
+selects.config_setting_group(
+    name = "local_debug",
+    match_all = [
+        "//bazel:debug",
+        "//install:from_local",
+    ],
 )
 
 filegroup(
@@ -50,6 +69,7 @@ tool_output(
     ],
     binary = "//tools/package:adt",
     message = "Generating the native OLED ADT",
+    xcode = False,
 )
 
 # hekate passes every key to U-Boot's environment too. bootwait=0: no wait on hekate's logo when launched from Nyx.
@@ -72,6 +92,7 @@ write_file(
     newline = "unix",
 )
 
+# --//install:prebuilt=release: the GitHub release's kernel (prelinked here), overlay Mach-Os, GPU trust cache and lz4.
 boot_package(
     name = "package",
     adt = ":adt",
@@ -85,7 +106,10 @@ boot_package(
     exporter = "//bazel/pinned:firmware/exporter.uimg",
     icon = "//boot/logo:icon_ios_hue.bmp",
     ini = ":ios_ini",
-    kernel = "//kernel:prelinked",
+    kernel = select({
+        "//install:from_release": "//install:release_kernel",
+        "//conditions:default": "//kernel:prelinked",
+    }),
     linker_script = ":loader/link.ld",
     loader_hdrs = [
         ":loader/boot_args.h",
@@ -126,17 +150,17 @@ boot_package(
         ":loader/copy.c",
         ":loader/copy.S",
     ],
+    lz4 = select({
+        "//install:from_release": "@switch_release//:lz4",
+        "//conditions:default": "//tools:lz4",
+    }),
     # The overlay's Mach-Os (the trust module hashes those the manifest trusts) and its other files, each by the
     # source tree/overlay/manifest.json names it by.
-    overlay_binaries = {
-        "//drivers/SwitchBluetooth:BlueTool": "build/switch-bluetooth/BlueTool",
-        "//drivers/SwitchAudio:SwitchAudioHAL": "build/switch-audio/SwitchAudio.driver/SwitchAudio",
-        "//drivers/SwitchJoyCon:joyconpaird": "build/switch-joycon/joyconpaird",
-        "//drivers/SwitchVideoDecoders:HEVCH8": "build/switch-video/HEVCH8.videodecoder",
-        "//drivers/SwitchVideoDecoders:AVD": "build/switch-video/AVD.videodecoder",
-        "//drivers/SwitchVideoEncoders:AVE": "build/switch-video/H264H7.videoencoder",
-    } | select({
-        "//bazel:debug": {"//drivers/TegraGM20BMetal:fetchform": "build/switch-gpu/fetchform"},
+    overlay_binaries = select({
+        "//install:from_release": {"@switch_release//:overlay/" + source: source for source in OVERLAY_BINARIES.values()},
+        "//conditions:default": OVERLAY_BINARIES,
+    }) | select({
+        ":local_debug": {"//drivers/TegraGM20BMetal:fetchform": "build/switch-gpu/fetchform"},
         "//conditions:default": {},
     }),
     overlay_data = {
@@ -147,6 +171,10 @@ boot_package(
     overlay_files = ["//overlay:overlay_sources"],
     overlay_manifest = "//overlay:manifest.json",
     portrait_header = "//drivers/NativeMobileDisplay:SwitchPortrait.h",
+    prebuilt = select({
+        "//install:from_release": True,
+        "//conditions:default": False,
+    }),
     script_template = ":u-boot-script.txt",
     static_trust = "//ipsw:static_system_trust",
 )

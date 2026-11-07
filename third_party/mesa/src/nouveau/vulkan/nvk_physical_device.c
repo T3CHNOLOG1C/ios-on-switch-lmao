@@ -4,6 +4,9 @@
  */
 #include "nvk_physical_device.h"
 
+/* NVK_BUILD_ID_OVERRIDE: the compiler identity (third_party/mesa/bazel/compiler_identity.py) */
+#include "nvk_build_id.h"
+
 #include "nak.h"
 #include "nvk_buffer.h"
 #include "nvk_descriptor_types.h"

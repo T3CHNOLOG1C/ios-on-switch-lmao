@@ -20,7 +20,8 @@ ROOTS = ["com.apple.driver.AppleMobileFileIntegrity", "com.apple.filesystems.apf
          "com.apple.iokit.IOUSBHostFamily", "com.apple.iokit.IOUSBMassStorageDriver",
          "com.apple.driver.AppleUSBCardReader", "com.apple.driver.AppleUSBMassStorageInterfaceNub",
          "com.apple.driver.USBStorageDeviceSpecifics", "com.apple.driver.SCSIDeviceSpecifics",
-         "com.apple.driver.usb.AppleUSBHostPacketFilter", "com.apple.driver.usb.AppleUSBHostDeviceSupport",
+         "com.apple.filesystems.lifs", "com.apple.driver.usb.AppleUSBHostPacketFilter",
+         "com.apple.driver.usb.AppleUSBHostDeviceSupport",
          "com.apple.driver.usb.IOUSBHostHIDDeviceSafeBoot", "com.apple.iokit.IOHIDEventDriver",
          "com.apple.iokit.IOHIDEventDriverSafeBoot", "com.apple.driver.AppleHIDKeyboard",
          "com.apple.driver.AppleHIDKeyboardEmbedded", "com.apple.driver.AppleTopCaseDriverV2",
@@ -29,7 +30,9 @@ ROOTS = ["com.apple.driver.AppleMobileFileIntegrity", "com.apple.filesystems.apf
          "com.apple.driver.AppleActuatorDriver", "com.apple.driver.ApplePencilDriver",
          "com.apple.driver.AppleInputDeviceSupport", "com.apple.driver.IOSlaveProcessor",
          "com.apple.driver.usb.AppleUSBHostiOSDevice", "com.apple.driver.AppleUSBHostMergeProperties",
-         "com.apple.iokit.IOGameControllerFamily", "com.apple.driver.AppleUSBAudio"]
+         "com.apple.iokit.IOGameControllerFamily", "com.apple.driver.AppleUSBAudio",
+         "com.apple.iokit.IONetworkingFamily", "com.apple.driver.usb.cdc.ecm", "com.apple.driver.usb.cdc.ncm",
+         "com.apple.driver.usb.ethernet.asix", "com.apple.driver.AppleUSBEthernetHost"]
 # _PrelinkExecutableLoadAddr of a codeless kext in a fileset kernelcache (XNU kOSKextCodelessKextLoadAddr).
 CODELESS_LOAD_ADDR = 0x7FFFFFFFFFFFFFFF
 

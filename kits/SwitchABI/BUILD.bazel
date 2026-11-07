@@ -168,6 +168,10 @@ switch_abi_class(
     header_name = "OriginalLegacyFramebufferABI.h",
 )
 
+switch_abi_class(name = "IOEthernetController")
+
+switch_abi_class(name = "IOEthernetInterface")
+
 switch_abi_class(name = "IOUSBDeviceController")
 
 switch_abi_class(name = "IOWatchdog")

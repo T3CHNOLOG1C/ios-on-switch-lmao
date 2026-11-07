@@ -552,6 +552,11 @@ int main(int argc, char **argv)
                             [e setDepthStencilState:dss[d.ds]];
                             [e setStencilFrontReferenceValue:d.stencilRef[0] backReferenceValue:d.stencilRef[1]];
                         }
+                        if (d.raster) {
+                            [e setCullMode:MTLCullMode(d.cull)];
+                            [e setFrontFacingWinding:MTLWinding(d.winding)];
+                            [e setTriangleFillMode:MTLTriangleFillMode(d.fill)];
+                        }
                         // FRAME_INDEXED: every third main draw indexed as Core Animation's meshes are (CA::OGL::MetalContext::draw:
                         // 16-bit indices written into its buffer pool at 4-byte alignment, drawIndexedPrimitives on triangles)
                         if (getenv("FRAME_INDEXED") && !d.blur && drawIndex % 3 == 1) {

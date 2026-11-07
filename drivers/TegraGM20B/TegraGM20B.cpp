@@ -17,6 +17,9 @@
 #include <kern/sched_prim.h>
 #include <kern/thread.h>
 #include <stdarg.h>
+#include <sys/errno.h>
+#include <sys/sysctl.h>
+#include "../../kits/SwitchSysctl/SwitchSysctl.h"
 #include "../SwitchSuspend/SwitchWake.h"
 #include "TegraGM20BGpu.h"
 #include "TegraGM20BSleep.h"
@@ -138,6 +141,38 @@ IOReturn publish()
 	return kIOReturnSuccess;
 }
 
+#if TGM_STATS
+// debug.switch_gpu_clkgate (debug kernels): 1 clock gating on, 0 off, for a frame-time A/B within one boot; BlueTool
+// writes it when the Mac posts com.brunostjohn.switch.debug.gpu-clkgate-on / -off.
+int gClkgateOn = 1;
+
+int clkgateSysctl SYSCTL_HANDLER_ARGS
+{
+	int on = gClkgateOn;
+	int error = SYSCTL_OUT(req, &on, sizeof(on));
+	if (error || !req->newptr)
+		return error;
+	error = SYSCTL_IN(req, &on, sizeof(on));
+	if (error)
+		return error;
+	if (tgm_clkgate_switch(on != 0))
+		return EBUSY;
+	gClkgateOn = on != 0;
+	return 0;
+}
+
+struct sysctl_oid gClkgateOid;
+
+void registerClkgateSysctl()
+{
+	switch_sysctl_oid(
+		&gClkgateOid, &sysctl__debug_children, "switch_gpu_clkgate",
+		static_cast<int>(CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_KERN | CTLFLAG_LOCKED),
+		clkgateSysctl, "I", "GPU clock gating on (1) or off (0), debug A/B");
+	sysctl_register_oid(&gClkgateOid);
+}
+#endif
+
 void bringup(void *arg, wait_result_t)
 {
 	const int stage = static_cast<int>(reinterpret_cast<intptr_t>(arg));
@@ -161,6 +196,9 @@ void bringup(void *arg, wait_result_t)
 			IOLog("tegra-gm20b: M4 ok published AGXAccelerator (MetalPluginName "
 			      "TegraGM20BMetal)\n");
 	}
+#if TGM_STATS
+	registerClkgateSysctl();
+#endif
 	bringupDone();
 }
 

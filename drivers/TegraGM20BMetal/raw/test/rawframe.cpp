@@ -198,6 +198,11 @@ int main(int argc, char **argv)
                     e->setDepthStencil(&dss[d.ds]);
                     e->setStencilReference(d.stencilRef[0], d.stencilRef[1]);
                 }
+                if (d.raster) {
+                    e->setCullMode(d.cull);
+                    e->setWinding(d.winding);
+                    e->setFillMode(d.fill);
+                }
                 const char *why = nullptr;
                 if (!e->draw(d.primitive, d.first, d.count, d.instances, 0, &why)) {
                     fprintf(stderr, "draw refused: %s\n", why);

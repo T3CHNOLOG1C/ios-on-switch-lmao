@@ -183,6 +183,12 @@ kernel_driver(
         "com.apple.driver.IOSlaveProcessor",
         "com.apple.driver.usb.AppleUSBHostiOSDevice",
         "com.apple.driver.AppleUSBHostMergeProperties",
+        # USB Ethernet, as J120's catalogue has it: CDC ECM and NCM, ASIX AX88772/AX88178 and an iPhone's tethering
+        # interface, on the CDC and USB networking libraries above and the IONetworkingFamily SwitchWLAN prelinks.
+        "com.apple.driver.usb.cdc.ecm",
+        "com.apple.driver.usb.cdc.ncm",
+        "com.apple.driver.usb.ethernet.asix",
+        "com.apple.driver.AppleUSBEthernetHost",
     ],
     # Declared dependencies left out of the prelink (COMPONENT=DEPENDENCY=pointer sites; a nonzero cut rebinds each
     # site to _switch_prelink_cut_null in SwitchUSB.cpp, so OSDynamicCast yields NULL):

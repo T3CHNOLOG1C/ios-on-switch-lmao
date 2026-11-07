@@ -32,6 +32,12 @@ enum : uint32_t {
     COLOR_CLEAR_VALUE = 0x0d80,
     INVALIDATE_SHADER_CACHES_NO_WFI = 0x0da4,
     PIXEL_SHADER_BARRIER = 0x0de0,
+    NO_OPERATION = 0x0100,
+    SET_FRONT_POLYGON_MODE = 0x0dac,
+    SET_BACK_POLYGON_MODE = 0x0db0,
+    OGL_SET_CULL = 0x1918,
+    OGL_SET_FRONT_FACE = 0x191c,
+    OGL_SET_CULL_FACE = 0x1920,
     PIXEL_SHADER_INTERLOCK_CONTROL = 0x1224,
     DEPTH_TEST = 0x12cc,
     STENCIL_TEST = 0x1380,
@@ -77,6 +83,7 @@ enum : uint32_t {
 };
 
 constexpr uint32_t kRootBytes = 0x800, kSetBytes = 0x100, kUboChunk = 0x100;
+constexpr uint32_t kMaxCbufBytes = 0x10000;        // NVK_MAX_CBUF_SIZE: the most of a constant buffer NVK binds
 constexpr uint32_t kRootInterlockTickets = 0x260;  // offsetof(nvk_root_descriptor_table, interlock_ticket_buffer)
 constexpr uint32_t kTicCount = 8192, kTscCount = 1024;
 constexpr uint32_t kEngines =
@@ -386,11 +393,12 @@ bool Device::init(std::string &err)
     return true;
 }
 
-// lock_ held: program `prog`'s slot in the heap, copied out of the pack the first time a state uses it, and its
-// SET_PIPELINE_PROGRAM value. A slot is a few KiB copied once per process from the pack's pages, so the CPU copies it (the copy
-// engine would want the pack's pages imported, wired, for the whole process); the next submission's prologue invalidates the
-// shader caches before any draw reads it. False: the heap is full (that state stays m2v's).
-bool Device::place(uint32_t prog, uint32_t &program)
+// lock_ held: program `prog`'s slot in the heap, copied out of the pack the first time a state uses it, its
+// SET_PIPELINE_PROGRAM value and its shader data's GPU address (0: none). A slot is a few KiB copied once per process from the
+// pack's pages, so the CPU copies it (the copy engine would want the pack's pages imported, wired, for the whole process); the
+// next submission's prologue invalidates the shader and constant caches before any draw reads it. False: the heap is full (that
+// state stays m2v's).
+bool Device::place(uint32_t prog, uint32_t &program, uint64_t &data)
 {
     const PackProgram &p = pack_.section<PackProgram>(PackPrograms)[prog];
     if (placed_[prog] == ~0u) {
@@ -402,7 +410,25 @@ bool Device::place(uint32_t prog, uint32_t &program)
         stats.programsPlaced++;
     }
     program = placed_[prog] + (p.program - p.heapOffset);
+    data = p.dataBytes ? heap_.va + placed_[prog] + p.dataOffset : 0;
     return true;
+}
+
+// The methods that bind program `prog`'s shader data at its slot of constant buffer group `group` (0 vertex, 4 pixel), leaving
+// the root table selected; and the slot it reads set 0 at (0: none)
+static uint8_t bindProgramCbufs(Push &w, const PackProgram &prog, uint32_t group, uint64_t data, uint64_t root)
+{
+    uint8_t setSlot = 0;
+    for (uint8_t c = 1; c < prog.cbufs; c++) {
+        if (prog.cbufType[c] == CbufSet)
+            setSlot = c;
+        if (prog.cbufType[c] != CbufShaderData)
+            continue;
+        w.inc(CB_SELECTOR_A, {std::min(prog.dataBytes, kMaxCbufBytes), uint32_t(data >> 32), uint32_t(data)});
+        w.m(BIND_GROUP_CB + 0x20 * group, 1 | uint32_t(c) << 4);
+        w.inc(CB_SELECTOR_A, {kRootBytes, uint32_t(root >> 32), uint32_t(root)});
+    }
+    return setSlot;
 }
 
 // A state of the pack, made the first time it is looked up (most of the pack's states never are in a process): its registers
@@ -420,11 +446,12 @@ Pipeline *Device::pipeline(uint64_t keyHash, PackForm form, bool caTransform)
     const PackProgram *progs = pack_.section<PackProgram>(PackPrograms);
     const uint32_t *blob = pack_.section<uint32_t>(PackBlob);
     uint32_t vs = 0, fs = 0;
-    if (!place(pp.vs, vs) || !place(pp.fs, fs)) {
+    uint64_t vsData = 0, fsData = 0;
+    if (!place(pp.vs, vs, vsData) || !place(pp.fs, fs, fsData)) {
         stats.heapFull++;
         return nullptr;
     }
-    std::vector<uint32_t> words(64 + pp.blobDwords * 2);
+    std::vector<uint32_t> words(64 + 16 + pp.blobDwords * 2);
     Push w{words.data(), words.data() + words.size()};
     uint32_t writes[8];
     memcpy(writes, ctWrite_, sizeof writes);
@@ -444,11 +471,11 @@ Pipeline *Device::pipeline(uint64_t keyHash, PackForm form, bool caTransform)
             interlocked = blob[pp.blob + k + 1] & 3;
     w.m(0x2044, vs);  // SET_PIPELINE_PROGRAM(VERTEX)
     w.m(0x2144, fs);  // SET_PIPELINE_PROGRAM(PIXEL)
+    pl.setSlot[0] = bindProgramCbufs(w, progs[pp.vs], 0, vsData, root_.va);
+    pl.setSlot[1] = bindProgramCbufs(w, progs[pp.fs], 4, fsData, root_.va);
     pl.methods.assign(words.data(), w.at);
     memcpy(pl.push, pp.pushWords, sizeof pl.push);
     pl.pushMask = pp.pushMask;
-    pl.vsSetCbuf = progs[pp.vs].cbufs >= 2;
-    pl.fsSetCbuf = progs[pp.fs].cbufs >= 2;
     // the color formats of its key ("c<i>=<format>:<writeMask>:<blending>:..."), and which colors its draws read as they
     // were (m2v linear_attachment::writes: a written color blended into, or written through a mask that keeps channels)
     for (const char *at = pack_.string(pp.keyString); (at = strstr(at, " c")); at += 2) {
@@ -2052,6 +2079,26 @@ bool RenderEncoder::draw(uint32_t primitive, uint32_t first, uint32_t count, uin
     readBits_ |= pl->fetchBits;
     if (!count || !instances)
         return true;
+    const Runs &runs = selfRuns(*pl, primitive, first, count, instances);
+    if (!runs.empty()) {
+        for (const auto &[begin, end] : runs) {
+#ifdef SWITCH_RAW_HARNESS_MARKS
+            // the host frame harness's builds only: nvdec names this mark SPLIT, and eqcheck folds the run into the one before
+            if (begin) {
+                if (p_.room() < 1024)
+                    reserve();
+                p_.m(NO_OPERATION, 0x5b1175);
+            }
+#endif
+            if (!prepare(pl, primitive, first + begin, first + begin, end - begin, baseInstance, false, why))
+                return false;
+            p_.m(BEGIN, 0);
+            p_.inc(VERTEX_ARRAY_START, {first + begin, end - begin});
+            p_.m(END, 0);
+        }
+        cb_->draws++;
+        return true;
+    }
     if (!prepare(pl, primitive, first, first, count, baseInstance, false, why))
         return false;
     for (uint32_t i = 0; i < instances; i++) {
@@ -2061,6 +2108,36 @@ bool RenderEncoder::draw(uint32_t primitive, uint32_t first, uint32_t count, uin
     }
     cb_->draws++;
     return true;
+}
+
+// The runs a draw that fetches a color it writes is drawn as, where its own triangles may cover a pixel twice
+// (raw_overlap.h); empty: it is drawn whole. The indexed draw being prepared sets drawIndices_ first
+const RenderEncoder::Runs &RenderEncoder::selfRuns(const Pipeline &pl, uint32_t primitive, uint32_t first,
+                                                   uint32_t count, uint32_t instances)
+{
+    static thread_local Runs runs;
+    static thread_local TriangleRuns triangles;
+    runs.clear();
+    if (!(pl.fetchBits & pl.writeBits) || (primitive != 3 && primitive != 4) || count <= 3)
+        return runs;
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    const auto start = std::chrono::steady_clock::now();
+#endif
+    const bool told = instances == 1 &&
+                      triangles.split(geometry(pl, primitive, first, count, {0, 0, ~0u, ~0u}), primitive == 4, runs);
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    dev_->stats.selfOverlapNs += uint64_t(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count());
+    if (!told)
+        dev_->stats.selfOverlapUnbounded++;
+    else if (!runs.empty()) {
+        dev_->stats.selfOverlapSplit++;
+        dev_->stats.selfOverlapRuns += runs.size();
+    }
+#else
+    (void)told;
+#endif
+    return runs;
 }
 
 // The largest index of `count` indices of type T at `at` (any alignment), restarts (all ones) left out; 0 for none.
@@ -2110,23 +2187,37 @@ bool RenderEncoder::drawIndexed(uint32_t primitive, uint32_t count, uint32_t ind
     drawIndices_ = at;
     drawIndexSize_ = indexSize;
     drawIndexCount_ = count;
-    const bool prepared = prepare(pl, primitive, 0, 0, most + 1, 0, true, why);
-    drawIndices_ = nullptr;
-    if (!prepared)
-        return false;
-    const uint64_t va = ib->va + offset, end = va + uint64_t(count) * indexSize - 1;
-    if (va != ibVa_ || end != ibEnd_ || indexSize != ibSize_) {
-        p_.inc(INDEX_BUFFER_A, {uint32_t(va >> 32), uint32_t(va), uint32_t(end >> 32), uint32_t(end)});
-        p_.m(DA_PRIMITIVE_RESTART_INDEX, indexSize == 2 ? 0xffffu : 0xffffffffu);
-        cb_->restart_ = indexSize == 2 ? 0xffffu : 0xffffffffu;
-        p_.m(INDEX_BUFFER_E, indexSize == 2 ? 1 : 2);  // INDEX_SIZE TWO_BYTES / FOUR_BYTES
-        ibVa_ = va;
-        ibEnd_ = end;
-        ibSize_ = indexSize;
+    const Runs &runs = selfRuns(*pl, primitive, 0, count, 1);
+    const uint32_t parts = runs.empty() ? 1 : uint32_t(runs.size());
+    for (uint32_t r = 0; r < parts; r++) {
+        const uint32_t begin = runs.empty() ? 0 : runs[r].first, end = runs.empty() ? count : runs[r].second;
+        drawIndices_ = at + uint64_t(begin) * indexSize;
+        drawIndexCount_ = end - begin;
+#ifdef SWITCH_RAW_HARNESS_MARKS
+        if (r) {
+            if (p_.room() < 1024)
+                reserve();
+            p_.m(NO_OPERATION, 0x5b1175);
+        }
+#endif
+        const bool prepared = prepare(pl, primitive, 0, 0, most + 1, 0, true, why);
+        drawIndices_ = nullptr;
+        if (!prepared)
+            return false;
+        const uint64_t va = ib->va + offset, last = va + uint64_t(count) * indexSize - 1;
+        if (va != ibVa_ || last != ibEnd_ || indexSize != ibSize_) {
+            p_.inc(INDEX_BUFFER_A, {uint32_t(va >> 32), uint32_t(va), uint32_t(last >> 32), uint32_t(last)});
+            p_.m(DA_PRIMITIVE_RESTART_INDEX, indexSize == 2 ? 0xffffu : 0xffffffffu);
+            cb_->restart_ = indexSize == 2 ? 0xffffu : 0xffffffffu;
+            p_.m(INDEX_BUFFER_E, indexSize == 2 ? 1 : 2);  // INDEX_SIZE TWO_BYTES / FOUR_BYTES
+            ibVa_ = va;
+            ibEnd_ = last;
+            ibSize_ = indexSize;
+        }
+        p_.m(BEGIN, 0);
+        p_.inc(INDEX_BUFFER_F, {begin, end - begin});  // SET_INDEX_BUFFER_F (first index), DRAW_INDEX_BUFFER (count)
+        p_.m(END, 0);
     }
-    p_.m(BEGIN, 0);
-    p_.inc(INDEX_BUFFER_F, {0, count});  // SET_INDEX_BUFFER_F (first index), DRAW_INDEX_BUFFER (count)
-    p_.m(END, 0);
     cb_->draws++;
     return true;
 }
@@ -2278,6 +2369,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, uint32_t first, ui
         }
         at[0] = tic | tsc << 20;
     }
+    writeRaster(p, raster_);
     if (pl != emitted_) {
         blendColorDirty_ |= pl->constantBlend;
         p.raw(pl->methods.data(), uint32_t(pl->methods.size()));
@@ -2345,12 +2437,12 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, uint32_t first, ui
         p.m(LOAD_CB_OFFSET, 0x38);
         p.nonInc(LOAD_CB, s, 4);
     }
-    if (pl->vsSetCbuf || pl->fsSetCbuf) {
+    if (pl->setSlot[0] || pl->setSlot[1]) {
         p.inc(CB_SELECTOR_A, {kSetBytes, uint32_t(setVa >> 32), uint32_t(setVa)});
-        if (pl->vsSetCbuf)
-            p.m(BIND_GROUP_CB + 0x20 * 0, 1 | 1 << 4);
-        if (pl->fsSetCbuf)
-            p.m(BIND_GROUP_CB + 0x20 * 4, 1 | 1 << 4);
+        if (pl->setSlot[0])
+            p.m(BIND_GROUP_CB + 0x20 * 0, 1 | uint32_t(pl->setSlot[0]) << 4);
+        if (pl->setSlot[1])
+            p.m(BIND_GROUP_CB + 0x20 * 4, 1 | uint32_t(pl->setSlot[1]) << 4);
         p.inc(CB_SELECTOR_A, {kRootBytes, uint32_t(d.root_.va >> 32), uint32_t(d.root_.va)});
     }
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
@@ -2379,6 +2471,11 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, uint32_t first, ui
         if (!storage && !written_.meets(g)) {
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
             dev_->stats.fetchBarriersElided++;
+#endif
+#ifdef SWITCH_RAW_HARNESS_MARKS
+            // the host frame harness's builds only (test/build.sh): nvdec names this mark ELIDED, and eqcheck takes a
+            // barrier NVK has and raw left out only where it is
+            p.m(NO_OPERATION, 0x0e11de);
 #endif
         } else {
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
@@ -2598,9 +2695,34 @@ bool chainLevelTarget(const Texture &t, uint32_t level, Texture &out)
     return true;
 }
 
+// NVK's nvk_flush_rs_state for the state m2v makes of Metal's (render_state.rs `fixed`): culling on and the face culled,
+// the front face, and the polygon mode of both faces; a register already holding its value is not written
+void RenderEncoder::writeRaster(Push &p, const Raster &want)
+{
+    if (want.cull != rasterHeld_.cull) {
+        p.m(OGL_SET_CULL, want.cull != 0);
+        if (want.cull)
+            p.m(OGL_SET_CULL_FACE, want.cull == 1 ? 0x404 : 0x405);  // FRONT, BACK
+        rasterHeld_.cull = want.cull;
+    }
+    if (want.winding != rasterHeld_.winding) {
+        p.m(OGL_SET_FRONT_FACE, want.winding ? 0x901 : 0x900);  // CCW, CW
+        rasterHeld_.winding = want.winding;
+    }
+    if (want.fill != rasterHeld_.fill) {
+        const uint32_t mode = want.fill ? 0x1b01 : 0x1b02;  // LINE, FILL
+        p.m(SET_FRONT_POLYGON_MODE, mode);
+        p.m(SET_BACK_POLYGON_MODE, mode);
+        rasterHeld_.fill = want.fill;
+    }
+}
+
 void RenderEncoder::end()
 {
     Device &d = *dev_;
+    if (p_.room() < 16)
+        reserve();
+    writeRaster(p_, Raster());
     if (p_.at > bodyStart_)
         bodies_.push_back({bodyStart_, p_.at});
     d.push_.head = uint64_t(reinterpret_cast<uint8_t *>(p_.at) - d.push_.bo.cpu);  // give back the unused reservation

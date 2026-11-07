@@ -303,3 +303,22 @@ TEST(LegacyFramebufferTable, Ios17ValuesStayPut)
     EXPECT_THAT(table, HasSubstr("\"size\": \"0x18a0\""));
     EXPECT_THAT(table, HasSubstr("\"slots\": 358"));
 }
+
+// The slots iPadOS reaches through IOMobileFramebuffer that this display answers as J120's AppleCLCD does (21H461
+// kernelcache: AppleCLCD's vtable at 0xfffffff006fd1358; the family's callers named in the interface).
+TEST(LegacyFramebufferTable, ContractSlotsOverridden)
+{
+    const std::string table = SourceText("../../../kits/SwitchABI/kinds/21H461/IOMobileFramebufferLegacy.json");
+    const std::string layout = Between(table, "\"layout\": {", "}");
+    for (const char *entry :
+         {"\"211\": \"changeFrameInfo\"", "\"213\": \"supportedFrameInfo\"", "\"274\": \"setDisplayTemperature\"",
+          "\"306\": \"platformFrameInfoNotify\"", "\"307\": \"sendFrameInfo\""})
+        EXPECT_THAT(layout, HasSubstr(entry));
+    const std::string source = SourceText("../NativeLegacyDisplay.cpp");
+    for (const char *method : {"    IOReturn changeFrameInfo(uint32_t type, void *client, uint32_t mask) override",
+                               "    IOReturn sendFrameInfo(void *client, const void *frame) override",
+                               "    IOReturn setDisplayTemperature(const uint32_t *temperatures) override"})
+        EXPECT_THAT(source, HasSubstr(method));
+    EXPECT_THAT(Between(source, "    IOReturn setDisplayTemperature(", "\n    }\n"),
+                HasSubstr("return kIOReturnSuccess;"));
+}

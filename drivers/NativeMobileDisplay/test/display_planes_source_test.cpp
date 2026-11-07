@@ -120,11 +120,19 @@ TEST(DisplayPlanesSource, DriverFollowsTheRules)
     const std::string gate = Function(source, "extern \"C\" bool native_legacy_detach_ready(void)\n");
     EXPECT_THAT(gate, HasSubstr("planesReady()"));
     EXPECT_THAT(gate, HasSubstr("(vic->rotations & 0x90) == 0x90"));
-    // And VIC's proven row pitch: the alignment Core Animation sizes surfaces by follows it before backboardd reads it.
+    // And a VIC row pitch the published alignment is a multiple of; the alignment itself is VIC's from start, never raised
+    // later (Core Animation and VideoToolbox read it once).
     EXPECT_THAT(gate, HasSubstr("vic->pitchAlign"));
     EXPECT_THAT(gate, HasSubstr("const bool ok = planes && turns && pitched;"));
-    EXPECT_THAT(gate, HasSubstr("if (ok)\n        display->publishDetachAlignment(rows, bases);"));
-    ExpectBefore(gate, "publishDetachAlignment", "return ok;");
+    EXPECT_THAT(source, Not(HasSubstr("publishDetachAlignment")));
+    EXPECT_THAT(Method(source, "    void publishStrideRequirements()\n"),
+                HasSubstr("OSNumber::withNumber(NativePlanes::kPublishedRowAlignment, 32)"));
+    EXPECT_THAT(Method(source, "    void publishPlaneLimits()\n"),
+                HasSubstr("{\"PlaneBaseAlignmentLinear\", NativePlanes::kPublishedBaseAlignment}"));
+    // The service is found as J120's: IOServiceMatching("AppleCLCD").
+    EXPECT_THAT(
+        source,
+        HasSubstr(": OSMetaClass(\"AppleCLCD\", NativeLegacyDisplay::superClass, sizeof(NativeLegacyDisplay))"));
 }
 
 TEST(DisplayPlanesSource, BackboarddDetachesOnlyWhenTheDisplaySaysSo)

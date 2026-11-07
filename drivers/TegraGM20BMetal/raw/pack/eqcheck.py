@@ -9,7 +9,8 @@ A draw is the same GPU work when every field matches: the live 3D registers (R l
 first-appearance name), the vertex data, each stage's program and register count, and the bytes each program's constant
 buffers hold (pointers replaced by what they point to, handles by their texture/sampler headers). Barriers are compared
 as sets: the raw path must cover what NVK emitted before each draw that reads memory written earlier (PSB + TEXINV
-before a framebuffer fetch).
+before a framebuffer fetch), but for a fetch barrier its harness build marks as left out (ELIDED). A draw the raw path
+drew in runs (SPLIT marks) is folded back into one draw first.
 
 usage: eqcheck.py <nvk.log> <raw.log> [--show N] [--flat] [--layouts] [--own]
 """
@@ -42,11 +43,53 @@ def frames(path: str) -> list[list[dict]]:
             elif line.startswith('  ') and ev is not None:
                 ev['lines'].append(line.strip())
         if any(e['head'].startswith('DRAW') for e in events):
-            out.append(events)
+            out.append(fold_runs(events))
     # --flat: every submission's events as one stream (a command buffer the raw path submits in segments is several
     # submissions, each of its driver, where m2v makes one)
     if FLAT and out:
         out = [[e for events in out for e in events]]
+    return out
+
+
+DRAW_HEAD = re.compile(r'(DRAW(?:-INDEXED)?) first=(\d+) count=(\d+) begin=(\w+) barriers=(.*)')
+# A draw the raw path drew in runs (raw_overlap.h: its own triangles may cover a pixel twice), each run after the first
+# marked by its harness build (SWITCH_RAW_HARNESS_MARKS); and what a run's state differs in from the run before: the
+# vertex bytes a non-indexed draw reads, up to its own last vertex (the last run's are the whole draw's), and the root
+# table's draw parameters, its first vertex (the first run's are the whole draw's)
+SPLIT = 'SPLIT'
+LAST_RUN = ('vb',)
+FIRST_RUN = ('cb0 root draw=',)
+
+
+def run_state(lines: list[str]) -> list[str]:
+    return [x for x in lines if not x.startswith(LAST_RUN + FIRST_RUN)]
+
+
+def fold_runs(events: list[dict]) -> list[dict]:
+    """Give the events with each split draw's runs folded into one draw of the vertices they cover.
+
+    A run folds into the draw before it when that is a draw of the same kind and state, it is not indexed, and its
+    vertices begin no later than the draw's end: a list's runs partition its vertices, a strip's share the two that
+    join their triangles. Any other run stays a draw of its own, so the comparison fails on it.
+    """
+    out: list[dict] = []
+    for ev in events:
+        m = DRAW_HEAD.match(ev['head'])
+        barriers = set(m.group(5).split(',')) - {''} if m else set()
+        prev = DRAW_HEAD.match(out[-1]['head']) if m and SPLIT in barriers and out else None
+        if not prev or m.group(1) != 'DRAW' or prev.group(1) != m.group(1) or prev.group(4) != m.group(4):
+            out.append(ev)
+            continue
+        first, end, start = int(prev.group(2)), int(prev.group(2)) + int(prev.group(3)), int(m.group(2))
+        if not first <= start <= end or run_state(out[-1]['lines']) != run_state(ev['lines']):
+            out.append(ev)
+            continue
+        end = max(end, start + int(m.group(3)))
+        last = {x.split()[0]: x for x in ev['lines'] if x.startswith(LAST_RUN)}
+        out[-1] = {
+            'head': f'{prev.group(1)} first={first} count={end - first} begin={prev.group(4)} barriers={prev.group(5)}',
+            'lines': [last.get(x.split()[0], x) if x.startswith(LAST_RUN) else x for x in out[-1]['lines']],
+        }
     return out
 
 
@@ -175,6 +218,7 @@ class Tally:
     draws: int = 0
     same: int = 0
     clears: int = 0
+    elided: int = 0
 
     def wants(self, kind: str) -> bool:
         return len(self.examples[kind]) < self.show
@@ -195,8 +239,8 @@ def compare_frame(tally: Tally, fi: int, fa: list[dict], fb: list[dict]) -> None
 def split_depth_stencil(clears: list[str]) -> list[str]:
     """Give each clear's color part, then each one's depth/stencil part on its own, in order.
 
-    NVK clears depth and stencil in the CLEAR_SURFACE of the first color its BeginRendering clears, and m2v decides which
-    colors those are (a fetched memoryless color's scratch clears apart): the same texels, packed another way.
+    NVK clears depth and stencil in the CLEAR_SURFACE of the first color its BeginRendering clears, and m2v decides
+    which colors those are (a fetched memoryless color's scratch clears apart): the same texels, packed another way.
     """
     colors, zs = [], []
     for c in clears:
@@ -247,11 +291,19 @@ def compare_draw(tally: Tally, fi: int, di: int, x: collections.OrderedDict, y: 
     return ok
 
 
+# A fetch barrier the raw path left out because the draw's pixels meet none written since its last one
+# (raw_region.h), as its harness builds mark it (SWITCH_RAW_HARNESS_MARKS): expected where NVK has PSB and TEXINV
+ELIDED = 'ELIDED'
+
+
 def compare_barriers(tally: Tally, where: str, xb: set[str], yb: set[str]) -> bool:
     missing = xb - yb
+    if ELIDED in yb and missing <= {'PSB', 'TEXINV'}:
+        tally.elided += 1
+        missing = set()
     for m in missing:
         tally.bar_missing[m] += 1
-    for m in yb - xb:
+    for m in yb - xb - {ELIDED}:
         tally.bar_extra[m] += 1
     if 'TEXINV' not in missing and 'WFI' not in missing and 'PSB' not in missing:
         return True
@@ -275,7 +327,10 @@ def compare_registers(tally: Tally, where: str, ra: dict[str, str], rb: dict[str
 
 
 def report(tally: Tally) -> int:
-    print(f'draws compared {tally.draws}, identical {tally.same}; clears compared {tally.clears}')
+    print(
+        f'draws compared {tally.draws}, identical {tally.same}; clears compared {tally.clears}; '
+        f'fetch barriers raw left out {tally.elided}'
+    )
     for k, n in tally.mism.most_common():
         print(f'MISMATCH {k:<28} {n}')
         for e in tally.examples[k]:

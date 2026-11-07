@@ -572,6 +572,7 @@ tool_output(
         "012162a73b3cb2c8306e7e0a98bae2bdfb4f6cf91d7698feac787939d0c5ffd0",
     ],
     tool = "unxz.py",
+    xcode = False,
 )
 
 kernel_prelink_switch(

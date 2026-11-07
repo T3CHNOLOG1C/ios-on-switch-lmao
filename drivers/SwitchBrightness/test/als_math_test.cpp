@@ -402,6 +402,25 @@ float interpolate(double x0, double y0, double x1, double y1, double x)
 }
 }  // namespace
 
+TEST(SwitchBacklightMath, MilliNitsAsThermalmonitordReadsThem)
+{
+    using namespace switch_backlight;
+    EXPECT_EQ(kMilliNitsMax, 400000u);
+    EXPECT_EQ(rawToMilliNits(kPanelMax), kMilliNitsMax);
+    EXPECT_EQ(rawToMilliNits(0), 0u);
+    EXPECT_NEAR(rawToMilliNits(kFloorRaw), 12506.0, 1.0);
+    unsigned previous = 0;
+    for (unsigned raw = 0; raw <= kPanelMax; ++raw) {
+        const uint32_t milli = rawToMilliNits(raw);
+        EXPECT_LE(std::fabs(milli - rawToNits(raw) * 1000.0 / 65536), 0.5) << raw;
+        EXPECT_GE(milli, previous) << raw;
+        EXPECT_LE(milli, (uint32_t)INT32_MAX) << "a CFNumber SInt32";
+        // thermalmonitord's percentage: (value * 100 + max / 2) / max
+        EXPECT_LE((milli * 100 + kMilliNitsMax / 2) / kMilliNitsMax, 100u);
+        previous = milli;
+    }
+}
+
 TEST(SwitchBacklightMath, MarketingTableAsDisplayCreateWithIDReadsIt)
 {
     using namespace switch_backlight;

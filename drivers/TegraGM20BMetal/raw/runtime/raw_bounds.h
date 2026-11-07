@@ -33,6 +33,11 @@ struct WindowViewport {
     double originX = 0, originY = 0, width = 0, height = 0;
 };
 
+struct WindowPoint {
+    double x = 0, y = 0, slack = 0;
+    bool unclipped = true;  // z within [0, w]
+};
+
 struct PositionStream {
     const uint8_t *base = nullptr;  // vertex 0's bytes
     uint32_t stride = 0, offset = 0;
@@ -48,8 +53,9 @@ public:
         memcpy(m_, matrix, sizeof m_);
     }
 
-    // False: the vertex leaves no box (at or behind w = 0, or not finite), and the draw may cover its whole scissor
-    bool add(const PositionStream &s, uint32_t vertex)
+    // The vertex in window space, and how far the GPU's fp32 transform and subpixel snap may put it from there. False: at
+    // or behind w = 0, or not finite
+    bool project(const PositionStream &s, uint32_t vertex, WindowPoint &out) const
     {
         float p[4] = {0, 0, 0, 1};
         memcpy(p, s.base + uint64_t(vertex) * s.stride + s.offset, s.components * sizeof(float));
@@ -67,19 +73,31 @@ public:
             clip[3] <= wError)
             return false;
         const double zError = kRelative * magnitude[2];
-        unclipped_ &= clip[2] - zError >= 0 && clip[2] + zError <= clip[3] - wError;
-        Point pt;
+        out.unclipped = clip[2] - zError >= 0 && clip[2] + zError <= clip[3] - wError;
+        out.slack = 0;
         for (int axis = 0; axis < 2; axis++) {
             const double ndc = clip[axis] / clip[3];
             const double ndcError = (kRelative * magnitude[axis] + std::fabs(ndc) * wError) / (clip[3] - wError);
             const double size = axis ? vp_.height : vp_.width;
             const double at = axis ? vp_.originY + (1 - ndc) * 0.5 * size : vp_.originX + (1 + ndc) * 0.5 * size;
-            const double slack = (ndcError + kRelative) * 0.5 * std::fabs(size) + kRelative * std::fabs(at) + kSnap;
-            (axis ? pt.y : pt.x) = at;
-            pt.slack = std::max(pt.slack, slack);
-            lo_[axis] = std::min(lo_[axis], at - slack);
-            hi_[axis] = std::max(hi_[axis], at + slack);
+            (axis ? out.y : out.x) = at;
+            out.slack =
+                std::max(out.slack, (ndcError + kRelative) * 0.5 * std::fabs(size) + kRelative * std::fabs(at) + kSnap);
         }
+        return true;
+    }
+
+    // False: the vertex leaves no box (at or behind w = 0, or not finite), and the draw may cover its whole scissor
+    bool add(const PositionStream &s, uint32_t vertex)
+    {
+        WindowPoint pt;
+        if (!project(s, vertex, pt))
+            return false;
+        unclipped_ &= pt.unclipped;
+        lo_[0] = std::min(lo_[0], pt.x - pt.slack);
+        hi_[0] = std::max(hi_[0], pt.x + pt.slack);
+        lo_[1] = std::min(lo_[1], pt.y - pt.slack);
+        hi_[1] = std::max(hi_[1], pt.y + pt.slack);
         if (count_ < kMaxCorners)
             points_[count_] = pt;
         count_++;
@@ -117,7 +135,7 @@ public:
             return false;
         int corner[kMaxCorners];
         for (uint32_t i = 0; i < count_; i++) {
-            const Point &q = points_[i];
+            const WindowPoint &q = points_[i];
             const bool left = std::fabs(q.x - x0) <= near, right = std::fabs(q.x - x1) <= near;
             const bool top = std::fabs(q.y - y0) <= near, bottom = std::fabs(q.y - y1) <= near;
             if (left == right || top == bottom)
@@ -136,10 +154,6 @@ public:
     }
 
 private:
-    struct Point {
-        double x = 0, y = 0, slack = 0;
-    };
-
     // fp32 roundings a vertex's transform, division and viewport mapping may make, and the rasterizer's subpixel snap
     static constexpr double kRelative = 16.0 / (1 << 24), kSnap = 1.0 / 256;
 
@@ -175,7 +189,7 @@ private:
     float m_[16];
     WindowViewport vp_;
     double lo_[2] = {INFINITY, INFINITY}, hi_[2] = {-INFINITY, -INFINITY};
-    Point points_[kMaxCorners];
+    WindowPoint points_[kMaxCorners];
     uint32_t count_ = 0;
     bool unclipped_ = true;
 };

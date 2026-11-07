@@ -21,6 +21,7 @@
 #include <libkern/c++/OSData.h>
 #include <pexpert/pexpert.h>
 #include "../ArmGIC/SwitchInterrupts.h"
+#include "../../kits/SwitchSysctl/SwitchSysctl.h"
 #include "../TegraDisplayFlip/TegraScanoutCopy.h"
 #include "../TegraDisplayFlip/TegraScanoutRing.h"
 #include "../TegraDisplayFlip/SwitchFrameTimeline.h"
@@ -38,6 +39,12 @@
 #include "VsyncPhase.h"
 #include "../SwitchPower/SwitchPower.h"
 #include "../../kits/SwitchRefusal/SwitchRefusal.h"
+#if SWITCH_FRAME_TIMELINE
+#include <sys/sysctl.h>
+#include "NativeColumnScan.h"
+extern "C" void native_legacy_frame_end_hold(void);
+extern "C" void native_legacy_frame_end_release(void);
+#endif
 
 // The last swap Core Animation offered (validateSwap, accepted or not; mach time): while swaps keep coming CA is
 // animating, and TegraGM20B's idle clock never drops the GPU (native_display_last_swap_ns below).
@@ -381,6 +388,10 @@ struct PanicRestore {
     volatile bool panicking;  // a panic began: window A is the panic's
     volatile bool planes;     // window B may scan a plane, window A may blend over it: both go back (r18-planes)
     uint32_t blend[3];        // window A's BLEND_LAYER_CONTROL, MATCH and NOMATCH as hekate left them
+#if SWITCH_FRAME_TIMELINE
+    volatile bool columnScan;  // the column-scan experiment has window A scaled and in YUV (NativeColumnScanDisplay.h)
+    uint32_t columnScanDepth;  // the UI's COLOR_DEPTH
+#endif
 };
 
 PanicRestore gPanicRestore;
@@ -404,6 +415,13 @@ void restorePitchOnPanic(const char *message)
         dc[kWinbufHOffset] = gPanicRestore.hOffset;
         dc[kWinbufStartAddr] = gPanicRestore.start;
         dc[kWinbufStartAddrHi] = 0;
+#if SWITCH_FRAME_TIMELINE
+        if (gPanicRestore.columnScan) {
+            dc[kWinColorDepth] = gPanicRestore.columnScanDepth;
+            dc[kWinPrescaled] = kPitchPrescaled;
+            dc[kWinDdaIncrement] = kUnitDda;
+        }
+#endif
         dc[kWinOptions] = gPanicRestore.options;
         uint32_t update = kGeneralUpdate | kWinAUpdate, request = kGeneralActReq | kWinAActReq;
         TegraDisplayColor::bypassForPanic(dc);
@@ -1489,6 +1507,8 @@ private:
         if (status & kVblankInt)
             vblankNotify();
         watchVsync(status);
+        if (status & kFrameEndInt)
+            columnScanFrameEnd();
         // After the compositor's vsync, since a latched flip starts the next frame's copy right here. A flip is also looked for at
         // V_BLANK (unmasked while a vsync client is registered), in case the controller latches after its FRAME_END.
         if ((status & kFrameEndInt) && rotated)
@@ -1502,7 +1522,8 @@ private:
         if (status & kFrameEndInt)
             planeFrameEnd();
         if (status & kFrameEndInt)
-            color->frameEndAction(ring.pending == kNoBuffer && !probeRequest && !(rotated && !rotationLatched));
+            color->frameEndAction(ring.pending == kNoBuffer && !probeRequest && !(rotated && !rotationLatched) &&
+                                  !columnScanBusy());
         if ((status & kFrameEndInt) && stats) {
             if (frameStall.frameEnd(mach_absolute_time(), refreshTicks(), vsyncWanted()))
                 switch_stall_frame(frameStall.lastPresent());
@@ -1760,6 +1781,7 @@ private:
             switch_sched_render_vsync(stamp, interval);
         }
         native_legacy_vsync_notify(this, stamp, continuous, interval);
+        tegra_gm20b_compositor_vsync(stamp, lead, interval);
         native_legacy_vsync_observed(1, vsyncHz);
         if (stats) {
             ++stVsyncs;
@@ -2988,6 +3010,7 @@ private:
     // tape, over the console's screen (it redraws it in the boot framebuffer first; the tape may be read once more, never written).
     void stopRotation()
     {
+        columnScanAbort("the display stopped");
         abortProbe("the display stopped");
         stopDirect();
         if (rotated) {
@@ -3059,6 +3082,8 @@ public:
     {
         if (!dc)
             return false;
+        if (!on && !hwSuspended)
+            columnScanAbort("the display went off");
         if (!on && !hwSuspended && planeProbe.active()) {  // r18-planes: no frame end comes once the scan stops
             PlaneProbeIo io = {this};
             planeProbe.perform(planeProbe.fail("the display went off"), io);
@@ -3119,6 +3144,7 @@ public:
     // between the steps is honoured, not undone).
     void quiesceForSuspend()
     {
+        columnScanAbort("the display suspended (SC7)");
         abortProbe("the display suspended (SC7)");
         planesQuiesce();  // r18-planes
         resumeLit = !scanoutStopped;
@@ -3310,8 +3336,10 @@ public:
                 this);
         startCopyLoop();
         startGpuCopy();
-        if (primary)
+        if (primary) {
             __atomic_store_n(&primaryDisplay, this, __ATOMIC_RELEASE);
+            columnScanRegister();
+        }
         return true;
     }
 
@@ -3426,6 +3454,10 @@ public:
             return;
         }
         if (planeProbe.active()) {  // r18-planes: window B covers the screen and the probe's CRC must not move
+            kickDeferred = true;
+            return;
+        }
+        if (columnScanBusy()) {  // window A is the column-scan experiment's (debug kernels)
             kickDeferred = true;
             return;
         }
@@ -4542,6 +4574,7 @@ public:
     }
 
 #include "NativePlanesDisplay.h"
+#include "NativeColumnScanDisplay.h"
 
     IOReturn collectCompletionReports(uint32_t, void *, uint32_t *count, uint32_t) override
     {
@@ -4848,36 +4881,18 @@ public:
     }
 
     // The compositor's framebuffer rows (QuartzCore CA::WindowServer::AppleDisplay::update_display_limits reads this IOMFB
-    // property; iosurface_alignment() then rounds every framebuffer's bytesPerRow up to it, 64 by default). The GPU renders
-    // into a linear surface in place only when its rows are 128-byte multiples (Mesa nil image.rs; below that NVK renders
-    // through a tiled shadow and copies it back every pass). 1280 x 4 = 5120 was one; 720 x 4 = 2880 is not, so ask
-    // 128: 2944-byte rows. The scanout copies take any source stride.
+    // property; iosurface_alignment() then rounds every framebuffer's bytesPerRow up to it, 64 by default), and VideoToolbox's
+    // outputs (NativePlanes::kPublishedRowAlignment): 720 x 4 = 2880 becomes 3072-byte rows. The scanout copies take any
+    // source stride.
     void publishStrideRequirements()
     {
         OSDictionary *requirements = OSDictionary::withCapacity(1);
-        OSNumber *horizontal = OSNumber::withNumber(128ull, 32);
+        OSNumber *horizontal = OSNumber::withNumber(NativePlanes::kPublishedRowAlignment, 32);
         if (requirements && horizontal && requirements->setObject("StrideLinearHorizontal", horizontal))
             setProperty("DisplayPipeStrideRequirements", requirements);
         OSSafeReleaseNULL(horizontal);
         OSSafeReleaseNULL(requirements);
         publishPlaneLimits();
-    }
-
-    // r18-planes, from native_legacy_detach_ready (thread context, before backboardd): the row and plane-base alignment
-    // Core Animation sizes its surfaces by, once detaching is allowed. Multiples of what was published before (128, 64), so
-    // everything validateSwap and the scanouts take stays taken; NVK still renders 256-byte rows in place.
-    void publishDetachAlignment(uint32_t rows, uint32_t bases)
-    {
-        auto publish = [this](const char *name, const char *key, uint64_t value) {
-            OSDictionary *dict = OSDictionary::withCapacity(1);
-            OSNumber *number = OSNumber::withNumber(value, 32);
-            if (dict && number && dict->setObject(key, number))
-                setProperty(name, dict);
-            OSSafeReleaseNULL(number);
-            OSSafeReleaseNULL(dict);
-        };
-        publish("DisplayPipeStrideRequirements", "StrideLinearHorizontal", rows);
-        publish("DisplayPipePlaneBaseAlignment", "PlaneBaseAlignmentLinear", bases);
     }
 
     // r18-planes: the limits Core Animation detaches a layer within (AppleDisplay::update_display_limits reads them once, at
@@ -4918,7 +4933,7 @@ public:
                                 {"VideoClock", 78000000},
                                 {"PixelClock", 78000000}};
         publish("IOMFBMaxSrcPixels", source, 7, 64);
-        const Entry base[] = {{"PlaneBaseAlignmentLinear", limits.planeBaseAlignment}};
+        const Entry base[] = {{"PlaneBaseAlignmentLinear", NativePlanes::kPublishedBaseAlignment}};
         publish("DisplayPipePlaneBaseAlignment", base, 1, 64);
         const Entry layers[] = {{"MaxNumLayers", limits.maxLayers}};
         publish("IOMFBNumLayers", layers, 1, 32);
@@ -4974,6 +4989,26 @@ public:
         return color->setAccessibilityScale(scale);
     }
 
+    // thermalmonitord's TSFD. J120's LCD takes the panel temperature for its temperature and pixel response compensation;
+    // DC A has neither and the OLED panel compensates for temperature itself, so the value is taken and reported once.
+    IOReturn setDisplayTemperature(const uint32_t *temperatures) override
+    {
+        if (!temperatures)
+            return kIOReturnBadArgument;
+        static bool reported;
+        if (!__atomic_exchange_n(&reported, true, __ATOMIC_RELAXED)) {
+            int64_t sum = 0;
+            for (unsigned i = 0; i < 4; ++i)
+                sum += (int32_t)temperatures[i];
+            const int64_t hundredths = sum * 100 / 4 / 65536;
+            IOLog("SwitchDisplay: display temperature %s%lld.%02lld C from thermalmonitord (TSFD); the panel "
+                  "compensates for temperature itself\n",
+                  hundredths < 0 ? "-" : "", (hundredths < 0 ? -hundredths : hundredths) / 100,
+                  (hundredths < 0 ? -hundredths : hundredths) % 100);
+        }
+        return kIOReturnSuccess;
+    }
+
     // J120's pipe does nothing when a client registers, and treats its going away as ChangeFrameInfo to no keys.
     void platformFrameInfoNotify(void *client, bool enable) override
     {
@@ -4993,8 +5028,21 @@ public:
 #undef LEAF
 };
 
-OSDefineMetaClassAndStructors(NativeLegacyDisplay,
-                              IOMobileFramebufferLegacy) NativeLegacyDisplay *NativeLegacyDisplay::primaryDisplay;
+// OSDefineMetaClassAndStructors(NativeLegacyDisplay, IOMobileFramebufferLegacy), registered under J120's class name. iPadOS
+// finds the internal display as an AppleCLCD: VideoToolbox's and MediaToolbox's FigGetAlignmentForIOSurfaceOutput match
+// IOServiceMatching("AppleCLCD") for the display pipe's alignment, and the poster extensions' sandbox profiles allow
+// iokit-get-properties on the iokit-registry-entry-class AppleCLCD. Apple's AppleCLCD (AppleMobileDispH9G) is not prelinked
+// here, so the name is free.
+OSDefineMetaClassWithInit(NativeLegacyDisplay, IOMobileFramebufferLegacy, ) NativeLegacyDisplay::MetaClass::MetaClass()
+    : OSMetaClass("AppleCLCD", NativeLegacyDisplay::superClass, sizeof(NativeLegacyDisplay))
+{}
+
+OSDefineDefaultStructors(NativeLegacyDisplay,
+                         IOMobileFramebufferLegacy) NativeLegacyDisplay *NativeLegacyDisplay::primaryDisplay;
+#if SWITCH_FRAME_TIMELINE
+constinit NativeLegacyDisplay::ColumnScanState NativeLegacyDisplay::columnScan;
+constinit struct sysctl_oid NativeLegacyDisplay::columnScanOid = {};
+#endif
 
 // SwitchBrightness's display power sequence (SwitchBrightness.h): from its work loop, after the panel is asleep and before it wakes.
 extern "C" bool native_legacy_display_set_scanout(bool on)
@@ -5113,10 +5161,8 @@ extern "C" void native_legacy_gpu_complete(void *display, int status)
 // IOSurfaceAccelerator quarter turns (transforms 4 and 7), 4:2:0 to RGB and a row pitch (V4 pitch: 16, 64 or else 256
 // bytes), since on an internal display every rotated detached layer (here: every landscape video) is first copied through
 // it into a destination Core Animation allocates, and what Core Animation does when that copy is refused is not known.
-// When it may, the row and plane-base alignment Core Animation sizes its surfaces by become ones VIC writes (rows: the
-// proven pitch, at least the GPU's 128; bases: VIC's 256), published here, before backboardd reads them at its display's
-// creation [I: that its IOSA destinations follow DisplayPipeStrideRequirements/PlaneBaseAlignment]. Otherwise
-// backboardd keeps CA_DISABLE_DETACHED=1 and nothing changes. One line per call.
+// The alignment Core Animation sizes those destinations by is VIC's from start (NativePlanes::kPublishedRowAlignment).
+// Otherwise backboardd keeps CA_DISABLE_DETACHED=1 and nothing changes. One line per call.
 extern "C" bool native_legacy_detach_ready(void)
 {
     NativeLegacyDisplay *display = __atomic_load_n(&NativeLegacyDisplay::primaryDisplay, __ATOMIC_ACQUIRE);
@@ -5124,16 +5170,13 @@ extern "C" bool native_legacy_detach_ready(void)
     const TegraVICTraits *vic = tegra_vic_ready() ? tegra_vic_traits() : nullptr;
     const bool turns = vic && (vic->rotations & 0x90) == 0x90 && (vic->yccIn & TEGRA_VIC_YCC_IN_RGB);
     const uint32_t pitch = vic ? vic->pitchAlign : 0;
-    const bool pitched = pitch && pitch <= 256 && !(pitch & (pitch - 1));
-    const uint32_t rows = pitched && pitch > 128 ? pitch : 128, bases = 256;
+    const bool pitched = pitch && pitch <= NativePlanes::kPublishedRowAlignment && !(pitch & (pitch - 1));
     const bool ok = planes && turns && pitched;
-    if (ok)
-        display->publishDetachAlignment(rows, bases);
     IOLog("SwitchDisplay: backboardd %s detach layers: planes %s, IOSurfaceAccelerator quarter turns %s (transforms "
           "%#x), VIC row pitch %u%s (rows %u, plane bases %u)\n",
           ok ? "may" : "may not", planes ? "on" : "off", turns ? "proven" : "not proven", vic ? vic->rotations : 0,
-          pitch, pitched ? "" : " (not proven)", ok ? rows : 128u,
-          ok ? bases : NativePlanes::Limits().planeBaseAlignment);
+          pitch, pitched ? "" : " (not proven)", NativePlanes::kPublishedRowAlignment,
+          NativePlanes::kPublishedBaseAlignment);
     return ok;
 }
 

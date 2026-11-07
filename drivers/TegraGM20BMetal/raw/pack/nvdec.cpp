@@ -48,6 +48,7 @@ enum : uint32_t {
     STENCIL_CLEAR_VALUE = 0x0da0,
     INVALIDATE_SHADER_CACHES_NO_WFI = 0x0da4,
     PIXEL_SHADER_BARRIER = 0x0de0,
+    NO_OPERATION = 0x0100,
     INVALIDATE_TEXTURE_DATA_CACHE_PIXEL_ORDERED = 0x0f74,
     ZT_A = 0x0fe0,
     ZT_B = 0x0fe4,
@@ -367,6 +368,13 @@ void Decoder::method(uint32_t subc, uint32_t mthd, uint32_t data, bool fromMme)
         break;
     case PIXEL_SHADER_BARRIER:
         barrier("PSB");
+        break;
+    case NO_OPERATION:
+        // raw_gpu.cpp's marks (SWITCH_RAW_HARNESS_MARKS builds): a fetch barrier left out, a draw's run after its first
+        if (data == 0x0e11de)
+            barrier("ELIDED");
+        else if (data == 0x5b1175)
+            barrier("SPLIT");
         break;
     case INVALIDATE_TEXTURE_DATA_CACHE:
     case INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI:
@@ -801,25 +809,29 @@ bool Decoder::loadPrograms(const char *path)
     while ((n = fread(chunk, 1, sizeof chunk, f)) > 0)
         b.insert(b.end(), chunk, chunk + n);
     fclose(f);
-    for (size_t at = 0; at + 12 <= b.size();) {
-        uint32_t code, count;
+    for (size_t at = 0; at + 16 <= b.size();) {
+        uint32_t code, count, data;
         if (memcmp(&b[at], "NVPG", 4))
             return false;
         memcpy(&code, &b[at + 4], 4);
         memcpy(&count, &b[at + 8], 4);
-        at += 12;
+        memcpy(&data, &b[at + 12], 4);
+        at += 16;
         ProgramInfo p;
         p.cbufTypes.assign(b.begin() + at, b.begin() + at + count);
         at += count;
         p.image.assign(b.begin() + at, b.begin() + at + 80 + code);
         at += 80 + code;
+        p.data.assign(b.begin() + at, b.begin() + at + data);
+        at += data;
         programs.emplace(fnv(p.image.data(), 80), p);
     }
     return true;
 }
 
-// The program a stage runs (pre-Volta: at SET_PIPELINE_PROGRAM bytes into SET_PROGRAM_REGION): a known one when its header and
-// code match exactly, named by the hash of both; else the hash of its header and first 256 bytes of code, marked unknown.
+// The program a stage runs (pre-Volta: at SET_PIPELINE_PROGRAM bytes into SET_PROGRAM_REGION): a known one when its header,
+// code and shader data match exactly, named by the hash of all three; else the hash of its header and first 256 bytes of code,
+// marked unknown. The header sits 0x30 bytes into its upload and the data 256-aligned after the code (nvk_shader_upload).
 const ProgramInfo *Decoder::program(int stage, std::string &id)
 {
     const uint64_t at = addr3(PROGRAM_REGION_A, PROGRAM_REGION_B) + r3(PIPELINE + 0x40 * stage + 4);
@@ -830,11 +842,13 @@ const ProgramInfo *Decoder::program(int stage, std::string &id)
     }
     auto range = programs.equal_range(fnv(head, 80));
     for (auto it = range.first; it != range.second; ++it) {
-        std::vector<uint8_t> b(it->second.image.size());
+        const ProgramInfo &p = it->second;
+        std::vector<uint8_t> b(p.image.size()), data(p.data.size());
         read(at, b.data(), b.size());
-        if (b == it->second.image) {
-            id = hex(fnv(b.data(), b.size()));
-            return &it->second;
+        const uint64_t dataAt = at - 0x30 + ((0x30 + b.size() + 0xff) & ~uint64_t(0xff));
+        if (b == p.image && (data.empty() || (read(dataAt, data.data(), data.size()) && data == p.data))) {
+            id = hex(fnv(data.data(), data.size(), fnv(b.data(), b.size())));
+            return &p;
         }
     }
     id = "unknown:" + hex(fnv(head, sizeof head));
@@ -1027,9 +1041,32 @@ void Decoder::probeDump(uint32_t first, uint32_t count)
     }
 }
 
+bool Decoder::bound(int group, int slot, uint64_t &addr, uint32_t &bytes) const
+{
+    if (group < 0 || group > 4 || slot < 0 || slot >= 18 || !binds_[group][slot].valid)
+        return false;
+    addr = binds_[group][slot].addr;
+    bytes = binds_[group][slot].size;
+    return true;
+}
+
+void Decoder::pushWords(uint32_t &mask, uint32_t words[32]) const
+{
+    mask = 0;
+    const uint64_t root = binds_[4][0].valid ? binds_[4][0].addr : binds_[0][0].addr;
+    for (auto it = writtenThisSubmit_.lower_bound(root + 0x700); it != writtenThisSubmit_.end() && *it < root + 0x780;
+         ++it) {
+        const uint32_t k = uint32_t(*it - root - 0x700) / 4;
+        mask |= 1u << k;
+        words[k] = cbufWrites_.at(*it);
+    }
+}
+
 void Decoder::draw(const char *kind, uint32_t first, uint32_t count)
 {
     draws++;
+    if (onDraw)
+        onDraw(*this);
     std::string bar;
     for (auto &b : pendingBarriers_)
         bar += (bar.empty() ? "" : ",") + b;

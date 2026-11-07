@@ -35,7 +35,9 @@
 #include "NativeBridgeMetalFrontend.h"
 #include "AsyncPipelines.h"
 #include "GpuMemoryRelease.h"
+#include "QueuePriority.h"
 #include "SwitchFrameTimeline.h"
+#include "../../kits/SwitchRefusal/SwitchRefusalSite.h"
 // The two-plane render targets' load and store functions (TwoPlaneStandIn.metal).
 #include "TwoPlaneStandIn.h"
 
@@ -240,7 +242,6 @@ static char gLastProblems[2][200];
 
 static void noteProblem(NSString *what)
 {
-    gProblems++;
     std::lock_guard<std::mutex> lock(gProblemLock);
     memcpy(gLastProblems[1], gLastProblems[0], sizeof gLastProblems[0]);
     strlcpy(gLastProblems[0], what.UTF8String ?: "?", sizeof gLastProblems[0]);
@@ -250,7 +251,19 @@ static void noteProblem(NSString *what)
     do {                                                            \
         NSString *nbText = [NSString stringWithFormat:__VA_ARGS__]; \
         NSLog(@"%@", nbText);                                       \
+        gProblems++;                                                \
         noteProblem(nbText);                                        \
+    } while (0)
+// Work iPadOS sent the frontend that it refuses or answers with nothing: counted every time, its line (kits/SwitchRefusal,
+// domain "frontend") once per process and reason, or reason and detail
+#define NBREFUSE(reason, detail, ...)                                                                                  \
+    do {                                                                                                               \
+        gProblems++;                                                                                                   \
+        if (switch_refusal_first(switch_refusal_key_with(SWITCH_REFUSAL_KEY("frontend", reason), uint64_t(detail)))) { \
+            NSString *nbText = [NSString stringWithFormat:__VA_ARGS__];                                                \
+            noteProblem(nbText);                                                                                       \
+            switch_refusal_log("frontend", reason, nbText.UTF8String);                                                 \
+        }                                                                                                              \
     } while (0)
 // The pixel formats textures were asked for (first eight distinct), with how many were refused: native_bridge_metal_formats.
 static uint32_t gFormats[8];
@@ -347,8 +360,7 @@ static void journal(const std::string &line)
 static void (*gAnsweredZero)(const char *, const char *);
 static std::mutex gForwardLock;
 static std::unordered_map<SEL, NSMethodSignature *> *gForwardSignatures;  // under gForwardLock; never shrinks
-static std::vector<std::pair<Class, SEL>> *gForwardReported;  // under gForwardLock: one line per class and selector
-static std::atomic<uint64_t> gForwardCalls, gForwardUs;       // the rates line's fwd=
+static std::atomic<uint64_t> gForwardCalls, gForwardUs;                   // the rates line's fwd=
 static thread_local uint64_t tForwardBegan;
 
 // The types of `selector` as the first MTL* protocol that declares it has them (required methods before optional ones), or null.
@@ -401,19 +413,15 @@ static void forwardZero(id self, SEL, NSInvocation *invocation)
 {
     const SEL selector = invocation.selector;
     Class cls = object_getClass(self);
-    bool first = false;
-    {
-        std::lock_guard<std::mutex> lock(gForwardLock);
-        if (!gForwardReported)
-            gForwardReported = new std::vector<std::pair<Class, SEL>>;
-        const std::pair<Class, SEL> key(cls, selector);
-        if (std::find(gForwardReported->begin(), gForwardReported->end(), key) == gForwardReported->end()) {
-            gForwardReported->push_back(key);
-            first = true;
-        }
+    const uint64_t key = switch_refusal_key_with(
+        switch_refusal_key_with(SWITCH_REFUSAL_KEY("frontend", "selector.zero"), uintptr_t(cls)), uintptr_t(selector));
+    if (switch_refusal_first(key)) {
+        char text[256];
+        snprintf(text, sizeof text, "-[%s %s] answered zero", class_getName(cls), sel_getName(selector));
+        switch_refusal_log("frontend", "selector.zero", text);
+        if (gAnsweredZero)
+            gAnsweredZero(class_getName(cls), sel_getName(selector));
     }
-    if (first && gAnsweredZero)
-        gAnsweredZero(class_getName(cls), sel_getName(selector));
     if (const NSUInteger length = invocation.methodSignature.methodReturnLength) {
         uint64_t small[8] = {};
         void *zero = length <= sizeof small ? small : calloc(1, length);
@@ -2231,11 +2239,83 @@ static void notified(void *context, uint64_t value)
 @property (nonatomic) MTLResourceOptions options;
 @property (nonatomic) MTLHeapType heapType;
 @end
-@interface NBQueue : NBObject
+@interface NBQueue : NBObject {
+@public
+    uint32_t gpuPriority, backgroundGpuPriority;  // what it asked for (QueuePriority.h), counted in gQueuePriorities
+}
 @property (nonatomic) NmbQueue *handle;
 @property (atomic, strong)
     dispatch_queue_t completionQueue;  // SPI: where command buffers' handlers run (nil: the runtime's thread)
 @end
+
+// The process's queues' GPU priorities; the GPU driver gets the most urgent of each (method 18) whenever it changes. Core
+// Animation sets a queue's once and never looks again, so one the driver could not take yet (no NVK device) is sent
+// again at the next queue made or command buffer committed (gQueuePriorityPending).
+static std::mutex gQueuePriorityLock;
+static switch_metal::QueuePriorities gQueuePriorities;
+static uint32_t gAppliedPriority = switch_metal::QueuePriorities::kDefault,
+                gAppliedBackground = switch_metal::QueuePriorities::kDefaultBackground;
+static std::atomic<bool> gQueuePriorityPending{false};
+
+using ApplyPriority = bool (*)(uint32_t, uint32_t);
+
+static ApplyPriority priorityCall()
+{
+    static const ApplyPriority apply = reinterpret_cast<ApplyPriority>(nvkSymbol("switch_nvk_gpu_priority"));
+    return apply;
+}
+
+// gQueuePriorityLock held
+static void applyQueuePriorities()
+{
+    const uint32_t priority = gQueuePriorities.priority(), background = gQueuePriorities.backgroundPriority();
+
+    if (priority == gAppliedPriority && background == gAppliedBackground) {
+        gQueuePriorityPending.store(false, std::memory_order_relaxed);
+        return;
+    }
+    const bool applied = priorityCall()(priority, background);
+    if (applied) {
+        gAppliedPriority = priority;
+        gAppliedBackground = background;
+    }
+    gQueuePriorityPending.store(!applied, std::memory_order_relaxed);
+}
+
+static void applyPendingQueuePriorities()
+{
+    if (!gQueuePriorityPending.load(std::memory_order_relaxed))
+        return;
+    std::lock_guard<std::mutex> lock(gQueuePriorityLock);
+    applyQueuePriorities();
+}
+
+static void addQueuePriority(NBQueue *queue)
+{
+    std::lock_guard<std::mutex> lock(gQueuePriorityLock);
+    queue->gpuPriority = switch_metal::QueuePriorities::kDefault;
+    queue->backgroundGpuPriority = switch_metal::QueuePriorities::kDefaultBackground;
+    gQueuePriorities.add(queue->gpuPriority, queue->backgroundGpuPriority);
+    if (priorityCall())
+        applyQueuePriorities();
+}
+
+// A queue's priority (or its background one): kept, and sent to the driver now or (pending) later. NO only without the
+// driver call (not the GM20B's NVK) or for a value Metal does not have.
+static bool setQueuePriority(NBQueue *queue, NSUInteger priority, bool background)
+{
+    if (priority > switch_metal::QueuePriorities::kMax || !priorityCall())
+        return false;
+    std::lock_guard<std::mutex> lock(gQueuePriorityLock);
+    gQueuePriorities.remove(queue->gpuPriority, queue->backgroundGpuPriority);
+    if (background)
+        queue->backgroundGpuPriority = uint32_t(priority);
+    else
+        queue->gpuPriority = uint32_t(priority);
+    gQueuePriorities.add(queue->gpuPriority, queue->backgroundGpuPriority);
+    applyQueuePriorities();
+    return true;
+}
 
 // A render encoder's attachments as the next one compares them (joinable passes, the rates line): texture, level, slice, depth
 // plane, load and store action of each color, the depth and the stencil.
@@ -3295,8 +3375,8 @@ static bool standInStates()
         gStandInStore = gStandInLoad ? [device newRenderPipelineStateWithDescriptor:d error:&error] : nil;
         tAsyncWorker = was;
         if (!gStandInLoad || !gStandInStore)
-            NBLOG(@"native-metal: two-plane render targets refused: their load/store states: %@",
-                  error.localizedDescription);
+            NBREFUSE("standin.states", 0, @"two-plane render targets refused: their load/store states: %@",
+                     error.localizedDescription);
     });
     return gStandInLoad && gStandInStore;
 }
@@ -3333,11 +3413,10 @@ static NBTwoPlaneStandIn *standInOf(id texture)
         d.pixelFormat = MTLPixelFormatRG8Unorm;
         standIn.chroma = [device newTextureWithDescriptor:d iosurface:planes.surface plane:1];
         if (!standIn.texture || !standIn.luma || !standIn.chroma) {
-            static std::atomic<bool> said{false};
-            if (!said.exchange(true))
-                NBLOG(@"native-metal: two-plane render target refused: no stand-in for a %lux%lu texture (%d%d%d)",
-                      (unsigned long)width, (unsigned long)height, standIn.texture != nil, standIn.luma != nil,
-                      standIn.chroma != nil);
+            NBREFUSE("standin.texture", 0,
+                     @"two-plane render target refused: no stand-in for a %lux%lu texture (%d%d%d)",
+                     (unsigned long)width, (unsigned long)height, standIn.texture != nil, standIn.luma != nil,
+                     standIn.chroma != nil);
             return nil;
         }
         planes.standIn = standIn;
@@ -3982,6 +4061,7 @@ extern "C" size_t native_bridge_metal_commit_origin(char *out, size_t size)
     switch_frame::trace(switch_frame::kM2vCommit, switch_frame::kPoint, frame.seq);
 #endif
     const uint64_t began = apiTiming() ? mach_absolute_time() : 0;
+    applyPendingQueuePriorities();
     [self commitNow];
     if (began) {
         gApiUs += ticksToUs(tApiTicks + mach_absolute_time() - began);
@@ -4160,6 +4240,12 @@ static void completed(void *context)
 
 - (void)dealloc
 {
+    {
+        std::lock_guard<std::mutex> lock(gQueuePriorityLock);
+        gQueuePriorities.remove(gpuPriority, backgroundGpuPriority);
+        if (priorityCall())
+            applyQueuePriorities();
+    }
     nmb_queue_release(_handle);
 }
 
@@ -4228,27 +4314,27 @@ static void completed(void *context)
 }  // submission happens on the caller's thread here
 
 // setCompletionQueue: is the property's setter.
-// GPU priorities are not applied (one hardware queue): reported as not applied.
+// The GPU driver runs the process's channels at the most urgent priority its queues asked for (QueuePriority.h).
 - (BOOL)setGPUPriority:(NSUInteger)priority
 {
-    (void)priority;
-    return NO;
+    return setQueuePriority(self, priority, false);
 }
 
 - (BOOL)setBackgroundGPUPriority:(NSUInteger)priority
 {
-    (void)priority;
-    return NO;
+    return setQueuePriority(self, priority, true);
 }
 
 - (NSUInteger)getGPUPriority
 {
-    return 0;
-}  // none was applied (above)
+    std::lock_guard<std::mutex> lock(gQueuePriorityLock);
+    return gpuPriority;
+}
 
 - (NSUInteger)getBackgroundGPUPriority
 {
-    return 0;
+    std::lock_guard<std::mutex> lock(gQueuePriorityLock);
+    return backgroundGpuPriority;
 }
 
 - (id<MTLCommandBuffer>)commandBufferWithDescriptor:(MTLCommandBufferDescriptor *)d
@@ -5407,7 +5493,8 @@ static void fillLimits(id device)
             continue;
         const uint64_t value = ((NSUInteger (*)(id, SEL))method_getImplementation(own))(device, sel);
         if (value > UINT32_MAX) {
-            NBLOG(@"native-metal: limits: %s %llu does not fit the table", field.selector, (unsigned long long)value);
+            NBREFUSE("limits.overflow", uintptr_t(field.selector), @"limits: %s %llu does not fit the table",
+                     field.selector, (unsigned long long)value);
             continue;
         }
         uint32_t was;
@@ -5416,8 +5503,9 @@ static void fillLimits(id device)
         memcpy(table + field.offset, &word, 4);
         if (((NSUInteger (*)(id, SEL))method_getImplementation(original))(device, sel) != value) {
             memcpy(table + field.offset, &was, 4);
-            NBLOG(@"native-metal: limits: the base class does not read %s at 0x%x; the fields from there stay 0",
-                  field.selector, field.offset);
+            NBREFUSE("limits.layout", field.offset,
+                     @"limits: the base class does not read %s at 0x%x; the fields from there stay 0", field.selector,
+                     field.offset);
             return;
         }
     }
@@ -5425,7 +5513,8 @@ static void fillLimits(id device)
     memcpy(&width, table + 0x84, 4);
     memcpy(&height, table + 0x88, 4);
     if (!width || !height)
-        NBLOG(@"native-metal: limits: no 2D texture size from the device (PhotosUICore refuses every image)");
+        NBREFUSE("limits.texture2d", 0,
+                 @"limits: no 2D texture size from the device (PhotosUICore refuses every image)");
 }
 #else
 static void fillLimits(id)
@@ -5883,6 +5972,7 @@ static void fillLimits(id)
         return nil;
     NBQueue *queue = [NBQueue new];
     queue.handle = handle;
+    addQueuePriority(queue);
     return (id<MTLCommandQueue>)queue;
 }
 
@@ -5925,8 +6015,9 @@ static void fillLimits(id)
     (void)length;
     (void)d;
     (void)deallocator;
-    NBLOG(@"native-metal: newTextureWithBytesNoCopy:length:descriptor:deallocator: is not implemented (Apple's texture "
-          @"layout of raw memory is not known)");
+    NBREFUSE("texture.bytesnocopy", 0,
+             @"newTextureWithBytesNoCopy:length:descriptor:deallocator: is not implemented (Apple's texture layout of "
+             @"raw memory is not known)");
     return nil;
 }
 
@@ -5996,9 +6087,9 @@ static void fillLimits(id)
     NmbBuffer *handle = nmb_buffer_new_no_copy(gDevice, pointer, length, options);
     if (!handle) {
         // Each refusal sends the caller to a CPU copy (QuartzCore's copy_image_to_texture uploads the image instead), so the
-        // first ones name the memory: where it sits in its page, and the VM region's protection, sharing and tag.
-        static std::atomic<int> told{0};
-        if (told.fetch_add(1) < 8) {
+        // line names the memory: where it sits in its page, and the VM region's protection, sharing and tag.
+        static constexpr uint64_t kRefusal = switch_refusal_key("frontend", "buffer.nocopy");
+        if (switch_refusal_first(kRefusal)) {
             vm_address_t region = (vm_address_t)pointer;
             vm_size_t regionSize = 0;
             vm_region_extended_info_data_t info = {};
@@ -6006,10 +6097,11 @@ static void fillLimits(id)
             mach_port_t object = MACH_PORT_NULL;
             const kern_return_t kr = vm_region_64(mach_task_self(), &region, &regionSize, VM_REGION_EXTENDED_INFO,
                                                   (vm_region_info_t)&info, &count, &object);
-            NBLOG(@"native-metal: no-copy buffer refused (%lu bytes at page offset 0x%lx; region %d: prot %d share %d "
-                  @"tag %u): %@",
-                  (unsigned long)length, (unsigned long)((uintptr_t)pointer & (vm_page_size - 1)), kr, info.protection,
-                  info.share_mode, info.user_tag, lastError());
+            NSString *text = [NSString
+                stringWithFormat:@"%lu bytes at page offset 0x%lx (region %d: prot %d share %d tag %u): %@",
+                                 (unsigned long)length, (unsigned long)((uintptr_t)pointer & (vm_page_size - 1)), kr,
+                                 info.protection, info.share_mode, info.user_tag, lastError()];
+            switch_refusal_log("frontend", "buffer.nocopy", text.UTF8String);
         }
         return nil;
     }
@@ -6435,7 +6527,8 @@ static uint64_t askAnswer(SEL cmd, NSUInteger arg)
     gAnswersAsked++;
     uint64_t value = 0;
     if (!nmb_device_answer(gDevice, sel_getName(cmd), arg, &value)) {
-        NBLOG(@"native-metal: %s(%lu): %@", sel_getName(cmd), (unsigned long)arg, lastError());
+        NBREFUSE("device.answer", uintptr_t(cmd) ^ uint64_t(arg) << 48, @"no device answer for %s(%lu): %@",
+                 sel_getName(cmd), (unsigned long)arg, lastError());
         value = 0;
     }
     if (keep) {
@@ -6496,7 +6589,7 @@ static void installAnswers(Class cls)
         case NMB_ANSWER_COUNT:
         case NMB_ANSWER_FLAG:
             if (!nmb_device_answer(gDevice, name, 0, &value)) {
-                NBLOG(@"native-metal: no device answer: %@", lastError());
+                NBREFUSE("device.answer", uintptr_t(sel), @"no device answer for %s: %@", name, lastError());
                 continue;
             }
             // Extended-range 10-bit (XR10) framebuffers are withheld from the render server: this display chain presents 8-bit BGRX scanout
