@@ -9176,27 +9176,50 @@ native_switch_als_cache(proc_t p, user_addr_t scratch, mount_t data_mount)
 
 /* timed keeps kern.monotonicclock with the UTC it last trusted (/var/db/timed/com.apple.timed.plist) and, while the clock
  * reads above that, extrapolates from it. Kernels before SwitchMonotonicBase.h counted the clock from the SoC's power-up;
- * this one counts seconds since 2000 by the MAX77620, so a pair cached by an older kernel would put the time decades
- * ahead. It is dropped once, when the marker is missing; a boot of an older kernel in between needs the marker removed
- * by hand. Failures are logged only; the next boot tries again. */
+ * this one counts seconds since 2000 by the MAX77620, so a pair an older kernel's boot cached would put the time decades
+ * ahead. The marker holds the boot session UUID of the last boot under this clock, and timed saves its own boot's UUID
+ * (BootUUID, NSUUID's upper-case string) with the pair: a cache without the marker's UUID was written by another kernel,
+ * or by none since, and is dropped before timed starts. A cache timed did not save in the last boot is dropped too,
+ * which is no worse than a cold boot. Failures are logged only. */
+static int
+native_switch_bytes_hold(const char *bytes, int length, const char *needle, int size)
+{
+	for (int at = 0; at + size <= length; ++at) {
+		if (!memcmp(bytes + at, needle, (size_t)size)) return 1;
+	}
+	return 0;
+}
+
 static void
 native_switch_timed_cache(proc_t p, user_addr_t scratch, mount_t data_mount)
 {
 	static const char cache[] = "/private/var/db/timed/com.apple.timed.plist",
-	    marker[] = "/private/var/Switch/monotonic-clock-since-2000";
-	vnode_t vp = NULLVP;
-	if (!vnode_lookup(marker, 0, &vp, vfs_context_current())) {
-		vnode_put(vp);
-		return;
+	    marker[] = "/private/var/Switch/monotonic-clock-boot";
+	const int uuid_length = (int)strlen(bootsessionuuid_string);
+	char *last = NULL, *cached = NULL;
+	int last_length = 0, cached_length = 0, keep = 0;
+	if (!native_switch_read_data_file(p, marker, data_mount, &last, &last_length) && last && last_length == uuid_length &&
+	    !native_switch_read_data_file(p, cache, data_mount, &cached, &cached_length) && cached) {
+		keep = native_switch_bytes_hold(cached, cached_length, last, last_length);
 	}
-	struct unlink_args request = {.path = scratch + 0x900};
-	int32_t result = 0;
-	int error = copyout(cache, request.path, sizeof(cache));
-	if (!error) error = native_switch_unlink(p, &request, &result);
-	if (error == ENOENT) error = 0;
+	if (last) kfree_data(last, (vm_size_t)last_length);
+	if (cached) kfree_data(cached, (vm_size_t)cached_length);
+	int error = 0;
+	if (!keep) {
+		struct unlink_args request = {.path = scratch + 0x900};
+		int32_t result = 0;
+		error = copyout(cache, request.path, sizeof(cache));
+		if (!error) error = native_switch_unlink(p, &request, &result);
+		if (error == ENOENT) error = 0;
+	}
 	if (!error) error = native_switch_mkdir(p, scratch, "/private/var/Switch", 0, 0755);
-	if (!error) error = native_switch_watchdog_file(p, scratch, marker, "", 0, data_mount, 0, 0, 0644);
-	printf("SwitchRawBoot: monotonic clock since 2000: timed's cache dropped (%d)\n", error);
+	if (!error) {
+		error = native_switch_watchdog_file(p, scratch, marker, bootsessionuuid_string, uuid_length, data_mount, 0, 0,
+		    0644);
+	}
+	if (!keep || error) {
+		printf("SwitchRawBoot: timed's cache %s (%d)\n", keep ? "kept" : "dropped, not saved in this clock's last boot", error);
+	}
 }
 
 extern const struct switch_ui_scale *switch_ui_scale(void);
