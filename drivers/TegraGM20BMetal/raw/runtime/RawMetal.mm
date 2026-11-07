@@ -3105,11 +3105,13 @@ static bool rawDepthStencil(MTLRenderPassDescriptor *pass)
 
 - (void)event:(id<MTLEvent>)event value:(uint64_t)value signal:(bool)signal
 {
-    // the m2v device's shared events: the raw path signals them from the CPU once its work completes, and waits for them on the
-    // CPU before its work is submitted; any other event is m2v's alone
-    if (![(id)event conformsToProtocol:@protocol(MTLSharedEvent)] ||
-        ![(id)event respondsToSelector:@selector(setSignaledValue:)]) {
-        [self takeWholeReason:WhyEvent why:@"an event that is not a shared event"];
+    // the m2v device's events, shared or plain (NBEvent answers a shared event's value, set and notifications): the raw path
+    // signals them from the CPU once its work completes, and holds its work until a wait is covered (waitCovered); an event
+    // without those (another device's) is m2v's alone
+    if (![(id)event respondsToSelector:@selector(signaledValue)] ||
+        ![(id)event respondsToSelector:@selector(setSignaledValue:)] ||
+        ![(id)event respondsToSelector:@selector(notifyListener:atValue:block:)]) {
+        [self takeWholeReason:WhyEvent why:@"an event the raw path cannot read, set or be notified of"];
         hit(self, PredEvent, signal);
     }
     [self retain:event];

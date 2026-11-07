@@ -2158,18 +2158,15 @@ static void asyncCall(void (^call)(void))
 @interface NBEvent : NBObject
 @property (nonatomic) NmbEvent *handle;
 @end
+static void notified(void *context, uint64_t value);
+// A plain event answers a shared event's value, set and notifications too, which Metal gives it none of: the raw GM20B
+// path (RawMetal.mm) signals and waits for both kinds through them, so a command buffer with a plain event stays raw.
 @implementation NBEvent
 
 - (void)dealloc
 {
     nmb_event_release(_handle);
 }
-
-@end
-@interface NBSharedEvent : NBEvent
-@end
-static void notified(void *context, uint64_t value);
-@implementation NBSharedEvent
 
 - (uint64_t)signaledValue
 {
@@ -2179,11 +2176,6 @@ static void notified(void *context, uint64_t value);
 - (void)setSignaledValue:(uint64_t)value
 {
     nmb_shared_event_set_value(self.handle, value);
-}
-
-- (BOOL)waitUntilSignaledValue:(uint64_t)value timeoutMS:(uint64_t)milliseconds
-{
-    return nmb_shared_event_wait(self.handle, value, milliseconds);
 }
 
 // The block runs on the listener's dispatch queue (Metal's contract); the bridge's listener thread only forwards it there.
@@ -2199,6 +2191,16 @@ static void notified(void *context, uint64_t value);
         (void)(__bridge_transfer NSArray *)(__bridge void *)job;
         NBLOG(@"native-metal: notifyListener refused: %@", lastError());
     }
+}
+
+@end
+@interface NBSharedEvent : NBEvent
+@end
+@implementation NBSharedEvent
+
+- (BOOL)waitUntilSignaledValue:(uint64_t)value timeoutMS:(uint64_t)milliseconds
+{
+    return nmb_shared_event_wait(self.handle, value, milliseconds);
 }
 
 // A handle for another process needs a kernel-backed event this bridge does not have yet: refused, never a handle that could not work.

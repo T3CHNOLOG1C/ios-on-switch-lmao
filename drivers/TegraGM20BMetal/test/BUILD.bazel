@@ -9,6 +9,8 @@
 #                     its deadline, and calls a passed fence whose wake never came a lost interrupt
 #   nvk_surfaces_test nvkmd_darwin's ExecSurfaces record (nvkmd_darwin_surfaces.h): each BO once with its accesses merged,
 #                     past its room the all-imports flag, its length
+#   raw_events_source_test  how a command buffer with a plain or shared Metal event stays raw (frontend, bridge, m2v,
+#                     RawMetal), and the cross-process shared event refusal line
 #   raw_follow_test   raw/runtime/raw_follow.h: the raw path's threads take a fixed-priority committer's policy, never a
 #                     lower one, and keep their own for a timeshare committer
 #   stage_test        stage-tegra-gm20b-metal.py on a directory standing in for the Data volume
@@ -82,6 +84,18 @@ host_test(
         "drivers/TegraGM20B",
     ],
     cxx_std = "c++17",
+)
+
+host_test(
+    name = "raw_events_source_test",
+    srcs = ["raw_events_source_test.cpp"],
+    data = [
+        "//drivers/NativeMetal:NativeBridgeMetalFrontend.mm",
+        "//drivers/NativeMetal:bridge/NativeMetalObjects.rs",
+        "//drivers/TegraGM20BMetal:TegraGM20BMetalPlugin.mm",
+        "//drivers/TegraGM20BMetal:raw/runtime/RawMetal.mm",
+        "//third_party/m2v/crates/metal2vulkan-runtime:sources",
+    ],
 )
 
 host_test(

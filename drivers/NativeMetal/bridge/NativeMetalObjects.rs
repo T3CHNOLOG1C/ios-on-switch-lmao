@@ -2250,10 +2250,11 @@ impl NmbEvent {
     }
 }
 
-fn shared<'a>(event: *const NmbEvent) -> Result<&'a SharedEvent, String> {
+// A plain event's host view too (Event::host_view): the raw GM20B path signals and waits for both kinds through it.
+fn shared(event: *const NmbEvent) -> Result<SharedEvent, String> {
     match get(event)? {
-        NmbEvent::Shared(s) => Ok(s),
-        NmbEvent::Event(_) => Err("not a shared event".into()),
+        NmbEvent::Shared(s) => Ok(s.clone()),
+        NmbEvent::Event(e) => Ok(e.host_view()),
     }
 }
 
