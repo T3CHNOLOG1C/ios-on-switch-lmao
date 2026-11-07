@@ -10,7 +10,9 @@
  * Sample time 0 is host time anchor_host, and one frame lasts ticks_per_frame_q32 / 2^32 host ticks. The null backend
  * sets both once; the Tegra I2S backend sets anchor_host again each time the hardware starts (the host time its DMA
  * started at ring frame 0) and ticks_per_frame_q32 to the frame length of the I2S clock it programmed (47999.88 Hz on
- * this board's PLLA, not 48000), so the plug-in reads anchor_host after SwitchAudioStartOutput returns. The plug-in
+ * this board's PLLA, not 48000), so the plug-in reads anchor_host after SwitchAudioStartOutput returns. rate is the
+ * nominal rate both directions run at now, one of rates[] (0 ends the list); SwitchAudioSetRate changes it, and
+ * ticks_per_frame_q32 with it, only while neither direction runs. The plug-in
  * mixes playback into the ring (adds, it does not overwrite) at least lead_frames ahead of now; the service consumes
  * the ring and clears what it consumed (out_frames). Capture frames below in_frames are valid. Both positions advance
  * in steps of period_frames (480 null, 2048 Tegra), so capture is read at least period_frames + lead_frames behind
@@ -25,8 +27,9 @@
 
 #define SWITCH_AUDIO_CLASS         "SwitchAudio"
 #define SWITCH_AUDIO_MAGIC         0x53574155u /* 'SWAU' */
-#define SWITCH_AUDIO_VERSION       3u
-#define SWITCH_AUDIO_RATE          48000u
+#define SWITCH_AUDIO_VERSION       4u
+#define SWITCH_AUDIO_RATE          48000u /* the rate a service starts at */
+#define SWITCH_AUDIO_MAX_RATES     2u
 #define SWITCH_AUDIO_OUT_CHANNELS  2u
 #define SWITCH_AUDIO_IN_CHANNELS   1u
 #define SWITCH_AUDIO_PERIOD_FRAMES 480u   /* 10 ms: the null backend's step */
@@ -45,7 +48,9 @@ enum {
     SwitchAudioStartInput = 2,
     SwitchAudioStopInput = 3,
     /* One scalar: the address, in the caller, of CoreAudio's 24 MHz host clock constant (see SwitchAudio.cpp). */
-    SwitchAudioSetHostClock = 4
+    SwitchAudioSetHostClock = 4,
+    /* One scalar: the nominal rate in Hz, one of rates[]. kIOReturnBusy while either direction runs. */
+    SwitchAudioSetRate = 5
 };
 
 enum {
@@ -60,8 +65,10 @@ enum {
 
 typedef struct {
     uint32_t magic, version;
-    uint32_t rate, out_channels, in_channels, period_frames, ring_frames, lead_frames;
+    volatile uint32_t rate;
+    uint32_t out_channels, in_channels, period_frames, ring_frames, lead_frames;
     uint32_t backend;
+    uint32_t rates[SWITCH_AUDIO_MAX_RATES];
     volatile uint32_t state;               /* SwitchAudio*Running */
     volatile uint64_t ticks_per_frame_q32; /* host ticks per frame, 32.32 fixed point */
     volatile uint64_t anchor_host;         /* host time of sample time 0 */

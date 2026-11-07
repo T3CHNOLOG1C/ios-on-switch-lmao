@@ -42,6 +42,9 @@
 //    38.4 MHz ref, m 2, n 38, p 2, SDM 0xfccc, really 368639062.5 Hz), PLLA_OUT0 49.152 MHz, AHUB (d_audio)
 //    = PLLA_OUT0, I2S 3.072 MHz (64 fs), extern1 12.288 MHz, APE from PLLP at 25.5 MHz. The real frame rate is
 //    therefore 47999.878 Hz, and ticks_per_frame_q32 says so.
+//  - The 44.1 kHz family (SwitchAudioFormat.h's clock table, chosen by the plug-in through SwitchAudioSetRate between
+//    streams): PLLA 282.24 MHz (m 2, n 29, p 2, SDM 0xfccc, the T210B01 table's other entry), PLLA_OUT0 / 5 = 56.448
+//    MHz (1280 fs), I2S / 20, extern1 / 5, so 44099.854 Hz. The codec needs nothing new: MCLK stays 256 fs.
 //  - Routing: XBAR "I2S1 Mux" = ADMAIF1 (playback), "ADMAIF1 Mux" = I2S1 (capture), as nvaudio_conf.xml sets them;
 //    ADMA request line 1 = ADMAIF1 (DTB admaif dmas). ADSP and the AHUB effect blocks are not used.
 //  - Interrupts: ADMA channel n raises SPI 24+n on the AGIC, the APE's own GICv2 (distributor 0x702f9000, CPU
@@ -80,6 +83,7 @@
 #include "../../kits/SwitchCAR/SwitchPMC.h"
 #include "../../kits/SwitchDMA/SwitchDcache.h"
 #include "../../kits/SwitchMMIO/SwitchMMIOKernel.h"
+#include "../../kits/SwitchRefusal/SwitchRefusal.h"
 
 extern "C" {
 extern task_t kernel_task;
@@ -143,7 +147,6 @@ constexpr unsigned kPeriods = 8;                                         // ADMA
 constexpr uint32_t kPeriodFrames = SWITCH_AUDIO_RING_FRAMES / kPeriods;  // 2048
 constexpr uint32_t kOutPeriodBytes = kOutBytes / kPeriods, kInPeriodBytes = kInBytes / kPeriods;
 static_assert(kPeriodFrames * kPeriods == SWITCH_AUDIO_RING_FRAMES, "a ring is whole ADMA periods");
-constexpr uint32_t kWatchdogMS = 4 * kPeriodFrames * 1000 / SWITCH_AUDIO_RATE;  // 170 ms: 4 periods
 constexpr uint32_t kGraceMS = 50;        // after a missed deadline, for an interrupt action already queued
 constexpr uint32_t kIdleMS = 5000;       // codec power-down after the last stream stops (ASoC pmdown_time)
 constexpr uint32_t kJackSettleMS = 250;  // jack contact bounce
@@ -198,16 +201,20 @@ enum : uint32_t {
     PLLA_EN_SDM = 1u << 26,         // MISC2
 };
 
-// PLLA = 38.4 MHz / m * (n + 1/2 + sdm / 8192) / p (clk-pll.c:653); p 2 is hardware 1 (pll_qlin_pdiv_to_hw).
-constexpr uint32_t kPllaM = 2, kPllaN = 38, kPllaP = 2, kPllaPHw = 1, kPllaSdm = 0xfccc;
-constexpr uint32_t kPllaMnp = (kPllaPHw << 20) | (kPllaN << 8) | kPllaM;
-constexpr int64_t kPllaNEff = 8192 * (int64_t)kPllaN + 4096 + (int64_t)(int16_t)kPllaSdm;  // n_eff * 8192 = 314572
-// 7.1 dividers (value = 2 * ratio - 2): PLLA_OUT0 = PLLA / 7.5, I2S = PLLA_OUT0 / 16 (the 64 fs bit clock),
-// extern1 = PLLA_OUT0 / 4, APE = PLLP 408 MHz / 16. PLLA_OUT0 is 1024 fs.
-constexpr uint32_t kPllaOut0X2 = 15, kPllaOut0PerFs = 1024;
-constexpr uint32_t kPllaOut0Div = kPllaOut0X2 - 2, kI2sDiv = switch_audio_i2s_divider(kPllaOut0PerFs), kExtern1Div = 6,
-                   kApeSource = (4u << 29) | 30;
-static_assert(kI2sDiv == 30, "I2S0 = PLLA_OUT0 / 16");
+// The rate families the I2S runs (SwitchAudioFormat.h), the first at start. PLLA = 38.4 MHz / m * (n + 1/2 + sdm /
+// 8192) / p (clk-pll.c:653); p 2 is hardware 1 (pll_qlin_pdiv_to_hw). 7.1 dividers (value = 2 * ratio - 2) take
+// PLLA_OUT0, the I2S bit clock (64 fs) and MCLK (extern1, 256 fs) from it; APE = PLLP 408 MHz / 16.
+constexpr switch_audio_clock kClocks[SWITCH_AUDIO_MAX_RATES] = {SWITCH_AUDIO_CLOCK_48000, SWITCH_AUDIO_CLOCK_44100};
+static_assert(kClocks[0].rate == SWITCH_AUDIO_RATE, "a service starts at SWITCH_AUDIO_RATE");
+constexpr uint32_t kPllaPHw = 1, kApeSource = (4u << 29) | 30;
+static_assert(kClocks[0].p == 2 && kClocks[1].p == 2, "p 2 is hardware 1");
+static_assert(switch_audio_i2s_divider(kClocks[0].out0_per_fs) == 30, "I2S0 = PLLA_OUT0 / 16 at 48 kHz");
+static_assert(switch_audio_i2s_divider(kClocks[1].out0_per_fs) == 38, "I2S0 = PLLA_OUT0 / 20 at 44.1 kHz");
+
+constexpr uint32_t pllaMnp(const switch_audio_clock &c)
+{
+    return (kPllaPHw << 20) | (c.n << 8) | c.m;
+}
 
 // APBDEV_PMC (hekate bdk/soc/pmc_t210.h; mainline pmc.c tegra210_io_pads/io_pad_vctrls).
 enum : uint32_t {
@@ -344,6 +351,7 @@ class SwitchAudio : public IOService {
     SwitchAudioControl *control = nullptr;
 
     uint64_t hz = 0;
+    const switch_audio_clock *clock = &kClocks[0];  // what the I2S runs (or runs next)
 
     // Tegra backend: hardware on `loop`, the codec (I2C transfers sleep) on its own work loop.
     bool tegra = false, tegraCapture = false;
@@ -381,7 +389,7 @@ class SwitchAudio : public IOService {
         if (now <= control->anchor_host)
             return 0;
         const uint64_t ticks = now - control->anchor_host;  // split so nothing overflows (no 128-bit helpers here)
-        return ticks / hz * SWITCH_AUDIO_RATE + ticks % hz * SWITCH_AUDIO_RATE / hz;
+        return ticks / hz * clock->rate + ticks % hz * clock->rate / hz;
     }
 
     switch_audio_sample_t *ring(uint32_t type) const
@@ -428,23 +436,27 @@ class SwitchAudio : public IOService {
         return base;
     }
 
-    // The rate the I2S really runs at, as host ticks per frame in 32.32: fs = ref * n_eff / (8192 m p) * 2/15 / 1024
-    // (PLLA_OUT0 / 16 for the bit clock, / 64 bit clocks a frame).
+    // The rate the I2S really runs at, as host ticks per frame in 32.32 (47999.878 Hz for 48 kHz, 44099.854 Hz for
+    // 44.1 kHz).
     uint64_t tegraTicksPerFrame(uint64_t refHz) const
     {
-        return switch_audio_ticks_per_frame_q32(hz, refHz, kPllaM, kPllaP, (uint64_t)kPllaNEff, kPllaOut0X2,
-                                                kPllaOut0PerFs);
+        return switch_audio_clock_ticks_per_frame_q32(hz, refHz, *clock);
     }
 
-    // PLLA 368.64 MHz and PLLA_OUT0 49.152 MHz, in the order clk-pll.c programs a disabled SDM PLL (set_defaults,
+    uint32_t watchdogMS() const  // 4 periods: 170 ms at 48 kHz
+    {
+        return 4 * kPeriodFrames * 1000 / clock->rate;
+    }
+
+    // `clock`'s PLLA and PLLA_OUT0, in the order clk-pll.c programs a disabled SDM PLL (set_defaults,
     // _update_pll_mnp, _clk_pll_enable, wait for lock). Left as it is if it already runs this configuration.
     void startPlla()
     {
+        const uint32_t mnp = pllaMnp(*clock), sdm = clock->sdm;
         const uint32_t base = switch_mmio_read32(car, PLLA_BASE);
         const bool running = (base & (PLL_ENABLE | PLL_BYPASS | PLLA_IDDQ)) == PLL_ENABLE &&
-                             (base & PLLA_MNP_MASK) == kPllaMnp &&
-                             (switch_mmio_read32(car, PLLA_MISC2) & PLLA_EN_SDM) &&
-                             (switch_mmio_read32(car, PLLA_MISC1) & 0xffff) == kPllaSdm;
+                             (base & PLLA_MNP_MASK) == mnp && (switch_mmio_read32(car, PLLA_MISC2) & PLLA_EN_SDM) &&
+                             (switch_mmio_read32(car, PLLA_MISC1) & 0xffff) == sdm;
         if (!running) {
             switch_mmio_write32(car, PLLA_OUT,
                                 switch_mmio_read32(car, PLLA_OUT) & ~3u);  // PLLA_OUT0 off while the PLL changes
@@ -452,8 +464,8 @@ class SwitchAudio : public IOService {
             switch_mmio_write32(car, PLLA_MISC0, PLLA_LOCK_ENABLE);
             switch_mmio_write32(car, PLLA_MISC2, 0);
             switch_mmio_write32(car, PLLA_BASE,
-                                (switch_mmio_read32(car, PLLA_BASE) & ~(PLL_BYPASS | PLLA_MNP_MASK)) | kPllaMnp);
-            switch_mmio_write32(car, PLLA_MISC1, (switch_mmio_read32(car, PLLA_MISC1) & ~0xffffu) | kPllaSdm);
+                                (switch_mmio_read32(car, PLLA_BASE) & ~(PLL_BYPASS | PLLA_MNP_MASK)) | mnp);
+            switch_mmio_write32(car, PLLA_MISC1, (switch_mmio_read32(car, PLLA_MISC1) & ~0xffffu) | sdm);
             switch_mmio_write32(car, PLLA_MISC2, PLLA_EN_SDM);
             IODelay(1);
             switch_mmio_write32(car, PLLA_BASE, switch_mmio_read32(car, PLLA_BASE) & ~PLLA_IDDQ);
@@ -467,8 +479,17 @@ class SwitchAudio : public IOService {
             IODelay(50);
         }
         // PLLA_OUT0: ratio at 15:8, out of reset (bit 0) and enabled (bit 1); the vreg field 31:28 stays 0.
-        switch_mmio_write32(car, PLLA_OUT, (switch_mmio_read32(car, PLLA_OUT) & ~0xf000ff03u) | (kPllaOut0Div << 8));
+        const uint32_t out0Div = clock->out0_x2 - 2;
+        switch_mmio_write32(car, PLLA_OUT, (switch_mmio_read32(car, PLLA_OUT) & ~0xf000ff03u) | (out0Div << 8));
         switch_mmio_write32(car, PLLA_OUT, switch_mmio_read32(car, PLLA_OUT) | 3u);
+    }
+
+    // PLLA and the I2S and MCLK dividers under it for `clock`; nothing on them may run.
+    void startClocks()
+    {
+        startPlla();
+        switch_mmio_write32(car, CLK_SOURCE_I2S0, switch_audio_i2s_divider(clock->out0_per_fs));         // PLLA_OUT0
+        switch_mmio_write32(car, CLK_SOURCE_EXTERN1, switch_audio_extern1_divider(clock->out0_per_fs));  // PLLA_OUT0
     }
 
     void tegraClocksAndPads()
@@ -498,11 +519,9 @@ class SwitchAudio : public IOService {
         if (switch_mmio_read32(pmc, NO_IOPOWER) & kNoIoPowerAudioHv)
             switch_mmio_write32(pmc, NO_IOPOWER, switch_mmio_read32(pmc, NO_IOPOWER) & ~kNoIoPowerAudioHv);
 
-        startPlla();
+        startClocks();
         switch_mmio_write32(car, CLK_SOURCE_APE, kApeSource);
-        switch_mmio_write32(car, CLK_SOURCE_D_AUDIO, 0);            // PLLA_OUT0 (mux_d_audio_clk index 0), 1:1
-        switch_mmio_write32(car, CLK_SOURCE_I2S0, kI2sDiv);         // PLLA_OUT0 (mux 0)
-        switch_mmio_write32(car, CLK_SOURCE_EXTERN1, kExtern1Div);  // PLLA_OUT0 (mux 0)
+        switch_mmio_write32(car, CLK_SOURCE_D_AUDIO, 0);  // PLLA_OUT0 (mux_d_audio_clk index 0), 1:1
         switch_mmio_write32(car, CLK_ENB_Y_SET, kClkY);
         switch_mmio_write32(car, CLK_ENB_V_SET, kClkV);
         switch_mmio_write32(car, CLK_ENB_L_SET, kClkL);
@@ -698,7 +717,7 @@ class SwitchAudio : public IOService {
             xferSeen[ch] = (uint16_t)switch_mmio_read32(adma, ch * CH_STRIDE + CH_XFER_STATUS);
         }
         graced = false;
-        timer->setTimeoutMS(kWatchdogMS);
+        timer->setTimeoutMS(watchdogMS());
 #if DEVELOPMENT || DEBUG
         ++statStarts;
 #endif
@@ -830,7 +849,7 @@ class SwitchAudio : public IOService {
         if (ch != kChOut)
             return;
         graced = false;
-        timer->setTimeoutMS(kWatchdogMS);
+        timer->setTimeoutMS(watchdogMS());
         // Capture runs on the same clock from the same start: two periods behind playback, its interrupt is lost or its
         // DMA stalled.
         if (tegraCapture && periods[kChOut] > periods[kChIn] + 2) {
@@ -941,7 +960,8 @@ class SwitchAudio : public IOService {
         kCodecPowerUp,
         kCodecUnmute,
         kCodecMute,
-        kCodecPause,  // the last stream stopped: muted now, powered down after kIdleMS unless one starts again
+        kCodecPause,    // the last stream stopped: muted now, powered down after kIdleMS unless one starts again
+        kCodecIdleNow,  // no stream: powered down now (before its MCLK changes), not kIdleMS later
     };
 
     static IOReturn codecGated(OSObject *owner, void *step, void *, void *, void *)
@@ -963,6 +983,10 @@ class SwitchAudio : public IOService {
         case kCodecPause:
             self->codec.mute(true);
             self->idleTimer->setTimeoutMS(kIdleMS);
+            break;
+        case kCodecIdleNow:
+            self->idleTimer->cancelTimeout();
+            codecIdle(self, self->idleTimer);
             break;
         default:
             break;
@@ -1339,7 +1363,7 @@ public:
         control = static_cast<SwitchAudioControl *>(memory[SwitchAudioMemoryControl]->getBytesNoCopy());
         control->magic = SWITCH_AUDIO_MAGIC;
         control->version = SWITCH_AUDIO_VERSION;
-        control->rate = SWITCH_AUDIO_RATE;
+        control->rate = clock->rate;
         control->out_channels = SWITCH_AUDIO_OUT_CHANNELS;
         control->in_channels = SWITCH_AUDIO_IN_CHANNELS;
         control->ring_frames = SWITCH_AUDIO_RING_FRAMES;
@@ -1352,14 +1376,14 @@ public:
             codecStart();
             control->period_frames = kPeriodFrames;
             control->backend = SwitchAudioBackendTegraI2S;
-            control->ticks_per_frame_q32 = tegraTicksPerFrame(38400000);
-#if DEVELOPMENT || DEBUG
-            periodTicksQ16 = (uint64_t)kPeriodFrames * control->ticks_per_frame_q32 >> 16;
-#endif
+            for (uint32_t i = 0; i < SWITCH_AUDIO_MAX_RATES; ++i)
+                control->rates[i] = kClocks[i].rate;
+            noteClock();
             timer = IOTimerEventSource::timerEventSource(this, &SwitchAudio::watchdogFired);
         } else {
             control->period_frames = SWITCH_AUDIO_PERIOD_FRAMES;
             control->backend = SwitchAudioBackendNull;
+            control->rates[0] = SWITCH_AUDIO_RATE;
             control->ticks_per_frame_q32 = (hz << 32) / SWITCH_AUDIO_RATE;
             timer = IOTimerEventSource::timerEventSource(this, &SwitchAudio::tick);
         }
@@ -1382,8 +1406,7 @@ public:
         registerService();
         if (tegra) {
             // The format and rate, once: S32_LE rings and APE path, 32-bit I2S slots at 64 fs, the codec's 24 bits.
-            const uint64_t milliHz =
-                switch_audio_rate_millihz(38400000, kPllaM, kPllaP, (uint64_t)kPllaNEff, kPllaOut0X2, kPllaOut0PerFs);
+            const uint64_t milliHz = switch_audio_clock_millihz(38400000, *clock);
             IOLog("SwitchAudio: Tegra I2S1 + RT5639 ready (%s%s): S32_LE, I2S 32-bit slots at 64 fs (%u kHz BCLK), "
                   "RT5639 %u-bit, %llu.%03llu Hz\n",
                   tegraCapture ? "playback and capture" : "playback", speakerOnly ? ", speaker only" : "",
@@ -1465,6 +1488,52 @@ public:
         return result;
     }
 
+    // ticks_per_frame_q32 (and the stats' period length) for `clock`.
+    void noteClock()
+    {
+        control->rate = clock->rate;
+        control->ticks_per_frame_q32 = tegraTicksPerFrame(38400000);
+#if DEVELOPMENT || DEBUG
+        periodTicksQ16 = (uint64_t)kPeriodFrames * control->ticks_per_frame_q32 >> 16;
+#endif
+    }
+
+    static IOReturn rateGated(OSObject *owner, void *next, void *, void *, void *)
+    {
+        auto *self = static_cast<SwitchAudio *>(owner);
+        if (self->control->state) {
+            switch_refusal("audio", "rate-while-running", "%u Hz asked while a stream runs at %u Hz",
+                           static_cast<const switch_audio_clock *>(next)->rate, self->clock->rate);
+            return kIOReturnBusy;
+        }
+        self->clock = static_cast<const switch_audio_clock *>(next);
+        if (!self->hardwareLost)
+            self->startClocks();
+        self->noteClock();
+        return kIOReturnSuccess;
+    }
+
+    // Both directions share the I2S clock, so the rate changes only between streams, and the codec, which runs from
+    // MCLK, is powered down first rather than left muted on a clock that stops and comes back at another rate.
+    IOReturn setRate(uint32_t rate)
+    {
+        const switch_audio_clock *next = nullptr;
+        for (const switch_audio_clock &c : kClocks) {
+            if (c.rate == rate && (tegra || c.rate == SWITCH_AUDIO_RATE))
+                next = &c;
+        }
+        if (!next) {
+            switch_refusal_k(switch_refusal_key_with(switch_refusal_key("audio", "rate"), rate), "audio", "rate",
+                             "%u Hz asked; the %s backend runs %u%s", rate, tegra ? "Tegra" : "null", SWITCH_AUDIO_RATE,
+                             tegra ? " and 44100 Hz" : " Hz");
+            return kIOReturnUnsupported;
+        }
+        if (next == clock)
+            return kIOReturnSuccess;
+        codecStep(kCodecIdleNow);
+        return gate->runAction(&SwitchAudio::rateGated, const_cast<switch_audio_clock *>(next));
+    }
+
     IOMemoryDescriptor *copyMemory(uint32_t type)
     {
         if (type > SwitchAudioMemoryInput)
@@ -1520,6 +1589,11 @@ public:
             return kIOReturnBadArgument;
         if (selector == SwitchAudioSetHostClock)
             return args->scalarInputCount == 1 ? setHostClock(owner, args->scalarInput[0]) : kIOReturnBadArgument;
+        if (selector == SwitchAudioSetRate) {
+            return args->scalarInputCount == 1 && args->scalarInput[0] <= UINT32_MAX
+                       ? audio->setRate((uint32_t)args->scalarInput[0])
+                       : kIOReturnBadArgument;
+        }
         if (selector > SwitchAudioStopInput || args->scalarInputCount)
             return kIOReturnBadArgument;
         return audio->request(selector);
