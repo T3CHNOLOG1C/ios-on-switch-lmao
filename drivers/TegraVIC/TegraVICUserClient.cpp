@@ -180,13 +180,6 @@ void refused(IOReturn ret, const char *why)
     switch_refusal("TegraVIC", why, "IOSurfaceAccelerator transform refused (%s), the caller falls back", kind);
 }
 
-uint32_t refusalBit(IOReturn ret)
-{
-    if (ret == kIOReturnUnsupported)
-        return 0;
-    return ret == kIOReturnBadArgument ? 1 : 2;
-}
-
 struct Job {
     Job *next;
     IOUserClient *client;  // retained
