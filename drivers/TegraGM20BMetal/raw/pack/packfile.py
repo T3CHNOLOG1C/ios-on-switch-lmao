@@ -26,7 +26,7 @@ def entry_bytes(entries: list[dict]) -> bytearray:
                 1,
                 1 if e['stage'] == 'v' else 2,
                 e['slot'],
-                1 if e.get('ssbo') else 0,
+                buffer_kind(e),
                 e.get('window', 256) // 16,
             )
         else:
@@ -39,6 +39,14 @@ def entry_bytes(entries: list[dict]) -> bytearray:
             )
     ents += bytes(8 * (16 - len(entries)))
     return ents
+
+
+def buffer_kind(e: dict) -> int:
+    """Give a buffer entry's samplerKind byte (raw_pack.h bufferStorage, bufferResidualWord)."""
+    if e.get('ssbo'):
+        return 1
+    residual = e.get('residual')
+    return 0 if residual is None else ((residual - 0x700) // 4 + 1) << 2
 
 
 def push_bytes(push: list[tuple[int, int]]) -> bytes:

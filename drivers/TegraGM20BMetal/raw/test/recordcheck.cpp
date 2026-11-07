@@ -24,7 +24,7 @@ int main(int argc, char **argv)
         return 2;
     }
     const std::string dir = argv[1];
-    Run r256, r16, r4096;
+    Run r256, r16, r4096, bound;
     raw::Pack pack;
     std::string err;
     if (!probelogs::loadRun(dir, 256, r256) || !probelogs::loadRun(dir, 16, r16) ||
@@ -32,6 +32,8 @@ int main(int argc, char **argv)
         fprintf(stderr, "recordcheck: %s\n", err.empty() ? "probe runs unread" : err.c_str());
         return 1;
     }
+    const bool offsets =
+        probelogs::loadRun(dir, "probeoff", bound);  // (a bucket probed before the bind-offset run has none)
     const std::map<std::string, raw::CapturedProgram> programs = probelogs::loadPrograms(dir + "/programs.bin");
     const raw::PackRules rules = raw::PackRules::of(pack, r256.context);
     auto byIndex = [](const Run &run, uint32_t index) -> const nvdec::ProbeSubmission * {
@@ -43,7 +45,12 @@ int main(int argc, char **argv)
     uint32_t same = 0, refused = 0, storage = 0, bad = 0;
     for (size_t i = 0; i < r256.probes.size(); i++) {
         const auto &[index, key] = r256.probes[i];
-        const raw::ProbeRuns runs = {&r256.submissions[i], byIndex(r16, index), byIndex(r4096, index), index, key};
+        const raw::ProbeRuns runs = {&r256.submissions[i],
+                                     byIndex(r16, index),
+                                     byIndex(r4096, index),
+                                     index,
+                                     key,
+                                     offsets ? byIndex(bound, index) : nullptr};
         raw::RuntimeRecord made;
         std::string why;
         const bool ok = raw::makeRecord(

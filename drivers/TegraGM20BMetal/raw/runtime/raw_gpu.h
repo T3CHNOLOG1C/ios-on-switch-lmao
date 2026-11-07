@@ -370,6 +370,7 @@ private:
     std::vector<std::pair<uint32_t *, uint32_t *>> bodies_;  // the pass body's push segments, in order
     void reserve();
     Pipeline *pipeline_ = nullptr, *emitted_ = nullptr;
+    bool residualsPushed_ = false;  // the last draw's push words held SlotBindOffset residuals (RenderEncoder::prepare)
     Bound bufs_[3][31];
     const Texture *textures_[16] = {};
     const Sampler *samplers_[16] = {};

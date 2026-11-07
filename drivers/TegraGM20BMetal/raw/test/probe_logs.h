@@ -85,10 +85,10 @@ inline void recordLine(nvdec::ProbeRecord &r, const std::vector<std::string> &f)
             r.pushWords.push_back(kv);
 }
 
-inline bool loadRun(const std::string &dir, int bytes, Run &run)
+// `name`: probe256, probe16, probe4096, probeoff (the bind-offset run)
+inline bool loadRun(const std::string &dir, const std::string &name, Run &run)
 {
-    std::ifstream out(dir + "/probe" + std::to_string(bytes) + ".out"),
-        log(dir + "/probe" + std::to_string(bytes) + ".log");
+    std::ifstream out(dir + "/" + name + ".out"), log(dir + "/" + name + ".log");
     if (!out || !log)
         return false;
     for (std::string line; std::getline(out, line);)
@@ -131,6 +131,11 @@ inline bool loadRun(const std::string &dir, int bytes, Run &run)
         return false;
     run.submissions.assign(subs.end() - run.probes.size(), subs.end());
     return true;
+}
+
+inline bool loadRun(const std::string &dir, int bytes, Run &run)
+{
+    return loadRun(dir, "probe" + std::to_string(bytes), run);
 }
 
 // mkprograms.py's programs.bin, by the id nvdec names a bound one with
