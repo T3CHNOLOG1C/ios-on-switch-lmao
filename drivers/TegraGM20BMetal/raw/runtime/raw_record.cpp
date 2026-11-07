@@ -54,10 +54,21 @@ uint32_t valueOf(const std::map<uint32_t, uint32_t> &regs, uint32_t m)
     return it == regs.end() ? 0 : it->second;
 }
 
+// mkpack.py interlocked: the storage form, in one draw or in a scratch between m2v's copy in and copy out
+bool interlocked(const nvdec::ProbeSubmission &s)
+{
+    for (const nvdec::ProbeRecord &r : s.records)
+        if (valueOf(r.regs, kInterlockControl) & 3)
+            return true;
+    return false;
+}
+
 // mkpack.py skip_reason
 bool skipReason(const nvdec::ProbeSubmission &s, std::string &why)
 {
-    if (s.draws != 1)
+    if (s.draws != 1 && !s.dispatches && interlocked(s))
+        why = "storage form through a scratch, m2v copying the color in and out around it";
+    else if (s.draws != 1)
         why = std::to_string(s.draws) + " draws";
     else if (s.dispatches)
         why = std::to_string(s.dispatches) + " dispatches";
