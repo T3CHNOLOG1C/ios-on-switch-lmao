@@ -2539,6 +2539,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     // set 0 first (it may refuse the draw before anything is written): the layout's entries only
     uint64_t setVa;
     uint32_t *set = reinterpret_cast<uint32_t *>(d.alloc(d.upload_, kSetBytes, 256, setVa));
+    uint32_t residuals[32], residualMask = 0;  // the draw's SlotBindOffset residuals by root push word
     for (uint32_t i = 0; i < r.entries; i++) {
         const PackEntry &e = r.entry[i];
         uint32_t *at = set + e.offset / 4;
@@ -2546,24 +2547,37 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
             // m2v's descriptor range (bind/instantiate.rs descriptor_range): the function's window, clamped to the bytes padded to
             // 16; NVK then rounds a uniform buffer's range up to the 256-byte cbuf alignment (nvk_ubo_descriptor)
             const Bound &b = bufs_[e.stage][e.slot];
+            const bool storage = bufferStorage(e);
             const uint32_t window = (uint32_t(e.sampler) | uint32_t(e.pad) << 8) * 16;
             uint32_t range = std::min<uint32_t>((b.size + 15) & ~15u, 0x10000u);  // a uniform range is at most 64 KiB
             if (window && window < range)
                 range = window;
-            if (!e.samplerKind)
-                range = (range + 255) & ~255u;
-            // A Metal offset that is not a multiple of 256 needs m2v's SlotBindOffset residual in the push window: not in the pack
-            // (every probe bound at offset 0)
-            if ((b.va & 255) && !e.samplerKind) {
-                *why = "a uniform buffer bound at an offset that is not a multiple of 256";
-                cb_->refusal = {RefUboOffset, uint32_t(e.stage) << 8 | e.slot, uint32_t(b.va & 255),
-                                uint32_t(std::min<uint64_t>(b.offset, ~0u))};
-                return false;
+            // A uniform buffer at an offset that is not a multiple of NVK's 256-byte alignment: its descriptor starts at the
+            // offset rounded down, from there to the window's end in the padded allocation, and the function reads the rest
+            // of the offset, m2v's SlotBindOffset residual, from its push word
+            const uint32_t residual = storage ? 0 : uint32_t(b.va & 255);
+            const uint64_t base = b.va - residual;
+            if (residual) {
+                const int word = bufferResidualWord(e);
+                if (word < 0) {
+                    *why =
+                        "a uniform buffer bound at an offset that is not a multiple of 256, with no residual push word";
+                    cb_->refusal = {RefUboOffset, uint32_t(e.stage) << 8 | e.slot, residual,
+                                    uint32_t(std::min<uint64_t>(b.offset, ~0u))};
+                    return false;
+                }
+                const uint64_t end = (b.va + b.size + 15) & ~15ull,
+                               hi = window ? std::min<uint64_t>((b.va + window + 15) & ~15ull, end) : end;
+                range = uint32_t(std::min<uint64_t>(hi - base, 0x10000u));
+                residuals[word] = residual;
+                residualMask |= 1u << word;
             }
+            if (!storage)
+                range = (range + 255) & ~255u;
             if (b.buffer && !b.buffer->wc)
-                cb_->clean(b.buffer->cpu + b.offset, std::min<uint64_t>(range, b.size));
-            at[0] = uint32_t(b.va);
-            at[1] = uint32_t(b.va >> 32);
+                cb_->clean(b.buffer->cpu + b.offset, std::min<uint64_t>(range - residual, b.size));
+            at[0] = uint32_t(base);
+            at[1] = uint32_t(base >> 32);
             at[2] = b.va ? range : 0;
             at[3] = 0;
             continue;
@@ -2612,25 +2626,33 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         at[0] = tic | tsc << 20;
     }
     writeRaster(p, rasterFor(primitive));
-    if (pl != emitted_) {
-        blendColorDirty_ |= pl->constantBlend;
-        p.raw(pl->methods.data(), uint32_t(pl->methods.size()));
+    if (pl != emitted_ || residualMask || residualsPushed_) {
+        if (pl != emitted_) {
+            blendColorDirty_ |= pl->constantBlend;
+            p.raw(pl->methods.data(), uint32_t(pl->methods.size()));
+        }
         // the state's push words into the root table, as m2v's vkCmdPushConstants ranges reach it through NVK: the words its
-        // ranges cover (the rest keep what an earlier state wrote), one LOAD_CONSTANT_BUFFER per run of words that change
+        // ranges cover (the rest keep what an earlier state wrote), the draw's residuals in theirs, one LOAD_CONSTANT_BUFFER per
+        // run of words that change
+        uint32_t want[32];
+        memcpy(want, pl->push, sizeof want);
+        for (uint32_t m = residualMask; m; m &= m - 1)
+            want[__builtin_ctz(m)] = residuals[__builtin_ctz(m)];
         for (int i = 0; i < 32;) {
-            if (!(pl->pushMask >> i & 1) || root[i] == pl->push[i]) {
+            if (!(pl->pushMask >> i & 1) || root[i] == want[i]) {
                 i++;
                 continue;
             }
             int j = i;
-            while (j < 32 && (pl->pushMask >> j & 1) && root[j] != pl->push[j])
+            while (j < 32 && (pl->pushMask >> j & 1) && root[j] != want[j])
                 j++;
             p.m(LOAD_CB_OFFSET, 0x700 + 4 * i);
-            p.nonInc(LOAD_CB, pl->push + i, j - i);
-            memcpy(root + i, pl->push + i, (j - i) * 4);
+            p.nonInc(LOAD_CB, want + i, j - i);
+            memcpy(root + i, want + i, (j - i) * 4);
             i = j;
         }
         emitted_ = pl;
+        residualsPushed_ = residualMask != 0;
     }
     const uint32_t topo = nvTopology(primitive), restart = (primitive == 2 || primitive == 4) ? 1 : 0;
     if (topo != topology_) {

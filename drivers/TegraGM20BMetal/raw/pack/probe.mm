@@ -714,6 +714,13 @@ int main(int argc, char **argv)
             // PROBE_BYTES (default 256): the tagged payloads' length; 16 and 4096 tell a uniform from a storage buffer (NVK rounds
             // a uniform buffer's range up to 256) and the function's proven window on each slot (m2v binds at most that)
             static const uint32_t bytes = getenv("PROBE_BYTES") ? atoi(getenv("PROBE_BYTES")) : 256;
+            // PROBE_BIND_OFFSET: each slot's payload in a buffer of its own at an offset of its own below 256, 4 x (1 + slot +
+            // 31 x (stage - 1)): the push word of a uniform slot's SlotBindOffset residual holds that offset (mkpack.py)
+            static const bool bindOffset = getenv("PROBE_BIND_OFFSET") != nullptr;
+            static std::vector<id<MTLBuffer>> payloads;
+            if (bindOffset && payloads.empty())
+                for (uint32_t k = 0; k < 2 * gSlots; k++)
+                    payloads.push_back([dev newBufferWithLength:256 + bytes options:MTLResourceStorageModeShared]);
             std::vector<uint32_t> tag(bytes / 4);
             for (uint32_t stage = 1; stage <= 2; stage++)
                 for (uint32_t slot = 0; slot < gSlots; slot++) {
@@ -721,10 +728,19 @@ int main(int argc, char **argv)
                     tag[1] = i;
                     for (uint32_t k = 2; k < tag.size(); k++)
                         tag[k] = 0xA0000000u | stage << 20 | slot << 16 | k;
-                    if (stage == 1)
+                    if (bindOffset) {
+                        const NSUInteger at = 4 * (1 + slot + 31 * (stage - 1));
+                        id<MTLBuffer> b = payloads[(stage - 1) * gSlots + slot];
+                        memcpy((uint8_t *)b.contents + at, tag.data(), bytes);
+                        if (stage == 1)
+                            [enc setVertexBuffer:b offset:at atIndex:slot];
+                        else
+                            [enc setFragmentBuffer:b offset:at atIndex:slot];
+                    } else if (stage == 1) {
                         [enc setVertexBytes:tag.data() length:bytes atIndex:slot];
-                    else
+                    } else {
                         [enc setFragmentBytes:tag.data() length:bytes atIndex:slot];
+                    }
                 }
             for (unsigned t = 0; t < 16; t++)
                 [enc setFragmentTexture:textures[t] atIndex:t];

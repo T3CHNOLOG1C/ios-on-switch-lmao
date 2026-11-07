@@ -227,10 +227,26 @@ std::map<uint32_t, uint32_t> boundSizes(const nvdec::ProbeSubmission *s)
     return out;
 }
 
+// mkpack.py attach_residuals: the root push words the bind-offset run set where the 256-byte run left 0, by their value's low byte
+std::map<uint32_t, uint32_t> residualWords(const nvdec::ProbeSubmission *plain, const nvdec::ProbeSubmission *bound)
+{
+    std::map<uint32_t, uint32_t> out;
+    if (!plain || !bound || bound->draws != 1 || bound->dispatches || bound->records.empty() || plain->records.empty())
+        return out;
+    std::map<uint32_t, uint32_t> was;
+    for (const auto &[offset, word] : plain->records[0].pushWords)
+        was[offset] = word;
+    for (const auto &[offset, word] : bound->records[0].pushWords)
+        if (word && !was[offset])
+            out[word & 0xff] = offset;
+    return out;
+}
+
 // packfile.py entry_bytes, from mkpack.py buffer_entry: a 16-byte payload bound at 256 is a uniform buffer (NVK rounds its range
-// up to the cbuf alignment), else storage; the 4096-byte one's range is the function's window on the slot (0: the whole payload)
+// up to the cbuf alignment), else storage; the 4096-byte one's range is the function's window on the slot (0: the whole payload);
+// a uniform one's residual push word (packfile.py buffer_kind)
 PackEntry bufferEntry(const LayoutEntry &e, const std::map<uint32_t, uint32_t> &sizes16,
-                      const std::map<uint32_t, uint32_t> &sizes4096)
+                      const std::map<uint32_t, uint32_t> &sizes4096, const std::map<uint32_t, uint32_t> &residuals)
 {
     uint32_t s16 = 256, s4k = 256;
     if (sizes16.count(e.offset) || sizes4096.count(e.offset)) {
@@ -244,6 +260,8 @@ PackEntry bufferEntry(const LayoutEntry &e, const std::map<uint32_t, uint32_t> &
     p.stage = e.stage;
     p.slot = e.slot;
     p.samplerKind = s16 < 256 ? 1 : 0;
+    if (const auto at = residuals.find(probeBindOffset(e.stage, e.slot)); !p.samplerKind && at != residuals.end())
+        p.samplerKind = uint8_t(((at->second - 0x700) / 4 + 1) << 2);
     p.sampler = uint8_t(window / 16);
     p.pad = uint8_t(window / 16 >> 8);
     return p;
@@ -417,11 +435,12 @@ bool makeRecord(const ProbeRuns &runs, const PackRules &rules, const ProgramLook
         return false;
     }
     PackPipeline &p = out.pipeline;
-    const std::map<uint32_t, uint32_t> sizes16 = boundSizes(runs.bytes16), sizes4096 = boundSizes(runs.bytes4096);
+    const std::map<uint32_t, uint32_t> sizes16 = boundSizes(runs.bytes16), sizes4096 = boundSizes(runs.bytes4096),
+                                       residuals = residualWords(runs.bytes256, runs.bound);
     for (const LayoutEntry &e : layoutEntries) {
         PackEntry &entry = p.entry[p.entries++];
         if (e.buffer)
-            entry = bufferEntry(e, sizes16, sizes4096);
+            entry = bufferEntry(e, sizes16, sizes4096, residuals);
         else if (!handleEntry(e, r, rules, out, entry, why))
             return false;
         if (entry.kind == EntryFetch)

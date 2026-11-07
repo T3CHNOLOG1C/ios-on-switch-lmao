@@ -590,7 +590,7 @@ int main(int argc, char **argv)
                                 else
                                     [e setFragmentBufferOffset:ringAt atIndex:b.slot];
                                 // FRAME_RING_ALIGN: the ring's suballocation alignment (Core Animation's pool aligns to the
-                                // device's minConstantBufferAlignmentBytes; 16 or 4 binds uniforms the raw path leaves to m2v)
+                                // device's minConstantBufferAlignmentBytes)
                                 static const NSUInteger align =
                                     getenv("FRAME_RING_ALIGN") ? NSUInteger(atoi(getenv("FRAME_RING_ALIGN"))) : 256;
                                 ringAt = (ringAt + b.length + align - 1) / align * align;

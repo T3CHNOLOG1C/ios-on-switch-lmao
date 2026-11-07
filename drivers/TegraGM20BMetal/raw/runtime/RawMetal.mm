@@ -2287,9 +2287,10 @@ static void forwardCall(RMEncoder *e, SEL selector, const void *argument)
     for (uint32_t i = 0; i < r.entries; i++) {
         const raw::PackEntry &e = r.entry[i];
         if (e.kind == raw::EntryUbo) {
-            // m2v's SlotBindOffset residual is not in the pack (every probe bound at offset 0); the device answers 256 for
-            // minConstantBufferAlignmentBytes, so Core Animation's buffer pool binds there
-            if (!e.samplerKind && e.stage < 3 && e.slot < 31 && (_bufVa[e.stage][e.slot] & 255)) {
+            // an offset off NVK's 256-byte uniform alignment needs the push word of m2v's SlotBindOffset residual, which a
+            // record made without the probe's offset run lacks (raw::bufferResidualWord)
+            if (!raw::bufferStorage(e) && raw::bufferResidualWord(e) < 0 && e.stage < 3 && e.slot < 31 &&
+                (_bufVa[e.stage][e.slot] & 255)) {
                 [_cb takeReason:WhyEncode why:@"a uniform buffer bound at an offset that is not a multiple of 256"];
                 return hit(_cb, PredEncUboOffset, uint64_t(e.stage) << 8 | e.slot, _bufVa[e.stage][e.slot] & 255);
             }

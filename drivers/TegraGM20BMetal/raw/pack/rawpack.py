@@ -9,9 +9,9 @@ ca/qc-<build>.json): the corpus's names, QuartzCore's offline compilation manife
 puts in the pipeline and over the blend it leaves in the fragment (CA_TIERS). With no tables of this QuartzCore (another
 IPSW's), the corpus's states as they are.
 
-  1. probe (pack/probe.mm) makes every state and draws it once with tagged inputs, three times: payloads of 256, 16 and
+  1. probe (pack/probe.mm) makes every state and draws it once with tagged inputs, four times: payloads of 256, 16 and
      4096 bytes (a uniform buffer's range is NVK's 256-byte rounding of the payload; the 4096-byte run gives the
-     function's window);
+     function's window), and of 256 bytes bound at an offset of each slot's own (the push word of its residual);
   2. mkprograms.py reads NAK's programs out of the NVK driver records the run left in its m2v cache directory;
   3. mkpack.py reads the probe logs and writes pack.bin: per state its programs, registers, push words and descriptor
      layout, plus NVK's context init with the addresses to relocate. States m2v draws with more than one draw or with
@@ -299,7 +299,7 @@ def barrier_set(d: Path) -> Path | None:
 def probe_bucket(tools: Path, d: Path, nvk: Path, qc: Path, env: dict[str, str]) -> str:
     """Probe one bucket's states, then its storage-form states again with the interlock hidden (barrier_set).
 
-    A run that only fills its m2v cache with NVK's driver records (NAK's programs), then the three decoded runs, which
+    A run that only fills its m2v cache with NVK's driver records (NAK's programs), then the four decoded runs, which
     name each bound program by those records (RAWCAP_PROGRAMS) and hit the same cache.
     """
     said = [probe_runs(tools, d, nvk, qc, env)]
@@ -310,7 +310,7 @@ def probe_bucket(tools: Path, d: Path, nvk: Path, qc: Path, env: dict[str, str])
 
 
 def probe_runs(tools: Path, d: Path, nvk: Path, qc: Path, env: dict[str, str]) -> str:
-    """Run the warm-up and the three decoded probe runs over d's corpus."""
+    """Run the warm-up and the four decoded probe runs over d's corpus."""
     if d.name == 'bucket0':
         env = dict(env, PROBE_YCBCR_LIB=str(tools / 'ycbcr.metallib'))
     said = []
@@ -343,6 +343,15 @@ def probe_runs(tools: Path, d: Path, nvk: Path, qc: Path, env: dict[str, str]) -
                 'RAWCAP_PROGRAMS': str(d / 'programs.bin'),
             },
         )
+    probe(
+        'probeoff',
+        {
+            'PROBE_BYTES': '256',
+            'PROBE_BIND_OFFSET': '1',
+            'RAWCAP_LOG': str(d / 'probeoff.log'),
+            'RAWCAP_PROGRAMS': str(d / 'programs.bin'),
+        },
+    )
     shutil.rmtree(d / 'cache')
     return f'rawpack: {d.parent.name + "/" if d.name == "barrier" else ""}{d.name}: ' + '; '.join(said)
 
