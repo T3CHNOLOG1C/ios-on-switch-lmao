@@ -20,12 +20,32 @@
 // not exported to IOKit; the IRQ path calls the real kernel implementation.
 extern "C" void rtclock_intr(unsigned int);
 // Kernel-internal entries used for secondary CPU startup (Darwin 23 osfmk).
+// NOLINTNEXTLINE(readability-redundant-declaration): not every kernel configuration's headers declare it
+extern "C" vm_offset_t ml_static_vtop(vm_offset_t);
 
 extern "C" char LowResetVectorBase[], LowResetVectorEnd[], ResetHandlerData[], const_boot_args[];
+// NOLINTNEXTLINE(readability-redundant-declaration): not every kernel configuration's headers declare it
+extern "C" kern_return_t processor_start(processor_t);
+// NOLINTNEXTLINE(readability-redundant-declaration): not every kernel configuration's headers declare it
+extern "C" kern_return_t kernel_thread_start(void (*)(void *, wait_result_t), void *, thread_t *);
+// NOLINTNEXTLINE(readability-redundant-declaration): not every kernel configuration's headers declare it
+extern "C" void thread_deallocate(thread_t);
+// NOLINTNEXTLINE(readability-redundant-declaration): not every kernel configuration's headers declare it
+extern "C" thread_t current_thread(void);
+// NOLINTNEXTLINE(readability-redundant-declaration): not every kernel configuration's headers declare it
+extern "C" kern_return_t thread_terminate(thread_t);
 
 extern "C" int switch_smp_publish_cpu_state(void);
 // System sleep (drivers/SwitchSuspend): the scheduler's processor exit, XNU's sleep path, the platform quiesce/active
 // actions.
+// NOLINTNEXTLINE(readability-redundant-declaration): not every kernel configuration's headers declare it
+extern "C" kern_return_t processor_exit(processor_t);
+// NOLINTNEXTLINE(readability-redundant-declaration): not every kernel configuration's headers declare it
+extern "C" void ml_arm_sleep(void);
+// NOLINTNEXTLINE(readability-redundant-declaration): not every kernel configuration's headers declare it
+extern "C" kern_return_t IOCPURunPlatformQuiesceActions(void);
+// NOLINTNEXTLINE(readability-redundant-declaration): not every kernel configuration's headers declare it
+extern "C" kern_return_t IOCPURunPlatformActiveActions(void);
 
 // Owned here, read by the kernel (osfmk/arm64/cpu.c): arm64_prepare_for_sleep calls switch_cpu_sleep_handler when
 // set, and cpu_machine_idle_init sets the flag at boot, so a kernel without the hook (whose arm64_prepare_for_sleep

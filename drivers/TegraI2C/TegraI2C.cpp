@@ -35,6 +35,8 @@
 #endif
 
 extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
+// NOLINTNEXTLINE(readability-redundant-declaration): not every kernel configuration's headers declare it
+extern "C" boolean_t preemption_enabled(void);
 
 namespace {
 constexpr vm_offset_t kI2CPA = 0x7000C000, kI2CSize = 0x2000;          // I2C1..I2C6

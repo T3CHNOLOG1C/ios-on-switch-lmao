@@ -54,6 +54,8 @@ void switch_cluster_record_start(struct switch_record_entry *log, uint32_t capac
 uint32_t switch_cluster_record_stop(void);                                             // bsd/vfs/vfs_cluster.c
 #if DEVELOPMENT || DEBUG
 void switch_cluster_image_direct(uint64_t bytes, uint32_t cardReads);  // bsd/vfs/vfs_cluster.c
+// NOLINTNEXTLINE(readability-redundant-declaration): not every kernel configuration's headers declare it
+int vnode_pagein(vnode_t, upl_t, upl_offset_t, vm_object_offset_t, upl_size_t, int, int *);  // bsd/vm/vnode_pager.c
 #endif
 // bsd/vm/vnode_pager.c
 int VFS_VGET(mount_t, ino64_t, vnode_t *, vfs_context_t);  // bsd/vfs/kpi_vfs.c
@@ -63,6 +65,8 @@ switch_block_device(IOService **controller, dev_t *whole, uint64_t *sectors,
 void qsort(void *, size_t, size_t, int (*)(const void *, const void *));
 processor_t cpu_to_processor(int);
 void processor_cpu_load_info(processor_t, natural_t ticks[CPU_STATE_MAX]);
+// NOLINTNEXTLINE(readability-redundant-declaration): not every kernel configuration's headers declare it
+int ml_get_max_cpu_number(void);
 }
 
 namespace {

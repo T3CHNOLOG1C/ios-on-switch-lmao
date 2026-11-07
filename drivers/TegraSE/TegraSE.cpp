@@ -64,7 +64,13 @@
 #include "../../kits/SwitchTime/SwitchTime.h"
 
 extern "C" {
+// NOLINTNEXTLINE(readability-redundant-declaration): not every kernel configuration's headers declare it
+extern task_t kernel_task;
 int write_random(void *buffer, u_int numBytes);
+// NOLINTNEXTLINE(readability-redundant-declaration): not every kernel configuration's headers declare it
+kern_return_t kernel_thread_start(thread_continue_t continuation, void *parameter, thread_t *new_thread);
+// NOLINTNEXTLINE(readability-redundant-declaration): not every kernel configuration's headers declare it
+void thread_deallocate(thread_t thread);
 int get_preemption_level(void);
 // libkern/crypto/register_crypto.c (xnu patch): XNU's SHA digests' compress offers its blocks here first.
 extern int (*volatile switch_digest_compress_hook)(const struct ccdigest_info *original, ccdigest_state_t state,

@@ -11,6 +11,8 @@
 #include "SwitchDiag.h"
 #include "SwitchPowerTrail.h"
 #include <switch/boot.h>
+// NOLINTNEXTLINE(readability-redundant-declaration): not every kernel configuration's headers declare it
+extern kern_return_t OSKextLoadKextWithIdentifier(const char *identifier);
 
 extern int native_verified_block_os_root_authorized(dev_t, dev_t);
 

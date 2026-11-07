@@ -11,6 +11,14 @@
 
 extern "C" {
 vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
+// NOLINTNEXTLINE(readability-redundant-declaration): not every kernel configuration's headers declare it
+boolean_t ml_set_interrupts_enabled(boolean_t enable);
+// NOLINTNEXTLINE(readability-redundant-declaration): not every kernel configuration's headers declare it
+boolean_t ml_get_interrupts_enabled(void);
+// NOLINTNEXTLINE(readability-redundant-declaration): not every kernel configuration's headers declare it
+void IOLogv(const char *format, va_list ap);
+// NOLINTNEXTLINE(readability-redundant-declaration): not every kernel configuration's headers declare it
+int vsnprintf(char *, size_t, const char *, va_list);
 }
 
 namespace

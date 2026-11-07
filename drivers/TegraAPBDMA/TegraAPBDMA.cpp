@@ -18,7 +18,10 @@
 #include "../../kits/SwitchDMA/SwitchDMABuffer.h"
 #include "../../kits/SwitchMMIO/SwitchMMIOKernel.h"
 
-extern "C" {}
+extern "C" {
+// NOLINTNEXTLINE(readability-redundant-declaration): not every kernel configuration's headers declare it
+extern task_t kernel_task;
+}
 
 namespace {
 constexpr uint64_t kDmaPA = 0x60020000, kDmaSize = 0x2000;

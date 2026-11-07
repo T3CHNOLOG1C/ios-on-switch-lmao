@@ -163,8 +163,7 @@ TEST(CryptexSource, PrefetchPagesFilesIn)
     EXPECT_THAT(proven, HasSubstr("device->readBlock(buffer, image / kPage)"));
     EXPECT_THAT(proven, HasSubstr("no read-ahead for %s (%s)"));
     EXPECT_THAT(body("int nameVnode(vnode_t vp, void *argument)"), HasSubstr("hit->vid != vnode_vid(vp)"));
-    EXPECT_THAT(body("uint32_t buildRuns("),
-                HasSubstr("vnode_iterate(mount, 0, nameVnode, &naming)"));
+    EXPECT_THAT(body("uint32_t buildRuns("), HasSubstr("vnode_iterate(mount, 0, nameVnode, &naming)"));
 }
 
 // A list this build will not replay makes the boot a recording boot with no prefetch: loadList checks it

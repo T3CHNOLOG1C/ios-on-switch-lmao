@@ -11,6 +11,8 @@
 #include <vm/vm_kern.h>
 
 #include <switch/diag.h>
+// NOLINTNEXTLINE(readability-redundant-declaration): not every kernel configuration's headers declare it
+extern vm_offset_t kernel_stack_size;
 
 /*
  * Switch: every blocked thread whose kernel stack runs through a kext, as

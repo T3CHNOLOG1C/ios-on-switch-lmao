@@ -107,6 +107,8 @@ volatile uint32_t native_legacy_client_calls, native_legacy_client_type;
 volatile int native_legacy_client_pid, native_legacy_client_status = -1;
 volatile uint64_t native_legacy_client_task, native_legacy_client_object;
 char native_legacy_client_class[64];
+// NOLINTNEXTLINE(readability-redundant-declaration): not every kernel configuration's headers declare it
+extern kern_return_t OSKextLoadKextWithIdentifier(const char *);
 
 extern int boot_progress_prepare_scanout(void) __attribute__((weak_import));
 extern void boot_progress_cancel_scanout(void) __attribute__((weak_import));
