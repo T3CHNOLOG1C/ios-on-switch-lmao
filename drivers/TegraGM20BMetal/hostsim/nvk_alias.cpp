@@ -4,7 +4,9 @@
 //  - pitch: a pool chunk (PTE kind 0) and a VK_IMAGE_TILING_LINEAR image at a span inside it, as wide as the raw texture's
 //    rows (m2v's texture in place takes the row pitch itself);
 //  - block-linear: a mip chain's chunk (fx::kBlockLinearKind) and a VK_IMAGE_TILING_OPTIMAL image of the chain's format, size
-//    and levels, whose texels raw/fx placed (and NVK writes back where raw/fx reads them).
+//    and levels, whose texels raw/fx placed (and NVK writes back where raw/fx reads them);
+//  - a block-linear pool span: a one-level VK_IMAGE_TILING_OPTIMAL image at a span inside a kind-0xFE chunk, whose texels
+//    TegraGM20BLayout.h placed.
 // For each: NVK's GPU address of the memory is the raw path's VA, NIL's layout is the raw path's (VK_EXT_host_image_copy reads
 // and writes through it on the CPU), the view costs no BoImport, BoAlloc or VmBind, and freeing it drops the raw path's
 // lease with no BoFree or VmBind.
@@ -13,6 +15,7 @@
 #include <string>
 #include "../raw/fx/fx_mip.h"
 #include "../raw/runtime/raw_kernel.h"
+#include "TegraGM20BLayout.h"
 #include "nvk_host.h"
 
 namespace {
@@ -173,6 +176,44 @@ void blockLinear(Vk &vk, raw::Kernel &k)
     }
     k.free(bo);
 }
+
+// A block-linear pool span (a private colour texture) in a kind-0xFE chunk, its texels where tgm_layout_write puts them
+void blockLinearSpan(Vk &vk, raw::Kernel &k)
+{
+    const uint32_t w = 200, h = 72;
+    const uint64_t chunkBytes = 1 << 20, spanOffset = 0x30000;
+    tgm_layout l;
+    expect(tgm_layout_tiled(w, h, 4, &l), "span: TegraGM20BLayout.h tiles the texture");
+    raw::Bo bo;
+    uint8_t *base = chunk(k, chunkBytes, TGM_LAYOUT_KIND, bo), *span = base + spanOffset;
+    const std::vector<uint8_t> texels = image(w, h, 0, 5);
+    tgm_layout_write(&l, span, 0, 0, w, h, texels.data(), uint64_t(w) * 4);
+    const Calls before = Calls::now();
+    const int held = holds;
+    VkDeviceMemory memory = foreignMemory(vk, bo, base, span, (l.bytes + 0x3fff) & ~uint64_t(0x3fff), TGM_LAYOUT_KIND);
+    VkMemoryRequirements req = {};
+    VkImage image =
+        memory ? vk.image(memory, 0, VK_IMAGE_TILING_OPTIMAL, VK_FORMAT_B8G8R8A8_UNORM, w, h, 1, req) : VK_NULL_HANDLE;
+    expect(image && holds - held == 1, "span: NVK's memory over the span holds the raw path's lease");
+    char line[200];
+    const uint64_t va = memory ? vk.address(memory, l.bytes) : 0;
+    snprintf(line, sizeof line, "span: NVK's GPU address of the span is the raw path's VA (%llx, %llx)",
+             (unsigned long long)va, (unsigned long long)(bo.vaBase + spanOffset));
+    expect(va == bo.vaBase + spanOffset, line);
+    snprintf(line, sizeof line, "span: NIL's image is TegraGM20BLayout.h's size (%llu, %llu)",
+             (unsigned long long)req.size, (unsigned long long)l.bytes);
+    expect(req.size == l.bytes, line);
+    const Calls viewed = Calls::now();
+    snprintf(line, sizeof line, "span: the view cost no BoImport (%lu), BoAlloc (%lu) or VmBind (%lu)",
+             viewed.imports - before.imports, viewed.allocs - before.allocs, viewed.binds - before.binds);
+    expect(viewed == before, line);
+    std::vector<uint8_t> got;
+    expect(image && vk.read(image, 0, w, h, 4, got) && got == texels,
+           "span: NVK reads the texels tgm_layout_write placed");
+    if (image)
+        release(vk, image, memory, "span");
+    k.free(bo);
+}
 }  // namespace
 
 int main(int argc, char **argv)
@@ -191,6 +232,7 @@ int main(int argc, char **argv)
     expect(k.open(err) && k.shared(), "the raw path's kernel connection is NVK's");
     pitch(vk, k);
     blockLinear(vk, k);
+    blockLinearSpan(vk, k);
     printf("%s\n", host::failures ? "FAILED" : "ALL OK");
     return host::failures ? 1 : 0;
 }
