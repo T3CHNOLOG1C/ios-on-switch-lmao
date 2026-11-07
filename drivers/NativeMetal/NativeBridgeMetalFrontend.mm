@@ -35,6 +35,7 @@
 #include "NativeBridgeMetalFrontend.h"
 #include "AsyncPipelines.h"
 #include "GpuMemoryRelease.h"
+#include "QueuePriority.h"
 #include "SwitchFrameTimeline.h"
 // The two-plane render targets' load and store functions (TwoPlaneStandIn.metal).
 #include "TwoPlaneStandIn.h"
@@ -2231,11 +2232,83 @@ static void notified(void *context, uint64_t value)
 @property (nonatomic) MTLResourceOptions options;
 @property (nonatomic) MTLHeapType heapType;
 @end
-@interface NBQueue : NBObject
+@interface NBQueue : NBObject {
+@public
+    uint32_t gpuPriority, backgroundGpuPriority;  // what it asked for (QueuePriority.h), counted in gQueuePriorities
+}
 @property (nonatomic) NmbQueue *handle;
 @property (atomic, strong)
     dispatch_queue_t completionQueue;  // SPI: where command buffers' handlers run (nil: the runtime's thread)
 @end
+
+// The process's queues' GPU priorities; the GPU driver gets the most urgent of each (method 18) whenever it changes. Core
+// Animation sets a queue's once and never looks again, so one the driver could not take yet (no NVK device) is sent
+// again at the next queue made or command buffer committed (gQueuePriorityPending).
+static std::mutex gQueuePriorityLock;
+static switch_metal::QueuePriorities gQueuePriorities;
+static uint32_t gAppliedPriority = switch_metal::QueuePriorities::kDefault,
+                gAppliedBackground = switch_metal::QueuePriorities::kDefaultBackground;
+static std::atomic<bool> gQueuePriorityPending{false};
+
+using ApplyPriority = bool (*)(uint32_t, uint32_t);
+
+static ApplyPriority priorityCall()
+{
+    static const ApplyPriority apply = reinterpret_cast<ApplyPriority>(nvkSymbol("switch_nvk_gpu_priority"));
+    return apply;
+}
+
+// gQueuePriorityLock held
+static void applyQueuePriorities()
+{
+    const uint32_t priority = gQueuePriorities.priority(), background = gQueuePriorities.backgroundPriority();
+
+    if (priority == gAppliedPriority && background == gAppliedBackground) {
+        gQueuePriorityPending.store(false, std::memory_order_relaxed);
+        return;
+    }
+    const bool applied = priorityCall()(priority, background);
+    if (applied) {
+        gAppliedPriority = priority;
+        gAppliedBackground = background;
+    }
+    gQueuePriorityPending.store(!applied, std::memory_order_relaxed);
+}
+
+static void applyPendingQueuePriorities()
+{
+    if (!gQueuePriorityPending.load(std::memory_order_relaxed))
+        return;
+    std::lock_guard<std::mutex> lock(gQueuePriorityLock);
+    applyQueuePriorities();
+}
+
+static void addQueuePriority(NBQueue *queue)
+{
+    std::lock_guard<std::mutex> lock(gQueuePriorityLock);
+    queue->gpuPriority = switch_metal::QueuePriorities::kDefault;
+    queue->backgroundGpuPriority = switch_metal::QueuePriorities::kDefaultBackground;
+    gQueuePriorities.add(queue->gpuPriority, queue->backgroundGpuPriority);
+    if (priorityCall())
+        applyQueuePriorities();
+}
+
+// A queue's priority (or its background one): kept, and sent to the driver now or (pending) later. NO only without the
+// driver call (not the GM20B's NVK) or for a value Metal does not have.
+static bool setQueuePriority(NBQueue *queue, NSUInteger priority, bool background)
+{
+    if (priority > switch_metal::QueuePriorities::kMax || !priorityCall())
+        return false;
+    std::lock_guard<std::mutex> lock(gQueuePriorityLock);
+    gQueuePriorities.remove(queue->gpuPriority, queue->backgroundGpuPriority);
+    if (background)
+        queue->backgroundGpuPriority = uint32_t(priority);
+    else
+        queue->gpuPriority = uint32_t(priority);
+    gQueuePriorities.add(queue->gpuPriority, queue->backgroundGpuPriority);
+    applyQueuePriorities();
+    return true;
+}
 
 // A render encoder's attachments as the next one compares them (joinable passes, the rates line): texture, level, slice, depth
 // plane, load and store action of each color, the depth and the stencil.
@@ -3982,6 +4055,7 @@ extern "C" size_t native_bridge_metal_commit_origin(char *out, size_t size)
     switch_frame::trace(switch_frame::kM2vCommit, switch_frame::kPoint, frame.seq);
 #endif
     const uint64_t began = apiTiming() ? mach_absolute_time() : 0;
+    applyPendingQueuePriorities();
     [self commitNow];
     if (began) {
         gApiUs += ticksToUs(tApiTicks + mach_absolute_time() - began);
@@ -4160,6 +4234,12 @@ static void completed(void *context)
 
 - (void)dealloc
 {
+    {
+        std::lock_guard<std::mutex> lock(gQueuePriorityLock);
+        gQueuePriorities.remove(gpuPriority, backgroundGpuPriority);
+        if (priorityCall())
+            applyQueuePriorities();
+    }
     nmb_queue_release(_handle);
 }
 
@@ -4228,27 +4308,27 @@ static void completed(void *context)
 }  // submission happens on the caller's thread here
 
 // setCompletionQueue: is the property's setter.
-// GPU priorities are not applied (one hardware queue): reported as not applied.
+// The GPU driver runs the process's channels at the most urgent priority its queues asked for (QueuePriority.h).
 - (BOOL)setGPUPriority:(NSUInteger)priority
 {
-    (void)priority;
-    return NO;
+    return setQueuePriority(self, priority, false);
 }
 
 - (BOOL)setBackgroundGPUPriority:(NSUInteger)priority
 {
-    (void)priority;
-    return NO;
+    return setQueuePriority(self, priority, true);
 }
 
 - (NSUInteger)getGPUPriority
 {
-    return 0;
-}  // none was applied (above)
+    std::lock_guard<std::mutex> lock(gQueuePriorityLock);
+    return gpuPriority;
+}
 
 - (NSUInteger)getBackgroundGPUPriority
 {
-    return 0;
+    std::lock_guard<std::mutex> lock(gQueuePriorityLock);
+    return backgroundGpuPriority;
 }
 
 - (id<MTLCommandBuffer>)commandBufferWithDescriptor:(MTLCommandBufferDescriptor *)d
@@ -5883,6 +5963,7 @@ static void fillLimits(id)
         return nil;
     NBQueue *queue = [NBQueue new];
     queue.handle = handle;
+    addQueuePriority(queue);
     return (id<MTLCommandQueue>)queue;
 }
 

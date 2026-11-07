@@ -155,6 +155,24 @@ TEST(Interleave, ThreeLevelsTooBigForTheRunlistKeepTheCompositorAfterEveryApp)
 
 constexpr uint64_t kInterval = 16666667;  // 60 Hz
 
+// Metal's GPU priorities as Core Animation sets them (CA::OGL::new_metal_context): its window server renderer 0, the
+// asynchronous dispatcher 1, other contexts 2 and 4, background contexts' background priority 2
+TEST(Priority, OnlyTheTopMetalPriorityIsTheCompositors)
+{
+	EXPECT_EQ(tgm_priority_level(0, 4, 0), TGM_LEVEL_HIGH);
+	EXPECT_EQ(tgm_priority_level(1, 4, 0), TGM_LEVEL_FOREGROUND);
+	EXPECT_EQ(tgm_priority_level(2, 4, 0), TGM_LEVEL_FOREGROUND);
+	EXPECT_EQ(tgm_priority_level(4, 4, 0), TGM_LEVEL_BACKGROUND);
+}
+
+TEST(Priority, ABackgroundRoleRunsAtTheBackgroundPriority)
+{
+	EXPECT_EQ(tgm_priority_level(2, 4, 1), TGM_LEVEL_BACKGROUND);
+	EXPECT_EQ(tgm_priority_level(2, 2, 1), TGM_LEVEL_FOREGROUND);
+	// the compositor's level is never a background process's
+	EXPECT_EQ(tgm_priority_level(0, 0, 1), TGM_LEVEL_FOREGROUND);
+}
+
 TEST(Deadline, AChannelIsHeldItsPreemptionLatencyBeforeTheCompositorsLatestStart)
 {
 	const uint64_t vblank = 1000 * kMs, expected = 6 * kMs, latency = 2 * kMs;

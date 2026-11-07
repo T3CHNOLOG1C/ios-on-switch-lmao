@@ -10,6 +10,8 @@
 #define PFIFO_ENG_CTX_VALID 1
 #define PFIFO_ENG_ID_TSG 0x00001000
 #define PFIFO_ENG_ID(s) ((s) & 0xfff)
+#define PFIFO_ENG_NEXT_ID_TSG 0x10000000
+#define PFIFO_ENG_NEXT_ID(s) (((s) >> 16) & 0xfff)
 #define PFIFO_PREEMPT 0x002634
 #define PFIFO_PREEMPT_PENDING 0x00100000
 #define PBDMA_STATUS(i) (0x003080 + (i) * 4)

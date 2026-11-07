@@ -24,6 +24,7 @@
 #include "TegraGM20BPoolPolicy.h"
 #include "TegraGM20BViews.h"
 #include "TegraGM20BPushScan.h"
+#include "TegraGM20BSchedPolicy.h"
 #include "TegraGM20BSharedWiring.h"
 using tgm_scan::PushCounts;
 using tgm_scan::PushParse;
@@ -739,6 +740,7 @@ class AGXDeviceUserClient : public IOUserClient
 		IOMemoryDescriptor *wired;      // imports
 		IOMemoryDescriptor *view;       // cached clientMemoryForType descriptor
 		bool system;  // a coherent BO from ordinary pages (tgm_pool::FromSystem): bmd's pages under a physical view
+		bool compositorPool;  // a pool BO counted as the compositor's (critical_ when it was made)
 		tgm_mem *mem;
 		tgm_coh *coh;  // imports: the surface's coherency registry entry (gpu.c), held
 		SharedWiring *
@@ -786,8 +788,13 @@ class AGXDeviceUserClient : public IOUserClient
 		0;  // the stats: its submissions, every kScanEvery-th read (scanPushes)
 	uint32_t pushScans_ =
 		0;  // the ones read, every kProfileEvery-th also profiled (gpu.c "push profile")
-	bool critical_ =
-		true;  // the compositor's GPU priority; no pool quota (all but the compositor with all-clients)
+	// the compositor's: its queues asked for the top GPU priority (method 18); its channels are high, it has no pool quota
+	bool critical_ = false;
+	// what the connection's queues asked for (method 18), whether runningboardd denies it the GPU (then the background
+	// priority counts) and the runlist level they give its channels
+	uint32_t priority_ = 2, backgroundPriority_ = 2;
+	bool backgroundRole_ = false;
+	uint32_t level_ = TGM_LEVEL_FOREGROUND;
 	bool importsWritten_ =
 		false;  // TegraGM20BPushImportsWritten: every submission marks every writable import
 	bool quotaLogged_ = false;
@@ -825,6 +832,7 @@ class AGXDeviceUserClient : public IOUserClient
 	IOReturn order(const TegraGM20BAbiOrder *in, TegraGM20BAbiOrderReply *out);
 	IOReturn surfaceLayout(const TegraGM20BAbiSurfaceLayout *in,
 			       TegraGM20BAbiSurfaceLayoutReply *out);
+	void applyLevel();
 	IOReturn unmapToken(const TegraGM20BAbiUnmap *in);
 	void releaseMappings();
 
@@ -853,7 +861,7 @@ OSDefineMetaClassAndStructors(AGXDeviceUserClient, IOUserClient)
 {
 	task_ = task;
 	proc_selfname(owner_, sizeof(owner_));
-	critical_ = !tgm_all_clients() || !strcmp(owner_, "backboardd");
+
 	lock_ = IOLockAlloc();
 	if (!lock_ || tgm_vm_new(&vm_))
 		return false;
@@ -952,7 +960,7 @@ void AGXDeviceUserClient::releaseBo(Bo *bo)
 	tgm_mem_del(&bo->mem);
 	if (bo->pool_va && bo->handle) {
 		pool_bytes_ -= bo->bytes;
-		if (critical_)
+		if (bo->compositorPool)
 			tgm_stats_compositor_pool(-static_cast<int64_t>(bo->bytes));
 		else
 			__atomic_sub_fetch(&gClientPoolBytes, bo->bytes, __ATOMIC_RELAXED);
@@ -1258,6 +1266,7 @@ IOReturn AGXDeviceUserClient::boAlloc(const TegraGM20BAbiBoAlloc *in,
 	if (bo->pool_va) {
 		pool_bytes_ += bo->bytes;
 		kind = TGM_BO_POOL;
+		bo->compositorPool = critical_;
 		if (critical_)
 			tgm_stats_compositor_pool(static_cast<int64_t>(bo->bytes));
 		else
@@ -1522,6 +1531,17 @@ IOReturn AGXDeviceUserClient::surfaceLayout(const TegraGM20BAbiSurfaceLayout *in
 	return kIOReturnSuccess;
 }
 
+// lock_ held. The connection's level from its priority and GPU denial (TegraGM20BSchedPolicy.h), for every channel it has.
+void AGXDeviceUserClient::applyLevel()
+{
+	level_ = tgm_priority_level(priority_, backgroundPriority_, backgroundRole_);
+	critical_ = level_ == TGM_LEVEL_HIGH;
+	for (uint32_t i = 0; i < kMaxChannels; i++) {
+		if (chans_[i])
+			tgm_chan_set_level(chans_[i], level_);
+	}
+}
+
 IOReturn AGXDeviceUserClient::channelCreate(const TegraGM20BAbiChannelCreate *in,
 					    TegraGM20BAbiChannelCreateReply *out)
 {
@@ -1538,6 +1558,8 @@ IOReturn AGXDeviceUserClient::channelCreate(const TegraGM20BAbiChannelCreate *in
 	if (ret)
 		return ret;
 	tgm_chan_set_group(chans_[slot], task_);  // Order relates the channels of one task
+	if (level_ != TGM_LEVEL_FOREGROUND && !critical_)
+		tgm_chan_set_level(chans_[slot], level_);
 	out->channel = slot + 1;
 	out->fence_token = kFenceToken;
 	out->fence_offset = slot * 16;
@@ -1746,6 +1768,14 @@ IOReturn AGXDeviceUserClient::exec(const TegraGM20BAbiExec *in, uint32_t count,
 	if (!in->channel || in->channel > kMaxChannels || !chans_[in->channel - 1])
 		return kIOReturnBadArgument;
 	tgm_chan *chan = chans_[in->channel - 1];
+	// runningboardd's GPU denial, as IOKit reads it for kIOUCForegroundOnly methods (task_is_gpu_denied), at each
+	// submission: a denied process runs at its background priority
+	const bool background = clientHasPrivilege(current_task(), kIOClientPrivilegeForeground) !=
+				kIOReturnSuccess;
+	if (background != backgroundRole_) {
+		backgroundRole_ = background;
+		applyLevel();
+	}
 	// TegraGM20BAbiPush and tgm_push share one layout; `in` is our private copy, so normalise flags in place
 	static_assert(sizeof(tgm_push) == sizeof(TegraGM20BAbiPush) &&
 			      offsetof(tgm_push, no_prefetch) == offsetof(TegraGM20BAbiPush, flags),
@@ -1937,7 +1967,8 @@ IOReturn AGXDeviceUserClient::getInfo(TegraGM20BAbiInfo *out)
 	bzero(out, sizeof(*out));
 	out->abi_version = TegraGM20BAbiVersion;
 	out->flags = TegraGM20BInfoHostImport | TegraGM20BInfoKernelMap | TegraGM20BInfoOrder |
-		     TegraGM20BInfoSurfaceWrites | TegraGM20BInfoSurfaceLayout;
+		     TegraGM20BInfoSurfaceWrites | TegraGM20BInfoSurfaceLayout |
+		     TegraGM20BInfoPriority;
 	out->chipset = info.chipset;
 	out->device_id = 0;
 	out->gpc_count = info.gpc_count;
@@ -2041,6 +2072,9 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 		wantIn = sizeof(TegraGM20BAbiSurfaceLayout);
 		wantOut = sizeof(TegraGM20BAbiSurfaceLayoutReply);
 		break;
+	case TegraGM20BMethodPriority:
+		wantIn = sizeof(TegraGM20BAbiPriority);
+		break;
 	default:
 		return kIOReturnUnsupported;
 	}
@@ -2084,6 +2118,13 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 		break;
 	case TegraGM20BMethodOrder:
 		if (!reservedZero(static_cast<const TegraGM20BAbiOrder *>(in)->reserved))
+			return kIOReturnBadArgument;
+		break;
+	case TegraGM20BMethodPriority:
+		if (static_cast<const TegraGM20BAbiPriority *>(in)->priority >
+			    TegraGM20BMaxPriority ||
+		    static_cast<const TegraGM20BAbiPriority *>(in)->background_priority >
+			    TegraGM20BMaxPriority)
 			return kIOReturnBadArgument;
 		break;
 	default:
@@ -2152,6 +2193,13 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 	case TegraGM20BMethodSurfaceLayout:
 		ret = surfaceLayout(static_cast<const TegraGM20BAbiSurfaceLayout *>(in),
 				    static_cast<TegraGM20BAbiSurfaceLayoutReply *>(out));
+		break;
+	case TegraGM20BMethodPriority:
+		priority_ = static_cast<const TegraGM20BAbiPriority *>(in)->priority;
+		backgroundPriority_ =
+			static_cast<const TegraGM20BAbiPriority *>(in)->background_priority;
+		applyLevel();
+		ret = kIOReturnSuccess;
 		break;
 	default:
 		ret = kIOReturnUnsupported;

@@ -15,6 +15,8 @@ void tgm_sched_level(struct nvkm_device *device, unsigned int chid, unsigned int
 /* Before nvkm removes a channel: its level goes back to foreground (nvkm's own runlist update then drops it) and the hold
  * forgets it. */
 void tgm_sched_forget(struct nvkm_device *device, unsigned int chid);
+/* Whether the host holds `chid`: on the PBDMA, or GR's channel or the one GR switches to (its RAMFC is the host's). */
+int tgm_sched_loaded(struct nvkm_device *device, unsigned int chid);
 /* What the GPU runs: the app channel on GR, else on the PBDMA; TGM_VICTIM_SWITCHING or TGM_VICTIM_NONE. */
 int tgm_sched_resident(struct nvkm_device *device);
 

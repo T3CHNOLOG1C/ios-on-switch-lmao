@@ -17,6 +17,18 @@ enum tgm_level {
 	TGM_LEVELS,
 };
 
+/* A connection's runlist level from the GPU priority its Metal queues asked for (TegraGM20BABI.h method 18) and whether
+ * runningboardd denies its process the GPU (`background`: then its background priority counts). */
+static inline enum tgm_level tgm_priority_level(uint32_t priority, uint32_t background_priority,
+						int background)
+{
+	uint32_t p = background ? background_priority : priority;
+
+	if (p == 0 && !background)
+		return TGM_LEVEL_HIGH;
+	return p <= 2 ? TGM_LEVEL_FOREGROUND : TGM_LEVEL_BACKGROUND;
+}
+
 /* What a high channel's kick should preempt, from engine 0's (GR's) status, whether its resident channel is high, and the
  * PBDMA's: the app channel holding GR, else the one holding the PBDMA; TGM_VICTIM_SWITCHING while GR is mid-switch (the
  * host already leaves a channel, and with the runlist interleaved goes to a high one next). A TSG id names no channel. */

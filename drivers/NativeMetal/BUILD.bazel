@@ -18,6 +18,7 @@ filegroup(
         "AsyncPipelines.h",
         "GpuMemoryRelease.h",
         "NativeBridgeMetalFrontend.h",
+        "QueuePriority.h",
         "SwitchFrameTimeline.h",
         "TwoPlaneStandIn.h",
         "bridge/NativeMetalBridge.h",

@@ -1054,6 +1054,7 @@ struct tgm_chan {
 	u64 stall_ns, stall_held;
 	int app;     /* a user channel: the hold may take it from its first submission */
 	int tracked; /* the hold may take it (tgm_hold_track) */
+	u32 timeslice_due; /* RAMFC timeslice for a level change, written once the host holds the channel no more */
 
 	/* high channels, by seqno: each submission's kick, the app channel it was queued behind and when that one was asked
 	 * to leave the GPU (PTIMER), whether an app held the GPU at its kick, whether acquires came before its start stamp */
@@ -2947,7 +2948,7 @@ static int chan_nonstall(struct nvif_event *event, void *repv, u32 repc)
 	(void)repv;
 	(void)repc;
 	if (done != chan->progress_done) {
-		if (chan->high)
+		if (__atomic_load_n(&chan->high, __ATOMIC_ACQUIRE))
 			high_fenced(chan, chan->progress_done, done);
 		chan->progress_done = done;
 		now = nvxnu_nanotime();
@@ -3002,6 +3003,7 @@ static void chan_free(struct tgm_chan *chan)
  * (os/linux/driver_common.c nvgpu_init_timeslice: 5200 vs 1300 us); critical channels get scale 5, 4x, written before
  * their first submission (the host reads RAMFC when it first loads the channel). */
 #define RAMFC_TIMESLICE 0xf8
+#define RAMFC_TIMESLICE_DEFAULT 0x10003080
 #define RAMFC_TIMESLICE_HIGH 0x10005080
 
 static int compositor_timeslice_on(void)
@@ -3033,6 +3035,53 @@ static void chan_prioritize(struct tgm_chan *chan)
 {
 	chan->high = 1;
 	tgm_sched_level(gpu.device, chan->chid, TGM_LEVEL_HIGH);
+}
+
+void tgm_chan_set_level(struct tgm_chan *chan, unsigned int level)
+{
+	int high = level == TGM_LEVEL_HIGH;
+	u64 now = nvxnu_nanotime();
+	u32 i;
+
+	if (chan->kernel)
+		return;
+	if (high == chan->high) {
+		tgm_sched_level(gpu.device, chan->chid, level);
+		return;
+	}
+	if (high) {
+		/* work kicked before the change found no preempt: none of it is timed as the compositor's */
+		for (i = 0; i < CHAN_QUEUED; i++) {
+			WRITE_ONCE(chan->queued[i].kick_ns, now);
+			WRITE_ONCE(chan->queued[i].behind, -1);
+			WRITE_ONCE(chan->queued[i].app, 1);
+			WRITE_ONCE(chan->queued[i].waits, 1);
+		}
+		WRITE_ONCE(chan->tracked, 0);
+		chan->critical = 1;
+		/* chan_nonstall reads queued[] once it sees high */
+		__atomic_store_n(&chan->high, 1, __ATOMIC_RELEASE);
+		tgm_sched_level(gpu.device, chan->chid, TGM_LEVEL_HIGH);
+	} else {
+		WRITE_ONCE(chan->high, 0);
+		chan->critical = 0;
+		tgm_sched_level(gpu.device, chan->chid, level);
+	}
+	if (compositor_timeslice_on())
+		chan->timeslice_due = high ? RAMFC_TIMESLICE_HIGH : RAMFC_TIMESLICE_DEFAULT;
+}
+
+/* chan_exec, before a submission is kicked: the host saves a channel's RAMFC when it leaves it, so a level change's
+ * timeslice is written while the channel is idle and on neither GR nor the PBDMA. */
+static void chan_timeslice_due(struct tgm_chan *chan)
+{
+	u32 value = chan->timeslice_due;
+
+	if (!value || (s32)(tgm_chan_completed(chan) - chan->submitted) < 0 ||
+	    tgm_sched_loaded(gpu.device, chan->chid))
+		return;
+	chan_timeslice(chan->chid, value);
+	chan->timeslice_due = 0;
 }
 
 static int chan_push_wait(struct tgm_chan *chan, u32 push_nr);
@@ -3923,6 +3972,7 @@ static int chan_exec(struct tgm_chan *chan, const struct tgm_push *pushes, uint3
 		return 0;
 	}
 	idle_wake(); /* the run rate before any of this submission is kicked */
+	chan_timeslice_due(chan);
 	/* from its first submission: a channel made before its connection's GPU priority came (the compositor's, at boot)
 	 * is never held for the compositor's own frame */
 	if (chan->app && !chan->high && !chan->tracked) {

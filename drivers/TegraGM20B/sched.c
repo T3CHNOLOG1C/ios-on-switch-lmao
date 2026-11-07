@@ -234,6 +234,29 @@ static int sched_victim(struct nvkm_device *device, struct nvkm_runl *runl)
 	return tgm_kick_victim(eng, is_high(PFIFO_ENG_ID(eng)), pbdma != 0, chid, is_high(chid));
 }
 
+int tgm_sched_loaded(struct nvkm_device *device, unsigned int chid)
+{
+	struct nvkm_runl *runl;
+	struct nvkm_engn *engn;
+	u32 eng;
+
+	nvkm_runl_foreach(runl, device->fifo)
+	{
+		if (runl->runq_nr && runl->runq[0] &&
+		    PBDMA_CHID(nvkm_rd32(device, PBDMA_CHANNEL(runl->runq[0]->id))) == chid)
+			return 1;
+		nvkm_runl_foreach_engn(engn, runl)
+		{
+			eng = nvkm_rd32(device, PFIFO_ENG_STATUS(engn->id));
+			if (!(eng & PFIFO_ENG_ID_TSG) && PFIFO_ENG_ID(eng) == chid)
+				return 1;
+			if (!(eng & PFIFO_ENG_NEXT_ID_TSG) && PFIFO_ENG_NEXT_ID(eng) == chid)
+				return 1;
+		}
+	}
+	return 0;
+}
+
 int tgm_sched_resident(struct nvkm_device *device)
 {
 	struct nvkm_runl *runl;

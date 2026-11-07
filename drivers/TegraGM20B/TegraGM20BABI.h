@@ -32,6 +32,7 @@ enum {
 	TegraGM20BMethodOrder = 14,         /* with TegraGM20BInfoOrder */
 	TegraGM20BMethodSurfaceWrites = 15, /* with TegraGM20BInfoSurfaceWrites */
 	TegraGM20BMethodSurfaceLayout = 16, /* with TegraGM20BInfoSurfaceLayout */
+	TegraGM20BMethodPriority = 18,      /* with TegraGM20BInfoPriority */
 
 	TegraGM20BMaxBindOps = 100,
 	TegraGM20BMaxPushes = 255,
@@ -47,6 +48,7 @@ enum {
 	TegraGM20BInfoSurfaceWrites = 1u
 		<< 5, /* BoImport takes TegraGM20BImportGpuReads; method 15 is implemented */
 	TegraGM20BInfoSurfaceLayout = 1u << 6, /* method 16 is implemented */
+	TegraGM20BInfoPriority = 1u << 8, /* Priority (method 18) is implemented */
 };
 
 /* Method 1, output only. Everything NVK's struct nv_device_info needs that the client cannot derive. */
@@ -326,6 +328,22 @@ struct TegraGM20BAbiOrder {
 	uint32_t reserved;
 };
 
+/* Method 18. The GPU priority the process's Metal command queues asked for (-[MTLCommandQueue setGPUPriority:] and
+ * setBackgroundGPUPriority:), Metal's values, the lower the more urgent: Core Animation's render server asks for 0 (its
+ * window server renderer: CA::OGL::new_metal_context's MetalPriority 4), its asynchronous dispatcher 1, its other
+ * contexts 2 and 4. It sets the runlist level of every channel of the connection, made before the call or after:
+  * 0 the compositor's, the highest, 1 and 2 an app's, 3 and above background. background_priority is the one for while
+ * runningboardd denies the process the GPU (task_is_gpu_denied, IOKit's "foreground" privilege). Values above
+ * TegraGM20BMaxPriority are refused. */
+enum {
+	TegraGM20BMaxPriority = 5,
+};
+
+struct TegraGM20BAbiPriority {
+	uint32_t priority;
+	uint32_t background_priority;
+};
+
 struct TegraGM20BAbiOrderReply {
 	uint32_t waits;
 	uint32_t reserved;
@@ -360,5 +378,6 @@ TEGRA_GM20B_ASSERT(TegraGM20BAbiMapReply, 16);
 TEGRA_GM20B_ASSERT(TegraGM20BAbiUnmap, 16);
 TEGRA_GM20B_ASSERT(TegraGM20BAbiOrder, 16);
 TEGRA_GM20B_ASSERT(TegraGM20BAbiOrderReply, 8);
+TEGRA_GM20B_ASSERT(TegraGM20BAbiPriority, 8);
 #undef TEGRA_GM20B_ASSERT
 #endif
