@@ -27,7 +27,7 @@
 
 #define SWITCH_AUDIO_CLASS         "SwitchAudio"
 #define SWITCH_AUDIO_MAGIC         0x53574155u /* 'SWAU' */
-#define SWITCH_AUDIO_VERSION       4u
+#define SWITCH_AUDIO_VERSION       5u
 #define SWITCH_AUDIO_RATE          48000u /* the rate a service starts at */
 #define SWITCH_AUDIO_MAX_RATES     2u
 #define SWITCH_AUDIO_OUT_CHANNELS  2u
@@ -50,7 +50,19 @@ enum {
     /* One scalar: the address, in the caller, of CoreAudio's 24 MHz host clock constant (see SwitchAudio.cpp). */
     SwitchAudioSetHostClock = 4,
     /* One scalar: the nominal rate in Hz, one of rates[]. kIOReturnBusy while either direction runs. */
-    SwitchAudioSetRate = 5
+    SwitchAudioSetRate = 5,
+    /* One scalar: the headphone output's attenuation below its full level in millidecibels, the codec's DAC volume
+     * (0.375 dB steps, down to SWITCH_AUDIO_HEADPHONE_RANGE_MDB); more than that mutes it. */
+    SwitchAudioSetHeadphoneLevel = 6
+};
+
+#define SWITCH_AUDIO_HEADPHONE_RANGE_MDB 63750u
+
+/* jack: what is plugged into the headphone jack. The service sends kIOMessageServicePropertyChange to its interest
+ * clients each time it changes. */
+enum {
+    SwitchAudioJackHeadphones = 1u << 0,
+    SwitchAudioJackMicrophone = 1u << 1
 };
 
 enum {
@@ -70,6 +82,7 @@ typedef struct {
     uint32_t backend;
     uint32_t rates[SWITCH_AUDIO_MAX_RATES];
     volatile uint32_t state;               /* SwitchAudio*Running */
+    volatile uint32_t jack;                /* SwitchAudioJack* */
     volatile uint64_t ticks_per_frame_q32; /* host ticks per frame, 32.32 fixed point */
     volatile uint64_t anchor_host;         /* host time of sample time 0 */
     volatile uint64_t out_frames;          /* the service: playback consumed (and cleared) below this sample time */

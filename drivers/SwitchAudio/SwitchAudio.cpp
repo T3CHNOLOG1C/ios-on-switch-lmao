@@ -5,8 +5,10 @@
 // package/ShengAudioService.cpp, the iPadOS 17.7.11 audio path that is known to play on real hardware.
 //
 // Backends:
-//   Tegra I2S playback (speaker and headphone jack); capture stays silence on the hardware's clock. tegraCapture
-//      (headset microphone) has never run on the device and stays off.
+//   Tegra I2S playback (speaker and headphone jack) and capture (the headset microphone on the jack). The jack's state,
+//      headphones and whether the plug has a microphone, is in the control page for the plug-in's Codec device. A
+//      capture channel that delivers nothing in its first periods is turned off for the boot with one line (it had
+//      never run on hardware before 11-07); the microphone then reads as absent.
 //   null, with boot-arg switch-no-audio: a 10 ms timer advances the play position on the host clock and clears what it
 //      passed; capture is silence; no Tegra hardware is touched. The timer runs only while a stream does.
 // The Tegra backend logs one line every 5 s while streams run: streams started, frames played, underruns, the loudest sample, the
@@ -368,8 +370,10 @@ class SwitchAudio : public IOService {
     IOInterruptEventSource *jackSource = nullptr;
     IOTimerEventSource *jackTimer = nullptr, *idleTimer = nullptr;
     bool codecOn = false, jackKnown = false, jackIn = false, headset = false, speakerOnly = false;
-    bool hardwareLost = false;  // the APE did not come back after sleep, or shut down: never touched again
-    bool codecOff = false;      // shut down: the codec is unpowered
+    bool captureProven = false;   // a capture period has arrived since start
+    unsigned headphoneSteps = 0;  // the plug-in's headphone level, in the DAC's 0.375 dB steps (setHeadphoneLevel)
+    bool hardwareLost = false;    // the APE did not come back after sleep, or shut down: never touched again
+    bool codecOff = false;        // shut down: the codec is unpowered
     IONotifier *shutdownNotifier = nullptr;
     SwitchRT5639 codec;
 #if DEVELOPMENT || DEBUG
@@ -818,9 +822,30 @@ class SwitchAudio : public IOService {
     }
 #endif
 
+    // Audio work loop: the capture channel delivered no period while playback finished three, on its first run since
+    // start. Capture stops for the boot, playback goes on, and the microphone reads as absent (publishJack).
+    void captureOff()
+    {
+        const uint32_t in = kChIn * CH_STRIDE, id = kAgicAdma + kChIn;
+        IOLog("SwitchAudio: headset microphone off for this boot: ADMA ch1 delivered no period while ch0 played %llu "
+              "(XFER %u STATUS %#x INT_STATUS %#x, ADMAIF RX %#x, I2S TX %#x)\n",
+              periods[kChOut], switch_mmio_read32(adma, in + CH_XFER_STATUS) & 0xffff,
+              switch_mmio_read32(adma, in + CH_STATUS), switch_mmio_read32(adma, in + CH_INT_STATUS),
+              switch_mmio_read32(ahub, ADMAIF_RX_STATUS), switch_mmio_read32(ahub, I2S_TX_STATUS));
+        switch_mmio_write32(adma, in + CH_CMD, 0);
+        switch_mmio_write32(adma, in + CH_INT_CLEAR, 1);
+        switch_mmio_write32(agic, GICD_ICENABLER + 4 * (id / 32), 1u << (id % 32));
+        switch_mmio_write32(ahub, ADMAIF_RX_ENABLE, 0);  // not waited for: nothing here starts them again this boot
+        switch_mmio_write32(ahub, I2S_TX_ENABLE, 0);
+        tegraCapture = false;
+        control->in_frames = control->out_frames;
+        codecStep(kCodecNoMicrophone);
+    }
+
     // Period n of the capture ring is in memory: drop what the CPUs cached of it, then publish it.
     void capturedPeriod()
     {
+        captureProven = true;
         const uint64_t n = periods[kChIn]++;
         switch_dcache_clean_invalidate(
             ring(SwitchAudioMemoryInput) + (n % kPeriods) * kPeriodFrames * SWITCH_AUDIO_IN_CHANNELS, kInPeriodBytes);
@@ -852,6 +877,10 @@ class SwitchAudio : public IOService {
         timer->setTimeoutMS(watchdogMS());
         // Capture runs on the same clock from the same start: two periods behind playback, its interrupt is lost or its
         // DMA stalled.
+        if (tegraCapture && !captureProven && periods[kChOut] > 2) {
+            captureOff();
+            return;
+        }
         if (tegraCapture && periods[kChOut] > periods[kChIn] + 2) {
             const uint32_t in = kChIn * CH_STRIDE, id = kAgicAdma + kChIn, bit = 1u << (id % 32), word = 4 * (id / 32);
             panic("SwitchAudio: ADMA ch1 behind: %llu periods vs %llu, XFER %u seen %u INT_STATUS %#x STATUS %#x, AGIC "
@@ -933,7 +962,7 @@ class SwitchAudio : public IOService {
             codec.biasStandby();
             codec.powerDac();
             if (tegraCapture) {
-                headset = codec.detectHeadset(jackIn);
+                codec.micBias(headset);
                 codec.powerCapture();
             }
             codecOn = true;
@@ -953,15 +982,16 @@ class SwitchAudio : public IOService {
         if (codec.biasIsOn())
             codec.biasOff();
         codecOn = false;
-        headset = false;
     }
 
     enum CodecStep : uintptr_t {
         kCodecPowerUp,
         kCodecUnmute,
         kCodecMute,
-        kCodecPause,    // the last stream stopped: muted now, powered down after kIdleMS unless one starts again
-        kCodecIdleNow,  // no stream: powered down now (before its MCLK changes), not kIdleMS later
+        kCodecPause,           // the last stream stopped: muted now, powered down after kIdleMS unless one starts again
+        kCodecIdleNow,         // no stream: powered down now (before its MCLK changes), not kIdleMS later
+        kCodecHeadphoneLevel,  // headphoneSteps
+        kCodecNoMicrophone,    // capture turned off for the boot
     };
 
     static IOReturn codecGated(OSObject *owner, void *step, void *, void *, void *)
@@ -987,6 +1017,15 @@ class SwitchAudio : public IOService {
         case kCodecIdleNow:
             self->idleTimer->cancelTimeout();
             codecIdle(self, self->idleTimer);
+            break;
+        case kCodecHeadphoneLevel:
+            self->codec.setHeadphoneAttenuation(__atomic_load_n(&self->headphoneSteps, __ATOMIC_RELAXED));
+            if (self->control->state)
+                self->codec.mute(false);
+            break;
+        case kCodecNoMicrophone:
+            self->codec.micBias(false);
+            self->publishJack();
             break;
         default:
             break;
@@ -1014,6 +1053,31 @@ class SwitchAudio : public IOService {
         static_cast<SwitchAudio *>(owner)->jackTimer->setTimeoutMS(kJackSettleMS);
     }
 
+    // Codec work loop, after the jack settled: whether the plug carries a microphone (rt5640_detect_headset needs the
+    // references, which come up for it and go down kIdleMS later), then the jack's state to the plug-in.
+    void noteJack()
+    {
+        if (tegraCapture && jackIn && !codec.biasIsOn()) {
+            codec.biasStandby();
+            if (!control->state)
+                idleTimer->setTimeoutMS(kIdleMS);
+        }
+        headset = tegraCapture && codec.detectHeadset(jackIn);
+        if (!jackIn)
+            codec.micBias(false);
+        publishJack();
+    }
+
+    void publishJack()
+    {
+        const uint32_t jack =
+            (jackIn ? SwitchAudioJackHeadphones : 0u) | (headset && tegraCapture ? SwitchAudioJackMicrophone : 0u);
+        if (control->jack == jack)
+            return;
+        control->jack = jack;
+        messageClients(kIOMessageServicePropertyChange);
+    }
+
     // Also the first reading, kJackSettleMS after codecStart; until then the jack counts as empty (the speaker).
     static void jackSettled(OSObject *owner, IOTimerEventSource *)
     {
@@ -1038,10 +1102,9 @@ class SwitchAudio : public IOService {
             self->codec.biasStandby();
             self->idleTimer->setTimeoutMS(kIdleMS);
         }
+        self->noteJack();
         if (!self->codecOn)
             return;  // the next stream routes
-        if (self->tegraCapture)
-            self->headset = self->codec.detectHeadset(in);
         if (self->codec.route() == self->wantedRoute())
             return;
         self->codec.routeDown();
@@ -1346,6 +1409,7 @@ public:
             return false;
         uint32_t off = 0;
         tegra = !(PE_parse_boot_argn("switch-no-audio", &off, sizeof(off)) && off);
+        tegraCapture = tegra;
         const IOOptionBits options = (IOOptionBits)kIODirectionInOut | (IOOptionBits)kIOMemoryKernelUserShared |
                                      (IOOptionBits)kIOMemoryPhysicallyContiguous;
         const uint32_t sizes[3] = {(uint32_t)PAGE_SIZE, kOutBytes, kInBytes};
@@ -1534,6 +1598,18 @@ public:
         return gate->runAction(&SwitchAudio::rateGated, const_cast<switch_audio_clock *>(next));
     }
 
+    // The headphone volume is the codec's: 0.375 dB DAC steps, rounded to the nearest.
+    IOReturn setHeadphoneLevel(uint64_t attenuationMdB)
+    {
+        if (!tegra)
+            return kIOReturnSuccess;
+        const uint64_t steps =
+            attenuationMdB > SWITCH_AUDIO_HEADPHONE_RANGE_MDB ? 0xffff : (attenuationMdB + 187) / 375;
+        __atomic_store_n(&headphoneSteps, steps > 0xffff ? 0xffffu : (unsigned)steps, __ATOMIC_RELAXED);
+        codecStep(kCodecHeadphoneLevel);
+        return kIOReturnSuccess;
+    }
+
     IOMemoryDescriptor *copyMemory(uint32_t type)
     {
         if (type > SwitchAudioMemoryInput)
@@ -1589,6 +1665,8 @@ public:
             return kIOReturnBadArgument;
         if (selector == SwitchAudioSetHostClock)
             return args->scalarInputCount == 1 ? setHostClock(owner, args->scalarInput[0]) : kIOReturnBadArgument;
+        if (selector == SwitchAudioSetHeadphoneLevel)
+            return args->scalarInputCount == 1 ? audio->setHeadphoneLevel(args->scalarInput[0]) : kIOReturnBadArgument;
         if (selector == SwitchAudioSetRate) {
             return args->scalarInputCount == 1 && args->scalarInput[0] <= UINT32_MAX
                        ? audio->setRate((uint32_t)args->scalarInput[0])

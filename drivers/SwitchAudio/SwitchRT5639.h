@@ -100,6 +100,11 @@ public:
     void routeDown();
     void mute(bool muted);
 
+    // The headphone level: the DAC's own volume (0.375 dB steps below its full level), applied now when the
+    // headphones play and at every headphone routeUp; steps past the DAC's range keep the headphone output muted.
+    void setHeadphoneAttenuation(unsigned steps);
+    void micBias(bool on);
+
     rt5639::Route route() const
     {
         return currentRoute;
@@ -117,6 +122,9 @@ public:
 private:
     rt5639::Route currentRoute = rt5639::kRouteNone;
     bool biasOn = false;
+    unsigned headphoneSteps = 0;
+    bool headphoneMuted = false;
+    uint16_t headphoneDac() const;
 
     void write(uint16_t reg, uint16_t value);
     void update(uint8_t reg, uint16_t mask, uint16_t value);

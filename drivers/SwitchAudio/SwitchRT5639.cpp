@@ -276,7 +276,7 @@ void SwitchRT5639::routeUp(Route to)
         update(PWR_VOL, P_HV_L | P_HV_R, P_HV_L | P_HV_R);
         depop(true);  // "HP Amp" POST_PMU
         writeList(kMicEq);
-        write(DAC1_DIG_VOL, kDacHeadphone);
+        write(DAC1_DIG_VOL, headphoneDac());
         IOSleep(80);   // "HP Post"
         IOSleep(100);  // bias ON with the HP amp up: then release its soft mute
         update(DEPOP_M1, D_HP_SG | D_HP_R_SMT | D_HP_L_SMT, 0);
@@ -309,22 +309,48 @@ void SwitchRT5639::mute(bool muted)
     if (currentRoute == kRouteSpeaker)
         update(SPK_VOL, V_MUTE, muted ? V_MUTE : 0);
     else if (currentRoute == kRouteHeadphones)
-        update(HP_VOL, V_MUTE, muted ? V_MUTE : 0);
+        update(HP_VOL, V_MUTE, muted || headphoneMuted ? V_MUTE : 0);
+}
+
+// DAC1_DIG_VOL: left 15:8, right 7:0, 0xaf = 0 dB in 0.375 dB steps; kDacHeadphone is the full headphone level.
+uint16_t SwitchRT5639::headphoneDac() const
+{
+    const unsigned full = kDacHeadphone & 0xff, steps = headphoneSteps < full ? headphoneSteps : full;
+    return (uint16_t)((full - steps) << 8 | (full - steps));
+}
+
+void SwitchRT5639::setHeadphoneAttenuation(unsigned steps)
+{
+    headphoneSteps = steps;
+    const bool muted = steps > (kDacHeadphone & 0xffu);
+    if (currentRoute != kRouteHeadphones) {
+        headphoneMuted = muted;
+        return;
+    }
+    write(DAC1_DIG_VOL, headphoneDac());
+    if (muted != headphoneMuted) {
+        headphoneMuted = muted;
+        if (muted)
+            update(HP_VOL, V_MUTE, V_MUTE);
+    }
+}
+
+void SwitchRT5639::micBias(bool on)
+{
+    update(PWR_ANLG1, P_LDO2, on ? P_LDO2 : 0);
+    update(PWR_ANLG2, P_MB1, on ? P_MB1 : 0);
 }
 
 bool SwitchRT5639::detectHeadset(bool jackIn)
 {
     bool headset = false;
     if (jackIn) {
-        update(PWR_ANLG1, P_LDO2, P_LDO2);
-        update(PWR_ANLG2, P_MB1, P_MB1);
+        micBias(true);
         update(IRQ_CTRL2, 1u << 3, 0);
         IOSleep(100);
         headset = !(read(IRQ_CTRL2) & (1u << 3));
     }
-    if (!headset) {
-        update(PWR_ANLG2, P_MB1, 0);
-        update(PWR_ANLG1, P_LDO2, 0);
-    }
+    if (!headset)
+        micBias(false);
     return headset;
 }
