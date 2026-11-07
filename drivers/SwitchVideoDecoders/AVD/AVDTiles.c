@@ -88,7 +88,7 @@ OSStatus avd_start_tile_session(VTVideoDecoderRef ref, VTTileDecoderSession sess
     const char *why = prepare(d, sps);
     if (why) {
         pthread_mutex_unlock(&d->lock);
-        os_log(gAVDLog, "AVD: tile session in %{public}s left to the next decoder: %{public}s", getprogname(), why);
+        switch_refusal("AVD", why, "tile session left to the next decoder");
         return kVTVideoDecoderUnsupportedDataFormatErr;
     }
     hevc_decoder_allow_10bit(d->hevc, false);

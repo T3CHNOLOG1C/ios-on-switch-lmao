@@ -106,8 +106,8 @@ static OSStatus startSoftware(Decoder *d, VTVideoDecoderSession session, CMVideo
     }
     d->software = software;
     const CMVideoDimensions size = CMVideoFormatDescriptionGetDimensions(format);
-    os_log(gAVDLog, "AVD: session %dx%d in %{public}s on Apple's software %{public}s decoder: %{public}s", size.width,
-           size.height, getprogname(), d->codec == kCMVideoCodecType_HEVC ? "HEVC" : "H.264", why);
+    switch_refusal("AVD", why, "%dx%d %s session on Apple's software decoder", size.width, size.height,
+                   d->codec == kCMVideoCodecType_HEVC ? "HEVC" : "H.264");
     return noErr;
 }
 
@@ -789,10 +789,8 @@ static OSStatus createInstance(FourCharCode codec, CFAllocatorRef allocator, VTV
         return kVTCouldNotFindVideoDecoderErr;
     }
     if (!client) {  // VideoToolbox goes on to H264SW
-        static int logged;
-        if (!__atomic_exchange_n(&logged, 1, __ATOMIC_RELAXED))
-            os_log_error(gAVDLog, "AVD: TegraNVDEC refused %{public}s (%#x) after registration; H.264 goes to software",
-                         getprogname(), error);
+        switch_refusal("AVD", "TegraNVDEC refused the process after registration",
+                       "error %#x: H.264 goes to Apple's software decoder", error);
         return kVTCouldNotFindVideoDecoderErr;
     }
     CMBaseObjectRef object = NULL;
@@ -1004,8 +1002,8 @@ void AVDRegister(void)
     int error = 0;
     NVDECClient *probe = nvdec_open(&error);
     if (!probe) {
-        os_log(gAVDLog, "AVD: TegraNVDEC refuses %{public}s (%#x): H.264 stays on Apple's software decoder here",
-               getprogname(), error);
+        switch_refusal("AVD", "TegraNVDEC refused the process", "error %#x: H.264 stays on Apple's software decoder",
+                       error);
         return;
     }
     const OSStatus status = VTRegisterVideoDecoder(kCMVideoCodecType_H264, createInstance);

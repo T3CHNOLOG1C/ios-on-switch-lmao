@@ -12,6 +12,7 @@
 #include "NVDECClient.h"
 #include "VP9NVDEC.h"
 #include "VTDecoderSPI.h"
+#include "../../../kits/SwitchRefusal/SwitchRefusal.h"
 
 // The tile being decoded: its frame ID, the canvas it goes into and where.
 typedef struct {
