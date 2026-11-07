@@ -126,9 +126,9 @@ TEST(DisplayPlanesSource, DriverFollowsTheRules)
     EXPECT_THAT(gate, HasSubstr("const bool ok = planes && turns && pitched;"));
     EXPECT_THAT(source, Not(HasSubstr("publishDetachAlignment")));
     EXPECT_THAT(Method(source, "    void publishStrideRequirements()\n"),
-                HasSubstr("OSNumber::withNumber(NativePlanes::kPublishedRowAlignment, 32)"));
+                HasSubstr("OSNumber::withNumber(native_planes::kPublishedRowAlignment, 32)"));
     EXPECT_THAT(Method(source, "    void publishPlaneLimits()\n"),
-                HasSubstr("{\"PlaneBaseAlignmentLinear\", NativePlanes::kPublishedBaseAlignment}"));
+                HasSubstr("{\"PlaneBaseAlignmentLinear\", native_planes::kPublishedBaseAlignment}"));
     // The service is found as J120's: IOServiceMatching("AppleCLCD").
     EXPECT_THAT(
         source,
