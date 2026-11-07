@@ -66,8 +66,10 @@ def apply(root: Path, entries: list[dict], log: host.Log, what: str, consume: bo
         flags = os.lstat(target).st_flags
         if flags & ~COMPRESSED:
             os.chflags(target, 0)
+        # Opening a compressed file for writing decompresses it in place first (its whole size, transiently); truncating
+        # it by path does not
+        os.truncate(target, 0)
         with open(e['source'], 'rb') as source, open(target, 'r+b') as out:
-            out.truncate(0)
             shutil.copyfileobj(source, out, 8 << 20)
             out.flush()
             os.fsync(out.fileno())
