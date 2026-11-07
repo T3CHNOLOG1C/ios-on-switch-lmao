@@ -171,9 +171,35 @@ def default_forms(simple: list[dict]) -> tuple[list[dict], list[tuple[dict, str]
     return kept, aside
 
 
+# The constant buffers a raw draw binds (raw_gpu.cpp): the root table (NVK's cbuf type 1) at 0 and set 0 (type 3) at 1
+RAW_CBUFS = ([1], [1, 3])
+
+
+def raw_bound(simple: list[dict], programs: dict[str, dict]) -> tuple[list[dict], list[tuple[dict, str]]]:
+    """Set aside the states whose programs read constant buffers a raw draw does not bind (NAK's shader data)."""
+    kept, aside = [], []
+    for p in simple:
+        cbufs = [programs[p['records'][0]['prog'][st][0]]['cbufs'] for st in (1, 5)]
+        other = [c for c in cbufs if c not in RAW_CBUFS]
+        if other:
+            aside.append(
+                (p, f'a program reads constant buffers {other[0]}, the raw path binds the root table and set 0')
+            )
+        else:
+            kept.append(p)
+    return kept, aside
+
+
 # Why a probed state may stay out of the pack (the raw path hands it to m2v): what its draw needs that the raw path
 # draws otherwise. Any other reason is a generator fault and fails the build.
-EXPECTED_SKIPS = ('draws', 'dispatches', 'storage form', 'warm-up state', 'a sampler m2v derives from a bound one')
+EXPECTED_SKIPS = (
+    'draws',
+    'dispatches',
+    'storage form',
+    'warm-up state',
+    'a sampler m2v derives from a bound one',
+    'the raw path binds the root table and set 0',
+)
 
 
 def unexpected(why: str) -> bool:
@@ -283,8 +309,6 @@ def lay_out_programs(
         slot += bytes((-len(slot)) % 0x100)
         heap += slot
         prog_index[pid] = len(prog_recs)
-        if any(t not in (1, 3) for t in pr['cbufs']):
-            report.append(f'  program {pid} has cbufs {pr["cbufs"]} (only root + set 0 supported)')
         prog_recs.append(
             {
                 'id': pid,
@@ -407,6 +431,8 @@ def main() -> None:
     report = []
     simple, skipped = split_probes(probes)
     simple, aside = default_forms(simple)
+    skipped += aside
+    simple, aside = raw_bound(simple, programs)
     skipped += aside
     for p in simple:
         n = targets(p['key'])

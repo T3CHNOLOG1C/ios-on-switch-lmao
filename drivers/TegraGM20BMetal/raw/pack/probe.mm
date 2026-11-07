@@ -156,6 +156,22 @@ static bool parseState(id<MTLLibrary> qc, const std::string &line, State &s)
     return true;
 }
 
+// The pixel formats of the color attachments the lines' states write (writeMask not 0), from their "c<i>=<format>:<mask>:"
+// fields
+static std::set<unsigned> writtenFormats(const std::vector<std::string> &lines)
+{
+    std::set<unsigned> out;
+    for (const std::string &line : lines) {
+        const std::string head = line.substr(0, line.find(" | v "));
+        for (size_t at = head.find(" c"); at != std::string::npos; at = head.find(" c", at + 2)) {
+            unsigned i, format, mask;
+            if (sscanf(head.c_str() + at, " c%u=%u:%u:", &i, &format, &mask) == 3 && mask)
+                out.insert(format);
+        }
+    }
+    return out;
+}
+
 static IOSurfaceRef newSurface(unsigned w, unsigned h)
 {
     NSDictionary *p = @{
@@ -441,7 +457,10 @@ int main(int argc, char **argv)
         std::set<std::string> seen;
         unsigned index = 0, made = 0, refused = 0, failed = 0;
         // warm-up: one draw of a state that samples, with the dummy sampler in every slot, so NVK (m2v makes samplers at first
-        // use) gives it index 0 and a handle naming index 0 means "no sampler"
+        // use) gives it index 0 and a handle naming index 0 means "no sampler". Its command buffer first clears every private
+        // target the states load: m2v writes Metal's fresh-texture pattern into a new Private texture at its first use
+        // (texture.rs fresh_patterned; a float format's with a draw), which would otherwise land in the submission of the
+        // first state that loads the target, as a draw that state does not make
         for (const std::string &line : lines) {
             State s;
             if (line.find("downsample_4_frag") == std::string::npos || !parseState(qc, line, s))
@@ -459,6 +478,16 @@ int main(int argc, char **argv)
                 pass.colorAttachments[c].storeAction = MTLStoreActionDontCare;
             }
             id<MTLCommandBuffer> cb = [queue commandBuffer];
+            for (unsigned format : writtenFormats(lines)) {
+                id<MTLTexture> t = target((MTLPixelFormat)format, false);
+                if (!t)
+                    continue;
+                MTLRenderPassDescriptor *clear = [MTLRenderPassDescriptor renderPassDescriptor];
+                clear.colorAttachments[0].texture = t;
+                clear.colorAttachments[0].loadAction = MTLLoadActionClear;
+                clear.colorAttachments[0].storeAction = MTLStoreActionStore;
+                [[cb renderCommandEncoderWithDescriptor:clear] endEncoding];
+            }
             id<MTLRenderCommandEncoder> enc = [cb renderCommandEncoderWithDescriptor:pass];
             [enc setRenderPipelineState:state];
             uint32_t zero[64] = {};
