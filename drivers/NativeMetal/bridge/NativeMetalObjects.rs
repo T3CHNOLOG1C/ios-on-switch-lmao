@@ -548,9 +548,13 @@ fn answer_selectors() -> &'static [(std::ffi::CString, u32)] {
     ALL.get_or_init(|| {
         let counts = PrivateCount::ALL.into_iter().map(|c| (c.selector(), 0));
         let flags = PrivateFlag::ALL.into_iter().map(|f| (f.selector(), 1));
-        counts
-            .chain(flags)
-            .chain(PUBLIC_ANSWERS.iter().copied())
+        let mut all: Vec<(&str, u32)> = counts.chain(flags).chain(PUBLIC_ANSWERS.iter().copied()).collect();
+        for selector in crate::target::count_selectors() {
+            if !all.iter().any(|&(s, _)| s == selector) {
+                all.push((selector, 0));
+            }
+        }
+        all.into_iter()
             .map(|(s, kind)| (std::ffi::CString::new(s).expect("selector"), kind))
             .collect()
     })
@@ -617,7 +621,23 @@ pub extern "C" fn nmb_device_family_waivers(device: *const NmbDevice, out: *mut 
     })
 }
 
+/// The device's answer: the runtime's, never above the target hardware's (NativeMetalTarget.rs).
 fn device_answer(device: &NmbDevice, selector: &str, arg: u64) -> Result<u64, String> {
+    if crate::target::says_no(selector) {
+        return Ok(0);
+    }
+    let own = runtime_answer(device, selector, arg);
+    let Some(target) = crate::target::count(selector) else {
+        return own;
+    };
+    let own = own.or_else(|reason| {
+        let color_attachments = runtime_answer(device, "maxColorAttachments", 0)?;
+        crate::target::device_bound(&device.0, selector, color_attachments).ok_or(reason)
+    })?;
+    Ok(own.min(target))
+}
+
+fn runtime_answer(device: &NmbDevice, selector: &str, arg: u64) -> Result<u64, String> {
     let d = &device.0;
     let p = d.properties();
     let none = || format!("the device has no answer for {selector}");
