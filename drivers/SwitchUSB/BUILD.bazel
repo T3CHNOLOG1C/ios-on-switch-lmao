@@ -128,10 +128,11 @@ kernel_driver(
         "com.apple.driver.usb.AppleUSBXHCI",
         "com.apple.iokit.IOAccessoryManager",
         "com.apple.iokit.IOPortFamily",
-        # ... and the class drivers: hubs, composite devices, HID (keyboard, mouse) and mass storage with its SCSI layers
-        # and IOPCIFamily (one pointer).
+        # ... and the class drivers: hubs, composite devices, USB audio, HID (keyboard, mouse) and mass storage with its
+        # SCSI layers and IOPCIFamily (one pointer).
         "com.apple.driver.usb.AppleUSBHub",
         "com.apple.driver.usb.AppleUSBHostCompositeDevice",
+        "com.apple.driver.AppleUSBAudio",
         "com.apple.driver.usb.IOUSBHostHIDDevice",
         "com.apple.iokit.IOUSBMassStorageDriver",
         "com.apple.iokit.IOSCSIArchitectureModelFamily",
