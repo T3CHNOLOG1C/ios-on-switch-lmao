@@ -38,21 +38,26 @@ void switch_iokit_iosurface_trap(IOUserClient *client, uint32_t index, void *p1,
 kern_return_t switch_iokit_iosurface_lock_will(IOUserClient *client, void *p1, void *p2);
 
 /* iokit_user_client_trap, before the client's trap runs (result: the filter's so far): an IOSurface lock first waits
- * for the GPU writes it must see, or fails as Apple's does when kIOSurfaceLockAvoidSync forbids that wait. */
+ * for the GPU writes it must see, or fails as Apple's does when kIOSurfaceLockAvoidSync forbids that wait; an unlock
+ * cleans what the CPU wrote while the surface is still locked, so whoever sees the seed the unlock moves (Core Animation
+ * reads a surface again when its seed moved) reads memory the GPU sees too. */
 static inline kern_return_t switch_iokit_trap_will(IOUserClient *client, uint32_t index, void *p1, void *p2,
                                                    kern_return_t result)
 {
     if (result == KERN_SUCCESS && index == kSwitchIOSurfaceTrapLock) {
         return switch_iokit_iosurface_lock_will(client, p1, p2);
     }
+    if (result == KERN_SUCCESS && index == kSwitchIOSurfaceTrapUnlock) {
+        switch_iokit_iosurface_trap(client, index, p1, p2);
+    }
     return result;
 }
 
-/* iokit_user_client_trap, after the client's trap ran: an IOSurface lock or unlock gets the cache op it needs. */
+/* iokit_user_client_trap, after the client's trap ran: a lock invalidates what the GPU wrote. */
 static inline void switch_iokit_trap_done(IOUserClient *client, uint32_t index, void *p1, void *p2,
                                           kern_return_t result)
 {
-    if (result == KERN_SUCCESS && (index == kSwitchIOSurfaceTrapLock || index == kSwitchIOSurfaceTrapUnlock)) {
+    if (result == KERN_SUCCESS && index == kSwitchIOSurfaceTrapLock) {
         switch_iokit_iosurface_trap(client, index, p1, p2);
     }
 }

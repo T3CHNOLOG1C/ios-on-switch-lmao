@@ -18,7 +18,10 @@
 //    interrupts until they completed, then the trap invalidates. Only a lock of a surface whose writers are still
 //    running waits.
 //  - CPU -> GPU: an unlock that was not read-only cleans the surface, so the GPU reads what the CPU wrote. Read-only
-//    imports included: the GPU samples what an app redraws into them.
+//    imports included: the GPU samples what an app redraws into them. The clean runs before IOSurface's own unlock, which
+//    moves the seed: Core Animation samples a surface again once its seed moved, and the raw path keeps a YCbCr
+//    surface's converted image until it moves again, so a clean after it let the render server convert lines still
+//    dirty in the writer's cache and keep that image.
 //  - Import: the importer cleans the pages for what the CPU wrote before. Memory imported without a surface ID (no-copy
 //    buffers, Core Animation's shared-memory images) never sees a lock, so the import clean is all it gets.
 // Entries are keyed by the surface's first physical page (the display asks by that, tegra_gm20b_surface_tiled) and,

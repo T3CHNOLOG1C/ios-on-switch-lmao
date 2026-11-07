@@ -3,7 +3,7 @@
  * IOSurface coherency (GPU <-> CPU). On Tegra the GPU does not snoop the CPU caches. At every process's IOSurfaceLock
  * and IOSurfaceUnlock (IOSurfaceRootUserClient traps 2 and 3), the TegraGM20B driver does the one cache op that
  * direction needs on the surfaces it imported (tegra_gm20b_iosurface_trap, TegraGM20BCoherency.cpp): a lock after GPU
- * writes invalidates, an unlock that wrote cleans. Before a lock runs, the driver waits for the GPU's pending writes to
+ * writes invalidates, an unlock that wrote cleans (before IOSurface's unlock moves the seed). Before a lock runs, the driver waits for the GPU's pending writes to
  * the surface (tegra_gm20b_iosurface_lock_will). Surfaces the GPU never imported cost a class compare and a hash
  * lookup.
  */
