@@ -552,6 +552,21 @@ void observeRf16Request()
                              });
 }
 
+// This process's name as one word for the rates lines (an app's executable may have spaces), which tools/devicerun reads per
+// process
+const char *processWord()
+{
+    static char word[128];
+    static std::once_flag made;
+    std::call_once(made, [] {
+        strlcpy(word, getprogname(), sizeof word);
+        for (char *c = word; *c; c++)
+            if (*c == ' ')
+                *c = '_';
+    });
+    return word;
+}
+
 // The frontend's rates line, every 5 s while the device works (it says nothing when idle). r16-idle: with a whole
 // interval of leeway, so the timer rides a wakeup the process or the kernel takes anyway instead of waking every
 // Metal process every 5 s; both rates functions measure their own window, so a late tick only makes a longer one.
@@ -570,13 +585,13 @@ void startRates()
         // 768: the rates line passed 512 with r6-lows' frame distributions (encp= cgap= swait= gpuq= psomax=).
         char line[768];
         if (native_bridge_metal_rates(line, sizeof line))
-            os_log(logger(), "TegraGM20BMetal: %{public}s %{public}s", getprogname(), line);
+            os_log(logger(), "TegraGM20BMetal: %{public}s %{public}s", processWord(), line);
         // r17-widgets: the stack of one commit per 30 s (what drives this process's commit rate).
         if (native_bridge_metal_commit_origin(line, sizeof line))
-            os_log(logger(), "TegraGM20BMetal: %{public}s %{public}s", getprogname(), line);
-        // The raw path's own: command buffers on each path, encode, draws.
+            os_log(logger(), "TegraGM20BMetal: %{public}s %{public}s", processWord(), line);
+        // The raw path's own: command buffers on each path and why, encode, draws, memory.
         if (gRaw && raw_metal_rates(line, sizeof line))
-            os_log(logger(), "TegraGM20BMetal: %{public}s %{public}s", getprogname(), line);
+            os_log(logger(), "TegraGM20BMetal: %{public}s %{public}s", processWord(), line);
     });
     dispatch_resume(timer);
 }
