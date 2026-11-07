@@ -42,7 +42,7 @@ build --spawn_strategy=sandboxed
 build:debug --strategy=Rustc=sandboxed,local
 build:debug --strategy=RustcMetadata=sandboxed,local
 # The other exception: iOS 27's translation attaches and mounts disk images (hdiutil, diskutil), which no sandbox
-# allows, so its two actions (install/translated.bzl) run here; they are also kept out of the shared disk cache.
+# allows, so its two actions (install/translated.bzl) run here.
 build --strategy=Pretranslate=local
 build --strategy=TranslatedCryptex=local
 # No network inside actions (repository rules fetch; actions never do).

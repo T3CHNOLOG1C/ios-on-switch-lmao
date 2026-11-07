@@ -1,16 +1,14 @@
 """iOS 27's translated parts as Bazel actions (tools/install/translate.py): each role's pretranslate delta, and each
 cryptex rebuilt from its delta, given its owners and sealed. A rerun after any failure redoes only what is missing.
 
-They attach disk images, so they run unsandboxed on this Mac (.bazelrc gives their mnemonics the local strategy) and
-are not shared through the disk cache: the System cryptex's delta and image are GBs each, and the output base's own
-action cache keeps them for the next run.
+They attach disk images, so they run unsandboxed on this Mac (.bazelrc gives their mnemonics the local strategy).
 """
 
 load("//translate/arm64e/pretranslate:defs.bzl", "PretranslatedInfo")
 
-# no-cache keeps the outputs out of the disk cache (Bazel counts it a local cache), not out of the output base's own
-# action cache, which is what a rerun resumes from.
-_LOCAL = {"no-cache": "", "no-remote": "", "no-sandbox": "", "requires-darwin": ""}
+# no-remote keeps the IPSW's translated bytes off any remote cache; the local disk cache keeps them, so a new output
+# base or a `bazel clean` takes them from there instead of translating again.
+_LOCAL = {"no-remote": "", "no-sandbox": "", "requires-darwin": ""}
 
 DeltaInfo = provider(doc = "A role's delta directory.", fields = {"role": "os, app_cryptex or system_cryptex", "dir": "File"})
 

@@ -28,8 +28,8 @@ head of `.001` (the manifest and boot files). An unchanged rerun computes the ke
 only the head, and a changed overlay repopulates a clone of the kept container, `composed.img` in
 `~/Library/Caches/switch-ios/image` (`image-<build>` for other builds). Nothing runs as root: populate writes iOS's
 files as you and sets their owners in the detached image. For iOS 27, translating each volume and rebuilding the two
-cryptexes are Bazel actions, so a rerun after a later failure translates nothing. Their outputs stay in the output
-base, out of the shared disk cache, because the System cryptex's alone take several GB; `bazel clean` makes them again.
+cryptexes are Bazel actions, cached like any other, so a rerun after a later failure translates nothing. They take
+about 13 GB for iOS 27 (the System cryptex's delta and image alone 11 GB).
 Each stage measures what it will write from its inputs and refuses to start unless that much is free with 2 GiB to
 spare. A run first detaches whatever an earlier run left attached and deletes its partial files. Files left by older
 runs under sudo belong to root, so it prints the `sudo rm -rf` that removes them.
