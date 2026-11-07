@@ -31,6 +31,7 @@ kernel_driver(
     name = "TegraVIC",
     srcs = [
         "TegraVIC.cpp",
+        "TegraVICBounce.cpp",
         "TegraVICPresent.cpp",
         "TegraVICSelfTest.cpp",
         "TegraVICSurface.cpp",
@@ -40,6 +41,7 @@ kernel_driver(
     ],
     abi = ["IOSurface"],
     hdr_deps = [
+        "drivers/TegraGM20B",
         "drivers/TegraHost1x",
         "drivers/TegraSMMU",
         "kits/SwitchCAR",

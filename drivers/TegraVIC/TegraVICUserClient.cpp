@@ -49,6 +49,8 @@
 #include "TegraVIC.h"
 #include "../../kits/SwitchRefusal/SwitchRefusal.h"
 #include "../../kits/SwitchTime/SwitchTime.h"
+#include "TegraVICBounce.h"
+#include "TegraVICBounceEngine.h"
 #include "TegraVICPresent.h"
 #include "TegraVICSurface.h"
 
@@ -179,6 +181,7 @@ struct Job {
     TegraVICSurface src, dst;
     TegraVICPlan plan;
     uint32_t chromaSite;
+    bool bounceSrc, bounceDst;  // through the copy engine's scratch (TegraVICBounce.h)
     bool async, reply;
     OSAsyncReference64 ref;
     uint64_t info;
@@ -187,39 +190,83 @@ struct Job {
     TegraVICJob check;  // the submitting thread's check of each operation
 };
 
-// Engine thread side: one job, all its operations, under the engine lock.
+// The pages the window maps for a side, and the geometry VIC reads them with: the surface's own, or its bounce scratch.
+struct Side {
+    uint64_t *pages;
+    uint32_t count;
+    const TegraVICSurfaceDesc *desc;
+};
+
+Side sideOf(TegraVICSurface *s, bool bounced, TegraVICBounce *b, uint64_t *pages, uint32_t count)
+{
+    return bounced ? Side{b->scratch.pages, b->pages, &b->desc} : Side{pages, count, &s->desc};
+}
+
+uint32_t pitchAlign()
+{
+    return tegra_vic_traits()->pitchAlign ? tegra_vic_traits()->pitchAlign : 256;
+}
+
+// How VIC will see a surface: as it is, or (rows it cannot address) as its bounce scratch.
+const char *staged(const TegraVICSurfaceDesc *d, TegraVICSurfaceDesc *stage, const TegraVICSurfaceDesc **as,
+                   bool *bounced)
+{
+    const uint32_t align = pitchAlign();
+    const int needed = tegra_vic_bounce_needed(d, align);
+    *bounced = needed == 0;
+    if (needed < 0)
+        return tegra_vic_format(d->fourcc) ? "plane offset the copy engine cannot take" : nullptr;
+    if (*bounced) {
+        tegra_vic_bounce_desc(d, align, stage);
+        *as = stage;
+    }
+    return nullptr;
+}
+
+// Engine thread side: one job, all its operations, under the engine lock. A side whose rows VIC cannot address goes
+// through its bounce scratch: the copy engine fills it before VIC runs (a destination too, for the pixels VIC leaves),
+// and copies a destination's back once VIC is done.
 IOReturn runJob(Job *job)
 {
     static TegraVICJob vj;
+    static TegraVICBounce bounce[TEGRA_VIC_WINDOWS];
     [[maybe_unused]] const uint64_t t0 = switch_now_us();
     uint32_t pages[TEGRA_VIC_WINDOWS] = {};
     TegraVICImage dst, src;
     const char *why = nullptr;
+    const bool readsSource = job->plan.readsSource;
+    const uint32_t align = pitchAlign();
     IOReturn ret = tegra_vic_surface_prepare(&job->dst, tegra_vic_surface_extent(&job->dst.desc),
                                              gPages[TEGRA_VIC_WINDOW_DST], kWindowPages, &pages[1]);
-    if (!ret && job->plan.readsSource)
+    if (!ret && readsSource)
         ret = tegra_vic_surface_prepare(&job->src, tegra_vic_surface_extent(&job->src.desc),
                                         gPages[TEGRA_VIC_WINDOW_SRC], kWindowPages, &pages[0]);
     if (ret)
         return ret;
-    tegra_vic_lock();
-    const uint64_t dstBase = tegra_vic_window_map(TEGRA_VIC_WINDOW_DST, gPages[TEGRA_VIC_WINDOW_DST], pages[1], true);
-    const uint64_t srcBase = job->plan.readsSource ? tegra_vic_window_map(TEGRA_VIC_WINDOW_SRC,
-                                                                          gPages[TEGRA_VIC_WINDOW_SRC], pages[0], false)
-                                                   : 0;
-    why = tegra_vic_image_from(&job->dst.desc, dstBase, &dst);
-    dst.chromaSite = job->chromaSite;
-    if (!why && job->plan.readsSource)
-        why = tegra_vic_image_from(&job->src.desc, srcBase, &src);
-    if (why)
-        ret = kIOReturnBadArgument;
-    // VIC does not snoop the CPU's caches: what the CPU wrote to the source must be in DRAM, and no dirty line of the
-    // destination may be written back over what VIC writes.
-    if (!ret && job->plan.readsSource)
+    // VIC and the copy engine do not snoop the CPU's caches: what the CPU wrote to the source must be in DRAM, and no
+    // dirty line of the destination may be written back over what they write.
+    if (readsSource)
         tegra_vic_cache_pages(SWITCH_DCACHE_CLEAN, gPages[TEGRA_VIC_WINDOW_SRC], pages[0]);
+    tegra_vic_cache_pages(SWITCH_DCACHE_CLEAN_INVALIDATE, gPages[TEGRA_VIC_WINDOW_DST], pages[1]);
+    switch_dcache_sync();
+    TegraVICBounce *srcBounce = &bounce[TEGRA_VIC_WINDOW_SRC], *dstBounce = &bounce[TEGRA_VIC_WINDOW_DST];
+    if (job->bounceSrc && !(ret = tegra_vic_bounce_stage(srcBounce, &job->src.desc, align)))
+        ret = tegra_vic_bounce_copy(job->src.memory, &job->src.desc, srcBounce->scratch.memory, &srcBounce->desc);
+    if (!ret && job->bounceDst && !(ret = tegra_vic_bounce_stage(dstBounce, &job->dst.desc, align)))
+        ret = tegra_vic_bounce_copy(job->dst.memory, &job->dst.desc, dstBounce->scratch.memory, &dstBounce->desc);
+    const Side dstSide = sideOf(&job->dst, job->bounceDst, dstBounce, gPages[TEGRA_VIC_WINDOW_DST], pages[1]);
+    const Side srcSide = sideOf(&job->src, job->bounceSrc, srcBounce, gPages[TEGRA_VIC_WINDOW_SRC], pages[0]);
+    tegra_vic_lock();
     if (!ret) {
-        tegra_vic_cache_pages(SWITCH_DCACHE_CLEAN_INVALIDATE, gPages[TEGRA_VIC_WINDOW_DST], pages[1]);
-        switch_dcache_sync();
+        const uint64_t dstBase = tegra_vic_window_map(TEGRA_VIC_WINDOW_DST, dstSide.pages, dstSide.count, true);
+        const uint64_t srcBase =
+            readsSource ? tegra_vic_window_map(TEGRA_VIC_WINDOW_SRC, srcSide.pages, srcSide.count, false) : 0;
+        why = tegra_vic_image_from(dstSide.desc, dstBase, &dst);
+        dst.chromaSite = job->chromaSite;
+        if (!why && readsSource)
+            why = tegra_vic_image_from(srcSide.desc, srcBase, &src);
+        if (why)
+            ret = kIOReturnBadArgument;
     }
     [[maybe_unused]] const uint64_t t1 = switch_now_us();
     [[maybe_unused]] uint64_t busy = 0;
@@ -238,12 +285,14 @@ IOReturn runJob(Job *job)
         __atomic_add_fetch(&gStats.ops, 1, __ATOMIC_RELAXED);
 #endif
     }
-    // The CPU may have pulled destination lines in while VIC wrote: readers must see DRAM.
-    tegra_vic_cache_pages(SWITCH_DCACHE_CLEAN_INVALIDATE, gPages[TEGRA_VIC_WINDOW_DST], pages[1]);
-    switch_dcache_sync();
     tegra_vic_window_clear(TEGRA_VIC_WINDOW_DST);
     tegra_vic_window_clear(TEGRA_VIC_WINDOW_SRC);
     tegra_vic_unlock();
+    if (!ret && job->bounceDst)
+        ret = tegra_vic_bounce_copy(dstBounce->scratch.memory, &dstBounce->desc, job->dst.memory, &job->dst.desc);
+    // The CPU may have pulled destination lines in while the engines wrote: readers must see DRAM.
+    tegra_vic_cache_pages(SWITCH_DCACHE_CLEAN_INVALIDATE, gPages[TEGRA_VIC_WINDOW_DST], pages[1]);
+    switch_dcache_sync();
     tegra_vic_surface_complete(&job->dst);
     tegra_vic_surface_complete(&job->src);
 #if TEGRA_VIC_STATS
@@ -371,12 +420,17 @@ IOReturn transform(Conn *conn, const void *in, uint32_t size)
     // real ones), so a refusal is this call's result and the caller can fall back at once.
     if (!ret) {
         TegraVICImage src = {}, dst = {};
-        why = tegra_vic_image_from(&job->dst.desc, kTegraVICWindowBase + TEGRA_VIC_WINDOW_DST * kTegraVICWindowBytes,
-                                   &dst);
+        TegraVICSurfaceDesc srcStage, dstStage;
+        const TegraVICSurfaceDesc *srcAs = &job->src.desc, *dstAs = &job->dst.desc;
+        why = staged(&job->dst.desc, &dstStage, &dstAs, &job->bounceDst);
         if (!why && job->plan.readsSource)
-            why = tegra_vic_image_from(&job->src.desc, kTegraVICWindowBase, &src);
-        if (!why && (tegra_vic_surface_extent(&job->dst.desc) > kTegraVICWindowBytes ||
-                     (job->plan.readsSource && tegra_vic_surface_extent(&job->src.desc) > kTegraVICWindowBytes)))
+            why = staged(&job->src.desc, &srcStage, &srcAs, &job->bounceSrc);
+        if (!why)
+            why = tegra_vic_image_from(dstAs, kTegraVICWindowBase + TEGRA_VIC_WINDOW_DST * kTegraVICWindowBytes, &dst);
+        if (!why && job->plan.readsSource)
+            why = tegra_vic_image_from(srcAs, kTegraVICWindowBase, &src);
+        if (!why && (tegra_vic_surface_extent(dstAs) > kTegraVICWindowBytes ||
+                     (job->plan.readsSource && tegra_vic_surface_extent(srcAs) > kTegraVICWindowBytes)))
             why = "surface larger than a 128 MiB window";
         dst.chromaSite = TEGRA_VIC_REQ_CHROMA_SITE(r.flags);
         for (uint32_t i = 0; !why && i < job->plan.count; i++)
