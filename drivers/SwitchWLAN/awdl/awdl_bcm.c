@@ -144,10 +144,11 @@ size_t bcm_actframe_request(uint8_t *out, size_t size, const uint8_t *frame, siz
     static const char name[] = "actframe";
     if (len <= BCM_80211_MGMT_HDR_LEN || len - BCM_80211_MGMT_HDR_LEN > BCM_AF_BODY_MAX)
         return 0;
-    const uint16_t fc = (uint16_t)(frame[0] | frame[1] << 8);
+    const uint16_t fc = (uint16_t)((unsigned)frame[0] | (unsigned)frame[1] << 8U);
     if ((fc & 0x00fc) != 0x00d0)  // type management, subtype action
         return 0;
-    const size_t body = len - BCM_80211_MGMT_HDR_LEN, total = sizeof(name) + BCM_AF_PARAMS_HDR_LEN + body;
+    const size_t body = len - BCM_80211_MGMT_HDR_LEN;
+    const size_t total = sizeof(name) + BCM_AF_PARAMS_HDR_LEN + body;
     if (total > size)
         return 0;
     uint8_t *p = out;
