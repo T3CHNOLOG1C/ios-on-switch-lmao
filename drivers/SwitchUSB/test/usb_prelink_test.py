@@ -43,21 +43,31 @@ BOTH = {
     'com.apple.driver.USBStorageDeviceSpecifics',
     'com.apple.driver.SCSIDeviceSpecifics',
 }
-IOS17 = BOTH | {
-    'com.apple.driver.AppleTopCaseActuatorHIDDriver',
-    'com.apple.filesystems.lifs',
-    'com.apple.filesystems.hfs.kext',
+SERIAL = {
     'com.apple.driver.usb.cdc',
     'com.apple.driver.usb.cdc.acm',
     'com.apple.driver.usb.serial',
     'com.apple.driver.usb.networking',
     'com.apple.iokit.IOSerialFamily',
 }
-IOS27 = BOTH | {
-    'com.apple.filesystems.lifs',
-    'com.apple.driver.usb.AppleUSBHostDeviceSupport',
-    'com.apple.iokit.IOGameControllerFamily',
-}
+IOS17 = (
+    BOTH
+    | SERIAL
+    | {
+        'com.apple.driver.AppleTopCaseActuatorHIDDriver',
+        'com.apple.filesystems.lifs',
+        'com.apple.filesystems.hfs.kext',
+    }
+)
+IOS27 = (
+    BOTH
+    | SERIAL
+    | {
+        'com.apple.filesystems.lifs',
+        'com.apple.driver.usb.AppleUSBHostDeviceSupport',
+        'com.apple.iokit.IOGameControllerFamily',
+    }
+)
 
 # iOS 27 imports still unnamed, (functions, data) per kext: a kext may only go down. Every other kext above, lifs and
 # IOGameControllerFamily among them (both load at every boot), has none.

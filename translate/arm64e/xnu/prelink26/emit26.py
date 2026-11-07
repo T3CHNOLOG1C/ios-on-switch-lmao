@@ -25,8 +25,7 @@ from native_prelink import macho, exports, backed_offset
 
 CUTS = {("com.apple.iokit.IOUSBHostFamily", "com.apple.driver.AppleSMC"): "_switch_prelink_cut_null",
         ("com.apple.iokit.IOUSBHostFamily", "com.apple.driver.usb.AppleUSBHostPlatformProperties"): None,
-        ("com.apple.iokit.IOAccessoryManager", "com.apple.driver.AppleOnboardSerial"): "_switch_prelink_cut_null",
-        ("com.apple.iokit.IOAccessoryManager", "com.apple.iokit.IOSerialFamily"): None}
+        ("com.apple.iokit.IOAccessoryManager", "com.apple.driver.AppleOnboardSerial"): "_switch_prelink_cut_null"}
 DEFERRED_PERSONALITIES = {"com.apple.iokit.IOUSBHostFamily": ("AppleUSBHostResources", "AppleUSBHostResourcesTypeC"),
                           "com.apple.iokit.IOUSBMassStorageDriver": ("IOUSBMassStorageResource",),
                           "com.apple.driver.usb.AppleUSBHostPacketFilter": ("AppleUSBHostPacketFilter",)}
