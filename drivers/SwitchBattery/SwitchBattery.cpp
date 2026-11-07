@@ -499,12 +499,15 @@ int readAll(Reading *r)
 static int gBatteryAvgMa = INT32_MIN;
 static bool gBatteryExternal;
 
+extern "C" bool native_aks_device_digest(const char *label, uint8_t out[32]);
+
 class SwitchBattery : public IOPMPowerSource {
     OSDeclareDefaultStructors(SwitchBattery);
     IOWorkLoop *loop = nullptr;
     IOTimerEventSource *timer = nullptr;
     IOInterruptEventSource *alerts[kAlertCount] = {};
     bool published = false;
+    bool serialPublished = false;
     bool reportedFailure = false;
     unsigned alertCount[kAlertCount] = {};
     uint64_t alertWindowStart[kAlertCount] = {};
@@ -528,6 +531,7 @@ class SwitchBattery : public IOPMPowerSource {
     static void alertFired(OSObject *owner, IOInterruptEventSource *sender, int count);
     static void pdChanged(void *context, const SwitchPDState *state);
     void attachAlerts();
+    void publishSerial();
     bool identify();
     bool refresh();
     bool reportAsFound(uint8_t found[11]);
@@ -562,6 +566,26 @@ void SwitchBattery::setKey(const char *key, OSObject *value)
     if (const OSSymbol *symbol = OSSymbol::withCString(key)) {
         setPSProperty(symbol, value);
         symbol->release();
+    }
+}
+
+// The pack has no readable serial (the MAX17050 keeps none) and powerd's battery health needs one: 17 characters of
+// Apple's serial alphabet, derived from this console's device key (AppleKeyStore), so the same on every boot and
+// different on every console. Published once AppleKeyStore has started.
+void SwitchBattery::publishSerial()
+{
+    static const char kAlphabet[] = "0123456789ABCDEFGHJKLMNPQRSTUVWXYZ";
+    uint8_t digest[32];
+    if (serialPublished || !native_aks_device_digest("Switch battery serial", digest))
+        return;
+    char serial[18];
+    for (size_t i = 0; i < 17; ++i)
+        serial[i] = kAlphabet[digest[i] % (sizeof(kAlphabet) - 1)];
+    serial[17] = '\0';
+    if (OSString *value = OSString::withCString(serial)) {
+        setKey(kIOPMPSSerialKey, value);
+        value->release();
+        serialPublished = true;
     }
 }
 
@@ -770,6 +794,7 @@ bool SwitchBattery::refresh()
         setKey("ChargerData", data);
         data->release();
     }
+    publishSerial();
     setKeyNumber("InstantAmperage", r.milliamps);
     setKeyNumber(kIOPMPSBatteryTemperatureKey, r.centiCelsius);
     setKeyNumber(kIOPMPSDesignCapacityKey, r.designCapacity);
