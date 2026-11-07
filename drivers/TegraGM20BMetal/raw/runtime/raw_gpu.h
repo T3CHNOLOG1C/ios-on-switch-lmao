@@ -467,6 +467,15 @@ public:
     bool commit(uint32_t &seqno);
     // Nothing of it is submitted: the rings get back what it took, the root table's shadow what it was.
     void abandon();
+
+    // A host import the submission reads or writes (a surface's, a no-copy buffer's), for the kernel's order with other
+    // processes' GPU work on it (raw_kernel.h exec)
+    void use(const Import *i, bool write)
+    {
+        if (i)
+            surfaces_.add(i->bo.handle, write);
+    }
+
     uint32_t draws = 0, passes = 0, blits = 0;
 
 private:
@@ -477,6 +486,7 @@ private:
     std::vector<TegraGM20BAbiPush> segments_;
     std::vector<std::pair<uintptr_t, uint64_t>> clean_, flush_;  // CPU ranges to clean / clean+invalidate before Exec
     std::vector<Texture *> backings_;                            // memoryless backings it uses
+    SurfaceList surfaces_;
     RenderEncoder render_;
     BlitEncoder blit_;
     uint64_t pushStart_ = 0, uploadStart_ = 0;

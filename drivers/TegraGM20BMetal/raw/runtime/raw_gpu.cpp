@@ -1732,6 +1732,7 @@ CommandBuffer *Device::begin()
     cb.clean_.clear();
     cb.flush_.clear();
     cb.backings_.clear();
+    cb.surfaces_.clear();
     cb.draws = cb.passes = cb.blits = 0;
     cb.refusal = {};
     cb.pushStart_ = push_.head;
@@ -1907,7 +1908,7 @@ bool CommandBuffer::commit(uint32_t &seqno)
     uint32_t seq = 0;
     for (size_t at = 0; at < segments_.size(); at += kMaxSegments) {
         const uint32_t n = uint32_t(std::min<size_t>(kMaxSegments, segments_.size() - at));
-        if (!d.k_.exec(d.channel_, segments_.data() + at, n, d.lastSeqno_, seq))
+        if (!d.k_.exec(d.channel_, segments_.data() + at, n, d.lastSeqno_, seq, &surfaces_))
             return false;
         d.lastSeqno_ = seq;
     }
@@ -1941,6 +1942,7 @@ void CommandBuffer::abandon()
     segments_.clear();
     clean_.clear();
     flush_.clear();
+    surfaces_.clear();
 }
 
 // ---- render encoder ----

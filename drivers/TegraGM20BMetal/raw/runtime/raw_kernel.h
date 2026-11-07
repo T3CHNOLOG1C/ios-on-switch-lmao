@@ -12,6 +12,7 @@
 #include <map>
 #include <string>
 #include "TegraGM20BABI.h"
+#include "raw_surfaces.h"
 
 namespace raw {
 
@@ -65,7 +66,11 @@ public:
     }
 
     // `last`: the channel's last submitted seqno (0 if none), waited on when the GPFIFO is full
-    bool exec(uint32_t channel, const TegraGM20BAbiPush *pushes, uint32_t count, uint32_t last, uint32_t &seqno);
+    // `surfaces` (null: none): the host imports the submission touches, named to the kernel (ExecSurfaces, method 17,
+    // TegraGM20BInfoExecSurfaces) before each Exec of it: it waits on the GPU for other channels' writes to them, and counts
+    // as a writer of the ones it writes only. A kernel without it, or a list it refuses, leaves the Exec as one with none.
+    bool exec(uint32_t channel, const TegraGM20BAbiPush *pushes, uint32_t count, uint32_t last, uint32_t &seqno,
+              SurfaceList *surfaces = nullptr);
     // Blocks in the kernel until the channel's completed seqno passes `seqno` (the kext sleeps on the fence interrupt).
     bool wait(uint32_t channel, uint32_t seqno, uint64_t timeoutNs = ~0ull);
     // Order (method 14, TegraGM20BInfoOrder): GPU-side acquires between `channel` and the task's other channels (NVK's).

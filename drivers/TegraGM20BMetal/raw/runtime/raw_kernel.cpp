@@ -354,7 +354,8 @@ int Kernel::order(uint32_t channel, uint32_t flags, uint32_t seqno, uint32_t &wa
     return kr;
 }
 
-bool Kernel::exec(uint32_t channel, const TegraGM20BAbiPush *pushes, uint32_t count, uint32_t last, uint32_t &seqno)
+bool Kernel::exec(uint32_t channel, const TegraGM20BAbiPush *pushes, uint32_t count, uint32_t last, uint32_t &seqno,
+                  SurfaceList *surfaces)
 {
     TegraGM20BAbiExec e;
     e.channel = channel;
@@ -364,7 +365,13 @@ bool Kernel::exec(uint32_t channel, const TegraGM20BAbiPush *pushes, uint32_t co
         e.pushes[0].flags |= TegraGM20BPushImportsWritten;
     const size_t in = offsetof(TegraGM20BAbiExec, pushes) + count * sizeof pushes[0];
     TegraGM20BAbiExecReply r = {};
+    const bool listed = surfaces && (info_.flags & TegraGM20BInfoExecSurfaces);
     for (;;) {
+        if (listed) {
+            size_t bytes = 0;
+            const TegraGM20BAbiExecSurfaces &list = surfaces->record(channel, bytes);
+            call(TegraGM20BMethodExecSurfaces, &list, bytes, nullptr, 0);
+        }
         const int kr = call(TegraGM20BMethodExec, &e, in, &r, sizeof r);
         if (kr == KERN_SUCCESS) {
             seqno = r.seqno;

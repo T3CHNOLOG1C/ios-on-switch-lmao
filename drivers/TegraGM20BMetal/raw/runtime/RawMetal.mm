@@ -4078,6 +4078,27 @@ static id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, 
 
 // ---- the tape onto the raw path ----
 // false: something in it the raw path cannot do after all (*why); nothing of it was submitted then
+// The host imports a texture's memory lies in, named to the submission (raw::CommandBuffer::use): a surface's or a planar
+// texture's planes, a buffer texture's buffer's, a view's parent's; and a YCbCr texture's planes, which only its conversion
+// reads (its image is pool memory).
+static void useTexture(raw::CommandBuffer *rc, RMTexture *t, bool write)
+{
+    while (t && t->_kind == RMTextureView && t->_parent)
+        t = t->_parent;
+    if (!t)
+        return;
+    rc->use(t->_buffer ? t->_buffer->_raw.import : t->_raw.import, write);
+    for (const raw::Texture *plane : {t->_raw.luma, t->_raw.chroma})
+        if (plane)
+            rc->use(plane->import, false);
+}
+
+static void useBuffer(raw::CommandBuffer *rc, RMBuffer *b, bool write)
+{
+    if (b)
+        rc->use(b->_raw.import, write);
+}
+
 static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why)
 {
     raw::Device &d = *gRM->raw;
@@ -4355,6 +4376,7 @@ static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **
                     continue;
                 if (t->_raw.planar)
                     return fail(PredEncPlanarRT, "a planar texture as a render target", j);
+                useTexture(rc, t, true);
                 if (!fresh.empty())
                     fresh.erase(t);  // this pass writes it
                 if (t->_raw.chain && a.level) {
@@ -4453,14 +4475,17 @@ static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **
             re->setStencilReference(c.a, c.b);
             break;
         case OpBuffer:
+            useBuffer(rc, (__bridge RMBuffer *)c.obj, false);
             re->setBuffer(c.stage, c.index, c.obj ? &((__bridge RMBuffer *)c.obj)->_raw : nullptr, c.c);
             break;
         case OpBufferOffset:
             re->setBufferOffset(c.stage, c.index, c.c);
             break;
         case OpTexture:
-            if (c.stage == 2)
+            if (c.stage == 2) {
+                useTexture(rc, (__bridge RMTexture *)c.obj, false);
                 re->setTexture(c.index, c.obj ? &((__bridge RMTexture *)c.obj)->_raw : nullptr);
+            }
             break;
         case OpSampler:
             if (c.stage == 2)
@@ -4490,12 +4515,15 @@ static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **
             re->barrier();
             break;
         case OpDrawIndexed:
+            useBuffer(rc, (__bridge RMBuffer *)c.obj, false);
             if (!re->drawIndexed(c.stage, c.a, c.b == MTLIndexTypeUInt16 ? 2 : 4, &((__bridge RMBuffer *)c.obj)->_raw,
                                  c.c, why))
                 return refused();
             break;
         case OpCopyTexture: {
             RMTexture *s = (__bridge RMTexture *)c.obj, *t = (__bridge RMTexture *)c.obj2;
+            useTexture(rc, s, false);
+            useTexture(rc, t, true);
             if (!fresh.empty())
                 fresh.erase(t);
             const uint64_t x = c.x, o = extra(cb, x + 10), sl = extra(cb, x + 1);
@@ -4518,6 +4546,7 @@ static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **
         }
         case OpMipmaps: {  // a chain's levels from level 0 (decided at record); m2v's texture of every level is behind it
             RMTexture *t = (__bridge RMTexture *)c.obj;
+            useTexture(rc, t, true);
             touch(t);
             be->generate(t->_raw, true);
             t->_mipLevels = false;
@@ -4526,6 +4555,8 @@ static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **
         }
         case OpCopyBuffer: {
             RMBuffer *s = (__bridge RMBuffer *)c.obj, *t = (__bridge RMBuffer *)c.obj2;
+            useBuffer(rc, s, false);
+            useBuffer(rc, t, true);
             const uint64_t n = extra(cb, c.x + 1), dof = extra(cb, c.x);
             if (!s->_raw.wc)
                 rc->clean(s->_raw.cpu + c.c, n);
@@ -4537,6 +4568,8 @@ static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **
         case OpCopyBufferToTexture: {
             RMBuffer *s = (__bridge RMBuffer *)c.obj;
             RMTexture *t = (__bridge RMTexture *)c.obj2;
+            useBuffer(rc, s, false);
+            useTexture(rc, t, true);
             const uint64_t x = c.x, o = extra(cb, x + 8), so = extra(cb, x), row = extra(cb, x + 1);
             const uint64_t w = extra(cb, x + 3), h = extra(cb, x + 4);
             if (!fresh.empty())
@@ -4555,6 +4588,8 @@ static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **
         case OpCopyTextureToBuffer: {
             RMTexture *s = (__bridge RMTexture *)c.obj;
             RMBuffer *t = (__bridge RMBuffer *)c.obj2;
+            useTexture(rc, s, false);
+            useBuffer(rc, t, true);
             const uint64_t x = c.x, o = extra(cb, x + 2), w = extra(cb, x + 4), h = extra(cb, x + 5),
                            dof = extra(cb, x + 7), row = extra(cb, x + 8);
             if (!t->_raw.wc)
