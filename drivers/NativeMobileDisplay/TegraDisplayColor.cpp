@@ -234,6 +234,18 @@ IOReturn TegraDisplayColor::swapSetColorMatrix(const void *matrix, uint32_t loca
     return status;
 }
 
+void TegraDisplayColor::setBlank(bool blank)
+{
+    const IOReturn status = change(lock, generation, [&] {
+        if (inputs.blank == blank)
+            return kIOReturnNotReady;
+        inputs.blank = blank;
+        return kIOReturnSuccess;
+    });
+    if (status == kIOReturnSuccess)
+        commit();
+}
+
 IOReturn TegraDisplayColor::setAccessibilityScale(uint32_t scale)
 {
     const IOReturn status = change(lock, generation, [&] {
@@ -308,9 +320,14 @@ void TegraDisplayColor::frameEndAction(bool mayRequest)
     writeEnable(want);
     hwEnabled = want;
     if (!want) {
-        IOLog("SwitchDisplay: colour CMU off\n");
+        if (announced)
+            IOLog("SwitchDisplay: colour CMU off\n");
+        announced = false;
         return;
     }
+    announced = reasons & ~kReasonBlank;
+    if (!announced)
+        return;
     IOLog("SwitchDisplay: colour CMU on:%s%s%s%s%s\n", reasons & kReasonMatrix ? " matrix" : "",
           reasons & kReasonScale ? " scale" : "", reasons & kReasonRemap ? " remap" : "",
           reasons & kReasonContrast ? " contrast" : "", reasons & kReasonGamma ? " gamma" : "");
