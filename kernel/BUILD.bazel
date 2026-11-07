@@ -90,7 +90,6 @@ filegroup(
         "//drivers/ArmGIC:all_files",
         "//drivers/SwitchAccelStub:all_files",
         "//drivers/NativeAES:all_files",
-        "//drivers/NativeAdreno:all_files",
         "//drivers/NativeGeniSpi:all_files",
         "//drivers/NativeHidInput:all_files",
         "//drivers/NativeSwitchBlock:all_files",
