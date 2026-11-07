@@ -91,10 +91,12 @@ TEST(SwitchAudioSource, DriverProgramsTheHeaderWords)
           "switch_mmio_write32(ahub, I2S_RX_CIF, switch_audio_i2s_rx_cif());",
           "switch_mmio_write32(ahub, I2S_TX_CIF, switch_audio_i2s_tx_cif());",
           "switch_mmio_write32(ahub, I2S_CTRL, kI2sCtrl);", "switch_mmio_write32(ahub, I2S_TIMING, kI2sTiming);",
-          "switch_mmio_write32(car, CLK_SOURCE_I2S0, kI2sDiv);",
-          "codecUpdate(I2S1_SDP, SWITCH_AUDIO_RT5640_SDP_MASK, SWITCH_AUDIO_RT5640_SDP);",
-          "codecUpdate(ADDA_CLK1, SWITCH_AUDIO_RT5640_ADDA_MASK, SWITCH_AUDIO_RT5640_ADDA);"})
+          "switch_mmio_write32(car, CLK_SOURCE_I2S0, kI2sDiv);"})
         EXPECT_THAT(d, HasSubstr(line));
+    const std::string codec = SourceText("../SwitchRT5639.cpp");
+    for (const char *line : {"update(I2S1_SDP, SWITCH_AUDIO_RT5640_SDP_MASK, SWITCH_AUDIO_RT5640_SDP);",
+                             "update(ADDA_CLK1, SWITCH_AUDIO_RT5640_ADDA_MASK, SWITCH_AUDIO_RT5640_ADDA);"})
+        EXPECT_THAT(codec, HasSubstr(line));
     EXPECT_THAT(d, HasSubstr("kI2sCtrl = switch_audio_i2s_ctrl(), kI2sTiming = switch_audio_i2s_timing()"));
     EXPECT_THAT(d, HasSubstr("kI2sDiv = switch_audio_i2s_divider(kPllaOut0PerFs)"));
     for (const char *gone : {"kPack16", "constexpr uint32_t cif(", "sizeof(int16_t)", "int16_t *"})
