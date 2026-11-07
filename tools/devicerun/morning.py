@@ -10,6 +10,7 @@ from tools.devicerun.rules import REPORT, TIMELINE, Check
 KERNEL = 'kernel'
 RAW = 'com.brunostjohn.switch.TegraGM20BMetal'
 DOC = 'r30-frames morning-doc.txt'
+PENDING = 'not on deploy-next5 (r30-frames morning-doc.txt)'
 RAW_5S = r'raw \d+s c=(?P<c>\d+)\(\S+\) m2v=(?P<m2v>\d+)(?:\((?P<reasons>[^)]*)\))?'
 
 MORNING = [
@@ -27,9 +28,15 @@ MORNING = [
     Check('raw.no-m2v-twin', 'r30-alias', 'no m2v twin', source=DOC),
     Check('alias.nocopy-hostmemory', 'r30-alias', 'no-copy', regex='HostMemory', source=DOC),
     Check(
-        'gpu.tiled-cache-on', 'r31-gpuanatomy', 'raw: tiled cache on', 'count > 0', subsystem=RAW, boot='B', source=DOC
+        'gpu.tiled-cache-on',
+        'r31-gpuanatomy',
+        'raw: tiled cache on',
+        'count > 0',
+        subsystem=RAW,
+        boot='B',
+        source=PENDING,
     ),
-    Check('gpu.capture-truncated', 'r31-gpuanatomy', 'SwitchFrameGpu:', regex='truncated', source=DOC),
+    Check('gpu.capture-truncated', 'r31-gpuanatomy', 'SwitchFrameGpu:', regex='truncated', source=PENDING),
     Check(
         'planes.dropped',
         'r31-cadeadline',
@@ -79,12 +86,14 @@ MORNING = [
         REPORT,
         boot='A',
         show=('process',),
-        source=DOC,
+        source=PENDING,
         note='Clock widget A/B: 20 Hz must stop when the widget is removed',
     ),
-    Check('widget.display-link', 'r31-rawds', 'displayLinkWithTarget', REPORT, boot='A', show=('process',), source=DOC),
+    Check(
+        'widget.display-link', 'r31-rawds', 'displayLinkWithTarget', REPORT, boot='A', show=('process',), source=PENDING
+    ),
     Check('nvk.copy-ways', 'r32-gpufixed', 'nvk: copies and fills on', TIMELINE, boot='A', source=DOC),
-    Check('frames.render-thread', 'r31-cadeadline', 'SwitchFrameRender: vsync', REPORT, process=KERNEL, source=DOC),
+    Check('frames.render-thread', 'r31-cadeadline', 'SwitchFrameRender: vsync', REPORT, process=KERNEL, source=PENDING),
 ]
 
 CHECKLIST = {
