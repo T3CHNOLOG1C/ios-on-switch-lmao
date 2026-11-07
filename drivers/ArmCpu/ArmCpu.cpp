@@ -1155,10 +1155,12 @@ void ArmCpu::interrupt()
             }
         }
         if (gicV2) {
-            // Preserve source-CPU bits [12:10] for SGIs, not only the 10-bit INTID.
+            // Preserve source-CPU bits [12:10] for SGIs, not only the 10-bit INTID. The barrier lets a driver's
+            // status-clear reach its device before the EOI, so a level line is not taken again. None after (Linux
+            // has none either): the next GICC_IAR read goes to the same Device-nGnRnE peripheral, so the EOI arrives
+            // before it, and the exception return synchronizes.
             __asm__ volatile("dsb sy" ::: "memory");
             write32(gV2CpuIf, 0x10, v2Acknowledge);
-            __asm__ volatile("dsb sy\nisb" ::: "memory");
         } else {
             __asm__ volatile("msr icc_eoir1_el1, %0\nisb" ::"r"(id) : "memory");
         }
