@@ -80,5 +80,24 @@ class DeltaTest(unittest.TestCase):
             delta.load(manifest)
 
 
+class AddedBytesTest(unittest.TestCase):
+    def test_counts_the_replacement_in_whole_blocks_less_what_it_replaces(self):
+        root = Path(tempfile.mkdtemp())
+        (root / 'bin').mkdir()
+        (root / 'bin/tool').write_bytes(b'x' * 100)
+        source = root / 'replacement'
+        source.write_bytes(b'y' * 9000)
+        entries = [{'path': '/bin/tool', 'source': source}]
+        old = os.lstat(root / 'bin/tool').st_blocks * 512
+        self.assertEqual(delta.added_bytes(root, entries), 3 * 4096 - old)
+
+    def test_a_smaller_replacement_gives_room_back(self):
+        root = Path(tempfile.mkdtemp())
+        (root / 'big').write_bytes(b'x' * 65536)
+        source = root / 'small'
+        source.write_bytes(b'y')
+        self.assertLess(delta.added_bytes(root, [{'path': '/big', 'source': source}]), 0)
+
+
 if __name__ == '__main__':
     unittest.main()

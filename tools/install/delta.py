@@ -35,6 +35,18 @@ def entries_under(entries: list[dict], prefix: str) -> list[dict]:
     return [dict(e, path='/' + e['path'][len(prefix) :]) for e in entries if e['path'].startswith(prefix)]
 
 
+def added_bytes(root: Path, entries: list[dict]) -> int:
+    """Return how many bytes applying `entries` below `root` adds to its volume.
+
+    Each replacement is stored uncompressed, in 4 KiB blocks, in place of a file that may be compressed.
+    """
+    added = 0
+    for e in entries:
+        target = Path(root) / e['path'].lstrip('/')
+        added += -(-os.path.getsize(e['source']) // 4096) * 4096 - os.lstat(target).st_blocks * 512
+    return added
+
+
 def apply(root: Path, entries: list[dict], log: host.Log, what: str, consume: bool = False) -> int:
     """Rewrite each entry's file below `root`.
 
