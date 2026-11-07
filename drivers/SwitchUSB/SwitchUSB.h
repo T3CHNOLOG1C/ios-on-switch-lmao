@@ -36,7 +36,7 @@
 //   SwitchUSB: host role (a device on the port, VBUS on | a source that made us DFP, ...)  /  SwitchUSB: device role
 //   SwitchUSB: SuperSpeed lane up|down (pairs <free|alt mode pending|DisplayPort's>, <role>, UPHY PLL <state>)
 //   SwitchUSB: SuperSpeed root port 1 on: PP off ..., RESET_SSPI taken, PP on ..., UsbForcePower 1: 0  /  ... off
-// and 1 s after each role or lane change one os_log record (log only):
+// and 1 s after each role or lane change and the dock's hub enable one os_log record (log only):
 //   SwitchUSB: <host|device> role +1 s (change <n>): xHCI USBCMD/USBSTS, pad 0's port and SS port 0's port with their
 //   link state and speed in words ("U0 SuperSpeed 5 Gb/s"), PORTSC <port>:<value>...; the last PP cycle; PADCTL
 //   PORT_CAP, VBUS_ID (ID, VBUS override), pad power, charger detect, OC maps | the SS lane (pad mux, port map,

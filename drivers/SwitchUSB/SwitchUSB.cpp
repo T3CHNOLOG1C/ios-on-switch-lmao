@@ -148,6 +148,7 @@ void applyLanes()
     if (dockHost && dockHub && host && !gDockHubSeen) {
         gDockHubSeen = true;
         switchxhci_expect_port_change();
+        armReport();
     }
     if (!dockHub || !dockHost)
         gDockHubSeen = false;
