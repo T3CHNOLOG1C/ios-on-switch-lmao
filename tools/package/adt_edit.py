@@ -257,6 +257,7 @@ def _capabilities(tree: list) -> None:
         ('RF-exposure-separation-distance', u32(5)),
         ('disable-globe-map', b''),
         ('sandman-support', u32(1)),
+        ('supports-avatars', b''),
     ):
         put(product, key, value)
     maps = child(product, 'maps')
