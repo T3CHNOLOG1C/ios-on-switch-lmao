@@ -37,10 +37,9 @@ public:
     void frameInfoNotify(void *client, bool enable);
 
     // DC A's frame end: the filter (primary interrupt context) writes changed tables, the action (work-loop gate) moves
-    // the enable bit. True from changePending while either still has work, so the caller keeps the frame end coming.
+    // the enable bit. A change holds the frame end (native_legacy_frame_end_hold) until both are done.
     void frameEndFilter();
     void frameEndAction();
-    bool changePending();
 
     // Under the gate, after tegra_display_power_up() reset DC A, before the resume's GENERAL_ACT_REQ: the tables and the
     // enable bit back, latching with that request.
@@ -61,6 +60,7 @@ private:
     uint32_t generation = 0;
     uint32_t frameInfoClients = 0;
     bool pendingDirty = false, activeValid = false, hwEnabled = false;
+    bool holding = false;  // a frame-end hold out until the change has reached DC A
     switch_color::Inputs inputs;
     uint32_t gammaTable[switch_color::kGammaWords];
     switch_color::Tables pending, active;

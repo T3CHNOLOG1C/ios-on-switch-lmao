@@ -239,6 +239,26 @@ TEST(DisplayStatsSource, QuietDisplayWindowsAreLogged)
     expectBefore(stats, "SwitchDisplay: quiet display: ", "if (logged)\n            os_log(");
 }
 
+// An idle display wakes no core: FRAME_END reaches the CPU only while something waits for a frame end. Holders outside the
+// gate (TegraPanel, the colour unit) write INT_MASK too, so every INT_MASK write is one of the three under its lock; a kick
+// unmasks it before any work that waits for a frame end; the last frame end with nothing waiting masks it.
+TEST(FrameEndSource, MaskedWhileNothingWaits)
+{
+    const std::string &source = display();
+    size_t writes = 0;
+    for (size_t at = source.find("dc[kDcIntMask] ="); at != std::string::npos; at = source.find("dc[kDcIntMask] =", at + 1))
+        ++writes;
+    EXPECT_EQ(writes, 3u);
+    for (const char *helper : {"    void writeIntMask(uint32_t clear, uint32_t set)", "    void unmaskFrameEnd()",
+                               "    void maskIdleFrameEnd()"})
+        EXPECT_THAT(method(source, helper), HasSubstr("IOSimpleLockLockDisableInterrupt(intMaskLock)")) << helper;
+    EXPECT_THAT(method(source, "    void kickSwapQueue() override"), HasSubstr("{\n        unmaskFrameEnd();"));
+    EXPECT_THAT(method(source, "    void vblankTick()"),
+                testing::EndsWith("if ((status & kFrameEndInt) && !frameEndNeeded() && tegra_panel_holds_frame_end())\n"
+                                  "            maskIdleFrameEnd();"));
+    EXPECT_THAT(method(source, "    void maskIdleFrameEnd()"), HasSubstr("if (!__atomic_load_n(&gFrameEndHolds"));
+}
+
 // iOS 17's layout of the original framebuffer is the one this driver always ran on: its table must keep these values, or
 // an iOS 17 kernel would read the swap queue and the swap requests somewhere else.
 TEST(LegacyFramebufferTable, Ios17ValuesStayPut)

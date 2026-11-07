@@ -11,6 +11,10 @@ static constexpr uint32_t kDcStateControl = 0x041, kDcCmuCsc = 0x32a, kDcCmuLut1
 static constexpr uint32_t kGeneralActReq = 1u << 0, kGeneralUpdate = 1u << 8, kCmuEnable = 1u << 20;
 static constexpr uint32_t kLocationAccessibility = 2, kLocationHarmony = 9;
 
+// NativeLegacyDisplay.cpp: FRAME_END reaches the CPU while a hold is out.
+extern "C" void native_legacy_frame_end_hold(void);
+extern "C" void native_legacy_frame_end_release(void);
+
 bool TegraDisplayColor::init()
 {
     identityGamma(inputs.gamma);
@@ -46,7 +50,11 @@ void TegraDisplayColor::detach()
         writeEnable(false);
     dc = nullptr;
     activeValid = hwEnabled = false;
+    const bool held = holding;
+    holding = false;
     IOSimpleLockUnlockEnableInterrupt(lock, state);
+    if (held)
+        native_legacy_frame_end_release();
 }
 
 // The tables are built outside the lock from a snapshot; a setter that ran meanwhile builds them again, so the last
@@ -61,12 +69,15 @@ void TegraDisplayColor::commit()
         IOSimpleLockUnlockEnableInterrupt(lock, state);
         build(snapshot, tables);
         state = IOSimpleLockLockDisableInterrupt(lock);
-        const bool current = seen == generation;
+        const bool current = seen == generation, hold = current && dc && !holding;
         if (current) {
             pending = tables;
             pendingDirty = true;
+            holding = holding || hold;
         }
         IOSimpleLockUnlockEnableInterrupt(lock, state);
+        if (hold)
+            native_legacy_frame_end_hold();
         if (current)
             return;
     }
@@ -280,10 +291,14 @@ void TegraDisplayColor::frameEndFilter()
 
 void TegraDisplayColor::frameEndAction()
 {
-    const IOInterruptState state = IOSimpleLockLockDisableInterrupt(lock);
+    IOInterruptState state = IOSimpleLockLockDisableInterrupt(lock);
     const bool want = pending.enabled, ready = !pendingDirty && activeValid, attached = dc != nullptr;
     const uint32_t reasons = pending.reasons;
+    const bool settled = !pendingDirty && want == hwEnabled, release = holding && settled;
+    holding = holding && !settled;
     IOSimpleLockUnlockEnableInterrupt(lock, state);
+    if (release)
+        native_legacy_frame_end_release();
     if (!attached || want == hwEnabled || (want && !ready))
         return;
     writeEnable(want);
@@ -295,14 +310,6 @@ void TegraDisplayColor::frameEndAction()
     IOLog("SwitchDisplay: colour CMU on:%s%s%s%s%s\n", reasons & kReasonMatrix ? " matrix" : "",
           reasons & kReasonScale ? " scale" : "", reasons & kReasonRemap ? " remap" : "",
           reasons & kReasonContrast ? " contrast" : "", reasons & kReasonGamma ? " gamma" : "");
-}
-
-bool TegraDisplayColor::changePending()
-{
-    const IOInterruptState state = IOSimpleLockLockDisableInterrupt(lock);
-    const bool busy = dc && (pendingDirty || pending.enabled != hwEnabled);
-    IOSimpleLockUnlockEnableInterrupt(lock, state);
-    return busy;
 }
 
 void TegraDisplayColor::restoreAfterPowerUp()

@@ -205,6 +205,16 @@ extern "C" uint64_t mach_continuous_time(void);
 extern "C" __attribute__((weak)) void tegra_panel_frame_end_filter(void)
 {}
 
+// Frame-end holds (native_legacy_frame_end_hold): TegraPanel's commands in flight and the colour unit's pending change.
+static uint32_t gFrameEndHolds;
+
+// SwitchBrightness answers true once TegraPanel holds the frame end for its commands and the ambient light sensor runs on
+// its own clock. Until then FRAME_END is never masked: both would wait for frame ends that do not come.
+extern "C" __attribute__((weak)) bool tegra_panel_holds_frame_end(void)
+{
+    return false;
+}
+
 // SwitchTouch (r17-touch): the interrupt time of the oldest touch report no swap has followed yet, taken (and cleared)
 // if it is before `before`; 0 otherwise. Weak: 0 without the touch driver.
 extern "C" __attribute__((weak)) uint64_t switch_touch_take_report(uint64_t)
@@ -711,13 +721,18 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     bool vsyncArmed = false;
     unsigned vsyncSilent = 0;  // DC A frame ends without a V_BLANK while armed (watchVsync)
     static constexpr unsigned kVsyncSilentFrames = 30;
-    // DC A interrupt, on the same work loop. FRAME_END stays unmasked while it runs: it feeds the panel's DSI commands and shows the
-    // interrupt is alive. V_BLANK is unmasked only while a vsync client is registered. The filter clears both in INT_STATUS, which lowers
-    // the line, and hands them to the action; the timer only checks once, 250 ms after the start, that frame ends arrive.
+    // DC A interrupt, on the same work loop. FRAME_END is unmasked while something waits for a frame end (frameEndNeeded, a
+    // frame-end hold) and masked at the first frame end with nothing waiting, so an idle display wakes no core. Every kick
+    // unmasks it, since all display work starts there. V_BLANK is unmasked only while a vsync client is registered. The
+    // filter clears both in INT_STATUS, which lowers the line, and hands them to the action; the timer only checks once,
+    // 250 ms after the start, that frame ends arrive.
     IOFilterInterruptEventSource *vblankSource = nullptr;
     IOMemoryMap *dcMap = nullptr;
     volatile uint32_t *dc = nullptr;
     uint32_t dcEnable = 0, dcMask = 0;  // INT_ENABLE and INT_MASK as found, restored on stop
+    // INT_MASK is written from outside the gate too (frame-end holds), so every write of it takes this lock.
+    IOSimpleLock *intMaskLock = nullptr;
+    bool intMaskLive = false;  // dc mapped and clocked: a hold may write INT_MASK
     bool scanoutStopped = false;        // display power off (setScanout): no frame ends or vblanks are expected
     uint32_t dcPending = 0;             // INT_STATUS bits from the filter, for the action
     uint64_t vblankTime = 0, vblankContinuous = 0, vblankLast = 0, frameEnds = 0;
@@ -950,6 +965,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     // waits on reading the surface or on writing the scanout.
     bool stReadDue = true;
     uint64_t stRead = 0;
+    uint32_t stIrqBase = 0;  // switch_interrupt_count(105) at the last stats line
     uint32_t stVblanks = 0;  // V_BLANKs the filter took while vsync was armed (atomic: primary interrupt context)
     // Frame pacing (r6-lows). A present is a flip DC A latched, timed at the frame end (or V_BLANK) whose interrupt showed it, as the
     // filter stamped it: the moment the new frame starts to scan. Under the gate unless said otherwise:
@@ -1251,6 +1267,56 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
             switch_perf_hint(SWITCH_PERF_HINT_FRAME_MISS);
     }
 
+    void writeIntMask(uint32_t clear, uint32_t set)
+    {
+        const IOInterruptState state = IOSimpleLockLockDisableInterrupt(intMaskLock);
+        dc[kDcIntMask] = (dc[kDcIntMask] & ~clear) | set;
+        IOSimpleLockUnlockEnableInterrupt(intMaskLock, state);
+    }
+
+    // Any context. A stopped or powered-down scanout gives no frame end; setScanout unmasks it at the restart. INT_ENABLE keeps
+    // FRAME_END latching while it is masked, so the latched one is stale (a frame end long ago, not now) and goes first.
+    void unmaskFrameEnd()
+    {
+        const IOInterruptState state = IOSimpleLockLockDisableInterrupt(intMaskLock);
+        if (intMaskLive && !scanoutStopped && !hwSuspended && !(dc[kDcIntMask] & kFrameEndInt)) {
+            dc[kDcIntStatus] = kFrameEndInt;
+            dc[kDcIntMask] = dc[kDcIntMask] | kFrameEndInt;
+        }
+        IOSimpleLockUnlockEnableInterrupt(intMaskLock, state);
+    }
+
+    // Under the gate, at a frame end: whether a later frame end has work. The first frame ends prove the interrupt alive.
+    bool frameEndNeeded()
+    {
+        return frameEnds < 2 || vsyncArmed || tapeAttached || tapeSettle || kickDeferred || presentDeferred ||
+               ring.pending != kNoBuffer || ring.superseded != kNoBuffer || ring.drawing != kNoBuffer ||
+               ring.held != kNoBuffer || (rotated && !rotationLatched) || probeRequest || probe.active() ||
+               (!probeRan && probeTables && doubleBuffer) || (planesOn && planeLatch.requested()) ||
+               planeProbe.active() || planeHeldSet;
+    }
+
+    void maskIdleFrameEnd()
+    {
+        const IOInterruptState state = IOSimpleLockLockDisableInterrupt(intMaskLock);
+        if (!__atomic_load_n(&gFrameEndHolds, __ATOMIC_ACQUIRE))
+            dc[kDcIntMask] = dc[kDcIntMask] & ~kFrameEndInt;
+        IOSimpleLockUnlockEnableInterrupt(intMaskLock, state);
+    }
+
+public:
+    // TegraPanel's contract (native_legacy_frame_end_held): a hold made FRAME_END reach the CPU.
+    bool frameEndRouted()
+    {
+        const IOInterruptState state = IOSimpleLockLockDisableInterrupt(intMaskLock);
+        const bool routed = intMaskLive && (dc[kDcIntEnable] & dc[kDcIntMask] & kFrameEndInt);
+        IOSimpleLockUnlockEnableInterrupt(intMaskLock, state);
+        return routed;
+    }
+
+    void holdFrameEnd() { unmaskFrameEnd(); }
+
+private:
     bool vsyncWanted() const
     {
         const void *head = nullptr;
@@ -1273,7 +1339,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
             if (!hwSuspended) {
                 const uint32_t bits = kVblankInt | (vpulseProgrammed && !phaseFailed ? kVpulse2Int : 0);
                 dc[kDcIntStatus] = bits;
-                dc[kDcIntMask] = dc[kDcIntMask] | bits;
+                writeIntMask(0, bits);
             }
             native_legacy_vsync_observed(0, vsyncHz);
             return;
@@ -1429,6 +1495,8 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
             checkInteraction();
             noteStatsWindow();
         }
+        if ((status & kFrameEndInt) && !frameEndNeeded() && tegra_panel_holds_frame_end())
+            maskIdleFrameEnd();
     }
 
     // At a frame end, under the gate: after 5 s, the one stats line for the window, then a new window. The line is formatted here and
@@ -1447,6 +1515,8 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
         }
         const uint64_t us = Span::ticksToUs(now - statsStart);
         const uint32_t vblanks = __atomic_exchange_n(&stVblanks, 0u, __ATOMIC_RELAXED);
+        const uint32_t irqs = switch_interrupt_count(kDisplayAInterrupt) - stIrqBase;
+        stIrqBase += irqs;
         // r16-idle: a window in which nothing reached the screen and nothing went wrong is logged once, marked quiet; the
         // windows after it are counted and reset as always but not logged, until a swap, a present or an error comes. A
         // lit, still screen then writes no display lines at all (it wrote two every 5 s).
@@ -1472,8 +1542,8 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
         auto span = [&](const char *name, const Span &value) {
             add(" %s %llu/%llu", name, (unsigned long long)value.meanUs(), (unsigned long long)value.maxUs());
         };
-        add("%llu ms: %u swaps %llu.%llu/s,", (unsigned long long)(us / 1000), stSwaps, rate(stSwaps) / 10,
-            rate(stSwaps) % 10);
+        add("%llu ms: %u DC A interrupts, %u swaps %llu.%llu/s,", (unsigned long long)(us / 1000), irqs, stSwaps,
+            rate(stSwaps) / 10, rate(stSwaps) % 10);
         span("interval", stInterval);
         span("client", stClient);
         span("submit-retire", stRetire);
@@ -1620,7 +1690,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
         if (!vsyncArmed)
             return;
         if (!vsyncWanted()) {
-            dc[kDcIntMask] = dc[kDcIntMask] & ~(kVblankInt | kVpulse2Int);  // no client: no wakeup of its own a frame
+            writeIntMask(kVblankInt | kVpulse2Int, 0);  // no client: no wakeup of its own a frame
             vsyncArmed = false;
             native_legacy_vsync_observed(2, vsyncHz);
             noteVsyncIdle();
@@ -1758,7 +1828,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
             dc[kDcIntStatus] = kVpulse2Int;
             dc[kDcIntEnable] = dc[kDcIntEnable] | kVpulse2Int;
             if (vsyncArmed)
-                dc[kDcIntMask] = dc[kDcIntMask] | kVpulse2Int;  // else armVsync unmasks it
+                writeIntMask(0, kVpulse2Int);  // else armVsync unmasks it
             vpulseProgrammed = true;
             phaseProbe = 0;
         }
@@ -1780,7 +1850,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
         if (!vpulseProgrammed || vpulseSeen || ++phaseProbe < kPhaseProbeFlips)
             return;
         phaseFailed = true;
-        dc[kDcIntMask] = dc[kDcIntMask] & ~kVpulse2Int;
+        writeIntMask(kVpulse2Int, 0);
         dc[kDcIntEnable] = dc[kDcIntEnable] & ~kVpulse2Int;
         char gic[192];
         switch_interrupt_describe(kDisplayAInterrupt, gic, sizeof(gic));
@@ -1857,7 +1927,8 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
         dcMask = dc[kDcIntMask];
         dc[kDcIntStatus] = kVblankInt | kFrameEndInt;
         dc[kDcIntEnable] = dcEnable | kVblankInt | kFrameEndInt;
-        dc[kDcIntMask] = (dcMask & ~kVblankInt) | kFrameEndInt;
+        writeIntMask(~0u, (dcMask & ~kVblankInt) | kFrameEndInt);
+        intMaskLive = true;
         // r17-touch: the frame's lines, for the vsync phase's V_PULSE2 line (its constants' comment).
         const auto vertical = [this](uint32_t reg) {
             return dc[reg] >> 16 & 0x1fff;
@@ -1889,7 +1960,10 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
         if (IOWorkLoop *loop = getWorkLoop())
             loop->removeEventSource(vblankSource);
         OSSafeReleaseNULL(vblankSource);
-        dc[kDcIntMask] = dcMask;
+        writeIntMask(~0u, dcMask);
+        const IOInterruptState state = IOSimpleLockLockDisableInterrupt(intMaskLock);
+        intMaskLive = false;
+        IOSimpleLockUnlockEnableInterrupt(intMaskLock, state);
         dc[kDcIntEnable] = dcEnable;
         dc[kDcIntStatus] = kVblankInt | kFrameEndInt | kVpulse2Int;
         vpulseProgrammed = vpulseSeen = false;
@@ -2989,7 +3063,7 @@ public:
         if (on != scanoutStopped)
             return true;
         if (!on)
-            dc[kDcIntMask] = dc[kDcIntMask] & ~(kVblankInt | kFrameEndInt);
+            writeIntMask(kVblankInt | kFrameEndInt, 0);
         // Assembly copy for both the read and the write, as the rotation code leaves it: only the ACT_REQ below moves the mode.
         dc[kDcStateAccess] = dc[kDcStateAccess] & ~(kReadMuxActive | kWriteMuxActive);
         dc[kDcDisplayCommand] = (dc[kDcDisplayCommand] & ~kDcModeMask) | (on ? kDcModeContinuous : 0);
@@ -3001,9 +3075,9 @@ public:
         // A window underflow latched around the stop is not the rotated scanout failing (checkRotation counts runs of them).
         dc[kDcIntStatus] = kVblankInt | kFrameEndInt | kWinAUnderflowInt;
         underflowRun = 0;
-        if (on)
-            dc[kDcIntMask] = dc[kDcIntMask] | kFrameEndInt | (vsyncArmed ? kVblankInt : 0);
         scanoutStopped = !on;
+        if (on)
+            writeIntMask(0, kFrameEndInt | (vsyncArmed ? kVblankInt : 0));
         if (!on && tapeAttached)
             thread_wakeup((event_t)&tapeFrames);  // no frame end comes now: the console scrolls without one
         return true;
@@ -3070,7 +3144,7 @@ public:
         dc[kDcStateControl] = kGeneralActReq | kWinAActReq;
         dc[kDcIntStatus] = kVblankInt | kFrameEndInt | kWinAUnderflowInt;
         dc[kDcIntEnable] = savedIntEnable;
-        dc[kDcIntMask] = savedIntMask;
+        writeIntMask(~0u, savedIntMask);
         __atomic_store_n(&dcPending, 0u, __ATOMIC_RELAXED);
         hwSuspended = false;
         scanoutStopped = true;
@@ -3149,6 +3223,8 @@ public:
         if (hists)
             IOFreeType(hists, FrameHists);
         color.free();
+        if (intMaskLock)
+            IOSimpleLockFree(intMaskLock);
         IOMobileFramebufferLegacy::free();
     }
 
@@ -3191,7 +3267,7 @@ public:
 
     bool start(IOService *provider) override
     {
-        if (!color.init())
+        if (!color.init() || !(intMaskLock = IOSimpleLockAlloc()))
             return false;
         if (frameHists && !(hists = IOMallocType(FrameHists)))
             return false;
@@ -3296,6 +3372,7 @@ public:
 
     void kickSwapQueue() override
     {
+        unmaskFrameEnd();
         armVsync();
         if (kicking) {
             rekick = true;
@@ -4801,6 +4878,29 @@ extern "C" bool native_legacy_display_set_scanout(bool on)
                                                                                                 : kIOReturnNotReady;
                },
                display, on ? display : nullptr) == kIOReturnSuccess;
+}
+
+// Frame-end holds, from any context, never sleeping: while one is held DC A's FRAME_END reaches the CPU (it is unmasked before
+// hold returns, unless the scanout is stopped: setScanout unmasks it at the restart). Released, it is masked again at the
+// first frame end with nothing else waiting.
+extern "C" void native_legacy_frame_end_hold(void)
+{
+    __atomic_fetch_add(&gFrameEndHolds, 1u, __ATOMIC_ACQ_REL);
+    if (NativeLegacyDisplay *display = __atomic_load_n(&NativeLegacyDisplay::primaryDisplay, __ATOMIC_ACQUIRE))
+        display->holdFrameEnd();
+}
+
+extern "C" void native_legacy_frame_end_release(void)
+{
+    if (!__atomic_load_n(&gFrameEndHolds, __ATOMIC_ACQUIRE))
+        panic("SwitchDisplay: frame-end hold released without a hold");
+    __atomic_fetch_sub(&gFrameEndHolds, 1u, __ATOMIC_ACQ_REL);
+}
+
+extern "C" bool native_legacy_frame_end_held(void)
+{
+    NativeLegacyDisplay *display = __atomic_load_n(&NativeLegacyDisplay::primaryDisplay, __ATOMIC_ACQUIRE);
+    return __atomic_load_n(&gFrameEndHolds, __ATOMIC_ACQUIRE) && display && display->frameEndRouted();
 }
 
 // SC7 hooks for the sleep code; contract in TegraDisplayPower.h. The panel sleeps and wakes with TegraPanel's own power sequence
