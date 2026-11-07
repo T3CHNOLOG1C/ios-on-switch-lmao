@@ -19,6 +19,7 @@
 #include <stddef.h>
 #include <string.h>
 #include "TegraGM20BABI.h"
+#include "TegraGM20BExecSurfaces.h"
 #include "TegraGM20BGpu.h"
 #include "TegraGM20BLayout.h"
 #include "TegraGM20BPoolPolicy.h"
@@ -745,7 +746,6 @@ class AGXDeviceUserClient : public IOUserClient
 		tgm_coh *coh;  // imports: the surface's coherency registry entry (gpu.c), held
 		SharedWiring *
 			wiring;  // a surface import's pages, mem and wiring, shared with the task's other imports
-		Bo *cohNext;                      // cohBos_
 		uint32_t snapshot[kMaxChannels];  // submitted seqnos when freed (zombies only)
 	};
 
@@ -753,6 +753,7 @@ class AGXDeviceUserClient : public IOUserClient
 		uint64_t va, range;
 		Bo *bo;
 		uint64_t bo_offset;
+		uint8_t pageShift;
 	};
 
 	// A mapping method 12 (Map) made into the client's task: what IOKit's io_connect_map_memory_into_task keeps in the
@@ -774,8 +775,8 @@ class AGXDeviceUserClient : public IOUserClient
 	IOMemoryDescriptor *fence_view_ = nullptr;
 	tgm_chan *chans_[kMaxChannels] = {};
 	Bo *bos_ = nullptr, *zombies_ = nullptr;
-	Bo *cohBos_ =
-		nullptr;  // the writable imports of bos_ with a coherency entry: what each Exec marks GPU-dirty
+	tgm_fences::ExecSurfaces
+		surfaces_;  // the imports of bos_ with a coherency entry, and method 17's lists
 	Mapping *maps_ = nullptr;  // under lock_
 	Binding *binds_ = nullptr;
 	uint32_t nbinds_ = 0, cap_binds_ = 0;
@@ -833,6 +834,7 @@ class AGXDeviceUserClient : public IOUserClient
 	IOReturn surfaceLayout(const TegraGM20BAbiSurfaceLayout *in,
 			       TegraGM20BAbiSurfaceLayoutReply *out);
 	void applyLevel();
+	IOReturn execSurfaces(const TegraGM20BAbiExecSurfaces *in);
 	IOReturn unmapToken(const TegraGM20BAbiUnmap *in);
 	void releaseMappings();
 
@@ -893,7 +895,7 @@ IOReturn AGXDeviceUserClient::clientClose()
 	hangHolder_ = nullptr;
 	while (nbinds_)
 		unbindOverlaps(binds_[0].va, binds_[0].range, nullptr);
-	cohBos_ = nullptr;
+	surfaces_.clear();
 	while (bos_) {
 		Bo *bo = bos_;
 		bos_ = bo->next;
@@ -914,7 +916,7 @@ void AGXDeviceUserClient::free()
 		closing_ = true;
 		for (uint32_t i = 0; i < kMaxChannels; i++)
 			tgm_chan_del(&chans_[i]);
-		cohBos_ = nullptr;
+		surfaces_.clear();
 		while (bos_) {
 			Bo *bo = bos_;
 			bos_ = bo->next;
@@ -1132,9 +1134,11 @@ IOReturn AGXDeviceUserClient::boAlloc(const TegraGM20BAbiBoAlloc *in,
 		if (!refused) {
 			// write-combined pool memory: zeroed by the allocator, no cacheable alias (CONTRACT §3). No room: the freed
 			// ranges the thread call has not zeroed yet are zeroed now, and the allocation tried again.
-			bo->pool_va = tgm_pool_alloc(in->bytes, &bo->pool_pa);
+			const uint64_t align =
+				(in->flags & TegraGM20BBoContiguous) ? 1ULL << in->align_log2 : 0;
+			bo->pool_va = tgm_pool_alloc(in->bytes, align, &bo->pool_pa);
 			if (!bo->pool_va && poolZeroNow())
-				bo->pool_va = tgm_pool_alloc(in->bytes, &bo->pool_pa);
+				bo->pool_va = tgm_pool_alloc(in->bytes, align, &bo->pool_pa);
 		}
 		system = tgm_pool::coherentSource(refused, bo->pool_va != nullptr) ==
 			 tgm_pool::FromSystem;
@@ -1254,7 +1258,7 @@ IOReturn AGXDeviceUserClient::boAlloc(const TegraGM20BAbiBoAlloc *in,
 			ret = kIOReturnNoMemory;
 	}
 	if (!ret)
-		ret = ioreturn(tgm_mem_new(vm_, bo->pas, bo->npages, &bo->mem));
+		ret = ioreturn(tgm_mem_new_exclusive(vm_, bo->pas, bo->npages, &bo->mem));
 	lap(3);
 	if (ret) {
 		if (!quotaLogged_)
@@ -1294,6 +1298,8 @@ IOReturn AGXDeviceUserClient::boImport(const TegraGM20BAbiBoImport *in,
 {
 	if (!in->bytes || ((in->address | in->bytes) & 0xfff) || in->bytes > kMaxBoBytes)
 		return kIOReturnBadArgument;
+	if (!surfaces_.reserve())
+		return kIOReturnNoMemory;
 	const uint64_t start = nowNs();
 	uint64_t phase[TGM_PHASES] = {},
 		 mark = start;  // the stats: wiring, pages, nvkm, clean
@@ -1390,10 +1396,8 @@ IOReturn AGXDeviceUserClient::boImport(const TegraGM20BAbiBoImport *in,
 	bo->handle = next_handle_++;
 	bo->next = bos_;
 	bos_ = bo;
-	if (bo->coh && !bo->readOnly) {
-		bo->cohNext = cohBos_;
-		cohBos_ = bo;
-	}
+	if (bo->coh)
+		surfaces_.add(bo->handle, bo->coh, !bo->readOnly);
 	out->handle = bo->handle;
 	out->map_token = 0;
 	out->reserved = 0;
@@ -1431,12 +1435,7 @@ IOReturn AGXDeviceUserClient::boFree(const TegraGM20BAbiBoFree *in)
 		return kIOReturnBadArgument;
 	Bo *bo = *p;
 	*p = bo->next;
-	for (Bo **c = &cohBos_; *c; c = &(*c)->cohNext) {
-		if (*c == bo) {
-			*c = bo->cohNext;
-			break;
-		}
-	}
+	surfaces_.remove(bo->handle);
 	for (uint32_t i = 0; i < nbinds_;) {
 		if (binds_[i].bo == bo)
 			unbindOverlaps(binds_[i].va, binds_[i].range, bo);
@@ -1459,7 +1458,7 @@ void AGXDeviceUserClient::unbindOverlaps(uint64_t va, uint64_t range, Bo *only)
 	for (uint32_t i = 0; i < nbinds_;) {
 		Binding &b = binds_[i];
 		if (b.va < va + range && va < b.va + b.range && (!only || b.bo == only)) {
-			tgm_vm_unmap(vm_, b.va, b.range);
+			tgm_vm_unmap_pages(vm_, b.va, b.range, b.pageShift);
 			binds_[i] = binds_[--nbinds_];
 		} else {
 			i++;
@@ -1501,12 +1500,13 @@ IOReturn AGXDeviceUserClient::vmBind(const TegraGM20BAbiVmBind *in, uint32_t cou
 			binds_ = grown;
 			cap_binds_ = cap;
 		}
-		IOReturn ret =
-			ioreturn(tgm_vm_map_ordered(vm_, op.va, op.range, bo->mem, op.bo_offset,
-						    static_cast<uint8_t>(op.kind), bo->readOnly));
-		if (ret)
-			return ret;
-		binds_[nbinds_++] = {op.va, op.range, bo, op.bo_offset};
+		uint8_t pageShift = 0;
+		const int err =
+			tgm_vm_map_ordered(vm_, op.va, op.range, bo->mem, op.bo_offset,
+					   static_cast<uint8_t>(op.kind), bo->readOnly, &pageShift);
+		if (err)
+			return ioreturn(err);
+		binds_[nbinds_++] = {op.va, op.range, bo, op.bo_offset, pageShift};
 		tgm_stats_bind(1, op.range >> 12, nowNs() - start);
 	}
 	return kIOReturnSuccess;
@@ -1585,6 +1585,15 @@ IOReturn AGXDeviceUserClient::order(const TegraGM20BAbiOrder *in, TegraGM20BAbiO
 	return ret;
 }
 
+// Method 17: what the channel's next Exec touches (TegraGM20BExecSurfaces.h).
+IOReturn AGXDeviceUserClient::execSurfaces(const TegraGM20BAbiExecSurfaces *in)
+{
+	static_assert(tgm_fences::kChannels == kMaxChannels, "channel slots");
+	if (!in->channel || in->channel > kMaxChannels || !chans_[in->channel - 1])
+		return kIOReturnBadArgument;
+	return surfaces_.set(in->channel - 1, in) ? kIOReturnSuccess : kIOReturnNoMemory;
+}
+
 IOReturn AGXDeviceUserClient::channelDestroy(const TegraGM20BAbiChannel *in)
 {
 	if (!in->channel || in->channel > kMaxChannels || !chans_[in->channel - 1])
@@ -1592,6 +1601,7 @@ IOReturn AGXDeviceUserClient::channelDestroy(const TegraGM20BAbiChannel *in)
 	hangHolder_ = current_thread();
 	tgm_chan_del(&chans_[in->channel - 1]);
 	hangHolder_ = nullptr;
+	surfaces_.forget(in->channel - 1);
 	reap(false);
 	return kIOReturnSuccess;
 }
@@ -1776,6 +1786,9 @@ IOReturn AGXDeviceUserClient::exec(const TegraGM20BAbiExec *in, uint32_t count,
 		backgroundRole_ = background;
 		applyLevel();
 	}
+	// Taken whatever happens to the Exec. The writers' acquires are queued for this submission's stream before it is made
+	// (one this Exec then does not make leaves them to the channel's next: each still names earlier work).
+	const bool listed = surfaces_.before(in->channel - 1, chan, count);
 	// TegraGM20BAbiPush and tgm_push share one layout; `in` is our private copy, so normalise flags in place
 	static_assert(sizeof(tgm_push) == sizeof(TegraGM20BAbiPush) &&
 			      offsetof(tgm_push, no_prefetch) == offsetof(TegraGM20BAbiPush, flags),
@@ -1806,11 +1819,10 @@ IOReturn AGXDeviceUserClient::exec(const TegraGM20BAbiExec *in, uint32_t count,
 	if (ret)
 		return ret;
 	if (count) {
-		// Every writable host import this submission may have written, marked GPU-dirty with the submission as its
-		// writer (atomic stores, no cache maintenance): a CPU IOSurfaceLock of it waits for this seqno, then
-		// invalidates (tgm_coherency_*, the XNU hooks).
-		for (Bo *bo = cohBos_; bo; bo = bo->cohNext)
-			tgm_coherency_wrote(bo->coh, importsWritten_, tgm_chan_uid(chan), seqno);
+		// The host imports this submission may have written, marked GPU-dirty with the submission as their writer
+		// (atomic stores, no cache maintenance): a CPU IOSurfaceLock of one waits for this seqno, then invalidates
+		// (tgm_coherency_*, the XNU hooks), and a listed Exec of another channel waits for it on the GPU.
+		surfaces_.after(listed, importsWritten_, tgm_chan_uid(chan), seqno);
 	}
 	out->seqno = seqno;
 	out->reserved = 0;
@@ -1968,7 +1980,9 @@ IOReturn AGXDeviceUserClient::getInfo(TegraGM20BAbiInfo *out)
 	out->abi_version = TegraGM20BAbiVersion;
 	out->flags = TegraGM20BInfoHostImport | TegraGM20BInfoKernelMap | TegraGM20BInfoOrder |
 		     TegraGM20BInfoSurfaceWrites | TegraGM20BInfoSurfaceLayout |
-		     TegraGM20BInfoPriority;
+		     TegraGM20BInfoExecSurfaces | TegraGM20BInfoPriority;
+	if (info.comptag_lines)
+		out->flags |= TegraGM20BInfoCompression;
 	out->chipset = info.chipset;
 	out->device_id = 0;
 	out->gpc_count = info.gpc_count;
@@ -1986,6 +2000,18 @@ IOReturn AGXDeviceUserClient::getInfo(TegraGM20BAbiInfo *out)
 	out->max_bo_bytes = kMaxBoBytes;
 	strlcpy(out->chip_name, "GM20B", sizeof(out->chip_name));
 	strlcpy(out->device_name, "NVIDIA Tegra X1 (GM20B)", sizeof(out->device_name));
+	return kIOReturnSuccess;
+}
+
+static IOReturn zbcAdd(const TegraGM20BAbiZbc *in, TegraGM20BAbiZbcReply *out)
+{
+	if (in->type != TegraGM20BZbcColor && in->type != TegraGM20BZbcDepth)
+		return kIOReturnBadArgument;
+	const int index = tgm_zbc_add(in->type == TegraGM20BZbcDepth, in->format, in->ds, in->l2);
+	if (index < 0)
+		return ioreturn(index);
+	out->index = static_cast<uint32_t>(index);
+	out->reserved = 0;
 	return kIOReturnSuccess;
 }
 
@@ -2072,8 +2098,23 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 		wantIn = sizeof(TegraGM20BAbiSurfaceLayout);
 		wantOut = sizeof(TegraGM20BAbiSurfaceLayoutReply);
 		break;
+	case TegraGM20BMethodExecSurfaces:
+		if (inSize < offsetof(TegraGM20BAbiExecSurfaces, uses))
+			return kIOReturnBadArgument;
+		count = static_cast<const TegraGM20BAbiExecSurfaces *>(in)->count;
+		if (count > TegraGM20BMaxExecSurfaces)
+			return kIOReturnBadArgument;
+		wantIn = inSize == sizeof(TegraGM20BAbiExecSurfaces)
+				 ? inSize
+				 : uint32_t(offsetof(TegraGM20BAbiExecSurfaces, uses) +
+					    count * sizeof(TegraGM20BAbiSurfaceUse));
+		break;
 	case TegraGM20BMethodPriority:
 		wantIn = sizeof(TegraGM20BAbiPriority);
+		break;
+	case TegraGM20BMethodZbc:
+		wantIn = sizeof(TegraGM20BAbiZbc);
+		wantOut = sizeof(TegraGM20BAbiZbcReply);
 		break;
 	default:
 		return kIOReturnUnsupported;
@@ -2120,6 +2161,11 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 		if (!reservedZero(static_cast<const TegraGM20BAbiOrder *>(in)->reserved))
 			return kIOReturnBadArgument;
 		break;
+	case TegraGM20BMethodExecSurfaces:
+		if (!tgm_fences::ExecSurfaces::valid(
+			    static_cast<const TegraGM20BAbiExecSurfaces *>(in)))
+			return kIOReturnBadArgument;
+		break;
 	case TegraGM20BMethodPriority:
 		if (static_cast<const TegraGM20BAbiPriority *>(in)->priority >
 			    TegraGM20BMaxPriority ||
@@ -2143,6 +2189,9 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 		static_cast<TegraGM20BAbiTimestamp *>(out)->ns = tgm_timestamp_ns();
 		return kIOReturnSuccess;
 	}
+	if (method == TegraGM20BMethodZbc)
+		return zbcAdd(static_cast<const TegraGM20BAbiZbc *>(in),
+			      static_cast<TegraGM20BAbiZbcReply *>(out));
 	IOLockLock(lock_);
 	// A channel killed for a GPU fault or hang (client fault isolation) refuses only what names it (Exec, Order and
 	// WaitFence answer kIOReturnNotResponding, GetStatus its error); the connection's memory, binds and other channels
@@ -2193,6 +2242,9 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 	case TegraGM20BMethodSurfaceLayout:
 		ret = surfaceLayout(static_cast<const TegraGM20BAbiSurfaceLayout *>(in),
 				    static_cast<TegraGM20BAbiSurfaceLayoutReply *>(out));
+		break;
+	case TegraGM20BMethodExecSurfaces:
+		ret = execSurfaces(static_cast<const TegraGM20BAbiExecSurfaces *>(in));
 		break;
 	case TegraGM20BMethodPriority:
 		priority_ = static_cast<const TegraGM20BAbiPriority *>(in)->priority;

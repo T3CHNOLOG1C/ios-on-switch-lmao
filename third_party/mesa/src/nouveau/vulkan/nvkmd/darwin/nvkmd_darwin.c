@@ -4,6 +4,9 @@
  */
 
 #include "nvkmd_darwin.h"
+#define DARWIN_ANY_CONN struct nvkmd_darwin_conn
+#include "nvkmd_darwin_wait_any.h"
+#include "nvkmd_darwin_surfaces.h"
 
 #include "nv_device_info.h"
 #include "util/bitscan.h"
@@ -121,6 +124,7 @@ darwin_open(struct vk_object_base *log_obj, struct nvkmd_darwin_conn *c,
                        kr, kr == KERN_SUCCESS ? info->abi_version : 0);
    }
    c->kernel_map = (info->flags & TegraGM20BInfoKernelMap) != 0;
+   c->exec_surfaces = (info->flags & TegraGM20BInfoExecSurfaces) != 0;
 
    return VK_SUCCESS;
 }
@@ -579,6 +583,91 @@ darwin_sync_wait_one(struct nvkmd_darwin_sync *s, enum vk_sync_wait_flags flags,
    return darwin_wait_seqno(dev, channel, seqno, abs_timeout_ns);
 }
 
+struct darwin_any_waits {
+   const struct vk_sync_wait *waits;
+   enum vk_sync_wait_flags flags;
+};
+
+/* darwin_sync_lock held */
+static enum darwin_any_status
+darwin_any_status(void *ctx, uint32_t i, struct darwin_any_fence *fence)
+{
+   const struct darwin_any_waits *w = ctx;
+   struct nvkmd_darwin_sync *s = to_darwin_sync(w->waits[i].sync);
+   struct nvkmd_darwin_sync_point point = { 0 };
+   if (darwin_is_timeline(s)) {
+      darwin_timeline_update_locked(s);
+      if (s->value >= w->waits[i].wait_value)
+         return DARWIN_ANY_DONE;
+      if (!darwin_timeline_point_locked(s, w->waits[i].wait_value, &point))
+         return DARWIN_ANY_WAITING;
+   } else {
+      if (s->state == NVKMD_DARWIN_SYNC_UNSIGNALED)
+         return DARWIN_ANY_WAITING;
+      if (s->state != NVKMD_DARWIN_SYNC_FENCE)
+         return DARWIN_ANY_DONE;
+      point.dev = s->dev;
+      point.channel = s->channel;
+      point.seqno = s->seqno;
+   }
+   if ((w->flags & VK_SYNC_WAIT_PENDING) || darwin_point_done(&point))
+      return DARWIN_ANY_DONE;
+   fence->conn = point.dev->conn;
+   fence->dev = point.dev;
+   fence->channel = point.channel;
+   fence->seqno = point.seqno;
+   return DARWIN_ANY_FENCE;
+}
+
+static bool
+darwin_any_fence_done(const struct darwin_any_fence *fence)
+{
+   const struct nvkmd_darwin_sync_point point = {
+      .dev = fence->dev, .channel = fence->channel, .seqno = fence->seqno,
+   };
+   return darwin_point_done(&point);
+}
+
+static int
+darwin_any_wait_fence(const struct darwin_any_fence *fence, uint64_t timeout_ns)
+{
+   struct TegraGM20BAbiWaitFence wait = {
+      .channel = fence->channel,
+      .seqno = fence->seqno,
+      .timeout_ns = timeout_ns,
+   };
+   const kern_return_t kr = darwin_call(&fence->conn, TegraGM20BMethodWaitFence,
+                                        &wait, sizeof(wait), NULL, 0);
+   return kr == KERN_SUCCESS ? 0 : kr == kIOReturnTimeout ? ETIMEDOUT : EIO;
+}
+
+static void
+darwin_any_lost(const struct darwin_any_fence *fence)
+{
+   os_log_fault(OS_LOG_DEFAULT,
+                "nvk darwin: channel %u passed seqno %u with no wake from its "
+                "WaitFence (a lost fence interrupt): abort() for the stack",
+                fence->channel, fence->seqno);
+   abort();
+}
+
+static uint64_t
+darwin_any_now_ns(void)
+{
+   return (uint64_t)os_time_get_nano();
+}
+
+static const struct darwin_any_ops darwin_any_ops = {
+   .lock = &darwin_sync_lock,
+   .cond = &darwin_sync_cond,
+   .status = darwin_any_status,
+   .fence_done = darwin_any_fence_done,
+   .wait_fence = darwin_any_wait_fence,
+   .cond_wait = darwin_sync_cond_wait_locked,
+   .now_ns = darwin_any_now_ns,
+   .lost = darwin_any_lost,
+};
+
 static VkResult
 darwin_sync_wait_many(struct vk_device *device, uint32_t wait_count,
                       const struct vk_sync_wait *waits,
@@ -598,19 +687,24 @@ darwin_sync_wait_many(struct vk_device *device, uint32_t wait_count,
       return VK_SUCCESS;
    }
 
-   /* Any: poll each in turn (no interrupts on this GPU anyway). */
-   for (;;) {
-      for (uint32_t i = 0; i < wait_count; i++) {
-         struct nvkmd_darwin_sync *s = to_darwin_sync(waits[i].sync);
-         VkResult result = darwin_is_timeline(s) ?
-            darwin_timeline_wait(s, waits[i].wait_value, wait_flags, 0, 0) :
-            darwin_sync_wait_one(s, wait_flags, 0);
-         if (result != VK_TIMEOUT)
-            return result;
-      }
-      if (abs_timeout_ns != UINT64_MAX && os_time_get_nano() >= abs_timeout_ns)
-         return VK_TIMEOUT;
-      usleep(100);
+   /* Any: asleep until one resolves (nvkmd_darwin_wait_any.h): host signals
+    * and submissions on the sync condition, GPU fences on their interrupts
+    * through WaitFence.
+    */
+   struct darwin_any_waits ctx = { .waits = waits, .flags = wait_flags };
+   pthread_mutex_lock(&darwin_sync_lock);
+   const int err = darwin_wait_any_locked(&darwin_any_ops, &ctx, wait_count,
+                                          abs_timeout_ns);
+   pthread_mutex_unlock(&darwin_sync_lock);
+   switch (err) {
+   case 0:
+      return VK_SUCCESS;
+   case ETIMEDOUT:
+      return VK_TIMEOUT;
+   case ENOMEM:
+      return vk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
+   default:
+      return vk_error(device, VK_ERROR_DEVICE_LOST);
    }
 }
 
@@ -1027,12 +1121,21 @@ nvkmd_darwin_import_dma_buf(struct nvkmd_dev *dev,
 }
 
 /* The BoImport an IOSurface's import leads to names the surface, so the kernel keeps it coherent at every process's
- * IOSurfaceLock/Unlock of it. */
+ * IOSurfaceLock/Unlock of it. With a shape, the import asks the surface's layout (method 16) and binds its VA with the
+ * kind a block-linear surface is written under, so an optimal image of that shape over it takes that VA as it is
+ * (nvk_image_plane_bind). The import's handle and the answer stay for the caller. */
 static __thread struct {
    uint32_t id;
    uintptr_t base;
    uint64_t bytes;
+   bool asks;
+   struct TegraGM20BAbiSurfaceLayout ask;
+   uint64_t handle;
+   uint32_t layout;
 } import_surface;
+
+/* TegraGM20BLayout.h TGM_LAYOUT_KIND: NIL's kind for uncompressed colour */
+#define DARWIN_LAYOUT_KIND 0xfe
 
 __attribute__((visibility("default"))) void
 switch_nvk_import_surface(uint32_t surface_id, const void *base, uint64_t bytes)
@@ -1040,6 +1143,63 @@ switch_nvk_import_surface(uint32_t surface_id, const void *base, uint64_t bytes)
    import_surface.id = surface_id;
    import_surface.base = (uintptr_t)base;
    import_surface.bytes = bytes;
+   import_surface.asks = false;
+   import_surface.handle = 0;
+   import_surface.layout = UINT32_MAX;
+}
+
+__attribute__((visibility("default"))) void
+switch_nvk_import_surface_shape(uint32_t width, uint32_t height, uint32_t bpp,
+                                uint32_t bytes_per_row, uint32_t flags)
+{
+   import_surface.asks = true;
+   import_surface.ask = (struct TegraGM20BAbiSurfaceLayout) {
+      .width = width,
+      .height = height,
+      .bpp = bpp,
+      .bytes_per_row = bytes_per_row,
+      .flags = flags,
+   };
+}
+
+__attribute__((visibility("default"))) uint32_t
+switch_nvk_import_surface_layout(uint64_t *handle)
+{
+   *handle = import_surface.handle;
+   return import_surface.layout;
+}
+
+static uint32_t
+darwin_surface_layout(const struct nvkmd_darwin_conn *conn, uint32_t info_flags,
+                      const struct TegraGM20BAbiSurfaceLayout *ask)
+{
+   if (!(info_flags & TegraGM20BInfoSurfaceLayout))
+      return 0;
+   struct TegraGM20BAbiSurfaceLayoutReply reply = { 0 };
+   if (darwin_call(conn, TegraGM20BMethodSurfaceLayout, ask, sizeof(*ask),
+                   &reply, sizeof(reply)) != KERN_SUCCESS)
+      return UINT32_MAX;
+   return reply.layout;
+}
+
+__attribute__((visibility("default"))) uint32_t
+switch_nvk_surface_layout(uint64_t handle, uint32_t width, uint32_t height,
+                          uint32_t bpp, uint32_t bytes_per_row, uint32_t flags)
+{
+   const struct TegraGM20BAbiSurfaceLayout ask = {
+      .handle = handle,
+      .width = width,
+      .height = height,
+      .bpp = bpp,
+      .bytes_per_row = bytes_per_row,
+      .flags = flags,
+   };
+   pthread_mutex_lock(&darwin_shared.lock);
+   const bool open = darwin_shared.refs > 0;
+   const struct nvkmd_darwin_conn conn = darwin_shared.conn;
+   const uint32_t info_flags = darwin_shared.info.flags;
+   pthread_mutex_unlock(&darwin_shared.lock);
+   return open ? darwin_surface_layout(&conn, info_flags, &ask) : UINT32_MAX;
 }
 
 /* Exported, as switch_nvk_import_surface is: the Metal frontend finds both with dlsym. */
@@ -1215,12 +1375,27 @@ nvkmd_darwin_import_host_mem(struct nvkmd_dev *_dev,
    }
    mem->handle = reply.handle;
    mem->host_ptr = host_ptr;
+   mem->surface_id = req.surface_id;
+
+   uint8_t pte_kind = 0;
+   if (req.surface_id) {
+      import_surface.handle = reply.handle;
+      if (import_surface.asks) {
+         struct TegraGM20BAbiSurfaceLayout ask = import_surface.ask;
+         ask.handle = reply.handle;
+         import_surface.layout = darwin_surface_layout(
+            &dev->conn, nvkmd_darwin_pdev(dev->base.pdev)->info.flags, &ask);
+         if (import_surface.layout == TegraGM20BLayoutTiled ||
+             import_surface.layout == TegraGM20BLayoutOtherShape)
+            pte_kind = DARWIN_LAYOUT_KIND;
+      }
+   }
 
    /* The owner's mapping is cacheable: not coherent with the GPU. */
    const enum nvkmd_mem_flags flags =
       NVKMD_MEM_LOCAL | NVKMD_MEM_CAN_MAP | NVKMD_MEM_SHARED;
    VkResult result = darwin_mem_finish_create(dev, log_obj, mem, flags, size_B,
-                                              0, 0, mem_out);
+                                              0, pte_kind, mem_out);
    if (result != VK_SUCCESS) {
       darwin_bo_free(dev, reply.handle);
       FREE(mem);
@@ -1669,6 +1844,68 @@ nvkmd_darwin_exec_ctx_wait(struct nvkmd_ctx *_ctx,
    return darwin_ctx_wait(ctx->channel, log_obj, wait_count, waits);
 }
 
+/* the hint made for the next vkQueueSubmit, and the one that call took */
+static __thread struct darwin_submit_hint submit_hint, submit_taken;
+
+void
+nvkmd_darwin_hint_surfaces(const void *queue)
+{
+   darwin_hint_begin(&submit_hint, queue);
+}
+
+void
+nvkmd_darwin_hint_surface(struct nvkmd_mem *_mem, uint8_t access)
+{
+   const struct nvkmd_darwin_mem *mem = nvkmd_darwin_mem(_mem);
+   if (submit_hint.queue != NULL && mem->host_ptr != NULL)
+      darwin_surfaces_add(&submit_hint.list, mem->handle, access);
+}
+
+void
+nvkmd_darwin_submit_call(const void *queue, bool begin)
+{
+   if (begin)
+      darwin_hint_take(&submit_hint, &submit_taken, queue);
+   else
+      submit_taken.queue = NULL;
+}
+
+void *
+nvkmd_darwin_submit_data(const void *queue)
+{
+   return darwin_hint_copy(&submit_taken, queue);
+}
+
+void
+nvkmd_darwin_submit_data_free(void *data)
+{
+   free(data);
+}
+
+void
+nvkmd_darwin_submit_surfaces(struct nvkmd_ctx *_ctx, const void *data)
+{
+   struct nvkmd_darwin_exec_ctx *ctx = nvkmd_darwin_exec_ctx(_ctx);
+   ctx->surfaces_given = data != NULL;
+   if (ctx->surfaces_given)
+      ctx->surfaces = *(const struct TegraGM20BAbiExecSurfaces *)data;
+}
+
+void
+nvkmd_darwin_submit_surfaces_end(struct nvkmd_ctx *_ctx)
+{
+   nvkmd_darwin_exec_ctx(_ctx)->surfaces_given = false;
+}
+
+static void
+darwin_exec_busy_unsubmitted(uint32_t channel)
+{
+   os_log_fault(OS_LOG_DEFAULT, "nvk darwin: Exec on channel %u found its "
+                "GPFIFO full with nothing submitted on it: abort() for the "
+                "stack", channel);
+   abort();
+}
+
 static VkResult
 nvkmd_darwin_exec_ctx_flush(struct nvkmd_ctx *_ctx,
                             struct vk_object_base *log_obj)
@@ -1684,21 +1921,33 @@ nvkmd_darwin_exec_ctx_flush(struct nvkmd_ctx *_ctx,
    const size_t in_size = offsetof(struct TegraGM20BAbiExec, pushes) +
                           ctx->req.count * sizeof(ctx->req.pushes[0]);
    for (;;) {
+      /* The kernel's next Exec of the channel takes the list, a refused one
+       * included: once more before every retry.
+       */
+      if (ctx->surfaces_given && dev->conn.exec_surfaces) {
+         ctx->surfaces.channel = ctx->channel;
+         darwin_call(&dev->conn, TegraGM20BMethodExecSurfaces, &ctx->surfaces,
+                     darwin_surfaces_bytes(&ctx->surfaces), NULL, 0);
+      }
       struct TegraGM20BAbiExecReply reply = { 0 };
       kern_return_t kr = darwin_call(&dev->conn, TegraGM20BMethodExec,
                                      &ctx->req, in_size, &reply, sizeof(reply));
       if (kr == KERN_SUCCESS) {
          ctx->last_seqno = reply.seqno;
+         ctx->submitted = true;
          break;
       }
       if (kr != kIOReturnBusy)
          return darwin_result(log_obj, kr, "Exec");
 
-      /* GPFIFO full: let the work already queued drain. */
-      if (ctx->last_seqno == 0) {
-         usleep(100);
-         continue;
-      }
+      /* GPFIFO full for 1 s (the kernel's chan_wait_room): asleep in
+       * WaitFence until what this channel submitted completes. A channel with
+       * nothing submitted has room for any one Exec: its 1024-entry GPFIFO
+       * (gpu.c CHAN_GPFIFO_BYTES) takes at most 255 pushes and the kernel's
+       * own entries, under 400.
+       */
+      if (!ctx->submitted)
+         darwin_exec_busy_unsubmitted(ctx->channel);
       VkResult result = darwin_wait_seqno(dev, ctx->channel, ctx->last_seqno,
                                           NVKMD_DARWIN_FOREVER_NS);
       if (result != VK_SUCCESS)

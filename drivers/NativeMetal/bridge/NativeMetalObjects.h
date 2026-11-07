@@ -129,6 +129,9 @@ NmbTexture *nmb_texture_new_on_surface_planes(NmbBuffer *, const struct NmbTextu
                                               const char *matrix);
 NmbTexture *nmb_texture_new_linear(NmbBuffer *, const struct NmbTextureDescriptor *, uint64_t offset,
                                    uint64_t bytes_per_row, uint64_t bytes_per_image);
+/* The device's optimal image of the descriptor bound at offset in the buffer's memory, holding the bytes there: optimal-tiled
+ * texels another driver of the process lays out as the device does (drivers/TegraGM20B/TegraGM20BLayout.h). A view. */
+NmbTexture *nmb_texture_new_tiled_in_place(NmbBuffer *, const struct NmbTextureDescriptor *, uint64_t offset);
 /* whole: a view of every level and slice as format; else levels and slices are {start, count} and kind the view's texture type. */
 NmbTexture *nmb_texture_new_view(NmbTexture *, uint64_t format, uint64_t kind, const uint64_t levels[2],
                                  const uint64_t slices[2], bool whole);

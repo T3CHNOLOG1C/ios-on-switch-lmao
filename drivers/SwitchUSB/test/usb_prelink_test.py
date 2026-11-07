@@ -1,7 +1,7 @@
 """Check the selected kind's prelink report for the host-side USB class kexts.
 
-Every host-side USB class kext an iPad has is prelinked, and on iOS 27 each one's kernel imports stay named: an unnamed
-one is a trampoline that panics when called.
+Every host-side USB class kext an iPad has is prelinked, and on iOS 27 no prelinked kext gains an unnamed kernel import:
+an unnamed one is a trampoline that panics when called.
 """
 
 import json
@@ -43,32 +43,58 @@ BOTH = {
     'com.apple.driver.USBStorageDeviceSpecifics',
     'com.apple.driver.SCSIDeviceSpecifics',
 }
-IOS17 = BOTH | {
-    'com.apple.driver.AppleTopCaseActuatorHIDDriver',
-    'com.apple.filesystems.lifs',
-    'com.apple.filesystems.hfs.kext',
+SERIAL = {
     'com.apple.driver.usb.cdc',
     'com.apple.driver.usb.cdc.acm',
     'com.apple.driver.usb.serial',
     'com.apple.driver.usb.networking',
     'com.apple.iokit.IOSerialFamily',
 }
-IOS27 = BOTH | {
-    'com.apple.filesystems.lifs',
-    'com.apple.driver.usb.AppleUSBHostDeviceSupport',
-    'com.apple.iokit.IOGameControllerFamily',
-}
+IOS17 = (
+    BOTH
+    | SERIAL
+    | {
+        'com.apple.driver.AppleTopCaseActuatorHIDDriver',
+        'com.apple.filesystems.lifs',
+        'com.apple.filesystems.hfs.kext',
+    }
+)
+IOS27 = (
+    BOTH
+    | SERIAL
+    | {
+        'com.apple.filesystems.lifs',
+        'com.apple.driver.usb.AppleUSBHostDeviceSupport',
+        'com.apple.iokit.IOGameControllerFamily',
+    }
+)
 
-# iOS 27 imports still unnamed, (functions, data) per kext: a kext may only go down. Every other kext above, lifs and
-# IOGameControllerFamily among them (both load at every boot), has none.
+# iOS 27 imports still unnamed, (functions, data), for every prelinked kext: a merge may only lower these. Every kext
+# not listed, lifs, IOGameControllerFamily and IOSerialFamily among them, has none.
 UNNAMED_27 = {
+    'com.apple.filesystems.apfs': (98, 4),
+    'com.apple.driver.AppleMobileFileIntegrity': (55, 2),
+    'com.apple.security.sandbox': (39, 3),
+    'com.apple.security.Image4': (6, 0),
+    'com.apple.iokit.IOGPUFamily': (4, 2),
+    'com.apple.iokit.IOSurface': (4, 2),
+    'com.apple.driver.AppleM2ScalerCSCDriver': (3, 1),
+    'com.apple.driver.ApplePMGR': (3, 0),
+    'com.apple.iokit.IOHIDFamily': (3, 1),
+    'com.apple.kec.corecrypto': (3, 0),
+    'com.apple.driver.DiskImages': (2, 0),
+    'com.apple.iokit.CoreAnalyticsFamily': (2, 0),
+    'com.apple.iokit.IOAccessoryManager': (2, 1),
+    'com.apple.iokit.IOReportFamily': (2, 0),
+    'com.apple.iokit.IOUSBHostFamily': (2, 1),
+    'com.apple.security.AppleImage4': (2, 1),
+    'com.apple.driver.AppleARMPlatform': (1, 1),
+    'com.apple.iokit.IOMobileGraphicsFamily': (1, 0),
+    'com.apple.iokit.IOStorageFamily': (1, 1),
+    'com.apple.driver.AppleARMWatchdogTimer': (0, 1),
     'com.apple.driver.usb.AppleUSBCommon': (0, 2),
     'com.apple.driver.usb.AppleUSBXHCI': (0, 1),
-    'com.apple.iokit.IOAccessoryManager': (2, 1),
-    'com.apple.iokit.IOHIDFamily': (3, 1),
-    'com.apple.iokit.IOSCSIArchitectureModelFamily': (1, 1),
-    'com.apple.iokit.IOStorageFamily': (3, 1),
-    'com.apple.iokit.IOUSBHostFamily': (2, 1),
+    'com.apple.iokit.IOSCSIArchitectureModelFamily': (0, 1),
     'com.apple.iokit.IOUSBMassStorageDriver': (0, 1),
 }
 
@@ -97,11 +123,11 @@ class UsbPrelinkTest(unittest.TestCase):
         self.assertEqual(sorted(expected - self.kexts), [])
 
     def test_ios27_imports_stay_named(self) -> None:
-        """No USB kext gains an unnamed kernel import."""
+        """No prelinked kext gains an unnamed kernel import."""
         if not self.ios27:
             self.skipTest('iOS 17 prelinks only when every import binds')
         unnamed = self.report['unresolved_by_component']
-        for kext in sorted(IOS27 | set(UNNAMED_27)):
+        for kext in sorted(self.kexts | set(unnamed)):
             entry = unnamed.get(kext, {'functions': [], 'data': []})
             counts = (len(entry['functions']), len(entry['data']))
             allowed = UNNAMED_27.get(kext, (0, 0))

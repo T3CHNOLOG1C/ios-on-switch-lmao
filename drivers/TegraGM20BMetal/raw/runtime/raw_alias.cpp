@@ -50,6 +50,9 @@ void Device::dropLocked(Lease *lease)
     case Memory::Import:
         release(lease->import);
         break;
+    case Memory::Bl:
+        blFree(lease->span);
+        break;
     }
     delete lease;
 }
@@ -68,6 +71,9 @@ void Device::freeSpan(Span &span, Memory from, Lease *&lease)
             break;
         case Memory::Import:
             break;
+        case Memory::Bl:
+            blFree(span);
+            break;
         }
     }
     span = {};
@@ -79,8 +85,10 @@ bool Device::alias(Texture &t, Alias &a)
     if (!k_.shared() || !t.span.valid())
         return false;
     std::lock_guard<std::mutex> l(lock_);
-    const Chunk &ch = (t.wc ? wcChunks_ : chunks_)[t.span.chunk];
-    describe(ch.bo, kPteKindPitch, leaseSpan(t.lease, t.span, t.wc ? Memory::Wc : Memory::Pool), a);
+    const Memory from = memoryOf(t);
+    const Chunk &ch = (from == Memory::Bl ? blChunks_ : from == Memory::Wc ? wcChunks_ : chunks_)[t.span.chunk];
+    describe(ch.bo, from == Memory::Bl ? uint32_t(TGM_LAYOUT_KIND) : kPteKindPitch, leaseSpan(t.lease, t.span, from),
+             a);
     return true;
 }
 
@@ -91,7 +99,7 @@ bool Device::alias(Buffer &b, Alias &a)
     std::lock_guard<std::mutex> l(lock_);
     if (b.import) {
         b.import->refs++;
-        describe(b.import->bo, kPteKindPitch, new Lease{this, 1, Memory::Import, {}, b.import}, a);
+        describe(b.import->bo, b.import->kind, new Lease{this, 1, Memory::Import, {}, b.import}, a);
         return true;
     }
     if (!b.span.valid())
@@ -109,7 +117,7 @@ bool Device::aliasSurface(uint64_t surfaceId, void *base, uint64_t bytes, const 
     Import *i = importSurface(surfaceId, base, bytes, surface);
     if (!i)
         return false;
-    describe(i->bo, kPteKindPitch, new Lease{this, 1, Memory::Import, {}, i}, a);
+    describe(i->bo, i->kind, new Lease{this, 1, Memory::Import, {}, i}, a);
     return true;
 }
 

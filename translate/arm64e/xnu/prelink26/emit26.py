@@ -25,8 +25,7 @@ from native_prelink import macho, exports, backed_offset
 
 CUTS = {("com.apple.iokit.IOUSBHostFamily", "com.apple.driver.AppleSMC"): "_switch_prelink_cut_null",
         ("com.apple.iokit.IOUSBHostFamily", "com.apple.driver.usb.AppleUSBHostPlatformProperties"): None,
-        ("com.apple.iokit.IOAccessoryManager", "com.apple.driver.AppleOnboardSerial"): "_switch_prelink_cut_null",
-        ("com.apple.iokit.IOAccessoryManager", "com.apple.iokit.IOSerialFamily"): None}
+        ("com.apple.iokit.IOAccessoryManager", "com.apple.driver.AppleOnboardSerial"): "_switch_prelink_cut_null"}
 DEFERRED_PERSONALITIES = {"com.apple.iokit.IOUSBHostFamily": ("AppleUSBHostResources", "AppleUSBHostResourcesTypeC"),
                           "com.apple.iokit.IOUSBMassStorageDriver": ("IOUSBMassStorageResource",),
                           "com.apple.driver.usb.AppleUSBHostPacketFilter": ("AppleUSBHostPacketFilter",)}
@@ -241,6 +240,9 @@ def main():
     br = collections.Counter()
     islands.sort(); isl_starts = [x[0] for x in islands]
     text = blobs["__PLK_TEXT_EXEC"]
+    # The stub area follows the kexts' text in the kernelcache's frame, where Apple's kernel text begins: a branch a64x
+    # aimed at one of its stubs is the kext's own, not a kernel call to rebind.
+    stubs_end = stub_va + len(stubs)
     for b in sorted(sel):
         for s in segs_of[b]:
             for sec in s["sections"]:
@@ -253,6 +255,7 @@ def main():
                     j = bisect.bisect_right(isl_starts, pc) - 1
                     if j >= 0 and pc < islands[j][1]: br["in data island, left"] += 1; continue
                     tgt = pc + (sx(w & 0x3FFFFFF, 26) << 2)
+                    if stub_va <= tgt < stubs_end: br["a64x stub"] += 1; continue
                     if not any(lo <= tgt < hi for lo, hi in kernel_text): continue
                     n = names.get(tgt)
                     if n and n in nsym and in_our_text(nsym[n]):

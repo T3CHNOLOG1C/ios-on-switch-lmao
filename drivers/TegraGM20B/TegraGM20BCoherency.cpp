@@ -39,9 +39,6 @@
 #endif
 #include "../TegraDisplayFlip/TegraScanoutCopy.h"
 
-#define TGM_COH_WRITERS \
-	4 /* the raw path's channel and m2v's, in each of two processes, before one has to wait for all */
-
 struct tgm_coh {
 	tgm_coh *next;    // first-page chain
 	tgm_coh *idNext;  // surface-ID chain, while surfaceId != 0
@@ -62,6 +59,11 @@ struct tgm_coh {
 	uint64_t writers
 		[TGM_COH_WRITERS];  // atomic: marking submissions, channel uid << 32 | seqno (0: free slot)
 	int writersLost;  // atomic: one found no slot: a lock waits for every channel's submitted work
+	// atomic: the writers whose submission listed the surface as written (ExecSurfaces), what another channel's listed
+	// Exec waits for on the GPU; a mark without a list names every import, written or not, so it is a writer above only
+	uint64_t listed[TGM_COH_WRITERS];
+	uint32_t
+		listedLost;  // atomic: listed writers that found no slot since tgm_coherency_lost_seen cleared it
 	uint32_t traced;  // atomic: CPU lock and unlock lines logged for it (debug kernels)
 };
 
@@ -360,34 +362,77 @@ extern "C" void tgm_coherency_put(struct tgm_coh *c)
 	drop(&c, 1);
 }
 
-// One submission of channel `uid` that may write `c`: a later one of the same channel takes its slot.
-static void noteWriter(tgm_coh *c, uint32_t uid, uint32_t seqno)
+// One submission of channel `uid` that may write the surface, into `slots`: a later one of the same channel takes its
+// slot. False: no slot left for it.
+static bool noteWriter(uint64_t *slots, uint32_t uid, uint32_t seqno)
 {
 	const uint64_t mine = uint64_t(uid) << 32 | seqno;
 	for (uint32_t i = 0; i < TGM_COH_WRITERS; i++) {
-		uint64_t seen = __atomic_load_n(&c->writers[i], __ATOMIC_ACQUIRE);
+		uint64_t seen = __atomic_load_n(&slots[i], __ATOMIC_ACQUIRE);
 		while (seen && uint32_t(seen >> 32) == uid) {
 			if (int32_t(seqno - uint32_t(seen)) <= 0 ||
-			    __atomic_compare_exchange_n(&c->writers[i], &seen, mine, false,
+			    __atomic_compare_exchange_n(&slots[i], &seen, mine, false,
 							__ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
-				return;
+				return true;
 		}
 	}
 	for (uint32_t i = 0; i < TGM_COH_WRITERS; i++) {
 		uint64_t free = 0;
-		if (__atomic_compare_exchange_n(&c->writers[i], &free, mine, false,
-						__ATOMIC_ACQ_REL, __ATOMIC_RELAXED))
-			return;
+		if (__atomic_compare_exchange_n(&slots[i], &free, mine, false, __ATOMIC_ACQ_REL,
+						__ATOMIC_RELAXED))
+			return true;
 	}
-	__atomic_store_n(&c->writersLost, 1, __ATOMIC_RELEASE);
+	// Slots are freed only by a CPU lock, and a surface the CPU never locks keeps every channel that ever wrote it.
+	for (uint32_t i = 0; i < TGM_COH_WRITERS; i++) {
+		uint64_t seen = __atomic_load_n(&slots[i], __ATOMIC_ACQUIRE);
+		if (seen && tgm_writer_done(uint32_t(seen >> 32), uint32_t(seen)) &&
+		    __atomic_compare_exchange_n(&slots[i], &seen, mine, false, __ATOMIC_ACQ_REL,
+						__ATOMIC_RELAXED))
+			return true;
+	}
+	return false;
+}
+
+static void wrote(tgm_coh *c, uint32_t uid, uint32_t seqno)
+{
+	if (!noteWriter(c->writers, uid, seqno))
+		__atomic_store_n(&c->writersLost, 1, __ATOMIC_RELEASE);
+	__atomic_store_n(&c->gpuDirty, 1, __ATOMIC_RELEASE);
 }
 
 extern "C" void tgm_coherency_wrote(struct tgm_coh *c, int always, uint32_t uid, uint32_t seqno)
 {
-	if (c && (always || __atomic_load_n(&c->gpuWrites, __ATOMIC_RELAXED))) {
-		noteWriter(c, uid, seqno);
-		__atomic_store_n(&c->gpuDirty, 1, __ATOMIC_RELEASE);
+	if (c && (always || __atomic_load_n(&c->gpuWrites, __ATOMIC_RELAXED)))
+		wrote(c, uid, seqno);
+}
+
+extern "C" void tgm_coherency_wrote_listed(struct tgm_coh *c, uint32_t uid, uint32_t seqno)
+{
+	if (!c)
+		return;
+	wrote(c, uid, seqno);
+	if (!noteWriter(c->listed, uid, seqno))
+		__atomic_add_fetch(&c->listedLost, 1, __ATOMIC_ACQ_REL);
+}
+
+extern "C" uint32_t tgm_coherency_writers(const struct tgm_coh *c, uint64_t out[TGM_COH_WRITERS],
+					  uint32_t *lost, uint64_t *pa)
+{
+	uint32_t n = 0;
+	for (uint32_t i = 0; i < TGM_COH_WRITERS; i++) {
+		const uint64_t w = __atomic_load_n(&c->listed[i], __ATOMIC_ACQUIRE);
+		if (w)
+			out[n++] = w;
 	}
+	*lost = __atomic_load_n(&c->listedLost, __ATOMIC_ACQUIRE);
+	*pa = c->pa;
+	return n;
+}
+
+extern "C" void tgm_coherency_lost_seen(struct tgm_coh *c, uint32_t lost)
+{
+	__atomic_compare_exchange_n(&c->listedLost, &lost, 0u, false, __ATOMIC_ACQ_REL,
+				    __ATOMIC_RELAXED);
 }
 
 // Whether `c` has a writer still running; with `wait`, sleeps until none has, and frees the completed slots.
@@ -557,6 +602,18 @@ extern "C" struct tgm_coh *tgm_coh_find_tiled_pa(uint64_t pa, uint64_t *offset)
 		found->refs++;
 	IOLockUnlock(gRegistryLock);
 	return found;
+}
+
+extern "C" struct tgm_coh *tgm_coh_find_pa(uint64_t pa)
+{
+	if (!gRegistryLock)
+		return nullptr;
+	IOLockLock(gRegistryLock);
+	tgm_coh *c = *pageSlot(pa & ~0xfffull);
+	if (c)
+		c->refs++;
+	IOLockUnlock(gRegistryLock);
+	return c;
 }
 
 extern "C" void tgm_coh_hold(struct tgm_coh *c)

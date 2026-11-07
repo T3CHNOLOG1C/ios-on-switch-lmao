@@ -66,6 +66,7 @@
 #include <unistd.h>
 #include "NativeBridgeMetalFrontend.h"
 #include "RawMetal.h"
+#include "SwitchRefusal.h"
 #include "bridge/NativeMetalObjects.h"
 
 // The build's stack key (build-tegra-gm20b-metal.py); 0 takes a pack of any build (never shipped so).
@@ -581,9 +582,19 @@ void startRates()
 }
 #endif
 
+// A shared event for another process (a handle to send, or one received): no kernel-backed event exists for one yet, so
+// the log says who asks before anything is built for it.
+static void crossProcessEvent(const char *cls, const char *selector)
+{
+    if (!strncmp(selector, "newSharedEventHandle", strlen("newSharedEventHandle")) ||
+        !strcmp(selector, "newSharedEventWithHandle:"))
+        switch_refusal("frontend", "sharedevent.handle", "-[%s %s]: no cross-process shared events", cls, selector);
+}
+
 // A Metal selector the frontend does not implement (the frontend's own report, made before it raises).
 void missing(const char *cls, const char *selector)
 {
+    crossProcessEvent(cls, selector);
     os_log_error(logger(), "TegraGM20BMetal: unimplemented -[%{public}s %{public}s]", cls, selector);
 }
 
@@ -595,6 +606,7 @@ void missing(const char *cls, const char *selector)
 // is the frontend's, once per selector (r14-maps: here it ran per call, Maps' setDepthClipMode: lag).
 void answeredZero(const char *cls, const char *selector)
 {
+    crossProcessEvent(cls, selector);
     os_log_error(logger(), "TegraGM20BMetal: unimplemented -[%{public}s %{public}s] answered zero", cls, selector);
 }
 

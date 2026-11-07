@@ -24,6 +24,7 @@ struct tgm_info {
 	uint16_t chipset;
 	uint8_t gpc_count;
 	uint16_t tpc_count;
+	uint32_t comptag_lines; /* 0: no compression (TegraGM20BComp.h) */
 };
 
 /* Bring the GPU up to `stage` (1 = M1 power/ring/GPCPLL, 2 = + ACR/PMU/FECS/GPCCS, 3 = + channel/CE/fence
@@ -33,6 +34,21 @@ int tgm_bringup(int stage, char *line, unsigned int len);
  * reached; each step is one tgm_journal() line, and a step that cannot be done panics with one line. */
 void tgm_sleep(void);
 void tgm_wake(void);
+/* Rail-gating (TegraGM20BRail.h), thread context. down: the GPU off with gpu.lock released, 0 or -EBUSY (no M3); up:
+ * back if it is down (a gpu.lock or gate caller wakes it the same way, under the lock it owns); railed: whether it is
+ * down. sc7_hold/release: system sleep with the GPU down holds gpu.lock across it on SwitchSuspend's thread (1), or
+ * takes tgm_sleep's path (0). idle: gpu.c's idle clock reached (its work item); idle_now: at the idle clock, or none. */
+int tgm_rail_down(void);
+void tgm_rail_up(void);
+int tgm_railed(void);
+int tgm_rail_sc7_hold(void);
+void tgm_rail_sc7_release(void);
+void tgm_rail_idle(void);
+int tgm_idle_now(void);
+/* TegraGM20B.cpp, around every rail-up, under gpu.lock (never block): one starts (SwitchThermal holds its CPU raise), one
+ * is done (`demand`: work woke the GPU, not the display). */
+void tgm_rail_moving(void);
+void tgm_rail_moved(int demand);
 /* One power-journal line (TegraGM20B.cpp: drivers/SwitchSuspend switch_power_journal). Thread context. */
 void tgm_journal(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 int tgm_stage(void);
@@ -50,7 +66,8 @@ int tgm_waiter_idle(uint32_t waiter, uint32_t seq, uint64_t deadline_ns);
 void tgm_waiter_unwoken(uint32_t waiter, uint32_t seq, uint32_t seqno);
 
 /* GPU memory pool (contiguous, write-combined in the kernel, below 4 GiB) */
-void *tgm_pool_alloc(uint64_t bytes, uint64_t *pa);
+/* align: at least the VM page (0 for just that) */
+void *tgm_pool_alloc(uint64_t bytes, uint64_t align, uint64_t *pa);
 void tgm_pool_free(void *va, uint64_t bytes, uint64_t pa);
 
 /* Address spaces: one per user-client connection, which claims it (tgm_vm_claim): only channels made for that owner
@@ -63,15 +80,24 @@ void tgm_vm_del(struct tgm_vm **pvm);
 int tgm_mem_new(struct tgm_vm *vm, const uint64_t *pas, uint32_t npages, struct tgm_mem **pmem);
 int tgm_mem_new_waited(struct tgm_vm *vm, const uint64_t *pas, uint32_t npages,
 		       struct tgm_mem **pmem, uint64_t *lock_wait_ns);
+/* The same for pages no other memory object will ever name (a BO's own): such memory may take compressible kinds. */
+int tgm_mem_new_exclusive(struct tgm_vm *vm, const uint64_t *pas, uint32_t npages,
+			  struct tgm_mem **pmem);
 void tgm_mem_del(struct tgm_mem **pmem);
 /* User range [TGM_USER_VA_START, TGM_KERNEL_VA): raw binds. read_only: the GPU may only read the range (a write is an
  * MMU fault). tgm_vm_map and tgm_vm_unmap invalidate the L2 and the TLB before they return; tgm_vm_map_ordered (a
- * claimed space's) leaves both to the next submission of each of its channels (TegraGM20BTlb.h). */
+ * claimed space's) leaves both to the next submission of each of its channels (TegraGM20BTlb.h). A compressible kind
+ * needs exclusive memory and whole 128 KiB pages (-EINVAL otherwise, -ENOSPC once the memory could get no comptags);
+ * *page_shift is the GMMU page the map used, which its unmap must name. */
 int tgm_vm_map(struct tgm_vm *vm, uint64_t va, uint64_t range, struct tgm_mem *mem, uint64_t offset,
 	       uint8_t kind, int read_only);
 int tgm_vm_map_ordered(struct tgm_vm *vm, uint64_t va, uint64_t range, struct tgm_mem *mem,
-		       uint64_t offset, uint8_t kind, int read_only);
+		       uint64_t offset, uint8_t kind, int read_only, uint8_t *page_shift);
 int tgm_vm_unmap(struct tgm_vm *vm, uint64_t va, uint64_t range);
+int tgm_vm_unmap_pages(struct tgm_vm *vm, uint64_t va, uint64_t range, uint8_t page_shift);
+/* A zero-bandwidth-clear entry (ds, l2 as TegraGM20BAbiZbc has them): its table index, or -EINVAL (format), -ENOSPC
+ * (table full), -ENODEV (no compression). */
+int tgm_zbc_add(int depth, uint32_t format, const uint32_t ds[4], const uint32_t l2[4]);
 /* Kernel range: map `mem` somewhere at or above TGM_KERNEL_VA and return the address. */
 int tgm_vm_kmap(struct tgm_vm *vm, struct tgm_mem *mem, uint64_t bytes, uint64_t *va);
 
@@ -145,6 +171,9 @@ struct tgm_prof {
 
 uint32_t tgm_chan_submitted(struct tgm_chan *chan);
 uint32_t tgm_chan_completed(struct tgm_chan *chan);
+/* `fenced(arg)` from the interrupt pass whenever the channel's fence may have moved, and once when it is killed (its
+ * fence then released): under nvkm's event lock, so it must not block (a thread call does the work). */
+void tgm_chan_on_fence(struct tgm_chan *chan, void (*fenced)(void *arg), void *arg);
 /* The group a channel belongs to (its connection's task): tgm_chan_order relates the channels of one group. */
 void tgm_chan_set_group(struct tgm_chan *chan, const void *group);
 /* GPU-side order between the channels of chan's group (TegraGM20BABI.h method 14), no CPU wait: semaphore acquires the
@@ -229,6 +258,20 @@ void tgm_coherency_put(struct tgm_coh *c);
 /* always: mark it even if the GPU only samples it (TegraGM20BPushImportsWritten). uid, seqno: the submission (channel
  * tgm_chan_uid, its fence seqno) that may have written it, which a CPU lock waits for. */
 void tgm_coherency_wrote(struct tgm_coh *c, int always, uint32_t uid, uint32_t seqno);
+/* The submissions an entry keeps as its writers: the raw path's channel and m2v's, in each of two processes. A later one
+ * of the same channel takes its slot, and so does any once its writer completed; past that the entry loses track. */
+#define TGM_COH_WRITERS 4
+/* A submission whose ExecSurfaces (method 17) listed the surface as written: wrote with `always`, and a listed writer too,
+ * which another channel's listed Exec waits for on the GPU. */
+void tgm_coherency_wrote_listed(struct tgm_coh *c, uint32_t uid, uint32_t seqno);
+/* The listed writers (uid << 32 | seqno) `c` names, done or not; *lost: nonzero when listed writers found no slot since
+ * tgm_coherency_lost_seen(c, *lost) last cleared it (some submissions that may write it are not among them); *pa: the
+ * surface's first page. */
+uint32_t tgm_coherency_writers(const struct tgm_coh *c, uint64_t out[TGM_COH_WRITERS],
+			       uint32_t *lost, uint64_t *pa);
+/* Every channel that imports the surface completed what it had submitted: the count `lost` read goes, unless more were
+ * lost since. */
+void tgm_coherency_lost_seen(struct tgm_coh *c, uint32_t lost);
 /* Also the locks that waited for GPU writes and the AvoidSync locks refused (count each). */
 void tgm_coherency_take_stats(uint64_t out[6]);
 /* XNU's iokit_user_client_trap, after an IOSurfaceRootUserClient trap ran: index 2 lock, 3 unlock (IOConnectTrap3 p1 the
@@ -291,6 +334,16 @@ void tgm_relayout_by_cpu(const struct tgm_relayout_pages *surface,
 /* The GPU address in `vm` (one that maps every connection's fence page, as every tgm_vm_new space does) of channel uid's
  * fence seqno; -ENOENT when it is gone or killed (its work is complete or abandoned). */
 int tgm_writer_fence_va(struct tgm_vm *vm, uint32_t uid, uint64_t *va);
+/* Method 17's acquires (TegraGM20BFences.h): chan's next submission waits on the GPU for each writer (uid << 32 | seqno) of
+ * another live channel that has not completed it, queued as tgm_chan_order's; follow_importers, for the last submission of
+ * every other channel whose address space imports the surface whose first page is `pa` and has work pending (*pending:
+ * how many). 0, or tgm_chan_order's -ENODEV (no view of the fence pages) or -ENOSPC (TGM_ORDER_MAX channels queued): the
+ * rest go unqueued. */
+int tgm_chan_follow(struct tgm_chan *chan, const uint64_t *writers, uint32_t n);
+int tgm_chan_follow_importers(struct tgm_chan *chan, uint64_t pa, uint32_t *pending);
+/* A GPU client made (add 1) or removed (add -1) a bind of the whole surface holding `c` with TEGRA_SCANOUT_TILED_KIND:
+ * the surface is tiled while any such bind lives, whatever other binds of it say (tegra_gm20b_surface_tiled). */
+void tgm_coherency_tiled_bind(struct tgm_coh *c, int add);
 
 /* The stats (every periodic tegra-gm20b line, the submissions' GPU stamps, the push scan and profile): debug kernels
  * only; a release kernel has none of their code or strings. */

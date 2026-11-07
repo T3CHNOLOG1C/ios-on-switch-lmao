@@ -1,11 +1,20 @@
 # drivers/TegraGM20B on the host:
+#   gm20b_comp_test          TegraGM20BComp.h against nvgpu's gm20b: the compbit backing store's size, lines and base for
+#                            every plausible CBC_PARAM, which page lists and binds may compress, a compressed bind's PTEs
 #   gm20b_coherency_test     TegraGM20BCoherency.cpp: which IOSurface lock/unlock traps clean or invalidate an import,
 #                            across imports of one surface and their release, and traps racing a release; each surface's
 #                            layout decision (TegraGM20BTiled.cpp) and its contents tiled in place; CPU locks of a
 #                            block-linear surface (TegraGM20BViews.cpp): rows in a scratch at the task's own address
 #                            while the pages keep texels, shared readers, nested locks, writes put back, dead tasks
+#   gm20b_fences_test        TegraGM20BExecSurfaces.cpp and TegraGM20BFences.h with the registry's writer records over a
+#                            model of gpu.c's channels: which listed surfaces' writers an Exec waits for on the GPU (another
+#                            channel's, unfinished, not killed), which imports it counts as written, and no list or the
+#                            all-imports flag as before
 #   gm20b_relayout_test      TegraGM20BRelayout.h's copy-engine pushes over a model of MAXWELL_DMA_COPY_A: every move
 #                            gives back exactly TegraGM20BLayout.h's bytes, for every texel size and NIL's shapes
+#   gm20b_copy_test          TegraGM20BCopyPush.h (TegraVIC's plane bounce) over the same model: rows at the new pitch
+#                            from pitch, block-linear and two-plane sources; writer and syncpoint waits first, the
+#                            syncpoint increment after the copy is in DRAM
 #   gm20b_wiring_test        TegraGM20BSharedWiring.cpp: one wiring per task and range, shared while the task still
 #                            maps it there, a racing publish, the last import's release
 #   gm20b_tlb_test           TegraGM20BTlb.h over a GMMU model (PTEs, the L2's copies, a TLB per space, running work
@@ -27,6 +36,9 @@
 #   gm20b_source_test        how the user client and gpu.c use both, the pool's zeroing (nvkm shim, scrubber), the
 #                            fence-only present, and which paths go through the sleep gate in what order (none of which a
 #                            host model runs); NVK's stencil copy temp on the bind alignment
+#   gm20b_rail_test          TegraGM20BRail.h: the rail goes down with the display off and the GPU idle, once a demand's
+#                            hold has run out, up on its thread call only for the display, never while system sleep holds it;
+#                            gpu.c's lock protocol on threads; GPU time never backwards across rail cycles
 #   gm20b_clkgate_test       TegraGM20BClkgate.h against nvgpu's gm20b_gating_reglist.c (nvidia/, verbatim): the SLCG and
 #                            BLCG writes are nvgpu's prod lists in its load order; ELCG's gate control; where gpu.c
 #                            applies them
@@ -36,6 +48,14 @@ load("//bazel/lint:defs.bzl", "lint_files")
 load("//bazel/testing:defs.bzl", "host_library", "host_shims", "host_test")
 
 lint_files()
+
+host_test(
+    name = "gm20b_comp_test",
+    srcs = [
+        "gm20b_comp_test.cpp",
+        "//drivers/TegraGM20B:TegraGM20BComp.h",
+    ],
+)
 
 host_test(
     name = "gm20b_pool_policy_test",
@@ -94,6 +114,16 @@ host_test(
 )
 
 host_test(
+    name = "gm20b_rail_test",
+    srcs = [
+        "gm20b_rail_test.cpp",
+        "//drivers/TegraGM20B:TegraGM20BRail.h",
+        "//drivers/TegraGM20B:TegraGM20BSleepGate.h",
+    ],
+    cxx_std = "c++17",
+)
+
+host_test(
     name = "gm20b_sleep_test",
     srcs = [
         "gm20b_sleep_test.cpp",
@@ -111,6 +141,9 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/runtime/raw_kernel.cpp",
         "//third_party/mesa/src/nouveau/vulkan:nvkmd/darwin/nvkmd_darwin.c",
         "//third_party/mesa/src/nouveau/vulkan:nvk_image.c",
+        "//third_party/mesa/src/nouveau/vulkan:nvk_queue.c",
+        "//third_party/mesa/src/vulkan/runtime:vk_queue.c",
+        "//drivers/TegraGM20B:TegraGM20BExecSurfaces.cpp",
         "//drivers/TegraGM20B:TegraGM20BGpu.h",
         "//drivers/TegraGM20B:TegraGM20BUserClient.cpp",
         "//drivers/TegraGM20B:gpu.c",
@@ -160,14 +193,55 @@ host_test(
     ],
 )
 
+host_library(
+    name = "exec_surfaces",
+    srcs = ["//drivers/TegraGM20B:TegraGM20BExecSurfaces.cpp"],
+    hdrs = [
+        "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BExecSurfaces.h",
+        "//drivers/TegraGM20B:TegraGM20BFences.h",
+        "//drivers/TegraGM20B:TegraGM20BGpu.h",
+    ],
+    deps = [":coherency_kernel"],
+)
+
+host_test(
+    name = "gm20b_fences_test",
+    srcs = [
+        "gm20b_fences_test.cpp",
+        "gm20b_tiled_stubs.cpp",
+    ],
+    deps = [
+        ":coherency",
+        ":coherency_kernel",
+        ":exec_surfaces",
+    ],
+)
+
 host_test(
     name = "gm20b_relayout_test",
     size = "medium",
     srcs = [
+        "gm20b_ce_model.h",
         "gm20b_relayout_test.cpp",
         "//drivers/TegraGM20B:TegraGM20BGpu.h",
         "//drivers/TegraGM20B:TegraGM20BLayout.h",
         "//drivers/TegraGM20B:TegraGM20BRelayout.h",
+    ],
+    cxx_std = "c++17",
+)
+
+host_test(
+    name = "gm20b_copy_test",
+    srcs = [
+        "gm20b_ce_model.h",
+        "gm20b_copy_test.cpp",
+        "//drivers/TegraGM20B:TegraGM20BCopy.h",
+        "//drivers/TegraGM20B:TegraGM20BCopyPush.h",
+        "//drivers/TegraGM20B:TegraGM20BGpu.h",
+        "//drivers/TegraGM20B:TegraGM20BLayout.h",
+        "//drivers/TegraGM20B:TegraGM20BRelayout.h",
+        "//drivers/TegraGM20B:TegraGM20BSyncpt.h",
     ],
     cxx_std = "c++17",
 )

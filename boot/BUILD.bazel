@@ -6,7 +6,7 @@
 # Boot-args (COMMAND_LINE) live in tools/package/boot_args.py; the ADT edits, USB_HOST and DISPLAY_GAMUT in
 # tools/package/adt_edit.py; the steps and what each reads in boot/defs.bzl.
 load("@bazel_skylib//lib:selects.bzl", "selects")
-load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
+load("@bazel_skylib//rules:common_settings.bzl", "bool_flag", "bool_setting")
 load("@bazel_skylib//rules:write_file.bzl", "write_file")
 load("@rules_python//python:py_binary.bzl", "py_binary")
 load("@rules_python//python:py_test.bzl", "py_test")
@@ -25,9 +25,17 @@ exports_files(glob(
 ))
 
 # Four cores: adt_edit.py --smp's four-A57 ADT.
+SMP = True
+
 bool_flag(
     name = "smp",
-    build_setting_default = True,
+    build_setting_default = SMP,
+)
+
+# What the release is built with (its CI sets no --//boot:smp), and so what a package composed from it has.
+bool_setting(
+    name = "release_smp",
+    build_setting_default = SMP,
 )
 
 # The GPU bundle's trust cache module, appended to the kernel's static trust cache so the plugin and NVK may run.
@@ -92,7 +100,8 @@ write_file(
     newline = "unix",
 )
 
-# --//install:prebuilt=release: the GitHub release's kernel (prelinked here), overlay Mach-Os, GPU trust cache and lz4.
+# --//install:prebuilt=release: the GitHub release's kernel (prelinked here), overlay Mach-Os, GPU trust cache, lz4 and
+# loader, with the release's --//boot:smp.
 boot_package(
     name = "package",
     adt = ":adt",
@@ -171,12 +180,34 @@ boot_package(
     overlay_files = ["//overlay:overlay_sources"],
     overlay_manifest = "//overlay:manifest.json",
     portrait_header = "//drivers/NativeMobileDisplay:SwitchPortrait.h",
-    prebuilt = select({
-        "//install:from_release": True,
-        "//conditions:default": False,
+    prebuilt_loader = select({
+        "//install:from_release": "@switch_release//:loader",
+        "//conditions:default": None,
+    }),
+    prebuilt_loader_constants = select({
+        "//install:from_release": "@switch_release//:loader_constants",
+        "//conditions:default": None,
     }),
     script_template = ":u-boot-script.txt",
+    smp = select({
+        "//install:from_release": ":release_smp",
+        "//conditions:default": ":smp",
+    }),
     static_trust = "//ipsw:static_system_trust",
+)
+
+# The loader and the window constants it was compiled for (constants.json: layout.h's and runs.h's), which the release
+# ships (//install:release_inputs) though they were made from the IPSW's kernelcache: release/ipsw_free.bzl DECLASSIFIED.
+filegroup(
+    name = "loader",
+    srcs = [":package"],
+    output_group = "loader",
+)
+
+filegroup(
+    name = "loader_constants",
+    srcs = [":package"],
+    output_group = "constants",
 )
 
 # The staged kernel window decodes (lz4 -d, block by block from the table the loader compiles in) to exactly the image

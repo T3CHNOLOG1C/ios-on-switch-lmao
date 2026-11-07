@@ -3,7 +3,8 @@
 // views of the raw path's memory are made over the raw path's own BOs, and every IOSurface is imported once, by whichever driver
 // needs it first. Over raw/pack's mock GPU, whose copy engine runs the raw path's copies through the mock VM (RAWCAP_LOG,
 // NVDEC_WRITETHROUGH); m2v's own blits are compute dispatches the mock does not run (nvk_alias.cpp checks NVK's addressing):
-//  - raw buffers and textures (pool and write-combined) and a raw surface texture, used by command buffers that replay on m2v;
+//  - raw buffers and textures (pool, block-linear when private, and write-combined) and a raw surface texture, used by command
+//    buffers that replay on m2v;
 //  - a surface m2v imports first (newBufferWithIOSurface), which a raw texture over it reads through the same import;
 //  - a surface the raw path imports first, which m2v's view and replay use.
 // Every view is made with no BoImport and no VmBind of imported pages, and each surface is imported once.
@@ -129,15 +130,16 @@ id<MTLTexture> texture(id<MTLDevice> dev, unsigned w, unsigned h, MTLStorageMode
     return [dev newTextureWithDescriptor:d];
 }
 
-// The raw path's texture `t` replayed on m2v: a copy into an m2v buffer, which the raw path cannot name
-void replayOnM2v(id<MTLDevice> dev, id<MTLDevice> m2v, id<MTLTexture> t, const char *what)
+// The raw path's texture `t` replayed on m2v: a copy into a buffer behind a fill, which sends the command buffer to m2v
+void replayOnM2v(id<MTLDevice> dev, id<MTLTexture> t, const char *what)
 {
-    id<MTLBuffer> out = [m2v newBufferWithLength:t.width * t.height * 4 options:MTLResourceStorageModeShared];
+    id<MTLBuffer> out = [dev newBufferWithLength:t.width * t.height * 4 options:MTLResourceStorageModeShared];
     rate(raw_metal_rates, " m2v=");
     rate(native_bridge_metal_rates, " stx=");
     const Calls before = Calls::now();
     id<MTLCommandBuffer> cb = [[dev newCommandQueue] commandBuffer];
     id<MTLBlitCommandEncoder> b = [cb blitCommandEncoder];
+    [b fillBuffer:out range:NSMakeRange(0, out.length) value:0];
     [b copyFromTexture:t
                      sourceSlice:0
                      sourceLevel:0
@@ -171,12 +173,15 @@ void rawBuffers(id<MTLDevice> dev)
     }
 }
 
-void rawTextures(id<MTLDevice> dev, id<MTLDevice> m2v)
+void rawTextures(id<MTLDevice> dev)
 {
     for (MTLStorageMode mode : {MTLStorageModePrivate, MTLStorageModeShared}) {
         id<MTLTexture> t = texture(dev, 96, 40, mode);
         expect(raw_metal_texture_kept(t), "the raw path keeps the texture");
-        replayOnM2v(dev, m2v, t, mode == MTLStorageModePrivate ? "pool texture" : "write-combined texture");
+        // a private one is block-linear (no rows the CPU could take), its m2v view NVK's optimal image in place
+        expect((raw_metal_texture_image(t, nullptr) == nullptr) == (mode == MTLStorageModePrivate),
+               mode == MTLStorageModePrivate ? "pool texture: block-linear" : "write-combined texture: rows");
+        replayOnM2v(dev, t, mode == MTLStorageModePrivate ? "block-linear pool texture" : "write-combined texture");
     }
 }
 
@@ -232,7 +237,7 @@ void surfaceRawFirst(id<MTLDevice> dev, id<MTLDevice> m2v)
     const Calls first = Calls::now();
     id<MTLTexture> raw = [dev newTextureWithDescriptor:d iosurface:s plane:0];
     expect(raw_metal_texture_kept(raw), "raw-first surface: the raw path keeps its texture over it");
-    replayOnM2v(dev, m2v, raw, "raw-first surface, replayed");
+    replayOnM2v(dev, raw, "raw-first surface, replayed");
     const Calls before = Calls::now();
     id<MTLBuffer> view = [(id<AliasSurfaceBuffer>)m2v newBufferWithIOSurface:s];
     expect(view != nil, "raw-first surface: m2v's buffer over it");
@@ -265,7 +270,7 @@ int main(int argc, char **argv)
             return 1;
         }
         rawBuffers(dev);
-        rawTextures(dev, m2v);
+        rawTextures(dev);
         surfaceM2vFirst(dev, m2v);
         surfaceRawFirst(dev, m2v);
     }

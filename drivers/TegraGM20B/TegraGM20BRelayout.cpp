@@ -36,13 +36,13 @@ struct Relayout {
 bool openSpace()
 {
 	Relayout &r = gRelayout;
-	r.pushCpu = static_cast<uint32_t *>(tgm_pool_alloc(kPage, &r.pushPa));
-	r.fenceCpu = tgm_pool_alloc(kPage, &r.fencePa);
+	r.pushCpu = static_cast<uint32_t *>(tgm_pool_alloc(kPage, 0, &r.pushPa));
+	r.fenceCpu = tgm_pool_alloc(kPage, 0, &r.fencePa);
 	if (!r.pushCpu || !r.fenceCpu || tgm_vm_new(&r.vm))
 		return false;
 	tgm_vm_claim(r.vm, &gRelayout);
 	return !tgm_mem_new(r.vm, &r.pushPa, 1, &r.push) &&
-	       !tgm_vm_map_ordered(r.vm, kPushVa, kPage, r.push, 0, 0, 1) &&
+	       !tgm_vm_map_ordered(r.vm, kPushVa, kPage, r.push, 0, 0, 1, nullptr) &&
 	       !tgm_mem_new(r.vm, &r.fencePa, 1, &r.fence) &&
 	       !tgm_vm_kmap(r.vm, r.fence, kPage, &r.fenceGpu);
 }
@@ -87,11 +87,12 @@ int move(const tgm_relayout_pages &surface, const tgm_relayout_pages &rows, cons
 		ret = tgm_mem_new(r.vm, rows.pas, rows.npages, &rowsMem);
 	if (!ret)
 		ret = tgm_vm_map_ordered(r.vm, kSurfaceVa, surfaceBytes, surfaceMem, 0,
-					 TGM_LAYOUT_KIND, 0);
+					 TGM_LAYOUT_KIND, 0, nullptr);
 	if (!ret)
-		ret = tgm_vm_map_ordered(r.vm, kSurfaceRowsVa, surfaceBytes, surfaceMem, 0, 0, 0);
+		ret = tgm_vm_map_ordered(r.vm, kSurfaceRowsVa, surfaceBytes, surfaceMem, 0, 0, 0,
+					 nullptr);
 	if (!ret)
-		ret = tgm_vm_map_ordered(r.vm, kRowsVa, rowsBytes, rowsMem, 0, 0, 0);
+		ret = tgm_vm_map_ordered(r.vm, kRowsVa, rowsBytes, rowsMem, 0, 0, 0, nullptr);
 	if (!ret) {
 		const tgm_relayout_move m = {kSurfaceVa, kSurfaceRowsVa, kRowsVa, bytesPerRow,
 					     op,         rowsBytes};

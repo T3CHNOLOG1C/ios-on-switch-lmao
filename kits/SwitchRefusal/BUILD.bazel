@@ -4,6 +4,7 @@
 #
 #   bazel test //kits/SwitchRefusal/test:all
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("@rules_rust//rust:defs.bzl", "rust_library")
 load("//bazel/lint:defs.bzl", "lint_files")
 load("//kernel/rules:kernel.bzl", "kernel_driver", "kernel_headers")
 
@@ -42,4 +43,13 @@ kernel_driver(
     srcs = ["SwitchRefusal.c"],
     c_recipe = ":bsd_c",
     hdr_deps = [],
+)
+
+# The Rust side (SwitchRefusal.rs): the keys as const fns and the C calls, for the Metal bridge (gpu:bridge), whose archive
+# carries SwitchRefusal.o.
+rust_library(
+    name = "switch_refusal_rs",
+    srcs = ["SwitchRefusal.rs"],
+    crate_name = "switch_refusal",
+    edition = "2024",
 )

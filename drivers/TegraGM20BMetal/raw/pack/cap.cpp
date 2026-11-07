@@ -37,7 +37,7 @@ std::mutex gLock;
 PushCounts gC;
 FILE *gDump, *gLog;
 uint64_t gSubmit;
-bool gDecode;  // RAWCAP_LOG given
+bool gDecode;  // RAWCAP_LOG or NVDEC_WRITETHROUGH given
 std::unique_ptr<raw::Capture> gCapture;
 raw::Pack gCapturePack;
 FILE *gCaptureOut;
@@ -119,6 +119,10 @@ void init()
         gDump = fopen(f, "w");
     if (const char *f = getenv("RAWCAP_LOG"))
         gLog = fopen(f, "w");
+    // NVDEC_WRITETHROUGH asks for the GPU's copies in host memory, which only the decoder makes: it runs then too, its
+    // trace going nowhere when no log was asked for
+    if (!gLog && getenv("NVDEC_WRITETHROUGH"))
+        gLog = fopen("/dev/null", "w");
     gDecode = gLog != nullptr;
     const char *pack = getenv("RAWCAP_CAPTURE"), *out = getenv("RAWCAP_CAPTURE_OUT");
     std::string err;
@@ -150,6 +154,15 @@ void writeCapture(const std::vector<raw::CapturedState> &states)
     }
     fflush(gCaptureOut);
 }
+}
+
+// A host test that reads the GPU's results back (NVDEC_WRITETHROUGH) needs NVK's copies and fills on the copy engine, which
+// the decoder runs: NVK's default way, compute dispatches and 3D draws, runs shaders this mock does not. Both ways write the
+// same bytes (Vulkan's copy semantics); the raw pack's probe never sets NVDEC_WRITETHROUGH and keeps the device's way.
+__attribute__((constructor)) static void copiesOnCopyEngine()
+{
+    if (getenv("NVDEC_WRITETHROUGH"))
+        setenv("NVK_COPIES", "ce", 0);
 }
 
 // The GPU's side of NVDEC_SCRUB (nvdec.cpp): zero [va, va + bytes) in the mock BO behind it.

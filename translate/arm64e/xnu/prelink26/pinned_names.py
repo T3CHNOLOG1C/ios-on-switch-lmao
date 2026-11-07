@@ -139,6 +139,18 @@ NAMES = {
     0xFFFFFFF00A80DA8C: '_IOMallocDataShareable',
     0xFFFFFFF00A80DAD8: '_IOMallocZeroDataShareable',
     0xFFFFFFF00A80DB70: '_IOFreeDataShareable',
+    # IOSerialFamily. subr_xxx.c's stubs in source order: enodev's ENODEV, enodev_strat's bare return, then enxio, enoioctl,
+    # enosys, eopnotsupp, nullop, and nulldev's 0 last; the cdevsw IOSerialBSDClient registers points at them.
+    0xFFFFFFF00A676794: '_enodev',
+    0xFFFFFFF00A67679C: '_enodev_strat',
+    0xFFFFFFF00A6767C8: '_nulldev',
+    # tty.c, in IOSerialFamily's GOT between tty_unlock and wakeup in this order: ttyclose (ttyflush, then ttyfree inlined:
+    # three clfree, lck_mtx_destroy, kfree), ttyfree (the same deallocation), ttymalloc (kalloc_type and the clallocs)
+    # and ttyselect (selrecord).
+    0xFFFFFFF00A685940: '_ttyclose',
+    0xFFFFFFF00A685870: '_ttyfree',
+    0xFFFFFFF00A688E50: '_ttymalloc',
+    0xFFFFFFF00A687AD0: '_ttyselect',
     # IOGameControllerFamily. vm_kern.c: after vm_kernel_addrperm_external, the same code with the unslide.
     0xFFFFFFF00A1EE914: '_vm_kernel_unslide_or_perm_external',
     # The callback-pointer iterateObjects, before the block one (0xFFFFFFF00A7A64A4).

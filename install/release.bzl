@@ -26,6 +26,8 @@ _FILES = {
     "gpu_trustcache": "inputs/gpu/TegraGM20BMetal.trustcache",
     "kernel": "inputs/kernel/kernel.macho",
     "prelink_options": "inputs/kernel/prelink.json",
+    "loader": "inputs/loader/loader.uboot.bin",
+    "loader_constants": "inputs/loader/constants.json",
     "install_payload": "sd/bootloader/payloads/install-ios.bin",
     "apfs_tool": "host_tools/apfs_tool",
     "lz4": "host_tools/lz4",

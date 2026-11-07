@@ -68,10 +68,15 @@ bool Kernel::open(std::string &err)
 {
     using Connection = bool (*)(uint32_t *, bool *, uint32_t *, uint64_t *, uint64_t *);
     void *nvk = nvkImage();
-    const auto connection = nvk ? reinterpret_cast<Connection>(dlsym(nvk, "switch_nvk_connection")) : nullptr;
-    const auto release = nvk ? reinterpret_cast<void (*)()>(dlsym(nvk, "switch_nvk_connection_release")) : nullptr;
-    if (!connection || !release)
+    if (!nvk)
         return openOwn(err);
+    const auto connection = reinterpret_cast<Connection>(dlsym(nvk, "switch_nvk_connection"));
+    const auto release = reinterpret_cast<void (*)()>(dlsym(nvk, "switch_nvk_connection_release"));
+    if (!connection || !release) {
+        // No fallback to a connection of our own: beside NVK's it would split the process's GPU VM in two
+        err = "the loaded NVK has no switch_nvk_connection, so it is older than this tree (rebuild //gpu/nvk:host)";
+        return false;
+    }
     // [vaStart, vaEnd) is the whole window NVK leaves out, handed to every caller: one Kernel per process may take it (the
     // render server's one raw device), or two free lists would hand out the same VAs.
     uint64_t vaStart = 0, vaEnd = 0;
@@ -254,6 +259,17 @@ bool Kernel::surfaceGpuWrites(uint32_t surfaceId)
     return false;
 }
 
+uint32_t Kernel::surfaceLayout(const Bo &bo, uint32_t width, uint32_t height, uint32_t bpp, uint32_t bytesPerRow,
+                               bool writes)
+{
+    if (!(info_.flags & TegraGM20BInfoSurfaceLayout))
+        return 0;
+    const TegraGM20BAbiSurfaceLayout in = {
+        bo.handle, width, height, bpp, bytesPerRow, writes ? uint32_t(TegraGM20BLayoutWrites) : 0, 0};
+    TegraGM20BAbiSurfaceLayoutReply out = {};
+    return call(TegraGM20BMethodSurfaceLayout, &in, sizeof in, &out, sizeof out) == KERN_SUCCESS ? out.layout : 0;
+}
+
 bool Kernel::bindImport(void *addr, Bo &bo, uint32_t kind)
 {
     const uintptr_t base = uintptr_t(addr) & ~uintptr_t(info_.page_size - 1);
@@ -354,7 +370,8 @@ int Kernel::order(uint32_t channel, uint32_t flags, uint32_t seqno, uint32_t &wa
     return kr;
 }
 
-bool Kernel::exec(uint32_t channel, const TegraGM20BAbiPush *pushes, uint32_t count, uint32_t last, uint32_t &seqno)
+bool Kernel::exec(uint32_t channel, const TegraGM20BAbiPush *pushes, uint32_t count, uint32_t last, uint32_t &seqno,
+                  SurfaceList *surfaces)
 {
     TegraGM20BAbiExec e;
     e.channel = channel;
@@ -364,7 +381,13 @@ bool Kernel::exec(uint32_t channel, const TegraGM20BAbiPush *pushes, uint32_t co
         e.pushes[0].flags |= TegraGM20BPushImportsWritten;
     const size_t in = offsetof(TegraGM20BAbiExec, pushes) + count * sizeof pushes[0];
     TegraGM20BAbiExecReply r = {};
+    const bool listed = surfaces && (info_.flags & TegraGM20BInfoExecSurfaces);
     for (;;) {
+        if (listed) {
+            size_t bytes = 0;
+            const TegraGM20BAbiExecSurfaces &list = surfaces->record(channel, bytes);
+            call(TegraGM20BMethodExecSurfaces, &list, bytes, nullptr, 0);
+        }
         const int kr = call(TegraGM20BMethodExec, &e, in, &r, sizeof r);
         if (kr == KERN_SUCCESS) {
             seqno = r.seqno;

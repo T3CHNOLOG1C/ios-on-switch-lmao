@@ -12,14 +12,19 @@ def load(out_path: str, log_path: str) -> list[dict]:
     """Give each PROBE line of probe.out with its submission's decoded draw (probe.mm: one command buffer per state).
 
     The probes are the log's last submissions: how many NVK makes before them varies (where the device exposes the pixel
-    interlock, its ticket buffer is cleared by a copy-engine submission of its own at device creation).
+    interlock, its ticket buffer is cleared by a copy-engine submission of its own at device creation). A probe whose
+    command buffer m2v failed (its FAILED line, the error in p['failed']) submitted nothing and has no records.
     """
     probes = _probes(out_path)
+    drawn = [p for p in probes if 'failed' not in p]
     subs = _submissions(log_path)
-    first = len(subs) - len(probes)
+    first = len(subs) - len(drawn)
     if first < 0:
-        raise ValueError(f'{log_path}: {len(subs)} submissions for {len(probes)} probes')
-    for n, p in enumerate(probes):
+        raise ValueError(f'{log_path}: {len(subs)} submissions for {len(drawn)} probes')
+    for p in probes:
+        if 'failed' in p:
+            p.update(draws=0, dispatches=0, clears=[], canon=[], records=[])
+    for n, p in enumerate(drawn):
         s = subs[first + n]
         p['draws'] = sum(1 for line in s if line.startswith('DRAW'))
         p['dispatches'] = sum(1 for line in s if line.startswith('DISPATCH'))
@@ -47,6 +52,10 @@ def _probes(out_path: str) -> list[dict]:
             if line.startswith('PROBE '):
                 _, i, key = line.rstrip('\n').split(' ', 2)
                 probes.append({'index': int(i), 'key': key.strip()})
+            elif line.startswith('FAILED ') and probes:
+                _, i, error = line.rstrip('\n').split(' ', 2)
+                if probes[-1]['index'] == int(i):
+                    probes[-1]['failed'] = error
     return probes
 
 

@@ -58,6 +58,8 @@ uint32_t tgm_coh_surface_id(const struct tgm_coh *c);
 struct tgm_coh *tgm_coh_find_tiled(uint32_t id);
 /* The same by a physical address inside the surface (any page of it): *offset its byte offset in the surface */
 struct tgm_coh *tgm_coh_find_tiled_pa(uint64_t pa, uint64_t *offset);
+/* The entry of the surface whose first page is at `pa` (tiled or not), with a reference for tgm_coherency_put, or null */
+struct tgm_coh *tgm_coh_find_pa(uint64_t pa);
 /* One more reference to an entry the caller holds one to */
 void tgm_coh_hold(struct tgm_coh *c);
 

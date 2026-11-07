@@ -159,6 +159,8 @@ mod rotation;
 mod shared;
 mod staging_copy;
 pub(super) mod stand_in;
+#[cfg(unix)]
+mod tiled_in_place;
 pub(super) mod storage_form;
 pub(super) mod surface_depth;
 pub(super) mod surface_two_planes;

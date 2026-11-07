@@ -3,7 +3,8 @@
 Each member of each pinned kind is its own repository (@ipsw_<kind>_<role>), so building something that needs the
 16 MB kernelcache never fetches the 5 GB OS image. Bazel downloads exactly the member's stored bytes with a `Range`
 header and checks them against the pinned sha256, which puts them in the repository cache (content-addressed, shared
-by every output base).
+by every output base). The member repositories are reproducible, so the repository contents cache keeps each one once
+and every output base's external/ holds a symlink to it.
 
 A stored member (the OS dmg) is used as fetched. A deflated one is inflated by a build action (ipsw_inflate,
 //ipsw:inflate) that checks the content against its pin; only the deflated bytes live in the repository cache. An Apple
@@ -56,6 +57,11 @@ def _ipsw_member_impl(rctx):
         headers = {"Range": ["bytes={}-{}".format(first, last)]},
     )
     rctx.file("BUILD.bazel", _STORED_BUILD.format(name = repr(rctx.attr.output)))
+
+    # download() copies the cached member into the repository (only download_and_extract hardlinks). On APFS the copy is
+    # a clone, but a clone per output base stops sharing blocks once its repository cache entry is replaced; the
+    # contents cache holds one clone, and every output base links to it.
+    return rctx.repo_metadata(reproducible = True)
 
 ipsw_member = repository_rule(
     implementation = _ipsw_member_impl,

@@ -12,6 +12,7 @@
 #include <map>
 #include <string>
 #include "TegraGM20BABI.h"
+#include "raw_surfaces.h"
 
 namespace raw {
 
@@ -50,6 +51,12 @@ public:
     bool importPages(void *addr, uint64_t bytes, Bo &bo, uint32_t surfaceId = 0);
     // The GPU may write the IOSurface from now on (BoImport took it as only sampled): before its first render or store.
     bool surfaceGpuWrites(uint32_t surfaceId);
+    // SurfaceLayout (method 16) for the import `bo` of a surface: its layout, decided by the kernel once for every process
+    // at the first asking import (TegraGM20BLayout.h: block-linear when that importer writes it alone). `writes`: this
+    // texture renders into or stores to it. TegraGM20BLayoutTiled, TegraGM20BLayoutOtherShape, or 0 (pitch; also without
+    // the method).
+    uint32_t surfaceLayout(const Bo &bo, uint32_t width, uint32_t height, uint32_t bpp, uint32_t bytesPerRow,
+                           bool writes);
     bool bindImport(void *addr, Bo &bo, uint32_t kind);
     // BoFree (the kernel unbinds it at once and releases the pages after the channels complete what they had); the VA goes
     // back to the free list at once: call it only once no submission that uses the BO is still running (raw::Device does).
@@ -65,7 +72,11 @@ public:
     }
 
     // `last`: the channel's last submitted seqno (0 if none), waited on when the GPFIFO is full
-    bool exec(uint32_t channel, const TegraGM20BAbiPush *pushes, uint32_t count, uint32_t last, uint32_t &seqno);
+    // `surfaces` (null: none): the host imports the submission touches, named to the kernel (ExecSurfaces, method 17,
+    // TegraGM20BInfoExecSurfaces) before each Exec of it: it waits on the GPU for other channels' writes to them, and counts
+    // as a writer of the ones it writes only. A kernel without it, or a list it refuses, leaves the Exec as one with none.
+    bool exec(uint32_t channel, const TegraGM20BAbiPush *pushes, uint32_t count, uint32_t last, uint32_t &seqno,
+              SurfaceList *surfaces = nullptr);
     // Blocks in the kernel until the channel's completed seqno passes `seqno` (the kext sleeps on the fence interrupt).
     bool wait(uint32_t channel, uint32_t seqno, uint64_t timeoutNs = ~0ull);
     // Order (method 14, TegraGM20BInfoOrder): GPU-side acquires between `channel` and the task's other channels (NVK's).

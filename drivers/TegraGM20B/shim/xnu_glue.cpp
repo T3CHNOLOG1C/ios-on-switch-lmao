@@ -746,6 +746,41 @@ extern "C" nvxnu_u32 nvxnu_vm_page_size(void)
 	return PAGE_SIZE;
 }
 
+extern "C" nvxnu_u64 nvxnu_ram_bytes(void)
+{
+	return max_mem;
+}
+
+// The descriptor stays wired for the kext's life: nothing gives such memory back.
+extern "C" int nvxnu_contig_alloc(nvxnu_u64 bytes, nvxnu_u64 *pa)
+{
+	IOBufferMemoryDescriptor *md = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(
+		kernel_task,
+		static_cast<IOOptionBits>(kIODirectionInOut) |
+			static_cast<IOOptionBits>(kIOMemoryMapperNone) |
+			kIOMemoryPhysicallyContiguous,
+		bytes, 0xffffffffffULL & ~static_cast<uint64_t>(PAGE_MASK));
+	if (!md)
+		return -12;
+	if (md->prepare() != kIOReturnSuccess) {
+		md->release();
+		return -12;
+	}
+	IOByteCount len = 0;
+	const addr64_t first = md->getPhysicalSegment(0, &len, kIOMemoryMapperNone);
+	void *va = md->getBytesNoCopy();
+	if (!first || !va || len < bytes) {
+		md->complete();
+		md->release();
+		return -12;
+	}
+	// The zero fill went through the cacheable aperture: no dirty line of it may land over what the GPU writes later.
+	memset(va, 0, bytes);
+	dcache_op(va, bytes, true);
+	*pa = first;
+	return 0;
+}
+
 extern "C" nvxnu_u64 nvxnu_pool_base_pa(void)
 {
 	return pool.pa;

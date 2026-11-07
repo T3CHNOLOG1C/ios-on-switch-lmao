@@ -187,7 +187,7 @@ TEST(GM20BImportCostSource, ImportCostsAreDebugOnly)
 				      "sizeof(region)); #endif"));
 	EXPECT_THAT(import, HasSubstr("tgm_mem_new_waited(vm_, bo->pas, bo->npages, &bo->mem, "
 				      "&cost.lock_ns)"));
-	EXPECT_THAT(flat(definition(gpu(), "int tgm_mem_new_waited(")),
+	EXPECT_THAT(flat(definition(gpu(), "static int mem_new(")),
 		    HasSubstr("asked = stats_on() && lock_wait_ns ? nvxnu_nanotime() : 0;"));
 }
 
@@ -248,10 +248,10 @@ TEST(GM20BPoolScrubSource, EveryAllocationZeroesWhatAFreeLeftDirty)
 // so its mapping never reaches another BO's, another connection's fence or nvkm's own memory.
 TEST(GM20BPoolIsolationSource, CpuMappedPoolMemoryIsWholeVmPages)
 {
-	EXPECT_THAT(
-		definition(gpu(), "void *tgm_pool_alloc(uint64_t bytes, uint64_t *pa)"),
-		HasSubstr(
-			"nvxnu_pool_alloc_clean(pool_bo_bytes(bytes), nvxnu_vm_page_size(), &h)"));
+	const std::string alloc = flat(definition(
+		gpu(), "void *tgm_pool_alloc(uint64_t bytes, uint64_t align, uint64_t *pa)"));
+	EXPECT_THAT(alloc, HasSubstr("nvxnu_pool_alloc_clean(pool_bo_bytes(bytes), "
+				     "max_t(u64, align, nvxnu_vm_page_size()), &h)"));
 	EXPECT_THAT(definition(gpu(), "void tgm_pool_free(void *va, uint64_t bytes, uint64_t pa)"),
 		    HasSubstr("pool_bo_bytes(bytes)"));
 	EXPECT_THAT(definition(gpu(),
@@ -486,7 +486,32 @@ TEST(GM20BCoherencySource, ExecNamesTheWriterOnceTheSubmissionHasItsSeqno)
 {
 	const std::string exec = flat(definition(client(), "IOReturn AGXDeviceUserClient::exec("));
 	expectBefore(exec, "ioreturn(tgm_chan_exec(chan, pushes, count, &seqno,",
-		     "tgm_coherency_wrote(bo->coh, importsWritten_, tgm_chan_uid(chan), seqno);");
+		     "surfaces_.after(listed, importsWritten_, tgm_chan_uid(chan), seqno);");
+	const std::string after = flat(definition(SourceText("../TegraGM20BExecSurfaces.cpp"),
+						  "void ExecSurfaces::after("));
+	EXPECT_THAT(after, HasSubstr("tgm_coherency_wrote(refs_[i].coh, always, uid, seqno);"));
+	// only a listed write is a writer another channel waits for on the GPU (gm20b_fences_test)
+	EXPECT_THAT(after, HasSubstr("tgm_coherency_wrote_listed(r->coh, uid, seqno);"));
+}
+
+// Method 17's acquires go into the submission's own stream: queued (order_add, under live_lock) before tgm_chan_exec makes
+// it, every exit of Exec past the channel check having taken the list; the decision is TegraGM20BFences.h's, which
+// gm20b_fences_test runs.
+TEST(GM20BFencesSource, ExecQueuesItsWritersAcquiresBeforeItSubmits)
+{
+	const std::string exec = flat(definition(client(), "IOReturn AGXDeviceUserClient::exec("));
+	expectBefore(exec, "const bool listed = surfaces_.before(in->channel - 1, chan, count);",
+		     "return kIOReturnBadArgument; if (p.flags & TegraGM20BPushImportsWritten)");
+	expectBefore(exec, "surfaces_.before(", "ioreturn(tgm_chan_exec(");
+	for (const char *signature :
+	     {"int tgm_chan_follow(struct tgm_chan *chan,", "int tgm_chan_follow_importers("}) {
+		const std::string follow = flat(definition(gpu(), signature));
+		expectBefore(follow, "mutex_lock(&live_lock);", "tgm_fence_wanted(");
+		expectBefore(follow, "tgm_fence_wanted(", "ret = order_add(chan,");
+		expectBefore(follow, "ret = order_add(chan,", "mutex_unlock(&live_lock);");
+	}
+	EXPECT_THAT(flat(definition(client(), "IOReturn AGXDeviceUserClient::getInfo(")),
+		    HasSubstr("| TegraGM20BInfoExecSurfaces"));
 }
 
 // A SurfaceWrites a client could not deliver never leaves a GPU write unmarked: the client stops saying its imports are
@@ -496,7 +521,7 @@ TEST(GM20BCoherencySource, AFailedSurfaceWritesFallsBackToMarkingEveryImport)
 {
 	const std::string exec = flat(definition(client(), "IOReturn AGXDeviceUserClient::exec("));
 	expectBefore(exec, "importsWritten_ = true;",
-		     "tgm_coherency_wrote(bo->coh, importsWritten_, tgm_chan_uid(chan), seqno);");
+		     "surfaces_.after(listed, importsWritten_, tgm_chan_uid(chan), seqno);");
 	const std::string raw = SourceText("../../TegraGM20BMetal/raw/runtime/raw_kernel.cpp");
 	const std::string declare = flat(definition(raw, "bool Kernel::surfaceGpuWrites("));
 	EXPECT_THAT(declare, HasSubstr("importsWritten_.store(true"));
@@ -523,6 +548,45 @@ TEST(GM20BCoherencySource, AFailedSurfaceWritesFallsBackToMarkingEveryImport)
 		EXPECT_THAT(nvk, HasSubstr(exported));
 }
 
+// NVK names a submission's host imports (method 17) before every Exec of it, a retry after kIOReturnBusy included, and a
+// GPFIFO the kernel found full sleeps in WaitFence, never a timed poll.
+TEST(GM20BFencesSource, NvkSendsItsSurfacesBeforeEachExecAndSleepsWhenFull)
+{
+	const std::string nvk = SourceText(
+		"../../../third_party/mesa/src/nouveau/vulkan/nvkmd/darwin/nvkmd_darwin.c");
+	const std::string flush =
+		flat(definition(nvk, "nvkmd_darwin_exec_ctx_flush(struct nvkmd_ctx *_ctx,"));
+	expectBefore(flush, "for (;;) {", "TegraGM20BMethodExecSurfaces");
+	expectBefore(flush, "TegraGM20BMethodExecSurfaces", "TegraGM20BMethodExec,");
+	EXPECT_THAT(flush, Not(HasSubstr("usleep")));
+	expectBefore(flush, "if (!ctx->submitted) darwin_exec_busy_unsubmitted(ctx->channel);",
+		     "darwin_wait_seqno(dev, ctx->channel, ctx->last_seqno,");
+	const std::string queue =
+		SourceText("../../../third_party/mesa/src/nouveau/vulkan/nvk_queue.c");
+	const std::string submit =
+		flat(definition(queue, "nvk_queue_submit(struct vk_queue *vk_queue,"));
+	expectBefore(submit, "nvkmd_darwin_submit_surfaces(queue->exec_ctx, submit->driver_data);",
+		     "result = nvk_queue_submit_exec(queue, submit);");
+	expectBefore(submit, "result = nvk_queue_submit_exec(queue, submit);",
+		     "nvkmd_darwin_submit_surfaces_end(queue->exec_ctx);");
+	EXPECT_THAT(queue, HasSubstr("__attribute__((visibility(\"default\"))) "
+				     "void\nswitch_nvk_submit_surfaces("));
+	const std::string call = flat(definition(queue, "nvk_QueueSubmit2(VkQueue _queue,"));
+	expectBefore(call, "nvkmd_darwin_submit_call(queue, true);", "vk_common_QueueSubmit2(");
+	expectBefore(call, "vk_common_QueueSubmit2(", "nvkmd_darwin_submit_call(queue, false);");
+	EXPECT_THAT(flat(queue),
+		    HasSubstr("queue->vk.driver_submit_data = nvk_queue_submit_data;"));
+	// Mesa gives each submission its data on the client's thread, before a submit thread can take it, and frees it with
+	// the submission.
+	const std::string runtime =
+		SourceText("../../../third_party/mesa/src/vulkan/runtime/vk_queue.c");
+	expectBefore(flat(definition(runtime, "vk_queue_submit(struct vk_queue *queue,")),
+		     "submit->driver_data = queue->driver_submit_data(queue);",
+		     "VK_QUEUE_SUBMIT_MODE_THREADED");
+	EXPECT_THAT(flat(definition(runtime, "vk_queue_submit_free(struct vk_queue *queue,")),
+		    HasSubstr("queue->driver_submit_data_free(submit->driver_data);"));
+}
+
 // Only a connection's maps skip the CPU's L2 and TLB maintenance; every removal keeps it (TegraGM20BTlb.h).
 TEST(GM20BTlbSource, MapsOrderedOnTheGpuRemovalsSynchronous)
 {
@@ -531,10 +595,51 @@ TEST(GM20BTlbSource, MapsOrderedOnTheGpuRemovalsSynchronous)
 	EXPECT_EQ(Count(gpu(), "nvxnu_gpu_ordered_begin();"), 1u);
 	const std::string map = flat(definition(gpu(), "static int vm_map("));
 	expectBefore(map, "nvxnu_gpu_ordered_end();", "nvif_vmm_raw_put(");
-	const std::string unmap = flat(definition(gpu(), "int tgm_vm_unmap("));
+	const std::string unmap = flat(definition(gpu(), "int tgm_vm_unmap_pages("));
 	EXPECT_THAT(unmap, Not(HasSubstr("gpu_ordered")));
 	EXPECT_THAT(flat(definition(gpu(), "void tgm_vm_del(")),
 		    HasSubstr("mmu_invalidate_all();"));
+}
+
+// Rail-gating (TegraGM20BRail.h): every other gpu.lock taker goes through gpu_lock(), which wakes a rail-gated GPU in
+// the caller under the lock it took; the rail-up opens the gate before it clears `railed`, so a closer that has seen the
+// GPU up never has its close undone (gm20b_rail_test's model).
+TEST(GM20BRailSource, GpuLockWakesARailGatedGpu)
+{
+	EXPECT_EQ(Count(gpu(), "mutex_lock(&gpu.lock);"), 6u)
+		<< "gpu_lock, tgm_timestamp_ns, tgm_sleep, tgm_rail_down, tgm_rail_up, "
+		   "tgm_rail_sc7_hold";
+	EXPECT_THAT(
+		flat(definition(gpu(), "static noinline void gpu_lock(void)")),
+		HasSubstr(
+			"if (unlikely(gpu.railed)) rail_up_locked(__builtin_return_address(0));"));
+	expectBefore(flat(definition(gpu(), "static void rail_up_locked(const void *site)")),
+		     "gate_open();", "__atomic_store_n(&gpu.railed, 0, __ATOMIC_SEQ_CST);");
+	// rail_up_locked takes these under the caller's gpu.lock: no gpu_lock() caller may hold one
+	const std::string &text = gpu();
+	for (size_t at = text.find("\tgpu_lock();"); at != std::string::npos;
+	     at = text.find("\tgpu_lock();", at + 1)) {
+		const size_t body = text.rfind("\n{\n", at);
+		const std::string before = text.substr(body, at - body);
+		for (const char *lock : {"(&live_lock)", "(idle.clk)", "(&gate_lock)"})
+			EXPECT_EQ(Count(before, std::string("mutex_lock") + lock),
+				  Count(before, std::string("mutex_unlock") + lock))
+				<< lock << " held at the gpu_lock() at offset " << at;
+	}
+	// GPU time never backwards (gm20b_rail_test's model): the floor read before every power-down, PTIMER reseeded to it
+	// after nvkm_timer_init, every time handed out clamped to it
+	expectBefore(
+		flat(definition(gpu(), "static void sleep_nvkm(void)")),
+		"stamp_last = tgm_stamp_monotonic(stamp_last, nvkm_timer_read(device->timer));",
+		"nvkm_device_fini(device, NVKM_SUSPEND)");
+	expectBefore(flat(definition(gpu(), "static void wake_m1(void)")),
+		     "ret = nvkm_subdev_init(&device->timer->subdev);", "stamp_reseed(device);");
+	EXPECT_THAT(flat(definition(gpu(), "uint64_t tgm_timestamp_ns(void)")),
+		    HasSubstr("stamp_last = t = tgm_stamp_monotonic(stamp_last, t);"));
+	const std::string down = flat(definition(gpu(), "int tgm_rail_down(void)"));
+	expectBefore(down, "sleep_gate();", "mutex_lock(&gpu.lock);");
+	expectBefore(down, "__atomic_store_n(&gpu.railed, 1, __ATOMIC_SEQ_CST);",
+		     "nvxnu_wakeup(&sc7_gate.shut);");
 }
 
 TEST(GM20BSleepSource, SleepAndWakeOrder)
@@ -547,6 +652,8 @@ TEST(GM20BSleepSource, SleepAndWakeOrder)
 	expectBefore(sleep, "sleep_nvkm();", "sleep_power_down();");
 	const std::string nvkm = flat(definition(gpu(), "static void sleep_nvkm(void)"));
 	expectBefore(nvkm, "nvif_client_suspend(&gpu.client, false)", "nvkm_ltc_flush(");
+	// nvgpu_mm_suspend: the L2's comptag lines written back (FLUSH_L2_CLEAN_COMPTAGS) before the data flush
+	expectBefore(nvkm, "nvkm_wr32(device, 0x07000c, 0x00000001);", "nvkm_ltc_flush(");
 	expectBefore(nvkm, "nvkm_ltc_flush(", "nvkm_device_fini(device, NVKM_SUSPEND)");
 	expectBefore(flat(definition(gpu(), "static void sleep_power_down(void)")),
 		     "nvxnu_irq_suspend();", "regulator_disable(");

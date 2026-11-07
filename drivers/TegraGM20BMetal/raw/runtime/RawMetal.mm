@@ -43,9 +43,14 @@
 #include "RawAlias.h"
 #include "raw_follow.h"
 #include "raw_gpu.h"
+#include "TegraGM20BLayout.h"
+#include "../../../../kits/SwitchRefusal/SwitchRefusal.h"
 
-// The m2v frontend's in-place texture over a buffer (NativeBridgeMetalFrontend.mm): weak, so the host benchmark links without it.
+// The m2v frontend's in-place textures over a buffer, of rows or the device's optimal layout (NativeBridgeMetalFrontend.mm):
+// weak, so the host benchmark links without them.
 extern "C" id native_bridge_metal_texture_in_place(id buffer, id descriptor, NSUInteger offset, NSUInteger bytesPerRow)
+    __attribute__((weak_import));
+extern "C" id native_bridge_metal_texture_tiled_in_place(id buffer, id descriptor, NSUInteger offset)
     __attribute__((weak_import));
 extern "C" id native_bridge_metal_render_pipeline_lazy(id device, id descriptor, NSUInteger options)
     __attribute__((weak_import));
@@ -141,7 +146,7 @@ enum RMPred : uint8_t {
     PredPassOther,         // visibility buffer, layered target, rasterization rate map
     // states and calls
     PredStateForeign,
-    PredStateNotQuartzCore,  // a state whose functions are not QuartzCore's default.metallib (never looked up in the pack)
+    PredStateNotPackable,  // a state whose functions are not of one framework's default.metallib (never looked up in the pack)
     PredStateNotInPack,
     PredCallVisibility,
     PredCallIndexedForm,     // a = instances, b = baseVertex | baseInstance << 32
@@ -165,7 +170,6 @@ enum RMPred : uint8_t {
     PredEncPlanarClamp,
     PredEncPlanarRT,
     PredEncPassRender,
-    PredEncBufToTexRow,  // a = sourceBytesPerRow
     PredEncKernel,
     PredEncIndexedRange,  // a = offset, b = index size
     PredEncBaseInstance,
@@ -197,7 +201,7 @@ static constexpr const char *kPredNames[] = {"-",
                                              "pass.ds",
                                              "pass.other",
                                              "state.foreign",
-                                             "state.notqc",
+                                             "state.notpack",
                                              "state.pack",
                                              "call.vis",
                                              "call.idxform",
@@ -220,7 +224,6 @@ static constexpr const char *kPredNames[] = {"-",
                                              "enc.planarclamp",
                                              "enc.planarrt",
                                              "enc.pass",
-                                             "enc.b2trow",
                                              "enc.kernel",
                                              "enc.idxrange",
                                              "enc.baseinst",
@@ -249,6 +252,8 @@ static inline bool predLogged(RMPred p)
 }
 
 // The predicate's first hit in the process: one line with its values (`detail`: the resource's, when it was made)
+// Each predicate's first command buffer this process sends to m2v, through kits/SwitchRefusal (domain raw-metal, the
+// predicate's name as the reason)
 static void logPred(RMPred p, uint64_t a, uint64_t b, NSString *detail)
 {
     const uint64_t bit = 1ull << p;
@@ -521,6 +526,7 @@ static id twinPublish(id object, __strong id &slot, id made)
 
 @interface RMDevice : NSObject  // the methods the device class gets (raw_metal_device_open); no state of its own
 - (void)rmCommit:(RMCommandBuffer *)cb;
+- (id<MTLTexture>)rmNewTexture:(MTLTextureDescriptor *)d tiled:(bool)tiled;
 @end
 
 @implementation RMObject
@@ -564,15 +570,17 @@ static id twinPublish(id object, __strong id &slot, id made)
 @end
 
 // ---- functions and libraries: the m2v library and functions, with the name and constants text the pack keys by ----
+// The libraries the pack's states come from are frameworks' default.metallib (QuartzCore's, RenderBox's): a state of their
+// functions is looked up by its key, which names the framework but QuartzCore's (raw_metal_pipeline_key)
 @interface RMLibrary : RMObject {
 @public
-    bool _quartzCore;  // QuartzCore's default.metallib: the only library the pack's functions come from
+    std::string _framework;  // "QuartzCore", "RenderBox"...; empty: not a framework's default library (never looked up)
 }
 @end
 @interface RMFunction : RMObject {
 @public
     std::string _constants;
-    bool _quartzCore;
+    std::string _framework;
 }
 @property (nonatomic, copy) NSString *name;
 @end
@@ -632,7 +640,7 @@ static std::string constantsText(MTLFunctionConstantValues *values)
     f->_device = _device;
     f->_twin = twin;
     f->_constants = constantsText(values);
-    f->_quartzCore = _quartzCore;
+    f->_framework = _framework;
     f.name = name;
     return f;
 }
@@ -682,7 +690,9 @@ static RMLibrary *wrapLibrary(id device, id<MTLLibrary> twin, NSString *path)
     RMLibrary *l = [RMLibrary new];
     l->_device = device;
     l->_twin = twin;
-    l->_quartzCore = [path hasSuffix:@"QuartzCore.framework/default.metallib"];
+    if ([path hasSuffix:@".framework/default.metallib"])
+        l->_framework =
+            path.stringByDeletingLastPathComponent.lastPathComponent.stringByDeletingPathExtension.UTF8String;
     return l;
 }
 
@@ -721,6 +731,8 @@ NSString *raw_metal_pipeline_key(MTLRenderPipelineDescriptor *d)
     RMFunction *ff = [(id)d.fragmentFunction isKindOfClass:[RMFunction class]] ? (RMFunction *)d.fragmentFunction : nil;
     key += " | v " + std::string(vf ? vf.name.UTF8String : "-") + " " + (vf ? vf->_constants : "");
     key += " | f " + std::string(ff ? ff.name.UTF8String : "-") + " " + (ff ? ff->_constants : "");
+    if (vf && vf->_framework != "QuartzCore" && !vf->_framework.empty())
+        key += " | l " + vf->_framework;
     while (!key.empty() && key.back() == ' ')
         key.pop_back();
     return [NSString stringWithUTF8String:key.c_str()];
@@ -965,6 +977,7 @@ static void traceSurfaceImage(RMTexture *t, const char *what, uint32_t seed)
 }
 #endif
 static void cpuLevel(RMTexture *t, MTLRegion r, NSUInteger level, uint8_t *bytes, NSUInteger row, bool write);
+static void cpuTiled(RMTexture *t, MTLRegion r, uint8_t *bytes, NSUInteger row, bool write);
 
 @implementation RMTexture
 
@@ -1019,7 +1032,9 @@ static void cpuLevel(RMTexture *t, MTLRegion r, NSUInteger level, uint8_t *bytes
                 if (d.storageMode == MTLStorageModeMemoryless)
                     d.storageMode = MTLStorageModePrivate;  // (memory here)
             }
-            if (pages && native_bridge_metal_texture_in_place)
+            if (pages && _raw.blockLinear && native_bridge_metal_texture_tiled_in_place)
+                made = native_bridge_metal_texture_tiled_in_place(pages, d, 0);
+            else if (pages && !_raw.blockLinear && native_bridge_metal_texture_in_place)
                 made = native_bridge_metal_texture_in_place(pages, d, 0, _raw.pitch);
             break;
         }
@@ -1075,7 +1090,7 @@ static void cpuLevel(RMTexture *t, MTLRegion r, NSUInteger level, uint8_t *bytes
                                                                              mipmapped:NO];
     d.storageMode = MTLStorageModePrivate;
     d.usage = MTLTextureUsageShaderRead | MTLTextureUsageRenderTarget;
-    id made = [(id<MTLDevice>)_device newTextureWithDescriptor:d];
+    id made = [(RMDevice *)_device rmNewTexture:d tiled:false];  // (rows: the 2D engine's copies of a level are pitch)
     RMTexture *m = [made isKindOfClass:[RMTexture class]] ? (RMTexture *)made : nil;
     if (!m || !m->_rawOk || m->_raw.memoryless || ((m->_raw.va | m->_raw.pitch) & 127) || ![m rmTwin]) {
         once([NSString
@@ -1261,6 +1276,10 @@ static void cpuLevel(RMTexture *t, MTLRegion r, NSUInteger level, uint8_t *bytes
     }
     if (r.origin.x + r.size.width > _raw.width || r.origin.y + r.size.height > _raw.height)
         return;
+    if (_raw.blockLinear) {
+        cpuTiled(self, r, (uint8_t *)bytes, row, true);
+        return;
+    }
     const size_t line = r.size.width * _raw.bpp;
     for (NSUInteger y = 0; y < r.size.height; y++) {
         uint8_t *to = _raw.cpu + (r.origin.y + y) * _raw.pitch + r.origin.x * _raw.bpp;
@@ -1309,6 +1328,10 @@ static void cpuLevel(RMTexture *t, MTLRegion r, NSUInteger level, uint8_t *bytes
     }
     if (r.origin.x + r.size.width > _raw.width || r.origin.y + r.size.height > _raw.height)
         return;
+    if (_raw.blockLinear) {
+        cpuTiled(self, r, (uint8_t *)bytes, row, false);
+        return;
+    }
 #if defined(__aarch64__)
     if (_gpuDirty.exchange(false) && !_raw.wc) {
         for (uintptr_t a = uintptr_t(_raw.cpu) & ~uintptr_t(63);
@@ -1412,6 +1435,30 @@ static void cacheLines(const uint8_t *from, uint64_t bytes, bool invalidate)
 // committed before left them, and the CPU writes since): m2v's texture of every level after m2v generated them (a write also goes
 // to the level's mirror, whole, so the raw path takes it in after generating: Chain::mirrorLevels); the mirror after m2v wrote
 // the level (and m2v's texture); else the chain, in the CPU's view the device's self-test chose.
+// A block-linear texture's CPU copies (replaceRegion, getBytes of level 0) through TegraGM20BLayout.h: the block rows they
+// reach are invalidated before a read of what the GPU wrote, cleaned after a write
+static void cpuTiled(RMTexture *t, MTLRegion r, uint8_t *bytes, NSUInteger row, bool write)
+{
+    tgm_layout l;
+    if (!r.size.width || !r.size.height || !tgm_layout_tiled(t->_raw.width, t->_raw.height, t->_raw.bpp, &l))
+        return;
+    const uint64_t blockRow = uint64_t(l.row_bytes) * (8u << l.y_log2);
+    const uint64_t from = r.origin.y / (8u << l.y_log2) * blockRow,
+                   to = std::min<uint64_t>((r.origin.y + r.size.height + (8u << l.y_log2) - 1) / (8u << l.y_log2) *
+                                               blockRow,
+                                           uint64_t(l.row_bytes) * l.rows);
+    if (write) {
+        tgm_layout_write(&l, t->_raw.cpu, uint32_t(r.origin.x), uint32_t(r.origin.y), uint32_t(r.size.width),
+                         uint32_t(r.size.height), bytes, row);
+        cacheLines(t->_raw.cpu + from, to - from, false);
+        return;
+    }
+    if (t->_gpuDirty.exchange(false))
+        cacheLines(t->_raw.cpu, l.row_bytes * uint64_t(l.rows), true);
+    tgm_layout_read(&l, t->_raw.cpu, uint32_t(r.origin.x), uint32_t(r.origin.y), uint32_t(r.size.width),
+                    uint32_t(r.size.height), bytes, row);
+}
+
 static void cpuLevel(RMTexture *t, MTLRegion r, NSUInteger level, uint8_t *bytes, NSUInteger row, bool write)
 {
     const raw::Texture::Chain &c = *t->_raw.chain;
@@ -1649,7 +1696,7 @@ static void refuseTexture(RMTexture *t, RMPred p, uint64_t a, uint64_t b, NSStri
 @interface RMPipeline : RMObject {
 @public
     raw::Pipeline *_raw;  // null: not in the pack (every command buffer using it goes to m2v)
-    bool _quartzCore;     // its functions are QuartzCore's (looked up in the pack)
+    bool _packable;       // its functions are one framework's default library's (looked up in the pack)
 }
 @end
 @implementation RMPipeline
@@ -2152,7 +2199,7 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
         hit(_cb, PredStateForeign);
     } else if (!p->_raw) {
         [_cb takeReason:WhyState why:@"a state not in the pack (its label: the line it was made with)"];
-        hit(_cb, p->_quartzCore ? PredStateNotInPack : PredStateNotQuartzCore);
+        hit(_cb, p->_packable ? PredStateNotInPack : PredStateNotPackable);
     }
     _pipe = [(id)p isKindOfClass:[RMPipeline class]] ? p : nil;
     setBinding(_cb, OpPipeline, 0, 0, state, 0);
@@ -2565,6 +2612,73 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
 
 @end
 
+// Where plain Metal reads or writes each buffer row of a copy between a buffer and a texture: rows `bytesPerRow` apart from
+// `offset`. A layout off Metal's rules (an offset or bytesPerRow off the texel, or rows that overlap) is placed as Apple's
+// GPUs place it (m2v blit_plan.rs placed_rows, measured): each row rounded down to the texel's component (at most 4 bytes),
+// except that a copy into a texture of more than one row whose bytesPerRow rounded down to the texel is a multiple of 16,
+// from an offset that is, takes Metal's aligned path: its rows at that rounded pitch from offset 0. False: a layout
+// Metal's behaviour is not known for, refused as m2v refuses it (rows that overlap out of a texture; on the aligned path,
+// a pitch below a row or a nonzero offset).
+struct BufferRows {
+    uint64_t first, pitch;  // row y at first + y * pitch where `uniform`
+    bool uniform;
+    uint32_t word;
+};
+
+static bool bufferRows(uint64_t offset, uint64_t bytesPerRow, uint32_t rows, uint32_t rowBytes, uint32_t bpp,
+                       bool intoTexture, BufferRows &out)
+{
+    const uint32_t word = std::min<uint32_t>(bpp, 4);
+    if (offset % bpp == 0 && bytesPerRow % bpp == 0 && (rows < 2 || bytesPerRow >= rowBytes)) {  // Metal's rules
+        out = {offset, bytesPerRow, true, word};
+        return true;
+    }
+    if (rows > 1 && bytesPerRow < rowBytes && !intoTexture)
+        return false;
+    const uint64_t pitch = bytesPerRow - bytesPerRow % bpp;
+    if (intoTexture && rows > 1 && pitch % 16 == 0 && offset % 16 == 0) {
+        if (offset || pitch < rowBytes)
+            return false;
+        out = {0, pitch, true, word};
+        return true;
+    }
+    out = {offset - offset % word, bytesPerRow, offset % word == 0 && bytesPerRow % word == 0, word};
+    return true;
+}
+
+// Row y of `r` (offset and bytesPerRow as given to bufferRows)
+static uint64_t bufferRow(const BufferRows &r, uint64_t offset, uint64_t bytesPerRow, uint32_t y)
+{
+    if (r.uniform)
+        return r.first + y * r.pitch;
+    const uint64_t at = offset + uint64_t(y) * bytesPerRow;
+    return at - at % r.word;
+}
+
+// The copy engine's copies of those rows: one copy of every row where they lie a pitch apart, else one per row
+static void copyRows(raw::BlitEncoder *be, uint64_t bufferVa, const BufferRows &r, uint64_t offset,
+                     uint64_t bytesPerRow, const raw::Texture &t, uint32_t x, uint32_t y, uint32_t w, uint32_t h,
+                     bool intoTexture)
+{
+    if (r.uniform) {
+        be->copyBufferTexels(bufferVa + r.first, uint32_t(r.pitch), t, x, y, w, h, intoTexture);
+        return;
+    }
+    for (uint32_t k = 0; k < h; k++)
+        be->copyBufferTexels(bufferVa + bufferRow(r, offset, bytesPerRow, k), w * t.bpp, t, x, y + k, w, 1,
+                             intoTexture);
+}
+
+// Blit options choose a depth/stencil aspect or a PVRTC row layout; a colour texture the raw path holds has neither, so they
+// change nothing about its copy (m2v's replay of the copy never carried them)
+static bool blitOptionsMoot(id<MTLTexture> t, MTLBlitOption options)
+{
+    if (!options)
+        return true;
+    RMTexture *x = [(id)t isKindOfClass:[RMTexture class]] ? (RMTexture *)t : nil;
+    return x && x->_rawOk && !x->_raw.zeta && !x->_raw.converted();
+}
+
 @implementation RMBlitEncoder
 
 + (Class)twinClass
@@ -2584,13 +2698,13 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
 {
     RMTexture *a = (RMTexture *)s, *b = (RMTexture *)d;
     const bool both = [(id)a isKindOfClass:[RMTexture class]] && [(id)b isKindOfClass:[RMTexture class]];
-    // a mipmapped texture's level below the first (its chain's, raw::BlitEncoder::copyFromLevel: the 2D engine, 1:1, into a
-    // texture of the same format whose address and rows it takes as a pitch surface)
+    // a mipmapped texture's level below the first (its chain's, raw::BlitEncoder::copyFromLevel, 1:1 into a texture of the
+    // same format: the 2D engine into rows, the copy engine into a block-linear one)
     const raw::Texture::Chain *ch = both && a->_rawOk ? a->_raw.chain : nullptr;
     const bool level = ch && sl && sl < ch->layout.levels && b->_rawOk && !b->_raw.memoryless &&
-                       !((b->_raw.va | b->_raw.pitch) & 127) && b->_raw.format == a->_raw.format && !b->_raw.planar &&
-                       !b->_raw.ycbcr && !ss && !ds && !dl && size.depth == 1 &&
-                       so.x + size.width <= ch->layout.level[sl].width &&
+                       (b->_raw.blockLinear || !((b->_raw.va | b->_raw.pitch) & 127)) &&
+                       b->_raw.format == a->_raw.format && !b->_raw.planar && !b->_raw.ycbcr && !ss && !ds && !dl &&
+                       size.depth == 1 && so.x + size.width <= ch->layout.level[sl].width &&
                        so.y + size.height <= ch->layout.level[sl].height && dorg.x + size.width <= b->_raw.width &&
                        dorg.y + size.height <= b->_raw.height;
     const bool ok = level || (both && a->_rawOk && b->_rawOk && !ss && !sl && !ds && !dl && size.depth == 1 &&
@@ -2688,20 +2802,19 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
     RMTexture *b = (RMTexture *)d;
     if ([(id)b isKindOfClass:[RMTexture class]] && b->_raw.chain)
         _cb->_chains = true;
-    const bool ok = [(id)a isKindOfClass:[RMBuffer class]] && [(id)b isKindOfClass:[RMTexture class]] && b->_rawOk &&
-                    !ds && !dl && size.depth == 1 && !b->_raw.memoryless &&
-                    so + row * (size.height - 1) + size.width * b->_raw.bpp <= a->_raw.length &&
-                    dorg.x + size.width <= b->_raw.width && dorg.y + size.height <= b->_raw.height;
+    BufferRows rows;
+    const bool ok =
+        [(id)a isKindOfClass:[RMBuffer class]] && [(id)b isKindOfClass:[RMTexture class]] && b->_rawOk && !ds && !dl &&
+        size.depth == 1 && !b->_raw.memoryless && b->_raw.bpp &&
+        bufferRows(so, row, uint32_t(size.height), uint32_t(size.width * b->_raw.bpp), b->_raw.bpp, true, rows) &&
+        bufferRow(rows, so, row, uint32_t(size.height - 1)) + size.width * b->_raw.bpp <= a->_raw.length &&
+        dorg.x + size.width <= b->_raw.width && dorg.y + size.height <= b->_raw.height;
     if (!ok) {
         [_cb takeReason:WhyTexture why:@"a buffer-to-texture copy the raw path does not do"];
         hit(_cb, PredBlitBufToTex, row, uint64_t(ds) | uint64_t(dl) << 8 | uint64_t(size.depth) << 16);
     } else if (b->_raw.converted()) {
         [_cb takeReason:WhyTexture why:@"a copy to or from a planar texture"];
         hit(_cb, PredEncPlanarCopy, 0, 1);
-    } else if (row % b->_raw.bpp &&
-               size.height > 1) {  // rows of whole texels (Metal's rule; the copy engine takes any)
-        [_cb takeReason:WhyTexture why:@"a buffer-to-texture copy whose rows are not whole texels"];
-        hit(_cb, PredEncBufToTexRow, row, b->_raw.bpp);
     }
     [_cb retain:s];
     [_cb retain:d];
@@ -2728,7 +2841,7 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
       destinationOrigin:(MTLOrigin)dorg
                 options:(MTLBlitOption)options
 {
-    if (options) {
+    if (!blitOptionsMoot(d, options)) {
         [_cb takeReason:WhyCall why:@"a copy with blit options"];
         hit(_cb, PredCallBlitOptions, options);
     }
@@ -2757,10 +2870,13 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
     RMBuffer *b = (RMBuffer *)d;
     if ([(id)a isKindOfClass:[RMTexture class]] && a->_raw.chain)
         _cb->_chains = true;
-    const bool ok = [(id)a isKindOfClass:[RMTexture class]] && [(id)b isKindOfClass:[RMBuffer class]] && a->_rawOk &&
-                    !ss && !sl && size.depth == 1 && !a->_raw.memoryless &&
-                    dof + row * (size.height - 1) + size.width * a->_raw.bpp <= b->_raw.length &&
-                    so.x + size.width <= a->_raw.width && so.y + size.height <= a->_raw.height;
+    BufferRows rows;
+    const bool ok =
+        [(id)a isKindOfClass:[RMTexture class]] && [(id)b isKindOfClass:[RMBuffer class]] && a->_rawOk && !ss && !sl &&
+        size.depth == 1 && !a->_raw.memoryless && a->_raw.bpp &&
+        bufferRows(dof, row, uint32_t(size.height), uint32_t(size.width * a->_raw.bpp), a->_raw.bpp, false, rows) &&
+        bufferRow(rows, dof, row, uint32_t(size.height - 1)) + size.width * a->_raw.bpp <= b->_raw.length &&
+        so.x + size.width <= a->_raw.width && so.y + size.height <= a->_raw.height;
     if (!ok) {
         [_cb takeReason:WhyTexture why:@"a texture-to-buffer copy the raw path does not do"];
         hit(_cb, PredBlitTexToBuf, row, uint64_t(ss) | uint64_t(sl) << 8 | uint64_t(size.depth) << 16);
@@ -2791,7 +2907,7 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
     destinationBytesPerImage:(NSUInteger)image
                      options:(MTLBlitOption)options
 {
-    if (options) {
+    if (!blitOptionsMoot(s, options)) {
         [_cb takeReason:WhyCall why:@"a copy with blit options"];
         hit(_cb, PredCallBlitOptions, options);
     }
@@ -3099,11 +3215,13 @@ static bool rawDepthStencil(MTLRenderPassDescriptor *pass)
 
 - (void)event:(id<MTLEvent>)event value:(uint64_t)value signal:(bool)signal
 {
-    // the m2v device's shared events: the raw path signals them from the CPU once its work completes, and waits for them on the
-    // CPU before its work is submitted; any other event is m2v's alone
-    if (![(id)event conformsToProtocol:@protocol(MTLSharedEvent)] ||
-        ![(id)event respondsToSelector:@selector(setSignaledValue:)]) {
-        [self takeWholeReason:WhyEvent why:@"an event that is not a shared event"];
+    // the m2v device's events, shared or plain (NBEvent answers a shared event's value, set and notifications): the raw path
+    // signals them from the CPU once its work completes, and holds its work until a wait is covered (waitCovered); an event
+    // without those (another device's) is m2v's alone
+    if (![(id)event respondsToSelector:@selector(signaledValue)] ||
+        ![(id)event respondsToSelector:@selector(setSignaledValue:)] ||
+        ![(id)event respondsToSelector:@selector(notifyListener:atValue:block:)]) {
+        [self takeWholeReason:WhyEvent why:@"an event the raw path cannot read, set or be notified of"];
         hit(self, PredEvent, signal);
     }
     [self retain:event];
@@ -4072,6 +4190,27 @@ static id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, 
 
 // ---- the tape onto the raw path ----
 // false: something in it the raw path cannot do after all (*why); nothing of it was submitted then
+// The host imports a texture's memory lies in, named to the submission (raw::CommandBuffer::use): a surface's or a planar
+// texture's planes, a buffer texture's buffer's, a view's parent's; and a YCbCr texture's planes, which only its conversion
+// reads (its image is pool memory).
+static void useTexture(raw::CommandBuffer *rc, RMTexture *t, bool write)
+{
+    while (t && t->_kind == RMTextureView && t->_parent)
+        t = t->_parent;
+    if (!t)
+        return;
+    rc->use(t->_buffer ? t->_buffer->_raw.import : t->_raw.import, write);
+    for (const raw::Texture *plane : {t->_raw.luma, t->_raw.chroma})
+        if (plane)
+            rc->use(plane->import, false);
+}
+
+static void useBuffer(raw::CommandBuffer *rc, RMBuffer *b, bool write)
+{
+    if (b)
+        rc->use(b->_raw.import, write);
+}
+
 static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **why)
 {
     raw::Device &d = *gRM->raw;
@@ -4349,6 +4488,7 @@ static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **
                     continue;
                 if (t->_raw.planar)
                     return fail(PredEncPlanarRT, "a planar texture as a render target", j);
+                useTexture(rc, t, true);
                 if (!fresh.empty())
                     fresh.erase(t);  // this pass writes it
                 if (t->_raw.chain && a.level) {
@@ -4447,14 +4587,17 @@ static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **
             re->setStencilReference(c.a, c.b);
             break;
         case OpBuffer:
+            useBuffer(rc, (__bridge RMBuffer *)c.obj, false);
             re->setBuffer(c.stage, c.index, c.obj ? &((__bridge RMBuffer *)c.obj)->_raw : nullptr, c.c);
             break;
         case OpBufferOffset:
             re->setBufferOffset(c.stage, c.index, c.c);
             break;
         case OpTexture:
-            if (c.stage == 2)
+            if (c.stage == 2) {
+                useTexture(rc, (__bridge RMTexture *)c.obj, false);
                 re->setTexture(c.index, c.obj ? &((__bridge RMTexture *)c.obj)->_raw : nullptr);
+            }
             break;
         case OpSampler:
             if (c.stage == 2)
@@ -4484,12 +4627,15 @@ static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **
             re->barrier();
             break;
         case OpDrawIndexed:
+            useBuffer(rc, (__bridge RMBuffer *)c.obj, false);
             if (!re->drawIndexed(c.stage, c.a, c.b == MTLIndexTypeUInt16 ? 2 : 4, &((__bridge RMBuffer *)c.obj)->_raw,
                                  c.c, why))
                 return refused();
             break;
         case OpCopyTexture: {
             RMTexture *s = (__bridge RMTexture *)c.obj, *t = (__bridge RMTexture *)c.obj2;
+            useTexture(rc, s, false);
+            useTexture(rc, t, true);
             if (!fresh.empty())
                 fresh.erase(t);
             const uint64_t x = c.x, o = extra(cb, x + 10), sl = extra(cb, x + 1);
@@ -4500,9 +4646,8 @@ static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **
                 be->copyFromLevel(s->_raw, uint32_t(sl), uint32_t(sx), uint32_t(sy), t->_raw, uint32_t(dx),
                                   uint32_t(dy), uint32_t(w), uint32_t(h));
             } else {
-                be->copyRect(s->_raw.va + sy * s->_raw.pitch + sx * s->_raw.bpp, s->_raw.pitch,
-                             t->_raw.va + dy * t->_raw.pitch + dx * t->_raw.bpp, t->_raw.pitch, uint32_t(w),
-                             uint32_t(h), s->_raw.bpp);
+                be->copyTexels(s->_raw, uint32_t(sx), uint32_t(sy), t->_raw, uint32_t(dx), uint32_t(dy), uint32_t(w),
+                               uint32_t(h));
             }
             if (t->_raw.chain) {  // its level 0 written
                 touch(t).l0Fresh = false;
@@ -4512,6 +4657,7 @@ static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **
         }
         case OpMipmaps: {  // a chain's levels from level 0 (decided at record); m2v's texture of every level is behind it
             RMTexture *t = (__bridge RMTexture *)c.obj;
+            useTexture(rc, t, true);
             touch(t);
             be->generate(t->_raw, true);
             t->_mipLevels = false;
@@ -4520,6 +4666,8 @@ static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **
         }
         case OpCopyBuffer: {
             RMBuffer *s = (__bridge RMBuffer *)c.obj, *t = (__bridge RMBuffer *)c.obj2;
+            useBuffer(rc, s, false);
+            useBuffer(rc, t, true);
             const uint64_t n = extra(cb, c.x + 1), dof = extra(cb, c.x);
             if (!s->_raw.wc)
                 rc->clean(s->_raw.cpu + c.c, n);
@@ -4531,30 +4679,42 @@ static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **
         case OpCopyBufferToTexture: {
             RMBuffer *s = (__bridge RMBuffer *)c.obj;
             RMTexture *t = (__bridge RMTexture *)c.obj2;
+            useBuffer(rc, s, false);
+            useTexture(rc, t, true);
             const uint64_t x = c.x, o = extra(cb, x + 8), so = extra(cb, x), row = extra(cb, x + 1);
             const uint64_t w = extra(cb, x + 3), h = extra(cb, x + 4);
             if (!fresh.empty())
-                fresh.erase(t);  // (rows of whole texels, any pitch: the copy engine's; decided at record)
+                fresh.erase(t);
             if (t->_raw.chain) {
                 touch(t).l0Fresh = false;
                 t->_mipL0 = false;
             }
+            BufferRows rows;
+            bufferRows(so, row, uint32_t(h), uint32_t(w * t->_raw.bpp), t->_raw.bpp, true,
+                       rows);  // (decided at record)
+            const uint64_t first = bufferRow(rows, so, row, 0);
             if (!s->_raw.wc)
-                rc->clean(s->_raw.cpu + so, row * (h - 1) + w * t->_raw.bpp);
-            be->copyRect(s->_raw.va + so, uint32_t(row),
-                         t->_raw.va + (o >> 32) * t->_raw.pitch + uint32_t(o) * t->_raw.bpp, t->_raw.pitch, uint32_t(w),
-                         uint32_t(h), t->_raw.bpp);
+                rc->clean(s->_raw.cpu + first, bufferRow(rows, so, row, uint32_t(h - 1)) - first + w * t->_raw.bpp);
+            copyRows(be, s->_raw.va, rows, so, row, t->_raw, uint32_t(o), uint32_t(o >> 32), uint32_t(w), uint32_t(h),
+                     true);
             break;
         }
         case OpCopyTextureToBuffer: {
             RMTexture *s = (__bridge RMTexture *)c.obj;
             RMBuffer *t = (__bridge RMBuffer *)c.obj2;
+            useTexture(rc, s, false);
+            useBuffer(rc, t, true);
             const uint64_t x = c.x, o = extra(cb, x + 2), w = extra(cb, x + 4), h = extra(cb, x + 5),
                            dof = extra(cb, x + 7), row = extra(cb, x + 8);
+            BufferRows rows;
+            bufferRows(dof, row, uint32_t(h), uint32_t(w * s->_raw.bpp), s->_raw.bpp, false,
+                       rows);  // (decided at record)
+            const uint64_t first = bufferRow(rows, dof, row, 0);
             if (!t->_raw.wc)
-                rc->clean(t->_raw.cpu + dof, row * (h - 1) + w * s->_raw.bpp, true);
-            be->copyRect(s->_raw.va + (o >> 32) * s->_raw.pitch + uint32_t(o) * s->_raw.bpp, s->_raw.pitch,
-                         t->_raw.va + dof, uint32_t(row), uint32_t(w), uint32_t(h), s->_raw.bpp);
+                rc->clean(t->_raw.cpu + first, bufferRow(rows, dof, row, uint32_t(h - 1)) - first + w * s->_raw.bpp,
+                          true);
+            copyRows(be, t->_raw.va, rows, dof, row, s->_raw, uint32_t(o), uint32_t(o >> 32), uint32_t(w), uint32_t(h),
+                     false);
             break;
         }
         default:  // states, fences, events, resources the raw path needs nothing for
@@ -4879,7 +5039,14 @@ static void commitBuffer(RMCommandBuffer *cb);
     return (id<MTLTexture>)t;
 }
 
+// A private texture the CPU never touches is block-linear (TegraGM20BLayout.h), as NVK lays out an optimal image and m2v's
+// view of it is (texture_tiled_in_place).
 - (id<MTLTexture>)newTextureWithDescriptor:(MTLTextureDescriptor *)d
+{
+    return [self rmNewTexture:d tiled:d.storageMode == MTLStorageModePrivate];
+}
+
+- (id<MTLTexture>)rmNewTexture:(MTLTextureDescriptor *)d tiled:(bool)tiled
 {
     if (gRM->raw->chainsOn() && chainShape(d)) {  // mipmapped: level 0 a pool texture, the levels a chain (raw/fx)
         RMTexture *t = [RMTexture new];
@@ -4912,7 +5079,7 @@ static void commitBuffer(RMCommandBuffer *cb);
         t->_kind = RMTexturePool;
         // a shared texture (the CPU writes it: replaceRegion) in write-combined memory: its rows need no clean after
         t->_rawOk = gRM->raw->createTexture(uint32_t(d.width), uint32_t(d.height), uint32_t(d.pixelFormat), t->_raw,
-                                            d.storageMode == MTLStorageModeShared);
+                                            d.storageMode == MTLStorageModeShared, tiled);
     }
     if (!t->_rawOk) {
         RMTexture *w = (RMTexture *)[self wrapTwin:[gRM->fallback newTextureWithDescriptor:d] descriptor:d];
@@ -4976,6 +5143,19 @@ static const char *ycbcrPlan(MTLTextureDescriptor *d, IOSurfaceRef s, NSUInteger
     return raw::planYcbcr(f, out);
 }
 
+// Whether the GPU may write a texture of this descriptor (Unknown: any use)
+static bool writesTexture(MTLTextureDescriptor *d)
+{
+    return d.usage == MTLTextureUsageUnknown || (d.usage & (MTLTextureUsageRenderTarget | MTLTextureUsageShaderWrite));
+}
+
+// Whether a texture of this descriptor is made to be rendered into or stored to, as the kernel's layout decision takes it
+// (TegraGM20BLayout.h): a surface whose first texture says Unknown is left pitch, as the CPU may produce it
+static bool producesTexture(MTLTextureDescriptor *d)
+{
+    return d.usage & (MTLTextureUsageRenderTarget | MTLTextureUsageShaderWrite);
+}
+
 - (id<MTLTexture>)newTextureWithDescriptor:(MTLTextureDescriptor *)d iosurface:(IOSurfaceRef)s plane:(NSUInteger)plane
 {
     SWITCH_API(ApiObject);
@@ -5011,10 +5191,9 @@ static const char *ycbcrPlan(MTLTextureDescriptor *d, IOSurfaceRef s, NSUInteger
         const size_t pitch = one ? IOSurfaceGetBytesPerRowOfPlane(s, 0) : IOSurfaceGetBytesPerRow(s);
         t->_rawOk = gRM->raw->createSurfaceTexture(IOSurfaceGetID(s), base, IOSurfaceGetAllocSize(s), s, offset,
                                                    uint32_t(d.width), uint32_t(d.height), uint32_t(pitch),
-                                                   uint32_t(d.pixelFormat), t->_raw);
+                                                   uint32_t(d.pixelFormat), t->_raw, producesTexture(d));
     }
-    if (t->_rawOk &&
-        (d.usage == MTLTextureUsageUnknown || (d.usage & (MTLTextureUsageRenderTarget | MTLTextureUsageShaderWrite))))
+    if (t->_rawOk && writesTexture(d))
         declareGpuWrites(t);
     if (!t->_rawOk) {  // a surface the raw path does not take: m2v's texture over it, made now (it may refuse: nil, as today)
         // which term (createSurfaceTexture's, recomputed here: a creation, not the hot path)
@@ -5173,18 +5352,19 @@ static MTLRenderPipelineDescriptor *twinDescriptor(MTLRenderPipelineDescriptor *
     p.label = d.label;
     RMFunction *vf = [(id)d.vertexFunction isKindOfClass:[RMFunction class]] ? (RMFunction *)d.vertexFunction : nil;
     RMFunction *ff = [(id)d.fragmentFunction isKindOfClass:[RMFunction class]] ? (RMFunction *)d.fragmentFunction : nil;
-    p->_quartzCore = vf && ff && vf->_quartzCore && ff->_quartzCore;
-    if (p->_quartzCore) {
+    p->_packable = vf && ff && !vf->_framework.empty() && vf->_framework == ff->_framework;
+    if (p->_packable) {
         NSString *key = raw_metal_pipeline_key(d);
         const char *k = key.UTF8String;
         p->_raw = gRM->raw->pipeline(raw::Pack::fnv(k, strlen(k)), raw::PackForm::Default,
-                                     [vf.name hasPrefix:@"fixed_vert_"] && [vf.name hasSuffix:@"_spc"]);
+                                     vf->_framework == "QuartzCore" && [vf.name hasPrefix:@"fixed_vert_"] &&
+                                         [vf.name hasSuffix:@"_spc"]);
     }
     if (!p->_raw) {
         const char *label = d.label.UTF8String ?: "-";
         SWITCH_REFUSE_DETAIL("raw", "state.unpacked", raw::Pack::fnv(label, strlen(label)),
                              "state not in the pack (m2v draws it)%s: %s",
-                             !p->_quartzCore            ? " (not QuartzCore's functions: never looked up)"
+                             !p->_packable              ? " (not one framework library's functions: never looked up)"
                              : gRM->raw->stats.heapFull ? " (or the shader heap is full)"
                                                         : "",
                              label);
@@ -5968,7 +6148,7 @@ static void completionLoop()
 static struct {
     uint64_t raw, m2v, encodeUs, draws, passes, copies, deferred, aborted, reasons[WhyCount], ringWaits, lastUs,
         switches, cpuOrdered, acquires, poolStalls, eventsReleased, heldReturns, abortUs, replayUs, replayClean,
-        rtUnaligned, predOnly[PredCount], splits, splitM2v, levelPasses, mirrorsOut, mirrorsIn;
+        rtUnaligned, rtMixed, predOnly[PredCount], splits, splitM2v, levelPasses, mirrorsOut, mirrorsIn;
 } gRates;
 
 bool raw_metal_texture_kept(id<MTLTexture> texture)
@@ -5986,7 +6166,7 @@ const void *raw_metal_texture_image(id<MTLTexture> texture, size_t *pitch)
     if (![(id)texture isKindOfClass:[RMTexture class]])
         return nullptr;
     RMTexture *t = (RMTexture *)texture;
-    if (!t->_rawOk || !t->_raw.cpu)
+    if (!t->_rawOk || !t->_raw.cpu || t->_raw.blockLinear)
         return nullptr;
     if (pitch)
         *pitch = t->_raw.pitch;
@@ -6044,14 +6224,16 @@ size_t raw_metal_rates(char *out, size_t size)
                    m2vs = f + segs ? f + segs : 1;
     char diag[768];
     snprintf(diag, sizeof diag,
-             " sp=%llu/%llu abortenc=%.0fus/a replay=%.0fus/m rclean=%.0fKB/m rt128=%llu(pitch %u va&255 %u) lvl=%llu "
+             " sp=%llu/%llu abortenc=%.0fus/a replay=%.0fus/m rclean=%.0fKB/m rt128=%llu(pitch %u va&255 %u) "
+             "rtmix=%llu lvl=%llu "
              "mir=%llu/%llu why=%s",
              (unsigned long long)sp, (unsigned long long)segs,
              (s.abortUs.load() - gRates.abortUs) / double(aborts ? aborts : 1),
              (s.replayUs.load() - gRates.replayUs) / double(m2vs),
              (s.replayClean.load() - gRates.replayClean) / 1024.0 / double(m2vs),
              (unsigned long long)(k.rtUnaligned.load() - gRates.rtUnaligned), k.rtUnalignedPitch.load(),
-             k.rtUnalignedVa.load(), (unsigned long long)(k.levelPasses.load() - gRates.levelPasses),
+             k.rtUnalignedVa.load(), (unsigned long long)(k.rtMixed.load() - gRates.rtMixed),
+             (unsigned long long)(k.levelPasses.load() - gRates.levelPasses),
              (unsigned long long)(k.mirrorsOut.load() - gRates.mirrorsOut),
              (unsigned long long)(k.mirrorsIn.load() - gRates.mirrorsIn), *preds ? preds : "-");
 #if SWITCH_FRAME_TIMELINE
@@ -6078,6 +6260,7 @@ size_t raw_metal_rates(char *out, size_t size)
     gRates.replayUs = s.replayUs.load();
     gRates.replayClean = s.replayClean.load();
     gRates.rtUnaligned = k.rtUnaligned.load();
+    gRates.rtMixed = k.rtMixed.load();
     gRates.levelPasses = k.levelPasses.load();
     gRates.mirrorsOut = k.mirrorsOut.load();
     gRates.mirrorsIn = k.mirrorsIn.load();

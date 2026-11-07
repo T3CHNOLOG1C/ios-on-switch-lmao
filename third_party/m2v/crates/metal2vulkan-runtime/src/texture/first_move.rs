@@ -104,9 +104,11 @@ pub(crate) struct FirstMove {
     /// Metal's pattern over the image's first levels, which the zeros then leave
     /// ([`FirstMove::patterned`]).
     pattern: Option<Patterned>,
-    /// The queue family the move acquires the image for from `VK_QUEUE_FAMILY_FOREIGN_EXT`, an
-    /// image over dma-buf pages the CPU writes ([`FirstMove::acquired`]).
-    acquire: Option<u32>,
+    /// The queue family the move acquires the image from and the one it acquires it for: from
+    /// `VK_QUEUE_FAMILY_FOREIGN_EXT` for an image over dma-buf pages the CPU writes
+    /// ([`FirstMove::acquired`]), from `VK_QUEUE_FAMILY_EXTERNAL` for an image over host memory
+    /// another driver of the process writes ([`FirstMove::acquired_external`]).
+    acquire: Option<(u32, u32)>,
 }
 
 /// How a first move writes Metal's pattern into the first `levels` levels of its image, of
@@ -231,7 +233,18 @@ impl FirstMove {
     /// image without one.
     pub(crate) fn acquired(mut self, family: u32) -> FirstMove {
         self.old = vk::ImageLayout::GENERAL;
-        self.acquire = Some(family);
+        self.acquire = Some((vk::QUEUE_FAMILY_FOREIGN_EXT, family));
+        self
+    }
+
+    /// The move, an acquire of the image from `VK_QUEUE_FAMILY_EXTERNAL` for `family` (as
+    /// [`FirstMove::acquired`] names it): an optimal image made for host allocations over memory
+    /// another driver of the process lays out as the device does and writes
+    /// (`texture/tiled_in_place.rs`). It moves from `GENERAL`, which keeps the bytes as they lie,
+    /// and needs no extension.
+    pub(crate) fn acquired_external(mut self, family: u32) -> FirstMove {
+        self.old = vk::ImageLayout::GENERAL;
+        self.acquire = Some((vk::QUEUE_FAMILY_EXTERNAL, family));
         self
     }
 
@@ -510,12 +523,11 @@ impl FirstMove {
         exit_guard::called(Call::CmdPipelineBarrier);
     }
 
-    /// The barrier of the move: an acquire from `VK_QUEUE_FAMILY_FOREIGN_EXT` where it is one.
+    /// The barrier of the move: an acquire from another queue family where it is one.
     fn barrier(&self) -> vk::ImageMemoryBarrier<'static> {
-        let (source, target) = match self.acquire {
-            Some(family) => (vk::QUEUE_FAMILY_FOREIGN_EXT, family),
-            None => (vk::QUEUE_FAMILY_IGNORED, vk::QUEUE_FAMILY_IGNORED),
-        };
+        let (source, target) = self
+            .acquire
+            .unwrap_or((vk::QUEUE_FAMILY_IGNORED, vk::QUEUE_FAMILY_IGNORED));
         vk::ImageMemoryBarrier::default()
             .src_access_mask(vk::AccessFlags::MEMORY_WRITE)
             .dst_access_mask(vk::AccessFlags::MEMORY_READ | vk::AccessFlags::MEMORY_WRITE)

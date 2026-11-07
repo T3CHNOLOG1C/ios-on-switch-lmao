@@ -321,6 +321,8 @@ pub(super) struct DeviceShared {
     pub(super) fresh: super::fresh_unwritten::FreshUnwritten,
     /// The program's resources by key, with what owns their memory (`used_resources.rs`).
     pub(super) owners: super::used_resources::Owners,
+    /// The consumer's hook told of each batch's host memory (`submission_memory.rs`).
+    pub(super) submission_memory: OnceLock<super::submission_memory::SubmissionMemoryHook>,
     /// The program's live buffers of their own, and their resident set (`live_buffers.rs`).
     pub(super) live_buffers: super::live_buffers::LiveBuffers,
     /// How its command buffers are timed on the GPU (`gpu_time.rs`).
@@ -1331,6 +1333,7 @@ impl Device {
             aliases: Default::default(),
             fresh: Default::default(),
             owners: Default::default(),
+            submission_memory: OnceLock::new(),
             live_buffers: Default::default(),
             timing,
             view_reinterpretation,

@@ -7,13 +7,15 @@
 # Rust, ...) is handed to a fresh output base already extracted, instead of re-extracting (the LLVM tarball alone
 # took 136 s per output base, three times over).
 common --repository_cache=~/Library/Caches/switch-ios-bazel/repository
-# Hardlink cached downloads into the external repositories instead of copying them (a multi-GB IPSW member once).
+# Hardlink a cached archive into the repository that extracts it instead of copying it. Only download_and_extract
+# (http_archive) hardlinks: a repository rule's download() always copies, which APFS makes a clone (ipsw/ipsw.bzl).
 common --experimental_repository_cache_hardlinks
 # Repository contents cache entries nobody used for a day are deleted (default 14 days): every change to a repository
 # rule's definition leaves its previous extraction behind (0.6-0.7 GB for Rust/LLVM-sized repositories).
 common --repo_contents_cache_gc_max_age=1d
 # Action results by action key: a fresh output base, a new worktree or `bazel clean` reuses them. With a disk cache
-# Bazel builds without the bytes: only top-level outputs land in the output base (one is ~1 GB, not 5).
+# Bazel builds without the bytes: only top-level outputs land in the output base (one is ~1 GB, not 5), each an APFS
+# clone of its cache entry: du counts them again, the disk does not.
 common --disk_cache=~/Library/Caches/switch-ios-bazel/disk
 # No py rule invents __init__.py files, in any repository: MODULE.bazel's explicit_init_py covers only this module, and
 # rules_pkg's zip and tar builders still asked for them (rules_python#2945: implicit ones make stray directories
