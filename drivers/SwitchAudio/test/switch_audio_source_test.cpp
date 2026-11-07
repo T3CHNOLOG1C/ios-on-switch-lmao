@@ -14,6 +14,7 @@
 #include <type_traits>
 
 #include "../SwitchAudioAbi.h"
+#include "../SwitchAudioFormat.h"
 #include "bazel/testing/source_text.h"
 #include "switch_audio_format_harness.h"
 #include "switch_audio_words.h"
@@ -28,7 +29,7 @@ using testing::Not;
 
 // The ABI: version 6 is S32_LE samples at one of rates[]; periods stay whole ADMA buffers and the rings DMA-able
 // (playback 65536 frames of stereo S32: 512 KiB; capture 16384 mono: 64 KiB).
-static_assert(SWITCH_AUDIO_VERSION == 6u);
+static_assert(SWITCH_AUDIO_VERSION == 7u);
 static_assert(std::is_same_v<switch_audio_sample_t, int32_t>);
 static_assert(SWITCH_AUDIO_RING_FRAMES * switch_audio_linux::kChannels * sizeof(switch_audio_sample_t) == 512 * 1024);
 static_assert(SWITCH_AUDIO_IN_RING_FRAMES * sizeof(switch_audio_sample_t) == 64 * 1024);
@@ -175,7 +176,7 @@ TEST(SwitchAudioSource, JackIsTheCodecDevice)
     const std::string capture = Between(driver, "void captureOff()", "\n    }\n");
     EXPECT_THAT(capture, Not(HasSubstr("panic(")));
     EXPECT_THAT(capture, HasSubstr("tegraCapture = false;"));
-    EXPECT_THAT(driver, HasSubstr("if (tegraCapture && !captureProven && periods[kChOut] > 2) {"));
+    EXPECT_THAT(driver, HasSubstr("if (!captureProven && played > 2 * kOutPeriodFrames) {"));
 
     const std::string codec = SourceText("../SwitchRT5639.cpp");
     EXPECT_THAT(codec, HasSubstr("write(DAC1_DIG_VOL, headphoneDac());"));
@@ -195,7 +196,51 @@ TEST(SwitchAudioSource, LongPlaybackShortCapturePeriods)
     constexpr uint32_t kLargestIoBuffer = 16384;
     static_assert(kLead + kLargestIoBuffer < SWITCH_AUDIO_RING_FRAMES - kOutPeriod);
     const std::string plugin = SourceText("../hal/SwitchAudioPlugIn.c");
-    EXPECT_THAT(plugin, HasSubstr("gIn[t % SWITCH_AUDIO_IN_RING_FRAMES]"));
+    EXPECT_THAT(plugin, HasSubstr("switch_audio_s32_to_float(gIn[at])"));
+}
+
+// The capture path runs only while input does: playback alone (the speaker, or headphones on the Codec device) never
+// starts ADMA channel 1, I2S TX or the codec's ADC and microphone bias.
+TEST(SwitchAudioSource, CapturePathFollowsInput)
+{
+    constexpr uint32_t out = SwitchAudioOutputRunning, in = SwitchAudioInputRunning;
+    EXPECT_EQ(neon_h_transition(0, out), (uint32_t)SWITCH_AUDIO_HW_START);
+    EXPECT_EQ(neon_h_transition(0, in), (uint32_t)(SWITCH_AUDIO_HW_START | SWITCH_AUDIO_CAPTURE_START));
+    EXPECT_EQ(neon_h_transition(out, out | in), (uint32_t)SWITCH_AUDIO_CAPTURE_START);
+    EXPECT_EQ(neon_h_transition(out | in, out), (uint32_t)SWITCH_AUDIO_CAPTURE_STOP);
+    EXPECT_EQ(neon_h_transition(out | in, in), 0u);
+    EXPECT_EQ(neon_h_transition(in, 0), (uint32_t)(SWITCH_AUDIO_CAPTURE_STOP | SWITCH_AUDIO_HW_STOP));
+    EXPECT_EQ(neon_h_transition(out, 0), (uint32_t)SWITCH_AUDIO_HW_STOP);
+    EXPECT_EQ(neon_h_transition(out, out), 0u);
+
+    // Capture ring frame 0 holds the sample time the session started at; outside [anchor, in_frames) is silence.
+    constexpr uint64_t kNone = SWITCH_AUDIO_NO_CAPTURE;
+    EXPECT_EQ(neon_h_capture_frame(1000, kNone, 5000, SWITCH_AUDIO_IN_RING_FRAMES), -1);
+    EXPECT_EQ(neon_h_capture_frame(999, 1000, 5000, SWITCH_AUDIO_IN_RING_FRAMES), -1);
+    EXPECT_EQ(neon_h_capture_frame(1000, 1000, 5000, SWITCH_AUDIO_IN_RING_FRAMES), 0);
+    EXPECT_EQ(neon_h_capture_frame(4999, 1000, 5000, SWITCH_AUDIO_IN_RING_FRAMES), 3999);
+    EXPECT_EQ(neon_h_capture_frame(5000, 1000, 5000, SWITCH_AUDIO_IN_RING_FRAMES), -1);
+    EXPECT_EQ(neon_h_capture_frame(1000 + SWITCH_AUDIO_IN_RING_FRAMES + 7, 1000, 1000 + 2 * SWITCH_AUDIO_IN_RING_FRAMES,
+                                   SWITCH_AUDIO_IN_RING_FRAMES),
+              7);
+
+    const std::string d = SourceText("../SwitchAudio.cpp");
+    const std::string start = Between(d, "    void tegraStart()", "\n    }\n");
+    for (const char *capture : {"ADMAIF_RX_ENABLE", "I2S_TX_ENABLE", "programChannel(kChIn)"})
+        EXPECT_THAT(start, Not(HasSubstr(capture))) << "playback start powers no capture: " << capture;
+    EXPECT_THAT(Between(d, "    void codecPowerUp()", "\n    }\n"), Not(HasSubstr("powerCapture")));
+    EXPECT_THAT(Between(d, "    void captureStart()", "\n    }\n"), HasSubstr("programChannel(kChIn);"));
+    EXPECT_THAT(Between(d, "    void tegraStop()", "\n    }\n"), HasSubstr("captureStop();"));
+    const std::string request = Between(d, "IOReturn request(uint32_t selector)", "\n    }\n");
+    EXPECT_THAT(request, HasSubstr("codecStep(kCodecCaptureOn)"));
+    EXPECT_THAT(request, HasSubstr("codecStep(kCodecCaptureOff)"));
+    EXPECT_THAT(d, HasSubstr("const uint32_t actions = switch_audio_transition(was, c->state);"));
+    EXPECT_THAT(Between(d, "    void noteJack()", "\n    }\n"), HasSubstr("if (!captureCodecOn || !headset)"));
+
+    const std::string plugin = SourceText("../hal/SwitchAudioPlugIn.c");
+    EXPECT_THAT(plugin, HasSubstr("const Boolean want = gCodecUsers > 0 && gCodecInActive && gControl;"));
+    EXPECT_THAT(Between(plugin, "static OSStatus StartIO(", "\n}\n"), Not(HasSubstr("SwitchAudioStartInput")));
+    EXPECT_THAT(plugin, HasSubstr("switch_audio_capture_frame(t, anchor, captured, SWITCH_AUDIO_IN_RING_FRAMES)"));
 }
 
 }  // namespace

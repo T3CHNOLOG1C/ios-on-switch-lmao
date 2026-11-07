@@ -234,6 +234,14 @@ void SwitchRT5639::powerCapture()
     update(PWR_DIG2, P_ADC_SF, P_ADC_SF);
 }
 
+void SwitchRT5639::powerCaptureOff()
+{
+    update(PWR_DIG2, P_ADC_SF, 0);
+    update(PWR_DIG1, P_ADC_L | P_ADC_R, 0);
+    update(PWR_MIXER, P_RM_L | P_RM_R, 0);
+    update(PWR_ANLG2, P_BST1, 0);
+}
+
 // rt5640_pud_depop.
 void SwitchRT5639::depop(bool up)
 {

@@ -11,10 +11,11 @@
 #include <IOKit/IOService.h>
 #include <kern/task.h>
 #include <kern/thread_call.h>
+#include "OriginalIOSurfaceRootUserClient.h"
 #include "TegraGM20BSurfacePrefault.h"
+#include "TegraGM20BViews.h"
 
 extern "C" {
-OSObject *tegra_gm20b_ios_lookup(IOService *root, uint32_t id, task_t task);
 IOMemoryDescriptor *tegra_gm20b_ios_memory(OSObject *surface);
 uint64_t tegra_gm20b_ios_alloc_size(OSObject *surface);
 // XNU's vm_pressure_level_t: 0 normal
@@ -23,9 +24,12 @@ extern int memorystatus_vm_pressure_level;
 
 namespace
 {
-// kits/SwitchABI's IOSurface table does not hold the kinds' create methods yet: no selector matches, nothing is faulted
-// in, until these come from it.
-constexpr TegraGM20BSurfaceCreateAbi kCreateAbi = {{~0u, ~0u, ~0u, ~0u}, 0};
+using RootClient = OriginalIOSurfaceRootUserClient;
+constexpr TegraGM20BSurfaceCreateAbi kCreateAbi = {
+	{uint32_t(RootClient::createSurfaceSelector),
+	 uint32_t(RootClient::createSurfaceFastPathSelector),
+	 uint32_t(RootClient::createSurfaceClientMemorySelector), ~0u},
+	uint32_t(RootClient::createOutputSurfaceID)};
 constexpr uint32_t kQueued =
 	16;  // creates waiting for the thread call; past it a create is left to fault lazily
 
@@ -37,7 +41,6 @@ struct Created {
 struct Prefault {
 	IOLock *lock;
 	thread_call_t call;
-	IOService *root;  // IOCoreSurfaceRoot, found by the thread call
 	Created queue[kQueued];
 	uint32_t head, tail;  // lock
 };
@@ -71,20 +74,9 @@ Prefault *prefault()
 	return fresh;
 }
 
-IOService *surfaceRoot(Prefault *p)
-{
-	if (!p->root) {
-		OSDictionary *match = IOService::nameMatching("IOCoreSurfaceRoot");
-		p->root = match ? IOService::copyMatchingService(match) : nullptr;  // kept
-		OSSafeReleaseNULL(match);
-	}
-	return p->root;
-}
-
 void faultIn(Prefault *p, const Created &c)
 {
-	IOService *root = surfaceRoot(p);
-	OSObject *surface = root ? tegra_gm20b_ios_lookup(root, c.id, c.task) : nullptr;
+	OSObject *surface = tgm_surface_lookup(c.id, c.task);
 	if (!surface)
 		return;
 	if (tegra_gm20b_prefault_wanted(

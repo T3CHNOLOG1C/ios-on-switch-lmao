@@ -256,18 +256,6 @@ IOReturn TegraDisplayColor::setAccessibilityScale(uint32_t scale)
     return status;
 }
 
-// AppleCLCD hands frame-info registrations to its pipe, which then sends the published keys each frame. This display
-// publishes none (supportedFrameInfo), so a registration only has to be accepted and undone.
-void TegraDisplayColor::frameInfoNotify(void *, bool enable)
-{
-    const IOInterruptState state = IOSimpleLockLockDisableInterrupt(lock);
-    if (enable)
-        ++frameInfoClients;
-    else if (frameInfoClients)
-        --frameInfoClients;
-    IOSimpleLockUnlockEnableInterrupt(lock, state);
-}
-
 void TegraDisplayColor::writeTables(const Tables &tables, const Tables *written)
 {
     for (unsigned i = 0; i < kLut1Entries; ++i)

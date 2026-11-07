@@ -34,7 +34,6 @@ public:
     IOReturn setBrightnessCorrection(uint32_t correction);
     IOReturn swapSetColorMatrix(const void *matrix, uint32_t location, uint32_t flags);
     IOReturn setAccessibilityScale(uint32_t scale);
-    void frameInfoNotify(void *client, bool enable);
 
     // Under the gate: a blank swap's black, from the next frame on, and its end at the first flip latched after it.
     void setBlank(bool blank);
@@ -61,7 +60,6 @@ private:
     volatile uint32_t *dc = nullptr;
     uint32_t colorControl = 0;
     uint32_t generation = 0;
-    uint32_t frameInfoClients = 0;
     bool pendingDirty = false, activeValid = false, hwEnabled = false;
     bool holding = false;    // a frame-end hold out until the change has reached DC A
     bool announced = false;  // the last enable was logged (a blank alone is not)

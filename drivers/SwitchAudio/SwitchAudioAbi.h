@@ -31,7 +31,7 @@
 
 #define SWITCH_AUDIO_CLASS          "SwitchAudio"
 #define SWITCH_AUDIO_MAGIC          0x53574155u /* 'SWAU' */
-#define SWITCH_AUDIO_VERSION        6u
+#define SWITCH_AUDIO_VERSION        7u
 #define SWITCH_AUDIO_RATE           48000u /* the rate a service starts at */
 #define SWITCH_AUDIO_MAX_RATES      2u
 #define SWITCH_AUDIO_OUT_CHANNELS   2u
@@ -62,6 +62,7 @@ enum {
 };
 
 #define SWITCH_AUDIO_HEADPHONE_RANGE_MDB 63750u
+#define SWITCH_AUDIO_NO_CAPTURE          (~(uint64_t)0)
 
 /* jack: what is plugged into the headphone jack. The service sends kIOMessageServicePropertyChange to its interest
  * clients each time it changes. */
@@ -92,6 +93,8 @@ typedef struct {
     volatile uint64_t anchor_host;         /* host time of sample time 0 */
     volatile uint64_t out_frames;          /* the service: playback consumed (and cleared) below this sample time */
     volatile uint64_t in_frames;           /* the service: capture valid below this sample time */
+    volatile uint64_t in_anchor;           /* the service: the sample time of capture ring frame 0 while capture runs,
+                                            * else SWITCH_AUDIO_NO_CAPTURE (switch_audio_capture_frame) */
     volatile uint64_t out_written;         /* the plug-in: the sample time after the last frame it wrote */
     volatile uint64_t io_cycles;           /* the plug-in: playback IO cycles (WriteMix calls) since it mapped this */
     volatile uint64_t io_frames;           /* the plug-in: frames those cycles wrote */

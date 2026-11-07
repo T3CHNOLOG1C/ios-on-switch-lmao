@@ -28,6 +28,7 @@
 #include "../TegraSMMU/TegraSMMUDomain.h"
 #include "DisplaySmmuProbe.h"
 #include "NativePlanes.h"
+#include "SwitchFrameInfo.h"
 #include "SwitchFrameStall.h"
 #include "SwitchInteraction.h"
 #include "../SwitchSuspend/SwitchSleepSteps.h"
@@ -36,6 +37,7 @@
 #include "TegraDisplayPower.h"
 #include "VsyncPhase.h"
 #include "../SwitchPower/SwitchPower.h"
+#include "../../kits/SwitchRefusal/SwitchRefusal.h"
 
 // The last swap Core Animation offered (validateSwap, accepted or not; mach time): while swaps keep coming CA is
 // animating, and TegraGM20B's idle clock never drops the GPU (native_display_last_swap_ns below).
@@ -560,6 +562,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     // The colour unit's state (tables, matrices, the pending change) is kept out of the object: inside, it took the instance
     // past the 16 KiB a kalloc_type class may have (KALLOC_SAFE_ALLOC_SIZE). Made in start, freed in free.
     TegraDisplayColor *color = nullptr;
+    switch_frame_info::State *frameInfo = nullptr;  // out of the object for the same reason
     bool blanked = false;  // a blank swap's black is the colour unit's until the next flip latches
 
     // Every request the validator accepted and the family has not retired yet. A client may submit swap N+1 while swap N is still on the GPU
@@ -2514,11 +2517,11 @@ private:
             if (replaced != kNoBuffer)
                 ++stReplaced;  // that frame was never shown
             notePresent(stamp, frameEnds - flipRequested, marks[asked]);
-            retireThrough(entrySeq[asked]);
+            retireThrough(entrySeq[asked], stamp);
             break;
         case TegraScanoutRing::kTakenReplaced:
             notePresent(stamp, 1, marks[replaced]);  // shown for a frame after all; the newer one is still out
-            retireThrough(entrySeq[replaced]);
+            retireThrough(entrySeq[replaced], stamp);
             break;
         }
         flipLatched();
@@ -2932,8 +2935,9 @@ private:
                 ring.latch(surfaceIndex(start), false);
                 if (replaced != kNoBuffer)
                     ++stReplaced;
-                notePresent(__atomic_load_n(&feStamp, __ATOMIC_ACQUIRE), frameEnds - flipRequested, marks[asked]);
-                retireThrough(entrySeq[asked]);  // r18-planes: retiring at the latch from the first frame on
+                const uint64_t stamp = __atomic_load_n(&feStamp, __ATOMIC_ACQUIRE);
+                notePresent(stamp, frameEnds - flipRequested, marks[asked]);
+                retireThrough(entrySeq[asked], stamp);  // r18-planes: retiring at the latch from the first frame on
                 flipLatched();
             }
             return;
@@ -3242,6 +3246,8 @@ public:
             color->free();
             IOFreeType(color, TegraDisplayColor);
         }
+        if (frameInfo)
+            IOFreeType(frameInfo, switch_frame_info::State);
         if (intMaskLock)
             IOSimpleLockFree(intMaskLock);
         IOMobileFramebufferLegacy::free();
@@ -3286,7 +3292,8 @@ public:
 
     bool start(IOService *provider) override
     {
-        if (!(color = IOMallocType(TegraDisplayColor)) || !color->init() || !(intMaskLock = IOSimpleLockAlloc()))
+        if (!(color = IOMallocType(TegraDisplayColor)) || !color->init() || !(intMaskLock = IOSimpleLockAlloc()) ||
+            !(frameInfo = IOMallocType(switch_frame_info::State)))
             return false;
         if (frameHists && !(hists = IOMallocType(FrameHists)))
             return false;
@@ -3715,6 +3722,8 @@ public:
         flipRequest = request;
         // r6-lows/r14-pacing: carried to the flip of this frame (flip, markFlip), then to its present (notePresent).
         taken = {submittedAt(request), kickAt, 0, 0, timelineOf(request)};
+        if (frameInfo->clients.any())
+            noteFrameInfoTaken(request);
         if (taken.submit && stats)
             stQueue.add(kickAt > taken.submit ? kickAt - taken.submit : 0);
         if (deferredAt) {
@@ -4238,7 +4247,7 @@ public:
             // r18-planes: a frame no flip carries (a blank fill of the pitch window before the first rotation, or the single
             // buffer) is on screen now.
             if (ring.pending == kNoBuffer && ring.held == kNoBuffer && !planeLatch.requested() && !planeHeldSet)
-                retireThrough(seqOf(request));
+                retireThrough(seqOf(request), mach_absolute_time());
             transferred = false;
             kickSwapQueue();
             return;
@@ -4280,6 +4289,27 @@ public:
         return 0;
     }
 
+    void noteFrameInfoTaken(const OriginalLegacySwapRequest *request)
+    {
+        auto bytes = reinterpret_cast<const unsigned char *>(request);
+        uint32_t id = 0;
+        uint64_t requested = 0;
+        memcpy(&id, bytes + swapId, sizeof(id));
+        memcpy(&requested, bytes + swapRequestedPresentation, sizeof(requested));
+        frameInfo->pending.take(seqOf(request), id, requested);
+    }
+
+    // Under the gate (the family's frameInfo_notify takes it again, recursively): each frame-info client's entry for the swap
+    // taken as seq, on screen from shownAt (mach_absolute_time).
+    void frameShown(uint64_t seq, uint64_t shownAt)
+    {
+        const uint64_t continuous = mach_continuous_time(), absolute = mach_absolute_time();
+        switch_frame_info::Frame frame;
+        if (frameInfo->pending.shown(seq, switch_frame_info::continuousTime(shownAt, absolute, continuous), frame) &&
+            frameInfo->clients.any())
+            native_legacy_frame_info_notify(this, &frame);
+    }
+
     // The first accepted swap in the family's queue not yet taken (latchRetire: older ones wait on screen for their latch).
     const OriginalLegacySwapRequest *firstUntaken() const
     {
@@ -4290,9 +4320,10 @@ public:
     }
 
     // At a latch (latchRetire): every taken swap at the head up to the one seen on screen (take sequence seq) retires, in queue
-    // order; the one still in flight, or a newer one asked for, stays.
-    void retireThrough(uint64_t seq)
+    // order; the one still in flight, or a newer one asked for, stays. shownAt: when the screen began showing it (mach time).
+    void retireThrough(uint64_t seq, uint64_t shownAt)
     {
+        frameShown(seq, shownAt);
         if (!latchRetire || !seq)
             return;
         bool retired = false;
@@ -4686,16 +4717,45 @@ public:
         return kIOReturnSuccess;
     }
 
-    // Selector 74 enumerates optional frame-info trace keys, not display
-    // modes. This backend implements no trace-key subscription contract.
-    IOReturn supportedFrameInfo(uint32_t, uint32_t *count, char *key, uint32_t *mask) override
+    IOReturn supportedFrameInfo(uint32_t index, uint32_t *count, char *key, uint32_t *flags) override
     {
-        if (!count || !key || !mask)
+        if (!count || !key || !flags)
             return kIOReturnBadArgument;
-        *count = 0;
-        *mask = 0;
-        bzero(key, 64);
-        return kIOReturnUnsupported;
+        return switch_frame_info::supported(index, count, key, flags) == switch_frame_info::kOk ? kIOReturnSuccess
+                                                                                                : kIOReturnBadArgument;
+    }
+
+    IOReturn changeFrameInfo(uint32_t type, void *client, uint32_t mask) override
+    {
+        if (type != switch_frame_info::kNotificationType) {
+            switch_refusal_k(switch_refusal_key_with(switch_refusal_key("display", "frame-info-type"), type), "display",
+                             "frame-info-type", "ChangeFrameInfo for notification type %u: only type %u is frame info",
+                             type, switch_frame_info::kNotificationType);
+            return kIOReturnBadArgument;
+        }
+        if (frameInfo->clients.change(client, mask) == switch_frame_info::kOk)
+            return kIOReturnSuccess;
+        switch_refusal("display", "frame-info-clients", "ChangeFrameInfo %#x: already %u frame-info clients", mask,
+                       switch_frame_info::Clients::kMax);
+        return kIOReturnNoResources;
+    }
+
+    IOReturn sendFrameInfo(void *client, const void *frame) override
+    {
+        switch_frame_info::Clients::Entry *entry = frameInfo->clients.find(client);
+        if (!entry || !frame)
+            return kIOReturnSuccess;
+        uint64_t words[switch_frame_info::kEntryWords];
+        const unsigned n = switch_frame_info::entry(entry->mask, *static_cast<const switch_frame_info::Frame *>(frame),
+                                                    entry->lastPresented, words);
+        void *owner = nullptr;
+        memcpy(&owner, static_cast<const unsigned char *>(client) + frameInfoClientOwner, sizeof(owner));
+        const IOReturn status = native_legacy_frame_info_enqueue(owner, words, n * sizeof(words[0]));
+        if (status != kIOReturnSuccess)
+            switch_refusal("display", "frame-info-queue",
+                           "frame info for swap %u dropped (%#x): the client's queue is full or gone",
+                           (uint32_t)words[1], status);
+        return status;
     }
 
     IOReturn newUserClient(task_t task, void *security, UInt32 type, IOUserClient **client) override
@@ -4914,9 +4974,11 @@ public:
         return color->setAccessibilityScale(scale);
     }
 
+    // J120's pipe does nothing when a client registers, and treats its going away as ChangeFrameInfo to no keys.
     void platformFrameInfoNotify(void *client, bool enable) override
     {
-        color->frameInfoNotify(client, enable);
+        if (!enable)
+            frameInfo->clients.change(client, 0);
     }
 
 #define LEAF(name, n)                                                      \
@@ -4924,10 +4986,8 @@ public:
     {                                                                      \
         native_legacy_backend_guard(n, this, __builtin_return_address(0)); \
     }
-    LEAF(platformPipeForward, 211)
     LEAF(platformInternalPlug, 245)
     LEAF(platformInternalUnplug, 246)
-    LEAF(platformHotPlug, 307)
     LEAF(platformRefreshRates, 338)
     LEAF(platformIdleWithoutClients, 345)
 #undef LEAF

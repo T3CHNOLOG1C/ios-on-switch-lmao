@@ -69,6 +69,7 @@
 #include <string.h>
 #include "SwitchAudioAbi.h"
 #include "SwitchAudioConvert.h"
+#include "SwitchAudioFormat.h"
 #include "../../../kits/SwitchRefusal/SwitchRefusal.h"
 
 enum {
@@ -105,6 +106,9 @@ static io_connect_t gConnect;
 static SwitchAudioControl *gControl;
 static switch_audio_sample_t *gOut, *gIn;
 static UInt32 gSpeakerUsers, gCodecUsers, gHawkingUsers;  // IO clients per device (gLock)
+// The audio server marks the Codec's input stream inactive while no client reads it (kAudioStreamPropertyIsActive):
+// headphone playback alone then leaves the microphone's path (DMA, I2S TX, the codec's ADC and bias) off. gLock.
+static Boolean gCodecInActive = true, gCodecInRunning;
 static Float32 gVolume = 1.0f, gCodecVolume = 1.0f;
 static uint32_t gJack;  // SwitchAudioJack*, as last told to the audio server
 static IONotificationPortRef gJackPort;
@@ -533,6 +537,20 @@ static OSStatus IsPropertySettable(AudioServerPlugInDriverRef d, AudioObjectID o
     return HasProperty(d, o, pid, a) ? 0 : kAudioHardwareUnknownPropertyError;
 }
 
+// gLock held: the kernel's input direction follows whether the codec device runs IO and its input stream is active.
+static void syncCodecInput(void)
+{
+    const Boolean want = gCodecUsers > 0 && gCodecInActive && gControl;
+    if (want == gCodecInRunning)
+        return;
+    if (call(want ? SwitchAudioStartInput : SwitchAudioStopInput) == KERN_SUCCESS) {
+        gCodecInRunning = want;
+        os_log(OS_LOG_DEFAULT, "SwitchAudio: headset microphone %{public}s", want ? "on" : "off");
+    } else if (want) {
+        os_log_error(OS_LOG_DEFAULT, "SwitchAudio: headset microphone not started: the kernel service refused");
+    }
+}
+
 static OSStatus SetPropertyData(AudioServerPlugInDriverRef d, AudioObjectID o, pid_t pid,
                                 const AudioObjectPropertyAddress *a, UInt32 qs, const void *q, UInt32 size,
                                 const void *data)
@@ -569,9 +587,18 @@ static OSStatus SetPropertyData(AudioServerPlugInDriverRef d, AudioObjectID o, p
     }
     if (isDevice(o) && a->mSelector == kAudioDevicePropertyNominalSampleRate)
         return size >= sizeof(Float64) ? requestRate(o, *(const Float64 *)data) : kAudioHardwareBadPropertySizeError;
-    // The audio server turns streams it does not use off and on; they stay running, so this only acknowledges it.
-    if (isStream(o) && a->mSelector == kAudioStreamPropertyIsActive)
-        return size >= sizeof(UInt32) ? 0 : kAudioHardwareBadPropertySizeError;
+    // The audio server turns streams it does not use off and on. Only the Codec's input has hardware behind it.
+    if (isStream(o) && a->mSelector == kAudioStreamPropertyIsActive) {
+        if (size < sizeof(UInt32))
+            return kAudioHardwareBadPropertySizeError;
+        if (o == kCodecIn) {
+            pthread_mutex_lock(&gLock);
+            gCodecInActive = *(const UInt32 *)data != 0;
+            syncCodecInput();
+            pthread_mutex_unlock(&gLock);
+        }
+        return 0;
+    }
     return kAudioHardwareUnknownPropertyError;
 }
 
@@ -788,7 +815,7 @@ static OSStatus GetPropertyData(AudioServerPlugInDriverRef d, AudioObjectID o, p
             *outDataSize = 0;
             return 0;
         case kAudioStreamPropertyIsActive:
-            REPLY(UInt32, 1);
+            REPLY(UInt32, o == kCodecIn ? gCodecInActive : 1);
         case kAudioStreamPropertyDirection:
             REPLY(UInt32, o != kSpeakerOut && o != kCodecOut);
         case kAudioStreamPropertyTerminalType:
@@ -870,8 +897,9 @@ static uint64_t nowFrames(void)
     return host > anchor ? (uint64_t)((Float64)(host - anchor) / gTicksPerFrame) : 0;
 }
 
-// The speaker starts the service's output and the microphone its input; the hardware runs while either does, on one
-// timeline that starts (new origin, new seed) when the first of them starts. Hawking only starts its own clock.
+// The speaker and the codec device start the service's output (syncCodecInput the microphone); the hardware runs while
+// either does, on one timeline that starts (new origin, new seed) when the first of them starts. Hawking only starts
+// its own clock.
 static OSStatus StartIO(AudioServerPlugInDriverRef d, AudioObjectID o, UInt32 client)
 {
     (void)d;
@@ -892,10 +920,9 @@ static OSStatus StartIO(AudioServerPlugInDriverRef d, AudioObjectID o, UInt32 cl
     const char *const what = o == kSpeaker ? "speaker" : "headphone";
     if (*users == 0) {
         const Boolean first = !gSpeakerUsers && !gCodecUsers;
-        // The service's output runs while either device does; the codec device also reads the microphone.
-        const Boolean output = first, input = o == kCodec;
-        if (connectService() || (output && call(SwitchAudioStartOutput) != KERN_SUCCESS) ||
-            (input && call(SwitchAudioStartInput) != KERN_SUCCESS)) {
+        // The service's output runs while either device does; the microphone only while a client reads it
+        // (syncCodecInput, once the codec's IO counts).
+        if (connectService() || (first && call(SwitchAudioStartOutput) != KERN_SUCCESS)) {
             r = kAudioHardwareNotRunningError;
             os_log_error(OS_LOG_DEFAULT, "SwitchAudio: %{public}s IO not started: the kernel service refused", what);
         } else {
@@ -908,8 +935,10 @@ static OSStatus StartIO(AudioServerPlugInDriverRef d, AudioObjectID o, UInt32 cl
                    (double)toDb(gVolume));
         }
     }
-    if (!r)
+    if (!r) {
         ++*users;
+        syncCodecInput();
+    }
     pthread_mutex_unlock(&gLock);
     return r;
 }
@@ -927,8 +956,7 @@ static OSStatus StopIO(AudioServerPlugInDriverRef d, AudioObjectID o, UInt32 cli
     } else {
         UInt32 *users = o == kSpeaker ? &gSpeakerUsers : &gCodecUsers;
         if (*users && --*users == 0) {
-            if (o == kCodec)
-                call(SwitchAudioStopInput);
+            syncCodecInput();
             if (!gSpeakerUsers && !gCodecUsers)
                 call(SwitchAudioStopOutput);
             os_log(OS_LOG_DEFAULT, "SwitchAudio: %{public}s IO stopped", o == kSpeaker ? "speaker" : "headphone");
@@ -1028,9 +1056,11 @@ static OSStatus DoIOOperation(AudioServerPlugInDriverRef d, AudioObjectID o, Aud
     } else if (op == kAudioServerPlugInIOOperationReadInput && stream == kCodecIn) {
         Float32 *dst = main;
         uint64_t t = (uint64_t)info->mInputTime.mSampleTime;
-        const uint64_t captured = gControl->in_frames;
-        for (UInt32 i = 0; i < frames; ++i, ++t)
-            dst[i] = t < captured ? switch_audio_s32_to_float(gIn[t % SWITCH_AUDIO_IN_RING_FRAMES]) : 0.0f;
+        const uint64_t anchor = __atomic_load_n(&gControl->in_anchor, __ATOMIC_ACQUIRE), captured = gControl->in_frames;
+        for (UInt32 i = 0; i < frames; ++i, ++t) {
+            const int64_t at = switch_audio_capture_frame(t, anchor, captured, SWITCH_AUDIO_IN_RING_FRAMES);
+            dst[i] = at < 0 ? 0.0f : switch_audio_s32_to_float(gIn[at]);
+        }
     }
     return 0;
 }

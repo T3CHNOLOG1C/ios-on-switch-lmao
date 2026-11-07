@@ -152,5 +152,41 @@ SWITCH_AUDIO_FN uint64_t switch_audio_clock_millihz(uint64_t ref_hz, switch_audi
     return switch_audio_rate_millihz(ref_hz, c.m, c.p, switch_audio_clock_n_eff(c), c.out0_x2, c.out0_per_fs);
 }
 
+/* What the hardware does when a request moves the running directions from `was` to `now` (SwitchAudio*Running bits:
+ * output 1, input 2). The I2S clocks and the playback DMA run while either direction does (one timeline); the capture
+ * path (ADMA channel 1, I2S TX, the codec's ADC and microphone bias) only while input does, so playback alone never
+ * powers it. */
+enum {
+    SWITCH_AUDIO_HW_START = 1u << 0,
+    SWITCH_AUDIO_HW_STOP = 1u << 1,
+    SWITCH_AUDIO_CAPTURE_START = 1u << 2,
+    SWITCH_AUDIO_CAPTURE_STOP = 1u << 3,
+};
+
+SWITCH_AUDIO_FN uint32_t switch_audio_transition(uint32_t was, uint32_t now)
+{
+    const uint32_t input = 1u << 1;
+    uint32_t actions = 0;
+    if (!was && now)
+        actions |= SWITCH_AUDIO_HW_START;
+    if ((now & input) && !(was & input))
+        actions |= SWITCH_AUDIO_CAPTURE_START;
+    if ((was & input) && !(now & input))
+        actions |= SWITCH_AUDIO_CAPTURE_STOP;
+    if (was && !now)
+        actions |= SWITCH_AUDIO_HW_STOP;
+    return actions;
+}
+
+/* The capture ring frame holding sample time t: ADMA channel 1 writes ring frame k at sample time anchor + k, and frames
+ * below in_frames are in memory. -1 (silence) outside that window, or with no capture session (anchor all ones). */
+SWITCH_AUDIO_FN int64_t switch_audio_capture_frame(uint64_t t, uint64_t anchor, uint64_t in_frames,
+                                                   uint32_t ring_frames)
+{
+    if (anchor == ~(uint64_t)0 || t < anchor || t >= in_frames)
+        return -1;
+    return (int64_t)((t - anchor) % ring_frames);
+}
+
 #undef SWITCH_AUDIO_FN
 #endif

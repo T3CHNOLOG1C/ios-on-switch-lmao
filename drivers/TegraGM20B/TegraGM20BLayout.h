@@ -9,6 +9,18 @@
 // GOBs of 64 bytes x 8 rows; a block is one GOB wide and 2^y_log2 GOBs tall; blocks lie row by row. Inside a GOB the bytes
 // are in the TegraColor arrangement (nil/copy.rs CopyGOBTegra), which is where kind TGM_LAYOUT_KIND memory holds them in
 // DRAM: what the CPU sees (the raw path's device self-test) and what DC A scans.
+//
+// Which IOSurfaces are block-linear (the kernel decides once per surface, TegraGM20BTiled.cpp, at its first GPU import that
+// asks; every process, driver and engine reads that decision): those the GPU produces. A surface is tiled when its first
+// asking import will write it on the GPU (a render target, a store, a blit destination), its shape tiles, and no other
+// import of it exists yet. It stays pitch for good when:
+//  - its first GPU import only samples it: the CPU produces it (a CG-drawn backing store, a CPU-decoded frame) and may
+//    rewrite it every frame, and a tiled surface pays a copy-engine move and a remap of the locker's mapping at every CPU
+//    lock and unlock (more than the GPU saves on one sampled read);
+//  - it lies in a client's own memory (IOSurface created over the app's pages): the app reads and writes those pages
+//    without IOSurfaceLock, so they must hold rows;
+//  - another import made before it asked, or its texel size or extent, rules it out.
+// A GPU-produced surface is CPU-read rarely (a snapshot's encoder), and its lock sees rows.
 #pragma once
 #include <stdint.h>
 
@@ -131,6 +143,21 @@ static inline void tgm_layout_read(const struct tgm_layout *l, const uint8_t *ti
 			xB += run;
 		}
 }
+
+// Provided by the GPU driver (weak in its callers): the layout of the IOSurface whose first page is `pa` when it is
+// block-linear (1: *out filled); 0 when it is pitch or no GPU client imports it. Engines that read or write a surface
+// (VIC, NVDEC, NVJPG, NVENC, the display) program a block-linear one with out->y_log2 GOBs a block and out->row_bytes,
+// and order their work after the GPU's on it as they do for a pitch one. Thread context; never waits for the GPU.
+int tegra_gm20b_surface_layout(uint64_t pa, struct tgm_layout *out);
+
+// For a kernel CPU reader of a block-linear IOSurface, by the physical address of any byte of it (`pa`): the surface's bytes
+// as a CPU lock sees them (its texels as rows bytes_per_row apart, from its first byte) in a scratch, the copy engine's,
+// behind the GPU's writers. 1: *rows to hand to tegra_gm20b_surface_rows_done, *memory an IOMemoryDescriptor of the
+// scratch valid until then, *offset where `pa`'s byte is in it. 0: no block-linear surface holds `pa`: read the memory
+// itself. -ENOMEM: one does but no scratch could be had: read nothing (its pages hold texels). Sleeps on the copy's fence
+// interrupt: thread context, no spinlock or interrupt filter.
+int tegra_gm20b_surface_rows(uint64_t pa, void **rows, void **memory, uint64_t *offset);
+void tegra_gm20b_surface_rows_done(void *rows);
 
 #ifdef __cplusplus
 }

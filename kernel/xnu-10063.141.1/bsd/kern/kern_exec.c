@@ -7265,6 +7265,7 @@ native_owner_cache_checkpoint(int status, int authorized)
 #if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
 #include "SwitchRawMount.h"
 #include "SwitchPanicSave.h"
+#include <switch/prefs.h>
 #endif
 
 static int
@@ -7975,6 +7976,43 @@ native_switch_portrait(void)
 	return rotation == 270 ? 4 : rotation == 90 ? 3 : 0;
 }
 
+/* A regular file of at most 1 MiB on data_mount, read whole into *bytes (kalloc_data, *length bytes; NULL when empty). */
+static int
+native_switch_read_data_file(proc_t p, const char *path, mount_t data_mount, char **bytes, int *length)
+{
+	vfs_context_t context = vfs_context_current();
+	vnode_t vp = NULLVP;
+	*bytes = NULL;
+	*length = 0;
+	int error = vnode_open(path, FREAD | O_NOFOLLOW_ANY, 0, 0, &vp, context);
+	if (error) return error;
+	struct vnode_attr attributes;
+	VATTR_INIT(&attributes);
+	VATTR_WANTED(&attributes, va_data_size);
+	if (vnode_mount(vp) != data_mount || !vnode_isreg(vp) || VNOP_GETATTR(vp, &attributes, context) ||
+	    !VATTR_IS_SUPPORTED(&attributes, va_data_size) || attributes.va_data_size > 1024 * 1024) {
+		error = EINVAL;
+	} else if (attributes.va_data_size) {
+		const int size = (int)attributes.va_data_size;
+		int residual = size;
+		char *data = kalloc_data((vm_size_t)size, Z_WAITOK);
+		if (!data) {
+			error = ENOMEM;
+		} else {
+			error = vn_rdwr(UIO_READ, vp, data, size, 0, UIO_SYSSPACE, 0, vfs_context_ucred(context), &residual, p);
+			if (!error && residual) error = EIO;
+			if (error) {
+				kfree_data(data, (vm_size_t)size);
+			} else {
+				*bytes = data;
+				*length = size;
+			}
+		}
+	}
+	(void)vnode_close(vp, FREAD, context);
+	return error;
+}
+
 /* The rotation lock earlier builds made (native_switch_portrait), released once: SpringBoard's own
  * SBLastRotationLockedOrientation[iPad] in its user plist still hold it (SpringBoard saves the lock it restored), and
  * it restores every lock it finds at startup. Each key is renamed in place to SWLastRotationLockedOrientation[iPad] (the
@@ -7995,29 +8033,8 @@ native_switch_rotation_lock_release(proc_t p, user_addr_t scratch, mount_t data_
 		return;
 	}
 	unsigned int renamed = 0;
-	int length = 0, error = vnode_open(plist, FREAD | O_NOFOLLOW_ANY, 0, 0, &vp, context);
 	char *bytes = NULL;
-	if (!error) {
-		struct vnode_attr attributes;
-		VATTR_INIT(&attributes);
-		VATTR_WANTED(&attributes, va_data_size);
-		if (vnode_mount(vp) != data_mount || !vnode_isreg(vp) || VNOP_GETATTR(vp, &attributes, context) ||
-		    !VATTR_IS_SUPPORTED(&attributes, va_data_size) || attributes.va_data_size > 1024 * 1024) {
-			error = EINVAL;
-		} else {
-			length = (int)attributes.va_data_size;
-			bytes = length ? kalloc_data((vm_size_t)length, Z_WAITOK) : NULL;
-			int residual = length;
-			if (length && !bytes) {
-				error = ENOMEM;
-			} else if (length) {
-				error = vn_rdwr(UIO_READ, vp, bytes, length, 0, UIO_SYSSPACE, 0, vfs_context_ucred(context),
-				    &residual, p);
-			}
-			if (!error && residual) error = EIO;
-		}
-		(void)vnode_close(vp, FREAD, context);
-	}
+	int length = 0, error = native_switch_read_data_file(p, plist, data_mount, &bytes, &length);
 	for (unsigned int k = 0; !error && bytes && k < sizeof(keys) / sizeof(keys[0]); ++k) {
 		const size_t size = strlen(keys[k]);
 		char binary[48], xml[64];
@@ -8045,6 +8062,47 @@ native_switch_rotation_lock_release(proc_t p, user_addr_t scratch, mount_t data_
 	if (!error) error = native_switch_watchdog_file(p, scratch, marker, "", 0, data_mount, 0, 0, 0644);
 	printf("SwitchRawBoot: rotation lock of earlier builds released once: %u key%s renamed (%d)\n", renamed,
 	    renamed == 1 ? "" : "s", error);
+}
+
+/* SpringBoard's never-dim keys, SBDisableAutoDim and SBDontDimOrLockOnAC, are not ours to set: the user's Auto-Lock
+ * decides, as on an iPad. With them the panel stayed lit after powerd had reported the user gone (no HID event for
+ * 300 s), and DAS ran its heavy maintenance under a user who was still looking. Kernels before the managed plist, and
+ * the first image builder, wrote them into the user's own com.apple.springboard plist, which SpringBoard has kept and
+ * rewritten since: they come out of it once, everything else in it untouched (the file goes if they were all it held).
+ * Then the marker. Before cfprefsd runs (launchd's exec). An I/O failure or a plist this cannot edit is logged, and
+ * without the marker the next boot tries again. */
+static void
+native_switch_never_dim_release(proc_t p, user_addr_t scratch, mount_t data_mount)
+{
+	static const char plist[] = "/private/var/mobile/Library/Preferences/com.apple.springboard.plist",
+	    marker[] = "/private/var/Switch/never-dim-released";
+	static const char *const keys[] = {"SBDisableAutoDim", "SBDontDimOrLockOnAC"};
+	static const char *const results[] = {"none there", "removed", "removed with the file", "plist unreadable"};
+	vnode_t vp = NULLVP;
+	if (!vnode_lookup(marker, 0, &vp, vfs_context_current())) {
+		vnode_put(vp);
+		return;
+	}
+	char *bytes = NULL;
+	int length = 0, error = native_switch_read_data_file(p, plist, data_mount, &bytes, &length);
+	size_t edited = (size_t)length;
+	enum switch_prefs_result result = SWITCH_PREFS_UNCHANGED;
+	if (bytes) result = switch_prefs_drop_keys((uint8_t *)bytes, &edited, keys, sizeof(keys) / sizeof(keys[0]));
+	if (result == SWITCH_PREFS_DROPPED) {
+		error = native_switch_watchdog_file(p, scratch, plist, bytes, (int)edited, data_mount, 501, 501, 0600);
+	} else if (result == SWITCH_PREFS_EMPTY) {
+		struct unlink_args request = {.path = scratch + 0x900};
+		int32_t unlinked = 0;
+		error = copyout(plist, request.path, sizeof(plist));
+		if (!error) error = native_switch_unlink(p, &request, &unlinked);
+	}
+	if (bytes) kfree_data(bytes, (vm_size_t)length);
+	if (error == ENOENT) error = 0;  /* no SpringBoard plist yet */
+	if (!error && result != SWITCH_PREFS_UNREADABLE) {
+		error = native_switch_mkdir(p, scratch, "/private/var/Switch", 0, 0755);
+		if (!error) error = native_switch_watchdog_file(p, scratch, marker, "", 0, data_mount, 0, 0, 0644);
+	}
+	printf("SwitchRawBoot: never-dim keys of earlier builds: %s (%d)\n", results[result], error);
 }
 
 /* MobileGestalt caches its answers (DisplayBootRotation among them) keyed by the OS build alone, so an answer from the
@@ -8325,8 +8383,7 @@ native_switch_setup_state(proc_t p, user_addr_t scratch, mount_t data_mount)
  * interface orientation the Switch rotates to. */
 #define SWITCH_SPRINGBOARD "<key>BKNoWatchdogs</key><true/>" \
 	"<key>FBLaunchWatchdogExceptions</key><dict><key>com.apple.purplebuddy</key><real>100</real></dict>" \
-	"<key>MCForceShowCloudConfigurationUI</key><false/><key>SBDisableAutoDim</key><true/>" \
-	"<key>SBDontDimOrLockOnAC</key><true/><key>SBDisableIdleSleep</key><false/>" \
+	"<key>MCForceShowCloudConfigurationUI</key><false/><key>SBDisableIdleSleep</key><false/>" \
 	"<key>SBDisableNaturalVolumeButtonArrangement</key><true/>"
 	static const struct {
 		const char *name, *body;
@@ -8411,6 +8468,7 @@ native_switch_setup_state(proc_t p, user_addr_t scratch, mount_t data_mount)
 	else {
 		native_switch_portrait_cache(p, scratch, data_mount);
 		native_switch_rotation_lock_release(p, scratch, data_mount);
+		native_switch_never_dim_release(p, scratch, data_mount);
 		native_switch_gamut_cache(p, scratch, data_mount);
 		native_switch_identity_cache(p, scratch, data_mount);
 		native_switch_als_cache(p, scratch, data_mount);

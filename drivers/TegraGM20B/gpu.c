@@ -2461,6 +2461,20 @@ static void stats_tick(void)
 				"%llu AvoidSync locks refused\n",
 				coh[0], coh[1] >> 10, coh[2], coh[3] >> 10, coh[4], coh[5]);
 	}
+	/* IOSurface layouts decided this window (TegraGM20BTiled.cpp), the block-linear ones live, and the CPU views'
+	 * scratch: what tiling costs in memory */
+	{
+		uint64_t t[9];
+		tgm_tiled_take_stats(t);
+		if (t[0] || t[1] || t[2] || t[3] || t[4] || t[5] || t[7])
+			nvxnu_log("tegra-gm20b: layouts %llu block-linear, pitch %llu sampled "
+				  "first, %llu shared, "
+				  "%llu by shape, %llu failed tiling; %llu block-linear live (%llu "
+				  "KiB), CPU views' "
+				  "scratch %llu KiB (peak %llu KiB)\n",
+				  t[0], t[1], t[2], t[3], t[4], t[5], t[6] >> 10, t[7] >> 10,
+				  t[8] >> 10);
+	}
 #undef PT_NS
 }
 
@@ -3530,6 +3544,23 @@ void tgm_writer_wait(uint32_t uid, uint32_t seqno)
 			tgm_chan_hung(chan, "IOSurface lock", seqno, TGM_WRITER_HANG_NS);
 		mutex_unlock(&live_lock);
 	}
+}
+
+int tgm_writer_fence_va(struct tgm_vm *vm, uint32_t uid, uint64_t *va)
+{
+	struct tgm_chan *chan;
+	uintptr_t off;
+	int ret = -ENOENT;
+
+	mutex_lock(&live_lock);
+	chan = live_by_uid(uid);
+	off = chan ? (uintptr_t)chan->fence_cpu - (uintptr_t)fences.va : TGM_FENCE_BYTES;
+	if (chan && !chan->error && vm->fences_va && fences.va && off < TGM_FENCE_BYTES) {
+		*va = vm->fences_va + off;
+		ret = 0;
+	}
+	mutex_unlock(&live_lock);
+	return ret;
 }
 
 int tgm_writers_all_done(void)

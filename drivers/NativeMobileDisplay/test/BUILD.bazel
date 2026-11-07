@@ -4,6 +4,8 @@
 #                                       slow for any phase
 #   switch_interaction_test             SwitchInteraction.h: the presents of a touch interaction window, its line
 #   switch_frame_stall_test             SwitchFrameStall.h: the frame ends at which the screen stopped mid-animation
+#   switch_frame_info_test              SwitchFrameInfo.h: the frame-info keys, each present's entry decoded as
+#                                       IOMobileFramebuffer.framework decodes it, the client and pending-swap tables
 #   display_probe_test                  DisplaySmmuProbe.h against a model of DC A, its CRC unit and the SMMU: passing
 #                                       on a working unit and failing at its own stage, undone, for each fault
 #   request_state_test                  NativeLegacyRequest.h: which swaps the legacy backend shows itself, the fill,
@@ -52,6 +54,14 @@ host_test(
     srcs = [
         "switch_frame_stall_test.cpp",
         "//drivers/NativeMobileDisplay:SwitchFrameStall.h",
+    ],
+)
+
+host_test(
+    name = "switch_frame_info_test",
+    srcs = [
+        "switch_frame_info_test.cpp",
+        "//drivers/NativeMobileDisplay:SwitchFrameInfo.h",
     ],
 )
 

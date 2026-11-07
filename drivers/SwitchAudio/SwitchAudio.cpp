@@ -376,10 +376,13 @@ class SwitchAudio : public IOService {
     IOInterruptEventSource *jackSource = nullptr;
     IOTimerEventSource *jackTimer = nullptr, *idleTimer = nullptr;
     bool codecOn = false, jackKnown = false, jackIn = false, headset = false, speakerOnly = false;
-    bool captureProven = false;   // a capture period has arrived since start
-    unsigned headphoneSteps = 0;  // the plug-in's headphone level, in the DAC's 0.375 dB steps (setHeadphoneLevel)
-    bool hardwareLost = false;    // the APE did not come back after sleep, or shut down: never touched again
-    bool codecOff = false;        // shut down: the codec is unpowered
+    bool captureProven = false;      // a capture period has arrived since start
+    bool captureRunning = false;     // ADMA ch1 and I2S TX run: input is requested (captureStart)
+    bool captureCodecOn = false;     // the codec's ADC path and microphone bias are up (codec work loop)
+    uint64_t captureStartFrame = 0;  // the sample time of capture ring frame 0
+    unsigned headphoneSteps = 0;     // the plug-in's headphone level, in the DAC's 0.375 dB steps (setHeadphoneLevel)
+    bool hardwareLost = false;       // the APE did not come back after sleep, or shut down: never touched again
+    bool codecOff = false;           // shut down: the codec is unpowered
     IONotifier *shutdownNotifier = nullptr;
     SwitchRT5639 codec;
 #if DEVELOPMENT || DEBUG
@@ -672,13 +675,12 @@ class SwitchAudio : public IOService {
     {
         if (hardwareLost)
             return;  // the play position stands still: the plug-in sees no progress, never noise
-        switch_audio_sample_t *out = ring(SwitchAudioMemoryOutput), *in = ring(SwitchAudioMemoryInput);
+        switch_audio_sample_t *out = ring(SwitchAudioMemoryOutput);
         bzero(out, kOutBytes);
         switch_dcache_clean(out, kOutBytes);
-        bzero(in, kInBytes);
-        switch_dcache_clean_invalidate(in, kInBytes);
         control->out_frames = 0;
         control->in_frames = 0;
+        control->in_anchor = SWITCH_AUDIO_NO_CAPTURE;
         control->out_written = 0;
         // I2S1 and ADMAIF1, each session in L4T's order (tegra210_i2s_alt.c): set_fmt (CTRL with master mode, I2S_EN),
         // hw_params (timing, data offset, CIF), then the DAPM PRE_PMU sw reset of each direction it powers up
@@ -692,46 +694,82 @@ class SwitchAudio : public IOService {
         switch_mmio_write32(ahub, I2S_RX_CIF, switch_audio_i2s_rx_cif());  // playback: XBAR stereo -> DAP stereo
         // capture: DAP stereo -> XBAR mono (left: IN1 is on both)
         switch_mmio_write32(ahub, I2S_TX_CIF, switch_audio_i2s_tx_cif());
+        // Both directions reset here, before either runs: a TX reset later would also clear I2S_CTRL under running
+        // playback (i2sSoftReset), so captureStart and captureStop leave it out.
         i2sSoftReset(I2S_RX_SOFT_RESET, "I2S1 RX");
         if (tegraCapture)
             i2sSoftReset(I2S_TX_SOFT_RESET, "I2S1 TX");
         softReset(ADMAIF_TX_SOFT_RESET, "ADMAIF1 TX");
         softReset(ADMAIF_RX_SOFT_RESET, "ADMAIF1 RX");
         switch_mmio_write32(ahub, ADMAIF_TX_CIF, switch_audio_admaif_cif(SWITCH_AUDIO_OUT_CHANNELS));
-        switch_mmio_write32(ahub, ADMAIF_RX_CIF, switch_audio_admaif_cif(SWITCH_AUDIO_IN_CHANNELS));
-        const unsigned channels = tegraCapture ? 2 : 1;
-        for (unsigned ch = 0; ch < channels; ++ch) {
-            const uint32_t base = ch * CH_STRIDE;
-            switch_mmio_write32(adma, base + CH_CMD, 0);
-            switch_mmio_write32(adma, base + CH_INT_CLEAR, 1);
-            switch_mmio_write32(adma, base + CH_TC, ch == kChOut ? kOutPeriodBytes : kInPeriodBytes);
-            switch_mmio_write32(adma, base + CH_CTRL, kChCtrl[ch]);
-            switch_mmio_write32(adma, base + CH_SRC, ch == kChOut ? ringPA[SwitchAudioMemoryOutput] : 0);
-            switch_mmio_write32(adma, base + CH_TRG, ch == kChOut ? 0 : ringPA[SwitchAudioMemoryInput]);
-            switch_mmio_write32(adma, base + CH_FIFO_CTRL, kChFifo[ch]);
-            switch_mmio_write32(adma, base + CH_CONFIG, kChConfig[ch]);
-        }
+        programChannel(kChOut);
         switch_mmio_write32(ahub, I2S_RX_ENABLE, 1);
-        if (tegraCapture)
-            switch_mmio_write32(ahub, I2S_TX_ENABLE, 1);
         switch_mmio_write32(ahub, ADMAIF_TX_ENABLE, 1);
-        if (tegraCapture)
-            switch_mmio_write32(ahub, ADMAIF_RX_ENABLE, 1);
         // Sample time 0 is ring frame 0 leaving memory. tegra_adma_start brackets the start with the global clock gate.
         control->anchor_host = mach_absolute_time();
         switch_mmio_write32(adma, GLOBAL_CG, 0);
-        for (unsigned ch = 0; ch < channels; ++ch)
-            switch_mmio_write32(adma, ch * CH_STRIDE + CH_CMD, 1);
+        switch_mmio_write32(adma, CH_CMD, 1);
         switch_mmio_write32(adma, GLOBAL_CG, 7);
-        for (unsigned ch = 0; ch < channels; ++ch) {
-            periods[ch] = 0;
-            xferSeen[ch] = (uint16_t)switch_mmio_read32(adma, ch * CH_STRIDE + CH_XFER_STATUS);
-        }
+        periods[kChOut] = 0;
+        xferSeen[kChOut] = (uint16_t)switch_mmio_read32(adma, CH_XFER_STATUS);
         graced = false;
         timer->setTimeoutMS(watchdogMS());
 #if DEVELOPMENT || DEBUG
         ++statStarts;
 #endif
+    }
+
+    void programChannel(unsigned ch)
+    {
+        const uint32_t base = ch * CH_STRIDE;
+        switch_mmio_write32(adma, base + CH_CMD, 0);
+        switch_mmio_write32(adma, base + CH_INT_CLEAR, 1);
+        switch_mmio_write32(adma, base + CH_TC, ch == kChOut ? kOutPeriodBytes : kInPeriodBytes);
+        switch_mmio_write32(adma, base + CH_CTRL, kChCtrl[ch]);
+        switch_mmio_write32(adma, base + CH_SRC, ch == kChOut ? ringPA[SwitchAudioMemoryOutput] : 0);
+        switch_mmio_write32(adma, base + CH_TRG, ch == kChOut ? 0 : ringPA[SwitchAudioMemoryInput]);
+        switch_mmio_write32(adma, base + CH_FIFO_CTRL, kChFifo[ch]);
+        switch_mmio_write32(adma, base + CH_CONFIG, kChConfig[ch]);
+    }
+
+    // Input requested with the I2S running (tegraStart, or a stream already playing): ADMAIF1 RX, I2S TX and ADMA
+    // ch1 from capture ring frame 0, which holds the sample time captureStartFrame (in_anchor for the plug-in).
+    void captureStart()
+    {
+        if (!tegraCapture || captureRunning || hardwareLost)
+            return;
+        switch_audio_sample_t *in = ring(SwitchAudioMemoryInput);
+        bzero(in, kInBytes);
+        switch_dcache_clean_invalidate(in, kInBytes);
+        softReset(ADMAIF_RX_SOFT_RESET, "ADMAIF1 RX");
+        switch_mmio_write32(ahub, ADMAIF_RX_CIF, switch_audio_admaif_cif(SWITCH_AUDIO_IN_CHANNELS));
+        programChannel(kChIn);
+        switch_mmio_write32(ahub, I2S_TX_ENABLE, 1);
+        switch_mmio_write32(ahub, ADMAIF_RX_ENABLE, 1);
+        captureStartFrame = nowFrame();
+        control->in_frames = captureStartFrame;
+        __atomic_store_n(&control->in_anchor, captureStartFrame, __ATOMIC_RELEASE);
+        switch_mmio_write32(adma, kChIn * CH_STRIDE + CH_CMD, 1);
+        periods[kChIn] = 0;
+        xferSeen[kChIn] = (uint16_t)switch_mmio_read32(adma, kChIn * CH_STRIDE + CH_XFER_STATUS);
+        captureRunning = true;
+    }
+
+    // tegraStop's capture half: DMA, ADMAIF, I2S TX; playback, if it runs, goes on.
+    void captureStop()
+    {
+        if (!captureRunning)
+            return;
+        captureRunning = false;
+        __atomic_store_n(&control->in_anchor, SWITCH_AUDIO_NO_CAPTURE, __ATOMIC_RELEASE);
+        const uint32_t base = kChIn * CH_STRIDE;
+        switch_mmio_write32(adma, base + CH_CMD, 0);
+        if (!switch_mmio_wait32(adma, base + CH_STATUS, 1, 0, 10000))
+            panic("SwitchAudio: ADMA ch1 did not stop (STATUS %#x)", switch_mmio_read32(adma, base + CH_STATUS));
+        switch_mmio_write32(adma, base + CH_INT_CLEAR, 1);
+        stopUnit(ADMAIF_RX_ENABLE, ADMAIF_RX_STATUS, "ADMAIF1 RX");
+        softReset(ADMAIF_RX_SOFT_RESET, "ADMAIF1 RX");
+        stopUnit(I2S_TX_ENABLE, I2S_TX_STATUS, "I2S1 TX");
     }
 
     // tegra_adma_stop, tegra_admaif_stop, the I2S widgets' power-down: DMA, then ADMAIF, then I2S.
@@ -740,25 +778,14 @@ class SwitchAudio : public IOService {
         timer->cancelTimeout();
         if (hardwareLost)
             return;  // tegraStart started nothing; a powered-off APE must not be accessed
-        const unsigned channels = tegraCapture ? 2 : 1;
-        for (unsigned ch = 0; ch < channels; ++ch) {
-            const uint32_t base = ch * CH_STRIDE;
-            switch_mmio_write32(adma, base + CH_CMD, 0);
-            if (!switch_mmio_wait32(adma, base + CH_STATUS, 1, 0, 10000)) {
-                panic("SwitchAudio: ADMA ch%u did not stop (STATUS %#x)", ch,
-                      switch_mmio_read32(adma, base + CH_STATUS));
-            }
-            switch_mmio_write32(adma, base + CH_INT_CLEAR, 1);
-        }
+        captureStop();
+        switch_mmio_write32(adma, CH_CMD, 0);
+        if (!switch_mmio_wait32(adma, CH_STATUS, 1, 0, 10000))
+            panic("SwitchAudio: ADMA ch0 did not stop (STATUS %#x)", switch_mmio_read32(adma, CH_STATUS));
+        switch_mmio_write32(adma, CH_INT_CLEAR, 1);
         stopUnit(ADMAIF_TX_ENABLE, ADMAIF_TX_STATUS, "ADMAIF1 TX");
         softReset(ADMAIF_TX_SOFT_RESET, "ADMAIF1 TX");
-        if (tegraCapture) {
-            stopUnit(ADMAIF_RX_ENABLE, ADMAIF_RX_STATUS, "ADMAIF1 RX");
-            softReset(ADMAIF_RX_SOFT_RESET, "ADMAIF1 RX");
-        }
         stopUnit(I2S_RX_ENABLE, I2S_RX_STATUS, "I2S1 RX");
-        if (tegraCapture)
-            stopUnit(I2S_TX_ENABLE, I2S_TX_STATUS, "I2S1 TX");
         switch_mmio_write32(ahub, I2S_ENABLE,
                             0);  // the bit and frame clocks stop until the next session (runtime suspend in Linux)
     }
@@ -778,8 +805,6 @@ class SwitchAudio : public IOService {
         bzero(slot, kOutPeriodBytes);
         switch_dcache_clean(slot, kOutPeriodBytes);
         control->out_frames = done;
-        if (!tegraCapture)
-            control->in_frames = done;  // the capture ring stays silent, on the hardware's clock
         if (done > now + kOutPeriodFrames) {
             panic(
                 "SwitchAudio: ADMA ch0 runs fast: %llu frames played at clock frame %llu (I2S %#x CTRL %#x TIMING %#x)",
@@ -829,14 +854,14 @@ class SwitchAudio : public IOService {
     }
 #endif
 
-    // Audio work loop: the capture channel delivered no period while playback finished three, on its first run since
+    // Audio work loop: the capture channel delivered no period in two playback periods, on its first run since
     // start. Capture stops for the boot, playback goes on, and the microphone reads as absent (publishJack).
     void captureOff()
     {
         const uint32_t in = kChIn * CH_STRIDE, id = kAgicAdma + kChIn;
-        IOLog("SwitchAudio: headset microphone off for this boot: ADMA ch1 delivered no period while ch0 played %llu "
+        IOLog("SwitchAudio: headset microphone off for this boot: ADMA ch1 delivered no period in %llu frames "
               "(XFER %u STATUS %#x INT_STATUS %#x, ADMAIF RX %#x, I2S TX %#x)\n",
-              periods[kChOut], switch_mmio_read32(adma, in + CH_XFER_STATUS) & 0xffff,
+              nowFrame() - captureStartFrame, switch_mmio_read32(adma, in + CH_XFER_STATUS) & 0xffff,
               switch_mmio_read32(adma, in + CH_STATUS), switch_mmio_read32(adma, in + CH_INT_STATUS),
               switch_mmio_read32(ahub, ADMAIF_RX_STATUS), switch_mmio_read32(ahub, I2S_TX_STATUS));
         switch_mmio_write32(adma, in + CH_CMD, 0);
@@ -845,7 +870,8 @@ class SwitchAudio : public IOService {
         switch_mmio_write32(ahub, ADMAIF_RX_ENABLE, 0);  // not waited for: nothing here starts them again this boot
         switch_mmio_write32(ahub, I2S_TX_ENABLE, 0);
         tegraCapture = false;
-        control->in_frames = control->out_frames;
+        captureRunning = false;
+        __atomic_store_n(&control->in_anchor, SWITCH_AUDIO_NO_CAPTURE, __ATOMIC_RELEASE);
         codecStep(kCodecNoMicrophone);
     }
 
@@ -857,7 +883,7 @@ class SwitchAudio : public IOService {
         switch_dcache_clean_invalidate(ring(SwitchAudioMemoryInput) +
                                            (n % kInPeriods) * kInPeriodFrames * SWITCH_AUDIO_IN_CHANNELS,
                                        kInPeriodBytes);
-        control->in_frames = (n + 1) * kInPeriodFrames;
+        control->in_frames = captureStartFrame + (n + 1) * kInPeriodFrames;
     }
 
     // One ADMA channel's interrupt: acknowledge it and account every period its completed-period counter
@@ -868,7 +894,7 @@ class SwitchAudio : public IOService {
         const uint32_t status = switch_mmio_read32(adma, base + CH_INT_STATUS);
         if (status)
             switch_mmio_write32(adma, base + CH_INT_CLEAR, status);
-        if (!control->state)
+        if (!control->state || (ch == kChIn && !captureRunning))
             return;  // the period that ended as the stream stopped
         const uint16_t xfer = (uint16_t)switch_mmio_read32(adma, base + CH_XFER_STATUS);
         uint32_t done = (uint16_t)(xfer - xferSeen[ch]);
@@ -883,14 +909,17 @@ class SwitchAudio : public IOService {
             return;
         graced = false;
         timer->setTimeoutMS(watchdogMS());
-        // Capture runs on the same clock from the same start: two periods behind playback, its interrupt is lost or its
-        // DMA stalled.
-        if (tegraCapture && !captureProven && periods[kChOut] > 2) {
+        // Capture runs on the same clock from its own start: two playback periods behind the clock, its interrupt is lost
+        // or its DMA stalled.
+        if (!captureRunning)
+            return;
+        const uint64_t now = nowFrame(), captured = periods[kChIn] * kInPeriodFrames;
+        const uint64_t played = now > captureStartFrame ? now - captureStartFrame : 0;
+        if (!captureProven && played > 2 * kOutPeriodFrames) {
             captureOff();
             return;
         }
-        if (tegraCapture &&
-            periods[kChOut] * kOutPeriodFrames > periods[kChIn] * kInPeriodFrames + 2 * kOutPeriodFrames) {
+        if (played > captured + 2 * kOutPeriodFrames) {
             const uint32_t in = kChIn * CH_STRIDE, id = kAgicAdma + kChIn, bit = 1u << (id % 32), word = 4 * (id / 32);
             panic("SwitchAudio: ADMA ch1 behind: %llu periods vs %llu, XFER %u seen %u INT_STATUS %#x STATUS %#x, AGIC "
                   "pend %u, "
@@ -970,10 +999,6 @@ class SwitchAudio : public IOService {
         if (!codecOn) {
             codec.biasStandby();
             codec.powerDac();
-            if (tegraCapture) {
-                codec.micBias(headset);
-                codec.powerCapture();
-            }
             codecOn = true;
         }
         const rt5639::Route want = wantedRoute();
@@ -984,6 +1009,20 @@ class SwitchAudio : public IOService {
     }
 
     // Route, DAC and references off, outputs muted first (rt5640.c's PRE_PMD steps, then bias OFF).
+    // The headset microphone's path (BST1, the REC mixers, the ADC, MICBIAS1 for a headset) only while input runs.
+    void captureCodec(bool on)
+    {
+        if (on && tegraCapture && codecOn && !captureCodecOn) {
+            codec.micBias(headset);
+            codec.powerCapture();
+            captureCodecOn = true;
+        } else if (!on && captureCodecOn) {
+            codec.powerCaptureOff();
+            codec.micBias(false);
+            captureCodecOn = false;
+        }
+    }
+
     void codecPowerDown()
     {
         if (codecOn)
@@ -991,6 +1030,7 @@ class SwitchAudio : public IOService {
         if (codec.biasIsOn())
             codec.biasOff();
         codecOn = false;
+        captureCodecOn = false;
     }
 
     enum CodecStep : uintptr_t {
@@ -1001,6 +1041,8 @@ class SwitchAudio : public IOService {
         kCodecIdleNow,         // no stream: powered down now (before its MCLK changes), not kIdleMS later
         kCodecHeadphoneLevel,  // headphoneSteps
         kCodecNoMicrophone,    // capture turned off for the boot
+        kCodecCaptureOn,
+        kCodecCaptureOff,
     };
 
     static IOReturn codecGated(OSObject *owner, void *step, void *, void *, void *)
@@ -1033,8 +1075,15 @@ class SwitchAudio : public IOService {
                 self->codec.mute(false);
             break;
         case kCodecNoMicrophone:
+            self->captureCodec(false);
             self->codec.micBias(false);
             self->publishJack();
+            break;
+        case kCodecCaptureOn:
+            self->captureCodec(true);
+            break;
+        case kCodecCaptureOff:
+            self->captureCodec(false);
             break;
         default:
             break;
@@ -1072,7 +1121,7 @@ class SwitchAudio : public IOService {
                 idleTimer->setTimeoutMS(kIdleMS);
         }
         headset = tegraCapture && codec.detectHeadset(jackIn);
-        if (!jackIn)
+        if (!captureCodecOn || !headset)
             codec.micBias(false);
         publishJack();
     }
@@ -1246,29 +1295,39 @@ class SwitchAudio : public IOService {
             break;
         case SwitchAudioStartInput:
             if (!(was & SwitchAudioInputRunning)) {
-                if (!self->tegra)
+                if (!self->tegra) {
                     c->in_frames = self->nowFrame();
+                    __atomic_store_n(&c->in_anchor, c->in_frames, __ATOMIC_RELEASE);
+                }
                 c->state = was | SwitchAudioInputRunning;
             }
             break;
         case SwitchAudioStopInput:
+            if (!self->tegra)
+                __atomic_store_n(&c->in_anchor, SWITCH_AUDIO_NO_CAPTURE, __ATOMIC_RELEASE);
             c->state = was & ~(uint32_t)SwitchAudioInputRunning;
             break;
         default:
             return kIOReturnBadArgument;
         }
-        // Both directions share one clock and one start: the hardware runs while either is requested.
-        if (!was && c->state) {
-            if (self->tegra)
-                self->tegraStart();
-            else
+        // Both directions share one clock: the I2S and playback DMA run while either is requested, the capture path
+        // only while input is.
+        const uint32_t actions = switch_audio_transition(was, c->state);
+        if (!self->tegra) {
+            if (actions & SWITCH_AUDIO_HW_START)
                 self->timer->setTimeoutMS(kTickMS);
-        } else if (was && !c->state) {
-            if (self->tegra)
-                self->tegraStop();
-            else
+            if (actions & SWITCH_AUDIO_HW_STOP)
                 self->timer->cancelTimeout();
+            return kIOReturnSuccess;
         }
+        if (actions & SWITCH_AUDIO_HW_START)
+            self->tegraStart();
+        if (actions & SWITCH_AUDIO_CAPTURE_START)
+            self->captureStart();
+        if (actions & SWITCH_AUDIO_CAPTURE_STOP)
+            self->captureStop();
+        if (actions & SWITCH_AUDIO_HW_STOP)
+            self->tegraStop();
         return kIOReturnSuccess;
     }
 
@@ -1316,6 +1375,8 @@ class SwitchAudio : public IOService {
         self->cascade->enable();
         if (self->control->state)
             self->tegraStart();
+        if (self->control->state & SwitchAudioInputRunning)
+            self->captureStart();
         return kIOReturnSuccess;
     }
 
@@ -1553,7 +1614,11 @@ public:
                                  : SwitchAudioInputRunning;
         if (run)
             codecStep(kCodecPowerUp);
-        else if (!(control->state & ~bit))
+        if (selector == SwitchAudioStartInput)
+            codecStep(kCodecCaptureOn);
+        else if (selector == SwitchAudioStopInput)
+            codecStep(kCodecCaptureOff);
+        if (!run && !(control->state & ~bit))
             codecStep(kCodecPause);
         const IOReturn result = gate->runAction(&SwitchAudio::requestGated, (void *)(uintptr_t)selector);
         if (run)

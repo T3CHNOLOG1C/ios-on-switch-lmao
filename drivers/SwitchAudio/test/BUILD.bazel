@@ -53,6 +53,7 @@ host_test(
         "switch_audio_source_test.cpp",
         "switch_audio_words.h",
         "//drivers/SwitchAudio:SwitchAudioAbi.h",
+        "//drivers/SwitchAudio:SwitchAudioFormat.h",
     ],
     data = [
         "//drivers/SwitchAudio:SwitchAudio.cpp",

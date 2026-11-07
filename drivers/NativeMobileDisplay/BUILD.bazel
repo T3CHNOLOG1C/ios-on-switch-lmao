@@ -52,6 +52,7 @@ kernel_driver(
         "drivers/TegraSMMU",
         # TegraVICConfig.h: the traits the detach gate reads (r18-planes).
         "drivers/TegraVIC",
+        "kits/SwitchRefusal",
     ],
     late = ["NativeLegacyDisplay.cpp"],
 )
@@ -66,6 +67,7 @@ switch_abi_bindings(
 kernel_driver(
     name = "NativeGOPPresenter",
     srcs = ["NativeGOPPresenter.cpp"],
-    hdr_deps = [],
+    # TegraGM20BLayout.h: a block-linear surface's rows for the CPU read.
+    hdr_deps = ["drivers/TegraGM20B"],
     late = ["NativeGOPPresenter.cpp"],
 )

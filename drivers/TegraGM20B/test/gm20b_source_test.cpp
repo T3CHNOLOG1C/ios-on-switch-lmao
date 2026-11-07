@@ -322,18 +322,23 @@ TEST(GM20BPresentSource, FenceOnlyPresentHasNoCopy)
 		     "NVB0B5_LAUNCH_DMA_NON_PIPELINED");
 }
 
-// A tiled (block-linear) source: the copy engine reads it block-linear with the tiled block height, never as pitch, and
-// the user client records a surface as tiled only from a bind of the whole surface.
+// A tiled (block-linear) source: the copy engine reads it block-linear with the tiled block height, never as pitch, through
+// a mapping of the kind its texels were written under; a surface's layout comes from its decision (SurfaceLayout), never
+// from how one client bound it.
 TEST(GM20BPresentSource, TiledSourceIsCopiedBlockLinear)
 {
 	const std::string copy = flat(Between(gpu(), "static int present_copy(", "\n}\n"));
 	expectBefore(copy, "if (src_block) PUSH_NVSQ(push, NVA0B5, NVB0B5_SET_SRC_BLOCK_SIZE",
 		     "NVB0B5_LAUNCH_DMA");
 	EXPECT_THAT(copy, HasSubstr("(src_block ? 0 : NVB0B5_LAUNCH_DMA_SRC_PITCH)"));
+	const std::string surface = flat(Between(client(), "uint64_t presentSurface(", "\n}\n"));
+	EXPECT_THAT(surface, HasSubstr("const uint32_t kind = blockLinear ? TGM_LAYOUT_KIND : 0;"));
+	EXPECT_THAT(surface, HasSubstr("s.mem, bytes, uint8_t(kind))"));
 	EXPECT_THAT(flat(Between(client(), "IOReturn AGXDeviceUserClient::vmBind(", "\n}\n")),
-		    HasSubstr("if (tiled) tgm_coherency_tiled_bind(bo->coh, 1);"));
-	EXPECT_THAT(flat(Between(client(), "void AGXDeviceUserClient::unbindOverlaps(", "\n}\n")),
-		    HasSubstr("if (b.tiled) tgm_coherency_tiled_bind(b.bo->coh, -1);"));
+		    Not(HasSubstr("tiled")));
+	EXPECT_THAT(
+		flat(Between(client(), "IOReturn AGXDeviceUserClient::surfaceLayout(", "\n}\n")),
+		HasSubstr("tgm_coherency_layout(bo->coh,"));
 }
 
 // System sleep (gpu.c "system sleep"): every path that touches the GPU outside gpu.lock goes through the gate

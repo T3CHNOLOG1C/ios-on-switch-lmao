@@ -93,6 +93,7 @@ public:
     // A stream's paths: I2S1 and DAC1; the headset microphone's BST1, REC mixers and ADC.
     void powerDac();
     void powerCapture();
+    void powerCaptureOff();
 
     // The DAPM power-up and power-down of each route, in DAPM order; the output mute is separate (mute) so a route can
     // be up while no stream plays.

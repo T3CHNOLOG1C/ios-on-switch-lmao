@@ -33,6 +33,9 @@ enum : uint32_t {
     INVALIDATE_SHADER_CACHES_NO_WFI = 0x0da4,
     PIXEL_SHADER_BARRIER = 0x0de0,
     PIXEL_SHADER_INTERLOCK_CONTROL = 0x1224,
+    DEPTH_TEST = 0x12cc,
+    STENCIL_TEST = 0x1380,
+    ANTI_ALIAS_ALPHA_CONTROL = 0x153c,
     // Not in NVIDIA's published class headers: the texture data cache invalidate that NVN (deko3d's ORDER_FRAGMENTS
     // barrier) and NVIDIA's Linux driver put after PIXEL_SHADER_BARRIER, which orders it after the earlier pixels. The
     // _NO_WFI form acts as the front end reads it, while those pixels may still be shading or in the ROP.
@@ -473,6 +476,18 @@ Pipeline *Device::pipeline(uint64_t keyHash, PackForm form, bool caTransform)
     pl.caTransform = caTransform;
     if (const char *ds = strstr(pack_.string(pp.keyString), "ds="))
         sscanf(ds, "ds=%u", &pl.depthFormat);
+    // SPH word 0 bit 15 KILLS_PIXELS, bit 608 OMAP_SAMPLE_MASK (cla097sph.h); SET_DEPTH_TEST, SET_STENCIL_TEST and
+    // SET_ANTI_ALIAS_ALPHA_CONTROL's alpha to coverage in bit 0
+    uint32_t sph[20];
+    memcpy(sph, pack_.section<uint8_t>(PackHeap) + progs[pp.fs].program, sizeof sph);
+    bool tests = false;
+    for (uint32_t k = 0; k < pp.blobDwords; k += 2) {
+        const uint32_t m = blob[pp.blob + k], v = blob[pp.blob + k + 1];
+        tests |= (m == DEPTH_TEST || m == STENCIL_TEST || m == ANTI_ALIAS_ALPHA_CONTROL) && (v & 1);
+    }
+    const char *key = pack_.string(pp.keyString);
+    pl.dropsPixels =
+        (sph[0] >> 15 & 1) || (sph[19] & 1) || tests || strncmp(key, "samples=1 ", 10) || !strstr(key, " ds=0/0 ");
     for (uint32_t k = 0; k < pp.entries; k++)
         if (pp.entry[k].kind == EntryFetch && pp.entry[k].slot < 8)
             pl.fetchBits |= uint8_t(1u << pp.entry[k].slot);
@@ -2120,6 +2135,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, uint32_t first, ui
                             uint32_t baseInstance, bool indexed, const char **why)
 {
     const uint32_t count = vCount;
+    const bool firstDraw = !drew_;
     drew_ = true;
     readBits_ |= pl->readBits;
     // the pixels it may write: its scissor within its viewport's pixels (m2v vk_scissors, viewport_pixels)
@@ -2352,6 +2368,11 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, uint32_t first, ui
     // (raw_region.h); nothing bounds a storage access's pixels.
     const uint8_t texFetched = pl->fetchBits & ~pl->storageBits, ropAccessed = pl->writeBits | pl->readBits;
     const DrawGeometry g = geometry(*pl, primitive, first, indexed ? drawIndexCount_ : count, {x[0], y[0], x[1], y[1]});
+    if (firstDraw && !pl->dropsPixels) {
+        const uint8_t opaque = pl->writeBits & ~(pl->readBits | pl->fetchBits | pl->storageBits);
+        if (opaque && WrittenRegion::covers(g, primitive == 3, areaW_, areaH_))
+            covered_ = opaque;
+    }
     const bool storage =
         (pl->storageBits & writtenBits_) | (ropAccessed & storageWrittenBits_) | (texFetched & storageWrittenBits_);
     if (storage || (texFetched & writtenBits_)) {
@@ -2776,10 +2797,15 @@ std::vector<RenderEncoder::Clear> RenderEncoder::clears() const
             }
             Clear c{j, 0, 0, rw, rh, a.clear};
             c.own = rw != w || rh != h;
+            dev_->stats.clears++;
+            if (!c.own && (covered_ >> j & 1)) {
+                dev_->stats.clearsElided++;
+                continue;
+            }
             out.push_back(c);
             continue;
         }
-        if (a.load != ColorAttachment::DontCare || reach == Nothing)
+        if (a.load != ColorAttachment::DontCare || reach == Nothing || (covered_ >> j & 1))
             continue;
         const bool read = readBits_ >> j & 1;
         if (memoryless_[j]) {

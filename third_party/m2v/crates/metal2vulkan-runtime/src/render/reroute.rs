@@ -217,7 +217,7 @@ impl RenderCommandEncoder {
         // leave out). The draws recorded again then record into it as their current one.
         self.rerouting = true;
         let made = self.next_instance(
-            (&colors, Some(by)),
+            (&colors, &[], Some(by)),
             (false, false),
             ViewSetup::default(),
             true,

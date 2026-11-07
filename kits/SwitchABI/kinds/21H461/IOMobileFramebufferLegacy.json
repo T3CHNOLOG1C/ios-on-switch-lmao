@@ -26,7 +26,7 @@
     "205": "setColorRemapMode",
     "206": "getColorRemapMode",
     "207": "setBrightnessCorrection",
-    "211": "platformPipeForward",
+    "211": "changeFrameInfo",
     "213": "supportedFrameInfo",
     "227": "swapSetColorMatrix",
     "245": "platformInternalPlug",
@@ -38,7 +38,7 @@
     "295": "completeCurrentSwap",
     "296": "validateSwap",
     "306": "platformFrameInfoNotify",
-    "307": "platformHotPlug",
+    "307": "sendFrameInfo",
     "337": "collectCompletionReports",
     "338": "platformRefreshRates",
     "345": "platformIdleWithoutClients",
@@ -67,7 +67,10 @@
     "swapsCompleted": "0x16bc",
     "swapsPresented": "0x16c0",
     "framesCompleted": "0xfc",
-    "vsyncClientList": "0x15d8"
+    "vsyncClientList": "0x15d8",
+    "swapId": "0x314",
+    "swapRequestedPresentation": "0x2d0",
+    "frameInfoClientOwner": "0x10"
   },
   "addresses": {
     "C2": "0xfffffff0067865cc",
@@ -265,6 +268,8 @@
     "opaque353": "0xfffffff0067a02bc",
     "opaque355": "0xfffffff0067a02d4",
     "vtable": "0xfffffff006f38560",
-    "gMetaClass": "0xfffffff007b35940"
+    "gMetaClass": "0xfffffff007b35940",
+    "native_legacy_frame_info_notify": "0xfffffff0067968b4",
+    "native_legacy_frame_info_enqueue": "0xfffffff00677ae18"
   }
 }
