@@ -225,6 +225,9 @@ struct Pipeline {
     bool caTransform = false;
     uint8_t positionComponents = 0;
     uint16_t positionOffset = 0;
+    // its draws may leave a pixel of their triangles unwritten: the fragment program discards (SPH KILLS_PIXELS) or writes
+    // the sample mask, or the state tests depth, stencil or alpha to coverage, or rasterizes more than one sample
+    bool dropsPixels = true;
     uint8_t readBits = 0;      // colors its draws read as they were: blended into, or written through a partial mask
     uint8_t fetchBits = 0;     // colors it reads by framebuffer fetch
     uint32_t depthFormat = 0;  // its key's depth and stencil attachment format (ds=<format>/<format>; 0: none)
@@ -349,6 +352,8 @@ private:
     // the draws that wrote a color since the last barrier, for the fetch barrier's region test (raw_region.h); the
     // indices of the indexed draw being prepared
     WrittenRegion written_;
+    // colors the pass's first draw overwrites whole and opaquely: their clears inside the render area are not needed
+    uint8_t covered_ = 0;
     const uint8_t *drawIndices_ = nullptr;
     uint32_t drawIndexSize_ = 0, drawIndexCount_ = 0;
     DrawGeometry geometry(const Pipeline &pl, uint32_t primitive, uint32_t first, uint32_t count,
@@ -631,6 +636,8 @@ public:
         // and those the interlocked storage form would (RenderEncoder::countRules, debug builds)
         std::atomic<uint64_t> fetchBarriers{0}, fetchBarriersElided{0}, fetchBarriersAnyColor{0},
             fetchBarriersInterlocked{0};
+        // Clear loads of colors, and those left out because the pass's first draw covers them (RenderEncoder::clears)
+        std::atomic<uint64_t> clears{0}, clearsElided{0};
         // channels made again after the kernel killed one
         std::atomic<uint64_t> reopens{0};
     } stats;

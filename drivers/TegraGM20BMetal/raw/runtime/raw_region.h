@@ -79,6 +79,32 @@ public:
         float matrix[16];
         memcpy(matrix, g.matrix, sizeof matrix);
         DrawBounds b(matrix, g.viewport);
+        uint32_t added = 0;
+        if (!addVertices(g, b, added))
+            return false;
+        out = b.pixels(g.limit);
+        return true;
+    }
+
+    // Whether the draw covers every pixel of [0, w) x [0, h) for sure: all its vertices one axis-aligned rectangle (a
+    // triangle `list` of 6, or a strip of 4 with no restart), within a scissor and viewport that hold the whole area
+    static bool covers(const DrawGeometry &g, bool list, uint32_t w, uint32_t h)
+    {
+        if (!g.bounded || g.count != (list ? 6u : 4u) || g.limit.x0 || g.limit.y0 || g.limit.x1 < w || g.limit.y1 < h)
+            return false;
+        float matrix[16];
+        memcpy(matrix, g.matrix, sizeof matrix);
+        DrawBounds b(matrix, g.viewport);
+        uint32_t added = 0;
+        PixelBox certain, possible;
+        return addVertices(g, b, added) && added == g.count && b.rectangle(list, certain, possible) && !certain.x0 &&
+               !certain.y0 && certain.x1 >= w && certain.y1 >= h;
+    }
+
+    // Every vertex of `g` into `b` but a strip's restarts (`added` counts those taken); false: one past the bound bytes,
+    // or one that leaves no box (raw_bounds.h add)
+    static bool addVertices(const DrawGeometry &g, DrawBounds &b, uint32_t &added)
+    {
         const uint64_t reach = g.positions.offset + g.positions.components * sizeof(float);
         for (uint32_t i = 0; i < g.count; i++) {
             uint32_t v = g.first + i;
@@ -95,8 +121,8 @@ public:
             }
             if (uint64_t(v) * g.positions.stride + reach > g.positionBytes || !b.add(g.positions, v))
                 return false;
+            added++;
         }
-        out = b.pixels(g.limit);
         return true;
     }
 

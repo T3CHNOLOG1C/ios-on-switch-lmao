@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: MIT
 // raw/runtime/raw_bounds.h on the host: the box and the rectangle of a draw of Core Animation's vertex transform, over
 // synthetic quads, triangles and clipped vertices (raw/test/boundsoracle.mm checks the same against a GPU's coverage);
-// and raw_region.h's fetch barrier region test over such draws.
+// and raw_region.h's fetch barrier region test over such draws, and when one covers a render area (clear elision).
 #include <gtest/gtest.h>
 
+#include <utility>
 #include <vector>
 
 #include "../raw/runtime/raw_bounds.h"
@@ -239,6 +240,64 @@ TEST(RawRegion, IndexedDrawsReadTheirIndices)
     written.add(g);
     EXPECT_FALSE(written.meets(quad(b, 150, 0, 200, 100)));
     EXPECT_TRUE(written.meets(quad(b, 50, 50, 200, 100)));
+}
+
+TEST(RawRegion, AFullTargetRectangleCoversTheRenderArea)
+{
+    std::vector<float> a, b;
+    EXPECT_TRUE(raw::WrittenRegion::covers(quad(a, 0, 0, kWidth, kHeight), false, kWidth, kHeight));
+    EXPECT_TRUE(raw::WrittenRegion::covers(quad(b, -40, -40, kWidth + 40, kHeight + 40), false, kWidth, kHeight));
+}
+
+TEST(RawRegion, ARectangleShortOfAnEdgeCoversNothing)
+{
+    std::vector<float> a, b, c;
+    EXPECT_FALSE(raw::WrittenRegion::covers(quad(a, 1, 0, kWidth, kHeight), false, kWidth, kHeight));
+    EXPECT_FALSE(raw::WrittenRegion::covers(quad(b, 0, 0, kWidth, kHeight - 0.5f), false, kWidth, kHeight));
+    EXPECT_FALSE(raw::WrittenRegion::covers(quad(c, 0, 0, kWidth - 1, kHeight), false, kWidth, kHeight));
+}
+
+TEST(RawRegion, ARectangleCoversOnlyWhereItsScissorReaches)
+{
+    std::vector<float> a;
+    raw::DrawGeometry g = quad(a, 0, 0, kWidth, kHeight);
+    g.limit = {0, 0, kWidth, kHeight - 1};
+    EXPECT_FALSE(raw::WrittenRegion::covers(g, false, kWidth, kHeight));
+    g.limit = kTarget;
+    g.bounded = false;
+    EXPECT_FALSE(raw::WrittenRegion::covers(g, false, kWidth, kHeight));
+}
+
+TEST(RawRegion, OnlyAPlainQuadCovers)
+{
+    std::vector<float> a, b, c;
+    raw::DrawGeometry folded = quad(a, 0, 0, kWidth, kHeight);
+    std::swap(a[8], a[12]);
+    std::swap(a[9], a[13]);
+    EXPECT_FALSE(raw::WrittenRegion::covers(folded, false, kWidth, kHeight));
+    raw::DrawGeometry list = quad(b, 0, 0, kWidth, kHeight);
+    const uint16_t pair[6] = {0, 1, 2, 1, 3, 2}, restart[5] = {0, 1, 0xffff, 2, 3};
+    list.indices = reinterpret_cast<const uint8_t *>(pair);
+    list.indexSize = 2;
+    list.count = 6;
+    EXPECT_TRUE(raw::WrittenRegion::covers(list, true, kWidth, kHeight));
+    EXPECT_FALSE(raw::WrittenRegion::covers(list, false, kWidth, kHeight));
+    raw::DrawGeometry strips = quad(c, 0, 0, kWidth, kHeight);
+    strips.indices = reinterpret_cast<const uint8_t *>(restart);
+    strips.indexSize = 2;
+    strips.count = 5;
+    EXPECT_FALSE(raw::WrittenRegion::covers(strips, false, kWidth, kHeight));
+}
+
+TEST(RawRegion, AClippedCornerCoversNothing)
+{
+    std::vector<float> a;
+    raw::DrawGeometry g = quad(a, 0, 0, kWidth, kHeight);
+    a[2] = -0.25f;
+    EXPECT_FALSE(raw::WrittenRegion::covers(g, false, kWidth, kHeight));
+    a[2] = 0.5f;
+    a[3] = 0;
+    EXPECT_FALSE(raw::WrittenRegion::covers(g, false, kWidth, kHeight));
 }
 
 }  // namespace
