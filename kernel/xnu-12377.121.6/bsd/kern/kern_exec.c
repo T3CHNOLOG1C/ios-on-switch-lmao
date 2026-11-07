@@ -9140,7 +9140,7 @@ native_switch_ui_scale_cache(proc_t p, user_addr_t scratch, mount_t data_mount)
 			continue;
 		}
 		vnode_put(vp);
-		if (each == scale) current = true;
+		if (switch_ui_scale_same(each, scale)) current = true;
 		else other = true;
 	}
 	if (switch_ui_scale_is_unit(scale) ? !other : current) return;
@@ -9150,7 +9150,7 @@ native_switch_ui_scale_cache(proc_t p, user_addr_t scratch, mount_t data_mount)
 	if (!error) error = native_switch_unlink(p, &request, &result);
 	if (error == ENOENT) error = 0;
 	for (unsigned i = 0; i < SWITCH_UI_SCALES && !error; i++) {
-		if (markers[i][0] == '\0' || &switch_ui_scales[i] == scale) continue;
+		if (markers[i][0] == '\0' || switch_ui_scale_same(&switch_ui_scales[i], scale)) continue;
 		error = copyout(markers[i], request.path, strlen(markers[i]) + 1);
 		if (!error) error = native_switch_unlink(p, &request, &result);
 	}
