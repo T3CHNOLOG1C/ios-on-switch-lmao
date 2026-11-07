@@ -77,6 +77,7 @@ struct nvkmd_darwin_mem {
    uint64_t handle;
    uint64_t bo_offset_B; /* where the memory starts in the BO: 0 but for foreign memory */
    uint32_t map_token;  /* 0 for host imports */
+   uint32_t surface_id; /* the IOSurface a host import is of, 0: none */
    void *host_ptr;      /* host imports: the caller's own mapping */
 
    /* Foreign memory (switch_nvk_import_foreign): another driver's BO, bound
@@ -155,6 +156,17 @@ struct nvkmd_darwin_sync_point {
 /* The IOSurface the next host import on this thread covers, from the Metal frontend (dlsym: the Vulkan loader opened
  * this library RTLD_LOCAL). */
 void switch_nvk_import_surface(uint32_t surface_id, const void *base, uint64_t bytes);
+/* The shape the next surface import on this thread asks the surface's layout for (method 16: width, height, bpp,
+ * bytes_per_row, flags TegraGM20BLayout*). The import binds a block-linear surface under the kind it is written in. */
+void switch_nvk_import_surface_shape(uint32_t width, uint32_t height, uint32_t bpp, uint32_t bytes_per_row,
+                                     uint32_t flags);
+/* The last surface import on this thread: its handle (0: none made) and the layout it was answered (method 16's reply;
+ * UINT32_MAX: not asked, or no answer). */
+uint32_t switch_nvk_import_surface_layout(uint64_t *handle);
+/* The layout of the surface whose import (this process's connection) is `handle`, for a shape: method 16's reply; 0
+ * where the kernel lays no surface out block-linear; UINT32_MAX: no answer. */
+uint32_t switch_nvk_surface_layout(uint64_t handle, uint32_t width, uint32_t height, uint32_t bpp, uint32_t bytes_per_row,
+                                   uint32_t flags);
 /* The GPU may write the surface from now on (method 15): before its first render, blit or store. false: not said. */
 bool switch_nvk_surface_gpu_writes(uint32_t surface_id);
 /* The GPU priority the process's Metal queues asked for (method 18: Metal's values, TegraGM20BABI.h). false: not

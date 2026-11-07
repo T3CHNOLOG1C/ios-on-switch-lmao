@@ -1121,12 +1121,21 @@ nvkmd_darwin_import_dma_buf(struct nvkmd_dev *dev,
 }
 
 /* The BoImport an IOSurface's import leads to names the surface, so the kernel keeps it coherent at every process's
- * IOSurfaceLock/Unlock of it. */
+ * IOSurfaceLock/Unlock of it. With a shape, the import asks the surface's layout (method 16) and binds its VA with the
+ * kind a block-linear surface is written under, so an optimal image of that shape over it takes that VA as it is
+ * (nvk_image_plane_bind). The import's handle and the answer stay for the caller. */
 static __thread struct {
    uint32_t id;
    uintptr_t base;
    uint64_t bytes;
+   bool asks;
+   struct TegraGM20BAbiSurfaceLayout ask;
+   uint64_t handle;
+   uint32_t layout;
 } import_surface;
+
+/* TegraGM20BLayout.h TGM_LAYOUT_KIND: NIL's kind for uncompressed colour */
+#define DARWIN_LAYOUT_KIND 0xfe
 
 __attribute__((visibility("default"))) void
 switch_nvk_import_surface(uint32_t surface_id, const void *base, uint64_t bytes)
@@ -1134,6 +1143,63 @@ switch_nvk_import_surface(uint32_t surface_id, const void *base, uint64_t bytes)
    import_surface.id = surface_id;
    import_surface.base = (uintptr_t)base;
    import_surface.bytes = bytes;
+   import_surface.asks = false;
+   import_surface.handle = 0;
+   import_surface.layout = UINT32_MAX;
+}
+
+__attribute__((visibility("default"))) void
+switch_nvk_import_surface_shape(uint32_t width, uint32_t height, uint32_t bpp,
+                                uint32_t bytes_per_row, uint32_t flags)
+{
+   import_surface.asks = true;
+   import_surface.ask = (struct TegraGM20BAbiSurfaceLayout) {
+      .width = width,
+      .height = height,
+      .bpp = bpp,
+      .bytes_per_row = bytes_per_row,
+      .flags = flags,
+   };
+}
+
+__attribute__((visibility("default"))) uint32_t
+switch_nvk_import_surface_layout(uint64_t *handle)
+{
+   *handle = import_surface.handle;
+   return import_surface.layout;
+}
+
+static uint32_t
+darwin_surface_layout(const struct nvkmd_darwin_conn *conn, uint32_t info_flags,
+                      const struct TegraGM20BAbiSurfaceLayout *ask)
+{
+   if (!(info_flags & TegraGM20BInfoSurfaceLayout))
+      return 0;
+   struct TegraGM20BAbiSurfaceLayoutReply reply = { 0 };
+   if (darwin_call(conn, TegraGM20BMethodSurfaceLayout, ask, sizeof(*ask),
+                   &reply, sizeof(reply)) != KERN_SUCCESS)
+      return UINT32_MAX;
+   return reply.layout;
+}
+
+__attribute__((visibility("default"))) uint32_t
+switch_nvk_surface_layout(uint64_t handle, uint32_t width, uint32_t height,
+                          uint32_t bpp, uint32_t bytes_per_row, uint32_t flags)
+{
+   const struct TegraGM20BAbiSurfaceLayout ask = {
+      .handle = handle,
+      .width = width,
+      .height = height,
+      .bpp = bpp,
+      .bytes_per_row = bytes_per_row,
+      .flags = flags,
+   };
+   pthread_mutex_lock(&darwin_shared.lock);
+   const bool open = darwin_shared.refs > 0;
+   const struct nvkmd_darwin_conn conn = darwin_shared.conn;
+   const uint32_t info_flags = darwin_shared.info.flags;
+   pthread_mutex_unlock(&darwin_shared.lock);
+   return open ? darwin_surface_layout(&conn, info_flags, &ask) : UINT32_MAX;
 }
 
 /* Exported, as switch_nvk_import_surface is: the Metal frontend finds both with dlsym. */
@@ -1309,12 +1375,27 @@ nvkmd_darwin_import_host_mem(struct nvkmd_dev *_dev,
    }
    mem->handle = reply.handle;
    mem->host_ptr = host_ptr;
+   mem->surface_id = req.surface_id;
+
+   uint8_t pte_kind = 0;
+   if (req.surface_id) {
+      import_surface.handle = reply.handle;
+      if (import_surface.asks) {
+         struct TegraGM20BAbiSurfaceLayout ask = import_surface.ask;
+         ask.handle = reply.handle;
+         import_surface.layout = darwin_surface_layout(
+            &dev->conn, nvkmd_darwin_pdev(dev->base.pdev)->info.flags, &ask);
+         if (import_surface.layout == TegraGM20BLayoutTiled ||
+             import_surface.layout == TegraGM20BLayoutOtherShape)
+            pte_kind = DARWIN_LAYOUT_KIND;
+      }
+   }
 
    /* The owner's mapping is cacheable: not coherent with the GPU. */
    const enum nvkmd_mem_flags flags =
       NVKMD_MEM_LOCAL | NVKMD_MEM_CAN_MAP | NVKMD_MEM_SHARED;
    VkResult result = darwin_mem_finish_create(dev, log_obj, mem, flags, size_B,
-                                              0, 0, mem_out);
+                                              0, pte_kind, mem_out);
    if (result != VK_SUCCESS) {
       darwin_bo_free(dev, reply.handle);
       FREE(mem);
