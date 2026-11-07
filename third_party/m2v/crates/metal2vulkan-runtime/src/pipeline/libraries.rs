@@ -270,8 +270,9 @@ impl Linked {
         let made_here = |part: Part| self.library(part).made(|| make(part));
         let fragment = match self.library(Part::PreRasterization).is_made() {
             true => None,
-            false => spare()
-                .and_then(|turn| Some((turn, self.library(Part::FragmentShader).claim()?))),
+            false => {
+                spare().and_then(|turn| Some((turn, self.library(Part::FragmentShader).claim()?)))
+            }
         };
         let mut raws = [vk::Pipeline::null(); 4];
         match fragment {
