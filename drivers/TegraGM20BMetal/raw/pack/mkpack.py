@@ -202,6 +202,7 @@ def raw_bound(simple: list[dict], programs: dict[str, dict]) -> tuple[list[dict]
 # Why a probed state may stay out of the pack (the raw path hands it to m2v): what its draw needs that the raw path
 # draws otherwise. Any other reason is a generator fault and fails the build.
 EXPECTED_SKIPS = (
+    'm2v failed its draw',
     'draws',
     'dispatches',
     'storage form',
@@ -263,6 +264,8 @@ def load_init(log_path: str) -> tuple[list[tuple[int, int, int]], dict[int, dict
 
 
 def skip_reason(p: dict) -> str | None:
+    if 'failed' in p:
+        return f'm2v failed its draw: {p["failed"]}'
     if p['draws'] != 1:
         return f'{p["draws"]} draws'
     if p['dispatches']:
