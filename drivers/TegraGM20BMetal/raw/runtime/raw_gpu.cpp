@@ -33,6 +33,11 @@ enum : uint32_t {
     INVALIDATE_SHADER_CACHES_NO_WFI = 0x0da4,
     PIXEL_SHADER_BARRIER = 0x0de0,
     NO_OPERATION = 0x0100,
+    SET_FRONT_POLYGON_MODE = 0x0dac,
+    SET_BACK_POLYGON_MODE = 0x0db0,
+    OGL_SET_CULL = 0x1918,
+    OGL_SET_FRONT_FACE = 0x191c,
+    OGL_SET_CULL_FACE = 0x1920,
     PIXEL_SHADER_INTERLOCK_CONTROL = 0x1224,
     DEPTH_TEST = 0x12cc,
     STENCIL_TEST = 0x1380,
@@ -2364,6 +2369,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, uint32_t first, ui
         }
         at[0] = tic | tsc << 20;
     }
+    writeRaster(p, raster_);
     if (pl != emitted_) {
         blendColorDirty_ |= pl->constantBlend;
         p.raw(pl->methods.data(), uint32_t(pl->methods.size()));
@@ -2689,9 +2695,34 @@ bool chainLevelTarget(const Texture &t, uint32_t level, Texture &out)
     return true;
 }
 
+// NVK's nvk_flush_rs_state for the state m2v makes of Metal's (render_state.rs `fixed`): culling on and the face culled,
+// the front face, and the polygon mode of both faces; a register already holding its value is not written
+void RenderEncoder::writeRaster(Push &p, const Raster &want)
+{
+    if (want.cull != rasterHeld_.cull) {
+        p.m(OGL_SET_CULL, want.cull != 0);
+        if (want.cull)
+            p.m(OGL_SET_CULL_FACE, want.cull == 1 ? 0x404 : 0x405);  // FRONT, BACK
+        rasterHeld_.cull = want.cull;
+    }
+    if (want.winding != rasterHeld_.winding) {
+        p.m(OGL_SET_FRONT_FACE, want.winding ? 0x901 : 0x900);  // CCW, CW
+        rasterHeld_.winding = want.winding;
+    }
+    if (want.fill != rasterHeld_.fill) {
+        const uint32_t mode = want.fill ? 0x1b01 : 0x1b02;  // LINE, FILL
+        p.m(SET_FRONT_POLYGON_MODE, mode);
+        p.m(SET_BACK_POLYGON_MODE, mode);
+        rasterHeld_.fill = want.fill;
+    }
+}
+
 void RenderEncoder::end()
 {
     Device &d = *dev_;
+    if (p_.room() < 16)
+        reserve();
+    writeRaster(p_, Raster());
     if (p_.at > bodyStart_)
         bodies_.push_back({bodyStart_, p_.at});
     d.push_.head = uint64_t(reinterpret_cast<uint8_t *>(p_.at) - d.push_.bo.cpu);  // give back the unused reservation

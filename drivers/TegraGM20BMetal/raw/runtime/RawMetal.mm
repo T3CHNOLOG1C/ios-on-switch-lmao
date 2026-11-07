@@ -148,8 +148,6 @@ enum RMPred : uint8_t {
     PredCallBufForeign,      // a = stage << 8 | index
     PredCallSamplerForeign,  // a sampler the raw path does not express (its reason logged when it was made)
     PredCallVertexSampler,
-    PredCallCull,
-    PredCallFillMode,
     PredCallDepthBias,     // a = bias, b = slope (float bits)
     PredCallInvocation,    // an encoder selector recorded as an invocation (each selector logged once)
     PredCallCBInvocation,  // a command buffer selector recorded as an invocation
@@ -206,8 +204,6 @@ static constexpr const char *kPredNames[] = {"-",
                                              "call.buf",
                                              "call.sampler",
                                              "call.vsampler",
-                                             "call.cull",
-                                             "call.fill",
                                              "call.dbias",
                                              "call.inv",
                                              "call.cbinv",
@@ -2387,10 +2383,6 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
 
 - (void)setCullMode:(MTLCullMode)mode
 {
-    if (mode != MTLCullModeNone) {
-        [_cb takeReason:WhyCall why:@"culling"];
-        hit(_cb, PredCallCull, mode);
-    }
     Cmd m = cmd(OpCull);
     m.a = uint32_t(mode);
     [_cb record:m];
@@ -2437,10 +2429,6 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
 
 - (void)setTriangleFillMode:(MTLTriangleFillMode)mode
 {
-    if (mode != MTLTriangleFillModeFill) {
-        [_cb takeReason:WhyCall why:@"line fill"];
-        hit(_cb, PredCallFillMode, mode);
-    }
     Cmd m = cmd(OpFillMode);
     m.a = uint32_t(mode);
     [_cb record:m];
@@ -4474,6 +4462,15 @@ static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **
             break;
         case OpScissor:
             re->setScissor(c.a, c.b, uint32_t(c.c >> 32), uint32_t(c.c));
+            break;
+        case OpCull:
+            re->setCullMode(uint8_t(c.a));
+            break;
+        case OpWinding:
+            re->setWinding(uint8_t(c.a));
+            break;
+        case OpFillMode:
+            re->setFillMode(uint8_t(c.a));
             break;
         case OpViewport:
             re->setViewport(extraDouble(cb, c.x), extraDouble(cb, c.x + 1), extraDouble(cb, c.x + 2),

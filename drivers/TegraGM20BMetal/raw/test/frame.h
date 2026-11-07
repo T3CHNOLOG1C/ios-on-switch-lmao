@@ -256,7 +256,17 @@ struct Draw {
     uint32_t primitive = 4, first = 0, count = 4, instances = 1;  // MTLPrimitiveType (4 triangle strip)
     int ds = -1;                                                  // dsSpec index set before it (-1: none set)
     uint32_t stencilRef[2] = {};                                  // set before it where ds >= 0
+    // set before it where raster: MTLCullMode, MTLWinding, MTLTriangleFillMode
+    bool raster = false;
+    uint8_t cull = 0, winding = 0, fill = 0;
 };
+
+// FRAME_RASTER: the main pass's draws cull no face, the front or the back, wind clockwise or counter-clockwise, and some fill
+// with lines (Core Animation culls a layer that is not doubleSided)
+inline bool rasterState()
+{
+    return getenv("FRAME_RASTER") != nullptr;
+}
 
 struct Pass {
     int color[3];  // Tex (-1: none)
@@ -351,6 +361,12 @@ inline std::vector<Pass> passes(unsigned frameIndex, const Shape &s, size_t blur
         d.textures[4] = IMAGE2;
         d.textures[9] = IMAGE3;
         d.samplers[1] = 1;
+        if (rasterState()) {
+            d.raster = true;
+            d.cull = uint8_t(i % 3);
+            d.winding = uint8_t((i / 3) % 2);
+            d.fill = uint8_t(i % 7 == 3);
+        }
         if (depthStencil() && i % 3 != 2) {
             d.ds = int((i / 3) % kDsSpecs);
             d.stencilRef[0] = (i * 37 + frameIndex) % 300;

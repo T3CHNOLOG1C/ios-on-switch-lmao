@@ -292,6 +292,23 @@ public:
     void setBlendColor(const float rgba[4]);
     void setDepthStencil(const DepthStencilDesc *d);  // null: Metal's default state
     void setStencilReference(uint32_t front, uint32_t back);
+
+    // MTLCullMode, MTLWinding and MTLTriangleFillMode, written as NVK's rasterizer registers at the next draw
+    void setCullMode(uint8_t mode)
+    {
+        raster_.cull = mode;
+    }
+
+    void setWinding(uint8_t winding)
+    {
+        raster_.winding = winding;
+    }
+
+    void setFillMode(uint8_t mode)
+    {
+        raster_.fill = mode;
+    }
+
     void setViewport(double x, double y, double w, double h, double znear, double zfar);
     void barrier();  // memoryBarrier...: everything before is written and visible to what follows
     // false: this draw cannot be drawn exactly as m2v would (*why says what); the command buffer goes to m2v instead
@@ -335,6 +352,15 @@ private:
     DepthStencilDesc ds_;
     uint32_t stencilRef_[2] = {};
     bool dsDirty_ = true;
+
+    // the encoder's culling, winding and fill, and what the registers hold: the context's (Metal's defaults: no culling,
+    // clockwise, fill) at a pass's start, put back at its end
+    struct Raster {
+        uint8_t cull = 0, winding = 0, fill = 0;
+    };
+
+    Raster raster_, rasterHeld_;
+    void writeRaster(Push &p, const Raster &want);
     uint32_t blendColor_[4] = {};  // Metal's default, (0, 0, 0, 0), until the encoder sets one
     bool blendColorDirty_ = true;
     uint32_t topology_ = ~0u, restart_ = ~0u, first_ = 0, baseInstance_ = 0;
