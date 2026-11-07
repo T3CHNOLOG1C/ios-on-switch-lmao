@@ -46,6 +46,7 @@ kernel_driver(
         "shim/nvif_nvkm.c",
         "platform.c",
         "gpu.c",
+        "clkgate.c",
         "recover.c",
         "sched.c",
         "hold.c",

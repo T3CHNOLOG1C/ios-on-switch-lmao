@@ -59,6 +59,7 @@
 #include <nvif/chan.h>
 #include <nvif/push906f.h>
 #include <nvhw/class/cla0b5.h>
+#include "TegraGM20BClkgate.h"
 #include "TegraGM20BGpu.h"
 #include "TegraGM20BHangDecode.h"
 #include "TegraGM20BRecover.h"
@@ -5332,6 +5333,7 @@ void tgm_wake(void)
 	tgm_recover_arm(gpu.device);
 	wake_nvkm();
 	wake_fence();
+	tgm_clkgate_enable(gpu.device);
 	wake_open();
 	tgm_deadline_resume();
 }
@@ -5352,6 +5354,7 @@ int tgm_bringup(int stage, char *line, unsigned int len)
 			ret = m2(line, len);
 		if (ret)
 			return ret;
+		tgm_clkgate_load(gpu.device);
 		tgm_recover_init(gpu.device);
 		tgm_recover_arm(gpu.device);
 		tgm_sched_init(gpu.device);
@@ -5361,6 +5364,7 @@ int tgm_bringup(int stage, char *line, unsigned int len)
 		ret = m3(line, len);
 		if (ret)
 			return ret;
+		tgm_clkgate_enable(gpu.device);
 		gpu.stage = 3;
 		if (stats_on())
 			log_engines();
