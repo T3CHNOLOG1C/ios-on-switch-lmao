@@ -143,6 +143,16 @@ def _product(tree: list) -> None:
         ('compatible-device-fallback', b'iPad6,7\0'),
         ('thin-bezel', u32(1)),
         ('product-id', bytes.fromhex('e9fefef6e6f9d12a5ba1a2551866cbbd749f0ec3')),
+        # MobileGestalt's GraphicsFeatureSetClass and GraphicsFeatureSetFallbacks, by which CoreUI picks asset catalog
+        # renditions (without them every CUICatalog logs that kMGArtworkGraphicsFeatureSetClass has no answer).
+        ('graphics-featureset-class', b'APPLE3\0'),
+        ('graphics-featureset-fallbacks', b'APPLE3v1:APPLE2:APPLE1:GLES2,0\0'),
+        ('device-perf-memory-class', u32(3)),
+        ('app-macho-architecture', b'arm64\0'),
+        ('framebuffer-identifier', b'0\0'),
+        ('display-mirroring', u32(1)),
+        ('ui-background-quality', u32(100)),
+        ('ui-weather-quality', u32(100)),
     ):
         put(product, key, value)
     put(child(product, 'audio'), 'wireless-splitter', u32(1))  # as UniXNU's 21H461 profile

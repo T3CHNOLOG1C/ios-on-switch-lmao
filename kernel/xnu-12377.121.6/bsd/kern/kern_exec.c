@@ -9042,6 +9042,44 @@ native_switch_gamut_cache(proc_t p, user_addr_t scratch, mount_t data_mount)
 	printf("SwitchRawBoot: display gamut %s: MobileGestalt cache dropped (%d)\n", srgb ? "sRGB" : "not sRGB", error);
 }
 
+/* MobileGestalt answers what it reads of /product (GraphicsFeatureSetClass and its fallbacks, the memory class, the
+ * artwork traits) from the same build-keyed cache, so an answer made before a package changed /product outlives the
+ * change. A digest of the node's properties is kept in a marker, and the cache is dropped once whenever it differs.
+ * Failures are logged only; the next boot tries again. */
+static void
+native_switch_product_cache(proc_t p, user_addr_t scratch, mount_t data_mount)
+{
+	static const char cache[] = "/private/var/containers/Shared/SystemGroup/systemgroup.com.apple.mobilegestaltcache/"
+	    "Library/Caches/com.apple.MobileGestalt.plist", marker[] = "/private/var/Switch/mobilegestalt-product";
+	DTEntry product;
+	OpaqueDTPropertyIterator properties;
+	if (SecureDTLookupEntry(0, "/product", &product) != kSuccess ||
+	    SecureDTInitPropertyIterator(product, &properties) != kSuccess) return;
+	uint64_t digest = 0xcbf29ce484222325ULL;
+	char const *name = NULL;
+	while (SecureDTIterateProperties(&properties, &name) == kSuccess) {
+		void const *value = NULL;
+		unsigned int size = 0;
+		if (SecureDTGetProperty(product, name, &value, &size) != kSuccess) continue;
+		const uint8_t *bytes[2] = {(const uint8_t *)name, value};
+		const size_t lengths[2] = {strlen(name) + 1, size};
+		for (unsigned int part = 0; part < 2; ++part) {
+			for (size_t i = 0; i < lengths[part]; ++i) digest = (digest ^ bytes[part][i]) * 0x100000001b3ULL;
+		}
+	}
+	char text[24];
+	const int length = snprintf(text, sizeof(text), "%016llx\n", digest);
+	if (native_switch_file_unchanged(marker, text, length, data_mount, 0, 0, 0644)) return;
+	struct unlink_args request = {.path = scratch + 0x900};
+	int32_t result = 0;
+	int error = copyout(cache, request.path, sizeof(cache));
+	if (!error) error = native_switch_unlink(p, &request, &result);
+	if (error == ENOENT) error = 0;
+	if (!error) error = native_switch_mkdir(p, scratch, "/private/var/Switch", 0, 0755);
+	if (!error) error = native_switch_watchdog_file(p, scratch, marker, text, length, data_mount, 0, 0, 0644);
+	printf("SwitchRawBoot: /product %016llx: MobileGestalt cache dropped (%d)\n", digest, error);
+}
+
 /* The ambient light sensor (drivers/SwitchBrightness/SwitchALS.cpp): MobileGestalt's ambient-light-sensor is an
  * IOServiceGetMatchingService on {PrimaryUsagePage 0xff00, PrimaryUsage 4}, which the sensor's HID service answers, and
  * Settings' Auto-Brightness switch and CoreBrightness's DisplayBrightnessAuto both gate on it. The answer is precacheable
@@ -9293,6 +9331,7 @@ native_switch_setup_state(proc_t p, user_addr_t scratch, mount_t data_mount)
 		native_switch_portrait_cache(p, scratch, data_mount);
 		native_switch_rotation_lock_release(p, scratch, data_mount);
 		native_switch_gamut_cache(p, scratch, data_mount);
+		native_switch_product_cache(p, scratch, data_mount);
 		native_switch_als_cache(p, scratch, data_mount);
 		native_switch_ui_scale_cache(p, scratch, data_mount);
 		native_switch_portrait_display(p, scratch, data_mount);
