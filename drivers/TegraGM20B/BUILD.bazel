@@ -31,7 +31,11 @@ kernel_headers()
 kernel_driver(
     name = "TegraGM20B_nvkm",
     srcs = [":" + f for f in glob(["nouveau/**/*.c"])],
-    c_copts = GPU_C_FLAGS + LINUX_RELAXATIONS,
+    # TegraGM20BComp.h: compression numbers shared with gpu.c and test/gm20b_comp_test.cpp
+    c_copts = GPU_C_FLAGS + LINUX_RELAXATIONS + [
+        "-I",
+        "{tree}/drivers/TegraGM20B",
+    ],
     c_recipe = ":freestanding_c",
     hdr_deps = [],
     object_names = "path",

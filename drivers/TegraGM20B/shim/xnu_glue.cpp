@@ -746,6 +746,11 @@ extern "C" nvxnu_u32 nvxnu_vm_page_size(void)
 	return PAGE_SIZE;
 }
 
+extern "C" nvxnu_u64 nvxnu_ram_bytes(void)
+{
+	return max_mem;
+}
+
 extern "C" nvxnu_u64 nvxnu_pool_base_pa(void)
 {
 	return pool.pa;
