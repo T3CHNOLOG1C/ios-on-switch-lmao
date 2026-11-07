@@ -219,13 +219,16 @@ def mounted(identifier: str, log: host.Log, read_only: bool = False, owners: boo
         info = host.disk_info(identifier) or {}
         if not read_only and not info.get('WritableVolume'):
             raise host.HostError(f'{identifier} is mounted read-only at {current}')
-        yield Path(current)
-        return
+        if owners or not info.get('GlobalPermissionsEnabled'):
+            yield Path(current)
+            return
+        # macOS's own mount of a card enforces owners, which closes root's 0700 folders to the user
+        host.run('diskutil', 'unmount', identifier, log=log)
     with tempfile.TemporaryDirectory(prefix='switch-') as directory:
         args = ['mount']
         if read_only:
             args.append('readOnly')
-        args += ['-mountOptions', 'nobrowse', '-mountPoint', directory, identifier]
+        args += ['-mountOptions', 'nobrowse' if owners else 'nobrowse,noowners', '-mountPoint', directory, identifier]
         host.run('diskutil', *args, log=log)
         try:
             if owners and os.geteuid() == 0:

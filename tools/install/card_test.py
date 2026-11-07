@@ -151,5 +151,38 @@ class CardTest(unittest.TestCase):
                 cards.resolve(argument)
 
 
+class MountedTest(unittest.TestCase):
+    def mount(self, info: dict, owners: bool = False) -> list[list[str]]:
+        calls = []
+
+        def run(*args: str, **_: object) -> str:
+            calls.append(list(args))
+            return ''
+
+        with (
+            mock.patch.object(cards.host, 'mount_point', return_value='/Volumes/Data'),
+            mock.patch.object(cards.host, 'disk_info', return_value=info),
+            mock.patch.object(cards.host, 'run', side_effect=run),
+            cards.mounted('disk34s2', lambda *_: None, owners=owners) as root,
+        ):
+            calls.append(['root', str(root)])
+        return calls
+
+    def test_a_mount_that_ignores_owners_is_reused(self):
+        calls = self.mount({'WritableVolume': True, 'GlobalPermissionsEnabled': False})
+        self.assertEqual(calls, [['root', '/Volumes/Data']])
+
+    def test_a_mount_that_enforces_owners_is_remounted_without_them(self):
+        calls = self.mount({'WritableVolume': True, 'GlobalPermissionsEnabled': True})
+        self.assertEqual(calls[0], ['diskutil', 'unmount', 'disk34s2'])
+        self.assertEqual(calls[1][:3], ['diskutil', 'mount', '-mountOptions'])
+        self.assertEqual(calls[1][3], 'nobrowse,noowners')
+        self.assertNotEqual(calls[2], ['root', '/Volumes/Data'])
+
+    def test_owners_wanted_keeps_the_mount(self):
+        calls = self.mount({'WritableVolume': True, 'GlobalPermissionsEnabled': True}, owners=True)
+        self.assertEqual(calls, [['root', '/Volumes/Data']])
+
+
 if __name__ == '__main__':
     unittest.main()
