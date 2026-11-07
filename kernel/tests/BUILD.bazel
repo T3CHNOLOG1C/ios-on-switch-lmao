@@ -43,6 +43,9 @@
 #                            a whole core, and its hook in both trees' thread_set_cpulimit
 #   switch_commpage_test     <switch/commpage.h>: the ARMv8 crypto features from ID_AA64ISAR0_EL1 into the commpage and
 #                            hw.optional.arm.FEAT_*, and its hook in both trees' commpage_init_arm_optional_features_isar0
+#   switch_prefs_test        kernel/switch/boot/prefs.c takes keys out of plists CoreFoundation wrote and reads back
+#                            (binary, both count forms, wide references, damaged files; XML as the setup wrote it); no
+#                            boot-time setup in either tree or the 12377 port record sets SpringBoard's never-dim keys
 #
 #   bazel test //kernel/tests:all
 load("@bazel_skylib//rules:copy_file.bzl", "copy_file")
@@ -472,4 +475,33 @@ host_test(
         'COMMPAGE_12377=\\"$(rootpath //kernel/xnu-12377.121.6/osfmk:arm/commpage/commpage.c)\\"',
     ],
     includes = ["."],
+)
+
+# --- kernel/switch/boot/prefs.c ----------------------------------------------------------------------------------------
+copy_file(
+    name = "switch_prefs_header",
+    src = "//kernel/switch:include/switch/prefs.h",
+    out = "switch/prefs.h",
+)
+
+host_library(
+    name = "prefs",
+    srcs = ["//kernel/switch:boot/prefs.c"],
+    hdrs = ["switch/prefs.h"],
+    includes = ["."],
+)
+
+host_test(
+    name = "switch_prefs_test",
+    srcs = ["switch_prefs_test.cpp"],
+    data = [
+        "//kernel/xnu-10063.141.1/bsd:kern/kern_exec.c",
+        "//kernel/xnu-12377.121.6/bsd:kern/kern_exec.c",
+        "//translate/arm64e:xnu/port-12377/switch-on-12377.diff",
+    ],
+    linkopts = [
+        "-framework",
+        "CoreFoundation",
+    ],
+    deps = [":prefs"],
 )
