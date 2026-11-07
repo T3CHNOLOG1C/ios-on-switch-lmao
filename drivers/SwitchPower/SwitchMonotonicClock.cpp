@@ -96,7 +96,7 @@ void describe(struct sysctl_oid *oid, const char *name, int type, sysctl_handler
 {
     oid->oid_parent = &sysctl__kern_children;
     oid->oid_number = OID_AUTO;
-    oid->oid_kind = type | CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED;
+    oid->oid_kind = type | CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED | CTLFLAG_OID2;
     oid->oid_name = name;
     oid->oid_handler = handler;
     oid->oid_fmt = format;
