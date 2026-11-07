@@ -1,11 +1,11 @@
 """Analysis tests of what the seed's actions are keyed on, over stand-in inputs (no IPSW is fetched):
 
-- the crawl reads the images and the crawler, and the crawler's own runfiles are crawl.py and metallib.py;
+- the crawl's names read the crawled tree and the tool alone;
 - a bucket's compile reads its bucket's lines, the libraries and the three tools that make code: not the corpus, the
   GPU bundle, the tools' manifest or the raw pack's tools, so a corpus edit reaches only the buckets it rewrites and a
   plugin edit reaches none;
 - the join reads the buckets' indexes and reports, never their packs;
-- the bundle check is a validation action, so the GPU bundle is no input of anything that makes the seed.
+- the bundle check is a validation action, so the GPU bundle is no input of anything that makes the seed;
 """
 
 load("@bazel_skylib//lib:unittest.bzl", "analysistest", "asserts")
@@ -16,26 +16,17 @@ def _actions(env, mnemonic):
 def _names(action):
     return [f.short_path for f in action.inputs.to_list()]
 
+def _ours(names):
+    return [p for p in names if not p.startswith("../")]
+
 def _crawl_impl(ctx):
     env = analysistest.begin(ctx)
-    (crawl,) = _actions(env, "ShaderCrawl")
-    images = [p for p in _names(crawl) if "/images/" in p]
-    asserts.equals(env, 3, len(images), "the three images")
-    stray = [p for p in _names(crawl) if "/images/" not in p and not p.startswith(("tools/gpu/shaders/", "../"))]
-    asserts.equals(env, [], stray, "the crawl's inputs beyond the images and the crawler")
+    (names,) = _actions(env, "M2vLibraryNames")
+    stray = [p for p in _ours(_names(names)) if "/crawl/tree/" not in p and not p.startswith("drivers/")]
+    asserts.equals(env, [], stray, "the names' inputs beyond the tree and the tool")
     return analysistest.end(env)
 
 _crawl_test = analysistest.make(_crawl_impl)
-
-def _crawler_impl(ctx):
-    env = analysistest.begin(ctx)
-    runfiles = analysistest.target_under_test(env)[DefaultInfo].default_runfiles.files.to_list()
-    sources = [f for f in runfiles if f.is_source and f.owner.workspace_name == "" and f.extension == "py"]
-    own = sorted([f.short_path for f in sources])
-    asserts.equals(env, ["tools/gpu/shaders/crawl.py", "tools/gpu/shaders/metallib.py"], own)
-    return analysistest.end(env)
-
-_crawler_test = analysistest.make(_crawler_impl)
 
 def _seed_impl(ctx):
     env = analysistest.begin(ctx)
@@ -59,16 +50,14 @@ def _seed_impl(ctx):
 
 _seed_test = analysistest.make(_seed_impl)
 
-def seed_inputs_tests(name, crawl, crawler, seed):
+def seed_inputs_tests(name, crawl, seed):
     """The tests, as one test_suite.
 
     Args:
         name: the test_suite's name.
-        crawl: a shader_crawl over stand-in images.
-        crawler: //tools/gpu/shaders:crawl.
+        crawl: a shader_crawl over a stand-in tree.
         seed: a metal_seed of four buckets over stand-in inputs.
     """
     _crawl_test(name = name + "_crawl", target_under_test = crawl)
-    _crawler_test(name = name + "_crawler", target_under_test = crawler)
     _seed_test(name = name + "_seed", target_under_test = seed)
-    native.test_suite(name = name, tests = [name + "_crawl", name + "_crawler", name + "_seed"])
+    native.test_suite(name = name, tests = [name + "_crawl", name + "_seed"])

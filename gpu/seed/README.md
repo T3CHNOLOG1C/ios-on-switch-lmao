@@ -19,7 +19,10 @@ bazel build //gpu/seed:tools_archive                          # the host tools, 
 
 The crawl reads every Metal library on the IPSW's OS volume and cryptexes, including the ones embedded in the dyld
 shared cache. Its inventory also lists what it leaves out (GPU binary archives and pipeline libraries, which the
-frontend refuses) and anything that doesn't parse.
+frontend refuses) and anything that doesn't parse. It runs once per IPSW, in a repository (`crawl.bzl`): Bazel downloads
+the OS image and cryptexes, crawls them, deletes them and keeps the crawl (about 233 MB) in its repository contents
+cache. Building the seed never needs the images, so they stay off the Mac until an image build (`//install`) fetches
+them. Editing `crawl.py` or `metallib.py` downloads and crawls again.
 
 - `corpus`: every pipeline in `drivers/TegraGM20BMetal/precompile/corpus.log`, the journal harvested from real boots.
   That includes the dispatch shapes (D lines) compute states were seen taking: a compute kernel's GM20B code depends

@@ -3,6 +3,7 @@
 #   bazel test //gpu/seed/test:all
 load("@bazel_skylib//rules:write_file.bzl", "write_file")
 load("//bazel/lint:defs.bzl", "lint_files")
+load("//gpu/seed:crawl.bzl", "QUARTZCORE")
 load("//gpu/seed:defs.bzl", "metal_seed", "shader_crawl")
 load(":inputs_test.bzl", "seed_inputs_tests")
 
@@ -14,9 +15,9 @@ lint_files()
     content = [],
     tags = ["manual"],
 ) for path in [
-    "images/os.dmg",
-    "images/system.dmg",
-    "images/app.dmg",
+    "crawl/tree/" + QUARTZCORE,
+    "crawl/tree/data/0.metallib",
+    "crawl/inventory.json",
     "base/TegraGM20BMetal.bundle/Info.plist",
     "tools/precompile",
     "tools/libmock_iokit.dylib",
@@ -44,14 +45,21 @@ filegroup(
     tags = ["manual"],
 )
 
-shader_crawl(
-    name = "crawl",
-    images = [
-        ":images/os.dmg",
-        ":images/system.dmg",
-        ":images/app.dmg",
+filegroup(
+    name = "tree",
+    srcs = [
+        ":crawl/tree/" + QUARTZCORE,
+        ":crawl/tree/data/0.metallib",
     ],
     tags = ["manual"],
+)
+
+shader_crawl(
+    name = "crawl",
+    inventory = ":crawl/inventory.json",
+    qc = ":crawl/tree/" + QUARTZCORE,
+    tags = ["manual"],
+    tree = ":tree",
 )
 
 metal_seed(
@@ -68,6 +76,5 @@ metal_seed(
 seed_inputs_tests(
     name = "inputs_test",
     crawl = ":crawl",
-    crawler = "//tools/gpu/shaders:crawl",
     seed = ":seed",
 )

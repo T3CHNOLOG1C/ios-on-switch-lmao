@@ -85,12 +85,10 @@ tools_archive(
 
 shader_crawl(
     name = "crawl",
-    images = [
-        "@ipsw//:os",
-        "@ipsw//:system_cryptex",
-        "@ipsw//:app_cryptex",
-    ],
+    inventory = "@ipsw//:crawl_inventory",
+    qc = "@ipsw//:crawl_qc",
     tags = ["manual"],
+    tree = "@ipsw//:crawl_tree",
 )
 
 metal_seed(
