@@ -51,8 +51,8 @@
 //   * AABC::HandleALSEvent reads IOHIDEventGetFloatValue(event, 0xc0000) (kIOHIDEventFieldAmbientLightSensorLevel, lux)
 //     from kIOHIDEventTypeAmbientLightSensor (12) events; colour only when field 0xc0006 (colour space) is set.
 //   * CoreBrightness also sets ReportInterval, ALSIntegrationMode, IOHIDALSContinuousMode and IOHIDBacklightLevel on the
-//     service. IOHIDEventDriver forwards only ReportInterval (to the descriptor's Report Interval feature), which this
-//     device does not take (IOHIDFamily logs "setValue failed"); the rate here is the sensor's.
+//     service. IOHIDEventDriver forwards only ReportInterval (to the descriptor's Report Interval feature), which sets
+//     the sample period here (reportIntervalSet), never shorter than a whole conversion (kSampleUS).
 // The HID service is a SwitchHIDDevice (kSwitchHIDLight) and its IOHIDEventDriver. IOHIDEventDriver has no ambient light
 // element of its own, so the events are made here and handed to that driver's dispatchEvent (switch_hid_dispatch_event).
 //
@@ -72,6 +72,7 @@
 #include "../TegraGPIO/TegraGPIO.h"
 #include "../TegraI2C/TegraI2C.h"
 #include "../SwitchTouch/SwitchHID.h"
+#include "../../kits/SwitchRefusal/SwitchRefusal.h"
 #include "SwitchALSMath.h"
 #include "SwitchBrightness.h"
 #include "TegraPanel.h"
@@ -192,7 +193,7 @@ void describeBus(char *buffer, size_t size)
 
 class SwitchALS : public IOService {
     OSDeclareDefaultStructors(SwitchALS) IOWorkLoop *loop = nullptr;
-    IOTimerEventSource *clock = nullptr;        // every kSampleUS while running
+    IOTimerEventSource *clock = nullptr;        // every sampleUS while running
     IOTimerEventSource *supplyCheck = nullptr;  // kSupplyDeadlineMS for SwitchTouch's first LDO6
     IOService *hid = nullptr;
     unsigned gain = 2;  // 64x, as bh1730_init_config and hekate
@@ -202,11 +203,13 @@ class SwitchALS : public IOService {
     bool broken = false;    // a sensor or HID path that is not as expected: logged once, sampling off for this boot
     uint64_t supplyAt = 0;  // when LDO6 last came on (switch_als_supply)
     bool running = false;
+    uint32_t sampleUS = kSampleUS;  // CoreBrightness's report interval, at least kSampleUS (reportIntervalSet)
     unsigned samples = 0, luxMin = ~0u, luxMax = 0;
     unsigned loggedLux = 0, loggedGain = ~0u;  // the last line's (noteStats); ~0u: none yet
     int loggedPanel = -1;
 
     static void ticked(OSObject *owner, IOTimerEventSource *sender);
+    static void reportIntervalSet(void *context, const uint8_t *report, size_t length);
     static void supplyLate(OSObject *owner, IOTimerEventSource *sender);
     void update();
     void giveUp();
@@ -447,8 +450,25 @@ void SwitchALS::ticked(OSObject *owner, IOTimerEventSource *sender)
     auto *self = static_cast<SwitchALS *>(owner);
     if (!__atomic_load_n(&self->running, __ATOMIC_ACQUIRE))
         return;
-    sender->setTimeoutUS(kSampleUS);
+    sender->setTimeoutUS(__atomic_load_n(&self->sampleUS, __ATOMIC_RELAXED));
     self->sample();
+}
+
+// The Report Interval feature (report 1: a 32-bit microsecond count), on IOHIDEventDriver's thread: the next tick
+// takes it. The sensor converts no faster than kSampleUS, so a shorter interval is held there, logged once.
+void SwitchALS::reportIntervalSet(void *context, const uint8_t *report, size_t length)
+{
+    auto *self = static_cast<SwitchALS *>(context);
+    if (length < 5)
+        return;
+    const uint32_t asked =
+        (uint32_t)report[1] | (uint32_t)report[2] << 8 | (uint32_t)report[3] << 16 | (uint32_t)report[4] << 24;
+    if (asked && asked < kSampleUS) {
+        switch_refusal("als", "interval-below-conversion",
+                       "report interval %u us asked; the BH1730 converts every %u us, so it reports at that", asked,
+                       kSampleUS);
+    }
+    __atomic_store_n(&self->sampleUS, asked > kSampleUS ? asked : kSampleUS, __ATOMIC_RELAXED);
 }
 
 // Work loop: SwitchTouch never turned LDO6 on (it did not start, or the panel never came up).
@@ -500,6 +520,7 @@ bool SwitchALS::start(IOService *provider)
         panic("SwitchALS: work loop setup failed");
     }
     hid = switch_hid_create(kSwitchHIDLight);
+    switch_hid_set_feature_handler(hid, &SwitchALS::reportIntervalSet, this);
     registerService();
     supplyCheck->setTimeoutMS(kSupplyDeadlineMS);
     setLit(switch_display_is_on());
