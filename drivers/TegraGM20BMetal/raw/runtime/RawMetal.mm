@@ -38,6 +38,7 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include "GpuMemoryRelease.h"
 #include "SwitchFrameTimeline.h"
 #include "../../../../kits/SwitchRefusal/SwitchRefusalSite.h"
 #include "RawAlias.h"
@@ -495,6 +496,7 @@ struct RawState {
     std::condition_variable doneChanged;
     std::deque<RMCommandBuffer *> inflight;  // raw command buffers submitted, in seqno order
     dispatch_queue_t handlers;               // where scheduled handlers run (in order, never inside commit)
+    std::atomic<uint32_t> committed{0};      // command buffers committed and not finished (gRawRelease's drain)
     Stats stats;
 };
 
@@ -4215,6 +4217,10 @@ static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **
 {
     raw::Device &d = *gRM->raw;
     raw::CommandBuffer *rc = d.begin();
+    if (!rc) {
+        *why = "the kernel gave the raw path no channel";
+        return false;
+    }
     raw::RenderEncoder *re = nullptr;
     raw::BlitEncoder *be = nullptr;
 
@@ -4875,6 +4881,10 @@ static void scheduled(RMCommandBuffer *cb)
 
 // Completed: CPU-signalled events, written resources marked, handlers (on the queue's completion queue when it has one), the
 // objects released, waiters woken.
+// The raw path's empty chunks go back as m2v's blocks do: on memory pressure, and outside the render server once nothing completed
+// for NMB_IDLE_RELEASE_MS (each completion moves the deadline)
+static GpuMemoryRelease &gRawRelease = *new GpuMemoryRelease;
+
 static void finish(RMCommandBuffer *cb, NSError *error)
 {
     gRM->stats.finished.fetch_add(1, std::memory_order_relaxed);
@@ -4906,6 +4916,8 @@ static void finish(RMCommandBuffer *cb, NSError *error)
         cb->_changed.notify_all();
         cb->_owners.clear();  // the resources may die now: no submission uses them any more
         cb->_owners.shrink_to_fit();
+        if (gRM->committed.fetch_sub(1, std::memory_order_acq_rel) == 1)
+            gRawRelease.drained();
 #if SWITCH_FRAME_TIMELINE
         switch_frame::finished(cb->_frame);
 #endif
@@ -5048,7 +5060,7 @@ static void commitBuffer(RMCommandBuffer *cb);
 
 - (id<MTLTexture>)rmNewTexture:(MTLTextureDescriptor *)d tiled:(bool)tiled
 {
-    if (gRM->raw->chainsOn() && chainShape(d)) {  // mipmapped: level 0 a pool texture, the levels a chain (raw/fx)
+    if (chainShape(d) && gRM->raw->chains()) {  // mipmapped: level 0 a pool texture, the levels a chain (raw/fx)
         RMTexture *t = [RMTexture new];
         t->_device = self;
         t->_descriptor = [d copy];
@@ -5698,6 +5710,8 @@ static void mirrorsForM2v(RMCommandBuffer *cb, size_t from, size_t to)
     }
     raw::Device &d = *r.raw;
     raw::CommandBuffer *rc = d.begin();
+    if (!rc)
+        return;
     raw::BlitEncoder *be = rc->blit();
     uint64_t levels = 0;
     for (RMTexture *t : need)
@@ -6058,6 +6072,7 @@ static void commitBuffer(RMCommandBuffer *cb)
     raw::followers().committing();
     planSegments(cb);
     RawState &r = *gRM;
+    r.committed.fetch_add(1, std::memory_order_relaxed);
     if (waitsForEvent(cb)) {
         std::lock_guard<std::mutex> h(gHoldersLock);
         gHolders.insert(cb);
@@ -6158,7 +6173,7 @@ bool raw_metal_texture_kept(id<MTLTexture> texture)
 
 bool raw_metal_chains_on(void)
 {
-    return gRM && gRM->raw->chainsOn();
+    return gRM && gRM->raw->chains();
 }
 
 const void *raw_metal_texture_image(id<MTLTexture> texture, size_t *pitch)
@@ -6406,13 +6421,15 @@ static struct {
     bool started = false;
 } gPrepared;
 
-static raw::Device *openDevice(const char *packPath, uint64_t stack, std::string &err)
+static raw::Device *openDevice(const char *packPath, uint64_t stack, raw::Device::Role role, std::string &err)
 {
     raw::Device *dev = new raw::Device;
-    if (!dev->open(packPath, stack, err)) {
+    if (!dev->open(packPath, stack, err, role)) {
         delete dev;  // its connection closes: the kernel frees what it held
         return nullptr;
     }
+    if (role == raw::Device::Role::Client)
+        return dev;
     // the 2D engine's mip-chain self-test at open (raw/fx): one line, whichever way it went (each sampling candidate's bad bytes
     // in the CPU's Tegra/Fermi views, the winner), and when the documented convention failed a second: what it got wrong
     {
@@ -6464,7 +6481,7 @@ void raw_metal_prepare(const char *packPath, uint64_t stack)
         pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
         pthread_setname_np("com.brunostjohn.switch.raw.open");
         std::string err;
-        raw::Device *dev = openDevice(gPrepared.path.c_str(), gPrepared.stack, err);
+        raw::Device *dev = openDevice(gPrepared.path.c_str(), gPrepared.stack, raw::Device::Role::RenderServer, err);
         std::lock_guard<std::mutex> m(gPrepared.lock);
         gPrepared.dev = dev;
         gPrepared.err = err;
@@ -6495,7 +6512,7 @@ id<MTLDevice> raw_metal_device_open(const char *packPath, uint64_t stack, id<MTL
         }
     }
     if (!prepared)
-        dev = openDevice(packPath, stack, err);
+        dev = openDevice(packPath, stack, raw::Device::Role::Client, err);
     if (dev && fallback && !dev->shared()) {
         err = "the kernel connection is not NVK's, so m2v cannot alias the raw path's memory";
         delete dev;
@@ -6581,15 +6598,23 @@ id<MTLDevice> raw_metal_device_open(const char *packPath, uint64_t stack, id<MTL
     gRM = r;
     if (fallback)
         rawAliasSurfaces(dev);
-    os_log(rawLog(), "raw: shader heap %llu KB, each program placed at its state's first use",
-           (unsigned long long)(dev->heapBytes() >> 10));
+    gRawRelease.start(
+        [](void *) {
+            gRM->raw->trim();
+        },
+        nullptr);
+    const bool renderServer = dev->role() == raw::Device::Role::RenderServer;
+    if (renderServer)
+        os_log(rawLog(), "raw: shader heap %llu KB, each program placed at its state's first use",
+               (unsigned long long)(dev->heapBytes() >> 10));
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    {  // the stall line's timer (rawStallTick): its own, so nothing the render server's other threads hold delays it
+    {  // the stall line's timer (rawStallTick): its own, so nothing the render server's other threads hold delays it; another
+        // process's rides the wakeups it takes anyway
         static dispatch_source_t stall;
         stall =
             dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_global_queue(QOS_CLASS_UTILITY, 0));
         dispatch_source_set_timer(stall, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC), 5 * NSEC_PER_SEC,
-                                  NSEC_PER_SEC / 4);
+                                  renderServer ? NSEC_PER_SEC / 4 : 5 * NSEC_PER_SEC);
         dispatch_source_set_event_handler(stall, ^{
             rawStallTick();
         });

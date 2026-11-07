@@ -31,6 +31,7 @@
 #include <map>
 #include <tuple>
 #include <vector>
+#include <mach/kern_return.h>
 #include "raw_kernel.h"
 #include "raw_pack.h"
 #include "raw_push.h"
@@ -519,8 +520,30 @@ private:
 
 class Device {
 public:
+    // Whose device it is. The render server draws every frame of the screen from its start: its channel, shader heap and first
+    // chunks are made at open. Any other process's are made at their first use, in smaller steps, and what stays empty goes
+    // back to the kernel when it idles (trim): most never draw, and a widget's jetsam limit is tens of MB.
+    enum class Role : uint8_t {
+        RenderServer,
+        Client
+    };
+
     ~Device();
-    bool open(const char *packPath, uint64_t stack, std::string &err);
+    bool open(const char *packPath, uint64_t stack, std::string &err, Role role = Role::RenderServer);
+
+    Role role() const
+    {
+        return role_;
+    }
+
+    // The channel and its context, made now if not yet (a client's first command buffer, Order or mipmapped texture); with it
+    // the 2D engine's mip-chain self-test. False: the kernel refused it (`channelError()`), and the device submits nothing.
+    bool ensureChannel();
+
+    const std::string &channelError() const
+    {
+        return channelError_;
+    }
 
     const Pack &pack() const
     {
@@ -581,11 +604,21 @@ public:
         return k_.shared();
     }
 
-    // Whether mip chains are on: the 2D engine's self-test at open made the chain the design expects (fx_mip.h)
+    // Whether mip chains are on: the 2D engine's self-test, run with the channel, made the chain the design expects (fx_mip.h)
     bool chainsOn() const
     {
         return chainsOn_;
     }
+
+    // The same, the channel made first where it is not yet (a client's first mipmapped texture)
+    bool chains()
+    {
+        return ensureChannel() && chainsOn_;
+    }
+
+    // The memory no resource holds goes back to the kernel: empty chunks of the pool, of images and of buffers, and the kept
+    // dedicated ones (the kernel keeps their pages until the work submitted before has completed)
+    void trim();
 
     // Whether the device's resource lock is free now (try, never waits: the stall line's)
     bool lockFree()
@@ -602,9 +635,10 @@ public:
     uint32_t wcChunksHeld();
     uint64_t wcChunkBytesHeld();
 
+    // the shader heap's bound bytes (the programs placed so far, in steps)
     uint64_t heapBytes() const
     {
-        return heap_.bytes;
+        return heapBound_;
     }
 
     bool createBufferNoCopy(void *bytes, uint64_t length, Buffer &b);
@@ -626,7 +660,7 @@ public:
     // below a low mark, so the render thread's allocations find room (Stats::poolStalls counts the ones that had to grow it).
     void warm();
 
-    // Submission. begin() opens the one command buffer (the caller serialises encoding and commit).
+    // Submission. begin() opens the one command buffer (the caller serialises encoding and commit); null: no channel.
     CommandBuffer *begin();
 
     uint32_t completed() const
@@ -634,14 +668,15 @@ public:
         return *fence_;
     }
 
+    // 0 before the channel is made (it may be made on another thread: a client's first mipmapped texture)
     uint32_t submitted() const
     {
-        return lastSeqno_;
+        return channelReady_.load(std::memory_order_acquire) ? lastSeqno_ : 0;
     }
 
     bool done(uint32_t seqno) const
     {
-        return int32_t(*fence_ - seqno) >= 0;
+        return !seqno || int32_t(*fence_ - seqno) >= 0;
     }
 
     // In the kernel, on the fence interrupt. False: the submission failed, the channel died with it in flight (reopen).
@@ -669,11 +704,16 @@ public:
 
     int orderAfterOthers(uint32_t &waits)
     {
+        if (!ensureChannel())
+            return KERN_FAILURE;
         return k_.order(channel_, TegraGM20BOrderAfterTask, 0, waits);
     }
 
     int orderOthersAfter(uint32_t &waits)
     {
+        waits = 0;
+        if (!channelReady_.load(std::memory_order_acquire))
+            return KERN_SUCCESS;  // nothing submitted to order after
         return k_.order(channel_, TegraGM20BOrderBeforeTask, lastSeqno_, waits);
     }
 
@@ -752,6 +792,7 @@ private:
     struct Ring {
         Bo bo;
         uint64_t head = 0, since = 0;  // next free byte; where the open command buffer's use began
+        bool waited = false;           // an allocation waited for the GPU since the last begin(): it doubles there
 
         struct Span {
             uint64_t begin, end;
@@ -770,13 +811,35 @@ private:
         bool dedicated = false;
     };
 
+    // A role's memory steps: the shared pool chunk (a span over half of one gets its own), a chunk of block-linear images, a
+    // chunk of write-combined buffers, and the rings' first sizes (each doubles where an allocation waited, to the render
+    // server's)
+    struct Sizes {
+        uint64_t chunk, blChunk, wcChunk, push, upload;
+    };
+
+    static const Sizes kSizes[2];
+    Role role_ = Role::RenderServer;
+    Sizes sizes_ = kSizes[0];
     std::mutex lock_;
     Kernel k_;
     Pack pack_;
+    // heap_: the shader heap's GPU VA reservation and CPU range (bytes: their size), bound from its start (heapBound_) in parts
+    // as programs are placed
     Bo heap_, tic_, tsc_, root_, zero_, tickets_;
+    std::vector<Bo> heapParts_;
+    uint64_t heapBound_ = 0;
     Ring push_, upload_;
+    // rings replaced by larger ones, freed once the GPU passed the seqno
+    std::vector<std::pair<Bo, uint32_t>> grownOut_;
     uint32_t channel_ = 0, lastSeqno_ = 0;
-    const volatile uint32_t *fence_ = nullptr;
+    // the channel's fence word; before there is a channel a zero, which every seqno submitted so far (none) has passed
+    const volatile uint32_t *fence_ = &kNoFence;
+    static constexpr uint32_t kNoFence = 0;
+    std::mutex channelLock_;
+    std::atomic<bool> channelReady_{false};
+    bool channelFailed_ = false;
+    std::string channelError_;
     std::vector<uint32_t> freeTic_, freeTsc_;
     uint32_t nextTic_ = 1, nextTsc_ = 1, neutralTsc_ = 0;
     // the pack's, by record index, each made at its first lookup (a process uses a few of the pack's thousands); a node
@@ -786,6 +849,8 @@ private:
     uint64_t heapPlaced_ = 0;
     uint32_t ctWrite_[8] = {};  // SET_CT_WRITE(i) as the baseline leaves it
     bool place(uint32_t prog, uint32_t &program, uint64_t &data);
+    bool heapGrow(uint64_t end);
+    bool heapPlace(const uint8_t *bytes, uint32_t size, uint64_t &offset);
     std::vector<uint32_t> constexprTsc_;
     CommandBuffer cb_;
     uint32_t rootPush_[32] = {};  // what the GPU's root table holds at [0x700, 0x780) after everything submitted
@@ -848,6 +913,9 @@ private:
     uint64_t commitCount_ = 0;
 
     bool init(std::string &err);
+    bool openChannel(std::string &err);
+    void growRing(Ring &r, uint64_t most);
+    void freeChunk(Chunk &ch);
     uint32_t contextWords() const;
     void emitContext(Push &p);
     bool reopen();
