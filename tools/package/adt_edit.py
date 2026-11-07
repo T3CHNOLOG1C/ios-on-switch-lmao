@@ -261,6 +261,11 @@ def _capabilities(tree: list) -> None:
         ('wifi-chipset', b'4355\0'),
     ):
         put(product, key, value)
+    # MobileGestalt's volume-buttons answer is whether /buttons has function-button_volup; nothing here resolves the
+    # function (SwitchButtons owns the buttons; AppleM68Buttons, which would, is not prelinked). J120's bytes.
+    buttons = child(tree, 'buttons')
+    put(buttons, 'function-button_volup', bytes.fromhex('240000004f4950472800000000000000'))
+    put(buttons, 'function-button_voldown', bytes.fromhex('240000004f4950472b00000000000000'))
     maps = child(product, 'maps')
     put(maps, '3d-imagery', u32(0))
     put(maps, '3d-maps', u32(0))
