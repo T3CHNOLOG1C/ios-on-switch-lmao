@@ -27,6 +27,7 @@ use crate::release;
 use ash::vk;
 use metal2vulkan::metal::format::FormatEmulation;
 use metal2vulkan::metal::TextureType;
+use metal2vulkan::vk::ImageAspectFlags;
 use std::sync::atomic::AtomicBool;
 use std::sync::Mutex;
 
@@ -87,7 +88,7 @@ impl Device {
             plan.mapping.emulation,
             FormatEmulation::Direct | FormatEmulation::SwizzledView
         );
-        if !exact || plan.mapping.aspects != vk::ImageAspectFlags::COLOR {
+        if !exact || plan.mapping.aspects != ImageAspectFlags::COLOR {
             return Err(refused);
         }
         let shared = self.shared();
