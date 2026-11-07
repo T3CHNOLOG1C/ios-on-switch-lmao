@@ -39,7 +39,10 @@ xcrun clang++ "${FLAGS[@]}" -I "$TREE/drivers/TegraGM20B" "$HERE/datacheck.cpp" 
     "$RAW/runtime/raw_kernel.cpp" "$RAW/runtime/raw_alias.cpp" "$RAW/runtime/raw_pack.cpp" "$RAW/runtime/raw_ycbcr.cpp" "$RAW/runtime/raw_zeta.cpp" "${LIBS[@]}" -o "$OUT/datacheck"
 # recordcheck: the runtime's records of states (raw_record.cpp) against the pack mkpack.py made from the same probe runs
 xcrun clang++ "${FLAGS[@]}" "$HERE/recordcheck.cpp" "$RAW/runtime/raw_record.cpp" "$RAW/runtime/raw_pack.cpp" -o "$OUT/recordcheck"
-echo "built $OUT/nvkframe $OUT/rawframe $OUT/facadeframe $OUT/poolcheck $OUT/datacheck $OUT/recordcheck"
+# cachecheck: the runtime's record cache and compile table on a bucket's records, and the AIR hashes on a real library
+xcrun clang++ "${FLAGS[@]}" "$HERE/cachecheck.cpp" "$RAW/runtime/raw_cache.cpp" "$RAW/runtime/raw_metallib.cpp" "$RAW/runtime/raw_record.cpp" \
+    "$RAW/runtime/raw_pack.cpp" -o "$OUT/cachecheck"
+echo "built $OUT/nvkframe $OUT/rawframe $OUT/facadeframe $OUT/poolcheck $OUT/datacheck $OUT/recordcheck $OUT/cachecheck"
 xcrun clang++ "${OBJC[@]}" -Wall -Wextra -x objective-c++ "$HERE/blitframe.mm" "$RAW/runtime/RawMetal.mm" "$RAW/runtime/RawAlias.mm" "$FRONT/NativeBridgeMetalFrontend.mm" \
     -x c++ "$RAW/runtime/raw_gpu.cpp" "$RAW/fx/fx_mip.cpp" "$RAW/runtime/raw_kernel.cpp" "$RAW/runtime/raw_alias.cpp" "$RAW/runtime/raw_pack.cpp" "$RAW/runtime/raw_ycbcr.cpp" "$RAW/runtime/raw_zeta.cpp" "$TREE/kits/SwitchRefusal/SwitchRefusal.c" -x none "$BRIDGE" "${LIBS[@]}" \
     -o "$OUT/blitframe" 2>&1 | grep -v "duplicate libraries" || true

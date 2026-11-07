@@ -16,6 +16,9 @@
 #   stage_test        stage-tegra-gm20b-metal.py on a directory standing in for the Data volume
 #   raw_ycbcr_test    raw/runtime/raw_ycbcr.cpp: the two-plane YCbCr textures the raw path converts (m2v's rules) and the
 #                     conversion's shape; its texels against Metal's reads are raw/test/ycbcroracle.mm's (this Mac's GPU)
+#   raw_cache_test    raw/runtime/raw_cache.h: the records the runtime makes for states the pack lacks, kept on disk and
+#                     made once per process (raw/test/cachecheck: the same checks on a bucket's real records), and
+#                     raw_metallib.h: the functions' AIR hashes that key them
 #   raw_bounds_test   raw/runtime/raw_bounds.h: a Core Animation draw's pixel box and rectangle from its vertices (against
 #                     a GPU's coverage it is raw/test/boundsoracle.mm's, this Mac's GPU), and raw_region.h: the fetch
 #                     barrier's region test over such draws, and which covers a render area (a clear it makes redundant)
@@ -140,6 +143,24 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/runtime/raw_bounds.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_overlap.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_region.h",
+    ],
+    cxx_std = "c++17",
+)
+
+host_test(
+    name = "raw_cache_test",
+    srcs = [
+        "raw_cache_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/pack/probe_record.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_cache.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_cache.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_capture.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_metallib.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_metallib.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_pack.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_pack.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_record.h",
+        "//drivers/TegraGM20BMetal:raw/test/cache_checks.h",
     ],
     cxx_std = "c++17",
 )
