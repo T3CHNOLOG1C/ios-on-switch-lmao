@@ -133,6 +133,7 @@ class Fill(unittest.TestCase):
             spec=spec,
             deltas=deltas,
             images={'app_cryptex': (cryptex, sha(b'sealed cryptex'))},
+            writes=0,
             boot_package=str(package),
             gpu_stager=str(stager),
             gpu_base=str(self.dir),

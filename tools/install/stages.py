@@ -6,12 +6,14 @@ directory for the next run; populate works on an APFS clone of it, which pack em
 
 import argparse
 import json
+import os
 import shutil
 from pathlib import Path
 
 from tools.install import (
     card as cards,
     compose,
+    disks,
     fill,
     folder,
     host,
@@ -21,6 +23,7 @@ from tools.install import (
     populate,
     pretranslate,
     progress,
+    space,
 )
 
 STATE = 'state.json'
@@ -28,7 +31,6 @@ COMPOSED = 'composed.img'
 POPULATED = 'populated.img'
 PROOF = 'proof.img'
 STAGING = '/private/preboot/Switch-Staging/'
-FLOOR = 14 << 30
 NOMINAL = 1 << 40
 BLOCK = 4096
 # A fitted container needs room for iOS to run in beyond what the image holds, and iOS a partition of this at least.
@@ -38,7 +40,10 @@ SMALLEST_PARTITION = 16 << 30
 # unsuffixed directory. Every other build gets its own, so one kind's image never recomposes over another's.
 LEGACY_BUILD = '21H461'
 # What the boot package pins of iOS 27's translation, kept from the deltas for //:image's folder (out/pretranslated).
-KEPT = 'pretranslated'
+KEPT = 'kept-pretranslated'
+# What runs before this one left in the scratch directory and nothing makes any more: the translation's work under
+# sudo (root's, which only `sudo rm` removes) and the cryptexes populate rebuilt there.
+LEFTOVERS = ('delta-os', 'delta-app_cryptex', 'delta-system_cryptex', 'translations', 'pretranslated')
 
 
 def default_scratch(build: str) -> Path:
@@ -121,13 +126,36 @@ class Stages:
     def save(self, **changes: object) -> None:
         saved = {k: v for k, v in self.state().items() if v is not None}
         saved.update(changes)
-        (self.scratch / STATE).write_text(json.dumps(saved, indent=2) + '\n')
+        partial = disks.partial(self.scratch / STATE)
+        partial.write_text(json.dumps(saved, indent=2) + '\n')
+        os.replace(partial, self.scratch / STATE)
+
+    def clean(self) -> None:
+        """Detach what an earlier run left attached, drop its partial files and the leftovers nothing makes now."""
+        self.scratch.mkdir(parents=True, exist_ok=True)
+        disks.sweep(self.scratch, self.log)
+        sources = {Path(p).name for p in (self.args.system_cryptex, self.args.app_cryptex) if p}
+        found = [self.scratch / name for name in (*LEFTOVERS, *sorted(sources)) if (self.scratch / name).exists()]
+        stuck = []
+        for path in found:
+            try:
+                shutil.rmtree(path) if path.is_dir() and not path.is_symlink() else path.unlink()
+            except PermissionError:
+                stuck.append(path)
+            else:
+                self.log(f'cleanup: removed {path.name}, left by an earlier run')
+        if stuck:
+            paths = ' '.join(f'"{p}"' for p in stuck)
+            self.log(f"cleanup: {len(stuck)} leftovers of an earlier run under sudo are root's: sudo rm -rf {paths}")
 
     def compose(self, key: str) -> None:
-        self.scratch.mkdir(parents=True, exist_ok=True)
         for image in (self.composed, self.populated):
             image.unlink(missing_ok=True)
-        offset, _ = compose.compose(self.composed, self.args.os_dmg, NOMINAL, self.spec, self.log)
+        os_used = compose.os_container_used(self.args.os_dmg, self.log)
+        space.check(self.scratch, os_used, 'compose')
+        partial = disks.partial(self.composed)
+        offset, _ = compose.compose(partial, self.args.os_dmg, NOMINAL, self.spec, self.log)
+        os.replace(partial, self.composed)
         self.save(compose=key, populate=None, offset=offset)
 
     def deltas(self) -> pretranslate.Deltas | None:
@@ -156,22 +184,26 @@ class Stages:
 
     def populate(self, key: str) -> None:
         self.populated.unlink(missing_ok=True)
-        host.run('cp', '-c', str(self.composed), str(self.populated), log=self.log)
+        partial = disks.partial(self.populated)
+        host.run('cp', '-c', str(self.composed), str(partial), log=self.log)
         deltas = self.deltas()
         if deltas:
             deltas.keep()
             self.check_pins(deltas)
         sources, expected = self.cryptexes()
+        images = populate.cryptex_images(self.spec, self.pins, sources, expected)
         inputs = fill.Inputs(
             spec=self.spec,
             deltas=deltas,
-            images=populate.cryptex_images(self.spec, self.pins, sources, expected),
+            images=images,
+            writes=space.populate_bytes(self.args, [image for image, _ in images.values()]),
             boot_package=self.args.boot_package,
             gpu_stager=self.args.gpu_stager,
             gpu_base=self.args.gpu_base,
             shader_seed=getattr(self.args, 'shader_seed', None),
         )
-        fill.fill(self.populated, self.state()['offset'], inputs, self.log)
+        fill.fill(partial, self.state()['offset'], inputs, self.log)
+        os.replace(partial, self.populated)
         self.save(populate=key)
 
     def measure(self, tool: str, image: Path) -> dict:
@@ -212,11 +244,15 @@ class Stages:
         layout = self.measure(tool, self.populated)
         layout['minimum_bytes'] = minimum_bytes(layout)
         self.prove(tool, layout['minimum_bytes'])
+        # What populate wrote is punched out behind the parts; composed.img keeps the rest of their blocks.
+        shared = space.allocated(self.composed) if self.composed.exists() else 0
+        space.check(self.scratch, layout['minimum_bytes'] - (space.allocated(self.populated) - shared), 'pack')
+        # Packing punches the populated clone out as it goes: from here on a failed run must populate again.
+        self.save(populate=None)
         source = pack.Source(self.populated, self.state()['offset'], layout)
         target = pack.Target(Path(out) / folder.SII_DIR, folder.SII_DIR, name, version_label(self.pins), files)
         m = pack.pack(source, target, self.log)
         self.populated.unlink(missing_ok=True)
-        self.save(populate=None)
         return m
 
 
@@ -239,10 +275,3 @@ def boot_record(args: argparse.Namespace) -> dict[str, str | None]:
         'overlay': cards.tree_digest(package / 'overlay'),
         'gpu_trustcache': cards.sha256_file(trust) if trust.is_file() else None,
     }
-
-
-def free_bytes(path: str | Path) -> int:
-    path = Path(path)
-    while not path.exists():
-        path = path.parent
-    return shutil.disk_usage(path).free

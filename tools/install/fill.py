@@ -11,7 +11,7 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
-from tools.install import card as cards, compose, delta, disks, host, owners, populate, pretranslate
+from tools.install import card as cards, compose, delta, disks, host, owners, populate, pretranslate, space
 
 VAR = '/private/var'
 
@@ -21,6 +21,7 @@ class Inputs:
     spec: dict
     deltas: pretranslate.Deltas | None
     images: dict[str, tuple[Path, str]]
+    writes: int
     boot_package: str
     gpu_stager: str
     gpu_base: str
@@ -39,13 +40,15 @@ def _os_entries(deltas: pretranslate.Deltas | None) -> list[dict]:
     return deltas.entries('os') if deltas and 'os' in deltas else []
 
 
-def _write(volumes: dict[str, str], inputs: Inputs, log: host.Log) -> dict[str, dict[int, owners.Owner]]:
+def _write(image: Path, volumes: dict[str, str], inputs: Inputs, log: host.Log) -> dict[str, dict[int, owners.Owner]]:
     """Fill Data and Preboot; return each one's owners by inode."""
     data_owners, preboot_owners = owners.Journal(), owners.Journal()
     entries = _os_entries(inputs.deltas)
     with disks.mounted(volumes['system'], log, owners=True, read_only=True) as system:
         data_owners.copy(system / VAR.lstrip('/'))
         originals = {e['path']: os.lstat(system / e['path'].lstrip('/')) for e in entries}
+        var_bytes = space.allocated(system / VAR.lstrip('/'))
+    space.check(image.parent, var_bytes + inputs.writes, 'populate')
     with (
         disks.mounted(volumes['system'], log, owners=False, read_only=True) as system,
         disks.mounted(volumes['data'], log, owners=False) as data,
@@ -68,7 +71,7 @@ def _write(volumes: dict[str, str], inputs: Inputs, log: host.Log) -> dict[str, 
 def fill(image: Path, offset: int, inputs: Inputs, log: host.Log) -> None:
     """Populate the container at `offset` in `image` as the user, owners included, and check the result."""
     with disks.attached(image, log, raw=True) as attachment:
-        by_inode = _write(_volumes(attachment, inputs.spec), inputs, log)
+        by_inode = _write(image, _volumes(attachment, inputs.spec), inputs, log)
     fd = os.open(image, os.O_RDWR)
     try:
         for key, wanted in by_inode.items():

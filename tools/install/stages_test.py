@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 from tools.install import folder, manifest, sii_fixture, stages
 
@@ -64,6 +65,41 @@ class StateTest(unittest.TestCase):
         self.assertEqual(self.work.state()['populate'], 'p1')
         (self.dir / stages.COMPOSED).unlink()
         self.assertNotIn('compose', self.work.state())
+
+
+class CleanTest(unittest.TestCase):
+    def test_leftovers_and_partials_go_and_root_owned_ones_are_named(self) -> None:
+        scratch = Path(tempfile.mkdtemp())
+        (scratch / 'delta-os').mkdir()
+        (scratch / 'delta-os/f').write_bytes(b'x')
+        (scratch / '141-10410-227.dmg').write_bytes(b'rebuilt')
+        (scratch / '.partial-composed.img').write_bytes(b'half')
+        (scratch / stages.COMPOSED).write_bytes(b'kept')
+        args = SimpleNamespace(scratch=str(scratch), system_cryptex='/ipsw/141-10410-227.dmg', app_cryptex=None)
+        lines = []
+        work = stages.Stages(args, SPEC, PINS, lambda *p: lines.append(' '.join(map(str, p))))
+        real_unlink = Path.unlink
+
+        def unlink(path: Path, missing_ok: bool = False) -> None:
+            if path.name.endswith('.dmg'):
+                raise PermissionError(path)
+            real_unlink(path, missing_ok=missing_ok)
+
+        with (
+            mock.patch.object(stages.disks.host, 'plist', return_value={'images': []}),
+            mock.patch.object(Path, 'unlink', unlink),
+        ):
+            work.clean()
+        self.assertFalse((scratch / 'delta-os').exists())
+        self.assertFalse((scratch / '.partial-composed.img').exists())
+        self.assertTrue((scratch / stages.COMPOSED).exists())
+        self.assertTrue(any('sudo rm -rf' in line and '141-10410-227.dmg' in line for line in lines), lines)
+
+    def test_state_is_written_whole(self) -> None:
+        scratch = Path(tempfile.mkdtemp())
+        work = stages.Stages(SimpleNamespace(scratch=str(scratch)), SPEC, PINS, quiet)
+        work.save(compose='c', offset=1)
+        self.assertEqual([p.name for p in scratch.iterdir()], [stages.STATE])
 
 
 class MinimumTest(unittest.TestCase):

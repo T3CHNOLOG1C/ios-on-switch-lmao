@@ -36,6 +36,7 @@ py_library(
         "progress.py",
         "renamed.py",
         "room.py",
+        "space.py",
         "stages.py",
         "target.py",
         "to_card.py",
@@ -207,6 +208,13 @@ py_test(
         "local",
         "manual",
     ],
+    deps = [":lib"],
+)
+
+py_test(
+    name = "space_test",
+    size = "small",
+    srcs = ["space_test.py"],
     deps = [":lib"],
 )
 

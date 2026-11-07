@@ -25,7 +25,7 @@ if __package__ in (None, ''):
 from tools.install import (
     apfs,
     card as cards,
-    compose,
+    disks,
     extents,
     folder,
     gpt,
@@ -61,8 +61,6 @@ INPUTS = (
     'translated_app_cryptex',
     'translated_system_cryptex',
 )
-HEADROOM = 4 << 30
-DATA_SEED_BYTES = 1 << 30
 
 
 def runfiles() -> 'rules_python_runfiles.Runfiles | None':
@@ -86,14 +84,6 @@ def resolve_inputs(args: argparse.Namespace) -> None:
         setattr(args, name, os.path.abspath(value) if value else None)
     if args.gpu_base and os.path.isfile(args.gpu_base):
         args.gpu_base = os.path.dirname(args.gpu_base)
-
-
-def needed(args: argparse.Namespace, pins: dict, os_bytes: int) -> int:
-    seed = 0
-    if args.shader_seed_size:
-        seed = json.loads(Path(args.shader_seed_size).read_text())['blocks4k']
-    cryptexes = sum(pins['members'][m]['size'] for m in ('system_cryptex', 'app_cryptex'))
-    return os_bytes + cryptexes + DATA_SEED_BYTES + seed + HEADROOM
 
 
 def plan_lines(args: argparse.Namespace, first: str | None, name: str) -> list[str]:
@@ -167,6 +157,7 @@ class Builder:
         if self.args.dry_run or first is None:
             self.log('dry run: nothing written' if self.args.dry_run else f'{self.name}.SII: unchanged')
             return 0
+        work.clean()
         if first == 'head':
             self.time('head', lambda: stages.refresh_head(out, self.name, files, self.label))
             self.finish(out, k)
@@ -181,7 +172,6 @@ class Builder:
     def compose_and_populate(self, work: stages.Stages, k: keys.Keys, first: str) -> bool:
         """Run compose and populate as far as `first` and --stop-after ask; return whether pack comes next."""
         if first == 'compose':
-            self.check_space()
             self.time('compose', lambda: work.compose(k.compose))
         if self.args.stop_after == 'compose':
             return False
@@ -224,15 +214,6 @@ class Builder:
             shutil.rmtree(kept)
         self.add_shared(out)
 
-    def check_space(self) -> None:
-        want = needed(self.args, self.pins, compose.os_container_bytes(self.args.os_dmg, self.log))
-        free = stages.free_bytes(self.args.scratch)
-        if free < want + stages.FLOOR:
-            raise host.HostError(
-                f'{self.args.scratch} has {free >> 30} GiB free; composing needs about {want >> 30} GiB and leaves '
-                f'{stages.FLOOR >> 30} GiB'
-            )
-
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -257,8 +238,8 @@ def main(argv: list[str] | None = None) -> int:
     log = host.Log(args.log) if not args.dry_run else PrintLog()
     try:
         host.check_tools(log)
-        builder = Builder(args, log)
-        return builder.run()
+        with disks.interrupts():
+            return Builder(args, log).run()
     except cards.RefusedError as error:
         log('REFUSED:', error)
         return 2

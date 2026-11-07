@@ -75,10 +75,14 @@ def _attach_os(os_dmg: str, log: host.Log) -> tuple[str, str]:
     return (store[:slice_at] if slice_at > 0 else store), store
 
 
-def os_container_bytes(os_dmg: str, log: host.Log) -> int:
+def os_container_used(os_dmg: str, log: host.Log) -> int:
+    """Return what the OS image's container uses, by its own count: what composing it writes."""
     whole, source = _attach_os(os_dmg, log)
     try:
-        return int(host.disk_info(source)['TotalSize'])
+        container = host.container_on(source[len('/dev/') :])
+        if not container:
+            raise host.HostError(f'{os_dmg}: no APFS container on {source}')
+        return int(container['CapacityCeiling']) - int(container['CapacityFree'])
     finally:
         host.run('hdiutil', 'detach', whole, log=log)
 

@@ -69,6 +69,7 @@ def make_delta(args: argparse.Namespace, log: host.Log) -> None:
 def make_cryptex(args: argparse.Namespace, log: host.Log) -> None:
     entries = delta.load(Path(args.delta) / f'{args.role}.manifest.json')
     out = Path(args.out)
+    disks.sweep(out.parent, log)
     cryptex.rebuild(cryptex.Job(args.image, entries, out, args.apfs_tool, args.role), log)
     Path(args.sha256).write_text(cards.sha256_file(out) + '\n')
 
