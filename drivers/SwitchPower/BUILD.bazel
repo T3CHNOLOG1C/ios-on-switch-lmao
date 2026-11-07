@@ -38,6 +38,7 @@ kernel_driver(
         "SwitchPerfGovernor.cpp",
         "SwitchPowerStats.cpp",
         "SwitchSensors.cpp",
+        "SwitchVirtualTemps.cpp",
     ],
     hdr_deps = [
         "drivers/ArmGIC",
@@ -54,6 +55,7 @@ kernel_driver(
         "kits/SwitchCAR",
         "kits/SwitchIdle",
         "kits/SwitchMMIO",
+        "kits/SwitchRefusal",
     ],
 )
 
