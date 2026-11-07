@@ -18,7 +18,8 @@
 namespace {
 int failures;
 
-void missing(const char *, const char *) {}
+void missing(const char *, const char *)
+{}
 
 void expect(bool ok, const char *what)
 {

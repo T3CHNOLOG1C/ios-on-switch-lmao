@@ -244,7 +244,11 @@ pub unsafe extern "C" fn nmb_device_open(loader: *const c_char, cache: *const c_
         options.messages = Some(MessageSink::new(observe_message));
         let device = Device::system_default_with(&options).map_err(e("device"))?;
         tell_nvk_submission_memory(&device, loader);
-        Ok(boxed(NmbDevice(device, std::sync::OnceLock::new(), std::sync::Mutex::new(()))))
+        Ok(boxed(NmbDevice(
+            device,
+            std::sync::OnceLock::new(),
+            std::sync::Mutex::new(()),
+        )))
     })
 }
 

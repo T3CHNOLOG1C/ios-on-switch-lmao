@@ -25,6 +25,7 @@ struct mock_memory {
 struct mock_exec_surfaces {
     uint64_t lists;
     uint32_t count, flags;
+
     struct {
         uint64_t handle;
         uint32_t access;
