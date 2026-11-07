@@ -8,6 +8,8 @@
 #   gm20b_pool_policy_test   TegraGM20BPoolPolicy.h (where a coherent BO's memory comes from) over a model of the pool
 #                            when Maps opened: its first buffers come from system memory instead of being refused;
 #                            MapKit's 4 KiB, the compositor's 16 MiB block, the floor, room for everyone
+#   gm20b_prefault_test      TegraGM20BSurfacePrefault.h over a mock create ABI: which IOSurfaceRootUserClient outputs
+#                            name a new surface, and which surfaces are faulted in (size, memory pressure)
 #   gm20b_push_scan_test     TegraGM20BPushScan.h (the kernel's method-stream reader and the push profile's classes) over
 #                            streams laid out as NVK writes them: every counter, and no profile stamp after a push whose
 #                            method continues, one the kernel could not read or one with an opcode NVK never writes
@@ -32,6 +34,15 @@ host_test(
     srcs = [
         "gm20b_pool_policy_test.cpp",
         "//drivers/TegraGM20B:TegraGM20BPoolPolicy.h",
+    ],
+    cxx_std = "c++17",
+)
+
+host_test(
+    name = "gm20b_prefault_test",
+    srcs = [
+        "gm20b_prefault_test.cpp",
+        "//drivers/TegraGM20B:TegraGM20BSurfacePrefault.h",
     ],
     cxx_std = "c++17",
 )

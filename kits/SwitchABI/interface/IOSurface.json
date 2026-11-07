@@ -10,14 +10,16 @@
     "lookup": {
       "doc": "IOSurfaceRoot::lookupSurface(id, task): find_surface, then a try-retain",
       "symbols": [
-        "tegra_vic_ios_lookup"
+        "tegra_vic_ios_lookup",
+        "tegra_gm20b_ios_lookup"
       ]
     },
     "memory": {
       "doc": "the surface's memory descriptor",
       "symbols": [
         "tegra_vic_ios_memory",
-        "native_legacy_surface_descriptor"
+        "native_legacy_surface_descriptor",
+        "tegra_gm20b_ios_memory"
       ]
     },
     "format": {
@@ -59,7 +61,8 @@
       "doc": "allocation size",
       "symbols": [
         "tegra_vic_ios_alloc_size",
-        "native_legacy_surface_allocation"
+        "native_legacy_surface_allocation",
+        "tegra_gm20b_ios_alloc_size"
       ]
     },
     "protection": {
