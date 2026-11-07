@@ -44,6 +44,7 @@
 #include "../ArmGIC/SwitchInterrupts.h"
 #include "../TegraI2C/TegraI2C.h"
 #include "../TegraGPIO/TegraGPIO.h"
+#include "../../kits/SwitchRefusal/SwitchRefusal.h"
 #include "block_backend.h"
 #include "NativeSwitchBlock.h"
 #include "SwitchClientCopy.h"
@@ -131,6 +132,13 @@ enum : int {
 
 // r12-sdio: what a read that proves ADMA2 above 4 GiB fills those pages with first (prepareDirect, proveHigh).
 constexpr uint8_t kPoison = 0x5a;
+// Unmap (stepUnmap): SD discard (CMD38 argument 1, SD 4.3.5) frees any range with a short busy (Linux allows 250 ms
+// whatever its length, mmc_sd_erase_timeout): 1 GiB a command. A discard waits for an idle queue, or for
+// kUnmapEveryChains chains if reads and writes keep coming: APFS trims its free space from a thread at every mount.
+constexpr uint64_t kDiscardSectors = 1u << 21;
+constexpr uint32_t kSdDiscardArgument = 1;
+constexpr unsigned kUnmapEveryChains = 8;
+constexpr uint64_t kUnmapRefusal = switch_refusal_key("SwitchSD", "discard");
 // r12-sdio: the most separate stretches of a read chain staged through the bounce buffer (SwitchAdmaStaging; consecutive
 // segments of one request make one): one per page of a 1 MiB chain of 4 KiB pages. More: the whole chain bounces.
 constexpr uint32_t kStages = 256;
@@ -353,6 +361,18 @@ struct Request {
     bool chained;  // r12-sdio: taken into the chain being picked (SwitchQueue.h), under queueLock
 };
 
+// One doUnmap call's extents (device blocks), discarded by the worker one command at a time between chains
+// (stepUnmap) while its caller waits.
+struct Unmap {
+    Unmap *next;
+    const IOBlockStorageDeviceExtent *extents;
+    uint32_t count;
+    uint32_t index;    // the next extent to start
+    uint64_t at, end;  // what is left of the current one, card LBAs
+    IOReturn result;
+    bool finished;
+};
+
 // r12-sdio: one chain's way through the worker (worker()): picked, begun (beginBatch: the table built and, when the chain is
 // one ADMA2 command, its pages synced and the command issued), ended (endBatch: that command waited for, retried and
 // checked; or the whole bounce path), then completed (completeBatch). The worker begins the next chain before it completes
@@ -436,10 +456,7 @@ public:
         return 0;
     }
 
-    IOReturn doUnmap(IOBlockStorageDeviceExtent *, UInt32, IOStorageUnmapOptions) override
-    {
-        return kIOReturnUnsupported;
-    }
+    IOReturn doUnmap(IOBlockStorageDeviceExtent *extents, UInt32 count, IOStorageUnmapOptions) override;
 
     char *getVendorString() override
     {
@@ -536,6 +553,8 @@ class NativeSwitchBlock : public IOService {
     uint64_t bouncePA = 0;
     IOLock *queueLock = nullptr;
     Request *head = nullptr, *tail = nullptr;
+    Unmap *unmaps = nullptr;               // under queueLock, oldest first
+    unsigned chainsSinceUnmap = 0;         // under queueLock: chains picked while a discard waited
     uint32_t queued = 0;                   // requests waiting, under queueLock
     uint32_t queuedReads[kClasses] = {};   // r6-lows: reads waiting per class, under queueLock
     ClassWait waits[kClasses] = {};        // r6-lows: per class since the last throughput line, under queueLock
@@ -753,6 +772,8 @@ class NativeSwitchBlock : public IOService {
     int endTask(Batch &, uint32_t *r1);
     int cqCommand(uint32_t index, uint32_t argument, uint32_t flags, uint32_t *response, int data);
     void cqLeave();
+    bool stepUnmap(Unmap &job);
+    int discard(uint64_t first, uint64_t last);
     // r18-sdcq: one line per recovered error (rate-limited), the power cycle of a card that stays in CQ mode, and the
     // stop's one IOLog line.
     void cqRecovered(const SwitchCqError &e);
@@ -829,6 +850,16 @@ public:
     bool setup();
     int transfer(uint64_t lba, uint32_t sectors, bool write, uint8_t *bytes);
     void submit(Request *);
+    IOReturn unmap(const IOBlockStorageDeviceExtent *extents, uint32_t count, uint64_t blocks);
+
+    // SD 5.1 Discard (SD Status DISCARD_SUPPORT) frees blocks without defining what they then read, which is what an
+    // unmap asks. A card without it gets no unmap: an erase's busy (ERASE_TIMEOUT, seconds for a few AUs) at every
+    // mount's free-space trim would cost more than trimming saves.
+    bool canUnmap() const
+    {
+        return haveSsr && irqMode && sdStatus.discard;
+    }
+
     void reportState(const char *why);
 };
 
@@ -871,6 +902,14 @@ bool NativeSwitchBlockDevice::configure(NativeSwitchBlock *provider, uint64_t se
         device->setObject(kIOPropertyMediumTypeKey, OSString::withCStringNoCopy(kIOPropertyMediumTypeSolidStateKey));
         setProperty(kIOPropertyDeviceCharacteristicsKey, device);
         device->release();
+    }
+    // Force Unit Access: every write completes only once it is on flash (doSynchronize). Unmap: SD discard.
+    if (OSDictionary *features = OSDictionary::withCapacity(2)) {
+        features->setObject(kIOStorageFeatureForceUnitAccess, kOSBooleanTrue);
+        if (provider->canUnmap())
+            features->setObject(kIOStorageFeatureUnmap, kOSBooleanTrue);
+        setProperty(kIOStorageFeaturesKey, features);
+        features->release();
     }
     setName("SwitchSD");
     return true;
@@ -1227,6 +1266,76 @@ void NativeSwitchBlock::submit(Request *request)
     __atomic_fetch_add(&submitted, 1, __ATOMIC_RELAXED);
     IOLockWakeup(queueLock, &head, true);
     IOLockUnlock(queueLock);
+}
+
+IOReturn NativeSwitchBlockDevice::doUnmap(IOBlockStorageDeviceExtent *extents, UInt32 count, IOStorageUnmapOptions)
+{
+    return owner->unmap(extents, count, blocks);
+}
+
+// Thread context: queues the extents for the worker and sleeps until it has run them, so the controller keeps one
+// thread and an unmap never lands between a chain's commands.
+IOReturn NativeSwitchBlock::unmap(const IOBlockStorageDeviceExtent *extents, uint32_t count, uint64_t blocks)
+{
+    if (!canUnmap())
+        return kIOReturnUnsupported;
+    if (!extents || !count)
+        return kIOReturnBadArgument;
+    for (uint32_t i = 0; i < count; ++i) {
+        if (!extents[i].blockCount || extents[i].blockStart >= blocks ||
+            extents[i].blockCount > blocks - extents[i].blockStart)
+            return kIOReturnBadArgument;
+    }
+    Unmap job = {nullptr, extents, count, 0, 0, 0, kIOReturnSuccess, false};
+    IOLockLock(queueLock);
+    Unmap **last = &unmaps;
+    while (*last)
+        last = &(*last)->next;
+    *last = &job;
+    IOLockWakeup(queueLock, &head, true);
+    while (!job.finished)
+        IOLockSleep(queueLock, &unmaps, THREAD_UNINT);
+    IOLockUnlock(queueLock);
+    return job.result;
+}
+
+// Worker thread, no chain in flight: the job's next discard. Extents are the APFS partition's blocks: firstSector maps
+// them onto the card. True once the job is finished (result set).
+bool NativeSwitchBlock::stepUnmap(Unmap &job)
+{
+    if (job.at == job.end) {
+        const IOBlockStorageDeviceExtent &extent = job.extents[job.index++];
+        job.at = firstSector + extent.blockStart;
+        job.end = job.at + extent.blockCount;
+    }
+    const uint64_t length = job.end - job.at < kDiscardSectors ? job.end - job.at : kDiscardSectors;
+    cqLeave();
+    if (int step = discard(job.at, job.at + length - 1)) {
+        switch_refusal_k(switch_refusal_key_with(kUnmapRefusal, static_cast<uint64_t>(step)), "SwitchSD", "discard",
+                         "the card failed to discard LBA %llu-%llu (step %d, irq %#x)", job.at, job.at + length - 1,
+                         step, cardLastIrq);
+        job.result = kIOReturnIOError;
+        return true;
+    }
+    job.at += length;
+    return job.at == job.end && job.index == job.count;
+}
+
+// CMD32/CMD33 bound the range (block addresses, SDHC/SDXC), CMD38 discards it; nothing may come between them
+// (ERASE_SEQ). Busy after CMD38 ends in transfer complete, an interrupt like any other command's.
+int NativeSwitchBlock::discard(uint64_t first, uint64_t last)
+{
+    uint32_t r1 = 0;
+    int step = cqCommand(32, static_cast<uint32_t>(first), RSP_R1, &r1, kRegNone);
+    if (!step && !(r1 & R1_ERRORS))
+        step = cqCommand(33, static_cast<uint32_t>(last), RSP_R1, &r1, kRegNone);
+    if (!step && !(r1 & R1_ERRORS))
+        step = cqCommand(38, kSdDiscardArgument, RSP_R1B, &r1, kRegNone);
+    if (!step && (r1 & R1_ERRORS))
+        step = 20;
+    if (step)
+        recover(false);
+    return step;
 }
 
 // A page the ADMA2 path may DMA to or from and maintain by line through the kernel's physical aperture: managed RAM with
@@ -2455,12 +2564,35 @@ void NativeSwitchBlock::worker(void *context, wait_result_t)
             IOLockUnlock(self->queueLock);
             continue;
         }
-        while (!pending && (!self->head || self->suspended))
+        while (!pending && ((!self->head && !self->unmaps) || self->suspended))
             IOLockSleep(self->queueLock, &self->head, THREAD_UNINT);
+        // A discard needs no chain in flight: on its turn no chain is picked, so the pending one completes first.
+        const bool discardTurn =
+            self->unmaps && !self->suspended && (!self->head || self->chainsSinceUnmap >= kUnmapEveryChains);
+        if (discardTurn && !pending) {
+            Unmap *job = self->unmaps;
+            self->working = true;
+            self->chainsSinceUnmap = 0;
+            IOLockUnlock(self->queueLock);
+            const bool finished = self->stepUnmap(*job);
+            IOLockLock(self->queueLock);
+            if (finished) {
+                self->unmaps = job->next;
+                job->finished = true;
+                IOLockWakeup(self->queueLock, &self->unmaps, false);
+            }
+            self->working = false;
+            if (self->suspended)
+                IOLockWakeup(self->queueLock, &self->working, false);
+            IOLockUnlock(self->queueLock);
+            continue;
+        }
         Batch *next = nullptr, *group = nullptr;
         unsigned tasks = 0;
         bool queue = false;
-        if (self->head && !self->suspended) {
+        if (self->head && !self->suspended && !discardTurn) {
+            if (self->unmaps)
+                ++self->chainsSinceUnmap;
             next = &batches[turn];
             turn ^= 1;
             next->first = self->pickLocked(&next->sectors, &next->count);
