@@ -532,7 +532,7 @@ impl RenderCommandEncoder {
         // views: the current one where it is such an instance and no tile dispatch or memory
         // barrier follows it, else a new one, as a draw of such a pipeline records.
         let (next, stood) = self.next_instance(
-            (&[], None),
+            (&[], &[], None),
             (false, false),
             ViewSetup::default(),
             false,
