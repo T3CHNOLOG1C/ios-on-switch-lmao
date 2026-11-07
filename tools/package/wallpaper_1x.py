@@ -12,7 +12,8 @@ synthesized 'Solid Black' (400).
 
 Each IPSW kind has the bundles of its own iPad (KINDS): those at that iPad's screen class whose productTypes list it
 (or have none) and whose unsupportedProductTypes do not. 21H461's for iPad7,1 (J120) are the _Flat ones (one 2x HEIC
-drawn by a .ca); its animated ones list J120 in unsupportedProductTypes. This copies each one's Wallpaper.plist with
+drawn by a .ca); its animated ones list J120 in unsupportedProductTypes. 24B119 (an iPad12,1 IPSW, J181AP) ships only
+the 10.2-inch iPad's 810w-1080h bundles, with no product lists. This copies each one's Wallpaper.plist with
 logicalScreenClass set to 'any' and nothing else changed. The overlay (overlay/manifest.json, per kind) shows it over
 the sealed bundle's own plist, with the bundle directory as its own union, so its .ca and images are the sealed
 volume's: no artwork is copied, and the 2x artwork is drawn into the 720x1280 panel (scaled down, never up).
@@ -49,6 +50,14 @@ KINDS = {
         (
             ('iPadOS_17~ipad.wallpaperCollection', '7570.iPadOS_17_Flat-1024w-1366h@2x~ipad.wallpaper'),
             ('Lake~ipad.wallpaperCollection', '7560.Lake_Flat-1024w-1366h@2x~ipad.wallpaper'),
+        ),
+    ),
+    '24B119': Kind(
+        'iPad12,1',
+        '810w-1080h@2x~ipad',
+        (
+            ('iPadOS_17~ipad.wallpaperCollection', '7570.iPadOS_17-810w-1080h@2x~ipad.wallpaper'),
+            ('Lake~ipad.wallpaperCollection', '7560.Lake-810w-1080h@2x~ipad.wallpaper'),
         ),
     ),
 }

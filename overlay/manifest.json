@@ -127,6 +127,16 @@
       "path": "/Library/Wallpaper/Collections/Lake~ipad.wallpaperCollection/Wallpapers/7560.Lake_Flat-1024w-1366h@2x~ipad.wallpaper/Wallpaper.plist",
       "source": "build/wallpaper-1x/21H461/7560.Lake_Flat.plist",
       "kind": "21H461"
+    },
+    {
+      "path": "/Library/Wallpaper/Collections/iPadOS_17~ipad.wallpaperCollection/Wallpapers/7570.iPadOS_17-810w-1080h@2x~ipad.wallpaper/Wallpaper.plist",
+      "source": "build/wallpaper-1x/24B119/7570.iPadOS_17.plist",
+      "kind": "24B119"
+    },
+    {
+      "path": "/Library/Wallpaper/Collections/Lake~ipad.wallpaperCollection/Wallpapers/7560.Lake-810w-1080h@2x~ipad.wallpaper/Wallpaper.plist",
+      "source": "build/wallpaper-1x/24B119/7560.Lake.plist",
+      "kind": "24B119"
     }
   ]
 }

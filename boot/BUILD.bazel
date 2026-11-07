@@ -179,7 +179,10 @@ boot_package(
             "//bazel/pinned:overlay/wallpaper-1x/21H461/7570.iPadOS_17_Flat.plist": "build/wallpaper-1x/21H461/7570.iPadOS_17_Flat.plist",
             "//bazel/pinned:overlay/wallpaper-1x/21H461/7560.Lake_Flat.plist": "build/wallpaper-1x/21H461/7560.Lake_Flat.plist",
         },
-        "//ipsw:24B119": {},
+        "//ipsw:24B119": {
+            "//bazel/pinned:overlay/wallpaper-1x/24B119/7570.iPadOS_17.plist": "build/wallpaper-1x/24B119/7570.iPadOS_17.plist",
+            "//bazel/pinned:overlay/wallpaper-1x/24B119/7560.Lake.plist": "build/wallpaper-1x/24B119/7560.Lake.plist",
+        },
     }),
     overlay_files = ["//overlay:overlay_sources"],
     overlay_manifest = "//overlay:manifest.json",

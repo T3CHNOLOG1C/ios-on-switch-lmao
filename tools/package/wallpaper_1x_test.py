@@ -32,8 +32,31 @@ FLAT_J120 = {
     'version': 1,
 }
 
+ANIMATED_J181 = {
+    'appearanceAware': True,
+    'assets': {
+        'lockAndHome': {
+            'default': {
+                'backgroundAnimationFileName': '7570.iPadOS_17_Background-810w-1080h@2x~ipad.ca',
+                'floatingAnimationFileNameKey': '7570.iPadOS_17_Floating-810w-1080h@2x~ipad.ca',
+                'identifier': 7570,
+                'name': 'iPadOS 17',
+                'type': 'LayeredAnimation',
+            }
+        }
+    },
+    'contentVersion': 2.01,
+    'family': 'iPadOS 17',
+    'identifier': 7570,
+    'logicalScreenClass': '810w-1080h@2x~ipad',
+    'name': 'iPadOS 17',
+    'preferredProminentColor': {'dark': '#F89043', 'default': '#FFC76E'},
+    'version': 1,
+}
+
 PINNED = {
     '21H461': ['7560.Lake_Flat.plist', '7570.iPadOS_17_Flat.plist'],
+    '24B119': ['7560.Lake.plist', '7570.iPadOS_17.plist'],
 }
 
 
@@ -59,7 +82,7 @@ def edit(fixture: dict, kind: str) -> dict:
 
 class OneXTest(unittest.TestCase):
     def test_only_the_screen_class_changes(self):
-        for fixture, kind in ((FLAT_J120, '21H461'),):
+        for fixture, kind in ((FLAT_J120, '21H461'), (ANIMATED_J181, '24B119')):
             out = edit(fixture, kind)
             self.assertEqual(out.pop('logicalScreenClass'), 'any')
             expected = dict(fixture)
@@ -72,6 +95,9 @@ class OneXTest(unittest.TestCase):
         for bad, kind in (
             (animated, '21H461'),
             (dict(FLAT_J120, logicalScreenClass='834w-1112h@2x~ipad'), '21H461'),
+            (ANIMATED_J181, '21H461'),
+            (FLAT_J120, '24B119'),
+            (dict(ANIMATED_J181, productTypes=['iPad11,6']), '24B119'),
         ):
             with self.assertRaises(SystemExit):
                 edit(bad, kind)
@@ -98,6 +124,12 @@ class PinnedTest(unittest.TestCase):
                     ),
                     path.name,
                 )
+
+    def test_ios27s_load_under_either_ipad_identity(self):
+        for path in pinned('24B119'):
+            plist = plistlib.loads(path.read_bytes())
+            self.assertNotIn('productTypes', plist, path.name)
+            self.assertNotIn('unsupportedProductTypes', plist, path.name)
 
 
 class OverlayEntriesTest(unittest.TestCase):

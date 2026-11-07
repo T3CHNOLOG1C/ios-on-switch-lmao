@@ -146,6 +146,8 @@ py_test(
     data = [
         "//bazel/pinned:overlay/wallpaper-1x/21H461/7560.Lake_Flat.plist",
         "//bazel/pinned:overlay/wallpaper-1x/21H461/7570.iPadOS_17_Flat.plist",
+        "//bazel/pinned:overlay/wallpaper-1x/24B119/7560.Lake.plist",
+        "//bazel/pinned:overlay/wallpaper-1x/24B119/7570.iPadOS_17.plist",
         "//overlay:manifest.json",
     ],
     imports = ["."],
