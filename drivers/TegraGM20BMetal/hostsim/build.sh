@@ -14,6 +14,11 @@
 # GPU instead (its copy engine runs through the mock VM): <outdir>/gpu/alias_frame <cache> <nvk>.
 # nvk_alias.cpp: a raw texture's span and a raw mip chain are NVK images in place, at the raw path's VA and in its layout:
 # <outdir>/gpu/nvk_alias <nvk>.
+# surface_layout.cpp: block-linear IOSurfaces through NVK (the mock decides layouts as the kernel does): a writer-first surface is
+# an optimal image at its import's VA, another process reads the same texels, a sampler-first one stays pitch, and NIL's layout
+# is TegraGM20BLayout.h's over a sweep: <outdir>/gpu/surface_layout <nvk>.
+# layout_frame.mm: the frontend's optimal views (a raw mip chain, a writer-first surface) and refusals: <outdir>/gpu/layout_frame
+# <cache> <nvk>.
 # usage: build.sh <host libnative_metal_bridge.a> <outdir>
 #   the bridge: bazel build //gpu:bridge_darwin (bazel-bin/gpu/bridge_darwin/libnative_metal_bridge.a)
 #   then: <outdir>/m2v_gm20b <host libvulkan_nouveau.dylib> <cache dir> [<QuartzCore default.metallib> <pairs>]
@@ -59,4 +64,12 @@ xcrun clang++ -O1 -g -std=c++17 -fobjc-arc -Wno-deprecated-declarations -I "$TRE
 xcrun clang++ -O1 -g -std=c++17 -Wall -I "$TREE/third_party/mesa/include" -I "$TREE/drivers/TegraGM20B" "$HERE/nvk_alias.cpp" \
     "$RAW/runtime/raw_kernel.cpp" "$RAW/fx/fx_mip.cpp" -L "$GPU" -lmock_iokit -Wl,-rpath,"$GPU" -framework IOKit \
     -o "$GPU/nvk_alias"
-echo "built $2/m2v_gm20b $2/qc_frontend $2/present_frontend $2/memory_frontend $GPU/alias_frame $GPU/nvk_alias"
+xcrun clang++ -O1 -g -std=c++17 -Wall -I "$TREE/third_party/mesa/include" -I "$TREE/drivers/TegraGM20B" \
+    "$HERE/surface_layout.cpp" -L "$GPU" -lmock_iokit -Wl,-rpath,"$GPU" -o "$GPU/surface_layout"
+xcrun clang++ -O1 -g -std=c++17 -fobjc-arc -Wno-deprecated-declarations -I "$TREE/drivers/NativeMetal" -I "$TREE/drivers/TegraGM20B" \
+    -x objective-c++ "$HERE/layout_frame.mm" "$TREE/drivers/NativeMetal/NativeBridgeMetalFrontend.mm" \
+    -x c++ "$RAW/runtime/raw_kernel.cpp" "$RAW/fx/fx_mip.cpp" -x none "$1" -L "$GPU" -lmock_iokit -Wl,-rpath,"$GPU" -lobjc \
+    -framework Foundation -framework Metal -framework IOSurface -framework IOKit -framework CoreFoundation \
+    -o "$GPU/layout_frame"
+echo "built $2/m2v_gm20b $2/qc_frontend $2/present_frontend $2/memory_frontend $GPU/alias_frame $GPU/nvk_alias" \
+    "$GPU/surface_layout $GPU/layout_frame"
