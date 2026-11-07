@@ -217,7 +217,12 @@ def _media_accel(tree: list) -> None:
     # FigCreateIOSurfacePropertiesDictionary, otherwise asks every IOSurface it makes (decoder and pixel-transfer pools)
     # for the PurpleGfxMem carveout, which this tree does not have. The engines that touch those surfaces reach
     # scattered pages through their own MMUs: VIC, NVJPG and the display through the MC SMMU, the GPU through its GMMU.
-    put(child(tree, 'arm-io'), 'iommu-present', b'')
+    arm_io = child(tree, 'arm-io')
+    put(arm_io, 'iommu-present', b'')
+    # J120's A10X generation. MobileGestalt compares it in about 25 answers, among them HEVCDecoder8bitSupported (H8)
+    # and HEVCDecoder10bitSupported (H9): absent, both answer false although NVDEC decodes HEVC. Its other reader in the
+    # dyld cache is DeviceIdentity; the kernel only lists it as sandbox-readable.
+    put(arm_io, 'soc-generation', b'H9\0')
 
 
 def _boot_slots(tree: list, chosen: list, overlay_dirs: Sequence[tuple[str, str]]) -> None:

@@ -36,12 +36,13 @@ def find(tree: list, *path: str) -> list:
 
 
 class MediaKeys(unittest.TestCase):
-    def test_arm_io_has_an_empty_iommu_present_as_j120(self):
+    def test_arm_io_has_j120s_iommu_present_and_soc_generation(self):
         adt_edit = load_adt_edit()
         tree, _ = adt_edit.adt_parse(adt_edit.ipad_adt(switch_tree()))
         props = {p[0]: p[2] for p in find(tree, 'arm-io')[0]}
         self.assertIn('iommu-present', props)
         self.assertEqual(props['iommu-present'], b'')
+        self.assertEqual(props['soc-generation'], b'H9\0')
         self.assertEqual(props['device_type'], b'nvidia,tegra210b01\0')
 
 
