@@ -11,7 +11,8 @@ FRONT=$2
 TREE=$3
 OUT=$4
 mkdir -p "$OUT"
-FLAGS=(-O2 -g -Wall -Wextra -std=c++17)
+# SWITCH_RAW_ELISION_MARKER: raw_gpu.cpp marks each fetch barrier it leaves out, for pack/eqcheck.py
+FLAGS=(-O2 -g -Wall -Wextra -std=c++17 -DSWITCH_RAW_ELISION_MARKER)
 for f in mme_fermi mme_fermi_sim; do xcrun clang -O2 -std=c11 -w -I "$RAW/pack/mesa" -c "$RAW/pack/mesa/$f.c" -o "$OUT/$f.o"; done
 xcrun clang -O1 -Wall -c -I "$TREE/drivers/TegraGM20B" "$RAW/pack/mock_iokit.c" -o "$OUT/mock_iokit.o"
 xcrun clang++ "${FLAGS[@]}" -c -I "$TREE/drivers/TegraGM20B" "$RAW/pack/cap.cpp" -o "$OUT/cap.o"
@@ -22,7 +23,7 @@ xcrun clang++ "${FLAGS[@]}" -c "$RAW/runtime/raw_pack.cpp" -o "$OUT/raw_pack_moc
 xcrun clang++ "${FLAGS[@]}" -c "$RAW/fx/test/twod_sim.cpp" -o "$OUT/twod_sim.o"
 xcrun clang++ -dynamiclib "$OUT/mock_iokit.o" "$OUT/cap.o" "$OUT/nvdec.o" "$OUT/raw_capture.o" "$OUT/raw_pack_mock.o" "$OUT/twod_sim.o" "$OUT/mme_fermi.o" "$OUT/mme_fermi_sim.o" -framework IOKit \
     -framework CoreFoundation -install_name @rpath/libmock_iokit.dylib -o "$OUT/libmock_iokit.dylib"
-OBJC=(-O2 -g -std=c++17 -fobjc-arc -Wno-deprecated-declarations -I "$FRONT" -I "$TREE/drivers/NativeMetal" -I "$TREE/drivers/TegraGM20B")
+OBJC=(-O2 -g -std=c++17 -fobjc-arc -Wno-deprecated-declarations -DSWITCH_RAW_ELISION_MARKER -I "$FRONT" -I "$TREE/drivers/NativeMetal" -I "$TREE/drivers/TegraGM20B")
 LIBS=(-L "$OUT" -lmock_iokit "-Wl,-rpath,$OUT" -lobjc -framework Foundation -framework Metal -framework IOSurface -framework IOKit -framework CoreFoundation)
 xcrun clang++ "${OBJC[@]}" -x objective-c++ "$HERE/nvkframe.mm" "$FRONT/NativeBridgeMetalFrontend.mm" -x none "$BRIDGE" "${LIBS[@]}" -o "$OUT/nvkframe" 2>&1 | grep -v "duplicate libraries" || true
 xcrun clang++ "${FLAGS[@]}" -I "$TREE/drivers/TegraGM20B" "$HERE/rawframe.cpp" "$RAW/runtime/raw_gpu.cpp" "$RAW/fx/fx_mip.cpp" "$RAW/runtime/raw_kernel.cpp" "$RAW/runtime/raw_alias.cpp" \

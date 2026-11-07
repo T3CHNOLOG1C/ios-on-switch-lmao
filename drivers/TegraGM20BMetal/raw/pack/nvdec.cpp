@@ -48,6 +48,7 @@ enum : uint32_t {
     STENCIL_CLEAR_VALUE = 0x0da0,
     INVALIDATE_SHADER_CACHES_NO_WFI = 0x0da4,
     PIXEL_SHADER_BARRIER = 0x0de0,
+    NO_OPERATION = 0x0100,
     INVALIDATE_TEXTURE_DATA_CACHE_PIXEL_ORDERED = 0x0f74,
     ZT_A = 0x0fe0,
     ZT_B = 0x0fe4,
@@ -367,6 +368,10 @@ void Decoder::method(uint32_t subc, uint32_t mthd, uint32_t data, bool fromMme)
         break;
     case PIXEL_SHADER_BARRIER:
         barrier("PSB");
+        break;
+    case NO_OPERATION:
+        if (data == 0x0e11de)  // raw_gpu.cpp's mark of a fetch barrier left out (SWITCH_RAW_ELISION_MARKER builds)
+            barrier("ELIDED");
         break;
     case INVALIDATE_TEXTURE_DATA_CACHE:
     case INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI:

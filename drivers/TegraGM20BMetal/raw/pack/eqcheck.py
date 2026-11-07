@@ -9,7 +9,7 @@ A draw is the same GPU work when every field matches: the live 3D registers (R l
 first-appearance name), the vertex data, each stage's program and register count, and the bytes each program's constant
 buffers hold (pointers replaced by what they point to, handles by their texture/sampler headers). Barriers are compared
 as sets: the raw path must cover what NVK emitted before each draw that reads memory written earlier (PSB + TEXINV
-before a framebuffer fetch).
+before a framebuffer fetch), but for a fetch barrier its harness build marks as left out (ELIDED).
 
 usage: eqcheck.py <nvk.log> <raw.log> [--show N] [--flat] [--layouts] [--own]
 """
@@ -175,6 +175,7 @@ class Tally:
     draws: int = 0
     same: int = 0
     clears: int = 0
+    elided: int = 0
 
     def wants(self, kind: str) -> bool:
         return len(self.examples[kind]) < self.show
@@ -247,11 +248,19 @@ def compare_draw(tally: Tally, fi: int, di: int, x: collections.OrderedDict, y: 
     return ok
 
 
+# A fetch barrier the raw path left out because the draw's pixels meet none written since its last one
+# (raw_region.h), as its harness builds mark it (SWITCH_RAW_ELISION_MARKER): expected where NVK has PSB and TEXINV
+ELIDED = 'ELIDED'
+
+
 def compare_barriers(tally: Tally, where: str, xb: set[str], yb: set[str]) -> bool:
     missing = xb - yb
+    if ELIDED in yb and missing <= {'PSB', 'TEXINV'}:
+        tally.elided += 1
+        missing = set()
     for m in missing:
         tally.bar_missing[m] += 1
-    for m in yb - xb:
+    for m in yb - xb - {ELIDED}:
         tally.bar_extra[m] += 1
     if 'TEXINV' not in missing and 'WFI' not in missing and 'PSB' not in missing:
         return True
@@ -275,7 +284,10 @@ def compare_registers(tally: Tally, where: str, ra: dict[str, str], rb: dict[str
 
 
 def report(tally: Tally) -> int:
-    print(f'draws compared {tally.draws}, identical {tally.same}; clears compared {tally.clears}')
+    print(
+        f'draws compared {tally.draws}, identical {tally.same}; clears compared {tally.clears}; '
+        f'fetch barriers raw left out {tally.elided}'
+    )
     for k, n in tally.mism.most_common():
         print(f'MISMATCH {k:<28} {n}')
         for e in tally.examples[k]:

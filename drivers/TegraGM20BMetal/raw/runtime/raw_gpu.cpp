@@ -32,6 +32,7 @@ enum : uint32_t {
     COLOR_CLEAR_VALUE = 0x0d80,
     INVALIDATE_SHADER_CACHES_NO_WFI = 0x0da4,
     PIXEL_SHADER_BARRIER = 0x0de0,
+    NO_OPERATION = 0x0100,
     PIXEL_SHADER_INTERLOCK_CONTROL = 0x1224,
     DEPTH_TEST = 0x12cc,
     STENCIL_TEST = 0x1380,
@@ -2449,6 +2450,11 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, uint32_t first, ui
         if (!storage && !written_.meets(g)) {
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
             dev_->stats.fetchBarriersElided++;
+#endif
+#ifdef SWITCH_RAW_ELISION_MARKER
+            // the host frame harness's builds only (test/build.sh): nvdec names this mark ELIDED, and eqcheck takes a
+            // barrier NVK has and raw left out only where it is
+            p.m(NO_OPERATION, 0x0e11de);
 #endif
         } else {
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
