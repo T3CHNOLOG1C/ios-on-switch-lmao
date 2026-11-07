@@ -692,3 +692,24 @@ TEST(NvkImageSource, StencilCopyTempStartsOnTheBindAlignment)
 	EXPECT_THAT(flat(definition(image, "nvk_image_plane_alloc_va(struct nvk_device *dev,")),
 		    HasSubstr("const uint64_t va_align_B = plane->plane_align_B;"));
 }
+
+// Nouveau puts the SW engine on the runlist with id 15 and no status register: PFIFO_ENG_STATUS(15) (0x0026b8)
+// PRI-times out, and the GPU's bus error panics. Every per-engine status read is behind a context or a GR check.
+TEST(GM20BSchedSource, EngineStatusReadsSkipTheSoftwareEngine)
+{
+	for (const char *file : {"../sched.c", "../recover.c"}) {
+		const std::string source = SourceText(file);
+		size_t reads = 0;
+		for (size_t at = source.find("PFIFO_ENG_STATUS(engn->id)"); at != std::string::npos;
+		     at = source.find("PFIFO_ENG_STATUS(engn->id)", at + 1)) {
+			const size_t loop = source.rfind("nvkm_runl_foreach_engn", at);
+			ASSERT_NE(loop, std::string::npos) << file;
+			const std::string guard = source.substr(loop, at - loop);
+			EXPECT_TRUE(guard.find("engn->func->cxid") != std::string::npos ||
+				    guard.find("NVKM_ENGINE_GR") != std::string::npos)
+				<< file << ": " << guard;
+			reads++;
+		}
+		EXPECT_GT(reads, 0u) << file;
+	}
+}

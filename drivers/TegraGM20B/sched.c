@@ -245,7 +245,8 @@ int tgm_sched_loaded(struct nvkm_device *device, unsigned int chid)
 		if (runl->runq_nr && runl->runq[0] &&
 		    PBDMA_CHID(nvkm_rd32(device, PBDMA_CHANNEL(runl->runq[0]->id))) == chid)
 			return 1;
-		nvkm_runl_foreach_engn(engn, runl)
+		/* Only engines with a context have a status register: SW's id 15 reads 0x0026b8, which PRI-times out */
+		nvkm_runl_foreach_engn_cond(engn, runl, engn->func->cxid)
 		{
 			eng = nvkm_rd32(device, PFIFO_ENG_STATUS(engn->id));
 			if (!(eng & PFIFO_ENG_ID_TSG) && PFIFO_ENG_ID(eng) == chid)

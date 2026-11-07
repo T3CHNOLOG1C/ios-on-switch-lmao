@@ -147,6 +147,8 @@ host_test(
         "//drivers/TegraGM20B:TegraGM20BGpu.h",
         "//drivers/TegraGM20B:TegraGM20BUserClient.cpp",
         "//drivers/TegraGM20B:gpu.c",
+        "//drivers/TegraGM20B:recover.c",
+        "//drivers/TegraGM20B:sched.c",
         "//drivers/TegraGM20B:shim/linux.c",
         "//drivers/TegraGM20B:shim/xnu_glue.cpp",
     ],
