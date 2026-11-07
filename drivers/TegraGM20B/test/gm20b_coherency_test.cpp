@@ -14,6 +14,8 @@
 #include "drivers/TegraGM20B/TegraGM20BLayout.h"
 #include "drivers/TegraGM20B/TegraGM20BRelayout.h"
 #include "drivers/TegraGM20B/TegraGM20BTiled.h"
+#include "drivers/TegraGM20B/TegraGM20BViews.h"
+#include "gm20b_tiled_model.h"
 #include "drivers/TegraDisplayFlip/TegraScanoutCopy.h"
 
 std::vector<std::vector<uint64_t>> &cleanCalls()
@@ -41,17 +43,7 @@ extern "C" void tgm_cpu_clean_pages(const uint64_t *pas, uint32_t npages)
 	cleanCalls().emplace_back(pas, pas + npages);
 }
 
-// The GPU's fences as the registry asks after them: each channel's last completed seqno; a channel not listed is gone.
-// A wait is the fence interrupt arriving: the channel completes what the wait was for.
-struct FakeGpu {
-	std::map<uint32_t, uint32_t> completed;
-	std::set<uint32_t> killed;
-	std::vector<std::pair<uint32_t, uint32_t>> waits;
-	bool allDone = true;
-	int waitAll = 0;
-};
-
-static FakeGpu gGpu;
+FakeGpu gGpu;
 
 extern "C" int tgm_writer_done(uint32_t uid, uint32_t seqno)
 {
@@ -71,10 +63,9 @@ extern "C" int tgm_writers_all_done(void)
 	return gGpu.allDone;
 }
 
-// Physical memory as the moves see it: each page by its address
-static std::map<uint64_t, std::vector<uint8_t>> gPages;
+std::map<uint64_t, std::vector<uint8_t>> gPages;
 
-static std::vector<uint8_t> gather(const tgm_relayout_pages &p)
+std::vector<uint8_t> gather(const tgm_relayout_pages &p)
 {
 	std::vector<uint8_t> out;
 	for (uint32_t i = 0; i < p.npages; i++) {
@@ -85,20 +76,24 @@ static std::vector<uint8_t> gather(const tgm_relayout_pages &p)
 	return out;
 }
 
-static void scatter(const tgm_relayout_pages &p, const std::vector<uint8_t> &bytes)
+void scatter(const tgm_relayout_pages &p, const std::vector<uint8_t> &bytes)
 {
 	for (uint32_t i = 0; i < p.npages; i++)
 		gPages[p.pas[i]].assign(bytes.begin() + i * 4096, bytes.begin() + (i + 1) * 4096);
 }
 
-// The moves as the copy engine makes them (gm20b_relayout_test proves the pushes give these bytes), recorded
-struct Move {
-	int op;
-	std::vector<tgm_relayout_writer> writers;
-};
+std::vector<Move> gMoves;
+bool gMoveFails;
+int gCpuMoves;
+bool gScratchFails;
+std::vector<std::pair<std::string, std::string>> gRefusals;
 
-static std::vector<Move> gMoves;
-static bool gMoveFails;
+extern "C" void switch_refusal(const char *domain, const char *reason, const char *, ...)
+{
+	gRefusals.emplace_back(domain, reason);
+}
+
+ViewModel gViews;
 
 extern "C" int tgm_relayout_init(void)
 {
@@ -127,12 +122,30 @@ extern "C" int tgm_relayout(const struct tgm_relayout_pages *surface,
 	return 0;
 }
 
-struct tgm_scratch {
-	std::vector<uint64_t> pas;
-};
-
-extern "C" struct tgm_scratch *tgm_scratch_get(uint64_t bytes, struct tgm_relayout_pages *pages)
+namespace
 {
+uint8_t *modelPage(uint64_t pa)
+{
+	auto &page = gPages[pa];
+	page.resize(4096);
+	return page.data();
+}
+}  // namespace
+
+extern "C" void tgm_relayout_by_cpu(const struct tgm_relayout_pages *surface,
+				    const struct tgm_relayout_pages *rows,
+				    const struct tgm_layout *l, uint32_t bytes_per_row, int op,
+				    const struct tgm_relayout_writer *, uint32_t)
+{
+	gCpuMoves++;
+	tgm_relayout_cpu(surface, rows, l, bytes_per_row, op == TGM_RELAYOUT_TO_ROWS, modelPage);
+}
+
+extern "C" struct tgm_scratch *tgm_scratch_get(uint64_t bytes, int,
+					       struct tgm_relayout_pages *pages)
+{
+	if (gScratchFails)
+		return nullptr;
 	static uint64_t next = 0x200000000ull;
 	auto *s = new tgm_scratch;
 	for (uint64_t at = 0; at < bytes; at += 4096, next += 4096)
@@ -143,7 +156,77 @@ extern "C" struct tgm_scratch *tgm_scratch_get(uint64_t bytes, struct tgm_relayo
 
 extern "C" void tgm_scratch_put(struct tgm_scratch *s)
 {
+	gViews.scratchesPut++;
 	delete s;
+}
+
+extern "C" void tgm_scratch_discard(struct tgm_scratch *s)
+{
+	gViews.scratchesDiscarded++;
+	delete s;
+}
+
+extern "C" void tgm_scratch_stats(uint64_t *held, uint64_t *peak)
+{
+	*held = *peak = 0;
+}
+
+extern "C" void *tgm_scratch_memory(struct tgm_scratch *s)
+{
+	return s;
+}
+
+extern "C" void tgm_scratch_pages(const struct tgm_scratch *s, struct tgm_relayout_pages *pages)
+{
+	*pages = {s->pas.data(), uint32_t(s->pas.size())};
+}
+
+extern "C" int tgm_cpu_view_of(void *client, uint32_t id, struct tgm_cpu_view *out)
+{
+	const auto it = gViews.mappings.find({client, id});
+	if (it == gViews.mappings.end())
+		return 0;
+	if (gViews.badMappings.count(client))
+		return -1;
+	*out = it->second;
+	return 1;
+}
+
+extern "C" int tgm_cpu_view_remap(const struct tgm_cpu_view *view, void *memory, uint64_t, int)
+{
+	const bool restore = uintptr_t(memory) & 1;  // ViewModel::surface
+	if ((restore && gViews.restoreFails.count(view->client)) ||
+	    (!restore && gViews.remapFails > 0)) {
+		gViews.remapFails -= !restore;
+		return -12;
+	}
+	gViews.mapped[{view->task, view->address}] = memory;
+	gViews.remaps++;
+	return 0;
+}
+
+extern "C" void *tgm_surface_memory(void *, uint32_t id)
+{
+	return ViewModel::surface(id);
+}
+
+extern "C" void tgm_memory_release(void *)
+{
+}
+
+extern "C" int tgm_cpu_view_live(const struct tgm_cpu_view *view)
+{
+	return !gViews.dead.count(view->client);
+}
+
+extern "C" void tgm_cpu_view_hold(struct tgm_cpu_view *view, int hold)
+{
+	gViews.holds[view->client] += hold ? 1 : -1;
+}
+
+extern "C" uint64_t tgm_timestamp_ns(void)
+{
+	return 0;
 }
 
 extern "C" void tgm_writers_wait_all(void)
@@ -189,6 +272,7 @@ protected:
 		gGpu = FakeGpu{};
 		gMoves.clear();
 		gMoveFails = false;
+		gViews = ViewModel{};
 	}
 };
 

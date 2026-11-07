@@ -233,6 +233,9 @@ void tegra_gm20b_iosurface_trap(uint32_t index, uint32_t surface_id, uint32_t op
  * have completed; nonzero, at once, when kIOSurfaceLockAvoidSync is set and one has not (the lock fails with
  * kIOReturnCannotLock). */
 int tegra_gm20b_iosurface_lock_will(uint32_t surface_id, uint32_t options);
+/* Before an IOSurface lock (index 2) or unlock (3) trap through IOSurfaceRootUserClient `client`: a block-linear surface's
+ * CPU view (TegraGM20BViews.cpp); nonzero refuses the lock (kIOReturnCannotLock). */
+int tegra_gm20b_iosurface_view(void *client, uint32_t index, uint32_t surface_id, uint32_t options);
 /* A channel's submissions as the coherency registry names them (gpu.c): uid, a 32-bit channel id never reused while the
  * channel lives; done, whether submission seqno completed (a channel that is gone or was killed counts as done); wait,
  * until it is done, on the fence interrupt (a wait that runs long recovers what the GPU is stuck on, as
@@ -247,6 +250,11 @@ void tgm_writers_wait_all(void);
  * block-linear at another shape. Sleeps on the copy engine's fence interrupt while it tiles. */
 int tgm_coherency_layout(struct tgm_coh *c, uint32_t width, uint32_t height, uint32_t bpp,
 			 uint32_t bytes_per_row, int writes);
+
+/* TegraGM20BTiled.cpp's stats, this window's (debug kernels): layouts decided block-linear, then pitch because the first
+ * import only samples, because another import or a CPU lock existed, because the shape does not tile, because the
+ * tiling move failed; the live block-linear surfaces and their bytes; the CPU views' scratch bytes held now and at most */
+void tgm_tiled_take_stats(uint64_t out[9]);
 
 /* TegraGM20BRelayout.cpp: one copy-engine move of a block-linear surface (TegraGM20BRelayout.h), behind its GPU writers
  * (a semaphore acquire on each that is still alive), returning once the bytes are in DRAM (sleeping on the fence
@@ -267,6 +275,14 @@ int tgm_relayout(const struct tgm_relayout_pages *surface, const struct tgm_rela
 		 const struct tgm_layout *layout, uint32_t bytes_per_row,
 		 int op /* TGM_RELAYOUT_* */, const struct tgm_relayout_writer *writers,
 		 uint32_t nwriters);
+/* TGM_RELAYOUT_TO_ROWS or TO_TILED by the CPU through the physical aperture, when tgm_relayout failed (the copy engine
+ * faulted, or its channel or mappings could not be had), after sleeping on each writer's fence interrupt: it allocates
+ * nothing and cannot fail, so a CPU lock that holds a scratch always has the rows, and what it wrote always reaches the
+ * texels. */
+void tgm_relayout_by_cpu(const struct tgm_relayout_pages *surface,
+			 const struct tgm_relayout_pages *rows, const struct tgm_layout *layout,
+			 uint32_t bytes_per_row, int op, const struct tgm_relayout_writer *writers,
+			 uint32_t nwriters);
 /* The GPU address in `vm` (one that maps every connection's fence page, as every tgm_vm_new space does) of channel uid's
  * fence seqno; -ENOENT when it is gone or killed (its work is complete or abandoned). */
 int tgm_writer_fence_va(struct tgm_vm *vm, uint32_t uid, uint64_t *va);

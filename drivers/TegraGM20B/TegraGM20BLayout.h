@@ -150,6 +150,15 @@ static inline void tgm_layout_read(const struct tgm_layout *l, const uint8_t *ti
 // and order their work after the GPU's on it as they do for a pitch one. Thread context; never waits for the GPU.
 int tegra_gm20b_surface_layout(uint64_t pa, struct tgm_layout *out);
 
+// For a kernel CPU reader of a block-linear IOSurface, by the physical address of any byte of it (`pa`): the surface's bytes
+// as a CPU lock sees them (its texels as rows bytes_per_row apart, from its first byte) in a scratch, the copy engine's,
+// behind the GPU's writers. 1: *rows to hand to tegra_gm20b_surface_rows_done, *memory an IOMemoryDescriptor of the
+// scratch valid until then, *offset where `pa`'s byte is in it. 0: no block-linear surface holds `pa`: read the memory
+// itself. -ENOMEM: one does but no scratch could be had: read nothing (its pages hold texels). Sleeps on the copy's fence
+// interrupt: thread context, no spinlock or interrupt filter.
+int tegra_gm20b_surface_rows(uint64_t pa, void **rows, void **memory, uint64_t *offset);
+void tegra_gm20b_surface_rows_done(void *rows);
+
 #ifdef __cplusplus
 }
 #endif

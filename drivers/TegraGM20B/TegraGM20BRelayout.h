@@ -4,7 +4,8 @@
 // TegraGM20BRelayout.cpp submits on the kernel's copy channel: a semaphore acquire on each GPU writer it must follow (the
 // host waits on the GPU, switching to other channels meanwhile), then its copies, each NON_PIPELINED (it starts once the
 // one before wrote everything) with FLUSH_ENABLE:
-//  - to rows: the surface's texels into the scratch;
+//  - to rows: the scratch cleared (every byte a task may read of it: no earlier user's bytes), then the surface's texels
+//    into it;
 //  - to tiled: the scratch's rows into the surface's texels;
 //  - tile in place: what the surface holds as rows (its contents before it became block-linear) into the scratch, then
 //    back into the surface as texels;
@@ -13,6 +14,7 @@
 // Plain C, so the host test runs the same words through a copy-engine model.
 #pragma once
 #include <stdint.h>
+#include "TegraGM20BGpu.h"
 #include "TegraGM20BLayout.h"
 
 #ifdef __cplusplus
@@ -44,11 +46,38 @@ struct tgm_relayout_move {
 	uint64_t surface_va, surface_rows_va, rows_va;
 	uint32_t bytes_per_row;
 	enum tgm_relayout_op op;
+	uint64_t
+		rows_bytes; /* the scratch's length (a multiple of 4096): what a move to rows clears */
 };
 
 static inline uint32_t tgm_relayout_header(uint32_t subc, uint32_t mthd, uint32_t count)
 {
 	return (1u << 29) | (count << 16) | (subc << 13) | (mthd >> 2);
+}
+
+// Zeros over `bytes` (a multiple of 4096) at va: lines of 4096 bytes, each 1024 four-byte components of constant A
+static inline uint32_t tgm_relayout_clear(uint32_t *w, uint64_t va, uint64_t bytes)
+{
+	uint32_t i = 0;
+	w[i++] = tgm_relayout_header(TGM_RELAYOUT_SUBC_COPY, 0x0700,
+				     3);  // REMAP_CONST_A, CONST_B, COMPONENTS
+	w[i++] = 0;
+	w[i++] = 0;
+	w[i++] =
+		4u |
+		3u << 16;  // DST_X CONST_A, COMPONENT_SIZE FOUR, one source and one destination component
+	w[i++] =
+		tgm_relayout_header(TGM_RELAYOUT_SUBC_COPY, 0x0408, 6);  // OFFSET_OUT .. LINE_COUNT
+	w[i++] = (uint32_t)(va >> 32);
+	w[i++] = (uint32_t)va;
+	w[i++] = 4096;
+	w[i++] = 4096;
+	w[i++] = 1024;
+	w[i++] = (uint32_t)(bytes / 4096);
+	w[i++] = tgm_relayout_header(TGM_RELAYOUT_SUBC_COPY, 0x0300, 1);
+	w[i++] = 2u | 1u << 2 | 1u << 7 | 1u << 8 | 1u << 9 |
+		 1u << 10;  // NON_PIPELINED, FLUSH, PITCH both, MULTI_LINE, REMAP
+	return i;
 }
 
 // SEMAPHOREA..D, ACQ_GEQ with ACQUIRE_SWITCH (cl906f.h)
@@ -114,6 +143,7 @@ static inline uint32_t tgm_relayout_push(uint32_t *w, const struct tgm_layout *l
 		i += tgm_relayout_acquire(w + i, &waits[k]);
 	switch (m->op) {
 	case TGM_RELAYOUT_TO_ROWS:
+		i += tgm_relayout_clear(w + i, m->rows_va, m->rows_bytes);
 		return i + tgm_relayout_copy(w + i, l, m->surface_va, 1, m->rows_va, 0,
 					     m->bytes_per_row);
 	case TGM_RELAYOUT_TO_TILED:
@@ -130,6 +160,47 @@ static inline uint32_t tgm_relayout_push(uint32_t *w, const struct tgm_layout *l
 					     m->bytes_per_row);
 	}
 	return i;
+}
+
+// tgm_relayout_by_cpu's moves over pages that `kva` gives a CPU address for: TO_ROWS clears the rows' pages first, as the
+// copy engine's move does (a scratch may hold another surface's rows). The caller handles the cache lines.
+static inline void tgm_relayout_cpu_bytes(const struct tgm_relayout_pages *p, uint64_t at,
+					  uint8_t *bytes, uint32_t n, int store,
+					  uint8_t *(*kva)(uint64_t pa))
+{
+	while (n) {
+		const uint32_t room = 4096 - (uint32_t)(at & 4095), run = n < room ? n : room;
+		uint8_t *cpu = kva(p->pas[at >> 12] & ~4095ull) + (at & 4095);
+		if (store)
+			__builtin_memcpy(cpu, bytes, run);
+		else
+			__builtin_memcpy(bytes, cpu, run);
+		at += run;
+		bytes += run;
+		n -= run;
+	}
+}
+
+static inline void tgm_relayout_cpu(const struct tgm_relayout_pages *surface,
+				    const struct tgm_relayout_pages *rows,
+				    const struct tgm_layout *l, uint32_t bytes_per_row, int to_rows,
+				    uint8_t *(*kva)(uint64_t pa))
+{
+	if (to_rows)
+		for (uint32_t i = 0; i < rows->npages; i++)
+			__builtin_memset(kva(rows->pas[i] & ~4095ull), 0, 4096);
+	const struct tgm_relayout_pages *from = to_rows ? surface : rows,
+					*to = to_rows ? rows : surface;
+	const uint32_t end = l->width * l->bpp;
+	uint8_t run[16];
+	for (uint32_t y = 0; y < l->height; y++)
+		for (uint32_t xB = 0; xB < end; xB += 16) {
+			const uint32_t n = end - xB < 16 ? end - xB : 16;
+			const uint64_t texels = tgm_layout_offset(l, xB, y),
+				       line = (uint64_t)y * bytes_per_row + xB;
+			tgm_relayout_cpu_bytes(from, to_rows ? texels : line, run, n, 0, kva);
+			tgm_relayout_cpu_bytes(to, to_rows ? line : texels, run, n, 1, kva);
+		}
 }
 
 #ifdef __cplusplus

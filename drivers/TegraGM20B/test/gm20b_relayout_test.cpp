@@ -76,6 +76,19 @@ struct CopyEngine {
 			       out = uint64_t(m[0x0408]) << 32 | m[0x040c];
 		const bool srcPitch = flags & (1u << 7), dstPitch = flags & (1u << 8);
 		const uint32_t b = bpp(), w = m[0x0418], h = m[0x041c];
+		if ((m.at(0x0708) & 7) == 4) {  // DST_X CONST_A: a fill of the constant, no source
+			ASSERT_TRUE(dstPitch);
+			for (uint32_t y = 0; y < h; y++)
+				for (uint32_t x = 0; x < w * b; x++) {
+					uint8_t *pd = memory.at(out + uint64_t(y) * m[0x0414] + x);
+					if (!pd) {
+						fault = true;
+						return;
+					}
+					*pd = uint8_t(m[0x0700] >> (8 * (x % 4)));
+				}
+			return;
+		}
 		for (uint32_t y = 0; y < h; y++)
 			for (uint32_t x = 0; x < w * b; x++) {
 				const uint64_t s = srcPitch ? in + uint64_t(y) * m[0x0410] + x
@@ -161,7 +174,7 @@ struct Surface {
 		EXPECT_TRUE(tgm_layout_tiled(c.w, c.h, c.bpp, &l));
 		bytesPerRow = c.w * c.bpp + c.pad;
 		surface.assign(std::max<uint64_t>(l.bytes, uint64_t(bytesPerRow) * c.h), 0);
-		rows.assign(uint64_t(bytesPerRow) * c.h, 0);
+		rows.assign((uint64_t(bytesPerRow) * c.h + 4095) & ~4095ull, 0);
 		memory.regions[kSurfaceVa] = &surface;
 		memory.regions[kSurfaceRowsVa] = &surface;
 		memory.regions[kRowsVa] = &rows;
@@ -171,7 +184,8 @@ struct Surface {
 	{
 		CopyEngine ce(memory);
 		uint32_t w[TGM_RELAYOUT_DWORDS];
-		const tgm_relayout_move m = {kSurfaceVa, kSurfaceRowsVa, kRowsVa, bytesPerRow, op};
+		const tgm_relayout_move m = {kSurfaceVa, kSurfaceRowsVa, kRowsVa, bytesPerRow,
+					     op,         rows.size()};
 		const uint32_t n =
 			tgm_relayout_push(w, &l, &m, waits.data(), uint32_t(waits.size()));
 		ASSERT_LE(n, TGM_RELAYOUT_DWORDS);
@@ -188,13 +202,11 @@ TEST(Relayout, ToRowsIsTheCpuDetile)
 	for (const Case &c : kCases) {
 		Surface s(c);
 		s.surface = pattern(s.surface.size(), c.w);
+		s.rows = pattern(s.rows.size(), 0x5a);  // an earlier user's bytes: none may show
 		std::vector<uint8_t> want(s.rows.size(), 0);
 		tgm_layout_read(&s.l, s.surface.data(), 0, 0, c.w, c.h, want.data(), s.bytesPerRow);
 		s.move(TGM_RELAYOUT_TO_ROWS);
-		for (uint32_t y = 0; y < c.h; y++)
-			ASSERT_EQ(0, memcmp(&s.rows[y * s.bytesPerRow], &want[y * s.bytesPerRow],
-					    size_t(c.w) * c.bpp))
-				<< c.w << "x" << c.h << " bpp " << c.bpp << " row " << y;
+		ASSERT_EQ(s.rows, want) << c.w << "x" << c.h << " bpp " << c.bpp;
 	}
 }
 
@@ -268,8 +280,8 @@ TEST(Relayout, WaitsForEveryWriterFirst)
 	s.move(TGM_RELAYOUT_TO_ROWS, {{0x1000040, 7}, {0x1004040, 0xfffffffe}});
 	uint32_t w[TGM_RELAYOUT_DWORDS];
 	const tgm_relayout_wait waits[] = {{0x10, 1}, {0x20, 2}};
-	const tgm_relayout_move m = {kSurfaceVa, kSurfaceRowsVa, kRowsVa, s.bytesPerRow,
-				     TGM_RELAYOUT_TO_ROWS};
+	const tgm_relayout_move m = {kSurfaceVa,    kSurfaceRowsVa,       kRowsVa,
+				     s.bytesPerRow, TGM_RELAYOUT_TO_ROWS, s.rows.size()};
 	tgm_relayout_push(w, &s.l, &m, waits, 2);
 	EXPECT_EQ(w[0], tgm_relayout_header(0, 0x0010, 4));
 	EXPECT_EQ(w[5], tgm_relayout_header(0, 0x0010, 4));

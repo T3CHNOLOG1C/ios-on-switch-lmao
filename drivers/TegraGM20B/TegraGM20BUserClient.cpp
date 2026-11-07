@@ -22,6 +22,7 @@
 #include "TegraGM20BGpu.h"
 #include "TegraGM20BLayout.h"
 #include "TegraGM20BPoolPolicy.h"
+#include "TegraGM20BViews.h"
 #include "TegraGM20BPushScan.h"
 #include "TegraGM20BSharedWiring.h"
 using tgm_scan::PushCounts;
@@ -1510,9 +1511,10 @@ IOReturn AGXDeviceUserClient::surfaceLayout(const TegraGM20BAbiSurfaceLayout *in
 	const Bo *bo = findBo(in->handle);
 	if (!bo || !bo->wired || !bo->coh)
 		return kIOReturnBadArgument;
-	const int layout =
-		tgm_coherency_layout(bo->coh, in->width, in->height, in->bpp, in->bytes_per_row,
-				     in->flags & TegraGM20BLayoutWrites);
+	const bool writes = (in->flags & TegraGM20BLayoutWrites) &&
+			    !tgm_surface_client_memory(tgm_coh_surface_id(bo->coh), task_);
+	const int layout = tgm_coherency_layout(bo->coh, in->width, in->height, in->bpp,
+						in->bytes_per_row, writes);
 	out->layout = layout > 0   ? TegraGM20BLayoutTiled
 		      : layout < 0 ? TegraGM20BLayoutOtherShape
 				   : 0;

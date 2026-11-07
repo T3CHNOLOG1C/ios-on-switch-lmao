@@ -147,6 +147,7 @@ filegroup(
         "//kits/SwitchMath:all_files",
         "//kits/SwitchRefusal:all_files",
         "//kits/SwitchRing:all_files",
+        "//kits/SwitchScratch:all_files",
         "//kits/SwitchSysctl:all_files",
         "//kits/SwitchTime:all_files",
         "//kits/VerifiedRoot:all_files",
@@ -355,6 +356,7 @@ kernel_archive(
         "//kits/SwitchCAR:SwitchCAR",
         "//kits/SwitchDMA:SwitchDMA",
         "//kits/SwitchFalcon:SwitchFalcon",
+        "//kits/SwitchScratch:SwitchScratch",
     ] + select({
         "//drivers/SwitchDisplayPort:on": ["//drivers/SwitchDisplayPort:SwitchDisplayPort"],
         "//conditions:default": [],

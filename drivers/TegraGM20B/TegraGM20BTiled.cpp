@@ -19,6 +19,8 @@ extern "C" int proc_selfpid(void);
 
 namespace
 {
+uint32_t gTiledLive;  // atomic: surfaces block-linear now
+
 enum Decision {
 	DecidedTiled,
 	PitchSampledFirst,
@@ -63,7 +65,7 @@ Decision decide(tgm_coh *c, tgm_tiled &t, uint32_t width, uint32_t height, uint3
 		return PitchShape;
 	t.bytes_per_row = bytesPerRow;
 	tgm_relayout_pages rows;
-	tgm_scratch *scratch = tgm_scratch_get(uint64_t(bytesPerRow) * height, &rows);
+	tgm_scratch *scratch = tgm_scratch_get(uint64_t(bytesPerRow) * height, 0, &rows);
 	tgm_relayout_writer writers[TGM_RELAYOUT_MAX_WAITS];
 	const uint32_t n = tgm_coh_writers(c, writers, TGM_RELAYOUT_MAX_WAITS);
 	const int ret = scratch ? tgm_relayout(&pages, &rows, &t.layout, bytesPerRow,
@@ -85,6 +87,8 @@ extern "C" int tgm_coherency_layout(struct tgm_coh *c, uint32_t width, uint32_t 
 		bzero(t, sizeof(*t));
 		const Decision d = decide(c, *t, width, height, bpp, bytes_per_row, writes);
 		t->tiled = d == DecidedTiled;
+		if (t->tiled)
+			__atomic_add_fetch(&gTiledLive, 1, __ATOMIC_ACQ_REL);
 		note(d, tgm_coh_surface_id(c), width, height, bpp);
 #if TGM_STATS
 		if (t->tiled) {
@@ -113,7 +117,7 @@ extern "C" void tgm_tiled_untile(struct tgm_coh *c)
 		const tgm_relayout_pages pages = tgm_coh_pages(c);
 		tgm_relayout_pages rows;
 		tgm_scratch *scratch =
-			tgm_scratch_get(uint64_t(t->bytes_per_row) * t->layout.height, &rows);
+			tgm_scratch_get(uint64_t(t->bytes_per_row) * t->layout.height, 0, &rows);
 		tgm_relayout_writer writers[TGM_RELAYOUT_MAX_WAITS];
 		const uint32_t n = tgm_coh_writers(c, writers, TGM_RELAYOUT_MAX_WAITS);
 		const int ret = scratch ? tgm_relayout(&pages, &rows, &t->layout, t->bytes_per_row,
@@ -130,14 +134,22 @@ extern "C" void tgm_tiled_untile(struct tgm_coh *c)
 		__atomic_fetch_sub(&gLiveBytes, t->layout.bytes, __ATOMIC_RELAXED);
 #endif
 		__atomic_store_n(&t->tiled, 0, __ATOMIC_RELEASE);
+		__atomic_sub_fetch(&gTiledLive, 1, __ATOMIC_ACQ_REL);
 	}
 	tgm_coh_unlock(c);
+}
+
+extern "C" int tgm_tiled_any(void)
+{
+	return __atomic_load_n(&gTiledLive, __ATOMIC_ACQUIRE) != 0;
 }
 
 extern "C" void tgm_tiled_free(struct tgm_tiled *t)
 {
 	if (!t)
 		return;
+	if (t->tiled)
+		__atomic_sub_fetch(&gTiledLive, 1, __ATOMIC_ACQ_REL);
 #if TGM_STATS
 	if (t->tiled) {
 		__atomic_fetch_sub(&gLive, 1, __ATOMIC_RELAXED);
@@ -147,13 +159,14 @@ extern "C" void tgm_tiled_free(struct tgm_tiled *t)
 	IODelete(t, tgm_tiled, 1);
 }
 
-extern "C" void tgm_tiled_take_stats(uint64_t out[7])
+extern "C" void tgm_tiled_take_stats(uint64_t out[9])
 {
-	bzero(out, 7 * sizeof(uint64_t));
+	bzero(out, 9 * sizeof(uint64_t));
 #if TGM_STATS
 	for (uint32_t i = 0; i < Decisions; i++)
 		out[i] = __atomic_exchange_n(&gDecisions[i], 0, __ATOMIC_RELAXED);
 	out[5] = __atomic_load_n(&gLive, __ATOMIC_RELAXED);
 	out[6] = __atomic_load_n(&gLiveBytes, __ATOMIC_RELAXED);
+	tgm_scratch_stats(&out[7], &out[8]);
 #endif
 }

@@ -8,11 +8,13 @@
 // kills it alone (the next move makes another).
 #include <IOKit/IOLib.h>
 #include <IOKit/IOLocks.h>
+#include <kern/task.h>
 #include <stdint.h>
 #include <string.h>
 #include "TegraGM20BGpu.h"
 #include "TegraGM20BRelayout.h"
 #include "TegraGM20BTiled.h"
+#include "../../kits/SwitchScratch/SwitchScratch.h"
 
 namespace
 {
@@ -91,7 +93,8 @@ int move(const tgm_relayout_pages &surface, const tgm_relayout_pages &rows, cons
 	if (!ret)
 		ret = tgm_vm_map_ordered(r.vm, kRowsVa, rowsBytes, rowsMem, 0, 0, 0);
 	if (!ret) {
-		const tgm_relayout_move m = {kSurfaceVa, kSurfaceRowsVa, kRowsVa, bytesPerRow, op};
+		const tgm_relayout_move m = {kSurfaceVa, kSurfaceRowsVa, kRowsVa, bytesPerRow,
+					     op,         rowsBytes};
 		const tgm_push push = {kPushVa, tgm_relayout_push(r.pushCpu, &l, &m, waits, nwaits),
 				       0};
 		uint32_t seqno = 0;
@@ -109,6 +112,31 @@ int move(const tgm_relayout_pages &surface, const tgm_relayout_pages &rows, cons
 	return ret;
 }
 }  // namespace
+
+extern "C" vm_offset_t phystokv(uint64_t pa);
+
+namespace
+{
+uint8_t *physical(uint64_t pa)
+{
+	return reinterpret_cast<uint8_t *>(phystokv(pa));
+}
+}  // namespace
+
+extern "C" void tgm_relayout_by_cpu(const struct tgm_relayout_pages *surface,
+				    const struct tgm_relayout_pages *rows,
+				    const struct tgm_layout *layout, uint32_t bytes_per_row, int op,
+				    const struct tgm_relayout_writer *writers, uint32_t nwriters)
+{
+	for (uint32_t i = 0; i < nwriters; i++)
+		tgm_writer_wait(writers[i].uid, writers[i].seqno);
+	const bool toRows = op == TGM_RELAYOUT_TO_ROWS;
+	const tgm_relayout_pages &to = toRows ? *rows : *surface;
+	tgm_cpu_clean_pages(surface->pas, surface->npages);
+	tgm_cpu_clean_pages(rows->pas, rows->npages);
+	tgm_relayout_cpu(surface, rows, layout, bytes_per_row, toRows, physical);
+	tgm_cpu_clean_pages(to.pas, to.npages);
+}
 
 extern "C" int tgm_relayout_init(void)
 {
@@ -131,39 +159,40 @@ extern "C" int tgm_relayout(const struct tgm_relayout_pages *surface,
 	return ret;
 }
 
-struct tgm_scratch {
-	void *va;
-	uint64_t pa, bytes;
-	uint64_t *pas;
-};
+struct tgm_scratch : switch_scratch {};
 
-// GPU pool pages, contiguous: the copy engine writes them, nothing reads them on the CPU
-extern "C" struct tgm_scratch *tgm_scratch_get(uint64_t bytes, struct tgm_relayout_pages *pages)
+// kits/SwitchScratch's recycled, wired, cacheable memory: the copy engine writes it, a locking task maps it
+extern "C" struct tgm_scratch *tgm_scratch_get(uint64_t bytes, int for_task,
+					       struct tgm_relayout_pages *pages)
 {
-	bytes = (bytes + kPage - 1) & ~(kPage - 1);
-	tgm_scratch *s = bytes ? IONew(tgm_scratch, 1) : nullptr;
-	if (!s)
-		return nullptr;
-	s->bytes = bytes;
-	s->va = tgm_pool_alloc(bytes, &s->pa);
-	s->pas = s->va ? IONew(uint64_t, bytes / kPage) : nullptr;
-	if (!s->pas) {
-		if (s->va)
-			tgm_pool_free(s->va, bytes, s->pa);
-		IODelete(s, tgm_scratch, 1);
-		return nullptr;
-	}
-	for (uint64_t i = 0; i < bytes / kPage; i++)
-		s->pas[i] = s->pa + i * kPage;
-	*pages = {s->pas, uint32_t(bytes / kPage)};
+	auto *s = static_cast<tgm_scratch *>(
+		switch_scratch_get(bytes, for_task ? current_task() : kernel_task));
+	if (s)
+		*pages = {s->pas, s->npages};
 	return s;
 }
 
 extern "C" void tgm_scratch_put(struct tgm_scratch *s)
 {
-	if (!s)
-		return;
-	tgm_pool_free(s->va, s->bytes, s->pa);
-	IODelete(s->pas, uint64_t, s->bytes / kPage);
-	IODelete(s, tgm_scratch, 1);
+	switch_scratch_put(s);
+}
+
+extern "C" void tgm_scratch_discard(struct tgm_scratch *s)
+{
+	switch_scratch_discard(s);
+}
+
+extern "C" void *tgm_scratch_memory(struct tgm_scratch *s)
+{
+	return s->memory;
+}
+
+extern "C" void tgm_scratch_pages(const struct tgm_scratch *s, struct tgm_relayout_pages *pages)
+{
+	*pages = {s->pas, s->npages};
+}
+
+extern "C" void tgm_scratch_stats(uint64_t *held, uint64_t *peak)
+{
+	switch_scratch_stats(held, peak);
 }

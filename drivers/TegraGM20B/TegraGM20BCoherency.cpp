@@ -55,8 +55,10 @@ struct tgm_coh {
 	int gpuWrites;  // atomic: an import or a SurfaceWrites says the GPU may write it, so submissions mark it
 	int cleaned;   // atomic: an import of it finished its own clean
 	int gpuDirty;  // atomic: the GPU may have written it since the last CPU lock
-	tgm_tiled *
-		tiled;  // atomic: the surface's layout once decided (TegraGM20BTiled.cpp), null before
+	// atomic: the surface's layout once decided (TegraGM20BTiled.cpp), null before
+	tgm_tiled *tiled;
+	uint32_t
+		cpuLocks;  // atomic: CPU locks held now (a surface is not made block-linear under one)
 	uint64_t writers
 		[TGM_COH_WRITERS];  // atomic: marking submissions, channel uid << 32 | seqno (0: free slot)
 	int writersLost;  // atomic: one found no slot: a lock waits for every channel's submitted work
@@ -226,6 +228,13 @@ void surfaceTrapped(uint32_t surfaceId, bool unlock, bool readOnly)
 	for (uint32_t skip = 0; n == kBatch && (n = findById(surfaceId, skip, found)); skip += n) {
 		uint64_t bytes = 0, done = 0;
 		for (uint32_t i = 0; i < n; i++) {
+			if (!unlock)
+				__atomic_add_fetch(&found[i]->cpuLocks, 1, __ATOMIC_ACQ_REL);
+			else if (__atomic_load_n(&found[i]->cpuLocks, __ATOMIC_ACQUIRE))
+				__atomic_sub_fetch(&found[i]->cpuLocks, 1, __ATOMIC_ACQ_REL);
+			// a block-linear surface's CPU locks read and write a scratch (TegraGM20BViews.cpp), never its pages
+			if (tiledNow(found[i]))
+				continue;
 			const bool maintained = unlock || __atomic_exchange_n(&found[i]->gpuDirty,
 									      0, __ATOMIC_ACQ_REL);
 			if (maintained) {
@@ -344,8 +353,11 @@ extern "C" void tgm_coherency_cleaned(struct tgm_coh *c)
 
 extern "C" void tgm_coherency_put(struct tgm_coh *c)
 {
-	if (c)
-		drop(&c, 1);
+	if (!c)
+		return;
+	if (tiledNow(c))
+		tgm_views_sweep(c);
+	drop(&c, 1);
 }
 
 // One submission of channel `uid` that may write `c`: a later one of the same channel takes its slot.
@@ -418,6 +430,8 @@ extern "C" int tegra_gm20b_iosurface_lock_will(uint32_t surface_id, uint32_t opt
 	for (uint32_t skip = 0; n == kBatch && !refused && (n = findById(surface_id, skip, found));
 	     skip += n) {
 		for (uint32_t i = 0; i < n && !refused; i++) {
+			if (tiledNow(found[i]))
+				continue;  // its view's copy waits for the writers on the GPU (TegraGM20BViews.cpp)
 			if (avoidSync)
 				refused = writersPending(found[i], false);
 			else
@@ -494,7 +508,7 @@ extern "C" struct tgm_tiled **tgm_coh_tiled(struct tgm_coh *c)
 extern "C" int tgm_coh_alone(struct tgm_coh *c)
 {
 	IOLockLock(gRegistryLock);
-	const int alone = c->refs == 1;
+	const int alone = c->refs == 1 && !__atomic_load_n(&c->cpuLocks, __ATOMIC_ACQUIRE);
 	IOLockUnlock(gRegistryLock);
 	return alone;
 }
@@ -502,6 +516,54 @@ extern "C" int tgm_coh_alone(struct tgm_coh *c)
 extern "C" struct tgm_relayout_pages tgm_coh_pages(const struct tgm_coh *c)
 {
 	return {c->pas, c->npages};
+}
+
+extern "C" struct tgm_coh *tgm_coh_find_tiled(uint32_t id)
+{
+	if (!tgm_tiled_any())
+		return nullptr;
+	tgm_coh *found[kBatch], *tiled = nullptr;
+	const uint32_t n = id && gRegistryLock ? findById(id, 0, found) : 0;
+	for (uint32_t i = 0; i < n; i++)
+		if (!tiled && tiledNow(found[i]))
+			tiled = found[i];
+	tgm_coh *others[kBatch];
+	uint32_t m = 0;
+	for (uint32_t i = 0; i < n; i++)
+		if (found[i] != tiled)
+			others[m++] = found[i];
+	drop(others, m);
+	return tiled;
+}
+
+extern "C" struct tgm_coh *tgm_coh_find_tiled_pa(uint64_t pa, uint64_t *offset)
+{
+	if (!gRegistryLock || !tgm_tiled_any())
+		return nullptr;
+	IOLockLock(gRegistryLock);
+	tgm_coh *found = nullptr;
+	for (uint32_t b = 0; b < kBuckets && !found; b++)
+		for (tgm_coh *c = gByPage[b]; c && !found; c = c->next) {
+			if (!tiledNow(c))
+				continue;
+			for (uint32_t i = 0; i < c->npages; i++)
+				if (c->pas[i] == (pa & ~0xfffull)) {
+					found = c;
+					*offset = (uint64_t(i) << 12) | (pa & 0xfff);
+					break;
+				}
+		}
+	if (found)
+		found->refs++;
+	IOLockUnlock(gRegistryLock);
+	return found;
+}
+
+extern "C" void tgm_coh_hold(struct tgm_coh *c)
+{
+	IOLockLock(gRegistryLock);
+	c->refs++;
+	IOLockUnlock(gRegistryLock);
 }
 
 extern "C" uint32_t tgm_coh_surface_id(const struct tgm_coh *c)

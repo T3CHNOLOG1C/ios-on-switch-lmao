@@ -12,9 +12,9 @@
 #include <kern/task.h>
 #include <kern/thread_call.h>
 #include "TegraGM20BSurfacePrefault.h"
+#include "TegraGM20BViews.h"
 
 extern "C" {
-OSObject *tegra_gm20b_ios_lookup(IOService *root, uint32_t id, task_t task);
 IOMemoryDescriptor *tegra_gm20b_ios_memory(OSObject *surface);
 uint64_t tegra_gm20b_ios_alloc_size(OSObject *surface);
 // XNU's vm_pressure_level_t: 0 normal
@@ -37,7 +37,6 @@ struct Created {
 struct Prefault {
 	IOLock *lock;
 	thread_call_t call;
-	IOService *root;  // IOCoreSurfaceRoot, found by the thread call
 	Created queue[kQueued];
 	uint32_t head, tail;  // lock
 };
@@ -71,20 +70,9 @@ Prefault *prefault()
 	return fresh;
 }
 
-IOService *surfaceRoot(Prefault *p)
-{
-	if (!p->root) {
-		OSDictionary *match = IOService::nameMatching("IOCoreSurfaceRoot");
-		p->root = match ? IOService::copyMatchingService(match) : nullptr;  // kept
-		OSSafeReleaseNULL(match);
-	}
-	return p->root;
-}
-
 void faultIn(Prefault *p, const Created &c)
 {
-	IOService *root = surfaceRoot(p);
-	OSObject *surface = root ? tegra_gm20b_ios_lookup(root, c.id, c.task) : nullptr;
+	OSObject *surface = tgm_surface_lookup(c.id, c.task);
 	if (!surface)
 		return;
 	if (tegra_gm20b_prefault_wanted(
