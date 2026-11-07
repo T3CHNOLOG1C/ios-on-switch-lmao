@@ -278,10 +278,12 @@ def barrier_set(d: Path) -> Path | None:
     sys.path.insert(0, str(HERE))
     import probelog  # noqa: PLC0415  the pack directory's module, on the path only now
 
+    # the interlock on in any of a probe's draws: a fetched color whose texture lacks STORAGE is drawn in a scratch
+    # between m2v's copy in and copy out (mkpack.py interlocked)
     keys = {
         p['key']
         for p in probelog.load(str(d / 'probe256.out'), str(d / 'probe256.log'))
-        if p['records'] and p['records'][0]['regs'].get(0x1224, 0) & 3
+        if any(r and r.get('regs', {}).get(0x1224, 0) & 3 for r in p['records'])
     }
     lines = (d / 'corpus.log').read_text().splitlines(keepends=True)
     chosen = [line for line in lines[1:] if state_key(line.rstrip('\n')) in keys]

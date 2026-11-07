@@ -137,18 +137,26 @@ def load_buckets(dirs: list[str], size: int) -> list[dict]:
 
 
 def interlocked(p: dict) -> bool:
-    """Whether the probe's draw had SET_PIXEL_SHADER_INTERLOCK_CONTROL on: metal2vulkan's storage form of a fetch."""
-    return bool(p['records'][0]['regs'].get(0x1224, 0) & 3)
+    """Whether a probe draw had SET_PIXEL_SHADER_INTERLOCK_CONTROL on: metal2vulkan's storage form of a fetch.
+
+    A fetched color whose texture lacks STORAGE is drawn in a scratch that has it, between a copy in and a copy out
+    (full-screen draws of m2v's own): three draws, the state's the middle one.
+    """
+    return any(r and r.get('regs', {}).get(0x1224, 0) & 3 for r in p['records'])
 
 
-def default_forms(simple: list[dict]) -> tuple[list[dict], list[tuple[dict, str]]]:
+def storage_keys(probes: list[dict]) -> set[str]:
+    """Give the keys of the states the default runs drew in the storage form, in one draw or through a scratch."""
+    return {p['key'] for p in probes if not p['form'] and 'failed' not in p and interlocked(p)}
+
+
+def default_forms(simple: list[dict], storage: set[str]) -> tuple[list[dict], list[tuple[dict, str]]]:
     """Give each state its default record and set the rest aside with why.
 
     A state metal2vulkan draws in the storage form (the pixel interlock) gets its barrier form (input attachments,
     ordered by barriers: the barrier run's) as its record; layouts.py cannot name the storage form's image, so it is not
     packed.
     """
-    storage = {p['key'] for p in simple if not p['form'] and interlocked(p)}
     barrier = {p['key'] for p in simple if p['form']}
     kept, aside = [], []
     for p in simple:
@@ -277,6 +285,8 @@ def record_reason(records: list[dict]) -> str | None:
 def skip_reason(p: dict) -> str | None:
     if 'failed' in p:
         return f'm2v failed its draw: {p["failed"]}'
+    if p['draws'] != 1 and not p['dispatches'] and not p['form'] and interlocked(p):
+        return 'storage form through a scratch, m2v copying the color in and out around it'
     if p['draws'] != 1:
         return f'{p["draws"]} draws'
     if p['dispatches']:
@@ -507,7 +517,7 @@ def main() -> None:
     # drop the query-pool setup (submit 4 is not traced) and NVK's own MME bookkeeping we relocate
     report = []
     simple, skipped = split_probes(probes)
-    simple, aside = default_forms(simple)
+    simple, aside = default_forms(simple, storage_keys(probes))
     skipped += aside
     simple, aside = raw_bound(simple, programs)
     skipped += aside
