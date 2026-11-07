@@ -7,8 +7,8 @@
 // duty * 2047 / 255). The panel is in video mode once hekate's display_init() has run, so a command packet rides the video
 // stream: hekate display_dsi_vblank_write() (enable command packets in video on line 4, wait for a frame end, queue the
 // packet, wait for the next frame end, reset the DSI syncpoint block, return to plain video). Every DSI write of that
-// sequence is made at a fixed offset after a DC A frame end, in primary interrupt context, as hekate makes them; a
-// command takes four frames (67 ms). TegraPanel.cpp has the steps and the timing.
+// sequence is made at a fixed offset after a DC A frame end, in primary interrupt context (the frame-end filter or a
+// timer callout), as hekate makes them; a command takes four frames (67 ms). TegraPanel.cpp has the steps and the timing.
 //
 // Frame ends come only from the display controller's interrupt (DC A, GIC SPI 73 = INTID 105), which the display driver
 // owns (NativeLegacyDisplay's vblank source); its interrupt filter calls tegra_panel_frame_end_filter() for every
@@ -52,9 +52,9 @@ int tegra_panel_boot_brightness(void);
 int tegra_panel_brightness(void);
 
 // For the owner of the DC A interrupt: call from its primary interrupt filter at every FRAME_END (DC_CMD_INT_STATUS
-// bit 1, which that owner enables, unmasks and clears), after clearing it. Returns at once unless a command is out; the
-// last step of a command spends about 620 us here (hekate's syncpoint reset and its settle delays). It also clocks the
-// ambient light sensor (switch_als_frame_end).
+// bit 1, which that owner enables, unmasks and clears), after clearing it. Returns at once unless a command is out, and
+// never waits: the last step's settle delays run on a timer callout. It also clocks the ambient light sensor
+// (switch_als_frame_end).
 void tegra_panel_frame_end_filter(void);
 
 #ifdef __cplusplus
