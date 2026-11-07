@@ -717,3 +717,13 @@ TEST(GM20BSchedSource, EngineStatusReadsSkipTheSoftwareEngine)
 		EXPECT_GT(reads, 0u) << file;
 	}
 }
+
+// With interrupts off XNU formats an os_log line only through the kernel printf into the message buffer, which has no
+// privacy annotations: "%{public}s" prints "{public}s" and drops nvkm's report (the GR and MMU fault lines).
+TEST(GM20BShimSource, InterruptPassReportsUsePlainFormats)
+{
+	const std::string report =
+		flat(definition(SourceText("../shim/xnu_glue.cpp"), "static void nvxnu_report(const char *line)"));
+	EXPECT_THAT(report, HasSubstr("os_log_error(OS_LOG_DEFAULT, \"%s\", line)"));
+	EXPECT_THAT(report, Not(HasSubstr("%{")));
+}

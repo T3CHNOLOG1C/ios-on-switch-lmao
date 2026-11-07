@@ -64,13 +64,15 @@ extern "C" void nvxnu_stats(const char *fmt, ...)
 }
 
 // nvkm's interrupt handler runs under spin_lock_irqsave, as in a Linux hard IRQ, and IOLog asserts with interrupts off.
-// os_log queues a line from any context, without the console copy.
+// With interrupts off os_log is not safe, so XNU only formats the line into the message buffer with the kernel's
+// printf, which replays it to the unified log later: that printf has no privacy annotations ("%{public}s" prints
+// "{public}s" and drops the string), so the format is plain "%s".
 static void nvxnu_report(const char *line)
 {
 	if (ml_get_interrupts_enabled()) {
 		IOLog("%s", line);
 	} else {
-		os_log_error(OS_LOG_DEFAULT, "%{public}s", line);
+		os_log_error(OS_LOG_DEFAULT, "%s", line);
 	}
 }
 
