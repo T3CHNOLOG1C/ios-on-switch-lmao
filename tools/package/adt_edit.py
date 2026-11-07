@@ -236,6 +236,9 @@ def _capabilities(tree: list) -> None:
     for key, value in (
         ('bluetooth-le', u32(1)),
         ('ui-pip', b''),
+        ('ui-pinned-app', b''),
+        ('ui-floating-live-app', b''),
+        ('ui-overlay-app', b''),
         ('hearingaid-audio-equalization', u32(1)),
         ('hearingaid-low-energy-audio', u32(1)),
         ('iap2-protocol-supported', u32(1)),

@@ -55,7 +55,8 @@ class Capabilities(unittest.TestCase):
         self.assertEqual(root['target-sub-type'], b'J120AP\0')
         product = {p[0]: p[2] for p in find(tree, 'product')[0]}
         self.assertEqual(product['bluetooth-le'], struct.pack('<I', 1))
-        self.assertEqual(product['ui-pip'], b'')
+        for key in ('ui-pip', 'ui-pinned-app', 'ui-floating-live-app', 'ui-overlay-app'):
+            self.assertEqual(product[key], b'', key)
         self.assertEqual(product['itunes-min-ver'], struct.pack('<I', 0xC0500))
         self.assertEqual(product['product-name'], b'iPad Pro (12.9-inch) (2nd generation)\0')
         maps = {p[0]: p[2] for p in find(tree, 'product', 'maps')[0]}
