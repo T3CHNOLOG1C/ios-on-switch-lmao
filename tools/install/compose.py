@@ -45,7 +45,9 @@ def fsck(store: str, what: str, log: host.Log) -> None:
         [host.TOOLS['fsck_apfs'], '-n', '/dev/r' + store], capture_output=True, text=True, check=False
     )
     log.quiet(result.stdout + result.stderr)
-    tail = (result.stdout + result.stderr).strip().splitlines()[-1:] or ['?']
+    # The verdict is stdout's last line. Warnings go to stderr, among them a fitted container's block count being
+    # smaller than its device's, which is what a fit proof's clone of the full-size image always shows.
+    tail = result.stdout.strip().splitlines()[-1:] or result.stderr.strip().splitlines()[-1:] or ['?']
     if result.returncode or 'appears to be OK' not in tail[0]:
         raise host.HostError(f'fsck_apfs -n {store} ({what}): {tail[0]}')
     log(f'fsck_apfs {store} ({what}): {tail[0]}')
