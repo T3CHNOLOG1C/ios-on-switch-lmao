@@ -532,7 +532,8 @@ static void waitForResource(id resource);
 // code round(h * 255), green into the luma plane and blue and red as the chroma plane's pairs (an M4 under macOS 27.0.1: clears,
 // source-over blends and loads into '_RB4' beside RGBA8Unorm, which rounds its float tile and lands up to 1 off). So a pass renders
 // such an attachment into the texture's RGBA16Float stand-in (made at its first pass and kept with it), the pipelines target
-// RGBA16Float in its place (renderDescriptor), a pass that loads it first moves the planes' codes into the stand-in, and the
+// RGBA16Float in its place (renderDescriptor), a pass that loads it (or stores a DontCare load) first moves the planes' codes into
+// the stand-in, and the
 // encoder's end stores the stand-in into the planes through R8Unorm and RG8Unorm textures over them (TwoPlaneStandIn.metal): one
 // full-target draw each, ordered on the GPU like any pass, no CPU wait. Samples, blits and CPU copies of the texture read and
 // write its planes directly.
@@ -3596,7 +3597,10 @@ static void scheduled(void *context);
         if (!c.texture || c.level || c.slice || c.depthPlane || c.resolveTexture ||
             !(standIns[i] = standInOf(c.texture)))
             continue;
-        if (c.loadAction == MTLLoadActionLoad)
+        // A DontCare load keeps the planes' codes in every 32x32 tile no draw touches (an M4 under macOS 27.0.1, raw/test/
+        // standinoracle.mm), and the store writes every texel: the stand-in holds the codes there too
+        if (c.loadAction == MTLLoadActionLoad ||
+            (c.loadAction == MTLLoadActionDontCare && c.storeAction != MTLStoreActionDontCare))
             [self loadStandIn:standIns[i] from:c.texture];
         if (c.storeAction != MTLStoreActionDontCare) {
             if (!storeBacks)
