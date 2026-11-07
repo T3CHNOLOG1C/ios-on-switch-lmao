@@ -8491,9 +8491,9 @@ native_switch_watchdog_policy(proc_t p, user_addr_t scratch)
 	/* maild and financed are not here, as on a Wi-Fi iPad with no account: without maild, Mail retries it about 460
 	 * times a second for minutes after every launch, and without financed FinanceKit traps destinationd at each boot.
 	 * FairPlay is out of scope (FairPlayIOKit is not prelinked), so fairplayd stays off with the FairPlay daemons that
-	 * start on their own: adid (CoreADI) and lskdd, whose daily XPC activity launches it, and it exits (92) before
-	 * completing the activity, so launchd respawned it once a second. SepUpdateTimer (seputil's sepOS update check)
-	 * likewise exits before taking its hourly activity with no SEP to update, and was respawned every 10 s. */
+	 * start on their own: adid (CoreADI) and lskdd. lskdd's daily XPC activity launches it, it exits (92) before
+	 * completing the activity, and launchd respawns it once a second. SepUpdateTimer (seputil's sepOS update check)
+	 * likewise exits before taking its hourly activity with no SEP to update, and is respawned every 10 s. */
 #define NATIVE_SWITCH_POLICY_TAIL "<key>com.apple.photoanalysisd</key><true/>" \
 	    "<key>com.apple.mediaanalysisd</key><true/>" \
 	    "<key>com.apple.mediastream.mstreamd</key><true/>" \
