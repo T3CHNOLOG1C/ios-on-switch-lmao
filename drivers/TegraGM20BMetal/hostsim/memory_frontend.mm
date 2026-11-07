@@ -1,14 +1,19 @@
 // Host check of what a Metal client's GPU memory costs it (NativeBridgeMetalFrontend.mm over the bridge over NVK over the mock
-// GM20B), in the mock's BOs as iOS charges them (mock_iokit.h): at device open, for a widget-like client (per surface a 520x800
-// BGRA8 render target and a Depth32Float_Stencil8 memoryless depth/stencil, as Core Animation draws a widget), and once the
-// client let its resources go and the GPU was idle (GpuMemoryRelease.h).
-// usage: memory_frontend <libvulkan_nouveau.dylib> <cache dir> [surfaces]; one line per step, then an ok/FAIL line per check;
-// exits non-zero on a FAIL.
+// GM20B), in the mock's BOs as iOS charges them (mock_iokit.h). Each surface is drawn as Core Animation and RenderBox draw a
+// widget: a BGRA8 render target and a Depth32Float_Stencil8 memoryless depth/stencil of the widget's size, made again for the
+// next frame. The default surfaces are WidgetRenderer's at the 23:44 boot's memory warning, at 520 px a large widget's side:
+// three large (Maps, News, Photos), one medium (Calendar) and two small (Notes, World Clock). Steps: device open, the widgets
+// made and drawn, a memory warning while they live, and their release once the GPU idled (GpuMemoryRelease.h).
+// usage: memory_frontend <libvulkan_nouveau.dylib> <cache dir> [<width>x<height> ...]; one line per step, then an ok/FAIL line
+// per check; exits non-zero on a FAIL.
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <set>
+#include <utility>
+#include <vector>
 #include "NativeBridgeMetalFrontend.h"
 #include "bridge/NativeMetalObjects.h"
 #include "mock_iokit.h"
@@ -49,15 +54,29 @@ static void check(bool ok, const char *what)
     failures += !ok;
 }
 
-static id<MTLTexture> texture(id<MTLDevice> device, MTLPixelFormat format, MTLStorageMode storage)
+using Extent = std::pair<unsigned, unsigned>;
+
+static id<MTLTexture> texture(id<MTLDevice> device, Extent size, MTLPixelFormat format, MTLStorageMode storage)
 {
     MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:format
-                                                                                 width:520
-                                                                                height:800
+                                                                                 width:size.first
+                                                                                height:size.second
                                                                              mipmapped:NO];
     d.storageMode = storage;
     d.usage = MTLTextureUsageRenderTarget | (storage == MTLStorageModeMemoryless ? 0 : MTLTextureUsageShaderRead);
     return [device newTextureWithDescriptor:d];
+}
+
+static NSMutableArray *depths(id<MTLDevice> device, const std::vector<Extent> &sizes)
+{
+    NSMutableArray *made = [NSMutableArray array];
+    for (const Extent &size : sizes) {
+        id<MTLTexture> depth = texture(device, size, MTLPixelFormatDepth32Float_Stencil8, MTLStorageModeMemoryless);
+        if (!depth)
+            return nil;
+        [made addObject:depth];
+    }
+    return made;
 }
 
 static bool render(id<MTLCommandQueue> queue, NSArray *targets, NSArray *depths, NSArray *scratch)
@@ -74,8 +93,8 @@ static bool render(id<MTLCommandQueue> queue, NSArray *targets, NSArray *depths,
         pass.stencilAttachment.texture = depths[i];
         pass.stencilAttachment.loadAction = MTLLoadActionClear;
         pass.stencilAttachment.storeAction = MTLStoreActionDontCare;
-        // Two memoryless colors of one shape in one pass: their shared backing cannot serve both.
-        for (NSUInteger j = 0; j < scratch.count; j++) {
+        // Two memoryless colors of one shape in the first pass: their shared backing cannot serve both.
+        for (NSUInteger j = 0; i == 0 && j < scratch.count; j++) {
             pass.colorAttachments[1 + j].texture = scratch[j];
             pass.colorAttachments[1 + j].loadAction = MTLLoadActionClear;
             pass.colorAttachments[1 + j].storeAction = MTLStoreActionDontCare;
@@ -92,7 +111,16 @@ int main(int argc, char **argv)
     @autoreleasepool {
         if (argc < 3)
             return 2;
-        const int surfaces = argc > 3 ? atoi(argv[3]) : 4;
+        std::vector<Extent> sizes;
+        for (int i = 3; i < argc; i++) {
+            unsigned width = 0, height = 0;
+            if (sscanf(argv[i], "%ux%u", &width, &height) != 2 || !width || !height)
+                return 2;
+            sizes.emplace_back(width, height);
+        }
+        if (sizes.empty())
+            sizes = {{520, 520}, {520, 520}, {520, 520}, {520, 240}, {240, 240}, {240, 240}};
+        const size_t shapes = std::set<Extent>(sizes.begin(), sizes.end()).size();
         setenv("NMB_DEVICE_BASE_NSOBJECT", "1", 1);
         setenv("M2V_BLOCK_MIB", "4", 0);  // a client outside the render server (TegraGM20BMetalPlugin.mm)
         id<MTLDevice> device = native_bridge_metal_open(argv[1], argv[2], 0, missing);
@@ -104,29 +132,29 @@ int main(int argc, char **argv)
         id<MTLCommandQueue> queue = [device newCommandQueue];
         step("command queue");
         @autoreleasepool {
-            NSMutableArray *targets = [NSMutableArray array], *depths = [NSMutableArray array];
-            for (int i = 0; i < surfaces; i++)
-                [targets addObject:texture(device, MTLPixelFormatBGRA8Unorm, MTLStorageModePrivate)];
+            NSMutableArray *targets = [NSMutableArray array];
+            for (const Extent &size : sizes)
+                [targets addObject:texture(device, size, MTLPixelFormatBGRA8Unorm, MTLStorageModePrivate)];
             step("render targets made");
-            id<MTLTexture> depth = texture(device, MTLPixelFormatDepth32Float_Stencil8, MTLStorageModeMemoryless);
-            check(depth != nil, "a memoryless Depth32Float_Stencil8 texture is made");
-            if (!depth)
+            NSArray *frame = depths(device, sizes);
+            check(frame != nil, "memoryless Depth32Float_Stencil8 textures are made");
+            if (!frame)
                 return 1;
-            [depths addObject:depth];
-            const Step first = step("first memoryless depth");
-            for (int i = 1; i < surfaces; i++)
-                [depths addObject:texture(device, MTLPixelFormatDepth32Float_Stencil8, MTLStorageModeMemoryless)];
-            const Step all = step("every memoryless depth");
-            check(all.bos.allocs[0] == first.bos.allocs[0] && all.backings == 1,
-                  "memoryless textures of one size and format share one backing");
+            check(step("memoryless depths").backings == shapes, "one memoryless backing per size and format");
+            check(render(queue, targets, frame, @[]), "passes over the shared depth/stencils complete");
+            const Step drawn = step("first frame drawn");
+            NSArray *next = depths(device, sizes);
+            const Step again = step("next frame's depths");
+            check(next != nil && again.bos.allocs[0] == drawn.bos.allocs[0] && again.backings == shapes,
+                  "memoryless textures of a size and format already held take no memory");
             NSArray *scratch = @[
-                texture(device, MTLPixelFormatBGRA8Unorm, MTLStorageModeMemoryless),
-                texture(device, MTLPixelFormatBGRA8Unorm, MTLStorageModeMemoryless)
+                texture(device, sizes[0], MTLPixelFormatBGRA8Unorm, MTLStorageModeMemoryless),
+                texture(device, sizes[0], MTLPixelFormatBGRA8Unorm, MTLStorageModeMemoryless)
             ];
-            check(render(queue, targets, depths, @[]), "passes over the shared depth/stencil complete");
-            check(render(queue, targets, depths, scratch),
-                  "a pass with two memoryless colors of one backing completes");
+            check(render(queue, targets, next, scratch), "a pass with two memoryless colors of one backing completes");
             step("surfaces drawn");
+            native_bridge_metal_release_idle_memory();
+            step("memory warning");
         }
         const Step released = step("surfaces released");
         // GpuMemoryRelease's idle deadline (1 s after the last command buffer completed) with its leeway.

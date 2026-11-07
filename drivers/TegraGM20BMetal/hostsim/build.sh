@@ -6,7 +6,8 @@
 # shader under 33 constant sets), each made and drawn three times in one pass: <outdir>/qc_frontend <nvk> <cache> <QC metallib>.
 # present_frontend.mm: the command buffer's presentDrawable: contract (Metal's): <outdir>/present_frontend <nvk> <cache>.
 # memory_frontend.mm: what a client's GPU memory costs it as iOS charges it (iokit_mapped), memoryless textures sharing a
-# backing, and the idle blocks going back: <outdir>/memory_frontend <nvk> <cache> [surfaces].
+# backing, and the idle blocks going back: <outdir>/memory_frontend <nvk> <cache> [<width>x<height> ...] (default: the widgets of
+# WidgetRenderer's 23:44 memory warning).
 # usage: build.sh <host libnative_metal_bridge.a> <outdir>
 #   the bridge: bazel build //gpu:bridge_darwin (bazel-bin/gpu/bridge_darwin/libnative_metal_bridge.a)
 #   then: <outdir>/m2v_gm20b <host libvulkan_nouveau.dylib> <cache dir> [<QuartzCore default.metallib> <pairs>]
