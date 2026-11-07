@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // The pack generator's probe of a render state (pack/probe.mm), in process, for a state the pack lacks: the state drawn once with
-// probe.mm's tagged inputs and attachments in three m2v command buffers (payloads of 256, 16 and 4096 bytes), each captured instead
+// probe.mm's tagged inputs and attachments in four m2v command buffers (payloads of 256, 16 and 4096 bytes, and of 256 bound at
+// each slot's own offset: PROBE_BIND_OFFSET, raw::probeBindOffset), each captured instead
 // of committed (NVK's commands decoded on the CPU, never run: raw_capture.h), and the record the generator makes of them
 // (raw_record.h). The twin's program is NVK's own compile of m2v's translation of the function's AIR, the program the raw path
 // draws with.
@@ -31,6 +32,7 @@ private:
     id<MTLCommandQueue> queue_;
     NSArray<id<MTLTexture>> *textures_;
     NSArray<id<MTLSamplerState>> *samplers_;
+    NSArray<id<MTLBuffer>> *payloads_;  // the bind-offset draw's, one a slot (made at its first)
     IOSurfaceRef framebufferSurface_ = nullptr;
     id<MTLTexture> framebuffer_;
     NSMutableDictionary<NSString *, id<MTLTexture>> *targets_;
@@ -44,7 +46,7 @@ private:
     id<MTLTexture> target(MTLPixelFormat format, bool memoryless);
     MTLRenderPassDescriptor *pass(MTLRenderPipelineDescriptor *d);
     Compiler::Outcome run(id<MTLRenderPipelineState> twin, MTLRenderPipelineDescriptor *d, uint32_t bytes,
-                          nvdec::ProbeSubmission &out, std::string &why);
+                          nvdec::ProbeSubmission &out, std::string &why, bool bindOffsets = false);
 };
 
 }  // namespace raw

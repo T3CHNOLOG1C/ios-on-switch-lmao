@@ -157,9 +157,20 @@ MTLRenderPassDescriptor *Probe::pass(MTLRenderPipelineDescriptor *d)
 }
 
 Compiler::Outcome Probe::run(id<MTLRenderPipelineState> twin, MTLRenderPipelineDescriptor *d, uint32_t bytes,
-                             nvdec::ProbeSubmission &out, std::string &why)
+                             nvdec::ProbeSubmission &out, std::string &why, bool bindOffsets)
 {
     @autoreleasepool {
+        if (bindOffsets && !payloads_) {
+            NSMutableArray<id<MTLBuffer>> *made = [NSMutableArray array];
+            for (uint32_t k = 0; k < 2 * kSlots; k++)
+                if (id<MTLBuffer> b = [device_ newBufferWithLength:256 + bytes options:MTLResourceStorageModeShared])
+                    [made addObject:b];
+            if (made.count != 2 * kSlots) {
+                why = "the probe's payload buffers were not made";
+                return Compiler::Outcome::Failed;
+            }
+            payloads_ = made;
+        }
         id<MTLCommandBuffer> cb = [queue_ commandBuffer];
         id<MTLRenderCommandEncoder> enc = [cb renderCommandEncoderWithDescriptor:pass(d)];
         [enc setRenderPipelineState:twin];
@@ -170,10 +181,19 @@ Compiler::Outcome Probe::run(id<MTLRenderPipelineState> twin, MTLRenderPipelineD
                 tag[1] = kProbeIndex;
                 for (uint32_t k = 2; k < tag.size(); k++)
                     tag[k] = 0xA0000000u | stage << 20 | slot << 16 | k;
-                if (stage == 1)
+                if (bindOffsets) {
+                    const NSUInteger at = probeBindOffset(stage, slot);
+                    id<MTLBuffer> b = payloads_[(stage - 1) * kSlots + slot];
+                    memcpy(static_cast<uint8_t *>(b.contents) + at, tag.data(), bytes);
+                    if (stage == 1)
+                        [enc setVertexBuffer:b offset:at atIndex:slot];
+                    else
+                        [enc setFragmentBuffer:b offset:at atIndex:slot];
+                } else if (stage == 1) {
                     [enc setVertexBytes:tag.data() length:bytes atIndex:slot];
-                else
+                } else {
                     [enc setFragmentBytes:tag.data() length:bytes atIndex:slot];
+                }
             }
         for (NSUInteger t = 0; t < textures_.count; t++)
             [enc setFragmentTexture:textures_[t] atIndex:t];
@@ -223,16 +243,17 @@ Compiler::Outcome Probe::make(id<MTLRenderPipelineState> twin, MTLRenderPipeline
         why = "the probe's inputs were not made";
         return Compiler::Outcome::Failed;
     }
-    nvdec::ProbeSubmission runs[3];
-    for (int i = 0; i < 3; i++)
-        if (const Compiler::Outcome o = run(twin, descriptor, kPayloads[i], runs[i], why); o != Compiler::Outcome::Made)
+    nvdec::ProbeSubmission runs[4];
+    for (int i = 0; i < 4; i++)
+        if (const Compiler::Outcome o = run(twin, descriptor, kPayloads[i % 3], runs[i], why, i == 3);
+            o != Compiler::Outcome::Made)
             return o;
     if (!rulesMade_) {
         rules_ = PackRules::of(pack_, capture_->context());
         rulesMade_ = true;
     }
     if (makeRecord(
-            {&runs[0], &runs[1], &runs[2], kProbeIndex, key}, rules_,
+            {&runs[0], &runs[1], &runs[2], kProbeIndex, key, &runs[3]}, rules_,
             [this](const std::string &id) {
                 return capture_->program(id);
             },

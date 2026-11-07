@@ -5139,8 +5139,8 @@ static void commitBuffer(RMCommandBuffer *cb);
 
 // Alignments Core Animation lays its memory out by (QuartzCore 21H461), answered for what the raw path takes as it is; m2v takes
 // any multiple of 16 (its own answers), so the m2v twins of the same memory are unchanged in what they hold:
-//  - its buffer pool's suballocations (CA::OGL::MetalBufferPool::get_buffer: max(this, the argument's)): a uniform buffer the
-//    raw path binds at its address (a constant buffer's is a multiple of 256 on GM20B; m2v's residual is not in the pack);
+//  - its buffer pool's suballocations (CA::OGL::MetalBufferPool::get_buffer: max(this, the argument's)): the A10X's 4, a
+//    uniform buffer the raw path binds at the multiple of 256 below it with m2v's residual in its push word (raw::PackEntry);
 //  (not iosurfaceReadOnlyTextureAlignmentBytes: QuartzCore makes it the render server's needed IOSurface row alignment,
 //  CADeviceSetMinimumAlignment, and hands it to every client, CA::Context::connect_remote; MetalContext::update_surface then
 //  refuses every surface whose rows miss it, "Row bytes (N) not 128 aligned", and the layer draws nothing (r7p5: 3347 refusals
@@ -5151,7 +5151,7 @@ static void commitBuffer(RMCommandBuffer *cb);
 //  - the rows of its CPU readbacks (CAMetalTextureGetBytesPerRow).
 - (NSUInteger)minConstantBufferAlignmentBytes
 {
-    return 256;
+    return 4;
 }
 
 - (NSUInteger)deviceLinearReadOnlyTextureAlignmentBytes
