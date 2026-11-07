@@ -891,7 +891,7 @@ OSDefineMetaClassAndStructors(SwitchBluetooth, IOService)
     // address and pairs nothing.
     void announceAddressToRails()
     {
-        IORegistryEntry *node = IORegistryEntry::fromPath("/arm-io/bluetooth", gIODTPlane);
+        const IORegistryEntry *node = IORegistryEntry::fromPath("/arm-io/bluetooth", gIODTPlane);
         const OSData *data = node ? OSDynamicCast(OSData, node->getProperty("local-mac-address")) : nullptr;
         if (data && data->getLength() == 6)
             switch_joycon_bluetooth_address(static_cast<const uint8_t *>(data->getBytesNoCopy()));
