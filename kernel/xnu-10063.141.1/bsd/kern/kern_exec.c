@@ -8251,6 +8251,31 @@ native_switch_als_cache(proc_t p, user_addr_t scratch, mount_t data_mount)
 	printf("SwitchRawBoot: ambient light sensor %s: MobileGestalt cache dropped (%d)\n", als ? "on" : "off", error);
 }
 
+/* timed keeps kern.monotonicclock with the UTC it last trusted (/var/db/timed/com.apple.timed.plist) and, while the clock
+ * reads above that, extrapolates from it. Kernels before SwitchMonotonicBase.h counted the clock from the SoC's power-up;
+ * this one counts seconds since 2000 by the MAX77620, so a pair cached by an older kernel would put the time decades
+ * ahead. It is dropped once, when the marker is missing; a boot of an older kernel in between needs the marker removed
+ * by hand. Failures are logged only; the next boot tries again. */
+static void
+native_switch_timed_cache(proc_t p, user_addr_t scratch, mount_t data_mount)
+{
+	static const char cache[] = "/private/var/db/timed/com.apple.timed.plist",
+	    marker[] = "/private/var/Switch/monotonic-clock-since-2000";
+	vnode_t vp = NULLVP;
+	if (!vnode_lookup(marker, 0, &vp, vfs_context_current())) {
+		vnode_put(vp);
+		return;
+	}
+	struct unlink_args request = {.path = scratch + 0x900};
+	int32_t result = 0;
+	int error = copyout(cache, request.path, sizeof(cache));
+	if (!error) error = native_switch_unlink(p, &request, &result);
+	if (error == ENOENT) error = 0;
+	if (!error) error = native_switch_mkdir(p, scratch, "/private/var/Switch", 0, 0755);
+	if (!error) error = native_switch_watchdog_file(p, scratch, marker, "", 0, data_mount, 0, 0, 0644);
+	printf("SwitchRawBoot: monotonic clock since 2000: timed's cache dropped (%d)\n", error);
+}
+
 extern const struct switch_ui_scale *switch_ui_scale(void);
 
 /* The UI scale (vm_unix.c, SwitchUIScale): MobileGestalt's main-screen-scale comes from its static screen info, which
@@ -8472,6 +8497,7 @@ native_switch_setup_state(proc_t p, user_addr_t scratch, mount_t data_mount)
 		native_switch_gamut_cache(p, scratch, data_mount);
 		native_switch_identity_cache(p, scratch, data_mount);
 		native_switch_als_cache(p, scratch, data_mount);
+		native_switch_timed_cache(p, scratch, data_mount);
 		native_switch_ui_scale_cache(p, scratch, data_mount);
 		native_switch_portrait_display(p, scratch, data_mount);
 		native_switch_system_app_migration(p, scratch, data_mount);

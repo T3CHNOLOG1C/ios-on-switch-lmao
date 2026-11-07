@@ -317,4 +317,29 @@ TEST(SwitchPrefsGuard, NoSetupSetsNeverDim)
     for (const char *key : kNeverDim)
         EXPECT_EQ(Count(record, key), 0u) << "the 12377 port record still sets " << key;
 }
+
+// timed's cache from a kernel whose monotonic clock counted from the SoC's power-up goes once, in both kernels
+// (drivers/SwitchPower/SwitchMonotonicBase.h), before timed reads it.
+TEST(SwitchPrefsGuard, TimedCacheDroppedOnceInBothKernels)
+{
+    using switch_ios::test::Body;
+    using switch_ios::test::Count;
+    using switch_ios::test::SourceText;
+    std::string first;
+    for (const char *path : kKernels) {
+        const std::string source = SourceText(path);
+        const std::string body =
+            Body(source, "native_switch_timed_cache(proc_t p, user_addr_t scratch, mount_t data_mount)");
+        ASSERT_FALSE(body.empty()) << path;
+        EXPECT_EQ(Count(body, "\"/private/var/db/timed/com.apple.timed.plist\""), 1u) << path;
+        EXPECT_EQ(Count(body, "native_switch_unlink(p, &request, &result)"), 1u) << path;
+        EXPECT_EQ(Count(Body(source, "native_switch_setup_state(proc_t p, user_addr_t scratch, mount_t data_mount)"),
+                        "native_switch_timed_cache(p, scratch, data_mount);"),
+                  1u)
+            << path;
+        if (first.empty())
+            first = body;
+        EXPECT_EQ(body, first) << path << ": the two kernels' drops differ";
+    }
+}
 }  // namespace

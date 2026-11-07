@@ -8,6 +8,7 @@
 #   switch_emc_governor_test         SwitchEMCGovernor.h: the EMC rates used, ACTMON's watermarks and the governor's moves
 #   switch_soctherm_window_test      SwitchSocThermWindow.h: SOC_THERM's one-degree LVL0 window and the groups' registers
 #   switch_thermal_shutdown_test     software shutdown below the hardware trip, its RTC record, the reset cause decoding
+#   switch_monotonic_base_test       SwitchMonotonicBase.h: kern.monotonicclock never reads below the previous boot's
 # The headers are C: each is compiled as C11 with -Wconversion -Wsign-conversion in a harness (its static inline
 # functions as exported ones) and driven by a GoogleTest test.
 #
@@ -96,5 +97,13 @@ host_test(
         "//drivers/SwitchPower:SwitchSocThermWindow.h",
         "//drivers/SwitchPower:SwitchThermalLimits.h",
         "//drivers/SwitchPower:SwitchThermalRecord.h",
+    ],
+)
+
+host_test(
+    name = "switch_monotonic_base_test",
+    srcs = [
+        "switch_monotonic_base_test.cpp",
+        "//drivers/SwitchPower:SwitchMonotonicBase.h",
     ],
 )
