@@ -36,6 +36,7 @@
 #include "AsyncPipelines.h"
 #include "GpuMemoryRelease.h"
 #include "SwitchFrameTimeline.h"
+#include "SwitchRefusal.h"
 // The two-plane render targets' load and store functions (TwoPlaneStandIn.metal).
 #include "TwoPlaneStandIn.h"
 
@@ -5996,9 +5997,9 @@ static void fillLimits(id)
     NmbBuffer *handle = nmb_buffer_new_no_copy(gDevice, pointer, length, options);
     if (!handle) {
         // Each refusal sends the caller to a CPU copy (QuartzCore's copy_image_to_texture uploads the image instead), so the
-        // first ones name the memory: where it sits in its page, and the VM region's protection, sharing and tag.
-        static std::atomic<int> told{0};
-        if (told.fetch_add(1) < 8) {
+        // line names the memory: where it sits in its page, and the VM region's protection, sharing and tag.
+        static constexpr uint64_t kRefusal = switch_refusal_key("metal", "no-copy-buffer");
+        if (switch_refusal_first(kRefusal)) {
             vm_address_t region = (vm_address_t)pointer;
             vm_size_t regionSize = 0;
             vm_region_extended_info_data_t info = {};
@@ -6006,10 +6007,11 @@ static void fillLimits(id)
             mach_port_t object = MACH_PORT_NULL;
             const kern_return_t kr = vm_region_64(mach_task_self(), &region, &regionSize, VM_REGION_EXTENDED_INFO,
                                                   (vm_region_info_t)&info, &count, &object);
-            NBLOG(@"native-metal: no-copy buffer refused (%lu bytes at page offset 0x%lx; region %d: prot %d share %d "
-                  @"tag %u): %@",
-                  (unsigned long)length, (unsigned long)((uintptr_t)pointer & (vm_page_size - 1)), kr, info.protection,
-                  info.share_mode, info.user_tag, lastError());
+            NSString *text = [NSString
+                stringWithFormat:@"%lu bytes at page offset 0x%lx (region %d: prot %d share %d tag %u): %@",
+                                 (unsigned long)length, (unsigned long)((uintptr_t)pointer & (vm_page_size - 1)), kr,
+                                 info.protection, info.share_mode, info.user_tag, lastError()];
+            switch_refusal_log("metal", "no-copy-buffer", text.UTF8String);
         }
         return nil;
     }

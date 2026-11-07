@@ -71,6 +71,7 @@ kernel_driver(
         "drivers/SwitchSuspend",
         "drivers/TegraDisplayFlip",
         "drivers/TegraI2C",
+        "kits/SwitchRefusal",
     ],
     late = ["TegraGM20BAccelerator.cpp"],
     object_names = "path",
