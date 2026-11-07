@@ -70,7 +70,7 @@ void perform(struct switch_pd_alt_out out)
         }
     }
     if (out.act == SWITCH_PD_ALT_COMMAND) {
-        const uint8_t command[2] = {(uint8_t)out.command, (uint8_t)(out.command >> 8)};
+        const uint8_t command[2] = {static_cast<uint8_t>(out.command), static_cast<uint8_t>(out.command >> 8)};
         const bool written =
             (out.message_len == 0 || tegra_i2c_write(kBus, kPD, OUTGOING_VDM, out.message, out.message_len) == 0) &&
             tegra_i2c_write(kBus, kPD, COMMAND, command, sizeof(command)) == 0;
@@ -113,7 +113,7 @@ void switch_pd_alt_alert(IOService *pd, IOWorkLoop *loop, bool (*at_rest_of)(con
     if (gAlt.step == SWITCH_PD_ALT_IDLE && sink_session && at_rest) {
         uint8_t raw[2] = {};
         (void)tegra_i2c_read(kBus, kPD, DP_STATUS, raw, sizeof(raw));
-        dp_status = (uint16_t)(raw[0] | (raw[1] << 8));
+        dp_status = static_cast<uint16_t>(raw[0] | (raw[1] << 8));
     }
     const struct switch_pd_alt_in in = {alert, status1, dp_status, sink_session, at_rest, dock_power};
     const enum switch_pd_alt_step before = gAlt.step;

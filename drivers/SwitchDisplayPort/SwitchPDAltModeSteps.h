@@ -9,6 +9,10 @@
 
 #include "SwitchPDAltMode.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 static inline unsigned switch_pd_alt_last_command(uint16_t status1)
 {
     return (status1 & SWITCH_PD_ALT_STATUS1_LASTCMD) >> 4;
@@ -357,5 +361,9 @@ static inline const char *switch_pd_alt_step_name(enum switch_pd_alt_step step)
         "failed"};
     return (unsigned)step < sizeof(names) / sizeof(names[0]) ? names[step] : "?";
 }
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif
