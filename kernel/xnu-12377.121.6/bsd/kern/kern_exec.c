@@ -9412,21 +9412,25 @@ native_switch_watchdog_policy(proc_t p, user_addr_t scratch)
 	 * _PanicOnCrash relaunch panicked. A crash of watchdogd now takes no panic (kern_exit.c). */
 #define NATIVE_SWITCH_POLICY_WATCHDOGD "<key>com.apple.watchdogd</key><true/>"
 #define NATIVE_SWITCH_POLICY_AUDIO "<key>com.apple.audiomxd</key><true/>"
+	/* maild and financed are not here, as on a Wi-Fi iPad with no account: without maild, Mail retries it about 460
+	 * times a second for minutes after every launch, and without financed FinanceKit traps destinationd at each boot.
+	 * FairPlay is out of scope (FairPlayIOKit is not prelinked), so fairplayd stays off with the FairPlay daemons that
+	 * start on their own: adid (CoreADI) and lskdd, whose daily XPC activity launches it, and it exits (92) before
+	 * completing the activity, so launchd respawned it once a second. */
 #define NATIVE_SWITCH_POLICY_TAIL "<key>com.apple.photoanalysisd</key><true/>" \
 	    "<key>com.apple.mediaanalysisd</key><true/>" \
 	    "<key>com.apple.mediastream.mstreamd</key><true/>" \
 	    "<key>com.apple.icloud.searchpartyd</key><true/>" \
 	    "<key>com.apple.findmy.findmybeaconingd</key><true/>" \
 	    "<key>com.apple.familycircled</key><true/>" \
-	    "<key>com.apple.financed</key><true/>" \
 	    "<key>com.apple.softwareupdateservicesd</key><true/>" \
 	    "<key>com.apple.ndoagent</key><true/>" \
 	    "<key>com.apple.biomesyncd</key><true/>" \
-	    "<key>com.apple.email.maild</key><true/>" \
 	    "<key>com.apple.amsengagementd</key><true/>" \
-	    "<key>com.apple.adid</key><true/>" \
 	    "<key>com.apple.eyereliefd</key><true/>" \
 	    "<key>com.apple.fairplayd.A2</key><true/>" \
+	    "<key>com.apple.adid</key><true/>" \
+	    "<key>com.apple.lskdd</key><true/>" \
 	    "<key>com.apple.passd</key><true/>" \
 	    "<key>com.apple.mobile.obliteration</key><true/>" \
 	    "<key>com.apple.coreduetd</key><true/>" \
