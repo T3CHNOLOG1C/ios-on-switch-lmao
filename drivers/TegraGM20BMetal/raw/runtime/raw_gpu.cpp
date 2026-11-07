@@ -2023,7 +2023,14 @@ void CommandBuffer::clean(const void *cpu, uint64_t bytes, bool invalidate)
 RenderEncoder *CommandBuffer::render(const PassDesc &pass)
 {
     RenderEncoder &e = render_;
+    // a pass's lists keep the last one's capacity: no allocation a steady frame
+    std::vector<std::pair<uint32_t *, uint32_t *>> bodies = std::move(e.bodies_);
+    std::vector<std::array<uint32_t, 4>> rects = std::move(e.rects_);
+    bodies.clear();
+    rects.clear();
     e = RenderEncoder();
+    e.bodies_ = std::move(bodies);
+    e.rects_ = std::move(rects);
     e.cb_ = this;
     e.dev_ = dev_;
     e.pass_ = pass;
