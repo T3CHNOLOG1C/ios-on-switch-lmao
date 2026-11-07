@@ -1970,6 +1970,7 @@ static inline void hit(RMCommandBuffer *cb, RMPred p, uint64_t a = 0, uint64_t b
 
 - (void)endEncoding
 {
+    SWITCH_API(ApiEncoder);
     if (_ended)
         return;
     _ended = true;
@@ -2079,6 +2080,7 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
                    baseVertex:(NSInteger)baseVertex
                  baseInstance:(NSUInteger)baseInstance
 {
+    SWITCH_API(ApiDraw);
     if (![(id)buffer isKindOfClass:[RMBuffer class]] || instances != 1 || baseVertex || baseInstance) {
         [_cb takeReason:WhyCall why:@"an indexed draw of several instances or a base vertex"];
         hit(_cb, PredCallIndexedForm, instances, uint64_t(uint32_t(baseVertex)) | uint64_t(baseInstance) << 32);
@@ -2111,6 +2113,7 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
             indexBufferOffset:(NSUInteger)offset
                 instanceCount:(NSUInteger)instances
 {
+    SWITCH_API(ApiDraw);
     [self drawIndexedPrimitives:type
                      indexCount:count
                       indexType:indexType
@@ -2127,6 +2130,7 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
                   indexBuffer:(id<MTLBuffer>)buffer
             indexBufferOffset:(NSUInteger)offset
 {
+    SWITCH_API(ApiDraw);
     [self drawIndexedPrimitives:type
                      indexCount:count
                       indexType:indexType
@@ -2139,6 +2143,7 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
 
 - (void)setRenderPipelineState:(id<MTLRenderPipelineState>)state
 {
+    SWITCH_API(ApiState);
     RMPipeline *p = (RMPipeline *)state;
     if (![(id)p isKindOfClass:[RMPipeline class]]) {
         [_cb takeReason:WhyState why:@"a render state not made by this device"];
@@ -2194,6 +2199,7 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
 
 - (void)bytes:(int)stage data:(const void *)bytes length:(NSUInteger)length index:(NSUInteger)index
 {
+    SWITCH_API(ApiBind);
     if (stage >= 1 && stage <= 2 && index < 31) {
         _bufVa[stage][index] = 0;  // its own 256-byte-aligned upload chunk
         _buf[stage][index] = nil;
@@ -2218,6 +2224,7 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
 
 - (void)buffer:(int)stage object:(id<MTLBuffer>)b offset:(NSUInteger)offset index:(NSUInteger)index
 {
+    SWITCH_API(ApiBind);
     if (b && ![(id)b isKindOfClass:[RMBuffer class]]) {
         [_cb takeReason:WhyCall why:@"a buffer not made by this device"];
         hit(_cb, PredCallBufForeign, uint64_t(stage) << 8 | index, b.length);
@@ -2242,6 +2249,7 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
 
 - (void)bufferOffset:(int)stage offset:(NSUInteger)offset index:(NSUInteger)index
 {
+    SWITCH_API(ApiBind);
     if (index < 31 && _buf[stage][index])
         _bufVa[stage][index] = _buf[stage][index]->_raw.va + offset;
     setBinding(_cb, OpBufferOffset, stage, index, nil, offset);
@@ -2273,6 +2281,7 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
 
 - (void)texture:(int)stage object:(id<MTLTexture>)t index:(NSUInteger)index
 {
+    SWITCH_API(ApiBind);
     RMTexture *x = [(id)t isKindOfClass:[RMTexture class]] ? (RMTexture *)t : nil;
     if (t && (!x || !x->_rawOk || !x->_raw.tic)) {
         [_cb takeReason:WhyTexture why:@"a texture the raw path does not keep"];
@@ -2318,6 +2327,7 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
 
 - (void)sampler:(int)stage object:(id<MTLSamplerState>)s index:(NSUInteger)index
 {
+    SWITCH_API(ApiBind);
     if (s && ![(id)s isKindOfClass:[RMSampler class]]) {
         [_cb takeReason:WhyCall why:@"a sampler not made by this device"];
         hit(_cb, PredCallSamplerForeign, index);
@@ -2347,6 +2357,7 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
 
 - (void)setScissorRect:(MTLScissorRect)r
 {
+    SWITCH_API(ApiState);
     Cmd m = cmd(OpScissor);
     m.a = uint32_t(r.x);
     m.b = uint32_t(r.y);
@@ -2356,6 +2367,7 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
 
 - (void)setViewport:(MTLViewport)v
 {
+    SWITCH_API(ApiState);
     Cmd m = cmd(OpViewport);
     m.x = _cb->_extra.size();
     const double d[6] = {v.originX, v.originY, v.width, v.height, v.znear, v.zfar};
@@ -2483,6 +2495,7 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
          instanceCount:(NSUInteger)instances
           baseInstance:(NSUInteger)base
 {
+    SWITCH_API(ApiDraw);
     [self checkDraw:base];
     Cmd m = cmd(OpDraw, uint8_t(type));
     m.a = uint32_t(start);
@@ -2496,6 +2509,7 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
            vertexCount:(NSUInteger)count
          instanceCount:(NSUInteger)instances
 {
+    SWITCH_API(ApiDraw);
     [self drawPrimitives:type vertexStart:start vertexCount:count instanceCount:instances baseInstance:0];
 }
 
@@ -2982,6 +2996,7 @@ static bool rawDepthStencil(MTLRenderPassDescriptor *pass)
 
 - (id<MTLRenderCommandEncoder>)renderCommandEncoderWithDescriptor:(MTLRenderPassDescriptor *)d
 {
+    SWITCH_API(ApiEncoder);
     RMRenderEncoder *e = [RMRenderEncoder new];
     [self begin:e];
     MTLRenderPassDescriptor *pass = [d copy];
@@ -3228,7 +3243,8 @@ static bool rawDepthStencil(MTLRenderPassDescriptor *pass)
     switch_frame::committed(_frame, since,
                             {gSurfaceTextures.load(std::memory_order_relaxed),
                              k.importsMade.load(std::memory_order_relaxed),
-                             k.importHits.load(std::memory_order_relaxed), gTwinsMade.load(std::memory_order_relaxed)});
+                             k.importHits.load(std::memory_order_relaxed), gTwinsMade.load(std::memory_order_relaxed)},
+                            __builtin_frame_address(0));
 #endif
     if (_active)
         [(RMEncoder *)_active endEncoding];
@@ -3358,6 +3374,7 @@ static bool rawDepthStencil(MTLRenderPassDescriptor *pass)
 
 - (id<MTLCommandBuffer>)commandBuffer
 {
+    SWITCH_API(ApiObject);
     RMCommandBuffer *b = [RMCommandBuffer new];
     b->_device = _device;
     b->_queue = self;
@@ -3367,6 +3384,9 @@ static bool rawDepthStencil(MTLRenderPassDescriptor *pass)
     b->_tape.reserve(512);
     b->_owners.reserve(256);
     b->_bytes.reserve(16384);
+#if SWITCH_FRAME_TIMELINE
+    switch_frame::made(b->_frame);
+#endif
     return (id<MTLCommandBuffer>)b;
 }
 
@@ -4783,6 +4803,7 @@ static void commitBuffer(RMCommandBuffer *cb);
 
 - (id<MTLBuffer>)newBufferWithLength:(NSUInteger)n options:(MTLResourceOptions)o
 {
+    SWITCH_API(ApiObject);
     RMBuffer *b = [RMBuffer new];
     b->_device = self;
     b->_options = o;
@@ -4805,6 +4826,7 @@ static void commitBuffer(RMCommandBuffer *cb);
 
 - (id<MTLBuffer>)newBufferWithBytes:(const void *)p length:(NSUInteger)n options:(MTLResourceOptions)o
 {
+    SWITCH_API(ApiObject);
     id<MTLBuffer> b = [self newBufferWithLength:n options:o];
     if (b && p && n) {
         memcpy(((RMBuffer *)b)->_raw.cpu, p, n);  // the draws that read it clean the lines they read
@@ -4817,6 +4839,7 @@ static void commitBuffer(RMCommandBuffer *cb);
                                   options:(MTLResourceOptions)o
                               deallocator:(void (^)(void *, NSUInteger))deallocator
 {
+    SWITCH_API(ApiObject);
     RMBuffer *b = [RMBuffer new];
     b->_device = self;
     b->_options = o;
@@ -4943,6 +4966,7 @@ static const char *ycbcrPlan(MTLTextureDescriptor *d, IOSurfaceRef s, NSUInteger
 
 - (id<MTLTexture>)newTextureWithDescriptor:(MTLTextureDescriptor *)d iosurface:(IOSurfaceRef)s plane:(NSUInteger)plane
 {
+    SWITCH_API(ApiObject);
     if (!s)
         return nil;
 #if SWITCH_FRAME_TIMELINE
@@ -5023,6 +5047,7 @@ static const char *ycbcrPlan(MTLTextureDescriptor *d, IOSurfaceRef s, NSUInteger
 
 - (id<MTLSamplerState>)newSamplerStateWithDescriptor:(MTLSamplerDescriptor *)d
 {
+    SWITCH_API(ApiObject);
     raw::SamplerDesc s;
     s.minFilter = uint8_t(d.minFilter);
     s.magFilter = uint8_t(d.magFilter);
@@ -5167,6 +5192,7 @@ static id<MTLRenderPipelineState> pipelineTwin(MTLRenderPipelineDescriptor *d, M
 - (id<MTLRenderPipelineState>)newRenderPipelineStateWithDescriptor:(MTLRenderPipelineDescriptor *)d
                                                              error:(NSError **)error
 {
+    SWITCH_API(ApiObject);
     RMPipeline *p = [self pipelineFor:d twin:nil];
     p->_twin = pipelineTwin(d, MTLPipelineOptionNone, p->_raw, error);
     if (!p->_twin && !p->_raw)
@@ -5181,6 +5207,7 @@ static id<MTLRenderPipelineState> pipelineTwin(MTLRenderPipelineDescriptor *d, M
                                                         reflection:(MTLAutoreleasedRenderPipelineReflection *)reflection
                                                              error:(NSError **)error
 {
+    SWITCH_API(ApiObject);
     if (reflection) {
         id<MTLRenderPipelineState> twin = [gRM->fallback newRenderPipelineStateWithDescriptor:twinDescriptor(d)
                                                                                       options:o
