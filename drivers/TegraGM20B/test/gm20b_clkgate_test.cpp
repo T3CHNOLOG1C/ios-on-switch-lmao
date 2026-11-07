@@ -10,13 +10,13 @@
 #include <regex>
 #include <sstream>
 #include <string>
-#include <utility>
+#include <tuple>
 #include <vector>
 
 namespace
 {
 
-using Entries = std::vector<std::pair<uint32_t, uint32_t>>;
+using Entries = std::vector<std::tuple<uint32_t, uint32_t, uint32_t>>;
 
 std::string Text(const char *path)
 {
@@ -33,7 +33,8 @@ std::map<std::string, Entries> Reference()
 	std::map<std::string, Entries> lists;
 	const std::regex list(
 		R"(static const struct gating_desc gm20b_(\w+)\[\] = \{([^}]*(?:\}[^;][^}]*)*)\};)");
-	const std::regex entry(R"(^\s*\{\.addr = (0x[0-9a-fA-F]+)U, \.prod = (0x[0-9a-fA-F]+)U)");
+	const std::regex entry(
+		R"(^\s*\{\.addr = (0x[0-9a-fA-F]+)U, \.prod = (0x[0-9a-fA-F]+)U, \.disable = (0x[0-9a-fA-F]+)U)");
 	for (auto it = std::sregex_iterator(source.begin(), source.end(), list);
 	     it != std::sregex_iterator(); ++it) {
 		Entries entries;
@@ -42,7 +43,8 @@ std::map<std::string, Entries> Reference()
 			std::smatch m;
 			if (std::regex_search(line, m, entry))
 				entries.emplace_back(std::stoul(m[1].str(), nullptr, 16),
-						     std::stoul(m[2].str(), nullptr, 16));
+						     std::stoul(m[2].str(), nullptr, 16),
+						     std::stoul(m[3].str(), nullptr, 16));
 		}
 		lists[(*it)[1].str()] = entries;
 	}
@@ -66,7 +68,8 @@ TEST(Gm20bClkgate, TheWritesAreNvgpusProdListsInItsLoadOrder)
 		expected.insert(expected.end(), ref.begin(), ref.end());
 		for (unsigned j = 0; j < tgm_cg_lists[i].count; ++j)
 			written.emplace_back(tgm_cg_lists[i].regs[j].addr,
-					     tgm_cg_lists[i].regs[j].prod);
+					     tgm_cg_lists[i].regs[j].prod,
+					     tgm_cg_lists[i].regs[j].disable);
 		EXPECT_EQ(tgm_cg_lists[i].count, ref.size()) << order[i];
 	}
 	EXPECT_EQ(written, expected);
@@ -84,6 +87,12 @@ TEST(Gm20bClkgate, NvgpusDisabledEntryAndUnloadedListsStayOut)
 			EXPECT_NE(list.regs[j].addr, 0x00000a70u)
 				<< "blcg_pwr_csb is not loaded on GM20B";
 		}
+}
+
+TEST(Gm20bClkgate, ElcgRunAsNvgpuTurnsItOff)
+{
+	EXPECT_EQ(tgm_elcg_gate_ctrl_run(0x00004901u), 0x00004910u);
+	EXPECT_EQ(tgm_elcg_gate_ctrl_run(0xffffffffu), 0xffffffdcu);
 }
 
 TEST(Gm20bClkgate, ElcgAutoBehindNvgpusIdleFilter)

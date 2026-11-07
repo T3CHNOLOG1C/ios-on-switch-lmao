@@ -109,6 +109,27 @@ int tgm_stage(void)
 	return gpu.stage;
 }
 
+#if TGM_STATS
+/* Debug kernels: clock gating off (nvgpu's disable values, ELCG run) or on again, for a frame-time A/B within one boot;
+ * under gpu.lock, once the bring-up has reached M3. */
+int tgm_clkgate_switch(int on)
+{
+	int ret = 0;
+
+	mutex_lock(&gpu.lock);
+	if (gpu.stage < 3)
+		ret = -EBUSY;
+	else if (on)
+		tgm_clkgate_enable(gpu.device);
+	else
+		tgm_clkgate_disable(gpu.device);
+	mutex_unlock(&gpu.lock);
+	nvxnu_log("tegra-gm20b: clock gating %s (debug A/B)%s\n", on ? "on" : "off",
+		  ret ? ": not yet, the bring-up has not reached M3" : "");
+	return ret;
+}
+#endif
+
 /* Fence waits by channel (nouveau_fence_chan.waiting): a fence's nonstall interrupt wakes the waiters of the channels
  * whose fence moved, not every thread in a GPU wait. nvkm runs every channel's nonstall handler on each nonstall
  * interrupt, so one global wake per handler woke each waiter once per live channel per fence. Channels share the words

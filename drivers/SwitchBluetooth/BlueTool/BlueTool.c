@@ -118,6 +118,23 @@ static void watchColumnScan(const char *name, int blockHeightLog2)
 }
 #endif
 
+#if SWITCH_DEBUG
+// Debug builds: the GPU's clock gating off and on again for a frame-time A/B within one boot (drivers/TegraGM20B
+// debug.switch_gpu_clkgate), once per Darwin notification the Mac posts
+// (`idevicenotificationproxy -u <udid> post com.brunostjohn.switch.debug.gpu-clkgate-off` / `-on`).
+static void watchClkgate(const char *name, int on)
+{
+    int token;
+    notify_register_dispatch(name, &token, dispatch_get_main_queue(), ^(int t) {
+        (void)t;
+        int value = on;
+        const int error = sysctlbyname("debug.switch_gpu_clkgate", NULL, NULL, &value, sizeof(value)) ? errno : 0;
+        os_log(OS_LOG_DEFAULT, "BlueTool: %{public}s posted: GPU clock gating %{public}s, %{public}s", name,
+               on ? "on" : "off", error ? strerror(error) : "done");
+    });
+}
+#endif
+
 static void answer(xpc_connection_t peer, xpc_object_t message)
 {
     if (xpc_get_type(message) != XPC_TYPE_DICTIONARY)
@@ -158,6 +175,8 @@ int main(void)
     watchWatchdogBench();
     watchColumnScan("com.brunostjohn.switch.debug.column-scan", 4);
     watchColumnScan("com.brunostjohn.switch.debug.column-scan-nvdec", 1);
+    watchClkgate("com.brunostjohn.switch.debug.gpu-clkgate-off", 0);
+    watchClkgate("com.brunostjohn.switch.debug.gpu-clkgate-on", 1);
 #endif
     dispatch_main();
 }

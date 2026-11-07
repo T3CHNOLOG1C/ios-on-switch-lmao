@@ -299,6 +299,10 @@ int tgm_writer_fence_va(struct tgm_vm *vm, uint32_t uid, uint64_t *va);
 #else
 #define TGM_STATS 0
 #endif
+#if TGM_STATS
+/* Debug kernels: clock gating on (1) or off (0), for the A/B (TegraGM20B.cpp's debug.switch_gpu_clkgate). 0 or -EBUSY. */
+int tgm_clkgate_switch(int on);
+#endif
 /* The stats: one log line per 5 s of submissions (submits, fence latency, imports, pool, MC errors).
  * tgm_stats_import(+bytes, first page) for each host import made, (-bytes, first page) for each one released. */
 void tgm_stats_import(int64_t bytes, uint64_t pa);
