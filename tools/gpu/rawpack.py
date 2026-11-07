@@ -39,7 +39,8 @@ PROBE_LABEL = ' label=com.apple.coreanimation.'
 LIBRARY = re.compile(r' lib=\S+')
 # What the link reads of a bucket's probe runs (mkpack.py), and of its barrier/.
 KEPT = ('programs.bin', 'probe256.out', 'probe256.log', 'probe16.out', 'probe16.log', 'probe4096.out', 'probe4096.log')
-# The frameworks other than QuartzCore whose states the pack holds: their lines keep lib=, which the probe loads them from
+# The frameworks other than QuartzCore whose states the pack holds: their lines keep lib=, which the probe loads
+# them from
 FRAMEWORKS = ('RenderBox',)
 
 

@@ -263,6 +263,17 @@ def load_init(log_path: str) -> tuple[list[tuple[int, int, int]], dict[int, dict
     return init, post
 
 
+def record_reason(records: list[dict]) -> str | None:
+    if not records:
+        return 'no record'
+    r = records[0]
+    if any(v[2] != 'known' for v in r['prog'].values()):
+        return 'unknown program'
+    if sorted(r['prog']) != [1, 5]:
+        return f'stages {sorted(r["prog"])}'
+    return None
+
+
 def skip_reason(p: dict) -> str | None:
     if 'failed' in p:
         return f'm2v failed its draw: {p["failed"]}'
@@ -270,14 +281,7 @@ def skip_reason(p: dict) -> str | None:
         return f'{p["draws"]} draws'
     if p['dispatches']:
         return f'{p["dispatches"]} dispatches'
-    if not p['records']:
-        return 'no record'
-    r = p['records'][0]
-    if any(v[2] != 'known' for v in r['prog'].values()):
-        return 'unknown program'
-    if sorted(r['prog']) != [1, 5]:
-        return f'stages {sorted(r["prog"])}'
-    return None
+    return record_reason(p['records'])
 
 
 def split_probes(probes: list[dict]) -> tuple[list[dict], list[tuple[dict, str]]]:

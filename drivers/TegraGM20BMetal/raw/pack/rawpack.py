@@ -88,13 +88,17 @@ def option(name: str, required: bool = True) -> str | None:
 
 
 BUILT = ('probe', 'libmock_iokit.dylib', 'ycbcr.metallib')
-# Another framework's states (their lines keep lib=, tools/gpu/rawpack.py): the probe loads that library from the crawl's root
+# Another framework's states (their lines keep lib=, tools/gpu/rawpack.py): the probe loads that library from the
+# crawl's root
 FRAMEWORK = re.compile(r' lib=/System/Library/(?:Private)?Frameworks/\w+\.framework/default\.metallib ')
 QC_PATH = 'System/Library/Frameworks/QuartzCore.framework/default.metallib'
 
 
 def library_root(qc: Path) -> str:
-    """Give the crawl root that QuartzCore's default.metallib lies in (the root other frameworks' libraries are under)."""
+    """Give the crawl root that QuartzCore's default.metallib lies in.
+
+    Other frameworks' libraries are under the same root.
+    """
     return str(qc)[: -len(QC_PATH) - 1] if str(qc).endswith(QC_PATH) else ''
 
 
