@@ -2038,13 +2038,19 @@ static bool asyncSkips(MTLRenderPassDescriptor *d)
     return nbasync::onscreen(surface, t ? (uint64_t)t.width * t.height : 0);
 }
 
-// Whether newRenderPipelineStateWithDescriptor: makes `d` on a worker (the policy's, AsyncPipelines.h), unless archives must be
-// read (FailOnBinaryArchiveMiss refuses at the call) or a function is another device's (refused at the call).
+static bool archivesOurs(NSArray *list);
+
+// Whether newRenderPipelineStateWithDescriptor: makes `d` on a worker (the policy's, AsyncPipelines.h), unless its archives
+// must answer at the call (FailOnBinaryArchiveMiss refuses there) or a function or archive is another device's (refused at
+// the call). Listed archives alone are read on the worker, where a miss compiles as any state does: a framework's metallib
+// (QuartzCore's, CoreUI's) loads as an archive holding nothing for this device.
 static bool asyncRenderPipelineWanted(MTLRenderPipelineDescriptor *d, MTLPipelineOption options)
 {
-    if (tAsyncWorker || !nbasync::policy().on || !d || d.binaryArchives.count)
+    if (tAsyncWorker || !nbasync::policy().on || !d)
         return false;
     if (options & MTLPipelineOptionFailOnBinaryArchiveMiss)
+        return false;
+    if (d.binaryArchives.count && !archivesOurs(d.binaryArchives))
         return false;
     if (![(id)d.vertexFunction isKindOfClass:[NBFunction class]])
         return false;
@@ -5297,6 +5303,14 @@ static bool computeDescriptor(MTLComputePipelineDescriptor *d, NmbComputePipelin
 }
 
 @end
+
+static bool archivesOurs(NSArray *list)
+{
+    for (id archive in list)
+        if (![archive isKindOfClass:[NBBinaryArchive class]])
+            return false;
+    return true;
+}
 
 static bool pipelineArchives(NSArray *list, std::vector<NmbBinaryArchive *> &archives, NSError **error)
 {
