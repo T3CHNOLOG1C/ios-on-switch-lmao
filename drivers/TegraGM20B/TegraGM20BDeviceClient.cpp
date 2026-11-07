@@ -41,7 +41,10 @@ extern "C" bool tegra_gm20b_display_deadline(uint64_t *nextVblank, uint64_t *int
 		before = __atomic_load_n(&gDeadline.sequence, __ATOMIC_ACQUIRE);
 		next = gDeadline.nextVblank;
 		step = gDeadline.interval;
-		after = __atomic_load_n(&gDeadline.sequence, __ATOMIC_ACQUIRE);
+		// An acquire load orders only what follows it: without the fence the two reads above may complete after the
+		// second sequence load and pass the check torn.
+		__atomic_thread_fence(__ATOMIC_ACQUIRE);
+		after = __atomic_load_n(&gDeadline.sequence, __ATOMIC_RELAXED);
 	} while ((before & 1) || before != after);
 	if (!before)
 		return false;
