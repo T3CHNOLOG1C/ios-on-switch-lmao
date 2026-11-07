@@ -15,6 +15,7 @@
 #include <vm/pmap.h>
 #include <vm/vm_page.h>
 
+#include <switch/boot_layout.h>
 #include <switch/ram.h>
 
 extern vm_offset_t first_avail;
@@ -119,7 +120,7 @@ void switch_ram_init(struct boot_args *args)
     unsigned int bytes = 0;
     if (SecureDTLookupEntry(NULL, "/chosen", &entry) != kSuccess ||
         SecureDTGetProperty(entry, "switch-ram-ledger", &wire, &bytes) != kSuccess) {
-        if (args->physBase == 0x80000000ULL && args->memSize == 0x100000000ULL) {
+        if (args->physBase == SWITCH_BOOT_PHYS_BASE && args->memSize == SWITCH_BOOT_MEM_SIZE) {
             panic("native full RAM requires live ownership ledger");
         }
         return;
@@ -132,10 +133,11 @@ void switch_ram_init(struct boot_args *args)
         !switch_ledger.count || switch_ledger.count > SWITCH_RAM_RANGES ||
         switch_ledger.banks[0].start != SWITCH_RAM_BANK0_START || switch_ledger.banks[0].end != SWITCH_RAM_BANK0_END ||
         switch_ledger.banks[1].start != SWITCH_RAM_BANK1_START || switch_ledger.banks[1].end != SWITCH_RAM_BANK1_END ||
-        args->physBase != 0x80000000ULL || args->memSize != 0x100000000ULL || args->virtBase != 0xffffffefd2200000ULL) {
+        args->physBase != SWITCH_BOOT_PHYS_BASE || args->memSize != SWITCH_BOOT_MEM_SIZE ||
+        args->virtBase != SWITCH_BOOT_VIRT_BASE) {
         panic("native RAM ledger/bank geometry");
     }
-    switch_kernel_start = 0xb207c000;
+    switch_kernel_start = SWITCH_KERNEL_PHYS_BASE;
     switch_bootstrap_start = args->topOfKernelData;
     /* Temporary assembly blocks end at the old envelope rounded down. */
     switch_bootstrap_limit = 0xe2000000ULL;

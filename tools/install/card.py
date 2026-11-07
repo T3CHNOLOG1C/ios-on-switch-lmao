@@ -18,6 +18,7 @@ to the paths the caller names.
 import contextlib
 import hashlib
 import os
+import re
 import shutil
 import tempfile
 from collections.abc import Callable, Iterator
@@ -34,6 +35,9 @@ ICON = 'bootloader/res/icon_ios_hue.bmp'
 FORMER_ICONS = ('bootloader/res/icon_ios.bmp',)
 # The user's own files in the entry's folder, which no package ships: the loader reads bootargs.txt at boot.
 USER_FILES = ('bootargs.txt',)
+# The installer's image parts beside the boot files (folder.py writes them, install-ios.bin reads them): never a
+# boot package's, so a deploy keeps them.
+INSTALL_PART = re.compile(r'([A-Z0-9]+)\.SII\.([0-9]{3})')
 HASH_CHUNK = 8 << 20
 MOUNT_TRIES = 3
 
@@ -362,6 +366,7 @@ def _remove_stale(fat_root: Path, wanted: dict[str, Path], dry_run: bool) -> lis
                 and path.is_file()
                 and not path.name.startswith('._')
                 and path.name not in USER_FILES
+                and not INSTALL_PART.fullmatch(path.name)
             ):
                 removed.append(relative)
                 if not dry_run:

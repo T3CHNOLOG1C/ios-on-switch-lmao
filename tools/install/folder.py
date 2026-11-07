@@ -13,7 +13,6 @@ or written.
 
 import json
 import os
-import re
 import shutil
 from pathlib import Path
 
@@ -24,7 +23,7 @@ LEGACY = cards.BOOT_ENTRY + '/install'
 PAYLOAD = 'bootloader/payloads/install-ios.bin'
 MARKER = '.switch-ios-image'
 SHARED = (cards.INI, cards.ICON, PAYLOAD)
-PART = re.compile(r'([A-Z0-9]+)\.SII\.([0-9]{3})')
+PART = cards.INSTALL_PART
 COPY_CHUNK = 64 << 20
 
 

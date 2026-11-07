@@ -276,6 +276,20 @@ def kinds_where(field, value):
     """
     return sorted([kind for kind, ipsw in IPSWS.items() if ipsw.get(field) == value])
 
+def kernel_virt_base(kind):
+    """The kind's pinned kernel_virt_base (pins.bzl's derived): the prelinked kernel's lowest segment, as hex.
+
+    Args:
+        kind: an IPSW kind.
+
+    Returns:
+        The base, a "0x..." string.
+    """
+    base = IPSWS[kind].get("derived", {}).get("kernel_virt_base")
+    if not base:
+        fail("IPSW kind {} has no derived kernel_virt_base in ipsw/pins.bzl".format(kind))
+    return base
+
 def config_setting_any(name, settings, visibility):
     """A config_setting matching any of settings.
 

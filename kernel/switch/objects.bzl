@@ -8,6 +8,17 @@ XNU_12377_121_6), so code that differs between versions is `#if XNU_<version>` h
 
 SWITCH_ROOT = "kernel/switch"
 
+# The IPSW kind's kernel window base (<switch/boot_layout.h>), for the objects that include that header only: the
+# xnu_objects rules expand {kernel_virt_base} from ipsw/pins.bzl's derived kernel_virt_base.
+_KERNEL_VIRT_BASE = "-DSWITCH_KERNEL_VIRT_BASE={kernel_virt_base}"
+
+# component: {Apple object: our copts}, after the object's own.
+SWITCH_APPLE_COPTS = {
+    "osfmk": {
+        "osfmk/arm64/start.s": [_KERNEL_VIRT_BASE],
+    },
+}
+
 # component: [(the Apple object it links after, the source below kernel/switch (or //<path> for one elsewhere in the
 # repository), its own copts[, the XNU versions that build it, when not all])]
 SWITCH_OBJECTS = {
@@ -28,7 +39,7 @@ SWITCH_OBJECTS = {
     "osfmk": [
         ("osfmk/arm/model_dep.c", "diag/threads.c", []),
         ("osfmk/ipc/ipc_kmsg.c", "diag/frames.c", []),
-        ("osfmk/arm64/arm_vm_init.c", "ram/ram.c", []),
+        ("osfmk/arm64/arm_vm_init.c", "ram/ram.c", [_KERNEL_VIRT_BASE]),
         ("osfmk/arm64/cpu.c", "idle/idle.c", []),
         ("osfmk/kern/timer_call.c", "sched/stats.c", []),
         ("osfmk/kern/timer_call.c", "sched/render.c", []),
@@ -69,10 +80,12 @@ def switch_objects(component, objects):
     return out
 
 def switch_copts(component, copts):
-    """A component's per-object copts with its kernel/switch sources' own."""
+    """A component's per-object copts with its kernel/switch sources' own and SWITCH_APPLE_COPTS."""
     out = dict(copts)
     for _, src, flags in _entries(component):
         out["switch:" + src] = flags
+    for obj, flags in SWITCH_APPLE_COPTS.get(component, {}).items():
+        out[obj] = out.get(obj, []) + flags
     return out
 
 def with_kprof(component, copts):
