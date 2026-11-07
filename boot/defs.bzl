@@ -111,7 +111,7 @@ def _boot_package_impl(ctx):
         return ctx.actions.declare_file(name + "_work/" + path)
 
     smp = ctx.attr._smp[BuildSettingInfo].value
-    profile = ctx.attr._profile[BuildSettingInfo].value
+    profile = "release" if ctx.attr.prebuilt else ctx.attr._profile[BuildSettingInfo].value
     release = profile == "release"
 
     # --- boot-args, overlay plan, ADT ------------------------------------------------------------------------------
@@ -211,9 +211,9 @@ def _boot_package_impl(ctx):
         lz4 = ctx.actions.declare_directory(name + "_work/window/lz4/" + _two_digits(i))
         ctx.actions.run_shell(
             command = _COMPRESS_SHARD,
-            arguments = [ctx.file._lz4.path, shard.path, lz4.path],
+            arguments = [ctx.file.lz4.path, shard.path, lz4.path],
             inputs = [shard],
-            tools = [ctx.file._lz4],
+            tools = [ctx.file.lz4],
             outputs = [lz4],
             env = {"LC_ALL": "C", "PATH": "/usr/bin:/bin"},
             mnemonic = "KernelCompress",
@@ -378,6 +378,16 @@ boot_package = rule(
         "loader_hdrs": attr.label_list(allow_files = True),
         "loader_include_markers": attr.label_list(allow_files = True, doc = "one file per -I directory, in order"),
         "linker_script": attr.label(mandatory = True, allow_single_file = True),
+        "prebuilt": attr.bool(
+            doc = "the kernel and overlay are the GitHub release's (--//install:prebuilt=release), which are release " +
+                  "builds: the package is composed as release whatever //bazel:profile is",
+        ),
+        "lz4": attr.label(
+            default = "//tools:lz4",
+            cfg = "exec",
+            allow_single_file = True,
+            doc = "the kernel window's compressor (lz4 -12, one action per shard): //tools:lz4 or the release's build of it",
+        ),
         "pretranslated": attr.label(
             default = "//ipsw:pretranslated",
             providers = [PretranslatedPinsInfo],
@@ -397,9 +407,7 @@ boot_package = rule(
         "_loader_link": _tool("//tools/package:loader_link"),
         "_boot_script": _tool("//tools/package:boot_script"),
         "_bl33": _tool("//tools/package:bl33"),
-        # The kernel window's compressor (lz4 -12, one action per shard), built from pinned source; LLVM 23.1.4's
-        # linker and binutils.
-        "_lz4": attr.label(default = "//tools:lz4", cfg = "exec", allow_single_file = True),
+        # LLVM 23.1.4's linker and binutils.
         "_ld_lld": attr.label(default = "@llvm//:bin/ld.lld", cfg = "exec", allow_single_file = True),
         "_objcopy": attr.label(default = "@llvm//:bin/llvm-objcopy", cfg = "exec", allow_single_file = True),
         "_readelf": attr.label(default = "@llvm//:bin/llvm-readelf", cfg = "exec", allow_single_file = True),
