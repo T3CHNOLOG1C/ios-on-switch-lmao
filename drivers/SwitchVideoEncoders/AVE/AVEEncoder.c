@@ -65,7 +65,7 @@ typedef struct {
     H264EncLayout layout;
     H264EncHandles handles;
     uint8_t *inputVA, *bitstreamVA, *auxVA;
-    uint32_t buffers[5];
+    uint32_t buffers[sizeof(H264EncHandles) / sizeof(uint32_t)];  // one per handle
     unsigned bufferCount;
     CMVideoFormatDescriptionRef format;
     uint8_t *avcc;  // AVCC scratch for one picture
