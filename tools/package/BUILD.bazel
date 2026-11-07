@@ -131,6 +131,13 @@ py_binary(
 py_test(
     name = "native_profile_test",
     srcs = ["native_profile_test.py"],
+    data = [
+        "//ipsw:pins.bzl",
+        "//kernel/switch:include/switch/boot_layout.h",
+        "//kernel/switch:ram/ram.c",
+        "//kernel/xnu-10063.141.1/osfmk:arm64/start.s",
+        "//kernel/xnu-12377.121.6/osfmk:arm64/start.s",
+    ],
     deps = [
         ":kernel_window",
         ":loader_abi",

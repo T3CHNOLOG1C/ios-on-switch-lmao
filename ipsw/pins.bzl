@@ -13,7 +13,10 @@ which pins one kind's members and keeps the rest. Per kind:
             default.metallib, the OS volume's or the SystemOS cryptex's grafted over it: the shader seed's gate,
             //gpu/seed:seed) and, for an arm64e IPSW, pretranslated: {file: sha256} of ipsw/pretranslated/<kind>/, the
             trust modules and dyld cache list of //translate/arm64e/pretranslate's run over the decrypted images
-            (//ipsw:pretranslated)
+            (//ipsw:pretranslated), and kernel_virt_base, the prelinked kernel's lowest segment (its kexts sit below
+            XNU's own __TEXT): the loader's layout refuses an image that differs (tools/package/build_native_loader.py)
+            and the kernel derives the virtBase it expects from it (kernel/switch/include/switch/boot_layout.h).
+            21H461's was measured on the device
 An Apple Encrypted Archive member (iOS 26 and later) also has aea_key, the key /usr/bin/aea decrypts it with, which
 `pin` unwraps from the archive's auth data. An empty kind is a declared slot: //ipsw:kind accepts it, no repository is
 made for it, and anything that reads an IPSW fails at analysis until it is pinned.
@@ -26,6 +29,7 @@ IPSWS = {
     "21H461": {
         "build": "21H461",
         "derived": {
+            "kernel_virt_base": "0xfffffff00427c000",
             "kernelcache_sha256": "f18b4df865405f2a287b84977d7aca745e056d656d9fc9df1662970ce2969de7",
             "quartzcore_metallib_sha256": "606f913adf520420f9b4bb666efb782a68c830f082f1e559e17b20d0d13adbc9",
         },
@@ -129,6 +133,7 @@ IPSWS = {
     "24B119": {
         "build": "24B119",
         "derived": {
+            "kernel_virt_base": "0xfffffff00307c000",
             "kernelcache_sha256": "250337d45598da0e5cc578413704981368afe92f84b3450dc956e21da1b21bd4",
             "pretranslated": {
                 "a64x-cache-pretranslated.bin": "c84bbd25c9091285d857c33d8cdbf50164d9e620c1e444dbbae1b1eb8bae556b",
