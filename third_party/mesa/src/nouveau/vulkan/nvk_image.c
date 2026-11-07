@@ -614,10 +614,18 @@ nvk_GetPhysicalDeviceImageFormatProperties2(
 
       case VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT:
          /* Host memory holds only images whose layout the client knows:
-          * plain linear ones, at the offset the client binds them.
+          * plain linear ones, at the offset the client binds them, and on a
+          * Tegra SoC optimal ones too. There every image lies in system
+          * memory as NIL lays it out, uncompressed, whatever memory it is
+          * bound to, so a client that writes NIL's layout (the GM20B's
+          * block-linear IOSurfaces, TegraGM20BLayout.h) gets an image of
+          * those texels.
           */
          if (!pdev->nvkmd->kmd_info.has_host_import ||
-             pImageFormatInfo->tiling != VK_IMAGE_TILING_LINEAR)
+             (pImageFormatInfo->tiling != VK_IMAGE_TILING_LINEAR &&
+              !(pImageFormatInfo->tiling == VK_IMAGE_TILING_OPTIMAL &&
+                pdev->info.type == NV_DEVICE_TYPE_SOC &&
+                !pdev->nvkmd->kmd_info.has_compression)))
             return VK_ERROR_FORMAT_NOT_SUPPORTED;
 
          ext_mem_props = &nvk_host_ptr_mem_props;
