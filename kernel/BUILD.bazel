@@ -265,7 +265,7 @@ tool_output(
         "@corecrypto//:all",
     ],
     outs = [
-        "build/corecrypto-2023/libcorecrypto_kernel_noasm-namespaced.a",
+        "build/corecrypto-2023/libcorecrypto_kernel-namespaced.a",
         "build/corecrypto-2023/namespace.h",
     ],
     args = [
