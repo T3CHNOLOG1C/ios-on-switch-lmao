@@ -580,7 +580,6 @@ class SwitchBluetooth : public IOService {
     uint8_t lastCredits = 1;     // the controller's Num_HCI_Command_Packets in its last completion (work loop)
     uint8_t answers[4][8] = {};  // Command Complete events made here, not yet passed on (cmdLock)
     uint32_t answerHead = 0, answerTail = 0;
-    bool advFixLogged = false;
     // bluetoothd's LE filtering in the controller's APCF filters (SwitchBluetoothLeFilter.h), client thread; leApcf
     // from the last bring-up's capability probe, until a refused APCF command turns it off for the boot.
     switch_le_filter leFilter = {};
@@ -1765,7 +1764,7 @@ bool SwitchBluetooth::clientRoom(size_t need)
 //   ~140 times a second: 23,608 of those and 2,951 refusals in 21 s, the SwitchBluetooth thread at the top of kprof.
 //   So on a controller older than 5.0 (HCI version from Read Local Version), the interval of 0xFD4A and of LE Set
 //   Advertising Parameters (0x2006) for those two types is raised to the floor (fixAdvertising): the fastest this
-//   controller can advertise them at all, one line the first time and a count in the stats.
+//   controller can advertise them at all, one SwitchRefusal line and a count in the stats.
 // - Scanning. bluetoothd filters adverts in the controller with two Broadcom LE meta (0xFCE9) features together: the
 //   packet content filter (sub-operations 5 feature selection and 7 service UUID, status 0 here) holding the
 //   service UUIDs some sessions scan for, and Apple's matching rules (0x32/0x33/0x1E/0x35: Unknown HCI Command here,
@@ -2242,12 +2241,11 @@ bool SwitchBluetooth::fixAdvertising(uint16_t opcode, uint8_t *params, uint8_t l
     interval[1] = (uint8_t)(kAdvIntervalMinNonConnectable >> 8);
     interval[2] = (uint8_t)newMax;
     interval[3] = (uint8_t)(newMax >> 8);
-    if (!__atomic_exchange_n(&advFixLogged, true, __ATOMIC_RELAXED)) {
-        IOLog("SwitchBluetooth: %s advertising interval %u-%u (%u ms) raised to %u-%u (%#06x): this controller (HCI "
-              "version %u, older than 5.0) refuses it below 100 ms\n",
-              type == 3 ? "non-connectable" : "scannable", min, max, min * 5 / 8, kAdvIntervalMinNonConnectable, newMax,
-              opcode, version);
-    }
+    switch_refusal("bluetooth", "adv-interval",
+                   "%s advertising interval %u-%u (%u ms) raised to %u-%u (%#06x): this controller (HCI version %u, "
+                   "older than 5.0) refuses it below 100 ms",
+                   type == 3 ? "non-connectable" : "scannable", min, max, min * 5 / 8, kAdvIntervalMinNonConnectable,
+                   newMax, opcode, version);
     return true;
 }
 
