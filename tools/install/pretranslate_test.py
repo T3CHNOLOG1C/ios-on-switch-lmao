@@ -1,12 +1,11 @@
-"""Pretranslate's drivers run in the order the dyld cache needs, with the other roles' cdhashes.
+"""iOS 27's deltas as Bazel leaves them.
 
-They leave the boot package's files behind when their deltas go.
+What the boot package keeps of them, and the System files placed on Data from them without consuming them.
 """
 
 import hashlib
 import json
 import stat
-import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -14,33 +13,23 @@ from unittest import mock
 
 from tools.install import host, overlay_index, pretranslate
 
-FAKE_DRIVER = """#!{python}
-import argparse, hashlib, json, sys
-from pathlib import Path
-ap = argparse.ArgumentParser()
-for name in ('--role', '--tool', '--volume', '--out'):
-    ap.add_argument(name, required=True)
-ap.add_argument('--apple-trustcache', action='append', default=[])
-ap.add_argument('--cdhash-pairs', action='append', default=[])
-ap.add_argument('--memo')
-ap.add_argument('--progress', action='store_true')
-a = ap.parse_args()
-if a.progress:
-    print('progress 1/1 files', flush=True)
-out = Path(a.out)
-(out / 'files').mkdir(parents=True, exist_ok=True)
-(out / 'files' / 'tool').write_bytes(b'arm64')
-entry = dict(path='/usr/bin/tool', file='files/tool', sha256_in=hashlib.sha256(b'arm64e').hexdigest(),
-             sha256_out=hashlib.sha256(b'arm64').hexdigest(), cdhash=['00' * 20])
-(out / (a.role + '.manifest.json')).write_text(json.dumps(dict(role=a.role, translator='t', files=[entry])))
-(out / (a.role + '.trustcache')).write_bytes(b'trust ' + a.role.encode())
-(out / (a.role + '.cdhash-pairs')).write_text(a.role + ' old new\\n')
-if a.role == 'system_cryptex':
-    (out / 'a64x-cache-pretranslated.bin').write_bytes(b'cache')
-with open(sys.argv[0] + '.calls', 'a') as calls:
-    calls.write(json.dumps(dict(role=a.role, pairs=a.cdhash_pairs, trust=a.apple_trustcache, volume=a.volume,
-                                memo=a.memo)) + '\\n')
-"""
+
+def fake_delta(out: Path, role: str) -> None:
+    """Write what translate_tree writes for one role: one translated file, its manifest, trust module and pairs."""
+    (out / 'files').mkdir(parents=True, exist_ok=True)
+    (out / 'files' / 'tool').write_bytes(b'arm64')
+    entry = {
+        'path': '/usr/bin/tool',
+        'file': 'files/tool',
+        'sha256_in': hashlib.sha256(b'arm64e').hexdigest(),
+        'sha256_out': hashlib.sha256(b'arm64').hexdigest(),
+        'cdhash': ['00' * 20],
+    }
+    (out / f'{role}.manifest.json').write_text(json.dumps({'role': role, 'translator': 't', 'files': [entry]}))
+    (out / f'{role}.trustcache').write_bytes(b'trust ' + role.encode())
+    (out / f'{role}.cdhash-pairs').write_text(role + ' old new\n')
+    if role == 'system_cryptex':
+        (out / 'a64x-cache-pretranslated.bin').write_bytes(b'cache')
 
 
 class Quiet:
@@ -51,71 +40,35 @@ class Quiet:
         pass
 
 
-class RolesTest(unittest.TestCase):
-    def setUp(self):
+class DeltasTest(unittest.TestCase):
+    def setUp(self) -> None:
         self.dir = Path(tempfile.mkdtemp())
-        self.driver = self.dir / 'translate_tree'
-        self.driver.write_text(FAKE_DRIVER.format(python=sys.executable))
-        self.driver.chmod(self.driver.stat().st_mode | stat.S_IXUSR)
-        spec = {'driver': str(self.driver), 'tool': '/bin/echo', 'trustcaches': ['/apple.im4p']}
-        self.roles = pretranslate.Roles(dict.fromkeys(pretranslate.ORDER, spec), self.dir / 'scratch', Quiet())
-
-    def calls(self):
-        return [json.loads(line) for line in Path(str(self.driver) + '.calls').read_text().splitlines()]
-
-    def test_system_cryptex_takes_the_other_roles_pairs(self):
+        dirs = {}
         for role in pretranslate.ORDER:
-            entries = self.roles.run(role, self.dir / role)
-            self.assertEqual(entries[0]['sha256_out'], hashlib.sha256(b'arm64').hexdigest())
-            self.roles.done(role)
-        calls = {c['role']: c for c in self.calls()}
-        self.assertEqual(calls['os']['pairs'], [])
-        self.assertEqual(calls['app_cryptex']['pairs'], [])
-        kept = self.dir / 'scratch/pretranslated'
-        self.assertEqual(calls['system_cryptex']['pairs'],
-                         [str(kept / 'os.cdhash-pairs'), str(kept / 'app_cryptex.cdhash-pairs')])  # fmt: skip
-        self.assertEqual(calls['os']['trust'], ['/apple.im4p'])
+            dirs[role] = self.dir / 'bazel-out' / ('delta_' + role)
+            fake_delta(dirs[role], role)
+        self.roles = pretranslate.Deltas(dirs, self.dir / 'scratch/pretranslated', Quiet())
 
-    def test_kept_files_outlive_the_deltas(self):
-        for role in pretranslate.ORDER:
-            self.roles.run(role, self.dir / role)
-            self.roles.done(role)
-            self.assertFalse(self.roles.out(role).exists())
+    def test_kept_files_are_the_boot_package_pins(self) -> None:
+        self.roles.keep()
         names = [p.name for p in self.roles.artifacts()]
         for role in pretranslate.ORDER:
             self.assertIn(role + '.trustcache', names)
+            self.assertIn(role + '.cdhash-pairs', names)
         self.assertIn('a64x-cache-pretranslated.bin', names)
+        self.assertNotIn('os.manifest.json', names)
 
-    def test_no_memo_unless_asked(self):
-        self.roles.run('os', self.dir / 'os')
-        self.assertIsNone(self.calls()[0]['memo'])
-
-    def test_a_memo_root_gives_each_role_its_memo_and_outlives_done(self):
-        memo = self.dir / 'scratch/translations'
-        spec = {'driver': str(self.driver), 'tool': '/bin/echo', 'trustcaches': []}
-        roles = pretranslate.Roles(dict.fromkeys(pretranslate.ORDER, spec), self.dir / 'scratch', Quiet(), memo)
-        for role in pretranslate.ORDER:
-            roles.run(role, self.dir / role)
-            memo.mkdir(parents=True, exist_ok=True)
-            roles.done(role)
-        self.assertEqual([c['memo'] for c in self.calls()], [str(memo / r) for r in pretranslate.ORDER])
-        self.assertTrue(memo.is_dir())
-
-    def test_system_cryptex_refuses_to_go_first(self):
-        with self.assertRaisesRegex(host.HostError, 'after os, app_cryptex'):
-            self.roles.run('system_cryptex', self.dir / 'system')
-
-    def test_a_failing_driver_stops(self):
-        self.driver.write_text('#!/bin/sh\necho broken >&2\nexit 3\n')
-        with self.assertRaisesRegex(host.HostError, 'translating os failed: broken'):
-            self.roles.run('os', self.dir / 'os')
+    def test_entries_point_into_the_delta(self) -> None:
+        entries = self.roles.entries('os')
+        self.assertEqual(entries[0]['sha256_out'], hashlib.sha256(b'arm64').hexdigest())
+        self.assertEqual(entries[0]['source'].read_bytes(), b'arm64')
 
     def test_system_files_go_to_the_data_overlay_with_their_modes(self):
         system = self.dir / 'system'
         (system / 'usr/libexec').mkdir(parents=True)
         (system / 'usr/libexec/tool').write_bytes(b'arm64e')
         (system / 'usr/libexec/tool').chmod(0o750)
-        entries = self.roles.run('os', system)
+        entries = self.roles.entries('os')
         data = self.dir / 'data'
         data.mkdir()
         entries[0]['path'] = '/usr/libexec/tool'
@@ -124,7 +77,7 @@ class RolesTest(unittest.TestCase):
         self.assertEqual(placed.read_bytes(), b'arm64')
         self.assertEqual(placed.stat().st_mode & 0o7777, 0o750)
         self.assertEqual((system / 'usr/libexec/tool').read_bytes(), b'arm64e')
-        self.assertFalse(entries[0]['source'].exists())
+        self.assertTrue(entries[0]['source'].exists(), "Bazel's delta is only read")
         self.assertEqual(manifest['files'][0]['mode'], '0750')
         self.assertEqual(json.loads((data / pretranslate.OVERLAY_MANIFEST).read_text()), manifest)
         files, directories = overlay_index.decode((data / pretranslate.OVERLAY_INDEX).read_bytes())
@@ -138,7 +91,7 @@ class RolesTest(unittest.TestCase):
         system = self.dir / 'system'
         (system / 'usr/libexec').mkdir(parents=True)
         (system / 'usr/libexec/tool').write_bytes(b'arm64e')
-        entries = self.roles.run('os', system)
+        entries = self.roles.entries('os')
         entries[0]['path'] = '/usr/libexec/tool'
         data = self.dir / 'data'
         data.mkdir()
@@ -167,7 +120,7 @@ class RolesTest(unittest.TestCase):
         (system / 'usr/sbin').mkdir(parents=True)
         (system / 'usr/libexec/tool').write_bytes(b'arm64e')
         (system / 'usr/sbin/tool').hardlink_to(system / 'usr/libexec/tool')
-        entries = self.roles.run('os', system)
+        entries = self.roles.entries('os')
         twin = entries[0]['source'].with_name('twin')
         twin.write_bytes(entries[0]['source'].read_bytes())
         entries = [dict(entries[0], path='/usr/libexec/tool'), dict(entries[0], path='/usr/sbin/tool', source=twin)]
@@ -176,7 +129,7 @@ class RolesTest(unittest.TestCase):
         manifest = self.roles.overlay_system(data, system, entries, owners=False)
         tree = data / pretranslate.OVERLAY
         self.assertFalse((tree / 'usr/sbin').exists())
-        self.assertFalse(twin.exists())
+        self.assertTrue(twin.exists())
         self.assertEqual([f['path'] for f in manifest['files']], ['/usr/libexec/tool', '/usr/sbin/tool'])
         files, _ = overlay_index.decode((data / pretranslate.OVERLAY_INDEX).read_bytes())
         ids = ((system / 'usr/libexec/tool').stat().st_ino, (tree / 'usr/libexec/tool').stat().st_ino)
@@ -187,7 +140,7 @@ class RolesTest(unittest.TestCase):
         (system / 'usr/bin').mkdir(parents=True)
         (system / 'usr/bin/real').write_bytes(b'arm64e')
         (system / 'usr/bin/tool').symlink_to('real')
-        entries = self.roles.run('os', system)
+        entries = self.roles.entries('os')
         with self.assertRaisesRegex(host.HostError, 'not a regular file'):
             self.roles.overlay_system(self.dir / 'data', system, entries, owners=False)
 
@@ -195,14 +148,13 @@ class RolesTest(unittest.TestCase):
         system = self.dir / 'system'
         (system / 'usr/bin').mkdir(parents=True)
         (system / 'usr/bin/tool').write_bytes(b'arm64e')
-        entries = self.roles.run('os', system)
+        entries = self.roles.entries('os')
         entries[0]['source'].write_bytes(b'corrupt')
         with self.assertRaisesRegex(host.HostError, 'does not match'):
             self.roles.overlay_system(self.dir / 'data', system, entries, owners=False)
 
-    def test_pins_refuse_another_translation(self):
-        for role in pretranslate.ORDER:
-            self.roles.run(role, self.dir / role)
+    def test_pins_refuse_another_translation(self) -> None:
+        self.roles.keep()
         digest = hashlib.sha256(b'trust os').hexdigest()
         self.roles.check_pins({'os.trustcache': digest})
         with self.assertRaisesRegex(host.HostError, 'os.trustcache'):
@@ -212,7 +164,7 @@ class RolesTest(unittest.TestCase):
 
     def test_unknown_roles_refused(self):
         with self.assertRaises(host.HostError):
-            pretranslate.Roles({'kernel': {}}, self.dir, Quiet())
+            pretranslate.Deltas({'kernel': self.dir}, self.dir, Quiet())
 
 
 if __name__ == '__main__':

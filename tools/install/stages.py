@@ -5,17 +5,14 @@ next run; populate works on an APFS clone of it, which pack empties into NAME.SI
 """
 
 import argparse
-import contextlib
 import json
 import os
 import shutil
-from collections.abc import Iterator
 from pathlib import Path
 
 from tools.install import (
     card as cards,
     compose,
-    cryptex,
     delta,
     folder,
     host,
@@ -41,8 +38,8 @@ SMALLEST_PARTITION = 16 << 30
 # iOS 17's image was composed before per-kind scratch, and the morning command names no --scratch, so 21H461 keeps the
 # unsuffixed directory. Every other build gets its own, so one kind's image never recomposes over another's.
 LEGACY_BUILD = '21H461'
-# Kept translations (pretranslate's memo): --warm-translations fills it as the user, --translation-memo reads it.
-TRANSLATIONS = 'translations'
+# What the boot package pins of iOS 27's translation, kept from the deltas for //:image's folder (out/pretranslated).
+KEPT = 'pretranslated'
 
 
 def default_scratch(build: str) -> Path:
@@ -80,7 +77,8 @@ def boot_files(package: str | Path) -> list[tuple[str, Path]]:
 def key_inputs(args: argparse.Namespace, spec: dict, pins: dict) -> dict:
     """Return what each stage is made from, as plain values for keys.compute."""
     members = pins['members']
-    roles = getattr(args, 'pretranslate', None) or {}
+    deltas = {r: getattr(args, 'delta_' + r, None) for r in pretranslate.ORDER}
+    translated = [getattr(args, f'translated_{m}', None) for m in ('system_cryptex', 'app_cryptex')]
     return {
         'compose': {'os': members['os']['content_sha256'], 'volumes': spec['volumes'], 'nominal': NOMINAL},
         'populate': {
@@ -90,7 +88,9 @@ def key_inputs(args: argparse.Namespace, spec: dict, pins: dict) -> dict:
             'gpu': keys.tree_digest(args.gpu_base),
             'seed': keys.tree_digest(getattr(args, 'shader_seed', None)),
             'pretranslated_pins': keys.tree_digest(getattr(args, 'pretranslated_pins', None)),
-            'pretranslate': {r: [keys.tree_digest(v['driver']), keys.tree_digest(v['tool'])] for r, v in roles.items()},
+            # A delta is its manifest (each replacement's sha256), a translated cryptex its sha256 (both Bazel's).
+            'deltas': {r: keys.file_digest(Path(d) / f'{r}.manifest.json') for r, d in deltas.items() if d},
+            'translated': [Path(t + '.sha256').read_text().strip() if t else None for t in translated],
         },
     }
 
@@ -132,108 +132,37 @@ class Stages:
         offset, _ = compose.compose(self.composed, self.args.os_dmg, NOMINAL, self.spec, self.log)
         self.save(compose=key, populate=None, offset=offset)
 
-    def roles(self) -> pretranslate.Roles | None:
-        """IOS 27's pretranslate drivers by role (pretranslate.py), or None for an IPSW that needs none."""
-        given = getattr(self.args, 'pretranslate', None)
-        memo = self.scratch / TRANSLATIONS if getattr(self.args, 'translation_memo', False) else None
-        return pretranslate.Roles(given, self.scratch, self.log, memo) if given else None
+    def deltas(self) -> pretranslate.Deltas | None:
+        """IOS 27's deltas by role (Bazel's, install/translated.bzl), or None for an IPSW that needs none."""
+        dirs = {r: getattr(self.args, 'delta_' + r, None) for r in pretranslate.ORDER}
+        dirs = {r: d for r, d in dirs.items() if d}
+        return pretranslate.Deltas(dirs, self.scratch / KEPT, self.log) if dirs else None
 
-    def warm_translations(self) -> None:
-        """Translate every role from the decrypted members, mounted read-only as the calling user, into the memo.
-
-        The members hold the same files populate later mounts, so its run with --translation-memo only copies them.
-        """
-        given = getattr(self.args, 'pretranslate', None)
-        if not given:
-            raise host.HostError('this IPSW kind has no pretranslate roles to warm')
-        roles = pretranslate.Roles(given, self.scratch, self.log, self.scratch / TRANSLATIONS)
-        members = {
-            'os': self.args.os_dmg,
-            'app_cryptex': self.args.app_cryptex,
-            'system_cryptex': self.args.system_cryptex,
-        }
-        for role in pretranslate.ORDER:
-            if role in roles:
-                with self._member_volume(role, members[role]) as root:
-                    roles.run(role, root)
-                roles.done(role)
-
-    @contextlib.contextmanager
-    def _member_volume(self, role: str, image: str) -> Iterator[Path]:
-        if role == 'os':
-            whole, store = compose._attach_os(image, self.log)
-            try:
-                container = host.container_on(store[len('/dev/') :]) or {}
-                uuid = self.spec['volumes']['system']['uuid'].upper()
-                volume = next(
-                    v['DeviceIdentifier'] for v in container.get('Volumes', []) if v['APFSVolumeUUID'].upper() == uuid
-                )
-                with cards.mounted(volume, self.log, read_only=True) as root:
-                    yield root
-            finally:
-                host.run('hdiutil', 'detach', whole, log=self.log, check=False)
-        else:
-            volume, whole = cryptex._attach(Path(image), self.log, writable=False)
-            try:
-                with cards.mounted(volume, self.log, read_only=True) as root:
-                    yield root
-            finally:
-                host.run('hdiutil', 'detach', whole, log=self.log, check=False)
-
-    def cryptexes(self, roles: pretranslate.Roles | None) -> tuple[dict[str, str | Path], dict[str, str]]:
-        """Return the cryptex images to stage, and their sha256 where translated (the pins describe the IPSW's).
-
-        The App cryptex goes before the SystemOS one, whose dyld cache takes the other volumes' cdhashes.
-        """
+    def cryptexes(self) -> tuple[dict[str, str | Path], dict[str, str]]:
+        """Return the cryptex images to stage, and the sha256 of those Bazel translated (pins describe the IPSW's)."""
         sources = {'system_cryptex': self.args.system_cryptex, 'app_cryptex': self.args.app_cryptex}
         expected = {}
-        for member in ('app_cryptex', 'system_cryptex'):
-            if roles and member in roles:
-                sources[member] = cryptex.rebuild(
-                    sources[member], lambda root, m=member: roles.run(m, root), self.scratch, self.log, member
-                )
-                roles.done(member)
-                with progress.step(f'{member}: hashing the sealed image', os.path.getsize(sources[member])):
-                    expected[member] = cards.sha256_file(sources[member], progress.advance)
+        for member in sources:
+            translated = getattr(self.args, 'translated_' + member, None)
+            if translated:
+                sources[member] = translated
+                expected[member] = Path(translated + '.sha256').read_text().strip()
         return sources, expected
 
-    def check_pins(self, roles: pretranslate.Roles) -> None:
+    def check_pins(self, deltas: pretranslate.Deltas) -> None:
         pins = getattr(self.args, 'pretranslated_pins', None)
         if pins:
-            roles.check_pins(json.loads(Path(pins).read_text()))
+            deltas.check_pins(json.loads(Path(pins).read_text()))
         else:
             self.log('pretranslate: no pins given; the trust modules are not checked against the boot package')
 
-    def check_translate_space(self, roles: pretranslate.Roles | None) -> None:
-        """Check for the space translating iOS 27 needs in the scratch directory.
-
-        The SystemOS cryptex's clone takes its translated files, and the rebuilt image is staged into Preboot.
-        """
-        if not roles or 'system_cryptex' not in roles:
-            return
-        want = 2 * os.path.getsize(self.args.system_cryptex) + (1 << 30)
-        free = free_bytes(self.scratch)
-        if free < want + FLOOR:
-            raise host.HostError(
-                f'translating iOS 27 needs about {want >> 30} GiB free in {self.scratch} besides the '
-                f'{FLOOR >> 30} GiB kept free; {free >> 30} GiB is'
-            )
-
-    def stale_cryptexes(self) -> list[Path]:
-        """Return a previous populate's rebuilt cryptex images, which cryptex.rebuild makes afresh."""
-        sources = [
-            Path(getattr(self.args, m)) for m in ('system_cryptex', 'app_cryptex') if getattr(self.args, m, None)
-        ]
-        rebuilt = [self.scratch / s.name for s in sources]
-        return [r for r, s in zip(rebuilt, sources, strict=True) if r.exists() and not r.samefile(s)]
-
     def populate(self, key: str) -> None:
         self.populated.unlink(missing_ok=True)
-        for image in self.stale_cryptexes():
-            image.unlink()
         host.run('cp', '-c', str(self.composed), str(self.populated), log=self.log)
-        roles = self.roles()
-        self.check_translate_space(roles)
+        deltas = self.deltas()
+        if deltas:
+            deltas.keep()
+            self.check_pins(deltas)
         disk = compose.attach_raw(self.populated, self.log)
         try:
             container = host.container_on(disk + 's1')
@@ -246,17 +175,14 @@ class Stages:
                 cards.mounted(dev['data'], self.log, owners=True) as data,
                 cards.mounted(dev['preboot'], self.log, owners=True) as preboot,
             ):
-                system_entries = roles.run('os', system) if roles and 'os' in roles else None
-                sources, expected = self.cryptexes(roles)
-                if roles:
-                    self.check_pins(roles)
+                sources, expected = self.cryptexes()
                 populate.seed_data(system, data, True, self.log, reseed=True)
-                if system_entries is not None:
+                if deltas and 'os' in deltas:
+                    system_entries = deltas.entries('os')
                     below_var = delta.entries_under(system_entries, '/private/var')
                     delta.apply(data, below_var, self.log, 'Data')
                     rest = [e for e in system_entries if not e['path'].startswith('/private/var/')]
-                    roles.overlay_system(data, system, rest, True)
-                    roles.done('os')
+                    deltas.overlay_system(data, system, rest, True)
                 images = populate.cryptex_images(self.spec, self.pins, sources, expected)
                 populate.stage_cryptexes(preboot, self.spec, images, True, self.log)
                 cards.sync_overlay(data, self.args.boot_package, self.log)

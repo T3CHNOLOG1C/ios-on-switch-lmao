@@ -1,121 +1,179 @@
-"""A cryptex image with a pretranslated delta applied and sealed again, for Preboot (iOS 27).
+"""A cryptex with its pretranslated delta in place, sealed, for Preboot (iOS 27), made as the user.
 
-The decrypted cryptex is a raw read/write image of one APFS volume (UDRW, no partition map). APFS checks every block
-of a cryptex against its seal, so after the delta the volume is sealed again with macOS's own cryptex sealer.
+The decrypted cryptex is a raw image of one APFS volume (UDRW, no partition map) that APFS checks block by block
+against its seal. Apple's sealed volume cannot be sealed again (apfs_prepare_cryptex fails on it untouched), so the
+translated cryptex is a fresh volume of the source's name, written once: every source file the delta leaves alone is
+copied with ditto (compression kept), each translated file goes straight to its path in place of the original, the
+source's owners, modes and flags are given back offline (owners.py), and macOS's own sealer seals it. Nothing is
+rewritten, so no freed blocks leave holes, and the volume is sized from what its files take: the cryptex is about the
+size of its files, and room.fit() cuts what is left when macOS still takes the result.
 """
 
+import ctypes
 import os
-import re
 import shutil
-from collections.abc import Callable
+import tempfile
+from collections.abc import Iterator
+from dataclasses import dataclass
 from pathlib import Path
 
-from tools.install import card as cards, delta, host, progress
+from tools.install import apfs_tree, card as cards, compose, delta, disks, host, owners, progress, room
 
 SEALER = '/System/Library/Filesystems/apfs.fs/Contents/Resources/apfs_prepare_cryptex'
-APFS_VOLUME = '41504653-0000-11AA-AA11-00306543ECAC'
-# Room beyond the source's size and the replacements' blocks: the metadata their new extents take, and the seal
-SLACK = 64 << 20
+# The sealer writes every node of the tree again, hashed, before the old ones are freed, and adds file-info records
+# beside the files' extents: room for two trees.
+SEAL_TREE_COPIES = 2
+XATTR_NOFOLLOW = 0x1
+LIBC = ctypes.CDLL(None, use_errno=True)
 
 
-def _attach(image: Path, log: host.Log, writable: bool = True) -> tuple[str, str]:
-    mode = '-readwrite' if writable else '-readonly'
-    out = host.plist('hdiutil', 'attach', '-plist', mode, '-nomount', '-noverify', '-noautofsck', str(image), log=log)
-    entities = out['system-entities']
-    volumes = [e['dev-entry'][len('/dev/') :] for e in entities if e.get('content-hint', '').upper() == APFS_VOLUME]
-    disks = [e['dev-entry'] for e in entities if re.fullmatch(r'/dev/disk\d+', e.get('dev-entry', ''))]
-    if len(volumes) != 1:
-        for d in disks:
-            host.run('hdiutil', 'detach', d, log=log, check=False)
-        raise host.HostError(f'{image}: expected one APFS volume, got {entities}')
-    return volumes[0], disks[0]
+def _xattrs(path: Path) -> list[str]:
+    """Return the extended attributes listxattr shows (a compressed file's decmpfs and resource fork stay hidden)."""
+    size = LIBC.listxattr(os.fsencode(path), None, 0, XATTR_NOFOLLOW)
+    if size <= 0:
+        return []
+    names = ctypes.create_string_buffer(size)
+    size = LIBC.listxattr(os.fsencode(path), names, size, XATTR_NOFOLLOW)
+    return [n.decode() for n in names.raw[:size].split(b'\0') if n]
 
 
-def _blank(image: Path, size: int, name: str, log: host.Log) -> None:
-    """Make `image` a raw image of `size` bytes holding one empty case-sensitive APFS volume, as a cryptex is."""
-    with open(image, 'wb') as f:
-        f.truncate(size)
-    out = host.plist(
-        'hdiutil',
-        'attach',
-        '-plist',
-        '-imagekey',
-        'diskimage-class=CRawDiskImage',
-        '-nomount',
-        '-noverify',
-        '-noautofsck',
-        str(image),
-        log=log,
-    )
-    whole = out['system-entities'][0]['dev-entry']
+class Plan:
+    """The source's files, which of them the delta replaces, and the room the new volume needs."""
+
+    def __init__(self, source: Path, entries: list[dict]) -> None:
+        self.paths = owners.walk(source)
+        inode_of = {path: info.st_ino for path, info in self.paths}
+        replacements: dict[int, dict] = {}
+        for e in entries:
+            ino = inode_of.get(source / e['path'].lstrip('/'))
+            if ino is None:
+                raise delta.DeltaError(f'{e["path"]} is not in the source')
+            first = replacements.setdefault(ino, e)
+            if first['sha256_out'] != e['sha256_out']:
+                raise delta.DeltaError(f'{first["path"]} and {e["path"]} are one file translated two ways')
+        self.replacements = replacements
+        self.replaced = [(path, info) for path, info in self.paths if info.st_ino in replacements]
+        for path, _ in self.replaced:
+            if _xattrs(path):
+                raise delta.DeltaError(f'{path} has extended attributes the translated file would not carry')
+        originals = {info.st_ino: info.st_blocks * 512 for _, info in self.replaced}
+        added = sum(-(-os.path.getsize(e['source']) // room.BLOCK) * room.BLOCK for e in replacements.values())
+        self.bytes = room.used_bytes(source) - sum(originals.values()) + added
+
+    def kept(self, source: Path) -> Iterator[str]:
+        """Yield every source path the delta leaves alone as `lsbom -s` lists it ('.', './usr/...')."""
+        for path, info in self.paths:
+            if info.st_ino not in self.replacements:
+                relative = path.relative_to(source).as_posix()
+                if '\n' in relative:
+                    raise delta.DeltaError(f'{relative!r}: a path with a newline cannot go in a bill of materials')
+                yield '.' if relative == '.' else './' + relative
+
+
+def _copy_kept(plan: Plan, source: Path, target: Path, log: host.Log, what: str) -> None:
+    with tempfile.TemporaryDirectory(prefix='switch-bom-') as work:
+        listing, bom = Path(work) / 'kept.txt', Path(work) / 'kept.bom'
+        listing.write_text(''.join(line + '\n' for line in plan.kept(source)))
+        host.run('mkbom', '-s', '-i', listing, bom, log=log)
+        start, whole = room.used_bytes(target), room.used_bytes(source)
+        with progress.step(f'{what}: copying the cryptex', whole, probe=lambda: room.used_bytes(target) - start):
+            host.run('ditto', '-bom', bom, '--preserveHFSCompression', source, target, log=log)
+
+
+def _place(plan: Plan, source: Path, target: Path, what: str) -> None:
+    """Write each translated file once at its first path, link its other paths, with the original's times."""
+    placed: dict[int, Path] = {}
+    total = sum(os.path.getsize(e['source']) for e in plan.replacements.values())
+    with progress.step(f'{what}: writing the translated files', 2 * total):
+        for path, info in plan.replaced:
+            at = target / path.relative_to(source)
+            at.unlink(missing_ok=True)
+            if info.st_ino in placed:
+                os.link(placed[info.st_ino], at)
+                continue
+            e = plan.replacements[info.st_ino]
+            shutil.copyfile(e['source'], at)
+            progress.advance(os.path.getsize(at))
+            if cards.sha256_file(at, progress.advance) != e['sha256_out']:
+                raise delta.DeltaError(f'{e["path"]} does not hold the translated bytes after the write')
+            os.utime(at, ns=(info.st_atime_ns, info.st_mtime_ns), follow_symlinks=False)
+            placed[info.st_ino] = at
+
+
+def _fill(source: str, entries: list[dict], image: Path, log: host.Log, what: str) -> dict[int, owners.Owner]:
+    """Make `image` a volume holding the translated files; return their owners by inode."""
+    journal = owners.Journal()
+    with disks.attached(Path(source), log, writable=False) as src_image:
+        if len(src_image.volumes) != 1:
+            raise host.HostError(f'{source}: expected one APFS volume, got {src_image.volumes}')
+        volume = src_image.volumes[0]
+        name = (host.disk_info(volume) or {}).get('VolumeName') or what
+        with disks.mounted(volume, log, owners=True, read_only=True) as src:
+            journal.copy(src)
+        with disks.mounted(volume, log, owners=False, read_only=True) as src:
+            plan = Plan(src, entries)
+            free = disks.free_bytes(image.parent)
+            if free < plan.bytes:
+                have, needed = progress.size(free), progress.size(plan.bytes)
+                raise host.HostError(f'{what}: {image.parent} has {have} free; the cryptex takes {needed}')
+            room.blank(image, plan.bytes, name, log)
+
+            def write(root: Path) -> dict[int, owners.Owner]:
+                _copy_kept(plan, src, root, log, what)
+                _place(plan, src, root, what)
+                return journal.resolve(root)
+
+            return room.with_room(image, lambda _root: plan.bytes, write, log, what)
+
+
+def _tree_bytes(image: Path) -> int:
+    fd = os.open(image, os.O_RDONLY)
     try:
-        host.run('newfs_apfs', '-e', '-v', name, whole, log=log)
+        return apfs_tree.Volume(fd).tree_bytes()
     finally:
-        host.run('hdiutil', 'detach', whole, log=log, check=False)
+        os.close(fd)
 
 
-def _grow(image: Path, by: int, log: host.Log) -> None:
-    """Make `image` `by` bytes (whole MiB) larger and its APFS container fill it."""
-    with open(image, 'r+b') as f:
-        f.truncate(image.stat().st_size + _mib(by))
-    _, whole = _attach(image, log)
+def _check_sealed(image: Path, by_inode: dict[int, owners.Owner], log: host.Log, what: str) -> None:
+    with disks.attached(image, log, writable=False, raw=True) as target:
+        if len(target.volumes) != 1:
+            raise host.HostError(f'{what}: macOS attaches no volume from {image.name}')
+        volume = target.volumes[0]
+        compose.fsck(volume.rpartition('s')[0], what, log)
+        if not (host.disk_info(volume) or {}).get('Sealed'):
+            raise host.HostError(f'{what}: the volume is not sealed')
+        with disks.mounted(volume, log, owners=True, read_only=True) as root:
+            owners.check(root, by_inode)
+
+
+@dataclass(frozen=True)
+class Job:
+    """`source`'s volume with `entries` in place, to be written to `out` (fitted with `apfs_tool`), named `what`."""
+
+    source: str
+    entries: list[dict]
+    out: Path
+    apfs_tool: str
+    what: str
+
+
+def rebuild(job: Job, log: host.Log) -> None:
+    """Write the job's cryptex: its owners given back, sealed, fitted, made beside `out` and renamed into place."""
+    source, entries, out, what = job.source, job.entries, job.out, job.what
+    image = disks.partial(out)
+    image.unlink(missing_ok=True)
+    by_inode = _fill(source, entries, image, log, what)
+    fd = os.open(image, os.O_RDWR)
     try:
-        host.watch('diskutil', 'apfs', 'resizeContainer', whole, '0', parse=progress.phases, log=log)
+        log(f'{what}: {owners.apply(fd, 0, None, by_inode)} inodes given their owners')
     finally:
-        host.run('hdiutil', 'detach', whole, log=log, check=False)
-
-
-def _copy(source: Path, target: Path, log: host.Log, what: str) -> None:
-    """Ditto the mounted source volume into the new one, its progress the new volume's growth against the source's."""
-    start, whole = shutil.disk_usage(target).used, shutil.disk_usage(source).used
-    with progress.step(f'{what}: copying the cryptex', whole, probe=lambda: shutil.disk_usage(target).used - start):
-        host.run('ditto', '--preserveHFSCompression', str(source), str(target), log=log)
-
-
-def _mib(size: int) -> int:
-    return -(-size // (1 << 20)) * (1 << 20)
-
-
-def rebuild(source: str, translate: Callable[[Path], list[dict]], work_dir: Path, log: host.Log, what: str) -> Path:
-    """Copy `source`'s volume into a new one in `work_dir` with its delta applied, and seal the new one.
-
-    `translate(mount point)` makes the delta from the mounted source and returns its entries. A sealed volume cannot be
-    sealed again (apfs_prepare_cryptex fails on Apple's own, untouched), so the copy is a fresh volume, grown until
-    every translated file fits whole beside the files it replaces: they are stored uncompressed.
-    """
-    image = Path(work_dir) / Path(source).name
-    if image.exists():
-        image.unlink()
-    src_volume, src_whole = _attach(Path(source), log, writable=False)
-    try:
-        name = (host.disk_info(src_volume) or {}).get('VolumeName') or what
-        with cards.mounted(src_volume, log, read_only=True) as src:
-            entries = translate(src)
-            _blank(image, _mib(os.path.getsize(source) + SLACK), name, log)
-            volume, whole = _attach(image, log)
-            try:
-                with cards.mounted(volume, log, owners=True) as root:
-                    _copy(src, root, log, what)
-            finally:
-                host.run('hdiutil', 'detach', whole, log=log, check=False)
-    finally:
-        host.run('hdiutil', 'detach', src_whole, log=log, check=False)
-    while True:
-        volume, whole = _attach(image, log)
-        try:
-            with cards.mounted(volume, log, owners=True) as root:
-                short = delta.written_bytes(root, entries) + SLACK - shutil.disk_usage(root).free
-                if short <= 0:
-                    delta.apply(root, entries, log, what, consume=True)
-            # The sealer mounts the container itself: it takes the volume's node, attached and not mounted.
-            if short <= 0:
-                with progress.step(f'{what}: sealing', 100, progress.PERCENT):
-                    host.watch(SEALER, '-p', '/dev/' + volume, parse=progress.sealer, log=log)
-                break
-        finally:
-            host.run('hdiutil', 'detach', whole, log=log, check=False)
-        log(f'{what}: growing the volume by {_mib(short + SLACK) >> 20} MiB for its translated files')
-        with progress.step(f'{what}: growing the volume', unit=None):
-            _grow(image, short + SLACK, log)
-    log(f'{what}: sealed again as {image}')
-    return image
+        os.close(fd)
+    tree = _tree_bytes(image)
+    room.make_room(image, lambda _root: SEAL_TREE_COPIES * tree, log, what)
+    # The sealer mounts the container itself: it takes the volume's node, attached and not mounted.
+    with disks.attached(image, log, raw=True) as target, progress.step(f'{what}: sealing', 100, progress.PERCENT):
+        host.watch(SEALER, '-p', '/dev/' + target.volumes[0], parse=progress.sealer, log=log)
+    _check_sealed(image, by_inode, log, what)
+    fitted = room.fit(image, job.apfs_tool, lambda clone: _check_sealed(clone, by_inode, log, what), log, what)
+    os.replace(image, out)
+    log(f'{what}: translated, sealed and fitted to {progress.size(fitted)} as {out}')

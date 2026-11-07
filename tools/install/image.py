@@ -57,6 +57,11 @@ INPUTS = (
     'install_payload',
     'pretranslated_pins',
     'apfs_tool',
+    'delta_os',
+    'delta_app_cryptex',
+    'delta_system_cryptex',
+    'translated_app_cryptex',
+    'translated_system_cryptex',
 )
 HEADROOM = 4 << 30
 DATA_SEED_BYTES = 1 << 30
@@ -72,17 +77,9 @@ def resolve_inputs(args: argparse.Namespace) -> None:
     def where(value: str) -> str:
         return os.path.abspath(locate.Rlocation(value) or value if locate and not os.path.isabs(value) else value)
 
-    args.pretranslate = {}
     for listing in args.inputs or []:
         for name, value in json.loads(Path(where(listing)).read_text()).items():
-            if name == 'pretranslate':
-                for role, spec in value.items():
-                    args.pretranslate[role] = {
-                        'driver': where(spec['driver']),
-                        'tool': where(spec['tool']),
-                        'trustcaches': [where(f) for f in spec['trustcaches']],
-                    }
-            elif not getattr(args, name, None):
+            if not getattr(args, name, None):
                 setattr(args, name, value)
     for name in INPUTS:
         value = getattr(args, name, None)
@@ -152,13 +149,6 @@ class Builder:
         self.spec = stages.ipsw_volumes(json.loads(Path(args.spec).read_text()), self.pins)
         self.name, self.label = folder.image_name(self.pins), stages.version_label(self.pins)
         self.time = Timer(log)
-
-    def warm(self) -> int:
-        check_inputs(self.args)
-        self.log(f'image: {self.label}: warming translations')
-        stages.Stages(self.args, self.spec, self.pins, self.log).warm_translations()
-        self.log(f'translations kept in {Path(self.args.scratch) / stages.TRANSLATIONS}')
-        return 0
 
     def run(self) -> int:
         check_inputs(self.args)
@@ -232,7 +222,7 @@ class Builder:
         entry = {'pack': k.pack, 'head': k.head, 'label': self.label, 'boot': stages.boot_record(self.args)}
         entry['minimum_bytes'] = minimum or before.get('minimum_bytes')
         folder.record(out, self.name, entry)
-        kept = Path(self.args.scratch) / 'pretranslated'
+        kept = Path(self.args.scratch) / stages.KEPT
         if kept.is_dir():
             shutil.copytree(kept, Path(out) / 'pretranslated', dirs_exist_ok=True)
             shutil.rmtree(kept)
@@ -252,15 +242,12 @@ class Builder:
 def reexec_as_root(args: argparse.Namespace) -> NoReturn:
     """Run the same command under sudo.
 
-    The runfiles variables go along: the inputs are found, and so are the runfiles of the pretranslate drivers it
-    starts (sudo clears the environment).
+    The runfiles variables go along, so the inputs are found (sudo clears the environment).
     """
     locate = runfiles()
     env = [f'{k}={v}' for k, v in sorted((locate.EnvVars() if locate else {}).items())]
     command = ['sudo', '--', '/usr/bin/env', *env, sys.executable, os.path.abspath(__file__)]
     for key, value in sorted(vars(args).items()):
-        if key == 'pretranslate':
-            continue
         flag = '--' + key.replace('_', '-')
         if key == 'inputs':
             command += [f'{flag}={v}' for v in value or []]
@@ -278,16 +265,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--boot-only', action='store_true', help="rewrite only the image's boot files (the head)")
     parser.add_argument('--stop-after', choices=('compose', 'populate'), help='stop after this stage; rerun to go on')
     parser.add_argument('--dry-run', action='store_true')
-    parser.add_argument(
-        '--warm-translations',
-        action='store_true',
-        help="translate iOS 27's volumes into the scratch's memo as this user, then stop (no compose)",
-    )
-    parser.add_argument(
-        '--translation-memo',
-        action='store_true',
-        help="populate takes translations from the scratch's memo instead of translating again",
-    )
     parser.add_argument('--scratch', help='where the container is composed and kept (sparse; about 15 GB used)')
     parser.add_argument('--log')
     parser.add_argument('--inputs', action='append', help='a JSON file of the inputs below (//install:image_inputs)')
@@ -306,7 +283,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         host.check_tools(log)
         builder = Builder(args, log)
-        return builder.warm() if args.warm_translations else builder.run()
+        return builder.run()
     except cards.RefusedError as error:
         log('REFUSED:', error)
         return 2

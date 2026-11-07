@@ -46,7 +46,7 @@ class Journal:
         """Record every path below `source` (mounted with owners) as it is there, at `under`; return how many."""
         base = _key(under)
         count = 0
-        for path, info in _walk(Path(source)):
+        for path, info in walk(Path(source)):
             relative = path.relative_to(source).as_posix()
             name = '/'.join(p for p in (base, '' if relative == '.' else relative) if p)
             self.wanted[name] = Owner(info.st_uid, info.st_gid, info.st_mode & 0o7777, info.st_flags & ~COMPRESSED)
@@ -57,7 +57,7 @@ class Journal:
         """{inode: owner} of every path below the mounted `root`, unnamed ones taking their directory's owner."""
         effective: dict[str, Owner] = {}
         by_inode: dict[int, tuple[str, Owner]] = {}
-        for path, info in _walk(Path(root)):
+        for path, info in walk(Path(root)):
             relative = path.relative_to(root).as_posix()
             name = '' if relative == '.' else relative
             owner = self.wanted.get(name)
@@ -107,7 +107,7 @@ def apply(fd: int, base: int, volume_uuid: object, by_inode: dict[int, Owner]) -
 def check(root: Path, by_inode: dict[int, Owner]) -> None:
     """Compare every path below `root`, mounted again with owners, with what was applied."""
     wrong = []
-    for path, info in _walk(Path(root)):
+    for path, info in walk(Path(root)):
         owner = by_inode.get(info.st_ino)
         if owner is None:
             wrong.append(f'{path}: not in the record')
@@ -121,7 +121,7 @@ def check(root: Path, by_inode: dict[int, Owner]) -> None:
         raise OwnersError(f'{len(wrong)} paths are not as recorded, e.g. {wrong[0]}')
 
 
-def _walk(root: Path) -> list[tuple[Path, os.stat_result]]:
+def walk(root: Path) -> list[tuple[Path, os.stat_result]]:
     """(path, lstat) of `root` and everything below it, links not followed."""
     found = [(root, os.lstat(root))]
     for directory, dirs, files in os.walk(root):

@@ -34,6 +34,7 @@ py_library(
         "pretranslate.py",
         "progress.py",
         "renamed.py",
+        "room.py",
         "stages.py",
         "target.py",
         "to_card.py",
@@ -54,6 +55,13 @@ py_binary(
         ":lib",
         "@rules_python//python/runfiles",
     ],
+)
+
+# Bazel runs it for iOS 27's deltas and translated cryptexes (install/translated.bzl).
+py_binary(
+    name = "translate",
+    srcs = ["translate.py"],
+    deps = [":lib"],
 )
 
 py_binary(
@@ -170,6 +178,19 @@ py_test(
 py_test(
     name = "pack_apfs_test",
     srcs = ["pack_apfs_test.py"],
+    tags = [
+        "local",
+        "manual",
+    ],
+    deps = [":lib"],
+)
+
+# cryptex.rebuild on a sealed stand-in: hdiutil and diskutil, macOS, outside the sandbox.
+py_test(
+    name = "cryptex_test",
+    srcs = ["cryptex_test.py"],
+    args = ["$(rootpath //boot/installer:apfs_tool)"],
+    data = ["//boot/installer:apfs_tool"],
     tags = [
         "local",
         "manual",

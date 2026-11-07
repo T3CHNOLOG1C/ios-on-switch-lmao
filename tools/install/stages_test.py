@@ -26,16 +26,27 @@ class ScratchTest(unittest.TestCase):
         self.assertEqual(len(set(dirs)), len(dirs))
 
 
-class TranslationMemoTest(unittest.TestCase):
-    def roles(self, **flags: object) -> stages.pretranslate.Roles | None:
-        args = SimpleNamespace(scratch='/scratch', pretranslate={'os': {'driver': 'd', 'tool': 't'}}, **flags)
-        return stages.Stages(args, SPEC, PINS, quiet).roles()
+class BazelOutputsTest(unittest.TestCase):
+    def test_deltas_are_the_roles_bazel_made(self) -> None:
+        args = SimpleNamespace(scratch='/scratch', delta_os='/out/delta_os', delta_app_cryptex=None)
+        deltas = stages.Stages(args, SPEC, PINS, quiet).deltas()
+        self.assertIn('os', deltas)
+        self.assertNotIn('app_cryptex', deltas)
+        self.assertEqual(deltas.kept, Path('/scratch') / stages.KEPT)
 
-    def test_populate_translates_afresh_by_default(self):
-        self.assertIsNone(self.roles().memo_root)
+    def test_an_ipsw_without_translation_has_no_deltas(self) -> None:
+        self.assertIsNone(stages.Stages(SimpleNamespace(scratch='/s'), SPEC, PINS, quiet).deltas())
 
-    def test_translation_memo_reads_the_scratchs_memo(self):
-        self.assertEqual(self.roles(translation_memo=True).memo_root, Path('/scratch') / stages.TRANSLATIONS)
+    def test_a_translated_cryptex_comes_with_its_sha256(self) -> None:
+        work = Path(tempfile.mkdtemp())
+        image = work / 'app.dmg'
+        image.write_bytes(b'sealed')
+        Path(str(image) + '.sha256').write_text('ab' * 32 + '\n')
+        args = SimpleNamespace(scratch=str(work), system_cryptex='/ipsw/sys.dmg', app_cryptex='/ipsw/app.dmg')
+        args.translated_app_cryptex = str(image)
+        sources, expected = stages.Stages(args, SPEC, PINS, quiet).cryptexes()
+        self.assertEqual(sources, {'system_cryptex': '/ipsw/sys.dmg', 'app_cryptex': str(image)})
+        self.assertEqual(expected, {'app_cryptex': 'ab' * 32})
 
 
 class StateTest(unittest.TestCase):
@@ -53,21 +64,6 @@ class StateTest(unittest.TestCase):
         self.assertEqual(self.work.state()['populate'], 'p1')
         (self.dir / stages.COMPOSED).unlink()
         self.assertNotIn('compose', self.work.state())
-
-
-class StaleCryptexTest(unittest.TestCase):
-    def test_a_previous_runs_rebuilt_cryptexes_are_stale_and_their_sources_are_not(self):
-        scratch, ipsw = Path(tempfile.mkdtemp()), Path(tempfile.mkdtemp())
-        for name in ('system.dmg', 'app.dmg'):
-            (ipsw / name).write_bytes(b'apple')
-        (scratch / 'system.dmg').write_bytes(b'rebuilt')
-        args = SimpleNamespace(
-            scratch=str(scratch), system_cryptex=str(ipsw / 'system.dmg'), app_cryptex=str(ipsw / 'app.dmg')
-        )
-        self.assertEqual(stages.Stages(args, SPEC, PINS, quiet).stale_cryptexes(), [scratch / 'system.dmg'])
-        args.app_cryptex = str(scratch / 'system.dmg')
-        args.system_cryptex = str(scratch / 'system.dmg')
-        self.assertEqual(stages.Stages(args, SPEC, PINS, quiet).stale_cryptexes(), [])
 
 
 class MinimumTest(unittest.TestCase):

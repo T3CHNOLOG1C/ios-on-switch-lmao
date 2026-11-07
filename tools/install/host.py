@@ -24,6 +24,7 @@ TOOLS = {
     'cp': '/bin/cp',
     'fsck_apfs': '/sbin/fsck_apfs',
     'newfs_apfs': '/sbin/newfs_apfs',
+    'mkbom': '/usr/bin/mkbom',
     'sw_vers': '/usr/bin/sw_vers',
     'sync': '/bin/sync',
 }

@@ -99,7 +99,7 @@ class Volume:
             if v_off != BTOFF_INVALID:
                 yield keys + k_off, k_len, values_end - v_off, v_len
 
-    def _leaves(self) -> Iterator[tuple[int, bytes]]:
+    def _nodes(self) -> Iterator[tuple[int, bytes]]:
         root = self._node(self.root, self.physical)
         # A hashed (sealed) tree names each child by its oid less the root's, beside the hash that binds it.
         base = self.root if struct.unpack_from('<H', root[1], 32)[0] & BTNODE_HASHED else 0
@@ -108,11 +108,17 @@ class Volume:
             (paddr, node), depth = pending.pop()
             if depth > MAX_DEPTH:
                 raise apfs.ApfsError('file-system tree too deep')
-            if struct.unpack_from('<H', node, 34)[0] == 0:
-                yield paddr, node
-                continue
-            children = [struct.unpack_from('<Q', node, v)[0] for _, _, v, _ in self._entries(node)]
-            pending += [(self._node(base + child, self.physical), depth + 1) for child in children]
+            yield paddr, node
+            if struct.unpack_from('<H', node, 34)[0]:
+                children = [struct.unpack_from('<Q', node, v)[0] for _, _, v, _ in self._entries(node)]
+                pending += [(self._node(base + child, self.physical), depth + 1) for child in children]
+
+    def _leaves(self) -> Iterator[tuple[int, bytes]]:
+        return ((paddr, node) for paddr, node in self._nodes() if struct.unpack_from('<H', node, 34)[0] == 0)
+
+    def tree_bytes(self) -> int:
+        """Return what the volume's file-system tree takes: its nodes, in blocks."""
+        return sum(1 for _ in self._nodes()) * self.container.block_size
 
     def _inode_records(self) -> Iterator[tuple[int, int, bytes, int]]:
         """(inode number, block, node, value offset) of every inode record."""

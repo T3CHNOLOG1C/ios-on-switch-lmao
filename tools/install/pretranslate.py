@@ -1,9 +1,8 @@
-"""iOS 27's user space, translated to plain arm64 while the image is composed (//translate/arm64e/pretranslate).
+"""iOS 27's user space, translated to plain arm64 (//translate/arm64e/pretranslate), placed while the image is composed.
 
-Each role's driver reads one mounted volume and writes its delta (delta.py) to a scratch directory. The SystemOS
-cryptex goes last: the prebuilt loaders in its dyld cache check the binaries of every volume by cdhash, so its driver
-takes the cdhash pairs the System volume's and the App cryptex's runs wrote, or each launch falls back to a slower
-loader.
+Bazel makes each role's delta (delta.py) from its mounted volume (install/translated.bzl). The SystemOS cryptex goes
+last: the prebuilt loaders in its dyld cache check the binaries of every volume by cdhash, so its run takes the cdhash
+pairs the System volume's and the App cryptex's runs wrote, or each launch falls back to a slower loader.
 
 The System volume stays sealed as Apple shipped it. Its translated files go to Data under Switch/pretranslated, at
 their System paths, its own tree because a deploy replaces Switch/overlay whole; the kernel shows them at those paths
@@ -34,7 +33,7 @@ def _cdhash(cdhash: list[str]) -> bytes:
 
 
 def _place(root: Path, e: dict, original: os.stat_result, owners: bool) -> Path:
-    """Move e's translated file to its System path below root, with the System file's mode, owner and flags."""
+    """Copy e's translated file to its System path below root, with the System file's mode, owner and flags."""
     target = root / e['path'].lstrip('/')
     target.parent.mkdir(parents=True, exist_ok=True)
     partial = target.with_name('.partial-' + target.name)
@@ -42,9 +41,8 @@ def _place(root: Path, e: dict, original: os.stat_result, owners: bool) -> Path:
     progress.advance(partial.stat().st_size)
     if cards.sha256_file(partial, progress.advance) != e['sha256_out']:
         partial.unlink()
-        raise host.HostError(f'{e["path"]}: the translated file does not match its manifest')
+        raise host.HostError('{}: the translated file does not match its manifest'.format(e['path']))
     os.replace(partial, target)
-    e['source'].unlink()
     target.chmod(original.st_mode & 0o7777)
     if owners:
         os.chown(target, original.st_uid, original.st_gid)
@@ -53,74 +51,40 @@ def _place(root: Path, e: dict, original: os.stat_result, owners: bool) -> Path:
     return target
 
 
-class Roles:
-    def __init__(self, roles: dict[str, dict], scratch: str | Path, log: host.Log, memo_root: str | Path | None = None):
-        """`roles`: {role: {"driver": path, "tool": path, "trustcaches": [path]}}.
+class Deltas:
+    """iOS 27's deltas, made by Bazel (install/translated.bzl), and what of them the boot package keeps."""
 
-        `memo_root`, if given, keeps each role's translations there across runs (the driver's --memo); done() leaves it.
-        """
-        unknown = set(roles) - set(ORDER)
+    def __init__(self, dirs: dict[str, str | Path], kept: Path, log: host.Log) -> None:
+        """`dirs`: {role: the role's delta directory}; `kept`: where keep() puts the files the boot package pins."""
+        unknown = set(dirs) - set(ORDER)
         if unknown:
             raise host.HostError(f'unknown pretranslate roles: {sorted(unknown)}')
-        self.roles, self.scratch, self.log = roles, Path(scratch), log
-        self.kept = self.scratch / 'pretranslated'
-        self.memo_root = Path(memo_root) if memo_root else None
+        self.dirs, self.kept, self.log = {r: Path(d) for r, d in dirs.items()}, Path(kept), log
 
     def __contains__(self, role: str) -> bool:
-        return role in self.roles
+        return role in self.dirs
 
-    def out(self, role: str) -> Path:
-        return self.scratch / ('delta-' + role)
-
-    def run(self, role: str, volume: str | Path) -> list[dict]:
-        """Return the role's delta for the volume mounted at `volume`; its entries are ready for delta.apply."""
-        if role == 'system_cryptex':
-            missing = [r for r in ('os', 'app_cryptex') if r in self.roles and not self._pairs(r).is_file()]
-            if missing:
-                raise host.HostError(f'system_cryptex is translated after {", ".join(missing)}')
-        spec = self.roles[role]
-        command = [spec['driver'], '--role', role, '--tool', spec['tool'], '--volume', str(volume)]
-        command += ['--out', str(self.out(role)), '--progress']
-        if self.memo_root:
-            command += ['--memo', str(self.memo_root / role)]
-        for trust in spec.get('trustcaches', []):
-            command += ['--apple-trustcache', trust]
-        if role == 'system_cryptex':
-            for other in ('os', 'app_cryptex'):
-                if other in self.roles:
-                    command += ['--cdhash-pairs', str(self._pairs(other))]
-        self.log.quiet('$', ' '.join(command))
-        with progress.step(f'{role}: translating', unit='files'):
-            result = host.stream(command, progress.ours)
-        self.log.quiet(result.stdout + result.stderr)
-        if result.returncode:
-            tail = (result.stderr or result.stdout).strip().splitlines()[-1:] or ['?']
-            raise host.HostError(f'translating {role} failed: {tail[0]}')
-        self._keep(role)
-        entries = delta.load(self.out(role) / f'{role}.manifest.json')
-        self.log(f'{role}: {len(entries)} files to translate')
+    def entries(self, role: str) -> list[dict]:
+        """Return the role's delta, ready for delta.apply; its files are Bazel's and are only read."""
+        entries = delta.load(self.dirs[role] / f'{role}.manifest.json')
+        self.log(f'{role}: {len(entries)} files translated')
         return entries
 
-    def _pairs(self, role: str) -> Path:
-        return self.kept / f'{role}.cdhash-pairs'
-
-    def _keep(self, role: str) -> None:
-        self.kept.mkdir(parents=True, exist_ok=True)
-        for name in KEPT:
-            path = self.out(role) / name.format(role=role)
-            if path.is_file():
-                shutil.copyfile(path, self.kept / path.name)
-
-    def done(self, role: str) -> None:
-        """Drop the role's applied delta: its replacement files go (the kept files stay for the boot package)."""
-        if self.out(role).exists():
-            shutil.rmtree(self.out(role))
+    def keep(self) -> None:
+        if self.kept.exists():
+            shutil.rmtree(self.kept)
+        self.kept.mkdir(parents=True)
+        for role, directory in sorted(self.dirs.items()):
+            for name in KEPT:
+                path = directory / name.format(role=role)
+                if path.is_file():
+                    shutil.copyfile(path, self.kept / path.name)
 
     def artifacts(self) -> list[Path]:
         return sorted(self.kept.iterdir()) if self.kept.is_dir() else []
 
     def check_pins(self, pins: dict[str, str]) -> None:
-        """Check the kept files against the ones the boot package was built with ({name: sha256}).
+        """Compare the kept files with the ones the boot package was built with ({name: sha256}).
 
         A translation that made other trust modules or another cache list would not run on the kernel.
         """
@@ -130,16 +94,17 @@ class Roles:
         ]
         if wrong:
             raise host.HostError(
-                f'this translation differs from the pinned one the boot package carries: {", ".join(wrong)}'
+                'this translation differs from the pinned one the boot package carries: {}'.format(', '.join(wrong))
             )
         self.log(f'pretranslate: {len(pins)} files match the pins')
 
-    def overlay_system(self, data: str | Path, system: str | Path, entries: list[dict], owners: bool) -> dict:
-        """Place the System volume's translated files onto Data (OVERLAY) and return their manifest.
+    def overlay_system(self, data: Path, system: Path, entries: list[dict], owners: bool) -> dict:
+        """Place the System volume's translated files on Data (OVERLAY); return their manifest.
 
         Each file gets its System file's owner, mode and flags, then the manifest and the kernel's index made from it
-        are written; the manifest is also kept for the boot package. As root, every file and directory of the tree
+        go beside them; the manifest is also kept for the boot package. As root, every file and directory of the tree
         ends system-immutable: the device's kernel refuses any change to the tree anyway, the flag is a second layer.
+
         Hard links of one System file get one Data file, placed at the first of their paths, and an index entry for
         each path. A link on Data would give the kernel's redirect a Data file whose parent changes with each lookup.
         """
@@ -151,13 +116,14 @@ class Roles:
             for e in entries:
                 original = os.lstat(Path(system) / e['path'].lstrip('/'))
                 if not stat.S_ISREG(original.st_mode):
-                    raise host.HostError(f'{e["path"]}: not a regular file on the System volume')
+                    raise host.HostError('{}: not a regular file on the System volume'.format(e['path']))
                 if original.st_ino in by_inode:
                     first, data_id, record = by_inode[original.st_ino]
                     if (first['sha256_out'], first.get('cdhash')) != (e['sha256_out'], e.get('cdhash')):
-                        raise host.HostError(f'{first["path"]} and {e["path"]} are one System file translated two ways')
+                        raise host.HostError(
+                            '{} and {} are one System file translated two ways'.format(first['path'], e['path'])
+                        )
                     progress.advance(2 * e['source'].stat().st_size)
-                    e['source'].unlink()
                 else:
                     target = _place(root, e, original, owners)
                     placed.append(target)
