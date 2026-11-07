@@ -173,13 +173,16 @@ class CardTest(unittest.TestCase):
 class MountedTest(unittest.TestCase):
     def mount(self, info: dict, owners: bool = False) -> list[list[str]]:
         calls = []
+        mounted_at = ['/Volumes/Data']
 
         def run(*args: str, **_: object) -> str:
             calls.append(list(args))
+            if args[:2] == ('diskutil', 'unmount'):
+                mounted_at[0] = None
             return ''
 
         with (
-            mock.patch.object(cards.host, 'mount_point', return_value='/Volumes/Data'),
+            mock.patch.object(cards.host, 'mount_point', side_effect=lambda _: mounted_at[0]),
             mock.patch.object(cards.host, 'disk_info', return_value=info),
             mock.patch.object(cards.host, 'run', side_effect=run),
             cards.mounted('disk34s2', lambda *_: None, owners=owners) as root,
