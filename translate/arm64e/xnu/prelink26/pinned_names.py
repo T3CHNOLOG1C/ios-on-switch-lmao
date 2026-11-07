@@ -62,6 +62,82 @@ NAMES = {
     # The OSSharedPtr wrapper after setObject(unsigned, OSSharedPtr): the same tail call through the vtable, two slots
     # further (0x100, replaceObject after merge), which IOGameControllerFamily imports.
     0xFFFFFFF00A7A4FC0: '__ZN7OSArray13replaceObjectEjRK11OSSharedPtrIK15OSMetaClassBaseE',
+    # lifs. kalloc.c after kalloc_ext and kalloc_large: the data wrapper, its shared twin, kalloc_data_require, then the
+    # typed entry points; all of them call kalloc_ext (0xFFFFFFF00A12F8E4).
+    0xFFFFFFF00A12FCE4: '_kalloc_data',
+    0xFFFFFFF00A12FE9C: '_kalloc_type_impl',
+    0xFFFFFFF00A12FF3C: '_kalloc_type_var_impl',
+    # "Invalid vm_map_copy_t sz:%lld, ofst:%lld"; the copyin wrapper that makes src_destroy a boolean and tail-calls
+    # vm_map_copyin_internal, as ours does; the user-flags check, ktriage and VM_FLAGS_ANYWHERE toggle of vm_allocate's
+    # external entry; vm_deallocate's tail call into mach_vm_deallocate.
+    0xFFFFFFF00A1F1574: '_vm_map_copy_discard',
+    0xFFFFFFF00A1FC608: '_vm_map_copyin',
+    0xFFFFFFF00A253B20: '_vm_allocate',
+    0xFFFFFFF00A253B84: '_vm_deallocate',
+    # iokit_rpc.c: after iokit_make_connect_port, the same code for the ident kobject type.
+    0xFFFFFFF00A25B9F0: '_iokit_make_ident_port',
+    # Before vfs_attr_pack_internal (the "com.apple.FinderInfo" packer), calling it twice.
+    0xFFFFFFF00A2BF04C: '_vfs_attr_pack_ext',
+    # vfs_bio.c after buf_meta_breadn: buf_bwrite(ap->a_bp), the function lifs puts in its vnop_bwrite slot.
+    0xFFFFFFF00A2CEEC0: '_vn_bwrite',
+    # vfs_cluster.c: advisory_read is the 0x10 wrapper calling the 0x3a0 advisory_read_ext; the GOT pass had put
+    # advisory_read's name on advisory_read_ext.
+    0xFFFFFFF00A2DFB78: '_advisory_read_ext',
+    0xFFFFFFF00A2E0190: '_advisory_read',
+    # (seq << 32) | (aux << 4) | (stat & 0xf).
+    0xFFFFFFF00A2F9B38: '_vfs_resolver_result',
+    # The mount helper that names "lifs", with vfs_mount_at_path's calls.
+    0xFFFFFFF00A2FD974: '_vfs_mount_at_path',
+    # lifs's vnode operation vector: vnop_revoke's nop (a_vp, then vn_revoke), vnop_advlock's and vnop_copyfile's
+    # ENOTSUP, vfs_support.c's source order.
+    0xFFFFFFF00A314920: '_nop_revoke',
+    0xFFFFFFF00A314A60: '_err_advlock',
+    0xFFFFFFF00A314C40: '_err_copyfile',
+    # mnt_kern_flag (+116) bit 30 read; bit 29 (MNTK_AUTH_OPAQUE) and bit 30 (MNTK_AUTH_OPAQUE_ACCESS) set under the
+    # mount lock; the VBLK (v_type 3) check and v_specinfo of vfs_setdevvp; the audit token copy of the context.
+    0xFFFFFFF00A320EA4: '_vfs_authopaqueaccess',
+    0xFFFFFFF00A320EB0: '_vfs_setauthopaque',
+    0xFFFFFFF00A320F54: '_vfs_setauthopaqueaccess',
+    0xFFFFFFF00A321930: '_vfs_setdevvp',
+    0xFFFFFFF00A32230C: '_vfs_context_copy_audit_token',
+    # kern_subr.c, adjacent: hashinit, then hashdestroy.
+    0xFFFFFFF00A6467BC: '_hashinit',
+    0xFFFFFFF00A6468D8: '_hashdestroy',
+    # The handler of the kernel's CTLTYPE_INT "L"/"LU" oids (num_vnodes, cs_blob_size, ...): SYSCTL_LONG's.
+    0xFFFFFFF00A64E00C: '_sysctl_handle_long',
+    # ubc_subr.c, read from the code (v_type VREG, v_ubcinfo at +120, ui_size at +32, ui_flags at +40). The GOT pass
+    # had this block shifted (ubc_setsize's name on upl_abort, getsize's on msync, ...): create_upl's vm_tag_bt and
+    # ubc_create_upl_kernel calls (the GOT holds its _external alias too); ui_size; UI_ISMAPPED and
+    # UI_MAPPEDWRITE out; both bits set; the "overflow detected" msync; range_op's 32-bit range check and tail call;
+    # ubc_setsize's tail call into ubc_setsize_ex; upl abort and abort_range.
+    0xFFFFFFF00A690F8C: '_ubc_create_upl',
+    0xFFFFFFF00A690188: '_ubc_getsize',
+    0xFFFFFFF00A69123C: '_ubc_is_mapped',
+    0xFFFFFFF00A69129C: '_ubc_is_mapped_writable',
+    0xFFFFFFF00A6906E4: '_ubc_msync',
+    0xFFFFFFF00A690F2C: '_ubc_range_op',
+    0xFFFFFFF00A690164: '_ubc_setsize',
+    0xFFFFFFF00A68FCE4: '_ubc_setsize_ex',
+    0xFFFFFFF00A6911C8: '_ubc_upl_abort',
+    0xFFFFFFF00A690114: '_ubc_upl_abort_range',
+    # refcnt.c: the count store; ldadd +1 with the overflow check; ldaddl then ldapr on the last reference (barrier).
+    0xFFFFFFF00A7EE0B4: '_os_ref_init_count_external',
+    0xFFFFFFF00A7EE0D0: '_os_ref_retain_external',
+    0xFFFFFFF00A7EE1FC: '_os_ref_release_barrier_external',
+    # The parent list of the vfs.lifs and vfs.apfs sysctl nodes (vfs.generic's too).
+    0xFFFFFFF007BDE9A8: '_sysctl__vfs_children',
+    # IOGameControllerFamily. vm_kern.c: after vm_kernel_addrperm_external, the same code with the unslide.
+    0xFFFFFFF00A1EE914: '_vm_kernel_unslide_or_perm_external',
+    # The callback-pointer iterateObjects, before the block one (0xFFFFFFF00A7A64A4).
+    0xFFFFFFF00A7A63B0: '__ZN12OSCollection14iterateObjectsEPvPFbS0_P8OSObjectE',
+    # OSNumber.cpp after the two withNumber factories: d8 stored as is (withFloat's fcvt follows); doubleValue's ucvtf.
+    0xFFFFFFF00A7D66C4: '__ZN8OSNumber10withDoubleEd',
+    0xFFFFFFF00A7D67B8: '__ZNK8OSNumber11doubleValueEv',
+    # OSSerializeBinary.cpp: binaryWithCapacity, then addBinary, then setIndexed (0xFFFFFFF00A7E43B0).
+    0xFFFFFFF00A7E40D4: '__ZN11OSSerialize18binaryWithCapacityEjPvS0_',
+    # IODataQueue's structors (its metaclass "IODataQueue" just before): retainCount 1 and the vtable; D2 poisons it.
+    0xFFFFFFF00A8C01E4: '__ZN11IODataQueueC2EPK11OSMetaClass',
+    0xFFFFFFF00A8C0234: '__ZN11IODataQueueD2Ev',
 }
 
 

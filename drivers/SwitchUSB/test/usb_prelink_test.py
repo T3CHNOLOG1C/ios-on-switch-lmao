@@ -54,20 +54,20 @@ IOS17 = BOTH | {
     'com.apple.iokit.IOSerialFamily',
 }
 IOS27 = BOTH | {
+    'com.apple.filesystems.lifs',
     'com.apple.driver.usb.AppleUSBHostDeviceSupport',
     'com.apple.iokit.IOGameControllerFamily',
 }
 
-# iOS 27 imports still unnamed, (functions, data) per kext: a kext may only go down. IOGameControllerFamily's are C++
-# KPIs new in iOS 26 that no iOS 17 kext imported.
+# iOS 27 imports still unnamed, (functions, data) per kext: a kext may only go down. Every other kext above, lifs and
+# IOGameControllerFamily among them (both load at every boot), has none.
 UNNAMED_27 = {
     'com.apple.driver.usb.AppleUSBCommon': (0, 2),
     'com.apple.driver.usb.AppleUSBXHCI': (0, 1),
     'com.apple.iokit.IOAccessoryManager': (2, 1),
-    'com.apple.iokit.IOGameControllerFamily': (7, 0),
-    'com.apple.iokit.IOHIDFamily': (5, 1),
+    'com.apple.iokit.IOHIDFamily': (3, 1),
     'com.apple.iokit.IOSCSIArchitectureModelFamily': (1, 1),
-    'com.apple.iokit.IOStorageFamily': (6, 1),
+    'com.apple.iokit.IOStorageFamily': (3, 1),
     'com.apple.iokit.IOUSBHostFamily': (2, 1),
     'com.apple.iokit.IOUSBMassStorageDriver': (0, 1),
 }

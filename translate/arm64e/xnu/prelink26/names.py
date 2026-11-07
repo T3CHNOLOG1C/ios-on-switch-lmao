@@ -202,6 +202,18 @@ def main():
         assign(a, n, "pinned")
         if n not in oname or oname.get(names[a]) != oname[n]:
             raise SystemExit("pinned name %s for %#x: not in our kernel, or named %s by %s" % (n, a, names[a], source[a]))
+    # vnode operation descriptors (struct vnodeop_desc, vnode_internal.h) carry their own name at +8: "vnop_<op>" for
+    # vnop_<op>_desc, "default" for vnop_default_desc. File systems point their operation vectors at them.
+    for a in sorted(set(t for t, f in fix.values() if in_kernel(t) and t not in names)):
+        target = fix.get(a + 8)
+        if not target: continue
+        at = kc.va2off(target[0])
+        end = kc.d.find(b"\0", at, at + 64) if at is not None else -1
+        if end < 0: continue
+        op = kc.d[at:end].decode(errors="replace")
+        n = "_vnop_default_desc" if op == "default" else "_%s_desc" % op if op.startswith("vnop_") else None
+        if n and n in oname and not ofunc(oname[n]):
+            assign(a, n, "vnodeop_desc")
     # 2. GOT order
     d17, kn17, names17, kexts17, gots17 = kc17.load()
     universe = set(l.strip() for l in open(paths.work("symbolsets26.txt")))
