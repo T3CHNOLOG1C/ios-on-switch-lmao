@@ -20,6 +20,7 @@ import hashlib
 import os
 import shutil
 import tempfile
+import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -35,6 +36,7 @@ FORMER_ICONS = ('bootloader/res/icon_ios.bmp',)
 # The user's own files in the entry's folder, which no package ships: the loader reads bootargs.txt at boot.
 USER_FILES = ('bootargs.txt',)
 HASH_CHUNK = 8 << 20
+UNMOUNT_TRIES = 5
 
 
 class RefusedError(Exception):
@@ -241,8 +243,8 @@ def mounted(identifier: str, log: host.Log, read_only: bool = False, owners: boo
             yield Path(current)
             return
         # macOS's own mount of a card enforces owners, which closes root's 0700 folders to the user
-        host.run('diskutil', 'unmount', identifier, log=log)
-    with tempfile.TemporaryDirectory(prefix='switch-') as directory:
+        unmount(identifier, log)
+    with tempfile.TemporaryDirectory(prefix='switch-', ignore_cleanup_errors=True) as directory:
         args = ['mount']
         if read_only:
             args.append('readOnly')
@@ -254,7 +256,17 @@ def mounted(identifier: str, log: host.Log, read_only: bool = False, owners: boo
             yield Path(directory)
         finally:
             host.run('sync')
-            host.run('diskutil', 'unmount', identifier, log=log, check=False)
+            unmount(identifier, log)
+
+
+def unmount(identifier: str, log: host.Log) -> None:
+    """Unmount a volume; Spotlight or FSKit can hold one busy for a moment after it was written, so try again."""
+    for _ in range(UNMOUNT_TRIES):
+        host.run('diskutil', 'unmount', identifier, log=log, check=False)
+        if not host.mount_point(identifier):
+            return
+        time.sleep(1)
+    log(f'{identifier} stays mounted')
 
 
 def sha256_file(path: Path, advance: Callable[[int], None] | None = None) -> str:

@@ -134,8 +134,7 @@ class Direct:
         self.activate()
         self.verify(before, boot)
         if not self.card.image and not self.args.no_eject:
-            host.run('diskutil', 'eject', self.card.disk, log=self.log)
-            self.log('ejected', self.card.disk)
+            self.eject()
         self.log(f'done: {self.name} is installed on {self.slice}; choose iOS in hekate')
         return 0
 
@@ -272,10 +271,12 @@ class Direct:
             raise host.HostError(f"the container on {self.slice} is {found}, not the image's")
         names = ', '.join(v.get('Name', '?') for v in container.get('Volumes', []))
         self.log(f'attached: {container["ContainerReference"]} ({names})')
-        self.unmount_container()
-        compose.fsck(self.slice, 'attached', self.log)
+        if self.unmount_container():
+            compose.fsck(self.slice, 'attached', self.log)
+        else:
+            self.log('macOS keeps the new container mounted: the second fsck_apfs is skipped (the first passed)')
 
-    def unmount_container(self) -> None:
+    def unmount_container(self) -> bool:
         """Unmount what macOS mounts of the container it attached, once it has stopped mounting for a second."""
         quiet = 0
         for _ in range(SETTLE_TRIES):
@@ -284,9 +285,16 @@ class Direct:
                 host.run('diskutil', 'unmountDisk', container['ContainerReference'], log=self.log, check=False)
                 quiet = 0
             elif (quiet := quiet + 1) == 2:
-                return
+                return True
             time.sleep(0.5)
-        raise host.HostError(f'macOS keeps mounting the container on {self.slice}')
+        return False
+
+    def eject(self) -> None:
+        try:
+            host.run('diskutil', 'eject', self.card.disk, log=self.log)
+            self.log('ejected', self.card.disk)
+        except host.HostError as error:
+            self.log(f'not ejected ({error}): eject {self.card.disk} in Finder before taking the card out')
 
     def verify(self, before: bytes, boot: list[tuple[str, bytes]]) -> None:
         cards.read_table(self.card)

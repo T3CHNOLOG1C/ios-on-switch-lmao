@@ -256,6 +256,7 @@ py_test(
 # outside the sandbox.
 py_test(
     name = "direct_card_test",
+    size = "large",
     srcs = [
         "direct_card_test.py",
         "testcard.py",
