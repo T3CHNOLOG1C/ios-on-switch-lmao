@@ -13,7 +13,7 @@ import subprocess
 import uuid
 from pathlib import Path
 
-from tools.install import apfs, gpt, host
+from tools.install import apfs, gpt, host, progress
 
 COPY_CHUNK = 8 << 20
 F_PUNCHHOLE = 99  # <sys/fcntl.h>: deallocate a range of a file (APFS)
@@ -41,9 +41,8 @@ def attach_raw(image: Path, log: host.Log, mount: bool = False) -> str:
 
 
 def fsck(store: str, what: str, log: host.Log) -> None:
-    result = subprocess.run(
-        [host.TOOLS['fsck_apfs'], '-n', '/dev/r' + store], capture_output=True, text=True, check=False
-    )
+    with progress.step(f'fsck_apfs {store} ({what})', unit=None):
+        result = host.stream([host.TOOLS['fsck_apfs'], '-n', '/dev/r' + store], progress.phases)
     log.quiet(result.stdout + result.stderr)
     # The verdict is stdout's last line. Warnings go to stderr, among them a fitted container's block count being
     # smaller than its device's, which is what a fit proof's clone of the full-size image always shows.
@@ -107,8 +106,9 @@ def _copy_os(os_dmg: str, image: Path, partition_sectors: int, spec: dict, log: 
             first = (gpt.APFS, uuid.uuid4(), START_SECTOR, START_SECTOR + os_bytes // gpt.SECTOR - 1, 'compose')
             for lba, data in gpt.build(disk_sectors, [first]):
                 os.pwrite(ifd, data, lba * gpt.SECTOR)
-            host.copy_parallel(sfd, 0, ifd, START_SECTOR * gpt.SECTOR, os_bytes)
-            os.fsync(ifd)
+            with progress.step('compose: copying the OS container', os_bytes):
+                host.copy_parallel(sfd, 0, ifd, START_SECTOR * gpt.SECTOR, os_bytes)
+                os.fsync(ifd)
         finally:
             os.close(sfd)
             os.close(ifd)
@@ -122,7 +122,10 @@ def _grow(image: Path, partition_bytes: int, spec: dict, log: host.Log) -> None:
     disk = attach_raw(image, log)
     try:
         store = disk + 's1'
-        host.run('diskutil', 'apfs', 'resizeContainer', store, f'{partition_bytes}B', log=log)
+        with progress.step(f'compose: growing the container to {progress.size(partition_bytes)}', unit=None):
+            host.watch(
+                'diskutil', 'apfs', 'resizeContainer', store, f'{partition_bytes}B', parse=progress.phases, log=log
+            )
         container = host.container_on(store)
         if not container:
             raise host.HostError('the scratch container did not attach')

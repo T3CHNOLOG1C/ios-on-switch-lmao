@@ -15,10 +15,9 @@ import json
 import os
 import shutil
 import stat
-import subprocess
 from pathlib import Path
 
-from tools.install import card as cards, delta, host, overlay_index, renamed
+from tools.install import card as cards, delta, host, overlay_index, progress, renamed
 
 OVERLAY = renamed.DATA_FOLDER + '/pretranslated'
 OVERLAY_MANIFEST = OVERLAY + '.json'
@@ -40,7 +39,8 @@ def _place(root: Path, e: dict, original: os.stat_result, owners: bool) -> Path:
     target.parent.mkdir(parents=True, exist_ok=True)
     partial = target.with_name('.partial-' + target.name)
     shutil.copyfile(e['source'], partial)
-    if cards.sha256_file(partial) != e['sha256_out']:
+    progress.advance(partial.stat().st_size)
+    if cards.sha256_file(partial, progress.advance) != e['sha256_out']:
         partial.unlink()
         raise host.HostError(f'{e["path"]}: the translated file does not match its manifest')
     os.replace(partial, target)
@@ -80,7 +80,7 @@ class Roles:
                 raise host.HostError(f'system_cryptex is translated after {", ".join(missing)}')
         spec = self.roles[role]
         command = [spec['driver'], '--role', role, '--tool', spec['tool'], '--volume', str(volume)]
-        command += ['--out', str(self.out(role))]
+        command += ['--out', str(self.out(role)), '--progress']
         if self.memo_root:
             command += ['--memo', str(self.memo_root / role)]
         for trust in spec.get('trustcaches', []):
@@ -90,7 +90,8 @@ class Roles:
                 if other in self.roles:
                     command += ['--cdhash-pairs', str(self._pairs(other))]
         self.log.quiet('$', ' '.join(command))
-        result = subprocess.run(command, capture_output=True, text=True, check=False)
+        with progress.step(f'{role}: translating', unit='files'):
+            result = host.stream(command, progress.ours)
         self.log.quiet(result.stdout + result.stderr)
         if result.returncode:
             tail = (result.stderr or result.stdout).strip().splitlines()[-1:] or ['?']
@@ -145,28 +146,31 @@ class Roles:
         root = Path(data) / OVERLAY
         files, ids, placed = [], [], []
         by_inode = {}
-        for e in entries:
-            original = os.lstat(Path(system) / e['path'].lstrip('/'))
-            if not stat.S_ISREG(original.st_mode):
-                raise host.HostError(f'{e["path"]}: not a regular file on the System volume')
-            if original.st_ino in by_inode:
-                first, data_id, record = by_inode[original.st_ino]
-                if (first['sha256_out'], first.get('cdhash')) != (e['sha256_out'], e.get('cdhash')):
-                    raise host.HostError(f'{first["path"]} and {e["path"]} are one System file translated two ways')
-                e['source'].unlink()
-            else:
-                target = _place(root, e, original, owners)
-                placed.append(target)
-                data_id = os.lstat(target).st_ino
-                record = {
-                    'trust': True,
-                    'mode': f'{original.st_mode & 0o7777:04o}',
-                    'sha256': e['sha256_out'],
-                    'cdhash': e.get('cdhash', []),
-                }
-                by_inode[original.st_ino] = (e, data_id, record)
-            ids.append((e['path'], original.st_ino, data_id, _cdhash(e.get('cdhash') or [])))
-            files.append({'path': e['path'], **record})
+        work = 2 * sum(e['source'].stat().st_size for e in entries)
+        with progress.step('System: placing the translated files on Data', work):
+            for e in entries:
+                original = os.lstat(Path(system) / e['path'].lstrip('/'))
+                if not stat.S_ISREG(original.st_mode):
+                    raise host.HostError(f'{e["path"]}: not a regular file on the System volume')
+                if original.st_ino in by_inode:
+                    first, data_id, record = by_inode[original.st_ino]
+                    if (first['sha256_out'], first.get('cdhash')) != (e['sha256_out'], e.get('cdhash')):
+                        raise host.HostError(f'{first["path"]} and {e["path"]} are one System file translated two ways')
+                    progress.advance(2 * e['source'].stat().st_size)
+                    e['source'].unlink()
+                else:
+                    target = _place(root, e, original, owners)
+                    placed.append(target)
+                    data_id = os.lstat(target).st_ino
+                    record = {
+                        'trust': True,
+                        'mode': f'{original.st_mode & 0o7777:04o}',
+                        'sha256': e['sha256_out'],
+                        'cdhash': e.get('cdhash', []),
+                    }
+                    by_inode[original.st_ino] = (e, data_id, record)
+                ids.append((e['path'], original.st_ino, data_id, _cdhash(e.get('cdhash') or [])))
+                files.append({'path': e['path'], **record})
         manifest = {'files': files}
         text = json.dumps(manifest, indent=1) + '\n'
         root.mkdir(parents=True, exist_ok=True)

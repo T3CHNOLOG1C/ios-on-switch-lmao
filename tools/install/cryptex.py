@@ -10,7 +10,7 @@ import shutil
 from collections.abc import Callable
 from pathlib import Path
 
-from tools.install import card as cards, delta, host
+from tools.install import card as cards, delta, host, progress
 
 SEALER = '/System/Library/Filesystems/apfs.fs/Contents/Resources/apfs_prepare_cryptex'
 APFS_VOLUME = '41504653-0000-11AA-AA11-00306543ECAC'
@@ -60,9 +60,16 @@ def _grow(image: Path, by: int, log: host.Log) -> None:
         f.truncate(image.stat().st_size + _mib(by))
     _, whole = _attach(image, log)
     try:
-        host.run('diskutil', 'apfs', 'resizeContainer', whole, '0', log=log)
+        host.watch('diskutil', 'apfs', 'resizeContainer', whole, '0', parse=progress.phases, log=log)
     finally:
         host.run('hdiutil', 'detach', whole, log=log, check=False)
+
+
+def _copy(source: Path, target: Path, log: host.Log, what: str) -> None:
+    """Ditto the mounted source volume into the new one, its progress the new volume's growth against the source's."""
+    start, whole = shutil.disk_usage(target).used, shutil.disk_usage(source).used
+    with progress.step(f'{what}: copying the cryptex', whole, probe=lambda: shutil.disk_usage(target).used - start):
+        host.run('ditto', '--preserveHFSCompression', str(source), str(target), log=log)
 
 
 def _mib(size: int) -> int:
@@ -88,7 +95,7 @@ def rebuild(source: str, translate: Callable[[Path], list[dict]], work_dir: Path
             volume, whole = _attach(image, log)
             try:
                 with cards.mounted(volume, log, owners=True) as root:
-                    host.run('ditto', '--preserveHFSCompression', str(src), str(root), log=log)
+                    _copy(src, root, log, what)
             finally:
                 host.run('hdiutil', 'detach', whole, log=log, check=False)
     finally:
@@ -102,11 +109,13 @@ def rebuild(source: str, translate: Callable[[Path], list[dict]], work_dir: Path
                     delta.apply(root, entries, log, what, consume=True)
             # The sealer mounts the container itself: it takes the volume's node, attached and not mounted.
             if short <= 0:
-                host.run(SEALER, '/dev/' + volume, log=log)
+                with progress.step(f'{what}: sealing', 100, progress.PERCENT):
+                    host.watch(SEALER, '-p', '/dev/' + volume, parse=progress.sealer, log=log)
                 break
         finally:
             host.run('hdiutil', 'detach', whole, log=log, check=False)
         log(f'{what}: growing the volume by {_mib(short + SLACK) >> 20} MiB for its translated files')
-        _grow(image, short + SLACK, log)
+        with progress.step(f'{what}: growing the volume', unit=None):
+            _grow(image, short + SLACK, log)
     log(f'{what}: sealed again as {image}')
     return image

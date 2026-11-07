@@ -20,7 +20,7 @@ import hashlib
 import os
 import shutil
 import tempfile
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -236,11 +236,14 @@ def mounted(identifier: str, log: host.Log, read_only: bool = False, owners: boo
             host.run('diskutil', 'unmount', identifier, log=log, check=False)
 
 
-def sha256_file(path: Path) -> str:
+def sha256_file(path: Path, advance: Callable[[int], None] | None = None) -> str:
+    """Return the file's sha256; `advance` (progress.advance) counts the bytes as they are read."""
     digest = hashlib.sha256()
     with open(path, 'rb') as f:
         while chunk := f.read(HASH_CHUNK):
             digest.update(chunk)
+            if advance:
+                advance(len(chunk))
     return digest.hexdigest()
 
 

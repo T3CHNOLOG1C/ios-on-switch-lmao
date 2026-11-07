@@ -24,6 +24,7 @@ from tools.install import (
     pack,
     populate,
     pretranslate,
+    progress,
 )
 
 STATE = 'state.json'
@@ -192,7 +193,8 @@ class Stages:
                     sources[member], lambda root, m=member: roles.run(m, root), self.scratch, self.log, member
                 )
                 roles.done(member)
-                expected[member] = cards.sha256_file(sources[member])
+                with progress.step(f'{member}: hashing the sealed image', os.path.getsize(sources[member])):
+                    expected[member] = cards.sha256_file(sources[member], progress.advance)
         return sources, expected
 
     def check_pins(self, roles: pretranslate.Roles) -> None:
@@ -283,6 +285,10 @@ class Stages:
         """Make install-ios.bin's fit on a clone of the real container; the kernel must attach it and fsck pass it."""
         proof = self.scratch / PROOF
         proof.unlink(missing_ok=True)
+        with progress.step(f'pack: proving the fit to {progress.size(smallest)}', unit=None):
+            self._prove(tool, proof, smallest)
+
+    def _prove(self, tool: str, proof: Path, smallest: int) -> None:
         host.run('cp', '-c', str(self.populated), str(proof), log=self.log)
         try:
             host.run(tool, str(proof), str(self.state()['offset']), str(smallest // BLOCK), log=self.log)

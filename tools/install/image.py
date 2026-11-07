@@ -34,6 +34,7 @@ from tools.install import (
     host,
     keys,
     manifest,
+    progress,
     stages,
 )
 
@@ -135,7 +136,8 @@ class Timer:
 
     def __call__(self, stage: str, work: Callable[[], object]) -> object:
         wall, cpu = time.monotonic(), self.cpu()
-        result = work()
+        with progress.step(stage, unit=None):
+            result = work()
         wall, cpu = time.monotonic() - wall, self.cpu() - cpu
         cores = os.cpu_count() or 1
         share = 100 * cpu / max(wall, 1e-9) / cores
@@ -317,7 +319,7 @@ def main(argv: list[str] | None = None) -> int:
 
 class PrintLog:
     def __call__(self, *parts: object) -> None:
-        print(*parts, flush=True)
+        progress.println(' '.join(str(p) for p in parts))
 
     def quiet(self, *parts: object) -> None:
         pass

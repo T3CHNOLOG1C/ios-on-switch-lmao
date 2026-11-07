@@ -7,11 +7,10 @@ Preboot  the two cryptex images, checked against the IPSW pins
 
 import os
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 
-from tools.install import card as cards, host
+from tools.install import card as cards, host, progress
 
 SKIP = ('.fseventsd', '.Spotlight-V100', '.Trashes')
 
@@ -30,17 +29,23 @@ def seed_data(system: Path, data: Path, owners: bool, log: host.Log, reseed: boo
                 shutil.rmtree(p)
             else:
                 p.unlink()
-    host.run(
-        'ditto',
-        '--rsrc',
-        '--extattr',
-        '--acl',
-        '--preserveHFSCompression',
-        '--nocache',
-        str(system / 'private/var'),
-        str(data),
-        log=log,
-    )
+    start = shutil.disk_usage(data).used
+    with progress.step(
+        'data: seeding from System /private/var',
+        allocated(system / 'private/var'),
+        probe=lambda: shutil.disk_usage(data).used - start,
+    ):
+        host.run(
+            'ditto',
+            '--rsrc',
+            '--extattr',
+            '--acl',
+            '--preserveHFSCompression',
+            '--nocache',
+            str(system / 'private/var'),
+            str(data),
+            log=log,
+        )
     prefs = data / 'mobile/Library/Preferences'
     prefs.mkdir(parents=True, exist_ok=True)
     if owners:
@@ -52,6 +57,15 @@ def seed_data(system: Path, data: Path, owners: bool, log: host.Log, reseed: boo
         'data: seeded from System /private/var ({} entries){}'.format(
             sum(1 for _ in data.rglob('*')), '' if owners else ' WITHOUT owners (unprivileged test: not bootable)'
         )
+    )
+
+
+def allocated(root: Path) -> int:
+    """Return the bytes the files below `root` take on disk (compressed files count as stored)."""
+    return sum(
+        os.lstat(os.path.join(directory, name)).st_blocks * 512
+        for directory, _, names in os.walk(root)
+        for name in names
     )
 
 
@@ -87,8 +101,10 @@ def stage_cryptexes(
             continue
         target.parent.mkdir(parents=True, exist_ok=True)
         partial = target.with_name('.partial-' + target.name)
-        host.copy_file_parallel(source, partial)
-        if cards.sha256_file(partial) != want:
+        with progress.step(f'preboot: staging {source.name}', 2 * source.stat().st_size):
+            host.copy_file_parallel(source, partial)
+            digest = cards.sha256_file(partial, progress.advance)
+        if digest != want:
             partial.unlink()
             raise host.HostError(f'{relative}: copy does not match its sha256')
         os.replace(partial, target)
@@ -101,9 +117,8 @@ def stage_cryptexes(
 
 
 def stage_gpu(data: Path, stager: str, gpu_base: str, log: host.Log) -> None:
-    result = subprocess.run(
-        [sys.executable, stager, str(data), '--build', str(gpu_base)], capture_output=True, text=True, check=False
-    )
+    with progress.step('gpu: staging the Metal bundle'):
+        result = host.stream([sys.executable, stager, str(data), '--build', str(gpu_base), '--progress'], progress.ours)
     log('gpu:', (result.stdout + result.stderr).strip())
     if result.returncode:
         raise host.HostError('the Metal bundle was not staged')
@@ -112,15 +127,18 @@ def stage_gpu(data: Path, stager: str, gpu_base: str, log: host.Log) -> None:
 def merge_tree(source: str | Path, target: Path, owners: bool, log: host.Log, what: str) -> None:
     """Copy `source` onto `target` (directories merged, files replaced): directories 0755, files 0644, root's."""
     count = 0
-    for path in sorted(Path(source).rglob('*')):
-        destination = Path(target) / path.relative_to(source)
-        if path.is_dir():
-            destination.mkdir(exist_ok=True)
-            destination.chmod(0o755)
-        else:
-            shutil.copyfile(path, destination)
-            destination.chmod(0o644)
-            count += 1
-        if owners:
-            os.chown(destination, 0, 0)
+    paths = sorted(Path(source).rglob('*'))
+    with progress.step(f'{what}: copying', sum(p.stat().st_size for p in paths if not p.is_dir())):
+        for path in paths:
+            destination = Path(target) / path.relative_to(source)
+            if path.is_dir():
+                destination.mkdir(exist_ok=True)
+                destination.chmod(0o755)
+            else:
+                shutil.copyfile(path, destination)
+                destination.chmod(0o644)
+                count += 1
+                progress.advance(destination.stat().st_size)
+            if owners:
+                os.chown(destination, 0, 0)
     log(f'{what}: {count} files')

@@ -23,7 +23,10 @@ for name in ('--role', '--tool', '--volume', '--out'):
 ap.add_argument('--apple-trustcache', action='append', default=[])
 ap.add_argument('--cdhash-pairs', action='append', default=[])
 ap.add_argument('--memo')
+ap.add_argument('--progress', action='store_true')
 a = ap.parse_args()
+if a.progress:
+    print('progress 1/1 files', flush=True)
 out = Path(a.out)
 (out / 'files').mkdir(parents=True, exist_ok=True)
 (out / 'files' / 'tool').write_bytes(b'arm64')
