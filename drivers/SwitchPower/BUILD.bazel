@@ -72,5 +72,6 @@ kernel_driver(
         "drivers/TegraI2C",
         "kits/SwitchCAR",
         "kits/SwitchMMIO",
+        "kits/SwitchSysctl",
     ],
 )

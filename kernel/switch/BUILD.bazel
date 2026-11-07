@@ -28,6 +28,10 @@ filegroup(
         "//translate/arm64e:a64x/a64x_image.c",
         "//translate/arm64e:a64x/a64x_rewrite.c",
     ],
+    visibility = [
+        "//kernel:__subpackages__",
+        "//kits/SwitchSysctl/test:__pkg__",
+    ],
 )
 
 filegroup(
