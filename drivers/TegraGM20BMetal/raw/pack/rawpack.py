@@ -37,6 +37,8 @@ and the tools alone):
            probes one bucket in place: programs.bin, probe{256,16,4096}.{out,log}, and its barrier/ the same
        rawpack.py --link --out <dir> [--stack <hex key>] <bucket dir>...
            mkpack.py over the buckets: <dir>/pack.bin and the rest, as the one-step form writes them
+       rawpack.py --stamp <pack.bin> --stack <hex key>
+           the stack key into a linked pack's header, so a build stamps a pack it linked without one
 """
 
 import concurrent.futures
@@ -340,15 +342,34 @@ def probe_env() -> dict[str, str]:
     return env
 
 
+def stamp(pack_bin: Path, stack: int) -> None:
+    """Write the stack key into pack.bin's header."""
+    pack = bytearray(pack_bin.read_bytes())
+    struct.pack_into('<Q', pack, 8 + 16 + 8 * 2 * 8, stack)  # PackHeader.stack (after the section table)
+    pack_bin.write_bytes(pack)
+
+
 def link(out: Path, buckets: list[Path], stack: int, programs: Path) -> None:
     """mkpack.py over the buckets' probe runs: out/pack.bin, stamped with the stack key."""
     out.mkdir(parents=True, exist_ok=True)
     report = run([sys.executable, HERE / 'mkpack.py', programs, out, *buckets])
     if stack:
-        pack = bytearray((out / 'pack.bin').read_bytes())
-        struct.pack_into('<Q', pack, 8 + 16 + 8 * 2 * 8, stack)  # PackHeader.stack (after the section table)
-        (out / 'pack.bin').write_bytes(pack)
+        stamp(out / 'pack.bin', stack)
     print(report.rstrip())
+
+
+def stamp_or_link(stack: int) -> bool:
+    """Run the --stamp or --link step where the command line names one; return whether it did."""
+    if '--stamp' in sys.argv[1:]:  # --stamp <pack.bin> --stack <key>
+        stamp(Path(option('--stamp')), stack)
+        return True
+    if '--link' in sys.argv[1:]:  # --link --out <dir> [--stack <key>] <bucket dir>...
+        out = Path(option('--out')).resolve()
+        buckets = [Path(a).resolve() for a in sys.argv[sys.argv.index('--link') + 1 :] if Path(a).is_dir()]
+        buckets = [b for b in buckets if b != out]
+        link(out, buckets, stack, out / 'programs.bin')
+        return True
+    return False
 
 
 def main() -> None:
@@ -362,11 +383,7 @@ def main() -> None:
                 (out / name).chmod(0o755)
         return
     stack = int(option('--stack', False) or '0', 16)
-    if '--link' in sys.argv[1:]:  # --link --out <dir> [--stack <key>] <bucket dir>...
-        out = Path(option('--out')).resolve()
-        buckets = [Path(a).resolve() for a in sys.argv[sys.argv.index('--link') + 1 :] if Path(a).is_dir()]
-        buckets = [b for b in buckets if b != out]
-        link(out, buckets, stack, out / 'programs.bin')
+    if stamp_or_link(stack):
         return
     qc = Path(option('--qc')).resolve()
     nvk = Path(option('--nvk')).resolve() if '--split' not in sys.argv[1:] else qc

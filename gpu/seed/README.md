@@ -46,3 +46,6 @@ hit.
 The work is split into shards by program, one action per shard, so it runs in parallel and a corpus edit only redoes
 the shards it touches. A derived pipeline that crashes the tool is skipped and counted. One from the corpus fails the
 build, because it would crash the device too.
+
+The raw pack is probed in buckets too, one action each. Only the last step, which stamps the stack key into the pack,
+reads the key that every `raw/` edit changes, so such an edit restamps the pack instead of probing again.

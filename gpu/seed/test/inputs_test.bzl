@@ -4,8 +4,10 @@
 - a bucket's compile reads its bucket's lines, the libraries and the three tools that make code: not the corpus, the
   GPU bundle, the tools' manifest or the raw pack's tools, so a corpus edit reaches only the buckets it rewrites and a
   plugin edit reaches none;
-- the join reads the buckets' indexes and reports, never their packs;
+- the join reads the buckets' indexes and reports, never their packs or the tools;
 - the bundle check is a validation action, so the GPU bundle is no input of anything that makes the seed;
+- the raw pack's probes read their bucket's states, the probe tools, the twin and QuartzCore's library, and only the
+  stamp reads the tools' manifest (the stack key, which every raw/ edit changes).
 """
 
 load("@bazel_skylib//lib:unittest.bzl", "analysistest", "asserts")
@@ -41,7 +43,7 @@ def _seed_impl(ctx):
             asserts.equals(env, [], [p for p in names if forbidden in p], "a bucket's inputs naming " + forbidden)
     (join,) = _actions(env, "MetalSeedJoin")
     asserts.equals(env, [], [p for p in _names(join) if p.endswith(".pack")], "the join reads no pack")
-    asserts.equals(env, [], [p for p in _names(join) if "/base/" in p], "the join reads no GPU bundle")
+    asserts.equals(env, [], [p for p in _names(join) if "/base/" in p or "/tools/" in p], "the join reads no tools")
     (check,) = _actions(env, "MetalSeedCheck")
     asserts.true(env, [p for p in _names(check) if "/base/" in p] != [], "the bundle is checked")
     validation = analysistest.target_under_test(env)[OutputGroupInfo]._validation.to_list()
@@ -50,14 +52,38 @@ def _seed_impl(ctx):
 
 _seed_test = analysistest.make(_seed_impl)
 
-def seed_inputs_tests(name, crawl, seed):
+def _raw_impl(ctx):
+    env = analysistest.begin(ctx)
+    probes = _actions(env, "MetalRawProbe")
+    asserts.equals(env, 16, len(probes))
+    for i, probe in enumerate(probes):
+        names = _ours(_names(probe))
+        lines = [p for p in names if p.endswith(".log")]
+        asserts.equals(env, ["bucket{}.log".format(i)], [p.rpartition("/")[2] for p in lines], "one bucket's states")
+        asserts.equals(env, [], [p for p in names if p.endswith("MANIFEST.json")], "a probe reads no stack key")
+        asserts.true(env, [p for p in names if p.endswith("libvulkan_nouveau.dylib")] != [], "the twin")
+        asserts.true(env, probe.outputs.to_list()[0].basename == "bucket{}".format(i), "named as rawpack.py knows it")
+    for mnemonic in ("MetalRawSplit", "MetalRawLink"):
+        (action,) = _actions(env, mnemonic)
+        asserts.equals(env, [], [p for p in _names(action) if p.endswith("MANIFEST.json")], mnemonic + " reads no key")
+    (link,) = _actions(env, "MetalRawLink")
+    asserts.equals(env, 16, len([f for f in link.inputs.to_list() if f.is_directory]), "every bucket's probe runs")
+    (stamp,) = _actions(env, "MetalRawStamp")
+    asserts.true(env, [p for p in _names(stamp) if p.endswith("MANIFEST.json")] != [], "the stamp reads the key")
+    return analysistest.end(env)
+
+_raw_test = analysistest.make(_raw_impl)
+
+def seed_inputs_tests(name, crawl, raw_pack, seed):
     """The tests, as one test_suite.
 
     Args:
         name: the test_suite's name.
         crawl: a shader_crawl over a stand-in tree.
+        raw_pack: a seed_raw_pack over stand-in tools and generator.
         seed: a metal_seed of four buckets over stand-in inputs.
     """
     _crawl_test(name = name + "_crawl", target_under_test = crawl)
     _seed_test(name = name + "_seed", target_under_test = seed)
-    native.test_suite(name = name, tests = [name + "_crawl", name + "_seed"])
+    _raw_test(name = name + "_raw", target_under_test = raw_pack)
+    native.test_suite(name = name, tests = [name + "_crawl", name + "_seed", name + "_raw"])

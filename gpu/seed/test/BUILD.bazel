@@ -4,10 +4,25 @@
 load("@bazel_skylib//rules:write_file.bzl", "write_file")
 load("//bazel/lint:defs.bzl", "lint_files")
 load("//gpu/seed:crawl.bzl", "QUARTZCORE")
-load("//gpu/seed:defs.bzl", "metal_seed", "shader_crawl")
+load("//gpu/seed:defs.bzl", "metal_seed", "seed_raw_pack", "shader_crawl")
 load(":inputs_test.bzl", "seed_inputs_tests")
 
 lint_files()
+
+RAW = [
+    "rawpack.py",
+    "mkpack.py",
+    "mkprograms.py",
+    "nvkshader.py",
+    "probelog.py",
+    "layouts.py",
+    "packfile.py",
+    "eqcheck.py",
+    "probe.mm",
+    "ca/caset.py",
+    "ca/caspec.py",
+    "ca/qc-21H461.json",
+]
 
 [write_file(
     name = path.replace("/", "_"),
@@ -25,7 +40,7 @@ lint_files()
     "tools/MANIFEST.json",
     "tools/raw/probe",
     "corpus/corpus.log",
-]]
+] + ["raw/" + name for name in RAW]]
 
 filegroup(
     name = "base",
@@ -73,8 +88,19 @@ metal_seed(
     tools = ":tools",
 )
 
+seed_raw_pack(
+    name = "raw_pack",
+    srcs = [":raw/" + name for name in RAW],
+    corpus = ":corpus/corpus.log",
+    crawl = ":crawl",
+    generator = ":raw/rawpack.py",
+    tags = ["manual"],
+    tools = ":tools",
+)
+
 seed_inputs_tests(
     name = "inputs_test",
     crawl = ":crawl",
+    raw_pack = ":raw_pack",
     seed = ":seed",
 )
