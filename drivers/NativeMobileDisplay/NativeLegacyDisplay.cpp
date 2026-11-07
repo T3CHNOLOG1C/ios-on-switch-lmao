@@ -786,7 +786,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     IOMemoryMap *scanMappings[kScanBuffers] = {};  // their write-combined views
     uint64_t scanAddresses[kScanBuffers] = {};     // their physical addresses
     TegraScanoutRing ring;                         // which surface is scanned, asked for, replaced, drawn
-    // The direct-scanout gate's probe (DisplaySmmuProbe.h; DESIGN-direct-scanout.md D1-D2): once, kProbeAfterFrames frame ends
+    // The direct-scanout gate's probe (DisplaySmmuProbe.h): once, kProbeAfterFrames frame ends
     // after window A first scanned a client frame, with nothing in flight, DC A's CRC unit and the display's SMMU domain (ASID
     // TEGRA_SMMU_ASID_DISPLAY on the "dc" swgroup) prove window A reads the scanned buffer through an IOVA slot; then all of
     // it is undone and one line says what was found. Swaps wait meanwhile (about 12 frames). Nothing scans through the SMMU
@@ -808,7 +808,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     int probeSurface = kNoBuffer;
     uint32_t probePixel = 0, probeSwgroupWas = 0;
     char probeLine[160] = {};
-    // Direct scanout (r14-direct; DESIGN-direct-scanout.md Phase 1), on once this boot's SMMU probe passed: the probe's domain
+    // Direct scanout (r14-direct), on once this boot's SMMU probe passed: the probe's domain
     // stays attached, and a full-frame BGRA swap whose rows window A can fetch (stride a multiple of 64, one 4 MiB slot) is
     // scanned in place from an SMMU slot (ring entries kSlot0..): a fence-only GPU present waits for the compositor's rendering
     // of it, then window A flips to the slot in pitch layout. Core Animation recycles a framebuffer when a later swap completes
