@@ -2240,7 +2240,9 @@ bool SwitchBluetooth::answer(uint16_t opcode, uint8_t status, int sub)
 // enable programs it again (the program starts by disabling APCF, so a part-done one leaves every advert passing).
 bool SwitchBluetooth::programLeFilter()
 {
-    constexpr uint8_t kInjectBusy = 0xfe, kInjectNotSent = 0xfd, kInjectNoAnswer = 0xff;
+    constexpr uint8_t kInjectBusy = 0xfe;
+    constexpr uint8_t kInjectNotSent = 0xfd;
+    constexpr uint8_t kInjectNoAnswer = 0xff;
     switch_le_command commands[SWITCH_LE_MAX_COMMANDS];
     const unsigned n = switch_le_filter_program(&leFilter, commands, SWITCH_LE_MAX_COMMANDS);
     for (unsigned i = 0; i < n; ++i) {
@@ -2250,13 +2252,17 @@ bool SwitchBluetooth::programLeFilter()
         if (!status)
             continue;
         if (status == kInjectBusy || status == kInjectNotSent || status == kInjectNoAnswer) {
+            const char *why = "no answer in time";
+            if (status == kInjectBusy) {
+                why = "a command outstanding";
+            } else if (status == kInjectNotSent) {
+                why = "not sent";
+            }
             switch_refusal_k(switch_refusal_key_with(switch_refusal_key("bluetooth", "apcf-deferred"), status),
                              "bluetooth", "apcf-deferred",
                              "APCF programming deferred to the next scan (%s): the controller keeps its previous "
                              "filters (or none) until then",
-                             status == kInjectBusy      ? "a command outstanding"
-                             : status == kInjectNotSent ? "not sent"
-                                                        : "no answer in time");
+                             why);
             leDirty = true;
             return true;
         }
@@ -3479,9 +3485,10 @@ bool SwitchBluetooth::bringUp(uint32_t offMs, char *why, size_t whySize)
         if (command(OP_READ_LOCAL_NAME, nullptr, 0, kCommandMs, name, &n) || n < 2)
             strlcpy(reinterpret_cast<char *>(name) + 1, "unnamed", 16);
         name[sizeof(name) - 1] = 0;
-        uint8_t caps[255] = {}, capsLength = 0;
+        uint8_t caps[255] = {};
+        uint8_t capsLength = 0;
         const int capsError = command(SWITCH_LE_OP_VENDOR_CAPS, nullptr, 0, kCommandMs, caps, &capsLength);
-        const bool apcf = !capsError && switch_le_filter_capabilities(caps, capsLength);
+        const bool apcf = (capsError == 0) && switch_le_filter_capabilities(caps, capsLength);
         __atomic_store_n(&leApcf, apcf, __ATOMIC_RELAXED);
         if (!leCapsLogged) {
             leCapsLogged = true;
