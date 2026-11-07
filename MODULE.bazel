@@ -244,6 +244,12 @@ use_repo(ipsw, "ipsw")
 release = use_extension("//install:release.bzl", "release")
 use_repo(release, "switch_release")
 
+# --- hw_test_app: the debug images' hardware test app (rules_apple + rules_swift); libvpx only for its media generator
+bazel_dep(name = "rules_swift", version = "4.2.2")
+bazel_dep(name = "rules_apple", version = "5.4.0")
+
+bazel_dep(name = "libvpx", version = "1.16.0.bcr.beta.3", dev_dependency = True)
+
 # --- GPU (owned by gpu/) -----------------------------------------------------------------------------------------
 # Rust 1.98.0 (the bridge's `cargo +1.98.0`), with the iOS standard library: the Metal bridge is built by this
 # toolchain's cargo, offline, inside a Bazel action (gpu/defs.bzl). rules_rust pins the dist archives by sha256.

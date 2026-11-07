@@ -18,6 +18,7 @@ py_library(
         "mkarchive.py",
         "poster_snapshots.py",
         "pull_logs.py",
+        "system_apps.py",
     ],
     imports = ["../.."],
     deps = ["//tools/install:lib"],
@@ -37,4 +38,11 @@ py_test(
         ":deploy",
         ":lib",
     ],
+)
+
+py_test(
+    name = "system_apps_test",
+    size = "small",
+    srcs = ["system_apps_test.py"],
+    deps = [":lib"],
 )

@@ -69,6 +69,15 @@ common --noexperimental_check_output_files
 # path); the script starts the hermetic interpreter at once. The same interpreter, venv and program.
 common --@rules_python//python/config_settings:bootstrap_impl=script
 
+# hw_test_app (debug images) is signed ad hoc, like the overlay's other user-space code: the boot package's trust cache
+# holds its CDHashes. With this identity rules_apple signs without the stand-in profile it requires for device builds.
+build --@rules_apple//apple/build_settings:signing_certificate_name=-
+# The app is for the device: rules_apple otherwise builds an Apple silicon host's iOS targets for the simulator.
+build --ios_multi_cpus=arm64
+# rules_apple tags its bundling, signing and profile-reading actions no-sandbox, for codesign's keychain lookups. An ad
+# hoc identity and an XML profile need neither the keychain nor anything undeclared, so they run sandboxed like the rest.
+build --modify_execution_info=^(BundleApp|BundleTreeApp|ProcessAndSign|SignBinary|ExtractFromProvisioningProfile)$=-no-sandbox
+
 # --- Output ------------------------------------------------------------------------------------------------------
 build --show_result=30
 common --color=yes

@@ -53,7 +53,8 @@ alias(
     }),
 )
 
-# fetchform is a debug build's, so never in a package composed from the release (release builds).
+# fetchform and the hardware test app are a debug build's, so never in a package composed from the release (release
+# builds), which also keeps rules_apple, Swift and the Metal toolchain out of the Xcode-free image path.
 selects.config_setting_group(
     name = "local_debug",
     match_all = [
@@ -169,7 +170,10 @@ boot_package(
         "//install:from_release": {"@switch_release//:overlay/" + source: source for source in OVERLAY_BINARIES.values()},
         "//conditions:default": OVERLAY_BINARIES,
     }) | select({
-        ":local_debug": {"//drivers/TegraGM20BMetal:fetchform": "build/switch-gpu/fetchform"},
+        ":local_debug": {
+            "//drivers/TegraGM20BMetal:fetchform": "build/switch-gpu/fetchform",
+            "//hw_test_app:SwitchHWTest": "build/switch-hwtest/SwitchHWTest.ipa",
+        },
         "//conditions:default": {},
     }),
     overlay_data = {
