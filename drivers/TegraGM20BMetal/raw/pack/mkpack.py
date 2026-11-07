@@ -127,18 +127,24 @@ RELOC_CODE = {
 
 
 def load_programs(path: str) -> dict[str, dict[str, bytes | list[int]]]:
+    """Give mkprograms.py's programs by the id nvdec names a bound one with: the FNV-1a of its header, code and data."""
     with open(path, 'rb') as programs:
         b = programs.read()
     progs, at = {}, 0
-    while at + 12 <= len(b):
+    while at + 16 <= len(b):
         assert b[at : at + 4] == b'NVPG'
-        code, count = struct.unpack_from('<II', b, at + 4)
-        at += 12
+        code, count, data = struct.unpack_from('<III', b, at + 4)
+        at += 16
         types = list(b[at : at + count])
         at += count
         image = b[at : at + 80 + code]
         at += 80 + code
-        progs[f'{packfile.fnv(image):x}'] = {'image': image, 'cbufs': types}
+        progs[f'{packfile.fnv(b[at - 80 - code : at + data]):x}'] = {
+            'image': image,
+            'cbufs': types,
+            'data': b[at : at + data],
+        }
+        at += data
     return progs
 
 
@@ -185,19 +191,35 @@ def default_forms(simple: list[dict]) -> tuple[list[dict], list[tuple[dict, str]
     return kept, aside
 
 
-# The constant buffers a raw draw binds (raw_gpu.cpp): the root table (NVK's cbuf type 1) at 0 and set 0 (type 3) at 1
-RAW_CBUFS = ([1], [1, 3])
+# NVK's cbuf types (nvk_shader.h nvk_cbuf_type) a raw draw binds: the root table at slot 0, then NAK's shader data and
+# set 0 at the slots the program names (raw_gpu.cpp)
+CBUF_ROOT, CBUF_SHADER_DATA, CBUF_SET = 1, 2, 3
+
+
+def raw_bindable(program: dict) -> bool:
+    cbufs = program['cbufs']
+    rest = cbufs[1:]
+    return (
+        bool(cbufs)
+        and cbufs[0] == CBUF_ROOT
+        and set(rest) <= {CBUF_SHADER_DATA, CBUF_SET}
+        and len(set(rest)) == len(rest)
+        and (CBUF_SHADER_DATA in rest) == bool(program['data'])
+    )
 
 
 def raw_bound(simple: list[dict], programs: dict[str, dict]) -> tuple[list[dict], list[tuple[dict, str]]]:
-    """Set aside the states whose programs read constant buffers a raw draw does not bind (NAK's shader data)."""
+    """Set aside the states whose programs read constant buffers a raw draw does not bind."""
     kept, aside = [], []
     for p in simple:
-        cbufs = [programs[p['records'][0]['prog'][st][0]]['cbufs'] for st in (1, 5)]
-        other = [c for c in cbufs if c not in RAW_CBUFS]
-        if other:
+        unbound = [
+            programs[pid]['cbufs']
+            for pid in (p['records'][0]['prog'][st][0] for st in (1, 5))
+            if not raw_bindable(programs[pid])
+        ]
+        if unbound:
             aside.append(
-                (p, f'a program reads constant buffers {other[0]}, the raw path binds the root table and set 0')
+                (p, f'a program reads constant buffers {unbound[0]}, the raw path binds root, shader data and set 0')
             )
         else:
             kept.append(p)
@@ -212,7 +234,7 @@ EXPECTED_SKIPS = (
     'storage form',
     'warm-up state',
     'a sampler m2v derives from a bound one',
-    'the raw path binds the root table and set 0',
+    'the raw path binds root, shader data and set 0',
     'the raw path has no 3D textures',
 )
 
@@ -335,6 +357,10 @@ def lay_out_programs(
         slot = bytearray(0x80 - 0x50) + pr['image'][:80]  # header at +0x30
         slot += pr['image'][80:]  # code at +0x80
         slot += bytes((-len(slot)) % 0x100)
+        data_offset = (
+            len(slot) if pr['data'] else 0
+        )  # NAK's shader data where NVK uploads it: 256-aligned after the code
+        slot += pr['data']
         heap += slot
         prog_index[pid] = len(prog_recs)
         prog_recs.append(
@@ -345,9 +371,12 @@ def lay_out_programs(
                 'bytes': len(slot),
                 'code': len(pr['image']) - 80,
                 'cbufs': pr['cbufs'],
+                'data_offset': data_offset,
+                'data_bytes': len(pr['data']),
             }
         )
-    report.append(f'{len(prog_recs)} programs, shader heap image {len(heap) // 1024} KiB')
+    data = sum(1 for pr in prog_recs if pr['data_bytes'])
+    report.append(f'{len(prog_recs)} programs ({data} with shader data), shader heap image {len(heap) // 1024} KiB')
     return heap, prog_index, prog_recs
 
 

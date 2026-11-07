@@ -26,6 +26,7 @@ using MapFn = std::function<const uint8_t *(uint64_t va, uint64_t bytes)>;
 struct ProgramInfo {
     std::vector<uint8_t> image;  // header + code, as uploaded to the shader heap
     std::vector<uint8_t> cbufTypes;
+    std::vector<uint8_t> data;  // NAK's shader data, uploaded 256-aligned after the code (NVK nvk_shader_upload)
 };
 
 class Decoder {

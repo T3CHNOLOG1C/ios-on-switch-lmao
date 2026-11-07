@@ -77,6 +77,7 @@ enum : uint32_t {
 };
 
 constexpr uint32_t kRootBytes = 0x800, kSetBytes = 0x100, kUboChunk = 0x100;
+constexpr uint32_t kMaxCbufBytes = 0x10000;        // NVK_MAX_CBUF_SIZE: the most of a constant buffer NVK binds
 constexpr uint32_t kRootInterlockTickets = 0x260;  // offsetof(nvk_root_descriptor_table, interlock_ticket_buffer)
 constexpr uint32_t kTicCount = 8192, kTscCount = 1024;
 constexpr uint32_t kEngines =
@@ -386,11 +387,12 @@ bool Device::init(std::string &err)
     return true;
 }
 
-// lock_ held: program `prog`'s slot in the heap, copied out of the pack the first time a state uses it, and its
-// SET_PIPELINE_PROGRAM value. A slot is a few KiB copied once per process from the pack's pages, so the CPU copies it (the copy
-// engine would want the pack's pages imported, wired, for the whole process); the next submission's prologue invalidates the
-// shader caches before any draw reads it. False: the heap is full (that state stays m2v's).
-bool Device::place(uint32_t prog, uint32_t &program)
+// lock_ held: program `prog`'s slot in the heap, copied out of the pack the first time a state uses it, its
+// SET_PIPELINE_PROGRAM value and its shader data's GPU address (0: none). A slot is a few KiB copied once per process from the
+// pack's pages, so the CPU copies it (the copy engine would want the pack's pages imported, wired, for the whole process); the
+// next submission's prologue invalidates the shader and constant caches before any draw reads it. False: the heap is full (that
+// state stays m2v's).
+bool Device::place(uint32_t prog, uint32_t &program, uint64_t &data)
 {
     const PackProgram &p = pack_.section<PackProgram>(PackPrograms)[prog];
     if (placed_[prog] == ~0u) {
@@ -402,7 +404,25 @@ bool Device::place(uint32_t prog, uint32_t &program)
         stats.programsPlaced++;
     }
     program = placed_[prog] + (p.program - p.heapOffset);
+    data = p.dataBytes ? heap_.va + placed_[prog] + p.dataOffset : 0;
     return true;
+}
+
+// The methods that bind program `prog`'s shader data at its slot of constant buffer group `group` (0 vertex, 4 pixel), leaving
+// the root table selected; and the slot it reads set 0 at (0: none)
+static uint8_t bindProgramCbufs(Push &w, const PackProgram &prog, uint32_t group, uint64_t data, uint64_t root)
+{
+    uint8_t setSlot = 0;
+    for (uint8_t c = 1; c < prog.cbufs; c++) {
+        if (prog.cbufType[c] == CbufSet)
+            setSlot = c;
+        if (prog.cbufType[c] != CbufShaderData)
+            continue;
+        w.inc(CB_SELECTOR_A, {std::min(prog.dataBytes, kMaxCbufBytes), uint32_t(data >> 32), uint32_t(data)});
+        w.m(BIND_GROUP_CB + 0x20 * group, 1 | uint32_t(c) << 4);
+        w.inc(CB_SELECTOR_A, {kRootBytes, uint32_t(root >> 32), uint32_t(root)});
+    }
+    return setSlot;
 }
 
 // A state of the pack, made the first time it is looked up (most of the pack's states never are in a process): its registers
@@ -420,11 +440,12 @@ Pipeline *Device::pipeline(uint64_t keyHash, PackForm form, bool caTransform)
     const PackProgram *progs = pack_.section<PackProgram>(PackPrograms);
     const uint32_t *blob = pack_.section<uint32_t>(PackBlob);
     uint32_t vs = 0, fs = 0;
-    if (!place(pp.vs, vs) || !place(pp.fs, fs)) {
+    uint64_t vsData = 0, fsData = 0;
+    if (!place(pp.vs, vs, vsData) || !place(pp.fs, fs, fsData)) {
         stats.heapFull++;
         return nullptr;
     }
-    std::vector<uint32_t> words(64 + pp.blobDwords * 2);
+    std::vector<uint32_t> words(64 + 16 + pp.blobDwords * 2);
     Push w{words.data(), words.data() + words.size()};
     uint32_t writes[8];
     memcpy(writes, ctWrite_, sizeof writes);
@@ -444,11 +465,11 @@ Pipeline *Device::pipeline(uint64_t keyHash, PackForm form, bool caTransform)
             interlocked = blob[pp.blob + k + 1] & 3;
     w.m(0x2044, vs);  // SET_PIPELINE_PROGRAM(VERTEX)
     w.m(0x2144, fs);  // SET_PIPELINE_PROGRAM(PIXEL)
+    pl.setSlot[0] = bindProgramCbufs(w, progs[pp.vs], 0, vsData, root_.va);
+    pl.setSlot[1] = bindProgramCbufs(w, progs[pp.fs], 4, fsData, root_.va);
     pl.methods.assign(words.data(), w.at);
     memcpy(pl.push, pp.pushWords, sizeof pl.push);
     pl.pushMask = pp.pushMask;
-    pl.vsSetCbuf = progs[pp.vs].cbufs >= 2;
-    pl.fsSetCbuf = progs[pp.fs].cbufs >= 2;
     // the color formats of its key ("c<i>=<format>:<writeMask>:<blending>:..."), and which colors its draws read as they
     // were (m2v linear_attachment::writes: a written color blended into, or written through a mask that keeps channels)
     for (const char *at = pack_.string(pp.keyString); (at = strstr(at, " c")); at += 2) {
@@ -2345,12 +2366,12 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, uint32_t first, ui
         p.m(LOAD_CB_OFFSET, 0x38);
         p.nonInc(LOAD_CB, s, 4);
     }
-    if (pl->vsSetCbuf || pl->fsSetCbuf) {
+    if (pl->setSlot[0] || pl->setSlot[1]) {
         p.inc(CB_SELECTOR_A, {kSetBytes, uint32_t(setVa >> 32), uint32_t(setVa)});
-        if (pl->vsSetCbuf)
-            p.m(BIND_GROUP_CB + 0x20 * 0, 1 | 1 << 4);
-        if (pl->fsSetCbuf)
-            p.m(BIND_GROUP_CB + 0x20 * 4, 1 | 1 << 4);
+        if (pl->setSlot[0])
+            p.m(BIND_GROUP_CB + 0x20 * 0, 1 | uint32_t(pl->setSlot[0]) << 4);
+        if (pl->setSlot[1])
+            p.m(BIND_GROUP_CB + 0x20 * 4, 1 | uint32_t(pl->setSlot[1]) << 4);
         p.inc(CB_SELECTOR_A, {kRootBytes, uint32_t(d.root_.va >> 32), uint32_t(d.root_.va)});
     }
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG

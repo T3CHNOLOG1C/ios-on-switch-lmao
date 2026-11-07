@@ -213,8 +213,8 @@ struct Pipeline {
     const PackPipeline *rec = nullptr;
     std::vector<uint32_t> methods;         // the state's registers as ready push words (program offsets relocated)
     uint32_t push[32] = {}, pushMask = 0;  // root table [0x700, 0x780): the words m2v's push ranges write, and which
-    bool vsSetCbuf = false, fsSetCbuf = false;  // the program reads set 0 as constant buffer 1
-    uint8_t writeBits = 0;                      // colors its draws write: SET_CT_WRITE(i) with a channel on
+    uint8_t setSlot[2] = {};  // the constant buffer slot the vertex and the pixel program read set 0 at (0: none)
+    uint8_t writeBits = 0;    // colors its draws write: SET_CT_WRITE(i) with a channel on
     // colors its fragment shader reads, and may write, as storage images inside the pixel interlock (metal2vulkan's storage
     // form of a fetch: the state turns the interlock on with SET_PIXEL_SHADER_INTERLOCK_CONTROL); the ROP writes none of them
     uint8_t storageBits = 0;
@@ -714,7 +714,7 @@ private:
     std::vector<uint32_t> placed_;  // each pack program's heap offset, ~0u: not placed
     uint64_t heapPlaced_ = 0;
     uint32_t ctWrite_[8] = {};  // SET_CT_WRITE(i) as the baseline leaves it
-    bool place(uint32_t prog, uint32_t &program);
+    bool place(uint32_t prog, uint32_t &program, uint64_t &data);
     std::vector<uint32_t> constexprTsc_;
     CommandBuffer cb_;
     uint32_t rootPush_[32] = {};  // what the GPU's root table holds at [0x700, 0x780) after everything submitted

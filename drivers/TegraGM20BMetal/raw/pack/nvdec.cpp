@@ -801,25 +801,29 @@ bool Decoder::loadPrograms(const char *path)
     while ((n = fread(chunk, 1, sizeof chunk, f)) > 0)
         b.insert(b.end(), chunk, chunk + n);
     fclose(f);
-    for (size_t at = 0; at + 12 <= b.size();) {
-        uint32_t code, count;
+    for (size_t at = 0; at + 16 <= b.size();) {
+        uint32_t code, count, data;
         if (memcmp(&b[at], "NVPG", 4))
             return false;
         memcpy(&code, &b[at + 4], 4);
         memcpy(&count, &b[at + 8], 4);
-        at += 12;
+        memcpy(&data, &b[at + 12], 4);
+        at += 16;
         ProgramInfo p;
         p.cbufTypes.assign(b.begin() + at, b.begin() + at + count);
         at += count;
         p.image.assign(b.begin() + at, b.begin() + at + 80 + code);
         at += 80 + code;
+        p.data.assign(b.begin() + at, b.begin() + at + data);
+        at += data;
         programs.emplace(fnv(p.image.data(), 80), p);
     }
     return true;
 }
 
-// The program a stage runs (pre-Volta: at SET_PIPELINE_PROGRAM bytes into SET_PROGRAM_REGION): a known one when its header and
-// code match exactly, named by the hash of both; else the hash of its header and first 256 bytes of code, marked unknown.
+// The program a stage runs (pre-Volta: at SET_PIPELINE_PROGRAM bytes into SET_PROGRAM_REGION): a known one when its header,
+// code and shader data match exactly, named by the hash of all three; else the hash of its header and first 256 bytes of code,
+// marked unknown. The header sits 0x30 bytes into its upload and the data 256-aligned after the code (nvk_shader_upload).
 const ProgramInfo *Decoder::program(int stage, std::string &id)
 {
     const uint64_t at = addr3(PROGRAM_REGION_A, PROGRAM_REGION_B) + r3(PIPELINE + 0x40 * stage + 4);
@@ -830,11 +834,13 @@ const ProgramInfo *Decoder::program(int stage, std::string &id)
     }
     auto range = programs.equal_range(fnv(head, 80));
     for (auto it = range.first; it != range.second; ++it) {
-        std::vector<uint8_t> b(it->second.image.size());
+        const ProgramInfo &p = it->second;
+        std::vector<uint8_t> b(p.image.size()), data(p.data.size());
         read(at, b.data(), b.size());
-        if (b == it->second.image) {
-            id = hex(fnv(b.data(), b.size()));
-            return &it->second;
+        const uint64_t dataAt = at - 0x30 + ((0x30 + b.size() + 0xff) & ~uint64_t(0xff));
+        if (b == p.image && (data.empty() || (read(dataAt, data.data(), data.size()) && data == p.data))) {
+            id = hex(fnv(data.data(), data.size(), fnv(b.data(), b.size())));
+            return &p;
         }
     }
     id = "unknown:" + hex(fnv(head, sizeof head));

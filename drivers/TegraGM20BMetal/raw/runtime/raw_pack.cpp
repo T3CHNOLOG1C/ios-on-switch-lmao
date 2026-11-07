@@ -44,8 +44,8 @@ bool Pack::load(const char *path, uint64_t stack, std::string &err)
     base_ = static_cast<const uint8_t *>(m);
     size_ = st.st_size;
     hdr_ = reinterpret_cast<const PackHeader *>(base_);
-    if (size_ < sizeof(PackHeader) || memcmp(hdr_->magic, "GM20BPK1", 8) || hdr_->version != 3) {
-        err = "not a version-3 pack";
+    if (size_ < sizeof(PackHeader) || memcmp(hdr_->magic, "GM20BPK1", 8) || hdr_->version != 4) {
+        err = "not a version-4 pack";
         return false;
     }
     if (stack && hdr_->stack != stack) {
