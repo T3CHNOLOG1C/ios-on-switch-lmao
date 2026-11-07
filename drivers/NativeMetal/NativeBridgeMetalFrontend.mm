@@ -2885,7 +2885,11 @@ static void waitForResource(id resource)
 
 @end
 
-@interface NBRenderEncoder : NBEncoder
+@interface NBRenderEncoder : NBEncoder {
+    MTLCullMode _cull;
+    MTLWinding _winding;
+    MTLTriangleFillMode _fill;
+}
 @property (nonatomic) bool skipsPending;  // the display's pass: a state still being made skips its draws
 @property (nonatomic) bool skipDraws;     // the state set last is being made (or failed): its draws are skipped
 @property (nonatomic, strong) NSArray<NBTwoPlaneStandIn *> *storeBacks;  // stored into their planes at endEncoding
@@ -3015,32 +3019,28 @@ static void waitForResource(id resource)
     [self check:nmb_render_set_scissor(self.handle, values) what:"setScissorRect"];
 }
 
-// The runtime takes cull mode, winding and fill mode together; this encoder keeps Metal's defaults until each is set.
+// The runtime takes cull mode, winding and fill mode together; this encoder keeps Metal's defaults (zero) until each is set.
 - (void)raster
 {
     NBApiTime timed;
-    NSNumber *cull = objc_getAssociatedObject(self, "cull"), *winding = objc_getAssociatedObject(self, "winding"),
-             *fill = objc_getAssociatedObject(self, "fill");
-    [self check:nmb_render_set_raster(self.handle, cull.unsignedLongLongValue, winding.unsignedLongLongValue,
-                                      fill.unsignedLongLongValue)
-           what:"raster state"];
+    [self check:nmb_render_set_raster(self.handle, _cull, _winding, _fill) what:"raster state"];
 }
 
 - (void)setCullMode:(MTLCullMode)m
 {
-    objc_setAssociatedObject(self, "cull", @(m), OBJC_ASSOCIATION_RETAIN);
+    _cull = m;
     [self raster];
 }
 
 - (void)setFrontFacingWinding:(MTLWinding)w
 {
-    objc_setAssociatedObject(self, "winding", @(w), OBJC_ASSOCIATION_RETAIN);
+    _winding = w;
     [self raster];
 }
 
 - (void)setTriangleFillMode:(MTLTriangleFillMode)f
 {
-    objc_setAssociatedObject(self, "fill", @(f), OBJC_ASSOCIATION_RETAIN);
+    _fill = f;
     [self raster];
 }
 
