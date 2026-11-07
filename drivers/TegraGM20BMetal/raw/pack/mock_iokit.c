@@ -64,7 +64,7 @@ static uint32_t submitted[16];
 static uint32_t *fence;   /* the fence page, a TegraGM20BAbiFence per channel at slot*16 */
 static uint32_t dead[16]; /* method 11's error of a killed channel */
 static uint32_t engines[16];
-static uint8_t live[16]; /* slots in use: the lowest free one is made next, its seqnos continuing (the kext's) */
+static uint8_t live[16]; /* slots in use: a connection gets its lowest free one, its seqnos continuing (the kext's) */
 static uint32_t kill_next;
 static atomic_ulong calls[16];
 static atomic_ulong import_maps;    /* VmBind map ops onto imported pages */
@@ -509,7 +509,7 @@ static kern_return_t mock_call(mach_port_t c, uint32_t sel, const void *in, size
             fence = mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_ANON | MAP_SHARED, -1, 0);
         pthread_mutex_lock(&gpu_lock);
         uint32_t ch = 1;
-        while (ch < 16 && live[ch])
+        while (ch < 16 && (live[ch] || (chan_conn[ch] && chan_conn[ch] != c)))
             ch++;
         if (ch == 16) {
             pthread_mutex_unlock(&gpu_lock);
