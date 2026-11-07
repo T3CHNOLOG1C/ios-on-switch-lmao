@@ -298,7 +298,8 @@ py_binary(
 )
 
 # The release's image-builder inputs (ios-on-switch-lmao-<version>-image-inputs.tar, r22-ci): this project's built
-# parts the Mac composes with the IPSW, none of them made from it.
+# parts the Mac composes with the IPSW, none of them made from it but the loader and its window constants (no Apple
+# bytes; release/ipsw_free.bzl DECLASSIFIED).
 prelink_options(
     name = "kernel_inputs",
     kernel = "//kernel:kernel_unprelinked",
@@ -310,6 +311,8 @@ release_tree(
     files = {
         ":kernel_inputs": "kernel",
         "//gpu:base": "gpu",
+        "//boot:loader": "loader/loader.uboot.bin",
+        "//boot:loader_constants": "loader/constants.json",
     } | {target: "overlay/" + source for target, source in OVERLAY_BINARIES.items()},
     tags = ["manual"],
 )
