@@ -5023,7 +5023,8 @@ static MTLRenderPipelineDescriptor *twinDescriptor(MTLRenderPipelineDescriptor *
     if (p->_quartzCore) {
         NSString *key = raw_metal_pipeline_key(d);
         const char *k = key.UTF8String;
-        p->_raw = gRM->raw->pipeline(raw::Pack::fnv(k, strlen(k)));
+        p->_raw = gRM->raw->pipeline(raw::Pack::fnv(k, strlen(k)), raw::PackForm::Default,
+                                     [vf.name hasPrefix:@"fixed_vert_"] && [vf.name hasSuffix:@"_spc"]);
     }
     if (!p->_raw)
         once([NSString stringWithFormat:@"state not in the pack (m2v draws it)%s: %@",
@@ -5904,8 +5905,7 @@ size_t raw_metal_rates(char *out, size_t size)
         snprintf(diag + used, sizeof diag - used, " rsplit=%.0f/%.0f/%.0fus/m rmax=%lluus fb=%llu/%llu/%llu/%llu",
                  (s.replaySlotUs.exchange(0) / double(m2vs)), (s.replayTwinUs.exchange(0) / double(m2vs)),
                  (s.replayCommitUs.exchange(0) / double(m2vs)), (unsigned long long)s.replayMaxUs.exchange(0),
-                 (unsigned long long)k.fetchBarriers.exchange(0),
-                 (unsigned long long)k.fetchBarriersDisjoint.exchange(0),
+                 (unsigned long long)k.fetchBarriers.exchange(0), (unsigned long long)k.fetchBarriersElided.exchange(0),
                  (unsigned long long)k.fetchBarriersAnyColor.exchange(0),
                  (unsigned long long)k.fetchBarriersInterlocked.exchange(0));
     }

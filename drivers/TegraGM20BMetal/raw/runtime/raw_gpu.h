@@ -34,6 +34,7 @@
 #include "raw_kernel.h"
 #include "raw_pack.h"
 #include "raw_push.h"
+#include "raw_region.h"
 #include "raw_ycbcr.h"
 #include "../fx/fx_mip.h"
 
@@ -214,6 +215,11 @@ struct Pipeline {
     uint8_t storageBits = 0;
     bool constantBlend = false;     // a blend factor of a blended color is the encoder's blend color
     uint32_t colorFormats[8] = {};  // MTLPixelFormat of each color attachment the state was made for (0: none)
+    // its vertex function is Core Animation's fixed_vert_l?h_spc (raw_bounds.h), and attribute 0 (the position) as its key
+    // gives it: floats from the stream's vertex start (0: no float position)
+    bool caTransform = false;
+    uint8_t positionComponents = 0;
+    uint16_t positionOffset = 0;
     uint8_t readBits = 0;   // colors its draws read as they were: blended into, or written through a partial mask
     uint8_t fetchBits = 0;  // colors it reads by framebuffer fetch
 };
@@ -284,6 +290,7 @@ private:
         uint32_t size = 0;  // bytes from va (setBytes: its length)
         const Buffer *buffer = nullptr;
         uint64_t offset = 0;
+        const uint8_t *cpu = nullptr;  // the bytes at va, where the CPU maps them
     };
 
     CommandBuffer *cb_ = nullptr;
@@ -319,13 +326,14 @@ private:
     double vp_[4] = {};
     uint32_t sc_[4] = {};
     std::vector<std::array<uint32_t, 4>> rects_;
+    // the draws that wrote a color since the last barrier, for the fetch barrier's region test (raw_region.h); the
+    // indices of the indexed draw being prepared
+    WrittenRegion written_;
+    const uint8_t *drawIndices_ = nullptr;
+    uint32_t drawIndexSize_ = 0, drawIndexCount_ = 0;
+    DrawGeometry geometry(const Pipeline &pl, uint32_t primitive, uint32_t first, uint32_t count,
+                          const PixelBox &limit) const;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    // the draw's pixels (empty: none), and the pixels color writes reached since the last barrier (full: more than it holds)
-    std::array<uint32_t, 4> drawRect_ = {};
-    std::array<std::array<uint32_t, 4>, 16> written_ = {};
-    uint32_t writtenCount_ = 0;
-    bool writtenFull_ = false;
-    bool writtenOverlaps(const std::array<uint32_t, 4> &r) const;
     // the same draws under two other rules, counted only: one barrier per fetching draw after any color write (the rule
     // before writtenBits_), and the interlocked storage form (a fetched color read and written by the fragment shader inside
     // the pixel interlock, the rest through the ROP): it orders storage accesses among themselves, so it barriers only where
@@ -434,7 +442,8 @@ public:
     }
 
     // A pack pipeline by its state key's FNV-1a (RawMetal.mm rawPipelineKey); null: not in the pack.
-    Pipeline *pipeline(uint64_t keyHash, PackForm form = PackForm::Default);
+    // caTransform: its vertex function is Core Animation's fixed_vert_l?h_spc (Pipeline::caTransform)
+    Pipeline *pipeline(uint64_t keyHash, PackForm form = PackForm::Default, bool caTransform = false);
 
     // Resources (thread safe). All textures are 2D, one level, one sample, pitch-linear.
     // pool memory, rows 256-byte aligned; `wc`: write-combined GPU-pool memory (a texture the CPU writes with replaceRegion:
@@ -594,10 +603,10 @@ public:
         std::atomic<uint64_t> levelPasses{0}, mirrorsOut{0}, mirrorsIn{0};
         // pack programs placed in the shader heap, and states not made because it was full
         std::atomic<uint64_t> programsPlaced{0}, heapFull{0};
-        // framebuffer-fetch barriers encoded, and of those the ones whose draw's pixels no color write since the last barrier
-        // reached (debug builds: what skipping a barrier by region would save); the barriers one per fetching draw after any
-        // color write would have encoded, and those the interlocked storage form would (RenderEncoder::countRules)
-        std::atomic<uint64_t> fetchBarriers{0}, fetchBarriersDisjoint{0}, fetchBarriersAnyColor{0},
+        // framebuffer-fetch barriers encoded, and those left out where the draw's pixels meet none a color write reached
+        // since the last barrier (raw_region.h); the barriers one per fetching draw after any color write would have encoded,
+        // and those the interlocked storage form would (RenderEncoder::countRules, debug builds)
+        std::atomic<uint64_t> fetchBarriers{0}, fetchBarriersElided{0}, fetchBarriersAnyColor{0},
             fetchBarriersInterlocked{0};
         // channels made again after the kernel killed one
         std::atomic<uint64_t> reopens{0};

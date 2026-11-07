@@ -396,7 +396,7 @@ bool Device::place(uint32_t prog, uint32_t &program)
 
 // A state of the pack, made the first time it is looked up (most of the pack's states never are in a process): its registers
 // as push words with its programs placed in the heap
-Pipeline *Device::pipeline(uint64_t keyHash, PackForm form)
+Pipeline *Device::pipeline(uint64_t keyHash, PackForm form, bool caTransform)
 {
     const PackPipeline *rec = pack_.find(keyHash, form);
     if (!rec)
@@ -453,6 +453,16 @@ Pipeline *Device::pipeline(uint64_t keyHash, PackForm form)
                 pl.constantBlend |= factor[k] >= 11 && factor[k] <= 14;
         }
     }
+    // attribute 0 ("a0=<MTLVertexFormat>:<offset>:<buffer>:<stride>:<step function>:..."): MTLVertexFormatFloat2, Float3
+    // or Float4, per vertex, from the stream's buffer
+    unsigned format = 0, offset = 0, buffer = 0, stride = 0, step = 0;
+    if (const char *a0 = strstr(pack_.string(pp.keyString), " a0=");
+        a0 && sscanf(a0, " a0=%u:%u:%u:%u:%u", &format, &offset, &buffer, &stride, &step) == 5 && format >= 29 &&
+        format <= 31 && buffer == pp.vertexSlot && stride == pp.vertexStride && step == 1) {
+        pl.positionComponents = uint8_t(format - 27);
+        pl.positionOffset = uint16_t(offset);
+    }
+    pl.caTransform = caTransform;
     for (uint32_t k = 0; k < pp.entries; k++)
         if (pp.entry[k].kind == EntryFetch && pp.entry[k].slot < 8)
             pl.fetchBits |= uint8_t(1u << pp.entry[k].slot);
@@ -1847,8 +1857,8 @@ void RenderEncoder::setBytes(int stage, uint32_t slot, const void *bytes, uint32
     uint8_t *m = dev_->alloc(dev_->upload_, chunk ? chunk : kUboChunk, kUboChunk, va);
     memcpy(m, bytes, length);
     memset(m + length, 0, (chunk ? chunk : kUboChunk) - length);
-    bufs_[stage][slot] = {va, length, nullptr,
-                          0};  // m2v binds the Metal length (its upload chunks are 256-byte aligned)
+    bufs_[stage][slot] = {va, length, nullptr, 0,
+                          m};  // m2v binds the Metal length (its upload chunks are 256-byte aligned)
     dev_->stats.uploadBytes += chunk;
 }
 
@@ -1860,8 +1870,9 @@ void RenderEncoder::setBuffer(int stage, uint32_t slot, const Buffer *b, uint64_
         bufs_[stage][slot] = {};
         return;
     }
-    bufs_[stage][slot] = {
-        b->va + offset, uint32_t(std::min<uint64_t>(b->length - std::min(offset, b->length), 0xffffffffu)), b, offset};
+    bufs_[stage][slot] = {b->va + offset,
+                          uint32_t(std::min<uint64_t>(b->length - std::min(offset, b->length), 0xffffffffu)), b, offset,
+                          b->cpu && offset < b->length ? b->cpu + offset : nullptr};
 }
 
 void RenderEncoder::setBufferOffset(int stage, uint32_t slot, uint64_t offset)
@@ -1927,9 +1938,8 @@ void RenderEncoder::barrier()
     p_.m(WAIT_FOR_IDLE, 0);
     p_.m(INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI, 0);
     writtenBits_ = storageWrittenBits_ = 0;
+    written_.clear();
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    writtenCount_ = 0;
-    writtenFull_ = false;
     anyWritten_ = false;
     ropWritten_ = storageWritten_ = 0;
 #endif
@@ -2000,7 +2010,12 @@ bool RenderEncoder::drawIndexed(uint32_t primitive, uint32_t count, uint32_t ind
                                                                   : largestIndex<uint32_t>(at, count);
     if (!ib->wc)
         cb_->clean(at, uint64_t(count) * indexSize);
-    if (!prepare(pl, primitive, 0, 0, most + 1, 0, true, why))
+    drawIndices_ = at;
+    drawIndexSize_ = indexSize;
+    drawIndexCount_ = count;
+    const bool prepared = prepare(pl, primitive, 0, 0, most + 1, 0, true, why);
+    drawIndices_ = nullptr;
+    if (!prepared)
         return false;
     const uint64_t va = ib->va + offset, end = va + uint64_t(count) * indexSize - 1;
     if (va != ibVa_ || end != ibEnd_ || indexSize != ibSize_) {
@@ -2025,22 +2040,20 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, uint32_t first, ui
     const uint32_t count = vCount;
     drew_ = true;
     readBits_ |= pl->readBits;
-    if (!whole_) {  // the pixels it may write: its scissor within its viewport's pixels (m2v vk_scissors, viewport_pixels)
-        auto axis = [](double origin, double size, uint32_t limit, uint32_t lo, uint32_t hi, uint32_t out[2]) {
-            const double a = size < 0 ? origin + size : origin, b = size < 0 ? origin : origin + size;
-            const int64_t first = int64_t(std::clamp(std::floor(a), 0.0, double(limit)));
-            const int64_t end =
-                size == 0 ? first : std::max<int64_t>(first, int64_t(std::clamp(std::ceil(b), 0.0, double(limit))));
-            out[0] = uint32_t(std::max<int64_t>(lo, first));
-            out[1] = std::max(out[0], uint32_t(std::min<int64_t>(hi, end)));
-        };
-        uint32_t x[2], y[2];
-        const bool empty = vp_[2] == 0 || vp_[3] == 0;
-        axis(vp_[0], empty ? 0 : vp_[2], areaW_, sc_[0], sc_[0] + sc_[2], x);
-        axis(vp_[1], empty ? 0 : vp_[3], areaH_, sc_[1], sc_[1] + sc_[3], y);
-#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-        drawRect_ = {x[0], y[0], x[1], y[1]};
-#endif
+    // the pixels it may write: its scissor within its viewport's pixels (m2v vk_scissors, viewport_pixels)
+    auto axis = [](double origin, double size, uint32_t limit, uint32_t lo, uint32_t hi, uint32_t out[2]) {
+        const double a = size < 0 ? origin + size : origin, b = size < 0 ? origin : origin + size;
+        const int64_t first = int64_t(std::clamp(std::floor(a), 0.0, double(limit)));
+        const int64_t end =
+            size == 0 ? first : std::max<int64_t>(first, int64_t(std::clamp(std::ceil(b), 0.0, double(limit))));
+        out[0] = uint32_t(std::max<int64_t>(lo, first));
+        out[1] = std::max(out[0], uint32_t(std::min<int64_t>(hi, end)));
+    };
+    uint32_t x[2], y[2];
+    const bool empty = vp_[2] == 0 || vp_[3] == 0;
+    axis(vp_[0], empty ? 0 : vp_[2], areaW_, sc_[0], sc_[0] + sc_[2], x);
+    axis(vp_[1], empty ? 0 : vp_[3], areaH_, sc_[1], sc_[1] + sc_[3], y);
+    if (!whole_) {
         if (x[1] > x[0] && y[1] > y[0]) {
             const std::array<uint32_t, 4> r = {x[0], y[0], x[1], y[1]};
             if (std::find(rects_.begin(), rects_.end(), r) == rects_.end())
@@ -2241,18 +2254,25 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, uint32_t first, ui
     // ROP's accesses are ordered after neither: a barrier where a texture fetch meets a write of either kind, a storage
     // access meets a ROP write, or a ROP access (a write, or the read a blend or a partial write mask makes) meets a
     // storage write.
+    // A fetch through the texture unit that meets only ROP writes needs the barrier only where its pixels meet theirs
+    // (raw_region.h); nothing bounds a storage access's pixels.
     const uint8_t texFetched = pl->fetchBits & ~pl->storageBits, ropAccessed = pl->writeBits | pl->readBits;
-    if ((texFetched & (writtenBits_ | storageWrittenBits_)) | (pl->storageBits & writtenBits_) |
-        (ropAccessed & storageWrittenBits_)) {
+    const DrawGeometry g = geometry(*pl, primitive, first, indexed ? drawIndexCount_ : count, {x[0], y[0], x[1], y[1]});
+    const bool storage =
+        (pl->storageBits & writtenBits_) | (ropAccessed & storageWrittenBits_) | (texFetched & storageWrittenBits_);
+    if (storage || (texFetched & writtenBits_)) {
+        if (!storage && !written_.meets(g)) {
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-        dev_->stats.fetchBarriers++;
-        if (!whole_ && !writtenOverlaps(drawRect_))
-            dev_->stats.fetchBarriersDisjoint++;
-        writtenCount_ = 0;
-        writtenFull_ = false;
+            dev_->stats.fetchBarriersElided++;
 #endif
-        fetchBarrier(p);
-        writtenBits_ = storageWrittenBits_ = 0;
+        } else {
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+            dev_->stats.fetchBarriers++;
+#endif
+            fetchBarrier(p);
+            writtenBits_ = storageWrittenBits_ = 0;
+            written_.clear();
+        }
     }
     if (first != first_ || baseInstance != baseInstance_) {
         // nvk_mme_build_set_draw_params: root draw.vs.{base_vertex, base_instance} and the base registers
@@ -2265,17 +2285,33 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, uint32_t first, ui
     }
     writtenBits_ |= pl->writeBits;
     storageWrittenBits_ |= pl->storageBits;
-#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    if (pl->writeBits && whole_)
-        writtenFull_ = true;
-    else if (pl->writeBits && drawRect_[2] > drawRect_[0] && drawRect_[3] > drawRect_[1]) {
-        if (writtenCount_ < written_.size())
-            written_[writtenCount_++] = drawRect_;
-        else
-            writtenFull_ = true;
-    }
-#endif
+    if (pl->writeBits)
+        written_.add(g);
     return true;
+}
+
+// What the region test reads of a draw: Core Animation's transform (Pipeline::caTransform) over a triangle list or strip
+// of one instance, with its matrix, positions and indices where the CPU maps them; anything else is its scissor alone
+DrawGeometry RenderEncoder::geometry(const Pipeline &pl, uint32_t primitive, uint32_t first, uint32_t count,
+                                     const PixelBox &limit) const
+{
+    DrawGeometry g;
+    g.limit = limit;
+    g.viewport = {vp_[0], vp_[1], vp_[2], vp_[3]};
+    g.first = drawIndices_ ? 0 : first;
+    g.count = count;
+    g.indices = drawIndices_;
+    g.indexSize = drawIndexSize_;
+    const Bound &m = bufs_[1][2];
+    const Bound &v = pl.rec->vertexSlot < 31 ? bufs_[1][pl.rec->vertexSlot] : bufs_[1][0];
+    g.bounded = pl.caTransform && pl.positionComponents && (primitive == 3 || primitive == 4) && m.cpu &&
+                m.size >= 64 && v.cpu && pl.rec->vertexSlot < 31;
+    if (g.bounded) {
+        g.matrix = m.cpu;
+        g.positions = {v.cpu, pl.rec->vertexStride, pl.positionOffset, pl.positionComponents};
+        g.positionBytes = v.size;
+    }
+    return g;
 }
 
 void RenderEncoder::fetchBarrier(Push &p)
@@ -2318,17 +2354,6 @@ void RenderEncoder::countRules(const Pipeline &pl)
     storageWritten_ |= stored;
 }
 
-bool RenderEncoder::writtenOverlaps(const std::array<uint32_t, 4> &r) const
-{
-    if (writtenFull_)
-        return true;
-    for (uint32_t i = 0; i < writtenCount_; i++) {
-        const std::array<uint32_t, 4> &w = written_[i];
-        if (r[0] < w[2] && w[0] < r[2] && r[1] < w[3] && w[1] < r[3])
-            return true;
-    }
-    return false;
-}
 #endif
 
 // The clear value m2v hands Vulkan for a Metal clear color of an attachment of `format` (metal2vulkan-runtime clear_value.rs

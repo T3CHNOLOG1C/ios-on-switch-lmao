@@ -7,8 +7,9 @@
 #   stage_test        stage-tegra-gm20b-metal.py on a directory standing in for the Data volume
 #   raw_ycbcr_test    raw/runtime/raw_ycbcr.cpp: the two-plane YCbCr textures the raw path converts (m2v's rules) and the
 #                     conversion's shape; its texels against Metal's reads are raw/test/ycbcroracle.mm's (this Mac's GPU)
-#   raw_bounds_test   raw/runtime/raw_bounds.h: a Core Animation draw's pixel box and rectangle from its vertices; against
-#                     a GPU's coverage it is raw/test/boundsoracle.mm's (this Mac's GPU)
+#   raw_bounds_test   raw/runtime/raw_bounds.h: a Core Animation draw's pixel box and rectangle from its vertices (against
+#                     a GPU's coverage it is raw/test/boundsoracle.mm's, this Mac's GPU), and raw_region.h: the fetch
+#                     barrier's region test over such draws
 #
 #   bazel test //drivers/TegraGM20BMetal/test:all
 load("@rules_python//python:py_test.bzl", "py_test")
@@ -59,6 +60,7 @@ host_test(
     srcs = [
         "raw_bounds_test.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_bounds.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_region.h",
     ],
     cxx_std = "c++17",
 )

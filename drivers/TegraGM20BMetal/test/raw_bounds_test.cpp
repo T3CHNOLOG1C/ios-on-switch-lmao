@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: MIT
 // raw/runtime/raw_bounds.h on the host: the box and the rectangle of a draw of Core Animation's vertex transform, over
-// synthetic quads, triangles and clipped vertices. raw/test/boundsoracle.mm checks the same against a GPU's coverage.
+// synthetic quads, triangles and clipped vertices (raw/test/boundsoracle.mm checks the same against a GPU's coverage);
+// and raw_region.h's fetch barrier region test over such draws.
 #include <gtest/gtest.h>
 
 #include <vector>
 
 #include "../raw/runtime/raw_bounds.h"
+#include "../raw/runtime/raw_region.h"
 
 namespace {
 
@@ -155,6 +157,88 @@ TEST(RawBounds, OffTargetClampsToTheLimit)
     ASSERT_TRUE(bounds(b, positions({{-500, -20}, {1500, -20}, {-500, 900}, {1500, 900}})));
     expectBox(b.pixels(kTarget), 0, 0, kWidth, kHeight);
     expectBox(b.pixels({100, 200, 300, 400}), 100, 200, 300, 400);
+}
+
+// A draw of a pixel rectangle as a strip, over vertex memory the test keeps
+raw::DrawGeometry quad(std::vector<float> &memory, float x0, float y0, float x1, float y1)
+{
+    memory = positions({{x0, y0}, {x1, y0}, {x0, y1}, {x1, y1}});
+    raw::DrawGeometry g;
+    g.bounded = true;
+    g.matrix = reinterpret_cast<const uint8_t *>(kPixels);
+    g.positions = {reinterpret_cast<const uint8_t *>(memory.data()), 16, 0, 4};
+    g.positionBytes = memory.size() * sizeof(float);
+    g.count = 4;
+    g.viewport = kViewport;
+    g.limit = kTarget;
+    return g;
+}
+
+TEST(RawRegion, AFetchMeetsOnlyTheWritesItsPixelsReach)
+{
+    std::vector<float> a, b, c, d;
+    raw::WrittenRegion written;
+    written.add(quad(a, 0, 0, 100, 100));
+    written.add(quad(b, 200, 0, 300, 100));
+    EXPECT_FALSE(written.meets(quad(c, 120, 0, 180, 100)));
+    EXPECT_TRUE(written.meets(quad(d, 90, 0, 150, 100)));
+    written.clear();
+    EXPECT_FALSE(written.meets(quad(d, 90, 0, 150, 100)));
+}
+
+TEST(RawRegion, AGuardPixelSeparatesTouchingRectangles)
+{
+    std::vector<float> a, b, c;
+    raw::WrittenRegion written;
+    written.add(quad(a, 0, 0, 100, 100));
+    EXPECT_TRUE(written.meets(quad(b, 100, 0, 200, 100)));
+    EXPECT_FALSE(written.meets(quad(c, 102, 0, 200, 100)));
+}
+
+TEST(RawRegion, AnUnboundedDrawCoversItsScissor)
+{
+    std::vector<float> a, b, c;
+    raw::WrittenRegion written;
+    raw::DrawGeometry other = quad(a, 0, 0, 10, 10);
+    other.bounded = false;
+    other.limit = {0, 0, 640, 720};
+    written.add(other);
+    EXPECT_TRUE(written.meets(quad(b, 600, 0, 700, 100)));
+    EXPECT_FALSE(written.meets(quad(c, 700, 0, 800, 100)));
+}
+
+TEST(RawRegion, VerticesPastTheBoundBytesLeaveNoBox)
+{
+    std::vector<float> a, b;
+    raw::WrittenRegion written;
+    raw::DrawGeometry g = quad(a, 0, 0, 10, 10);
+    g.positionBytes = 3 * 16;
+    g.limit = {0, 0, 640, 720};
+    written.add(g);
+    EXPECT_TRUE(written.meets(quad(b, 600, 0, 700, 100)));
+}
+
+TEST(RawRegion, MoreWritesThanItHoldsMeetEverything)
+{
+    std::vector<std::vector<float>> memory(raw::WrittenRegion::kMaxDraws + 2);
+    raw::WrittenRegion written;
+    for (uint32_t i = 0; i <= raw::WrittenRegion::kMaxDraws; i++)
+        written.add(quad(memory[i], float(i), 0, float(i) + 1, 1));
+    EXPECT_TRUE(written.meets(quad(memory.back(), 1000, 600, 1100, 700)));
+}
+
+TEST(RawRegion, IndexedDrawsReadTheirIndices)
+{
+    std::vector<float> a, b;
+    raw::WrittenRegion written;
+    raw::DrawGeometry g = quad(a, 0, 0, 100, 100);
+    const uint16_t indices[6] = {0, 1, 2, 1, 3, 2};
+    g.indices = reinterpret_cast<const uint8_t *>(indices);
+    g.indexSize = 2;
+    g.count = 6;
+    written.add(g);
+    EXPECT_FALSE(written.meets(quad(b, 150, 0, 200, 100)));
+    EXPECT_TRUE(written.meets(quad(b, 50, 50, 200, 100)));
 }
 
 }  // namespace
