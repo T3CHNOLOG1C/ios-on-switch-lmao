@@ -44,6 +44,7 @@ SETUP = targets.SETUP_NAME
 # macOS reads the partition table again when a whole disk opened for writing is closed; it takes well under a second.
 REPROBE_SECONDS = 30
 SETTLE_TRIES = 40
+UNMOUNT_TRIES = 5
 BLOCK = 4096
 GB = 1e9
 
@@ -168,10 +169,20 @@ class Direct:
         return False
 
     def unmount_all(self, container: dict | None) -> None:
-        """Nothing on the card may be mounted while its whole-disk node is open for writing (EBUSY otherwise)."""
-        if container:
-            host.run('diskutil', 'unmountDisk', container['ContainerReference'], log=self.log)
-        host.run('diskutil', 'unmountDisk', self.card.disk, log=self.log)
+        """Nothing on the card may be mounted while its whole-disk node is open for writing (EBUSY otherwise).
+
+        Spotlight and Finder hold a volume they just saw mounted for a moment, so a busy unmount is tried again.
+        """
+        disks = ([container['ContainerReference']] if container else []) + [self.card.disk]
+        volumes = [v['DeviceIdentifier'] for v in (container or {}).get('Volumes', [])]
+        for attempt in range(UNMOUNT_TRIES):
+            for disk in disks:
+                host.run('diskutil', 'unmountDisk', disk, log=self.log, check=attempt + 1 == UNMOUNT_TRIES)
+            parts = [p['DeviceIdentifier'] for p in host.partitions(self.card.disk)]
+            if not any(host.mount_point(identifier) for identifier in parts + volumes):
+                return
+            time.sleep(1)
+        raise host.HostError(f'something on {self.card.disk} stays mounted: close what uses the card and run again')
 
     def retype(self, kind: uuid.UUID, name: str) -> None:
         index = self.target.index
@@ -270,7 +281,7 @@ class Direct:
         for _ in range(SETTLE_TRIES):
             container = host.container_on(self.slice) or {}
             if any(host.mount_point(v['DeviceIdentifier']) for v in container.get('Volumes', [])):
-                host.run('diskutil', 'unmountDisk', container['ContainerReference'], log=self.log)
+                host.run('diskutil', 'unmountDisk', container['ContainerReference'], log=self.log, check=False)
                 quiet = 0
             elif (quiet := quiet + 1) == 2:
                 return
@@ -295,8 +306,10 @@ class Direct:
 def image(out: Path, name: str | None) -> tuple[str, manifest.Manifest]:
     found = folder.images(out)
     names = [name] if name else sorted(found)
+    if not names:
+        raise host.HostError(f'{out} holds no image: run //:image first')
     if len(names) != 1:
-        raise cards.RefusedError(f'{out} holds images {names or "none"}: choose one with --image')
+        raise cards.RefusedError(f'{out} holds {", ".join(names)}: choose one with --image')
     m = found.get(names[0])
     if m is None:
         raise host.HostError(f'{out} holds no readable image {names[0]}: run //:image first')

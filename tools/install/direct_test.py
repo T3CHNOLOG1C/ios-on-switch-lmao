@@ -1,15 +1,18 @@
 """The direct install's container writer against a plain file standing in for the partition (no device)."""
 
+import contextlib
 import hashlib
 import io
 import os
 import random
 import shutil
 import struct
+import sys
 import tempfile
 import unittest
 import uuid
 from pathlib import Path
+from unittest import mock
 
 from tools.install import apfs, card as cards, direct, direct_stream as streams, folder, manifest, pack
 
@@ -160,6 +163,33 @@ class ImageTest(unittest.TestCase):
             direct.image(root, None)
         name, m = direct.image(root, 'IOS27')
         self.assertEqual((name, m.label), ('IOS27', 'IOS27 test'))
+
+
+class ReexecTest(unittest.TestCase):
+    def test_reruns_itself_under_sudo_with_absolute_inputs_and_the_confirmation(self):
+        args = direct.parse(['disk7', '--yes', '--out', 'relative/sd', '--apfs-tool', '/tools/apfs_tool'])
+        args.confirm, args.image = 'disk7', 'IOS27'
+        with (
+            mock.patch.object(direct.os, 'execvp', side_effect=SystemExit) as execvp,
+            contextlib.redirect_stdout(io.StringIO()),
+            self.assertRaises(SystemExit),
+        ):
+            direct.reexec_as_root(args)
+        command = execvp.call_args.args[1]
+        self.assertEqual(
+            command[:6], ['sudo', '--', sys.executable, os.path.abspath(direct.__file__), 'disk7', '--yes']
+        )
+        flags = dict(flag.split('=', 1) for flag in command[6:])
+        self.assertEqual(set(flags), {'--confirm', '--out', '--image', '--apfs-tool', '--log'})
+        self.assertEqual(flags['--confirm'], 'disk7')
+        self.assertEqual(flags['--image'], 'IOS27')
+        self.assertEqual(flags['--out'], os.path.abspath('relative/sd'))
+        self.assertTrue(os.path.isabs(flags['--log']))
+        args.partition, args.no_eject = 'userdata', True
+        with mock.patch.object(direct.os, 'execvp') as execvp, contextlib.redirect_stdout(io.StringIO()):
+            direct.reexec_as_root(args)
+        self.assertEqual(execvp.call_args.args[1][-2:], ['--log=' + flags['--log'], '--no-eject'])
+        self.assertIn('--partition=userdata', execvp.call_args.args[1])
 
 
 if __name__ == '__main__':
