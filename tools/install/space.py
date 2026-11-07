@@ -76,3 +76,24 @@ def check(where: str | Path, need: int, what: str) -> None:
             f'{what} writes {progress.size(need)} to {where}, which has {progress.size(free)} free; '
             f'{progress.size(need + KEEP_FREE - free)} more is needed (the Mac keeps {progress.size(KEEP_FREE)})'
         )
+
+
+def check_run(where: str | Path, rows: list[tuple[str, int]], cached: int, log: host.Log) -> None:
+    """Say what the whole run writes, stage by stage, against what is free; refuse before the first stage if short.
+
+    `cached`: what Bazel's outputs this run reads (iOS 27's translations) already take on the same disk.
+    """
+    free, total = disks.free_bytes(where), sum(n for _, n in rows)
+    stages = ', '.join(f'{name} {progress.size(n)}' for name, n in rows)
+    log(f'space: this run writes {progress.size(total)} ({stages}); {progress.size(free)} free on {where}')
+    if cached:
+        log(f"space: Bazel's outputs it reads already take {progress.size(cached)} (in the disk cache and output base)")
+    written = 0
+    for name, n in rows:
+        written += n
+        if written + KEEP_FREE > free:
+            short = progress.size(total + KEEP_FREE - free)
+            raise host.HostError(
+                f'{name} would run out of disk: the run needs {progress.size(total)} and the Mac keeps '
+                f'{progress.size(KEEP_FREE)}, {progress.size(free)} is free; clear {short} and run again'
+            )

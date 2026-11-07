@@ -148,11 +148,21 @@ class Stages:
             paths = ' '.join(f'"{p}"' for p in stuck)
             self.log(f"cleanup: {len(stuck)} leftovers of an earlier run under sudo are root's: sudo rm -rf {paths}")
 
+    def space_needed(self, first: str) -> list[tuple[str, int]]:
+        """Return what each stage from `first` on writes to the scratch disk, measured from its inputs."""
+        os_used, var = compose.os_measure(self.args.os_dmg, self.spec['volumes']['system']['uuid'], self.log)
+        sources, expected = self.cryptexes()
+        images = populate.cryptex_images(self.spec, self.pins, sources, expected)
+        rows = [('compose', os_used)] if first == 'compose' else []
+        if first in ('compose', 'populate'):
+            rows.append(('populate', var + space.populate_bytes(self.args, [i for i, _ in images.values()])))
+        # The parts hold every used block; punching the clone gives back what populate wrote, not composed.img's.
+        rows.append(('pack', os_used))
+        return rows
+
     def compose(self, key: str) -> None:
         for image in (self.composed, self.populated):
             image.unlink(missing_ok=True)
-        os_used = compose.os_container_used(self.args.os_dmg, self.log)
-        space.check(self.scratch, os_used, 'compose')
         partial = disks.partial(self.composed)
         offset, _ = compose.compose(partial, self.args.os_dmg, NOMINAL, self.spec, self.log)
         os.replace(partial, self.composed)

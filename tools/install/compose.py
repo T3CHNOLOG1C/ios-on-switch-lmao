@@ -13,7 +13,7 @@ import subprocess
 import uuid
 from pathlib import Path
 
-from tools.install import apfs, gpt, host, progress
+from tools.install import apfs, disks, gpt, host, progress, space
 
 COPY_CHUNK = 8 << 20
 F_PUNCHHOLE = 99  # <sys/fcntl.h>: deallocate a range of a file (APFS)
@@ -75,14 +75,25 @@ def _attach_os(os_dmg: str, log: host.Log) -> tuple[str, str]:
     return (store[:slice_at] if slice_at > 0 else store), store
 
 
-def os_container_used(os_dmg: str, log: host.Log) -> int:
-    """Return what the OS image's container uses, by its own count: what composing it writes."""
+def os_measure(os_dmg: str, system_uuid: str, log: host.Log) -> tuple[int, int]:
+    """Return what the OS image's container uses and what its System volume's /private/var takes, by their own counts.
+
+    Composing writes the first; populating copies the second onto Data.
+    """
     whole, source = _attach_os(os_dmg, log)
     try:
         container = host.container_on(source[len('/dev/') :])
         if not container:
             raise host.HostError(f'{os_dmg}: no APFS container on {source}')
-        return int(container['CapacityCeiling']) - int(container['CapacityFree'])
+        used = int(container['CapacityCeiling']) - int(container['CapacityFree'])
+        volume = next(
+            (v['DeviceIdentifier'] for v in container['Volumes'] if v['APFSVolumeUUID'].upper() == system_uuid.upper()),
+            None,
+        )
+        if volume is None:
+            raise host.HostError(f'{os_dmg}: no System volume {system_uuid}')
+        with disks.mounted(volume, log, owners=False, read_only=True) as root:
+            return used, space.allocated(root / 'private/var')
     finally:
         host.run('hdiutil', 'detach', whole, log=log)
 

@@ -33,6 +33,7 @@ from tools.install import (
     keys,
     manifest,
     progress,
+    space,
     stages,
 )
 
@@ -55,6 +56,13 @@ INPUTS = (
     'install_payload',
     'pretranslated_pins',
     'apfs_tool',
+    'delta_os',
+    'delta_app_cryptex',
+    'delta_system_cryptex',
+    'translated_app_cryptex',
+    'translated_system_cryptex',
+)
+BAZEL_OUTPUTS = (
     'delta_os',
     'delta_app_cryptex',
     'delta_system_cryptex',
@@ -158,6 +166,9 @@ class Builder:
             self.log('dry run: nothing written' if self.args.dry_run else f'{self.name}.SII: unchanged')
             return 0
         work.clean()
+        if first != 'head':
+            cached = sum(space.allocated(getattr(self.args, n, None)) for n in BAZEL_OUTPUTS)
+            space.check_run(self.args.scratch, work.space_needed(first), cached, self.log)
         if first == 'head':
             self.time('head', lambda: stages.refresh_head(out, self.name, files, self.label))
             self.finish(out, k)

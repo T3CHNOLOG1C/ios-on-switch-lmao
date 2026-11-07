@@ -35,6 +35,16 @@ class Space(unittest.TestCase):
             with self.assertRaisesRegex(host.HostError, r'compose writes 2.0 GiB .* 1.0 GiB more is needed'):
                 space.check(self.dir, 2 << 30, 'compose')
 
+    def test_the_whole_run_is_stated_and_refused_before_it_starts(self) -> None:
+        lines = []
+        rows = [('compose', 8 << 30), ('populate', 7 << 30), ('pack', 8 << 30)]
+        with mock.patch.object(space.disks, 'free_bytes', return_value=20 << 30):
+            with self.assertRaisesRegex(host.HostError, r'^pack would run out .* needs 23 GiB .* clear 5.0 GiB'):
+                space.check_run(self.dir, rows, 13 << 30, lines.append)
+            self.assertIn('this run writes 23 GiB (compose 8.0 GiB, populate 7.0 GiB, pack 8.0 GiB)', lines[0])
+            self.assertIn('already take 13 GiB', lines[1])
+            space.check_run(self.dir, rows[1:], 0, lines.append)
+
 
 if __name__ == '__main__':
     unittest.main()
