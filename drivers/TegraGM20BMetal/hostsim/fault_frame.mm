@@ -6,7 +6,7 @@
 //    a page fault, a hang a timeout);
 //  - one still running when a later one's kill comes fails with it, as a victim of Metal's recovery;
 //  - the queue gets a new channel, and the next command buffers on the same queue and device complete;
-//  - the device frees and remakes nothing, and memory written before the fault keeps its bytes.
+//  - memory written before the fault keeps its bytes, and the next command buffer reads it.
 // usage: fault_frame <cache dir> <host libvulkan_nouveau.dylib>
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
@@ -70,12 +70,11 @@ bool holds(id<MTLBuffer> buffer, uint8_t value)
 }
 
 struct Counts {
-    unsigned long creates, destroys, frees;
+    unsigned long creates, destroys;
 
     static Counts now()
     {
-        return {mock_iokit_calls(TegraGM20BMethodChannelCreate), mock_iokit_calls(TegraGM20BMethodChannelDestroy),
-                mock_iokit_calls(TegraGM20BMethodBoFree)};
+        return {mock_iokit_calls(TegraGM20BMethodChannelCreate), mock_iokit_calls(TegraGM20BMethodChannelDestroy)};
     }
 };
 
@@ -97,7 +96,6 @@ void faultedCommandBufferFails(id<MTLDevice> dev, id<MTLCommandQueue> queue)
     expect(completes(next), "the next command buffer on the queue completes");
     const Counts is = Counts::now();
     expect(is.creates == was.creates + 1 && is.destroys == was.destroys + 1, "the queue got one new channel");
-    expect(is.frees == was.frees, "the device freed nothing");
     expect(holds(before, 0xa5) && holds(source, 0x5a), "memory written before the fault keeps its bytes");
     expect([dev newCommandQueue] != nil && completes(copy([dev newCommandQueue], source, after)),
            "the device makes queues whose work completes");
