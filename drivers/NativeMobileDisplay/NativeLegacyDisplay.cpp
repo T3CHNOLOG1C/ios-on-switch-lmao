@@ -117,6 +117,12 @@ extern "C" __attribute__((weak)) void tegra_gm20b_frame_take(struct SwitchFrameG
     *out = {};
 }
 
+extern "C" __attribute__((weak)) void switch_sched_render_vsync(uint64_t, uint64_t)
+{}
+
+extern "C" __attribute__((weak)) void switch_sched_render_swapped(void)
+{}
+
 // XNU osfmk/kern/switch_stall.c, debug kernels: base and current priority, mode and effective QoS of a thread.
 extern "C" __attribute__((weak)) void switch_thread_sched(thread_t, int *base, int *sched, int *mode, int *qos)
 {
@@ -1747,6 +1753,7 @@ private:
             __atomic_store_n(&vsyncSentAt, stamp, __ATOMIC_RELAXED);
             __atomic_store_n(&vsyncSentKhz, switch_perf_cpu_khz(), __ATOMIC_RELAXED);
             KDBG(SWITCH_KDBG_CODE(SWITCH_KDBG_VSYNC), frameEnds);
+            switch_sched_render_vsync(stamp, interval);
         }
         native_legacy_vsync_notify(this, stamp, continuous, interval);
         native_legacy_vsync_observed(1, vsyncHz);
@@ -4636,6 +4643,7 @@ public:
             tl.mode = (int8_t)mode;
             tl.qos = (int8_t)qos;
             KDBG(SWITCH_KDBG_CODE(SWITCH_KDBG_SWAP), frameEnds);
+            switch_sched_render_swapped();
             return;
         }
     }

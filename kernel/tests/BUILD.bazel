@@ -19,6 +19,8 @@
 #   xnu_sched_stats_test     kernel/switch/sched/stats.h's latency histogram, percentiles and line entry; that
 #                            thread_invoke feeds it in both dispatch paths under the incoming thread's lock, and that
 #                            a release kernel compiles every hook to nothing
+#   xnu_sched_render_test    kernel/switch/sched/render.h: the display thread's dispatches split its time from a vsync
+#                            to its swap into running, blocked and waiting for a core
 #   xnu_ui_scale_test        bsd/vm/switch_ui_scale.h's scales (whole-point screens, exact floats, boot-arg values)
 #                            and the cache text they write, against the assembler and the bytes the 1.6-only sites
 #                            shipped; the status bar battery's fill in whole pixels with equal gaps at 1.25; the
@@ -211,6 +213,22 @@ host_test(
         "//kernel/switch:sched/stats.c",
     ],
     deps = [":sched_stats"],
+)
+
+# --- kernel/switch/sched/render.h -----------------------------------------------------------------------------------------
+copy_file(
+    name = "switch_sched_render",
+    src = "//kernel/switch:sched/render.h",
+    out = "sched/render.h",
+)
+
+host_test(
+    name = "xnu_sched_render_test",
+    srcs = [
+        "sched/render.h",
+        "xnu_sched_render_test.cpp",
+    ],
+    includes = ["."],
 )
 
 # --- kernel/switch/diag/frames.h ----------------------------------------------------------------------------------------

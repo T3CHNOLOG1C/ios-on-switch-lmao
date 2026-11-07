@@ -3695,6 +3695,10 @@ static u32 chan_fence(struct tgm_chan *chan)
 	return next;
 }
 
+__attribute__((weak)) void switch_sched_render_submitted(void)
+{
+}
+
 static void frame_submitted(struct tgm_chan *chan, u32 seqno, u64 start)
 {
 	u64 now = nvxnu_nanotime(), none = 0;
@@ -3704,6 +3708,7 @@ static void frame_submitted(struct tgm_chan *chan, u32 seqno, u64 start)
 		__atomic_fetch_add(&frame_gpu.others, 1, __ATOMIC_RELAXED);
 		return;
 	}
+	switch_sched_render_submitted();
 	__atomic_compare_exchange_n(&frame_gpu.first, &none, start, false, __ATOMIC_RELAXED,
 				    __ATOMIC_RELAXED);
 	__atomic_store_n(&frame_gpu.last, start, __ATOMIC_RELAXED);

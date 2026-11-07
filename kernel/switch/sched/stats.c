@@ -144,6 +144,9 @@ void switch_sched_dispatched(thread_t thread, uint64_t now)
                     (uint64_t)thread->base_pri | (uint64_t)thread->sched_pri << 8 | (uint64_t)thread->sched_mode << 16 |
                         (uint64_t)thread->effective_policy.thep_qos << 24 | (uint64_t)thread->th_sched_bucket << 32,
                     relaxed);
+    if (i == CA_DISPLAY) {
+        switch_sched_render_on_core(thread, now);
+    }
 }
 
 static void watch(enum slot_id id, uint64_t tid, int pid, const char *label, bool replace_same_pid)
