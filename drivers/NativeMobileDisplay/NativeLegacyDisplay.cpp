@@ -5006,6 +5006,26 @@ public:
         return color->setAccessibilityScale(scale);
     }
 
+    // thermalmonitord's TSFD. J120's LCD takes the panel temperature for its temperature and pixel response compensation;
+    // DC A has neither and the OLED panel compensates for temperature itself, so the value is taken and reported once.
+    IOReturn setDisplayTemperature(const uint32_t *temperatures) override
+    {
+        if (!temperatures)
+            return kIOReturnBadArgument;
+        static bool reported;
+        if (!__atomic_exchange_n(&reported, true, __ATOMIC_RELAXED)) {
+            int64_t sum = 0;
+            for (unsigned i = 0; i < 4; ++i)
+                sum += (int32_t)temperatures[i];
+            const int64_t hundredths = sum * 100 / 4 / 65536;
+            IOLog("SwitchDisplay: display temperature %s%lld.%02lld C from thermalmonitord (TSFD); the panel "
+                  "compensates for temperature itself\n",
+                  hundredths < 0 ? "-" : "", (hundredths < 0 ? -hundredths : hundredths) / 100,
+                  (hundredths < 0 ? -hundredths : hundredths) % 100);
+        }
+        return kIOReturnSuccess;
+    }
+
     // J120's pipe does nothing when a client registers, and treats its going away as ChangeFrameInfo to no keys.
     void platformFrameInfoNotify(void *client, bool enable) override
     {

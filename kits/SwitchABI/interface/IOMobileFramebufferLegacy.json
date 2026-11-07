@@ -181,6 +181,12 @@
       "mangled": "__ZN25IOMobileFramebufferLegacy21setAccessibilityScaleEj",
       "doc": "SetParameter 3 (selector 68), which QuartzCore sends after its accessibility matrix: a 16.16 scale, Reduce White Point's. The family answers kIOReturnUnsupported."
     },
+    "setDisplayTemperature": {
+      "decl": "virtual IOReturn setDisplayTemperature(const uint32_t *temperatures)",
+      "pac": "_ZN25IOMobileFramebufferLegacy21setDisplayTemperatureEPKj",
+      "mangled": "__ZN25IOMobileFramebufferLegacy21setDisplayTemperatureEPKj",
+      "doc": "SetParameter 0 (selector 68, four values), run on the work-loop gate: thermalmonitord's TSFD, the display's temperature in 16.16 degrees C four times (the family keeps each value's low 32 bits). J120's AppleCLCD averages them into its LCD's temperature compensation and pixel response compensation. The family answers kIOReturnUnsupported."
+    },
     "changeFrameInfo": {
       "decl": "virtual IOReturn changeFrameInfo(uint32_t type, void *client, uint32_t mask) = 0",
       "pac": "_ZN25IOMobileFramebufferLegacy15changeFrameInfoEjPvj",
