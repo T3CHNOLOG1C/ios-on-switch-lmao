@@ -330,7 +330,7 @@ int main(int argc, char **argv)
                 surfaces[t] = IOSurfaceCreate((__bridge CFDictionaryRef)p);
                 d.storageMode = MTLStorageModeShared;
                 tex[t] = [dev newTextureWithDescriptor:d iosurface:surfaces[t] plane:0];
-            } else if (!td.memoryless && getenv("FRAME_INPLACE")) {
+            } else if (!td.memoryless && td.format == 80 && getenv("FRAME_INPLACE")) {
                 // m2v's in-place texture over page-aligned memory: what the raw path's pool textures are to m2v (their twins)
                 const NSUInteger row = (td.w * 4 + 255) & ~NSUInteger(255), page = (NSUInteger)getpagesize();
                 const NSUInteger bytes = (row * td.h + page - 1) / page * page;

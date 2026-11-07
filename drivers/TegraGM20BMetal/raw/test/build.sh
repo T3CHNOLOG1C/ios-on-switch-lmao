@@ -83,3 +83,8 @@ echo "built $OUT/shapecheck"
 xcrun clang++ -O1 -std=c++17 -fobjc-arc "$HERE/standinoracle.mm" -framework Metal -framework Foundation -framework CoreVideo \
     -framework IOSurface -o "$OUT/standinoracle"
 echo "built $OUT/standinoracle"
+# xroracle: the extended-range stand-ins, clears and Core Animation's passes against this Mac's Metal
+# ($OUT/xroracle pack/xr.metal <QuartzCore default.metallib>)
+xcrun clang++ -O1 -std=c++17 -fobjc-arc "$HERE/xroracle.mm" -framework Metal -framework Foundation -framework CoreVideo \
+    -framework IOSurface -o "$OUT/xroracle"
+echo "built $OUT/xroracle"

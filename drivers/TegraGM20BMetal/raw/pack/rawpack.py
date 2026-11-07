@@ -15,13 +15,14 @@ IPSW's), the corpus's states as they are.
   2. mkprograms.py reads NAK's programs out of the NVK driver records the run left in its m2v cache directory;
   3. mkpack.py reads the probe logs and writes pack.bin: per state its programs, registers, push words and descriptor
      layout, plus NVK's context init with the addresses to relocate. States m2v draws with more than one draw or with
-     dispatches (the extended-range formats' shadow images and merges) are left out: the raw path hands them to m2v.
+     dispatches are left out: the raw path hands them to m2v. (An extended-range attachment is loaded and stored
+     DontCare, so its state's draw is the pass's only one: probe.mm.)
 
 usage: rawpack.py --bridge <host libnative_metal_bridge.a> --nvk <host twin dylib> --qc <default.metallib>
                   --corpus <corpus.log> --out <dir> [--stack <hex key>] [--prebuilt <dir>]
        rawpack.py --build-only --bridge <host libnative_metal_bridge.a> --out <dir>
 writes <out>/pack.bin, pack.json, layouts.txt, report.txt and keeps the probe logs in <out>/work (deleted with --clean).
---build-only compiles the probe, the mock GPU (libmock_iokit.dylib) and ycbcr.metallib into <dir> and stops; --prebuilt
+--build-only compiles the probe, the mock GPU (libmock_iokit.dylib) and own.metallib into <dir> and stops; --prebuilt
 <dir> runs those instead of compiling them (//gpu/seed:local_tools makes them its own action, so a corpus edit only
 reruns the probes).
 --stack: the build's stack key (the plugin is compiled with the same value), stamped into the pack header: the runtime
@@ -87,7 +88,7 @@ def option(name: str, required: bool = True) -> str | None:
     return None
 
 
-BUILT = ('probe', 'libmock_iokit.dylib', 'ycbcr.metallib')
+BUILT = ('probe', 'libmock_iokit.dylib', 'own.metallib')
 # Another framework's states (their lines keep lib=, tools/gpu/rawpack.py): the probe loads that library from the
 # crawl's root
 FRAMEWORK = re.compile(r' lib=/System/Library/(?:Private)?Frameworks/\w+\.framework/default\.metallib ')
@@ -135,8 +136,8 @@ def build(work: Path, bridge: Path) -> None:
     """Build the mock GPU, the probe and the raw path's own states into `work`.
 
     The mock GPU with nvdec on every submission, the probe through the frontend + host bridge (beside it: rpath
-    @executable_path) and the raw path's own states: the 4:2:0 YCbCr conversions (ycbcr.metal), an iOS library like
-    QuartzCore's, drawn after Core Animation's (probe.mm PROBE_YCBCR_LIB).
+    @executable_path) and the raw path's own states: the YCbCr conversions (ycbcr.metal) and the extended-range
+    stand-ins (xr.metal), an iOS library like QuartzCore's, drawn after Core Animation's (probe.mm PROBE_OWN_LIB).
     """
     # Source paths (Mesa's asserts' __FILE__) as /switch-ios/..., whichever checkout or sandbox this runs in: the probe
     # and the mock are an action's outputs, and the run's cache key is their bytes.
@@ -210,14 +211,18 @@ def build(work: Path, bridge: Path) -> None:
             work / 'probe',
         ]
     )
-    run(['xcrun', '-sdk', 'iphoneos', 'metal', '-c', HERE / 'ycbcr.metal', '-I', HERE, '-o', work / 'ycbcr.air'])
-    run(['xcrun', '-sdk', 'iphoneos', 'metallib', work / 'ycbcr.air', '-o', work / 'ycbcr.metallib'])
+    own = ('ycbcr', 'xr')
+    for name in own:
+        run(
+            ['xcrun', '-sdk', 'iphoneos', 'metal', '-c', HERE / f'{name}.metal', '-I', HERE, '-o', work / f'{name}.air']
+        )
+    run(['xcrun', '-sdk', 'iphoneos', 'metallib', *(work / f'{name}.air' for name in own), '-o', work / 'own.metallib'])
 
 
 # The states are probed in buckets, each its own probe processes over a share of the states (fnv64 of the state's line,
 # so a state stays in its bucket whatever else changes), all at once: a bucket's outputs are a function of its states
 # and the tools alone (what a cache of probe runs can key by). Bucket 0 also draws the raw path's own states
-# (PROBE_YCBCR_LIB).
+# (PROBE_OWN_LIB).
 BUCKETS = 16
 
 
@@ -301,7 +306,7 @@ def probe_bucket(tools: Path, d: Path, nvk: Path, qc: Path, env: dict[str, str])
 def probe_runs(tools: Path, d: Path, nvk: Path, qc: Path, env: dict[str, str]) -> str:
     """Run the warm-up and the three decoded probe runs over d's corpus."""
     if d.name == 'bucket0':
-        env = dict(env, PROBE_YCBCR_LIB=str(tools / 'ycbcr.metallib'))
+        env = dict(env, PROBE_OWN_LIB=str(tools / 'own.metallib'))
     said = []
 
     def probe(name: str, extra: dict[str, str]) -> None:

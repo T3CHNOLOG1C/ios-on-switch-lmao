@@ -50,9 +50,10 @@ def push_bytes(push: list[tuple[int, int]]) -> bytes:
 
 
 def key_hash(rec: dict) -> int:
-    # the raw path's own states (probe.mm PROBE_YCBCR_LIB) by the name the runtime asks for (raw_gpu.cpp ycbcrPipeline)
-    own = re.search(r'\| f (ycbcr_\w+)', rec['key'])
-    return fnv(('raw.ycbcr.' + own.group(1)).encode() if own else rec['key'].encode())
+    # the raw path's own states (probe.mm PROBE_OWN_LIB) by the name the runtime asks for (raw_gpu.cpp ycbcrPipeline,
+    # runtime/raw_xr.h xrConversion)
+    own = re.search(r'\| f ((ycbcr|xr)_\w+)', rec['key'])
+    return fnv(f'raw.{own.group(2)}.{own.group(1)}'.encode() if own else rec['key'].encode())
 
 
 def pipeline_bytes(rec: dict, key_offset: int, blob_off: int) -> bytes:

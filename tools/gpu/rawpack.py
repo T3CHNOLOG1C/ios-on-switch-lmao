@@ -6,7 +6,7 @@ One action per step (gpu/seed/tools.bzl seed_tools builds, gpu/seed/defs.bzl see
     rawpack.py build --xcode-env F --host-bridge <darwin bridge .a> --generator <raw/pack/rawpack.py> --tree <tree>
                      --out <dir>
         the generator's host tools (the probe through this build's frontend and host bridge, the mock GM20B, the raw
-        path's ycbcr.metallib) into <dir>
+        path's own.metallib) into <dir>
     rawpack.py corpus --corpus corpus.log --out <file>
         the corpus lines the probe makes (raw/pack/probe.mm: Core Animation's render states, without lib=), so an edit
         to any other line leaves the run's input as it was
@@ -14,7 +14,7 @@ One action per step (gpu/seed/tools.bzl seed_tools builds, gpu/seed/defs.bzl see
         the states of each of the generator's buckets
     rawpack.py probe --generator <rawpack.py> --raw <dir> --nvk <twin dylib> --qc default.metallib
                      --lines <bucket corpus> --out <dir named bucket<i>>
-        one bucket's states made through the shader tools (raw/ holds the probe, the mock and ycbcr.metallib; the NVK
+        one bucket's states made through the shader tools (raw/ holds the probe, the mock and own.metallib; the NVK
         twin) over the mock GM20B and read off the decoded push stream, its storage-form states again in <out>/barrier
     rawpack.py link --generator <rawpack.py> --out <dir> <bucket dir>...
         the pack made from the buckets' probe runs, unstamped: <out>/pack.bin and report.txt
