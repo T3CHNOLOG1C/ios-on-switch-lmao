@@ -16,60 +16,6 @@ void native_legacy_display_probe(void);
 STUB void native_legacy_display_probe(void)
 {}
 
-// NativeRamBlock asks for a UFS store mode; with no UFS driver in this kernel it is always 0, no store, so the Data
-// ramdisk stays in memory and the other hooks are never called; they refuse if they are.
-unsigned native_ufs_store_mode(void);
-
-STUB unsigned native_ufs_store_mode(void)
-{
-    return 0;
-}
-
-int native_ufs_store_open(uint64_t blocks, uint64_t *first, const char **why);
-
-STUB int native_ufs_store_open(uint64_t blocks, uint64_t *first, const char **why)
-{
-    (void)blocks;
-    (void)first;
-    if (why)
-        *why = "no UFS store on this board";
-    return 0;
-}
-
-int native_ufs_store_read(uint64_t block, uint32_t count, void *buffer);
-
-STUB int native_ufs_store_read(uint64_t block, uint32_t count, void *buffer)
-{
-    (void)block;
-    (void)count;
-    (void)buffer;
-    return 0;
-}
-
-int native_ufs_store_write(uint64_t block, uint32_t count, const void *buffer);
-
-STUB int native_ufs_store_write(uint64_t block, uint32_t count, const void *buffer)
-{
-    (void)block;
-    (void)count;
-    (void)buffer;
-    return 0;
-}
-
-int native_ufs_store_sync(void);
-
-STUB int native_ufs_store_sync(void)
-{
-    return 0;
-}
-
-unsigned native_ufs_store_gpt_check(void);
-
-STUB unsigned native_ufs_store_gpt_check(void)
-{
-    return 0;
-}
-
 // The display archive (qemu_root_defconfig) shares the frame buffer with sheng's boot progress screen, which this
 // board does not have. Each definition behaves as the absent hook: the display may always draw, keeps no diagnostic
 // mapping and reports no stages.
