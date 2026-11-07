@@ -81,6 +81,15 @@ public:
     void biasStandby();
     void biasOff();
 
+    bool biasIsOn() const
+    {
+        return biasOn;
+    }
+
+    // The datasheet's power-off order, as rt5640_suspend does it: every codec function off (route, then bias), the
+    // reset, then LDO1_EN low. probe() powers it again.
+    void powerOff();
+
     // A stream's paths: I2S1 and DAC1; the headset microphone's BST1, REC mixers and ADC.
     void powerDac();
     void powerCapture();
@@ -107,6 +116,7 @@ public:
 
 private:
     rt5639::Route currentRoute = rt5639::kRouteNone;
+    bool biasOn = false;
 
     void write(uint16_t reg, uint16_t value);
     void update(uint8_t reg, uint16_t mask, uint16_t value);

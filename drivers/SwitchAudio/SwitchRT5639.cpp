@@ -190,12 +190,16 @@ void SwitchRT5639::probe(bool afterSleep, bool capture)
     }
 }
 
+// VREF1/VREF2 charge in fast mode (FV clear), then run in normal mode.
 void SwitchRT5639::biasStandby()
 {
+    if (biasOn)
+        return;
     update(PWR_ANLG1, P_VREF1 | P_MB | P_BG | P_VREF2, P_VREF1 | P_MB | P_BG | P_VREF2);
     IOSleep(15);
     update(PWR_ANLG1, P_FV1 | P_FV2, P_FV1 | P_FV2);
     update(GEN_CTRL1, 0x0301, 0x0201);
+    biasOn = true;
 }
 
 void SwitchRT5639::biasOff()
@@ -205,6 +209,16 @@ void SwitchRT5639::biasOff()
     for (uint8_t reg = PWR_DIG1; reg <= PWR_VOL; ++reg)
         write(reg, 0);
     update(GEN_CTRL1, 1u, 1u);  // the I2S clock stays: jack detect with an external microphone needs it
+    biasOn = false;
+}
+
+void SwitchRT5639::powerOff()
+{
+    routeDown();
+    biasOff();
+    write(RESET, 0);
+    if (tegra_gpio_output(kLdo1Enable, 0))
+        IOLog("SwitchAudio: cannot drive PZ4 (RT5639 LDO1_EN) low; the codec loses power with the PMIC\n");
 }
 
 void SwitchRT5639::powerDac()

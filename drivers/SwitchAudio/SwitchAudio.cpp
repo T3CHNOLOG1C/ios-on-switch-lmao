@@ -66,6 +66,8 @@
 #include <IOKit/IOInterruptEventSource.h>
 #include <IOKit/IOTimerEventSource.h>
 #include <IOKit/IOWorkLoop.h>
+#include <IOKit/IOMessage.h>
+#include <IOKit/pwr_mgt/RootDomain.h>
 #include <os/log.h>
 #include <IOKit/IOLib.h>
 #include <kern/clock.h>
@@ -358,7 +360,9 @@ class SwitchAudio : public IOService {
     IOInterruptEventSource *jackSource = nullptr;
     IOTimerEventSource *jackTimer = nullptr, *idleTimer = nullptr;
     bool codecOn = false, jackKnown = false, jackIn = false, headset = false, speakerOnly = false;
-    bool hardwareLost = false;  // the APE did not come back after sleep: the hardware is never touched again
+    bool hardwareLost = false;  // the APE did not come back after sleep, or shut down: never touched again
+    bool codecOff = false;      // shut down: the codec is unpowered
+    IONotifier *shutdownNotifier = nullptr;
     SwitchRT5639 codec;
 #if DEVELOPMENT || DEBUG
     // The stats: counted on the audio work loop, printed (and the peak reset) on the codec work loop.
@@ -704,6 +708,8 @@ class SwitchAudio : public IOService {
     void tegraStop()
     {
         timer->cancelTimeout();
+        if (hardwareLost)
+            return;  // tegraStart started nothing; a powered-off APE must not be accessed
         const unsigned channels = tegraCapture ? 2 : 1;
         for (unsigned ch = 0; ch < channels; ++ch) {
             const uint32_t base = ch * CH_STRIDE;
@@ -896,8 +902,8 @@ class SwitchAudio : public IOService {
         return jackIn && !speakerOnly ? rt5639::kRouteHeadphones : rt5639::kRouteSpeaker;
     }
 
-    // A stream starts: the codec powered (bias, DAC, capture path), routed to where the jack says, unmuted.
-    void codecRun()
+    // A stream starts: the codec powered (bias, DAC, capture path) and routed to where the jack says, still muted.
+    void codecPowerUp()
     {
         idleTimer->cancelTimeout();
 #if DEVELOPMENT || DEBUG
@@ -918,33 +924,64 @@ class SwitchAudio : public IOService {
             codec.routeDown();
             codec.routeUp(want);
         }
-        codec.mute(false);
     }
 
-    // The last stream stopped: mute now, power down after kIdleMS unless one starts again.
-    void codecPause()
+    // Route, DAC and references off, outputs muted first (rt5640.c's PRE_PMD steps, then bias OFF).
+    void codecPowerDown()
     {
-        codec.mute(true);
-        idleTimer->setTimeoutMS(kIdleMS);
+        if (codecOn)
+            codec.routeDown();
+        if (codec.biasIsOn())
+            codec.biasOff();
+        codecOn = false;
+        headset = false;
     }
 
-    static IOReturn codecGated(OSObject *owner, void *run, void *, void *, void *)
+    enum CodecStep : uintptr_t {
+        kCodecPowerUp,
+        kCodecUnmute,
+        kCodecMute,
+        kCodecPause,  // the last stream stopped: muted now, powered down after kIdleMS unless one starts again
+    };
+
+    static IOReturn codecGated(OSObject *owner, void *step, void *, void *, void *)
     {
         auto *self = static_cast<SwitchAudio *>(owner);
-        run ? self->codecRun() : self->codecPause();
+        if (self->codecOff)
+            return kIOReturnSuccess;
+        switch ((uintptr_t)step) {
+        case kCodecPowerUp:
+            self->codecPowerUp();
+            break;
+        case kCodecUnmute:
+            if (self->control->state)
+                self->codec.mute(false);
+            break;
+        case kCodecMute:
+            self->codec.mute(true);
+            break;
+        case kCodecPause:
+            self->codec.mute(true);
+            self->idleTimer->setTimeoutMS(kIdleMS);
+            break;
+        default:
+            break;
+        }
         return kIOReturnSuccess;
+    }
+
+    void codecStep(CodecStep step)
+    {
+        codecGate->runAction(&SwitchAudio::codecGated, reinterpret_cast<void *>(step));
     }
 
     static void codecIdle(OSObject *owner, IOTimerEventSource *)
     {
         auto *self = static_cast<SwitchAudio *>(owner);
-        if (self->control->state || !self->codecOn)
+        if (self->control->state || self->codecOff || !self->codec.biasIsOn())
             return;
         tegra_gpio_check_delivery(kCodecIrq, "SwitchAudio");
-        self->codec.routeDown();
-        self->codec.biasOff();
-        self->headset = false;
-        self->codecOn = false;
+        self->codecPowerDown();
     }
 
     // PBB4, both edges (rt5640_irq: IRQF_TRIGGER_RISING | FALLING): wait for the contacts to settle.
@@ -959,7 +996,8 @@ class SwitchAudio : public IOService {
         auto *self = static_cast<SwitchAudio *>(owner);
         const uint16_t status = self->codec.read(rt5639::INT_IRQ_ST);
         const bool in = SwitchRT5639::jackPlugged(status);
-        if (!self->jackKnown) {
+        const bool first = !self->jackKnown;
+        if (first) {
             self->jackKnown = true;
             IOLog("SwitchAudio: headphones %s at start\n", in ? "in" : "out");
         } else if (in != self->jackIn) {
@@ -968,6 +1006,14 @@ class SwitchAudio : public IOService {
             return;
         }
         self->jackIn = in;
+        // The references come up here once with every output off, and go down kIdleMS later as after a stream. At
+        // boot the VREF capacitor starts from 0 V: charged by the first stream instead, its 15 ms of fast charge left
+        // the reference still rising when the class-D amplifier came on, the loud click of the first sound after
+        // boot. Later power-ups start from a charged capacitor.
+        if (first && !self->codec.biasIsOn()) {
+            self->codec.biasStandby();
+            self->idleTimer->setTimeoutMS(kIdleMS);
+        }
         if (!self->codecOn)
             return;  // the next stream routes
         if (self->tegraCapture)
@@ -992,8 +1038,8 @@ class SwitchAudio : public IOService {
     // bit 4 set = empty; PV6, 1 = empty) and route, and PWR_DIG1, PWR_ANLG1, PWR_MIXER, PWR_VOL, SPK_VOL, HP_VOL,
     // DAC1_DIG_VOL.
     // The line runs while there is audio to report: the first window after boot, then from a stream's start
-    // (codecRun arms it) until a window with no stream, no start, nothing moved and the codec powered down; that window
-    // reads nothing, writes no line and leaves the timer off, so a silent console takes no stats wakeups.
+    // (codecPowerUp arms it) until a window with no stream, no start, nothing moved and the codec powered down; that
+    // window reads nothing, writes no line and leaves the timer off, so a silent console takes no stats wakeups.
     static void statsFired(OSObject *owner, IOTimerEventSource *sender)
     {
         auto *self = static_cast<SwitchAudio *>(owner);
@@ -1177,23 +1223,26 @@ class SwitchAudio : public IOService {
         return kIOReturnSuccess;
     }
 
+    // The codec's interrupt and timers off, then the codec powered down.
+    void codecQuiesce()
+    {
+        jackSource->disable();
+        jackTimer->cancelTimeout();
+        idleTimer->cancelTimeout();
+#if DEVELOPMENT || DEBUG
+        if (statsTimer)
+            statsTimer->cancelTimeout();
+#endif
+        codecPowerDown();
+    }
+
     static IOReturn codecSleepGated(OSObject *owner, void *entering, void *, void *, void *)
     {
         auto *self = static_cast<SwitchAudio *>(owner);
+        if (self->codecOff)
+            return kIOReturnSuccess;
         if (entering) {
-            self->jackSource->disable();
-            self->jackTimer->cancelTimeout();
-            self->idleTimer->cancelTimeout();
-#if DEVELOPMENT || DEBUG
-            if (self->statsTimer)
-                self->statsTimer->cancelTimeout();
-#endif
-            if (self->codecOn) {
-                self->codec.routeDown();
-                self->codec.biasOff();
-                self->codecOn = false;
-            }
-            self->headset = false;
+            self->codecQuiesce();
             return kIOReturnSuccess;
         }
         if (self->hardwareLost)
@@ -1206,17 +1255,59 @@ class SwitchAudio : public IOService {
         if (self->statsTimer)
             self->statsResume();
 #endif
+        if (self->control->state) {  // the I2S already runs again (sleepGated)
+            self->codecPowerUp();
+            self->codec.mute(false);
+        }
         return kIOReturnSuccess;
     }
 
+    // Shut Down and Restart, before the PMIC cuts the rails: the hardware stopped and nothing touched again.
+    static IOReturn shutdownGated(OSObject *owner, void *, void *, void *, void *)
+    {
+        auto *self = static_cast<SwitchAudio *>(owner);
+        if (self->control->state)
+            self->tegraStop();
+        self->hardwareLost = true;
+        return kIOReturnSuccess;
+    }
+
+    static IOReturn codecShutdownGated(OSObject *owner, void *, void *, void *, void *)
+    {
+        auto *self = static_cast<SwitchAudio *>(owner);
+        if (self->codecOff)
+            return kIOReturnSuccess;
+        self->codecQuiesce();
+        self->codec.powerOff();
+        self->codecOff = true;
+        return kIOReturnSuccess;
+    }
+
+    static IOReturn powerMessage(void *target, void *, UInt32 type, IOService *, void *, vm_size_t)
+    {
+        if (type == kIOMessageSystemWillPowerOff || type == kIOMessageSystemWillRestart)
+            static_cast<SwitchAudio *>(target)->systemShutdown();
+        return kIOReturnSuccess;
+    }
+
+    // As at sleep, then the codec reset and its LDO1_EN low: the datasheet's power-off order, ahead of its rails.
+    void systemShutdown()
+    {
+        codecStep(kCodecMute);
+        gate->runAction(&SwitchAudio::shutdownGated);
+        codecGate->runAction(&SwitchAudio::codecShutdownGated);
+    }
+
 public:
-    // System sleep (switch_audio_suspend/resume, SwitchSuspend's thread): the hardware first, the codec after it on
-    // sleep; the reverse on wake. Null backend: nothing to do.
+    // System sleep (switch_audio_suspend/resume, SwitchSuspend's thread), in ASoC's suspend order: the outputs muted
+    // while the I2S still clocks, then the hardware stopped, then the codec powered down. On wake the hardware first,
+    // then the codec, unmuted only if a stream runs. Null backend: nothing to do.
     void systemSleep(bool entering)
     {
         if (!tegra)
             return;
         if (entering) {
+            codecStep(kCodecMute);
             gate->runAction(&SwitchAudio::sleepGated, reinterpret_cast<void *>(1));
             codecGate->runAction(&SwitchAudio::codecSleepGated, reinterpret_cast<void *>(1));
         } else {
@@ -1274,6 +1365,13 @@ public:
         }
         if (!timer || loop->addEventSource(timer) != kIOReturnSuccess)
             return false;
+        if (tegra) {
+            // registerPrioritySleepWakeInterest dereferences the root domain unchecked.
+            shutdownNotifier =
+                getPMRootDomain() ? registerPrioritySleepWakeInterest(&SwitchAudio::powerMessage, this) : nullptr;
+            if (!shutdownNotifier)
+                IOLog("SwitchAudio: no shut down notification; the codec loses power with the PMIC\n");
+        }
         control->anchor_host = mach_absolute_time();
 
         // audiomxd's sandbox names no class of ours; the kernel's NativeSandboxGrantProcess check (IOUserClient.cpp)
@@ -1297,6 +1395,8 @@ public:
 
     void free() override
     {
+        if (shutdownNotifier)
+            shutdownNotifier->remove();
         if (timer) {
             timer->cancelTimeout();
             if (loop)
@@ -1342,21 +1442,27 @@ public:
         IOService::free();
     }
 
-    // The codec moves first both ways, as ASoC orders DAPM around a stream: powered and unmuted before the I2S clocks
-    // data, muted before the clocks stop.
+    // As ASoC orders a stream: the codec powered with its outputs muted, then the I2S clocks and the DMA, then the
+    // unmute, so the RT5639 (the I2S slave) has a running frame clock before anything reaches its amplifiers. The
+    // last stop mutes before the clocks stop.
     IOReturn request(uint32_t selector)
     {
         if (selector > SwitchAudioStopInput)
             return kIOReturnBadArgument;
-        if (tegra) {
-            const bool run = selector == SwitchAudioStartOutput || selector == SwitchAudioStartInput;
-            const uint32_t bit = (selector == SwitchAudioStartOutput || selector == SwitchAudioStopOutput)
-                                     ? SwitchAudioOutputRunning
-                                     : SwitchAudioInputRunning;
-            if (run || !(control->state & ~bit))
-                codecGate->runAction(&SwitchAudio::codecGated, (void *)(uintptr_t)run);
-        }
-        return gate->runAction(&SwitchAudio::requestGated, (void *)(uintptr_t)selector);
+        if (!tegra)
+            return gate->runAction(&SwitchAudio::requestGated, (void *)(uintptr_t)selector);
+        const bool run = selector == SwitchAudioStartOutput || selector == SwitchAudioStartInput;
+        const uint32_t bit = (selector == SwitchAudioStartOutput || selector == SwitchAudioStopOutput)
+                                 ? SwitchAudioOutputRunning
+                                 : SwitchAudioInputRunning;
+        if (run)
+            codecStep(kCodecPowerUp);
+        else if (!(control->state & ~bit))
+            codecStep(kCodecPause);
+        const IOReturn result = gate->runAction(&SwitchAudio::requestGated, (void *)(uintptr_t)selector);
+        if (run)
+            codecStep(kCodecUnmute);
+        return result;
     }
 
     IOMemoryDescriptor *copyMemory(uint32_t type)

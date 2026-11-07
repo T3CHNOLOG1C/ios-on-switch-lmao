@@ -1,6 +1,7 @@
 // SwitchAudio's driver and plug-in use the S32 link as switch_audio_format_test checks it: the driver programs
 // exactly SwitchAudioFormat.h's words (no hand-written duplicates), its I2S clock is 47999.878 Hz on PLLA (its own
-// PLLA constants through the header's divider and rate helpers), and the ABI and plug-in are S32 throughout.
+// PLLA constants through the header's divider and rate helpers), the ABI and plug-in are S32 throughout, and the codec
+// is unmuted only while the I2S clocks run.
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
@@ -20,6 +21,7 @@
 namespace {
 
 using switch_audio_linux::Fraction;
+using switch_ios::test::Between;
 using switch_ios::test::SourceText;
 using testing::HasSubstr;
 using testing::Not;
@@ -104,6 +106,25 @@ TEST(SwitchAudioSource, DriverProgramsTheHeaderWords)
     // Nothing else writes the CIF registers.
     const std::regex writes(R"(switch_mmio_write32\(ahub, (?:ADMAIF|I2S)_[RT]X_CIF,)");
     EXPECT_EQ(std::distance(std::sregex_iterator(d.begin(), d.end(), writes), std::sregex_iterator()), 4);
+}
+
+// The RT5639, the I2S slave, is unmuted only once the I2S clocks run and muted before they stop, at a stream's start
+// and stop and at system sleep (ASoC's order): its amplifiers never carry the frame clock starting or stopping.
+TEST(SwitchAudioSource, CodecUnmutedOnlyWhileTheI2sClocks)
+{
+    const std::string d = SourceText("../SwitchAudio.cpp");
+    const std::string request = Between(d, "IOReturn request(uint32_t selector)", "\n    }\n");
+    const size_t powerUp = request.find("codecStep(kCodecPowerUp)"), pause = request.find("codecStep(kCodecPause)");
+    const size_t hardware = request.find("const IOReturn result = gate->runAction(&SwitchAudio::requestGated");
+    const size_t unmute = request.find("codecStep(kCodecUnmute)");
+    ASSERT_NE(hardware, std::string::npos);
+    EXPECT_LT(powerUp, hardware);
+    EXPECT_LT(pause, hardware);
+    EXPECT_NE(unmute, std::string::npos);
+    EXPECT_GT(unmute, hardware);
+    EXPECT_THAT(Between(d, "void codecPowerUp()", "\n    }\n"), Not(HasSubstr("mute(false)")));
+    const std::string sleep = Between(d, "void systemSleep(bool entering)", "} else {");
+    EXPECT_LT(sleep.find("codecStep(kCodecMute)"), sleep.find("&SwitchAudio::sleepGated"));
 }
 
 TEST(SwitchAudioSource, AbiIsS32)
