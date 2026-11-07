@@ -53,6 +53,7 @@
 #include "TegraVICBounceEngine.h"
 #include "TegraVICPresent.h"
 #include "TegraVICSurface.h"
+#include "../TegraGM20B/TegraGM20BLayout.h"
 
 // The kernel's IOService/IOUserClient implementations, called directly (they are the defaults the vtable copies
 // keep or fall back to), and their vtables, where the slots are found.
@@ -243,6 +244,17 @@ IOReturn runJob(Job *job)
                                         gPages[TEGRA_VIC_WINDOW_SRC], kWindowPages, &pages[0]);
     if (ret)
         return ret;
+    // A GPU-rendered surface may be block-linear (TegraGM20BLayout.h): the copy engine reads a source as its rows into
+    // the scratch; VIC's block-linear output is unproven, so a destination is refused rather than written as rows.
+    tgm_layout layout;
+    const bool bounceSrc =
+        readsSource && (job->bounceSrc || tegra_gm20b_surface_layout(gPages[TEGRA_VIC_WINDOW_SRC][0], &layout) == 1);
+    if (tegra_gm20b_surface_layout(gPages[TEGRA_VIC_WINDOW_DST][0], &layout) == 1) {
+        tegra_vic_surface_complete(&job->dst);
+        tegra_vic_surface_complete(&job->src);
+        refused(kIOReturnUnsupported, "block-linear destination");
+        return kIOReturnUnsupported;
+    }
     // VIC and the copy engine do not snoop the CPU's caches: what the CPU wrote to the source must be in DRAM, and no
     // dirty line of the destination may be written back over what they write.
     if (readsSource)
@@ -250,12 +262,12 @@ IOReturn runJob(Job *job)
     tegra_vic_cache_pages(SWITCH_DCACHE_CLEAN_INVALIDATE, gPages[TEGRA_VIC_WINDOW_DST], pages[1]);
     switch_dcache_sync();
     TegraVICBounce *srcBounce = &bounce[TEGRA_VIC_WINDOW_SRC], *dstBounce = &bounce[TEGRA_VIC_WINDOW_DST];
-    if (job->bounceSrc && !(ret = tegra_vic_bounce_stage(srcBounce, &job->src.desc, align)))
+    if (bounceSrc && !(ret = tegra_vic_bounce_stage(srcBounce, &job->src.desc, align)))
         ret = tegra_vic_bounce_copy(job->src.memory, &job->src.desc, srcBounce->scratch.memory, &srcBounce->desc);
     if (!ret && job->bounceDst && !(ret = tegra_vic_bounce_stage(dstBounce, &job->dst.desc, align)))
         ret = tegra_vic_bounce_copy(job->dst.memory, &job->dst.desc, dstBounce->scratch.memory, &dstBounce->desc);
     const Side dstSide = sideOf(&job->dst, job->bounceDst, dstBounce, gPages[TEGRA_VIC_WINDOW_DST], pages[1]);
-    const Side srcSide = sideOf(&job->src, job->bounceSrc, srcBounce, gPages[TEGRA_VIC_WINDOW_SRC], pages[0]);
+    const Side srcSide = sideOf(&job->src, bounceSrc, srcBounce, gPages[TEGRA_VIC_WINDOW_SRC], pages[0]);
     tegra_vic_lock();
     if (!ret) {
         const uint64_t dstBase = tegra_vic_window_map(TEGRA_VIC_WINDOW_DST, dstSide.pages, dstSide.count, true);
