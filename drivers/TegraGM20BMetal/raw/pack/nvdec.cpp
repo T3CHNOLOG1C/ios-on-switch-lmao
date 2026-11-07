@@ -1033,9 +1033,32 @@ void Decoder::probeDump(uint32_t first, uint32_t count)
     }
 }
 
+bool Decoder::bound(int group, int slot, uint64_t &addr, uint32_t &bytes) const
+{
+    if (group < 0 || group > 4 || slot < 0 || slot >= 18 || !binds_[group][slot].valid)
+        return false;
+    addr = binds_[group][slot].addr;
+    bytes = binds_[group][slot].size;
+    return true;
+}
+
+void Decoder::pushWords(uint32_t &mask, uint32_t words[32]) const
+{
+    mask = 0;
+    const uint64_t root = binds_[4][0].valid ? binds_[4][0].addr : binds_[0][0].addr;
+    for (auto it = writtenThisSubmit_.lower_bound(root + 0x700); it != writtenThisSubmit_.end() && *it < root + 0x780;
+         ++it) {
+        const uint32_t k = uint32_t(*it - root - 0x700) / 4;
+        mask |= 1u << k;
+        words[k] = cbufWrites_.at(*it);
+    }
+}
+
 void Decoder::draw(const char *kind, uint32_t first, uint32_t count)
 {
     draws++;
+    if (onDraw)
+        onDraw(*this);
     std::string bar;
     for (auto &b : pendingBarriers_)
         bar += (bar.empty() ? "" : ",") + b;

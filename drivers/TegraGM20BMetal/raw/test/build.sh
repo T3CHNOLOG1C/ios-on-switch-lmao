@@ -17,8 +17,10 @@ xcrun clang -O1 -Wall -c -I "$TREE/drivers/TegraGM20B" "$RAW/pack/mock_iokit.c" 
 xcrun clang++ "${FLAGS[@]}" -c -I "$TREE/drivers/TegraGM20B" "$RAW/pack/cap.cpp" -o "$OUT/cap.o"
 # the mock's decoder runs the 2D engine's blits too (raw/fx/test/twod_sim: the mip chains)
 xcrun clang++ "${FLAGS[@]}" -DNVDEC_TWOD -c "$RAW/pack/nvdec.cpp" -o "$OUT/nvdec.o"
+xcrun clang++ "${FLAGS[@]}" -c "$RAW/runtime/raw_capture.cpp" -o "$OUT/raw_capture.o"
+xcrun clang++ "${FLAGS[@]}" -c "$RAW/runtime/raw_pack.cpp" -o "$OUT/raw_pack_mock.o"
 xcrun clang++ "${FLAGS[@]}" -c "$RAW/fx/test/twod_sim.cpp" -o "$OUT/twod_sim.o"
-xcrun clang++ -dynamiclib "$OUT/mock_iokit.o" "$OUT/cap.o" "$OUT/nvdec.o" "$OUT/twod_sim.o" "$OUT/mme_fermi.o" "$OUT/mme_fermi_sim.o" -framework IOKit \
+xcrun clang++ -dynamiclib "$OUT/mock_iokit.o" "$OUT/cap.o" "$OUT/nvdec.o" "$OUT/raw_capture.o" "$OUT/raw_pack_mock.o" "$OUT/twod_sim.o" "$OUT/mme_fermi.o" "$OUT/mme_fermi_sim.o" -framework IOKit \
     -framework CoreFoundation -install_name @rpath/libmock_iokit.dylib -o "$OUT/libmock_iokit.dylib"
 OBJC=(-O2 -g -std=c++17 -fobjc-arc -Wno-deprecated-declarations -I "$FRONT" -I "$TREE/drivers/NativeMetal" -I "$TREE/drivers/TegraGM20B")
 LIBS=(-L "$OUT" -lmock_iokit "-Wl,-rpath,$OUT" -lobjc -framework Foundation -framework Metal -framework IOSurface -framework IOKit -framework CoreFoundation)
