@@ -122,6 +122,16 @@ uint32_t SWITCH_AUDIO_HARNESS(h_extern1_divider)(uint32_t pllaout0_per_fs)
     return switch_audio_extern1_divider(pllaout0_per_fs);
 }
 
+uint32_t SWITCH_AUDIO_HARNESS(h_transition)(uint32_t was, uint32_t now)
+{
+    return switch_audio_transition(was, now);
+}
+
+int64_t SWITCH_AUDIO_HARNESS(h_capture_frame)(uint64_t t, uint64_t anchor, uint64_t in_frames, uint32_t ring_frames)
+{
+    return switch_audio_capture_frame(t, anchor, in_frames, ring_frames);
+}
+
 void SWITCH_AUDIO_HARNESS(h_mix)(int32_t *dst, const float *src, uint32_t samples, float gain)
 {
     switch_audio_mix_s32(dst, src, samples, gain);

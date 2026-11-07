@@ -57,6 +57,7 @@ ios_binary(
     out = "build/switch-audio/SwitchAudio.driver/SwitchAudio",
     hdrs = [
         "SwitchAudioAbi.h",
+        "SwitchAudioFormat.h",
         "hal/SwitchAudioConvert.h",
         "//kits/SwitchRefusal:SwitchRefusal.h",
     ],
