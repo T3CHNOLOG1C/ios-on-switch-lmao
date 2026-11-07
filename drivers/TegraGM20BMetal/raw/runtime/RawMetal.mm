@@ -5252,25 +5252,26 @@ static bool producesTexture(MTLTextureDescriptor *d)
 - (id<MTLSamplerState>)newSamplerStateWithDescriptor:(MTLSamplerDescriptor *)d
 {
     SWITCH_API(ApiObject);
+    raw::MetalSamplerFields m;
+    m.minFilter = d.minFilter;
+    m.magFilter = d.magFilter;
+    m.mipFilter = d.mipFilter;
+    m.sAddress = d.sAddressMode;
+    m.tAddress = d.tAddressMode;
+    m.rAddress = d.rAddressMode;
+    m.maxAnisotropy = d.maxAnisotropy;
+    m.compareFunction = d.compareFunction;
+    m.borderColor = d.borderColor;
+    m.lodMin = d.lodMinClamp;
+    m.lodMax = d.lodMaxClamp;
+    m.normalizedCoordinates = d.normalizedCoordinates;
     raw::SamplerDesc s;
-    s.minFilter = uint8_t(d.minFilter);
-    s.magFilter = uint8_t(d.magFilter);
-    s.mipFilter = uint8_t(d.mipFilter);
-    s.sAddress = uint8_t(d.sAddressMode);
-    s.tAddress = uint8_t(d.tAddressMode);
-    s.rAddress = uint8_t(d.rAddressMode);
-    s.lodMin = d.lodMinClamp;
-    s.lodMax = d.lodMaxClamp;
     RMSampler *r = [RMSampler new];
     r->_device = self;
     r->_descriptor = [d copy];
     r.label = d.label;
-    // what the raw sampler header does not express (anisotropy, compare, border colours, unnormalised coordinates, LOD average):
-    // the m2v twin is the sampler, and the raw path refuses the draws that use it
-    const bool rawOk = d.maxAnisotropy <= 1 && d.normalizedCoordinates &&
-                       d.compareFunction == MTLCompareFunctionNever &&
-                       d.sAddressMode != MTLSamplerAddressModeClampToBorderColor &&
-                       d.tAddressMode != MTLSamplerAddressModeClampToBorderColor && !d.lodAverage;
+    // what the raw sampler header does not express: the m2v twin is the sampler, and the raw path refuses the draws that use it
+    const bool rawOk = raw::takeSampler(m, s);
     if (!rawOk || !gRM->raw->createSampler(s, r->_raw)) {
         if (!predLogged(PredCallSamplerForeign))
             logPred(

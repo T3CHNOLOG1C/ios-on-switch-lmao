@@ -16,6 +16,8 @@
 #   stage_test        stage-tegra-gm20b-metal.py on a directory standing in for the Data volume
 #   raw_ycbcr_test    raw/runtime/raw_ycbcr.cpp: the two-plane YCbCr textures the raw path converts (m2v's rules) and the
 #                     conversion's shape; its texels against Metal's reads are raw/test/ycbcroracle.mm's (this Mac's GPU)
+#   raw_sampler_test  raw/runtime/raw_sampler.h: the Metal samplers the raw path takes, as m2v samples them on NVK
+#                     (raw/test/samplercheck: their headers against NVK's)
 #   raw_cache_test    raw/runtime/raw_cache.h: the records the runtime makes for states the pack lacks, kept on disk and
 #                     made once per process (raw/test/cachecheck: the same checks on a bucket's real records), and
 #                     raw_metallib.h: the functions' AIR hashes that key them
@@ -122,6 +124,15 @@ host_test(
         "raw_ycbcr_test.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_ycbcr.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_ycbcr.h",
+    ],
+    cxx_std = "c++17",
+)
+
+host_test(
+    name = "raw_sampler_test",
+    srcs = [
+        "raw_sampler_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_sampler.h",
     ],
     cxx_std = "c++17",
 )

@@ -37,6 +37,7 @@
 #include "raw_push.h"
 #include "raw_overlap.h"
 #include "raw_region.h"
+#include "raw_sampler.h"
 #include "raw_zeta.h"
 #include "raw_ycbcr.h"
 #include "../fx/fx_mip.h"
@@ -199,13 +200,6 @@ struct Buffer {
     Import *import = nullptr;  // a caller's no-copy pages, else
     Span span;                 // pool memory
     Lease *lease = nullptr;    // as Texture::lease
-};
-
-struct SamplerDesc {                                      // the MTLSamplerDescriptor fields the TSC takes
-    uint8_t minFilter = 0, magFilter = 0, mipFilter = 0;  // MTLSamplerMinMagFilter / MTLSamplerMipFilter
-    uint8_t sAddress = 0, tAddress = 0, rAddress = 0;     // MTLSamplerAddressMode (clampToBorderColor: not taken)
-    uint8_t maxAnisotropy = 1;
-    float lodMin = 0, lodMax = 3.402823466e+38f;
 };
 
 // Level `level` (1 .. levels - 1) of mipmapped texture `t`'s chain as a render target (raw_target.h: NVK's block-linear

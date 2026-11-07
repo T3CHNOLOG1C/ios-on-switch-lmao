@@ -368,7 +368,7 @@ int main(int argc, char **argv)
             return targets[k];
         };
         // PROBE_SAMPLERS: one textured uber state drawn once per sampler descriptor Core Animation may make (CA::OGL::MetalContext::
-        // draw: min/mag nearest or linear, mip not/nearest/linear, the address modes, max anisotropy 1 or 8, LOD clamps), every
+        // draw: min/mag nearest or linear, mip not/nearest/linear, the address modes, max anisotropy 1, 2, 8 or 16, LOD clamps), every
         // fragment sampler slot bound to it; mksamplers.py reads NVK's sampler header for each, raw/test/samplercheck compares.
         if (getenv("PROBE_SAMPLERS")) {
             State st;
@@ -388,7 +388,7 @@ int main(int argc, char **argv)
             for (unsigned minmag = 0; minmag < 4; minmag++)
                 for (unsigned mip = 0; mip < 3; mip++)
                     for (unsigned addr : {0u, 1u, 2u, 3u, 4u})
-                        for (unsigned aniso : {1u, 8u})
+                        for (unsigned aniso : {1u, 2u, 8u, 16u})
                             for (unsigned lod = 0; lod < 2; lod++, i++) {
                                 MTLSamplerDescriptor *sd = [MTLSamplerDescriptor new];
                                 sd.minFilter = (MTLSamplerMinMagFilter)(minmag & 1);
