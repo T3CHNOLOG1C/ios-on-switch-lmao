@@ -132,6 +132,13 @@ NAMES = {
     0xFFFFFFF00A7EE1FC: '_os_ref_release_barrier_external',
     # The parent list of the vfs.lifs and vfs.apfs sysctl nodes (vfs.generic's too).
     0xFFFFFFF007BDE9A8: '_sysctl__vfs_children',
+    # IOLib.cpp's data allocators in source order: IOMallocData, IOMallocZeroData, IOMallocDataShareable,
+    # IOMallocZeroDataShareable, IOFreeData, IOFreeDataShareable. The first, second and fifth load one heap
+    # (KHEAP_DATA_BUFFERS), these three the other (KHEAP_DATA_SHARED). The GOT pass had the private heap's names on the
+    # shareable allocators: our IOMallocData and IOMallocData_external are one function, so both names fit (r34-net).
+    0xFFFFFFF00A80DA8C: '_IOMallocDataShareable',
+    0xFFFFFFF00A80DAD8: '_IOMallocZeroDataShareable',
+    0xFFFFFFF00A80DB70: '_IOFreeDataShareable',
     # IOGameControllerFamily. vm_kern.c: after vm_kernel_addrperm_external, the same code with the unslide.
     0xFFFFFFF00A1EE914: '_vm_kernel_unslide_or_perm_external',
     # The callback-pointer iterateObjects, before the block one (0xFFFFFFF00A7A64A4).
