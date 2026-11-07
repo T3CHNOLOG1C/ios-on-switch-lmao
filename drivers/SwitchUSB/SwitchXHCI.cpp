@@ -200,11 +200,12 @@ bool switchxhci_start(char *why, size_t whySize)
     const bool resources = xhost::addResourcePersonality("AppleUSBHostResources", "AppleUSBHostResources",
                                                          "com.apple.iokit.IOUSBHostFamily") &&
                            xhost::addResourcePersonality("IOUSBMassStorageResource", "IOUSBMassStorageResource",
-                                                         "com.apple.iokit.IOUSBMassStorageDriver");
+                                                         "com.apple.iokit.IOUSBMassStorageDriver")
 #if XNU_12377_121_6
-    resources = resources && xhost::addResourcePersonality("AppleUSBHostPacketFilter", "AppleUSBHostPacketFilter",
-                                                           "com.apple.driver.usb.AppleUSBHostPacketFilter", "IOBSD");
+                           && xhost::addResourcePersonality("AppleUSBHostPacketFilter", "AppleUSBHostPacketFilter",
+                                                            "com.apple.driver.usb.AppleUSBHostPacketFilter", "IOBSD")
 #endif
+        ;
     if (!resources) {
         snprintf(why, whySize, "IOCatalogue refused the USB host resource personalities");
         return false;

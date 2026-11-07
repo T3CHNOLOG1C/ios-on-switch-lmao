@@ -63,7 +63,8 @@ class BundleTest(unittest.TestCase):
             overlay.main()
 
     def test_plan_unions_the_parent_directory(self):
-        plan = overlay.plan(self.manifest, portrait=False, kind='21H461', given=['build/switch-hwtest/SwitchHWTest.ipa'])
+        given = ['build/switch-hwtest/SwitchHWTest.ipa']
+        plan = overlay.plan(self.manifest, portrait=False, kind='21H461', given=given)
         self.assertEqual(plan['dirs'], [['/Applications', '']])
         self.assertTrue(plan['files'][0]['bundle'])
 
@@ -106,7 +107,8 @@ class BundleTest(unittest.TestCase):
             self.assertIn(directory_hash(image), data)
 
     def test_an_ipa_without_the_app_is_refused(self):
-        entry = dict(overlay.plan(self.manifest, portrait=False, kind='21H461')['files'][0], path='/Applications/Other.app')
+        planned = overlay.plan(self.manifest, portrait=False, kind='21H461')['files'][0]
+        entry = dict(planned, path='/Applications/Other.app')
         with self.assertRaises(SystemExit):
             overlay.code_of(entry, self.ipa)
 
