@@ -323,7 +323,7 @@ void TegraDisplayColor::frameEndAction(bool mayRequest)
         announced = false;
         return;
     }
-    announced = reasons & ~kReasonBlank;
+    announced = ((reasons & ~kReasonBlank) != 0u);
     if (!announced)
         return;
     IOLog("SwitchDisplay: colour CMU on:%s%s%s%s%s\n", reasons & kReasonMatrix ? " matrix" : "",

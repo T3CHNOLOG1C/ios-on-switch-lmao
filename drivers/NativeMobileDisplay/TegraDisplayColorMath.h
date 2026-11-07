@@ -257,8 +257,8 @@ inline void build(const Inputs &in, Tables &out)
                   (gammaTable ? kReasonGamma : 0);
     out.enabled = !identityCsc || inverted || contrast || gammaTable;
     if (in.blank) {
-        for (unsigned k = 0; k < kLut2Entries; ++k)
-            out.lut2[k] = 0;
+        for (uint8_t &value : out.lut2)
+            value = 0;
         out.reasons |= kReasonBlank;
         out.enabled = true;
     }

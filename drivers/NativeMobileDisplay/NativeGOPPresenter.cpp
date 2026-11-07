@@ -198,8 +198,10 @@ IOReturn NativeGOPPresenter::transfer(task_t task, const NGPPresent &q, NGPTrans
     if (status == kIOReturnSuccess) {
         // A range inside a block-linear surface holds its texels tiled: the rows come from the GPU driver's scratch, taken
         // before the gate since that call sleeps. Past the surface's end the range is read as it is.
-        void *rows = nullptr, *rowsMemory = nullptr;
-        uint64_t rowsOffset = 0, fromRows = 0;
+        void *rows = nullptr;
+        void *rowsMemory = nullptr;
+        uint64_t rowsOffset = 0;
+        uint64_t fromRows = 0;
         const addr64_t pa = input->getPhysicalSegment(0, nullptr, kIOMemoryMapperNone);
         const int tiled = pa ? tegra_gm20b_surface_rows(pa, &rows, &rowsMemory, &rowsOffset) : 0;
         IOMemoryDescriptor *rowsSource = static_cast<IOMemoryDescriptor *>(rowsMemory);
