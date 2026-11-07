@@ -1,6 +1,6 @@
 """Translate one mounted volume (the System volume, the SystemOS cryptex or the App cryptex) offline.
 
-    translate_tree --role ROLE --tool arm64e --volume MNT --out DIR [--apple-trustcache IM4P]...
+    translate_tree --role ROLE --tool arm64e --volume MNT --out DIR [--apple-trustcache IM4P]... [--progress]
 
 The tree is read-only (a decrypted image mounted on the Mac). For every Mach-O whose translation changes bytes, the
 replacement file goes to DIR under its volume path and an entry to DIR/<role>.manifest.json. The new cdhashes become
@@ -10,7 +10,8 @@ the prebuilt-loader cdhashes of on-disk binaries are updated to their translatio
 cdhashes go to DIR/a64x-cache-pretranslated.bin for the device tree.
 
 Each file is translated by one `arm64e` subprocess, skipped when DIR already holds its output for this input and
-translator version (content addressed): reruns resume. It does not mount or write outside DIR.
+translator version (content addressed): reruns resume. It does not mount or write outside DIR. --progress prints
+'progress DONE/TOTAL files' as it goes and 'progress WHAT' before a long wait, for the image builder to show.
 """
 
 import argparse
@@ -164,6 +165,11 @@ def _external_pairs(paths: Iterable[str]) -> list[tuple[str, str]]:
     return pairs
 
 
+def _report(args: argparse.Namespace, what: str) -> None:
+    if args.progress:
+        print('progress', what, flush=True)
+
+
 def _machos(volume: Path, cache: Path) -> list[Path]:
     machos = []
     for root, _, names in os.walk(volume):
@@ -176,7 +182,7 @@ def _machos(volume: Path, cache: Path) -> list[Path]:
     return machos
 
 
-def main() -> None:
+def _arguments() -> argparse.Namespace:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--role', required=True, choices=('os', 'system_cryptex', 'app_cryptex'))
     ap.add_argument('--tool', required=True, help='the arm64e CLI')
@@ -192,7 +198,12 @@ def main() -> None:
     ap.add_argument(
         '--memo', type=Path, help='keep translations here across runs, keyed by their inputs (default: none)'
     )
-    args = ap.parse_args()
+    ap.add_argument('--progress', action='store_true', help='print how far it is (progress DONE/TOTAL files)')
+    return ap.parse_args()
+
+
+def main() -> None:
+    args = _arguments()
     memo = Memo(args.memo) if args.memo else None
 
     out = args.out
@@ -211,7 +222,10 @@ def main() -> None:
     no_category = 0
 
     cache = args.volume / CACHE_DIR
-    for src in sorted(_machos(args.volume, cache)):
+    _report(args, 'finding the Mach-O files')
+    machos = sorted(_machos(args.volume, cache))
+    for done, src in enumerate(machos):
+        _report(args, f'{done}/{len(machos)} files')
         rel = src.relative_to(args.volume)
         dst = out / 'files' / rel
         in_sha = sha256(src)
@@ -244,6 +258,7 @@ def main() -> None:
             flags, cat = apple.get(s['cdhash_in'], (0, 0))
             trust.append((bytes.fromhex(s['cdhash_out']), flags, cat))
 
+    _report(args, f'{len(machos)}/{len(machos)} files')
     (out / f'{args.role}.cdhash-pairs').write_text(''.join(f'{a} {b}\n' for a, b in pairs))
     if args.role == 'system_cryptex' and cache.is_dir():
         _translate_cache(args, pairs + external_pairs, trust, apple, manifest)
@@ -274,6 +289,7 @@ def _translate_cache(
         run_tool(args.tool, 'plan', '-o', str(plan), str(main_cache))
         return {}
 
+    _report(args, 'planning the dyld shared cache')
     if memo:
         memo.run(['plan', key_sha256(main_cache), version], plan, make_plan)
     else:
@@ -283,7 +299,9 @@ def _translate_cache(
 
     suffixes = _subcache_suffixes(main_cache)
     cdhashes = []
-    for name in ['dyld_shared_cache_arm64e'] + [f'dyld_shared_cache_arm64e{s}' for s in suffixes]:
+    names = ['dyld_shared_cache_arm64e'] + [f'dyld_shared_cache_arm64e{s}' for s in suffixes]
+    for done, name in enumerate(names):
+        _report(args, f'{done}/{len(names)} dyld cache files')
         src = cache / name
         if name.endswith(('.symbols', '.atlas')) or not src.exists():
             continue
@@ -314,6 +332,7 @@ def _translate_cache(
         )
         flags, cat = apple.get(_cache_cdhash_in(src), (0, 0))
         trust.append((bytes.fromhex(cdhash), flags, cat))
+    _report(args, f'{len(names)}/{len(names)} dyld cache files')
     (out / 'a64x-cache-pretranslated.bin').write_bytes(b''.join(cdhashes))
 
 
