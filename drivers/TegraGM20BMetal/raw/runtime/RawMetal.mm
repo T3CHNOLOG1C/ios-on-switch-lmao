@@ -3409,6 +3409,27 @@ static bool rawDepthStencil(MTLRenderPassDescriptor *pass)
         waitTooLong("waitUntilCompleted of command buffer", (__bridge void *)self);
 }
 
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+// hw_test_app's attribution, final once the command buffer completed (its completed handlers may ask): "raw",
+// "m2v:<reason>:<first predicate>" or "split:<raw segments>+<m2v segments>:<reason>:<first predicate>"
+- (NSString *)switchRawPath
+{
+    std::lock_guard<std::mutex> l(_lock);
+    if (!_completedSent)
+        return @"pending";
+    if (!_segs.empty()) {
+        const auto raw = static_cast<size_t>(std::count_if(_segs.begin(), _segs.end(), [](const RMSegment &s) {
+            return s.raw;
+        }));
+        return [NSString stringWithFormat:@"split:%zu+%zu:%s:%s", raw, _segs.size() - raw, kReasonNames[_reason],
+                                          kPredNames[_pred0]];
+    }
+    if (!_m2v)
+        return @"raw";
+    return [NSString stringWithFormat:@"m2v:%s:%s", kReasonNames[_reason], kPredNames[_pred0]];
+}
+#endif
+
 // A selector a command buffer does not answer here: recorded for m2v (the command buffer goes there), answered zero.
 - (NSMethodSignature *)methodSignatureForSelector:(SEL)selector
 {
@@ -4937,6 +4958,36 @@ static void commitBuffer(RMCommandBuffer *cb);
 {
     commitBuffer(cb);
 }
+
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+// hw_test_app's attribution: this process's command buffers on each path since the device opened, never reset (the rates
+// line's windows stay its own). Keys: raw, m2v, split, split_m2v, aborted, reopens (channels the kernel killed and this
+// process opened again), m2v.<reason>, pred.<predicate> (nonzero only).
+- (NSDictionary<NSString *, NSNumber *> *)switchRawCounters
+{
+    const Stats &s = gRM->stats;
+    NSMutableDictionary *d = [NSMutableDictionary dictionary];
+    d[@"raw"] = @(s.raw.load());
+    d[@"m2v"] = @(s.m2v.load());
+    d[@"split"] = @(s.splits.load());
+    d[@"split_m2v"] = @(s.splitM2v.load());
+    d[@"aborted"] = @(s.aborted.load());
+    d[@"reopens"] = @(gRM->raw->stats.reopens.load());
+    for (int r = 1; r < WhyCount; r++)
+        if (const uint64_t n = s.reasons[r].load())
+            d[[NSString stringWithFormat:@"m2v.%s", kReasonNames[r]]] = @(n);
+    for (int p = 1; p < PredCount; p++)
+        if (const uint64_t n = gPredCbs[p].load(std::memory_order_relaxed))
+            d[[NSString stringWithFormat:@"pred.%s", kPredNames[p]]] = @(n);
+    return d;
+}
+
+// The m2v device this one wraps (the one TEGRA_RAW_METAL=0 gives the process): hw_test_app draws each scene on both
+- (id<MTLDevice>)switchM2VDevice
+{
+    return gRM->fallback;
+}
+#endif
 
 // Alignments Core Animation lays its memory out by (QuartzCore 21H461), answered for what the raw path takes as it is; m2v takes
 // any multiple of 16 (its own answers), so the m2v twins of the same memory are unchanged in what they hold:
