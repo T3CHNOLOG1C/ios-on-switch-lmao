@@ -717,11 +717,16 @@ static std::mutex gSurfaceImportLock;
 // association is never the one dropped: a lookup that missed it would import the same surface a second time.
 static constexpr NSUInteger kSurfaceImportKeys = 1024;
 
-// A symbol of NVK (libvulkan_nouveau.dylib: the one this process loaded, else the one beside this image), which the Vulkan
-// loader opened RTLD_LOCAL: looked up through that image rather than RTLD_DEFAULT.
+// The NVK the device was opened over (native_bridge_metal_open's loader), whatever its file is named (rawpack's twin copy).
+static std::string gNvkPath;
+
+// A symbol of NVK (the one the device opened, else libvulkan_nouveau.dylib: the one this process loaded, else the one beside
+// this image), which the Vulkan loader opened RTLD_LOCAL: looked up through that image rather than RTLD_DEFAULT.
 static void *nvkSymbol(const char *name)
 {
     static void *const nvk = []() -> void * {
+        if (void *opened = gNvkPath.empty() ? nullptr : dlopen(gNvkPath.c_str(), RTLD_LAZY | RTLD_NOLOAD))
+            return opened;
         static const char kNvk[] = "/libvulkan_nouveau.dylib";
         for (uint32_t i = 0, n = _dyld_image_count(); i < n; i++) {
             const char *image = _dyld_get_image_name(i);
@@ -6749,6 +6754,7 @@ extern "C" id native_bridge_metal_open(const char *loader, const char *cache, ui
         return gDeviceObject;
     gMissing = missing;
     gInFlight = [NSMutableSet set];
+    gNvkPath = loader ? loader : "";
     gDevice = nmb_device_open(loader, cache);
     if (!gDevice) {
         NBLOG(@"native-metal: device refused: %s", nmb_last_error());
