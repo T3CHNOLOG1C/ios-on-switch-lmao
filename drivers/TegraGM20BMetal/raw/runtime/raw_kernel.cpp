@@ -68,10 +68,15 @@ bool Kernel::open(std::string &err)
 {
     using Connection = bool (*)(uint32_t *, bool *, uint32_t *, uint64_t *, uint64_t *);
     void *nvk = nvkImage();
-    const auto connection = nvk ? reinterpret_cast<Connection>(dlsym(nvk, "switch_nvk_connection")) : nullptr;
-    const auto release = nvk ? reinterpret_cast<void (*)()>(dlsym(nvk, "switch_nvk_connection_release")) : nullptr;
-    if (!connection || !release)
+    if (!nvk)
         return openOwn(err);
+    const auto connection = reinterpret_cast<Connection>(dlsym(nvk, "switch_nvk_connection"));
+    const auto release = reinterpret_cast<void (*)()>(dlsym(nvk, "switch_nvk_connection_release"));
+    if (!connection || !release) {
+        // No fallback to a connection of our own: beside NVK's it would split the process's GPU VM in two
+        err = "the loaded NVK has no switch_nvk_connection, so it is older than this tree (rebuild //gpu/nvk:host)";
+        return false;
+    }
     // [vaStart, vaEnd) is the whole window NVK leaves out, handed to every caller: one Kernel per process may take it (the
     // render server's one raw device), or two free lists would hand out the same VAs.
     uint64_t vaStart = 0, vaEnd = 0;
