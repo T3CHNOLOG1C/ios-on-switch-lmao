@@ -5336,6 +5336,9 @@ static bool pipelineArchives(NSArray *list, std::vector<NmbBinaryArchive *> &arc
 // request: the render server, whose QuartzCore never compiles source, never loads it.
 static std::string
     gCompileCache;  // <the runtime's cache>/msl: the compiler's replies, kept across respawns (empty: none kept)
+// <the shared shader cache seed>/msl: the replies the image ships (Core Image's kernels as the device compiled them; the seed's
+// merge.py), read in place when this process's own cache lacks one (empty: no seed)
+static std::string gCompileSeed;
 static std::atomic<uint64_t> gCompiles, gCompilesKept, gCompileRefusals;
 
 // The compiler was written for MTLCompilerService's threads and recurses deeply; a dispatch worker's 512 KiB stack is too small for it
@@ -5368,8 +5371,8 @@ static void onLargeStack(void (^body)(void))
 
 // A reply depends only on the request and the compiler, so a compiled one is kept as <gCompileCache>/<SHA-256 of MTLCompiler's LC_UUID,
 // the request type and its bytes>.reply: magic, warning and metallib lengths, the SHA-256 of both, then both. A respawned process (the
-// icon service is ended whenever it goes idle) reads it instead of compiling again. Written beside its name and renamed; one that does
-// not check out is compiled again; failures are not kept.
+// icon service is ended whenever it goes idle) reads it instead of compiling again, and a process that never compiled it reads the
+// seed's. Written beside its name and renamed; one that does not check out is compiled again; failures are not kept.
 struct NBCompileReplyHeader {
     uint32_t magic, warningBytes;
     uint64_t metallibBytes;
@@ -5378,10 +5381,8 @@ struct NBCompileReplyHeader {
 
 static const uint32_t kNBCompileReplyMagic = 0x3143534e;  // "NSC1"
 
-static std::string compileReplyPath(const unsigned char uuid[16], uint32_t type, const std::vector<uint8_t> &request)
+static std::string compileReplyName(const unsigned char uuid[16], uint32_t type, const std::vector<uint8_t> &request)
 {
-    if (gCompileCache.empty())
-        return std::string();
     CC_SHA256_CTX context;
     CC_SHA256_Init(&context);
     CC_SHA256_Update(&context, uuid, 16);
@@ -5392,14 +5393,15 @@ static std::string compileReplyPath(const unsigned char uuid[16], uint32_t type,
     char name[2 * CC_SHA256_DIGEST_LENGTH + 8];
     for (int i = 0; i < CC_SHA256_DIGEST_LENGTH; i++)
         snprintf(name + 2 * i, 3, "%02x", key[i]);
-    return gCompileCache + "/" + name + ".reply";
+    return std::string(name) + ".reply";
 }
 
-static bool compileReplyRead(const std::string &path, NSData **metallib, NSString **warnings)
+static bool compileReplyRead(const std::string &dir, const std::string &name, NSData **metallib, NSString **warnings)
 {
-    NSData *file = path.empty()
-                       ? nil
-                       : [NSData dataWithContentsOfFile:@(path.c_str()) options:NSDataReadingMappedIfSafe error:nil];
+    NSData *file = dir.empty() ? nil
+                               : [NSData dataWithContentsOfFile:@((dir + "/" + name).c_str())
+                                                        options:NSDataReadingMappedIfSafe
+                                                          error:nil];
     NBCompileReplyHeader header;
     if (file.length < sizeof header)
         return false;
@@ -5419,10 +5421,11 @@ static bool compileReplyRead(const std::string &path, NSData **metallib, NSStrin
     return true;
 }
 
-static void compileReplyWrite(const std::string &path, NSData *metallib, NSString *warnings)
+static void compileReplyWrite(const std::string &name, NSData *metallib, NSString *warnings)
 {
-    if (path.empty() || !metallib.length)
+    if (gCompileCache.empty() || !metallib.length)
         return;
+    const std::string path = gCompileCache + "/" + name;
     NSData *warned = [warnings dataUsingEncoding:NSUTF8StringEncoding];
     NBCompileReplyHeader header = {kNBCompileReplyMagic, (uint32_t)warned.length, metallib.length, {}};
     NSMutableData *file = [NSMutableData dataWithCapacity:sizeof header + warned.length + metallib.length];
@@ -5441,23 +5444,24 @@ static void compileReplyWrite(const std::string &path, NSData *metallib, NSStrin
 
 typedef void (^NBCodeGenReply)(int32_t status, const void *reply, size_t length, const char *message);
 
+// A kept reply is read before the code generation service is made: a process whose requests the seed or its own cache holds never
+// starts the compiler, only loads its framework for the LC_UUID that names the replies.
 static NSData *codeGenRequest(uint32_t type, const std::vector<uint8_t> &request, NSString **warnings,
                               NSString **failure)
 {
     static void *service;
+    static void *(*create)(const char *);
     static void (*build)(void *, void *, uint32_t, const void *, size_t, NBCodeGenReply);
     static unsigned char compilerUuid[16];
-    static dispatch_once_t once;
+    static dispatch_once_t loaded, created;
     static std::mutex lock;
-    dispatch_once(&once, ^{
+    dispatch_once(&loaded, ^{
         void *library =
             dlopen("/System/Library/PrivateFrameworks/MTLCompiler.framework/MTLCompiler", RTLD_NOW | RTLD_LOCAL);
-        void *(*create)(const char *) =
-            library ? (void *(*)(const char *))dlsym(library, "MTLCodeGenServiceCreate") : nullptr;
+        create = library ? (void *(*)(const char *))dlsym(library, "MTLCodeGenServiceCreate") : nullptr;
         build = library ? (void (*)(void *, void *, uint32_t, const void *, size_t, NBCodeGenReply))dlsym(
                               library, "MTLCodeGenServiceBuildRequest")
                         : nullptr;
-        service = create && build ? create("native-metal") : nullptr;
         Dl_info info;
         if (build && dladdr((const void *)build, &info) && info.dli_fbase) {
             const mach_header_64 *header = (const mach_header_64 *)info.dli_fbase;
@@ -5468,22 +5472,32 @@ static NSData *codeGenRequest(uint32_t type, const std::vector<uint8_t> &request
                     break;
                 }
         }
-        if (!service)
+        if (!create || !build)
             NBLOG(@"native-metal: the system's Metal compiler (MTLCompiler.framework) did not load: %s",
                   library ? "no code generation service" : dlerror());
     });
-    if (!service) {
+    if (!create || !build) {
         *failure = @"the system's Metal compiler (MTLCompiler.framework) is not available";
         return nil;
     }
-    const std::string kept = compileReplyPath(compilerUuid, type, request);
+    const std::string name = compileReplyName(compilerUuid, type, request);
     NSData *keptMetallib = nil;
     NSString *keptWarnings = nil;
-    if (compileReplyRead(kept, &keptMetallib, &keptWarnings)) {
+    if (compileReplyRead(gCompileCache, name, &keptMetallib, &keptWarnings) ||
+        compileReplyRead(gCompileSeed, name, &keptMetallib, &keptWarnings)) {
         gCompilesKept++;
         *warnings = keptWarnings;
         *failure = nil;
         return keptMetallib;
+    }
+    dispatch_once(&created, ^{
+        service = create("native-metal");
+        if (!service)
+            NBLOG(@"native-metal: the system's Metal compiler (MTLCompiler.framework) made no code generation service");
+    });
+    if (!service) {
+        *failure = @"the system's Metal compiler (MTLCompiler.framework) is not available";
+        return nil;
     }
     __block NSData *metallib = nil;
     __block NSString *warned = nil, *message = nil;
@@ -5523,7 +5537,7 @@ static NSData *codeGenRequest(uint32_t type, const std::vector<uint8_t> &request
         gCompileRefusals++;
         return nil;
     }
-    compileReplyWrite(kept, metallib, warned);
+    compileReplyWrite(name, metallib, warned);
     return metallib;
 }
 
@@ -6858,6 +6872,8 @@ extern "C" id native_bridge_metal_open(const char *loader, const char *cache, ui
     if (cache) {
         gCompileCache = std::string(cache) + "/msl";
     }
+    if (const char *seed = getenv("METAL2VULKAN_SHADER_CACHE_SEED"); seed && *seed)
+        gCompileSeed = std::string(seed) + "/msl";
     if (cache && kJournal) {
         // The journal lives in a cache that survives reboots: past 2 MiB it starts again, the previous one kept as pipelines.log.old.
         gJournalPath = std::string(cache) + "/pipelines.log";
