@@ -67,6 +67,7 @@
 #include <kern/clock.h>
 #include <os/log.h>
 #include <pexpert/pexpert.h>
+#include "../../diagnostics/switch/SwitchPanicSave.h"
 #include "../../diagnostics/switch/SwitchPowerTrail.h"
 #include "../SwitchBrightness/TegraPanel.h"
 #include "../TegraBPMP/TegraBPMP.h"
@@ -734,6 +735,9 @@ extern "C" int switch_pmic_start(void)
             IOLog("SwitchPMIC: Wi-Fi/Bluetooth 32 kHz clock not set (%d): Bluetooth will not come up\n", clockErr);
         }
         gRTC = publishRTC(rtcMode);
+        int recordMillic = 0;
+        const enum switch_thermal_sensor recorded = switch_pmic_thermal_take(&recordMillic);
+        switch_panic_save_thermal(recorded, recordMillic);
 #if DEVELOPMENT || DEBUG
         switch_pmic_mark_start();
 #endif
