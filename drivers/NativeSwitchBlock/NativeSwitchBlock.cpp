@@ -154,6 +154,7 @@ constexpr uint64_t kTrimQuietNs = 10000000000ull, kTrimQuietLitNs = 60000000000u
 constexpr uint64_t kTrimBootSectors = 8ull << 21;
 constexpr uint64_t kTrimCursorEveryAus = 64;
 constexpr uint32_t kSdEraseArgument = 0;
+constexpr uint64_t kEraseRefusal = switch_refusal_key("SwitchSD", "erase");
 constexpr char kTrimCursorVariable[] = "switch-sd-trim-cursor";
 // r12-sdio: the most separate stretches of a read chain staged through the bounce buffer (SwitchAdmaStaging; consecutive
 // segments of one request make one): one per page of a 1 MiB chain of 4 KiB pages. More: the whole chain bounces.
@@ -1474,7 +1475,7 @@ void NativeSwitchBlock::trimStep()
     IOLockLock(queueLock);
     if (step) {
         trimFailed = true;
-        switch_refusal_k(switch_refusal_key_with(kUnmapRefusal, static_cast<uint64_t>(step)), "SwitchSD", "erase",
+        switch_refusal_k(switch_refusal_key_with(kEraseRefusal, static_cast<uint64_t>(step)), "SwitchSD", "erase",
                          "the card failed to erase LBA %llu-%llu (step %d, irq %#x): no more erases this boot", lba,
                          lba + sectors - 1, step, cardLastIrq);
     } else {
