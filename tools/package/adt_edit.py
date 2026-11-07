@@ -231,6 +231,7 @@ def _capabilities(tree: list) -> None:
     # iBoot sets to the SoC. Without it CoreVideo, AMS and the store's user agent read NULL.
     put(tree, 'platform-name', b't8011\0')
     put(tree, 'target-sub-type', b'J120AP\0')
+    put(child(tree, 'chosen'), 'display-corner-radius', u32(0))
     product = child(tree, 'product')
     for key, value in (
         ('bluetooth-le', u32(1)),
