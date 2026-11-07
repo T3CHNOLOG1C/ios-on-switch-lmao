@@ -106,8 +106,24 @@ where
         .ok_or_else(|| format!("{what} {value} is not a Metal value"))
 }
 
+/// The error of `what` as the caller's text, and m2v's refusal of work iPadOS sent, logged once per call and kind of error
+/// in the process (kits/SwitchRefusal: an error line, kept in release). The kind is the error's variant and first field
+/// (`NotImplemented(Format`, `Unsupported(Unsupported { feature: FramebufferFetch`) without digits, so a value that varies
+/// per call makes no line of its own.
 fn e<E: std::fmt::Debug>(what: &'static str) -> impl FnOnce(E) -> String {
-    move |error| format!("{what}: {error:?}")
+    move |error| {
+        let text = format!("{what}: {error:?}");
+        let kind: String = text[what.len() + 2..]
+            .split([',', ')'])
+            .next()
+            .unwrap_or_default()
+            .chars()
+            .filter(|c| !c.is_ascii_digit())
+            .collect();
+        let key = switch_refusal::key_with(switch_refusal::key("m2v", what), switch_refusal::key("", &kind));
+        switch_refusal::refuse(c"m2v", what, key, || text.clone());
+        text
+    }
 }
 
 fn options(value: u64) -> Result<ResourceOptions, String> {
