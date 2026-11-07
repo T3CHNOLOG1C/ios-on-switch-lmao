@@ -326,8 +326,9 @@ void SwitchRT5639::mute(bool muted)
 // DAC1_DIG_VOL: left 15:8, right 7:0, 0xaf = 0 dB in 0.375 dB steps; kDacHeadphone is the full headphone level.
 uint16_t SwitchRT5639::headphoneDac() const
 {
-    const unsigned full = kDacHeadphone & 0xff, steps = headphoneSteps < full ? headphoneSteps : full;
-    return (uint16_t)((full - steps) << 8 | (full - steps));
+    const unsigned full = kDacHeadphone & 0xff;
+    const unsigned steps = headphoneSteps < full ? headphoneSteps : full;
+    return static_cast<uint16_t>((full - steps) << 8 | (full - steps));
 }
 
 void SwitchRT5639::setHeadphoneAttenuation(unsigned steps)
