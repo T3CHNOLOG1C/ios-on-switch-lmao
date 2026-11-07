@@ -2166,9 +2166,12 @@ bool SwitchBluetooth::answer(uint16_t opcode, uint8_t status, int sub)
 
 // Client thread: leFilter into the controller's APCF filters, injected between bluetoothd's commands, before the scan
 // that uses them starts. A refused APCF command turns the translation off for the boot: APCF disabled, the controller
-// passes every advert as before, and bluetoothd's filtering commands are refused again.
+// passes every advert as before, and bluetoothd's filtering commands are refused again. An injection that could not
+// go now (another command outstanding, no answer in time) is not a refusal: the state stays dirty and the next scan
+// enable programs it again (the program starts by disabling APCF, so a part-done one leaves every advert passing).
 bool SwitchBluetooth::programLeFilter()
 {
+    constexpr uint8_t kInjectBusy = 0xfe, kInjectNotSent = 0xfd, kInjectNoAnswer = 0xff;
     switch_le_command commands[SWITCH_LE_MAX_COMMANDS];
     const unsigned n = switch_le_filter_program(&leFilter, commands, SWITCH_LE_MAX_COMMANDS);
     for (unsigned i = 0; i < n; ++i) {
@@ -2177,6 +2180,17 @@ bool SwitchBluetooth::programLeFilter()
         const uint8_t status = inject(commands[i].opcode, commands[i].params, commands[i].length, ret, &retLength);
         if (!status)
             continue;
+        if (status == kInjectBusy || status == kInjectNotSent || status == kInjectNoAnswer) {
+            switch_refusal_k(switch_refusal_key_with(switch_refusal_key("bluetooth", "apcf-deferred"), status),
+                             "bluetooth", "apcf-deferred",
+                             "APCF programming deferred to the next scan (%s): the controller keeps its previous "
+                             "filters (or none) until then",
+                             status == kInjectBusy      ? "a command outstanding"
+                             : status == kInjectNotSent ? "not sent"
+                                                        : "no answer in time");
+            leDirty = true;
+            return true;
+        }
         IOLog("SwitchBluetooth: APCF sub-code %#x action %#x refused (status %#x): LE adverts filter in the host this "
               "boot\n",
               commands[i].params[0], commands[i].length > 1 ? commands[i].params[1] : 0, status);
