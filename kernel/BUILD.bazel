@@ -88,7 +88,6 @@ filegroup(
         "//drivers/ArmCpu:all_files",
         "//drivers/ArmDTPlatform:all_files",
         "//drivers/ArmGIC:all_files",
-        "//drivers/ArmVirtPlatform:all_files",
         "//drivers/SwitchAccelStub:all_files",
         "//drivers/NativeAES:all_files",
         "//drivers/NativeAdreno:all_files",
