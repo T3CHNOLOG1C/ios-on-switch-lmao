@@ -109,3 +109,31 @@ void fillLimitsTable(uint8_t *table, Answer answer, ReadBack readBack, Report re
         report(field, LimitFill::Filled);
     }
 }
+
+#ifdef __OBJC__
+#include <objc/runtime.h>
+
+// fillLimitsTable with the answers of `device`'s own class: each field's method where it is not the base class's and answers an
+// integer, read back through the base class's.
+template <class Report> void fillLimitsFromMethods(id device, uint8_t *table, Report report)
+{
+    Class cls = object_getClass(device), base = class_getSuperclass(cls);
+    auto answer = [&](const LimitField &field, uint64_t &value) {
+        SEL sel = sel_registerName(field.selector);
+        Method own = class_getInstanceMethod(cls, sel), original = class_getInstanceMethod(base, sel);
+        if (!own || !original || method_getImplementation(own) == method_getImplementation(original))
+            return false;
+        char type[8] = {};
+        method_getReturnType(own, type, sizeof type);
+        if (strcmp(type, "Q") && strcmp(type, "L") && strcmp(type, "I"))
+            return false;
+        value = ((NSUInteger (*)(id, SEL))method_getImplementation(own))(device, sel);
+        return true;
+    };
+    auto readBack = [&](const LimitField &field) -> uint64_t {
+        SEL sel = sel_registerName(field.selector);
+        return ((NSUInteger (*)(id, SEL))method_getImplementation(class_getInstanceMethod(base, sel)))(device, sel);
+    };
+    fillLimitsTable(table, answer, readBack, report);
+}
+#endif

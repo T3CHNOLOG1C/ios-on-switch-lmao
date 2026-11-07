@@ -39,6 +39,7 @@
 #include <thread>
 #include <vector>
 #include "GpuMemoryRelease.h"
+#include "LimitsTable.h"
 #include "SwitchFrameTimeline.h"
 #include "../../../../kits/SwitchRefusal/SwitchRefusalSite.h"
 #include "RawAlias.h"
@@ -6570,23 +6571,19 @@ id<MTLDevice> raw_metal_device_open(const char *packPath, uint64_t stack, id<MTL
     r->fallback = fallback;
     r->device = [cls new];
     // The base class's limits table (_MTLDevice's own accessors read it; the frontend's fillLimits filled the m2v device's from its
-    // answers): the same for this device. The frontend's fillLimits, which Metal's registration runs through initLimits, finds no
-    // answer of this class's own to write (they are the m2v class's), so it leaves the copy as it is.
+    // answers): the same for this device, then this device's own answers (RMDevice's) where the base class reads them there.
     static const SEL limits = NSSelectorFromString(@"limits");
     if (fallback && [fallback respondsToSelector:limits] && [r->device respondsToSelector:limits]) {
         const void *from = ((const void *(*)(id, SEL))objc_msgSend)(fallback, limits);
         void *to = ((void *(*)(id, SEL))objc_msgSend)(r->device, limits);
-        if (from && to && from != to)
-            memcpy(to, from, 0x100);  // kLimitFields' extent (NativeBridgeMetalFrontend.mm)
-        // and this device's own answers (RMDevice) where the table holds them (kLimitFields' offsets)
-        if (to && from != to) {
-            static const struct {
-                uint16_t offset;
-                uint32_t value;
-            } own[] = {{0x78, 256}, {0xb0, 32}};
-
-            for (const auto &o : own)
-                memcpy(static_cast<uint8_t *>(to) + o.offset, &o.value, 4);
+        if (from && to && from != to) {
+            memcpy(to, from, 0x100);  // kLimitFields' extent
+            fillLimitsFromMethods(r->device, static_cast<uint8_t *>(to), [](const LimitField &field, LimitFill how) {
+                if (how != LimitFill::Filled)
+                    SWITCH_REFUSE_DETAIL("raw", "limits.layout", field.offset,
+                                         "limits: %s not written at 0x%x (the base class does not read it there)",
+                                         field.selector, field.offset);
+            });
         }
     }
     r->handlers = dispatch_queue_create(

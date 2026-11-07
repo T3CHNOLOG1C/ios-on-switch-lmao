@@ -5518,29 +5518,12 @@ static bool systemCompiler()
 // the table says what the methods say; a field the device has no answer for stays the base class's 0.
 static void fillLimits(id device)
 {
-    Class cls = object_getClass(device), base = class_getSuperclass(cls);
-    if (![base instancesRespondToSelector:@selector(limits)])
+    if (![class_getSuperclass(object_getClass(device)) instancesRespondToSelector:@selector(limits)])
         return;
     uint8_t *table = (uint8_t *)[(id<NBOriginalLimits>)device limits];
     if (!table)
         return;
-    auto answer = [&](const LimitField &field, uint64_t &value) {
-        SEL sel = sel_registerName(field.selector);
-        Method own = class_getInstanceMethod(cls, sel), original = class_getInstanceMethod(base, sel);
-        if (!own || !original || method_getImplementation(own) == method_getImplementation(original))
-            return false;
-        char type[8] = {};
-        method_getReturnType(own, type, sizeof type);
-        if (strcmp(type, "Q") && strcmp(type, "L") && strcmp(type, "I"))
-            return false;
-        value = ((NSUInteger (*)(id, SEL))method_getImplementation(own))(device, sel);
-        return true;
-    };
-    auto readBack = [&](const LimitField &field) -> uint64_t {
-        SEL sel = sel_registerName(field.selector);
-        return ((NSUInteger (*)(id, SEL))method_getImplementation(class_getInstanceMethod(base, sel)))(device, sel);
-    };
-    fillLimitsTable(table, answer, readBack, [](const LimitField &field, LimitFill how) {
+    fillLimitsFromMethods(device, table, [](const LimitField &field, LimitFill how) {
         if (how == LimitFill::Overflow)
             NBREFUSE("limits.overflow", uintptr_t(field.selector), @"limits: %s does not fit the table",
                      field.selector);
