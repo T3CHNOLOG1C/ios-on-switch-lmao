@@ -319,6 +319,36 @@ int main(int argc, char **argv)
                 d.mipmapLevelCount = 1 + unsigned(std::log2(double(std::max(td.w, td.h))));
                 d.storageMode = MTLStorageModePrivate;
                 tex[t] = [dev newTextureWithDescriptor:d];
+            } else if (td.iosurface && td.format == 542) {
+                // a widget snapshot: luma rows one byte a texel, chroma rows two, each rounded up to 64 bytes (FRAME_PITCH:
+                // 16, so neither is a pitch target's 128)
+                const NSUInteger round = frame::pitchShapes("fb") ? 16 : 64, row0 = (td.w + round - 1) / round * round,
+                                 row1 = (2 * td.w + round - 1) / round * round, off1 = (row0 * td.h + 4095) & ~4095ul;
+                NSDictionary *p0 = @{
+                    (id)kIOSurfacePlaneWidth : @(td.w),
+                    (id)kIOSurfacePlaneHeight : @(td.h),
+                    (id)kIOSurfacePlaneBytesPerElement : @1,
+                    (id)kIOSurfacePlaneBytesPerRow : @(row0),
+                    (id)kIOSurfacePlaneOffset : @0,
+                    (id)kIOSurfacePlaneSize : @(row0 * td.h)
+                };
+                NSDictionary *p1 = @{
+                    (id)kIOSurfacePlaneWidth : @(td.w),
+                    (id)kIOSurfacePlaneHeight : @(td.h),
+                    (id)kIOSurfacePlaneBytesPerElement : @2,
+                    (id)kIOSurfacePlaneBytesPerRow : @(row1),
+                    (id)kIOSurfacePlaneOffset : @(off1),
+                    (id)kIOSurfacePlaneSize : @(row1 * td.h)
+                };
+                surfaces[t] = IOSurfaceCreate((__bridge CFDictionaryRef) @{
+                    (id)kIOSurfaceWidth : @(td.w),
+                    (id)kIOSurfaceHeight : @(td.h),
+                    (id)kIOSurfacePixelFormat : @((uint32_t)'_RB4'),
+                    (id)kIOSurfaceAllocSize : @((off1 + row1 * td.h + 16383) & ~16383ul),
+                    (id)kIOSurfacePlaneInfo : @[ p0, p1 ]
+                });
+                d.storageMode = MTLStorageModeShared;
+                tex[t] = [dev newTextureWithDescriptor:d iosurface:surfaces[t] plane:0];
             } else if (td.iosurface) {
                 NSDictionary *p = @{
                     (id)kIOSurfaceWidth : @(td.w),

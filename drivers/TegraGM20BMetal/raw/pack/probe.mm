@@ -23,6 +23,7 @@
 #include <string>
 #include <vector>
 #include "NativeBridgeMetalFrontend.h"
+#include "TwoPlaneStandIn.h"
 #include "bridge/NativeMetalObjects.h"
 extern "C" void mock_iokit_report(void);
 extern "C" void pushcount_report(const char *what);
@@ -285,13 +286,18 @@ int main(int argc, char **argv)
             lines.push_back(plain.UTF8String);
         }
         // PROBE_YCBCR_LIB=<metallib>: the raw path's own states after Core Animation's, drawn and read alike: the conversions of
-        // YCbCr textures (pack/ycbcr.metal), lines marked "@Y " (their functions are that library's); mkpack.py keys
-        // them by name ("raw.ycbcr.<fragment function>"), which the runtime asks for
-        id<MTLLibrary> ycbcr = nil;
+        // YCbCr textures (pack/ycbcr.metal), lines marked "@Y " (their functions are that library's), and the frontend's moves
+        // between an RGB8_444_2P target's planes and its RGBA16Float stand-in (TwoPlaneStandIn.metal), lines marked "@S ";
+        // mkpack.py keys them by name ("raw.ycbcr.<fragment function>", "raw.standin.<fragment function>"), which the runtime
+        // asks for
+        id<MTLLibrary> ycbcr = nil, standIn = nil;
         if (const char *path = getenv("PROBE_YCBCR_LIB")) {
             ycbcr = [dev newLibraryWithURL:[NSURL fileURLWithPath:@(path)] error:&error];
-            if (!ycbcr) {
-                fprintf(stderr, "ycbcr library: %s\n", error.localizedDescription.UTF8String);
+            dispatch_data_t data = dispatch_data_create(kTwoPlaneStandInLibrary, sizeof kTwoPlaneStandInLibrary,
+                                                        nullptr, DISPATCH_DATA_DESTRUCTOR_DEFAULT);
+            standIn = ycbcr ? [dev newLibraryWithData:data error:&error] : nil;
+            if (!ycbcr || !standIn) {
+                fprintf(stderr, "raw's own library: %s\n", error.localizedDescription.UTF8String);
                 return 1;
             }
             for (const char *out :
@@ -302,6 +308,10 @@ int main(int argc, char **argv)
                 lines.push_back("@Y R ok=1 label=raw.ycbcr samples=1 topo=0 ds=0/0 c0=" + o.substr(0, bar) +
                                 ":15:0:1:0:0:1:0:0" + o.substr(bar));
             }
+            for (const char *out :
+                 {"c0=115:15:0:1:0:0:1:0:0 | v two_plane_cover | f two_plane_load",
+                  "c0=10:15:0:1:0:0:1:0:0 c1=30:15:0:1:0:0:1:0:0 | v two_plane_cover | f two_plane_store"})
+                lines.push_back(std::string("@S R ok=1 label=raw.standin samples=1 topo=0 ds=0/0 ") + out);
         }
         id<MTLCommandQueue> queue = [dev newCommandQueue];
         // tagged textures and samplers
@@ -638,10 +648,13 @@ int main(int argc, char **argv)
         }
         for (const std::string &marked : lines) {
             State s;
-            const bool own = marked.rfind("@Y ", 0) == 0, framework = marked.rfind("@L ", 0) == 0;
+            const bool own = marked.rfind("@Y ", 0) == 0, standInLine = marked.rfind("@S ", 0) == 0,
+                       framework = marked.rfind("@L ", 0) == 0;
             const size_t pathEnd = framework ? marked.find(' ', 3) : 0;
-            const std::string line = own ? marked.substr(3) : framework ? marked.substr(pathEnd + 1) : marked;
-            id<MTLLibrary> library = own ? ycbcr : qc;
+            const std::string line = own || standInLine ? marked.substr(3)
+                                     : framework        ? marked.substr(pathEnd + 1)
+                                                        : marked;
+            id<MTLLibrary> library = own ? ycbcr : standInLine ? standIn : qc;
             if (framework && !(library = frameworkLibrary(dev, marked.substr(3, pathEnd - 3)))) {
                 fprintf(stderr, "LIBRARY %s\n", marked.substr(3, pathEnd - 3).c_str());
                 refused++;
@@ -715,6 +728,22 @@ int main(int argc, char **argv)
                 }
             for (unsigned t = 0; t < 16; t++)
                 [enc setFragmentTexture:textures[t] atIndex:t];
+            // the store reads the RGBA16Float stand-in, whose class decides the push words of its read: a tagged texture of slot
+            // 0's size in that format (the load reads the codes as the raw path holds them: an 8-bit image, as the tagged
+            // textures are)
+            if (standInLine && line.find("f two_plane_store") != std::string::npos) {
+                static id<MTLTexture> halves = [&] {
+                    MTLTextureDescriptor *td =
+                        [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA16Float
+                                                                           width:16
+                                                                          height:8
+                                                                       mipmapped:NO];
+                    td.usage = MTLTextureUsageShaderRead;
+                    td.storageMode = MTLStorageModePrivate;
+                    return [dev newTextureWithDescriptor:td];
+                }();
+                [enc setFragmentTexture:halves atIndex:0];
+            }
             for (unsigned t = 0; t < 16; t++)
                 [enc setFragmentSamplerState:samplers[t] atIndex:t];
             [enc drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];

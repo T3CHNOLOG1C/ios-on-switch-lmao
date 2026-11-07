@@ -584,7 +584,9 @@ Pipeline *Device::pipeline(uint64_t keyHash, PackForm form, bool caTransform)
         const int n = sscanf(at, " c%u=%u:%u:%u:%u:%u:%*u:%u:%u", &c, &f, &mask, &blend, &factor[0], &factor[1],
                              &factor[2], &factor[3]);
         if (n >= 4 && c < 8) {
-            pl.colorFormats[c] = f;
+            constexpr unsigned kRGB8_444_2P = 542,
+                               kRGBA16Float = 115;  // rendered through its stand-in (Texture::standIn)
+            pl.colorFormats[c] = f == kRGB8_444_2P ? kRGBA16Float : f;
             if (mask && (blend || mask != 15))
                 pl.readBits |= uint8_t(1u << c);
             // MTLBlendFactorBlendColor, OneMinusBlendColor, BlendAlpha, OneMinusBlendAlpha
@@ -1104,6 +1106,38 @@ bool Device::createPlanarTexture(uint64_t surfaceId, void *base, uint64_t allocB
     return true;
 }
 
+Pipeline *Device::standInPipeline(bool store)
+{
+    static const char load[] = "raw.standin.two_plane_load", stored[] = "raw.standin.two_plane_store";
+    return store ? pipeline(Pack::fnv(stored, sizeof stored - 1)) : pipeline(Pack::fnv(load, sizeof load - 1));
+}
+
+bool Device::createPlanarTarget(uint64_t surfaceId, void *base, uint64_t allocBytes, const void *surface, Texture &t)
+{
+    constexpr uint32_t kR8Unorm = 10, kRG8Unorm = 30, kRGBA16Float = 115;
+    if (!t.planar || !t.import || !standInPipeline(false) || !standInPipeline(true))
+        return false;
+    const uint64_t at = t.import->bo.va;
+    Texture *luma = new Texture, *chroma = new Texture, *standIn = new Texture;
+    const bool made = createSurfaceTexture(surfaceId, base, allocBytes, surface, t.planes.luma - at, t.width, t.height,
+                                           t.planes.lumaPitch, kR8Unorm, *luma) &&
+                      createSurfaceTexture(surfaceId, base, allocBytes, surface, t.planes.chroma - at, t.width,
+                                           t.height, t.planes.chromaPitch, kRG8Unorm, *chroma) &&
+                      createTexture(t.width, t.height, kRGBA16Float, *standIn, false, true) && standIn->renderable &&
+                      (luma->renderable || luma->shadowTarget) && (chroma->renderable || chroma->shadowTarget);
+    if (!made) {
+        for (Texture *x : {luma, chroma, standIn}) {
+            destroyTexture(*x);
+            delete x;
+        }
+        return false;
+    }
+    t.luma = luma;
+    t.chroma = chroma;
+    t.standIn = standIn;
+    return true;
+}
+
 bool Device::createBufferTexture(const Buffer &b, uint64_t offset, uint32_t width, uint32_t height, uint32_t pitch,
                                  uint32_t format, Texture &t)
 {
@@ -1340,12 +1374,12 @@ void Device::selfTest()
 
 void Device::destroyTexture(Texture &t)
 {
-    for (Texture *plane : {t.luma, t.chroma})
+    for (Texture *plane : {t.luma, t.chroma, t.standIn})
         if (plane) {
             destroyTexture(*plane);
             delete plane;
         }
-    t.luma = t.chroma = nullptr;
+    t.luma = t.chroma = t.standIn = nullptr;
     if (t.sampled) {  // its header is the pool image's
         destroyTexture(*t.sampled);
         delete t.sampled;
