@@ -17,8 +17,6 @@ constexpr uint32_t kInterlockControl = 0x1224;  // SET_PIXEL_SHADER_INTERLOCK_CO
 constexpr uint32_t kTextureType3D = 2;          // TEXHEAD's TEXTURE_TYPE (word 4 bits 26:23)
 constexpr uint32_t kTagBuffer = 0xC0DE;         // pack/probe.mm's payload tag
 constexpr uint8_t kCbufRoot = 1, kCbufShaderData = 2, kCbufSet = 3;
-// MTLSamplerDescriptor's defaults through m2v + NVK: the probe's warm-up sampler, NVK's sampler index 0
-constexpr uint32_t kDummyTsc[3] = {0x26092, 0x291, 0x40000};
 
 std::string hex(uint64_t v)
 {
@@ -146,13 +144,11 @@ Tex textureKind(const nvdec::ProbeRecord::Header &t, const std::map<std::string,
 }
 
 // layouts.py tsc_kind: probe.mm tags fragment sampler slot s with max LOD 1 + s/2 (nearest mip filter), linear filters when s&1
-// and a repeating U when s&2; `untagged`: no such tag (a constexpr sampler)
-Smp samplerKind(const std::array<uint32_t, 8> &t, uint8_t &slot, bool &untagged)
+// and a repeating U when s&2; a header without such a tag is a constexpr sampler's
+Smp samplerKind(const std::array<uint32_t, 8> &t, uint8_t &slot)
 {
-    untagged = false;
     const uint32_t lod = t[2] >> 12 & 0xFFF, mag = t[1] & 7, u = t[0] & 7;
     if (lod % 256 || lod < 256 || lod > 256 * 8 || (mag != 1 && mag != 2)) {
-        untagged = true;
         return Smp::Constexpr;
     }
     const uint32_t s = 2 * (lod / 256 - 1) + (mag == 2 ? 1 : 0);
@@ -166,11 +162,11 @@ Smp samplerKind(const std::array<uint32_t, 8> &t, uint8_t &slot, bool &untagged)
 bool layout(const nvdec::ProbeSubmission &s, uint32_t index, std::vector<LayoutEntry> &out, std::string &why)
 {
     const nvdec::ProbeRecord &r = s.records[0];
-    const std::vector<uint32_t> &words = r.set0;
+    const std::vector<uint32_t> &words = r.sets[0].words;
     for (size_t o = 0; o < words.size();) {
         if (o % 4 == 0) {
-            if (const auto p = r.set0Pointers.find(uint32_t(o * 4)); p != r.set0Pointers.end()) {
-                const std::vector<uint32_t> &pw = p->second;
+            if (const auto p = r.setPointers[0].find(uint32_t(o * 4)); p != r.setPointers[0].end()) {
+                const std::vector<uint32_t> &pw = p->second.words;
                 const uint32_t stage = pw.size() > 1 ? pw[0] >> 8 & 0xFF : 0;
                 if (pw.size() < 2 || pw[0] >> 16 != kTagBuffer || pw[1] != index || (stage != 1 && stage != 2)) {
                     why = "untagged pointer at " + std::to_string(o * 4) + " (" + hex(pw.empty() ? 0 : pw[0]) + ")";
@@ -196,13 +192,10 @@ bool layout(const nvdec::ProbeSubmission &s, uint32_t index, std::vector<LayoutE
                 e.tex = t == r.tic.end() ? Tex::Unknown : textureKind(t->second, s.targets, e.texSlot);
             }
             const auto smp = r.tsc.find(e.tsc);
-            e.smp = Smp::Constexpr;
-            bool untagged = true;
-            if (smp != r.tsc.end()) {
-                e.smp = samplerKind(smp->second, e.smpSlot, untagged);
-                if (untagged && e.tsc == 0 && !memcmp(smp->second.data(), kDummyTsc, sizeof kDummyTsc))
-                    e.smp = Smp::None;  // the warm-up sampler, never bound in a probe: the handle names no sampler
-            }
+            if (e.tsc == 0)
+                e.smp = Smp::None;  // NVK's reserved sampler (nvk_device.c): the handle names no sampler
+            else
+                e.smp = smp == r.tsc.end() ? Smp::Constexpr : samplerKind(smp->second, e.smpSlot);
             if (e.tex == Tex::Unknown) {
                 why = "unidentified handle at " + std::to_string(o * 4) + ": " + hex(w);
                 return false;
@@ -218,11 +211,11 @@ bool layout(const nvdec::ProbeSubmission &s, uint32_t index, std::vector<LayoutE
 std::map<uint32_t, uint32_t> boundSizes(const nvdec::ProbeSubmission *s)
 {
     std::map<uint32_t, uint32_t> out;
-    if (!s || s->draws != 1 || s->dispatches || s->records.empty() || s->records[0].set0.empty())
+    if (!s || s->draws != 1 || s->dispatches || s->records.empty() || s->records[0].sets[0].words.empty())
         return out;
-    const std::vector<uint32_t> &w = s->records[0].set0;
+    const std::vector<uint32_t> &w = s->records[0].sets[0].words;
     for (size_t o = 0; o + 3 < w.size(); o += 4)
-        if (s->records[0].set0Pointers.count(uint32_t(o * 4)))
+        if (s->records[0].setPointers[0].count(uint32_t(o * 4)))
             out[uint32_t(o * 4)] = w[o + 2];
     return out;
 }
@@ -445,7 +438,8 @@ bool makeRecord(const ProbeRuns &runs, const PackRules &rules, const ProgramLook
         p.pushWords[(offset - 0x700) / 4] = word;
         p.pushes++;
     }
-    p.setBytes = r.set0.empty() || r.root.size() <= 0x38 / 4 + 2 ? 0 : uint16_t(r.root[0x38 / 4 + 2]);
+    const std::vector<uint32_t> &root = r.root.words;
+    p.setBytes = r.sets[0].words.empty() || root.size() <= 0x38 / 4 + 2 ? 0 : uint16_t(root[0x38 / 4 + 2]);
     const size_t bar = runs.key.find(" | ");
     out.keyString = runs.key.substr(0, bar);
     while (!out.keyString.empty() && isspace(static_cast<unsigned char>(out.keyString.back())))

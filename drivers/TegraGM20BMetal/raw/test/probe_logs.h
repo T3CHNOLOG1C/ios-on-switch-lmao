@@ -60,11 +60,11 @@ inline void recordLine(nvdec::ProbeRecord &r, const std::vector<std::string> &f)
     if (t == "regs")
         r.regs = pairs(f, 2);
     else if (t == "root")
-        r.root = words(f, 3);
+        r.root.words = words(f, 3);
     else if (t == "set0")
-        r.set0 = words(f, 3);
+        r.sets[0].words = words(f, 3);
     else if (t.rfind("ptr0.", 0) == 0)
-        r.set0Pointers[uint32_t(atoi(t.c_str() + 5))] = words(f, 3);
+        r.setPointers[0][uint32_t(atoi(t.c_str() + 5))].words = words(f, 3);
     else if (t == "tic") {
         nvdec::ProbeRecord::Header &h = r.tic[uint32_t(atoi(f[2].c_str()))];
         h.name = f[3];
@@ -79,7 +79,7 @@ inline void recordLine(nvdec::ProbeRecord &r, const std::vector<std::string> &f)
     else if (t.rfind("vb", 0) == 0)
         r.streams[uint32_t(atoi(t.c_str() + 2))].words = words(f, 3);
     else if (t == "prog")
-        r.programs[atoi(f[2].c_str())] = {f[3], f[5] == "known"};
+        r.programs[atoi(f[2].c_str())] = {f[3], hex(f[4]), f[5] == "known"};
     else if (t == "pushw")
         for (const auto &kv : pairs(f, 2))
             r.pushWords.push_back(kv);

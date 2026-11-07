@@ -29,23 +29,28 @@ filegroup(
     ]),
 )
 
+# What the runtime's capture of a state compiles beside it: pack/nvdec (the generator's decoder) and Mesa's MME simulator
+filegroup(
+    name = "raw_capture_headers",
+    srcs = glob([
+        "raw/pack/*.h",
+        "raw/pack/mesa/**/*.h",
+        "raw/fx/test/twod_sim.h",
+    ]),
+)
+
 # Not a hand run's leftovers: a .pyc of the modules (the host Python's) in a checkout would change the raw pack's action key
 # there and nowhere else, so that checkout's pack never hits the disk cache another checkout filled, and the other way round.
 filegroup(
     name = "raw_pack_generator",
     srcs = glob(
-        [
-            "raw/pack/**",
-            # the mock's capture mode (pack/cap.cpp) and the methods the raw path owns (pack/mkpack.py)
-            "raw/runtime/raw_capture.*",
-            "raw/runtime/raw_pack.*",
-        ],
+        ["raw/pack/**"],
         exclude = [
             "**/__pycache__/**",
             "**/*.pyc",
             "**/.DS_Store",
         ],
-    ) + ["raw/runtime/raw_owned.h"],
+    ) + ["raw/runtime/raw_owned.h"],  # the methods the raw path owns (pack/mkpack.py reads them)
 )
 
 filegroup(

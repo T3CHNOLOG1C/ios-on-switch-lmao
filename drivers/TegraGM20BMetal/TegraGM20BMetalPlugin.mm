@@ -777,6 +777,7 @@ id openDevice(unsigned port)
                        getprogname(), pack, (unsigned long long)TEGRA_RAW_STACK);
                 device = raw;
                 gRaw = true;
+                raw_metal_complete_states(cache);
             } else {
                 os_log_error(logger(),
                              "TegraGM20BMetal: raw GM20B path off in %{public}s (%{public}@): m2v device kept",
