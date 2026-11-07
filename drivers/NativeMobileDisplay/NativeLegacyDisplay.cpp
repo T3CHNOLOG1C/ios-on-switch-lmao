@@ -552,7 +552,9 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     bool primary = false;
     bool logicalPM = false;
     bool transferred = false;
-    TegraDisplayColor color;
+    // The colour unit's state (tables, matrices, the pending change) is kept out of the object: inside, it took the instance
+    // past the 16 KiB a kalloc_type class may have (KALLOC_SAFE_ALLOC_SIZE). Made in start, freed in free.
+    TegraDisplayColor *color = nullptr;
 
     // Every request the validator accepted and the family has not retired yet. A client may submit swap N+1 while swap N is still on the GPU
     // (int-131: swap 3 was validated during swap 2's GPU copy and one remembered pointer lost swap 2, which then never retired and left
@@ -1413,7 +1415,7 @@ private:
         // A console waiting to scroll (waitTapeFrame) wakes at every frame end while it draws on the tape.
         if (status & kFrameEndInt) {
             tegra_panel_frame_end_filter();
-            self->color.frameEndFilter();
+            self->color->frameEndFilter();
             if (self->tapeAttached) {
                 __atomic_fetch_add(&self->tapeFrames, 1ull, __ATOMIC_RELEASE);
                 thread_wakeup((event_t)&self->tapeFrames);
@@ -1488,7 +1490,7 @@ private:
         if (status & kFrameEndInt)
             planeFrameEnd();
         if (status & kFrameEndInt)
-            color.frameEndAction();
+            color->frameEndAction();
         if ((status & kFrameEndInt) && stats) {
             if (frameStall.frameEnd(mach_absolute_time(), refreshTicks(), vsyncWanted()))
                 switch_stall_frame(frameStall.lastPresent());
@@ -1918,7 +1920,7 @@ private:
         if (!dcMap)
             panic("SwitchDisplay: cannot map DC A");
         dc = reinterpret_cast<volatile uint32_t *>(dcMap->getVirtualAddress());
-        color.attach(dc);
+        color->attach(dc);
         vblankSource = IOFilterInterruptEventSource::filterInterruptEventSource(
             this, &NativeLegacyDisplay::vblankFired, &NativeLegacyDisplay::vblankFilter, nub, 0);
         if (!vblankSource || loop->addEventSource(vblankSource) != kIOReturnSuccess)
@@ -1967,7 +1969,7 @@ private:
         dc[kDcIntEnable] = dcEnable;
         dc[kDcIntStatus] = kVblankInt | kFrameEndInt | kVpulse2Int;
         vpulseProgrammed = vpulseSeen = false;
-        color.detach();
+        color->detach();
         dc = nullptr;
         OSSafeReleaseNULL(dcMap);
         dcPending = 0;
@@ -3139,7 +3141,7 @@ public:
         dc[kDcScratchB] = savedScratchB;
         if (vpulseProgrammed)
             writePhaseRegisters();  // r17-touch: SC7 reset them; they latch with the request below
-        color.restoreAfterPowerUp();
+        color->restoreAfterPowerUp();
         dc[kDcStateControl] = kGeneralUpdate | kWinAUpdate;
         dc[kDcStateControl] = kGeneralActReq | kWinAActReq;
         dc[kDcIntStatus] = kVblankInt | kFrameEndInt | kWinAUnderflowInt;
@@ -3222,7 +3224,10 @@ public:
         OSSafeReleaseNULL(bootMapping);
         if (hists)
             IOFreeType(hists, FrameHists);
-        color.free();
+        if (color) {
+            color->free();
+            IOFreeType(color, TegraDisplayColor);
+        }
         if (intMaskLock)
             IOSimpleLockFree(intMaskLock);
         IOMobileFramebufferLegacy::free();
@@ -3267,7 +3272,7 @@ public:
 
     bool start(IOService *provider) override
     {
-        if (!color.init() || !(intMaskLock = IOSimpleLockAlloc()))
+        if (!(color = IOMallocType(TegraDisplayColor)) || !color->init() || !(intMaskLock = IOSimpleLockAlloc()))
             return false;
         if (frameHists && !(hists = IOMallocType(FrameHists)))
             return false;
@@ -4833,20 +4838,20 @@ public:
         publish("IOMFBNumLayers", layers, 1, 32);
     }
 
-    IOReturn getGammaTable(void *table) override { return color.getGammaTable(table); }
-    IOReturn setGammaTable(const void *table) override { return color.setGammaTable(table); }
-    IOReturn getMatrix(uint32_t location, void *matrix) override { return color.getMatrix(location, matrix); }
-    IOReturn setMatrix(uint32_t location, const void *matrix) override { return color.setMatrix(location, matrix); }
-    IOReturn setContrast(const void *contrast) override { return color.setContrast(contrast); }
-    IOReturn setColorRemapMode(uint32_t mode) override { return color.setColorRemapMode(mode); }
-    IOReturn getColorRemapMode(uint32_t *mode) override { return color.getColorRemapMode(mode); }
-    IOReturn setBrightnessCorrection(uint32_t value) override { return color.setBrightnessCorrection(value); }
+    IOReturn getGammaTable(void *table) override { return color->getGammaTable(table); }
+    IOReturn setGammaTable(const void *table) override { return color->setGammaTable(table); }
+    IOReturn getMatrix(uint32_t location, void *matrix) override { return color->getMatrix(location, matrix); }
+    IOReturn setMatrix(uint32_t location, const void *matrix) override { return color->setMatrix(location, matrix); }
+    IOReturn setContrast(const void *contrast) override { return color->setContrast(contrast); }
+    IOReturn setColorRemapMode(uint32_t mode) override { return color->setColorRemapMode(mode); }
+    IOReturn getColorRemapMode(uint32_t *mode) override { return color->getColorRemapMode(mode); }
+    IOReturn setBrightnessCorrection(uint32_t value) override { return color->setBrightnessCorrection(value); }
     IOReturn swapSetColorMatrix(const void *matrix, uint32_t location, uint32_t flags) override
     {
-        return color.swapSetColorMatrix(matrix, location, flags);
+        return color->swapSetColorMatrix(matrix, location, flags);
     }
-    IOReturn setAccessibilityScale(uint32_t scale) override { return color.setAccessibilityScale(scale); }
-    void platformFrameInfoNotify(void *client, bool enable) override { color.frameInfoNotify(client, enable); }
+    IOReturn setAccessibilityScale(uint32_t scale) override { return color->setAccessibilityScale(scale); }
+    void platformFrameInfoNotify(void *client, bool enable) override { color->frameInfoNotify(client, enable); }
 
 #define LEAF(name, n)                                                      \
     __attribute__((noreturn, noinline)) void name() override               \

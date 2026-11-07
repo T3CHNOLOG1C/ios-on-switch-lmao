@@ -15,8 +15,10 @@ static constexpr uint32_t kLocationAccessibility = 2, kLocationHarmony = 9;
 extern "C" void native_legacy_frame_end_hold(void);
 extern "C" void native_legacy_frame_end_release(void);
 
+// The object comes zeroed from IOMallocType, its member initializers not run.
 bool TegraDisplayColor::init()
 {
+    inputs = Inputs();
     identityGamma(inputs.gamma);
     for (unsigned point = 0; point < kGammaPoints; ++point)
         for (unsigned channel = 0; channel < 3; ++channel)
