@@ -267,7 +267,7 @@ TEST(BlankSource, ColourBlankEndsAtTheNextLatch)
     EXPECT_THAT(display(), HasSubstr("rotated && rotationLatched && doubleBuffer && ring.pending == kNoBuffer &&"));
     EXPECT_THAT(
         method(display(), "    void flipLatched()"),
-        HasSubstr("{\n        if (blanked) {\n            blanked = false;\n            color.setBlank(false);"));
+        HasSubstr("{\n        if (blanked) {\n            blanked = false;\n            color->setBlank(false);"));
 }
 
 // iOS 17's layout of the original framebuffer is the one this driver always ran on: its table must keep these values, or
