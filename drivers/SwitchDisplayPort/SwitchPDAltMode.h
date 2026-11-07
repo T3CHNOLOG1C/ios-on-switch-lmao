@@ -24,7 +24,7 @@ extern "C" {
 #define SWITCH_PD_ALT_ALERT_CONTRACT     (1u << 12)
 #define SWITCH_PD_ALT_STATUS1_LASTCMD    (7u << 4)
 #define SWITCH_PD_ALT_STATUS1_INSERT     (1u << 7)
-#define SWITCH_PD_ALT_STATUS1_DR_SHIFT   8
+#define SWITCH_PD_ALT_STATUS1_DR_SHIFT   8u
 #define SWITCH_PD_ALT_STATUS1_CSIDE      (1u << 11)
 #define SWITCH_PD_ALT_STATUS1_CMD_BUSY   (1u << 13)
 #define SWITCH_PD_ALT_DP_STATUS_DP_EN    (1u << 15)
@@ -196,7 +196,7 @@ static inline bool switch_pd_alt_has_svid(const uint8_t *vdm, size_t len, uint16
 {
     const size_t count = vdm[0] < len ? vdm[0] : len - 1;
     for (size_t i = 5; i + 1 <= count; i += 2) {
-        if ((uint16_t)(vdm[i] | (vdm[i + 1] << 8)) == svid) {
+        if ((uint16_t)((unsigned)vdm[i] | (unsigned)vdm[i + 1] << 8U) == svid) {
             return true;
         }
     }
