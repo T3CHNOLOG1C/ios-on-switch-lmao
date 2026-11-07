@@ -8494,18 +8494,16 @@ native_switch_watchdog_policy(proc_t p, user_addr_t scratch)
 	 * a job to turn off. softwareupdateservicesd stays off: an OTA must never replace this system. FairPlay is out of
 	 * scope (FairPlayIOKit is not prelinked), so fairplayd stays off with the FairPlay daemons that start on their own:
 	 * adid (CoreADI) and lskdd. lskdd's daily XPC activity launches it, it exits (92) before completing the activity,
-	 * and launchd respawns it once a second. SepUpdateTimer (seputil's sepOS update check) is limited to device trees
-	 * with a "hilo" node (_LimitLoadToDeviceTree), which J120 has not, yet launchd loads it here; seputil then exits
-	 * before taking its hourly activity and is respawned every 10 s. */
+	 * and launchd respawns it once a second. Jobs limited to device-tree nodes J120 has not (SepUpdateTimer and
+	 * iomfb_bics_daemon on "hilo", biometrickitd.mesa on "mesa") are refused by launchd itself, as on J120. */
 #define NATIVE_SWITCH_POLICY_TAIL "<key>com.apple.softwareupdateservicesd</key><true/>" \
 	    "<key>com.apple.fairplayd.A2</key><true/>" \
 	    "<key>com.apple.adid</key><true/>" \
 	    "<key>com.apple.lskdd</key><true/>" \
-	    "<key>com.apple.SepUpdateTimer</key><true/>" \
 	    NATIVE_SWITCH_POLICY_NO_HARDWARE \
 	    "</dict></plist>\n"
 	/* No such hardware on the Switch (approved 11-04): NFC, secure element, Tap to Pay, ID wallet, Face ID, UWB,
-	 * multitouch calibration, hotspot, cellular helper, smart charging, Apple display FDR/BICS; and tailspind (always-on
+	 * multitouch calibration, hotspot, cellular helper, smart charging, Apple display FDR; and tailspind (always-on
 	 * kdebug tracing) and accessoryupdaterd. This file is the only override database 21H461 launchd reads: no
 	 * disabled.<uid>.plist exists. launchd reads it once, between its finish-demo-restore and sysstatuscheck boot tasks.
 	 * The user/501 domain shares the system domain's dictionary, so one bare-label key covers both domains. A job disabled
@@ -8517,14 +8515,12 @@ native_switch_watchdog_policy(proc_t p, user_addr_t scratch)
 	    "<key>com.apple.seserviced</key><true/>" \
 	    "<key>com.apple.softposreaderd</key><true/>" \
 	    "<key>com.apple.coreidvd</key><true/>" \
-	    "<key>com.apple.biometrickitd.mesa</key><true/>" \
 	    "<key>com.apple.nearbyd</key><true/>" \
 	    "<key>com.apple.mtmergeprops</key><true/>" \
 	    "<key>com.apple.MobileInternetSharing</key><true/>" \
 	    "<key>com.apple.CommCenterMobileHelper</key><true/>" \
 	    "<key>com.apple.PowerUIAgent</key><true/>" \
 	    "<key>com.apple.iomfb_fdr_loader</key><true/>" \
-	    "<key>com.apple.iomfb_bics_daemon</key><true/>" \
 	    "<key>com.apple.tailspind</key><true/>" \
 	    "<key>com.apple.accessoryupdaterd</key><true/>"
 	static const char head[] = NATIVE_SWITCH_POLICY_HEAD, bluetooth_off[] = NATIVE_SWITCH_POLICY_BLUETOOTH,
