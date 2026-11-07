@@ -19,7 +19,7 @@ from pathlib import Path
 
 if __package__ in (None, ''):
     sys.path.insert(0, str(Path(os.path.abspath(__file__)).parents[2]))
-from tools.install import card as cards, folder, host
+from tools.install import card as cards, folder, host, progress
 
 
 def fat_of(card: cards.Card) -> cards.Part:
@@ -89,7 +89,8 @@ def main(argv: list[str] | None = None) -> int:
                     raise cards.RefusedError('not confirmed')
             folder.merge(out, Path(root), names, log)
         if not args.no_eject:
-            host.run('diskutil', 'eject', card.disk, log=log)
+            with progress.step(f'card: ejecting {card.disk}', unit=None):
+                host.run('diskutil', 'eject', card.disk, log=log)
             log('ejected', card.disk, "- in the Switch, run install-ios.bin from hekate's Payloads")
         return 0
     except cards.RefusedError as error:

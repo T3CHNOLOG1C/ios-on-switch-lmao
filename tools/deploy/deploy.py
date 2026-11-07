@@ -35,7 +35,6 @@ import argparse
 import json
 import os
 import plistlib
-import subprocess
 import sys
 import time
 from pathlib import Path
@@ -51,6 +50,7 @@ from tools.deploy import (
 from tools.install import (
     card as cards,
     host,
+    progress,
     renamed,
 )
 
@@ -191,8 +191,9 @@ def _confirmed(args: argparse.Namespace, card: cards.Card) -> None:
 
 def _stage_gpu(args: argparse.Namespace, data_root: Path, log: host.Log) -> None:
     command = [sys.executable, args.stager, str(data_root)]
-    command += ['--remove'] if args.remove_gpu else ['--build', args.gpu_bundle]
-    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    command += ['--remove'] if args.remove_gpu else ['--build', args.gpu_bundle, '--progress']
+    with progress.step('gpu: staging the Metal bundle'):
+        result = host.stream(command, progress.ours)
     log('gpu:', (result.stdout + result.stderr).strip())
     if result.returncode:
         raise host.HostError('GPU bundle NOT staged')
@@ -240,10 +241,11 @@ def main(argv: list[str] | None = None) -> int:
         args.log or Path.home() / 'Library/Logs/switch-ios-install/deploy-{}.log'.format(time.strftime('%Y%m%d-%H%M%S'))
     )
     try:
-        card, spec, fat, target, data = _checked(args, log)
-        with cards.mounted(fat.identifier, log) as fat_root:
-            changes, removed = cards.sync_boot_entry(fat_root, args.boot_package, log, dry_run=True)
-            pairing = None if args.no_joycon_pairing else joycon_pairing.read(fat_root, log)
+        with progress.step(f'deploy: checking {args.disk}', unit=None):
+            card, spec, fat, target, data = _checked(args, log)
+            with cards.mounted(fat.identifier, log) as fat_root:
+                changes, removed = cards.sync_boot_entry(fat_root, args.boot_package, log, dry_run=True)
+                pairing = None if args.no_joycon_pairing else joycon_pairing.read(fat_root, log)
         log(f'card {card.disk}: FAT {fat.identifier}, iPad Data {data}')
         for step in _plan(args, changes, removed, pairing):
             log('  plan:', step)
@@ -251,14 +253,15 @@ def main(argv: list[str] | None = None) -> int:
             log('dry run: nothing written (add --yes)')
             return 0
         _confirmed(args, card)
-        preboot = pull_logs.data_volume(card, spec['volumes']['preboot']['uuid'])
-        if preboot:
-            with cards.mounted(preboot, log) as preboot_root:
-                renamed.migrate_preboot(preboot_root, spec, log)
-        with cards.mounted(data, log) as data_root:
-            ok = _write(args, data_root, fat, pairing, log)
-        if not args.no_eject:
-            _eject(card, target, log)
+        with progress.step(f'deploy: writing to {card.disk}', unit=None):
+            preboot = pull_logs.data_volume(card, spec['volumes']['preboot']['uuid'])
+            if preboot:
+                with cards.mounted(preboot, log) as preboot_root:
+                    renamed.migrate_preboot(preboot_root, spec, log)
+            with cards.mounted(data, log) as data_root:
+                ok = _write(args, data_root, fat, pairing, log)
+            if not args.no_eject:
+                _eject(card, target, log)
         log('deployed')
         return 0 if ok else 1
     except cards.RefusedError as error:

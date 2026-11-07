@@ -17,7 +17,7 @@ import re
 import shutil
 from pathlib import Path
 
-from tools.install import card as cards, host, manifest, renamed
+from tools.install import card as cards, host, manifest, progress, renamed
 
 SII_DIR = cards.BOOT_ENTRY
 LEGACY = cards.BOOT_ENTRY + '/install'
@@ -148,6 +148,7 @@ def _copy_range(source: Path, target: Path, start: int, end: int) -> None:
             data = src.read(min(COPY_CHUNK, end - start))
             dst.write(data)
             start += len(data)
+            progress.advance(len(data))
         dst.flush()
         os.fsync(dst.fileno())
     if whole:
@@ -158,15 +159,17 @@ def merge(out: Path, fat_root: Path, names: list[str], log: host.Log) -> tuple[l
     """Put images NAMES and the payload, ini and icon from `out` onto a mounted FAT; return (written, removed)."""
     out, fat_root = Path(out), Path(fat_root)
     written, removed = [], []
-    for name in names:
-        copies, stale = copy_plan(out, fat_root, name)
-        for relative in stale:
-            (fat_root / relative).unlink()
-            removed.append(relative)
-        for relative, start, end in copies:
-            (fat_root / relative).parent.mkdir(parents=True, exist_ok=True)
-            _copy_range(out / relative, fat_root / relative, start, end)
-            written.append(relative if end != manifest.BODY_OFFSET or start else relative + ' (head)')
+    with progress.step('card: copying', copy_bytes(out, fat_root, names)):
+        for name in names:
+            copies, stale = copy_plan(out, fat_root, name)
+            for relative in stale:
+                (fat_root / relative).unlink()
+                removed.append(relative)
+            for relative, start, end in copies:
+                progress.note(relative)
+                (fat_root / relative).parent.mkdir(parents=True, exist_ok=True)
+                _copy_range(out / relative, fat_root / relative, start, end)
+                written.append(relative if end != manifest.BODY_OFFSET or start else relative + ' (head)')
     if (fat_root / LEGACY).is_dir() and not any((fat_root / LEGACY).iterdir()):
         (fat_root / LEGACY).rmdir()
     for relative in SHARED:
