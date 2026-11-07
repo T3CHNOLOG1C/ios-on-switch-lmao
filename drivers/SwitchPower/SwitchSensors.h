@@ -101,12 +101,14 @@ static const struct switch_sensor switch_sensors[SWITCH_SENSOR_COUNT] = {
 // The sensors thermalmonitord reads every 5 s (copyEvent), as a mask of table indices. It sets an infoOnly sensor's
 // health bit whenever its service exists, so with no service hooked its "current" mask is exactly the infoOnly bits
 // (0x9249276ba).
+// NOLINTNEXTLINE(modernize-redundant-void-arg): C (the host harness) reads this header too
 static inline uint64_t switch_sensors_read_mask(void)
 {
     uint64_t mask = 0;
-    for (unsigned i = 0; i < SWITCH_SENSOR_COUNT; ++i)
+    for (unsigned i = 0; i < SWITCH_SENSOR_COUNT; ++i) {
         if (!switch_sensors[i].info_only)
-            mask |= 1ull << i;
+            mask |= 1ULL << i;
+    }
     return mask;
 }
 
@@ -133,13 +135,13 @@ static inline int32_t switch_sensor_cltm_centi(int32_t fixed)
 // thermalmonitord's -[HidSensors isTempSensorDataValid:value:] on centi-degrees: (uint32)(v - 15000) > 0xffffb5c8.
 static inline int switch_sensor_cltm_valid(int32_t centi)
 {
-    return (uint32_t)(centi - 15000) > 0xffffb5c8u;
+    return (uint32_t)(centi - 15000) > 0xffffb5c8u ? 1 : 0;
 }
 
 // Only physically plausible readings are handed to thermalmonitord; anything else is a read failure (no event).
 static inline int switch_sensor_plausible(int32_t milli_c)
 {
-    return milli_c > -40000 && milli_c < 150000;
+    return milli_c > -40000 && milli_c < 150000 ? 1 : 0;
 }
 
 // SOC_THERM readback (TS_*_STATUS1 bits 15:0, SENSOR_TEMP1/2 halves): TTTTTTTT H______N, T = degrees, H = +0.5, N =
@@ -165,8 +167,9 @@ static inline int32_t switch_max17050_millic(uint16_t raw)
 // a degree either way raises ALRT and the current reading never violates it.
 static inline uint16_t switch_max17050_talrt(int32_t milli_c)
 {
-    int32_t whole = milli_c >= 0 ? (milli_c + 500) / 1000 : -((-milli_c + 500) / 1000);  // nearest
-    int32_t hi = whole + 1, lo = whole - 1;
+    const int32_t whole = milli_c >= 0 ? (milli_c + 500) / 1000 : -((-milli_c + 500) / 1000);  // nearest
+    int32_t hi = whole + 1;
+    int32_t lo = whole - 1;
     if (hi > 127)
         hi = 127;
     if (hi < -127)
@@ -175,7 +178,7 @@ static inline uint16_t switch_max17050_talrt(int32_t milli_c)
         lo = -128;
     if (lo > 126)
         lo = 126;
-    return (uint16_t)((uint16_t)(uint8_t)(int8_t)hi << 8 | (uint8_t)(int8_t)lo);
+    return (uint16_t)((unsigned)(uint8_t)(int8_t)hi << 8 | (uint8_t)(int8_t)lo);
 }
 
 // --- SOC_THERM fuse calibration (Linux drivers/thermal/tegra/tsensor-fuse.c and tegra210-soctherm.c, T210B01) ----
@@ -207,6 +210,7 @@ struct switch_tsensor_shared {
 static inline int32_t switch_sign_extend32(uint32_t value, unsigned index)
 {
     const unsigned shift = 31 - index;
+    // NOLINTNEXTLINE(bugprone-signed-bitwise): an arithmetic shift right sign-extends the field
     return (int32_t)(value << shift) >> shift;
 }
 
@@ -215,6 +219,7 @@ static inline int64_t switch_div64_precise(int64_t a, int32_t b)
 {
     const int64_t al = a * 65536;
     const int64_t r = (al * 2 + 1) / ((int64_t)b * 2);
+    // NOLINTNEXTLINE(bugprone-signed-bitwise): an arithmetic shift, as Linux's div64_s64_precise
     return r >> 16;
 }
 
@@ -238,11 +243,13 @@ static inline uint32_t switch_tsensor_calib(const struct switch_tsensor_config *
 {
     const int32_t cp = shared->base_cp * 64 + switch_sign_extend32(fuse & 0x1fffu, 12);
     const int32_t ft = shared->base_ft * 32 + switch_sign_extend32((fuse >> 13) & 0x1fffu, 12);
-    const int32_t delta_sens = ft - cp, delta_temp = shared->actual_temp_ft - shared->actual_temp_cp;
-    const int32_t mult = (int32_t)(cfg->pdiv * cfg->tsample_ate), div = (int32_t)(cfg->tsample * cfg->pdiv_ate);
+    const int32_t delta_sens = ft - cp;
+    const int32_t delta_temp = shared->actual_temp_ft - shared->actual_temp_cp;
+    const int32_t mult = (int32_t)(cfg->pdiv * cfg->tsample_ate);
+    const int32_t div = (int32_t)(cfg->tsample * cfg->pdiv_ate);
     if (!delta_sens)
         return 0;
-    int64_t temp = (int64_t)delta_temp * (1ll << 13) * mult;
+    int64_t temp = (int64_t)delta_temp * (1LL << 13) * mult;
     int16_t therma = (int16_t)switch_div64_precise(temp, (int32_t)((int64_t)delta_sens * div));
     temp = (int64_t)ft * shared->actual_temp_cp - (int64_t)cp * shared->actual_temp_ft;
     int16_t thermb = (int16_t)switch_div64_precise(temp, delta_sens);
@@ -280,9 +287,10 @@ static const char *const switch_cltm_keys[SWITCH_CLTM_CONTRIBUTORS] = {
 static inline uint32_t switch_cltm_ceiling(const uint32_t fraction[SWITCH_CLTM_CONTRIBUTORS])
 {
     uint32_t c = 0x10000u;
-    for (unsigned i = 0; i < SWITCH_CLTM_CONTRIBUTORS; ++i)
+    for (unsigned i = 0; i < SWITCH_CLTM_CONTRIBUTORS; ++i) {
         if (fraction[i] < c)
             c = fraction[i];
+    }
     return c;
 }
 

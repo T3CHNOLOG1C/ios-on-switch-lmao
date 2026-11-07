@@ -21,16 +21,20 @@ volatile uint32_t native_aes_completed = 0;
 volatile uint32_t native_aes_unsupported_key = 0;
 }
 
+// NOLINTNEXTLINE(misc-use-internal-linkage): OSDefineMetaClassAndStructors needs the class's external linkage
 class NativeAES : public IOAESAccelerator {
+    // NOLINTNEXTLINE(misc-explicit-constructor): IOKit's structors macro declares the metaclass constructor
 OSDeclareDefaultStructors(NativeAES) public : bool start(IOService *) override;
 
     IOWorkLoop *getWorkLoop() const override
     {
+        // NOLINTNEXTLINE(bugprone-parent-virtual-call): IOAESAccelerator's drives Apple's engine; IOService's is wanted
         return IOService::getWorkLoop();
     }
 
     IOReturn callPlatformFunction(const OSSymbol *name, bool wait, void *a, void *b, void *c, void *d) override
     {
+        // NOLINTNEXTLINE(bugprone-parent-virtual-call): IOAESAccelerator's drives Apple's engine; IOService's is wanted
         return IOService::callPlatformFunction(name, wait, a, b, c, d);
     }
 
@@ -67,7 +71,7 @@ OSDefineMetaClassAndStructors(NativeAES, IOAESAccelerator)
     } context;
 
     unsigned char nextIV[16];
-    int result;
+    int result = 0;
     // The Security Engine first (drivers/TegraSE: it updates iv the same way); the CPU if it declines.
     if (!tegra_se_aes(TEGRA_SE_CBC, operation != IOAESDecrypt, key.bytes, key.bits / 8, iv, input, output, bytes))
         return 0;
@@ -92,9 +96,13 @@ OSDefineMetaClassAndStructors(NativeAES, IOAESAccelerator)
 
 bool NativeAES::start(IOService *provider)
 {
-    if (!g_crypto_funcs || !g_crypto_funcs->ccaes_cbc_encrypt || !g_crypto_funcs->ccaes_cbc_decrypt ||
-        !IOService::start(provider))
+    if (!g_crypto_funcs || !g_crypto_funcs->ccaes_cbc_encrypt || !g_crypto_funcs->ccaes_cbc_decrypt) {
         return false;
+    }
+    // NOLINTNEXTLINE(bugprone-parent-virtual-call): IOAESAccelerator's start drives Apple's engine; IOService's is wanted
+    if (!IOService::start(provider)) {
+        return false;
+    }
     setProperty("NativeAESSoftwareKeysOnly", true);
     native_aes_registered = 1;
     registerService();
@@ -110,10 +118,11 @@ IOReturn NativeAES::performAES(IOMemoryDescriptor *input, IOMemoryDescriptor *ou
         return kIOReturnBadArgument;
     if (key->selector || (operation != IOAESEncrypt && operation != IOAESDecrypt)) {
         __atomic_fetch_add(&native_aes_unsupported_key, 1, __ATOMIC_RELAXED);
-        switch_refusal_k(switch_refusal_key_with(kRefusedKey, (uint64_t)key->selector << 32 | (uint32_t)operation),
+        switch_refusal_k(switch_refusal_key_with(kRefusedKey, static_cast<uint64_t>(key->selector) << 32 |
+                                                                  static_cast<uint32_t>(operation)),
                          "NativeAES", "hardware key",
                          "key selector %u, operation %d: only keys the caller passes, encrypt or decrypt",
-                         (unsigned)key->selector, (int)operation);
+                         static_cast<unsigned>(key->selector), static_cast<int>(operation));
         return kIOReturnUnsupported;
     }
     if (inputOffset > input->getLength() || bytes > input->getLength() - inputOffset ||
@@ -172,7 +181,7 @@ IOReturn NativeAES::performAES(void *input, void *output, task_t task, unsigned 
             destination->release();
         return kIOReturnNoMemory;
     }
-    IOReturn result = performAES(source, destination, bytes, iv, operation, key, 0, 0, callback, refcon);
+    const IOReturn result = performAES(source, destination, bytes, iv, operation, key, 0, 0, callback, refcon);
     source->release();
     destination->release();
     return result;

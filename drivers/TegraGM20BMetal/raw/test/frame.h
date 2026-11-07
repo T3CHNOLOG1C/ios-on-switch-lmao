@@ -254,15 +254,17 @@ struct Draw {
     int textures[16];                                             // Tex or -1
     int samplers[16];                                             // sampler spec index or -1
     uint32_t primitive = 4, first = 0, count = 4, instances = 1;  // MTLPrimitiveType (4 triangle strip)
-    int ds = -1;                                                  // dsSpec index set before it (-1: none set)
-    uint32_t stencilRef[2] = {};                                  // set before it where ds >= 0
-    // set before it where raster: MTLCullMode, MTLWinding, MTLTriangleFillMode
+    uint32_t baseInstance = 0;
+    int ds = -1;                  // dsSpec index set before it (-1: none set)
+    uint32_t stencilRef[2] = {};  // set before it where ds >= 0
+    // set before it where raster: MTLCullMode, MTLWinding, MTLTriangleFillMode, and setDepthBias's factors
     bool raster = false;
     uint8_t cull = 0, winding = 0, fill = 0;
+    float bias[3] = {};
 };
 
-// FRAME_RASTER: the main pass's draws cull no face, the front or the back, wind clockwise or counter-clockwise, and some fill
-// with lines (Core Animation culls a layer that is not doubleSided)
+// FRAME_RASTER: the main pass's draws cull no face, the front or the back, wind clockwise or counter-clockwise, some fill
+// with lines, some are biased in depth and some draw lines (Core Animation culls a layer that is not doubleSided)
 inline bool rasterState()
 {
     return getenv("FRAME_RASTER") != nullptr;
@@ -356,6 +358,8 @@ inline std::vector<Pass> passes(unsigned frameIndex, const Shape &s, size_t blur
                 d.first = 1, d.count = 3;
             if (i % 7 == 3)
                 d.instances = 2;
+            if (i % 9 == 4)
+                d.baseInstance = 3;
         }
         d.textures[3] = IMAGE1 + int(i % 3);
         d.textures[4] = IMAGE2;
@@ -366,6 +370,13 @@ inline std::vector<Pass> passes(unsigned frameIndex, const Shape &s, size_t blur
             d.cull = uint8_t(i % 3);
             d.winding = uint8_t((i / 3) % 2);
             d.fill = uint8_t(i % 7 == 3);
+            if (i % 5 == 1) {
+                d.bias[0] = 0.25f * float(i % 9) - 1.0f;
+                d.bias[1] = i % 2 ? 2.0f : 0.0f;
+                d.bias[2] = i % 3 ? 0.0f : 0.5f;
+            }
+            if (i % 11 == 5)
+                d.primitive = 1;  // MTLPrimitiveTypeLine
         }
         if (depthStencil() && i % 3 != 2) {
             d.ds = int((i / 3) % kDsSpecs);
@@ -376,6 +387,38 @@ inline std::vector<Pass> passes(unsigned frameIndex, const Shape &s, size_t blur
     }
     out.push_back(mp);
     return out;
+}
+
+// FRAME_INDEXED: every third main draw indexed as Core Animation's meshes are (CA::OGL::MetalContext::draw: 16-bit indices
+// written into its buffer pool at 4-byte alignment, drawIndexedPrimitives on triangles), at `at` in the index buffer, which
+// it advances; with FRAME_INDEXED_FORMS also several instances, a base vertex and a base instance
+struct Indexed {
+    uint32_t count, offset, instances = 1, baseInstance = 0;
+    int32_t baseVertex = 0;
+};
+
+inline bool indexedDraw(bool blur, uint32_t drawIndex)
+{
+    return getenv("FRAME_INDEXED") && !blur && drawIndex % 3 == 1;
+}
+
+inline Indexed indexed(uint32_t drawIndex, uint8_t *buffer, uint32_t &at)
+{
+    if (at + 64 > 65536)
+        at = 0;
+    static const uint16_t quad[6] = {0, 1, 2, 2, 1, 3};
+    memcpy(buffer + at, quad, sizeof quad);
+    Indexed x{6, at};
+    if (getenv("FRAME_INDEXED_FORMS")) {
+        if (drawIndex % 4 == 0)
+            x.instances = 2;
+        if (drawIndex % 4 == 2)
+            x.count = 3, x.baseVertex = 1;  // the quad's vertices 1 to 3
+        if (drawIndex % 5 == 3)
+            x.baseInstance = 2;
+    }
+    at += 12 + (drawIndex % 5) * 4;  // offsets 4-byte aligned, as the buffer pool hands them out
+    return x;
 }
 
 // Deterministic contents for a setBytes call: vertices (a quad, stride 48, moved per draw) or uniforms.

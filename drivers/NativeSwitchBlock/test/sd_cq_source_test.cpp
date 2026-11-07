@@ -78,7 +78,7 @@ TEST(SdCqSource, DriverGuards)
                 HasSubstr("if ((s & INT_COMMAND) && !(s & 0x000f0000u))\n            *response = r32(RESPONSE);"));
     // An erase-based trim passes the longer busy its SD Status specifies; every other command keeps the default.
     EXPECT_THAT(command, HasSubstr("limit = limitNs"));
-    EXPECT_THAT(source, HasSubstr("int data,\n                  uint64_t limitNs = 1500000000ull);"));
+    EXPECT_THAT(source, HasSubstr("int data,\n                  uint64_t limitNs = 1500000000ULL);"));
     EXPECT_EQ(Count(source, "kRegNone, limitNs)"), 1u);
     EXPECT_THAT(body("Batch *NativeSwitchBlock::runGroup("), Not(HasSubstr("13, ")));  // no CMD13 task-status polling
     EXPECT_EQ(Count(engine(), "bus.settle()"), 2u);
@@ -192,7 +192,9 @@ TEST(SdCqSource, DriverGuards)
     const std::string check = body("const char *NativeSwitchBlock::checkCq(");
     EXPECT_THAT(check, HasSubstr("if (perf.cqDepth < 2)\n        return \"the card offers no queue\";"));
     EXPECT_THAT(check, HasSubstr("if (perf.cqControl & kSdCqEnable)"));
-    EXPECT_THAT(check, HasSubstr("memcmp(bounce + i * kBytes, checkBuffer + i * kBytes, kBytes)"));
+    EXPECT_THAT(
+        check,
+        HasSubstr("memcmp(bounce + static_cast<size_t>(i) * kBytes, checkBuffer + static_cast<size_t>(i) * kBytes,"));
     EXPECT_LT(Index(check, "cq.start(depth, perf.cache);"), Index(check, "cq.enter(cqBus)"));
     // r18-sdcq: the depth one below byte 6's (the Raspberry Pi kernel's), the test group once more after a recovered
     // protocol error, and the data path's counts from zero.

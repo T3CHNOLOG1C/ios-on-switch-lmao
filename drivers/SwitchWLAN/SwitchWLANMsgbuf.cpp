@@ -39,9 +39,10 @@ enum : unsigned {
     CONTROL_COMPLETE,
     TX_COMPLETE,
     RX_COMPLETE,
-    RING_COUNT,
-    FLOW = RING_COUNT
+    RING_COUNT
 };
+
+constexpr unsigned FLOW = RING_COUNT;  // the flow rings' slot after the common rings
 
 constexpr uint16_t kRingItems[RING_COUNT] = {64, 512, 64, 1024, 512};
 constexpr uint16_t kRingItemSize[RING_COUNT] = {40, 32, 24, 16, 32};
@@ -149,11 +150,12 @@ bool Msgbuf::allocateArea(char *why, size_t whyLength)
             break;
         }
         OSSafeReleaseNULL(memory);
-        if (layout.length == kAreaLarge.length)
+        if (layout.length == kAreaLarge.length) {
             IOLog("SwitchWLAN: msgbuf: %u KiB contiguous below 4 GiB not available (pa %#llx, run %llu); taking %u KiB "
                   "with %u receive and %u transmit buffers\n",
                   kAreaLarge.length / 1024, pa, static_cast<unsigned long long>(segment), kAreaSmall.length / 1024,
                   kAreaSmall.rxBuffers, kAreaSmall.txBuffers);
+        }
     }
     if (!memory_) {
         snprintf(why, whyLength, "DMA area: %u bytes contiguous below 4 GiB not available (pa %#llx, run %llu)",
@@ -216,11 +218,13 @@ bool Msgbuf::attach(Chip *chip, EventHandler events, FrameHandler frames, void *
 
     const uint32_t info = tcm.r32(shared + SHARED_RING_INFO);
     uint32_t mem = tcm.r32(info + RINGINFO_MEM);
-    const uint32_t h2dW = tcm.r32(info + RINGINFO_H2D_W), h2dR = tcm.r32(info + RINGINFO_H2D_R);
-    const uint32_t d2hW = tcm.r32(info + RINGINFO_D2H_W), d2hR = tcm.r32(info + RINGINFO_D2H_R);
+    const uint32_t h2dW = tcm.r32(info + RINGINFO_H2D_W);
+    const uint32_t h2dR = tcm.r32(info + RINGINFO_H2D_R);
+    const uint32_t d2hW = tcm.r32(info + RINGINFO_D2H_W);
+    const uint32_t d2hR = tcm.r32(info + RINGINFO_D2H_R);
     for (unsigned k = 0; k <= RING_COUNT; ++k) {
-        const uint16_t items = k == FLOW ? kFlowItems : kRingItems[k],
-                       size = k == FLOW ? kFlowItemSize : kRingItemSize[k];
+        const uint16_t items = k == FLOW ? kFlowItems : kRingItems[k];
+        const uint16_t size = k == FLOW ? kFlowItemSize : kRingItemSize[k];
         Buffer b;
         // 64-byte aligned, so ring offsets and cache lines line up (the completion-ring rule above relies on it).
         if (!allocate(static_cast<uint32_t>(items) * size, 64, b)) {
@@ -236,10 +240,13 @@ bool Msgbuf::attach(Chip *chip, EventHandler events, FrameHandler frames, void *
         }
         // H2D indices: control submit, rx post, then the flow rings; D2H: the three completion rings.
         const bool h2d = k < 2 || k == FLOW;
-        const uint32_t slot = k == FLOW ? 4 * kFlowRingId : (k < 2 ? 4 * k : 4 * (k - 2));
+        uint32_t slot = k < 2 ? 4 * k : 4 * (k - 2);
+        if (k == FLOW)
+            slot = 4 * kFlowRingId;
         rings_[k] = {b.va, b.pa, items, size, (h2d ? h2dW : d2hW) + slot, (h2d ? h2dR : d2hR) + slot, 0, 0, 0, 0, 0};
     }
-    Buffer scratch, ringUpd;
+    Buffer scratch;
+    Buffer ringUpd;
     if (!allocate(kScratchLength, 64, scratch) || !allocate(kRingUpdLength, 64, ringUpd) ||
         !allocate(kIoctlMax + 18, 64, ioctlBuffer_)) {
         snprintf(why, whyLength, "DMA area too small");
@@ -356,7 +363,7 @@ uint16_t Msgbuf::readIndex(uint32_t tcmAddress)
 unsigned Msgbuf::space(unsigned ring)
 {
     Ring &r = rings_[ring];
-    auto room = [&r] {
+    const auto room = [&r] {
         return static_cast<unsigned>(switch_ring_pending(switch_ring_next(r.pos, r.items), r.seen, r.items));
     };
     if (room() == 0) {
@@ -370,10 +377,10 @@ unsigned Msgbuf::space(unsigned ring)
 // Room for one more item on a host-to-dongle ring; nullptr when full.
 uint8_t *Msgbuf::reserve(unsigned ring)
 {
-    Ring &r = rings_[ring];
+    const Ring &r = rings_[ring];
     if (!space(ring))
         return nullptr;
-    uint8_t *item = r.va + static_cast<uint32_t>(r.pos) * r.size;
+    uint8_t *item = r.va + static_cast<size_t>(r.pos) * r.size;
     memset(item, 0, r.size);
     return item;
 }
@@ -392,7 +399,8 @@ void Msgbuf::publish(unsigned ring)
     Ring &r = rings_[ring];
     if (r.pos == r.told)
         return;
-    const uint32_t from = static_cast<uint32_t>(r.told) * r.size, to = static_cast<uint32_t>(r.pos) * r.size;
+    const uint32_t from = static_cast<uint32_t>(r.told) * r.size;
+    const uint32_t to = static_cast<uint32_t>(r.pos) * r.size;
     if (r.pos > r.told) {
         switch_dcache_clean_lines(r.va + from, to - from);
     } else {
@@ -458,7 +466,8 @@ void Msgbuf::refresh(unsigned ring)
         return;
     }
     r.seen = write;
-    const uint32_t from = static_cast<uint32_t>(r.pos) * r.size, to = static_cast<uint32_t>(write) * r.size;
+    const uint32_t from = static_cast<uint32_t>(r.pos) * r.size;
+    const uint32_t to = static_cast<uint32_t>(write) * r.size;
     if (write >= r.pos) {
         switch_dcache_clean_invalidate_lines(r.va + from, to - from);
     } else {
@@ -474,7 +483,7 @@ bool Msgbuf::next(unsigned ring, uint8_t *item)
     Ring &r = rings_[ring];
     if (r.pos == r.seen)
         return false;
-    uint8_t *p = r.va + static_cast<uint32_t>(r.pos) * r.size;
+    const uint8_t *p = r.va + static_cast<size_t>(r.pos) * r.size;
     for (uint32_t waited = 0; !p[0]; waited += 10) {
         if (waited >= kLandingSpinUs) {
             panic("SwitchWLAN: ring %u item %u announced (write index %u) but still empty after %u ms: the chip's DMA "
@@ -551,7 +560,8 @@ void Msgbuf::drain()
                     length = kControlBufferSize - dataOffset_;
                 const uint8_t *frame = control_[id].va + dataOffset_;
                 switch_dcache_clean_invalidate(frame, length);
-                if (length >= kEventData && ((frame[12] << 8) | frame[13]) == kEthPLinkCtl && events_) {
+                if (length >= kEventData && ((static_cast<unsigned>(frame[12]) << 8) | frame[13]) == kEthPLinkCtl &&
+                    events_) {
                     Event e;
                     e.flags = (static_cast<uint32_t>(frame[kEventMsg + 2]) << 8) | frame[kEventMsg + 3];
                     e.type = be32(frame + kEventMsg + 4);
@@ -615,10 +625,11 @@ void Msgbuf::drain()
                 continue;
             const uint32_t offset = le16(item + 16) ? le16(item + 16) : dataOffset_;
             uint32_t length = le16(item + 14);
-            if (offset >= kRxBufferSize)
+            if (offset >= kRxBufferSize) {
                 length = 0;
-            else if (offset + length > kRxBufferSize)
+            } else if (offset + length > kRxBufferSize) {
                 length = kRxBufferSize - offset;
+            }
             switch_dcache_clean_invalidate_lines(rxVa(id) + offset, length);
             arrivals[arrived++] = {id, static_cast<uint16_t>(offset), static_cast<uint16_t>(length), item[1]};
         }
@@ -858,7 +869,8 @@ int Msgbuf::awdlSend(uint8_t ifidx, const uint8_t *frame, size_t length)
     }
     static const uint8_t kBroadcast[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
     const uint8_t *da = (frame[0] & 1) ? kBroadcast : frame;
-    unsigned k = 0, free = awdlRings_;
+    unsigned k = 0;
+    unsigned free = awdlRings_;
     for (; k < awdlRings_; ++k) {
         if ((awdl_[k].state == FLOW_OPEN || awdl_[k].state == FLOW_PENDING) && awdl_[k].ifidx == ifidx &&
             !memcmp(awdl_[k].da, da, 6))
@@ -898,8 +910,8 @@ int Msgbuf::awdlSend(uint8_t ifidx, const uint8_t *frame, size_t length)
     f.pendingLength = static_cast<uint16_t>(length);
     r.pos = r.seen = r.told = 0;  // a fresh ring: both indices from zero
     chip_->tcm().w16(r.wIndex, 0);
-    bzero(r.va, static_cast<uint32_t>(r.items) * r.size);
-    switch_dcache_clean_invalidate(r.va, static_cast<uint32_t>(r.items) * r.size);
+    bzero(r.va, static_cast<size_t>(r.items) * r.size);
+    switch_dcache_clean_invalidate(r.va, static_cast<size_t>(r.items) * r.size);
     p[0] = MSG_FLOW_RING_CREATE;
     p[1] = ifidx;
     memcpy(p + 8, da, 6);

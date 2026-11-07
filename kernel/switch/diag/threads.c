@@ -11,7 +11,7 @@
 #include <vm/vm_kern.h>
 
 #include <switch/diag.h>
-
+// NOLINTNEXTLINE(readability-redundant-declaration): not every kernel configuration's headers declare it
 extern vm_offset_t kernel_stack_size;
 
 /*
@@ -22,7 +22,8 @@ extern vm_offset_t kernel_stack_size;
  */
 static unsigned switch_thread_frames(thread_t thread, uint64_t *frames, unsigned max)
 {
-    const vm_offset_t low = thread->kernel_stack, high = low + kernel_stack_size;
+    const vm_offset_t low = thread->kernel_stack;
+    const vm_offset_t high = low + kernel_stack_size;
     arm_kernel_saved_state_t *saved = &thread_get_kernel_state(thread)->machine.ss;
     unsigned count = 0;
     uint64_t fp = saved->fp;
@@ -45,13 +46,15 @@ static void switch_print_frames(const uint64_t *frames, unsigned count)
 
 void switch_print_blocked_kext_threads(const char *(*name_of)(const void *), unsigned max_threads)
 {
-    unsigned printed = 0, blocked = 0, owners = 0;
+    unsigned printed = 0;
+    unsigned blocked = 0;
+    unsigned owners = 0;
     uint64_t owner_ids[4];
-    thread_t thread;
+    thread_t thread = NULL;
     lck_mtx_lock(&tasks_threads_lock);
     queue_iterate(&threads, thread, thread_t, threads)
     {
-        if (thread == current_thread() || !thread->kernel_stack || !(thread->state & TH_WAIT)) {
+        if (thread == current_thread() || !thread->kernel_stack || !((unsigned int)thread->state & TH_WAIT)) {
             continue;
         }
         blocked++;

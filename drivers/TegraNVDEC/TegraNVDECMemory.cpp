@@ -12,9 +12,9 @@
 #include "../../kits/SwitchDMA/SwitchDcache.h"
 
 namespace {
-constexpr uint64_t kWindowBase = 1ull << 30, kWindowBytes = 1ull << 30;
+constexpr uint64_t kWindowBase = 1ULL << 30, kWindowBytes = 1ULL << 30;
 constexpr uint32_t kIdentityTables = 4;  // the firmware and the setup slots: at most two 4 MiB sections each
-constexpr uint64_t kWiredLimit = 512ull << 20;
+constexpr uint64_t kWiredLimit = 512ULL << 20;
 constexpr uint32_t kTranslation = (1u << 24) | (1u << 25);  // nvdecsrd, nvdecswr
 
 const TegraSMMUSwgroup kGroups[] = {

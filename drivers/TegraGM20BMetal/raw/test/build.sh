@@ -34,6 +34,9 @@ xcrun clang++ "${OBJC[@]}" -Wall -Wextra -DRAW_FACADE -x objective-c++ "$HERE/nv
 # poolcheck: the raw device's chunks after a burst (raw::Device::poolFree, wcFree)
 xcrun clang++ "${FLAGS[@]}" -I "$TREE/drivers/TegraGM20B" "$HERE/poolcheck.cpp" "$RAW/runtime/raw_gpu.cpp" "$RAW/fx/fx_mip.cpp" \
     "$RAW/runtime/raw_kernel.cpp" "$RAW/runtime/raw_alias.cpp" "$RAW/runtime/raw_pack.cpp" "$RAW/runtime/raw_ycbcr.cpp" "$RAW/runtime/raw_zeta.cpp" "${LIBS[@]}" -o "$OUT/poolcheck"
+# footprint: what the raw device costs a process (its BOs and malloc heap) at open and at its first state, texture and command buffer
+xcrun clang++ "${FLAGS[@]}" -I "$TREE/drivers/TegraGM20B" "$HERE/footprint.cpp" "$RAW/runtime/raw_gpu.cpp" "$RAW/fx/fx_mip.cpp" \
+    "$RAW/runtime/raw_kernel.cpp" "$RAW/runtime/raw_alias.cpp" "$RAW/runtime/raw_pack.cpp" "$RAW/runtime/raw_ycbcr.cpp" "$RAW/runtime/raw_zeta.cpp" "${LIBS[@]}" -o "$OUT/footprint"
 # datacheck: the pack's states whose programs read NAK's shader data, drawn raw (test/datacheck.py holds them against the probe)
 xcrun clang++ "${FLAGS[@]}" -I "$TREE/drivers/TegraGM20B" "$HERE/datacheck.cpp" "$RAW/runtime/raw_gpu.cpp" "$RAW/fx/fx_mip.cpp" \
     "$RAW/runtime/raw_kernel.cpp" "$RAW/runtime/raw_alias.cpp" "$RAW/runtime/raw_pack.cpp" "$RAW/runtime/raw_ycbcr.cpp" "$RAW/runtime/raw_zeta.cpp" "${LIBS[@]}" -o "$OUT/datacheck"
@@ -42,7 +45,7 @@ xcrun clang++ "${FLAGS[@]}" "$HERE/recordcheck.cpp" "$RAW/runtime/raw_record.cpp
 # cachecheck: the runtime's record cache and compile table on a bucket's records, and the AIR hashes on a real library
 xcrun clang++ "${FLAGS[@]}" "$HERE/cachecheck.cpp" "$RAW/runtime/raw_cache.cpp" "$RAW/runtime/raw_metallib.cpp" "$RAW/runtime/raw_record.cpp" \
     "$RAW/runtime/raw_pack.cpp" -o "$OUT/cachecheck"
-echo "built $OUT/nvkframe $OUT/rawframe $OUT/facadeframe $OUT/poolcheck $OUT/datacheck $OUT/recordcheck $OUT/cachecheck"
+echo "built $OUT/nvkframe $OUT/rawframe $OUT/facadeframe $OUT/poolcheck $OUT/footprint $OUT/datacheck $OUT/recordcheck $OUT/cachecheck"
 xcrun clang++ "${OBJC[@]}" -Wall -Wextra -x objective-c++ "$HERE/blitframe.mm" "$RAW/runtime/RawMetal.mm" "$RAW/runtime/RawAlias.mm" "$FRONT/NativeBridgeMetalFrontend.mm" \
     -x c++ "$RAW/runtime/raw_gpu.cpp" "$RAW/fx/fx_mip.cpp" "$RAW/runtime/raw_kernel.cpp" "$RAW/runtime/raw_alias.cpp" "$RAW/runtime/raw_pack.cpp" "$RAW/runtime/raw_ycbcr.cpp" "$RAW/runtime/raw_zeta.cpp" "$TREE/kits/SwitchRefusal/SwitchRefusal.c" -x none "$BRIDGE" "${LIBS[@]}" \
     -o "$OUT/blitframe" 2>&1 | grep -v "duplicate libraries" || true
@@ -51,6 +54,11 @@ xcrun clang++ "${OBJC[@]}" -Wall -Wextra -x objective-c++ "$HERE/orderframe.mm" 
     -x c++ "$RAW/runtime/raw_gpu.cpp" "$RAW/fx/fx_mip.cpp" "$RAW/runtime/raw_kernel.cpp" "$RAW/runtime/raw_alias.cpp" "$RAW/runtime/raw_pack.cpp" "$RAW/runtime/raw_ycbcr.cpp" "$RAW/runtime/raw_zeta.cpp" "$TREE/kits/SwitchRefusal/SwitchRefusal.c" -x none "$BRIDGE" "${LIBS[@]}" \
     -o "$OUT/orderframe" 2>&1 | grep -v "duplicate libraries" || true
 echo "built $OUT/orderframe"
+# surfaceorder: an IOSurface one process's raw path writes, read by another process's raw path or m2v after the write on the GPU
+xcrun clang++ "${OBJC[@]}" -Wall -Wextra -x objective-c++ "$HERE/surfaceorder.mm" "$RAW/runtime/RawMetal.mm" "$RAW/runtime/RawAlias.mm" "$FRONT/NativeBridgeMetalFrontend.mm" \
+    -x c++ "$RAW/runtime/raw_gpu.cpp" "$RAW/fx/fx_mip.cpp" "$RAW/runtime/raw_kernel.cpp" "$RAW/runtime/raw_alias.cpp" "$RAW/runtime/raw_pack.cpp" "$RAW/runtime/raw_ycbcr.cpp" "$RAW/runtime/raw_zeta.cpp" "$TREE/kits/SwitchRefusal/SwitchRefusal.c" -x none "$BRIDGE" "${LIBS[@]}" \
+    -o "$OUT/surfaceorder" 2>&1 | grep -v "duplicate libraries" || true
+echo "built $OUT/surfaceorder"
 xcrun clang++ "${OBJC[@]}" -Wall -Wextra -x objective-c++ "$HERE/selcheck.mm" "$RAW/runtime/RawMetal.mm" "$RAW/runtime/RawAlias.mm" "$FRONT/NativeBridgeMetalFrontend.mm" \
     -x c++ "$RAW/runtime/raw_gpu.cpp" "$RAW/fx/fx_mip.cpp" "$RAW/runtime/raw_kernel.cpp" "$RAW/runtime/raw_alias.cpp" "$RAW/runtime/raw_pack.cpp" "$RAW/runtime/raw_ycbcr.cpp" "$RAW/runtime/raw_zeta.cpp" "$TREE/kits/SwitchRefusal/SwitchRefusal.c" -x none "$BRIDGE" "${LIBS[@]}" \
     -o "$OUT/selcheck" 2>&1 | grep -v "duplicate libraries" || true

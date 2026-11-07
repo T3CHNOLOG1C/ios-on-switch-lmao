@@ -25,7 +25,8 @@
 #define SM_BITMAP_OFFSET 328
 #define CI_BYTES         32
 #define CI_COUNT_MASK    0xFFFFFu
-#define CPM_ENTRIES      16
+#define CPM_ENTRIES      256
+#define FQ_CHILDREN      256
 #define IP_BLOCKS_PER    3u
 #define FQ_IP_PER_NODE   1127u
 #define MAX_FS_BYTES     (UINT64_C(512) << 20)
@@ -43,6 +44,7 @@ struct work {
     uint64_t bitmap_addr[SWITCH_APFS_EDIT_BITMAPS];
     uint64_t cpm_oid[CPM_ENTRIES];
     uint64_t cpm_addr[CPM_ENTRIES];
+    uint64_t fq_children[FQ_CHILDREN];
     uint32_t cibs_edited;
     uint32_t bitmaps_edited;
     uint32_t cpm_count;
@@ -228,8 +230,42 @@ static int latest_checkpoint(const struct switch_apfs_io *io, struct work *w)
     return 0;
 }
 
-// The largest end (paddr + length) of a free queue's entries, none of which may overlap [lo, hi); the queue must be
-// one leaf node.
+// The entries of a free queue node in `node`: for a leaf, each freed extent (paddr + length), none of which may
+// overlap [lo, hi), widening *end; for an index node, each child's oid into `children`.
+static int queue_node(const uint8_t *node, uint64_t lo, uint64_t hi, uint64_t *end, uint64_t *children)
+{
+    uint16_t flags = le16(node + 32);
+    uint32_t toc = 56u + le16(node + 40);
+    uint32_t keys = toc + le16(node + 42);
+    uint32_t values = BS - (flags & 1 ? 40u : 0u);
+    uint32_t count = le32(node + 36);
+    uint32_t entry = flags & 4 ? 4 : 8;
+    if (!(flags & 2) && count > FQ_CHILDREN) {
+        return 1;
+    }
+    for (uint32_t i = 0; i < count; i++) {
+        const uint8_t *t = node + toc + (size_t)i * entry;
+        uint32_t k = le16(t);
+        uint32_t v = le16(t + (flags & 4 ? 2 : 4));
+        if (keys + k + 16 > BS || (v != 0xFFFF && (v < 8 || v > values)) || (!(flags & 2) && v == 0xFFFF)) {
+            return 1;
+        }
+        if (!(flags & 2)) {
+            children[i] = le64(node + values - v);
+            continue;
+        }
+        uint64_t paddr = le64(node + keys + k + 8);
+        uint64_t length = v == 0xFFFF ? 1 : le64(node + values - v);
+        if (paddr < hi && lo < paddr + length) {
+            return 1;
+        }
+        *end = max64(*end, paddr + length);
+    }
+    return 0;
+}
+
+// The largest end (paddr + length) of a free queue's entries, none of which may overlap [lo, hi). The queue is one
+// leaf, or a root index node over leaves once APFS splits it: many frees waiting for their checkpoint to retire.
 static int queue_end(const struct switch_apfs_io *io, struct work *w, uint32_t q, uint64_t lo, uint64_t hi,
                      uint64_t *end)
 {
@@ -239,28 +275,19 @@ static int queue_end(const struct switch_apfs_io *io, struct work *w, uint32_t q
         return 0;
     }
     uint64_t addr = ephemeral(w, le64(fq + 8));
-    if (!addr || io->read(io->context, addr, w->node) || !object_ok(w->node, 2) || le16(w->node + 34)) {
+    if (!addr || io->read(io->context, addr, w->scratch) || !object_ok(w->scratch, 2) || le16(w->scratch + 34) > 1) {
         return 1;
     }
-    uint16_t flags = le16(w->node + 32);
-    uint32_t toc = 56u + le16(w->node + 40);
-    uint32_t keys = toc + le16(w->node + 42);
-    uint32_t values = BS - (flags & 1 ? 40u : 0u);
-    uint32_t count = le32(w->node + 36);
-    uint32_t entry = flags & 4 ? 4 : 8;
-    for (uint32_t i = 0; i < count; i++) {
-        const uint8_t *t = w->node + toc + (size_t)i * entry;
-        uint32_t k = le16(t);
-        uint32_t v = le16(t + (flags & 4 ? 2 : 4));
-        if (keys + k + 16 > BS || (v != 0xFFFF && (v < 8 || v > values))) {
+    uint32_t level = le16(w->scratch + 34);
+    if (level != !(le16(w->scratch + 32) & 2) || queue_node(w->scratch, lo, hi, end, w->fq_children)) {
+        return 1;
+    }
+    for (uint32_t i = 0; level && i < le32(w->scratch + 36); i++) {
+        addr = ephemeral(w, w->fq_children[i]);
+        if (!addr || io->read(io->context, addr, w->node) || !object_ok(w->node, 3) || le16(w->node + 34) ||
+            !(le16(w->node + 32) & 2) || queue_node(w->node, lo, hi, end, NULL)) {
             return 1;
         }
-        uint64_t paddr = le64(w->node + keys + k + 8);
-        uint64_t length = v == 0xFFFF ? 1 : le64(w->node + values - v);
-        if (paddr < hi && lo < paddr + length) {
-            return 1;
-        }
-        *end = max64(*end, paddr + length);
     }
     return 0;
 }

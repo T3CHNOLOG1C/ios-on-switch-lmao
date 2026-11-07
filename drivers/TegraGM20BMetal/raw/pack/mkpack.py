@@ -494,6 +494,8 @@ def main() -> None:
             skipped.append((p, '; '.join(rec['problems'])))
             continue
         pipes.append(rec)
+    # the runtime binary-searches the pipelines in place (raw_pack.cpp Pack::find): no process keeps an index of its own
+    pipes.sort(key=packfile.key_hash)
     # init template with relocations (submissions 1-3 as NVK recorded them)
     init_recs = [(sc, m, d, RELOC_CODE.get(RELOC.get((sc, m)), 0)) for sc, m, d in init]
     report.append(f'init template: {len(init_recs)} methods, {sum(1 for x in init_recs if x[3])} relocated')

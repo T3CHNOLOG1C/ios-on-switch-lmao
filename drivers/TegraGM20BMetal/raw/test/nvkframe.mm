@@ -556,26 +556,26 @@ int main(int argc, char **argv)
                             [e setCullMode:MTLCullMode(d.cull)];
                             [e setFrontFacingWinding:MTLWinding(d.winding)];
                             [e setTriangleFillMode:MTLTriangleFillMode(d.fill)];
+                            [e setDepthBias:d.bias[0] slopeScale:d.bias[1] clamp:d.bias[2]];
                         }
-                        // FRAME_INDEXED: every third main draw indexed as Core Animation's meshes are (CA::OGL::MetalContext::draw:
-                        // 16-bit indices written into its buffer pool at 4-byte alignment, drawIndexedPrimitives on triangles)
-                        if (getenv("FRAME_INDEXED") && !d.blur && drawIndex % 3 == 1) {
-                            static NSUInteger ibAt = 0;
-                            if (ibAt + 64 > 65536)
-                                ibAt = 0;
-                            static const uint16_t quad[6] = {0, 1, 2, 2, 1, 3};
-                            memcpy((uint8_t *)indices.contents + ibAt, quad, sizeof quad);
+                        if (frame::indexedDraw(d.blur, drawIndex)) {
+                            static uint32_t ibAt = 0;
+                            const frame::Indexed x =
+                                frame::indexed(drawIndex, static_cast<uint8_t *>(indices.contents), ibAt);
                             [e drawIndexedPrimitives:MTLPrimitiveTypeTriangle
-                                          indexCount:6
+                                          indexCount:x.count
                                            indexType:MTLIndexTypeUInt16
                                          indexBuffer:indices
-                                   indexBufferOffset:ibAt];
-                            ibAt += 12 + (drawIndex % 5) * 4;  // 4-byte aligned, rarely 256
+                                   indexBufferOffset:x.offset
+                                       instanceCount:x.instances
+                                          baseVertex:x.baseVertex
+                                        baseInstance:x.baseInstance];
                         } else
                             [e drawPrimitives:(MTLPrimitiveType)d.primitive
                                   vertexStart:d.first
                                   vertexCount:d.count
-                                instanceCount:d.instances];
+                                instanceCount:d.instances
+                                 baseInstance:d.baseInstance];
                         drawIndex++;
                     }
                     [e endEncoding];

@@ -111,12 +111,14 @@ extern "C" void native_aks_device_key_start(void)
 {
     if (gDeviceKeyReady)
         return;
-    IOMemoryMap *carMap = nullptr, *fuseMap = nullptr;
+    IOMemoryMap *carMap = nullptr;
+    IOMemoryMap *fuseMap = nullptr;
     volatile uint32_t *car = mapRegisters(kCarPA, &carMap);
-    volatile uint32_t *fuse = mapRegisters(kFusePagePA, &fuseMap);
+    const volatile uint32_t *fuse = mapRegisters(kFusePagePA, &fuseMap);
     if (!car || !fuse)
         panic("AppleKeyStore: cannot map CAR/FUSE for the device key");
-    const uint32_t clocks = car[kCarClkOutEnbH / 4], resets = car[kCarRstDevicesH / 4];
+    const uint32_t clocks = car[kCarClkOutEnbH / 4];
+    const uint32_t resets = car[kCarRstDevicesH / 4];
     if (!(clocks & kFuseClockBit) || (resets & kFuseClockBit)) {
         panic("AppleKeyStore: FUSE clock off or in reset (CLK_OUT_ENB_H %#x RST_DEVICES_H %#x), no device key", clocks,
               resets);
@@ -199,9 +201,10 @@ extern "C" IOReturn native_aks_unwrap(uint32_t keybag, uint32_t keyClass, const 
     if (!ok) {
         // Keys wrapped under the v1 labels' device key (an install from before them) never unwrap: say so once.
         static volatile UInt32 sReported;
-        if (OSCompareAndSwap(0, 1, &sReported))
+        if (OSCompareAndSwap(0, 1, &sReported)) {
             IOLog("AppleKeyStore: a wrapped key does not unwrap under this device key (data from an older install?); "
                   "refused, as every such key is: reinstall to start fresh\n");
+        }
         return (IOReturn)aks::kReturnError;
     }
     *written = length - aks::kBlock;
@@ -221,8 +224,8 @@ extern "C" IOReturn native_aks_bag_uuid(uint32_t keybag, uint8_t uuid[16])
     uint8_t mac[32];
     aks::hmacSha256(sha256Parts, gDeviceKey, 32, parts, lengths, 2, mac);
     memcpy(uuid, mac, 16);
-    uuid[6] = static_cast<uint8_t>((uuid[6] & 0x0f) | 0x80);
-    uuid[8] = static_cast<uint8_t>((uuid[8] & 0x3f) | 0x80);
+    uuid[6] = static_cast<uint8_t>((uuid[6] & 0x0fu) | 0x80u);
+    uuid[8] = static_cast<uint8_t>((uuid[8] & 0x3fu) | 0x80u);
     return kIOReturnSuccess;
 }
 
@@ -230,8 +233,9 @@ extern "C" IOReturn native_aks_bag_uuid(uint32_t keybag, uint8_t uuid[16])
 // needs shows on the console, not only as an e00002c7 in some daemon's log.
 extern "C" void native_aks_unsupported(uint32_t selector)
 {
-    const uint32_t word = selector < 256 ? selector / 64 : 3, bit = selector < 256 ? selector % 64 : 63;
-    const uint64_t mask = 1ull << bit;
+    const uint32_t word = selector < 256 ? selector / 64 : 3;
+    const uint32_t bit = selector < 256 ? selector % 64 : 63;
+    const uint64_t mask = 1ULL << bit;
     if (__atomic_fetch_or(&gUnsupportedSeen[word], mask, __ATOMIC_RELAXED) & mask)
         return;
     char name[17] = {};

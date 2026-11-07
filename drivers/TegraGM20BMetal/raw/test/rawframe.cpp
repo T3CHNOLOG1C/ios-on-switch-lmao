@@ -135,8 +135,9 @@ int main(int argc, char **argv)
             }
         cpu.push_back((threadNs() - c0) / 1e6);
     }
-    raw::Buffer ring;
+    raw::Buffer ring, indices;
     dev.createBuffer(frame::kRingBytes, ring);
+    dev.createBuffer(65536, indices);
     uint64_t ringAt = 0;
     for (unsigned f = 0; f < frames && !harness; f++) {
         const uint64_t c0 = threadNs();
@@ -202,9 +203,18 @@ int main(int argc, char **argv)
                     e->setCullMode(d.cull);
                     e->setWinding(d.winding);
                     e->setFillMode(d.fill);
+                    e->setDepthBias(d.bias[0], d.bias[1], d.bias[2]);
                 }
                 const char *why = nullptr;
-                if (!e->draw(d.primitive, d.first, d.count, d.instances, 0, &why)) {
+                if (frame::indexedDraw(d.blur, drawIndex)) {
+                    static uint32_t ibAt = 0;
+                    const frame::Indexed x = frame::indexed(drawIndex, indices.cpu, ibAt);
+                    if (!e->drawIndexed(3, x.count, 2, &indices, x.offset, x.instances, x.baseVertex, x.baseInstance,
+                                        &why)) {
+                        fprintf(stderr, "draw refused: %s\n", why);
+                        return 1;
+                    }
+                } else if (!e->draw(d.primitive, d.first, d.count, d.instances, d.baseInstance, &why)) {
                     fprintf(stderr, "draw refused: %s\n", why);
                     return 1;
                 }

@@ -11,9 +11,13 @@
 
 extern "C" {
 vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
+// NOLINTNEXTLINE(readability-redundant-declaration): not every kernel configuration's headers declare it
 boolean_t ml_set_interrupts_enabled(boolean_t enable);
+// NOLINTNEXTLINE(readability-redundant-declaration): not every kernel configuration's headers declare it
 boolean_t ml_get_interrupts_enabled(void);
+// NOLINTNEXTLINE(readability-redundant-declaration): not every kernel configuration's headers declare it
 void IOLogv(const char *format, va_list ap);
+// NOLINTNEXTLINE(readability-redundant-declaration): not every kernel configuration's headers declare it
 int vsnprintf(char *, size_t, const char *, va_list);
 }
 
@@ -24,6 +28,7 @@ lck_grp_t *group()
 	static lck_grp_t *grp;
 	if (!grp) {
 		lck_grp_t *fresh = lck_grp_alloc_init("TegraDFLL", LCK_GRP_ATTR_NULL);
+		// NOLINTNEXTLINE(misc-const-correctness): the compare-exchange writes it
 		lck_grp_t *expected = nullptr;
 		if (!__atomic_compare_exchange_n(&grp, &expected, fresh, false, __ATOMIC_ACQ_REL,
 						 __ATOMIC_ACQUIRE))
@@ -41,12 +46,12 @@ thread_call_t gFlush;
 
 void flushDeferred(thread_call_param_t, thread_call_param_t)
 {
-	uint32_t tail = __atomic_load_n(&gDeferredTail, __ATOMIC_ACQUIRE);
+	const uint32_t tail = __atomic_load_n(&gDeferredTail, __ATOMIC_ACQUIRE);
 	for (uint32_t head = __atomic_load_n(&gDeferredHead, __ATOMIC_ACQUIRE); head != tail;
 	     ++head)
 		IOLog("%s", gDeferred[head % kDeferredLines]);
 	__atomic_store_n(&gDeferredHead, tail, __ATOMIC_RELEASE);
-	if (uint32_t lost = __atomic_exchange_n(&gDeferredLost, 0u, __ATOMIC_ACQ_REL))
+	if (const uint32_t lost = __atomic_exchange_n(&gDeferredLost, 0u, __ATOMIC_ACQ_REL))
 		IOLog("TegraDFLL: %u log lines lost with interrupts masked\n", lost);
 }
 
@@ -58,7 +63,7 @@ struct Call {
 
 void callTrampoline(thread_call_param_t p0, thread_call_param_t)
 {
-	Call *c = static_cast<Call *>(p0);
+	const Call *c = static_cast<Call *>(p0);
 	c->fn(c->arg);
 }
 
@@ -89,7 +94,7 @@ extern "C" void dfllxnu_vlog(const char *fmt, va_list ap)
 		IOLogv(fmt, ap);
 		return;
 	}
-	uint32_t slot = __atomic_load_n(&gDeferredTail, __ATOMIC_ACQUIRE);
+	const uint32_t slot = __atomic_load_n(&gDeferredTail, __ATOMIC_ACQUIRE);
 	if (!gFlush || slot - __atomic_load_n(&gDeferredHead, __ATOMIC_ACQUIRE) >= kDeferredLines) {
 		__atomic_add_fetch(&gDeferredLost, 1u, __ATOMIC_RELAXED);
 		return;
@@ -101,6 +106,7 @@ extern "C" void dfllxnu_vlog(const char *fmt, va_list ap)
 
 extern "C" void dfllxnu_log(const char *fmt, ...)
 {
+	// NOLINTNEXTLINE(cppcoreguidelines-init-variables): va_start initializes it
 	va_list ap;
 	va_start(ap, fmt);
 	dfllxnu_vlog(fmt, ap);
@@ -149,7 +155,7 @@ extern "C" void dfllxnu_msleep(dfllxnu_u32 ms)
 
 extern "C" dfllxnu_u64 dfllxnu_nanotime(void)
 {
-	uint64_t ns;
+	uint64_t ns = 0;
 	absolutetime_to_nanoseconds(mach_absolute_time(), &ns);
 	return ns;
 }
@@ -157,10 +163,11 @@ extern "C" dfllxnu_u64 dfllxnu_nanotime(void)
 // Called in thread context under the API mutex only (platform.c bring-up, the DFLL probe): the table needs no lock.
 extern "C" volatile void *dfllxnu_ioremap(dfllxnu_u64 pa, dfllxnu_u64 size)
 {
-	uint64_t page = pa & ~(kWindow - 1);
-	if (pa + size > page + kWindow)
+	const uint64_t page = pa & ~(kWindow - 1);
+	if (pa + size > page + kWindow) {
 		return reinterpret_cast<volatile void *>(
 			ml_io_map(static_cast<vm_offset_t>(pa), static_cast<vm_size_t>(size)));
+	}
 	for (Mapping &m : gMappings) {
 		if (m.va && m.page == page)
 			return reinterpret_cast<volatile void *>(m.va + (pa - page));
@@ -194,12 +201,13 @@ extern "C" void *dfllxnu_call_alloc(void (*fn)(void *), void *arg)
 
 extern "C" void dfllxnu_call_arm(void *call, dfllxnu_u64 delay_ns)
 {
-	Call *c = static_cast<Call *>(call);
+	const Call *c = static_cast<Call *>(call);
 	if (!delay_ns) {
 		thread_call_enter(c->call);
 		return;
 	}
-	uint64_t interval, deadline;
+	uint64_t interval = 0;
+	uint64_t deadline = 0;
 	nanoseconds_to_absolutetime(delay_ns, &interval);
 	deadline = mach_absolute_time() + interval;
 	thread_call_enter_delayed(c->call, deadline);

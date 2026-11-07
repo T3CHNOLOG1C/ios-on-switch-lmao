@@ -32,7 +32,8 @@ static inline uint32_t switch_mmio_read32(const volatile uint8_t *base, uint32_t
 #ifdef SWITCH_MMIO_HOST_MODEL
     return switch_mmio_model_read32((uintptr_t)(base + offset));
 #else
-    uint32_t value;
+    // NOLINTNEXTLINE(misc-const-correctness): written by the asm below
+    uint32_t value = 0;
     __asm__ volatile("ldar %w0, [%1]" : "=r"(value) : "r"(base + offset) : "memory");
     return value;
 #endif
@@ -53,7 +54,8 @@ static inline uint16_t switch_mmio_read16(const volatile uint8_t *base, uint32_t
 #ifdef SWITCH_MMIO_HOST_MODEL
     return switch_mmio_model_read16((uintptr_t)(base + offset));
 #else
-    uint32_t value;
+    // NOLINTNEXTLINE(misc-const-correctness): written by the asm below
+    uint32_t value = 0;
     __asm__ volatile("ldarh %w0, [%1]" : "=r"(value) : "r"(base + offset) : "memory");
     return (uint16_t)value;
 #endif
@@ -73,7 +75,8 @@ static inline uint8_t switch_mmio_read8(const volatile uint8_t *base, uint32_t o
 #ifdef SWITCH_MMIO_HOST_MODEL
     return switch_mmio_model_read8((uintptr_t)(base + offset));
 #else
-    uint32_t value;
+    // NOLINTNEXTLINE(misc-const-correctness): written by the asm below
+    uint32_t value = 0;
     __asm__ volatile("ldarb %w0, [%1]" : "=r"(value) : "r"(base + offset) : "memory");
     return (uint8_t)value;
 #endif

@@ -288,6 +288,27 @@ bool Kernel::bindImport(void *addr, Bo &bo, uint32_t kind)
     return true;
 }
 
+uint64_t Kernel::reserveVa(uint64_t bytes)
+{
+    return allocVa(bytes, kVaGranule);
+}
+
+void Kernel::releaseVa(uint64_t va, uint64_t bytes)
+{
+    freeVa(va, bytes);
+}
+
+bool Kernel::bindImportAt(void *addr, Bo &bo, uint64_t va, uint32_t kind)
+{
+    if (!bind(va, bo.handle, bo.bytes, kind)) {
+        free(bo);
+        return false;
+    }
+    bo.va = va + (uintptr_t(addr) & (info_.page_size - 1));
+    bo.cpu = static_cast<uint8_t *>(addr);
+    return true;
+}
+
 void Kernel::free(Bo &bo)
 {
     if (bo.token && bo.cpu)

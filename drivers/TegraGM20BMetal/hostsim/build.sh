@@ -53,7 +53,10 @@ xcrun clang -O1 -Wall -c -I "$TREE/drivers/TegraGM20B" "$RAW/pack/mock_iokit.c" 
 xcrun clang++ -O2 -std=c++17 -c -I "$TREE/drivers/TegraGM20B" "$RAW/pack/cap.cpp" -o "$GPU/cap.o"
 xcrun clang++ -O2 -std=c++17 -DNVDEC_TWOD -I "$TREE/drivers/TegraGM20B" -c "$RAW/pack/nvdec.cpp" -o "$GPU/nvdec.o"
 xcrun clang++ -O2 -std=c++17 -c "$RAW/fx/test/twod_sim.cpp" -o "$GPU/twod_sim.o"
-xcrun clang++ -dynamiclib "$GPU/mock_iokit.o" "$GPU/cap.o" "$GPU/nvdec.o" "$GPU/twod_sim.o" "$GPU/mme_fermi.o" "$GPU/mme_fermi_sim.o" \
+xcrun clang++ -O2 -std=c++17 -c "$RAW/runtime/raw_capture.cpp" -o "$GPU/raw_capture.o"
+xcrun clang++ -O2 -std=c++17 -c "$RAW/runtime/raw_pack.cpp" -o "$GPU/raw_pack_mock.o"
+xcrun clang++ -dynamiclib "$GPU/mock_iokit.o" "$GPU/cap.o" "$GPU/nvdec.o" "$GPU/twod_sim.o" "$GPU/raw_capture.o" "$GPU/raw_pack_mock.o" \
+    "$GPU/mme_fermi.o" "$GPU/mme_fermi_sim.o" \
     -framework IOKit -framework CoreFoundation -install_name @rpath/libmock_iokit.dylib -o "$GPU/libmock_iokit.dylib"
 xcrun clang++ -O1 -g -std=c++17 -fobjc-arc -Wno-deprecated-declarations -I "$TREE/drivers/NativeMetal" -I "$TREE/drivers/TegraGM20B" \
     -x objective-c++ "$HERE/alias_frame.mm" "$RAW/runtime/RawMetal.mm" "$RAW/runtime/RawAlias.mm" \

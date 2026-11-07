@@ -21,7 +21,7 @@ public:
     void free();
 
     // Under the work-loop gate: DC A mapped, then unmapped.
-    void attach(volatile uint32_t *dc);
+    void attach(volatile uint32_t *registers);
     void detach();
 
     IOReturn getGammaTable(void *table);
@@ -49,7 +49,7 @@ public:
 
     // A panic's screen without the transform (a colour filter or a low white point could hide its text): the CMU bypassed
     // with the caller's next GENERAL_ACT_REQ. Stores only, from any context, the controller clocked.
-    static void bypassForPanic(volatile uint32_t *dc);
+    static void bypassForPanic(volatile uint32_t *registers);
 
 private:
     void commit();

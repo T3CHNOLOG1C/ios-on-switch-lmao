@@ -37,6 +37,7 @@
 #include "SwitchSuspend.h"
 #include "SwitchWake.h"
 
+// NOLINTNEXTLINE(readability-redundant-declaration): not every kernel configuration's headers declare it
 extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
 
 // The SoC's hooks (strong: the kernel link takes no undefined weak references; every one below is in a linked
@@ -45,8 +46,6 @@ extern "C" {
 int armcpu_system_sleep_enable(char *why, size_t size);
 void arm_gic_suspend(void);
 void arm_gic_resume(void);
-void tegra_gpio_suspend(void);
-void tegra_gpio_resume(void);
 void tegra_i2c_suspend(void);
 void tegra_i2c_resume(void);
 void switch_rtc_sleep_enable(void);
@@ -152,7 +151,9 @@ IOPMDriverAssertionID switch_suspend_hold(IOService *owner, const char *why)
 }
 }  // namespace
 
+// NOLINTNEXTLINE(misc-use-internal-linkage): OSDefineMetaClassAndStructors needs the class's external linkage
 class SwitchSuspend : public IOService {
+    // NOLINTNEXTLINE(misc-explicit-constructor): IOKit's structors macro declares the metaclass constructor
     OSDeclareDefaultStructors(SwitchSuspend) volatile uint8_t *pmc = nullptr, *apb = nullptr, *car = nullptr,
                                                               *tmr = nullptr;
     uint32_t usecConfig = 0, usecAfter = 0;  // TIMERUS_USEC_CFG at quiesce and as SC7 exit left it
@@ -214,7 +215,7 @@ OSDefineMetaClassAndStructors(SwitchSuspend, IOService)
     // turns off. In reset it reads nothing: the wake line then has no time asleep.
     bool SwitchSuspend::rtcClockOn(bool log)
 {
-    auto reg = [this](uint32_t o) {
+    const auto reg = [this](uint32_t o) {
         return reinterpret_cast<volatile uint32_t *>(car + o);
     };
     if (*reg(CAR_RST_DEVICES_L) & CAR_L_RTC) {
@@ -237,7 +238,7 @@ void SwitchSuspend::journalWatchdog()
 {
     if (!tmr)
         return;
-    auto reg = [this](uint32_t o) {
+    const auto reg = [this](uint32_t o) {
         return *reinterpret_cast<volatile uint32_t *>(tmr + o);
     };
     const uint32_t count = reg(TMR5_PCR) & TMR_COUNT_MASK;
@@ -302,7 +303,7 @@ bool SwitchSuspend::start(IOService *provider)
     tmr = reinterpret_cast<volatile uint8_t *>(ml_io_map(kTmrPA, 0x1000));
     setName("SwitchSuspend");
 #if DEVELOPMENT || DEBUG
-    rtcUsable = pmc && car && rtcClockOn(true);  // the wake line's time asleep
+    rtcUsable = (pmc != nullptr) && (car != nullptr) && rtcClockOn(true);  // the wake line's time asleep
 #endif
     char why[224] = "";
     const char *blocker = nullptr;
@@ -310,8 +311,10 @@ bool SwitchSuspend::start(IOService *provider)
         blocker = "the PMC/APB_MISC could not be mapped";
     } else if (!switch_display_power_enabled()) {
         blocker = "display power is off (switch-no-sleep)";
-    } else if (!(blocker = checkPmc(why, sizeof(why))) && armcpu_system_sleep_enable(why, sizeof(why))) {
-        blocker = why;
+    } else {
+        blocker = checkPmc(why, sizeof(why));
+        if (!blocker && armcpu_system_sleep_enable(why, sizeof(why)))
+            blocker = why;
     }
     if (blocker) {
         hold = switch_suspend_hold(this, blocker);
@@ -393,7 +396,9 @@ void SwitchSuspend::sleepDevices()
     if (armBackstop())
         wakeArmed |= UINT64_C(1) << kBackstopEvent;
 #endif
-    uint32_t mask[2], high[2], low[2];
+    uint32_t mask[2];
+    uint32_t high[2];
+    uint32_t low[2];
     switch_wake_pmc_registers(wakeArmed, mask, high, low);
     // Linux pmc.c tegra_pmc_suspend: software statuses cleared, the wake latches pulsed, then the latched statuses
     // cleared (write one to clear) before the levels and masks.
@@ -411,7 +416,7 @@ void SwitchSuspend::sleepDevices()
     wr(PMC_WAKE2_MASK, mask[1]);
     (void)rd(PMC_WAKE2_MASK);
     switch_power_journal("SwitchSuspend: sleep pmc wake: events armed %#llx (WAKE_MASK %#x WAKE2_MASK %#x)",
-                         (unsigned long long)wakeArmed, mask[0], mask[1]);
+                         static_cast<unsigned long long>(wakeArmed), mask[0], mask[1]);
     {
         char line[160] = "";
         switch_sleep_mark(SWITCH_STEP_SLEEP_BPMP);
@@ -439,9 +444,9 @@ void SwitchSuspend::quiesce()
     const uint64_t start = mach_absolute_time();
     tegra_gpio_suspend();
     for (uint32_t i = 0; i < kPadWords; ++i)
-        pad[i] = *reinterpret_cast<volatile uint32_t *>(apb + kPadFirst + 4 * i);
+        pad[i] = *reinterpret_cast<volatile uint32_t *>(apb + kPadFirst + 4 * static_cast<size_t>(i));
     for (uint32_t i = 0; i < kMuxWords; ++i)
-        mux[i] = *reinterpret_cast<volatile uint32_t *>(apb + kMuxFirst + 4 * i);
+        mux[i] = *reinterpret_cast<volatile uint32_t *>(apb + kMuxFirst + 4 * static_cast<size_t>(i));
     arm_gic_suspend();
     usecConfig = tmr ? *reinterpret_cast<volatile uint32_t *>(tmr + TIMERUS_USEC_CFG) : 0;
     rtcBeforeMS = rtcUsable ? rtcMS() : 0;
@@ -464,9 +469,9 @@ void SwitchSuspend::activate()
         *reinterpret_cast<volatile uint32_t *>(tmr + TIMERUS_USEC_CFG) = usecConfig;
     }
     for (uint32_t i = 0; i < kMuxWords; ++i)
-        *reinterpret_cast<volatile uint32_t *>(apb + kMuxFirst + 4 * i) = mux[i];
+        *reinterpret_cast<volatile uint32_t *>(apb + kMuxFirst + 4 * static_cast<size_t>(i)) = mux[i];
     for (uint32_t i = 0; i < kPadWords; ++i)
-        *reinterpret_cast<volatile uint32_t *>(apb + kPadFirst + 4 * i) = pad[i];
+        *reinterpret_cast<volatile uint32_t *>(apb + kPadFirst + 4 * static_cast<size_t>(i)) = pad[i];
     __asm__ volatile("dsb sy" ::: "memory");
     tegra_gpio_resume();
     // The pads held their levels in deep power-down through SC7; released as Linux tegra_pmc_resume does, once the
@@ -558,7 +563,7 @@ void SwitchSuspend::wakeDevices()
         switch_wake_bt_slept();
         if (wakeHoldBegin)
             thread_call_enter(wakeHoldBegin);  // after IOCPUSleepKernel has let the root domain go
-        uint64_t deadline;
+        uint64_t deadline = 0;
         clock_interval_to_deadline(SWITCH_BT_RECONNECT_MS, kMillisecondScale, &deadline);
         if (wakeHoldEnd)
             thread_call_enter_delayed(wakeHoldEnd, deadline);
@@ -572,7 +577,7 @@ void SwitchSuspend::wakeDevices()
     if (!strcmp(reason, "unknown")) {
         IOLog("SwitchSuspend: wake %u without an armed PMC wake event (PMC WAKE_STATUS %#x WAKE2_STATUS %#x, armed "
               "%#llx)\n",
-              sleeps, wakeStatus, wake2Status, (unsigned long long)wakeArmed);
+              sleeps, wakeStatus, wake2Status, static_cast<unsigned long long>(wakeArmed));
     }
 }
 

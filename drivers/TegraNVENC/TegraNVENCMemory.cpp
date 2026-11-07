@@ -11,9 +11,9 @@
 #include "../../kits/SwitchDMA/SwitchDcache.h"
 
 namespace {
-constexpr uint64_t kWindowBase = 1ull << 30, kWindowBytes = 1ull << 30;
+constexpr uint64_t kWindowBase = 1ULL << 30, kWindowBytes = 1ULL << 30;
 constexpr uint32_t kIdentityTables = 6;  // the firmware, setup slots and scratch: at most two 4 MiB sections each
-constexpr uint64_t kWiredLimit = 256ull << 20;
+constexpr uint64_t kWiredLimit = 256ULL << 20;
 
 // The swgroup's one ASID register; its two clients' translation bits sit in two registers (nvencsrd, nvencswr).
 const TegraSMMUSwgroup kGroups[] = {

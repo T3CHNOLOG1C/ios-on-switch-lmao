@@ -182,7 +182,7 @@ mbuf_t gInputHead, gInputTail;
 
 uint64_t hostNs()
 {
-    uint64_t ns;
+    uint64_t ns = 0;
     absolutetime_to_nanoseconds(mach_absolute_time(), &ns);
     return ns;
 }
@@ -207,7 +207,7 @@ uint64_t nowTsf()
 // Soft backend only, from timerFired without gLock: re-read the radio's TSF once a second.
 void reanchorUnlocked()
 {
-    if (!gCaps || gCaps->has_native_awdl || hostNs() - gLastAnchorNs < 1000000000ull)
+    if (!gCaps || gCaps->has_native_awdl || hostNs() - gLastAnchorNs < 1000000000ULL)
         return;
     uint64_t tsf = 0;
     const uint64_t ns = hostNs();
@@ -223,7 +223,8 @@ void armTimer(uint64_t tsf)
 {
     if (!gTimer || tsf == UINT64_MAX)
         return;
-    uint64_t deadline, leeway;
+    uint64_t deadline = 0;
+    uint64_t leeway = 0;
     nanoseconds_to_absolutetime(awdl_tsf_clock_host(&gClock, tsf), &deadline);
     nanoseconds_to_absolutetime(50000, &leeway);
     thread_call_enter_delayed_with_leeway(gTimer, nullptr, deadline, leeway, THREAD_CALL_DELAY_LEEWAY);
@@ -260,7 +261,7 @@ int hostTx(void *, const uint8_t *frame, size_t length, uint16_t freq, uint64_t 
     r.len = length;
     r.freq_mhz = freq;
     r.rate_mcs = 0xff;
-    r.flags = static_cast<uint8_t>((noAck ? SWLAN_TX_NO_ACK : 0) | SWLAN_TX_ON_CHANNEL_ONLY);
+    r.flags = static_cast<uint8_t>((noAck ? SWLAN_TX_NO_ACK : 0u) | SWLAN_TX_ON_CHANNEL_ONLY);
     r.tx_tsf = gCaps && gCaps->can_inject_timed ? tsf : 0;
     return swlan_awdl_tx(&r) < 0 ? -1 : 0;
 }
@@ -270,7 +271,7 @@ void hostSchedule(void *, const struct awdl_chan seq[AWDL_SEQ_SLOTS], uint64_t a
 {
     static struct swlan_chan_slot slots[2 * AWDL_SEQ_SLOTS];
     for (unsigned i = 0; i < AWDL_SEQ_SLOTS; ++i)
-        slots[2 * i] = slots[2 * i + 1] = {awdl_chan_freq(seq[i]), 32768};
+        slots[static_cast<size_t>(2) * i] = slots[2 * i + 1] = {awdl_chan_freq(seq[i]), 32768};
     swlan_status st;
     switch_wlan_status_get(&st);
     const struct swlan_chan_seq s = {anchorTsf, 32768u * 2 * AWDL_SEQ_SLOTS, 2 * AWDL_SEQ_SLOTS,
@@ -307,10 +308,11 @@ void hostDeliver(void *, const uint8_t *eth, size_t length)
     }
     mbuf_pkthdr_setlen(m, length);
     mbuf_pkthdr_setrcvif(m, gIf);
-    if (gInputTail)
+    if (gInputTail) {
         mbuf_setnextpkt(gInputTail, m);
-    else
+    } else {
         gInputHead = m;
+    }
     gInputTail = m;
 }
 
@@ -339,9 +341,10 @@ int hostIovar(void *, int32_t ifidx, int get, const char *name, const void *buf,
     if (gIovarCount == sizeof gIovars / sizeof gIovars[0] || length > sizeof gIovars[0].value || ifidx < 0 ||
         ifidx > 255) {
         static unsigned said;
-        if (said++ < 4)
+        if (said++ < 4) {
             IOLog("SwitchWLAN: AWDL: %s not queued (queue %u, %zu bytes, ifidx %d)\n", name, gIovarCount, length,
                   ifidx);
+        }
         return -1;
     }
     Iovar &v = gIovars[(gIovarHead + gIovarCount++) % (sizeof gIovars / sizeof gIovars[0])];
@@ -379,14 +382,17 @@ void iovarWork(thread_call_param_t, thread_call_param_t)
         gIovarCount--;
         IOLockUnlock(gLock);
         size_t got = 0;
-        const int e = swlan_awdl_var(!v.get, static_cast<uint8_t>(v.ifidx), v.name, v.value, v.length,
+        const int e = swlan_awdl_var(v.get ? 0 : 1, static_cast<uint8_t>(v.ifidx), v.name, v.value, v.length,
                                      v.get ? reply : nullptr, v.get ? sizeof reply : 0, &got);
-        const int status = !e ? 0 : swlan_is_fwerr(e) ? swlan_fwerr_code(e) : AWDL_FW_NO_ANSWER;
+        int status = swlan_is_fwerr(e) ? swlan_fwerr_code(e) : AWDL_FW_NO_ANSWER;
+        if (!e)
+            status = 0;
         if (status) {
             static unsigned said;
-            if (said++ < 24)
+            if (said++ < 24) {
                 IOLog("SwitchWLAN: AWDL: %s (%u bytes, ifidx %d) answered %d %s\n", v.name, v.length, v.ifidx, status,
                       bcme_name(status));
+            }
         }
         IOLockLock(gLock);
         if (gCore)
@@ -423,7 +429,7 @@ void drain(bool presence = true)
 {
     Presence todo[16];
     unsigned n = 0;
-    mbuf_t input;
+    mbuf_t input = nullptr;
     IOLockLock(gLock);
     if (presence) {
         n = gPresenceCount;
@@ -432,9 +438,10 @@ void drain(bool presence = true)
     }
     input = gInputHead;
     gInputHead = gInputTail = nullptr;
-    const ifnet_t ifp = gIf;
+    // NOLINTNEXTLINE(misc-const-correctness): a const ifnet_t is a const pointer (misc-misplaced-const)
+    ifnet_t ifp = gIf;
     IOLockUnlock(gLock);
-    for (mbuf_t m = input, next; m; m = next) {
+    for (mbuf_t m = input, next = nullptr; m; m = next) {
         next = mbuf_nextpkt(m);
         mbuf_setnextpkt(m, nullptr);
         if (!ifp) {
@@ -477,7 +484,7 @@ void statsLine()
 {
     static uint64_t last;
     const uint64_t ns = hostNs();
-    if (ns - last < 60000000000ull || !gCore)
+    if (ns - last < 60000000000ULL || !gCore)
         return;
     last = ns;
     const awdl_stats *st = awdl_core_stats(gCore);
@@ -514,8 +521,9 @@ void radioRx(void *, const uint8_t *frame, size_t length, const struct swlan_rx_
     }
     IOLockLock(gLock);
     if (gCore && awdl_core_running(gCore)) {
-        const struct awdl_rx_meta m = {meta && meta->tsf ? meta->tsf : nowTsf(), meta ? meta->freq_mhz : uint16_t(0),
-                                       meta ? meta->rssi_dbm : int8_t(-90)};
+        const struct awdl_rx_meta m = {meta && meta->tsf ? meta->tsf : nowTsf(),
+                                       meta ? meta->freq_mhz : static_cast<uint16_t>(0),
+                                       meta ? meta->rssi_dbm : static_cast<int8_t>(-90)};
         awdl_core_rx(gCore, frame, length, &m);
         rearm();
     }
@@ -624,11 +632,11 @@ extern "C" int switch_wlan_awdl_stat(char *buf, size_t size)
     if (gCore && awdl_core_running(gCore)) {
         const awdl_stats *st = awdl_core_stats(gCore);
         const enum awdl_role role = awdl_core_role(gCore);
+        const char *roleName = role == AWDL_ROLE_FOLLOWER ? "follower" : "off";
+        if (role == AWDL_ROLE_ROOT)
+            roleName = "root";
         n = snprintf(buf, size, "; AWDL running %s %s, %u/16 slots away, peers +%u-%u af_rx %u aws %u fw_ev %u",
-                     role == AWDL_ROLE_ROOT       ? "root"
-                     : role == AWDL_ROLE_FOLLOWER ? "follower"
-                                                  : "off",
-                     awdl_core_mode(gCore) == AWDL_MODE_TRANSFER ? "transfer" : "idle",
+                     roleName, awdl_core_mode(gCore) == AWDL_MODE_TRANSFER ? "transfer" : "idle",
                      awdl_slots_away(awdl_core_sequence(gCore), swlan_awdl_infra_freq()), st->peer_adds, st->peer_dels,
                      st->af_rx, st->aws, st->fw_events);
     }
@@ -657,10 +665,11 @@ errno_t ifOutput(ifnet_t ifp, mbuf_t m)
     if (!r && stash.length && swlan_awdl_eth_tx(stash.frame, stash.length) < 0)
         r = -1;
     IOLockUnlock(gSend);
-    if (r)
+    if (r) {
         ifnet_stat_increment_out(ifp, 0, 0, 1);
-    else
+    } else {
         ifnet_stat_increment_out(ifp, 1, static_cast<uint32_t>(length), 0);
+    }
     mbuf_freem(m);
     return 0;
 }
@@ -704,12 +713,13 @@ int awdlRequest(bool set, apple80211req &rq)
         e = copyin(rq.req_data, data, capacity);
     // apple80211_awdl_sync_enabled {version, flags, enabled}: AWDL on needs the radio opened first, without gLock
     if (!e && set && rq.req_type == A80211_IOC_AWDL_SYNC_ENABLED && capacity >= 12 &&
-        (data[8] | data[9] | data[10] | data[11]))
+        (static_cast<unsigned>(data[8]) | data[9] | data[10] | data[11]))
         e = ensureRadio();
     uint32_t length = set ? capacity : 0;
     if (!e) {
         IOLockLock(gLock);
-        e = a80211_awdl_request(&gFacade, set, rq.req_type, &rq.req_val, data, &length, capacity, nowTsf());
+        e = a80211_awdl_request(&gFacade, static_cast<int>(set), rq.req_type, &rq.req_val, data, &length, capacity,
+                                nowTsf());
         rearm();
         IOLockUnlock(gLock);
     }
@@ -744,7 +754,7 @@ errno_t ifIoctl(ifnet_t ifp, unsigned long cmd, void *arg)
     case SIOCSA80211:
         return awdlRequest(cmd == SIOCSA80211, *static_cast<apple80211req *>(arg));
     case SIOCGIFMEDIA64:
-        return answerMedia(arg, IFM_AVALID | (gCore && awdl_core_running(gCore) ? IFM_ACTIVE : 0));
+        return answerMedia(arg, IFM_AVALID | (gCore && awdl_core_running(gCore) ? IFM_ACTIVE : 0u));
     case SIOCSIFLLADDR: {
         // wifip2pd's AWDL address: the stack transmits with it and the kernel derives fe80::/64 from it
         const struct ifreq *ifr = static_cast<const struct ifreq *>(arg);
@@ -793,7 +803,9 @@ void ifEventStub(ifnet_t, const struct kev_msg *)
 }  // namespace
 
 // ---- the IOService and its user client -----------------------------------------------------------------------------
+// NOLINTNEXTLINE(misc-use-internal-linkage): OSDefineMetaClassAndStructors needs the class's external linkage (its kalloc type view)
 class SwitchAwdlUserClient : public IOUserClient {
+    // NOLINTNEXTLINE(misc-explicit-constructor): IOKit's structors macro declares the metaclass constructor
     OSDeclareDefaultStructors(SwitchAwdlUserClient);
 
 public:
@@ -808,7 +820,7 @@ public:
                             OSObject *target, void *reference) APPLE_KEXT_OVERRIDE;
 
 private:
-    IOReturn passthrough(IOExternalMethodArguments *a);
+    static IOReturn passthrough(IOExternalMethodArguments *a);
 };
 
 OSDefineMetaClassAndStructors(SwitchAwdlUserClient, IOUserClient);
@@ -837,7 +849,9 @@ IOReturn SwitchAwdlUserClient::clientClose()
 
 IOReturn SwitchAwdlUserClient::clientMemoryForType(UInt32 type, IOOptionBits *options, IOMemoryDescriptor **memory)
 {
-    IOBufferMemoryDescriptor *md = type == 1 ? gRingMemory : type == 2 ? gStateMemory : nullptr;
+    IOBufferMemoryDescriptor *md = type == 2 ? gStateMemory : nullptr;
+    if (type == 1)
+        md = gRingMemory;
     if (!md)
         return kIOReturnBadArgument;
     md->retain();
@@ -855,7 +869,8 @@ IOReturn SwitchAwdlUserClient::passthrough(IOExternalMethodArguments *a)
                                                       : a->structureInputSize;
     if (size < 0x30 + 8 || size > 0x40000)
         return kIOReturnBadArgument;
-    uint8_t head[8], trailer[0x28];
+    uint8_t head[8];
+    uint8_t trailer[0x28];
     if (a->structureInputDescriptor) {
         IOMemoryDescriptor *md = a->structureInputDescriptor;
         if (md->prepare() != kIOReturnSuccess)
@@ -868,8 +883,9 @@ IOReturn SwitchAwdlUserClient::passthrough(IOExternalMethodArguments *a)
         memcpy(head, a->structureInput, 8);
         memcpy(trailer, static_cast<const uint8_t *>(a->structureInput) + size - 0x28, 0x28);
     }
-    uint32_t cmd;
-    int32_t type, val;
+    uint32_t cmd = 0;
+    int32_t type = 0;
+    int32_t val = 0;
     memcpy(&cmd, head, 4);
     memcpy(&type, trailer + 0x10, 4);
     memcpy(&val, trailer + 0x14, 4);
@@ -898,7 +914,7 @@ IOReturn SwitchAwdlUserClient::externalMethod(uint32_t selector, IOExternalMetho
     case 5: {  // useIOUCEventPipe: yes
         if (a->structureOutputSize < 1 || !a->structureOutput)
             return kIOReturnBadArgument;
-        *static_cast<uint8_t *>(a->structureOutput) = selector == 5;
+        *static_cast<uint8_t *>(a->structureOutput) = static_cast<uint8_t>(selector == 5);
         a->structureOutputSize = 1;
         return kIOReturnSuccess;
     }
@@ -945,7 +961,9 @@ IOReturn SwitchAwdlUserClient::externalMethod(uint32_t selector, IOExternalMetho
     }
 }
 
+// NOLINTNEXTLINE(misc-use-internal-linkage): OSDefineMetaClassAndStructors needs the class's external linkage (its kalloc type view)
 class SwitchAwdlInterface : public IOService {
+    // NOLINTNEXTLINE(misc-explicit-constructor): IOKit's structors macro declares the metaclass constructor
     OSDeclareDefaultStructors(SwitchAwdlInterface);
 
 public:
@@ -1164,11 +1182,40 @@ void createDownInterface(thread_call_param_t, thread_call_param_t)
 // Under switch_wlan_awdl_capable's `deciding`, once a boot; the caller may be inside en0's ioctl.
 void scheduleDownInterface()
 {
-    if (!(gDownCreate = thread_call_allocate(createDownInterface, nullptr))) {
+    gDownCreate = thread_call_allocate(createDownInterface, nullptr);
+    if (!gDownCreate) {
         IOLog("SwitchWLAN: AWDL: awdl0 not made: no thread call\n");
         return;
     }
     thread_call_enter(gDownCreate);
+}
+
+// The stack's locks, core and thread calls, in this order; false at the first one there is no memory for.
+bool allocateStack()
+{
+    gLock = IOLockAlloc();
+    if (!gLock)
+        return false;
+    gSend = IOLockAlloc();
+    if (!gSend)
+        return false;
+    gOpenLock = IOLockAlloc();
+    if (!gOpenLock)
+        return false;
+    gCore = static_cast<awdl_core *>(IOMallocZero(awdl_core_size()));
+    if (!gCore)
+        return false;
+    gTimer = thread_call_allocate_with_priority(timerFired, nullptr, THREAD_CALL_PRIORITY_HIGH);
+    if (!gTimer)
+        return false;
+    gDeferred = thread_call_allocate(deferredWork, nullptr);
+    if (!gDeferred)
+        return false;
+    gCreate = thread_call_allocate(createInterface, nullptr);
+    if (!gCreate)
+        return false;
+    gIovarWork = thread_call_allocate(iovarWork, nullptr);
+    return gIovarWork != nullptr;
 }
 
 }  // namespace
@@ -1185,12 +1232,14 @@ extern "C" int switch_wlan_awdl_capable(void)
         int verdict = -1;
         const struct swlan_awdl_caps *caps = nullptr;
         const int e = swlan_awdl_query(&caps);  // what the bring-up found; no firmware request
-        const awdl_radio_verdict v =
-            awdl_radio_verdict_of(e == 0 && !caps ? -ENODEV : e, caps && caps->abi_version == SWLAN_AWDL_ABI_VERSION,
-                                  caps && caps->has_native_awdl, caps && caps->can_monitor, caps && caps->can_inject,
-                                  caps ? caps->probe : nullptr);
+        const awdl_radio_verdict v = awdl_radio_verdict_of(
+            e == 0 && !caps ? -ENODEV : e,
+            static_cast<int>((caps != nullptr) && caps->abi_version == SWLAN_AWDL_ABI_VERSION),
+            static_cast<int>((caps != nullptr) && caps->has_native_awdl != 0u),
+            static_cast<int>((caps != nullptr) && caps->can_monitor != 0u),
+            static_cast<int>((caps != nullptr) && caps->can_inject != 0u), caps ? caps->probe : nullptr);
         if (v.mode == AWDL_RADIO_UNDECIDED) {
-        } else if (v.off == AWDL_OFF_NO_RADIO) {
+        } else if (v.off == AWDL_OFF_NO_RADIO || !caps) {
             IOLog("SwitchWLAN: AWDL: the radio has no AWDL (%d): off\n", e);
             verdict = 0;
         } else if (v.off == AWDL_OFF_ABI) {
@@ -1206,12 +1255,7 @@ extern "C" int switch_wlan_awdl_capable(void)
                 "SwitchWLAN: AWDL: the firmware lists awdl but has neither interface_create v3 nor awdl_if (%s): off\n",
                 caps->probe ? "AWDL probe lines" : "probe did not run");
             verdict = 0;
-        } else if (!(gLock = IOLockAlloc()) || !(gSend = IOLockAlloc()) || !(gOpenLock = IOLockAlloc()) ||
-                   !(gCore = static_cast<awdl_core *>(IOMallocZero(awdl_core_size()))) ||
-                   !(gTimer = thread_call_allocate_with_priority(timerFired, nullptr, THREAD_CALL_PRIORITY_HIGH)) ||
-                   !(gDeferred = thread_call_allocate(deferredWork, nullptr)) ||
-                   !(gCreate = thread_call_allocate(createInterface, nullptr)) ||
-                   !(gIovarWork = thread_call_allocate(iovarWork, nullptr))) {
+        } else if (!allocateStack()) {
             IOLog("SwitchWLAN: AWDL: no memory for the stack: off\n");
             verdict = 0;
         } else {
@@ -1293,7 +1337,8 @@ extern "C" int switch_wlan_awdl_vif_delete(const void *payload, size_t length)
     awdl_core_stop(gCore);
     opStop(nullptr);
     gFacade.enabled = 0;
-    const ifnet_t ifp = gIf;
+    // NOLINTNEXTLINE(misc-const-correctness): a const ifnet_t is a const pointer (misc-misplaced-const)
+    ifnet_t ifp = gIf;
     gIf = nullptr;
     IOService *s = gService;
     gService = nullptr;

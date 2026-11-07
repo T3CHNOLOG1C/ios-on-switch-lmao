@@ -75,7 +75,7 @@ public:
     // power register 0. After SC7 (afterSleep) LDO1_EN stayed high, so a codec that answers needs no power-up wait.
     void probe(bool afterSleep, bool capture);
 
-    uint16_t read(uint8_t reg);
+    static uint16_t read(uint8_t reg);
 
     // rt5640_set_bias_level STANDBY (from OFF) and OFF.
     void biasStandby();
@@ -117,7 +117,7 @@ public:
 
     static bool jackPlugged(uint16_t irqStatus)
     {
-        return !(irqStatus & (1u << 4));  // JD_STATUS, inverted (jd_inverted)
+        return (irqStatus & (1u << 4)) == 0u;  // JD_STATUS, inverted (jd_inverted)
     }
 
 private:

@@ -55,18 +55,27 @@ void entry(TegraNVDECSubmit *s, uint16_t method, uint16_t kind, uint32_t value, 
 
 uint64_t nowUs()
 {
-    uint64_t ns;
+    uint64_t ns = 0;
     absolutetime_to_nanoseconds(mach_absolute_time(), &ns);
     return ns / 1000;
 }
 
+const char *waitFailure(int ret)
+{
+    if (ret == -60)
+        return "past its bound";
+    return ret == -5 ? "done, but its interrupt never came" : "engine refused";
+}
+
 int run(char *line, size_t size)
 {
-    const nvdec_h264_pic_s *setup = (const nvdec_h264_pic_s *)kTestSetup;
-    const uint32_t width = kTestWidthMbs * 16, height = kTestHeightMbs * 16, pitch = setup->pitch_luma;
+    const nvdec_h264_pic_s *setup = reinterpret_cast<const nvdec_h264_pic_s *>(kTestSetup);
+    const uint32_t width = kTestWidthMbs * 16;
+    const uint32_t height = kTestHeightMbs * 16;
+    const uint32_t pitch = setup->pitch_luma;
     const uint32_t lumaBytes = pitch * ((height + 31) & ~31u);
     for (int i = kInput; i <= kSurface; i++) {
-        if (tegra_nvdec_buffer_alloc(64 * 1024, &gBlocks[i])) {
+        if (tegra_nvdec_buffer_alloc(64ULL * 1024, &gBlocks[i])) {
             snprintf(line, size, "N3 FAIL no NVDEC memory");
             return -12;
         }
@@ -82,7 +91,7 @@ int run(char *line, size_t size)
     memcpy(s->setup, kTestSetup, sizeof(kTestSetup));
     entry(s, NVC5B0_SET_APPLICATION_ID, TEGRA_NVDEC_ENTRY_VALUE, NVC5B0_SET_APPLICATION_ID_ID_H264, 0);
     entry(s, NVC5B0_SET_CONTROL_PARAMS, TEGRA_NVDEC_ENTRY_VALUE,
-          NVC5B0_SET_CONTROL_PARAMS_CODEC_TYPE_H264 | 1u << 4 | 1u << 6, 0);
+          static_cast<uint32_t>(NVC5B0_SET_CONTROL_PARAMS_CODEC_TYPE_H264) | 1u << 4 | 1u << 6, 0);
     entry(s, NVC5B0_SET_PICTURE_INDEX, TEGRA_NVDEC_ENTRY_VALUE, 0, 0);
     entry(s, NVC5B0_SET_IN_BUF_BASE_OFFSET, TEGRA_NVDEC_ENTRY_RELOC, kInput, kBitsOff);
     entry(s, NVC5B0_SET_SLICE_OFFSETS_BUF_OFFSET, TEGRA_NVDEC_ENTRY_RELOC, kInput, kSlicesOff);
@@ -91,12 +100,13 @@ int run(char *line, size_t size)
     entry(s, NVC5B0_H264_SET_MBHIST_BUF_OFFSET, TEGRA_NVDEC_ENTRY_RELOC, kAux, kMbhistOff);
     entry(s, NVC5B0_SET_HISTORY_OFFSET, TEGRA_NVDEC_ENTRY_RELOC, kAux, kHistoryOff);
     for (uint16_t i = 0; i < 17; i++) {
-        entry(s, (uint16_t)(NVC5B0_SET_PICTURE_LUMA_OFFSET0 + 4 * i), TEGRA_NVDEC_ENTRY_RELOC, kSurface, 0);
-        entry(s, (uint16_t)(NVC5B0_SET_PICTURE_CHROMA_OFFSET0 + 4 * i), TEGRA_NVDEC_ENTRY_RELOC, kSurface, lumaBytes);
+        entry(s, static_cast<uint16_t>(NVC5B0_SET_PICTURE_LUMA_OFFSET0 + 4 * i), TEGRA_NVDEC_ENTRY_RELOC, kSurface, 0);
+        entry(s, static_cast<uint16_t>(NVC5B0_SET_PICTURE_CHROMA_OFFSET0 + 4 * i), TEGRA_NVDEC_ENTRY_RELOC, kSurface,
+              lumaBytes);
     }
     entry(s, NVC5B0_EXECUTE, TEGRA_NVDEC_ENTRY_VALUE, 1u << 8, 0);
-    s->clean[0] = {kInput, kSlicesOff, (uint32_t)sizeof(kTestSliceOffsets), 0};
-    s->clean[1] = {kInput, kBitsOff, (uint32_t)sizeof(kTestBitstream), 0};
+    s->clean[0] = {kInput, kSlicesOff, static_cast<uint32_t>(sizeof(kTestSliceOffsets)), 0};
+    s->clean[1] = {kInput, kBitsOff, static_cast<uint32_t>(sizeof(kTestBitstream)), 0};
     s->clean_count = 2;
 
     const uint64_t began = nowUs();
@@ -108,23 +118,22 @@ int run(char *line, size_t size)
         snprintf(line, size, "N3 FAIL submit refused (%d, %s)", ret, why ? why : "engine");
         return ret;
     }
-    if ((ret = tegra_nvdec_wait(fence))) {
-        snprintf(line, size, "N3 FAIL decode did not finish (%s; see the job line)",
-                 ret == -60  ? "past its bound"
-                 : ret == -5 ? "done, but its interrupt never came"
-                             : "engine refused");
+    ret = tegra_nvdec_wait(fence);
+    if (ret) {
+        snprintf(line, size, "N3 FAIL decode did not finish (%s; see the job line)", waitFailure(ret));
         return ret;
     }
     const uint64_t us = nowUs() - began;
     tegra_nvdec_cache_flush(gBlocks[kInput].va, sizeof(nvdec_status_s));
     tegra_nvdec_cache_flush(gBlocks[kSurface].va, lumaBytes * 3 / 2);
-    const nvdec_status_s *status = (const nvdec_status_s *)gBlocks[kInput].va;
+    const nvdec_status_s *status = reinterpret_cast<const nvdec_status_s *>(gBlocks[kInput].va);
     uint32_t crc = 0xffffffffu;
-    for (uint32_t y = 0; y < height; y++)
+    for (uint32_t y = 0; y < height; y++) {
         for (uint32_t x = 0; x < width; x++)
             crc = crc32(crc, gBlocks[kSurface].va[blockLinear(x, y, pitch)]);
+    }
     crc = ~crc;
-    const bool ok = crc == kTestLumaCrc && !status->error_status && !status->mbs_in_error;
+    const bool ok = crc == kTestLumaCrc && (status->error_status == 0u) && (status->mbs_in_error == 0u);
     snprintf(line, size,
              "N3 %s H.264 %ux%u IDR in %llu us: %u MBs decoded, %u in error, error_status %#x, %u cycles; "
              "luma CRC %#010x (expected %#010x)",
@@ -154,13 +163,15 @@ int runVP9(char *line, size_t size)
             return -12;
         }
     }
-    uint8_t *input = gVP9Blocks[1].va, *aux = gVP9Blocks[2].va;
+    uint8_t *input = gVP9Blocks[1].va;
+    uint8_t *aux = gVP9Blocks[2].va;
     memcpy(input + kVP9TestProbOff, kVP9TestProbs, sizeof(kVP9TestProbs));
     memcpy(input + kVP9TestBitsOff, kVP9TestBitstream, sizeof(kVP9TestBitstream));
     memset(input + kVP9TestBitsOff + sizeof(kVP9TestBitstream), 0, 64);  // the plug-in's padding after the tile data
     memcpy(aux + kVP9TestTilesOff, kVP9TestTiles, sizeof(kVP9TestTiles));
-    ((uint16_t *)(aux + kVP9TestTilesOff))[0x37a] = 9;  // the tile size table's tail, as the plug-in sets it
-    ((uint16_t *)(aux + kVP9TestTilesOff))[0x37b] = 1;
+    reinterpret_cast<uint16_t *>(aux + kVP9TestTilesOff)[0x37a] =
+        9;  // the tile size table's tail, as the plug-in sets it
+    reinterpret_cast<uint16_t *>(aux + kVP9TestTilesOff)[0x37b] = 1;
     TegraNVDECSubmit *s = IONewZero(TegraNVDECSubmit, 1);
     if (!s)
         return -12;
@@ -169,8 +180,8 @@ int runVP9(char *line, size_t size)
     memcpy(s->setup, kVP9TestSetup, sizeof(kVP9TestSetup));
     s->entry_count = sizeof(kVP9TestEntries) / sizeof(kVP9TestEntries[0]);
     memcpy(s->entries, kVP9TestEntries, sizeof(kVP9TestEntries));
-    s->clean[0] = {1, kVP9TestProbOff, (uint32_t)(kVP9TestBitsOff - kVP9TestProbOff + sizeof(kVP9TestBitstream) + 64),
-                   0};
+    s->clean[0] = {1, kVP9TestProbOff,
+                   static_cast<uint32_t>(kVP9TestBitsOff - kVP9TestProbOff + sizeof(kVP9TestBitstream) + 64), 0};
     s->clean[1] = {2, kVP9TestTilesOff, 0x700, 0};
     s->clean_count = 2;
 
@@ -183,24 +194,23 @@ int runVP9(char *line, size_t size)
         snprintf(line, size, "N3 VP9 FAIL submit refused (%d, %s)", ret, why ? why : "engine");
         return ret;
     }
-    if ((ret = tegra_nvdec_wait(fence))) {
-        snprintf(line, size, "N3 VP9 FAIL decode did not finish (%s; see the job line)",
-                 ret == -60  ? "past its bound"
-                 : ret == -5 ? "done, but its interrupt never came"
-                             : "engine refused");
+    ret = tegra_nvdec_wait(fence);
+    if (ret) {
+        snprintf(line, size, "N3 VP9 FAIL decode did not finish (%s; see the job line)", waitFailure(ret));
         return ret;
     }
     const uint64_t us = nowUs() - began;
     const uint32_t rows = (kVP9TestHeight + 63) & ~63u;
     tegra_nvdec_cache_flush(input, sizeof(nvdec_status_s));
     tegra_nvdec_cache_flush(gVP9Blocks[3].va, kVP9TestPitch * rows * 3 / 2);
-    const nvdec_status_s *status = (const nvdec_status_s *)input;
+    const nvdec_status_s *status = reinterpret_cast<const nvdec_status_s *>(input);
     uint32_t crc = 0xffffffffu;
-    for (uint32_t y = 0; y < kVP9TestHeight; y++)
+    for (uint32_t y = 0; y < kVP9TestHeight; y++) {
         for (uint32_t x = 0; x < kVP9TestWidth; x++)
             crc = crc32(crc, gVP9Blocks[3].va[blockLinear(x, y, kVP9TestPitch)]);
+    }
     crc = ~crc;
-    const bool ok = crc == kVP9TestLumaCrc && !status->error_status;
+    const bool ok = crc == kVP9TestLumaCrc && (status->error_status == 0u);
     snprintf(line, size,
              "N3 VP9 %s %ux%u key frame in %llu us: error_status %#x, %u cycles; luma CRC %#010x (expected %#010x, "
              "libvpx)%s",
@@ -239,7 +249,7 @@ int runHEVC(char *line, size_t size)
     memcpy(s->setup, kHEVCTestSetup, sizeof(kHEVCTestSetup));
     s->entry_count = sizeof(kHEVCTestEntries) / sizeof(kHEVCTestEntries[0]);
     memcpy(s->entries, kHEVCTestEntries, sizeof(kHEVCTestEntries));
-    s->clean[0] = {2, kHEVCTestInputOff, (uint32_t)sizeof(kHEVCTestInput), 0};
+    s->clean[0] = {2, kHEVCTestInputOff, static_cast<uint32_t>(sizeof(kHEVCTestInput)), 0};
     s->clean_count = 1;
 
     const uint64_t began = nowUs();
@@ -251,24 +261,23 @@ int runHEVC(char *line, size_t size)
         snprintf(line, size, "N3 HEVC FAIL submit refused (%d, %s)", ret, why ? why : "engine");
         return ret;
     }
-    if ((ret = tegra_nvdec_wait(fence))) {
-        snprintf(line, size, "N3 HEVC FAIL decode did not finish (%s; see the job line)",
-                 ret == -60  ? "past its bound"
-                 : ret == -5 ? "done, but its interrupt never came"
-                             : "engine refused");
+    ret = tegra_nvdec_wait(fence);
+    if (ret) {
+        snprintf(line, size, "N3 HEVC FAIL decode did not finish (%s; see the job line)", waitFailure(ret));
         return ret;
     }
     const uint64_t us = nowUs() - began;
     const uint32_t rows = (kHEVCTestHeight + 63) & ~63u;
     tegra_nvdec_cache_flush(gHEVCBlocks[2].va, sizeof(nvdec_status_s));
     tegra_nvdec_cache_flush(gHEVCBlocks[3].va, kHEVCTestPitch * rows * 3 / 2);
-    const nvdec_status_s *status = (const nvdec_status_s *)gHEVCBlocks[2].va;
+    const nvdec_status_s *status = reinterpret_cast<const nvdec_status_s *>(gHEVCBlocks[2].va);
     uint32_t crc = 0xffffffffu;
-    for (uint32_t y = 0; y < kHEVCTestHeight; y++)
+    for (uint32_t y = 0; y < kHEVCTestHeight; y++) {
         for (uint32_t x = 0; x < kHEVCTestWidth; x++)
             crc = crc32(crc, gHEVCBlocks[3].va[blockLinear(x, y, kHEVCTestPitch)]);
+    }
     crc = ~crc;
-    const bool ok = crc == kHEVCTestLumaCrc && !status->error_status;
+    const bool ok = crc == kHEVCTestLumaCrc && (status->error_status == 0u);
     snprintf(line, size,
              "N3 HEVC %s %ux%u IDR in %llu us: error_status %#x, slice header error %#x, %u cycles; luma CRC %#010x "
              "(expected %#010x, FFmpeg)%s",
@@ -285,9 +294,10 @@ extern "C" int tegra_nvdec_self_test_hevc(void)
     line[0] = 0;
     const int ret = runHEVC(line, sizeof(line));
     IOLog("TegraNVDEC: %s\n", line);
-    if (ret != -60)
+    if (ret != -60) {
         for (int i = 1; i <= 3; i++)
             tegra_nvdec_buffer_free(&gHEVCBlocks[i]);
+    }
     return ret;
 }
 
@@ -297,9 +307,10 @@ extern "C" int tegra_nvdec_self_test_vp9(void)
     line[0] = 0;
     const int ret = runVP9(line, sizeof(line));
     IOLog("TegraNVDEC: %s\n", line);
-    if (ret != -60)
+    if (ret != -60) {
         for (int i = 1; i <= 3; i++)
             tegra_nvdec_buffer_free(&gVP9Blocks[i]);
+    }
     return ret;
 }
 
@@ -309,8 +320,9 @@ extern "C" int tegra_nvdec_self_test(void)
     line[0] = 0;
     const int ret = run(line, sizeof(line));
     IOLog("TegraNVDEC: %s\n", line);
-    if (ret != -60)  // a job still in the engine keeps its buffers
+    if (ret != -60) {  // a job still in the engine keeps its buffers
         for (int i = kInput; i <= kSurface; i++)
             tegra_nvdec_buffer_free(&gBlocks[i]);
+    }
     return ret;
 }

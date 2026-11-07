@@ -53,7 +53,8 @@ alias(
     }),
 )
 
-# fetchform is a debug build's, so never in a package composed from the release (release builds).
+# fetchform and the hardware test app are a debug build's, so never in a package composed from the release (release
+# builds), which also keeps rules_apple, Swift and the Metal toolchain out of the Xcode-free image path.
 selects.config_setting_group(
     name = "local_debug",
     match_all = [
@@ -169,14 +170,24 @@ boot_package(
         "//install:from_release": {"@switch_release//:overlay/" + source: source for source in OVERLAY_BINARIES.values()},
         "//conditions:default": OVERLAY_BINARIES,
     }) | select({
-        ":local_debug": {"//drivers/TegraGM20BMetal:fetchform": "build/switch-gpu/fetchform"},
+        ":local_debug": {
+            "//drivers/TegraGM20BMetal:fetchform": "build/switch-gpu/fetchform",
+            "//hw_test_app:SwitchHWTest": "build/switch-hwtest/SwitchHWTest.ipa",
+        },
         "//conditions:default": {},
     }),
     overlay_data = {
         "//boot/logo:apple-logo~ipad.png": "build/progressui/apple-logo~ipad.png",
-        "//bazel/pinned:overlay/wallpaper-1x/7570.iPadOS_17_Flat.plist": "build/wallpaper-1x/7570.iPadOS_17_Flat.plist",
-        "//bazel/pinned:overlay/wallpaper-1x/7560.Lake_Flat.plist": "build/wallpaper-1x/7560.Lake_Flat.plist",
-    },
+    } | select({
+        "//ipsw:21H461": {
+            "//bazel/pinned:overlay/wallpaper-1x/21H461/7570.iPadOS_17_Flat.plist": "build/wallpaper-1x/21H461/7570.iPadOS_17_Flat.plist",
+            "//bazel/pinned:overlay/wallpaper-1x/21H461/7560.Lake_Flat.plist": "build/wallpaper-1x/21H461/7560.Lake_Flat.plist",
+        },
+        "//ipsw:24B119": {
+            "//bazel/pinned:overlay/wallpaper-1x/24B119/7570.iPadOS_17.plist": "build/wallpaper-1x/24B119/7570.iPadOS_17.plist",
+            "//bazel/pinned:overlay/wallpaper-1x/24B119/7560.Lake.plist": "build/wallpaper-1x/24B119/7560.Lake.plist",
+        },
+    }),
     overlay_files = ["//overlay:overlay_sources"],
     overlay_manifest = "//overlay:manifest.json",
     portrait_header = "//drivers/NativeMobileDisplay:SwitchPortrait.h",
@@ -194,6 +205,14 @@ boot_package(
         "//conditions:default": ":smp",
     }),
     static_trust = "//ipsw:static_system_trust",
+    xcode_env = select({
+        "//install:from_release": None,
+        "//conditions:default": "@xcode//:xcode.env",
+    }),
+    xcode_identity = select({
+        "//install:from_release": None,
+        "//conditions:default": "@xcode//:identity",
+    }),
 )
 
 # The loader and the window constants it was compiled for (constants.json: layout.h's and runs.h's), which the release

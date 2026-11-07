@@ -92,7 +92,8 @@ void switch_ram_bootstrap_check(pmap_paddr_t start, pmap_paddr_t end)
  */
 static void switch_ram_reserve_gpu_pool(void)
 {
-    const uint64_t gpu_pa = SWITCH_RAM_GPU_POOL_START, gpu_end = SWITCH_RAM_GPU_POOL_END;
+    const uint64_t gpu_pa = SWITCH_RAM_GPU_POOL_START;
+    const uint64_t gpu_end = SWITCH_RAM_GPU_POOL_END;
     if (switch_ledger.count == SWITCH_RAM_RANGES) {
         panic("the GPU pool %#llx-%#llx does not fit: the RAM ledger is full", gpu_pa, gpu_end);
     }
@@ -113,9 +114,9 @@ static void switch_ram_reserve_gpu_pool(void)
 
 void switch_ram_init(struct boot_args *args)
 {
-    DTEntry entry;
-    const void *wire;
-    unsigned int bytes;
+    DTEntry entry = NULL;
+    const void *wire = NULL;
+    unsigned int bytes = 0;
     if (SecureDTLookupEntry(NULL, "/chosen", &entry) != kSuccess ||
         SecureDTGetProperty(entry, "switch-ram-ledger", &wire, &bytes) != kSuccess) {
         if (args->physBase == 0x80000000ULL && args->memSize == 0x100000000ULL) {
@@ -142,7 +143,8 @@ void switch_ram_init(struct boot_args *args)
         panic("native kernel extent outside low bank");
     }
     for (unsigned i = 0; i < switch_ledger.count; ++i) {
-        pmap_paddr_t start = switch_ledger.reserved[i].start, end = switch_ledger.reserved[i].end;
+        pmap_paddr_t start = switch_ledger.reserved[i].start;
+        pmap_paddr_t end = switch_ledger.reserved[i].end;
         if (start >= end) {
             panic("native invalid reservation");
         }
@@ -150,7 +152,7 @@ void switch_ram_init(struct boot_args *args)
             panic("native reservation overlaps kernel");
         }
         if (start >= switch_bootstrap_start && start < switch_bootstrap_limit) {
-            switch_bootstrap_limit = start & ~PAGE_MASK;
+            switch_bootstrap_limit = start & ~(pmap_paddr_t)PAGE_MASK;
         }
     }
     switch_ram_reserve_gpu_pool();
@@ -179,7 +181,8 @@ void switch_ram_account(uint64_t present)
     if (!switch_ledger.committed) {
         return;
     }
-    uint64_t eligible = 0, free_bytes = 0;
+    uint64_t eligible = 0;
+    uint64_t free_bytes = 0;
     for (pmap_paddr_t pa = gPhysBase; pa < gPhysBase + present; pa += PAGE_SIZE) {
         if (switch_ram_pa_valid(pa)) {
             const bool reserved = switch_ram_ledger_reserved(pa);
@@ -215,7 +218,8 @@ unsigned int switch_ram_physmap_pieces(pmap_paddr_t start, pmap_paddr_t end,
     };
     unsigned int count = 0;
     for (unsigned i = 0; i < 4; i++) {
-        pmap_paddr_t lo = MAX(start, regions[i].start), hi = MIN(end, regions[i].end);
+        pmap_paddr_t lo = MAX(start, regions[i].start);
+        pmap_paddr_t hi = MIN(end, regions[i].end);
         /* The GPU pool splits the region it lies in and is mapped write-combined. */
         pmap_paddr_t split[3][2] = {{lo, hi}, {0, 0}, {0, 0}};
         if (switch_gpu_start < switch_gpu_end && lo < switch_gpu_end && switch_gpu_start < hi) {

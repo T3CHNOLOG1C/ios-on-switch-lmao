@@ -57,6 +57,11 @@ host_test(
     ],
     data = [
         "//drivers/SwitchAudio:SwitchAudio.cpp",
+        "//drivers/SwitchAudio:SwitchAudioClocks.cpp",
+        "//drivers/SwitchAudio:SwitchAudioCodec.cpp",
+        "//drivers/SwitchAudio:SwitchAudioDriver.h",
+        "//drivers/SwitchAudio:SwitchAudioRegisters.h",
+        "//drivers/SwitchAudio:SwitchAudioStream.cpp",
         "//drivers/SwitchAudio:SwitchRT5639.cpp",
         "//drivers/SwitchAudio:hal/SwitchAudioPlugIn.c",
     ],

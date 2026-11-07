@@ -12,11 +12,12 @@ Steps:
                    copied, stale files in switchroot/ios/ removed (never the user's bootargs.txt or the install
                    images in switchroot/ios/install/), AppleDouble files by name; nothing else on the FAT. Refused
                    when the card's iOS is another kind than the build's (its System volume is not the IPSW's)
-  3 overlay        <Data>/Switch/overlay := the package's overlay/; also removes the r3 Wi-Fi bring-up's configd Debug
-                   logging profile (STALE_LOGGING_PROFILES) if a card still has it; and stages hekate's "Dump Joy-Con
-                   BT" (the FAT's switchroot/joycon_mac.ini, only read) as <Data>/Switch/bluetooth/{host-address,
-                   joycon-pairing.plist}, removed when the FAT has none (joycon_pairing.py; --no-joycon-pairing
-                   skips it)
+  3 overlay        <Data>/Switch/overlay := the package's overlay/; when its /Applications changed, writes
+                   <Data>/datamigrator/migrate so the next boot registers the apps (system_apps.py); also removes the
+                   r3 Wi-Fi bring-up's configd Debug logging profile (STALE_LOGGING_PROFILES) if a card still has
+                   it; and stages hekate's "Dump Joy-Con BT" (the FAT's switchroot/joycon_mac.ini, only read) as
+                   <Data>/Switch/bluetooth/{host-address, joycon-pairing.plist}, removed when the FAT has none
+                   (joycon_pairing.py; --no-joycon-pairing skips it)
   4 GPU bundle     <Data>/ngpu/addons/TegraGM20BMetal.{bundle,m2v-seed,raw} from --//deploy:gpu_bundle, via the
                    plugin's stager, which copies only the files whose sha256 the card does not already hold and
                    reads nothing more when the card's list matches the build (its CDHashes must be in the same
@@ -45,6 +46,7 @@ from tools.deploy import (
     joycon_pairing,
     poster_snapshots,
     pull_logs,
+    system_apps,
 )
 from tools.install import (
     card as cards,
@@ -208,7 +210,9 @@ def _write(args: argparse.Namespace, data_root: Path, fat: object, pairing: dict
         pull_logs.harvest(data_root, out, log, harvest_dir, args.corpus)
     with cards.mounted(fat.identifier, log) as fat_root:
         cards.sync_boot_entry(fat_root, args.boot_package, log)
+    apps = system_apps.digest(data_root)
     cards.sync_overlay(data_root, args.boot_package, log)
+    system_apps.request_migration(data_root, apps, log)
     remove_stale_logging_profiles(data_root, log)
     if not args.no_joycon_pairing:
         joycon_pairing.stage(data_root, pairing, log)

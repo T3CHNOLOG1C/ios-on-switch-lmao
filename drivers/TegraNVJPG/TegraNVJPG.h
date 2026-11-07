@@ -33,8 +33,8 @@ enum {
     TEGRA_NVJPG_WINDOWS = 2
 };
 
-constexpr uint64_t kTegraNVJPGWindowBase[TEGRA_NVJPG_WINDOWS] = {0x10000000ull, 0x20000000ull};
-constexpr uint64_t kTegraNVJPGWindowBytes[TEGRA_NVJPG_WINDOWS] = {64ull << 20, 256ull << 20};
+constexpr uint64_t kTegraNVJPGWindowBase[TEGRA_NVJPG_WINDOWS] = {0x10000000ULL, 0x20000000ULL};
+constexpr uint64_t kTegraNVJPGWindowBytes[TEGRA_NVJPG_WINDOWS] = {64ULL << 20, 256ULL << 20};
 
 // What the self-test proved about the engine (J3); the service builds every job with it.
 struct TegraNVJPGTraits {

@@ -19,7 +19,8 @@ bool Controller::armRemoteWake(unsigned port)
     if (!(portsc & XHCI_PORTSC_CCS))
         return false;
     const enum xusb_utmi_speed speed = xusb_utmi_speed(portsc);
-    const uint32_t bias = r(padctl, XUSB_PADCTL_USB2_BIAS_PAD_CTL1), otg = r(padctl, XUSB_PADCTL_USB2_OTG_PAD0_CTL1);
+    const uint32_t bias = r(padctl, XUSB_PADCTL_USB2_BIAS_PAD_CTL1);
+    const uint32_t otg = r(padctl, XUSB_PADCTL_USB2_OTG_PAD0_CTL1);
     pmcRmw(XUSB_PMC_UTMIP_SLEEP_CFG, XUSB_SLEEP_MASTER_ENABLE, 0);
     pmcRmw(XUSB_PMC_UTMIP_MASTER_CONFIG, 0, XUSB_MASTER_CONFIG_PWR);
     pmcRmw(XUSB_PMC_USB_DEBOUNCE_DEL, XUSB_DEBOUNCE_LINE_MASK, XUSB_DEBOUNCE_LINE_ONE);

@@ -75,10 +75,14 @@ inline uint32_t refC(const Vector &v, uint32_t k, uint32_t x, uint32_t y)
 // A 4:2:0 output sample: the mean of the chroma over its (up to) 2x2 pixels.
 uint32_t refC420(const Vector &v, uint32_t k, uint32_t i, uint32_t j)
 {
-    uint32_t sum = 0, count = 0;
-    for (uint32_t y = 2 * j; y < 2 * j + 2 && y < v.h; y++)
+    uint32_t sum = 0;
+    uint32_t count = 0;
+    for (uint32_t y = 2 * j; y < 2 * j + 2 && y < v.h; y++) {
         for (uint32_t x = 2 * i; x < 2 * i + 2 && x < v.w; x++, count++)
             sum += refC(v, k, x, y);
+    }
+    if (!count)
+        return 128;
     return (sum + count / 2) / count;
 }
 
@@ -105,7 +109,7 @@ struct Score {
 
     bool within(const Tolerance &t) const
     {
-        return count && max <= t.max && sum * 4 <= (uint64_t)t.mean4 * count;
+        return (count != 0u) && max <= t.max && sum * 4 <= static_cast<uint64_t>(t.mean4) * count;
     }
 };
 
@@ -138,9 +142,10 @@ int decode(const Vector &v, uint32_t format, uint64_t bits, const Output &out, n
     static TegraNVJPGJob job;  // the setup is 2.8 KiB: not on the kernel stack (J3 runs on one thread)
     bzero(&job, sizeof(job));
     tegra_nvjpg_setup_image(&img, bytes, &job.setup);
-    TegraNVJPGTarget target = {format, v.scale, {out.pitch[0], out.pitch[1], out.pitch[2]}, 0xff};
+    const TegraNVJPGTarget target = {format, v.scale, {out.pitch[0], out.pitch[1], out.pitch[2]}, 0xff};
     TegraNVJPGExtent extent;
-    if ((why = tegra_nvjpg_setup_output(&img, &target, 1, &job.setup, &extent))) {
+    why = tegra_nvjpg_setup_output(&img, &target, true, &job.setup, &extent);
+    if (why) {
         snprintf(gWhy, sizeof(gWhy), "%s target refused: %s", v.name, why);
         return -1;
     }
@@ -148,7 +153,7 @@ int decode(const Vector &v, uint32_t format, uint64_t bits, const Output &out, n
     job.planes = extent.planes;
     for (uint32_t p = 0; p < extent.planes; p++)
         job.plane[p] = out.iova[p];
-    job.pixels = (uint64_t)img.mcusX * img.mcuW * img.mcusY * img.mcuH;
+    job.pixels = static_cast<uint64_t>(img.mcusX) * img.mcuW * img.mcusY * img.mcuH;
     uint64_t us = 0;
     const int ret = tegra_nvjpg_run(&job, status, &us);
     gJobs++;
@@ -167,7 +172,7 @@ int decode(const Vector &v, uint32_t format, uint64_t bits, const Output &out, n
     }
     if (!v.scale && format == TEGRA_NVJPG_OUT_BGRA && v.jpeg == kJ3AJpeg) {
         gCycles = status->reserved0;  // the cycle count (DUMP_CYCLE_COUNT; NVIDIA's later header: cycle_count)
-        gPixels = (uint64_t)v.w * v.h;
+        gPixels = static_cast<uint64_t>(v.w) * v.h;
     }
     return 0;
 }
@@ -177,50 +182,71 @@ int decode(const Vector &v, uint32_t format, uint64_t bits, const Output &out, n
 bool compare(const Vector &v, uint32_t format, const Output &out)
 {
     const bool scaled = v.scale != 0;
-    Score y = {}, c = {}, rgb = {}, alpha = {};
+    Score y = {};
+    Score c = {};
+    Score rgb = {};
+    Score alpha = {};
     if (format == TEGRA_NVJPG_OUT_NV12 || format == TEGRA_NVJPG_OUT_I420 || format == TEGRA_NVJPG_OUT_GREY) {
-        for (uint32_t j = 0; j < v.h; j++)
+        for (uint32_t j = 0; j < v.h; j++) {
             for (uint32_t i = 0; i < v.w; i++)
                 y.add(i, j, out.va[0][j * out.pitch[0] + i], refY(v, i, j));
-        if (format != TEGRA_NVJPG_OUT_GREY)
-            for (uint32_t j = 0; j < (v.h + 1) / 2; j++)
-                for (uint32_t i = 0; i < (v.w + 1) / 2; i++)
+        }
+        if (format != TEGRA_NVJPG_OUT_GREY) {
+            for (uint32_t j = 0; j < (v.h + 1) / 2; j++) {
+                for (uint32_t i = 0; i < (v.w + 1) / 2; i++) {
                     for (uint32_t k = 1; k <= 2; k++) {
                         const uint8_t got = format == TEGRA_NVJPG_OUT_NV12
                                                 ? out.va[1][j * out.pitch[1] + 2 * i + (k - 1)]
                                                 : out.va[k][j * out.pitch[k] + i];
                         c.add(i, j, got, refC420(v, k, i, j));
                     }
+                }
+            }
+        }
         const bool native420 = v.cw * 2 >= v.w && v.cw * 2 <= v.w + 1 && v.ch * 2 >= v.h && v.ch * 2 <= v.h + 1;
-        const bool ok = y.within(scaled ? kScaledLuma : kLuma) &&
-                        (format == TEGRA_NVJPG_OUT_GREY || c.within(scaled      ? kScaledChroma
-                                                                    : native420 ? kChroma
-                                                                                : kConverted));
-        if (!ok)
+        const Tolerance *chroma = &kConverted;
+        if (scaled) {
+            chroma = &kScaledChroma;
+        } else if (native420) {
+            chroma = &kChroma;
+        }
+        const bool ok = y.within(scaled ? kScaledLuma : kLuma) && (format == TEGRA_NVJPG_OUT_GREY || c.within(*chroma));
+        if (!ok) {
             snprintf(gWhy, sizeof(gWhy),
                      "%s format %u: luma max %u mean %llu/%u (at %u,%u got %u want %u), chroma max %u mean %llu/%u (at "
                      "%u,%u got %u want %u)",
                      v.name, format, y.max, y.sum, y.count, y.atX, y.atY, y.got, y.want, c.max, c.sum, c.count, c.atX,
                      c.atY, c.got, c.want);
+        }
         return ok;
     }
-    const uint32_t r = format == TEGRA_NVJPG_OUT_BGRA ? 2 : format == TEGRA_NVJPG_OUT_RGBA ? 0 : 1;
-    const uint32_t b = format == TEGRA_NVJPG_OUT_BGRA ? 0 : format == TEGRA_NVJPG_OUT_RGBA ? 2 : 3;
-    const uint32_t g = format == TEGRA_NVJPG_OUT_ARGB ? 2 : 1, a = format == TEGRA_NVJPG_OUT_ARGB ? 0 : 3;
-    for (uint32_t j = 0; j < v.h; j++)
+    uint32_t r = 1;
+    uint32_t b = 3;
+    if (format == TEGRA_NVJPG_OUT_BGRA) {
+        r = 2;
+        b = 0;
+    } else if (format == TEGRA_NVJPG_OUT_RGBA) {
+        r = 0;
+        b = 2;
+    }
+    const uint32_t g = format == TEGRA_NVJPG_OUT_ARGB ? 2 : 1;
+    const uint32_t a = format == TEGRA_NVJPG_OUT_ARGB ? 0 : 3;
+    for (uint32_t j = 0; j < v.h; j++) {
         for (uint32_t i = 0; i < v.w; i++) {
             uint8_t want[3];
             tegra_nvjpg_jfif_rgb(refY(v, i, j), refC(v, 1, i, j), refC(v, 2, i, j), want);
-            const uint8_t *px = out.va[0] + j * out.pitch[0] + 4 * i;
+            const uint8_t *px = out.va[0] + static_cast<size_t>(j) * out.pitch[0] + static_cast<size_t>(i) * 4;
             rgb.add(i, j, px[r], want[0]);
             rgb.add(i, j, px[g], want[1]);
             rgb.add(i, j, px[b], want[2]);
             alpha.add(i, j, px[a], 0xff);
         }
+    }
     const bool ok = rgb.within(scaled ? kScaledRgb : kRgb) && alpha.max == 0;
-    if (!ok)
+    if (!ok) {
         snprintf(gWhy, sizeof(gWhy), "%s format %u: RGB max %u mean %llu/%u (at %u,%u got %u want %u), alpha max %u",
                  v.name, format, rgb.max, rgb.sum, rgb.count, rgb.atX, rgb.atY, rgb.got, rgb.want, alpha.max);
+    }
     return ok;
 }
 
@@ -262,8 +288,12 @@ int run(const Vector &v, uint32_t format, uint32_t pitch)
 int extent(uint32_t format, uint32_t pitch, bool *clipped)
 {
     static uint8_t first[16384];
-    const uint32_t planes = tegra_nvjpg_planes(format), bpp = format == TEGRA_NVJPG_OUT_BGRA ? 4 : 1;
-    const uint32_t gridW[2] = {48 * bpp, 48}, gridH[2] = {48, 24}, picW[2] = {44 * bpp, 44}, picH[2] = {40, 20};
+    const uint32_t planes = tegra_nvjpg_planes(format);
+    const uint32_t bpp = format == TEGRA_NVJPG_OUT_BGRA ? 4 : 1;
+    const uint32_t gridW[2] = {48 * bpp, 48};
+    const uint32_t gridH[2] = {48, 24};
+    const uint32_t picW[2] = {44 * bpp, 44};
+    const uint32_t picH[2] = {40, 20};
     for (uint32_t pass = 0; pass < 2; pass++) {
         nvjpg_dec_status status;
         prefill(pass ? 0xff : 0x00);
@@ -278,10 +308,11 @@ int extent(uint32_t format, uint32_t pitch, bool *clipped)
             memcpy(first, gOut.va, sizeof(first));
             continue;
         }
-        bool padX = false, padY = false;
+        bool padX = false;
+        bool padY = false;
         for (uint32_t p = 0; p < planes; p++) {
             const uint32_t rows = gridH[p] + kGuardRows;
-            for (uint32_t row = 0; row < rows; row++)
+            for (uint32_t row = 0; row < rows; row++) {
                 for (uint32_t col = 0; col < pitch; col++) {
                     const uint32_t at = kPlaneOffset[p] + row * pitch + col;
                     if (first[at] == 0x00 && gOut.va[at] == 0xff)
@@ -298,6 +329,7 @@ int extent(uint32_t format, uint32_t pitch, bool *clipped)
                     if (row >= picH[p])
                         padY = true;
                 }
+            }
         }
         *clipped = !padX && !padY;
     }
@@ -327,7 +359,7 @@ int translation()
     switch_dcache_clean_invalidate(gPageB.va, gPageB.size);
     uint32_t inA = 0;
     for (uint64_t i = 0; i < gPageA.size; i++)
-        inA += gPageA.va[i] != 0x5a;
+        inA += static_cast<uint32_t>(gPageA.va[i] != 0x5a);
     if (inA || !compare(kA, TEGRA_NVJPG_OUT_BGRA, out)) {
         char seen[200];
         strlcpy(seen, gWhy, sizeof(seen));
@@ -344,9 +376,10 @@ int translation()
 // with its four pages in reverse order.
 int windows()
 {
-    uint64_t in[2] = {gBits.pa, gBits.pa + 4096}, outPages[4];
+    uint64_t in[2] = {gBits.pa, gBits.pa + 4096};
+    uint64_t outPages[4];
     for (uint32_t i = 0; i < 4; i++)
-        outPages[i] = gPageB.pa + (uint64_t)(3 - i) * 4096;
+        outPages[i] = gPageB.pa + static_cast<uint64_t>(3 - i) * 4096;
     memset(gPageB.va, 0x5a, gPageB.size);
     switch_dcache_clean_invalidate(gPageB.va, gPageB.size);
     const uint64_t inBase = tegra_nvjpg_window_map(TEGRA_NVJPG_WINDOW_IN, in, 2, false);
@@ -367,8 +400,8 @@ int windows()
     switch_dcache_clean_invalidate(gPageB.va, gPageB.size);
     // Undo the permutation into gOut and compare there.
     for (uint32_t i = 0; i < 4; i++)
-        memcpy(gOut.va + i * 4096, gPageB.va + (3 - i) * 4096, 4096);
-    Output cpu = layout(TEGRA_NVJPG_OUT_BGRA, 256);
+        memcpy(gOut.va + static_cast<size_t>(i) * 4096, gPageB.va + (static_cast<size_t>(3 - i) * 4096), 4096);
+    const Output cpu = layout(TEGRA_NVJPG_OUT_BGRA, 256);
     if (!compare(kA, TEGRA_NVJPG_OUT_BGRA, cpu)) {
         char seen[200];
         strlcpy(seen, gWhy, sizeof(seen));
@@ -390,7 +423,8 @@ extern "C" int tegra_nvjpg_self_test(TegraNVJPGTraits *traits)
     const uint64_t began = switch_now_us();
     tegra_nvjpg_lock();
     int ret = translation();
-    bool clipNv12 = false, clipBgra = false;
+    bool clipNv12 = false;
+    bool clipBgra = false;
     if (!ret)
         ret = extent(TEGRA_NVJPG_OUT_NV12, 128, &clipNv12);
     if (!ret)
@@ -410,7 +444,7 @@ extern "C" int tegra_nvjpg_self_test(TegraNVJPGTraits *traits)
     // that times out or loses its interrupt (-2) is the engine's failure and fails J3.
     char off[256] = "";
     bool engine = true;
-    auto attempt = [&](const Vector &v, uint32_t format, uint32_t pitch, const char *what) {
+    const auto attempt = [&](const Vector &v, uint32_t format, uint32_t pitch, const char *what) {
         if (!engine)
             return false;
         const int result = run(v, format, pitch);

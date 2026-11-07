@@ -263,7 +263,9 @@ class Installer:
                 raise host.HostError('the System volume has no /private/preboot (the kernel mounts Preboot there)')
             populate.seed_data(system, data, owners, self.log, self.args.reseed_data)
             sources = {'system_cryptex': self.args.system_cryptex, 'app_cryptex': self.args.app_cryptex}
-            populate.stage_cryptexes(preboot, self.spec, self.pins, sources, owners, self.log)
+            populate.stage_cryptexes(
+                preboot, self.spec, populate.cryptex_images(self.spec, self.pins, sources), owners, self.log
+            )
             if self.args.boot_package:
                 cards.sync_overlay(data, self.args.boot_package, self.log)
 
@@ -312,23 +314,59 @@ class Installer:
             )
         )
 
+    def check_unprivileged(self) -> None:
+        card = cards.resolve(self.args.disk)
+        fat, target = cards.check_layout_unprivileged(card, self.spec)
+        self.log(
+            f'card: {card.disk} ({card.size} bytes); FAT {fat.identifier}, target {target.identifier} '
+            f'{target.name!r} ({target.size} bytes, {target.content})'
+        )
+        self.log(
+            "dry run: the layout passes diskutil's checks. Reading the partition table itself (hybrid MBR, "
+            'both GPT copies) and the container needs root: --yes runs the full checks under sudo before '
+            'writing anything.'
+        )
+
+    def rewrite(self, state: str, snapshot: bytes) -> tuple[bytes, bool] | None:
+        """Take the card from `state` to an attached container.
+
+        Returns the partition table to verify against and whether the target entry was retyped since, or None when
+        the card was ejected to be reinserted.
+        """
+        retyped = False
+        if state == 'detach':
+            self.retype(gpt.LINUX_DATA, targets.SETUP_NAME)
+            if not self.reprobe(expect_container=False):
+                return None
+            snapshot = cards.table_snapshot(self.card)
+            state = 'compose'
+        if state == 'compose':
+            if host.container_on(self.card.slice(self.card.target)):
+                raise host.HostError(
+                    f'macOS has a container attached on {self.card.slice(self.card.target)}: refusing to write under it'
+                )
+            image, offset, os_bytes = self.compose()
+            try:
+                self.write(image, offset, os_bytes)
+            finally:
+                if not self.args.keep_scratch:
+                    image.unlink()
+            state = 'retype'
+        if state == 'retype':
+            self.retype()
+            retyped = True
+            state = 'reprobe'
+        if state == 'reprobe' and not self.reprobe():
+            return None
+        return snapshot, retyped
+
     def run(self) -> int:
         try:
             state = self.inspect()
         except host.HostError as error:
             if 'needs root' not in str(error) or self.args.yes:
                 raise
-            card = cards.resolve(self.args.disk)
-            fat, target = cards.check_layout_unprivileged(card, self.spec)
-            self.log(
-                f'card: {card.disk} ({card.size} bytes); FAT {fat.identifier}, target {target.identifier} '
-                f'{target.name!r} ({target.size} bytes, {target.content})'
-            )
-            self.log(
-                "dry run: the layout passes diskutil's checks. Reading the partition table itself (hybrid MBR, "
-                'both GPT copies) and the container needs root: --yes runs the full checks under sudo before '
-                'writing anything.'
-            )
+            self.check_unprivileged()
             return 0
         self.log(
             'card: {} ({} bytes{}), target {}'.format(
@@ -348,33 +386,10 @@ class Installer:
         backup = Path(str(self.log.path) + '.partition-table.bin')
         backup.write_bytes(snapshot)
         self.log('partition table backed up to', backup)
-        retyped = False
-        if state == 'detach':
-            self.retype(gpt.LINUX_DATA, targets.SETUP_NAME)
-            retyped = True
-            if not self.reprobe(expect_container=False):
-                return 0
-            snapshot = cards.table_snapshot(self.card)
-            retyped = False
-            state = 'compose'
-        if state == 'compose':
-            if host.container_on(self.card.slice(self.card.target)):
-                raise host.HostError(
-                    f'macOS has a container attached on {self.card.slice(self.card.target)}: refusing to write under it'
-                )
-            image, offset, os_bytes = self.compose()
-            try:
-                self.write(image, offset, os_bytes)
-            finally:
-                if not self.args.keep_scratch:
-                    image.unlink()
-            state = 'retype'
-        if state == 'retype':
-            self.retype()
-            retyped = True
-            state = 'reprobe'
-        if state == 'reprobe' and not self.reprobe():
+        written = self.rewrite(state, snapshot)
+        if written is None:
             return 0
+        snapshot, retyped = written
         self.populate()
         self.boot_entry()
         self.verify(snapshot, retyped)

@@ -58,6 +58,11 @@ public:
     uint32_t surfaceLayout(const Bo &bo, uint32_t width, uint32_t height, uint32_t bpp, uint32_t bytesPerRow,
                            bool writes);
     bool bindImport(void *addr, Bo &bo, uint32_t kind);
+    // GPU VA held for binds made into it later (bindImportAt), whole granules; 0: none left. releaseVa gives it back.
+    uint64_t reserveVa(uint64_t bytes);
+    void releaseVa(uint64_t va, uint64_t bytes);
+    // bindImport at `va`, a granule boundary inside a reservation: freeing the BO leaves the VA to the reservation
+    bool bindImportAt(void *addr, Bo &bo, uint64_t va, uint32_t kind);
     // BoFree (the kernel unbinds it at once and releases the pages after the channels complete what they had); the VA goes
     // back to the free list at once: call it only once no submission that uses the BO is still running (raw::Device does).
     void free(Bo &bo);

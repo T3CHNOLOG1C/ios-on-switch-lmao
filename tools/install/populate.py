@@ -55,26 +55,30 @@ def seed_data(system: Path, data: Path, owners: bool, log: host.Log, reseed: boo
     )
 
 
-def stage_cryptexes(
-    preboot: Path,
-    spec: dict,
-    pins: dict,
-    sources: dict[str, str | Path],
-    owners: bool,
-    log: host.Log,
-    expected: dict[str, str] | None = None,
-) -> None:
-    """Stage the cryptex images into Preboot, each checked against its sha256.
+def cryptex_images(
+    spec: dict, pins: dict, sources: dict[str, str | Path], expected: dict[str, str] | None = None
+) -> dict[str, tuple[Path, str]]:
+    """Return {member: (image, sha256)} for the cryptexes the spec lists.
 
     `sources`: {"system_cryptex": path, "app_cryptex": path}; `expected`: {member: sha256} for rebuilt images, which
     the IPSW pins do not describe.
     """
     expected = expected or {}
+    images = {}
     for item in spec['cryptexes']:
         member = item['member']
-        want = expected.get(member) or pins['members'][member]['content_sha256']
+        images[member] = (Path(sources[member]), expected.get(member) or pins['members'][member]['content_sha256'])
+    return images
+
+
+def stage_cryptexes(
+    preboot: Path, spec: dict, images: dict[str, tuple[Path, str]], owners: bool, log: host.Log
+) -> None:
+    """Stage the cryptex images (cryptex_images) into Preboot, each checked against its sha256."""
+    for item in spec['cryptexes']:
+        member = item['member']
+        source, want = images[member]
         relative = item['path'][len('/private/preboot/') :]
-        source = Path(sources[member])
         if Path(relative).name != source.name:
             raise host.HostError('{}: the kernel opens {}, the image is {}'.format(member, item['path'], source))
         target = preboot / relative

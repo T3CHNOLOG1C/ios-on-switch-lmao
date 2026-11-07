@@ -14,7 +14,7 @@ constexpr unsigned kBus = 1;
 constexpr uint8_t kAddr = 0x1c;
 constexpr unsigned kLdo1Enable = TEGRA_GPIO(Z, 4);
 
-enum : uint16_t {
+enum : unsigned {
     // PWR_DIG1, PWR_DIG2
     P_I2S1 = 1u << 15,
     P_DAC_L1 = 1u << 12,
@@ -103,28 +103,30 @@ uint16_t SwitchRT5639::read(uint8_t reg)
         error = tegra_i2c_read(kBus, kAddr, reg, bytes, sizeof(bytes));
     if (error)
         panic("SwitchAudio: RT5639 read %#x failed: %d", reg, error);
-    return (uint16_t)(bytes[0] << 8 | bytes[1]);  // 16-bit registers, big endian
+    return static_cast<uint16_t>(static_cast<unsigned>(bytes[0]) << 8U | bytes[1]);  // 16-bit registers, big endian
 }
 
+// NOLINTNEXTLINE(misc-no-recursion): a private register is one PRIV_INDEX write deep
 void SwitchRT5639::write(uint16_t reg, uint16_t value)
 {
     if (reg >= kPrivate) {
         write(PRIV_INDEX, reg - kPrivate);
         reg = PRIV_DATA;
     }
-    const uint8_t bytes[2] = {(uint8_t)(value >> 8), (uint8_t)value};
-    int error = tegra_i2c_write(kBus, kAddr, (uint8_t)reg, bytes, sizeof(bytes));
+    const uint8_t bytes[2] = {static_cast<uint8_t>(value >> 8), static_cast<uint8_t>(value)};
+    int error = tegra_i2c_write(kBus, kAddr, static_cast<uint8_t>(reg), bytes, sizeof(bytes));
     if (error)
-        error = tegra_i2c_write(kBus, kAddr, (uint8_t)reg, bytes, sizeof(bytes));
+        error = tegra_i2c_write(kBus, kAddr, static_cast<uint8_t>(reg), bytes, sizeof(bytes));
     if (error)
         panic("SwitchAudio: RT5639 write %#x = %#x failed: %d", reg, value, error);
 }
 
 void SwitchRT5639::update(uint8_t reg, uint16_t mask, uint16_t value)
 {
-    const uint16_t old = read(reg), now = (uint16_t)((old & ~mask) | (value & mask));
+    const unsigned old = read(reg);
+    const unsigned now = (old & ~static_cast<unsigned>(mask)) | (static_cast<unsigned>(value) & mask);
     if (now != old)
-        write(reg, now);
+        write(reg, static_cast<uint16_t>(now));
 }
 
 void SwitchRT5639::probe(bool afterSleep, bool capture)
@@ -133,7 +135,7 @@ void SwitchRT5639::probe(bool afterSleep, bool capture)
         panic("SwitchAudio: I2C1 did not start");
     uint8_t id[2] = {};
     const bool powered =
-        afterSleep && !tegra_i2c_read(kBus, kAddr, VENDOR_ID2, id, sizeof(id)) && id[0] == 0x62 && id[1] == 0x31;
+        afterSleep && (tegra_i2c_read(kBus, kAddr, VENDOR_ID2, id, sizeof(id)) == 0) && id[0] == 0x62 && id[1] == 0x31;
     if (!powered) {
         if (tegra_gpio_output(kLdo1Enable, 1))
             panic("SwitchAudio: cannot drive PZ4 (RT5639 LDO1_EN)");
@@ -314,17 +316,19 @@ void SwitchRT5639::routeDown()
 
 void SwitchRT5639::mute(bool muted)
 {
-    if (currentRoute == kRouteSpeaker)
+    if (currentRoute == kRouteSpeaker) {
         update(SPK_VOL, V_MUTE, muted ? V_MUTE : 0);
-    else if (currentRoute == kRouteHeadphones)
+    } else if (currentRoute == kRouteHeadphones) {
         update(HP_VOL, V_MUTE, muted || headphoneMuted ? V_MUTE : 0);
+    }
 }
 
 // DAC1_DIG_VOL: left 15:8, right 7:0, 0xaf = 0 dB in 0.375 dB steps; kDacHeadphone is the full headphone level.
 uint16_t SwitchRT5639::headphoneDac() const
 {
-    const unsigned full = kDacHeadphone & 0xff, steps = headphoneSteps < full ? headphoneSteps : full;
-    return (uint16_t)((full - steps) << 8 | (full - steps));
+    const unsigned full = kDacHeadphone & 0xff;
+    const unsigned steps = headphoneSteps < full ? headphoneSteps : full;
+    return static_cast<uint16_t>((full - steps) << 8 | (full - steps));
 }
 
 void SwitchRT5639::setHeadphoneAttenuation(unsigned steps)
@@ -356,7 +360,7 @@ bool SwitchRT5639::detectHeadset(bool jackIn)
         micBias(true);
         update(IRQ_CTRL2, 1u << 3, 0);
         IOSleep(100);
-        headset = !(read(IRQ_CTRL2) & (1u << 3));
+        headset = ((read(IRQ_CTRL2) & (1u << 3)) == 0u);
     }
     if (!headset)
         micBias(false);

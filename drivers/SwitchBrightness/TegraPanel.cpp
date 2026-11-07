@@ -146,7 +146,7 @@ void advance(Move move)
     __atomic_store_n(&gCommand.step, move.next, __ATOMIC_RELEASE);
     if (!move.timerUS)
         return;
-    uint64_t deadline;
+    uint64_t deadline = 0;
     clock_interval_to_deadline(move.timerUS, kMicrosecondScale, &deadline);
     __atomic_store_n(&gStepDeadline, deadline, __ATOMIC_RELAXED);
     timer_call_enter(&gStepTimer, deadline, TIMER_CALL_SYS_CRITICAL | TIMER_CALL_LOCAL);
@@ -158,9 +158,9 @@ bool displayRunning()
 {
     if (!gCar) {
         timer_call_setup(&gStepTimer, stepTimerFired, nullptr);
-        gDc = (volatile uint32_t *)ml_io_map(kDisplayAPA, kDcMapBytes);
-        gDsi = (volatile uint32_t *)ml_io_map(kDsiPA, 0x1000);
-        gCar = (volatile uint32_t *)ml_io_map(kCarPA, 0x1000);
+        gDc = reinterpret_cast<volatile uint32_t *>(ml_io_map(kDisplayAPA, kDcMapBytes));
+        gDsi = reinterpret_cast<volatile uint32_t *>(ml_io_map(kDsiPA, 0x1000));
+        gCar = reinterpret_cast<volatile uint32_t *>(ml_io_map(kCarPA, 0x1000));
     }
     if (!gCar || !gDc || !gDsi)
         return false;
@@ -168,8 +168,8 @@ bool displayRunning()
         !(gCar[CLK_OUT_ENB_H / 4] & kDsiClock) || (gCar[RST_DEVICES_H / 4] & kDsiClock)) {
         return false;
     }
-    return (gDsi[DSI_POWER_CONTROL] & kDsiPowerEnable) && (gDsi[DSI_CONTROL] & kDsiVideoEnable) &&
-           (gDc[DC_CMD_DISPLAY_COMMAND] & kDisplayModeMask);
+    return ((gDsi[DSI_POWER_CONTROL] & kDsiPowerEnable) != 0u) && ((gDsi[DSI_CONTROL] & kDsiVideoEnable) != 0u) &&
+           ((gDc[DC_CMD_DISPLAY_COMMAND] & kDisplayModeMask) != 0u);
 }
 
 Step step()
@@ -184,7 +184,7 @@ uint64_t frames()
 
 uint64_t frameDeadline()
 {
-    uint64_t deadline;
+    uint64_t deadline = 0;
     clock_interval_to_deadline(kFrameTimeoutUS, kMicrosecondScale, &deadline);
     return deadline;
 }
@@ -223,10 +223,11 @@ void play(const uint32_t *words, unsigned count, const char *what)
     gCommand.count = count;
     gCommand.deferrals = 0;
     const uint32_t before = gDsi[DSI_STATUS];
-    uint64_t seen = frames(), deadline = frameDeadline();
+    uint64_t seen = frames();
+    uint64_t deadline = frameDeadline();
     __atomic_store_n(&gCommand.step, kQueued, __ATOMIC_RELEASE);
     for (;;) {
-        assert_wait_deadline((event_t)&gCommand, THREAD_UNINT, deadline);
+        assert_wait_deadline(reinterpret_cast<event_t>(&gCommand), THREAD_UNINT, deadline);
         wait_result_t result = THREAD_AWAKENED;
         if (step() == kDone || frames() != seen) {
             clear_wait(current_thread(), THREAD_AWAKENED);
@@ -246,7 +247,8 @@ void play(const uint32_t *words, unsigned count, const char *what)
     native_legacy_frame_end_release();
     if (!count)
         return;
-    static bool lateReset, lineBuffer;
+    static bool lateReset;
+    static bool lineBuffer;
     if (!(gCommand.timing & kDbgVBlank) && !lateReset) {
         lateReset = true;
         IOLog("TegraPanel: %s: step 4 ran outside vertical blanking after %u frame ends (DBG_TIMING %#x)\n", what,
@@ -307,7 +309,7 @@ int bootLevel()
     const uint32_t duty = gDc[DC_COM_SCRATCH_REGISTER_B];
     if (!duty || duty > 255)
         return -1;
-    return (int)(duty * TEGRA_PANEL_BRIGHTNESS_MAX / 255);
+    return static_cast<int>(duty * TEGRA_PANEL_BRIGHTNESS_MAX / 255);
 }
 
 template <typename F> int locked(F body)
@@ -343,7 +345,7 @@ extern "C" int tegra_panel_power_off(void)
         if (!gHaveLevel) {
             const int boot = bootLevel();
             if (boot >= 0) {
-                gLevel = (unsigned)boot;
+                gLevel = static_cast<unsigned>(boot);
                 gHaveLevel = true;
             }
         }
@@ -351,10 +353,12 @@ extern "C" int tegra_panel_power_off(void)
         if (result)
             return result;
         IOSleep(100);  // hekate _display_dsi_backlight_brightness: the panel's dimming ramp
-        if ((result = sendCommand(kDisplayOff, "display off")))
+        result = sendCommand(kDisplayOff, "display off");
+        if (result)
             return result;
         IOSleep(40);
-        if ((result = sendCommand(kEnterSleep, "sleep in")))
+        result = sendCommand(kEnterSleep, "sleep in");
+        if (result)
             return result;
         IOSleep(120);
         gControlSent = false;  // sent again on wake, as L4T's init list does
@@ -372,16 +376,24 @@ extern "C" int tegra_panel_power_on(int level)
         if (result)
             return result;
         IOSleep(180);
-        if ((result = sendCommand(kControlDisplay, kBrightnessControl | kDimmingControl, "brightness control")))
+        result = sendCommand(kControlDisplay, kBrightnessControl | kDimmingControl, "brightness control");
+        if (result)
             return result;
         gControlSent = true;
-        if ((result = sendCommand(kDisplayOn, "display on")))
+        result = sendCommand(kDisplayOn, "display on");
+        if (result)
             return result;
         IOSleep(20);
-        unsigned target = level >= 0 ? (unsigned)level : gHaveLevel ? gLevel : TEGRA_PANEL_BRIGHTNESS_MAX / 2;
+        unsigned target = TEGRA_PANEL_BRIGHTNESS_MAX / 2;
+        if (level >= 0) {
+            target = static_cast<unsigned>(level);
+        } else if (gHaveLevel) {
+            target = gLevel;
+        }
         if (target > TEGRA_PANEL_BRIGHTNESS_MAX)
             target = TEGRA_PANEL_BRIGHTNESS_MAX;
-        if ((result = sendBrightness(target)))
+        result = sendBrightness(target);
+        if (result)
             return result;
         gLevel = target;
         gHaveLevel = true;

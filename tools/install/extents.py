@@ -70,28 +70,7 @@ def plan(
     Every data range is copied, the parts of `required` ranges that hold no data are written as zeros. Close copy
     extents are joined (the gap copied as zeros) until there are at most `limit` extents.
     """
-    marks = []
-    for start, end in data:
-        marks.append((start, end, True))
-    for start, end in required:
-        if end > size:
-            raise ExtentError(f'range {start:#x}-{end:#x} is beyond the partition')
-        at = start
-        for d_start, d_end in data:
-            if d_end <= at or d_start >= end:
-                continue
-            if d_start > at:
-                marks.append((at, d_start, False))
-            at = max(at, d_end)
-        if at < end:
-            marks.append((at, end, False))
-    marks.sort()
-    merged = []
-    for start, end, copy in marks:
-        if merged and merged[-1][2] == copy and start <= merged[-1][1]:
-            merged[-1] = (merged[-1][0], max(merged[-1][1], end), copy)
-        else:
-            merged.append((start, end, copy))
+    merged = _merge(_marks(data, required, size))
     gap = block
     while len(merged) > limit:
         merged = _join(merged, gap)
@@ -104,6 +83,34 @@ def plan(
     if not extents or extents[0][0] != 0 or extents[0][1] == manifest.ZERO:
         raise ExtentError("the image's first block holds no data")
     return extents
+
+
+def _marks(data: list[tuple[int, int]], required: list[tuple[int, int]], size: int) -> list[tuple[int, int, bool]]:
+    """Return the data ranges to copy and the parts of `required` ranges no data covers (zeros), sorted."""
+    marks = [(start, end, True) for start, end in data]
+    for start, end in required:
+        if end > size:
+            raise ExtentError(f'range {start:#x}-{end:#x} is beyond the partition')
+        at = start
+        for d_start, d_end in data:
+            if d_end <= at or d_start >= end:
+                continue
+            if d_start > at:
+                marks.append((at, d_start, False))
+            at = max(at, d_end)
+        if at < end:
+            marks.append((at, end, False))
+    return sorted(marks)
+
+
+def _merge(marks: list[tuple[int, int, bool]]) -> list[tuple[int, int, bool]]:
+    merged = []
+    for start, end, copy in marks:
+        if merged and merged[-1][2] == copy and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end), copy)
+        else:
+            merged.append((start, end, copy))
+    return merged
 
 
 def _join(merged: list[tuple[int, int, bool]], gap: int) -> list[tuple[int, int, bool]]:

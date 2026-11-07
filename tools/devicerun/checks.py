@@ -4,6 +4,7 @@
 'timeline' checks are INFO: open issues whose count is the baseline for their fix, and manual steps to read in order.
 """
 
+from tools.devicerun.hwtest import HWTEST
 from tools.devicerun.morning import MORNING
 from tools.devicerun.rules import REPORT, TIMELINE, Check
 
@@ -518,6 +519,7 @@ GROUPS: dict[str, list[Check]] = {
         Check('io.securityd-sos', 'r32-cpuhog', 'Source was stale because shmem was null', REPORT, process='securityd'),
     ],
     'gpu-morning': MORNING,
+    'hwtest': HWTEST,
 }
 
 # The tools/frames lines, pulled with the checks' own query.

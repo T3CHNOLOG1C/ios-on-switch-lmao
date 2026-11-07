@@ -103,7 +103,9 @@ enum : uint32_t {
 const char kControllerName[] = "SwitchGIC";
 }
 
+// NOLINTNEXTLINE(misc-use-internal-linkage): OSDefineMetaClassAndStructors needs the class's external linkage
 class ArmGIC : public IOInterruptController {
+    // NOLINTNEXTLINE(misc-explicit-constructor): IOKit's structors macro declares the metaclass constructor
     OSDeclareDefaultStructors(ArmGIC)
 
         IOMemoryMap *distMap = nullptr,
@@ -135,15 +137,15 @@ class ArmGIC : public IOInterruptController {
 
     bool readBit(uint32_t bank, uint32_t intid) const
     {
-        return (read32(bank + (intid / 32) * 4) >> (intid % 32)) & 1;
+        return ((read32(bank + (intid / 32) * 4) >> (intid % 32)) & 1) != 0u;
     }
 
-    void write32(uint32_t offset, uint32_t value)
+    void write32(uint32_t offset, uint32_t value) const
     {
         *reinterpret_cast<volatile uint32_t *>(dist + offset) = value;
     }
 
-    void write8(uint32_t offset, uint8_t value)
+    void write8(uint32_t offset, uint8_t value) const
     {
         *reinterpret_cast<volatile uint8_t *>(dist + offset) = value;
     }
@@ -156,17 +158,18 @@ class ArmGIC : public IOInterruptController {
 
     bool licCovers(uint32_t intid) const
     {
-        return lic && (intid - kFirstSpi) / 32 < kLicBanks;
+        return (lic != 0u) && (intid - kFirstSpi) / 32 < kLicBanks;
     }
 
     volatile uint32_t *licRegister(uint32_t intid, uint32_t offset) const
     {
-        return reinterpret_cast<volatile uint32_t *>(lic + ((intid - kFirstSpi) / 32) * 0x100 + offset);
+        return reinterpret_cast<volatile uint32_t *>(lic + static_cast<uintptr_t>((intid - kFirstSpi) / 32) * 0x100 +
+                                                     offset);
     }
 
     bool isEdge(uint32_t intid) const
     {
-        return (edge[intid / 32] >> (intid % 32)) & 1;
+        return ((edge[intid / 32] >> (intid % 32)) & 1) != 0u;
     }
 
     static bool isFrame(uint32_t intid)
@@ -178,7 +181,7 @@ class ArmGIC : public IOInterruptController {
     // GICv2 breaks a priority tie by lowest INTID, so with one priority for every SPI the GPU fence lines (189/190)
     // lose CPU0 to any lower-numbered SPI also pending: during A2DP pairing UART-D (122) kept the GPU fence pending
     // for over a second and backboardd's waitFence panicked.
-    uint8_t priorityFor(uint32_t intid) const
+    static uint8_t priorityFor(uint32_t intid)
     {
         if (isFrame(intid))
             return kFramePriority;
@@ -195,7 +198,7 @@ class ArmGIC : public IOInterruptController {
     // The CPU interface of the highest-numbered core whose interface ArmCpu has enabled (it publishes the core's
     // GICD_ITARGETSR0 byte only then), or 0 if no secondary core takes interrupts yet. ArmCpu dispatches an SPI on
     // whichever core takes it, and a secondary never goes offline unless system sleep is on (ArmCpu::haltCPU).
-    uint8_t frameTarget() const
+    static uint8_t frameTarget()
     {
         for (uint32_t cpu = 7; cpu > 0; --cpu) {
             const uint32_t target = __atomic_load_n(&armcpu_gic_targets[cpu], __ATOMIC_ACQUIRE);
@@ -221,7 +224,7 @@ class ArmGIC : public IOInterruptController {
         return target && target <= 0xff && !(target & (target - 1)) ? static_cast<uint8_t>(target) : 0;
     }
 
-    uint8_t steerTarget(uint32_t intid) const
+    static uint8_t steerTarget(uint32_t intid)
     {
         if (isFrame(intid))
             return frameTarget();
@@ -247,11 +250,9 @@ class ArmGIC : public IOInterruptController {
     const char *setup();
     IOService *makeNub(uint32_t intid);
 
-protected:
-    void free() override;
-
 public:
-    static ArmGIC *shared();
+    void free() override;
+    static LIBKERN_RETURNS_NOT_RETAINED ArmGIC *shared();
     void suspend();
     void resume();
     void cpuOnline(uint32_t cpu);
@@ -314,12 +315,14 @@ ArmGIC *ArmGIC::shared()
 // CPU interface, size} in /arm-io bus addresses, /arm-io ranges = {bus base, physical base, size}.
 bool ArmGIC::mapDistributor(uint64_t *physical)
 {
-    IORegistryEntry *soc = IORegistryEntry::fromPath("/arm-io", gIODTPlane);
-    IORegistryEntry *gic = IORegistryEntry::fromPath("/arm-io/intc", gIODTPlane);
-    OSData *ranges = soc ? OSDynamicCast(OSData, soc->getProperty("ranges")) : nullptr;
-    OSData *reg = gic ? OSDynamicCast(OSData, gic->getProperty("reg")) : nullptr;
-    uint64_t bus[3] = {}, regions[4] = {};
-    const bool found = ranges && ranges->getLength() == sizeof(bus) && reg && reg->getLength() == sizeof(regions);
+    const IORegistryEntry *soc = IORegistryEntry::fromPath("/arm-io", gIODTPlane);
+    const IORegistryEntry *gic = IORegistryEntry::fromPath("/arm-io/intc", gIODTPlane);
+    const OSData *ranges = soc ? OSDynamicCast(OSData, soc->getProperty("ranges")) : nullptr;
+    const OSData *reg = gic ? OSDynamicCast(OSData, gic->getProperty("reg")) : nullptr;
+    uint64_t bus[3] = {};
+    uint64_t regions[4] = {};
+    const bool found = (ranges != nullptr) && ranges->getLength() == sizeof(bus) && (reg != nullptr) &&
+                       reg->getLength() == sizeof(regions);
     if (found) {
         memcpy(bus, ranges->getBytesNoCopy(), sizeof(bus));
         memcpy(regions, reg->getBytesNoCopy(), sizeof(regions));
@@ -382,6 +385,7 @@ const char *ArmGIC::setup()
     IOPlatformExpert *platform = getPlatform();
     if (!platform || !attach(platform))
         return "cannot attach to the platform expert";
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): registerInterruptController takes a non-const symbol
     platform->registerInterruptController(const_cast<OSSymbol *>(name), this);
     return nullptr;
 }
@@ -416,11 +420,11 @@ IOService *ArmGIC::makeNub(uint32_t intid)
     const IOInterruptVectorNumber number = static_cast<IOInterruptVectorNumber>(intid);
     const OSObject *controllerNames[] = {name};
     OSArray *controllers = OSArray::withObjects(controllerNames, 1);
-    OSData *specifier = OSData::withBytes(&number, sizeof(number));
+    const OSData *specifier = OSData::withBytes(&number, sizeof(number));
     const OSObject *specifierList[] = {specifier};
     OSArray *specifiers = specifier ? OSArray::withObjects(specifierList, 1) : nullptr;
     IOService *nub = OSTypeAlloc(IOService);
-    bool made = controllers && specifiers && nub && nub->init() &&
+    bool made = (controllers != nullptr) && (specifiers != nullptr) && (nub != nullptr) && nub->init() &&
                 nub->setProperty(gIOInterruptControllersKey, controllers) &&
                 nub->setProperty(gIOInterruptSpecifiersKey, specifiers);
     if (made) {
@@ -449,10 +453,11 @@ IOService *ArmGIC::nubFor(uint32_t intid, bool edgeTriggered)
     }
     if (!nub) {
         // The trigger is recorded before the nub exists, so getVectorType() already knows it at registration.
-        if (edgeTriggered)
+        if (edgeTriggered) {
             edge[intid / 32] |= 1U << (intid % 32);
-        else
+        } else {
             edge[intid / 32] &= ~(1U << (intid % 32));
+        }
         nub = makeNub(intid);
         nubs[intid] = nub;  // keeps the creation reference: nubs live as long as the controller
         if (!nub)
@@ -477,7 +482,7 @@ IOReturn ArmGIC::handleInterrupt(void *, IOService *, int source)
     vector->interruptActive = 1;
     OSMemoryBarrier();
     if (!vector->interruptDisabledSoft) {
-        const bool trace = (gIOKitTrace & kIOTraceInterrupts) != 0;
+        const bool trace = (static_cast<uint64_t>(gIOKitTrace) & kIOTraceInterrupts) != 0;
         if (trace)
             timeStampInterruptHandlerStart(static_cast<IOInterruptVectorNumber>(intid), vector);
         vector->handler(vector->target, vector->refCon, vector->nub, vector->source);
@@ -504,8 +509,9 @@ void ArmGIC::initVector(IOInterruptVectorNumber vectorNumber, IOInterruptVector 
     write8(GICD_IPRIORITYR + intid, priorityFor(intid));
     const uint8_t target = targetFor(intid);
     write8(GICD_ITARGETSR + intid, target);
-    const uint32_t config = GICD_ICFGR + (intid / 16) * 4, edgeBit = 2U << ((intid % 16) * 2);
-    IOInterruptState state = IOSimpleLockLockDisableInterrupt(controllerLock);
+    const uint32_t config = GICD_ICFGR + (intid / 16) * 4;
+    const uint32_t edgeBit = 2U << ((intid % 16) * 2);
+    const IOInterruptState state = IOSimpleLockLockDisableInterrupt(controllerLock);
     write32(config, isEdge(intid) ? (read32(config) | edgeBit) : (read32(config) & ~edgeBit));
     if (licCovers(intid)) {
         volatile uint32_t *iepClass = licRegister(intid, ICTLR_CPU_IEP_CLASS);
@@ -564,8 +570,9 @@ void ArmGIC::describe(uint32_t intid, char *buffer, size_t size) const
              "INTID %u: fired %u, registered %u, soft-off %u, gicd en %u pend %u act %u, %s, prio %#x, "
              "target %#x, lic ier %d",
              intid, fired[intid], vector.interruptRegistered, vector.interruptDisabledSoft,
-             readBit(GICD_ISENABLER, intid), readBit(GICD_ISPENDR, intid), readBit(GICD_ISACTIVER, intid),
-             isEdge(intid) ? "edge" : "level", read8(GICD_IPRIORITYR + intid), read8(GICD_ITARGETSR + intid),
+             static_cast<int>(readBit(GICD_ISENABLER, intid)), static_cast<int>(readBit(GICD_ISPENDR, intid)),
+             static_cast<int>(readBit(GICD_ISACTIVER, intid)), isEdge(intid) ? "edge" : "level",
+             read8(GICD_IPRIORITYR + intid), read8(GICD_ITARGETSR + intid),
              licCovers(intid) ? static_cast<int>((*licRegister(intid, ICTLR_CPU_IER) >> (intid % 32)) & 1) : -1);
 }
 
@@ -584,8 +591,10 @@ void ArmGIC::suspend()
         savedTarget[i] = read32(GICD_ITARGETSR + i * 4);
     }
     for (uint32_t bank = 0; lic && bank < kLicBanks; ++bank) {
-        savedLicEnable[bank] = *reinterpret_cast<volatile uint32_t *>(lic + bank * 0x100 + ICTLR_CPU_IER);
-        savedLicClass[bank] = *reinterpret_cast<volatile uint32_t *>(lic + bank * 0x100 + ICTLR_CPU_IEP_CLASS);
+        savedLicEnable[bank] =
+            *reinterpret_cast<volatile uint32_t *>(lic + static_cast<uintptr_t>(bank) * 0x100 + ICTLR_CPU_IER);
+        savedLicClass[bank] =
+            *reinterpret_cast<volatile uint32_t *>(lic + static_cast<uintptr_t>(bank) * 0x100 + ICTLR_CPU_IEP_CLASS);
     }
 }
 
@@ -602,9 +611,12 @@ void ArmGIC::resume()
         write32(GICD_ITARGETSR + i * 4, savedTarget[i]);
     }
     for (uint32_t bank = 0; lic && bank < kLicBanks; ++bank) {
-        *reinterpret_cast<volatile uint32_t *>(lic + bank * 0x100 + ICTLR_CPU_IEP_CLASS) = savedLicClass[bank];
-        *reinterpret_cast<volatile uint32_t *>(lic + bank * 0x100 + ICTLR_CPU_IER_CLR) = ~savedLicEnable[bank];
-        *reinterpret_cast<volatile uint32_t *>(lic + bank * 0x100 + ICTLR_CPU_IER_SET) = savedLicEnable[bank];
+        *reinterpret_cast<volatile uint32_t *>(lic + static_cast<uintptr_t>(bank) * 0x100 + ICTLR_CPU_IEP_CLASS) =
+            savedLicClass[bank];
+        *reinterpret_cast<volatile uint32_t *>(lic + static_cast<uintptr_t>(bank) * 0x100 + ICTLR_CPU_IER_CLR) =
+            ~savedLicEnable[bank];
+        *reinterpret_cast<volatile uint32_t *>(lic + static_cast<uintptr_t>(bank) * 0x100 + ICTLR_CPU_IER_SET) =
+            savedLicEnable[bank];
     }
     for (uint32_t i = kFirstSpi / 32; i < intids / 32; ++i)
         write32(GICD_ISENABLER + i * 4, savedEnable[i]);
@@ -652,7 +664,7 @@ extern "C" void arm_gic_resume(void)
 extern "C" bool switch_gic_dispatch(uint32_t intid)
 {
     ArmGIC *gic = __atomic_load_n(&gGic, __ATOMIC_ACQUIRE);
-    return gic && gic->handleInterrupt(nullptr, nullptr, static_cast<int>(intid)) == kIOReturnSuccess;
+    return (gic != nullptr) && gic->handleInterrupt(nullptr, nullptr, static_cast<int>(intid)) == kIOReturnSuccess;
 }
 
 int switch_check_after_ms(IOTimerEventSource *timer, uint32_t ms)
@@ -662,7 +674,7 @@ int switch_check_after_ms(IOTimerEventSource *timer, uint32_t ms)
     return timer->setTimeout(kIOTimeOptionsWithLeeway, interval, interval);
 }
 
-bool switch_interrupts_ready(void)
+bool switch_interrupts_ready()
 {
     return ArmGIC::shared() != nullptr;
 }
@@ -675,35 +687,40 @@ IOService *switch_interrupt_nub(uint32_t intid, bool edgeTriggered)
     if (!gic) {
         uint64_t deadline = 0;
         clock_interval_to_deadline(10, NSEC_PER_SEC, &deadline);
+        // NOLINTNEXTLINE(clang-analyzer-osx.cocoa.RetainCount): shared() lends the singleton, it is never released
         while (!(gic = ArmGIC::shared())) {
             if (armcpu_gic_ready && armcpu_gic_version != 2) {
                 panic("ArmGIC: INTID %u asked for, but the interrupt controller is GICv%u", intid, armcpu_gic_version);
             }
-            assert_wait_deadline((event_t)&armcpu_gic_targets[0], THREAD_UNINT, deadline);
-            if ((gic = ArmGIC::shared())) {
+            assert_wait_deadline(reinterpret_cast<event_t>(reinterpret_cast<uintptr_t>(&armcpu_gic_targets[0])),
+                                 THREAD_UNINT, deadline);
+            gic = ArmGIC::shared();
+            if (gic) {
                 clear_wait(current_thread(), THREAD_AWAKENED);
                 break;
             }
-            if (thread_block(THREAD_CONTINUE_NULL) == THREAD_TIMED_OUT && !(gic = ArmGIC::shared())) {
+            if (thread_block(THREAD_CONTINUE_NULL) == THREAD_TIMED_OUT && !ArmGIC::shared()) {
                 panic("ArmGIC: INTID %u asked for, GIC not up after 10 s (version %u, ready %u, cpu0 target %#x)",
                       intid, armcpu_gic_version, armcpu_gic_ready, armcpu_gic_targets[0]);
             }
         }
     }
+    // NOLINTNEXTLINE(clang-analyzer-osx.cocoa.RetainCount): shared() lends the singleton, it is never released
     return gic->nubFor(intid, edgeTriggered);
 }
 
 uint32_t switch_interrupt_count(uint32_t intid)
 {
-    ArmGIC *gic = __atomic_load_n(&gGic, __ATOMIC_ACQUIRE);
+    const ArmGIC *gic = __atomic_load_n(&gGic, __ATOMIC_ACQUIRE);
     return gic ? gic->count(intid) : 0;
 }
 
 void switch_interrupt_describe(uint32_t intid, char *buffer, size_t size)
 {
-    ArmGIC *gic = __atomic_load_n(&gGic, __ATOMIC_ACQUIRE);
-    if (gic)
+    const ArmGIC *gic = __atomic_load_n(&gGic, __ATOMIC_ACQUIRE);
+    if (gic) {
         gic->describe(intid, buffer, size);
-    else
+    } else {
         snprintf(buffer, size, "INTID %u: no GIC controller", intid);
+    }
 }

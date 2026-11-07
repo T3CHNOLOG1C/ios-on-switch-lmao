@@ -12,7 +12,7 @@ extern "C" {
 
 static inline uint64_t switch_abs_from_ns(uint64_t ns)
 {
-    uint64_t abs;
+    uint64_t abs = 0;
     nanoseconds_to_absolutetime(ns, &abs);
     return abs;
 }
@@ -29,7 +29,7 @@ static inline uint64_t switch_abs_from_ms(uint64_t ms)
 
 static inline uint64_t switch_abs_to_ns(uint64_t abs)
 {
-    uint64_t ns;
+    uint64_t ns = 0;
     absolutetime_to_nanoseconds(abs, &ns);
     return ns;
 }
@@ -44,7 +44,7 @@ static inline uint64_t switch_abs_to_ms(uint64_t abs)
     return switch_abs_to_ns(abs) / NSEC_PER_MSEC;
 }
 
-static inline uint64_t switch_now_us(void)
+static inline uint64_t switch_now_us()
 {
     return switch_abs_to_us(mach_absolute_time());
 }
@@ -61,14 +61,14 @@ static inline uint64_t switch_ms_since(uint64_t start_abs)
 
 static inline uint64_t switch_deadline_us(uint32_t us)
 {
-    uint64_t deadline;
+    uint64_t deadline = 0;
     clock_interval_to_deadline(us, NSEC_PER_USEC, &deadline);
     return deadline;
 }
 
 static inline uint64_t switch_deadline_ms(uint32_t ms)
 {
-    uint64_t deadline;
+    uint64_t deadline = 0;
     clock_interval_to_deadline(ms, NSEC_PER_MSEC, &deadline);
     return deadline;
 }

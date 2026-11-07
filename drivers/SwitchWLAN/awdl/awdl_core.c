@@ -39,7 +39,7 @@ void awdl_log(struct awdl_core *c, const char *fmt, ...)
     if (!c->host.log)
         return;
     char line[160];
-    va_list ap;
+    va_list ap;  // NOLINT(cppcoreguidelines-init-variables): va_start initializes it
     va_start(ap, fmt);
     vsnprintf(line, sizeof line, fmt, ap);
     va_end(ap);
@@ -64,9 +64,10 @@ static int native(const struct awdl_core *c)
 // Native backend: whether the bring-up probe found `name` missing from the firmware's table.
 static int fw_absent(const struct awdl_core *c, const char *name)
 {
-    for (unsigned i = 0; i < BCM_PROBE_COUNT; ++i)
+    for (unsigned i = 0; i < BCM_PROBE_COUNT; ++i) {
         if (!strcmp(bcm_probe_names[i], name))
             return (c->cfg.fw_absent >> i) & 1;
+    }
     return 0;
 }
 
@@ -102,15 +103,17 @@ static void fw_u32(struct awdl_core *c, const char *name, uint32_t v)
 // awdl_peer_op: an add carries the peer's HT capabilities element, built from its AWDL HT TLV (as macOS passes it).
 static void fw_peer_op(struct awdl_core *c, uint8_t op, const struct awdl_peer *p)
 {
-    uint8_t ie[BCM_HT_CAP_IE_LEN], b[BCM_AWDL_PEER_OP_HDR_LEN + BCM_AWDL_PEER_IES_MAX];
+    uint8_t ie[BCM_HT_CAP_IE_LEN];
+    uint8_t b[BCM_AWDL_PEER_OP_HDR_LEN + BCM_AWDL_PEER_IES_MAX];
     size_t ies = 0;
     if (op == BCM_AWDL_PEER_OP_ADD && p->has_ht)
         ies = bcm_ht_cap_ie(ie, p->ht_caps, p->ht_ampdu, p->ht_mcs);
     fw_set(c, "awdl_peer_op", b, bcm_awdl_peer_op(b, sizeof b, op, p->addr, ie, ies));
-    if (op == BCM_AWDL_PEER_OP_ADD)
+    if (op == BCM_AWDL_PEER_OP_ADD) {
         c->stats.peer_adds++;
-    else
+    } else {
         c->stats.peer_dels++;
+    }
 }
 
 static void native_push_sync(struct awdl_core *c);
@@ -137,7 +140,7 @@ uint64_t awdl_core_aw_start(const struct awdl_core *c, uint16_t seq, uint64_t no
 
 static unsigned slot_of(uint16_t aw)
 {
-    return (unsigned)(aw / AWDL_EAW_AWS) % AWDL_SEQ_SLOTS;
+    return (aw / AWDL_EAW_AWS) % AWDL_SEQ_SLOTS;
 }
 
 struct awdl_chan awdl_core_channel_at(const struct awdl_core *c, uint64_t now)
@@ -211,7 +214,8 @@ static void run_election(struct awdl_core *c, uint64_t now)
             best = k;
     }
     const enum awdl_role was = c->role;
-    uint8_t old_parent[6], old_root[6];
+    uint8_t old_parent[6];
+    uint8_t old_root[6];
     memcpy(old_parent, c->adv.parent, 6);
     memcpy(old_root, c->adv.root, 6);
     c->role = best.root == self ? AWDL_ROLE_ROOT : AWDL_ROLE_FOLLOWER;
@@ -222,24 +226,27 @@ static void run_election(struct awdl_core *c, uint64_t now)
     c->adv.root_metric = best.metric;
     c->adv.self_metric = c->cfg.self_metric;
     c->adv.self_counter = c->self_counter;
-    if (was != c->role || !addr_eq(old_parent, c->adv.parent) || !addr_eq(old_root, c->adv.root))
+    if (was != c->role || !addr_eq(old_parent, c->adv.parent) || !addr_eq(old_root, c->adv.root)) {
         awdl_log(c, "AWDL: %s, root %02x:%02x:%02x:%02x:%02x:%02x metric %u, %u hops",
                  c->role == AWDL_ROLE_ROOT ? "root" : "follower", best.root[0], best.root[1], best.root[2],
                  best.root[3], best.root[4], best.root[5], best.metric, best.hops);
+    }
 }
 
 // ---- peers ----------------------------------------------------------------------------------------------------------
 const struct awdl_peer *awdl_core_find(const struct awdl_core *c, const uint8_t addr[6])
 {
-    for (unsigned i = 0; i < AWDL_MAX_PEERS; ++i)
+    for (unsigned i = 0; i < AWDL_MAX_PEERS; ++i) {
         if (c->peers[i].used && addr_eq(c->peers[i].addr, addr))
             return &c->peers[i];
+    }
     return NULL;
 }
 
 static struct awdl_peer *peer_get(struct awdl_core *c, const uint8_t addr[6], uint64_t now)
 {
-    struct awdl_peer *free_slot = NULL, *oldest = NULL;
+    struct awdl_peer *free_slot = NULL;
+    struct awdl_peer *oldest = NULL;
     for (unsigned i = 0; i < AWDL_MAX_PEERS; ++i) {
         struct awdl_peer *p = &c->peers[i];
         if (p->used && addr_eq(p->addr, addr))
@@ -272,9 +279,10 @@ static void peer_lost(struct awdl_core *c, struct awdl_peer *p, const char *why)
 
 static void expire_peers(struct awdl_core *c, uint64_t now)
 {
-    for (unsigned i = 0; i < AWDL_MAX_PEERS; ++i)
+    for (unsigned i = 0; i < AWDL_MAX_PEERS; ++i) {
         if (c->peers[i].used && now - c->peers[i].last_seen > AWDL_PEER_TIMEOUT_US)
             peer_lost(c, &c->peers[i], "timeout");
+    }
 }
 
 const struct awdl_peer *awdl_core_peer(const struct awdl_core *c, unsigned i)
@@ -297,7 +305,10 @@ static void sync_to(struct awdl_core *c, const struct awdl_peer *p, uint64_t now
     const int64_t err = (int64_t)(p->next_aw_tsf - predicted);
     c->base_tsf = p->next_aw_tsf;
     c->base_seq = p->next_aw_seq;
-    c->stats.last_sync_error_us = (int32_t)(err > INT32_MAX ? INT32_MAX : err < INT32_MIN ? INT32_MIN : err);
+    int64_t clamped = err < INT32_MIN ? INT32_MIN : err;
+    if (err > INT32_MAX)
+        clamped = INT32_MAX;
+    c->stats.last_sync_error_us = (int32_t)clamped;
     if (err > AWDL_RESYNC_US || err < -AWDL_RESYNC_US) {
         c->stats.resyncs++;
         install_schedule(c, now);
@@ -317,10 +328,10 @@ static void handle_af(struct awdl_core *c, const struct awdl_af *a, const struct
     p->last_seen = m->tsf;
     p->rssi = p->frames ? (int8_t)((3 * p->rssi + m->rssi) / 4) : m->rssi;
     p->frames++;
-    if (a->present & (1u << AWDL_TLV_ELECTION_PARAMS_V2)) {
+    if (a->present & awdl_tlv_bit(AWDL_TLV_ELECTION_PARAMS_V2)) {
         p->election = a->election2;
         p->has_v2 = 1;
-    } else if (a->present & (1u << AWDL_TLV_ELECTION_PARAMS)) {  // a v1-only peer: its master is the root
+    } else if (a->present & awdl_tlv_bit(AWDL_TLV_ELECTION_PARAMS)) {  // a v1-only peer: its master is the root
         memset(&p->election, 0, sizeof p->election);
         memcpy(p->election.root, a->election.master, 6);
         memcpy(p->election.parent, a->src, 6);
@@ -329,26 +340,26 @@ static void handle_af(struct awdl_core *c, const struct awdl_af *a, const struct
         p->election.self_metric = a->election.self_metric;
         p->has_v2 = 1;
     }
-    if (a->present & (1u << AWDL_TLV_CHANNEL_SEQUENCE)) {
+    if (a->present & awdl_tlv_bit(AWDL_TLV_CHANNEL_SEQUENCE)) {
         p->seq = a->chanseq;
         p->has_seq = 1;
-    } else if ((a->present & (1u << AWDL_TLV_SYNC_PARAMS)) && a->sync.has_seq) {
+    } else if ((a->present & awdl_tlv_bit(AWDL_TLV_SYNC_PARAMS)) && a->sync.has_seq) {
         p->seq = a->sync.seq;
         p->has_seq = 1;
     }
-    if (a->present & (1u << AWDL_TLV_VERSION)) {
+    if (a->present & awdl_tlv_bit(AWDL_TLV_VERSION)) {
         p->awdl_version = a->awdl_version;
         p->device_class = a->device_class;
     }
-    if ((a->present & (1u << AWDL_TLV_ARPA)) && a->hostname[0])
+    if ((a->present & awdl_tlv_bit(AWDL_TLV_ARPA)) && a->hostname[0])
         memcpy(p->hostname, a->hostname, sizeof p->hostname);
-    const int timed = (a->present & (1u << AWDL_TLV_SYNC_PARAMS)) != 0;
+    const int timed = (a->present & awdl_tlv_bit(AWDL_TLV_SYNC_PARAMS)) != 0;
     if (timed) {
         p->sync = a->sync;
         p->next_aw_tsf = sender_next_aw(a, m->tsf);
         p->next_aw_seq = (uint16_t)(a->sync.aw_seq + 1);
     }
-    if (a->present & (1u << AWDL_TLV_HT_CAPS)) {
+    if (a->present & awdl_tlv_bit(AWDL_TLV_HT_CAPS)) {
         p->has_ht = 1;
         p->ht_caps = a->ht_caps;
         p->ht_ampdu = a->ht_ampdu;
@@ -366,7 +377,7 @@ static void handle_af(struct awdl_core *c, const struct awdl_af *a, const struct
             native_learn_social(c, p, m->tsf);
     }
     if (!p->reachable && timed && p->has_seq &&
-        (a->subtype == AWDL_SUBTYPE_MIF || (a->present & (1u << AWDL_TLV_DATA_PATH_STATE)))) {
+        (a->subtype == AWDL_SUBTYPE_MIF || (a->present & awdl_tlv_bit(AWDL_TLV_DATA_PATH_STATE)))) {
         p->reachable = 1;
         awdl_log(c, "AWDL: peer %02x:%02x:%02x:%02x:%02x:%02x \"%s\" reachable, %d dBm, version %#x class %u",
                  p->addr[0], p->addr[1], p->addr[2], p->addr[3], p->addr[4], p->addr[5], p->hostname, p->rssi,
@@ -446,7 +457,7 @@ static uint64_t af_target(const struct awdl_core *c, uint64_t now, uint16_t *cou
 
 size_t awdl_core_build_af(struct awdl_core *c, uint8_t subtype, uint64_t now, uint8_t *buf, size_t size)
 {
-    uint16_t counter;
+    uint16_t counter = 0;
     const uint64_t target = af_target(c, now, &counter);
     const uint16_t aw_at_target = awdl_core_aw_seq(c, target);
     const struct awdl_chan ch = awdl_core_channel_at(c, target);
@@ -457,7 +468,7 @@ size_t awdl_core_build_af(struct awdl_core *c, uint8_t subtype, uint64_t now, ui
     memset(hdr + 4, 0xff, 6);
     memcpy(hdr + 10, c->cfg.addr, 6);
     memcpy(hdr + 16, awdl_bssid, 6);
-    awdl_put16(hdr + 22, (uint16_t)((c->mgmt_seq++ & 0xfff) << 4));
+    awdl_put16(hdr + 22, (uint16_t)((c->mgmt_seq++ & 0xfffu) << 4));
     awdl_w_bytes(&w, hdr, 24);
     const uint8_t fixed[8] = {0x7f, awdl_oui[0], awdl_oui[1], awdl_oui[2], 0x08, 0x10, subtype, 0};
     awdl_w_bytes(&w, fixed, 8);
@@ -536,10 +547,11 @@ static void send_af(struct awdl_core *c, uint8_t subtype, uint64_t now)
         return;
     }
     c->stats.af_tx++;
-    if (subtype == AWDL_SUBTYPE_PSF)
+    if (subtype == AWDL_SUBTYPE_PSF) {
         c->stats.psf_tx++;
-    else
+    } else {
         c->stats.mif_tx++;
+    }
 }
 
 // ---- data path --------------------------------------------------------------------------------------------------------
@@ -568,10 +580,11 @@ static void flush(struct awdl_core *c, uint64_t now)
         struct awdl_txq_entry *e = &c->txq[(c->txq_head + i) % AWDL_TXQ_FRAMES];
         if (listening(c, e->dst, now)) {
             const uint16_t freq = awdl_chan_freq(awdl_core_channel_at(c, now));
-            if (c->host.tx(c->host.ctx, e->frame, e->len, freq, 0, e->group))
+            if (c->host.tx(c->host.ctx, e->frame, e->len, freq, 0, e->group)) {
                 c->stats.tx_refused++;
-            else
+            } else {
                 c->stats.data_tx++;
+            }
             continue;
         }
         if (!e->group && !awdl_core_find(c, e->dst)) {
@@ -649,9 +662,10 @@ static void handle_data(struct awdl_core *c, const uint8_t *f, size_t len, const
     if (!is_group(c->scratch) && !addr_eq(c->scratch, c->cfg.addr))
         return;  // someone else's
     struct awdl_peer *p = NULL;
-    for (unsigned i = 0; i < AWDL_MAX_PEERS; ++i)
+    for (unsigned i = 0; i < AWDL_MAX_PEERS; ++i) {
         if (c->peers[i].used && addr_eq(c->peers[i].addr, c->scratch + 6))
             p = &c->peers[i];
+    }
     if (p) {
         p->last_seen = m->tsf;
         if (retry && p->has_data_seq && p->last_data_seq == seq)
@@ -696,12 +710,13 @@ static void schedule_from(struct awdl_chan out[AWDL_SEQ_SLOTS], uint16_t mask, s
                           uint8_t first, uint8_t second)
 {
     for (unsigned i = 0; i < AWDL_SEQ_SLOTS; ++i) {
-        if (i == 8)
+        if (i == 8) {
             out[i] = (struct awdl_chan){6, 81};
-        else if ((mask >> i) & 1)
+        } else if (((unsigned)mask >> i) & 1u) {
             out[i] = social5_chan(i < 8 ? first : second);
-        else
+        } else {
             out[i] = free_chan;  // the access point's channel, or empty while unassociated
+        }
     }
 }
 
@@ -709,10 +724,11 @@ void awdl_schedule(struct awdl_chan out[AWDL_SEQ_SLOTS], uint16_t infra_mhz, uin
 {
     const struct awdl_chan infra = awdl_chan_of_freq(infra_mhz);
     const uint8_t ip = infra.number;
-    uint8_t first = social5, second = social5;
-    if (ip == 44 || ip == 149)
+    uint8_t first = social5;
+    uint8_t second = social5;
+    if (ip == 44 || ip == 149) {
         first = second = ip;
-    else if (social5 != 44 && social5 != 149) {
+    } else if (social5 != 44 && social5 != 149) {
         first = 149;  // no master heard yet: both 5 GHz social channels, so either kind of peer meets us
         second = 44;
     }
@@ -735,7 +751,12 @@ uint16_t awdl_social_map(const struct awdl_chan seq[AWDL_SEQ_SLOTS])
     uint16_t map = 0;
     for (unsigned i = 0; i < AWDL_SEQ_SLOTS; ++i) {
         const uint8_t p = awdl_chan_primary(seq[i]);
-        map |= p == 6 ? 0x1 : p == 44 ? 0x2 : p == 149 ? 0x4 : 0;
+        if (p == 6)
+            map |= 0x1u;
+        if (p == 44)
+            map |= 0x2u;
+        if (p == 149)
+            map |= 0x4u;
     }
     return map;
 }
@@ -755,23 +776,26 @@ static void native_build_seq(struct awdl_core *c)
         return;
     }
     awdl_schedule(c->cfg.seq, c->infra_mhz, c->social5, (enum awdl_mode)c->mode);
-    for (unsigned i = 0; c->seq_no_empty && i < AWDL_SEQ_SLOTS; ++i)
+    for (unsigned i = 0; c->seq_no_empty && i < AWDL_SEQ_SLOTS; ++i) {
         if (!c->cfg.seq[i].number)
             c->cfg.seq[i] = c->cfg.seq[0];
+    }
 }
 
 static void native_schedule(struct awdl_core *c)
 {
     uint8_t b[BCM_AWDL_SLOT_BSS_LEN];
-    if (c->created_with == BCM_AWDL_API_IFC_V3 && !fw_absent(c, "slot_bss"))
+    if (c->created_with == BCM_AWDL_API_IFC_V3 && !fw_absent(c, "slot_bss")) {
         fw_set(c, "slot_bss", b, bcm_slot_bss(b, awdl_slot_mask(c->infra_mhz, (enum awdl_mode)c->mode)));
-    else
+    } else {
         fw_set(c, "awdl_chan_seq", b, bcm_awdl_chan_seq(b, sizeof b, c->cfg.seq, AWDL_SEQ_SLOTS));
+    }
 }
 
 static void native_payload(struct awdl_core *c)
 {
-    uint8_t tlvs[256], b[512];
+    uint8_t tlvs[256];
+    uint8_t b[512];
     const size_t n = awdl_core_build_payload(c, tlvs, sizeof tlvs);
     fw_set(c, "awdl_payload", b, bcm_awdl_payload(b, sizeof b, c->payload_u16, tlvs, n));
 }
@@ -779,20 +803,22 @@ static void native_payload(struct awdl_core *c)
 static void native_election(struct awdl_core *c)
 {
     uint8_t b[BCM_AWDL_ELECTION_TREE_LEN];
-    if (c->role == AWDL_ROLE_FOLLOWER)
+    if (c->role == AWDL_ROLE_FOLLOWER) {
         bcm_awdl_election_tree(b, c->adv.root, c->adv.root_metric, (uint8_t)c->adv.hops);
-    else
+    } else {
         bcm_awdl_election_tree(b, c->cfg.addr, BCM_AWDL_SELF_METRIC, 0);
+    }
     fw_set(c, "awdl_election_tree", b, sizeof b);
 }
 
 static void native_opmode(struct awdl_core *c)
 {
     uint8_t b[BCM_AWDL_OPMODE_LEN];
-    if (c->role == AWDL_ROLE_FOLLOWER)
+    if (c->role == AWDL_ROLE_FOLLOWER) {
         bcm_awdl_opmode(b, BCM_AWDL_ROLE_SLAVE, c->adv.parent);
-    else
+    } else {
         bcm_awdl_opmode(b, BCM_AWDL_ROLE_MASTER, c->cfg.addr);
+    }
     fw_set(c, "awdl_opmode", b, sizeof b);
 }
 
@@ -805,7 +831,8 @@ static void native_sync_params(struct awdl_core *c)
 // The series' brcmf_awdl_refresh: our frames' TLVs and the synchronisation state again.
 static void native_refresh(struct awdl_core *c)
 {
-    uint8_t tlvs[256], b[512];
+    uint8_t tlvs[256];
+    uint8_t b[512];
     struct awdl_writer w = {tlvs, sizeof tlvs, 0, 0, 0};
     write_extras(c, &w, 0);  // out-of-band frames: what a PSF carries beyond sync and election
     fw_set(c, "awdl_oob_af_auto", b, w.overflow ? 0 : bcm_awdl_oob_auto(b, sizeof b, tlvs, w.at));
@@ -836,13 +863,16 @@ static void native_learn_social(struct awdl_core *c, const struct awdl_peer *p, 
     (void)now;
     if (!p->has_seq || !p->seq.count)
         return;
-    unsigned n44 = 0, n149 = 0;
+    unsigned n44 = 0;
+    unsigned n149 = 0;
     for (unsigned i = 0; i < p->seq.count && i < AWDL_SEQ_SLOTS; ++i) {
         const uint8_t ch = awdl_chan_primary(p->seq.chan[i]);
         n44 += ch == 44;
         n149 += ch == 149;
     }
-    const uint8_t want = n44 > n149 ? 44 : n149 ? 149 : 0;
+    uint8_t want = n149 ? 149 : 0;
+    if (n44 > n149)
+        want = 44;
     if (!want || want == c->social5 || c->created_with == BCM_AWDL_API_IFC_V3)
         return;
     c->social5 = want;
@@ -858,7 +888,7 @@ static void native_fail(struct awdl_core *c, const char *fmt, ...) __attribute__
 static void native_fail(struct awdl_core *c, const char *fmt, ...)
 {
     char why[120];
-    va_list ap;
+    va_list ap;  // NOLINT(cppcoreguidelines-init-variables): va_start initializes it
     va_start(ap, fmt);
     vsnprintf(why, sizeof why, fmt, ap);
     va_end(ap);
@@ -883,10 +913,11 @@ static void native_create(struct awdl_core *c, uint8_t api, uint64_t now)
     c->payload_u16 = api == BCM_AWDL_API_IFC_V3;
     c->payload_switched = 0;
     c->seq_no_empty = 0;
-    if (api == BCM_AWDL_API_IFC_V3)
+    if (api == BCM_AWDL_API_IFC_V3) {
         fw_req(c, 0, 1, "interface_create", b, bcm_ifc_v3_awdl(b, c->cfg.addr));
-    else
+    } else {
         fw_req(c, 0, 0, awdl_if_name(c), b, bcm_awdl_if2(b, BCM_AWDL_IFIDX, 1, awdl_bssid, c->cfg.addr));
+    }
     c->nstate = AWDL_N_CREATING;
     c->create_deadline = now + AWDL_CREATE_TIMEOUT_US;
     awdl_log(c, "AWDL: making the firmware's AWDL interface (%s, %02x:%02x:%02x:%02x:%02x:%02x)",
@@ -934,9 +965,10 @@ static void native_enable(struct awdl_core *c, uint64_t now)
     native_refresh(c);
     c->aftx_at = now + AWDL_AFTX_DELAY_US;
     c->settle_at = now + AWDL_SETTLE_DELAY_US;
-    for (unsigned i = 0; i < AWDL_MAX_PEERS; ++i)
+    for (unsigned i = 0; i < AWDL_MAX_PEERS; ++i) {
         if (c->peers[i].used && c->peers[i].reachable)
             fw_peer_op(c, BCM_AWDL_PEER_OP_ADD, &c->peers[i]);
+    }
     awdl_log(c, "AWDL: started (firmware AWDL, %s), ifidx %d bsscfg %u, social %u/%u, infra %u MHz",
              bcm_awdl_api_name((enum bcm_awdl_api)c->created_with), (int)c->fw_ifidx, c->fw_bsscfg,
              awdl_chan_primary(c->cfg.seq[0]), awdl_chan_primary(c->cfg.seq[9]), c->infra_mhz);
@@ -947,16 +979,17 @@ static void native_enable(struct awdl_core *c, uint64_t now)
 static void log_schedule(struct awdl_core *c, const char *fmt, ...)
 {
     char why[96];
-    va_list ap;
+    va_list ap;  // NOLINT(cppcoreguidelines-init-variables): va_start initializes it
     va_start(ap, fmt);
     vsnprintf(why, sizeof why, fmt, ap);
     va_end(ap);
     const char *mode = c->mode == AWDL_MODE_TRANSFER ? "transfer" : "idle";
     const unsigned n = awdl_slots_away(c->cfg.seq, c->infra_mhz);
-    if (c->infra_mhz)
+    if (c->infra_mhz) {
         awdl_log(c, "AWDL: schedule %s (%s): %u of 16 slots away from infra (%u MHz)", mode, why, n, c->infra_mhz);
-    else
+    } else {
         awdl_log(c, "AWDL: schedule %s (%s): AWDL in %u of 16 slots, not associated", mode, why, n);
+    }
 }
 
 // The sequence changed (mode, infra channel): to the firmware, with the payload when its social map moved.
@@ -977,7 +1010,7 @@ static void native_set_mode(struct awdl_core *c, enum awdl_mode mode, const char
     if (c->mode == (uint8_t)mode)
         return;
     char why[96];
-    va_list ap;
+    va_list ap;  // NOLINT(cppcoreguidelines-init-variables): va_start initializes it
     va_start(ap, fmt);
     vsnprintf(why, sizeof why, fmt, ap);
     va_end(ap);
@@ -994,7 +1027,7 @@ static int unicast_tcp(const uint8_t *eth, size_t len)
 {
     if (len < 14 + 20 || (eth[0] & 1))
         return 0;
-    const uint16_t type = (uint16_t)((eth[12] << 8) | eth[13]);
+    const uint16_t type = (uint16_t)(((unsigned)eth[12] << 8) | eth[13]);
     if (type == 0x0800)
         return (eth[14] >> 4) == 4 && eth[14 + 9] == 6;
     if (type == 0x86dd)
@@ -1128,8 +1161,10 @@ void awdl_core_fw_result(struct awdl_core *c, const char *name, int status, uint
     if (!strcmp(name, "awdl_chan_seq") && !c->seq_no_empty &&
         (status == BCME_BADCHAN || status == BCME_OUTOFRANGECHAN || status == BCME_BADARG || status == BCME_BADLEN)) {
         int empty = 0;
-        for (unsigned i = 0; i < AWDL_SEQ_SLOTS; ++i)
-            empty |= !c->cfg.seq[i].number;
+        for (unsigned i = 0; i < AWDL_SEQ_SLOTS; ++i) {
+            if (!c->cfg.seq[i].number)
+                empty = 1;
+        }
         if (empty) {
             c->seq_no_empty = 1;
             native_build_seq(c);
@@ -1198,9 +1233,10 @@ void awdl_core_stop(struct awdl_core *c)
 {
     if (!c->running)
         return;
-    for (unsigned i = 0; i < AWDL_MAX_PEERS; ++i)
+    for (unsigned i = 0; i < AWDL_MAX_PEERS; ++i) {
         if (c->peers[i].used)
             peer_lost(c, &c->peers[i], "stopped");
+    }
     if (native(c))
         native_stop(c);
     c->txq_count = 0;
@@ -1313,6 +1349,20 @@ uint64_t awdl_core_timer(struct awdl_core *c, uint64_t now)
 }
 
 // ---- native backend: firmware events ------------------------------------------------------------------------------
+static const char *fw_role_name(uint32_t status)
+{
+    switch (status) {
+    case BCM_AWDL_ROLE_SLAVE:
+        return "slave";
+    case BCM_AWDL_ROLE_MASTER:
+        return "master";
+    case BCM_AWDL_ROLE_NE_MASTER:
+        return "non-election master";
+    default:
+        return "?";
+    }
+}
+
 void awdl_core_fw_event(struct awdl_core *c, const struct awdl_fw_event *e, const uint8_t *data, size_t len,
                         uint64_t now)
 {
@@ -1326,13 +1376,14 @@ void awdl_core_fw_event(struct awdl_core *c, const struct awdl_fw_event *e, cons
     case WLC_E_AWDL_RX_ACT_FRAME: {
         // The header (be16 version) and the frame from its category on; the sender is the event's address.
         struct bcm_rx_frame meta;
-        const uint8_t *body;
-        size_t n;
+        const uint8_t *body = NULL;
+        size_t n = 0;
         if (bcm_awdl_rx_af(data, len, &meta, &body, &n)) {
             if (e->type == WLC_E_AWDL_EVENT) {  // most AWDL_EVENTs carry no frame
-                if (c->stats.fw_unknown++ < 8)
+                if (c->stats.fw_unknown++ < 8) {
                     awdl_log(c, "AWDL: firmware AWDL_EVENT status %u reason %u, %u bytes", (unsigned)e->status,
                              (unsigned)e->reason, (unsigned)len);
+                }
             } else {
                 c->stats.af_bad++;
             }
@@ -1356,13 +1407,18 @@ void awdl_core_fw_event(struct awdl_core *c, const struct awdl_fw_event *e, cons
             c->stats.af_bad++;
             return;
         }
-        if (c->stats.af_rx++ == 0)  // the native backend's first question: do the firmware's AWDL frames reach us
+        if (c->stats.af_rx++ == 0) {  // the native backend's first question: do the firmware's AWDL frames reach us
             awdl_log(c,
                      "AWDL: first AWDL action frame from the firmware (event %u, header v%u, chanspec %#x): "
                      "%02x:%02x:%02x:%02x:%02x:%02x, %s, %u bytes",
                      (unsigned)e->type, meta.version, meta.chanspec, a.src[0], a.src[1], a.src[2], a.src[3], a.src[4],
                      a.src[5], a.subtype == AWDL_SUBTYPE_MIF ? "MIF" : "PSF", (unsigned)n);
-        const int32_t r = !meta.version ? -60 : meta.rssi < -128 ? -128 : meta.rssi > 0 ? 0 : meta.rssi;
+        }
+        int32_t r = meta.rssi > 0 ? 0 : meta.rssi;
+        if (meta.rssi < -128)
+            r = -128;
+        if (!meta.version)
+            r = -60;
         const struct awdl_rx_meta m = {now, 0, (int8_t)r};
         handle_af(c, &a, &m);
         return;
@@ -1371,24 +1427,21 @@ void awdl_core_fw_event(struct awdl_core *c, const struct awdl_fw_event *e, cons
         const int32_t was = c->stats.fw_role;
         c->stats.fw_role = (int32_t)e->status;
         c->stats.roles++;
-        if (was != c->stats.fw_role)
+        if (was != c->stats.fw_role) {
             awdl_log(c, "AWDL: firmware role %s (%u), event address %02x:%02x:%02x:%02x:%02x:%02x, %u bytes",
-                     e->status == BCM_AWDL_ROLE_SLAVE       ? "slave"
-                     : e->status == BCM_AWDL_ROLE_MASTER    ? "master"
-                     : e->status == BCM_AWDL_ROLE_NE_MASTER ? "non-election master"
-                                                            : "?",
-                     (unsigned)e->status, e->addr[0], e->addr[1], e->addr[2], e->addr[3], e->addr[4], e->addr[5],
-                     (unsigned)len);
+                     fw_role_name(e->status), (unsigned)e->status, e->addr[0], e->addr[1], e->addr[2], e->addr[3],
+                     e->addr[4], e->addr[5], (unsigned)len);
+        }
         return;
     }
     case WLC_E_IF: {  // the AWDL interface the firmware made (or removed)
         struct bcm_if_event ie;
         if (bcm_if_event_decode(data, len, &ie))
             return;
-        awdl_log(c, "AWDL: firmware interface %s: ifidx %u bsscfg %u role %u, %02x:%02x:%02x:%02x:%02x:%02x",
-                 ie.opcode == 1   ? "added"
-                 : ie.opcode == 2 ? "removed"
-                                  : "changed",
+        const char *change = ie.opcode == 2 ? "removed" : "changed";
+        if (ie.opcode == 1)
+            change = "added";
+        awdl_log(c, "AWDL: firmware interface %s: ifidx %u bsscfg %u role %u, %02x:%02x:%02x:%02x:%02x:%02x", change,
                  ie.ifidx, ie.bssidx, ie.role, e->addr[0], e->addr[1], e->addr[2], e->addr[3], e->addr[4], e->addr[5]);
         static const uint8_t zero[6];
         if (ie.opcode == 1 && c->nstate == AWDL_N_CREATING && ie.ifidx &&
@@ -1408,9 +1461,10 @@ void awdl_core_fw_event(struct awdl_core *c, const struct awdl_fw_event *e, cons
         return;
     default:
         // Payloads not settled: the first few events of other kinds are logged with their size.
-        if (c->stats.fw_unknown++ < 8)
+        if (c->stats.fw_unknown++ < 8) {
             awdl_log(c, "AWDL: firmware event %u status %u reason %u, %u bytes", (unsigned)e->type, (unsigned)e->status,
                      (unsigned)e->reason, (unsigned)len);
+        }
         return;
     }
 }
@@ -1426,9 +1480,10 @@ void awdl_core_rx_eth(struct awdl_core *c, const uint8_t *frame, size_t len, uin
         return;
     }
     struct awdl_peer *p = NULL;
-    for (unsigned i = 0; i < AWDL_MAX_PEERS; ++i)
+    for (unsigned i = 0; i < AWDL_MAX_PEERS; ++i) {
         if (c->peers[i].used && addr_eq(c->peers[i].addr, c->scratch + 6))
             p = &c->peers[i];
+    }
     if (p)
         p->last_seen = now;
     c->stats.data_rx++;
@@ -1440,14 +1495,14 @@ void awdl_core_rx_eth(struct awdl_core *c, const uint8_t *frame, size_t len, uin
 // ---- TSF clock ----------------------------------------------------------------------------------------------------------
 void awdl_tsf_clock_anchor(struct awdl_tsf_clock *k, uint64_t tsf, uint64_t host_ns)
 {
-    if (k->valid && host_ns > k->host0_ns + 100000000ull) {  // rate from anchors at least 100 ms apart
+    if (k->valid && host_ns > k->host0_ns + 100000000ULL) {  // rate from anchors at least 100 ms apart
         const int64_t dh = (int64_t)((host_ns - k->host0_ns) / 1000);
         const int64_t dt = (int64_t)(tsf - k->tsf0);
         int64_t ppm16 = (dt - dh) * 16000000 / dh;
-        if (ppm16 > 16 * 500)
-            ppm16 = 16 * 500;  // a crystal is within ±500 ppm; more is a TSF jump
-        if (ppm16 < -16 * 500)
-            ppm16 = -16 * 500;
+        if (ppm16 > (int64_t)16 * 500)
+            ppm16 = (int64_t)16 * 500;  // a crystal is within ±500 ppm; more is a TSF jump
+        if (ppm16 < (int64_t)-16 * 500)
+            ppm16 = (int64_t)-16 * 500;
         k->ppm_x16 = (int32_t)((3 * (int64_t)k->ppm_x16 + ppm16) / 4);
     }
     k->tsf0 = tsf;

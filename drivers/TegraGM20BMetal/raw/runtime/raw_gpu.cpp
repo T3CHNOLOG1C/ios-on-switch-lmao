@@ -36,6 +36,12 @@ enum : uint32_t {
     NO_OPERATION = 0x0100,
     SET_FRONT_POLYGON_MODE = 0x0dac,
     SET_BACK_POLYGON_MODE = 0x0db0,
+    SET_POLY_OFFSET_POINT = 0x0dc0,
+    SET_POLY_OFFSET_LINE = 0x0dc4,
+    SET_POLY_OFFSET_FILL = 0x0dc8,
+    SET_SLOPE_SCALE_DEPTH_BIAS = 0x156c,
+    SET_DEPTH_BIAS = 0x15bc,
+    SET_DEPTH_BIAS_CLAMP = 0x187c,
     OGL_SET_CULL = 0x1918,
     OGL_SET_FRONT_FACE = 0x191c,
     OGL_SET_CULL_FACE = 0x1920,
@@ -55,6 +61,8 @@ enum : uint32_t {
     INVALIDATE_SAMPLER_CACHE_NO_WFI = 0x1424,
     INVALIDATE_TEXTURE_HEADER_CACHE_NO_WFI = 0x1428,
     GLOBAL_BASE_INSTANCE_INDEX = 0x1438,
+    GLOBAL_BASE_VERTEX_INDEX = 0x1434,
+    VERTEX_ID_BASE = 0x1118,
     ZT_SELECT = 0x1538,
     END = 0x1614,
     BEGIN = 0x1618,
@@ -91,12 +99,11 @@ constexpr uint32_t kRootInterlockTickets = 0x260;  // offsetof(nvk_root_descript
 constexpr uint32_t kTicCount = 8192, kTscCount = 1024;
 constexpr uint32_t kEngines =
     TegraGM20BEngine3D | TegraGM20BEngineCompute | TegraGM20BEngineCopy | TegraGM20BEngine2D | TegraGM20BEngineM2MF;
-constexpr uint64_t kPushRing = 2 << 20, kUploadRing = 4 << 20;
-constexpr uint64_t kChunk = 16 << 20, kDedicated = 8 << 20;
 constexpr size_t kDedicatedSpares = 2;
-// The shader heap: the programs of the states a process uses, placed at first use (Device::place); the pack holds tens of MB
-// of programs, of which the render server uses a few hundred
-constexpr uint64_t kHeapCap = 8 << 20;
+// The shader heap: the programs of the states a process uses, placed at first use (Device::place); the pack holds MBs of
+// programs, of which the render server uses a few hundred. Bound in steps as they are placed, with room after the last one
+// for the GPU's instruction prefetch past a program's end.
+constexpr uint64_t kHeapCap = 8 << 20, kHeapStep = 256 << 10, kHeapSlack = 0x1000;
 constexpr uint32_t kMaxSegments = TegraGM20BMaxPushes;
 // NVK's copies of pitch memory (nouveau_copy_rect: LAUNCH_DMA PIPELINED, FLUSH_ENABLE, SRC/DST_MEMORY_LAYOUT PITCH, MULTI_LINE_ENABLE)
 constexpr uint32_t kLaunchPitch = 1u | 1u << 2 | 1u << 7 | 1u << 8 | 1u << 9;
@@ -153,7 +160,26 @@ size_t pageSize()
     static const size_t page = size_t(getpagesize());
     return page;
 }
+
+// CPU writes to cached memory the GPU reads (an import), out to memory
+void cleanToMemory(const void *at, uint64_t bytes)
+{
+#if defined(__aarch64__)
+    for (uintptr_t a = uintptr_t(at) & ~uintptr_t(63); a < uintptr_t(at) + bytes; a += 64)
+        __asm__ volatile("dc cvac, %0" ::"r"(a) : "memory");
+    __asm__ volatile("dsb sy" ::: "memory");
+#else
+    (void)at;
+    (void)bytes;
+#endif
+}
 }  // namespace
+
+// The render server's: what one 720p screen's composition holds. A client's: m2v's block (M2V_BLOCK_MIB outside backboardd).
+const Device::Sizes Device::kSizes[2] = {
+    {16 << 20, 16 << 20, 4 << 20, 2 << 20, 4 << 20},
+    {4 << 20, 4 << 20, 1 << 20, 256 << 10, 512 << 10},
+};
 
 const FormatInfo *formatInfo(uint32_t mtl)
 {
@@ -186,6 +212,7 @@ uint8_t *Device::alloc(Ring &r, uint32_t bytes, uint32_t align, uint64_t &va)
         }
         if (it->begin < at + bytes && at < it->end && it->seqno) {
             stats.ringWaits++;
+            r.waited = true;
             k_.wait(channel_, it->seqno);
             it = r.inflight.erase(it);
             continue;
@@ -305,8 +332,10 @@ void Device::emitContext(Push &p)
     }
 }
 
-bool Device::open(const char *packPath, uint64_t stack, std::string &err)
+bool Device::open(const char *packPath, uint64_t stack, std::string &err, Role role)
 {
+    role_ = role;
+    sizes_ = kSizes[role == Role::RenderServer ? 0 : 1];
     if (!pack_.load(packPath, stack, err))
         return false;
     if (!k_.open(err))
@@ -318,25 +347,28 @@ bool Device::open(const char *packPath, uint64_t stack, std::string &err)
     return init(err);
 }
 
+// Every process's: the header pools, the root table, the zero page, the interlock tickets and the shader heap's reservation,
+// which textures, samplers and states need before any submission. The render server's channel, heap and first chunks too.
 bool Device::init(std::string &err)
 {
-    const uint64_t heapBytes = std::min<uint64_t>(pack_.bytes(PackHeap), kHeapCap);
-    if (!k_.alloc(heapBytes + 0x1000, true, heap_) || !k_.alloc(kTicCount * 32, true, tic_) ||
-        !k_.alloc(kTscCount * 32, true, tsc_) || !k_.alloc(0x1000, true, root_) || !k_.alloc(0x10000, true, zero_) ||
-        !k_.alloc(0x1000, true, tickets_) || !k_.alloc(kPushRing, true, push_.bo) ||
-        !k_.alloc(kUploadRing, true, upload_.bo)) {
+    vm_address_t heapCpu = 0;
+    if (!k_.alloc(kTicCount * 32, true, tic_) || !k_.alloc(kTscCount * 32, true, tsc_) ||
+        !k_.alloc(0x1000, true, root_) || !k_.alloc(0x10000, true, zero_) || !k_.alloc(0x1000, true, tickets_)) {
         err = k_.error();
         return false;
     }
+    heap_.bytes = kHeapCap;
+    heap_.va = heap_.vaBase = k_.reserveVa(kHeapCap);
+    if (!heap_.va || vm_allocate(mach_task_self(), &heapCpu, kHeapCap, VM_FLAGS_ANYWHERE) != KERN_SUCCESS) {
+        err = "no room for the shader heap";
+        return false;
+    }
+    heap_.cpu = reinterpret_cast<uint8_t *>(heapCpu);
     memset(tic_.cpu, 0, tic_.bytes);
     memset(tsc_.cpu, 0, tsc_.bytes);
     memset(root_.cpu, 0, root_.bytes);
     memset(zero_.cpu, 0, zero_.bytes);
     memset(tickets_.cpu, 0, tickets_.bytes);
-    if (!k_.channel(kEngines, channel_, fence_)) {
-        err = k_.error();
-        return false;
-    }
     // texture header 0: NIL's null descriptor (block linear over the zero page), what NVK keeps at index 0
     uint32_t *t0 = reinterpret_cast<uint32_t *>(tic_.cpu);
     t0[0] = 0x2491d;
@@ -357,7 +389,63 @@ bool Device::init(std::string &err)
         memcpy(tsc_.cpu + 32 * nextTsc_, cs + 8 * i, 32);
         constexprTsc_.push_back(nextTsc_++);
     }
+    // SET_CT_WRITE(i), as the baseline leaves it where a state's registers do not set it
+    const uint32_t *base = pack_.section<uint32_t>(PackBaseline);
+    for (uint64_t i = 0; i < pack_.bytes(PackBaseline) / 8; i++)
+        if (base[2 * i] >= CT_WRITE && base[2 * i] < CT_WRITE + 32)
+            ctWrite_[(base[2 * i] - CT_WRITE) / 4] = base[2 * i + 1];
+    placed_.assign(pack_.header()->programs, ~0u);
+    if (role_ == Role::Client)
+        return true;
+    if (!ensureChannel()) {
+        err = channelError_;
+        return false;
+    }
+    // at the render server's start, not under its first frames: the heap bound for every program of the pack, the mip chains'
+    // first chunk and the first pool chunk
+    {
+        std::lock_guard<std::mutex> l(lock_);
+        heapGrow(std::min<uint64_t>(pack_.bytes(PackHeap) + kHeapSlack, kHeapCap));
+        if (chainsOn_) {
+            Span first;
+            if (blAlloc(1, 0, first))
+                blFree(first);
+        }
+    }
+    uint32_t chunk;
+    newChunk(sizes_.chunk, false, nullptr, chunk);
+    return true;
+}
 
+bool Device::ensureChannel()
+{
+    if (channelReady_.load(std::memory_order_acquire))
+        return true;
+    std::lock_guard<std::mutex> l(channelLock_);
+    if (channelReady_.load(std::memory_order_relaxed))
+        return true;
+    if (channelFailed_)
+        return false;
+    if (!openChannel(channelError_)) {
+        channelFailed_ = true;
+        return false;
+    }
+    channelReady_.store(true, std::memory_order_release);
+    return true;
+}
+
+// channelLock_ held: the rings, the channel and its context, then the 2D engine's state and its mip-chain self-test (raw/fx)
+bool Device::openChannel(std::string &err)
+{
+    if (!k_.alloc(sizes_.push, true, push_.bo) || !k_.alloc(sizes_.upload, true, upload_.bo) ||
+        !k_.channel(kEngines, channel_, fence_)) {
+        err = k_.error();
+        k_.free(push_.bo);
+        k_.free(upload_.bo);
+        channel_ = 0;
+        fence_ = &kNoFence;
+        return false;
+    }
     uint64_t va;
     uint32_t *start = reinterpret_cast<uint32_t *>(alloc(push_, contextWords() * 4, 256, va));
     Push p{start, start + contextWords()};
@@ -370,29 +458,7 @@ bool Device::init(std::string &err)
     }
     lastSeqno_ = seq;
     retire(push_, seq);
-    if (!k_.wait(channel_, seq)) {
-        err = k_.error();
-        return false;
-    }
-    // SET_CT_WRITE(i), as the baseline leaves it where a state's registers do not set it
-    const uint32_t *base = pack_.section<uint32_t>(PackBaseline);
-    for (uint64_t i = 0; i < pack_.bytes(PackBaseline) / 8; i++)
-        if (base[2 * i] >= CT_WRITE && base[2 * i] < CT_WRITE + 32)
-            ctWrite_[(base[2 * i] - CT_WRITE) / 4] = base[2 * i + 1];
-    pipelines_.resize(pack_.header()->pipelines);
-    placed_.assign(pack_.header()->programs, ~0u);
-    // the 2D engine's state and its mip-chain self-test (raw/fx); chains on, their first chunk now too (wired here, at the
-    // render server's start, not under the first mipmapped texture's frame)
     selfTest();
-    if (chainsOn_) {
-        std::lock_guard<std::mutex> l(lock_);
-        Span first;
-        if (blAlloc(1, 0, first))
-            blFree(first);
-    }
-    // the first pool chunk now, at the render server's start, not under its first frame
-    uint32_t chunk;
-    newChunk(kChunk, false, nullptr, chunk);
     return true;
 }
 
@@ -405,15 +471,46 @@ bool Device::place(uint32_t prog, uint32_t &program, uint64_t &data)
 {
     const PackProgram &p = pack_.section<PackProgram>(PackPrograms)[prog];
     if (placed_[prog] == ~0u) {
-        if (heapPlaced_ + p.bytes > heap_.bytes - 0x1000)
+        uint64_t at = 0;
+        if (!heapPlace(pack_.section<uint8_t>(PackHeap) + p.heapOffset, p.bytes, at))
             return false;
-        memcpy(heap_.cpu + heapPlaced_, pack_.section<uint8_t>(PackHeap) + p.heapOffset, p.bytes);
-        placed_[prog] = uint32_t(heapPlaced_);
-        heapPlaced_ += p.bytes;
+        placed_[prog] = uint32_t(at);
         stats.programsPlaced++;
     }
     program = placed_[prog] + (p.program - p.heapOffset);
     data = p.dataBytes ? heap_.va + placed_[prog] + p.dataOffset : 0;
+    return true;
+}
+
+// lock_ held: the heap bound from its start through `end`: host pages of its CPU range imported and bound at the reservation's
+// VAs, in steps. False: past the reservation, or the kernel refused a part.
+bool Device::heapGrow(uint64_t end)
+{
+    if (end > heap_.bytes)
+        return false;
+    while (heapBound_ < end) {
+        const uint64_t step = std::min(heap_.bytes - heapBound_, (end - heapBound_ + kHeapStep - 1) & ~(kHeapStep - 1));
+        Bo part;
+        uint8_t *cpu = heap_.cpu + heapBound_;
+        if (!k_.importPages(cpu, step, part) || !k_.bindImportAt(cpu, part, heap_.va + heapBound_, kPteKindPitch))
+            return false;
+        heapParts_.push_back(part);
+        heapBound_ += step;
+    }
+    return true;
+}
+
+// lock_ held: `size` bytes of programs at the heap's end, their offset in `offset`, with the prefetch slack after them bound.
+// The heap is cached host memory: what the CPU copies there is cleaned to memory before the GPU can read it. False: no room.
+bool Device::heapPlace(const uint8_t *bytes, uint32_t size, uint64_t &offset)
+{
+    const uint64_t end = heapPlaced_ + size;
+    if (!heapGrow(end + kHeapSlack))
+        return false;
+    memcpy(heap_.cpu + heapPlaced_, bytes, size);
+    cleanToMemory(heap_.cpu + heapPlaced_, size);
+    offset = heapPlaced_;
+    heapPlaced_ = end;
     return true;
 }
 
@@ -531,11 +628,9 @@ Pipeline *Device::pipeline(uint64_t keyHash, PackForm form, bool caTransform)
 
 // A span of `bytes` (page multiple) from the pool: first fit in a chunk, else a new chunk (one BoImport of fresh anonymous
 // memory; its pages are wired and their zeros cleaned to memory by the kext: ~10 ms for 16 MiB on the device, r7l). A span of more
-// than kDedicated gets a chunk of its own, given back whole when the span is freed. The shared chunks grow ahead of need: once their
-// free bytes fall below kLowMark the grower thread makes the next one, so this (the render thread's resource creation) finds room;
+// than half a chunk gets a chunk of its own, given back whole when the span is freed. The shared chunks grow ahead of need: once their
+// free bytes fall below a chunk's worth the grower thread makes the next one, so this (the render thread's resource creation) finds room;
 // one that does not waits for a chunk the grower is making, or makes one itself (Stats::poolStalls: a burst outran the mark).
-constexpr uint64_t kLowMark =
-    kChunk;  // a whole chunk ahead: a burst of a chunk's worth finds room while the next is wired
 
 // lock_ held (`unlocked`: the caller's lock, let go for the kernel's wiring and taken again); the chunk's index in chunks_
 bool Device::newChunk(uint64_t size, bool dedicated, std::unique_lock<std::mutex> *unlocked, uint32_t &index)
@@ -582,7 +677,7 @@ void Device::growLoop()
         if (stopping_)
             return;
         uint32_t c;
-        newChunk(kChunk, false, &l, c);  // failing, the render thread's next allocation tries itself
+        newChunk(sizes_.chunk, false, &l, c);  // failing, the render thread's next allocation tries itself
         growing_ = false;
         grown_.notify_all();
     }
@@ -592,8 +687,9 @@ bool Device::poolAlloc(uint64_t bytes, Span &s)
 {
     bytes = (bytes + pageSize() - 1) & ~uint64_t(pageSize() - 1);
     s = {};
-    if (bytes >
-        kDedicated) {  // its own chunk, made now (rare: no Core Animation texture of the 720p screen is that large)
+    // over half a chunk: its own chunk, made now (in the render server rare: no Core Animation texture of the 720p screen is
+    // that large)
+    if (bytes > sizes_.chunk / 2) {
         uint32_t c = ~0u;
         for (auto it = spares_.begin(); it != spares_.end(); ++it)
             if (chunks_[it->chunk].bytes == bytes) {
@@ -622,7 +718,7 @@ bool Device::poolAlloc(uint64_t bytes, Span &s)
                 ch.used += bytes;
                 poolFree_ -= bytes;
                 s = {c, offset, bytes, ch.bo.va + offset, static_cast<uint8_t *>(ch.memory) + offset};
-                if (poolFree_ < kLowMark && !growing_ && grower_.joinable()) {  // the next chunk, off this thread
+                if (poolFree_ < sizes_.chunk && !growing_ && grower_.joinable()) {  // the next chunk, off this thread
                     growing_ = true;
                     grow_.notify_one();
                 }
@@ -647,7 +743,7 @@ bool Device::poolAlloc(uint64_t bytes, Span &s)
             continue;
         }
         uint32_t c;
-        if (!newChunk(kChunk, false, nullptr, c))
+        if (!newChunk(sizes_.chunk, false, nullptr, c))
             return false;
     }
     return false;
@@ -658,7 +754,7 @@ void Device::warm()
     {
         std::lock_guard<std::mutex> l(lock_);
         uint32_t c;
-        while (poolFree_ <= kLowMark && newChunk(kChunk, false, nullptr, c)) {
+        while (poolFree_ <= sizes_.chunk && newChunk(sizes_.chunk, false, nullptr, c)) {
         }  // the first and the one ahead of it
     }
     if (!grower_.joinable())
@@ -682,11 +778,7 @@ void Device::poolFree(Span &s)
             s = {};
             return;
         }
-        stats.poolBytes -= ch.bytes;
-        stats.poolChunks--;
-        k_.free(ch.bo);
-        vm_deallocate(mach_task_self(), vm_address_t(ch.memory), ch.bytes);
-        ch = Chunk();
+        freeChunk(ch);
         s = {};
         return;
     }
@@ -708,16 +800,44 @@ void Device::poolFree(Span &s)
     if (!merged)
         ch.free[offset] = bytes;
     s = {};
-    // an empty chunk goes back while the others keep a chunk's worth free (kLowMark: the grower's own mark), so the pool
+    // an empty chunk goes back while the others keep a chunk's worth free (the grower's own mark), so the pool
     // shrinks after a burst instead of holding its peak for good (r8a: 320 MB in 20 chunks from 15:18 on, the screen idle)
-    if (!ch.used && poolFree_ >= ch.bytes + kLowMark) {
+    if (!ch.used && poolFree_ >= ch.bytes + sizes_.chunk) {
         poolFree_ -= ch.bytes;
-        stats.poolBytes -= ch.bytes;
-        stats.poolChunks--;
-        k_.free(ch.bo);  // (the kernel keeps the pages until the work submitted before has completed)
-        vm_deallocate(mach_task_self(), vm_address_t(ch.memory), ch.bytes);
-        ch = Chunk();
+        freeChunk(ch);
     }
+}
+
+// lock_ held: an imported chunk's BO and pages go back (the kernel keeps the pages until the work submitted before has completed)
+void Device::freeChunk(Chunk &ch)
+{
+    stats.poolBytes -= ch.bytes;
+    stats.poolChunks--;
+    k_.free(ch.bo);
+    vm_deallocate(mach_task_self(), vm_address_t(ch.memory), ch.bytes);
+    ch = Chunk();
+}
+
+void Device::trim()
+{
+    std::lock_guard<std::mutex> l(lock_);
+    for (const Spare &sp : spares_)
+        freeChunk(chunks_[sp.chunk]);
+    spares_.clear();
+    for (Chunk &ch : chunks_)
+        if (ch.memory && !ch.dedicated && !ch.used) {
+            poolFree_ -= ch.bytes;
+            freeChunk(ch);
+        }
+    for (std::vector<Chunk> *tiled : {&blChunks_, &zChunks_})
+        for (Chunk &ch : *tiled)
+            if (ch.memory && !ch.used)
+                freeChunk(ch);
+    for (Chunk &ch : wcChunks_)
+        if (ch.bo.handle && !ch.used) {
+            k_.free(ch.bo);
+            ch = Chunk();
+        }
 }
 
 // A surface's one import in this task. A new one asks the kernel its layout (`ask`: the first texture's shape and whether it
@@ -1033,8 +1153,7 @@ bool Device::createMemoryless(uint32_t width, uint32_t height, uint32_t format, 
 
 // ---- block-linear memory (raw/fx mip chains: kind 0xFE; zeta: kZetaPteKind), made on demand ----
 
-constexpr uint64_t kBlChunk = 16ull << 20;  // a chunk of images (an image over half of one gets its own)
-constexpr uint64_t kBlAlign = 16384;        // NVK's image alignment here (r12-cafx niloracle), a multiple of NIL's
+constexpr uint64_t kBlAlign = 16384;  // NVK's image alignment here (r12-cafx niloracle), a multiple of NIL's
 
 bool Device::tiledAlloc(std::vector<Chunk> &chunks, uint32_t kind, uint64_t bytes, uint64_t align, Span &s)
 {
@@ -1062,8 +1181,8 @@ bool Device::tiledAlloc(std::vector<Chunk> &chunks, uint32_t kind, uint64_t byte
         }
         if (pass)
             break;
-        const bool dedicated = bytes > kBlChunk / 2;
-        const uint64_t size = dedicated ? bytes : kBlChunk;
+        const bool dedicated = bytes > sizes_.blChunk / 2;
+        const uint64_t size = dedicated ? bytes : sizes_.blChunk;
         vm_address_t memory = 0;
         if (vm_allocate(mach_task_self(), &memory, size, VM_FLAGS_ANYWHERE) != KERN_SUCCESS)
             return false;
@@ -1104,11 +1223,7 @@ void Device::tiledFree(std::vector<Chunk> &chunks, Span &s)
     Chunk &ch = chunks[s.chunk];
     ch.used -= s.bytes;
     if (ch.dedicated) {
-        stats.poolBytes -= ch.bytes;
-        stats.poolChunks--;
-        k_.free(ch.bo);
-        vm_deallocate(mach_task_self(), vm_address_t(ch.memory), ch.bytes);
-        ch = Chunk();
+        freeChunk(ch);
         s = {};
         return;
     }
@@ -1284,8 +1399,6 @@ bool Device::createBuffer(uint64_t length, Buffer &b, bool wc)
 
 // ---- write-combined buffers: the GPU pool (BoAlloc coherent), mapped write-combined for the CPU ----
 
-constexpr uint64_t kWcChunk = 4ull << 20;  // a chunk of buffers (a buffer over half of one gets its own BO)
-
 // lock_ held. First fit by page; a new chunk when none has room (a BoAlloc: tens of microseconds, the GPU pool's own)
 bool Device::wcAlloc(uint64_t bytes, Span &s)
 {
@@ -1310,8 +1423,8 @@ bool Device::wcAlloc(uint64_t bytes, Span &s)
         }
         if (pass)
             break;
-        const bool dedicated = bytes > kWcChunk / 2;
-        const uint64_t size = dedicated ? bytes : kWcChunk;
+        const bool dedicated = bytes > sizes_.wcChunk / 2;
+        const uint64_t size = dedicated ? bytes : sizes_.wcChunk;
         Chunk ch;
         if (!k_.alloc(size, true, ch.bo))
             return false;  // the GPU pool is full: pool memory instead (createBuffer)
@@ -1710,12 +1823,7 @@ void Device::trimBackings()
 {
     for (auto it = spares_.begin(); it != spares_.end();) {
         if (commitCount_ - it->freedAt > 600) {
-            Chunk &ch = chunks_[it->chunk];
-            stats.poolBytes -= ch.bytes;
-            stats.poolChunks--;
-            k_.free(ch.bo);
-            vm_deallocate(mach_task_self(), vm_address_t(ch.memory), ch.bytes);
-            ch = Chunk();
+            freeChunk(chunks_[it->chunk]);
             it = spares_.erase(it);
             continue;
         }
@@ -1785,10 +1893,36 @@ bool Device::reopen()
     return true;
 }
 
+// Between command buffers: a ring that made an allocation wait for the GPU doubles (to `most`), the old one freed once the work
+// that used it completed, so a client's rings follow what its command buffers use.
+void Device::growRing(Ring &r, uint64_t most)
+{
+    const bool grow = r.waited && r.bo.bytes < most;
+    r.waited = false;
+    Bo larger;
+    if (!grow || !k_.alloc(std::min(r.bo.bytes * 2, most), true, larger))
+        return;
+    grownOut_.push_back({r.bo, lastSeqno_});
+    r.bo = larger;
+    r.head = r.since = 0;
+    r.inflight.clear();
+}
+
 CommandBuffer *Device::begin()
 {
+    if (!ensureChannel())
+        return nullptr;
     if (k_.lost(channel_))
         reopen();
+    for (auto it = grownOut_.begin(); it != grownOut_.end();)
+        if (done(it->second)) {
+            k_.free(it->first);
+            it = grownOut_.erase(it);
+        } else {
+            ++it;
+        }
+    growRing(push_, kSizes[0].push);
+    growRing(upload_, kSizes[0].upload);
     CommandBuffer &cb = cb_;
     cb.dev_ = this;
     cb.segments_.clear();
@@ -2180,7 +2314,7 @@ bool RenderEncoder::draw(uint32_t primitive, uint32_t first, uint32_t count, uin
 
 // The runs a draw that fetches a color it writes is drawn as, where its own triangles may cover a pixel twice
 // (raw_overlap.h); empty: it is drawn whole. The indexed draw being prepared sets drawIndices_ first
-const RenderEncoder::Runs &RenderEncoder::selfRuns(const Pipeline &pl, uint32_t primitive, uint32_t first,
+const RenderEncoder::Runs &RenderEncoder::selfRuns(const Pipeline &pl, uint32_t primitive, int32_t first,
                                                    uint32_t count, uint32_t instances)
 {
     static thread_local Runs runs;
@@ -2222,17 +2356,19 @@ template <typename T> static uint32_t largestIndex(const uint8_t *at, uint32_t c
 }
 
 // NVK's indexed draw on MAXWELL_B: the index buffer as NVK_MME_BIND_IB sets it (start, last byte, the restart index of the type,
-// the index size) where it changed, the draw parameters as NVK_MME_DRAW_INDEXED's (base vertex 0: those of a draw from vertex 0),
-// then BEGIN, SET_INDEX_BUFFER_F (first index) and DRAW_INDEX_BUFFER (count), END. m2v binds the indices the draw reads.
+// the index size) where it changed, the draw parameters as NVK_MME_DRAW_INDEXED's (the base vertex in the root table and the
+// base registers, the base instance), then per instance BEGIN, SET_INDEX_BUFFER_F (first index) and DRAW_INDEX_BUFFER (count),
+// END. m2v binds the indices the draw reads.
 bool RenderEncoder::drawIndexed(uint32_t primitive, uint32_t count, uint32_t indexSize, const Buffer *ib,
-                                uint64_t offset, const char **why)
+                                uint64_t offset, uint32_t instances, int32_t baseVertex, uint32_t baseInstance,
+                                const char **why)
 {
     Pipeline *pl = pipeline_;
     if (!pl)
         return true;
     called_ = true;
     readBits_ |= pl->fetchBits;
-    if (!count)
+    if (!count || !instances)
         return true;
     if (!ib || (indexSize != 2 && indexSize != 4) || offset % indexSize ||
         offset + uint64_t(count) * indexSize > ib->length) {
@@ -2255,7 +2391,10 @@ bool RenderEncoder::drawIndexed(uint32_t primitive, uint32_t count, uint32_t ind
     drawIndices_ = at;
     drawIndexSize_ = indexSize;
     drawIndexCount_ = count;
-    const Runs &runs = selfRuns(*pl, primitive, 0, count, 1);
+    // the vertices the indices reach from the base vertex, the ones a negative base puts before the stream left out
+    const int64_t vFirst = std::max<int64_t>(0, baseVertex),
+                  vEnd = std::max<int64_t>(0, int64_t(baseVertex) + most + 1);
+    const Runs &runs = selfRuns(*pl, primitive, baseVertex, count, instances);
     const uint32_t parts = runs.empty() ? 1 : uint32_t(runs.size());
     for (uint32_t r = 0; r < parts; r++) {
         const uint32_t begin = runs.empty() ? 0 : runs[r].first, end = runs.empty() ? count : runs[r].second;
@@ -2268,7 +2407,8 @@ bool RenderEncoder::drawIndexed(uint32_t primitive, uint32_t count, uint32_t ind
             p_.m(NO_OPERATION, 0x5b1175);
         }
 #endif
-        const bool prepared = prepare(pl, primitive, 0, 0, most + 1, 0, true, why);
+        const bool prepared = prepare(pl, primitive, baseVertex, uint32_t(vFirst),
+                                      uint32_t(std::max<int64_t>(0, vEnd - vFirst)), baseInstance, true, why);
         drawIndices_ = nullptr;
         if (!prepared)
             return false;
@@ -2282,15 +2422,19 @@ bool RenderEncoder::drawIndexed(uint32_t primitive, uint32_t count, uint32_t ind
             ibEnd_ = last;
             ibSize_ = indexSize;
         }
-        p_.m(BEGIN, 0);
-        p_.inc(INDEX_BUFFER_F, {begin, end - begin});  // SET_INDEX_BUFFER_F (first index), DRAW_INDEX_BUFFER (count)
-        p_.m(END, 0);
+        // each instance: INSTANCE_ID FIRST, then SUBSEQUENT (nvk_mme_build_draw_indexed_loop); SET_INDEX_BUFFER_F (first
+        // index) and DRAW_INDEX_BUFFER (count)
+        for (uint32_t i = 0; i < instances; i++) {
+            p_.m(BEGIN, i ? 1u << 26 : 0);
+            p_.inc(INDEX_BUFFER_F, {begin, end - begin});
+            p_.m(END, 0);
+        }
     }
     cb_->draws++;
     return true;
 }
 
-bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, uint32_t first, uint32_t vFirst, uint32_t vCount,
+bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uint32_t vFirst, uint32_t vCount,
                             uint32_t baseInstance, bool indexed, const char **why)
 {
     const uint32_t count = vCount;
@@ -2320,11 +2464,6 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, uint32_t first, ui
                 rects_.clear();
             }
         }
-    }
-    if (baseInstance) {
-        *why = "draw with a base instance";
-        cb_->refusal = {RefBaseInstance, baseInstance, 0, 0};
-        return false;
     }
     for (uint32_t j = 0; j < 8; j++) {  // the pass's attachments are the formats the state was made for
         const Texture *t = j < pass_.count ? pass_.color[j].texture : nullptr;
@@ -2437,7 +2576,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, uint32_t first, ui
         }
         at[0] = tic | tsc << 20;
     }
-    writeRaster(p, raster_);
+    writeRaster(p, rasterFor(primitive));
     if (pl != emitted_) {
         blendColorDirty_ |= pl->constantBlend;
         p.raw(pl->methods.data(), uint32_t(pl->methods.size()));
@@ -2554,14 +2693,21 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, uint32_t first, ui
             written_.clear();
         }
     }
-    if (first != first_ || baseInstance != baseInstance_) {
+    if (uint32_t(first) != first_ || baseInstance != baseInstance_) {
         // nvk_mme_build_set_draw_params: root draw.vs.{base_vertex, base_instance} and the base registers
-        const uint32_t v[2] = {first, baseInstance};
+        const uint32_t v[2] = {uint32_t(first), baseInstance};
         p.m(LOAD_CB_OFFSET, 0);
         p.nonInc(LOAD_CB, v, 2);
         p.m(GLOBAL_BASE_INSTANCE_INDEX, baseInstance);
-        first_ = first;
+        first_ = uint32_t(first);
         baseInstance_ = baseInstance;
+    }
+    // the base vertex the hardware adds to an indexed draw's indices (nvk_mme_build_draw_indexed); 0 for a draw of vertices
+    const uint32_t baseVertex = indexed ? uint32_t(first) : 0;
+    if (baseVertex != baseVertex_) {
+        p.m(GLOBAL_BASE_VERTEX_INDEX, baseVertex);
+        p.m(VERTEX_ID_BASE, baseVertex);
+        baseVertex_ = baseVertex;
     }
     writtenBits_ |= pl->writeBits;
     storageWrittenBits_ |= pl->storageBits;
@@ -2572,13 +2718,13 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, uint32_t first, ui
 
 // What the region test reads of a draw: Core Animation's transform (Pipeline::caTransform) over a triangle list or strip
 // of one instance, with its matrix, positions and indices where the CPU maps them; anything else is its scissor alone
-DrawGeometry RenderEncoder::geometry(const Pipeline &pl, uint32_t primitive, uint32_t first, uint32_t count,
+DrawGeometry RenderEncoder::geometry(const Pipeline &pl, uint32_t primitive, int32_t first, uint32_t count,
                                      const PixelBox &limit) const
 {
     DrawGeometry g;
     g.limit = limit;
     g.viewport = {vp_[0], vp_[1], vp_[2], vp_[3]};
-    g.first = drawIndices_ ? 0 : first;
+    g.first = first;
     g.count = count;
     g.indices = drawIndices_;
     g.indexSize = drawIndexSize_;
@@ -2799,10 +2945,48 @@ bool chainLevelTarget(const Texture &t, uint32_t level, Texture &out)
     return true;
 }
 
-// NVK's nvk_flush_rs_state for the state m2v makes of Metal's (render_state.rs `fixed`): culling on and the face culled,
-// the front face, and the polygon mode of both faces; a register already holding its value is not written
+void RenderEncoder::setDepthBias(float constant, float slope, float clamp)
+{
+    depthBias_[0] = constant;
+    depthBias_[1] = slope;
+    depthBias_[2] = std::isfinite(clamp) ? clamp : 0.0f;
+}
+
+// The rasterizer state of a draw of `primitive` (MTLPrimitiveType): the encoder's, with m2v's depth bias for its topology
+// (metal::state::depth_bias): on, of Metal's factors, for triangles; off and zero for points and lines, and zero where
+// both factors are
+RenderEncoder::Raster RenderEncoder::rasterFor(uint32_t primitive) const
+{
+    Raster r = raster_;
+    r.bias = primitive == 3 || primitive == 4;
+    if (r.bias && (depthBias_[0] != 0 || depthBias_[1] != 0)) {
+        r.biasConstant = fbits(depthBias_[0]);
+        r.biasSlope = fbits(depthBias_[1]);
+        r.biasClamp = fbits(depthBias_[2]);
+    }
+    return r;
+}
+
+// NVK's nvk_flush_rs_state for the state m2v makes of Metal's (render_state.rs `fixed`, `vk_depth_bias`): culling on and
+// the face culled, the front face, the polygon mode of both faces, the polygon offset and the depth bias factors (in the
+// depth format's units: the pack's SET_DEPTH_BIAS_CONTROL); a register already holding its value is not written
 void RenderEncoder::writeRaster(Push &p, const Raster &want)
 {
+    if (want.bias != rasterHeld_.bias) {
+        p.m(SET_POLY_OFFSET_POINT, want.bias);
+        p.m(SET_POLY_OFFSET_LINE, want.bias);
+        p.m(SET_POLY_OFFSET_FILL, want.bias);
+        rasterHeld_.bias = want.bias;
+    }
+    if (want.biasConstant != rasterHeld_.biasConstant || want.biasSlope != rasterHeld_.biasSlope ||
+        want.biasClamp != rasterHeld_.biasClamp) {
+        p.m(SET_DEPTH_BIAS, want.biasConstant);
+        p.m(SET_SLOPE_SCALE_DEPTH_BIAS, want.biasSlope);
+        p.m(SET_DEPTH_BIAS_CLAMP, want.biasClamp);
+        rasterHeld_.biasConstant = want.biasConstant;
+        rasterHeld_.biasSlope = want.biasSlope;
+        rasterHeld_.biasClamp = want.biasClamp;
+    }
     if (want.cull != rasterHeld_.cull) {
         p.m(OGL_SET_CULL, want.cull != 0);
         if (want.cull)
@@ -2824,9 +3008,20 @@ void RenderEncoder::writeRaster(Push &p, const Raster &want)
 void RenderEncoder::end()
 {
     Device &d = *dev_;
-    if (p_.room() < 16)
+    if (p_.room() < 64)
         reserve();
     writeRaster(p_, Raster());
+    // the draw parameters the next encoder starts from: the root table's and the base registers, 0
+    if (first_ || baseInstance_) {
+        const uint32_t zero[2] = {};
+        p_.m(LOAD_CB_OFFSET, 0);
+        p_.nonInc(LOAD_CB, zero, 2);
+        p_.m(GLOBAL_BASE_INSTANCE_INDEX, 0);
+    }
+    if (baseVertex_) {
+        p_.m(GLOBAL_BASE_VERTEX_INDEX, 0);
+        p_.m(VERTEX_ID_BASE, 0);
+    }
     if (p_.at > bodyStart_)
         bodies_.push_back({bodyStart_, p_.at});
     d.push_.head = uint64_t(reinterpret_cast<uint8_t *>(p_.at) - d.push_.bo.cpu);  // give back the unused reservation

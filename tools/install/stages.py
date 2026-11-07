@@ -217,8 +217,18 @@ class Stages:
                 f'{FLOOR >> 30} GiB kept free; {free >> 30} GiB is'
             )
 
+    def stale_cryptexes(self) -> list[Path]:
+        """Return a previous populate's rebuilt cryptex images, which cryptex.rebuild makes afresh."""
+        sources = [
+            Path(getattr(self.args, m)) for m in ('system_cryptex', 'app_cryptex') if getattr(self.args, m, None)
+        ]
+        rebuilt = [self.scratch / s.name for s in sources]
+        return [r for r, s in zip(rebuilt, sources, strict=True) if r.exists() and not r.samefile(s)]
+
     def populate(self, key: str) -> None:
         self.populated.unlink(missing_ok=True)
+        for image in self.stale_cryptexes():
+            image.unlink()
         host.run('cp', '-c', str(self.composed), str(self.populated), log=self.log)
         roles = self.roles()
         self.check_translate_space(roles)
@@ -245,7 +255,8 @@ class Stages:
                     rest = [e for e in system_entries if not e['path'].startswith('/private/var/')]
                     roles.overlay_system(data, system, rest, True)
                     roles.done('os')
-                populate.stage_cryptexes(preboot, self.spec, self.pins, sources, True, self.log, expected)
+                images = populate.cryptex_images(self.spec, self.pins, sources, expected)
+                populate.stage_cryptexes(preboot, self.spec, images, True, self.log)
                 cards.sync_overlay(data, self.args.boot_package, self.log)
                 populate.stage_gpu(data, self.args.gpu_stager, self.args.gpu_base, self.log)
                 if self.args.shader_seed:

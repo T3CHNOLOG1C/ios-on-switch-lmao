@@ -31,8 +31,10 @@ size_t appendIdle(char *line, size_t size, size_t n, uint64_t window)
         if (switch_idle_read_counts(cpu, &now))
             continue;
         const switch_idle_counts &was = gSeen[cpu];
-        const uint64_t c7 = now.residency[1] - was.residency[1], wfi = now.residency[0] - was.residency[0];
-        const unsigned c7Pm = permille(c7, window), wfiPm = permille(wfi, window);
+        const uint64_t c7 = now.residency[1] - was.residency[1];
+        const uint64_t wfi = now.residency[0] - was.residency[0];
+        const unsigned c7Pm = permille(c7, window);
+        const unsigned wfiPm = permille(wfi, window);
         const unsigned busyPm = c7Pm + wfiPm < 1000 ? 1000 - c7Pm - wfiPm : 0;
         n += static_cast<size_t>(snprintf(line + n, size - n,
                                           "%scpu%u c7 %u.%u%% (%llu, %llu skipped) wfi %u.%u%% busy %u.%u%%",
@@ -54,7 +56,7 @@ size_t appendBattery(char *line, size_t size, size_t n)
 }
 }  // namespace
 
-void switch_power_stats_tick(void)
+void switch_power_stats_tick()
 {
     const uint64_t now = mach_absolute_time();
     if (gLast && now - gLast < kWindowTicks)

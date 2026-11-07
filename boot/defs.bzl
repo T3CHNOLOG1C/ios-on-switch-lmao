@@ -65,8 +65,8 @@ _XCODE_SHELL = 'DEVELOPER_DIR="$(/usr/bin/sed -n "s/^DEVELOPER_DIR=//p" "$1")"; 
 def _xcode(ctx, tool, arguments, inputs, outputs, mnemonic, message):
     ctx.actions.run_shell(
         command = _XCODE_SHELL,
-        arguments = [ctx.file._xcode_env.path, tool] + arguments,
-        inputs = depset(inputs + [ctx.file._xcode_env, ctx.file._xcode_identity]),
+        arguments = [ctx.file.xcode_env.path, tool] + arguments,
+        inputs = depset(inputs + [ctx.file.xcode_env, ctx.file.xcode_identity]),
         outputs = outputs,
         env = {"LC_ALL": "C", "PATH": "/usr/bin:/bin", "TZ": "UTC"},
         mnemonic = mnemonic,
@@ -161,6 +161,8 @@ def _boot_package_impl(ctx):
     prebuilt = bool(ctx.attr.prebuilt_loader)
     if prebuilt != bool(ctx.attr.prebuilt_loader_constants):
         fail("prebuilt_loader and prebuilt_loader_constants go together")
+    if not prebuilt and not (ctx.file.xcode_env and ctx.file.xcode_identity):
+        fail("compiling the loader needs xcode_env and xcode_identity")
     smp = ctx.attr.smp[BuildSettingInfo].value
     profile = "release" if prebuilt else ctx.attr._profile[BuildSettingInfo].value
     release = profile == "release"
@@ -189,6 +191,7 @@ def _boot_package_impl(ctx):
     args.add("plan")
     args.add("--manifest", ctx.file.overlay_manifest)
     args.add("--portrait-header", ctx.file.portrait_header)
+    args.add("--kind", ctx.attr._kind[BuildSettingInfo].value)
     args.add_all(sorted(files.keys()), before_each = "--given")
     if release:
         args.add("--release")
@@ -419,8 +422,10 @@ boot_package = rule(
         "_gpu_trustcache": attr.label(default = "//boot:gpu_trustcache"),
         "_kind": attr.label(default = "//ipsw:kind"),
         "_profile": attr.label(default = "//bazel:profile"),
-        "_xcode_env": attr.label(default = "@xcode//:xcode.env", allow_single_file = True),
-        "_xcode_identity": attr.label(default = "@xcode//:identity", allow_single_file = True),
+        # Only the loader's compile runs Xcode: a package staging the release's loader names neither, so the image
+        # builder's graph on a Mac without Xcode holds none of @xcode's stand-ins.
+        "xcode_env": attr.label(allow_single_file = True, doc = "@xcode//:xcode.env, unless the loader is prebuilt"),
+        "xcode_identity": attr.label(allow_single_file = True, doc = "@xcode//:identity, unless the loader is prebuilt"),
         "_boot_args": _tool("//tools/package:boot_args"),
         "_overlay": _tool("//tools/package:overlay"),
         "_adt_edit": _tool("//tools/package:adt_edit"),

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// The raw GM20B path as Core Animation's render server's Metal device (backboardd only; TegraGM20BMetalPlugin.mm decides).
+// The raw GM20B path as a process's Metal device (TegraGM20BMetalPlugin.mm decides: every process whose sandbox may read the pack).
 //
 // Every Metal object it hands out answers on the raw path (raw_gpu.h: direct MAXWELL_B methods, one Exec per command buffer) and
 // has an m2v twin over the same memory, made when first needed (the m2v device it wraps: NativeBridgeMetalFrontend.mm). A command
@@ -14,8 +14,10 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-// Starts the raw path's own setup on a thread of its own (the pack read, the kernel connection, the channel and its context, the
-// first pool chunk), so it runs beside the m2v device's open; raw_metal_device_open with the same pack and key takes its result.
+// The render server's: starts the raw path's own setup on a thread of its own (the pack read, the kernel connection, the channel
+// and its context, the shader heap, the first pool chunk), so it runs beside the m2v device's open; raw_metal_device_open with
+// the same pack and key takes its result. A device opened without it is another process's (raw_gpu.h Device::Role::Client): each
+// of those made at its first use, in smaller steps.
 void raw_metal_prepare(const char *packPath, uint64_t stack);
 // A raw device over the pack at `packPath` (its stack key must be `stack`; 0: any, for host tests), wrapping the m2v device
 // `fallback` (nil on a host benchmark: nothing can fall back then), or nil (the reason in *error).

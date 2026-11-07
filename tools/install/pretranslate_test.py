@@ -1,5 +1,6 @@
-"""The drivers run in the order the dyld cache needs, with the other roles' cdhashes, and leave the boot package's
-files behind when their deltas go.
+"""Pretranslate's drivers run in the order the dyld cache needs, with the other roles' cdhashes.
+
+They leave the boot package's files behind when their deltas go.
 """
 
 import hashlib
@@ -40,10 +41,10 @@ with open(sys.argv[0] + '.calls', 'a') as calls:
 
 
 class Quiet:
-    def __call__(self, *parts):
+    def __call__(self, *parts: object) -> None:
         pass
 
-    def quiet(self, *parts):
+    def quiet(self, *parts: object) -> None:
         pass
 
 
@@ -140,7 +141,7 @@ class RolesTest(unittest.TestCase):
         data.mkdir()
         flagged = {}
 
-        def chflags(path, flags):
+        def chflags(path: str | Path, flags: int) -> None:
             flagged[Path(path)] = flags
 
         with mock.patch.object(pretranslate.os, 'chown'), mock.patch.object(pretranslate.os, 'chflags', chflags):
@@ -156,6 +157,36 @@ class RolesTest(unittest.TestCase):
         self.assertEqual(set(flagged), expected)
         for path, flags in flagged.items():
             self.assertTrue(flags & stat.SF_IMMUTABLE, path)
+
+    def test_hard_links_share_one_data_file_and_each_get_an_entry(self):
+        system = self.dir / 'system'
+        (system / 'usr/libexec').mkdir(parents=True)
+        (system / 'usr/sbin').mkdir(parents=True)
+        (system / 'usr/libexec/tool').write_bytes(b'arm64e')
+        (system / 'usr/sbin/tool').hardlink_to(system / 'usr/libexec/tool')
+        entries = self.roles.run('os', system)
+        twin = entries[0]['source'].with_name('twin')
+        twin.write_bytes(entries[0]['source'].read_bytes())
+        entries = [dict(entries[0], path='/usr/libexec/tool'), dict(entries[0], path='/usr/sbin/tool', source=twin)]
+        data = self.dir / 'data'
+        data.mkdir()
+        manifest = self.roles.overlay_system(data, system, entries, owners=False)
+        tree = data / pretranslate.OVERLAY
+        self.assertFalse((tree / 'usr/sbin').exists())
+        self.assertFalse(twin.exists())
+        self.assertEqual([f['path'] for f in manifest['files']], ['/usr/libexec/tool', '/usr/sbin/tool'])
+        files, _ = overlay_index.decode((data / pretranslate.OVERLAY_INDEX).read_bytes())
+        ids = ((system / 'usr/libexec/tool').stat().st_ino, (tree / 'usr/libexec/tool').stat().st_ino)
+        self.assertEqual([f[1:3] for f in files], [ids, ids])
+
+    def test_a_symlink_is_refused(self):
+        system = self.dir / 'system'
+        (system / 'usr/bin').mkdir(parents=True)
+        (system / 'usr/bin/real').write_bytes(b'arm64e')
+        (system / 'usr/bin/tool').symlink_to('real')
+        entries = self.roles.run('os', system)
+        with self.assertRaisesRegex(host.HostError, 'not a regular file'):
+            self.roles.overlay_system(self.dir / 'data', system, entries, owners=False)
 
     def test_a_translated_file_that_does_not_match_is_refused(self):
         system = self.dir / 'system'

@@ -122,10 +122,11 @@ public:
         Entry *free = nullptr;
         for (Entry &e : entries) {
             if (e.record == record) {
-                if (mask)
+                if (mask) {
                     e.mask = mask;
-                else
+                } else {
                     e = {};
+                }
                 return kOk;
             }
             if (!e.record && !free)
@@ -141,17 +142,19 @@ public:
 
     Entry *find(const void *record)
     {
-        for (Entry &e : entries)
+        for (Entry &e : entries) {
             if (record && e.record == record)
                 return &e;
+        }
         return nullptr;
     }
 
     bool any() const
     {
-        for (const Entry &e : entries)
+        for (const Entry &e : entries) {
             if (e.record)
                 return true;
+        }
         return false;
     }
 

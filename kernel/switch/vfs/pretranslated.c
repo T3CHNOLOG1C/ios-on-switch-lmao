@@ -294,7 +294,7 @@ void switch_pretranslated_redirect(struct nameidata *ndp)
     if (vnode_getattr(vp, &va, ctx) || !VATTR_IS_SUPPORTED(&va, va_fileid)) {
         return;
     }
-    const int64_t file = switch_pt_system_file(&switch_pt.tables, va.va_fileid, cnp->cn_nameptr, length);
+    const int64_t file = switch_pt_system_file(&switch_pt.tables, va.va_fileid, hash, cnp->cn_nameptr, length);
     if (file < 0) {
         return;
     }

@@ -359,12 +359,12 @@ void map()
 {
     if (gCar)
         return;
-    gCar = (volatile uint32_t *)ml_io_map(kCarPA, 0x1000);
-    gDc = (volatile uint32_t *)ml_io_map(kDisplayAPA, 0x4000);
-    gDsi = (volatile uint32_t *)ml_io_map(kDsiPA, 0x1000);
-    gMipiCal = (volatile uint32_t *)ml_io_map(kMipiCalPA, 0x1000);
-    gApbMisc = (volatile uint32_t *)ml_io_map(kApbMiscPA, 0x4000);
-    gPmc = (volatile uint32_t *)ml_io_map(kPmcPagePA, 0x1000);
+    gCar = reinterpret_cast<volatile uint32_t *>(ml_io_map(kCarPA, 0x1000));
+    gDc = reinterpret_cast<volatile uint32_t *>(ml_io_map(kDisplayAPA, 0x4000));
+    gDsi = reinterpret_cast<volatile uint32_t *>(ml_io_map(kDsiPA, 0x1000));
+    gMipiCal = reinterpret_cast<volatile uint32_t *>(ml_io_map(kMipiCalPA, 0x1000));
+    gApbMisc = reinterpret_cast<volatile uint32_t *>(ml_io_map(kApbMiscPA, 0x4000));
+    gPmc = reinterpret_cast<volatile uint32_t *>(ml_io_map(kPmcPagePA, 0x1000));
     if (!gCar || !gDc || !gDsi || !gMipiCal || !gApbMisc || !gPmc)
         panic("TegraDisplay: cannot map the display registers");
 }
@@ -377,9 +377,10 @@ void setPlld(uint32_t divp, uint32_t divn)
     car(PLLD_MISC1) = 0;
     car(PLLD_MISC) = (1u << 21) | (1u << 19) | (1u << 18) | (1u << 16) | 0xFC00;
     for (unsigned us = 0; !(car(PLLD_BASE) & kPllLock); ++us) {
-        if (us == 1000)
+        if (us == 1000) {
             panic("TegraDisplay: PLLD (P %u N %u) did not lock: BASE %#x MISC %#x", divp, divn, car(PLLD_BASE),
                   car(PLLD_MISC));
+        }
         IODelay(1);
     }
     IODelay(2);
@@ -454,9 +455,10 @@ extern "C" void tegra_display_power_up(void)
     pmc(IO_DPD_REQ) = kDpdOff | kDpdDsi;
     pmc(IO_DPD2_REQ) = kDpdOff | kDpdDsib;
     for (unsigned us = 0; (pmc(IO_DPD_STATUS) & kDpdDsi) || (pmc(IO_DPD2_STATUS) & kDpdDsib); ++us) {
-        if (us == 250)
+        if (us == 250) {
             panic("TegraDisplay: DSI pads stay in deep power down: DPD_STATUS %#x DPD2_STATUS %#x", pmc(IO_DPD_STATUS),
                   pmc(IO_DPD2_STATUS));
+        }
         IODelay(1);
     }
     // Panel reset held (the OLED has no LCD AVDD/WLED pins), pad regulators up, T210B01 DSI pad control cleared.

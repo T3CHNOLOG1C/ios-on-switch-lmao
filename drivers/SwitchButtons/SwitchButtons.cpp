@@ -52,8 +52,8 @@ enum : uint8_t {
     OnOffStat = 0x15
 };
 
-constexpr uint8_t kTopOnOff = 1u << 1, kTopRtc = 1u << 3, kGlobalMask = 1u << 0, kEn0Falling = 1u << 2,
-                  kEn0Rising = 1u << 3, kEn0Pressed = 1u << 2;
+constexpr unsigned kTopOnOff = 1u << 1, kTopRtc = 1u << 3, kGlobalMask = 1u << 0, kEn0Falling = 1u << 2,
+                   kEn0Rising = 1u << 3, kEn0Pressed = 1u << 2;
 constexpr uint32_t kPmicIntid = 118;  // GIC SPI 86
 constexpr vm_offset_t kPmcPA = 0x7000E400;
 constexpr uint32_t kPmcIntrPolarity = 1u << 17;
@@ -83,7 +83,9 @@ int pmicWrite(uint8_t reg, uint8_t value)
 }
 }  // namespace
 
+// NOLINTNEXTLINE(misc-use-internal-linkage): OSDefineMetaClassAndStructors needs the class's external linkage
 class SwitchButtons : public IOService {
+    // NOLINTNEXTLINE(misc-explicit-constructor): IOKit's structors macro declares the metaclass constructor
     OSDeclareDefaultStructors(SwitchButtons)
 
         IOWorkLoop *loop = nullptr;
@@ -207,18 +209,20 @@ void SwitchButtons::setUpPmic()
               control);
     }
 
-    uint8_t stale = 0, global = 0, state = 0;
+    uint8_t stale = 0;
+    uint8_t global = 0;
+    uint8_t state = 0;
     int err = tegra_i2c_init(kPmicBus);
     if (!err)
         err = pmicRead(OnOffIrq, &stale);
     if (!err)
-        err = pmicWrite(OnOffIrqMask, (uint8_t)~(kEn0Falling | kEn0Rising));
+        err = pmicWrite(OnOffIrqMask, static_cast<uint8_t>(~(kEn0Falling | kEn0Rising)));
     if (!err)
-        err = pmicWrite(IrqTopMask, (uint8_t)~kTopOnOff);
+        err = pmicWrite(IrqTopMask, static_cast<uint8_t>(~kTopOnOff));
     if (!err)
         err = pmicRead(IntEnLbt, &global);
     if (!err && (global & kGlobalMask))
-        err = pmicWrite(IntEnLbt, (uint8_t)(global & ~kGlobalMask));
+        err = pmicWrite(IntEnLbt, static_cast<uint8_t>(global & ~kGlobalMask));
     if (!err)
         err = pmicRead(OnOffStat, &state);
     if (err)
@@ -235,14 +239,14 @@ void SwitchButtons::post()
 
 void SwitchButtons::change(uint8_t button, bool pressed, bool pulse)
 {
-    const bool was = buttons & button;
+    const bool was = (buttons & button) != 0;
     if (pressed == was && !pulse)
         return;
     if (pressed == was) {  // a whole press (or release) happened before we got here: report both halves
         buttons ^= button;
         post();
     }
-    buttons = (uint8_t)(pressed ? buttons | button : buttons & ~button);
+    buttons = static_cast<uint8_t>(pressed ? buttons | button : buttons & ~static_cast<unsigned>(button));
     post();
 }
 
@@ -264,7 +268,9 @@ void SwitchButtons::pmicInterrupt(OSObject *owner, IOInterruptEventSource *, int
     auto *self = OSDynamicCast(SwitchButtons, owner);
     if (!self)
         return;
-    uint8_t top = 0, edges = 0, state = 0;
+    uint8_t top = 0;
+    uint8_t edges = 0;
+    uint8_t state = 0;
     int err = pmicRead(IrqTop, &top);
     if (!err && (top & kTopOnOff))
         err = pmicRead(OnOffIrq, &edges);
@@ -279,7 +285,7 @@ void SwitchButtons::pmicInterrupt(OSObject *owner, IOInterruptEventSource *, int
     const uint64_t now = mach_absolute_time();
     uint64_t elapsedNS = 0;
     absolutetime_to_nanoseconds(now - self->pmicWindow, &elapsedNS);
-    if (elapsedNS > 1000000000ull) {
+    if (elapsedNS > 1000000000ULL) {
         self->pmicWindow = now;
         self->pmicCount = 0;
     }
@@ -290,8 +296,8 @@ void SwitchButtons::pmicInterrupt(OSObject *owner, IOInterruptEventSource *, int
               "ONOFFSTAT %#x, %s",
               self->pmicCount, elapsedNS / 1000000, top, edges, state, gic);
     }
-    const bool wasPressed = self->buttons & kSwitchButtonPower;
-    self->change(kSwitchButtonPower, state & kEn0Pressed,
+    const bool wasPressed = (self->buttons & kSwitchButtonPower) != 0;
+    self->change(kSwitchButtonPower, (state & kEn0Pressed) != 0,
                  (edges & (kEn0Falling | kEn0Rising)) == (kEn0Falling | kEn0Rising));
     // A press (down, or a whole press latched before this ran) with the panel off: a wake source.
     if ((!wasPressed && (state & kEn0Pressed)) || (edges & (kEn0Falling | kEn0Rising)) == (kEn0Falling | kEn0Rising))
@@ -305,7 +311,7 @@ void SwitchButtons::btClicks(OSObject *owner, IOInterruptEventSource *, int)
     auto *self = OSDynamicCast(SwitchButtons, owner);
     if (!self)
         return;
-    const uint8_t which = __atomic_exchange_n(&self->clicks, (uint8_t)0, __ATOMIC_ACQ_REL);
+    const uint8_t which = __atomic_exchange_n(&self->clicks, static_cast<uint8_t>(0), __ATOMIC_ACQ_REL);
 
     const struct {
         uint8_t bt, button;
@@ -316,7 +322,7 @@ void SwitchButtons::btClicks(OSObject *owner, IOInterruptEventSource *, int)
             continue;
         self->buttons |= c.button;
         self->post();
-        self->buttons &= (uint8_t)~c.button;
+        self->buttons &= static_cast<uint8_t>(~c.button);
         self->post();
     }
 }
@@ -345,8 +351,8 @@ extern "C" int switch_buttons_start(void)
     return 0;
 }
 
-extern "C" void switch_buttons_bt_click(uint8_t which)
+extern "C" void switch_buttons_bt_click(uint8_t buttons)
 {
-    if (SwitchButtons *buttons = __atomic_load_n(&gButtons, __ATOMIC_ACQUIRE))
-        buttons->click(which);
+    if (SwitchButtons *driver = __atomic_load_n(&gButtons, __ATOMIC_ACQUIRE))
+        driver->click(buttons);
 }

@@ -43,13 +43,13 @@ TegraVICJob gLastJob;  // the last job run, for a failure's diagnostic
 void dumpLastJob(const char *what)
 {
     const TegraVICJob &j = gLastJob;
-    const uint32_t *w = (const uint32_t *)j.config;
+    const uint32_t *w = reinterpret_cast<const uint32_t *>(j.config);
     char text[300];
     char falcon[200];
     tegra_vic_describe(falcon, sizeof(falcon));
     IOLog("TegraVIC: diag %s: %s\n", what, falcon);
 
-    struct {
+    const struct {
         const char *name;
         uint32_t offset, bytes;
     } parts[] = {
@@ -64,12 +64,12 @@ void dumpLastJob(const char *what)
 
     for (const auto &part : parts) {
         int n = snprintf(text, sizeof(text), "TegraVIC: diag %s: %s @%#x:", what, part.name, part.offset);
-        for (uint32_t i = 0; i < part.bytes / 4 && n > 0 && n < (int)sizeof(text); i++)
+        for (uint32_t i = 0; i < part.bytes / 4 && n > 0 && n < static_cast<int>(sizeof(text)); i++)
             n += snprintf(text + n, sizeof(text) - n, " %08x", w[part.offset / 4 + i]);
         IOLog("%s\n", text);
     }
     int n = snprintf(text, sizeof(text), "TegraVIC: diag %s: methods", what);
-    for (uint32_t i = 0; i < j.count && n > 0 && n < (int)sizeof(text); i++)
+    for (uint32_t i = 0; i < j.count && n > 0 && n < static_cast<int>(sizeof(text)); i++)
         n += snprintf(text + n, sizeof(text) - n, " %03x=%08x", j.method[i], j.value[i]);
     IOLog("%s\n", text);
 }
@@ -97,8 +97,8 @@ TegraVICImage nv12(const TegraVICBuffer &b, uint32_t w, uint32_t h)
     im.rows[0] = h;
     im.rows[1] = h / 2;
     im.base[0] = b.pa;
-    im.span[0] = (uint64_t)kPitch * h;
-    im.base[1] = b.pa + (uint64_t)kPitch * h;
+    im.span[0] = static_cast<uint64_t>(kPitch) * h;
+    im.base[1] = b.pa + static_cast<uint64_t>(kPitch) * h;
     im.span[1] = b.size - im.span[0];
     im.standard = TEGRA_VIC_YCC_709;
     return im;
@@ -107,8 +107,8 @@ TegraVICImage nv12(const TegraVICBuffer &b, uint32_t w, uint32_t h)
 TegraVICOp copyOp(uint32_t sw, uint32_t sh, uint32_t dw, uint32_t dh, uint32_t transform)
 {
     TegraVICOp op = {};
-    op.srcW = (uint64_t)sw << 16;
-    op.srcH = (uint64_t)sh << 16;
+    op.srcW = static_cast<uint64_t>(sw) << 16;
+    op.srcH = static_cast<uint64_t>(sh) << 16;
     op.dstW = dw;
     op.dstH = dh;
     op.transform = transform;
@@ -144,7 +144,7 @@ bool smmuProof(char *line, size_t size)
     TegraVICTraits t = {};
     t.rotations = 1;
     t.pitchAlign = 256;
-    TegraVICImage dst = bgra(gPageA, 64, 4, kPitch);
+    const TegraVICImage dst = bgra(gPageA, 64, 4, kPitch);
     TegraVICOp op = {};
     op.fill = 1;
     op.dstW = 64;
@@ -173,18 +173,19 @@ bool smmuProof(char *line, size_t size)
     gJobs++;
     gBusyUs += us;
     const uint32_t want = 0xff55aa33u;  // A8R8G8B8: bytes 33 aa 55 ff
-    uint32_t inA = 0, inB = 0;
+    uint32_t inA = 0;
+    uint32_t inB = 0;
     for (uint32_t i = 0; i < 4 * kPitch / 4; i++) {
-        inA += ((const uint32_t *)gPageA.va)[i] == want;
-        inB += ((const uint32_t *)gPageB.va)[i] == want;
+        inA += static_cast<uint32_t>(reinterpret_cast<const uint32_t *>(gPageA.va)[i] == want);
+        inB += static_cast<uint32_t>(reinterpret_cast<const uint32_t *>(gPageB.va)[i] == want);
     }
     if (ret || inB != 64 * 4 || inA) {
         snprintf(line, size,
                  "V3 FAIL a fill at IOVA %#llx mapped to page %#llx: %s; %u of 256 pixels in that page, %u at the bus "
                  "address (%s); first words %#x %#x",
                  gPageA.pa, gPageB.pa, ret ? "job did not complete" : "landed elsewhere", inB, inA,
-                 inA ? "translation is off" : "nowhere", ((const uint32_t *)gPageB.va)[0],
-                 ((const uint32_t *)gPageA.va)[0]);
+                 inA ? "translation is off" : "nowhere", reinterpret_cast<const uint32_t *>(gPageB.va)[0],
+                 reinterpret_cast<const uint32_t *>(gPageA.va)[0]);
         return false;
     }
     snprintf(line, size,
@@ -234,14 +235,15 @@ constexpr uint32_t kPatches[8] = {0xff000000, 0xffffffff, 0xffff0000, 0xff00ff00
 void drawPatches(uint32_t pitch, uint32_t width = 64)
 {
     bzero(gSrc.va, gSrc.size);
-    for (uint32_t y = 0; y < 32; y++)
+    for (uint32_t y = 0; y < 32; y++) {
         for (uint32_t x = 0; x < width; x++)
-            ((uint32_t *)(gSrc.va + y * pitch))[x] = kPatches[(y / 16) * 4 + x / 16];
+            reinterpret_cast<uint32_t *>(gSrc.va + static_cast<size_t>(y) * pitch)[x] = kPatches[(y / 16) * 4 + x / 16];
+    }
 }
 
 inline uint32_t near(uint32_t a, uint32_t b)
 {
-    return a > b ? a - b <= 1 : b - a <= 1;
+    return static_cast<uint32_t>(a > b ? a - b <= 1 : b - a <= 1);
 }
 
 // The engine's result for an RGB pixel through the output matrix: Y, Cb, Cr (8-bit).
@@ -259,20 +261,23 @@ void expectYcc(const TegraVICMatrix *m, const TegraVICChroma *ch, uint32_t argb,
 bool checkNv12(uint32_t w, uint32_t h, uint32_t patchW, uint32_t patchH, const uint32_t (*want)[3], uint32_t cols,
                uint32_t *bad)
 {
-    const uint8_t *yp = gDst.va, *uv = gDst.va + (uint64_t)kPitch * h;
+    const uint8_t *yp = gDst.va;
+    const uint8_t *uv = gDst.va + static_cast<uint64_t>(kPitch) * h;
     *bad = 0;
-    for (uint32_t py = 0; py < h / patchH; py++)
+    for (uint32_t py = 0; py < h / patchH; py++) {
         for (uint32_t px = 0; px < w / patchW; px++) {
             const uint32_t *e = want[py * cols + px];
-            for (uint32_t y = py * patchH + patchH / 4; y < (py + 1) * patchH - patchH / 4; y++)
+            for (uint32_t y = py * patchH + patchH / 4; y < (py + 1) * patchH - patchH / 4; y++) {
                 for (uint32_t x = px * patchW + patchW / 4; x < (px + 1) * patchW - patchW / 4; x++) {
                     if (!near(yp[y * kPitch + x], e[0]))
                         (*bad)++;
-                    const uint8_t *c = uv + (y / 2) * kPitch + (x / 2) * 2;
+                    const uint8_t *c = uv + static_cast<size_t>(y / 2) * kPitch + static_cast<size_t>(x / 2) * 2;
                     if (!near(c[0], e[1]) || !near(c[1], e[2]))
                         (*bad)++;
                 }
+            }
         }
+    }
     return *bad == 0;
 }
 
@@ -293,35 +298,39 @@ inline uint32_t widen(uint32_t v8, uint32_t law)
 
 bool yccSource(TegraVICTraits *t, char *line, size_t size, char *note, size_t noteSize)
 {
-    TegraVICImage ysrc = nv12(gSrc, 64, 32);
+    const TegraVICImage ysrc = nv12(gSrc, 64, 32);
     const TegraVICOp op = copyOp(64, 32, 64, 32, 0);
     const TegraVICChroma orders[2] = {t->out, {t->out.crChannel, t->out.cbChannel}};
-    const uint8_t *yp = gSrc.va, *uv = gSrc.va + (uint64_t)kPitch * 32;
+    const uint8_t *yp = gSrc.va;
+    const uint8_t *uv = gSrc.va + static_cast<uint64_t>(kPitch) * 32;
     // 420f -> BGRA through the slot matrix in both chroma orders. Patch centres kept for a failure's diagnostic: read
     // Y Cb Cr, wrote R G B, want R G B (shift), want R G B (repeated bits), BT.709 R G B.
-    uint32_t worst[2][2] = {{256, 256}, {256, 256}}, centre[2][8][15] = {};
+    uint32_t worst[2][2] = {{256, 256}, {256, 256}};
+    uint32_t centre[2][8][15] = {};
     const char *refused[2] = {nullptr, nullptr};
     for (uint32_t o = 0; o < 2; o++) {
         TegraVICTraits probe = *t;
         probe.in = orders[o];
         probe.yccIn = TEGRA_VIC_YCC_IN_RGB;
-        TegraVICImage rgb = bgra(gDst, 64, 32, kPitch);
+        const TegraVICImage rgb = bgra(gDst, 64, 32, kPitch);
         if (run(&ysrc, &rgb, &op, &probe, &refused[o]))
             continue;
         TegraVICMatrix toRgb;
-        tegra_vic_matrix_ycc_to_rgb(TEGRA_VIC_YCC_709, 1, &orders[o], &toRgb);
+        tegra_vic_matrix_ycc_to_rgb(TEGRA_VIC_YCC_709, true, &orders[o], &toRgb);
         worst[o][0] = worst[o][1] = 0;
-        for (uint32_t i = 0; i < 8; i++)
-            for (uint32_t y = (i / 4) * 16 + 4; y < (i / 4) * 16 + 12; y++)
+        for (uint32_t i = 0; i < 8; i++) {
+            for (uint32_t y = (i / 4) * 16 + 4; y < (i / 4) * 16 + 12; y++) {
                 for (uint32_t x = (i % 4) * 16 + 4; x < (i % 4) * 16 + 12; x++) {
                     // NV12 memory: Cb then Cr (the RGB -> 420f check just proved the engine writes it so)
-                    const uint8_t *c = uv + (y / 2) * kPitch + (x / 2) * 2;
+                    const uint8_t *c = uv + static_cast<size_t>(y / 2) * kPitch + static_cast<size_t>(x / 2) * 2;
                     const uint32_t ycc[3] = {yp[y * kPitch + x], c[0], c[1]};
-                    const uint32_t px = ((const uint32_t *)(gDst.va + y * kPitch))[x];
+                    const uint32_t px =
+                        reinterpret_cast<const uint32_t *>(gDst.va + static_cast<size_t>(y) * kPitch)[x];
                     const uint32_t got[3] = {(px >> 16) & 0xff, (px >> 8) & 0xff, px & 0xff};
                     uint32_t want[2][3];
                     for (uint32_t law = 0; law < 2; law++) {
-                        uint32_t pipe[3], out10[3];
+                        uint32_t pipe[3];
+                        uint32_t out10[3];
                         pipe[0] = widen(ycc[0], law);
                         pipe[orders[o].cbChannel] = widen(ycc[1], law);
                         pipe[orders[o].crChannel] = widen(ycc[2], law);
@@ -340,17 +349,22 @@ bool yccSource(TegraVICTraits *t, char *line, size_t size, char *note, size_t no
                         tegra_vic_ideal_rgb709_full(ycc, e + 12);
                     }
                 }
+            }
+        }
     }
-    uint32_t best = 0, law = 0;
-    for (uint32_t o = 0; o < 2; o++)
-        for (uint32_t l = 0; l < 2; l++)
+    uint32_t best = 0;
+    uint32_t law = 0;
+    for (uint32_t o = 0; o < 2; o++) {
+        for (uint32_t l = 0; l < 2; l++) {
             if (worst[o][l] < worst[best][law])
                 best = o, law = l;
+        }
+    }
     const uint32_t *e = centre[best][6];  // the c0 40 20 patch
     if (worst[best][law] > 1) {
         // The one-boot diagnostic: what the engine read and wrote at each patch centre in both orders, then the
         // configuration of a job in the closer order (run again, so the dump is that job's).
-        for (uint32_t o = 0; o < 2; o++)
+        for (uint32_t o = 0; o < 2; o++) {
             for (uint32_t i = 0; i < 8; i++) {
                 const uint32_t *d = centre[o][i];
                 IOLog("TegraVIC: diag 420f -> BGRA order %u (Cb in channel %u) patch %u: read Y %u Cb %u Cr %u, wrote "
@@ -358,38 +372,41 @@ bool yccSource(TegraVICTraits *t, char *line, size_t size, char *note, size_t no
                       o, orders[o].cbChannel, i, d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7], d[8], d[9], d[10],
                       d[11], d[12], d[13], d[14]);
             }
+        }
         TegraVICTraits probe = *t;
         probe.in = orders[best];
         probe.yccIn = TEGRA_VIC_YCC_IN_RGB;
-        TegraVICImage rgb = bgra(gDst, 64, 32, kPitch);
+        const TegraVICImage rgb = bgra(gDst, 64, 32, kPitch);
         const char *why = nullptr;
         (void)run(&ysrc, &rgb, &op, &probe, &why);
         dumpLastJob("420f -> BGRA");
-        if (refused[0] && refused[1])
+        if (refused[0] && refused[1]) {
             snprintf(line, size, "V4 FAIL 420f -> BGRA: %s", refused[0]);
-        else
+        } else {
             snprintf(line, size,
                      "V4 FAIL 420f -> BGRA (BT.709 full) not the reference in either chroma order (worst %u/%u/%u/%u "
                      "steps; c0 40 20 patch read Y %u Cb %u Cr %u, wrote %u %u %u, want %u %u %u)",
                      worst[0][0], worst[0][1], worst[1][0], worst[1][1], e[0], e[1], e[2], e[3], e[4], e[5],
                      e[6 + 3 * law], e[7 + 3 * law], e[8 + 3 * law]);
+        }
         return false;
     }
     t->in = orders[best];
     t->yccIn |= TEGRA_VIC_YCC_IN_RGB;
     // 420f -> 420f 1:1 (same range and standard): the pass-through, exact to a step. Only when the engine reads the
     // chroma in the order it writes it: otherwise such a job goes through both matrices (tegra_vic_build), proven above.
-    uint32_t copyBad = 0, firstBad = UINT32_MAX;
+    uint32_t copyBad = 0;
+    uint32_t firstBad = UINT32_MAX;
     const bool passThrough = t->in.cbChannel == t->out.cbChannel;
     if (passThrough) {
         TegraVICTraits probe = *t;
         probe.yccIn |= TEGRA_VIC_YCC_IN_COPY;
-        TegraVICImage dst = nv12(gDst, 64, 32);
+        const TegraVICImage dst = nv12(gDst, 64, 32);
         const char *why = nullptr;
         if (run(&ysrc, &dst, &op, &probe, &why)) {
             copyBad = UINT32_MAX;
         } else {
-            for (uint32_t at = 0; at < (uint32_t)kPitch * 48; at++) {
+            for (uint32_t at = 0; at < kPitch * 48; at++) {
                 if (at % kPitch >= 64)
                     continue;
                 if (!near(gDst.va[at], gSrc.va[at])) {
@@ -399,9 +416,9 @@ bool yccSource(TegraVICTraits *t, char *line, size_t size, char *note, size_t no
                 }
             }
         }
-        if (!copyBad)
+        if (!copyBad) {
             t->yccIn |= TEGRA_VIC_YCC_IN_COPY;
-        else if (copyBad != UINT32_MAX) {
+        } else if (copyBad != UINT32_MAX) {
             IOLog("TegraVIC: diag 420f -> 420f: %u of 3072 samples off, first at byte %#x (plane %s row %u column %u): "
                   "%u, source %u\n",
                   copyBad, firstBad, firstBad < kPitch * 32 ? "Y" : "CbCr", (firstBad % (kPitch * 32)) / kPitch,
@@ -409,14 +426,14 @@ bool yccSource(TegraVICTraits *t, char *line, size_t size, char *note, size_t no
             dumpLastJob("420f -> 420f");
         }
     }
+    const char *copy = "through the matrices";
+    if (passThrough)
+        copy = (t->yccIn & TEGRA_VIC_YCC_IN_COPY) ? "on" : "refused";
     snprintf(note, noteSize,
              "4:2:0 in: to RGB on (Cb in channel %u, 8-bit samples widened as %s; worst %u/%u/%u/%u steps by order and "
              "widening; c0 40 20 patch read Y %u Cb %u Cr %u -> %u %u %u, BT.709 %u %u %u), copy %s",
              t->in.cbChannel, law ? "x << 2 | x >> 6" : "x << 2", worst[0][0], worst[0][1], worst[1][0], worst[1][1],
-             e[0], e[1], e[2], e[3], e[4], e[5], e[12], e[13], e[14],
-             !passThrough                         ? "through the matrices"
-             : (t->yccIn & TEGRA_VIC_YCC_IN_COPY) ? "on"
-                                                  : "refused");
+             e[0], e[1], e[2], e[3], e[4], e[5], e[12], e[13], e[14], copy);
     return true;
 }
 
@@ -424,11 +441,12 @@ bool colour(TegraVICTraits *t, char *line, size_t size, char *note, size_t noteS
 {
     // RGB -> 420f through the output matrix; the measured channel order first.
     drawPatches(kPitch);
-    TegraVICImage src = bgra(gSrc, 64, 32, kPitch);
-    TegraVICImage dst = nv12(gDst, 64, 32);
-    TegraVICOp op = copyOp(64, 32, 64, 32, 0);
+    const TegraVICImage src = bgra(gSrc, 64, 32, kPitch);
+    const TegraVICImage dst = nv12(gDst, 64, 32);
+    const TegraVICOp op = copyOp(64, 32, 64, 32, 0);
     const TegraVICChroma orders[2] = {{2, 1}, {1, 2}};
-    uint32_t bad = 0, outOrder = 2;
+    uint32_t bad = 0;
+    uint32_t outOrder = 2;
     for (uint32_t o = 0; o < 2 && outOrder == 2; o++) {
         t->out = orders[o];
         t->in = orders[o];
@@ -438,17 +456,19 @@ bool colour(TegraVICTraits *t, char *line, size_t size, char *note, size_t noteS
             return false;
         }
         TegraVICMatrix m;
-        tegra_vic_matrix_rgb_to_ycc(TEGRA_VIC_YCC_709, 1, &t->out, &m);
+        tegra_vic_matrix_rgb_to_ycc(TEGRA_VIC_YCC_709, true, &t->out, &m);
         uint32_t want[8][3];
         for (uint32_t i = 0; i < 8; i++)
             expectYcc(&m, &t->out, kPatches[i], want[i]);
         if (checkNv12(64, 32, 16, 16, want, 4, &bad)) {
             outOrder = o;
         } else {
-            const uint8_t *yp = gDst.va, *uv = gDst.va + kPitch * 32;
+            const uint8_t *yp = gDst.va;
+            const uint8_t *uv = gDst.va + static_cast<size_t>(kPitch) * 32;
             for (uint32_t i = 0; i < 8; i++) {
-                const uint32_t x = (i % 4) * 16 + 8, y = (i / 4) * 16 + 8;
-                const uint8_t *c = uv + (y / 2) * kPitch + (x / 2) * 2;
+                const uint32_t x = (i % 4) * 16 + 8;
+                const uint32_t y = (i / 4) * 16 + 8;
+                const uint8_t *c = uv + static_cast<size_t>(y / 2) * kPitch + static_cast<size_t>(x / 2) * 2;
                 IOLog(
                     "TegraVIC: diag BGRA -> 420f order %u (Cb in channel %u) patch %u (%06x): wrote Y %u Cb %u Cr %u, "
                     "want %u %u %u\n",
@@ -459,7 +479,8 @@ bool colour(TegraVICTraits *t, char *line, size_t size, char *note, size_t noteS
         }
     }
     if (outOrder == 2) {
-        const uint8_t *p = gDst.va, *uv = gDst.va + kPitch * 32;
+        const uint8_t *p = gDst.va;
+        const uint8_t *uv = gDst.va + static_cast<size_t>(kPitch) * 32;
         snprintf(line, size,
                  "V4 FAIL BGRA -> 420f (BT.709 full) not the reference in either chroma order (%u samples off); "
                  "white patch Y %u, red patch Y %u Cb %u Cr %u",
@@ -470,7 +491,7 @@ bool colour(TegraVICTraits *t, char *line, size_t size, char *note, size_t noteS
     t->in = t->out;
 
     // That 420f (the patches, as the engine wrote them) is the source of the 4:2:0-in checks.
-    memcpy(gSrc.va, gDst.va, (uint64_t)kPitch * 48);
+    memcpy(gSrc.va, gDst.va, static_cast<uint64_t>(kPitch) * 48);
     if (!yccSource(t, line, size, note, noteSize))
         return false;
 
@@ -492,14 +513,15 @@ bool colour(TegraVICTraits *t, char *line, size_t size, char *note, size_t noteS
             return false;
         }
         TegraVICMatrix m;
-        tegra_vic_matrix_rgb_to_ycc(TEGRA_VIC_YCC_709, 1, &t->out, &m);
+        tegra_vic_matrix_rgb_to_ycc(TEGRA_VIC_YCC_709, true, &t->out, &m);
         uint32_t want[8][3];
-        for (uint32_t i = 0; i < 8; i++)
-            expectYcc(&m, &t->out, 0xffc04020u, want[i]);
+        for (uint32_t *patch : want)
+            expectYcc(&m, &t->out, 0xffc04020u, patch);
         if (checkNv12(64, 32, 16, 16, want, 4, &bad))
             break;
         if (!through) {
-            const uint8_t *p = gDst.va, *uv = gDst.va + kPitch * 32;
+            const uint8_t *p = gDst.va;
+            const uint8_t *uv = gDst.va + static_cast<size_t>(kPitch) * 32;
             snprintf(line, size, "V4 FAIL 420f fill of RGB c0 40 20 is Y %u Cb %u Cr %u, want %u %u %u", p[0], uv[0],
                      uv[1], want[0][0], want[0][1], want[0][2]);
             return false;
@@ -511,8 +533,8 @@ bool colour(TegraVICTraits *t, char *line, size_t size, char *note, size_t noteS
 bool scaling(TegraVICTraits *t, char *line, size_t size)
 {
     drawPatches(kPitch);
-    TegraVICImage src = bgra(gSrc, 64, 32, kPitch);
-    TegraVICImage dst = bgra(gDst, 32, 16, kPitch);
+    const TegraVICImage src = bgra(gSrc, 64, 32, kPitch);
+    const TegraVICImage dst = bgra(gDst, 32, 16, kPitch);
     for (uint32_t bilinear = 1;; bilinear = 0) {
         t->bilinear = bilinear;
         TegraVICOp op = copyOp(64, 32, 32, 16, 0);
@@ -523,14 +545,18 @@ bool scaling(TegraVICTraits *t, char *line, size_t size)
             return false;
         }
         uint32_t bad = 0;
-        for (uint32_t i = 0; i < 8; i++)
-            for (uint32_t y = (i / 4) * 8 + 2; y < (i / 4) * 8 + 6; y++)
+        for (uint32_t i = 0; i < 8; i++) {
+            for (uint32_t y = (i / 4) * 8 + 2; y < (i / 4) * 8 + 6; y++) {
                 for (uint32_t x = (i % 4) * 8 + 2; x < (i % 4) * 8 + 6; x++) {
-                    const uint32_t got = ((const uint32_t *)(gDst.va + y * kPitch))[x];
-                    for (int c = 0; c < 24; c += 8)
+                    const uint32_t got =
+                        reinterpret_cast<const uint32_t *>(gDst.va + static_cast<size_t>(y) * kPitch)[x];
+                    for (uint32_t c = 0; c < 24; c += 8) {
                         if (!near((got >> c) & 0xff, (kPatches[i] >> c) & 0xff))
                             bad++;
+                    }
                 }
+            }
+        }
         if (!bad)
             return true;
         if (!bilinear) {
@@ -548,11 +574,12 @@ bool pitch(TegraVICTraits *t, char *line, size_t size)
     static const uint32_t kNarrow[2][2] = {{144, 16}, {192, 64}};
     t->pitchAlign = 256;
     for (uint32_t i = 0; i < 2 && t->pitchAlign == 256; i++) {
-        const uint32_t rowBytes = kNarrow[i][0], w = rowBytes / 4;
+        const uint32_t rowBytes = kNarrow[i][0];
+        const uint32_t w = rowBytes / 4;
         drawPatches(rowBytes, w);
-        TegraVICImage src = bgra(gSrc, w, 32, rowBytes);
-        TegraVICImage dst = bgra(gDst, w, 32, kPitch);
-        TegraVICOp op = copyOp(w, 32, w, 32, 0);
+        const TegraVICImage src = bgra(gSrc, w, 32, rowBytes);
+        const TegraVICImage dst = bgra(gDst, w, 32, kPitch);
+        const TegraVICOp op = copyOp(w, 32, w, 32, 0);
         TegraVICTraits probe = *t;
         probe.pitchAlign = kNarrow[i][1];
         const char *why = nullptr;
@@ -560,13 +587,17 @@ bool pitch(TegraVICTraits *t, char *line, size_t size)
             snprintf(line, size, "V4 FAIL %u-byte pitch copy: %s", rowBytes, why);
             return false;
         }
-        uint32_t bad = 0, firstX = 0, firstY = 0, got = 0;
-        for (uint32_t y = 0; y < 32; y++)
+        uint32_t bad = 0;
+        uint32_t firstX = 0;
+        uint32_t firstY = 0;
+        uint32_t got = 0;
+        for (uint32_t y = 0; y < 32; y++) {
             for (uint32_t x = 0; x < w; x++) {
-                const uint32_t px = ((const uint32_t *)(gDst.va + y * kPitch))[x];
+                const uint32_t px = reinterpret_cast<const uint32_t *>(gDst.va + static_cast<size_t>(y) * kPitch)[x];
                 if (px != kPatches[(y / 16) * 4 + x / 16] && !bad++)
                     firstX = x, firstY = y, got = px;
             }
+        }
         if (!bad) {
             t->pitchAlign = kNarrow[i][1];
         } else {
@@ -588,31 +619,34 @@ bool pitch(TegraVICTraits *t, char *line, size_t size)
 // dropped (such jobs are refused and callers fall back), one line says why in `note`, and V4 goes on.
 void recording(TegraVICTraits *t, char *note, size_t size)
 {
-    static const uint32_t kTurns[2] = {TEGRA_VIC_ROT90, TEGRA_VIC_ROT90 | TEGRA_VIC_FLIP_H | TEGRA_VIC_FLIP_V};
-    for (uint32_t turn : kTurns) {
+    static const uint32_t kTurns[2] = {TEGRA_VIC_ROT90,
+                                       static_cast<uint32_t>(TEGRA_VIC_ROT90) | TEGRA_VIC_FLIP_H | TEGRA_VIC_FLIP_V};
+    for (const uint32_t turn : kTurns) {
         if (!(t->rotations & (1u << turn)))
             continue;  // unproven: such requests are refused anyway
         drawPatches(kPitch);
-        TegraVICImage src = bgra(gSrc, 64, 32, kPitch);
-        TegraVICImage dst = nv12(gDst, 32, 64);
-        TegraVICOp op = copyOp(64, 32, 32, 64, turn);
+        const TegraVICImage src = bgra(gSrc, 64, 32, kPitch);
+        const TegraVICImage dst = nv12(gDst, 32, 64);
+        const TegraVICOp op = copyOp(64, 32, 32, 64, turn);
         const char *why = nullptr;
         uint32_t bad = 0;
         if (!run(&src, &dst, &op, t, &why)) {
             TegraVICMatrix m;
-            tegra_vic_matrix_rgb_to_ycc(TEGRA_VIC_YCC_709, 1, &t->out, &m);
+            tegra_vic_matrix_rgb_to_ycc(TEGRA_VIC_YCC_709, true, &t->out, &m);
             // Patch (px, py) of the 64 x 32 source (4 x 2 patches of 16) lands at output patch (u, v) of the 32 x 64
             // output (2 x 4): the transform of the patch grid.
             uint32_t want[8][3];
             for (uint32_t i = 0; i < 8; i++) {
-                uint32_t u, v;
+                uint32_t u = 0;
+                uint32_t v = 0;
                 tegra_vic_transform_point(turn, 4, 2, i % 4, i / 4, &u, &v);
                 expectYcc(&m, &t->out, kPatches[i], want[v * 2 + u]);
             }
             if (checkNv12(32, 64, 16, 16, want, 2, &bad))
                 continue;
         }
-        const uint8_t *yp = gDst.va, *uv = gDst.va + (uint64_t)kPitch * 64;
+        const uint8_t *yp = gDst.va;
+        const uint8_t *uv = gDst.va + static_cast<uint64_t>(kPitch) * 64;
         snprintf(note, size, "off: transform %u into 420f %s (%u samples off; output patch 0,0 Y %u Cb %u Cr %u)", turn,
                  why ? why : "not the patches turned", bad, yp[8 * kPitch + 8], uv[4 * kPitch + 8], uv[4 * kPitch + 9]);
         dumpLastJob("BGRA -> 420f turned");
@@ -626,18 +660,20 @@ void recording(TegraVICTraits *t, char *note, size_t size)
 // 16Bx2 sectors, two GOBs to a 16-row block, blocks left to right).
 inline size_t tbl(uint32_t pitch, uint32_t x, uint32_t y)
 {
-    return (size_t)(y / 16) * pitch * 16 + (x / 64) * 1024 + ((y % 16) / 8) * 512 + ((x % 64) / 32) * 256 +
-           ((y % 8) / 2) * 64 + ((x % 32) / 16) * 32 + (y % 2) * 16 + x % 16;
+    return static_cast<size_t>(y / 16) * pitch * 16 + static_cast<size_t>(x / 64) * 1024 +
+           static_cast<size_t>((y % 16) / 8) * 512 + static_cast<size_t>((x % 64) / 32) * 256 +
+           static_cast<size_t>((y % 8) / 2) * 64 + static_cast<size_t>((x % 32) / 16) * 32 +
+           static_cast<size_t>(y % 2) * 16 + x % 16;
 }
 
 inline uint8_t blLuma(uint32_t x, uint32_t y)
 {
-    return (uint8_t)(x * 3 + y * 5 + 7);
+    return static_cast<uint8_t>(x * 3 + y * 5 + 7);
 }
 
 inline uint8_t blChroma(uint32_t x, uint32_t y)  // x: the byte in the CbCr row
 {
-    return (uint8_t)(x * 5 + y * 11 + 50);
+    return static_cast<uint8_t>(x * 5 + y * 11 + 50);
 }
 
 // A 128x64 420f picture (pitch 128: two GOBs across; 64 luma and 32 chroma rows: four and two blocks) written in block
@@ -645,17 +681,21 @@ inline uint8_t blChroma(uint32_t x, uint32_t y)  // x: the byte in the CbCr row
 // decoders' pictures take); never fails V4.
 void blockLinear(TegraVICTraits *t, char *note, size_t size)
 {
-    constexpr uint32_t kW = 128, kH = 64, kLuma = kW * kH;
+    constexpr uint32_t kW = 128;
+    constexpr uint32_t kH = 64;
+    constexpr uint32_t kLuma = kW * kH;
     if (!(t->yccIn & TEGRA_VIC_YCC_IN_COPY) || t->in.cbChannel != t->out.cbChannel) {
         snprintf(note, size, "block-linear in off (no 4:2:0 pass-through to carry it)");
         return;
     }
-    for (uint32_t y = 0; y < kH; y++)
+    for (uint32_t y = 0; y < kH; y++) {
         for (uint32_t x = 0; x < kW; x++)
             gSrc.va[tbl(kW, x, y)] = blLuma(x, y);
-    for (uint32_t y = 0; y < kH / 2; y++)
+    }
+    for (uint32_t y = 0; y < kH / 2; y++) {
         for (uint32_t x = 0; x < kW; x++)
             gSrc.va[kLuma + tbl(kW, x, y)] = blChroma(x, y);
+    }
     TegraVICImage src = {};
     src.format = tegra_vic_format(TEGRA_VIC_FOURCC('4', '2', '0', 'f'));
     src.width = kW;
@@ -670,8 +710,8 @@ void blockLinear(TegraVICTraits *t, char *note, size_t size)
     src.standard = TEGRA_VIC_YCC_709;
     src.blockLinear = 1;
     src.blockHeightLog2 = 1;
-    TegraVICImage dst = nv12(gDst, kW, kH);
-    TegraVICOp op = copyOp(kW, kH, kW, kH, 0);
+    const TegraVICImage dst = nv12(gDst, kW, kH);
+    const TegraVICOp op = copyOp(kW, kH, kW, kH, 0);
     TegraVICTraits probe = *t;
     probe.blockLinearIn = 1;
     const char *why = nullptr;
@@ -679,18 +719,25 @@ void blockLinear(TegraVICTraits *t, char *note, size_t size)
         snprintf(note, size, "block-linear in off (the job: %s)", why);
         return;
     }
-    uint32_t bad = 0, firstX = 0, firstY = 0, got = 0, want = 0;
+    uint32_t bad = 0;
+    uint32_t firstX = 0;
+    uint32_t firstY = 0;
+    uint32_t got = 0;
+    uint32_t want = 0;
     bool chroma = false;
-    for (uint32_t plane = 0; plane < 2; plane++)
-        for (uint32_t y = 0; y < (plane ? kH / 2 : kH); y++)
+    for (uint32_t plane = 0; plane < 2; plane++) {
+        for (uint32_t y = 0; y < (plane ? kH / 2 : kH); y++) {
             for (uint32_t x = 0; x < kW; x++) {
-                const uint8_t g = gDst.va[(plane ? (size_t)kPitch * kH : 0) + (size_t)y * kPitch + x];
+                const uint8_t g =
+                    gDst.va[(plane ? static_cast<size_t>(kPitch) * kH : 0) + static_cast<size_t>(y) * kPitch + x];
                 const uint8_t w = plane ? blChroma(x, y) : blLuma(x, y);
                 if (near(g, w))
                     continue;
                 if (!bad++)
-                    firstX = x, firstY = y, got = g, want = w, chroma = plane;
+                    firstX = x, firstY = y, got = g, want = w, chroma = (plane != 0u);
             }
+        }
+    }
     if (!bad) {
         t->blockLinearIn = 1;
         snprintf(note, size, "block-linear in on (16Bx2, 2 GOBs a block: %u samples exact to a step)", kW * kH * 3 / 2);
@@ -706,9 +753,12 @@ void blockLinear(TegraVICTraits *t, char *note, size_t size)
 
 extern "C" int tegra_vic_self_test(TegraVICTraits *traits)
 {
-    char line[300], note[300] = "", blNote[200] = "", turnsNote[200] = "";
-    if (tegra_vic_buffer(64 * 1024, &gSrc) || tegra_vic_buffer(64 * 1024, &gDst) || tegra_vic_buffer(4096, &gPageA) ||
-        tegra_vic_buffer(4096, &gPageB)) {
+    char line[300];
+    char note[300] = "";
+    char blNote[200] = "";
+    char turnsNote[200] = "";
+    if (tegra_vic_buffer(64LL * 1024, &gSrc) || tegra_vic_buffer(64LL * 1024, &gDst) ||
+        tegra_vic_buffer(4096, &gPageA) || tegra_vic_buffer(4096, &gPageB)) {
         IOLog("TegraVIC: V3 FAIL no self-test buffers in the arena\n");
         return -12;
     }
@@ -740,11 +790,12 @@ extern "C" int tegra_vic_self_test(TegraVICTraits *traits)
     }
     *traits = t;
     char turns[220];
-    if (t.rotations & 0xf0)
+    if (t.rotations & 0xf0) {
         snprintf(turns, sizeof(turns), "with rectangles %s, surface %s the transpose",
                  tegra_vic_probe_when(t.preTransposeRects), tegra_vic_probe_when(t.preTransposeSurface));
-    else
+    } else {
         snprintf(turns, sizeof(turns), "%s", turnsNote[0] ? turnsNote : "none: see the transpose diag lines");
+    }
     IOLog("TegraVIC: V4 ok transforms %#x of 0xff (quarter turns %s), sub-rectangles %#x, RGB to 420f BT.709 full (Cb "
           "in channel %u), fill %s, %s scaling, pitch %u-byte aligned; %u jobs, engine %llu us, %llu us in all\n",
           t.rotations, turns, t.subRects, t.out.cbChannel,
