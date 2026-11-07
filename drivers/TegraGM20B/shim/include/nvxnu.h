@@ -91,6 +91,8 @@ int nvxnu_pool_init(int *zeroed);
 nvxnu_u32 nvxnu_vm_page_size(void);
 /* the memory XNU manages (max_mem): what the GPU's compression covers, as nvgpu covers Linux's RAM */
 nvxnu_u64 nvxnu_ram_bytes(void);
+/* Wired, physically contiguous, zeroed memory for the GPU alone (no CPU view is kept), never freed; 0 on success */
+int nvxnu_contig_alloc(nvxnu_u64 bytes, nvxnu_u64 *pa);
 nvxnu_u64 nvxnu_pool_base_pa(void);
 nvxnu_u64 nvxnu_pool_size(void);
 void *nvxnu_pool_base_va(void);

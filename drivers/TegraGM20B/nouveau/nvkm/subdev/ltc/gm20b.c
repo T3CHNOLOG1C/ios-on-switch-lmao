@@ -24,7 +24,6 @@
  */
 #include "priv.h"
 
-#include <core/memory.h>
 #include <subdev/fb.h>
 #include <subdev/timer.h>
 
@@ -64,25 +63,22 @@ gm20b_ltc_oneinit(struct nvkm_ltc *ltc)
 	struct nvkm_fb *fb = device->fb;
 	const u32 param = nvkm_rd32(device, 0x17e280);
 	const u32 line_bits = (nvkm_rd32(device, 0x100c80) & 0x00001000) ? 16 : 17;
-	struct tgm_cbc cbc;
+	struct tgm_cbc cbc = {};
+	u64 pa = 0;
 
 	ltc->ltc_nr = nvkm_rd32(device, 0x12006c);
 	ltc->lts_nr = tgm_cbc_slices(param);
 	ltc->num_tags = 0;
 
-	/* The backing store outlives system sleep in DRAM's self-refresh, so instmem need not copy it out (SR_LOST). */
+	/* Ordinary memory as nvgpu's (nvgpu_ltc_alloc_cbc), not the GPU pool, which every process's coherent memory
+	 * shares. DRAM keeps it through system sleep and only the L2 touches it, so nothing saves or restores it. */
 	if (tgm_cbc_size(param, ltc->ltc_nr, nvxnu_ram_bytes() >> 20, line_bits, &cbc) &&
-	    !nvkm_memory_new(device, NVKM_MEM_TARGET_INST_SR_LOST, cbc.bytes, 0x1000, false,
-			     &ltc->tag_ram) &&
-	    tgm_cbc_base(nvkm_memory_addr(ltc->tag_ram), ltc->ltc_nr, &ltc->tag_base))
+	    !nvxnu_contig_alloc(cbc.bytes, &pa) && tgm_cbc_base(pa, ltc->ltc_nr, &ltc->tag_base))
 		ltc->num_tags = cbc.lines;
-	else
-		nvkm_memory_unref(&ltc->tag_ram);
 
 	nvxnu_log("tegra-gm20b: CBC: %u comptag lines, %llu KiB at %llx (base %x), %u LTC x %u slices, "
 		  "%u per %u-byte line (param %08x)\n",
-		  ltc->num_tags, ltc->tag_ram ? nvkm_memory_size(ltc->tag_ram) >> 10 : 0,
-		  ltc->tag_ram ? nvkm_memory_addr(ltc->tag_ram) : 0, ltc->tag_base, ltc->ltc_nr,
+		  ltc->num_tags, ltc->num_tags ? cbc.bytes >> 10 : 0, pa, ltc->tag_base, ltc->ltc_nr,
 		  ltc->lts_nr, tgm_cbc_comptags_per_cacheline(param), tgm_cbc_cacheline_bytes(param),
 		  param);
 
