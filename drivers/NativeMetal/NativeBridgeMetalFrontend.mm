@@ -31,6 +31,7 @@
 #include <execinfo.h>
 #include <mach/mach.h>
 #include <mach/mach_time.h>
+#include <mach/mach_vm.h>
 #include "bridge/NativeMetalObjects.h"
 #include "NativeBridgeMetalFrontend.h"
 #include "AsyncPipelines.h"
@@ -5991,7 +5992,22 @@ static void fillLimits(id)
 {
     NmbBuffer *handle = nmb_buffer_new_no_copy(gDevice, pointer, length, options);
     if (!handle) {
-        NBLOG(@"native-metal: no-copy buffer refused: %@", lastError());
+        // Each refusal sends the caller to a CPU copy (QuartzCore's copy_image_to_texture uploads the image instead), so the
+        // first ones name the memory: where it sits in its page, and the VM region's protection, sharing and tag.
+        static std::atomic<int> told{0};
+        if (told.fetch_add(1) < 8) {
+            mach_vm_address_t region = (mach_vm_address_t)pointer;
+            mach_vm_size_t regionSize = 0;
+            vm_region_extended_info_data_t info = {};
+            mach_msg_type_number_t count = VM_REGION_EXTENDED_INFO_COUNT;
+            mach_port_t object = MACH_PORT_NULL;
+            const kern_return_t kr = mach_vm_region(mach_task_self(), &region, &regionSize, VM_REGION_EXTENDED_INFO,
+                                                    (vm_region_info_t)&info, &count, &object);
+            NBLOG(@"native-metal: no-copy buffer refused (%lu bytes at page offset 0x%lx; region %d: prot %d share %d "
+                  @"tag %u): %@",
+                  (unsigned long)length, (unsigned long)((uintptr_t)pointer & (vm_page_size - 1)), kr, info.protection,
+                  info.share_mode, info.user_tag, lastError());
+        }
         return nil;
     }
     NBBuffer *buffer = [NBBuffer new];
