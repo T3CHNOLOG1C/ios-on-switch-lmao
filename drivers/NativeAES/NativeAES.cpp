@@ -8,7 +8,12 @@
 #pragma clang diagnostic pop
 #include <corecrypto/cc.h>
 #include <kern/task.h>
+#include "../../kits/SwitchRefusal/SwitchRefusal.h"
 #include "../TegraSE/TegraSE.h"
+
+namespace {
+constexpr uint64_t kRefusedKey = switch_refusal_key("NativeAES", "hardware key");
+}
 
 extern "C" {
 volatile uint32_t native_aes_registered = 0;
@@ -105,6 +110,10 @@ IOReturn NativeAES::performAES(IOMemoryDescriptor *input, IOMemoryDescriptor *ou
         return kIOReturnBadArgument;
     if (key->selector || (operation != IOAESEncrypt && operation != IOAESDecrypt)) {
         __atomic_fetch_add(&native_aes_unsupported_key, 1, __ATOMIC_RELAXED);
+        switch_refusal_k(switch_refusal_key_with(kRefusedKey, (uint64_t)key->selector << 32 | (uint32_t)operation),
+                         "NativeAES", "hardware key",
+                         "key selector %u, operation %d: only keys the caller passes, encrypt or decrypt",
+                         (unsigned)key->selector, (int)operation);
         return kIOReturnUnsupported;
     }
     if (inputOffset > input->getLength() || bytes > input->getLength() - inputOffset ||
