@@ -4,6 +4,8 @@
  */
 
 #include "nvkmd_darwin.h"
+#define DARWIN_ANY_CONN struct nvkmd_darwin_conn
+#include "nvkmd_darwin_wait_any.h"
 
 #include "nv_device_info.h"
 #include "util/bitscan.h"
@@ -579,6 +581,91 @@ darwin_sync_wait_one(struct nvkmd_darwin_sync *s, enum vk_sync_wait_flags flags,
    return darwin_wait_seqno(dev, channel, seqno, abs_timeout_ns);
 }
 
+struct darwin_any_waits {
+   const struct vk_sync_wait *waits;
+   enum vk_sync_wait_flags flags;
+};
+
+/* darwin_sync_lock held */
+static enum darwin_any_status
+darwin_any_status(void *ctx, uint32_t i, struct darwin_any_fence *fence)
+{
+   const struct darwin_any_waits *w = ctx;
+   struct nvkmd_darwin_sync *s = to_darwin_sync(w->waits[i].sync);
+   struct nvkmd_darwin_sync_point point = { 0 };
+   if (darwin_is_timeline(s)) {
+      darwin_timeline_update_locked(s);
+      if (s->value >= w->waits[i].wait_value)
+         return DARWIN_ANY_DONE;
+      if (!darwin_timeline_point_locked(s, w->waits[i].wait_value, &point))
+         return DARWIN_ANY_WAITING;
+   } else {
+      if (s->state == NVKMD_DARWIN_SYNC_UNSIGNALED)
+         return DARWIN_ANY_WAITING;
+      if (s->state != NVKMD_DARWIN_SYNC_FENCE)
+         return DARWIN_ANY_DONE;
+      point.dev = s->dev;
+      point.channel = s->channel;
+      point.seqno = s->seqno;
+   }
+   if ((w->flags & VK_SYNC_WAIT_PENDING) || darwin_point_done(&point))
+      return DARWIN_ANY_DONE;
+   fence->conn = point.dev->conn;
+   fence->dev = point.dev;
+   fence->channel = point.channel;
+   fence->seqno = point.seqno;
+   return DARWIN_ANY_FENCE;
+}
+
+static bool
+darwin_any_fence_done(const struct darwin_any_fence *fence)
+{
+   const struct nvkmd_darwin_sync_point point = {
+      .dev = fence->dev, .channel = fence->channel, .seqno = fence->seqno,
+   };
+   return darwin_point_done(&point);
+}
+
+static int
+darwin_any_wait_fence(const struct darwin_any_fence *fence, uint64_t timeout_ns)
+{
+   struct TegraGM20BAbiWaitFence wait = {
+      .channel = fence->channel,
+      .seqno = fence->seqno,
+      .timeout_ns = timeout_ns,
+   };
+   const kern_return_t kr = darwin_call(&fence->conn, TegraGM20BMethodWaitFence,
+                                        &wait, sizeof(wait), NULL, 0);
+   return kr == KERN_SUCCESS ? 0 : kr == kIOReturnTimeout ? ETIMEDOUT : EIO;
+}
+
+static void
+darwin_any_lost(const struct darwin_any_fence *fence)
+{
+   os_log_fault(OS_LOG_DEFAULT,
+                "nvk darwin: channel %u passed seqno %u with no wake from its "
+                "WaitFence (a lost fence interrupt): abort() for the stack",
+                fence->channel, fence->seqno);
+   abort();
+}
+
+static uint64_t
+darwin_any_now_ns(void)
+{
+   return (uint64_t)os_time_get_nano();
+}
+
+static const struct darwin_any_ops darwin_any_ops = {
+   .lock = &darwin_sync_lock,
+   .cond = &darwin_sync_cond,
+   .status = darwin_any_status,
+   .fence_done = darwin_any_fence_done,
+   .wait_fence = darwin_any_wait_fence,
+   .cond_wait = darwin_sync_cond_wait_locked,
+   .now_ns = darwin_any_now_ns,
+   .lost = darwin_any_lost,
+};
+
 static VkResult
 darwin_sync_wait_many(struct vk_device *device, uint32_t wait_count,
                       const struct vk_sync_wait *waits,
@@ -598,19 +685,24 @@ darwin_sync_wait_many(struct vk_device *device, uint32_t wait_count,
       return VK_SUCCESS;
    }
 
-   /* Any: poll each in turn (no interrupts on this GPU anyway). */
-   for (;;) {
-      for (uint32_t i = 0; i < wait_count; i++) {
-         struct nvkmd_darwin_sync *s = to_darwin_sync(waits[i].sync);
-         VkResult result = darwin_is_timeline(s) ?
-            darwin_timeline_wait(s, waits[i].wait_value, wait_flags, 0, 0) :
-            darwin_sync_wait_one(s, wait_flags, 0);
-         if (result != VK_TIMEOUT)
-            return result;
-      }
-      if (abs_timeout_ns != UINT64_MAX && os_time_get_nano() >= abs_timeout_ns)
-         return VK_TIMEOUT;
-      usleep(100);
+   /* Any: asleep until one resolves (nvkmd_darwin_wait_any.h): host signals
+    * and submissions on the sync condition, GPU fences on their interrupts
+    * through WaitFence.
+    */
+   struct darwin_any_waits ctx = { .waits = waits, .flags = wait_flags };
+   pthread_mutex_lock(&darwin_sync_lock);
+   const int err = darwin_wait_any_locked(&darwin_any_ops, &ctx, wait_count,
+                                          abs_timeout_ns);
+   pthread_mutex_unlock(&darwin_sync_lock);
+   switch (err) {
+   case 0:
+      return VK_SUCCESS;
+   case ETIMEDOUT:
+      return VK_TIMEOUT;
+   case ENOMEM:
+      return vk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
+   default:
+      return vk_error(device, VK_ERROR_DEVICE_LOST);
    }
 }
 
