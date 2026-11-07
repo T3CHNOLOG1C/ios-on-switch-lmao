@@ -1651,8 +1651,8 @@ public:
         }
         if (!run && !(control->state & ~bit))
             codecStep(kCodecPause);
-        const IOReturn result =
-            gate->runAction(&SwitchAudio::requestGated, reinterpret_cast<void *>(static_cast<uintptr_t>(selector)));
+        void *const argument = reinterpret_cast<void *>(static_cast<uintptr_t>(selector));
+        const IOReturn result = gate->runAction(&SwitchAudio::requestGated, argument);
         if (run)
             codecStep(kCodecUnmute);
         return result;
