@@ -16,7 +16,7 @@ FILES = [
 class OverlayIndexTest(unittest.TestCase):
     def test_layout(self):
         raw = overlay_index.encode(FILES, [7, 5])
-        magic, version, count, dirs, size, reserved = overlay_index.HEADER.unpack_from(raw)
+        magic, version, count, dirs, _size, reserved = overlay_index.HEADER.unpack_from(raw)
         self.assertEqual((magic, version, count, dirs, reserved), (b'SWOV', 2, 3, 2, 0))
         records = [
             overlay_index.FILE.unpack_from(raw, overlay_index.HEADER.size + overlay_index.FILE.size * i)

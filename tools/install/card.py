@@ -273,7 +273,30 @@ def sync_boot_entry(
     """
     fat_root = Path(fat_root)
     wanted = boot_entry_files(package)
-    changed, removed = [], []
+    changed = _copy_changed(fat_root, wanted, dry_run)
+    removed = _remove_stale(fat_root, wanted, dry_run)
+    for relative in list(wanted) + removed:  # AppleDouble files, by name only
+        double = (fat_root / relative.rstrip('/')).with_name('._' + Path(relative.rstrip('/')).name)
+        if double.exists() and not dry_run:
+            double.unlink()
+    if not dry_run:
+        host.run('sync')
+    log(
+        'boot entry{}: {} {}, {} stale {}, {} unchanged'.format(
+            ' (dry run)' if dry_run else '',
+            len(changed),
+            'to update' if dry_run else 'updated',
+            len(removed),
+            'to remove' if dry_run else 'removed',
+            len(wanted) - len(changed),
+        ),
+        changed + ['-' + r for r in removed],
+    )
+    return changed, removed
+
+
+def _copy_changed(fat_root: Path, wanted: dict[str, Path], dry_run: bool) -> list[str]:
+    changed = []
     for relative, source in wanted.items():
         target = fat_root / relative
         if (
@@ -288,6 +311,12 @@ def sync_boot_entry(
             partial = target.with_name('.switch-partial-' + target.name)
             shutil.copyfile(source, partial)
             os.replace(partial, target)
+    return changed
+
+
+def _remove_stale(fat_root: Path, wanted: dict[str, Path], dry_run: bool) -> list[str]:
+    """Remove the entry's files the package no longer has, older entries and former icons; return what went."""
+    removed = []
     entry = fat_root / BOOT_ENTRY
     if entry.is_dir():
         for path in sorted(entry.iterdir()):
@@ -307,24 +336,7 @@ def sync_boot_entry(
             removed.append(relative)
             if not dry_run:
                 (fat_root / relative).unlink()
-    for relative in list(wanted) + removed:  # AppleDouble files, by name only
-        double = (fat_root / relative.rstrip('/')).with_name('._' + Path(relative.rstrip('/')).name)
-        if double.exists() and not dry_run:
-            double.unlink()
-    if not dry_run:
-        host.run('sync')
-    log(
-        'boot entry{}: {} {}, {} stale {}, {} unchanged'.format(
-            ' (dry run)' if dry_run else '',
-            len(changed),
-            'to update' if dry_run else 'updated',
-            len(removed),
-            'to remove' if dry_run else 'removed',
-            len(wanted) - len(changed),
-        ),
-        changed + ['-' + r for r in removed],
-    )
-    return changed, removed
+    return removed
 
 
 def tree_digest(root: Path) -> str | None:

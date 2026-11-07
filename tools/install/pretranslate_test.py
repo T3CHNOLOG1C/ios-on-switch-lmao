@@ -1,5 +1,6 @@
-"""The drivers run in the order the dyld cache needs, with the other roles' cdhashes, and leave the boot package's
-files behind when their deltas go.
+"""Pretranslate's drivers run in the order the dyld cache needs, with the other roles' cdhashes.
+
+They leave the boot package's files behind when their deltas go.
 """
 
 import hashlib
@@ -40,10 +41,10 @@ with open(sys.argv[0] + '.calls', 'a') as calls:
 
 
 class Quiet:
-    def __call__(self, *parts):
+    def __call__(self, *parts: object) -> None:
         pass
 
-    def quiet(self, *parts):
+    def quiet(self, *parts: object) -> None:
         pass
 
 
@@ -140,7 +141,7 @@ class RolesTest(unittest.TestCase):
         data.mkdir()
         flagged = {}
 
-        def chflags(path, flags):
+        def chflags(path: str | Path, flags: int) -> None:
             flagged[Path(path)] = flags
 
         with mock.patch.object(pretranslate.os, 'chown'), mock.patch.object(pretranslate.os, 'chflags', chflags):

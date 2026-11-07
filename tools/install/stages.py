@@ -255,7 +255,8 @@ class Stages:
                     rest = [e for e in system_entries if not e['path'].startswith('/private/var/')]
                     roles.overlay_system(data, system, rest, True)
                     roles.done('os')
-                populate.stage_cryptexes(preboot, self.spec, self.pins, sources, True, self.log, expected)
+                images = populate.cryptex_images(self.spec, self.pins, sources, expected)
+                populate.stage_cryptexes(preboot, self.spec, images, True, self.log)
                 cards.sync_overlay(data, self.args.boot_package, self.log)
                 populate.stage_gpu(data, self.args.gpu_stager, self.args.gpu_base, self.log)
                 if self.args.shader_seed:

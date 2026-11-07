@@ -27,7 +27,7 @@ class ScratchTest(unittest.TestCase):
 
 
 class TranslationMemoTest(unittest.TestCase):
-    def roles(self, **flags):
+    def roles(self, **flags: object) -> stages.pretranslate.Roles | None:
         args = SimpleNamespace(scratch='/scratch', pretranslate={'os': {'driver': 'd', 'tool': 't'}}, **flags)
         return stages.Stages(args, SPEC, PINS, quiet).roles()
 

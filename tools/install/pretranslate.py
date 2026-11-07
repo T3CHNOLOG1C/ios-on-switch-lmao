@@ -42,7 +42,7 @@ def _place(root: Path, e: dict, original: os.stat_result, owners: bool) -> Path:
     shutil.copyfile(e['source'], partial)
     if cards.sha256_file(partial) != e['sha256_out']:
         partial.unlink()
-        raise host.HostError('{}: the translated file does not match its manifest'.format(e['path']))
+        raise host.HostError(f'{e["path"]}: the translated file does not match its manifest')
     os.replace(partial, target)
     e['source'].unlink()
     target.chmod(original.st_mode & 0o7777)
@@ -54,30 +54,30 @@ def _place(root: Path, e: dict, original: os.stat_result, owners: bool) -> Path:
 
 
 class Roles:
-    def __init__(self, roles, scratch, log, memo_root=None):
+    def __init__(self, roles: dict[str, dict], scratch: str | Path, log: host.Log, memo_root: str | Path | None = None):
         """`roles`: {role: {"driver": path, "tool": path, "trustcaches": [path]}}.
 
         `memo_root`, if given, keeps each role's translations there across runs (the driver's --memo); done() leaves it.
         """
         unknown = set(roles) - set(ORDER)
         if unknown:
-            raise host.HostError('unknown pretranslate roles: {}'.format(sorted(unknown)))
+            raise host.HostError(f'unknown pretranslate roles: {sorted(unknown)}')
         self.roles, self.scratch, self.log = roles, Path(scratch), log
         self.kept = self.scratch / 'pretranslated'
         self.memo_root = Path(memo_root) if memo_root else None
 
-    def __contains__(self, role):
+    def __contains__(self, role: str) -> bool:
         return role in self.roles
 
-    def out(self, role):
+    def out(self, role: str) -> Path:
         return self.scratch / ('delta-' + role)
 
-    def run(self, role, volume):
-        """The role's delta for the volume mounted at `volume`; its entries are ready for delta.apply."""
+    def run(self, role: str, volume: str | Path) -> list[dict]:
+        """Return the role's delta for the volume mounted at `volume`; its entries are ready for delta.apply."""
         if role == 'system_cryptex':
             missing = [r for r in ('os', 'app_cryptex') if r in self.roles and not self._pairs(r).is_file()]
             if missing:
-                raise host.HostError('system_cryptex is translated after {}'.format(', '.join(missing)))
+                raise host.HostError(f'system_cryptex is translated after {", ".join(missing)}')
         spec = self.roles[role]
         command = [spec['driver'], '--role', role, '--tool', spec['tool'], '--volume', str(volume)]
         command += ['--out', str(self.out(role))]
@@ -90,68 +90,69 @@ class Roles:
                 if other in self.roles:
                     command += ['--cdhash-pairs', str(self._pairs(other))]
         self.log.quiet('$', ' '.join(command))
-        result = subprocess.run(command, capture_output=True, text=True)
+        result = subprocess.run(command, capture_output=True, text=True, check=False)
         self.log.quiet(result.stdout + result.stderr)
         if result.returncode:
             tail = (result.stderr or result.stdout).strip().splitlines()[-1:] or ['?']
-            raise host.HostError('translating {} failed: {}'.format(role, tail[0]))
+            raise host.HostError(f'translating {role} failed: {tail[0]}')
         self._keep(role)
-        entries = delta.load(self.out(role) / '{}.manifest.json'.format(role))
-        self.log('{}: {} files to translate'.format(role, len(entries)))
+        entries = delta.load(self.out(role) / f'{role}.manifest.json')
+        self.log(f'{role}: {len(entries)} files to translate')
         return entries
 
-    def _pairs(self, role):
-        return self.kept / '{}.cdhash-pairs'.format(role)
+    def _pairs(self, role: str) -> Path:
+        return self.kept / f'{role}.cdhash-pairs'
 
-    def _keep(self, role):
+    def _keep(self, role: str) -> None:
         self.kept.mkdir(parents=True, exist_ok=True)
         for name in KEPT:
             path = self.out(role) / name.format(role=role)
             if path.is_file():
                 shutil.copyfile(path, self.kept / path.name)
 
-    def done(self, role):
-        """The role's delta is applied: its replacement files go (the kept files stay for the boot package)."""
+    def done(self, role: str) -> None:
+        """Drop the role's applied delta: its replacement files go (the kept files stay for the boot package)."""
         if self.out(role).exists():
             shutil.rmtree(self.out(role))
 
-    def artifacts(self):
+    def artifacts(self) -> list[Path]:
         return sorted(self.kept.iterdir()) if self.kept.is_dir() else []
 
-    def check_pins(self, pins):
-        """The kept files against the ones the boot package was built with ({name: sha256}): a translation that made
-        other trust modules or another cache list would not run on the kernel."""
+    def check_pins(self, pins: dict[str, str]) -> None:
+        """Check the kept files against the ones the boot package was built with ({name: sha256}).
+
+        A translation that made other trust modules or another cache list would not run on the kernel.
+        """
         kept = {p.name: p for p in self.artifacts()}
         wrong = [
             name for name, digest in sorted(pins.items()) if name not in kept or cards.sha256_file(kept[name]) != digest
         ]
         if wrong:
             raise host.HostError(
-                'this translation differs from the pinned one the boot package carries: {}'.format(', '.join(wrong))
+                f'this translation differs from the pinned one the boot package carries: {", ".join(wrong)}'
             )
-        self.log('pretranslate: {} files match the pins'.format(len(pins)))
+        self.log(f'pretranslate: {len(pins)} files match the pins')
 
-    def overlay_system(self, data, system, entries, owners):
-        """The System volume's translated files onto Data (OVERLAY), each with its System file's owner, mode and
-        flags, then their manifest and the kernel's index made from it; the manifest is also kept for the boot
-        package. As root, every file and directory of the tree ends system-immutable: the device's kernel refuses any
-        change to the tree anyway, the flag is a second layer. Returns the manifest.
+    def overlay_system(self, data: str | Path, system: str | Path, entries: list[dict], owners: bool) -> dict:
+        """Place the System volume's translated files onto Data (OVERLAY) and return their manifest.
 
+        Each file gets its System file's owner, mode and flags, then the manifest and the kernel's index made from it
+        are written; the manifest is also kept for the boot package. As root, every file and directory of the tree
+        ends system-immutable: the device's kernel refuses any change to the tree anyway, the flag is a second layer.
         Hard links of one System file get one Data file, placed at the first of their paths, and an index entry for
-        each path. A link on Data would give the kernel's redirect a Data file whose parent changes with each lookup."""
+        each path. A link on Data would give the kernel's redirect a Data file whose parent changes with each lookup.
+        """
         root = Path(data) / OVERLAY
         files, ids, placed = [], [], []
         by_inode = {}
         for e in entries:
             original = os.lstat(Path(system) / e['path'].lstrip('/'))
             if not stat.S_ISREG(original.st_mode):
-                raise host.HostError('{}: not a regular file on the System volume'.format(e['path']))
+                raise host.HostError(f'{e["path"]}: not a regular file on the System volume')
             if original.st_ino in by_inode:
                 first, data_id, record = by_inode[original.st_ino]
                 if (first['sha256_out'], first.get('cdhash')) != (e['sha256_out'], e.get('cdhash')):
-                    raise host.HostError(
-                        '{} and {} are one System file translated two ways'.format(first['path'], e['path'])
-                    )
+                    raise host.HostError(f'{first["path"]} and {e["path"]} are one System file translated two ways')
                 e['source'].unlink()
             else:
                 target = _place(root, e, original, owners)
@@ -159,7 +160,7 @@ class Roles:
                 data_id = os.lstat(target).st_ino
                 record = {
                     'trust': True,
-                    'mode': '{:04o}'.format(original.st_mode & 0o7777),
+                    'mode': f'{original.st_mode & 0o7777:04o}',
                     'sha256': e['sha256_out'],
                     'cdhash': e.get('cdhash', []),
                 }
@@ -184,5 +185,5 @@ class Roles:
             os.chown(index, 0, 0)
             for path in [*placed, index, *reversed(directories)]:
                 os.chflags(path, os.lstat(path).st_flags | stat.SF_IMMUTABLE)
-        self.log('System: {} translated files on Data under {}'.format(len(files), OVERLAY))
+        self.log(f'System: {len(files)} translated files on Data under {OVERLAY}')
         return manifest
