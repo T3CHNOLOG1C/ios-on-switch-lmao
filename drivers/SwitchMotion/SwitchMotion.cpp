@@ -28,14 +28,14 @@
 //   * backboardd's BKOrientationManager matches {0xff00, 3} for UIAccelerometer clients. Its device orientation comes
 //     only from CoreMotion's orientation notifier, which on this hardware type (CoreMotion hwType 62) opens the AOP's
 //     device-orientation service {0x20, 0x8a} and takes kIOHIDEventTypeOrientation events (field 0xa0004 = 0x64 +
-//     UIDeviceOrientation). Checked in 21H461's CoreMotion: CLOrientationNotifier::openHidDriverInterface looks for the
-//     AOP's plug-in (type 7ACF5332-1A35-4893-87CB-BA64E1887FAE) on the service's grandparent, which an IOHIDDevice
-//     does not have, so fHidDeviceInterface stays NULL, and onIohidEvent takes events only then (type 10, usage
-//     0x64..0x6a, orientation = usage - 0x64; anything else is logged and dropped), each with its sample time as a
-//     child event (SwitchHID.h SwitchOrientationReport). Its first query of the current orientation goes through that
-//     plug-in ("No reply for LastOrientation") and CoreMotion never copies the event, so a client learns the
-//     orientation only from an event after it started listening: the detector announces again (detectOrientation)
-//     whenever the console comes to rest after moving and when the panel comes on, not only on a change.
+//     UIDeviceOrientation). Checked in 21H461's CoreMotion: CLOrientationNotifier::openHidDriverInterface opens the
+//     AOP's plug-in (type 7ACF5332-1A35-4893-87CB-BA64E1887FAE, AppleSPULib) on the service's grandparent, the
+//     orientation SwitchHIDDevice, which publishes it and answers its user client (SwitchOrientationClient.cpp:
+//     LastOrientation from switch_motion_last_orientation). onIohidEvent takes events (type 10, usage 0x64..0x6a,
+//     orientation = usage - 0x64; anything else is logged and dropped), each with its sample time as a child event
+//     (SwitchHID.h SwitchOrientationReport). Before that plug-in existed a client learned the orientation only from an
+//     event after it started listening, so the detector still announces again (detectOrientation) whenever the console
+//     comes to rest after moving and when the panel comes on, not only on a change.
 //   * Third-party apps' CMMotionManager (accelerometer, gyroscope, device motion) is served by locationd over XPC
 //     (kCLConnectionMessage...), which reads these same services; SpringBoard and backboardd run CoreMotion in process.
 // Sampling: the part converts only while a client has a nonzero report interval (the services' Report Interval
@@ -964,12 +964,17 @@ void SwitchMotion::detectOrientation(const int32_t accel[3])
 // next only once IOHIDFamily took this report (IOHIDDevice refuses reports, kIOReturnNotReady, until it is ready for
 // input reports): the set a report uses must read all 0 in the device's element state, which the last report taken
 // left so.
+// The last announcement for switch_motion_last_orientation: orientation in the top byte, the stamp's low 56 bits (the
+// 19.2 MHz timebase needs a century to fill them).
+static uint64_t gLastOrientation;
+
 void SwitchMotion::announce(uint8_t which)
 {
     uint64_t stamp = mach_absolute_time();
     if (stamp <= orientationStamp)
         stamp = orientationStamp + 1;
     orientationStamp = stamp;
+    __atomic_store_n(&gLastOrientation, (uint64_t)which << 56 | (stamp & ((1ull << 56) - 1)), __ATOMIC_RELEASE);
     SwitchOrientationReport report = {1, {0, 0}, stamp};
     report.orientation[orientationSet] = (uint8_t)(1u << which);
     const IOReturn taken = timedOrientation ? switch_hid_post_at(orientationHid, &report, sizeof(report), stamp)
@@ -1326,4 +1331,11 @@ extern "C" void switch_motion_display_power(bool on)
 {
     if (SwitchMotion *motion = __atomic_load_n(&gMotion, __ATOMIC_ACQUIRE))
         motion->displayPower(on);
+}
+
+extern "C" void switch_motion_last_orientation(uint8_t *orientation, uint64_t *stamp)
+{
+    const uint64_t last = __atomic_load_n(&gLastOrientation, __ATOMIC_ACQUIRE);
+    *orientation = (uint8_t)(last >> 56);
+    *stamp = last & ((1ull << 56) - 1);
 }

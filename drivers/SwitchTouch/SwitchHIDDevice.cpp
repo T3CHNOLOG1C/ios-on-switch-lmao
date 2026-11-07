@@ -46,6 +46,15 @@
 #include "../../kits/SwitchRefusal/SwitchRefusal.h"
 
 extern kmod_info_t g_kernel_kmod_info;
+
+// SwitchMotion (SwitchOrientationClient.cpp): the orientation device's AOP user client. Weak, so this archive links
+// without it.
+extern "C" __attribute__((weak)) IOReturn switch_motion_orientation_client(IOService *, task_t, void *, uint32_t,
+                                                                           IOUserClient **)
+{
+    return kIOReturnUnsupported;
+}
+
 extern "C" void switch_hid_static_init(void) __asm__("__GLOBAL__sub_I_SwitchHIDDevice.cpp");
 
 namespace {
@@ -463,8 +472,33 @@ public:
         setProperty("ProductID", (unsigned long long)profile->productID, 32);
         setProperty("Manufacturer", "Nintendo");
         setProperty("Built-In", true);
+        if (profile == &kProfiles[kSwitchHIDOrientation])
+            addAopPlugIn();
         timed = timestamps();
         return IOHIDDevice::start(provider);
+    }
+
+    // CoreMotion's orientation notifier opens this device, the event service's grandparent, with AppleSPULib's
+    // AppleSPUHIDDevice plug-in type (J120's AppleSPUHIDDevice personality) to ask the current orientation; the
+    // plug-in's user client type is 'ashd' (newUserClient). Its processes' profiles name no class of ours.
+    void addAopPlugIn()
+    {
+        OSDictionary *types = OSDictionary::withCapacity(1);
+        OSString *plugIn = OSString::withCString("AppleSPU.kext/PlugIns/AppleSPULib.plugin");
+        if (types && plugIn && types->setObject("7ACF5332-1A35-4893-87CB-BA64E1887FAE", plugIn))
+            setProperty("IOCFPlugInTypes", types);
+        OSSafeReleaseNULL(types);
+        OSSafeReleaseNULL(plugIn);
+        setProperty("NativeSandboxGrantProcess", "backboardd,SpringBoard,locationd,audiomxd");
+    }
+
+    IOReturn newUserClient(task_t task, void *security, UInt32 type, OSDictionary *properties,
+                           IOUserClient **handler) override
+    {
+        constexpr UInt32 kAopUserClient = 0x61736864;  // 'ashd'
+        if (type == kAopUserClient && profile == &kProfiles[kSwitchHIDOrientation])
+            return switch_motion_orientation_client(this, task, security, type, handler);
+        return IOHIDDevice::newUserClient(task, security, type, properties, handler);
     }
 
     void stop(IOService *provider) override
