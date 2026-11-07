@@ -476,7 +476,9 @@ IOReturn ArmGIC::handleInterrupt(void *, IOService *, int source)
     IOInterruptVector *vector = &vectors[intid];
     if (!vector->interruptRegistered)
         return kIOReturnNoInterrupt;
-    __atomic_fetch_add(&fired[intid], 1U, __ATOMIC_RELAXED);
+    // An INTID's handler never runs on two cores at once (the GIC holds it active until the EOI), so a load and a
+    // store count it, without an exclusive-monitor loop.
+    __atomic_store_n(&fired[intid], __atomic_load_n(&fired[intid], __ATOMIC_RELAXED) + 1U, __ATOMIC_RELAXED);
     if (isFrame(intid))
         switch_idle_note_frame();
     vector->interruptActive = 1;

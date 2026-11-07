@@ -661,11 +661,13 @@ void reportClocks(const char *when)
           emc.clockSource);
 }
 
-SwitchRTC *publishRTC(unsigned mode)
+SwitchRTC *publishRTC(unsigned mode, int64_t *readSecs, uint64_t *readStamp)
 {
     char why[96] = "";
     const int64_t secs = rtcRead(why, sizeof(why));
     const uint64_t stamp = mach_absolute_time();
+    *readSecs = secs;
+    *readStamp = stamp;
     if (secs < 0) {
         IOLog("SwitchRTC: MAX77620 RTC not used (%s); the clock starts at 1970\n", why);
         return nullptr;
@@ -757,12 +759,13 @@ extern "C" int switch_pmic_start(void)
         return 0;
     started = true;
     reportClocks("at boot");
-    (void)switch_monotonic_clock_start();
 
     // Read-only: Horizon keeps its clock in the same RTC, and writing ours would shift it.
     constexpr unsigned rtcMode = 1;
     constexpr unsigned emcKHz = 1600000;  // hekate's top stock MTC table, L4T's T210B01 core-DVFS "emc" ceiling
     uint8_t control = 0;
+    int64_t rtcSecs = -1;
+    uint64_t rtcStamp = 0;
     const int err = tegra_i2c_init(kBus) ? TEGRA_I2C_ENOTREADY : readByte(kPmic, ONOFFCNFG1, &control);
     if (err) {
         IOLog("SwitchPMIC: MAX77620 not answering on I2C5 (%d): no RTC, no power-off\n", err);
@@ -770,7 +773,7 @@ extern "C" int switch_pmic_start(void)
         if (const int clockErr = moduleClockOn()) {
             IOLog("SwitchPMIC: Wi-Fi/Bluetooth 32 kHz clock not set (%d): Bluetooth will not come up\n", clockErr);
         }
-        gRTC = publishRTC(rtcMode);
+        gRTC = publishRTC(rtcMode, &rtcSecs, &rtcStamp);
         int recordMillic = 0;
         const enum switch_thermal_sensor recorded = switch_pmic_thermal_take(&recordMillic);
         switch_panic_save_thermal(recorded, recordMillic);
@@ -780,6 +783,7 @@ extern "C" int switch_pmic_start(void)
         gPmc = (volatile uint32_t *)ml_io_map(kPmcPA, 0x1000);
         PE_halt_restart = haltRestart;
     }
+    (void)switch_monotonic_clock_start(rtcSecs, rtcStamp);
 
     {
         char line[256];
