@@ -34,6 +34,7 @@ kernel_driver(
     srcs = [
         "SwitchThermal.cpp",
         "SwitchPerfGovernor.cpp",
+        "SwitchPowerStats.cpp",
         "SwitchSensors.cpp",
     ],
     hdr_deps = [
@@ -46,6 +47,7 @@ kernel_driver(
         "drivers/TegraGM20B",
         "drivers/TegraGPIO",
         "drivers/TegraI2C",
+        "kits/SwitchIdle",
     ],
 )
 

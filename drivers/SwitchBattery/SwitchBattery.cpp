@@ -1244,17 +1244,20 @@ extern "C" void switch_battery_resume(void)
 
 extern "C" int switch_battery_gauge_sample(struct switch_battery_gauge *sample)
 {
-    uint16_t qh = 0, avg = 0, now = 0;
+    uint16_t qh = 0, avg = 0, now = 0, vcell = 0;
     int err = gaugeWord(QH, &qh);
     if (!err)
         err = gaugeWord(AvgCurrent, &avg);
     if (!err)
         err = gaugeWord(Current, &now);
+    if (!err)
+        err = gaugeWord(VCell, &vcell);
     if (err)
         return err;
     sample->qh = qh;
     sample->avg_ma = (int16_t)avg * 15625 / 100000;
     sample->now_ma = (int16_t)now * 15625 / 100000;
+    sample->mv = (vcell >> 3) * 625u / 1000;
     return 0;
 }
 

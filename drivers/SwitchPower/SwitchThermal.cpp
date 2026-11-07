@@ -151,6 +151,7 @@
 #include "SwitchGovernor.h"
 #include "SwitchPerfGovernor.h"
 #include "SwitchPower.h"
+#include "SwitchPowerStats.h"
 #include <os/log.h>
 
 extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
@@ -1601,6 +1602,9 @@ void SwitchThermal::timerFired(OSObject *owner, IOTimerEventSource *sender)
         tegra_gpio_check_delivery(TEGRA_GPIO_TEMP_ALERT, "SwitchThermal TMP451 ALERT");
     const bool ok = self->evaluate();
     sender->setTimeoutMS(self->nextTickMS(ok));
+#if DEVELOPMENT || DEBUG
+    switch_power_stats_tick();
+#endif
 }
 
 // ALERT asserted (level low on PX4; the GPIO line stays masked while this runs). Re-evaluate and
