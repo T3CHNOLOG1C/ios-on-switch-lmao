@@ -7,7 +7,8 @@ from pathlib import Path
 from tools.devicerun import devicerun, hwtest
 from tools.devicerun.rules import FAIL, INFO, NO_DATA, PASS
 
-SOURCES = Path(__file__).resolve().parents[2] / 'hw_test_app/tests'
+APP = Path(__file__).resolve().parents[2] / 'hw_test_app'
+SOURCES = (APP / 'tests', APP / 'gpu/scenes')
 PARAMETERIZED = re.compile(
     r'^(decode\.|playback\.|encode\.|audio\.playback_|image\.(' + '|'.join(hwtest.STILLS) + r')$)'
 )
@@ -48,6 +49,17 @@ class Verdicts(unittest.TestCase):
         self.assertIn('audio.headset', results['hwtest.skipped'].observed)
         self.assertIn('212.4', results['hwtest.decode-fps'].observed)
 
+    def test_gpu_paths_and_pacing_are_reported(self):
+        results = run(
+            'HWTEST gpu.clear.formats PASS dev=raw raw_checks=228 raw_paths=raw/230,m2v:compute:compute/2 ms=9.0',
+            'HWTEST pacing.blur_over FAIL link_frames=300 link_missed=0 link_hist=299/0/0/0 late=0 '
+            'present_frames=290 present_missed=12 present_hist=280/9/1/0 ms=6000.0 why=the_display_missed',
+            'HWTEST suite FAIL pass=1 fail=1 skip=0 ms=1.0',
+        )
+        self.assertIn('raw/230,m2v:compute:compute/2', results['hwtest.gpu-paths'].observed)
+        self.assertIn('280/9/1/0', results['hwtest.pacing'].observed)
+        self.assertEqual(results['hwtest.pacing.blur_over'].verdict, FAIL)
+
     def test_a_clean_run_passes(self):
         results = run('HWTEST metal.device PASS ms=1.0', 'HWTEST suite PASS pass=70 fail=0 skip=0 ms=1.0')
         self.assertEqual(results['hwtest.suite'].verdict, PASS)
@@ -76,9 +88,9 @@ class Verdicts(unittest.TestCase):
 class AppSources(unittest.TestCase):
     def declared(self) -> dict[str, bool]:
         ids = {}
-        for source in sorted(SOURCES.glob('*.swift')):
+        for source in sorted(path for directory in SOURCES for path in directory.glob('*.swift')):
             for block in re.split(r'\n(?=struct )', source.read_text()):
-                for test_id in re.findall(r'let id = "([a-z0-9_.]+)"', block):
+                for test_id in re.findall(r'(?:let id = |\bid: )"([a-z0-9_.]+)"', block):
                     ids[test_id] = 'let interactive = true' in block
         return ids
 
