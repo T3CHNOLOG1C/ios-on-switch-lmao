@@ -76,8 +76,8 @@ MORNING = [
         boot='A',
         regex=r'(?P<halves>[0-9a-f]{4} [0-9a-f]{4} [0-9a-f]{4} [0-9a-f]{4})',
         show=('halves',),
-        source=DOC,
-        note='RNE reads 3800 3800 37ff 3800; format not on deploy-next5',
+        source=PENDING,
+        note='RNE reads 3800 3800 37ff 3800',
     ),
     Check(
         'widget.needs-display',
