@@ -1509,7 +1509,7 @@ static void sc7Exit()
 #endif
 
 // The boot CPU's PSCI entry record, which only system sleep and C7 use (secondaries get theirs at CPU_ON).
-void armcpu::fillBootRecord(void)
+void armcpu::fillBootRecord()
 {
     switch_smp_record *record = &switch_secondary_records[0];
     memset(record, 0, sizeof(*record));
@@ -1527,19 +1527,19 @@ int64_t armcpu::psciSmc(uint64_t function, uint64_t a, uint64_t b, uint64_t c)
     return psciCall(false, function, a, b, c);
 }
 
-bool armcpu::psciSmcConduit(void)
+bool armcpu::psciSmcConduit()
 {
     bool hvc = false;
     return psciConduit(&hvc) && !hvc;
 }
 
-bool armcpu::nativeGicV2Smp(void)
+bool armcpu::nativeGicV2Smp()
 {
-    return gSharedGicV2 && gNativeSmp && armcpu_gic_ready &&
+    return gSharedGicV2 && gNativeSmp && (armcpu_gic_ready != 0u) &&
            __atomic_load_n(&armcpu_smp_running, __ATOMIC_ACQUIRE) == SWITCH_SMP_CORE_COUNT - 1;
 }
 
-uintptr_t armcpu::gicDistributor(void)
+uintptr_t armcpu::gicDistributor()
 {
     return gDist;
 }
