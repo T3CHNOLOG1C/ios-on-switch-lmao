@@ -2136,13 +2136,19 @@ IOReturn AGXDeviceUserClient::clientMemoryForType(UInt32 type, IOOptionBits *opt
 	return ret;
 }
 
+extern "C" IOReturn tegra_gm20b_new_device_client(IOService *, task_t, void *, UInt32,
+						  OSDictionary *, IOUserClient **);
+
 // Called by AGXAccelerator::newUserClient (TegraGM20BAccelerator.cpp).
 extern "C" IOReturn tegra_gm20b_new_user_client(IOService *provider, task_t task, void *securityID,
 						UInt32 type, OSDictionary *properties,
 						IOUserClient **handler)
 {
+	if ((type & 0xffff) == 1)  // IOGPU's device (IOGPUDeviceCreate), the API in the high half
+		return tegra_gm20b_new_device_client(provider, task, securityID, type, properties,
+						     handler);
 	if (type != TegraGM20BOpenType)
-		return kIOReturnBadArgument;  // the original IOGPU library opens with type 1
+		return kIOReturnBadArgument;
 	if (tgm_stage() < 2)
 		return kIOReturnNotReady;
 	if (__atomic_add_fetch(&gConnections, 1, __ATOMIC_SEQ_CST) >

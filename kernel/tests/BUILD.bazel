@@ -39,6 +39,8 @@
 #                            change is setting the Access flag
 #   switch_cpulimit_test     <switch/cpulimit.h>: a blocking per-thread CPU limit's share scaled to this CPU, lifted at
 #                            a whole core, and its hook in both trees' thread_set_cpulimit
+#   switch_commpage_test     <switch/commpage.h>: the ARMv8 crypto features from ID_AA64ISAR0_EL1 into the commpage and
+#                            hw.optional.arm.FEAT_*, and its hook in both trees' commpage_init_arm_optional_features_isar0
 #
 #   bazel test //kernel/tests:all
 load("@bazel_skylib//rules:copy_file.bzl", "copy_file")
@@ -427,6 +429,29 @@ host_test(
     defines = [
         'THREAD_10063=\\"$(rootpath //kernel/xnu-10063.141.1/osfmk:kern/thread.c)\\"',
         'THREAD_12377=\\"$(rootpath //kernel/xnu-12377.121.6/osfmk:kern/thread.c)\\"',
+    ],
+    includes = ["."],
+)
+
+copy_file(
+    name = "switch_commpage",
+    src = "//kernel/switch:include/switch/commpage.h",
+    out = "switch/commpage.h",
+)
+
+host_test(
+    name = "switch_commpage_test",
+    srcs = [
+        "switch/commpage.h",
+        "switch_commpage_test.cpp",
+    ],
+    data = [
+        "//kernel/xnu-10063.141.1/osfmk:arm/commpage/commpage.c",
+        "//kernel/xnu-12377.121.6/osfmk:arm/commpage/commpage.c",
+    ],
+    defines = [
+        'COMMPAGE_10063=\\"$(rootpath //kernel/xnu-10063.141.1/osfmk:arm/commpage/commpage.c)\\"',
+        'COMMPAGE_12377=\\"$(rootpath //kernel/xnu-12377.121.6/osfmk:arm/commpage/commpage.c)\\"',
     ],
     includes = ["."],
 )

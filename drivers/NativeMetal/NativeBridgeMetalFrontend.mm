@@ -531,7 +531,8 @@ static void waitForResource(id resource);
 // code round(h * 255), green into the luma plane and blue and red as the chroma plane's pairs (an M4 under macOS 27.0.1: clears,
 // source-over blends and loads into '_RB4' beside RGBA8Unorm, which rounds its float tile and lands up to 1 off). So a pass renders
 // such an attachment into the texture's RGBA16Float stand-in (made at its first pass and kept with it), the pipelines target
-// RGBA16Float in its place (renderDescriptor), a pass that loads it first moves the planes' codes into the stand-in, and the
+// RGBA16Float in its place (renderDescriptor), a pass that loads it (or stores a DontCare load) first moves the planes' codes into
+// the stand-in, and the
 // encoder's end stores the stand-in into the planes through R8Unorm and RG8Unorm textures over them (TwoPlaneStandIn.metal): one
 // full-target draw each, ordered on the GPU like any pass, no CPU wait. Samples, blits and CPU copies of the texture read and
 // write its planes directly.
@@ -1684,6 +1685,20 @@ static bool systemCompiler();
     if (error)
         *error = nil;
     return function;
+}
+
+// A pipeline library holds an Apple GPU's compiled functions, none for this device (newPipelineLibraryWithFilePath: refuses
+// each), so the function is made from this library as without one.
+- (id<MTLFunction>)newFunctionWithName:(NSString *)name
+                        constantValues:(MTLFunctionConstantValues *)values
+                       pipelineLibrary:(id)pipelineLibrary
+                                 error:(NSError **)error
+{
+    (void)pipelineLibrary;
+    MTLFunctionDescriptor *d = [MTLFunctionDescriptor functionDescriptor];
+    d.name = name;
+    d.constantValues = values;
+    return [self newFunctionWithDescriptor:d error:error];
 }
 
 - (void)newFunctionWithDescriptor:(MTLFunctionDescriptor *)d
@@ -3581,7 +3596,10 @@ static void scheduled(void *context);
         if (!c.texture || c.level || c.slice || c.depthPlane || c.resolveTexture ||
             !(standIns[i] = standInOf(c.texture)))
             continue;
-        if (c.loadAction == MTLLoadActionLoad)
+        // A DontCare load keeps the planes' codes in every 32x32 tile no draw touches (an M4 under macOS 27.0.1, raw/test/
+        // standinoracle.mm), and the store writes every texel: the stand-in holds the codes there too
+        if (c.loadAction == MTLLoadActionLoad ||
+            (c.loadAction == MTLLoadActionDontCare && c.storeAction != MTLStoreActionDontCare))
             [self loadStandIn:standIns[i] from:c.texture];
         if (c.storeAction != MTLStoreActionDontCare) {
             if (!storeBacks)
@@ -4227,6 +4245,11 @@ static void completed(void *context)
 {
     return 0;
 }  // none was applied (above)
+
+- (NSUInteger)getBackgroundGPUPriority
+{
+    return 0;
+}
 
 - (id<MTLCommandBuffer>)commandBufferWithDescriptor:(MTLCommandBufferDescriptor *)d
 {
@@ -5972,7 +5995,22 @@ static void fillLimits(id)
 {
     NmbBuffer *handle = nmb_buffer_new_no_copy(gDevice, pointer, length, options);
     if (!handle) {
-        NBLOG(@"native-metal: no-copy buffer refused: %@", lastError());
+        // Each refusal sends the caller to a CPU copy (QuartzCore's copy_image_to_texture uploads the image instead), so the
+        // first ones name the memory: where it sits in its page, and the VM region's protection, sharing and tag.
+        static std::atomic<int> told{0};
+        if (told.fetch_add(1) < 8) {
+            vm_address_t region = (vm_address_t)pointer;
+            vm_size_t regionSize = 0;
+            vm_region_extended_info_data_t info = {};
+            mach_msg_type_number_t count = VM_REGION_EXTENDED_INFO_COUNT;
+            mach_port_t object = MACH_PORT_NULL;
+            const kern_return_t kr = vm_region_64(mach_task_self(), &region, &regionSize, VM_REGION_EXTENDED_INFO,
+                                                  (vm_region_info_t)&info, &count, &object);
+            NBLOG(@"native-metal: no-copy buffer refused (%lu bytes at page offset 0x%lx; region %d: prot %d share %d "
+                  @"tag %u): %@",
+                  (unsigned long)length, (unsigned long)((uintptr_t)pointer & (vm_page_size - 1)), kr, info.protection,
+                  info.share_mode, info.user_tag, lastError());
+        }
         return nil;
     }
     NBBuffer *buffer = [NBBuffer new];

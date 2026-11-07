@@ -1,7 +1,7 @@
 # drivers/SwitchUSB on the host: the XUDC's device-mode transfer planner and OUT residue protocol (XudcTransfer.h,
 # xudc_transfer_test), its completion accounting against a model controller (XudcTransfer.h TdRing,
-# xudc_completion_test), and USB2 host mode's power-role policy and register arithmetic (SwitchPDPolicy.h, XusbPorts.h,
-# switch_usb_host_test).
+# xudc_completion_test), host mode's power and data roles and register arithmetic (SwitchPDPolicy.h, XusbPorts.h,
+# switch_usb_host_test), and SuperSpeed's lane and root port (XusbLanes.h, switch_usb_lanes_test).
 #
 #   bazel test //drivers/SwitchUSB/test:all
 load("//bazel/lint:defs.bzl", "lint_files")
@@ -82,7 +82,8 @@ host_test(
 )
 
 # What the headers cannot show: the interrupt routing (DT SPI 39/40 level-high, the LIC, IPFS as tegra_xusb_config,
-# checkFired's one panic) and that the kernel files use the tested headers in the order the model assumes.
+# checkFired's one panic), that the kernel files use the tested headers in the order the model assumes, and the
+# SuperSpeed lane's handshake with PCIe's UPHY PLL calibration.
 host_test(
     name = "switch_usb_host_source_test",
     srcs = ["switch_usb_host_source_test.cpp"],
@@ -93,15 +94,19 @@ host_test(
         "//drivers/SwitchUSB:SwitchXHCI.cpp",
         "//drivers/SwitchUSB:SwitchXHCIEvents.cpp",
         "//drivers/SwitchUSB:SwitchXHCIServices.cpp",
+        "//drivers/SwitchUSB:UsbSmmuMapper.cpp",
         "//drivers/SwitchUSB:XusbHost.cpp",
         "//drivers/SwitchUSB:XusbHost.h",
+        "//drivers/SwitchUSB:XusbSuperSpeed.cpp",
+        "//drivers/SwitchWLAN:TegraPCIe.cpp",
     ],
 )
 
-# --- SuperSpeed: SS port 0's lane, the falcon's SuperSpeed messages, SwitchXHCI's write adjustments ---
-# XusbLanes.h (//drivers/SwitchUSB:superspeed) compiled as C11 with -Wconversion -Wsign-conversion, and its decisions:
-# the lane across DisplayPort alt mode's pin assignments and the role, the register writes against the Linux sequences
-# (never a bit of USB2 pad 0 or another lane), LFPS and DFE/CTLE messages, U1/U2 off and the moderation floor.
+# --- SuperSpeed: SS port 0's lane and root port, the falcon's SuperSpeed messages, SwitchXHCI's write adjustments ---
+# XusbLanes.h compiled as C11 with -Wconversion -Wsign-conversion, and its decisions: the lane across DisplayPort alt
+# mode's pin assignments, the role and PCIe's PLL calibrations, the root port across sessions and SC7, the register
+# writes against the Linux sequences (never a bit of USB2 pad 0 or another lane), LFPS, DFE/CTLE and RESET_SSPI
+# messages, the SMMU state the host accepts, U1/U2 off and the moderation floor.
 host_library(
     name = "switch_usb_lanes_c",
     srcs = ["switch_usb_lanes_c.c"],

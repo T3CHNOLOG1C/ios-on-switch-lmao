@@ -1,0 +1,32 @@
+# Refusal logging, one C ABI for the kernel (the SwitchRefusal driver objects) and user space (SwitchRefusal.c and .h
+# compiled into the binary).
+#
+#   bazel test //kits/SwitchRefusal/test:all
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//kernel/rules:kernel.bzl", "kernel_driver", "kernel_headers")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files()
+
+exports_files(glob(
+    ["**"],
+    exclude = ["BUILD.bazel"],
+))
+
+filegroup(
+    name = "all_files",
+    srcs = glob(
+        ["**"],
+        exclude = ["BUILD.bazel"],
+    ),
+)
+
+kernel_headers()
+
+kernel_driver(
+    name = "SwitchRefusal",
+    srcs = ["SwitchRefusal.c"],
+    c_recipe = ":bsd_c",
+    hdr_deps = [],
+)

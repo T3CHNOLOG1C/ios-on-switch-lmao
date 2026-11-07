@@ -50,6 +50,7 @@ rust_static_library(
     srcs = [
         METAL + ":bridge/NativeMetalBridge.rs",
         METAL + ":bridge/NativeMetalObjects.rs",
+        METAL + ":bridge/NativeMetalTarget.rs",
     ],
     # The AIR fixtures it compiles in (include_bytes!(env!(...)); rules_rust makes $(execpath) absolute).
     compile_data = [
@@ -104,6 +105,7 @@ raw_stack(
     srcs = [
         METAL + ":bridge/NativeMetalBridge.rs",
         METAL + ":bridge/NativeMetalObjects.rs",
+        METAL + ":bridge/NativeMetalTarget.rs",
         METAL + ":NativeBridgeMetalFrontend.mm",
         GM20B_METAL + ":raw_stack_sources",
     ],

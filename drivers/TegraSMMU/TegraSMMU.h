@@ -21,15 +21,18 @@ extern "C" {
 enum {
     TEGRA_SMMU_ASID_VIC = 127,
     TEGRA_SMMU_ASID_DISPLAY = 126,
-    TEGRA_SMMU_ASID_NVJPG = 125
+    TEGRA_SMMU_ASID_NVJPG = 125,
+    TEGRA_SMMU_ASID_XUSB_HOST = 124
 };
 
 enum {
     TEGRA_SMMU_TRANSLATION_ENABLE_0 = 0x228,
+    TEGRA_SMMU_TRANSLATION_ENABLE_2 = 0x230,
     TEGRA_SMMU_TRANSLATION_ENABLE_3 = 0x234,
     TEGRA_SMMU_DC_ASID = 0x240,
     TEGRA_SMMU_VIC_ASID = 0x284,
-    TEGRA_SMMU_NVJPG_ASID = 0xac0,  // swgroup "nvjpg" (clients nvjpgsrd/nvjpgswr: TRANSLATION_ENABLE_3 bits 30/31)
+    TEGRA_SMMU_XUSB_HOST_ASID = 0x288,  // swgroup "xusb_host" (xusb_hostr/xusb_hostw: TRANSLATION_ENABLE_2 bits 10/11)
+    TEGRA_SMMU_NVJPG_ASID = 0xac0,      // swgroup "nvjpg" (clients nvjpgsrd/nvjpgswr: TRANSLATION_ENABLE_3 bits 30/31)
 };
 
 // Points swgroup register asidReg at the directory ptb (TegraSMMUDomain::ptb) under asid: the directory (read back),

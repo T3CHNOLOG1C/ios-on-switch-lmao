@@ -146,12 +146,16 @@ TEST(SwitchALSSource, WakeSamplesFromTheDcRestart)
     ASSERT_NE(scanout, std::string::npos);
     ASSERT_NE(als, std::string::npos);
     ASSERT_NE(panel, std::string::npos);
-    EXPECT_LT(scanout, als) << "frame ends run before the sensor's clock starts";
+    EXPECT_LT(scanout, als) << "the sensor starts once the panel's DC scans out again";
     EXPECT_LT(als, panel) << "the sensor samples through the panel's wake";
     EXPECT_EQ(Count(on, "switch_als_set_active"), 1u);
 
     const std::string sensor = SourceText("../SwitchALS.cpp");
-    EXPECT_THAT(Body(sensor, "void SwitchALS::update()"), HasSubstr("const int err = configure();"));
+    const std::string update = Body(sensor, "void SwitchALS::update()");
+    EXPECT_THAT(update, HasSubstr("const int err = configure();"));
+    EXPECT_LT(update.find("clock->setTimeoutUS(kFirstSampleUS);"), update.find("const int err = configure();"))
+        << "the first sample's period counts from the set-up";
+    EXPECT_THAT(update, HasSubstr("clock->cancelTimeout();"));
     const std::string configure = Body(sensor, "int SwitchALS::configure()");
     EXPECT_THAT(configure, HasSubstr("skip = 0;"));
     EXPECT_LT(configure.find("RegTiming"), configure.find("RegControl, kPowerOn | kAdcEnable"))

@@ -9042,6 +9042,48 @@ native_switch_gamut_cache(proc_t p, user_addr_t scratch, mount_t data_mount)
 	printf("SwitchRawBoot: display gamut %s: MobileGestalt cache dropped (%d)\n", srgb ? "sRGB" : "not sRGB", error);
 }
 
+/* MobileGestalt answers what it reads of /product (GraphicsFeatureSetClass and its fallbacks, the memory class, the
+ * artwork traits), of /arm-io (soc-generation, which gates its codec answers) and of the root (platform-name, its
+ * HardwarePlatform) from the same build-keyed cache, so an answer made before a package changed one of them outlives the
+ * change. A digest of the three nodes' own properties is kept in a marker, and the cache is dropped once whenever it
+ * differs. Failures are logged only; the next boot tries again. */
+static void
+native_switch_identity_cache(proc_t p, user_addr_t scratch, mount_t data_mount)
+{
+	static const char cache[] = "/private/var/containers/Shared/SystemGroup/systemgroup.com.apple.mobilegestaltcache/"
+	    "Library/Caches/com.apple.MobileGestalt.plist", marker[] = "/private/var/Switch/mobilegestalt-identity";
+	static const char *const nodes[] = {"/", "/product", "/arm-io"};
+	uint64_t digest = 0xcbf29ce484222325ULL;
+	for (unsigned int n = 0; n < sizeof(nodes) / sizeof(nodes[0]); ++n) {
+		DTEntry node;
+		OpaqueDTPropertyIterator properties;
+		if (SecureDTLookupEntry(0, nodes[n], &node) != kSuccess ||
+		    SecureDTInitPropertyIterator(node, &properties) != kSuccess) continue;
+		char const *name = NULL;
+		while (SecureDTIterateProperties(&properties, &name) == kSuccess) {
+			void const *value = NULL;
+			unsigned int size = 0;
+			if (SecureDTGetProperty(node, name, &value, &size) != kSuccess) continue;
+			const uint8_t *bytes[2] = {(const uint8_t *)name, value};
+			const size_t lengths[2] = {strlen(name) + 1, size};
+			for (unsigned int part = 0; part < 2; ++part) {
+				for (size_t i = 0; i < lengths[part]; ++i) digest = (digest ^ bytes[part][i]) * 0x100000001b3ULL;
+			}
+		}
+	}
+	char text[24];
+	const int length = snprintf(text, sizeof(text), "%016llx\n", digest);
+	if (native_switch_file_unchanged(marker, text, length, data_mount, 0, 0, 0644)) return;
+	struct unlink_args request = {.path = scratch + 0x900};
+	int32_t result = 0;
+	int error = copyout(cache, request.path, sizeof(cache));
+	if (!error) error = native_switch_unlink(p, &request, &result);
+	if (error == ENOENT) error = 0;
+	if (!error) error = native_switch_mkdir(p, scratch, "/private/var/Switch", 0, 0755);
+	if (!error) error = native_switch_watchdog_file(p, scratch, marker, text, length, data_mount, 0, 0, 0644);
+	printf("SwitchRawBoot: identity %016llx: MobileGestalt cache dropped (%d)\n", digest, error);
+}
+
 /* The ambient light sensor (drivers/SwitchBrightness/SwitchALS.cpp): MobileGestalt's ambient-light-sensor is an
  * IOServiceGetMatchingService on {PrimaryUsagePage 0xff00, PrimaryUsage 4}, which the sensor's HID service answers, and
  * Settings' Auto-Brightness switch and CoreBrightness's DisplayBrightnessAuto both gate on it. The answer is precacheable
@@ -9098,7 +9140,7 @@ native_switch_ui_scale_cache(proc_t p, user_addr_t scratch, mount_t data_mount)
 			continue;
 		}
 		vnode_put(vp);
-		if (each == scale) current = true;
+		if (switch_ui_scale_same(each, scale)) current = true;
 		else other = true;
 	}
 	if (switch_ui_scale_is_unit(scale) ? !other : current) return;
@@ -9108,7 +9150,7 @@ native_switch_ui_scale_cache(proc_t p, user_addr_t scratch, mount_t data_mount)
 	if (!error) error = native_switch_unlink(p, &request, &result);
 	if (error == ENOENT) error = 0;
 	for (unsigned i = 0; i < SWITCH_UI_SCALES && !error; i++) {
-		if (markers[i][0] == '\0' || &switch_ui_scales[i] == scale) continue;
+		if (markers[i][0] == '\0' || switch_ui_scale_same(&switch_ui_scales[i], scale)) continue;
 		error = copyout(markers[i], request.path, strlen(markers[i]) + 1);
 		if (!error) error = native_switch_unlink(p, &request, &result);
 	}
@@ -9293,6 +9335,7 @@ native_switch_setup_state(proc_t p, user_addr_t scratch, mount_t data_mount)
 		native_switch_portrait_cache(p, scratch, data_mount);
 		native_switch_rotation_lock_release(p, scratch, data_mount);
 		native_switch_gamut_cache(p, scratch, data_mount);
+		native_switch_identity_cache(p, scratch, data_mount);
 		native_switch_als_cache(p, scratch, data_mount);
 		native_switch_ui_scale_cache(p, scratch, data_mount);
 		native_switch_portrait_display(p, scratch, data_mount);
@@ -9348,14 +9391,13 @@ native_switch_watchdog_policy(proc_t p, user_addr_t scratch)
 	 * with them: there the three deadlocked each other). locationd runs since r17: third-party apps' CoreMotion
 	 * (CMMotionManager accelerometer, gyroscope and device motion) is served by it over XPC from the console IMU's
 	 * HID services (drivers/SwitchMotion), and r8a's bluetoothd already asked for it ("failed lookup:
-	 * com.apple.locationd.registration"). With identityservicesd off, its lookups of it fail at once (a disabled job is
-	 * refused at import), as bluetoothd's do. CommCenter runs: a device tree without a baseband node loads
-	 * com.apple.CommCenter-noncellular.plist, as on a Wi-Fi iPad, and SpringBoard's SBTelephonyManager expects it
-	 * (without it, it retried com.apple.commcenter.xpc on its main thread once a second). */
+	 * com.apple.locationd.registration"). identityservicesd runs too: imagent, homed, wifid, sharingd, bluetoothd and
+	 * WirelessRadioManager look it up at every boot, as on any iPad. CommCenter runs: a device tree without a baseband
+	 * node loads com.apple.CommCenter-noncellular.plist, as on a Wi-Fi iPad, and SpringBoard's SBTelephonyManager
+	 * expects it (without it, it retried com.apple.commcenter.xpc on its main thread once a second). */
 #define NATIVE_SWITCH_POLICY_HEAD "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" \
 	    "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n" \
-	    "<plist version=\"1.0\"><dict>" \
-	    "<key>com.apple.identityservicesd</key><true/>"
+	    "<plist version=\"1.0\"><dict>"
 	/* Bluetooth needs drivers/SwitchBluetooth, which boot-arg switch-no-bt keeps off (the BlueTool stand-in in the
 	 * overlay and bluetoothd's transport, native_switch_exec_environment, follow it). Without it bluetoothd has no
 	 * controller and stays disabled, and so does audiomxd: its Bluetooth plug-in would retry bluetoothd's
@@ -9369,21 +9411,28 @@ native_switch_watchdog_policy(proc_t p, user_addr_t scratch)
 	 * _PanicOnCrash relaunch panicked. A crash of watchdogd now takes no panic (kern_exit.c). */
 #define NATIVE_SWITCH_POLICY_WATCHDOGD "<key>com.apple.watchdogd</key><true/>"
 #define NATIVE_SWITCH_POLICY_AUDIO "<key>com.apple.audiomxd</key><true/>"
+	/* maild and financed are not here, as on a Wi-Fi iPad with no account: without maild, Mail retries it about 460
+	 * times a second for minutes after every launch, and without financed FinanceKit traps destinationd at each boot.
+	 * FairPlay is out of scope (FairPlayIOKit is not prelinked), so fairplayd stays off with the FairPlay daemons that
+	 * start on their own: adid (CoreADI) and lskdd. lskdd's daily XPC activity launches it, it exits (92) before
+	 * completing the activity, and launchd respawns it once a second. SepUpdateTimer (seputil's sepOS update check) is
+	 * limited to device trees with a "hilo" node (_LimitLoadToDeviceTree), which J120 has not, yet launchd loads it
+	 * here; seputil then exits before taking its hourly activity and is respawned every 10 s. */
 #define NATIVE_SWITCH_POLICY_TAIL "<key>com.apple.photoanalysisd</key><true/>" \
 	    "<key>com.apple.mediaanalysisd</key><true/>" \
 	    "<key>com.apple.mediastream.mstreamd</key><true/>" \
 	    "<key>com.apple.icloud.searchpartyd</key><true/>" \
 	    "<key>com.apple.findmy.findmybeaconingd</key><true/>" \
 	    "<key>com.apple.familycircled</key><true/>" \
-	    "<key>com.apple.financed</key><true/>" \
 	    "<key>com.apple.softwareupdateservicesd</key><true/>" \
 	    "<key>com.apple.ndoagent</key><true/>" \
 	    "<key>com.apple.biomesyncd</key><true/>" \
-	    "<key>com.apple.email.maild</key><true/>" \
 	    "<key>com.apple.amsengagementd</key><true/>" \
-	    "<key>com.apple.adid</key><true/>" \
 	    "<key>com.apple.eyereliefd</key><true/>" \
 	    "<key>com.apple.fairplayd.A2</key><true/>" \
+	    "<key>com.apple.adid</key><true/>" \
+	    "<key>com.apple.lskdd</key><true/>" \
+	    "<key>com.apple.SepUpdateTimer</key><true/>" \
 	    "<key>com.apple.passd</key><true/>" \
 	    "<key>com.apple.mobile.obliteration</key><true/>" \
 	    "<key>com.apple.coreduetd</key><true/>" \

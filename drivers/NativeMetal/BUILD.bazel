@@ -30,5 +30,6 @@ filegroup(
     srcs = [
         "bridge/NativeMetalBridge.rs",
         "bridge/NativeMetalObjects.rs",
+        "bridge/NativeMetalTarget.rs",
     ],
 )
