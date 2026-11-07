@@ -51,6 +51,7 @@
 #include <os/log.h>
 #include <string.h>
 #include "../ArmGIC/SwitchInterrupts.h"
+#include "../../kits/SwitchRefusal/SwitchRefusal.h"
 #include "SwitchUSB.h"
 
 using namespace xudc;
@@ -309,6 +310,7 @@ public:
 
     IOReturn doRemoteWakeGated() override
     {
+        switch_refusal("usb-device", "remote-wake", "remote wake of the USB host refused: not implemented on the XUDC");
         return kIOReturnUnsupported;
     }
 
@@ -815,8 +817,11 @@ IOReturn SwitchXUDC::ioGated(_IOUSBDeviceIORequestTag *request)
     if (dci >= kMaxDci || !endpoints[dci].active)
         return kIOReturnNotReady;
     Endpoint &ep = endpoints[dci];
-    if (get<uint8_t>(request, kReqIsoc))
+    if (get<uint8_t>(request, kReqIsoc)) {
+        switch_refusal("usb-device", "isochronous-io", "isochronous transfer on endpoint %#x refused: not implemented",
+                       (unsigned)address);
         return kIOReturnUnsupported;
+    }
     if (get<uint64_t>(request, kReqLength) > UINT32_MAX || ep.count == kQueueDepth)
         return kIOReturnNoResources;
     const uint64_t entered = mach_absolute_time();
@@ -1479,6 +1484,9 @@ IOReturn SwitchXUDC::activateEndpoint(int address, int type, int maxPacketSize, 
         uint32_t value = interval < 1 ? 1 : (uint32_t)interval;
         period = speed == kSpeedFull ? log2Floor(value * 8) : (value > 16 ? 16 : value) - 1;  // 2^n x 125 us
     } else {
+        switch_refusal_k(switch_refusal_key_with(switch_refusal_key("usb-device", "endpoint-type"), (uint64_t)type),
+                         "usb-device", "endpoint-type", "endpoint %#x of type %u refused: bulk and interrupt only",
+                         (unsigned)address, (unsigned)type);
         return kIOReturnUnsupported;
     }
     Endpoint &ep = endpoints[dci];
