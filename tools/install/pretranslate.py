@@ -30,6 +30,29 @@ ORDER = ('os', 'app_cryptex', 'system_cryptex')
 KEPT = ('{role}.trustcache', '{role}.cdhash-pairs', 'a64x-cache-pretranslated.bin')
 
 
+def _cdhash(cdhash: list[str]) -> bytes:
+    return bytes.fromhex(cdhash[0]) if cdhash else b'\x00' * overlay_index.CDHASH
+
+
+def _place(root: Path, e: dict, original: os.stat_result, owners: bool) -> Path:
+    """Move e's translated file to its System path below root, with the System file's mode, owner and flags."""
+    target = root / e['path'].lstrip('/')
+    target.parent.mkdir(parents=True, exist_ok=True)
+    partial = target.with_name('.partial-' + target.name)
+    shutil.copyfile(e['source'], partial)
+    if cards.sha256_file(partial) != e['sha256_out']:
+        partial.unlink()
+        raise host.HostError('{}: the translated file does not match its manifest'.format(e['path']))
+    os.replace(partial, target)
+    e['source'].unlink()
+    target.chmod(original.st_mode & 0o7777)
+    if owners:
+        os.chown(target, original.st_uid, original.st_gid)
+    if original.st_flags & ~COMPRESSED:
+        os.chflags(target, original.st_flags & ~COMPRESSED)
+    return target
+
+
 class Roles:
     def __init__(self, roles, scratch, log, memo_root=None):
         """`roles`: {role: {"driver": path, "tool": path, "trustcaches": [path]}}.
@@ -112,42 +135,37 @@ class Roles:
         """The System volume's translated files onto Data (OVERLAY), each with its System file's owner, mode and
         flags, then their manifest and the kernel's index made from it; the manifest is also kept for the boot
         package. As root, every file and directory of the tree ends system-immutable: the device's kernel refuses any
-        change to the tree anyway, the flag is a second layer. Returns the manifest."""
+        change to the tree anyway, the flag is a second layer. Returns the manifest.
+
+        Hard links of one System file get one Data file, placed at the first of their paths, and an index entry for
+        each path. A link on Data would give the kernel's redirect a Data file whose parent changes with each lookup."""
         root = Path(data) / OVERLAY
         files, ids, placed = [], [], []
+        by_inode = {}
         for e in entries:
             original = os.lstat(Path(system) / e['path'].lstrip('/'))
-            target = root / e['path'].lstrip('/')
-            target.parent.mkdir(parents=True, exist_ok=True)
-            partial = target.with_name('.partial-' + target.name)
-            shutil.copyfile(e['source'], partial)
-            if cards.sha256_file(partial) != e['sha256_out']:
-                partial.unlink()
-                raise host.HostError('{}: the translated file does not match its manifest'.format(e['path']))
-            os.replace(partial, target)
-            e['source'].unlink()
-            target.chmod(original.st_mode & 0o7777)
-            if owners:
-                os.chown(target, original.st_uid, original.st_gid)
-            if original.st_flags & ~COMPRESSED:
-                os.chflags(target, original.st_flags & ~COMPRESSED)
-            cdhash = e.get('cdhash') or []
-            ids.append(
-                (
-                    e['path'],
-                    original.st_ino,
-                    os.lstat(target).st_ino,
-                    bytes.fromhex(cdhash[0]) if cdhash else b'\x00' * 20,
-                )
-            )
-            placed.append(target)
-            files.append({
-                'path': e['path'],
-                'trust': True,
-                'mode': '{:04o}'.format(original.st_mode & 0o7777),
-                'sha256': e['sha256_out'],
-                'cdhash': e.get('cdhash', []),
-            })  # fmt: skip
+            if not stat.S_ISREG(original.st_mode):
+                raise host.HostError('{}: not a regular file on the System volume'.format(e['path']))
+            if original.st_ino in by_inode:
+                first, data_id, record = by_inode[original.st_ino]
+                if (first['sha256_out'], first.get('cdhash')) != (e['sha256_out'], e.get('cdhash')):
+                    raise host.HostError(
+                        '{} and {} are one System file translated two ways'.format(first['path'], e['path'])
+                    )
+                e['source'].unlink()
+            else:
+                target = _place(root, e, original, owners)
+                placed.append(target)
+                data_id = os.lstat(target).st_ino
+                record = {
+                    'trust': True,
+                    'mode': '{:04o}'.format(original.st_mode & 0o7777),
+                    'sha256': e['sha256_out'],
+                    'cdhash': e.get('cdhash', []),
+                }
+                by_inode[original.st_ino] = (e, data_id, record)
+            ids.append((e['path'], original.st_ino, data_id, _cdhash(e.get('cdhash') or [])))
+            files.append({'path': e['path'], **record})
         manifest = {'files': files}
         text = json.dumps(manifest, indent=1) + '\n'
         root.mkdir(parents=True, exist_ok=True)

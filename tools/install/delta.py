@@ -35,13 +35,18 @@ def entries_under(entries: list[dict], prefix: str) -> list[dict]:
     return [dict(e, path='/' + e['path'][len(prefix) :]) for e in entries if e['path'].startswith(prefix)]
 
 
-def written_bytes(entries: list[dict]) -> int:
-    """Return the room `entries` need written whole, in 4 KiB blocks, without counting what the files they replace free.
+def written_bytes(root: Path, entries: list[dict]) -> int:
+    """Return the room `entries` below `root` need written whole, in 4 KiB blocks.
 
-    The blocks a rewritten file frees are not reusable until APFS commits the transaction that freed them, so a volume
-    rewriting many files at once can run out with a positive net balance.
+    What the files they replace free is not counted, and hard links of one file are written once. The blocks a
+    rewritten file frees are not reusable until APFS commits the transaction that freed them, so a volume rewriting
+    many files at once can run out with a positive net balance.
     """
-    return sum(-(-os.path.getsize(e['source']) // 4096) * 4096 for e in entries)
+    sizes = {}
+    for e in entries:
+        inode = os.lstat(Path(root) / e['path'].lstrip('/')).st_ino
+        sizes[inode] = -(-os.path.getsize(e['source']) // 4096) * 4096
+    return sum(sizes.values())
 
 
 def added_bytes(root: Path, entries: list[dict]) -> int:
@@ -59,8 +64,9 @@ def added_bytes(root: Path, entries: list[dict]) -> int:
 def apply(root: Path, entries: list[dict], log: host.Log, what: str, consume: bool = False) -> int:
     """Rewrite each entry's file below `root`.
 
-    A file already holding sha256_out is left alone (a resumed run). `consume` deletes each replacement once written,
-    so a delta and its volume never both hold the bytes.
+    A file already holding sha256_out is left alone: a resumed run, or a hard link of a file already rewritten.
+    `consume` deletes each replacement once written or found there, so a delta and its volume never both hold the
+    bytes.
     """
     changed = 0
     for e in entries:
@@ -69,6 +75,8 @@ def apply(root: Path, entries: list[dict], log: host.Log, what: str, consume: bo
             raise DeltaError('{}: {} is not a regular file'.format(what, e['path']))
         current = cards.sha256_file(target)
         if current == e['sha256_out']:
+            if consume:
+                e['source'].unlink(missing_ok=True)
             continue
         if current != e['sha256_in']:
             raise DeltaError('{}: {} is not the file the delta was made from'.format(what, e['path']))

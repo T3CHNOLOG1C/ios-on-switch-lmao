@@ -97,7 +97,7 @@ def rebuild(source: str, translate: Callable[[Path], list[dict]], work_dir: Path
         volume, whole = _attach(image, log)
         try:
             with cards.mounted(volume, log, owners=True) as root:
-                short = delta.written_bytes(entries) + SLACK - shutil.disk_usage(root).free
+                short = delta.written_bytes(root, entries) + SLACK - shutil.disk_usage(root).free
                 if short <= 0:
                     delta.apply(root, entries, log, what, consume=True)
             # The sealer mounts the container itself: it takes the volume's node, attached and not mounted.
