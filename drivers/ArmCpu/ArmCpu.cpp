@@ -53,7 +53,7 @@ extern "C" kern_return_t IOCPURunPlatformActiveActions(void);
 // switch_cpu_wake_handler on the boot CPU back from SC7, before anything else in the kernel runs there.
 extern "C" {
 void (*switch_cpu_sleep_handler)(boolean_t) = nullptr;
-void (*switch_cpu_wake_handler)(void) = nullptr;
+void (*switch_cpu_wake_handler)() = nullptr;
 bool switch_cpu_sleep_hook_present = false;
 }
 
@@ -1487,7 +1487,7 @@ static void psciSleep(boolean_t)
     armcpu::fillBootRecord();
 #if DEVELOPMENT || DEBUG
     // ATF's SYSTEM_SUSPEND returns at once, without suspending, while an interrupt is pending here (psci_suspend.c).
-    uint64_t pending;
+    uint64_t pending = 0;  // NOLINT(misc-const-correctness): written by the asm after it
     __asm__ volatile("mrs %0, isr_el1" : "=r"(pending));
     switch_power_trail("isr_el1 %#llx", pending);
 #endif
@@ -1499,7 +1499,7 @@ static void psciSleep(boolean_t)
 #if DEVELOPMENT || DEBUG
 // The boot CPU back from SC7, the first C the kernel runs there (arm_init_cpu): interrupts off, the timebase not yet
 // rebased.
-static void sc7Exit(void)
+static void sc7Exit()
 {
     // The mark first: I2C5's raw write re-clocks its controller, while the timer block's state after the warm boot is
     // unknown, and a stall in the watchdog's write must not leave the mark at SYSTEM_SUSPEND.
