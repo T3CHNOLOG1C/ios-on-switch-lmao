@@ -25,8 +25,8 @@ use metal2vulkan_runtime::{
     MessageSink, MetalLevel, MultisampleDepthResolveFilter, MultisampleStencilResolveFilter, Origin, PipelineOption,
     PipelineOptions, PrivateCount, PrivateFlag, PrivateProperties, PurgeableState, Region, RenderCommandEncoder,
     RenderPassDescriptor, RenderPipelineState, ResourceOptions, ResourceRef, RowState, SamplerState, ScissorRect,
-    SharedEvent, SharedEventListener, Size, StoreAction, SurfaceYCbCrMatrix, Texture, TextureDescriptor, Viewport,
-    VisibilityResultMode,
+    SharedEvent, SharedEventListener, Size, StoreAction, SubmissionMemoryHook, SurfaceYCbCrMatrix, Texture,
+    TextureDescriptor, Viewport, VisibilityResultMode,
 };
 use std::cell::RefCell;
 use std::ffi::{CStr, c_char, c_void};
@@ -242,12 +242,31 @@ pub unsafe extern "C" fn nmb_device_open(loader: *const c_char, cache: *const c_
             let _ = SHADOW_LOG.set(cache.join("shadow.log"));
         }
         options.messages = Some(MessageSink::new(observe_message));
-        Ok(boxed(NmbDevice(
-            Device::system_default_with(&options).map_err(e("device"))?,
-            std::sync::OnceLock::new(),
-            std::sync::Mutex::new(()),
-        )))
+        let device = Device::system_default_with(&options).map_err(e("device"))?;
+        tell_nvk_submission_memory(&device, loader);
+        Ok(boxed(NmbDevice(device, std::sync::OnceLock::new(), std::sync::Mutex::new(()))))
     })
+}
+
+/// NVK's switch_nvk_submit_surfaces, where the loaded NVK has it: each submission's host memory, so the kernel orders other
+/// processes' GPU work on those imports (ExecSurfaces) and CPU locks wait only for writers.
+fn tell_nvk_submission_memory(device: &Device, loader: &CStr) {
+    // SAFETY: a NUL-terminated path; RTLD_NOLOAD loads nothing, and the device's open loaded NVK from this path.
+    let nvk = unsafe { libc::dlopen(loader.as_ptr(), libc::RTLD_LAZY | libc::RTLD_NOLOAD) };
+    if nvk.is_null() {
+        return;
+    }
+    // SAFETY: a handle dlopen returned and a NUL-terminated name.
+    let hook = unsafe { libc::dlsym(nvk, c"switch_nvk_submit_surfaces".as_ptr()) };
+    if !hook.is_null() {
+        // SAFETY: NVK exports it with SubmissionMemoryHook's signature; it is thread-safe, lives as long as NVK (never
+        // unloaded while a device is open) and calls nothing of the runtime's.
+        unsafe {
+            device.set_submission_memory_hook(std::mem::transmute::<*mut c_void, SubmissionMemoryHook>(hook));
+        }
+    }
+    // SAFETY: the reference RTLD_NOLOAD took.
+    unsafe { libc::dlclose(nvk) };
 }
 
 // What the runtime says through the device's sink, kept as numbers for the plugin's telemetry: each render VkPipeline making the
