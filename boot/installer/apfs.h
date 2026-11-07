@@ -10,7 +10,7 @@
 #define SWITCH_APFS_NOMINAL_BYTES (UINT64_C(1) << 40)
 #define SWITCH_APFS_EDIT_CIBS     4u
 #define SWITCH_APFS_EDIT_BITMAPS  4u
-#define SWITCH_APFS_WORK_BYTES    ((6u + SWITCH_APFS_EDIT_CIBS + SWITCH_APFS_EDIT_BITMAPS) * SWITCH_APFS_BLOCK + 1024u)
+#define SWITCH_APFS_WORK_BYTES    ((9u + SWITCH_APFS_EDIT_CIBS + SWITCH_APFS_EDIT_BITMAPS) * SWITCH_APFS_BLOCK + 1024u)
 
 // APFS's object checksum: Fletcher-64 over 32-bit words, everything after the 8 checksum bytes.
 uint64_t switch_apfs_checksum(const uint8_t *block, uint32_t bytes);
