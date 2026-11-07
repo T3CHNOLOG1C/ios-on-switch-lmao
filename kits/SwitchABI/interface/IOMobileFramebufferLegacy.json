@@ -181,10 +181,10 @@
       "mangled": "__ZN25IOMobileFramebufferLegacy21setAccessibilityScaleEj",
       "doc": "SetParameter 3 (selector 68), which QuartzCore sends after its accessibility matrix: a 16.16 scale, Reduce White Point's. The family answers kIOReturnUnsupported."
     },
-    "platformPipeForward": {
-      "decl": "virtual void platformPipeForward() = 0",
-      "pac": "_ZN25IOMobileFramebufferLegacy19platformPipeForwardEv",
-      "doc": "Apple's platform driver (UnifiedPipeline) forwards it to its display pipe backend. Only a platform display driver implements it, and nothing here should reach it."
+    "changeFrameInfo": {
+      "decl": "virtual IOReturn changeFrameInfo(uint32_t type, void *client, uint32_t mask) = 0",
+      "pac": "_ZN25IOMobileFramebufferLegacy15changeFrameInfoEjPvj",
+      "doc": "ChangeFrameInfo (selector 73: the notification type, 3, and the keys a client wants, one bit per supportedFrameInfo index), under the work-loop gate; client is the family's notification record. J120's AppleCLCD forwards it to its pipe, which keeps the client's mask and answers kIOReturnBadArgument for any other type."
     },
     "platformInternalPlug": {
       "decl": "virtual void platformInternalPlug() = 0",
@@ -201,10 +201,10 @@
       "pac": "_ZN25IOMobileFramebufferLegacy23platformFrameInfoNotifyEPvb",
       "doc": "The frame-info notification (EnableNotifications type 3, selector 72) of one client turning on, and off again when it is disabled or the client goes away; the caller ignores what it returns. UnifiedPipeline forwards it to its display pipe, which then sends the client the keys supportedFrameInfo published at each frame."
     },
-    "platformHotPlug": {
-      "decl": "virtual void platformHotPlug() = 0",
-      "pac": "_ZN25IOMobileFramebufferLegacy15platformHotPlugEv",
-      "doc": "Reached from hotPlug_notify_gated; UnifiedPipeline forwards it to its display pipe backend. Only a platform display driver implements it, and nothing here should reach it."
+    "sendFrameInfo": {
+      "decl": "virtual IOReturn sendFrameInfo(void *client, const void *frame) = 0",
+      "pac": "_ZN25IOMobileFramebufferLegacy13sendFrameInfoEPvPKv",
+      "doc": "One frame-info client's entry for a present: native_legacy_frame_info_notify calls it, gated, for every record on the type 3 list with the frame it was given. 21H461's caller logs a nonzero return as a dropped message; J120's AppleCLCD sends nothing to a client with no keys."
     },
     "platformRefreshRates": {
       "decl": "virtual void platformRefreshRates() = 0",
@@ -286,12 +286,29 @@
     },
     "vsyncClientList": {
       "doc": "The framebuffer's vsync client list head (a pointer): set while a client wants vsync messages; native_legacy_vsync_notify walks it."
+    },
+    "swapId": {
+      "doc": "A request's swap id (uint32), the one SwapBegin gave the client: the completion path stores it in swapsCompleted."
+    },
+    "swapRequestedPresentation": {
+      "doc": "A request's presentation target (uint64 mach time): SwapSetTimestamps type 1, which QuartzCore sets to the vsync it renders for (the IOSurface display-presentation time)."
+    },
+    "frameInfoClientOwner": {
+      "doc": "A notification record's user client (a pointer): its shared data queue for type 3 is what native_legacy_frame_info_enqueue fills."
     }
   },
   "functions": {
     "native_legacy_vsync_notify": {
       "decl": "void native_legacy_vsync_notify(void *display, uint64_t timestamp, uint64_t continuousTime, uint64_t interval)",
       "doc": "The family's vsync message sender (IOMobileFramebufferLegacy's own): every client on vsyncClients gets the vsync message; a 0 continuous time or interval is filled in from the framebuffer."
+    },
+    "native_legacy_frame_info_notify": {
+      "decl": "void native_legacy_frame_info_notify(void *display, const void *frame)",
+      "doc": "The family's frameInfo_notify: under the work-loop gate (recursive from the work loop), sendFrameInfo(record, frame) for every client on the type 3 notification list, then a hook that does nothing in the family."
+    },
+    "native_legacy_frame_info_enqueue": {
+      "decl": "IOReturn native_legacy_frame_info_enqueue(void *userClient, const void *entry, uint32_t bytes)",
+      "doc": "IOMobileFramebufferUserClient's frame-info enqueue: one entry on the client's type 3 IOSharedDataQueue (0x1040 bytes, made for every client), which notifies the client's port when it was empty; kIOReturnNoSpace when full (24B119 panics instead if the client asked for that). 0 without a queue."
     }
   }
 }

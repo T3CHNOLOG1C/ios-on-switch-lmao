@@ -52,6 +52,7 @@ kernel_driver(
         "drivers/TegraSMMU",
         # TegraVICConfig.h: the traits the detach gate reads (r18-planes).
         "drivers/TegraVIC",
+        "kits/SwitchRefusal",
     ],
     late = ["NativeLegacyDisplay.cpp"],
 )

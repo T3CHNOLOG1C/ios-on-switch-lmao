@@ -68,11 +68,23 @@ TEST(DirectScanoutSource, FenceOnlyPresentNoRetireAtTheOffer)
 
 TEST(DirectScanoutSource, RetireAtTheLatchInQueueOrder)
 {
-    const std::string retire = method(display(), "    void retireThrough(uint64_t seq)\n");
+    const std::string retire = method(display(), "    void retireThrough(uint64_t seq, uint64_t shownAt)\n");
     EXPECT_THAT(retire, HasSubstr("at > seq"));
     EXPECT_THAT(retire, HasSubstr("head == gpuRequest"));
-    EXPECT_THAT(display(), HasSubstr("retireThrough(entrySeq[asked])"));
-    EXPECT_THAT(display(), HasSubstr("retireThrough(entrySeq[replaced])"));
+    EXPECT_THAT(display(), HasSubstr("retireThrough(entrySeq[asked], stamp)"));
+    EXPECT_THAT(display(), HasSubstr("retireThrough(entrySeq[replaced], stamp)"));
+}
+
+// Every present of a swap reaches its frame-info clients (the swap's entry first, at the latch's stamp), in both
+// retire modes: frameShown comes before retireThrough's latchRetire check.
+TEST(DirectScanoutSource, FrameInfoAtEveryPresent)
+{
+    const std::string retire = method(display(), "    void retireThrough(uint64_t seq, uint64_t shownAt)\n");
+    EXPECT_LT(retire.find("frameShown(seq, shownAt);"), retire.find("if (!latchRetire || !seq)"));
+    EXPECT_THAT(method(display(), "    void noteTaken("), HasSubstr("noteFrameInfoTaken(request)"));
+    EXPECT_THAT(method(display(), "    void frameShown("), HasSubstr("native_legacy_frame_info_notify(this, &frame)"));
+    EXPECT_THAT(method(display(), "    IOReturn sendFrameInfo("),
+                HasSubstr("native_legacy_frame_info_enqueue(owner, words, n * sizeof(words[0]))"));
 }
 
 TEST(DirectScanoutSource, NoEarlyRetireOrCollapseOnceRetiringAtTheLatch)
