@@ -6,6 +6,7 @@ of a cryptex against its seal, so after the delta the volume is sealed again wit
 
 import os
 import re
+import shutil
 from collections.abc import Callable
 from pathlib import Path
 
@@ -53,12 +54,27 @@ def _blank(image: Path, size: int, name: str, log: host.Log) -> None:
         host.run('hdiutil', 'detach', whole, log=log, check=False)
 
 
+def _grow(image: Path, by: int, log: host.Log) -> None:
+    """Make `image` `by` bytes (whole MiB) larger and its APFS container fill it."""
+    with open(image, 'r+b') as f:
+        f.truncate(image.stat().st_size + _mib(by))
+    _, whole = _attach(image, log)
+    try:
+        host.run('diskutil', 'apfs', 'resizeContainer', whole, '0', log=log)
+    finally:
+        host.run('hdiutil', 'detach', whole, log=log, check=False)
+
+
+def _mib(size: int) -> int:
+    return -(-size // (1 << 20)) * (1 << 20)
+
+
 def rebuild(source: str, translate: Callable[[Path], list[dict]], work_dir: Path, log: host.Log, what: str) -> Path:
     """Copy `source`'s volume into a new one in `work_dir` with its delta applied, and seal the new one.
 
     `translate(mount point)` makes the delta from the mounted source and returns its entries. A sealed volume cannot be
-    sealed again (apfs_prepare_cryptex fails on Apple's own, untouched), so the copy is a fresh volume with room for the
-    translated files, which are stored uncompressed.
+    sealed again (apfs_prepare_cryptex fails on Apple's own, untouched), so the copy is a fresh volume, grown until the
+    translated files fit: they are stored uncompressed.
     """
     image = Path(work_dir) / Path(source).name
     if image.exists():
@@ -68,18 +84,29 @@ def rebuild(source: str, translate: Callable[[Path], list[dict]], work_dir: Path
         name = (host.disk_info(src_volume) or {}).get('VolumeName') or what
         with cards.mounted(src_volume, log, read_only=True) as src:
             entries = translate(src)
-            size = os.path.getsize(source) + max(delta.added_bytes(src, entries), 0) + SLACK
-            _blank(image, -(-size // (1 << 20)) * (1 << 20), name, log)
+            _blank(image, _mib(os.path.getsize(source) + SLACK), name, log)
             volume, whole = _attach(image, log)
             try:
                 with cards.mounted(volume, log, owners=True) as root:
                     host.run('ditto', '--preserveHFSCompression', str(src), str(root), log=log)
-                    delta.apply(root, entries, log, what, consume=True)
-                # The sealer mounts the container itself: it takes the volume's node, attached and not mounted.
-                host.run(SEALER, '/dev/' + volume, log=log)
             finally:
                 host.run('hdiutil', 'detach', whole, log=log, check=False)
     finally:
         host.run('hdiutil', 'detach', src_whole, log=log, check=False)
+    while True:
+        volume, whole = _attach(image, log)
+        try:
+            with cards.mounted(volume, log, owners=True) as root:
+                short = delta.added_bytes(root, entries) + SLACK - shutil.disk_usage(root).free
+                if short <= 0:
+                    delta.apply(root, entries, log, what, consume=True)
+            # The sealer mounts the container itself: it takes the volume's node, attached and not mounted.
+            if short <= 0:
+                host.run(SEALER, '/dev/' + volume, log=log)
+                break
+        finally:
+            host.run('hdiutil', 'detach', whole, log=log, check=False)
+        log(f'{what}: growing the volume by {_mib(short + SLACK) >> 20} MiB for its translated files')
+        _grow(image, short + SLACK, log)
     log(f'{what}: sealed again as {image}')
     return image
