@@ -611,3 +611,8 @@ extern "C" unsigned int switch_perf_cpu_khz(void)
 {
     return __atomic_load_n(&gAppliedKhz, __ATOMIC_ACQUIRE);
 }
+
+extern "C" bool switch_perf_boot_done(void)
+{
+    return __atomic_load_n(&gBootDone, __ATOMIC_ACQUIRE);
+}

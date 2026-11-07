@@ -44,6 +44,9 @@ void switch_perf_hint(unsigned int hint);
 // context (one atomic load): kprof prints it next to its measured per-core clock.
 unsigned int switch_perf_cpu_khz(void);
 
+// System Boot Complete has come (or the boot window's fallback passed). Any context (one atomic load).
+bool switch_perf_boot_done(void);
+
 // The thermal service's last good TMP451 reading: the SoC diode and the PCB (m C) and when it was taken (mach absolute
 // time). 0 before the first one or after the sensor was lost. Any context.
 int switch_thermal_tmp451(int *soc_millic, int *pcb_millic, unsigned long long *at);

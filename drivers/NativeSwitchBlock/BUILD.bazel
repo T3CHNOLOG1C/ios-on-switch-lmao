@@ -39,6 +39,8 @@ kernel_driver(
     copts = BLOCK_FLAGS,
     hdr_deps = [
         "drivers/ArmGIC",
+        "drivers/SwitchBrightness",
+        "drivers/SwitchPower",
         "drivers/TegraGPIO",
         "drivers/TegraI2C",
         "kits/SwitchRefusal",
