@@ -199,11 +199,25 @@ EXPECTED_SKIPS = (
     'warm-up state',
     'a sampler m2v derives from a bound one',
     'the raw path binds the root table and set 0',
+    'the raw path has no 3D textures',
 )
 
 
 def unexpected(why: str) -> bool:
     return not any(reason in why for reason in EXPECTED_SKIPS)
+
+
+def account(report: list[str], skipped: list[tuple[dict, str]], taken: int, packed: int) -> list[tuple[dict, str]]:
+    """List every record set aside with its reason, count them by reason, and give those set aside by a fault."""
+    faults = [(p, why) for p, why in skipped if unexpected(why)]
+    for p, why in skipped:
+        report.append(f'  {"FAULT" if unexpected(why) else "skipped"} {p["index"]} ({why}): {p["key"][:150]}')
+    expected = collections.Counter(
+        next(reason for reason in EXPECTED_SKIPS if reason in why) for _, why in skipped if not unexpected(why)
+    )
+    report.append('set aside for m2v: ' + '; '.join(f'{n} x {reason}' for reason, n in expected.most_common()))
+    report.append(f'{taken} taken, {packed} packed, {len(faults)} dropped by a generator fault')
+    return faults
 
 
 def load_sizes(dirs: list[str]) -> dict[tuple, list[int]]:
@@ -349,6 +363,8 @@ def handle_entry(e: tuple, tsc: dict[int, list[int]], constexpr_tsc: list[list[i
         ent['tex'] = ('slot', tk[1])
     elif tk[0] == 'fetch':
         ent['tex'] = ('fetch', tk[1])
+    elif tk[0] == 'tex3d':
+        problems.append('a texture3d argument, and the raw path has no 3D textures')
     else:
         problems.append(f'texture {tk}')
     if sk is None:
@@ -455,9 +471,6 @@ def main() -> None:
             skipped.append((p, '; '.join(rec['problems'])))
             continue
         pipes.append(rec)
-    faults = [(p, why) for p, why in skipped if unexpected(why)]
-    for p, why in skipped:
-        report.append(f'  {"FAULT" if unexpected(why) else "skipped"} {p["index"]} ({why}): {p["key"][:150]}')
     # init template with relocations (submissions 1-3 as NVK recorded them)
     init_recs = [(sc, m, d, RELOC_CODE.get(RELOC.get((sc, m)), 0)) for sc, m, d in init]
     report.append(f'init template: {len(init_recs)} methods, {sum(1 for x in init_recs if x[3])} relocated')
@@ -471,7 +484,7 @@ def main() -> None:
         f'pack.bin {len(data) // 1024} KiB: {len(pipes)} pipelines, {len(prog_recs)} programs, '
         f'{len(constexpr_tsc)} constexpr samplers, {len(blob)} blob dwords, {len(baseline)} baseline regs'
     )
-    report.append(f'{len(simple)} taken, {len(pipes)} packed, {len(faults)} dropped by a generator fault')
+    faults = account(report, skipped, len(simple), len(pipes))
     with open(os.path.join(out_dir, 'report.txt'), 'w') as report_txt:
         report_txt.write('\n'.join(report) + '\n')
     print('\n'.join(report))

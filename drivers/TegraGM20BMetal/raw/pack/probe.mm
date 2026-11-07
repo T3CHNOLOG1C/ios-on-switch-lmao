@@ -3,8 +3,9 @@
 // (host builds, mock GM20B with cap.cpp's nvdec in NVDEC_PROBE mode) and drawn once with tagged inputs, so tools/mkpack.py can read
 // off, per state, the programs NVK built, the 3D registers the state sets, and where each Metal slot lands in GPU memory.
 //
-// Tags: every buffer slot 0..7 of both stages is setBytes of 256 bytes whose words are 0xC0DE0000|stage<<8|slot, the probe index,
-// then 0xA0000000|stage<<20|slot<<16|word (slots 0..PROBE_SLOTS-1, default 8); fragment texture slot t (0..15) is a (16+t)x(8+t)
+// Tags: every buffer slot of both stages is setBytes of 256 bytes whose words are 0xC0DE0000|stage<<8|slot, the probe index,
+// then 0xA0000000|stage<<20|slot<<16|word (slots 0..PROBE_SLOTS-1, default 31: Metal's whole buffer table, as Core Animation's
+// functions read slots past 7, apply_apl_dimming's dim_factor at 9; an unbound one m2v fills with zeros); fragment texture slot t (0..15) is a (16+t)x(8+t)
 // BGRA8 texture, fragment sampler slot s (0..15) has max LOD clamp 1+s/2 (mip filter nearest; r8-rawca: 1+s made slot 14 look like any sampler with the default clamp, 15), linear min/mag when s&1, repeat U
 // when s&2. A sampler made before them takes NVK's sampler index 0. One command buffer (one submission) per state; stdout lines "PROBE <i> <state key>".
 // The corpus's lib= fields (the journal names each function's library since 11-04) are not part of the state key: the raw path
@@ -22,7 +23,7 @@
 #include "bridge/NativeMetalObjects.h"
 extern "C" void mock_iokit_report(void);
 extern "C" void pushcount_report(const char *what);
-static uint32_t gSlots = getenv("PROBE_SLOTS") ? atoi(getenv("PROBE_SLOTS")) : 8;
+static uint32_t gSlots = getenv("PROBE_SLOTS") ? atoi(getenv("PROBE_SLOTS")) : 31;
 
 static void missing(const char *cls, const char *sel)
 {
