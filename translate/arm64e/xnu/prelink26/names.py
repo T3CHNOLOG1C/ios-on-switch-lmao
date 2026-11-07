@@ -7,8 +7,8 @@ The 26.5.2 kernelcache is fully stripped. Sources, strongest first:
      that introduced the slot (prelink26/ptrauth_disc.py computes it with clang).
   2. GOT order: a kext's __auth_got / __got entries are sorted by imported symbol name (98.3% of adjacent pairs in
      the symbolized iOS 17 cache; the rest are aliases). Between two named neighbours, the unknown entries take the
-     names that the same kext imported in iOS 17 in that interval, or the 26.5.2 KPI names (symbol sets) there,
-     when the count matches exactly. Iterated over every kext until nothing changes.
+     names that the same kext imported in iOS 17 in that interval when the count matches exactly. Iterated over every
+     kext until nothing changes.
   3. ipsw/symbolicator string signatures (Darwin 25.5): seeds for C functions, and a hold-out check of 1-2.
   4. pinned_names.py: functions identified by hand for one kernelcache, before the GOT pass; any disagreement fails.
 Output: prelink26/kernel-names.json {address: name}, with per-source counts and conflicts.
@@ -226,9 +226,6 @@ def main():
                     secs.append((sec["name"], [fix.get(sec["va"] + 8 * i, (None, None))[0] for i in range(sec["size"] // 8)]))
         gots26[bid] = secs
     imports17 = {bid: sorted(set(n for t, ns in seq for n in ns)) for bid, seq in gots17.items()}
-    union17 = sorted(set(n for v in imports17.values() for n in v))
-    funcs_u = sorted(n for n in universe if n in oname and ofunc(oname[n]))
-    data_u = sorted(n for n in universe if n in oname and not ofunc(oname[n]))
     # every kernel entry of every GOT section: address -> [(section key, position)]
     secs_k = {}
     occ = collections.defaultdict(list)
@@ -285,8 +282,10 @@ def main():
                 lo, hi = bounds(lo, hi)
                 gap = [ks[j] for j in range(j0 + 1, j1) if ks[j] not in names]
                 if not gap or len(set(gap)) != len(gap): continue
-                for cand_src, pool in (("got17", imp), ("got17-any", union17),
-                                       ("got26-kpi", funcs_u if secname == "__auth_got" else data_u)):
+                # Only the kext's own iOS 17 imports: any kext's, or any KPI name, fit a gap's count by chance
+                # and shifted names by one (amfi_interface_register's on libCoreEntitlements' registration,
+                # proc_is64bit_data's on proc_get_syscall_filter_mask_size); pinned_names.py names the rest.
+                for cand_src, pool in (("got17", imp),):
                     lo_i, hi_i = bisect.bisect_right(pool, lo), bisect.bisect_left(pool, hi)
                     cands = [n for n in pool[lo_i:hi_i] if kind_ok(n) and n not in taken]
                     if len(cands) < len(gap): continue

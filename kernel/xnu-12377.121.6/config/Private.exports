@@ -1426,6 +1426,7 @@ _sbuf_overflowed
 _sbuf_putc
 _sbuf_printf
 _sbuf_vprintf
+_sysctl__security_children
 _sysctl__security_mac_children
 _mac_vnode_label_allocate
 _mac_vnode_label_get
