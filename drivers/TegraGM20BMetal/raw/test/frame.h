@@ -317,7 +317,9 @@ inline std::vector<Pass> passes(unsigned frameIndex, const Shape &s, size_t blur
 {
     std::vector<Pass> out;
     for (unsigned p = 0; p < s.blurPasses && blurCount; p++) {
-        Pass bp{{p & 1 ? BLUR1 : BLUR0, BLUR_MEMORYLESS, -1}, {0, 0, 0}, {0, 0, 0, 0}, {}};
+        // FRAME_BLUR_LOAD: the blur targets' load action (0 DontCare, 1 Load, 2 Clear to a color past [0, 1] in two channels)
+        const int blurLoad = getenv("FRAME_BLUR_LOAD") ? atoi(getenv("FRAME_BLUR_LOAD")) : 0;
+        Pass bp{{p & 1 ? BLUR1 : BLUR0, BLUR_MEMORYLESS, -1}, {blurLoad, 0, 0}, {0.25f, -0.5f, 1.125f, 0.75f}, {}};
         Draw d{int(p % blurCount), true, {0, 0, 320, 180}, {}, {}, {}};
         for (int &t : d.textures)
             t = -1;
