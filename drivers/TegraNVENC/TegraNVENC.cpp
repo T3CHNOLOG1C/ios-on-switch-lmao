@@ -328,7 +328,7 @@ void bringUp(void *, wait_result_t)
 {
     // A failed bring-up leaves nothing behind: the engine back in reset with its clock off (once it was touched), then
     // its address space and kernel buffers returned.
-    auto giveUp = [](bool touched) {
+    const auto giveUp = [](bool touched) {
         if (touched)
             park();
         tegra_nvenc_memory_release();
@@ -347,8 +347,8 @@ void bringUp(void *, wait_result_t)
         return;
     }
     gLine[0] = 0;
-    if (!switch_dma_alloc(&gSetup, kSetupSlots * kSetupSlotBytes) || !switch_dma_alloc(&gSink, kSinkBytes) ||
-        !loadImage()) {
+    if (!switch_dma_alloc(&gSetup, static_cast<size_t>(kSetupSlots) * kSetupSlotBytes) ||
+        !switch_dma_alloc(&gSink, kSinkBytes) || !loadImage()) {
         IOLog("TegraNVENC: %s\n", gLine[0] ? gLine : "E1 FAIL no contiguous setup slots or scratch below 4 GiB");
         giveUp(false);
         return;
@@ -438,7 +438,8 @@ int run(const TegraNVENCSubmit *s, TegraNVENCResolve resolve, void *context, uin
     // predictor pair when the submit has none; the scratch buffer as the RC process state (NVIDIA's driver gives every
     // job one; constant QP leaves it unread); the setup slot (INCR METHOD0 x2: method, value, each); OP_DONE increment.
     constexpr uint32_t kUnused = sizeof(kUnusedMethods) / sizeof(kUnusedMethods[0]);
-    uint32_t words[1 + 3 * (kUnused + 4 + TEGRA_NVENC_MAX_ENTRIES) + 1], n = 0;
+    uint32_t words[1 + 3 * (kUnused + 4 + TEGRA_NVENC_MAX_ENTRIES) + 1];
+    uint32_t n = 0;
     bool predictors = false;
     for (uint32_t i = 0; i < s->entry_count; i++)
         predictors |= s->entries[i].method == NVC5B7_SET_IN_MEPRED_DATA;
@@ -466,22 +467,24 @@ int run(const TegraNVENCSubmit *s, TegraNVENCResolve resolve, void *context, uin
         }
     }
     const uint32_t slot = job % kSetupSlots;
-    memcpy(gSetup.va + slot * kSetupSlotBytes, s->setup, s->setup_bytes);
-    tegra_nvenc_cache_clean(gSetup.va + slot * kSetupSlotBytes, s->setup_bytes);
+    uint8_t *setup = gSetup.va + static_cast<size_t>(slot) * kSetupSlotBytes;
+    memcpy(setup, s->setup, s->setup_bytes);
+    tegra_nvenc_cache_clean(setup, s->setup_bytes);
     for (uint32_t i = 0; i < s->entry_count; i++) {
         const TegraNVENCEntry *e = &s->entries[i];
         if (i == s->entry_count - 1) {  // EXECUTE, last by the check
-            for (uint32_t k = 0; k < kUnused; k++)
-                method(kUnusedMethods[k], 0);
+            for (const uint16_t unused : kUnusedMethods)
+                method(unused, 0);
             if (!predictors) {
                 method(NVC5B7_SET_IN_MEPRED_DATA, 0);
                 method(NVC5B7_SET_OUT_MEPRED_DATA, 0);
             }
-            method(NVC5B7_SET_IO_RC_PROCESS, (uint32_t)(gSink.pa >> 8));
-            method(NVC5B7_SET_IN_DRV_PIC_SETUP, (uint32_t)((gSetup.pa + slot * kSetupSlotBytes) >> 8));
+            method(NVC5B7_SET_IO_RC_PROCESS, static_cast<uint32_t>(gSink.pa >> 8));
+            method(NVC5B7_SET_IN_DRV_PIC_SETUP,
+                   static_cast<uint32_t>((gSetup.pa + static_cast<uint64_t>(slot) * kSetupSlotBytes) >> 8));
         }
-        method(e->method,
-               e->kind == TEGRA_NVENC_ENTRY_RELOC ? (uint32_t)((blocks[i].iova + e->offset) >> 8) : e->value);
+        method(e->method, e->kind == TEGRA_NVENC_ENTRY_RELOC ? static_cast<uint32_t>((blocks[i].iova + e->offset) >> 8)
+                                                             : e->value);
     }
     words[n++] = tegra_host1x_op_incr_syncpt(TEGRA_HOST1X_COND_OP_DONE, gSyncpt);
     const int ret = tegra_host1x_submit(words, n);

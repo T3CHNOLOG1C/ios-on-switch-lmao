@@ -133,9 +133,10 @@ IOReturn AppleAVE2UserClient::clientClose()
     const bool idle = quiesce();
     if (!idle)
         IOLog("TegraNVENC: a closing client's job never finished; its buffers stay wired\n");
-    for (uint32_t i = 0; i < kMaxBuffers; i++)
-        if (buffers_[i].handle)
-            drop(&buffers_[i], idle);
+    for (Buffer &b : buffers_) {
+        if (b.handle)
+            drop(&b, idle);
+    }
     IOLockUnlock(lock_);
     terminate();
     return kIOReturnSuccess;
@@ -240,7 +241,8 @@ IOReturn AppleAVE2UserClient::run(uint32_t method, const void *in, uint32_t inSi
             ret = slot ? kIOReturnBadArgument : kIOReturnNoResources;
             break;
         }
-        if ((ret = ioreturn(tegra_nvenc_buffer_alloc(size, &slot->block))))
+        ret = ioreturn(tegra_nvenc_buffer_alloc(size, &slot->block));
+        if (ret)
             break;
         slot->handle = nextHandle_++;
         if (!nextHandle_)
@@ -385,7 +387,8 @@ extern "C" int tegra_nvenc_publish(void)
         return -12;
     }
     service->registerService();
-    uint64_t limit = 0, free = 0;
+    uint64_t limit = 0;
+    uint64_t free = 0;
     tegra_nvenc_memory_usage(&limit, &free);
     const TegraNVENCProven *proven = tegra_nvenc_proven();
     IOLog("TegraNVENC: E3 ok service published (user client AppleAVE2UserClient, ABI %u, input layout %u, chroma mode "

@@ -116,10 +116,20 @@ static inline const char *tegra_nvenc_check(const TegraNVENCSubmit *s, const uin
         return "counts";
     if (s->setup_bytes < TEGRA_NVENC_SETUP_HEADER || s->setup_bytes > TEGRA_NVENC_MAX_SETUP)
         return "setup size";
-    uint64_t cur = 0, curChroma = 0, out = 0, outChroma = 0, bits = 0, status = 0, history = 0, colocOut = 0;
-    uint64_t mepredIn = 0, mepredOut = 0;
-    uint64_t refLuma[REFS] = {0}, refChroma[REFS] = {0};
-    uint32_t seen = 0, control = 0;
+    uint64_t cur = 0;
+    uint64_t curChroma = 0;
+    uint64_t out = 0;
+    uint64_t outChroma = 0;
+    uint64_t bits = 0;
+    uint64_t status = 0;
+    uint64_t history = 0;
+    uint64_t colocOut = 0;
+    uint64_t mepredIn = 0;
+    uint64_t mepredOut = 0;
+    uint64_t refLuma[REFS] = {0};
+    uint64_t refChroma[REFS] = {0};
+    uint32_t seen = 0;
+    uint32_t control = 0;
     for (uint32_t i = 0; i < s->entry_count; i++) {
         const TegraNVENCEntry *e = &s->entries[i];
         const uint16_t m = e->method;
@@ -216,7 +226,7 @@ static inline const char *tegra_nvenc_check(const TegraNVENCSubmit *s, const uin
         return "missing application id, control params or execute";
     if (!cur || !curChroma || !out || !bits || !status || !history)
         return "missing relocation";
-    if (!mepredIn != !mepredOut)
+    if ((mepredIn == 0u) != (mepredOut == 0u))
         return "ME predictors in without out, or out without in";
 
     const nvenc_h264_drv_pic_setup_s *p = (const nvenc_h264_drv_pic_setup_s *)s->setup;
@@ -234,16 +244,18 @@ static inline const char *tegra_nvenc_check(const TegraNVENCSubmit *s, const uin
     const uint32_t mbs = wmbs * hmbs;
     if (mbs > TEGRA_NVENC_MAX_MBS)
         return "too many macroblocks";
-    const char *why;
-    if ((why = tegra_nvenc_check_surface(&p->input_cfg, width, height, cur, curChroma, false)))
+    const char *why = tegra_nvenc_check_surface(&p->input_cfg, width, height, cur, curChroma, false);
+    if (why)
         return why;
     // A reference picture without a chroma relocation has its chroma inside the luma buffer at the config's offset,
     // as NVIDIA's T210 driver gives them.
     if (!outChroma && !p->outputpic_cfg.chroma_top_frm_offset)
         return "reconstruction chroma";
-    if ((why = tegra_nvenc_check_surface(&p->outputpic_cfg, width, height, out, outChroma ? outChroma : out, true)))
+    why = tegra_nvenc_check_surface(&p->outputpic_cfg, width, height, out, outChroma ? outChroma : out, true);
+    if (why)
         return why;
-    if ((why = tegra_nvenc_check_surface(&p->refpic_cfg, width, height, ~0ull, ~0ull, true)))
+    why = tegra_nvenc_check_surface(&p->refpic_cfg, width, height, ~0ULL, ~0ULL, true);
+    if (why)
         return why;
     const uint8_t *half = (const uint8_t *)&p->half_scaled_outputpic_cfg;
     for (uint32_t i = 0; i < sizeof(p->half_scaled_outputpic_cfg); i++) {
@@ -332,11 +344,12 @@ static inline const char *tegra_nvenc_check(const TegraNVENCSubmit *s, const uin
                 return "list 0 length";
             continue;
         }
-        const int slot = (signed char)pc->l0[i];
+        const int slot = (signed char)pc->l0[i];  // NOLINT(bugprone-signed-char-misuse): signed, -2 is unused
         if (slot < 0 || slot >= REFS || !refLuma[slot] || (!refChroma[slot] && !p->refpic_cfg.chroma_top_frm_offset))
             return "reference slot";
         const uint64_t chroma = refChroma[slot] ? refChroma[slot] : refLuma[slot];
-        if ((why = tegra_nvenc_check_surface(&p->refpic_cfg, width, height, refLuma[slot], chroma, true)))
+        why = tegra_nvenc_check_surface(&p->refpic_cfg, width, height, refLuma[slot], chroma, true);
+        if (why)
             return why;
     }
 
