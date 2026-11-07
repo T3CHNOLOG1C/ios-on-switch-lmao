@@ -499,7 +499,7 @@ def window_checks(m: dict, payload: bytes, adt: bytes, kind: str, virt_base: int
             and seed_bytes == SEED_BYTES
             and not seed_offset % 4
             and in_window(seed_offset, seed_bytes) == adt[seed_offset : seed_offset + seed_bytes],
-            'random-seed must be a 64-byte, aligned /chosen property carried into the window',
+            f'random-seed must be a {SEED_BYTES}-byte, aligned /chosen property carried into the window',
         )
 
     # The root boot: the OS volume by UUID, persistent Data, no RAM root or runtime manifest.

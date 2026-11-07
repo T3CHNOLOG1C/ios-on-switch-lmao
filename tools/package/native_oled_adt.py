@@ -15,6 +15,8 @@ import zlib
 from collections.abc import Iterable, Sequence
 from typing import NamedTuple
 
+from loader_abi import SEED_BYTES
+
 MANAGED_BASE = 0xB2004000
 MANAGED_USER_BASE = 0xB207C000
 MANAGED_SIZE = 768 << 20
@@ -161,9 +163,9 @@ def _cpus(native_smp: bool) -> bytes:
 def generate_adt(seed: bytes | None, profile: Profile) -> bytes:
     """Serialize only the audited native resources; deterministic seed for tests."""
     if seed is None:
-        seed = os.urandom(64)
-    if not isinstance(seed, bytes) or len(seed) != 64:
-        raise ValueError('random seed must be exactly 64 bytes')
+        seed = os.urandom(SEED_BYTES)
+    if not isinstance(seed, bytes) or len(seed) != SEED_BYTES:
+        raise ValueError(f'random seed must be exactly {SEED_BYTES} bytes')
     _check_profile(profile)
     userspace_fixture, _, root_boot, full_ram, native_smp = profile
     return _node(

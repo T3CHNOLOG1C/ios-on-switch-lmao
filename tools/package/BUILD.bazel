@@ -37,6 +37,7 @@ py_library(
     name = "native_oled_adt",
     srcs = ["native_oled_adt.py"],
     imports = ["."],
+    deps = [":loader_abi"],
 )
 
 py_library(
