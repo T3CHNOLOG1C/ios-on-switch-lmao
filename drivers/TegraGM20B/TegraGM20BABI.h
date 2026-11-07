@@ -51,7 +51,7 @@ enum {
 	TegraGM20BInfoSurfaceWrites = 1u
 		<< 5, /* BoImport takes TegraGM20BImportGpuReads; method 15 is implemented */
 	TegraGM20BInfoSurfaceLayout = 1u << 6, /* method 16 is implemented */
-	TegraGM20BInfoExecSurfaces = 1u << 7, /* ExecSurfaces (method 17) is implemented */
+	TegraGM20BInfoExecSurfaces = 1u << 7,  /* ExecSurfaces (method 17) is implemented */
 	TegraGM20BInfoPriority = 1u << 8,      /* Priority (method 18) is implemented */
 	TegraGM20BInfoCompression = 1u << 9, /* compressible kinds bind; method 19 is implemented */
 };
