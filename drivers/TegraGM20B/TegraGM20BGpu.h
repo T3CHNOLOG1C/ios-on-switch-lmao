@@ -58,8 +58,11 @@ void tgm_pool_free(void *va, uint64_t bytes, uint64_t pa);
 int tgm_vm_new(struct tgm_vm **pvm);
 void tgm_vm_claim(struct tgm_vm *vm, const void *owner);
 void tgm_vm_del(struct tgm_vm **pvm);
-/* Wrap physical pages as GPU memory. `pas` (one entry per 4 KiB page) must stay valid until tgm_mem_del. */
+/* Wrap physical pages as GPU memory. `pas` (one entry per 4 KiB page) must stay valid until tgm_mem_del. lock_wait_ns
+ * (or NULL): with the stats, how long the call waited for gpu.lock. */
 int tgm_mem_new(struct tgm_vm *vm, const uint64_t *pas, uint32_t npages, struct tgm_mem **pmem);
+int tgm_mem_new_waited(struct tgm_vm *vm, const uint64_t *pas, uint32_t npages,
+		       struct tgm_mem **pmem, uint64_t *lock_wait_ns);
 void tgm_mem_del(struct tgm_mem **pmem);
 /* User range [TGM_USER_VA_START, TGM_KERNEL_VA): raw binds. read_only: the GPU may only read the range (a write is an
  * MMU fault). tgm_vm_map and tgm_vm_unmap invalidate the L2 and the TLB before they return; tgm_vm_map_ordered (a
@@ -285,6 +288,39 @@ void tgm_pool_breakdown(uint64_t *client_bytes, uint64_t *orphan_bytes, uint64_t
 unsigned long tgm_owner_stats(char *out, unsigned long size);
 void tgm_stats_bo_import(uint64_t bytes, int read_only, int skipped, uint64_t ns,
 			 const uint64_t phase_ns[TGM_PHASES]);
+
+/* With the stats, one host import's costs for the "imports" line and, past 4 ms, a "slow import" line of its own: the
+ * wiring's wall time and the importing thread's CPU time in it (the rest it waited: free pages, busy pages, a
+ * decompression, the CPU), the system's zero-fill faults meanwhile, gpu.lock's wait inside the GPU memory object, the
+ * coherency registry's add and the clean. tgm_stats_cpu_ns and tgm_stats_zero_fills read the thread's CPU time and the
+ * system's zero-fill count (0 without the stats). */
+struct tgm_import_cost {
+	uint64_t bytes, total_ns, wire_ns, wire_cpu_ns, zero_fills, pages_ns, mem_ns, lock_ns,
+		coh_ns, clean_ns;
+	uint32_t surface_id;
+	int read_only;
+	const char *owner;
+};
+#if TGM_STATS
+uint64_t tgm_stats_cpu_ns(void);
+uint64_t tgm_stats_zero_fills(void);
+void tgm_stats_import_cost(const struct tgm_import_cost *cost);
+#else
+static inline uint64_t tgm_stats_cpu_ns(void)
+{
+	return 0;
+}
+
+static inline uint64_t tgm_stats_zero_fills(void)
+{
+	return 0;
+}
+
+static inline void tgm_stats_import_cost(const struct tgm_import_cost *cost)
+{
+	(void)cost;
+}
+#endif
 void tgm_stats_bind(int map, uint64_t pages, uint64_t ns);
 /* A fence wait that slept on `waiter`, then woke (woken 1) or reached its deadline (0), and found its fence done or
  * not: the "waits" line's wakes, waits woken for another channel's fence, and wake-to-waiter latency. */

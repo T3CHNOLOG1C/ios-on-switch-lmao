@@ -15,6 +15,7 @@
 #include <kern/clock.h>
 #include <kern/thread.h>
 #include <kern/thread_call.h>
+#include <mach/vm_region.h>
 #include <stddef.h>
 #include <string.h>
 #include "TegraGM20BABI.h"
@@ -156,6 +157,36 @@ void scheduleOrphanRelease()
 	if (call)
 		thread_call_enter(call);
 }
+
+#if TGM_STATS
+extern "C" vm_map_t get_task_map(task_t task);
+extern "C" kern_return_t vm_map_region_recurse_64(vm_map_t map, uint64_t *address, uint64_t *size,
+						  natural_t *depth, vm_region_submap_info_64_t info,
+						  mach_msg_type_number_t *count);
+
+// What `task` maps at `address`, innermost submap's region, for a refused import's line: why IOKit could not wire it
+// (protections, sharing, the allocator's tag, the object) is in these.
+void describeRegion(task_t task, uint64_t address, char *out, size_t size)
+{
+	uint64_t at = address, bytes = 0;
+	natural_t depth = 64;
+	vm_region_submap_info_data_64_t info = {};
+	mach_msg_type_number_t count = VM_REGION_SUBMAP_INFO_COUNT_64;
+	const kern_return_t kr =
+		vm_map_region_recurse_64(get_task_map(task), &at, &bytes, &depth, &info, &count);
+	if (kr != KERN_SUCCESS || at > address) {
+		snprintf(out, size, "; nothing mapped there (%d)", kr);
+		return;
+	}
+	snprintf(out, size,
+		 "; region %#llx+%#llx depth %u prot %d/%d share %d tag %u object %#x "
+		 "ref %u shadow %u resident %u wired %u%s%s",
+		 at, bytes, depth, info.protection, info.max_protection, info.share_mode,
+		 info.user_tag, info.object_id, info.ref_count, info.shadow_depth,
+		 info.pages_resident, info.user_wired_count,
+		 info.external_pager ? " file-backed" : "", info.is_submap ? " submap" : "");
+}
+#endif
 
 uint64_t nowNs()
 {
@@ -1272,6 +1303,8 @@ IOReturn AGXDeviceUserClient::boImport(const TegraGM20BAbiBoImport *in,
 		bo->pas = IONew(uint64_t, bo->npages);
 	IOReturn ret = bo->pas ? kIOReturnSuccess : kIOReturnNoMemory,
 		 wire[2] = {kIOReturnNoMemory, kIOReturnNoMemory};
+	tgm_import_cost cost = {};
+	const uint64_t cpuBefore = tgm_stats_cpu_ns(), zeroFillsBefore = tgm_stats_zero_fills();
 	if (!ret && !bo->wiring) {
 		// Wired for the GPU to write where the task's mapping allows that, else for it to read only (Core Animation
 		// hands over image bytes it maps read-only); a read-only BO is mapped read-only in the GPU, so a GPU write to
@@ -1286,20 +1319,27 @@ IOReturn AGXDeviceUserClient::boImport(const TegraGM20BAbiBoImport *in,
 			bo->readOnly = i == 1;
 		}
 		lap(0);
+		cost.wire_cpu_ns = tgm_stats_cpu_ns() - cpuBefore;
+		cost.zero_fills = tgm_stats_zero_fills() - zeroFillsBefore;
 		ret = bo->wired ? collectPages(bo->wired, in->bytes, bo->pas)
 				: kIOReturnBadArgument;
 		lap(1);
 	}
 	if (!ret && !bo->wiring) {
-		ret = ioreturn(tgm_mem_new(vm_, bo->pas, bo->npages, &bo->mem));
+		ret = ioreturn(
+			tgm_mem_new_waited(vm_, bo->pas, bo->npages, &bo->mem, &cost.lock_ns));
 		if (!ret && in->surface_id)
 			publishWiring(bo, in);
 	}
 	lap(2);
 	if (ret) {
+		char region[192] = "";
+#if TGM_STATS
+		describeRegion(task_, in->address, region, sizeof(region));
+#endif
 		IOLog("tegra-gm20b: BoImport %llu bytes at %#llx refused: %#x (wiring for GPU "
-		      "writes %#x, reads %#x)\n",
-		      in->bytes, in->address, ret, wire[0], wire[1]);
+		      "writes %#x, reads %#x)%s\n",
+		      in->bytes, in->address, ret, wire[0], wire[1], region);
 		releaseBo(bo);
 		return ret;
 	}
@@ -1309,6 +1349,7 @@ IOReturn AGXDeviceUserClient::boImport(const TegraGM20BAbiBoImport *in,
 	const int gpuWrites = !bo->readOnly && !(in->flags & TegraGM20BImportGpuReads);
 	bo->coh = tgm_coherency_add(bo->pas[0], in->surface_id, bo->pas, bo->npages, !bo->readOnly,
 				    gpuWrites, &covered);
+	const uint64_t added = TGM_STATS ? nowNs() : 0;
 	// The GPU does not snoop the CPU caches: what the task wrote must be in DRAM before the GPU reads it, and no dirty
 	// line (fresh pages are zeroed through the cache) may be written back later over what the GPU wrote.
 	if (!covered) {
@@ -1318,6 +1359,19 @@ IOReturn AGXDeviceUserClient::boImport(const TegraGM20BAbiBoImport *in,
 	lap(3);
 	tgm_stats_import(static_cast<int64_t>(bo->bytes), bo->pas[0]);
 	tgm_stats_bo_import(bo->bytes, bo->readOnly, covered, mark - start, phase);
+	if (TGM_STATS) {
+		cost.bytes = bo->bytes;
+		cost.total_ns = mark - start;
+		cost.wire_ns = phase[0];
+		cost.pages_ns = phase[1];
+		cost.mem_ns = phase[2];
+		cost.coh_ns = added - (mark - phase[3]);
+		cost.clean_ns = mark - added;
+		cost.surface_id = in->surface_id;
+		cost.read_only = bo->readOnly;
+		cost.owner = owner_;
+		tgm_stats_import_cost(&cost);
+	}
 	tgm_vm_import_note(
 		vm_, bo->pas[0],
 		1);  // this connection may draw into what it imports (the GPU present asks)

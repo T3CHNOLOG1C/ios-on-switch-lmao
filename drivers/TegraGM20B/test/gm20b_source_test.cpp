@@ -169,6 +169,28 @@ TEST(GM20BPoolPolicySource, SystemBosTakeAndReturnSpares)
 	expectBefore(free, "unbindOverlaps(binds_[i].va, binds_[i].range, bo);", "reap(false);");
 }
 
+// The import costs (the "imports" and "slow import" lines, the refused import's region) are the debug kernel's alone:
+// a release kernel neither reads the thread's CPU time nor walks the task's map.
+TEST(GM20BImportCostSource, ImportCostsAreDebugOnly)
+{
+	const std::string stats =
+		Between(gpu(), "#if TGM_STATS\n/* The \"imports\" line's histograms", "#endif\n");
+	EXPECT_THAT(stats, HasSubstr("thread_get_runtime_self()"));
+	EXPECT_EQ(Count(gpu(), "thread_get_runtime_self"), Count(stats, "thread_get_runtime_self"));
+	const std::string header = SourceText("../TegraGM20BGpu.h");
+	EXPECT_THAT(
+		Between(header, "#else\nstatic inline uint64_t tgm_stats_cpu_ns(void)", "#endif"),
+		HasSubstr("return 0;"));
+	const std::string import =
+		flat(definition(client(), "IOReturn AGXDeviceUserClient::boImport("));
+	EXPECT_THAT(import, HasSubstr("#if TGM_STATS describeRegion(task_, in->address, region, "
+				      "sizeof(region)); #endif"));
+	EXPECT_THAT(import, HasSubstr("tgm_mem_new_waited(vm_, bo->pas, bo->npages, &bo->mem, "
+				      "&cost.lock_ns)"));
+	EXPECT_THAT(flat(definition(gpu(), "int tgm_mem_new_waited(")),
+		    HasSubstr("asked = stats_on() && lock_wait_ns ? nvxnu_nanotime() : 0;"));
+}
+
 TEST(GM20BPoolPolicySource, StatsNameThePoolHolders)
 {
 	const std::string stats = flat(gpu());

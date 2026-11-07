@@ -842,10 +842,19 @@ void tgm_vm_claim(struct tgm_vm *vm, const void *owner)
 	vm->owner = owner;
 }
 
+static int stats_on(void);
+
 int tgm_mem_new(struct tgm_vm *vm, const uint64_t *pas, uint32_t npages, struct tgm_mem **pmem)
+{
+	return tgm_mem_new_waited(vm, pas, npages, pmem, NULL);
+}
+
+int tgm_mem_new_waited(struct tgm_vm *vm, const uint64_t *pas, uint32_t npages,
+		       struct tgm_mem **pmem, uint64_t *lock_wait_ns)
 {
 	struct nvif_mem_ram_v0 args = {.version = 0, .dma = (dma_addr_t *)pas, .sgl = NULL};
 	struct tgm_mem *mem;
+	u64 asked;
 	int ret;
 	(void)vm;
 	if (gpu.stage < 2)
@@ -853,7 +862,10 @@ int tgm_mem_new(struct tgm_vm *vm, const uint64_t *pas, uint32_t npages, struct 
 	if (!(mem = kzalloc(sizeof(*mem), GFP_KERNEL)))
 		return -ENOMEM;
 	mem->bytes = (u64)npages << PAGE_SHIFT;
+	asked = stats_on() && lock_wait_ns ? nvxnu_nanotime() : 0;
 	mutex_lock(&gpu.lock);
+	if (asked)
+		*lock_wait_ns = nvxnu_nanotime() - asked;
 	ret = nvif_mem_ctor_type(&gpu.mmu, "bo", NVIF_CLASS_MEM_GF100, gpu.mem_type, PAGE_SHIFT,
 				 mem->bytes, &args, sizeof(args), &mem->mem);
 	mutex_unlock(&gpu.lock);
@@ -1733,6 +1745,140 @@ void tgm_stats_bo_import(uint64_t bytes, int read_only, int skipped, uint64_t ns
 		__atomic_fetch_add(&mstat.import_phase[i], phase_ns[i], __ATOMIC_RELAXED);
 }
 
+#if TGM_STATS
+/* The "imports" line's histograms: quarter-octave buckets of microseconds (each about 19% wide; below 4 us one per
+ * microsecond), so a percentile reads as the upper bound of the bucket it falls in. */
+#define COST_BUCKETS 100
+#define SLOW_IMPORT_NS (4 * NSEC_PER_MSEC)
+#define SLOW_IMPORT_LINES 8 /* a window's "slow import" lines at most */
+
+extern uint64_t thread_get_runtime_self(void); /* DEVELOPMENT kernels export every global */
+extern void absolutetime_to_nanoseconds(uint64_t abstime, uint64_t *result);
+
+static struct {
+	u32 total[COST_BUCKETS], wire[COST_BUCKETS], bind[COST_BUCKETS];
+	u64 n, bytes, total_max, wire_ns, wire_max, wire_cpu_ns, zero_fills, pages_ns, mem_ns,
+		lock_ns, lock_max, coh_ns, clean_ns, slow, slow_logged;
+} icost;
+
+static u32 cost_bucket(u64 ns)
+{
+	const u64 us = ns / 1000;
+	u32 octave;
+	if (us < 4)
+		return (u32)us;
+	octave = 63 - __builtin_clzll(us);
+	return min_t(u32, octave * 4 + ((u32)(us >> (octave - 2)) & 3), COST_BUCKETS - 1);
+}
+
+static u64 cost_bucket_top_us(u32 b)
+{
+	return b < 4 ? b : ((u64)(4 + (b & 3) + 1) << (b / 4 - 2)) - 1;
+}
+
+/* The upper bound (us) of the bucket holding the `per_mille`th part of the window's `n` samples, taken from `hist`. */
+static u64 cost_percentile(const u32 *hist, u64 n, u32 per_mille)
+{
+	const u64 want = (n * per_mille + 999) / 1000;
+	u64 seen = 0;
+	u32 b;
+	for (b = 0; b < COST_BUCKETS; b++) {
+		seen += hist[b];
+		if (seen >= want && seen)
+			return cost_bucket_top_us(b);
+	}
+	return 0;
+}
+
+uint64_t tgm_stats_cpu_ns(void)
+{
+	uint64_t ns;
+	absolutetime_to_nanoseconds(thread_get_runtime_self(), &ns);
+	return ns;
+}
+
+uint64_t tgm_stats_zero_fills(void)
+{
+	struct nvxnu_faults f;
+	nvxnu_vm_faults(&f);
+	return f.zero_fill;
+}
+
+void tgm_stats_import_cost(const struct tgm_import_cost *c)
+{
+	__atomic_fetch_add(&icost.total[cost_bucket(c->total_ns)], 1, __ATOMIC_RELAXED);
+	__atomic_fetch_add(&icost.wire[cost_bucket(c->wire_ns)], 1, __ATOMIC_RELAXED);
+	__atomic_fetch_add(&icost.n, 1, __ATOMIC_RELAXED);
+	__atomic_fetch_add(&icost.bytes, c->bytes, __ATOMIC_RELAXED);
+	stats_add(&icost.wire_ns, &icost.wire_max, c->wire_ns);
+	__atomic_fetch_add(&icost.wire_cpu_ns, min(c->wire_cpu_ns, c->wire_ns), __ATOMIC_RELAXED);
+	__atomic_fetch_add(&icost.zero_fills, c->zero_fills, __ATOMIC_RELAXED);
+	__atomic_fetch_add(&icost.pages_ns, c->pages_ns, __ATOMIC_RELAXED);
+	__atomic_fetch_add(&icost.mem_ns, c->mem_ns, __ATOMIC_RELAXED);
+	stats_add(&icost.lock_ns, &icost.lock_max, c->lock_ns);
+	__atomic_fetch_add(&icost.coh_ns, c->coh_ns, __ATOMIC_RELAXED);
+	__atomic_fetch_add(&icost.clean_ns, c->clean_ns, __ATOMIC_RELAXED);
+	if (c->total_ns > __atomic_load_n(&icost.total_max, __ATOMIC_RELAXED))
+		__atomic_store_n(&icost.total_max, c->total_ns, __ATOMIC_RELAXED);
+	if (c->total_ns < SLOW_IMPORT_NS)
+		return;
+	__atomic_fetch_add(&icost.slow, 1, __ATOMIC_RELAXED);
+	if (__atomic_fetch_add(&icost.slow_logged, 1, __ATOMIC_RELAXED) >= SLOW_IMPORT_LINES)
+		return;
+	nvxnu_stats("tegra-gm20b: slow import %s %llu KiB%s surface %u: %llu us = wire %llu "
+		    "(%llu on CPU, %llu zero-fill faults) + pages %llu + nvkm %llu (gpu.lock wait "
+		    "%llu) + coherency %llu + clean %llu us",
+		    c->owner, c->bytes >> 10, c->read_only ? " read-only" : "", c->surface_id,
+		    c->total_ns / 1000, c->wire_ns / 1000, min(c->wire_cpu_ns, c->wire_ns) / 1000,
+		    c->zero_fills, c->pages_ns / 1000, c->mem_ns / 1000, c->lock_ns / 1000,
+		    c->coh_ns / 1000, c->clean_ns / 1000);
+}
+
+/* The window's "imports" line (stats_mem): its histograms and sums taken, as mstat's are. */
+static void stats_imports(u64 ms, u64 map_n)
+{
+	u32 total[COST_BUCKETS], wire[COST_BUCKETS], bind[COST_BUCKETS];
+	u64 n, bytes, total_max, wire_ns, wire_max, wire_cpu, zero_fills, pages, mem, lock,
+		lock_max, coh, clean, slow;
+	unsigned int b;
+	for (b = 0; b < COST_BUCKETS; b++) {
+		total[b] = __atomic_exchange_n(&icost.total[b], 0, __ATOMIC_RELAXED);
+		wire[b] = __atomic_exchange_n(&icost.wire[b], 0, __ATOMIC_RELAXED);
+		bind[b] = __atomic_exchange_n(&icost.bind[b], 0, __ATOMIC_RELAXED);
+	}
+#define TAKE(field) __atomic_exchange_n(&icost.field, 0, __ATOMIC_RELAXED)
+	n = TAKE(n);
+	bytes = TAKE(bytes);
+	total_max = TAKE(total_max);
+	wire_ns = TAKE(wire_ns);
+	wire_max = TAKE(wire_max);
+	wire_cpu = TAKE(wire_cpu_ns);
+	zero_fills = TAKE(zero_fills);
+	pages = TAKE(pages_ns);
+	mem = TAKE(mem_ns);
+	lock = TAKE(lock_ns);
+	lock_max = TAKE(lock_max);
+	coh = TAKE(coh_ns);
+	clean = TAKE(clean_ns);
+	slow = TAKE(slow);
+	TAKE(slow_logged);
+#undef TAKE
+	if (!n && !map_n)
+		return;
+	nvxnu_stats("tegra-gm20b: imports %llu in %llu ms (%llu KiB): total p50 %llu p99 %llu max "
+		    "%llu us; wire p50 %llu p99 %llu max %llu us, %llu%% on CPU, %llu zero-fill "
+		    "faults; mean pages %llu, nvkm %llu (gpu.lock wait %llu, max %llu), coherency "
+		    "%llu, clean %llu us; %llu over 4 ms; VmBind %llu: p50 %llu p99 %llu us",
+		    n, ms, bytes >> 10, cost_percentile(total, n, 500),
+		    cost_percentile(total, n, 990), total_max / 1000, cost_percentile(wire, n, 500),
+		    cost_percentile(wire, n, 990), wire_max / 1000,
+		    wire_ns ? wire_cpu * 100 / wire_ns : 0, zero_fills, n ? pages / n / 1000 : 0,
+		    n ? mem / n / 1000 : 0, n ? lock / n / 1000 : 0, lock_max / 1000,
+		    n ? coh / n / 1000 : 0, n ? clean / n / 1000 : 0, slow, map_n,
+		    cost_percentile(bind, map_n, 500), cost_percentile(bind, map_n, 990));
+}
+#endif
+
 void tgm_stats_bind(int map, uint64_t pages, uint64_t ns)
 {
 	if (!stats_on())
@@ -1740,6 +1886,9 @@ void tgm_stats_bind(int map, uint64_t pages, uint64_t ns)
 	__atomic_fetch_add(&frame_gpu.binds, 1, __ATOMIC_RELAXED);
 	__atomic_fetch_add(&frame_gpu.bind_ns, ns, __ATOMIC_RELAXED);
 	if (map) {
+#if TGM_STATS
+		__atomic_fetch_add(&icost.bind[cost_bucket(ns)], 1, __ATOMIC_RELAXED);
+#endif
 		__atomic_fetch_add(&mstat.map_n, 1, __ATOMIC_RELAXED);
 		__atomic_fetch_add(&mstat.map_pages, pages, __ATOMIC_RELAXED);
 		stats_add(&mstat.map_ns, &mstat.map_max, ns);
@@ -1884,6 +2033,9 @@ static void stats_mem(u64 ms)
 			  US(MS(unmap_ns)));
 		nvxnu_stats("tegra-gm20b: mem2 %s", line);
 	}
+#if TGM_STATS
+	stats_imports(ms, MS(map_n));
+#endif
 	if (tgm_owner_stats(line, sizeof(line)))
 		nvxnu_stats("tegra-gm20b: mem3 BoAllocs by process: %s", line);
 	last = f;
