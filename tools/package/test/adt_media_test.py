@@ -1,4 +1,4 @@
-"""adt_edit.py's ipad_adt over a minimal Switch tree: the media keys iOS reads before it picks a hardware path."""
+"""adt_edit.py's ipad_adt over a minimal Switch tree: J120's answers to what iOS reads before it uses a feature."""
 
 import importlib.util
 import struct
@@ -44,6 +44,23 @@ class MediaKeys(unittest.TestCase):
         self.assertEqual(props['iommu-present'], b'')
         self.assertEqual(props['soc-generation'], b'H9\0')
         self.assertEqual(props['device_type'], b'nvidia,tegra210b01\0')
+
+
+class Capabilities(unittest.TestCase):
+    def test_root_and_product_carry_j120s_answers(self):
+        adt_edit = load_adt_edit()
+        tree, _ = adt_edit.adt_parse(adt_edit.ipad_adt(switch_tree()))
+        root = {p[0]: p[2] for p in tree[0]}
+        self.assertEqual(root['platform-name'], b't8011\0')
+        self.assertEqual(root['target-sub-type'], b'J120AP\0')
+        product = {p[0]: p[2] for p in find(tree, 'product')[0]}
+        self.assertEqual(product['bluetooth-le'], struct.pack('<I', 1))
+        self.assertEqual(product['display-mirroring'], struct.pack('<I', 1))
+        self.assertEqual(product['ui-pip'], b'')
+        self.assertEqual(product['itunes-min-ver'], struct.pack('<I', 0xC0500))
+        self.assertEqual(product['product-name'], b'iPad Pro (12.9-inch) (2nd generation)\0')
+        maps = {p[0]: p[2] for p in find(tree, 'product', 'maps')[0]}
+        self.assertEqual(maps['3d-maps'], struct.pack('<I', 0))
 
 
 if __name__ == '__main__':

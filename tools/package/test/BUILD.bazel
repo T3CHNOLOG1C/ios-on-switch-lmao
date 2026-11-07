@@ -38,8 +38,8 @@ py_test(
     ],
 )
 
-# adt_edit.py's ipad_adt over a minimal Switch tree: /arm-io/iommu-present as J120 has it (VideoToolbox's IOSurface
-# memory region choice).
+# adt_edit.py's ipad_adt over a minimal Switch tree: J120's answers on /arm-io, the root and /product, which
+# VideoToolbox and MobileGestalt read before iOS uses a feature.
 py_test(
     name = "adt_media_test",
     size = "small",

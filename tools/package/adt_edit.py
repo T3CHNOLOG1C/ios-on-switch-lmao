@@ -225,6 +225,42 @@ def _media_accel(tree: list) -> None:
     put(arm_io, 'soc-generation', b'H9\0')
 
 
+def _capabilities(tree: list) -> None:
+    """J120's own answers to what MobileGestalt reads before iOS offers a feature (libMobileGestalt, 21H461)."""
+    # IOPlatformExpertDevice carries the root's properties; MobileGestalt's HardwarePlatform is its platform-name, which
+    # iBoot sets to the SoC. Without it CoreVideo, AMS and the store's user agent read NULL.
+    put(tree, 'platform-name', b't8011\0')
+    put(tree, 'target-sub-type', b'J120AP\0')
+    product = child(tree, 'product')
+    for key, value in (
+        ('bluetooth-le', u32(1)),
+        ('display-mirroring', u32(1)),
+        ('ui-pip', b''),
+        ('hearingaid-audio-equalization', u32(1)),
+        ('hearingaid-low-energy-audio', u32(1)),
+        ('iap2-protocol-supported', u32(1)),
+        ('allow-32bit-apps', u32(1)),
+        ('partition-style', b'iOS\0'),
+        ('ephemeral-data-mode', u32(0)),
+        ('multiuser-sessions', u32(0)),
+        ('has-applelpm', u32(0)),
+        ('has-boot-chime', u32(0)),
+        ('udid-version', u32(1)),
+        ('chrome-identifier', b'com.apple.dt.devicekit.chrome.tablet\0'),
+        ('device-color-policy', u32(0)),
+        ('itunes-min-ver', u32(0xC0500)),
+        ('mobiledevice-min-ver', b'1600\0'),
+        ('ptp-large-files', u32(1)),
+        ('RF-exposure-separation-distance', u32(5)),
+        ('disable-globe-map', b''),
+        ('sandman-support', u32(1)),
+    ):
+        put(product, key, value)
+    maps = child(product, 'maps')
+    put(maps, '3d-imagery', u32(0))
+    put(maps, '3d-maps', u32(0))
+
+
 def _boot_slots(tree: list, chosen: list, overlay_dirs: Sequence[tuple[str, str]]) -> None:
     # Directories the kernel shows the Data overlay over: NUL-terminated "<directory>[:<boot-arg>]".
     if overlay_dirs:
@@ -289,6 +325,7 @@ def ipad_adt(
     put(chosen, 'unique-chip-id', struct.pack('<Q', 0x001D5A0000000001))
     _usb(tree)
     _media_accel(tree)
+    _capabilities(tree)
     _boot_slots(tree, chosen, overlay_dirs)
     if smp:
         four_cores(tree)
