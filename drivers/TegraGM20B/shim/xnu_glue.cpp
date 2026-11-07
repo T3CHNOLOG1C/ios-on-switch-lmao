@@ -27,6 +27,7 @@ vm_offset_t phystokv(uint64_t pa);  // physical aperture (osfmk/arm64/arm_vm_ini
 vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
 vm_offset_t ml_io_map_wcomb(vm_offset_t phys_addr, vm_size_t size);
 boolean_t ml_set_interrupts_enabled(boolean_t enable);
+boolean_t ml_get_interrupts_enabled(void);
 boolean_t switch_ram_gpu_pool(uint64_t *start, uint64_t *end);
 void pmap_set_cache_attributes(ppnum_t pn, unsigned int cacheattr);
 boolean_t pmap_valid_page(ppnum_t pn);
@@ -57,12 +58,24 @@ extern "C" void nvxnu_stats(const char *fmt, ...)
 	os_log(OS_LOG_DEFAULT, "%s", line);
 }
 
+// nvkm's interrupt handler runs under spin_lock_irqsave, as in a Linux hard IRQ, and IOLog asserts with interrupts off.
+// os_log queues a line from any context, without the console copy.
+static void nvxnu_report(const char *line)
+{
+	if (ml_get_interrupts_enabled())
+		IOLog("%s", line);
+	else
+		os_log_error(OS_LOG_DEFAULT, "%{public}s", line);
+}
+
 extern "C" void nvxnu_log(const char *fmt, ...)
 {
+	char line[512];
 	va_list ap;
 	va_start(ap, fmt);
-	IOLogv(fmt, ap);
+	vsnprintf(line, sizeof(line), fmt, ap);
 	va_end(ap);
+	nvxnu_report(line);
 }
 
 // Bring-up step trace (M1/M2/CLK steps): only with kTracePaced, set in source for a bring-up test, which also gives the
@@ -137,7 +150,9 @@ extern "C" void nvxnu_error(const char *dev, const char *fmt, ...)
 	va_start(ap, fmt);
 	vsnprintf(line, sizeof(line), fmt, ap);
 	va_end(ap);
-	IOLog("tegra-gm20b %s: %s", dev, line);
+	char report[sizeof(line) + 64];
+	snprintf(report, sizeof(report), "tegra-gm20b %s: %s", dev, line);
+	nvxnu_report(report);
 	if (current_thread() != __atomic_load_n(&gIrqThread, __ATOMIC_RELAXED))
 		return;
 	size_t n = strnlen(line, sizeof(line));
