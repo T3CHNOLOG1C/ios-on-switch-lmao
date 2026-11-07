@@ -401,8 +401,6 @@ extern "C" int tegra_panel_brightness(void)
     return __atomic_load_n(&gHaveLevel, __ATOMIC_RELAXED) ? (int)__atomic_load_n(&gLevel, __ATOMIC_RELAXED) : -1;
 }
 
-// Every command holds FRAME_END (play) and the ambient light sensor has its own clock, so the display may mask
-// FRAME_END while nothing holds it.
 extern "C" bool tegra_panel_holds_frame_end(void)
 {
     return true;
