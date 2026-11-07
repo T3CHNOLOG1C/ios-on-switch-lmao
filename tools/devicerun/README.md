@@ -14,7 +14,7 @@ bazel run //tools/devicerun -- /tmp/session.logarchive --crashes /tmp/session-cr
 because `log show` has to read the whole archive once.
 
 The checks live in `checks.py`, one entry per expectation. Its `source` field names the file that logs the line, so a
-check can be traced back to its format string when that format changes. INFO rows are open issues and manual steps:
-their counts are the baseline for the next fix, not a verdict. NO-DATA means the line never appeared. Usually the
+check can be traced back to its format string when that format changes. INFO rows are open issues and manual steps;
+their counts are the baseline for the next fix. NO-DATA means the line never appeared. Usually the
 feature wasn't exercised (no USB 3 device plugged in, for example), or a release kernel compiled the debug line out.
 Use `--start` and `--end` to scope the launchd rates to the idle minutes.
