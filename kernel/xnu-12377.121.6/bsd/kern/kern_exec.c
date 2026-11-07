@@ -110,6 +110,7 @@
 #include <sys/persona.h>
 #include <sys/reason.h>
 #include <switch/pretranslated.h>
+#include <switch/a64x.h>
 #if SYSV_SHM
 #include <sys/shm_internal.h>           /* shmexec() */
 #endif
@@ -7463,6 +7464,14 @@ exec_add_apple_strings(struct image_params *imgp,
 		imgp->ip_applec++;
 	}
 #endif /* __has_feature(ptrauth_calls) */
+	if (switch_a64x_keys_off(imgp->ip_origcputype, imgp->ip_origcpusubtype)) {
+		error = exec_add_user_string(imgp, CAST_USER_ADDR_T(SWITCH_A64X_PTRAUTH_DISABLED), UIO_SYSSPACE, FALSE);
+		if (error) {
+			goto bad;
+		}
+
+		imgp->ip_applec++;
+	}
 
 	/*
 	 * Add main thread mach port name
