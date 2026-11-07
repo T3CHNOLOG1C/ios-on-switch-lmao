@@ -62,8 +62,10 @@ def rebuild(source: str, translate: Callable[[Path], list[dict]], work_dir: Path
                 short = delta.added_bytes(root, entries) + SLACK - shutil.disk_usage(root).free
                 if short <= 0:
                     delta.apply(root, entries, log, what, consume=True)
-                    host.run(SEALER, str(root), log=log)
-                    break
+            # The sealer mounts the container itself: it takes the volume's node, attached and not mounted.
+            if short <= 0:
+                host.run(SEALER, '/dev/' + volume, log=log)
+                break
         finally:
             host.run('hdiutil', 'detach', whole, log=log, check=False)
         log(f'{what}: growing the volume by {(short + SLACK) >> 20} MiB for its translated files')
