@@ -4156,10 +4156,11 @@ static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **
         untouch();
         return false;
     };
-    // the planar textures it samples: their images from their planes first, once (m2v converts at each encoder that uses one;
-    // nothing between this command buffer's passes writes the planes, refused below), then the passes, whose prologue's full
-    // barrier orders the copies before their reads. A sampler that clamps to zero or to the border reads a 4:4:4 code texture
-    // as clamp to edge (m2v's address map), which the raw path does not derive: such a command buffer is m2v's.
+    // the planar textures its draws sample: their images from their planes first, once (m2v converts at each encoder that uses
+    // one; nothing between this command buffer's passes writes the planes, refused below), then the passes, whose prologue's
+    // full barrier orders the copies before their reads. A texture bound where no draw's state reads it is not converted: the
+    // image is made when a draw samples it. A sampler that clamps to zero or to the border reads a 4:4:4 code texture as clamp to
+    // edge (m2v's address map), which the raw path does not derive: such a command buffer is m2v's.
     std::vector<std::pair<RMTexture *, uint32_t>> converted;  // planar images converted here, at their surfaces' seeds
     {
         std::vector<RMTexture *> planar;
@@ -4167,6 +4168,8 @@ static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **
         auto isPlanar = [](void *o) {
             return o && ((__bridge RMTexture *)o)->_raw.converted();
         };
+        RMTexture *bound[16] = {};  // the open render encoder's planar fragment textures
+        RMPipeline *pipe = nil;
         for (size_t at = from; at < to; at++) {
             const Cmd &c = cb->_tape[at];
             // Metal's copies of a planar texture move its planes' bytes, not the image: m2v's
@@ -4174,10 +4177,21 @@ static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **
                 (c.op == OpCopyBufferToTexture && isPlanar(c.obj2)) ||
                 (c.op == OpCopyTextureToBuffer && isPlanar(c.obj)))
                 return fail(PredEncPlanarCopy, "a copy to or from a planar texture", c.op);
-            if (c.op == OpTexture && c.obj) {
-                RMTexture *t = (__bridge RMTexture *)c.obj;
-                if (t->_raw.converted() && std::find(planar.begin(), planar.end(), t) == planar.end())
-                    planar.push_back(t);
+            if (c.op == OpRender) {
+                std::fill(std::begin(bound), std::end(bound), nil);
+                pipe = nil;
+            } else if (c.op == OpPipeline) {
+                pipe = [(__bridge id)c.obj isKindOfClass:[RMPipeline class]] ? (__bridge RMPipeline *)c.obj : nil;
+            } else if (c.op == OpTexture && c.stage == 2 && c.index < 16) {
+                bound[c.index] = isPlanar(c.obj) ? (__bridge RMTexture *)c.obj : nil;
+            } else if ((c.op == OpDraw || c.op == OpDrawIndexed) && pipe && pipe->_raw) {
+                const raw::PackPipeline &r = *pipe->_raw->rec;
+                for (uint32_t e = 0; e < r.entries; e++) {
+                    RMTexture *t =
+                        r.entry[e].kind == raw::EntryTexture && r.entry[e].slot < 16 ? bound[r.entry[e].slot] : nil;
+                    if (t && std::find(planar.begin(), planar.end(), t) == planar.end())
+                        planar.push_back(t);
+                }
             } else if (c.op == OpSampler && c.obj) {
                 RMSampler *sm = (__bridge RMSampler *)c.obj;
                 if (std::find(samplers.begin(), samplers.end(), sm) == samplers.end())
