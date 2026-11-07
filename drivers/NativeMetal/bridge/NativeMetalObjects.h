@@ -177,7 +177,8 @@ uint64_t nmb_function_type(const NmbFunction *);
 // vertexAttributes (stage_input false) or stageInputAttributes: their count, -1 where Metal answers nil; attribute `at`'s name
 // into out and its attributeIndex, MTLDataType, isActive, isPatchData and isPatchControlPointData into info[5]
 int64_t nmb_function_attribute_count(const NmbFunction *, bool stage_input);
-size_t nmb_function_attribute(const NmbFunction *, bool stage_input, uint32_t at, char *out, size_t size, uint64_t info[5]);
+size_t nmb_function_attribute(const NmbFunction *, bool stage_input, uint32_t at, char *out, size_t size,
+                              uint64_t info[5]);
 
 NmbComputePipeline *nmb_compute_pipeline_new(NmbDevice *, NmbFunction *);
 void nmb_compute_pipeline_release(NmbComputePipeline *);

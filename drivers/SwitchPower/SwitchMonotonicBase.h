@@ -28,8 +28,10 @@ static inline uint64_t switch_monotonic_base_usec(int64_t rtc_secs, uint64_t teg
                                                   uint64_t mach_usec)
 {
     if (rtc_secs > SWITCH_RTC_EPOCH_SECS) {
+        // NOLINTBEGIN(modernize-avoid-c-style-cast): C (kern_exec.c) reads this header too
         const uint64_t anchor =
             (uint64_t)(rtc_secs - SWITCH_RTC_EPOCH_SECS) * SWITCH_MONOTONIC_USEC_PER_SEC + since_rtc_usec;
+        // NOLINTEND(modernize-avoid-c-style-cast)
 
         if (anchor > tegra_usec && anchor > mach_usec) {
             return anchor - tegra_usec;

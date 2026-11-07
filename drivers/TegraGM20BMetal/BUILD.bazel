@@ -148,6 +148,7 @@ py_binary(
 ) for check in [
     "capturecheck",
     "datacheck",
+    "targetcheck",
 ]]
 
 py_binary(
