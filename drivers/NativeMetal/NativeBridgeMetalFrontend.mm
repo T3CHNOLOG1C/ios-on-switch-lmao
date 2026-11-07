@@ -37,6 +37,7 @@
 #include "GpuMemoryRelease.h"
 #include "QueuePriority.h"
 #include "SwitchFrameTimeline.h"
+#include "../../kits/SwitchRefusal/SwitchRefusalSite.h"
 // The two-plane render targets' load and store functions (TwoPlaneStandIn.metal).
 #include "TwoPlaneStandIn.h"
 
@@ -241,7 +242,6 @@ static char gLastProblems[2][200];
 
 static void noteProblem(NSString *what)
 {
-    gProblems++;
     std::lock_guard<std::mutex> lock(gProblemLock);
     memcpy(gLastProblems[1], gLastProblems[0], sizeof gLastProblems[0]);
     strlcpy(gLastProblems[0], what.UTF8String ?: "?", sizeof gLastProblems[0]);
@@ -251,7 +251,19 @@ static void noteProblem(NSString *what)
     do {                                                            \
         NSString *nbText = [NSString stringWithFormat:__VA_ARGS__]; \
         NSLog(@"%@", nbText);                                       \
+        gProblems++;                                                \
         noteProblem(nbText);                                        \
+    } while (0)
+// Work iPadOS sent the frontend that it refuses or answers with nothing: counted every time, its line (kits/SwitchRefusal,
+// domain "frontend") once per process and reason, or reason and detail
+#define NBREFUSE(reason, detail, ...)                                                                                  \
+    do {                                                                                                               \
+        gProblems++;                                                                                                   \
+        if (switch_refusal_first(switch_refusal_key_with(SWITCH_REFUSAL_KEY("frontend", reason), uint64_t(detail)))) { \
+            NSString *nbText = [NSString stringWithFormat:__VA_ARGS__];                                                \
+            noteProblem(nbText);                                                                                       \
+            switch_refusal_log("frontend", reason, nbText.UTF8String);                                                 \
+        }                                                                                                              \
     } while (0)
 // The pixel formats textures were asked for (first eight distinct), with how many were refused: native_bridge_metal_formats.
 static uint32_t gFormats[8];
@@ -348,8 +360,7 @@ static void journal(const std::string &line)
 static void (*gAnsweredZero)(const char *, const char *);
 static std::mutex gForwardLock;
 static std::unordered_map<SEL, NSMethodSignature *> *gForwardSignatures;  // under gForwardLock; never shrinks
-static std::vector<std::pair<Class, SEL>> *gForwardReported;  // under gForwardLock: one line per class and selector
-static std::atomic<uint64_t> gForwardCalls, gForwardUs;       // the rates line's fwd=
+static std::atomic<uint64_t> gForwardCalls, gForwardUs;                   // the rates line's fwd=
 static thread_local uint64_t tForwardBegan;
 
 // The types of `selector` as the first MTL* protocol that declares it has them (required methods before optional ones), or null.
@@ -402,19 +413,15 @@ static void forwardZero(id self, SEL, NSInvocation *invocation)
 {
     const SEL selector = invocation.selector;
     Class cls = object_getClass(self);
-    bool first = false;
-    {
-        std::lock_guard<std::mutex> lock(gForwardLock);
-        if (!gForwardReported)
-            gForwardReported = new std::vector<std::pair<Class, SEL>>;
-        const std::pair<Class, SEL> key(cls, selector);
-        if (std::find(gForwardReported->begin(), gForwardReported->end(), key) == gForwardReported->end()) {
-            gForwardReported->push_back(key);
-            first = true;
-        }
+    const uint64_t key = switch_refusal_key_with(
+        switch_refusal_key_with(SWITCH_REFUSAL_KEY("frontend", "selector.zero"), uintptr_t(cls)), uintptr_t(selector));
+    if (switch_refusal_first(key)) {
+        char text[256];
+        snprintf(text, sizeof text, "-[%s %s] answered zero", class_getName(cls), sel_getName(selector));
+        switch_refusal_log("frontend", "selector.zero", text);
+        if (gAnsweredZero)
+            gAnsweredZero(class_getName(cls), sel_getName(selector));
     }
-    if (first && gAnsweredZero)
-        gAnsweredZero(class_getName(cls), sel_getName(selector));
     if (const NSUInteger length = invocation.methodSignature.methodReturnLength) {
         uint64_t small[8] = {};
         void *zero = length <= sizeof small ? small : calloc(1, length);
@@ -3368,8 +3375,8 @@ static bool standInStates()
         gStandInStore = gStandInLoad ? [device newRenderPipelineStateWithDescriptor:d error:&error] : nil;
         tAsyncWorker = was;
         if (!gStandInLoad || !gStandInStore)
-            NBLOG(@"native-metal: two-plane render targets refused: their load/store states: %@",
-                  error.localizedDescription);
+            NBREFUSE("standin.states", 0, @"two-plane render targets refused: their load/store states: %@",
+                     error.localizedDescription);
     });
     return gStandInLoad && gStandInStore;
 }
@@ -3406,11 +3413,10 @@ static NBTwoPlaneStandIn *standInOf(id texture)
         d.pixelFormat = MTLPixelFormatRG8Unorm;
         standIn.chroma = [device newTextureWithDescriptor:d iosurface:planes.surface plane:1];
         if (!standIn.texture || !standIn.luma || !standIn.chroma) {
-            static std::atomic<bool> said{false};
-            if (!said.exchange(true))
-                NBLOG(@"native-metal: two-plane render target refused: no stand-in for a %lux%lu texture (%d%d%d)",
-                      (unsigned long)width, (unsigned long)height, standIn.texture != nil, standIn.luma != nil,
-                      standIn.chroma != nil);
+            NBREFUSE("standin.texture", 0,
+                     @"two-plane render target refused: no stand-in for a %lux%lu texture (%d%d%d)",
+                     (unsigned long)width, (unsigned long)height, standIn.texture != nil, standIn.luma != nil,
+                     standIn.chroma != nil);
             return nil;
         }
         planes.standIn = standIn;
@@ -5487,7 +5493,8 @@ static void fillLimits(id device)
             continue;
         const uint64_t value = ((NSUInteger (*)(id, SEL))method_getImplementation(own))(device, sel);
         if (value > UINT32_MAX) {
-            NBLOG(@"native-metal: limits: %s %llu does not fit the table", field.selector, (unsigned long long)value);
+            NBREFUSE("limits.overflow", uintptr_t(field.selector), @"limits: %s %llu does not fit the table",
+                     field.selector, (unsigned long long)value);
             continue;
         }
         uint32_t was;
@@ -5496,8 +5503,9 @@ static void fillLimits(id device)
         memcpy(table + field.offset, &word, 4);
         if (((NSUInteger (*)(id, SEL))method_getImplementation(original))(device, sel) != value) {
             memcpy(table + field.offset, &was, 4);
-            NBLOG(@"native-metal: limits: the base class does not read %s at 0x%x; the fields from there stay 0",
-                  field.selector, field.offset);
+            NBREFUSE("limits.layout", field.offset,
+                     @"limits: the base class does not read %s at 0x%x; the fields from there stay 0", field.selector,
+                     field.offset);
             return;
         }
     }
@@ -5505,7 +5513,8 @@ static void fillLimits(id device)
     memcpy(&width, table + 0x84, 4);
     memcpy(&height, table + 0x88, 4);
     if (!width || !height)
-        NBLOG(@"native-metal: limits: no 2D texture size from the device (PhotosUICore refuses every image)");
+        NBREFUSE("limits.texture2d", 0,
+                 @"limits: no 2D texture size from the device (PhotosUICore refuses every image)");
 }
 #else
 static void fillLimits(id)
@@ -6006,8 +6015,9 @@ static void fillLimits(id)
     (void)length;
     (void)d;
     (void)deallocator;
-    NBLOG(@"native-metal: newTextureWithBytesNoCopy:length:descriptor:deallocator: is not implemented (Apple's texture "
-          @"layout of raw memory is not known)");
+    NBREFUSE("texture.bytesnocopy", 0,
+             @"newTextureWithBytesNoCopy:length:descriptor:deallocator: is not implemented (Apple's texture layout of "
+             @"raw memory is not known)");
     return nil;
 }
 
@@ -6516,7 +6526,8 @@ static uint64_t askAnswer(SEL cmd, NSUInteger arg)
     gAnswersAsked++;
     uint64_t value = 0;
     if (!nmb_device_answer(gDevice, sel_getName(cmd), arg, &value)) {
-        NBLOG(@"native-metal: %s(%lu): %@", sel_getName(cmd), (unsigned long)arg, lastError());
+        NBREFUSE("device.answer", uintptr_t(cmd) ^ uint64_t(arg) << 48, @"no device answer for %s(%lu): %@",
+                 sel_getName(cmd), (unsigned long)arg, lastError());
         value = 0;
     }
     if (keep) {
@@ -6577,7 +6588,7 @@ static void installAnswers(Class cls)
         case NMB_ANSWER_COUNT:
         case NMB_ANSWER_FLAG:
             if (!nmb_device_answer(gDevice, name, 0, &value)) {
-                NBLOG(@"native-metal: no device answer: %@", lastError());
+                NBREFUSE("device.answer", uintptr_t(sel), @"no device answer for %s: %@", name, lastError());
                 continue;
             }
             // Extended-range 10-bit (XR10) framebuffers are withheld from the render server: this display chain presents 8-bit BGRX scanout

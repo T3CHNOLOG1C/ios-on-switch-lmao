@@ -27,6 +27,7 @@
 #include <os/log.h>
 #include <pthread.h>
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
@@ -38,6 +39,7 @@
 #include <thread>
 #include <vector>
 #include "SwitchFrameTimeline.h"
+#include "../../../../kits/SwitchRefusal/SwitchRefusalSite.h"
 #include "RawAlias.h"
 #include "raw_follow.h"
 #include "raw_gpu.h"
@@ -177,60 +179,71 @@ enum RMPred : uint8_t {
 };
 
 static_assert(PredCount <= 64, "one mask word");
-static const char *const kPredNames[] = {"-",
-                                         "tex.shape",
-                                         "tex.pool",
-                                         "tex.surf.plane",
-                                         "tex.surf.pitch",
-                                         "tex.surf.bounds",
-                                         "tex.surf.base",
-                                         "tex.surf.imp",
-                                         "tex.planar",
-                                         "tex.buf.base",
-                                         "tex.buf.pitch",
-                                         "tex.buf.other",
-                                         "tex.view",
-                                         "tex.foreign",
-                                         "pass.fmt",
-                                         "pass.level",
-                                         "pass.rtsize",
-                                         "pass.ds",
-                                         "pass.other",
-                                         "state.foreign",
-                                         "state.notqc",
-                                         "state.pack",
-                                         "call.vis",
-                                         "call.idxform",
-                                         "call.buf",
-                                         "call.sampler",
-                                         "call.vsampler",
-                                         "call.cull",
-                                         "call.fill",
-                                         "call.dbias",
-                                         "call.inv",
-                                         "call.cbinv",
-                                         "call.blitopt",
-                                         "call.bufcopy",
-                                         "blit.tex",
-                                         "blit.b2t",
-                                         "blit.t2b",
-                                         "blit.whole",
-                                         "compute",
-                                         "mipmaps",
-                                         "event",
-                                         "enc.planarcopy",
-                                         "enc.planarclamp",
-                                         "enc.planarrt",
-                                         "enc.pass",
-                                         "enc.b2trow",
-                                         "enc.kernel",
-                                         "enc.idxrange",
-                                         "enc.baseinst",
-                                         "enc.colorfmt",
-                                         "enc.ubo",
-                                         "enc.notic",
-                                         "enc.ds"};
+static constexpr const char *kPredNames[] = {"-",
+                                             "tex.shape",
+                                             "tex.pool",
+                                             "tex.surf.plane",
+                                             "tex.surf.pitch",
+                                             "tex.surf.bounds",
+                                             "tex.surf.base",
+                                             "tex.surf.imp",
+                                             "tex.planar",
+                                             "tex.buf.base",
+                                             "tex.buf.pitch",
+                                             "tex.buf.other",
+                                             "tex.view",
+                                             "tex.foreign",
+                                             "pass.fmt",
+                                             "pass.level",
+                                             "pass.rtsize",
+                                             "pass.ds",
+                                             "pass.other",
+                                             "state.foreign",
+                                             "state.notqc",
+                                             "state.pack",
+                                             "call.vis",
+                                             "call.idxform",
+                                             "call.buf",
+                                             "call.sampler",
+                                             "call.vsampler",
+                                             "call.cull",
+                                             "call.fill",
+                                             "call.dbias",
+                                             "call.inv",
+                                             "call.cbinv",
+                                             "call.blitopt",
+                                             "call.bufcopy",
+                                             "blit.tex",
+                                             "blit.b2t",
+                                             "blit.t2b",
+                                             "blit.whole",
+                                             "compute",
+                                             "mipmaps",
+                                             "event",
+                                             "enc.planarcopy",
+                                             "enc.planarclamp",
+                                             "enc.planarrt",
+                                             "enc.pass",
+                                             "enc.b2trow",
+                                             "enc.kernel",
+                                             "enc.idxrange",
+                                             "enc.baseinst",
+                                             "enc.colorfmt",
+                                             "enc.ubo",
+                                             "enc.notic",
+                                             "enc.ds"};
 static_assert(sizeof kPredNames / sizeof *kPredNames == PredCount, "a name for each predicate");
+
+// Each predicate's refusal key: domain "raw", the predicate's name as the reason (kits/SwitchRefusal)
+static constexpr std::array<uint64_t, PredCount> predKeys()
+{
+    std::array<uint64_t, PredCount> keys{};
+    for (int p = 0; p < PredCount; p++)
+        keys[p] = switch_refusal_key("raw", kPredNames[p]);
+    return keys;
+}
+
+static constexpr std::array<uint64_t, PredCount> kPredKeys = predKeys();
 static std::atomic<uint64_t> gPredCbs[PredCount], gPredOnly[PredCount], gPredLogged{0};
 static uint64_t gPredRates[PredCount];  // the rates line's last gPredCbs (its timer thread only)
 
@@ -245,9 +258,9 @@ static void logPred(RMPred p, uint64_t a, uint64_t b, NSString *detail)
     const uint64_t bit = 1ull << p;
     if (gPredLogged.fetch_or(bit, std::memory_order_relaxed) & bit)
         return;
-    os_log_error(rawLog(), "raw: first %{public}s: a=%llu (0x%llx) b=%llu (0x%llx)%{public}s%{public}@", kPredNames[p],
-                 (unsigned long long)a, (unsigned long long)a, (unsigned long long)b, (unsigned long long)b,
-                 detail ? " " : "", detail ?: @"");
+    switch_refusal_k(kPredKeys[p], "raw", kPredNames[p], "a=%llu (0x%llx) b=%llu (0x%llx)%s%s", (unsigned long long)a,
+                     (unsigned long long)a, (unsigned long long)b, (unsigned long long)b, detail ? " " : "",
+                     detail ? detail.UTF8String : "");
 #if !TARGET_OS_IPHONE
     fprintf(stderr, "raw: first %s: a=%llu b=%llu %s\n", kPredNames[p], (unsigned long long)a, (unsigned long long)b,
             detail ? detail.UTF8String : "");
@@ -532,8 +545,8 @@ static id twinPublish(id object, __strong id &slot, id made)
 {
     id twin = [self rmTwin];
     if (!twin)
-        once([NSString stringWithFormat:@"-[%s %s] with no m2v twin", class_getName(object_getClass(self)),
-                                        sel_getName(selector)]);
+        SWITCH_REFUSE_DETAIL("raw", "twin.missing", uintptr_t(selector), "-[%s %s] with no m2v twin",
+                             class_getName(object_getClass(self)), sel_getName(selector));
     return twin;
 }
 
@@ -1033,8 +1046,9 @@ static void cpuLevel(RMTexture *t, MTLRegion r, NSUInteger level, uint8_t *bytes
     }
     id twin = twinPublish(self, _twin, made);
     if (!twin)
-        once([NSString stringWithFormat:@"no m2v twin for a %ux%u texture of format %lu (kind %u)", _raw.width,
-                                        _raw.height, (unsigned long)_descriptor.pixelFormat, unsigned(_kind)]);
+        SWITCH_REFUSE_DETAIL("raw", "twin.texture", _descriptor.pixelFormat,
+                             "no m2v twin for a %ux%u texture of format %lu (kind %u)", _raw.width, _raw.height,
+                             (unsigned long)_descriptor.pixelFormat, unsigned(_kind));
     return twin;
 }
 
@@ -1945,16 +1959,8 @@ static inline void hit(RMCommandBuffer *cb, RMPred p, uint64_t a = 0, uint64_t b
     [_cb record:c];
     [_cb takeReason:WhyCall why:@"an encoder call recorded as an invocation"];
     hit(_cb, PredCallInvocation, uintptr_t(inv.selector));
-    static std::mutex lock;  // each selector named once (a pointer set: no string unless it is new)
-    static std::set<SEL> seen;
-    bool fresh;
-    {
-        std::lock_guard<std::mutex> l(lock);
-        fresh = seen.size() < 256 && seen.insert(inv.selector).second;
-    }
-    if (fresh)
-        once([NSString
-            stringWithFormat:@"invocation -[%s %s]", class_getName(object_getClass(self)), sel_getName(inv.selector)]);
+    SWITCH_REFUSE_DETAIL("raw", "call.invocation", uintptr_t(inv.selector), "-[%s %s] recorded as an invocation",
+                         class_getName(object_getClass(self)), sel_getName(inv.selector));
     const NSUInteger n = inv.methodSignature.methodReturnLength;
     if (n) {
         void *zero = calloc(1, n);
@@ -3337,15 +3343,8 @@ static bool rawDepthStencil(MTLRenderPassDescriptor *pass)
     [self record:c];
     [self takeWholeReason:WhyCall why:@"a command buffer call recorded as an invocation"];
     hit(self, PredCallCBInvocation, uintptr_t(inv.selector));
-    static std::mutex lock;  // each selector named once
-    static std::set<SEL> seen;
-    bool fresh;
-    {
-        std::lock_guard<std::mutex> l(lock);
-        fresh = seen.size() < 256 && seen.insert(inv.selector).second;
-    }
-    if (fresh)
-        once([NSString stringWithFormat:@"invocation -[MTLCommandBuffer %s]", sel_getName(inv.selector)]);
+    SWITCH_REFUSE_DETAIL("raw", "call.cbinvocation", uintptr_t(inv.selector), "-[MTLCommandBuffer %s] answered zero",
+                         sel_getName(inv.selector));
     const NSUInteger n = inv.methodSignature.methodReturnLength;
     if (n) {
         void *zero = calloc(1, n);
@@ -4829,7 +4828,7 @@ static void commitBuffer(RMCommandBuffer *cb);
     const bool wc = (o & MTLResourceStorageModeMask) == MTLResourceStorageModeShared;
     if (!gRM->raw->createBuffer(n ? n : 16, b->_raw,
                                 wc)) {  // the pool could not grow: m2v's buffer (its users go to m2v)
-        once([NSString stringWithFormat:@"no raw memory for a %lu-byte buffer: m2v's", (unsigned long)n]);
+        SWITCH_REFUSE("raw", "buffer.pool", "no raw memory for a %lu-byte buffer: m2v's", (unsigned long)n);
         if (!predLogged(PredCallBufForeign))
             logPred(PredCallBufForeign, 0, n, @"(made: the pool had no room)");
         RMTwinObject *t = [RMTwinObject new];
@@ -5184,12 +5183,15 @@ static MTLRenderPipelineDescriptor *twinDescriptor(MTLRenderPipelineDescriptor *
         p->_raw = gRM->raw->pipeline(raw::Pack::fnv(k, strlen(k)), raw::PackForm::Default,
                                      [vf.name hasPrefix:@"fixed_vert_"] && [vf.name hasSuffix:@"_spc"]);
     }
-    if (!p->_raw)
-        once([NSString stringWithFormat:@"state not in the pack (m2v draws it)%s: %@",
-                                        !p->_quartzCore            ? " (not QuartzCore's functions: never looked up)"
-                                        : gRM->raw->stats.heapFull ? " (or the shader heap is full)"
-                                                                   : "",
-                                        d.label ?: @"-"]);
+    if (!p->_raw) {
+        const char *label = d.label.UTF8String ?: "-";
+        SWITCH_REFUSE_DETAIL("raw", "state.unpacked", raw::Pack::fnv(label, strlen(label)),
+                             "state not in the pack (m2v draws it)%s: %s",
+                             !p->_quartzCore            ? " (not QuartzCore's functions: never looked up)"
+                             : gRM->raw->stats.heapFull ? " (or the shader heap is full)"
+                                                        : "",
+                             label);
+    }
     return p;
 }
 
@@ -5618,13 +5620,9 @@ static bool submitLocked(RMCommandBuffer *cb)
     r.stats.m2v++;
     r.stats.reasons[cb->_reason]++;
     countPreds(cb);
-    {  // one line per reason kind (no string per command buffer: the predicates' own lines carry the values)
-        static std::atomic<uint32_t> logged{0};
-        const uint32_t bit = 1u << cb->_reason;
-        if (!(logged.fetch_or(bit, std::memory_order_relaxed) & bit))
-            once([NSString stringWithFormat:@"command buffer on m2v (%s): %@ [first predicate %s]",
-                                            kReasonNames[cb->_reason], cb->_why, kPredNames[cb->_pred0]]);
-    }
+    // one line per reason kind (no string per command buffer: the predicates' own lines carry the values)
+    SWITCH_REFUSE_DETAIL("raw", "cb.m2v", cb->_reason, "command buffer on m2v (%s): %s [first predicate %s]",
+                         kReasonNames[cb->_reason], cb->_why.UTF8String ?: "-", kPredNames[cb->_pred0]);
     cb->_m2v = true;
     const uint64_t replayBegan = nowUs();
 #if SWITCH_FRAME_TIMELINE

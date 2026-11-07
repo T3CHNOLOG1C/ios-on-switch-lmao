@@ -68,7 +68,10 @@ rust_static_library(
     # takes no extra-filename: the archive's own object is named without cargo's suffix (no shipped byte depends on it).
     rustc_flags = cargo_ids("0cd6ef7afe7b4328", "943b498a20400856")[:1],
     version = "0.1.0",
+    # kits/SwitchRefusal's C, bundled into the archive by rustc (a static native library of a staticlib): the plugin
+    # image's one copy, which the frontend and the raw path call too
     deps = [
+        "//kits/SwitchRefusal:switch_refusal",
         "//third_party/m2v/crates/metal2vulkan",
         "//third_party/m2v/crates/metal2vulkan-runtime",
         "@rust_crates//:libc",
@@ -131,6 +134,8 @@ metal_plugin(
         GM20B_METAL + ":raw_runtime_headers",
         GM20B_ABI,
         GM20B_LAYOUT,
+        "//kits/SwitchRefusal:SwitchRefusal.h",
+        "//kits/SwitchRefusal:SwitchRefusalSite.h",
     ],
     bridge = ":bridge_ios",
     cc_srcs = [
