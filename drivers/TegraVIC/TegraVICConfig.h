@@ -491,9 +491,12 @@ static inline const char *tegra_vic_check_image(const TegraVICImage *im, const T
             return "plane shorter than the surface";
         // The engine reads or writes (LumaHeight + 1) rows of (LumaWidth + 1) elements: h rows of pitch bytes (a
         // block-linear plane: all its rows, whole blocks).
-        const uint64_t extent = im->blockLinear    ? (uint64_t)im->pitch[p] * im->rows[p]
-                                : im->lastRowExact ? (uint64_t)im->pitch[p] * (h - 1) + (uint64_t)w * f->bpe[p]
-                                                   : (uint64_t)im->pitch[p] * h;
+        uint64_t extent = (uint64_t)im->pitch[p] * h;
+        if (im->blockLinear) {
+            extent = (uint64_t)im->pitch[p] * im->rows[p];
+        } else if (im->lastRowExact) {
+            extent = (uint64_t)im->pitch[p] * (h - 1) + (uint64_t)w * f->bpe[p];
+        }
         if (extent > im->span[p])
             return "plane extends past its mapping";
     }

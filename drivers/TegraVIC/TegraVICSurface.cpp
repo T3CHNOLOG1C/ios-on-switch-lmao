@@ -109,7 +109,8 @@ extern "C" IOReturn tegra_vic_surface_pages(TegraVICSurface *s, uint64_t offset,
                                             uint32_t max, uint32_t *count)
 {
     *count = 0;
-    const uint64_t first = offset >> 12, end = (offset + bytes + 0xfff) >> 12;
+    const uint64_t first = offset >> 12;
+    const uint64_t end = (offset + bytes + 0xfff) >> 12;
     if (!bytes || offset + bytes > s->memory->getLength() || end - first > max)
         return kIOReturnBadArgument;
     if (!s->prepared) {

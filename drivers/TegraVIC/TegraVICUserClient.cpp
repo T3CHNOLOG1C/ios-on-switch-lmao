@@ -169,10 +169,13 @@ void refused(IOReturn ret, const char *why)
     if (!strncmp(why, "row pitch", 9))
         __atomic_add_fetch(&gStats.pitch, 1, __ATOMIC_RELAXED);
 #endif
-    switch_refusal("TegraVIC", why, "IOSurfaceAccelerator transform refused (%s), the caller falls back",
-                   ret == kIOReturnUnsupported   ? "not on VIC"
-                   : ret == kIOReturnBadArgument ? "bad request"
-                                                 : "surface lookup");
+    const char *kind = "surface lookup";
+    if (ret == kIOReturnUnsupported) {
+        kind = "not on VIC";
+    } else if (ret == kIOReturnBadArgument) {
+        kind = "bad request";
+    }
+    switch_refusal("TegraVIC", why, "IOSurfaceAccelerator transform refused (%s), the caller falls back", kind);
 }
 
 struct Job {
@@ -334,7 +337,7 @@ bool runJob(Job *job, IOReturn *status)
 #if TEGRA_VIC_STATS
     gStats.engineUs += busy;
     gStats.mapUs += (t1 - t0) + (switch_now_us() - t1 - busy);
-    gStats.bytes += ((uint64_t)pages[0] + pages[1]) << 12;
+    gStats.bytes += (static_cast<uint64_t>(pages[0]) + pages[1]) << 12;
 #endif
     if (why)
         IOLog("TegraVIC: a checked job was refused on the engine thread: %s\n", why);
@@ -846,6 +849,12 @@ extern "C" int tegra_vic_publish(void)
     }
     service->registerService();
     tegra_vic_present_start();
+    const char *present = "off (block linear in not proven: NVDEC's pictures are copied by the CPU)";
+    if (tegra_vic_present_ready()) {
+        present = "on (block linear in proven)";
+    } else if (tegra_vic_traits()->blockLinearIn) {
+        present = "off (no memory for its page lists)";
+    }
     IOLog("TegraVIC: V5 ok AppleM2ScalerCSCDriver published (Apple's classes, VIC's slots: newUserClient %d; "
           "IOSurfaceAcceleratorClient; BGRA, RGBA, 420v, 420f; transforms %#x; up to %ux%u, %ux up, %ux down); "
           "NVDEC present %s\n",
