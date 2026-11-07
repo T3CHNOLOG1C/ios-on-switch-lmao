@@ -91,7 +91,7 @@ public:
     void connect();                                     // VBUS/ID override, enable, port to RxDetect: pull-up on
     void disconnect();                                  // device mode and VBUS override off: the host sees a detach
     bool nextEvent(Event &event);                       // false when the ring is empty
-    bool eventPending();                                // the next event is there (nextEvent would return it)
+    bool eventPending() const;                          // the next event is there (nextEvent would return it)
     void finishEvents();                                // ERDP update + EHB clear after a batch
     bool takeInterrupt();                               // ST.IP set? Then acknowledge it (W1C, IP only)
     bool interruptPending();                            // ST.IP, read only
@@ -131,7 +131,8 @@ public:
 
     uint64_t trbBuffer(uint32_t dci, uint32_t index) const
     {
-        return rings[dci].trb[index * 4] | (uint64_t)rings[dci].trb[index * 4 + 1] << 32;
+        const size_t at = static_cast<size_t>(index) * 4;
+        return rings[dci].trb[at] | static_cast<uint64_t>(rings[dci].trb[at + 1]) << 32;
     }
 
     bool trbIndex(uint32_t dci, uint32_t trbPA, uint32_t *index) const;
@@ -159,14 +160,14 @@ private:
     Ring rings[kMaxDci];
     uint32_t eventIndex = 0, eventCycle = 1;
 
-    static uint32_t r(volatile uint8_t *b, uint32_t o)
+    static uint32_t r(const volatile uint8_t *b, uint32_t o)
     {
-        return *(volatile uint32_t *)(b + o);
+        return *reinterpret_cast<const volatile uint32_t *>(b + o);
     }
 
     static void w(volatile uint8_t *b, uint32_t o, uint32_t v)
     {
-        *(volatile uint32_t *)(b + o) = v;
+        *reinterpret_cast<volatile uint32_t *>(b + o) = v;
     }
 
     uint32_t pmc(uint32_t o);
@@ -182,12 +183,12 @@ private:
         w(xudc, o, v);
     }
 
-    bool waitBits(volatile uint8_t *b, uint32_t o, uint32_t mask, uint32_t value, uint32_t us);
+    static bool waitBits(const volatile uint8_t *b, uint32_t o, uint32_t mask, uint32_t value, uint32_t us);
     bool powerUp(uint32_t partition, uint32_t clockSet, uint32_t resetSet, uint32_t bit);
     bool initPhy();
     void clearPortChange(uint32_t change);
     void resetEp0();
-    volatile uint32_t *context(uint32_t dci);
+    volatile uint32_t *context(uint32_t dci) const;
     void resetRing(uint32_t dci);
     void toggleBit(uint32_t reg, uint32_t dci, bool set);
 };

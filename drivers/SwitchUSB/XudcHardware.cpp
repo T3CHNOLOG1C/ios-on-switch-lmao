@@ -176,7 +176,8 @@ inline void barrier()
 
 void cacheFlush(const volatile void *p, size_t n)
 {
-    uintptr_t at = (uintptr_t)p & ~(uintptr_t)63, end = (uintptr_t)p + n;
+    uintptr_t at = reinterpret_cast<uintptr_t>(p) & ~static_cast<uintptr_t>(63);
+    const uintptr_t end = reinterpret_cast<uintptr_t>(p) + n;
     for (; at < end; at += 64)
         __asm__ volatile("dc civac, %0" ::"r"(at) : "memory");
     barrier();
@@ -187,10 +188,10 @@ bool DmaBuffer::allocate(uint32_t bytes)
     md = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task,
                                                           static_cast<IOOptionBits>(kIODirectionInOut) |
                                                               static_cast<IOOptionBits>(kIOMemoryPhysicallyContiguous),
-                                                          bytes, 0x00000000fffff000ull);
-    uint64_t physical = md ? md->getPhysicalSegment(0, nullptr, kIOMemoryMapperNone) : 0;
+                                                          bytes, 0x00000000fffff000ULL);
+    const uint64_t physical = md ? md->getPhysicalSegment(0, nullptr, kIOMemoryMapperNone) : 0;
     va = md ? static_cast<uint8_t *>(md->getBytesNoCopy()) : nullptr;
-    if (!va || !physical || physical + bytes > (1ull << 32)) {
+    if (!va || !physical || physical + bytes > (1ULL << 32)) {
         release();
         return false;
     }
@@ -222,7 +223,7 @@ void Hardware::pmcWrite(uint32_t o, uint32_t v)
 }
 
 // Bounded register handshakes of the bring-up and endpoint commands (microseconds); never event waits.
-bool Hardware::waitBits(volatile uint8_t *b, uint32_t o, uint32_t mask, uint32_t value, uint32_t us)
+bool Hardware::waitBits(const volatile uint8_t *b, uint32_t o, uint32_t mask, uint32_t value, uint32_t us)
 {
     for (uint32_t i = 0; i <= us; ++i) {
         if ((r(b, o) & mask) == value)
@@ -234,13 +235,14 @@ bool Hardware::waitBits(volatile uint8_t *b, uint32_t o, uint32_t mask, uint32_t
 
 bool Hardware::map()
 {
-    car = (volatile uint8_t *)ml_io_map(kCarPA, 0x1000);
-    pmcPage = (volatile uint8_t *)ml_io_map(kPmcPagePA, 0x1000);
-    fusePage = (volatile uint8_t *)ml_io_map(kFusePagePA, 0x1000);
-    mc = (volatile uint8_t *)ml_io_map(kMcPA, 0x1000);
-    padctl = (volatile uint8_t *)ml_io_map(kPadctlPA, 0x1000);
-    xudc = (volatile uint8_t *)ml_io_map(kXudcPA, kXudcBytes);
-    return car && pmcPage && fusePage && mc && padctl && xudc;
+    car = reinterpret_cast<volatile uint8_t *>(ml_io_map(kCarPA, 0x1000));
+    pmcPage = reinterpret_cast<volatile uint8_t *>(ml_io_map(kPmcPagePA, 0x1000));
+    fusePage = reinterpret_cast<volatile uint8_t *>(ml_io_map(kFusePagePA, 0x1000));
+    mc = reinterpret_cast<volatile uint8_t *>(ml_io_map(kMcPA, 0x1000));
+    padctl = reinterpret_cast<volatile uint8_t *>(ml_io_map(kPadctlPA, 0x1000));
+    xudc = reinterpret_cast<volatile uint8_t *>(ml_io_map(kXudcPA, kXudcBytes));
+    return (car != nullptr) && (pmcPage != nullptr) && (fusePage != nullptr) && (mc != nullptr) &&
+           (padctl != nullptr) && (xudc != nullptr);
 }
 
 // Linux tegra_powergate_power_up order: module reset asserted, partition on, module clock on, clamps removed. The
@@ -268,13 +270,13 @@ bool Hardware::powerUp(uint32_t partition, uint32_t clockSet, uint32_t resetSet,
 // whichever controller owns the port.
 bool usb2PadInit(volatile uint8_t *car, volatile uint8_t *fusePage, volatile uint8_t *padctl)
 {
-    auto r = [](volatile uint8_t *b, uint32_t o) {
-        return *(volatile uint32_t *)(b + o);
+    auto r = [](const volatile uint8_t *b, uint32_t o) {
+        return *reinterpret_cast<const volatile uint32_t *>(b + o);
     };
-    auto w = [](volatile uint8_t *b, uint32_t o, uint32_t v) {
-        *(volatile uint32_t *)(b + o) = v;
+    const auto w = [](volatile uint8_t *b, uint32_t o, uint32_t v) {
+        *reinterpret_cast<volatile uint32_t *>(b + o) = v;
     };
-    auto waitBits = [&](volatile uint8_t *b, uint32_t o, uint32_t mask, uint32_t value, uint32_t us) {
+    const auto waitBits = [&](volatile uint8_t *b, uint32_t o, uint32_t mask, uint32_t value, uint32_t us) {
         for (uint32_t i = 0; i <= us; ++i) {
             if ((r(b, o) & mask) == value)
                 return true;
@@ -282,10 +284,10 @@ bool usb2PadInit(volatile uint8_t *car, volatile uint8_t *fusePage, volatile uin
         }
         return false;
     };
-    uint32_t pllu = r(car, PLLU_BASE);
+    const uint32_t pllu = r(car, PLLU_BASE);
     if (!(pllu & PLL_ENABLE) || !(pllu & PLL_LOCK)) {  // hekate clock_enable_pllu
         w(car, PLLU_MISC, r(car, PLLU_MISC) | (1u << 29));
-        uint32_t cfg = (pllu & 0xffe00000u) | (1u << 24) | (1u << 16) | (0x19u << 8) | 2;
+        const uint32_t cfg = (pllu & 0xffe00000u) | (1u << 24) | (1u << 16) | (0x19u << 8) | 2;
         w(car, PLLU_BASE, cfg);
         w(car, PLLU_BASE, cfg | PLL_ENABLE);
         if (!waitBits(car, PLLU_BASE, PLL_LOCK, PLL_LOCK, 1000))
@@ -305,19 +307,19 @@ bool usb2PadInit(volatile uint8_t *car, volatile uint8_t *fusePage, volatile uin
     IODelay(2);
 
     // Pad calibration from fuses; the fuse block needs its clock for reads.
-    bool fuseClock = r(car, CLK_OUT_ENB_H) & H_FUSE;
+    const bool fuseClock = (r(car, CLK_OUT_ENB_H) & H_FUSE) != 0u;
     if (!fuseClock) {
         w(car, CLK_ENB_H_SET, H_FUSE);
         IODelay(2);
     }
-    uint32_t calib = r(fusePage, kFuseOffset + FUSE_USB_CALIB);
-    uint32_t calibExt = r(fusePage, kFuseOffset + FUSE_USB_CALIB_EXT);
+    const uint32_t calib = r(fusePage, kFuseOffset + FUSE_USB_CALIB);
+    const uint32_t calibExt = r(fusePage, kFuseOffset + FUSE_USB_CALIB_EXT);
     if (!fuseClock)
         w(car, CLK_ENB_H_CLR, H_FUSE);
     w(padctl, OTG_PAD0_CTL_0, (r(padctl, OTG_PAD0_CTL_0) & 0xffffffc0u) | (calib & 0x3f));  // HS_CURR_LEVEL
     w(padctl, OTG_PAD0_CTL_1,
-      (r(padctl, OTG_PAD0_CTL_1) & 0x83ffff87u) |                       // TERM_RANGE_ADJ,
-          ((calib & 0x780) >> 4) | ((uint32_t)(calibExt << 27) >> 1));  // RPD_CTRL
+      (r(padctl, OTG_PAD0_CTL_1) & 0x83ffff87u) |             // TERM_RANGE_ADJ,
+          ((calib & 0x780) >> 4) | ((calibExt << 27) >> 1));  // RPD_CTRL
     w(padctl, BATTERY_CHRG_OTGPAD0_CTL1, (r(padctl, BATTERY_CHRG_OTGPAD0_CTL1) & 0xfffffe3fu) | 0x80);  // VREG_LEV 1
 
     w(padctl, OTG_PAD0_CTL_0, r(padctl, OTG_PAD0_CTL_0) & 0xdbffffffu);                        // PD, PD_ZI
@@ -360,7 +362,7 @@ bool Hardware::powerOn(char *why, size_t whySize)
         return false;
     }
     // EP0's ring in the control area; data endpoints get their own at their first initEndpoint.
-    rings[0].trb = (volatile uint32_t *)(control.va + kRingOffset);
+    rings[0].trb = reinterpret_cast<volatile uint32_t *>(control.va + kRingOffset);
     rings[0].pa = control.pa + kRingOffset;
     rings[0].trbs = kRingTrbs;
 
@@ -405,7 +407,7 @@ bool Hardware::powerOn(char *why, size_t whySize)
     IODelay(10);
     xw(FPCI_CFG_1, xr(FPCI_CFG_1) | 7);  // IO, memory, bus master
     IODelay(1);
-    xw(FPCI_CFG_4, (uint32_t)kXudcPA);
+    xw(FPCI_CFG_4, static_cast<uint32_t>(kXudcPA));
     xw(FPCI_CFG_5, 0);
     IODelay(100);
     xw(IPFS_INTR_MASK, xr(IPFS_INTR_MASK) | 1u << 16);
@@ -457,9 +459,9 @@ void Hardware::disconnect()
 
 bool Hardware::nextEvent(Event &event)
 {
-    volatile uint32_t *e = (volatile uint32_t *)events.va + eventIndex * 4;
+    volatile uint32_t *e = reinterpret_cast<volatile uint32_t *>(events.va) + static_cast<size_t>(eventIndex) * 4;
     cacheFlush(e, 16);
-    uint32_t d3 = e[3];
+    const uint32_t d3 = e[3];
     if ((d3 & TRB_CYCLE) != eventCycle)
         return false;
     event.d[0] = e[0];
@@ -474,9 +476,9 @@ bool Hardware::nextEvent(Event &event)
 }
 
 // The CPU never writes the event ring: cacheFlush's clean of a dirty line would overwrite events written since.
-bool Hardware::eventPending()
+bool Hardware::eventPending() const
 {
-    volatile uint32_t *e = (volatile uint32_t *)events.va + eventIndex * 4;
+    volatile uint32_t *e = reinterpret_cast<volatile uint32_t *>(events.va) + static_cast<size_t>(eventIndex) * 4;
     cacheFlush(e, 16);
     return (e[3] & TRB_CYCLE) == eventCycle;
 }
@@ -491,7 +493,7 @@ void Hardware::finishEvents()
 
 bool Hardware::interruptPending()
 {
-    return xr(ST) & ST_IP;
+    return (xr(ST) & ST_IP) != 0u;
 }
 
 void Hardware::describeInterrupt(char *buffer, size_t size)
@@ -519,7 +521,7 @@ void Hardware::clearPortChange(uint32_t change)
 // every endpoint unhalted, EP0 reloaded and unpaused. The device address goes back to 0 with the bus reset.
 void Hardware::resetEp0()
 {
-    Ring &ring = rings[0];
+    const Ring &ring = rings[0];
     volatile uint32_t *c = context(0);
     cacheFlush(c, 64);
     c[2] = ((ring.pa + ring.enqueue * 16) & ~0xfu) | ring.cycle;
@@ -529,7 +531,7 @@ void Hardware::resetEp0()
     c[1] = (c[1] & 0x0000ffffu) | 64u << 16;  // max packet 64 below SuperSpeed
     cacheFlush(c, 64);
     xw(CTRL, xr(CTRL) & ~(0x7fu << 24));
-    if (uint32_t halted = xr(EP_HALT)) {  // Linux ep_unhalt_all
+    if (const uint32_t halted = xr(EP_HALT)) {  // Linux ep_unhalt_all
         xw(EP_HALT, 0);
         if (waitBits(xudc, EP_STCHG, halted, halted, 1000))
             xw(EP_STCHG, halted);
@@ -545,7 +547,7 @@ PortChange Hardware::portChange()
 {
     PortChange change;
     for (unsigned pass = 0; pass < 8; ++pass) {
-        uint32_t halt = xr(PORTHALT);
+        const uint32_t halt = xr(PORTHALT);
         if ((halt & PORTHALT_STCHG_REQ) && (halt & PORTHALT_HALT_LTSSM))
             xw(PORTHALT, halt & ~PORTHALT_HALT_LTSSM);
 
@@ -598,9 +600,9 @@ PortChange Hardware::portChange()
     return change;
 }
 
-volatile uint32_t *Hardware::context(uint32_t dci)
+volatile uint32_t *Hardware::context(uint32_t dci) const
 {
-    return (volatile uint32_t *)(control.va + kContextOffset) + dci * 16;
+    return reinterpret_cast<volatile uint32_t *>(control.va + kContextOffset) + static_cast<size_t>(dci) * 16;
 }
 
 void Hardware::resetRing(uint32_t dci)
@@ -608,12 +610,12 @@ void Hardware::resetRing(uint32_t dci)
     Ring &ring = rings[dci];
     for (uint32_t i = 0; i < ring.trbs * 4; ++i)
         ring.trb[i] = 0;
-    volatile uint32_t *link = ring.trb + (ring.trbs - 1) * 4;
+    volatile uint32_t *link = ring.trb + static_cast<size_t>(ring.trbs - 1) * 4;
     link[0] = ring.pa;
     link[3] = trbType(TRB_LINK) | TRB_TOGGLE;
     ring.enqueue = 0;
     ring.cycle = 1;
-    cacheFlush(ring.trb, ring.trbs * 16);
+    cacheFlush(ring.trb, static_cast<size_t>(ring.trbs) * 16);
 }
 
 // hekate xusb_ep_ctx_t / Linux tegra_xudc_ep_context_setup: state running, CErr/CEC 3, dequeue = ring start with
@@ -626,17 +628,19 @@ bool Hardware::initEndpoint(uint32_t dci, uint32_t type, uint32_t maxPacket, uin
     if (dci && !ring.trb) {
         if (!ring.own.allocate(kDataRingTrbs * 16))
             return false;
-        ring.trb = (volatile uint32_t *)ring.own.va;
+        ring.trb = reinterpret_cast<volatile uint32_t *>(ring.own.va);
         ring.pa = ring.own.pa;
         ring.trbs = kDataRingTrbs;
     }
     resetRing(dci);
     volatile uint32_t *c = context(dci);
-    uint32_t address = dci == 0 ? (xr(CTRL) >> 24) & 0x7f : 0;
+    const uint32_t address = dci == 0 ? (xr(CTRL) >> 24) & 0x7f : 0;
     const bool interrupt = type == EP_INTR_IN || type == EP_INTR_OUT;
     const bool periodic = interrupt || type == EP_ISOCH_IN || type == EP_ISOCH_OUT;
-    uint32_t average = type == EP_CONTROL ? 8 : interrupt ? 1024 : 3072;
-    uint32_t esit = periodic ? maxPacket * (maxBurst + 1) : 0;
+    uint32_t average = interrupt ? 1024 : 3072;
+    if (type == EP_CONTROL)
+        average = 8;
+    const uint32_t esit = periodic ? maxPacket * (maxBurst + 1) : 0;
     for (uint32_t i = 0; i < 16; ++i)
         c[i] = 0;
     c[0] = 1 | interval << 16;
@@ -662,8 +666,9 @@ bool Hardware::reloadEndpoint(uint32_t dci)
 // Linux ep_pause/ep_halt pattern: change the bit, wait for EP_STCHG, ack it.
 void Hardware::toggleBit(uint32_t reg, uint32_t dci, bool set)
 {
-    uint32_t bit = 1u << dci, value = xr(reg);
-    if (!!(value & bit) == set)
+    const uint32_t bit = 1u << dci;
+    const uint32_t value = xr(reg);
+    if (((value & bit) != 0u) == set)
         return;
     xw(reg, set ? value | bit : value & ~bit);
     if (waitBits(xudc, EP_STCHG, bit, bit, 1000))
@@ -682,7 +687,7 @@ void Hardware::setPause(uint32_t dci, bool pause)
 
 bool Hardware::halted(uint32_t dci)
 {
-    return (xr(EP_HALT) >> dci) & 1;
+    return ((xr(EP_HALT) >> dci) & 1) != 0u;
 }
 
 void Hardware::disableEndpoint(uint32_t dci)
@@ -717,7 +722,7 @@ void Hardware::resetSequence(uint32_t dci)
 // clear partial-TD state, reload. The sequence number (data toggle) survives.
 void Hardware::dropQueued(uint32_t dci)
 {
-    Ring &ring = rings[dci];
+    const Ring &ring = rings[dci];
     toggleBit(EP_PAUSE, dci, true);
     (void)waitBits(xudc, EP_THREAD_ACTIVE, 1u << dci, 0, 1000);
     volatile uint32_t *c = context(dci);
@@ -743,14 +748,14 @@ uint32_t Hardware::pushData(uint32_t dci, uint64_t bufferPA, uint32_t length, ui
 {
     Ring &ring = rings[dci];
     const uint32_t index = ring.enqueue;
-    volatile uint32_t *t = ring.trb + index * 4;
-    t[0] = (uint32_t)bufferPA;
-    t[1] = (uint32_t)(bufferPA >> 32);
+    volatile uint32_t *t = ring.trb + static_cast<size_t>(index) * 4;
+    t[0] = static_cast<uint32_t>(bufferPA);
+    t[1] = static_cast<uint32_t>(bufferPA >> 32);
     t[2] = (length & 0x1ffff) | (tdSize > 31 ? 31 : tdSize) << 17;
     t[3] = flags | ring.cycle;
     cacheFlush(t, 16);
     if (++ring.enqueue == ring.trbs - 1) {
-        volatile uint32_t *link = ring.trb + ring.enqueue * 4;
+        volatile uint32_t *link = ring.trb + static_cast<size_t>(ring.enqueue) * 4;
         link[3] = linkControl(link[3], flags, ring.cycle);
         cacheFlush(link, 16);
         ring.enqueue = 0;
@@ -771,7 +776,7 @@ bool Hardware::trbIndex(uint32_t dci, uint32_t trbPA, uint32_t *index) const
 void Hardware::doorbell(uint32_t dci, uint16_t sequence)
 {
     barrier();
-    xw(DB, dci << 8 | (dci == 0 ? (uint32_t)sequence << 16 : 0));
+    xw(DB, dci << 8 | (dci == 0 ? static_cast<uint32_t>(sequence) << 16 : 0));
 }
 
 // SET_ADDRESS: CTRL.DEVADDR and EP0's context (Linux tegra_xudc_ep0_set_address), before the status stage.

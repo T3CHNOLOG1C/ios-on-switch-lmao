@@ -129,7 +129,8 @@ constexpr size_t kFwHeader = 256, kFwCodeTag = 8, kFwCodeSize = 12, kFwCreated =
 
 inline uint32_t le32(const uint8_t *p)
 {
-    return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
+    return static_cast<uint32_t>(p[0]) | static_cast<uint32_t>(p[1]) << 8 | static_cast<uint32_t>(p[2]) << 16 |
+           static_cast<uint32_t>(p[3]) << 24;
 }
 
 // The firmware image stays where the falcon reads it (ILOAD_BASE) for as long as the controller runs.
@@ -160,15 +161,16 @@ bool Controller::map()
 {
     if (isMapped)
         return true;
-    car = (volatile uint8_t *)ml_io_map(kCarPA, 0x1000);
-    pmcPage = (volatile uint8_t *)ml_io_map(kPmcPagePA, 0x1000);
-    fusePage = (volatile uint8_t *)ml_io_map(kFusePagePA, 0x1000);
-    mc = (volatile uint8_t *)ml_io_map(kMcPA, 0x1000);
-    padctl = (volatile uint8_t *)ml_io_map(kPadctlPA, 0x1000);
-    regs = (volatile uint8_t *)ml_io_map(kXhciPA, kXhciBytes);
-    fpci = (volatile uint8_t *)ml_io_map(kFpciPA, 0x1000);
-    ipfs = (volatile uint8_t *)ml_io_map(kIpfsPA, 0x1000);
-    isMapped = car && pmcPage && fusePage && mc && padctl && regs && fpci && ipfs;
+    car = reinterpret_cast<volatile uint8_t *>(ml_io_map(kCarPA, 0x1000));
+    pmcPage = reinterpret_cast<volatile uint8_t *>(ml_io_map(kPmcPagePA, 0x1000));
+    fusePage = reinterpret_cast<volatile uint8_t *>(ml_io_map(kFusePagePA, 0x1000));
+    mc = reinterpret_cast<volatile uint8_t *>(ml_io_map(kMcPA, 0x1000));
+    padctl = reinterpret_cast<volatile uint8_t *>(ml_io_map(kPadctlPA, 0x1000));
+    regs = reinterpret_cast<volatile uint8_t *>(ml_io_map(kXhciPA, kXhciBytes));
+    fpci = reinterpret_cast<volatile uint8_t *>(ml_io_map(kFpciPA, 0x1000));
+    ipfs = reinterpret_cast<volatile uint8_t *>(ml_io_map(kIpfsPA, 0x1000));
+    isMapped = (car != nullptr) && (pmcPage != nullptr) && (fusePage != nullptr) && (mc != nullptr) &&
+               (padctl != nullptr) && (regs != nullptr) && (fpci != nullptr) && (ipfs != nullptr);
     return isMapped;
 }
 
@@ -245,7 +247,7 @@ bool Controller::powerOn(char *why, size_t whySize)
 
     rmw(ipfs, IPFS_CONFIGURATION, 0, IPFS_EN_FPCI);
     IODelay(10);
-    rmw(fpci, XUSB_CFG_4, CFG_4_BASE_MASK, (uint32_t)kXhciPA & CFG_4_BASE_MASK);
+    rmw(fpci, XUSB_CFG_4, CFG_4_BASE_MASK, static_cast<uint32_t>(kXhciPA) & CFG_4_BASE_MASK);
     IODelay(100);
     rmw(fpci, XUSB_CFG_1, 0, CFG_1_ENABLES);
     rmw(ipfs, IPFS_INTR_MASK, 0, IPFS_IP_INT_MASK);
@@ -278,7 +280,7 @@ bool Controller::loadFirmware(const uint8_t *image, size_t size, char *why, size
 {
     if (csbRead(CSB_MP_ILOAD_BASE_LO) != 0)
         return true;
-    uint32_t length = size >= kFwHeader ? le32(image + kFwLength) : 0;
+    const uint32_t length = size >= kFwHeader ? le32(image + kFwLength) : 0;
     if (length < kFwHeader || length > size) {
         snprintf(why, whySize, "XUSB firmware header says %u bytes, the image has %zu", length, size);
         return false;
@@ -290,12 +292,14 @@ bool Controller::loadFirmware(const uint8_t *image, size_t size, char *why, size
     memcpy(gFirmware.va, image, length);
     gFirmware.va[kFwHsicPorts] = 0;  // header->num_hsic_port: no HSIC on this board
     xudc::cacheFlush(gFirmware.va, length);
-    uint32_t codeTag = le32(image + kFwCodeTag), codeSize = le32(image + kFwCodeSize);
-    uint32_t tagBlocks = (codeTag + IMEM_BLOCK - 1) / IMEM_BLOCK, sizeBlocks = (codeSize + IMEM_BLOCK - 1) / IMEM_BLOCK;
-    uint64_t base = (uint64_t)gFirmware.pa + kFwHeader;
+    const uint32_t codeTag = le32(image + kFwCodeTag);
+    const uint32_t codeSize = le32(image + kFwCodeSize);
+    const uint32_t tagBlocks = (codeTag + IMEM_BLOCK - 1) / IMEM_BLOCK;
+    const uint32_t sizeBlocks = (codeSize + IMEM_BLOCK - 1) / IMEM_BLOCK;
+    const uint64_t base = static_cast<uint64_t>(gFirmware.pa) + kFwHeader;
     csbWrite(CSB_MP_ILOAD_ATTR, length);
-    csbWrite(CSB_MP_ILOAD_BASE_HI, (uint32_t)(base >> 32));
-    csbWrite(CSB_MP_ILOAD_BASE_LO, (uint32_t)base);
+    csbWrite(CSB_MP_ILOAD_BASE_HI, static_cast<uint32_t>(base >> 32));
+    csbWrite(CSB_MP_ILOAD_BASE_LO, static_cast<uint32_t>(base));
     csbWrite(CSB_MP_APMAP, APMAP_BOOTPATH);
     csbWrite(CSB_MP_L2IMEMOP_TRIG, L2IMEMOP_INVALIDATE_ALL);
     csbWrite(CSB_MP_L2IMEMOP_SIZE, (tagBlocks & 0x3ff) << 8 | (sizeBlocks & 0xff) << 24);
@@ -305,7 +309,7 @@ bool Controller::loadFirmware(const uint8_t *image, size_t size, char *why, size
     csbWrite(FALC_DMACTL, 0);
     bool loaded = false;
     for (int i = 0; i < 200 && !loaded; ++i) {  // Linux: 10 ms in 50 us steps
-        loaded = csbRead(CSB_MP_L2IMEMOP_RESULT) & L2IMEMOP_RESULT_VLD;
+        loaded = ((csbRead(CSB_MP_L2IMEMOP_RESULT) & L2IMEMOP_RESULT_VLD) != 0u);
         if (!loaded)
             IODelay(50);
     }
@@ -342,7 +346,8 @@ void Controller::setHostRole(bool host)
         IODelay(1500);
     }
     w(padctl, XUSB_USB2_VBUS_ID, xusb_vbus_id_host(r(padctl, XUSB_USB2_VBUS_ID)));
-    const uint32_t ctl0 = r(padctl, XUSB_CHRG_OTGPAD0_CTL0), ctl1 = r(padctl, XUSB_CHRG_OTGPAD0_CTL1);
+    const uint32_t ctl0 = r(padctl, XUSB_CHRG_OTGPAD0_CTL0);
+    const uint32_t ctl1 = r(padctl, XUSB_CHRG_OTGPAD0_CTL1);
     const uint32_t ocMap = r(padctl, XUSB_USB2_OC_MAP);
     if (ctl0 != xusb_chrg_ctl0_host(ctl0) || ctl1 != xusb_chrg_ctl1_host(ctl1) || ocMap != xusb_oc_map_host(ocMap)) {
         w(padctl, XUSB_CHRG_OTGPAD0_CTL0, xusb_chrg_ctl0_host(ctl0));
@@ -355,9 +360,11 @@ void Controller::setHostRole(bool host)
 }
 
 namespace {
+// NOLINTNEXTLINE(misc-const-correctness): xhci_find_ports's reader signature
 uint32_t readCapability(void *context, uint32_t offset)
 {
-    return *reinterpret_cast<volatile uint32_t *>(static_cast<volatile uint8_t *>(context) + offset);
+    volatile uint8_t *const regs = *static_cast<volatile uint8_t *const *>(context);
+    return *reinterpret_cast<volatile uint32_t *>(regs + offset);
 }
 }  // namespace
 
@@ -366,7 +373,7 @@ unsigned Controller::otgPort()
     if (!isPowered)
         return 0;
     if (!usb2First) {
-        const xhci_port_range usb2 = xhci_find_ports(&readCapability, (void *)regs, (uint32_t)kXhciBytes, 2);
+        const xhci_port_range usb2 = xhci_find_ports(&readCapability, &regs, static_cast<uint32_t>(kXhciBytes), 2);
         usb2First = usb2.first;
         usb2Count = usb2.count;
     }
@@ -378,7 +385,7 @@ unsigned Controller::ssPort()
     if (!isPowered)
         return 0;
     if (!usb3Count) {
-        const xhci_port_range usb3 = xhci_find_ports(&readCapability, (void *)regs, (uint32_t)kXhciBytes, 3);
+        const xhci_port_range usb3 = xhci_find_ports(&readCapability, &regs, static_cast<uint32_t>(kXhciBytes), 3);
         usb3First = usb3.first;
         usb3Count = usb3.count;
     }
@@ -407,7 +414,8 @@ bool Controller::setPortPower(unsigned port, bool on, uint32_t trace[2])
 
 bool Controller::cyclePortPower(unsigned port, uint32_t trace[3])
 {
-    uint32_t offTrace[2], onTrace[2];
+    uint32_t offTrace[2];
+    uint32_t onTrace[2];
     const bool off = setPortPower(port, false, offTrace);
     const bool on = setPortPower(port, true, onTrace);
     trace[0] = offTrace[0];
@@ -441,22 +449,25 @@ void Controller::describePorts(char *buffer, size_t size)
         return;
     }
     const uint32_t op = capLength();
-    const unsigned ports = xhci(4) >> 24, pad = otgPort(), ss = ssPort();
-    const uint32_t padPortsc = pad ? portsc(pad) : 0, ssPortsc = ss ? portsc(ss) : 0;
+    const unsigned ports = xhci(4) >> 24;
+    const unsigned pad = otgPort();
+    const unsigned ss = ssPort();
+    const uint32_t padPortsc = pad ? portsc(pad) : 0;
+    const uint32_t ssPortsc = ss ? portsc(ss) : 0;
     int n = snprintf(buffer, size,
                      "xHCI USBCMD %#x USBSTS %#x, pad 0 = port %u (USB2 %u+%u): %s %s, SS port 0 = port %u (USB3 "
                      "%u+%u): %s %s; PORTSC",
                      xhci(op), xhci(op + 4), pad, usb2First, usb2Count, xhci_portsc_link_name(padPortsc),
                      xhci_portsc_speed_name(padPortsc), ss, usb3First, usb3Count, xhci_portsc_link_name(ssPortsc),
                      xhci_portsc_speed_name(ssPortsc));
-    for (unsigned port = 1; port <= ports && port <= 16 && n > 0 && (size_t)n < size; ++port) {
-        n += snprintf(buffer + n, size - (size_t)n, " %u:%#x", port, xhci(xhci_portsc_offset(op, port)));
+    for (unsigned port = 1; port <= ports && port <= 16 && n > 0 && static_cast<size_t>(n) < size; ++port) {
+        n += snprintf(buffer + n, size - static_cast<size_t>(n), " %u:%#x", port, xhci(xhci_portsc_offset(op, port)));
     }
 }
 
 bool Controller::takeMailboxInterrupt()
 {
-    uint32_t smi = r(fpci, XUSB_CFG_ARU_SMI_INTR);
+    const uint32_t smi = r(fpci, XUSB_CFG_ARU_SMI_INTR);
     if (!(smi & (SMI_INTR_EN | SMI_INTR_FW_HANG)))
         return false;
     w(fpci, XUSB_CFG_ARU_SMI_INTR, smi);
@@ -468,7 +479,7 @@ bool Controller::takeMailboxInterrupt()
 
 bool Controller::mailboxPending() const
 {
-    return r(fpci, XUSB_CFG_ARU_SMI_INTR) & (SMI_INTR_EN | SMI_INTR_FW_HANG);
+    return (r(fpci, XUSB_CFG_ARU_SMI_INTR) & (SMI_INTR_EN | SMI_INTR_FW_HANG)) != 0u;
 }
 
 // tegra_xusb_mbox_send: ACK/NAK go out while the firmware still owns the mailbox; anything else takes ownership first
@@ -502,7 +513,9 @@ bool Controller::serviceMailbox()
 {
     if (mailboxHang)
         return false;
-    uint32_t message = r(fpci, XUSB_CFG_ARU_MBOX_DATA_OUT), cmd = message >> 24, data = message & 0xffffff;
+    const uint32_t message = r(fpci, XUSB_CFG_ARU_MBOX_DATA_OUT);
+    const uint32_t cmd = message >> 24;
+    const uint32_t data = message & 0xffffff;
     rmw(fpci, XUSB_CFG_ARU_MBOX_CMD, MBOX_DEST_SMI, 0);
     if (cmd == MBOX_SET_BW || cmd == MBOX_ACK || cmd == MBOX_NAK) {
         w(fpci, XUSB_CFG_ARU_MBOX_OWNER, MBOX_OWNER_NONE);
@@ -518,7 +531,8 @@ bool Controller::serviceMailbox()
             IOLog("SwitchUSB: falcon mailbox reply %u to %u failed\n", ss.reply, cmd);
         return true;
     }
-    uint32_t reply = MBOX_ACK, replyData = data;
+    uint32_t reply = MBOX_ACK;
+    uint32_t replyData = data;
     switch (cmd) {
     case MBOX_INC_FALC_CLOCK:
     case MBOX_DEC_FALC_CLOCK:
@@ -546,24 +560,31 @@ bool Controller::serviceMailbox()
 // (SMI_INTR, owner), and whether powerOn found the partitions already on (a boot stage left them: reset not pulsed).
 void Controller::describe(char *buffer, size_t size) const
 {
-    const uint32_t op = capLength(), rt = runtimeOffset(), iman = xhci(rt + 0x20), cmd = xhci(op), sts = xhci(op + 4);
+    const uint32_t op = capLength();
+    const uint32_t rt = runtimeOffset();
+    const uint32_t iman = xhci(rt + 0x20);
+    const uint32_t cmd = xhci(op);
+    const uint32_t sts = xhci(op + 4);
     const unsigned port = usb2First;
     snprintf(
         buffer, size,
         "USBCMD %#x (INTE %u) USBSTS %#x (EINT %u) IMAN0 %#x (IP %u IE %u) ERDP0 %#x PORTSC%u %#x; FPCI CFG_1 %#x; "
         "IPFS CONFIGURATION %#x INTR_MASK %#x INTR_ENABLE %#x MSI_EN_VEC0 %#x; SMI %#x MBOX_OWNER %#x; "
         "partitions found on %#x",
-        cmd, !!(cmd & XHCI_USBCMD_INTE), sts, !!(sts & XHCI_USBSTS_EINT), iman, !!(iman & XHCI_IMAN_IP),
-        !!(iman & XHCI_IMAN_IE), xhci(rt + 0x38), port, port ? xhci(xhci_portsc_offset(op, port)) : 0,
-        r(fpci, XUSB_CFG_1), r(ipfs, IPFS_CONFIGURATION), r(ipfs, IPFS_INTR_MASK), r(ipfs, IPFS_INTR_ENABLE),
-        r(ipfs, IPFS_MSI_EN_VEC0), r(fpci, XUSB_CFG_ARU_SMI_INTR), r(fpci, XUSB_CFG_ARU_MBOX_OWNER), partitionsFound);
+        cmd, static_cast<unsigned>((cmd & XHCI_USBCMD_INTE) != 0u), sts,
+        static_cast<unsigned>((sts & XHCI_USBSTS_EINT) != 0u), iman, static_cast<unsigned>((iman & XHCI_IMAN_IP) != 0u),
+        static_cast<unsigned>((iman & XHCI_IMAN_IE) != 0u), xhci(rt + 0x38), port,
+        port ? xhci(xhci_portsc_offset(op, port)) : 0, r(fpci, XUSB_CFG_1), r(ipfs, IPFS_CONFIGURATION),
+        r(ipfs, IPFS_INTR_MASK), r(ipfs, IPFS_INTR_ENABLE), r(ipfs, IPFS_MSI_EN_VEC0), r(fpci, XUSB_CFG_ARU_SMI_INTR),
+        r(fpci, XUSB_CFG_ARU_MBOX_OWNER), partitionsFound);
 }
 
 bool Controller::interruptSample(uint32_t &iman, uint32_t &usbcmd, uint32_t &usbsts, uint32_t &erdp) const
 {
     if (!isPowered)
         return false;
-    const uint32_t op = capLength(), rt = runtimeOffset();
+    const uint32_t op = capLength();
+    const uint32_t rt = runtimeOffset();
     iman = xhci(rt + 0x20);
     usbcmd = xhci(op);
     usbsts = xhci(op + 4);
