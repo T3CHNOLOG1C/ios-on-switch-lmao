@@ -211,6 +211,15 @@ def _usb(tree: list) -> None:
             put(xhci, key, value)
 
 
+def _media_accel(tree: list) -> None:
+    """The keys iOS's media frameworks read before they pick a hardware path."""
+    # J120 has iommu-present (empty) on /arm-io. Its one reader in 21H461's dyld cache, VideoToolbox's
+    # FigCreateIOSurfacePropertiesDictionary, otherwise asks every IOSurface it makes (decoder and pixel-transfer pools)
+    # for the PurpleGfxMem carveout, which this tree does not have. The engines that touch those surfaces reach
+    # scattered pages through their own MMUs: VIC, NVJPG and the display through the MC SMMU, the GPU through its GMMU.
+    put(child(tree, 'arm-io'), 'iommu-present', b'')
+
+
 def _boot_slots(tree: list, chosen: list, overlay_dirs: Sequence[tuple[str, str]]) -> None:
     # Directories the kernel shows the Data overlay over: NUL-terminated "<directory>[:<boot-arg>]".
     if overlay_dirs:
@@ -274,6 +283,7 @@ def ipad_adt(
     put(chosen, 'chip-id', u32(0x8011))
     put(chosen, 'unique-chip-id', struct.pack('<Q', 0x001D5A0000000001))
     _usb(tree)
+    _media_accel(tree)
     _boot_slots(tree, chosen, overlay_dirs)
     if smp:
         four_cores(tree)
