@@ -722,8 +722,8 @@ TEST(GM20BSchedSource, EngineStatusReadsSkipTheSoftwareEngine)
 // privacy annotations: "%{public}s" prints "{public}s" and drops nvkm's report (the GR and MMU fault lines).
 TEST(GM20BShimSource, InterruptPassReportsUsePlainFormats)
 {
-	const std::string report =
-		flat(definition(SourceText("../shim/xnu_glue.cpp"), "static void nvxnu_report(const char *line)"));
+	const std::string report = flat(definition(SourceText("../shim/xnu_glue.cpp"),
+						   "static void nvxnu_report(const char *line)"));
 	EXPECT_THAT(report, HasSubstr("os_log_error(OS_LOG_DEFAULT, \"%s\", line)"));
 	EXPECT_THAT(report, Not(HasSubstr("%{")));
 }
@@ -736,5 +736,7 @@ TEST(GM20BChannelSource, SeqnoCursorsStartAtTheSlotsFence)
 	const std::string create = flat(definition(gpu(), "static int chan_new("));
 	EXPECT_THAT(create, HasSubstr("chan->submitted = READ_ONCE(*fence_cpu);"));
 	for (const char *cursor : {"stat_done", "woken_done", "gov_done", "progress_done"})
-		EXPECT_THAT(create, HasSubstr(std::string("chan->") + cursor + " = chan->submitted;")) << cursor;
+		EXPECT_THAT(create,
+			    HasSubstr(std::string("chan->") + cursor + " = chan->submitted;"))
+			<< cursor;
 }
