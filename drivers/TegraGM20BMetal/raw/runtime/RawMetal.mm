@@ -145,7 +145,7 @@ enum RMPred : uint8_t {
     PredPassAttLevel,   // slice, depth plane or resolve, or a level of a texture with no chain
     PredPassRTSize,     // a = renderTargetWidth << 16 | renderTargetHeight, b = attachment width << 16 | height
     PredPassDepthStencil,  // a = depth format, b = stencil format
-    PredPassOther,         // visibility buffer, layered target, rasterization rate map
+    PredPassOther,         // a = renderTargetArrayLength (layered), b = a rasterization rate map
     // states and calls
     PredStateForeign,
     PredStateNotPackable,  // a state whose functions are not of one framework's default.metallib (never looked up in the pack)
@@ -3165,11 +3165,12 @@ static bool rawDepthStencil(MTLRenderPassDescriptor *pass)
         }
     }
     // renderTargetWidth / renderTargetHeight: the render area's bounds (raw::PassDesc width, height)
-    if (pass.visibilityResultBuffer || (pass.renderTargetArrayLength > 1) || pass.rasterizationRateMap) {
-        [self retain:pass.visibilityResultBuffer];
-        [self takeReason:WhyPass why:@"a visibility attachment, layers or a rate map"];
-        hit(self, PredPassOther, pass.visibilityResultBuffer != nil,
-            pass.renderTargetArrayLength | uint64_t(pass.rasterizationRateMap != nil) << 32);
+    // A visibility result buffer is written only by draws under a counting mode (setVisibilityResultMode:offset:, refused there),
+    // as m2v copies results only where a query was taken (visibility.rs plan)
+    [self retain:pass.visibilityResultBuffer];
+    if (pass.renderTargetArrayLength > 1 || pass.rasterizationRateMap) {
+        [self takeReason:WhyPass why:@"layers or a rate map"];
+        hit(self, PredPassOther, pass.renderTargetArrayLength, pass.rasterizationRateMap != nil);
     }
     Cmd m = cmd(OpRender);
     m.obj = (__bridge void *)pass;

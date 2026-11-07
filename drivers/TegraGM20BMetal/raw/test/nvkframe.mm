@@ -507,10 +507,18 @@ int main(int argc, char **argv)
                         rp.depthAttachment.clearDepth = pass.clearDepth;
                         rp.stencilAttachment.clearStencil = pass.clearStencil;
                     }
+                    // FRAME_VISIBILITY: every pass carries a visibility result buffer (GL-on-Metal's passes) and every draw sets the
+                    // Disabled mode, so nothing counts into it
+                    static id<MTLBuffer> visibility =
+                        getenv("FRAME_VISIBILITY") ? [dev newBufferWithLength:4096 options:MTLResourceStorageModeShared]
+                                                   : nil;
+                    rp.visibilityResultBuffer = visibility;
                     id<MTLRenderCommandEncoder> e = [cb renderCommandEncoderWithDescriptor:rp];
                     bool bound[3][31] = {};
                     for (const frame::Draw &d : pass.draws) {
                         [e setRenderPipelineState:d.blur ? blur[d.state] : uber[d.state]];
+                        if (visibility)
+                            [e setVisibilityResultMode:MTLVisibilityResultModeDisabled offset:0];
                         for (const frame::Bytes &b : d.bytes) {
                             frame::fill(bytes, b, f, drawIndex);
                             if (shape.ring) {
