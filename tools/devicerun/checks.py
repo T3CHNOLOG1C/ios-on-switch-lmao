@@ -39,7 +39,7 @@ GROUPS: dict[str, list[Check]] = {
             'launchd.spawns',
             'r32-cpuhog',
             SPAWNED,
-            'rate >= 0',
+            REPORT,
             process=LAUNCHD,
             show=('job',),
             note='per label; pass --start/--end around 10 idle minutes',
