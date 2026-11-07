@@ -1,6 +1,9 @@
 # drivers/TegraGM20B on the host:
 #   gm20b_coherency_test     TegraGM20BCoherency.cpp: which IOSurface lock/unlock traps clean or invalidate an import,
-#                            across imports of one surface and their release, and traps racing a release
+#                            across imports of one surface and their release, and traps racing a release; each surface's
+#                            layout decision (TegraGM20BTiled.cpp) and its contents tiled in place
+#   gm20b_relayout_test      TegraGM20BRelayout.h's copy-engine pushes over a model of MAXWELL_DMA_COPY_A: every move
+#                            gives back exactly TegraGM20BLayout.h's bytes, for every texel size and NIL's shapes
 #   gm20b_wiring_test        TegraGM20BSharedWiring.cpp: one wiring per task and range, shared while the task still
 #                            maps it there, a racing publish, the last import's release
 #   gm20b_tlb_test           TegraGM20BTlb.h over a GMMU model (PTEs, the L2's copies, a TLB per space, running work
@@ -106,10 +109,16 @@ host_shims(
 
 host_library(
     name = "coherency",
-    srcs = ["//drivers/TegraGM20B:TegraGM20BCoherency.cpp"],
+    srcs = [
+        "//drivers/TegraGM20B:TegraGM20BCoherency.cpp",
+        "//drivers/TegraGM20B:TegraGM20BTiled.cpp",
+    ],
     hdrs = [
         "//drivers/TegraDisplayFlip:TegraScanoutCopy.h",
         "//drivers/TegraGM20B:TegraGM20BGpu.h",
+        "//drivers/TegraGM20B:TegraGM20BLayout.h",
+        "//drivers/TegraGM20B:TegraGM20BRelayout.h",
+        "//drivers/TegraGM20B:TegraGM20BTiled.h",
     ],
     deps = [":coherency_kernel"],
 )
@@ -121,6 +130,17 @@ host_test(
         ":coherency",
         ":coherency_kernel",
     ],
+)
+
+host_test(
+    name = "gm20b_relayout_test",
+    size = "medium",
+    srcs = [
+        "gm20b_relayout_test.cpp",
+        "//drivers/TegraGM20B:TegraGM20BLayout.h",
+        "//drivers/TegraGM20B:TegraGM20BRelayout.h",
+    ],
+    cxx_std = "c++17",
 )
 
 host_test(

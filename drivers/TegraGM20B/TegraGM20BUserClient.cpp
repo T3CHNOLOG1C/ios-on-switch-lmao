@@ -20,6 +20,7 @@
 #include <string.h>
 #include "TegraGM20BABI.h"
 #include "TegraGM20BGpu.h"
+#include "TegraGM20BLayout.h"
 #include "TegraGM20BPoolPolicy.h"
 #include "TegraGM20BPushScan.h"
 #include "TegraGM20BSharedWiring.h"
@@ -749,7 +750,6 @@ class AGXDeviceUserClient : public IOUserClient
 		uint64_t va, range;
 		Bo *bo;
 		uint64_t bo_offset;
-		bool tiled;  // counted in the surface's tiled binds (tgm_coherency_tiled_bind)
 	};
 
 	// A mapping method 12 (Map) made into the client's task: what IOKit's io_connect_map_memory_into_task keeps in the
@@ -822,6 +822,8 @@ class AGXDeviceUserClient : public IOUserClient
 	IOReturn getStatus(const TegraGM20BAbiChannel *in, TegraGM20BAbiStatus *out);
 	IOReturn mapToken(const TegraGM20BAbiMap *in, TegraGM20BAbiMapReply *out);
 	IOReturn order(const TegraGM20BAbiOrder *in, TegraGM20BAbiOrderReply *out);
+	IOReturn surfaceLayout(const TegraGM20BAbiSurfaceLayout *in,
+			       TegraGM20BAbiSurfaceLayoutReply *out);
 	IOReturn unmapToken(const TegraGM20BAbiUnmap *in);
 	void releaseMappings();
 
@@ -1448,8 +1450,6 @@ void AGXDeviceUserClient::unbindOverlaps(uint64_t va, uint64_t range, Bo *only)
 		Binding &b = binds_[i];
 		if (b.va < va + range && va < b.va + b.range && (!only || b.bo == only)) {
 			tgm_vm_unmap(vm_, b.va, b.range);
-			if (b.tiled)
-				tgm_coherency_tiled_bind(b.bo->coh, -1);
 			binds_[i] = binds_[--nbinds_];
 		} else {
 			i++;
@@ -1496,13 +1496,27 @@ IOReturn AGXDeviceUserClient::vmBind(const TegraGM20BAbiVmBind *in, uint32_t cou
 						    static_cast<uint8_t>(op.kind), bo->readOnly));
 		if (ret)
 			return ret;
-		const bool tiled = bo->coh && !op.bo_offset && op.range >= bo->bytes &&
-				   op.kind == TEGRA_SCANOUT_TILED_KIND;
-		binds_[nbinds_++] = {op.va, op.range, bo, op.bo_offset, tiled};
-		if (tiled)
-			tgm_coherency_tiled_bind(bo->coh, 1);
+		binds_[nbinds_++] = {op.va, op.range, bo, op.bo_offset};
 		tgm_stats_bind(1, op.range >> 12, nowNs() - start);
 	}
+	return kIOReturnSuccess;
+}
+
+// The decision may tile the surface on the copy engine and sleep on its fence; the connection's lock is held meanwhile,
+// as for a BoImport's wiring.
+IOReturn AGXDeviceUserClient::surfaceLayout(const TegraGM20BAbiSurfaceLayout *in,
+					    TegraGM20BAbiSurfaceLayoutReply *out)
+{
+	const Bo *bo = findBo(in->handle);
+	if (!bo || !bo->wired || !bo->coh)
+		return kIOReturnBadArgument;
+	const int layout =
+		tgm_coherency_layout(bo->coh, in->width, in->height, in->bpp, in->bytes_per_row,
+				     in->flags & TegraGM20BLayoutWrites);
+	out->layout = layout > 0   ? TegraGM20BLayoutTiled
+		      : layout < 0 ? TegraGM20BLayoutOtherShape
+				   : 0;
+	out->reserved = 0;
 	return kIOReturnSuccess;
 }
 
@@ -1921,7 +1935,7 @@ IOReturn AGXDeviceUserClient::getInfo(TegraGM20BAbiInfo *out)
 	bzero(out, sizeof(*out));
 	out->abi_version = TegraGM20BAbiVersion;
 	out->flags = TegraGM20BInfoHostImport | TegraGM20BInfoKernelMap | TegraGM20BInfoOrder |
-		     TegraGM20BInfoSurfaceWrites;
+		     TegraGM20BInfoSurfaceWrites | TegraGM20BInfoSurfaceLayout;
 	out->chipset = info.chipset;
 	out->device_id = 0;
 	out->gpc_count = info.gpc_count;
@@ -2021,6 +2035,10 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 	case TegraGM20BMethodSurfaceWrites:
 		wantIn = sizeof(TegraGM20BAbiSurfaceWrites);
 		break;
+	case TegraGM20BMethodSurfaceLayout:
+		wantIn = sizeof(TegraGM20BAbiSurfaceLayout);
+		wantOut = sizeof(TegraGM20BAbiSurfaceLayoutReply);
+		break;
 	default:
 		return kIOReturnUnsupported;
 	}
@@ -2037,6 +2055,12 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 		break;
 	case TegraGM20BMethodSurfaceWrites:
 		if (!reservedZero(static_cast<const TegraGM20BAbiSurfaceWrites *>(in)->reserved))
+			return kIOReturnBadArgument;
+		break;
+	case TegraGM20BMethodSurfaceLayout:
+		if (!reservedZero(static_cast<const TegraGM20BAbiSurfaceLayout *>(in)->reserved) ||
+		    (static_cast<const TegraGM20BAbiSurfaceLayout *>(in)->flags &
+		     ~uint32_t(TegraGM20BLayoutWrites)))
 			return kIOReturnBadArgument;
 		break;
 	case TegraGM20BMethodVmBind:
@@ -2122,6 +2146,10 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 		tgm_coherency_gpu_writes(
 			static_cast<const TegraGM20BAbiSurfaceWrites *>(in)->surface_id);
 		ret = kIOReturnSuccess;
+		break;
+	case TegraGM20BMethodSurfaceLayout:
+		ret = surfaceLayout(static_cast<const TegraGM20BAbiSurfaceLayout *>(in),
+				    static_cast<TegraGM20BAbiSurfaceLayoutReply *>(out));
 		break;
 	default:
 		ret = kIOReturnUnsupported;
@@ -2279,7 +2307,7 @@ struct PresentTarget {
 struct PresentSurface {
 	IOMemoryDescriptor *memory;
 	uint64_t bytes, used;
-	uint32_t npages;
+	uint32_t npages, kind;
 	uint64_t *pas;
 	tgm_mem *mem;
 };
@@ -2346,13 +2374,16 @@ uint64_t presentTarget(uint64_t pa, uint64_t bytes)
 	return kPresentTarget + slot * kPresentTargetSpan;
 }
 
-// The GPU address of the surface, imported on first use (or again after it fell out of the four); *pa its first page.
-uint64_t presentSurface(IOMemoryDescriptor *memory, uint64_t bytes, uint64_t *pa)
+// The GPU address of the surface, imported on first use (or again after it fell out of the four, or became block-linear);
+// *pa its first page. A block-linear surface is mapped with TGM_LAYOUT_KIND, the kind its texels are written under.
+uint64_t presentSurface(IOMemoryDescriptor *memory, uint64_t bytes, bool blockLinear, uint64_t *pa)
 {
 	bytes = (bytes + 0xfff) & ~0xfffULL;
+	const uint32_t kind = blockLinear ? TGM_LAYOUT_KIND : 0;
 	unsigned slot = 0;
 	for (unsigned i = 0; i < 4; i++) {
-		if (gSurfaces[i].memory == memory && gSurfaces[i].bytes >= bytes) {
+		if (gSurfaces[i].memory == memory && gSurfaces[i].bytes >= bytes &&
+		    gSurfaces[i].kind == kind) {
 			gSurfaces[i].used = ++gSurfaceUses;
 			*pa = gSurfaces[i].pas[0];
 			return kPresentSurface + i * kPresentSurfaceSpan;
@@ -2371,6 +2402,7 @@ uint64_t presentSurface(IOMemoryDescriptor *memory, uint64_t bytes, uint64_t *pa
 	memory->retain();
 	s.memory = memory;
 	s.bytes = bytes;
+	s.kind = kind;
 	tgm_vm *vm = nullptr;
 	if (memory->prepare(kIODirectionOut) != kIOReturnSuccess) {
 		memory->release();
@@ -2380,7 +2412,8 @@ uint64_t presentSurface(IOMemoryDescriptor *memory, uint64_t bytes, uint64_t *pa
 	}
 	if (collectPages(memory, bytes, s.pas) || tgm_present_open(&vm) ||
 	    tgm_mem_new(vm, s.pas, s.npages, &s.mem) ||
-	    tgm_present_map(kPresentSurface + slot * kPresentSurfaceSpan, s.mem, bytes, 0)) {
+	    tgm_present_map(kPresentSurface + slot * kPresentSurfaceSpan, s.mem, bytes,
+			    uint8_t(kind))) {
 		tgm_mem_del(&s.mem);
 		memory->complete();
 		memory->release();
@@ -2432,8 +2465,9 @@ extern "C" int tegra_gm20b_scanout_copy(const struct TegraScanoutCopy *copy)
 	uint64_t sourcePa = 0;
 	// fence only: no target; the source is still imported (its first page names the channels that write it)
 	const uint64_t target = fenceOnly ? 0 : presentTarget(copy->target, copy->targetBytes);
-	const uint64_t source =
-		target || fenceOnly ? presentSurface(memory, copy->sourceBytes, &sourcePa) : 0;
+	const uint64_t source = target || fenceOnly ? presentSurface(memory, copy->sourceBytes,
+								     sourceBlock, &sourcePa)
+						    : 0;
 	int ret = (target || fenceOnly) && source
 			  ? tgm_present_copy(source, sourcePa, copy->sourceStride, sourceBlock,
 					     copy->width, copy->height, target, copy->targetPitch,

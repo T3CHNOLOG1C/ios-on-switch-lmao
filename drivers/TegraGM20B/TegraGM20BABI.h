@@ -31,6 +31,7 @@ enum {
 	TegraGM20BMethodUnmap = 13,         /* with TegraGM20BInfoKernelMap */
 	TegraGM20BMethodOrder = 14,         /* with TegraGM20BInfoOrder */
 	TegraGM20BMethodSurfaceWrites = 15, /* with TegraGM20BInfoSurfaceWrites */
+	TegraGM20BMethodSurfaceLayout = 16, /* with TegraGM20BInfoSurfaceLayout */
 
 	TegraGM20BMaxBindOps = 100,
 	TegraGM20BMaxPushes = 255,
@@ -45,6 +46,7 @@ enum {
 	TegraGM20BInfoOrder = 1u << 4,      /* Order (method 14) is implemented */
 	TegraGM20BInfoSurfaceWrites = 1u
 		<< 5, /* BoImport takes TegraGM20BImportGpuReads; method 15 is implemented */
+	TegraGM20BInfoSurfaceLayout = 1u << 6, /* method 16 is implemented */
 };
 
 /* Method 1, output only. Everything NVK's struct nv_device_info needs that the client cannot derive. */
@@ -119,6 +121,35 @@ struct TegraGM20BAbiBoImport {
  * that renders, blits or stores into it is made. */
 struct TegraGM20BAbiSurfaceWrites {
 	uint32_t surface_id;
+	uint32_t reserved;
+};
+
+/* Method 16. The layout of the IOSurface whose import `handle` is (its BoImport named the surface), decided once for every
+ * process at its first GPU import that asks, by the shared rule (TegraGM20BLayout.h): block-linear when that importer will
+ * write it (TegraGM20BLayoutWrites: a render target, a store, a blit destination), its texels are width x height of bpp
+ * bytes from the surface's first byte in rows bytes_per_row apart, the shape tiles, and no other import of it exists;
+ * pitch otherwise, for good. A surface becoming block-linear has what it holds tiled before the reply. A later call (any
+ * process, any flags) answers the decision. Block-linear surfaces are bound with TGM_LAYOUT_KIND and read as
+ * TegraGM20BLayout.h lays them out by the GPU and the display; a CPU lock sees their texels as rows bytes_per_row apart.
+ * Reply: TegraGM20BLayoutTiled at the asked shape; 0 pitch; TegraGM20BLayoutOtherShape tiled at another shape. */
+enum {
+	TegraGM20BLayoutWrites = 1u << 0,
+};
+
+enum {
+	TegraGM20BLayoutTiled = 1,
+	TegraGM20BLayoutOtherShape = 2,
+};
+
+struct TegraGM20BAbiSurfaceLayout {
+	uint64_t handle;
+	uint32_t width, height, bpp, bytes_per_row;
+	uint32_t flags; /* TegraGM20BLayout* */
+	uint32_t reserved;
+};
+
+struct TegraGM20BAbiSurfaceLayoutReply {
+	uint32_t layout; /* 0, TegraGM20BLayoutTiled or TegraGM20BLayoutOtherShape */
 	uint32_t reserved;
 };
 
@@ -310,6 +341,8 @@ TEGRA_GM20B_ASSERT(TegraGM20BAbiBoAlloc, 16);
 TEGRA_GM20B_ASSERT(TegraGM20BAbiBoAllocReply, 16);
 TEGRA_GM20B_ASSERT(TegraGM20BAbiBoImport, 24);
 TEGRA_GM20B_ASSERT(TegraGM20BAbiSurfaceWrites, 8);
+TEGRA_GM20B_ASSERT(TegraGM20BAbiSurfaceLayout, 32);
+TEGRA_GM20B_ASSERT(TegraGM20BAbiSurfaceLayoutReply, 8);
 TEGRA_GM20B_ASSERT(TegraGM20BAbiBoFree, 8);
 TEGRA_GM20B_ASSERT(TegraGM20BAbiBindOp, 40);
 TEGRA_GM20B_ASSERT(TegraGM20BAbiVmBind, 4008);

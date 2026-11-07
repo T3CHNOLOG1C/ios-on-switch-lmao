@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MIT
 // TegraGM20BCoherency.cpp on the host: which IOSurface lock/unlock traps clean or invalidate an import, with how many
 // pages, across imports of the same surface and their release.
+#include <algorithm>
 #include <atomic>
+#include <cstring>
 #include <cstdio>
 #include <map>
 #include <set>
@@ -9,6 +11,9 @@
 #include <vector>
 #include <gtest/gtest.h>
 #include "drivers/TegraGM20B/TegraGM20BGpu.h"
+#include "drivers/TegraGM20B/TegraGM20BLayout.h"
+#include "drivers/TegraGM20B/TegraGM20BRelayout.h"
+#include "drivers/TegraGM20B/TegraGM20BTiled.h"
 #include "drivers/TegraDisplayFlip/TegraScanoutCopy.h"
 
 std::vector<std::vector<uint64_t>> &cleanCalls()
@@ -66,6 +71,81 @@ extern "C" int tgm_writers_all_done(void)
 	return gGpu.allDone;
 }
 
+// Physical memory as the moves see it: each page by its address
+static std::map<uint64_t, std::vector<uint8_t>> gPages;
+
+static std::vector<uint8_t> gather(const tgm_relayout_pages &p)
+{
+	std::vector<uint8_t> out;
+	for (uint32_t i = 0; i < p.npages; i++) {
+		auto &page = gPages[p.pas[i]];
+		page.resize(4096);
+		out.insert(out.end(), page.begin(), page.end());
+	}
+	return out;
+}
+
+static void scatter(const tgm_relayout_pages &p, const std::vector<uint8_t> &bytes)
+{
+	for (uint32_t i = 0; i < p.npages; i++)
+		gPages[p.pas[i]].assign(bytes.begin() + i * 4096, bytes.begin() + (i + 1) * 4096);
+}
+
+// The moves as the copy engine makes them (gm20b_relayout_test proves the pushes give these bytes), recorded
+struct Move {
+	int op;
+	std::vector<tgm_relayout_writer> writers;
+};
+
+static std::vector<Move> gMoves;
+static bool gMoveFails;
+
+extern "C" int tgm_relayout_init(void)
+{
+	return 0;
+}
+
+extern "C" int tgm_relayout(const struct tgm_relayout_pages *surface,
+			    const struct tgm_relayout_pages *rows, const struct tgm_layout *l,
+			    uint32_t bytes_per_row, int op,
+			    const struct tgm_relayout_writer *writers, uint32_t nwriters)
+{
+	gMoves.push_back({op, std::vector<tgm_relayout_writer>(writers, writers + nwriters)});
+	if (gMoveFails)
+		return -5;
+	std::vector<uint8_t> s = gather(*surface), r = gather(*rows);
+	if (op == TGM_RELAYOUT_TILE_IN_PLACE)
+		r.assign(s.begin(), s.begin() + r.size());
+	if (op == TGM_RELAYOUT_TO_ROWS || op == TGM_RELAYOUT_UNTILE_IN_PLACE)
+		tgm_layout_read(l, s.data(), 0, 0, l->width, l->height, r.data(), bytes_per_row);
+	else
+		tgm_layout_write(l, s.data(), 0, 0, l->width, l->height, r.data(), bytes_per_row);
+	if (op == TGM_RELAYOUT_UNTILE_IN_PLACE)
+		std::copy(r.begin(), r.end(), s.begin());
+	scatter(*surface, s);
+	scatter(*rows, r);
+	return 0;
+}
+
+struct tgm_scratch {
+	std::vector<uint64_t> pas;
+};
+
+extern "C" struct tgm_scratch *tgm_scratch_get(uint64_t bytes, struct tgm_relayout_pages *pages)
+{
+	static uint64_t next = 0x200000000ull;
+	auto *s = new tgm_scratch;
+	for (uint64_t at = 0; at < bytes; at += 4096, next += 4096)
+		s->pas.push_back(next);
+	*pages = {s->pas.data(), uint32_t(s->pas.size())};
+	return s;
+}
+
+extern "C" void tgm_scratch_put(struct tgm_scratch *s)
+{
+	delete s;
+}
+
 extern "C" void tgm_writers_wait_all(void)
 {
 	gGpu.waitAll++;
@@ -107,6 +187,8 @@ protected:
 		ASSERT_EQ(tgm_coherency_init(), 0);
 		cleanCalls().clear();
 		gGpu = FakeGpu{};
+		gMoves.clear();
+		gMoveFails = false;
 	}
 };
 
@@ -258,19 +340,131 @@ TEST_F(Coherency, OnlyALiveImportOfTheSameSurfaceCoversAnother)
 	tgm_coherency_put(again);
 }
 
-TEST_F(Coherency, TiledWhileAnyTiledBindLives)
+// A 64x64 BGRA8 surface (16 KiB of texels, rows 256 + 64 bytes apart: 20 KiB) over 5 pages
+constexpr uint32_t kW = 64, kH = 64, kBpp = 4, kRow = 320;
+
+TEST_F(Coherency, FirstWritingImportAloneTilesWhatTheSurfaceHolds)
 {
-	const auto p = pages(0x85000000, 2);
-	tgm_coh *c = add(p[0], 31, p.data(), 2, 1);
+	const auto p = pages(0x85000000, 5);
+	tgm_coh *c = add(p[0], 31, p.data(), 5, 1);
+	const tgm_relayout_pages surface = {p.data(), 5};
+	std::vector<uint8_t> held(5 * 4096);
+	for (size_t i = 0; i < held.size(); i++)
+		held[i] = uint8_t(i * 7 + 3);
+	scatter(surface, held);
 	EXPECT_FALSE(tegra_gm20b_surface_tiled(p[0]));
-	tgm_coherency_tiled_bind(c, 1);
-	tgm_coherency_tiled_bind(c, 1);
-	tgm_coherency_tiled_bind(c, -1);
+	EXPECT_EQ(tgm_coherency_layout(c, kW, kH, kBpp, kRow, 1), 1);
 	EXPECT_TRUE(tegra_gm20b_surface_tiled(p[0]));
-	tgm_coherency_tiled_bind(c, -1);
-	EXPECT_FALSE(tegra_gm20b_surface_tiled(p[0]));
+	ASSERT_EQ(gMoves.size(), 1u);
+	EXPECT_EQ(gMoves[0].op, TGM_RELAYOUT_TILE_IN_PLACE);
+	tgm_layout l;
+	ASSERT_TRUE(tgm_layout_tiled(kW, kH, kBpp, &l));
+	const std::vector<uint8_t> now = gather(surface);
+	std::vector<uint8_t> rows(kRow * kH);
+	tgm_layout_read(&l, now.data(), 0, 0, kW, kH, rows.data(), kRow);
+	for (uint32_t y = 0; y < kH; y++)
+		ASSERT_EQ(0, memcmp(&rows[y * kRow], &held[y * kRow], kW * kBpp)) << y;
+	// decided: every later caller, writing or not, at any shape, gets the decision and nothing moves again
+	EXPECT_EQ(tgm_coherency_layout(c, kW, kH, kBpp, kRow, 0), 1);
+	EXPECT_EQ(tgm_coherency_layout(c, kW, kH / 2, kBpp, kRow, 1), -1);
+	EXPECT_EQ(gMoves.size(), 1u);
 	tgm_coherency_put(c);
 	EXPECT_FALSE(tegra_gm20b_surface_tiled(p[0]));
+}
+
+TEST_F(Coherency, TheLastImportGivesTheSurfaceItsRowsBack)
+{
+	const auto p = pages(0x85200000, 5);
+	const tgm_relayout_pages surface = {p.data(), 5};
+	std::vector<uint8_t> held(5 * 4096);
+	for (size_t i = 0; i < held.size(); i++)
+		held[i] = uint8_t(i * 13 + 1);
+	scatter(surface, held);
+	tgm_coh *first = add(p[0], 33, p.data(), 5, 1);
+	ASSERT_EQ(tgm_coherency_layout(first, kW, kH, kBpp, kRow, 1), 1);
+	tgm_coh *second = add(p[0], 33, p.data(), 5, 1);
+	tgm_coherency_put(first);
+	EXPECT_TRUE(tegra_gm20b_surface_tiled(p[0]));
+	EXPECT_EQ(gMoves.size(), 1u);
+	tgm_coherency_put(second);
+	ASSERT_EQ(gMoves.size(), 2u);
+	EXPECT_EQ(gMoves[1].op, TGM_RELAYOUT_UNTILE_IN_PLACE);
+	EXPECT_FALSE(tegra_gm20b_surface_tiled(p[0]));
+	const std::vector<uint8_t> now = gather(surface);
+	for (uint32_t y = 0; y < kH; y++)
+		ASSERT_EQ(0, memcmp(&now[y * kRow], &held[y * kRow], kW * kBpp)) << y;
+	// a new GPU import decides afresh over the rows
+	tgm_coh *again = add(p[0], 33, p.data(), 5, 1);
+	EXPECT_EQ(tgm_coherency_layout(again, kW, kH, kBpp, kRow, 1), 1);
+	EXPECT_EQ(gMoves.back().op, TGM_RELAYOUT_TILE_IN_PLACE);
+	tgm_coherency_put(again);
+}
+
+TEST_F(Coherency, TilingFollowsTheSurfacesWritersOnTheGpu)
+{
+	const auto p = pages(0x85100000, 5);
+	tgm_coh *c = add(p[0], 32, p.data(), 5, 1);
+	gGpu.completed[5] = 10;
+	tgm_coherency_wrote(c, 0, 5, 12);
+	tgm_coherency_wrote(c, 0, kDone, 1);
+	ASSERT_EQ(tgm_coherency_layout(c, kW, kH, kBpp, kRow, 1), 1);
+	ASSERT_EQ(gMoves.size(), 1u);
+	ASSERT_EQ(gMoves[0].writers.size(), 1u);
+	EXPECT_EQ(gMoves[0].writers[0].uid, 5u);
+	EXPECT_EQ(gMoves[0].writers[0].seqno, 12u);
+	EXPECT_TRUE(gGpu.waits.empty());  // ordered on the GPU, no CPU wait
+	tgm_coherency_put(c);
+}
+
+TEST_F(Coherency, PitchForGoodUnlessTheFirstAskerWritesItAlone)
+{
+	const auto a = pages(0x86000000, 5), b = pages(0x86100000, 5), d = pages(0x86200000, 5),
+		   e = pages(0x86300000, 5);
+	tgm_coh *sampled = add(a[0], 41, a.data(), 5, 1);
+	EXPECT_EQ(tgm_coherency_layout(sampled, kW, kH, kBpp, kRow, 0), 0);
+	EXPECT_EQ(tgm_coherency_layout(sampled, kW, kH, kBpp, kRow, 1), 0);
+	tgm_coh *first = add(b[0], 42, b.data(), 5, 1), *second = add(b[0], 42, b.data(), 5, 1);
+	EXPECT_EQ(first, second);
+	EXPECT_EQ(tgm_coherency_layout(first, kW, kH, kBpp, kRow, 1), 0);
+	tgm_coh *odd = add(d[0], 43, d.data(), 5, 1);
+	EXPECT_EQ(tgm_coherency_layout(odd, kW, kH, 3, kRow, 1), 0);
+	tgm_coh *small = add(e[0], 44, e.data(), 1, 1);
+	EXPECT_EQ(tgm_coherency_layout(small, kW, kH, kBpp, kRow, 1), 0);
+	EXPECT_TRUE(gMoves.empty());
+	for (const auto &p : {a, b, d, e})
+		EXPECT_FALSE(tegra_gm20b_surface_tiled(p[0]));
+	for (tgm_coh *c : {sampled, first, second, odd, small})
+		tgm_coherency_put(c);
+}
+
+TEST_F(Coherency, AFailedTilingMoveLeavesItPitch)
+{
+	const auto p = pages(0x87000000, 5);
+	tgm_coh *c = add(p[0], 51, p.data(), 5, 1);
+	gMoveFails = true;
+	EXPECT_EQ(tgm_coherency_layout(c, kW, kH, kBpp, kRow, 1), 0);
+	gMoveFails = false;
+	EXPECT_FALSE(tegra_gm20b_surface_tiled(p[0]));
+	EXPECT_EQ(tgm_coherency_layout(c, kW, kH, kBpp, kRow, 1), 0);
+	EXPECT_EQ(gMoves.size(), 1u);
+	tgm_coherency_put(c);
+}
+
+TEST_F(Coherency, ConcurrentAskersGetOneDecision)
+{
+	const auto p = pages(0x88000000, 5);
+	tgm_coh *c = add(p[0], 61, p.data(), 5, 1);
+	std::atomic<int> tiled{0};
+	std::vector<std::thread> askers;
+	for (int i = 0; i < 4; i++)
+		askers.emplace_back([&] {
+			tiled += tgm_coherency_layout(c, kW, kH, kBpp, kRow, 1);
+		});
+	for (auto &t : askers)
+		t.join();
+	EXPECT_EQ(tiled.load(), 4);
+	EXPECT_EQ(gMoves.size(), 1u);
+	tgm_coherency_put(c);
 }
 
 TEST_F(Coherency, TrapsRaceReleaseWithoutUseAfterFree)

@@ -3532,6 +3532,23 @@ void tgm_writer_wait(uint32_t uid, uint32_t seqno)
 	}
 }
 
+int tgm_writer_fence_va(struct tgm_vm *vm, uint32_t uid, uint64_t *va)
+{
+	struct tgm_chan *chan;
+	uintptr_t off;
+	int ret = -ENOENT;
+
+	mutex_lock(&live_lock);
+	chan = live_by_uid(uid);
+	off = chan ? (uintptr_t)chan->fence_cpu - (uintptr_t)fences.va : TGM_FENCE_BYTES;
+	if (chan && !chan->error && vm->fences_va && fences.va && off < TGM_FENCE_BYTES) {
+		*va = vm->fences_va + off;
+		ret = 0;
+	}
+	mutex_unlock(&live_lock);
+	return ret;
+}
+
 int tgm_writers_all_done(void)
 {
 	struct tgm_chan *chan;

@@ -242,9 +242,34 @@ int tgm_writer_done(uint32_t uid, uint32_t seqno);
 void tgm_writer_wait(uint32_t uid, uint32_t seqno);
 int tgm_writers_all_done(void);
 void tgm_writers_wait_all(void);
-/* A GPU client made (add 1) or removed (add -1) a bind of the whole surface holding `c` with TEGRA_SCANOUT_TILED_KIND:
- * the surface is tiled while any such bind lives, whatever other binds of it say (tegra_gm20b_surface_tiled). */
-void tgm_coherency_tiled_bind(struct tgm_coh *c, int add);
+/* SurfaceLayout (method 16) for the import holding `c`: the surface's layout, decided at the first call with `writes` while
+ * `c` is its only import (the surface's contents tiled before it says so); 1 block-linear at this shape, 0 pitch, -1
+ * block-linear at another shape. Sleeps on the copy engine's fence interrupt while it tiles. */
+int tgm_coherency_layout(struct tgm_coh *c, uint32_t width, uint32_t height, uint32_t bpp,
+			 uint32_t bytes_per_row, int writes);
+
+/* TegraGM20BRelayout.cpp: one copy-engine move of a block-linear surface (TegraGM20BRelayout.h), behind its GPU writers
+ * (a semaphore acquire on each that is still alive), returning once the bytes are in DRAM (sleeping on the fence
+ * interrupt). 0 or -errno. Serialised; init once before. */
+struct tgm_layout;
+
+struct tgm_relayout_pages {
+	const uint64_t *pas; /* one per 4 KiB page */
+	uint32_t npages;
+};
+
+struct tgm_relayout_writer {
+	uint32_t uid, seqno;
+};
+
+int tgm_relayout_init(void);
+int tgm_relayout(const struct tgm_relayout_pages *surface, const struct tgm_relayout_pages *rows,
+		 const struct tgm_layout *layout, uint32_t bytes_per_row,
+		 int op /* TGM_RELAYOUT_* */, const struct tgm_relayout_writer *writers,
+		 uint32_t nwriters);
+/* The GPU address in `vm` (one that maps every connection's fence page, as every tgm_vm_new space does) of channel uid's
+ * fence seqno; -ENOENT when it is gone or killed (its work is complete or abandoned). */
+int tgm_writer_fence_va(struct tgm_vm *vm, uint32_t uid, uint64_t *va);
 
 /* The stats (every periodic tegra-gm20b line, the submissions' GPU stamps, the push scan and profile): debug kernels
  * only; a release kernel has none of their code or strings. */
