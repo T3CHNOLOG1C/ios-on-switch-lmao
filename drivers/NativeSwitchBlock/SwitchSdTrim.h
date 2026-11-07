@@ -50,7 +50,7 @@ inline bool switchSdTrimTest(const SwitchSdTrimMap *m, uint64_t au)
 inline void switchSdTrimSet(SwitchSdTrimMap *m, uint64_t au, bool on)
 {
     const uint64_t bit = 1ULL << (au % 64);
-    if (on == !((m->bits[au / 64] & bit) == 0u))
+    if (on == ((m->bits[au / 64] & bit) != 0u))
         return;
     m->bits[au / 64] ^= bit;
     m->pending += on ? 1 : -1;
