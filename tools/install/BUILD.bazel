@@ -29,6 +29,7 @@ py_library(
         "pack.py",
         "populate.py",
         "pretranslate.py",
+        "progress.py",
         "renamed.py",
         "stages.py",
         "target.py",
@@ -226,6 +227,20 @@ py_test(
     name = "pretranslate_test",
     size = "small",
     srcs = ["pretranslate_test.py"],
+    deps = [":lib"],
+)
+
+py_test(
+    name = "progress_test",
+    size = "small",
+    srcs = ["progress_test.py"],
+    deps = [":lib"],
+)
+
+py_test(
+    name = "host_test",
+    size = "small",
+    srcs = ["host_test.py"],
     deps = [":lib"],
 )
 
