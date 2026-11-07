@@ -95,7 +95,7 @@ uint64_t pmap_find_pa(pmap_t pmap, uint64_t va);
 
 namespace {
 constexpr uint32_t kOutBytes = SWITCH_AUDIO_RING_FRAMES * SWITCH_AUDIO_OUT_CHANNELS * sizeof(switch_audio_sample_t);
-constexpr uint32_t kInBytes = SWITCH_AUDIO_RING_FRAMES * SWITCH_AUDIO_IN_CHANNELS * sizeof(switch_audio_sample_t);
+constexpr uint32_t kInBytes = SWITCH_AUDIO_IN_RING_FRAMES * SWITCH_AUDIO_IN_CHANNELS * sizeof(switch_audio_sample_t);
 constexpr uint32_t kTickMS = SWITCH_AUDIO_PERIOD_FRAMES * 1000 / SWITCH_AUDIO_RATE;
 // Below 4 GiB and physically contiguous, so the ADMA plays the rings in place (32-bit addresses).
 constexpr mach_vm_address_t kDmaMask = 0x00000000fffff000ULL;
@@ -145,10 +145,15 @@ IOReturn setHostClock(task_t task, uint64_t address)
     return result;
 }
 
-constexpr unsigned kPeriods = 8;                                         // ADMA_CH_CONFIG_MAX_BUFS
-constexpr uint32_t kPeriodFrames = SWITCH_AUDIO_RING_FRAMES / kPeriods;  // 2048
-constexpr uint32_t kOutPeriodBytes = kOutBytes / kPeriods, kInPeriodBytes = kInBytes / kPeriods;
-static_assert(kPeriodFrames * kPeriods == SWITCH_AUDIO_RING_FRAMES, "a ring is whole ADMA periods");
+// Playback's period interrupt only clears what played and moves out_frames (the plug-in times its IO from the host
+// clock), so its periods are long: an interrupt every 341 ms at 48 kHz. Capture's in_frames moves a period at a time,
+// so its period is the microphone's latency. ADMA_CH_CONFIG_MAX_BUFS is 8.
+constexpr unsigned kOutPeriods = 4, kInPeriods = 8;
+constexpr uint32_t kOutPeriodFrames = SWITCH_AUDIO_RING_FRAMES / kOutPeriods;   // 16384
+constexpr uint32_t kInPeriodFrames = SWITCH_AUDIO_IN_RING_FRAMES / kInPeriods;  // 2048
+constexpr uint32_t kOutPeriodBytes = kOutBytes / kOutPeriods, kInPeriodBytes = kInBytes / kInPeriods;
+static_assert(kOutPeriodFrames * kOutPeriods == SWITCH_AUDIO_RING_FRAMES, "a ring is whole ADMA periods");
+static_assert(kInPeriodFrames * kInPeriods == SWITCH_AUDIO_IN_RING_FRAMES, "a ring is whole ADMA periods");
 constexpr uint32_t kGraceMS = 50;        // after a missed deadline, for an interrupt action already queued
 constexpr uint32_t kIdleMS = 5000;       // codec power-down after the last stream stops (ASoC pmdown_time)
 constexpr uint32_t kJackSettleMS = 250;  // jack contact bounce
@@ -317,11 +322,12 @@ enum : uint32_t {
 };
 
 // CTRL: request 1 (ADMAIF1) at 28 (tx) / 24 (rx), direction MEM2AHUB 4 / AHUB2MEM 2 at 12, continuous mode, flow
-// control. CONFIG: 8 buffers at 28 (src) / 24 (trg), burst fls(16) = 5 at 20, WRR weight 1. FIFO_CTRL: size 3
+// control. CONFIG: buffers - 1 at 28 (src) / 24 (trg), burst fls(16) = 5 at 20, WRR weight 1. FIFO_CTRL: size 3
 // (request <= 2) at 8 (tx) / 0 (rx).
 constexpr uint32_t kChCtrl[2] = {(1u << 28) | (4u << 12) | (2u << 8) | (1u << 1),
                                  (1u << 24) | (2u << 12) | (2u << 8) | (1u << 1)};
-constexpr uint32_t kChConfig[2] = {(7u << 28) | (5u << 20) | 1u, (7u << 24) | (5u << 20) | 1u};
+constexpr uint32_t kChConfig[2] = {((kOutPeriods - 1) << 28) | (5u << 20) | 1u,
+                                   ((kInPeriods - 1) << 24) | (5u << 20) | 1u};
 constexpr uint32_t kChFifo[2] = {3u << 8, 3u};
 
 // AGIC (GICv2: distributor at +0, CPU interface at +0x1000).
@@ -384,7 +390,8 @@ class SwitchAudio : public IOService {
     bool statsArmed = false, statsShown = false;  // statsTimer: armed / a line written (statsFired)
     int statPeak = 0;
     int64_t statLagMin = INT64_MAX, statLagMax = INT64_MIN, statLeadMin = INT64_MAX;
-    uint64_t periodTicksQ16 = 0;  // host ticks per ADMA period in 48.16 (kPeriodFrames * ticks_per_frame_q32 >> 16)
+    uint64_t periodTicksQ16 =
+        0;  // host ticks per playback period in 48.16 (kOutPeriodFrames * ticks_per_frame_q32 >> 16)
 #endif
 
     uint64_t nowFrame() const
@@ -449,7 +456,7 @@ class SwitchAudio : public IOService {
 
     uint32_t watchdogMS() const  // 4 periods: 170 ms at 48 kHz
     {
-        return 4 * kPeriodFrames * 1000 / clock->rate;
+        return 4 * kOutPeriodFrames * 1000 / clock->rate;
     }
 
     // `clock`'s PLLA and PLLA_OUT0, in the order clk-pll.c programs a disabled SDM PLL (set_defaults,
@@ -762,8 +769,8 @@ class SwitchAudio : public IOService {
     {
         const uint64_t n = periods[kChOut]++;
         switch_audio_sample_t *slot =
-            ring(SwitchAudioMemoryOutput) + (n % kPeriods) * kPeriodFrames * SWITCH_AUDIO_OUT_CHANNELS;
-        const uint64_t done = (n + 1) * kPeriodFrames, now = nowFrame();
+            ring(SwitchAudioMemoryOutput) + (n % kOutPeriods) * kOutPeriodFrames * SWITCH_AUDIO_OUT_CHANNELS;
+        const uint64_t done = (n + 1) * kOutPeriodFrames, now = nowFrame();
 #if DEVELOPMENT || DEBUG
         if (statsTimer)
             notePlayed(slot, done);
@@ -773,7 +780,7 @@ class SwitchAudio : public IOService {
         control->out_frames = done;
         if (!tegraCapture)
             control->in_frames = done;  // the capture ring stays silent, on the hardware's clock
-        if (done > now + kPeriodFrames) {
+        if (done > now + kOutPeriodFrames) {
             panic(
                 "SwitchAudio: ADMA ch0 runs fast: %llu frames played at clock frame %llu (I2S %#x CTRL %#x TIMING %#x)",
                 done, now, switch_mmio_read32(ahub, I2S_RX_STATUS), switch_mmio_read32(ahub, I2S_CTRL),
@@ -793,11 +800,11 @@ class SwitchAudio : public IOService {
     // this CPU-coherent mapping.)
     void notePlayed(const switch_audio_sample_t *slot, uint64_t done)
     {
-        statFrames += kPeriodFrames;
-        const bool settled = done > kSettlePeriods * kPeriodFrames;
+        statFrames += kOutPeriodFrames;
+        const bool settled = done > kSettlePeriods * kOutPeriodFrames;
         if (settled) {
             const int64_t lagTicks = (int64_t)(mach_absolute_time() - control->anchor_host) -
-                                     (int64_t)((done / kPeriodFrames) * periodTicksQ16 >> 16);
+                                     (int64_t)((done / kOutPeriodFrames) * periodTicksQ16 >> 16);
             const int64_t lagUs = lagTicks * 1000000 / (int64_t)hz;
             if (lagUs < statLagMin)
                 statLagMin = lagUs;
@@ -812,7 +819,7 @@ class SwitchAudio : public IOService {
         if (lead < 0)
             ++statUnderruns;
         int peak = statPeak;
-        for (uint32_t i = 0; i < kPeriodFrames * SWITCH_AUDIO_OUT_CHANNELS; ++i) {
+        for (uint32_t i = 0; i < kOutPeriodFrames * SWITCH_AUDIO_OUT_CHANNELS; ++i) {
             const int sample = slot[i] >> 16;  // -32768..32767
             const int magnitude = sample < 0 ? -sample : sample;
             if (magnitude > peak)
@@ -847,9 +854,10 @@ class SwitchAudio : public IOService {
     {
         captureProven = true;
         const uint64_t n = periods[kChIn]++;
-        switch_dcache_clean_invalidate(
-            ring(SwitchAudioMemoryInput) + (n % kPeriods) * kPeriodFrames * SWITCH_AUDIO_IN_CHANNELS, kInPeriodBytes);
-        control->in_frames = (n + 1) * kPeriodFrames;
+        switch_dcache_clean_invalidate(ring(SwitchAudioMemoryInput) +
+                                           (n % kInPeriods) * kInPeriodFrames * SWITCH_AUDIO_IN_CHANNELS,
+                                       kInPeriodBytes);
+        control->in_frames = (n + 1) * kInPeriodFrames;
     }
 
     // One ADMA channel's interrupt: acknowledge it and account every period its completed-period counter
@@ -865,7 +873,7 @@ class SwitchAudio : public IOService {
         const uint16_t xfer = (uint16_t)switch_mmio_read32(adma, base + CH_XFER_STATUS);
         uint32_t done = (uint16_t)(xfer - xferSeen[ch]);
         xferSeen[ch] = xfer;
-        if (done > kPeriods) {
+        if (done > (ch == kChOut ? kOutPeriods : kInPeriods)) {
             panic("SwitchAudio: ADMA ch%u completed %u periods in one interrupt (XFER_STATUS %#x): lost track", ch,
                   done, xfer);
         }
@@ -881,7 +889,8 @@ class SwitchAudio : public IOService {
             captureOff();
             return;
         }
-        if (tegraCapture && periods[kChOut] > periods[kChIn] + 2) {
+        if (tegraCapture &&
+            periods[kChOut] * kOutPeriodFrames > periods[kChIn] * kInPeriodFrames + 2 * kOutPeriodFrames) {
             const uint32_t in = kChIn * CH_STRIDE, id = kAgicAdma + kChIn, bit = 1u << (id % 32), word = 4 * (id / 32);
             panic("SwitchAudio: ADMA ch1 behind: %llu periods vs %llu, XFER %u seen %u INT_STATUS %#x STATUS %#x, AGIC "
                   "pend %u, "
@@ -1438,7 +1447,7 @@ public:
             // The interrupt source goes on the loop before the deadline timer, so a pending interrupt is served first.
             tegraInit();
             codecStart();
-            control->period_frames = kPeriodFrames;
+            control->period_frames = kInPeriodFrames;
             control->backend = SwitchAudioBackendTegraI2S;
             for (uint32_t i = 0; i < SWITCH_AUDIO_MAX_RATES; ++i)
                 control->rates[i] = kClocks[i].rate;
@@ -1558,7 +1567,7 @@ public:
         control->rate = clock->rate;
         control->ticks_per_frame_q32 = tegraTicksPerFrame(38400000);
 #if DEVELOPMENT || DEBUG
-        periodTicksQ16 = (uint64_t)kPeriodFrames * control->ticks_per_frame_q32 >> 16;
+        periodTicksQ16 = (uint64_t)kOutPeriodFrames * control->ticks_per_frame_q32 >> 16;
 #endif
     }
 

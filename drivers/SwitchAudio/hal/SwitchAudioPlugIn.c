@@ -1030,7 +1030,7 @@ static OSStatus DoIOOperation(AudioServerPlugInDriverRef d, AudioObjectID o, Aud
         uint64_t t = (uint64_t)info->mInputTime.mSampleTime;
         const uint64_t captured = gControl->in_frames;
         for (UInt32 i = 0; i < frames; ++i, ++t)
-            dst[i] = t < captured ? switch_audio_s32_to_float(gIn[t % SWITCH_AUDIO_RING_FRAMES]) : 0.0f;
+            dst[i] = t < captured ? switch_audio_s32_to_float(gIn[t % SWITCH_AUDIO_IN_RING_FRAMES]) : 0.0f;
     }
     return 0;
 }

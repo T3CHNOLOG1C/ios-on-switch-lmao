@@ -4,7 +4,8 @@
  *
  * The plug-in opens the service, maps three memory types and starts and stops each direction. Memory type 0 is the
  * control page, 1 the playback ring, 2 the capture ring. Rings hold 32-bit little-endian signed interleaved samples
- * (S32_LE, full scale +-2^31), ring_frames frames each; sample time t lives at frame t % ring_frames. The Tegra
+ * (S32_LE, full scale +-2^31): the playback ring ring_frames (SWITCH_AUDIO_RING_FRAMES) frames, the capture ring
+ * SWITCH_AUDIO_IN_RING_FRAMES; sample time t lives at frame t modulo the ring's size. The Tegra
  * backend hands them to the APE as they are (SwitchAudioFormat.h): the codec plays the top 24 bits of each.
  *
  * Sample time 0 is host time anchor_host, and one frame lasts ticks_per_frame_q32 / 2^32 host ticks. The null backend
@@ -14,27 +15,31 @@
  * nominal rate both directions run at now, one of rates[] (0 ends the list); SwitchAudioSetRate changes it, and
  * ticks_per_frame_q32 with it, only while neither direction runs. The plug-in
  * mixes playback into the ring (adds, it does not overwrite) at least lead_frames ahead of now; the service consumes
- * the ring and clears what it consumed (out_frames). Capture frames below in_frames are valid. Both positions advance
- * in steps of period_frames (480 null, 2048 Tegra), so capture is read at least period_frames + lead_frames behind
- * now.
+ * the ring and clears what it consumed (out_frames), a playback period at a time: the plug-in's write-ahead (lead
+ * plus its IO buffer) stays under ring_frames less one playback period. Capture frames below in_frames are valid;
+ * in_frames advances in steps of period_frames (480 null, 2048 Tegra), so capture is read at least period_frames +
+ * lead_frames behind now.
  *
  * The Tegra backend's ADMA plays and fills the rings in place and does not snoop the CPU caches: the plug-in cleans
  * (dc cvac) every playback range it mixed before returning, and the service invalidates each capture period before
- * it moves in_frames past it. An ADMA cycle holds at most 8 periods, so a ring is exactly 8 of them. */
+ * it moves in_frames past it. An ADMA cycle holds at most 8 periods, so each ring is whole periods: playback 4 long
+ * ones, whose interrupt is the CPU's only wake-up for the hardware while music plays, capture 8 short ones, whose
+ * length is the microphone's latency. */
 #ifndef SWITCH_AUDIO_ABI_H
 #define SWITCH_AUDIO_ABI_H
 #include <stdint.h>
 
-#define SWITCH_AUDIO_CLASS         "SwitchAudio"
-#define SWITCH_AUDIO_MAGIC         0x53574155u /* 'SWAU' */
-#define SWITCH_AUDIO_VERSION       5u
-#define SWITCH_AUDIO_RATE          48000u /* the rate a service starts at */
-#define SWITCH_AUDIO_MAX_RATES     2u
-#define SWITCH_AUDIO_OUT_CHANNELS  2u
-#define SWITCH_AUDIO_IN_CHANNELS   1u
-#define SWITCH_AUDIO_PERIOD_FRAMES 480u   /* 10 ms: the null backend's step */
-#define SWITCH_AUDIO_RING_FRAMES   16384u /* 341 ms: 8 ADMA periods of 2048 frames */
-typedef int32_t switch_audio_sample_t;    /* a ring sample: S32_LE */
+#define SWITCH_AUDIO_CLASS          "SwitchAudio"
+#define SWITCH_AUDIO_MAGIC          0x53574155u /* 'SWAU' */
+#define SWITCH_AUDIO_VERSION        6u
+#define SWITCH_AUDIO_RATE           48000u /* the rate a service starts at */
+#define SWITCH_AUDIO_MAX_RATES      2u
+#define SWITCH_AUDIO_OUT_CHANNELS   2u
+#define SWITCH_AUDIO_IN_CHANNELS    1u
+#define SWITCH_AUDIO_PERIOD_FRAMES  480u   /* 10 ms: the null backend's step */
+#define SWITCH_AUDIO_RING_FRAMES    65536u /* playback: 1.37 s, 4 ADMA periods of 16384 frames */
+#define SWITCH_AUDIO_IN_RING_FRAMES 16384u /* capture: 341 ms, 8 ADMA periods of 2048 frames */
+typedef int32_t switch_audio_sample_t;     /* a ring sample: S32_LE */
 
 enum {
     SwitchAudioMemoryControl = 0,

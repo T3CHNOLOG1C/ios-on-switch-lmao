@@ -26,11 +26,12 @@ using switch_ios::test::SourceText;
 using testing::HasSubstr;
 using testing::Not;
 
-// The ABI: version 4 is S32_LE samples at one of rates[]; periods stay whole ADMA buffers and the rings DMA-able (16384 frames of
-// stereo S32: 128 KiB).
-static_assert(SWITCH_AUDIO_VERSION == 5u);
+// The ABI: version 6 is S32_LE samples at one of rates[]; periods stay whole ADMA buffers and the rings DMA-able
+// (playback 65536 frames of stereo S32: 512 KiB; capture 16384 mono: 64 KiB).
+static_assert(SWITCH_AUDIO_VERSION == 6u);
 static_assert(std::is_same_v<switch_audio_sample_t, int32_t>);
-static_assert(SWITCH_AUDIO_RING_FRAMES * switch_audio_linux::kChannels * sizeof(switch_audio_sample_t) == 128 * 1024);
+static_assert(SWITCH_AUDIO_RING_FRAMES * switch_audio_linux::kChannels * sizeof(switch_audio_sample_t) == 512 * 1024);
+static_assert(SWITCH_AUDIO_IN_RING_FRAMES * sizeof(switch_audio_sample_t) == 64 * 1024);
 
 struct ClockFamily {
     uint32_t index;
@@ -179,6 +180,22 @@ TEST(SwitchAudioSource, JackIsTheCodecDevice)
     const std::string codec = SourceText("../SwitchRT5639.cpp");
     EXPECT_THAT(codec, HasSubstr("write(DAC1_DIG_VOL, headphoneDac());"));
     EXPECT_THAT(codec, Not(HasSubstr("write(DAC1_DIG_VOL, kDacHeadphone);")));
+}
+
+// Playback's ADMA period is long (its interrupt only clears what played) and bounded by the plug-in's write-ahead;
+// capture's stays short, the microphone's latency.
+TEST(SwitchAudioSource, LongPlaybackShortCapturePeriods)
+{
+    const std::string d = SourceText("../SwitchAudio.cpp");
+    EXPECT_THAT(d, HasSubstr("constexpr unsigned kOutPeriods = 4, kInPeriods = 8;"));
+    EXPECT_THAT(d, HasSubstr("((kOutPeriods - 1) << 28) | (5u << 20) | 1u"));
+    EXPECT_THAT(d, HasSubstr("control->period_frames = kInPeriodFrames;"));
+    EXPECT_THAT(d, Not(HasSubstr("kPeriodFrames ")));
+    constexpr uint32_t kOutPeriod = SWITCH_AUDIO_RING_FRAMES / 4, kLead = 2 * SWITCH_AUDIO_PERIOD_FRAMES;
+    constexpr uint32_t kLargestIoBuffer = 16384;
+    static_assert(kLead + kLargestIoBuffer < SWITCH_AUDIO_RING_FRAMES - kOutPeriod);
+    const std::string plugin = SourceText("../hal/SwitchAudioPlugIn.c");
+    EXPECT_THAT(plugin, HasSubstr("gIn[t % SWITCH_AUDIO_IN_RING_FRAMES]"));
 }
 
 }  // namespace
