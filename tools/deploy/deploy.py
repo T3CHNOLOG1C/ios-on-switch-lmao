@@ -10,7 +10,7 @@ Steps:
                    also merges the device's m2v journals into the checkout's corpus.log
   2 boot entry     switchroot/ios/* and bootloader/ini/ios.ini on the FAT: only files that differ are
                    copied, stale files in switchroot/ios/ removed (never the user's bootargs.txt or the install
-                   images in switchroot/ios/install/), AppleDouble files by name; nothing else on the FAT. Refused
+                   images' NAME.SII.NNN parts), AppleDouble files by name; nothing else on the FAT. Refused
                    when the card's iOS is another kind than the build's (its System volume is not the IPSW's)
   3 overlay        <Data>/Switch/overlay := the package's overlay/; when its /Applications changed, writes
                    <Data>/datamigrator/migrate so the next boot registers the apps (system_apps.py); also removes the
