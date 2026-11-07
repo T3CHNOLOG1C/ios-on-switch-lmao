@@ -21,7 +21,6 @@
 #include <libkern/c++/OSData.h>
 #include <pexpert/pexpert.h>
 #include "../ArmGIC/SwitchInterrupts.h"
-#include "../TegraDisplayFlip/TegraBlockSwizzle.h"
 #include "../TegraDisplayFlip/TegraScanoutCopy.h"
 #include "../TegraDisplayFlip/TegraScanoutRing.h"
 #include "../TegraDisplayFlip/SwitchFrameTimeline.h"
@@ -960,7 +959,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     uint32_t stSwaps = 0, stVsyncs = 0, stGpuTimeouts = 0, stNewMaps = 0, stSourceAttr = 0x100;
     uint32_t stUnderflows = 0;  // DC A frame ends with WIN_A_UF_INT latched (window A ran dry during a line)
     uint32_t stFast = 0,
-             stByte = 0;  // block-linear copies by TegraBlockSwizzle.h, and by the byte loop
+             stByte = 0;  // block-linear copies: of a tiled source as it is, and by the byte loop
     uint32_t stGpuCopies = 0, stGpuDeclined = 0;
     Span stGpuCopy = {};  // GPU frame copies done, offers declined, offer to completion
     // Once per window, just before a copy, the source is read alone (readPass): next to the copy's time it shows whether the copy
@@ -3733,11 +3732,10 @@ public:
         cache = mach_absolute_time() - cacheAt;
     }
 
-    // The block-linear pass into target: kSwizzleFast, kSwizzleByte or kSwizzleFailed. Both loops write the same bytes;
-    // native_legacy_block_layout (the caller's check) bounds them.
+    // The block-linear pass into target: kSwizzleTiled, kSwizzleByte or kSwizzleFailed; native_legacy_block_layout (the
+    // caller's check) bounds it.
     enum Swizzled {
         kSwizzleFailed,
-        kSwizzleFast,
         kSwizzleByte,
         kSwizzleTiled
     };
@@ -3761,13 +3759,13 @@ public:
 
     void noteSwizzled(Swizzled how)
     {
-        if (how == kSwizzleFast || how == kSwizzleTiled)
+        if (how == kSwizzleTiled)
             ++stFast;
         else if (how == kSwizzleByte)
             ++stByte;
     }
 
-    // The stats' read probe: every visible row of the source loaded once, 16 bytes at a time as the fast swizzle does. Ticks; 0 when
+    // The stats' read probe: every visible row of the source loaded once, 16 bytes at a time. Ticks; 0 when
     // the source is not 16-byte aligned.
     static uint64_t readPass(const void *source, uint64_t stride, uint32_t width, uint32_t height)
     {
