@@ -734,9 +734,9 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     uint32_t dcEnable = 0, dcMask = 0;  // INT_ENABLE and INT_MASK as found, restored on stop
     // INT_MASK is written from outside the gate too (frame-end holds), so every write of it takes this lock.
     IOSimpleLock *intMaskLock = nullptr;
-    bool intMaskLive = false;  // dc mapped and clocked: a hold may write INT_MASK
-    bool scanoutStopped = false;        // display power off (setScanout): no frame ends or vblanks are expected
-    uint32_t dcPending = 0;             // INT_STATUS bits from the filter, for the action
+    bool intMaskLive = false;     // dc mapped and clocked: a hold may write INT_MASK
+    bool scanoutStopped = false;  // display power off (setScanout): no frame ends or vblanks are expected
+    uint32_t dcPending = 0;       // INT_STATUS bits from the filter, for the action
     uint64_t vblankTime = 0, vblankContinuous = 0, vblankLast = 0, frameEnds = 0;
     // r17-touch: the compositor's vsync phase (VsyncPhase.h, the pacing line's "phase"). While its lead is in effect the vsync
     // goes out at V_PULSE2, programmed `lead` before the frame end; otherwise at V_BLANK as before, and at most one goes out a
@@ -1316,7 +1316,10 @@ public:
         return routed;
     }
 
-    void holdFrameEnd() { unmaskFrameEnd(); }
+    void holdFrameEnd()
+    {
+        unmaskFrameEnd();
+    }
 
 private:
     bool vsyncWanted() const
@@ -4838,20 +4841,60 @@ public:
         publish("IOMFBNumLayers", layers, 1, 32);
     }
 
-    IOReturn getGammaTable(void *table) override { return color->getGammaTable(table); }
-    IOReturn setGammaTable(const void *table) override { return color->setGammaTable(table); }
-    IOReturn getMatrix(uint32_t location, void *matrix) override { return color->getMatrix(location, matrix); }
-    IOReturn setMatrix(uint32_t location, const void *matrix) override { return color->setMatrix(location, matrix); }
-    IOReturn setContrast(const void *contrast) override { return color->setContrast(contrast); }
-    IOReturn setColorRemapMode(uint32_t mode) override { return color->setColorRemapMode(mode); }
-    IOReturn getColorRemapMode(uint32_t *mode) override { return color->getColorRemapMode(mode); }
-    IOReturn setBrightnessCorrection(uint32_t value) override { return color->setBrightnessCorrection(value); }
+    IOReturn getGammaTable(void *table) override
+    {
+        return color->getGammaTable(table);
+    }
+
+    IOReturn setGammaTable(const void *table) override
+    {
+        return color->setGammaTable(table);
+    }
+
+    IOReturn getMatrix(uint32_t location, void *matrix) override
+    {
+        return color->getMatrix(location, matrix);
+    }
+
+    IOReturn setMatrix(uint32_t location, const void *matrix) override
+    {
+        return color->setMatrix(location, matrix);
+    }
+
+    IOReturn setContrast(const void *contrast) override
+    {
+        return color->setContrast(contrast);
+    }
+
+    IOReturn setColorRemapMode(uint32_t mode) override
+    {
+        return color->setColorRemapMode(mode);
+    }
+
+    IOReturn getColorRemapMode(uint32_t *mode) override
+    {
+        return color->getColorRemapMode(mode);
+    }
+
+    IOReturn setBrightnessCorrection(uint32_t value) override
+    {
+        return color->setBrightnessCorrection(value);
+    }
+
     IOReturn swapSetColorMatrix(const void *matrix, uint32_t location, uint32_t flags) override
     {
         return color->swapSetColorMatrix(matrix, location, flags);
     }
-    IOReturn setAccessibilityScale(uint32_t scale) override { return color->setAccessibilityScale(scale); }
-    void platformFrameInfoNotify(void *client, bool enable) override { color->frameInfoNotify(client, enable); }
+
+    IOReturn setAccessibilityScale(uint32_t scale) override
+    {
+        return color->setAccessibilityScale(scale);
+    }
+
+    void platformFrameInfoNotify(void *client, bool enable) override
+    {
+        color->frameInfoNotify(client, enable);
+    }
 
 #define LEAF(name, n)                                                      \
     __attribute__((noreturn, noinline)) void name() override               \

@@ -42,9 +42,9 @@ constexpr uint32_t gammaIdentity(unsigned point)
 }
 
 struct Inputs {
-    Matrix harmony = kIdentity;        // SetMatrix, location 9: True Tone and Night Shift
-    Matrix accessibility = kIdentity;  // SwapSetColorMatrix, location 2: colour filters
-    uint32_t correction = kUnity16;    // SetBrightnessCorrection, 16.16
+    Matrix harmony = kIdentity;              // SetMatrix, location 9: True Tone and Night Shift
+    Matrix accessibility = kIdentity;        // SwapSetColorMatrix, location 2: colour filters
+    uint32_t correction = kUnity16;          // SetBrightnessCorrection, 16.16
     uint32_t accessibilityScale = kUnity16;  // SetParameter 3, 16.16: Reduce White Point
     uint32_t remapMode = kRemapNormal;
     uint32_t contrast = kUnity16;  // SetContrast, 16.16; 0 is neutral
@@ -165,7 +165,8 @@ inline bool floatToUnity16(uint32_t bits, uint32_t *out)
     const uint64_t significand = mantissa | 1u << 23;
     const int shift = int(exponent) - 134;
     if (shift >= 0)
-        *out = shift >= 9 ? UINT32_MAX : uint32_t(significand << shift > UINT32_MAX ? UINT32_MAX : significand << shift);
+        *out =
+            shift >= 9 ? UINT32_MAX : uint32_t(significand << shift > UINT32_MAX ? UINT32_MAX : significand << shift);
     else
         *out = -shift >= 40 ? 0 : uint32_t((significand + (uint64_t(1) << (-shift - 1))) >> -shift);
     return true;
@@ -205,8 +206,8 @@ inline void build(const Inputs &in, Tables &out)
         matrix = multiply(kGrayscale, matrix);
     if (!equal(in.harmony, zero))
         matrix = multiply(in.harmony, matrix);
-    uint64_t scale = uint64_t(in.correction ? in.correction : kUnity16) *
-                     (in.accessibilityScale ? in.accessibilityScale : kUnity16);
+    uint64_t scale =
+        uint64_t(in.correction ? in.correction : kUnity16) * (in.accessibilityScale ? in.accessibilityScale : kUnity16);
     if (scale > uint64_t(kOne))
         scale = uint64_t(kOne);
     matrix = scaled(matrix, Q32(scale));

@@ -190,7 +190,8 @@ TEST(Remap, GrayscaleKeepsWhiteAndRowsSumToOne)
         Tables tables;
         build(in, tables);
         for (int r = 0; r < 3; ++r)
-            EXPECT_EQ(cscSigned(tables.csc[r * 3]) + cscSigned(tables.csc[r * 3 + 1]) + cscSigned(tables.csc[r * 3 + 2]),
+            EXPECT_EQ(cscSigned(tables.csc[r * 3]) + cscSigned(tables.csc[r * 3 + 1]) +
+                          cscSigned(tables.csc[r * 3 + 2]),
                       256);
         const Rgb white = scan(tables, {255, 255, 255}), red = scan(tables, {255, 0, 0});
         EXPECT_EQ(white.r, mode == kRemapGrayscale ? 255u : 0u);

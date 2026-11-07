@@ -246,7 +246,8 @@ TEST(FrameEndSource, MaskedWhileNothingWaits)
 {
     const std::string &source = display();
     size_t writes = 0;
-    for (size_t at = source.find("dc[kDcIntMask] ="); at != std::string::npos; at = source.find("dc[kDcIntMask] =", at + 1))
+    for (size_t at = source.find("dc[kDcIntMask] ="); at != std::string::npos;
+         at = source.find("dc[kDcIntMask] =", at + 1))
         ++writes;
     EXPECT_EQ(writes, 3u);
     for (const char *helper : {"    void writeIntMask(uint32_t clear, uint32_t set)", "    void unmaskFrameEnd()",
