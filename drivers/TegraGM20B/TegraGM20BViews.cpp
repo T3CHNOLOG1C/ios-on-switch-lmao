@@ -28,8 +28,10 @@ namespace
 void drain(tgm_coh *c, tgm_tiled &t);
 
 constexpr uint32_t kLock = 2, kLockReadOnly = 0x1, kLockAvoidSync = 0x2;
+#if TGM_STATS
 constexpr uint32_t kBusyLocks =
 	4;  // debug: more locks than this in a second name the surface (a CPU producer)
+#endif
 
 int findView(const tgm_tiled &t, const tgm_cpu_view &v)
 {
