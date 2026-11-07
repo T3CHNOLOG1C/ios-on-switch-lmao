@@ -433,10 +433,10 @@ void Kernel::markLost(uint32_t channel)
 {
     const TegraGM20BAbiChannel in = {channel, 0};
     TegraGM20BAbiStatus st = {};
-    if (call(TegraGM20BMethodGetStatus, &in, sizeof in, &st, sizeof st) == KERN_SUCCESS && st.error) {
-        lostFaultVa_.store(st.fault_va, std::memory_order_relaxed);
-        lostError_.store(st.error, std::memory_order_relaxed);
-    }
+    if (call(TegraGM20BMethodGetStatus, &in, sizeof in, &st, sizeof st) != KERN_SUCCESS)
+        st = {};  // the channel already destroyed (another thread's reopen): the cause unknown, not an earlier kill's
+    lostFaultVa_.store(st.fault_va, std::memory_order_relaxed);
+    lostError_.store(st.error, std::memory_order_relaxed);
     lostChannel_.store(channel, std::memory_order_relaxed);
 }
 
