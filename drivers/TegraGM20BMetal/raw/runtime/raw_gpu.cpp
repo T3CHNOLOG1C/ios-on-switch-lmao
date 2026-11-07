@@ -1849,6 +1849,39 @@ void Device::noteLost()
     lostAny_.store(true, std::memory_order_release);
 }
 
+// The barriers order the record after the caller's read of the fence word, and its range after its error: the kernel
+// writes the range, the error, then the fence word.
+bool Device::liveKill(Killed &k) const
+{
+    const volatile uint32_t *fence = fence_;
+    if (!k_.killRecords() || fence == &kNoFence)
+        return false;
+    const auto *record = reinterpret_cast<const volatile TegraGM20BAbiFence *>(fence);
+    std::atomic_thread_fence(std::memory_order_acquire);
+    k.error = record->error;
+    if (!k.error)
+        return false;
+    std::atomic_thread_fence(std::memory_order_acquire);
+    k.first = record->killed_first;
+    k.last = record->killed_last;
+    return true;
+}
+
+bool Device::killed(uint32_t seqno) const
+{
+    const auto covers = [seqno](const Killed &k) {
+        return k.error && int32_t(seqno - k.first) >= 0 && int32_t(k.last - seqno) >= 0;
+    };
+    Killed live = {};
+    if (liveKill(live) && covers(live))
+        return true;
+    std::lock_guard<std::mutex> l(killedLock_);
+    for (const Killed &kept : killedKept_)
+        if (covers(kept))
+            return true;
+    return false;
+}
+
 // The kernel killed the channel (a GPU fault or hang, its own or one it was stuck behind; as a GPU restart on iOS): what it
 // had in flight failed, and a new channel, named by ChannelCreate's reply, gets the context the old one took with it.
 // Between command buffers: no span of either ring is open, and every one the old channel had is done (the kernel released
@@ -1856,6 +1889,11 @@ void Device::noteLost()
 bool Device::reopen()
 {
     noteLost();
+    Killed live = {};
+    if (liveKill(live)) {
+        std::lock_guard<std::mutex> l(killedLock_);
+        killedKept_[killedNext_++ % killedKept_.size()] = live;
+    }
     k_.closeChannel(channel_);
     if (!k_.channel(kEngines, channel_, fence_))
         return false;
@@ -1912,7 +1950,8 @@ CommandBuffer *Device::begin()
 {
     if (!ensureChannel())
         return nullptr;
-    if (k_.lost(channel_))
+    Killed live = {};
+    if (k_.lost(channel_) || liveKill(live))
         reopen();
     for (auto it = grownOut_.begin(); it != grownOut_.end();)
         if (done(it->second)) {

@@ -697,6 +697,8 @@ public:
 
     bool lost(uint32_t seqno) const
     {
+        if (k_.killRecords())
+            return killed(seqno);
         return lostAny_.load(std::memory_order_acquire) &&
                int32_t(lostThrough_.load(std::memory_order_relaxed) - seqno) >= 0;
     }
@@ -928,9 +930,20 @@ private:
     void emitContext(Push &p);
     bool reopen();
     void noteLost();
-    // the last seqno of a channel that died: it and every one before it failed (or completed before; not told apart)
+    // the last seqno of a channel that died: it and every one before it failed (or completed before; not told apart),
+    // where the kernel writes no kill records
     std::atomic<uint32_t> lostThrough_{0};
     std::atomic<bool> lostAny_{false};
+    // The seqnos a kill took (TegraGM20BAbiFence): the live channel's record, then the ones the channels it replaced left,
+    // kept until reopen made the record's slot over (a slot's seqnos continue, so a kept record names its channel's alone).
+    struct Killed {
+        uint32_t first, last, error;
+    };
+    bool liveKill(Killed &k) const;
+    bool killed(uint32_t seqno) const;
+    mutable std::mutex killedLock_;
+    std::array<Killed, 4> killedKept_{};
+    uint32_t killedNext_ = 0;
     uint8_t *alloc(Ring &r, uint32_t bytes, uint32_t align, uint64_t &va);
     void retire(Ring &r, uint32_t seqno);
     uint32_t allocTic();

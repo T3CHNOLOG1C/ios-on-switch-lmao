@@ -62,6 +62,7 @@ static atomic_uint nbo = 1;
 static uint32_t submitted[16];
 static uint32_t *fence; /* the fence page, a TegraGM20BAbiFence per channel at slot*16 */
 static uint32_t dead[16]; /* method 11's error of a killed channel */
+static uint8_t live[16];  /* a channel slot in use: the lowest free one is made next, its seqnos continuing, as the kext's */
 static uint32_t kill_next;
 static atomic_ulong calls[16];
 static atomic_ulong import_maps;    /* VmBind map ops onto imported pages */
@@ -494,15 +495,27 @@ static kern_return_t mock_call(mach_port_t c, uint32_t sel, const void *in, size
         }
         return KERN_SUCCESS;
     }
-    case TegraGM20BMethodChannelDestroy:
+    case TegraGM20BMethodChannelDestroy: {
+        const struct TegraGM20BAbiChannel *d = in;
+        pthread_mutex_lock(&gpu_lock);
+        live[d->channel & 15] = 0;
+        pthread_mutex_unlock(&gpu_lock);
         return KERN_SUCCESS;
+    }
     case TegraGM20BMethodChannelCreate: {
-        static uint32_t next = 1;
         if (!fence)
             fence = mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_ANON | MAP_SHARED, -1, 0);
-        uint32_t ch = next++;
         pthread_mutex_lock(&gpu_lock);
-        nchannels = ch;
+        uint32_t ch = 1;
+        while (ch < 16 && live[ch])
+            ch++;
+        if (ch == 16) {
+            pthread_mutex_unlock(&gpu_lock);
+            return kIOReturnNoResources;
+        }
+        live[ch] = 1;
+        if (ch > nchannels)
+            nchannels = ch;
         chan_conn[ch & 15] = c;
         dead[ch & 15] = 0;
         fence[(ch & 15) * 4 + 1] = fence[(ch & 15) * 4 + 2] = fence[(ch & 15) * 4 + 3] = 0;

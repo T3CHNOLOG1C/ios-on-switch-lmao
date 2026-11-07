@@ -93,6 +93,12 @@ public:
         return (info_.flags & TegraGM20BInfoOrder) != 0;
     }
 
+    // A channel's fence word is a TegraGM20BAbiFence: a kill names the seqnos it took
+    bool killRecords() const
+    {
+        return (info_.flags & TegraGM20BInfoKillRecord) != 0;
+    }
+
     const std::string &error() const
     {
         return err_;
