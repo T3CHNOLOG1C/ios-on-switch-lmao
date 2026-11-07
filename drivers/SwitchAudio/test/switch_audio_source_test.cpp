@@ -176,7 +176,7 @@ TEST(SwitchAudioSource, JackIsTheCodecDevice)
     const std::string capture = Between(driver, "void captureOff()", "\n    }\n");
     EXPECT_THAT(capture, Not(HasSubstr("panic(")));
     EXPECT_THAT(capture, HasSubstr("tegraCapture = false;"));
-    EXPECT_THAT(driver, HasSubstr("if (!captureProven && played > 2 * kOutPeriodFrames) {"));
+    EXPECT_THAT(driver, HasSubstr("if (!captureProven && played > 2 * static_cast<uint64_t>(kOutPeriodFrames)) {"));
 
     const std::string codec = SourceText("../SwitchRT5639.cpp");
     EXPECT_THAT(codec, HasSubstr("write(DAC1_DIG_VOL, headphoneDac());"));
