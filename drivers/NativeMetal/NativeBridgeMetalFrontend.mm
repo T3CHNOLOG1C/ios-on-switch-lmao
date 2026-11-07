@@ -1562,6 +1562,42 @@ static std::string stageText(NBFunction *f)
 @end
 @implementation NBFunctionConstant
 @end
+// A function's stage-input attribute (MTLVertexAttribute's and MTLAttribute's readable properties), for vertexAttributes and
+// stageInputAttributes.
+@interface NBAttribute : NSObject
+@property (nonatomic, copy) NSString *name;
+@property (nonatomic) NSUInteger attributeIndex;
+@property (nonatomic) MTLDataType attributeType;
+@property (nonatomic, getter=isActive) BOOL active;
+@property (nonatomic, getter=isPatchData) BOOL patchData;
+@property (nonatomic, getter=isPatchControlPointData) BOOL patchControlPointData;
+@end
+@implementation NBAttribute
+@end
+
+static NSArray *functionAttributes(const NmbFunction *f, bool stageInput)
+{
+    const int64_t count = nmb_function_attribute_count(f, stageInput);
+    if (count < 0)
+        return nil;
+    NSMutableArray *out = [NSMutableArray arrayWithCapacity:NSUInteger(count)];
+    for (uint32_t i = 0; i < uint32_t(count); i++) {
+        char name[256];
+        uint64_t info[5] = {};
+        if (!nmb_function_attribute(f, stageInput, i, name, sizeof name, info))
+            continue;
+        NBAttribute *a = [NBAttribute new];
+        a.name = [NSString stringWithUTF8String:name];
+        a.attributeIndex = info[0];
+        a.attributeType = (MTLDataType)info[1];
+        a.active = info[2] != 0;
+        a.patchData = info[3] != 0;
+        a.patchControlPointData = info[4] != 0;
+        [out addObject:a];
+    }
+    return out;
+}
+
 @implementation NBFunction
 
 - (void)dealloc
@@ -1591,6 +1627,16 @@ static std::string stageText(NBFunction *f)
 - (MTLFunctionOptions)options
 {
     return MTLFunctionOptionNone;
+}
+
+- (NSArray<MTLVertexAttribute *> *)vertexAttributes
+{
+    return (NSArray<MTLVertexAttribute *> *)functionAttributes(_handle, false);
+}
+
+- (NSArray<MTLAttribute *> *)stageInputAttributes
+{
+    return (NSArray<MTLAttribute *> *)functionAttributes(_handle, true);
 }
 
 // The layout of the argument buffer the function takes at the index, as its AIR lays it out (the runtime's decode). No reflection

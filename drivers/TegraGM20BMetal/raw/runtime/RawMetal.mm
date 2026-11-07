@@ -3118,7 +3118,63 @@ static bool rawDepthStencil(MTLRenderPassDescriptor *pass)
     return true;
 }
 
+// A finished command buffer's recording storage, kept for the next one (its capacity a frame's): Core Animation's steady frames
+// allocate none of it
+struct RMRecording {
+    std::vector<Cmd> tape;
+    std::vector<uint8_t> bytes;
+    std::vector<uint64_t> extra;
+    std::vector<id> owners;
+};
+
+static std::mutex gRecordingsLock;
+static std::vector<RMRecording> gRecordings;
+
+static void takeRecording(RMCommandBuffer *b)
+{
+    {
+        std::lock_guard<std::mutex> l(gRecordingsLock);
+        if (!gRecordings.empty()) {
+            RMRecording &r = gRecordings.back();
+            b->_tape.swap(r.tape);
+            b->_bytes.swap(r.bytes);
+            b->_extra.swap(r.extra);
+            b->_owners.swap(r.owners);
+            gRecordings.pop_back();
+            return;
+        }
+    }
+    b->_tape.reserve(512);
+    b->_owners.reserve(256);
+    b->_bytes.reserve(16384);
+}
+
+static void giveRecording(RMCommandBuffer *b)
+{
+    constexpr size_t kKept = 4,
+                     kKeptBytes = 1 << 20;  // (a command buffer of a few megabytes of setBytes: its own, freed)
+    if (b->_bytes.capacity() + b->_tape.capacity() * sizeof(Cmd) + b->_extra.capacity() * 8 > kKeptBytes)
+        return;
+    RMRecording r;
+    r.tape.swap(b->_tape);
+    r.bytes.swap(b->_bytes);
+    r.extra.swap(b->_extra);
+    r.owners.swap(b->_owners);
+    r.tape.clear();
+    r.bytes.clear();
+    r.extra.clear();
+    r.owners.clear();
+    std::lock_guard<std::mutex> l(gRecordingsLock);
+    if (gRecordings.size() < kKept)
+        gRecordings.push_back(std::move(r));
+}
+
 @implementation RMCommandBuffer
+
+- (void)dealloc
+{
+    giveRecording(self);
+}
 
 - (void)retain:(id)object
 {
@@ -3421,8 +3477,11 @@ static bool rawDepthStencil(MTLRenderPassDescriptor *pass)
         // once scheduled() took the handlers, one added is run behind them (was: until they ran, it joined a list no one read
         // again, and a presentDrawable added then never presented)
         now = _scheduledSent;
-        if (!now)
+        if (!now) {
+            if (!_scheduledHandlers)
+                _scheduledHandlers = [NSMutableArray array];
             [_scheduledHandlers addObject:[block copy]];
+        }
     }
     if (now)
         dispatch_async(gRM->handlers, ^{
@@ -3438,8 +3497,11 @@ static bool rawDepthStencil(MTLRenderPassDescriptor *pass)
     {
         std::lock_guard<std::mutex> l(_lock);
         now = _completedSent;  // as addScheduledHandler: once finish() took the handlers
-        if (!now)
+        if (!now) {
+            if (!_completedHandlers)
+                _completedHandlers = [NSMutableArray array];
             [_completedHandlers addObject:[block copy]];
+        }
     }
     if (now)
         block((id<MTLCommandBuffer>)self);
@@ -3612,12 +3674,8 @@ static bool rawDepthStencil(MTLRenderPassDescriptor *pass)
     RMCommandBuffer *b = [RMCommandBuffer new];
     b->_device = _device;
     b->_queue = self;
-    b->_scheduledHandlers = [NSMutableArray array];
-    b->_completedHandlers = [NSMutableArray array];
     b->_status = MTLCommandBufferStatusNotEnqueued;
-    b->_tape.reserve(512);
-    b->_owners.reserve(256);
-    b->_bytes.reserve(16384);
+    takeRecording(b);
 #if SWITCH_FRAME_TIMELINE
     switch_frame::made(b->_frame);
 #endif
@@ -5053,10 +5111,8 @@ static void scheduled(RMCommandBuffer *cb)
         cb->_scheduledSent = true;
         if (cb->_status == MTLCommandBufferStatusCommitted)
             cb->_status = MTLCommandBufferStatusScheduled;
-        if (cb->_scheduledHandlers.count) {
-            handlers = [cb->_scheduledHandlers copy];
-            [cb->_scheduledHandlers removeAllObjects];
-        }
+        handlers = cb->_scheduledHandlers;
+        cb->_scheduledHandlers = nil;
         cb->_gpuStart = hostSeconds();
         // Core Animation's render thread waits for this every frame (waitUntilScheduled): with nothing to run, no hop through
         // the handler queue
@@ -5100,8 +5156,8 @@ static void finish(RMCommandBuffer *cb, NSError *error)
         cb->_status = error ? MTLCommandBufferStatusError : MTLCommandBufferStatusCompleted;
         cb->_error = error;
         cb->_gpuEnd = hostSeconds();
-        handlers = [cb->_completedHandlers copy];
-        [cb->_completedHandlers removeAllObjects];
+        handlers = cb->_completedHandlers;
+        cb->_completedHandlers = nil;
         cb->_completedSent = true;
         cb->_scheduledSent = true;  // a completed command buffer is scheduled; its own scheduled() runs no more
     }

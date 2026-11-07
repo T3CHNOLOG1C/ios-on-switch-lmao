@@ -1560,6 +1560,61 @@ pub extern "C" fn nmb_function_constant(
     })
 }
 
+/// `vertexAttributes` (`stage_input` false) or `stageInputAttributes` (true): the function's
+/// attributes, `None` where Metal answers nil.
+fn attributes(
+    function: *const NmbFunction,
+    stage_input: bool,
+) -> Result<Option<Vec<metal2vulkan::reflection::Attribute>>, String> {
+    let f = &get(function)?.0;
+    let attributes = if stage_input {
+        f.stage_input_attributes().map_err(e("stage input attributes"))?
+    } else {
+        f.vertex_attributes().map_err(e("vertex attributes"))?
+    };
+    Ok(attributes)
+}
+
+/// How many attributes `vertexAttributes` (`stage_input` false) or `stageInputAttributes` (true)
+/// answers, -1 where Metal answers nil.
+#[unsafe(no_mangle)]
+pub extern "C" fn nmb_function_attribute_count(function: *const NmbFunction, stage_input: bool) -> i64 {
+    guard(-1, || {
+        Ok(attributes(function, stage_input)?.map_or(-1, |a| a.len() as i64))
+    })
+}
+
+/// Attribute `at` of those [`nmb_function_attribute_count`] counts: its name into `out`, and its
+/// attributeIndex, MTLDataType, isActive, isPatchData and isPatchControlPointData into `info`.
+#[unsafe(no_mangle)]
+pub extern "C" fn nmb_function_attribute(
+    function: *const NmbFunction,
+    stage_input: bool,
+    at: u32,
+    out: *mut c_char,
+    size: usize,
+    info: *mut u64,
+) -> usize {
+    guard(0, || {
+        if info.is_null() {
+            return Err("null attribute info".into());
+        }
+        let attributes = attributes(function, stage_input)?.unwrap_or_default();
+        let a = attributes
+            .get(at as usize)
+            .ok_or_else(|| format!("no attribute {at}"))?;
+        // SAFETY: the header's five words.
+        unsafe { std::slice::from_raw_parts_mut(info, 5) }.copy_from_slice(&[
+            u64::from(a.attribute_index()),
+            u64::from(a.attribute_type().as_raw()),
+            u64::from(a.is_active()),
+            u64::from(a.is_patch_data()),
+            u64::from(a.is_patch_control_point_data()),
+        ]);
+        Ok(copy_out(a.name(), out, size))
+    })
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn nmb_function_release(function: *mut NmbFunction) {
     release(function)
