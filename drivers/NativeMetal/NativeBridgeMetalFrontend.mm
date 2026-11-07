@@ -4242,6 +4242,11 @@ static void completed(void *context)
     return 0;
 }  // none was applied (above)
 
+- (NSUInteger)getBackgroundGPUPriority
+{
+    return 0;
+}
+
 - (id<MTLCommandBuffer>)commandBufferWithDescriptor:(MTLCommandBufferDescriptor *)d
 {
     (void)d;
