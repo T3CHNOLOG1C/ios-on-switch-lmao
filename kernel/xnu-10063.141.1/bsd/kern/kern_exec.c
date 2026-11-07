@@ -8492,7 +8492,8 @@ native_switch_watchdog_policy(proc_t p, user_addr_t scratch)
 	 * times a second for minutes after every launch, and without financed FinanceKit traps destinationd at each boot.
 	 * FairPlay is out of scope (FairPlayIOKit is not prelinked), so fairplayd stays off with the FairPlay daemons that
 	 * start on their own: adid (CoreADI) and lskdd, whose daily XPC activity launches it, and it exits (92) before
-	 * completing the activity, so launchd respawned it once a second. */
+	 * completing the activity, so launchd respawned it once a second. SepUpdateTimer (seputil's sepOS update check)
+	 * likewise exits before taking its hourly activity with no SEP to update, and was respawned every 10 s. */
 #define NATIVE_SWITCH_POLICY_TAIL "<key>com.apple.photoanalysisd</key><true/>" \
 	    "<key>com.apple.mediaanalysisd</key><true/>" \
 	    "<key>com.apple.mediastream.mstreamd</key><true/>" \
@@ -8507,6 +8508,7 @@ native_switch_watchdog_policy(proc_t p, user_addr_t scratch)
 	    "<key>com.apple.fairplayd.A2</key><true/>" \
 	    "<key>com.apple.adid</key><true/>" \
 	    "<key>com.apple.lskdd</key><true/>" \
+	    "<key>com.apple.SepUpdateTimer</key><true/>" \
 	    "<key>com.apple.passd</key><true/>" \
 	    "<key>com.apple.mobile.obliteration</key><true/>" \
 	    "<key>com.apple.coreduetd</key><true/>" \
