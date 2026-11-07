@@ -212,7 +212,7 @@ def _usb(tree: list) -> None:
 
 
 def _media_accel(tree: list) -> None:
-    """The keys iOS's media frameworks read before they pick a hardware path."""
+    """Set the keys iOS's media frameworks read before they pick a hardware path."""
     # J120 has iommu-present (empty) on /arm-io. Its one reader in 21H461's dyld cache, VideoToolbox's
     # FigCreateIOSurfacePropertiesDictionary, otherwise asks every IOSurface it makes (decoder and pixel-transfer pools)
     # for the PurpleGfxMem carveout, which this tree does not have. The engines that touch those surfaces reach
