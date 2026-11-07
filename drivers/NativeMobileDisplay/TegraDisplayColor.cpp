@@ -291,7 +291,9 @@ void TegraDisplayColor::frameEndFilter()
     IOSimpleLockUnlock(lock);
 }
 
-void TegraDisplayColor::frameEndAction()
+// mayRequest false: a window A request is out, and the flip, rotation and probe checks read GENERAL_ACT_REQ as part of
+// it; the enable waits for a frame end with none out.
+void TegraDisplayColor::frameEndAction(bool mayRequest)
 {
     IOInterruptState state = IOSimpleLockLockDisableInterrupt(lock);
     const bool want = pending.enabled, ready = !pendingDirty && activeValid, attached = dc != nullptr;
@@ -301,7 +303,7 @@ void TegraDisplayColor::frameEndAction()
     IOSimpleLockUnlockEnableInterrupt(lock, state);
     if (release)
         native_legacy_frame_end_release();
-    if (!attached || want == hwEnabled || (want && !ready))
+    if (!attached || !mayRequest || want == hwEnabled || (want && !ready))
         return;
     writeEnable(want);
     hwEnabled = want;
@@ -331,6 +333,4 @@ void TegraDisplayColor::restoreAfterPowerUp()
 void TegraDisplayColor::bypassForPanic(volatile uint32_t *registers)
 {
     registers[kDcDispColorControl] = registers[kDcDispColorControl] & ~kCmuEnable;
-    registers[kDcStateControl] = kGeneralUpdate;
-    registers[kDcStateControl] = kGeneralActReq;
 }

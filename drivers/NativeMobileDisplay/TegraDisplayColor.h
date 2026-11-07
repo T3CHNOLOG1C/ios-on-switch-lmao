@@ -39,14 +39,14 @@ public:
     // DC A's frame end: the filter (primary interrupt context) writes changed tables, the action (work-loop gate) moves
     // the enable bit. A change holds the frame end (native_legacy_frame_end_hold) until both are done.
     void frameEndFilter();
-    void frameEndAction();
+    void frameEndAction(bool mayRequest);
 
     // Under the gate, after tegra_display_power_up() reset DC A, before the resume's GENERAL_ACT_REQ: the tables and the
     // enable bit back, latching with that request.
     void restoreAfterPowerUp();
 
     // A panic's screen without the transform (a colour filter or a low white point could hide its text): the CMU bypassed
-    // from the next frame. Stores only, from any context.
+    // with the caller's next GENERAL_ACT_REQ. Stores only, from any context, the controller clocked.
     static void bypassForPanic(volatile uint32_t *dc);
 
 private:

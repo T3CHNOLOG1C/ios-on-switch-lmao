@@ -383,8 +383,6 @@ void restorePitchOnPanic(const char *message)
     const bool first = !gPanicRestore.panicking;
     gPanicRestore.panicking = true;
     __asm__ volatile("dmb ish" ::: "memory");
-    if (gPanicRestore.dc)
-        TegraDisplayColor::bypassForPanic(gPanicRestore.dc);
     if (gPanicRestore.armed || (gPanicRestore.tape && !vc_tape_panic())) {
         if (first) {
             volatile uint64_t *pixels = gPanicRestore.pixels;
@@ -401,6 +399,7 @@ void restorePitchOnPanic(const char *message)
         dc[kWinbufStartAddrHi] = 0;
         dc[kWinOptions] = gPanicRestore.options;
         uint32_t update = kGeneralUpdate | kWinAUpdate, request = kGeneralActReq | kWinAActReq;
+        TegraDisplayColor::bypassForPanic(dc);
         if (gPanicRestore.planes) {  // the panic screen over nothing: window B off, window A opaque again
             dc[kWinBBase + NativePlanes::kOptions] = 0;
             for (unsigned i = 0; i < 3; ++i)
@@ -415,6 +414,7 @@ void restorePitchOnPanic(const char *message)
                    .planes) {  // the plane probe covers the screen before the first frame: off, the console shows
         volatile uint32_t *dc = gPanicRestore.dc;
         dc[kWinBBase + NativePlanes::kOptions] = 0;
+        TegraDisplayColor::bypassForPanic(dc);
         __asm__ volatile("dsb sy" ::: "memory");
         dc[kDcStateControl] = kGeneralUpdate | kWinBUpdate;
         dc[kDcStateControl] = kGeneralActReq | kWinBActReq;
@@ -1493,7 +1493,7 @@ private:
         if (status & kFrameEndInt)
             planeFrameEnd();
         if (status & kFrameEndInt)
-            color->frameEndAction();
+            color->frameEndAction(ring.pending == kNoBuffer && !probeRequest && !(rotated && !rotationLatched));
         if ((status & kFrameEndInt) && stats) {
             if (frameStall.frameEnd(mach_absolute_time(), refreshTicks(), vsyncWanted()))
                 switch_stall_frame(frameStall.lastPresent());
