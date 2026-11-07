@@ -45,6 +45,7 @@ kernel_driver(
     hdr_deps = [
         "drivers/ArmGIC",
         "drivers/SwitchPower",
+        "drivers/SwitchSuspend",
         "drivers/TegraDisplayFlip",
         "drivers/TegraGPIO",
         "drivers/TegraSMMU",

@@ -29,7 +29,9 @@
 #include "../TegraSMMU/TegraSMMUDomain.h"
 #include "DisplaySmmuProbe.h"
 #include "NativePlanes.h"
+#include "SwitchFrameStall.h"
 #include "SwitchInteraction.h"
+#include "../SwitchSuspend/SwitchSleepSteps.h"
 #include "../TegraVIC/TegraVICConfig.h"
 #include "TegraDisplayPower.h"
 #include "VsyncPhase.h"
@@ -60,6 +62,8 @@ extern "C" void switch_frames_touch_activity(uint64_t *, uint64_t *);
 extern "C" size_t switch_frames_line(bool, char *, size_t);
 extern "C" void switch_frames_present(uint64_t, uint64_t, uint64_t);
 extern "C" size_t switch_frames_latency_line(char *, size_t);
+// XNU (kernel/switch/diag/stall_frame.c): the threads a frame waits on, snapshotted at a frame end that found a stall
+extern "C" void switch_stall_frame(uint64_t);
 extern "C" uint64_t native_legacy_surface_width(OSObject *), native_legacy_surface_height(OSObject *);
 extern "C" uint64_t native_legacy_surface_stride(OSObject *), native_legacy_surface_allocation(OSObject *);
 extern "C" uint32_t native_legacy_surface_format(OSObject *), native_legacy_surface_planes(OSObject *);
@@ -1075,6 +1079,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
         uint64_t intervalUs = 0;
         uint32_t periods = 0;
         unsigned cause = kLongCauses;
+        frameStall.present(stamp, lastPresent && stamp > lastPresent ? stamp - lastPresent : 0, refreshTicks());
         if (lastPresent && stamp > lastPresent) {
             const uint64_t us = Span::ticksToUs(stamp - lastPresent);
             intervalUs = us;
@@ -1096,6 +1101,16 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
         }
         if (frameHists)
             noteInteraction(stamp, intervalUs, periods, cause);
+    }
+
+    SwitchFrameStall frameStall;
+
+    uint64_t refreshTicks() const
+    {
+        uint64_t period = vsyncInterval;
+        if (!period)
+            nanoseconds_to_absolutetime(16666667ull, &period);
+        return period;
     }
 
     // Debug kernels: a present inside a touch interaction window (SwitchInteraction.h), after closing an ended one.
@@ -1402,6 +1417,8 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
         if (status & kFrameEndInt)
             planeFrameEnd();
         if ((status & kFrameEndInt) && stats) {
+            if (frameStall.frameEnd(mach_absolute_time(), refreshTicks(), vsyncWanted()))
+                switch_stall_frame(frameStall.lastPresent());
             checkInteraction();
             noteStatsWindow();
         }
@@ -4805,6 +4822,7 @@ extern "C" void tegra_display_suspend(void)
         d->quiesceForSuspend();
         return true;
     });
+    switch_sleep_mark(SWITCH_STEP_DISPLAY_QUIESCED);
     IOSleep(20);  // DC A stops at the end of the frame it was scanning
     tegra_display_power_down();
 }

@@ -1,11 +1,14 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // The durable power mark (diagnostics/switch/SwitchPowerTrail.h): one code byte in the MAX77620 RTC's ALARM2, the one
 // store on the board that a forced power-off keeps, since the RTC runs from the battery while the PMIC is off.
-// ALARM2_SEC holds the code, ALARM2_MIN how many marks the boot wrote (mod 128), ALARM2_YEAR kMagic. Each field's bit 7,
-// its compare enable, stays clear, so the alarm never matches (Linux max77686_rtc_stop_alarm turns an alarm off the same
-// way, and the power-off clears ONOFFCNFG2 WK_ALARM2 besides); ALARM1 is the wake alarm (SwitchPMIC.cpp). Horizon
-// programs ALARM2 for its own alarms, so a Horizon boot in between leaves no mark of ours; hekate's
-// max77620_rtc_stop_alarm clears only the compare bits and keeps the mark.
+// The RTC drops a field written out of its range at the update and keeps the old value (on 11-06 every halt code, 96 and
+// up, left ALARM2_SEC at the boot's 0x1f while ALARM2_MIN counted on), so every field stays in range: the code's low five
+// bits in ALARM2_SEC, its high two in ALARM2_HOUR, how many marks the boot wrote (mod 60) in ALARM2_MIN, kMagic in
+// ALARM2_YEAR, 1 + the flags (SWITCH_MARK_FLAG_*) in ALARM2_DATE, and weekday and month 1. Each field's bit 7, its
+// compare enable, stays clear, so the alarm never matches (Linux max77686_rtc_stop_alarm turns an alarm off the same way,
+// and the power-off clears ONOFFCNFG2 WK_ALARM2 besides); ALARM1 is the wake alarm (SwitchPMIC.cpp). Horizon programs
+// ALARM2 for its own alarms, so a Horizon boot in between leaves no mark of ours; hekate's max77620_rtc_stop_alarm clears
+// only the compare bits and keeps the mark.
 // Debug kernels write marks; every kernel keeps the RTC's update rule (SwitchMAX77620.h).
 #include <IOKit/IOLib.h>
 #include <IOKit/IOLocks.h>
@@ -48,13 +51,14 @@ void max77620::rtcUpdated()
 namespace {
 using namespace max77620;
 
-constexpr uint8_t kMagic = 0x5a;
+constexpr uint8_t kMagic = 91;  // 90 was the out-of-range layout
 constexpr uint8_t kAlarmCompare = 1u << 7;
 constexpr uint32_t kNoMark = 0x100;  // gWritten before this boot's first mark
 
 uint32_t gPending = kNoMark;  // the latest mark asked for (atomic)
 uint32_t gWritten = kNoMark;  // the latest mark in the RTC (gLock, or the one caller of switch_pmic_mark_now)
 uint8_t gCount;               // marks written this boot
+uint8_t gFlags;               // SWITCH_MARK_FLAG_* set this boot, ALARM2_DATE - 1
 uint8_t gUpdate0;             // RTCUPDATE0's other bits as the boot found them
 IOLock *gLock;
 thread_call_t gCall;
@@ -77,16 +81,34 @@ int rawWrite(uint8_t reg, uint8_t value)
     return tegra_i2c_raw_write(kBus, kRtc, data, sizeof(data));
 }
 
+// A field's value in range for the binary 24-hour layout (Linux max77686_rtc_tm_to_data).
+uint8_t fieldValue(unsigned field, uint32_t code, uint8_t count)
+{
+    switch (field) {
+    case SEC:
+        return static_cast<uint8_t>(code & 0x1fu);
+    case MIN:
+        return count;
+    case HOUR:
+        return static_cast<uint8_t>((code >> 5) & 0x3u);
+    case YEAR:
+        return kMagic;
+    case DATE:
+        return static_cast<uint8_t>(1u + gFlags);
+    default:
+        return 1;  // weekday (one-hot), month
+    }
+}
+
 // The code and the count, then UDR. A boot's first mark writes every field, compare bits clear: whatever alarm ALARM2
 // held is off from then on.
 int writeMark(Write put, uint32_t code)
 {
-    const auto count = static_cast<uint8_t>((gCount + 1u) & 0x7fu);
-    int err = put(alarm2(SEC), static_cast<uint8_t>(code));
-    if (!err)
-        err = put(alarm2(MIN), count);
-    for (unsigned field = HOUR; !err && gWritten == kNoMark && field < kTimeRegs; ++field)
-        err = put(alarm2(field), field == YEAR ? kMagic : 0);
+    const auto count = static_cast<uint8_t>((gCount + 1u) % 60u);
+    const unsigned fields = gWritten == kNoMark ? kTimeRegs : HOUR + 1u;
+    int err = 0;
+    for (unsigned field = SEC; !err && field < fields; ++field)
+        err = put(alarm2(field), fieldValue(field, code, count));
     if (!err)
         err = put(RTC_UPDATE0, gUpdate0 | kRtcWriteUpdate);
     rtcUpdated();
@@ -120,7 +142,7 @@ void writerCall(thread_call_param_t, thread_call_param_t)
 }
 
 // The last boot's mark, read through RBUDR; -1 if ALARM2 holds none of ours.
-int lastMark(unsigned *count)
+int lastMark(unsigned *count, unsigned *flags)
 {
     uint8_t alarm[kTimeRegs] = {};
     rtcQuiet(true);
@@ -134,10 +156,11 @@ int lastMark(unsigned *count)
         if (field & kAlarmCompare)
             return -1;
     }
-    if (err || alarm[YEAR] != kMagic)
+    if (err || alarm[YEAR] != kMagic || alarm[SEC] > 0x1fu || alarm[HOUR] > 0x3u || alarm[DATE] < 1 || alarm[DATE] > 4)
         return -1;
     *count = alarm[MIN];
-    return alarm[SEC];
+    *flags = alarm[DATE] - 1u;
+    return static_cast<int>((unsigned{alarm[HOUR]} << 5) | alarm[SEC]);
 }
 }  // namespace
 
@@ -152,8 +175,9 @@ extern "C" void switch_pmic_mark_start(void)
     }
     gUpdate0 = static_cast<uint8_t>(update & ~(unsigned{kRtcWriteUpdate} | kRtcReadUpdate));
     unsigned count = 0;
-    const int last = lastMark(&count);
-    switch_power_trail_durable(last, count);
+    unsigned flags = 0;
+    const int last = lastMark(&count, &flags);
+    switch_power_trail_durable(last, count, flags);
     gLock = IOLockAlloc();
     gCall =
         gLock ? thread_call_allocate_with_options(writerCall, nullptr, THREAD_CALL_PRIORITY_KERNEL_HIGH, 0) : nullptr;
@@ -189,5 +213,17 @@ extern "C" void switch_pmic_mark_now(uint8_t code)
         return;
     rtcQuiet(false);
     (void)writeMark(rawWrite, code);
+}
+
+// ALARM2_DATE alone (1 + the flags), then UDR: the code and the count stay as the last mark left them.
+extern "C" void switch_pmic_flag_now(uint8_t flag)
+{
+    if (!gCall)
+        return;
+    gFlags = static_cast<uint8_t>((unsigned{gFlags} | flag) & 0x3u);
+    rtcQuiet(false);
+    if (!rawWrite(alarm2(DATE), static_cast<uint8_t>(1u + gFlags)))
+        (void)rawWrite(RTC_UPDATE0, gUpdate0 | kRtcWriteUpdate);
+    rtcUpdated();
 }
 #endif

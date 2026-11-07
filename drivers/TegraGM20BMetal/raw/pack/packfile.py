@@ -4,7 +4,7 @@ import struct
 from dataclasses import dataclass
 
 MAGIC = b'GM20BPK1'
-VERSION = 2  # 2: the header's stack key (rawpack.py --stack) after the section table
+VERSION = 3  # 2: the header's stack key (rawpack.py --stack) after the section table; 3: barrier-form records
 
 
 def fnv(b: bytes, h: int = 0xCBF29CE484222325) -> int:
@@ -51,7 +51,7 @@ def pipeline_bytes(rec: dict, key_offset: int, blob_off: int) -> bytes:
     # the raw path's own states (probe.mm PROBE_YCBCR_LIB) by the name the runtime asks for (raw_gpu.cpp ycbcrPipeline)
     own = re.search(r'\| f (ycbcr_\w+)', rec['key'])
     keyhash = fnv(('raw.ycbcr.' + own.group(1)).encode() if own else rec['key'].encode())
-    flags = 1 if rec['fetch'] else 0
+    flags = (1 if rec['fetch'] else 0) | (2 if rec.get('form') == 'barrier' else 0)  # PackPipelineFlags
     head = struct.pack(
         '<QIHHIIBBBBHHI',
         keyhash,

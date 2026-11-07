@@ -10,6 +10,13 @@
 //    fresh surface's zeros came back as 16x1 black runs in a GPU-rendered launch snapshot). A surface the GPU only
 //    samples (an app's backing store in the render server) is never marked, so the app's lock to redraw it costs no
 //    invalidate.
+//  - Lock and GPU work in flight: IOSurfaceLock is where a CPU reader synchronises with the GPU (Apple's: a lock without
+//    kIOSurfaceLockAvoidSync waits for the GPU's pending writes; with it, a lock that would have to wait fails with
+//    kIOReturnCannotLock), and readers count on it: a snapshot's reader locks its surface right after the render
+//    server's reply, its render maybe still running. So Exec also records each marking submission (channel, seqno) on
+//    the entry, and a lock (tegra_gm20b_iosurface_lock_will, before the trap) sleeps on those channels' fence
+//    interrupts until they completed, then the trap invalidates. Only a lock of a surface whose writers are still
+//    running waits.
 //  - CPU -> GPU: an unlock that was not read-only cleans the surface, so the GPU reads what the CPU wrote. Read-only
 //    imports included: the GPU samples what an app redraws into them.
 //  - Import: the importer cleans the pages for what the CPU wrote before. Memory imported without a surface ID (no-copy
@@ -25,6 +32,9 @@
 #include "TegraGM20BGpu.h"
 #include "../TegraDisplayFlip/TegraScanoutCopy.h"
 
+#define TGM_COH_WRITERS \
+	4 /* the raw path's channel and m2v's, in each of two processes, before one has to wait for all */
+
 struct tgm_coh {
 	tgm_coh *next;    // first-page chain
 	tgm_coh *idNext;  // surface-ID chain, while surfaceId != 0
@@ -39,12 +49,15 @@ struct tgm_coh {
 	int cleaned;          // atomic: an import of it finished its own clean
 	int gpuDirty;         // atomic: the GPU may have written it since the last CPU lock
 	uint32_t tiledBinds;  // atomic: live whole-surface binds with TEGRA_SCANOUT_TILED_KIND
+	uint64_t writers
+		[TGM_COH_WRITERS];  // atomic: marking submissions, channel uid << 32 | seqno (0: free slot)
+	int writersLost;  // atomic: one found no slot: a lock waits for every channel's submitted work
 };
 
 namespace
 {
 constexpr uint32_t kBuckets = 256;
-constexpr uint32_t kTrapLock = 2, kTrapUnlock = 3, kLockReadOnly = 0x1;
+constexpr uint32_t kTrapLock = 2, kTrapUnlock = 3, kLockReadOnly = 0x1, kLockAvoidSync = 0x2;
 constexpr uint32_t kBatch = 4;
 
 IOLock *gRegistryLock;
@@ -53,7 +66,7 @@ uint32_t gWithId;  // atomic: entries reachable by surface ID; 0 lets every trap
 
 #if TGM_STATS
 struct {
-	uint64_t invalN, invalBytes, cleanN, cleanBytes;
+	uint64_t invalN, invalBytes, cleanN, cleanBytes, waitedN, cannotLockN;
 } gStats;  // registry lock
 #endif
 
@@ -265,10 +278,97 @@ extern "C" void tgm_coherency_put(struct tgm_coh *c)
 	IOLockUnlock(gRegistryLock);
 }
 
-extern "C" void tgm_coherency_wrote(struct tgm_coh *c, int always)
+// One submission of channel `uid` that may write `c`: a later one of the same channel takes its slot.
+static void noteWriter(tgm_coh *c, uint32_t uid, uint32_t seqno)
 {
-	if (c && (always || __atomic_load_n(&c->gpuWrites, __ATOMIC_RELAXED)))
+	const uint64_t mine = uint64_t(uid) << 32 | seqno;
+	for (uint32_t i = 0; i < TGM_COH_WRITERS; i++) {
+		uint64_t seen = __atomic_load_n(&c->writers[i], __ATOMIC_ACQUIRE);
+		while (seen && uint32_t(seen >> 32) == uid) {
+			if (int32_t(seqno - uint32_t(seen)) <= 0 ||
+			    __atomic_compare_exchange_n(&c->writers[i], &seen, mine, false,
+							__ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
+				return;
+		}
+	}
+	for (uint32_t i = 0; i < TGM_COH_WRITERS; i++) {
+		uint64_t free = 0;
+		if (__atomic_compare_exchange_n(&c->writers[i], &free, mine, false,
+						__ATOMIC_ACQ_REL, __ATOMIC_RELAXED))
+			return;
+	}
+	__atomic_store_n(&c->writersLost, 1, __ATOMIC_RELEASE);
+}
+
+extern "C" void tgm_coherency_wrote(struct tgm_coh *c, int always, uint32_t uid, uint32_t seqno)
+{
+	if (c && (always || __atomic_load_n(&c->gpuWrites, __ATOMIC_RELAXED))) {
+		noteWriter(c, uid, seqno);
 		__atomic_store_n(&c->gpuDirty, 1, __ATOMIC_RELEASE);
+	}
+}
+
+// Whether `c` has a writer still running; with `wait`, sleeps until none has, and frees the completed slots.
+static bool writersPending(tgm_coh *c, bool wait)
+{
+	bool pending = false;
+	if (__atomic_load_n(&c->writersLost, __ATOMIC_ACQUIRE)) {
+		if (!wait)
+			return !tgm_writers_all_done();
+		__atomic_store_n(&c->writersLost, 0, __ATOMIC_RELAXED);
+		tgm_writers_wait_all();
+		pending = true;
+	}
+	for (uint32_t i = 0; i < TGM_COH_WRITERS; i++) {
+		uint64_t seen = __atomic_load_n(&c->writers[i], __ATOMIC_ACQUIRE);
+		if (!seen || tgm_writer_done(uint32_t(seen >> 32), uint32_t(seen))) {
+			if (seen)
+				__atomic_compare_exchange_n(&c->writers[i], &seen, 0, false,
+							    __ATOMIC_ACQ_REL, __ATOMIC_RELAXED);
+			continue;
+		}
+		if (!wait)
+			return true;
+		tgm_writer_wait(uint32_t(seen >> 32), uint32_t(seen));
+		__atomic_compare_exchange_n(&c->writers[i], &seen, 0, false, __ATOMIC_ACQ_REL,
+					    __ATOMIC_RELAXED);
+		pending = true;
+	}
+	return pending;
+}
+
+extern "C" int tegra_gm20b_iosurface_lock_will(uint32_t surface_id, uint32_t options)
+{
+	if (!surface_id || !__atomic_load_n(&gWithId, __ATOMIC_RELAXED))
+		return 0;
+	const bool avoidSync = options & kLockAvoidSync;
+	tgm_coh *found[kBatch];
+	uint32_t n = kBatch;
+	bool waited = false, refused = false;
+	for (uint32_t skip = 0; n == kBatch && !refused && (n = findById(surface_id, skip, found));
+	     skip += n) {
+		for (uint32_t i = 0; i < n && !refused; i++) {
+			if (avoidSync)
+				refused = writersPending(found[i], false);
+			else
+				waited |= writersPending(found[i], true);
+		}
+		IOLockLock(gRegistryLock);
+		for (uint32_t i = 0; i < n; i++)
+			release(found[i]);
+		IOLockUnlock(gRegistryLock);
+	}
+#if TGM_STATS
+	if (waited || refused) {
+		IOLockLock(gRegistryLock);
+		gStats.waitedN += waited;
+		gStats.cannotLockN += refused;
+		IOLockUnlock(gRegistryLock);
+	}
+#else
+	(void)waited;
+#endif
+	return refused;
 }
 
 extern "C" void tgm_coherency_gpu_writes(uint32_t surface_id)
@@ -300,9 +400,9 @@ extern "C" int tegra_gm20b_surface_tiled(uint64_t pa)
 	return tiled;
 }
 
-extern "C" void tgm_coherency_take_stats(uint64_t out[4])
+extern "C" void tgm_coherency_take_stats(uint64_t out[6])
 {
-	bzero(out, 4 * sizeof(uint64_t));
+	bzero(out, 6 * sizeof(uint64_t));
 #if TGM_STATS
 	if (!gRegistryLock)
 		return;
@@ -311,6 +411,8 @@ extern "C" void tgm_coherency_take_stats(uint64_t out[4])
 	out[1] = gStats.invalBytes;
 	out[2] = gStats.cleanN;
 	out[3] = gStats.cleanBytes;
+	out[4] = gStats.waitedN;
+	out[5] = gStats.cannotLockN;
 	bzero(&gStats, sizeof(gStats));
 	IOLockUnlock(gRegistryLock);
 #endif

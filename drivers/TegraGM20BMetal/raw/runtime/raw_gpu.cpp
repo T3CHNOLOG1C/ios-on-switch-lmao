@@ -32,6 +32,7 @@ enum : uint32_t {
     COLOR_CLEAR_VALUE = 0x0d80,
     INVALIDATE_SHADER_CACHES_NO_WFI = 0x0da4,
     PIXEL_SHADER_BARRIER = 0x0de0,
+    PIXEL_SHADER_INTERLOCK_CONTROL = 0x1224,
     // Not in NVIDIA's published class headers: the texture data cache invalidate that NVN (deko3d's ORDER_FRAGMENTS
     // barrier) and NVIDIA's Linux driver put after PIXEL_SHADER_BARRIER, which orders it after the earlier pixels. The
     // _NO_WFI form acts as the front end reads it, while those pixels may still be shading or in the ROP.
@@ -51,6 +52,7 @@ enum : uint32_t {
     RENDER_ENABLE_OVERRIDE = 0x1944,
     PRIMITIVE_TOPOLOGY = 0x1970,
     CLEAR_SURFACE = 0x19d0,
+    BLEND_CONST_RED = 0x131c,
     COLOR_COMPRESSION = 0x19e0,
     CT_WRITE = 0x1a00,
     VERTEX_STREAM_LOCATION = 0x1c04,
@@ -72,13 +74,16 @@ enum : uint32_t {
 };
 
 constexpr uint32_t kRootBytes = 0x800, kSetBytes = 0x100, kUboChunk = 0x100;
+constexpr uint32_t kRootInterlockTickets = 0x260;  // offsetof(nvk_root_descriptor_table, interlock_ticket_buffer)
 constexpr uint32_t kTicCount = 8192, kTscCount = 1024;
+constexpr uint32_t kEngines =
+    TegraGM20BEngine3D | TegraGM20BEngineCompute | TegraGM20BEngineCopy | TegraGM20BEngine2D | TegraGM20BEngineM2MF;
 constexpr uint64_t kPushRing = 2 << 20, kUploadRing = 4 << 20;
 constexpr uint64_t kChunk = 16 << 20, kDedicated = 8 << 20;
+constexpr size_t kDedicatedSpares = 2;
 // The shader heap: the programs of the states a process uses, placed at first use (Device::place); the pack holds tens of MB
 // of programs, of which the render server uses a few hundred
 constexpr uint64_t kHeapCap = 8 << 20;
-constexpr uint32_t kPteKindPitch = 0;
 constexpr uint32_t kMaxSegments = TegraGM20BMaxPushes;
 // NVK's copies of pitch memory (nouveau_copy_rect: LAUNCH_DMA PIPELINED, FLUSH_ENABLE, SRC/DST_MEMORY_LAYOUT PITCH, MULTI_LINE_ENABLE)
 constexpr uint32_t kLaunchPitch = 1u | 1u << 2 | 1u << 7 | 1u << 8 | 1u << 9;
@@ -110,7 +115,7 @@ const FormatInfo kFormats[] = {
     {71, 0, 0x58d24908, 4, true},        // RGBA8Unorm_sRGB
     {80, 0xcf, 0x54e24908, 4, false},    // BGRA8Unorm
     {81, 0, 0x54e24908, 4, true},        // BGRA8Unorm_sRGB
-    {90, 0, 0x58d24909, 4, false},       // RGB10A2Unorm
+    {90, 0xd1, 0x58d24909, 4, false},    // RGB10A2Unorm (rendered: a 10-bit code texture's image)
     {92, 0, 0x78d7ffa1, 4, false},       // RG11B10Float
     {93, 0, 0x78d7ffa0, 4, false},       // RGB9E5Float
     {94, 0, 0x54e24909, 4, false},       // BGR10A2Unorm
@@ -207,64 +212,16 @@ Device::~Device()
         grower_.join();
 }
 
-bool Device::open(const char *packPath, uint64_t stack, std::string &err)
+uint32_t Device::contextWords() const
 {
-    if (!pack_.load(packPath, stack, err))
-        return false;
-    if (!k_.open(err))
-        return false;
-    if (k_.info().cls_eng3d != 0xb197 || k_.info().cls_copy != 0xb0b5) {
-        err = "not a MAXWELL_B with MAXWELL_DMA_COPY_A";
-        return false;
-    }
-    return init(err);
+    return uint32_t(pack_.bytes(PackInit) / sizeof(PackInitMethod)) * 2 + 4096;
 }
 
-bool Device::init(std::string &err)
+// The channel's context: NVK's own init methods with our addresses, then every register Core Animation's states leave the
+// same. A channel the kernel kills takes its context with it (reopen).
+void Device::emitContext(Push &p)
 {
-    const uint64_t heapBytes = std::min<uint64_t>(pack_.bytes(PackHeap), kHeapCap);
-    if (!k_.alloc(heapBytes + 0x1000, true, heap_) || !k_.alloc(kTicCount * 32, true, tic_) ||
-        !k_.alloc(kTscCount * 32, true, tsc_) || !k_.alloc(0x1000, true, root_) || !k_.alloc(0x10000, true, zero_) ||
-        !k_.alloc(kPushRing, true, push_.bo) || !k_.alloc(kUploadRing, true, upload_.bo)) {
-        err = k_.error();
-        return false;
-    }
-    memset(tic_.cpu, 0, tic_.bytes);
-    memset(tsc_.cpu, 0, tsc_.bytes);
-    memset(root_.cpu, 0, root_.bytes);
-    memset(zero_.cpu, 0, zero_.bytes);
-    if (!k_.channel(TegraGM20BEngine3D | TegraGM20BEngineCompute | TegraGM20BEngineCopy | TegraGM20BEngine2D |
-                        TegraGM20BEngineM2MF,
-                    channel_, fence_)) {
-        err = k_.error();
-        return false;
-    }
-    // texture header 0: NIL's null descriptor (block linear over the zero page), what NVK keeps at index 0
-    uint32_t *t0 = reinterpret_cast<uint32_t *>(tic_.cpu);
-    t0[0] = 0x2491d;
-    t0[1] = uint32_t(zero_.va);
-    t0[2] = 0x600000 | uint32_t(zero_.va >> 32);
-    t0[4] = 0xe2840000;
-    t0[5] = 0x80000000;
-    t0[7] = 0x80000001;
-    // m2v's neutral sampler, which it binds for a sampler slot the function reads and the encoder left unbound (Vulkan defaults:
-    // nearest, clamp to edge, mip nearest, no LOD clamp), then the constexpr samplers the pack's functions use
-    {
-        const uint32_t neutral[8] = {0x26092, 0x291, 0xfff000, 0, 0, 0, 0, 0};
-        memcpy(tsc_.cpu + 32 * nextTsc_, neutral, 32);
-        neutralTsc_ = nextTsc_++;
-    }
-    const uint32_t *cs = pack_.section<uint32_t>(PackSamplers);
-    for (uint32_t i = 0; i < pack_.header()->samplers; i++) {
-        memcpy(tsc_.cpu + 32 * nextTsc_, cs + 8 * i, 32);
-        constexprTsc_.push_back(nextTsc_++);
-    }
-
-    // the context: NVK's own init methods with our addresses, then every register Core Animation's states leave the same
-    uint64_t va;
     const uint32_t initCount = uint32_t(pack_.bytes(PackInit) / sizeof(PackInitMethod));
-    uint32_t *start = reinterpret_cast<uint32_t *>(alloc(push_, (initCount * 2 + 4096) * 4, 256, va));
-    Push p{start, start + initCount * 2 + 4096};
     const PackInitMethod *im = pack_.section<PackInitMethod>(PackInit);
     for (uint32_t i = 0; i < initCount; i++) {
         uint32_t d = im[i].data;
@@ -318,6 +275,72 @@ bool Device::init(std::string &err)
     p.inc(CB_SELECTOR_A, {kRootBytes, uint32_t(root_.va >> 32), uint32_t(root_.va)});
     p.m(LOAD_CB_OFFSET, 0x1c);
     p.nonInc(LOAD_CB, (const uint32_t[]){0x88}, 1);
+    // the pixel interlock's ticket buffer (nvk_root_descriptor_table.interlock_ticket_buffer; NAK's lowering waits on and
+    // releases its words, 256 per GPC): zero, as this channel's ticket dispenser starts. NVK's init above may name the probe's.
+    {
+        const uint32_t a[2] = {uint32_t(tickets_.va), uint32_t(tickets_.va >> 32)};
+        p.m(LOAD_CB_OFFSET, kRootInterlockTickets);
+        p.nonInc(LOAD_CB, a, 2);
+    }
+}
+
+bool Device::open(const char *packPath, uint64_t stack, std::string &err)
+{
+    if (!pack_.load(packPath, stack, err))
+        return false;
+    if (!k_.open(err))
+        return false;
+    if (k_.info().cls_eng3d != 0xb197 || k_.info().cls_copy != 0xb0b5) {
+        err = "not a MAXWELL_B with MAXWELL_DMA_COPY_A";
+        return false;
+    }
+    return init(err);
+}
+
+bool Device::init(std::string &err)
+{
+    const uint64_t heapBytes = std::min<uint64_t>(pack_.bytes(PackHeap), kHeapCap);
+    if (!k_.alloc(heapBytes + 0x1000, true, heap_) || !k_.alloc(kTicCount * 32, true, tic_) ||
+        !k_.alloc(kTscCount * 32, true, tsc_) || !k_.alloc(0x1000, true, root_) || !k_.alloc(0x10000, true, zero_) ||
+        !k_.alloc(0x1000, true, tickets_) || !k_.alloc(kPushRing, true, push_.bo) ||
+        !k_.alloc(kUploadRing, true, upload_.bo)) {
+        err = k_.error();
+        return false;
+    }
+    memset(tic_.cpu, 0, tic_.bytes);
+    memset(tsc_.cpu, 0, tsc_.bytes);
+    memset(root_.cpu, 0, root_.bytes);
+    memset(zero_.cpu, 0, zero_.bytes);
+    memset(tickets_.cpu, 0, tickets_.bytes);
+    if (!k_.channel(kEngines, channel_, fence_)) {
+        err = k_.error();
+        return false;
+    }
+    // texture header 0: NIL's null descriptor (block linear over the zero page), what NVK keeps at index 0
+    uint32_t *t0 = reinterpret_cast<uint32_t *>(tic_.cpu);
+    t0[0] = 0x2491d;
+    t0[1] = uint32_t(zero_.va);
+    t0[2] = 0x600000 | uint32_t(zero_.va >> 32);
+    t0[4] = 0xe2840000;
+    t0[5] = 0x80000000;
+    t0[7] = 0x80000001;
+    // m2v's neutral sampler, which it binds for a sampler slot the function reads and the encoder left unbound (Vulkan defaults:
+    // nearest, clamp to edge, mip nearest, no LOD clamp), then the constexpr samplers the pack's functions use
+    {
+        const uint32_t neutral[8] = {0x26092, 0x291, 0xfff000, 0, 0, 0, 0, 0};
+        memcpy(tsc_.cpu + 32 * nextTsc_, neutral, 32);
+        neutralTsc_ = nextTsc_++;
+    }
+    const uint32_t *cs = pack_.section<uint32_t>(PackSamplers);
+    for (uint32_t i = 0; i < pack_.header()->samplers; i++) {
+        memcpy(tsc_.cpu + 32 * nextTsc_, cs + 8 * i, 32);
+        constexprTsc_.push_back(nextTsc_++);
+    }
+
+    uint64_t va;
+    uint32_t *start = reinterpret_cast<uint32_t *>(alloc(push_, contextWords() * 4, 256, va));
+    Push p{start, start + contextWords()};
+    emitContext(p);
     TegraGM20BAbiPush seg = {va, uint32_t(p.at - start), 0};
     uint32_t seq = 0;
     if (!k_.exec(channel_, &seg, 1, 0, seq)) {
@@ -331,6 +354,7 @@ bool Device::init(std::string &err)
         return false;
     }
     // SET_CT_WRITE(i), as the baseline leaves it where a state's registers do not set it
+    const uint32_t *base = pack_.section<uint32_t>(PackBaseline);
     for (uint64_t i = 0; i < pack_.bytes(PackBaseline) / 8; i++)
         if (base[2 * i] >= CT_WRITE && base[2 * i] < CT_WRITE + 32)
             ctWrite_[(base[2 * i] - CT_WRITE) / 4] = base[2 * i + 1];
@@ -372,9 +396,9 @@ bool Device::place(uint32_t prog, uint32_t &program)
 
 // A state of the pack, made the first time it is looked up (most of the pack's states never are in a process): its registers
 // as push words with its programs placed in the heap
-Pipeline *Device::pipeline(uint64_t keyHash)
+Pipeline *Device::pipeline(uint64_t keyHash, PackForm form, bool caTransform)
 {
-    const PackPipeline *rec = pack_.find(keyHash);
+    const PackPipeline *rec = pack_.find(keyHash, form);
     if (!rec)
         return nullptr;
     std::lock_guard<std::mutex> l(lock_);
@@ -402,6 +426,11 @@ Pipeline *Device::pipeline(uint64_t keyHash)
     for (uint32_t c = 0; c < 8; c++)
         if (writes[c] & 0x1111)  // R_ENABLE, G_ENABLE, B_ENABLE, A_ENABLE
             pl.writeBits |= uint8_t(1u << c);
+    // TILE_COALESCER_MODE: conflicts by sample or pixel
+    bool interlocked = false;
+    for (uint32_t k = 0; k < pp.blobDwords; k += 2)
+        if (blob[pp.blob + k] == PIXEL_SHADER_INTERLOCK_CONTROL)
+            interlocked = blob[pp.blob + k + 1] & 3;
     w.m(0x2044, vs);  // SET_PIPELINE_PROGRAM(VERTEX)
     w.m(0x2144, fs);  // SET_PIPELINE_PROGRAM(PIXEL)
     pl.methods.assign(words.data(), w.at);
@@ -412,16 +441,33 @@ Pipeline *Device::pipeline(uint64_t keyHash)
     // the color formats of its key ("c<i>=<format>:<writeMask>:<blending>:..."), and which colors its draws read as they
     // were (m2v linear_attachment::writes: a written color blended into, or written through a mask that keeps channels)
     for (const char *at = pack_.string(pp.keyString); (at = strstr(at, " c")); at += 2) {
-        unsigned c = 0, f = 0, mask = 0, blend = 0;
-        if (sscanf(at, " c%u=%u:%u:%u", &c, &f, &mask, &blend) == 4 && c < 8) {
+        unsigned c = 0, f = 0, mask = 0, blend = 0, factor[6] = {};
+        const int n = sscanf(at, " c%u=%u:%u:%u:%u:%u:%*u:%u:%u", &c, &f, &mask, &blend, &factor[0], &factor[1],
+                             &factor[2], &factor[3]);
+        if (n >= 4 && c < 8) {
             pl.colorFormats[c] = f;
             if (mask && (blend || mask != 15))
                 pl.readBits |= uint8_t(1u << c);
+            // MTLBlendFactorBlendColor, OneMinusBlendColor, BlendAlpha, OneMinusBlendAlpha
+            for (int k = 0; blend && k + 4 < n; k++)
+                pl.constantBlend |= factor[k] >= 11 && factor[k] <= 14;
         }
     }
+    // attribute 0 ("a0=<MTLVertexFormat>:<offset>:<buffer>:<stride>:<step function>:..."): MTLVertexFormatFloat2, Float3
+    // or Float4, per vertex, from the stream's buffer
+    unsigned format = 0, offset = 0, buffer = 0, stride = 0, step = 0;
+    if (const char *a0 = strstr(pack_.string(pp.keyString), " a0=");
+        a0 && sscanf(a0, " a0=%u:%u:%u:%u:%u", &format, &offset, &buffer, &stride, &step) == 5 && format >= 29 &&
+        format <= 31 && buffer == pp.vertexSlot && stride == pp.vertexStride && step == 1) {
+        pl.positionComponents = uint8_t(format - 27);
+        pl.positionOffset = uint16_t(offset);
+    }
+    pl.caTransform = caTransform;
     for (uint32_t k = 0; k < pp.entries; k++)
         if (pp.entry[k].kind == EntryFetch && pp.entry[k].slot < 8)
             pl.fetchBits |= uint8_t(1u << pp.entry[k].slot);
+    if (interlocked)
+        pl.storageBits = pl.fetchBits;
     pl.rec = rec;
     return &pl;
 }
@@ -493,8 +539,14 @@ bool Device::poolAlloc(uint64_t bytes, Span &s)
     s = {};
     if (bytes >
         kDedicated) {  // its own chunk, made now (rare: no Core Animation texture of the 720p screen is that large)
-        uint32_t c;
-        if (!newChunk(bytes, true, nullptr, c))
+        uint32_t c = ~0u;
+        for (auto it = spares_.begin(); it != spares_.end(); ++it)
+            if (chunks_[it->chunk].bytes == bytes) {
+                c = it->chunk;
+                spares_.erase(it);
+                break;
+            }
+        if (c == ~0u && !newChunk(bytes, true, nullptr, c))
             return false;
         chunks_[c].used = bytes;
         s = {c, 0, bytes, chunks_[c].bo.va, static_cast<uint8_t *>(chunks_[c].memory)};
@@ -570,6 +622,11 @@ void Device::poolFree(Span &s)
     Chunk &ch = chunks_[s.chunk];
     ch.used -= s.bytes;
     if (ch.dedicated) {  // nothing else is in it
+        if (spares_.size() < kDedicatedSpares) {
+            spares_.push_back({s.chunk, commitCount_});
+            s = {};
+            return;
+        }
         stats.poolBytes -= ch.bytes;
         stats.poolChunks--;
         k_.free(ch.bo);
@@ -715,7 +772,7 @@ bool Device::createTexture(uint32_t width, uint32_t height, uint32_t format, Tex
     t.pitch = (width * t.bpp + 255) & ~255u;
     std::lock_guard<std::mutex> l(lock_);
     const uint64_t bytes = uint64_t(t.pitch) * height;
-    if (wc && wcOn_ && wcAlloc(bytes, t.span)) {
+    if (wc && wcAlloc(bytes, t.span)) {
         t.wc = true;
         stats.wcBytes += t.span.bytes;
     } else {
@@ -843,6 +900,7 @@ bool Device::createView(const Texture &of, uint32_t format, Texture &t)
     t.shadowTarget = f->rt != 0 && !linearTarget(t);
     t.import = nullptr;  // the viewed texture owns the memory (RawMetal.mm keeps it alive while a view lives)
     t.span = {};
+    t.lease = nullptr;
     if (!(t.tic = allocTic()))
         return false;
     writeTic(t);
@@ -1070,18 +1128,18 @@ void Device::destroyTexture(Texture &t)
         freeTic_.push_back(t.tic);
     }
     if (t.chain) {
+        for (const uint32_t level : t.chain->levelTic)
+            if (level) {
+                memset(tic_.cpu + 32 * level, 0, 32);
+                freeTic_.push_back(level);
+            }
         blFree(t.chain->span);
         delete t.chain;
         t.chain = nullptr;
     }
     if (t.import)
         release(t.import);
-    if (t.span.valid()) {
-        if (t.wc)
-            wcFree(t.span);
-        else
-            poolFree(t.span);
-    }
+    freeSpan(t.span, t.wc ? Memory::Wc : Memory::Pool, t.lease);
     t = {};
 }
 
@@ -1091,7 +1149,7 @@ bool Device::createBuffer(uint64_t length, Buffer &b, bool wc)
     if (!length)
         length = 16;
     std::lock_guard<std::mutex> l(lock_);
-    if (wc && wcOn_) {
+    if (wc) {
         if (wcAlloc(length, b.span)) {
             b.wc = true;
             b.va = b.span.va;
@@ -1244,12 +1302,7 @@ void Device::destroyBuffer(Buffer &b)
     std::lock_guard<std::mutex> l(lock_);
     if (b.import)
         release(b.import);
-    if (b.span.valid()) {
-        if (b.wc)
-            wcFree(b.span);
-        else
-            poolFree(b.span);
-    }
+    freeSpan(b.span, b.wc ? Memory::Wc : Memory::Pool, b.lease);
     b = {};
 }
 
@@ -1415,46 +1468,39 @@ bool Device::samplerVariant(Sampler &s, uint8_t map)
 Pipeline *Device::ycbcrPipeline(uint8_t output)
 {
     static const char *const names[] = {"", "raw.ycbcr.ycbcr_converted_frag", "raw.ycbcr.ycbcr_srgb_frag",
-                                        "raw.ycbcr.ycbcr_codes_frag"};
-    if (!output || output > 3)
+                                        "raw.ycbcr.ycbcr_codes_frag", "raw.ycbcr.ycbcr_codes10_frag"};
+    if (!output || output > 4)
         return nullptr;
     return pipeline(Pack::fnv(names[output], strlen(names[output])));
 }
 
-bool Device::createYcbcrTexture(uint64_t surfaceId, void *base, uint64_t allocBytes, const void *surface, uint64_t luma,
-                                uint32_t lumaPitch, uint64_t chroma, uint32_t chromaPitch, uint32_t width,
-                                uint32_t height, uint32_t format, const uint32_t shape[9], Texture &t)
+bool Device::createYcbcrTexture(uint64_t surfaceId, void *base, uint64_t allocBytes, const void *surface,
+                                const YcbcrPlan &plan, uint32_t width, uint32_t height, Texture &t)
 {
-    constexpr uint32_t kR8Unorm = 10, kRG8Unorm = 30;
-    const uint8_t output = format == 500 ? 1 : format == 520 ? 2 : format == 540 ? 3 : 0;
-    const uint32_t image = output == 1 ? 115 : output == 2 ? 125 : 70;
-    if (!output || !ycbcrPipeline(output))
+    if (!ycbcrPipeline(plan.output))
         return false;
-    Texture *y = new Texture, *c = new Texture;
-    if (!createSurfaceTexture(surfaceId, base, allocBytes, surface, luma, width, height, lumaPitch, kR8Unorm, *y)) {
-        delete y;
-        delete c;
+    Texture *y = new Texture, *c = plan.chromaWidth ? new Texture : nullptr;
+    auto undo = [&] {
+        for (Texture *x : {y, c})
+            if (x) {
+                destroyTexture(*x);
+                delete x;
+            }
         return false;
-    }
-    if (!createSurfaceTexture(surfaceId, base, allocBytes, surface, chroma, (width + 1) / 2, (height + 1) / 2,
-                              chromaPitch, kRG8Unorm, *c)) {
-        destroyTexture(*y);
-        delete y;
-        delete c;
-        return false;
-    }
-    if (!createTexture(width, height, image, t)) {
-        destroyTexture(*y);
-        destroyTexture(*c);
-        delete y;
-        delete c;
-        return false;
-    }
+    };
+    if (!createSurfaceTexture(surfaceId, base, allocBytes, surface, plan.luma, width, height, plan.lumaPitch,
+                              plan.lumaFormat, *y))
+        return undo();
+    if (c && !createSurfaceTexture(surfaceId, base, allocBytes, surface, plan.chroma, plan.chromaWidth,
+                                   plan.chromaHeight, plan.chromaPitch, plan.chromaFormat, *c))
+        return undo();
+    if (!createTexture(width, height, plan.image, t))
+        return undo();
     t.luma = y;
     t.chroma = c;
-    memcpy(t.shape, shape, sizeof t.shape);
-    t.ycbcr = output;
-    t.addressMap = output == 3 ? 3 : 1;  // (codes: clamps to zero and to the border at the edge too)
+    memcpy(t.shape, plan.shape, sizeof t.shape);
+    t.ycbcr = plan.output;
+    t.addressMap = plan.addressMap;
     // its alpha read as one, as m2v's view of its own converted image reads it (W_SOURCE ONE_FLOAT; the conversion writes 1 there
     // too: the same texels, now the same header)
     {
@@ -1504,6 +1550,19 @@ Texture *Device::backing(const Texture &m, uint32_t tag)
 // Backings no pass used for 600 command buffers (~10 s of frames) and whose last use completed go back to the pool.
 void Device::trimBackings()
 {
+    for (auto it = spares_.begin(); it != spares_.end();) {
+        if (commitCount_ - it->freedAt > 600) {
+            Chunk &ch = chunks_[it->chunk];
+            stats.poolBytes -= ch.bytes;
+            stats.poolChunks--;
+            k_.free(ch.bo);
+            vm_deallocate(mach_task_self(), vm_address_t(ch.memory), ch.bytes);
+            ch = Chunk();
+            it = spares_.erase(it);
+            continue;
+        }
+        ++it;
+    }
     for (auto it = backings_.begin(); it != backings_.end();) {
         Backing *b = *it;
         if (commitCount_ - b->lastCommit > 600 && (!b->lastUse || done(b->lastUse))) {
@@ -1520,8 +1579,60 @@ void Device::trimBackings()
 
 // ---- command buffer ----
 
+void Device::noteLost()
+{
+    lostThrough_.store(__atomic_load_n(&lastSeqno_, __ATOMIC_RELAXED), std::memory_order_relaxed);
+    lostAny_.store(true, std::memory_order_release);
+}
+
+// The kernel killed the channel (a GPU fault or hang, its own or one it was stuck behind; as a GPU restart on iOS): what it
+// had in flight failed, and a new channel, named by ChannelCreate's reply, gets the context the old one took with it.
+// Between command buffers: no span of either ring is open, and every one the old channel had is done (the kernel released
+// its fence), whatever word the new channel's fence is.
+bool Device::reopen()
+{
+    noteLost();
+    k_.closeChannel(channel_);
+    if (!k_.channel(kEngines, channel_, fence_))
+        return false;
+    stats.reopens++;
+    push_.inflight.clear();
+    upload_.inflight.clear();
+    {
+        std::lock_guard<std::mutex> l(lock_);
+        for (Backing *b : backings_)
+            b->lastUse = 0;
+    }
+    memset(rootPush_, 0, sizeof rootPush_);
+    restart_ = 0;
+    const uint32_t words = contextWords() + uint32_t(fx::twodInitWords());
+    uint64_t va;
+    uint32_t *start = reinterpret_cast<uint32_t *>(alloc(push_, words * 4, 256, va));
+    Push p{start, start + words};
+    emitContext(p);
+    // The interlock's tickets start at zero with the new context's dispensers (a fresh context: its dispenser values are
+    // zero already). Warps of the dead channel may have held tickets, and their lines may sit dirty in the GPU's L2, so the
+    // copy engine zeroes the buffer in the new channel's own order, done before the 3D engine runs again.
+    p.inc(CE_OFFSET_IN_UPPER,
+          {uint32_t(zero_.va >> 32), uint32_t(zero_.va), uint32_t(tickets_.va >> 32), uint32_t(tickets_.va)},
+          SUBC_COPY);
+    p.inc(CE_LINE_LENGTH_IN, {uint32_t(tickets_.bytes), 1}, SUBC_COPY);
+    p.m(CE_LAUNCH_DMA, kLaunchPitch, SUBC_COPY);
+    p.m(WAIT_FOR_IDLE, 0);
+    fx::emitTwodInit(p);
+    TegraGM20BAbiPush seg = {va, uint32_t(p.at - start), 0};
+    uint32_t seq = 0;
+    if (!k_.exec(channel_, &seg, 1, 0, seq))
+        return false;
+    lastSeqno_ = seq;
+    retire(push_, seq);
+    return true;
+}
+
 CommandBuffer *Device::begin()
 {
+    if (k_.lost(channel_))
+        reopen();
     CommandBuffer &cb = cb_;
     cb.dev_ = this;
     cb.segments_.clear();
@@ -1746,8 +1857,8 @@ void RenderEncoder::setBytes(int stage, uint32_t slot, const void *bytes, uint32
     uint8_t *m = dev_->alloc(dev_->upload_, chunk ? chunk : kUboChunk, kUboChunk, va);
     memcpy(m, bytes, length);
     memset(m + length, 0, (chunk ? chunk : kUboChunk) - length);
-    bufs_[stage][slot] = {va, length, nullptr,
-                          0};  // m2v binds the Metal length (its upload chunks are 256-byte aligned)
+    bufs_[stage][slot] = {va, length, nullptr, 0,
+                          m};  // m2v binds the Metal length (its upload chunks are 256-byte aligned)
     dev_->stats.uploadBytes += chunk;
 }
 
@@ -1759,8 +1870,9 @@ void RenderEncoder::setBuffer(int stage, uint32_t slot, const Buffer *b, uint64_
         bufs_[stage][slot] = {};
         return;
     }
-    bufs_[stage][slot] = {
-        b->va + offset, uint32_t(std::min<uint64_t>(b->length - std::min(offset, b->length), 0xffffffffu)), b, offset};
+    bufs_[stage][slot] = {b->va + offset,
+                          uint32_t(std::min<uint64_t>(b->length - std::min(offset, b->length), 0xffffffffu)), b, offset,
+                          b->cpu && offset < b->length ? b->cpu + offset : nullptr};
 }
 
 void RenderEncoder::setBufferOffset(int stage, uint32_t slot, uint64_t offset)
@@ -1809,16 +1921,25 @@ void RenderEncoder::setViewport(double x, double y, double w, double h, double z
     viewportDirty_ = true;
 }
 
+void RenderEncoder::setBlendColor(const float rgba[4])
+{
+    uint32_t v[4];
+    memcpy(v, rgba, sizeof v);
+    if (memcmp(v, blendColor_, sizeof v)) {
+        memcpy(blendColor_, v, sizeof v);
+        blendColorDirty_ = true;
+    }
+}
+
 void RenderEncoder::barrier()
 {
     if (p_.room() < 64)
         reserve();
     p_.m(WAIT_FOR_IDLE, 0);
     p_.m(INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI, 0);
-    writtenBits_ = 0;
+    writtenBits_ = storageWrittenBits_ = 0;
+    written_.clear();
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    writtenCount_ = 0;
-    writtenFull_ = false;
     anyWritten_ = false;
     ropWritten_ = storageWritten_ = 0;
 #endif
@@ -1889,7 +2010,12 @@ bool RenderEncoder::drawIndexed(uint32_t primitive, uint32_t count, uint32_t ind
                                                                   : largestIndex<uint32_t>(at, count);
     if (!ib->wc)
         cb_->clean(at, uint64_t(count) * indexSize);
-    if (!prepare(pl, primitive, 0, 0, most + 1, 0, true, why))
+    drawIndices_ = at;
+    drawIndexSize_ = indexSize;
+    drawIndexCount_ = count;
+    const bool prepared = prepare(pl, primitive, 0, 0, most + 1, 0, true, why);
+    drawIndices_ = nullptr;
+    if (!prepared)
         return false;
     const uint64_t va = ib->va + offset, end = va + uint64_t(count) * indexSize - 1;
     if (va != ibVa_ || end != ibEnd_ || indexSize != ibSize_) {
@@ -1914,22 +2040,20 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, uint32_t first, ui
     const uint32_t count = vCount;
     drew_ = true;
     readBits_ |= pl->readBits;
-    if (!whole_) {  // the pixels it may write: its scissor within its viewport's pixels (m2v vk_scissors, viewport_pixels)
-        auto axis = [](double origin, double size, uint32_t limit, uint32_t lo, uint32_t hi, uint32_t out[2]) {
-            const double a = size < 0 ? origin + size : origin, b = size < 0 ? origin : origin + size;
-            const int64_t first = int64_t(std::clamp(std::floor(a), 0.0, double(limit)));
-            const int64_t end =
-                size == 0 ? first : std::max<int64_t>(first, int64_t(std::clamp(std::ceil(b), 0.0, double(limit))));
-            out[0] = uint32_t(std::max<int64_t>(lo, first));
-            out[1] = std::max(out[0], uint32_t(std::min<int64_t>(hi, end)));
-        };
-        uint32_t x[2], y[2];
-        const bool empty = vp_[2] == 0 || vp_[3] == 0;
-        axis(vp_[0], empty ? 0 : vp_[2], areaW_, sc_[0], sc_[0] + sc_[2], x);
-        axis(vp_[1], empty ? 0 : vp_[3], areaH_, sc_[1], sc_[1] + sc_[3], y);
-#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-        drawRect_ = {x[0], y[0], x[1], y[1]};
-#endif
+    // the pixels it may write: its scissor within its viewport's pixels (m2v vk_scissors, viewport_pixels)
+    auto axis = [](double origin, double size, uint32_t limit, uint32_t lo, uint32_t hi, uint32_t out[2]) {
+        const double a = size < 0 ? origin + size : origin, b = size < 0 ? origin : origin + size;
+        const int64_t first = int64_t(std::clamp(std::floor(a), 0.0, double(limit)));
+        const int64_t end =
+            size == 0 ? first : std::max<int64_t>(first, int64_t(std::clamp(std::ceil(b), 0.0, double(limit))));
+        out[0] = uint32_t(std::max<int64_t>(lo, first));
+        out[1] = std::max(out[0], uint32_t(std::min<int64_t>(hi, end)));
+    };
+    uint32_t x[2], y[2];
+    const bool empty = vp_[2] == 0 || vp_[3] == 0;
+    axis(vp_[0], empty ? 0 : vp_[2], areaW_, sc_[0], sc_[0] + sc_[2], x);
+    axis(vp_[1], empty ? 0 : vp_[3], areaH_, sc_[1], sc_[1] + sc_[3], y);
+    if (!whole_) {
         if (x[1] > x[0] && y[1] > y[0]) {
             const std::array<uint32_t, 4> r = {x[0], y[0], x[1], y[1]};
             if (std::find(rects_.begin(), rects_.end(), r) == rects_.end())
@@ -2012,8 +2136,16 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, uint32_t first, ui
             tic = t ? t->tic : 0;
         } else if (e.kind == EntryFetch) {
             const Texture *t = pass_.color[e.slot].texture;
-            if (t && !t->tic) {  // a chain level target has no texture header of its own to fetch through
-                *why = "framebuffer fetch from a target the raw path cannot sample (a mip level)";
+            if (t && !t->tic) {
+                *why = "framebuffer fetch from a target the raw path cannot sample";
+                cb_->refusal = {RefNoTic, e.slot, t->format, t->width};
+                return false;
+            }
+            // metal2vulkan's storage view of an 8-bit sRGB color is its texel size's unsigned-integer format, not the
+            // texture's header
+            const FormatInfo *f = t && (pl->storageBits >> e.slot & 1) ? formatInfo(t->format) : nullptr;
+            if (f && f->srgb) {
+                *why = "an sRGB color read and written in the pixel interlock";
                 cb_->refusal = {RefNoTic, e.slot, t->format, t->width};
                 return false;
             }
@@ -2037,6 +2169,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, uint32_t first, ui
         at[0] = tic | tsc << 20;
     }
     if (pl != emitted_) {
+        blendColorDirty_ |= pl->constantBlend;
         p.raw(pl->methods.data(), uint32_t(pl->methods.size()));
         // the state's push words into the root table, as m2v's vkCmdPushConstants ranges reach it through NVK: the words its
         // ranges cover (the rest keep what an earlier state wrote), one LOAD_CONSTANT_BUFFER per run of words that change
@@ -2072,6 +2205,11 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, uint32_t first, ui
     if (scissorDirty_) {
         p.inc(SCISSOR_ENABLE, {1, scissor_[0], scissor_[1]});
         scissorDirty_ = false;
+    }
+    // NVK's SET_BLEND_CONST_RED..ALPHA, the floats' bits, written where a draw blends with them
+    if (pl->constantBlend && blendColorDirty_) {
+        p.incArray(BLEND_CONST_RED, blendColor_, 4);
+        blendColorDirty_ = false;
     }
     // vertex stream 0 from the pipeline's vertex buffer slot
     if (r.vertexSlot != 0xff) {
@@ -2112,17 +2250,29 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, uint32_t first, ui
     // color this draw fetches (m2v's barrier, 0106, follows any color write: the ROP writes only the colors SET_CT_WRITE opens).
     // The barrier holds this draw's pixel shading until the earlier pixels have left the ROP; vertex work and rasterization
     // go on (NVK's for a color-output to fragment-read dependency, as NVIDIA's drivers order one)
-    if (pl->fetchBits & writtenBits_) {
+    // A storage access in the interlock is ordered after the earlier ones by the ticket, not after the ROP's writes; the
+    // ROP's accesses are ordered after neither: a barrier where a texture fetch meets a write of either kind, a storage
+    // access meets a ROP write, or a ROP access (a write, or the read a blend or a partial write mask makes) meets a
+    // storage write.
+    // A fetch through the texture unit that meets only ROP writes needs the barrier only where its pixels meet theirs
+    // (raw_region.h); nothing bounds a storage access's pixels.
+    const uint8_t texFetched = pl->fetchBits & ~pl->storageBits, ropAccessed = pl->writeBits | pl->readBits;
+    const DrawGeometry g = geometry(*pl, primitive, first, indexed ? drawIndexCount_ : count, {x[0], y[0], x[1], y[1]});
+    const bool storage =
+        (pl->storageBits & writtenBits_) | (ropAccessed & storageWrittenBits_) | (texFetched & storageWrittenBits_);
+    if (storage || (texFetched & writtenBits_)) {
+        if (!storage && !written_.meets(g)) {
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-        dev_->stats.fetchBarriers++;
-        if (!whole_ && !writtenOverlaps(drawRect_))
-            dev_->stats.fetchBarriersDisjoint++;
-        writtenCount_ = 0;
-        writtenFull_ = false;
+            dev_->stats.fetchBarriersElided++;
 #endif
-        p.m(PIXEL_SHADER_BARRIER, 0);
-        p.m(INVALIDATE_TEXTURE_DATA_CACHE_PIXEL_ORDERED, 0);
-        writtenBits_ = 0;
+        } else {
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+            dev_->stats.fetchBarriers++;
+#endif
+            fetchBarrier(p);
+            writtenBits_ = storageWrittenBits_ = 0;
+            written_.clear();
+        }
     }
     if (first != first_ || baseInstance != baseInstance_) {
         // nvk_mme_build_set_draw_params: root draw.vs.{base_vertex, base_instance} and the base registers
@@ -2134,17 +2284,78 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, uint32_t first, ui
         baseInstance_ = baseInstance;
     }
     writtenBits_ |= pl->writeBits;
+    storageWrittenBits_ |= pl->storageBits;
+    if (pl->writeBits)
+        written_.add(g);
+    return true;
+}
+
+// What the region test reads of a draw: Core Animation's transform (Pipeline::caTransform) over a triangle list or strip
+// of one instance, with its matrix, positions and indices where the CPU maps them; anything else is its scissor alone
+DrawGeometry RenderEncoder::geometry(const Pipeline &pl, uint32_t primitive, uint32_t first, uint32_t count,
+                                     const PixelBox &limit) const
+{
+    DrawGeometry g;
+    g.limit = limit;
+    g.viewport = {vp_[0], vp_[1], vp_[2], vp_[3]};
+    g.first = drawIndices_ ? 0 : first;
+    g.count = count;
+    g.indices = drawIndices_;
+    g.indexSize = drawIndexSize_;
+    const Bound &m = bufs_[1][2];
+    const Bound &v = pl.rec->vertexSlot < 31 ? bufs_[1][pl.rec->vertexSlot] : bufs_[1][0];
+    g.bounded = pl.caTransform && pl.positionComponents && (primitive == 3 || primitive == 4) && m.cpu &&
+                m.size >= 64 && v.cpu && pl.rec->vertexSlot < 31;
+    if (g.bounded) {
+        g.matrix = m.cpu;
+        g.positions = {v.cpu, pl.rec->vertexStride, pl.positionOffset, pl.positionComponents};
+        g.positionBytes = v.size;
+    }
+    return g;
+}
+
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    if (pl->writeBits && whole_)
-        writtenFull_ = true;
-    else if (pl->writeBits && drawRect_[2] > drawRect_[0] && drawRect_[3] > drawRect_[1]) {
-        if (writtenCount_ < written_.size())
-            written_[writtenCount_++] = drawRect_;
-        else
-            writtenFull_ = true;
+const char *Device::fetchBarrierName(FetchBarrier b)
+{
+    switch (b) {
+    case FetchBarrier::PixelShader:
+        return "ps";
+    case FetchBarrier::WaitForIdle:
+        return "wfi";
+    case FetchBarrier::PixelShaderOnly:
+        return "psonly";
+    case FetchBarrier::PixelShaderNoWfiInvalidate:
+        return "psnowfi";
+    case FetchBarrier::None:
+        return "none";
+    }
+    return "?";
+}
+#endif
+
+void RenderEncoder::fetchBarrier(Push &p)
+{
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    switch (dev_->fetchBarrier.load(std::memory_order_relaxed)) {
+    case Device::FetchBarrier::None:
+        return;
+    case Device::FetchBarrier::WaitForIdle:
+        p.m(WAIT_FOR_IDLE, 0);
+        p.m(INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI, 0);
+        return;
+    case Device::FetchBarrier::PixelShaderOnly:
+        p.m(PIXEL_SHADER_BARRIER, 0);
+        return;
+    case Device::FetchBarrier::PixelShaderNoWfiInvalidate:
+        p.m(PIXEL_SHADER_BARRIER, 0);
+        p.m(INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI, 0);
+        return;
+    case Device::FetchBarrier::PixelShader:
+        break;
     }
 #endif
-    return true;
+    p.m(PIXEL_SHADER_BARRIER, 0);
+    p.m(INVALIDATE_TEXTURE_DATA_CACHE_PIXEL_ORDERED, 0);
 }
 
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
@@ -2164,17 +2375,6 @@ void RenderEncoder::countRules(const Pipeline &pl)
     storageWritten_ |= stored;
 }
 
-bool RenderEncoder::writtenOverlaps(const std::array<uint32_t, 4> &r) const
-{
-    if (writtenFull_)
-        return true;
-    for (uint32_t i = 0; i < writtenCount_; i++) {
-        const std::array<uint32_t, 4> &w = written_[i];
-        if (r[0] < w[2] && w[0] < r[2] && r[1] < w[3] && w[1] < r[3])
-            return true;
-    }
-    return false;
-}
 #endif
 
 // The clear value m2v hands Vulkan for a Metal clear color of an attachment of `format` (metal2vulkan-runtime clear_value.rs
@@ -2246,6 +2446,21 @@ static void targetWords(Push &p, uint32_t m, const Texture &t)
     uint32_t w[kColorTargetWords];
     colorTargetWords(d, w);
     p.incArray(m, w, kColorTargetWords);
+}
+
+uint32_t Device::levelTic(Texture &t, uint32_t level)
+{
+    const FormatInfo *f = formatInfo(t.format);
+    if (!t.chain || !f || level >= t.chain->layout.levels)
+        return 0;
+    std::lock_guard<std::mutex> l(lock_);
+    uint32_t &tic = t.chain->levelTic[level];
+    if (!tic && (tic = allocTic())) {
+        uint32_t w[8];
+        fx::mipChainTic(t.chain->layout, t.chain->va, f->tic0, f->srgb, level, 1, w);
+        memcpy(tic_.cpu + 32 * tic, w, 32);  // visible at the next submission's header invalidate
+    }
+    return tic;
 }
 
 bool chainLevelTarget(const Texture &t, uint32_t level, Texture &out)

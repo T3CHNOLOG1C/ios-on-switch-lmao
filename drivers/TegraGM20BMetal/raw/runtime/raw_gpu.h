@@ -5,7 +5,7 @@
 // MAXWELL_B / MAXWELL_DMA_COPY_A methods in a push buffer and submits them through the TegraGM20B user client (raw_kernel.h).
 //
 // Memory. Everything the raw path draws with is memory this task can also hand to m2v (RawMetal.mm's fallback makes m2v
-// objects over the same pages, never a copy):
+// objects over the same BOs at the same VAs, never a copy or a second import: Alias):
 //  - textures Core Animation makes, and buffers: pool spans, page-aligned anonymous memory imported once in big chunks;
 //  - IOSurface textures: the surface's pages, imported once per surface while a texture over it lives;
 //  - no-copy buffers: the caller's pages.
@@ -34,12 +34,35 @@
 #include "raw_kernel.h"
 #include "raw_pack.h"
 #include "raw_push.h"
+#include "raw_region.h"
+#include "raw_ycbcr.h"
 #include "../fx/fx_mip.h"
 
 namespace raw {
 
 class Device;
 class CommandBuffer;
+
+constexpr uint32_t kPteKindPitch = 0;
+
+struct Lease;  // raw_alias.cpp
+
+// Where memory comes from: the pool, the write-combined GPU pool, an import
+enum class Memory : uint8_t {
+    Pool,
+    Wc,
+    Import
+};
+
+// Memory of the raw path an m2v view uses in place (RawMetal.mm's twins), as NVK takes it (switch_nvk_import_foreign): the BO
+// it lies in, bound already in the GPU VM the two drivers share (raw_kernel.h), and a lease the view holds (Device::holdLease,
+// dropLease, any thread) so the memory outlives the view's last use. One hold of it is the caller's to drop.
+struct Alias {
+    const uint8_t *cpu = nullptr;  // the BO's first byte for the CPU
+    uint64_t bytes = 0, handle = 0, va = 0;
+    uint32_t kind = 0;  // the PTE kind of its binding
+    Lease *lease = nullptr;
+};
 
 // MTLPixelFormat -> NV formats: the texture header's word 0 NVK writes (read off the twin: pack/mkformats.py), its render target
 // format when the raw path may render to it (0: sampled only), bytes per pixel, sRGB.
@@ -87,6 +110,7 @@ struct Texture {
     uint32_t tic = 0;          // texture header index, 0: none (not sampleable)
     Import *import = nullptr;  // surface or no-copy pages, else
     Span span;                 // pool memory, else a view (memory of the texture it views)
+    Lease *lease = nullptr;    // span's, once an m2v view aliases it (Device::alias): span is freed at its last drop
 
     // A two-plane 4:4:4 surface's texture (RGB8_444_2P, Metal format 542): the image sampled is span (RGBA8, the codes as Metal
     // reads them: red Cr, green Y, blue Cb, alpha 1), which BlitEncoder::convertPlanar writes from the surface's planes (import)
@@ -97,16 +121,24 @@ struct Texture {
     } planes;
 
     bool planar = false;
-    // A two-plane 4:2:0 surface's texture (YCBCR8_420_2P 500, its sRGB twin 520, RGB8_420_2P 540): the image sampled is span
-    // (RGBA16Float, RGBA32Float, RGBA8Unorm), which a pass of the pack's conversion state draws from the planes' textures, luma
-    // (R8Unorm) and chroma (RG8Unorm), before the work that samples it (pack/ycbcr.metal; shape: its fragment buffer 0)
+    // A two-plane YCbCr surface's texture (raw_ycbcr.h): the image sampled is span (RGBA16Float, RGBA32Float, RGBA8Unorm,
+    // RGB10A2Unorm), which a pass of the pack's conversion state draws from the planes' textures, luma (R8Unorm, R16Unorm) and
+    // chroma (RG8Unorm, RG16Unorm; none over plane 1), before the work that samples it (pack/ycbcr.metal; shape: its fragment
+    // buffer 0)
     Texture *luma = nullptr, *chroma = nullptr;
-    uint32_t shape[9] = {};
-    uint8_t ycbcr = 0;  // 1 converted, 2 sRGB, 3 codes
+    uint32_t shape[kYcbcrShapeWords] = {};
+    uint8_t ycbcr = 0;  // YcbcrOutput, 0: none
     // m2v's address map of a planar texture's samplers (metal2vulkan texture/ycbcr_image.rs `ycbcr_modes`): 1 the wrapping modes
     // (repeat, mirrored repeat, mirror-clamp) clamp to the edge (4:2:0 converted), 2 clamp to zero and to the border clamp to the
     // edge (4:4:4 codes), 3 both (4:2:0 codes)
     uint8_t addressMap = 0;
+
+    // Its image is converted from a surface's planes: Metal's copies of it move the planes' bytes
+    bool converted() const
+    {
+        return planar || ycbcr;
+    }
+
     // Rows 16 but not 32 bytes apart (or an address off 32): the texture header's pitch takes multiples of 32, so it is sampled
     // through `sampled`, a pool image of its texels the copy engine refreshes from it (CommandBuffer::refresh) before work that
     // samples it, as m2v samples such a surface through a shadow image it copies in. tic is sampled's.
@@ -128,6 +160,7 @@ struct Texture {
         uint32_t fmt2d = 0;
         bool l0Fresh = false, levelsFresh = false;
         uint16_t rawLevels = 0, mirrorLevels = 0;
+        uint32_t levelTic[fx::kMaxLevels] = {};  // a view of each level alone (Device::levelTic), made on first use
     } *chain = nullptr;
 
     // A chain level as a render target (chainLevelTarget: no memory or header of its own, tic 0): block-linear at the level's
@@ -146,6 +179,7 @@ struct Buffer {
     bool wc = false;
     Import *import = nullptr;  // a caller's no-copy pages, else
     Span span;                 // pool memory
+    Lease *lease = nullptr;    // as Texture::lease
 };
 
 struct SamplerDesc {                                      // the MTLSamplerDescriptor fields the TSC takes
@@ -176,7 +210,16 @@ struct Pipeline {
     uint32_t push[32] = {}, pushMask = 0;  // root table [0x700, 0x780): the words m2v's push ranges write, and which
     bool vsSetCbuf = false, fsSetCbuf = false;  // the program reads set 0 as constant buffer 1
     uint8_t writeBits = 0;                      // colors its draws write: SET_CT_WRITE(i) with a channel on
+    // colors its fragment shader reads, and may write, as storage images inside the pixel interlock (metal2vulkan's storage
+    // form of a fetch: the state turns the interlock on with SET_PIXEL_SHADER_INTERLOCK_CONTROL); the ROP writes none of them
+    uint8_t storageBits = 0;
+    bool constantBlend = false;     // a blend factor of a blended color is the encoder's blend color
     uint32_t colorFormats[8] = {};  // MTLPixelFormat of each color attachment the state was made for (0: none)
+    // its vertex function is Core Animation's fixed_vert_l?h_spc (raw_bounds.h), and attribute 0 (the position) as its key
+    // gives it: floats from the stream's vertex start (0: no float position)
+    bool caTransform = false;
+    uint8_t positionComponents = 0;
+    uint16_t positionOffset = 0;
     uint8_t readBits = 0;   // colors its draws read as they were: blended into, or written through a partial mask
     uint8_t fetchBits = 0;  // colors it reads by framebuffer fetch
 };
@@ -227,6 +270,7 @@ public:
     }
 
     void setScissor(uint32_t x, uint32_t y, uint32_t w, uint32_t h);
+    void setBlendColor(const float rgba[4]);
     void setViewport(double x, double y, double w, double h, double znear, double zfar);
     void barrier();  // memoryBarrier...: everything before is written and visible to what follows
     // false: this draw cannot be drawn exactly as m2v would (*why says what); the command buffer goes to m2v instead
@@ -246,6 +290,7 @@ private:
         uint32_t size = 0;  // bytes from va (setBytes: its length)
         const Buffer *buffer = nullptr;
         uint64_t offset = 0;
+        const uint8_t *cpu = nullptr;  // the bytes at va, where the CPU maps them
     };
 
     CommandBuffer *cb_ = nullptr;
@@ -266,8 +311,11 @@ private:
                  uint32_t baseInstance, bool indexed, const char **why);
     uint32_t scissor_[2] = {}, viewport_[8] = {};
     bool scissorDirty_ = true, viewportDirty_ = true;
+    uint32_t blendColor_[4] = {};  // Metal's default, (0, 0, 0, 0), until the encoder sets one
+    bool blendColorDirty_ = true;
     uint32_t topology_ = ~0u, restart_ = ~0u, first_ = 0, baseInstance_ = 0;
-    uint8_t writtenBits_ = 0;  // colors a draw wrote since the last barrier
+    uint8_t writtenBits_ = 0;         // colors the ROP wrote since the last barrier
+    uint8_t storageWrittenBits_ = 0;  // colors a fragment shader may have written as storage since the last barrier
     bool memoryless_[8] = {};
     const Texture *shadowOf_[8] =
         {};  // a shadow target's texture, where pass_ holds its pool image (CommandBuffer::render)
@@ -278,13 +326,14 @@ private:
     double vp_[4] = {};
     uint32_t sc_[4] = {};
     std::vector<std::array<uint32_t, 4>> rects_;
+    // the draws that wrote a color since the last barrier, for the fetch barrier's region test (raw_region.h); the
+    // indices of the indexed draw being prepared
+    WrittenRegion written_;
+    const uint8_t *drawIndices_ = nullptr;
+    uint32_t drawIndexSize_ = 0, drawIndexCount_ = 0;
+    DrawGeometry geometry(const Pipeline &pl, uint32_t primitive, uint32_t first, uint32_t count,
+                          const PixelBox &limit) const;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    // the draw's pixels (empty: none), and the pixels color writes reached since the last barrier (full: more than it holds)
-    std::array<uint32_t, 4> drawRect_ = {};
-    std::array<std::array<uint32_t, 4>, 16> written_ = {};
-    uint32_t writtenCount_ = 0;
-    bool writtenFull_ = false;
-    bool writtenOverlaps(const std::array<uint32_t, 4> &r) const;
     // the same draws under two other rules, counted only: one barrier per fetching draw after any color write (the rule
     // before writtenBits_), and the interlocked storage form (a fetched color read and written by the fragment shader inside
     // the pixel interlock, the rest through the ROP): it orders storage accesses among themselves, so it barriers only where
@@ -293,6 +342,7 @@ private:
     uint8_t ropWritten_ = 0, storageWritten_ = 0;
     void countRules(const Pipeline &pl);
 #endif
+    void fetchBarrier(Push &p);
 
     struct Clear {
         uint32_t target, x0, y0, x1, y1;
@@ -392,11 +442,12 @@ public:
     }
 
     // A pack pipeline by its state key's FNV-1a (RawMetal.mm rawPipelineKey); null: not in the pack.
-    Pipeline *pipeline(uint64_t keyHash);
+    // caTransform: its vertex function is Core Animation's fixed_vert_l?h_spc (Pipeline::caTransform)
+    Pipeline *pipeline(uint64_t keyHash, PackForm form = PackForm::Default, bool caTransform = false);
 
     // Resources (thread safe). All textures are 2D, one level, one sample, pitch-linear.
-    // pool memory, rows 256-byte aligned; `wc`: write-combined GPU-pool memory when wcOn() (a texture the CPU writes with
-    // replaceRegion: no clean after), else pool memory
+    // pool memory, rows 256-byte aligned; `wc`: write-combined GPU-pool memory (a texture the CPU writes with replaceRegion:
+    // no clean after), else (or full) pool memory
     bool createTexture(uint32_t width, uint32_t height, uint32_t format, Texture &t, bool wc = false);
 
     // Before the GPU first renders or stores into the IOSurface (Kernel::surfaceGpuWrites).
@@ -407,13 +458,10 @@ public:
 
     bool createSurfaceTexture(uint64_t surfaceId, void *base, uint64_t allocBytes, const void *surface, uint64_t offset,
                               uint32_t width, uint32_t height, uint32_t pitch, uint32_t format, Texture &t);
-    // A two-plane 4:2:0 surface's texture of YCBCR8_420_2P (500), YCBCR8_420_2P_sRGB (520) or RGB8_420_2P (540): its planes at
-    // `luma`/`chroma` (offsets in the allocation, with their pitches) as R8Unorm and RG8Unorm textures, its image an
-    // RGBA16Float, RGBA32Float or RGBA8Unorm one of the pool, `shape` the conversion's fragment buffer (pack/ycbcr.metal)
-    bool createYcbcrTexture(uint64_t surfaceId, void *base, uint64_t allocBytes, const void *surface, uint64_t luma,
-                            uint32_t lumaPitch, uint64_t chroma, uint32_t chromaPitch, uint32_t width, uint32_t height,
-                            uint32_t format, const uint32_t shape[9], Texture &t);
-    // The pack's conversion state of a 4:2:0 texture's output (Texture::ycbcr), null if the pack has none
+    // A two-plane YCbCr surface's texture of `width` x `height` as `plan` reads its planes, its image one of the pool
+    bool createYcbcrTexture(uint64_t surfaceId, void *base, uint64_t allocBytes, const void *surface,
+                            const YcbcrPlan &plan, uint32_t width, uint32_t height, Texture &t);
+    // The pack's conversion state of a YCbCr texture's output (Texture::ycbcr), null if the pack has none
     Pipeline *ycbcrPipeline(uint8_t output);
     // s's header under address map `map` (Texture::addressMap), made now if it is not yet
     bool samplerVariant(Sampler &s, uint8_t map);
@@ -430,6 +478,15 @@ public:
     // A mipmapped 2D texture of `levels` levels: level 0 a pool texture as createTexture's, its header the block-linear chain's
     // (Texture::chain). False: not one the raw path keeps (chainsOn() false, a format the 2D engine does not filter, no memory).
     bool createMipTexture(uint32_t width, uint32_t height, uint32_t format, uint32_t levels, Texture &t);
+    // The texture header of level `level` of mipmapped texture `t`'s chain alone, as NVK's view of that level (a pass into
+    // the level fetches its color through it); 0: none
+    uint32_t levelTic(Texture &t, uint32_t level);
+
+    // Whether the connection is NVK's (raw_kernel.h): m2v's views alias this path's memory
+    bool shared() const
+    {
+        return k_.shared();
+    }
 
     // Whether mip chains are on: the 2D engine's self-test at open made the chain the design expects (fx_mip.h)
     bool chainsOn() const
@@ -445,19 +502,8 @@ public:
     }
 
     void destroyTexture(Texture &t);
-    // `wc`: from the write-combined GPU pool (Buffer::wc) when wcOn(), else (or full) pool memory as before
+    // `wc`: from the write-combined GPU pool (Buffer::wc), else (or full) pool memory as before
     bool createBuffer(uint64_t length, Buffer &b, bool wc = false);
-
-    // Whether write-combined buffers are on (RawMetal.mm turns them off at open when m2v cannot make its twin over one)
-    bool wcOn() const
-    {
-        return wcOn_;
-    }
-
-    void setWc(bool on)
-    {
-        wcOn_ = on;
-    }
 
     // The write-combined chunks held (non-dedicated) and their bytes (test/poolcheck.cpp: they follow what is in them)
     uint32_t wcChunksHeld();
@@ -470,6 +516,15 @@ public:
 
     bool createBufferNoCopy(void *bytes, uint64_t length, Buffer &b);
     void destroyBuffer(Buffer &b);
+
+    // The memory an m2v view of t (a pool or write-combined texture) or b uses in place, one hold taken for the caller (raw_alias.cpp).
+    // False: nothing to alias (memoryless, a view's memory), or the connection is not NVK's.
+    bool alias(Texture &t, Alias &a);
+    bool alias(Buffer &b, Alias &a);
+    // The surface's import, made now if no texture of the raw path holds one: an m2v import of the surface is this one, aliased.
+    bool aliasSurface(uint64_t surfaceId, void *base, uint64_t bytes, const void *surface, Alias &a);
+    static void holdLease(void *lease);
+    static void dropLease(void *lease);
     bool createSampler(const SamplerDesc &d, Sampler &s);
     void destroySampler(Sampler &s);
 
@@ -496,10 +551,19 @@ public:
         return int32_t(*fence_ - seqno) >= 0;
     }
 
+    // In the kernel, on the fence interrupt. False: the submission failed, the channel died with it in flight (reopen).
     bool wait(uint32_t seqno)
     {
-        return done(seqno) || k_.wait(channel_, seqno);
-    }  // in the kernel, on the fence interrupt
+        if (!done(seqno) && !k_.wait(channel_, seqno) && k_.lost(channel_))
+            noteLost();
+        return !lost(seqno);
+    }
+
+    bool lost(uint32_t seqno) const
+    {
+        return lostAny_.load(std::memory_order_acquire) &&
+               int32_t(lostThrough_.load(std::memory_order_relaxed) - seqno) >= 0;
+    }
 
     // GPU-side order with the process's other driver (NVK's channels), through the kernel's Order (TegraGM20BInfoOrder; false:
     // it has none). orderAfterOthers: this channel's next submission starts with an acquire on what they submitted so far;
@@ -539,12 +603,32 @@ public:
         std::atomic<uint64_t> levelPasses{0}, mirrorsOut{0}, mirrorsIn{0};
         // pack programs placed in the shader heap, and states not made because it was full
         std::atomic<uint64_t> programsPlaced{0}, heapFull{0};
-        // framebuffer-fetch barriers encoded, and of those the ones whose draw's pixels no color write since the last barrier
-        // reached (debug builds: what skipping a barrier by region would save); the barriers one per fetching draw after any
-        // color write would have encoded, and those the interlocked storage form would (RenderEncoder::countRules)
-        std::atomic<uint64_t> fetchBarriers{0}, fetchBarriersDisjoint{0}, fetchBarriersAnyColor{0},
+        // framebuffer-fetch barriers encoded, and those left out where the draw's pixels meet none a color write reached
+        // since the last barrier (raw_region.h); the barriers one per fetching draw after any color write would have encoded,
+        // and those the interlocked storage form would (RenderEncoder::countRules, debug builds)
+        std::atomic<uint64_t> fetchBarriers{0}, fetchBarriersElided{0}, fetchBarriersAnyColor{0},
             fetchBarriersInterlocked{0};
+        // channels made again after the kernel killed one
+        std::atomic<uint64_t> reopens{0};
     } stats;
+
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    // The fetch barrier's methods, set by the context-switch stress (test/fetchform.cpp) and the ceiling measurement
+    // (RawMetal.mm's debug notifications): PIXEL_SHADER_BARRIER and 0x0f74 (the shipped form), WAIT_FOR_IDLE and
+    // INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI (the form before it, the stress's reference), PIXEL_SHADER_BARRIER alone or with
+    // the NO_WFI invalidate, which tell a hang's method apart, and none at all. PixelShaderOnly and None let a fetching
+    // draw read colors its predecessors have not finished writing: measurements of what the barrier costs, never shipped
+    enum class FetchBarrier : uint8_t {
+        PixelShader,
+        WaitForIdle,
+        PixelShaderOnly,
+        PixelShaderNoWfiInvalidate,
+        None
+    };
+
+    std::atomic<FetchBarrier> fetchBarrier{FetchBarrier::PixelShader};
+    static const char *fetchBarrierName(FetchBarrier b);
+#endif
 
     // The self-test's result (open), per sampling candidate (fx::sampling(i)): bytes off by more than 1 in the CPU's Tegra and
     // Fermi views (~0u: not run); the one chains use (selfTestChosen, fx::kSamplings: none passed) and its view; the first
@@ -588,7 +672,7 @@ private:
     std::mutex lock_;
     Kernel k_;
     Pack pack_;
-    Bo heap_, tic_, tsc_, root_, zero_;
+    Bo heap_, tic_, tsc_, root_, zero_, tickets_;
     Ring push_, upload_;
     uint32_t channel_ = 0, lastSeqno_ = 0;
     const volatile uint32_t *fence_ = nullptr;
@@ -607,11 +691,21 @@ private:
     uint32_t restart_ = 0;        // and its primitive restart index
     std::map<std::tuple<uint64_t, uint64_t, uint64_t>, Import *> surfaces_;
     std::vector<Chunk> chunks_;
+
+    // Dedicated chunks freed but kept wired for the next allocation of the same size: a video's frames are surface textures
+    // made and released one after another, each with a converted image past the dedicated limit (30 MB at 2500x1500), which
+    // would otherwise be wired anew on the render thread for every frame. A chunk comes back only when its texture died,
+    // so after every submission that used it completed.
+    struct Spare {
+        uint32_t chunk;
+        uint64_t freedAt;  // commitCount_
+    };
+
+    std::vector<Spare> spares_;
     // mip chains' memory: chunks bound with PTE kind 0xFE (fx::kBlockLinearKind), made on demand, never CPU-written
     std::vector<Chunk> blChunks_;
     // write-combined buffers' memory: GPU-pool BOs (BoAlloc coherent: the CPU maps them write-combined), sub-allocated by page
     std::vector<Chunk> wcChunks_;
-    bool wcOn_ = true;
     bool wcAlloc(uint64_t bytes, Span &s);
     void wcFree(Span &s);
     bool chainsOn_ = false;
@@ -638,6 +732,13 @@ private:
     uint64_t commitCount_ = 0;
 
     bool init(std::string &err);
+    uint32_t contextWords() const;
+    void emitContext(Push &p);
+    bool reopen();
+    void noteLost();
+    // the last seqno of a channel that died: it and every one before it failed (or completed before; not told apart)
+    std::atomic<uint32_t> lostThrough_{0};
+    std::atomic<bool> lostAny_{false};
     uint8_t *alloc(Ring &r, uint32_t bytes, uint32_t align, uint64_t &va);
     void retire(Ring &r, uint32_t seqno);
     uint32_t allocTic();
@@ -646,6 +747,11 @@ private:
     void poolFree(Span &s);
     Import *importSurface(uint64_t id, void *base, uint64_t bytes, const void *owner);
     void release(Import *i);
+    // lock_ held (raw_alias.cpp): a hold on a span's lease, made at its first alias; the last drop frees what the lease holds
+    Lease *leaseSpan(Lease *&lease, const Span &span, Memory from);
+    void dropLocked(Lease *lease);
+    // lock_ held: the span goes back to where it came from now, or at its lease's last drop
+    void freeSpan(Span &span, Memory from, Lease *&lease);
     // A memoryless attachment's memory (tag 0), or a shadow target's pool image for attachment j (tag 1 + j): one per size,
     // format and tag, kept while passes use it
     Texture *backing(const Texture &memoryless, uint32_t tag = 0);

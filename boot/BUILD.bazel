@@ -135,7 +135,10 @@ boot_package(
         "//drivers/SwitchVideoDecoders:HEVCH8": "build/switch-video/HEVCH8.videodecoder",
         "//drivers/SwitchVideoDecoders:AVD": "build/switch-video/AVD.videodecoder",
         "//drivers/SwitchVideoEncoders:AVE": "build/switch-video/H264H7.videoencoder",
-    },
+    } | select({
+        "//bazel:debug": {"//drivers/TegraGM20BMetal:fetchform": "build/switch-gpu/fetchform"},
+        "//conditions:default": {},
+    }),
     overlay_data = {
         "//boot/logo:apple-logo~ipad.png": "build/progressui/apple-logo~ipad.png",
         "//bazel/pinned:overlay/wallpaper-1x/7570.iPadOS_17_Flat.plist": "build/wallpaper-1x/7570.iPadOS_17_Flat.plist",

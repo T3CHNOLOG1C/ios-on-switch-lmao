@@ -223,7 +223,10 @@ struct TegraGM20BAbiTimestamp {
 	uint64_t ns; /* PTIMER, nanoseconds; same clock the GPU writes in timestamp queries */
 };
 
-/* Method 11. Input TegraGM20BAbiChannel; error 0 means healthy, anything else means the channel is dead (device lost). */
+/* Method 11. Input TegraGM20BAbiChannel; error 0 means healthy, anything else means the kext killed the channel (its fence
+ * word was moved past every seqno it gave out, so no acquire or wait stays on it). Only that channel is dead: Exec, Order
+ * and WaitFence on it answer kIOReturnNotResponding, while the connection's BOs, binds and other channels go on, and
+ * ChannelDestroy then ChannelCreate (whose reply names the new channel and fence word) gives the client a new one. */
 struct TegraGM20BAbiStatus {
 	uint32_t completed;
 	uint32_t submitted;
@@ -283,7 +286,8 @@ enum {
  * Every acquire names work submitted before the call, so no two submissions can wait for each other. A channel the task makes
  * after the call is not ordered by it; work that completed already queues nothing. reply.waits: the acquires queued.
  * kIOReturnNotReady: an address space has no view of the fence pages; kIOReturnNoResources: a channel has
- * TegraGM20BMaxOrderWaits acquires from other channels queued. Either way the caller orders that switch itself. */
+ * TegraGM20BMaxOrderWaits acquires from other channels queued. Either way the caller orders that switch itself.
+ * kIOReturnNotResponding: `channel` was killed (method 11); killed channels of the task are left out. */
 struct TegraGM20BAbiOrder {
 	uint32_t channel;
 	uint32_t flags; /* TegraGM20BOrder* */

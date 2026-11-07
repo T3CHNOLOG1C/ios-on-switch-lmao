@@ -123,6 +123,16 @@ host_test(
     deps = [":switch_usb_lanes_c"],
 )
 
+# XusbSleepwalk.h (XusbSleepwalk.cpp): pad 0's PMC sleepwalk values for a USB device's remote wake across SC7.
+host_test(
+    name = "xusb_sleepwalk_test",
+    srcs = [
+        "xusb_sleepwalk_test.cpp",
+        "//drivers/SwitchUSB:XusbSleepwalk.h",
+    ],
+    copts = ["-O1"],
+)
+
 # UsbIova.h (UsbSmmuMapper.cpp): the XUSB host's SMMU window and the page layout of a scattered buffer at one IOVA range.
 host_test(
     name = "usb_iova_test",

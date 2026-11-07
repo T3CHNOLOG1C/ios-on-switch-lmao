@@ -34,11 +34,14 @@
 #include "bridge/NativeMetalObjects.h"
 #include "NativeBridgeMetalFrontend.h"
 #include "AsyncPipelines.h"
+#include "GpuMemoryRelease.h"
 #include "SwitchFrameTimeline.h"
 // The two-plane render targets' load and store functions (TwoPlaneStandIn.metal).
 #include "TwoPlaneStandIn.h"
 
 static NmbDevice *gDevice;
+// Never destroyed: its dispatch sources' handlers may still run while the process exits.
+static GpuMemoryRelease &gMemoryRelease = *new GpuMemoryRelease;
 static id gDeviceObject;
 static uint64_t gRegistryID;
 static NSString *gName;
@@ -703,11 +706,18 @@ static std::mutex gSurfaceImportLock;
 // association is never the one dropped: a lookup that missed it would import the same surface a second time.
 static constexpr NSUInteger kSurfaceImportKeys = 1024;
 
-// A symbol of NVK (libvulkan_nouveau.dylib, beside this image), which the Vulkan loader opened RTLD_LOCAL: looked up
-// through that image rather than RTLD_DEFAULT.
+// A symbol of NVK (libvulkan_nouveau.dylib: the one this process loaded, else the one beside this image), which the Vulkan
+// loader opened RTLD_LOCAL: looked up through that image rather than RTLD_DEFAULT.
 static void *nvkSymbol(const char *name)
 {
     static void *const nvk = []() -> void * {
+        static const char kNvk[] = "/libvulkan_nouveau.dylib";
+        for (uint32_t i = 0, n = _dyld_image_count(); i < n; i++) {
+            const char *image = _dyld_get_image_name(i);
+            const size_t length = image ? strlen(image) : 0;
+            if (length > sizeof kNvk - 1 && !strcmp(image + length - (sizeof kNvk - 1), kNvk))
+                return dlopen(image, RTLD_LAZY | RTLD_NOLOAD);
+        }
         Dl_info info = {};
         if (!dladdr(reinterpret_cast<const void *>(&nvkSymbol), &info) || !info.dli_fname)
             return nullptr;
@@ -745,6 +755,58 @@ static void declareGpuWrites(IOSurfaceRef surface)
               IOSurfaceGetID(surface));
 }
 
+static NmbBuffer *bufferOverForeign(const struct switch_foreign_memory *memory, void *bytes, uint64_t length,
+                                    uint64_t options)
+{
+    using Foreign =
+        void (*)(const void *, uint64_t, uint64_t, uint64_t, uint32_t, void (*)(void *), void (*)(void *), void *);
+    static const Foreign foreign = reinterpret_cast<Foreign>(nvkSymbol("switch_nvk_import_foreign"));
+    if (!foreign || !gDevice)
+        return nullptr;
+    foreign(memory->cpu, memory->bytes, memory->handle, memory->va, memory->kind, memory->hold, memory->drop,
+            memory->lease);
+    NmbBuffer *handle = nmb_buffer_new_no_copy(gDevice, bytes, length, options);
+    foreign(nullptr, 0, 0, 0, 0, nullptr, nullptr, nullptr);
+    return handle;
+}
+
+extern "C" id native_bridge_metal_buffer_over_foreign(const struct switch_foreign_memory *memory, void *bytes,
+                                                      NSUInteger length, NSUInteger options)
+{
+    NmbBuffer *handle = memory ? bufferOverForeign(memory, bytes, length, options) : nullptr;
+    if (!handle) {
+        NBLOG(@"native-metal: buffer over foreign memory refused: %@", lastError());
+        return nil;
+    }
+    NBBuffer *buffer = [NBBuffer new];
+    buffer.handle = handle;
+    buffer.options = options;
+    buffer.wrapped = bytes;
+    return (id<MTLBuffer>)buffer;
+}
+
+static std::atomic<switch_surface_importer> gSurfaceImporter{nullptr};
+
+extern "C" void native_bridge_metal_set_surface_importer(switch_surface_importer importer)
+{
+    gSurfaceImporter.store(importer);
+}
+
+static NmbBuffer *importSurface(IOSurfaceRef surface, void *base, size_t bytes)
+{
+    const switch_surface_importer importer = gSurfaceImporter.load();
+    struct switch_foreign_memory memory = {};
+    if (importer && importer(IOSurfaceGetID(surface), surface, base, bytes, &memory)) {
+        NmbBuffer *handle = bufferOverForeign(&memory, base, bytes, MTLResourceStorageModeShared);
+        memory.drop(memory.lease);
+        return handle;
+    }
+    noteImportSurface(IOSurfaceGetID(surface), base, bytes);
+    NmbBuffer *handle = nmb_buffer_new_no_copy(gDevice, base, bytes, MTLResourceStorageModeShared);
+    noteImportSurface(0, nullptr, 0);
+    return handle;
+}
+
 static bool usageWrites(MTLTextureUsage usage)
 {
     return usage == MTLTextureUsageUnknown || (usage & (MTLTextureUsageRenderTarget | MTLTextureUsageShaderWrite));
@@ -767,9 +829,7 @@ static NBBuffer *surfaceBuffer(IOSurfaceRef surface, void *base, size_t bytes)
         return buffer;
     }
     const uint64_t began = nowUs();
-    noteImportSurface(IOSurfaceGetID(surface), base, bytes);
-    NmbBuffer *handle = nmb_buffer_new_no_copy(gDevice, base, bytes, MTLResourceStorageModeShared);
-    noteImportSurface(0, nullptr, 0);
+    NmbBuffer *handle = importSurface(surface, base, bytes);
     gTimeSurfaceImport.add(began);
     if (!handle) {
         NBLOG(@"native-metal: surface import refused: %@", lastError());
@@ -1857,9 +1917,10 @@ static bool asyncRenderPipelineWanted(MTLRenderPipelineDescriptor *d, MTLPipelin
     return !d.fragmentFunction || [(id)d.fragmentFunction isKindOfClass:[NBFunction class]];
 }
 
-// A state of `d` made on a worker by the synchronous path (the call returns at once; AsyncPipelines.h).
+// A state of `d` made on a worker by the synchronous path (the call returns at once; AsyncPipelines.h), or at its first
+// set when `lazy`.
 static id<MTLRenderPipelineState> asyncRenderPipeline(id device, MTLRenderPipelineDescriptor *d,
-                                                      MTLPipelineOption options)
+                                                      MTLPipelineOption options, bool lazy = false)
 {
     MTLRenderPipelineDescriptor *copy = [d copy];
     auto making = std::make_shared<nbasync::Making>();
@@ -1879,8 +1940,24 @@ static id<MTLRenderPipelineState> asyncRenderPipeline(id device, MTLRenderPipeli
     };
     NBRenderPipeline *state = [NBRenderPipeline new];
     state.making = making;
-    nbasync::start(making);
+    if (lazy)
+        nbasync::startLazy(making);
+    else
+        nbasync::start(making);
     return (id<MTLRenderPipelineState>)state;
+}
+
+// TegraGM20BMetal: the m2v twin of a state its raw path draws, made at its first set (AsyncPipelines.h startLazy); made
+// here when this process makes its states on the asking thread.
+extern "C" id native_bridge_metal_render_pipeline_lazy(id device, id descriptor, NSUInteger options)
+{
+    MTLRenderPipelineDescriptor *d = descriptor;
+    if (!asyncRenderPipelineWanted(d, (MTLPipelineOption)options))
+        return [(id<MTLDevice>)device newRenderPipelineStateWithDescriptor:d
+                                                                   options:(MTLPipelineOption)options
+                                                                reflection:nil
+                                                                     error:nil];
+    return asyncRenderPipeline(device, d, (MTLPipelineOption)options, true);
 }
 
 // `call` on a global queue of the caller's class (the completion-handler API, which calls back there; not the workers, whose
@@ -3784,6 +3861,8 @@ static void scheduled(void *context);
     [_resourceOwners removeAllObjects];
     @synchronized(gInFlight) {
         [gInFlight removeObject:self];
+        if (!gInFlight.count)
+            gMemoryRelease.drained();
     }
     NSArray *completedHandlers;
     @synchronized(self) {
@@ -6420,6 +6499,7 @@ extern "C" id native_bridge_metal_open(const char *loader, const char *cache, ui
         NBLOG(@"native-metal: device refused: %s", nmb_last_error());
         return nil;
     }
+    gMemoryRelease.start(gDevice);
     if (cache) {
         gCompileCache = std::string(cache) + "/msl";
     }
@@ -6508,6 +6588,16 @@ extern "C" bool native_bridge_metal_shader_cache_stats(NmbShaderCacheStats *out)
 extern "C" bool native_bridge_metal_work_stats(uint64_t out[10])
 {
     return gDevice && nmb_device_work_stats(gDevice, out);
+}
+
+extern "C" void native_bridge_metal_release_idle_memory(void)
+{
+    gMemoryRelease.release();
+}
+
+extern "C" bool native_bridge_metal_memory(uint64_t out[3])
+{
+    return gDevice && nmb_device_memory(gDevice, out);
 }
 
 extern "C" size_t native_bridge_metal_status(char *out, size_t size)
@@ -6676,7 +6766,7 @@ extern "C" size_t native_bridge_metal_rates(char *out, size_t size)
         uint64_t at, cpu, sys, faults, commits, encode, submitN, submitUs, waitN, waitUs, gpuN, gpuUs, draws, passes,
             apiUs, joinable, psoN, psoUs, texN, texUs, asked, kept, planar, rb, rbBytes, rbUs, impN, impUs, impHits,
             stxN, stxUs, fwdN, fwdUs;
-        uint64_t work[10], counts[10], waits[4], routes[7];
+        uint64_t work[10], counts[10], waits[4], routes[7], memory[3];
         NmbShaderCacheStats cache;
     };
 
@@ -6723,6 +6813,7 @@ extern "C" size_t native_bridge_metal_rates(char *out, size_t size)
         nmb_device_work_stats(gDevice, now.work);
         nmb_device_shader_cache_stats(gDevice, &now.cache);
         nmb_device_counts(gDevice, now.counts);
+        nmb_device_memory(gDevice, now.memory);
         nmb_device_texel_copy_routes(gDevice, now.routes);
         nmb_device_wait_counts(gDevice, now.waits);
     }
@@ -6767,7 +6858,7 @@ extern "C" size_t native_bridge_metal_rates(char *out, size_t size)
         (unsigned long long)(now.cache.driver_hits - was.cache.driver_hits),
         (unsigned long long)(now.cache.driver_misses - was.cache.driver_misses),
         (unsigned long long)(now.asked - was.asked), (unsigned long long)(now.kept - was.kept),
-        (unsigned long long)(now.planar - was.planar), (unsigned long long)(now.counts[0] >> 20),
+        (unsigned long long)(now.planar - was.planar), (unsigned long long)(now.memory[0] >> 20),
         (unsigned long long)now.counts[1], (unsigned long long)now.counts[2], (unsigned long long)now.counts[3],
         (unsigned long long)(now.counts[4] - was.counts[4]), (unsigned long long)(now.counts[5] - was.counts[5]),
         (unsigned long long)(now.counts[6] - was.counts[6]), (unsigned long long)(now.counts[7] - was.counts[7]),

@@ -35,6 +35,18 @@ enum {
 };
 
 void switch_iokit_iosurface_trap(IOUserClient *client, uint32_t index, void *p1, void *p2);
+kern_return_t switch_iokit_iosurface_lock_will(IOUserClient *client, void *p1, void *p2);
+
+/* iokit_user_client_trap, before the client's trap runs (result: the filter's so far): an IOSurface lock first waits
+ * for the GPU writes it must see, or fails as Apple's does when kIOSurfaceLockAvoidSync forbids that wait. */
+static inline kern_return_t switch_iokit_trap_will(IOUserClient *client, uint32_t index, void *p1, void *p2,
+                                                   kern_return_t result)
+{
+    if (result == KERN_SUCCESS && index == kSwitchIOSurfaceTrapLock) {
+        return switch_iokit_iosurface_lock_will(client, p1, p2);
+    }
+    return result;
+}
 
 /* iokit_user_client_trap, after the client's trap ran: an IOSurface lock or unlock gets the cache op it needs. */
 static inline void switch_iokit_trap_done(IOUserClient *client, uint32_t index, void *p1, void *p2,

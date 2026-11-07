@@ -47,6 +47,7 @@ static atomic_uint nbo = 1;
 static uint32_t submitted[16];
 static uint32_t *fence; /* the fence page, one uint32 per channel at slot*16 */
 static atomic_ulong calls[16];
+static atomic_ulong import_maps; /* VmBind map ops onto imported pages */
 
 /* Order and the asynchronous GPU (gpu_lock) */
 enum {
@@ -331,6 +332,8 @@ static kern_return_t mock_call(mach_port_t c, uint32_t sel, const void *in, size
         for (uint32_t i = 0; i < b->count && i < TegraGM20BMaxBindOps; i++) {
             const struct TegraGM20BAbiBindOp *op = &b->ops[i];
             const struct bo *o = (op->op == TegraGM20BBindMap && op->handle < kMaxBo) ? &bos[op->handle] : NULL;
+            if (o && o->import)
+                atomic_fetch_add(&import_maps, 1);
             pushcount_bind(op->va, op->range, o ? o->fd : -1, o ? o->import : NULL, op->bo_offset, o ? o->bytes : 0);
         }
         return KERN_SUCCESS;
@@ -508,6 +511,16 @@ static kern_return_t mock_unmap(io_connect_t c, uint32_t type, task_port_t t, ma
         return KERN_SUCCESS;
     munmap((void *)addr, bytes);
     return KERN_SUCCESS;
+}
+
+unsigned long mock_iokit_calls(unsigned method)
+{
+    return method < 16 ? calls[method] : 0;
+}
+
+unsigned long mock_iokit_import_maps(void)
+{
+    return import_maps;
 }
 
 void mock_iokit_report(void)

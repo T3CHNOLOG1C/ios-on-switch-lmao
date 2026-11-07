@@ -13,6 +13,7 @@
 #include <IOKit/IOSubMemoryDescriptor.h>
 #include <IOKit/IOUserClient.h>
 #include <kern/clock.h>
+#include <kern/thread.h>
 #include <kern/thread_call.h>
 #include <stddef.h>
 #include <string.h>
@@ -745,14 +746,16 @@ class AGXDeviceUserClient : public IOUserClient
 	uint32_t pushScans_ =
 		0;  // the ones read, every kProfileEvery-th also profiled (gpu.c "push profile")
 	bool critical_ =
-		true;  // its GPU errors panic; no pool quota (all but the compositor with all-clients)
-	bool dead_ = false;  // a channel was killed for a GPU error: no new work, BOs or binds
+		true;  // the compositor's GPU priority; no pool quota (all but the compositor with all-clients)
 	bool importsWritten_ =
 		false;  // TegraGM20BPushImportsWritten: every submission marks every writable import
 	bool quotaLogged_ = false;
 	bool systemLogged_ =
 		false;  // a coherent BoAlloc served from system memory (tgm_pool::FromSystem), logged once
 	uint64_t pool_bytes_ = 0;  // pool BOs held
+	// the thread about to take a hang's line while it holds lock_ (tgm_chan_hung, tgm_chan_del), so hungInterlocks
+	// reads the binds without taking it again
+	thread_t hangHolder_ = nullptr;
 
 	Bo *findBo(uint64_t handle);
 	Bo *findToken(uint32_t token);
@@ -760,6 +763,7 @@ class AGXDeviceUserClient : public IOUserClient
 	void reap(bool force);
 	void unbindOverlaps(uint64_t va, uint64_t range, Bo *only);
 	void scanPushes(const tgm_push *pushes, uint32_t count, tgm_prof *prof);
+	const uint32_t *pushView(uint64_t va, uint64_t bytes, const Binding *&hit) const;
 	IOReturn run(uint32_t method, const void *in, uint32_t inSize, void *out,
 		     uint32_t *outSize);
 
@@ -783,6 +787,8 @@ class AGXDeviceUserClient : public IOUserClient
 
 public:
 	bool setUp(task_t task);
+	int hungInterlocks(const uint64_t *va, const uint32_t *dwords, uint32_t n,
+			   uint64_t *interlocks);
 
 	void countConnection()
 	{
@@ -829,9 +835,11 @@ IOReturn AGXDeviceUserClient::clientClose()
 	releaseMappings();  // first: a view still mapped would keep its pool pages as an orphan (releaseBo)
 	IOLockLock(lock_);
 	closing_ = true;
+	hangHolder_ = current_thread();
 	for (uint32_t i = 0; i < kMaxChannels; i++)
 		tgm_chan_del(
 			&chans_[i]);  // bounded wait, then nvkm preempts and removes it from the runlist
+	hangHolder_ = nullptr;
 	while (nbinds_)
 		unbindOverlaps(binds_[0].va, binds_[0].range, nullptr);
 	cohBos_ = nullptr;
@@ -1476,9 +1484,68 @@ IOReturn AGXDeviceUserClient::channelDestroy(const TegraGM20BAbiChannel *in)
 {
 	if (!in->channel || in->channel > kMaxChannels || !chans_[in->channel - 1])
 		return kIOReturnBadArgument;
+	hangHolder_ = current_thread();
 	tgm_chan_del(&chans_[in->channel - 1]);
+	hangHolder_ = nullptr;
 	reap(false);
 	return kIOReturnSuccess;
+}
+
+// The kernel's view of the push at [va, va + bytes) through the binding that holds it (`hit`: the last one found, tried
+// first): pool BOs write-combined, cached BOs their kernel mapping. Null for a host import (no kernel mapping) or a system
+// coherent BO (its task writes it write-combined, and a read through its cacheable kernel mapping could fill lines a later
+// read would find stale). lock_ held.
+const uint32_t *AGXDeviceUserClient::pushView(uint64_t va, uint64_t bytes,
+					      const Binding *&hit) const
+{
+	if (!hit || va < hit->va || va + bytes > hit->va + hit->range) {
+		hit = nullptr;
+		for (uint32_t b = 0; b < nbinds_ && !hit; b++)
+			if (va >= binds_[b].va && va + bytes <= binds_[b].va + binds_[b].range)
+				hit = &binds_[b];
+	}
+	const void *base = !hit || hit->bo->system ? nullptr
+			   : hit->bo->pool_va      ? hit->bo->pool_va
+			   : hit->bo->bmd          ? hit->bo->bmd->getBytesNoCopy()
+						   : nullptr;
+	return base ? reinterpret_cast<const uint32_t *>(static_cast<const uint8_t *>(base) +
+							 hit->bo_offset + (va - hit->va))
+		    : nullptr;
+}
+
+// A hang's line (gpu.c chan_hung_note): the hung submission's pushes read as the stats read them, for its interlocked
+// states. From a GPU panic path on any thread: the binds are read under lock_, taken only if it is free (a thread that
+// holds it while a GPU wait hangs would never let it go), unless this thread is the one holding it (hangHolder_).
+int AGXDeviceUserClient::hungInterlocks(const uint64_t *va, const uint32_t *dwords, uint32_t n,
+					uint64_t *interlocks)
+{
+	const bool held = hangHolder_ == current_thread();
+	if (!held && !IOLockTryLock(lock_))
+		return -1;
+	PushCounts c = {};
+	PushParse p = {};
+	const Binding *hit = nullptr;
+	int read = 0;
+	for (uint32_t i = 0; i < n; i++) {
+		const uint32_t *words = pushView(va[i], uint64_t(dwords[i]) * 4, hit);
+		if (!words) {
+			p = {};  // a method left open by the push not read ends with it
+			continue;
+		}
+		tgm_scan::pushParse(c, p, words, dwords[i]);
+		read++;
+	}
+	if (!held)
+		IOLockUnlock(lock_);
+	*interlocks = c.interlocks;
+	return read;
+}
+
+extern "C" int tgm_client_interlocks(const void *client, const uint64_t *va, const uint32_t *dwords,
+				     uint32_t n, uint64_t *interlocks)
+{
+	return static_cast<AGXDeviceUserClient *>(const_cast<void *>(client))
+		->hungInterlocks(va, dwords, n, interlocks);
 }
 
 // The stats (see pushScanOn): count what this submission's pushes ask of the GPU, through the kernel's view of the
@@ -1499,31 +1566,15 @@ void AGXDeviceUserClient::scanPushes(const tgm_push *pushes, uint32_t count, tgm
 		}
 		const uint64_t va = pushes[i].va, bytes = uint64_t(pushes[i].dwords) * 4;
 		c.bytes += bytes;
-		if (!hit || va < hit->va || va + bytes > hit->va + hit->range) {
-			hit = nullptr;
-			for (uint32_t b = 0; b < nbinds_ && !hit; b++)
-				if (va >= binds_[b].va &&
-				    va + bytes <= binds_[b].va + binds_[b].range)
-					hit = &binds_[b];
-		}
-		// (not a system coherent BO's: its task writes it write-combined, and a read through its cacheable kernel
-		// mapping could fill lines a later read would find stale)
-		const void *base = !hit || hit->bo->system ? nullptr
-				   : hit->bo->pool_va      ? hit->bo->pool_va
-				   : hit->bo->bmd          ? hit->bo->bmd->getBytesNoCopy()
-							   : nullptr;
-		if (!base || bytes > budget) {
+		const uint32_t *words = pushView(va, bytes, hit);
+		if (!words || bytes > budget) {
 			scanPush(c, p, whole, nullptr, 0);  // not read: no later push is stamped
 			continue;
 		}
 		budget -= bytes;
 		c.readBytes += bytes;
 		const uint64_t drawsBefore = c.draws, sampleBefore = c.sampleDraws;
-		const uint8_t cls = scanPush(
-			c, p, whole,
-			reinterpret_cast<const uint32_t *>(static_cast<const uint8_t *>(base) +
-							   hit->bo_offset + (va - hit->va)),
-			bytes / 4);
+		const uint8_t cls = scanPush(c, p, whole, words, bytes / 4);
 		if (prof && i < TGM_PROF_MAX) {
 			prof->cls[i] = cls;
 			const uint64_t draws = c.draws - drawsBefore,
@@ -1629,13 +1680,6 @@ IOReturn AGXDeviceUserClient::exec(const TegraGM20BAbiExec *in, uint32_t count,
 			importsWritten_ = true;
 		pushes[i].no_prefetch = (p.flags & TegraGM20BPushNoPrefetch) ? 1u : 0u;
 	}
-	if (count) {
-		// Mark every writable host import this submission may have written GPU-dirty (cheap flag stores, no cache
-		// maintenance): the reader's next IOSurface read lock invalidates it then (tgm_coherency_*, the XNU hook). A read
-		// lock between now and the fence completing would clear the mark early, but a CPU readback waits for completion.
-		for (Bo *bo = cohBos_; bo; bo = bo->cohNext)
-			tgm_coherency_wrote(bo->coh, importsWritten_);
-	}
 	tgm_prof prof;
 	bool profiled = false;
 	if (count && pushScanOn() && pushSubmits_++ % kScanEvery == 0) {
@@ -1648,6 +1692,13 @@ IOReturn AGXDeviceUserClient::exec(const TegraGM20BAbiExec *in, uint32_t count,
 	reap(false);
 	if (ret)
 		return ret;
+	if (count) {
+		// Every writable host import this submission may have written, marked GPU-dirty with the submission as its
+		// writer (atomic stores, no cache maintenance): a CPU IOSurfaceLock of it waits for this seqno, then
+		// invalidates (tgm_coherency_*, the XNU hooks).
+		for (Bo *bo = cohBos_; bo; bo = bo->cohNext)
+			tgm_coherency_wrote(bo->coh, importsWritten_, tgm_chan_uid(chan), seqno);
+	}
 	out->seqno = seqno;
 	out->reserved = 0;
 	return kIOReturnSuccess;
@@ -1660,8 +1711,8 @@ IOReturn AGXDeviceUserClient::waitFence(const TegraGM20BAbiWaitFence *in)
 	if (!in->channel || in->channel > kMaxChannels)
 		return kIOReturnBadArgument;
 	const uint64_t limit_ns = in->timeout_ns == UINT64_MAX ? 10000000000ULL : in->timeout_ns;
-	const uint64_t start = nowNs();
-	const uint64_t deadline = limit_ns > UINT64_MAX - start ? UINT64_MAX : start + limit_ns;
+	uint64_t start = nowNs();
+	uint64_t deadline = limit_ns > UINT64_MAX - start ? UINT64_MAX : start + limit_ns;
 	uint32_t waiter = 0, seq = 0;
 	bool woken = false;
 	for (bool slept = false;; slept = true) {
@@ -1680,12 +1731,19 @@ IOReturn AGXDeviceUserClient::waitFence(const TegraGM20BAbiWaitFence *in)
 			ret = kIOReturnNotResponding;
 		else if (static_cast<int32_t>(tgm_chan_completed(chan) - in->seqno) >= 0)
 			ret = kIOReturnSuccess;
-		else if (in->timeout_ns == UINT64_MAX && now - start >= limit_ns)
-			tgm_chan_hung(chan, "fence wait", in->seqno,
-				      now - start);  // CONTRACT: UINT64_MAX means 10 s
-		else if (!limit_ns || now - start >= limit_ns) {
+		else if (in->timeout_ns == UINT64_MAX && now - start >= limit_ns) {
+			// CONTRACT: UINT64_MAX means 10 s; then what the GPU is stuck on is killed (this channel's error
+			// ends the wait) and the wait goes on
+			hangHolder_ = current_thread();
+			tgm_chan_stalled(chan, "fence wait", in->seqno, now - start);
+			hangHolder_ = nullptr;
+			start = now;
+			deadline = now + limit_ns;
+		} else if (!limit_ns || now - start >= limit_ns) {
+			hangHolder_ = current_thread();
 			if (limit_ns)
 				tgm_chan_check_progress(chan, "fence wait", in->seqno);
+			hangHolder_ = nullptr;
 			ret = kIOReturnTimeout;
 		}
 		IOLockUnlock(lock_);
@@ -1941,8 +1999,7 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 
 	if (method == TegraGM20BMethodWaitFence)
 		return waitFence(static_cast<const TegraGM20BAbiWaitFence *>(in));
-	// Map and Unmap take lock_ themselves (Map's clientMemoryForType must run without it); a dead connection still maps and
-	// unmaps what it has, as IOConnectMapMemory64 would.
+	// Map and Unmap take lock_ themselves (Map's clientMemoryForType must run without it).
 	if (method == TegraGM20BMethodMap)
 		return mapToken(static_cast<const TegraGM20BAbiMap *>(in),
 				static_cast<TegraGM20BAbiMapReply *>(out));
@@ -1953,17 +2010,9 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 		return kIOReturnSuccess;
 	}
 	IOLockLock(lock_);
-	// a channel of this connection was killed for a GPU error (client fault isolation): the connection takes no
-	// new work, memory or binds; status, fence waits, frees and teardown still answer, so the client sees the error and
-	// fails or falls back
-	for (uint32_t i = 0; i < kMaxChannels && !dead_; i++)
-		dead_ = chans_[i] && tgm_chan_error(chans_[i]) && tgm_stage() >= 3;
-	if (dead_ && (method == TegraGM20BMethodBoAlloc || method == TegraGM20BMethodBoImport ||
-		      method == TegraGM20BMethodVmBind || method == TegraGM20BMethodChannelCreate ||
-		      method == TegraGM20BMethodExec || method == TegraGM20BMethodOrder)) {
-		IOLockUnlock(lock_);
-		return kIOReturnNotResponding;
-	}
+	// A channel killed for a GPU fault or hang (client fault isolation) refuses only what names it (Exec, Order and
+	// WaitFence answer kIOReturnNotResponding, GetStatus its error); the connection's memory, binds and other channels
+	// go on, and ChannelCreate makes it a new one, as a GPU restart leaves a Metal device on iOS.
 	IOReturn ret;
 	switch (method) {
 	case TegraGM20BMethodGetInfo:

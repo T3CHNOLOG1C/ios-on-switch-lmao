@@ -9,6 +9,7 @@
 #include <libkern/c++/OSDictionary.h>
 #include <libkern/c++/OSNumber.h>
 #include <libkern/c++/OSSymbol.h>
+#include <string.h>
 #include "../ArmGIC/SwitchInterrupts.h"
 
 namespace xhost {
@@ -96,13 +97,41 @@ IOService *waitForRootPort(IOService *controller, unsigned number, uint64_t time
     return found;
 }
 
-IOReturn forcePortPower(IOService *port, bool on)
+void describePorts(IOService *controller, char *buffer, size_t size)
+{
+    size_t used = 0;
+    buffer[0] = 0;
+    OSIterator *children = controller->getChildIterator(gIOServicePlane);
+    while (children != nullptr && used + 1 < size) {
+        auto *child = OSDynamicCast(IOService, children->getNextObject());
+        if (child == nullptr)
+            break;
+        const OSObject *value = child->copyProperty(kPortNumber);
+        const auto *data = OSDynamicCast(OSData, value);
+        uint32_t number = 0;
+        const bool known = data != nullptr && data->getLength() >= sizeof(number);
+        if (known)
+            memcpy(&number, data->getBytesNoCopy(), sizeof(number));
+        const unsigned power = child->getPowerState();
+        const int n = known ? snprintf(buffer + used, size - used, "%s%s port %u power %u", used != 0 ? ", " : "",
+                                       child->getMetaClass()->getClassName(), number, power)
+                            : snprintf(buffer + used, size - used, "%s%s port ? power %u", used != 0 ? ", " : "",
+                                       child->getMetaClass()->getClassName(), power);
+        OSSafeReleaseNULL(value);
+        if (n <= 0)
+            break;
+        used = used + static_cast<size_t>(n) < size ? used + static_cast<size_t>(n) : size - 1;
+    }
+    OSSafeReleaseNULL(children);
+}
+
+IOReturn forcePower(IOService *service, bool on)
 {
     const OSNumber *value = OSNumber::withNumber(on ? 1U : 0U, 32);
     OSDictionary *request = value != nullptr ? OSDictionary::withCapacity(1) : nullptr;
     if (request == nullptr || !request->setObject(kForcePower, value))
-        panic("SwitchUSB: no memory for the root port's UsbForcePower");
-    const IOReturn result = port->setProperties(request);
+        panic("SwitchUSB: no memory for UsbForcePower");
+    const IOReturn result = service->setProperties(request);
     OSSafeReleaseNULL(request);
     OSSafeReleaseNULL(value);
     return result;

@@ -49,6 +49,9 @@ struct nvk_queue {
 
    /* CB0 for all draw commands on this queue */
    struct nvkmd_mem *draw_cb0;
+
+   /* Scratch memory usage for fragment shader interlock */
+   struct nvkmd_mem *fsi_memory;
 };
 
 static inline struct nvk_device *

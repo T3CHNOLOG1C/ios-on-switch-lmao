@@ -11,6 +11,9 @@
 #   gm20b_push_scan_test     TegraGM20BPushScan.h (the kernel's method-stream reader and the push profile's classes) over
 #                            streams laid out as NVK writes them: every counter, and no profile stamp after a push whose
 #                            method continues, one the kernel could not read or one with an opcode NVK never writes
+#   gm20b_sched_test         TegraGM20BSchedPolicy.h and tgm_hang_blame over deploy-2045's hang registers: what a
+#                            compositor kick preempts, the interleaved runlist (full, empty, one level), which channel a
+#                            late wait kills (the context GR cannot switch, a self-hung channel, never slow work)
 #   gm20b_sleep_test         TegraGM20BSleepGate.h (system sleep's gate and plan): every transition, and on threads with
 #                            gpu.c's sleeping protocol around it, no caller inside between the drain and the wake, a
 #                            submission waiting at the gate goes on at the wake, a caller that never leaves fails the drain
@@ -45,6 +48,17 @@ host_test(
 )
 
 host_test(
+    name = "gm20b_sched_test",
+    srcs = [
+        "gm20b_sched_test.cpp",
+        "//drivers/TegraGM20B:TegraGM20BHost.h",
+        "//drivers/TegraGM20B:TegraGM20BRecover.h",
+        "//drivers/TegraGM20B:TegraGM20BSchedPolicy.h",
+    ],
+    cxx_std = "c++17",
+)
+
+host_test(
     name = "gm20b_sleep_test",
     srcs = [
         "gm20b_sleep_test.cpp",
@@ -58,6 +72,7 @@ host_test(
     srcs = ["gm20b_source_test.cpp"],
     # c++20 (not the harnesses' c++17): bazel/testing's headers use string_view and nested namespaces.
     data = [
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_gpu.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_kernel.cpp",
         "//third_party/mesa/src/nouveau/vulkan:nvkmd/darwin/nvkmd_darwin.c",
         "//third_party/mesa/src/nouveau/vulkan:nvk_image.c",

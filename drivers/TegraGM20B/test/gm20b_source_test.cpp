@@ -120,9 +120,13 @@ TEST(GM20BPoolPolicySource, SystemBosGoAsPoolViewsDo)
 			"!bo->system && !(bo->flags & TegraGM20BBoContiguous) &&"));  // never a spare
 	expectBefore(flat(definition(client(), "void releaseOrphans()")),
 		     "orphan->view->release();", "orphan->backing->release();");
-	// Never read through the cacheable alias.
-	EXPECT_THAT(flat(definition(client(), "void AGXDeviceUserClient::scanPushes(")),
+	// Never read through the cacheable alias: the stats and a hang's line both read pushes through pushView.
+	EXPECT_THAT(flat(definition(client(), "const uint32_t *AGXDeviceUserClient::pushView(")),
 		    HasSubstr("!hit || hit->bo->system ? nullptr"));
+	EXPECT_THAT(flat(definition(client(), "void AGXDeviceUserClient::scanPushes(")),
+		    HasSubstr("pushView(va, bytes, hit)"));
+	EXPECT_THAT(flat(definition(client(), "int AGXDeviceUserClient::hungInterlocks(")),
+		    HasSubstr("pushView(va[i], uint64_t(dwords[i]) * 4, hit)"));
 }
 
 TEST(GM20BPoolPolicySource, StatsNameThePoolHolders)
@@ -322,6 +326,62 @@ TEST(GM20BFenceWakeSource, WaitersWakeByChannel)
 	EXPECT_THAT(wait, Not(HasSubstr("tgm_idle(")));
 }
 
+// A killed channel is dead alone (client fault isolation): what names it refuses, the connection's memory, binds and other
+// channels go on, a new channel can be made in it, and nothing another channel waits for stays on the dead one.
+TEST(GM20BKillSource, AKilledChannelLeavesItsConnectionWorking)
+{
+	const std::string run =
+		flat(definition(client(), "IOReturn AGXDeviceUserClient::run(uint32_t method,"));
+	EXPECT_THAT(client(), Not(HasSubstr("dead_")));
+	EXPECT_THAT(run, Not(HasSubstr("tgm_chan_error(")));
+	EXPECT_THAT(flat(definition(gpu(), "static int chan_exec(struct tgm_chan *chan,")),
+		    HasSubstr("if (chan->error) return -EIO;"));
+	const std::string order =
+		flat(definition(gpu(), "int tgm_chan_order(struct tgm_chan *chan,"));
+	EXPECT_THAT(order, HasSubstr("if (READ_ONCE(chan->error)) return -EIO;"));
+	EXPECT_THAT(order, HasSubstr("READ_ONCE(other->error)) continue;"));
+	const std::string killed = flat(definition(
+		gpu(), "static int chan_killed(struct nvif_event *event, void *repv, u32 repc)"));
+	EXPECT_THAT(killed, HasSubstr("WRITE_ONCE(*chan->fence_cpu, chan->submitted);"));
+	EXPECT_THAT(killed, HasSubstr("chan->kernel || !tgm_all_clients()"));
+	EXPECT_THAT(flat(definition(client(), "void AGXDeviceUserClient::reap(bool force)")),
+		    HasSubstr("chans_[i] && !tgm_chan_error(chans_[i]) &&"));
+}
+
+// The raw path's reopen after its channel is killed: the shader heap's BO and VA outlive the channel, so every program
+// placed in it (Device::place) keeps its slot and every state that baked its offset stays drawable; the new channel gets
+// what lives in a channel's context again, the program region at the heap, the texture and sampler pools and the root
+// constant buffer (emitContext, from the pack's relocations) and the 2D state, and the first command buffer's prologue
+// invalidates the shader caches before any draw.
+TEST(GM20BRawReopenSource, ReopenKeepsTheHeapAndReplaysTheContext)
+{
+	const std::string raw = SourceText("../../TegraGM20BMetal/raw/runtime/raw_gpu.cpp");
+	const std::string reopen = flat(definition(raw, "bool Device::reopen()"));
+	EXPECT_THAT(reopen, Not(HasSubstr("placed_")));
+	EXPECT_THAT(reopen, Not(HasSubstr("heapPlaced_")));
+	EXPECT_THAT(reopen, Not(HasSubstr("pipelines_")));
+	EXPECT_THAT(reopen, Not(HasSubstr("heap_")));
+	expectBefore(reopen, "k_.channel(kEngines, channel_, fence_)", "emitContext(p);");
+	expectBefore(reopen, "emitContext(p);", "fx::emitTwodInit(p);");
+	// the interlock's ticket buffer zeroed by the copy engine in the new channel, after the context names it and before
+	// the 3D engine runs again
+	expectBefore(reopen, "emitContext(p);",
+		     "uint32_t(tickets_.va >> 32), uint32_t(tickets_.va)}, SUBC_COPY);");
+	expectBefore(reopen, "uint32_t(tickets_.va)}, SUBC_COPY);",
+		     "p.m(CE_LAUNCH_DMA, kLaunchPitch, SUBC_COPY);");
+	expectBefore(reopen, "p.m(CE_LAUNCH_DMA, kLaunchPitch, SUBC_COPY);",
+		     "p.m(WAIT_FOR_IDLE, 0);");
+	const std::string context = flat(definition(raw, "void Device::emitContext(Push &p)"));
+	EXPECT_THAT(context, HasSubstr("p.m(LOAD_CB_OFFSET, kRootInterlockTickets);"));
+	for (const char *reloc :
+	     {"case RelocHeapHi:", "case RelocHeapLo:", "case RelocTicHi:", "case RelocTicLo:",
+	      "case RelocTscHi:", "case RelocTscLo:", "case RelocRootHi:", "case RelocRootLo:"})
+		EXPECT_THAT(context, HasSubstr(reloc));
+	EXPECT_THAT(context, HasSubstr("p.inc(CB_SELECTOR_A,"));
+	const std::string begin = flat(definition(raw, "CommandBuffer *Device::begin()"));
+	expectBefore(begin, "reopen();", "p.m(INVALIDATE_SHADER_CACHES_NO_WFI,");
+}
+
 // No spin for GPFIFO or push room: every wait for room sleeps until a fence's interrupt, and the fence reports GET to nvif
 // before that interrupt, so the room the GPU freed is there when the waiter looks.
 TEST(GM20BRoomSource, RoomIsWaitedForByInterrupt)
@@ -354,6 +414,14 @@ TEST(GM20BL2Source, InvalidateOnTheGpu)
 		     "pushes[i].no_prefetch || ((l2_on() || tlb) && !i));");
 }
 
+// A CPU IOSurfaceLock waits for the submissions that may write the surface: Exec names each one once it has its seqno.
+TEST(GM20BCoherencySource, ExecNamesTheWriterOnceTheSubmissionHasItsSeqno)
+{
+	const std::string exec = flat(definition(client(), "IOReturn AGXDeviceUserClient::exec("));
+	expectBefore(exec, "ioreturn(tgm_chan_exec(chan, pushes, count, &seqno,",
+		     "tgm_coherency_wrote(bo->coh, importsWritten_, tgm_chan_uid(chan), seqno);");
+}
+
 // A SurfaceWrites a client could not deliver never leaves a GPU write unmarked: the client stops saying its imports are
 // only sampled and flags every submission TegraGM20BPushImportsWritten, which makes the connection mark every writable
 // import at every Exec.
@@ -361,7 +429,7 @@ TEST(GM20BCoherencySource, AFailedSurfaceWritesFallsBackToMarkingEveryImport)
 {
 	const std::string exec = flat(definition(client(), "IOReturn AGXDeviceUserClient::exec("));
 	expectBefore(exec, "importsWritten_ = true;",
-		     "tgm_coherency_wrote(bo->coh, importsWritten_);");
+		     "tgm_coherency_wrote(bo->coh, importsWritten_, tgm_chan_uid(chan), seqno);");
 	const std::string raw = SourceText("../../TegraGM20BMetal/raw/runtime/raw_kernel.cpp");
 	const std::string declare = flat(definition(raw, "bool Kernel::surfaceGpuWrites("));
 	EXPECT_THAT(declare, HasSubstr("importsWritten_.store(true"));
@@ -377,10 +445,14 @@ TEST(GM20BCoherencySource, AFailedSurfaceWritesFallsBackToMarkingEveryImport)
 		    HasSubstr("ctx->req.pushes[0].flags |= TegraGM20BPushImportsWritten;"));
 	EXPECT_THAT(nvk,
 		    HasSubstr("if (req.surface_id && !p_atomic_read(&surface_writes_failed))"));
-	// The frontend reaches both with dlsym (NativeBridgeMetalFrontend.mm nvkSymbol); Mesa builds hidden by default.
+	// The frontend and the raw path's kernel connection (raw_kernel.cpp) reach these with dlsym; Mesa builds hidden by
+	// default. Without the connection's, the raw path opens no device and the render server stays on m2v alone.
 	for (const char *exported :
 	     {"__attribute__((visibility(\"default\"))) void\nswitch_nvk_import_surface(",
-	      "__attribute__((visibility(\"default\"))) bool\nswitch_nvk_surface_gpu_writes("})
+	      "__attribute__((visibility(\"default\"))) bool\nswitch_nvk_surface_gpu_writes(",
+	      "__attribute__((visibility(\"default\"))) bool\nswitch_nvk_connection(",
+	      "__attribute__((visibility(\"default\"))) void\nswitch_nvk_connection_release(",
+	      "__attribute__((visibility(\"default\"))) void\nswitch_nvk_import_foreign("})
 		EXPECT_THAT(nvk, HasSubstr(exported));
 }
 

@@ -6424,6 +6424,7 @@ iokit_user_client_trap(struct iokit_user_client_trap_args *args)
 			if (filterPolicy && gIOUCFilterCallbacks->io_filter_applier) {
 				result = gIOUCFilterCallbacks->io_filter_applier(userClient, filterPolicy, io_filter_type_trap, args->index);
 			}
+			result = switch_iokit_trap_will(userClient, args->index, args->p1, args->p2, result);
 			if (kIOReturnSuccess == result) {
 				trap = userClient->getTargetAndTrapForIndex(&target, args->index);
 			}

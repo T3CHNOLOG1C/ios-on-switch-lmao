@@ -51,23 +51,33 @@ namespace {
 constexpr uint32_t kVendorID = 0x057e;   // Nintendo
 constexpr uint32_t kProbeScore = 10000;  // over AppleUserHIDEventDriver's 1 and IOHIDEventDriver's own 0
 
-// Logical maxima of X and Y, little endian: the report frame (SwitchHID.h kSwitchTouchReportWidth/Height).
+// Logical maxima of X and Y, little endian: the report frame (SwitchHID.h kSwitchTouchReportWidth/Height). Physical
+// maxima: the panel's 87 x 155 mm in hundredths of a centimetre (Unit 0x11, SI length in cm; Unit Exponent -2).
+// IOHIDEventDriver publishes them as the service's SurfaceDimensions in millimetres (IOHIDFamily getFixedValue), and
+// backboardd hands them on as each touch event's digitizer surface size; without a unit it published the logical
+// ranges as raw 16.16 millimetres, 0.011 x 0.020 mm.
 #if SWITCH_PORTRAIT_NATIVE
-#define TOUCH_X_MAX 0xcf, 0x02 /* 719 */
-#define TOUCH_Y_MAX 0xff, 0x04 /* 1279 */
+#define TOUCH_X_MAX  0xcf, 0x02 /* 719 */
+#define TOUCH_Y_MAX  0xff, 0x04 /* 1279 */
+#define TOUCH_X_SIZE 0x66, 0x03 /* 870: 87.0 mm */
+#define TOUCH_Y_SIZE 0x0e, 0x06 /* 1550: 155.0 mm */
 #else
-#define TOUCH_X_MAX 0xff, 0x04 /* 1279 */
-#define TOUCH_Y_MAX 0xcf, 0x02 /* 719 */
+#define TOUCH_X_MAX  0xff, 0x04 /* 1279 */
+#define TOUCH_Y_MAX  0xcf, 0x02 /* 719 */
+#define TOUCH_X_SIZE 0x0e, 0x06 /* 1550: 155.0 mm */
+#define TOUCH_Y_SIZE 0x66, 0x03 /* 870: 87.0 mm */
 #endif
 static_assert(kSwitchTouchReportWidth == (SWITCH_PORTRAIT_NATIVE ? 720 : 1280), "touch descriptor X range");
-#define FINGER                                                                                                    \
-    0x05, 0x0d, 0x09, 0x22, 0xa1, 0x02,                             /* Digitizer: Finger, Collection (Logical) */ \
-        0x09, 0x42, 0x09, 0x47, 0x09, 0x34,                         /* Tip Switch, Touch Valid, Untouch */        \
-        0x15, 0x00, 0x25, 0x01, 0x75, 0x01, 0x95, 0x03, 0x81, 0x02, /* 3 x 1 bit, Input (Data, Var, Abs) */       \
-        0x95, 0x05, 0x81, 0x03,                                     /* 5 bits padding */                          \
-        0x09, 0x51, 0x25, 0x09, 0x75, 0x08, 0x95, 0x01, 0x81, 0x02, /* Contact Identifier, 0..9 */                \
-        0x05, 0x01, 0x09, 0x30, 0x26, TOUCH_X_MAX, 0x75, 0x10, 0x81, 0x02, /* Generic Desktop X */                \
-        0x09, 0x31, 0x26, TOUCH_Y_MAX, 0x81, 0x02,                         /* Y */                                \
+#define FINGER                                                                                                       \
+    0x05, 0x0d, 0x09, 0x22, 0xa1, 0x02,                                /* Digitizer: Finger, Collection (Logical) */ \
+        0x09, 0x42, 0x09, 0x47, 0x09, 0x34,                            /* Tip Switch, Touch Valid, Untouch */        \
+        0x15, 0x00, 0x25, 0x01, 0x75, 0x01, 0x95, 0x03, 0x81, 0x02,    /* 3 x 1 bit, Input (Data, Var, Abs) */       \
+        0x95, 0x05, 0x81, 0x03,                                        /* 5 bits padding */                          \
+        0x09, 0x51, 0x25, 0x09, 0x75, 0x08, 0x95, 0x01, 0x81, 0x02,    /* Contact Identifier, 0..9 */                \
+        0x05, 0x01, 0x09, 0x30, 0x26, TOUCH_X_MAX, 0x75, 0x10,         /* Generic Desktop X, 16 bits */              \
+        0x46, TOUCH_X_SIZE, 0x65, 0x11, 0x55, 0x0e, 0x81, 0x02,        /* 0 .. its millimetres, Input */             \
+        0x09, 0x31, 0x26, TOUCH_Y_MAX, 0x46, TOUCH_Y_SIZE, 0x81, 0x02, /* Y */                                       \
+        0x45, 0x00, 0x65, 0x00, 0x55, 0x00,                            /* the next finger's items: no unit */        \
         0xc0
 const uint8_t kTouchDescriptor[] = {
     0x05,   0x0d,   0x09,   0x04,   0xa1,   0x01,   0x85,   0x01,  // Digitizer: Touch Screen, Collection (Application), Report ID 1
@@ -76,6 +86,8 @@ const uint8_t kTouchDescriptor[] = {
 #undef FINGER
 #undef TOUCH_X_MAX
 #undef TOUCH_Y_MAX
+#undef TOUCH_X_SIZE
+#undef TOUCH_Y_SIZE
 static_assert(sizeof(SwitchTouchReport) == 1 + kSwitchTouchSlots * 6, "touch report layout");
 
 const uint8_t kButtonsDescriptor[] = {

@@ -3,8 +3,9 @@
 // (host builds, mock GM20B with cap.cpp's nvdec in NVDEC_PROBE mode) and drawn once with tagged inputs, so tools/mkpack.py can read
 // off, per state, the programs NVK built, the 3D registers the state sets, and where each Metal slot lands in GPU memory.
 //
-// Tags: every buffer slot 0..7 of both stages is setBytes of 256 bytes whose words are 0xC0DE0000|stage<<8|slot, the probe index,
-// then 0xA0000000|stage<<20|slot<<16|word (slots 0..PROBE_SLOTS-1, default 8); fragment texture slot t (0..15) is a (16+t)x(8+t)
+// Tags: every buffer slot of both stages is setBytes of 256 bytes whose words are 0xC0DE0000|stage<<8|slot, the probe index,
+// then 0xA0000000|stage<<20|slot<<16|word (slots 0..PROBE_SLOTS-1, default 31: Metal's whole buffer table, as Core Animation's
+// functions read slots past 7, apply_apl_dimming's dim_factor at 9; an unbound one m2v fills with zeros); fragment texture slot t (0..15) is a (16+t)x(8+t)
 // BGRA8 texture, fragment sampler slot s (0..15) has max LOD clamp 1+s/2 (mip filter nearest; r8-rawca: 1+s made slot 14 look like any sampler with the default clamp, 15), linear min/mag when s&1, repeat U
 // when s&2. A sampler made before them takes NVK's sampler index 0. One command buffer (one submission) per state; stdout lines "PROBE <i> <state key>".
 // The corpus's lib= fields (the journal names each function's library since 11-04) are not part of the state key: the raw path
@@ -22,7 +23,7 @@
 #include "bridge/NativeMetalObjects.h"
 extern "C" void mock_iokit_report(void);
 extern "C" void pushcount_report(const char *what);
-static uint32_t gSlots = getenv("PROBE_SLOTS") ? atoi(getenv("PROBE_SLOTS")) : 8;
+static uint32_t gSlots = getenv("PROBE_SLOTS") ? atoi(getenv("PROBE_SLOTS")) : 31;
 
 static void missing(const char *cls, const char *sel)
 {
@@ -156,6 +157,22 @@ static bool parseState(id<MTLLibrary> qc, const std::string &line, State &s)
     return true;
 }
 
+// The pixel formats of the color attachments the lines' states write (writeMask not 0), from their "c<i>=<format>:<mask>:"
+// fields
+static std::set<unsigned> writtenFormats(const std::vector<std::string> &lines)
+{
+    std::set<unsigned> out;
+    for (const std::string &line : lines) {
+        const std::string head = line.substr(0, line.find(" | v "));
+        for (size_t at = head.find(" c"); at != std::string::npos; at = head.find(" c", at + 2)) {
+            unsigned i, format, mask;
+            if (sscanf(head.c_str() + at, " c%u=%u:%u:", &i, &format, &mask) == 3 && mask)
+                out.insert(format);
+        }
+    }
+    return out;
+}
+
 static IOSurfaceRef newSurface(unsigned w, unsigned h)
 {
     NSDictionary *p = @{
@@ -204,7 +221,7 @@ int main(int argc, char **argv)
             lines.push_back(plain.UTF8String);
         }
         // PROBE_YCBCR_LIB=<metallib>: the raw path's own states after Core Animation's, drawn and read alike: the conversions of
-        // 4:2:0 YCbCr textures (pack/ycbcr.metal), lines marked "@Y " (their functions are that library's); mkpack.py keys
+        // YCbCr textures (pack/ycbcr.metal), lines marked "@Y " (their functions are that library's); mkpack.py keys
         // them by name ("raw.ycbcr.<fragment function>"), which the runtime asks for
         id<MTLLibrary> ycbcr = nil;
         if (const char *path = getenv("PROBE_YCBCR_LIB")) {
@@ -215,7 +232,7 @@ int main(int argc, char **argv)
             }
             for (const char *out :
                  {"115 | v ycbcr_vert | f ycbcr_converted_frag", "125 | v ycbcr_vert | f ycbcr_srgb_frag",
-                  "70 | v ycbcr_vert | f ycbcr_codes_frag"}) {
+                  "70 | v ycbcr_vert | f ycbcr_codes_frag", "90 | v ycbcr_vert | f ycbcr_codes10_frag"}) {
                 std::string o = out;
                 const size_t bar = o.find(' ');
                 lines.push_back("@Y R ok=1 label=raw.ycbcr samples=1 topo=0 ds=0/0 c0=" + o.substr(0, bar) +
@@ -441,7 +458,10 @@ int main(int argc, char **argv)
         std::set<std::string> seen;
         unsigned index = 0, made = 0, refused = 0, failed = 0;
         // warm-up: one draw of a state that samples, with the dummy sampler in every slot, so NVK (m2v makes samplers at first
-        // use) gives it index 0 and a handle naming index 0 means "no sampler"
+        // use) gives it index 0 and a handle naming index 0 means "no sampler". Its command buffer first clears every private
+        // target the states load: m2v writes Metal's fresh-texture pattern into a new Private texture at its first use
+        // (texture.rs fresh_patterned; a float format's with a draw), which would otherwise land in the submission of the
+        // first state that loads the target, as a draw that state does not make
         for (const std::string &line : lines) {
             State s;
             if (line.find("downsample_4_frag") == std::string::npos || !parseState(qc, line, s))
@@ -459,6 +479,16 @@ int main(int argc, char **argv)
                 pass.colorAttachments[c].storeAction = MTLStoreActionDontCare;
             }
             id<MTLCommandBuffer> cb = [queue commandBuffer];
+            for (unsigned format : writtenFormats(lines)) {
+                id<MTLTexture> t = target((MTLPixelFormat)format, false);
+                if (!t)
+                    continue;
+                MTLRenderPassDescriptor *clear = [MTLRenderPassDescriptor renderPassDescriptor];
+                clear.colorAttachments[0].texture = t;
+                clear.colorAttachments[0].loadAction = MTLLoadActionClear;
+                clear.colorAttachments[0].storeAction = MTLStoreActionStore;
+                [[cb renderCommandEncoderWithDescriptor:clear] endEncoding];
+            }
             id<MTLRenderCommandEncoder> enc = [cb renderCommandEncoderWithDescriptor:pass];
             [enc setRenderPipelineState:state];
             uint32_t zero[64] = {};

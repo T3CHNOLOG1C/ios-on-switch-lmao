@@ -26,12 +26,15 @@ writes <out>/pack.bin, pack.json, layouts.txt, report.txt and keeps the probe lo
 reruns the probes).
 --stack: the build's stack key (the plugin is compiled with the same value), stamped into the pack header: the runtime
 refuses a pack of another build.
+A bucket's states that its run drew in metal2vulkan's storage form (the pixel interlock on: framebuffer fetch, whatever
+library) are probed once more in <bucket>/barrier with NVK's interlock hidden (NVK_DEBUG=no_fsi, the macOS twin's
+alone), so the pack holds their barrier form too (input attachments, barriers between draws).
 The same work in three steps, for a build that caches each bucket's probe runs (they depend on the bucket's state lines
 and the tools alone):
        rawpack.py --split --qc <default.metallib> --corpus <corpus.log> --out <dir>
            writes <dir>/work/bucket0 .. bucket15, each a corpus.log of its states
        rawpack.py --probe-bucket <bucket dir> --prebuilt <dir> --nvk <host twin dylib> --qc <default.metallib>
-           probes one bucket in place: programs.bin, probe{256,16,4096}.{out,log}
+           probes one bucket in place: programs.bin, probe{256,16,4096}.{out,log}, and its barrier/ the same
        rawpack.py --link --out <dir> [--stack <hex key>] <bucket dir>...
            mkpack.py over the buckets: <dir>/pack.bin and the rest, as the one-step form writes them
 """
@@ -225,12 +228,55 @@ def fnv(b: bytes) -> int:
     return h
 
 
+def state_key(line: str) -> str:
+    """Give an R line's state key as probe.mm prints it: every descriptor field but the label, then its functions."""
+    bar1, bar2 = line.find(' | v '), line.find(' | f ')
+    if bar1 < 0 or bar2 < 0:
+        return ''
+    bar3 = line.find(' | ', bar2 + 5)
+    fields = [
+        h
+        for h in line[:bar1].split()
+        if h.startswith(('samples=', 'topo=', 'ds=')) or (len(h) > 1 and h[0] in 'ca' and h[1].isdigit())
+    ]
+    return (' '.join(fields) + ' ' + line[bar1 : bar3 if bar3 >= 0 else len(line)]).strip()
+
+
+def barrier_set(d: Path) -> Path | None:
+    """Write <d>/barrier/corpus.log: the warm-up line and the lines of the states d's run drew with the interlock on."""
+    sys.path.insert(0, str(HERE))
+    import probelog  # noqa: PLC0415  the pack directory's module, on the path only now
+
+    keys = {
+        p['key']
+        for p in probelog.load(str(d / 'probe256.out'), str(d / 'probe256.log'))
+        if p['records'] and p['records'][0]['regs'].get(0x1224, 0) & 3
+    }
+    lines = (d / 'corpus.log').read_text().splitlines(keepends=True)
+    chosen = [line for line in lines[1:] if state_key(line.rstrip('\n')) in keys]
+    if not chosen:
+        return None
+    barrier = d / 'barrier'
+    barrier.mkdir(exist_ok=True)
+    (barrier / 'corpus.log').write_text(lines[0] + ''.join(chosen))
+    return barrier
+
+
 def probe_bucket(tools: Path, d: Path, nvk: Path, qc: Path, env: dict[str, str]) -> str:
-    """Probe one bucket's states.
+    """Probe one bucket's states, then its storage-form states again with the interlock hidden (barrier_set).
 
     A run that only fills its m2v cache with NVK's driver records (NAK's programs), then the three decoded runs, which
     name each bound program by those records (RAWCAP_PROGRAMS) and hit the same cache.
     """
+    said = [probe_runs(tools, d, nvk, qc, env)]
+    barrier = barrier_set(d)
+    if barrier:
+        said.append(probe_runs(tools, barrier, nvk, qc, dict(env, NVK_DEBUG='no_fsi')))
+    return '; '.join(said)
+
+
+def probe_runs(tools: Path, d: Path, nvk: Path, qc: Path, env: dict[str, str]) -> str:
+    """Run the warm-up and the three decoded probe runs over d's corpus."""
     if d.name == 'bucket0':
         env = dict(env, PROBE_YCBCR_LIB=str(tools / 'ycbcr.metallib'))
     said = []
@@ -264,7 +310,7 @@ def probe_bucket(tools: Path, d: Path, nvk: Path, qc: Path, env: dict[str, str])
             },
         )
     shutil.rmtree(d / 'cache')
-    return f'rawpack: {d.name}: ' + '; '.join(said)
+    return f'rawpack: {d.parent.name + "/" if d.name == "barrier" else ""}{d.name}: ' + '; '.join(said)
 
 
 def probe_env() -> dict[str, str]:

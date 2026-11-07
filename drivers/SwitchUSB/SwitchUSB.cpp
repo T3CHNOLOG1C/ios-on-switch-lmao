@@ -291,6 +291,12 @@ extern "C" void switch_usb_suspend(void)
         switchxudc_sleep(true);
     if (__atomic_load_n(&gHostUp, __ATOMIC_ACQUIRE))
         switchxhci_sleep(true);
+    switch_pd_sleep(true);
+}
+
+extern "C" bool switch_usb_remote_wake()
+{
+    return __atomic_load_n(&gHostUp, __ATOMIC_ACQUIRE) && switchxhci_remote_wake_armed();
 }
 
 // The host block comes back here, before IOKit raises AppleUSBXHCI; the pad's host role, which the XUDC's own power-up
@@ -305,6 +311,7 @@ extern "C" void switch_usb_resume(void)
         gPadLost = true;
         IOLockUnlock(gLock);
     }
+    switch_pd_sleep(false);  // last: a sink attached while asleep is found now, with the host block already back
     if (gRoleCall)
         thread_call_enter(gRoleCall);  // a cable that came or went while asleep
 }

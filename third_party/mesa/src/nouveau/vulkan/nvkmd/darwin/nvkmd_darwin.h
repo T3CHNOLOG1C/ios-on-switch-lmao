@@ -57,6 +57,7 @@ struct nvkmd_darwin_dev {
    struct nvkmd_dev base;
 
    struct nvkmd_darwin_conn conn;
+   bool shared_conn; /* the process's connection (darwin_shared), not its own */
 
    simple_mtx_t heap_mutex;
    struct util_vma_heap heap;
@@ -73,8 +74,15 @@ struct nvkmd_darwin_mem {
    struct nvkmd_mem base;
 
    uint64_t handle;
+   uint64_t bo_offset_B; /* where the memory starts in the BO: 0 but for foreign memory */
    uint32_t map_token;  /* 0 for host imports */
    void *host_ptr;      /* host imports: the caller's own mapping */
+
+   /* Foreign memory (switch_nvk_import_foreign): another driver's BO, bound
+    * in its VA already; drop(lease) when it is freed, and no kernel call.
+    */
+   void (*drop)(void *lease);
+   void *lease;
 };
 
 NVKMD_DECL_SUBCLASS(mem, darwin);
@@ -141,5 +149,17 @@ struct nvkmd_darwin_sync_point {
 void switch_nvk_import_surface(uint32_t surface_id, const void *base, uint64_t bytes);
 /* The GPU may write the surface from now on (method 15): before its first render, blit or store. false: not said. */
 bool switch_nvk_surface_gpu_writes(uint32_t surface_id);
+/* The process's connection, for the plugin's raw GM20B path (drivers/TegraGM20BMetal/raw/runtime/raw_kernel.cpp): opened by
+ * the first of it and NVK's first device, closed after the last release. One connection is one GPU address space, so each
+ * driver can use memory the other bound with no second import or bind. [*va_start, *va_end): client VAs NVK never hands
+ * out, the caller's to bind. false: no connection. */
+bool switch_nvk_connection(uint32_t *conn, bool *tunnel, uint32_t *selector, uint64_t *va_start,
+                           uint64_t *va_end);
+void switch_nvk_connection_release(void);
+/* The next host import on this thread whose range lies in [cpu, cpu + bytes) is memory the caller has bound in the
+ * shared connection's VM already: BO `handle` (cpu its first byte) at `va`, PTE kind `kind`. NVK makes it with no kernel
+ * call and frees it with none: hold(lease) when it makes it, drop(lease) when it frees it. cpu NULL: none. */
+void switch_nvk_import_foreign(const void *cpu, uint64_t bytes, uint64_t handle, uint64_t va, uint32_t kind,
+                               void (*hold)(void *), void (*drop)(void *), void *lease);
 
 #endif /* NVKMD_DARWIN_H */

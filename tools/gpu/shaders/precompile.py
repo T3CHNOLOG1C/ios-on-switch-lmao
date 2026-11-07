@@ -106,6 +106,15 @@ def _died_at(progress: Path, corpus: dict, derived: dict, output: str) -> tuple[
     return words[-2], int(words[-1])
 
 
+def failure(output: str) -> str:
+    """Say why the tool exited non-zero: the corpus states of QuartzCore's library it refused, or its output's tail."""
+    refused = sorted({line.split(' ', 1)[1] for line in output.splitlines() if line.startswith('REFUSED-CORPUS ')})
+    if not refused:
+        return '\n' + output[-6000:]
+    listed = '\n'.join(refused)
+    return f"{len(refused)} corpus state(s) of QuartzCore's library refused, which the device refuses too:\n{listed}"
+
+
 def make(work: Path, args: argparse.Namespace, corpus: dict, derived: dict) -> dict:
     """Run the tool until every line is made or skipped; return what happened."""
     env = {
@@ -143,11 +152,11 @@ def make(work: Path, args: argparse.Namespace, corpus: dict, derived: dict) -> d
             died, output = result.returncode < 0, result.stdout + result.stderr
         except subprocess.TimeoutExpired as expired:
             died, output = True, str(expired.stdout or '') + str(expired.stderr or '')
-        refusals += [line[8:] for line in output.splitlines() if line.startswith('REFUSED ')]
+        refusals += [line.split(' ', 1)[1] for line in output.splitlines() if line.startswith('REFUSED')]
         summaries += [line for line in output.splitlines() if line.startswith(('precompile:', 'rates:'))]
         if not died:
             if result.returncode:
-                sys.exit(f'precompile failed ({result.returncode}):\n{output[-6000:]}')
+                sys.exit(f'precompile failed ({result.returncode}): {failure(output)}')
             break
         kind, index = _died_at(work / 'progress', corpus, derived, output)
         line = (corpus[kind] + derived[kind])[index]

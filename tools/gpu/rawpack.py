@@ -113,7 +113,7 @@ def main() -> None:
     )
     if result.returncode or not (generated / 'pack.bin').is_file():
         sys.exit(f'the pack generator failed:\n{(result.stdout + result.stderr)[-6000:]}')
-    print('\n'.join(line for line in result.stdout.splitlines() if not line.startswith('  skipped')))
+    print(result.stdout.rstrip())
     out = Path(args.out)
     if out.exists():
         shutil.rmtree(out)

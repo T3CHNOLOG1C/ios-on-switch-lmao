@@ -93,7 +93,7 @@ extern "C" int nvxnu_vsnprintf(char *buf, unsigned long size, const char *fmt, v
 
 extern "C" void nvxnu_panic(const char *fmt, ...)
 {
-	char line[512];
+	char line[1024];
 	va_list ap;
 	va_start(ap, fmt);
 	vsnprintf(line, sizeof(line), fmt, ap);
