@@ -753,6 +753,7 @@ class AGXDeviceUserClient : public IOUserClient
 		uint64_t va, range;
 		Bo *bo;
 		uint64_t bo_offset;
+		uint8_t pageShift;
 	};
 
 	// A mapping method 12 (Map) made into the client's task: what IOKit's io_connect_map_memory_into_task keeps in the
@@ -1133,9 +1134,11 @@ IOReturn AGXDeviceUserClient::boAlloc(const TegraGM20BAbiBoAlloc *in,
 		if (!refused) {
 			// write-combined pool memory: zeroed by the allocator, no cacheable alias (CONTRACT §3). No room: the freed
 			// ranges the thread call has not zeroed yet are zeroed now, and the allocation tried again.
-			bo->pool_va = tgm_pool_alloc(in->bytes, &bo->pool_pa);
+			const uint64_t align =
+				(in->flags & TegraGM20BBoContiguous) ? 1ULL << in->align_log2 : 0;
+			bo->pool_va = tgm_pool_alloc(in->bytes, align, &bo->pool_pa);
 			if (!bo->pool_va && poolZeroNow())
-				bo->pool_va = tgm_pool_alloc(in->bytes, &bo->pool_pa);
+				bo->pool_va = tgm_pool_alloc(in->bytes, align, &bo->pool_pa);
 		}
 		system = tgm_pool::coherentSource(refused, bo->pool_va != nullptr) ==
 			 tgm_pool::FromSystem;
@@ -1255,7 +1258,7 @@ IOReturn AGXDeviceUserClient::boAlloc(const TegraGM20BAbiBoAlloc *in,
 			ret = kIOReturnNoMemory;
 	}
 	if (!ret)
-		ret = ioreturn(tgm_mem_new(vm_, bo->pas, bo->npages, &bo->mem));
+		ret = ioreturn(tgm_mem_new_exclusive(vm_, bo->pas, bo->npages, &bo->mem));
 	lap(3);
 	if (ret) {
 		if (!quotaLogged_)
@@ -1455,7 +1458,7 @@ void AGXDeviceUserClient::unbindOverlaps(uint64_t va, uint64_t range, Bo *only)
 	for (uint32_t i = 0; i < nbinds_;) {
 		Binding &b = binds_[i];
 		if (b.va < va + range && va < b.va + b.range && (!only || b.bo == only)) {
-			tgm_vm_unmap(vm_, b.va, b.range);
+			tgm_vm_unmap_pages(vm_, b.va, b.range, b.pageShift);
 			binds_[i] = binds_[--nbinds_];
 		} else {
 			i++;
@@ -1497,12 +1500,13 @@ IOReturn AGXDeviceUserClient::vmBind(const TegraGM20BAbiVmBind *in, uint32_t cou
 			binds_ = grown;
 			cap_binds_ = cap;
 		}
-		IOReturn ret =
-			ioreturn(tgm_vm_map_ordered(vm_, op.va, op.range, bo->mem, op.bo_offset,
-						    static_cast<uint8_t>(op.kind), bo->readOnly));
-		if (ret)
-			return ret;
-		binds_[nbinds_++] = {op.va, op.range, bo, op.bo_offset};
+		uint8_t pageShift = 0;
+		const int err =
+			tgm_vm_map_ordered(vm_, op.va, op.range, bo->mem, op.bo_offset,
+					   static_cast<uint8_t>(op.kind), bo->readOnly, &pageShift);
+		if (err)
+			return ioreturn(err);
+		binds_[nbinds_++] = {op.va, op.range, bo, op.bo_offset, pageShift};
 		tgm_stats_bind(1, op.range >> 12, nowNs() - start);
 	}
 	return kIOReturnSuccess;
@@ -1977,6 +1981,8 @@ IOReturn AGXDeviceUserClient::getInfo(TegraGM20BAbiInfo *out)
 	out->flags = TegraGM20BInfoHostImport | TegraGM20BInfoKernelMap | TegraGM20BInfoOrder |
 		     TegraGM20BInfoSurfaceWrites | TegraGM20BInfoSurfaceLayout |
 		     TegraGM20BInfoExecSurfaces | TegraGM20BInfoPriority;
+	if (info.comptag_lines)
+		out->flags |= TegraGM20BInfoCompression;
 	out->chipset = info.chipset;
 	out->device_id = 0;
 	out->gpc_count = info.gpc_count;
@@ -1994,6 +2000,18 @@ IOReturn AGXDeviceUserClient::getInfo(TegraGM20BAbiInfo *out)
 	out->max_bo_bytes = kMaxBoBytes;
 	strlcpy(out->chip_name, "GM20B", sizeof(out->chip_name));
 	strlcpy(out->device_name, "NVIDIA Tegra X1 (GM20B)", sizeof(out->device_name));
+	return kIOReturnSuccess;
+}
+
+static IOReturn zbcAdd(const TegraGM20BAbiZbc *in, TegraGM20BAbiZbcReply *out)
+{
+	if (in->type != TegraGM20BZbcColor && in->type != TegraGM20BZbcDepth)
+		return kIOReturnBadArgument;
+	const int index = tgm_zbc_add(in->type == TegraGM20BZbcDepth, in->format, in->ds, in->l2);
+	if (index < 0)
+		return ioreturn(index);
+	out->index = static_cast<uint32_t>(index);
+	out->reserved = 0;
 	return kIOReturnSuccess;
 }
 
@@ -2094,6 +2112,10 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 	case TegraGM20BMethodPriority:
 		wantIn = sizeof(TegraGM20BAbiPriority);
 		break;
+	case TegraGM20BMethodZbc:
+		wantIn = sizeof(TegraGM20BAbiZbc);
+		wantOut = sizeof(TegraGM20BAbiZbcReply);
+		break;
 	default:
 		return kIOReturnUnsupported;
 	}
@@ -2167,6 +2189,9 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 		static_cast<TegraGM20BAbiTimestamp *>(out)->ns = tgm_timestamp_ns();
 		return kIOReturnSuccess;
 	}
+	if (method == TegraGM20BMethodZbc)
+		return zbcAdd(static_cast<const TegraGM20BAbiZbc *>(in),
+			      static_cast<TegraGM20BAbiZbcReply *>(out));
 	IOLockLock(lock_);
 	// A channel killed for a GPU fault or hang (client fault isolation) refuses only what names it (Exec, Order and
 	// WaitFence answer kIOReturnNotResponding, GetStatus its error); the connection's memory, binds and other channels

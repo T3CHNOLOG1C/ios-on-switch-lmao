@@ -31,6 +31,7 @@
 #include <engine/fifo/runq.h> /* nvkm_runq.id: the engine list's PBDMAs */
 #include <core/gpuobj.h>      /* nvkm_wo32 on a channel's RAMFC: compositor timeslice */
 #include <engine/gr.h>
+#include <engine/gr/gf100.h> /* gf100_gr_zbc_color_get, _depth_get: tgm_zbc_add */
 #include <subdev/acr.h>
 #include <subdev/clk.h>
 #include <subdev/clk/priv.h> /* nvkm_clk_func: clk_raise() runs calc/prog as gm20b_clk_init() does */
@@ -44,6 +45,7 @@
 #include <subdev/top.h>
 #include <nvif/class.h>
 #include <nvif/cl0080.h>
+#include <nvif/cl9097.h>
 #include <nvif/client.h>
 #include <nvif/device.h>
 #include <nvif/driver.h>
@@ -61,6 +63,7 @@
 #include <nvif/push906f.h>
 #include <nvhw/class/cla0b5.h>
 #include "TegraGM20BClkgate.h"
+#include "TegraGM20BComp.h"
 #include "TegraGM20BGpu.h"
 #include "TegraGM20BFences.h"
 #include "TegraGM20BHangDecode.h"
@@ -677,6 +680,33 @@ void tgm_get_info(struct tgm_info *info)
 	info->chipset = gpu.device->chipset;
 	info->gpc_count = units & 0xff;
 	info->tpc_count = (units >> 8) & 0xffff;
+	info->comptag_lines = gpu.device->ltc->num_tags;
+}
+
+/* Global, first fit, never removed, as nvgpu's ZBC_SET_TABLE and nvkm's FERMI_A_ZBC_* keep entries; GR and LTC init write
+ * them all again after power-off. */
+int tgm_zbc_add(int depth, uint32_t format, const uint32_t ds[4], const uint32_t l2[4])
+{
+	/* gf100_fermi_mthd_zbc_color's formats */
+	static const u8 color_formats[] = {0x01, 0x02, 0x04, 0x08, 0x0c, 0x10, 0x14,
+					   0x16, 0x18, 0x1c, 0x20, 0x24, 0x28, 0x2c,
+					   0x30, 0x34, 0x38, 0x3c, 0x40};
+	struct gf100_gr *gr;
+	int ret = -EINVAL;
+	unsigned int i;
+
+	if (gpu.stage < 2 || !gpu.device->ltc->num_tags)
+		return -ENODEV;
+	gr = gf100_gr(gpu.device->gr);
+	mutex_lock(&gpu.lock);
+	if (depth && format == FERMI_A_ZBC_DEPTH_V0_FMT_FP32)
+		ret = gf100_gr_zbc_depth_get(gr, format, ds[0], l2[0]);
+	for (i = 0; !depth && i < ARRAY_SIZE(color_formats); i++) {
+		if (format == color_formats[i])
+			ret = gf100_gr_zbc_color_get(gr, format, ds, l2);
+	}
+	mutex_unlock(&gpu.lock);
+	return ret;
 }
 
 uint64_t tgm_timestamp_ns(void)
@@ -700,10 +730,11 @@ static uint64_t pool_bo_bytes(uint64_t bytes)
 	return (bytes + vm_page - 1) & ~(vm_page - 1);
 }
 
-void *tgm_pool_alloc(uint64_t bytes, uint64_t *pa)
+void *tgm_pool_alloc(uint64_t bytes, uint64_t align, uint64_t *pa)
 {
 	unsigned long long h = 0;
-	void *va = nvxnu_pool_alloc_clean(pool_bo_bytes(bytes), nvxnu_vm_page_size(), &h);
+	void *va = nvxnu_pool_alloc_clean(pool_bo_bytes(bytes),
+					  max_t(u64, align, nvxnu_vm_page_size()), &h);
 	*pa = va ? h : 0;
 	return va;
 }
@@ -775,6 +806,7 @@ struct tgm_import {
 struct tgm_mem {
 	struct nvif_mem mem;
 	u64 bytes;
+	u8 page; /* the largest GMMU page it may be mapped with */
 };
 
 struct tgm_kmap {
@@ -808,7 +840,7 @@ static int pfence_get(struct tgm_vm *vm)
 	mutex_lock(&pfence_lock);
 	if (!pfence.mem) {
 		if (!pfence.va)
-			pfence.va = tgm_pool_alloc(PAGE_SIZE, &pfence.pa);
+			pfence.va = tgm_pool_alloc(PAGE_SIZE, 0, &pfence.pa);
 		ret = pfence.va ? tgm_mem_new(vm, &pfence.pa, 1, &pfence.mem) : -ENOMEM;
 	}
 	mutex_unlock(&pfence_lock);
@@ -904,29 +936,24 @@ void tgm_vm_claim(struct tgm_vm *vm, const void *owner)
 
 static int stats_on(void);
 
-int tgm_mem_new(struct tgm_vm *vm, const uint64_t *pas, uint32_t npages, struct tgm_mem **pmem)
-{
-	return tgm_mem_new_waited(vm, pas, npages, pmem, NULL);
-}
-
-int tgm_mem_new_waited(struct tgm_vm *vm, const uint64_t *pas, uint32_t npages,
-		       struct tgm_mem **pmem, uint64_t *lock_wait_ns)
+static int mem_new(const uint64_t *pas, uint32_t npages, u8 page, struct tgm_mem **pmem,
+		   uint64_t *lock_wait_ns)
 {
 	struct nvif_mem_ram_v0 args = {.version = 0, .dma = (dma_addr_t *)pas, .sgl = NULL};
 	struct tgm_mem *mem;
 	u64 asked;
 	int ret;
-	(void)vm;
 	if (gpu.stage < 2)
 		return -ENODEV;
 	if (!(mem = kzalloc(sizeof(*mem), GFP_KERNEL)))
 		return -ENOMEM;
 	mem->bytes = (u64)npages << PAGE_SHIFT;
+	mem->page = page;
 	asked = stats_on() && lock_wait_ns ? nvxnu_nanotime() : 0;
 	gpu_lock();
 	if (asked)
 		*lock_wait_ns = nvxnu_nanotime() - asked;
-	ret = nvif_mem_ctor_type(&gpu.mmu, "bo", NVIF_CLASS_MEM_GF100, gpu.mem_type, PAGE_SHIFT,
+	ret = nvif_mem_ctor_type(&gpu.mmu, "bo", NVIF_CLASS_MEM_GF100, gpu.mem_type, page,
 				 mem->bytes, &args, sizeof(args), &mem->mem);
 	mutex_unlock(&gpu.lock);
 	if (ret) {
@@ -935,6 +962,33 @@ int tgm_mem_new_waited(struct tgm_vm *vm, const uint64_t *pas, uint32_t npages,
 	}
 	*pmem = mem;
 	return 0;
+}
+
+int tgm_mem_new(struct tgm_vm *vm, const uint64_t *pas, uint32_t npages, struct tgm_mem **pmem)
+{
+	(void)vm;
+	return mem_new(pas, npages, PAGE_SHIFT, pmem, NULL);
+}
+
+int tgm_mem_new_waited(struct tgm_vm *vm, const uint64_t *pas, uint32_t npages,
+		       struct tgm_mem **pmem, uint64_t *lock_wait_ns)
+{
+	(void)vm;
+	return mem_new(pas, npages, PAGE_SHIFT, pmem, lock_wait_ns);
+}
+
+/* Comptags belong to the physical pages, yet nvkm keeps them on the memory object (nvkm/subdev/mmu/uvmm.c): two objects
+ * over the same pages would give them two sets of lines, and a GPU access through one would misread what the other
+ * compressed. Only memory whose pages no other object names may compress, so one object per physical page holds its
+ * lines and every map of it, in any space, shares them. Imports (an IOSurface's pages, wired once per task and
+ * imported by every process that draws into it) never qualify. */
+int tgm_mem_new_exclusive(struct tgm_vm *vm, const uint64_t *pas, uint32_t npages,
+			  struct tgm_mem **pmem)
+{
+	const int comp = gpu.stage >= 2 && gpu.device->ltc->num_tags;
+	(void)vm;
+	return mem_new(pas, npages, comp ? tgm_comp_page_shift(pas, npages) : PAGE_SHIFT, pmem,
+		       NULL);
 }
 
 void tgm_mem_del(struct tgm_mem **pmem)
@@ -949,25 +1003,34 @@ void tgm_mem_del(struct tgm_mem **pmem)
 }
 
 /* Sysmem is mapped volatile (GPU L2 does not keep its lines): CONTRACT.md §3(b) option one; cacheable with
- * l2_on(). Compressible kinds are not offered (no comptags); nvkm rejects invalid kinds. */
+ * l2_on(). A compressible kind maps with 128 KiB pages and the memory's comptags (TegraGM20BComp.h) or is refused: a map
+ * demoted to its uncompressed kind, as nvgpu demotes one, would look compressed to its caller, who would go on clearing
+ * and resolving it as compressed. */
 static int vm_map(struct tgm_vm *vm, uint64_t va, uint64_t range, struct tgm_mem *mem,
-		  uint64_t offset, uint8_t kind, int read_only, int vol, int gpu_ordered)
+		  uint64_t offset, uint8_t kind, int read_only, int vol, int gpu_ordered,
+		  uint8_t *page_shift)
 {
 	struct gf100_vmm_map_v0 args = {
 		.version = 0, .vol = !!vol, .ro = !!read_only, .priv = 0, .kind = kind};
+	u8 shift = PAGE_SHIFT;
 	int ret, got;
 	if (va < TGM_USER_VA_START || range > TGM_KERNEL_VA || va > TGM_KERNEL_VA - range ||
 	    offset > mem->bytes || range > mem->bytes - offset ||
 	    !nvif_mmu_kind_valid(&gpu.mmu, kind))
 		return -EINVAL;
+	if (gpu.mmu.kind[kind] != kind) {
+		if (!tgm_comp_bind_ok(va, offset, range, mem->page))
+			return -EINVAL;
+		shift = TGM_COMP_SHIFT;
+	}
 	gpu_lock();
 	if (gpu_ordered)
 		nvxnu_gpu_ordered_begin();
-	ret = nvif_vmm_raw_get(&vm->vmm, va, range, PAGE_SHIFT);
+	ret = nvif_vmm_raw_get(&vm->vmm, va, range, shift);
 	got = !ret;
 	if (got)
-		ret = nvif_vmm_raw_map(&vm->vmm, va, range, PAGE_SHIFT, &args, sizeof(args),
-				       &mem->mem, offset);
+		ret = nvif_vmm_raw_map(&vm->vmm, va, range, shift, &args, sizeof(args), &mem->mem,
+				       offset);
 	if (gpu_ordered)
 		nvxnu_gpu_ordered_end();
 	if (gpu_ordered && !ret)
@@ -975,38 +1038,45 @@ static int vm_map(struct tgm_vm *vm, uint64_t va, uint64_t range, struct tgm_mem
 	if (ret) {
 		/* removals are synchronous (TegraGM20BTlb.h): a failed get may have dropped page tables it made */
 		if (got)
-			nvif_vmm_raw_put(&vm->vmm, va, range, PAGE_SHIFT);
+			nvif_vmm_raw_put(&vm->vmm, va, range, shift);
 		else if (gpu_ordered)
 			mmu_invalidate_all();
 	}
 	mutex_unlock(&gpu.lock);
+	if (!ret && page_shift)
+		*page_shift = shift;
 	return ret;
 }
 
 int tgm_vm_map(struct tgm_vm *vm, uint64_t va, uint64_t range, struct tgm_mem *mem, uint64_t offset,
 	       uint8_t kind, int read_only)
 {
-	return vm_map(vm, va, range, mem, offset, kind, read_only, !l2_on(), 0);
+	return vm_map(vm, va, range, mem, offset, kind, read_only, !l2_on(), 0, NULL);
 }
 
 int tgm_vm_map_ordered(struct tgm_vm *vm, uint64_t va, uint64_t range, struct tgm_mem *mem,
-		       uint64_t offset, uint8_t kind, int read_only)
+		       uint64_t offset, uint8_t kind, int read_only, uint8_t *page_shift)
 {
 	if (!vm->owner)
 		return -EINVAL;
-	return vm_map(vm, va, range, mem, offset, kind, read_only, !l2_on(), 1);
+	return vm_map(vm, va, range, mem, offset, kind, read_only, !l2_on(), 1, page_shift);
 }
 
-int tgm_vm_unmap(struct tgm_vm *vm, uint64_t va, uint64_t range)
+int tgm_vm_unmap_pages(struct tgm_vm *vm, uint64_t va, uint64_t range, uint8_t page_shift)
 {
 	int ret;
 	if (va < TGM_USER_VA_START || range > TGM_KERNEL_VA || va > TGM_KERNEL_VA - range)
 		return -EINVAL;
 	gpu_lock();
-	ret = nvif_vmm_raw_unmap(&vm->vmm, va, range, PAGE_SHIFT, false);
-	nvif_vmm_raw_put(&vm->vmm, va, range, PAGE_SHIFT);
+	ret = nvif_vmm_raw_unmap(&vm->vmm, va, range, page_shift, false);
+	nvif_vmm_raw_put(&vm->vmm, va, range, page_shift);
 	mutex_unlock(&gpu.lock);
 	return ret;
+}
+
+int tgm_vm_unmap(struct tgm_vm *vm, uint64_t va, uint64_t range)
+{
+	return tgm_vm_unmap_pages(vm, va, range, PAGE_SHIFT);
 }
 
 int tgm_vm_kmap(struct tgm_vm *vm, struct tgm_mem *mem, uint64_t bytes, uint64_t *va)
@@ -3436,7 +3506,7 @@ static int fences_alloc(void)
 
 	if (fences.va)
 		return 0;
-	fences.va = tgm_pool_alloc(TGM_FENCE_BYTES, &fences.pa);
+	fences.va = tgm_pool_alloc(TGM_FENCE_BYTES, 0, &fences.pa);
 	if (!fences.va)
 		return -ENOMEM;
 	for (i = 0; i < TGM_FENCE_GPU_PAGES; i++)
@@ -4493,7 +4563,7 @@ out:
 /* Present mappings: volatile, at a fixed address of the present's user range. */
 int tgm_present_map(uint64_t va, struct tgm_mem *mem, uint64_t bytes, uint8_t kind)
 {
-	return present.vm ? vm_map(present.vm, va, bytes, mem, 0, kind, 0, 1, 0) : -ENODEV;
+	return present.vm ? vm_map(present.vm, va, bytes, mem, 0, kind, 0, 1, 0, NULL) : -ENODEV;
 }
 
 int tgm_present_unmap(uint64_t va, uint64_t bytes)
@@ -4873,7 +4943,7 @@ static void scrub_open(void)
 	scrub.deadline = nvxnu_work_alloc(scrub_deadline, NULL);
 	scrub.pool_pas =
 		kcalloc(npages, sizeof(u64), GFP_KERNEL); /* nvkm keeps the array (mem.c) */
-	fence_va = tgm_pool_alloc(PAGE_SIZE, &scrub.fence_pa);
+	fence_va = tgm_pool_alloc(PAGE_SIZE, 0, &scrub.fence_pa);
 	ret = scrub.work && scrub.deadline && scrub.pool_pas && fence_va ? tgm_vm_new(&scrub.vm)
 									 : -ENOMEM;
 	for (i = 0; !ret && i < npages; i++)
@@ -4983,7 +5053,7 @@ static int m3(char *line, unsigned int len)
 
 	/* page 0: fence word at +0, page 1: fill target. The copy engine fills page 1 through a user
 	 * (L2-cacheable) mapping, so the check below also proves the fence's L2 flush. */
-	page = tgm_pool_alloc(2 * PAGE_SIZE, &pa);
+	page = tgm_pool_alloc(2 * PAGE_SIZE, 0, &pa);
 	if (!page)
 		return -ENOMEM;
 	pas[0] = pa;
@@ -5175,6 +5245,14 @@ static void sleep_nvkm(void)
 		    us_since(start));
 	start = nvxnu_nanotime();
 	stamp_last = tgm_stamp_monotonic(stamp_last, nvkm_timer_read(device->timer));
+	/* nvgpu_mm_suspend cleans the comptag lines (FLUSH_L2_CLEAN_COMPTAGS) before its L2 flush: the backing store must
+	 * hold every line the L2 loses with its power */
+	if (device->ltc->num_tags) {
+		nvkm_wr32(device, 0x07000c, 0x00000001);
+		if (nvkm_wait_msec(device, 2000, 0x07000c, 0x00000003, 0x00000000) < 0)
+			nvxnu_panic("tegra-gm20b: sleep: comptag clean still busy after 2 s (%08x)",
+				    nvkm_rd32(device, 0x07000c));
+	}
 	nvkm_ltc_flush(device->ltc);
 	if (nvkm_rd32(device, 0x070010) & 0x3) /* FLUSH_L2_FLUSH_DIRTY: 0 pending, 1 outstanding */
 		nvxnu_panic("tegra-gm20b: sleep: L2 flush still busy after 2 s (%08x)",

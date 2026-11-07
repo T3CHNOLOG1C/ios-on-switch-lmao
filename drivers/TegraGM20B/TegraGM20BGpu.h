@@ -24,6 +24,7 @@ struct tgm_info {
 	uint16_t chipset;
 	uint8_t gpc_count;
 	uint16_t tpc_count;
+	uint32_t comptag_lines; /* 0: no compression (TegraGM20BComp.h) */
 };
 
 /* Bring the GPU up to `stage` (1 = M1 power/ring/GPCPLL, 2 = + ACR/PMU/FECS/GPCCS, 3 = + channel/CE/fence
@@ -65,7 +66,8 @@ int tgm_waiter_idle(uint32_t waiter, uint32_t seq, uint64_t deadline_ns);
 void tgm_waiter_unwoken(uint32_t waiter, uint32_t seq, uint32_t seqno);
 
 /* GPU memory pool (contiguous, write-combined in the kernel, below 4 GiB) */
-void *tgm_pool_alloc(uint64_t bytes, uint64_t *pa);
+/* align: at least the VM page (0 for just that) */
+void *tgm_pool_alloc(uint64_t bytes, uint64_t align, uint64_t *pa);
 void tgm_pool_free(void *va, uint64_t bytes, uint64_t pa);
 
 /* Address spaces: one per user-client connection, which claims it (tgm_vm_claim): only channels made for that owner
@@ -78,15 +80,24 @@ void tgm_vm_del(struct tgm_vm **pvm);
 int tgm_mem_new(struct tgm_vm *vm, const uint64_t *pas, uint32_t npages, struct tgm_mem **pmem);
 int tgm_mem_new_waited(struct tgm_vm *vm, const uint64_t *pas, uint32_t npages,
 		       struct tgm_mem **pmem, uint64_t *lock_wait_ns);
+/* The same for pages no other memory object will ever name (a BO's own): such memory may take compressible kinds. */
+int tgm_mem_new_exclusive(struct tgm_vm *vm, const uint64_t *pas, uint32_t npages,
+			  struct tgm_mem **pmem);
 void tgm_mem_del(struct tgm_mem **pmem);
 /* User range [TGM_USER_VA_START, TGM_KERNEL_VA): raw binds. read_only: the GPU may only read the range (a write is an
  * MMU fault). tgm_vm_map and tgm_vm_unmap invalidate the L2 and the TLB before they return; tgm_vm_map_ordered (a
- * claimed space's) leaves both to the next submission of each of its channels (TegraGM20BTlb.h). */
+ * claimed space's) leaves both to the next submission of each of its channels (TegraGM20BTlb.h). A compressible kind
+ * needs exclusive memory and whole 128 KiB pages (-EINVAL otherwise, -ENOSPC once the memory could get no comptags);
+ * *page_shift is the GMMU page the map used, which its unmap must name. */
 int tgm_vm_map(struct tgm_vm *vm, uint64_t va, uint64_t range, struct tgm_mem *mem, uint64_t offset,
 	       uint8_t kind, int read_only);
 int tgm_vm_map_ordered(struct tgm_vm *vm, uint64_t va, uint64_t range, struct tgm_mem *mem,
-		       uint64_t offset, uint8_t kind, int read_only);
+		       uint64_t offset, uint8_t kind, int read_only, uint8_t *page_shift);
 int tgm_vm_unmap(struct tgm_vm *vm, uint64_t va, uint64_t range);
+int tgm_vm_unmap_pages(struct tgm_vm *vm, uint64_t va, uint64_t range, uint8_t page_shift);
+/* A zero-bandwidth-clear entry (ds, l2 as TegraGM20BAbiZbc has them): its table index, or -EINVAL (format), -ENOSPC
+ * (table full), -ENODEV (no compression). */
+int tgm_zbc_add(int depth, uint32_t format, const uint32_t ds[4], const uint32_t l2[4]);
 /* Kernel range: map `mem` somewhere at or above TGM_KERNEL_VA and return the address. */
 int tgm_vm_kmap(struct tgm_vm *vm, struct tgm_mem *mem, uint64_t bytes, uint64_t *va);
 

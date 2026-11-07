@@ -187,7 +187,7 @@ TEST(GM20BImportCostSource, ImportCostsAreDebugOnly)
 				      "sizeof(region)); #endif"));
 	EXPECT_THAT(import, HasSubstr("tgm_mem_new_waited(vm_, bo->pas, bo->npages, &bo->mem, "
 				      "&cost.lock_ns)"));
-	EXPECT_THAT(flat(definition(gpu(), "int tgm_mem_new_waited(")),
+	EXPECT_THAT(flat(definition(gpu(), "static int mem_new(")),
 		    HasSubstr("asked = stats_on() && lock_wait_ns ? nvxnu_nanotime() : 0;"));
 }
 
@@ -248,10 +248,10 @@ TEST(GM20BPoolScrubSource, EveryAllocationZeroesWhatAFreeLeftDirty)
 // so its mapping never reaches another BO's, another connection's fence or nvkm's own memory.
 TEST(GM20BPoolIsolationSource, CpuMappedPoolMemoryIsWholeVmPages)
 {
-	EXPECT_THAT(
-		definition(gpu(), "void *tgm_pool_alloc(uint64_t bytes, uint64_t *pa)"),
-		HasSubstr(
-			"nvxnu_pool_alloc_clean(pool_bo_bytes(bytes), nvxnu_vm_page_size(), &h)"));
+	const std::string alloc = flat(definition(
+		gpu(), "void *tgm_pool_alloc(uint64_t bytes, uint64_t align, uint64_t *pa)"));
+	EXPECT_THAT(alloc, HasSubstr("nvxnu_pool_alloc_clean(pool_bo_bytes(bytes), "
+				     "max_t(u64, align, nvxnu_vm_page_size()), &h)"));
 	EXPECT_THAT(definition(gpu(), "void tgm_pool_free(void *va, uint64_t bytes, uint64_t pa)"),
 		    HasSubstr("pool_bo_bytes(bytes)"));
 	EXPECT_THAT(definition(gpu(),
@@ -595,7 +595,7 @@ TEST(GM20BTlbSource, MapsOrderedOnTheGpuRemovalsSynchronous)
 	EXPECT_EQ(Count(gpu(), "nvxnu_gpu_ordered_begin();"), 1u);
 	const std::string map = flat(definition(gpu(), "static int vm_map("));
 	expectBefore(map, "nvxnu_gpu_ordered_end();", "nvif_vmm_raw_put(");
-	const std::string unmap = flat(definition(gpu(), "int tgm_vm_unmap("));
+	const std::string unmap = flat(definition(gpu(), "int tgm_vm_unmap_pages("));
 	EXPECT_THAT(unmap, Not(HasSubstr("gpu_ordered")));
 	EXPECT_THAT(flat(definition(gpu(), "void tgm_vm_del(")),
 		    HasSubstr("mmu_invalidate_all();"));
@@ -652,6 +652,8 @@ TEST(GM20BSleepSource, SleepAndWakeOrder)
 	expectBefore(sleep, "sleep_nvkm();", "sleep_power_down();");
 	const std::string nvkm = flat(definition(gpu(), "static void sleep_nvkm(void)"));
 	expectBefore(nvkm, "nvif_client_suspend(&gpu.client, false)", "nvkm_ltc_flush(");
+	// nvgpu_mm_suspend: the L2's comptag lines written back (FLUSH_L2_CLEAN_COMPTAGS) before the data flush
+	expectBefore(nvkm, "nvkm_wr32(device, 0x07000c, 0x00000001);", "nvkm_ltc_flush(");
 	expectBefore(nvkm, "nvkm_ltc_flush(", "nvkm_device_fini(device, NVKM_SUSPEND)");
 	expectBefore(flat(definition(gpu(), "static void sleep_power_down(void)")),
 		     "nvxnu_irq_suspend();", "regulator_disable(");

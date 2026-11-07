@@ -34,6 +34,7 @@ enum {
 	TegraGM20BMethodSurfaceLayout = 16, /* with TegraGM20BInfoSurfaceLayout */
 	TegraGM20BMethodExecSurfaces = 17,  /* with TegraGM20BInfoExecSurfaces */
 	TegraGM20BMethodPriority = 18,      /* with TegraGM20BInfoPriority */
+	TegraGM20BMethodZbc = 19,           /* with TegraGM20BInfoCompression */
 
 	TegraGM20BMaxBindOps = 100,
 	TegraGM20BMaxPushes = 255,
@@ -52,6 +53,7 @@ enum {
 	TegraGM20BInfoSurfaceLayout = 1u << 6, /* method 16 is implemented */
 	TegraGM20BInfoExecSurfaces = 1u << 7, /* ExecSurfaces (method 17) is implemented */
 	TegraGM20BInfoPriority = 1u << 8,      /* Priority (method 18) is implemented */
+	TegraGM20BInfoCompression = 1u << 9, /* compressible kinds bind; ZBC (method 19) is implemented */
 };
 
 /* Method 1, output only. Everything NVK's struct nv_device_info needs that the client cannot derive. */
@@ -174,6 +176,14 @@ enum {
 		3, /* [va, va+range) -> sparse (reads 0, writes dropped); needs InfoSparse */
 };
 
+/* Compression (TegraGM20BInfoCompression): a Map with a compressible kind (one the GMMU kind table maps to another, e.g.
+ * C32_2C 0xdb, Z24S8_2CZ) compresses through the GPU's L2; every GPU engine reading or writing through such a mapping
+ * sees plain data, the CPU and the display read the compressed bytes. It needs a BO from BoAlloc (never an import)
+ * whose memory is in physically contiguous, 128 KiB-aligned runs (Contiguous, Coherent or not, with align_log2 >= 17
+ * and bytes a 128 KiB multiple), and va, bo_offset and range 128 KiB multiples; else kIOReturnBadArgument. The BO's
+ * compression lines are its own from its first compressed Map until it is freed, shared by every Map of it: map it with
+ * one compressible kind only, since an uncompressed alias reads compressed bytes. kIOReturnNoResources: none were left
+ * when it first needed them, and no Map of that BO will compress; bind it uncompressed. */
 struct TegraGM20BAbiBindOp {
 	uint32_t op;        /* TegraGM20BBind* */
 	uint32_t kind;      /* GMMU PTE kind (NVK's pte_kind); 0 = pitch/generic */
@@ -388,6 +398,31 @@ struct TegraGM20BAbiOrderReply {
 	uint32_t reserved;
 };
 
+/* Method 17. A zero-bandwidth-clear entry: a full-tile clear (CLEAR_SURFACE) of a compressed surface to a value in the
+ * table writes the tiles' compression state instead of their pixels. The table is the GPU's, shared by every process,
+ * 15 colour and 15 depth entries, never emptied: transparent black, opaque white, RGBA32F 0 and 1, opaque black as
+ * A8B8G8R8 and A8R8G8B8, and depth 0.0 and 1.0 are in it from boot. Adding an entry that is there answers its index;
+ * kIOReturnNoResources: the table is full (clears to that value are ordinary clears).
+ * format: the NV9097 ZBC colour format (FERMI_A_ZBC_COLOR_V0_FMT_*), or 1 (FP32) for depth. ds: the value as
+ * SET_COLOR_CLEAR_VALUE(0..3) takes it, or SET_Z_CLEAR_VALUE in ds[0]. l2: the value as the surface stores it, the packed
+ * pixel or the depth word (l2[0]). */
+enum {
+	TegraGM20BZbcColor = 1,
+	TegraGM20BZbcDepth = 2,
+};
+
+struct TegraGM20BAbiZbc {
+	uint32_t type; /* TegraGM20BZbc* */
+	uint32_t format;
+	uint32_t ds[4];
+	uint32_t l2[4];
+};
+
+struct TegraGM20BAbiZbcReply {
+	uint32_t index; /* 1..15 */
+	uint32_t reserved;
+};
+
 #if defined(__cplusplus)
 #define TEGRA_GM20B_ASSERT(x, n) static_assert(sizeof(x) == (n), #x " layout")
 #else
@@ -420,5 +455,7 @@ TEGRA_GM20B_ASSERT(TegraGM20BAbiUnmap, 16);
 TEGRA_GM20B_ASSERT(TegraGM20BAbiOrder, 16);
 TEGRA_GM20B_ASSERT(TegraGM20BAbiOrderReply, 8);
 TEGRA_GM20B_ASSERT(TegraGM20BAbiPriority, 8);
+TEGRA_GM20B_ASSERT(TegraGM20BAbiZbc, 40);
+TEGRA_GM20B_ASSERT(TegraGM20BAbiZbcReply, 8);
 #undef TEGRA_GM20B_ASSERT
 #endif
