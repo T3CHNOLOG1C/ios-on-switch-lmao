@@ -98,6 +98,7 @@ struct nvkmd_darwin_exec_ctx {
 
    uint32_t channel;
    uint32_t last_seqno;  /* last submitted; 0 before the first submission */
+   bool submitted;       /* an Exec of it went through (a seqno may wrap to 0) */
 
    struct TegraGM20BAbiExec req;
 };

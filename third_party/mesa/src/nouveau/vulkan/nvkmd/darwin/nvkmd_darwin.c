@@ -1761,6 +1761,15 @@ nvkmd_darwin_exec_ctx_wait(struct nvkmd_ctx *_ctx,
    return darwin_ctx_wait(ctx->channel, log_obj, wait_count, waits);
 }
 
+static void
+darwin_exec_busy_unsubmitted(uint32_t channel)
+{
+   os_log_fault(OS_LOG_DEFAULT, "nvk darwin: Exec on channel %u found its "
+                "GPFIFO full with nothing submitted on it: abort() for the "
+                "stack", channel);
+   abort();
+}
+
 static VkResult
 nvkmd_darwin_exec_ctx_flush(struct nvkmd_ctx *_ctx,
                             struct vk_object_base *log_obj)
@@ -1781,16 +1790,20 @@ nvkmd_darwin_exec_ctx_flush(struct nvkmd_ctx *_ctx,
                                      &ctx->req, in_size, &reply, sizeof(reply));
       if (kr == KERN_SUCCESS) {
          ctx->last_seqno = reply.seqno;
+         ctx->submitted = true;
          break;
       }
       if (kr != kIOReturnBusy)
          return darwin_result(log_obj, kr, "Exec");
 
-      /* GPFIFO full: let the work already queued drain. */
-      if (ctx->last_seqno == 0) {
-         usleep(100);
-         continue;
-      }
+      /* GPFIFO full for 1 s (the kernel's chan_wait_room): asleep in
+       * WaitFence until what this channel submitted completes. A channel with
+       * nothing submitted has room for any one Exec: its 1024-entry GPFIFO
+       * (gpu.c CHAN_GPFIFO_BYTES) takes at most 255 pushes and the kernel's
+       * own entries, under 400.
+       */
+      if (!ctx->submitted)
+         darwin_exec_busy_unsubmitted(ctx->channel);
       VkResult result = darwin_wait_seqno(dev, ctx->channel, ctx->last_seqno,
                                           NVKMD_DARWIN_FOREVER_NS);
       if (result != VK_SUCCESS)
