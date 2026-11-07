@@ -415,7 +415,7 @@ bool Kernel::exec(uint32_t channel, const TegraGM20BAbiPush *pushes, uint32_t co
             return true;
         }
         if (kr == kIOReturnNotResponding)
-            lostChannel_.store(channel, std::memory_order_relaxed);
+            markLost(channel);
         if (kr != kIOReturnBusy || !last) {
             err_ = "Exec failed";
             return false;
@@ -426,12 +426,24 @@ bool Kernel::exec(uint32_t channel, const TegraGM20BAbiPush *pushes, uint32_t co
     }
 }
 
+// The kernel keeps a killed channel, and its cause, until ChannelDestroy (reopen), so GetStatus still answers for it here
+void Kernel::markLost(uint32_t channel)
+{
+    const TegraGM20BAbiChannel in = {channel, 0};
+    TegraGM20BAbiStatus st = {};
+    if (call(TegraGM20BMethodGetStatus, &in, sizeof in, &st, sizeof st) == KERN_SUCCESS && st.error) {
+        lostFaultVa_.store(st.fault_va, std::memory_order_relaxed);
+        lostError_.store(st.error, std::memory_order_relaxed);
+    }
+    lostChannel_.store(channel, std::memory_order_relaxed);
+}
+
 bool Kernel::wait(uint32_t channel, uint32_t seqno, uint64_t timeoutNs)
 {
     TegraGM20BAbiWaitFence w = {channel, seqno, timeoutNs};
     const int kr = call(TegraGM20BMethodWaitFence, &w, sizeof w, nullptr, 0);
     if (kr == kIOReturnNotResponding)
-        lostChannel_.store(channel, std::memory_order_relaxed);
+        markLost(channel);
     if (kr != KERN_SUCCESS) {
         err_ = "WaitFence failed";
         return false;

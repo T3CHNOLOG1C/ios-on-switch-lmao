@@ -76,6 +76,18 @@ public:
         return lostChannel_.load(std::memory_order_relaxed) == channel;
     }
 
+    // Why the last channel found dead was killed (TegraGM20BAbiStatus: 1 MMU fault at lostFaultVa(), 2 GR exception, 3 host
+    // error, 4 hang); 0 when the kernel did not say
+    uint32_t lostError() const
+    {
+        return lostError_.load(std::memory_order_relaxed);
+    }
+
+    uint64_t lostFaultVa() const
+    {
+        return lostFaultVa_.load(std::memory_order_relaxed);
+    }
+
     // `last`: the channel's last submitted seqno (0 if none), waited on when the GPFIFO is full
     // `surfaces` (null: none): the host imports the submission touches, named to the kernel (ExecSurfaces, method 17,
     // TegraGM20BInfoExecSurfaces) before each Exec of it: it waits on the GPU for other channels' writes to them, and counts
@@ -110,6 +122,7 @@ private:
     bool bind(uint64_t va, uint64_t handle, uint64_t range, uint32_t kind);
     uint64_t allocVa(uint64_t bytes, uint64_t align);
     void freeVa(uint64_t va, uint64_t bytes);
+    void markLost(uint32_t channel);
     bool openOwn(std::string &err);
     uint32_t conn_ = 0;
     bool tunnel_ = false;
@@ -118,7 +131,8 @@ private:
     // A SurfaceWrites failed: imports stop saying the GPU only samples them, and every Exec carries
     // TegraGM20BPushImportsWritten.
     std::atomic<bool> importsWritten_{false};
-    std::atomic<uint32_t> lostChannel_{0};
+    std::atomic<uint32_t> lostChannel_{0}, lostError_{0};
+    std::atomic<uint64_t> lostFaultVa_{0};
     uint64_t fenceMap_ = 0;  // the connection's fence page, mapped once: every channel's word is in it
     uint32_t selector_ = 0;
     TegraGM20BAbiInfo info_ = {};

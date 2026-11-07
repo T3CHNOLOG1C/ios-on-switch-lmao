@@ -701,6 +701,17 @@ public:
                int32_t(lostThrough_.load(std::memory_order_relaxed) - seqno) >= 0;
     }
 
+    // Kernel::lostError and lostFaultVa: why the kernel killed the channel last found dead
+    uint32_t lostError() const
+    {
+        return k_.lostError();
+    }
+
+    uint64_t lostFaultVa() const
+    {
+        return k_.lostFaultVa();
+    }
+
     // GPU-side order with the process's other driver (NVK's channels), through the kernel's Order (TegraGM20BInfoOrder; false:
     // it has none). orderAfterOthers: this channel's next submission starts with an acquire on what they submitted so far;
     // orderOthersAfter: their next submissions start with one on everything this channel submitted. The kern_return_t (0:
