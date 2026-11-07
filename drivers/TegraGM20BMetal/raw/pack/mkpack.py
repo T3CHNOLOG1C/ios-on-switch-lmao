@@ -19,12 +19,13 @@ usage: mkpack.py <merged programs.bin out> <out dir> <bucket dir>...
   (probe16.*, probe4096.*: each buffer entry's descriptor type, a uniform buffer's range NVK rounds up to 256 bytes, and
   the function's window on the slot) and programs.bin; a state's index is (its bucket, its line in the bucket's corpus).
   The context init and post-init registers are the first bucket's (every probe process opens the device alike). A
-  bucket's barrier/ holds its storage-form states' run with NVK's interlock hidden (rawpack.py barrier_set): each gets a
-  second record from it, its barrier form (PipelineBarrierForm), after every first.
+  bucket's barrier/ holds its storage-form states' run with NVK's interlock hidden (rawpack.py barrier_set): their
+  record is the barrier form (PipelineBarrierForm) from it.
 writes the merged programs.bin, <out>/pack.bin (runtime/raw_pack.h layout), <out>/pack.json, <out>/programs.txt
 (decoder tables), and prints a report.
 """
 
+import collections
 import os
 import struct
 import sys
@@ -147,13 +148,36 @@ def interlocked(p: dict) -> bool:
     return bool(p['records'][0]['regs'].get(0x1224, 0) & 3)
 
 
-def barrier_forms(simple: list[dict]) -> list[dict]:
-    """Keep a barrier-form probe only where the same state's default record is in the storage form.
+def default_forms(simple: list[dict]) -> tuple[list[dict], list[tuple[dict, str]]]:
+    """Give each state its default record and set the rest aside with why.
 
-    Elsewhere the two runs drew it alike.
+    A state metal2vulkan draws in the storage form (the pixel interlock) gets its barrier form (input attachments,
+    ordered by barriers: the barrier run's) as its record; layouts.py cannot name the storage form's image, so it is not
+    packed.
     """
     storage = {p['key'] for p in simple if not p['form'] and interlocked(p)}
-    return [p for p in simple if not p['form'] or p['key'] in storage]
+    barrier = {p['key'] for p in simple if p['form']}
+    kept, aside = [], []
+    for p in simple:
+        if not p['form'] and p['key'] in storage:
+            aside.append((p, 'storage form' + ('' if p['key'] in barrier else ', its barrier form not taken')))
+        elif p['form'] and p['key'] not in storage:
+            # a barrier run's first line is its bucket's warm-up state (rawpack.py barrier_set), probed in both runs
+            aside.append(
+                (p, 'warm-up state' if p['index'] == 0 else 'barrier form of a state drawn without the interlock')
+            )
+        else:
+            kept.append(p)
+    return kept, aside
+
+
+# Why a probed state may stay out of the pack (the raw path hands it to m2v): what its draw needs that the raw path
+# draws otherwise. Any other reason is a generator fault and fails the build.
+EXPECTED_SKIPS = ('draws', 'dispatches', 'storage form', 'warm-up state', 'a sampler m2v derives from a bound one')
+
+
+def unexpected(why: str) -> bool:
+    return not any(reason in why for reason in EXPECTED_SKIPS)
 
 
 def load_sizes(dirs: list[str]) -> dict[tuple, list[int]]:
@@ -169,6 +193,11 @@ def load_sizes(dirs: list[str]) -> dict[tuple, list[int]]:
     return sizes
 
 
+# The copy engine's subchannel: NVK's init uses it only to fill buffers of its own (the pixel interlock's ticket buffer,
+# zeroed at the probe's address), which are not context state; replayed, the fill would write the probe's address
+SUBC_COPY = 4
+
+
 def load_init(log_path: str) -> tuple[list[tuple[int, int, int]], dict[int, dict[int, int]]]:
     # init trace and post-init registers
     init, post = [], {0: {}, 1: {}}
@@ -176,7 +205,8 @@ def load_init(log_path: str) -> tuple[list[tuple[int, int, int]], dict[int, dict
         for line in log:
             if line.startswith('T '):
                 _, sc, m, d = line.split()
-                init.append((int(sc), int(m, 16), int(d, 16)))
+                if int(sc) != SUBC_COPY:
+                    init.append((int(sc), int(m, 16), int(d, 16)))
             elif line.startswith('S regs '):
                 f = line.split()
                 post[int(f[2])] = {int(a, 16): int(v, 16) for a, v in (x.split('=') for x in f[3:])}
@@ -376,18 +406,17 @@ def main() -> None:
     # drop the query-pool setup (submit 4 is not traced) and NVK's own MME bookkeeping we relocate
     report = []
     simple, skipped = split_probes(probes)
-    simple = barrier_forms(simple)
+    simple, aside = default_forms(simple)
+    skipped += aside
     for p in simple:
         n = targets(p['key'])
         p['records'][0]['regs'] = {m: v for m, v in p['records'][0]['regs'].items() if not foreign(m, n)}
     varying, baseline = split_registers(simple, post)
     barriers = sum(1 for p in simple if p['form'])
     report.append(
-        f'{len(probes)} states probed, {len(simple) - barriers} taken, {len(skipped)} skipped; '
-        f'{barriers} storage-form states with their barrier form'
+        f'{len(probes)} records probed, {len(simple)} taken ({barriers} of them barrier forms of storage-form states), '
+        f'{len(skipped)} set aside'
     )
-    for p, why in skipped:
-        report.append(f'  skipped {p["index"]} ({why}): {p["key"][:150]}')
     names = ' '.join(f'{m:x}' for m in varying)
     report.append(f'{len(varying)} per-pipeline registers: {names}')
     report.append(f'{len(baseline)} baseline registers over post-init')
@@ -397,10 +426,12 @@ def main() -> None:
     for p in simple:
         rec = pipeline(p, varying, prog_index, sizes, constexpr_tsc)
         if rec['problems']:  # m2v draws it (RawMetal.mm: a state not in the pack goes there)
-            report.append(f'  skipped {p["index"]} ({"; ".join(rec["problems"])}): {p["key"][:150]}')
+            skipped.append((p, '; '.join(rec['problems'])))
             continue
         pipes.append(rec)
-    pipes.sort(key=lambda rec: rec['form'] == 'barrier')  # a key's first record is its default (Pack::find)
+    faults = [(p, why) for p, why in skipped if unexpected(why)]
+    for p, why in skipped:
+        report.append(f'  {"FAULT" if unexpected(why) else "skipped"} {p["index"]} ({why}): {p["key"][:150]}')
     # init template with relocations (submissions 1-3 as NVK recorded them)
     init_recs = [(sc, m, d, RELOC_CODE.get(RELOC.get((sc, m)), 0)) for sc, m, d in init]
     report.append(f'init template: {len(init_recs)} methods, {sum(1 for x in init_recs if x[3])} relocated')
@@ -414,9 +445,16 @@ def main() -> None:
         f'pack.bin {len(data) // 1024} KiB: {len(pipes)} pipelines, {len(prog_recs)} programs, '
         f'{len(constexpr_tsc)} constexpr samplers, {len(blob)} blob dwords, {len(baseline)} baseline regs'
     )
+    report.append(f'{len(simple)} taken, {len(pipes)} packed, {len(faults)} dropped by a generator fault')
     with open(os.path.join(out_dir, 'report.txt'), 'w') as report_txt:
         report_txt.write('\n'.join(report) + '\n')
     print('\n'.join(report))
+    if faults:
+        reasons = collections.Counter(why.split(' (')[0][:80] for _, why in faults)
+        sys.exit(
+            f'mkpack: {len(faults)} records dropped for reasons no state may have (FAULT lines): '
+            + '; '.join(f'{n} x {why}' for why, n in reasons.most_common(8))
+        )
 
 
 if __name__ == '__main__':

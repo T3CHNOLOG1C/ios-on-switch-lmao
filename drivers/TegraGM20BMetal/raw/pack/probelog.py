@@ -8,20 +8,36 @@ def fnv(b: bytes, h: int = 0xCBF29CE484222325) -> int:
     return h
 
 
-def load(out_path: str, log_path: str, init_submits: int = 4) -> list[dict]:
-    with open(out_path) as out:
-        if any(line.startswith('WARMUP') for line in out):
-            init_submits += 1
+def load(out_path: str, log_path: str) -> list[dict]:
+    """Give each PROBE line of probe.out with its submission's decoded draw (probe.mm: one command buffer per state).
+
+    The probes are the log's last submissions: how many NVK makes before them varies (where the device exposes the pixel
+    interlock, its ticket buffer is cleared by a copy-engine submission of its own at device creation).
+    """
     probes = _probes(out_path)
     subs = _submissions(log_path)
+    first = len(subs) - len(probes)
+    if first < 0:
+        raise ValueError(f'{log_path}: {len(subs)} submissions for {len(probes)} probes')
     for n, p in enumerate(probes):
-        s = subs[init_submits + n]
+        s = subs[first + n]
         p['draws'] = sum(1 for line in s if line.startswith('DRAW'))
         p['dispatches'] = sum(1 for line in s if line.startswith('DISPATCH'))
         p['clears'] = [line for line in s if line.startswith('CLEAR')]
         p['canon'] = s
         p['records'] = _records(s)
+        _check_tags(p, log_path)
     return probes
+
+
+def _check_tags(p: dict, log_path: str) -> None:
+    """Fail where a probe's draw reads another probe's tagged payload: its records are another state's."""
+    for rec in p['records']:
+        for key, (_, words) in (rec or {}).get('ptr', {}).items():
+            if len(words) > 1 and words[0] >> 16 == 0xC0DE and words[1] != p['index']:
+                raise ValueError(
+                    f"{log_path}: probe {p['index']} reads probe {words[1]}'s payload at {key}: records misaligned"
+                )
 
 
 def _probes(out_path: str) -> list[dict]:
