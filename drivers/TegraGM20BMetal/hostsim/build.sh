@@ -21,18 +21,17 @@ TREE=$HERE/../../..
 mkdir -p "$2"
 xcrun clang -O1 -Wall -dynamiclib -I "$TREE/drivers/TegraGM20B" "$HERE/mock_iokit.c" -framework IOKit -framework CoreFoundation \
     -install_name @rpath/libmock_iokit.dylib -o "$2/libmock_iokit.dylib"
-xcrun clang -O1 -Wall -c "$TREE/kits/SwitchRefusal/SwitchRefusal.c" -o "$2/SwitchRefusal.o"
-xcrun clang++ -O1 -g -std=c++17 -fobjc-arc -Wno-deprecated-declarations -I "$TREE/drivers/NativeMetal" -I "$TREE/kits/SwitchRefusal" -x objective-c++ \
-    "$HERE/m2v_gm20b.mm" "$TREE/drivers/NativeMetal/NativeBridgeMetalFrontend.mm" -x none "$1" "$2/SwitchRefusal.o" -L "$2" -lmock_iokit \
+xcrun clang++ -O1 -g -std=c++17 -fobjc-arc -Wno-deprecated-declarations -I "$TREE/drivers/NativeMetal" -x objective-c++ \
+    "$HERE/m2v_gm20b.mm" "$TREE/drivers/NativeMetal/NativeBridgeMetalFrontend.mm" -x none "$1" -L "$2" -lmock_iokit \
     -Wl,-rpath,"$2" -lobjc -framework Foundation -framework Metal -framework IOSurface -framework IOKit -o "$2/m2v_gm20b"
-xcrun clang++ -O1 -g -std=c++17 -fobjc-arc -Wno-deprecated-declarations -I "$TREE/drivers/NativeMetal" -I "$TREE/kits/SwitchRefusal" -x objective-c++ \
-    "$HERE/qc_frontend.mm" "$TREE/drivers/NativeMetal/NativeBridgeMetalFrontend.mm" -x none "$1" "$2/SwitchRefusal.o" -L "$2" -lmock_iokit \
+xcrun clang++ -O1 -g -std=c++17 -fobjc-arc -Wno-deprecated-declarations -I "$TREE/drivers/NativeMetal" -x objective-c++ \
+    "$HERE/qc_frontend.mm" "$TREE/drivers/NativeMetal/NativeBridgeMetalFrontend.mm" -x none "$1" -L "$2" -lmock_iokit \
     -Wl,-rpath,"$2" -lobjc -framework Foundation -framework Metal -framework IOSurface -framework IOKit -o "$2/qc_frontend"
-xcrun clang++ -O1 -g -std=c++17 -fobjc-arc -Wno-deprecated-declarations -I "$TREE/drivers/NativeMetal" -I "$TREE/kits/SwitchRefusal" -x objective-c++ \
-    "$HERE/present_frontend.mm" "$TREE/drivers/NativeMetal/NativeBridgeMetalFrontend.mm" -x none "$1" "$2/SwitchRefusal.o" -L "$2" -lmock_iokit \
+xcrun clang++ -O1 -g -std=c++17 -fobjc-arc -Wno-deprecated-declarations -I "$TREE/drivers/NativeMetal" -x objective-c++ \
+    "$HERE/present_frontend.mm" "$TREE/drivers/NativeMetal/NativeBridgeMetalFrontend.mm" -x none "$1" -L "$2" -lmock_iokit \
     -Wl,-rpath,"$2" -lobjc -framework Foundation -framework Metal -framework IOSurface -framework IOKit -o "$2/present_frontend"
-xcrun clang++ -O1 -g -std=c++17 -fobjc-arc -Wno-deprecated-declarations -I "$TREE/drivers/NativeMetal" -I "$TREE/kits/SwitchRefusal" -I "$HERE" \
-    -x objective-c++ "$HERE/memory_frontend.mm" "$TREE/drivers/NativeMetal/NativeBridgeMetalFrontend.mm" -x none "$1" "$2/SwitchRefusal.o" \
+xcrun clang++ -O1 -g -std=c++17 -fobjc-arc -Wno-deprecated-declarations -I "$TREE/drivers/NativeMetal" -I "$HERE" \
+    -x objective-c++ "$HERE/memory_frontend.mm" "$TREE/drivers/NativeMetal/NativeBridgeMetalFrontend.mm" -x none "$1" \
     -L "$2" -lmock_iokit -Wl,-rpath,"$2" -lobjc -framework Foundation -framework Metal -framework IOSurface -framework IOKit \
     -o "$2/memory_frontend"
 RAW=$HERE/../raw
@@ -45,10 +44,10 @@ xcrun clang++ -O2 -std=c++17 -DNVDEC_TWOD -c "$RAW/pack/nvdec.cpp" -o "$GPU/nvde
 xcrun clang++ -O2 -std=c++17 -c "$RAW/fx/test/twod_sim.cpp" -o "$GPU/twod_sim.o"
 xcrun clang++ -dynamiclib "$GPU/mock_iokit.o" "$GPU/cap.o" "$GPU/nvdec.o" "$GPU/twod_sim.o" "$GPU/mme_fermi.o" "$GPU/mme_fermi_sim.o" \
     -framework IOKit -framework CoreFoundation -install_name @rpath/libmock_iokit.dylib -o "$GPU/libmock_iokit.dylib"
-xcrun clang++ -O1 -g -std=c++17 -fobjc-arc -Wno-deprecated-declarations -I "$TREE/drivers/NativeMetal" -I "$TREE/kits/SwitchRefusal" -I "$TREE/drivers/TegraGM20B" \
+xcrun clang++ -O1 -g -std=c++17 -fobjc-arc -Wno-deprecated-declarations -I "$TREE/drivers/NativeMetal" -I "$TREE/drivers/TegraGM20B" \
     -x objective-c++ "$HERE/alias_frame.mm" "$RAW/runtime/RawMetal.mm" "$RAW/runtime/RawAlias.mm" \
     "$TREE/drivers/NativeMetal/NativeBridgeMetalFrontend.mm" -x c++ "$RAW/runtime/raw_gpu.cpp" "$RAW/runtime/raw_alias.cpp" \
-    "$RAW/fx/fx_mip.cpp" "$RAW/runtime/raw_kernel.cpp" "$RAW/runtime/raw_pack.cpp" "$RAW/runtime/raw_ycbcr.cpp" -x none "$1" "$2/SwitchRefusal.o" \
+    "$RAW/fx/fx_mip.cpp" "$RAW/runtime/raw_kernel.cpp" "$RAW/runtime/raw_pack.cpp" "$RAW/runtime/raw_ycbcr.cpp" -x none "$1" \
     -L "$GPU" -lmock_iokit -Wl,-rpath,"$GPU" -lobjc -framework Foundation -framework Metal -framework IOSurface \
     -framework IOKit -framework CoreFoundation -o "$GPU/alias_frame"
 xcrun clang++ -O1 -g -std=c++17 -Wall -I "$TREE/third_party/mesa/include" -I "$TREE/drivers/TegraGM20B" "$HERE/nvk_alias.cpp" \

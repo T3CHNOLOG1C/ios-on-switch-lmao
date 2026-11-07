@@ -131,10 +131,8 @@ metal_plugin(
         GM20B_METAL + ":raw_runtime_headers",
         GM20B_ABI,
         GM20B_LAYOUT,
-        "//kits/SwitchRefusal:SwitchRefusal.h",
     ],
     bridge = ":bridge_ios",
-    c_srcs = ["//kits/SwitchRefusal:SwitchRefusal.c"],
     cc_srcs = [
         GM20B_METAL + ":raw/runtime/raw_gpu.cpp",
         GM20B_METAL + ":raw/runtime/raw_alias.cpp",
@@ -154,7 +152,6 @@ metal_plugin(
         METAL + ":NativeBridgeMetalFrontend.h",
         GM20B_METAL + ":raw/runtime/RawMetal.h",
         GM20B_ABI,
-        "//kits/SwitchRefusal:SwitchRefusal.h",
     ],
     stack = ":raw_stack",
 )
