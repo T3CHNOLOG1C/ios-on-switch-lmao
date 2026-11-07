@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // Tegra210 NVENC (video encoder 5.0, a falcon behind host1x): bring-up, the job engine and sleep. tegra_nvenc_probe()
 // runs the whole bring-up by default on its own thread:
-//   E0  host1x (drivers/TegraHost1x, shared with NVDEC) and the arena's boot chunk (2 MiB)
-//   E1  power partition, clock, reset, falcon firmware loaded and started
+//   E0  host1x (drivers/TegraHost1x, shared with NVDEC)
+//   E1  NVENC's SMMU address space (TegraNVENCMemory.cpp), power partition, clock, reset, falcon firmware loaded and
+//       started
 //   E2  proof of life through host1x channel 0 in NVENC's class: an IMMEDIATE syncpoint increment (the engine's host
 //       interface answers) then an OP_DONE one (the falcon firmware answers), each completed by interrupt
 //   E3  the TegraNVENC service and its user client published (TegraNVENCUserClient.cpp)
 // One line per stage ("TegraNVENC: E1 ok ..."), or the failing stage's FAIL line and nothing after it. Until E3
-// publishes, every failure is that one line: the engine is put back in reset with its clock off, the arena is given
-// back and nothing is published, so VideoToolbox has no hardware encoder. From E3 on a job past its bound panics with
+// publishes, every failure is that one line: the engine is put back in reset with its clock off, its address space is
+// given back and nothing is published, so VideoToolbox has no hardware encoder. From E3 on a job past its bound panics with
 // one line, and a lost syncpoint interrupt panics in TegraHost1x. No boot-arg.
 //
 // Input pictures are 16x16 tiles with chroma at the surface config's offset (TegraNVENCInfo): the layout and chroma
@@ -44,6 +45,7 @@
 #include <kern/thread.h>
 #include <string.h>
 #include "../TegraHost1x/TegraHost1x.h"
+#include "../TegraSMMU/TegraSMMU.h"
 #include "TegraNVENC.h"
 #include "TegraNVENCCheck.h"
 #include "../../kits/SwitchCAR/SwitchCAR.h"
@@ -66,7 +68,6 @@ constexpr uint32_t kThiMethod0 = 0x40;  // THI METHOD0 (offset) then METHOD1 (da
 constexpr uint64_t kMcPA = 0x70019000;
 constexpr uint32_t kPartition = 6;  // TEGRA_POWERGATE_MPE
 constexpr unsigned kClock = 219;    // TEGRA210_CLK_NVENC: CAR bank Y bit 27, also its reset
-constexpr uint64_t kBootChunk = 2ull << 20;
 
 enum : uint32_t {  // clock and reset controller
     CLK_OUT_ENB_Y = 0x298,
@@ -86,8 +87,6 @@ enum : uint32_t {
 enum : uint32_t {
     MC_HOTRESET_CTRL = 0x200,
     MC_HOTRESET_NVENC = 1u << 11,
-    MC_SMMU_NVENC_ASID = 0x264,
-    SMMU_ENABLE = 1u << 31,
 };
 
 enum : uint32_t {
@@ -114,8 +113,7 @@ constexpr uint32_t kJobBoundUs = 500000, kWaitBoundUs = kInFlight * kJobBoundUs;
 IOLock *gEngineLock;
 uint32_t gSyncpt, gBase, gIssued;  // job n's fence is gBase + n
 bool gUp, gWedged, gSuspended, gPublished;
-uint64_t gArenaUs;
-TegraNVENCBlock gSetup, gSink;  // setup slots and the scratch buffer, never mapped into a client
+switch_dma_buffer gSetup, gSink;  // setup slots and the scratch buffer, never mapped into a client
 const TegraNVENCProven gProven = {TEGRA_NVENC_LAYOUT_TILED16, TEGRA_NVENC_CHROMA_OFFSET, 1};
 
 const char *falconState()
@@ -172,11 +170,6 @@ const char *falconDump(bool debugger)
 // from scratch.
 bool powerUp(bool *wasOn)
 {
-    if (switch_mmio_read32(gMc, MC_SMMU_NVENC_ASID) & SMMU_ENABLE) {
-        snprintf(gLine, sizeof(gLine), "E1 FAIL SMMU translation is on for NVENC (MC 0x264 = %#x)",
-                 switch_mmio_read32(gMc, MC_SMMU_NVENC_ASID));
-        return false;
-    }
     *wasOn = switch_pmc_partition_is_on(kPartition);
     switch_car_reset_assert(kClock);
     IODelay(10);
@@ -327,22 +320,17 @@ void park()
 
 void bringUp(void *, wait_result_t)
 {
-    // A failed bring-up leaves nothing behind: the engine back in reset with its clock off (once it was touched), and
-    // the arena returned.
+    // A failed bring-up leaves nothing behind: the engine back in reset with its clock off (once it was touched), then
+    // its address space and kernel buffers returned.
     auto giveUp = [](bool touched) {
         if (touched)
             park();
-        tegra_nvenc_arena_release();
+        tegra_nvenc_memory_release();
+        switch_dma_free(&gSetup);
+        switch_dma_free(&gSink);
     };
-    const uint64_t arenaStart = switch_now_us();
-    if (tegra_nvenc_arena_init(kBootChunk)) {
-        IOLog("TegraNVENC: E0 FAIL no contiguous %llu MiB arena chunk below 4 GiB\n", kBootChunk >> 20);
-        return;
-    }
-    gArenaUs = switch_now_us() - arenaStart;
     if (tegra_host1x_start()) {
         IOLog("TegraNVENC: E0 FAIL host1x is not up (see the TegraHost1x line)\n");
-        giveUp(false);
         return;
     }
     gNvenc = switch_mmio_map(kNvencPA, kNvencSize);
@@ -350,6 +338,17 @@ void bringUp(void *, wait_result_t)
     gEngineLock = IOLockAlloc();
     if (!gNvenc || !gMc || !gEngineLock) {
         IOLog("TegraNVENC: E1 FAIL no mapping\n");
+        return;
+    }
+    gLine[0] = 0;
+    if (!switch_dma_alloc(&gSetup, kSetupSlots * kSetupSlotBytes) || !switch_dma_alloc(&gSink, kSinkBytes) ||
+        !loadImage()) {
+        IOLog("TegraNVENC: %s\n", gLine[0] ? gLine : "E1 FAIL no contiguous setup slots or scratch below 4 GiB");
+        giveUp(false);
+        return;
+    }
+    if (tegra_nvenc_memory_init(&gFirmware, &gSetup, &gSink, gLine, sizeof(gLine))) {
+        IOLog("TegraNVENC: %s\n", gLine);
         giveUp(false);
         return;
     }
@@ -372,18 +371,12 @@ void bringUp(void *, wait_result_t)
     }
     IOLog("TegraNVENC: E2 ok host interface and falcon incremented syncpoint %u %u->%u by interrupt in %llu us; %s\n",
           id, from, tegra_host1x_syncpt_read(id), us, falconState());
-    if (tegra_nvenc_arena_alloc(kSetupSlots * kSetupSlotBytes, &gSetup) ||
-        tegra_nvenc_arena_alloc(kSinkBytes, &gSink)) {
-        IOLog("TegraNVENC: E2 FAIL no setup slots or scratch in the arena\n");
-        giveUp(true);
-        return;
-    }
     gSyncpt = id;
     gBase = tegra_host1x_syncpt_read(id);
     gUp = true;
     tegra_host1x_set_sleep_client(engineSuspend, engineResume);
     gPublished = true;
-    tegra_nvenc_publish(gArenaUs);
+    tegra_nvenc_publish();
 }
 }  // namespace
 
@@ -479,7 +472,8 @@ int run(const TegraNVENCSubmit *s, TegraNVENCResolve resolve, void *context, uin
             method(NVC5B7_SET_IO_RC_PROCESS, (uint32_t)(gSink.pa >> 8));
             method(NVC5B7_SET_IN_DRV_PIC_SETUP, (uint32_t)((gSetup.pa + slot * kSetupSlotBytes) >> 8));
         }
-        method(e->method, e->kind == TEGRA_NVENC_ENTRY_RELOC ? (uint32_t)((blocks[i].pa + e->offset) >> 8) : e->value);
+        method(e->method,
+               e->kind == TEGRA_NVENC_ENTRY_RELOC ? (uint32_t)((blocks[i].iova + e->offset) >> 8) : e->value);
     }
     words[n++] = tegra_host1x_op_incr_syncpt(TEGRA_HOST1X_COND_OP_DONE, gSyncpt);
     const int ret = tegra_host1x_submit(words, n);
@@ -530,9 +524,8 @@ void engineSuspend()
     gSuspended = true;
     if (!gWedged && tegra_host1x_syncpt_wait(gSyncpt, gBase + gIssued, kWaitBoundUs) == TEGRA_HOST1X_ETIMEDOUT)
         timedOut(gBase + gIssued);
-    switch_car_reset_assert(kClock);
-    IODelay(2);
-    switch_car_clock_disable(kClock);
+    park();
+    tegra_nvenc_memory_detach();
     IOLockUnlock(gEngineLock);
 }
 
@@ -542,7 +535,7 @@ void engineResume()
     bool wasOn = false;
     gLine[0] = 0;
     gWedged = true;
-    if (powerUp(&wasOn) && bootFalcon()) {
+    if (!tegra_nvenc_memory_attach(gLine, sizeof(gLine)) && powerUp(&wasOn) && bootFalcon()) {
         const uint32_t from = tegra_host1x_syncpt_read(gSyncpt);
         const char *stage = nullptr;
         const int ret = answer(gSyncpt, from, &stage);

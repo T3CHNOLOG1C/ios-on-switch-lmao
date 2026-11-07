@@ -23,11 +23,13 @@ enum tegra_smmu_asid {
     TEGRA_SMMU_ASID_DISPLAY = 126,
     TEGRA_SMMU_ASID_NVJPG = 125,
     TEGRA_SMMU_ASID_XUSB_HOST = 124,
-    TEGRA_SMMU_ASID_NVDEC = 123
+    TEGRA_SMMU_ASID_NVDEC = 123,
+    TEGRA_SMMU_ASID_NVENC = 122
 };
 
 enum tegra_smmu_register {
     TEGRA_SMMU_TRANSLATION_ENABLE_0 = 0x228,
+    TEGRA_SMMU_TRANSLATION_ENABLE_1 = 0x22c,
     TEGRA_SMMU_TRANSLATION_ENABLE_2 = 0x230,
     TEGRA_SMMU_TRANSLATION_ENABLE_3 = 0x234,
     TEGRA_SMMU_DC_ASID = 0x240,
@@ -36,6 +38,7 @@ enum tegra_smmu_register {
     TEGRA_SMMU_NVJPG_ASID = 0xac0,      // swgroup "nvjpg" (clients nvjpgsrd/nvjpgswr: TRANSLATION_ENABLE_3 bits 30/31)
     TEGRA_SMMU_NVDEC_ASID = 0xab4,      // swgroup "nvdec" (clients nvdecsrd/nvdecswr: TRANSLATION_ENABLE_3 bits 24/25)
     TEGRA_SMMU_NVDEC1_ASID = 0xae0,     // swgroup "nvdec1" (no client in Linux's table; attached so none can bypass)
+    TEGRA_SMMU_NVENC_ASID = 0x264,      // swgroup "nvenc" (nvencsrd: TRANSLATION_ENABLE_0 bit 28, nvencswr: _1 bit 11)
 };
 
 // Two drivers on one ASID or one swgroup register would translate through each other's tables. Every enumerator above
@@ -48,10 +51,12 @@ static inline void tegra_smmu_ids_distinct(enum tegra_smmu_asid asid, enum tegra
     case TEGRA_SMMU_ASID_NVJPG:
     case TEGRA_SMMU_ASID_XUSB_HOST:
     case TEGRA_SMMU_ASID_NVDEC:
+    case TEGRA_SMMU_ASID_NVENC:
         break;
     }
     switch (reg) {
     case TEGRA_SMMU_TRANSLATION_ENABLE_0:
+    case TEGRA_SMMU_TRANSLATION_ENABLE_1:
     case TEGRA_SMMU_TRANSLATION_ENABLE_2:
     case TEGRA_SMMU_TRANSLATION_ENABLE_3:
     case TEGRA_SMMU_DC_ASID:
@@ -60,6 +65,7 @@ static inline void tegra_smmu_ids_distinct(enum tegra_smmu_asid asid, enum tegra
     case TEGRA_SMMU_NVJPG_ASID:
     case TEGRA_SMMU_NVDEC_ASID:
     case TEGRA_SMMU_NVDEC1_ASID:
+    case TEGRA_SMMU_NVENC_ASID:
         break;
     }
 }

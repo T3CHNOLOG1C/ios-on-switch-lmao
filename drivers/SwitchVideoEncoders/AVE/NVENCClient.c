@@ -103,7 +103,7 @@ void nvenc_close(NVENCClient *c)
     free(c);
 }
 
-// The first failure of each kind is logged, to tell an arena too small for the stream from a mapping the kernel
+// The first failure of each kind is logged, to tell NVENC's memory running out from a mapping the kernel
 // refused.
 static void logOnce(int *flag, const char *what, kern_return_t kr, uint64_t size)
 {

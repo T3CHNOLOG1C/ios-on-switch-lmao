@@ -1,22 +1,24 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// Inside TegraNVENC: the engine (TegraNVENC.cpp), the buffer arena (TegraNVENCMemory.cpp) and the user client
-// (TegraNVENCUserClient.cpp).
+// Inside TegraNVENC: the engine (TegraNVENC.cpp), its SMMU address space and buffers (TegraNVENCMemory.cpp) and the
+// user client (TegraNVENCUserClient.cpp).
 //
-// On by default; the stages (TegraNVENC.cpp) are E0 host1x and the arena's boot chunk, E1 power and falcon, E2 syncpoint
-// proof of life, E3 the TegraNVENC service and its user client. No boot-arg.
+// On by default; the stages (TegraNVENC.cpp) are E0 host1x, E1 SMMU, power and falcon, E2 syncpoint proof of life, E3
+// the TegraNVENC service and its user client. No boot-arg.
 #ifndef TEGRA_NVENC_H
 #define TEGRA_NVENC_H
 #include <stddef.h>
 #include <stdint.h>
 #include "TegraNVENCABI.h"
+#include "../../kits/SwitchDMA/SwitchDMAPages.h"
 
-class IOMemoryDescriptor;
+struct switch_dma_buffer;
 
-// One arena allocation: physically contiguous, below 4 GiB, 64 KiB granular, zeroed and clean in the caches.
+// One buffer NVENC reads or writes: any RAM pages, mapped at `iova` in NVENC's address space, 64 KiB granular, zeroed
+// and clean in the caches when allocated.
 struct TegraNVENCBlock {
-    uint64_t pa, size;
+    uint64_t iova, size;
     uint8_t *va;
-    uint32_t chunk, first, count;  // arena chunk and its granules
+    switch_dma_pages pages;  // the memory a client maps, and its page list
 };
 
 // Resolves a submit's buffer handle; every user client supplies its own.
@@ -28,12 +30,17 @@ struct TegraNVENCProven {
 };
 
 extern "C" {
-int tegra_nvenc_arena_init(uint64_t bytes);  // the boot chunk
-void tegra_nvenc_arena_release(void);        // a failed bring-up gives every chunk back (engine in reset first)
-int tegra_nvenc_arena_alloc(uint64_t size, TegraNVENCBlock *block);  // adds a chunk when none has room
-void tegra_nvenc_arena_free(const TegraNVENCBlock *block);
-IOMemoryDescriptor *tegra_nvenc_arena_descriptor(const TegraNVENCBlock *block);  // for mapping into a client
-void tegra_nvenc_arena_usage(uint64_t *total, uint64_t *free);
+// NVENC's address space (E1): its tables, the firmware, setup slots and scratch identity-mapped, the swgroup translated.
+// 0, or -1 with one line in `line`. Detach puts the swgroup back in bypass (sleep); attach undoes it.
+int tegra_nvenc_memory_init(const switch_dma_buffer *firmware, const switch_dma_buffer *setup,
+                            const switch_dma_buffer *scratch, char *line, size_t size);
+int tegra_nvenc_memory_attach(char *line, size_t size);
+void tegra_nvenc_memory_detach(void);
+void tegra_nvenc_memory_release(void);  // a failed bring-up gives the tables back (swgroup detached first)
+// -12 when the wired-memory ceiling or the address window has no room.
+int tegra_nvenc_buffer_alloc(uint64_t size, TegraNVENCBlock *block);
+void tegra_nvenc_buffer_free(TegraNVENCBlock *block);  // only once no job can touch it
+void tegra_nvenc_memory_usage(uint64_t *limit, uint64_t *free);
 void tegra_nvenc_cache_clean(const void *va, size_t size);  // dc cvac: the CPU's writes reach DRAM
 void tegra_nvenc_cache_flush(const void *va, size_t size);  // dc civac: the next CPU read comes from DRAM
 
@@ -49,7 +56,7 @@ int tegra_nvenc_wait(uint32_t fence);
 bool tegra_nvenc_ready(void);
 const TegraNVENCProven *tegra_nvenc_proven(void);
 
-int tegra_nvenc_publish(uint64_t arenaUs);  // E3
+int tegra_nvenc_publish(void);  // E3
 }
 
 #endif

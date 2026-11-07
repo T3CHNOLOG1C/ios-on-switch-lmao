@@ -13,7 +13,7 @@ bool nvenc_service_present(void);
 NVENCClient *nvenc_open(int *error);  // NULL with the IOReturn when the service is absent or refuses this process
 void nvenc_close(NVENCClient *client);
 
-bool nvenc_info(NVENCClient *client, TegraNVENCInfo *info);  // what E3 proved, and the arena
+bool nvenc_info(NVENCClient *client, TegraNVENCInfo *info);  // input layout, chroma reading, memory
 
 // Buffers and jobs (ctx = the client).
 int nvenc_alloc(void *client, uint64_t size, uint32_t *handle, void **va);

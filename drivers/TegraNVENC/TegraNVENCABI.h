@@ -10,15 +10,15 @@
 // record...}, output the method's record. Method TEGRA_NVENC_TUNNEL_PROBE only proves a selector is admitted.
 //
 // Model (the TegraNVDEC model, for an encoder):
-//   * No SMMU: NVENC reads and writes physical memory. Buffers come from NVENC's own arena (contiguous chunks below
-//     4 GiB, one small chunk reserved at boot, more added when a session needs them and kept); user space maps them
-//     (IOConnectMapMemory64 with type = handle, cacheable) and never sees an address. Every address method is a
-//     relocation (handle + offset) the kernel resolves and bounds-checks against what the firmware may touch there.
+//   * NVENC sits behind the MC SMMU in an address space of its own. A buffer is any RAM pages, mapped into that space
+//     when allocated; user space maps it too (IOConnectMapMemory64 with type = handle, cacheable) and never sees an
+//     address. Every address method is a relocation (handle + offset) the kernel resolves and bounds-checks against
+//     what the firmware may touch there.
 //   * The kernel builds the host1x stream itself: only whitelisted NVENC methods, written through the engine's THI
 //     METHOD0/METHOD1 pair, then SET_IN_DRV_PIC_SETUP (a kernel-only copy of the checked setup) and EXECUTE, then an
-//     OP_DONE syncpoint increment. The address methods of features the checker keeps off (CEA hints, ME predictors,
-//     QP maps, RC state, ...) point at a kernel scratch buffer on every job, so the firmware never finds address 0, or
-//     another client's buffer, in them.
+//     OP_DONE syncpoint increment. The address methods of features the checker keeps off (CEA hints, colocated
+//     input, QP maps, RC data, partitions) are 0 on every job, as NVIDIA's T210 driver leaves them, so no job keeps
+//     another client's address in them; the RC process state is a kernel scratch buffer.
 //   * Cache maintenance is explicit: Submit cleans the ranges the CPU wrote (the input picture), Wait invalidates the
 //     ranges the CPU will read (status, bitstream). Reference pictures are never touched by the CPU.
 //   * Jobs run in submission order; a fence is a syncpoint threshold, waited on by interrupt. The kernel bounds every
@@ -75,7 +75,7 @@ typedef struct {
     uint32_t chroma_mode;   // TEGRA_NVENC_CHROMA_*
     uint32_t p_frames;      // 1: P pictures predicted from NVENC's own reconstruction; 0: intra only
     uint32_t reserved;
-    uint64_t arena_bytes, arena_free;
+    uint64_t memory_limit, memory_free;  // what every session's buffers together may wire, and what is left
 } TegraNVENCInfo;
 
 typedef struct {
@@ -96,7 +96,7 @@ typedef struct {
 } TegraNVENCRange;
 
 // One NVENC method. kind 0: `value` is written as is. kind 1: relocation, the method gets
-// (physical address of buffer `value` + `offset`) >> 8, so `offset` must be 256-byte aligned.
+// (NVENC's address of buffer `value` + `offset`) >> 8, so `offset` must be 256-byte aligned.
 typedef struct {
     uint16_t method;  // byte offset in the NVENC class (clc5b7.h)
     uint16_t kind;
