@@ -35,6 +35,7 @@
 #include "NativeBridgeMetalFrontend.h"
 #include "AsyncPipelines.h"
 #include "GpuMemoryRelease.h"
+#include "LimitsTable.h"
 #include "QueuePriority.h"
 #include "SurfaceLayout.h"
 #include "SwitchFrameTimeline.h"
@@ -5509,84 +5510,12 @@ static bool systemCompiler()
 @protocol NBOriginalStitching
 - (NSString *)newDagStringWithGraphs:(NSArray<MTLFunctionStitchingGraph *> *)graphs;
 @end
-// The base class's limits table (-[_MTLDevice limits], the words after isa in 21H461). Metal's accessors read their field from it
-// (-[_MTLDevice maxTextureWidth2D] is limits+0x84), and frameworks read it directly, past this device's methods: PhotosUICore's texture
-// converter takes its largest image from 0x84/0x88 (-[PXGMetalTextureConverter createTextureFromCGImage:transform:alpha:options:],
-// PXGCreateMetalTextureFromBytesInCGImage); with them 0 every image is "too large", is redrawn to fit 0x0 and PXGCreateContext asserts.
-// CoreRE reads minBufferNoCopyAlignmentBytes at 0x7c. The offsets are those accessors' loads (the
-// 61 integer fields; maxLineWidth and maxPointSize are floats, not filled).
 @protocol NBOriginalLimits
 - (void *)limits;
 @end
 #if TARGET_OS_IPHONE
-static const struct {
-    const char *selector;
-    uint16_t offset;
-} kLimitFields[] = {{"maxFramebufferStorageBits", 0x0},
-                    {"linearTextureArrayAlignmentBytes", 0x4},
-                    {"linearTextureArrayAlignmentSlice", 0x8},
-                    {"maxTileBuffers", 0xc},
-                    {"maxTileTextures", 0x10},
-                    {"maxTileSamplers", 0x14},
-                    {"maxTileInlineDataSize", 0x18},
-                    {"minTilePixels", 0x1c},
-                    {"maxColorAttachments", 0x20},
-                    {"maxVertexAttributes", 0x24},
-                    {"maxVertexBuffers", 0x28},
-                    {"maxVertexTextures", 0x2c},
-                    {"maxVertexSamplers", 0x30},
-                    {"maxVertexInlineDataSize", 0x34},
-                    {"maxInterpolants", 0x38},
-                    {"maxFragmentBuffers", 0x3c},
-                    {"maxFragmentTextures", 0x40},
-                    {"maxFragmentSamplers", 0x44},
-                    {"maxFragmentInlineDataSize", 0x48},
-                    {"maxComputeBuffers", 0x4c},
-                    {"maxComputeTextures", 0x50},
-                    {"maxComputeSamplers", 0x54},
-                    {"maxComputeInlineDataSize", 0x58},
-                    {"maxComputeLocalMemorySizes", 0x5c},
-                    {"maxTotalComputeThreadsPerThreadgroup", 0x60},
-                    {"maxComputeThreadgroupMemory", 0x64},
-                    {"maxVisibilityQueryOffset", 0x70},
-                    {"minConstantBufferAlignmentBytes", 0x78},
-                    {"minBufferNoCopyAlignmentBytes", 0x7c},
-                    {"maxTextureWidth1D", 0x80},
-                    {"maxTextureWidth2D", 0x84},
-                    {"maxTextureHeight2D", 0x88},
-                    {"maxTextureWidth3D", 0x8c},
-                    {"maxTextureHeight3D", 0x90},
-                    {"maxTextureDepth3D", 0x94},
-                    {"maxTextureDimensionCube", 0x98},
-                    {"maxTextureLayers", 0x9c},
-                    {"linearTextureAlignmentBytes", 0xa0},
-                    {"iosurfaceTextureAlignmentBytes", 0xa4},
-                    {"iosurfaceReadOnlyTextureAlignmentBytes", 0xa8},
-                    {"deviceLinearTextureAlignmentBytes", 0xac},
-                    {"deviceLinearReadOnlyTextureAlignmentBytes", 0xb0},
-                    {"maxFunctionConstantIndices", 0xb4},
-                    {"maxComputeThreadgroupMemoryAlignmentBytes", 0xb8},
-                    {"maxInterpolatedComponents", 0xbc},
-                    {"maxTessellationFactor", 0xc0},
-                    {"maxIndirectBuffers", 0xc4},
-                    {"maxIndirectTextures", 0xc8},
-                    {"maxIndirectSamplers", 0xcc},
-                    {"maxIndirectSamplersPerDevice", 0xd0},
-                    {"maxFenceInstances", 0xd4},
-                    {"maxViewportCount", 0xd8},
-                    {"maxCustomSamplePositions", 0xdc},
-                    {"maxVertexAmplificationFactor", 0xe0},
-                    {"maxVertexAmplificationCount", 0xe4},
-                    {"maxTextureBufferWidth", 0xe8},
-                    {"maxComputeAttributes", 0xec},
-                    {"maxIOCommandsInFlight", 0xf0},
-                    {"maxPredicatedNestingDepth", 0xf4},
-                    {"maxAccelerationStructureLevels", 0xf8},
-                    {"maxConstantBufferArguments", 0xfc}};
-
-// Each field whose selector this device answers itself (installAnswers, NBDeviceMethods) gets that answer, so the table says what the
-// methods say; one the device has no answer for stays the base class's 0. Every write is read back through the base class's own accessor,
-// and a field it does not read back is restored and the fill stops there (a different layout), the field named.
+// The base class's limits table (LimitsTable.h) gets each answer of this device's own methods (installAnswers, NBDeviceMethods), so
+// the table says what the methods say; a field the device has no answer for stays the base class's 0.
 static void fillLimits(id device)
 {
     Class cls = object_getClass(device), base = class_getSuperclass(cls);
@@ -5595,33 +5524,31 @@ static void fillLimits(id device)
     uint8_t *table = (uint8_t *)[(id<NBOriginalLimits>)device limits];
     if (!table)
         return;
-    for (const auto &field : kLimitFields) {
+    auto answer = [&](const LimitField &field, uint64_t &value) {
         SEL sel = sel_registerName(field.selector);
         Method own = class_getInstanceMethod(cls, sel), original = class_getInstanceMethod(base, sel);
         if (!own || !original || method_getImplementation(own) == method_getImplementation(original))
-            continue;
+            return false;
         char type[8] = {};
         method_getReturnType(own, type, sizeof type);
         if (strcmp(type, "Q") && strcmp(type, "L") && strcmp(type, "I"))
-            continue;
-        const uint64_t value = ((NSUInteger (*)(id, SEL))method_getImplementation(own))(device, sel);
-        if (value > UINT32_MAX) {
-            NBREFUSE("limits.overflow", uintptr_t(field.selector), @"limits: %s %llu does not fit the table",
-                     field.selector, (unsigned long long)value);
-            continue;
-        }
-        uint32_t was;
-        memcpy(&was, table + field.offset, 4);
-        const uint32_t word = (uint32_t)value;
-        memcpy(table + field.offset, &word, 4);
-        if (((NSUInteger (*)(id, SEL))method_getImplementation(original))(device, sel) != value) {
-            memcpy(table + field.offset, &was, 4);
+            return false;
+        value = ((NSUInteger (*)(id, SEL))method_getImplementation(own))(device, sel);
+        return true;
+    };
+    auto readBack = [&](const LimitField &field) -> uint64_t {
+        SEL sel = sel_registerName(field.selector);
+        return ((NSUInteger (*)(id, SEL))method_getImplementation(class_getInstanceMethod(base, sel)))(device, sel);
+    };
+    fillLimitsTable(table, answer, readBack, [](const LimitField &field, LimitFill how) {
+        if (how == LimitFill::Overflow)
+            NBREFUSE("limits.overflow", uintptr_t(field.selector), @"limits: %s does not fit the table",
+                     field.selector);
+        else if (how == LimitFill::NotRead)
             NBREFUSE("limits.layout", field.offset,
-                     @"limits: the base class does not read %s at 0x%x; the fields from there stay 0", field.selector,
+                     @"limits: the base class does not read %s at 0x%x; it stays its own", field.selector,
                      field.offset);
-            return;
-        }
-    }
+    });
     uint32_t width = 0, height = 0;
     memcpy(&width, table + 0x84, 4);
     memcpy(&height, table + 0x88, 4);
