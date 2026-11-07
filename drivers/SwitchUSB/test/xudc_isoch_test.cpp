@@ -45,7 +45,7 @@ TEST(XudcIsoch, StampsWalkBackFromTheLastFrame)
 
 TEST(XudcIsoch, FramesGoDirectOrThroughOnePage)
 {
-    const Run runs[] = {{0x80000000, 4096}, {0x90000000, 4096}};
+    const xudc::Run runs[] = {{0x80000000, 4096}, {0x90000000, 4096}};
     Piece p;
     ASSERT_TRUE(planFrame(runs, 2, 192, 192, true, 1ull << 32, &p));
     EXPECT_FALSE(p.bounce);
@@ -56,13 +56,13 @@ TEST(XudcIsoch, FramesGoDirectOrThroughOnePage)
     ASSERT_TRUE(planFrame(runs, 2, 4096 + 100, 196, false, 1ull << 32, &p));  // IN: no cache-line rule
     EXPECT_FALSE(p.bounce);
     EXPECT_EQ(p.pa, 0x90000064u);
-    const Run small[] = {{0x80000010, 100}};  // OUT inside a run that does not own its lines
+    const xudc::Run small[] = {{0x80000010, 100}};  // OUT inside a run that does not own its lines
     ASSERT_TRUE(planFrame(small, 1, 0, 100, true, 1ull << 32, &p));
     EXPECT_TRUE(p.bounce);
-    const Run high[] = {{0x1ffffff00, 4096}};
+    const xudc::Run high[] = {{0x1ffffff00, 4096}};
     ASSERT_TRUE(planFrame(high, 1, 0, 512, false, 1ull << 32, &p));
     EXPECT_TRUE(p.bounce);
-    const Run boundary[] = {{0x8000ff00, 4096}};
+    const xudc::Run boundary[] = {{0x8000ff00, 4096}};
     ASSERT_TRUE(planFrame(boundary, 1, 0, 512, false, 1ull << 32, &p));
     EXPECT_TRUE(p.bounce);
     ASSERT_TRUE(planFrame(runs, 2, 50, 0, true, 1ull << 32, &p));

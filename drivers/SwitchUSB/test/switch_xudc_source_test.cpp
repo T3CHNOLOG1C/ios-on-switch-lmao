@@ -43,7 +43,8 @@ TEST(SwitchXudcSource, FreedPoolPagesKickEveryWaitingEndpoint)
 {
     const std::string source = SourceText("../SwitchXUDC.cpp");
     EXPECT_THAT(source, HasSubstr("poolFreed = true;"));
-    EXPECT_EQ(Count(source, "    kickWaiting();"), 2u) << "after the event drain and after a cancel";
+    EXPECT_EQ(Count(source, "    kickWaiting();"), 3u)
+        << "after the event drain and after a cancel, bulk or isochronous";
 }
 
 TEST(SwitchXudcSource, InterruptModerationOn)
