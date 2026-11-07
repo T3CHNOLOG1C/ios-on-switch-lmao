@@ -9,27 +9,27 @@
 #include "../TegraVICBand.h"
 
 namespace {
-struct Run {
+struct Span {
     uint32_t page, offset, length;
 };
 
 void collect(void *context, uint32_t page, uint32_t offset, uint32_t length)
 {
-    static_cast<std::vector<Run> *>(context)->push_back({page, offset, length});
+    static_cast<std::vector<Span> *>(context)->push_back({page, offset, length});
 }
 
-std::vector<Run> runs(const TegraVICBand &b)
+std::vector<Span> runs(const TegraVICBand &b)
 {
-    std::vector<Run> out;
+    std::vector<Span> out;
     tegra_vic_band_runs(&b, collect, &out);
     return out;
 }
 
 // Every byte the runs name, as offsets from the band's first page.
-std::set<uint64_t> bytes(const std::vector<Run> &rs)
+std::set<uint64_t> bytes(const std::vector<Span> &rs)
 {
     std::set<uint64_t> out;
-    for (const Run &r : rs)
+    for (const Span &r : rs)
         for (uint32_t i = 0; i < r.length; i++)
             out.insert((uint64_t)r.page * TEGRA_VIC_BAND_PAGE + r.offset + i);
     return out;
@@ -56,7 +56,7 @@ TEST(VicBand, LumaAndChromaOfATile)
 TEST(VicBand, RunsCoverExactlyTheRectangle)
 {
     const TegraVICBand b = tegra_vic_band_420(0, 1280, 0, 256, 6, 300, 40);
-    const std::vector<Run> rs = runs(b);
+    const std::vector<Span> rs = runs(b);
     const std::set<uint64_t> got = bytes(rs);
     std::set<uint64_t> want;
     const uint64_t base = b.start / TEGRA_VIC_BAND_PAGE * TEGRA_VIC_BAND_PAGE;
@@ -65,7 +65,7 @@ TEST(VicBand, RunsCoverExactlyTheRectangle)
             want.insert(b.start + (uint64_t)r * b.pitch + x - base);
     EXPECT_EQ(got, want);
     uint64_t total = 0;
-    for (const Run &r : rs) {
+    for (const Span &r : rs) {
         EXPECT_LE(r.offset + r.length, TEGRA_VIC_BAND_PAGE) << "a run inside one page";
         EXPECT_LT(r.page, tegra_vic_band_pages(&b));
         total += r.length;
