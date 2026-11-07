@@ -6,7 +6,9 @@
 // must all return long before the GPU is done (no CPU wait for GPU work), the mock's log must show every submission start
 // after the one committed before it on the other driver ended (ordercheck.py), the chain must arrive intact, and the rates line
 // must count the switches with none ordered on the CPU. MOCK_NO_ORDER=1 (a kernel without Order): the same order and content,
-// by CPU waits, which the rates line counts.
+// by CPU waits, which the rates line counts. ORDERFRAME_PACE_US: that long between pairs, as frames come, so the GPU can kill
+// a channel (mock_iokit.c MOCK_KILL) while later pairs are still being committed: the raw path makes its channel again and
+// keeps GPU order (ordercheck.py's first raw channel argument).
 // usage: orderframe <pack> <cache> <nvk host dylib> [pairs]
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
@@ -79,8 +81,11 @@ int main(int argc, char **argv)
         raw_metal_rates(line, sizeof line);  // the window starts here
         printf("BEGIN %.3f\n", nowMs());
         const double began = nowMs();
+        const useconds_t pace = getenv("ORDERFRAME_PACE_US") ? useconds_t(atoi(getenv("ORDERFRAME_PACE_US"))) : 0;
         id<MTLCommandBuffer> last = nil;
         for (unsigned k = 0; k < pairs; k++) {
+            if (k && pace)
+                usleep(pace);
             id<MTLCommandBuffer> r = [q commandBuffer];  // raw: chain[k] -> chain[k + 1]
             id<MTLBlitCommandEncoder> b = [r blitCommandEncoder];
             [b copyFromBuffer:chain[k] sourceOffset:0 toBuffer:chain[k + 1] destinationOffset:0 size:bytes];

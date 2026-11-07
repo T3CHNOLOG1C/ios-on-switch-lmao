@@ -107,6 +107,7 @@ struct job {
     struct acq acq[kOrderMax];
     struct TegraGM20BAbiExec *exec;
     uint64_t kick;
+    int kill; /* MOCK_KILL's submission: the channel dies when the GPU reaches it */
 };
 
 struct run {
@@ -144,6 +145,22 @@ static struct run runs[kJobs];
 static uint32_t nruns;
 static unsigned long order_calls, order_queued, waits_total, waits_submit;
 static int gpu_us = -1;
+static void kill_channel(uint32_t ch, uint32_t error);
+
+/* MOCK_KILL=<channel>:<seqno>: that submission faults the GPU when it runs and the kernel kills its channel (kill_channel,
+ * GetStatus error 2, a GR exception), so commits can go on past the kill while it is in flight. gpu_lock held. */
+static int kill_due(uint32_t ch, uint32_t seqno)
+{
+    static int parsed;
+    static unsigned kch, kseq;
+    if (!parsed) {
+        const char *k = getenv("MOCK_KILL");
+        parsed = 1;
+        if (!k || sscanf(k, "%u:%u", &kch, &kseq) != 2)
+            kch = 0;
+    }
+    return kch && ch == (kch & 15) && seqno == kseq;
+}
 
 static uint64_t now_us(void)
 {
@@ -241,7 +258,9 @@ static void *gpu_thread(void *arg)
             continue;
         }
         struct job j = queue[ch][qhead[ch] % kQueue];
-        if (dead[ch]) { /* killed with it in flight: it never runs */
+        if (dead[ch] || j.kill) { /* killed with it in flight, or MOCK_KILL's: it never runs */
+            if (!dead[ch])
+                kill_channel(ch, 2);
             qhead[ch]++;
             free(j.exec);
             continue;
@@ -553,11 +572,16 @@ static kern_return_t mock_call(mach_port_t c, uint32_t sel, const void *in, size
                 j.acq[j.nacq++] = pending[ch][i];
         npending[ch] = 0;
         struct TegraGM20BAbiExecReply r = {.seqno = j.seqno};
-        if (kill_next && (engines[ch] & TegraGM20BEngine3D)) {
+        j.kill = kill_due(ch, j.seqno);
+        if (j.kill && !async_gpu())
+            kill_channel(ch, 2);
+        else if (kill_next && (engines[ch] & TegraGM20BEngine3D)) {
             kill_channel(ch, kill_next);
             dead_va[ch] = kill_next_va;
             kill_next = 0;
             kill_next_va = 0;
+        }
+        if (dead[ch]) {
             pthread_mutex_unlock(&gpu_lock);
             memcpy(out, &r, sizeof(r));
             return KERN_SUCCESS;

@@ -387,6 +387,8 @@ int Kernel::order(uint32_t channel, uint32_t flags, uint32_t seqno, uint32_t &wa
     const TegraGM20BAbiOrder in = {channel, flags, seqno, 0};
     TegraGM20BAbiOrderReply r = {};
     const int kr = call(TegraGM20BMethodOrder, &in, sizeof in, &r, sizeof r);
+    if (kr == kIOReturnNotResponding)
+        markLost(channel);
     waits = kr == KERN_SUCCESS ? r.waits : 0;
     return kr;
 }

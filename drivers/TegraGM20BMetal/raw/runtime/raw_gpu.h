@@ -31,6 +31,7 @@
 #include <map>
 #include <tuple>
 #include <vector>
+#include <IOKit/IOReturn.h>
 #include <mach/kern_return.h>
 #include "raw_kernel.h"
 #include "raw_pack.h"
@@ -767,19 +768,29 @@ public:
         return k_.canOrder();
     }
 
+    // A channel the kernel killed is made again first (between command buffers, as begin() would), so one GPU fault does not
+    // leave the process ordered on the CPU for good
     int orderAfterOthers(uint32_t &waits)
     {
         if (!ensureChannel())
             return KERN_FAILURE;
-        return k_.order(channel_, TegraGM20BOrderAfterTask, 0, waits);
+        for (int attempt = 0;; attempt++) {
+            if (k_.lost(channel_) && !reopen())
+                return KERN_FAILURE;
+            const int kr = k_.order(channel_, TegraGM20BOrderAfterTask, 0, waits);
+            if (kr != kIOReturnNotResponding || attempt)
+                return kr;
+        }
     }
 
+    // A killed channel's fence is released and nothing it had runs any more: there is nothing of it to order after
     int orderOthersAfter(uint32_t &waits)
     {
         waits = 0;
-        if (!channelReady_.load(std::memory_order_acquire))
-            return KERN_SUCCESS;  // nothing submitted to order after
-        return k_.order(channel_, TegraGM20BOrderBeforeTask, lastSeqno_, waits);
+        if (!channelReady_.load(std::memory_order_acquire) || k_.lost(channel_))
+            return KERN_SUCCESS;
+        const int kr = k_.order(channel_, TegraGM20BOrderBeforeTask, lastSeqno_, waits);
+        return kr == kIOReturnNotResponding ? KERN_SUCCESS : kr;
     }
 
     struct Stats {
