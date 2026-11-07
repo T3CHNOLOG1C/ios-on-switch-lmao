@@ -39,6 +39,7 @@ kernel_driver(
     hdr_deps = [
         "drivers/TegraHost1x",
         "drivers/TegraSMMU",
+        "kits/SwitchBootArgs",
         "kits/SwitchCAR",
         "kits/SwitchDMA",
         "kits/SwitchFalcon",

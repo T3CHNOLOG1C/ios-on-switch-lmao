@@ -10,7 +10,7 @@
 // One line per stage ("TegraNVENC: E1 ok ..."), or the failing stage's FAIL line and nothing after it. Until E3
 // publishes, every failure is that one line: the engine is put back in reset with its clock off, its address space is
 // given back and nothing is published, so VideoToolbox has no hardware encoder. From E3 on a job past its bound panics with
-// one line, and a lost syncpoint interrupt panics in TegraHost1x. No boot-arg.
+// one line, and a lost syncpoint interrupt panics in TegraHost1x. switch-no-nvdec turns it off.
 //
 // Input pictures are 16x16 tiles with chroma at the surface config's offset (TegraNVENCInfo): the layout and chroma
 // reading the unit encoded IPCM and IDR pictures from exactly on every boot of 11-06 (r30 archives, "E3 IPCM ok input
@@ -46,6 +46,7 @@
 #include <string.h>
 #include "../TegraHost1x/TegraHost1x.h"
 #include "../TegraSMMU/TegraSMMU.h"
+#include "../../kits/SwitchBootArgs/SwitchBootArgs.h"
 #include "TegraNVENC.h"
 #include "TegraNVENCCheck.h"
 #include "../../kits/SwitchCAR/SwitchCAR.h"
@@ -556,9 +557,12 @@ void engineResume()
 }
 }  // namespace
 
+// switch-no-nvdec turns hardware video encoding off as well as decoding.
 extern "C" int tegra_nvenc_probe(void)
 {
     static volatile int started;
+    if (switch_boot_flag("switch-no-nvdec"))
+        return 0;
     if (__atomic_exchange_n(&started, 1, __ATOMIC_SEQ_CST))
         return 0;
     thread_t thread;

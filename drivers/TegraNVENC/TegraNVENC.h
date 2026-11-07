@@ -3,7 +3,7 @@
 // user client (TegraNVENCUserClient.cpp).
 //
 // On by default; the stages (TegraNVENC.cpp) are E0 host1x, E1 SMMU, power and falcon, E2 syncpoint proof of life, E3
-// the TegraNVENC service and its user client. No boot-arg.
+// the TegraNVENC service and its user client. switch-no-nvdec turns it off.
 #ifndef TEGRA_NVENC_H
 #define TEGRA_NVENC_H
 #include <stddef.h>
