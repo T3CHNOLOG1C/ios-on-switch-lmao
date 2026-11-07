@@ -30,7 +30,9 @@ ROOTS = ["com.apple.driver.AppleMobileFileIntegrity", "com.apple.filesystems.apf
          "com.apple.driver.AppleActuatorDriver", "com.apple.driver.ApplePencilDriver",
          "com.apple.driver.AppleInputDeviceSupport", "com.apple.driver.IOSlaveProcessor",
          "com.apple.driver.usb.AppleUSBHostiOSDevice", "com.apple.driver.AppleUSBHostMergeProperties",
-         "com.apple.iokit.IOGameControllerFamily", "com.apple.driver.AppleUSBAudio"]
+         "com.apple.iokit.IOGameControllerFamily", "com.apple.driver.AppleUSBAudio",
+         "com.apple.iokit.IONetworkingFamily", "com.apple.driver.usb.cdc.ecm", "com.apple.driver.usb.cdc.ncm",
+         "com.apple.driver.usb.ethernet.asix", "com.apple.driver.AppleUSBEthernetHost"]
 # _PrelinkExecutableLoadAddr of a codeless kext in a fileset kernelcache (XNU kOSKextCodelessKextLoadAddr).
 CODELESS_LOAD_ADDR = 0x7FFFFFFFFFFFFFFF
 
