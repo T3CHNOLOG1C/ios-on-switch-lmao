@@ -41,6 +41,12 @@ size_t native_bridge_metal_benchmark(id device, const char *metallib, unsigned p
 // A texture over `buffer` (this device's) rendered and sampled in place, as an IOSurface's: the raw GM20B path's m2v twin of memory
 // it shares (drivers/TegraGM20BMetal/raw/runtime/RawMetal.mm). Nil if the buffer is not this device's or the runtime refuses.
 id native_bridge_metal_texture_in_place(id buffer, id descriptor, NSUInteger offset, NSUInteger bytesPerRow);
+// The device's optimal image of `descriptor` (any type but a texture buffer, any levels, layers and samples) over `buffer`'s
+// memory from `offset`, holding the bytes there as the device lays that image out: texels another driver of the process
+// writes in the device's layout (the raw GM20B path's block-linear textures and mip chains, drivers/TegraGM20B/TegraGM20BLayout.h).
+// `buffer` is a no-copy buffer of this device; over foreign memory (native_bridge_metal_buffer_over_foreign) bound under the
+// image's PTE kind, the image takes the memory's own VA. Nil where the device makes no such image there.
+id native_bridge_metal_texture_tiled_in_place(id buffer, id descriptor, NSUInteger offset);
 // A render pipeline state of this device made at its first set (AsyncPipelines.h startLazy): the raw path's m2v twin of a
 // state it draws itself.
 id native_bridge_metal_render_pipeline_lazy(id device, id descriptor, NSUInteger options);

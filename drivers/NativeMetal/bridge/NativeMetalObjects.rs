@@ -1171,6 +1171,21 @@ pub extern "C" fn nmb_texture_new_linear(
     })
 }
 
+/// The device's optimal image of `descriptor` bound `offset` bytes into `buffer`'s memory, holding the bytes there
+/// (`Buffer::new_tiled_texture_in_place`): optimal-tiled texels another driver of the process lays out as the device does.
+#[unsafe(no_mangle)]
+pub extern "C" fn nmb_texture_new_tiled_in_place(
+    buffer: *mut NmbBuffer,
+    descriptor: *const NmbTextureDescriptor,
+    offset: u64,
+) -> *mut NmbTexture {
+    guard(std::ptr::null_mut(), || {
+        let descriptor = texture_descriptor(descriptor)?;
+        let texture = get(buffer)?.0.new_tiled_texture_in_place(&descriptor, offset);
+        Ok(boxed(NmbTexture(texture.map_err(e("tiled texture in place"))?)))
+    })
+}
+
 /// A view of `texture`: of the whole texture as `format` where `whole`, else of `levels` and `slices` (start, count) as `format` and `kind`.
 #[unsafe(no_mangle)]
 pub extern "C" fn nmb_texture_new_view(

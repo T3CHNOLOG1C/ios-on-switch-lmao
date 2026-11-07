@@ -19,6 +19,7 @@ filegroup(
         "GpuMemoryRelease.h",
         "NativeBridgeMetalFrontend.h",
         "QueuePriority.h",
+        "SurfaceLayout.h",
         "SwitchFrameTimeline.h",
         "TwoPlaneStandIn.h",
         "bridge/NativeMetalBridge.h",

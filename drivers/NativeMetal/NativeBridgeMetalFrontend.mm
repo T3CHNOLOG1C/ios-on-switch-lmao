@@ -36,6 +36,7 @@
 #include "AsyncPipelines.h"
 #include "GpuMemoryRelease.h"
 #include "QueuePriority.h"
+#include "SurfaceLayout.h"
 #include "SwitchFrameTimeline.h"
 #include "../../kits/SwitchRefusal/SwitchRefusalSite.h"
 // The two-plane render targets' load and store functions (TwoPlaneStandIn.metal).
@@ -525,6 +526,7 @@ static void waitForResource(id resource);
 @property (nonatomic, copy) void (^deallocator)(void *, NSUInteger);
 @property (nonatomic) void *wrapped;
 @property (nonatomic) IOSurfaceRef surfaceOwner;  // keeps a shared import's CPU mapping alive
+@property (nonatomic) surface_layout::Import layout;  // a surface import's layout (SurfaceLayout.h)
 @property (nonatomic)
     uint32_t gpuDirty;  // the GPU wrote this host import since its lines were last invalidated (invalidateForCpu)
 @property (nonatomic, strong) id<MTLHeap> parentHeap;  // the heap that made the buffer, nil otherwise
@@ -801,18 +803,58 @@ extern "C" void native_bridge_metal_set_surface_importer(switch_surface_importer
     gSurfaceImporter.store(importer);
 }
 
-static NmbBuffer *importSurface(IOSurfaceRef surface, void *base, size_t bytes)
+// The layouts surface imports were answered, by surface and mapping: what an import the runtime joins to a live one of the same
+// bytes (no BoImport, so no answer of its own) was bound as. Bounded: past the cap it starts again, and a join it no longer knows
+// takes no layout (its textures that would need one are refused).
+static std::unordered_map<std::string, surface_layout::Import> gSurfaceLayouts;
+static constexpr size_t kSurfaceLayouts = 4096;
+
+static std::string surfaceLayoutKey(IOSurfaceRef surface, void *base, size_t bytes)
 {
+    char key[64];
+    snprintf(key, sizeof key, "%u/%lx/%zx", IOSurfaceGetID(surface), (unsigned long)(uintptr_t)base, bytes);
+    return key;
+}
+
+// The surface's import, the layout asked by `ask`'s shape (the raw GM20B path's import in the render server: it asked; another
+// process: this import asks at its BoImport, NVK binding a block-linear surface under the kind its texels are written in).
+static NmbBuffer *importSurface(IOSurfaceRef surface, void *base, size_t bytes, const surface_layout::Shape &ask,
+                                surface_layout::Import &layout)
+{
+    const surface_layout::Nvk &nvk = surface_layout::nvk(nvkSymbol);
     const switch_surface_importer importer = gSurfaceImporter.load();
     struct switch_foreign_memory memory = {};
     if (importer && importer(IOSurfaceGetID(surface), surface, base, bytes, &memory)) {
+        layout.handle = memory.handle;
+        if (memory.kind == surface_layout::kKind) {
+            layout.layout = surface_layout::kTiled;
+        } else {  // pitch, or a surface the raw path took as rows without asking: never decided block-linear from here
+            layout.asked = ask;
+            layout.asked.flags &= ~surface_layout::kWrites;
+            layout.layout = nvk.layout ? nvk.layout(memory.handle, ask.width, ask.height, ask.bpp, ask.rowBytes,
+                                                    layout.asked.flags)
+                                       : surface_layout::kPitch;
+        }
         NmbBuffer *handle = bufferOverForeign(&memory, base, bytes, MTLResourceStorageModeShared);
         memory.drop(memory.lease);
         return handle;
     }
     noteImportSurface(IOSurfaceGetID(surface), base, bytes);
+    if (nvk.importShape)
+        nvk.importShape(ask.width, ask.height, ask.bpp, ask.rowBytes, ask.flags);
     NmbBuffer *handle = nmb_buffer_new_no_copy(gDevice, base, bytes, MTLResourceStorageModeShared);
+    layout.layout = nvk.importLayout ? nvk.importLayout(&layout.handle) : surface_layout::kPitch;
+    layout.asked = ask;
     noteImportSurface(0, nullptr, 0);
+    const std::string key = surfaceLayoutKey(surface, base, bytes);
+    if (layout.handle) {
+        if (gSurfaceLayouts.size() >= kSurfaceLayouts)
+            gSurfaceLayouts.clear();
+        gSurfaceLayouts[key] = layout;
+    } else if (handle) {
+        const auto known = gSurfaceLayouts.find(key);
+        layout = known != gSurfaceLayouts.end() ? known->second : surface_layout::Import{};
+    }
     return handle;
 }
 
@@ -821,7 +863,7 @@ static bool usageWrites(MTLTextureUsage usage)
     return usage == MTLTextureUsageUnknown || (usage & (MTLTextureUsageRenderTarget | MTLTextureUsageShaderWrite));
 }
 
-static NBBuffer *surfaceBuffer(IOSurfaceRef surface, void *base, size_t bytes)
+static NBBuffer *surfaceBuffer(IOSurfaceRef surface, void *base, size_t bytes, const surface_layout::Shape &ask)
 {
     struct Key {
         uint64_t identity, address, bytes;
@@ -838,7 +880,8 @@ static NBBuffer *surfaceBuffer(IOSurfaceRef surface, void *base, size_t bytes)
         return buffer;
     }
     const uint64_t began = nowUs();
-    NmbBuffer *handle = importSurface(surface, base, bytes);
+    surface_layout::Import layout;
+    NmbBuffer *handle = importSurface(surface, base, bytes, ask, layout);
     gTimeSurfaceImport.add(began);
     if (!handle) {
         NBLOG(@"native-metal: surface import refused: %@", lastError());
@@ -848,6 +891,7 @@ static NBBuffer *surfaceBuffer(IOSurfaceRef surface, void *base, size_t bytes)
     buffer.handle = handle;
     buffer.options = MTLResourceStorageModeShared;
     buffer.surfaceOwner = (IOSurfaceRef)CFRetain(surface);
+    buffer.layout = layout;
     if (key) {
         // Bound metadata without retaining old frames. Evicting an association is
         // harmless: its owners still retain the actual import until their own end.
@@ -1247,6 +1291,53 @@ static NBTexture *textureOnBuffer(NBBuffer *buffer, MTLTextureDescriptor *d, NSU
     return texture;
 }
 
+// The device's optimal image of `d` over `buffer`'s memory from `offset`: texels another driver of the process, or the kernel's
+// block-linear surface layout, lays out as the device does (SurfaceLayout.h).
+static NBTexture *tiledTextureOnBuffer(NBBuffer *buffer, MTLTextureDescriptor *d, NSUInteger offset)
+{
+    NmbTextureDescriptor descriptor;
+    if (!buffer || !textureDescriptor(d, &descriptor))
+        return nil;
+    const uint64_t began = nowUs();
+    NmbTexture *handle = nmb_texture_new_tiled_in_place(buffer.handle, &descriptor, offset);
+    gTimeSurfaceTexture.add(began);
+    if (!handle) {
+        NBLOG(@"native-metal: tiled texture over buffer refused: %@", lastError());
+        return nil;
+    }
+    NBTexture *texture = [NBTexture new];
+    texture.handle = handle;
+    nmb_texture_describe(handle, &descriptor);
+    texture.descriptor = descriptor;
+    texture.buffer = buffer;
+    texture.offset = offset;
+    return texture;
+}
+
+// A surface use refused because its layout does not fit (a texture of another shape or type over a block-linear surface, a
+// buffer or a planar texture over one, no answer): once per surface's shape, use and answer.
+static void refuseLayout(IOSurfaceRef surface, const char *use, uint32_t layout)
+{
+    static NSMutableSet *said = [NSMutableSet set];
+    NSString *why = [NSString stringWithFormat:@"%s over a %zux%zu surface of %zu-byte texels: layout %u", use,
+                                               IOSurfaceGetWidth(surface), IOSurfaceGetHeight(surface),
+                                               IOSurfaceGetBytesPerElement(surface), layout];
+    @synchronized(said) {
+        if ([said containsObject:why])
+            return;
+        [said addObject:why];
+    }
+    NBLOG(@"native-metal: refused for its surface's layout: %@", why);
+}
+
+// The shape a surface's own texels ask, sampled
+static surface_layout::Shape surfaceShape(IOSurfaceRef surface, size_t plane)
+{
+    return {uint32_t(IOSurfaceGetWidthOfPlane(surface, plane)), uint32_t(IOSurfaceGetHeightOfPlane(surface, plane)),
+            uint32_t(IOSurfaceGetBytesPerElementOfPlane(surface, plane)),
+            uint32_t(IOSurfaceGetBytesPerRowOfPlane(surface, plane)), 0};
+}
+
 // A texture over plane `plane` of a planar surface, made by the runtime over the surface's whole allocation with the surface's facts
 // (its OSType, plane 0's size, plane 1's place, its kIOSurfaceYCbCrMatrix): Metal's two-plane formats over plane 0 and plain
 // formats over either plane, as the runtime holds them (`new_texture_with_iosurface_plane`):
@@ -1269,10 +1360,14 @@ static NBTexture *planarSurfaceTexture(MTLTextureDescriptor *d, IOSurfaceRef sur
     if (!base || (base & (page - 1)) || at < base || (planes > 1 && chroma < base) || !allocation ||
         allocation > SIZE_MAX - (page - 1))
         return nil;
-    NBBuffer *buffer = surfaceBuffer(surface, (void *)base, (allocation + page - 1) & ~(page - 1));
+    NBBuffer *buffer = surfaceBuffer(surface, (void *)base, (allocation + page - 1) & ~(page - 1), surfaceShape(surface, 0));
     NmbTextureDescriptor descriptor;
     if (!buffer || !textureDescriptor(d, &descriptor))
         return nil;
+    if (buffer.layout.layout != surface_layout::kPitch) {
+        refuseLayout(surface, "a planar texture", buffer.layout.layout);
+        return nil;
+    }
     // kIOSurfaceYCbCrMatrix: the CoreVideo attachment's string ("ITU_R_709_2", ...), which the converted formats read.
     char matrix[32] = {};
     if (CFTypeRef value = IOSurfaceCopyValue(surface, CFSTR("IOSurfaceYCbCrMatrix"))) {
@@ -1359,6 +1454,13 @@ extern "C" id native_bridge_metal_texture_in_place(id buffer, id descriptor, NSU
     if (![buffer isKindOfClass:[NBBuffer class]] || ![descriptor isKindOfClass:[MTLTextureDescriptor class]])
         return nil;
     return textureOnBuffer((NBBuffer *)buffer, (MTLTextureDescriptor *)descriptor, offset, row, true);
+}
+
+extern "C" id native_bridge_metal_texture_tiled_in_place(id buffer, id descriptor, NSUInteger offset)
+{
+    if (![buffer isKindOfClass:[NBBuffer class]] || ![descriptor isKindOfClass:[MTLTextureDescriptor class]])
+        return nil;
+    return tiledTextureOnBuffer((NBBuffer *)buffer, (MTLTextureDescriptor *)descriptor, offset);
 }
 
 // ---- libraries, functions, states ----
@@ -5844,7 +5946,11 @@ static void fillLimits(id)
     const size_t page = vm_page_size, allocation = IOSurfaceGetAllocSize(surface);
     if (!base || ((uintptr_t)base & (page - 1)) || !allocation || allocation > SIZE_MAX - (page - 1))
         return nil;
-    NBBuffer *buffer = surfaceBuffer(surface, base, (allocation + page - 1) & ~(page - 1));
+    NBBuffer *buffer = surfaceBuffer(surface, base, (allocation + page - 1) & ~(page - 1), surfaceShape(surface, 0));
+    if (buffer && buffer.layout.layout != surface_layout::kPitch) {
+        refuseLayout(surface, "a buffer", buffer.layout.layout);
+        return nil;
+    }
     if (buffer)
         declareGpuWrites(surface);
     return (id<MTLBuffer>)buffer;
@@ -6159,11 +6265,23 @@ static void fillLimits(id)
     if (!page || (page & (page - 1)) || !base || ((uintptr_t)base & (page - 1)) || !allocation ||
         allocation > SIZE_MAX - (page - 1))
         return nil;
-    const size_t bytes = (allocation + page - 1) & ~(page - 1);
-    NBBuffer *buffer = surfaceBuffer(surface, base, bytes);
+    const size_t bytes = (allocation + page - 1) & ~(page - 1), row = IOSurfaceGetBytesPerRow(surface);
+    // A single 2D image of the surface asks the layout with its shape and use; another texture the surface's own, sampled
+    surface_layout::Shape shape = surfaceShape(surface, 0);
+    const bool image = d.textureType == MTLTextureType2D && d.mipmapLevelCount == 1 && d.sampleCount == 1 &&
+                       d.arrayLength == 1 &&
+                       surface_layout::shapeOf(gDevice, d.pixelFormat, d.width, d.height, row, usageWrites(d.usage), shape);
+    NBBuffer *buffer = surfaceBuffer(surface, base, bytes, shape);
     if (!buffer)
         return nil;
-    NBTexture *texture = textureOnBuffer(buffer, d, 0, IOSurfaceGetBytesPerRow(surface), true);
+    const uint32_t layout = surface_layout::layoutFor(surface_layout::nvk(nvkSymbol), buffer.layout, shape);
+    NBTexture *texture = nil;
+    if (layout == surface_layout::kPitch)
+        texture = textureOnBuffer(buffer, d, 0, row, true);
+    else if (layout == surface_layout::kTiled && image)
+        texture = tiledTextureOnBuffer(buffer, d, 0);
+    else
+        refuseLayout(surface, "a texture", layout);
     if (!texture)
         return nil;
     texture.surface = (IOSurfaceRef)CFRetain(surface);
