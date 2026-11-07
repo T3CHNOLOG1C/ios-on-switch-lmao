@@ -947,7 +947,8 @@ void SwitchMotion::post(Sensor sensor, const int16_t raw[3], uint64_t now)
 // lay the interface out in portrait and back for several seconds.
 void SwitchMotion::detectOrientation(const int32_t accel[3])
 {
-    const bool first = orientation == Unknown && candidate == Unknown && !gravity[0] && !gravity[1] && !gravity[2];
+    const bool first =
+        orientation == Unknown && candidate == Unknown && (gravity[0] == 0) && (gravity[1] == 0) && (gravity[2] == 0);
     if (first) {
         for (unsigned i = 0; i < 3; ++i)
             gravity[i] = accel[i];
@@ -999,7 +1000,7 @@ void SwitchMotion::detectOrientation(const int32_t accel[3])
         candidate = next;
         candidateCount = 0;
     }
-    if (++candidateCount < kOrientationStable && !(first && next != Unknown))
+    if (++candidateCount < kOrientationStable && (!first || next == Unknown))
         return;
     candidateCount = 0;
     static const char *const names[] = {
@@ -1024,7 +1025,8 @@ void SwitchMotion::announce(uint8_t which)
     if (stamp <= orientationStamp)
         stamp = orientationStamp + 1;
     orientationStamp = stamp;
-    __atomic_store_n(&gLastOrientation, (uint64_t)which << 56 | (stamp & ((1ull << 56) - 1)), __ATOMIC_RELEASE);
+    __atomic_store_n(&gLastOrientation, static_cast<uint64_t>(which) << 56 | (stamp & ((1ULL << 56) - 1)),
+                     __ATOMIC_RELEASE);
     SwitchOrientationReport report = {1, {0, 0}, stamp};
     report.orientation[orientationSet] = static_cast<uint8_t>(1u << which);
     const IOReturn taken = timedOrientation ? switch_hid_post_at(orientationHid, &report, sizeof(report), stamp)
@@ -1391,5 +1393,5 @@ extern "C" void switch_motion_last_orientation(uint8_t *orientation, uint64_t *s
 {
     const uint64_t last = __atomic_load_n(&gLastOrientation, __ATOMIC_ACQUIRE);
     *orientation = (uint8_t)(last >> 56);
-    *stamp = last & ((1ull << 56) - 1);
+    *stamp = last & ((1ULL << 56) - 1);
 }
