@@ -21,13 +21,14 @@ namespace {
 constexpr int W = 256, H = 256, N = W * H;
 constexpr MTLPixelFormat kRGB8_444_2P = MTLPixelFormat(542);
 
-NSString *const kValues = @"#include <metal_stdlib>\nusing namespace metal;\n"
-                          @"struct V { float4 p [[position]]; };\n"
-                          @"vertex V cover(uint i [[vertex_id]], constant float4 &box [[buffer(0)]]) {\n"
-                          @"  float2 c = float2((i << 1) & 2, i & 2); V v; v.p = float4(mix(box.xy, box.zw, c * 0.5) * 2 - 1, 0, 1);"
-                          @" return v; }\n"
-                          @"fragment float4 values(V in [[stage_in]], device const float4 *k [[buffer(0)]]) {\n"
-                          @"  return k[uint(in.p.y) * 256 + uint(in.p.x)]; }\n";
+NSString *const kValues =
+    @"#include <metal_stdlib>\nusing namespace metal;\n"
+    @"struct V { float4 p [[position]]; };\n"
+    @"vertex V cover(uint i [[vertex_id]], constant float4 &box [[buffer(0)]]) {\n"
+    @"  float2 c = float2((i << 1) & 2, i & 2); V v; v.p = float4(mix(box.xy, box.zw, c * 0.5) * 2 - 1, 0, 1);"
+    @" return v; }\n"
+    @"fragment float4 values(V in [[stage_in]], device const float4 *k [[buffer(0)]]) {\n"
+    @"  return k[uint(in.p.y) * 256 + uint(in.p.x)]; }\n";
 
 struct Target {
     CVPixelBufferRef pb = nullptr;
@@ -39,7 +40,8 @@ Target makeTarget(id<MTLDevice> dev, OSType fourcc)
 {
     Target t;
     NSDictionary *attrs =
-        @{(id)kCVPixelBufferIOSurfacePropertiesKey : @{}, (id)kCVPixelBufferMetalCompatibilityKey : @YES};
+        @{(id)kCVPixelBufferIOSurfacePropertiesKey : @{},
+          (id)kCVPixelBufferMetalCompatibilityKey : @YES};
     if (CVPixelBufferCreate(nullptr, W, H, fourcc, (__bridge CFDictionaryRef)attrs, &t.pb))
         return t;
     t.surface = CVPixelBufferGetIOSurface(t.pb);
@@ -191,7 +193,8 @@ float bitsOf(uint32_t u)
 std::vector<std::vector<float>> valueSets()
 {
     std::vector<float> v;
-    for (float x : {-1.0f, -0.0f, 2.0f, 65504.0f, -65504.0f, INFINITY, -INFINITY, bitsOf(0x7fc00000u), bitsOf(0xffc00000u)})
+    for (float x :
+         {-1.0f, -0.0f, 2.0f, 65504.0f, -65504.0f, INFINITY, -INFINITY, bitsOf(0x7fc00000u), bitsOf(0xffc00000u)})
         v.push_back(x);
     for (uint16_t h = 0; h <= 0x3c00; h++) {
         _Float16 a;
@@ -237,9 +240,12 @@ int main(int argc, char **argv)
         id<MTLFunction> full = [standIn newFunctionWithName:@"two_plane_cover"];
         g.native = state(g.dev, cover, draw, {kRGB8_444_2P});
         g.intoStandIn = state(g.dev, cover, draw, {MTLPixelFormatRGBA16Float});
-        g.load = state(g.dev, full, [standIn newFunctionWithName:@"two_plane_load"], {MTLPixelFormatRGBA16Float});
-        g.store = state(g.dev, full, [standIn newFunctionWithName:@"two_plane_store"],
-                        {MTLPixelFormatR8Unorm, MTLPixelFormatRG8Unorm});
+        g.load = state(g.dev, full, [standIn newFunctionWithName : @"two_plane_load"], {
+            MTLPixelFormatRGBA16Float
+        });
+        g.store = state(g.dev, full, [standIn newFunctionWithName : @"two_plane_store"], {
+            MTLPixelFormatR8Unorm, MTLPixelFormatRG8Unorm
+        });
         MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA16Float
                                                                                      width:W
                                                                                     height:H
