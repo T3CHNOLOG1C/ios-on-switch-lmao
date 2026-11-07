@@ -2,6 +2,7 @@
 // dead PAC checks, the marker, re-signing, the fallbacks, and the verifier catching what it must.
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <cstring>
 #include <string>
@@ -10,6 +11,7 @@
 extern "C" {
 #include "../macho/codesign.h"
 #include "../macho/pretranslate.h"
+#include "../macho/stub_split.h"
 }
 
 namespace {
@@ -283,6 +285,76 @@ TEST(Pretranslate, NoRoomLeavesTheSliceForTheLoader)
     EXPECT_EQ(x.r.status, A64X_PT_FALLBACK);
     EXPECT_NE(strstr(x.r.why, "no room"), nullptr) << x.r.why;
     EXPECT_EQ(x.out, x.in);
+}
+
+// No tail, only 3-word holes: a CASAL with x30 live needs its own stub, longer than any hole, so it is split.
+TEST(Pretranslate, AStubLongerThanEveryHoleIsSplitOverSeveral)
+{
+    Spec s;
+    s.code.assign((kSeg - kTextOff) / 4, kAdd);
+    s.code[0] = kCasal;
+    s.code[1] = kRet;
+    s.starts = {0, 2};
+    const uint32_t lr_check[] = {kAutibsp, 0xCA1E07D0, 0xB6F00050, 0xD4388E20, kRet};
+    for (uint32_t f = 2; f + 5 <= s.code.size(); f += 5)
+        memcpy(&s.code[f], lr_check, sizeof(lr_check));
+    s.code.back() = kRet;
+    Result x;
+    run(s, x);
+    ASSERT_EQ(x.r.status, A64X_PT_TRANSLATED) << x.r.why;
+    EXPECT_EQ(x.verified, 1) << x.err;
+    EXPECT_EQ(x.r.tail_words, 0u);
+    const uint64_t site = kTextOff;
+    ASSERT_EQ(text(x, 0) & 0xFC000000u, 0x14000000u) << "x30 live: B to its own stub";
+    uint64_t pc = target(text(x, 0), site), holes = 1;
+    for (int words = 0; words < 64; words++, pc += 4) {
+        const uint32_t w = get32(x.out.data() + pc);
+        if ((w & 0xFC000000u) != 0x14000000u)
+            continue;
+        if (target(w, pc) == site + 4)
+            break;
+        pc = target(w, pc) - 4;
+        holes++;
+    }
+    EXPECT_GT(holes, 1u) << "the stub spans several holes";
+}
+
+// Every branch of a split stub reaches the new place of the word it reached before; one out of the stub keeps its target.
+TEST(StubSplit, BranchesFollowTheWordsTheyTarget)
+{
+    const uint64_t laid = 0x10000, site = 0x8000;
+    uint32_t st[A64X_STUB_MAX];
+    const int n = a64x_stub_v(kCasal, site, laid, (1u << 16) | (1u << 17), 0, st, A64X_STUB_MAX);
+    ASSERT_GT(n, 5);
+    std::vector<uint64_t> addr(n), links;
+    for (int j = 0; j < n; j++) {
+        addr[j] = 0x40000 + 0x100 * static_cast<uint64_t>(j / 2) + 4 * static_cast<uint64_t>(j % 2);
+        if (j % 2 == 1 && j + 1 < n)
+            links.push_back(addr[j] + 4);
+    }
+    std::vector<a64x_placed> out(n + links.size());
+    const int np = a64x_stub_split(st, n, laid, addr.data(), links.data(), static_cast<int>(links.size()), out.data());
+    ASSERT_EQ(np, n + static_cast<int>(links.size()));
+    int checked = 0;
+    for (const a64x_placed &w : out) {
+        bool is;
+        const int64_t off = a64x_branch_offset(w.word, &is);
+        const auto j = std::find(addr.begin(), addr.end(), w.at);
+        if (j == addr.end()) {
+            EXPECT_TRUE(is && w.at + off == *(std::find(addr.begin(), addr.end(), w.at - 4) + 1)) << "a link";
+            continue;
+        }
+        bool was;
+        const int64_t old = a64x_branch_offset(st[j - addr.begin()], &was);
+        ASSERT_EQ(is, was);
+        if (!is)
+            continue;
+        const uint64_t before = laid + 4 * static_cast<uint64_t>(j - addr.begin()) + old;
+        const uint64_t after = before >= laid && before < laid + 4ull * n ? addr[(before - laid) / 4] : before;
+        EXPECT_EQ(w.at + off, after);
+        checked++;
+    }
+    EXPECT_GE(checked, 3) << "the loop, the failure branch and the return";
 }
 
 TEST(Pretranslate, UnsignedSlicesAreLeftAlone)

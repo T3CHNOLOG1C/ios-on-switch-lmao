@@ -2,7 +2,8 @@
  * One Mach-O slice translated offline, in place: same size, same layout, same load commands. One-word rewrites as
  * the loader does them; dead PAC failure checks become `b ok` and give their words to stubs; stubs also go into
  * the zero tail of the executable segment (between its last section and its end, already mapped executable and
- * covered by the signature). x30 dead at a site: `BL shared` to one stub per (word, registers) ending in RET.
+ * covered by the signature); a stub longer than every hole left is split over several (stub_split.h). x30 dead at a
+ * site: `BL shared` to one stub per (word, registers) ending in RET.
  * Liveness is per function (LC_FUNCTION_STARTS). The slice is marked (mach_header_64.reserved) so the kernel maps
  * it as is, and re-signed. A slice whose stubs do not all fit is left as it was: the kernel translates it at load.
  */

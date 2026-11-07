@@ -55,6 +55,7 @@ MACHO_SRCS = [
     "macho/pretranslate.c",
     "macho/pt_verify.c",
     "macho/sha256.c",
+    "macho/stub_split.c",
 ]
 
 MACHO_HDRS = [
@@ -64,6 +65,7 @@ MACHO_HDRS = [
     "macho/macho.h",
     "macho/pretranslate.h",
     "macho/sha256.h",
+    "macho/stub_split.h",
 ]
 
 filegroup(

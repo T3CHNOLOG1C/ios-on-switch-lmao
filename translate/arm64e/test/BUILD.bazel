@@ -40,6 +40,7 @@ host_library(
         "//translate/arm64e:macho/pretranslate.c",
         "//translate/arm64e:macho/pt_verify.c",
         "//translate/arm64e:macho/sha256.c",
+        "//translate/arm64e:macho/stub_split.c",
     ],
     hdrs = [
         "//translate/arm64e:macho/codesign.h",
@@ -48,6 +49,7 @@ host_library(
         "//translate/arm64e:macho/macho.h",
         "//translate/arm64e:macho/pretranslate.h",
         "//translate/arm64e:macho/sha256.h",
+        "//translate/arm64e:macho/stub_split.h",
     ],
     deps = [":a64x"],
 )
