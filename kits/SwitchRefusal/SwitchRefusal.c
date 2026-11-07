@@ -66,8 +66,9 @@ void switch_refusal_log(const char *domain, const char *reason_key, const char *
     proc_selfname(process, sizeof(process));
     const int pid = proc_selfpid();
     // os_log_create can block, and a refusal may be logged with preemption off, so the kernel logs to the default log.
-    os_log_error(OS_LOG_DEFAULT, "%{public}s: %{public}s[%d] %{public}s: %{public}s", domain, process, pid, reason_key,
-                 text);
+    // There os_log formats into the message buffer with the kernel's printf, which has no privacy specifiers ("%{public}s"
+    // prints "{public}s" and drops the argument): plain "%s", public in the kernel's log either way.
+    os_log_error(OS_LOG_DEFAULT, "%s: %s[%d] %s: %s", domain, process, pid, reason_key, text);
 }
 #else
 void switch_refusal_log(const char *domain, const char *reason_key, const char *text)
