@@ -27,5 +27,6 @@ kernel_headers()
 kernel_driver(
     name = "SwitchRefusal",
     srcs = ["SwitchRefusal.c"],
+    c_recipe = ":bsd_c",
     hdr_deps = [],
 )
