@@ -1,34 +1,44 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// The copy-engine bounce (TegraVICBounce.h): scratch memory kept across jobs and the copies into and out of it. Only the
-// engine thread calls these, one job at a time.
+// The copy-engine bounce (TegraVICBounce.h): scratch memory kept across jobs, and the copies into and out of it, queued
+// without waiting. The copy engine and VIC order each other on the hardware through host1x syncpoints: VIC's channel
+// waits for the fills, the copy back waits for VIC's fence. The engine thread queues and moves on; a copy back finishes
+// its job from the copy's completion. A copy back that never completes is a one-line panic from a deadline timer.
 #include <IOKit/IOLib.h>
 #include <IOKit/IOLocks.h>
 #include <kern/clock.h>
+#include <kern/thread_call.h>
 #include <sys/errno.h>
 #include "TegraVICBounce.h"
 #include "TegraVICBounceEngine.h"
-#include "../TegraGM20B/TegraGM20BCopy.h"
+#include "../TegraHost1x/TegraHost1x.h"
 
 namespace {
 constexpr uint32_t kLandedWithinMs = 2000;  // a whole 128 MiB window copies in well under 100 ms
 
-struct Landing {
-    IOLock *lock;
-    uint32_t pending;
-    int status;
-};
+IOLock *gLock;  // the copies in flight and the watchdog
+uint32_t gSyncpt, gNext;
+uint32_t gBackQueued, gBackLanded, gBackSeen;  // copies back queued and completed; completions the watchdog last saw
+thread_call_t gWatchdog;
 
-IOLock *gLock;
-
-void landed(void *arg, int status)
+void watchLocked()
 {
-    auto *landing = static_cast<Landing *>(arg);
-    IOLockLock(landing->lock);
-    if (status && !landing->status)
-        landing->status = status;
-    if (--landing->pending == 0)
-        IOLockWakeup(landing->lock, landing, false);
-    IOLockUnlock(landing->lock);
+    uint64_t deadline = 0;
+    clock_interval_to_deadline(kLandedWithinMs, kMillisecondScale, &deadline);
+    gBackSeen = gBackLanded;
+    thread_call_enter_delayed(gWatchdog, deadline);
+}
+
+void watchdog(thread_call_param_t, thread_call_param_t)
+{
+    IOLockLock(gLock);
+    const uint32_t pending = gBackQueued - gBackLanded;
+    if (pending && gBackLanded == gBackSeen)
+        panic("TegraVIC: copy-engine bounce lost its completion: %u copies back outstanding after %u ms (syncpoint "
+              "%u at %u)",
+              pending, kLandedWithinMs, gSyncpt, tegra_host1x_syncpt_read(gSyncpt));
+    if (pending)
+        watchLocked();
+    IOLockUnlock(gLock);
 }
 
 IOReturn ioreturnOf(int err)
@@ -40,12 +50,45 @@ IOReturn ioreturnOf(int err)
 }
 }  // namespace
 
+IOReturn tegra_vic_bounce_start(void)
+{
+    if (gLock)
+        return kIOReturnSuccess;
+    IOLock *lock = IOLockAlloc();
+    thread_call_t watch = thread_call_allocate(watchdog, nullptr);
+    if (!lock || !watch || tegra_host1x_syncpt_alloc(&gSyncpt)) {
+        if (lock)
+            IOLockFree(lock);
+        if (watch)
+            thread_call_free(watch);
+        return kIOReturnNoResources;
+    }
+    gNext = tegra_host1x_syncpt_read(gSyncpt);
+    gWatchdog = watch;
+    gLock = lock;
+    return kIOReturnSuccess;
+}
+
+uint32_t tegra_vic_bounce_syncpt(void)
+{
+    return gSyncpt;
+}
+
+uint32_t *tegra_vic_bounce_next(void)
+{
+    return &gNext;
+}
+
 IOReturn tegra_vic_bounce_stage(TegraVICBounce *b, const TegraVICSurfaceDesc *d, uint32_t align)
 {
-    if (!gLock && !(gLock = IOLockAlloc()))
-        return kIOReturnNoMemory;
     tegra_vic_bounce_desc(d, align, &b->desc);
     if (b->scratch.size < b->desc.length) {
+        // The scratch a copy back still reads is freed only once it has landed (a new size is rare: no steady-state
+        // job waits here).
+        IOLockLock(gLock);
+        while (b->inFlight)
+            IOLockSleep(gLock, &b->inFlight, THREAD_UNINT);
+        IOLockUnlock(gLock);
         switch_dma_pages_free(&b->scratch);
         if (!switch_dma_pages_alloc(&b->scratch, (size_t)b->desc.length))
             return kIOReturnNoMemory;
@@ -54,34 +97,39 @@ IOReturn tegra_vic_bounce_stage(TegraVICBounce *b, const TegraVICSurfaceDesc *d,
     return kIOReturnSuccess;
 }
 
-IOReturn tegra_vic_bounce_copy(IOMemoryDescriptor *from, const TegraVICSurfaceDesc *fd, IOMemoryDescriptor *to,
-                               const TegraVICSurfaceDesc *td)
+IOReturn tegra_vic_bounce_queue(IOMemoryDescriptor *from, const TegraVICSurfaceDesc *fd, IOMemoryDescriptor *to,
+                                const TegraVICSurfaceDesc *td, const tegra_gm20b_ce_wait *wait, bool signal,
+                                void (*landed)(void *, int), void *arg)
 {
     const TegraVICFormat *f = tegra_vic_format(fd->fourcc);
-    Landing landing = {gLock, 0, 0};
-    const tegra_gm20b_ce_done done = {TEGRA_GM20B_CE_NO_SYNCPT, landed, &landing};
-    int err = 0;
-    for (uint32_t p = 0; p < f->planes && !err; p++) {
+    const tegra_gm20b_ce_done done = {signal ? gSyncpt : TEGRA_GM20B_CE_NO_SYNCPT, landed, arg};
+    for (uint32_t p = 0; p < f->planes; p++) {
         const tegra_gm20b_ce_plane src = {from, fd->planeOffset[p], (uint32_t)fd->planeBytesPerRow[p]};
         const tegra_gm20b_ce_plane dst = {to, td->planeOffset[p], (uint32_t)td->planeBytesPerRow[p]};
-        IOLockLock(gLock);
-        landing.pending++;
-        IOLockUnlock(gLock);
-        err = tegra_gm20b_ce_copy_plane(&src, &dst, tegra_vic_bounce_row_bytes(f, fd->width, p),
-                                        (uint32_t)fd->planeHeight[p], nullptr, &done);
-        if (err) {
-            IOLockLock(gLock);
-            landing.pending--;
-            IOLockUnlock(gLock);
-        }
+        const bool last = p + 1 == f->planes;
+        const int err = tegra_gm20b_ce_copy_plane(&src, &dst, tegra_vic_bounce_row_bytes(f, fd->width, p),
+                                                  (uint32_t)fd->planeHeight[p], p ? nullptr : wait,
+                                                  last && (signal || landed) ? &done : nullptr);
+        if (err)
+            return ioreturnOf(err);
     }
-    uint64_t deadline = 0;
-    clock_interval_to_deadline(kLandedWithinMs, kMillisecondScale, &deadline);
+    return kIOReturnSuccess;
+}
+
+void tegra_vic_bounce_back_queued(TegraVICBounce *b)
+{
     IOLockLock(gLock);
-    while (landing.pending)
-        if (IOLockSleepDeadline(gLock, &landing, deadline, THREAD_UNINT) == THREAD_TIMED_OUT && landing.pending)
-            panic("TegraVIC: copy-engine bounce lost its completion: %u plane copies outstanding after %u ms",
-                  landing.pending, kLandedWithinMs);
+    b->inFlight++;
+    if (gBackQueued++ == gBackLanded)
+        watchLocked();
     IOLockUnlock(gLock);
-    return err ? ioreturnOf(err) : ioreturnOf(landing.status);
+}
+
+void tegra_vic_bounce_back_landed(TegraVICBounce *b)
+{
+    IOLockLock(gLock);
+    gBackLanded++;
+    if (--b->inFlight == 0)
+        IOLockWakeup(gLock, &b->inFlight, false);
+    IOLockUnlock(gLock);
 }

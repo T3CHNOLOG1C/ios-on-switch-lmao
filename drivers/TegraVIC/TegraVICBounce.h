@@ -53,4 +53,31 @@ static inline void tegra_vic_bounce_desc(const TegraVICSurfaceDesc *d, uint32_t 
     out->length = at;
 }
 
+// The copy engine raises its syncpoint this much after each copy that signals (nvgpu's release: two increments).
+#define TEGRA_VIC_BOUNCE_INCREMENTS 2u
+
+// Where a job's copies and VIC meet, on the engines: the fills (a source into its scratch, then a destination's own
+// pixels into its scratch) run in order on the copy engine and only the last signals; VIC's channel waits for that
+// value; a destination's copy back waits for VIC's fence and signals the value the job is finished at. `next` is the
+// copy engine's syncpoint value after everything queued so far, advanced past this job's signals.
+typedef struct {
+    uint32_t fills;
+    int vicWaits, copiesBack;
+    uint32_t vicAcquire;  // the copy-engine value VIC's channel waits for
+    uint32_t done;        // the copy-engine value the job is finished at, after its copy back
+} TegraVICBounceOrder;
+
+static inline TegraVICBounceOrder tegra_vic_bounce_order(int bounceSrc, int bounceDst, uint32_t *next)
+{
+    TegraVICBounceOrder o = {0, 0, 0, 0, 0};
+    o.fills = (bounceSrc ? 1u : 0u) + (bounceDst ? 1u : 0u);
+    o.vicWaits = o.fills != 0;
+    o.copiesBack = bounceDst != 0;
+    if (o.vicWaits)
+        o.vicAcquire = *next += TEGRA_VIC_BOUNCE_INCREMENTS;
+    if (o.copiesBack)
+        o.done = *next += TEGRA_VIC_BOUNCE_INCREMENTS;
+    return o;
+}
+
 #endif
