@@ -1158,17 +1158,19 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     {
         uint64_t period = vsyncInterval;
         if (!period)
-            nanoseconds_to_absolutetime(16666667ull, &period);
+            nanoseconds_to_absolutetime(16666667ULL, &period);
         return period;
     }
 
     // Debug kernels: a present inside a touch interaction window (SwitchInteraction.h), after closing an ended one.
     void noteInteraction(uint64_t stamp, uint64_t intervalUs, uint32_t periods, unsigned cause)
     {
-        uint64_t began = 0, lastDown = 0;
+        uint64_t began = 0;
+        uint64_t lastDown = 0;
         switch_frames_touch_activity(&began, &lastDown);
-        const uint64_t now = Span::ticksToUs(stamp), beganUs = Span::ticksToUs(began),
-                       lastDownUs = Span::ticksToUs(lastDown);
+        const uint64_t now = Span::ticksToUs(stamp);
+        const uint64_t beganUs = Span::ticksToUs(began);
+        const uint64_t lastDownUs = Span::ticksToUs(lastDown);
         SwitchInteraction &window = hists->interaction;
         const bool active = SwitchInteraction::active(now, beganUs, lastDownUs);
         if (window.isOpen() && !active)
@@ -1182,7 +1184,8 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     {
         if (!frameHists || !hists->interaction.isOpen())
             return;
-        uint64_t began = 0, lastDown = 0;
+        uint64_t began = 0;
+        uint64_t lastDown = 0;
         switch_frames_touch_activity(&began, &lastDown);
         const uint64_t lastDownUs = Span::ticksToUs(lastDown);
         if (!SwitchInteraction::active(Span::ticksToUs(mach_absolute_time()), Span::ticksToUs(began), lastDownUs))
@@ -1211,7 +1214,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
         if (mark.tl.vsyncUs == kNotSeen || mark.tl.vsyncUs > 0)
             return 0;
         uint64_t back = 0;
-        nanoseconds_to_absolutetime((uint64_t)-(int64_t)mark.tl.vsyncUs * 1000, &back);
+        nanoseconds_to_absolutetime(static_cast<uint64_t>(-static_cast<int64_t>(mark.tl.vsyncUs)) * 1000, &back);
         return back < mark.submit ? mark.submit - back : 0;
     }
 
