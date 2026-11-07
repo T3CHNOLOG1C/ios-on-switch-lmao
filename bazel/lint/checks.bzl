@@ -179,6 +179,7 @@ _RUN = """\
 report="$1"; shift
 export DPRINT_CACHE_DIR="$(mktemp -d)" RUMDL_CACHE_DIR="$(mktemp -d)" NO_COLOR=1
 log="$(mktemp)"
+trap 'rm -rf "$DPRINT_CACHE_DIR" "$RUMDL_CACHE_DIR" "$log"' EXIT
 if "$@" > "$log" 2>&1; then
     : > "$report"
 else
@@ -187,7 +188,6 @@ else
     [ -s "$report" ] || echo "(no output)" > "$report"
     echo "exit $rc: $*" >> "$report"
 fi
-rm -f "$log"
 """
 
 _TEST = """\
