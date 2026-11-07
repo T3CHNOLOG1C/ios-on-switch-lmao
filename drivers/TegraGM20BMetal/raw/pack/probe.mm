@@ -18,6 +18,7 @@
 #import <Foundation/Foundation.h>
 #import <IOSurface/IOSurface.h>
 #import <Metal/Metal.h>
+#include <map>
 #include <set>
 #include <stdio.h>
 #include <string>
@@ -213,6 +214,14 @@ static id<MTLLibrary> frameworkLibrary(id<MTLDevice> dev, const std::string &pat
 
 constexpr MTLPixelFormat kRGB8_444_2P = MTLPixelFormat(542);
 
+// RGB10A8_2P_XR10, BGRA10_XR, BGR10_XR and their _sRGB twins (550 to 555). m2v holds such an attachment as its raw codes and
+// the function's draw writes them; a loaded attachment adds m2v's own passes (its unused bits made Metal's), so the state's
+// draw would not be the pass's only one. The raw path loads and stores such an attachment in place.
+static bool extendedRange(MTLPixelFormat f)
+{
+    return f >= MTLPixelFormat(550) && f <= MTLPixelFormat(555);
+}
+
 // RGB8_444_2P over plane 0 of a two-plane 4:4:4 surface (RenderBox's widget snapshots): the only texture of the format Metal makes
 static id<MTLTexture> planarTarget(id<MTLDevice> dev, unsigned w, unsigned h)
 {
@@ -284,37 +293,54 @@ int main(int argc, char **argv)
                                                        withTemplate:@""];
             lines.push_back(plain.UTF8String);
         }
-        // PROBE_YCBCR_LIB=<metallib>: the raw path's own states after Core Animation's, drawn and read alike: the conversions of
-        // YCbCr textures (pack/ycbcr.metal), lines marked "@Y " (their functions are that library's); mkpack.py keys
-        // them by name ("raw.ycbcr.<fragment function>"), which the runtime asks for
-        id<MTLLibrary> ycbcr = nil;
-        if (const char *path = getenv("PROBE_YCBCR_LIB")) {
-            ycbcr = [dev newLibraryWithURL:[NSURL fileURLWithPath:@(path)] error:&error];
-            if (!ycbcr) {
-                fprintf(stderr, "ycbcr library: %s\n", error.localizedDescription.UTF8String);
+        // PROBE_OWN_LIB=<metallib>: the raw path's own states after Core Animation's, drawn and read alike: the conversions of
+        // YCbCr textures (pack/ycbcr.metal) and the extended-range stand-ins (pack/xr.metal), lines marked "@O " (their
+        // functions are that library's); mkpack.py keys them by name ("raw.<ycbcr|xr>.<fragment function>"), which the
+        // runtime asks for
+        id<MTLLibrary> own = nil;
+        if (const char *path = getenv("PROBE_OWN_LIB")) {
+            own = [dev newLibraryWithURL:[NSURL fileURLWithPath:@(path)] error:&error];
+            if (!own) {
+                fprintf(stderr, "own library: %s\n", error.localizedDescription.UTF8String);
                 return 1;
             }
-            for (const char *out :
-                 {"115 | v ycbcr_vert | f ycbcr_converted_frag", "125 | v ycbcr_vert | f ycbcr_srgb_frag",
-                  "70 | v ycbcr_vert | f ycbcr_codes_frag", "90 | v ycbcr_vert | f ycbcr_codes10_frag"}) {
+            for (const char *out : {"115 | v ycbcr_vert | f ycbcr_converted_frag",
+                                    "125 | v ycbcr_vert | f ycbcr_srgb_frag", "70 | v ycbcr_vert | f ycbcr_codes_frag",
+                                    "90 | v ycbcr_vert | f ycbcr_codes10_frag", "115 | v xr_vert | f xr_bgr10_frag",
+                                    "115 | v xr_vert | f xr_bgra10_frag", "115 | v xr_vert | f xr_planes_frag"}) {
                 std::string o = out;
                 const size_t bar = o.find(' ');
-                lines.push_back("@Y R ok=1 label=raw.ycbcr samples=1 topo=0 ds=0/0 c0=" + o.substr(0, bar) +
+                lines.push_back("@O R ok=1 label=raw.own samples=1 topo=0 ds=0/0 c0=" + o.substr(0, bar) +
                                 ":15:0:1:0:0:1:0:0" + o.substr(bar));
             }
         }
         id<MTLCommandQueue> queue = [dev newCommandQueue];
-        // tagged textures and samplers
-        std::vector<id<MTLTexture>> textures;
-        for (unsigned t = 0; t < 16; t++) {
-            MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
-                                                                                          width:16 + t
-                                                                                         height:8 + t
-                                                                                      mipmapped:NO];
-            td.usage = MTLTextureUsageShaderRead;
-            td.storageMode = MTLStorageModePrivate;
-            textures.push_back([dev newTextureWithDescriptor:td]);
-        }
+        // tagged textures and samplers: BGRA8, and for the stand-ins' conversions the integer formats they read codes as
+        // (pack/xr.metal), tagged alike by their sizes
+        auto tagged = [&](MTLPixelFormat f) {
+            std::vector<id<MTLTexture>> out;
+            for (unsigned t = 0; t < 16; t++) {
+                MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:f
+                                                                                              width:16 + t
+                                                                                             height:8 + t
+                                                                                          mipmapped:NO];
+                td.usage = MTLTextureUsageShaderRead;
+                td.storageMode = MTLStorageModePrivate;
+                out.push_back([dev newTextureWithDescriptor:td]);
+            }
+            return out;
+        };
+        const std::vector<id<MTLTexture>> textures = tagged(MTLPixelFormatBGRA8Unorm);
+        const std::map<std::string, std::vector<id<MTLTexture>>> codeTextures = {
+            {"f xr_bgr10_frag", tagged(MTLPixelFormatR32Uint)},
+            {"f xr_bgra10_frag", tagged(MTLPixelFormatRGBA16Uint)},
+            {"f xr_planes_frag", tagged(MTLPixelFormatRG32Uint)}};
+        auto texturesOf = [&](const std::string &line) -> const std::vector<id<MTLTexture>> & {
+            for (const auto &[fragment, set] : codeTextures)
+                if (line.find("| " + fragment) != std::string::npos)
+                    return set;
+            return textures;
+        };
         std::vector<id<MTLSamplerState>> samplers;
         // a sampler made first takes NVK's sampler index 0, so a handle naming index 0 means "no sampler" below
         static id<MTLSamplerState> dummySampler;  // kept: a released sampler gives its index back
@@ -577,10 +603,10 @@ int main(int argc, char **argv)
         }
         for (const std::string &marked : lines) {
             State s;
-            const bool own = marked.rfind("@Y ", 0) == 0, framework = marked.rfind("@L ", 0) == 0;
+            const bool ours = marked.rfind("@O ", 0) == 0, framework = marked.rfind("@L ", 0) == 0;
             const size_t pathEnd = framework ? marked.find(' ', 3) : 0;
-            const std::string line = own ? marked.substr(3) : framework ? marked.substr(pathEnd + 1) : marked;
-            id<MTLLibrary> library = own ? ycbcr : qc;
+            const std::string line = ours ? marked.substr(3) : framework ? marked.substr(pathEnd + 1) : marked;
+            id<MTLLibrary> library = ours ? own : qc;
             if (framework && !(library = frameworkLibrary(dev, marked.substr(3, pathEnd - 3)))) {
                 fprintf(stderr, "LIBRARY %s\n", marked.substr(3, pathEnd - 3).c_str());
                 refused++;
@@ -624,9 +650,9 @@ int main(int argc, char **argv)
                 // a 542 snapshot renders into the frontend's RGBA16Float stand-in, which a load or store would draw from or
                 // into: neither, so the state's draw is the pass's one
                 const bool planes = ca.pixelFormat == kRGB8_444_2P;
-                pass.colorAttachments[c].loadAction = memoryless || planes ? MTLLoadActionDontCare : MTLLoadActionLoad;
-                pass.colorAttachments[c].storeAction =
-                    memoryless || planes ? MTLStoreActionDontCare : MTLStoreActionStore;
+                const bool loose = memoryless || planes || extendedRange(ca.pixelFormat);
+                pass.colorAttachments[c].loadAction = loose ? MTLLoadActionDontCare : MTLLoadActionLoad;
+                pass.colorAttachments[c].storeAction = loose ? MTLStoreActionDontCare : MTLStoreActionStore;
             }
             // a state with depth or stencil formats draws into a memoryless attachment of them (Metal's default Clear load and
             // DontCare store, its default depth/stencil state), so its registers are those NVK writes beside one
@@ -653,7 +679,7 @@ int main(int argc, char **argv)
                         [enc setFragmentBytes:tag.data() length:bytes atIndex:slot];
                 }
             for (unsigned t = 0; t < 16; t++)
-                [enc setFragmentTexture:textures[t] atIndex:t];
+                [enc setFragmentTexture:texturesOf(line)[t] atIndex:t];
             for (unsigned t = 0; t < 16; t++)
                 [enc setFragmentSamplerState:samplers[t] atIndex:t];
             [enc drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];

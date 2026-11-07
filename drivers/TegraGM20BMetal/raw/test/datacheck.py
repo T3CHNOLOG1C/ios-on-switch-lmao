@@ -21,8 +21,8 @@ SHADER_DATA, SET = '2', '3'
 
 
 def key_hash(key: str) -> int:
-    own = re.search(r'\| f (ycbcr_\w+)', key)
-    return packfile.fnv(('raw.ycbcr.' + own.group(1)).encode() if own else key.encode())
+    own = re.search(r'\| f ((ycbcr|xr)_\w+)', key)
+    return packfile.fnv(f'raw.{own.group(2)}.{own.group(1)}'.encode() if own else key.encode())
 
 
 def bindings(lines: list[str]) -> dict[str, list[tuple]]:

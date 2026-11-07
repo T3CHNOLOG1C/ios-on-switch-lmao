@@ -38,6 +38,7 @@
 #include "raw_overlap.h"
 #include "raw_region.h"
 #include "raw_zeta.h"
+#include "raw_xr.h"
 #include "raw_ycbcr.h"
 #include "../fx/fx_mip.h"
 
@@ -157,6 +158,13 @@ struct Texture {
     // through `sampled`, a pool image of its texels the copy engine refreshes from it (CommandBuffer::refresh) before work that
     // samples it, as m2v samples such a surface through a shadow image it copies in. tic is sampled's.
     Texture *sampled = nullptr;
+
+    // An extended-range texture's (raw_xr.h): the image a draw samples, its codes' values as RGBA16Float, which a pass of the
+    // pack's conversion state draws from the codes (tic) before the work that samples it. Null: not sampled.
+    Texture *standIn = nullptr;
+    // Metal keeps it losslessly compressed (m2v nan_clear.rs keeps_nan_sign): an extended-range Clear in a pass that records
+    // no draw call stores Metal's straight route's codes
+    bool compressed = false;
 
     // A mipmapped texture's levels (r12, raw/fx): level 0 is this texture (pitch, pool memory: rendered, copied and cleared as any
     // other), and `chain` the block-linear image of every level that its texture header (tic) points at, which the 2D engine
@@ -586,6 +594,10 @@ public:
                             const YcbcrPlan &plan, uint32_t width, uint32_t height, Texture &t);
     // The pack's conversion state of a YCbCr texture's output (Texture::ycbcr), null if the pack has none
     Pipeline *ycbcrPipeline(uint8_t output);
+    // An extended-range texture's stand-in (Texture::standIn), made if the pack has its conversion state
+    bool createStandIn(Texture &t);
+    // The pack's conversion state of an extended-range texture's stand-in, null if the pack has none
+    Pipeline *xrPipeline(XrForm form);
     // s's header under address map `map` (Texture::addressMap), made now if it is not yet
     bool samplerVariant(Sampler &s, uint8_t map);
     // A two-plane 4:4:4 surface's texture of RGB8_444_2P (542): its planes at `luma`/`chroma` (offsets in the allocation,

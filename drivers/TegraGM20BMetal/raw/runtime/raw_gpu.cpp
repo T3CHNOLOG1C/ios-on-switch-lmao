@@ -143,6 +143,10 @@ const FormatInfo kFormats[] = {
     {110, 0, 0x58d24903, 8, false},      // RGBA16Unorm
     {115, 0xca, 0x58d7ff83, 8, false},   // RGBA16Float (rendered: a 4:2:0 texture's converted image)
     {125, 0xc0, 0x58d7ff81, 16, false},  // RGBA32Float (rendered: an sRGB 4:2:0 texture's image)
+    // the extended-range formats' codes (raw_xr.h), as m2v's NVK renders and fetches them: RG32_UINT, RGBA16_UINT, R32_UINT
+    {550, 0xcd, 0x60d49204, 8, false},  // RGB10A8_2P_XR10
+    {552, 0xc9, 0x58d49203, 8, false},  // BGRA10_XR
+    {554, 0xe4, 0x6014920f, 4, false},  // BGR10_XR
 };
 
 // bits [lo, hi] of the 256-bit header
@@ -1126,7 +1130,8 @@ bool Device::createView(const Texture &of, uint32_t format, Texture &t)
     if (of.chain)
         return false;  // a view of a mipmapped texture: m2v's
     const FormatInfo *f = formatInfo(format);
-    if (!f || f->bpp != of.bpp || of.memoryless || of.sampled)
+    if (!f || f->bpp != of.bpp || of.memoryless || of.sampled || xrForm(format) != XrForm::None ||
+        xrForm(of.format) != XrForm::None)
         return false;
     std::lock_guard<std::mutex> l(lock_);
     t = of;
@@ -1345,6 +1350,11 @@ void Device::destroyTexture(Texture &t)
             delete plane;
         }
     t.luma = t.chroma = nullptr;
+    if (t.standIn) {
+        destroyTexture(*t.standIn);
+        delete t.standIn;
+        t.standIn = nullptr;
+    }
     if (t.sampled) {  // its header is the pool image's
         destroyTexture(*t.sampled);
         delete t.sampled;
@@ -1699,6 +1709,25 @@ Pipeline *Device::ycbcrPipeline(uint8_t output)
     if (!output || output > 4)
         return nullptr;
     return pipeline(Pack::fnv(names[output], strlen(names[output])));
+}
+
+Pipeline *Device::xrPipeline(XrForm form)
+{
+    const char *name = xrConversion(form);
+    return name ? pipeline(Pack::fnv(name, strlen(name))) : nullptr;
+}
+
+bool Device::createStandIn(Texture &t)
+{
+    if (t.standIn || !xrPipeline(xrForm(t.format)))
+        return t.standIn != nullptr;
+    Texture *s = new Texture;
+    if (!createTexture(t.width, t.height, kXrStandInFormat, *s, false, true)) {
+        delete s;
+        return false;
+    }
+    t.standIn = s;
+    return true;
 }
 
 bool Device::createYcbcrTexture(uint64_t surfaceId, void *base, uint64_t allocBytes, const void *surface,
@@ -2541,7 +2570,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
                 cb_->refusal = {RefNoTic, e.slot, t->format, t->width};
                 return false;
             }
-            tic = t ? t->tic : 0;
+            tic = t ? (t->standIn ? t->standIn->tic : t->tic) : 0;
         } else if (e.kind == EntryFetch) {
             const Texture *t = pass_.color[e.slot].texture;
             if (t && !t->tic) {
@@ -2807,8 +2836,14 @@ void RenderEncoder::countRules(const Pipeline &pl)
 // `color`): what NVK's clear writes, as Metal's conversion stores it. Normalized channels through float, clamped, k / 255 of the
 // nearest integer k (ties to even); half channels the value of the half nearest (ties to even); float channels themselves (a
 // NaN quieted); the channels a format has none of 0.
-static void clearValue(uint32_t format, const float in[4], uint32_t out[4])
+// The clear registers' words: a float format's value, an integer target's components (an extended-range format's codes,
+// raw_xr.h; `straight`: Metal's straight route)
+static void clearValue(uint32_t format, const float in[4], uint32_t out[4], bool straight)
 {
+    if (const XrForm xr = xrForm(format); xr != XrForm::None) {
+        xrClearTexel(xr, in, straight, out);
+        return;
+    }
     auto unorm8 = [](float x) {
         const double v = std::isnan(x) ? 0.0 : std::clamp(double(x), 0.0, 1.0);
         return fbits(float(std::nearbyint(v * 255.0) / 255.0));
@@ -3064,7 +3099,8 @@ void RenderEncoder::end()
         p.inc(SURFACE_CLIP_H, {c.x1 << 16, c.y1 << 16});
         p.m(ZT_SELECT, 0);
         uint32_t v[4];
-        clearValue(pass_.color[c.target].texture->format, c.value, v);
+        clearValue(pass_.color[c.target].texture->format, c.value, v,
+                   !called_ && pass_.color[c.target].texture->compressed);
         p.inc(COLOR_CLEAR_VALUE, {v[0], v[1], v[2], v[3]});
         p.inc(CLEAR_RECT_H, {c.x1 << 16 | c.x0, c.y1 << 16 | c.y0});
         p.m(CLEAR_SURFACE_CONTROL, 0x10);  // USE_CLEAR_RECT
@@ -3101,7 +3137,8 @@ void RenderEncoder::end()
         if (c.own)
             continue;
         uint32_t v[4];
-        clearValue(pass_.color[c.target].texture->format, c.value, v);
+        clearValue(pass_.color[c.target].texture->format, c.value, v,
+                   !called_ && pass_.color[c.target].texture->compressed);
         const bool area = !c.x0 && !c.y0 && c.x1 == areaW_ && c.y1 == areaH_;
         p.inc(COLOR_CLEAR_VALUE, {v[0], v[1], v[2], v[3]});
         p.inc(CLEAR_RECT_H, {c.x1 << 16 | c.x0, c.y1 << 16 | c.y0});

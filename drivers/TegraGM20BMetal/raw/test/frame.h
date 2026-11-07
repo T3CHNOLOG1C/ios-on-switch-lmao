@@ -67,12 +67,19 @@ inline bool depthStencil()
     return getenv("FRAME_DS") != nullptr;
 }
 
+// FRAME_XR: the blur passes draw Core Animation's extended-range blur states (RGB10A8_2P_XR10, format 550, both attachments) into
+// targets of that format, each sampling the one before; every fourth main draw samples the last of them
+inline bool extendedRange()
+{
+    return getenv("FRAME_XR") != nullptr;
+}
+
 struct State {
     std::string line, key;
     bool uber, blur, extra = false;
 };
 
-// The corpus states the frame uses: BGRA8 (format 80) two-attachment states only (the pack has no extended-range state).
+// The corpus states the frame uses: BGRA8 (format 80) two-attachment states (FRAME_XR: the blurs' 550 ones).
 inline std::vector<State> states(const char *corpusPath)
 {
     std::vector<State> out;
@@ -93,9 +100,11 @@ inline std::vector<State> states(const char *corpusPath)
             l.erase(at, l.find(' ', at + 1) - at);  // not in the key
         // FRAME_A3: the three-attachment states instead (a third R32Float attachment, c2=55: Core Animation's "A3" states,
         // r7n's harvest), drawn in a main pass with that third attachment
-        if (l.find(" c0=80:") == std::string::npos || l.find(" c1=80:") == std::string::npos ||
-            (a3() ? l.find(" c2=55:") == std::string::npos || l.find(" c3=") != std::string::npos
-                  : l.find(" c2=") != std::string::npos))
+        const bool xrBlur = extendedRange() && l.find("v downsample_blur_vert_lph") != std::string::npos;
+        const char *c0 = xrBlur ? " c0=550:" : " c0=80:", *c1 = xrBlur ? " c1=550:" : " c1=80:";
+        if (l.find(c0) == std::string::npos || l.find(c1) == std::string::npos ||
+            (a3() && !xrBlur ? l.find(" c2=55:") == std::string::npos || l.find(" c3=") != std::string::npos
+                             : l.find(" c2=") != std::string::npos))
             continue;
         State s{l, key(l), l.find("v fixed_vert_lph_spc") != std::string::npos,
                 l.find("v downsample_blur_vert_lph") != std::string::npos};
@@ -161,7 +170,8 @@ enum Tex : int {
 struct TexDesc {
     int w, h;
     bool iosurface, memoryless, renderTarget;
-    uint32_t format = 80;  // MTLPixelFormat: BGRA8Unorm, or R32Float (55) for the A3 states' third attachment
+    uint32_t format =
+        80;  // MTLPixelFormat: BGRA8Unorm, R32Float (55) for the A3 states' third attachment, 550 FRAME_XR's blurs
 };
 
 // FRAME_PITCH: the surfaces' rows as clients' and the render server's can lie since r12a (its needed alignment back at 16): the
@@ -183,9 +193,9 @@ inline TexDesc texture(int t)
         return {1280, 720, false, true, true};
     case BLUR0:
     case BLUR1:
-        return {320, 180, false, false, true};
+        return {320, 180, false, false, true, extendedRange() ? 550u : 80u};
     case BLUR_MEMORYLESS:
-        return {320, 180, false, true, true};
+        return {320, 180, false, true, true, extendedRange() ? 550u : 80u};
     case IMAGE0:
         return {1280, 720, true, false, false};
     case A3TARGET:
@@ -362,7 +372,7 @@ inline std::vector<Pass> passes(unsigned frameIndex, const Shape &s, size_t blur
                 d.baseInstance = 3;
         }
         d.textures[3] = IMAGE1 + int(i % 3);
-        d.textures[4] = IMAGE2;
+        d.textures[4] = extendedRange() && i % 4 == 0 && s.blurPasses ? (s.blurPasses & 1 ? BLUR0 : BLUR1) : IMAGE2;
         d.textures[9] = IMAGE3;
         d.samplers[1] = 1;
         if (rasterState()) {

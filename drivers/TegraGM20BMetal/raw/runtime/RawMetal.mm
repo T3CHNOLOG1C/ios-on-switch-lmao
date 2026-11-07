@@ -284,6 +284,16 @@ static const char *metalTypes(SEL selector)
     return types;
 }
 
+// A format the raw path has a header for. RGB10A8_2P_XR10 only private or memoryless: its texels are m2v's own layout, not the two
+// planes of Metal's bytes a surface, a buffer or the CPU holds (raw_xr.h)
+static bool keptFormat(MTLTextureDescriptor *d)
+{
+    if (raw::xrForm(uint32_t(d.pixelFormat)) == raw::XrForm::Planes && d.storageMode != MTLStorageModePrivate &&
+        d.storageMode != MTLStorageModeMemoryless)
+        return false;
+    return raw::formatInfo(uint32_t(d.pixelFormat)) != nullptr;
+}
+
 // A texture the raw path keeps: 2D, one level, one sample, a format it has a header for, not rotated (the descriptor's rotation SPI:
 // Core Animation's window-server surfaces on a rotated display, CA::OGL::MetalContext::get_surface; m2v renders those rotated)
 static bool rawShape(MTLTextureDescriptor *d)
@@ -292,7 +302,7 @@ static bool rawShape(MTLTextureDescriptor *d)
     const NSUInteger turned =
         [d respondsToSelector:rotation] ? ((NSUInteger (*)(id, SEL))objc_msgSend)(d, rotation) : 0;
     return d.textureType == MTLTextureType2D && d.mipmapLevelCount <= 1 && d.sampleCount <= 1 && d.arrayLength <= 1 &&
-           d.depth <= 1 && !turned && raw::formatInfo(uint32_t(d.pixelFormat));
+           d.depth <= 1 && !turned && keptFormat(d);
 }
 
 // A mipmapped texture the raw path keeps as a pool texture and a block-linear chain of its levels (raw::Device::createMipTexture,
@@ -334,13 +344,13 @@ static uint32_t rawShapeTerm(MTLTextureDescriptor *d)
     static const SEL rotation = NSSelectorFromString(@"rotation");
     const NSUInteger turned =
         [d respondsToSelector:rotation] ? ((NSUInteger (*)(id, SEL))objc_msgSend)(d, rotation) : 0;
-    return d.textureType != MTLTextureType2D           ? 1
-           : d.mipmapLevelCount > 1                    ? 2
-           : d.sampleCount > 1                         ? 3
-           : (d.arrayLength > 1 || d.depth > 1)        ? 4
-           : turned                                    ? 5
-           : !raw::formatInfo(uint32_t(d.pixelFormat)) ? 6
-                                                       : 0;
+    return d.textureType != MTLTextureType2D    ? 1
+           : d.mipmapLevelCount > 1             ? 2
+           : d.sampleCount > 1                  ? 3
+           : (d.arrayLength > 1 || d.depth > 1) ? 4
+           : turned                             ? 5
+           : !keptFormat(d)                     ? 6
+                                                : 0;
 }
 
 static NSString *describe(MTLTextureDescriptor *d)
@@ -497,6 +507,23 @@ struct RawState {
 };
 
 static RawState *gRM;
+
+// A kept extended-range texture's facts (raw_xr.h). Metal keeps it compressed with allowGPUOptimizedContents, 16 texels or more a
+// side and no ShaderWrite, PixelFormatView or ShaderAtomic usage, never over a buffer (m2v heap_tiled.rs metal_compresses); one
+// draws may sample gets its stand-in.
+static void keepExtendedRange(MTLTextureDescriptor *d, raw::Texture &t, bool overBuffer)
+{
+    if (raw::xrForm(t.format) == raw::XrForm::None)
+        return;
+    const MTLTextureUsage plain =
+        MTLTextureUsageShaderWrite | MTLTextureUsagePixelFormatView | MTLTextureUsageShaderAtomic;
+    const bool every = d.usage == MTLTextureUsageUnknown;
+    t.compressed =
+        !overBuffer && d.allowGPUOptimizedContents && std::min(d.width, d.height) >= 16 && !every && !(d.usage & plain);
+    if (every || (d.usage & MTLTextureUsageShaderRead))
+        gRM->raw->createStandIn(t);
+}
+
 static uint64_t signalled(NSMapTable *map, void *event);  // the order section's (below)
 
 // An m2v twin made outside its object's lock, kept if no other thread kept one first (theirs is returned, this one dropped). The
@@ -1599,6 +1626,8 @@ static void refuseTexture(RMTexture *t, RMPred p, uint64_t a, uint64_t b, NSStri
     if (rawShape(d) && d.storageMode != MTLStorageModeMemoryless)
         t->_rawOk = gRM->raw->createBufferTexture(_raw, offset, uint32_t(d.width), uint32_t(d.height), uint32_t(row),
                                                   uint32_t(d.pixelFormat), t->_raw);
+    if (t->_rawOk)
+        keepExtendedRange(d, t->_raw, true);
     if (!t->_rawOk) {  // which term (createBufferTexture's, recomputed: not the hot path)
         const raw::FormatInfo *f = raw::formatInfo(uint32_t(d.pixelFormat));
         const uint64_t packed = uint64_t(d.width) * (f ? f->bpp : 0), at = (_raw.va + offset) & 31;
@@ -1902,6 +1931,7 @@ struct RMSegment {
     bool
         _sampledShadows;  // it binds a texture sampled through a pool image (raw::Texture::sampled): encodeRaw refreshes them
     bool _chains;         // it uses a mipmapped texture (raw::Texture::chain): encodeRaw and the replay keep its levels
+    bool _standIns;  // it binds an extended-range texture (raw::Texture::standIn): encodeRaw draws its stand-in
     std::vector<Cmd> _tape;
     std::vector<uint8_t> _bytes;
     std::vector<uint64_t> _extra;
@@ -2326,7 +2356,9 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
 {
     SWITCH_API(ApiBind);
     RMTexture *x = [(id)t isKindOfClass:[RMTexture class]] ? (RMTexture *)t : nil;
-    if (t && (!x || !x->_rawOk || !x->_raw.tic)) {
+    // an extended-range texture is sampled through its stand-in (raw_xr.h): one without (no ShaderRead usage) is m2v's to sample
+    const bool unsampled = x && !x->_raw.standIn && raw::xrForm(x->_raw.format) != raw::XrForm::None;
+    if (t && (!x || !x->_rawOk || !x->_raw.tic || unsampled)) {
         [_cb takeReason:WhyTexture why:@"a texture the raw path does not keep"];
         if (!x) {
             if (!predLogged(PredTexForeign))
@@ -2341,6 +2373,8 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
         _tex[index] = x;
     if (x && x->_raw.sampled)
         _cb->_sampledShadows = true;
+    if (x && x->_raw.standIn)
+        _cb->_standIns = true;
     if (x && (x->_raw.chain || (x->_parent && x->_parent->_raw.chain)))
         _cb->_chains = true;
     setBinding(_cb, OpTexture, stage, index, t, 0);
@@ -4429,6 +4463,57 @@ static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **
             b->end();
         }
     };
+    // extended-range textures (raw_xr.h): a draw samples the stand-in, drawn from the codes by the pack's conversion state
+    // before the first pass whose draws sample it, and again after work here writes the codes. Their passes' prologue barrier
+    // orders the conversion between the codes' writes and the samples.
+    std::set<RMTexture *> standInFresh;
+    std::deque<raw::Texture>
+        codes;  // the conversions' sources: the codes' headers (the encoder reads them until its end)
+    auto standIns = [&](size_t pass) {
+        RMTexture *bound[16] = {};
+        RMPipeline *pipe = nil;
+        std::vector<RMTexture *> stale;
+        for (size_t k = pass + 1; k < to && cb->_tape[k].op != OpEnd; k++) {
+            const Cmd &u = cb->_tape[k];
+            if (u.op == OpPipeline) {
+                pipe = [(__bridge id)u.obj isKindOfClass:[RMPipeline class]] ? (__bridge RMPipeline *)u.obj : nil;
+            } else if (u.op == OpTexture && u.stage == 2 && u.index < 16) {
+                RMTexture *t = (__bridge RMTexture *)u.obj;
+                bound[u.index] = t && t->_raw.standIn ? t : nil;
+            } else if ((u.op == OpDraw || u.op == OpDrawIndexed) && pipe && pipe->_raw) {
+                const raw::PackPipeline &r = *pipe->_raw->rec;
+                for (uint32_t e = 0; e < r.entries; e++) {
+                    RMTexture *t =
+                        r.entry[e].kind == raw::EntryTexture && r.entry[e].slot < 16 ? bound[r.entry[e].slot] : nil;
+                    if (t && !standInFresh.count(t) && std::find(stale.begin(), stale.end(), t) == stale.end())
+                        stale.push_back(t);
+                }
+            }
+        }
+        for (RMTexture *t : stale) {
+            raw::Texture &x = t->_raw;
+            raw::PassDesc p;
+            p.color[0].texture = x.standIn;
+            p.color[0].load = raw::ColorAttachment::DontCare;
+            p.color[0].store = true;
+            p.count = 1;
+            raw::RenderEncoder *conv = rc->render(p);
+            if (!conv)
+                return fail(PredEncPassRender, "an extended-range texture's stand-in the raw path cannot render");
+            codes.push_back(x);
+            codes.back().standIn = nullptr;
+            useTexture(rc, t, false);
+            conv->setPipeline(d.xrPipeline(raw::xrForm(x.format)));
+            conv->setTexture(0, &codes.back());
+            conv->setViewport(0, 0, x.width, x.height, 0, 1);
+            conv->setScissor(0, 0, x.width, x.height);
+            if (!conv->draw(4 /* MTLPrimitiveTypeTriangleStrip */, 0, 4, 1, 0, why))
+                return refused();
+            conv->end();
+            standInFresh.insert(t);
+        }
+        return true;
+    };
     for (size_t at = from; at < to; at++) {
         const Cmd &c = cb->_tape[at];
         switch (c.op) {
@@ -4436,6 +4521,8 @@ static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **
             MTLRenderPassDescriptor *pass = (__bridge MTLRenderPassDescriptor *)c.obj;
             if (cb->_sampledShadows)
                 refresh(at);
+            if (cb->_standIns && !standIns(at))
+                return false;
             if (cb->_chains) {  // the chains this pass samples, current first (one blit of the 2D engine's work)
                 raw::BlitEncoder *b = nullptr;
                 auto stale = [](const raw::Texture::Chain *c) {
@@ -4494,6 +4581,7 @@ static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **
                 useTexture(rc, t, true);
                 if (!fresh.empty())
                     fresh.erase(t);  // this pass writes it
+                standInFresh.erase(t);
                 if (t->_raw.chain && a.level) {
                     // the chain keeps the texture's levels (levelsFresh), m2v's are behind, and they are no longer what
                     // generating from level 0 gives (rawLevels)
@@ -4645,6 +4733,7 @@ static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **
             useTexture(rc, t, true);
             if (!fresh.empty())
                 fresh.erase(t);
+            standInFresh.erase(t);
             const uint64_t x = c.x, o = extra(cb, x + 10), sl = extra(cb, x + 1);
             const uint64_t sx = extra(cb, x + 2), sy = extra(cb, x + 3), w = extra(cb, x + 5), h = extra(cb, x + 6);
             const uint64_t dx = uint32_t(o), dy = o >> 32;
@@ -4692,6 +4781,7 @@ static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **
             const uint64_t w = extra(cb, x + 3), h = extra(cb, x + 4);
             if (!fresh.empty())
                 fresh.erase(t);
+            standInFresh.erase(t);
             if (t->_raw.chain) {
                 touch(t).l0Fresh = false;
                 t->_mipL0 = false;
@@ -5093,6 +5183,8 @@ static void commitBuffer(RMCommandBuffer *cb);
         // a shared texture (the CPU writes it: replaceRegion) in write-combined memory: its rows need no clean after
         t->_rawOk = gRM->raw->createTexture(uint32_t(d.width), uint32_t(d.height), uint32_t(d.pixelFormat), t->_raw,
                                             d.storageMode == MTLStorageModeShared, tiled);
+        if (t->_rawOk)
+            keepExtendedRange(d, t->_raw, false);
     }
     if (!t->_rawOk) {
         RMTexture *w = (RMTexture *)[self wrapTwin:[gRM->fallback newTextureWithDescriptor:d] descriptor:d];
@@ -5205,6 +5297,8 @@ static bool producesTexture(MTLTextureDescriptor *d)
         t->_rawOk = gRM->raw->createSurfaceTexture(IOSurfaceGetID(s), base, IOSurfaceGetAllocSize(s), s, offset,
                                                    uint32_t(d.width), uint32_t(d.height), uint32_t(pitch),
                                                    uint32_t(d.pixelFormat), t->_raw, producesTexture(d));
+        if (t->_rawOk)
+            keepExtendedRange(d, t->_raw, false);
     }
     if (t->_rawOk && writesTexture(d))
         declareGpuWrites(t);

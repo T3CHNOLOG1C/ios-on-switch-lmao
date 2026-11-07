@@ -352,14 +352,17 @@ void registers(const std::map<uint32_t, uint32_t> &regs, uint32_t colors, const 
 
 uint64_t packKeyHash(const std::string &key)
 {
-    const size_t own = key.find("| f ycbcr_");
-    if (own == std::string::npos)
-        return Pack::fnv(key.data(), key.size());
-    size_t end = own + 4;
-    while (end < key.size() && (isalnum(static_cast<unsigned char>(key[end])) || key[end] == '_'))
-        end++;
-    const std::string name = "raw.ycbcr." + key.substr(own + 4, end - own - 4);
-    return Pack::fnv(name.data(), name.size());
+    for (const char *lib : {"ycbcr", "xr"}) {
+        const size_t own = key.find(std::string("| f ") + lib + "_");
+        if (own == std::string::npos)
+            continue;
+        size_t end = own + 4;
+        while (end < key.size() && (isalnum(static_cast<unsigned char>(key[end])) || key[end] == '_'))
+            end++;
+        const std::string name = std::string("raw.") + lib + "." + key.substr(own + 4, end - own - 4);
+        return Pack::fnv(name.data(), name.size());
+    }
+    return Pack::fnv(key.data(), key.size());
 }
 
 PackRules PackRules::of(const Pack &pack, std::map<uint32_t, uint32_t> context)

@@ -20,7 +20,7 @@ SeedToolsInfo = provider(
         "twin": "the NVK twin, libvulkan_nouveau.dylib",
         "manifest": "MANIFEST.json (the stack key, the twin's LC_UUID and compiler identity)",
         "nvk_identity": "the twin's .source (its Mesa tree and compiler identity), or None: what a bucket is keyed on",
-        "raw": "the raw pack's probe, mock and ycbcr.metallib (files, or one directory)",
+        "raw": "the raw pack's probe, mock and own.metallib (files, or one directory)",
         "raw_dir": "the directory holding them",
     },
 )
