@@ -7,6 +7,8 @@
 #   nvk_wait_any_test nvkmd_darwin's WAIT_ANY (nvkmd_darwin_wait_any.h) over a model of the kext's WaitFence: it returns
 #                     once one sync of the set resolves (a host signal, a fence's interrupt), sleeps until then, keeps
 #                     its deadline, and calls a passed fence whose wake never came a lost interrupt
+#   nvk_surfaces_test nvkmd_darwin's ExecSurfaces record (nvkmd_darwin_surfaces.h): each BO once with its accesses merged,
+#                     past its room the all-imports flag, its length
 #   raw_follow_test   raw/runtime/raw_follow.h: the raw path's threads take a fixed-priority committer's policy, never a
 #                     lower one, and keep their own for a timeshare committer
 #   stage_test        stage-tegra-gm20b-metal.py on a directory standing in for the Data volume
@@ -64,6 +66,20 @@ host_test(
     srcs = [
         "nvk_wait_any_test.cpp",
         "//third_party/mesa/src/nouveau/vulkan:nvkmd/darwin/nvkmd_darwin_wait_any.h",
+    ],
+    cxx_std = "c++17",
+)
+
+host_test(
+    name = "nvk_surfaces_test",
+    srcs = [
+        "nvk_surfaces_test.cpp",
+        "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//third_party/mesa/src/nouveau/vulkan:nvkmd/darwin/nvkmd_darwin_surfaces.h",
+    ],
+    copts = [
+        "-I",
+        "drivers/TegraGM20B",
     ],
     cxx_std = "c++17",
 )

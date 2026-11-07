@@ -548,6 +548,45 @@ TEST(GM20BCoherencySource, AFailedSurfaceWritesFallsBackToMarkingEveryImport)
 		EXPECT_THAT(nvk, HasSubstr(exported));
 }
 
+// NVK names a submission's host imports (method 17) before every Exec of it, a retry after kIOReturnBusy included, and a
+// GPFIFO the kernel found full sleeps in WaitFence, never a timed poll.
+TEST(GM20BFencesSource, NvkSendsItsSurfacesBeforeEachExecAndSleepsWhenFull)
+{
+	const std::string nvk = SourceText(
+		"../../../third_party/mesa/src/nouveau/vulkan/nvkmd/darwin/nvkmd_darwin.c");
+	const std::string flush =
+		flat(definition(nvk, "nvkmd_darwin_exec_ctx_flush(struct nvkmd_ctx *_ctx,"));
+	expectBefore(flush, "for (;;) {", "TegraGM20BMethodExecSurfaces");
+	expectBefore(flush, "TegraGM20BMethodExecSurfaces", "TegraGM20BMethodExec,");
+	EXPECT_THAT(flush, Not(HasSubstr("usleep")));
+	expectBefore(flush, "if (!ctx->submitted) darwin_exec_busy_unsubmitted(ctx->channel);",
+		     "darwin_wait_seqno(dev, ctx->channel, ctx->last_seqno,");
+	const std::string queue =
+		SourceText("../../../third_party/mesa/src/nouveau/vulkan/nvk_queue.c");
+	const std::string submit =
+		flat(definition(queue, "nvk_queue_submit(struct vk_queue *vk_queue,"));
+	expectBefore(submit, "nvkmd_darwin_submit_surfaces(queue->exec_ctx, submit->driver_data);",
+		     "result = nvk_queue_submit_exec(queue, submit);");
+	expectBefore(submit, "result = nvk_queue_submit_exec(queue, submit);",
+		     "nvkmd_darwin_submit_surfaces_end(queue->exec_ctx);");
+	EXPECT_THAT(queue, HasSubstr("__attribute__((visibility(\"default\"))) "
+				     "void\nswitch_nvk_submit_surfaces("));
+	const std::string call = flat(definition(queue, "nvk_QueueSubmit2(VkQueue _queue,"));
+	expectBefore(call, "nvkmd_darwin_submit_call(queue, true);", "vk_common_QueueSubmit2(");
+	expectBefore(call, "vk_common_QueueSubmit2(", "nvkmd_darwin_submit_call(queue, false);");
+	EXPECT_THAT(flat(queue),
+		    HasSubstr("queue->vk.driver_submit_data = nvk_queue_submit_data;"));
+	// Mesa gives each submission its data on the client's thread, before a submit thread can take it, and frees it with
+	// the submission.
+	const std::string runtime =
+		SourceText("../../../third_party/mesa/src/vulkan/runtime/vk_queue.c");
+	expectBefore(flat(definition(runtime, "vk_queue_submit(struct vk_queue *queue,")),
+		     "submit->driver_data = queue->driver_submit_data(queue);",
+		     "VK_QUEUE_SUBMIT_MODE_THREADED");
+	EXPECT_THAT(flat(definition(runtime, "vk_queue_submit_free(struct vk_queue *queue,")),
+		    HasSubstr("queue->driver_submit_data_free(submit->driver_data);"));
+}
+
 // Only a connection's maps skip the CPU's L2 and TLB maintenance; every removal keeps it (TegraGM20BTlb.h).
 TEST(GM20BTlbSource, MapsOrderedOnTheGpuRemovalsSynchronous)
 {

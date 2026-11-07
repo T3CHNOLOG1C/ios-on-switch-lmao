@@ -6,6 +6,7 @@
 #include "nvkmd_darwin.h"
 #define DARWIN_ANY_CONN struct nvkmd_darwin_conn
 #include "nvkmd_darwin_wait_any.h"
+#include "nvkmd_darwin_surfaces.h"
 
 #include "nv_device_info.h"
 #include "util/bitscan.h"
@@ -123,6 +124,7 @@ darwin_open(struct vk_object_base *log_obj, struct nvkmd_darwin_conn *c,
                        kr, kr == KERN_SUCCESS ? info->abi_version : 0);
    }
    c->kernel_map = (info->flags & TegraGM20BInfoKernelMap) != 0;
+   c->exec_surfaces = (info->flags & TegraGM20BInfoExecSurfaces) != 0;
 
    return VK_SUCCESS;
 }
@@ -1761,6 +1763,59 @@ nvkmd_darwin_exec_ctx_wait(struct nvkmd_ctx *_ctx,
    return darwin_ctx_wait(ctx->channel, log_obj, wait_count, waits);
 }
 
+/* the hint made for the next vkQueueSubmit, and the one that call took */
+static __thread struct darwin_submit_hint submit_hint, submit_taken;
+
+void
+nvkmd_darwin_hint_surfaces(const void *queue)
+{
+   darwin_hint_begin(&submit_hint, queue);
+}
+
+void
+nvkmd_darwin_hint_surface(struct nvkmd_mem *_mem, uint8_t access)
+{
+   const struct nvkmd_darwin_mem *mem = nvkmd_darwin_mem(_mem);
+   if (submit_hint.queue != NULL && mem->host_ptr != NULL)
+      darwin_surfaces_add(&submit_hint.list, mem->handle, access);
+}
+
+void
+nvkmd_darwin_submit_call(const void *queue, bool begin)
+{
+   if (begin)
+      darwin_hint_take(&submit_hint, &submit_taken, queue);
+   else
+      submit_taken.queue = NULL;
+}
+
+void *
+nvkmd_darwin_submit_data(const void *queue)
+{
+   return darwin_hint_copy(&submit_taken, queue);
+}
+
+void
+nvkmd_darwin_submit_data_free(void *data)
+{
+   free(data);
+}
+
+void
+nvkmd_darwin_submit_surfaces(struct nvkmd_ctx *_ctx, const void *data)
+{
+   struct nvkmd_darwin_exec_ctx *ctx = nvkmd_darwin_exec_ctx(_ctx);
+   ctx->surfaces_given = data != NULL;
+   if (ctx->surfaces_given)
+      ctx->surfaces = *(const struct TegraGM20BAbiExecSurfaces *)data;
+}
+
+void
+nvkmd_darwin_submit_surfaces_end(struct nvkmd_ctx *_ctx)
+{
+   nvkmd_darwin_exec_ctx(_ctx)->surfaces_given = false;
+}
+
 static void
 darwin_exec_busy_unsubmitted(uint32_t channel)
 {
@@ -1785,6 +1840,14 @@ nvkmd_darwin_exec_ctx_flush(struct nvkmd_ctx *_ctx,
    const size_t in_size = offsetof(struct TegraGM20BAbiExec, pushes) +
                           ctx->req.count * sizeof(ctx->req.pushes[0]);
    for (;;) {
+      /* The kernel's next Exec of the channel takes the list, a refused one
+       * included: once more before every retry.
+       */
+      if (ctx->surfaces_given && dev->conn.exec_surfaces) {
+         ctx->surfaces.channel = ctx->channel;
+         darwin_call(&dev->conn, TegraGM20BMethodExecSurfaces, &ctx->surfaces,
+                     darwin_surfaces_bytes(&ctx->surfaces), NULL, 0);
+      }
       struct TegraGM20BAbiExecReply reply = { 0 };
       kern_return_t kr = darwin_call(&dev->conn, TegraGM20BMethodExec,
                                      &ctx->req, in_size, &reply, sizeof(reply));

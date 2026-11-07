@@ -128,6 +128,8 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/runtime/raw_kernel.cpp",
         "//third_party/mesa/src/nouveau/vulkan:nvkmd/darwin/nvkmd_darwin.c",
         "//third_party/mesa/src/nouveau/vulkan:nvk_image.c",
+        "//third_party/mesa/src/nouveau/vulkan:nvk_queue.c",
+        "//third_party/mesa/src/vulkan/runtime:vk_queue.c",
         "//drivers/TegraGM20B:TegraGM20BExecSurfaces.cpp",
         "//drivers/TegraGM20B:TegraGM20BGpu.h",
         "//drivers/TegraGM20B:TegraGM20BUserClient.cpp",

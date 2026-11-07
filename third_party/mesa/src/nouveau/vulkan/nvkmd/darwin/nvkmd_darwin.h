@@ -27,6 +27,7 @@ struct nvkmd_darwin_conn {
    bool tunnel;
    uint32_t selector;
    bool kernel_map; /* TegraGM20BInfoKernelMap: map through methods 12, 13 */
+   bool exec_surfaces; /* TegraGM20BInfoExecSurfaces: method 17 */
 };
 
 struct nvkmd_darwin_pdev {
@@ -101,6 +102,12 @@ struct nvkmd_darwin_exec_ctx {
    bool submitted;       /* an Exec of it went through (a seqno may wrap to 0) */
 
    struct TegraGM20BAbiExec req;
+
+   /* The submission's host imports, sent before each of its Execs while set
+    * (nvkmd_darwin_submit_surfaces)
+    */
+   bool surfaces_given;
+   struct TegraGM20BAbiExecSurfaces surfaces;
 };
 
 NVKMD_DECL_SUBCLASS(ctx, darwin_exec);

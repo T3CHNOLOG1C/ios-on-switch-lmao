@@ -121,4 +121,9 @@ VkResult nvk_push_draw_state_init(struct nvk_queue *queue,
 VkResult nvk_push_dispatch_state_init(struct nvk_queue *queue,
                                       struct nv_push *p);
 
+#ifdef NVK_HAS_DARWIN
+void switch_nvk_submit_surfaces(VkQueue queue, const VkDeviceMemory *mems,
+                                const uint8_t *access, uint32_t count);
+#endif
+
 #endif
