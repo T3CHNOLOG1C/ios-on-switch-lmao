@@ -101,6 +101,21 @@ static void watchWatchdogBench(void)
                    error ? strerror(error) : "armed");
         });
 }
+
+// Debug builds: window A's column-scan experiment (drivers/NativeMobileDisplay/NativeColumnScan.h), once per Darwin
+// notification the Mac posts: com.brunostjohn.switch.debug.column-scan scans the 4K test frame in the UI's 16-GOB
+// blocks, ...column-scan-nvdec in NVDEC's 2-GOB ones. The kernel logs the result.
+static void watchColumnScan(const char *name, int blockHeightLog2)
+{
+    int token;
+    notify_register_dispatch(name, &token, dispatch_get_main_queue(), ^(int t) {
+        (void)t;
+        int value = blockHeightLog2;
+        const int error =
+            sysctlbyname("debug.switch_display_column_scan", NULL, NULL, &value, sizeof(value)) ? errno : 0;
+        os_log(OS_LOG_DEFAULT, "BlueTool: %{public}s posted: %{public}s", name, error ? strerror(error) : "started");
+    });
+}
 #endif
 
 static void answer(xpc_connection_t peer, xpc_object_t message)
@@ -141,6 +156,8 @@ int main(void)
 #if SWITCH_DEBUG
     watchStress();
     watchWatchdogBench();
+    watchColumnScan("com.brunostjohn.switch.debug.column-scan", 4);
+    watchColumnScan("com.brunostjohn.switch.debug.column-scan-nvdec", 1);
 #endif
     dispatch_main();
 }

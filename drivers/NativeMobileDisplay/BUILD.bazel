@@ -48,6 +48,8 @@ kernel_driver(
         "drivers/SwitchPower",
         "drivers/SwitchSuspend",
         "drivers/TegraDisplayFlip",
+        # TegraGM20BLayout.h: the column-scan experiment's block-linear surfaces (NativeColumnScan.h).
+        "drivers/TegraGM20B",
         "drivers/TegraGPIO",
         "drivers/TegraSMMU",
         # TegraVICConfig.h: the traits the detach gate reads (r18-planes).

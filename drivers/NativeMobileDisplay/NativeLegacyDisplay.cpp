@@ -38,6 +38,12 @@
 #include "VsyncPhase.h"
 #include "../SwitchPower/SwitchPower.h"
 #include "../../kits/SwitchRefusal/SwitchRefusal.h"
+#if SWITCH_FRAME_TIMELINE
+#include <sys/sysctl.h>
+#include "NativeColumnScan.h"
+extern "C" void native_legacy_frame_end_hold(void);
+extern "C" void native_legacy_frame_end_release(void);
+#endif
 
 // The last swap Core Animation offered (validateSwap, accepted or not; mach time): while swaps keep coming CA is
 // animating, and TegraGM20B's idle clock never drops the GPU (native_display_last_swap_ns below).
@@ -381,6 +387,10 @@ struct PanicRestore {
     volatile bool panicking;  // a panic began: window A is the panic's
     volatile bool planes;     // window B may scan a plane, window A may blend over it: both go back (r18-planes)
     uint32_t blend[3];        // window A's BLEND_LAYER_CONTROL, MATCH and NOMATCH as hekate left them
+#if SWITCH_FRAME_TIMELINE
+    volatile bool columnScan;  // the column-scan experiment has window A scaled and in YUV (NativeColumnScanDisplay.h)
+    uint32_t columnScanDepth;  // the UI's COLOR_DEPTH
+#endif
 };
 
 PanicRestore gPanicRestore;
@@ -404,6 +414,13 @@ void restorePitchOnPanic(const char *message)
         dc[kWinbufHOffset] = gPanicRestore.hOffset;
         dc[kWinbufStartAddr] = gPanicRestore.start;
         dc[kWinbufStartAddrHi] = 0;
+#if SWITCH_FRAME_TIMELINE
+        if (gPanicRestore.columnScan) {
+            dc[kWinColorDepth] = gPanicRestore.columnScanDepth;
+            dc[kWinPrescaled] = kPitchPrescaled;
+            dc[kWinDdaIncrement] = kUnitDda;
+        }
+#endif
         dc[kWinOptions] = gPanicRestore.options;
         uint32_t update = kGeneralUpdate | kWinAUpdate, request = kGeneralActReq | kWinAActReq;
         TegraDisplayColor::bypassForPanic(dc);
@@ -1489,6 +1506,8 @@ private:
         if (status & kVblankInt)
             vblankNotify();
         watchVsync(status);
+        if (status & kFrameEndInt)
+            columnScanFrameEnd();
         // After the compositor's vsync, since a latched flip starts the next frame's copy right here. A flip is also looked for at
         // V_BLANK (unmasked while a vsync client is registered), in case the controller latches after its FRAME_END.
         if ((status & kFrameEndInt) && rotated)
@@ -1502,7 +1521,8 @@ private:
         if (status & kFrameEndInt)
             planeFrameEnd();
         if (status & kFrameEndInt)
-            color->frameEndAction(ring.pending == kNoBuffer && !probeRequest && !(rotated && !rotationLatched));
+            color->frameEndAction(ring.pending == kNoBuffer && !probeRequest && !(rotated && !rotationLatched) &&
+                                  !columnScanBusy());
         if ((status & kFrameEndInt) && stats) {
             if (frameStall.frameEnd(mach_absolute_time(), refreshTicks(), vsyncWanted()))
                 switch_stall_frame(frameStall.lastPresent());
@@ -2989,6 +3009,7 @@ private:
     // tape, over the console's screen (it redraws it in the boot framebuffer first; the tape may be read once more, never written).
     void stopRotation()
     {
+        columnScanAbort("the display stopped");
         abortProbe("the display stopped");
         stopDirect();
         if (rotated) {
@@ -3060,6 +3081,8 @@ public:
     {
         if (!dc)
             return false;
+        if (!on && !hwSuspended)
+            columnScanAbort("the display went off");
         if (!on && !hwSuspended && planeProbe.active()) {  // r18-planes: no frame end comes once the scan stops
             PlaneProbeIo io = {this};
             planeProbe.perform(planeProbe.fail("the display went off"), io);
@@ -3120,6 +3143,7 @@ public:
     // between the steps is honoured, not undone).
     void quiesceForSuspend()
     {
+        columnScanAbort("the display suspended (SC7)");
         abortProbe("the display suspended (SC7)");
         planesQuiesce();  // r18-planes
         resumeLit = !scanoutStopped;
@@ -3311,8 +3335,10 @@ public:
                 this);
         startCopyLoop();
         startGpuCopy();
-        if (primary)
+        if (primary) {
             __atomic_store_n(&primaryDisplay, this, __ATOMIC_RELEASE);
+            columnScanRegister();
+        }
         return true;
     }
 
@@ -3427,6 +3453,10 @@ public:
             return;
         }
         if (planeProbe.active()) {  // r18-planes: window B covers the screen and the probe's CRC must not move
+            kickDeferred = true;
+            return;
+        }
+        if (columnScanBusy()) {  // window A is the column-scan experiment's (debug kernels)
             kickDeferred = true;
             return;
         }
@@ -4543,6 +4573,7 @@ public:
     }
 
 #include "NativePlanesDisplay.h"
+#include "NativeColumnScanDisplay.h"
 
     IOReturn collectCompletionReports(uint32_t, void *, uint32_t *count, uint32_t) override
     {
@@ -4996,6 +5027,10 @@ public:
 
 OSDefineMetaClassAndStructors(NativeLegacyDisplay,
                               IOMobileFramebufferLegacy) NativeLegacyDisplay *NativeLegacyDisplay::primaryDisplay;
+#if SWITCH_FRAME_TIMELINE
+constinit NativeLegacyDisplay::ColumnScanState NativeLegacyDisplay::columnScan;
+constinit struct sysctl_oid NativeLegacyDisplay::columnScanOid = {};
+#endif
 
 // SwitchBrightness's display power sequence (SwitchBrightness.h): from its work loop, after the panel is asleep and before it wakes.
 extern "C" bool native_legacy_display_set_scanout(bool on)
