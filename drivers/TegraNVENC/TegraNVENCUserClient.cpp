@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// E4 (on by default with NVDEC): the TegraNVENC service and its user client (ABI in TegraNVENCABI.h).
+// E3 (on by default): the TegraNVENC service and its user client (ABI in TegraNVENCABI.h).
 //
 // The client class is named AppleAVE2UserClient, the name of iPad7,1's own encoder client (AppleAVE2Driver, the AVE
 // kext, not loaded here), which 21H461's media sandbox profiles admit. The service is not called AppleAVE2Driver:
@@ -177,10 +177,9 @@ IOReturn AppleAVE2UserClient::run(uint32_t method, const void *in, uint32_t inSi
         {sizeof(TegraNVENCBuffer), 0},
         {sizeof(TegraNVENCSubmit), sizeof(TegraNVENCFence)},
         {sizeof(TegraNVENCWait), 0},
-        {0, sizeof(TegraNVENCClaim)},
     };
 
-    if (method < TegraNVENCMethodGetInfo || method > TegraNVENCMethodClaimSelfTest || inSize != kSizes[method].in ||
+    if (method < TegraNVENCMethodGetInfo || method > TegraNVENCMethodWait || inSize != kSizes[method].in ||
         *outSize < kSizes[method].out)
         return kIOReturnBadArgument;
     *outSize = kSizes[method].out;
@@ -279,12 +278,6 @@ IOReturn AppleAVE2UserClient::run(uint32_t method, const void *in, uint32_t inSi
         reply->reserved = 0;
         break;
     }
-    case TegraNVENCMethodClaimSelfTest: {
-        TegraNVENCClaim *reply = static_cast<TegraNVENCClaim *>(out);
-        reply->claimed = tegra_nvenc_claim_self_test();
-        reply->reserved = 0;
-        break;
-    }
     default:
         ret = kIOReturnUnsupported;
         break;
@@ -369,7 +362,7 @@ extern "C" int tegra_nvenc_publish(uint64_t arenaUs)
     TegraNVENC *service = OSTypeAlloc(TegraNVENC);
     if (!resources || !service || !service->init()) {
         OSSafeReleaseNULL(service);
-        IOLog("TegraNVENC: E4 FAIL could not create the service\n");
+        IOLog("TegraNVENC: E3 FAIL could not create the service\n");
         return -12;
     }
     service->setProperty("IOUserClientClass", "AppleAVE2UserClient");
@@ -378,20 +371,20 @@ extern "C" int tegra_nvenc_publish(uint64_t arenaUs)
     service->setProperty("TegraNVENCABIVersion", (unsigned long long)TEGRA_NVENC_ABI_VERSION, 32);
     if (!service->attach(resources)) {
         service->release();
-        IOLog("TegraNVENC: E4 FAIL could not attach the service\n");
+        IOLog("TegraNVENC: E3 FAIL could not attach the service\n");
         return -12;
     }
     if (!service->start(resources)) {
         service->detach(resources);
         service->release();
-        IOLog("TegraNVENC: E4 FAIL could not start the service\n");
+        IOLog("TegraNVENC: E3 FAIL could not start the service\n");
         return -12;
     }
     service->registerService();
     uint64_t total = 0, free = 0;
     tegra_nvenc_arena_usage(&total, &free);
     const TegraNVENCProven *proven = tegra_nvenc_proven();
-    IOLog("TegraNVENC: E4 ok service published (user client AppleAVE2UserClient, ABI %u, input layout %u, chroma mode "
+    IOLog("TegraNVENC: E3 ok service published (user client AppleAVE2UserClient, ABI %u, input layout %u, chroma mode "
           "%u, %s; arena %llu MiB, boot chunk in %llu us)\n",
           TEGRA_NVENC_ABI_VERSION, proven->inputLayout, proven->chromaMode,
           proven->pFrames ? "P pictures" : "intra only", total >> 20, arenaUs);

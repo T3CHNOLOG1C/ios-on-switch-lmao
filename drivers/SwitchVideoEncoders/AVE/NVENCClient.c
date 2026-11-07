@@ -95,13 +95,6 @@ bool nvenc_info(NVENCClient *c, TegraNVENCInfo *info)
     return call(c, c->selector, TegraNVENCMethodGetInfo, NULL, 0, info, sizeof(*info)) == KERN_SUCCESS;
 }
 
-bool nvenc_claim_self_test(NVENCClient *c)
-{
-    TegraNVENCClaim reply = {0, 0};
-    return call(c, c->selector, TegraNVENCMethodClaimSelfTest, NULL, 0, &reply, sizeof(reply)) == KERN_SUCCESS &&
-           reply.claimed;
-}
-
 void nvenc_close(NVENCClient *c)
 {
     if (!c)

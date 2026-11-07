@@ -12,7 +12,6 @@ typedef struct NVENCClient NVENCClient;
 bool nvenc_service_present(void);
 NVENCClient *nvenc_open(int *error);  // NULL with the IOReturn when the service is absent or refuses this process
 void nvenc_close(NVENCClient *client);
-bool nvenc_claim_self_test(NVENCClient *client);  // true for one caller per boot (TegraNVENCMethodClaimSelfTest)
 
 bool nvenc_info(NVENCClient *client, TegraNVENCInfo *info);  // what E3 proved, and the arena
 

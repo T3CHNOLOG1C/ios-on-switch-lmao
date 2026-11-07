@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// TegraNVENC user client ABI, v1 (kernel: TegraNVENCUserClient.cpp; client: SwitchVideoEncoders/AVE).
+// TegraNVENC user client ABI, v2 (kernel: TegraNVENCUserClient.cpp; client: SwitchVideoEncoders/AVE).
 //
-// The service is "TegraNVENC" (IOServiceMatching), published by default once NVENC has proven itself (E4). Its user
+// The service is "TegraNVENC" (IOServiceMatching), published by default once NVENC answers (E3). Its user
 // client's class is named AppleAVE2UserClient, the client class of iPad7,1's own encoder (AppleAVE2Driver, not loaded
 // here), which 21H461's media sandbox profiles admit; the processes known to encode are granted outright as well
 // (NativeSandboxGrantProcess on the service). Open type TEGRA_NVENC_OPEN_TYPE.
@@ -24,33 +24,30 @@
 //   * Jobs run in submission order; a fence is a syncpoint threshold, waited on by interrupt. The kernel bounds every
 //     wait itself (timeout_us is ignored); once published, a job past that bound is a hardware fault and panics.
 //
-// What the boot self-test (E3) proved is in TegraNVENCInfo: the input surface layout the firmware reads, how it
-// addresses chroma planes, and whether a P picture referencing NVENC's own reconstruction decoded right.
+// TegraNVENCInfo says how the firmware reads the input picture, how it addresses chroma planes, and whether P pictures
+// are on.
 #ifndef TEGRA_NVENC_ABI_H
 #define TEGRA_NVENC_ABI_H
 #include <stdint.h>
 
-#define TEGRA_NVENC_ABI_VERSION  1
+#define TEGRA_NVENC_ABI_VERSION  2
 #define TEGRA_NVENC_OPEN_TYPE    0x4e45       // 'NE'
 #define TEGRA_NVENC_TUNNEL_MAGIC 0x4e45544eu  // 'NETN'
 #define TEGRA_NVENC_TUNNEL_PROBE 0xffffffffu
 
 enum TegraNVENCMethod {
-    TegraNVENCMethodGetInfo = 1,        // -> TegraNVENCInfo
-    TegraNVENCMethodBufferAlloc = 2,    // TegraNVENCBufferAlloc -> TegraNVENCBufferReply
-    TegraNVENCMethodBufferFree = 3,     // TegraNVENCBuffer -> (waits for the last job, revokes the client's mappings)
-    TegraNVENCMethodSubmit = 4,         // TegraNVENCSubmit -> TegraNVENCFence
-    TegraNVENCMethodWait = 5,           // TegraNVENCWait ->
-    TegraNVENCMethodClaimSelfTest = 6,  // -> TegraNVENCClaim: claimed = 1 for exactly one caller per boot
+    TegraNVENCMethodGetInfo = 1,      // -> TegraNVENCInfo
+    TegraNVENCMethodBufferAlloc = 2,  // TegraNVENCBufferAlloc -> TegraNVENCBufferReply
+    TegraNVENCMethodBufferFree = 3,   // TegraNVENCBuffer -> (waits for the last job, revokes the client's mappings)
+    TegraNVENCMethodSubmit = 4,       // TegraNVENCSubmit -> TegraNVENCFence
+    TegraNVENCMethodWait = 5,         // TegraNVENCWait ->
 };
 
 enum {
     TEGRA_NVENC_CODEC_H264 = 1
 };  // NVENC application id (clc5b7.h NVC5B7_SET_APPLICATION_ID_ID_NVENC_H264)
 
-// Input picture layouts (nvenc_h264_surface_cfg_s of input_cfg). E3 tries them (16x16 tiles first, pitch linear last:
-// TegraNVENCSelfTest.cpp kSearch) and keeps the first whose picture NVDEC decodes back to the source;
-// TegraNVENCInfo.input_layout names it.
+// Input picture layouts (nvenc_h264_surface_cfg_s of input_cfg); TegraNVENCInfo.input_layout names the one in use.
 enum {
     TEGRA_NVENC_LAYOUT_PITCH = 0,    // pitch linear: block_height 0, tiled_16x16 0
     TEGRA_NVENC_LAYOUT_BL2_LOG = 1,  // Tegra block linear, 64Bx8 GOBs two to a block; block_height 1 (log2 GOBs)
@@ -74,9 +71,9 @@ typedef struct {
     uint32_t abi_version, nvenc_version;  // nvenc_version 0x50: NVENC 5.0 (T210)
     uint32_t codecs;                      // bit n: TEGRA_NVENC_CODEC_* n is accepted by Submit
     uint32_t max_width, max_height, max_mbs;
-    uint32_t input_layout;  // TEGRA_NVENC_LAYOUT_* E3 proved
-    uint32_t chroma_mode;   // TEGRA_NVENC_CHROMA_* E3 proved
-    uint32_t p_frames;      // 1: a P picture predicted from NVENC's own reconstruction decoded right; 0: intra only
+    uint32_t input_layout;  // TEGRA_NVENC_LAYOUT_*
+    uint32_t chroma_mode;   // TEGRA_NVENC_CHROMA_*
+    uint32_t p_frames;      // 1: P pictures predicted from NVENC's own reconstruction; 0: intra only
     uint32_t reserved;
     uint64_t arena_bytes, arena_free;
 } TegraNVENCInfo;
@@ -129,10 +126,6 @@ typedef struct {
 typedef struct {
     uint32_t fence, reserved;
 } TegraNVENCFence;
-
-typedef struct {
-    uint32_t claimed, reserved;
-} TegraNVENCClaim;
 
 typedef struct {
     uint32_t fence, timeout_us;  // timeout_us: ignored (the kernel bounds every wait, see above)
