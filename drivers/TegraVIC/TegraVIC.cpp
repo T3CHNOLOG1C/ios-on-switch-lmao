@@ -70,7 +70,7 @@ constexpr uint32_t kThiMethod0 = 0x40;  // THI METHOD0 (offset) then METHOD1 (da
 constexpr uint64_t kMcPA = 0x70019000;
 constexpr uint32_t kPartition = 23;  // TEGRA_POWERGATE_VIC
 constexpr unsigned kClock = 178;     // TEGRA210_CLK_VIC03: CAR bank X bit 18, also its reset
-constexpr uint64_t kArenaBytes = 1ull << 20;
+constexpr uint64_t kArenaBytes = 1ULL << 20;
 constexpr uint32_t kAsid = TEGRA_SMMU_ASID_VIC;
 
 enum : uint32_t {  // clock and reset controller
@@ -112,7 +112,7 @@ uint64_t gArenaUsed;
 char gLine[256];
 
 // SMMU domain: one page directory, the identity tables of the kernel buffers and the windows' tables.
-constexpr uint32_t kWindowTables = (uint32_t)(kTegraVICWindowBytes >> 22);  // 4 MiB per table
+constexpr uint32_t kWindowTables = static_cast<uint32_t>(kTegraVICWindowBytes >> 22);  // 4 MiB per table
 constexpr uint32_t kIdentityTables = 4;  // the arena and the firmware: at most two 4 MiB sections each
 constexpr uint32_t kTables = 1 + TEGRA_VIC_WINDOWS * kWindowTables + kIdentityTables;
 TegraSMMUDomain gDomain;  // directory = page 0, the windows' tables pages 1.., then the identity tables
@@ -126,7 +126,7 @@ constexpr uint64_t kQueueUs = 2000000, kMaxBoundUs = 30000000, kAcquireBoundUs =
 inline uint32_t jobBoundUs(const TegraVICJob *job)
 {
     const uint64_t us = kQueueUs + job->pixels / 8;
-    return (uint32_t)(us < kMaxBoundUs ? us : kMaxBoundUs);
+    return static_cast<uint32_t>(us < kMaxBoundUs ? us : kMaxBoundUs);
 }
 
 IOLock *gJobLock;    // one job at a time: map, run, unmap
@@ -139,9 +139,10 @@ TegraVICTraits gTraits;
 // A job's pages through the physical aperture, without the barrier: the caller's switch_dcache_sync() completes them.
 void cachePages(switch_dcache_op op, const uint64_t *pages, uint32_t count)
 {
-    for (uint32_t i = 0; i < count; i++)
+    for (uint32_t i = 0; i < count; i++) {
         if (switch_dma_pa_managed(pages[i]))
             switch_dcache_phys_lines(op, pages[i] & ~SWITCH_HW_PAGE_MASK, SWITCH_HW_PAGE_SIZE);
+    }
 }
 
 const char *falconState()
@@ -169,7 +170,7 @@ bool parse(const uint8_t *fw, size_t length)
         gImage.fce_data == 0xa5a5a5a5u)
         return false;
     gFceSize = switch_falcon_le32(fw + gImage.fce_header + 8);
-    return (gImage.fce_data & 0xff) == 0 && gFceSize && gImage.fce_data <= gImage.size &&
+    return (gImage.fce_data & 0xff) == 0 && (gFceSize != 0u) && gImage.fce_data <= gImage.size &&
            gFceSize <= gImage.size - gImage.fce_data;
 }
 
@@ -182,7 +183,8 @@ inline uint32_t *table(uint32_t index)
 // The table entries just written, to memory (the SMMU does not snoop the CPU's caches).
 void cleanDomain()
 {
-    uintptr_t low, high;
+    uintptr_t low = 0;
+    uintptr_t high = 0;
     if (gDomain.takeDirty(&low, &high))
         switch_dcache_clean(reinterpret_cast<const void *>(low), high - low);
 }
@@ -203,17 +205,19 @@ bool smmuSetUp()
 {
     if (!gDomain.init(gTables.va, gTables.pa, kTables)) {
         snprintf(gLine, sizeof(gLine), "V1 FAIL the SMMU table buffer at %#llx cannot hold a directory",
-                 (unsigned long long)gTables.pa);
+                 static_cast<unsigned long long>(gTables.pa));
         return false;
     }
-    for (uint32_t w = 0; w < TEGRA_VIC_WINDOWS; w++)
+    for (uint32_t w = 0; w < TEGRA_VIC_WINDOWS; w++) {
         if (!gDomain.reserve(kTegraVICWindowBase + w * kTegraVICWindowBytes, kTegraVICWindowBytes)) {
             snprintf(gLine, sizeof(gLine), "V1 FAIL no SMMU tables for window %u", w);
             return false;
         }
+    }
     const bool identities = identity(gFirmware, false) && identity(gArena, true);
     switch_dcache_clean(gTables.va, gTables.size);
-    uintptr_t low, high;
+    uintptr_t low = 0;
+    uintptr_t high = 0;
     gDomain.takeDirty(&low, &high);  // all of it was just cleaned
     if (!identities) {
         snprintf(gLine, sizeof(gLine), "V1 FAIL kernel buffers need more than %u identity tables", kIdentityTables);
@@ -274,7 +278,7 @@ bool powerUp(bool *wasOn)
         return false;
     }
     // tegra210_vic_mbist_war: VIC's override bit pulsed under the CAR lock, the register's other bits left alone.
-    const bool overridden = switch_car_read(LVL2_CLK_GATE_OVRE) & OVRE_VIC_MBIST;
+    const bool overridden = (switch_car_read(LVL2_CLK_GATE_OVRE) & OVRE_VIC_MBIST) != 0u;
     switch_car_rmw(LVL2_CLK_GATE_OVRE, 0, OVRE_VIC_MBIST);
     IODelay(1);
     const uint32_t slcg = switch_mmio_read32(gVic, THI_SLCG_OVERRIDE_LOW);
@@ -321,7 +325,7 @@ int answer(uint32_t id, uint32_t from, const char **stage)
         gFceSize,
         tegra_host1x_op_incr(kThiMethod0 / 4, 2),
         TEGRA_VIC_M_SET_FCE_UCODE_OFFSET / 4,
-        (uint32_t)((gFirmware.pa + gImage.fce_data) >> 8),
+        static_cast<uint32_t>((gFirmware.pa + gImage.fce_data) >> 8),
         tegra_host1x_op_incr_syncpt(TEGRA_HOST1X_COND_OP_DONE, id),
     };
     int ret = tegra_host1x_submit_on(TEGRA_HOST1X_CHANNEL_VIC, stream, sizeof(stream) / sizeof(stream[0]));
@@ -350,9 +354,10 @@ void timedOut(uint32_t fence, uint64_t us)
 {
     char host[200];
     tegra_host1x_describe_channel(TEGRA_HOST1X_CHANNEL_VIC, host, sizeof(host));
-    if (gPublished)
+    if (gPublished) {
         panic("TegraVIC: job fence %u not reached in %llu ms (syncpoint %u at %u); %s; %s", fence, us / 1000, gSyncpt,
               tegra_host1x_syncpt_read(gSyncpt), falconState(), host);
+    }
     if (gWedged)
         return;
     gWedged = true;
@@ -365,15 +370,16 @@ void engineResume();
 
 bool allocate()
 {
-    const size_t length = (size_t)(tegra_vic_fw_end - tegra_vic_fw_start);
+    const size_t length =
+        reinterpret_cast<uintptr_t>(tegra_vic_fw_end) - reinterpret_cast<uintptr_t>(tegra_vic_fw_start);
     if (!parse(tegra_vic_fw_start, length)) {
         snprintf(gLine, sizeof(gLine), "V0 FAIL embedded firmware is not a VIC falcon v1 image with FCE (%lu bytes)",
-                 (unsigned long)length);
+                 static_cast<unsigned long>(length));
         return false;
     }
     if (!contiguous(switch_align_up(gImage.size, SWITCH_HW_PAGE_SIZE), &gFirmwareDma, &gFirmware) ||
         !contiguous(kArenaBytes, &gArenaDma, &gArena) ||
-        !contiguous((uint64_t)kTables * SWITCH_HW_PAGE_SIZE, &gTablesDma, &gTables)) {
+        !contiguous(static_cast<uint64_t>(kTables) * SWITCH_HW_PAGE_SIZE, &gTablesDma, &gTables)) {
         snprintf(gLine, sizeof(gLine), "V0 FAIL no contiguous firmware, arena or page-table memory below 4 GiB");
         return false;
     }
@@ -580,7 +586,8 @@ extern "C" int tegra_vic_run_after(const TegraVICJob *job, const TegraVICAcquire
     }
     memcpy(gConfig.va, job->config, TEGRA_VIC_CONFIG_BYTES);
     switch_dcache_clean(gConfig.va, TEGRA_VIC_CONFIG_BYTES);
-    uint32_t words[2 + 1 + 3 * TEGRA_VIC_MAX_METHODS + 1], n = 0;
+    uint32_t words[2 + 1 + 3 * TEGRA_VIC_MAX_METHODS + 1];
+    uint32_t n = 0;
     if (acquire)
         n += tegra_host1x_op_wait_syncpt(words, acquire->syncpt, acquire->threshold);
     words[n++] = tegra_host1x_op_setclass(kClass, 0, 0);
@@ -645,11 +652,12 @@ void engineResume()
         const uint32_t from = tegra_host1x_syncpt_read(gSyncpt);
         const char *stage = nullptr;
         const int ret = answer(gSyncpt, from, &stage);
-        if (!ret)
+        if (!ret) {
             gWedged = false;
-        else
+        } else {
             snprintf(gLine, sizeof(gLine), "%s did not answer (%d, syncpoint %u %u->%u); %s", stage, ret, gSyncpt, from,
                      tegra_host1x_syncpt_read(gSyncpt), falconState());
+        }
     }
     if (gWedged)
         IOLog("TegraVIC: resume FAIL %s; VIC refuses work\n", gLine[0] ? gLine : "V1");
@@ -666,7 +674,7 @@ extern "C" int tegra_vic_probe(void)
     static volatile int started;
     if (__atomic_exchange_n(&started, 1, __ATOMIC_SEQ_CST))
         return 0;
-    thread_t thread;
+    thread_t thread = nullptr;
     if (kernel_thread_start(bringUp, nullptr, &thread) != KERN_SUCCESS) {
         IOLog("TegraVIC: could not start the bring-up thread\n");
         return -1;
