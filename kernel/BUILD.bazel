@@ -549,6 +549,16 @@ alias(
     }),
 )
 
+# The selected kind's prelink report (components, and on iOS 27 the kernel imports left unnamed), for tests.
+filegroup(
+    name = "prelink_report",
+    srcs = select({
+        ":xnu_12377_121_6": [":kernel_12377"],
+        "//conditions:default": [":kernel"],
+    }),
+    output_group = "report",
+)
+
 # --- Prelink: Apple's original kexts (the V20 roots, plus every driver's prelink list) --------------------------------
 tool_output(
     name = "dma_prelink_report",

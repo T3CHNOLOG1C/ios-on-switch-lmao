@@ -33,6 +33,32 @@ NAMES = {
     0xFFFFFFF00A8762CC: '__ZN12IODMACommand12OutputHost64EPS_NS_9Segment64EPvj',
     # serviceMatching(name, table) on the raw pointer, then retains the result and releases the table it consumed.
     0xFFFFFFF00A83EA78: '__ZN9IOService15serviceMatchingEPKc11OSSharedPtrI12OSDictionaryE',
+    # kern_codesigning.c in source order, which AppleMobileFileIntegrity and the sandbox import. The GOT pass put these
+    # names one function off (developer_mode_state's on disable_code_signing_feature, current_proc's on
+    # developer_mode_state) or none: the two panics; secure_channel_shared_page's tail call (0xFFFFFFF00A66C0FC);
+    # toggle_developer_mode(true), then (false); a load (developer_mode_state, which the GOT pass names); the research
+    # pair (the same code, research_mode_enabled first); rem_enable's call; rem_state's load; device state; boot mode;
+    # garbage collection's tail call into its body.
+    0xFFFFFFF00A66C038: '_disable_code_signing_feature',
+    0xFFFFFFF00A66C100: '_enable_developer_mode',
+    0xFFFFFFF00A66C150: '_disable_developer_mode',
+    0xFFFFFFF00A66C1B8: '_research_mode_state',
+    0xFFFFFFF00A66C1F8: '_extended_research_mode_state',
+    0xFFFFFFF00A66C238: '_restricted_execution_mode_enable',
+    0xFFFFFFF00A66C278: '_restricted_execution_mode_state',
+    0xFFFFFFF00A66C2A0: '_update_csm_device_state',
+    0xFFFFFFF00A66C2E8: '_complete_security_boot_mode',
+    0xFFFFFFF00A66C34C: '_garbage_collect_provisioning_profiles',
+    # After set_local_signing_public_key, as in the source.
+    0xFFFFFFF00A66CB40: '_get_local_signing_public_key',
+    # No calls, followed by fp_getfvp's call to fp_get_ftype, as in kern_descrip.c.
+    0xFFFFFFF00A5F68C0: '_fg_get_vnode',
+    # current_persona_get_id (voucher, bank, release), then persona_lookup.
+    0xFFFFFFF00A62AD80: '_current_persona_get',
+    # panic() after OSCollection's and OSIterator's deleted destructors, between OSMetaClass::instanceConstructed and
+    # __stack_chk_fail in the GOT of every kext with an abstract class (thirty of the prelinked ones). Vtables cannot
+    # name it: every pure virtual slot points here.
+    0xFFFFFFF00A96EE90: '___cxa_pure_virtual',
 }
 
 
