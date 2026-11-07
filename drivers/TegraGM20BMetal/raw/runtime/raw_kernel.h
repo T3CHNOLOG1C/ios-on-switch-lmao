@@ -51,6 +51,12 @@ public:
     bool importPages(void *addr, uint64_t bytes, Bo &bo, uint32_t surfaceId = 0);
     // The GPU may write the IOSurface from now on (BoImport took it as only sampled): before its first render or store.
     bool surfaceGpuWrites(uint32_t surfaceId);
+    // SurfaceLayout (method 16) for the import `bo` of a surface: its layout, decided by the kernel once for every process
+    // at the first asking import (TegraGM20BLayout.h: block-linear when that importer writes it alone). `writes`: this
+    // texture renders into or stores to it. TegraGM20BLayoutTiled, TegraGM20BLayoutOtherShape, or 0 (pitch; also without
+    // the method).
+    uint32_t surfaceLayout(const Bo &bo, uint32_t width, uint32_t height, uint32_t bpp, uint32_t bytesPerRow,
+                           bool writes);
     bool bindImport(void *addr, Bo &bo, uint32_t kind);
     // BoFree (the kernel unbinds it at once and releases the pages after the channels complete what they had); the VA goes
     // back to the free list at once: call it only once no submission that uses the BO is still running (raw::Device does).

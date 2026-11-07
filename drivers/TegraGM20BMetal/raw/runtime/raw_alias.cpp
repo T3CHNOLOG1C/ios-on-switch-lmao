@@ -91,7 +91,7 @@ bool Device::alias(Buffer &b, Alias &a)
     std::lock_guard<std::mutex> l(lock_);
     if (b.import) {
         b.import->refs++;
-        describe(b.import->bo, kPteKindPitch, new Lease{this, 1, Memory::Import, {}, b.import}, a);
+        describe(b.import->bo, b.import->kind, new Lease{this, 1, Memory::Import, {}, b.import}, a);
         return true;
     }
     if (!b.span.valid())
@@ -109,7 +109,7 @@ bool Device::aliasSurface(uint64_t surfaceId, void *base, uint64_t bytes, const 
     Import *i = importSurface(surfaceId, base, bytes, surface);
     if (!i)
         return false;
-    describe(i->bo, kPteKindPitch, new Lease{this, 1, Memory::Import, {}, i}, a);
+    describe(i->bo, i->kind, new Lease{this, 1, Memory::Import, {}, i}, a);
     return true;
 }
 

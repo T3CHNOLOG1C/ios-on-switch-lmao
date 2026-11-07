@@ -259,6 +259,17 @@ bool Kernel::surfaceGpuWrites(uint32_t surfaceId)
     return false;
 }
 
+uint32_t Kernel::surfaceLayout(const Bo &bo, uint32_t width, uint32_t height, uint32_t bpp, uint32_t bytesPerRow,
+                               bool writes)
+{
+    if (!(info_.flags & TegraGM20BInfoSurfaceLayout))
+        return 0;
+    const TegraGM20BAbiSurfaceLayout in = {
+        bo.handle, width, height, bpp, bytesPerRow, writes ? uint32_t(TegraGM20BLayoutWrites) : 0, 0};
+    TegraGM20BAbiSurfaceLayoutReply out = {};
+    return call(TegraGM20BMethodSurfaceLayout, &in, sizeof in, &out, sizeof out) == KERN_SUCCESS ? out.layout : 0;
+}
+
 bool Kernel::bindImport(void *addr, Bo &bo, uint32_t kind)
 {
     const uintptr_t base = uintptr_t(addr) & ~uintptr_t(info_.page_size - 1);

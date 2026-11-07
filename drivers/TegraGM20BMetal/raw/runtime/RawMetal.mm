@@ -43,6 +43,7 @@
 #include "RawAlias.h"
 #include "raw_follow.h"
 #include "raw_gpu.h"
+#include "TegraGM20BLayout.h"
 
 // The m2v frontend's in-place texture over a buffer (NativeBridgeMetalFrontend.mm): weak, so the host benchmark links without it.
 extern "C" id native_bridge_metal_texture_in_place(id buffer, id descriptor, NSUInteger offset, NSUInteger bytesPerRow)
@@ -971,6 +972,7 @@ static void traceSurfaceImage(RMTexture *t, const char *what, uint32_t seed)
 }
 #endif
 static void cpuLevel(RMTexture *t, MTLRegion r, NSUInteger level, uint8_t *bytes, NSUInteger row, bool write);
+static void cpuTiled(RMTexture *t, MTLRegion r, uint8_t *bytes, NSUInteger row, bool write);
 
 @implementation RMTexture
 
@@ -1267,6 +1269,10 @@ static void cpuLevel(RMTexture *t, MTLRegion r, NSUInteger level, uint8_t *bytes
     }
     if (r.origin.x + r.size.width > _raw.width || r.origin.y + r.size.height > _raw.height)
         return;
+    if (_raw.blockLinear) {
+        cpuTiled(self, r, (uint8_t *)bytes, row, true);
+        return;
+    }
     const size_t line = r.size.width * _raw.bpp;
     for (NSUInteger y = 0; y < r.size.height; y++) {
         uint8_t *to = _raw.cpu + (r.origin.y + y) * _raw.pitch + r.origin.x * _raw.bpp;
@@ -1315,6 +1321,10 @@ static void cpuLevel(RMTexture *t, MTLRegion r, NSUInteger level, uint8_t *bytes
     }
     if (r.origin.x + r.size.width > _raw.width || r.origin.y + r.size.height > _raw.height)
         return;
+    if (_raw.blockLinear) {
+        cpuTiled(self, r, (uint8_t *)bytes, row, false);
+        return;
+    }
 #if defined(__aarch64__)
     if (_gpuDirty.exchange(false) && !_raw.wc) {
         for (uintptr_t a = uintptr_t(_raw.cpu) & ~uintptr_t(63);
@@ -1418,6 +1428,30 @@ static void cacheLines(const uint8_t *from, uint64_t bytes, bool invalidate)
 // committed before left them, and the CPU writes since): m2v's texture of every level after m2v generated them (a write also goes
 // to the level's mirror, whole, so the raw path takes it in after generating: Chain::mirrorLevels); the mirror after m2v wrote
 // the level (and m2v's texture); else the chain, in the CPU's view the device's self-test chose.
+// A block-linear texture's CPU copies (replaceRegion, getBytes of level 0) through TegraGM20BLayout.h: the block rows they
+// reach are invalidated before a read of what the GPU wrote, cleaned after a write
+static void cpuTiled(RMTexture *t, MTLRegion r, uint8_t *bytes, NSUInteger row, bool write)
+{
+    tgm_layout l;
+    if (!r.size.width || !r.size.height || !tgm_layout_tiled(t->_raw.width, t->_raw.height, t->_raw.bpp, &l))
+        return;
+    const uint64_t blockRow = uint64_t(l.row_bytes) * (8u << l.y_log2);
+    const uint64_t from = r.origin.y / (8u << l.y_log2) * blockRow,
+                   to = std::min<uint64_t>((r.origin.y + r.size.height + (8u << l.y_log2) - 1) / (8u << l.y_log2) *
+                                               blockRow,
+                                           uint64_t(l.row_bytes) * l.rows);
+    if (write) {
+        tgm_layout_write(&l, t->_raw.cpu, uint32_t(r.origin.x), uint32_t(r.origin.y), uint32_t(r.size.width),
+                         uint32_t(r.size.height), bytes, row);
+        cacheLines(t->_raw.cpu + from, to - from, false);
+        return;
+    }
+    if (t->_gpuDirty.exchange(false))
+        cacheLines(t->_raw.cpu, l.row_bytes * uint64_t(l.rows), true);
+    tgm_layout_read(&l, t->_raw.cpu, uint32_t(r.origin.x), uint32_t(r.origin.y), uint32_t(r.size.width),
+                    uint32_t(r.size.height), bytes, row);
+}
+
 static void cpuLevel(RMTexture *t, MTLRegion r, NSUInteger level, uint8_t *bytes, NSUInteger row, bool write)
 {
     const raw::Texture::Chain &c = *t->_raw.chain;
@@ -2593,7 +2627,7 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
     // a mipmapped texture's level below the first (its chain's, raw::BlitEncoder::copyFromLevel: the 2D engine, 1:1, into a
     // texture of the same format whose address and rows it takes as a pitch surface)
     const raw::Texture::Chain *ch = both && a->_rawOk ? a->_raw.chain : nullptr;
-    const bool level = ch && sl && sl < ch->layout.levels && b->_rawOk && !b->_raw.memoryless &&
+    const bool level = ch && sl && sl < ch->layout.levels && b->_rawOk && !b->_raw.memoryless && !b->_raw.blockLinear &&
                        !((b->_raw.va | b->_raw.pitch) & 127) && b->_raw.format == a->_raw.format && !b->_raw.planar &&
                        !b->_raw.ycbcr && !ss && !ds && !dl && size.depth == 1 &&
                        so.x + size.width <= ch->layout.level[sl].width &&
@@ -4536,9 +4570,8 @@ static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **
                 be->copyFromLevel(s->_raw, uint32_t(sl), uint32_t(sx), uint32_t(sy), t->_raw, uint32_t(dx),
                                   uint32_t(dy), uint32_t(w), uint32_t(h));
             } else {
-                be->copyRect(s->_raw.va + sy * s->_raw.pitch + sx * s->_raw.bpp, s->_raw.pitch,
-                             t->_raw.va + dy * t->_raw.pitch + dx * t->_raw.bpp, t->_raw.pitch, uint32_t(w),
-                             uint32_t(h), s->_raw.bpp);
+                be->copyTexels(s->_raw, uint32_t(sx), uint32_t(sy), t->_raw, uint32_t(dx), uint32_t(dy), uint32_t(w),
+                               uint32_t(h));
             }
             if (t->_raw.chain) {  // its level 0 written
                 touch(t).l0Fresh = false;
@@ -4582,9 +4615,8 @@ static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **
             }
             if (!s->_raw.wc)
                 rc->clean(s->_raw.cpu + so, row * (h - 1) + w * t->_raw.bpp);
-            be->copyRect(s->_raw.va + so, uint32_t(row),
-                         t->_raw.va + (o >> 32) * t->_raw.pitch + uint32_t(o) * t->_raw.bpp, t->_raw.pitch, uint32_t(w),
-                         uint32_t(h), t->_raw.bpp);
+            be->copyBufferTexels(s->_raw.va + so, uint32_t(row), t->_raw, uint32_t(o), uint32_t(o >> 32), uint32_t(w),
+                                 uint32_t(h), true);
             break;
         }
         case OpCopyTextureToBuffer: {
@@ -4596,8 +4628,8 @@ static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **
                            dof = extra(cb, x + 7), row = extra(cb, x + 8);
             if (!t->_raw.wc)
                 rc->clean(t->_raw.cpu + dof, row * (h - 1) + w * s->_raw.bpp, true);
-            be->copyRect(s->_raw.va + (o >> 32) * s->_raw.pitch + uint32_t(o) * s->_raw.bpp, s->_raw.pitch,
-                         t->_raw.va + dof, uint32_t(row), uint32_t(w), uint32_t(h), s->_raw.bpp);
+            be->copyBufferTexels(t->_raw.va + dof, uint32_t(row), s->_raw, uint32_t(o), uint32_t(o >> 32), uint32_t(w),
+                                 uint32_t(h), false);
             break;
         }
         default:  // states, fences, events, resources the raw path needs nothing for
@@ -5019,6 +5051,19 @@ static const char *ycbcrPlan(MTLTextureDescriptor *d, IOSurfaceRef s, NSUInteger
     return raw::planYcbcr(f, out);
 }
 
+// Whether the GPU may write a texture of this descriptor (Unknown: any use)
+static bool writesTexture(MTLTextureDescriptor *d)
+{
+    return d.usage == MTLTextureUsageUnknown || (d.usage & (MTLTextureUsageRenderTarget | MTLTextureUsageShaderWrite));
+}
+
+// Whether a texture of this descriptor is made to be rendered into or stored to, as the kernel's layout decision takes it
+// (TegraGM20BLayout.h): a surface whose first texture says Unknown is left pitch, as the CPU may produce it
+static bool producesTexture(MTLTextureDescriptor *d)
+{
+    return d.usage & (MTLTextureUsageRenderTarget | MTLTextureUsageShaderWrite);
+}
+
 - (id<MTLTexture>)newTextureWithDescriptor:(MTLTextureDescriptor *)d iosurface:(IOSurfaceRef)s plane:(NSUInteger)plane
 {
     SWITCH_API(ApiObject);
@@ -5054,10 +5099,9 @@ static const char *ycbcrPlan(MTLTextureDescriptor *d, IOSurfaceRef s, NSUInteger
         const size_t pitch = one ? IOSurfaceGetBytesPerRowOfPlane(s, 0) : IOSurfaceGetBytesPerRow(s);
         t->_rawOk = gRM->raw->createSurfaceTexture(IOSurfaceGetID(s), base, IOSurfaceGetAllocSize(s), s, offset,
                                                    uint32_t(d.width), uint32_t(d.height), uint32_t(pitch),
-                                                   uint32_t(d.pixelFormat), t->_raw);
+                                                   uint32_t(d.pixelFormat), t->_raw, producesTexture(d));
     }
-    if (t->_rawOk &&
-        (d.usage == MTLTextureUsageUnknown || (d.usage & (MTLTextureUsageRenderTarget | MTLTextureUsageShaderWrite))))
+    if (t->_rawOk && writesTexture(d))
         declareGpuWrites(t);
     if (!t->_rawOk) {  // a surface the raw path does not take: m2v's texture over it, made now (it may refuse: nil, as today)
         // which term (createSurfaceTexture's, recomputed here: a creation, not the hot path)
@@ -6012,7 +6056,7 @@ static void completionLoop()
 static struct {
     uint64_t raw, m2v, encodeUs, draws, passes, copies, deferred, aborted, reasons[WhyCount], ringWaits, lastUs,
         switches, cpuOrdered, acquires, poolStalls, eventsReleased, heldReturns, abortUs, replayUs, replayClean,
-        rtUnaligned, predOnly[PredCount], splits, splitM2v, levelPasses, mirrorsOut, mirrorsIn;
+        rtUnaligned, rtMixed, predOnly[PredCount], splits, splitM2v, levelPasses, mirrorsOut, mirrorsIn;
 } gRates;
 
 bool raw_metal_texture_kept(id<MTLTexture> texture)
@@ -6030,7 +6074,7 @@ const void *raw_metal_texture_image(id<MTLTexture> texture, size_t *pitch)
     if (![(id)texture isKindOfClass:[RMTexture class]])
         return nullptr;
     RMTexture *t = (RMTexture *)texture;
-    if (!t->_rawOk || !t->_raw.cpu)
+    if (!t->_rawOk || !t->_raw.cpu || t->_raw.blockLinear)
         return nullptr;
     if (pitch)
         *pitch = t->_raw.pitch;
@@ -6088,14 +6132,16 @@ size_t raw_metal_rates(char *out, size_t size)
                    m2vs = f + segs ? f + segs : 1;
     char diag[768];
     snprintf(diag, sizeof diag,
-             " sp=%llu/%llu abortenc=%.0fus/a replay=%.0fus/m rclean=%.0fKB/m rt128=%llu(pitch %u va&255 %u) lvl=%llu "
+             " sp=%llu/%llu abortenc=%.0fus/a replay=%.0fus/m rclean=%.0fKB/m rt128=%llu(pitch %u va&255 %u) "
+             "rtmix=%llu lvl=%llu "
              "mir=%llu/%llu why=%s",
              (unsigned long long)sp, (unsigned long long)segs,
              (s.abortUs.load() - gRates.abortUs) / double(aborts ? aborts : 1),
              (s.replayUs.load() - gRates.replayUs) / double(m2vs),
              (s.replayClean.load() - gRates.replayClean) / 1024.0 / double(m2vs),
              (unsigned long long)(k.rtUnaligned.load() - gRates.rtUnaligned), k.rtUnalignedPitch.load(),
-             k.rtUnalignedVa.load(), (unsigned long long)(k.levelPasses.load() - gRates.levelPasses),
+             k.rtUnalignedVa.load(), (unsigned long long)(k.rtMixed.load() - gRates.rtMixed),
+             (unsigned long long)(k.levelPasses.load() - gRates.levelPasses),
              (unsigned long long)(k.mirrorsOut.load() - gRates.mirrorsOut),
              (unsigned long long)(k.mirrorsIn.load() - gRates.mirrorsIn), *preds ? preds : "-");
 #if SWITCH_FRAME_TIMELINE
@@ -6122,6 +6168,7 @@ size_t raw_metal_rates(char *out, size_t size)
     gRates.replayUs = s.replayUs.load();
     gRates.replayClean = s.replayClean.load();
     gRates.rtUnaligned = k.rtUnaligned.load();
+    gRates.rtMixed = k.rtMixed.load();
     gRates.levelPasses = k.levelPasses.load();
     gRates.mirrorsOut = k.mirrorsOut.load();
     gRates.mirrorsIn = k.mirrorsIn.load();

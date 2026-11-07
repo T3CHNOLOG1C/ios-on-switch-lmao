@@ -82,6 +82,16 @@ struct Import {
     uint32_t refs = 0;
     uint64_t id = 0, base = 0, bytes = 0;  // surfaces: IOSurfaceID, base address, allocation size (the cache key)
     const void *owner = nullptr;           // a retained IOSurfaceRef: its pages stay the surface's while imported
+    // The PTE kind it is bound with: TGM_LAYOUT_KIND when the kernel decided the surface block-linear (SurfaceLayout), at
+    // `layout`: its every texture is block-linear, as every GPU client, the display and a CPU lock see it
+    uint32_t kind = 0;
+    tgm_layout layout = {};
+};
+
+// The first texture's shape a new import asks the kernel the surface's layout with (raw_kernel.h surfaceLayout)
+struct LayoutAsk {
+    uint32_t width = 0, height = 0, bpp = 0, bytesPerRow = 0;
+    bool writes = false;
 };
 
 // A page-aligned span of a pool chunk.
@@ -165,8 +175,9 @@ struct Texture {
         uint32_t levelTic[fx::kMaxLevels] = {};  // a view of each level alone (Device::levelTic), made on first use
     } *chain = nullptr;
 
-    // A chain level as a render target (chainLevelTarget: no memory or header of its own, tic 0): block-linear at the level's
-    // address, pitch its row stride, `blockHeight` its block height (log2 GOBs), `layerBytes` the chain's size
+    // Block-linear (TegraGM20BLayout.h): a chain level as a render target (chainLevelTarget: no memory or header of its own,
+    // tic 0), or a texture laid out so (a tiled surface's, a memoryless attachment's backing in a block-linear pass): pitch
+    // its row stride, `blockHeight` its block height (log2 GOBs), `layerBytes` the chain's or the texture's size
     bool blockLinear = false;
     uint8_t blockHeight = 0;
     uint64_t layerBytes = 0;
@@ -416,6 +427,13 @@ public:
     // buffer<->image copies of linear images)
     void copyRect(uint64_t src, uint32_t srcPitch, uint64_t dst, uint32_t dstPitch, uint32_t width, uint32_t lines,
                   uint32_t bpp);
+    // `w` x `h` texels from (sx, sy) of `src` to (dx, dy) of `dst`, each pitch or block-linear (vkCmdCopyImage)
+    void copyTexels(const Texture &src, uint32_t sx, uint32_t sy, const Texture &dst, uint32_t dx, uint32_t dy,
+                    uint32_t w, uint32_t h);
+    // `w` x `h` texels between rows `pitch` bytes apart at `va` and (x, y) of `t`, pitch or block-linear: into `t` where
+    // `toTexture`, else out of it (vkCmdCopyBufferToImage, vkCmdCopyImageToBuffer)
+    void copyBufferTexels(uint64_t va, uint32_t pitch, const Texture &t, uint32_t x, uint32_t y, uint32_t w, uint32_t h,
+                          bool toTexture);
     // A planar texture's image from its surface's planes (Texture::planar): two remapped copies, the luma codes into green
     // (alpha 255), then the chroma pairs into red (Cr) and blue (Cb), each leaving the other components as they are
     void convertPlanar(const Texture &t);
@@ -522,8 +540,11 @@ public:
         return id && k_.surfaceGpuWrites(uint32_t(id));
     }
 
+    // `writes`: the texture is rendered into or stored to. A surface the kernel decides block-linear (the first texture over
+    // it writes it: TegraGM20BLayout.h) has block-linear textures only, at the decided shape (false: another one)
     bool createSurfaceTexture(uint64_t surfaceId, void *base, uint64_t allocBytes, const void *surface, uint64_t offset,
-                              uint32_t width, uint32_t height, uint32_t pitch, uint32_t format, Texture &t);
+                              uint32_t width, uint32_t height, uint32_t pitch, uint32_t format, Texture &t,
+                              bool writes = false);
     // A two-plane YCbCr surface's texture of `width` x `height` as `plan` reads its planes, its image one of the pool
     bool createYcbcrTexture(uint64_t surfaceId, void *base, uint64_t allocBytes, const void *surface,
                             const YcbcrPlan &plan, uint32_t width, uint32_t height, Texture &t);
@@ -659,6 +680,8 @@ public:
         // diagnostics: color targets the raw path rendered whose address or pitch is not a multiple of 128 (NVK renders
         // those through a tiled shadow: nvk_cmd_draw.c nvk_image_plane_aligned_for_linear_attachment), and the last one's pitch
         std::atomic<uint64_t> rtUnaligned{0};
+        // color targets in rows the raw path rendered through a block-linear shadow, beside a block-linear one in their pass
+        std::atomic<uint64_t> rtMixed{0};
         std::atomic<uint32_t> rtUnalignedPitch{0}, rtUnalignedVa{0};
         // mip chains: made, chain bytes, generated (whole) and level-0 refreshes, copies out of a level
         std::atomic<uint64_t> chains{0}, chainBytes{0}, chainGenerates{0}, chainRefreshes{0}, chainCopies{0};
@@ -833,7 +856,8 @@ private:
     void writeTic(const Texture &t);
     bool poolAlloc(uint64_t bytes, Span &s);
     void poolFree(Span &s);
-    Import *importSurface(uint64_t id, void *base, uint64_t bytes, const void *owner);
+    bool tiledSurfaceTexture(uint64_t offset, uint32_t width, uint32_t height, Texture &t);
+    Import *importSurface(uint64_t id, void *base, uint64_t bytes, const void *owner, const LayoutAsk *ask = nullptr);
     void release(Import *i);
     // lock_ held (raw_alias.cpp): a hold on a span's lease, made at its first alias; the last drop frees what the lease holds
     Lease *leaseSpan(Lease *&lease, const Span &span, Memory from);
@@ -841,9 +865,9 @@ private:
     // lock_ held: the span goes back to where it came from now, or at its lease's last drop
     void freeSpan(Span &span, Memory from, Lease *&lease);
     // A memoryless color attachment j's memory (tag kMemorylessTag + j: two of a pass never share one), a shadow target's pool
-    // image for attachment j (tag 1 + j), or a memoryless zeta's (tag 0): one per size, format and tag, kept while passes use it
-    // `blockLinear`: a colour backing of a pass with a depth/stencil attachment (NVK renders no pitch colour beside zeta); a
-    // zeta's is zeta memory
+    // image for attachment j (tag 1 + j), or a memoryless zeta's (tag 0): one per size, format, tag and layout, kept while passes
+    // use it. `blockLinear`: a colour backing of a pass with a block-linear colour target or a depth/stencil attachment; a zeta's
+    // is zeta memory
     static constexpr uint32_t kMemorylessTag = 9;
     Texture *backing(const Texture &memoryless, uint32_t tag = 0, bool blockLinear = false);
     void freeBacking(Texture &t);

@@ -7,6 +7,7 @@
 #include "raw_follow.h"
 #include "raw_gpu.h"
 #include "raw_target.h"
+#include "TegraGM20BLayout.h"
 
 #include <CoreFoundation/CoreFoundation.h>
 #include <mach/mach.h>
@@ -80,6 +81,8 @@ enum : uint32_t {
     CE_LINE_LENGTH_IN = 0x0418,
     CE_SET_REMAP_CONST_A = 0x0700,
     CE_SET_REMAP_COMPONENTS = 0x0708,
+    CE_SET_DST_BLOCK_SIZE = 0x070c,  // then DST_WIDTH, HEIGHT, DEPTH, LAYER, ORIGIN
+    CE_SET_SRC_BLOCK_SIZE = 0x0728,  // then SRC_WIDTH, HEIGHT, DEPTH, LAYER, ORIGIN
 };
 
 constexpr uint32_t kRootBytes = 0x800, kSetBytes = 0x100, kUboChunk = 0x100;
@@ -717,7 +720,10 @@ void Device::poolFree(Span &s)
     }
 }
 
-Import *Device::importSurface(uint64_t id, void *base, uint64_t bytes, const void *owner)
+// A surface's one import in this task. A new one asks the kernel its layout (`ask`: the first texture's shape and whether it
+// writes; none: a pitch decision, as for m2v's imports and buffers over a surface) before binding it under that layout's
+// kind; one already made is shared whatever its layout.
+Import *Device::importSurface(uint64_t id, void *base, uint64_t bytes, const void *owner, const LayoutAsk *ask)
 {
     const auto key = std::make_tuple(id, uint64_t(uintptr_t(base)), bytes);
     if (id) {
@@ -729,7 +735,16 @@ Import *Device::importSurface(uint64_t id, void *base, uint64_t bytes, const voi
         }
     }
     Import *i = new Import;
-    if (!k_.import(base, bytes, i->bo, kPteKindPitch, uint32_t(id))) {
+    if (!k_.importPages(base, bytes, i->bo, uint32_t(id))) {
+        delete i;
+        return nullptr;
+    }
+    const LayoutAsk none = {};
+    const LayoutAsk &a = ask ? *ask : none;
+    if (id && k_.surfaceLayout(i->bo, a.width, a.height, a.bpp, a.bytesPerRow, a.writes) == TegraGM20BLayoutTiled &&
+        tgm_layout_tiled(a.width, a.height, a.bpp, &i->layout))
+        i->kind = TGM_LAYOUT_KIND;
+    if (!k_.bindImport(base, i->bo, i->kind)) {
         delete i;
         return nullptr;
     }
@@ -777,6 +792,12 @@ void Device::writeTic(const Texture &t)
 {
     const FormatInfo *f = formatInfo(t.format);
     uint32_t w[8] = {f->tic0};
+    fx::MipChain one;
+    if (t.blockLinear && fx::mipChainLayout(t.width, t.height, 1, t.bpp, one)) {  // NIL's header of a one-level image
+        fx::mipChainTic(one, t.va, f->tic0, f->srgb, 0, 1, w);
+        memcpy(tic_.cpu + 32 * t.tic, w, 32);
+        return;
+    }
     setField(w, 87, 85, 2);                        // HEADER_VERSION PITCH
     setField(w, 63, 37, (t.va >> 5) & 0x7ffffff);  // ADDRESS_BITS31TO5
     setField(w, 79, 64, (t.va >> 32) & 0xffff);
@@ -846,9 +867,35 @@ bool Device::createTexture(uint32_t width, uint32_t height, uint32_t format, Tex
     return true;
 }
 
+// A texture over a block-linear surface's import: TegraGM20BLayout.h's image from the surface's first byte, at the shape the
+// kernel decided (a view of another format of the same texel size reads it as its own), under the import's
+// TGM_LAYOUT_KIND binding, which the 3D and 2D engines, the copy engine and the texture unit all address so
+bool Device::tiledSurfaceTexture(uint64_t offset, uint32_t width, uint32_t height, Texture &t)
+{
+    const tgm_layout &l = t.import->layout;
+    if (offset || width != l.width || height != l.height || t.bpp != l.bpp) {
+        release(t.import);
+        t.import = nullptr;
+        return false;
+    }
+    t.va = t.import->bo.va;
+    t.cpu = reinterpret_cast<uint8_t *>(t.import->base);
+    t.pitch = l.row_bytes;
+    t.blockLinear = true;
+    t.blockHeight = l.y_log2;
+    t.layerBytes = l.bytes;
+    if (!(t.tic = allocTic())) {
+        release(t.import);
+        t.import = nullptr;
+        return false;
+    }
+    writeTic(t);
+    return true;
+}
+
 bool Device::createSurfaceTexture(uint64_t surfaceId, void *base, uint64_t allocBytes, const void *surface,
                                   uint64_t offset, uint32_t width, uint32_t height, uint32_t pitch, uint32_t format,
-                                  Texture &t)
+                                  Texture &t, bool writes)
 {
     // rows and offset a multiple of 16, as m2v takes a surface (linear_plan.rs); the texture header's 32 through `sampled`
     if (!shape(width, height, format, t) || (pitch & 15) || (offset & 15) || pitch < width * t.bpp ||
@@ -865,14 +912,24 @@ bool Device::createSurfaceTexture(uint64_t surfaceId, void *base, uint64_t alloc
     }
     std::unique_lock<std::mutex> l(lock_);
     t.pitch = pitch;
-    if (!(t.import =
-              importSurface(surfaceId, base, (allocBytes + pageSize() - 1) & ~uint64_t(pageSize() - 1), surface))) {
+    const LayoutAsk ask = {width, height, t.bpp, pitch, writes && !offset && !sampled};
+    if (!(t.import = importSurface(surfaceId, base, (allocBytes + pageSize() - 1) & ~uint64_t(pageSize() - 1), surface,
+                                   &ask)) ||
+        (t.import->kind == TGM_LAYOUT_KIND && !tiledSurfaceTexture(offset, width, height, t))) {
         l.unlock();
         if (sampled) {
             destroyTexture(*sampled);
             delete sampled;
         }
         return false;
+    }
+    if (t.blockLinear) {
+        l.unlock();
+        if (sampled) {
+            destroyTexture(*sampled);
+            delete sampled;
+        }
+        return true;
     }
     t.va = t.import->bo.va + offset;
     t.cpu = static_cast<uint8_t *>(base) + offset;
@@ -948,8 +1005,8 @@ bool Device::createView(const Texture &of, uint32_t format, Texture &t)
     std::lock_guard<std::mutex> l(lock_);
     t = of;
     t.format = format;
-    t.renderable = f->rt != 0 && linearTarget(t);
-    t.shadowTarget = f->rt != 0 && !linearTarget(t);
+    t.renderable = f->rt != 0 && (t.blockLinear || linearTarget(t));
+    t.shadowTarget = f->rt != 0 && !t.blockLinear && !linearTarget(t);
     t.import = nullptr;  // the viewed texture owns the memory (RawMetal.mm keeps it alive while a view lives)
     t.span = {};
     t.lease = nullptr;
@@ -1563,8 +1620,8 @@ bool Device::createYcbcrTexture(uint64_t surfaceId, void *base, uint64_t allocBy
 }
 
 // A memoryless attachment's memory: one per size, format, tag and layout, kept while passes use it (m2v 0105 gives a memoryless
-// attachment linear memory in a pass that renders to linear memory; NVK renders a pass with a depth/stencil attachment into
-// block-linear colour). Called with the device lock held.
+// attachment linear memory in a pass that renders to linear memory; NVK renders a pass with a block-linear colour target or a
+// depth/stencil attachment into block-linear colour). Called with the device lock held.
 Texture *Device::backing(const Texture &m, uint32_t tag, bool blockLinear)
 {
     blockLinear |= m.zeta;
@@ -1795,18 +1852,16 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
     e.cb_ = this;
     e.dev_ = dev_;
     e.pass_ = pass;
-    // the render hardware takes one memory layout for all of a pass's color targets, block-linear beside a zeta (NVK renders
-    // its pitch colors through tiled shadows then); memoryless ones get a backing of the pass's layout
+    // the render hardware takes one memory layout for all of a pass's color targets (nvk_rendering_linear): block-linear when
+    // one of them is or beside a zeta, its pitch ones then rendered through block-linear shadows as NVK does; memoryless ones
+    // get a backing of the pass's layout
     const Texture *zeta = pass.depthStencil.texture;
     if (zeta && (!zeta->zeta || !zeta->memoryless))
         return nullptr;
-    bool blockLinear = zeta != nullptr, pitch = false;
+    bool blockLinear = zeta != nullptr;
     for (uint32_t j = 0; j < pass.count && j < 8; j++)
-        if (const Texture *t = pass.color[j].texture)
-            if (!t->memoryless || !zeta)
-                (t->blockLinear ? blockLinear : pitch) = true;
-    if (blockLinear && pitch)
-        return nullptr;
+        if (const Texture *t = pass.color[j].texture; t && !t->memoryless && t->blockLinear)
+            blockLinear = true;
     if (zeta) {
         std::lock_guard<std::mutex> l(dev_->lock_);
         Texture *b = dev_->backing(*zeta);
@@ -1821,12 +1876,17 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
             continue;
         if (!t->renderable && !t->shadowTarget)
             return nullptr;
-        if (t->shadowTarget) {  // rendered through a pool image (end(): copied in before, back after)
-            dev_->stats.rtUnaligned++;
-            dev_->stats.rtUnalignedPitch = t->pitch;
-            dev_->stats.rtUnalignedVa = uint32_t(t->va & 255);
+        const bool mixed = blockLinear && !t->blockLinear && !t->memoryless;
+        if (t->shadowTarget || mixed) {  // rendered through a pool image (end(): copied in before, back after)
+            if (mixed) {
+                dev_->stats.rtMixed++;
+            } else {
+                dev_->stats.rtUnaligned++;
+                dev_->stats.rtUnalignedPitch = t->pitch;
+                dev_->stats.rtUnalignedVa = uint32_t(t->va & 255);
+            }
             std::lock_guard<std::mutex> l(dev_->lock_);
-            Texture *b = dev_->backing(*t, 1 + j);
+            Texture *b = dev_->backing(*t, 1 + j, blockLinear);
             if (!b || !b->renderable)
                 return nullptr;
             e.pass_.color[j].texture = b;
@@ -1836,7 +1896,7 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
         }
         if (t->memoryless) {  // back it for this pass
             std::lock_guard<std::mutex> l(dev_->lock_);
-            Texture *b = dev_->backing(*t, Device::kMemorylessTag + j, zeta != nullptr);
+            Texture *b = dev_->backing(*t, Device::kMemorylessTag + j, blockLinear);
             if (!b)
                 return nullptr;
             e.pass_.color[j].texture = b;
@@ -2626,23 +2686,59 @@ static void clearValue(uint32_t format, const float in[4], uint32_t out[4])
 }
 
 namespace {
-// `lines` rows of `width` texels of `bpp` bytes, pitch to pitch: a remap of min(bpp, 4)-byte components, so the line length counts
-// texels (about 12 dwords)
-void copyRows(Push &p, uint64_t src, uint32_t srcPitch, uint64_t dst, uint32_t dstPitch, uint32_t width, uint32_t lines,
-              uint32_t bpp, Device::Stats &stats)
+// One side of a copy-engine copy: pitch (va the first texel's, rows `pitch` apart) or a block-linear image (va its first byte,
+// `pitch` its row stride, the copy from texel (x, y) of its width x height)
+struct CopySide {
+    uint64_t va = 0;
+    uint32_t pitch = 0, x = 0, y = 0, width = 0, height = 0;
+    bool blockLinear = false;
+    uint8_t blockHeight = 0;
+};
+
+CopySide sideOf(const Texture &t, uint32_t x, uint32_t y)
 {
-    if (!width || !lines || !bpp)
+    if (!t.blockLinear)
+        return {t.va + uint64_t(y) * t.pitch + uint64_t(x) * t.bpp, t.pitch};
+    return {t.va, t.pitch, x, y, t.pitch / t.bpp, t.height, true, t.blockHeight};
+}
+
+// `w` x `h` texels of `bpp` bytes as nouveau_copy_rect moves them: a remap of min(bpp, 4)-byte components, so lengths, widths
+// and origins count texels; a block-linear side by its block size (one GOB wide, Fermi's 8-row GOBs), its width the row
+// stride in texels, one layer
+void copySides(Push &p, const CopySide &s, const CopySide &d, uint32_t w, uint32_t h, uint32_t bpp,
+               Device::Stats &stats)
+{
+    if (!w || !h || !bpp)
         return;
     stats.ceOps++;
-    stats.ceBytes += uint64_t(width) * bpp * lines;
+    stats.ceBytes += uint64_t(w) * bpp * h;
     const uint32_t comp = std::min(bpp, 4u), n = bpp / comp;
     // DST_X..W = SRC_X..W, COMPONENT_SIZE, NUM_SRC_COMPONENTS, NUM_DST_COMPONENTS
     p.m(CE_SET_REMAP_COMPONENTS, 0 | 1 << 4 | 2 << 8 | 3 << 12 | (comp - 1) << 16 | (n - 1) << 20 | (n - 1) << 24,
         SUBC_COPY);
     p.inc(CE_OFFSET_IN_UPPER,
-          {uint32_t(src >> 32), uint32_t(src), uint32_t(dst >> 32), uint32_t(dst), srcPitch, dstPitch, width, lines},
+          {uint32_t(s.va >> 32), uint32_t(s.va), uint32_t(d.va >> 32), uint32_t(d.va), s.pitch, d.pitch, w, h},
           SUBC_COPY);
-    p.m(CE_LAUNCH_DMA, kLaunchPitch | 1u << 10, SUBC_COPY);  // REMAP_ENABLE
+    constexpr uint32_t kGobHeightFermi8 = 1u << 12, kSrcPitch = 1u << 7, kDstPitch = 1u << 8;
+    uint32_t launch = (kLaunchPitch & ~(kSrcPitch | kDstPitch)) | 1u << 10;  // REMAP_ENABLE
+    if (s.blockLinear)
+        p.inc(CE_SET_SRC_BLOCK_SIZE,
+              {uint32_t(s.blockHeight) << 4 | kGobHeightFermi8, s.width, s.height, 1, 0, s.y << 16 | s.x}, SUBC_COPY);
+    else
+        launch |= kSrcPitch;
+    if (d.blockLinear)
+        p.inc(CE_SET_DST_BLOCK_SIZE,
+              {uint32_t(d.blockHeight) << 4 | kGobHeightFermi8, d.width, d.height, 1, 0, d.y << 16 | d.x}, SUBC_COPY);
+    else
+        launch |= kDstPitch;
+    p.m(CE_LAUNCH_DMA, launch, SUBC_COPY);
+}
+
+// `lines` rows of `width` texels of `bpp` bytes, pitch to pitch
+void copyRows(Push &p, uint64_t src, uint32_t srcPitch, uint64_t dst, uint32_t dstPitch, uint32_t width, uint32_t lines,
+              uint32_t bpp, Device::Stats &stats)
+{
+    copySides(p, {src, srcPitch}, {dst, dstPitch}, width, lines, bpp, stats);
 }
 }  // namespace
 
@@ -2744,8 +2840,7 @@ void RenderEncoder::end()
         if (const Texture *o = shadowOf_[j]) {
             if (pass_.color[j].load == ColorAttachment::Clear)
                 continue;
-            const Texture *s = pass_.color[j].texture;
-            copyRows(p, o->va, o->pitch, s->va, s->pitch, areaW_, areaH_, o->bpp, d.stats);
+            copySides(p, sideOf(*o, 0, 0), sideOf(*pass_.color[j].texture, 0, 0), areaW_, areaH_, o->bpp, d.stats);
             copied = true;
         }
     if (copied) {
@@ -2836,7 +2931,7 @@ void RenderEncoder::end()
     for (uint32_t j = 0; j < pass_.count && j < 8; j++)
         stores |= shadowOf_[j] && pass_.color[j].store;
     if (stores) {
-        const uint32_t room2 = 8 + 8 * 16;
+        const uint32_t room2 = 8 + 8 * 32;
         uint32_t *at = reinterpret_cast<uint32_t *>(d.alloc(d.push_, room2 * 4, 256, va));
         Push q{at, at + room2};
         q.m(WAIT_FOR_IDLE, 0);
@@ -2850,8 +2945,7 @@ void RenderEncoder::end()
                     w = std::max(w, c.x1);
                     h = std::max(h, c.y1);
                 }
-            const Texture *s = pass_.color[j].texture;
-            copyRows(q, s->va, s->pitch, o->va, o->pitch, w, h, o->bpp, d.stats);
+            copySides(q, sideOf(*pass_.color[j].texture, 0, 0), sideOf(*o, 0, 0), w, h, o->bpp, d.stats);
         }
         cb_->segment(at, q.at);
         d.push_.head = uint64_t(reinterpret_cast<uint8_t *>(q.at) - d.push_.bo.cpu);
@@ -3001,6 +3095,21 @@ void BlitEncoder::copyRect(uint64_t src, uint32_t srcPitch, uint64_t dst, uint32
         return;
     room();
     copyRows(p_, src, srcPitch, dst, dstPitch, width, lines, bpp, dev_->stats);
+}
+
+void BlitEncoder::copyTexels(const Texture &src, uint32_t sx, uint32_t sy, const Texture &dst, uint32_t dx, uint32_t dy,
+                             uint32_t w, uint32_t h)
+{
+    room(32);
+    copySides(p_, sideOf(src, sx, sy), sideOf(dst, dx, dy), w, h, src.bpp, dev_->stats);
+}
+
+void BlitEncoder::copyBufferTexels(uint64_t va, uint32_t pitch, const Texture &t, uint32_t x, uint32_t y, uint32_t w,
+                                   uint32_t h, bool toTexture)
+{
+    room(32);
+    const CopySide rows{va, pitch}, texels = sideOf(t, x, y);
+    copySides(p_, toTexture ? rows : texels, toTexture ? texels : rows, w, h, t.bpp, dev_->stats);
 }
 
 // The codes Metal reads of RGB8_444_2P (pack/../m2v ycbcr_convert.rs: "Codes"): red Cr, green Y, blue Cb, each code / 255, alpha
