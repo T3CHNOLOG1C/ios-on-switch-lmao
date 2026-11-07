@@ -16,19 +16,6 @@ void native_legacy_display_probe(void);
 STUB void native_legacy_display_probe(void)
 {}
 
-// NativeVirtioBlock in verified mode (qemu_root_defconfig) asks NativeUfs whether a provider is one of its windows.
-// It declares the hook weak, but a static kernel link still requires a definition; -1 means "not a UFS window", the
-// same as the hook being absent.
-int native_ufs_block_authenticates(void *provider, const char *uuid, uint8_t *digest);
-
-STUB int native_ufs_block_authenticates(void *provider, const char *uuid, uint8_t *digest)
-{
-    (void)provider;
-    (void)uuid;
-    (void)digest;
-    return -1;
-}
-
 // NativeRamBlock asks for a UFS store mode; with no UFS driver in this kernel it is always 0, no store, so the Data
 // ramdisk stays in memory and the other hooks are never called; they refuse if they are.
 unsigned native_ufs_store_mode(void);

@@ -96,7 +96,6 @@ filegroup(
         "//drivers/NativeKeyStoreEvents:all_files",
         "//drivers/NativeMobileDisplay:all_files",
         "//drivers/NativeRamBlock:all_files",
-        "//drivers/NativeVirtioBlock:all_files",
         "//drivers/NativeVirtioConsole:all_files",
         "//drivers/SwitchAudio:all_files",
         "//drivers/SwitchBattery:all_files",
