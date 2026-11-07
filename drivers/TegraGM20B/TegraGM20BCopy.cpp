@@ -119,7 +119,8 @@ int map(Plane &p, IOMemoryDescriptor *memory, uint64_t offset, uint64_t bytes, u
 		return ret;
 	p.va = window + (offset - first);
 	p.bytes = bytes;
-	return tgm_vm_map_ordered(gCopy.vm, window, uint64_t(p.npages) * kPage, p.mem, 0, kind, 0, nullptr);
+	return tgm_vm_map_ordered(gCopy.vm, window, uint64_t(p.npages) * kPage, p.mem, 0, kind, 0,
+				  nullptr);
 }
 
 void reapWork(thread_call_param_t, thread_call_param_t)

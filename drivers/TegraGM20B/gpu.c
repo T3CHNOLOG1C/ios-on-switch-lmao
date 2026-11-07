@@ -698,7 +698,7 @@ int tgm_zbc_add(int depth, uint32_t format, const uint32_t ds[4], const uint32_t
 	if (gpu.stage < 2 || !gpu.device->ltc->num_tags)
 		return -ENODEV;
 	gr = gf100_gr(gpu.device->gr);
-	mutex_lock(&gpu.lock);
+	gpu_lock();
 	if (depth && format == FERMI_A_ZBC_DEPTH_V0_FMT_FP32)
 		ret = gf100_gr_zbc_depth_get(gr, format, ds[0], l2[0]);
 	for (i = 0; !depth && i < ARRAY_SIZE(color_formats); i++) {

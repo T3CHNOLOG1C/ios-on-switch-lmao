@@ -511,7 +511,7 @@ TEST(GM20BFencesSource, ExecQueuesItsWritersAcquiresBeforeItSubmits)
 		expectBefore(follow, "ret = order_add(chan,", "mutex_unlock(&live_lock);");
 	}
 	EXPECT_THAT(flat(definition(client(), "IOReturn AGXDeviceUserClient::getInfo(")),
-		    HasSubstr("TegraGM20BInfoExecSurfaces;"));
+		    HasSubstr("| TegraGM20BInfoExecSurfaces"));
 }
 
 // A SurfaceWrites a client could not deliver never leaves a GPU write unmarked: the client stops saying its imports are

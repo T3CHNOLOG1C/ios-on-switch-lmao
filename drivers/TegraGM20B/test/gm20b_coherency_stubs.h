@@ -35,10 +35,6 @@ inline void IOLockUnlock(IOLock *lock) __attribute__((no_thread_safety_analysis)
 #define IONew(type, count) (new type[(count)])
 #define IODelete(ptr, type, count) (delete[] (ptr))
 
-inline void IOLog(const char *, ...)
-{
-}
-
 inline void bzero(void *p, size_t n)
 {
 	std::memset(p, 0, n);

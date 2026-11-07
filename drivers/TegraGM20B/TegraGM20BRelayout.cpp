@@ -89,7 +89,8 @@ int move(const tgm_relayout_pages &surface, const tgm_relayout_pages &rows, cons
 		ret = tgm_vm_map_ordered(r.vm, kSurfaceVa, surfaceBytes, surfaceMem, 0,
 					 TGM_LAYOUT_KIND, 0, nullptr);
 	if (!ret)
-		ret = tgm_vm_map_ordered(r.vm, kSurfaceRowsVa, surfaceBytes, surfaceMem, 0, 0, 0, nullptr);
+		ret = tgm_vm_map_ordered(r.vm, kSurfaceRowsVa, surfaceBytes, surfaceMem, 0, 0, 0,
+					 nullptr);
 	if (!ret)
 		ret = tgm_vm_map_ordered(r.vm, kRowsVa, rowsBytes, rowsMem, 0, 0, 0, nullptr);
 	if (!ret) {
