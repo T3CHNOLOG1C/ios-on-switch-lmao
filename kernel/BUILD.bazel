@@ -349,17 +349,12 @@ kernel_archive(
         "//drivers/TegraVIC:TegraVIC",
         "//drivers/TegraNVJPG:TegraNVJPG",
         "//drivers/SwitchUSB:SwitchUSB",
+        "//drivers/SwitchDisplayPort:SwitchPDAltMode",
         "//kits/SwitchCAR:SwitchCAR",
         "//kits/SwitchDMA:SwitchDMA",
         "//kits/SwitchFalcon:SwitchFalcon",
         "//kits/SwitchRefusal:SwitchRefusal",
     ] + select({
-        "//drivers/SwitchUSB:superspeed_on": ["//drivers/SwitchUSB:SwitchUSBSuperSpeed"],
-        "//conditions:default": [],
-    }) + select({
-        "//drivers/SwitchDisplayPort:alt_mode": ["//drivers/SwitchDisplayPort:SwitchPDAltMode"],
-        "//conditions:default": [],
-    }) + select({
         "//drivers/SwitchDisplayPort:on": ["//drivers/SwitchDisplayPort:SwitchDisplayPort"],
         "//conditions:default": [],
     }),

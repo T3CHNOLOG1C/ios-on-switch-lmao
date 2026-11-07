@@ -21,6 +21,7 @@
 #include <os/log.h>
 #include "../SwitchBattery/SwitchBattery.h"
 #include "../SwitchBattery/SwitchChargePolicy.h"
+#include "../SwitchDisplayPort/SwitchPDAltModeHook.h"
 #include "../TegraGPIO/TegraGPIO.h"
 #include "../TegraI2C/TegraI2C.h"
 #include "SwitchPDPolicy.h"
@@ -297,11 +298,6 @@ bool SwitchPD::readStatus(uint16_t &status1, uint16_t &status2)
 
 // Work loop: an ALERT (the pin is masked while this runs and unmasked after, TegraGPIO level pins, so the
 // ALERT_STATUS read here is what keeps it from firing again), a classify window's end, or a listener's first call.
-#if SWITCH_DISPLAYPORT || SWITCH_USB_SUPERSPEED
-// Below begin(): XNU's panic() carries its line, so nothing built in only with these settings may sit above it.
-#include "../SwitchDisplayPort/SwitchPDAltModeHook.h"
-#endif
-
 void SwitchPD::handle(uint16_t alertBits, uint16_t status1, uint16_t status2)
 {
     state.alert = alertBits;
@@ -312,7 +308,6 @@ void SwitchPD::handle(uint16_t alertBits, uint16_t status1, uint16_t status2)
     state.dataHost = state.plugged && ((status1 >> SWITCH_PD_STATUS1_DR_SHIFT) & 3) == SWITCH_PD_DATA_ROLE_DFP;
     apply(switch_pd_decide(phase, alertBits, status1, status2, allowSource));
     negotiate(alertBits);
-#if SWITCH_DISPLAYPORT || SWITCH_USB_SUPERSPEED
     const auto atRest = [](const void *pd) -> bool {
         const Nego n = static_cast<const SwitchPD *>(pd)->nego;
         return n == Nego::Settling || n == Nego::Done || n == Nego::Failed;
@@ -321,7 +316,6 @@ void SwitchPD::handle(uint16_t alertBits, uint16_t status1, uint16_t status2)
     switch_pd_alt_alert(this, loop, atRest, alertBits, status1,
                         phase == SWITCH_PD_SINK && state.plugged && !(status1 & SWITCH_PD_STATUS1_SRC_MODE),
                         contractOurs && choice.dock);
-#endif
     notify();
 }
 

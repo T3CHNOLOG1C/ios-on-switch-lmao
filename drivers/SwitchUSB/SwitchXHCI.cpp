@@ -16,6 +16,7 @@
 #include "SwitchXHCI.h"
 #include "SwitchUSB.h"
 #include "SwitchXHCIServices.h"
+#include "XusbLanes.h"
 #include <IOKit/IOLib.h>
 #include <libkern/c++/OSKext.h>
 #include <mach/kmod.h>
@@ -103,7 +104,6 @@ uint32_t *SwitchXHCI::shadowFor(uint64_t address)
     return &shadow[at / 32][(at % 32) / 4];
 }
 
-#if SWITCH_USB_SUPERSPEED
 namespace {
 // XusbLanes.h's adjustments to AppleUSBXHCI's register writes: U1/U2 off on the SuperSpeed ports, an interrupt
 // moderation floor. AppleUSBXHCI writes from its work loop and its interrupt filter: arithmetic only.
@@ -134,7 +134,6 @@ uint32_t adjustWrite(uint32_t offset, uint32_t value, uint32_t runtime, uint32_t
 }
 }  // namespace
 
-#endif
 uint32_t SwitchXHCI::regRead32(uint64_t base, uint32_t offset)
 {
     if (!capBase && offset == 4)
@@ -161,10 +160,8 @@ void SwitchXHCI::regWrite32(uint64_t base, uint32_t offset, uint32_t value)
         *s = value;
         return;
     }
-#if SWITCH_USB_SUPERSPEED
     if (capBase && base + offset >= capBase && base + offset - capBase < xhost::kXhciBytes)
         value = adjustWrite((uint32_t)(base + offset - capBase), value, runtimeOffset, hardwareInterrupters);
-#endif
     // xhci-tegra.c tegra_xusb_probe_finish: USBCMD.EU3S (MFINDEX stops in U3), on every write so that a reset or a
     // controller AppleUSBXHCI reinitializes after SC7 keeps it.
     if (capBase && base + offset == capBase + operationalOffset)

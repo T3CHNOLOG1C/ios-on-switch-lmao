@@ -39,18 +39,6 @@ config_setting(
     flag_values = {":xudc_direct": "True"},
 )
 
-# SuperSpeed on the USB-C port, the dock's hub and LAN, and the host's DMA through the SMMU. Off until USB2 host mode
-# works on the device.
-bool_flag(
-    name = "superspeed",
-    build_setting_default = False,
-)
-
-config_setting(
-    name = "superspeed_on",
-    flag_values = {":superspeed": "True"},
-)
-
 # This package's headers, as kernel_headers() makes them, with the settings' defines, which every driver whose hdr_deps
 # name drivers/SwitchUSB compiles with (the kernel toolchain's preprocessor_defines feature).
 filegroup(
@@ -71,16 +59,14 @@ cc_library(
     defines = select({
         ":xudc_direct_on": ["SWITCH_XUDC_DIRECT=1"],
         "//conditions:default": [],
-    }) + select({
-        ":superspeed_on": ["SWITCH_USB_SUPERSPEED=1"],
-        "//conditions:default": [],
     }),
     tags = ["kernel"],
     target_compatible_with = ["//bazel/platforms:kernel"],
 )
 
-# SwitchUSB: USB 2.0 on the USB-C port. Device mode: the XUDC under Apple's IOUSBDeviceFamily (+ AppleUSBDeviceMux).
-# Host mode: the XUSB host (falcon firmware by .incbin) under IOUSBHostFamily + AppleUSBXHCI and Apple's class drivers.
+# SwitchUSB: USB on the USB-C port. Device mode (USB 2.0): the XUDC under Apple's IOUSBDeviceFamily (+ AppleUSBDeviceMux).
+# Host mode (USB 2.0 and SuperSpeed on UPHY lane 5, DMA through the SMMU): the XUSB host (falcon firmware by .incbin)
+# under IOUSBHostFamily + AppleUSBXHCI and Apple's class drivers.
 # SwitchXUDC and SwitchXHCI subclass original classes (late objects) from kits/SwitchABI: the selected kind's
 # IOUSBDeviceController and AppleUSBXHCI, whose bindings check their vtables against the kind's tables on every build.
 kernel_driver(
@@ -93,7 +79,9 @@ kernel_driver(
         "SwitchPD.cpp",
         "XusbHost.cpp",
         "XusbSleepwalk.cpp",
+        "XusbSuperSpeed.cpp",
         "UsbDmaMapper.cpp",
+        "UsbSmmuMapper.cpp",
         "SwitchXHCI.cpp",
         "SwitchXHCIEvents.cpp",
         "SwitchXHCIServices.cpp",
@@ -111,6 +99,8 @@ kernel_driver(
         "drivers/SwitchDisplayPort",
         "drivers/TegraGPIO",
         "drivers/TegraI2C",
+        "drivers/TegraSMMU",
+        "kits/SwitchCAR",
     ],
     late = [
         "SwitchXUDC.cpp",
@@ -189,17 +179,6 @@ kernel_driver(
         "com.apple.iokit.IOUSBHostFamily=AppleUSBHostResourcesTypeC",
         "com.apple.iokit.IOUSBMassStorageDriver=IOUSBMassStorageResource",
     ],
-)
-
-# SuperSpeed (//drivers/SwitchUSB:superspeed): SS port 0's UPHY lane (XusbSuperSpeed.cpp, XusbLanes.h), in the kernel only
-# with the setting (kernel/BUILD.bazel libNativeSwitchBlockDevice).
-kernel_driver(
-    name = "SwitchUSBSuperSpeed",
-    srcs = [
-        "XusbSuperSpeed.cpp",
-        "UsbSmmuMapper.cpp",
-    ],
-    hdr_deps = ["drivers/TegraSMMU"],
 )
 
 switch_abi_bindings(
