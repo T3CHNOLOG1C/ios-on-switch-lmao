@@ -839,6 +839,19 @@ OSDefineMetaClassAndStructors(SwitchBluetooth, IOService)
         OSSafeReleaseNULL(value);
     }
 
+    // The rails pair seated Joy-Cons to the address bluetoothd reads at its start, before backboardd and
+    // gamecontrollerd open their HID devices: pairing replaces a running Joy-Con's device, and done at bluetoothd's
+    // first connect it took away both devices gamecontrollerd had just prepared. That connect then finds the same
+    // address and pairs nothing.
+    void announceAddressToRails()
+    {
+        IORegistryEntry *node = IORegistryEntry::fromPath("/arm-io/bluetooth", gIODTPlane);
+        const OSData *data = node ? OSDynamicCast(OSData, node->getProperty("local-mac-address")) : nullptr;
+        if (data && data->getLength() == 6)
+            switch_joycon_bluetooth_address(static_cast<const uint8_t *>(data->getBytesNoCopy()));
+        OSSafeReleaseNULL(node);
+    }
+
     // The unit's own BD address, as U-Boot derives device_bt_mac (switchroot board/nintendo/switch/nintendo-switch.c
     // generate_and_set_serial): Nintendo's OUI 98:B6:E9, bits 23:16 and 15:8 of FUSE_OPT_LOT_CODE_0, its low byte + 1
     // (+2 is Wi-Fi's). It replaces the packager's shared fallback where bluetoothd (/arm-io/bluetooth
@@ -3925,14 +3938,15 @@ extern "C" void switch_bluetooth_data_mounted(void)
     if (bluetoothDisabled())
         return;
     uint8_t staged[6];
-    if (!readStagedAddress(staged)) {
+    if (readStagedAddress(staged)) {
+        memcpy(gStaged, staged, sizeof(gStaged));
+        __atomic_store_n(&gStagedState, kStagedFound, __ATOMIC_RELEASE);
+        publishAddressBytes(staged);
+        IOLog("SwitchBluetooth: BD %02x:%02x:%02x:%02x:%02x:%02x from the staged Joy-Con pairing (Horizon's), in "
+              "place before launchd\n",
+              staged[0], staged[1], staged[2], staged[3], staged[4], staged[5]);
+    } else {
         __atomic_store_n(&gStagedState, kStagedNone, __ATOMIC_RELEASE);
-        return;
     }
-    memcpy(gStaged, staged, sizeof(gStaged));
-    __atomic_store_n(&gStagedState, kStagedFound, __ATOMIC_RELEASE);
-    publishAddressBytes(staged);
-    IOLog("SwitchBluetooth: BD %02x:%02x:%02x:%02x:%02x:%02x from the staged Joy-Con pairing (Horizon's), in place "
-          "before launchd\n",
-          staged[0], staged[1], staged[2], staged[3], staged[4], staged[5]);
+    announceAddressToRails();
 }
