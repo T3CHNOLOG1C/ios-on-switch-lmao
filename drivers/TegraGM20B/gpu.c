@@ -1124,7 +1124,9 @@ struct tgm_chan {
 
 	u32 gov_done;   /* idle clock: last seqno counted retired (gov_fenced) */
 	u32 woken_done; /* the completed seqno its waiters were last woken for (chan_wake_waiters) */
-	u32 stat_done;  /* stats: last seqno whose latency was counted, submit times by seqno */
+	void (*fenced)(void *arg); /* tgm_chan_on_fence */
+	void *fenced_arg;
+	u32 stat_done; /* stats: last seqno whose latency was counted, submit times by seqno */
 	u64 stat_sub_ns[CHAN_NSTAMPS];
 	u64 stat_sub_ptimer[CHAN_NSTAMPS];
 	u8 stat_kick[CHAN_NSTAMPS]; /* stats: what each high kick found (tgm_sched_kick) */
@@ -1374,6 +1376,8 @@ static int chan_killed(struct nvif_event *event, void *repv, u32 repc)
 		  chan->owner, chan->chid, report);
 	nvxnu_wake();
 	chan_wake_all_waiters(chan);
+	if (READ_ONCE(chan->fenced))
+		chan->fenced(chan->fenced_arg);
 	return NVIF_EVENT_DROP;
 }
 
@@ -3034,7 +3038,15 @@ static int chan_nonstall(struct nvif_event *event, void *repv, u32 repc)
 		present_fenced(chan);
 	else
 		chan_wake_waiters(chan);
+	if (READ_ONCE(chan->fenced))
+		chan->fenced(chan->fenced_arg);
 	return NVIF_EVENT_KEEP;
+}
+
+void tgm_chan_on_fence(struct tgm_chan *chan, void (*fenced)(void *arg), void *arg)
+{
+	chan->fenced_arg = arg;
+	__atomic_store_n(&chan->fenced, fenced, __ATOMIC_RELEASE);
 }
 
 static void chan_free(struct tgm_chan *chan)

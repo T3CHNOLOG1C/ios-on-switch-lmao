@@ -604,6 +604,18 @@ extern "C" struct tgm_coh *tgm_coh_find_tiled_pa(uint64_t pa, uint64_t *offset)
 	return found;
 }
 
+extern "C" struct tgm_coh *tgm_coh_find_pa(uint64_t pa)
+{
+	if (!gRegistryLock)
+		return nullptr;
+	IOLockLock(gRegistryLock);
+	tgm_coh *c = *pageSlot(pa & ~0xfffull);
+	if (c)
+		c->refs++;
+	IOLockUnlock(gRegistryLock);
+	return c;
+}
+
 extern "C" void tgm_coh_hold(struct tgm_coh *c)
 {
 	IOLockLock(gRegistryLock);

@@ -160,6 +160,9 @@ struct tgm_prof {
 
 uint32_t tgm_chan_submitted(struct tgm_chan *chan);
 uint32_t tgm_chan_completed(struct tgm_chan *chan);
+/* `fenced(arg)` from the interrupt pass whenever the channel's fence may have moved, and once when it is killed (its
+ * fence then released): under nvkm's event lock, so it must not block (a thread call does the work). */
+void tgm_chan_on_fence(struct tgm_chan *chan, void (*fenced)(void *arg), void *arg);
 /* The group a channel belongs to (its connection's task): tgm_chan_order relates the channels of one group. */
 void tgm_chan_set_group(struct tgm_chan *chan, const void *group);
 /* GPU-side order between the channels of chan's group (TegraGM20BABI.h method 14), no CPU wait: semaphore acquires the

@@ -10,6 +10,9 @@
 #                            all-imports flag as before
 #   gm20b_relayout_test      TegraGM20BRelayout.h's copy-engine pushes over a model of MAXWELL_DMA_COPY_A: every move
 #                            gives back exactly TegraGM20BLayout.h's bytes, for every texel size and NIL's shapes
+#   gm20b_copy_test          TegraGM20BCopyPush.h (TegraVIC's plane bounce) over the same model: rows at the new pitch
+#                            from pitch, block-linear and two-plane sources; writer and syncpoint waits first, the
+#                            syncpoint increment after the copy is in DRAM
 #   gm20b_wiring_test        TegraGM20BSharedWiring.cpp: one wiring per task and range, shared while the task still
 #                            maps it there, a racing publish, the last import's release
 #   gm20b_tlb_test           TegraGM20BTlb.h over a GMMU model (PTEs, the L2's copies, a TLB per space, running work
@@ -206,10 +209,26 @@ host_test(
     name = "gm20b_relayout_test",
     size = "medium",
     srcs = [
+        "gm20b_ce_model.h",
         "gm20b_relayout_test.cpp",
         "//drivers/TegraGM20B:TegraGM20BGpu.h",
         "//drivers/TegraGM20B:TegraGM20BLayout.h",
         "//drivers/TegraGM20B:TegraGM20BRelayout.h",
+    ],
+    cxx_std = "c++17",
+)
+
+host_test(
+    name = "gm20b_copy_test",
+    srcs = [
+        "gm20b_ce_model.h",
+        "gm20b_copy_test.cpp",
+        "//drivers/TegraGM20B:TegraGM20BCopy.h",
+        "//drivers/TegraGM20B:TegraGM20BCopyPush.h",
+        "//drivers/TegraGM20B:TegraGM20BGpu.h",
+        "//drivers/TegraGM20B:TegraGM20BLayout.h",
+        "//drivers/TegraGM20B:TegraGM20BRelayout.h",
+        "//drivers/TegraGM20B:TegraGM20BSyncpt.h",
     ],
     cxx_std = "c++17",
 )

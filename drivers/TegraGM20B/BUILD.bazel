@@ -57,6 +57,7 @@ kernel_driver(
         "TegraGM20BDeviceClient.cpp",
         "TegraGM20BCoherency.cpp",
         "TegraGM20BRelayout.cpp",
+        "TegraGM20BCopy.cpp",
         "TegraGM20BSurfaceClient.cpp",
         "TegraGM20BTiled.cpp",
         "TegraGM20BViews.cpp",
