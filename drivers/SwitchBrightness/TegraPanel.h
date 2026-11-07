@@ -44,6 +44,10 @@ int tegra_panel_power_off(void);
 // sleep mode (it is not reset), so L4T's level-2 register writes are not repeated. About 0.5 s.
 int tegra_panel_power_on(int level);
 
+// True: TegraPanel takes native_legacy_frame_end_hold for each command and nothing else of SwitchBrightness needs DC A
+// frame ends, so the display may mask FRAME_END while it has no holder. Any context.
+bool tegra_panel_holds_frame_end(void);
+
 // The level the boot chain left, from DC_COM_SCRATCH_REGISTER_B where hekate keeps its 0..255 duty (di.h
 // DC_DCS_BACKLIGHT_LEVEL), scaled to 0..TEGRA_PANEL_BRIGHTNESS_MAX; -1 if the display is not running or the register
 // holds no plausible value.
