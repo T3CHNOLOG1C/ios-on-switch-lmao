@@ -166,6 +166,11 @@ __attribute__((weak)) void switch_pmic_mark_now(uint8_t code)
     (void)code;
 }
 
+__attribute__((weak)) void switch_pmic_flag_now(uint8_t flag)
+{
+    (void)flag;
+}
+
 static const char *halt_name(unsigned code)
 {
     static const char *const halt[] = {
@@ -194,8 +199,6 @@ static const char *mark_name(unsigned code)
     switch (code) {
     case SWITCH_MARK_NONE:
         return "running";
-    case SWITCH_MARK_PANIC_RESET:
-        return "a panic's warm reset";
     case SWITCH_MARK_BOOT_PMIC:
         return "boot: PMIC up";
     case SWITCH_MARK_BOOT_ROOT:
@@ -211,8 +214,6 @@ static const char *mark_name(unsigned code)
     }
     if ((code & 0x70u) == SWITCH_MARK_HALT_BEGAN)
         return halt_name(code);
-    if ((code & 0x70u) == SWITCH_MARK_HALT_DEADLINE)
-        return "the shutdown deadline passed";
     if (switch_sleep_step_name(code))
         return switch_sleep_step_name(code);
     switch (code & 0x70u) {
@@ -246,8 +247,14 @@ void switch_power_trail_mark_now(unsigned code)
     switch_pmic_mark_now((uint8_t)(code & 0x7fu));
 }
 
+void switch_power_trail_flag_now(unsigned flag)
+{
+    switch_power_trail("flag %u on the mark (now)", flag);
+    switch_pmic_flag_now((uint8_t)flag);
+}
+
 static int durable_code = -2; /* -2: not read this boot */
-static unsigned durable_count;
+static unsigned durable_count, durable_flags;
 
 static void log_durable(const char *when)
 {
@@ -259,15 +266,18 @@ static void log_durable(const char *when)
     }
     const unsigned code = (unsigned)durable_code;
     os_log(OS_LOG_DEFAULT, "SwitchPowerTrail: durable mark: %#04x %s%s%s (mark %u of the last boot)%s", code,
-           mark_name(code), (code & 0x70u) == SWITCH_MARK_HALT_DEADLINE ? ", after: " : "",
-           (code & 0x70u) == SWITCH_MARK_HALT_DEADLINE ? halt_name(code) : "", durable_count, when);
+           mark_name(code),
+           (durable_flags & (unsigned)SWITCH_MARK_FLAG_DEADLINE) ? ", then the shutdown deadline passed" : "",
+           (durable_flags & (unsigned)SWITCH_MARK_FLAG_PANIC_RESET) ? ", then a panic's warm reset" : "", durable_count,
+           when);
 }
 
 /* Logged at once and again before launchd: the unified log may not keep what the kernel logs this early. */
-void switch_power_trail_durable(int code, unsigned count)
+void switch_power_trail_durable(int code, unsigned count, unsigned flags)
 {
     durable_code = code;
     durable_count = count;
+    durable_flags = flags;
     log_durable("");
 }
 

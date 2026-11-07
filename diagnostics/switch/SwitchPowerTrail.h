@@ -24,7 +24,6 @@ extern "C" {
 // Durable mark codes, 0x00..0x7f: the high nibble is the phase, a phase's 0x?f its normal end.
 enum {
     SWITCH_MARK_NONE = 0x00,
-    SWITCH_MARK_PANIC_RESET = 0x10,     // a panic's warm reset (SwitchPanicSave.c), written just before it
     SWITCH_MARK_BOOT_PMIC = 0x11,       // the first mark a boot can write: I2C5 and the PMIC answer
     SWITCH_MARK_BOOT_ROOT = 0x12,       // the root file system mounted
     SWITCH_MARK_BOOT_LAUNCHD = 0x13,    // launchd about to start
@@ -50,7 +49,12 @@ enum {
     SWITCH_MARK_HALT_CPU = 0x6d,            // the CPU off the DFLL
     SWITCH_MARK_HALT_PMIC = 0x6e,     // the panel dark, the MAX77620 soft reset next: what a power-off that took leaves
     SWITCH_MARK_HALT_NOT_OFF = 0x6f,  // the soft reset written, the console still running 2 s later
-    SWITCH_MARK_HALT_DEADLINE = 0x70,  // 0x70 + n: the shutdown deadline passed, 0x60 + n the last mark before it
+};
+
+// Flags on the mark in the RTC, set with interrupts off, keeping the code of the step that was running.
+enum {
+    SWITCH_MARK_FLAG_DEADLINE = 1u << 0,     // the shutdown deadline passed
+    SWITCH_MARK_FLAG_PANIC_RESET = 1u << 1,  // a panic's warm reset (SwitchPanicSave.c), set just before it
 };
 
 #if DEVELOPMENT || DEBUG
@@ -73,27 +77,31 @@ void switch_power_trail_mark_flush(void);
 // suspended or not yet resumed): polled I2C5 (tegra_i2c_raw_write), about 0.5 ms, after up to 16 ms spun out while the
 // RTC finishes the previous update. Not while a thread-context mark is being written.
 void switch_power_trail_mark_now(unsigned code);
+// A SWITCH_MARK_FLAG_* on the mark in the RTC, as mark_now writes (and in the same contexts); the code stays.
+void switch_power_trail_flag_now(unsigned flag);
 
 // SwitchPanicSave.c: the region's trail slice, at its init (the last boot's lines are read before any is written);
 // and the last boot's lines to os_log, once Data is mounted. SwitchPowerMark.cpp: the mark the last boot left (-1:
-// none readable) and how many that boot wrote, logged at once.
+// none readable), how many that boot wrote and its flags, logged at once.
 void switch_power_trail_init(volatile uint8_t *slice, uint32_t bytes);
 void switch_power_trail_report(void);
-void switch_power_trail_durable(int code, unsigned count);
-// The RTC's writer behind the marks (SwitchPowerMark.cpp), as the three calls above describe.
+void switch_power_trail_durable(int code, unsigned count, unsigned flags);
+// The RTC's writer behind the marks (SwitchPowerMark.cpp), as the calls above describe.
 void switch_pmic_mark(uint8_t code);
 void switch_pmic_mark_flush(void);
 void switch_pmic_mark_now(uint8_t code);
+void switch_pmic_flag_now(uint8_t flag);
 #else
 int switch_power_trail_unused(const char *format, ...) __attribute__((format(printf, 1, 2)));
-#define switch_power_trail(...)                 ((void)sizeof(switch_power_trail_unused(__VA_ARGS__)))
-#define switch_power_trail_watch(seconds, why)  ((void)sizeof((seconds) + sizeof(why)))
-#define switch_power_trail_mark(code)           ((void)sizeof(code))
-#define switch_power_trail_mark_flush()         ((void)0)
-#define switch_power_trail_mark_now(code)       ((void)sizeof(code))
-#define switch_power_trail_init(slice, bytes)   ((void)0)
-#define switch_power_trail_report()             ((void)0)
-#define switch_power_trail_durable(code, count) ((void)0)
+#define switch_power_trail(...)                        ((void)sizeof(switch_power_trail_unused(__VA_ARGS__)))
+#define switch_power_trail_watch(seconds, why)         ((void)sizeof((seconds) + sizeof(why)))
+#define switch_power_trail_mark(code)                  ((void)sizeof(code))
+#define switch_power_trail_mark_flush()                ((void)0)
+#define switch_power_trail_mark_now(code)              ((void)sizeof(code))
+#define switch_power_trail_flag_now(flag)              ((void)sizeof(flag))
+#define switch_power_trail_init(slice, bytes)          ((void)0)
+#define switch_power_trail_report()                    ((void)0)
+#define switch_power_trail_durable(code, count, flags) ((void)0)
 #endif
 
 #ifdef __cplusplus

@@ -3,7 +3,7 @@
  * Shut down and restart (<switch/shutdown.h>). Debug kernels: reboot(2)'s start and every step reboot_kernel and the
  * IOKit halt path finish go to the power trail, as lines and as durable marks (SwitchPowerTrail.h), each mark in the
  * RTC before the next step starts; then the SoC watchdog is armed, and a shutdown still running DEADLINE_S after
- * reboot(2) marks that (0x70 + the last step's code) and panics, naming the last step that ended. The durable mark
+ * reboot(2) flags that on the mark of the step it is stuck after and panics, naming that step. The durable mark
  * survives POWER held; the panic's record and the trail survive only a warm reset that gets back to iPadOS. XNU's own
  * halt timeout ("Halt/Restart Timed Out") starts only at PEHaltRestart. A healthy shutdown is over in a few seconds.
  *
@@ -29,20 +29,18 @@
 
 static int shutdown_howto;
 static const char *volatile last_step = "none";
-static volatile unsigned last_mark = SWITCH_MARK_HALT_BEGAN;
 static unsigned procs_done, unmounts_done;
 
 /* A mark in the RTC before the caller's next step. */
 static void switch_shutdown_mark_sync(unsigned code)
 {
-    last_mark = code;
     switch_power_trail_mark(code);
     switch_power_trail_mark_flush();
 }
 
 static void switch_shutdown_stalled(thread_call_param_t p0 __unused, thread_call_param_t p1 __unused)
 {
-    switch_power_trail_mark_now(SWITCH_MARK_HALT_DEADLINE | (last_mark & 0xfu));
+    switch_power_trail_flag_now(SWITCH_MARK_FLAG_DEADLINE);
     panic("SwitchShutdown: reboot(%#x) still running %u s after it began; last step done: %s", shutdown_howto,
           DEADLINE_S, last_step);
 }

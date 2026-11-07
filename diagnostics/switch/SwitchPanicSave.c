@@ -666,7 +666,7 @@ void switch_panic_logged(void)
     deadline += panic_at;
     while (mach_absolute_time() < deadline)
         __asm__ volatile("isb" ::: "memory");
-    switch_power_trail_mark_now(SWITCH_MARK_PANIC_RESET);
+    switch_power_trail_flag_now(SWITCH_MARK_FLAG_PANIC_RESET);
     pmc_reset();
 }
 
