@@ -15,6 +15,7 @@ translator version (content addressed): reruns resume. It does not mount or writ
 """
 
 import argparse
+import concurrent.futures
 import hashlib
 import json
 import os
@@ -224,20 +225,23 @@ def main() -> None:
     cache = args.volume / CACHE_DIR
     _report(args, 'finding the Mach-O files')
     machos = sorted(_machos(args.volume, cache))
-    for done, src in enumerate(machos):
-        _report(args, f'{done}/{len(machos)} files')
+
+    def translate(src: Path) -> tuple[Path, Path, str, dict]:
         rel = src.relative_to(args.volume)
         dst = out / 'files' / rel
         in_sha = sha256(src)
+        record = work / (str(rel).replace('/', '_') + '.json')
         if memo:
-            report = work / 'report.json'
             r = memo.run(
                 ['file', in_sha, translator.version],
                 dst,
-                lambda src=src, dst=dst, report=report: pretranslate_file(translator.tool, src, dst, report),
+                lambda: pretranslate_file(translator.tool, src, dst, record.with_suffix('.report.json')),
             )
         else:
-            r = _memoized(translator, src, dst, work / (str(rel).replace('/', '_') + '.json'), in_sha)
+            r = _memoized(translator, src, dst, record, in_sha)
+        return rel, dst, in_sha, r
+
+    for rel, dst, in_sha, r in _in_order(args, translate, machos, 'files'):
         translated = [s for s in r['slices'] if s['status'] == 'translated']
         if not translated:
             dst.unlink(missing_ok=True)
@@ -258,7 +262,6 @@ def main() -> None:
             flags, cat = apple.get(s['cdhash_in'], (0, 0))
             trust.append((bytes.fromhex(s['cdhash_out']), flags, cat))
 
-    _report(args, f'{len(machos)}/{len(machos)} files')
     (out / f'{args.role}.cdhash-pairs').write_text(''.join(f'{a} {b}\n' for a, b in pairs))
     if args.role == 'system_cryptex' and cache.is_dir():
         _translate_cache(args, pairs + external_pairs, trust, apple, manifest)
@@ -298,25 +301,24 @@ def _translate_cache(
     pairs_file.write_text(''.join(f'{a} {b}\n' for a, b in pairs))
 
     suffixes = _subcache_suffixes(main_cache)
-    cdhashes = []
     names = ['dyld_shared_cache_arm64e'] + [f'dyld_shared_cache_arm64e{s}' for s in suffixes]
-    for done, name in enumerate(names):
-        _report(args, f'{done}/{len(names)} dyld cache files')
-        src = cache / name
-        if name.endswith(('.symbols', '.atlas')) or not src.exists():
-            continue
-        dst = out / 'files' / CACHE_DIR / name
+    sources = [cache / n for n in names if not n.endswith(('.symbols', '.atlas')) and (cache / n).exists()]
+
+    def apply(src: Path) -> tuple[Path, Path, str]:
+        dst = out / 'files' / CACHE_DIR / src.name
         dst.parent.mkdir(parents=True, exist_ok=True)
 
-        def apply(src: Path = src, dst: Path = dst) -> dict:
+        def run() -> dict:
             line = run_tool(args.tool, 'dsc-apply', '-c', str(pairs_file), str(plan), str(src), str(dst))
             return {'cdhash': line.split()[0]}
 
         if memo:
             parts = ['dsc', key_sha256(src), key_sha256(plan), key_sha256(pairs_file), version]
-            cdhash = memo.run(parts, dst, apply)['cdhash']
-        else:
-            cdhash = apply()['cdhash']
+            return src, dst, memo.run(parts, dst, run)['cdhash']
+        return src, dst, run()['cdhash']
+
+    cdhashes = []
+    for src, dst, cdhash in _in_order(args, apply, sources, 'dyld cache files'):
         cdhashes.append(bytes.fromhex(cdhash))
         if sha256(dst) == sha256(src):
             dst.unlink()
@@ -332,8 +334,23 @@ def _translate_cache(
         )
         flags, cat = apple.get(_cache_cdhash_in(src), (0, 0))
         trust.append((bytes.fromhex(cdhash), flags, cat))
-    _report(args, f'{len(names)}/{len(names)} dyld cache files')
     (out / 'a64x-cache-pretranslated.bin').write_bytes(b''.join(cdhashes))
+
+
+def _in_order[T, R](args: argparse.Namespace, work: Callable[[T], R], items: list[T], unit: str) -> list[R]:
+    """Run work(item) for every item on every core, each its own arm64e process; return the results in items' order.
+
+    The arm64e tool is single-threaded, and each item writes only its own outputs, so they run side by side; folding
+    the results in the given order keeps the manifest, trust module and cdhash lists byte for byte the serial run's.
+    """
+    results: dict[int, R] = {}
+    with concurrent.futures.ThreadPoolExecutor(os.cpu_count() or 1) as pool:
+        pending = {pool.submit(work, item): i for i, item in enumerate(items)}
+        _report(args, f'0/{len(items)} {unit}')
+        for future in concurrent.futures.as_completed(pending):
+            results[pending[future]] = future.result()
+            _report(args, f'{len(results)}/{len(items)} {unit}')
+    return [results[i] for i in range(len(items))]
 
 
 def _subcache_suffixes(main_cache: Path) -> list[str]:
