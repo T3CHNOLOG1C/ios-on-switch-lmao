@@ -2455,6 +2455,7 @@ struct PassTarget {
 }
 @property (nonatomic, strong) NSMutableArray *waitedEvents;
 @property (nonatomic) NmbCommandBuffer *handle;
+@property (nonatomic, strong) NSArray<NSNumber *> *capturedRaws;  // the VkCommandBuffers a capture read, in order
 @property (nonatomic, strong) NBQueue *queue;
 @property (atomic, copy) NSString *encodeFailure;
 @property (atomic) BOOL committed, failedLocally;
@@ -4318,6 +4319,85 @@ static bool heldBehindEvent()
 }
 
 @end
+
+// The raw GM20B path's capture of a render state (NativeBridgeMetalFrontend.h): NVK's exports (nvk_switch_capture.c) over the
+// VkCommandBuffers the command buffer's encoders recorded
+namespace capture {
+using Segments = void (*)(uint64_t, void (*)(void *, uint64_t, const uint32_t *, uint32_t), void *);
+using Map = const void *(*)(uint64_t, uint64_t, uint64_t);
+using Program = bool (*)(uint64_t, uint32_t, const void **, uint32_t *, const void **, uint32_t *, const void **,
+                         uint32_t *, uint8_t *, uint32_t *);
+using Context = bool (*)(uint64_t, uint64_t *, uint64_t *, uint64_t *, uint64_t *, uint32_t *, uint64_t *, uint32_t *);
+
+template <class F> F nvk(const char *name)
+{
+    return reinterpret_cast<F>(nvkSymbol(name));
+}
+
+NSArray<NSNumber *> *raws(id commandBuffer)
+{
+    return [commandBuffer isKindOfClass:[NBCommandBuffer class]] ? ((NBCommandBuffer *)commandBuffer).capturedRaws
+                                                                 : nil;
+}
+}  // namespace capture
+
+extern "C" bool native_bridge_metal_capture(id commandBuffer,
+                                            void (^segment)(uint64_t addr, const uint32_t *cpu, uint32_t dwords),
+                                            NBCaptureContext *context)
+{
+    static const auto segments = capture::nvk<capture::Segments>("switch_nvk_capture_cmd_buffer");
+    static const auto contextOf = capture::nvk<capture::Context>("switch_nvk_capture_context");
+    static const bool complete = segments && contextOf && capture::nvk<capture::Map>("switch_nvk_capture_map") &&
+                                 capture::nvk<capture::Program>("switch_nvk_capture_program");
+    if (![commandBuffer isKindOfClass:[NBCommandBuffer class]] || !complete)
+        return false;
+    NBCommandBuffer *cb = (NBCommandBuffer *)commandBuffer;
+    NSMutableArray<NSNumber *> *raws = [NSMutableArray array];
+
+    struct Reading {
+        capture::Segments segments;
+        void (^segment)(uint64_t, const uint32_t *, uint32_t);
+        NSMutableArray<NSNumber *> *raws;
+    } reading = {segments, segment, raws};
+
+    const bool captured = nmb_command_buffer_capture(
+        cb.handle,
+        [](void *ctx, uint64_t raw) {
+            Reading &r = *static_cast<Reading *>(ctx);
+            [r.raws addObject:@(raw)];
+            r.segments(
+                raw,
+                [](void *inner, uint64_t addr, const uint32_t *cpu, uint32_t dwords) {
+                    static_cast<Reading *>(inner)->segment(addr, cpu, dwords);
+                },
+                ctx);
+        },
+        &reading);
+    cb.capturedRaws = raws;
+    if (!captured || !raws.count)
+        return false;
+    return !context || contextOf(raws[0].unsignedLongLongValue, &context->shaderHeap, &context->zeroPage, &context->cb0,
+                                 &context->images, &context->imageMax, &context->samplers, &context->samplerMax);
+}
+
+extern "C" const void *native_bridge_metal_capture_map(id commandBuffer, uint64_t va, uint64_t bytes)
+{
+    static const auto map = capture::nvk<capture::Map>("switch_nvk_capture_map");
+    NSArray<NSNumber *> *raws = capture::raws(commandBuffer);
+    return map && raws.count ? map(raws[0].unsignedLongLongValue, va, bytes) : nullptr;
+}
+
+extern "C" bool native_bridge_metal_capture_program(id commandBuffer, uint32_t program, NBCapturedProgram *out)
+{
+    static const auto programOf = capture::nvk<capture::Program>("switch_nvk_capture_program");
+    if (!programOf)
+        return false;
+    for (NSNumber *raw in capture::raws(commandBuffer))
+        if (programOf(raw.unsignedLongLongValue, program, &out->header, &out->headerBytes, &out->code, &out->codeBytes,
+                      &out->data, &out->dataBytes, out->cbufTypes, &out->cbufCount))
+            return true;
+    return false;
+}
 
 static void scheduled(void *context)
 {

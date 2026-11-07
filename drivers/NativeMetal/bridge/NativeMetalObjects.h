@@ -277,6 +277,9 @@ bool nmb_command_buffer_on_completed(NmbCommandBuffer *, void (*handler)(void *c
  * The caller keeps context alive until completion (or a refused commit). */
 bool nmb_command_buffer_on_scheduled(NmbCommandBuffer *, void (*handler)(void *context), void *context);
 bool nmb_command_buffer_commit(NmbCommandBuffer *);
+/* Each VkCommandBuffer the command buffer's encoders recorded, in order, to each(ctx, handle) instead of a commit: a capture the
+ * driver never runs. The command buffer cannot be committed after. */
+bool nmb_command_buffer_capture(NmbCommandBuffer *, void (*each)(void *ctx, uint64_t command_buffer), void *ctx);
 /* Wait for scheduling and scheduled handlers only; false on a refused wait. */
 bool nmb_command_buffer_wait_scheduled(NmbCommandBuffer *);
 /* 0 completed in time, 1 timed out (timeout_ms 0 waits without a bound). */
