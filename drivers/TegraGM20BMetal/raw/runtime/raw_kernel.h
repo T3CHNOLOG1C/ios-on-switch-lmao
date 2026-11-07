@@ -88,6 +88,9 @@ public:
         return lostFaultVa_.load(std::memory_order_relaxed);
     }
 
+    // `channel` is dead (an Exec or WaitFence answered so, or its kill record says so): lost() and the cause from GetStatus
+    void markLost(uint32_t channel);
+
     // `last`: the channel's last submitted seqno (0 if none), waited on when the GPFIFO is full
     // `surfaces` (null: none): the host imports the submission touches, named to the kernel (ExecSurfaces, method 17,
     // TegraGM20BInfoExecSurfaces) before each Exec of it: it waits on the GPU for other channels' writes to them, and counts
@@ -128,7 +131,6 @@ private:
     bool bind(uint64_t va, uint64_t handle, uint64_t range, uint32_t kind);
     uint64_t allocVa(uint64_t bytes, uint64_t align);
     void freeVa(uint64_t va, uint64_t bytes);
-    void markLost(uint32_t channel);
     bool openOwn(std::string &err);
     uint32_t conn_ = 0;
     bool tunnel_ = false;

@@ -703,10 +703,12 @@ public:
                int32_t(lostThrough_.load(std::memory_order_relaxed) - seqno) >= 0;
     }
 
-    // Kernel::lostError and lostFaultVa: why the kernel killed the channel last found dead
+    // Why the kernel killed the channel of the last seqno lost() named (its kill record's error), else Kernel::lostError and
+    // lostFaultVa: the channel last found dead
     uint32_t lostError() const
     {
-        return k_.lostError();
+        const uint32_t recorded = killedError_.load(std::memory_order_relaxed);
+        return recorded ? recorded : k_.lostError();
     }
 
     uint64_t lostFaultVa() const
@@ -957,6 +959,7 @@ private:
     mutable std::mutex killedLock_;
     std::array<Killed, 4> killedKept_{};
     uint32_t killedNext_ = 0;
+    mutable std::atomic<uint32_t> killedError_{0};
     uint8_t *alloc(Ring &r, uint32_t bytes, uint32_t align, uint64_t &va);
     void retire(Ring &r, uint32_t seqno);
     uint32_t allocTic();

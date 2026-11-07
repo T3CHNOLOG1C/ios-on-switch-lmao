@@ -1873,12 +1873,16 @@ bool Device::killed(uint32_t seqno) const
         return k.error && int32_t(seqno - k.first) >= 0 && int32_t(k.last - seqno) >= 0;
     };
     Killed live = {};
-    if (liveKill(live) && covers(live))
+    if (liveKill(live) && covers(live)) {
+        killedError_.store(live.error, std::memory_order_relaxed);
         return true;
+    }
     std::lock_guard<std::mutex> l(killedLock_);
     for (const Killed &kept : killedKept_)
-        if (covers(kept))
+        if (covers(kept)) {
+            killedError_.store(kept.error, std::memory_order_relaxed);
             return true;
+        }
     return false;
 }
 
@@ -1891,6 +1895,7 @@ bool Device::reopen()
     noteLost();
     Killed live = {};
     if (liveKill(live)) {
+        k_.markLost(channel_);
         std::lock_guard<std::mutex> l(killedLock_);
         killedKept_[killedNext_++ % killedKept_.size()] = live;
     }
