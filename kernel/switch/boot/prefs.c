@@ -109,7 +109,14 @@ static enum switch_prefs_result drop_binary(uint8_t *plist, size_t length, const
         entries > (b.objects_end - at - header) / (2 * b.ref_size)) {
         return SWITCH_PREFS_UNREADABLE;
     }
-    const size_t rs = b.ref_size;
+    const size_t rs = b.ref_size, end = at + header + (size_t)entries * 2 * rs;
+    /* The edit rewrites the dictionary's bytes: no other object may claim any of them (a damaged offset table). */
+    for (uint64_t i = 0; i < b.object_count; ++i) {
+        const size_t other = object_at(&b, i);
+        if (i != top && other >= at && other < end) {
+            return SWITCH_PREFS_UNREADABLE;
+        }
+    }
     uint64_t dropped[PREFS_MAX_KEYS];
     size_t drops = 0;
     for (uint64_t i = 0; i < entries; ++i) {

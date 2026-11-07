@@ -26,8 +26,7 @@ template <typename T> struct Owned {
     T ref;
 
     explicit Owned(T r) : ref(r)
-    {
-    }
+    {}
 
     ~Owned()
     {
@@ -187,6 +186,32 @@ TEST(SwitchPrefs, BinaryTopLevelArrayIsUnreadable)
     EXPECT_EQ(Drop(bytes), SWITCH_PREFS_UNREADABLE);
 }
 
+// The edit rewrites the dictionary's own bytes, so an offset table that puts another object among them (damage) leaves
+// the file alone: CoreFoundation would read that object from the rewritten bytes.
+TEST(SwitchPrefs, ObjectInsideTheDictionaryIsUnreadable)
+{
+    Owned<CFMutableDictionaryRef> dict(SpringBoardPlist(0));
+    Bytes bytes = Binary(dict.ref);
+    const uint8_t *trailer = bytes.data() + bytes.size() - 32;
+    const size_t offsetSize = trailer[6];
+    uint64_t top = 0, table = 0;
+    for (int i = 0; i < 8; ++i) {
+        top = top << 8 | trailer[16 + i];
+        table = table << 8 | trailer[24 + i];
+    }
+    const auto offsetAt = [&](uint64_t object) {
+        uint64_t offset = 0;
+        for (size_t i = 0; i < offsetSize; ++i)
+            offset = offset << 8 | bytes[table + object * offsetSize + i];
+        return offset;
+    };
+    uint64_t inside = offsetAt(top) + 3;
+    const size_t victim = top ? 0 : 1;
+    for (size_t i = offsetSize; i-- > 0; inside >>= 8)
+        bytes[table + victim * offsetSize + i] = (uint8_t)inside;
+    EXPECT_EQ(Drop(bytes), SWITCH_PREFS_UNREADABLE);
+}
+
 // Damaged files: whatever comes back, nothing is read or written outside the buffer (AddressSanitizer), and an edit of
 // a plist CoreFoundation still reads is one it reads too.
 TEST(SwitchPrefs, DamagedBinaryStaysInBounds)
@@ -210,8 +235,9 @@ TEST(SwitchPrefs, DamagedBinaryStaysInBounds)
     }
 }
 
-const char kXmlHead[] = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" "
-                        "\"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\"><dict>";
+const char kXmlHead[] =
+    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" "
+    "\"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\"><dict>";
 const char kXmlTail[] = "</dict></plist>\n";
 
 Bytes Xml(const std::string &body)
@@ -222,11 +248,12 @@ Bytes Xml(const std::string &body)
 
 TEST(SwitchPrefs, XmlAsEarlierKernelsWroteIt)
 {
-    Bytes bytes = Xml("<key>BKNoWatchdogs</key><true/>"
-                      "<key>FBLaunchWatchdogExceptions</key><dict><key>com.apple.purplebuddy</key><real>100</real></dict>"
-                      "<key>MCForceShowCloudConfigurationUI</key><false/><key>SBDisableAutoDim</key><true/>"
-                      "<key>SBDontDimOrLockOnAC</key><true/><key>SBDisableIdleSleep</key><true/>"
-                      "<key>SBHomeLargeIcons</key><true/>");
+    Bytes bytes =
+        Xml("<key>BKNoWatchdogs</key><true/>"
+            "<key>FBLaunchWatchdogExceptions</key><dict><key>com.apple.purplebuddy</key><real>100</real></dict>"
+            "<key>MCForceShowCloudConfigurationUI</key><false/><key>SBDisableAutoDim</key><true/>"
+            "<key>SBDontDimOrLockOnAC</key><true/><key>SBDisableIdleSleep</key><true/>"
+            "<key>SBHomeLargeIcons</key><true/>");
     ASSERT_EQ(Drop(bytes), SWITCH_PREFS_DROPPED);
     EXPECT_EQ(bytes, Xml("<key>BKNoWatchdogs</key><true/>"
                          "<key>FBLaunchWatchdogExceptions</key><dict><key>com.apple.purplebuddy</key><real>100</real>"
