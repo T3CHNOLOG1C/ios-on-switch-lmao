@@ -35,6 +35,15 @@ def entries_under(entries: list[dict], prefix: str) -> list[dict]:
     return [dict(e, path='/' + e['path'][len(prefix) :]) for e in entries if e['path'].startswith(prefix)]
 
 
+def written_bytes(entries: list[dict]) -> int:
+    """Return the room `entries` need written whole, in 4 KiB blocks, without counting what the files they replace free.
+
+    The blocks a rewritten file frees are not reusable until APFS commits the transaction that freed them, so a volume
+    rewriting many files at once can run out with a positive net balance.
+    """
+    return sum(-(-os.path.getsize(e['source']) // 4096) * 4096 for e in entries)
+
+
 def added_bytes(root: Path, entries: list[dict]) -> int:
     """Return how many bytes applying `entries` below `root` adds to its volume.
 

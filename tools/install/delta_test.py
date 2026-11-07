@@ -99,5 +99,15 @@ class AddedBytesTest(unittest.TestCase):
         self.assertLess(delta.added_bytes(root, [{'path': '/big', 'source': source}]), 0)
 
 
+class WrittenBytesTest(unittest.TestCase):
+    def test_counts_every_replacement_whole(self):
+        root = Path(tempfile.mkdtemp())
+        a = root / 'a'
+        a.write_bytes(b'x' * 5000)
+        b = root / 'b'
+        b.write_bytes(b'y')
+        self.assertEqual(delta.written_bytes([{'source': a}, {'source': b}]), 2 * 4096 + 4096)
+
+
 if __name__ == '__main__':
     unittest.main()

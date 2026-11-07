@@ -73,8 +73,8 @@ def rebuild(source: str, translate: Callable[[Path], list[dict]], work_dir: Path
     """Copy `source`'s volume into a new one in `work_dir` with its delta applied, and seal the new one.
 
     `translate(mount point)` makes the delta from the mounted source and returns its entries. A sealed volume cannot be
-    sealed again (apfs_prepare_cryptex fails on Apple's own, untouched), so the copy is a fresh volume, grown until the
-    translated files fit: they are stored uncompressed.
+    sealed again (apfs_prepare_cryptex fails on Apple's own, untouched), so the copy is a fresh volume, grown until
+    every translated file fits whole beside the files it replaces: they are stored uncompressed.
     """
     image = Path(work_dir) / Path(source).name
     if image.exists():
@@ -97,7 +97,7 @@ def rebuild(source: str, translate: Callable[[Path], list[dict]], work_dir: Path
         volume, whole = _attach(image, log)
         try:
             with cards.mounted(volume, log, owners=True) as root:
-                short = delta.added_bytes(root, entries) + SLACK - shutil.disk_usage(root).free
+                short = delta.written_bytes(entries) + SLACK - shutil.disk_usage(root).free
                 if short <= 0:
                     delta.apply(root, entries, log, what, consume=True)
             # The sealer mounts the container itself: it takes the volume's node, attached and not mounted.
