@@ -46,14 +46,9 @@ static void columnScanRegister()
 {
     if (columnScanOid.oid_name)
         return;
-    columnScanOid.oid_parent = &sysctl__debug_children;
-    columnScanOid.oid_number = OID_AUTO;
-    columnScanOid.oid_kind = CTLTYPE_INT | CTLFLAG_WR | CTLFLAG_ANYBODY | CTLFLAG_LOCKED | CTLFLAG_OID2;
-    columnScanOid.oid_name = "switch_display_column_scan";
-    columnScanOid.oid_handler = columnScanSysctl;
-    columnScanOid.oid_fmt = "I";
-    columnScanOid.oid_descr = "window A column-scans a 4K NV12 test frame for 30 frames: its block height, log2 GOBs";
-    columnScanOid.oid_version = SYSCTL_OID_VERSION;
+    switch_sysctl_oid(&columnScanOid, &sysctl__debug_children, "switch_display_column_scan",
+                      CTLTYPE_INT | CTLFLAG_WR | CTLFLAG_ANYBODY | CTLFLAG_LOCKED, columnScanSysctl, "I",
+                      "window A column-scans a 4K NV12 test frame for 30 frames: its block height, log2 GOBs");
     sysctl_register_oid(&columnScanOid);
 }
 

@@ -48,7 +48,7 @@ enum {
 	TegraGM20BInfoSurfaceWrites = 1u
 		<< 5, /* BoImport takes TegraGM20BImportGpuReads; method 15 is implemented */
 	TegraGM20BInfoSurfaceLayout = 1u << 6, /* method 16 is implemented */
-	TegraGM20BInfoPriority = 1u << 8, /* Priority (method 18) is implemented */
+	TegraGM20BInfoPriority = 1u << 8,      /* Priority (method 18) is implemented */
 };
 
 /* Method 1, output only. Everything NVK's struct nv_device_info needs that the client cannot derive. */

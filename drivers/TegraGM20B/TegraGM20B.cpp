@@ -19,6 +19,7 @@
 #include <stdarg.h>
 #include <sys/errno.h>
 #include <sys/sysctl.h>
+#include "../../kits/SwitchSysctl/SwitchSysctl.h"
 #include "../SwitchSuspend/SwitchWake.h"
 #include "TegraGM20BGpu.h"
 #include "TegraGM20BSleep.h"
@@ -164,15 +165,10 @@ struct sysctl_oid gClkgateOid;
 
 void registerClkgateSysctl()
 {
-	gClkgateOid.oid_parent = &sysctl__debug_children;
-	gClkgateOid.oid_number = OID_AUTO;
-	gClkgateOid.oid_kind = static_cast<int>(CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_KERN |
-						CTLFLAG_LOCKED | CTLFLAG_OID2);
-	gClkgateOid.oid_name = "switch_gpu_clkgate";
-	gClkgateOid.oid_handler = clkgateSysctl;
-	gClkgateOid.oid_fmt = "I";
-	gClkgateOid.oid_descr = "GPU clock gating on (1) or off (0), debug A/B";
-	gClkgateOid.oid_version = SYSCTL_OID_VERSION;
+	switch_sysctl_oid(
+		&gClkgateOid, &sysctl__debug_children, "switch_gpu_clkgate",
+		static_cast<int>(CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_KERN | CTLFLAG_LOCKED),
+		clkgateSysctl, "I", "GPU clock gating on (1) or off (0), debug A/B");
 	sysctl_register_oid(&gClkgateOid);
 }
 #endif

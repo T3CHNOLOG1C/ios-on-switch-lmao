@@ -38,7 +38,6 @@ filegroup(
             "raw/pack/**",
             # the mock's capture mode (pack/cap.cpp) and the methods the raw path owns (pack/mkpack.py)
             "raw/runtime/raw_capture.*",
-            "raw/runtime/raw_owned.h",
             "raw/runtime/raw_pack.*",
         ],
         exclude = [
@@ -46,7 +45,7 @@ filegroup(
             "**/*.pyc",
             "**/.DS_Store",
         ],
-    ),
+    ) + ["raw/runtime/raw_owned.h"],
 )
 
 filegroup(

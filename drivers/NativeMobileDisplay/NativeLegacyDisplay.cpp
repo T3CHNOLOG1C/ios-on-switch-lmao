@@ -21,6 +21,7 @@
 #include <libkern/c++/OSData.h>
 #include <pexpert/pexpert.h>
 #include "../ArmGIC/SwitchInterrupts.h"
+#include "../../kits/SwitchSysctl/SwitchSysctl.h"
 #include "../TegraDisplayFlip/TegraScanoutCopy.h"
 #include "../TegraDisplayFlip/TegraScanoutRing.h"
 #include "../TegraDisplayFlip/SwitchFrameTimeline.h"

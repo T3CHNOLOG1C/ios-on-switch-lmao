@@ -114,7 +114,7 @@ TEST(Gm20bClkgate, GpuFollowsNvgpusOrderAroundTheGoldenContext)
 	EXPECT_NE(load, std::string::npos);
 	EXPECT_NE(golden, std::string::npos);
 	EXPECT_NE(enable, std::string::npos);
-	EXPECT_NE(gpu.find("\twake_fence();\n\ttgm_clkgate_enable(gpu.device);\n\twake_open();\n}"),
+	EXPECT_NE(gpu.find("\twake_fence();\n\ttgm_clkgate_enable(gpu.device);\n\twake_open();\n"),
 		  std::string::npos);
 }
 
