@@ -35,6 +35,7 @@ host_library(
         "//translate/arm64e:macho/codesign.c",
         "//translate/arm64e:macho/dsc.c",
         "//translate/arm64e:macho/dsc_verify.c",
+        "//translate/arm64e:macho/fips.c",
         "//translate/arm64e:macho/macho.c",
         "//translate/arm64e:macho/pretranslate.c",
         "//translate/arm64e:macho/pt_verify.c",
@@ -43,6 +44,7 @@ host_library(
     hdrs = [
         "//translate/arm64e:macho/codesign.h",
         "//translate/arm64e:macho/dsc.h",
+        "//translate/arm64e:macho/fips.h",
         "//translate/arm64e:macho/macho.h",
         "//translate/arm64e:macho/pretranslate.h",
         "//translate/arm64e:macho/sha256.h",
@@ -71,6 +73,12 @@ host_test(
 host_test(
     name = "macho_test",
     srcs = ["macho_test.cpp"],
+    deps = [":macho"],
+)
+
+host_test(
+    name = "fips_test",
+    srcs = ["fips_test.cpp"],
     deps = [":macho"],
 )
 

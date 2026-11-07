@@ -50,6 +50,7 @@ MACHO_SRCS = [
     "macho/codesign.c",
     "macho/dsc.c",
     "macho/dsc_verify.c",
+    "macho/fips.c",
     "macho/macho.c",
     "macho/pretranslate.c",
     "macho/pt_verify.c",
@@ -59,6 +60,7 @@ MACHO_SRCS = [
 MACHO_HDRS = [
     "macho/codesign.h",
     "macho/dsc.h",
+    "macho/fips.h",
     "macho/macho.h",
     "macho/pretranslate.h",
     "macho/sha256.h",

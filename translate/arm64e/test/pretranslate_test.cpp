@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <cstring>
+#include <string>
 #include <vector>
 
 extern "C" {
@@ -33,7 +34,10 @@ struct Spec {
     uint32_t text_words = 0;            // __text size in words (0: code.size())
     bool sign = true;
     uint32_t reserved = 0;
+    int fips = 0;  // 1: __TEXT,__fips_hmacs holds the MAC of __text (macho/fips.h); 2: a stale one
 };
+
+constexpr uint32_t kFipsOff = 0x800;
 
 void put32(std::vector<uint8_t> &b, size_t at, uint32_t v)
 {
@@ -63,10 +67,12 @@ void name16(std::vector<uint8_t> &b, size_t at, const char *n)
     memcpy(&b[at], n, strlen(n));
 }
 
-// __TEXT (0x4000, one __text section), __LINKEDIT (function starts, then an ad hoc SHA-256 signature).
+// __TEXT (0x4000: __text, and __fips_hmacs before it with s.fips), __LINKEDIT (function starts, then an ad hoc
+// SHA-256 signature).
 std::vector<uint8_t> build(const Spec &s)
 {
-    const uint32_t ncmds = s.sign ? 4 : 3, sizeofcmds = 152 + 72 + 16 + (s.sign ? 16 : 0);
+    const uint32_t text_cmd = s.fips ? 232 : 152;
+    const uint32_t ncmds = s.sign ? 4 : 3, sizeofcmds = text_cmd + 72 + 16 + (s.sign ? 16 : 0);
     const uint32_t fs_off = kSeg, sig_off = kSeg + 0x100, ident_off = 88, hash_off = ident_off + 2;
     const uint32_t pages = (sig_off + 4095) / 4096, cd_len = hash_off + 32 * pages, sig_len = 20 + cd_len;
     std::vector<uint8_t> b(sig_off + (s.sign ? sig_len : 0), 0);
@@ -79,14 +85,22 @@ std::vector<uint8_t> build(const Spec &s)
     put32(b, 28, s.reserved);
     size_t at = 32;
     put32(b, at, 0x19);
-    put32(b, at + 4, 152);
+    put32(b, at + 4, text_cmd);
     name16(b, at + 8, "__TEXT");
     put64(b, at + 24, kBase);
     put64(b, at + 32, kSeg);
     put64(b, at + 48, kSeg);
     put32(b, at + 56, 5);
     put32(b, at + 60, 5);
-    put32(b, at + 64, 1);
+    put32(b, at + 64, s.fips ? 2 : 1);
+    if (s.fips) {
+        name16(b, at + 72, "__fips_hmacs");
+        name16(b, at + 88, "__TEXT");
+        put64(b, at + 104, kBase + kFipsOff);
+        put64(b, at + 112, A64X_FIPS_MAC_SIZE);
+        put32(b, at + 120, kFipsOff);
+        at += 80;
+    }
     name16(b, at + 72, "__text");
     name16(b, at + 88, "__TEXT");
     const uint32_t words = s.text_words ? s.text_words : static_cast<uint32_t>(s.code.size());
@@ -125,6 +139,10 @@ std::vector<uint8_t> build(const Spec &s)
     at += 16;
     for (size_t i = 0; i < s.code.size(); i++)
         put32(b, kTextOff + 4 * i, s.code[i]);
+    if (s.fips)
+        a64x_fips_mac(&b[kTextOff], 4ull * words, &b[kFipsOff]);
+    if (s.fips == 2)
+        b[kFipsOff] ^= 1;
     if (!s.sign)
         return b;
     put32(b, at, 0x1D);
@@ -298,6 +316,45 @@ TEST(Pretranslate, MarkedSlicesStayAsTheyAre)
     run(s, x);
     EXPECT_EQ(x.r.status, A64X_PT_UNCHANGED);
     EXPECT_EQ(x.out, x.in);
+}
+
+TEST(Pretranslate, AFipsMacThatHeldIsThatOfTheTranslatedText)
+{
+    Spec s = typical();
+    s.fips = 1;
+    Result x;
+    run(s, x);
+    ASSERT_EQ(x.r.status, A64X_PT_TRANSLATED) << x.r.why;
+    EXPECT_EQ(x.r.fips_mac, 1);
+    uint8_t mac[A64X_FIPS_MAC_SIZE];
+    a64x_fips_mac(x.out.data() + kTextOff, 4 * s.code.size(), mac);
+    EXPECT_EQ(memcmp(mac, x.out.data() + kFipsOff, sizeof(mac)), 0);
+    EXPECT_GE(x.verified, 0) << x.err;
+}
+
+TEST(Pretranslate, AStaleFipsMacStays)
+{
+    Spec s = typical();
+    s.fips = 2;
+    Result x;
+    run(s, x);
+    ASSERT_EQ(x.r.status, A64X_PT_TRANSLATED) << x.r.why;
+    EXPECT_EQ(x.r.fips_mac, 0);
+    EXPECT_EQ(memcmp(x.out.data() + kFipsOff, x.in.data() + kFipsOff, A64X_FIPS_MAC_SIZE), 0);
+    EXPECT_GE(x.verified, 0) << x.err;
+}
+
+TEST(Pretranslate, TheVerifierCatchesAFipsMacLeftAsItWas)
+{
+    Spec s = typical();
+    s.fips = 1;
+    Result x;
+    run(s, x);
+    ASSERT_EQ(x.r.status, A64X_PT_TRANSLATED) << x.r.why;
+    memcpy(x.out.data() + kFipsOff, x.in.data() + kFipsOff, A64X_FIPS_MAC_SIZE);
+    a64x_pt_check v;
+    EXPECT_LT(a64x_pt_verify(&x.m, x.out.data(), &v, x.err, sizeof(x.err)), 0);
+    EXPECT_NE(std::string(x.err).find("FIPS"), std::string::npos) << x.err;
 }
 
 }  // namespace

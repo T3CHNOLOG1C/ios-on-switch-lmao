@@ -436,6 +436,10 @@ int a64x_pretranslate(const struct a64x_macho *m, uint8_t *out, struct a64x_pt_r
     }
     for (uint64_t off = m->exec_fileoff; off + 4 <= m->exec_fileoff + m->exec_filesize; off += 4)
         r->changed += rd32(out + off) != rd32(m->base + off);
+    struct a64x_fips fips;
+    if (a64x_pt_fips(m, m->base, &fips))
+        r->fips_mac = a64x_fips_rewrite(m->base + fips.text_fileoff, out + fips.text_fileoff, fips.text_size,
+                                        out + fips.mac_fileoff);
     wr32(out + 28, A64X_PRETRANSLATED);
     if (a64x_cs_rehash(out, m->size, sig_off, sig_size, r->cdhash_out, r->why, sizeof(r->why))) {
         memcpy(out, m->base, m->size);
