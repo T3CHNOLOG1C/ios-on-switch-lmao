@@ -209,6 +209,8 @@ struct Buffer {
 // Level `level` (1 .. levels - 1) of mipmapped texture `t`'s chain as a render target (raw_target.h: NVK's block-linear
 // target of that level), for a pass to render into: `out` names the chain's memory, it owns nothing. False: not a level of it.
 bool chainLevelTarget(const Texture &t, uint32_t level, Texture &out);
+// The same level as the copy engine's block-linear side, for a format the 3D engine does not render too
+bool chainLevelImage(const Texture &t, uint32_t level, Texture &out);
 // The sampler header NVK writes for the Vulkan sampler m2v makes of `d` (Mesa nvk_sampler_get_header; checked against the twin for
 // Core Animation's combinations: pack/mksamplers.py, test/samplercheck.cpp)
 void samplerHeader(const SamplerDesc &d, uint32_t w[8]);

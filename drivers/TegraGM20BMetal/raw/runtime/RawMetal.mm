@@ -2803,6 +2803,55 @@ static bool blitOptionsMoot(id<MTLTexture> t, MTLBlitOption options)
     return x && x->_rawOk && !x->_raw.zeta && !x->_raw.converted();
 }
 
+// `w` x `h` texels at (x, y) of level `level` of `t` as one side of a raw copy: level 0 the texture's memory, a later level
+// its chain's (raw::chainLevelImage)
+static bool copySideOk(RMTexture *t, NSUInteger level, NSUInteger x, NSUInteger y, NSUInteger w, NSUInteger h)
+{
+    if (!t->_rawOk || t->_raw.memoryless)
+        return false;
+    raw::Texture view;
+    if (level && (level >= raw::fx::kMaxLevels || !raw::chainLevelImage(t->_raw, uint32_t(level), view)))
+        return false;
+    const raw::Texture &side = level ? view : t->_raw;
+    return x + w <= side.width && y + h <= side.height;
+}
+
+static MTLSize levelSize(id<MTLTexture> t, NSUInteger level)
+{
+    auto at = [&](NSUInteger n) {
+        return std::max<NSUInteger>(1, n >> level);
+    };
+    return MTLSizeMake(at(t.width), at(t.height), t.textureType == MTLTextureType3D ? at(t.depth) : 1);
+}
+
+static NSUInteger sliceCount(id<MTLTexture> t)
+{
+    const MTLTextureType type = t.textureType;
+    return (type == MTLTextureTypeCube || type == MTLTextureTypeCubeArray ? 6 : 1) *
+           std::max<NSUInteger>(1, t.arrayLength);
+}
+
+// The levels a whole-texture copy starts at: the smaller's first, and the larger's of its size. False: neither has a level
+// of the other's size.
+static bool sameSizeLevels(id<MTLTexture> s, id<MTLTexture> d, NSUInteger &sl, NSUInteger &dl)
+{
+    auto same = [](MTLSize a, MTLSize b) {
+        return a.width == b.width && a.height == b.height && a.depth == b.depth;
+    };
+    sl = dl = 0;
+    for (NSUInteger l = 0; l < s.mipmapLevelCount; l++)
+        if (same(levelSize(s, l), levelSize(d, 0))) {
+            sl = l;
+            return true;
+        }
+    for (NSUInteger l = 1; l < d.mipmapLevelCount; l++)
+        if (same(levelSize(d, l), levelSize(s, 0))) {
+            dl = l;
+            return true;
+        }
+    return false;
+}
+
 @implementation RMBlitEncoder
 
 + (Class)twinClass
@@ -2822,19 +2871,13 @@ static bool blitOptionsMoot(id<MTLTexture> t, MTLBlitOption options)
 {
     RMTexture *a = (RMTexture *)s, *b = (RMTexture *)d;
     const bool both = [(id)a isKindOfClass:[RMTexture class]] && [(id)b isKindOfClass:[RMTexture class]];
-    // a mipmapped texture's level below the first (its chain's, raw::BlitEncoder::copyFromLevel, 1:1 into a texture of the
-    // same format: the 2D engine into rows, the copy engine into a block-linear one)
-    const raw::Texture::Chain *ch = both && a->_rawOk ? a->_raw.chain : nullptr;
-    const bool level = ch && sl && sl < ch->layout.levels && b->_rawOk && !b->_raw.memoryless &&
-                       (b->_raw.blockLinear || !((b->_raw.va | b->_raw.pitch) & 127)) &&
-                       b->_raw.format == a->_raw.format && !b->_raw.planar && !b->_raw.ycbcr && !ss && !ds && !dl &&
-                       size.depth == 1 && so.x + size.width <= ch->layout.level[sl].width &&
-                       so.y + size.height <= ch->layout.level[sl].height && dorg.x + size.width <= b->_raw.width &&
-                       dorg.y + size.height <= b->_raw.height;
-    const bool ok = level || (both && a->_rawOk && b->_rawOk && !ss && !sl && !ds && !dl && size.depth == 1 &&
-                              a->_raw.bpp == b->_raw.bpp && !a->_raw.memoryless && !b->_raw.memoryless &&
-                              so.x + size.width <= a->_raw.width && so.y + size.height <= a->_raw.height &&
-                              dorg.x + size.width <= b->_raw.width && dorg.y + size.height <= b->_raw.height);
+    // a level below the first into rows is the 2D engine's 1:1 copy out of the chain (raw::BlitEncoder::copyFromLevel), which
+    // converts between formats and takes rows 128-byte aligned; every other copy is the copy engine's, of bytes
+    const bool twoD = both && sl && !dl && !b->_raw.blockLinear;
+    const bool ok = both && !ss && !ds && size.depth == 1 && a->_raw.bpp == b->_raw.bpp &&
+                    copySideOk(a, sl, so.x, so.y, size.width, size.height) &&
+                    copySideOk(b, dl, dorg.x, dorg.y, size.width, size.height) &&
+                    (!twoD || (b->_raw.format == a->_raw.format && !((b->_raw.va | b->_raw.pitch) & 127)));
     if (both && (a->_raw.chain || b->_raw.chain))
         _cb->_chains = true;
     if (!ok) {
@@ -2870,8 +2913,44 @@ static bool blitOptionsMoot(id<MTLTexture> t, MTLBlitOption options)
     [_cb record:m];
 }
 
+- (void)copyFromTexture:(id<MTLTexture>)s
+            sourceSlice:(NSUInteger)ss
+            sourceLevel:(NSUInteger)sl
+              toTexture:(id<MTLTexture>)d
+       destinationSlice:(NSUInteger)ds
+       destinationLevel:(NSUInteger)dl
+             sliceCount:(NSUInteger)slices
+             levelCount:(NSUInteger)levels
+{
+    for (NSUInteger k = 0; k < slices; k++)
+        for (NSUInteger l = 0; l < levels; l++)
+            [self copyFromTexture:s
+                      sourceSlice:ss + k
+                      sourceLevel:sl + l
+                     sourceOrigin:MTLOriginMake(0, 0, 0)
+                       sourceSize:levelSize(s, sl + l)
+                        toTexture:d
+                 destinationSlice:ds + k
+                 destinationLevel:dl + l
+                destinationOrigin:MTLOriginMake(0, 0, 0)];
+}
+
+// Metal's whole-texture copy: every level of a size both have, from the larger's level of the smaller's size, and as many
+// slices as both have
 - (void)copyFromTexture:(id<MTLTexture>)s toTexture:(id<MTLTexture>)d
 {
+    NSUInteger sl = 0, dl = 0;
+    if (s.textureType == d.textureType && sameSizeLevels(s, d, sl, dl)) {
+        [self copyFromTexture:s
+                  sourceSlice:0
+                  sourceLevel:sl
+                    toTexture:d
+             destinationSlice:0
+             destinationLevel:dl
+                   sliceCount:std::min(sliceCount(s), sliceCount(d))
+                   levelCount:std::min(s.mipmapLevelCount - sl, d.mipmapLevelCount - dl)];
+        return;
+    }
     [self copyFromTexture:s
               sourceSlice:0
               sourceLevel:0
@@ -2928,11 +3007,10 @@ static bool blitOptionsMoot(id<MTLTexture> t, MTLBlitOption options)
         _cb->_chains = true;
     BufferRows rows;
     const bool ok =
-        [(id)a isKindOfClass:[RMBuffer class]] && [(id)b isKindOfClass:[RMTexture class]] && b->_rawOk && !ds && !dl &&
-        size.depth == 1 && !b->_raw.memoryless && b->_raw.bpp &&
+        [(id)a isKindOfClass:[RMBuffer class]] && [(id)b isKindOfClass:[RMTexture class]] && !ds && size.depth == 1 &&
+        copySideOk(b, dl, dorg.x, dorg.y, size.width, size.height) && b->_raw.bpp &&
         bufferRows(so, row, uint32_t(size.height), uint32_t(size.width * b->_raw.bpp), b->_raw.bpp, true, rows) &&
-        bufferRow(rows, so, row, uint32_t(size.height - 1)) + size.width * b->_raw.bpp <= a->_raw.length &&
-        dorg.x + size.width <= b->_raw.width && dorg.y + size.height <= b->_raw.height;
+        bufferRow(rows, so, row, uint32_t(size.height - 1)) + size.width * b->_raw.bpp <= a->_raw.length;
     if (!ok) {
         [_cb takeReason:WhyTexture why:@"a buffer-to-texture copy the raw path does not do"];
         hit(_cb, PredBlitBufToTex, row, uint64_t(ds) | uint64_t(dl) << 8 | uint64_t(size.depth) << 16);
@@ -2996,11 +3074,10 @@ static bool blitOptionsMoot(id<MTLTexture> t, MTLBlitOption options)
         _cb->_chains = true;
     BufferRows rows;
     const bool ok =
-        [(id)a isKindOfClass:[RMTexture class]] && [(id)b isKindOfClass:[RMBuffer class]] && a->_rawOk && !ss && !sl &&
-        size.depth == 1 && !a->_raw.memoryless && a->_raw.bpp &&
+        [(id)a isKindOfClass:[RMTexture class]] && [(id)b isKindOfClass:[RMBuffer class]] && !ss && size.depth == 1 &&
+        copySideOk(a, sl, so.x, so.y, size.width, size.height) && a->_raw.bpp &&
         bufferRows(dof, row, uint32_t(size.height), uint32_t(size.width * a->_raw.bpp), a->_raw.bpp, false, rows) &&
-        bufferRow(rows, dof, row, uint32_t(size.height - 1)) + size.width * a->_raw.bpp <= b->_raw.length &&
-        so.x + size.width <= a->_raw.width && so.y + size.height <= a->_raw.height;
+        bufferRow(rows, dof, row, uint32_t(size.height - 1)) + size.width * a->_raw.bpp <= b->_raw.length;
     if (!ok) {
         [_cb takeReason:WhyTexture why:@"a texture-to-buffer copy the raw path does not do"];
         hit(_cb, PredBlitTexToBuf, row, uint64_t(ss) | uint64_t(sl) << 8 | uint64_t(size.depth) << 16);
@@ -3872,6 +3949,12 @@ static void mipSync(RMCommandBuffer *cb, id<MTLCommandBuffer> m, size_t at, size
         case OpCopyTextureToBuffer:
             if (extra(cb, c.x + 1))
                 add(c.obj, true);  // a level below the first, read
+            if (c.op == OpCopyTexture && extra(cb, c.x + 9))
+                add(c.obj2, true);  // one written: the rest of it stays what m2v's levels hold
+            break;
+        case OpCopyBufferToTexture:
+            if (extra(cb, c.x + 7))
+                add(c.obj2, true);
             break;
         default:
             break;
@@ -4458,6 +4541,21 @@ static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **
                 }
         c.mirrorLevels = 0;
     };
+    // the raw path wrote level `level` of `t`: level 0 puts the chain's copy and m2v's behind it; a later level is the chain's
+    // own (rawLevels), m2v's behind it
+    auto chainWritten = [&](RMTexture *t, uint32_t level) {
+        if (!t->_raw.chain)
+            return;
+        raw::Texture::Chain &c = touch(t);
+        if (level) {
+            c.rawLevels |= uint16_t(1u << level);
+            t->_mipLevels = false;
+            t->_mirrored = false;
+        } else {
+            c.l0Fresh = false;
+            t->_mipL0 = false;
+        }
+    };
     auto fail = [&](RMPred p, const char *w, uint64_t a = 0, uint64_t b = 0) {
         *why = w;
         hit(cb, p, a, b);
@@ -4757,17 +4855,13 @@ static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **
                     } else {
                         levelTargets[j].tic = gRM->raw->levelTic(t->_raw, uint32_t(a.level));
                     }
-                    raw::Texture::Chain &c = touch(t);
-                    c.rawLevels |= uint16_t(1u << a.level);
-                    t->_mipLevels = false;
-                    t->_mirrored = false;
+                    chainWritten(t, uint32_t(a.level));
                     levelPasses++;
                     if (!loggedLevel.exchange(true))
                         os_log(rawLog(), "raw: renders into mip levels (first: level %lu of %ux%u format %u)",
                                (unsigned long)a.level, t->_raw.width, t->_raw.height, t->_raw.format);
-                } else if (t->_raw.chain) {  // its level 0: the chain's copy and m2v's are behind it
-                    touch(t).l0Fresh = false;
-                    t->_mipL0 = false;
+                } else {
+                    chainWritten(t, 0);
                 }
                 p.color[j].texture = a.level ? &levelTargets[j] : t->_raw.standIn ? t->_raw.standIn : &t->_raw;
                 p.color[j].load = a.loadAction == MTLLoadActionClear  ? raw::ColorAttachment::Clear
@@ -4897,21 +4991,27 @@ static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **
             useTexture(rc, t, true);
             if (!fresh.empty())
                 fresh.erase(t);
-            const uint64_t x = c.x, o = extra(cb, x + 10), sl = extra(cb, x + 1);
-            const uint64_t sx = extra(cb, x + 2), sy = extra(cb, x + 3), w = extra(cb, x + 5), h = extra(cb, x + 6);
-            const uint64_t dx = uint32_t(o), dy = o >> 32;
-            if (sl) {  // a level below the first of a chain (decided at record): the chain current, then the 2D engine's copy
+            const uint64_t x = c.x, o = extra(cb, x + 10), sl = extra(cb, x + 1), dl = extra(cb, x + 9);
+            const uint32_t sx = uint32_t(extra(cb, x + 2)), sy = uint32_t(extra(cb, x + 3)),
+                           w = uint32_t(extra(cb, x + 5)), h = uint32_t(extra(cb, x + 6)), dx = uint32_t(o),
+                           dy = uint32_t(o >> 32);
+            // a later level (decided at record) is read and written in its chain made current first: a generate from level 0
+            // or a copy from a mirror after the write would write over it
+            if (sl)
                 current(s, be);
-                be->copyFromLevel(s->_raw, uint32_t(sl), uint32_t(sx), uint32_t(sy), t->_raw, uint32_t(dx),
-                                  uint32_t(dy), uint32_t(w), uint32_t(h));
+            if (dl)
+                current(t, be);
+            if (sl && !dl && !t->_raw.blockLinear) {
+                be->copyFromLevel(s->_raw, uint32_t(sl), sx, sy, t->_raw, dx, dy, w, h);
             } else {
-                be->copyTexels(s->_raw, uint32_t(sx), uint32_t(sy), t->_raw, uint32_t(dx), uint32_t(dy), uint32_t(w),
-                               uint32_t(h));
+                raw::Texture fromLevel, toLevel;
+                if (sl)
+                    raw::chainLevelImage(s->_raw, uint32_t(sl), fromLevel);
+                if (dl)
+                    raw::chainLevelImage(t->_raw, uint32_t(dl), toLevel);
+                be->copyTexels(sl ? fromLevel : s->_raw, sx, sy, dl ? toLevel : t->_raw, dx, dy, w, h);
             }
-            if (t->_raw.chain) {  // its level 0 written
-                touch(t).l0Fresh = false;
-                t->_mipL0 = false;
-            }
+            chainWritten(t, uint32_t(dl));
             break;
         }
         case OpMipmaps: {  // a chain's levels from level 0 (decided at record); m2v's texture of every level is behind it
@@ -4941,21 +5041,23 @@ static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **
             useBuffer(rc, s, false);
             useTexture(rc, t, true);
             const uint64_t x = c.x, o = extra(cb, x + 8), so = extra(cb, x), row = extra(cb, x + 1);
-            const uint64_t w = extra(cb, x + 3), h = extra(cb, x + 4);
+            const uint64_t w = extra(cb, x + 3), h = extra(cb, x + 4), dl = extra(cb, x + 7);
             if (!fresh.empty())
                 fresh.erase(t);
-            if (t->_raw.chain) {
-                touch(t).l0Fresh = false;
-                t->_mipL0 = false;
+            raw::Texture level;
+            if (dl) {
+                current(t, be);
+                raw::chainLevelImage(t->_raw, uint32_t(dl), level);
             }
+            chainWritten(t, uint32_t(dl));
             BufferRows rows;
             bufferRows(so, row, uint32_t(h), uint32_t(w * t->_raw.bpp), t->_raw.bpp, true,
                        rows);  // (decided at record)
             const uint64_t first = bufferRow(rows, so, row, 0);
             if (!s->_raw.wc)
                 rc->clean(s->_raw.cpu + first, bufferRow(rows, so, row, uint32_t(h - 1)) - first + w * t->_raw.bpp);
-            copyRows(be, s->_raw.va, rows, so, row, t->_raw, uint32_t(o), uint32_t(o >> 32), uint32_t(w), uint32_t(h),
-                     true);
+            copyRows(be, s->_raw.va, rows, so, row, dl ? level : t->_raw, uint32_t(o), uint32_t(o >> 32), uint32_t(w),
+                     uint32_t(h), true);
             break;
         }
         case OpCopyTextureToBuffer: {
@@ -4964,7 +5066,12 @@ static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **
             useTexture(rc, s, false);
             useBuffer(rc, t, true);
             const uint64_t x = c.x, o = extra(cb, x + 2), w = extra(cb, x + 4), h = extra(cb, x + 5),
-                           dof = extra(cb, x + 7), row = extra(cb, x + 8);
+                           dof = extra(cb, x + 7), row = extra(cb, x + 8), sl = extra(cb, x + 1);
+            raw::Texture level;
+            if (sl) {
+                current(s, be);
+                raw::chainLevelImage(s->_raw, uint32_t(sl), level);
+            }
             BufferRows rows;
             bufferRows(dof, row, uint32_t(h), uint32_t(w * s->_raw.bpp), s->_raw.bpp, false,
                        rows);  // (decided at record)
@@ -4972,8 +5079,8 @@ static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **
             if (!t->_raw.wc)
                 rc->clean(t->_raw.cpu + first, bufferRow(rows, dof, row, uint32_t(h - 1)) - first + w * s->_raw.bpp,
                           true);
-            copyRows(be, t->_raw.va, rows, dof, row, s->_raw, uint32_t(o), uint32_t(o >> 32), uint32_t(w), uint32_t(h),
-                     false);
+            copyRows(be, t->_raw.va, rows, dof, row, sl ? level : s->_raw, uint32_t(o), uint32_t(o >> 32), uint32_t(w),
+                     uint32_t(h), false);
             break;
         }
         default:  // states, fences, events, resources the raw path needs nothing for
@@ -6022,6 +6129,12 @@ static void mirrorsForM2v(RMCommandBuffer *cb, size_t from, size_t to)
         case OpCopyTextureToBuffer:
             if (extra(cb, c.x + 1))
                 add(c.obj);
+            if (c.op == OpCopyTexture && extra(cb, c.x + 9))
+                add(c.obj2);
+            break;
+        case OpCopyBufferToTexture:
+            if (extra(cb, c.x + 7))
+                add(c.obj2);
             break;
         default:
             break;

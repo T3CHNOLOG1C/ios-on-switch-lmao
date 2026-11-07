@@ -2942,11 +2942,10 @@ uint32_t Device::levelTic(Texture &t, uint32_t level)
     return tic;
 }
 
-bool chainLevelTarget(const Texture &t, uint32_t level, Texture &out)
+static bool chainLevelView(const Texture &t, uint32_t level, uint32_t rtFormat, Texture &out)
 {
-    const FormatInfo *f = formatInfo(t.format);
     ColorTargetDesc d;
-    if (!t.chain || !f || !f->rt || !chainLevelDesc(t.chain->layout, t.chain->va, level, f->rt, d))
+    if (!t.chain || !chainLevelDesc(t.chain->layout, t.chain->va, level, rtFormat, d))
         return false;
     out = Texture();
     out.va = d.va;
@@ -2955,11 +2954,24 @@ bool chainLevelTarget(const Texture &t, uint32_t level, Texture &out)
     out.format = t.format;
     out.pitch = d.pitch;
     out.bpp = t.bpp;
-    out.renderable = true;
     out.blockLinear = true;
     out.blockHeight = d.blockHeight;
     out.layerBytes = d.layerBytes;
     return true;
+}
+
+bool chainLevelTarget(const Texture &t, uint32_t level, Texture &out)
+{
+    const FormatInfo *f = formatInfo(t.format);
+    if (!f || !f->rt || !chainLevelView(t, level, f->rt, out))
+        return false;
+    out.renderable = true;
+    return true;
+}
+
+bool chainLevelImage(const Texture &t, uint32_t level, Texture &out)
+{
+    return chainLevelView(t, level, ~0u, out);
 }
 
 void RenderEncoder::setDepthBias(float constant, float slope, float clamp)
@@ -3390,7 +3402,7 @@ void BlitEncoder::copyFromLevel(const Texture &t, uint32_t level, uint32_t sx, u
         return;
     if (dst.blockLinear) {  // the copy engine, block-linear to block-linear (the 2D engine's destination here is pitch)
         Texture from;
-        if (chainLevelTarget(t, level, from))
+        if (chainLevelImage(t, level, from))
             copyTexels(from, sx, sy, dst, dx, dy, w, h);
         dev_->stats.chainCopies++;
         return;
