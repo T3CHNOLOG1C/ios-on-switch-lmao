@@ -100,6 +100,12 @@ NAMES = {
     0xFFFFFFF00A320F54: '_vfs_setauthopaqueaccess',
     0xFFFFFFF00A321930: '_vfs_setdevvp',
     0xFFFFFFF00A32230C: '_vfs_context_copy_audit_token',
+    # kpi_vfs.c, which the ubc-like shift had one function off too: MNTK_SYSTEM (0x40) and MNTK_NOSWAP (0x80) set
+    # under the mount lock; owner and group stored; snap_mp's mnt_flag (+112) given mp's security bits.
+    0xFFFFFFF00A3211E4: '_vfs_setmntsystem',
+    0xFFFFFFF00A321478: '_vfs_setnoswap',
+    0xFFFFFFF00A3221F8: '_vfs_setowner',
+    0xFFFFFFF00A322A58: '_vfs_setsnapshotmntflags',
     # kern_subr.c, adjacent: hashinit, then hashdestroy.
     0xFFFFFFF00A6467BC: '_hashinit',
     0xFFFFFFF00A6468D8: '_hashdestroy',
