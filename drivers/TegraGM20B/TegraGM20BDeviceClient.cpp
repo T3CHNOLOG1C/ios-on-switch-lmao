@@ -4,6 +4,7 @@
 // (IOGPUDeviceSetDisplayParams). It holds no GPU resources: IOGPUDeviceCreate's queries are answered empty (no shared
 // stamps, no trace ids, as a device with none) and the deadline is kept for the scheduler (tegra_gm20b_display_deadline).
 #include <IOKit/IOUserClient.h>
+#include "../../kits/SwitchRefusal/SwitchRefusal.h"
 
 namespace
 {
@@ -100,6 +101,10 @@ IOReturn TegraGM20BDeviceUserClient::externalMethod(uint32_t selector,
 		storeDeadline(arguments->scalarInput[0], arguments->scalarInput[1]);
 		return kIOReturnSuccess;
 	default:
+		switch_refusal_k(switch_refusal_key_with(
+					 switch_refusal_key("iogpu", "device-selector"), selector),
+				 "iogpu", "device-selector", "IOGPU device selector %u refused",
+				 selector);
 		return kIOReturnUnsupported;
 	}
 }
