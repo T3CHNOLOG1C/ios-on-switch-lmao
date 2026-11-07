@@ -6,26 +6,27 @@
 
 namespace raw {
 
-// lock_ held: a program's slot laid out as the pack lays one (programSlot), once per program, after what the heap holds. The next
-// submission's prologue invalidates the shader and constant caches before any draw reads it.
+// lock_ held: a program's slot laid out as the pack lays one (programSlot), once per program, placed as the pack's programs are
+// (heapPlace). The next submission's prologue invalidates the shader and constant caches before any draw reads it.
 bool Device::placeCompleted(const CapturedProgram &p, PlacedProgram &out)
 {
     if (const auto it = completedPrograms_.find(p.id); it != completedPrograms_.end()) {
         out = it->second.placed;
         return true;
     }
+    if (p.image.size() < sizeof CompletedProgram::header)
+        return false;
     PackProgram info;
     const std::vector<uint8_t> slot = programSlot(p, info);
-    if (p.image.size() < sizeof CompletedProgram::header || heapPlaced_ + slot.size() > heap_.bytes - 0x1000)
+    uint64_t at = 0;
+    if (!heapPlace(slot.data(), uint32_t(slot.size()), at))
         return false;
-    memcpy(heap_.cpu + heapPlaced_, slot.data(), slot.size());
-    info.heapOffset = uint32_t(heapPlaced_);
+    info.heapOffset = uint32_t(at);
     CompletedProgram &placed = completedPrograms_[p.id];
     placed.info = info;
     memcpy(placed.header, p.image.data(), sizeof placed.header);
-    placed.placed = {&placed.info, uint32_t(heapPlaced_) + info.program,
-                     info.dataBytes ? heap_.va + heapPlaced_ + info.dataOffset : 0, placed.header};
-    heapPlaced_ += slot.size();
+    placed.placed = {&placed.info, uint32_t(at) + info.program, info.dataBytes ? heap_.va + at + info.dataOffset : 0,
+                     placed.header};
     stats.programsPlaced++;
     out = placed.placed;
     return true;

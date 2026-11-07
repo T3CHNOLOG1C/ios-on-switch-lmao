@@ -461,16 +461,19 @@ bool Device::heapGrow(uint64_t end)
     return true;
 }
 
-// lock_ held: `size` bytes of programs at the heap's end, their offset in `offset`, with the prefetch slack after them bound.
-// The heap is cached host memory: what the CPU copies there is cleaned to memory before the GPU can read it. False: no room.
+// lock_ held: a program slot of `size` bytes at the heap's end, its offset in `offset`, with the prefetch slack after it bound.
+// A slot starts 256-aligned as NVK's uploads do: its code at +0x80 and its shader data at a 256-aligned offset in it, while the
+// slot before may end anywhere after its shader data. The heap is cached host memory: what the CPU copies there is cleaned to
+// memory before the GPU can read it. False: no room.
 bool Device::heapPlace(const uint8_t *bytes, uint32_t size, uint64_t &offset)
 {
-    const uint64_t end = heapPlaced_ + size;
+    const uint64_t at = (heapPlaced_ + 0xFF) & ~uint64_t(0xFF);
+    const uint64_t end = at + size;
     if (!heapGrow(end + kHeapSlack))
         return false;
-    memcpy(heap_.cpu + heapPlaced_, bytes, size);
-    cleanToMemory(heap_.cpu + heapPlaced_, size);
-    offset = heapPlaced_;
+    memcpy(heap_.cpu + at, bytes, size);
+    cleanToMemory(heap_.cpu + at, size);
+    offset = at;
     heapPlaced_ = end;
     return true;
 }
