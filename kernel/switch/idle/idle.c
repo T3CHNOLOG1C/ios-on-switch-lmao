@@ -34,6 +34,7 @@ static struct idle_core idle_cores[SWITCH_SMP_CORE_COUNT];
 static const struct switch_idle_platform *idle_platform;
 static bool idle_c7;
 static uint64_t idle_frame_at;
+static void (*idle_frames_started)(void);
 static int64_t idle_failure;
 static thread_call_t idle_failure_call;
 
@@ -114,7 +115,24 @@ void switch_idle_start(const struct switch_idle_platform *platform)
 
 void switch_idle_note_frame(void)
 {
-    os_atomic_store(&idle_frame_at, mach_absolute_time(), relaxed);
+    const uint64_t now = mach_absolute_time();
+    const uint64_t before = os_atomic_xchg(&idle_frame_at, now, relaxed);
+    if (now - before >= SWITCH_IDLE_FRAME_WINDOW) {
+        void (*started)(void) = os_atomic_load(&idle_frames_started, acquire);
+        if (started) {
+            started();
+        }
+    }
+}
+
+uint64_t switch_idle_last_frame(void)
+{
+    return os_atomic_load(&idle_frame_at, relaxed);
+}
+
+void switch_idle_set_frames_started(void (*started)(void))
+{
+    os_atomic_store(&idle_frames_started, started, release);
 }
 
 int switch_idle_read_counts(uint32_t cpu, struct switch_idle_counts *out)

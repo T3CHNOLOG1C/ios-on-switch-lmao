@@ -151,6 +151,7 @@
 #include "SwitchGovernor.h"
 #include "SwitchPerfGovernor.h"
 #include "SwitchPower.h"
+#include "SwitchEMC.h"
 #include "SwitchPowerStats.h"
 #include <os/log.h>
 
@@ -1761,6 +1762,7 @@ extern "C" void switch_thermal_cpu_quiesce(void)
 
 extern "C" void switch_thermal_suspend(void)
 {
+    switch_emc_suspend();
     if (gThermal)
         gThermal->suspend();
 }
@@ -1769,4 +1771,5 @@ extern "C" void switch_thermal_resume(void)
 {
     if (gThermal)
         gThermal->resume();
+    switch_emc_resume();
 }

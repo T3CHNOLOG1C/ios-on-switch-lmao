@@ -63,6 +63,7 @@
 #include "TegraGM20BHangDecode.h"
 #include "TegraGM20BRecover.h"
 #include "TegraGM20BSched.h"
+#include "../../kits/SwitchIdle/switch_idle.h"
 #include "TegraGM20BSleepGate.h"
 #include "TegraGM20BTlb.h"
 #include "../SwitchSuspend/SwitchSleepSteps.h"
@@ -3682,6 +3683,7 @@ static u32 chan_fence(struct tgm_chan *chan)
 		WRITE_ONCE(chan->stat_sub_ns[next % CHAN_NSTAMPS], chan->submit_ns);
 	if ((s32)(tgm_chan_completed(chan) - chan->submitted) >= 0)
 		WRITE_ONCE(chan->busy_ns, chan->submit_ns);
+	switch_emc_gpu_submit();
 	PUSH_KICK(push);
 	if (chan->high) {
 		enum tgm_sched_kick kick = tgm_sched_kicked(gpu.device, chan->chid);

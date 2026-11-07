@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // The power stats line (debug kernels only, os_log): every 10 s, each core's time in C7, in WFI and busy over the
-// window, with its C7 entries and the requests the firmware returned from at once, then the battery's draw.
+// window, with its C7 entries and the requests the firmware returned from at once, the EMC's rate changes and time at
+// each rate, then the battery's draw.
 #include "SwitchPowerStats.h"
 
 #if DEVELOPMENT || DEBUG
@@ -9,6 +10,7 @@
 #include <os/log.h>
 #include "../../kits/SwitchIdle/switch_idle.h"
 #include "../SwitchBattery/SwitchBattery.h"
+#include "SwitchEMC.h"
 
 namespace {
 constexpr uint32_t kCores = 4;
@@ -61,6 +63,10 @@ void switch_power_stats_tick(void)
     char line[512];
     size_t n = static_cast<size_t>(snprintf(line, sizeof(line), "SwitchPower: %llu ms: ", window / 19200));
     n = appendIdle(line, sizeof(line), n, window);
+    if (n + 2 < sizeof(line)) {
+        n += static_cast<size_t>(snprintf(line + n, sizeof(line) - n, "; "));
+        n += switch_emc_stats(line + n, sizeof(line) - n);
+    }
     appendBattery(line, sizeof(line), n);
     if (gLast)
         os_log(OS_LOG_DEFAULT, "%s", line);
