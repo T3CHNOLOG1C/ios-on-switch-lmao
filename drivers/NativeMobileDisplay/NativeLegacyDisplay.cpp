@@ -4880,36 +4880,18 @@ public:
     }
 
     // The compositor's framebuffer rows (QuartzCore CA::WindowServer::AppleDisplay::update_display_limits reads this IOMFB
-    // property; iosurface_alignment() then rounds every framebuffer's bytesPerRow up to it, 64 by default). The GPU renders
-    // into a linear surface in place only when its rows are 128-byte multiples (Mesa nil image.rs; below that NVK renders
-    // through a tiled shadow and copies it back every pass). 1280 x 4 = 5120 was one; 720 x 4 = 2880 is not, so ask
-    // 128: 2944-byte rows. The scanout copies take any source stride.
+    // property; iosurface_alignment() then rounds every framebuffer's bytesPerRow up to it, 64 by default), and VideoToolbox's
+    // outputs (NativePlanes::kPublishedRowAlignment): 720 x 4 = 2880 becomes 3072-byte rows. The scanout copies take any
+    // source stride.
     void publishStrideRequirements()
     {
         OSDictionary *requirements = OSDictionary::withCapacity(1);
-        OSNumber *horizontal = OSNumber::withNumber(128ull, 32);
+        OSNumber *horizontal = OSNumber::withNumber(NativePlanes::kPublishedRowAlignment, 32);
         if (requirements && horizontal && requirements->setObject("StrideLinearHorizontal", horizontal))
             setProperty("DisplayPipeStrideRequirements", requirements);
         OSSafeReleaseNULL(horizontal);
         OSSafeReleaseNULL(requirements);
         publishPlaneLimits();
-    }
-
-    // r18-planes, from native_legacy_detach_ready (thread context, before backboardd): the row and plane-base alignment
-    // Core Animation sizes its surfaces by, once detaching is allowed. Multiples of what was published before (128, 64), so
-    // everything validateSwap and the scanouts take stays taken; NVK still renders 256-byte rows in place.
-    void publishDetachAlignment(uint32_t rows, uint32_t bases)
-    {
-        auto publish = [this](const char *name, const char *key, uint64_t value) {
-            OSDictionary *dict = OSDictionary::withCapacity(1);
-            OSNumber *number = OSNumber::withNumber(value, 32);
-            if (dict && number && dict->setObject(key, number))
-                setProperty(name, dict);
-            OSSafeReleaseNULL(number);
-            OSSafeReleaseNULL(dict);
-        };
-        publish("DisplayPipeStrideRequirements", "StrideLinearHorizontal", rows);
-        publish("DisplayPipePlaneBaseAlignment", "PlaneBaseAlignmentLinear", bases);
     }
 
     // r18-planes: the limits Core Animation detaches a layer within (AppleDisplay::update_display_limits reads them once, at
@@ -4950,7 +4932,7 @@ public:
                                 {"VideoClock", 78000000},
                                 {"PixelClock", 78000000}};
         publish("IOMFBMaxSrcPixels", source, 7, 64);
-        const Entry base[] = {{"PlaneBaseAlignmentLinear", limits.planeBaseAlignment}};
+        const Entry base[] = {{"PlaneBaseAlignmentLinear", NativePlanes::kPublishedBaseAlignment}};
         publish("DisplayPipePlaneBaseAlignment", base, 1, 64);
         const Entry layers[] = {{"MaxNumLayers", limits.maxLayers}};
         publish("IOMFBNumLayers", layers, 1, 32);
@@ -5045,8 +5027,17 @@ public:
 #undef LEAF
 };
 
-OSDefineMetaClassAndStructors(NativeLegacyDisplay,
-                              IOMobileFramebufferLegacy) NativeLegacyDisplay *NativeLegacyDisplay::primaryDisplay;
+// OSDefineMetaClassAndStructors(NativeLegacyDisplay, IOMobileFramebufferLegacy), registered under J120's class name. iPadOS
+// finds the internal display as an AppleCLCD: VideoToolbox's and MediaToolbox's FigGetAlignmentForIOSurfaceOutput match
+// IOServiceMatching("AppleCLCD") for the display pipe's alignment, and the poster extensions' sandbox profiles allow
+// iokit-get-properties on the iokit-registry-entry-class AppleCLCD. Apple's AppleCLCD (AppleMobileDispH9G) is not prelinked
+// here, so the name is free.
+OSDefineMetaClassWithInit(NativeLegacyDisplay, IOMobileFramebufferLegacy, ) NativeLegacyDisplay::MetaClass::MetaClass()
+    : OSMetaClass("AppleCLCD", NativeLegacyDisplay::superClass, sizeof(NativeLegacyDisplay))
+{}
+
+OSDefineDefaultStructors(NativeLegacyDisplay,
+                         IOMobileFramebufferLegacy) NativeLegacyDisplay *NativeLegacyDisplay::primaryDisplay;
 #if SWITCH_FRAME_TIMELINE
 constinit NativeLegacyDisplay::ColumnScanState NativeLegacyDisplay::columnScan;
 constinit struct sysctl_oid NativeLegacyDisplay::columnScanOid = {};
@@ -5169,10 +5160,8 @@ extern "C" void native_legacy_gpu_complete(void *display, int status)
 // IOSurfaceAccelerator quarter turns (transforms 4 and 7), 4:2:0 to RGB and a row pitch (V4 pitch: 16, 64 or else 256
 // bytes), since on an internal display every rotated detached layer (here: every landscape video) is first copied through
 // it into a destination Core Animation allocates, and what Core Animation does when that copy is refused is not known.
-// When it may, the row and plane-base alignment Core Animation sizes its surfaces by become ones VIC writes (rows: the
-// proven pitch, at least the GPU's 128; bases: VIC's 256), published here, before backboardd reads them at its display's
-// creation [I: that its IOSA destinations follow DisplayPipeStrideRequirements/PlaneBaseAlignment]. Otherwise
-// backboardd keeps CA_DISABLE_DETACHED=1 and nothing changes. One line per call.
+// The alignment Core Animation sizes those destinations by is VIC's from start (NativePlanes::kPublishedRowAlignment).
+// Otherwise backboardd keeps CA_DISABLE_DETACHED=1 and nothing changes. One line per call.
 extern "C" bool native_legacy_detach_ready(void)
 {
     NativeLegacyDisplay *display = __atomic_load_n(&NativeLegacyDisplay::primaryDisplay, __ATOMIC_ACQUIRE);
@@ -5180,16 +5169,13 @@ extern "C" bool native_legacy_detach_ready(void)
     const TegraVICTraits *vic = tegra_vic_ready() ? tegra_vic_traits() : nullptr;
     const bool turns = vic && (vic->rotations & 0x90) == 0x90 && (vic->yccIn & TEGRA_VIC_YCC_IN_RGB);
     const uint32_t pitch = vic ? vic->pitchAlign : 0;
-    const bool pitched = pitch && pitch <= 256 && !(pitch & (pitch - 1));
-    const uint32_t rows = pitched && pitch > 128 ? pitch : 128, bases = 256;
+    const bool pitched = pitch && pitch <= NativePlanes::kPublishedRowAlignment && !(pitch & (pitch - 1));
     const bool ok = planes && turns && pitched;
-    if (ok)
-        display->publishDetachAlignment(rows, bases);
     IOLog("SwitchDisplay: backboardd %s detach layers: planes %s, IOSurfaceAccelerator quarter turns %s (transforms "
           "%#x), VIC row pitch %u%s (rows %u, plane bases %u)\n",
           ok ? "may" : "may not", planes ? "on" : "off", turns ? "proven" : "not proven", vic ? vic->rotations : 0,
-          pitch, pitched ? "" : " (not proven)", ok ? rows : 128u,
-          ok ? bases : NativePlanes::Limits().planeBaseAlignment);
+          pitch, pitched ? "" : " (not proven)", NativePlanes::kPublishedRowAlignment,
+          NativePlanes::kPublishedBaseAlignment);
     return ok;
 }
 
