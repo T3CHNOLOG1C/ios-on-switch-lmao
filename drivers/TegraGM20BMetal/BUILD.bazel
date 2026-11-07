@@ -66,6 +66,7 @@ ios_binary(
     hdrs = [
         ":raw_runtime_headers",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BLayout.h",
     ],
     copts = [
         "-O2",

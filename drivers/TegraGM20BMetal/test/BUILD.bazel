@@ -2,6 +2,8 @@
 #   raw_target_test   raw/runtime/raw_target.h: the raw path's color target words, pitch as before and a mip chain's level as
 #                     NVK's block-linear target, addressing every texel where raw/fx's layout (the texture header's and
 #                     the 2D engine's view of the chain) has it
+#   raw_layout_test   drivers/TegraGM20B/TegraGM20BLayout.h: the block-linear layout every GPU user takes is NIL's (its
+#                     answers for one-level images of every texel size), raw/fx's level 0 and the display's tiled scan
 #   raw_follow_test   raw/runtime/raw_follow.h: the raw path's threads take a fixed-priority committer's policy, never a
 #                     lower one, and keep their own for a timeshare committer
 #   stage_test        stage-tegra-gm20b-metal.py on a directory standing in for the Data volume
@@ -22,10 +24,32 @@ host_test(
     name = "raw_target_test",
     srcs = [
         "raw_target_test.cpp",
+        "//drivers/TegraGM20B:TegraGM20BLayout.h",
         "//drivers/TegraGM20BMetal:raw/fx/fx_mip.cpp",
         "//drivers/TegraGM20BMetal:raw/fx/fx_mip.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_push.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_target.h",
+    ],
+    copts = [
+        "-I",
+        "drivers/TegraGM20B",
+    ],
+    cxx_std = "c++17",
+)
+
+host_test(
+    name = "raw_layout_test",
+    srcs = [
+        "raw_layout_test.cpp",
+        "//drivers/TegraDisplayFlip:TegraScanoutCopy.h",
+        "//drivers/TegraGM20B:TegraGM20BLayout.h",
+        "//drivers/TegraGM20BMetal:raw/fx/fx_mip.cpp",
+        "//drivers/TegraGM20BMetal:raw/fx/fx_mip.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_push.h",
+    ],
+    copts = [
+        "-I",
+        "drivers/TegraGM20B",
     ],
     cxx_std = "c++17",
 )

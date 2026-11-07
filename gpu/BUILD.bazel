@@ -25,6 +25,8 @@ GM20B_METAL = "//drivers/TegraGM20BMetal"
 
 GM20B_ABI = "//drivers/TegraGM20B:TegraGM20BABI.h"
 
+GM20B_LAYOUT = "//drivers/TegraGM20B:TegraGM20BLayout.h"
+
 NVK = "//gpu/nvk:dylib"
 
 # The runtime's AIR fixtures, which the bridge compiles in (include_bytes!).
@@ -126,6 +128,7 @@ metal_plugin(
         METAL + ":frontend_headers",
         GM20B_METAL + ":raw_runtime_headers",
         GM20B_ABI,
+        GM20B_LAYOUT,
     ],
     bridge = ":bridge_ios",
     cc_srcs = [
