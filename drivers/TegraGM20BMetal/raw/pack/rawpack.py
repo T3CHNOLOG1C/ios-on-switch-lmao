@@ -9,9 +9,9 @@ ca/qc-<build>.json): the corpus's names, QuartzCore's offline compilation manife
 puts in the pipeline and over the blend it leaves in the fragment (CA_TIERS). With no tables of this QuartzCore (another
 IPSW's), the corpus's states as they are.
 
-  1. probe (pack/probe.mm) makes every state and draws it once with tagged inputs, three times: payloads of 256, 16 and
+  1. probe (pack/probe.mm) makes every state and draws it once with tagged inputs, four times: payloads of 256, 16 and
      4096 bytes (a uniform buffer's range is NVK's 256-byte rounding of the payload; the 4096-byte run gives the
-     function's window);
+     function's window), and of 256 bytes bound at an offset of each slot's own (the push word of its residual);
   2. mkprograms.py reads NAK's programs out of the NVK driver records the run left in its m2v cache directory;
   3. mkpack.py reads the probe logs and writes pack.bin: per state its programs, registers, push words and descriptor
      layout, plus NVK's context init with the addresses to relocate. States m2v draws with more than one draw or with
@@ -93,6 +93,7 @@ BUILT = ('probe', 'libmock_iokit.dylib', 'own.metallib')
 # crawl's root
 FRAMEWORK = re.compile(r' lib=/System/Library/(?:Private)?Frameworks/\w+\.framework/default\.metallib ')
 QC_PATH = 'System/Library/Frameworks/QuartzCore.framework/default.metallib'
+LIBRARY = re.compile(r' lib=(\S+)')
 
 
 def library_root(qc: Path) -> str:
@@ -257,7 +258,16 @@ def fnv(b: bytes) -> int:
 
 
 def state_key(line: str) -> str:
-    """Give an R line's state key as probe.mm prints it: every descriptor field but the label, then its functions."""
+    """Give an R line's state key as probe.mm prints it: every descriptor field but the label, then its functions.
+
+    No lib= field is in it; a line whose first library is another framework's default.metallib than QuartzCore's ends
+    with " | l <framework>" (probe.mm libraryPath, frameworkName).
+    """
+    libs = LIBRARY.findall(line)
+    framework = ''
+    if libs and libs[0].endswith('.framework/default.metallib') and '/QuartzCore.framework/' not in libs[0]:
+        framework = libs[0].rsplit('.framework/', 1)[0].rsplit('/', 1)[-1]
+    line = LIBRARY.sub('', line)
     bar1, bar2 = line.find(' | v '), line.find(' | f ')
     if bar1 < 0 or bar2 < 0:
         return ''
@@ -267,7 +277,8 @@ def state_key(line: str) -> str:
         for h in line[:bar1].split()
         if h.startswith(('samples=', 'topo=', 'ds=')) or (len(h) > 1 and h[0] in 'ca' and h[1].isdigit())
     ]
-    return (' '.join(fields) + ' ' + line[bar1 : bar3 if bar3 >= 0 else len(line)]).strip()
+    key = (' '.join(fields) + ' ' + line[bar1 : bar3 if bar3 >= 0 else len(line)]).strip()
+    return f'{key} | l {framework}' if framework else key
 
 
 def barrier_set(d: Path) -> Path | None:
@@ -293,7 +304,7 @@ def barrier_set(d: Path) -> Path | None:
 def probe_bucket(tools: Path, d: Path, nvk: Path, qc: Path, env: dict[str, str]) -> str:
     """Probe one bucket's states, then its storage-form states again with the interlock hidden (barrier_set).
 
-    A run that only fills its m2v cache with NVK's driver records (NAK's programs), then the three decoded runs, which
+    A run that only fills its m2v cache with NVK's driver records (NAK's programs), then the four decoded runs, which
     name each bound program by those records (RAWCAP_PROGRAMS) and hit the same cache.
     """
     said = [probe_runs(tools, d, nvk, qc, env)]
@@ -304,7 +315,7 @@ def probe_bucket(tools: Path, d: Path, nvk: Path, qc: Path, env: dict[str, str])
 
 
 def probe_runs(tools: Path, d: Path, nvk: Path, qc: Path, env: dict[str, str]) -> str:
-    """Run the warm-up and the three decoded probe runs over d's corpus."""
+    """Run the warm-up and the four decoded probe runs over d's corpus."""
     if d.name == 'bucket0':
         env = dict(env, PROBE_OWN_LIB=str(tools / 'own.metallib'))
     said = []
@@ -337,6 +348,15 @@ def probe_runs(tools: Path, d: Path, nvk: Path, qc: Path, env: dict[str, str]) -
                 'RAWCAP_PROGRAMS': str(d / 'programs.bin'),
             },
         )
+    probe(
+        'probeoff',
+        {
+            'PROBE_BYTES': '256',
+            'PROBE_BIND_OFFSET': '1',
+            'RAWCAP_LOG': str(d / 'probeoff.log'),
+            'RAWCAP_PROGRAMS': str(d / 'programs.bin'),
+        },
+    )
     shutil.rmtree(d / 'cache')
     return f'rawpack: {d.parent.name + "/" if d.name == "barrier" else ""}{d.name}: ' + '; '.join(said)
 
