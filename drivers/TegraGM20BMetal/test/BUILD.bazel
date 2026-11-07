@@ -7,6 +7,9 @@
 #   nvk_wait_any_test nvkmd_darwin's WAIT_ANY (nvkmd_darwin_wait_any.h) over a model of the kext's WaitFence: it returns
 #                     once one sync of the set resolves (a host signal, a fence's interrupt), sleeps until then, keeps
 #                     its deadline, and calls a passed fence whose wake never came a lost interrupt
+#   nvk_kill_test     nvkmd_darwin's view of a channel the kernel killed (nvkmd_darwin_kill.h): the fence word's kill record
+#                     names the seqnos that never ran, a kept record answers for its old channel alone, a timeline keeps
+#                     its failed values
 #   nvk_surfaces_test nvkmd_darwin's ExecSurfaces record (nvkmd_darwin_surfaces.h): each BO once with its accesses merged,
 #                     past its room the all-imports flag, its length
 #   raw_events_source_test  how a command buffer with a plain or shared Metal event stays raw (frontend, bridge, m2v,
@@ -73,6 +76,20 @@ host_test(
     srcs = [
         "nvk_wait_any_test.cpp",
         "//third_party/mesa/src/nouveau/vulkan:nvkmd/darwin/nvkmd_darwin_wait_any.h",
+    ],
+    cxx_std = "c++17",
+)
+
+host_test(
+    name = "nvk_kill_test",
+    srcs = [
+        "nvk_kill_test.cpp",
+        "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//third_party/mesa/src/nouveau/vulkan:nvkmd/darwin/nvkmd_darwin_kill.h",
+    ],
+    copts = [
+        "-I",
+        "drivers/TegraGM20B",
     ],
     cxx_std = "c++17",
 )

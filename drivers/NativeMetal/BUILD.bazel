@@ -31,6 +31,7 @@ filegroup(
     name = "bridge_rust",
     srcs = [
         "bridge/NativeMetalBridge.rs",
+        "bridge/NativeMetalFailure.rs",
         "bridge/NativeMetalObjects.rs",
         "bridge/NativeMetalTarget.rs",
     ],

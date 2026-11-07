@@ -287,6 +287,8 @@ int nmb_command_buffer_wait_completed_for(NmbCommandBuffer *, uint64_t timeout_m
 /* Metal's MTLCommandBufferStatus (0 not enqueued .. 4 completed, 5 error). */
 uint64_t nmb_command_buffer_status(const NmbCommandBuffer *);
 size_t nmb_command_buffer_error(const NmbCommandBuffer *, char *out, size_t size);
+/* Metal's MTLCommandBufferError code of a failed command buffer, 0 before it failed. */
+uint64_t nmb_command_buffer_error_code(const NmbCommandBuffer *);
 double nmb_command_buffer_gpu_time(const NmbCommandBuffer *, bool end);
 
 /* Events: an MTLEvent (shared false) or an MTLSharedEvent within this process. */
