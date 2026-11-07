@@ -18,7 +18,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-VERSIONS = {'compose': 1, 'populate': 1, 'pack': 1, 'head': 1}
+VERSIONS = {'compose': 1, 'populate': 2, 'pack': 1, 'head': 1}
 STAGES = ('compose', 'populate', 'pack', 'head')
 CHUNK = 8 << 20
 

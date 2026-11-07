@@ -21,6 +21,7 @@ from tools.install import host
 
 APFS_VOLUME = '41504653-0000-11AA-AA11-00306543ECAC'
 PARTIAL = '.partial-'
+FSEVENTS = '.fseventsd'
 ATTACH = ('-nomount', '-noverify', '-noautofsck')
 RAW = ('-imagekey', 'diskimage-class=CRawDiskImage')
 
@@ -60,8 +61,8 @@ def mounted(device: str, log: host.Log, owners: bool, read_only: bool = False) -
     """Mount a volume at a private mount point, hidden from the Finder and Spotlight.
 
     `owners` shows the files' owners as they are; without, every file reads and writes as the user and new files are
-    the user's (owners.py gives them theirs afterwards). A writable volume loses the .fseventsd macOS makes for it on
-    mounting: the device makes its own, a cryptex has none, and removed at once nothing recreates it.
+    the user's (owners.py gives them theirs afterwards). On a writable volume fseventsd is told to log nothing
+    (quiet()) and its directory goes before unmounting (settle()).
     """
     with tempfile.TemporaryDirectory(prefix='switch-') as directory:
         options = 'nobrowse,' + ('owners' if owners else 'noowners')
@@ -69,10 +70,29 @@ def mounted(device: str, log: host.Log, owners: bool, read_only: bool = False) -
         host.run('diskutil', 'mount', *mode, '-mountOptions', options, '-mountPoint', directory, device, log=log)
         try:
             if not read_only:
-                shutil.rmtree(Path(directory) / '.fseventsd', ignore_errors=True)
+                quiet(Path(directory))
             yield Path(directory)
         finally:
+            if not read_only:
+                settle(Path(directory))
             host.run('diskutil', 'unmount', device, log=log, check=False)
+
+
+def quiet(root: Path) -> None:
+    """Make fseventsd log nothing on the volume mounted at `root` (its no_log marker).
+
+    fseventsd makes .fseventsd on a volume when it is mounted, at a moment of its own, and writes its log there when
+    the volume is unmounted: files that would land after their owners were recorded. Removing the directory alone
+    races with its making.
+    """
+    events = root / FSEVENTS
+    events.mkdir(exist_ok=True)
+    (events / 'no_log').touch()
+
+
+def settle(root: Path) -> None:
+    """Remove .fseventsd: the device makes its own, and a cryptex has none. With no_log nothing writes it again."""
+    shutil.rmtree(root / FSEVENTS, ignore_errors=True)
 
 
 def sweep(directory: Path, log: host.Log) -> list[str]:

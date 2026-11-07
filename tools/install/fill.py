@@ -65,6 +65,8 @@ def _write(image: Path, volumes: dict[str, str], inputs: Inputs, log: host.Log) 
         populate.stage_gpu(data, inputs.gpu_stager, inputs.gpu_base, log)
         if inputs.shader_seed:
             populate.merge_tree(inputs.shader_seed, data, data_owners, log, 'shader seed')
+        disks.settle(data)
+        disks.settle(preboot)
         return {'data': data_owners.resolve(data), 'preboot': preboot_owners.resolve(preboot)}
 
 

@@ -2,8 +2,8 @@
 
 The source is a sealed volume with root's and admin's files, a compressed file and a hard link, as a decrypted cryptex
 is. Its delta replaces the compressed file with a larger one and the hard-linked file through one of its two paths.
-The rebuild must hold the replacements (both links), keep every other file compressed and every owner, carry no
-.fseventsd, be sealed, pass fsck_apfs, and be about the size of what it holds. hdiutil and
+The rebuild must hold the replacements (both links), keep every other file compressed and every owner, be sealed,
+pass fsck_apfs, and be about the size of what it holds. hdiutil and
 diskutil: macOS, outside the sandbox (--strategy=TestRunner=local). The argument is apfs_tool.
 """
 
@@ -68,6 +68,7 @@ class Rebuild(unittest.TestCase):
             host.run('ditto', '--hfsCompression', plain, root, log=LOG)
             os.link(root / 'usr/lib/libsmall.dylib', root / 'usr/lib/libsame.dylib')
             self.assertTrue(os.lstat(root / 'usr/lib/libbig.dylib').st_flags & delta.COMPRESSED)
+            disks.settle(root)
             by_inode = journal.resolve(root)
         fd = os.open(self.source, os.O_RDWR)
         try:
@@ -117,7 +118,6 @@ class Rebuild(unittest.TestCase):
                 admin = os.lstat(root / 'usr/share/admin.plist')
                 self.assertEqual((admin.st_uid, admin.st_gid, stat.S_IMODE(admin.st_mode)), (0, 80, 0o644))
                 self.assertEqual(os.lstat(root / 'usr/lib').st_uid, 0)
-                self.assertFalse((root / '.fseventsd').exists())
                 used = (os.statvfs(root).f_blocks - os.statvfs(root).f_bfree) * 4096
         self.assertLess(self.out.stat().st_size - used, 3 * MIB, 'the cryptex is about the size of what it holds')
 

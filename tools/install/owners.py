@@ -66,6 +66,8 @@ class Journal:
 
     def resolve(self, root: Path) -> dict[int, Owner]:
         """{inode: owner} of every path below the mounted `root`, unnamed ones taking their directory's owner."""
+        if (Path(root) / '.fseventsd').exists():
+            raise OwnersError(f"{root} holds macOS's event log, whose files come and go: disks.settle() it first")
         effective: dict[str, Owner] = {}
         by_inode: dict[int, tuple[str, Owner]] = {}
         for path, info in walk(Path(root)):
@@ -97,13 +99,17 @@ def apply(fd: int, base: int, volume_uuid: object, by_inode: dict[int, Owner]) -
     """Rewrite the inodes of the detached volume on `fd` to `by_inode`; return how many.
 
     Every inode outside APFS's reserved range must be named: one the walk could not reach (a file without a path)
-    would keep the builder's own uid, which on the device is mobile's.
+    would keep the builder's own uid, which on the device is mobile's. The one exception is what fseventsd writes in
+    the volume's .fseventsd when it is unmounted, after the walk: it is given root's, as fseventsd's own files are.
     """
     volume = apfs_tree.Volume(fd, base, volume_uuid)
     current = volume.inodes()
-    unnamed = sorted(i for i in current if i >= FIRST_USER_INODE and i not in by_inode)
-    if unnamed:
-        raise OwnersError(f'{len(unnamed)} inodes have no path to take an owner from (the first is {unnamed[0]})')
+    unnamed = [i for i in current if i >= FIRST_USER_INODE and i not in by_inode]
+    late = [i for i in unnamed if _in_event_log(current, i)]
+    if len(late) != len(unnamed):
+        first = min(set(unnamed) - set(late))
+        raise OwnersError(f'{len(unnamed) - len(late)} inodes have no path to take an owner from ({first} is one)')
+    by_inode = dict(by_inode) | {i: Owner(0, 0) for i in late}
     wanted = {}
     for ino, owner in by_inode.items():
         if ino not in current:
@@ -115,10 +121,27 @@ def apply(fd: int, base: int, volume_uuid: object, by_inode: dict[int, Owner]) -
     return volume.rewrite(wanted)
 
 
+def _in_event_log(inodes: dict[int, apfs_tree.Inode], ino: int) -> bool:
+    """Whether `ino` is below the volume's top-level .fseventsd, which fseventsd writes after the walk, as root."""
+    for _ in range(len(inodes)):
+        inode = inodes.get(ino)
+        if inode is None:
+            return False
+        if inode.parent == ROOT_INODE:
+            return inode.name == '.fseventsd'
+        ino = inode.parent
+    return False
+
+
 def check(root: Path, by_inode: dict[int, Owner]) -> None:
-    """Compare every path below `root`, mounted again with owners, with what was applied."""
+    """Compare every path below `root`, mounted again with owners, with what was applied (fseventsd's: root's)."""
     wrong = []
+    events = Path(root) / '.fseventsd'
     for path, info in walk(Path(root)):
+        if path == events or events in path.parents:
+            if info.st_uid != 0:
+                wrong.append(f"{path}: fseventsd's, but not root's")
+            continue
         owner = by_inode.get(info.st_ino)
         if owner is None:
             wrong.append(f'{path}: not in the record')

@@ -8,7 +8,9 @@ action cache keeps them for the next run.
 
 load("//translate/arm64e/pretranslate:defs.bzl", "PretranslatedInfo")
 
-_LOCAL = {"no-remote": "", "no-sandbox": "", "requires-darwin": ""}
+# no-cache keeps the outputs out of the disk cache (Bazel counts it a local cache), not out of the output base's own
+# action cache, which is what a rerun resumes from.
+_LOCAL = {"no-cache": "", "no-remote": "", "no-sandbox": "", "requires-darwin": ""}
 
 DeltaInfo = provider(doc = "A role's delta directory.", fields = {"role": "os, app_cryptex or system_cryptex", "dir": "File"})
 

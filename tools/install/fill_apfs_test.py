@@ -99,6 +99,7 @@ class Fill(unittest.TestCase):
                     journal.set(path, uid, gid)
                 journal.set('private/var/db/daemon/state', DAEMON, DAEMON, 0o600)
                 journal.set('private/var/mobile/Library', 501, 501)
+                disks.settle(root)
                 by_inode = journal.resolve(root)
         fd = os.open(self.image, os.O_RDWR)
         try:
@@ -166,7 +167,6 @@ class Fill(unittest.TestCase):
                 self.assertEqual(owner(data, 'Switch/gpu/bundle.bin')[:2], (0, 0))
                 self.assertEqual(owner(data, 'mobile/Library/Preferences/com.apple.backboardd.plist')[:2], (501, 501))
                 self.assertEqual(owner(data, 'Switch/shaders/a.bin'), (0, 0, 0o644))
-                self.assertFalse((data / '.fseventsd').exists())
             with disks.mounted(volumes['preboot'], LOG, owners=True, read_only=True) as preboot:
                 self.assertEqual(owner(preboot, 'Switch-Staging/app.dmg'), (0, 0, 0o644))
                 self.assertEqual((preboot / 'Switch-Staging/app.dmg').read_bytes(), b'sealed cryptex')

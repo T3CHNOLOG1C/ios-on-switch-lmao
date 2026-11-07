@@ -121,6 +121,7 @@ def _fill(source: str, entries: list[dict], image: Path, log: host.Log, what: st
             def write(root: Path) -> dict[int, owners.Owner]:
                 _copy_kept(plan, src, root, log, what)
                 _place(plan, src, root, what)
+                disks.settle(root)
                 return journal.resolve(root)
 
             return room.with_room(image, lambda _root: plan.bytes, write, log, what)

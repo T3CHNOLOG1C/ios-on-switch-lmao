@@ -27,16 +27,21 @@ OBJ_ID_MASK = (1 << 60) - 1
 INCOMPAT_SEALED_VOLUME = 0x20
 SB_INCOMPAT, SB_OMAP, SB_ROOT_TREE_TYPE, SB_ROOT_TREE = 56, 128, 116, 136
 INODE_FLAGS, INODE_OWNER, INODE_GROUP, INODE_MODE, INODE_BYTES = 68, 72, 76, 80, 92
+INO_EXT_TYPE_NAME = 4
 PERMISSIONS = 0o7777
 MAX_DEPTH = 16
 
 
 @dataclass(frozen=True)
 class Inode:
+    """An inode's owner, group, mode and BSD flags; read ones also carry their parent's inode and their name."""
+
     uid: int
     gid: int
     mode: int
     flags: int
+    parent: int = 0
+    name: str = ''
 
 
 @dataclass(frozen=True)
@@ -120,18 +125,18 @@ class Volume:
         """Return what the volume's file-system tree takes: its nodes, in blocks."""
         return sum(1 for _ in self._nodes()) * self.container.block_size
 
-    def _inode_records(self) -> Iterator[tuple[int, int, bytes, int]]:
-        """(inode number, block, node, value offset) of every inode record."""
+    def _inode_records(self) -> Iterator[tuple[int, int, bytes, int, int]]:
+        """(inode number, block, node, value offset, value length) of every inode record."""
         for paddr, node in self._leaves():
             for k, _, v, v_len in self._entries(node):
                 key = struct.unpack_from('<Q', node, k)[0]
                 if key >> 60 == APFS_TYPE_INODE:
                     if v_len < INODE_BYTES:
                         raise apfs.ApfsError(f'inode {key & OBJ_ID_MASK} has a {v_len}-byte value')
-                    yield key & OBJ_ID_MASK, paddr, node, v
+                    yield key & OBJ_ID_MASK, paddr, node, v, v_len
 
     def inodes(self) -> dict[int, Inode]:
-        return {ino: _decode(node, v) for ino, _, node, v in self._inode_records()}
+        return {ino: _decode(node, v, v_len) for ino, _, node, v, v_len in self._inode_records()}
 
     def rewrite(self, wanted: dict[int, Inode]) -> int:
         """Give each inode in `wanted` its owner, group, permission bits and flags; return how many changed.
@@ -142,7 +147,7 @@ class Volume:
             raise apfs.ApfsError('the volume is sealed: its owners can no longer change')
         changed: dict[int, bytearray] = {}
         seen = set()
-        for ino, paddr, node, v in self._inode_records():
+        for ino, paddr, node, v, _ in self._inode_records():
             if ino not in wanted:
                 continue
             seen.add(ino)
@@ -160,6 +165,21 @@ class Volume:
         return len(seen)
 
 
-def _decode(node: bytes, v: int) -> Inode:
+def _decode(node: bytes, v: int, v_len: int) -> Inode:
     flags, uid, gid = struct.unpack_from('<III', node, v + INODE_FLAGS)
-    return Inode(uid, gid, struct.unpack_from('<H', node, v + INODE_MODE)[0], flags)
+    mode = struct.unpack_from('<H', node, v + INODE_MODE)[0]
+    return Inode(uid, gid, mode, flags, struct.unpack_from('<Q', node, v)[0], _name(node[v + INODE_BYTES : v + v_len]))
+
+
+def _name(xfields: bytes) -> str:
+    """Return an inode's INO_EXT_TYPE_NAME field (xf_blob_t: x_field_t headers, then 8-byte-aligned values)."""
+    if len(xfields) < 4:
+        return ''
+    count = struct.unpack_from('<H', xfields, 0)[0]
+    at = 4 + 4 * count
+    for i in range(count):
+        kind, _flags, size = struct.unpack_from('<BBH', xfields, 4 + 4 * i)
+        if kind == INO_EXT_TYPE_NAME:
+            return xfields[at : at + size].split(b'\0', 1)[0].decode('utf-8', 'replace')
+        at += -(-size // 8) * 8
+    return ''
