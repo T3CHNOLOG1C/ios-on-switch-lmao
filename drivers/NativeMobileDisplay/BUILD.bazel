@@ -66,6 +66,7 @@ switch_abi_bindings(
 kernel_driver(
     name = "NativeGOPPresenter",
     srcs = ["NativeGOPPresenter.cpp"],
-    hdr_deps = [],
+    # TegraGM20BLayout.h: a block-linear surface's rows for the CPU read.
+    hdr_deps = ["drivers/TegraGM20B"],
     late = ["NativeGOPPresenter.cpp"],
 )
