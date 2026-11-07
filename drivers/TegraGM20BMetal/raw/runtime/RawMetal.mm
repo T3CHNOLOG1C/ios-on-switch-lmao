@@ -141,7 +141,7 @@ enum RMPred : uint8_t {
     PredPassOther,         // visibility buffer, layered target, rasterization rate map
     // states and calls
     PredStateForeign,
-    PredStateNotQuartzCore,  // a state whose functions are not QuartzCore's default.metallib (never looked up in the pack)
+    PredStateNotPackable,  // a state whose functions are not of one framework's default.metallib (never looked up in the pack)
     PredStateNotInPack,
     PredCallVisibility,
     PredCallIndexedForm,     // a = instances, b = baseVertex | baseInstance << 32
@@ -197,7 +197,7 @@ static constexpr const char *kPredNames[] = {"-",
                                              "pass.ds",
                                              "pass.other",
                                              "state.foreign",
-                                             "state.notqc",
+                                             "state.notpack",
                                              "state.pack",
                                              "call.vis",
                                              "call.idxform",
@@ -564,15 +564,17 @@ static id twinPublish(id object, __strong id &slot, id made)
 @end
 
 // ---- functions and libraries: the m2v library and functions, with the name and constants text the pack keys by ----
+// The libraries the pack's states come from are frameworks' default.metallib (QuartzCore's, RenderBox's): a state of their
+// functions is looked up by its key, which names the framework but QuartzCore's (raw_metal_pipeline_key)
 @interface RMLibrary : RMObject {
 @public
-    bool _quartzCore;  // QuartzCore's default.metallib: the only library the pack's functions come from
+    std::string _framework;  // "QuartzCore", "RenderBox"...; empty: not a framework's default library (never looked up)
 }
 @end
 @interface RMFunction : RMObject {
 @public
     std::string _constants;
-    bool _quartzCore;
+    std::string _framework;
 }
 @property (nonatomic, copy) NSString *name;
 @end
@@ -632,7 +634,7 @@ static std::string constantsText(MTLFunctionConstantValues *values)
     f->_device = _device;
     f->_twin = twin;
     f->_constants = constantsText(values);
-    f->_quartzCore = _quartzCore;
+    f->_framework = _framework;
     f.name = name;
     return f;
 }
@@ -682,7 +684,9 @@ static RMLibrary *wrapLibrary(id device, id<MTLLibrary> twin, NSString *path)
     RMLibrary *l = [RMLibrary new];
     l->_device = device;
     l->_twin = twin;
-    l->_quartzCore = [path hasSuffix:@"QuartzCore.framework/default.metallib"];
+    if ([path hasSuffix:@".framework/default.metallib"])
+        l->_framework =
+            path.stringByDeletingLastPathComponent.lastPathComponent.stringByDeletingPathExtension.UTF8String;
     return l;
 }
 
@@ -721,6 +725,8 @@ NSString *raw_metal_pipeline_key(MTLRenderPipelineDescriptor *d)
     RMFunction *ff = [(id)d.fragmentFunction isKindOfClass:[RMFunction class]] ? (RMFunction *)d.fragmentFunction : nil;
     key += " | v " + std::string(vf ? vf.name.UTF8String : "-") + " " + (vf ? vf->_constants : "");
     key += " | f " + std::string(ff ? ff.name.UTF8String : "-") + " " + (ff ? ff->_constants : "");
+    if (vf && vf->_framework != "QuartzCore" && !vf->_framework.empty())
+        key += " | l " + vf->_framework;
     while (!key.empty() && key.back() == ' ')
         key.pop_back();
     return [NSString stringWithUTF8String:key.c_str()];
@@ -1649,7 +1655,7 @@ static void refuseTexture(RMTexture *t, RMPred p, uint64_t a, uint64_t b, NSStri
 @interface RMPipeline : RMObject {
 @public
     raw::Pipeline *_raw;  // null: not in the pack (every command buffer using it goes to m2v)
-    bool _quartzCore;     // its functions are QuartzCore's (looked up in the pack)
+    bool _packable;       // its functions are one framework's default library's (looked up in the pack)
 }
 @end
 @implementation RMPipeline
@@ -2152,7 +2158,7 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
         hit(_cb, PredStateForeign);
     } else if (!p->_raw) {
         [_cb takeReason:WhyState why:@"a state not in the pack (its label: the line it was made with)"];
-        hit(_cb, p->_quartzCore ? PredStateNotInPack : PredStateNotQuartzCore);
+        hit(_cb, p->_packable ? PredStateNotInPack : PredStateNotPackable);
     }
     _pipe = [(id)p isKindOfClass:[RMPipeline class]] ? p : nil;
     setBinding(_cb, OpPipeline, 0, 0, state, 0);
@@ -5173,18 +5179,19 @@ static MTLRenderPipelineDescriptor *twinDescriptor(MTLRenderPipelineDescriptor *
     p.label = d.label;
     RMFunction *vf = [(id)d.vertexFunction isKindOfClass:[RMFunction class]] ? (RMFunction *)d.vertexFunction : nil;
     RMFunction *ff = [(id)d.fragmentFunction isKindOfClass:[RMFunction class]] ? (RMFunction *)d.fragmentFunction : nil;
-    p->_quartzCore = vf && ff && vf->_quartzCore && ff->_quartzCore;
-    if (p->_quartzCore) {
+    p->_packable = vf && ff && !vf->_framework.empty() && vf->_framework == ff->_framework;
+    if (p->_packable) {
         NSString *key = raw_metal_pipeline_key(d);
         const char *k = key.UTF8String;
         p->_raw = gRM->raw->pipeline(raw::Pack::fnv(k, strlen(k)), raw::PackForm::Default,
-                                     [vf.name hasPrefix:@"fixed_vert_"] && [vf.name hasSuffix:@"_spc"]);
+                                     vf->_framework == "QuartzCore" && [vf.name hasPrefix:@"fixed_vert_"] &&
+                                         [vf.name hasSuffix:@"_spc"]);
     }
     if (!p->_raw) {
         const char *label = d.label.UTF8String ?: "-";
         SWITCH_REFUSE_DETAIL("raw", "state.unpacked", raw::Pack::fnv(label, strlen(label)),
                              "state not in the pack (m2v draws it)%s: %s",
-                             !p->_quartzCore            ? " (not QuartzCore's functions: never looked up)"
+                             !p->_packable              ? " (not one framework library's functions: never looked up)"
                              : gRM->raw->stats.heapFull ? " (or the shader heap is full)"
                                                         : "",
                              label);

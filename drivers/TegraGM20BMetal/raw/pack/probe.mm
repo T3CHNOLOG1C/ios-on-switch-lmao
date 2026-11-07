@@ -9,9 +9,12 @@
 // BGRA8 texture, fragment sampler slot s (0..15) has max LOD clamp 1+s/2 (mip filter nearest; r8-rawca: 1+s made slot 14 look like any sampler with the default clamp, 15), linear min/mag when s&1, repeat U
 // when s&2. A sampler made before them takes NVK's sampler index 0. One command buffer (one submission) per state; stdout lines "PROBE <i> <state key>".
 // The corpus's lib= fields (the journal names each function's library since 11-04) are not part of the state key: the raw path
-// keys QuartzCore's functions by name and constants (RawMetal.mm rawPipelineKey). PROBE_LABEL (default com.apple.coreanimation.):
-// only R lines whose label starts with it (the render server's states; "" for every line).
+// keys QuartzCore's functions by name and constants (RawMetal.mm raw_metal_pipeline_key). PROBE_LABEL (default
+// com.apple.coreanimation.): only R lines whose label starts with it (the render server's states; "" for every line), and the
+// lines that keep a lib= field (rawpack.py keeps it on another framework's states): their functions come from that library
+// under PROBE_LIB_ROOT (the crawl's root), and their key ends with " | l <framework>", as the raw path keys them.
 // usage: probe <nvk dylib> <cache dir> <default.metallib> <corpus.log> [first] [count]
+#import <CoreVideo/CoreVideo.h>
 #import <Foundation/Foundation.h>
 #import <IOSurface/IOSurface.h>
 #import <Metal/Metal.h>
@@ -173,6 +176,58 @@ static std::set<unsigned> writtenFormats(const std::vector<std::string> &lines)
     return out;
 }
 
+// A line's library (its vertex function's lib= path) where it is a framework's default.metallib other than QuartzCore's
+static std::string libraryPath(const std::string &line)
+{
+    const size_t at = line.find(" lib=");
+    if (at == std::string::npos)
+        return "";
+    const std::string path = line.substr(at + 5, line.find(' ', at + 5) - at - 5);
+    const std::string suffix = ".framework/default.metallib";
+    if (path.size() < suffix.size() || path.compare(path.size() - suffix.size(), suffix.size(), suffix) ||
+        path.find("/QuartzCore.framework/") != std::string::npos)
+        return "";
+    return path;
+}
+
+static std::string frameworkName(const std::string &path)
+{
+    const size_t end = path.rfind(".framework/"), begin = path.rfind('/', end) + 1;
+    return path.substr(begin, end - begin);
+}
+
+static id<MTLLibrary> frameworkLibrary(id<MTLDevice> dev, const std::string &path)
+{
+    static NSMutableDictionary<NSString *, id<MTLLibrary>> *loaded = [NSMutableDictionary dictionary];
+    NSString *key = @(path.c_str());
+    if (!loaded[key]) {
+        const char *root = getenv("PROBE_LIB_ROOT");
+        NSError *e = nil;
+        if (id<MTLLibrary> l =
+                [dev newLibraryWithURL:[NSURL fileURLWithPath:@((std::string(root ? root : "") + path).c_str())]
+                                 error:&e])
+            loaded[key] = l;
+    }
+    return loaded[key];
+}
+
+constexpr MTLPixelFormat kRGB8_444_2P = MTLPixelFormat(542);
+
+// RGB8_444_2P over plane 0 of a two-plane 4:4:4 surface (RenderBox's widget snapshots): the only texture of the format Metal makes
+static id<MTLTexture> planarTarget(id<MTLDevice> dev, unsigned w, unsigned h)
+{
+    CVPixelBufferRef buffer = nullptr;
+    NSDictionary *attributes = @{(id)kCVPixelBufferIOSurfacePropertiesKey : @{}};
+    if (CVPixelBufferCreate(nullptr, w, h, '444f', (__bridge CFDictionaryRef)attributes, &buffer))
+        return nil;
+    MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:kRGB8_444_2P
+                                                                                 width:w
+                                                                                height:h
+                                                                             mipmapped:NO];
+    d.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+    return [dev newTextureWithDescriptor:d iosurface:CVPixelBufferGetIOSurface(buffer) plane:0];
+}
+
 static IOSurfaceRef newSurface(unsigned w, unsigned h)
 {
     NSDictionary *p = @{
@@ -212,6 +267,15 @@ int main(int argc, char **argv)
         for (NSString *l in [text componentsSeparatedByString:@"\n"]) {
             if (![l hasPrefix:@"R "] || ![l containsString:@" ok=1 "])
                 continue;
+            if (const std::string path = libraryPath(l.UTF8String); !path.empty()) {
+                lines.push_back("@L " + path + " " +
+                                [lib stringByReplacingMatchesInString:l
+                                                              options:0
+                                                                range:NSMakeRange(0, l.length)
+                                                         withTemplate:@""]
+                                    .UTF8String);
+                continue;
+            }
             if (*labelPrefix && ![l containsString:[@" label=" stringByAppendingString:@(labelPrefix)]])
                 continue;
             NSString *plain = [lib stringByReplacingMatchesInString:l
@@ -282,6 +346,10 @@ int main(int argc, char **argv)
         NSMutableDictionary<NSString *, id<MTLTexture>> *targets = [NSMutableDictionary dictionary];
         auto target = [&](MTLPixelFormat f, bool memoryless) -> id<MTLTexture> {
             NSString *k = [NSString stringWithFormat:@"%lu.%d", (unsigned long)f, memoryless];
+            if (!targets[k] && f == kRGB8_444_2P) {
+                targets[k] = planarTarget(dev, 64, 64);
+                return targets[k];
+            }
             if (!targets[k]) {
                 MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:f
                                                                                               width:64
@@ -509,13 +577,22 @@ int main(int argc, char **argv)
         }
         for (const std::string &marked : lines) {
             State s;
-            const bool own = marked.rfind("@Y ", 0) == 0;
-            const std::string line = own ? marked.substr(3) : marked;
-            if (!parseState(own ? ycbcr : qc, line, s)) {
+            const bool own = marked.rfind("@Y ", 0) == 0, framework = marked.rfind("@L ", 0) == 0;
+            const size_t pathEnd = framework ? marked.find(' ', 3) : 0;
+            const std::string line = own ? marked.substr(3) : framework ? marked.substr(pathEnd + 1) : marked;
+            id<MTLLibrary> library = own ? ycbcr : qc;
+            if (framework && !(library = frameworkLibrary(dev, marked.substr(3, pathEnd - 3)))) {
+                fprintf(stderr, "LIBRARY %s\n", marked.substr(3, pathEnd - 3).c_str());
+                refused++;
+                continue;
+            }
+            if (!parseState(library, line, s)) {
                 fprintf(stderr, "UNPARSED %s\n", line.substr(0, 80).c_str());
                 refused++;
                 continue;
             }
+            if (framework)
+                s.key += " | l " + frameworkName(marked.substr(3, pathEnd - 3));
             if (!seen.insert(s.key).second)
                 continue;
             const unsigned i = index++;
@@ -544,8 +621,12 @@ int main(int argc, char **argv)
                                        : target(ca.pixelFormat, memoryless);
                 usedFb |= t == fb;
                 pass.colorAttachments[c].texture = t;
-                pass.colorAttachments[c].loadAction = memoryless ? MTLLoadActionDontCare : MTLLoadActionLoad;
-                pass.colorAttachments[c].storeAction = memoryless ? MTLStoreActionDontCare : MTLStoreActionStore;
+                // a 542 snapshot renders into the frontend's RGBA16Float stand-in, which a load or store would draw from or
+                // into: neither, so the state's draw is the pass's one
+                const bool planes = ca.pixelFormat == kRGB8_444_2P;
+                pass.colorAttachments[c].loadAction = memoryless || planes ? MTLLoadActionDontCare : MTLLoadActionLoad;
+                pass.colorAttachments[c].storeAction =
+                    memoryless || planes ? MTLStoreActionDontCare : MTLStoreActionStore;
             }
             // a state with depth or stencil formats draws into a memoryless attachment of them (Metal's default Clear load and
             // DontCare store, its default depth/stencil state), so its registers are those NVK writes beside one

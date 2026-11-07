@@ -46,6 +46,7 @@ import contextlib
 import hashlib
 import json
 import os
+import re
 import shutil
 import struct
 import subprocess
@@ -87,6 +88,16 @@ def option(name: str, required: bool = True) -> str | None:
 
 
 BUILT = ('probe', 'libmock_iokit.dylib', 'ycbcr.metallib')
+# Another framework's states (their lines keep lib=, tools/gpu/rawpack.py): the probe loads that library from the crawl's root
+FRAMEWORK = re.compile(r' lib=/System/Library/(?:Private)?Frameworks/\w+\.framework/default\.metallib ')
+QC_PATH = 'System/Library/Frameworks/QuartzCore.framework/default.metallib'
+
+
+def library_root(qc: Path) -> str:
+    """Give the crawl root that QuartzCore's default.metallib lies in (the root other frameworks' libraries are under)."""
+    return str(qc)[: -len(QC_PATH) - 1] if str(qc).endswith(QC_PATH) else ''
+
+
 # The Core Animation states the pack holds (ca/caset.py's tiers): every one. The runtime makes a state and places its
 # programs in the shader heap at its first lookup (raw_gpu.cpp Device::pipeline), so the pack's size is file size only.
 CA_TIERS = ('corpus', 'manifest', 'blend', 'fetch')
@@ -189,6 +200,8 @@ def build(work: Path, bridge: Path) -> None:
             'IOSurface',
             '-framework',
             'IOKit',
+            '-framework',
+            'CoreVideo',
             '-o',
             work / 'probe',
         ]
@@ -215,7 +228,7 @@ def split_buckets(corpus: Path, work: Path, count: int) -> list[Path]:
     warm = ''
     with open(corpus) as f:
         for line in f:
-            if line.startswith('R ') and ' label=com.apple.coreanimation.' in line:
+            if line.startswith('R ') and (' label=com.apple.coreanimation.' in line or FRAMEWORK.search(line)):
                 lines[fnv(line.split(' ', 3)[3].encode()) % count].append(line)
                 warm = warm or (line if 'f downsample_4_frag' in line else '')
     dirs = []
@@ -291,7 +304,7 @@ def probe_runs(tools: Path, d: Path, nvk: Path, qc: Path, env: dict[str, str]) -
         with open(d / f'{name}.out', 'w') as out:
             r = subprocess.run(
                 [str(tools / 'probe'), str(nvk), str(d / 'cache'), str(qc), str(d / 'corpus.log')],
-                env=dict(env, **extra),
+                env=dict(env, PROBE_LIB_ROOT=library_root(qc), **extra),
                 stdout=out,
                 stderr=subprocess.PIPE,
                 text=True,

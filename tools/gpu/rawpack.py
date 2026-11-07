@@ -39,14 +39,26 @@ PROBE_LABEL = ' label=com.apple.coreanimation.'
 LIBRARY = re.compile(r' lib=\S+')
 # What the link reads of a bucket's probe runs (mkpack.py), and of its barrier/.
 KEPT = ('programs.bin', 'probe256.out', 'probe256.log', 'probe16.out', 'probe16.log', 'probe4096.out', 'probe4096.log')
+# The frameworks other than QuartzCore whose states the pack holds: their lines keep lib=, which the probe loads them from
+FRAMEWORKS = ('RenderBox',)
+
+
+def framework_line(line: str) -> bool:
+    """Whether the line's functions are all one pack framework's default.metallib."""
+    libs = set(LIBRARY.findall(line))
+    return len(libs) == 1 and any(
+        lib == f' lib=/System/Library/PrivateFrameworks/{name}.framework/default.metallib'
+        for lib in libs
+        for name in FRAMEWORKS
+    )
 
 
 def probe_lines(corpus: str) -> list[str]:
     """Return the corpus lines probe.mm makes, as it reads them."""
     return [
-        LIBRARY.sub('', line)
+        line if framework_line(line) else LIBRARY.sub('', line)
         for line in corpus.split('\n')
-        if line.startswith('R ') and ' ok=1 ' in line and PROBE_LABEL in line
+        if line.startswith('R ') and ' ok=1 ' in line and (PROBE_LABEL in line or framework_line(line))
     ]
 
 
