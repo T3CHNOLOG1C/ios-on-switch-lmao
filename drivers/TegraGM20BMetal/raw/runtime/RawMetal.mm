@@ -150,8 +150,7 @@ enum RMPred : uint8_t {
     PredStateNotPackable,  // a state whose functions are not of one framework's default.metallib (never looked up in the pack)
     PredStateNotInPack,
     PredCallVisibility,
-    PredCallIndexedForm,     // a = instances, b = baseVertex | baseInstance << 32
-    PredCallBufForeign,      // a = stage << 8 | index
+    PredCallBufForeign,      // a = stage << 8 | index (0xffff: an index buffer)
     PredCallSamplerForeign,  // a sampler the raw path does not express (its reason logged when it was made)
     PredCallVertexSampler,
     PredCallDepthBias,     // a = bias, b = slope (float bits)
@@ -173,7 +172,6 @@ enum RMPred : uint8_t {
     PredEncPassRender,
     PredEncKernel,
     PredEncIndexedRange,  // a = offset, b = index size
-    PredEncBaseInstance,
     PredEncColorFormats,  // a = attachment, b = pass format, c in the line: state format
     PredEncUboOffset,     // a = stage << 8 | slot, b = va & 255
     PredEncNoTic,
@@ -205,7 +203,6 @@ static constexpr const char *kPredNames[] = {"-",
                                              "state.notpack",
                                              "state.pack",
                                              "call.vis",
-                                             "call.idxform",
                                              "call.buf",
                                              "call.sampler",
                                              "call.vsampler",
@@ -227,7 +224,6 @@ static constexpr const char *kPredNames[] = {"-",
                                              "enc.pass",
                                              "enc.kernel",
                                              "enc.idxrange",
-                                             "enc.baseinst",
                                              "enc.colorfmt",
                                              "enc.ubo",
                                              "enc.notic",
@@ -2132,9 +2128,9 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
                  baseInstance:(NSUInteger)baseInstance
 {
     SWITCH_API(ApiDraw);
-    if (![(id)buffer isKindOfClass:[RMBuffer class]] || instances != 1 || baseVertex || baseInstance) {
-        [_cb takeReason:WhyCall why:@"an indexed draw of several instances or a base vertex"];
-        hit(_cb, PredCallIndexedForm, instances, uint64_t(uint32_t(baseVertex)) | uint64_t(baseInstance) << 32);
+    if (![(id)buffer isKindOfClass:[RMBuffer class]]) {
+        [_cb takeReason:WhyCall why:@"an index buffer not made by this device"];
+        hit(_cb, PredCallBufForeign, 0xffff, 0);
     } else if ((indexType != MTLIndexTypeUInt16 && indexType != MTLIndexTypeUInt32) ||
                offset % (indexType == MTLIndexTypeUInt16 ? 2 : 4) ||
                offset + uint64_t(count) * (indexType == MTLIndexTypeUInt16 ? 2 : 4) >
@@ -2142,7 +2138,7 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
         [_cb takeReason:WhyEncode why:@"an indexed draw the raw path does not take"];
         hit(_cb, PredEncIndexedRange, offset, indexType == MTLIndexTypeUInt16 ? 2 : 4);
     }
-    [self checkDraw:0];
+    [self checkDraw];
     if (buffer)
         [_cb retain:buffer];
     Cmd m = cmd(OpDrawIndexed, uint8_t(type));
@@ -2208,17 +2204,13 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
 }
 
 // What raw::RenderEncoder::prepare would refuse of a draw with the encoder's bindings, decided here (the same tests)
-- (void)checkDraw:(NSUInteger)baseInstance
+- (void)checkDraw
 {
     // no raw draw to decide (m2v drops a draw without a state too), or this encoder goes to m2v already (its pass refused: its
     // formats are not recorded, and every draw would hit enc.colorfmt for nothing, r7p5's "a=0 b=0")
     if (!_pipe || !_pipe->_raw || _cb->_encRefused)
         return;
     const raw::Pipeline &pl = *_pipe->_raw;
-    if (baseInstance) {
-        [_cb takeReason:WhyEncode why:@"draw with a base instance"];
-        return hit(_cb, PredEncBaseInstance, baseInstance);
-    }
     for (uint32_t j = 0; j < 8; j++) {
         const uint32_t f = j < _count ? _formats[j] : 0;
         if (f != pl.colorFormats[j] && !(f && pl.colorFormats[j] == 0)) {
@@ -2541,7 +2533,7 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
           baseInstance:(NSUInteger)base
 {
     SWITCH_API(ApiDraw);
-    [self checkDraw:base];
+    [self checkDraw];
     Cmd m = cmd(OpDraw, uint8_t(type));
     m.a = uint32_t(start);
     m.b = uint32_t(count);
@@ -4122,7 +4114,7 @@ static id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, 
             // its indices, and the vertices up to the largest (a restart reads none), as the raw path's indexed draw cleans
             RMBuffer *ib = [(__bridge id)c.obj isKindOfClass:[RMBuffer class]] ? (__bridge RMBuffer *)c.obj : nil;
             const uint32_t size = c.b == MTLIndexTypeUInt16 ? 2 : 4;
-            if (ib && pipe && pipe->_raw && !extra(cb, c.x + 1) && c.c + uint64_t(c.a) * size <= ib->_raw.length) {
+            if (ib && pipe && pipe->_raw && c.c + uint64_t(c.a) * size <= ib->_raw.length) {
                 range(ib, c.c, uint64_t(c.a) * size);
                 // the largest index only sizes the vertices to clean: none in write-combined memory (r17), whose indices the
                 // CPU would read uncached, one load each (raw::RenderEncoder::drawIndexed's rule)
@@ -4136,7 +4128,10 @@ static id<MTLCommandBuffer> replay(RMCommandBuffer *cb, size_t from, size_t to, 
                         if (v != (size == 2 ? 0xffffu : 0xffffffffu))
                             most = std::max(most, v);
                     }
-                drawn(0, c.a ? most + 1 : 0);
+                // from the base vertex: those a negative one puts before the stream are none
+                const int64_t base = int64_t(extra(cb, c.x + 1)), from = std::max<int64_t>(0, base);
+                const int64_t end = c.a ? std::max<int64_t>(from, base + most + 1) : from;
+                drawn(uint32_t(from), uint32_t(end - from));
             } else {
                 if (ib)
                     buffers.insert(ib);
@@ -4281,7 +4276,7 @@ static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **
     };
     // a draw the encoder refused: its predicate and values (raw_gpu.h Refusal)
     auto refused = [&]() {
-        static const RMPred map[] = {PredEncPassRender, PredEncIndexedRange, PredEncBaseInstance, PredEncColorFormats,
+        static const RMPred map[] = {PredEncPassRender, PredEncIndexedRange, PredEncColorFormats,
                                      PredEncUboOffset,  PredEncNoTic,        PredEncDepthStencil};
         const raw::Refusal &f = rc->refusal;
         hit(cb, f.id < sizeof map / sizeof *map ? map[f.id] : PredEncPassRender, f.a,
@@ -4640,7 +4635,8 @@ static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **
         case OpDrawIndexed:
             useBuffer(rc, (__bridge RMBuffer *)c.obj, false);
             if (!re->drawIndexed(c.stage, c.a, c.b == MTLIndexTypeUInt16 ? 2 : 4, &((__bridge RMBuffer *)c.obj)->_raw,
-                                 c.c, why))
+                                 c.c, uint32_t(extra(cb, c.x)), int32_t(extra(cb, c.x + 1)),
+                                 uint32_t(extra(cb, c.x + 2)), why))
                 return refused();
             break;
         case OpCopyTexture: {

@@ -61,6 +61,8 @@ enum : uint32_t {
     INVALIDATE_SAMPLER_CACHE_NO_WFI = 0x1424,
     INVALIDATE_TEXTURE_HEADER_CACHE_NO_WFI = 0x1428,
     GLOBAL_BASE_INSTANCE_INDEX = 0x1438,
+    GLOBAL_BASE_VERTEX_INDEX = 0x1434,
+    VERTEX_ID_BASE = 0x1118,
     ZT_SELECT = 0x1538,
     END = 0x1614,
     BEGIN = 0x1618,
@@ -2312,7 +2314,7 @@ bool RenderEncoder::draw(uint32_t primitive, uint32_t first, uint32_t count, uin
 
 // The runs a draw that fetches a color it writes is drawn as, where its own triangles may cover a pixel twice
 // (raw_overlap.h); empty: it is drawn whole. The indexed draw being prepared sets drawIndices_ first
-const RenderEncoder::Runs &RenderEncoder::selfRuns(const Pipeline &pl, uint32_t primitive, uint32_t first,
+const RenderEncoder::Runs &RenderEncoder::selfRuns(const Pipeline &pl, uint32_t primitive, int32_t first,
                                                    uint32_t count, uint32_t instances)
 {
     static thread_local Runs runs;
@@ -2354,17 +2356,19 @@ template <typename T> static uint32_t largestIndex(const uint8_t *at, uint32_t c
 }
 
 // NVK's indexed draw on MAXWELL_B: the index buffer as NVK_MME_BIND_IB sets it (start, last byte, the restart index of the type,
-// the index size) where it changed, the draw parameters as NVK_MME_DRAW_INDEXED's (base vertex 0: those of a draw from vertex 0),
-// then BEGIN, SET_INDEX_BUFFER_F (first index) and DRAW_INDEX_BUFFER (count), END. m2v binds the indices the draw reads.
+// the index size) where it changed, the draw parameters as NVK_MME_DRAW_INDEXED's (the base vertex in the root table and the
+// base registers, the base instance), then per instance BEGIN, SET_INDEX_BUFFER_F (first index) and DRAW_INDEX_BUFFER (count),
+// END. m2v binds the indices the draw reads.
 bool RenderEncoder::drawIndexed(uint32_t primitive, uint32_t count, uint32_t indexSize, const Buffer *ib,
-                                uint64_t offset, const char **why)
+                                uint64_t offset, uint32_t instances, int32_t baseVertex, uint32_t baseInstance,
+                                const char **why)
 {
     Pipeline *pl = pipeline_;
     if (!pl)
         return true;
     called_ = true;
     readBits_ |= pl->fetchBits;
-    if (!count)
+    if (!count || !instances)
         return true;
     if (!ib || (indexSize != 2 && indexSize != 4) || offset % indexSize ||
         offset + uint64_t(count) * indexSize > ib->length) {
@@ -2387,7 +2391,10 @@ bool RenderEncoder::drawIndexed(uint32_t primitive, uint32_t count, uint32_t ind
     drawIndices_ = at;
     drawIndexSize_ = indexSize;
     drawIndexCount_ = count;
-    const Runs &runs = selfRuns(*pl, primitive, 0, count, 1);
+    // the vertices the indices reach from the base vertex, the ones a negative base puts before the stream left out
+    const int64_t vFirst = std::max<int64_t>(0, baseVertex),
+                  vEnd = std::max<int64_t>(0, int64_t(baseVertex) + most + 1);
+    const Runs &runs = selfRuns(*pl, primitive, baseVertex, count, instances);
     const uint32_t parts = runs.empty() ? 1 : uint32_t(runs.size());
     for (uint32_t r = 0; r < parts; r++) {
         const uint32_t begin = runs.empty() ? 0 : runs[r].first, end = runs.empty() ? count : runs[r].second;
@@ -2400,7 +2407,8 @@ bool RenderEncoder::drawIndexed(uint32_t primitive, uint32_t count, uint32_t ind
             p_.m(NO_OPERATION, 0x5b1175);
         }
 #endif
-        const bool prepared = prepare(pl, primitive, 0, 0, most + 1, 0, true, why);
+        const bool prepared = prepare(pl, primitive, baseVertex, uint32_t(vFirst),
+                                      uint32_t(std::max<int64_t>(0, vEnd - vFirst)), baseInstance, true, why);
         drawIndices_ = nullptr;
         if (!prepared)
             return false;
@@ -2414,15 +2422,19 @@ bool RenderEncoder::drawIndexed(uint32_t primitive, uint32_t count, uint32_t ind
             ibEnd_ = last;
             ibSize_ = indexSize;
         }
-        p_.m(BEGIN, 0);
-        p_.inc(INDEX_BUFFER_F, {begin, end - begin});  // SET_INDEX_BUFFER_F (first index), DRAW_INDEX_BUFFER (count)
-        p_.m(END, 0);
+        // each instance: INSTANCE_ID FIRST, then SUBSEQUENT (nvk_mme_build_draw_indexed_loop); SET_INDEX_BUFFER_F (first
+        // index) and DRAW_INDEX_BUFFER (count)
+        for (uint32_t i = 0; i < instances; i++) {
+            p_.m(BEGIN, i ? 1u << 26 : 0);
+            p_.inc(INDEX_BUFFER_F, {begin, end - begin});
+            p_.m(END, 0);
+        }
     }
     cb_->draws++;
     return true;
 }
 
-bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, uint32_t first, uint32_t vFirst, uint32_t vCount,
+bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uint32_t vFirst, uint32_t vCount,
                             uint32_t baseInstance, bool indexed, const char **why)
 {
     const uint32_t count = vCount;
@@ -2452,11 +2464,6 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, uint32_t first, ui
                 rects_.clear();
             }
         }
-    }
-    if (baseInstance) {
-        *why = "draw with a base instance";
-        cb_->refusal = {RefBaseInstance, baseInstance, 0, 0};
-        return false;
     }
     for (uint32_t j = 0; j < 8; j++) {  // the pass's attachments are the formats the state was made for
         const Texture *t = j < pass_.count ? pass_.color[j].texture : nullptr;
@@ -2686,14 +2693,21 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, uint32_t first, ui
             written_.clear();
         }
     }
-    if (first != first_ || baseInstance != baseInstance_) {
+    if (uint32_t(first) != first_ || baseInstance != baseInstance_) {
         // nvk_mme_build_set_draw_params: root draw.vs.{base_vertex, base_instance} and the base registers
-        const uint32_t v[2] = {first, baseInstance};
+        const uint32_t v[2] = {uint32_t(first), baseInstance};
         p.m(LOAD_CB_OFFSET, 0);
         p.nonInc(LOAD_CB, v, 2);
         p.m(GLOBAL_BASE_INSTANCE_INDEX, baseInstance);
-        first_ = first;
+        first_ = uint32_t(first);
         baseInstance_ = baseInstance;
+    }
+    // the base vertex the hardware adds to an indexed draw's indices (nvk_mme_build_draw_indexed); 0 for a draw of vertices
+    const uint32_t baseVertex = indexed ? uint32_t(first) : 0;
+    if (baseVertex != baseVertex_) {
+        p.m(GLOBAL_BASE_VERTEX_INDEX, baseVertex);
+        p.m(VERTEX_ID_BASE, baseVertex);
+        baseVertex_ = baseVertex;
     }
     writtenBits_ |= pl->writeBits;
     storageWrittenBits_ |= pl->storageBits;
@@ -2704,13 +2718,13 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, uint32_t first, ui
 
 // What the region test reads of a draw: Core Animation's transform (Pipeline::caTransform) over a triangle list or strip
 // of one instance, with its matrix, positions and indices where the CPU maps them; anything else is its scissor alone
-DrawGeometry RenderEncoder::geometry(const Pipeline &pl, uint32_t primitive, uint32_t first, uint32_t count,
+DrawGeometry RenderEncoder::geometry(const Pipeline &pl, uint32_t primitive, int32_t first, uint32_t count,
                                      const PixelBox &limit) const
 {
     DrawGeometry g;
     g.limit = limit;
     g.viewport = {vp_[0], vp_[1], vp_[2], vp_[3]};
-    g.first = drawIndices_ ? 0 : first;
+    g.first = first;
     g.count = count;
     g.indices = drawIndices_;
     g.indexSize = drawIndexSize_;
@@ -2994,9 +3008,20 @@ void RenderEncoder::writeRaster(Push &p, const Raster &want)
 void RenderEncoder::end()
 {
     Device &d = *dev_;
-    if (p_.room() < 16)
+    if (p_.room() < 64)
         reserve();
     writeRaster(p_, Raster());
+    // the draw parameters the next encoder starts from: the root table's and the base registers, 0
+    if (first_ || baseInstance_) {
+        const uint32_t zero[2] = {};
+        p_.m(LOAD_CB_OFFSET, 0);
+        p_.nonInc(LOAD_CB, zero, 2);
+        p_.m(GLOBAL_BASE_INSTANCE_INDEX, 0);
+    }
+    if (baseVertex_) {
+        p_.m(GLOBAL_BASE_VERTEX_INDEX, 0);
+        p_.m(VERTEX_ID_BASE, 0);
+    }
     if (p_.at > bodyStart_)
         bodies_.push_back({bodyStart_, p_.at});
     d.push_.head = uint64_t(reinterpret_cast<uint8_t *>(p_.at) - d.push_.bo.cpu);  // give back the unused reservation

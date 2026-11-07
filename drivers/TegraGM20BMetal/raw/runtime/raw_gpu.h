@@ -331,10 +331,9 @@ public:
     // false: this draw cannot be drawn exactly as m2v would (*why says what); the command buffer goes to m2v instead
     bool draw(uint32_t primitive, uint32_t first, uint32_t count, uint32_t instances, uint32_t baseInstance,
               const char **why);
-    // drawIndexedPrimitives of one instance, base vertex and instance 0 (Core Animation's meshes): `count` indices of `indexSize`
-    // bytes (2 or 4) at `offset` in `ib`
+    // drawIndexedPrimitives: `count` indices of `indexSize` bytes (2 or 4) at `offset` in `ib`, each `baseVertex` on
     bool drawIndexed(uint32_t primitive, uint32_t count, uint32_t indexSize, const Buffer *ib, uint64_t offset,
-                     const char **why);
+                     uint32_t instances, int32_t baseVertex, uint32_t baseInstance, const char **why);
     void end();
 
 private:
@@ -361,8 +360,9 @@ private:
     const Sampler *samplers_[16] = {};
     uint64_t vbVa_ = 0, vbLimit_ = 0, ibVa_ = 0, ibEnd_ = 0;
     uint32_t ibSize_ = 0;
-    // the state a draw needs, up to its draw parameters (vertices [vFirst, vFirst + vCount) of the stream are CPU-cleaned)
-    bool prepare(Pipeline *pl, uint32_t primitive, uint32_t first, uint32_t vFirst, uint32_t vCount,
+    // the state a draw needs, up to its draw parameters (vertices [vFirst, vFirst + vCount) of the stream are CPU-cleaned):
+    // the first vertex a draw of vertices starts at, or the base vertex an indexed one adds to each index
+    bool prepare(Pipeline *pl, uint32_t primitive, int32_t first, uint32_t vFirst, uint32_t vCount,
                  uint32_t baseInstance, bool indexed, const char **why);
     uint32_t scissor_[2] = {}, viewport_[8] = {};
     bool scissorDirty_ = true, viewportDirty_ = true;
@@ -385,7 +385,7 @@ private:
     Raster rasterFor(uint32_t primitive) const;
     uint32_t blendColor_[4] = {};  // Metal's default, (0, 0, 0, 0), until the encoder sets one
     bool blendColorDirty_ = true;
-    uint32_t topology_ = ~0u, restart_ = ~0u, first_ = 0, baseInstance_ = 0;
+    uint32_t topology_ = ~0u, restart_ = ~0u, first_ = 0, baseInstance_ = 0, baseVertex_ = 0;
     uint8_t writtenBits_ = 0;         // colors the ROP wrote since the last barrier
     uint8_t storageWrittenBits_ = 0;  // colors a fragment shader may have written as storage since the last barrier
     bool memoryless_[8] = {};
@@ -404,10 +404,10 @@ private:
     // colors the pass's first draw overwrites whole and opaquely: their clears inside the render area are not needed
     uint8_t covered_ = 0;
     using Runs = std::vector<std::pair<uint32_t, uint32_t>>;
-    const Runs &selfRuns(const Pipeline &pl, uint32_t primitive, uint32_t first, uint32_t count, uint32_t instances);
+    const Runs &selfRuns(const Pipeline &pl, uint32_t primitive, int32_t first, uint32_t count, uint32_t instances);
     const uint8_t *drawIndices_ = nullptr;
     uint32_t drawIndexSize_ = 0, drawIndexCount_ = 0;
-    DrawGeometry geometry(const Pipeline &pl, uint32_t primitive, uint32_t first, uint32_t count,
+    DrawGeometry geometry(const Pipeline &pl, uint32_t primitive, int32_t first, uint32_t count,
                           const PixelBox &limit) const;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     // the same draws under two other rules, counted only: one barrier per fetching draw after any color write (the rule
@@ -473,7 +473,6 @@ private:
 enum RefusalId : uint8_t {
     RefNone,
     RefIndexedRange,
-    RefBaseInstance,
     RefColorFormats,
     RefUboOffset,
     RefNoTic,

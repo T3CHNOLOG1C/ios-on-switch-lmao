@@ -139,6 +139,9 @@ std::string nameless(const std::string &s)
     return out;
 }
 
+// An indexed draw of at most this many indices prints them by value (eqcheck.py joins a split draw's runs from them)
+constexpr uint32_t kListedIndices = 256;
+
 std::string hex(uint64_t v)
 {
     char b[24];
@@ -181,9 +184,11 @@ bool ignored3d(uint32_t m)
         return true;
     if (m >= PIPELINE && m < PIPELINE + 0x180 && (m & 0x3f) == 4)
         return true;  // program offsets: compared as programs
-    // other address-bearing state NVK sets once (shader local memory, zcull, query/ICB, index buffer, MME DMA)
-    static const uint32_t addrs[] = {0x0790, 0x0794, 0x07e0, 0x07e4, 0x07e8, 0x07ec, 0x07f0, 0x07f4, 0x07f8, 0x07fc,
-                                     0x0f84, 0x0f88, 0x1550, 0x1554, 0x17c8, 0x17cc, 0x17d0, 0x17d4, 0x17d8};
+    // other address-bearing state NVK sets once (shader local memory, zcull, query/ICB, index buffer, MME DMA), and an
+    // indexed draw's first index and count (SET_INDEX_BUFFER_F, DRAW_INDEX_BUFFER: its ib line's)
+    static const uint32_t addrs[] = {0x0790, 0x0794, 0x07e0, 0x07e4, 0x07e8, 0x07ec, 0x07f0,
+                                     0x07f4, 0x07f8, 0x07fc, 0x0f84, 0x0f88, 0x1550, 0x1554,
+                                     0x17c8, 0x17cc, 0x17d0, 0x17d4, 0x17d8, 0x17dc, 0x17e0};
     return std::find(std::begin(addrs), std::end(addrs), m) != std::end(addrs);
 }
 }  // namespace
@@ -434,8 +439,17 @@ void Decoder::method(uint32_t subc, uint32_t mthd, uint32_t data, bool fromMme)
         }
         indexed_ = true;
         draw("DRAW", 0, most + 1);
-        fprintf(out_, "  ib size=%u count=%u data=%s restart=%x end=%llx\n", size, data,
-                contentHash(ib, idx.size(), 0, false, false).c_str(), r3(0x1648),
+        std::string indices = contentHash(ib, idx.size(), 0, false, false);
+        if (data <= kListedIndices) {
+            indices = "";
+            for (uint32_t i = 0; i < data; i++) {
+                uint32_t v = 0;
+                memcpy(&v, &idx[size_t(i) * size], size);
+                indices += (i ? "," : "") + hex(v);
+            }
+        }
+        fprintf(out_, "  ib size=%u first=%u count=%u %s=%s restart=%x end=%llx\n", size, first, data,
+                data <= kListedIndices ? "idx" : "data", indices.c_str(), r3(0x1648),
                 (unsigned long long)(addr3(0x17d0, 0x17d4) - addr3(0x17c8, 0x17cc)));
         indexed_ = false;
         return;
@@ -1137,6 +1151,10 @@ void Decoder::draw(const char *kind, uint32_t first, uint32_t count)
             const uint32_t i = (m - PIPELINE) / 0x40;
             return (m & 0x3f) == 0 || stageLive[i];
         }
+        // the primitive restart index is the index buffer's: a vertex array draw reads none (NVK leaves its last index
+        // buffer's in place or puts its pipeline's 0 back, as its dynamic state goes, before either)
+        if (m == 0x1648)
+            return indexed_;
         return true;
     };
 
