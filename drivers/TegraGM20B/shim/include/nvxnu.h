@@ -62,6 +62,8 @@ void nvxnu_rw_lock_exclusive(void *rw);
 void nvxnu_rw_unlock_exclusive(void *rw);
 
 nvxnu_u64 nvxnu_nanotime(void);
+/* mach_absolute_time units to nvxnu_nanotime's */
+nvxnu_u64 nvxnu_abstime_to_ns(nvxnu_u64 abstime);
 void nvxnu_udelay(nvxnu_u32 us); /* busy wait */
 void nvxnu_usleep(nvxnu_u32 us); /* may block */
 void nvxnu_yield(void);

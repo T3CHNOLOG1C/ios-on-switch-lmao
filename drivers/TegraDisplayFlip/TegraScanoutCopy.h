@@ -67,6 +67,10 @@ void native_legacy_gpu_complete(void *display, int status);
 // block-linear pixels. A surface's layout is decided once, at its first GPU import, and holds while any GPU client
 // imports it; a CPU lock never changes what its pages hold. Thread context; never waits for the GPU.
 int tegra_gm20b_surface_tiled(uint64_t pa);
+// Each vsync the display sends the compositor (only while it has vsync on), from the display's work loop: its stamp and
+// interval (mach absolute time) and lead, the microseconds from the stamp to the frame end (0: sent at V_BLANK). The GPU
+// holds app work off the GPU ahead of the vblank the frame started there aims for.
+void tegra_gm20b_compositor_vsync(uint64_t stamp, uint32_t lead_us, uint64_t interval);
 #ifdef __cplusplus
 }
 #endif

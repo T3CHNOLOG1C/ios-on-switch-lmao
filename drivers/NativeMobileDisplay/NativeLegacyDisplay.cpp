@@ -1760,6 +1760,7 @@ private:
             switch_sched_render_vsync(stamp, interval);
         }
         native_legacy_vsync_notify(this, stamp, continuous, interval);
+        tegra_gm20b_compositor_vsync(stamp, lead, interval);
         native_legacy_vsync_observed(1, vsyncHz);
         if (stats) {
             ++stVsyncs;

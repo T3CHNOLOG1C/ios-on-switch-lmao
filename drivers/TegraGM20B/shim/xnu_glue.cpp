@@ -296,6 +296,13 @@ extern "C" nvxnu_u64 nvxnu_nanotime(void)
 	return ns;
 }
 
+extern "C" nvxnu_u64 nvxnu_abstime_to_ns(nvxnu_u64 abstime)
+{
+	uint64_t ns;
+	absolutetime_to_nanoseconds(abstime, &ns);
+	return ns;
+}
+
 extern "C" void nvxnu_udelay(nvxnu_u32 us)
 {
 	IODelay(us);

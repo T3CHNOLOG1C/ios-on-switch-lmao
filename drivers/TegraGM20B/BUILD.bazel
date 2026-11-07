@@ -48,6 +48,8 @@ kernel_driver(
         "gpu.c",
         "recover.c",
         "sched.c",
+        "hold.c",
+        "deadline.c",
         "shim/xnu_glue.cpp",
         "TegraGM20B.cpp",
         "TegraGM20BUserClient.cpp",

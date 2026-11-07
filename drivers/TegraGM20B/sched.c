@@ -8,7 +8,8 @@
  * high channel follows each other entry of the runlist, so whichever app the host leaves, the compositor is next; and a
  * high channel's kick preempts the app channel GR or the PBDMA is on (PFIFO_PREEMPT, as gf100_chan_preempt), so the host
  * leaves it at its next wait-for-idle instead of at the end of its timeslice. Nothing waits for a preempt: a context that
- * never saves trips the engine's context-switch timeout, which recovers its channel (TegraGM20BRecover.h).
+ * never saves trips the engine's context-switch timeout, which recovers its channel (TegraGM20BRecover.h). Apps run at
+ * runningboardd's background or foreground level below the compositor's, three levels interleaved the same way.
  */
 #include <core/device.h>
 #include <core/memory.h>
@@ -29,7 +30,7 @@
 #define SCHED_CHIDS 4096
 #define SCHED_RUNLS 4
 
-static DECLARE_BITMAP(high, SCHED_CHIDS);
+static u8 level[SCHED_CHIDS] = {[0 ... SCHED_CHIDS - 1] = TGM_LEVEL_FOREGROUND};
 
 /* nvkm's channel functions, the preempt wrapped (sched_chan_preempt) */
 static struct nvkm_chan_func chan_func;
@@ -45,29 +46,30 @@ static struct {
 	u32 segment; /* bytes: two segments, one written while the host may still read the other */
 	int next;
 	struct nvkm_cgrp *unit[SCHED_UNITS];
-	u8 high[SCHED_UNITS];
+	u8 level[SCHED_UNITS];
 	u16 entries[SCHED_UNITS], order[SCHED_ORDER];
 } rl[SCHED_RUNLS];
 
 static struct {
-	u32 kicks, preempted, switching, deferred;
+	u32 kicks, preempted, switching, deferred, followed;
 } st;
 
 static int is_high(int chid)
 {
-	return chid >= 0 && chid < SCHED_CHIDS && test_bit(chid, high);
+	return chid >= 0 && chid < SCHED_CHIDS && READ_ONCE(level[chid]) == TGM_LEVEL_HIGH;
 }
 
-static int cgrp_high(struct nvkm_cgrp *cgrp)
+static u8 cgrp_level(struct nvkm_cgrp *cgrp)
 {
 	struct nvkm_chan *chan;
+	u8 top = TGM_LEVEL_BACKGROUND;
 
 	nvkm_cgrp_foreach_chan(chan, cgrp)
 	{
-		if (is_high(chan->id))
-			return 1;
+		if (chan->id >= 0 && chan->id < SCHED_CHIDS)
+			top = max_t(u8, top, READ_ONCE(level[chan->id]));
 	}
-	return 0;
+	return top;
 }
 
 /* runl->func->update, under runl->mutex as nvkm calls it. The wait for the host's last update comes first: it may run
@@ -91,10 +93,10 @@ static int sched_update(struct nvkm_runl *runl)
 		if (units == SCHED_UNITS)
 			break;
 		unit[units] = cgrp;
-		rl[runl->id].high[units] = cgrp_high(cgrp);
+		rl[runl->id].level[units] = cgrp_level(cgrp);
 		rl[runl->id].entries[units++] = cgrp->hw + cgrp->chan_nr;
 	}
-	n = tgm_interleave(rl[runl->id].high, rl[runl->id].entries, units,
+	n = tgm_interleave(rl[runl->id].level, rl[runl->id].entries, units,
 			   rl[runl->id].segment / size, rl[runl->id].order, SCHED_ORDER);
 	start = rl[runl->id].next * rl[runl->id].segment;
 	rl[runl->id].next ^= 1;
@@ -135,6 +137,8 @@ void tgm_sched_init(struct nvkm_device *device)
 	struct nvkm_runl *runl;
 	u32 entries;
 
+	tgm_hold_init();
+	tgm_deadline_init(device);
 	if (fifo->func->chan.func->preempt && fifo->func->chan.func != &chan_func) {
 		chan_func = *fifo->func->chan.func;
 		orig_chan_preempt = chan_func.preempt;
@@ -166,17 +170,15 @@ void tgm_sched_init(struct nvkm_device *device)
 	}
 }
 
-void tgm_sched_high(struct nvkm_device *device, unsigned int chid, int on)
+void tgm_sched_level(struct nvkm_device *device, unsigned int chid, unsigned int to)
 {
 	struct nvkm_runl *runl;
 
-	if (chid >= SCHED_CHIDS)
+	if (chid >= SCHED_CHIDS || to >= TGM_LEVELS || READ_ONCE(level[chid]) == to)
 		return;
-	if (!on) {
-		clear_bit(chid, high);
-		return;
-	}
-	set_bit(chid, high);
+	WRITE_ONCE(level[chid], to);
+	if (to == TGM_LEVEL_HIGH)
+		tgm_hold_track(device, chid, 0);
 	nvkm_runl_foreach(runl, device->fifo)
 	{
 		if (runl->func->update != sched_update)
@@ -186,6 +188,14 @@ void tgm_sched_high(struct nvkm_device *device, unsigned int chid, int on)
 		nvkm_runl_update_locked(runl, true);
 		mutex_unlock(&runl->mutex);
 	}
+}
+
+void tgm_sched_forget(struct nvkm_device *device, unsigned int chid)
+{
+	if (chid >= SCHED_CHIDS)
+		return;
+	tgm_hold_track(device, chid, 0);
+	WRITE_ONCE(level[chid], TGM_LEVEL_FOREGROUND);
 }
 
 static enum tgm_sched_kick counted(enum tgm_sched_kick kick)
@@ -199,6 +209,8 @@ static enum tgm_sched_kick counted(enum tgm_sched_kick kick)
 		__atomic_fetch_add(&st.switching, 1, __ATOMIC_RELAXED);
 	else if (kick == TGM_KICK_DEFERRED)
 		__atomic_fetch_add(&st.deferred, 1, __ATOMIC_RELAXED);
+	else if (kick == TGM_KICK_FOLLOWED)
+		__atomic_fetch_add(&st.followed, 1, __ATOMIC_RELAXED);
 	return kick;
 }
 
@@ -222,11 +234,43 @@ static int sched_victim(struct nvkm_device *device, struct nvkm_runl *runl)
 	return tgm_kick_victim(eng, is_high(PFIFO_ENG_ID(eng)), pbdma != 0, chid, is_high(chid));
 }
 
-enum tgm_sched_kick tgm_sched_kicked(struct nvkm_device *device, unsigned int chid)
+int tgm_sched_resident(struct nvkm_device *device)
+{
+	struct nvkm_runl *runl;
+	struct nvkm_engn *engn;
+
+	nvkm_runl_foreach(runl, device->fifo)
+	{
+		if (runl->func->update != sched_update)
+			continue;
+		nvkm_runl_foreach_engn(engn, runl)
+		{
+			if (engn->engine->subdev.type == NVKM_ENGINE_GR)
+				return sched_victim(device, runl);
+		}
+	}
+	return TGM_VICTIM_NONE;
+}
+
+/* The kick's submission waits for `victim` to leave: the time it was first asked to, by this kick or a hold before it. */
+static enum tgm_sched_kick queued_behind(struct nvkm_device *device, enum tgm_sched_kick kick,
+					 int victim, struct tgm_sched_queued *queued)
+{
+	u64 asked = kick == TGM_KICK_PREEMPTED ? nvkm_timer_read(device->timer) : 0;
+
+	queued->behind = -1;
+	if (victim >= 0 && (queued->asked_pt = tgm_hold_asked(victim, asked)))
+		queued->behind = victim;
+	return counted(kick);
+}
+
+enum tgm_sched_kick tgm_sched_kicked(struct nvkm_device *device, unsigned int chid,
+				     struct tgm_sched_queued *queued)
 {
 	struct nvkm_runl *runl;
 	int victim;
 
+	queued->behind = -1;
 	nvkm_runl_foreach(runl, device->fifo)
 	{
 		if (runl->func->update != sched_update || !is_high(chid) ||
@@ -237,16 +281,18 @@ enum tgm_sched_kick tgm_sched_kicked(struct nvkm_device *device, unsigned int ch
 			return counted(TGM_KICK_SWITCHING);
 		if (victim == TGM_VICTIM_NONE)
 			return counted(TGM_KICK_CLEAR);
+		if (!tgm_kick_may_preempt(victim, tgm_hold_needed(victim)))
+			return counted(TGM_KICK_FOLLOWED);
 		/* nvkm writes PFIFO_PREEMPT under runl->mutex and waits for it there; one of its own is in flight */
 		if (!mutex_trylock(&runl->mutex))
-			return counted(TGM_KICK_DEFERRED);
+			return queued_behind(device, TGM_KICK_DEFERRED, victim, queued);
 		if (nvkm_rd32(device, PFIFO_PREEMPT) & PFIFO_PREEMPT_PENDING) {
 			mutex_unlock(&runl->mutex);
-			return counted(TGM_KICK_SWITCHING);
+			return queued_behind(device, TGM_KICK_SWITCHING, victim, queued);
 		}
 		nvkm_wr32(device, PFIFO_PREEMPT, victim);
 		mutex_unlock(&runl->mutex);
-		return counted(TGM_KICK_PREEMPTED);
+		return queued_behind(device, TGM_KICK_PREEMPTED, victim, queued);
 	}
 	return TGM_KICK_CLEAR;
 }
@@ -256,9 +302,11 @@ void tgm_sched_stats(char *buf, unsigned int len)
 	u32 kicks = __atomic_exchange_n(&st.kicks, 0, __ATOMIC_RELAXED),
 	    preempted = __atomic_exchange_n(&st.preempted, 0, __ATOMIC_RELAXED),
 	    switching = __atomic_exchange_n(&st.switching, 0, __ATOMIC_RELAXED),
-	    deferred = __atomic_exchange_n(&st.deferred, 0, __ATOMIC_RELAXED);
+	    deferred = __atomic_exchange_n(&st.deferred, 0, __ATOMIC_RELAXED),
+	    followed = __atomic_exchange_n(&st.followed, 0, __ATOMIC_RELAXED);
 
 	scnprintf(buf, len,
-		  "%u high kicks: %u preempted an app, %u found a switch under way, %u deferred",
-		  kicks, preempted, switching, deferred);
+		  "%u high kicks: %u preempted an app, %u found a switch under way, %u deferred, "
+		  "%u left the app they wait for running",
+		  kicks, preempted, switching, deferred, followed);
 }
