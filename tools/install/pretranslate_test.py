@@ -5,13 +5,13 @@ What the boot package keeps of them, and the System files placed on Data from th
 
 import hashlib
 import json
+import os
 import stat
 import tempfile
 import unittest
 from pathlib import Path
-from unittest import mock
 
-from tools.install import host, overlay_index, pretranslate
+from tools.install import host, overlay_index, owners, pretranslate
 
 
 def fake_delta(out: Path, role: str) -> None:
@@ -30,6 +30,10 @@ def fake_delta(out: Path, role: str) -> None:
     (out / f'{role}.cdhash-pairs').write_text(role + ' old new\n')
     if role == 'system_cryptex':
         (out / 'a64x-cache-pretranslated.bin').write_bytes(b'cache')
+
+
+def stats(system: Path) -> pretranslate.SystemStat:
+    return lambda path: os.lstat(system / path.lstrip('/'))
 
 
 class Quiet:
@@ -72,7 +76,7 @@ class DeltasTest(unittest.TestCase):
         data = self.dir / 'data'
         data.mkdir()
         entries[0]['path'] = '/usr/libexec/tool'
-        manifest = self.roles.overlay_system(data, system, entries, owners=False)
+        manifest = self.roles.overlay_system(data, stats(system), entries, None)
         placed = data / pretranslate.OVERLAY / 'usr/libexec/tool'
         self.assertEqual(placed.read_bytes(), b'arm64')
         self.assertEqual(placed.stat().st_mode & 0o7777, 0o750)
@@ -87,7 +91,7 @@ class DeltasTest(unittest.TestCase):
         self.assertEqual(directories, sorted(p.stat().st_ino for p in (tree, tree / 'usr', tree / 'usr/libexec')))
         self.assertIn('os.overlay.json', [p.name for p in self.roles.artifacts()])
 
-    def test_as_root_the_tree_ends_system_immutable(self):
+    def test_the_tree_ends_system_immutable_with_the_system_files_owners(self) -> None:
         system = self.dir / 'system'
         (system / 'usr/libexec').mkdir(parents=True)
         (system / 'usr/libexec/tool').write_bytes(b'arm64e')
@@ -95,13 +99,8 @@ class DeltasTest(unittest.TestCase):
         entries[0]['path'] = '/usr/libexec/tool'
         data = self.dir / 'data'
         data.mkdir()
-        flagged = {}
-
-        def chflags(path: str | Path, flags: int) -> None:
-            flagged[Path(path)] = flags
-
-        with mock.patch.object(pretranslate.os, 'chown'), mock.patch.object(pretranslate.os, 'chflags', chflags):
-            self.roles.overlay_system(data, system, entries, owners=True)
+        journal = owners.Journal(data)
+        self.roles.overlay_system(data, stats(system), entries, journal)
         tree = data / pretranslate.OVERLAY
         expected = {
             tree,
@@ -110,9 +109,10 @@ class DeltasTest(unittest.TestCase):
             tree / 'usr/libexec/tool',
             data / pretranslate.OVERLAY_INDEX,
         }
-        self.assertEqual(set(flagged), expected)
-        for path, flags in flagged.items():
-            self.assertTrue(flags & stat.SF_IMMUTABLE, path)
+        self.assertEqual({data / k for k in journal.wanted}, expected)
+        for name, owner in journal.wanted.items():
+            self.assertTrue(owner.flags & stat.SF_IMMUTABLE, name)
+        self.assertEqual(journal.wanted[f'{pretranslate.OVERLAY}/usr/libexec/tool'].uid, os.getuid())
 
     def test_hard_links_share_one_data_file_and_each_get_an_entry(self):
         system = self.dir / 'system'
@@ -126,7 +126,7 @@ class DeltasTest(unittest.TestCase):
         entries = [dict(entries[0], path='/usr/libexec/tool'), dict(entries[0], path='/usr/sbin/tool', source=twin)]
         data = self.dir / 'data'
         data.mkdir()
-        manifest = self.roles.overlay_system(data, system, entries, owners=False)
+        manifest = self.roles.overlay_system(data, stats(system), entries, None)
         tree = data / pretranslate.OVERLAY
         self.assertFalse((tree / 'usr/sbin').exists())
         self.assertTrue(twin.exists())
@@ -142,7 +142,7 @@ class DeltasTest(unittest.TestCase):
         (system / 'usr/bin/tool').symlink_to('real')
         entries = self.roles.entries('os')
         with self.assertRaisesRegex(host.HostError, 'not a regular file'):
-            self.roles.overlay_system(self.dir / 'data', system, entries, owners=False)
+            self.roles.overlay_system(self.dir / 'data', stats(system), entries, None)
 
     def test_a_translated_file_that_does_not_match_is_refused(self):
         system = self.dir / 'system'
@@ -151,7 +151,7 @@ class DeltasTest(unittest.TestCase):
         entries = self.roles.entries('os')
         entries[0]['source'].write_bytes(b'corrupt')
         with self.assertRaisesRegex(host.HostError, 'does not match'):
-            self.roles.overlay_system(self.dir / 'data', system, entries, owners=False)
+            self.roles.overlay_system(self.dir / 'data', stats(system), entries, None)
 
     def test_pins_refuse_another_translation(self) -> None:
         self.roles.keep()

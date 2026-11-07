@@ -1,19 +1,18 @@
 """//:image's work in stages, each kept with the key of what it was made from (keys.py).
 
-Compose and pack run as the user, populate as root (file owners). composed.img stays in the scratch directory for the
-next run; populate works on an APFS clone of it, which pack empties into NAME.SII.* as it goes.
+Every stage runs as the user; populate gives files their owners offline (fill.py). composed.img stays in the scratch
+directory for the next run; populate works on an APFS clone of it, which pack empties into NAME.SII.* as it goes.
 """
 
 import argparse
 import json
-import os
 import shutil
 from pathlib import Path
 
 from tools.install import (
     card as cards,
     compose,
-    delta,
+    fill,
     folder,
     host,
     keys,
@@ -123,7 +122,6 @@ class Stages:
         saved = {k: v for k, v in self.state().items() if v is not None}
         saved.update(changes)
         (self.scratch / STATE).write_text(json.dumps(saved, indent=2) + '\n')
-        give_back(self.scratch)
 
     def compose(self, key: str) -> None:
         self.scratch.mkdir(parents=True, exist_ok=True)
@@ -163,36 +161,17 @@ class Stages:
         if deltas:
             deltas.keep()
             self.check_pins(deltas)
-        disk = compose.attach_raw(self.populated, self.log)
-        try:
-            container = host.container_on(disk + 's1')
-            vols = {v['APFSVolumeUUID'].upper(): v['DeviceIdentifier'] for v in (container or {}).get('Volumes', [])}
-            dev = {k: vols.get(v['uuid']) for k, v in self.spec['volumes'].items()}
-            if not all(dev.values()):
-                raise host.HostError(f"the composed container's volumes did not attach: {dev}")
-            with (
-                cards.mounted(dev['system'], self.log, read_only=True) as system,
-                cards.mounted(dev['data'], self.log, owners=True) as data,
-                cards.mounted(dev['preboot'], self.log, owners=True) as preboot,
-            ):
-                sources, expected = self.cryptexes()
-                populate.seed_data(system, data, True, self.log, reseed=True)
-                if deltas and 'os' in deltas:
-                    system_entries = deltas.entries('os')
-                    below_var = delta.entries_under(system_entries, '/private/var')
-                    delta.apply(data, below_var, self.log, 'Data')
-                    rest = [e for e in system_entries if not e['path'].startswith('/private/var/')]
-                    deltas.overlay_system(data, system, rest, True)
-                images = populate.cryptex_images(self.spec, self.pins, sources, expected)
-                populate.stage_cryptexes(preboot, self.spec, images, True, self.log)
-                cards.sync_overlay(data, self.args.boot_package, self.log)
-                populate.stage_gpu(data, self.args.gpu_stager, self.args.gpu_base, self.log)
-                if self.args.shader_seed:
-                    populate.merge_tree(self.args.shader_seed, data, True, self.log, 'shader seed')
-            host.run('diskutil', 'unmountDisk', container['ContainerReference'], log=self.log, check=False)
-            compose.fsck(disk + 's1', 'image', self.log)
-        finally:
-            host.run('hdiutil', 'detach', disk, log=self.log, check=False)
+        sources, expected = self.cryptexes()
+        inputs = fill.Inputs(
+            spec=self.spec,
+            deltas=deltas,
+            images=populate.cryptex_images(self.spec, self.pins, sources, expected),
+            boot_package=self.args.boot_package,
+            gpu_stager=self.args.gpu_stager,
+            gpu_base=self.args.gpu_base,
+            shader_seed=getattr(self.args, 'shader_seed', None),
+        )
+        fill.fill(self.populated, self.state()['offset'], inputs, self.log)
         self.save(populate=key)
 
     def measure(self, tool: str, image: Path) -> dict:
@@ -260,15 +239,6 @@ def boot_record(args: argparse.Namespace) -> dict[str, str | None]:
         'overlay': cards.tree_digest(package / 'overlay'),
         'gpu_trustcache': cards.sha256_file(trust) if trust.is_file() else None,
     }
-
-
-def give_back(path: Path) -> None:
-    """Files made under sudo go back to the user who ran //:image."""
-    uid, gid = os.environ.get('SUDO_UID'), os.environ.get('SUDO_GID')
-    if os.geteuid() != 0 or not uid:
-        return
-    for p in [Path(path), *Path(path).rglob('*')]:
-        os.chown(p, int(uid), int(gid))
 
 
 def free_bytes(path: str | Path) -> int:

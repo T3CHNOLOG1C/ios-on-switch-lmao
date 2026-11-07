@@ -38,6 +38,7 @@ from tools.install import (
     compose as composer,
     gpt,
     host,
+    owners as ownership,
     populate,
     target as targets,
 )
@@ -251,7 +252,7 @@ class Installer:
         if missing:
             raise host.HostError(f'volumes {missing} not attached (have {sorted(vols)})')
         dev = {k: vols[u]['DeviceIdentifier'] for k, u in self.want.items()}
-        owners = os.geteuid() == 0
+        owners = ownership.Immediate() if os.geteuid() == 0 else None
         if not owners and not self.args.unprivileged_test:
             raise host.HostError('populating needs root (file owners): run with sudo')
         with (

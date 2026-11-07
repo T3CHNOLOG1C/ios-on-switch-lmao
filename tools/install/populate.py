@@ -1,4 +1,7 @@
-"""What goes into the composed container's Data and Preboot volumes, mounted on the Mac as root (file owners).
+"""What goes into the composed container's Data and Preboot volumes, mounted on the Mac.
+
+Who owns each file goes to an owner sink (owners.py): a Journal given offline after a run as the user, or Immediate
+for a run as root; None leaves owners alone (an unprivileged test, not bootable).
 
 Data     the System volume's /private/var (once), mobile's Preferences, the boot package's overlay, the Metal bundle
          (its stager, as //deploy:sd --stage-gpu) and the shader seed
@@ -10,12 +13,12 @@ import shutil
 import sys
 from pathlib import Path
 
-from tools.install import card as cards, host, progress
+from tools.install import card as cards, host, owners as ownership, progress
 
 SKIP = ('.fseventsd', '.Spotlight-V100', '.Trashes')
 
 
-def seed_data(system: Path, data: Path, owners: bool, log: host.Log, reseed: bool = False) -> None:
+def seed_data(system: Path, data: Path, owners: ownership.Owners | None, log: host.Log, reseed: bool = False) -> None:
     if (data / 'mobile').is_dir() and not reseed:
         log('data: already seeded (mobile/ exists); kept (--reseed-data replaces it)')
         return
@@ -48,11 +51,11 @@ def seed_data(system: Path, data: Path, owners: bool, log: host.Log, reseed: boo
         )
     prefs = data / 'mobile/Library/Preferences'
     prefs.mkdir(parents=True, exist_ok=True)
+    data.chmod(0o755)
     if owners:
-        os.chown(data, 0, 0)
-        data.chmod(0o755)
+        owners.set(data, 0, 0, 0o755)
         for p in (data / 'mobile/Library', prefs):
-            os.chown(p, 501, 501)
+            owners.set(p, 501, 501)
     log(
         'data: seeded from System /private/var ({} entries){}'.format(
             sum(1 for _ in data.rglob('*')), '' if owners else ' WITHOUT owners (unprivileged test: not bootable)'
@@ -86,7 +89,7 @@ def cryptex_images(
 
 
 def stage_cryptexes(
-    preboot: Path, spec: dict, images: dict[str, tuple[Path, str]], owners: bool, log: host.Log
+    preboot: Path, spec: dict, images: dict[str, tuple[Path, str]], owners: ownership.Owners | None, log: host.Log
 ) -> None:
     """Stage the cryptex images (cryptex_images) into Preboot, each checked against its sha256."""
     for item in spec['cryptexes']:
@@ -110,8 +113,9 @@ def stage_cryptexes(
         os.replace(partial, target)
         target.chmod(0o644)
         if owners:
-            os.chown(target.parent, 0, 0)
-            os.chown(target, 0, 0)
+            owners.set(preboot, 0, 0, 0o755)
+            owners.set(target.parent, 0, 0)
+            owners.set(target, 0, 0, 0o644)
         log(f'preboot: {relative} staged ({source.stat().st_size} bytes)')
     host.run('sync')
 
@@ -124,7 +128,7 @@ def stage_gpu(data: Path, stager: str, gpu_base: str, log: host.Log) -> None:
         raise host.HostError('the Metal bundle was not staged')
 
 
-def merge_tree(source: str | Path, target: Path, owners: bool, log: host.Log, what: str) -> None:
+def merge_tree(source: str | Path, target: Path, owners: ownership.Owners | None, log: host.Log, what: str) -> None:
     """Copy `source` onto `target` (directories merged, files replaced): directories 0755, files 0644, root's."""
     count = 0
     paths = sorted(Path(source).rglob('*'))
@@ -140,5 +144,5 @@ def merge_tree(source: str | Path, target: Path, owners: bool, log: host.Log, wh
                 count += 1
                 progress.advance(destination.stat().st_size)
             if owners:
-                os.chown(destination, 0, 0)
+                owners.set(destination, 0, 0, 0o755 if path.is_dir() else 0o644)
     log(f'{what}: {count} files')

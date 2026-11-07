@@ -7,8 +7,7 @@
 
 No card is needed: the container is composed for 1 TiB and install-ios.bin fits it to the card's iOS partition, which
 must be at least the image's minimum. Every stage is kept with the key of what it was made from (keys.py), so a rerun
-does only what changed. Populating the container needs root for file owners, so a run that populates asks for sudo
-once.
+does only what changed. Nothing needs root: file owners are given in the detached image (owners.py).
 """
 
 import argparse
@@ -20,7 +19,6 @@ import sys
 import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import NoReturn
 
 if __package__ in (None, ''):
     sys.path.insert(0, str(Path(os.path.abspath(__file__)).parents[2]))
@@ -103,7 +101,7 @@ def plan_lines(args: argparse.Namespace, first: str | None, name: str) -> list[s
         return [f"write {name}.SII.001's head (manifest and boot files); the rest is unchanged"]
     steps = [
         f'compose a 1 TiB iOS container in {args.scratch}/{stages.COMPOSED} (kept for the next run)',
-        'populate Data and Preboot on a clone of it (asks for sudo once)',
+        'populate Data and Preboot on a clone of it, owners given offline',
         f'prove the fit on a clone, pack {args.out}/{folder.SII_DIR}/{name}.SII.*',
     ]
     start = ('compose', 'populate', 'pack').index(first) if first else len(steps)
@@ -188,8 +186,6 @@ class Builder:
         if self.args.stop_after == 'compose':
             return False
         if first in ('compose', 'populate'):
-            if os.geteuid() != 0:
-                reexec_as_root(self.args)
             self.time('populate', lambda: work.populate(k.populate))
         return self.args.stop_after != 'populate'
 
@@ -227,7 +223,6 @@ class Builder:
             shutil.copytree(kept, Path(out) / 'pretranslated', dirs_exist_ok=True)
             shutil.rmtree(kept)
         self.add_shared(out)
-        stages.give_back(out)
 
     def check_space(self) -> None:
         want = needed(self.args, self.pins, compose.os_container_bytes(self.args.os_dmg, self.log))
@@ -237,26 +232,6 @@ class Builder:
                 f'{self.args.scratch} has {free >> 30} GiB free; composing needs about {want >> 30} GiB and leaves '
                 f'{stages.FLOOR >> 30} GiB'
             )
-
-
-def reexec_as_root(args: argparse.Namespace) -> NoReturn:
-    """Run the same command under sudo.
-
-    The runfiles variables go along, so the inputs are found (sudo clears the environment).
-    """
-    locate = runfiles()
-    env = [f'{k}={v}' for k, v in sorted((locate.EnvVars() if locate else {}).items())]
-    command = ['sudo', '--', '/usr/bin/env', *env, sys.executable, os.path.abspath(__file__)]
-    for key, value in sorted(vars(args).items()):
-        flag = '--' + key.replace('_', '-')
-        if key == 'inputs':
-            command += [f'{flag}={v}' for v in value or []]
-        elif value is True:
-            command.append(flag)
-        elif value not in (None, False):
-            command.append(f'{flag}={value}')
-    print('composing needs root for file owners; running under sudo', flush=True)
-    os.execvp('sudo', command)
 
 
 def main(argv: list[str] | None = None) -> int:

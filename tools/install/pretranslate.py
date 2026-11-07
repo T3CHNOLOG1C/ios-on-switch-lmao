@@ -14,9 +14,10 @@ import json
 import os
 import shutil
 import stat
+from collections.abc import Callable
 from pathlib import Path
 
-from tools.install import card as cards, delta, host, overlay_index, progress, renamed
+from tools.install import card as cards, delta, host, overlay_index, owners as ownership, progress, renamed
 
 OVERLAY = renamed.DATA_FOLDER + '/pretranslated'
 OVERLAY_MANIFEST = OVERLAY + '.json'
@@ -24,6 +25,7 @@ OVERLAY_INDEX = OVERLAY + '/' + overlay_index.NAME
 COMPRESSED = 0x20
 
 ORDER = ('os', 'app_cryptex', 'system_cryptex')
+SystemStat = Callable[[str], os.stat_result]
 # What the boot package needs of a run (trust modules, the device tree's list of translated cache cdhashes).
 KEPT = ('{role}.trustcache', '{role}.cdhash-pairs', 'a64x-cache-pretranslated.bin')
 
@@ -32,8 +34,8 @@ def _cdhash(cdhash: list[str]) -> bytes:
     return bytes.fromhex(cdhash[0]) if cdhash else b'\x00' * overlay_index.CDHASH
 
 
-def _place(root: Path, e: dict, original: os.stat_result, owners: bool) -> Path:
-    """Copy e's translated file to its System path below root, with the System file's mode, owner and flags."""
+def _place(root: Path, e: dict, original: os.stat_result) -> Path:
+    """Copy e's translated file to its System path below root, with the System file's mode."""
     target = root / e['path'].lstrip('/')
     target.parent.mkdir(parents=True, exist_ok=True)
     partial = target.with_name('.partial-' + target.name)
@@ -41,13 +43,9 @@ def _place(root: Path, e: dict, original: os.stat_result, owners: bool) -> Path:
     progress.advance(partial.stat().st_size)
     if cards.sha256_file(partial, progress.advance) != e['sha256_out']:
         partial.unlink()
-        raise host.HostError('{}: the translated file does not match its manifest'.format(e['path']))
+        raise host.HostError(f'{e["path"]}: the translated file does not match its manifest')
     os.replace(partial, target)
     target.chmod(original.st_mode & 0o7777)
-    if owners:
-        os.chown(target, original.st_uid, original.st_gid)
-    if original.st_flags & ~COMPRESSED:
-        os.chflags(target, original.st_flags & ~COMPRESSED)
     return target
 
 
@@ -98,12 +96,15 @@ class Deltas:
             )
         self.log(f'pretranslate: {len(pins)} files match the pins')
 
-    def overlay_system(self, data: Path, system: Path, entries: list[dict], owners: bool) -> dict:
+    def overlay_system(
+        self, data: Path, system: SystemStat, entries: list[dict], owners: ownership.Owners | None
+    ) -> dict:
         """Place the System volume's translated files on Data (OVERLAY); return their manifest.
 
-        Each file gets its System file's owner, mode and flags, then the manifest and the kernel's index made from it
-        go beside them; the manifest is also kept for the boot package. As root, every file and directory of the tree
-        ends system-immutable: the device's kernel refuses any change to the tree anyway, the flag is a second layer.
+        `system(path)` is the System file's lstat, from a mount that shows its owners. Each translated file gets its
+        System file's owner, mode and flags, then the manifest and the kernel's index made from it go beside them; the
+        manifest is also kept for the boot package. Every file and directory of the tree ends root's and
+        system-immutable: the device's kernel refuses any change to the tree anyway, the flag is a second layer.
 
         Hard links of one System file get one Data file, placed at the first of their paths, and an index entry for
         each path. A link on Data would give the kernel's redirect a Data file whose parent changes with each lookup.
@@ -114,19 +115,17 @@ class Deltas:
         work = 2 * sum(e['source'].stat().st_size for e in entries)
         with progress.step('System: placing the translated files on Data', work):
             for e in entries:
-                original = os.lstat(Path(system) / e['path'].lstrip('/'))
+                original = system(e['path'])
                 if not stat.S_ISREG(original.st_mode):
-                    raise host.HostError('{}: not a regular file on the System volume'.format(e['path']))
+                    raise host.HostError(f'{e["path"]}: not a regular file on the System volume')
                 if original.st_ino in by_inode:
                     first, data_id, record = by_inode[original.st_ino]
                     if (first['sha256_out'], first.get('cdhash')) != (e['sha256_out'], e.get('cdhash')):
-                        raise host.HostError(
-                            '{} and {} are one System file translated two ways'.format(first['path'], e['path'])
-                        )
+                        raise host.HostError(f'{first["path"]} and {e["path"]} are one System file translated two ways')
                     progress.advance(2 * e['source'].stat().st_size)
                 else:
-                    target = _place(root, e, original, owners)
-                    placed.append(target)
+                    target = _place(root, e, original)
+                    placed.append((target, original))
                     data_id = os.lstat(target).st_ino
                     record = {
                         'trust': True,
@@ -144,16 +143,17 @@ class Deltas:
         self.kept.mkdir(parents=True, exist_ok=True)
         (self.kept / 'os.overlay.json').write_text(text)
         directories = [root, *(p for p in root.rglob('*') if p.is_dir())]
-        if owners:
-            for directory in directories:
-                os.chown(directory, 0, 0)
-                directory.chmod(0o755)
+        for directory in directories:
+            directory.chmod(0o755)
         index = Path(data) / OVERLAY_INDEX
         index.write_bytes(overlay_index.encode(ids, [os.lstat(d).st_ino for d in directories]))
         index.chmod(0o644)
         if owners:
-            os.chown(index, 0, 0)
-            for path in [*placed, index, *reversed(directories)]:
-                os.chflags(path, os.lstat(path).st_flags | stat.SF_IMMUTABLE)
+            for target, original in placed:
+                flags = (original.st_flags & ~COMPRESSED) | stat.SF_IMMUTABLE
+                owners.set(target, original.st_uid, original.st_gid, original.st_mode & 0o7777, flags)
+            owners.set(index, 0, 0, 0o644, stat.SF_IMMUTABLE)
+            for directory in reversed(directories):
+                owners.set(directory, 0, 0, 0o755, stat.SF_IMMUTABLE)
         self.log(f'System: {len(files)} translated files on Data under {OVERLAY}')
         return manifest

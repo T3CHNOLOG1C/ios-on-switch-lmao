@@ -34,17 +34,28 @@ class OwnersError(Exception):
 
 
 class Journal:
-    """Wanted owners by path relative to one volume's root ('' is the root itself)."""
+    """Wanted owners by path relative to one volume's root ('' is the root itself).
 
-    def __init__(self) -> None:
+    `root`, the volume's mount point, lets set() and copy() take paths below it as they are.
+    """
+
+    def __init__(self, root: Path | None = None) -> None:
+        self.root = Path(root) if root else None
         self.wanted: dict[str, Owner] = {}
 
-    def set(self, relative: str | Path, uid: int, gid: int, mode: int | None = None, flags: int | None = None) -> None:
-        self.wanted[_key(relative)] = Owner(uid, gid, mode, flags)
+    def _key(self, path: str | Path) -> str:
+        path = Path(path)
+        if path.is_absolute() and self.root:
+            path = path.relative_to(self.root)
+        text = path.as_posix().strip('/')
+        return '' if text == '.' else text
+
+    def set(self, path: str | Path, uid: int, gid: int, mode: int | None = None, flags: int | None = None) -> None:
+        self.wanted[self._key(path)] = Owner(uid, gid, mode, flags)
 
     def copy(self, source: Path, under: str | Path = '') -> int:
         """Record every path below `source` (mounted with owners) as it is there, at `under`; return how many."""
-        base = _key(under)
+        base = self._key(under)
         count = 0
         for path, info in walk(Path(source)):
             relative = path.relative_to(source).as_posix()
@@ -131,6 +142,20 @@ def walk(root: Path) -> list[tuple[Path, os.stat_result]]:
     return found
 
 
-def _key(relative: str | Path) -> str:
-    text = Path(relative).as_posix().strip('/')
-    return '' if text == '.' else text
+class Immediate:
+    """Owners given at once, by root on a volume mounted with owners (a card written in the Mac): a Journal's calls."""
+
+    def set(self, path: str | Path, uid: int, gid: int, mode: int | None = None, flags: int | None = None) -> None:
+        os.lchown(path, uid, gid)
+        if mode is not None and not os.path.islink(path):
+            os.chmod(path, mode)
+        if flags is not None:
+            os.lchflags(path, (os.lstat(path).st_flags & COMPRESSED) | flags)
+
+    def copy(self, source: Path, under: str | Path = '') -> int:
+        """Nothing to do: a copy made by root keeps its source's owners."""
+        del source, under
+        return 0
+
+
+Owners = Journal | Immediate

@@ -44,7 +44,11 @@ def attached(image: Path, log: host.Log, writable: bool = True, raw: bool = Fals
     disks = [e['dev-entry'][5:] for e in entities if re.fullmatch(r'/dev/disk\d+', e.get('dev-entry', ''))]
     if not disks:
         raise host.HostError(f'hdiutil attach gave no disk for {image}')
-    volumes = [e['dev-entry'][5:] for e in entities if e.get('content-hint', '').upper() == APFS_VOLUME]
+    volumes = [
+        e['dev-entry'][5:]
+        for e in entities
+        if e.get('content-hint', '').upper() == APFS_VOLUME and re.fullmatch(r'/dev/disk\d+s\d+', e['dev-entry'])
+    ]
     try:
         yield Attachment(disks[0], volumes)
     finally:

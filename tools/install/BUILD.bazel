@@ -22,6 +22,7 @@ py_library(
         "delta.py",
         "disks.py",
         "extents.py",
+        "fill.py",
         "folder.py",
         "gpt.py",
         "host.py",
@@ -191,6 +192,17 @@ py_test(
     srcs = ["cryptex_test.py"],
     args = ["$(rootpath //boot/installer:apfs_tool)"],
     data = ["//boot/installer:apfs_tool"],
+    tags = [
+        "local",
+        "manual",
+    ],
+    deps = [":lib"],
+)
+
+# Populate as the user on a small composed container: hdiutil and diskutil, macOS, outside the sandbox.
+py_test(
+    name = "fill_apfs_test",
+    srcs = ["fill_apfs_test.py"],
     tags = [
         "local",
         "manual",
