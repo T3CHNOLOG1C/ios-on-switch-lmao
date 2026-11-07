@@ -59,6 +59,9 @@ NAMES = {
     # __stack_chk_fail in the GOT of every kext with an abstract class (thirty of the prelinked ones). Vtables cannot
     # name it: every pure virtual slot points here.
     0xFFFFFFF00A96EE90: '___cxa_pure_virtual',
+    # The OSSharedPtr wrapper after setObject(unsigned, OSSharedPtr): the same tail call through the vtable, two slots
+    # further (0x100, replaceObject after merge), which IOGameControllerFamily imports.
+    0xFFFFFFF00A7A4FC0: '__ZN7OSArray13replaceObjectEjRK11OSSharedPtrIK15OSMetaClassBaseE',
 }
 
 

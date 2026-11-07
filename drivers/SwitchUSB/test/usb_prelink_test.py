@@ -64,7 +64,7 @@ UNNAMED_27 = {
     'com.apple.driver.usb.AppleUSBCommon': (0, 2),
     'com.apple.driver.usb.AppleUSBXHCI': (0, 1),
     'com.apple.iokit.IOAccessoryManager': (2, 1),
-    'com.apple.iokit.IOGameControllerFamily': (8, 0),
+    'com.apple.iokit.IOGameControllerFamily': (7, 0),
     'com.apple.iokit.IOHIDFamily': (5, 1),
     'com.apple.iokit.IOSCSIArchitectureModelFamily': (1, 1),
     'com.apple.iokit.IOStorageFamily': (6, 1),
