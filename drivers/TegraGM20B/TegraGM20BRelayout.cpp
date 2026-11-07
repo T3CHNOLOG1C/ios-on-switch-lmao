@@ -19,8 +19,8 @@
 namespace
 {
 constexpr uint64_t kPage = 4096;
-constexpr uint64_t kPushVa = 1ull << 20, kSurfaceVa = 1ull << 32, kSurfaceRowsVa = 2ull << 32,
-		   kRowsVa = 3ull << 32;
+constexpr uint64_t kPushVa = 1ULL << 20, kSurfaceVa = 1ULL << 32, kSurfaceRowsVa = 2ULL << 32,
+		   kRowsVa = 3ULL << 32;
 
 struct Relayout {
 	IOLock *lock;
@@ -41,10 +41,10 @@ bool openSpace()
 	if (!r.pushCpu || !r.fenceCpu || tgm_vm_new(&r.vm))
 		return false;
 	tgm_vm_claim(r.vm, &gRelayout);
-	return !tgm_mem_new(r.vm, &r.pushPa, 1, &r.push) &&
-	       !tgm_vm_map_ordered(r.vm, kPushVa, kPage, r.push, 0, 0, 1, nullptr) &&
-	       !tgm_mem_new(r.vm, &r.fencePa, 1, &r.fence) &&
-	       !tgm_vm_kmap(r.vm, r.fence, kPage, &r.fenceGpu);
+	return (tgm_mem_new(r.vm, &r.pushPa, 1, &r.push) == 0) &&
+	       (tgm_vm_map_ordered(r.vm, kPushVa, kPage, r.push, 0, 0, 1, nullptr) == 0) &&
+	       (tgm_mem_new(r.vm, &r.fencePa, 1, &r.fence) == 0) &&
+	       (tgm_vm_kmap(r.vm, r.fence, kPage, &r.fenceGpu) == 0);
 }
 
 tgm_chan *channel()
@@ -56,9 +56,10 @@ tgm_chan *channel()
 		r.failed = true;
 		IOLog("tegra-gm20b: block-linear surfaces cannot be moved: no address space\n");
 	}
-	if (!r.chan && !r.failed)
+	if (!r.chan && !r.failed) {
 		tgm_chan_new(r.vm, &gRelayout, static_cast<volatile uint32_t *>(r.fenceCpu),
 			     r.fenceGpu, "relayout", 1, &r.chan);
+	}
 	return r.chan;
 }
 
@@ -66,10 +67,10 @@ int move(const tgm_relayout_pages &surface, const tgm_relayout_pages &rows, cons
 	 uint32_t bytesPerRow, tgm_relayout_op op, const tgm_relayout_writer *writers,
 	 uint32_t nwriters)
 {
-	Relayout &r = gRelayout;
-	const uint64_t surfaceBytes = uint64_t(surface.npages) * kPage,
-		       rowsBytes = uint64_t(rows.npages) * kPage;
-	const uint64_t rowBytes = uint64_t(bytesPerRow) * l.height;
+	const Relayout &r = gRelayout;
+	const uint64_t surfaceBytes = static_cast<uint64_t>(surface.npages) * kPage;
+	const uint64_t rowsBytes = static_cast<uint64_t>(rows.npages) * kPage;
+	const uint64_t rowBytes = static_cast<uint64_t>(bytesPerRow) * l.height;
 	if (l.bytes > surfaceBytes || bytesPerRow < l.width * l.bpp || rowBytes > surfaceBytes ||
 	    rowBytes > rowsBytes)
 		return -22;
@@ -78,19 +79,23 @@ int move(const tgm_relayout_pages &surface, const tgm_relayout_pages &rows, cons
 		return -12;
 	tgm_relayout_wait waits[TGM_RELAYOUT_MAX_WAITS];
 	uint32_t nwaits = 0;
-	for (uint32_t i = 0; i < nwriters && nwaits < TGM_RELAYOUT_MAX_WAITS; i++)
+	for (uint32_t i = 0; i < nwriters && nwaits < TGM_RELAYOUT_MAX_WAITS; i++) {
 		if (!tgm_writer_fence_va(r.vm, writers[i].uid, &waits[nwaits].va))
 			waits[nwaits++].seqno = writers[i].seqno;
-	tgm_mem *surfaceMem = nullptr, *rowsMem = nullptr;
+	}
+	tgm_mem *surfaceMem = nullptr;
+	tgm_mem *rowsMem = nullptr;
 	int ret = tgm_mem_new(r.vm, surface.pas, surface.npages, &surfaceMem);
 	if (!ret)
 		ret = tgm_mem_new(r.vm, rows.pas, rows.npages, &rowsMem);
-	if (!ret)
+	if (!ret) {
 		ret = tgm_vm_map_ordered(r.vm, kSurfaceVa, surfaceBytes, surfaceMem, 0,
 					 TGM_LAYOUT_KIND, 0, nullptr);
-	if (!ret)
+	}
+	if (!ret) {
 		ret = tgm_vm_map_ordered(r.vm, kSurfaceRowsVa, surfaceBytes, surfaceMem, 0, 0, 0,
 					 nullptr);
+	}
 	if (!ret)
 		ret = tgm_vm_map_ordered(r.vm, kRowsVa, rowsBytes, rowsMem, 0, 0, 0, nullptr);
 	if (!ret) {
@@ -135,7 +140,7 @@ extern "C" void tgm_relayout_by_cpu(const struct tgm_relayout_pages *surface,
 	const tgm_relayout_pages &to = toRows ? *rows : *surface;
 	tgm_cpu_clean_pages(surface->pas, surface->npages);
 	tgm_cpu_clean_pages(rows->pas, rows->npages);
-	tgm_relayout_cpu(surface, rows, layout, bytes_per_row, toRows, physical);
+	tgm_relayout_cpu(surface, rows, layout, bytes_per_row, static_cast<int>(toRows), physical);
 	tgm_cpu_clean_pages(to.pas, to.npages);
 }
 
@@ -183,7 +188,7 @@ extern "C" void tgm_scratch_discard(struct tgm_scratch *s)
 	switch_scratch_discard(s);
 }
 
-extern "C" void *tgm_scratch_memory(struct tgm_scratch *s)
+extern "C" void *tgm_scratch_memory(const struct tgm_scratch *s)
 {
 	return s->memory;
 }

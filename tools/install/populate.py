@@ -1,4 +1,7 @@
-"""What goes into the composed container's Data and Preboot volumes, mounted on the Mac as root (file owners).
+"""What goes into the composed container's Data and Preboot volumes, mounted on the Mac.
+
+Who owns each file goes to an owner sink (owners.py): a Journal given offline after a run as the user, or Immediate
+for a run as root; None leaves owners alone (an unprivileged test, not bootable).
 
 Data     the System volume's /private/var (once), mobile's Preferences, the boot package's overlay, the Metal bundle
          (its stager, as //deploy:sd --stage-gpu) and the shader seed
@@ -7,16 +10,15 @@ Preboot  the two cryptex images, checked against the IPSW pins
 
 import os
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 
-from tools.install import card as cards, host
+from tools.install import card as cards, host, owners as ownership, progress
 
 SKIP = ('.fseventsd', '.Spotlight-V100', '.Trashes')
 
 
-def seed_data(system: Path, data: Path, owners: bool, log: host.Log, reseed: bool = False) -> None:
+def seed_data(system: Path, data: Path, owners: ownership.Owners | None, log: host.Log, reseed: bool = False) -> None:
     if (data / 'mobile').is_dir() and not reseed:
         log('data: already seeded (mobile/ exists); kept (--reseed-data replaces it)')
         return
@@ -30,28 +32,43 @@ def seed_data(system: Path, data: Path, owners: bool, log: host.Log, reseed: boo
                 shutil.rmtree(p)
             else:
                 p.unlink()
-    host.run(
-        'ditto',
-        '--rsrc',
-        '--extattr',
-        '--acl',
-        '--preserveHFSCompression',
-        '--nocache',
-        str(system / 'private/var'),
-        str(data),
-        log=log,
-    )
+    start = shutil.disk_usage(data).used
+    with progress.step(
+        'data: seeding from System /private/var',
+        allocated(system / 'private/var'),
+        probe=lambda: shutil.disk_usage(data).used - start,
+    ):
+        host.run(
+            'ditto',
+            '--rsrc',
+            '--extattr',
+            '--acl',
+            '--preserveHFSCompression',
+            '--nocache',
+            str(system / 'private/var'),
+            str(data),
+            log=log,
+        )
     prefs = data / 'mobile/Library/Preferences'
     prefs.mkdir(parents=True, exist_ok=True)
+    data.chmod(0o755)
     if owners:
-        os.chown(data, 0, 0)
-        data.chmod(0o755)
+        owners.set(data, 0, 0, 0o755)
         for p in (data / 'mobile/Library', prefs):
-            os.chown(p, 501, 501)
+            owners.set(p, 501, 501)
     log(
         'data: seeded from System /private/var ({} entries){}'.format(
             sum(1 for _ in data.rglob('*')), '' if owners else ' WITHOUT owners (unprivileged test: not bootable)'
         )
+    )
+
+
+def allocated(root: Path) -> int:
+    """Return the bytes the files below `root` take on disk (compressed files count as stored)."""
+    return sum(
+        os.lstat(os.path.join(directory, name)).st_blocks * 512
+        for directory, _, names in os.walk(root)
+        for name in names
     )
 
 
@@ -72,7 +89,7 @@ def cryptex_images(
 
 
 def stage_cryptexes(
-    preboot: Path, spec: dict, images: dict[str, tuple[Path, str]], owners: bool, log: host.Log
+    preboot: Path, spec: dict, images: dict[str, tuple[Path, str]], owners: ownership.Owners | None, log: host.Log
 ) -> None:
     """Stage the cryptex images (cryptex_images) into Preboot, each checked against its sha256."""
     for item in spec['cryptexes']:
@@ -87,40 +104,45 @@ def stage_cryptexes(
             continue
         target.parent.mkdir(parents=True, exist_ok=True)
         partial = target.with_name('.partial-' + target.name)
-        host.copy_file_parallel(source, partial)
-        if cards.sha256_file(partial) != want:
+        with progress.step(f'preboot: staging {source.name}', 2 * source.stat().st_size):
+            host.copy_file_parallel(source, partial)
+            digest = cards.sha256_file(partial, progress.advance)
+        if digest != want:
             partial.unlink()
             raise host.HostError(f'{relative}: copy does not match its sha256')
         os.replace(partial, target)
         target.chmod(0o644)
         if owners:
-            os.chown(target.parent, 0, 0)
-            os.chown(target, 0, 0)
+            owners.set(preboot, 0, 0, 0o755)
+            owners.set(target.parent, 0, 0)
+            owners.set(target, 0, 0, 0o644)
         log(f'preboot: {relative} staged ({source.stat().st_size} bytes)')
     host.run('sync')
 
 
 def stage_gpu(data: Path, stager: str, gpu_base: str, log: host.Log) -> None:
-    result = subprocess.run(
-        [sys.executable, stager, str(data), '--build', str(gpu_base)], capture_output=True, text=True, check=False
-    )
+    with progress.step('gpu: staging the Metal bundle'):
+        result = host.stream([sys.executable, stager, str(data), '--build', str(gpu_base), '--progress'], progress.ours)
     log('gpu:', (result.stdout + result.stderr).strip())
     if result.returncode:
         raise host.HostError('the Metal bundle was not staged')
 
 
-def merge_tree(source: str | Path, target: Path, owners: bool, log: host.Log, what: str) -> None:
+def merge_tree(source: str | Path, target: Path, owners: ownership.Owners | None, log: host.Log, what: str) -> None:
     """Copy `source` onto `target` (directories merged, files replaced): directories 0755, files 0644, root's."""
     count = 0
-    for path in sorted(Path(source).rglob('*')):
-        destination = Path(target) / path.relative_to(source)
-        if path.is_dir():
-            destination.mkdir(exist_ok=True)
-            destination.chmod(0o755)
-        else:
-            shutil.copyfile(path, destination)
-            destination.chmod(0o644)
-            count += 1
-        if owners:
-            os.chown(destination, 0, 0)
+    paths = sorted(Path(source).rglob('*'))
+    with progress.step(f'{what}: copying', sum(p.stat().st_size for p in paths if not p.is_dir())):
+        for path in paths:
+            destination = Path(target) / path.relative_to(source)
+            if path.is_dir():
+                destination.mkdir(exist_ok=True)
+                destination.chmod(0o755)
+            else:
+                shutil.copyfile(path, destination)
+                destination.chmod(0o644)
+                count += 1
+                progress.advance(destination.stat().st_size)
+            if owners:
+                owners.set(destination, 0, 0, 0o755 if path.is_dir() else 0o644)
     log(f'{what}: {count} files')

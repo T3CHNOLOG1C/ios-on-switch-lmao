@@ -26,12 +26,16 @@ extern "C" {
 vm_offset_t phystokv(uint64_t pa);  // physical aperture (osfmk/arm64/arm_vm_init.c)
 vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
 vm_offset_t ml_io_map_wcomb(vm_offset_t phys_addr, vm_size_t size);
+// NOLINTNEXTLINE(readability-redundant-declaration): not every kernel configuration's headers declare it
 boolean_t ml_set_interrupts_enabled(boolean_t enable);
+// NOLINTNEXTLINE(readability-redundant-declaration): not every kernel configuration's headers declare it
 boolean_t ml_get_interrupts_enabled(void);
 boolean_t switch_ram_gpu_pool(uint64_t *start, uint64_t *end);
 void pmap_set_cache_attributes(ppnum_t pn, unsigned int cacheattr);
 boolean_t pmap_valid_page(ppnum_t pn);
+// NOLINTNEXTLINE(readability-redundant-declaration): not every kernel configuration's headers declare it
 void IOLogv(const char *format, va_list ap);
+// NOLINTNEXTLINE(readability-redundant-declaration): not every kernel configuration's headers declare it
 int vsnprintf(char *, size_t, const char *, va_list);
 }
 
@@ -40,6 +44,7 @@ static lck_grp_t *nvxnu_grp()
 	static lck_grp_t *grp;
 	if (!grp) {
 		lck_grp_t *fresh = lck_grp_alloc_init("TegraGM20B", LCK_GRP_ATTR_NULL);
+		// NOLINTNEXTLINE(misc-const-correctness): the compare-and-swap writes the current value back into it
 		lck_grp_t *expected = nullptr;
 		if (!__atomic_compare_exchange_n(&grp, &expected, fresh, false, __ATOMIC_ACQ_REL,
 						 __ATOMIC_ACQUIRE))
@@ -51,7 +56,7 @@ static lck_grp_t *nvxnu_grp()
 extern "C" void nvxnu_stats(const char *fmt, ...)
 {
 	char line[768];
-	va_list ap;
+	va_list ap;  // NOLINT(cppcoreguidelines-init-variables): va_start initializes it
 	va_start(ap, fmt);
 	vsnprintf(line, sizeof(line), fmt, ap);
 	va_end(ap);
@@ -59,19 +64,22 @@ extern "C" void nvxnu_stats(const char *fmt, ...)
 }
 
 // nvkm's interrupt handler runs under spin_lock_irqsave, as in a Linux hard IRQ, and IOLog asserts with interrupts off.
-// os_log queues a line from any context, without the console copy.
+// With interrupts off os_log is not safe, so XNU only formats the line into the message buffer with the kernel's
+// printf, which replays it to the unified log later: that printf has no privacy annotations ("%{public}s" prints
+// "{public}s" and drops the string), so the format is plain "%s".
 static void nvxnu_report(const char *line)
 {
-	if (ml_get_interrupts_enabled())
+	if (ml_get_interrupts_enabled()) {
 		IOLog("%s", line);
-	else
-		os_log_error(OS_LOG_DEFAULT, "%{public}s", line);
+	} else {
+		os_log_error(OS_LOG_DEFAULT, "%s", line);
+	}
 }
 
 extern "C" void nvxnu_log(const char *fmt, ...)
 {
 	char line[512];
-	va_list ap;
+	va_list ap;  // NOLINT(cppcoreguidelines-init-variables): va_start initializes it
 	va_start(ap, fmt);
 	vsnprintf(line, sizeof(line), fmt, ap);
 	va_end(ap);
@@ -85,7 +93,7 @@ extern "C" void nvxnu_step(const char *fmt, ...)
 {
 	if (!nvxnu_trace_paced())
 		return;
-	va_list ap;
+	va_list ap;  // NOLINT(cppcoreguidelines-init-variables): va_start initializes it
 	va_start(ap, fmt);
 	IOLogv(fmt, ap);
 	va_end(ap);
@@ -96,7 +104,7 @@ constexpr bool kTracePaced = false;
 
 extern "C" int nvxnu_trace_paced(void)
 {
-	return kTracePaced;
+	return static_cast<int>(kTracePaced);
 }
 
 extern "C" int nvxnu_vsnprintf(char *buf, unsigned long size, const char *fmt, va_list ap)
@@ -107,7 +115,7 @@ extern "C" int nvxnu_vsnprintf(char *buf, unsigned long size, const char *fmt, v
 extern "C" void nvxnu_panic(const char *fmt, ...)
 {
 	char line[1024];
-	va_list ap;
+	va_list ap;  // NOLINT(cppcoreguidelines-init-variables): va_start initializes it
 	va_start(ap, fmt);
 	vsnprintf(line, sizeof(line), fmt, ap);
 	va_end(ap);
@@ -140,13 +148,14 @@ extern "C" void nvxnu_gpu_ordered_end(void)
 
 extern "C" int nvxnu_gpu_ordered(void)
 {
-	return current_thread() == __atomic_load_n(&gGpuOrderedThread, __ATOMIC_RELAXED);
+	return static_cast<int>(current_thread() ==
+				__atomic_load_n(&gGpuOrderedThread, __ATOMIC_RELAXED));
 }
 
 extern "C" void nvxnu_error(const char *dev, const char *fmt, ...)
 {
 	char line[256];
-	va_list ap;
+	va_list ap;  // NOLINT(cppcoreguidelines-init-variables): va_start initializes it
 	va_start(ap, fmt);
 	vsnprintf(line, sizeof(line), fmt, ap);
 	va_end(ap);
@@ -158,12 +167,14 @@ extern "C" void nvxnu_error(const char *dev, const char *fmt, ...)
 	size_t n = strnlen(line, sizeof(line));
 	while (n && (line[n - 1] == '\n' || line[n - 1] == ' '))
 		line[--n] = 0;
-	if (gIrqErrorsLen)
+	if (gIrqErrorsLen) {
 		gIrqErrorsLen += strlcpy(gIrqErrors + gIrqErrorsLen, " | ",
 					 sizeof(gIrqErrors) - gIrqErrorsLen);
-	if (gIrqErrorsLen < sizeof(gIrqErrors))
+	}
+	if (gIrqErrorsLen < sizeof(gIrqErrors)) {
 		gIrqErrorsLen += strlcpy(gIrqErrors + gIrqErrorsLen, line,
 					 sizeof(gIrqErrors) - gIrqErrorsLen);
+	}
 	if (gIrqErrorsLen > sizeof(gIrqErrors) - 1)
 		gIrqErrorsLen = sizeof(gIrqErrors) - 1;
 }
@@ -291,14 +302,14 @@ extern "C" void nvxnu_rw_unlock_exclusive(void *rw)
 
 extern "C" nvxnu_u64 nvxnu_nanotime(void)
 {
-	uint64_t ns;
+	uint64_t ns = 0;
 	absolutetime_to_nanoseconds(mach_absolute_time(), &ns);
 	return ns;
 }
 
 extern "C" nvxnu_u64 nvxnu_abstime_to_ns(nvxnu_u64 abstime)
 {
-	uint64_t ns;
+	uint64_t ns = 0;
 	absolutetime_to_nanoseconds(abstime, &ns);
 	return ns;
 }
@@ -351,19 +362,21 @@ bool pmcPending()
 {
 	if (__atomic_load_n(&gGpuOff, __ATOMIC_ACQUIRE))
 		return false;
-	return (pmc(PMC_INTR_0) && (pmc(PMC_INTR_EN_0) & 1)) ||
-	       (pmc(PMC_INTR_1) && (pmc(PMC_INTR_EN_1) & 1));
+	return ((pmc(PMC_INTR_0) != 0u) && ((pmc(PMC_INTR_EN_0) & 1) != 0u)) ||
+	       ((pmc(PMC_INTR_1) != 0u) && ((pmc(PMC_INTR_EN_1) & 1) != 0u));
 }
 
 [[noreturn]] void gpuPanic(const char *why, const char *what, uint32_t value)
 {
-	char stall[192], nonstall[192];
+	char stall[192];
+	char nonstall[192];
 	switch_interrupt_describe(kGpuIntids[0], stall, sizeof(stall));
 	switch_interrupt_describe(kGpuIntids[1], nonstall, sizeof(nonstall));
-	if (__atomic_load_n(&gGpuOff, __ATOMIC_ACQUIRE))
+	if (__atomic_load_n(&gGpuOff, __ATOMIC_ACQUIRE)) {
 		panic("tegra-gm20b: GPU interrupt %s (%s %u, INTID %u/%u) while the GPU is powered "
 		      "down for system sleep: %s | %s",
 		      why, what, value, kGpuIntids[0], kGpuIntids[1], stall, nonstall);
+	}
 	panic("tegra-gm20b: GPU interrupt %s (%s %u, INTID %u/%u): PMC INTR %#x/%#x EN %#x/%#x, %s "
 	      "| %s",
 	      why, what, value, kGpuIntids[0], kGpuIntids[1], pmc(PMC_INTR_0), pmc(PMC_INTR_1),
@@ -373,6 +386,7 @@ bool pmcPending()
 // Work loop action for either GPU line (level; the GIC masks it while this runs). nvkm_intr unarms the GPU's
 // top-level interrupt enables, runs the subdev handlers and rearms, so the line is quiet on return. A line nvkm
 // keeps finding nothing on is stuck: panic rather than spin. Errors nvkm reported in the pass panic (nvxnu_error).
+// NOLINTNEXTLINE(misc-const-correctness): IOInterruptEventSource::Action's signature
 void gpuInterrupt(OSObject *, IOInterruptEventSource *source, int)
 {
 	// a line taken before nvxnu_irq_suspend() whose pass runs after it: the GPU is off now
@@ -388,10 +402,11 @@ void gpuInterrupt(OSObject *, IOInterruptEventSource *source, int)
 	if (gIrqErrorsLen && __atomic_load_n(&gErrorsFatal, __ATOMIC_ACQUIRE) &&
 	    !(gErrorsContained && gErrorsContained(gIrqErrors)))
 		panic("tegra-gm20b: GPU error: %s", gIrqErrors);
-	if (handled == 1)
+	if (handled == 1) {
 		gUnhandled = 0;
-	else if (++gUnhandled >= kStorm)
+	} else if (++gUnhandled >= kStorm) {
 		gpuPanic("storm", "unhandled", gUnhandled);
+	}
 	nvxnu_wake();
 }
 
@@ -402,8 +417,9 @@ bool sleepUntil(const volatile uint32_t *word, nvxnu_u32 seq, uint64_t until_ns)
 	const uint64_t now = nvxnu_nanotime();
 	if (until_ns <= now)
 		return false;
-	uint64_t interval;
+	uint64_t interval = 0;
 	nanoseconds_to_absolutetime(until_ns - now, &interval);
+	// NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): the wait event is the word's address
 	assert_wait_deadline(reinterpret_cast<event_t>(const_cast<uint32_t *>(word)), THREAD_UNINT,
 			     mach_absolute_time() + interval);
 	if (__atomic_load_n(word, __ATOMIC_ACQUIRE) != seq) {
@@ -422,6 +438,7 @@ extern "C" nvxnu_u32 nvxnu_word_seq(const volatile nvxnu_u32 *word)
 extern "C" void nvxnu_word_wake(volatile nvxnu_u32 *word)
 {
 	__atomic_fetch_add(word, 1, __ATOMIC_RELEASE);
+	// NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): the wait event is the word's address
 	thread_wakeup(reinterpret_cast<event_t>(const_cast<uint32_t *>(word)));
 }
 
@@ -429,9 +446,10 @@ extern "C" void nvxnu_word_wake(volatile nvxnu_u32 *word)
 // checks in a row with no interrupt taken in between never reached the CPU.
 extern "C" int nvxnu_word_idle(const volatile nvxnu_u32 *word, nvxnu_u32 seq, nvxnu_u64 deadline_ns)
 {
-	if (!__atomic_load_n(&gIrqActive, __ATOMIC_ACQUIRE))
+	if (!__atomic_load_n(&gIrqActive, __ATOMIC_ACQUIRE)) {
 		panic("tegra-gm20b: GPU wait before its interrupts are attached (INTID %u/%u)",
 		      kGpuIntids[0], kGpuIntids[1]);
+	}
 	bool pendingSeen = false;
 	uint32_t runsAtPending = 0;
 	for (;;) {
@@ -509,9 +527,10 @@ extern "C" void nvxnu_irq_start(void)
 						    gIrqLoop, gpuInterrupt, nub, 0)
 					  : nullptr;
 		if (!gPmc || !gIrqSources[i] ||
-		    gIrqLoop->addEventSource(gIrqSources[i]) != kIOReturnSuccess)
+		    gIrqLoop->addEventSource(gIrqSources[i]) != kIOReturnSuccess) {
 			panic("tegra-gm20b: cannot attach the GPU %s interrupt (INTID %u)",
 			      i ? "nonstall" : "stall", kGpuIntids[i]);
+		}
 	}
 	__atomic_store_n(&gIrqActive, 1, __ATOMIC_RELEASE);
 	for (auto *source : gIrqSources)
@@ -549,27 +568,34 @@ extern "C" void nvxnu_irq_resume(void)
 extern "C" int nvxnu_mutex_sleep(void *m, const void *event, nvxnu_u64 deadline_ns)
 {
 	auto *mtx = static_cast<lck_mtx_t *>(m);
+	// NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): the wait event is the word's address
 	auto *ev = reinterpret_cast<event_t>(const_cast<void *>(event));
-	if (deadline_ns == ~0ULL)
-		return lck_mtx_sleep(mtx, LCK_SLEEP_DEFAULT, ev, THREAD_UNINT) != THREAD_TIMED_OUT;
+	if (deadline_ns == ~0ULL) {
+		return static_cast<int>(lck_mtx_sleep(mtx, LCK_SLEEP_DEFAULT, ev, THREAD_UNINT) !=
+					THREAD_TIMED_OUT);
+	}
 	const uint64_t now = nvxnu_nanotime();
 	if (deadline_ns <= now)
 		return 0;
-	uint64_t interval;
+	uint64_t interval = 0;
 	nanoseconds_to_absolutetime(deadline_ns - now, &interval);
-	return lck_mtx_sleep_deadline(mtx, LCK_SLEEP_DEFAULT, ev, THREAD_UNINT,
-				      mach_absolute_time() + interval) != THREAD_TIMED_OUT;
+	return static_cast<int>(lck_mtx_sleep_deadline(mtx, LCK_SLEEP_DEFAULT, ev, THREAD_UNINT,
+						       mach_absolute_time() + interval) !=
+				THREAD_TIMED_OUT);
 }
 
 extern "C" void nvxnu_wakeup(const void *event)
 {
+	// NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): the wait event is the word's address
 	thread_wakeup(reinterpret_cast<event_t>(const_cast<void *>(event)));
 }
 
 extern "C" void *nvxnu_work_alloc(void (*fn)(void *), void *arg)
 {
-	return thread_call_allocate(
-		reinterpret_cast<thread_call_func_t>(reinterpret_cast<void *>(fn)), arg);
+	// Through void * on purpose: a direct cast trips -Wcast-function-type-mismatch. thread_call passes a second
+	// argument, which fn ignores.
+	void *const entry = reinterpret_cast<void *>(fn);
+	return thread_call_allocate(reinterpret_cast<thread_call_func_t>(entry), arg);
 }
 
 extern "C" void nvxnu_work_schedule(void *w)
@@ -586,7 +612,8 @@ extern "C" void nvxnu_work_cancel_wait(void *w)
 
 extern "C" void nvxnu_work_schedule_after(void *w, nvxnu_u64 ns)
 {
-	uint64_t interval, deadline;
+	uint64_t interval = 0;
+	uint64_t deadline = 0;
 	nanoseconds_to_absolutetime(ns, &interval);
 	clock_absolutetime_interval_to_deadline(interval, &deadline);
 	if (w)
@@ -601,7 +628,7 @@ extern "C" void nvxnu_work_cancel(void *w)
 
 extern "C" volatile void *nvxnu_ioremap(nvxnu_u64 pa, nvxnu_u64 size, int write_combined)
 {
-	vm_offset_t va = write_combined ? ml_io_map_wcomb(pa, size) : ml_io_map(pa, size);
+	const vm_offset_t va = write_combined ? ml_io_map_wcomb(pa, size) : ml_io_map(pa, size);
 	return reinterpret_cast<volatile void *>(va);
 }
 
@@ -613,17 +640,19 @@ extern "C" void nvxnu_iounmap(volatile void *va, nvxnu_u64 size)
 
 static void dcache_op(const void *va, nvxnu_u64 size, bool invalidate)
 {
-	uint64_t ctr;
+	// NOLINTNEXTLINE(misc-const-correctness): the mrs below writes it
+	uint64_t ctr = 0;
 	__asm__ volatile("mrs %0, ctr_el0" : "=r"(ctr));
 	const uintptr_t line = static_cast<uintptr_t>(4) << ((ctr >> 16) & 15);
-	uintptr_t a = reinterpret_cast<uintptr_t>(va) & ~(line - 1),
-		  end = reinterpret_cast<uintptr_t>(va) + size;
+	uintptr_t a = reinterpret_cast<uintptr_t>(va) & ~(line - 1);
+	const uintptr_t end = reinterpret_cast<uintptr_t>(va) + size;
 	__asm__ volatile("dsb sy" ::: "memory");
 	for (; a < end; a += line) {
-		if (invalidate)
+		if (invalidate) {
 			__asm__ volatile("dc civac, %0" ::"r"(a) : "memory");
-		else
+		} else {
 			__asm__ volatile("dc cvac, %0" ::"r"(a) : "memory");
+		}
 	}
 	__asm__ volatile("dsb sy" ::: "memory");
 }
@@ -649,7 +678,8 @@ extern "C" void nvxnu_dcache_clean_inval_pa(nvxnu_u64 pa, nvxnu_u64 size)
 // it (all lines at the point of coherency) cover all pages; a pair per page is ~1800 barriers for a 3.6 MB import.
 extern "C" void nvxnu_dcache_clean_inval_pages(const nvxnu_u64 *pas, nvxnu_u32 count)
 {
-	uint64_t ctr;
+	// NOLINTNEXTLINE(misc-const-correctness): the mrs below writes it
+	uint64_t ctr = 0;
 	__asm__ volatile("mrs %0, ctr_el0" : "=r"(ctr));
 	const uintptr_t line = static_cast<uintptr_t>(4) << ((ctr >> 16) & 15);
 	__asm__ volatile("dsb sy" ::: "memory");
@@ -691,7 +721,8 @@ extern "C" int nvxnu_pool_init(int *zeroed)
 	*zeroed = 0;
 	if (pool.va)
 		return 0;
-	uint64_t start = 0, end = 0;
+	uint64_t start = 0;
+	uint64_t end = 0;
 	if (switch_ram_gpu_pool(&start, &end)) {
 		// Bring-up trace: one console line before each step that touches memory or hardware for the first time, so
 		// the last line names the step that hung.
@@ -730,9 +761,10 @@ extern "C" int nvxnu_pool_init(int *zeroed)
 	}
 	memset(va, 0, bytes);
 	dcache_op(va, bytes, true);
-	for (uint64_t off = 0; off < bytes; off += PAGE_SIZE)
+	for (uint64_t off = 0; off < bytes; off += PAGE_SIZE) {
 		pmap_set_cache_attributes(static_cast<ppnum_t>(atop_64(first + off)),
 					  VM_WIMG_WCOMB);
+	}
 	pool.descriptor = md;
 	pool.pa = first;
 	pool.size = bytes;
@@ -775,6 +807,7 @@ extern "C" int nvxnu_contig_alloc(nvxnu_u64 bytes, nvxnu_u64 *pa)
 		return -12;
 	}
 	// The zero fill went through the cacheable aperture: no dirty line of it may land over what the GPU writes later.
+	// NOLINTNEXTLINE(clang-analyzer-osx.cocoa.RetainCount): the descriptor stays wired for the kext's life (above)
 	memset(va, 0, bytes);
 	dcache_op(va, bytes, true);
 	*pa = first;
@@ -797,11 +830,14 @@ extern "C" void *nvxnu_pool_base_va(void)
 }
 
 // Scattered pool pages: one kernel mapping over several physical ranges, remembered for vunmap.
+namespace
+{
 struct nvxnu_vmapping {
 	nvxnu_vmapping *next;
 	IOMemoryMap *map;
 	void *va;
 };
+}  // namespace
 
 static nvxnu_vmapping *vmaps;
 static IOLock *vmaps_lock;
@@ -809,7 +845,9 @@ static IOLock *vmaps_lock;
 extern "C" void *nvxnu_vmap(const nvxnu_u64 *pas, nvxnu_u32 count)
 {
 	if (!vmaps_lock) {
-		IOLock *fresh = IOLockAlloc(), *expected = nullptr;
+		IOLock *fresh = IOLockAlloc();
+		// NOLINTNEXTLINE(misc-const-correctness): the compare-and-swap writes the current value back into it
+		IOLock *expected = nullptr;
 		if (!__atomic_compare_exchange_n(&vmaps_lock, &expected, fresh, false,
 						 __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
 			IOLockFree(fresh);
@@ -860,6 +898,7 @@ extern "C" void *nvxnu_vmap(const nvxnu_u64 *pas, nvxnu_u32 count)
 	return m->va;
 }
 
+// NOLINTNEXTLINE(misc-const-correctness): nvxnu.h's declaration, which the vendored C code calls
 extern "C" void nvxnu_vunmap(void *va)
 {
 	if (!vmaps_lock)
@@ -879,10 +918,14 @@ extern "C" void nvxnu_vunmap(void *va)
 }
 
 // The firmware table is firmware.S's.
+namespace
+{
 struct nvxnu_fw_entry {
 	const char *name;
-	const unsigned char *start, *end;
+	const unsigned char *start;
+	const unsigned char *end;
 };
+}  // namespace
 
 extern "C" const nvxnu_fw_entry tegra_gm20b_firmware[];
 

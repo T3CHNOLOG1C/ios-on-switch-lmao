@@ -41,6 +41,10 @@ build --spawn_strategy=sandboxed
 # every other Rust action (and every action of release) stays sandboxed.
 build:debug --strategy=Rustc=sandboxed,local
 build:debug --strategy=RustcMetadata=sandboxed,local
+# The other exception: iOS 27's translation attaches and mounts disk images (hdiutil, diskutil), which no sandbox
+# allows, so its two actions (install/translated.bzl) run here.
+build --strategy=Pretranslate=local
+build --strategy=TranslatedCryptex=local
 # No network inside actions (repository rules fetch; actions never do).
 build --sandbox_default_allow_network=false
 # Reuse sandbox directory trees between actions: faster sandbox setup, the same isolation.

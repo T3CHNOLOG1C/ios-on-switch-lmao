@@ -16,8 +16,8 @@
 namespace
 {
 constexpr uint32_t kJobs = 8;
-constexpr uint64_t kPage = 4096, kPushVa = 1ull << 20, kWindow = 1ull << 32,
-		   kFirstWindow = 8ull << 32;
+constexpr uint64_t kPage = 4096, kPushVa = 1ULL << 20, kWindow = 1ULL << 32,
+		   kFirstWindow = 8ULL << 32;
 
 struct Plane {
 	tgm_mem *mem;
@@ -62,10 +62,10 @@ bool openSpace()
 	tgm_vm_claim(c.vm, &gCopy);
 	for (uint32_t i = 0; i < kJobs; i++)
 		pas[i] = c.pushPa + i * kPage;
-	return !tgm_mem_new(c.vm, pas, kJobs, &c.push) &&
-	       !tgm_vm_map_ordered(c.vm, kPushVa, kPage * kJobs, c.push, 0, 0, 1, nullptr) &&
-	       !tgm_mem_new(c.vm, &c.fencePa, 1, &c.fence) &&
-	       !tgm_vm_kmap(c.vm, c.fence, kPage, &c.fenceGpu);
+	return (tgm_mem_new(c.vm, pas, kJobs, &c.push) == 0) &&
+	       (tgm_vm_map_ordered(c.vm, kPushVa, kPage * kJobs, c.push, 0, 0, 1, nullptr) == 0) &&
+	       (tgm_mem_new(c.vm, &c.fencePa, 1, &c.fence) == 0) &&
+	       (tgm_vm_kmap(c.vm, c.fence, kPage, &c.fenceGpu) == 0);
 }
 
 // lock held: the channel, made again after a fault killed the last one (once its copies were reaped)
@@ -73,9 +73,10 @@ tgm_chan *channel()
 {
 	Copier &c = gCopy;
 	if (c.chan && tgm_chan_error(c.chan)) {
-		for (const Job &j : c.jobs)
+		for (const Job &j : c.jobs) {
 			if (j.busy)
 				return nullptr;
+		}
 		tgm_chan_del(&c.chan);
 	}
 	if (!c.vm && !c.failed && !openSpace())
@@ -90,7 +91,8 @@ tgm_chan *channel()
 void unmap(Plane &p)
 {
 	if (p.mem) {
-		tgm_vm_unmap(gCopy.vm, p.va & ~(kPage - 1), uint64_t(p.npages) * kPage);
+		tgm_vm_unmap(gCopy.vm, p.va & ~(kPage - 1),
+			     static_cast<uint64_t>(p.npages) * kPage);
 		tgm_mem_del(&p.mem);
 	}
 	if (p.pas)
@@ -105,13 +107,13 @@ int map(Plane &p, IOMemoryDescriptor *memory, uint64_t offset, uint64_t bytes, u
 	const uint64_t first = offset & ~(kPage - 1);
 	if (!bytes || offset + bytes > memory->getLength() || offset + bytes - first > kWindow)
 		return -22;
-	p.npages = uint32_t((offset + bytes - first + kPage - 1) / kPage);
+	p.npages = static_cast<uint32_t>((offset + bytes - first + kPage - 1) / kPage);
 	p.pas = IONew(uint64_t, p.npages);
 	if (!p.pas)
 		return -12;
 	for (uint32_t i = 0; i < p.npages; i++) {
-		p.pas[i] = memory->getPhysicalSegment(first + uint64_t(i) * kPage, nullptr,
-						      kIOMemoryMapperNone);
+		p.pas[i] = memory->getPhysicalSegment(first + static_cast<uint64_t>(i) * kPage,
+						      nullptr, kIOMemoryMapperNone);
 		if (!p.pas[i])
 			return -22;
 	}
@@ -119,8 +121,8 @@ int map(Plane &p, IOMemoryDescriptor *memory, uint64_t offset, uint64_t bytes, u
 		return ret;
 	p.va = window + (offset - first);
 	p.bytes = bytes;
-	return tgm_vm_map_ordered(gCopy.vm, window, uint64_t(p.npages) * kPage, p.mem, 0, kind, 0,
-				  nullptr);
+	return tgm_vm_map_ordered(gCopy.vm, window, static_cast<uint64_t>(p.npages) * kPage, p.mem,
+				  0, kind, 0, nullptr);
 }
 
 void reapWork(thread_call_param_t, thread_call_param_t)
@@ -133,7 +135,7 @@ void reapWork(thread_call_param_t, thread_call_param_t)
 	const uint32_t completed = c.chan ? tgm_chan_completed(c.chan) : 0;
 	const int error = c.chan && tgm_chan_error(c.chan) ? -5 : 0;
 	for (Job &j : c.jobs) {
-		if (!j.busy || (!error && int32_t(completed - j.seqno) < 0))
+		if (!j.busy || (!error && static_cast<int32_t>(completed - j.seqno) < 0))
 			continue;
 		unmap(j.src);
 		unmap(j.dst);
@@ -166,6 +168,7 @@ bool init()
 	if (!__atomic_compare_exchange_n(&c.reap, &noCall, reap, false, __ATOMIC_ACQ_REL,
 					 __ATOMIC_ACQUIRE))
 		thread_call_free(reap);
+	// NOLINTNEXTLINE(misc-const-correctness): the compare-and-swap writes the current value back into it
 	IOLock *noLock = nullptr;
 	if (!__atomic_compare_exchange_n(&c.lock, &noLock, lock, false, __ATOMIC_ACQ_REL,
 					 __ATOMIC_ACQUIRE))
@@ -181,8 +184,8 @@ struct Surface {
 	tgm_layout layout = {};
 
 	explicit Surface(IOMemoryDescriptor *memory)
+	    : coh(tgm_coh_find_pa(memory->getPhysicalSegment(0, nullptr, kIOMemoryMapperNone)))
 	{
-		coh = tgm_coh_find_pa(memory->getPhysicalSegment(0, nullptr, kIOMemoryMapperNone));
 		if (!coh)
 			return;
 		tgm_coh_lock(coh);
@@ -209,14 +212,16 @@ struct Surface {
 		tgm_coh_lock(coh);
 		const uint32_t found = tgm_coh_writers(coh, w, TGM_RELAYOUT_MAX_WAITS - n);
 		tgm_coh_unlock(coh);
-		for (uint32_t i = 0; i < found; i++)
+		for (uint32_t i = 0; i < found; i++) {
 			if (!tgm_writer_fence_va(gCopy.vm, w[i].uid, &waits[n].va))
 				waits[n++].seqno = w[i].seqno;
+		}
 	}
 
 	bool whole(const tegra_gm20b_ce_plane &p, uint32_t rowBytes, uint32_t rows) const
 	{
-		return !p.offset && rowBytes == layout.width * layout.bpp && rows == layout.height;
+		return (p.offset == 0u) && rowBytes == layout.width * layout.bpp &&
+		       rows == layout.height;
 	}
 };
 
@@ -250,15 +255,17 @@ extern "C" int tegra_gm20b_ce_copy_plane(const struct tegra_gm20b_ce_plane *src,
 		slot++;
 	if (!chan || slot == kJobs) {
 		IOLockUnlock(c.lock);
-		if (chan)
+		if (chan) {
 			switch_refusal(
 				"gpu-copy", "busy",
 				"every one of the copy engine's %u plane copies is in flight",
 				kJobs);
+		}
 		return chan ? -16 : -12;
 	}
 	Job &j = c.jobs[slot];
-	const Surface from(srcMemory), to(dstMemory);
+	const Surface from(srcMemory);
+	const Surface to(dstMemory);
 	tgm_relayout_wait waits[TGM_RELAYOUT_MAX_WAITS];
 	uint32_t nwaits = 0;
 	from.writers(waits, nwaits);
@@ -269,12 +276,14 @@ extern "C" int tegra_gm20b_ce_copy_plane(const struct tegra_gm20b_ce_plane *src,
 	const uint64_t dstBytes =
 		to.tiled ? to.layout.bytes : uint64_t(dst->pitch) * (rows - 1) + row_bytes;
 	const uint64_t windows = kFirstWindow + uint64_t(slot) * 2 * kWindow;
-	if (!ret)
+	if (!ret) {
 		ret = map(j.src, srcMemory, src->offset, srcBytes, windows,
 			  from.tiled ? uint8_t(TGM_LAYOUT_KIND) : 0);
-	if (!ret)
+	}
+	if (!ret) {
 		ret = map(j.dst, dstMemory, dst->offset, dstBytes, windows + kWindow,
 			  to.tiled ? uint8_t(TGM_LAYOUT_KIND) : 0);
+	}
 	uint32_t seqno = 0;
 	if (!ret) {
 		const tgm_copy_job job = {j.src.va,

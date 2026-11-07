@@ -36,8 +36,10 @@ void storeDeadline(uint64_t nextVblank, uint64_t interval)
 // The deadline QuartzCore last gave; false before the first.
 extern "C" bool tegra_gm20b_display_deadline(uint64_t *nextVblank, uint64_t *interval)
 {
-	uint32_t before, after;
-	uint64_t next, step;
+	uint32_t before = 0;
+	uint32_t after = 0;
+	uint64_t next = 0;
+	uint64_t step = 0;
 	do {
 		before = __atomic_load_n(&gDeadline.sequence, __ATOMIC_ACQUIRE);
 		next = gDeadline.nextVblank;
@@ -54,8 +56,10 @@ extern "C" bool tegra_gm20b_display_deadline(uint64_t *nextVblank, uint64_t *int
 	return true;
 }
 
+// NOLINTNEXTLINE(misc-use-internal-linkage): OSDefineMetaClassAndStructors needs the class's external linkage
 class TegraGM20BDeviceUserClient : public IOUserClient
 {
+	// NOLINTNEXTLINE(misc-explicit-constructor): IOKit's structors macro declares the metaclass constructor
 	OSDeclareDefaultStructors(TegraGM20BDeviceUserClient);
 
 public:
@@ -77,7 +81,7 @@ IOReturn TegraGM20BDeviceUserClient::externalMethod(uint32_t selector,
 						    IOExternalMethodArguments *arguments,
 						    IOExternalMethodDispatch *, OSObject *, void *)
 {
-	auto answerEmpty = [arguments](uint32_t size) {
+	const auto answerEmpty = [arguments](uint32_t size) {
 		if (arguments->structureOutputDescriptor || arguments->structureOutputSize < size ||
 		    !arguments->structureOutput)
 			return kIOReturnBadArgument;

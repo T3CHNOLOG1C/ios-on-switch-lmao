@@ -152,13 +152,13 @@ enum {
 	TGM_PC_DRAW = 0,   /* + size * 4 + pitch * 2 + msaa */
 	TGM_PC_CLEAR = 12, /* + the same */
 	TGM_PC_PASS = 24,  /* begins a render pass, draws and clears nothing */
-	TGM_PC_SYNC,       /* only waits, cache invalidates and host flushes */
-	TGM_PC_COMPUTE,
-	TGM_PC_COPY,
-	TGM_PC_2D,
-	TGM_PC_STATE, /* state and anything else */
-	TGM_PC_FENCE, /* the kernel's fence push (WFI, L2 flush): the end stamp's share */
-	TGM_PC_COUNT,
+	TGM_PC_SYNC = 25,  /* only waits, cache invalidates and host flushes */
+	TGM_PC_COMPUTE = 26,
+	TGM_PC_COPY = 27,
+	TGM_PC_2D = 28,
+	TGM_PC_STATE = 29, /* state and anything else */
+	TGM_PC_FENCE = 30, /* the kernel's fence push (WFI, L2 flush): the end stamp's share */
+	TGM_PC_COUNT = 31,
 	TGM_PC_SKIP =
 		0xff, /* no stamp after this push: a method may continue into the next one, or it was not read */
 };
@@ -215,7 +215,7 @@ int tegra_gm20b_sync_for_cpu(const void *va, uint64_t bytes, uint64_t timeout_ns
 
 /* Fence pages: one per connection, from one pool range the GPU present maps whole (gpu.c). Zeroed; 0 or -ENOMEM. */
 int tgm_fence_page_get(volatile uint32_t **va, uint64_t *pa);
-void tgm_fence_page_put(volatile uint32_t *va);
+void tgm_fence_page_put(const volatile uint32_t *va);
 
 /* GPU present (gpu.c "GPU present"): a kernel channel and address space, made at the first call (from the self-test on).
  * Mappings in it are volatile, at addresses the caller picks in [TGM_USER_VA_START, TGM_KERNEL_VA). tgm_present_copy

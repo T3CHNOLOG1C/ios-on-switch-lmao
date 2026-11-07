@@ -57,7 +57,7 @@ struct tgm_hang_candidate {
 static inline enum tgm_hang tgm_hang_blame(const struct tgm_hang_candidate *c, int n, int late_dead,
 					   int late_kernel, int any_progress, int *blame)
 {
-	int i;
+	int i = 0;
 
 	*blame = -1;
 	for (i = 0; i < n; i++) {

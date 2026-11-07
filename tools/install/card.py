@@ -20,11 +20,11 @@ import hashlib
 import os
 import shutil
 import tempfile
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
-from tools.install import gpt, host, renamed, target as targets
+from tools.install import disks, gpt, host, renamed, target as targets
 
 LINUX_MBR = 0x83
 BOOT_ENTRY = 'switchroot/ios'
@@ -35,6 +35,7 @@ FORMER_ICONS = ('bootloader/res/icon_ios.bmp',)
 # The user's own files in the entry's folder, which no package ships: the loader reads bootargs.txt at boot.
 USER_FILES = ('bootargs.txt',)
 HASH_CHUNK = 8 << 20
+MOUNT_TRIES = 3
 
 
 class RefusedError(Exception):
@@ -203,6 +204,24 @@ def table_snapshot(card: Card) -> bytes:
     return b''.join(parts)
 
 
+def changed_outside(card: Card, before: bytes, after: bytes, index: int | None) -> list[int]:
+    """Return the offsets at which two table_snapshot()s differ, other than where retyping entry `index` writes.
+
+    Retyping writes that entry in both arrays and the two headers; with `index` None every byte counts.
+    """
+    if len(after) != len(before):
+        raise host.HostError('the partition table changed shape')
+    table, span = card.table, card.table.entry_sectors * gpt.SECTOR
+    allowed = set()
+    if index is not None:
+        entry = index * table.entry_size
+        allowed |= set(range(gpt.SECTOR, 2 * gpt.SECTOR))
+        for base in (2 * gpt.SECTOR, 2 * gpt.SECTOR + span):
+            allowed |= set(range(base + entry, base + entry + table.entry_size))
+        allowed |= set(range(len(after) - gpt.SECTOR, len(after)))
+    return [i for i in range(len(after)) if after[i] != before[i] and i not in allowed]
+
+
 def volumes(card: Card) -> dict[str, dict]:
     """{uuid: {DeviceIdentifier, Roles, Name, ...}} of the APFS container on the target, {} when none is attached."""
     container = host.container_on(card.slice(card.target))
@@ -219,28 +238,45 @@ def mounted(identifier: str, log: host.Log, read_only: bool = False, owners: boo
         info = host.disk_info(identifier) or {}
         if not read_only and not info.get('WritableVolume'):
             raise host.HostError(f'{identifier} is mounted read-only at {current}')
-        yield Path(current)
-        return
-    with tempfile.TemporaryDirectory(prefix='switch-') as directory:
+        if owners or not info.get('GlobalPermissionsEnabled'):
+            yield Path(current)
+            return
+        # macOS's own mount of a card enforces owners, which closes root's 0700 folders to the user
+        disks.unmount(identifier, log)
+    with tempfile.TemporaryDirectory(prefix='switch-', ignore_cleanup_errors=True) as directory:
         args = ['mount']
         if read_only:
             args.append('readOnly')
-        args += ['-mountOptions', 'nobrowse', '-mountPoint', directory, identifier]
-        host.run('diskutil', *args, log=log)
+        args += ['-mountOptions', 'nobrowse' if owners else 'nobrowse,noowners', '-mountPoint', directory, identifier]
+        where = None
+        for attempt in range(MOUNT_TRIES):
+            host.run('diskutil', *args, log=log, check=attempt + 1 == MOUNT_TRIES)
+            where = host.mount_point(identifier)
+            if where and os.path.realpath(where) == os.path.realpath(directory):
+                break
+            # After a partition table write macOS mounts the card's volumes itself, and can take this one between
+            # our check and our mount; what we would write into `directory` would then land on the Mac's disk.
+            if where:
+                disks.unmount(identifier, log)
+        else:
+            raise host.HostError(f'{identifier} would not mount at {directory} (macOS has it at {where or "nowhere"})')
         try:
             if owners and os.geteuid() == 0:
                 host.run('diskutil', 'enableOwnership', directory, log=log)
             yield Path(directory)
         finally:
             host.run('sync')
-            host.run('diskutil', 'unmount', identifier, log=log, check=False)
+            disks.unmount(identifier, log)
 
 
-def sha256_file(path: Path) -> str:
+def sha256_file(path: Path, advance: Callable[[int], None] | None = None) -> str:
+    """Return the file's sha256; `advance` (progress.advance) counts the bytes as they are read."""
     digest = hashlib.sha256()
     with open(path, 'rb') as f:
         while chunk := f.read(HASH_CHUNK):
             digest.update(chunk)
+            if advance:
+                advance(len(chunk))
     return digest.hexdigest()
 
 

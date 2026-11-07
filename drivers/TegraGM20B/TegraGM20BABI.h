@@ -423,7 +423,7 @@ struct TegraGM20BAbiZbcReply {
 	uint32_t reserved;
 };
 
-#if defined(__cplusplus)
+#ifdef __cplusplus
 #define TEGRA_GM20B_ASSERT(x, n) static_assert(sizeof(x) == (n), #x " layout")
 #else
 #define TEGRA_GM20B_ASSERT(x, n) _Static_assert(sizeof(struct x) == (n), #x " layout")

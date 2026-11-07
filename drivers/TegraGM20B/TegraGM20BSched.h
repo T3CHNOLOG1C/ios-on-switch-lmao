@@ -11,7 +11,7 @@ struct nvkm_device;
 void tgm_sched_init(struct nvkm_device *device);
 /* A channel's runlist level (TegraGM20BSchedPolicy.h enum tgm_level): the compositor's channels are high, a
  * runningboardd role sets an app's background or foreground. A change rebuilds the runlist, so the host sees it at once. */
-void tgm_sched_level(struct nvkm_device *device, unsigned int chid, unsigned int level);
+void tgm_sched_level(struct nvkm_device *device, unsigned int chid, unsigned int to);
 /* Before nvkm removes a channel: its level goes back to foreground (nvkm's own runlist update then drops it) and the hold
  * forgets it. */
 void tgm_sched_forget(struct nvkm_device *device, unsigned int chid);
