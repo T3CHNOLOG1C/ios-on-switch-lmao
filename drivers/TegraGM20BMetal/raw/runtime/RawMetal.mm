@@ -2514,11 +2514,13 @@ static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger 
 
 - (void)setDepthBias:(float)bias slopeScale:(float)slope clamp:(float)clamp
 {
-    if (bias != 0 || slope != 0 || clamp != 0) {
+    // an infinite or NaN factor biases every fragment to a depth m2v sets through the viewport (render_state.rs
+    // depth_bias_effect), which the raw path does not
+    if (!std::isfinite(bias) || !std::isfinite(slope)) {
         uint32_t b, k;
         memcpy(&b, &bias, 4);
         memcpy(&k, &slope, 4);
-        [_cb takeReason:WhyCall why:@"a depth bias"];
+        [_cb takeReason:WhyCall why:@"a depth bias of an infinite or NaN factor"];
         hit(_cb, PredCallDepthBias, b, k);
     }
     Cmd m = cmd(OpDepthBias);
@@ -4620,6 +4622,9 @@ static bool encodeRaw(RMCommandBuffer *cb, size_t from, size_t to, const char **
             break;
         case OpFillMode:
             re->setFillMode(uint8_t(c.a));
+            break;
+        case OpDepthBias:
+            re->setDepthBias(extraFloat(cb, c.x), extraFloat(cb, c.x + 1), extraFloat(cb, c.x + 2));
             break;
         case OpViewport:
             re->setViewport(extraDouble(cb, c.x), extraDouble(cb, c.x + 1), extraDouble(cb, c.x + 2),

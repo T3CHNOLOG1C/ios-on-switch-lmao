@@ -202,6 +202,7 @@ int main(int argc, char **argv)
                     e->setCullMode(d.cull);
                     e->setWinding(d.winding);
                     e->setFillMode(d.fill);
+                    e->setDepthBias(d.bias[0], d.bias[1], d.bias[2]);
                 }
                 const char *why = nullptr;
                 if (!e->draw(d.primitive, d.first, d.count, d.instances, 0, &why)) {

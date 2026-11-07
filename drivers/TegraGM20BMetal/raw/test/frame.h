@@ -256,13 +256,14 @@ struct Draw {
     uint32_t primitive = 4, first = 0, count = 4, instances = 1;  // MTLPrimitiveType (4 triangle strip)
     int ds = -1;                                                  // dsSpec index set before it (-1: none set)
     uint32_t stencilRef[2] = {};                                  // set before it where ds >= 0
-    // set before it where raster: MTLCullMode, MTLWinding, MTLTriangleFillMode
+    // set before it where raster: MTLCullMode, MTLWinding, MTLTriangleFillMode, and setDepthBias's factors
     bool raster = false;
     uint8_t cull = 0, winding = 0, fill = 0;
+    float bias[3] = {};
 };
 
-// FRAME_RASTER: the main pass's draws cull no face, the front or the back, wind clockwise or counter-clockwise, and some fill
-// with lines (Core Animation culls a layer that is not doubleSided)
+// FRAME_RASTER: the main pass's draws cull no face, the front or the back, wind clockwise or counter-clockwise, some fill
+// with lines, some are biased in depth and some draw lines (Core Animation culls a layer that is not doubleSided)
 inline bool rasterState()
 {
     return getenv("FRAME_RASTER") != nullptr;
@@ -366,6 +367,13 @@ inline std::vector<Pass> passes(unsigned frameIndex, const Shape &s, size_t blur
             d.cull = uint8_t(i % 3);
             d.winding = uint8_t((i / 3) % 2);
             d.fill = uint8_t(i % 7 == 3);
+            if (i % 5 == 1) {
+                d.bias[0] = 0.25f * float(i % 9) - 1.0f;
+                d.bias[1] = i % 2 ? 2.0f : 0.0f;
+                d.bias[2] = i % 3 ? 0.0f : 0.5f;
+            }
+            if (i % 11 == 5)
+                d.primitive = 1;  // MTLPrimitiveTypeLine
         }
         if (depthStencil() && i % 3 != 2) {
             d.ds = int((i / 3) % kDsSpecs);

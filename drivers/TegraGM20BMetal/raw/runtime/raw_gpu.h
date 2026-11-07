@@ -322,6 +322,10 @@ public:
         raster_.fill = mode;
     }
 
+    // setDepthBias:slopeScale:clamp: of finite constant and slope factors (an infinite or NaN one m2v draws through the
+    // viewport: refused before it gets here)
+    void setDepthBias(float constant, float slope, float clamp);
+
     void setViewport(double x, double y, double w, double h, double znear, double zfar);
     void barrier();  // memoryBarrier...: everything before is written and visible to what follows
     // false: this draw cannot be drawn exactly as m2v would (*why says what); the command buffer goes to m2v instead
@@ -370,10 +374,15 @@ private:
     // clockwise, fill) at a pass's start, put back at its end
     struct Raster {
         uint8_t cull = 0, winding = 0, fill = 0;
+        bool bias = true;                                         // polygon offset on: a triangle topology's
+        uint32_t biasConstant = 0, biasSlope = 0, biasClamp = 0;  // float bits
     };
+
+    float depthBias_[3] = {};
 
     Raster raster_, rasterHeld_;
     void writeRaster(Push &p, const Raster &want);
+    Raster rasterFor(uint32_t primitive) const;
     uint32_t blendColor_[4] = {};  // Metal's default, (0, 0, 0, 0), until the encoder sets one
     bool blendColorDirty_ = true;
     uint32_t topology_ = ~0u, restart_ = ~0u, first_ = 0, baseInstance_ = 0;

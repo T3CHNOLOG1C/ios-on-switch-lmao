@@ -36,6 +36,12 @@ enum : uint32_t {
     NO_OPERATION = 0x0100,
     SET_FRONT_POLYGON_MODE = 0x0dac,
     SET_BACK_POLYGON_MODE = 0x0db0,
+    SET_POLY_OFFSET_POINT = 0x0dc0,
+    SET_POLY_OFFSET_LINE = 0x0dc4,
+    SET_POLY_OFFSET_FILL = 0x0dc8,
+    SET_SLOPE_SCALE_DEPTH_BIAS = 0x156c,
+    SET_DEPTH_BIAS = 0x15bc,
+    SET_DEPTH_BIAS_CLAMP = 0x187c,
     OGL_SET_CULL = 0x1918,
     OGL_SET_FRONT_FACE = 0x191c,
     OGL_SET_CULL_FACE = 0x1920,
@@ -2563,7 +2569,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, uint32_t first, ui
         }
         at[0] = tic | tsc << 20;
     }
-    writeRaster(p, raster_);
+    writeRaster(p, rasterFor(primitive));
     if (pl != emitted_) {
         blendColorDirty_ |= pl->constantBlend;
         p.raw(pl->methods.data(), uint32_t(pl->methods.size()));
@@ -2925,10 +2931,48 @@ bool chainLevelTarget(const Texture &t, uint32_t level, Texture &out)
     return true;
 }
 
-// NVK's nvk_flush_rs_state for the state m2v makes of Metal's (render_state.rs `fixed`): culling on and the face culled,
-// the front face, and the polygon mode of both faces; a register already holding its value is not written
+void RenderEncoder::setDepthBias(float constant, float slope, float clamp)
+{
+    depthBias_[0] = constant;
+    depthBias_[1] = slope;
+    depthBias_[2] = std::isfinite(clamp) ? clamp : 0.0f;
+}
+
+// The rasterizer state of a draw of `primitive` (MTLPrimitiveType): the encoder's, with m2v's depth bias for its topology
+// (metal::state::depth_bias): on, of Metal's factors, for triangles; off and zero for points and lines, and zero where
+// both factors are
+RenderEncoder::Raster RenderEncoder::rasterFor(uint32_t primitive) const
+{
+    Raster r = raster_;
+    r.bias = primitive == 3 || primitive == 4;
+    if (r.bias && (depthBias_[0] != 0 || depthBias_[1] != 0)) {
+        r.biasConstant = fbits(depthBias_[0]);
+        r.biasSlope = fbits(depthBias_[1]);
+        r.biasClamp = fbits(depthBias_[2]);
+    }
+    return r;
+}
+
+// NVK's nvk_flush_rs_state for the state m2v makes of Metal's (render_state.rs `fixed`, `vk_depth_bias`): culling on and
+// the face culled, the front face, the polygon mode of both faces, the polygon offset and the depth bias factors (in the
+// depth format's units: the pack's SET_DEPTH_BIAS_CONTROL); a register already holding its value is not written
 void RenderEncoder::writeRaster(Push &p, const Raster &want)
 {
+    if (want.bias != rasterHeld_.bias) {
+        p.m(SET_POLY_OFFSET_POINT, want.bias);
+        p.m(SET_POLY_OFFSET_LINE, want.bias);
+        p.m(SET_POLY_OFFSET_FILL, want.bias);
+        rasterHeld_.bias = want.bias;
+    }
+    if (want.biasConstant != rasterHeld_.biasConstant || want.biasSlope != rasterHeld_.biasSlope ||
+        want.biasClamp != rasterHeld_.biasClamp) {
+        p.m(SET_DEPTH_BIAS, want.biasConstant);
+        p.m(SET_SLOPE_SCALE_DEPTH_BIAS, want.biasSlope);
+        p.m(SET_DEPTH_BIAS_CLAMP, want.biasClamp);
+        rasterHeld_.biasConstant = want.biasConstant;
+        rasterHeld_.biasSlope = want.biasSlope;
+        rasterHeld_.biasClamp = want.biasClamp;
+    }
     if (want.cull != rasterHeld_.cull) {
         p.m(OGL_SET_CULL, want.cull != 0);
         if (want.cull)

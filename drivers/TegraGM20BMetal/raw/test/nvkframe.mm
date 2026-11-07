@@ -556,6 +556,7 @@ int main(int argc, char **argv)
                             [e setCullMode:MTLCullMode(d.cull)];
                             [e setFrontFacingWinding:MTLWinding(d.winding)];
                             [e setTriangleFillMode:MTLTriangleFillMode(d.fill)];
+                            [e setDepthBias:d.bias[0] slopeScale:d.bias[1] clamp:d.bias[2]];
                         }
                         // FRAME_INDEXED: every third main draw indexed as Core Animation's meshes are (CA::OGL::MetalContext::draw:
                         // 16-bit indices written into its buffer pool at 4-byte alignment, drawIndexedPrimitives on triangles)
