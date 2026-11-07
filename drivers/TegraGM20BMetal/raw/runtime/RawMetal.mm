@@ -3124,13 +3124,16 @@ static bool rawDepthStencil(MTLRenderPassDescriptor *pass)
             // a = format; b = attachment | kind << 8 | the texture's own predicate << 16 (0: kept, not renderable)
             const uint64_t b = c | (own ? uint64_t(x->_kind) : 0xff) << 8 | (own ? uint64_t(x->_pred) : 0) << 16;
             if (own && x->_rawOk &&
-                !predLogged(PredPassAttFormat))  // kept, not a target: which term (raw_gpu.cpp linearTarget)
-                logPred(
-                    PredPassAttFormat, t.pixelFormat, b,
-                    [NSString stringWithFormat:@"(kept, not a target: %ux%u pitch %u va&127 %llu, a pitch target needs "
-                                               @"both multiples of 128)",
-                                               x->_raw.width, x->_raw.height, x->_raw.pitch,
-                                               (unsigned long long)(x->_raw.va & 127)]);
+                !predLogged(PredPassAttFormat)) {  // kept, not a target: which term (raw_gpu.cpp linearTarget)
+                const raw::FormatInfo *f = raw::formatInfo(x->_raw.format);
+                logPred(PredPassAttFormat, t.pixelFormat, b,
+                        f && f->rt
+                            ? [NSString stringWithFormat:@"(kept, not a target: %ux%u pitch %u va&127 %llu, a pitch "
+                                                         @"target needs both multiples of 128)",
+                                                         x->_raw.width, x->_raw.height, x->_raw.pitch,
+                                                         (unsigned long long)(x->_raw.va & 127)]
+                            : @"(kept, of a format m2v's NVK renders none of)");
+            }
             hit(self, PredPassAttFormat, t.pixelFormat, b);
         } else if (x->_raw.planar || x->_raw.ycbcr) {
             [self takeReason:WhyPass why:@"a planar texture as a render target"];

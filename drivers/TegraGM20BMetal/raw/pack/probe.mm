@@ -523,6 +523,67 @@ int main(int argc, char **argv)
             pushcount_report("probe");
             return 0;
         }
+        // PROBE_TARGETS: the textured uber state drawn once into a private 64x64 target of each format the raw path may render to,
+        // as its first color attachment; NVK's color target format for each is the draw's rt0 (raw/test/targetcheck.py).
+        if (getenv("PROBE_TARGETS")) {
+            static const MTLPixelFormat formats[] = {
+                MTLPixelFormatA8Unorm,         MTLPixelFormatR8Unorm,         MTLPixelFormatR8Unorm_sRGB,
+                MTLPixelFormatRG8Unorm,        MTLPixelFormatR16Unorm,        MTLPixelFormatR16Float,
+                MTLPixelFormatRG16Unorm,       MTLPixelFormatRG16Float,       MTLPixelFormatR32Float,
+                MTLPixelFormatRGBA8Unorm,      MTLPixelFormatRGBA8Unorm_sRGB, MTLPixelFormatBGRA8Unorm,
+                MTLPixelFormatBGRA8Unorm_sRGB, MTLPixelFormatRGB10A2Unorm,    MTLPixelFormatBGR10A2Unorm,
+                MTLPixelFormatRG11B10Float,    MTLPixelFormatRGB9E5Float,     MTLPixelFormatRGBA16Unorm,
+                MTLPixelFormatRGBA16Float,     MTLPixelFormatRG32Float,       MTLPixelFormatRGBA32Float,
+                MTLPixelFormatB5G6R5Unorm,     MTLPixelFormatA1BGR5Unorm,     MTLPixelFormatABGR4Unorm,
+                MTLPixelFormatBGR5A1Unorm};
+            State st;
+            bool found = false;
+            for (const std::string &line : lines)
+                if (line.find("f fixed_frag_lph_cph") != std::string::npos &&
+                    line.find("fc_texture_function:49:01") != std::string::npos && parseState(qc, line, st)) {
+                    found = true;
+                    break;
+                }
+            if (!found) {
+                fprintf(stderr, "PROBE_TARGETS: no textured uber state\n");
+                return 1;
+            }
+            for (unsigned i = 0; i < sizeof formats / sizeof formats[0]; i++) {
+                MTLRenderPipelineDescriptor *d = [st.d copy];
+                d.colorAttachments[0].pixelFormat = formats[i];
+                id<MTLRenderPipelineState> state = [dev newRenderPipelineStateWithDescriptor:d error:&error];
+                id<MTLTexture> t = target(formats[i], false);
+                if (!state || !t) {
+                    printf("TARGET %u %lu refused\n", i, (unsigned long)formats[i]);
+                    continue;
+                }
+                MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
+                for (NSUInteger c = 0; c < 8; c++) {
+                    MTLRenderPipelineColorAttachmentDescriptor *ca = d.colorAttachments[c];
+                    if (ca.pixelFormat == MTLPixelFormatInvalid)
+                        continue;
+                    pass.colorAttachments[c].texture = c ? target(ca.pixelFormat, ca.writeMask == 0) : t;
+                    pass.colorAttachments[c].loadAction = MTLLoadActionDontCare;
+                    pass.colorAttachments[c].storeAction = c ? MTLStoreActionDontCare : MTLStoreActionStore;
+                }
+                id<MTLCommandBuffer> cb = [queue commandBuffer];
+                id<MTLRenderCommandEncoder> enc = [cb renderCommandEncoderWithDescriptor:pass];
+                [enc setRenderPipelineState:state];
+                uint32_t zero[64] = {};
+                for (uint32_t slot = 0; slot < 8; slot++) {
+                    [enc setVertexBytes:zero length:sizeof zero atIndex:slot];
+                    [enc setFragmentBytes:zero length:sizeof zero atIndex:slot];
+                }
+                [enc drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
+                [enc endEncoding];
+                printf("TARGET %u %lu\n", i, (unsigned long)formats[i]);
+                fflush(stdout);
+                [cb commit];
+                [cb waitUntilCompleted];
+            }
+            pushcount_report("probe");
+            return 0;
+        }
         std::set<std::string> seen;
         unsigned index = 0, made = 0, refused = 0, failed = 0;
         // warm-up: one draw of a state that samples, with the dummy sampler in every slot, so NVK (m2v makes samplers at first
